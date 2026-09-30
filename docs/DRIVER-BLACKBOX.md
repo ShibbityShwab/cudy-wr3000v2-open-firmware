@@ -153,7 +153,53 @@ Verification: the lead re-derived the symbol set and the dispatch mapping indepe
 addresses/sizes matched, and `.rel.data` entries at 0x1d60/0x1d6c named the two handlers), then the
 phase-2 verification lane re-ran the checks and wrote `ulw/phase2/verification.md`.
 
-## 13. What this means for reverse engineering (measured, not guessed)
+## 14. Complete `alg` command table (phase 3, 2026-10-01)
+
+- All 414 entries of `g_ast_alg_cfg_process_info_table` extracted with name, cfg_id and direction:
+  189 getters / 225 setters, 237 distinct cfg_ids, 177 get/set pairs; names resolved through the
+  `.rel.data` relocations into `.rodata.str1.4`. Five getters sit outside the `get_*` filter
+  (`save_2g_upc`, `save_5g_upc`, `xo_ppm_cali`, `fem_check`, `efuse_test`).
+- 184 getter-shaped names probed read-only on the device: 142 `[SUCC]` / 42 `[FAIL]`, no timeouts; the
+  refusals carry firmware reasons such as `param num[0] invalid` or `pkt type[13] invalid`.
+- Deliverable: `ulw/phase3/alg-commands.md`. Lead re-ran five probe rows on the device and they
+  reproduced byte-for-byte, including the error text.
+
+## 15. Live driver-to-firmware capture with kprobes (phase 3, 2026-10-01)
+
+- Tracefs and dynamic kprobes work on this 5.10.201 kernel (only the `nop` static tracer is compiled
+  in, but `kprobe_events` is fully functional; `kptr_restrict=0`, so `/proc/kallsyms` shows the module
+  symbols with real addresses).
+- `hmac_sync_dmac_alg_cfg_rsp_entry` fires exactly once per request, from the `Host MSG RX` kernel
+  thread, carrying the response buffer pointer and a per-request id word (`0x0d01xxxx`, different for
+  2.4/5 GHz variants); a kretprobe named the dispatch site `hmac_event_config_syn+0x150`.
+- The four calibration/save functions did not fire under any read-only trigger; reaching them needs a
+  real calibration run (a write path) and stays out of scope by design.
+- Deliverable: `ulw/phase3/wire-capture.md`. The lead reproduced the probe independently (one hit, same
+  thread) and confirmed the probe list is empty afterwards.
+
+## 16. Firmware blob forensics (phase 3, 2026-10-01)
+
+- `FIRMWARE.bin` is 928,920 bytes; the first two words are `0x00046971` and `0x000C742D` (both odd,
+  i.e. Thumb pointers into the file); max 4 KB entropy is 7.256 bits/byte, so this is uncompressed
+  ARM/Thumb code plus tables, not a compressed container.
+- Strings include the real version banner `ChenTangV100R001C20T13`, the test tokens `VERIFY20M` and
+  `VERIFY40M`, and a large `smac`/`hcc` symbol table; exactly one little-endian `DEADBEEF` sits at the
+  end of an MMIO register table whose preceding word is a count (`0x0F`).
+- ARM veneer tables, address/jump tables and constant/register/exponential tables are substantiated;
+  the INI's ITCM/DTCM addresses are **not** file offsets (they exceed the file size, and ITCM+len
+  lands exactly on DTCM, which suggests a separate address space). Eight open items are listed.
+- Deliverable: `ulw/phase3/firmware-forensics.md`. The lead re-computed the header words, banner,
+  tokens, DEADBEEF count and entropy maximum; all matched.
+
+## 17. Published open-source release (2026-10-01)
+
+- Public repository: **https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware** - 18 text files,
+  472 KB: README, LICENSE (MIT), NOTICE, `docs/` (flash plan, this dossier, phase2 and phase3
+  analyses, the systime RCE writeup) and `tools/` (build recipe, calibration snapshot/restore,
+  web-login/probe, the proxy helper). Contains no vendor binaries, no firmware blob, no keys or
+  credentials; the recipes build the firmware locally from the owner's own dumps.
+
+## 18. What this means for reverse engineering (measured, not guessed)
 
 - The MAC/MLME logic is **host-side and symbol-rich**: rates, aggregation, EDCA, DFS, ring/queue
   handling, cfg80211 operations. Disassembly with names is practical (ARM32, capstone/pyelftools
