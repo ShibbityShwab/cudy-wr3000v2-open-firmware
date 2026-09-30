@@ -7,7 +7,11 @@ No driver or firmware was modified.
 
 - Two PCIe endpoints, `0000:00:00.0` and `0001:00:00.0` (one per radio), both:
   - vendor `0x59e7`, device `0x0005`, class `0x028000` (network controller, "other"),
-  - subsystem vendor `0x19e5` (HiSilicon), 64-bit memory BARs.
+  - subsystem vendor `0x19e5` = "Huawei Technologies Co., Ltd." per `lspci` (the primary vendor id is
+    not in the PCI database; HiSilicon's own id appears only in the subsystem field),
+  - 64-bit non-prefetchable memory BARs of **16 MB (BAR0), 16 KB (BAR2) and 8 MB (BAR4)** per endpoint,
+  - MSI capable (Count=1/1), PCIe Express v2 endpoint, MaxPayload 128, IRQ 207 and 209 respectively.
+  The 24 MB of MMIO window per radio is the address space a driver reverse-engineer would have to map.
 - `iwpriv Hisilicon0 get_chipid` -> `chip id:0x34 version:0x00`.
 - `iwpriv Hisilicon0 get_dieid` -> 16-word device-unique die ID (readable, not reproduced here).
 - Private ioctl table on the Wi-Fi netdev `Hisilicon0`:
