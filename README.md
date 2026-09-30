@@ -19,6 +19,7 @@ vendor binaries**, no firmware images, no keys and no credentials. See `NOTICE.m
 | `tools/make_custom_tar_v3.py` | Builds a custom rootfs tar from a stock rootfs tar you extracted from **your own** device. |
 | `tools/wifi-cal-snapshot.sh` / `wifi-cal-restore.sh` | Snapshot and restore the Wi-Fi calibration state, dry-run by default. |
 | `tools/web-login.sh` / `rce-probe.sh` | Log into the vendor web UI and probe the systime page (for testing your own fix). |
+| `tools/wifireg.sh` | Read a Wi-Fi chip register from userspace by its config address, on either radio (endpoint 0 or 1), using the verified BAR0 offset. See `docs/HAZARDS.md` before using it. |
 | `tools/proxy.js` | Tiny CONNECT/HTTP proxy, used to give the router internet access through a PC over SSH when it has no WAN. |
 
 ## The short version of the build
