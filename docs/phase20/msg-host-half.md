@@ -410,7 +410,8 @@ path contains no host->device write. No reply was fabricated.
 **Did the payload land?** No. Zero DR node changes, zero payload-buffer changes, in the whole 25 s;
 the DR buffers we posted were never touched. `irq_taken = 0` - the endpoint never asserted INTx. The
 firmware's visible output is **unchanged from `hostwin`**: `out[1] = 0x40` then `0x04`, then silence.
-The two words and their timing match phase 20c; servicing them did not advance the dialogue.
+The same two words in the same order as phase 20c (this boot saw them at +480 ms and +1460 ms after
+the release); servicing them did not advance the dialogue.
 
 **This is a negative result for the phase-20c hypothesis that the ack/re-arm was *the* blocker.** The
 module performed exactly the vendor's ack / clear / re-arm / dispatch, with the recovered CAs, and the
