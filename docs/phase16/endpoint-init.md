@@ -214,6 +214,12 @@ program the region, and finally **write the Command register to 7**:
 (`0x9518: movw r1, #0x90c; bl pci_write_config_dword`), then the base/limit/target dwords
 that follow it.
 
+**[measured, endpoint 59e7:0005]** these offsets are *not* implemented on the endpoint's own
+config space: the test boot read `cfg[0x900]=0xffffffff`, `cfg[0x904]=0`, `cfg[0x908]=0`,
+`cfg[0x90c]=0`. They are the *root complex*'s iATU viewport registers, i.e. the A.4 writes
+target the RC, not this endpoint. `epinit` therefore reads them (documented) but never writes
+them to the endpoint.
+
 ### A.5 L1-substates (config space + BAR0 registers) **[proven constants]**
 
 `shuangta_pcie_l1ss_set` @ `0x1aeb8` (called from the bus ops; `clear` is the inverse at
@@ -462,4 +468,89 @@ slot A (stock).
 
 ## Test record
 
-See the "Test-boot evidence" and "Recovery evidence" sections appended below.
+Artifacts in `build/register-dumps/endpoint-init/` (gitignored): `000_baseline.txt`,
+`010_staging.txt`, `015_live_precheck.txt`, `020_testboot_evidence.txt`,
+`030_recovery_run.txt`, `040_recovery_evidence.txt`, `050_final_state.txt`.
+CI: run `36853503238` (commit `d3dd50d`), artifact `epinit-ko`, `epinit.ko` md5
+`fa2b77320fbeec62e66690e7e8f8a562`, `vermagic=5.10.201 SMP mod_unload ARMv7`.
+
+### Staging (before the reboot; `010_staging.txt`)
+
+    epinit.ko md5 fa2b77320fbeec62e66690e7e8f8a562  (== CI artifact)
+    hi5622v100_wifi.ko.omo-off  e21629d226ec7de9a860a8955952d311  (== baseline)
+    hi5622v100_plat.ko.omo-off  23660bc285393e678d5cade1c36c194b  (== baseline)
+    /etc/rc.d/S99omo-epinit -> ../init.d/omo-epinit
+    sh -n on both scripts: OK
+
+### Test boot (`020_testboot_evidence.txt`) - vendor hidden, `epinit` via S99
+
+    [vendor]:  (none: hi5622v100_wifi + hi5622v100_plat + rox_pci0 absent)
+    epinit                 16384  0
+
+    [   39.559586] omo-epinit: pci_enable_device rc=0 command 0x0140 -> 0x0142 [vendor oal_pci_lres_init]
+    [   39.568539] omo-epinit: pci_request_mem_regions rc=0 (MEM BARs claimed)
+    [   39.575214] omo-epinit: cfg[0x004] <= 0x0007 readback=0x0006 MEM|MASTER=set (I/O bit RO0, no I/O BAR) (oal_pcie_set_inbound_by_viewport)
+    [   39.587626] omo-epinit: BAR0 base=0x40000000 (config-space read)
+    [   39.593833] omo-epinit: ROM vector page BAR0+0x0: 00000101 00000110 00000002 00000000 00000000 00000000 00000000 00000000
+    [   39.605205] omo-epinit: stage=1: BAR0 register writes NOT performed (not provably safe on an unowned chip); stopping here
+    [   39.616211] omo-epinit: done - endpoint claimed, config-space init verified, firmware NOT loaded (BAL/HCC download path not implemented)
+
+    0000:00:00.0 enable=1   (our pci_enable_device)     driver: none
+    0001:00:00.0 enable=0   (untouched)                driver: none
+    S99 rc.d link: removed by the script before insmod (watchdog safety)
+    br-lan 192.168.10.1/24 up; SSH up; no Wiphy / 0 wlan ifaces (wifi down by design)
+    pstore: no new record (only the older blk-0/2/3 files, mtimes 10:41/10:26/10:34, all pre-test)
+
+Config space read before any write (selected): id `0x000559e7`, command `0x00100140`, revision/class
+`0x02800000` (network controller), BAR0 `0x40000004`, BAR2 `0x41800004`, BAR4 `0x41000004`,
+subsystem `0x000019e5`, L1SS `0x80=0x10120000`, `0xff8=0x00011521`.
+
+The write and its read-back are both logged. The `0x0006` read-back is the expected behaviour
+(bit 0 is read-only-0 with no I/O BAR); `MEM|MASTER` is set, which is exactly the vendor's
+intent in `oal_pcie_set_inbound_by_viewport`. No BAR0 write, no firmware, no reset. The box did
+not fault and no pstore record was produced.
+
+### Live pre-check (`015_live_precheck.txt`)
+
+The same binary was also `insmod`-ed live in the takeover state (`insmod ... stage=1`, rc=0, left
+loaded, `rmmod` rc=0), confirming the S99 boot result independently of the boot path.
+
+### Recovery (`030_recovery_run.txt`, `040_recovery_evidence.txt`, `050_final_state.txt`)
+
+`sh /root/recover-epinit.sh` renamed the modules back, removed
+`/etc/rc.d/S99omo-epinit`, `/etc/init.d/omo-epinit` and `/lib/modules/5.10.201/epinit.ko`,
+`sync`, `reboot`. The recovered boot:
+
+    hi5622v100_plat  323584  3 hi5622v100_wifi      (same use count as baseline)
+    hi5622v100_wifi 3387392  1
+    md5 hi5622v100_wifi.ko e21629d226ec7de9a860a8955952d311  (baseline)
+    md5 hi5622v100_plat.ko 23660bc285393e678d5cade1c36c194b  (baseline)
+    leftovers: epinit.ko / *.omo-off / S99omo-epinit / init.d/omo-epinit all absent
+    0000:00:00.0 -> /sys/bus/pci/drivers/rox_pci0
+    0001:00:00.0 -> /sys/bus/pci/drivers/rox_pci0
+    Wiphy phy0 + phy1, 6 wlan interfaces, /tmp/wifi_done present, iwpriv lists Hisilicon0
+    br-lan 192.168.10.1/24 up; PC ping 192.168.10.1: 2/2, 0% loss
+    pstore: no new record
+
+**Acceptance state reached: the router is healthy with the vendor stack restored.**
+
+---
+
+## Limits
+
+- **The firmware is not downloaded.** The disassembly shows the vendor's transfer is
+  `firmware_file_send -> bal_write(chip, 0x01240000+off, buf, n)` through the BAL/HCC/ETE DMA +
+  message engine, not a BAR0 memcpy. That engine (ETE rings, message registers, the per-chip
+  device window, `bal_write`'s registered callback) is not implemented in `epinit`, so the
+  download path is **not** unambiguous and is deliberately not attempted.
+- **The module stops at the first step that is not provably safe.** The config-space claim/init
+  is performed and verified; the two constant BAR0 register writes (`0x2210`, `0x3a200`) are
+  implemented (`stage=2`) but gated off: a bulk BAR0 write already soft-locked the bus once, and
+  a single register write has never been proven safe on an unowned chip.
+- **The vendor's iATU writes (cfg `0x900/0x908/0x90c`) are aimed at the RC, not the endpoint.**
+  On the endpoint those offsets read `0xffffffff`/`0`; `epinit` reads them but does not write
+  them. Reproducing the vendor's iATU setup would mean driving the RC, which `hi_pcie` owns.
+- **The test boot is one boot with Wi-Fi intentionally down** (by design), as in phase 16; the
+  LAN/SSH path never dropped.
+- **Only one endpoint is touched.** `domain=0` (2.4 GHz, `0000:00:00.0`); `0001:00:00.0` is
+  left unbound and `enable=0`.
