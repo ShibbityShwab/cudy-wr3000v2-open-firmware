@@ -1,0 +1,1 @@
+obj-m := barsnap.o
