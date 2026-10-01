@@ -1165,6 +1165,28 @@ static void omo_set_enable(unsigned int mode)
 				i + 3, b0, ioread32(win + b + 0x48));
 		}
 	}
+
+	/*
+	 * mode 4 - the firmware's own message-service enable bits.  The firmware's
+	 * pcie_msg_init (file 0x9334, reached through the ops table) sets bit 0 of
+	 * CA 0x40101410 and 0x40101430:
+	 *   0x09794: add.w r2,r2,#0xc8000 ; add.w r2,r2,#0x3fc  ; r2 = 0x40101410
+	 *   0x0979c: ldrh r3,[r2] ; orr r3,r3,#1 ; strh r3,[r2]
+	 *   0x097f4: ldrh r3,[r2,#0x20] ; orr r3,r3,#1 ; strh r3,[r2,#0x20]
+	 * A live vendor boot reads both as 1; the takeover reads both as 0 (see the
+	 * DUMP lines), i.e. the firmware's message-service init never got that far.
+	 * The host writing them is the quoted substitute for the missing enable.
+	 */
+	if (mode & 4) {
+		b0 = ioread32(omo_bar0 + 0x4b9410);
+		iowrite32(b0 | 1U, omo_bar0 + 0x4b9410);
+		pr_info("omo-fwaccept: ENABLE 0x40101410 0x%08x -> 0x%08x readback=0x%08x (fw pcie_msg_init 0x097a0)\n",
+			b0, b0 | 1U, ioread32(omo_bar0 + 0x4b9410));
+		b0 = ioread32(omo_bar0 + 0x4b9430);
+		iowrite32(b0 | 1U, omo_bar0 + 0x4b9430);
+		pr_info("omo-fwaccept: ENABLE 0x40101430 0x%08x -> 0x%08x readback=0x%08x (fw pcie_msg_init 0x097f8)\n",
+			b0, b0 | 1U, ioread32(omo_bar0 + 0x4b9430));
+	}
 }
 
 static void omo_ete_wr(void __iomem *win, unsigned long off, u32 val,
