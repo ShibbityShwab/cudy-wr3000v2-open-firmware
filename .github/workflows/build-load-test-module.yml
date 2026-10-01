@@ -115,6 +115,11 @@ jobs:
           cd lab/msgd
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build rtmsg module
+        run: |
+          cd lab/rtmsg
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -169,6 +174,7 @@ jobs:
           strings lab/fwboot/fwboot.ko | grep -m1 vermagic
           strings lab/fwhs/fwhs.ko | grep -m1 vermagic
           strings lab/msgd/msgd.ko | grep -m1 vermagic
+          strings lab/rtmsg/rtmsg.ko | grep -m1 vermagic
           strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
           strings lab/abiprobe/abiprobe.ko | grep -m1 vermagic
           strings lab/wifidrv0/wifidrv0.ko | grep -m1 vermagic
@@ -257,6 +263,11 @@ jobs:
         with:
           name: msgd-ko
           path: lab/msgd/msgd.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtmsg-ko
+          path: lab/rtmsg/rtmsg.ko
 
       - uses: actions/upload-artifact@v4
         with:

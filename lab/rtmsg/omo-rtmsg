@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-20b rtmsg module.
+#
+# Claims the endpoint, programs the six inbound iATU viewports, builds the
+# runtime message context (six CAs + handler table), allocates and programs the
+# ETE SR/DR rings, loads FIRMWARE.bin, requests the endpoint INTx line, then
+# performs the proven 0x5a5a release and drains/logs the mailbox, the DR rings
+# and a firmware-RAM window.  Only quoted writes; no host->device reply.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-rtmsg
+	insmod /lib/modules/$(uname -r)/rtmsg.ko domain=0 program=1 release=1 \
+		useirq=1 irq=0 rings=1 acpoff=0 pollms=500 polldur=25000 \
+		scanbase=0x7d8000 scanlen=0x60000
+}
