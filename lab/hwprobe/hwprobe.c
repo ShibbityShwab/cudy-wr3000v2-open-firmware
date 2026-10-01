@@ -27,8 +27,8 @@ static void __iomem *omo_win;
 
 static int __init omo_hwprobe_init(void)
 {
-	resource_size_t start, len;
-	u32 w0, w1, w2;
+	resource_size_t start, len, base;
+	u32 cfg0 = 0, w0, w1, w2;
 
 	omo_dev = pci_get_device(OMO_VENDOR_ID, OMO_DEVICE_ID, NULL);
 	if (!omo_dev) {
@@ -39,15 +39,36 @@ static int __init omo_hwprobe_init(void)
 
 	start = pci_resource_start(omo_dev, 0);
 	len = pci_resource_len(omo_dev, 0);
-	pr_info("omo-hwprobe: found %04x:%04x BAR0 start=0x%llx len=0x%llx\n",
+
+	/*
+	 * Read BAR0 straight from config space (read-only) as an independent
+	 * source. The vendor kernel need not share our vanilla struct pci_dev
+	 * layout, so pci_resource_start() can read the wrong offset; the PCI
+	 * core's own config-space accessor always uses the vendor's layout.
+	 */
+	pci_read_config_dword(omo_dev, PCI_BASE_ADDRESS_0, &cfg0);
+	base = (cfg0 & PCI_BASE_ADDRESS_SPACE_IO) ?
+	       (cfg0 & PCI_BASE_ADDRESS_IO_MASK) :
+	       (cfg0 & PCI_BASE_ADDRESS_MEM_MASK);
+
+	pr_info("omo-hwprobe: found %04x:%04x BAR0 resource start=0x%llx len=0x%llx cfgreg=0x%08x base=0x%llx\n",
 		OMO_VENDOR_ID, OMO_DEVICE_ID,
-		(unsigned long long)start, (unsigned long long)len);
+		(unsigned long long)start, (unsigned long long)len,
+		cfg0, (unsigned long long)base);
+
+	if (!base) {
+		pr_err("omo-hwprobe: no usable BAR0 (resource=0x%llx cfg=0x%08x)\n",
+		       (unsigned long long)start, cfg0);
+		pci_dev_put(omo_dev);
+		omo_dev = NULL;
+		return -ENODEV;
+	}
 
 	/* No pci_request_region: the vendor driver owns the region. */
-	omo_win = ioremap(start + OMO_WIN_OFF, OMO_WIN_LEN);
+	omo_win = ioremap(base + OMO_WIN_OFF, OMO_WIN_LEN);
 	if (!omo_win) {
 		pr_err("omo-hwprobe: ioremap of 0x%llx (16 bytes) failed\n",
-		       (unsigned long long)(start + OMO_WIN_OFF));
+		       (unsigned long long)(base + OMO_WIN_OFF));
 		pci_dev_put(omo_dev);
 		omo_dev = NULL;
 		return -ENOMEM;
