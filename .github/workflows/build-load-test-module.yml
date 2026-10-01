@@ -1,0 +1,43 @@
+name: build-load-test-module
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+
+      - name: vanilla kernel source
+        run: |
+          curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
+          tar xf linux.tar.xz
+
+      - name: prepare kernel for external modules
+        run: |
+          cd linux-5.10.201
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          scripts/config --enable SMP --disable PREEMPT --enable MODULE_UNLOAD --disable MODVERSIONS --set-str LOCALVERSION ""
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules_prepare -j"$(nproc)"
+
+      - name: build test module
+        run: |
+          cd lab/hello
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
+      - name: show vermagic
+        run: |
+          strings lab/hello/hello.ko | grep -m1 vermagic
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-ko
+          path: lab/hello/hello.ko
