@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-21 fwaccept module.
+#
+# This is the phase-20f txpath boot plus the device-side accept gate recovered
+# from the firmware image: after the release and the SR post it writes the
+# gate register (enable=1: out[5] CA 0x400392f0 <= 8, quoted from
+# pcie_msg_send_irq @0x174a8), then rings pcie_msg_send(chip,3) and logs
+# whether the device clears out[0], answers (id 1 or anything else), and
+# whether the SR/DR indices move.  Only quoted writes; the single
+# unproven-but-quoted write is the PCI_INTERRUPT_LINE (plus, per boot, exactly
+# one of the two gate families selected by `enable`).
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-fwaccept
+	insmod /lib/modules/$(uname -r)/fwaccept.ko domain=0 program=1 outwin=1 \
+		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
+		release=1 useirq=1 irq=0 hostirq=207 rings=1 acpoff=0 \
+		enable=${OMO_ENABLE:-1} \
+		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
+}
