@@ -25,7 +25,7 @@ jobs:
         run: |
           cd linux-5.10.201
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
-          scripts/config --enable SMP --disable PREEMPT --enable MODULE_UNLOAD --disable MODVERSIONS --set-str LOCALVERSION ""
+          scripts/config --enable SMP --disable PREEMPT --enable MODULE_UNLOAD --disable MODVERSIONS --disable ARM_PATCH_PHYS_VIRT --set-str LOCALVERSION ""
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules_prepare -j"$(nproc)"
 
       - name: build test module
