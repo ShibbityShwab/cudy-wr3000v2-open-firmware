@@ -66,7 +66,8 @@ The `get_2g_power_param` answer read during the run is the same 26-word table ph
    three more times. Six snapshots, span 5.117 s.
 2. **Controlled run** (`ringwatch_pair_log.txt`): `clear`, then five times
    {take snapshot → one `get_2g_power_param` → take snapshot}. Ten snapshots, each pair ~15–19 ms
-   apart, so the message is the only thing that can move between a pre and its post.
+   apart, so the message is the dominant thing that can move between a pre and its post (background
+   traffic still lands in the window, which is why the idle pairs are a useful control).
 3. **Rapid run** (`ringwatch_rapid_log.txt`): reloaded with `nsnapshots=400`, then 400 snapshots taken
    back to back (4.614 s, 86.7 snapshots/s) to watch the cursor wrap.
 
@@ -198,7 +199,7 @@ Only three words move, and they moved **because of the message**: `0x1b8e34/38/3
 snapshots taken right after the five `get_2g_power_param` commands). The new triple is
 `{pointer, small-int, same-pointer}`; the old middle word `01042de8` looks like a handle/token and was
 replaced by `00000002`. Note `0x1b8e30` held `0010f1f0`, the pre-value of `0x1b8e3c`, so the struct
-duplicates a pointer at `+0x2c` and `+0x38`.
+duplicates a pointer at `+0x30` and `+0x3c` (relative to the region base `0x1b8e00`).
 
 Limits 4 and 5 of `rings.md` are the right frame here: beacons, timers and competing traffic also
 write these structures, so one 5-command interval proves *the message touched this struct* but not
@@ -219,7 +220,7 @@ message-attributable signal in this experiment is the `0x1b8e00` struct change, 
 1. **Read-only, no claim.** No config-space write, no `iowrite32`, no `pci_request_region`,
    `pci_enable_device` or reset. No vendor module was loaded or unloaded by us. The only writes were
    to our own debugfs `sample` node.
-2. **One sample rate.** 86.7 snapshots/s is far faster than the ~65 cursor steps/s we measured, but a
+2. **One sample rate.** 86.7 snapshots/s is far faster than the ~62 cursor steps/s we measured, but a
    step can still be missed; the pre/post pairing mitigates this and the wrap count is exact.
 3. **Attribution.** The five-command burst moved `0x1b8e00` exactly once, but beacons/timers also run;
    only the before/after boundary, not per-command causality, is shown.
@@ -232,7 +233,7 @@ message-attributable signal in this experiment is the `0x1b8e00` struct change, 
    not follow the pointers.
 7. **No `set_*` run.** The safe branch of the task was taken; whether a value-identical
    `set_2g_power_param` moves the ring more strongly than `get` is untested.
-8. **100 ms-scale timing only.** The module's timestamp is `ktime_get_ns()` in the write handler; the
+8. **Timing resolution.** The module's timestamp is `ktime_get_ns()` in the write handler; the
    latency between the debugfs write and the `ioread32()`s of the three regions is not measured, and
    the three regions are read sequentially, not atomically.
 
