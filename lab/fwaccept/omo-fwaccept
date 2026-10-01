@@ -12,9 +12,12 @@
 START=99
 start() {
 	rm -f /etc/rc.d/S99omo-fwaccept
+	# per-boot gate selection: /etc/omo-fwaccept.enable (unset -> 1)
+	ENABLE=$(cat /etc/omo-fwaccept.enable 2>/dev/null)
+	[ -n "$ENABLE" ] || ENABLE=1
 	insmod /lib/modules/$(uname -r)/fwaccept.ko domain=0 program=1 outwin=1 \
 		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
 		release=1 useirq=1 irq=0 hostirq=207 rings=1 acpoff=0 \
-		enable=${OMO_ENABLE:-1} \
+		enable=$ENABLE \
 		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
 }
