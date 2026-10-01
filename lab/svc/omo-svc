@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-21 service-thread module (svc.ko).
+#
+# This is the phase-20f/21 fwaccept takeover: claim the endpoint, program the
+# six inbound + one outbound iATU viewports, load FIRMWARE.bin, build the
+# vendor message context and the ETE SR/DR rings, post DR buffers, post the
+# vendor's id-1 SR frame, release the chip (0x5a5a) and ring
+# pcie_msg_send(chip,3).  It then runs the recovered vendor service thread
+# (pcie_process_thread @0x16efc) as a kthread for 25 s: the host message
+# dispatch (pcie_msg_handle @0x171f8: clear out[1], ack 0x40101438, re-arm
+# 0x40101414), the ETE glue status W1C (pcie_intr_handle @0x82e4 /
+# oal_pcie_transfer_done @0x83e4, +0x2ec & 0x3d8), the DR/SR completion and
+# index scans, and the periodic doorbell re-ring (pcie_msg_send @0x160f4).
+#
+# enable=0 deliberately: the phase-20 boot 3 proved that the enable=1 family
+# (out[5] CA 0x400392f0 <= 8, pcie_msg_send_irq @0x174a8) writes the
+# firmware's live ack word and HANGS the chip.  This run does not touch it.
+# The only unproven-but-quoted write remains PCI_INTERRUPT_LINE = 0xcf.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-svc
+	insmod /lib/modules/$(uname -r)/svc.ko domain=0 program=1 outwin=1 \
+		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
+		release=1 useirq=1 irq=0 hostirq=207 rings=1 acpoff=0 \
+		enable=0 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
+		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
+}

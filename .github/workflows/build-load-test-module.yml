@@ -145,6 +145,11 @@ jobs:
           cd lab/fwaccept
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build svc module
+        run: |
+          cd lab/svc
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -205,6 +210,7 @@ jobs:
           strings lab/rxloop/rxloop.ko | grep -m1 vermagic
           strings lab/txpath/txpath.ko | grep -m1 vermagic
           strings lab/fwaccept/fwaccept.ko | grep -m1 vermagic
+          strings lab/svc/svc.ko | grep -m1 vermagic
           strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
           strings lab/abiprobe/abiprobe.ko | grep -m1 vermagic
           strings lab/wifidrv0/wifidrv0.ko | grep -m1 vermagic
@@ -323,6 +329,11 @@ jobs:
         with:
           name: fwaccept-ko
           path: lab/fwaccept/fwaccept.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: svc-ko
+          path: lab/svc/svc.ko
 
       - uses: actions/upload-artifact@v4
         with:
