@@ -1064,6 +1064,48 @@ static void omo_send_doorbell(const char *tag, unsigned int id)
  *   each channel control word (firmware file 0x9560: ldr r3,[chan+0xb0];
  *   ldr r2,[r3]; orr r2,#1; str r2,[r3]).  So the host never supplies them.
  */
+/*
+ * Read-only diagnostic dump of the register windows the gate lives in: the
+ * ETE block's own control/status words (device CA 0x4003a000..0x4003a0ff),
+ * every channel's +0x00/+0x08/+0x48, and the mailbox words.  Compared against
+ * a live vendor boot (build/register-dumps/barmap_ep0_bar0.bin) this shows
+ * exactly which enable the takeover lacks.  No writes.
+ */
+static void omo_dump_gate_regs(const char *tag)
+{
+	void __iomem *win = omo_bar0 + ETE_BAR0_OFF;
+	unsigned int i, k;
+
+	for (k = 0; k < 0x40; k += 0x10) {
+		pr_info("omo-fwaccept: DUMP %s ETE+%03x: %08x %08x %08x %08x\n",
+			tag, k,
+			ioread32(win + k), ioread32(win + k + 4),
+			ioread32(win + k + 8), ioread32(win + k + 0xc));
+	}
+	for (i = 0; i < ETE_SR_N; i++)
+		pr_info("omo-fwaccept: DUMP %s SR%u CA 0x%08x: +00=%08x +08=%08x +48=%08x\n",
+			tag, i, 0x4003a000U + (u32)omo_sr_block[i],
+			ioread32(win + omo_sr_block[i]),
+			ioread32(win + omo_sr_block[i] + 0x08),
+			ioread32(win + omo_sr_block[i] + 0x48));
+	for (i = 0; i < ETE_DR_N; i++)
+		pr_info("omo-fwaccept: DUMP %s DR%u CA 0x%08x: +00=%08x +08=%08x +48=%08x\n",
+			tag, i + 3, 0x4003a000U + (u32)omo_dr_block[i],
+			ioread32(win + omo_dr_block[i]),
+			ioread32(win + omo_dr_block[i] + 0x08),
+			ioread32(win + omo_dr_block[i] + 0x48));
+	pr_info("omo-fwaccept: DUMP %s MBOX 39000=%08x 39010=%08x 39014=%08x 39108=%08x 3910c=%08x 39220=%08x 39224=%08x 392d0=%08x 392d4=%08x 392e8=%08x 392f0=%08x 392f4=%08x 101410=%08x 101430=%08x 101434=%08x\n",
+		tag,
+		ioread32(omo_bar0 + 0x3f1000), ioread32(omo_bar0 + 0x3f1010),
+		ioread32(omo_bar0 + 0x3f1014), ioread32(omo_bar0 + 0x3f1108),
+		ioread32(omo_bar0 + 0x3f110c), ioread32(omo_bar0 + 0x3f1220),
+		ioread32(omo_bar0 + 0x3f1224), ioread32(omo_bar0 + 0x3f12d0),
+		ioread32(omo_bar0 + 0x3f12d4), ioread32(omo_bar0 + 0x3f12e8),
+		ioread32(omo_bar0 + 0x3f12f0), ioread32(omo_bar0 + 0x3f12f4),
+		ioread32(omo_bar0 + 0x4b9410), ioread32(omo_bar0 + 0x4b9430),
+		ioread32(omo_bar0 + 0x4b9434));
+}
+
 static void omo_set_enable(unsigned int mode)
 {
 	void __iomem *win = omo_bar0 + ETE_BAR0_OFF;
@@ -1832,6 +1874,7 @@ skip_program:
 	omo_snapshot_all();
 	pr_info("omo-fwaccept: pre-release baseline taken (t0)\n");
 	omo_poll_mailbox("pre", 1);
+	omo_dump_gate_regs("pre");
 
 	if (omo_useirq)
 		omo_request_irq_line();
@@ -1852,6 +1895,7 @@ skip_program:
 	omo_scan_sr("post0");
 	/* the device-side gate this phase recovers (Part A); quoted writes only */
 	omo_set_enable(omo_enable);
+	omo_dump_gate_regs("gate");
 	/* ring the host->device doorbell (pcie_msg_send(chip,3), @0x160f4) */
 	omo_send_doorbell("post0", MSG_SEND_ID);
 
