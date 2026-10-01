@@ -42,7 +42,6 @@
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/io.h>
-#include <linux/ktime.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -152,11 +151,11 @@ static const struct omo_stat omo_stat[STATUS_N] = {
 
 static u32 omo_mbox_last[MAILBOX_N];
 static u32 omo_stat_last[STATUS_N];
-static u64 omo_t0;
+static unsigned long omo_t0;
 
-static u64 omo_now_ns(void)
+static unsigned long omo_ms_now(void)
 {
-	return ktime_get_ns();
+	return jiffies_to_msecs(jiffies - omo_t0);
 }
 
 /* ---- iATU programming (vendor membar path, as inbound.c/fwboot.c) ------ */
@@ -328,7 +327,7 @@ static void omo_decode_mailbox(const char *what, u32 v)
 	pr_info("omo-fwhs:   %-18s = 0x%08x  bits={%s}\n", what, v, bits[0] ? bits : "-");
 }
 
-static void omo_scan_changes(const char *tag, u64 t)
+static void omo_scan_changes(const char *tag)
 {
 	unsigned long off;
 	unsigned int changed = 0, shown = 0;
@@ -343,8 +342,8 @@ static void omo_scan_changes(const char *tag, u64 t)
 				u32 old;
 
 				memcpy(&old, omo_scan_base + off, 4);
-				pr_info("omo-fwhs: [%s +%llums] SCAN CA=0x%08x BAR0+0x%lx 0x%08x -> 0x%08x\n",
-					tag, (unsigned long long)((t - omo_t0) / 1000000ULL),
+				pr_info("omo-fwhs: [%s +%lums] SCAN CA=0x%08x BAR0+0x%lx 0x%08x -> 0x%08x\n",
+					tag, omo_ms_now(),
 					0x01320000U + (u32)off, omo_scanbase + off, old, w);
 				shown++;
 			}
@@ -352,22 +351,20 @@ static void omo_scan_changes(const char *tag, u64 t)
 		}
 	}
 	if (changed)
-		pr_info("omo-fwhs: [%s +%llums] scan window changed %u/%u words (shown %u)\n",
-			tag, (unsigned long long)((t - omo_t0) / 1000000ULL),
-			changed, omo_scanlen / 4, shown);
+		pr_info("omo-fwhs: [%s +%lums] scan window changed %u/%u words (shown %u)\n",
+			tag, omo_ms_now(), changed, omo_scanlen / 4, shown);
 }
 
-static void omo_poll_mailbox(const char *tag, u64 t, unsigned int first)
+static void omo_poll_mailbox(const char *tag, unsigned int first)
 {
 	unsigned int i;
-	u64 ms = (t - omo_t0) / 1000000ULL;
 
 	for (i = 0; i < MAILBOX_N; i++) {
 		u32 v = ioread32(omo_bar0 + omo_mbox[i].off);
 
 		if (v != omo_mbox_last[i] || first) {
-			pr_info("omo-fwhs: [%s +%llums] MBOX %-18s CA=0x%08x 0x%08x -> 0x%08x\n",
-				tag, (unsigned long long)ms, omo_mbox[i].what,
+			pr_info("omo-fwhs: [%s +%lums] MBOX %-18s CA=0x%08x 0x%08x -> 0x%08x\n",
+				tag, omo_ms_now(), omo_mbox[i].what,
 				omo_mbox[i].ca, omo_mbox_last[i], v);
 			omo_decode_mailbox(omo_mbox[i].what, v);
 			omo_mbox_last[i] = v;
@@ -377,8 +374,8 @@ static void omo_poll_mailbox(const char *tag, u64 t, unsigned int first)
 		u32 v = ioread32(omo_bar0 + omo_stat[i].off);
 
 		if (v != omo_stat_last[i]) {
-			pr_info("omo-fwhs: [%s +%llums] STAT %-18s CA=0x%08x 0x%08x -> 0x%08x\n",
-				tag, (unsigned long long)ms, omo_stat[i].what,
+			pr_info("omo-fwhs: [%s +%lums] STAT %-18s CA=0x%08x 0x%08x -> 0x%08x\n",
+				tag, omo_ms_now(), omo_stat[i].what,
 				omo_stat[i].ca, omo_stat_last[i], v);
 			omo_stat_last[i] = v;
 		}
@@ -525,10 +522,10 @@ skip_program:
 	}
 
 	/* Pre-release baseline of every watched register and the scan window. */
-	omo_t0 = omo_now_ns();
+	omo_t0 = jiffies;
 	omo_snapshot_all();
 	pr_info("omo-fwhs: pre-release baseline taken (t0)\n");
-	omo_poll_mailbox("pre", omo_now_ns(), 1);
+	omo_poll_mailbox("pre", 1);
 
 	if (!omo_release) {
 		pr_info("omo-fwhs: release=0: NOT releasing the chip\n");
@@ -540,8 +537,8 @@ skip_program:
 	}
 
 	/* Immediate post-release sample, then the timed poll. */
-	omo_poll_mailbox("post0", omo_now_ns(), 0);
-	omo_scan_changes("post0", omo_now_ns());
+	omo_poll_mailbox("post0", 0);
+	omo_scan_changes("post0");
 
 	if (omo_polldur < 10000)
 		omo_polldur = 10000;
@@ -553,11 +550,11 @@ skip_program:
 
 	for (k = 0; k < polls; k++) {
 		msleep(omo_pollms);
-		omo_poll_mailbox("poll", omo_now_ns(), 0);
+		omo_poll_mailbox("poll", 0);
 		if ((k & 1) == 1)
-			omo_scan_changes("poll", omo_now_ns());
+			omo_scan_changes("poll");
 	}
-	omo_scan_changes("final", omo_now_ns());
+	omo_scan_changes("final");
 	pr_info("omo-fwhs: poll complete after %u ms\n", omo_polldur);
 
 done:
