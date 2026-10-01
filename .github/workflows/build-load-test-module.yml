@@ -65,10 +65,32 @@ jobs:
           cd lab/calwrite
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
-      - name: build wifiskel module
+      # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
+      # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
+      # struct-offset delta is captured in both binaries. ----
+
+      - name: build wifiskel + abiprobe (PM on)
         run: |
-          cd lab/wifiskel
-          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          make -C linux-5.10.201 M="$PWD/lab/wifiskel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          make -C linux-5.10.201 M="$PWD/lab/abiprobe" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          mkdir -p "$RUNNER_TEMP/abi-artifacts"
+          cp lab/wifiskel/wifiskel.ko "$RUNNER_TEMP/abi-artifacts/wifiskel-pm-on.ko"
+          cp lab/abiprobe/abiprobe.ko "$RUNNER_TEMP/abi-artifacts/abiprobe-pm-on.ko"
+
+      - name: force CONFIG_PM off in prepared headers (match vendor)
+        run: sh lab/abi-pm-off.sh "$PWD/linux-5.10.201"
+
+      - name: build wifiskel + abiprobe (PM off)
+        run: |
+          rm -f lab/wifiskel/wifiskel.o lab/wifiskel/wifiskel.ko
+          rm -f lab/abiprobe/abiprobe.o lab/abiprobe/abiprobe.ko
+          make -C linux-5.10.201 M="$PWD/lab/wifiskel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          make -C linux-5.10.201 M="$PWD/lab/abiprobe" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          cp lab/wifiskel/wifiskel.ko "$RUNNER_TEMP/abi-artifacts/wifiskel-pm-off.ko"
+          cp lab/abiprobe/abiprobe.ko "$RUNNER_TEMP/abi-artifacts/abiprobe-pm-off.ko"
+          echo "== autoconf.h PM state seen by the PM-off build =="
+          grep -nE 'CONFIG_PM( |_SLEEP )' linux-5.10.201/include/generated/autoconf.h || true
+          md5sum "$RUNNER_TEMP"/abi-artifacts/*.ko
 
       - name: show vermagic
         run: |
@@ -80,6 +102,7 @@ jobs:
           strings lab/ringwatch/ringwatch.ko | grep -m1 vermagic
           strings lab/calwrite/calwrite.ko | grep -m1 vermagic
           strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
+          strings lab/abiprobe/abiprobe.ko | grep -m1 vermagic
 
       - uses: actions/upload-artifact@v4
         with:
@@ -120,3 +143,8 @@ jobs:
         with:
           name: wifiskel-ko
           path: lab/wifiskel/wifiskel.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abi-artifacts
+          path: ${{ runner.temp }}/abi-artifacts

@@ -95,11 +95,14 @@ static int __init omo_wifiskel_init(void)
 
 	pr_info("omo-skel: init: built against vanilla 5.10.201 headers: "
 		"sizeof(struct wiphy)=%zu sizeof(struct ieee80211_supported_band)=%zu "
-		"sizeof(struct ieee80211_channel)=%zu sizeof(struct ieee80211_sta_ht_cap)=%zu\n",
+		"sizeof(struct ieee80211_channel)=%zu sizeof(struct ieee80211_sta_ht_cap)=%zu "
+		"offsetof(wiphy.interface_modes)=%zu offsetof(wiphy.bands)=%zu\n",
 		sizeof(struct wiphy),
 		sizeof(struct ieee80211_supported_band),
 		sizeof(struct ieee80211_channel),
-		sizeof(struct ieee80211_sta_ht_cap));
+		sizeof(struct ieee80211_sta_ht_cap),
+		offsetof(struct wiphy, interface_modes),
+		offsetof(struct wiphy, bands));
 
 	wiphy = wiphy_new_nm(&omo_ops, 0, OMO_WIPHY_NAME);
 	pr_info("omo-skel: wiphy_new_nm(ops, sizeof_priv=0, name=\"%s\") rc=%d ptr=%px\n",
