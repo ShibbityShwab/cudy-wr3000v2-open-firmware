@@ -91,11 +91,18 @@ static void omo_cfg_dump(struct pci_dev *dev, u16 off)
 		pr_info("omo-epinit: cfg[0x%03x] = 0x%08x\n", off, v);
 }
 
-/* Write a word, read it straight back, log both.  Every write is verified. */
+/*
+ * Write a word, read it straight back, log both.  Every write is verified.
+ *
+ * PCI_COMMAND bit 0 (I/O space) is hardwired 0 because the 59e7:0005 endpoint
+ * has no I/O BAR, so the vendor's own pci_write_config_word(dev,4,7) reads back
+ * 0x0006.  Require the two bits the vendor actually needs (MEM|MASTER) rather
+ * than strict equality, and say so in the log.
+ */
 static int omo_cfg_write_check(struct pci_dev *dev, u16 off, u16 val, const char *why)
 {
 	u16 rb = 0xffff;
-	int ret;
+	int ret, ok;
 
 	ret = pci_write_config_word(dev, off, val);
 	if (ret) {
@@ -104,9 +111,17 @@ static int omo_cfg_write_check(struct pci_dev *dev, u16 off, u16 val, const char
 		return ret;
 	}
 	pci_read_config_word(dev, off, &rb);
-	pr_info("omo-epinit: cfg[0x%03x] <= 0x%04x readback=0x%04x match=%s (%s)\n",
-		off, val, rb, rb == val ? "YES" : "NO", why);
-	return rb == val ? 0 : -EIO;
+	if (off == PCI_COMMAND) {
+		ok = (rb & (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER)) ==
+		     (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+		pr_info("omo-epinit: cfg[0x%03x] <= 0x%04x readback=0x%04x MEM|MASTER=%s (I/O bit RO0, no I/O BAR) (%s)\n",
+			off, val, rb, ok ? "set" : "MISSING", why);
+	} else {
+		ok = (rb == val);
+		pr_info("omo-epinit: cfg[0x%03x] <= 0x%04x readback=0x%04x match=%s (%s)\n",
+			off, val, rb, ok ? "YES" : "NO", why);
+	}
+	return ok ? 0 : -EIO;
 }
 
 static void omo_log_words(const char *tag, unsigned long off,
