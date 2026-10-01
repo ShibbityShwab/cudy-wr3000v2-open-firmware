@@ -404,7 +404,7 @@ static void omo_snapshot_all(void)
 	}
 }
 
-static int omo_release(void)
+static int omo_do_release(void)
 {
 	u32 rb;
 
@@ -468,7 +468,7 @@ static int __init omo_fwhs_init(void)
 				((u64)hi << 32);
 		pr_info("omo-fwhs: BAR0 base=0x%llx (config space), BAR2=0x%x (iatu_bar1)\n",
 			(unsigned long long)omo_bar0_base,
-			b2 & PCI_BASE_ADDRESS_MEM_MASK);
+			(u32)(b2 & PCI_BASE_ADDRESS_MEM_MASK));
 	}
 
 	omo_bar0 = pci_iomap(omo_dev, OMO_BAR_NUM, 0);
@@ -534,7 +534,7 @@ skip_program:
 		pr_info("omo-fwhs: release=0: NOT releasing the chip\n");
 		goto done;
 	}
-	if (omo_release()) {
+	if (omo_do_release()) {
 		pr_err("omo-fwhs: release readback mismatch - stopping\n");
 		goto err_unmap;
 	}
