@@ -95,6 +95,11 @@ jobs:
           cd lab/fwload
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build inbound module
+        run: |
+          cd lab/inbound
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -214,6 +219,11 @@ jobs:
         with:
           name: fwload-ko
           path: lab/fwload/fwload.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inbound-ko
+          path: lab/inbound/inbound.ko
 
       - uses: actions/upload-artifact@v4
         with:
