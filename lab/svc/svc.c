@@ -433,6 +433,8 @@ static unsigned int omo_glue_clears;
 static u32 omo_glue_last;
 static u32 omo_out0_last;
 static u32 omo_out1_last;
+static u32 omo_sr_idx_last[ETE_SR_N];
+static u32 omo_dr_idx_last[ETE_DR_N];
 
 static unsigned long omo_ms_now(void)
 {
@@ -1769,16 +1771,26 @@ static void omo_svc_log_state(const char *tag)
 			tag, omo_ms_now(), omo_mbox[1].ca, omo_out1_last, o1);
 		omo_out1_last = o1;
 	}
-	for (i = 0; i < ETE_SR_N; i++)
-		pr_info("omo-svc: [%s +%lums] SR ch%u wptr(+0x18)=0x%08x rptr(+0x1c)=0x%08x\n",
-			tag, omo_ms_now(), i,
-			ioread32(win + omo_sr_block[i] + ETE_SR_WPTR),
-			ioread32(win + omo_sr_block[i] + ETE_SR_RPTR));
-	for (i = 0; i < ETE_DR_N; i++)
-		pr_info("omo-svc: [%s +%lums] DR ch%u wptr(+0x38)=0x%08x rptr(+0x3c)=0x%08x\n",
-			tag, omo_ms_now(), i + 3,
-			ioread32(win + omo_dr_block[i] + ETE_DR_WPTR),
-			ioread32(win + omo_dr_block[i] + ETE_DR_RPTR));
+	for (i = 0; i < ETE_SR_N; i++) {
+		u32 w = ioread32(win + omo_sr_block[i] + ETE_SR_WPTR);
+		u32 r = ioread32(win + omo_sr_block[i] + ETE_SR_RPTR);
+
+		if (r != omo_sr_idx_last[i]) {
+			pr_info("omo-svc: [%s +%lums] SR ch%u wptr(+0x18)=0x%08x rptr(+0x1c)=0x%08x\n",
+				tag, omo_ms_now(), i, w, r);
+			omo_sr_idx_last[i] = r;
+		}
+	}
+	for (i = 0; i < ETE_DR_N; i++) {
+		u32 w = ioread32(win + omo_dr_block[i] + ETE_DR_WPTR);
+		u32 r = ioread32(win + omo_dr_block[i] + ETE_DR_RPTR);
+
+		if (r != omo_dr_idx_last[i]) {
+			pr_info("omo-svc: [%s +%lums] DR ch%u wptr(+0x38)=0x%08x rptr(+0x3c)=0x%08x\n",
+				tag, omo_ms_now(), i + 3, w, r);
+			omo_dr_idx_last[i] = r;
+		}
+	}
 }
 
 /*
