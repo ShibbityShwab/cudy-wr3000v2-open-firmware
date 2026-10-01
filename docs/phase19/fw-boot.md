@@ -315,10 +315,221 @@ without writing), `fwpath`, `target` (0x6f8000), `chunk` (0x80000), `maxlen` (0)
 `nobs` (3). **No release write is performed** (the vendor's IRQ enable is host-side and there is no
 IRQ registered in the takeover boot; the `0x5a5a` magic is on an untaken branch).
 
-### Test record
+### B.3 The build
 
-_(filled in below after the observation boot)_
+`fwboot.ko` built by the existing GitHub Actions workflow (`build fwboot module` step added),
+CI run **36871468530** (commit `250732a`), artifact `fwboot-ko`; md5
+`69a35629fe92695dbe7758117eda7e7a`, `vermagic=5.10.201 SMP mod_unload ARMv7`, 17404 bytes.
+
+---
+
+## Test record
+
+Artifacts in `build/register-dumps/fwboot/` (gitignored): `000_baseline.txt`, `010_staging.txt`,
+`020_testboot_evidence.txt` (captured mid-run), `021_testboot_evidence2.txt` (**the full
+observation**), `030_recovery_run.txt`, `040_recovery_evidence.txt`, `041_recovery_radios.txt`,
+plus `stage/` (`fwboot.ko`, `omo-fwboot`, `recover-fwboot.sh`).
+
+**Boots: 1 observation boot + 1 recovery boot.** Per the lane directive, no second (release) boot
+was run, because Part A finds **no proven** release write to perform; the observation boot is the
+baseline the release step must change.
+
+### 1. Baseline (live router, vendor stack loaded, no reboot)
+
+```
+hi5622v100_plat       323584  3 hi5622v100_wifi
+hi5622v100_wifi      3387392  1
+  40000000-40ffffff : 0000:00:00.0
+    41800000-41803fff : iatu_bar1
+pstore: blk-0/2/3 mtimes 10:41 / 10:26 / 10:34  (all pre-test)
+6 wlan interfaces
+```
+
+### 2. Staging (vendor hidden, module + one-shot loader installed)
+
+The vendor modules are renamed `.ko.omo-off` (the phase-16/17/18 recipe), `fwboot.ko` is installed
+at `/lib/modules/5.10.201/fwboot.ko` (md5 `69a35629fe92695dbe7758117eda7e7a`, matches the artifact),
+the one-shot loader `/etc/init.d/omo-fwboot` is symlinked `S99`, and `/root/recover-fwboot.sh` is
+installed. Both shell scripts pass `sh -n`:
+
+```
++ sh -n /tmp/omo-fwboot && echo loader-syntax-ok
+loader-syntax-ok
++ sh -n /tmp/recover-fwboot.sh && echo recover-syntax-ok
+recover-syntax-ok
++ md5sum /lib/modules/5.10.201/fwboot.ko
+69a35629fe92695dbe7758117eda7e7a  /lib/modules/5.10.201/fwboot.ko
+```
+
+The loader deletes its own rc.d symlink before `insmod` (watchdog safety: a hang resets into a
+reachable boot with the vendor still hidden and no `fwboot`), then reboots.
+
+### 3. The observation boot (`021_testboot_evidence2.txt`)
+
+Claim and decode first - the same proven path as phase 18, every iATU write read back `match=YES`:
+
+```
+omo-fwboot: endpoint 0000:00:00.0 id 59e7:0005
+omo-fwboot: pci_enable_device rc=0 command 0x0140 -> 0x0142
+omo-fwboot: pci_request_mem_regions rc=0 (MEM BARs claimed)
+omo-fwboot: BAR0 base=0x40000000 (config space), BAR2=0x41800000 (iatu_bar1)
+omo-fwboot: before BAR0+0x6f8000 = 0xffffffff
+omo-fwboot:   iatu[0x104] <= 0x80000000 readback=0x80000000 match=YES  (r0 ctrl2=ena)
+... (all six viewports, all match=YES) ...
+omo-fwboot: programmed 6 viewports
+omo-fwboot: cfg[0x004] <= 0x0007 readback=0x0006 MEM|MASTER=set
+omo-fwboot: decode verdict BAR0+0x6f8000: before=0xffffffff after=0x00000000 decoded=YES
+```
+
+The firmware write, verified end to end exactly as phase 18 (note the `after=0x00000000`: the window
+reads as zero words here, then our image lands in it):
+
+```
+omo-fwboot: firmware file /lib/firmware/hi_wifi/FIRMWARE.bin size=928920 bytes
+omo-fwboot: writability probe BAR0+0x6f8000: wrote 0xdeadbeef read 0xdeadbeef match=YES
+omo-fwboot: download 928920 bytes -> BAR0+0x6f8000 (device CA 0x01240000) in 524288-byte chunks
+omo-fwboot: wrote 524288/928920 bytes @ BAR0+0x6f8000
+omo-fwboot: wrote 928920/928920 bytes @ BAR0+0x778000
+omo-fwboot: verify target BAR0+0x6f8000: file=928920 bytes diffs=0 match=YES
+omo-fwboot: observing 30 registers, 3 samples, 3000 ms apart (no release write)
+```
+
+Then the three samples. **No release write was performed.** Sample 1 (t=40.5 s), sample 2
+(t=43.8 s) and sample 3 (t=47.1 s) - the full 30-register table is in the evidence file; the
+distinguishing rows:
+
+| register | CA | sample1 (40.5 s) | sample2 (43.8 s) | sample3 (47.1 s) |
+| --- | --- | --- | --- | --- |
+| ROM vector word0 | `0x00000000` | `0xe59ff018` | `0xe59ff018` | `0xe59ff018` |
+| region5 alias of CA0 w0 | `0x01200000` | `0xe59ff018` | `0xe59ff018` | `0xe59ff018` |
+| fw image word0 | `0x01240000` | `0x00046971` | `0x00046971` | `0x00046971` |
+| fw image word1 | `0x01240004` | `0x000c742d` | `0x000c742d` | `0x000c742d` |
+| fw BSS/stack +0x00 | `0x01322c18` | `0x40080000` | `0x40080000` | `0x40080000` |
+| fw BSS/stack +0x04 | `0x01322c1c` | `0x00000025` | `0x00000025` | `0x00000025` |
+| msg out[0] H2D mask | `0x40039010` | `0x00000000` | `0x00000000` | `0x00000000` |
+| msg out[1] | `0x40039014` | `0x00000000` | `0x00000000` | `0x00000000` |
+| msg out[2] doorbell | `0x400392d4` | `0x00000000` | `0x00000000` | `0x00000000` |
+| msg out[5] | `0x400392f0` | `0x00000000` | `0x00000000` | `0x00000000` |
+| msg out[4] MAC-side | `0x40101414` | `0x00000000` | `0x00000000` | `0x00000000` |
+| msg out[3] MAC-side | `0x40101438` | `0x00000000` | `0x00000000` | `0x00000000` |
+| pcie0 status latch | `0x400392d0` | `0x00000005` | `0x00000005` | `0x00000005` |
+| pcie0_status | `0x40039224` | `0x2000a230` | `0x2000a230` | `0x2000a230` |
+| efuse_chip_id | `0x400002a8` | `0x00000186` | `0x00000186` | `0x00000186` |
+| dcoldo_efuse | `0x400002d4` | `0x00008108` | `0x00008108` | `0x00008108` |
+| tcxo_pll_status | `0x40101234` | `0x00000001` | `0x00000001` | `0x00000001` |
+| region5 top word | `0x01417ff0` | `0xdeadbeaf` | `0xdeadbeaf` | `0xdeadbeaf` |
+
+```
+omo-fwboot: change verdict over 3 samples: s1->s2 changed=0/30  s2->s3 changed=0/30
+omo-fwboot: done (mode=1 program=1 nobs=3 obsdelay=3000)
+```
+
+No panic, no bus stall, no new pstore record; the box stayed reachable throughout.
+
+### 4. Recovery (`030_recovery_run.txt`, `040_recovery_evidence.txt`, `041_recovery_radios.txt`)
+
+`sh /root/recover-fwboot.sh` renamed the modules back, removed the loader, the module, the symlink
+and the `/tmp` copy, `sync`, `reboot`. Recovered boot:
+
+```
+hi5622v100_plat       323584  3 hi5622v100_wifi
+hi5622v100_wifi      3387392  1
+md5 hi5622v100_wifi.ko e21629d226ec7de9a860a8955952d311  (baseline)
+md5 hi5622v100_plat.ko 23660bc285393e678d5cade1c36c194b  (baseline)
+0000:00:00.0 -> /sys/bus/pci/drivers/rox_pci0
+0001:00:00.0 -> /sys/bus/pci/drivers/rox_pci0
+Wiphy phy0 (Band 1) + phy1 (Band 2), 6 wlan interfaces; hostapd + softapd running
+iwpriv Hisilicon0 get_chipid -> chip id:0x34 version:0x00
+iwpriv Hisilicon0 alg get_2g_power_param -> [SUCC]17161605 17161605 ... 0a0606ff   (baseline)
+iwpriv Hisilicon0 alg get_5g_power_param -> [SUCC]00000000 0004ff00 ... 0000001a   (baseline)
+br-lan 192.168.10.1/24 up
+leftovers (module, .omo-off, loader, /etc/init.d, symlink, /tmp): all absent
+pstore: no new record (blk-0/2/3 mtimes 10:41/10:26/10:34, all pre-test)
+```
+
+**Recovery verified: the router is healthy with the vendor stack restored, both radios answering.**
+The inbound decode does **not** persist across a reboot: the loader's own log shows
+`before iatu viewport0 [0x100] = 0x00000000` and `before BAR0+0x6f8000 = 0xffffffff` on the fresh
+boot, i.e. the iATU must be re-programmed every boot (which the module does).
+
+---
 
 ## Part C - the outcome
 
-_(filled in below)_
+### C.1 Did the chip show signs of running our loaded firmware? **No.**
+
+The image is in the chip and provably so - `verify target BAR0+0x6f8000: file=928920 bytes diffs=0
+match=YES` - and the decode is live (`BAR0+0x000000 = 0xe59ff018` is the chip's ROM/RAM code, the
+region-5 alias of CA 0 matches it). But **nothing changed over the 6 seconds of observation**: all
+30 sampled words were byte-identical across the three samples (`changed=0/30`, twice).
+
+Every register that the disassembly says would announce a running firmware is silent:
+
+- the **HCC mailbox** - `out[0]` `0x40039010` (the H2D pending mask), `out[1]` `0x40039014`, the
+  **doorbell** `out[2]` `0x400392d4`, `out[5]` `0x400392f0` and the two MAC-side registers
+  `0x40101414` / `0x40101438` - read `0x00000000` in all three samples. The firmware never wrote
+  the mailbox, so neither of `multi_chip_loading`'s two ready waits (A.3) would ever complete;
+- the **RAM just past the image** (`CA 0x1322c18`, the BSS/stack/heap the firmware would initialise
+  and use) holds fixed values (`0x40080000 0x00000025 0x00001110 0x00000008`) - not a running
+  program's zeroed BSS and moving stack;
+- the `dev_status_check` set (`efuse_chip_id` `0x186`, `dcoldo_efuse` `0x8108`, `pcie0_status`
+  `0x2000a230`, `tcxo_pll_status` `1`, `temp` `0`, `lock_status` `0`) is frozen at the ROM-state
+  values.
+
+So the chip is in the same frozen state before and after our image lands. This is the plain
+reading: **placing the image does not start the CPU.**
+
+### C.2 The exact observations
+
+1. The decode and the download are reproducible end to end on a fresh boot: all six iATU writes
+   read back `match=YES`, `PCI_COMMAND=7` reads back `0x0006`, the window goes `0xffffffff` ->
+   our data, and the read-back is `diffs=0` over all 928920 bytes.
+2. The chip is **not** reset by the host reboot: `region5 top word` `CA 0x1417ff0` already held
+   `0xdeadbeaf` before anything of ours wrote there (we wrote only `CA 0x1240000..0x1322c18`), and
+   it survived. ACP SRAM retains state across the host reboot - useful for the next lane (a running
+   firmware's BSS would persist too, so a post-release sample has a stable place to look).
+3. The message/doorbell registers are readable through the decoded region 3 window
+   (`BAR0+0x3f1010` etc.) and sit at zero. That is the single most direct place to see the firmware
+   run, and it is now instrumented.
+4. **One boot, one recovery, no panic, no pstore record, box reachable throughout.**
+
+### C.3 What remains
+
+The open problem is exactly one step: **nothing proven from the disassembly starts the chip CPU.**
+The candidates, in order of how testable they are:
+
+- **The message path.** The vendor's own handshake is message-driven (A.3): enable the endpoint IRQ,
+  then wait for the firmware to write the mailbox. The takeover boot cannot enable that IRQ (there
+  is no registered IRQ handler - `do_request_irq` is part of the vendor probe path we do not
+  replay), and the chip is silent anyway, which is consistent: the firmware is not running, so there
+  is nothing to answer. Any future step must first make the CPU run, then this handshake applies.
+- **The `0x5a5a -> CA 0x40000108` magic (A.4).** The only boot-looking write in the vendor download
+  function, on a branch the vendor does not take for chip 0. It is the cheapest next experiment
+  (a single 4-byte write inside the already-decoded region 3, read back, with the full 30-register
+  observation either side), but it is **inferred**, not proven, and was deliberately not performed.
+- **The ROM/boot sequencer.** The chip may boot from ROM at CA 0 and need a separate hand-off we
+  have not found in either `.ko`; the honest state is that neither object contains a proven release
+  register, so the mechanism is either in the untaken branch, in the ROM itself, or in the
+  `hi_pcie`/RC layer outside the two objects we scanned.
+
+Radio bring-up is downstream of all of this and untouched: `hdpp_chip_init`/`hal_chip_init` in
+`hi5622v100_wifi.ko` send HCC messages to a firmware that is not running, so they cannot succeed at
+this stage.
+
+### C.4 Risk notes for the writes taken
+
+- **The six iATU viewport register writes (BAR2)** - the vendor's own probe-time programming, every
+  write read back; the same class as phase 18, now on a fresh boot. Taken.
+- **`PCI_COMMAND = 7`** - proven safe in phases 16/17/18 (reads back `0x0006`). Taken.
+- **The writability probe (`0xdeadbeef` at `BAR0+0x6f8000`)** - immediately overwritten by the first
+  firmware chunk; bounded and read back. Taken.
+- **The full 928,920-byte firmware write to `BAR0+0x6f8000`** - the vendor's own download target
+  through the decoded region-5 window; completed without a stall in both phase 18 and here. Taken.
+- **The 30-register observation reads** - reads only (the whole decode path is read-safe: phase 18
+  read the same windows with no stall); no write of any kind. Taken.
+- **No release/reset write, no doorbell ring, no IRQ unmask, no write outside the documented set.**
+  The `0x5a5a` magic and the vendor IRQ enable were deliberately not performed because they are not
+  proven to belong to the taken path.
+- **Recovery**: vendor modules restored and both radios verified after a single reboot; the pstore
+  baseline is unchanged (no panic), and the iATU programming is known not to persist across the
+  reboot.
