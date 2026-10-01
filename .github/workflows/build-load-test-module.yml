@@ -65,6 +65,11 @@ jobs:
           cd lab/calwrite
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build wifiskel module
+        run: |
+          cd lab/wifiskel
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       - name: show vermagic
         run: |
           strings lab/hello/hello.ko | grep -m1 vermagic
@@ -74,6 +79,7 @@ jobs:
           strings lab/calread/calread.ko | grep -m1 vermagic
           strings lab/ringwatch/ringwatch.ko | grep -m1 vermagic
           strings lab/calwrite/calwrite.ko | grep -m1 vermagic
+          strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
 
       - uses: actions/upload-artifact@v4
         with:
@@ -109,3 +115,8 @@ jobs:
         with:
           name: calwrite-ko
           path: lab/calwrite/calwrite.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifiskel-ko
+          path: lab/wifiskel/wifiskel.ko
