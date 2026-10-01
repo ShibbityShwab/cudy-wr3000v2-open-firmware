@@ -834,6 +834,8 @@ static void omo_post_dr(void)
 			(unsigned long long)omo_dr_pay_dma[i]);
 		pr_info("omo-rxloop: DR ch%u commit DR+0x%02x (wptr) <= 0x%08x readback=0x%08x (packed index, dr_reg_init @0x1483c)\n",
 			i + 3, (unsigned)ETE_DR_WPTR, idx, rb);
+		pr_info("omo-rxloop: DR ch%u baseline after commit: wptr(+0x38)=0x%08x rptr(+0x3c)=0x%08x (device index, before release)\n",
+			i + 3, rb, ioread32(win + omo_dr_block[i] + ETE_DR_RPTR));
 	}
 }
 
@@ -1414,6 +1416,7 @@ skip_program:
 	 * @0x1765c: node.word0 = buffer device address) so the device has a
 	 * target if it sends a payload.  Host memory only. */
 	omo_post_dr();
+	omo_scan_dr("postdr");	/* pre-release baseline for the device index */
 
 	ret = omo_load_fw();
 	if (ret)
