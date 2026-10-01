@@ -50,6 +50,13 @@ static int __init omo_abiprobe_init(void)
 		offsetof(struct net_device, state),
 		offsetof(struct net_device, ifindex),
 		offsetof(struct net_device, netdev_ops));
+	pr_info("omo-abiprobe: net_device: ieee80211_ptr=%zu dev_addr=%zu addr_len=%zu "
+		"ALIGN(sizeof,NETDEV_ALIGN)=%zu sizeof(wireless_dev)=%zu\n",
+		offsetof(struct net_device, ieee80211_ptr),
+		offsetof(struct net_device, dev_addr),
+		offsetof(struct net_device, addr_len),
+		ALIGN(sizeof(struct net_device), NETDEV_ALIGN),
+		sizeof(struct wireless_dev));
 	return 0;
 }
 

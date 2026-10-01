@@ -92,6 +92,15 @@ jobs:
           grep -nE 'CONFIG_PM( |_SLEEP )' linux-5.10.201/include/generated/autoconf.h || true
           md5sum "$RUNNER_TEMP"/abi-artifacts/*.ko
 
+      - name: build wifidrv0 (PM off)
+        run: |
+          rm -f lab/wifidrv0/wifidrv0.o lab/wifidrv0/wifidrv0.ko
+          make -C linux-5.10.201 M="$PWD/lab/wifidrv0" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          cp lab/wifidrv0/wifidrv0.ko "$RUNNER_TEMP/abi-artifacts/wifidrv0-pm-off.ko"
+          echo "== wifidrv0 under the PM-off headers =="
+          grep -nE 'CONFIG_PM( |_SLEEP )' linux-5.10.201/include/generated/autoconf.h || true
+          md5sum lab/wifidrv0/wifidrv0.ko
+
       - name: show vermagic
         run: |
           strings lab/hello/hello.ko | grep -m1 vermagic
@@ -103,6 +112,7 @@ jobs:
           strings lab/calwrite/calwrite.ko | grep -m1 vermagic
           strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
           strings lab/abiprobe/abiprobe.ko | grep -m1 vermagic
+          strings lab/wifidrv0/wifidrv0.ko | grep -m1 vermagic
 
       - uses: actions/upload-artifact@v4
         with:
@@ -148,3 +158,8 @@ jobs:
         with:
           name: abi-artifacts
           path: ${{ runner.temp }}/abi-artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifidrv0-ko
+          path: lab/wifidrv0/wifidrv0.ko
