@@ -928,16 +928,26 @@ static int omo_rings_alloc(void)
  */
 
 /* pcie_ete_ring_ptr_plus @0x13ef8: packed index = index[9:0] | phase[10];
- * increment the index, and on reaching depth wrap it to 0 and toggle phase. */
+ * increment the index, and on reaching depth wrap it to 0 and toggle phase.
+ *
+ * pcie_ete_ring_ptr_plus @0x13ef8, faithfully:
+ *   0x013efc: add  r2, r3, #1      ; r2 = idx + 1 (phase carry NOT masked)
+ *   0x013f00: bfi  r3, r2, #0,#0xa ; r3[9:0] = (idx+1)[9:0], phase kept
+ *   0x013f04: ubfx r2, r3, #0,#0xa ; index only
+ *   0x013f08: cmp  r2, depth
+ *   0x013f0c: bfceq r3, #0,#0xa    ; wrap index to 0
+ *   0x013f10: ubfxeq r2, r3,#0xa,#1 ; phase
+ *   0x013f14: eoreq r2, r2, #1      ; toggle
+ *   0x013f18: bfieq r3, r2,#0xa,#1
+ * The previous implementation masked the phase bit on the first step, so a
+ * full-lap refill committed the SAME index and the device saw no new nodes. */
 static u32 omo_ring_ptr_plus(u32 idx, u32 depth)
 {
-	u32 next = (idx + 1) & 0x3ff;
+	u32 r3 = (idx & ~0x3ffu) | ((idx + 1) & 0x3ffu);
 
-	if ((next & 0x3ff) == depth) {
-		next &= ~0x3ffu;
-		next ^= 0x400;
-	}
-	return next;
+	if ((r3 & 0x3ffu) == depth)
+		r3 = (r3 & ~0x3ffu) ^ 0x400u;	/* index 0, toggle the phase bit */
+	return r3;
 }
 
 static void omo_post_dr(void)
