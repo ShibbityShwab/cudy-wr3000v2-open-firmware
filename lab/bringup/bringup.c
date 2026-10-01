@@ -170,7 +170,7 @@ static int __init omo_bringup_init(void)
 	}
 	pr_info("omo-bringup: ep%u pci_enable_device rc=0\n", omo_domain);
 
-	ret = pci_request_mem_regions(omo_dev);
+	ret = pci_request_mem_regions(omo_dev, "omo-bringup");
 	if (ret) {
 		pr_err("omo-bringup: pci_request_mem_regions rc=%d (region busy - vendor stack still loaded?) - refusing to write\n",
 		       ret);
@@ -258,7 +258,7 @@ static int __init omo_bringup_init(void)
 
 	omo_dbg = debugfs_create_dir("bringup", NULL);
 	if (IS_ERR_OR_NULL(omo_dbg)) {
-		pr_warn("omo-bringup: debugfs unavailable (%ld)\n",
+		pr_warn("omo-bringup: debugfs unavailable (%d)\n",
 			PTR_ERR_OR_ZERO(omo_dbg));
 		omo_dbg = NULL;
 	} else if (IS_ERR_OR_NULL(debugfs_create_file("readback", 0444,
