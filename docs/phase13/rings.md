@@ -448,8 +448,8 @@ apart).
 
 ## Lead verification note (2026-10-01)
 
-Re-run by the lead on the two dumps: the marker transition  occurs at
-**0x1d09c0** and  at **0x8c893c** (the report's addresses differ by ~0xA8;
-the transition is what matters and it is real). The mirror claim also checks out: **781 pages** satisfy
-. The DMA-range caveat is confirmed as a statement about register
-VALUES: no  entry sits AT 0x01/0x02xxxxxx as an address.
+Re-run by the lead on the two dumps: the marker transition `0x80098009 -> 0x80198019` occurs at
+**0x1d09c0** and `0x80098009 -> 0x00160016` at **0x8c893c** (the report's addresses differ by about
+0xA8; the transition is what matters and it is real). The mirror claim also checks out: **781 pages**
+satisfy `dump[off] == dump[off + 0x6b8000]`. The DMA-range caveat is confirmed as a statement about
+register VALUES: no `reg_all.txt` entry sits AT 0x01/0x02xxxxxx as an address.
