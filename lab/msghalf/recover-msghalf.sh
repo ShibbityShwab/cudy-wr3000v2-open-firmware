@@ -1,5 +1,5 @@
 #!/bin/sh
-# Recovery for the phase-20c hostwin test.
+# Recovery for the phase-20d msghalf test.
 # Restores the vendor modules, removes the one-shot loader, the staged module
 # and the tmp copy, then reboots into the normal vendor stack.
 set -x
