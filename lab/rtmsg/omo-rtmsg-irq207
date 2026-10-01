@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-20b rtmsg module, boot 2.
+# Same as omo-rtmsg but passes the vendor's IRQ number explicitly (207), the
+# value PCI_INTERRUPT_LINE carries in a vendor boot, so the shared request_irq
+# path is exercised even though a clean-boot takeover leaves the line unrouted.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-rtmsg
+	insmod /lib/modules/$(uname -r)/rtmsg.ko domain=0 program=1 release=1 \
+		useirq=1 irq=207 rings=1 acpoff=0 pollms=500 polldur=25000 \
+		scanbase=0x7d8000 scanlen=0x60000
+}

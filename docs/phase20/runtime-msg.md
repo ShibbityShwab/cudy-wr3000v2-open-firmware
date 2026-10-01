@@ -20,6 +20,16 @@ This phase answers the three gaps the parent task names:
   decoded message.
 - **Part C**: what arrived, what the IRQ did, whether the handshake advanced, and what remains.
 
+**Headline.** The runtime message context, the ETE SR/DR rings and the request path are all recovered
+and reproduced. Two takeover boots: with the rings correctly programmed the firmware emits a **new**
+PCIe word (`out[1] = 0x40`, bit 6 = `pcie_trigger_ete_sending_handle`) before the familiar `0x4`,
+whereas the same boot with the rings mis-addressed emits only `0x4` - so the rings move the firmware
+past its idle edge. But no payload lands in any DR-ring buffer we own and no interrupt is taken:
+the ring base is a host address the device cannot reach (`pcie_hostca_to_devva`'s runtime window
+`chip->[4]->[0xc4]` is absent in a takeover), and a clean-boot endpoint has no routed INTx. Those two
+are what still stands between the mailbox word and the full HCC dialogue. The router was recovered
+with the vendor stack and both radios verified.
+
 Artifacts used here (regenerable; `lab/ko_disasm.py`):
 
 ```
@@ -538,12 +548,222 @@ id 2 `host_ready_msg_process`). **[proven structure]**
 
 ## Part B - `lab/rtmsg/rtmsg.c`
 
-*(filled in after the test boot; see the test record below)*
+The module reuses the phase-18/19/20 proven path and adds the context and rings:
+
+1. **Claim** the endpoint (`pci_enable_device`, `pci_request_mem_regions`; refuses if the vendor
+   stack holds the regions), `pci_iomap` BAR0 (`0x40000000`, the six-region host aperture) and BAR2
+   (the iATU), then program the six inbound viewports and `PCI_COMMAND = 7`, exactly as `msgd`.
+2. **Build the runtime message context** (host structures only): the six CAs mapped as
+   `BAR0 + {0x3f1010, 0x3f1014, 0x3f12d4, 0x3f12f0, 0x4b9414, 0x4b9438}`, a `kzalloc` 11-entry
+   `{fn,arg}` handler table with ids 1/3/6/7 registered to a logging stub, and the inferred
+   `pending/ack/re-arm` bindings `out[1]/out[0]/out[2]`. **No device write through them.**
+3. **Allocate and program the ETE rings**: SR node arrays `3 x (32+2)*8`, DR node arrays
+   `4 x 32*8` and `4 x 2048`-byte payload buffers, all `dma_alloc_coherent`; then the quoted SR/DR
+   register writes at BAR0 `0x3f2000 + {0x400,0x450,0x4a0}` / `+{0x590,0x5e0,0x630,0x680}`
+   (base, depth-1, wptr, ctrl; then the `+0x2e8 & 0xfffffc20` RMW). The DR nodes are left zeroed
+   (the device fills them).
+4. **Load** `FIRMWARE.bin` to CA `0x01240000` (BAR0 `0x6f8000`), read-back verified.
+5. **Request the IRQ**: `PCI_INTERRUPT_LINE` + the proven `request_irq(irq, IRQF_SHARED, ...)`
+   (parameter `irq` forces the vendor's 207). The handler reads the six mailbox registers and
+   returns `IRQ_HANDLED` only for the first change, then `disable_irq_nosync` - never wedges a
+   shared level line.
+6. **Release**: `0x5a5a` to CA `0x40000108` (BAR0 `0x3b8108`), read back. No host->device reply.
+7. **Poll** for 25 s: the six mailbox registers (raw + per-bit decode), 12 status registers, the
+   firmware-RAM scan window, and - new here - every DR node word and payload buffer, diffed against
+   a pre-release snapshot.
+
+Only quoted writes are performed. The single **inferred** write is the ETE ring base *value*: the
+coherent DMA address plus `acpoff` (default 0). The vendor converts the same address with
+`pcie_hostca_to_devva` through the runtime inbound window `chip->[4]->[0xc4]`; the takeover has no
+such window.
+
+CI run `36883238414` (boot 2), artifact `rtmsg-ko`, md5 `fc0f709a6ba21704ea487791bed7f423`,
+vermagic `5.10.201 SMP mod_unload ARMv7`, 32748 bytes. (Boot 1 was run `36882373775`, md5
+`3488832a54169d94fd1b0a1812bd6399`.)
+
+### B.1 The module's log - boot 2 (rings correct, `irq=207`)
+
+```
+[   39.545535] omo-rtmsg: ETE block CA 0x4003a000 = BAR0+0x3f2000 (via region-3 viewport
+              0x403b8000->CA 0x40000000; the old phase-17 flat offset 0x3a000 = host
+              0x4003a000 reads 0xffffffff, wrong region)
+[   39.563258] omo-rtmsg: ---- SR/DR program registers BEFORE ----
+[   39.569162] omo-rtmsg:   SR ch0 ctrl=0x00000000 base=0x00000000 depth=0x00000000 wptr=0x00000000
+[   39.595620] omo-rtmsg:   DR ch3 base=0x00000000 depth=0x00000000 wptr=0x00000000
+[   39.625421] omo-rtmsg:   SR ch0 base            [0x410] <= 0x83a1f000 readback=0x83a1f000 match=YES
+[   39.643524] omo-rtmsg:   SR ch0 wptr            [0x418] <= 0x00000000 readback=0x00000000 match=YES
+[   39.652539] omo-rtmsg:   SR ch0 ctrl            [0x408] <= 0x00000000 readback=0x00000000 match=YES
+[   39.734230] omo-rtmsg:   DR ch3 base            [0x5c0] <= 0x83bc8000 readback=0x83bc8000 match=YES
+[   39.843094] omo-rtmsg: ---- pcie_ete_chn_res (mask 0xfffffc20) ----
+[   39.849345] omo-rtmsg:   SR ch0 chn_res         [0x6e8] <= 0x00000000 readback=0x00000000 match=YES
+[   39.912826] omo-rtmsg: ETE base values are the coherent DMA address + acpoff=0 (INFERRED ...)
+[   39.936691] omo-rtmsg:   SR ch0 ctrl=0x00000000 base=0x83a1f000 depth=0x0000001f wptr=0x00000000
+[   39.963159] omo-rtmsg:   DR ch3 base=0x83bc8000 depth=0x0000001f wptr=0x00000000
+[   40.225155] omo-rtmsg: writability probe BAR0+0x6f8000: wrote 0xdeadbeef read 0xdeadbeef match=YES
+[   40.975192] omo-rtmsg: verify target BAR0+0x6f8000: file=928920 bytes diffs=0 match=YES
+[   41.353565] omo-rtmsg: INTx config: PCI_INTERRUPT_LINE=255 requested irq=207
+[   41.360743] omo-rtmsg: request_irq(207, IRQF_SHARED, "omo-rtmsg") rc=0 - IRQ path live
+[   41.368638] omo-rtmsg: RELEASE write CA 0x40000108 <- 0x00005a5a (BAR0+0x3b8108)
+[   41.376189] omo-rtmsg: release readback = 0x00005a5a
+[   41.381152] omo-rtmsg: [post0 +400ms] STAT dcoldo_vset  CA=0x4000500c 0xffffffff -> 0x260d4184
+[   41.767098] omo-rtmsg: [post0 +780ms] scan window changed 98278/98304 words (shown 24)
+[   42.299325] omo-rtmsg: [poll +1320ms] MBOX out[1] msg1  CA=0x40039014 0x00000000 -> 0x00000040
+[   42.308438] omo-rtmsg:     bit 6 (id 6 = pcie_trigger_ete_sending_handle)
+[   42.839500] omo-rtmsg: [poll +1860ms] MBOX out[1] msg1  CA=0x40039014 0x00000040 -> 0x00000004
+[   42.848629] omo-rtmsg:     bit 2 (id 2 = unregistered)
+[   76.881881] omo-rtmsg: done (release=1 rings=1 acpoff=0 pollms=500 polldur=25000 irq=207
+              irq_taken=0 irq_handled=0 msgs=2)
+```
+
+All 7 channel register sets and the 7 `+0x2e8` RMW read back matching (`match=NO` count: 0). No
+`DR chN ... CHANGED` and no `payload+...` line appears anywhere in the 25 s - **no payload landed**.
+
+### B.2 Boot 1, and why there are two boots
+
+Boot 1 (run `36882373775`) ran the same module before the offset fix: the ETE writes went to
+BAR0 `+0x3a000` (region 0, dev CA `0x3a000` - the phase-17 conflation) and read `0xffffffff`, so the
+engine was never programmed. Everything else worked and the mailbox produced one word (`out[1] = 4`,
+`msgs=1`), with `request_irq(255)` rejected (`rc=-22`). Boot 2 fixed the offset, so the rings are
+really programmed and the IRQ line is really requested. The two-boot split is exactly the parent
+task's "one to validate context+rings, one for the IRQ".
+
+---
 
 ## Part C - outcome
 
-*(filled in after the test boot)*
+**What arrived.** Two boots, two results, and the difference is the rings:
+
+| boot | rings | mailbox words | IRQ |
+| ---- | ----- | ------------- | --- |
+| 1 (`36882373775`) | mis-addressed (no-op) | 1: `out[1] 0 -> 0x4` at +1.84 s (bit 2) | `request_irq(255)` rc `-22` |
+| 2 (`36883238414`) | programmed, readbacks match | 2: `out[1] 0 -> 0x40` at +1.32 s (bit 6), `0x40 -> 0x4` at +1.86 s (bit 2) | `request_irq(207)` rc 0, `0` taken |
+
+Boot 2's first word is **bit 6 = `pcie_trigger_ete_sending_handle`** - the id whose handler is
+registered by `pcie_msg_init` for exactly the ETE send path. It appears **only once the ETE rings
+are actually in the device**: with the rings mis-addressed (boot 1) the firmware never emitted it.
+That is the first real sign that standing up the ring registers moves the firmware past its idle
+edge. Boot 2's second word is the same bit-2 word as phase 20a.
+
+**What the IRQ did.** `PCI_INTERRUPT_LINE` still reads `255` in the takeover, so the endpoint's own
+config space has no line; forcing the vendor's `207` makes `request_irq(207, IRQF_SHARED)` return 0,
+but the handler takes **zero** interrupts in 25 s (both boots). The line is the SoC PCIe controller's
+`radm` (GIC-0 91, action `hisi_pci_intx`), and in the vendor boot that action exists because the
+vendor stack requests and hosts it. A clean-boot takeover inherits neither the config line nor a
+source that asserts it, so `request_irq` is necessary but not sufficient: the endpoint's INTx route
+must be stood up host-side (the part `oal_pcie_probe`/`oal_pcie_host_init` do).
+
+**Did the handshake advance?** Not to the vendor's ready sequence. There is still no id-1
+"Device plat ready!" word and no id-1/id-2 HCC payload. The bit-6 word is progress at the PCIe
+message level, but the firmware stopped before an ETE transfer completed: **no DR node and no
+payload buffer changed** in either boot. The handshake's `multi_chip_loading` waits (200/2000
+jiffies) would still time out, as in phase 20a.
+
+**What remains, in order of dependency:**
+
+1. **The device-reachable ring window.** The ETE ring base register and every descriptor word must
+   be a *device* address. `pcie_hostca_to_devva` @ `0xaefc` computes it as `devva_base + hostca -
+   hostca_base` from the runtime window `chip->[4]->[0xc4]`, which the vendor builds and the
+   takeover does not have. The DTS shows the endpoint's inbound window (`iatu_ep`: PCI
+   `0x30000000..0x307fffff` -> ACP `0xab000000`, 8 MiB), but the window the vendor uses is a
+   runtime sliding map over host DRAM, so a host-physical `dma_addr_t` written straight into
+   `SR/DR+base` (what this module does, the one inferred write) is not device-reachable. This is why
+   no payload lands even though the firmware emits the bit-6 ETE-send trigger. Recover the window
+   (base/limit and the host-CA base) and convert before writing the ring base and filling nodes.
+2. **The endpoint INTx route.** Bring up the host-side INTx (config line + the controller's glue
+   status at `+0x2ec & 0x3d8`) so the released word raises an interrupt, and give the ISR something
+   to clear - otherwise the line either does not fire or storms.
+3. **The per-chip context `+4`/`+0xc`/`+0x10`.** The pending/ack/re-arm register pointers are not
+   statically attributable from `plat.ko`; without them the ISR cannot perform the vendor's
+   clear/ack/re-arm and the dialogue cannot advance past one word.
+
+Only then does a host->device reply (and the ALG/HMAC/WAL dialogue, the 414-entry command table)
+become meaningful.
+
+---
 
 ## Test record / Recovery
 
-*(filled in after the test boot)*
+Raw evidence: `build/register-dumps/rtmsg/` (gitignored) + `stage/`. **Two takeover boots + one
+recovery boot. No panic; `pstore` unchanged throughout.**
+
+| file | contents |
+| ---- | -------- |
+| `000_baseline.txt` | live router, vendor stack loaded, no reboot |
+| `010_staging.txt` | vendor modules hidden, `rtmsg.ko` + loader + recovery installed, syntax/md5 |
+| `011_staging2.txt` | boot-2 module (md5 `fc0f709a...`) + `irq=207` loader |
+| `020_testboot_cmd.txt`, `021_testboot2_cmd.txt` | the two test reboots |
+| `030_testboot_dmesg_full.txt`, `031_testboot_evidence.txt` | full boot-1 log (mis-addressed rings) |
+| `040_testboot2_dmesg_full.txt`, `041_testboot2_evidence.txt` | full boot-2 log (rings correct, irq 207) |
+| `050_post_test2_state.txt` | post-test state |
+| `060_recovery_run.txt` | the recovery script run from the device |
+| `070_recovery_evidence.txt` | recovered boot: modules/radios/IRQs/power params |
+| `stage/` | `rtmsg.ko`, `omo-rtmsg`, `omo-rtmsg-irq207`, `recover-rtmsg.sh` |
+
+### Baseline (live, vendor stack loaded)
+
+```
+hi5622v100_plat 323584 3 hi5622v100_wifi ; hi5622v100_wifi 3387392 1
+md5 wifi e21629d226ec7de9a860a8955952d311   md5 plat 23660bc285393e678d5cade1c36c194b
+0000:00:00.0 irq=207 ; 0001:00:00.0 irq=209 ; both -> rox_pci0 ; /proc/interrupts hisi_pci_intx
+phy0+phy1 ; 6 wlan ifaces ; br-lan 192.168.10.1/24
+pstore blk-0/2/3 mtimes 10:41 / 10:26 / 10:34 (all pre-test)
+```
+
+### Boot 1 (md5 `3488832a54169d94fd1b0a1812bd6399`)
+
+Claim + six viewports `match=YES`; firmware write verifies (`diffs=0`); release readback
+`0x00005a5a`; firmware BSS zeroed (98278/98304 words). Message context built (six CAs + handler
+table). ETE writes mis-addressed (`readback=0xffffffff` on every channel register);
+`request_irq(255)` `rc=-22`; one mailbox word (`out[1]=4`); `irq_taken=0`; no DR/payload change;
+`done (... msgs=1)`. No panic, pstore unchanged.
+
+### Boot 2 (md5 `fc0f709a6ba21704ea487791bed7f423`)
+
+Same claim/decode/write/release; ETE block at the corrected BAR0 `+0x3f2000`, all 7 channel
+register sets + 7 `+0x2e8` RMW `match=YES` (`match=NO` count 0); `request_irq(207, IRQF_SHARED)`
+`rc=0`; two mailbox words (`out[1] = 0x40` then `0x4`); `irq_taken=0`; no DR/payload change;
+`done (... irq=207 irq_taken=0 irq_handled=0 msgs=2)`. No panic, pstore unchanged.
+
+### Recovery
+
+`sh /root/recover-rtmsg.sh` (staged, run from the device) renamed the modules back and removed the
+module, loader, symlink and `/tmp` copy, `sync`, `reboot`. Recovered boot:
+
+```
+hi5622v100_plat 323584 3 hi5622v100_wifi ; hi5622v100_wifi 3387392 1
+md5 wifi e21629d226ec7de9a860a8955952d311   md5 plat 23660bc285393e678d5cade1c36c194b   (baseline)
+0000:00:00.0 (irq 207) and 0001:00:00.0 (irq 209) both bound to rox_pci0 ; hisi_pci_intx back
+phy0 + phy1 ; 6 wlan ifaces (vap0/1/11/3/8/9) ; hostapd+softapd running
+iwpriv Hisilicon0 get_chipid -> chip id:0x34 version:0x00
+iwpriv Hisilicon0 alg get_2g_power_param -> [SUCC]17161605 17161605 ... 0a0606ff   (baseline)
+iwpriv Hisilicon0 alg get_5g_power_param -> [SUCC]00000000 0004ff00 ... 0000001a   (baseline)
+br-lan 192.168.10.1/24 up
+leftovers (rtmsg.ko, .omo-off, loader, symlink, /tmp copy, /root/recover-rtmsg.sh): all absent
+pstore: no new record (blk-0/2/3 mtimes 10:41/10:26/10:34, all pre-test)
+```
+
+**Recovery verified: the router is healthy with the vendor stack restored and both radios
+answering.**
+
+### Risk notes
+
+- Writes per takeover boot: six iATU viewports + `PCI_COMMAND=7` + the 928,920-byte firmware
+  (phase-18-proven, every write read back); the ETE SR/DR program registers (phase-17-quoted, all
+  read back matching in boot 2); and the single phase-19b-proven `0x5a5a` release. **No host->device
+  reply** and no write through the message-context `+4`/`+0xc`/`+0x10` pointers.
+- The one **inferred** write is the ETE ring base value (coherent DMA address + `acpoff`); it is
+  accepted by the engine but is a host address, not the device VA the device needs.
+- Boot 1's ETE writes hit region 0 (wrong offset) and were effectively no-ops; this is recorded
+  rather than hidden, and corrected in boot 2.
+- The IRQ handler returns `IRQ_NONE` unless a mailbox register changed, and disables the shared
+  level line after the first hit; the line was never taken, so no storm.
+- Recovery - vendor modules restored and both radios verified after one reboot; pstore unchanged.
+
+### Regenerate
+
+```
+PY=../pyenv/Scripts/python.exe
+KO=build/register-dumps/teardown/hi5622v100_plat.ko
+# Part A dumps (see A.0 for the full command list) land in build/tmp/rtmsg/.
+gh run download 36883238414 -n rtmsg-ko -D build/tmp/rtmsg-ko2
+```
