@@ -1,0 +1,18 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-20c hostwin module.
+#
+# Claims the endpoint, programs the six inbound iATU viewports AND the outbound
+# (device->host) viewport so host memory becomes device-visible, builds the
+# runtime message context, allocates and programs the ETE SR/DR rings with the
+# device-visible address, loads FIRMWARE.bin, writes the vendor's observed
+# PCI_INTERRUPT_LINE, requests the endpoint INTx line, performs the proven
+# 0x5a5a release, then drains/logs the mailbox, the DR rings and the payloads.
+# Only quoted writes; the single unproven-but-quoted write is the config line.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-hostwin
+	insmod /lib/modules/$(uname -r)/hostwin.ko domain=0 program=1 outwin=1 \
+		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
+		release=1 useirq=1 irq=0 hostirq=207 rings=1 acpoff=0 \
+		pollms=500 polldur=25000 scanbase=0x7d8000 scanlen=0x60000
+}
