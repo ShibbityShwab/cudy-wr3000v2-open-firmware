@@ -1,5 +1,11 @@
 # wifiskel: registering a cfg80211 wiphy from our own module (phase 14, 2026-10-01)
 
+> **Follow-up (2026-10-01): the 8-byte delta was found and fixed.** It is the `#ifdef CONFIG_PM`
+> wowlan pointer pair in `struct wiphy`; forcing `CONFIG_PM=n` in the prepared headers makes the
+> skeleton register as **Band 1**. See [abi-match.md](abi-match.md) for the offset table, the CI
+> recipe and the on-device evidence. The "not a config toggle we can reproduce" verdict below is
+> superseded.
+
 **Result: the vendor kernel accepted our module's `wiphy_new_nm()` / `wiphy_register()`
 calls (`rc=0`) and a phy called `omo-skel` appeared in `iw phy` while loaded and vanished on
 `rmmod`. But it did not land where we put it: the 2.4 GHz band was registered at nl80211 band
