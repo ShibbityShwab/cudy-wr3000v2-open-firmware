@@ -92,8 +92,13 @@
 #define SCAN_CHANGES_MAX 24
 #define ISR_LOG_MAX	8
 
-/* ETE register block (docs/phase17/ete-init.md A.1): static .data+0x2944. */
-#define ETE_BAR0_OFF	0x3a000UL
+/* ETE register block (docs/phase17/ete-init.md A.1): static .data+0x2944.
+ *
+ * Device CA 0x4003a000 is reached through the region-3 viewport (host
+ * 0x403b8000 -> dev CA 0x40000000), so its BAR0 offset is
+ * 0x3b8000 + (0x4003a000 - 0x40000000) = 0x3f2000.  The phase-17 text's
+ * "BAR0+0x3a000" conflated the device CA with a flat BAR0 offset. */
+#define ETE_BAR0_OFF	0x3f2000UL
 #define ETE_WIN_LEN	0x1000UL
 #define ETE_CHN_RES	0x2e8
 #define ETE_CHN_RES_MASK 0xfffffc20U
@@ -521,11 +526,11 @@ static int omo_rings_alloc(void)
 		if (!omo_dr_snap[i] || !omo_pay_snap[i])
 			return -ENOMEM;
 
-		/* Pre-fill the DR nodes with the device VA of our payload buffer
-		 * (the vendor fills SR nodes this way, shuangta_ete_sr_dscr_fill
-		 * @0x17858; DR nodes are normally device-filled - we pre-arm
-		 * them so a device deposit lands in memory we own).  Word1 is
-		 * (len<<16) | flags; we leave the owner bits to the device. */
+		/* The DR nodes are left zeroed: the device fills them (word0 =
+		 * buffer device VA, word1 = (len<<16)|flags), and the device VA
+		 * conversion (pcie_hostca_to_devva) is not available in the
+		 * takeover - see docs/phase20/runtime-msg.md A.2.  We own the
+		 * arrays and payload buffers and scan them for a deposit. */
 		pr_info("omo-rtmsg: DR ch%u nodes=%zuB virt=%px dma=0x%llx  payload=%px dma=0x%llx\n",
 			i + 3, sz, omo_dr_va[i],
 			(unsigned long long)omo_dr_dma[i], omo_dr_pay[i],
@@ -558,8 +563,8 @@ static void omo_ete_program(void)
 	}
 
 	win = omo_bar0 + ETE_BAR0_OFF;
-	pr_info("omo-rtmsg: ETE block CA 0x4003a000 = BAR0+0x%lx (static .data+0x2944)\n",
-		ETE_BAR0_OFF);
+	pr_info("omo-rtmsg: ETE block CA 0x4003a000 = BAR0+0x%lx (via region-3 viewport 0x403b8000->CA 0x40000000; the old phase-17 flat offset 0x3a000 = host 0x4003a000 reads 0x%08x, wrong region)\n",
+		ETE_BAR0_OFF, ioread32(omo_bar0 + 0x3a000));
 
 	/* Read-only pre-state. */
 	pr_info("omo-rtmsg: ---- SR/DR program registers BEFORE ----\n");
