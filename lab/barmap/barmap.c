@@ -268,8 +268,10 @@ static int omo_scan_bar(int ep, int barnum, u32 lo_reg, u32 hi_reg,
 		}
 	}
 
-	/* flush the page map */
-	snprintf(path, sizeof(path), "/tmp/barmap_ep%d.txt", ep);
+	/* flush the page map (BAR0 keeps the required ep<ep>.txt name; other
+	 * BARs get a _bar<n> suffix so they cannot overwrite it). */
+	snprintf(path, sizeof(path), "/tmp/barmap_ep%d%s.txt", ep,
+		 barnum == 0 ? "" : "_bar4");
 	{
 		struct file *f = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 		loff_t pos = 0;
