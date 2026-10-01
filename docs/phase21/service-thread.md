@@ -433,8 +433,168 @@ word is non-zero.
 
 ## Part B - `lab/svc/svc.c` and the test boots
 
-*(filled in after the test boots - see Part C)*
+`lab/svc/svc.c` is `fwaccept.c` (phase 21, kept verbatim except the rename `omo-fwaccept` -> `omo-svc`)
+plus the recovered service thread. New module parameters:
 
-## Part C - outcome
+| param | default | meaning |
+| ----- | ------- | ------- |
+| `svc` | 1 | 1 = run the service kthread; 0 = the old synchronous poll loop (control) |
+| `svcdur` | 20000 | ms the kthread runs (clamped to >= 20000) |
+| `svcms` | 100 | ms between iterations |
+| `svcdoorbell` | 10 | iterations between `omo_post_dr()` + the id-3/id-5 doorbells |
 
-*(filled in after the test boots)*
+`omo_svc_thread` (kernel thread `omo-svc`) runs the four steps of Part A.8 each iteration:
+`omo_msg_service` (the `pcie_msg_handle` @`0x171f8` equivalent: clear `out[1]`, ack `0x40101438`,
+re-arm `0x40101414`, dispatch), `omo_glue_service` (read ETE `+0x2ec`, `dsb`-equivalent barrier,
+mask `0x3d8`, W1C only when non-zero - `pcie_intr_handle` @`0x82e4` / `oal_pcie_transfer_done`
+@`0x83e4`), `omo_scan_dr`/`omo_scan_sr` (completion + index scans), and the periodic
+`omo_post_dr()` + `pcie_msg_send(chip,3)` / `pcie_msg_send(chip,5)` re-ring. `omo_svc_log_state`
+logs every `out[0]`/`out[1]` and SR/DR index change. The one-shot loader `lab/svc/omo-svc` runs
+with **`enable=0`** on purpose - phase 20 boot 3 proved `enable=1` (`out[5]` CA `0x400392f0 <= 8`)
+hangs the chip, and this phase does not touch that register. The only unproven-but-quoted write
+remains `PCI_INTERRUPT_LINE = 0xcf`; the new device write surface is the ETE `+0x2ec` W1C, which
+happened zero times because the word read 0.
+
+Build: CI run **36910583771** (branch `omo/phase21-service-thread`), artifact `svc-ko` =
+`svc.ko`, 53504 bytes, md5 **6241df9a61f3f47672789a30c08cd0b3**,
+`vermagic=5.10.201 SMP mod_unload ARMv7` (matches the vendor kernel).
+
+### B.1 Staging (`build/register-dumps/svc/010_staging.txt`)
+
+```
+6241df9a61f3f47672789a30c08cd0b3  /lib/modules/5.10.201/svc.ko
+lrwxrwxrwx  /etc/rc.d/S99omo-svc -> ../init.d/omo-svc
+-rw-r--r--  /lib/modules/5.10.201/hi5622v100_plat.ko.omo-off   (364660 B, vendor)
+-rw-r--r--  /lib/modules/5.10.201/hi5622v100_wifi.ko.omo-off   (3564728 B, vendor)
+loader syntax: OK ; recovery syntax: OK
+```
+
+### B.2 The test boot (`build/register-dumps/svc/031_testboot_live.txt`, `032_testboot_full.txt`)
+
+The box did **not** hang: the module loaded, the thread ran its full 25 s and the init returned.
+The loader deleted its own symlink first, and the pstore record set is unchanged (blk-0/1/2
+mtimes still `10:41`/`14:37`/`14:37`).
+
+Takeover + host message service (the chip's first D2H word is id 6, as in phases 19/20):
+
+```
+[   43.446526] omo-svc: RELEASE write CA 0x40000108 <- 0x00005a5a (BAR0+0x3b8108)
+[   43.521497] omo-svc: [svc post0 +330ms] pending out[1] CA=0x40039014 = 0x00000040
+[   43.540653] omo-svc: [svc post0] ACK   out[3] CA=0x40101438 <= 0x00000001 readback=0x00000000
+[   43.549137] omo-svc: [svc post0] CLEAR out[1] CA=0x40039014 0x00000040 -> 0x00000000 readback=0x00000000
+[   43.558675] omo-svc: [svc post0] REARM out[4] CA=0x40101414 <= 0x00000001 readback=0x00000000
+[   43.567285] omo-svc: [svc post0] dispatch id=6 fn=omo_id6_handler+0x0/0x48 [svc] arg=00000006
+[   43.795161] omo-svc: [send post0] pcie_msg_send(chip,3): out[0] CA=0x40039010 0x00000000 -> 0x00000008 readback=0x00000008
+[   43.808432] omo-svc: [send post0] out[2] CA=0x400392d4 0x00000000 -> 0x00000001 readback=0x00000000 (doorbell |= 1)
+[   43.819753] omo-svc: service thread up (pcie_process_thread @0x16efc emulation) dur=25000ms interval=100ms doorbell=10
+```
+
+During the 25 s loop the **chip's message service is demonstrably alive in the D2H direction**: it
+re-raised id 6 (`out[1] = 0x40`) three times and then id 2 (`0x04`), and every word was consumed and
+acked by the thread:
+
+```
+[   44.026345] omo-svc: [svc svc] CLEAR out[1] CA=0x40039014 0x00000040 -> 0x00000000 readback=0x00000000
+[   44.259289] omo-svc: [svc svc +1070ms] pending out[1] CA=0x40039014 = 0x00000040
+[   44.286954] omo-svc: [svc svc] CLEAR out[1] CA=0x40039014 0x00000040 -> 0x00000000 readback=0x00000000
+[   44.459353] omo-svc: [svc svc +1270ms] pending out[1] CA=0x40039014 = 0x00000040
+[   44.487298] omo-svc: [svc svc] CLEAR out[1] CA=0x40039014 0x00000040 -> 0x00000000 readback=0x00000000
+[   44.669371] omo-svc: [svc +1480ms] MBOX out[1] pending CA=0x40039014 0x00000040 -> 0x00000004
+[   44.697249] omo-svc: [svc svc +1500ms] pending out[1] CA=0x40039014 = 0x00000004
+[   44.723177] omo-svc: [svc svc] CLEAR out[1] CA=0x40039014 0x00000004 -> 0x00000000 readback=0x00000000
+```
+
+**`out[0]` (CA `0x40039010`, the H2D mask) is never cleared by the device.** The only changes to it
+are the module's own `pcie_msg_send` writes; there is no `H2D MASK CLEARED BY DEVICE` line:
+
+```
+[   50.056651] omo-svc: [send svc] pcie_msg_send(chip,3): out[0] CA=0x40039010 0x00000020 -> 0x00000008 readback=0x00000008
+[   50.079992] omo-svc: [send svc] pcie_msg_send(chip,5): out[0] CA=0x40039010 0x00000008 -> 0x00000020 readback=0x00000020
+```
+
+`glue_clears = 0`: the ETE glue status candidate `+0x2ec` read 0 every iteration, so no glue write was
+made. The SR engine still read our descriptors once (`SR ch0 DEVICE INDEX 0x10 -> 0x400`), and the
+DR device indices advanced `0 -> 0x10` on all four channels; there was **no** `0x5a5a` buffer, no
+HCC message decode and no `ID-1 READY`.
+
+```
+[   68.934797] omo-svc: service thread exit after 170 iters (glue_clears=0)
+[   68.941988] omo-svc: done (release=1 rings=1 sr_posted=1 acpoff=0 svc=1 iters=170 glue_clears=0 pollms=100 polldur=20000 irq=207 irq_taken=0 irq_handled=0 msgs=4 services=5 sendflag=1 dr_events=4 sr_events=1)
+```
+
+Every device write in the run is quoted from the disassembly or a live vendor read (the same set as
+`fwaccept`, minus the gate families): the six inbound + one outbound iATU viewports,
+`PCI_COMMAND=7`, `FIRMWARE.bin` (read back), the SR/DR program registers + the per-channel `+0x2e8`
+RMW, the DR base/depth/wptr, the SR base/depth/wptr/ctrl, the `0x5a5a` release, the host-side
+`out[1]`/`out[3]`/`out[4]` service words, and `out[0]`/`out[2]` for the id-3 and id-5 doorbells.
+The ETE `+0x2ec` W1C did not fire (value 0). One unproven-but-quoted write: `PCI_INTERRUPT_LINE
+= 0xcf`.
+
+---
+
+## Part C - outcome and the named next blocker
+
+**Did the chip process our frame and answer? No.** Across the 25 s service run `out[0]` stayed at the
+module's own last write (`0x08` / `0x20`), the endpoint consumed the doorbell (`out[2]` readback 0)
+but the chip's firmware dispatcher never cleared `out[0]`, no `out[1]` reply carried an id-1 or an
+HCC payload, no `0x5a5a` buffer appeared in the DR ring, and `glue_clears = 0`. The chip's own
+receive routine (firmware file `0x818a8`, `docs/phase20/fw-accept.md` A.2) is still never entered for
+the H2D direction.
+
+**What the run did prove.** With the vendor service thread stood up as `omo_svc_thread`:
+
+1. the **D2H** message path is fully live end-to-end: the chip re-raises id 6
+   (`pcie_trigger_ete_sending_handle`, the request that wakes the host to pump SR) and id 2
+   (`host_ready`), and the host consumes/acks/re-arms every word (`services=5`) - this is more
+   traffic than phase 20f saw (`out[1]` stayed 0x40/0x04 for the whole 25 s);
+2. the thread model itself is safe: 170 iterations, no panic, no chip hang, no new pstore record,
+   `enable=0` avoided the `out[5]` hazard;
+3. the H2D gate is **not** reached by running the host thread: the chip's service is alive (point 1)
+   yet it will not take `out[0]`.
+
+**Named next blocker.** The chip repeatedly asks the host to **pump the SR ring** (id 6) but our
+thread only re-rings the `pcie_msg_send` doorbell; it never performs the vendor's
+`pcie_ete_sending_trigger` @`0x13f90` descriptor fill + producer commit from the thread, so the SR
+engine reads the one descriptor set we posted and then has nothing new to send while the chip keeps
+signalling. The next step is to implement that producer side (fill the next SR node and commit
+`SR+0x18` from the thread, per `shuangta_ete_sr_dscr_fill` @`0x17858`), and in parallel to pin the
+true ETE glue base: `pcie_intr_handle` reads `[[ctx+4]]+0x2ec`, and at both reachable candidates
+(`0x4003a2ec`, the channel `+0x2ec`) the word is 0 in this run **and** in the live vendor BAR0 dump,
+so the register cannot be located from either side yet - it needs the `[[ctx+4]]` resolution or a
+device-side trace.
+
+---
+
+## Recovery
+
+Recovery used the staged `lab/svc/recover-svc.sh` (renames the vendor modules back, removes the
+module, loader, symlink, `/tmp` copies and itself, then reboots). Raw evidence:
+`build/register-dumps/svc/060_recovery_run.txt`, `070_recovery_evidence.txt`.
+
+Recovered boot:
+
+```
+hi5622v100_plat 323584 3 hi5622v100_wifi ; hi5622v100_wifi 3387392 1
+md5 plat 23660bc285393e678d5cade1c36c194b / wifi e21629d226ec7de9a860a8955952d311  = baseline
+0000:00:00.0 -> rox_pci0
+radios: vap0 Cudy-1C73 (2g), vap8 Cudy-1C73-5G (5g), ... ; br-lan 192.168.10.1/24 UP
+leftovers (svc.ko, *.omo-off, init.d/omo-svc, rc.d/S99omo-svc, /root/recover-svc.sh, /tmp copies): absent
+pstore: no new record (blk-0/1/2 mtimes 10:41/14:37/14:37, all pre-test)
+```
+
+**Recovery verified: the router is healthy with the vendor stack restored and both radios
+answering.**
+
+### Hazard note
+
+No panic and no chip hang this run (`enable=0`, the `out[5]` register untouched). All measurements
+were made through endpoint 0's own BAR0; the RC `misc` window (`0x10161000`) was never touched.
+
+### Writes per takeover boot
+
+Boot: the six inbound iATU viewports + one outbound viewport + `PCI_COMMAND=7` + the 928,920-byte
+firmware (read back) + the seven SR/DR program registers + the per-channel `+0x2e8` RMW + the DR
+base/depth/wptr + the SR base/depth/wptr/ctrl + the `0x5a5a` release + the host `out[1]`/`out[3]`/
+`out[4]` service words + `out[0]`/`out[2]` for `pcie_msg_send(3)` and `pcie_msg_send(5)` (repeated
+every 10 iterations = 2 s). ETE `+0x2ec` W1C: 0 times (word read 0). The one unproven-but-quoted
+write remains `PCI_INTERRUPT_LINE = 0xcf`.
