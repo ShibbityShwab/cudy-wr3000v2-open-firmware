@@ -50,12 +50,18 @@ jobs:
           cd lab/barmap
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build calread module
+        run: |
+          cd lab/calread
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       - name: show vermagic
         run: |
           strings lab/hello/hello.ko | grep -m1 vermagic
           strings lab/hwprobe/hwprobe.ko | grep -m1 vermagic
           strings lab/barsnap/barsnap.ko | grep -m1 vermagic
           strings lab/barmap/barmap.ko | grep -m1 vermagic
+          strings lab/calread/calread.ko | grep -m1 vermagic
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,3 +82,8 @@ jobs:
         with:
           name: barmap-ko
           path: lab/barmap/barmap.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calread-ko
+          path: lab/calread/calread.ko
