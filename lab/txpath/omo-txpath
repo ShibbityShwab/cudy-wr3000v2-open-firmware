@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-20f txpath module.
+#
+# Claims the endpoint, programs the six inbound iATU viewports AND the outbound
+# (device->host) viewport, builds the runtime message context, allocates and
+# programs the ETE SR/DR rings, posts the DR receive nodes AND commits the DR
+# producer index, posts the SR transmit nodes (the vendor's first host->device
+# message in slot 0) and commits the SR producer index, loads FIRMWARE.bin,
+# writes the vendor observed PCI_INTERRUPT_LINE, requests the endpoint INTx
+# line, performs the proven 0x5a5a release, rings the host->device doorbell
+# (pcie_msg_send(chip,3)), then runs the receive loop for 20 s logging mailbox
+# words, SR/DR index movement, node/payload bytes and whether an HCC id-1
+# message arrives.  Only quoted writes; the single unproven-but-quoted write is
+# the config line.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-txpath
+	insmod /lib/modules/$(uname -r)/txpath.ko domain=0 program=1 outwin=1 \
+		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
+		release=1 useirq=1 irq=0 hostirq=207 rings=1 acpoff=0 \
+		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
+}

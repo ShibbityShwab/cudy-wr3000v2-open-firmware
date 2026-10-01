@@ -135,6 +135,11 @@ jobs:
           cd lab/rxloop
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build txpath module
+        run: |
+          cd lab/txpath
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -193,6 +198,7 @@ jobs:
           strings lab/hostwin/hostwin.ko | grep -m1 vermagic
           strings lab/msghalf/msghalf.ko | grep -m1 vermagic
           strings lab/rxloop/rxloop.ko | grep -m1 vermagic
+          strings lab/txpath/txpath.ko | grep -m1 vermagic
           strings lab/wifiskel/wifiskel.ko | grep -m1 vermagic
           strings lab/abiprobe/abiprobe.ko | grep -m1 vermagic
           strings lab/wifidrv0/wifidrv0.ko | grep -m1 vermagic
@@ -301,6 +307,11 @@ jobs:
         with:
           name: rxloop-ko
           path: lab/rxloop/rxloop.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: txpath-ko
+          path: lab/txpath/txpath.ko
 
       - uses: actions/upload-artifact@v4
         with:
