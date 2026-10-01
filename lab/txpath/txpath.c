@@ -216,6 +216,7 @@
 #define ETE_SR_PAYLOAD	512	/* per-node host->device SR message buffer */
 #define ETE_SR_FLAG	0x6d2b	/* shuangta_ete_sr_dscr_fill @0x17858: (len<<16)|0x6000|0xd2b */
 #define ETE_SR_MSG_LEN	0x48	/* vendor's first SR message, live capture (72 B) */
+#define ETE_SR_ALG_LEN	0x12a	/* alg get_2g_power_param H2D frame, live capture (298 B) */
 #define MSG_SEND_ID	3	/* pcie_msg_send(chip,3) after an SR fill (0x178f8) */
 #define MSG_RECLAIM_ID	5	/* pcie_msg_send(chip,5), rcv_buff_check (0x15140) */
 
@@ -939,6 +940,26 @@ static void omo_post_sr(void)
 		pr_info("omo-txpath: SR ch0 first H2D message built (%zu B): proto=0x%08x len/id=0x%08x magic=0x%08x tok=0x%08x/%08x hdr14=0x%08x hdr18=0x%08x (live vendor capture, node[0])\n",
 			sizeof(omo_sr_msg), w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
 	}
+	/*
+	 * Slot 1: the vendor's alg get_2g_power_param host->device frame, captured
+	 * live at hcc_msg_tx+0x20 (id 3, len 0x12a): proto 0x01200101,
+	 * len/id 0x0003012a, magic 0x5a5a0000, token (0), cmd/len 0x010e0101,
+	 * payload 0x0d010dae, then 1.  This is the earliest H2D command whose
+	 * firmware response is proven (docs/phase5/message-decode.md).
+	 */
+	{
+		u32 *w = (u32 *)((u8 *)omo_sr_pay[0] + ETE_SR_PAYLOAD);
+
+		memset(w, 0, ETE_SR_PAYLOAD);
+		w[0] = 0x01200101;
+		w[1] = 0x0003012a;
+		w[2] = 0x5a5a0000;
+		w[5] = 0x010e0101;
+		w[6] = 0x0d010dae;
+		w[8] = 0x00000001;
+		pr_info("omo-txpath: SR ch0 slot1 alg frame built (%u B): w0=0x%08x len/id=0x%08x magic=0x%08x cmd/len=0x%08x payload=0x%08x (live vendor capture)\n",
+			ETE_SR_ALG_LEN, w[0], w[1], w[2], w[5], w[6]);
+	}
 
 	for (i = 0; i < ETE_SR_N; i++) {
 		u32 devva = omo_hostca_to_devva(omo_sr_pay_dma[i]) +
@@ -948,7 +969,8 @@ static void omo_post_sr(void)
 
 		for (j = 0; j < ETE_DEPTH; j++) {
 			u32 a = devva + j * ETE_SR_PAYLOAD;
-			u64 w1 = (u64)(u32)((ETE_SR_MSG_LEN << 16) | ETE_SR_FLAG);
+			u32 ln = (j == 1) ? ETE_SR_ALG_LEN : ETE_SR_MSG_LEN;
+			u64 w1 = (u64)(u32)((ln << 16) | ETE_SR_FLAG);
 
 			n[j] = (w1 << 32) | a;   /* word0 = buf devva, word1 = (len<<16)|0x6d2b */
 			idx = omo_ring_ptr_plus(idx, ETE_DEPTH);
@@ -960,6 +982,10 @@ static void omo_post_sr(void)
 			i, ETE_DEPTH, devva,
 			(u32)((ETE_SR_MSG_LEN << 16) | ETE_SR_FLAG),
 			(unsigned)ETE_SR_WPTR, idx, rb);
+		if (i == 0)
+			pr_info("omo-txpath: SR ch0 node[1] (slot1) carries the alg get_2g_power_param frame, len 0x%x, word1=0x%08x\n",
+				ETE_SR_ALG_LEN,
+				(u32)((ETE_SR_ALG_LEN << 16) | ETE_SR_FLAG));
 	}
 	omo_sr_posted = 1;
 }
@@ -1042,7 +1068,10 @@ static void omo_ete_program(void)
 		scnprintf(t, sizeof(t), "SR ch%u wptr", i);
 		omo_ete_wr(win, b + ETE_SR_WPTR, 0, t);
 		scnprintf(t, sizeof(t), "SR ch%u ctrl", i);
-		omo_ete_wr(win, b + ETE_SR_CTRL, 0, t);
+		/* pcie_ete_sr_reg_init @0x14ae8 sets SR+0x08[2:0] = cfg[5] (= 1 for
+		 * the three SR channels); the live vendor boot reads 0 once the
+		 * device has picked the ring up. */
+		omo_ete_wr(win, b + ETE_SR_CTRL, 1, t);
 	}
 
 	/* DR: base, depth-1, wptr (pcie_ete_dr_reg_init @0x1483c). */
