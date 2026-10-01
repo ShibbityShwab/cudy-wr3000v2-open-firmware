@@ -403,12 +403,23 @@ static int __init omo_inbound_init(void)
 	}
 	pr_info("omo-inbound: pci_request_mem_regions rc=0 (MEM BARs claimed)\n");
 
-	omo_bar0_base = pci_resource_start(omo_dev, OMO_BAR_NUM);
-	pr_info("omo-inbound: BAR0 0x%llx..0x%llx, BAR2 (iatu_bar1) 0x%llx..0x%llx\n",
-		(unsigned long long)omo_bar0_base,
-		(unsigned long long)pci_resource_end(omo_dev, OMO_BAR_NUM),
-		(unsigned long long)pci_resource_start(omo_dev, OMO_IATU_BAR),
-		(unsigned long long)pci_resource_end(omo_dev, OMO_IATU_BAR));
+	{
+		u32 lo = 0, hi = 0, b2 = 0;
+
+		/*
+		 * pci_resource_start() reads the wrong struct offsets on this vendor
+		 * kernel (the 5.10.201 layout delta phase 16 recorded: it returned 0
+		 * for BAR0).  Take the base from config space instead.
+		 */
+		pci_read_config_dword(omo_dev, PCI_BASE_ADDRESS_0, &lo);
+		pci_read_config_dword(omo_dev, PCI_BASE_ADDRESS_1, &hi);
+		pci_read_config_dword(omo_dev, PCI_BASE_ADDRESS_2, &b2);
+		omo_bar0_base = (u64)(lo & PCI_BASE_ADDRESS_MEM_MASK) |
+				((u64)hi << 32);
+		pr_info("omo-inbound: BAR0 base=0x%llx (config space), BAR2=0x%x (iatu_bar1)\n",
+			(unsigned long long)omo_bar0_base,
+			b2 & PCI_BASE_ADDRESS_MEM_MASK);
+	}
 
 	omo_bar0 = pci_iomap(omo_dev, OMO_BAR_NUM, 0);
 	omo_iatu = pci_iomap(omo_dev, OMO_IATU_BAR, 0);
