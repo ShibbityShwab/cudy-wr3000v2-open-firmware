@@ -46,6 +46,7 @@
 #include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/rtnetlink.h>
+#include <linux/skbuff.h>
 #include <net/cfg80211.h>
 
 #define OMO_WIPHY_NAME	"omo-drv0"
@@ -102,9 +103,24 @@ static int omo_ndo_stop(struct net_device *dev)
 	return 0;
 }
 
+/*
+ * A netdev that can be brought up must accept transmits: `ip link set up`
+ * makes the stack add an IPv6 link-local address and the MLD timer then
+ * queues a report.  Without ndo_start_xmit the core calls through a NULL
+ * pointer in dev_hard_start_xmit() and oopses (seen on the first try, see
+ * the report).  There is no hardware, so every packet is simply dropped;
+ * this is not logged per-packet to avoid a dmesg flood.
+ */
+static netdev_tx_t omo_ndo_start_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+	kfree_skb(skb);
+	return NETDEV_TX_OK;
+}
+
 static const struct net_device_ops omo_netdev_ops = {
 	.ndo_open	= omo_ndo_open,
 	.ndo_stop	= omo_ndo_stop,
+	.ndo_start_xmit	= omo_ndo_start_xmit,
 };
 
 /* channels 1..13, 20 MHz, nominal 20 dBm */
