@@ -132,8 +132,15 @@ static const struct omo_region omo_regions[6] = {
  * OUTSIDE both windows above.  It gets its own mapping: one page suffices for
  * the single register.  (Writing it through another window would fault exactly
  * like the +0x1508 access did - checked before writing the code this time.) */
-#define OMO_REL_WIN	0x3b8000UL
-#define OMO_REL_BYTES	0x1000UL
+/* Region 3 (SHUANGTA_REGION_IO) as ONE window: host 0x403b8000..0x404d7fff -> dev CA
+ * 0x40000000, size 0x120000 (docs/phase18/inbound-map.md row 3).  It carries the release
+ * register (0x3b8108), the analog/clock status words phase 19 used as the CPU-start
+ * signature (0x3bd00c, 0x4b9230) and more.  An earlier revision mapped only 0x1000 here
+ * and the signature registers fell outside it - caught by the offset-fits check, which is
+ * exactly why that check exists (the +0x1508 access faulted once already). */
+#define OMO_IO_WIN	0x3b8000UL
+#define OMO_IO_BYTES	0x120000UL
+#define OMO_REL_WIN	0x3b8000UL	/* kept for the release offset arithmetic */
 
 /* message registers, offsets within the message window (0x3f0000 base) */
 #define OMO_MSG0	0x010
@@ -201,7 +208,7 @@ static struct net_device *omo_netdev;
 static struct pci_dev *omo_pdev;
 static void __iomem *omo_msg;		/* message/channel window  BAR0+0x3f0000 */
 static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
-static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */
+static void __iomem *omo_rel;		/* region 3 IO (release + status words) */
 static void __iomem *omo_fwmap;		/* region 5 / firmware   BAR0+0x6f8000 */static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
 static resource_size_t omo_bar0_base;
 
@@ -714,14 +721,69 @@ static void omo_glue_service(void)
 		pr_info("omo-drv1:   NOTE the glue status never asserted in this window\n");
 }
 
+/*
+ * The release SIGNATURE - whether the chip actually left ROM state.
+ *
+ * Phase 19 (docs/phase19/release-attempts.md A.2/A.3) measured the difference between a frozen chip
+ * and a running one.  A readback match on the release register only proves the register accepted the
+ * value; it does NOT prove the CPU started.  This reads the same signature phase 19 used, before and
+ * after the release, so "the release worked" becomes an observation instead of an assumption.
+ *
+ * Register addresses follow the region mapping: for a device CA in 0x40000000..0x4011ffff the BAR0
+ * offset is 0x3b8000 + (CA - 0x40000000) (region 3); the firmware/stack words live in region 5
+ * (dev 0x01200000 -> host 0x406b8000).
+ */
+struct omo_sigreg {
+	const char *name;
+	unsigned long off;	/* BAR0 offset */
+	int window;		/* 0 = omo_rel, 1 = omo_msg, 2 = fw window */
+};
+
+static const struct omo_sigreg omo_sig[] = {
+	{ "fw BSS +0x00",	0x7eac18UL, 2 },
+	{ "fw BSS +0x04",	0x7eac1cUL, 2 },
+	{ "fw BSS +0x08",	0x7eac20UL, 2 },
+	{ "fw BSS +0x0c",	0x7eac24UL, 2 },
+	{ "dcoldo_vset",	0x3bd00cUL, 0 },
+	{ "pbank_code",		0x3bd05cUL, 0 },
+	{ "abank_code",		0x3bd060UL, 0 },
+	{ "tcxo_pll_mux",	0x4b9230UL, 0 },
+	{ "tcxo_pll_stat",	0x4b9234UL, 0 },
+};
+
+static void __iomem *omo_sigwin(int w)
+{
+	switch (w) {
+	case 0:	return omo_rel;
+	case 1:	return omo_msg;
+	case 2:	return omo_fwmap;
+	default:	return NULL;
+	}
+}
+
+static void omo_sig_read(const char *tag, u32 *out)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(omo_sig); i++) {
+		void __iomem *w = omo_sigwin(omo_sig[i].window);
+		unsigned long base = (omo_sig[i].window == 2) ? OMO_FW_WIN
+				   : (omo_sig[i].window == 1) ? OMO_MSG_WIN : OMO_IO_WIN;
+
+		out[i] = w ? omo_rd(w, omo_sig[i].off - base) : 0;
+	}
+	pr_info("omo-drv1: [sig %s] BSS=%08x/%08x/%08x/%08x dcoldo=%08x pbank=%08x abank=%08x tcxo=%08x/%08x\n",
+		tag, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8]);
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
 
 	pr_info("omo-drv1: RELEASE write CA 0x40000108 <- 0x%08x (BAR0+0x%lx)\n",
 		OMO_RELEASE_VAL, (unsigned long)OMO_RELEASE_OFF);
-	iowrite32(OMO_RELEASE_VAL, omo_rel + (OMO_RELEASE_OFF - OMO_REL_WIN));
-	rb = ioread32(omo_rel + (OMO_RELEASE_OFF - OMO_REL_WIN));
+	iowrite32(OMO_RELEASE_VAL, omo_rel + (OMO_RELEASE_OFF - OMO_IO_WIN));
+	rb = ioread32(omo_rel + (OMO_RELEASE_OFF - OMO_IO_WIN));
 	pr_info("omo-drv1: release readback = 0x%08x %s\n", rb,
 		rb == OMO_RELEASE_VAL ? "match=YES" : "match=NO");
 	return rb == OMO_RELEASE_VAL ? 0 : -EIO;
@@ -895,10 +957,10 @@ static int omo_hw_attach(void)
 	pr_info("omo-drv1: mapped message BAR0+0x%lx and ETE BAR0+0x%lx (region-3 viewport at 0x40000000)\n",
 		(unsigned long)OMO_MSG_WIN, (unsigned long)OMO_ETE_WIN);
 
-	omo_rel = ioremap(omo_bar0_base + OMO_REL_WIN, OMO_REL_BYTES);
+	omo_rel = ioremap(omo_bar0_base + OMO_IO_WIN, OMO_IO_BYTES);
 	if (!omo_rel) {
-		pr_err("omo-drv1: ioremap release window (BAR0+0x%lx) FAILED\n",
-		       (unsigned long)OMO_REL_WIN);
+		pr_err("omo-drv1: ioremap region-3 IO (BAR0+0x%lx) FAILED\n",
+		       (unsigned long)OMO_IO_WIN);
 		rc = -ENOMEM;
 		goto err_ete;	/* omo_rel is NULL; only ete/msg need unwinding */
 	}
@@ -945,7 +1007,24 @@ static int omo_hw_attach(void)
 	/* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param - then OBSERVE
 	 * what the released firmware emits instead of assuming it said nothing. */
 	if (omo_release_en) {
+		u32 before[ARRAY_SIZE(omo_sig)], after[ARRAY_SIZE(omo_sig)];
+		unsigned int i, changed = 0;
+
+		omo_sig_read("pre ", before);
 		omo_do_release();
+		msleep(500);
+		omo_sig_read("post", after);
+		for (i = 0; i < ARRAY_SIZE(omo_sig); i++) {
+			if (before[i] != after[i]) {
+				pr_info("omo-drv1: [sig]   %-14s 0x%08x -> 0x%08x CHANGED\n",
+					omo_sig[i].name, before[i], after[i]);
+				changed++;
+			}
+		}
+		pr_info("omo-drv1: [sig] %u/%zu signature registers changed -> %s\n",
+			changed, ARRAY_SIZE(omo_sig),
+			changed ? "THE CHIP LEFT ROM STATE" : "the chip did NOT start");
+
 		omo_poll_mailbox();
 	}
 
