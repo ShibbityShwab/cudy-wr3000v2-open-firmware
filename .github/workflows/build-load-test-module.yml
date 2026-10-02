@@ -165,6 +165,11 @@ jobs:
           cd lab/sibep
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build sr2 module
+        run: |
+          cd lab/sr2
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -367,6 +372,11 @@ jobs:
         with:
           name: sibep-ko
           path: lab/sibep/sibep.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sr2-ko
+          path: lab/sr2/sr2.ko
 
       - uses: actions/upload-artifact@v4
         with:
