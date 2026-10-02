@@ -12,7 +12,8 @@ claim here is **[proven]** (a value the device or the harness printed this sessi
   `EXP RESULT: PASS`; `tools/batch.sh` ran **20 hypotheses in ONE boot** to
   `BATCH RESULT: PASS` with per-entry `result.txt`. The author lane had only dry-run them.
 - **Three real harness bugs surfaced on the first boots and were fixed** (list persistence, a
-  health-gate race, and a completion-marker false-positive). All three would have blocked the run.
+  health-gate race, and a completion-marker false-positive), plus the matching recovery cleanup. All
+  would have blocked or corrupted the run.
 - **BOOT A (batched, safe: H4 glue arm, H2 ETE-interrupt sweep, H3 producer-commit variants): the
   chip's state does not change on any of the 20 entries.** `out[0]` (H2D mask, CA `0x40039010`) is
   never cleared by the device, there is no id-1 reply/payload, `SR ch0 +0x1c` stays at `0x400`, and
