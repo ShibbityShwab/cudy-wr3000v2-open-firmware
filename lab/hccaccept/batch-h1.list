@@ -1,0 +1,21 @@
+# H1 (sr-carrier, docs/phase22/fw-hostmem.md section 6) batched in ONE boot.
+# The chip's fetch (SR+0x1c 0x10 -> 0x400) happens BEFORE the 0x5a5a release and
+# never again; each entry below tests one post-release action and the whole
+# series is sampled with stopfirst=0 so every entry's observables are recorded.
+#   (a) h1a-baseline        - control: current pump (refill + full-lap commit
+#                             + id-3 doorbell), no extra action.
+#   (b) h1b-sr-reassert-edge- re-assert SR ch0 +0x10/+0x14/+0x08 (quoted
+#                             pcie_ete_sr_reg_init @0x14a48 values) then the
+#                             double-lap commit edge +0x18<=0x410, <=0x000;
+#                             NO out[0] write (ring isolated from mailbox).
+#   (c) h1c-dr-reassert-mbox - re-assert the DR program group (DR +0x30/+0x34)
+#                             on every DR channel, then ring the H2D mailbox
+#                             out[0]<=0x08 and read the ack CA 0x400392f0.
+#   (d) h1d-sr72-edge-iso   - 72-byte SR payload in node 0 exactly as
+#                             shuangta_ete_sr_dscr_fill @0x17858 builds it
+#                             (word0=disp buffer device VA, word1=(72<<16)|0x6d2b)
+#                             with the commit edge, NO out[0] write.
+h1a-baseline|hyp=none
+h1b-sr-reassert-edge|hyp=h1b
+h1c-dr-reassert-mbox|hyp=h1c
+h1d-sr72-edge-iso|hyp=h1d

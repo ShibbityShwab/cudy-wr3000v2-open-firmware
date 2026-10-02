@@ -2408,6 +2408,14 @@ static int omo_do_release(void)
  *   h3ctrl    H3: SR ch0 +0x08 low3 <= arg, then full-lap commit
  *   h3ctrl48  H3: SR ch0 +0x48 <= arg, then full-lap commit
  *   out5      BOOT B: full-lap commit, wait for fetch, CA 0x400392f0 <= 8
+ *
+ * phase-22 H1 (sr-carrier, docs/phase22/fw-hostmem.md section 6) additions:
+ *   h1b       re-assert SR ch0 +0x10/+0x14/+0x08, commit edge +0x18<=0x410,
+ *             <=0x000; no out[0] write (ring isolated from the mailbox)
+ *   h1c       re-assert DR +0x30/+0x34 on every DR channel, then ring the H2D
+ *             mailbox out[0]<=0x08 and read the ack CA 0x400392f0
+ *   h1d       72-byte SR payload in node 0 (word0=devva, word1=(72<<16)|0x6d2b)
+ *             + commit edge; no out[0] write
  * ====================================================================== */
 
 #define OMOH_LABEL_MAX 48
@@ -2422,6 +2430,12 @@ struct omo_hyp_result {
 	u32  sr1c;
 	u32  glue;
 	unsigned int irq;
+	/* phase-22 H1 (sr-carrier) extra observables, logged for every entry */
+	u32  sr18;		/* SR ch0 producer/index  +0x18 */
+	u32  sr10;		/* SR ch0 ring base      +0x10 */
+	u32  out0v;		/* out[0] CA 0x40039010 at end of window */
+	u32  ack;		/* ack CA 0x400392f0 read-back */
+	u32  dr3c;		/* DR ch3 device index  +0x3c */
 };
 
 static u32 omo_base_intr;
@@ -2681,6 +2695,90 @@ static void omo_hyp_apply(const char *hyp, unsigned int arg)
 			ioread32(omo_bar0 + omo_mbox[5].off));
 		return;
 	}
+	/* H1 (b): re-assert the quoted SR ch0 program (base +0x10, depth-1
+	 * +0x14, ctrl +0x08 exactly as pcie_ete_sr_reg_init @0x14a48) and then
+	 * commit the double-lap edge SR+0x18 <= 0x410 then <= 0x000.  No
+	 * mailbox write: the ring is isolated from out[0] (H1 candidate). */
+	if (!strcmp(hyp, "h1b")) {
+		unsigned long b = omo_sr_block[0];
+		u32 want = omo_hostca_to_devva(omo_sr_dma[0]) + (u32)omo_acpoff;
+		u32 c = ioread32(win + b + ETE_SR_CTRL);
+
+		omo_refill_sr_ch(0);
+		iowrite32(want, win + b + ETE_SR_BASE);
+		iowrite32(ETE_DEPTH - 1, win + b + ETE_SR_DEPTH);
+		iowrite32((c & ~0x7u) | (omo_srctrl & 0x7u),
+			  win + b + ETE_SR_CTRL);
+		pr_info("omo-hccaccept: [hyp h1b] SR ch0 re-assert +0x10<=0x%08x +0x14<=0x%08x +0x08<=0x%08x (readback 0x%08x/0x%08x/0x%08x)\n",
+			want, ETE_DEPTH - 1, (c & ~0x7u) | (omo_srctrl & 0x7u),
+			ioread32(win + b + ETE_SR_BASE),
+			ioread32(win + b + ETE_SR_DEPTH),
+			ioread32(win + b + ETE_SR_CTRL));
+		iowrite32(0x410u, win + b + ETE_SR_WPTR);
+		pr_info("omo-hccaccept: [hyp h1b] SR ch0 +0x18 <= 0x00000410 readback=0x%08x\n",
+			ioread32(win + b + ETE_SR_WPTR));
+		iowrite32(0x000u, win + b + ETE_SR_WPTR);
+		pr_info("omo-hccaccept: [hyp h1b] SR ch0 +0x18 <= 0x00000000 readback=0x%08x rptr(+0x1c)=0x%08x (double-lap edge, no out[0] write)\n",
+			ioread32(win + b + ETE_SR_WPTR),
+			ioread32(win + b + ETE_SR_RPTR));
+		return;
+	}
+	/* H1 (c): re-assert the DR program group the firmware's d2h notify uses
+	 * (DR +0x30 base / +0x34 depth) on every DR channel, then ring the H2D
+	 * mailbox out[0] <= 0x08 (pcie_msg_send(chip,3)) and read the ack
+	 * CA 0x400392f0. */
+	if (!strcmp(hyp, "h1c")) {
+		unsigned int i;
+
+		for (i = 0; i < ETE_DR_N; i++) {
+			unsigned long b = omo_dr_block[i];
+			u32 want = omo_hostca_to_devva(omo_dr_dma[i]) +
+				(u32)omo_acpoff;
+			u32 pre_b = ioread32(win + b + ETE_DR_BASE);
+			u32 pre_d = ioread32(win + b + ETE_DR_DEPTH);
+
+			iowrite32(want, win + b + ETE_DR_BASE);
+			iowrite32(ETE_DEPTH - 1, win + b + ETE_DR_DEPTH);
+			pr_info("omo-hccaccept: [hyp h1c] DR ch%u +0x30 0x%08x -> 0x%08x +0x34 0x%08x -> 0x%08x (readback 0x%08x/0x%08x, d2h_notify ring)\n",
+				i + 3, pre_b, want, pre_d, ETE_DEPTH - 1,
+				ioread32(win + b + ETE_DR_BASE),
+				ioread32(win + b + ETE_DR_DEPTH));
+		}
+		pr_info("omo-hccaccept: [hyp h1c] ack 0x400392f0 pre=0x%08x out[0] pre=0x%08x\n",
+			ioread32(omo_bar0 + omo_mbox[5].off),
+			ioread32(omo_bar0 + omo_mbox[0].off));
+		iowrite32(0x08u, omo_bar0 + omo_mbox[0].off);
+		{
+			u32 m2 = ioread32(omo_bar0 + omo_mbox[2].off);
+
+			iowrite32(m2 | 1U, omo_bar0 + omo_mbox[2].off);
+		}
+		pr_info("omo-hccaccept: [hyp h1c] out[0] <= 0x00000008 doorbell out[2] |= 1; ack 0x400392f0 readback=0x%08x\n",
+			ioread32(omo_bar0 + omo_mbox[5].off));
+		return;
+	}
+	/* H1 (d): a 72-byte SR payload in node 0 exactly as
+	 * shuangta_ete_sr_dscr_fill @0x17858 builds it (word0 = the coherent
+	 * buffer's device VA, word1 = (72<<16)|0x6d2b) with the double-lap
+	 * commit edge, isolated from the mailbox (no out[0] write). */
+	if (!strcmp(hyp, "h1d")) {
+		unsigned long b = omo_sr_block[0];
+		u64 *n = omo_sr_va[0];
+		u32 devva = omo_hostca_to_devva(omo_sr_pay_dma[0]) +
+			(u32)omo_acpoff;
+		u64 w1 = (u64)(u32)((ETE_SR_MSG_LEN << 16) | ETE_SR_FLAG);
+
+		memcpy(omo_sr_pay[0], omo_sr_msg, sizeof(omo_sr_msg));
+		n[0] = (w1 << 32) | devva;
+		pr_info("omo-hccaccept: [hyp h1d] SR ch0 node[0] word0=0x%08x word1=0x%08x (%u-byte id-1 frame, sr_dscr_fill @0x17858)\n",
+			devva, (u32)w1, (unsigned)sizeof(omo_sr_msg));
+		iowrite32(0x410u, win + b + ETE_SR_WPTR);
+		iowrite32(0x000u, win + b + ETE_SR_WPTR);
+		pr_info("omo-hccaccept: [hyp h1d] SR ch0 +0x18 <= 0x410 then 0x000 (commit edge, NO out[0] write - ring isolated from the mailbox) readback=0x%08x rptr=0x%08x\n",
+			ioread32(win + b + ETE_SR_WPTR),
+			ioread32(win + b + ETE_SR_RPTR));
+		return;
+	}
 	pr_info("omo-hccaccept: [hyp %s] control/default - full-lap SR commit + id-3 doorbell\n",
 		hyp);
 	omo_hyp_commit_lap();
@@ -2723,10 +2821,22 @@ static void omo_sample_entry(struct omo_hyp_result *res, unsigned int winms)
 	res->id1 = id1;
 	res->fetched = (omo_sr_rptr(0) != omo_entry_rptr0);
 	res->sr1c = omo_sr_rptr(0);
+	res->sr18 = ioread32(omo_bar0 + ETE_BAR0_OFF + omo_sr_block[0] +
+			     ETE_SR_WPTR);
+	res->sr10 = ioread32(omo_bar0 + ETE_BAR0_OFF + omo_sr_block[0] +
+			     ETE_SR_BASE);
+	res->out0v = ioread32(omo_bar0 + omo_mbox[0].off);
+	res->ack = ioread32(omo_bar0 + omo_mbox[5].off);
+	res->dr3c = ioread32(omo_bar0 + ETE_BAR0_OFF + omo_dr_block[0] +
+			     ETE_DR_RPTR);
 	res->glue = ioread32(omo_bar0 + GLUE_BAR0_OFF + GLUE_STAT) &
 		    GLUE_STAT_MASK;
 	res->irq = max_t(unsigned int, atomic_read(&omo_irq_count),
 			 atomic_read(&omo_irq2_count));
+	pr_info("omo-hccaccept: [obs] label=%s sr10=0x%08x sr18=0x%08x sr1c(devidx)=0x%08x dr3_devidx=0x%08x out0=0x%08x ack392f0=0x%08x glue=0x%08x irq=%u id1=%d fetched=%d\n",
+		res->label, res->sr10, res->sr18, res->sr1c, res->dr3c,
+		res->out0v, res->ack, res->glue, res->irq, res->id1,
+		res->fetched);
 }
 
 static int omo_write_result(const char *dir, const struct omo_hyp_result *r)
@@ -2739,6 +2849,14 @@ static int omo_write_result(const char *dir, const struct omo_hyp_result *r)
 		r->label, r->params[0] ? r->params : "-", r->out0,
 		r->sr1c, r->glue, r->irq);
 	if (dir && dir[0]) {
+		char ob[320];
+		int on = scnprintf(ob, sizeof(ob),
+			"label=%s out0=0x%08x ack392f0=0x%08x sr10=0x%08x sr18=0x%08x sr1c=0x%08x dr3_devidx=0x%08x glue=0x%08x irq=%u id1=%d fetched=%d\n",
+			r->label, r->out0v, r->ack, r->sr10, r->sr18, r->sr1c,
+			r->dr3c, r->glue, r->irq, r->id1, r->fetched);
+
+		snprintf(path, sizeof(path), "%s/obs.txt", dir);
+		omo_write_file(path, ob, on);
 		snprintf(path, sizeof(path), "%s/result.txt", dir);
 		return omo_write_file(path, buf, n);
 	}
@@ -3402,4 +3520,4 @@ module_init(omo_svc_init);
 module_exit(omo_svc_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("phase-22 hccaccept: bothep + exp-harness batch (H2/H3/H4 + out[5]) for the device-side H2D HCC accept gate");
+MODULE_DESCRIPTION("phase-22 hccaccept: bothep + exp-harness batch (H1/H2/H3/H4 + out[5]) for the device-side H2D HCC accept gate");
