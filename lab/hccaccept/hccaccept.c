@@ -2662,6 +2662,20 @@ static void omo_hyp_apply(const char *hyp, unsigned int arg)
 			ioread32(omo_bar0 + omo_mbox[5].off), omo_sr_rptr(0),
 			ioread32(omo_bar0 + omo_mbox[0].off),
 			ioread32(omo_bar0 + omo_mbox[1].off));
+		/* persistent marker immediately before the risky write, so a watchdog
+		 * reset distinguishes "hung at the out[5] arm" from an earlier stop */
+		if (omo_resultpath && omo_resultpath[0]) {
+			char mb[192];
+			int mbl = scnprintf(mb, sizeof(mb),
+				"stage=arming-out5 sr1c=0x%08x out0=0x%08x out1=0x%08x irq=%u\n",
+				omo_sr_rptr(0),
+				ioread32(omo_bar0 + omo_mbox[0].off),
+				ioread32(omo_bar0 + omo_mbox[1].off),
+				max_t(unsigned int, atomic_read(&omo_irq_count),
+				      atomic_read(&omo_irq2_count)));
+
+			omo_write_file(omo_resultpath, mb, mbl);
+		}
 		iowrite32(8, omo_bar0 + omo_mbox[5].off);
 		pr_info("omo-hccaccept: [hyp out5] CA 0x400392f0 <= 0x00000008 readback=0x%08x\n",
 			ioread32(omo_bar0 + omo_mbox[5].off));
