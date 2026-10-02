@@ -1207,7 +1207,16 @@ static int omo_hw_attach(void)
 
 		omo_sig_read("pre ", before);
 		omo_do_release();
-		msleep(500);
+
+		/* POLL FIRST, IMMEDIATELY. An earlier revision slept 500 ms and then did the signature
+		 * read (~40 ms) before polling, so the mailbox was unobserved for the first ~540 ms
+		 * after the release - which is exactly where phase 20 recorded the id-6 word
+		 * (out[1] 0 -> 0x40 = pcie_trigger_ete_sending_handle at ~+910 ms).  That ordering
+		 * could have hidden the first word of the dialogue, and nothing about the poll needs
+		 * the signature to run first.  The signature is CPU state, not a transient, so
+		 * reading it after the poll window is just as valid. */
+		omo_poll_mailbox();
+
 		omo_sig_read("post", after);
 		for (i = 0; i < ARRAY_SIZE(omo_sig); i++) {
 			if (before[i] != after[i]) {
@@ -1219,8 +1228,6 @@ static int omo_hw_attach(void)
 		pr_info("omo-drv1: [sig] %u/%zu signature registers changed -> %s\n",
 			changed, ARRAY_SIZE(omo_sig),
 			changed ? "THE CHIP LEFT ROM STATE" : "the chip did NOT start");
-
-		omo_poll_mailbox();
 	}
 
 	/* The recovered host half, against the corrected registers: ack, clear, re-arm, dispatch. */
