@@ -90,24 +90,28 @@ static const struct omo_region omo_regions[6] = {
 	{ 0x6b8000, 0x218000, 0x01200000UL, "ACP-fw" },
 };
 
-/* Two DIFFERENT blocks, both reachable from the same BAR0 mapping.
+/* Two DIFFERENT blocks, BOTH inside the region-3 IO window (host
+ * 0x403b8000 -> dev CA 0x40000000, size 0x120000; docs/phase18/inbound-map.md
+ * row 3).  Because the window base is 0x403b8000, a device CA 0x4003XXXX
+ * appears at BAR0 offset 0x3XXXX:
  *
- * MESSAGE block: the six mailbox registers shuangta_pcie_msg_reg_map fills.
- * Device CAs 0x40039010/0x40039014/0x400392d4/0x400392e8/0x400392f0
- * (docs/phase4/mmio-map.md section 4.1), i.e. BAR0 offsets 0x39010..
- * 0x392f0 when the region-3 viewport is mapped at 0x40000000.
+ * MESSAGE block: the six mailbox registers (docs/phase20/runtime-msg.md,
+ * "slot | device CA | BAR0 off"):
+ *   out[0] 0x40039010 -> 0x3f1010   out[1] 0x40039014 -> 0x3f1014
+ *   out[2] 0x400392d4 -> 0x3f12d4   out[5] 0x400392f0 -> 0x3f12f0
  *
- * ETE block: the SR/DR ring program registers. Its device CA is 0x4003a000
- * (static resource .data+0x2944, docs/phase17/ete-engine.md A.1), which maps
- * to BAR0 offset 0x3f2000 - NOT 0x3a000 (docs/phase20/runtime-msg.md, the
- * "offset correction (measured, phase 20b)" note). SR channels live at
- * 0x3f2000 + {0x400, 0x450, 0x4a0}, DR at +{0x590, 0x5e0, 0x630, 0x680},
- * stride 0x114 / 0x6c, and each ring programs base/depth/wptr/ctrl. */
-#define OMO_MSG_WIN	0x39000UL
+ * ETE block: the SR/DR ring program registers, device CA 0x4003a000 (static
+ * resource .data+0x2944, docs/phase17/ete-engine.md A.1) -> BAR0 0x3f2000.
+ * SR channels at +{0x400,0x450,0x4a0}, DR at +{0x590,0x5e0,0x630,0x680},
+ * stride 0x114 / 0x6c.
+ *
+ * Getting these wrong is detectable in the readback: a mis-addressed window
+ * reads 0xffffffff (measured both ways on this device, phase 23b/c). */
+#define OMO_MSG_WIN	0x3f0000UL
 #define OMO_ETE_WIN	0x3f2000UL
 #define OMO_WIN_BYTES	0x1000UL
 
-/* message registers, offsets within the message window */
+/* message registers, offsets within the message window (0x3f0000 base) */
 #define OMO_MSG0	0x010
 #define OMO_MSG1	0x014
 #define OMO_MSG2	0x2d4
