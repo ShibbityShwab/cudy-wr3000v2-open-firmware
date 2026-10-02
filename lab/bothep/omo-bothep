@@ -21,10 +21,15 @@ start() {
 	# module loads, so a chip hang at insmod is still recovered by the watchdog.
 	[ -f /root/recover-bothep.sh ] && start-stop-daemon -S -b -m \
 		-p /tmp/omo-bothep.timer.pid -x /bin/sh -- /root/recover-bothep.sh --watch
-	insmod /lib/modules/$(uname -r)/bothep.ko domain=1 domain2=0 program=1 \
+	# domain=0 (ep0) is the REGISTER/RING primary: phase 20f proved the SR
+	# engine fetches descriptors programmed through ep0's BAR0 pre-release;
+	# sr2/srt/bothep-boot1 programmed through ep1 and the firmware rewrote
+	# SR+0x18 to 0x04 without the engine consuming.  domain2=1 (ep1) is the
+	# interrupt endpoint: its INTx is the one delivered (irq 209).
+	insmod /lib/modules/$(uname -r)/bothep.ko domain=0 domain2=1 program=1 \
 		outwin=1 devvabase=0x80000000 devvaend=0xffffffff \
-		hostcabase=0x80000000 release=1 useirq=1 irq=209 hostirq=209 \
-		useirq2=1 irq2=207 hostirq2=207 rings=1 acpoff=0 enable=0 \
+		hostcabase=0x80000000 release=1 useirq=1 irq=207 hostirq=207 \
+		useirq2=1 irq2=209 hostirq2=209 rings=1 acpoff=0 enable=0 \
 		intr=0 srctrl=0 seq=1 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
 		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
 }
