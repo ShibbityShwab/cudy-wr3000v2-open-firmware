@@ -41,6 +41,9 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/fs.h>		/* filp_open / kernel_read (the firmware loader) */
+#include <linux/vmalloc.h>	/* vmalloc/vfree for the firmware image */
+#include <linux/uaccess.h>	/* memcpy_toio */
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/netdevice.h>
@@ -163,6 +166,14 @@ static unsigned int omo_wr_en;
 module_param_named(wr, omo_wr_en, uint, 0444);
 MODULE_PARM_DESC(wr, "1 = program the ETE rings (the module's first writes to the endpoint); requires hw=1 program=1");
 
+static unsigned int omo_fw_en;
+module_param_named(fw, omo_fw_en, uint, 0444);
+MODULE_PARM_DESC(fw, "1 = load FIRMWARE.bin into the chip before the release (REQUIRED for the firmware to run)");
+
+static char *omo_fwpath = "/lib/firmware/hi_wifi/FIRMWARE.bin";
+module_param_named(fwpath, omo_fwpath, charp, 0444);
+MODULE_PARM_DESC(fwpath, "firmware image path (default /lib/firmware/hi_wifi/FIRMWARE.bin)");
+
 static unsigned int omo_release_en;
 module_param_named(release, omo_release_en, uint, 0444);
 MODULE_PARM_DESC(release, "1 = write 0x5a5a to CA 0x40000108 (release the Wi-Fi CPU); requires hw=1");
@@ -190,7 +201,8 @@ static struct net_device *omo_netdev;
 static struct pci_dev *omo_pdev;
 static void __iomem *omo_msg;		/* message/channel window  BAR0+0x3f0000 */
 static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
-static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
+static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */
+static void __iomem *omo_fwmap;		/* region 5 / firmware   BAR0+0x6f8000 */static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
 static resource_size_t omo_bar0_base;
 
 struct omo_ring {
@@ -523,6 +535,97 @@ static void omo_poll_mailbox(void)
 		pr_info("omo-drv1:   NOTE no mailbox transition in this window - the firmware produced nothing\n");
 }
 
+/*
+ * Load FIRMWARE.bin into the chip.  THIS MUST HAPPEN BEFORE THE RELEASE.
+ *
+ * The 2026-10-02 poll run released the CPU with no firmware in place and the poll produced
+ * NOTHING in 8 s, while phase 19 saw words at +1.85 s - the difference is exactly that phase 19's
+ * sequence is "place the firmware, THEN release" (docs/phase19/release-attempts.md A.1: the
+ * 0x5a5a write sits in firmware_download AFTER the image is written).  Releasing an empty chip
+ * starts a CPU with nothing to run.
+ *
+ * Path and target are the phase-18 verified ones: FIRMWARE.bin -> BAR0+0x6f8000 (device CA
+ * 0x01240000), written through region 5 (ACP-fw), verified there with diffs=0.
+ */
+#define OMO_FW_TARGET	0x6f8000UL	/* device CA 0x01240000 */
+#define OMO_FW_CHUNK	0x80000UL
+
+/* its own mapping: the firmware target is outside every window above */
+#define OMO_FW_WIN	0x6f8000UL
+#define OMO_FW_BYTES	0x100000UL	/* 1 MiB covers the 928,920-byte image */
+
+static void *omo_fw;
+static size_t omo_fw_len;
+
+static int omo_load_fw(void)
+{
+	struct file *f;
+	loff_t pos = 0;
+	ssize_t n;
+	size_t done = 0;
+
+	f = filp_open(omo_fwpath, O_RDONLY, 0);
+	if (IS_ERR(f)) {
+		pr_err("omo-drv1: filp_open(%s) failed %ld\n", omo_fwpath, PTR_ERR(f));
+		return PTR_ERR(f);
+	}
+	omo_fw_len = i_size_read(file_inode(f));
+	if (!omo_fw_len || omo_fw_len > 16UL * 1024 * 1024) {
+		pr_err("omo-drv1: bad firmware size %zu\n", omo_fw_len);
+		filp_close(f, NULL);
+		return -EINVAL;
+	}
+	omo_fw = vmalloc(omo_fw_len);
+	if (!omo_fw) {
+		filp_close(f, NULL);
+		return -ENOMEM;
+	}
+	while (done < omo_fw_len) {
+		n = kernel_read(f, omo_fw + done, omo_fw_len - done, &pos);
+		if (n <= 0) {
+			pr_err("omo-drv1: kernel_read stopped at %zu/%zu (n=%zd)\n",
+			       done, omo_fw_len, n);
+			filp_close(f, NULL);
+			vfree(omo_fw);
+			omo_fw = NULL;
+			return n ? (int)n : -EIO;
+		}
+		done += n;
+	}
+	filp_close(f, NULL);
+	pr_info("omo-drv1: firmware file %s size=%zu bytes\n", omo_fwpath, omo_fw_len);
+	return 0;
+}
+
+/* Write the loaded image, then read it back and report the diff count (phase 18: diffs=0). */
+static int omo_write_fw(void)
+{
+	size_t off = 0;
+	unsigned int diffs = 0;
+
+	if (!omo_fw || !omo_fw_len) {
+		pr_err("omo-drv1: no firmware loaded\n");
+		return -EINVAL;
+	}
+	while (off < omo_fw_len) {
+		size_t n = omo_fw_len - off;
+
+		if (n > OMO_FW_CHUNK)
+			n = OMO_FW_CHUNK;
+		memcpy_toio(omo_fwmap + off, omo_fw + off, n);
+		off += n;
+	}
+	pr_info("omo-drv1: firmware written to BAR0+0x%lx (%zu bytes)\n",
+		(unsigned long)OMO_FW_TARGET, omo_fw_len);
+	for (off = 0; off < omo_fw_len; off++) {
+		if (ioread8(omo_fwmap + off) != ((u8 *)omo_fw)[off])
+			diffs++;
+	}
+	pr_info("omo-drv1: firmware readback diffs=%u %s\n", diffs,
+		diffs == 0 ? "match=YES" : "match=NO");
+	return diffs == 0 ? 0 : -EIO;
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -738,6 +841,19 @@ static int omo_hw_attach(void)
 		omo_ete_program();
 	}
 
+	if (omo_fw_en) {
+		rc = omo_load_fw();
+		if (rc)
+			goto err_iatu;
+		omo_fwmap = ioremap(omo_bar0_base + OMO_FW_WIN, OMO_FW_BYTES);
+		if (!omo_fwmap) {
+			pr_err("omo-drv1: ioremap firmware window FAILED\n");
+			rc = -ENOMEM;
+			goto err_iatu;
+		}
+		omo_write_fw();
+	}
+
 	/* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param - then OBSERVE
 	 * what the released firmware emits instead of assuming it said nothing. */
 	if (omo_release_en) {
@@ -768,6 +884,15 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
+	if (omo_fwmap) {
+		iounmap(omo_fwmap);
+		omo_fwmap = NULL;
+	}
+	if (omo_fw) {
+		vfree(omo_fw);
+		omo_fw = NULL;
+		omo_fw_len = 0;
+	}
 	if (omo_pdev)
 		omo_rings_free();
 	if (omo_rel) {
