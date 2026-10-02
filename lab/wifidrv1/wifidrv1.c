@@ -701,8 +701,8 @@ static void omo_glue_service(void)
 
 	pr_info("omo-drv1: ---- glue-status service (%u ms interval, %u ms total) ----\n",
 		omo_svcms, omo_svcdur);
-	pr_info("omo-drv1:   t=0  glue status 0x3f02ec = 0x%08x (masked 0x%08x)\n",
-		first, first & OMO_GLUE_MASK);
+	pr_info("omo-drv1:   t=0  glue status BAR0+0x%05lx = 0x%08x (masked 0x%08x)\n",
+		(unsigned long)(OMO_MSG_WIN + OMO_GLUE_STAT), first, first & OMO_GLUE_MASK);
 
 	while (elapsed < omo_svcdur) {
 		u32 st;
@@ -738,6 +738,8 @@ static void omo_glue_service(void)
 
 	pr_info("omo-drv1:   service done: %u pending events in %lu ms; final status=0x%08x\n",
 		events, elapsed, omo_rd(omo_msg, OMO_GLUE_STAT));
+	pr_info("omo-drv1:   (glue status read at BAR0+0x%05lx = CA 0x400392ec)\n",
+		(unsigned long)(OMO_MSG_WIN + OMO_GLUE_STAT));
 	if (!events)
 		pr_info("omo-drv1:   NOTE the glue status never asserted in this window\n");
 }
