@@ -797,6 +797,87 @@ static void omo_sig_read(const char *tag, u32 *out)
 		tag, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8]);
 }
 
+/*
+ * The recovered host half of the message service, run against the CORRECT registers.
+ *
+ * docs/phase20/msg-host-half.md recovered the contract [proven]: pcie_msg_handle reads the pending
+ * mask, writes 1 to the ack, clears the pending word, writes 1 to the re-arm, then dispatches the
+ * lowest set bit through the handler table.  The three registers, by the region-3 translation
+ * (offset = 0x3b8000 + (CA - 0x40000000)):
+ *
+ *   pending out[1] CA 0x40039014 -> 0x3f1014   (the message window, +0x014)
+ *   ack     out[3] CA 0x40101438 -> 0x4b9438   (region 3, well above the message window)
+ *   re-arm  out[4] CA 0x40101414 -> 0x4b9414   (region 3)
+ *   out[5]  CA 0x400392f0 -> 0x3f12f0          NEVER WRITTEN by this module (project rule)
+ *
+ * Until phase 23x the module read the pending word one page low, so this sequence was never
+ * actually performed against the real registers.  Now that the addresses are right, running it is a
+ * real test of whether the dialogue advances past the firmware's single ready word.
+ */
+#define OMO_ACK_OFF	0x4b9438UL	/* BAR0: out[3], CA 0x40101438 */
+#define OMO_REARM_OFF	0x4b9414UL	/* BAR0: out[4], CA 0x40101414 */
+
+static unsigned int omo_msgsvc;
+module_param_named(msgsvc, omo_msgsvc, uint, 0444);
+MODULE_PARM_DESC(msgsvc, "1 = service the mailbox (ack + clear + re-arm + dispatch) instead of only observing");
+
+static unsigned int omo_svcdur2 = 10000;
+module_param_named(msgsvc_dur, omo_svcdur2, uint, 0444);
+MODULE_PARM_DESC(msgsvc_dur, "mailbox service duration in ms (default 10000)");
+
+static void omo_msg_service(void)
+{
+	unsigned long elapsed = 0;
+	unsigned int handled = 0;
+	u32 prev = omo_rd(omo_msg, OMO_MSG1);
+
+	pr_info("omo-drv1: ---- mailbox service: ack/clear/re-arm + dispatch (%u ms) ----\n",
+		omo_svcdur2);
+	pr_info("omo-drv1:   pending out[1] BAR0+0x%05lx = 0x%08x (baseline)\n",
+		(unsigned long)(OMO_MSG_WIN + OMO_MSG1), prev);
+
+	while (elapsed < omo_svcdur2) {
+		u32 st = omo_rd(omo_msg, OMO_MSG1);
+		int bit;
+
+		if (st && st != prev) {
+			pr_info("omo-drv1:   t=%lums pending 0x%08x -> 0x%08x\n", elapsed, prev, st);
+			for (bit = 0; bit < 32; bit++)
+				if (st & (1U << bit))
+					pr_info("omo-drv1:     bit %d pending -> dispatch handler[%d]\n",
+						bit, bit);
+
+			/* the vendor's pcie_msg_handle, in its order */
+			iowrite32(1, omo_rel + (OMO_ACK_OFF - OMO_IO_WIN));
+			pr_info("omo-drv1:     ack   out[3] 0x%05lx <= 0x00000001 readback=0x%08x\n",
+				(unsigned long)OMO_ACK_OFF,
+				omo_rd(omo_rel, OMO_ACK_OFF - OMO_IO_WIN));
+			iowrite32(0, omo_msg + OMO_MSG1);
+			pr_info("omo-drv1:     clear out[1] 0x%05lx <= 0 readback=0x%08x\n",
+				(unsigned long)(OMO_MSG_WIN + OMO_MSG1),
+				omo_rd(omo_msg, OMO_MSG1));
+			iowrite32(1, omo_rel + (OMO_REARM_OFF - OMO_IO_WIN));
+			pr_info("omo-drv1:     rearm out[4] 0x%05lx <= 0x00000001 readback=0x%08x\n",
+				(unsigned long)OMO_REARM_OFF,
+				omo_rd(omo_rel, OMO_REARM_OFF - OMO_IO_WIN));
+
+			prev = omo_rd(omo_msg, OMO_MSG1);
+			pr_info("omo-drv1:     after service: out[0]=0x%08x out[1]=0x%08x glue=0x%08x\n",
+				omo_rd(omo_msg, OMO_MSG0), prev,
+				omo_rd(omo_msg, OMO_GLUE_STAT));
+			handled++;
+		}
+
+		msleep(200);
+		elapsed += 200;
+	}
+
+	pr_info("omo-drv1:   mailbox service done: %u words serviced in %lu ms; final out[1]=0x%08x\n",
+		handled, elapsed, omo_rd(omo_msg, OMO_MSG1));
+	if (!handled)
+		pr_info("omo-drv1:   NOTE nothing was pending to service in this window\n");
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -1048,6 +1129,10 @@ static int omo_hw_attach(void)
 
 		omo_poll_mailbox();
 	}
+
+	/* The recovered host half, against the corrected registers: ack, clear, re-arm, dispatch. */
+	if (omo_msgsvc)
+		omo_msg_service();
 
 	/* Stand in for the missing ISR: poll the glue status and dispatch, the route
 	 * phases 20/22 both name as never entered by a takeover. */
