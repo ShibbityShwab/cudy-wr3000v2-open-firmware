@@ -124,8 +124,29 @@ static const struct omo_region omo_regions[6] = {
  *
  * ETE window: the SR/DR ring program registers, 0x3f2000 + up to ~0x6e8.
  */
-#define OMO_MSG_WIN	0x3f0000UL
-#define OMO_MSG_BYTES	0x2000UL	/* covers 0x3f1010..0x3f1508 inclusive-ish */
+/*
+ * MESSAGE window: the six mailbox CAs.  
+ *
+ * THE BASE IS 0x3f1000, NOT 0x3f0000.  This was wrong for the whole phase-23 investigation and it
+ * explains every "the firmware produced nothing" result: the mailbox was being watched one page
+ * below where it lives, so the firmware's words landed outside the poll.
+ *
+ * The vendor's own table (docs/phase20/runtime-msg.md) gives CA -> BAR0 offset, and the region-3
+ * translation (host 0x403b8000 -> dev CA 0x40000000, docs/phase18/inbound-map.md row 3) is
+ * offset = 0x3b8000 + (CA - 0x40000000):
+ *   out[0] CA 0x40039010 -> 0x3f1010     out[1] CA 0x40039014 -> 0x3f1014
+ *   out[2] CA 0x400392d4 -> 0x3f12d4     chn_res CA 0x400392e8 -> 0x3f12e8
+ *   glue status +0x2ec   -> 0x3f12ec     out[5] CA 0x400392f0 -> 0x3f12f0
+ *   ETE intr CA 0x40039508 -> 0x3f1508 (= this base + 0x508)
+ * Independent confirmation on a live vendor boot: 0x403f12e8 reads 0x00000020, matching phase 15's
+ * captured chn_res, while 0x403f02e8 (the address an earlier revision read) reads 0.
+ *
+ * Sizing: the highest offset used here is 0x508 (+4), so a 0x1000 window at 0x3f1000 covers all of
+ * them.  (An earlier revision also mapped 0x2000 from 0x3f0000 and used offset 0x1508 for the
+ * interrupt register, which happened to land on the right address - masking the base error.)
+ */
+#define OMO_MSG_WIN	0x3f1000UL
+#define OMO_MSG_BYTES	0x1000UL
 #define OMO_ETE_WIN	0x3f2000UL
 #define OMO_WIN_BYTES	0x1000UL	/* the ETE block: +0x408..+0x6e8 */
 /* Region 0 (ROM_WRAM) holds the release register at BAR0+0x3b8108, which is
@@ -279,7 +300,7 @@ static u32 omo_rd(void __iomem *win, unsigned long off);
  * message/glue block, CA 0x400392e8 -> BAR0 0x3f12e8, AND 0xfffffc20, AFTER
  * them.  (hccaccept's note: the earlier takeover applied that mask to the ETE
  * ring offsets instead and missed the real register.) */
-#define OMO_ETE_INTR_OFF	0x1508UL	/* within the message window (0x3f0000) */
+#define OMO_ETE_INTR_OFF	0x508UL	/* within the message window -> BAR0 0x3f1508 */
 #define OMO_ETE_INTR_MASK	0xffe0f8f8U
 #define OMO_GLUE_CHN_RES_MASK	0xfffffc20U
 #define OMO_ETE_DEPTH		32
@@ -653,7 +674,7 @@ static int omo_write_fw(void)
  *
  * Read-mostly: the only write is the masked status write-back that the vendor performs to clear it.
  */
-#define OMO_GLUE_STAT	0x2ec		/* within the message window: BAR0 0x3f02ec */
+#define OMO_GLUE_STAT	0x2ec		/* within the message window -> BAR0 0x3f12ec */
 #define OMO_GLUE_MASK	0x3d8U		/* bits 3,4,6,7,8,9 - pcie_intr_handle's mask */
 #define OMO_STAT_MASK1	0xff000000U
 #define OMO_STAT_MASK2	0x00e00000U
