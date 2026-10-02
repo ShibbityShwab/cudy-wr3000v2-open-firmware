@@ -1094,6 +1094,22 @@ static void omo_program_outbound(void)
 	omo_iatu_wr(omo_iatu, 0x018, 0, "out", "target_hi");
 }
 
+static unsigned int omo_srpost_en;
+module_param_named(srpost, omo_srpost_en, uint, 0444);
+MODULE_PARM_DESC(srpost, "1 = post SR descriptor nodes + commit the producer index + enable the channel (the phase-24i-proven trigger for the firmware's id-6 word); requires wr=1");
+
+/*
+ * The descriptor length the SR nodes announce for the vendor's first frame.
+ *
+ * The frame is 72 bytes and its OWN header at +4 says 48, so the two length fields disagree (slot 1's
+ * alg frame is self-consistent at 298/298, see docs/phase24/frame-field-check.md).  This parameter
+ * makes the announced length testable without a rebuild per value: 0 keeps the captured 0x48, and
+ * 0x30 matches the message's own header.
+ */
+static unsigned int omo_sr_desclen;
+module_param_named(sr_desclen, omo_sr_desclen, uint, 0444);
+MODULE_PARM_DESC(sr_desclen, "SR slot-0 descriptor length override (0 = the captured 0x48; 0x30 matches the frame's own header field)");
+
 static void omo_sr_post(void)
 {
 	unsigned int i, j;
@@ -1151,22 +1167,6 @@ static void omo_sr_post(void)
 			i, en, omo_rd(omo_ete, b + OMO_SR_EN1));
 	}
 }
-
-static unsigned int omo_srpost_en;
-module_param_named(srpost, omo_srpost_en, uint, 0444);
-MODULE_PARM_DESC(srpost, "1 = post SR descriptor nodes + commit the producer index + enable the channel (the phase-24i-proven trigger for the firmware's id-6 word); requires wr=1");
-
-/*
- * The descriptor length the SR nodes announce for the vendor's first frame.
- *
- * The frame is 72 bytes and its OWN header at +4 says 48, so the two length fields disagree (slot 1's
- * alg frame is self-consistent at 298/298, see docs/phase24/frame-field-check.md).  This parameter
- * makes the announced length testable without a rebuild per value: 0 keeps the captured 0x48, and
- * 0x30 matches the message's own header.
- */
-static unsigned int omo_sr_desclen;
-module_param_named(sr_desclen, omo_sr_desclen, uint, 0444);
-MODULE_PARM_DESC(sr_desclen, "SR slot-0 descriptor length override (0 = the captured 0x48; 0x30 matches the frame's own header field)");
 
 /*
  * Device -> host: post DR receive buffers and commit the producer index.
