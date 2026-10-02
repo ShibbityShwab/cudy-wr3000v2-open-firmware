@@ -1,0 +1,28 @@
+# BOOT A (batched, one boot): safe hypotheses for the device-side H2D HCC
+# accept gate.  Entry 1 is the control; the module stops the series at the
+# first entry whose observables change the chip's state (out[0] cleared by the
+# device, an id-1 reply/payload, or a new fetch the control did not make).
+#   H4 - glue channel-resource arm (CA 0x400392e8 <= 0x20; status 0x400392ec)
+#   H2 - ETE interrupt block per-channel enable sweep (CA 0x40039508)
+#   H3 - SR producer-commit edge/phase variants (SR ch0 +0x18 / +0x08 / +0x48)
+# The out[5] arm (CA 0x400392f0) is BOOT B and is NEVER in this list.
+control|hyp=none
+h4-glue|hyp=glue
+h2-intr-or|hyp=intror
+h2-intr-bit0|hyp=intrbit,arg=0
+h2-intr-bit1|hyp=intrbit,arg=1
+h2-intr-bit2|hyp=intrbit,arg=2
+h2-intr-bit3|hyp=intrbit,arg=3
+h2-intr-bit4|hyp=intrbit,arg=4
+h2-intr-bit8|hyp=intrbit,arg=8
+h2-intr-bit9|hyp=intrbit,arg=9
+h2-intr-bit10|hyp=intrbit,arg=10
+h2-intr-bit11|hyp=intrbit,arg=11
+h2-intr-bit12|hyp=intrbit,arg=12
+h3-noop|hyp=h3noop
+h3-full|hyp=h3full
+h3-zero|hyp=h3zero
+h3-ctrl0|hyp=h3ctrl,arg=0
+h3-ctrl7|hyp=h3ctrl,arg=7
+h3-ctrl48-0|hyp=h3ctrl48,arg=0
+h3-ctrl48-1|hyp=h3ctrl48,arg=1
