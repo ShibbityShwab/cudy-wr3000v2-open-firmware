@@ -397,6 +397,33 @@ static void omo_ete_program(void)
 	pr_info("omo-drv1: NOTE no descriptor submitted, no doorbell rung (bounded by design)\n");
 }
 
+/*
+ * Read back the viewports we programmed, so they can be diffed against a live vendor boot.
+ * Reference values (docs/phase18/inbound-map.md + build/register-dumps/bothep/001_live_vendor_bars2.txt):
+ *   v0 [0x104]=0x80000000 [0x108]=0x40000000 [0x110]=0x401BFFFF [0x114]=0x00000000
+ *   v3 [0x704]=0x80000000 [0x708]=0x403B8000 [0x710]=0x404D7FFF [0x714]=0x40000000
+ * If ours differ, the region-3 decode difference has a name; if ours match, the difference is
+ * elsewhere (and that is a finding too).
+ */
+static void omo_read_viewports(void)
+{
+	static const unsigned int ctrl1[6] = { 0x100, 0x300, 0x500, 0x700, 0x900, 0xb00 };
+	unsigned int i;
+
+	pr_info("omo-drv1: ---- inbound viewports as programmed (diff against the vendor ref) ----\n");
+	for (i = 0; i < ARRAY_SIZE(ctrl1); i++) {
+		unsigned long o = ctrl1[i];
+
+		pr_info("omo-drv1:   v%u [0x%03lx]=0x%08x [0x%03lx]=0x%08x [0x%03lx]=0x%08x [0x%03lx]=0x%08x [0x%03lx]=0x%08x [0x%03lx]=0x%08x\n",
+			i, o, omo_rd(omo_iatu, o),
+			o + 4, omo_rd(omo_iatu, o + 4),
+			o + 8, omo_rd(omo_iatu, o + 8),
+			o + 12, omo_rd(omo_iatu, o + 12),
+			o + 16, omo_rd(omo_iatu, o + 16),
+			o + 20, omo_rd(omo_iatu, o + 20));
+	}
+}
+
 /* ---- register access --------------------------------------------------- */
 static u32 omo_rd(void __iomem *win, unsigned long off)
 {
@@ -576,6 +603,7 @@ static int omo_hw_attach(void)
 	if (omo_program_regions_en) {
 		pr_info("omo-drv1: programming the six inbound viewports (region-3 IO required for the ETE block)\n");
 		omo_program_inbound(omo_iatu, omo_bar0_base, "inbound");
+		omo_read_viewports();
 	}
 
 	/* decode the blocks - reads only */
