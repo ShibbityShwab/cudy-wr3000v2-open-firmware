@@ -312,6 +312,8 @@ static const unsigned long omo_dr_block[OMO_ETE_DR_N] = { 0x590, 0x5e0, 0x630, 0
 
 static void *omo_sr_va[OMO_ETE_SR_N];
 static dma_addr_t omo_sr_dma[OMO_ETE_SR_N];
+static void *omo_sr_pay[OMO_ETE_SR_N];	/* per-node H2D message buffers */
+static dma_addr_t omo_sr_pay_dma[OMO_ETE_SR_N];
 static void *omo_dr_va[OMO_ETE_DR_N];
 static dma_addr_t omo_dr_dma[OMO_ETE_DR_N];
 static bool omo_rings_ready;
@@ -365,6 +367,18 @@ static int omo_rings_alloc(void)
 		pr_info("omo-drv1: SR ch%u nodes %zu bytes @ %pad (devva 0x%08x)\n",
 			i, sr_sz, &omo_sr_dma[i], omo_hostca_to_devva(omo_sr_dma[i]));
 	}
+	for (i = 0; i < OMO_ETE_SR_N; i++) {
+		omo_sr_pay[i] = dma_alloc_coherent(&omo_pdev->dev,
+						  OMO_ETE_DEPTH * OMO_SR_PAYLOAD,
+						  &omo_sr_pay_dma[i], GFP_KERNEL);
+		if (!omo_sr_pay[i]) {
+			pr_err("omo-drv1: SR ch%u payload dma_alloc_coherent FAILED\n", i);
+			return -ENOMEM;
+		}
+		pr_info("omo-drv1: SR ch%u payload %u bytes @ %pad (devva 0x%08x)\n",
+			i, OMO_ETE_DEPTH * OMO_SR_PAYLOAD, &omo_sr_pay_dma[i],
+			omo_hostca_to_devva(omo_sr_pay_dma[i]));
+	}
 	for (i = 0; i < OMO_ETE_DR_N; i++) {
 		omo_dr_va[i] = dma_alloc_coherent(&omo_pdev->dev, dr_sz,
 						  &omo_dr_dma[i], GFP_KERNEL);
@@ -391,6 +405,12 @@ static void omo_rings_free(void)
 			dma_free_coherent(&omo_pdev->dev, (OMO_ETE_DEPTH + 2) * 8,
 					  omo_sr_va[i], omo_sr_dma[i]);
 			omo_sr_va[i] = NULL;
+		}
+		if (omo_sr_pay[i]) {
+			dma_free_coherent(&omo_pdev->dev,
+					  OMO_ETE_DEPTH * OMO_SR_PAYLOAD,
+					  omo_sr_pay[i], omo_sr_pay_dma[i]);
+			omo_sr_pay[i] = NULL;
 		}
 	}
 	for (i = 0; i < OMO_ETE_DR_N; i++) {
@@ -971,6 +991,129 @@ static void omo_h2d_send(void)
 		pr_info("omo-drv1:   NOTE the sent bit was CLEARED - the device consumed the message\n");
 }
 
+#define OMO_SR_PAYLOAD	512	/* per-node host->device message buffer (fwaccept: ETE_SR_PAYLOAD) */
+#define OMO_SR_MSG_LEN	0x48	/* the vendor's first SR message, live capture (72 B) */
+#define OMO_SR_ALG_LEN	0x12a	/* alg get_2g_power_param H2D frame, live capture (298 B) */
+#define OMO_SR_FLAG	0x6d2b	/* shuangta_ete_sr_dscr_fill @0x17858: word1 = (len<<16)|0x6d2b */
+#define OMO_SR_EN0	0x000	/* per-channel enable (the vendor's ENABLE SR chN +0x00) */
+#define OMO_SR_EN1	0x048	/* SR-side enable (ENABLE SR chN +0x48) */
+
+/*
+ * The vendor's first host->device SR frame, captured live by phase 20 (fwaccept: omo_sr_msg).
+ * +0x00 proto 0x04000100, +0x08 u16 0 / u16 0x5a5a (the header magic rcv_buff_check tests),
+ * +0x0c 8-byte token, +0x14 u16 0x00d8 / u16 0x0014, +0x18 payload start.
+ */
+static const u8 omo_sr_msg[OMO_SR_MSG_LEN] = {
+	0x00, 0x01, 0x00, 0x04, 0x30, 0x00, 0x01, 0x00,
+	0x00, 0x00, 0x5a, 0x5a, 0x00, 0x00, 0x00, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0xd8, 0x00, 0x14, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+/*
+ * Host -> device: post SR nodes and commit the producer index.
+ *
+ * Phase 24i proved this is the trigger for the firmware's id-6 word
+ * (pcie_trigger_ete_sending_handle): fwaccept, which posts, sees id 6 -> id 2 -> clear; wifidrv1,
+ * which writes the ring configuration only, sees id 2 alone.  Until this was added the port had
+ * removed the trigger for the very word the later phases were trying to elicit.
+ *
+ * word0 = the payload buffer's device VA (devva_base == hostca_base == 0x80000000 here, so the
+ * mapping is the identity); word1 = (len << 16) | 0x6d2b.  The producer index is committed to
+ * SR+0x18 as the vendor's packed index (index[9:0] | phase[10]) - 32 nodes at depth 32 wrap the
+ * index and flip the phase, which is where the recorded 0x400 comes from.
+ */
+static u32 omo_ring_ptr_plus(u32 idx, u32 depth)
+{
+	u32 i = (idx & 0x3ffU) + 1;
+	u32 ph = (idx >> 10) & 1U;
+
+	if (i >= depth) {
+		i = 0;
+		ph ^= 1U;
+	}
+	return (ph << 10) | i;
+}
+
+static void omo_program_outbound(void)
+{
+	pr_info("omo-drv1: outbound viewport0: devva 0x%08lx..0x%08lx -> host 0x%08lx (oal_pcie_set_outbound_by_membar @0x9a38)\n",
+		OMO_DEVVA_BASE, 0xffffffffUL, OMO_HOSTCA_BASE);
+	omo_iatu_wr(omo_iatu, 0x000, 0, "out", "ctrl1=0");
+	omo_iatu_wr(omo_iatu, 0x004, 0x80000000U, "out", "ctrl2=ena|bar0");
+	omo_iatu_wr(omo_iatu, 0x008, (u32)OMO_DEVVA_BASE, "out", "base_lo");
+	omo_iatu_wr(omo_iatu, 0x00c, 0, "out", "base_hi");
+	omo_iatu_wr(omo_iatu, 0x010, 0xffffffffU, "out", "limit");
+	omo_iatu_wr(omo_iatu, 0x014, (u32)OMO_HOSTCA_BASE, "out", "target_lo");
+	omo_iatu_wr(omo_iatu, 0x018, 0, "out", "target_hi");
+}
+
+static void omo_sr_post(void)
+{
+	unsigned int i, j;
+
+	if (!omo_rings_ready) {
+		pr_err("omo-drv1: srpost requested but the rings are not allocated\n");
+		return;
+	}
+
+	omo_program_outbound();
+
+	memset(omo_sr_pay[0], 0, OMO_ETE_DEPTH * OMO_SR_PAYLOAD);
+	memcpy(omo_sr_pay[0], omo_sr_msg, sizeof(omo_sr_msg));
+	{
+		u32 *w = (u32 *)((u8 *)omo_sr_pay[0] + OMO_SR_PAYLOAD);
+
+		memset(w, 0, OMO_SR_PAYLOAD);
+		w[0] = 0x01200101;
+		w[1] = 0x0003012a;
+		w[2] = 0x5a5a0000;
+		w[5] = 0x010e0101;
+		w[6] = 0x0d010dae;
+		w[8] = 0x00000001;
+	}
+
+	pr_info("omo-drv1: ---- SR post: %u nodes + producer commit + enable (fwaccept's proven sequence) ----\n",
+		OMO_ETE_DEPTH);
+	for (i = 0; i < OMO_ETE_SR_N; i++) {
+		u32 devva = omo_hostca_to_devva(omo_sr_dma[i]);
+		u64 *n = omo_sr_va[i];
+		unsigned long b = omo_sr_block[i];
+		u32 idx = 0, rb, en;
+
+		for (j = 0; j < OMO_ETE_DEPTH; j++) {
+			u32 ln = (i == 0 && j == 1) ? OMO_SR_ALG_LEN : OMO_SR_MSG_LEN;
+			u64 w1 = (u64)(u32)((ln << 16) | OMO_SR_FLAG);
+
+			n[j] = (w1 << 32) | (devva + j * OMO_SR_PAYLOAD);
+			idx = omo_ring_ptr_plus(idx, OMO_ETE_DEPTH);
+		}
+
+		iowrite32(idx, omo_ete + b + ETE_SR_WPTR);
+		rb = omo_rd(omo_ete, b + ETE_SR_WPTR);
+		pr_info("omo-drv1: SR ch%u posted %u nodes word0=0x%08x; commit SR+0x%02x <= 0x%08x readback=0x%08x\n",
+			i, OMO_ETE_DEPTH, devva, (unsigned)ETE_SR_WPTR, idx, rb);
+
+		en = omo_rd(omo_ete, b + OMO_SR_EN0);
+		iowrite32(en | 1U, omo_ete + b + OMO_SR_EN0);
+		pr_info("omo-drv1: ENABLE SR ch%u +0x00 0x%08x -> 0x%08x readback=0x%08x\n",
+			i, en, en | 1U, omo_rd(omo_ete, b + OMO_SR_EN0));
+		en = omo_rd(omo_ete, b + OMO_SR_EN1);
+		iowrite32(1U, omo_ete + b + OMO_SR_EN1);
+		pr_info("omo-drv1: ENABLE SR ch%u +0x48 0x%08x -> 0x00000001 readback=0x%08x\n",
+			i, en, omo_rd(omo_ete, b + OMO_SR_EN1));
+	}
+}
+
+static unsigned int omo_srpost_en;
+module_param_named(srpost, omo_srpost_en, uint, 0444);
+MODULE_PARM_DESC(srpost, "1 = post SR descriptor nodes + commit the producer index + enable the channel (the phase-24i-proven trigger for the firmware's id-6 word); requires wr=1");
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -1184,6 +1327,8 @@ static int omo_hw_attach(void)
 		if (rc)
 			goto err_iatu;
 		omo_ete_program();
+		if (omo_srpost_en)
+			omo_sr_post();
 	}
 
 	if (omo_fw_en) {
