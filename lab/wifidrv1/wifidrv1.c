@@ -47,6 +47,7 @@
 #include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/rtnetlink.h>
+#include <net/net_namespace.h>
 #include <linux/skbuff.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
@@ -189,8 +190,7 @@ static struct net_device *omo_netdev;
 static struct pci_dev *omo_pdev;
 static void __iomem *omo_msg;		/* message/channel window  BAR0+0x3f0000 */
 static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
-static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */
-static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
+static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
 static resource_size_t omo_bar0_base;
 
 struct omo_ring {
@@ -460,6 +460,69 @@ static void omo_read_viewports(void)
 #define OMO_RELEASE_OFF	0x3b8108UL
 #define OMO_RELEASE_VAL	0x00005a5aU
 
+/*
+ * Poll the mailbox after the release, so the words the released firmware emits are actually
+ * OBSERVED rather than assumed.  Phase 19/20 measured them at ~+1.85 s after the release write
+ * (docs/phase20/runtime-msg.md B.1: out[1] 0 -> 0x40 at +1320 ms, then 0x40 -> 0x04 at +1860 ms), and
+ * logged each TRANSITION rather than a sampled value.
+ *
+ * Reads only.  Every transition in out[0]/out[1] is reported with the bit decoded to its id, because
+ * a single-bit mailbox is the vendor's per-message convention (docs/phase19/fw-handshake.md).
+ */
+static unsigned int omo_pollms = 500;
+module_param_named(pollms, omo_pollms, uint, 0444);
+MODULE_PARM_DESC(pollms, "post-release mailbox poll interval in ms (default 500)");
+
+static unsigned int omo_polldur = 8000;
+module_param_named(polldur, omo_polldur, uint, 0444);
+MODULE_PARM_DESC(polldur, "post-release mailbox poll duration in ms (default 8000; phase 19 saw the first word at ~1.85 s)");
+
+static void omo_poll_mailbox(void)
+{
+	unsigned long elapsed = 0;
+	u32 p0 = omo_rd(omo_msg, OMO_MSG0);
+	u32 p1 = omo_rd(omo_msg, OMO_MSG1);
+	unsigned int seen = 0;
+
+	pr_info("omo-drv1: ---- post-release mailbox poll (%u ms interval, %u ms total) ----\n",
+		omo_pollms, omo_polldur);
+	pr_info("omo-drv1:   t=0  out[0]=0x%08x out[1]=0x%08x (baseline)\n", p0, p1);
+
+	while (elapsed < omo_polldur) {
+		u32 n0, n1;
+		int bit;
+
+		msleep(omo_pollms);
+		elapsed += omo_pollms;
+
+		n0 = omo_rd(omo_msg, OMO_MSG0);
+		n1 = omo_rd(omo_msg, OMO_MSG1);
+		if (n0 == p0 && n1 == p1)
+			continue;
+
+		pr_info("omo-drv1:   t=%lums out[0] 0x%08x -> 0x%08x, out[1] 0x%08x -> 0x%08x\n",
+			elapsed, p0, n0, p1, n1);
+		for (bit = 0; bit < 32; bit++) {
+			if ((n1 & (1U << bit)) && !(p1 & (1U << bit)))
+				pr_info("omo-drv1:     out[1] bit %d set (id %d)\n", bit, bit);
+			if (!(n1 & (1U << bit)) && (p1 & (1U << bit)))
+				pr_info("omo-drv1:     out[1] bit %d cleared (id %d)\n", bit, bit);
+		}
+		for (bit = 0; bit < 32; bit++) {
+			if ((n0 & (1U << bit)) && !(p0 & (1U << bit)))
+				pr_info("omo-drv1:     out[0] bit %d set (H2D mask)\n", bit);
+		}
+		p0 = n0;
+		p1 = n1;
+		seen++;
+	}
+
+	pr_info("omo-drv1:   poll done: %u transitions in %lu ms; final out[0]=0x%08x out[1]=0x%08x\n",
+		seen, elapsed, omo_rd(omo_msg, OMO_MSG0), omo_rd(omo_msg, OMO_MSG1));
+	if (!seen)
+		pr_info("omo-drv1:   NOTE no mailbox transition in this window - the firmware produced nothing\n");
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -675,9 +738,12 @@ static int omo_hw_attach(void)
 		omo_ete_program();
 	}
 
-	/* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param. */
-	if (omo_release_en)
+	/* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param - then OBSERVE
+	 * what the released firmware emits instead of assuming it said nothing. */
+	if (omo_release_en) {
 		omo_do_release();
+		omo_poll_mailbox();
+	}
 
 	return 0;
 
@@ -876,7 +942,9 @@ static int omo_del_virtual_intf(struct wiphy *wiphy, struct wireless_dev *wdev)
 		return -ENODEV;
 
 	omo_netdev = NULL;
+	rtnl_lock();
 	unregister_netdevice(dev);
+	rtnl_unlock();
 	free_netdev(dev);
 	return 0;
 }
@@ -948,7 +1016,9 @@ static void __exit omo_wifidrv1_exit(void)
 		struct net_device *dev = omo_netdev;
 
 		omo_netdev = NULL;
+		rtnl_lock();
 		unregister_netdevice(dev);
+		rtnl_unlock();
 		free_netdev(dev);
 	}
 	if (omo_wiphy) {
