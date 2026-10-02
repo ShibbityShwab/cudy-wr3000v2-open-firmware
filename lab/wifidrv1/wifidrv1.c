@@ -279,6 +279,40 @@ static void omo_read_ring_block(void)
 	pr_info("omo-drv1: NOTE read-only decode; no ring write, no descriptor, no doorbell\n");
 }
 
+/*
+ * Disambiguate out[0].  The phase-23f run read 0x40000004 at BAR0+0x3f1010, which is ALSO the
+ * value of the endpoint's BAR0 config-space register - so the read could be a live mailbox word
+ * or an aliasing artefact.  Several addresses are read in the same boot, plus the config word,
+ * so the question is settled by measurement rather than by reasoning:
+ *   0x3f1010  the vendor slot table's offset for out[0] (CA 0x40039010 through region 3)
+ *   0x3f1014  out[1], the register the released chip is stated to write
+ *   0x39010   the earlier (wrong) offset, for contrast
+ *   0x3f2000  the ETE block's own base - a different, already-trusted decode
+ *   0x3f1000  the message block's base word
+ * and the PCI_BASE_ADDRESS_0 config word the driver already prints.  If the candidate reads differ
+ * from each other, at most one is the real register; if one equals the config word bit-for-bit
+ * while another differs, the matching one is aliasing rather than a mailbox value.
+ */
+static void omo_disambiguate_msg0(void)
+{
+	u32 cfg0 = 0;
+
+	pci_read_config_dword(omo_pdev, PCI_BASE_ADDRESS_0, &cfg0);
+
+	pr_info("omo-drv1: ---- out[0] disambiguation ----\n");
+	pr_info("omo-drv1:   cfg      PCI_BASE_ADDRESS_0 = 0x%08x\n", cfg0);
+	pr_info("omo-drv1:   msg+000  BAR0+0x3f1000      = 0x%08x\n",
+		omo_rd(omo_msg, 0x000));
+	pr_info("omo-drv1:   out[0]   BAR0+0x3f1010      = 0x%08x\n",
+		omo_rd(omo_msg, OMO_MSG0));
+	pr_info("omo-drv1:   out[1]   BAR0+0x3f1014      = 0x%08x\n",
+		omo_rd(omo_msg, OMO_MSG1));
+	pr_info("omo-drv1:   r39010   BAR0+0x39010       = 0x%08x\n",
+		omo_rd(omo_msg, 0x39010 - OMO_MSG_WIN));
+	pr_info("omo-drv1:   ete+000  BAR0+0x3f2000      = 0x%08x  (IO ROM vector, expect 0x00000101)\n",
+		omo_rd(omo_ete, 0x000));
+}
+
 static void omo_read_msg_block(void)
 {
 	omo_msg0 = omo_rd(omo_msg, OMO_MSG0);
@@ -290,6 +324,8 @@ static void omo_read_msg_block(void)
 	omo_log_reg("MSG1 out[1]", omo_msg, OMO_MSG1, omo_msg1);
 	omo_log_reg("MSG2 doorbell", omo_msg, OMO_MSG2, omo_msg2);
 	omo_log_reg("CHN_RES", omo_msg, OMO_CHN_RES, omo_chnres);
+
+	omo_disambiguate_msg0();
 
 	if (omo_read_msg5) {
 		omo_msg5 = omo_rd(omo_msg, OMO_MSG5);
