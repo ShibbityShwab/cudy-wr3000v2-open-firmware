@@ -626,6 +626,94 @@ static int omo_write_fw(void)
 	return diffs == 0 ? 0 : -EIO;
 }
 
+/*
+ * The glue-status service loop - the route phases 20 and 22 both name as the point a raw takeover
+ * never reaches, reproduced WITHOUT an interrupt line (the takeover has none: PCI_INTERRUPT_LINE is
+ * 0xff and the vendor's action that hosts it does not exist here).
+ *
+ * Shape, from docs/phase20/message-service.md A.2 [proven]:
+ *   oal_pcie_transfer_done @0x83e4 reads the PCIe glue status, masks off the non-device bits
+ *   (0xff000000 / 0xe00000 / 0xf800 / 0xf8), ORs the remainder into the bridge status register
+ *   (that write-back IS the clear), then fans out to pcie_ete_h2d_isr_handle,
+ *   pcie_ete_d2h_isr_handle and pcie_intr_handle.
+ *   pcie_intr_handle @0x82e4 then reads the SAME status masked to 0x3d8 (bits 3,4,6,7,8,9) and calls
+ *   handler[lowest set bit] from the table at comm+0x48 (arg at comm+0x4c).
+ *
+ * Our takeover has no ISR, so this polls that status in a thread at the same cadence an ISR would be
+ * entered, and performs the same clear + dispatch. It is a faithful reproduction of the DECISION
+ * LOGIC, not of the interrupt: if the firmware needs a real IRQ edge to make progress, this will not
+ * supply it - and the run will say so, which is itself the answer.
+ *
+ * Read-mostly: the only write is the masked status write-back that the vendor performs to clear it.
+ */
+#define OMO_GLUE_STAT	0x2ec		/* within the message window: BAR0 0x3f02ec */
+#define OMO_GLUE_MASK	0x3d8U		/* bits 3,4,6,7,8,9 - pcie_intr_handle's mask */
+#define OMO_STAT_MASK1	0xff000000U
+#define OMO_STAT_MASK2	0x00e00000U
+#define OMO_STAT_MASK3	0x0000f800U
+#define OMO_STAT_MASK4	0x000000f8U
+
+static unsigned int omo_svc;
+module_param_named(svc, omo_svc, uint, 0444);
+MODULE_PARM_DESC(svc, "1 = poll the PCIe glue status and dispatch, standing in for the missing ISR");
+
+static unsigned int omo_svcms = 200;
+module_param_named(svcms, omo_svcms, uint, 0444);
+MODULE_PARM_DESC(svcms, "glue-status poll interval in ms (default 200)");
+
+static unsigned int omo_svcdur = 8000;
+module_param_named(svcdur, omo_svcdur, uint, 0444);
+MODULE_PARM_DESC(svcdur, "glue-status service duration in ms (default 8000)");
+
+static void omo_glue_service(void)
+{
+	unsigned long elapsed = 0;
+	unsigned int events = 0;
+	u32 first = omo_rd(omo_msg, OMO_GLUE_STAT);
+
+	pr_info("omo-drv1: ---- glue-status service (%u ms interval, %u ms total) ----\n",
+		omo_svcms, omo_svcdur);
+	pr_info("omo-drv1:   t=0  glue status 0x3f02ec = 0x%08x (masked 0x%08x)\n",
+		first, first & OMO_GLUE_MASK);
+
+	while (elapsed < omo_svcdur) {
+		u32 st;
+
+		msleep(omo_svcms);
+		elapsed += omo_svcms;
+		st = omo_rd(omo_msg, OMO_GLUE_STAT);
+
+		if (st & OMO_GLUE_MASK) {
+			u32 keep = st;
+			int bit;
+
+			pr_info("omo-drv1:   t=%lums status 0x%08x -> masked 0x%08x PENDING\n",
+				elapsed, st, st & OMO_GLUE_MASK);
+			for (bit = 0; bit < 32; bit++)
+				if ((st & OMO_GLUE_MASK) & (1U << bit))
+					pr_info("omo-drv1:     status bit %d set -> dispatch handler[%d]\n",
+						bit, bit);
+
+			/* the vendor's clear: mask off non-device bits, write the remainder back */
+			keep &= ~OMO_STAT_MASK1;
+			keep &= ~OMO_STAT_MASK2;
+			keep &= ~OMO_STAT_MASK3;
+			keep &= ~OMO_STAT_MASK4;
+			pr_info("omo-drv1:     write-back 0x%08x (the vendor's clear)\n", keep);
+			iowrite32(keep, omo_msg + OMO_GLUE_STAT);
+			pr_info("omo-drv1:     after clear: 0x%08x\n",
+				omo_rd(omo_msg, OMO_GLUE_STAT));
+			events++;
+			first = omo_rd(omo_msg, OMO_GLUE_STAT);
+		}
+	}
+
+	pr_info("omo-drv1:   service done: %u pending events in %lu ms; final status=0x%08x\n",
+		events, elapsed, omo_rd(omo_msg, OMO_GLUE_STAT));
+	if (!events)
+		pr_info("omo-drv1:   NOTE the glue status never asserted in this window\n");
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -860,6 +948,11 @@ static int omo_hw_attach(void)
 		omo_do_release();
 		omo_poll_mailbox();
 	}
+
+	/* Stand in for the missing ISR: poll the glue status and dispatch, the route
+	 * phases 20/22 both name as never entered by a takeover. */
+	if (omo_svc)
+		omo_glue_service();
 
 	return 0;
 
