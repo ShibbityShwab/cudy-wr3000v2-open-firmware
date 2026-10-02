@@ -32,6 +32,25 @@ Two facts that were previously mis-stated by me and are now corrected:
    that is a design constraint, not a blocker, and it is already the working assumption of the
    bring-up modules.
 
+## 1b. What phase 23 added (2026-10-02, same session, all on hardware)
+
+| layer | state | evidence |
+| --- | --- | --- |
+| wiphy + netdev (`wifidrv1`) | registers, opens/closes, clean `rmmod`; vendor radios untouched | `docs/phase23/wifidrv1-endpoint.md` |
+| endpoint claim | **only in a takeover boot**; under the vendor stack `pci_request_mem_regions` returns `EBUSY` (-16) by design | same |
+| register windows | message `BAR0+0x3f0000` (out[0] at `+0x010` = the vendor table's `0x3f1010`), ETE `BAR0+0x3f2000`, both inside region-3 IO | `docs/phase23/register-windows.md` |
+| inbound viewports | **programmed and byte-identical to the live vendor boot**, all six | `docs/phase23/write-path-executed.md` |
+| ETE ring decode | 3 SR (`0x4003a400`/`514`/`628`) + 4 DR (`0x590`/`5fc`/`668`/`6d4`), geometry matches phase 20 | `docs/phase23/wifidrv1-both-blocks.md` |
+| **ring ownership** | **3 SR + 4 DR rings + both binding writes written, readback match, 0 failures** | `docs/phase23/write-path-executed.md` |
+| message-block read | still aliases PCI config space in a takeover - **narrowed**: not a viewport-value problem (they match the vendor), so look at endpoint/RC selection at read time or the read path itself | `docs/phase23/window-disambiguation.md` |
+| data path | not started. Phase 22's device-side H2D accept gate still holds; submitting descriptors without it does nothing | `docs/phase22/h2d-accept.md` |
+
+**Two bugs were found by measurement on the way, both mine, both now covered by checks:** the message
+window was read at `0x39000` instead of `0x3f0000` (symptom: `0xffffffff`), and the window was
+`ioremap`ed `0x1000` bytes while the write path touches `+0x1508` (symptom: kernel paging oops). The
+second is the reason there is now an offset-fits-its-window sweep in the module's review checklist:
+*"the module loaded" says nothing about the next line.*
+
 ## 2. What is genuinely not done
 
 - The **radio firmware interface** (driver<->firmware message protocol) is mapped but not fully
