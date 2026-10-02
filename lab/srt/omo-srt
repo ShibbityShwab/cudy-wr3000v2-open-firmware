@@ -19,6 +19,10 @@
 START=99
 start() {
 	rm -f /etc/rc.d/S99omo-srt
+	# Re-arm the device-side self-recovery inside this takeover boot before the
+	# module loads, so a chip hang at insmod is still recovered by the watchdog.
+	[ -f /root/recover-srt.sh ] && start-stop-daemon -S -b -m \
+		-p /tmp/omo-srt.timer.pid -x /bin/sh -- /root/recover-srt.sh --watch
 	insmod /lib/modules/$(uname -r)/srt.ko domain=1 program=1 outwin=1 \
 		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
 		release=1 useirq=1 irq=209 hostirq=209 rings=1 acpoff=0 \
