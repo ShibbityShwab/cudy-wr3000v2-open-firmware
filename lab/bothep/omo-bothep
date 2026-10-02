@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-21b two-endpoint module (bothep.ko).
+#
+# It claims BOTH functions of the 59e7:0005 message device:
+#   - primary   `0001:00:00.0` (domain 1, irq 209) - the vendor's live message
+#     interrupt, and the register alias the rings are programmed through;
+#   - secondary `0000:00:00.0` (domain 0, irq 207) - the RC whose outbound
+#     window the device's SR descriptor fetch actually traverses (phase 20f
+#     txpath fetched on ep0; phase 21 sr2/srt never fetched on ep1 alone).
+# Both RCs get the six inbound viewports and the one outbound window; irq 209
+# (and 207) are requested.  See docs/phase21/both-eps.md.
+#
+# enable=0 deliberately: the phase-20 boot 3 proved the enable=1 family
+# (out[5] CA 0x400392f0 <= 8) hangs the chip.  intr=0 / srctrl=0 select the
+# vendor's live ETE/reg values with read-only diagnostics.  The only
+# unproven-but-quoted writes remain PCI_INTERRUPT_LINE (209 / 207).
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-bothep
+	# Re-arm the device-side self-recovery inside this takeover boot before the
+	# module loads, so a chip hang at insmod is still recovered by the watchdog.
+	[ -f /root/recover-bothep.sh ] && start-stop-daemon -S -b -m \
+		-p /tmp/omo-bothep.timer.pid -x /bin/sh -- /root/recover-bothep.sh --watch
+	insmod /lib/modules/$(uname -r)/bothep.ko domain=1 domain2=0 program=1 \
+		outwin=1 devvabase=0x80000000 devvaend=0xffffffff \
+		hostcabase=0x80000000 release=1 useirq=1 irq=209 hostirq=209 \
+		useirq2=1 irq2=207 hostirq2=207 rings=1 acpoff=0 enable=0 \
+		intr=0 srctrl=0 seq=1 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
+		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
+}
