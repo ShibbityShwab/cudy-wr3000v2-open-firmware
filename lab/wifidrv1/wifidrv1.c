@@ -516,18 +516,16 @@ static void omo_disambiguate_msg0(void)
 
 	pci_read_config_dword(omo_pdev, PCI_BASE_ADDRESS_0, &cfg0);
 
-	pr_info("omo-drv1: ---- out[0] disambiguation ----\n");
-	pr_info("omo-drv1:   cfg      PCI_BASE_ADDRESS_0 = 0x%08x\n", cfg0);
-	pr_info("omo-drv1:   msg+000  BAR0+0x3f1000      = 0x%08x\n",
-		omo_rd(omo_msg, 0x000));
-	pr_info("omo-drv1:   out[0]   BAR0+0x3f1010      = 0x%08x\n",
-		omo_rd(omo_msg, OMO_MSG0));
-	pr_info("omo-drv1:   out[1]   BAR0+0x3f1014      = 0x%08x\n",
-		omo_rd(omo_msg, OMO_MSG1));
-	pr_info("omo-drv1:   r39010   BAR0+0x39010       = 0x%08x\n",
-		omo_rd(omo_msg, 0x39010 - OMO_MSG_WIN));
-	pr_info("omo-drv1:   ete+000  BAR0+0x3f2000      = 0x%08x  (IO ROM vector, expect 0x00000101)\n",
-		omo_rd(omo_ete, 0x000));
+	pr_info("omo-drv1: ---- out[0] disambiguation (labels are ABSOLUTE BAR0 offsets) ----\n");
+	pr_info("omo-drv1:   cfg      PCI_BASE_ADDRESS_0   = 0x%08x\n", cfg0);
+	pr_info("omo-drv1:   msg+000  BAR0+0x%05lx       = 0x%08x\n",
+		(unsigned long)OMO_MSG_WIN + 0x000, omo_rd(omo_msg, 0x000));
+	pr_info("omo-drv1:   out[0]   BAR0+0x%05lx       = 0x%08x\n",
+		(unsigned long)OMO_MSG_WIN + OMO_MSG0, omo_rd(omo_msg, OMO_MSG0));
+	pr_info("omo-drv1:   out[1]   BAR0+0x%05lx       = 0x%08x\n",
+		(unsigned long)OMO_MSG_WIN + OMO_MSG1, omo_rd(omo_msg, OMO_MSG1));
+	pr_info("omo-drv1:   ete+000  BAR0+0x%05lx       = 0x%08x  (IO ROM vector)\n",
+		(unsigned long)OMO_ETE_WIN + 0x000, omo_rd(omo_ete, 0x000));
 }
 
 static void omo_read_msg_block(void)
