@@ -882,6 +882,93 @@ static void omo_msg_service(void)
 		pr_info("omo-drv1:   NOTE nothing was pending to service in this window\n");
 }
 
+/*
+ * Host -> device send, in the vendor's pcie_msg_send form.
+ *
+ * docs/phase20/msg-host-half.md: pcie_msg_send indexes the same context from +0x2c:
+ *   out[0] (CA 0x40039010 -> BAR0 0x3f1010, offset +0x010) receives the message-id BITMAP
+ *   out[2] (CA 0x400392d4 -> BAR0 0x3f12d4, offset +0x2d4) is the doorbell; bit 0 is ORed in
+ *
+ * DELIBERATE OMISSION: the vendor also has pcie_msg_send_irq, which additionally writes 8 to
+ * out[5] (CA 0x400392f0).  That register is on this project's forbidden list (writing it hangs the
+ * chip - phase 20 BOOT B), so this module performs the out[0]+out[2] form ONLY.  If a send needs the
+ * out[5] arm to be seen, that will show up as the device ignoring it, and it must be solved another
+ * way rather than by breaking the rule.
+ */
+#define OMO_MSG_DOORBELL	0x2d4	/* within the message window -> BAR0 0x3f12d4 (out[2]) */
+
+static int omo_send = -1;
+module_param_named(send, omo_send, int, 0444);
+MODULE_PARM_DESC(send, "message id bit to send to the device (0-31); -1 = do not send (default)");
+
+static unsigned int omo_senddur = 6000;
+module_param_named(senddur, omo_senddur, uint, 0444);
+MODULE_PARM_DESC(senddur, "post-send observation window in ms (default 6000)");
+
+static void omo_h2d_send(void)
+{
+	u32 mask = 1U << omo_send;
+	u32 m0, m2, rb0, rb2;
+	unsigned long elapsed = 0;
+	u32 l0, l1, lg;
+
+	pr_info("omo-drv1: ---- H2D send: id %d (bitmap 0x%08x) via out[0] + doorbell out[2] ----\n",
+		omo_send, mask);
+	pr_info("omo-drv1:   NOTE out[5] (CA 0x400392f0) is deliberately NOT written (project rule)\n");
+
+	m0 = omo_rd(omo_msg, OMO_MSG0);
+	iowrite32(m0 | mask, omo_msg + OMO_MSG0);
+	rb0 = omo_rd(omo_msg, OMO_MSG0);
+	pr_info("omo-drv1:   out[0] 0x%05lx 0x%08x -> 0x%08x readback=0x%08x match=%s\n",
+		(unsigned long)(OMO_MSG_WIN + OMO_MSG0), m0, m0 | mask, rb0,
+		rb0 == (m0 | mask) ? "YES" : "NO");
+
+	m2 = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+	iowrite32(m2 | 1U, omo_msg + OMO_MSG_DOORBELL);
+	rb2 = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+	pr_info("omo-drv1:   out[2] 0x%05lx 0x%08x -> 0x%08x readback=0x%08x match=%s (doorbell)\n",
+		(unsigned long)(OMO_MSG_WIN + OMO_MSG_DOORBELL), m2, m2 | 1U, rb2,
+		rb2 == (m2 | 1U) ? "YES" : "NO");
+
+	l0 = omo_rd(omo_msg, OMO_MSG0);
+	l1 = omo_rd(omo_msg, OMO_MSG1);
+	lg = omo_rd(omo_msg, OMO_GLUE_STAT);
+	pr_info("omo-drv1:   observing %u ms for a response...\n", omo_senddur);
+
+	while (elapsed < omo_senddur) {
+		u32 n0 = omo_rd(omo_msg, OMO_MSG0);
+		u32 n1 = omo_rd(omo_msg, OMO_MSG1);
+		u32 ng = omo_rd(omo_msg, OMO_GLUE_STAT);
+		int bit;
+
+		if (n0 != l0 || n1 != l1 || ng != lg) {
+			pr_info("omo-drv1:   t=%lums out[0] 0x%08x->0x%08x out[1] 0x%08x->0x%08x glue 0x%08x->0x%08x\n",
+				elapsed, l0, n0, l1, n1, lg, ng);
+			for (bit = 0; bit < 32; bit++) {
+				if ((n0 & (1U << bit)) != (l0 & (1U << bit)))
+					pr_info("omo-drv1:     out[0] bit %d %s by the DEVICE\n", bit,
+						(n0 & (1U << bit)) ? "SET" : "CLEARED");
+				if ((n1 & (1U << bit)) != (l1 & (1U << bit)))
+					pr_info("omo-drv1:     out[1] bit %d %s by the DEVICE\n", bit,
+						(n1 & (1U << bit)) ? "SET" : "CLEARED");
+			}
+			l0 = n0;
+			l1 = n1;
+			lg = ng;
+		}
+		msleep(200);
+		elapsed += 200;
+	}
+
+	pr_info("omo-drv1:   send observation done: final out[0]=0x%08x out[1]=0x%08x glue=0x%08x\n",
+		omo_rd(omo_msg, OMO_MSG0), omo_rd(omo_msg, OMO_MSG1),
+		omo_rd(omo_msg, OMO_GLUE_STAT));
+	if (omo_rd(omo_msg, OMO_MSG0) & mask)
+		pr_info("omo-drv1:   NOTE the sent bit is STILL SET - the device did not consume it\n");
+	else
+		pr_info("omo-drv1:   NOTE the sent bit was CLEARED - the device consumed the message\n");
+}
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -1137,6 +1224,10 @@ static int omo_hw_attach(void)
 	/* The recovered host half, against the corrected registers: ack, clear, re-arm, dispatch. */
 	if (omo_msgsvc)
 		omo_msg_service();
+
+	/* Host -> device send, then observe whether the device reacts. */
+	if (omo_send >= 0 && omo_send < 32)
+		omo_h2d_send();
 
 	/* Stand in for the missing ISR: poll the glue status and dispatch, the route
 	 * phases 20/22 both name as never entered by a takeover. */
