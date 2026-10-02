@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+# One-shot boot-time loader for the phase-21 sibling-endpoint module (sibep.ko).
+#
+# Same full bring-up as lab/bind's omo-bind (claim -> decode six inbound + one
+# outbound iATU viewports -> load FIRMWARE.bin -> build the vendor message
+# context and the ETE SR/DR rings -> post DR buffers -> post the id-1 SR frame
+# -> release (0x5a5a) -> ring pcie_msg_send(chip,3) -> run the recovered vendor
+# service thread for 25 s, including the in-thread SR producer pump and the two
+# live-captured device-side binding writes: ETE interrupt block CA 0x40039508
+# (old & 0xffe0f8f8) and glue channel-resource CA 0x400392e8 (old & 0xfffffc20)),
+# but it claims the SIBLING endpoint `0001:00:00.0` (domain 1) and requests its
+# INTx line, irq 209, instead of `0000:00:00.0` (domain 0, irq 207).
+#
+# enable=0 deliberately: the phase-20 boot 3 proved the enable=1 family
+# (out[5] CA 0x400392f0 <= 8) hangs the chip.  This run does not touch it.
+# The only unproven-but-quoted write remains PCI_INTERRUPT_LINE = 209 (the
+# live vendor value for this endpoint); CA 0x400392f0 is never written.
+START=99
+start() {
+	rm -f /etc/rc.d/S99omo-sibep
+	insmod /lib/modules/$(uname -r)/sibep.ko domain=1 program=1 outwin=1 \
+		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
+		release=1 useirq=1 irq=209 hostirq=209 rings=1 acpoff=0 \
+		enable=0 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
+		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
+}
