@@ -221,6 +221,13 @@ jobs:
           grep -nE 'CONFIG_PM( |_SLEEP )' linux-5.10.201/include/generated/autoconf.h || true
           md5sum lab/wifidrv0/wifidrv0.ko
 
+      - name: build wifidrv1 (PM off)
+        run: |
+          rm -f lab/wifidrv1/wifidrv1.o lab/wifidrv1/wifidrv1.ko
+          make -C linux-5.10.201 M="$PWD/lab/wifidrv1" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+          cp lab/wifidrv1/wifidrv1.ko "$RUNNER_TEMP/abi-artifacts/wifidrv1-pm-off.ko"
+          md5sum lab/wifidrv1/wifidrv1.ko
+
       - name: show vermagic
         run: |
           strings lab/hello/hello.ko | grep -m1 vermagic
@@ -422,3 +429,8 @@ jobs:
         with:
           name: wifidrv0-ko
           path: lab/wifidrv0/wifidrv0.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifidrv1-ko
+          path: lab/wifidrv1/wifidrv1.ko
