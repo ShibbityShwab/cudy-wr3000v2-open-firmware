@@ -107,9 +107,23 @@ static const struct omo_region omo_regions[6] = {
  *
  * Getting these wrong is detectable in the readback: a mis-addressed window
  * reads 0xffffffff (measured both ways on this device, phase 23b/c). */
+/*
+ * Two windows, sized to what their users actually touch.
+ *
+ * MESSAGE window: the six mailbox CAs.  Device CAs 0x40039010 (out[0]),
+ * 0x40039014 (out[1]), 0x400392d4 (out[2]), 0x400392e8 (glue chn_res),
+ * 0x400392f0 (out[5]) and the ETE status/intr block at 0x40039508
+ * (BAR0 0x3f1508).  That range spans 0x3f1010..0x3f1508, so the window is
+ * 0x2000 bytes, NOT 0x1000: an earlier revision mapped 0x1000 and the write
+ * path faulted at omo_msg+0x1508 (oops: paging request at c9045508,
+ * PC omo_wifidrv1_init+0x98c - caught on hardware, phase 23k).
+ *
+ * ETE window: the SR/DR ring program registers, 0x3f2000 + up to ~0x6e8.
+ */
 #define OMO_MSG_WIN	0x3f0000UL
+#define OMO_MSG_BYTES	0x2000UL	/* covers 0x3f1010..0x3f1508 inclusive-ish */
 #define OMO_ETE_WIN	0x3f2000UL
-#define OMO_WIN_BYTES	0x1000UL
+#define OMO_WIN_BYTES	0x1000UL	/* the ETE block: +0x408..+0x6e8 */
 
 /* message registers, offsets within the message window (0x3f0000 base) */
 #define OMO_MSG0	0x010
@@ -579,7 +593,7 @@ static int omo_hw_attach(void)
 		(rb & (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER)) ==
 		(PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER) ? "set" : "MISSING");
 
-	omo_msg = ioremap(omo_bar0_base + OMO_MSG_WIN, OMO_WIN_BYTES);
+	omo_msg = ioremap(omo_bar0_base + OMO_MSG_WIN, OMO_MSG_BYTES);
 	if (!omo_msg) {
 		pr_err("omo-drv1: ioremap message window FAILED\n");
 		rc = -ENOMEM;
