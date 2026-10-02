@@ -156,6 +156,10 @@ static unsigned int omo_wr_en;
 module_param_named(wr, omo_wr_en, uint, 0444);
 MODULE_PARM_DESC(wr, "1 = program the ETE rings (the module's first writes to the endpoint); requires hw=1 program=1");
 
+static unsigned int omo_release_en;
+module_param_named(release, omo_release_en, uint, 0444);
+MODULE_PARM_DESC(release, "1 = write 0x5a5a to CA 0x40000108 (release the Wi-Fi CPU); requires hw=1");
+
 static unsigned int omo_program_regions_en;
 module_param_named(program, omo_program_regions_en, uint, 0444);
 MODULE_PARM_DESC(program, "1 = program the six inbound iATU viewports (needed for the ETE/IO block to decode); 0 = decode as-is");
@@ -177,8 +181,9 @@ static struct wiphy *omo_wiphy;
 static struct net_device *omo_netdev;
 
 static struct pci_dev *omo_pdev;
-static void __iomem *omo_msg;		/* message/channel window  BAR0+0x39000 */
+static void __iomem *omo_msg;		/* message/channel window  BAR0+0x3f0000 */
 static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
+static void __iomem *omo_rel;		/* region 0 / release reg BAR0+0x3b8000 */
 static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
 static resource_size_t omo_bar0_base;
 
@@ -438,6 +443,30 @@ static void omo_read_viewports(void)
 	}
 }
 
+/*
+ * Release the Wi-Fi CPU: a single quoted 4-byte write, the act phase 19 found by
+ * experiment (docs/phase19/release-attempts.md).  Without it the firmware image
+ * sits in the chip and nothing runs.  Read back and report, per the discipline
+ * used everywhere else in this module.
+ *
+ * CA 0x40000108 -> BAR0 0x3b8108 (region 3: host 0x403b8000 -> dev 0x40000000).
+ */
+#define OMO_RELEASE_OFF	0x3b8108UL
+#define OMO_RELEASE_VAL	0x00005a5aU
+
+static int omo_do_release(void)
+{
+	u32 rb;
+
+	pr_info("omo-drv1: RELEASE write CA 0x40000108 <- 0x%08x (BAR0+0x%lx)\n",
+		OMO_RELEASE_VAL, (unsigned long)OMO_RELEASE_OFF);
+	iowrite32(OMO_RELEASE_VAL, omo_bar0 + OMO_RELEASE_OFF);
+	rb = ioread32(omo_bar0 + OMO_RELEASE_OFF);
+	pr_info("omo-drv1: release readback = 0x%08x %s\n", rb,
+		rb == OMO_RELEASE_VAL ? "match=YES" : "match=NO");
+	return rb == OMO_RELEASE_VAL ? 0 : -EIO;
+}
+
 /* ---- register access --------------------------------------------------- */
 static u32 omo_rd(void __iomem *win, unsigned long off)
 {
@@ -606,6 +635,14 @@ static int omo_hw_attach(void)
 	pr_info("omo-drv1: mapped message BAR0+0x%lx and ETE BAR0+0x%lx (region-3 viewport at 0x40000000)\n",
 		(unsigned long)OMO_MSG_WIN, (unsigned long)OMO_ETE_WIN);
 
+	omo_rel = ioremap(omo_bar0_base + OMO_REL_WIN, OMO_REL_BYTES);
+	if (!omo_rel) {
+		pr_err("omo-drv1: ioremap release window (BAR0+0x%lx) FAILED\n",
+		       (unsigned long)OMO_REL_WIN);
+		rc = -ENOMEM;
+		goto err_ete;
+	}
+
 	omo_iatu = pci_iomap(omo_pdev, OMO_IATU_BAR, 0);
 	if (!omo_iatu) {
 		pr_err("omo-drv1: iomap BAR2 (iATU) FAILED\n");
@@ -632,11 +669,18 @@ static int omo_hw_attach(void)
 		omo_ete_program();
 	}
 
+	/* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param. */
+	if (omo_release_en)
+		omo_do_release();
+
 	return 0;
 
 err_iatu:
 	pci_iounmap(omo_pdev, omo_iatu);
 	omo_iatu = NULL;
+err_rel:
+	iounmap(omo_rel);
+	omo_rel = NULL;
 err_ete:
 	iounmap(omo_ete);
 	omo_ete = NULL;
@@ -654,6 +698,10 @@ static void omo_hw_detach(void)
 {
 	if (omo_pdev)
 		omo_rings_free();
+	if (omo_rel) {
+		iounmap(omo_rel);
+		omo_rel = NULL;
+	}
 	if (omo_iatu) {
 		pci_iounmap(omo_pdev, omo_iatu);
 		omo_iatu = NULL;
