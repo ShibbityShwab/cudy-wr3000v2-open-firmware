@@ -1128,7 +1128,8 @@ static void omo_sr_post(void)
 		u32 idx = 0, rb, en;
 
 		for (j = 0; j < OMO_ETE_DEPTH; j++) {
-			u32 ln = (i == 0 && j == 1) ? OMO_SR_ALG_LEN : OMO_SR_MSG_LEN;
+			u32 ln = (i == 0 && j == 1) ? OMO_SR_ALG_LEN :
+				(omo_sr_desclen ? omo_sr_desclen : OMO_SR_MSG_LEN);
 			u64 w1 = (u64)(u32)((ln << 16) | OMO_SR_FLAG);
 
 			n[j] = (w1 << 32) | (devva + j * OMO_SR_PAYLOAD);
@@ -1154,6 +1155,18 @@ static void omo_sr_post(void)
 static unsigned int omo_srpost_en;
 module_param_named(srpost, omo_srpost_en, uint, 0444);
 MODULE_PARM_DESC(srpost, "1 = post SR descriptor nodes + commit the producer index + enable the channel (the phase-24i-proven trigger for the firmware's id-6 word); requires wr=1");
+
+/*
+ * The descriptor length the SR nodes announce for the vendor's first frame.
+ *
+ * The frame is 72 bytes and its OWN header at +4 says 48, so the two length fields disagree (slot 1's
+ * alg frame is self-consistent at 298/298, see docs/phase24/frame-field-check.md).  This parameter
+ * makes the announced length testable without a rebuild per value: 0 keeps the captured 0x48, and
+ * 0x30 matches the message's own header.
+ */
+static unsigned int omo_sr_desclen;
+module_param_named(sr_desclen, omo_sr_desclen, uint, 0444);
+MODULE_PARM_DESC(sr_desclen, "SR slot-0 descriptor length override (0 = the captured 0x48; 0x30 matches the frame's own header field)");
 
 /*
  * Device -> host: post DR receive buffers and commit the producer index.
