@@ -190,6 +190,7 @@ static const struct omo_region omo_regions[6] = {
 #define ETE_DR_DEPTH	0x034
 #define ETE_DR_WPTR	0x038
 #define ETE_DR_RPTR	0x03c
+#define OMO_DR_PAYLOAD	2048	/* per-node device->host receive buffer (fwaccept: ETE_DR_PAYLOAD) */
 
 /* ---- parameters --------------------------------------------------------- */
 static unsigned int omo_hw;		/* 0 = registration only (safe default) */
@@ -322,6 +323,8 @@ static void *omo_sr_pay[OMO_ETE_SR_N];	/* per-node H2D message buffers */
 static dma_addr_t omo_sr_pay_dma[OMO_ETE_SR_N];
 static void *omo_dr_va[OMO_ETE_DR_N];
 static dma_addr_t omo_dr_dma[OMO_ETE_DR_N];
+static void *omo_dr_pay[OMO_ETE_DR_N];	/* per-node D2H receive buffers */
+static dma_addr_t omo_dr_pay_dma[OMO_ETE_DR_N];
 static bool omo_rings_ready;
 static unsigned int omo_wr_fail;
 
@@ -396,6 +399,18 @@ static int omo_rings_alloc(void)
 		pr_info("omo-drv1: DR ch%u nodes %zu bytes @ %pad (devva 0x%08x)\n",
 			i, dr_sz, &omo_dr_dma[i], omo_hostca_to_devva(omo_dr_dma[i]));
 	}
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		omo_dr_pay[i] = dma_alloc_coherent(&omo_pdev->dev,
+						  OMO_ETE_DEPTH * OMO_DR_PAYLOAD,
+						  &omo_dr_pay_dma[i], GFP_KERNEL);
+		if (!omo_dr_pay[i]) {
+			pr_err("omo-drv1: DR ch%u payload dma_alloc_coherent FAILED\n", i);
+			return -ENOMEM;
+		}
+		pr_info("omo-drv1: DR ch%u payload %u bytes @ %pad (devva 0x%08x)\n",
+			i, OMO_ETE_DEPTH * OMO_DR_PAYLOAD, &omo_dr_pay_dma[i],
+			omo_hostca_to_devva(omo_dr_pay_dma[i]));
+	}
 	omo_rings_ready = true;
 	return 0;
 }
@@ -424,6 +439,12 @@ static void omo_rings_free(void)
 			dma_free_coherent(&omo_pdev->dev, OMO_ETE_DEPTH * 8,
 					  omo_dr_va[i], omo_dr_dma[i]);
 			omo_dr_va[i] = NULL;
+		}
+		if (omo_dr_pay[i]) {
+			dma_free_coherent(&omo_pdev->dev,
+					  OMO_ETE_DEPTH * OMO_DR_PAYLOAD,
+					  omo_dr_pay[i], omo_dr_pay_dma[i]);
+			omo_dr_pay[i] = NULL;
 		}
 	}
 	omo_rings_ready = false;
@@ -1113,6 +1134,100 @@ static unsigned int omo_srpost_en;
 module_param_named(srpost, omo_srpost_en, uint, 0444);
 MODULE_PARM_DESC(srpost, "1 = post SR descriptor nodes + commit the producer index + enable the channel (the phase-24i-proven trigger for the firmware's id-6 word); requires wr=1");
 
+/*
+ * Device -> host: post DR receive buffers and commit the producer index.
+ *
+ * Phase 20's own conclusion named this the most likely next thing to try: the posted DR nodes
+ * (word0 = payload device VA, word1 = 0) "were never touched", and whether the engine needs the
+ * host producer index advanced - or an explicit "buffers available" write - before it will DMA a
+ * receive was left undetermined.  lab/fwaccept DID commit that index (DR+0x38, the same packed form)
+ * and recorded dr_events=4; wifidrv1 wrote DR wptr = 0.  This closes that gap.
+ */
+static void omo_dr_post(void)
+{
+	unsigned int i, j;
+
+	if (!omo_rings_ready) {
+		pr_err("omo-drv1: drpost requested but the rings are not allocated\n");
+		return;
+	}
+
+	pr_info("omo-drv1: ---- DR post: %u nodes + producer commit (the phase-20 open item) ----\n",
+		OMO_ETE_DEPTH);
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		u32 devva = omo_hostca_to_devva(omo_dr_pay_dma[i]);
+		u64 *nodes = omo_dr_va[i];
+		unsigned long b = omo_dr_block[i];
+		u32 idx = 0, rb, rp;
+
+		memset(omo_dr_pay[i], 0, OMO_ETE_DEPTH * OMO_DR_PAYLOAD);
+		for (j = 0; j < OMO_ETE_DEPTH; j++) {
+			nodes[j] = devva + j * OMO_DR_PAYLOAD;
+			idx = omo_ring_ptr_plus(idx, OMO_ETE_DEPTH);
+		}
+
+		iowrite32(idx, omo_ete + b + ETE_DR_WPTR);
+		rb = omo_rd(omo_ete, b + ETE_DR_WPTR);
+		rp = omo_rd(omo_ete, b + ETE_DR_RPTR);
+		pr_info("omo-drv1: DR ch%u posted %u nodes word0=0x%08x; commit DR+0x%02x <= 0x%08x readback=0x%08x rptr=0x%08x\n",
+			i + 3, OMO_ETE_DEPTH, devva, (unsigned)ETE_DR_WPTR, idx, rb, rp);
+	}
+}
+
+/*
+ * Watch the DR rings for a device deposit: the device index (+0x3c) advancing, or a node word
+ * changing under us.  Read-only on the device.  A deposit is the first evidence of data flow.
+ */
+static void omo_dr_watch(void)
+{
+	unsigned int i;
+	u32 rptr_last[OMO_ETE_DR_N];
+	u32 snap[OMO_ETE_DR_N][8];
+	unsigned long elapsed = 0;
+	unsigned int events = 0;
+
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		rptr_last[i] = omo_rd(omo_ete, omo_dr_block[i] + ETE_DR_RPTR);
+		memcpy(snap[i], omo_dr_va[i], sizeof(snap[i]));
+	}
+	pr_info("omo-drv1: ---- DR watch (%u ms): device index + node words ----\n",
+		omo_polldur);
+
+	while (elapsed < omo_polldur) {
+		for (i = 0; i < OMO_ETE_DR_N; i++) {
+			unsigned long b = omo_dr_block[i];
+			u32 rp = omo_rd(omo_ete, b + ETE_DR_RPTR);
+			u32 wp = omo_rd(omo_ete, b + ETE_DR_WPTR);
+
+			if (rp != rptr_last[i]) {
+				pr_info("omo-drv1: DR ch%u DEVICE INDEX 0x%08x -> 0x%08x (host wptr=0x%08x, delta=%u) = A DEPOSIT\n",
+					i + 3, rptr_last[i], rp, wp,
+					(rp - rptr_last[i]) & 0x3ffU);
+				rptr_last[i] = rp;
+				events++;
+			}
+			if (memcmp(omo_dr_va[i], snap[i], sizeof(snap[i])) != 0) {
+				u32 *n = omo_dr_va[i];
+
+				pr_info("omo-drv1: DR ch%u node[0] CHANGED word0=0x%08x word1=0x%08x (the device wrote our buffer)\n",
+					i + 3, n[0], n[1]);
+				memcpy(snap[i], omo_dr_va[i], sizeof(snap[i]));
+				events++;
+			}
+		}
+		msleep(omo_pollms);
+		elapsed += omo_pollms;
+	}
+
+	pr_info("omo-drv1: DR watch done: %u deposit events in %lu ms\n", events, elapsed);
+	if (!events)
+		pr_info("omo-drv1: NOTE no DR deposit - the device did not write our receive buffers\n");
+}
+
+static unsigned int omo_drpost_en;
+module_param_named(drpost, omo_drpost_en, uint, 0444);
+MODULE_PARM_DESC(drpost, "1 = post DR receive buffers + commit the producer index AND watch for a device deposit (the phase-20 open item); requires wr=1");
+
 static int omo_do_release(void)
 {
 	u32 rb;
@@ -1328,6 +1443,8 @@ static int omo_hw_attach(void)
 		omo_ete_program();
 		if (omo_srpost_en)
 			omo_sr_post();
+		if (omo_drpost_en)
+			omo_dr_post();
 	}
 
 	if (omo_fw_en) {
@@ -1360,6 +1477,9 @@ static int omo_hw_attach(void)
 		 * the signature to run first.  The signature is CPU state, not a transient, so
 		 * reading it after the poll window is just as valid. */
 		omo_poll_mailbox();
+
+		if (omo_drpost_en)
+			omo_dr_watch();
 
 		omo_sig_read("post", after);
 		for (i = 0; i < ARRAY_SIZE(omo_sig); i++) {
