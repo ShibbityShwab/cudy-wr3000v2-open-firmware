@@ -14,7 +14,7 @@ Artifacts:
 
 ## 1. `power-decode.md` (decode lane)
 
-All commands run with cwd `C:/Users/ShibbityShwab/router-openwrt/build/tmp` unless stated.
+All commands run with cwd `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp` unless stated.
 
 | # | Claim in `power-decode.md` | Exact command run | Observed output | Verdict |
 |---|---|---|---|---|
@@ -40,7 +40,7 @@ Notes: the `sed`/`awk`/`grep` numbers reproduce the document exactly, including 
 
 ## 2. `alg-dispatch.md` (disassembly lane)
 
-cwd `C:/Users/ShibbityShwab/router-openwrt`.
+cwd `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2`.
 
 | # | Claim in `alg-dispatch.md` | Exact command run | Observed output | Verdict |
 |---|---|---|---|---|
@@ -63,7 +63,7 @@ claimed entry counts and strides are confirmed by the symbol sizes alone.
 
 ## 3. Calibration snapshot integrity
 
-cwd `C:/Users/ShibbityShwab/router-openwrt/build/cal-snapshots/20260930-195439`.
+cwd `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/cal-snapshots/20260930-195439`.
 
 | # | Claim | Exact command run | Observed output | Verdict |
 |---|---|---|---|---|

@@ -87,7 +87,7 @@ Full cycle (`tools/batch.sh`), `build/register-dumps/detached/sr-carrier.log`:
 -- [4/7] wait for the completion marker
   completion marker seen
 -- [5/7] capture the evidence
-  evidence: /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/20261002-100556-batch
+  evidence: /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/20261002-100556-batch
 -- [6/7] recover
 -- [7/7] verify health
   wiphy=2/2 iface=6/6 cal_succ=1 omo_off=0 staged=0 loader=0

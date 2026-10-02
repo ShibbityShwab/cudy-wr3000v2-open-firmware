@@ -7,7 +7,7 @@ Every claim below carries the command or byte-level excerpt it came from.
 
 | item | value |
 | --- | --- |
-| driver analysed | `C:/Users/ShibbityShwab/router-openwrt/build/versions/2.5.24/hi5622v100_wifi.ko` |
+| driver analysed | `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/versions/2.5.24/hi5622v100_wifi.ko` |
 | sha256 | `de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521` |
 | previous release | `build/versions/2.4.15/hi5622v100_wifi.ko` sha256 `22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2` |
 | disassembly | ELF `.text` (ARM, sh_addr 0), capstone ARM mode, relocations resolved from `.rel.text`/`.rel.rodata` |

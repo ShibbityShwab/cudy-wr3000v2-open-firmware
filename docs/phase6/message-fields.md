@@ -384,7 +384,7 @@ Before any set, `tools/wifi-cal-snapshot.sh` was run (allowed write under
 
 ```
 $ bash tools/wifi-cal-snapshot.sh
-snapshot dir: /c/Users/ShibbityShwab/router-openwrt/build/cal-snapshots/20260930-204706
+snapshot dir: /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/cal-snapshots/20260930-204706
 pulled cfg_hi5622v100_hisi.ini
 pulled cfg_device_hisi.ini
 pulled FIRMWARE.bin

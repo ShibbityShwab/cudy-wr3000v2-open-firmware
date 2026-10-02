@@ -1,10 +1,10 @@
 # Phase 7 - Giving the register dump meaning: classification of all 72 windows
 
 Source (local, read-only; no device access):
-- `C:/Users/ShibbityShwab/router-openwrt/build/register-dumps/reg_all.txt` (run 1) - sha256 `a8461c98a464a8368bcb91969ddeb609a6d6d0083c124b76bc09a940b336d6f4`
-- `C:/Users/ShibbityShwab/router-openwrt/build/register-dumps/reg_all_run2.txt` (run 2, seconds later) - sha256 `382db1fe622ed5d60374ca11742e258658d64fbd2073b1d76753dea1d9c5989c`
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/reg_all.txt` (run 1) - sha256 `a8461c98a464a8368bcb91969ddeb609a6d6d0083c124b76bc09a940b336d6f4`
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/reg_all_run2.txt` (run 2, seconds later) - sha256 `382db1fe622ed5d60374ca11742e258658d64fbd2073b1d76753dea1d9c5989c`
 - Cross-reference: `ulw/phase6/register-windows.md`, `ulw/phase6/register-dump.md`, `ulw/phase4/mmio-map.md`, `ulw/phase6/message-fields.md`
-- Tooling: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe`
+- Tooling: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe`
 
 Every classification below is produced by the diff/scan scripts in **Appendix A**. The `nz` column is the
 non-zero word count, the `ch` column is the word count that differs between run 1 and run 2.
@@ -312,8 +312,8 @@ register state that only the diagnostic dumper reads.
 
 ## Appendix A - reproduction commands
 
-All scripts run with `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe` from
-`C:/Users/ShibbityShwab/router-openwrt`, reading `build/register-dumps/reg_all.txt` (`a`) and
+All scripts run with `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe` from
+`C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2`, reading `build/register-dumps/reg_all.txt` (`a`) and
 `build/register-dumps/reg_all_run2.txt` (`b`).
 
 ### A.1 Parse + window/header/resize scan

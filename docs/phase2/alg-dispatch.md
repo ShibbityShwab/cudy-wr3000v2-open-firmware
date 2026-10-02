@@ -1,8 +1,8 @@
 # `iwpriv <wlan> alg` (ioctl 0x0101) dispatch map and driver<->firmware sync boundary
 
-Target: `C:/Users/ShibbityShwab/router-openwrt/build/tmp/hi5622v100_wifi.ko`
+Target: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/hi5622v100_wifi.ko`
 (3,564,728 bytes, ELF 32-bit LSB **relocatable** `ET_REL`, ARM EABI5, not stripped).
-Tooling: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe` (capstone 5.0.7 + pyelftools).
+Tooling: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe` (capstone 5.0.7 + pyelftools).
 All work read-only; no device access.
 
 ## 0. Address convention (important)
@@ -15,7 +15,7 @@ from relocation addends rather than from absolute vaddrs.
 Verification command **C1**:
 
 ```
-$ cd C:/Users/ShibbityShwab/router-openwrt && ./pyenv/Scripts/python.exe - <<'EOF'
+$ cd C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2 && ./pyenv/Scripts/python.exe - <<'EOF'
 from elftools.elf.elffile import ELFFile
 e=ELFFile(open('build/tmp/hi5622v100_wifi.ko','rb'))
 for s in e.iter_sections():
@@ -39,7 +39,7 @@ Symbol count **C1b**: `.symtab` = 21,495 symbols, 3,847 `STT_FUNC`, 0 zero-sized
 Command **C2**:
 
 ```
-$ cd C:/Users/ShibbityShwab/router-openwrt && ./pyenv/Scripts/python.exe - <<'EOF'
+$ cd C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2 && ./pyenv/Scripts/python.exe - <<'EOF'
 from elftools.elf.elffile import ELFFile
 e=ELFFile(open('build/tmp/hi5622v100_wifi.ko','rb'))
 sym=e.get_section_by_name('.symtab')
@@ -71,7 +71,7 @@ Scan `.rodata` for the literal little-endian word `01 01 00 00` and inspect the 
 Command **C3**:
 
 ```
-$ cd C:/Users/ShibbityShwab/router-openwrt && ./pyenv/Scripts/python.exe - <<'EOF'
+$ cd C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2 && ./pyenv/Scripts/python.exe - <<'EOF'
 from elftools.elf.elffile import ELFFile
 import re, struct
 e=ELFFile(open('build/tmp/hi5622v100_wifi.ko','rb')); data=open('build/tmp/hi5622v100_wifi.ko','rb').read()
@@ -101,7 +101,7 @@ and `.rodata+0xb2a0` is the same entry inside the big registration array.
 Command **C4** (resolve relocations with addends decoded from MOVW/MOVT immediates and ABS32 words):
 
 ```
-$ cd C:/Users/ShibbityShwab/router-openwrt && ./pyenv/Scripts/python.exe - <<'EOF'
+$ cd C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2 && ./pyenv/Scripts/python.exe - <<'EOF'
 from elftools.elf.elffile import ELFFile
 e=ELFFile(open('build/tmp/hi5622v100_wifi.ko','rb'))
 for s in e.get_section_by_name('.symtab').iter_symbols():
@@ -481,7 +481,7 @@ The same table also contains `curve_param`/`*_all_curve_param` (0x0db4/0x0db5),
 ### Verification of this document
 
 Reproduce with the commands C1–C12 above using
-`C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe`; all printed values were
+`C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe`; all printed values were
 observed in this session's output. Addresses are section-relative because the input is an
 `ET_REL` object (C1). The `alg` priv_arg entry (C3), the module table entry cmd 0x0101 (C8),
 the name→cfg_id table row for `get_2g_power_param` (C9), and the `g_alg_cfg_lut` handler for

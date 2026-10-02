@@ -7,7 +7,7 @@ Source (local, read-only; no device access): task `st_01a0f69f`.
 - Vendor register dump: `opensource/dumps/reg_all.txt` (25,154 words, CA space).
 - Cross-references: `docs/phase12/live-diff.md`, `docs/phase7/dump-semantics.md`,
   `docs/phase4/mmio-map.md`, `docs/phase4/firmware-disasm.md`.
-- Tooling: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe` (stdlib `array` only; numpy is
+- Tooling: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe` (stdlib `array` only; numpy is
   **not** installed in that env).
 
 Every number below is produced by the scripts in **Appendix A**; every address is quoted as a byte offset
@@ -360,7 +360,7 @@ Honourable mention (outside the 16 MiB window): the MAC DMA bases at `CA 0x40044
 
 ## Appendix A — reproduction (all claims above come from these scripts)
 
-Run from `C:/Users/ShibbityShwab/router-openwrt` with
+Run from `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2` with
 `./pyenv/Scripts/python.exe - <<'PY' … PY`.
 
 ### A.1 Page diff and the 36 register pages

@@ -2,9 +2,9 @@
 
 Scope: local file only, read-only, no device access. Task `st_01a0f3fe`.
 
-- Target: `C:/Users/ShibbityShwab/router-openwrt/build/tmp/FIRMWARE.bin`
+- Target: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/FIRMWARE.bin`
 - Size: 928,920 bytes = `0xE2C98`
-- Tool: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe`, capstone 5.0.7, pyelftools 0.33
+- Tool: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe`, capstone 5.0.7, pyelftools 0.33
 - Context: `build/custom/DRIVER-BLACKBOX.md` §16 (blob is uncompressed ARM/Thumb code plus tables; max 4 KB entropy 7.256; banner `ChenTangV100R001C20T13`; tokens `VERIFY20M`/`VERIFY40M`; an `smac`/`hcc` symbol table; one `DEADBEEF`).
 
 Every claim below is followed by the command that produced it. Inference that is not directly
@@ -601,10 +601,10 @@ wire protocol, vector order, and DSP algorithms** — none of which the blob sta
 
 ## Reproduce
 
-Run from `C:/Users/ShibbityShwab/router-openwrt` (all read-only; only this `.md` is written):
+Run from `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2` (all read-only; only this `.md` is written):
 
 ```bash
-cd /c/Users/ShibbityShwab/router-openwrt
+cd /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2
 ls -la build/tmp/FIRMWARE.bin
 ./pyenv/Scripts/python.exe - <<'PY'
 import struct, math, collections, re

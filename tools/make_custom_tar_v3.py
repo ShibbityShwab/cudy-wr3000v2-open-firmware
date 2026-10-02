@@ -1,6 +1,6 @@
 import io, os, tarfile
 
-BASE = r'C:/Users/ShibbityShwab/router-openwrt'
+BASE = r'C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2'
 MT = 1761796156
 KEY_FILES = ['id_ed25519.pub', 'id_rsa.pub']
 SRC = os.path.join(BASE, 'build/custom/rootfs-2.5.24-base.tar')

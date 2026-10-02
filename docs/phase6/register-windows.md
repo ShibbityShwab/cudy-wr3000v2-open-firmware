@@ -1,10 +1,10 @@
 # Phase 6 - MMIO windows turned into a register map (hi5622v100)
 
 Source (local, read-only; no device access):
-- `C:/Users/ShibbityShwab/router-openwrt/build/tmp/hi5622v100_wifi.ko` - sha256 `de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521`
-- `C:/Users/ShibbityShwab/router-openwrt/build/tmp/hi5622v100_plat.ko` - sha256 `6f2eac415dbf4d3e8e71c1abd941ea4f9d97b159674d28d5e99d4ecb0e6cd491`
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/hi5622v100_wifi.ko` - sha256 `de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521`
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/hi5622v100_plat.ko` - sha256 `6f2eac415dbf4d3e8e71c1abd941ea4f9d97b159674d28d5e99d4ecb0e6cd491`
 
-Tooling: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe` (pyelftools + capstone 5.0.7, `CS_ARCH_ARM`/`CS_MODE_ARM`).
+Tooling: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe` (pyelftools + capstone 5.0.7, `CS_ARCH_ARM`/`CS_MODE_ARM`).
 Both objects are `ET_REL`; **every address below is a section-relative offset** (`st_value` / `sh_offset` inside the named section, usually `.text` = sec1 of each file). Device chip addresses ("CA") are written as absolute 32-bit values because that is how the code materialises them.
 
 Input window list: `ulw/phase4/mmio-map.md` Sec 2.2 (`shuangta_read_all_reg_info` `.text+0x35600`, `shuangta_read_soc_to_file` `.text+0x3617c`); accessor `oal_pcie_devca_to_hostva` (plat `.text+0x6914`).
@@ -352,7 +352,7 @@ All bit interpretations above are derived from the literal masks/shifts in the c
 $ sha256sum hi5622v100_wifi.ko hi5622v100_plat.ko
 de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521 *hi5622v100_wifi.ko
 6f2eac415dbf4d3e8e71c1abd941ea4f9d97b159674d28d5e99d4ecb0e6cd491 *hi5622v100_plat.ko
-$ C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe -c "import capstone,elftools;print(capstone.__version__)"
+$ C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe -c "import capstone,elftools;print(capstone.__version__)"
 5.0.7
 ```
 

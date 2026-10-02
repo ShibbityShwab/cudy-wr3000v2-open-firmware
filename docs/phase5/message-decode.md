@@ -409,7 +409,7 @@ Reproduce with the local `.ko` (ARM/A32 — the module code decodes as ARM, not
 Thumb). The helper used:
 
 ```
-$ cd C:/Users/ShibbityShwab/router-openwrt
+$ cd C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2
 $ ./pyenv/Scripts/python.exe - <<'PY'
 from elftools.elf.elffile import ELFFile
 from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM

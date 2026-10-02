@@ -192,7 +192,7 @@ a8461c98a464a8368bcb91969ddeb609a6d6d0083c124b76bc09a940b336d6f4  /config/work/f
 | on-device path | `/config/work/firmware/reg_all.txt` |
 | size | 709,089 bytes |
 | lines | 25,166 (12 non-data header lines + 25,154 `addr = ..., value = ...` lines) |
-| local copy | `C:/Users/ShibbityShwab/router-openwrt/build/register-dumps/reg_all.txt` |
+| local copy | `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/reg_all.txt` |
 | sha256 | `a8461c98a464a8368bcb91969ddeb609a6d6d0083c124b76bc09a940b336d6f4` (device value == local value) |
 
 Format is plain ASCII, one u32 per line: `addr = <hex CA>, value = <hex>`. The file is split by
@@ -355,7 +355,7 @@ first window; nothing there looks like a free-running counter.
 
 ## 3. Raw artifact and hashes
 
-Saved under `C:/Users/ShibbityShwab/router-openwrt/build/register-dumps/`:
+Saved under `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/`:
 
 | file | bytes | sha256 |
 |---|---:|---|

@@ -1,9 +1,9 @@
 # FIRMWARE.bin — forensic structure analysis
 
 Scope: local files, read-only. No device access.
-Target: `C:/Users/ShibbityShwab/router-openwrt/build/tmp/FIRMWARE.bin`
-Cross-check input: `C:/Users/ShibbityShwab/router-openwrt/build/tmp/cfg_wifi.ini`
-Tool: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe`
+Target: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/FIRMWARE.bin`
+Cross-check input: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/cfg_wifi.ini`
+Tool: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe`
 
 Every number below is followed by the command that produced it and the observed output.
 Statements that are inference rather than measurement are explicitly labelled **HYPOTHESIS**.
@@ -511,7 +511,7 @@ The most frequent words are Thumb-2 instruction encodings, confirming the main b
 ### Reproduce
 
 ```bash
-cd /c/Users/ShibbityShwab/router-openwrt
+cd /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2
 ls -la build/tmp/FIRMWARE.bin
 sha256sum build/tmp/FIRMWARE.bin build/tmp/cfg_wifi.ini
 xxd -l 512 build/tmp/FIRMWARE.bin

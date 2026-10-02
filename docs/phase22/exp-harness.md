@@ -104,7 +104,7 @@ full ordered sequence below and exits without opening SSH. Host commands are iss
 module    : build/tmp/hwprobe-art/hwprobe.ko
 module id : hwprobe (staged as /lib/modules/5.10.201/hwprobe.ko)
 params    : [pollms=100 useirq=1]
-evidence  : /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/
+evidence  : /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/
 host      : root@192.168.10.1 (via .sshwrap/rsh.sh, .sshwrap/rscp.sh)
 watchdog  : WATCH=1800s, boot timeout=300s, run timeout=180s, poll=3s
 # NOTHING BELOW IS EXECUTED IN --dry-run.  ssh/scp shape is exact.
@@ -222,26 +222,26 @@ dmesg | grep -q 'done (' && echo EXP_DONE
 EOS
 
 == 5/7 capture the evidence ==
-$ mkdir -p /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>
+$ mkdir -p /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>
 
 # capture dmesg
 $ ssh root@192.168.10.1 <<'EOS'
-dmesg > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/dmesg.txt
+dmesg > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/dmesg.txt
 EOS
 
 # capture lsmod
 $ ssh root@192.168.10.1 <<'EOS'
-lsmod > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/lsmod.txt
+lsmod > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/lsmod.txt
 EOS
 
 # capture interrupts
 $ ssh root@192.168.10.1 <<'EOS'
-cat /proc/interrupts > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/interrupts.txt
+cat /proc/interrupts > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/interrupts.txt
 EOS
 
 # capture module log
 $ ssh root@192.168.10.1 <<'EOS'
-dmesg | grep -i -- 'hwprobe' > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/module-log.txt
+dmesg | grep -i -- 'hwprobe' > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/module-log.txt
 EOS
 
 # bundle module-written files
@@ -249,10 +249,10 @@ $ ssh root@192.168.10.1 <<'EOS'
 cd /; tar -czf /tmp/omo-exp-capture.tar.gz $(for p in /tmp/omo-hwprobe; do [ -e "$p" ] && printf '%s ' "$p"; done) 2>/dev/null
 ls -l /tmp/omo-exp-capture.tar.gz
 EOS
-$ scp -O root@192.168.10.1:/tmp/omo-exp-capture.tar.gz /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/
-$ tar -xzf /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>/omo-exp-capture.tar.gz -C /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>
-$ ( cd /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS> && tar --exclude=./evidence.tar.gz -czf evidence.tar.gz . )
-# evidence dir: /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>   (raw files + evidence.tar.gz)
+$ scp -O root@192.168.10.1:/tmp/omo-exp-capture.tar.gz /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/
+$ tar -xzf /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>/omo-exp-capture.tar.gz -C /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>
+$ ( cd /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS> && tar --exclude=./evidence.tar.gz -czf evidence.tar.gz . )
+# evidence dir: /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>   (raw files + evidence.tar.gz)
 
 == 6/7 recover (cancel the watchdog, restore, reboot) ==
 
@@ -381,11 +381,11 @@ report step, without touching the device:
 
 ```
 == batch.sh DRY RUN ==
-module    : /c/Users/ShibbityShwab/router-openwrt/build/tmp/omo-batch/omo-batch.ko (id omo-batch)
+module    : /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/omo-batch/omo-batch.ko (id omo-batch)
 list      : tools/batch-hypotheses.example
 base param: []
 device    : params=[batch=/tmp/omo-batch/list batchdir=/tmp/omo-batch ]
-evidence  : /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/
+evidence  : /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/
 # NOTHING BELOW IS EXECUTED IN --dry-run.
 # validate the list and copy it to a staging path
 $ batch.sh: validate tools/batch-hypotheses.example (4 hypotheses)
@@ -449,8 +449,8 @@ kill -0 $(cat /tmp/omo-exp.timer.pid) 2>/dev/null && echo WATCHDOG_ALIVE
 EOS
 
 == 2/7 stage the module (vendor modules hidden as .omo-off) ==
-# local md5 of /c/Users/ShibbityShwab/router-openwrt/build/tmp/omo-batch/omo-batch.ko = <not present; md5-checked on a real run>
-$ scp -O /c/Users/ShibbityShwab/router-openwrt/build/tmp/omo-batch/omo-batch.ko root@192.168.10.1:/tmp/omo-batch.ko
+# local md5 of /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/omo-batch/omo-batch.ko = <not present; md5-checked on a real run>
+$ scp -O /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/omo-batch/omo-batch.ko root@192.168.10.1:/tmp/omo-batch.ko
 
 # push to the boot path and hide the two vendor modules
 $ ssh root@192.168.10.1 <<'EOS'
@@ -517,26 +517,26 @@ lsmod | grep -q '^omo-batch ' && echo MODULE_LOADED
 EOS
 
 == 5/7 capture the evidence ==
-$ mkdir -p /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch
+$ mkdir -p /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch
 
 # capture dmesg
 $ ssh root@192.168.10.1 <<'EOS'
-dmesg > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/dmesg.txt
+dmesg > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/dmesg.txt
 EOS
 
 # capture lsmod
 $ ssh root@192.168.10.1 <<'EOS'
-lsmod > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/lsmod.txt
+lsmod > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/lsmod.txt
 EOS
 
 # capture interrupts
 $ ssh root@192.168.10.1 <<'EOS'
-cat /proc/interrupts > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/interrupts.txt
+cat /proc/interrupts > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/interrupts.txt
 EOS
 
 # capture module log
 $ ssh root@192.168.10.1 <<'EOS'
-dmesg | grep -i -- 'omo-batch' > /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/module-log.txt
+dmesg | grep -i -- 'omo-batch' > /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/module-log.txt
 EOS
 
 # bundle module-written files
@@ -544,10 +544,10 @@ $ ssh root@192.168.10.1 <<'EOS'
 cd /; tar -czf /tmp/omo-exp-capture.tar.gz $(for p in /tmp/omo-omo-batch /tmp/omo-batch; do [ -e "$p" ] && printf '%s ' "$p"; done) 2>/dev/null
 ls -l /tmp/omo-exp-capture.tar.gz
 EOS
-$ scp -O root@192.168.10.1:/tmp/omo-exp-capture.tar.gz /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/
-$ tar -xzf /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/omo-exp-capture.tar.gz -C /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch
-$ ( cd /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch && tar --exclude=./evidence.tar.gz -czf evidence.tar.gz . )
-# evidence dir: /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch   (raw files + evidence.tar.gz)
+$ scp -O root@192.168.10.1:/tmp/omo-exp-capture.tar.gz /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/
+$ tar -xzf /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/omo-exp-capture.tar.gz -C /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch
+$ ( cd /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch && tar --exclude=./evidence.tar.gz -czf evidence.tar.gz . )
+# evidence dir: /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch   (raw files + evidence.tar.gz)
 
 == 6/7 recover (cancel the watchdog, restore, reboot) ==
 
@@ -584,10 +584,10 @@ BATCH RESULT: PASS module=omo-batch params=[batch=/tmp/omo-batch/list batchdir=/
 BATCH RESULT: FAIL module=omo-batch reason=<step: reason> evidence=<evidence-dir>/
 
 == report: fold per-hypothesis observables into report.txt ==
-# parse /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/tmp/omo-batch/batch-summary.txt (or each */result.txt)
+# parse /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/tmp/omo-batch/batch-summary.txt (or each */result.txt)
 # columns: label  out0_cleared  sr1c  glue  irq
-$ write /c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/report.txt
-$ BATCH RESULT: PASS|FAIL hypotheses=4 out0_cleared_yes=<n> evidence=/c/Users/ShibbityShwab/router-openwrt/build/register-dumps/exp/<TS>-batch/
+$ write /c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/report.txt
+$ BATCH RESULT: PASS|FAIL hypotheses=4 out0_cleared_yes=<n> evidence=/c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/register-dumps/exp/<TS>-batch/
 ```
 
 ---

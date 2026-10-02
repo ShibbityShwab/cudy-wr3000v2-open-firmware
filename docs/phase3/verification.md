@@ -2,7 +2,7 @@
 
 - Date: 2026-09-30
 - Device: `root@192.168.10.1` (WR3000, kernel 5.10.201) — read-only; every probe created was removed again.
-- Local checkout: `/c/Users/ShibbityShwab/router-openwrt/opensource`
+- Local checkout: `/c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/opensource`
 - Remote: `https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware.git`
 - Repo HEAD (local == remote `master`): `3157cf96772d724153de5120630b32b9f0bd4d43`
 
@@ -59,7 +59,7 @@ Recomputed with `./pyenv/Scripts/python.exe` against `build/tmp/FIRMWARE.bin`.
 
 ## PART 2 — published repo audit (`ShibbityShwab/cudy-wr3000v2-open-firmware`)
 
-Local checkout at `/c/Users/ShibbityShwab/router-openwrt/opensource`, working tree clean, `## master...origin/master` (in sync).
+Local checkout at `/c/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/opensource`, working tree clean, `## master...origin/master` (in sync).
 
 | # | claim | exact command | observed | verdict |
 |---|---|---|---|---|

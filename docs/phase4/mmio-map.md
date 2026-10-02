@@ -1,10 +1,10 @@
 # Wi-Fi chip MMIO register-map skeleton (hi5622v100)
 
 Source (local, read-only, no device access):
-- `C:/Users/ShibbityShwab/router-openwrt/build/tmp/hi5622v100_wifi.ko` — sha256 `de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521`, 3,564,728 bytes
-- `C:/Users/ShibbityShwab/router-openwrt/build/tmp/hi5622v100_plat.ko` — sha256 `6f2eac415dbf4d3e8e71c1abd941ea4f9d97b159674d28d5e99d4ecb0e6cd491`, 364,660 bytes
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/hi5622v100_wifi.ko` — sha256 `de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521`, 3,564,728 bytes
+- `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/build/tmp/hi5622v100_plat.ko` — sha256 `6f2eac415dbf4d3e8e71c1abd941ea4f9d97b159674d28d5e99d4ecb0e6cd491`, 364,660 bytes
 
-Tooling: `C:/Users/ShibbityShwab/router-openwrt/pyenv/Scripts/python.exe` — capstone 5.0.7 (`CS_ARCH_ARM`, `CS_MODE_ARM`), pyelftools.
+Tooling: `C:/Users/ShibbityShwab/Documents/GitHub/cudy-wr3000v2/pyenv/Scripts/python.exe` — capstone 5.0.7 (`CS_ARCH_ARM`, `CS_MODE_ARM`), pyelftools.
 All addresses in this document are **section-relative offsets in the relocatable ELF** (both objects are `ET_REL`; every `sh_addr == 0`, so `st_value` is a section offset and there is no link-time absolute VA). `.text` of the wifi module is `0x1630cc` bytes, of the plat module `0x1d324` bytes; `.text.unlikely` is a separate section.
 
 ---
