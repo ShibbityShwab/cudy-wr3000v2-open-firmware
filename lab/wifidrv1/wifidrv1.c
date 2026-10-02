@@ -65,6 +65,30 @@
 /* ---- PCI identity and BARs (docs/phase4/mmio-map.md, phase18) ----------- */
 #define OMO_PCI_DEV	PCI_DEVFN(0, 0)
 #define OMO_CFG_BAR0	0x10
+#define OMO_IATU_BAR	2		/* BAR2 = the iATU viewport window */
+#define OMO_IATU_CTRL2	0x104		/* per-viewport control word 2 */
+#define OMO_IATU_STRIDE	0x200		/* viewport stride */
+
+/* The six inbound regions the vendor's oal_pcie_set_inbound programs, from
+ * docs/phase18/inbound-map.md (measured live).  Region 3 ("IO", dev CA
+ * 0x40000000) is the one that makes the ETE block at CA 0x4003a000 appear at
+ * BAR0+0x3f2000; without it that window reads 0xffffffff (the same state
+ * phase 20 recorded before it programmed the viewports). */
+struct omo_region {
+	u32 off;		/* host offset within the BAR0 window */
+	u32 size;
+	u64 target;		/* device chip address */
+	const char *name;
+};
+
+static const struct omo_region omo_regions[6] = {
+	{ 0x000000, 0x1c0000, 0x00000000UL, "ROM_WRAM" },
+	{ 0x1c0000, 0x018000, 0x00400000UL, "TCM_NOACP" },
+	{ 0x1d8000, 0x1e0000, 0x01000000UL, "PKTRAM_NOACP" },
+	{ 0x3b8000, 0x120000, 0x40000000UL, "IO" },
+	{ 0x4d8000, 0x1e0000, 0x02000000UL, "ACP" },
+	{ 0x6b8000, 0x218000, 0x01200000UL, "ACP-fw" },
+};
 
 /* Two DIFFERENT blocks, both reachable from the same BAR0 mapping.
  *
@@ -108,7 +132,11 @@
 /* ---- parameters --------------------------------------------------------- */
 static unsigned int omo_hw;		/* 0 = registration only (safe default) */
 module_param_named(hw, omo_hw, uint, 0444);
-MODULE_PARM_DESC(hw, "1 = claim EP0 and read the register block (read-only); 0 = no hardware access");
+MODULE_PARM_DESC(hw, "1 = claim EP0, program the inbound viewports, decode (read-only); 0 = no hardware access");
+
+static unsigned int omo_program_regions_en;
+module_param_named(program, omo_program_regions_en, uint, 0444);
+MODULE_PARM_DESC(program, "1 = program the six inbound iATU viewports (needed for the ETE/IO block to decode); 0 = decode as-is");
 
 static unsigned int omo_domain;
 module_param_named(domain, omo_domain, uint, 0444);
@@ -129,6 +157,7 @@ static struct net_device *omo_netdev;
 static struct pci_dev *omo_pdev;
 static void __iomem *omo_msg;		/* message/channel window  BAR0+0x39000 */
 static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
+static void __iomem *omo_iatu;		/* BAR2: the inbound viewport window */
 static resource_size_t omo_bar0_base;
 
 struct omo_ring {
@@ -145,6 +174,48 @@ static u32 omo_msg0, omo_msg1, omo_msg2, omo_msg5, omo_chnres;
 static bool omo_regs_valid;
 
 static const u8 omo_mac[ETH_ALEN] = { 0x02, 0x00, 0x6f, 0x6d, 0x6f, 0x31 };
+
+/* ---- iATU inbound programming (ported from lab/hccaccept, proven) ------- */
+static void omo_iatu_wr(void __iomem *iatu, unsigned long off, u32 val,
+			const char *who, const char *what)
+{
+	iowrite32(val, iatu + off);
+	pr_info("omo-drv1: %s %-14s [0x%03lx] <= 0x%08x readback=0x%08x\n",
+		who, what, off, val, ioread32(iatu + off));
+}
+
+/*
+ * Program the six inbound viewports.  This is what makes the region-3 IO block
+ * (and therefore the ETE register block at CA 0x4003a000, seen at BAR0
+ * +0x3f2000) readable at all: an unprogrammed window reads 0xffffffff.
+ * Values follow docs/phase18/inbound-map.md; the write order follows the
+ * vendor's oal_pcie_set_inbound (ctrl2=0, ctrl2=enable, base_lo/hi, limit,
+ * target_lo/hi) as reproduced in lab/hccaccept.
+ */
+static int omo_program_inbound(void __iomem *iatu, u64 bar0_base, const char *who)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(omo_regions); i++) {
+		const struct omo_region *r = &omo_regions[i];
+		u64 base = bar0_base + r->off;
+		u64 limit = base + r->size - 1;
+		unsigned long c = OMO_IATU_CTRL2 + OMO_IATU_STRIDE * i;
+
+		pr_info("omo-drv1: %s region %u %-12s host 0x%llx..0x%llx -> dev 0x%llx\n",
+			who, i, r->name, (unsigned long long)base,
+			(unsigned long long)limit, (unsigned long long)r->target);
+
+		omo_iatu_wr(iatu, c, 0, who, "ctrl2=0");
+		omo_iatu_wr(iatu, c, 0x80000000U, who, "ctrl2=ena");
+		omo_iatu_wr(iatu, c + 4, (u32)base, who, "base_lo");
+		omo_iatu_wr(iatu, c + 8, (u32)(base >> 32), who, "base_hi");
+		omo_iatu_wr(iatu, c + 12, (u32)limit, who, "limit");
+		omo_iatu_wr(iatu, c + 16, (u32)r->target, who, "target_lo");
+		omo_iatu_wr(iatu, c + 20, (u32)(r->target >> 32), who, "target_hi");
+	}
+	return i;
+}
 
 /* ---- register access --------------------------------------------------- */
 static u32 omo_rd(void __iomem *win, unsigned long off)
@@ -280,6 +351,17 @@ static int omo_hw_attach(void)
 	pr_info("omo-drv1: mapped message BAR0+0x%lx and ETE BAR0+0x%lx (region-3 viewport at 0x40000000)\n",
 		(unsigned long)OMO_MSG_WIN, (unsigned long)OMO_ETE_WIN);
 
+	omo_iatu = pci_iomap(omo_pdev, OMO_IATU_BAR, 0);
+	if (!omo_iatu) {
+		pr_err("omo-drv1: iomap BAR2 (iATU) FAILED\n");
+		rc = -ENOMEM;
+		goto err_ete;
+	}
+	if (omo_program_regions_en) {
+		pr_info("omo-drv1: programming the six inbound viewports (region-3 IO required for the ETE block)\n");
+		omo_program_inbound(omo_iatu, omo_bar0_base, "inbound");
+	}
+
 	/* decode the blocks - reads only */
 	omo_read_ring_block();
 	omo_read_msg_block();
@@ -287,12 +369,12 @@ static int omo_hw_attach(void)
 
 	return 0;
 
-err_msg:
-	iounmap(omo_msg);
-	omo_msg = NULL;
 err_ete:
 	iounmap(omo_ete);
 	omo_ete = NULL;
+err_msg:
+	iounmap(omo_msg);
+	omo_msg = NULL;
 err_regions:
 	pci_release_mem_regions(omo_pdev);
 	pci_disable_device(omo_pdev);
@@ -302,6 +384,10 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
+	if (omo_iatu) {
+		pci_iounmap(omo_pdev, omo_iatu);
+		omo_iatu = NULL;
+	}
 	if (omo_ete) {
 		iounmap(omo_ete);
 		omo_ete = NULL;
