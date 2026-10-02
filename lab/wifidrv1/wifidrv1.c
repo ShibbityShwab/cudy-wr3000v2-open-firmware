@@ -124,6 +124,12 @@ static const struct omo_region omo_regions[6] = {
 #define OMO_MSG_BYTES	0x2000UL	/* covers 0x3f1010..0x3f1508 inclusive-ish */
 #define OMO_ETE_WIN	0x3f2000UL
 #define OMO_WIN_BYTES	0x1000UL	/* the ETE block: +0x408..+0x6e8 */
+/* Region 0 (ROM_WRAM) holds the release register at BAR0+0x3b8108, which is
+ * OUTSIDE both windows above.  It gets its own mapping: one page suffices for
+ * the single register.  (Writing it through another window would fault exactly
+ * like the +0x1508 access did - checked before writing the code this time.) */
+#define OMO_REL_WIN	0x3b8000UL
+#define OMO_REL_BYTES	0x1000UL
 
 /* message registers, offsets within the message window (0x3f0000 base) */
 #define OMO_MSG0	0x010
@@ -460,8 +466,8 @@ static int omo_do_release(void)
 
 	pr_info("omo-drv1: RELEASE write CA 0x40000108 <- 0x%08x (BAR0+0x%lx)\n",
 		OMO_RELEASE_VAL, (unsigned long)OMO_RELEASE_OFF);
-	iowrite32(OMO_RELEASE_VAL, omo_bar0 + OMO_RELEASE_OFF);
-	rb = ioread32(omo_bar0 + OMO_RELEASE_OFF);
+	iowrite32(OMO_RELEASE_VAL, omo_rel + (OMO_RELEASE_OFF - OMO_REL_WIN));
+	rb = ioread32(omo_rel + (OMO_RELEASE_OFF - OMO_REL_WIN));
 	pr_info("omo-drv1: release readback = 0x%08x %s\n", rb,
 		rb == OMO_RELEASE_VAL ? "match=YES" : "match=NO");
 	return rb == OMO_RELEASE_VAL ? 0 : -EIO;
@@ -640,14 +646,14 @@ static int omo_hw_attach(void)
 		pr_err("omo-drv1: ioremap release window (BAR0+0x%lx) FAILED\n",
 		       (unsigned long)OMO_REL_WIN);
 		rc = -ENOMEM;
-		goto err_ete;
+		goto err_ete;	/* omo_rel is NULL; only ete/msg need unwinding */
 	}
 
 	omo_iatu = pci_iomap(omo_pdev, OMO_IATU_BAR, 0);
 	if (!omo_iatu) {
 		pr_err("omo-drv1: iomap BAR2 (iATU) FAILED\n");
 		rc = -ENOMEM;
-		goto err_ete;
+		goto err_rel;	/* unmap the release window, which IS mapped here */
 	}
 	if (omo_program_regions_en) {
 		pr_info("omo-drv1: programming the six inbound viewports (region-3 IO required for the ETE block)\n");
