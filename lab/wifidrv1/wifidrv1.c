@@ -840,8 +840,12 @@ static void omo_msg_service(void)
 		u32 st = omo_rd(omo_msg, OMO_MSG1);
 		int bit;
 
-		if (st && st != prev) {
-			pr_info("omo-drv1:   t=%lums pending 0x%08x -> 0x%08x\n", elapsed, prev, st);
+		/* The vendor's pcie_msg_handle runs whenever the pending mask is NON-ZERO - not on a
+		 * transition.  An earlier revision keyed on a change and therefore serviced nothing when
+		 * the word was already pending at entry (which it is: the firmware asserts it ~500 ms
+		 * after the release and it stays set).  Service on the pending STATE. */
+		if (st) {
+			pr_info("omo-drv1:   t=%lums pending 0x%08x (was 0x%08x)\n", elapsed, st, prev);
 			for (bit = 0; bit < 32; bit++)
 				if (st & (1U << bit))
 					pr_info("omo-drv1:     bit %d pending -> dispatch handler[%d]\n",
