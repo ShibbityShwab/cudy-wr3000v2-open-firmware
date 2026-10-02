@@ -38,18 +38,24 @@ Two facts that were previously mis-stated by me and are now corrected:
 | --- | --- | --- |
 | wiphy + netdev (`wifidrv1`) | registers, opens/closes, clean `rmmod`; vendor radios untouched | `docs/phase23/wifidrv1-endpoint.md` |
 | endpoint claim | **only in a takeover boot**; under the vendor stack `pci_request_mem_regions` returns `EBUSY` (-16) by design | same |
-| register windows | message `BAR0+0x3f0000` (out[0] at `+0x010` = the vendor table's `0x3f1010`), ETE `BAR0+0x3f2000`, both inside region-3 IO | `docs/phase23/register-windows.md` |
+| register windows | **message `BAR0+0x3f1000`** (out[0] at `+0x010` = `0x3f1010`, confirmed against the vendor boot), ETE `BAR0+0x3f2000`, region-3 IO carrying the release, the CPU-start signature and the ack/re-arm | `docs/phase24/address-verification.md` |
 | inbound viewports | **programmed and byte-identical to the live vendor boot**, all six | `docs/phase23/write-path-executed.md` |
 | ETE ring decode | 3 SR (`0x4003a400`/`514`/`628`) + 4 DR (`0x590`/`5fc`/`668`/`6d4`), geometry matches phase 20 | `docs/phase23/wifidrv1-both-blocks.md` |
 | **ring ownership** | **3 SR + 4 DR rings + both binding writes written, readback match, 0 failures** | `docs/phase23/write-path-executed.md` |
-| message-block read | still aliases PCI config space in a takeover - **narrowed**: not a viewport-value problem (they match the vendor), so look at endpoint/RC selection at read time or the read path itself | `docs/phase23/window-disambiguation.md` |
-| data path | not started. Phase 22's device-side H2D accept gate still holds; submitting descriptors without it does nothing | `docs/phase22/h2d-accept.md` |
+| **firmware load + release** | FIRMWARE.bin written to `BAR0+0x6f8000`, `diffs=0`; `0x5a5a` release readback match; **CPU-start signature 9/9 changed** (`dcoldo 0xffffffff -> 0x260d4184`, BSS zeroed) | `docs/phase23/firmware-speaks.md` |
+| **first firmware word** | **`out[1] 0 -> 0x04` (bit 2) read at the corrected address** | same |
+| **host half** | **dispatch + ack (`out[3]` self-clearing) + clear (`out[1]` takes and holds) + re-arm (`out[4]` self-clearing) all executed on the real registers** | `docs/phase24/host-half-executed.md` |
+| H2D send | host write lands (`out[0]` bitmap readback match), doorbell consumed by hardware - **device does not accept**, reproducing phase 20 on verified-correct registers | `docs/phase24/h2d-send-result.md` |
+| data path | not started. The device-side H2D accept gate holds; closing it needs device-side state or a firmware trace, not host register writes | `docs/phase22/h2d-accept.md` |
 
-**Two bugs were found by measurement on the way, both mine, both now covered by checks:** the message
-window was read at `0x39000` instead of `0x3f0000` (symptom: `0xffffffff`), and the window was
-`ioremap`ed `0x1000` bytes while the write path touches `+0x1508` (symptom: kernel paging oops). The
-second is the reason there is now an offset-fits-its-window sweep in the module's review checklist:
-*"the module loaded" says nothing about the next line.*
+**Three bugs were found by measurement on the way, all mine, all now covered by checks:** the message
+window was read at `0x39000` instead of `0x3f1000` (symptom: everything looked silent); the window was
+`ioremap`ed `0x1000` bytes while the write path touches `+0x1508` (symptom: kernel paging oops); and
+the mailbox service keyed on a *transition* rather than the pending *state*, so it serviced nothing
+while a word sat pending. Two rules came out of them and are applied before every build now: an
+offset-fits-its-window sweep, and *derive each register address from the documented CA plus the
+translation rule and confirm the register behaves as documented* - because the window bug survived
+several phases precisely by producing plausible values at a plausible-looking address.
 
 ## 2. What is genuinely not done
 
