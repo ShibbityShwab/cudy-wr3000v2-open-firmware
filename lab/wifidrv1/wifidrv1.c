@@ -138,6 +138,10 @@ static unsigned int omo_hw;		/* 0 = registration only (safe default) */
 module_param_named(hw, omo_hw, uint, 0444);
 MODULE_PARM_DESC(hw, "1 = claim EP0, program the inbound viewports, decode (read-only); 0 = no hardware access");
 
+static unsigned int omo_wr_en;
+module_param_named(wr, omo_wr_en, uint, 0444);
+MODULE_PARM_DESC(wr, "1 = program the ETE rings (the module's first writes to the endpoint); requires hw=1 program=1");
+
 static unsigned int omo_program_regions_en;
 module_param_named(program, omo_program_regions_en, uint, 0444);
 MODULE_PARM_DESC(program, "1 = program the six inbound iATU viewports (needed for the ETE/IO block to decode); 0 = decode as-is");
@@ -219,6 +223,178 @@ static int omo_program_inbound(void __iomem *iatu, u64 bar0_base, const char *wh
 		omo_iatu_wr(iatu, c + 20, (u32)(r->target >> 32), who, "target_hi");
 	}
 	return i;
+}
+
+/* ---- ETE ring programming (ported from lab/hccaccept, proven) ---------- */
+/* forward decl: defined with the other accessors below */
+static u32 omo_rd(void __iomem *win, unsigned long off);
+
+/* The two "binding" writes the vendor performs around the ring program:
+ * pcie_ete_intr_init maps CA 0x40039508 -> BAR0 0x3f1508 and ANDs it with
+ * 0xffe0f8f8, BEFORE the rings; pcie_ete_chn_res touches ONE register in the
+ * message/glue block, CA 0x400392e8 -> BAR0 0x3f12e8, AND 0xfffffc20, AFTER
+ * them.  (hccaccept's note: the earlier takeover applied that mask to the ETE
+ * ring offsets instead and missed the real register.) */
+#define OMO_ETE_INTR_OFF	0x1508UL	/* within the message window (0x3f0000) */
+#define OMO_ETE_INTR_MASK	0xffe0f8f8U
+#define OMO_GLUE_CHN_RES_MASK	0xfffffc20U
+#define OMO_ETE_DEPTH		32
+#define OMO_ETE_SR_N		3
+#define OMO_ETE_DR_N		4
+
+static const unsigned long omo_sr_block[OMO_ETE_SR_N] = { 0x400, 0x450, 0x4a0 };
+static const unsigned long omo_dr_block[OMO_ETE_DR_N] = { 0x590, 0x5e0, 0x630, 0x680 };
+
+static void *omo_sr_va[OMO_ETE_SR_N];
+static dma_addr_t omo_sr_dma[OMO_ETE_SR_N];
+static void *omo_dr_va[OMO_ETE_DR_N];
+static dma_addr_t omo_dr_dma[OMO_ETE_DR_N];
+static bool omo_rings_ready;
+static unsigned int omo_wr_fail;
+
+/* write + readback, the discipline rtmsg/hccaccept used and the spec mandates */
+static void omo_wr(void __iomem *win, unsigned long off, u32 val, const char *name)
+{
+	u32 rb;
+
+	iowrite32(val, win + off);
+	rb = ioread32(win + off);
+	pr_info("omo-drv1:   %-20s [0x%04lx] <= 0x%08x readback=0x%08x match=%s\n",
+		name, off, val, rb, rb == val ? "YES" : "NO");
+	if (rb != val)
+		omo_wr_fail++;
+}
+
+/*
+ * devva = devva_base + hostca - hostca_base (pcie_hostca_to_devva @0xaefc).
+ * The window values the vendor boot reports are 0x80000000/0x80000000, which is
+ * what the device->host iATU viewport 0 was programmed with (phase 20c).
+ */
+#define OMO_DEVVA_BASE	0x80000000UL
+#define OMO_HOSTCA_BASE	0x80000000UL
+
+static u32 omo_hostca_to_devva(dma_addr_t hostca)
+{
+	u64 h = (u64)hostca;
+
+	if (h < (u64)OMO_HOSTCA_BASE)
+		return 0xffffffffU;
+	return (u32)((u64)OMO_DEVVA_BASE + (h - (u64)OMO_HOSTCA_BASE));
+}
+
+/* Allocate the ring node arrays: SR (depth+2)*8 per channel, DR depth*8. */
+static int omo_rings_alloc(void)
+{
+	unsigned int i;
+	size_t sr_sz = (OMO_ETE_DEPTH + 2) * 8;
+	size_t dr_sz = OMO_ETE_DEPTH * 8;
+
+	for (i = 0; i < OMO_ETE_SR_N; i++) {
+		omo_sr_va[i] = dma_alloc_coherent(&omo_pdev->dev, sr_sz,
+						  &omo_sr_dma[i], GFP_KERNEL);
+		if (!omo_sr_va[i]) {
+			pr_err("omo-drv1: SR ch%u dma_alloc_coherent(%zu) FAILED\n",
+			       i, sr_sz);
+			return -ENOMEM;
+		}
+		pr_info("omo-drv1: SR ch%u nodes %zu bytes @ %pad (devva 0x%08x)\n",
+			i, sr_sz, &omo_sr_dma[i], omo_hostca_to_devva(omo_sr_dma[i]));
+	}
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		omo_dr_va[i] = dma_alloc_coherent(&omo_pdev->dev, dr_sz,
+						  &omo_dr_dma[i], GFP_KERNEL);
+		if (!omo_dr_va[i]) {
+			pr_err("omo-drv1: DR ch%u dma_alloc_coherent(%zu) FAILED\n",
+			       i, dr_sz);
+			return -ENOMEM;
+		}
+		pr_info("omo-drv1: DR ch%u nodes %zu bytes @ %pad (devva 0x%08x)\n",
+			i, dr_sz, &omo_dr_dma[i], omo_hostca_to_devva(omo_dr_dma[i]));
+	}
+	omo_rings_ready = true;
+	return 0;
+}
+
+static void omo_rings_free(void)
+{
+	unsigned int i;
+
+	if (!omo_rings_ready)
+		return;
+	for (i = 0; i < OMO_ETE_SR_N; i++) {
+		if (omo_sr_va[i]) {
+			dma_free_coherent(&omo_pdev->dev, (OMO_ETE_DEPTH + 2) * 8,
+					  omo_sr_va[i], omo_sr_dma[i]);
+			omo_sr_va[i] = NULL;
+		}
+	}
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		if (omo_dr_va[i]) {
+			dma_free_coherent(&omo_pdev->dev, OMO_ETE_DEPTH * 8,
+					  omo_dr_va[i], omo_dr_dma[i]);
+			omo_dr_va[i] = NULL;
+		}
+	}
+	omo_rings_ready = false;
+}
+
+/*
+ * Program the ETE rings - the port's FIRST WRITE to the endpoint.
+ * Order and values per the write-path spec (docs/phase23/write-path-spec.md):
+ * binding write #1 (intr mask), SR ch0..2, DR ch0..3, binding write #2
+ * (glue chn_res RMW).  Readback after every write; a mismatch is counted, not
+ * swallowed.  Bounded by design: NO descriptor is submitted and NO doorbell is
+ * rung - phase 22 showed submitting without the device-side accept gate does
+ * nothing, so this stops at ring ownership.
+ */
+static void omo_ete_program(void)
+{
+	unsigned int i;
+	u32 v;
+
+	pr_info("omo-drv1: ---- first write path: ETE ring programming ----\n");
+
+	/* binding write #1: pcie_ete_intr_init, CA 0x40039508, before the rings */
+	v = omo_rd(omo_msg, OMO_ETE_INTR_OFF);
+	pr_info("omo-drv1:   intr pre=0x%08x mask=0x%08x\n", v, OMO_ETE_INTR_MASK);
+	omo_wr(omo_msg, OMO_ETE_INTR_OFF, v & OMO_ETE_INTR_MASK, "ETE intr 0x40039508");
+
+	for (i = 0; i < OMO_ETE_SR_N; i++) {
+		unsigned long b = omo_sr_block[i];
+		u32 devva = omo_hostca_to_devva(omo_sr_dma[i]);
+		char t[40];
+
+		scnprintf(t, sizeof(t), "SR ch%u base", i);
+		omo_wr(omo_ete, b + ETE_SR_BASEREG, devva, t);
+		scnprintf(t, sizeof(t), "SR ch%u depth-1", i);
+		omo_wr(omo_ete, b + ETE_SR_DEPTH, OMO_ETE_DEPTH - 1, t);
+		scnprintf(t, sizeof(t), "SR ch%u wptr", i);
+		omo_wr(omo_ete, b + ETE_SR_WPTR, 0, t);
+		scnprintf(t, sizeof(t), "SR ch%u ctrl", i);
+		omo_wr(omo_ete, b + ETE_SR_CTRL, 0, t);
+	}
+
+	for (i = 0; i < OMO_ETE_DR_N; i++) {
+		unsigned long b = omo_dr_block[i];
+		u32 devva = omo_hostca_to_devva(omo_dr_dma[i]);
+		char t[40];
+
+		scnprintf(t, sizeof(t), "DR ch%u base", i + 3);
+		omo_wr(omo_ete, b + ETE_DR_BASEREG, devva, t);
+		scnprintf(t, sizeof(t), "DR ch%u depth-1", i + 3);
+		omo_wr(omo_ete, b + ETE_DR_DEPTH, OMO_ETE_DEPTH - 1, t);
+		scnprintf(t, sizeof(t), "DR ch%u wptr", i + 3);
+		omo_wr(omo_ete, b + ETE_DR_WPTR, 0, t);
+	}
+
+	/* binding write #2: pcie_ete_chn_res on the glue/message block, after the rings */
+	v = omo_rd(omo_msg, OMO_CHN_RES);
+	pr_info("omo-drv1:   glue chn_res pre=0x%08x mask=0x%08x\n", v, OMO_GLUE_CHN_RES_MASK);
+	omo_wr(omo_msg, OMO_CHN_RES, v & OMO_GLUE_CHN_RES_MASK, "glue chn_res 0x400392e8");
+
+	pr_info("omo-drv1: ---- write path done: writes that failed readback = %u ----\n",
+		omo_wr_fail);
+	pr_info("omo-drv1: NOTE no descriptor submitted, no doorbell rung (bounded by design)\n");
 }
 
 /* ---- register access --------------------------------------------------- */
@@ -407,8 +583,20 @@ static int omo_hw_attach(void)
 	omo_read_msg_block();
 	omo_regs_valid = true;
 
+	/* the first write path, only when explicitly requested and only after the
+	 * decode, so the before/after pair is unambiguous in one boot. */
+	if (omo_wr_en) {
+		rc = omo_rings_alloc();
+		if (rc)
+			goto err_iatu;
+		omo_ete_program();
+	}
+
 	return 0;
 
+err_iatu:
+	pci_iounmap(omo_pdev, omo_iatu);
+	omo_iatu = NULL;
 err_ete:
 	iounmap(omo_ete);
 	omo_ete = NULL;
@@ -424,6 +612,8 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
+	if (omo_pdev)
+		omo_rings_free();
 	if (omo_iatu) {
 		pci_iounmap(omo_pdev, omo_iatu);
 		omo_iatu = NULL;
