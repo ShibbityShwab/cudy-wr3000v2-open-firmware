@@ -26,6 +26,6 @@ start() {
 	insmod /lib/modules/$(uname -r)/srt.ko domain=1 program=1 outwin=1 \
 		devvabase=0x80000000 devvaend=0xffffffff hostcabase=0x80000000 \
 		release=1 useirq=1 irq=209 hostirq=209 rings=1 acpoff=0 \
-		enable=0 intr=1 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
+		enable=0 intr=0 srctrl=0 svc=1 svcdur=25000 svcms=100 svcdoorbell=10 \
 		pollms=100 polldur=20000 scanbase=0x7d8000 scanlen=0
 }

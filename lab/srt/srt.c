@@ -401,6 +401,11 @@ module_param_named(enable, omo_enable, uint, 0444);
  * 0x3f201818 post-release (default), 2 = OR vendor bits, 3 = raw reset. */
 static unsigned int omo_intr = 1;
 module_param_named(intr, omo_intr, uint, 0444);
+/* SR channel control +0x08 low 3 bits.  The vendor programs cfg[5] = 0
+ * (pcie_ete_sr_reg_init @0x14ae8-c: bfi r2,r1,#0,#3 with cfg[5]=0; live vendor
+ * reads 0); lab/sr2 wrote 1.  The live field-by-field diff is exactly this bit. */
+static unsigned int omo_srctrl = 1;
+module_param_named(srctrl, omo_srctrl, uint, 0444);
 /* phase-21 service thread (pcie_process_thread @0x16efc emulation) */
 static unsigned int omo_svc = 1;
 module_param_named(svc, omo_svc, uint, 0444);
@@ -1212,7 +1217,7 @@ static void omo_ete_resync_sr(const char *tag)
 		iowrite32(want, win + b + ETE_SR_BASE);
 		iowrite32(ETE_DEPTH - 1, win + b + ETE_SR_DEPTH);
 		iowrite32(r, win + b + ETE_SR_WPTR);
-		iowrite32((c & ~0x7u) | 1u, win + b + ETE_SR_CTRL);
+		iowrite32((c & ~0x7u) | (omo_srctrl & 0x7u), win + b + ETE_SR_CTRL);
 		omo_sr_wr_idx[i] = r;
 		omo_sr_base_last[i] = want;
 		omo_sr_idx_last[i] = r;
@@ -1515,10 +1520,9 @@ static void omo_ete_program(void)
 		scnprintf(t, sizeof(t), "SR ch%u wptr", i);
 		omo_ete_wr(win, b + ETE_SR_WPTR, 0, t);
 		scnprintf(t, sizeof(t), "SR ch%u ctrl", i);
-		/* pcie_ete_sr_reg_init @0x14ae8 sets SR+0x08[2:0] = cfg[5] (= 1 for
-		 * the three SR channels); the live vendor boot reads 0 once the
-		 * device has picked the ring up. */
-		omo_ete_wr(win, b + ETE_SR_CTRL, 1, t);
+		/* pcie_ete_sr_reg_init @0x14ae8 sets SR+0x08[2:0] = cfg[5]; the live
+		 * vendor boot reads 0.  srctrl defaults to 1 (sr2 behaviour). */
+		omo_ete_wr(win, b + ETE_SR_CTRL, omo_srctrl & 0x7u, t);
 	}
 
 	/* DR: base, depth-1, wptr (pcie_ete_dr_reg_init @0x1483c). */
