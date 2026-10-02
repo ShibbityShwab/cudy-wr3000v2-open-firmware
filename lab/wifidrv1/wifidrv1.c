@@ -65,33 +65,45 @@
 /* ---- PCI identity and BARs (docs/phase4/mmio-map.md, phase18) ----------- */
 #define OMO_PCI_DEV	PCI_DEVFN(0, 0)
 #define OMO_CFG_BAR0	0x10
-#define OMO_BAR0_WIN	0x40000000UL	/* region-3 viewport base (EP0) */
 
-/* the ETE window and the message/channel block live in one BAR0 mapping:
- * 0x39000..0x3afff, so omo_bar0 covers the ETE block and omo_remap is the
- * same mapping offset to 0x3a000. */
-#define OMO_ETE_WIN	0x39000UL
-#define OMO_ETE_LEN	0x2000UL
-#define OMO_REMAP_OFF	0x1000UL	/* 0x3a000 - the channel/message block within the mapping */
-#define OMO_MSG0		0x010
-#define OMO_MSG1		0x014
-#define OMO_MSG2		0x2d4
+/* Two DIFFERENT blocks, both reachable from the same BAR0 mapping.
+ *
+ * MESSAGE block: the six mailbox registers shuangta_pcie_msg_reg_map fills.
+ * Device CAs 0x40039010/0x40039014/0x400392d4/0x400392e8/0x400392f0
+ * (docs/phase4/mmio-map.md section 4.1), i.e. BAR0 offsets 0x39010..
+ * 0x392f0 when the region-3 viewport is mapped at 0x40000000.
+ *
+ * ETE block: the SR/DR ring program registers. Its device CA is 0x4003a000
+ * (static resource .data+0x2944, docs/phase17/ete-engine.md A.1), which maps
+ * to BAR0 offset 0x3f2000 - NOT 0x3a000 (docs/phase20/runtime-msg.md, the
+ * "offset correction (measured, phase 20b)" note). SR channels live at
+ * 0x3f2000 + {0x400, 0x450, 0x4a0}, DR at +{0x590, 0x5e0, 0x630, 0x680},
+ * stride 0x114 / 0x6c, and each ring programs base/depth/wptr/ctrl. */
+#define OMO_MSG_WIN	0x39000UL
+#define OMO_ETE_WIN	0x3f2000UL
+#define OMO_WIN_BYTES	0x1000UL
+
+/* message registers, offsets within the message window */
+#define OMO_MSG0	0x010
+#define OMO_MSG1	0x014
+#define OMO_MSG2	0x2d4
 #define OMO_CHN_RES	0x2e8
 #define OMO_MSG5	0x2f0
 
-/* Offsets inside the ETE block (docs/phase17/ete-engine.md A.4). */
+/* ETE ring registers, offsets within the ETE window (SR ch0 base) */
+#define ETE_SR0_BASE	0x400
+#define ETE_SR_STRIDE	0x114
+#define ETE_DR0_BASE	0x590
+#define ETE_DR_STRIDE	0x6c
 #define ETE_SR_CTRL	0x008
-#define ETE_SR_BASE	0x010
+#define ETE_SR_BASEREG	0x010
 #define ETE_SR_DEPTH	0x014
 #define ETE_SR_WPTR	0x018
-#define ETE_DR_BASE	0x030
+#define ETE_SR_RPTR	0x01c
+#define ETE_DR_BASEREG	0x030
 #define ETE_DR_DEPTH	0x034
 #define ETE_DR_WPTR	0x038
-#define ETE_MSG0	0x010
-#define ETE_MSG1	0x014
-#define ETE_MSG2	0x2d4
-#define ETE_CHN_RES	0x2e8
-#define ETE_MSG5	0x2f0
+#define ETE_DR_RPTR	0x03c
 
 /* ---- parameters --------------------------------------------------------- */
 static unsigned int omo_hw;		/* 0 = registration only (safe default) */
@@ -115,19 +127,20 @@ static struct wiphy *omo_wiphy;
 static struct net_device *omo_netdev;
 
 static struct pci_dev *omo_pdev;
-static void __iomem *omo_bar0;		/* ETE/glue window */
-static void __iomem *omo_remap;		/* channel-res / message window */
+static void __iomem *omo_msg;		/* message/channel window  BAR0+0x39000 */
+static void __iomem *omo_ete;		/* ETE ring window        BAR0+0x3f2000 */
 static resource_size_t omo_bar0_base;
 
 struct omo_ring {
 	u32 base;
 	u32 depth;
 	u32 wptr;
+	u32 rptr;
 	u32 ctrl;
 };
 
-static struct omo_ring omo_sr;
-static struct omo_ring omo_dr;
+static struct omo_ring omo_sr[3];	/* 3 SR channels, stride 0x114 */
+static struct omo_ring omo_dr[4];	/* 4 DR channels, stride 0x6c */
 static u32 omo_msg0, omo_msg1, omo_msg2, omo_msg5, omo_chnres;
 static bool omo_regs_valid;
 
@@ -152,56 +165,59 @@ static void omo_log_reg(const char *tag, void __iomem *win, unsigned long off, u
 static void omo_read_ring_block(void)
 {
 	u32 before, after;
+	int i;
 
-	/* bracket the block with one message register so a concurrent device
+	/* bracket the block with a message register so a concurrent device
 	 * write is visible as a changed value (the read discipline phase 17
 	 * used: read-only, bracketed, no writes of any kind). */
-	before = omo_rd(omo_bar0, ETE_MSG1);
+	before = omo_rd(omo_msg, OMO_MSG1);
 
-	omo_sr.ctrl  = omo_rd(omo_bar0, ETE_SR_CTRL);
-	omo_sr.base  = omo_rd(omo_bar0, ETE_SR_BASE);
-	omo_sr.depth = omo_rd(omo_bar0, ETE_SR_DEPTH);
-	omo_sr.wptr  = omo_rd(omo_bar0, ETE_SR_WPTR);
+	/* 3 SR channels at 0x400 + i*0x114, 4 DR at 0x590 + i*0x6c */
+	for (i = 0; i < 3; i++) {
+		unsigned long b = ETE_SR0_BASE + i * ETE_SR_STRIDE;
 
-	omo_dr.base  = omo_rd(omo_bar0, ETE_DR_BASE);
-	omo_dr.depth = omo_rd(omo_bar0, ETE_DR_DEPTH);
-	omo_dr.wptr  = omo_rd(omo_bar0, ETE_DR_WPTR);
+		omo_sr[i].ctrl  = omo_rd(omo_ete, b + ETE_SR_CTRL);
+		omo_sr[i].base  = omo_rd(omo_ete, b + ETE_SR_BASEREG);
+		omo_sr[i].depth = omo_rd(omo_ete, b + ETE_SR_DEPTH);
+		omo_sr[i].wptr  = omo_rd(omo_ete, b + ETE_SR_WPTR);
+		omo_sr[i].rptr  = omo_rd(omo_ete, b + ETE_SR_RPTR);
+		pr_info("omo-drv1: SR ch%d CA=0x%08x base=0x%08x depth-1=%u wptr=0x%08x rptr=0x%08x ctrl=0x%08x\n",
+			i, (u32)(0x4003a000 + b), omo_sr[i].base,
+			omo_sr[i].depth & 0x3ff, omo_sr[i].wptr, omo_sr[i].rptr,
+			omo_sr[i].ctrl);
+	}
+	for (i = 0; i < 4; i++) {
+		unsigned long b = ETE_DR0_BASE + i * ETE_DR_STRIDE;
 
-	after = omo_rd(omo_bar0, ETE_MSG1);
+		omo_dr[i].base  = omo_rd(omo_ete, b + ETE_DR_BASEREG);
+		omo_dr[i].depth = omo_rd(omo_ete, b + ETE_DR_DEPTH);
+		omo_dr[i].wptr  = omo_rd(omo_ete, b + ETE_DR_WPTR);
+		omo_dr[i].rptr  = omo_rd(omo_ete, b + ETE_DR_RPTR);
+		pr_info("omo-drv1: DR ch%d CA=0x%08x base=0x%08x depth-1=%u wptr=0x%08x rptr=0x%08x\n",
+			i, (u32)(0x4003a000 + b), omo_dr[i].base,
+			omo_dr[i].depth & 0x3ff, omo_dr[i].wptr, omo_dr[i].rptr);
+	}
 
-	omo_log_reg("SR_CTRL", omo_bar0, ETE_SR_CTRL, omo_sr.ctrl);
-	omo_log_reg("SR_BASE", omo_bar0, ETE_SR_BASE, omo_sr.base);
-	omo_log_reg("SR_DEPTH", omo_bar0, ETE_SR_DEPTH, omo_sr.depth);
-	omo_log_reg("SR_WPTR", omo_bar0, ETE_SR_WPTR, omo_sr.wptr);
-	omo_log_reg("DR_BASE", omo_bar0, ETE_DR_BASE, omo_dr.base);
-	omo_log_reg("DR_DEPTH", omo_bar0, ETE_DR_DEPTH, omo_dr.depth);
-	omo_log_reg("DR_WPTR", omo_bar0, ETE_DR_WPTR, omo_dr.wptr);
-
-	pr_info("omo-drv1: SR: base=0x%08x depth_field=0x%08x wptr=0x%08x ctrl=0x%08x (depth-1=%u)\n",
-		omo_sr.base, omo_sr.depth, omo_sr.wptr, omo_sr.ctrl,
-		omo_sr.depth & 0x3ff);
-	pr_info("omo-drv1: DR: base=0x%08x depth_field=0x%08x wptr=0x%08x (depth-1=%u)\n",
-		omo_dr.base, omo_dr.depth, omo_dr.wptr, omo_dr.depth & 0x3ff);
+	after = omo_rd(omo_msg, OMO_MSG1);
 	pr_info("omo-drv1: msg1 bracket before=0x%08x after=0x%08x %s\n",
 		before, after, before == after ? "(stable)" : "(DEVICE CHANGED IT)");
-
 	pr_info("omo-drv1: NOTE read-only decode; no ring write, no descriptor, no doorbell\n");
 }
 
 static void omo_read_msg_block(void)
 {
-	omo_msg0 = omo_rd(omo_remap, ETE_MSG0);
-	omo_msg1 = omo_rd(omo_remap, ETE_MSG1);
-	omo_msg2 = omo_rd(omo_remap, ETE_MSG2);
-	omo_chnres = omo_rd(omo_remap, ETE_CHN_RES);
+	omo_msg0 = omo_rd(omo_msg, OMO_MSG0);
+	omo_msg1 = omo_rd(omo_msg, OMO_MSG1);
+	omo_msg2 = omo_rd(omo_msg, OMO_MSG2);
+	omo_chnres = omo_rd(omo_msg, OMO_CHN_RES);
 
-	omo_log_reg("MSG0 out[0]", omo_remap, ETE_MSG0, omo_msg0);
-	omo_log_reg("MSG1 out[1]", omo_remap, ETE_MSG1, omo_msg1);
-	omo_log_reg("MSG2 doorbell", omo_remap, ETE_MSG2, omo_msg2);
-	omo_log_reg("CHN_RES", omo_remap, ETE_CHN_RES, omo_chnres);
+	omo_log_reg("MSG0 out[0]", omo_msg, OMO_MSG0, omo_msg0);
+	omo_log_reg("MSG1 out[1]", omo_msg, OMO_MSG1, omo_msg1);
+	omo_log_reg("MSG2 doorbell", omo_msg, OMO_MSG2, omo_msg2);
+	omo_log_reg("CHN_RES", omo_msg, OMO_CHN_RES, omo_chnres);
 
 	if (omo_read_msg5) {
-		omo_msg5 = omo_rd(omo_remap, ETE_MSG5);
+		omo_msg5 = omo_rd(omo_msg, OMO_MSG5);
 		pr_info("omo-drv1: DEBUG msg5 out[5] READ-ONLY = 0x%08x (never written here)\n",
 			omo_msg5);
 	}
@@ -249,13 +265,20 @@ static int omo_hw_attach(void)
 		(rb & (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER)) ==
 		(PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER) ? "set" : "MISSING");
 
-	omo_bar0 = ioremap(omo_bar0_base + OMO_ETE_WIN, OMO_ETE_LEN);
-	if (!omo_bar0) {
-		pr_err("omo-drv1: ioremap ETE window FAILED\n");
+	omo_msg = ioremap(omo_bar0_base + OMO_MSG_WIN, OMO_WIN_BYTES);
+	if (!omo_msg) {
+		pr_err("omo-drv1: ioremap message window FAILED\n");
 		rc = -ENOMEM;
 		goto err_regions;
 	}
-	omo_remap = omo_bar0 + OMO_REMAP_OFF;
+	omo_ete = ioremap(omo_bar0_base + OMO_ETE_WIN, OMO_WIN_BYTES);
+	if (!omo_ete) {
+		pr_err("omo-drv1: ioremap ETE window FAILED\n");
+		rc = -ENOMEM;
+		goto err_msg;
+	}
+	pr_info("omo-drv1: mapped message BAR0+0x%lx and ETE BAR0+0x%lx (region-3 viewport at 0x40000000)\n",
+		(unsigned long)OMO_MSG_WIN, (unsigned long)OMO_ETE_WIN);
 
 	/* decode the blocks - reads only */
 	omo_read_ring_block();
@@ -264,9 +287,12 @@ static int omo_hw_attach(void)
 
 	return 0;
 
-err_bar0:
-	iounmap(omo_bar0);
-	omo_bar0 = NULL;
+err_msg:
+	iounmap(omo_msg);
+	omo_msg = NULL;
+err_ete:
+	iounmap(omo_ete);
+	omo_ete = NULL;
 err_regions:
 	pci_release_mem_regions(omo_pdev);
 	pci_disable_device(omo_pdev);
@@ -276,10 +302,13 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
-	omo_remap = NULL;	/* inside the omo_bar0 mapping */
-	if (omo_bar0) {
-		iounmap(omo_bar0);
-		omo_bar0 = NULL;
+	if (omo_ete) {
+		iounmap(omo_ete);
+		omo_ete = NULL;
+	}
+	if (omo_msg) {
+		iounmap(omo_msg);
+		omo_msg = NULL;
 	}
 	if (omo_pdev) {
 		pci_release_mem_regions(omo_pdev);
@@ -319,8 +348,8 @@ static int omo_ndo_stop(struct net_device *dev)
 static netdev_tx_t omo_ndo_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	if (omo_regs_valid && omo_verbose > 1)
-		pr_info("omo-drv1: xmit %u bytes dropped (no data path yet; SR base=0x%08x)\n",
-			skb->len, omo_sr.base);
+		pr_info("omo-drv1: xmit %u bytes dropped (no data path yet; SR0 base=0x%08x)\n",
+			skb->len, omo_sr[0].base);
 	kfree_skb(skb);
 	return NETDEV_TX_OK;
 }
