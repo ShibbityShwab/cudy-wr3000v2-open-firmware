@@ -225,6 +225,20 @@ static unsigned int omo_read_msg5;
 module_param_named(read_msg5, omo_read_msg5, uint, 0444);
 MODULE_PARM_DESC(read_msg5, "1 = also READ out[5] CA 0x400392f0 (never written); default 0");
 
+/*
+ * The value the host writes to the re-arm register (out[4], CA 0x40101414).
+ *
+ * The HOST-side disassembly (plat.ko, docs/phase20/msg-host-half.md) writes 1 here, and the port has
+ * written 1 since phase 24c.  The FIRMWARE's own pcie_msg_handle (file 0x818a8, ARM Thumb) writes
+ * **8** to its third register - `movs r1, #8; str r1, [r2]` - so the two sides of the same protocol do
+ * not use the same value.  Whether the difference is meaningful (a different register, or a bitmask
+ * where the host only needs bit 0) is unresolved, and this parameter makes it testable without a
+ * rebuild per value.
+ */
+static unsigned int omo_rearm_val = 1;
+module_param_named(rearm_val, omo_rearm_val, uint, 0444);
+MODULE_PARM_DESC(rearm_val, "value written to the re-arm register out[4] (host disasm says 1, the firmware's own handler writes 8); default 1");
+
 static unsigned int omo_verbose = 1;
 module_param_named(verbose, omo_verbose, uint, 0444);
 MODULE_PARM_DESC(verbose, "1 = log each decoded register");
@@ -569,14 +583,16 @@ static void omo_poll_mailbox(void)
 	unsigned long elapsed = 0;
 	u32 p0 = omo_rd(omo_msg, OMO_MSG0);
 	u32 p1 = omo_rd(omo_msg, OMO_MSG1);
+	u32 p5 = omo_rd(omo_msg, OMO_MSG5);
 	unsigned int seen = 0;
 
 	pr_info("omo-drv1: ---- post-release mailbox poll (%u ms interval, %u ms total) ----\n",
 		omo_pollms, omo_polldur);
-	pr_info("omo-drv1:   t=0  out[0]=0x%08x out[1]=0x%08x (baseline)\n", p0, p1);
+	pr_info("omo-drv1:   t=0  out[0]=0x%08x out[1]=0x%08x out[5]=0x%08x (baseline)\n",
+		p0, p1, p5);
 
 	while (elapsed < omo_polldur) {
-		u32 n0, n1;
+		u32 n0, n1, n5;
 		int bit;
 
 		msleep(omo_pollms);
@@ -584,11 +600,15 @@ static void omo_poll_mailbox(void)
 
 		n0 = omo_rd(omo_msg, OMO_MSG0);
 		n1 = omo_rd(omo_msg, OMO_MSG1);
-		if (n0 == p0 && n1 == p1)
+		n5 = omo_rd(omo_msg, OMO_MSG5);
+		if (n0 == p0 && n1 == p1 && n5 == p5)
 			continue;
 
-		pr_info("omo-drv1:   t=%lums out[0] 0x%08x -> 0x%08x, out[1] 0x%08x -> 0x%08x\n",
-			elapsed, p0, n0, p1, n1);
+		pr_info("omo-drv1:   t=%lums out[0] 0x%08x -> 0x%08x, out[1] 0x%08x -> 0x%08x, out[5] 0x%08x -> 0x%08x\n",
+			elapsed, p0, n0, p1, n1, p5, n5);
+		if (n5 != p5)
+			pr_info("omo-drv1:     out[5] CA 0x400392f0 changed %s (the firmware's own ack register)\n",
+				n5 ? "ASSERTED" : "cleared");
 		for (bit = 0; bit < 32; bit++) {
 			if ((n1 & (1U << bit)) && !(p1 & (1U << bit)))
 				pr_info("omo-drv1:     out[1] bit %d set (id %d)\n", bit, bit);
@@ -601,6 +621,7 @@ static void omo_poll_mailbox(void)
 		}
 		p0 = n0;
 		p1 = n1;
+		p5 = n5;
 		seen++;
 	}
 
@@ -909,10 +930,10 @@ static void omo_msg_service(void)
 			pr_info("omo-drv1:     clear out[1] 0x%05lx <= 0 readback=0x%08x\n",
 				(unsigned long)(OMO_MSG_WIN + OMO_MSG1),
 				omo_rd(omo_msg, OMO_MSG1));
-			iowrite32(1, omo_rel + (OMO_REARM_OFF - OMO_IO_WIN));
-			pr_info("omo-drv1:     rearm out[4] 0x%05lx <= 0x00000001 readback=0x%08x\n",
-				(unsigned long)OMO_REARM_OFF,
-				omo_rd(omo_rel, OMO_REARM_OFF - OMO_IO_WIN));
+		iowrite32(omo_rearm_val, omo_rel + (OMO_REARM_OFF - OMO_IO_WIN));
+		pr_info("omo-drv1:     rearm out[4] 0x%05lx <= 0x%08x readback=0x%08x\n",
+			(unsigned long)OMO_REARM_OFF, omo_rearm_val,
+			omo_rd(omo_rel, OMO_REARM_OFF - OMO_IO_WIN));
 
 			prev = omo_rd(omo_msg, OMO_MSG1);
 			pr_info("omo-drv1:     after service: out[0]=0x%08x out[1]=0x%08x glue=0x%08x\n",
