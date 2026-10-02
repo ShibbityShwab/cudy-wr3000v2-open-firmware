@@ -179,6 +179,12 @@ static const struct omo_region omo_regions[6] = {
 #define ETE_SR_BASEREG	0x010
 #define ETE_SR_DEPTH	0x014
 #define ETE_SR_WPTR	0x018
+#define OMO_SR_PAYLOAD	512	/* per-node host->device message buffer (fwaccept: ETE_SR_PAYLOAD) */
+#define OMO_SR_MSG_LEN	0x48	/* the vendor's first SR message, live capture (72 B) */
+#define OMO_SR_ALG_LEN	0x12a	/* alg get_2g_power_param H2D frame, live capture (298 B) */
+#define OMO_SR_FLAG	0x6d2b	/* shuangta_ete_sr_dscr_fill @0x17858: word1 = (len<<16)|0x6d2b */
+#define OMO_SR_EN0	0x000	/* per-channel enable (the vendor's ENABLE SR chN +0x00) */
+#define OMO_SR_EN1	0x048	/* SR-side enable (ENABLE SR chN +0x48) */
 #define ETE_SR_RPTR	0x01c
 #define ETE_DR_BASEREG	0x030
 #define ETE_DR_DEPTH	0x034
@@ -990,13 +996,6 @@ static void omo_h2d_send(void)
 	else
 		pr_info("omo-drv1:   NOTE the sent bit was CLEARED - the device consumed the message\n");
 }
-
-#define OMO_SR_PAYLOAD	512	/* per-node host->device message buffer (fwaccept: ETE_SR_PAYLOAD) */
-#define OMO_SR_MSG_LEN	0x48	/* the vendor's first SR message, live capture (72 B) */
-#define OMO_SR_ALG_LEN	0x12a	/* alg get_2g_power_param H2D frame, live capture (298 B) */
-#define OMO_SR_FLAG	0x6d2b	/* shuangta_ete_sr_dscr_fill @0x17858: word1 = (len<<16)|0x6d2b */
-#define OMO_SR_EN0	0x000	/* per-channel enable (the vendor's ENABLE SR chN +0x00) */
-#define OMO_SR_EN1	0x048	/* SR-side enable (ENABLE SR chN +0x48) */
 
 /*
  * The vendor's first host->device SR frame, captured live by phase 20 (fwaccept: omo_sr_msg).
