@@ -46,3 +46,50 @@ message (id 7) - not the rx-data/voice frame the port currently posts.
 
 That is a testable statement, and it is the first one in this investigation that is grounded in **named
 handlers** rather than inferred from a churning ring.
+
+## CORRECTION (same phase, minutes later): the ids were read from the wrong offset
+
+The first version of this table read the id from the entry's `+8` word, which is always zero, and so
+presented a mapping that was **wrong**. Re-parsing with the entry layout `{ id @ +0, handler @ +4,
++8 unused }` and a 12-byte stride - with the table pointer leading the first entry, which is why the
+handler addresses sit at `+4` - gives the real mapping, and every slot is now accounted for:
+
+**tab_chip (`.data+0x04`, 5 entries)**
+
+| id | handler |
+| --- | --- |
+| 0 | `hmac_voice_aggr_event` |
+| 4 | `hmac_device_wow_data_report` |
+| 5 | `hmac_rx_schedule_req` |
+| 7 | `hdpp_stat_save_tx_ppdu_record_process` |
+| 8 | `hdpp_stat_save_rx_ppdu_record_process` |
+
+**tab_core (`.data+0x40`, 7 entries)**
+
+| id | handler |
+| --- | --- |
+| 0 | `hmac_tx_complete_event_handle` |
+| 1 | `hmac_tx_event_process` |
+| 2 | `hmac_rx_process_data_event` |
+| 3 | `hmac_rx_process_data_event` |
+| 4 | `hmac_tx_complete_notify_other_core_event_handle` |
+| 7 | `hmac_mac_exception_proc` |
+| 8 | `hmac_ba_timeout_proc` |
+
+Every one of the 12 slots resolves to a named symbol, and no slot is omitted: **C002 is satisfied by
+construction here**, because the corrected parser prints an explicit `<unnamed:0x...>` or `<zero>` for
+any slot it cannot name, and none occurred.
+
+## What the corrected mapping does and does not change
+
+It **keeps** the phase's central reading - the ids are TX/RX event notifications, the chip and core sides
+use different handler sets over overlapping ids, and id 7 on the chip side being `hmac_rx_schedule_req`
+is the natural counterpart of the firmware's id 6 "wake the host's receive thread".
+
+It **retracts** the specific per-id pairs the first version listed, which were built on the zero word.
+
+This is the second time in this phase that a map came out wrong because a field offset was assumed rather
+than checked - the same failure that produced the one-page-low register window at phase 23. The remedy is
+the one already written into the project's rules: print the computed address for every read, and account
+for every slot rather than the ones that look meaningful.
+
