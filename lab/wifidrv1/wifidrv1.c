@@ -1071,14 +1071,15 @@ static const u8 omo_sr_msg[OMO_SR_MSG_LEN] = {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
+/*
  * PHASE 25y - THE OFFSET BECOMES AN EXPLICIT VARIABLE.  Phase 25 established that an announce is only
  * read if it is PENDING AT RELEASE, because the firmware clears the message registers during its own
  * boot.  Every run since has satisfied that ordering - but only as an ACCIDENT of code layout: the
  * init path is sr_post (announce) -> load_fw -> write_fw -> release, so the gap between the announce and
  * the release is whatever the firmware load happens to take, and it has never been chosen or swept.
  * With the payload question closed (replicas A and B, both real vendor messages, both silent), the
- * remaining host-controlled variable is that gap.  REANNOUNCE_DELAY_MS re-posts the SAME announce after
- * the firmware write and immediately before the release; 0 leaves the historical behaviour untouched.
+ * remaining host-controlled variable is that gap.  This delay re-posts the SAME announce after the
+ * firmware write and immediately before the release; 0 leaves the historical behaviour untouched.
  */
 static unsigned int omo_reannounce_ms;
 module_param_named(reannounce, omo_reannounce_ms, uint, 0444);
