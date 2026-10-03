@@ -61,3 +61,33 @@ something it has not seen before. If it is unchanged, then the 72-byte zero-body
 firmware wants at this point either - which would shift the question to *which* of the vendor's messages
 the firmware is waiting for, rather than what its bytes should be.
 
+
+## Refinement: the two messages are cleanly paired, and the port was neither
+
+Reading the two frames as **whole messages** rather than as a header and a body separates them cleanly:
+
+| message | `+0x04` len | `+0x06` id | body | where it was seen |
+| --- | --- | --- | --- | --- |
+| **A** | `0x0048` (72) | `0x001d` (29) | all zeros | phase-25 bound capture, 3x, 3 buffers, 2 runs |
+| **B** | `0x0030` (48) | `0x0001` (1) | `{1, 0x001400d8, 1, 0,0,0}` + `0xff` tail | phase-20 A.5, the vendor's **first** frame after boot |
+
+Length and id travel **together**: 72 goes with 29, and 48 goes with 1. So the port's frame -
+length 72 (A's) with id 1 and B's body - is a **mix of the two**, and after the phase-25p `+6` change it
+became length 72, id 29 (A's header) with **B's body** - still a mix, now with A's header.
+
+## The experimental program this defines
+
+Two clean single-variable tests, in order:
+
+1. **Replicate A exactly** - length 72, id 29, zero body, zero tail. *(this is the build in flight:
+   phase 25u zeroed the body, and phase 25p had already set the id)*
+2. **Replicate B exactly** - length 48, id 1, body `{1, 0x001400d8, 1, 0,0,0}`, `0xff` tail.
+
+Each is a byte-for-byte copy of a message the vendor demonstrably sends. **Neither has been tested**:
+every previous run sent a mix, so this is the first time either real message has been put on the ring.
+
+If A produces nothing and B produces nothing, the conclusion is no longer "our bytes are wrong" but
+**"the firmware is not waiting for an SR message of this type at this point"** - a different and much
+better-founded statement, and one that would redirect the work to *which* channel or *when* rather than
+*what bytes*.
+
