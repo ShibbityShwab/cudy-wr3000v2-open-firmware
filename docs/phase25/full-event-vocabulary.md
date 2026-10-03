@@ -123,3 +123,48 @@ table, which is consistent with phase 20's finding that `hcc_msg_tx` is called f
 So 58 of the 79 entries are named here; the wal table's 19 remain, and two entries in the base-2 table
 resolve to no symbol at all (which is stated rather than omitted, as C002 of G002 required).
 
+
+## The wal table (`.data+0x1c74`, id base 2, 19 entries) - the vocabulary is complete
+
+| id | handler | | id | handler |
+| --- | --- | --- | --- | --- |
+| 0 | `wal_config_process_pkt` | | 12 | `wal_cfg80211_init_evt_handle` |
+| 1 | `wal_acs_netlink_recv_handle` | | 13 | `wal_cfg80211_mgmt_tx_status` |
+| 2 | `wal_scan_comp_proc_sta` | | 20 | `wal_cfg80211_cac_report` |
+| 3 | `wal_asoc_comp_proc_sta` | | 21 | `wal_receive_all_sta_rssi_proc` |
+| 4 | `wal_disasoc_comp_proc_sta` | | 30 | `wal_report_external_auth_req` |
+| 5 | `wal_connect_new_sta_proc_ap` | | 31 | `wal_process_packet_xmit` |
+| 6 | `wal_disconnect_sta_proc_ap` | | 32 | `wal_dfr_power_down_dev` |
+| 7 | `wal_mic_failure_proc` | | 37 | `wal_multiap_report_proc` |
+| 8 | `wal_acs_response_event_handler` | | 38 | `wal_hiwifi_report_proc` |
+| 9 | `wal_send_mgmt_to_host` | | | |
+
+This is the **WAL** layer - the highest of the three, and the one that fronts **cfg80211/mac80211**. Three
+names matter directly to this project's goal:
+
+- **`wal_send_mgmt_to_host`** (id 9) - a management frame being **sent to the host**, i.e. the path by
+  which the vendor stack delivers received management frames upward;
+- **`wal_cfg80211_mgmt_tx_status`** (13) and **`wal_cfg80211_cac_report`** (20) - **cfg80211 callbacks**,
+  which is precisely the interface a genuinely open driver would have to implement;
+- **`wal_receive_all_sta_rssi_proc`** (21), `wal_report_external_auth_req` (30), `wal_process_packet_xmit`
+  (31) - the data-path and roaming entry points.
+
+So the answer to "what would an open driver have to speak" is now partly written down in the vendor's own
+handler names: the event set spans **scan / association / deauth / MIC failure / ACS / CAC / packet xmit /
+rssi**, and the WAL table is where it meets cfg80211.
+
+## Coverage: complete
+
+| table | id base | entries | named |
+| --- | --- | --- | --- |
+| hdpp tab_chip | 3 | 5 | 5 |
+| hdpp tab_core | 0 | 7 | 7 |
+| hmac tab_chip | 1 | 28 | 28 |
+| hmac tab_chip | 2 | 12 | 10 (2 unnamed) |
+| hmac tab_chip | 3 | 8 | 8 |
+| **wal tab_chip** | **2** | **19** | **19** |
+| | | **79** | **77 named, 2 unnamed and stated as such** |
+
+Every table the binaries register is now enumerated, every slot is accounted for, and the two that resolve
+to no symbol are reported rather than omitted.
+
