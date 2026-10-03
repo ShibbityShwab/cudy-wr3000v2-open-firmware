@@ -56,3 +56,18 @@ If the content is not the gate, then the gate is elsewhere, and the evidence nam
 Both are different experiments rather than more edits to the same 72 bytes, which is why the frame is now
 frozen: further payload variants would have no hypothesis behind them.
 
+## CORRECTION to the "which channel" direction, made before acting on it
+
+The first draft of this conclusion named the **DS/DR channel producer** as the untried direction. Reading
+the record before running it shows that is **wrong**: `drpost=1` has been run twice -
+`docs/phase24/dr-commit-not-the-gate.md` (buffers posted, index committed with a matching readback, the
+full id-6/id-2 dialogue, 9/9 CPU start, and **0 deposit events in 4000 ms**) and again in
+`docs/phase25/desclen-irrelevant-confirmed.md` **with the corrected window base and the in-post announce**.
+
+So the DR channel is **not** untried, and "exercise the DR producer" would have been a duplicate
+experiment aimed at a question already answered: *the producer commit is necessary state but not the gate,
+and the receive engine does not DMA even when the buffers are posted and the dialogue runs.*
+
+That leaves the **timing** direction as the only one of the two that is genuinely untested - which is what
+phase 25y implements.
+
