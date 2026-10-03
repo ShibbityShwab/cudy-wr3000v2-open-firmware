@@ -93,3 +93,35 @@ Worth stating plainly: this is a **correction of an inconsistency**, not yet pro
 the one the firmware wants *at this point*. But it is derived from the vendor's real bytes, and it costs
 one constant to test.
 
+
+## The recurring type-1 header (more stable pairs)
+
+Continuing the stable-pair read produced repeats of one pattern:
+
+```
+idx  8  desc_len=72 | +0=0x01000100  +4=0x0048  +6=0x001d  magic=5a5a   (+4 == len)
+idx 18  desc_len=72 | +0=0x01000100  +4=0x8fb8  +6=0xd5fd  magic=5a5a   (recycled mid-read)
+idx 19  desc_len=72 | +0=0x01000100  +4=0x0010  +6=0x001d  magic=5a5a
+idx 22  desc_len=72 | +0=0x6f722720  +4=0x0048  +6=0x001d  magic=00     (payload not a header)
+```
+
+**`+0 = 0x01000100` recurs, with `+6 = 0x001d` and the `0x5a5a` magic at `+0xa`.** That is the vendor's
+host->device header shape for this class of message.
+
+And the port's captured frame is:
+
+```
+port:  +0=0x04000100  +4=0x0048 (was 0x0030)  +6=0x0001  magic@0xa=5a5a
+```
+
+So the port's frame agrees with the vendor's shape on the **magic position** and (now) the **length**, and
+differs on **two fields**: `+0`'s high byte (`04` vs `01`) and `+6` (`0x0001` vs `0x001d`).
+
+That is a much better-posed question than "what is the message?": the port is sending a frame of the
+**same family**, with a plausible type/proto word and a consistent length, and two fields differ from the
+vendor's recurring header. Either the capture is a different message *type* (`04` vs `01`), or those two
+fields were mis-transcribed in the capture.
+
+Recorded as the next two constants to test, in that order, since `+0` reads as a type word and a wrong
+type is more likely to be ignored outright than a wrong sub-field.
+
