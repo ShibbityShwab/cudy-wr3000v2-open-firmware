@@ -1042,21 +1042,18 @@ static void omo_h2d_send(void)
 /*
  * The vendor's first host->device SR frame, captured live by phase 20 (fwaccept: omo_sr_msg).
  *
- * PHASE 25g-25k CORRECTED THE LENGTH, AND RETRACTED A HEADER INFERENCE.  Reading the LIVE vendor ring
- * read-only (devmem through BAR0, NORMAL operation - docs/phase25/live-vendor-ring-ground-truth.md)
- * gave two things: a stable pair whose +4 equals its own descriptor length (72), and a tally over 13
- * messages showing (a) lengths 72 x11 / 29 x2 - so 72 is the port's correct length - and (b) that
- * **+0 = 0x04000100 IS a real vendor message type** while **+6 is not a header field at all** (it took
- * six different values).  An earlier inference of a single "recurring header" from THREE samples was
- * therefore wrong and is retracted (docs/phase25/type-tally-and-correction.md); the captured +0/+6 are
- * restored here.  Kept from the live evidence: +4 = 0x0048, the dominant real length and the same value
- * the SR node announces.
+ * PHASE 25o - THE ONE-VARIABLE TEST.  A write-atomic capture (write index + all descriptors in one ssh
+ * call, then the just-published slot's own buffer in the next) gave a BOUND message of the port's own
+ * type: '04000100 001d0048 5a5a0000' - i.e. type 0x04000100, +4..5 = 0x0048 (72), +6..7 = 0x001d, magic
+ * 0x5a5a at +0xa.  Against this frame that is every field equal EXCEPT +0x06 (vendor 0x001d, port 0x0001).
+ * Phase 25i had set +6 = 0x001d but in the SAME edit as +0, moving the type to 0x01000100; phase 25k
+ * restored both together - so this combination was never actually run.  Only +0x06 changes here.
  *
  * +0x00 proto 0x04000100, +0x08 u16 0 / u16 0x5a5a (the header magic rcv_buff_check tests),
  * +0x0c 8-byte token, +0x14 u16 0x00d8 / u16 0x0014, +0x18 payload start.
  */
 static const u8 omo_sr_msg[OMO_SR_MSG_LEN] = {
-	0x00, 0x01, 0x00, 0x04, 0x48, 0x00, 0x01, 0x00,
+	0x00, 0x01, 0x00, 0x04, 0x48, 0x00, 0x1d, 0x00,
 	0x00, 0x00, 0x5a, 0x5a, 0x00, 0x00, 0x00, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0xd8, 0x00, 0x14, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
