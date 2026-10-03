@@ -1042,18 +1042,20 @@ static void omo_h2d_send(void)
 /*
  * The vendor's first host->device SR frame, captured live by phase 20 (fwaccept: omo_sr_msg).
  *
- * PHASE 25g CORRECTED THE LENGTH FIELD.  Reading the LIVE vendor ring read-only (devmem through BAR0,
- * normal operation - docs/phase25/live-vendor-ring-ground-truth.md) produced a stable
- * (descriptor, buffer) pair whose message header is
+ * PHASE 25g/25h CORRECTED THE FRAME HEADER AGAINST LIVE VENDOR BYTES.  Reading the LIVE vendor ring
+ * read-only (devmem through BAR0, normal operation - docs/phase25/live-vendor-ring-ground-truth.md)
+ * gave stable (descriptor, buffer) pairs whose header recurs as
  *     +0=0x01000100  +4=0x0048  +6=0x001d  magic@0xa=0x5a5a
- * with **+4 equal to the descriptor's own length (72)**.  This captured frame instead had +4 = 48
- * while its SR node announced 72 - the message contradicting its own descriptor.  +4 is now 72.
+ * with **+4 equal to the descriptor's own length (72)**.  The captured frame had +4 = 48 (contradicting
+ * its own descriptor) and disagreed on +0 and +6 as well; +4 -> 0x0048 was tested first and was a
+ * negative (docs/phase25/lenfix-negative.md), so +0 and +6 now match the vendor verbatim, leaving the
+ * port's frame byte-identical to the vendor's recurring type-1 header in every field observed.
  *
  * +0x00 proto 0x04000100, +0x08 u16 0 / u16 0x5a5a (the header magic rcv_buff_check tests),
  * +0x0c 8-byte token, +0x14 u16 0x00d8 / u16 0x0014, +0x18 payload start.
  */
 static const u8 omo_sr_msg[OMO_SR_MSG_LEN] = {
-	0x00, 0x01, 0x00, 0x04, 0x48, 0x00, 0x01, 0x00,
+	0x00, 0x01, 0x00, 0x01, 0x48, 0x00, 0x1d, 0x00,
 	0x00, 0x00, 0x5a, 0x5a, 0x00, 0x00, 0x00, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0xd8, 0x00, 0x14, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
