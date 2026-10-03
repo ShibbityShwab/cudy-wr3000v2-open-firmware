@@ -1284,7 +1284,9 @@ static void omo_dr_watch(void)
 	if (!events)
 		pr_info("omo-drv1: NOTE no DR deposit - the device did not write our receive buffers\n");
 	if (!sr_events)
-		pr_info("omo-drv1: NOTE the SR device index NEVER ADVANCED - the device never consumed our descriptors, i.e. it granted no TX buffers (the observable form of zero credit)\n");
+		pr_info("omo-drv1: NOTE the SR device index did not MOVE during this window. That is NOT evidence the\n");
+	pr_info("omo-drv1:      device ignored our descriptors - check rptr against wptr above: ch0 read\n");
+	pr_info("omo-drv1:      rptr == wptr, i.e. already caught up at baseline (docs/phase24/sr-consumption-measured.md)\n");
 }
 
 static unsigned int omo_drpost_en;
