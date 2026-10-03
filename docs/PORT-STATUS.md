@@ -67,6 +67,23 @@ applied before every build now:
    earlier hand-written check tested a fixed identifier list and so missed exactly the identifier I had
    just added. **A check keyed to a list I maintain by hand will miss the case I did not think of.**
 
+### 1b-2. What phase 25 added (2026-10-03, all on hardware)
+
+| layer | state | evidence |
+| --- | --- | --- |
+| **announce timing** | **A host announce is read ONLY if it is pending at release** - the firmware clears the message registers during its own boot. A pre-release announce is CONSUMED; every post-release send in phases 24d-24t was posted too late to be seen. First host->device write this project has had taken | `docs/phase25/in-post-announce-consumed.md` |
+| message header | parsed from BOUND captures, anchored on the `0x5a5a` magic at `+0x0a`: `+0x00` proto (`0x0100`/`0x0102`), `+0x02` field, `+0x04` length, `+0x06` field, `+0x08` zero, `+0x0a` magic | `docs/phase25/sr-header-parsed.md` |
+| **the port's frame** | type `0x04000100` at length 72 with the right magic - **every field matches a bound vendor message of the same type EXCEPT `+0x06`** (port `0x0001`, vendor `0x001d`) | `docs/phase25/bound-capture-single-difference.md` |
+| **instrument defect** | the live-ring read is **weaker than first claimed**: 32 descriptors share only **13 buffers**, so a descriptor's buffer read can return a recycled message. Descriptor data and lengths stand; the buffer-derived claims were retracted | `docs/phase25/instrument-defect-buffer-pooling.md` |
+| **bound capture** | the fix: write index + all descriptors in ONE ssh call, then that slot's own buffer in the very next call - 10 captures, 0 misses | `docs/phase25/bound-capture-single-difference.md` |
+| chip message tables | named by id. tab_chip ids 0/4/5/7/8 = `hmac_voice_aggr_event`, `hmac_device_wow_data_report`, `hmac_rx_schedule_req`, `hdpp_stat_save_tx/rx_ppdu_record_process`; tab_core ids 0/1/2/3/4/7/8 = `hmac_tx_complete_event_handle`, `hmac_tx_event_process`, `hmac_rx_process_data_event`, `hmac_tx_complete_notify_other_core_event_handle`, `hmac_mac_exception_proc`, `hmac_ba_timeout_proc`. **The ids are TX/RX event notifications** | `docs/phase25/chip-message-tables-named.md` |
+| deployed build | re-verified live: marker `omo-minimal-0.3 stock-2.5.24-20260727-122111`, `ubiblock0_0` sha256 `55f5c5b4...` identical to the local artifact, `omosshd` running. **`omo-rtmsg` is a dangling symlink, not a live service** | `docs/phase25/deploy-reverify-dangling-link.md` |
+
+**A comparison whose variables were not held fixed is this phase's recurring failure**, in three forms: pooled
+buffer reads treated as bound, a table entry id read from the always-zero `+8` word, and an edit that
+changed `+0` and `+0x06` together so the `+6` test was never really run. All three are named in the reports
+rather than quietly fixed.
+
 ## 2. What is genuinely not done
 
 - **The H2D path, and its cause is now known rather than guessed.** The vendor's `hcc_queue_tx_process`
@@ -88,11 +105,18 @@ applied before every build now:
 
 ## 3. The next steps the record implies (not a restart)
 
-1. **The two directions with information left.** (a) Find what installs the chip layer's credit
-   callback (`.LANCHOR0+0x3c` in `plat.ko`, written by `wifi.ko` at runtime) and whether the credit
-   derives from a **device register the port could read** - observing it would convert "the device does
-   not consume the bit" into "the device has granted zero TX buffers". (b) The **vendor SDL/GPL source
-   request**, which answers a device-side gate that eight host-side candidates could not move.
+1. **THE REMAINING QUESTION IS SEQUENCING, NOT PAYLOAD SYNTAX.** The firmware says "wake your receive
+   thread" (id 6); the vendor's own vocabulary pairs that with an `hmac_rx_schedule_req`-shaped reply
+   (chip-side id 7), while the port posts an rx-data/voice frame. The one header field differing from a
+   BOUND vendor message of the port's own type is `+0x06` - and it must be changed ONE constant at a
+   time, because earlier edits moved `+0` and `+0x06` together and the result looked neutral
+   (`docs/phase25/bound-capture-single-difference.md`).
+2. **Read the vendor's ring with the BOUND capture only** - one call for the write index and all
+   descriptors, the next call for that slot's own buffer. It works in NORMAL operation only (a takeover
+   has no vendor stack) and the ring base changes per boot, so always read it from `0x403f2410`.
+3. **The two directions with information left.** (a) The vendor SDL/GPL source request, which answers a
+   device-side gate that host-side work has not moved. (b) Deeper `wifi.ko`/`plat.ko` statics, which are
+   parallelisable because they need no device.
 2. **Stop writing host registers at this problem.** The last eight host-side candidates were all
    negative, each costing a build and a boot cycle; the port's host side is complete and every knob it
    has has been measured.
