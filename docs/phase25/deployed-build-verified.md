@@ -40,3 +40,21 @@ with our layer and a recovery path.
 The plan documents describe the deployment as history. This is the same claim **re-measured on the live
 device in the current session**, which is the standard this notebook holds itself to everywhere else -
 and it means the deployable half of the goal is not merely documented but currently true.
+
+---
+
+## CORRECTION (phase 25p, same day): one of the three confirmations was a false positive
+
+Point 3 above claimed "**the injected layer is live** - `omosshd` + `omo-rtmsg`". Half of that is wrong.
+
+`S99omo-rtmsg` is a **dangling symlink**: `/etc/rc.d/S99omo-rtmsg` exists in the overlay, but its target
+`/etc/init.d/omo-rtmsg` does not, so the service is not installed and nothing starts at 99. The check that
+produced the claim was `ls -l` over the three paths - and **`ls` lists a dangling symlink as though it were
+present**, so the test could not tell "installed" from "a broken link".
+
+The corrected position: **`omosshd` is installed and running; `omo-rtmsg` is not a live service.**
+
+Points 1 and 2 stand unchanged - the marker string and the UBI hash both still match the local artifact on
+a fresh probe (phase 25p re-ran them). So the *build* identity is confirmed and only the *service* claim
+was overstated. See `deploy-reverify-dangling-link.md` for the corrected verification and the falsifiers.
+
