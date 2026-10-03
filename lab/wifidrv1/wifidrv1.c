@@ -1217,17 +1217,43 @@ static void omo_dr_watch(void)
 	unsigned int i;
 	u32 rptr_last[OMO_ETE_DR_N];
 	u32 snap[OMO_ETE_DR_N][8];
+	u32 srr_last[OMO_ETE_SR_N];
 	unsigned long elapsed = 0;
-	unsigned int events = 0;
+	unsigned int events = 0, sr_events = 0;
 
 	for (i = 0; i < OMO_ETE_DR_N; i++) {
 		rptr_last[i] = omo_rd(omo_ete, omo_dr_block[i] + ETE_DR_RPTR);
 		memcpy(snap[i], omo_dr_va[i], sizeof(snap[i]));
 	}
-	pr_info("omo-drv1: ---- DR watch (%u ms): device index + node words ----\n",
+	/*
+	 * The SR device index is the flow-control signal that matters most here: the vendor refuses to
+	 * transmit unless the device has granted TX buffers, and the buffers it returns are exactly the
+	 * SR descriptors it has consumed.  If this index never advances after the post, the device never
+	 * took our descriptors - which is the observable form of a zero credit, and the measurement the
+	 * credit chain (docs/phase24/tx-credit-source.md) could not produce statically.
+	 */
+	for (i = 0; i < OMO_ETE_SR_N; i++)
+		srr_last[i] = omo_rd(omo_ete, omo_sr_block[i] + ETE_SR_RPTR);
+
+	pr_info("omo-drv1: ---- ring watch (%u ms): DR device index + node words, SR device index ----\n",
 		omo_polldur);
+	for (i = 0; i < OMO_ETE_SR_N; i++)
+		pr_info("omo-drv1:   SR ch%u baseline: wptr(+0x18)=0x%08x rptr(+0x1c)=0x%08x\n",
+			i, omo_rd(omo_ete, omo_sr_block[i] + ETE_SR_WPTR), srr_last[i]);
 
 	while (elapsed < omo_polldur) {
+		for (i = 0; i < OMO_ETE_SR_N; i++) {
+			u32 rp = omo_rd(omo_ete, omo_sr_block[i] + ETE_SR_RPTR);
+
+			if (rp != srr_last[i]) {
+				pr_info("omo-drv1: SR ch%u DEVICE INDEX 0x%08x -> 0x%08x (host wptr=0x%08x, delta=%u) = THE DEVICE CONSUMED OUR DESCRIPTORS\n",
+					i, srr_last[i], rp,
+					omo_rd(omo_ete, omo_sr_block[i] + ETE_SR_WPTR),
+					(rp - srr_last[i]) & 0x3ffU);
+				srr_last[i] = rp;
+				sr_events++;
+			}
+		}
 		for (i = 0; i < OMO_ETE_DR_N; i++) {
 			unsigned long b = omo_dr_block[i];
 			u32 rp = omo_rd(omo_ete, b + ETE_DR_RPTR);
@@ -1253,9 +1279,12 @@ static void omo_dr_watch(void)
 		elapsed += omo_pollms;
 	}
 
-	pr_info("omo-drv1: DR watch done: %u deposit events in %lu ms\n", events, elapsed);
+	pr_info("omo-drv1: ring watch done: %u DR deposit events, %u SR consumption events in %lu ms\n",
+		events, sr_events, elapsed);
 	if (!events)
 		pr_info("omo-drv1: NOTE no DR deposit - the device did not write our receive buffers\n");
+	if (!sr_events)
+		pr_info("omo-drv1: NOTE the SR device index NEVER ADVANCED - the device never consumed our descriptors, i.e. it granted no TX buffers (the observable form of zero credit)\n");
 }
 
 static unsigned int omo_drpost_en;
