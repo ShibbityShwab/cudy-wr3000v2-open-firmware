@@ -57,3 +57,23 @@ The object whose `+0x18` `bal_port_start_xfer` calls, and the `hdpp_*` routine b
 `hdpp_main_init` and the `bal_` accessors it installs, looking for the function that writes `out[0]`
 (the `0x40039010` window) and the doorbell - i.e. the function the port's `omo_h2d_send` is a
 substitute for.
+
+## A negative that narrows the search
+
+Scanning `wifi.ko`'s `.text` for every one of the mailbox CAs built as an immediate pair
+(`movw`/`movt`: `0x40039010`, `0x40039014`, `0x400392d4`, `0x400392f0`, `0x40101438`,
+`0x40101414`, `0x40000108`) returns **zero hits** - 875k instructions of ARM, not one of those
+addresses.
+
+That is a useful result rather than a dead end: **the chip layer never hardcodes the mailbox
+registers.** It receives them as pointers - which is exactly the shape phase 20 found in
+`pcie_msg_send` (`ldr r2, [comm, #0x2c]` then a store, rather than an address). So `wifi.ko`'s
+transfer routine cannot be located by searching for the register constants; it has to be found by
+following the object it is handed, which is why the chain has to go through the registration
+(`hcc_queue_register_customer_for_chip` / `hcc_msg_register_tab_chip`) rather than by address.
+
+**This also bounds what "reimplementing the unread function" means.** The port's `omo_h2d_send` writes
+`out[0]` and `out[2]` through windows it resolved itself; the vendor's chip layer writes the same two
+registers through pointers it was given. The *addresses* are not the difference. Whatever the chip layer
+does differently, it is in the **sequence and the state around those writes**, not in which register.
+
