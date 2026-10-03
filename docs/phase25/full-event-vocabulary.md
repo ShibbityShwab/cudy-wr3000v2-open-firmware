@@ -65,3 +65,61 @@ set is **five tables larger** than that scope, which is why the vocabulary had l
 reached, and the payload bodies of those events. Naming the handlers gives the vocabulary; it does not
 give the message formats. That remains G006 (structure, measurable) and G004 (the vendor's definitions).
 
+
+## The two pc-literal tables, resolved (the remaining hmac registrations)
+
+The two tables `hmac_main_init` loads through a literal pool (id bases 2 and 3) sit directly after the
+28-entry one, which is what made them findable: the literal resolved to `.data+0x6d4` = `0x584 + 28*12`,
+and the next to `.data+0x764` = `0x6d4 + 12*12`. The layout is contiguous, so the three hmac tables are one
+array read three ways.
+
+**id base 2 `(.data+0x6d4, 12 entries)`**
+
+| id | handler | | id | handler |
+| --- | --- | --- | --- | --- |
+| 22 | *unnamed* | | 28 | `hmac_ba_action_msg_process` |
+| 23 | *unnamed* | | 29 | `hcc_timer_process` |
+| 24 | `hmac_spectral_scan_complete` | | 33 | `hmac_mgmt_read_error_msg_process` |
+| 25 | `hmac_phy_event_complete` | | 34 | `hmac_mgmt_send_deauth_frame_process` |
+| 26 | `hmac_phy_event_complete` | | 35 | `hmac_del_user_msg_process` |
+| 27 | `hmac_mgmt_deauth_msg_process` | | 36 | `hmac_rx_data_send_disasoc_frame_process` |
+
+**id base 3 `(.data+0x764, 8 entries)`**
+
+| id | handler |
+| --- | --- |
+| 9 | `hmac_smps_update_device_capbility` |
+| 10 | `hmac_pfm_hiex_rx_local_msg` |
+| 15 | `hmac_bsd_update_msg` |
+| 16 | `hmac_multiap_report_11v_event` |
+| 17 | `hmac_d2h_pm_event` |
+| 18 | `hmac_d2h_temp_state_update` |
+| 19 | `hmac_receive_beacon_probrsp_to_reprot` |
+| 20 | `hmac_report_beacon_frame` |
+
+## Vocabulary now: 79 named handlers across six tables
+
+Two of the new names are worth calling out because they name a **direction** explicitly rather than a
+subsystem: `hmac_d2h_pm_event` and `hmac_d2h_temp_state_update` - "d2h" being **device-to-host**. The
+project has been treating the id space as one namespace with a direction implied by context; these two
+show the vendor names the direction in the handler itself, which is the same lesson as the
+domain-dependent id 2, from a different angle.
+
+Note also `hcc_timer_process` at id 29 in the base-2 table: a **timer** dispatched through the message
+table, which is consistent with phase 20's finding that `hcc_msg_tx` is called from
+`hcc_timer_timeout_proc` - the message service and the timer service share this table.
+
+## Coverage, stated honestly
+
+| table | id base | entries | named |
+| --- | --- | --- | --- |
+| hdpp tab_chip | 3 | 5 | 5 |
+| hdpp tab_core | 0 | 7 | 7 |
+| hmac tab_chip | 1 | 28 | 28 |
+| hmac tab_chip | 2 | 12 | **10** (two unnamed) |
+| hmac tab_chip | 3 | 8 | 8 |
+| wal tab_chip | 2 | 19 | **not yet dumped** |
+
+So 58 of the 79 entries are named here; the wal table's 19 remain, and two entries in the base-2 table
+resolve to no symbol at all (which is stated rather than omitted, as C002 of G002 required).
+
