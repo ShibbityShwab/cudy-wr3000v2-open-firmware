@@ -58,3 +58,19 @@ question on the body is now precisely two things:
 Both are behind the ops-table indirection, so the next step is to find who *dispatches through* these
 entries - the same route that identified the message handler table earlier - rather than to look for a
 direct call, which does not exist.
+
+## The table's name
+
+The 68-byte region at `.data+0x2900` - 17 pointers, covering `pcie_main_init` through
+`shuangta_ete_dr_set_sr_dscr_flag` - is the symbol **`g_st_pcie_bus_driver`**. It is referenced from
+one other data structure (section 22, offset 0x28d8), i.e. it is installed into a higher-level ops
+table rather than called directly, which is why no direct caller of `shuangta_ete_sr_dscr_fill`
+exists: **the chip layer reaches the fill through this vector.**
+
+That is the same indirection that made `bal_port_start_xfer` a tail call, and it explains why the
+"caller of the fill" search kept coming back empty. **The route to the remaining body question is
+through `g_st_pcie_bus_driver`'s consumers, not through a call site.**
+
+Recorded so the next attempt does not repeat the search: everything about the SR/DR descriptor model,
+the PCIe transport, and the ETE register bases is in this one named table.
+
