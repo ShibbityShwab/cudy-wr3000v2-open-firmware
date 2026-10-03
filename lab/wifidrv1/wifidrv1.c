@@ -1071,6 +1071,36 @@ static const u8 omo_sr_msg[OMO_SR_MSG_LEN] = {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
+ * PHASE 25y - THE OFFSET BECOMES AN EXPLICIT VARIABLE.  Phase 25 established that an announce is only
+ * read if it is PENDING AT RELEASE, because the firmware clears the message registers during its own
+ * boot.  Every run since has satisfied that ordering - but only as an ACCIDENT of code layout: the
+ * init path is sr_post (announce) -> load_fw -> write_fw -> release, so the gap between the announce and
+ * the release is whatever the firmware load happens to take, and it has never been chosen or swept.
+ * With the payload question closed (replicas A and B, both real vendor messages, both silent), the
+ * remaining host-controlled variable is that gap.  REANNOUNCE_DELAY_MS re-posts the SAME announce after
+ * the firmware write and immediately before the release; 0 leaves the historical behaviour untouched.
+ */
+static unsigned int omo_reannounce_ms;
+module_param_named(reannounce, omo_reannounce_ms, uint, 0444);
+MODULE_PARM_DESC(reannounce,
+	"ms to wait after the firmware write before re-posting the SAME announce and releasing; 0 = historical (announce inside omo_sr_post only)");
+
+/* Re-post the identical announce the SR fill makes, so the message is pending as close to the release
+ * as the chosen delay allows.  Same registers, same bits - only the MOMENT differs. */
+static void omo_reannounce(void)
+{
+	u32 a0, a2;
+
+	a0 = omo_rd(omo_msg, OMO_MSG0);
+	iowrite32(a0 | 8U, omo_msg + OMO_MSG0);
+	pr_info("omo-drv1: RE-ANNOUNCE out[0] <= 0x%08x readback=0x%08x\n",
+		a0 | 8U, omo_rd(omo_msg, OMO_MSG0));
+	a2 = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+	iowrite32(a2 | 1U, omo_msg + OMO_MSG_DOORBELL);
+	pr_info("omo-drv1: RE-ANNOUNCE out[2] <= 0x%08x readback=0x%08x (doorbell)\n",
+		a2 | 1U, omo_rd(omo_msg, OMO_MSG_DOORBELL));
+}
+
 /*
  * Host -> device: post SR nodes and commit the producer index.
  *
@@ -1571,6 +1601,16 @@ static int omo_hw_attach(void)
 	if (omo_release_en) {
 		u32 before[ARRAY_SIZE(omo_sig)], after[ARRAY_SIZE(omo_sig)];
 		unsigned int i, changed = 0;
+
+		/* Phase 25y: make the announce-to-release gap an explicit, swept variable instead of
+		 * whatever the firmware load happens to cost.  Same announce, same registers - only the
+		 * moment moves.  0 leaves every earlier result reproducible. */
+		if (omo_reannounce_ms) {
+			pr_info("omo-drv1: waiting %u ms after the firmware write before re-announcing\n",
+				omo_reannounce_ms);
+			msleep(omo_reannounce_ms);
+			omo_reannounce();
+		}
 
 		omo_sig_read("pre ", before);
 		omo_do_release();
