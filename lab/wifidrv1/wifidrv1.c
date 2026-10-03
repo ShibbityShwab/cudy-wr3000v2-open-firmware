@@ -1110,6 +1110,18 @@ static unsigned int omo_sr_desclen;
 module_param_named(sr_desclen, omo_sr_desclen, uint, 0444);
 MODULE_PARM_DESC(sr_desclen, "SR slot-0 descriptor length override (0 = the captured 0x48; 0x30 matches the frame's own header field)");
 
+/*
+ * Announce the SR post the way the vendor's own fill routine does.
+ *
+ * shuangta_ete_sr_dscr_fill @0x17858 ends with `mov r1, #3; bl pcie_msg_send` - i.e. it announces
+ * `out[0] |= 8` (id 3) and the `out[2]` doorbell as the LAST act of filling, per descriptor, BEFORE
+ * anything else runs.  The port has announced id 3 too, but once and much later (after the poll and
+ * the service).  Same id, same registers - different moment.  Default 1: do it as the vendor does.
+ */
+static unsigned int omo_sr_announce = 1;
+module_param_named(sr_announce, omo_sr_announce, uint, 0444);
+MODULE_PARM_DESC(sr_announce, "1 = announce id 3 (out[0] bitmap + out[2] doorbell) inside omo_sr_post, as shuangta_ete_sr_dscr_fill does; 0 = only the later omo_h2d_send");
+
 static void omo_sr_post(void)
 {
 	unsigned int i, j;
@@ -1165,6 +1177,20 @@ static void omo_sr_post(void)
 		iowrite32(1U, omo_ete + b + OMO_SR_EN1);
 		pr_info("omo-drv1: ENABLE SR ch%u +0x48 0x%08x -> 0x00000001 readback=0x%08x\n",
 			i, en, omo_rd(omo_ete, b + OMO_SR_EN1));
+
+		/* the vendor's own last act of the fill: pcie_msg_send(chip, 3) */
+		if (omo_sr_announce) {
+			u32 a0 = omo_rd(omo_msg, OMO_MSG0);
+			u32 a2;
+
+			iowrite32(a0 | 8U, omo_msg + OMO_MSG0);
+			pr_info("omo-drv1: ANNOUNCE (as sr_dscr_fill does) out[0] <= 0x%08x readback=0x%08x\n",
+				a0 | 8U, omo_rd(omo_msg, OMO_MSG0));
+			a2 = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+			iowrite32(a2 | 1U, omo_msg + OMO_MSG_DOORBELL);
+			pr_info("omo-drv1: ANNOUNCE out[2] <= 0x%08x readback=0x%08x (doorbell)\n",
+				a2 | 1U, omo_rd(omo_msg, OMO_MSG_DOORBELL));
+		}
 	}
 }
 
