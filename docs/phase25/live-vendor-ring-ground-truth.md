@@ -66,3 +66,30 @@ with a working instrument, not a static-analysis dead end.
 **Immediate consequence for the port:** an always-72-byte fixed frame is not what the vendor sends. Any
 next experiment should treat the message as a *typed* object with a per-type length, starting from the
 live examples rather than from the single capture.
+
+## The decisive pair, read stably
+
+Reading each descriptor *around* its buffer and discarding any pair the ring recycled mid-read gave one
+trustworthy sample that settles the header layout:
+
+```
+idx  8  desc_len=72 | +0=0x01000100  +4=0x0048  +6=0x001d  magic@0xa=5a5a
+        +4 == desc_len ? YES
+```
+
+**The vendor's own message has `+4` equal to its descriptor's length (72).** The other stable pairs show
+the same field carrying unrelated values (an IP-like string, 0x0016, 0x0010), i.e. the ring also carries
+non-command payloads - but the type-1 message is unambiguous: **the length field and the descriptor agree.**
+
+## The defect this exposes in the port
+
+The port's captured frame read `+4 = 48` while its SR node announced **72** - the message contradicting
+its own descriptor. On the vendor's own traffic that does not happen; the two agree.
+
+So `omo_sr_msg`'s `+4` is now `0x0048`, matching the descriptor, and that is the first content change
+this project has made from **live vendor evidence** rather than from a capture's assumption.
+
+Worth stating plainly: this is a **correction of an inconsistency**, not yet proof that the message is
+the one the firmware wants *at this point*. But it is derived from the vendor's real bytes, and it costs
+one constant to test.
+
