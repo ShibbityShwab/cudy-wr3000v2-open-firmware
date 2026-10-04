@@ -192,6 +192,12 @@ firmware build - needs (1).
 
 ## 4. Ways forward, ranked (using THIS environment, no new hardware)
 
+> **Updated 2026-10-04, by the human's decision:** the vendor-source routes (the Jeton request and
+> the Cudy escalation) are SET ASIDE - "we will finish reversing ourselves without Jeton's help".
+> The active path is the self-contained reversal: the phase-32 static lanes and the live
+> experiments they name. Items 1 and 7 below remain available in parallel but are no longer the
+> critical path.
+
 **1. THE JETON LEAD - same SoC, possibly same board, different brand.** A web search found the
 **Jeton Tech AX3000 Core** router is built on the **HiSilicon Hi5671**. If Jeton publishes a GPL
 tarball for it (many rebrands of the same HiSilicon reference design do), that tarball IS the
