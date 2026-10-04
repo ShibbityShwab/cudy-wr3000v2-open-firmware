@@ -1719,6 +1719,9 @@ static void omo_dr_post(void)
 static unsigned int omo_drparse_en;
 module_param_named(drparse, omo_drparse_en, uint, 0444);
 MODULE_PARM_DESC(drparse, "1 = parse the DR payload as an HCC frame when the device writes it (phase 40)");
+static unsigned int omo_drdump_en;
+module_param_named(drdump, omo_drdump_en, uint, 0444);
+MODULE_PARM_DESC(drdump, "1 = dump the DR node words + payload head at watch baseline - catches a boot-time deposit the change detector misses");
 
 static void omo_dr_watch(void)
 {
@@ -1748,6 +1751,21 @@ static void omo_dr_watch(void)
 	for (i = 0; i < OMO_ETE_SR_N; i++)
 		pr_info("omo-drv1:   SR ch%u baseline: wptr(+0x18)=0x%08x rptr(+0x1c)=0x%08x\n",
 			i, omo_rd(omo_ete, omo_sr_block[i] + ETE_SR_WPTR), srr_last[i]);
+
+	/* The watch detects CHANGES, but the device's boot-time deposit (if any) happened during the
+	 * mailbox poll, before this baseline - a change detector can miss it entirely.  Dump the
+	 * CURRENT node words and the payload's first bytes instead: if the device wrote at boot, the
+	 * frame is sitting in the buffer right now. */
+	if (omo_drdump_en) {
+		for (i = 0; i < OMO_ETE_DR_N; i++) {
+			u32 *n = omo_dr_va[i];
+			u8 *h = omo_dr_pay[i];
+
+			pr_info("omo-drv1: [drdump] ch%u node0 w0=0x%08x w1=0x%08x pay=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				i + 3, n[0], n[1], h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
+				h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
+		}
+	}
 
 	while (elapsed < omo_polldur) {
 		for (i = 0; i < OMO_ETE_SR_N; i++) {
