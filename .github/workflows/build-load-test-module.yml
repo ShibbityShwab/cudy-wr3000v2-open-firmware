@@ -185,6 +185,11 @@ jobs:
           cd lab/hccaccept
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build iatuview module
+        run: |
+          cd lab/iatuview
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -243,6 +248,7 @@ jobs:
           strings lab/eteprobe/eteprobe.ko | grep -m1 vermagic
           strings lab/eteinit/eteinit.ko | grep -m1 vermagic
           strings lab/fwload/fwload.ko | grep -m1 vermagic
+          strings lab/iatuview/iatuview.ko | grep -m1 vermagic
           strings lab/fwboot/fwboot.ko | grep -m1 vermagic
           strings lab/fwhs/fwhs.ko | grep -m1 vermagic
           strings lab/msgd/msgd.ko | grep -m1 vermagic
@@ -414,6 +420,11 @@ jobs:
         with:
           name: hccaccept-ko
           path: lab/hccaccept/hccaccept.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iatuview-ko
+          path: lab/iatuview/iatuview.ko
 
       - uses: actions/upload-artifact@v4
         with:
