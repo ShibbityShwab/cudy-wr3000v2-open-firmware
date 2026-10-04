@@ -60,3 +60,19 @@ even names the product string **"ChenTang"** - a second vendor line on the same 
    is a first look at the SDK's own evolution.
 3. Diff the module symbol tables (Jeton wifi/plat `.ko` vs ours) - the newer build may expose
    symbol renames that settle open naming questions from phases 15-25.
+
+## Symbol-table diff (the SDK lineage, third way)
+
+```
+wifi.ko: jeton 5867 syms / cudy 5356 syms / common 5349
+         jeton-only: alg_cfg_args_analysis_* (spectral-scan config), ...
+         cudy-only : 7 wal_config/hmac_config getters
+plat.ko: jeton 1051 syms / cudy 856 syms / common 856   <- CUDY IS A STRICT SUBSET
+         jeton-only: bal_port_activate/deactivate/halt, firmware_info,
+                     g_al_nvram_init_params, exception_get_*_res
+```
+
+Jeton's build is a **superset of the same source tree at a newer revision** - the two devices are
+provably siblings of one SDK line, and the Jeton extras (spectral-scan analysis args, BAL port
+control) are the direction the SDK is evolving.
+
