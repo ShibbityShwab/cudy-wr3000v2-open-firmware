@@ -662,6 +662,40 @@ static void omo_poll_mailbox(void)
 		pr_info("omo-drv1:   NOTE no mailbox transition in this window - the firmware produced nothing\n");
 }
 
+/* PHASE 35 - is the ack a pulse the 25ms poll keeps missing?
+ * The firmware provably consumes the announce word out[0] at t=25ms after the release.  If
+ * that consumption is the dispatcher running, its ack write to out[5] should appear at the
+ * same moment - and every poll so far sampled at 25ms, which would miss a us-scale pulse.
+ * Sample out[5] and out[0] at 100us for 500ms right after the release. */
+static unsigned int omo_ackfast_en;
+module_param_named(ackfast, omo_ackfast_en, uint, 0444);
+MODULE_PARM_DESC(ackfast,
+	"1 = fast-sample out[5]/out[0] at 100us for 500ms right after the release");
+
+static void omo_ackfast(void)
+{
+	u32 a0 = omo_rd(omo_msg, OMO_MSG5);
+	u32 o0 = omo_rd(omo_msg, OMO_MSG0);
+	int j;
+	int ch = 0;
+
+	pr_info("omo-drv1: [ackfast] start: out5=0x%08x out0=0x%08x\n", a0, o0);
+	for (j = 0; j < 5000; j++) {
+		u32 a = omo_rd(omo_msg, OMO_MSG5);
+		u32 o = omo_rd(omo_msg, OMO_MSG0);
+
+		udelay(100);
+		if (a != a0 || o != o0) {
+			pr_info("omo-drv1: [ackfast] CHANGE iter %u (t~%u.%02ums): out5 %08x -> %08x, out0 %08x -> %08x\n",
+				j, j / 10, (j % 10) * 10, a0, a, o0, o);
+			a0 = a;
+			o0 = o;
+			ch++;
+		}
+	}
+	pr_info("omo-drv1: [ackfast] done: out5=0x%08x out0=0x%08x changes=%d\n", a0, o0, ch);
+}
+
 /*
  * Load FIRMWARE.bin into the chip.  THIS MUST HAPPEN BEFORE THE RELEASE.
  *
@@ -1896,40 +1930,6 @@ static int omo_hw_attach(void)
 		}
 		omo_write_fw();
 	}
-
-	/* PHASE 35 - is the ack a pulse the 25ms poll keeps missing?
- * The firmware provably consumes the announce word out[0] at t=25ms after the release.  If
- * that consumption is the dispatcher running, its ack write to out[5] should appear at the
- * same moment - and every poll so far sampled at 25ms, which would miss a us-scale pulse.
- * Sample out[5] and out[0] at 100us for 500ms right after the release. */
-static unsigned int omo_ackfast_en;
-module_param_named(ackfast, omo_ackfast_en, uint, 0444);
-MODULE_PARM_DESC(ackfast,
-	"1 = fast-sample out[5]/out[0] at 100us for 500ms right after the release");
-
-static void omo_ackfast(void)
-{
-	u32 a0 = omo_rd(omo_msg, OMO_MSG5);
-	u32 o0 = omo_rd(omo_msg, OMO_MSG0);
-	int j;
-	int ch = 0;
-
-	pr_info("omo-drv1: [ackfast] start: out5=0x%08x out0=0x%08x\n", a0, o0);
-	for (j = 0; j < 5000; j++) {
-		u32 a = omo_rd(omo_msg, OMO_MSG5);
-		u32 o = omo_rd(omo_msg, OMO_MSG0);
-
-		udelay(100);
-		if (a != a0 || o != o0) {
-			pr_info("omo-drv1: [ackfast] CHANGE iter %u (t~%u.%02ums): out5 %08x -> %08x, out0 %08x -> %08x\n",
-				j, j / 10, (j % 10) * 10, a0, a, o0, o);
-			a0 = a;
-			o0 = o;
-			ch++;
-		}
-	}
-	pr_info("omo-drv1: [ackfast] done: out5=0x%08x out0=0x%08x changes=%d\n", a0, o0, ch);
-}
 
 /* Release the Wi-Fi CPU - the act phase 19 found, gated on its own param - then OBSERVE
 	 * what the released firmware emits instead of assuming it said nothing. */
