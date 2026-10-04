@@ -1173,7 +1173,6 @@ static void omo_fwctx_read(void)
 }
 
 /*
-/*
  * PHASE 31 - RING THE H2D DOORBELL POST-RELEASE AND SAMPLE THE INTERRUPT BLOCK + ACK.
  *
  * The gate narrowed (phase 30) to one link: the host's doorbell write (out[2] |= 1 to CA
@@ -1231,6 +1230,7 @@ static void omo_intrsamp(void)
 		cur[0], cur[1], cur[2], cur[3], ack_pre);
 }
 
+/*
  * Host -> device: post SR nodes and commit the producer index.
  *
  * Phase 24i proved this is the trigger for the firmware's id-6 word
