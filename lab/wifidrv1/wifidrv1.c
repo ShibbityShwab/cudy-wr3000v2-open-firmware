@@ -512,6 +512,19 @@ static unsigned int omo_dren_en;
 module_param_named(dren, omo_dren_en, uint, 0444);
 MODULE_PARM_DESC(dren, "1 = set the DR per-channel enable (+0x00 bit 0) pre-release (phase 44)");
 
+/* PHASE 48 - the last host-side moves from the verified phase-47 verdict: (a) the twin PCIe1
+ * ctrl-rb mask (0x40039ae8, the one family enable the port never wrote) in minimal RMW form
+ * (0x3ff -> 0x3f6), and (b) re-asserting the EP0 mask 0x400392e8 = 0x20 at message-service time
+ * (right before the first doorbell), the sibling's arm placement. */
+static unsigned int omo_twinmask_en;
+module_param_named(twinmask, omo_twinmask_en, uint, 0444);
+MODULE_PARM_DESC(twinmask,
+	"1 = write the twin PCIe1 ctrl-rb mask 0x40039ae8 = old & ~0x9 pre-release (phase 48)");
+static unsigned int omo_maskreassert_en;
+module_param_named(maskreassert, omo_maskreassert_en, uint, 0444);
+MODULE_PARM_DESC(maskreassert,
+	"1 = re-assert the EP0 mask 0x400392e8 = 0x20 right before the first doorbell (phase 48)");
+
 static void omo_ete_program(void)
 {
 	unsigned int i;
@@ -566,6 +579,11 @@ static void omo_ete_program(void)
 	pr_info("omo-drv1: ---- write path done: writes that failed readback = %u ----\n",
 		omo_wr_fail);
 	pr_info("omo-drv1: NOTE no descriptor submitted, no doorbell rung (bounded by design)\n");
+
+	if (omo_twinmask_en) {
+		v = omo_rd(omo_msg, 0xae8);
+		omo_wr(omo_msg, 0xae8, v & ~0x9U, "twin ctrl-rb mask 0x40039ae8");
+	}
 }
 
 /*
@@ -1334,6 +1352,12 @@ static void omo_intrsamp(void)
 	ack_pre = omo_rd(omo_msg, OMO_MSG5);
 	raw_pre = omo_rd(omo_msg, 0x2e4);
 	st_pre = omo_rd(omo_msg, 0x2ec);
+	if (omo_maskreassert_en) {
+		u32 m = omo_rd(omo_msg, 0x2e8);
+
+		omo_wr(omo_msg, 0x2e8, 0x20U, "EP0 mask re-assert 0x400392e8");
+		pr_info("omo-drv1: [intrsamp] mask re-assert: 0x2e8 0x%08x -> 0x20\n", m);
+	}
 	pr_info("omo-drv1: [intrsamp] pre: ack(out5)=%08x raw(0x2e4)=%08x masked(0x2ec)=%08x\n",
 		ack_pre, raw_pre, st_pre);
 
