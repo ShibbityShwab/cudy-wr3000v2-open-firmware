@@ -20,7 +20,15 @@ Follow-up lane: `gic-view.md` (post-plan, 2026-10-04) flips the sensor on task 1
 patched firmware reads the GIC itself and deposits the words in host-readable cells. Evidence
 `build/register-dumps/exp/20261004-174357/`; BRANCH-G: the device CAN read the GIC (C0 = `0x00000001`, a
 pre-write ISENABLER word 2 read at CA `0x40161108`), and nothing was pending or active at either sampled
-instant (C1/C3/C4 = 0, C2/C5 = `0x3FF`). The lanes below are unchanged by it.
+instant (C1/C3/C4 = 0, C2/C5 = `0x3FF`). That lane's own next branch, the post-SEND sampling iteration it
+dispatched, then RAN: the addendum in `gic-view.md` ("the post-SEND iteration LANDED", variant `gicsend`)
+samples the GIC at the firmware's own `out[1]` post. **BRANCH-S:** at that post the mechanism is alive (id
+`0x45` pending in the same register) while source `0x4c`'s line does not show pending. The send-site cells
+sit above an upper-address aliasing boundary, so they are quoted from the ACP alias only, and the
+disagreement mechanism is unexplained and accepted as a device fact. Evidence
+`build/register-dumps/exp/20261004-180736/` (round 2, sentinel-proven; round 1
+`build/register-dumps/exp/20261004-180114/` kept with its `aliasing-note.txt`). The lanes below are unchanged
+by either.
 
 The chain phase 47 named, with where each link now stands:
 
