@@ -36,7 +36,17 @@ AFTER the store. **BRANCH-P:** the conditional store EXECUTED and TOOK (E0 = `0x
 bit 12 SET, with C0 = `0x1` the same word PRE-write in the same pass), so the silent-condition root cause is
 exonerated; downstream, the line is not pending at the enable instant (E1 = `0x0`) nor at the firmware's own
 post (BRANCH-S). The break sits downstream of the enable register. Evidence
-`build/register-dumps/exp/20261004-190222/`.
+`build/register-dumps/exp/20261004-190222/`. A third addendum to `gic-view.md` ("the
+delivery-configuration test", variant `gicmask`) then swept the delivery SETTINGS for the `0x4c` line at the
+firmware's own post. **BRANCH-M (label BRANCH-M4):** the three candidate roots are all EXCLUDED - the CPU
+interface is enabled (F0 GICC_CTLR = `0x1`), the line is targeted at CPU 0 (F2 ITARGETSR = `0x01010101`), and
+the glue H2D mask bit is open (F5 `0x400392E8` = `0x20`), with PMR/priority/trigger all passing - so the
+delivery configuration is fully ARMED and the missing piece is the EVENT ASSERTION (ctrl-rb -> GIC),
+not a configuration block. F6/F7 (glue raw/post-mask = `0x0`) is the expected reading of a boot with no ring
+rung, so it cannot separate "never asserts" from "asserts but is dropped". The addendum also records two
+brief corrections (the `0x3d8` mask CONSTANT vs the real mask register CA `0x400392E8`; the firmware literals
+behind the F addresses) and two inherited conventions flagged as residual risks (the F5 mask polarity, and
+GICC_CTLR bit 0 read without an IGROUPR group check). Evidence `build/register-dumps/exp/20261004-194824/`.
 
 The chain phase 47 named, with where each link now stands:
 

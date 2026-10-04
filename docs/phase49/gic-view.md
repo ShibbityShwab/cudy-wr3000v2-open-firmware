@@ -357,3 +357,129 @@ With the enable proven taken and the line silent downstream, the remaining quest
 distributor's delivery/target/priority words and the CPU-interface mask for the `0x4c` line, takeover
 instrumented (safe), or run a vendor-stack boot with the same instrument (needs the lead's authorization, and
 carries the task-12 abort risk).
+
+---
+
+# ADDENDUM 3 (2026-10-04): the delivery-configuration test (gicmask) - BRANCH-M
+
+The WHERE probe the previous section named, run as a configuration sweep rather than another pending-word
+sample. Evidence `build/register-dumps/exp/20261004-194824/` (`interp.txt`, `capture-cmd.txt`,
+`acceptance.txt`, `artifact-check.txt`, `health.txt`, `cleanup.txt`, `pstore-check.txt`, `run-gicmask.log`,
+`gm_check.py`, `KNOBSET.txt`). One `exp.sh` cycle, `EXP RESULT: PASS`, 150 s, healthy recovery. Everything
+in the gicview, gicsend and gicpost records above stands unchanged.
+
+## The question
+
+After register (L1), enable (BRANCH-1) and the landed conditional store (BRANCH-P), the delivery path could
+still be dead at a SETTING: the CPU interface disabled, no target CPU, or the glue masking the line. Any one
+of those three is a root cause upstream of the wire, and each is a register the firmware itself writes. This
+run samples the DELIVERY CONFIGURATION for source `0x4c` device-side, at the firmware's own post, and reads
+all three candidate roots directly instead of inferring them.
+
+## The instrument
+
+`tools/patch_fw_scratch.py` variant **`gicmask`** (+608/-13, uncommitted at record time) keeps the proven
+gate and post pads and makes the send-site pad additionally read and store ten words F0..F9. Blob
+`build/tmp/fw-patched/gicmask.bin`, md5 `2d354bd297270d6a64056bf2fc663dc2`, size 928920 (= stock size;
+`size_unchanged: true`). The F cells are the fourth-word group of two all-zero 4 KB pages above the
+`0x104000` boundary (`all_zero_pages[2]`/`[3]`, manifest `gic_map.cells_note`), so they are quoted from the
+ACP alias; `F8`/`F9` carry the sentinel `0x50AA7E49` and prove the pads ran. Manifest
+`build/tmp/fw-patched/gicmask.bin.manifest.json`.
+
+## The values (F cells above the `0x104000` boundary - ALIAS view; E/S/C agree at both views)
+
+| cell | register | value | meaning |
+| --- | --- | --- | --- |
+| F0 | `0x40160100` GICC_CTLR | `0x00000001` | bit 0 EnableGrp0 SET, the CPU interface is enabled |
+| F1 | `0x40160104` GICC_PMR | `0x000000F0` | passes `0x4c`'s priority `0x50` |
+| F2 | `0x4016184C` ITARGETSR | `0x01010101` | byte 0 = `0x01`, targeted at CPU 0 |
+| F3 | `0x4016144C` IPRIORITYR | `0xF050F050` | id `0x4c` -> `0x50` |
+| F4 | `0x40161C10` ICFGR word | `0x55555555` | all fields `0b01` = EDGE |
+| F5 | `0x400392E8` glue HOST_INTR_MASK | `0x00000020` | bit 0 = 0, the H2D line is UNMASKED/open |
+| F6 | `0x400392E4` glue raw status | `0x0` | no event latched at the sampled post |
+| F7 | `0x400392EC` glue post-mask | `0x0` | no event latched at the sampled post |
+
+Sentinels: F8 = F9 = `0x50AA7E49` (both the page sentinel and the handshake), so the send pad ran after the
+id-`0x4c` enable pass. E/S/C re-verify the earlier runs at both views (E0 = `0x1001`, E3 = `0x80000093`,
+S1 = `0x1000`, S2 = `0x1`, C0 = `0x1`, C2 = C5 = `0x3FF`); no value anywhere returned `0xffffffff`; the
+window sanity word `0xE59FF018` decoded.
+
+## Matched branch: BRANCH-M
+
+**All three candidate roots are EXCLUDED. The delivery configuration is fully ARMED; the missing piece is
+the EVENT ASSERTION (ctrl-rb -> GIC).**
+
+F0 = `0x1` rules out "the GICC is disabled". F2 byte 0 = `0x01` rules out "no target CPU". F5 bit 0 = `0`
+rules out "the glue masks the line". F1/F3/F4 show the priority and trigger settings pass. So the line's path
+is configured to deliver end to end, and what is missing sits on the assertion side, not downstream of it:
+the mailbox-side generation of the H2D interrupt. F6/F7 clear is the EXPECTED reading of a boot with no ring
+rung (the frozen params never write `0x400392d4`), so it cannot separate "never asserts" from "asserts but is
+dropped" - the classification label BRANCH-M4 says exactly that, and the run's own decode prints the same
+caveat.
+
+## Two brief corrections (verified by disasm)
+
+1. **`mask0x3d8` is a MASK CONSTANT, not an address.** The brief's "glue mask `0x3d8`" is the value the
+   vendor's own `pcie_intr_handle` ANDs with the glue status word: `ldr r4,[r3,#0x2ec]` at `hi5622v100_plat.ko`
+   file `0x833c`, then `ands r4,r4,#0x3d8` at `0x8344` (bits {3,4,6,7,8,9}). There is no register at ctrl-rb
+   +`0x3d8`. The real mask register is CA `0x400392E8` (+0x2E8, 1 = masked per the sibling header and the
+   vendor's own live value), which is F5.
+2. **The F addresses rest on firmware literals.** GICC base `0x40160100` = firmware literal file `0x8309c`
+   (also `0x83010` = `0x4016010c` IAR, `0x83020` = `0x40160110` EoI); GICD ITARGETSR base `0x40161800` = file
+   `0x7174`; IPRIORITYR base `0x40161400` = file `0x7170`; ICFGR base `0x40161c00` = file `0x715c`; the glue
+   triplet `0x40039000` = file `0x86fb4`. Note the verifier's nit: `0x83098` = `0x40160104` IS a literal too,
+   so F1 is literal-anchored, not layout-derived; the instrument's prose contradicted its own table on this
+   (bound 4 called F1 layout-derived), and the conservative reading is taken with no value changed.
+
+## Own findings
+
+1. **The BAR0 view LAGS the alias above the boundary.** F9's BAR0-direct view reads `0xE2E2E2E2` (the gate
+   pad's EARLIER request to F9) while its alias reads `0x50AA7E49` (the send pad's LATER sentinel). So the
+   boundary phenomenon has content: the BAR0 view is stale relative to the alias, not a different location.
+   One sample, stated as an observation, and it changes nothing here (the F cells are quoted from the alias).
+2. **F1 = `0xF0`, while the image's only GICC_PMR writer stores `0xff`** (`movs r2,#0xff` at file `0x8304e`,
+   `str r2,[r3]` at `0x83054`, r3 = the literal at `0x83098` = `0x40160104`). Both `0xF0` and `0xff` pass
+   `0x4c`'s priority `0x50`, so the discrepancy is immaterial to the branch and reported as its own finding.
+3. **No `0xffffffff` anywhere**, so the read path is live at the sampled addresses.
+
+## The bounds (declared, not hidden)
+
+1. **Instant samples.** F0..F7 are one-shot reads a few instructions after the reproduced `out[1]` post; F6/F7
+   are wire-status samples and share the "not pending at the sampled instant" bound.
+2. **No doorbell was rung**, so F6/F7 clear is the expected reading and says nothing about a ring.
+3. **The F cells are quoted from the ACP alias** (above `0x104000`); their BAR0-direct zeros are not
+   admissible evidence.
+4. **The F deposits are provable because of F8/F9**, not by their values alone.
+5. **The id is the id-`0x4c` pass** by the handshake's construction plus E0's landed word-2 bit 12.
+
+## Verification
+
+An independent verifier CONFIRMED (high): the values were reproduced (44 view-reads parsed), the acceptance
+re-run 67/67 `ALL_OK`, `gm_check` 55/55 `ALL_OK` (an independent re-derivation from the BYTES ON DISK: the
+four sites re-disassemble to the manifest's pad offsets, the pads' `movw`/`movt` constants match the F read
+map, the two sentinels and the two `0xe2e2e2e2` requests are located by value, every changed byte lies inside
+the four sites or four pads). Six variants regenerate (probe `2a9a9f1d...`, scratch `b08699bd...`, gicview
+`b6b7faa9...`, gicsend `326619be...`, gicpost `a4e69d74...` unchanged; gicmask deterministic). Capstone
+confirmed the mask constant (`ands r4,r4,#0x3d8`) and the firmware literals. The live device is clean. Two
+inherited conventions are flagged as RESIDUAL RISKS, not re-derived here: (i) the F5 mask POLARITY (1 =
+masked) is inherited from a sibling header plus the vendor's live value, so an inversion would resurrect the
+"the glue masks it" root; (ii) GICC_CTLR bit 0 is read as "enabled" without checking the interrupt's GROUP
+(no IGROUPR check, so a Group-1 SPI with only EnableGrp0 set would keep a variant alive). Both are cheap to
+test. One acceptance weakness is noted: the ladder prints F1..F4 without pinning them (only F0/F5/F6 gate the
+branch), though the values are independently pinned in this record. The "no ring -> expected clear" reading is
+correct and conceals nothing; the doorbell/ring test is the named next branch.
+
+## Health and cleanup
+
+`health.txt` (`build/register-dumps/exp/20261004-194824/health.txt`): `WIFI=1 PLAT=1 WIPHY=2 IFACE=6
+CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. Post-cycle cleanup (`cleanup.txt`): the staged `.omo-pat`
+removed (`rm_rc=0`; 928920 bytes present), firmware dir back to its 3 stock entries, stock FIRMWARE.bin md5
+re-verified `0e530b976d5a20e87358671f1a577695`, `.omo-off` count 0, no loader/staged-module/watchdog
+leftovers, vendor stack loaded with NO `wifidrv1`, 2 wiphys / 6 interfaces, calibration `[SUCC]` on both bands.
+`pstore-check.txt`: still exactly the 3 pre-existing records and the 3 known wifi exception dumps, no new
+crash.
+
+## Next branch
+
+A ring-instrumented run (doorbell plus event-assertion sampling at the ring instant) AND the two convention
+checks: F5 polarity via a known-masked line, and IGROUPR for id `0x4c` plus EnableGrp1. All takeover-safe.
