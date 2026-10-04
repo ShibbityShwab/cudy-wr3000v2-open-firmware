@@ -72,3 +72,27 @@ The decisive follow-up (building): dump the handler table **itself** at the fixe
 (ids 1/3/5/6). If the takeover's table at the same address is also populated, the registration
 happened and the gate is elsewhere; if it is empty, the registration is missing in a takeover.
 
+
+## REFUTED, the same day - the registration DID happen in the takeover
+
+The follow-up run dumped the handler table ITSELF at firmware `0x118d68` in a takeover
+(evidence `build/register-dumps/exp/20261004-043028/`) and it is **populated identically to the
+vendor boot**:
+
+```
+id 1: fn=0x00040511  arg=0x00000000
+id 3: fn=0x000c5145  arg=0x0010c0f4    <- the ctx
+id 5: fn=0x000c19dd  arg=0x00000000
+id 6: fn=0x0008cce5  arg=0x00000000
+```
+
+**So the "registration missing" mechanism in the title is WRONG and is retracted.** The firmware's
+message service is fully initialized in a takeover: the ctx is built (six CAs present), and the
+handlers ARE registered. The `[pcie_msg+0xbc]` slot difference observed earlier is a live-service
+artifact (the running vendor system rewrites that slot), not the gate.
+
+**What stands, corrected:** the firmware is fully armed for H2D in a takeover, and the dispatcher
+(file `0x818ac`) is still **never called** - its ack signature is never observed. The gate is the
+**caller**: the firmware's own message interrupt, which never fires in a takeover. That is now the
+single question, and it is narrower than it has ever been.
+
