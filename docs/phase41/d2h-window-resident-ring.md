@@ -1,5 +1,12 @@
 # The D2H data path is window-resident: the vendor's DR ring is carved from the message window (phase 41, 2026-10-04)
 
+> **RETRACTED by phase 42 (2026-10-04):** the "window-carved ring" conclusion below does not hold.
+> `docs/phase42/THE-RING-MAP.md`: the vendor's rings are host DRAM with 8-byte nodes
+> (phase-25's live read: SR ch0 base=0x848F6000, nodes `buf 0x82483840 | len=72`), the port already
+> posts that exact format, and the window blocks are the device's staged D2H payload records, not
+> ring descriptors.  The phase-40 zero-buffer result is the known mailbox gate, not a layout error.
+> The block-level observations below remain valid as observations.
+
 Read-only `devmem` of the healthy device's message window (BAR0 `0x3f1000..0x3f1fff`, 1024 words),
 2026-10-04 ~19:55 local.
 
