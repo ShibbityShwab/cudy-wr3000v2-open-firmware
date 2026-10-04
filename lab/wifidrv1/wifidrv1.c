@@ -1149,20 +1149,21 @@ static void omo_fwctx_read(void)
 			(long)(i * 4) - 0x10, v[i], v[i + 1], v[i + 2], v[i + 3]);
 
 	/* In NORMAL operation the firmware's H2D handler table lives at firmware 0x118d68
-	 * (4 handlers registered: ids 1/3/5/6, incl. {fn=0xc5145, arg=ctx} at id 3).  The
-	 * takeover's [pcie_msg+0xbc] link slot is 0.  The decisive question: is the TABLE
-	 * ITSELF populated in a takeover?  Dump both candidate tables at fixed addresses. */
+	 * (4 handlers registered: ids 1/3/5/6, incl. {fn=0xc5145, arg=ctx} at id 3) and its
+	 * INTERRUPT handler table at 0x17d398 (fn for id N at +N*4+0x98): id 0x2d = 0x62f9,
+	 * id 0x2e = 0x624d, with flag bytes 0x05/0x01 in the 0x105f8c table.  Dump both
+	 * tables and the flags in the takeover to see whether the interrupt service is armed. */
 	{
-		static const u32 tabs[] = { 0x118d50, 0x118d68 };
+		static const u32 tabs[] = { 0x118d68, 0x17d398, 0x105f80 };
 		int t, i;
 
-		for (t = 0; t < 2; t++) {
-			u32 w[24];
+		for (t = 0; t < 3; t++) {
+			u32 w[28];
 
-			for (i = 0; i < 24; i++)
+			for (i = 0; i < 28; i++)
 				w[i] = readl(omo_acp + tabs[t] + i * 4);
 			pr_info("omo-drv1: [fwctx] table @firmware 0x%x:\n", tabs[t]);
-			for (i = 0; i < 24; i += 4)
+			for (i = 0; i < 28; i += 4)
 				pr_info("omo-drv1: [fwctx]   +0x%02x: %08x %08x %08x %08x\n",
 					i * 4, w[i], w[i + 1], w[i + 2], w[i + 3]);
 		}
