@@ -1714,6 +1714,12 @@ static void omo_dr_post(void)
  * Watch the DR rings for a device deposit: the device index (+0x3c) advancing, or a node word
  * changing under us.  Read-only on the device.  A deposit is the first evidence of data flow.
  */
+/* PHASE 40 - parse the device's D2H payload as an HCC frame (the verified 12-byte header):
+ * group = h[0] & 0xf, id = u16 @ +6, total len = u16 @ +4, SR tag = u16 @ +0xa. */
+static unsigned int omo_drparse_en;
+module_param_named(drparse, omo_drparse_en, uint, 0444);
+MODULE_PARM_DESC(drparse, "1 = parse the DR payload as an HCC frame when the device writes it (phase 40)");
+
 static void omo_dr_watch(void)
 {
 	unsigned int i;
@@ -1773,6 +1779,13 @@ static void omo_dr_watch(void)
 
 				pr_info("omo-drv1: DR ch%u node[0] CHANGED word0=0x%08x word1=0x%08x (the device wrote our buffer)\n",
 					i + 3, n[0], n[1]);
+				if (omo_drparse_en && omo_dr_pay[i]) {
+					u8 *h = omo_dr_pay[i];
+
+					pr_info("omo-drv1: [drparse] ch%u HCC group=%u id=%u len=%u tag=%02x%02x hdr=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+						i + 3, h[0] & 0xf, h[6] | (h[7] << 8), h[4] | (h[5] << 8),
+						h[0xa], h[0xb], h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10], h[11]);
+				}
 				memcpy(snap[i], omo_dr_va[i], sizeof(snap[i]));
 				events++;
 			}
