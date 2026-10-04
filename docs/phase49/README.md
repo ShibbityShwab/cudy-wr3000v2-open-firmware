@@ -16,6 +16,12 @@ beside this one in `opensource/docs/phase49/`.
 
 ## What the forward lane measured (one line per chain link)
 
+Follow-up lane: `gic-view.md` (post-plan, 2026-10-04) flips the sensor on task 13's host-invisible GIC - the
+patched firmware reads the GIC itself and deposits the words in host-readable cells. Evidence
+`build/register-dumps/exp/20261004-174357/`; BRANCH-G: the device CAN read the GIC (C0 = `0x00000001`, a
+pre-write ISENABLER word 2 read at CA `0x40161108`), and nothing was pending or active at either sampled
+instant (C1/C3/C4 = 0, C2/C5 = `0x3FF`). The lanes below are unchanged by it.
+
 The chain phase 47 named, with where each link now stands:
 
 ```
