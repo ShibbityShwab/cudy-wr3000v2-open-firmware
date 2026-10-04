@@ -1173,6 +1173,64 @@ static void omo_fwctx_read(void)
 }
 
 /*
+/*
+ * PHASE 31 - RING THE H2D DOORBELL POST-RELEASE AND SAMPLE THE INTERRUPT BLOCK + ACK.
+ *
+ * The gate narrowed (phase 30) to one link: the host's doorbell write (out[2] |= 1 to CA
+ * 0x400392d4) never reaches the firmware as an interrupt, so its dispatcher never runs
+ * (the ack out[5] CA 0x400392f0 never reads 1).  The firmware's interrupt enable bitmap
+ * is at CA 0x40161100 (region 3 -> BAR0 0x3b8000 + 0x161100 = 0x519100).  This samples
+ * the block and the ack at high rate across a POST-RELEASE doorbell ring, to see whether
+ * the doorbell latches as a pending interrupt at all.  out[5] is only ever READ.
+ */
+static unsigned int omo_intrsamp_en;
+module_param_named(intrsamp, omo_intrsamp_en, uint, 0444);
+MODULE_PARM_DESC(intrsamp,
+	"1 = ring the doorbell post-release and sample the interrupt block + ack at high rate (phase 31)");
+
+#define OMO_IRQ_BLOCK	0x161100UL	/* region-3 offset of CA 0x40161100 */
+
+static void omo_intrsamp(void)
+{
+	u32 pre[8], cur[8], ack_pre, ack_cur;
+	u32 db;
+	unsigned int i, j;
+
+	for (i = 0; i < 8; i++)
+		pre[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
+	ack_pre = omo_rd(omo_msg, OMO_MSG5);
+	pr_info("omo-drv1: [intrsamp] pre: irqblock=%08x %08x %08x %08x %08x %08x %08x %08x ack(out5)=%08x\n",
+		pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6], pre[7], ack_pre);
+
+	db = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+	iowrite32(db | 1U, omo_msg + OMO_MSG_DOORBELL);
+	pr_info("omo-drv1: [intrsamp] doorbell out[2] <= 0x%08x readback=0x%08x\n",
+		db | 1U, omo_rd(omo_msg, OMO_MSG_DOORBELL));
+
+	for (j = 0; j < 2000; j++) {
+		int any = 0;
+
+		udelay(100);
+		for (i = 0; i < 8; i++) {
+			cur[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
+			if (cur[i] != pre[i])
+				any = 1;
+		}
+		ack_cur = omo_rd(omo_msg, OMO_MSG5);
+		if (ack_cur != ack_pre)
+			any = 1;
+		if (any) {
+			pr_info("omo-drv1: [intrsamp] CHANGE iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
+				j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
+			for (i = 0; i < 8; i++)
+				pre[i] = cur[i];
+			ack_pre = ack_cur;
+		}
+	}
+	pr_info("omo-drv1: [intrsamp] done: final irqblock=%08x %08x %08x %08x ack=%08x\n",
+		cur[0], cur[1], cur[2], cur[3], ack_pre);
+}
+
  * Host -> device: post SR nodes and commit the producer index.
  *
  * Phase 24i proved this is the trigger for the firmware's id-6 word
@@ -1721,6 +1779,9 @@ static int omo_hw_attach(void)
 
 	if (omo_fwctx_en)
 		omo_fwctx_read();
+
+	if (omo_intrsamp_en)
+		omo_intrsamp();
 
 	/* The recovered host half, against the corrected registers: ack, clear, re-arm, dispatch. */
 	if (omo_msgsvc)
