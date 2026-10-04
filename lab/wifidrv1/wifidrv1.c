@@ -1191,6 +1191,7 @@ MODULE_PARM_DESC(intrsamp,
 
 static struct pci_dev *omo_ep1_dev;
 static void __iomem *omo_ep1_msg;
+static void __iomem *omo_ep1_iatu;
 
 static void omo_intrsamp(void)
 {
@@ -1304,6 +1305,18 @@ static int omo_ep1_init(void)
 	pci_read_config_dword(omo_ep1_dev, PCI_BASE_ADDRESS_0, (u32 *)&lo);
 	lo &= PCI_BASE_ADDRESS_MEM_MASK;
 	pr_info("omo-drv1: [ep1db] sibling BAR0 = 0x%llx\n", (unsigned long long)lo);
+
+	/* The first run proved the bare claim is not enough: EP1's readback was 0xffffffff
+	 * (PCIe no-decode) because the takeover only programs EP0's inbound viewports.  Program
+	 * the SAME six inbound regions on the sibling, shifted by its BAR0, exactly as the vendor
+	 * does for both functions. */
+	omo_ep1_iatu = pci_iomap(omo_ep1_dev, OMO_IATU_BAR, 0);
+	if (!omo_ep1_iatu) {
+		pr_err("omo-drv1: [ep1db] iomap sibling iATU failed\n");
+		return -ENOMEM;
+	}
+	omo_program_inbound(omo_ep1_iatu, lo, "ep1-inbound");
+
 	omo_ep1_msg = ioremap(lo + OMO_MSG_WIN, OMO_MSG_BYTES);
 	if (!omo_ep1_msg) {
 		pr_err("omo-drv1: [ep1db] ioremap sibling window failed\n");
@@ -1910,6 +1923,10 @@ static void omo_hw_detach(void)
 	if (omo_ep1_msg) {
 		iounmap(omo_ep1_msg);
 		omo_ep1_msg = NULL;
+	}
+	if (omo_ep1_iatu) {
+		pci_iounmap(omo_ep1_dev, omo_ep1_iatu);
+		omo_ep1_iatu = NULL;
 	}
 	if (omo_ep1_dev) {
 		pci_release_mem_regions(omo_ep1_dev);
