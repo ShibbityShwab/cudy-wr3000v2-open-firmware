@@ -57,3 +57,18 @@ This comparison is **read-only**: the takeover read came from the fwctx=1 module
 stable), and the normal-operation read came from `devmem` through BAR0 with the vendor stack
 running. The mapping was verified two ways before the comparison was trusted (the ctx global
 matching the record's `0x10c0f4` prediction, and the CAs appearing in order).
+
+## CORRECTION, added the same day - the live slot changes between samples
+
+A second normal-operation read of the SAME slot showed `0x0010c1b4` where the first showed
+`0x00118d68` - the vendor's running system rewrites `[pcie_msg+0xbc]` as it services messages. So
+the single-sample comparison above is evidence, not proof: the slot is **non-zero and live** in a
+vendor boot, and **stable at 0** across two takeover boots. The blob's own initial data holds
+`0x118d68` at that slot, so 0 in the takeover is a divergence from both the initial data and the
+live system.
+
+The decisive follow-up (building): dump the handler table **itself** at the fixed addresses
+`0x118d50`/`0x118d68` in a takeover. Normal operation has 4 handlers registered at `0x118d68`
+(ids 1/3/5/6). If the takeover's table at the same address is also populated, the registration
+happened and the gate is elsewhere; if it is empty, the registration is missing in a takeover.
+
