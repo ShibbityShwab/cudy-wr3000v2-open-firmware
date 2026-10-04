@@ -1322,14 +1322,20 @@ static void __iomem *omo_ep1_iatu;
 static void omo_intrsamp(void)
 {
 	u32 pre[8], cur[8], ack_pre, ack_cur;
+	/* PHASE 46 - the ctrl-rb observables: the verified sibling map (phase 45) names 0x2e4 as the
+	 * RAW interrupt status and 0x2ec as the masked status - reading them across a doorbell shows
+	 * whether the H2D interrupt even FIRES at the ctrl-rb level. */
+	u32 raw_pre, raw_cur, st_pre, st_cur;
 	u32 db;
 	unsigned int i, j;
 
 	for (i = 0; i < 8; i++)
 		pre[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
 	ack_pre = omo_rd(omo_msg, OMO_MSG5);
-	pr_info("omo-drv1: [intrsamp] pre: irqblock=%08x %08x %08x %08x %08x %08x %08x %08x ack(out5)=%08x\n",
-		pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6], pre[7], ack_pre);
+	raw_pre = omo_rd(omo_msg, 0x2e4);
+	st_pre = omo_rd(omo_msg, 0x2ec);
+	pr_info("omo-drv1: [intrsamp] pre: ack(out5)=%08x raw(0x2e4)=%08x masked(0x2ec)=%08x\n",
+		ack_pre, raw_pre, st_pre);
 
 	/* the firmware's own re-arm constant for this doorbell is 8 (its dispatcher writes 8 to
 	 * 0x400392d4); the port has always rung 1.  Ring BOTH values and sample each. */
@@ -1353,20 +1359,24 @@ static void omo_intrsamp(void)
 						any = 1;
 				}
 				ack_cur = omo_rd(omo_msg, OMO_MSG5);
-				if (ack_cur != ack_pre)
+				raw_cur = omo_rd(omo_msg, 0x2e4);
+				st_cur = omo_rd(omo_msg, 0x2ec);
+				if (ack_cur != ack_pre || raw_cur != raw_pre || st_cur != st_pre)
 					any = 1;
 				if (any) {
-					pr_info("omo-drv1: [intrsamp] CHANGE val %u iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
-						vals[v], j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
+					pr_info("omo-drv1: [intrsamp] CHANGE val %u iter %u: ack %08x -> %08x, raw %08x -> %08x, masked %08x -> %08x\n",
+						vals[v], j, ack_pre, ack_cur, raw_pre, raw_cur, st_pre, st_cur);
 					for (i = 0; i < 8; i++)
 						pre[i] = cur[i];
 					ack_pre = ack_cur;
+					raw_pre = raw_cur;
+					st_pre = st_cur;
 				}
 			}
 		}
 	}
-	pr_info("omo-drv1: [intrsamp] done: final irqblock=%08x %08x %08x %08x ack=%08x\n",
-		cur[0], cur[1], cur[2], cur[3], ack_pre);
+	pr_info("omo-drv1: [intrsamp] done: ack=%08x raw(0x2e4)=%08x masked(0x2ec)=%08x\n",
+		ack_pre, raw_pre, st_pre);
 
 	/* PHASE 33 - the EP1 doorbell: phase 32 (verified) showed the vendor rings the H2D
 	 * doorbell through the SIBLING endpoint's window (chip->dev[0] = EP1 by phy_devid), while
@@ -1387,14 +1397,18 @@ static void omo_intrsamp(void)
 					any = 1;
 			}
 			ack_cur = omo_rd(omo_msg, OMO_MSG5);
-			if (ack_cur != ack_pre)
+			raw_cur = omo_rd(omo_msg, 0x2e4);
+			st_cur = omo_rd(omo_msg, 0x2ec);
+			if (ack_cur != ack_pre || raw_cur != raw_pre || st_cur != st_pre)
 				any = 1;
 			if (any) {
-				pr_info("omo-drv1: [intrsamp] CHANGE (EP1 ring) iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
-					j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
+				pr_info("omo-drv1: [intrsamp] CHANGE (EP1 ring) iter %u: ack %08x -> %08x, raw %08x -> %08x, masked %08x -> %08x\n",
+					j, ack_pre, ack_cur, raw_pre, raw_cur, st_pre, st_cur);
 				for (i = 0; i < 8; i++)
 					pre[i] = cur[i];
 				ack_pre = ack_cur;
+				raw_pre = raw_cur;
+				st_pre = st_cur;
 			}
 		}
 	}
