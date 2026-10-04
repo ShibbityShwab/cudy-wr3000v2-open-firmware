@@ -1189,6 +1189,9 @@ MODULE_PARM_DESC(intrsamp,
 
 #define OMO_IRQ_BLOCK	0x161100UL	/* region-3 offset of CA 0x40161100 */
 
+static struct pci_dev *omo_ep1_dev;
+static void __iomem *omo_ep1_msg;
+
 static void omo_intrsamp(void)
 {
 	u32 pre[8], cur[8], ack_pre, ack_cur;
@@ -1277,9 +1280,6 @@ static unsigned int omo_ep1db_en;
 module_param_named(ep1db, omo_ep1db_en, uint, 0444);
 MODULE_PARM_DESC(ep1db,
 	"1 = also claim 0001:00:00.0 and ring the H2D doorbell through its window (phase 33)");
-
-static struct pci_dev *omo_ep1_dev;
-static void __iomem *omo_ep1_msg;
 
 static int omo_ep1_init(void)
 {
