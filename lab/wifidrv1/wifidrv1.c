@@ -1237,6 +1237,79 @@ static void omo_intrsamp(void)
 	}
 	pr_info("omo-drv1: [intrsamp] done: final irqblock=%08x %08x %08x %08x ack=%08x\n",
 		cur[0], cur[1], cur[2], cur[3], ack_pre);
+
+	/* PHASE 33 - the EP1 doorbell: phase 32 (verified) showed the vendor rings the H2D
+	 * doorbell through the SIBLING endpoint's window (chip->dev[0] = EP1 by phy_devid), while
+	 * the port rings EP0.  Same device register CA 0x400392d4, different root complex. */
+	if (omo_ep1_msg) {
+		u32 d1 = omo_rd(omo_ep1_msg, OMO_MSG_DOORBELL);
+
+		iowrite32(d1 | 8U, omo_ep1_msg + OMO_MSG_DOORBELL);
+		pr_info("omo-drv1: [intrsamp] EP1 doorbell (sibling window) <= 0x%08x readback=0x%08x\n",
+			d1 | 8U, omo_rd(omo_ep1_msg, OMO_MSG_DOORBELL));
+		for (j = 0; j < 1000; j++) {
+			int any = 0;
+
+			udelay(100);
+			for (i = 0; i < 8; i++) {
+				cur[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
+				if (cur[i] != pre[i])
+					any = 1;
+			}
+			ack_cur = omo_rd(omo_msg, OMO_MSG5);
+			if (ack_cur != ack_pre)
+				any = 1;
+			if (any) {
+				pr_info("omo-drv1: [intrsamp] CHANGE (EP1 ring) iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
+					j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
+				for (i = 0; i < 8; i++)
+					pre[i] = cur[i];
+				ack_pre = ack_cur;
+			}
+		}
+	}
+}
+
+/* PHASE 33 - claim and map the SIBLING endpoint (0001:00:00.0, EP1) so its window can ring
+ * the H2D doorbell, exactly as the vendor's chip->dev[0] does.  Only the doorbell CA 0x400392d4
+ * is written through it; out[5] CA 0x400392f0 is never written. */
+static unsigned int omo_ep1db_en;
+module_param_named(ep1db, omo_ep1db_en, uint, 0444);
+MODULE_PARM_DESC(ep1db,
+	"1 = also claim 0001:00:00.0 and ring the H2D doorbell through its window (phase 33)");
+
+static struct pci_dev *omo_ep1_dev;
+static void __iomem *omo_ep1_msg;
+
+static int omo_ep1_init(void)
+{
+	resource_size_t lo;
+	int rc;
+
+	omo_ep1_dev = pci_get_domain_bus_and_slot(1, 0, PCI_DEVFN(0, 0));
+	if (!omo_ep1_dev) {
+		pr_err("omo-drv1: [ep1db] sibling 0001:00:00.0 not found\n");
+		return -ENODEV;
+	}
+	rc = pci_enable_device(omo_ep1_dev);
+	if (rc) {
+		pr_err("omo-drv1: [ep1db] pci_enable_device rc=%d\n", rc);
+		return rc;
+	}
+	rc = pci_request_mem_regions(omo_ep1_dev, "omo-ep1");
+	if (rc) {
+		pr_err("omo-drv1: [ep1db] request regions rc=%d\n", rc);
+		return rc;
+	}
+	pci_read_config_dword(omo_ep1_dev, PCI_BASE_ADDRESS_0, (u32 *)&lo);
+	lo &= PCI_BASE_ADDRESS_MEM_MASK;
+	pr_info("omo-drv1: [ep1db] sibling BAR0 = 0x%llx\n", (unsigned long long)lo);
+	omo_ep1_msg = ioremap(lo + OMO_MSG_WIN, OMO_MSG_BYTES);
+	if (!omo_ep1_msg) {
+		pr_err("omo-drv1: [ep1db] ioremap sibling window failed\n");
+		return -ENOMEM;
+	}
+	return 0;
 }
 
 /*
@@ -1789,6 +1862,12 @@ static int omo_hw_attach(void)
 	if (omo_fwctx_en)
 		omo_fwctx_read();
 
+	if (omo_ep1db_en) {
+		rc = omo_ep1_init();
+		if (rc)
+			pr_err("omo-drv1: [ep1db] init failed rc=%d - EP1 doorbell skipped\n", rc);
+	}
+
 	if (omo_intrsamp_en)
 		omo_intrsamp();
 
@@ -1828,6 +1907,14 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
+	if (omo_ep1_msg) {
+		iounmap(omo_ep1_msg);
+		omo_ep1_msg = NULL;
+	}
+	if (omo_ep1_dev) {
+		pci_release_mem_regions(omo_ep1_dev);
+		omo_ep1_dev = NULL;
+	}
 	if (omo_acp) {
 		iounmap(omo_acp);
 		omo_acp = NULL;
