@@ -237,3 +237,123 @@ loaded, 2 wiphys / 6 interfaces, calibration `[SUCC]` on both bands, no `.omo-of
 Follow the `0x4c` line's routing and mask inside the chip. Candidates: (a) compare against a VENDOR boot
 with the same sentinel-instrumented blob, does `0x4c` show pending when the vendor's own stack runs; (b)
 probe the two dynamic enable sites, or run an other-source id `0x45` probe; (c) the host-ring / id-6 hop.
+
+---
+
+# ADDENDUM 2 (2026-10-04): the conditional-enable test (gicpost) - BRANCH-P
+
+The conditional-enable test the two sections above earned the hard way. Evidence
+`build/register-dumps/exp/20261004-190222/` (`interp.txt`, `capture-cmd.txt`, `acceptance.txt`, `health.txt`,
+`cleanup.txt`, `pstore-check.txt`). One `exp.sh` cycle, `EXP RESULT: PASS`, 147 s, healthy recovery
+(`run-gicpost.log`). Everything in the gicview and gicsend records above stands unchanged.
+
+## The question
+
+The enable write is not a plain store. It is the CONDITIONAL `strlo.w r4,[r3,r2,lsl #2]` at file `0x8702c`,
+which executes iff LO holds: C = 0 and Z = 0. Every prior sample of this write (gicview C0, gicsend's
+BRANCH-1 cells) was taken PRE-write, so none of them shows the store landing. If the condition failed in a
+takeover boot, the enable would never happen at all, and that would be a root cause sitting upstream of the
+whole delivery question: a line that was never enabled cannot be delivered. This run settles it by reading
+back the enable register AFTER the store, no inference from the flag path required.
+
+## The instrument (gate pad plus a post-store trampoline)
+
+`tools/patch_fw_scratch.py` variant **`gicpost`** (uncommitted at record time) keeps the proven pads and makes
+two changes:
+
+- **the gate pad additionally deposits the APSR it captures.** The same `mrs` it already uses to test the
+  condition feeds cell E3, and on its id-`0x4c` path it also deposits a REQUEST `0xe2e2e2e2` into E2 as the
+  handshake's first half.
+- **a post-store trampoline at file `0x87036`** (pad file offset `0xc8558`). The firmware's own `bl
+  #0xbdf50` there is replaced by a trampoline whose pad holds NO `bl` and ends `b.w #0xbdf50` with `lr`
+  untouched (the push excludes `lr`), so control resumes at `0x8703a` exactly as the original did. The pad
+  matches and clears the `0xe2e2e2e2` request, re-arms the sentinel `0x50AA7E49` into E2, and reads CA
+  `0x40161108` (POST-write ISENABLER2 word 2) into E0 and CA `0x40161208` (ISPENDR2 word 2) into E1.
+
+Blob `build/tmp/fw-patched/gicpost.bin`, md5 `a4e69d74c172d856dd0e336a64482fbd`. The E cells sit at
+`0x103fb8`/`0x103fe8`/`0x103ff0`/`0x103ff8`, inside the sub-boundary band where BAR0 and the ACP alias agree
+(see the gicsend section's aliasing facts), and all four agree at both views. So this run quotes both views,
+and the upper-address disagreement plays no part in it.
+
+## The values
+
+| cell | BAR0 addr | alias addr | value (both views) | meaning |
+| --- | --- | --- | --- | --- |
+| E0 | `0x40103FB8` | `0x407BBBB8` | `0x00001001` | POST-write ISENABLER2 word 2: bit 12 SET (the conditional store TOOK); bit 0 = the prior id-`0x40` enable |
+| E1 | `0x40103FE8` | `0x407BBBE8` | `0x00000000` | ISPENDR2 word 2, post-store: the `0x4c` line not pending at that instant |
+| E2 | `0x40103FF0` | `0x407BBBF0` | `0x50AA7E49` | handshake fired: request matched and cleared, sentinel re-armed |
+| E3 | `0x40103FF8` | `0x407BBBF8` | `0x80000093` | APSR at the gate: N=1 Z=0 C=0 V=0 -> **LO HELD**; low bits are mode residue |
+
+Sanities: S1 / S1+4 / S2 / S2+4 re-verify BRANCH-1 (`0x00001000` / `0x40161108` / `0x00000001` /
+`0x50AA7E49`); C0 = `0x1` is the same register read PRE-write (bit 12 clear), so the 0 -> 1 on bit 12
+happened in this pass, not before it; C2 / C5 = `0x3FF` (HPPIR still decodes as a real register); the D3 / D5
+markers are present; `[sig]` 9/9.
+
+## Matched branch: BRANCH-P
+
+**The conditional store EXECUTED and TOOK. The silent-condition root cause is EXONERATED.**
+
+E0 = `0x00001001` is the PK51/whatever readback of a latched register, the strongest evidence class in this
+record: not a timing sample of a wire, but the register's own value read after the store. C0 = `0x1` (same
+word, same run, PRE-write) makes the transition explicit: bit 12 was clear at the gate's read, and set at the
+post-store read. E3 = `0x80000093` independently confirms the branch path: Z = 0, C = 0, so LO held and
+`strlo` was architecturally bound to execute.
+
+The chain now reads: **registered (L1) -> enabled-and-taken (E0) -> the line not pending at the enable instant
+(E1) nor at the firmware's own post (gicsend's D0 = D4 = `0x00000020`, bit 12 clear) while word 2 carries
+another line (id `0x45`) and HPPIR decodes `0x3FF`.** So the break is DOWNSTREAM of the enable register: the
+delivery or mask path for the `0x4c` line. E0 is a latched register readback, not a sampled wire.
+
+## The bounds (declared, not hidden)
+
+1. **E1 is an instant, not a window.** It says the `0x4c` line was not pending at that instant. It does NOT
+   say the line was never pending, and the word "never" is not claimed.
+2. **The gate cannot see an enable that never reached the bitmap path.** The gate fires on the word-2 bit-12
+   bitmap (`0x1000`); E0 proves the store landed, but a path that silently never reached this bitmap would
+   simply produce no gate and no E cells. The positive result is safe (E0 exists, so the pass happened); a
+   hypothetical absence would not have been decidable from the gate alone.
+3. **The bitmap read is an id-`0x4c` pass.** Gate bitmap `0x1000` admits id `0x4c` (word 2) and `0x2c` (word
+   1). A landed WORD-2 bit 12 is only produced by id `0x4c` (word 1's bit 12 is id `0x2c`), so E0's bit 12 is
+   an id-`0x4c` witness.
+4. **The register map rests on the GIC-400 relative layout.** Anchored by the firmware's own literals and
+   write targets, as in the gicview map correction above. IAR CA `0x4016010c` is never read in this variant;
+   CA `0x400392f0` is untouched; the RC misc window `0x10161000` is never read.
+5. **The BAR0 / alias disagreement above `0x104000` is unexplained** (the gicsend aliasing facts). This run
+   uses only sub-boundary cells where the two views agree, so it is not load-bearing here.
+6. **No doorbell was rung.** The host-ring / id-6 hop stays untested, so this run says nothing about whether a
+   ring would raise `0x4c` (the gicsend bound stands).
+7. **No pre-cycle calibration snapshot.** The lane writes no calibration data: it is a firmware-init lane, not
+   a calibration one, and the cleanup below shows the device healthy and calibration `[SUCC]` after.
+8. **The run proves the WRITE landed, not the downstream cause.** It removes one candidate (the conditional
+   never firing) and narrows the search; it does not find the delivery fault.
+
+## Verification
+
+An independent verifier CONFIRMED (high). The values were independently parsed from the raw capture; the
+acceptance re-run passed 47/47 on every check; all five variant md5s were regenerated identical and the
+`gicpost` blob is deterministic; capstone confirmed the site swap (stock `36f08bff` = `bl #0xbdf50` -> patched
+`41f08ff8` = `bl #0xc8558`, with the pad's tail `b.w #0xbdf50`, no `bl` inside the pad, and `lr` preserved to
+`0x8703a`); the handshake logic was proven by the sentinel (E2 = `0x50AA7E49` requires BOTH pads to run;
+`0xe2e2e2e2` or `0x0` are the distinguishable alternatives if either half fails); the live device is clean
+after the cycle. One nit was noted, and it did not affect this result: the acceptance script would label P1
+even if LO were false, so the label alone is not the proof; the proof is the value pair (E3 = `0x80000093`
+with a landed E0), and the nit was not triggered by the observed pair.
+
+## Health and cleanup
+
+The cycle ended healthy. `health.txt` (`build/register-dumps/exp/20261004-190222/health.txt`): `WIFI=1
+PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. Post-cycle cleanup
+(`cleanup.txt`): the staged `.omo-pat` removed (the stock `FIRMWARE.bin` is never written by this lane; the
+patched bytes were staged under the distinct `.omo-pat` name via `EXP_EXTRA_STAGE`), stock FIRMWARE.bin md5
+re-verified `0e530b976d5a20e87358671f1a577695`, vendor modules loaded, 2 wiphys / 6 interfaces, calibration
+`[SUCC]` on both bands, no `.omo-off` leftovers. `pstore-check.txt`: 3 pstore records (the same 3 known ones,
+no new record), and the 3 known wifi exception dumps (`excp_pktram_chip0.bin`, `excp_smac_dtcm_chip0.bin`,
+`excp_wram_chip0.bin`), no new crash. The host copy of the blob remains at
+`a4e69d74c172d856dd0e336a64482fbd` while the device carries none.
+
+## Next branch
+
+With the enable proven taken and the line silent downstream, the remaining question is WHERE. Probe the
+distributor's delivery/target/priority words and the CPU-interface mask for the `0x4c` line, takeover
+instrumented (safe), or run a vendor-stack boot with the same instrument (needs the lead's authorization, and
+carries the task-12 abort risk).

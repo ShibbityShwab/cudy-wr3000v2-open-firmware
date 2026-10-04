@@ -28,7 +28,15 @@ sit above an upper-address aliasing boundary, so they are quoted from the ACP al
 disagreement mechanism is unexplained and accepted as a device fact. Evidence
 `build/register-dumps/exp/20261004-180736/` (round 2, sentinel-proven; round 1
 `build/register-dumps/exp/20261004-180114/` kept with its `aliasing-note.txt`). The lanes below are unchanged
-by either.
+by either. A second addendum to `gic-view.md` ("the conditional-enable test", variant `gicpost`) then closed
+the remaining pre-write gap: the enable write is the conditional `strlo.w r4,[r3,r2,lsl #2]` at file `0x8702c`,
+and every earlier sample of it was PRE-write. The gate pad now deposits the APSR it tests (E3 =
+`0x80000093`, Z = 0 and C = 0 -> LO held) and a post-store trampoline at file `0x87036` reads the register
+AFTER the store. **BRANCH-P:** the conditional store EXECUTED and TOOK (E0 = `0x00001001`, ISENABLER2 word 2
+bit 12 SET, with C0 = `0x1` the same word PRE-write in the same pass), so the silent-condition root cause is
+exonerated; downstream, the line is not pending at the enable instant (E1 = `0x0`) nor at the firmware's own
+post (BRANCH-S). The break sits downstream of the enable register. Evidence
+`build/register-dumps/exp/20261004-190222/`.
 
 The chain phase 47 named, with where each link now stands:
 
