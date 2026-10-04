@@ -125,3 +125,19 @@ takes through the two root complexes.
 That is now a question about ONE link - the doorbell->interrupt delivery - rather than about
 anything the host sends.
 
+
+## The doorbell->interrupt link, and the enable bitmap (same day)
+
+The firmware's interrupt enable fn (0x86ff4) writes bit `id%32` into the device register at
+**CA `0x40161100 + (id/32)*4`** (for the message ids 0x2d/0x2e: word 1, bits 13/14 =
+`0x6000`). The block is readable through EP0's IO region (BAR0 `0x3b8000` + `0x161100` =
+`0x519100`; the mapping was validated by the release register reading `0x5A5A` in the same
+session). **In normal operation the whole block reads zero** - so the bitmap is either transient
+(set around each interrupt, cleared after servicing) or write-only from the host's side. It is not
+a static enable the host can compare.
+
+That leaves the gate as stated: the doorbell write (post- or pre-release - both have been run)
+never produces the firmware's dispatch, whose signature (ack `0x400392f0` = 1) is never observed.
+The next measurement is a **high-rate sample of the interrupt block and the ack across the
+doorbell write in a takeover**, to see whether the doorbell even latches as a pending interrupt.
+
