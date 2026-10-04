@@ -1148,23 +1148,23 @@ static void omo_fwctx_read(void)
 		pr_info("omo-drv1: [fwctx]   %+4ld: %08x %08x %08x %08x\n",
 			(long)(i * 4) - 0x10, v[i], v[i + 1], v[i + 2], v[i + 3]);
 
-	/* The dispatcher's handler table: A.2 reads [ctx, #0x20] for it, and the record says the
-	 * global holds obj+0x34, so obj = g - 0x34.  First run measured [obj+0x20] = 0x00118d50.
-	 * Dump the 10 entries (registration helper stores {fn, arg}, index <= 9). */
+	/* In NORMAL operation the firmware's H2D handler table lives at firmware 0x118d68
+	 * (4 handlers registered: ids 1/3/5/6, incl. {fn=0xc5145, arg=ctx} at id 3).  The
+	 * takeover's [pcie_msg+0xbc] link slot is 0.  The decisive question: is the TABLE
+	 * ITSELF populated in a takeover?  Dump both candidate tables at fixed addresses. */
 	{
-		u32 obj = g - 0x34;
-		u32 tbl = readl(omo_acp + obj + 0x20);
+		static const u32 tabs[] = { 0x118d50, 0x118d68 };
+		int t, i;
 
-		pr_info("omo-drv1: [fwctx] obj = 0x%08x, handler table @[obj+0x20] = 0x%08x\n",
-			obj, tbl);
-		if (tbl >= 0x40000 && tbl < OMO_ACP_BYTES) {
-			for (i = 0; i < 10; i++) {
-				u32 fn = readl(omo_acp + tbl + i * 8);
-				u32 arg = readl(omo_acp + tbl + i * 8 + 4);
+		for (t = 0; t < 2; t++) {
+			u32 w[24];
 
-				pr_info("omo-drv1: [fwctx]   handler[%d] fn=0x%08x arg=0x%08x\n",
-					i, fn, arg);
-			}
+			for (i = 0; i < 24; i++)
+				w[i] = readl(omo_acp + tabs[t] + i * 4);
+			pr_info("omo-drv1: [fwctx] table @firmware 0x%x:\n", tabs[t]);
+			for (i = 0; i < 24; i += 4)
+				pr_info("omo-drv1: [fwctx]   +0x%02x: %08x %08x %08x %08x\n",
+					i * 4, w[i], w[i + 1], w[i + 2], w[i + 3]);
 		}
 	}
 }
