@@ -42,8 +42,12 @@ one more normal-op capture round before the port replicates it.
 
 ## The geometry capture (2026-10-04 ~19:58, read-only)
 
-Two full-window snapshots 4.2 s apart: **0 of 1024 words changed** - the ring content is the
-device's last DMA batch, frozen until the next transfer.  1004/1024 words nonzero.
+Two full-window snapshots 4.2 s apart: **0 of 1024 words changed** in that window - but the
+phase-42 capture 5 minutes later shows the marker words DID change between captures (the 19:55
+values 0x33016000/0x29016000/0x53016000/0x1D016000/0x79016000 became
+0x07016000/0x4B016000/0xEF016000/0xBF016000/0x79016000 by 20:00), so the ring is **alive but
+slower than 4 seconds** - my earlier "frozen batch" reading was a sampling-window error, not a
+property of the ring.  1004/1024 words nonzero.
 
 Counter-headed blocks (word0 = `0xXX016000`, the low byte counting):
 
