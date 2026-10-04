@@ -119,6 +119,18 @@ fires). Order: last - it is the only path that reaches past the host-invisible h
 
 ## 3. The observable that decides
 
+> **CORRECTION (2026-10-04): the ctrl-rb ack is not a deciding observable.** CA `0x400392f0` is the
+> ctrl-rb `HOST_INTR_CLR` register, write-to-clear: the sibling map gives it as the bit-0 clear of
+> the 12-source host-intr group, and the H2D dispatcher named in section 1 writes 1 to clear it
+> (`THE-GATE-MAP.md` section 1, `0x818b2 movs r7,#1` / `0x818b8 str r7,[r2]`, phase 32). A W1C
+> register reads 0 before AND after any dispatcher run, so "the ack never flips" decides nothing,
+> and any readback-based "byte-identical" claim resting on it proves decode/storage only, never
+> device effect. Keep the never-write-`0x400392f0` rule: a snapshot showing it latched is expected,
+> not evidence. The valid observables are the raw status CA `0x400392e4` and masked status CA
+> `0x400392ec` (phase 46 measured: the doorbell sets bit 0 of each), and the device-side signatures
+> (pending id CA `0x4016010c`) as the real delivery witness. The table below already stands on
+> 0x40161108 and 0x4016010c, and needs no change; only the ack line of section 1 is struck.
+
 One measurement separates every alternative: **read CA `0x40161108` bit 12 and CA `0x4016010c` across
 one doorbell ring** (device-side instrument, action 3).
 

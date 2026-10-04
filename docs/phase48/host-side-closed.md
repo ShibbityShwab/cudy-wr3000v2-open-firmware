@@ -2,6 +2,24 @@
 
 Evidence `build/register-dumps/exp/20261004-151051/`, params include twinmask=1 maskreassert=1.
 
+> **CORRECTION (2026-10-04) - SUPERSEDED observable: CA `0x400392f0` is write-to-clear**
+>
+> The headline chain item 5 and this report's `ack: 0 throughout` line cite an observable that
+> cannot carry the claim. CA `0x400392f0` is the ctrl-rb `HOST_INTR_CLR` register: its sibling map
+> shows it is the bit-0 clear of the same 12-source host-intr group, and the firmware's own H2D
+> dispatcher writes 1 to it to end the interrupt (`THE-GATE-MAP.md` section 1: `0x818b2 movs r7,#1`
+> / `0x818b8 str r7,[r2]`, phase 32). Write-to-clear means the register reads 0 before AND after
+> any dispatcher run, so "the ack never flips" is vacuous: it holds whether the leaf ran or not.
+> Every readback-based "byte-identical" or "the move landed correctly" claim in this file is a
+> decode/storage result only, and proves nothing about device effect.
+>
+> The valid observable set instead: raw status CA `0x400392e4` and masked status CA `0x400392ec`
+> (both measured in phase 46, `exp/20261004-144441`, doorbell sets bit 0 of each), plus the
+> device-side signatures, chiefly the pending id at CA `0x4016010c`, as the real delivery witness.
+>
+> The never-write-`0x400392f0` rule is unchanged and stands. Nothing below is deleted; the original
+> text is kept as the record of what was claimed before the correction.
+
 ## The measurement
 
 ```
