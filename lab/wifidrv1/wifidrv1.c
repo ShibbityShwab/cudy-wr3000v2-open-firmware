@@ -1201,29 +1201,38 @@ static void omo_intrsamp(void)
 	pr_info("omo-drv1: [intrsamp] pre: irqblock=%08x %08x %08x %08x %08x %08x %08x %08x ack(out5)=%08x\n",
 		pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6], pre[7], ack_pre);
 
-	db = omo_rd(omo_msg, OMO_MSG_DOORBELL);
-	iowrite32(db | 1U, omo_msg + OMO_MSG_DOORBELL);
-	pr_info("omo-drv1: [intrsamp] doorbell out[2] <= 0x%08x readback=0x%08x\n",
-		db | 1U, omo_rd(omo_msg, OMO_MSG_DOORBELL));
+	/* the firmware's own re-arm constant for this doorbell is 8 (its dispatcher writes 8 to
+	 * 0x400392d4); the port has always rung 1.  Ring BOTH values and sample each. */
+	{
+		static const u32 vals[2] = { 1U, 8U };
+		int v;
 
-	for (j = 0; j < 2000; j++) {
-		int any = 0;
+		for (v = 0; v < 2; v++) {
+			db = omo_rd(omo_msg, OMO_MSG_DOORBELL);
+			iowrite32(db | vals[v], omo_msg + OMO_MSG_DOORBELL);
+			pr_info("omo-drv1: [intrsamp] doorbell out[2] <= 0x%08x (bit %u) readback=0x%08x\n",
+				db | vals[v], v == 0 ? 0 : 3, omo_rd(omo_msg, OMO_MSG_DOORBELL));
 
-		udelay(100);
-		for (i = 0; i < 8; i++) {
-			cur[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
-			if (cur[i] != pre[i])
-				any = 1;
-		}
-		ack_cur = omo_rd(omo_msg, OMO_MSG5);
-		if (ack_cur != ack_pre)
-			any = 1;
-		if (any) {
-			pr_info("omo-drv1: [intrsamp] CHANGE iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
-				j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
-			for (i = 0; i < 8; i++)
-				pre[i] = cur[i];
-			ack_pre = ack_cur;
+			for (j = 0; j < 1000; j++) {
+				int any = 0;
+
+				udelay(100);
+				for (i = 0; i < 8; i++) {
+					cur[i] = omo_rd(omo_rel, OMO_IRQ_BLOCK + i * 4);
+					if (cur[i] != pre[i])
+						any = 1;
+				}
+				ack_cur = omo_rd(omo_msg, OMO_MSG5);
+				if (ack_cur != ack_pre)
+					any = 1;
+				if (any) {
+					pr_info("omo-drv1: [intrsamp] CHANGE val %u iter %u: irqblock=%08x %08x %08x %08x ack %08x -> %08x\n",
+						vals[v], j, cur[0], cur[1], cur[2], cur[3], ack_pre, ack_cur);
+					for (i = 0; i < 8; i++)
+						pre[i] = cur[i];
+					ack_pre = ack_cur;
+				}
+			}
 		}
 	}
 	pr_info("omo-drv1: [intrsamp] done: final irqblock=%08x %08x %08x %08x ack=%08x\n",
