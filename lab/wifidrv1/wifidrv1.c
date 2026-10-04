@@ -609,6 +609,49 @@ static unsigned int omo_polldur = 8000;
 module_param_named(polldur, omo_polldur, uint, 0444);
 MODULE_PARM_DESC(polldur, "post-release mailbox poll duration in ms (default 8000; phase 19 saw the first word at ~1.85 s)");
 
+/* PHASE 38 - the D2H service routine, from the verified map (phase37 sections 1.2/3.1): when
+ * out[1] is nonzero, ack 0x40101438 = 1, read+clear out[1] 0x40039014, re-arm 0x40101414 = 1,
+ * then dispatch the lowest set bit among the registered ids {1,3,6,7} - none of which owes a
+ * device reply.  The forbidden CA 0x400392f0 is not touched (that is the DEVICE's ack). */
+static unsigned int omo_d2hsvc_en;
+module_param_named(d2hsvc, omo_d2hsvc_en, uint, 0444);
+MODULE_PARM_DESC(d2hsvc, "1 = service out[1] as the vendor's pcie_msg_handle does (phase 38)");
+
+#define OMO_D2H_ACK	0x101438UL	/* CA 0x40101438 within the region-3 window */
+#define OMO_D2H_REARM	0x101414UL	/* CA 0x40101414 */
+
+static void omo_d2h_service(u32 pending)
+{
+	u32 id = 0;
+	const char *what;
+
+	while (pending && !(pending & 1)) {
+		pending >>= 1;
+		id++;
+	}
+	iowrite32(1U, omo_rel + OMO_D2H_ACK);
+	iowrite32(0, omo_msg + OMO_MSG1);
+	iowrite32(1U, omo_rel + OMO_D2H_REARM);
+	pr_info("omo-drv1: [d2hsvc] ack=1 clear re-arm=1 for id %u\n", id);
+
+	switch (id) {
+	case 1:
+		what = "empty stub (device-ready is the HCC group-4 id 1) - no reply";
+		break;
+	case 3:
+		what = "ETE transfer done - drain DR channels 0..4 - no reply";
+		break;
+	case 6:
+	case 7:
+		what = "trigger ETE sending - wake the SR/TX pump - no reply";
+		break;
+	default:
+		what = "UNREGISTERED - the vendor's 0x1739c path drops it";
+		break;
+	}
+	pr_info("omo-drv1: [d2hsvc] id %u: %s\n", id, what);
+}
+
 static void omo_poll_mailbox(void)
 {
 	unsigned long elapsed = 0;
@@ -634,6 +677,9 @@ static void omo_poll_mailbox(void)
 		n5 = omo_rd(omo_msg, OMO_MSG5);
 		if (n0 == p0 && n1 == p1 && n5 == p5)
 			continue;
+
+		if (omo_d2hsvc_en && n1 && n1 != p1)
+			omo_d2h_service(n1 & ~p1);
 
 		pr_info("omo-drv1:   t=%lums out[0] 0x%08x -> 0x%08x, out[1] 0x%08x -> 0x%08x, out[5] 0x%08x -> 0x%08x\n",
 			elapsed, p0, n0, p1, n1, p5, n5);
@@ -1486,6 +1532,45 @@ static unsigned int omo_sr_announce = 1;
 module_param_named(sr_announce, omo_sr_announce, uint, 0444);
 MODULE_PARM_DESC(sr_announce, "1 = announce id 3 (out[0] bitmap + out[2] doorbell) inside omo_sr_post, as shuangta_ete_sr_dscr_fill does; 0 = only the later omo_h2d_send");
 
+/* PHASE 38 - the HCC frame builder, from the verified protocol map (phase37 section 2.2).
+ * The SR node's buffer is an HCC message: a 12-byte header + payload.  Header fields:
+ * +0x00 group/type (low nibble), +0x01 alloc-state (low nibble, 1 = allocated) + resource-group
+ * index (high nibble), +0x02/+0x03 field A/B, +0x04 u16 total length (payload + 12), +0x06 u16
+ * message id, +0x08 field C, +0x09 retry, +0x0a the SR-layer tag 0x5a5a, payload at +0x0c. */
+static unsigned int omo_hccpost_en;
+module_param_named(hccpost, omo_hccpost_en, uint, 0444);
+MODULE_PARM_DESC(hccpost, "1 = build the SR node body as a real HCC frame (phase 38)");
+static unsigned int omo_hcc_group;
+module_param_named(hccgroup, omo_hcc_group, uint, 0444);
+MODULE_PARM_DESC(hccgroup, "HCC group/type nibble for the posted frame (default 0)");
+static unsigned int omo_hcc_id;
+module_param_named(hccid, omo_hcc_id, uint, 0444);
+MODULE_PARM_DESC(hccid, "HCC message id for the posted frame (default 0)");
+static unsigned int omo_hcc_len = 16;
+module_param_named(hcclen, omo_hcc_len, uint, 0444);
+MODULE_PARM_DESC(hcclen, "HCC payload length for the posted frame (default 16)");
+static unsigned int omo_hcc_res;
+module_param_named(hccres, omo_hcc_res, uint, 0444);
+MODULE_PARM_DESC(hccres,
+	"HCC resource-group index (high nibble of header byte 1; default 0 - the announce-body lane names the per-message value)");
+
+static void omo_hcc_build(void *buf, unsigned int group, unsigned int id,
+			  unsigned int payload_len)
+{
+	u8 *h = buf;
+	unsigned int total = payload_len + 12;
+
+	memset(buf, 0, total);
+	h[0x00] = (u8)(group & 0xf);
+	h[0x01] = (u8)(0x1 | ((omo_hcc_res & 0xf) << 4));
+	h[0x04] = (u8)(total & 0xff);
+	h[0x05] = (u8)((total >> 8) & 0xff);
+	h[0x06] = (u8)(id & 0xff);
+	h[0x07] = (u8)((id >> 8) & 0xff);
+	h[0x0a] = 0x5a;
+	h[0x0b] = 0x5a;
+}
+
 static void omo_sr_post(void)
 {
 	unsigned int i, j;
@@ -1498,7 +1583,13 @@ static void omo_sr_post(void)
 	omo_program_outbound();
 
 	memset(omo_sr_pay[0], 0, OMO_ETE_DEPTH * OMO_SR_PAYLOAD);
-	memcpy(omo_sr_pay[0], omo_sr_msg, sizeof(omo_sr_msg));
+	if (omo_hccpost_en) {
+		omo_hcc_build(omo_sr_pay[0], omo_hcc_group, omo_hcc_id, omo_hcc_len);
+		pr_info("omo-drv1: HCC frame built: group=%u id=%u len=%u (12-byte header + payload)\n",
+			omo_hcc_group, omo_hcc_id, omo_hcc_len);
+	} else {
+		memcpy(omo_sr_pay[0], omo_sr_msg, sizeof(omo_sr_msg));
+	}
 	{
 		u32 *w = (u32 *)((u8 *)omo_sr_pay[0] + OMO_SR_PAYLOAD);
 
