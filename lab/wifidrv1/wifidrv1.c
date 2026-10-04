@@ -1147,6 +1147,26 @@ static void omo_fwctx_read(void)
 	for (i = 0; i < 80; i += 4)
 		pr_info("omo-drv1: [fwctx]   %+4ld: %08x %08x %08x %08x\n",
 			(long)(i * 4) - 0x10, v[i], v[i + 1], v[i + 2], v[i + 3]);
+
+	/* The dispatcher's handler table: A.2 reads [ctx, #0x20] for it, and the record says the
+	 * global holds obj+0x34, so obj = g - 0x34.  First run measured [obj+0x20] = 0x00118d50.
+	 * Dump the 10 entries (registration helper stores {fn, arg}, index <= 9). */
+	{
+		u32 obj = g - 0x34;
+		u32 tbl = readl(omo_acp + obj + 0x20);
+
+		pr_info("omo-drv1: [fwctx] obj = 0x%08x, handler table @[obj+0x20] = 0x%08x\n",
+			obj, tbl);
+		if (tbl >= 0x40000 && tbl < OMO_ACP_BYTES) {
+			for (i = 0; i < 10; i++) {
+				u32 fn = readl(omo_acp + tbl + i * 8);
+				u32 arg = readl(omo_acp + tbl + i * 8 + 4);
+
+				pr_info("omo-drv1: [fwctx]   handler[%d] fn=0x%08x arg=0x%08x\n",
+					i, fn, arg);
+			}
+		}
+	}
 }
 
 /*
