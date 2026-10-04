@@ -504,6 +504,14 @@ static void omo_rings_free(void)
  * rung - phase 22 showed submitting without the device-side accept gate does
  * nothing, so this stops at ring ownership.
  */
+/* PHASE 44 - the DR per-channel enable: the verified phase-43 map's top candidate (H1).
+ * The vendor's live blocks read +0x00 = 1 on all seven channels and the port writes the
+ * SR-side enable but never the DR-side one; set DR +0x00 bit 0 pre-release and re-read the
+ * blocks post-release to separate H1 from H2. */
+static unsigned int omo_dren_en;
+module_param_named(dren, omo_dren_en, uint, 0444);
+MODULE_PARM_DESC(dren, "1 = set the DR per-channel enable (+0x00 bit 0) pre-release (phase 44)");
+
 static void omo_ete_program(void)
 {
 	unsigned int i;
@@ -542,6 +550,12 @@ static void omo_ete_program(void)
 		omo_wr(omo_ete, b + ETE_DR_DEPTH, OMO_ETE_DEPTH - 1, t);
 		scnprintf(t, sizeof(t), "DR ch%u wptr", i + 3);
 		omo_wr(omo_ete, b + ETE_DR_WPTR, 0, t);
+		if (omo_dren_en) {
+			u32 en = omo_rd(omo_ete, b + 0x00);
+
+			scnprintf(t, sizeof(t), "DR ch%u +0x00 enable", i + 3);
+			omo_wr(omo_ete, b + 0x00, en | 1U, t);
+		}
 	}
 
 	/* binding write #2: pcie_ete_chn_res on the glue/message block, after the rings */
@@ -1764,6 +1778,18 @@ static void omo_dr_watch(void)
 			pr_info("omo-drv1: [drdump] ch%u node0 w0=0x%08x w1=0x%08x pay=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
 				i + 3, n[0], n[1], h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
 				h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
+		}
+	}
+	/* PHASE 44: post-release re-read of the DR channel blocks - separates H1 (the enable was
+	 * missing) from H2 (the firmware overwrote the program group): if +0x00 and +0x48 now read
+	 * 1 and +0x30 still holds the port's devva, the enable landed and H2 is open. */
+	if (omo_dren_en) {
+		for (i = 0; i < OMO_ETE_DR_N; i++) {
+			unsigned long b = omo_dr_block[i];
+
+			pr_info("omo-drv1: [dren] DR ch%u post-release: +0x00=0x%08x +0x48=0x%08x +0x30=0x%08x +0x34=0x%08x\n",
+				i + 3, omo_rd(omo_ete, b + 0x00), omo_rd(omo_ete, b + 0x48),
+				omo_rd(omo_ete, b + ETE_DR_BASEREG), omo_rd(omo_ete, b + ETE_DR_DEPTH));
 		}
 	}
 
