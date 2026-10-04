@@ -40,3 +40,28 @@ word1 = length|flags), instead of system RAM - then the device's D2H frames beco
 port for the first time.  The exact ring geometry (node count, base, the counter semantics) needs
 one more normal-op capture round before the port replicates it.
 
+## The geometry capture (2026-10-04 ~19:58, read-only)
+
+Two full-window snapshots 4.2 s apart: **0 of 1024 words changed** - the ring content is the
+device's last DMA batch, frozen until the next transfer.  1004/1024 words nonzero.
+
+Counter-headed blocks (word0 = `0xXX016000`, the low byte counting):
+
+```
+0x3f1004 = 0x33016000    0x3f1204 = 0x29016000    0x3f1804 = 0x53016000
+0x3f1a04 = 0x1d016000    0x3f1e04 = 0x79016000
+```
+
+Stride 0x200, at window offsets 0x000, 0x200, 0x800, 0xa00, 0xe00; the blocks at 0x400-0x7ff and
+0xc00-0xfff hold payload (packets + UPnP text) without a counter head.  The counter value varies
+per block and is NOT monotonic across the visible order - the ring's active-head geometry needs the
+ETE register set (BAR0 0x3f2xxx) and the descriptor word semantics before the port replicates it.
+
+## Next phase (the ring-geometry map)
+
+Static + read-only lanes: (1) which ETE registers point at the window-carved ring and what their
+values are in normal op; (2) the node word semantics (word0 = 0x33016000 - is that a device
+address, a counter+flags pair, or both) from the vendor's descriptor-fill code; (3) the ring's node
+count and the host/device index registers; (4) whether the port can post window-carved DR nodes at
+the same geometry.  That map is the precondition for the first window-resident DR experiment.
+
