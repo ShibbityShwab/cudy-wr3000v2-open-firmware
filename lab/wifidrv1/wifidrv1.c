@@ -286,6 +286,20 @@ static void omo_iatu_wr(void __iomem *iatu, unsigned long off, u32 val,
  * vendor's oal_pcie_set_inbound (ctrl2=0, ctrl2=enable, base_lo/hi, limit,
  * target_lo/hi) as reproduced in lab/hccaccept.
  */
+/* PHASE 34 - a spare inbound viewport onto the device's interrupt block.
+ * Phase 32 (verified) located the firmware's interrupt pending (CA 0x4016010C) and enable
+ * (0x40161100) registers but proved no existing host window reaches the 0x4016xxxx range.
+ * The endpoint's iATU has 16 inbound viewports and 6 are used; viewport 6 can target device
+ * 0x40160000 at an unused BAR0 offset, making the whole block host-visible. */
+static unsigned int omo_irqwin_en;
+module_param_named(irqwin, omo_irqwin_en, uint, 0444);
+MODULE_PARM_DESC(irqwin,
+	"1 = add a spare inbound viewport onto device CA 0x40160000 (phase 34)");
+
+#define OMO_IRQWIN_OFF	0x8d8000UL	/* unused BAR0 offset above the six named regions */
+#define OMO_IRQWIN_SIZE	0x002000UL	/* covers 0x40160000..0x40161fff */
+#define OMO_IRQWIN_TGT	0x40160000UL
+
 static int omo_program_inbound(void __iomem *iatu, u64 bar0_base, const char *who)
 {
 	unsigned int i;
@@ -307,6 +321,23 @@ static int omo_program_inbound(void __iomem *iatu, u64 bar0_base, const char *wh
 		omo_iatu_wr(iatu, c + 12, (u32)limit, who, "limit");
 		omo_iatu_wr(iatu, c + 16, (u32)r->target, who, "target_lo");
 		omo_iatu_wr(iatu, c + 20, (u32)(r->target >> 32), who, "target_hi");
+	}
+
+	if (omo_irqwin_en) {
+		u64 base = bar0_base + OMO_IRQWIN_OFF;
+		u64 limit = base + OMO_IRQWIN_SIZE - 1;
+		unsigned long c = OMO_IATU_CTRL2 + OMO_IATU_STRIDE * 6;
+
+		pr_info("omo-drv1: %s region 6 IRQ         host 0x%llx..0x%llx -> dev 0x%llx\n",
+			who, (unsigned long long)base, (unsigned long long)limit,
+			(unsigned long long)OMO_IRQWIN_TGT);
+		omo_iatu_wr(iatu, c, 0, who, "ctrl2=0");
+		omo_iatu_wr(iatu, c, 0x80000000U, who, "ctrl2=ena");
+		omo_iatu_wr(iatu, c + 4, (u32)base, who, "base_lo");
+		omo_iatu_wr(iatu, c + 8, (u32)(base >> 32), who, "base_hi");
+		omo_iatu_wr(iatu, c + 12, (u32)limit, who, "limit");
+		omo_iatu_wr(iatu, c + 16, (u32)OMO_IRQWIN_TGT, who, "target_lo");
+		omo_iatu_wr(iatu, c + 20, (u32)((u64)OMO_IRQWIN_TGT >> 32), who, "target_hi");
 	}
 	return i;
 }
@@ -1125,6 +1156,7 @@ MODULE_PARM_DESC(fwctx,
 #define OMO_FWCTX_GLOBAL 0x172130UL	/* firmware runtime addr of the ctx pointer global */
 
 static void __iomem *omo_acp;
+static void __iomem *omo_irqwin;
 
 static void omo_fwctx_read(void)
 {
@@ -1271,6 +1303,35 @@ static void omo_intrsamp(void)
 				ack_pre = ack_cur;
 			}
 		}
+	}
+
+	/* The spare viewport (phase 34) makes the interrupt block host-visible: sample the
+	 * pending register (CA 0x4016010C = win+0x10c) and the enables (0x40161100/0x40161108)
+	 * across a doorbell ring, looking for the latch phase 31 could not see. */
+	if (omo_irqwin) {
+		u32 p0 = readl(omo_irqwin + 0x10c);
+		u32 e00 = readl(omo_irqwin + 0x1100);
+		u32 e10 = readl(omo_irqwin + 0x1108);
+
+		pr_info("omo-drv1: [intrsamp] irqwin pre: pending=0x%08x en0=0x%08x en1=0x%08x\n",
+			p0, e00, e10);
+		iowrite32(8U, omo_msg + OMO_MSG_DOORBELL);
+		for (j = 0; j < 1000; j++) {
+			u32 p = readl(omo_irqwin + 0x10c);
+			u32 e0 = readl(omo_irqwin + 0x1100);
+			u32 e1 = readl(omo_irqwin + 0x1108);
+
+			udelay(100);
+			if (p != p0 || e0 != e00 || e1 != e10) {
+				pr_info("omo-drv1: [intrsamp] irqwin CHANGE iter %u: pending %08x -> %08x en0 %08x -> %08x en1 %08x -> %08x\n",
+					j, p0, p, e00, e0, e10, e1);
+				p0 = p;
+				e00 = e0;
+				e10 = e1;
+			}
+		}
+		pr_info("omo-drv1: [intrsamp] irqwin done: pending=0x%08x en0=0x%08x en1=0x%08x\n",
+			p0, e00, e10);
 	}
 }
 
@@ -1825,6 +1886,14 @@ static int omo_hw_attach(void)
 				goto err_iatu;
 			}
 		}
+		if (omo_irqwin_en) {
+			omo_irqwin = ioremap(omo_bar0_base + OMO_IRQWIN_OFF, OMO_IRQWIN_SIZE);
+			if (!omo_irqwin) {
+				pr_err("omo-drv1: ioremap IRQ window FAILED\n");
+				rc = -ENOMEM;
+				goto err_iatu;
+			}
+		}
 		omo_write_fw();
 	}
 
@@ -1935,6 +2004,10 @@ static void omo_hw_detach(void)
 	if (omo_acp) {
 		iounmap(omo_acp);
 		omo_acp = NULL;
+	}
+	if (omo_irqwin) {
+		iounmap(omo_irqwin);
+		omo_irqwin = NULL;
 	}
 	if (omo_fwmap) {
 		iounmap(omo_fwmap);
