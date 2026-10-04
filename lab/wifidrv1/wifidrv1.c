@@ -1571,6 +1571,22 @@ static void omo_hcc_build(void *buf, unsigned int group, unsigned int id,
 	h[0x0b] = 0x5a;
 }
 
+/* message B - the verified boot announce body (phase38/announce-body-bytes.md): HCC group 0 /
+ * id 1, header total 0x30, 72-byte descriptor - the vendor's first SR post after boot. */
+static unsigned int omo_msgb_en;
+module_param_named(msgb, omo_msgb_en, uint, 0444);
+MODULE_PARM_DESC(msgb, "1 = post the literal message-B bytes instead of the builder frame (phase 38)");
+
+static const u8 omo_msg_b[72] = {
+	0x00, 0x01, 0x00, 0x04,  0x30, 0x00, 0x01, 0x00,  0x00, 0x00, 0x5a, 0x5a,
+	0x00, 0x00, 0x00, 0x00,  0x01, 0x00, 0x00, 0x00,  0xd8, 0x00, 0x14, 0x00,
+	0x01, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00,
+	0xff, 0xff, 0xff, 0xff,  0xff, 0xff, 0xff, 0xff,  0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff,  0xff, 0xff, 0xff, 0xff,  0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff,
+};
+
 static void omo_sr_post(void)
 {
 	unsigned int i, j;
@@ -1584,9 +1600,14 @@ static void omo_sr_post(void)
 
 	memset(omo_sr_pay[0], 0, OMO_ETE_DEPTH * OMO_SR_PAYLOAD);
 	if (omo_hccpost_en) {
-		omo_hcc_build(omo_sr_pay[0], omo_hcc_group, omo_hcc_id, omo_hcc_len);
-		pr_info("omo-drv1: HCC frame built: group=%u id=%u len=%u (12-byte header + payload)\n",
-			omo_hcc_group, omo_hcc_id, omo_hcc_len);
+		if (omo_msgb_en) {
+			memcpy(omo_sr_pay[0], omo_msg_b, sizeof(omo_msg_b));
+			pr_info("omo-drv1: message B (verified boot announce, HCC group 0 id 1, 72 B) posted\n");
+		} else {
+			omo_hcc_build(omo_sr_pay[0], omo_hcc_group, omo_hcc_id, omo_hcc_len);
+			pr_info("omo-drv1: HCC frame built: group=%u id=%u len=%u (12-byte header + payload)\n",
+				omo_hcc_group, omo_hcc_id, omo_hcc_len);
+		}
 	} else {
 		memcpy(omo_sr_pay[0], omo_sr_msg, sizeof(omo_sr_msg));
 	}
