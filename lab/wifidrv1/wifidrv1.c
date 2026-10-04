@@ -1103,6 +1103,53 @@ static void omo_reannounce(void)
 }
 
 /*
+ * PHASE 30 - READ THE FIRMWARE'S LIVE MESSAGE CONTEXT THROUGH THE ACP-FW WINDOW.
+ *
+ * The mapping is pinned by phase-17 A.6 and the phase-23 signature reads: the firmware image
+ * loads at device 0x01240000 (= 0x01200000 + 0x40000) and a firmware runtime address X is
+ * visible at BAR0 0x6b8000 + X (region 5, ACP-fw, size 0x218000) - the phase-23 BSS signature
+ * read at BAR0 0x7eac18 is firmware addr 0x132c18, which confirms it.  The firmware's
+ * pcie_msg_init stores its ctx object pointer in the GLOBAL at runtime 0x172130 (file 0x9706),
+ * and the record (phase20 A.1, phase22 fw-hostmem) says the ctx fields at [obj]+0xd0..0xe4 hold
+ * the six mailbox CAs with the handler table at [obj]+0xbc.  Reading them LIVE shows the
+ * vendor's own binding - the thing phase 22 named as "reproducing the vendor's message-
+ * context/ISR binding", which no register poke could see.
+ */
+static unsigned int omo_fwctx_en;
+module_param_named(fwctx, omo_fwctx_en, uint, 0444);
+MODULE_PARM_DESC(fwctx,
+	"1 = read the firmware's live pcie_msg ctx through the ACP-fw window (phase 30)");
+
+#define OMO_ACP_BAR0	0x6b8000UL	/* region 5 BAR0 base; firmware addr X -> BAR0 0x6b8000 + X */
+#define OMO_ACP_BYTES	0x218000UL	/* region 5 size */
+#define OMO_FWCTX_GLOBAL 0x172130UL	/* firmware runtime addr of the ctx pointer global */
+
+static void __iomem *omo_acp;
+
+static void omo_fwctx_read(void)
+{
+	u32 g, v[80];
+	int i;
+
+	if (!omo_acp)
+		return;
+	g = readl(omo_acp + OMO_FWCTX_GLOBAL);
+	pr_info("omo-drv1: [fwctx] global @firmware 0x%x (BAR0 0x%lx) = 0x%08x\n",
+		OMO_FWCTX_GLOBAL, (unsigned long)(OMO_ACP_BAR0 + OMO_FWCTX_GLOBAL), g);
+	if (g < 0x40000 || g >= OMO_ACP_BYTES) {
+		pr_info("omo-drv1: [fwctx] ctx pointer 0x%08x outside the ACP window - cannot dump\n",
+			g);
+		return;
+	}
+	for (i = 0; i < 80; i++)
+		v[i] = readl(omo_acp + (g - 0x10) + i * 4);
+	pr_info("omo-drv1: [fwctx] ctx object @firmware 0x%08x, dump (offset relative to it):\n", g);
+	for (i = 0; i < 80; i += 4)
+		pr_info("omo-drv1: [fwctx]   %+4ld: %08x %08x %08x %08x\n",
+			(long)(i * 4) - 0x10, v[i], v[i + 1], v[i + 2], v[i + 3]);
+}
+
+/*
  * Host -> device: post SR nodes and commit the producer index.
  *
  * Phase 24i proved this is the trigger for the firmware's id-6 word
@@ -1594,6 +1641,14 @@ static int omo_hw_attach(void)
 			rc = -ENOMEM;
 			goto err_iatu;
 		}
+		if (omo_fwctx_en) {
+			omo_acp = ioremap(omo_bar0_base + OMO_ACP_BAR0, OMO_ACP_BYTES);
+			if (!omo_acp) {
+				pr_err("omo-drv1: ioremap ACP window FAILED\n");
+				rc = -ENOMEM;
+				goto err_iatu;
+			}
+		}
 		omo_write_fw();
 	}
 
@@ -1641,6 +1696,9 @@ static int omo_hw_attach(void)
 			changed ? "THE CHIP LEFT ROM STATE" : "the chip did NOT start");
 	}
 
+	if (omo_fwctx_en)
+		omo_fwctx_read();
+
 	/* The recovered host half, against the corrected registers: ack, clear, re-arm, dispatch. */
 	if (omo_msgsvc)
 		omo_msg_service();
@@ -1677,6 +1735,10 @@ err_regions:
 
 static void omo_hw_detach(void)
 {
+	if (omo_acp) {
+		iounmap(omo_acp);
+		omo_acp = NULL;
+	}
 	if (omo_fwmap) {
 		iounmap(omo_fwmap);
 		omo_fwmap = NULL;
