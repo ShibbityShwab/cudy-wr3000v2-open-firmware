@@ -96,3 +96,32 @@ artifact (the running vendor system rewrites that slot), not the gate.
 **caller**: the firmware's own message interrupt, which never fires in a takeover. That is now the
 single question, and it is narrower than it has ever been.
 
+
+## The interrupt service is armed too - the gate is the interrupt FIRING, not the arming (same day)
+
+The widened dump (evidence `build/register-dumps/exp/20261004-044442/`) reached the interrupt fn
+slots. **The takeover's interrupt handlers are registered identically to the vendor boot:**
+
+```
+fn array @0x17d430 (fn for id N at +N*4):
+  id 0x2d = 0x000462f9    <- identical to normal operation
+  id 0x2e = 0x0004624d    <- identical to normal operation
+  id 0x2f = 0x000aec95
+  (plus the populated {fn_ptr, id} list and the packed id table seen in the previous run)
+```
+
+**So the entire receive chain is armed in a takeover:** ctx (six CAs) -> H2D handler table (ids
+1/3/5/6) -> interrupt handlers (ids 0x2d/0x2e) -> dispatcher (file 0x818ac). Four of the five links
+are now proven present, in the vendor's exact values.
+
+**The gate is the last link: the firmware's message interrupt never FIRES.** The host's doorbell
+write (out[2] <= 1 to CA 0x400392d4) does not reach the firmware as an interrupt, so the dispatcher
+never runs (its ack signature, a write of 1 to 0x400392f0, is never observed - the poll's out[5]
+stays 0). The vendor performs the same doorbell write through the same viewport and the firmware
+responds - so the remaining difference is either the device's interrupt-mask state at the moment of
+the doorbell (the firmware's enable path pokes device CA 0x40161800) or the path the doorbell write
+takes through the two root complexes.
+
+That is now a question about ONE link - the doorbell->interrupt delivery - rather than about
+anything the host sends.
+
