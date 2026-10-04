@@ -1,0 +1,59 @@
+# The gate is located: the firmware's H2D handler table is registered in a vendor boot and NOT in a takeover (phase 30, 2026-10-04)
+
+The new instrument (reading the firmware's RAM through the ACP-fw window, firmware addr X ->
+BAR0 0x6b8000 + X, verified against the record's own predictions) produced the first direct
+comparison of the firmware's live message state between a working vendor boot and a takeover.
+
+## The decisive table
+
+| word (firmware addr) | takeover (module boot) | normal operation (vendor stack) |
+| --- | --- | --- |
+| `*0x172130` (pcie_msg global) | `0x0010C0F4` | `0x0010C0F4` |
+| **`[*0x172130 + 0xbc]` - the handler-table link** | **`0x00000000`** | **`0x00118D68`** |
+
+**The vendor boot populates the H2D message-handler table link; the takeover does not.** The
+takeover's ctx object is otherwise built (the six mailbox CAs sit in it, in the record's exact
+order), so `pcie_msg_init` ran - but the registration link is missing.
+
+## The firmware's live registered handlers (read from 0x118D68 in normal operation)
+
+```
+handler[1] fn=0x00040511  (file 0x00511)   arg=0x00000000
+handler[3] fn=0x000c5145  (file 0x85145)   arg=0x0010c0f4   <- the ctx object, as the arg
+handler[5] fn=0x000c19dd  (file 0x819dd)   arg=0x00000000
+handler[6] fn=0x0008cce5  (file 0x4cce5)   arg=0x00000000
+```
+
+- **handler[3] is the registration this project already found statically**: the call at file
+  `0x9838` inside `pcie_msg_init` registers `{fn = 0xc5145, arg = the ctx}` - and here it is,
+  LIVE, with the ctx pointer as its argument. This independently confirms both the static reading
+  and the instrument.
+- The dispatcher at file `0x818ac` indexes this same table (`[ctx+0x20]` with ctx = the message
+  object whose +0x20 points at 0x118D68), so **this table is the firmware's H2D dispatch**.
+
+## What this explains, in one chain
+
+The takeover's firmware has **no H2D dispatch table** - the link `[pcie_msg+0xbc]` is NULL. So:
+
+1. the dispatcher, even if entered, has no handlers to call - consistent with every H2D accept
+   failure across phases 20-25;
+2. the firmware's own boot stops short of completing its message service - consistent with it
+   "stopping at the pending-word stage" (phase 20);
+3. none of the host-side candidates (20 register hypotheses, payload content, announce timing,
+   ring geometry) could EVER have worked - the receiver side was never armed. Those eliminations
+   are now explained, not just accumulated.
+
+## What is NOT yet established
+
+**Which firmware-side condition writes the +0xbc link, and what it waits for.** The write is
+somewhere in the firmware's init; finding its gate is now a *static* question with a precise
+observable: the instruction that stores into `[pcie_msg+0xbc]`, and the condition around it. The
+firmware blob is on disk (`build/tmp/FIRMWARE.bin`, md5 `0e530b976d5a20e87358671f1a577695`), and
+the record's disassembly tooling is already set up for exactly this.
+
+## Method note
+
+This comparison is **read-only**: the takeover read came from the fwctx=1 module dump (two boots,
+stable), and the normal-operation read came from `devmem` through BAR0 with the vendor stack
+running. The mapping was verified two ways before the comparison was trusted (the ctx global
+matching the record's `0x10c0f4` prediction, and the CAs appearing in order).
