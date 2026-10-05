@@ -394,3 +394,24 @@ held on both lines, zero panics, pstore delta none, router healthy. Reported aux
 `v-run2` wrote no verdict dir, `v-chip`'s landed in the wrong dir, and run 4's worker files (acceptance,
 rows, MATRIX) stayed missing though `tools/finish-evidence.sh` produced KNOBSET/cleanup/interp (D1).
 Next: the COMBINED QUIESCE RUNG (CONSUME + TWINCLOSE) plus the bounded re-enable probe.
+
+## ADDENDUM 16 (2026-10-05): the combined quiesce + the real chain - the instrument is built and never spent
+
+Knob v8 committed (`553342d` on `omo/phase22-hccaccept` only, +128/-24 on `lab/wifidrv1/wifidrv1.c`) adds
+rung 7 `Q_COMBO` (TWINCLOSE then the vendor CONSUME order), the sec.3 second-bound re-enable probe, and the
+real-chain preamble opt-in `Q_RC_PRE`. Both intended boots were BLOCKED on the CI artifact and never ran:
+no `run-combo.log` or `run-realchain.log` exists, a tree-wide grep for the decisive strings matches only the
+`build/tmp/*-selftest/` fixtures, and the newest boot on disk is still the twin-close boot `20261005-185140`.
+The independent ko check scored the still-staged v7 ko 57 passed / 11 failed, with all eleven fails being the
+v8-only features, so a combo boot on that ko would have been a silent `case 7` no-op. The CI run
+`37365078637` landed at 19:54:36Z and the artifact verified clean (md5 `3f87f1e9fe5ed9666f27d1f784d34535`,
+vermagic `5.10.201 SMP mod_unload ARMv7`, all seven v8 strings present, no store of either forbidden W1C
+constant). The two branch tables are recorded so the runs can be judged the moment they exist: boot 1 against
+combod.md sec.2 (`QUIESCED_BY_COMBO` / partial / probe), boot 2 against realchain2.md sec.5 (`TAKEN` /
+`ABSENT-1..3` / `CONTROL`). Neither branch is disproved, only untested. The supervisor discipline was
+re-derived from source: both ISRs self-disable before any MMIO, `enable_irq` exists only inside
+`omo_sv_probe` under the tighter second bound with both counters reset, and a re-assert is final. The probe
+was never spent, so the second bound has still never tripped on device. Router healthy (2 wiphys, 6
+interfaces, `[SUCC]` both bands, zero leftovers, no new pstore). Next: fetch, verify and run the two boots on
+the landed ko, then spend the second bound on a rung that leaves both levels clean. Full record in
+`gic-view.md` ADDENDUM 16; verdicts `diffs/{20261005T1946Z-vtool12,20261005T1954Z-vrun13}/`.

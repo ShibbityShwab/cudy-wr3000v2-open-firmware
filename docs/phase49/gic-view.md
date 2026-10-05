@@ -2670,3 +2670,194 @@ Specs `build/tmp/inta-spec/{h2d2,credit2,twinsem,chipdeep,superfix,twinq,ladder3
 boots `build/register-dumps/exp/{20261005-181512,182024,182537,185140}/`; verdicts
 `diffs/{20261005T1814Z-vtool11,20261005T1829Z-vrun11,20261005T1855Z-vrun12}`; the CRG CI commit `dff5925`;
 ko pins storm-close `028f9d12...` and twin-close `4e8088e8...`.
+
+
+# ADDENDUM 16 (2026-10-05): the combined quiesce + the real chain - THE INSTRUMENT IS BUILT AND NEVER SPENT / BOTH BOOTS BLOCKED ON THE CI ARTIFACT, THEN NOT RUN IN THE WINDOW / NEITHER RUNG-7 NOR THE REAL-CHAIN TAKE HAS EVIDENCE
+
+ADDENDUM 15 closed with two questions and a queue: does CONSUME plus TWINCLOSE clear BOTH copies in one
+boot, and does the real-chain stimulus make the device CPU take the frame. Both instruments were designed,
+committed, and verified `UNAVAILABLE` at the moment the verification window shut. The two boots simply had
+not happened. This addendum records that honestly, because a verdict that says "no run" is a fact about the
+instrument, not a hole in the record.
+
+### The instrument: knob v8, committed and never run
+
+One commit, `553342d` on `omo/phase22-hccaccept` only, +128/-24 on `lab/wifidrv1/wifidrv1.c`. It adds
+rung 7 `Q_COMBO` (TWINCLOSE first, then the vendor CONSUME order: ack `out[3]`, clear `out[1]`, re-arm
+`out[4]`), the sec.3 second-bound re-enable probe, and the real-chain preamble opt-in `Q_RC_PRE` (quiesce
+bit `0x1`, default off) that prepends the twin storm preamble W1+W2 before the `intapost=0x100` stimulus.
+
+The supervisor discipline survived an independent source audit. Both ISRs self-disable before any MMIO at
+their bound and return `IRQ_HANDLED` without touching a register. `enable_irq` exists at exactly two lines,
+both inside `omo_sv_probe`, whose sole call site is the both-levels-clean branch. The probe runs under the
+tighter second bound (`qbound2` pushed onto `qbound209`, both counters reset), and a re-assert is FINAL:
+`[qsv] IRQ_LEFT_DISABLED ... reason=probe-rearmed` and both lines stay disabled. Every other supervisor
+exit returns without enabling anything.
+
+The one gap was external. `verify-ko-combo.py` ran against the still-staged v7 ko and scored 57 passed,
+11 failed, with all eleven fails being exactly the v8-only features (the COMBO rung-7 banner, the rung clamp
+`0..7`, `QUIESCED_CONFIRMED`, `PROBE ATTEMPT`, `Q_RC_PRE`, the region-relative CONSUME immediates
+`0x101438`/`0x101414`). That is the discriminator working: the old ko would have fallen to
+`case 7 -> default: break;` and produced a silent no-op boot, so a combo run staged before the fetch would
+have proved nothing. The CI run that builds the artifact (`37365078637`, `workflow_dispatch`, headSha
+`553342d`) was still `in_progress` when the instrument verifier closed at 19:52Z.
+
+Then it landed. At 19:54:36Z the run completed success and the verifier fetched `wifidrv1-ko` into its own
+directory, never the runner's staging name:
+
+- md5 `3f87f1e9fe5ed9666f27d1f784d34535`, vermagic `5.10.201 SMP mod_unload ARMv7` (the device kernel)
+- all seven v8 strings present (`COMBO rung 7`, `QUIESCED_CONFIRMED`, `PROBE ATTEMPT`, `Q_RC_PRE`,
+  `CONSUME 0x40101438`, `(0..7)`, `realchain`)
+- the forbidden W1C constants `0x400392f0` and `0x40039af0` appear only in read-only comment and param text,
+  never as a store
+
+### The two boots: blocked, not failed
+
+The two runner tasks each stalled on that artifact. Their own words, quoted in the adversarial verdict:
+
+> "I'm waiting on the CI build (monitor `mon_K7SMEB9TMCCB2EEW` is watching it)."
+
+> "Blocked on the queued CI build; monitor `mon_D2X7EQ3KGCEPD8HA` is live and will resume me at
+> completion. Standing by to fetch the v8 ko and run the cycle."
+
+The evidence is the absence itself. Neither `build/tmp/wifidrv1-art/run-combo.log` nor
+`run-realchain.log` exists, and a tree-wide grep for `rung=7|rung=COMBO|[realchain]|QUIESCED_BY_COMBO|
+QUIESCED_CONFIRMED` under `build/register-dumps/exp/` returns nothing. The decisive strings match only
+four synthetic fixtures under `build/tmp/{combo-selftest,realchain-selftest}/`, never a real evidence
+directory. The newest boot on disk is still the twin-close boot `20261005-185140`, so nothing newer than
+18:51Z ran.
+
+Both branch tables are recorded here so the runs can be judged the moment they exist, rather than
+re-derived later.
+
+**BOOT 1, the COMBINED rung (combod.md sec.2).** Full win `QUIESCED_BY_COMBO`: `rd(0x400392ec)==0` and
+`rd(0x40039aec)==0`, then the probe. Partial (no probe, `PROBE SKIPPED`): the residue pairs
+`glue 0x08/twin 0x00`, `0x10/0x00`, `0x18/0x00`, `0x00/0x08`, `0x18/0x08`, or any readback that
+differs from what was written. Probe outcomes: `QUIESCED_CONFIRMED` is a zero delta across the whole
+`qwait_ms` window with both statuses still zero; `probe-rearmed` is any nonzero delta, which trips bound
+#2 (`n > 8`), is FINAL, and leaves both lines disabled. The ladder it continues from is measured:
+
+| boot | rung | glue stat `0x400392ec` | twin stat `0x40039aec` |
+| --- | --- | --- | --- |
+| 181512 | 1 CONSUME | `0x18 -> 0x08` (bit 4 retired) | `0x08` |
+| 182024 | 2 FWACK | `0x18 -> 0x18` | `0x08` |
+| 182537 | 3 MASKCLOSE | `0x18 -> 0x10` (bit 3 retired) | `0x08` |
+| 185140 | 5 TWINCLOSE | `0x18` (unchanged) | `0x08 -> 0x00` (mask `0x20 -> 0x28`) |
+
+So the runner ran `rung=7 intapost=0x60 quiesce=0x18 qbound=64 qbound2=8 qbound209=8` with the probe
+armed, and never produced a row.
+
+**BOOT 2, the real chain (realchain2.md sec.5).** `TAKEN` means `out[0]` at `0x40039010` goes `0x8 ->
+0x0` (the device consumed) plus a copy-A glue raw bit-3 clear that no host wrote, with the 209 ISPENDR
+bit 12 clear and both IRQ deltas bounded. `ABSENT-1` is rc3 waited 2000 ms with no change and
+`out[0]` pinned at `0x8`. `ABSENT-2` is `out[0]` pinned with ISPENDR2 word 2 bit 12 SET (parked or
+pending, the expired-boot signature). `ABSENT-3` is `out[0]` pinned with CPSR `0x20000193` (I=1 at both
+samples, the device ISR mask). `CONTROL` is a host bit-3 write only, which proves the instrument and not
+the device. The twin triple must stay fixed in every branch. The runner was
+`intapost=0x100 quiesce=0x1 rung=0` on the same v8 ko, and also produced no row.
+
+### What this does NOT say
+
+Neither branch is disproved. The specs are untested, not refuted. `QUIESCED` is NOT ESTABLISHED and the
+exact residual is NONE OBSERVED, because the rung never executed. For the real chain the observation is
+ABSENT, which is a different thing from the device-ABSENT branch of sec.5 that no run supports. C3 fell
+first and then rose: the instrument was FAIL (not delivered) at 19:52Z and CONFIRMED at 19:55Z when the
+artifact landed.
+
+Two non-inverting bookkeeping notes. The superproject gitlink still points at `f12209a` while the submodule
+HEAD is `553342d` (`git status` shows ` M opensource`) and `tools/finish-evidence.sh` carries an
+uncommitted verifier-mode change; the v8 commit itself is safe on the push-authorized branch. Two verdict
+skeletons (`20261005T1931Z-toolverify`, `20261005T1932Z-toolverify2`) were minted and left as TODOs, and
+`vrun13`'s own two monitors on `run-combo.log`/`run-realchain.log` are live.
+
+### Safety
+
+The probe was never spent, so the second bound has still never tripped on device. The read-only probe at the
+close of the window left the router healthy: 2 wiphys, 6 interfaces, calibration `[SUCC]` on both bands,
+`OMO_OFF=0`, `STAGED=0`, `LOADER=0`, zero `.omo-pat`, zero leftovers, stock md5
+`0e530b976d5a20e87358671f1a577695`, and three pstore records with none new. No register was read by either
+verifier. `0x400392f0` and `0x40039af0` were never written, and neither the IAR `0x4016010c` nor the RC
+misc `0x10161000` was read.
+
+### The next threads
+
+- **Run the two boots now that the ko is on disk.** `fetch-ci-combo.sh` then `verify-ko-combo.py` then
+  `run-combo.sh`; the ko is md5 `3f87f1e9...`. Classify boot 1 against combod.md sec.2 and boot 2 against
+  realchain2.md sec.5, and quote `run-combo.log`/`run-realchain.log`.
+- **Spend the second bound on purpose.** No rung has left both levels clean, so the sec.3 re-enable probe
+  has never fired. A test that clears copy A alone, or a rung that zeros both copies, is what finally
+  exercises it.
+- **Keep the discriminate-first rule.** The stale-ko trap is the reason `verify-ko-combo.py` checks for the
+  v8 strings before staging; a combo boot on the v7 ko is a silent `case 7` no-op.
+
+### Artifacts
+
+Specs `build/tmp/inta-spec/{combod.md,realchain2.md,realchain.md,twinclear.md,ep1fix.md,chipdeep.md,stage2.md}`;
+runners `build/tmp/wifidrv1-art/run-{combo,realchain}.sh`; verdicts
+`build/register-dumps/diffs/{20261005T1946Z-vtool12,20261005T1954Z-vrun13}/`; CI commit `553342d`
+(`omo/phase22-hccaccept` only); CI artifact run `37365078637`, ko md5 `3f87f1e9fe5ed9666f27d1f784d34535`;
+staged-but-unrun runner ko still the v7 `4e8088e8...`; ladder boots
+`build/register-dumps/exp/{20261005-181512,182024,182537,185140}/`.
+
+### 16a. ADJUDICATION (appended by the orchestrator, 2026-10-05T20:0xZ): the COMBO boot landed after this addendum closed
+
+The heading above ("NEITHER RUNG-7 NOR THE REAL-CHAIN TAKE HAS EVIDENCE") was true at this addendum's
+timestamp and is **SUPERSEDED for the combo boot**: the detached cycle the boot task had launched
+(from `run-combo.sh`) completed after this section was written. Adjudication per vrun13's pre-registered
+frame (`build/register-dumps/diffs/20261005T1954Z-vrun13/verdict.txt`, sec.1):
+
+- **BOOT 1 (the combo boot) RAN** - `build/register-dumps/exp/20261005-195626/` (RUN_TS 19:56:25, the
+  v8 ko md5 `3f87f1e9fe5ed9666f27d1f784d34535`, the reused `inta3.bin`), and its branch is the
+  spec's **PARTIAL** name: the storm refired (`IRQ_DISABLED_BOUND irq=207 n=65 bound=64 glue=0x18`;
+  `irq=209 n=9 bound=8`), rung=COMBO ran TWINCLOSE then CONSUME (`[qsv] TWINCLOSE 0x40039ae8
+  0x20->0x28 (rb 0x28) twin=00000000 glue=00000018`; `[qsv] CONSUME 0x40101438<=1 (rb 0)
+  0x40039014<=0 (rb 0) 0x40101414<=1 (rb 0)`), and the AFTER line reads `glue{raw=0x8 mask=0x20
+  stat=0x00000008} twin{raw=0x8 mask=0x28 stat=0x00000000} residual=0x8/0x0` - **glue bit 4
+  retired (0x18 -> 0x08), the twin fully cleared (0x08 -> 0x00), residual = the glue's copy-A
+  bit 3 alone**; `quiesced=0` (the strict glue==0x00 criterion not met), the single re-enable
+  probe NOT armed (it fires only on a full clear), the bound held on both lines, and the pstore
+  delta is empty (no panic).
+- The identity of the residual: the glue's copy-A bit 3 (`0x8`) is the D2H-RX source that only the
+  device's own take-gated consumption retires (`fn_array[0x4c]` - the same gate as 16's H2D
+  finding). The host side now provably retires everything it can: bit 4 (CONSUME) + the whole
+  twin copy (TWINCLOSE).
+- **BOOT 2 (the real-chain boot)** had NOT launched by this amendment; its validated runner
+  (`run-realchain.sh`, `intapost=0x100 quiesce=1 rung=0`) was launched by the orchestrator at
+  `2026-10-05T19:59:24Z` on the fresh recovery boot (boot_id `b9028c8f-...`, stock md5
+  `0e530b976d5a20e87358671f1a577695` verified, 6 interfaces). Its branch lands in a later
+  append or the next addendum; vrun13's C2 branch table remains the adjudication frame.
+- Health after the combo cycle's own recovery reboot: verified (stock md5 exact, 6 interfaces,
+  3 pstore records unchanged).
+
+### 16b. THE REAL-CHAIN BOOT (appended by the orchestrator, 2026-10-05T20:0xZ): the device consumes, the take still does not
+
+The orchestrator's cycle (`run-realchain.sh`, launched `19:59:24Z`, v8 ko `3f87f1e9...`, blob `eee1f673...`,
+`intapost=0x100 quiesce=1 rung=0`) landed `build/register-dumps/exp/20261005-200139/`. Measured set:
+
+- The twin storm preamble + seed restore ran (`twin 0x40039ae8 0x20 -> 0x3ff`; twin stat held `0x00`
+  throughout - the discriminator did not move under the mask); the mandatory bound held
+  (`irq=207 n=65`, `irq=209 n=9 bound=8`); pstore unchanged.
+- `rc1-handshake`: `0x4000010c <= 0xcece` landed (rb `0x0000cece`); the storm followed.
+- `rc2-h2d-post`: `0x40039010 <= 8` (rb `0x8` - the message POSTED).
+- `rc3-h2d-doorbell`: `0x400392d4 <= 1` (rb `0x00000000` - the doorbell bit self-cleared); no raw/stat move,
+  `isr 65 -> 65 delta=0`.
+- The `[realchain]` read: **`out[0]=0x00000000`** (the message is GONE) with glue `{raw=0x8 stat=0x18}`
+  and twin `{raw=0x8 mask=0x3ff stat=0x00}`; the 8 s poll saw 0 transitions (stable at 0).
+- The device-side cells (page 10, retained): `N_ACT=0x0`, `N_ISP=0x00000020` (**bit 12 SET**),
+  `N_HPP=0x3ff`, `N_OU0=0x00000000`; `F_SNT=0x50AA7E49` (the sentinel held - retention + stores proven),
+  `WIN=0xE59FF018`.
+
+**Classification (against 16's realchain2.md branch table): a FOURTH combination the table did not
+enumerate.** The consumption DID occur (`out[0]` 8 -> 0, live + cell), so it is not ABSENT-1/2/3
+(all of which pin `out[0]` at `0x8`); but the TAKEN branch's discriminators all FAIL: zero ISR delta,
+`ACT=0`, `HPP=0x3ff` (nothing served), the glue's copy-A bit 3 NOT retired (`raw 08 -> 08`,
+`stat 18 -> 18`). **The mailbox consumption and the take-gated interrupt dispatch are therefore
+PROVABLY SEPARATE device-side paths: the message drains on the handshake/doorbell sequence without
+`fn_array[0x4c]` ever running** - the same separation the inta2 run first hinted at (`out0 8 -> 0`
+with no interrupt) and 16's h2d finding predicted (the dispatcher gated on the CPU's take). The open
+question narrows to: what makes the DEVICE CPU read its IAR for source `0x4c` with IRQs live (the
+sequencing question of 16, now measured to persist even with a real, consumed message).
+
+Post-cycle state: the runner's `[6/7] recover` + `[7/7] verify health` steps ran after the capture
+(the pack-evidence warning about `health.txt` is the mid-sequence state); the final health/pack files
+are the runner's own closure set.
