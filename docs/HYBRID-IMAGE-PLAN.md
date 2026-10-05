@@ -1,3 +1,7 @@
+> STATUS: FALLBACK (not the goal). The lead's directive 2026-10-05: no vendor kernel; the deliverable is
+> our own fully-current OpenWrt (our kernel + our drivers). This plan is retained only as a labeled
+> fallback. The goal-level plan is `opensource/docs/UPSTREAM-PORT-PLAN.md`.
+
 # HYBRID-IMAGE PLAN: the newest OpenWrt userland on this device, no upstream kernel support
 
 Scope: a flashable rootfs that grafts the newest upstream OpenWrt userland onto the vendor kernel and its
