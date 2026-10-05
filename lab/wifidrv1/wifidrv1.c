@@ -2093,8 +2093,13 @@ MODULE_PARM_DESC(intapost,
 	"(phase 49): 0x1 = H2D doorbell CA 0x400392d4 |= 1; 0x2 = D2H set CA 0x400392d4 |= 8; "
 	"0x4 = firmware D2H doorbell CA 0x40101434 |= 1; 0x8 = natural-post companion "
 	"CA 0x4000010c <= 0xcece (run first); 0x10 = dual-line: claim 0001:00:00.0 and request_irq "
-	"its line (209) with a second ISR counter omo_isr2_n; 0x20 = the read-only config/MSI/glue "
-	"snapshot around the documented writes (intx.md section 4)");
+	"the KERNEL's irq for it (209 in the takeover) with a second ISR counter omo_isr2_n; "
+	"0x20 = the read-only config/MSI/glue snapshot around the documented writes, WIDENED with the "
+	"twin copy B (0xae4/0xae8/0xaec) and the ETE group (0x508/0x50c/0x510) plus W3 (twin.md "
+	"section 5; intx.md section 4); 0x40 = twin-stim: W1 open the twin mask CA 0x40039ae8 and W2 "
+	"ring its doorbell CA 0x40039ad4 (the one new candidate; requires 0x20); 0x80 = the MSI probe, "
+	"LAST and read-only (requires 0x20; twin.md section 4 - the target kernel has no MSI API, so "
+	"the step reports the state and changes nothing)");
 
 #define OMO_GLUE_RAW	0x2e4		/* within the message window -> BAR0 0x3f12e4 */
 #define OMO_GLUE_MASKREG 0x2e8		/* within the message window -> BAR0 0x3f12e8 */
@@ -2166,8 +2171,29 @@ static void omo_intapost_step(const char *what, u32 ca, void __iomem *win, unsig
  * wifidrv1.c:593 uses 0xae8 and reads the live BAR0 0x3f1ae8); the ETE host mask at omo_msg+0x508
  * (CA 0x40039508); out[0]/out[1] at omo_msg+0x10/+0x14.  HARD RULES: never write CA 0x400392f0
  * (W1C); never read the ack IAR CA 0x4016010c nor the RC misc CA 0x10161000; every read is bounded.
+ *
+ * KNOB v3 (build/tmp/inta-spec/twin.md) - the SAME intapost bitmask, no 42nd knob:
+ *   0x40 twin-stim: W1 = CA 0x40039ae8 (the SECOND ctrl-rb copy's mask, twin.md sec.1.1) with the
+ *        vendor's own copy-A constant 0xfffffc20, W2 = CA 0x40039ad4 |= 0x8 (its doorbell).  The
+ *        vendor's HOST module never writes any 0xa** glue offset (raw scan: 0 hits in both vendor
+ *        modules) - the device firmware programs it (announce routine file 0x86ef0) - so W1 is a
+ *        conditional, readback-verified experimental unmask, not a reproduction.
+ *   0x80 msi-test: LAST and reversible (twin.md sec.4).  MSI must not be the delivery: the vendor
+ *        raises INTA, the DT has no msi-parent, and this kernel is built with CONFIG_PCI_MSI=n
+ *        (MEASURED: /proc/kallsyms has no pci_alloc_irq_vectors, pci_irq_vector or
+ *        pci_free_irq_vectors), while the CI's vanilla build DOES set CONFIG_PCI_MSI=y (the first
+ *        knob-v3 artifact arrived with those three as UNDEFINED symbols - a strong reference would
+ *        make insmod fail on the target).  The step therefore PROBES and reports the MSI state
+ *        (the documented negative, twin.md sec.4 row 6) and changes nothing.
+ *   0x20 (WIDENED): the snapshot now also reads copy B's raw/status and the ETE group's clr/status,
+ *        and W3 (twin.md sec.5.3) writes the vendor's own ETE clear ONLY if the status latched.
  */
 #define OMO_TWIN_MASK	0xae8		/* CA 0x40039ae8 within the message window -> BAR0 0x3f1ae8 */
+#define OMO_TWIN_RAW	0xae4		/* CA 0x40039ae4 - copy B's pre-mask latch (twin.md sec.1.1) */
+#define OMO_TWIN_STAT	0xaec		/* CA 0x40039aec - copy B's post-mask status (twin.md sec.1.1) */
+#define OMO_TWIN_DOORBELL 0xad4		/* CA 0x40039ad4 - copy B's doorbell (W2) */
+#define OMO_ETE_INTR_CLR	0x50c	/* CA 0x4003950c - the ETE group clear (W3; the vendor's own) */
+#define OMO_ETE_INTR_STAT	0x510	/* CA 0x40039510 - the ETE group status (snapshot) */
 
 static atomic_t omo_isr2_n = ATOMIC_INIT(0);
 static int omo_irq2;
@@ -2192,10 +2218,25 @@ static irqreturn_t omo_intx2_isr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-/* claim the sibling (if needed) and request_irq its line with omo_intx2_isr.  Idempotent. */
+/* claim the sibling (if needed) and request_irq the KERNEL's irq for it with omo_intx2_isr.
+ *
+ * FLAW 1 fix (witness2.md): the source is the kernel's IRQ - NOT the sibling's config-space
+ * PCI_INTERRUPT_LINE byte.  The takeover only programs EP0's config line, so the sibling's byte
+ * reads 0xff while the kernel owns 209 (assigned by hi_pcie_map_irq at scan time and visible as
+ * /sys/bus/pci/devices/0001:00:00.0/irq); reading config was the defect that made isr209 vacuous.
+ *
+ * The kernel-API lookup is offset-immune, the ->irq deref is not: this module is cross-built
+ * against vanilla 5.10.201 headers whose struct pci_dev puts ->irq at 0x1ac (re-measured in the CI
+ * artifact: `ldr r1,[r0,#0x1ac]` at .text+0x344), while the running vendor kernel has 0x184
+ * (hi5622v100_plat.ko do_request_irq @0x1082c; virq3.md).  So the direct read executes ONLY when
+ * the compiled layout matches the vendor's - a compile-time offset guard (the durable BUILD_BUG_ON
+ * of virq3.md would hard-fail the CI build at 0x1ac).  Every other path uses the kernel sysfs
+ * value: never a config-space read, never a struct read at a mismatched offset.  The config byte
+ * is printed as a CROSS-CHECK only and never gates request_irq. */
 static int omo_dual_line_attach(void)
 {
-	u8 line = 0;
+	size_t irq_off = offsetof(struct pci_dev, irq);
+	u8 cfgline = 0;
 	int rc;
 
 	if (omo_irq2_owned)
@@ -2208,8 +2249,35 @@ static int omo_dual_line_attach(void)
 			return rc;
 		}
 	}
-	if (pci_read_config_byte(omo_ep1_dev, PCI_INTERRUPT_LINE, &line) == 0)
-		omo_irq2 = line;
+	if (irq_off == 0x184) {
+		struct pci_dev *sib = pci_get_domain_bus_and_slot(1, 0, PCI_DEVFN(0, 0));
+
+		if (!sib) {
+			pr_err("omo-drv1: [intx2] sibling 0001:00:00.0 not found\n");
+			return -ENODEV;
+		}
+		omo_irq2 = (int)sib->irq;	/* READ only; == 209 on the vendor kernel */
+		pci_dev_put(sib);
+	} else {
+		pr_warn("omo-drv1: [intx2] compiled pci_dev->irq at 0x%zx (vendor 0x184) - using the sysfs virq\n",
+			irq_off);
+		omo_irq2 = 0;
+	}
+	if (omo_irq2 <= 0 || omo_irq2 == 255) {	/* fallback: the kernel's value, no config read */
+		struct file *f = filp_open("/sys/bus/pci/devices/0001:00:00.0/irq", O_RDONLY, 0);
+
+		if (!IS_ERR(f)) {
+			char buf[16] = { 0 };
+			loff_t pos = 0;
+
+			kernel_read(f, buf, sizeof(buf) - 1, &pos);
+			filp_close(f, NULL);
+			omo_irq2 = (int)simple_strtol(buf, NULL, 10);
+		}
+	}
+	if (pci_read_config_byte(omo_ep1_dev, PCI_INTERRUPT_LINE, &cfgline) == 0)
+		pr_info("omo-drv1: [intx2] sibling irq(irq=%d) cfg INTERRUPT_LINE=0x%02x (cfg read is not the witness)\n",
+			omo_irq2, cfgline);
 	if (omo_irq2 > 0 && omo_irq2 != 255) {
 		rc = request_irq(omo_irq2, omo_intx2_isr, IRQF_SHARED, "omo-drv1-ep1", omo_ep1_dev);
 		pr_info("omo-drv1: [intx2] request_irq(%d, IRQF_SHARED) rc=%d (the sibling line)\n",
@@ -2232,7 +2300,8 @@ struct omo_intx2_snap {
 	u8  msi_cap;
 	u16 msi_ctl, msi_data;
 	u32 msi_addr_lo, msi_addr_hi;
-	u32 raw, mask, stat, twin, ete;	u32 out0, out1;
+	u32 raw, mask, stat, twin, ete;	u32 twin_raw, twin_stat, ete_clr, ete_stat;
+	u32 out0, out1;
 	u32 isr207, isr209;
 };
 
@@ -2282,7 +2351,11 @@ static void omo_intx2_read_glue(struct omo_intx2_snap *s)
 	s->mask = omo_msg ? omo_rd(omo_msg, OMO_GLUE_MASKREG) : 0xffffffffU;
 	s->stat = omo_msg ? omo_rd(omo_msg, OMO_GLUE_STAT) : 0xffffffffU;
 	s->twin = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0xffffffffU;
+	s->twin_raw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0xffffffffU;
+	s->twin_stat = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0xffffffffU;
 	s->ete = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_OFF) : 0xffffffffU;
+	s->ete_clr = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_CLR) : 0xffffffffU;
+	s->ete_stat = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0xffffffffU;
 	s->out0 = omo_msg ? omo_rd(omo_msg, OMO_MSG0) : 0xffffffffU;
 	s->out1 = omo_msg ? omo_rd(omo_msg, OMO_MSG1) : 0xffffffffU;
 	s->isr207 = (u32)atomic_read(&omo_isr_n);
@@ -2302,23 +2375,26 @@ static void omo_intx2_snap_take(struct omo_intx2_snap *s)
 
 static void omo_intx2_print(const char *tag, const struct omo_intx2_snap *s)
 {
-	pr_info("omo-drv1: [intx2] tag=%s cmd=%04x sta=%04x line=%02x pin=%02x "
+	pr_info("omo-drv1: [intx3] tag=%s cmd=%04x sta=%04x line=%02x pin=%02x "
 		"msi{found=%d cap=%02x ctl=%04x en=%d addr=%08x:%08x data=%04x} "
-		"glue{raw=%08x mask=%08x stat=%08x twin=%08x ete=%08x} out0=%08x out1=%08x "
+		"glueA{raw=%08x mask=%08x stat=%08x} twinB{raw=%08x mask=%08x stat=%08x} "
+		"ete{mask=%08x clr=%08x stat=%08x} out0=%08x out1=%08x "
 		"isr207=%u isr209=%u\n",
 		tag, s->cmd, s->sta, s->line, s->pin,
 		s->msi_found, s->msi_cap, s->msi_ctl,
 		(s->msi_ctl & PCI_MSI_FLAGS_ENABLE) ? 1 : 0,
 		s->msi_addr_hi, s->msi_addr_lo, s->msi_data,
-		s->raw, s->mask, s->stat, s->twin, s->ete, s->out0, s->out1,
+		s->raw, s->mask, s->stat,
+		s->twin_raw, s->twin, s->twin_stat,
+		s->ete, s->ete_clr, s->ete_stat, s->out0, s->out1,
 		s->isr207, s->isr209);
 }
 
 static void omo_intx2_delta(const char *tag, const struct omo_intx2_snap *p,
 			    const struct omo_intx2_snap *c)
 {
-	char ch[384];
-	char same[192];
+	char ch[640];
+	char same[256];
 	int n = 0, m = 0;
 	bool any = false;
 
@@ -2341,8 +2417,12 @@ static void omo_intx2_delta(const char *tag, const struct omo_intx2_snap *p,
 	if (p->raw != c->raw) { OMO_CH("glue raw %08x->%08x ", p->raw, c->raw); any = true; }
 	if (p->mask != c->mask) { OMO_CH("glue mask %08x->%08x ", p->mask, c->mask); any = true; }
 	if (p->stat != c->stat) { OMO_CH("glue stat %08x->%08x ", p->stat, c->stat); any = true; }
-	if (p->twin != c->twin) { OMO_CH("glue twin %08x->%08x ", p->twin, c->twin); any = true; }
-	if (p->ete != c->ete) { OMO_CH("glue ete %08x->%08x ", p->ete, c->ete); any = true; }
+	if (p->twin != c->twin) { OMO_CH("glueA twin(mask) %08x->%08x ", p->twin, c->twin); any = true; }
+	if (p->twin_raw != c->twin_raw) { OMO_CH("twinB raw %08x->%08x ", p->twin_raw, c->twin_raw); any = true; }
+	if (p->twin_stat != c->twin_stat) { OMO_CH("twinB stat %08x->%08x ", p->twin_stat, c->twin_stat); any = true; }
+	if (p->ete != c->ete) { OMO_CH("ete mask %08x->%08x ", p->ete, c->ete); any = true; }
+	if (p->ete_clr != c->ete_clr) { OMO_CH("ete clr %08x->%08x ", p->ete_clr, c->ete_clr); any = true; }
+	if (p->ete_stat != c->ete_stat) { OMO_CH("ete stat %08x->%08x ", p->ete_stat, c->ete_stat); any = true; }
 	if (p->out0 != c->out0) { OMO_CH("out0 %08x->%08x ", p->out0, c->out0); any = true; }
 	if (p->out1 != c->out1) { OMO_CH("out1 %08x->%08x ", p->out1, c->out1); any = true; }
 	if (p->isr207 != c->isr207) { OMO_CH("isr207 %u->%u ", p->isr207, c->isr207); any = true; }
@@ -2350,7 +2430,7 @@ static void omo_intx2_delta(const char *tag, const struct omo_intx2_snap *p,
 	if (p->isr209 != c->isr209) { OMO_CH("isr209 %u->%u ", p->isr209, c->isr209); any = true; }
 	else OMO_SM("isr209 ");
 
-	pr_info("omo-drv1: [intx2] DELTA %s: %s; unchanged: %s\n",
+	pr_info("omo-drv1: [intx3] DELTA %s: %s; unchanged: %s\n",
 		tag, any ? ch : "no change", same[0] ? same : "-");
 #undef OMO_CH
 #undef OMO_SM
@@ -2362,14 +2442,19 @@ static void omo_intx2_wait(const struct omo_intx2_snap *base)
 	unsigned int ms;
 
 	for (ms = 0; ms < OMO_INTAPOST_TIMEOUT_MS; ms += OMO_INTAPOST_STEP_MS) {
-		u32 raw, st, i207, i209;
+		u32 raw, st, i207, i209, traw, tst, est;
 
 		msleep(OMO_INTAPOST_STEP_MS);
 		raw = omo_msg ? omo_rd(omo_msg, OMO_GLUE_RAW) : 0;
 		st = omo_msg ? omo_rd(omo_msg, OMO_GLUE_STAT) : 0;
+		traw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0;
+		tst = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0;
+		est = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0;
 		i207 = (u32)atomic_read(&omo_isr_n);
 		i209 = (u32)atomic_read(&omo_isr2_n);
 		if (raw != base->raw || st != base->stat ||
+		    traw != base->twin_raw || tst != base->twin_stat ||
+		    est != base->ete_stat ||
 		    i207 != base->isr207 || i209 != base->isr209)
 			break;
 	}
@@ -2436,13 +2521,130 @@ static void omo_intx2_write_step(const char *tag, const char *what, u32 ca, void
 	*prev = post;
 }
 
+/* intapost bit 0x40 (twin.md section 5.3) - the one new candidate: the twin copy's mask + doorbell.
+ *
+ * W1: open the second ctrl-rb copy's mask, CA 0x40039ae8, with the vendor's OWN copy-A constant
+ *     (0xfffffc20: pcie_ete_chn_res @0x74fc `ldr r8,[r3,#0x2e8]` / @0x7504 `and r8,r8,sb` (
+ *     sb=0xfffffc20 from @0x74a4/0x74a8) / @0x7520 `str r8,[r2,#0x2e8]`).  Conditional: only when
+ *     the twin mask is not already 0x20; written once and read back.  The vendor's HOST module
+ *     never writes any 0xa** glue offset (raw scan: 0 hits in either module), so this is an
+ *     experimental unmask, not a reproduction - the device firmware programs the same family.
+ * W2: ring the twin's doorbell, CA 0x40039ad4 |= 0x8 - the mirror of copy A's documented D2H set
+ *     (0x400392d4 |= 8).  Conditional on W1 having taken (mask reads 0x20); self-clearing.
+ * Each write gets the bounded wait, a full snapshot and a DELTA line.  NEVER touches the W1C
+ * clears 0x400392f0 (copy A) / 0x40039af0 (copy B); never reads 0x10161000 or 0x4016010c. */
+static void omo_twin_stim_step(struct omo_intx2_snap *prev)
+{
+	struct omo_intx2_snap post;
+	u32 m, want, rb, d;
+
+	m = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0;
+	if (m == 0x20U) {
+		pr_info("omo-drv1: [intx3] W1 twin mask 0x40039ae8 already 0x%08x - no write\n", m);
+	} else {
+		want = m & OMO_GLUE_CHN_RES_MASK;
+		iowrite32(want, omo_msg + OMO_TWIN_MASK);
+		rb = omo_rd(omo_msg, OMO_TWIN_MASK);
+		pr_info("omo-drv1: [intx3] W1 twin mask 0x40039ae8 0x%08x -> 0x%08x (rb 0x%08x)\n",
+			m, want, rb);
+	}
+	omo_intx2_wait(prev);
+	omo_intx2_snap_take(&post);
+	omo_intx2_print("W1", &post);
+	omo_intx2_delta("W1", prev, &post);
+	*prev = post;
+
+	m = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0;
+	if (m == 0x20U) {
+		d = omo_rd(omo_msg, OMO_TWIN_DOORBELL);
+		iowrite32(d | 0x8U, omo_msg + OMO_TWIN_DOORBELL);
+		pr_info("omo-drv1: [intx3] W2 twin doorbell 0x40039ad4 <= 0x%08x (rb 0x%08x, self-clearing)\n",
+			d | 0x8U, omo_rd(omo_msg, OMO_TWIN_DOORBELL));
+	} else {
+		pr_info("omo-drv1: [intx3] W2 skipped: twin mask reads 0x%08x, not 0x20\n", m);
+	}
+	omo_intx2_wait(prev);
+	omo_intx2_snap_take(&post);
+	omo_intx2_print("W2", &post);
+	omo_intx2_delta("W2", prev, &post);
+	*prev = post;
+}
+
+/* intapost bit 0x20 (twin.md section 5.3, W3 - optional): if the ETE group's status latched, write
+ * it back to the group's clear register, CA 0x4003950c - exactly oal_pcie_transfer_done @0x8480
+ * (`ldr r3,[r0,#4]; orr r3,r3,r5; str r3,[r0,#4]`).  The vendor's own RMW; a no-op when nothing
+ * latched.  Never the W1C clears 0x400392f0 / 0x40039af0. */
+static void omo_ete_clear_step(struct omo_intx2_snap *prev)
+{
+	struct omo_intx2_snap post;
+	u32 es = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0;
+
+	if (es) {
+		iowrite32(es, omo_msg + OMO_ETE_INTR_CLR);
+		pr_info("omo-drv1: [intx3] W3 ETE clear 0x4003950c <- 0x%08x (status rb 0x%08x)\n",
+			es, omo_rd(omo_msg, OMO_ETE_INTR_STAT));
+	} else {
+		pr_info("omo-drv1: [intx3] W3 skipped: ETE status 0x40039510 clear (nothing latched)\n");
+	}
+	omo_intx2_wait(prev);
+	omo_intx2_snap_take(&post);
+	omo_intx2_print("W3", &post);
+	omo_intx2_delta("W3", prev, &post);
+	*prev = post;
+}
+
+/* intapost bit 0x80 - the MSI probe, LAST and reversible (twin.md section 4; needs 0x20).
+ *
+ * twin.md's branch table expects the documented negative here (row 6, "MSI DEAD"): MSI must not be
+ * the delivery on this board (the vendor raises INTA; the DT carries no msi-parent/msi-controller).
+ * The twin.md *shape* - pci_alloc_irq_vectors(pdev,1,1,PCI_IRQ_MSI) -> pci_irq_vector -> request_irq
+ * -> counter - cannot be coded here, and that is a MEASURED platform limit, not a choice:
+ *   * the target kernel has NO MSI API AT ALL (CONFIG_PCI_MSI=n): /proc/kallsyms carries zero hits
+ *     for pci_alloc_irq_vectors, pci_alloc_irq_vectors_affinity, pci_irq_vector,
+ *     pci_free_irq_vectors, pci_enable_msi and pci_msi_enabled (12 names checked, 2026-10-05);
+ *   * the CI's vanilla multi_v7_defconfig DOES set CONFIG_PCI_MSI=y (measured on the first knob-v3
+ *     artifact: pci_alloc_irq_vectors_affinity/pci_irq_vector/pci_free_irq_vectors arrived as
+ *     UNDEFINED symbols), so a strong reference makes insmod fail with "Unknown symbol" on the
+ *     very kernel this module must load on - which is exactly how that build was caught;
+ *   * a weak reference would load but leave the call sites NULL, and a NULL-guarded call is still
+ *     untestable on a stack with no MSI IRQ domain.
+ * So the step PROBES and REPORTS the MSI state - cap/ctl/Enable/addr/data + the kernel-side facts
+ * that decide the row - and changes nothing at all, which trivially satisfies "reversible". */
+static void omo_msi_step(struct omo_intx2_snap *prev)
+{
+	struct omo_intx2_snap post;
+	struct file *f;
+	char buf[32] = { 0 };
+	loff_t pos = 0;
+	bool msi_irqs = false;
+
+	f = filp_open("/sys/bus/pci/devices/0000:00:00.0/msi_irqs", O_RDONLY, 0);
+	if (!IS_ERR(f)) {
+		kernel_read(f, buf, sizeof(buf) - 1, &pos);
+		filp_close(f, NULL);
+		msi_irqs = true;
+	}
+	pr_info("omo-drv1: [intx3] msi: cap=%02x ctl=0x%04x en=%d addr=%08x:%08x data=%04x (the vendor value is 0x0180: present, Enable 0, 1 vector)\n",
+		prev->msi_cap, prev->msi_ctl, (prev->msi_ctl & PCI_MSI_FLAGS_ENABLE) ? 1 : 0,
+		prev->msi_addr_hi, prev->msi_addr_lo, prev->msi_data);
+	pr_info("omo-drv1: [intx3] msi: /sys/bus/pci/devices/0000:00:00.0/msi_irqs %s - no MSI IRQ domain on this SoC\n",
+		msi_irqs ? "PRESENT" : "ABSENT");
+	pr_info("omo-drv1: [intx3] msi: target kernel MSI API unavailable (CONFIG_PCI_MSI=n: /proc/kallsyms has no pci_irq_vector); this module was built with CONFIG_PCI_MSI=%s, so no API is called\n",
+		IS_ENABLED(CONFIG_PCI_MSI) ? "y" : "n");
+	pr_info("omo-drv1: [intx3] msi: MSI DEAD (twin.md sec.4 row 6) - INTx stays; nothing was enabled, nothing to roll back\n");
+	omo_intx2_snap_take(&post);
+	omo_intx2_print("F", &post);
+	omo_intx2_delta("F", prev, &post);
+	*prev = post;
+}
+
 #define OMO_INTX2_BASE_TAG "A"
 
 static void omo_intx2_snapshot_run(void)
 {
 	struct omo_intx2_snap s;
 
-	pr_info("omo-drv1: ---- intx2 snapshot knob (intx.md section 4; 209 line %s) ----\n",
+	pr_info("omo-drv1: ---- intx3 snapshot knob (twin.md section 5; 209 line %s) ----\n",
 		omo_irq2_owned ? "CLAIMED" : "unclaimed");
 
 	/* A: baseline, read-only, then the conditional gates + a refresh */
@@ -2464,6 +2666,19 @@ static void omo_intx2_snapshot_run(void)
 	/* E: the firmware's own D2H doorbell (CA 0x40101434) */
 	omo_intx2_write_step("E", "fw-d2h-doorbell", 0x40101434U, omo_rel, OMO_D2H_DOORBELL,
 			     0x1U, true, &s);
+
+	/* W1/W2: the twin-copy stimulus - the ONE new candidate (bit 0x40, twin.md sec.5.3) */
+	if (omo_intapost & 0x40)
+		omo_twin_stim_step(&s);
+	else
+		pr_info("omo-drv1: [intx3] twin-stim (0x40) not requested - twinB mask/doorbell left unwritten\n");
+
+	/* W3: the vendor's own ETE-group clear, only if the status latched (bit 0x20) */
+	omo_ete_clear_step(&s);
+
+	/* F: MSI - last and reversible (bit 0x80, twin.md sec.4) */
+	if (omo_intapost & 0x80)
+		omo_msi_step(&s);
 }
 
 static void omo_intapost_run(void)
