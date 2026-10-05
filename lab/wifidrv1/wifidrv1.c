@@ -1345,6 +1345,10 @@ MODULE_PARM_DESC(intrsamp,
 static struct pci_dev *omo_ep1_dev;
 static void __iomem *omo_ep1_msg;
 static void __iomem *omo_ep1_iatu;
+/* the sibling's line (209): declared here because omo_ep1_init caches it at claim time, i.e. before
+ * the quiesce block below that also closes it through the 207 ISR's bound. */
+static int omo_irq2;
+static bool omo_irq2_owned;
 
 static void omo_intrsamp(void)
 {
@@ -1486,17 +1490,28 @@ module_param_named(ep1db, omo_ep1db_en, uint, 0444);
 MODULE_PARM_DESC(ep1db,
 	"1 = also claim 0001:00:00.0 and ring the H2D doorbell through its window (phase 33)");
 
+/* witness3 (c): the sibling endpoint's PCI domain, explicit rather than a fixed function id.  The
+ * crossed sibling lives at 0001:00:00.0 (intx.md); the port pins it by THIS domain. */
+static unsigned int omo_sibling_domain = 1;
+module_param_named(sibling_domain, omo_sibling_domain, uint, 0444);
+MODULE_PARM_DESC(sibling_domain,
+	"the sibling (0001:00:00.0) PCI domain for the 209 witness (default 1)");
+
 static int omo_ep1_init(void)
 {
 	resource_size_t lo;
 	int rc;
 
-	if (omo_ep1_dev)
-		return 0;		/* the 0x10 dual-line bit or a second ep1db path already claimed it */
-	omo_ep1_dev = pci_get_domain_bus_and_slot(1, 0, PCI_DEVFN(0, 0));
-	if (!omo_ep1_dev) {
-		pr_err("omo-drv1: [ep1db] sibling 0001:00:00.0 not found\n");
-		return -ENODEV;
+	if (omo_ep1_msg)
+		return 0;		/* already claimed AND mapped (the 0x10 bit or ep1db got here) */
+	if (!omo_ep1_dev) {		/* the pci_driver .probe may already have bound it (witness3) */
+		omo_ep1_dev = pci_get_domain_bus_and_slot(omo_sibling_domain, 0, OMO_PCI_DEV);
+
+		if (!omo_ep1_dev) {
+			pr_err("omo-drv1: [ep1db] sibling domain=%u bus0 devfn0 not found\n",
+			       omo_sibling_domain);
+			return -ENODEV;
+		}
 	}
 	rc = pci_enable_device(omo_ep1_dev);
 	if (rc) {
@@ -1511,6 +1526,33 @@ static int omo_ep1_init(void)
 	pci_read_config_dword(omo_ep1_dev, PCI_BASE_ADDRESS_0, (u32 *)&lo);
 	lo &= PCI_BASE_ADDRESS_MEM_MASK;
 	pr_info("omo-drv1: [ep1db] sibling BAR0 = 0x%llx\n", (unsigned long long)lo);
+
+	/* witness3 (a): cache the kernel's OWN irq at claim time.  The sysfs /irq file is a FROZEN
+	 * field (IRQ_NOTCONNECTED = 255 the moment no driver owns the line), so read it WHILE we own
+	 * the claim - our pci_driver bind made the core run pci_assign_irq() for the sibling, so its
+	 * ->irq (=209 here) is what /sys/.../irq reports.  The config byte is the offset-immune
+	 * fallback; never read ->irq at the CI offset 0x1ac (resource[] garbage / an oops-y virq). */
+	{
+		u8 line = 0;
+
+		if (pci_read_config_byte(omo_ep1_dev, PCI_INTERRUPT_LINE, &line) == 0 && line)	/* 0xff invalid */
+			omo_irq2 = (line == 0xff) ? 0 : line;
+		if (omo_irq2 <= 0 || omo_irq2 == 255) {
+			struct file *f = filp_open("/sys/bus/pci/devices/0001:00:00.0/irq",
+						   O_RDONLY, 0);
+
+			if (!IS_ERR(f)) {
+				char b[16] = { 0 };
+				loff_t p = 0;
+
+				kernel_read(f, b, sizeof(b) - 1, &p);
+				filp_close(f, NULL);
+				omo_irq2 = (int)simple_strtol(b, NULL, 10);
+			}
+		}
+		pr_info("omo-drv1: [ep1db] sibling kernel irq=%d (cached at claim; cfg byte 0x%02x)\n",
+			omo_irq2, line);
+	}
 
 	/* The first run proved the bare claim is not enough: EP1's readback was 0xffffffff
 	 * (PCIe no-decode) because the takeover only programs EP0's inbound viewports.  Program
@@ -2044,8 +2086,7 @@ static bool omo_pci_registered;
  * 207 ISR's HARD BOUND can also close the sibling line, and so the quiesce supervisor below can
  * drive both.  The rest of the isr2 state + omo_intx2_isr live with the intapost knob further on. */
 static atomic_t omo_isr2_n = ATOMIC_INIT(0);
-static int omo_irq2;
-static bool omo_irq2_owned;
+/* omo_irq2 / omo_irq2_owned live beside omo_ep1_dev (they are cached at claim time). */
 
 /* ======================================================================
  * PHASE 50 - KNOB v4: the BOUNDED QUIESCE (build/tmp/inta-spec/quiesce.md)
@@ -2059,6 +2100,16 @@ static bool omo_irq2_owned;
  *   quiesce 0x8 Q_ESCALATE  : after a bounded attempt that did not quiesce, run the next under a
  *                             FRESH bound
  *   quiesce 0x10 Q_LEAVE_MASKED: do not restore the mask at the end
+ *   quiesce 0x20 Q_BRIDGEACK : R0 - the vendor's OWN per-entry store at its OWN target
+ *                              (CA 0x400392e8 |= rd(0x2ec) & 0x001f0707; it carries no bits 3/4,
+ *                              so it cannot quiesce a storm alone - the vendor's per-entry action)
+ *   quiesce 0x40 Q_BRIDGE_C2 : R0's opt-in block-base probe (CA 0x40039008/0x40039004)
+ *
+ * KNOB v5 (build/tmp/inta-spec/ladder2.md) - the ladder completed: R0 Q_BRIDGEACK -> R1 Q_CONSUME
+ * -> R2 Q_FWACK -> R3 Q_MASKCLOSE.  R3 now masks with the ISR-latched storm bits (0x2ec & 0x3d8)
+ * instead of the fixed 0x18, the supervisor prints the raw/mask/stat triple + the residual, and a
+ * CONSUME residual of exactly bit 3 (0x8, the phase21 livebind signature) escalates to R2/R3 even
+ * when Q_ESCALATE is not armed.
  *
  * THE HARD BOUND IS MANDATORY AND UNCONDITIONAL whenever hw=1: after `qbound` entries (clamped
  * 1..64) the ISR calls disable_irq_nosync() on the line(s) it owns and prints IRQ_DISABLED_BOUND
@@ -2077,7 +2128,9 @@ MODULE_PARM_DESC(quiesce,
 	"0x2 = Q_FWACK (CA 0x4000010c <= 0x0000cece, drive the firmware's own service); "
 	"0x4 = Q_MASKCLOSE (CA 0x400392e8 <= saved|0x18 - the named, reversible hard stop, LAST); "
 	"0x8 = Q_ESCALATE (after a bounded attempt that did not quiesce, re-enable the line and run "
-	"the next ranked attempt under a FRESH bound); 0x10 = Q_LEAVE_MASKED (skip the mask restore)");
+	"the next ranked attempt under a FRESH bound); 0x10 = Q_LEAVE_MASKED (skip the mask restore); "
+	"0x20 = Q_BRIDGEACK (R0: the vendor's own per-entry store CA 0x400392e8 |= rd(0x2ec) & "
+	"0x001f0707, run in-ISR when armed); 0x40 = Q_BRIDGE_C2 (R0's opt-in block-base probe)");
 
 static unsigned int omo_qbound = 64;
 module_param_named(qbound, omo_qbound, uint, 0444);
@@ -2092,14 +2145,16 @@ MODULE_PARM_DESC(qwait_ms, "per-attempt supervisor wait in ms (clamped <= 5000; 
 static unsigned int omo_bisect;
 module_param_named(bisect, omo_bisect, uint, 0444);
 MODULE_PARM_DESC(bisect,
-	"the chosen bisect row (build/tmp/inta-spec/bisect.md): 0 = legacy (intapost alone); "
-	"1 = B1 widened snapshot (0x20, reads + W3); 2 = B2 that snapshot WITHOUT the four new "
-	"twin/ETE reads (0xae4/0xaec/0x50c/0x510); 3 = B3 W1 only (twin mask, no W2 doorbell); "
-	"4 = B4 W2 only (twin doorbell, no W1); 5 = B5 the corrected 209 witness alone (0x10); "
-	"6 = B6 the MSI probe alone (0x80)");
+	"the chosen bisect row (build/tmp/inta-spec/modes.md sec.3): 0 = legacy (intapost alone); "
+	"1 = B1 the widened snapshot + the copy-B/ETE reads (0x20); 2 = B2 that snapshot WITHOUT the "
+	"four new reads (0xae4/0xaec/0x50c/0x510); 3 = B3 the snapshot + W1 only (0x20|0x40, no W2); "
+	"4 = B4 the snapshot + W1+W2 (0x20|0x40, the twin-doorbell delta); 5 = B5 the corrected 209 "
+	"witness alone (0x10); 6 = B6 the snapshot + the MSI probe (0x20|0x80).  Every row runs with "
+	"THE HARD BOUND armed (qbound, unconditional in the ISR)");
 
 #define OMO_Q_GLUE_RAW		0x2e4		/* the glue RAW status (copy A) */
 #define OMO_Q_MASK_BITS		0x18U		/* the two ctl-rb bits (3+4) the ladder closes */
+#define OMO_Q_BRIDGE_KEEP	0x001f0707U	/* oal_pcie_transfer_done's kept bits (ladder2 R0) */
 #define OMO_Q_ACK_OFF		0x101438UL	/* CA 0x40101438 - out[3] ack, within region 3 */
 #define OMO_Q_REARM_OFF		0x101414UL	/* CA 0x40101414 - out[4] re-arm, within region 3 */
 #define OMO_Q_NATPOST_OFF	0x10cUL		/* CA 0x4000010c - the natural-post companion */
@@ -2113,6 +2168,25 @@ static const char *omo_qwinner;		/* its name, for the final print */
 static unsigned omo_quiet_printed;
 static u32 omo_mask_saved;		/* CA 0x400392e8 before Q_MASKCLOSE */
 static bool omo_mask_saved_valid;
+static u32 omo_q_storm_bits;		/* ISR-latched: last rd(0x2ec) & OMO_GLUE_MASK (ladder2) */
+static bool omo_q_bridge_armed;		/* R0 Q_BRIDGEACK armed (quiesce bit 0x20) */
+
+/* R0 Q_BRIDGEACK (ladder2.md sec.2): the vendor's OWN per-entry store at its own target - CA
+ * 0x400392e8 |= (rd(0x2ec) & 0x001f0707) (candidate c1, phase20's S+4 mapping).  It carries no
+ * dispatch bits 3/4, so it cannot quiesce a storm alone; its role is the vendor's per-entry action
+ * and, on c1, pre-masking only the bits the vendor itself acknowledges.  The c2 block-base probe is
+ * opt-in on quiesce bit 0x40.  NEVER the W1C clears 0x400392f0/0x40039af0. */
+static void omo_q_bridgeack(void)
+{
+	u32 keep = omo_rd(omo_msg, OMO_GLUE_STAT) & OMO_Q_BRIDGE_KEEP;
+
+	iowrite32(omo_rd(omo_msg, OMO_CHN_RES) | keep, omo_msg + OMO_CHN_RES);	/* c1 0x400392e8 */
+	if (omo_quiesce & 0x40u) {		/* c2: the block-base probe (opt-in) */
+		u32 v = omo_rd(omo_msg, 0x008) & OMO_Q_BRIDGE_KEEP;
+
+		iowrite32(omo_rd(omo_msg, 0x004) | v, omo_msg + 0x004);
+	}
+}
 
 /* ---- the three mechanisms: one MMIO group per ladder entry ---- */
 static void omo_q_consume(void)
@@ -2135,7 +2209,8 @@ static void omo_q_maskclose(void)
 		omo_mask_saved = cur;
 		omo_mask_saved_valid = true;
 	}
-	iowrite32(cur | OMO_Q_MASK_BITS, omo_msg + OMO_CHN_RES);
+	iowrite32(cur | (omo_q_storm_bits ? omo_q_storm_bits : OMO_Q_MASK_BITS),
+		  omo_msg + OMO_CHN_RES);
 }
 
 /* Split 1..qbound among the armed attempts, in rank order, and run this entry's mechanism once,
@@ -2205,8 +2280,9 @@ static void omo_quiesce_run(void)
 		pr_info("omo-drv1: [qsv] no message window - quiesce supervisor skipped\n");
 		return;
 	}
-	pr_info("omo-drv1: ---- quiesce supervisor: mask=0x%x bound=%u wait=%ums ----\n",
-		omo_quiesce, omo_qbound, omo_qwait_ms);
+	omo_q_bridge_armed = (omo_quiesce & 0x20u) ? true : false;	/* arm R0 before CONSUME */
+	pr_info("omo-drv1: ---- quiesce supervisor: mask=0x%x bound=%u wait=%ums bridge=%d ----\n",
+		omo_quiesce, omo_qbound, omo_qwait_ms, omo_q_bridge_armed ? 1 : 0);
 	for (i = 0; i < 3; i++) {
 		unsigned a = mech[i];
 		unsigned long waited = 0;
@@ -2219,8 +2295,8 @@ static void omo_quiesce_run(void)
 		st0 = omo_rd(omo_msg, OMO_GLUE_STAT);
 		o0 = omo_rd(omo_msg, OMO_MSG0);
 		o1 = omo_rd(omo_msg, OMO_MSG1);
-		pr_info("omo-drv1: [qsv] BEFORE %s glue{raw=%08x mask=%08x stat=%08x} out0=%08x out1=%08x isr_n=%u isr2_n=%u\n",
-			name[i], raw, msk, st0, o0, o1,
+		pr_info("omo-drv1: [qsv] BEFORE %s glue{raw=%08x mask=%08x stat=%08x} storm=0x%x out0=%08x out1=%08x isr_n=%u isr2_n=%u\n",
+			name[i], raw, msk, st0, st0 & OMO_GLUE_MASK, o0, o1,
 			(unsigned)atomic_read(&omo_isr_n), (unsigned)atomic_read(&omo_isr2_n));
 
 		if (d207 && omo_irq_owned) {
@@ -2249,15 +2325,18 @@ static void omo_quiesce_run(void)
 			d207 = true;
 		if (omo_bounded2)
 			d209 = true;
-		pr_info("omo-drv1: [qsv] AFTER %s glue=%08x (was %08x) bounded=%d/%d waited=%lums isr_n=%u isr2_n=%u\n",
-			name[i], st, st0, omo_bounded, omo_bounded2, waited,
+		pr_info("omo-drv1: [qsv] AFTER %s glue=%08x (was %08x) residual=0x%x bounded=%d/%d waited=%lums isr_n=%u isr2_n=%u\n",
+			name[i], st, st0, st & OMO_GLUE_MASK, omo_bounded, omo_bounded2, waited,
 			(unsigned)atomic_read(&omo_isr_n), (unsigned)atomic_read(&omo_isr2_n));
 		if (st == 0) {
 			omo_qsv_done = true;
 			omo_qwinner = name[i];
 			break;
 		}
-		if (!(omo_quiesce & 0x8u))		/* Q_ESCALATE */
+		/* escalate when Q_ESCALATE is armed OR the CONSUME residual is exactly bit 3 (0x8): the
+		 * phase21 livebind signature - CONSUME retires bit 4 and leaves bit 3, so the winner
+		 * must be R2 (the device) or R3 (the mask) (ladder2.md sec.3). */
+		if (!(omo_quiesce & 0x8u) && (st & OMO_Q_MASK_BITS) != 0x8u)
 			break;
 	}
 	omo_qmode = 0;		/* no further in-ISR mechanisms unless re-armed */
@@ -2301,8 +2380,13 @@ static irqreturn_t omo_intx_isr(int irq, void *dev_id)
 		return IRQ_HANDLED;			/* no MMIO while bounded */
 	}
 	st = omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0;
+	if (omo_msg && st)
+		omo_q_storm_bits = st & OMO_GLUE_MASK;	/* latch the dispatch class (ladder2) */
 	if (st && !(omo_quiet_printed++ & 0xffu))	/* bounded log: 1 line / 256 entries */
-		pr_info("omo-drv1: [qsv] entry n=%u mode=0x%x glue=%08x\n", n, omo_qmode, st);
+		pr_info("omo-drv1: [qsv] entry n=%u mode=0x%x glue=%08x storm=0x%x\n", n, omo_qmode, st,
+			st & OMO_GLUE_MASK);
+	if (omo_msg && omo_q_bridge_armed)
+		omo_q_bridgeack();			/* R0, armed by quiesce bit 0x20 */
 	if (omo_msg)
 		omo_q_ladder(n, st);			/* the armed attempts, in rank order */
 	if (omo_msg)					/* the vendor RMW write-back, kept (NEVER 0x400392f0) */
@@ -2477,14 +2561,16 @@ static irqreturn_t omo_intx2_isr(int irq, void *dev_id)
  * reads 0xff while the kernel owns 209 (assigned by hi_pcie_map_irq at scan time and visible as
  * /sys/bus/pci/devices/0001:00:00.0/irq); reading config was the defect that made isr209 vacuous.
  *
- * The kernel-API lookup is offset-immune, the ->irq deref is not: this module is cross-built
- * against vanilla 5.10.201 headers whose struct pci_dev puts ->irq at 0x1ac (re-measured in the CI
- * artifact: `ldr r1,[r0,#0x1ac]` at .text+0x344), while the running vendor kernel has 0x184
- * (hi5622v100_plat.ko do_request_irq @0x1082c; virq3.md).  So the direct read executes ONLY when
- * the compiled layout matches the vendor's - a compile-time offset guard (the durable BUILD_BUG_ON
- * of virq3.md would hard-fail the CI build at 0x1ac).  Every other path uses the kernel sysfs
- * value: never a config-space read, never a struct read at a mismatched offset.  The config byte
- * is printed as a CROSS-CHECK only and never gates request_irq. */
+ * witness3.md: the kernel-API lookup is offset-immune, the ->irq deref is not: this module is
+ * cross-built against vanilla 5.10.201 headers whose struct pci_dev puts ->irq at 0x1ac
+ * (re-measured in the CI artifact: `ldr r1,[r0,#0x1ac]` at .text+0x344), while the running vendor
+ * kernel has 0x184 (hi5622v100_plat.ko do_request_irq @0x1082c; virq3.md).  The AUTHORITY is the
+ * kernel's own per-device field, reached through the port's OWN pci_driver claim (the core runs
+ * pci_assign_irq() for the bound sibling, so its irq is 209 at claim time and /sys/.../irq reports
+ * it) - cached in omo_ep1_init.  The direct ->irq read executes ONLY when the compiled layout
+ * matches the vendor's (0x184); the offset-immune config byte is the fallback; the sysfs file is
+ * printed as a CROSS-CHECK only and never gates (it froze to 255 the instant the vendor's
+ * free_irq left 209 unowned - the exact defect that made the earlier probe read 255). */
 static int omo_dual_line_attach(void)
 {
 	size_t irq_off = offsetof(struct pci_dev, irq);
@@ -2493,29 +2579,36 @@ static int omo_dual_line_attach(void)
 
 	if (omo_irq2_owned)
 		return 0;
-	if (!omo_ep1_dev) {
-		rc = omo_ep1_init();
-		if (rc) {
-			pr_err("omo-drv1: [intx2] sibling claim failed rc=%d - the 209 witness is unavailable\n",
-			       rc);
-			return rc;
-		}
+	rc = omo_ep1_init();		/* omo_ep1_init is idempotent: it maps once and caches the irq */
+	if (rc) {
+		pr_err("omo-drv1: [intx2] sibling claim failed rc=%d - the 209 witness is unavailable\n",
+		       rc);
+		return rc;
 	}
-	if (irq_off == 0x184) {
-		struct pci_dev *sib = pci_get_domain_bus_and_slot(1, 0, PCI_DEVFN(0, 0));
+	if (omo_irq2 <= 0 || omo_irq2 == 255) {
+		/* witness3 (b): the authority is the kernel's own per-device field, reached through the
+		 * port's OWN pci_driver claim (cached in omo_ep1_init).  Re-resolve here if the cache is
+		 * empty: ->irq only at the matching layout (0x184), else the offset-immune config byte.
+		 * NEVER gate on the sysfs file - it froze to 255 with no driver owning 209 (the defect). */
+		struct pci_dev *sib = pci_get_domain_bus_and_slot(omo_sibling_domain, 0, OMO_PCI_DEV);
 
 		if (!sib) {
-			pr_err("omo-drv1: [intx2] sibling 0001:00:00.0 not found\n");
+			pr_err("omo-drv1: [intx2] sibling domain=%u not found\n", omo_sibling_domain);
 			return -ENODEV;
 		}
-		omo_irq2 = (int)sib->irq;	/* READ only; == 209 on the vendor kernel */
+		if (irq_off == 0x184)		/* only legal when the CI headers match the kernel */
+			omo_irq2 = (int)sib->irq;
+		else {				/* offset-immune: the byte the core wrote at scan time */
+			u8 line = 0;
+
+			if (pci_read_config_byte(sib, PCI_INTERRUPT_LINE, &line) == 0)
+				omo_irq2 = (line == 0xff) ? 0 : line;
+		}
 		pci_dev_put(sib);
-	} else {
-		pr_warn("omo-drv1: [intx2] compiled pci_dev->irq at 0x%zx (vendor 0x184) - using the sysfs virq\n",
+		pr_warn("omo-drv1: [intx2] compiled pci_dev->irq at 0x%zx (vendor 0x184) - cfg byte used\n",
 			irq_off);
-		omo_irq2 = 0;
 	}
-	if (omo_irq2 <= 0 || omo_irq2 == 255) {	/* fallback: the kernel's value, no config read */
+	{   /* cross-check ONLY - printed, never gating (the port's own claim is the witness) */
 		struct file *f = filp_open("/sys/bus/pci/devices/0001:00:00.0/irq", O_RDONLY, 0);
 
 		if (!IS_ERR(f)) {
@@ -2524,7 +2617,8 @@ static int omo_dual_line_attach(void)
 
 			kernel_read(f, buf, sizeof(buf) - 1, &pos);
 			filp_close(f, NULL);
-			omo_irq2 = (int)simple_strtol(buf, NULL, 10);
+			pr_info("omo-drv1: [intx2] cross-check: sysfs irq=%s (never gates)\n",
+				buf[0] ? buf : "0");
 		}
 	}
 	if (pci_read_config_byte(omo_ep1_dev, PCI_INTERRUPT_LINE, &cfgline) == 0)
@@ -2536,8 +2630,11 @@ static int omo_dual_line_attach(void)
 			omo_irq2, rc);
 		if (rc == 0)
 			omo_irq2_owned = true;
-		else
+		else {
+			if (rc == -EBUSY)
+				pr_info("omo-drv1: [intx2] ROW 8 SIBLING BUSY: host-side re-run cause (free_irq without the core reset; a fast pre-teardown re-run sees 209 unowned)\n");
 			omo_irq2 = 0;
+		}
 	} else {
 		pr_info("omo-drv1: [intx2] no sibling INTx virq (irq=%d) - the 209 witness is unavailable\n",
 			omo_irq2);
@@ -2907,7 +3004,7 @@ static void omo_msi_step(struct omo_intx2_snap *prev)
 
 #define OMO_INTX2_BASE_TAG "A"
 
-static void omo_intx2_snapshot_run(void)
+static void omo_intx2_snapshot_run(unsigned bits)
 {
 	struct omo_intx2_snap s;
 
@@ -2935,7 +3032,7 @@ static void omo_intx2_snapshot_run(void)
 			     0x1U, true, &s);
 
 	/* W1/W2: the twin-copy stimulus - the ONE new candidate (bit 0x40, twin.md sec.5.3) */
-	if (omo_intapost & 0x40)
+	if (bits & 0x40)
 		omo_twin_stim_step(&s);
 	else
 		pr_info("omo-drv1: [intx3] twin-stim (0x40) not requested - twinB mask/doorbell left unwritten\n");
@@ -2944,7 +3041,7 @@ static void omo_intx2_snapshot_run(void)
 	omo_ete_clear_step(&s);
 
 	/* F: MSI - last and reversible (bit 0x80, twin.md sec.4) */
-	if (omo_intapost & 0x80)
+	if (bits & 0x80)
 		omo_msi_step(&s);
 }
 
@@ -2956,10 +3053,10 @@ static unsigned omo_bisect_bits(unsigned b)
 	switch (b) {
 	case 1: return 0x20;   /* B1 widened snapshot (reads + W3) */
 	case 2: return 0x20;   /* B2 widened snapshot WITHOUT the four new reads */
-	case 3: return 0x40;   /* B3 W1 only */
-	case 4: return 0x40;   /* B4 W2 only */
+	case 3: return 0x20|0x40; /* B3 the snapshot + W1 only (no W2 doorbell) */
+	case 4: return 0x20|0x40; /* B4 the snapshot + W1+W2 (the twin-doorbell delta) */
 	case 5: return 0x10;   /* B5 the corrected 209 witness alone */
-	case 6: return 0x80;   /* B6 the MSI probe alone */
+	case 6: return 0x20|0x80; /* B6 the snapshot + the MSI probe */
 	default: return 0;     /* B0: no stimulus */
 	}
 }
@@ -2973,7 +3070,7 @@ static void omo_intapost_run(void)
 	if (bits & 0x10)
 		omo_dual_line_attach();
 	if (bits & 0x20)
-		omo_intx2_snapshot_run();
+		omo_intx2_snapshot_run(bits);
 	if (bits & 0x8)
 		omo_intapost_step("0x8-natural-post", 0x4000010cU, omo_rel, OMO_NATPOST_OFF,
 				  OMO_NATPOST_VAL, false);
@@ -3245,7 +3342,9 @@ err_regions:
 	return rc;
 }
 
-static void omo_hw_detach(void)
+/* witness3: release the sibling claim (windows + regions + the reference this port took).
+ * Idempotent - reachable from EP0's .remove and from exit. */
+static void omo_ep1_release(void)
 {
 	if (omo_ep1_msg) {
 		iounmap(omo_ep1_msg);
@@ -3257,8 +3356,14 @@ static void omo_hw_detach(void)
 	}
 	if (omo_ep1_dev) {
 		pci_release_mem_regions(omo_ep1_dev);
+		pci_dev_put(omo_ep1_dev);	/* the claim's own reference (probe or pci_get) */
 		omo_ep1_dev = NULL;
 	}
+}
+
+static void omo_hw_detach(void)
+{
+	omo_ep1_release();
 	if (omo_acp) {
 		iounmap(omo_acp);
 		omo_acp = NULL;
@@ -3323,6 +3428,22 @@ static int omo_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (!omo_hw)
 		return -ENODEV;		/* hw=0 = registration-only, no PCI access */
 
+	/* witness3 (#4): bind the SIBLING to this same pci_driver so the core runs pci_assign_irq()
+	 * for it and writes its INTx virq (209) into ->irq - the authority for the 209 witness.  Its
+	 * own .remove must not tear down the EP0 attach (see omo_pci_remove). */
+	if (omo_sibling_domain != omo_domain) {
+		want = pci_get_domain_bus_and_slot(omo_sibling_domain, 0, OMO_PCI_DEV);
+		if (want == pdev) {
+			pci_dev_put(want);
+			omo_ep1_dev = pci_dev_get(pdev);
+			pr_info("omo-drv1: [ep1db] sibling domain=%u bound to omo-drv1 (the 209 witness)\n",
+				omo_sibling_domain);
+			return 0;
+		}
+		if (want)
+			pci_dev_put(want);
+	}
+
 	/* keep the domain selector: pci_get_domain_bus_and_slot() returns the same
 	 * pci_dev only for the endpoint in domain omo_domain at bus 0 / devfn 0. */
 	want = pci_get_domain_bus_and_slot(omo_domain, 0, OMO_PCI_DEV);
@@ -3339,8 +3460,10 @@ static int omo_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 static void omo_pci_remove(struct pci_dev *pdev)
 {
-	(void)pdev;
-	omo_hw_detach();
+	/* the sibling (witness3) is bound to this driver for the 209 authority; the EP0 remove
+	 * tears the whole attach down, the sibling remove must not. */
+	if (pdev != omo_ep1_dev)
+		omo_hw_detach();
 }
 
 static struct pci_driver omo_pci_driver = {
@@ -3530,6 +3653,10 @@ static int __init omo_wifidrv1_init(void)
 		omo_qmode = omo_quiesce & 0x7u;	/* arm the in-ISR ladder from the FIRST entry */
 		pr_info("omo-drv1: quiesce armed in-ISR: mode=0x%x bound=%u wait=%ums (the bound is mandatory)\n",
 			omo_qmode, omo_qbound, omo_qwait_ms);
+	}
+	if (omo_hw && (omo_quiesce & 0x20u)) {
+		omo_q_bridge_armed = true;	/* R0 Q_BRIDGEACK before CONSUME (ladder2 sec.4a) */
+		pr_info("omo-drv1: Q_BRIDGEACK armed in-ISR (quiesce bit 0x20)\n");
 	}
 
 	if (omo_hw) {
