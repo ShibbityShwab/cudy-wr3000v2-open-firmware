@@ -34,6 +34,12 @@
  * 0x10161000; never rmmod a vendor module; measurement only through the
  * endpoint's BAR0/BAR2.
  *
+ * INTx (virq2.md section 2, the virq experiment): the module registers a
+ * struct pci_driver for 59e7:0005, so the PCI core runs pci_assign_irq() and
+ * writes the endpoint's INTx virq (207) before .probe.  omo_hw_attach() then
+ * request_irq()s it and omo_intx_isr counts + clears it; the init-done line
+ * carries irq0=/isr0= for the host-side witness.
+ *
  * SAFETY: the whole hardware section is gated on param `hw` (default 0 = off),
  * so the default load behaves exactly like wifidrv0 (registration only, no PCI
  * access at all).  With hw=1 the claim is read-mostly and refuses on conflict.
@@ -55,6 +61,9 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/interrupt.h>	/* request_irq / IRQF_SHARED / irqreturn_t */
+#include <linux/atomic.h>	/* the ISR's lockless event counter */
+#include <linux/of_pci.h>	/* of_irq_parse_and_map_pci (the pci_assign_irq fallback) */
 #include <net/cfg80211.h>
 
 #define OMO_WIPHY_NAME	"omo-drv1"
@@ -2014,6 +2023,43 @@ static void omo_read_msg_block(void)
 	}
 }
 
+/* ---- endpoint INTx (virq2.md section 2/3): acquire and count the line ----------
+ * In a takeover the vendor's endpoint driver (hi5622v100_plat.ko) is hidden, so
+ * nothing is a struct pci_driver for the endpoint and pci_assign_irq() never runs:
+ * pci_dev->irq keeps the pci_read_irq() copy of the never-written config byte 0xff =
+ * 255 (virq2.md section 1).  The port therefore registers omo_pci_driver (module
+ * init below); the core then assigns the INTx virq through the RC's map_irq
+ * (hi_pcie_map_irq -> virq 207) before .probe, and omo_hw_attach() requests it here.
+ * The handler counts and clears - the counter is the host-side witness.
+ */
+static atomic_t omo_isr_n = ATOMIC_INIT(0);
+static int omo_irq;
+static bool omo_irq_owned;
+static bool omo_pci_registered;
+
+static irqreturn_t omo_intx_isr(int irq, void *dev_id)
+{
+	u32 st, keep;
+
+	atomic_inc(&omo_isr_n);
+	(void)dev_id;
+	/* omo_msg may still be unmapped if the line asserts this early (the guard). */
+	st = omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0;
+	pr_info_ratelimited("omo-drv1: [isr] irq=%d n=%u status=0x%08x\n",
+			    irq, (unsigned int)atomic_read(&omo_isr_n), st);
+
+	/* the vendor's oal_pcie_intx_isr clear: mask the non-device bits off and write
+	 * the remainder back (the same clear omo_glue_service() performs at :942). */
+	keep = st;
+	keep &= ~OMO_STAT_MASK1;
+	keep &= ~OMO_STAT_MASK2;
+	keep &= ~OMO_STAT_MASK3;
+	keep &= ~OMO_STAT_MASK4;
+	if (omo_msg)
+		iowrite32(keep, omo_msg + OMO_GLUE_STAT);
+	return IRQ_HANDLED;
+}
+
 /* ---- PCI bring-up (mirrors lab/eteprobe, read-mostly) ------------------ */
 static int omo_hw_attach(void)
 {
@@ -2021,9 +2067,12 @@ static int omo_hw_attach(void)
 	u16 rb = 0;
 	int rc;
 
-	omo_pdev = pci_get_domain_bus_and_slot(omo_domain, 0, OMO_PCI_DEV);
+	/* omo_pdev is set by omo_pci_probe() (the pci_driver path, virq2.md section 2):
+	 * the core runs pci_assign_irq() before .probe, so pci_dev->irq already holds
+	 * the mapped INTx virq - the direct pci_get_domain_bus_and_slot() lookup is
+	 * gone (it is not a pci_driver, so it never triggered the core assignment). */
 	if (!omo_pdev) {
-		pr_err("omo-drv1: no 59e7:0005 endpoint in domain %u\n", omo_domain);
+		pr_err("omo-drv1: no 59e7:0005 endpoint bound in domain %u\n", omo_domain);
 		return -ENODEV;
 	}
 
@@ -2042,6 +2091,33 @@ static int omo_hw_attach(void)
 		pci_disable_device(omo_pdev);
 		omo_pdev = NULL;
 		return rc;
+	}
+
+	/* Acquire and count the endpoint INTx line (virq2.md sections 2-3).  The
+	 * .probe() pci_driver path made the core run pci_assign_irq(), which mapped
+	 * the endpoint INTA through the RC's map_irq (hi_pcie_map_irq -> virq 207)
+	 * and wrote PCI_INTERRUPT_LINE.  If it still reads 0/255, try the core's own
+	 * DT INTx mapper (exported; a documented negative on this board - no
+	 * interrupt-map) and otherwise leave the svc=1 poll service as the stand-in
+	 * (virq2.md section 4). */
+	omo_irq = omo_pdev->irq;
+	if (omo_irq == 0 || omo_irq == 255) {
+		u8 pin = 0;
+
+		pci_read_config_byte(omo_pdev, PCI_INTERRUPT_PIN, &pin);
+		if (pin)
+			omo_irq = of_irq_parse_and_map_pci(omo_pdev, 0, pin);
+	}
+	if (omo_irq > 0 && omo_irq != 255) {
+		rc = request_irq(omo_irq, omo_intx_isr, IRQF_SHARED, "omo-drv1", omo_pdev);
+		pr_info("omo-drv1: request_irq(%d, IRQF_SHARED) rc=%d\n", omo_irq, rc);
+		if (rc == 0)
+			omo_irq_owned = true;
+		else
+			omo_irq = 0;
+	} else {
+		pr_info("omo-drv1: no endpoint INTx virq (irq=%d) - the svc=1 poll service is the stand-in\n",
+			omo_irq);
 	}
 
 	pci_read_config_dword(omo_pdev, PCI_BASE_ADDRESS_0, &lo);
@@ -2288,6 +2364,54 @@ static void omo_hw_detach(void)
 	omo_regs_valid = false;
 }
 
+/* ---- the pci_driver that makes pci_assign_irq() run (virq2.md section 2) ------
+ * The vendor's endpoint driver is the only struct pci_driver for 59e7:0005, so the
+ * takeover must supply one to get the core to assign the INTx virq.  The id table
+ * matches both endpoints; .probe keeps the domain selector (EP0 is domain
+ * omo_domain, EP1 is the domain-1 sibling) and chains into the existing
+ * omo_hw_attach() body.  hw=0 stays registration-only: .probe declines.
+ */
+static const struct pci_device_id omo_pci_ids[] = {
+	{ PCI_DEVICE(0x59e7, 0x0005) },
+	{ }
+};
+MODULE_DEVICE_TABLE(pci, omo_pci_ids);
+
+static int omo_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+{
+	struct pci_dev *want;
+
+	(void)id;
+	if (!omo_hw)
+		return -ENODEV;		/* hw=0 = registration-only, no PCI access */
+
+	/* keep the domain selector: pci_get_domain_bus_and_slot() returns the same
+	 * pci_dev only for the endpoint in domain omo_domain at bus 0 / devfn 0. */
+	want = pci_get_domain_bus_and_slot(omo_domain, 0, OMO_PCI_DEV);
+	if (want != pdev) {
+		if (want)
+			pci_dev_put(want);
+		return -ENODEV;
+	}
+	pci_dev_put(want);
+
+	omo_pdev = pdev;
+	return omo_hw_attach();
+}
+
+static void omo_pci_remove(struct pci_dev *pdev)
+{
+	(void)pdev;
+	omo_hw_detach();
+}
+
+static struct pci_driver omo_pci_driver = {
+	.name		= "omo-drv1",
+	.id_table	= omo_pci_ids,
+	.probe		= omo_pci_probe,
+	.remove		= omo_pci_remove,
+};
+
 /* ---- netdev ------------------------------------------------------------ */
 static struct wireless_dev *omo_add_virtual_intf(struct wiphy *wiphy,
 						 const char *name,
@@ -2458,10 +2582,16 @@ static int __init omo_wifidrv1_init(void)
 		VND_ND_OPS_OFF, VND_ND_IEEE80211_OFF, VND_ND_PRIV_OFF);
 
 	if (omo_hw) {
-		rc = omo_hw_attach();
+		/* virq2.md section 2: register a pci_driver so the core runs
+		 * pci_assign_irq() (and writes PCI_INTERRUPT_LINE) before .probe;
+		 * .probe then chains into omo_hw_attach() as before. */
+		rc = pci_register_driver(&omo_pci_driver);
 		if (rc) {
-			pr_err("omo-drv1: hardware attach failed rc=%d - continuing without it\n",
-			       rc);
+			pr_err("omo-drv1: pci_register_driver rc=%d - continuing without hw\n", rc);
+		} else {
+			omo_pci_registered = true;
+			if (!omo_pdev)
+				pr_err("omo-drv1: hardware attach failed (no endpoint bound) - continuing without it\n");
 		}
 	} else {
 		pr_info("omo-drv1: hw=0 - registration-only load (no PCI access at all)\n");
@@ -2498,14 +2628,20 @@ static int __init omo_wifidrv1_init(void)
 			       PTR_ERR(wdev));
 	}
 
-	pr_info("omo-drv1: init done wiphy=%s ifname=%s hw=%u regs=%s\n",
+	pr_info("omo-drv1: init done wiphy=%s ifname=%s hw=%u regs=%s irq0=%d isr0=%u\n",
 		OMO_WIPHY_NAME, OMO_IFNAME, omo_hw,
-		omo_regs_valid ? "decoded" : "absent");
+		omo_regs_valid ? "decoded" : "absent",
+		omo_irq, (unsigned int)atomic_read(&omo_isr_n));
 	return 0;
 }
 
 static void __exit omo_wifidrv1_exit(void)
 {
+	/* free the line first, while omo_pdev is still valid (.remove() clears it). */
+	if (omo_irq_owned) {
+		free_irq(omo_irq, omo_pdev);
+		omo_irq_owned = false;
+	}
 	if (omo_netdev) {
 		struct net_device *dev = omo_netdev;
 
@@ -2519,6 +2655,10 @@ static void __exit omo_wifidrv1_exit(void)
 		wiphy_unregister(omo_wiphy);
 		wiphy_free(omo_wiphy);
 		omo_wiphy = NULL;
+	}
+	if (omo_pci_registered) {
+		pci_unregister_driver(&omo_pci_driver);	/* -> .remove() -> omo_hw_detach() */
+		omo_pci_registered = false;
 	}
 	omo_hw_detach();
 	pr_info("omo-drv1: exit done\n");
