@@ -60,6 +60,14 @@ UNDECIDED in either direction. GROUP - the group gate DIES: G2 GICD_IGROUPR word
 in-run by the F6/F7/G0 triple in the same boot (raw rises, masked status stays clear, then status rises once
 the mask opens), which excludes both the inverted and the independent-raw-latch models, so the polarity no
 longer rests on the inherited sibling header. Evidence `build/register-dumps/exp/20261005-053936/`.
+A fifth addendum to `gic-view.md` ("the post-unmask ring test", variant `gicunmask`) then ran that addendum's
+named next branch and retired its R2 confound by opening the glue mask BEFORE the ring. **BRANCH A
+(ADDENDUM 5): THE RINGED EVENT REACHES THE GIC.** With the mask OPEN (`0x20`, never `0x21`) and one ring,
+the distributor pending bit is set (H0 ISPENDR2 word 2 = `0x00001020`, id `0x4c` bit 12 SET) and the CPU
+interface reports the same id (H1 HPPIR = `0x0000004C`), while the glue latched and passed (H3 = H4 =
+`0x1`): the device-internal ctrl-rb -> GIC wire is ALIVE, phase-48's dead-link hypothesis is REFUTED, and
+the earlier zeros mean the natural firmware posts never RING the doorbell (a TRIGGER problem, not a dead
+wire). Evidence `build/register-dumps/exp/20261005-072450/`.
 
 The chain phase 47 named, with where each link now stands:
 

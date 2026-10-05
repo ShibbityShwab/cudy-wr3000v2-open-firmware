@@ -650,3 +650,111 @@ The named next branch is one follow-up cycle: a device-side ISPENDR2 word-2 read
 mask is restored open (or a compile-time open mask with no restore), which is the sample this boot is missing
 and the one read that decides the ring -> GIC step. Pair it with an HPPIR decode and an ISACTIVER2 read at
 the same post. All takeover-safe, one serial/detached `tools/exp.sh` cycle, verified against the same hook.
+
+---
+
+# ADDENDUM 5 (2026-10-05): the post-unmask ring test (gicunmask) - BRANCH A: THE WIRE IS ALIVE
+
+The one follow-up cycle ADDENDUM 4's next branch named, and its runtime residual R2 retired (the masked
+ISPENDR sample that left the ring -> GIC step undecided). Evidence
+`build/register-dumps/exp/20261005-072450/` (`acceptance.txt`, `interp.txt`, `capture-cmd.txt`,
+`artifact-check.txt`, `run-gicunmask.log`, `cleanup.txt`, `health.txt`). One `exp.sh` cycle, `EXP RESULT:
+PASS`, acceptance 60/0, `gu_verify` 36/36, artifact-check clean. The gicview, gicsend, gicpost, gicmask and
+gicking records above stand unchanged; nothing below contradicts a value they recorded.
+
+## The question (the R2 follow-up)
+
+Does a RINGED event, with the glue mask OPEN, reach the GIC? gicking's post-ring ISPENDR sample could not
+say: its own R2 confound held the mask MASKED at the sample instant (F5 = `0x21`), so a line gated by the
+glue mask was expected to leave ISPENDR clear, and there was no post-unmask read. This boot opens the mask
+BEFORE it rings so the sample is not gated, and it is the read gicking was missing.
+
+## The instrument
+
+`tools/patch_fw_scratch.py` variant **`gicunmask`** (+639/-4, uncommitted at record time) keeps the proven
+pads and re-sequences the send pad: entry read H5 (ISPENDR2 word 2), drive the glue mask OPEN (CA
+`0x400392E8` <= `0x20`; `0x21` is NEVER written this run), then ring the doorbell ONCE (CA `0x400392D4` <=
+`0x1`), then read H0 = ISPENDR2 word 2 (CA `0x40161208`), H1 = GICC HPPIR (`0x40160118`), H2 = ISACTIVER2
+word 2 (`0x40161308`), H3 = glue raw (`0x400392E4`), H4 = glue status (`0x400392EC`), with the sentinels H6
+and H7 (`0x50AA7E49`). Blob md5 `a68d5fed68b3015ab97c63ca7a394c28`, size 928920 (the patch is
+size-preserving). The acknowledging GICC IAR CA `0x4016010c` is NEVER read by this variant; CA `0x400392f0`
+is untouched; the RC misc window `0x10161000` is never read. Manifest and hooks in `build/tmp/wifidrv1-art/`
+(`gu_verify.py`, `artifact-check.txt`); manifest `build/tmp/fw-patched/gicunmask.bin.manifest.json`.
+
+## The values (the H cells above the boundary, quoted from the ACP alias)
+
+| cell | register | value (alias view) | meaning |
+| --- | --- | --- | --- |
+| H0 | ISPENDR2 word 2 (CA `0x40161208`) | `0x00001020` | BIT 12 SET = id `0x4c` pending, plus bit 5 |
+| H1 | GICC HPPIR (CA `0x40160118`) | `0x0000004C` | the CPU interface reports id `0x4c` as THE pending interrupt |
+| H2 | ISACTIVER2 word 2 (CA `0x40161308`) | `0x00000000` | not yet active; IAR never read |
+| H3 | glue raw (CA `0x400392E4`) | `0x00000001` | bit 0 latch |
+| H4 | glue status (CA `0x400392EC`) | `0x00000001` | bit 0 set, the OPEN mask passes it |
+| H5 | ISPENDR2 word 2, entry | `0x00000020` | bit 12 CLEAR at the next send-site visit |
+| H6 | page sentinel | `0x50AA7E49` | the H deposits are real |
+| H7 | page sentinel | `0x50AA7E49` | the H deposits are real |
+
+Sanities: S1 = `0x1000`, S1+4 = `0x40161108`, S2 = `0x1`, S2+4 = marker; C0 = `0x1`, C1 = `0x0`, C2 =
+`0x3FF`, C3 = `0x0`, C4 = `0x0`, C5 = `0x3FF`; E0 = `0x1001`, E1 = `0x0`, E2 = marker, E3 = `0x80000093`;
+window `0x406B8000` = `0xE59FF018` (the task-9/task-11 sanity word: the window decoded); `[sig]` 9/9; the
+staged blob md5 `a68d5fed...` and stock md5 `0e530b97...`. `build/register-dumps/exp/20261005-072450/`.
+
+## Matched branch: BRANCH A - THE RINGED EVENT REACHES THE GIC
+
+**Two ends agree, and they agree on the same source id.** The distributor pending bit is set (H0 ISPENDR2
+word 2 bit 12 = 1, id `0x4c`) AND the CPU interface reports that id (H1 HPPIR = `0x0000004C`, not `0x3FF`,
+not another id), while the glue itself latched and passed (H3 = H4 = `0x1`, with the open mask). A ringed
+event with the mask open therefore reaches the GIC end to end: **the device-internal ctrl-rb -> GIC WIRE IS
+ALIVE.**
+
+This is the death of the phase-48 dead-link hypothesis. If the wire were dead, H0 bit 12 could not be set
+and HPPIR could not name `0x4c`; both do. The earlier zeros were not a dead wire, they were a missing ring:
+**the natural firmware posts never ring the doorbell, so a TRIGGER problem, not a dead wire, is what the
+gicview / gicsend / gicpost / gicking zeros record.** The RING succeeded (the glue latched, H3 = 1) and the
+DELIVERY succeeded (H0 bit 12 and H1 = `0x4c`).
+
+The dead-link and delayed-delivery branches are excluded by **H0 bit 12 SET** - both require it CLEAR - so
+neither survives this boot. H1 = `0x4c` is a unique architectural decode (HPPIR returns the highest-priority
+pending id, and `0x3FF` is spurious/none), so the read is a real register answering a real request, not a
+window artifact.
+
+## The bounds (declared, not hidden)
+
+1. **Instant samples.** H0..H4 are one-shot reads a few instructions after the ring; "set at the sampled
+   instant" is the claim, nothing about how long it holds.
+2. **The H cells are quoted from the ACP alias** (above the `0x104000` boundary). The alias model is
+   INHERITED from gicsend / gicmask this boot, not re-demonstrated here by a BAR0-direct H read. Support
+   for the inherited model: the sentinels survived, H1 decodes a valid unique id, and two CAs agree.
+3. **H2 = `0x00000000` is pre-acknowledgement state.** The IAR is never read, so the interrupt is reported
+   pending but not taken: H2 is the not-yet-active reading, as expected.
+4. **H0 bit 5 (`0x20`) is a second pending line, reported not attributed.** It is present in the same word;
+   this run does not name or explain it.
+5. **H5's bit-12-clear is stated as RECORDED.** The "H5 entry was consumed / the send ran again" inference
+   is weak: bit 5 could already have been set, so H5 = `0x20` does not by itself prove the entry clear came
+   from a prior consume. It does not affect Branch A, whose evidence is H0/H1.
+6. **The ring actor is DEVICE-side.** The firmware pads ring the doorbell; the vendor's NATURAL trigger is
+   not reproduced, so this boot proves the wire when rung, not what rings it in normal operation. That is
+   the open question below.
+
+## Verification
+
+An independent verifier CONFIRMED (high): the raw capture was re-read, the acceptance (60/0) and `gu_verify`
+(36/36) were re-run, capstone showed the exact sequence (H5 entry -> mask OPEN `0x20` with NO `0x21`
+anywhere -> ring CA `0x400392d4` <= `0x1` ONCE -> H0..H4 -> sentinels H6/H7), the forbidden CAs are absent
+in all pads, the original ISENABLER store at file `0x8702c` is preserved, and the 513 changed bytes are
+confined to the intended sites and pads. The live device is clean after the cycle (no `.omo-pat`, stock
+FIRMWARE.bin md5 `0e530b976d5a20e87358671f1a577695`, 0/0/3 pstore, 6 interfaces, calibration `[SUCC]`). The
+verifier noted two non-load-bearing items: the H-cell alias model is inherited (bound 2) and H5's bit-12
+inference is weak (bound 5); neither touches Branch A.
+
+## Health and cleanup
+
+`health.txt` (`build/register-dumps/exp/20261005-072450/health.txt`): `WIFI=1 PLAT=1 WIPHY=2 IFACE=6
+CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. Post-cycle cleanup (`cleanup.txt`): the staged
+`.omo-pat` removed, stock FIRMWARE.bin md5 re-verified `0e530b976d5a20e87358671f1a577695`, vendor modules
+loaded, 2 wiphys / 6 interfaces, calibration `[SUCC]` on both bands, no leftovers.
+
+## Next question (one line)
+
+What natural firmware action should ring the H2D doorbell (the trigger), and does the host ISR vision now
+follow a firmware-side ring?
