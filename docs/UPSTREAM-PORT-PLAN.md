@@ -257,3 +257,16 @@ lane has no `Module.symvers`/`vmlinux` dump, so the unresolved-symbol check is s
 remains loading the `.ko` against the vendor tree; the driver was never loaded and no device cycle was run by
 that task. Next stage-2 fill-in is the per-pin `drv_data {reg_off, shift, func}`, the real per-group pin
 lists and the `"cfg"` bitfield map behind `set_mux`/`pin_config_set` (`pinctrl.md` section 4).
+
+The take lane's end-to-end health check is now a measured instrument (2026-10-05, take3,
+`opensource/docs/phase49/gic-view.md` ADDENDUM 19, `build/tmp/inta-spec/tiebreak.md`): the take3 boot stamped
+the port's two endpoint witnesses the stage-2/3 work depends on - `207: 65 ... omo-drv1` and `209: 9 ...
+omo-drv1-ep1` in `/proc/interrupts`, with both request_irq calls returning `rc=0` - and exercised the
+mandatory bound so the port's no-re-enable discipline is on the record (`207 n=65/64`, `209 n=9/8`, both
+self-disabling). One port-relevant defect turned up in a companion tool: `tools/patch_fw_scratch.py`'s
+`write_ca_block()` writes `movw r0,#0` for a value larger than `0xFFFF` and never emits the `movt`, so a
+32-bit register store silently becomes its low halfword. It is a fw-patch emitter, not kernel driver code, but
+the lesson is the one a port has to hold: a build check that re-uses the encoder it is checking can pass while
+the emitted bytes are wrong (the take3 pad shipped `0x00000000` to `ICENABLER0` and the self-check agreed).
+When the ctrl-rb/IRQ-glue driver gets its own ported write path, assert the emitted value back, not the call
+site.

@@ -462,3 +462,35 @@ this boot's per-entry ids are suspect and the flip must be re-run clean. Next: r
 arbitration with the competitors out of the set. Evidence `build/register-dumps/exp/20261005-210057/`;
 instrument verdict `build/register-dumps/diffs/20261005T2101Z-vtool14/verdict.txt` (CONFIRMED). Health: bound
 held both lines, no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.
+
+## ADDENDUM 20 (2026-10-05): the tie-break (take3) - ROW 5 THE INSTRUMENT: the 0x4C promotion held, the 0x1D mask never landed (an emitter bug)
+
+The tie-break cycle `tiebreak.md` sec.3 specified ran as variant **`take3`** (blob md5
+`072de986879bdbad00f339b2ad21ebd7`, `wifidrv1.ko` `3f87f1e9fe5ed9666f27d1f784d34535` reused unchanged) with
+`tools/exp.sh` serial/detached, the watchdog armed first and the mandatory bound `qbound=64`/`qbound209=8`.
+The cycle recovered healthy (`TAKE3 RESULT: PASS`, 21:27:10Z to 21:29:56Z). This block is the pointer; the full
+record is `gic-view.md` **ADDENDUM 19** ("the tie-break"). Evidence
+`build/register-dumps/exp/20261005-212711/`; instrument verdict
+`build/register-dumps/diffs/20261005T2130Z-vrun16/verdict.txt` (**ROW 5**, all eight claims CONFIRMED).
+
+The synchronized flip's two halves came apart. The `0x4C` priority promotion LANDED and HELD to the END
+(`E_P4C` byte0 `0x00`, `E_EN2` bit12 SET, `GICD_CTLR`.RWP 0), and its `0x40`/`0x45` mask landed too
+(`E_EN2` = `0x5000`). The competitor-disable for the banked TWD PPI `0x1D` did NOT: `E_EN0` bit29 reads SET
+(`0x2000FFFF`) because the emitter `write_ca_block()` (`tools/patch_fw_scratch.py:1779`) writes `movw r0,#0`
+for the mask `0x20000000` and never emits the `movt r0,#0x2000` half, so `ICENABLER0`/`ICPENDR0` got
+`0x00000000`. The build's own self-check counts `write_ca_block(...)` calls and re-asserts the constant
+through the SAME buggy encoder, so it passes; `vtool15`'s verdict is still an unfilled skeleton, so the take3
+build was never adjudicated in writing either.
+
+Consequently the boot does NOT test `0x4C` promoted AND `0x1D` masked; it reproduces take2's out-ranking
+under the tighter mask, and the honest label is **ROW 5, the pad/site fault, with a NAMED cause**: `0x4C` stayed
+pending and unaided (`E_ISP` bit12 set, `E_ACT` bit12 CLEAR, `E_OU0` = `0x8`), `E_HPP` still names `0x1D`, and
+the IAR take record stayed SGI-class (`V2_ID` = `0x00000402`, ring `0,1,2,0x402`). The take2 prediction is now
+measured (`E_P4C` = `0x00` AND `0x4C` pending AND the two SPI competitors masked and STILL no `0x4C` take),
+which says `0x4C` cannot move from priority alone; but because the one source that out-ranks it, the banked PPI
+`0x1D`, was never removed from the ENABLED set, "priority is not the comparator" STAYS BLOCKED. The new E block
+(`E_P1D`..`E_SNT`, twelve page-10 cells read at `selpost`) closes ADDENDUM 18's readback gap and puts the
+blocker on the one store the emitter dropped. Health: bound held both lines (`207 n=65/64`, `209 n=9/8`), no
+new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands. Next: fix `write_ca_block()` to emit
+`movt r0, value>>16` when `value > 0xFFFF` and re-run take3 unchanged; a rerun whose `E_EN0` bit29 reads CLEAR
+is the first boot that actually tests `tiebreak.md`'s lever.

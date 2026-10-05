@@ -3158,3 +3158,160 @@ Evidence `build/register-dumps/exp/20261005-210057/`; blob `build/tmp/fw-patched
 `build/tmp/wifidrv1-art/take2-verify.py`; instrument verdict
 `build/register-dumps/diffs/20261005T2101Z-vtool14/`; specs `build/tmp/inta-spec/{gicv2,select}.md`; ko
 `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`).
+
+---
+
+# ADDENDUM 19 (2026-10-05): the tie-break - ROW 5 THE INSTRUMENT: the 0x4C promotion HELD to the END and the 0x1D competitor-disable NEVER LANDED (an emitter bug); NO ROW QUIESCED; the take3 boot reproduces take2's out-ranking and cannot yet separate the blocker
+
+Task `st_01a10deb`. The tie-break cycle `tiebreak.md` sec.3 specified, run as variant **`take3`**: the full
+reverse-audit a take2 defect called for, in ONE boot. Blob `build/tmp/fw-patched/take3.bin` md5
+`072de986879bdbad00f339b2ad21ebd7`, `wifidrv1.ko` `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, reused
+unchanged). Evidence `build/register-dumps/exp/20261005-212711/`; instrument verdict
+`build/register-dumps/diffs/20261005T2130Z-vrun16/verdict.txt`. The cycle ran serial/detached via
+`tools/exp.sh` with the watchdog armed first and the mandatory bound `qbound=64`/`qbound209=8`; it recovered
+with `TAKE3 RESULT: PASS` at 21:29:56Z (the harness health verdict, not the take physics).
+
+## Short version
+
+The synchronized flip's `0x4C` priority promotion LANDED and HELD to the end of the boot (`E_P4C` byte0 = `0x00`,
+`E_EN2` bit12 set, `GICD_CTLR`.RWP = 0). Its other half, the competitor-disable that would have pulled the
+banked TWD PPI `0x1D` out of the ENABLED set, was a NO-OP: the emitter `write_ca_block()` writes
+`movw r0,#0` for the mask `0x20000000` and never emits the `movt r0,#0x2000` half, so `ICENABLER0`/`ICPENDR0`
+got `0x00000000`. `E_EN0` bit29 still reads SET, and `0x4C` stayed pending and unaided (`E_ISP` bit12 set,
+`E_ACT` 0, `E_OU0` 8) with `E_HPP = 0x1D`. The boot therefore does NOT test `0x4C` promoted AND `0x1D` masked;
+it reproduces take2's out-ranking under the tighter mask, and the verdict is ROW 5, the pad/site fault, with
+a NAMED cause. It is not a re-run of take2: the end-state E block and the mask that DID land are new, and they
+isolate the blocker to the one store the emitter dropped. The honest next step is a one-line encoder fix
+(`movt r0, value>>16` when `value > 0xFFFF`) and the same boot again.
+
+## The take3 protocol, and what each of its halves did
+
+`tiebreak.md` sec.3 sequenced four steps into the `selpre` slot: competitor-disable (`ICENABLER0/ICPENDR0` for
+`0x1D`, `ICENABLER2/ICPENDR2` for `0x40`/`0x45`), competitor pending-clear, `0x4C` source-disable -> priority
+write `0x00` -> source-enable with `dsb sy`, then the usual re-ring and a new END-STATE read block. Two of the
+four landed:
+
+| step | the register | END-state read | landed? |
+| --- | --- | --- | --- |
+| `0x40`/`0x45` mask (`ICENABLER2` w2 <= `0x21`) | `0x40161188` | `E_EN2` = `0x5000` (bits0/5 CLEAR, bit12 SET) | YES |
+| `0x4C` priority -> `0x00` | `0x4016144C` | `E_P4C` byte0 = `0x00` | YES (held) |
+| `0x1D` mask (`ICENABLER0` w0 <= `0x20000000`) | `0x40161180` | `E_EN0` = `0x2000FFFF` (bit29 SET) | **NO (after-image `0`)** |
+| `0x1D` pending-clear (`ICPENDR0` w0) | `0x40161280` | (same defect) | **NO (after-image `0`)** |
+
+The w2 values are both `<= 0xFFFF` (`0x21`, `0x1000`), so they were emitted with a correct single `movw` and
+landed. The w0 values are `0x20000000`, which needs the high halfword; the built pad at file `0xc80a8` carries
+`movw r1,#0x1180` / `movt r1,#0x4016` / `movw r0,#0` / `str r0,[r1]` for the ICENABLER0 store (byte-for-byte
+present in the pad), i.e. it writes `0x00000000` to `0x40161180`, and the same shape for `ICPENDR0`.
+
+## The named cause: `write_ca_block()` drops the high halfword
+
+`tools/patch_fw_scratch.py:1779` `write_ca_block(ca,val)` emits `movw(0, val & 0xFFFF)` and no
+`movt(0, val >> 16)`, so every 32-bit store with a nonzero high halfword silently becomes its low halfword
+(`0x20000000 -> 0x00000000`). The build's own self-check could not catch it: the take3 assertions and
+`take3-verify.py` count `write_ca_block(ca, val)` calls and re-assert the `TI_MASK_1D = 0x20000000` constant,
+and the CHECKER is the buggy encoder, so it reproduces the same zero emission and passes. Two consequences the
+record owes the next runner: (1) the take3 build was never adjudicated in writing - `vtool15`'s verdict is
+still an unfilled skeleton; (2) the emitter fix and a re-run are the ONLY thing standing between this boot and
+the test tiebreak.md actually wanted. Two smaller residuals ride along: `E_EN2` bit14 (`0x4E`) is SET at the
+END though no pad writes it, consistent with tiebreak.md R3's late writer (file `0x7edd8` registers `0x4c` AND
+`0x4e`; its id source is a RAM table, unproven); and `E_P40 = 0xF050F050` differs from take2's `P_40 =
+0xF050F0F0`, which says the authored priority bytes are per-boot firmware state, so the mask evidence is
+`E_EN2`, not the byte.
+
+## The end-state E block (the take2 readback gap closed)
+
+ADDENDUM 18's honest bound was that take2 read the priority/window words only at the flip's instant, with a
+single end-of-boot sample and no re-read of priorities, `ISPENDR` or `HPPIR`. take3 adds the E block, twelve
+page-10 cells read at `selpost` before the gate loop (alias `0x406B8000` + runtime):
+
+| cell | CA / source | value | meaning |
+| --- | --- | --- | --- |
+| `E_P1D` | `0x4016141C` w7 (byte1 = id `0x1D`) | `0xF0F0E0F0` | byte1 still reads `0xE0`, byte-identical to take2's `P_ID` |
+| `E_P40` | `0x40161440` | `0xF050F050` | byte0 `0x50`, the firmware's own value (take2 read `0xF0` here) |
+| `E_P4C` | `0x4016144C` | `0xF050F000` | byte0 `0x00`: the flip held to the END, no late re-write |
+| `E_HPP` | `0x40160118` | `0x0000001D` | the GIC's own view still promotes `0x1D` over a pending `0x4C` |
+| `E_ISP` | `0x40161208` w2 | `0x00001021` | bits 0/5/12: `0x40`, `0x45` and `0x4C` all still pending |
+| `E_ACT` | `0x40161308` w2 | `0x00000000` | bit12 CLEAR: `0x4C` was never acknowledged |
+| `E_OU0` | `0x40039010` | `0x00000008` | the dispatcher never consumed it |
+| `E_EN0` | `0x40161100` w0 | `0x2000FFFF` | bit29 SET: **`0x1D` was never masked** |
+| `E_EN2` | `0x40161108` w2 | `0x00005000` | bit12 SET, bits0/5 CLEAR: the w2 half landed |
+| `E_CTLR` | `0x40161000` | `0x00000001` | RWP bit31 = 0 (no write in flight), EnableGrp0 set |
+| `E_PSR` / `E_SNT` | CPSR / page sentinel | `0x20000193` / `0x50AA7E49` | the mask is open at the sample; the pad ran |
+
+Retained take2 cells in the same boot agree: `X_HPP = 0x1D`, `X_ISP = 0x1021`, `X_ACT = 0`, `X_OU0 = 8`,
+`F_HPP = 0x4C` at the fall-through. So the take record never moves even with the flip held to the end.
+
+## The take record: the IAR still names the SGI-class ids, never 0x4C
+
+`V_MAGIC = 0xA4A4A4A4` and `V_CNT = V2_CNT = 4` say the firmware's ISR ran and the v2 pad clocked every one
+of the four IAR reads. `V2_ID = 0x00000402` and the ring `0,1,2,0x402` are byte-identical to take2: the
+`0x402` word is still not a valid GIC source id (its `ubfx 9:0` field is `0x002`), and take3 provides no new
+reading of it. The two open explanations from ADDENDUM 18 stand unchanged: the store perturbed the SGI/PPI
+bank, or the pad's IAR read raced the flip. With `0x4C` enabled, promoted to `0x00` and pending, and its two
+SPI competitors masked, the argument "the `0x4C` take cannot move purely from priority" is now measured, not
+predicted; ADDENDUM 18's prediction ("a landed `0x00` cannot promote a high id when a lower id ties it") is
+reproduced with the mask that landed, but the "priority is not the comparator" reading STAYS BLOCKED because the
+one source that out-ranks `0x4C` at the CPU interface, the banked PPI `0x1D`, was left enabled. That is the
+whole gap the emitter bug opens.
+
+## The bounds (declared, not hidden)
+
+1. **The competitor-disable half of the flip is untested.** `E_EN0` bit29 SET is an after-image of a defect,
+   not an arbitration result, so this boot cannot separate the priority tie from the banked-PPI comparison
+   basis. The isolation is the take4 fix (emit the `movt`) plus the same rerun.
+2. **One shot, four entries.** The take record is a single boot's ring; the `0x402` anomaly is not a stable
+   property of any variant, and per-entry ids need a clean re-run before they are used as arbitration evidence.
+3. **The `E_EN2` bit14 (`0x4E`) enable is unexplained** (no pad writes it). Consistent with R3's runtime-id
+   writer whose id source is a RAM table, bounded by this run's readbacks but not closed.
+4. **`0x1D`'s byte does not explain its rank, again.** `E_P1D` byte1 reads `0xE0` and `E_HPP` still names
+   `0x1D` while `0x4C` reads `0x00`, so priority-it-first is not the whole story; the PPI-vs-SPI comparison
+   basis remains the standing suspect.
+5. **No `0x1D` take record.** The take record only counts the firmware's ISR entries; a masked `0x1D`
+   assertion and a code fault can both leave the record empty, which is why the mask step matters and which
+   is exactly the half that did not run.
+6. **The verdict text lands in the addendum, not `interp.txt`** (the run's `interp.txt` is the finish-evidence
+   skeleton), so the rows above are sourced from `capture-cmd.txt`, `dmesg.txt`, `health.txt`, `pstore-delta.txt`
+   and the verdict, each named.
+
+## Verification
+
+Instrument verdict `build/register-dumps/diffs/20261005T2130Z-vrun16/verdict.txt`: **CONFIRMED on all eight
+claims, ROW 5**. C1 the pad sampled (`V_MAGIC` live, `E_SNT` = `0x50AA7E49`, staged blob = take3);
+C2 the take did not move (a verified negative); C3 the flip held (`E_P4C` byte0 `0x00`, `E_CTLR` RWP 0);
+C4 the w2 mask landed (`E_EN2` = `0x5000`); C5 the `0x1D` disable did NOT land (`E_EN0` bit29 SET; the pad's
+ICENABLER0 stores are `0x00000000`); C6 the mandatory bound tripped `207 n=65 bound=64` and `209 n=9 bound=8`
+and self-disabled (`IRQ_LEFT_DISABLED reason=bound`, no `enable_irq` after); C7 the router is healthy;
+C8 no crash. The verifier re-disassembled the staged pad with capstone and re-ran the emitter, reproducing the
+zero byte-for-byte. Its live read-only probe after the cycle: no `.omo-pat` leftover, vendor modules loaded,
+stock `FIRMWARE.bin` md5 unchanged, 2 wiphys, 6 interfaces, calibration `[SUCC]` on both bands.
+
+Run facts: `stage2`-style done marker `init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207
+isr0=65`; window sanity `0xE59FF018`; host witness `207: 65 ... omo-drv1`, `209: 9 ... omo-drv1-ep1`; the
+bound trips `irq=207 n=65 bound=64` and `irq=209 n=9 bound=8`; supervisor reached `SUPERVISOR DONE
+quiesced=0 rung=OBSERVE ... state=IDLE`; `health.txt` = `WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0
+STAGED=0 LOADER=0 RECOVER=0`; `pstore-delta.txt` = NO new record (baseline `blk-0/2/3` unchanged).
+
+## The next threads
+
+- **Fix the emitter and re-run the same boot.** Emit `movt r0, value>>16` in `write_ca_block()` when
+  `value > 0xFFFF`, re-stage `wifidrv1.ko`, and re-run take3 unchanged. A rerun whose `E_EN0` bit29 reads
+  CLEAR is the first boot that actually tests `tiebreak.md`'s lever; take3's `E_P4C`/E block then become
+  the checkpoints.
+- **Re-run the flip clean for the `0x402` id.** Keep only `0x4C -> 0x00` as the mutation and re-read
+  `V2_ID` per entry, so this boot's per-entry ids stop carrying a suspect word.
+- **Take `0x1D` out of the enabled set as the standalone test.** Since `E_P1D` byte1 still reads `0xE0` and
+  `E_HPP` still names `0x1D`, mask `ISENABLER0` bit29 and re-ring with `0x4C` promoted; the `0x1D` handler's
+  per-core accept register (`0x4016060C`) is the live view to sample.
+- **Retire the `0x40` re-arm.** `E_ISP` still holds `0x40`/`0x45` pending alongside `0x4C`; mask `0x40`
+  (`ISENABLER2` bit0) and `0x45` (bit5) with `0x4C` promoted, then read which id the next take returns.
+
+## Artifacts
+
+Evidence `build/register-dumps/exp/20261005-212711/`; blob `build/tmp/fw-patched/take3.bin` md5
+`072de986879bdbad00f339b2ad21ebd7`; the retained take1/take2 blobs `0c681650...`/`eeeb252f...`; runner
+`build/tmp/wifidrv1-art/run-take3.sh`; hook `build/tmp/wifidrv1-art/take3-capture.hook`; verifier
+`build/tmp/wifidrv1-art/take3-verify.py`; instrument verdict
+`build/register-dumps/diffs/20261005T2130Z-vrun16/`; specs `build/tmp/inta-spec/{tiebreak,select}.md`; ko
+`3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`). Hard rules held: the pad
+writes no `0x400392f0`/`0x40039af0`, no pad reads the IAR except the firmware's own, no `0x10161000` access,
+staged as `wifidrv1.ko`, cycle serial/detached with the bound armed, router left healthy.
