@@ -919,3 +919,250 @@ The next test is the HOST ISR acceptance test (`build/tmp/trigger-spec/hostisr.m
 and use the `hostisr.md` section 2 hook so the host `207:`/`209:` line and the `[isr]` dmesg line land next
 to the T cells; the `hostisr.md` section 3 table then reads ISR FIRED (A) versus LINE ASSERTED WITHOUT HOST
 DELIVERY (B) from the same boot.
+
+---
+
+# ADDENDUM 7 (2026-10-05): the natural-post ring test (variant `trignat`) - no branch, the capture never landed
+
+This addendum records the follow-up ADDENDUM 6 dispatched, and it records a failure honestly. The
+`trignat` variant was built and the endpoint-IRQ port change was made, but **no trignat cell was ever
+captured**, so the branch table `trigger2.md` section 4 defines cannot be named. One device-side result
+does survive, and it is the host half: the virq was NOT delivered. Evidence
+`build/register-dumps/exp/20261005-083612/` (never created), `build/register-dumps/exp/20261005-084742/`
+(the one re-run, `capture-cmd.txt` = 0 bytes), and the verification dir
+`build/register-dumps/diffs/20261005-083612-vrun3/`.
+
+## The instrument (built, staged, and it ran)
+
+`tools/patch_fw_scratch.py` variant **`trignat`** (+312 lines, uncommitted at record time; the frozen pin
+is `TRIGNAT_MD5 = 845188343f70cff9de29e77aea464021`). It implements `build/tmp/upstream-spec/trigger2.md`
+section 3: five trampolines (Pad A at file `0x86F5A` = the firmware's own natural `out[1]` post, Pad B at
+file `0x86F7E` = the announce-routine exit, plus the gicpost thunk/bring-up/post pads preserved
+byte-identical). Pad A reproduces the post (`out[1] <= 4`), drives the glue mask OPEN (CA `0x400392E8` <=
+`0x20`; `0x21` NEVER written), makes the H2D submission (`out[0] <= 8`, the store `pcie_msg_send` makes),
+samples `A_S0..A_S2` PRE-ring, rings the H2D doorbell ONCE (CA `0x400392D4` <= `0x1`), then samples
+`A_S3..A_S8` POST-ring. Pad B reads the device-dispatcher consumption witnesses `B_D0` (out[0]) / `B_D2`
+(ISPENDR2 word 2 bit 12) / `B_P3` (sentinel). 18 cells and 3 sentinels (`0x50AA7E49`) in the next two
+all-zero pages past trigring's pair (`0x14F000` and `0x150000`). Both sites, both pads, and the preserved
+original ISENABLER store at file `0x8702c` are capstone-audited in
+`build/tmp/wifidrv1-art/ARTIFACT.txt`; the blob is size-preserving (928920 B) and two builds are
+byte-identical (`--selftest` reports `SELFTEST PASS` with the earlier eight variant pins unchanged). No
+forbidden CA (`0x400392f0`, `0x10161000`, `0x4016010c`) is read or written by the pads or the hook.
+
+The port change the same session made is `build/tmp/upstream-spec/virq2.md` sections 2-3: register
+`struct pci_driver omo_pci_driver` (`{ PCI_DEVICE(0x59e7, 0x0005) }`, `.probe`/`.remove`) so the PCI core
+runs `pci_assign_irq()` before `.probe`, then `request_irq(irq, omo_intx_isr, IRQF_SHARED, "omo-drv1",
+pdev)` with `[isr]` counter logging, and `irq0=%d isr0=%u` appended to the init-done line. It rode the
+submodule CI on branch `omo/phase22-hccaccept` only (commit `189f43d`, run `37284211791`, artifact
+`wifidrv1-isr.ko` md5 `359d39572c6057e52bedd4afb309a14d`); master untouched.
+
+## The cells (all absent) and the two failures that made them absent
+
+**No trignat cell was captured. `capture-cmd.txt` is 0 bytes in the only boot that reached the capture
+step, so every decisive cell is absent:** `A_S3`, `A_S4`, `A_S5`, `A_S7`, `A_S8`, `B_D0`, `B_D2`, `B_P3`,
+the sentinels, the inherited sanities (`S1`/`S2`/`C0..C5`/`E0..E3`), the window sanity, and both md5s.
+This is a MISSING record, not a measured zero; a zero value and an absent read must not be conflated.
+
+* **The parent RUN failed on a HOST-SIDE cause.** `tools/exp.sh` derives `MODNAME` from the STAGED
+  FILENAME (`tools/exp.sh:598-606`) and gates step 4 on `lsmod | grep -q '^wifidrv1-isr '`
+  (`tools/exp.sh:383-391`), but the ko's internal `__this_module.name` is `wifidrv1` (the string
+  `wifidrv1-isr` appears 0 times in the ko). The gate is unsatisfiable, so the run timed out at
+  `EXP_RUN_TIMEOUT=420` s and reported FAIL **without running the capture step** (evidence dir never
+  created, `run-trignat.log`, TS `20261005-083612`). Nothing about the module's behaviour is decided by
+  this failure.
+* **The ONE authorised re-run reused the same module bytes and blob, only renamed to `wifidrv1.ko` so the
+  gate matches.** The module loaded and completed (`omo-drv1: init done ... irq0=0 isr0=0`,
+  `build/register-dumps/exp/20261005-084742/dmesg.txt`), but the step-5 capture hook's ssh session was
+  reset by the peer mid-read (`Read from remote host 192.168.10.1: Connection reset by peer`), leaving
+  `capture-cmd.txt` at 0 bytes. The reset is undetermined; it is NOT a named host-side cause, so it does
+  not authorise a further cycle. The device was not reset (uptime rose continuously, `wifidrv1` stayed
+  loaded, no new pstore record).
+
+## The branch: none assignable
+
+The `trigger2.md` section 4 branch reads `A_S3`, `A_S4`, `A_S5`, `A_S7`, `A_S8` and `B_D0`, `B_D2`,
+`B_P3`. Every one of them is absent, so **TRIGNAT-COMPLETE, RING-PENDING-NOT-TAKEN, GLUE-ONLY and NOTHING
+are all unsupported.** Both parsers reduce the empty record to `PAD-DID-NOT-RUN` because it matches their
+fall-through clause, and the acceptance script's own docstring says that label means the record is void
+for the affected cells; it is a null classification, NOT a claim that a pad ran and did nothing. No
+branch is named here.
+
+What the surviving dmesg DOES show, and only this, is device-side and module-printed, not the instrument:
+the takeover firmware was written and released (`[sig] 9/9 signature registers changed -> THE CHIP LEFT
+ROM STATE`), and the port's own post-release poll saw `out[0]` go `0x0 -> 0x8` (bit 3, the H2D mask) and
+`out[1]` go `0x0 -> 0x4` (`build/register-dumps/exp/20261005-084742/dmesg.txt`, t=500 ms). That is the
+shape Pad A was built to reproduce, but with no `B_D0`/`B_D2` there is NO dispatcher-consumption witness,
+so it is not evidence that `0x818AC` consumed `out[0]`. The same poll recorded the natural post's own
+stores, so the trignat question (does the dispatcher consume it) stays open.
+
+## The virq outcome (the one device-side result that survives)
+
+**NOT DELIVERED.** The `virq2.md` port change did register as a `pci_driver` (the device was enabled:
+`omo-drv1 0000:00:00.0: enabling device (0140 -> 0142)`), but the PCI core did not assign the INTx virq:
+`pci_dev->irq` read 0, the `of_irq_parse_and_map_pci()` fallback failed (`of_irq_parse_pci: failed with
+rc=-22`), so `request_irq` was never called. The done line carries `irq0=0 isr0=0`, no `[isr]` line
+exists, and `/proc/interrupts` carries NO `207:` and NO `209:` line
+(`build/register-dumps/exp/20261005-084742/interrupts.txt`). That is `hostisr.md` table ROW B, and it is a
+property of the PORT (irq never assigned), not of INTA. It also refines `virq2.md`'s expectation: the
+report inferred the takeover core run would yield exactly 207; here the assignment itself returned nothing
+(`irq 0`), so `omo_pci_probe` did NOT reproduce the vendor's `pci_assign_irq() -> 207` path. Whether the
+cause is the domain selector, a missing `map_irq` at that probe instant, or another ordering detail is not
+resolved by this boot.
+
+## The bounds (declared, not hidden)
+
+1. **The headline limit: no trignat cell was captured.** The parent RUN failed before the capture step and
+the re-run's capture was reset by the peer. Any `TRIGNAT-COMPLETE` / `RING-PENDING-NOT-TAKEN` /
+   `GLUE-ONLY` / `NOTHING` reading from this record is UNSUPPORTED.
+2. **The re-run's capture reset is undetermined** (peer RST at the start of a large read-only hook): a
+transient ssh/daemon reset is likeliest, and it is not a named host-side cause, so no further cycle was
+taken.
+3. **The re-run's only difference from the RUN is the ko filename.** Same module bytes and blob, so the
+	`[sig] 9/9` and `init done` dmesg are valid evidence that the RUN's module would have loaded too.
+4. **Instant samples / clock skew:** the device clock is skewed (Oct 4 vs Oct 5); all conclusions use the
+   kernel-uptime-relative dmesg timestamps.
+5. **A side-effect to record:** the port's `omo_add_virtual_intf` path produced repeated
+   `WARNING: CPU: 1 ... register_netdevice` warnings on this boot (about 12 between 51.4 s and 56.7 s).
+   They taint the kernel but did not survive recovery (0 new pstore, healthy end state).
+6. **Two HARD-RULE notes hold:** no pad or hook read `0x400392f0`, `0x10161000` or `0x4016010c`; the
+   device cycle ran detached through `tools/exp.sh` with the watchdog armed first; no calibration snapshot
+   was touched.
+
+## Verification
+
+The verification dir is `build/register-dumps/diffs/20261005-083612-vrun3/`. The runtime verifier
+(`verdict.txt`) re-parsed the raw (empty) capture with an independent parser
+(`parse_trignat.py`, 15 passed / 53 failed, `rc=1`) and re-ran the run owner's acceptance
+(`acceptance.txt`, 2 passed / 74 failed, `PAD-DID-NOT-RUN`); both tallies fail because every declared cell
+is absent. It named the two failures with their commands and output, ran the single authorised re-run, and
+ran ONE live read-only probe: healthy and unchanged (stock md5 `0e530b976d5a20e87358671f1a577695`, 0
+`.omo-pat`, 0 `.omo-off`, 0 `wifidrv1`, 3 pstore, 2 wiphy / 6 ifaces, `[SUCC]` on both bands). Git shows
+only the expected `tools/patch_fw_scratch.py` (+ `opensource` submodule at `189f43d`). `health.txt` after
+the re-run cycle: `WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. The
+recover script's auto-delete of `/lib/firmware/hi_wifi/*.omo-pat` ran, so the staged blob is gone from the
+device while the host copy remains at `845188343f70cff9de29e77aea464021`.
+
+## Next branch (one line)
+
+Re-run `trignat` on the SAME blob with a captured record: fix the capture path (stage under
+`wifidrv1.ko`, or split the hook so a peer reset cannot lose the whole read), and give the port a
+`pci_driver` path that actually assigns the INTx virq; the `trigger2.md` section 4 table (device side) and
+`hostisr.md` section 3 (host side) then both resolve on one boot.
+
+---
+
+# ADDENDUM 7 - AMENDMENT (2026-10-05): the salvaged retry - BRANCH PAD-DID-NOT-RUN + the virq negative
+
+ADDENDUM 7 above says "no trignat cell was ever captured". That sentence is now SUPERSEDED. A HARDENED
+retry ran, its local driver died at step `[4/7]`, the takeover boot stayed LIVE, and the detached
+device-side hook's output was pulled post-hoc and salvaged. The capture EXISTS:
+`build/register-dumps/exp/20261005-090644-salvage/capture-cmd.txt` (25,766 bytes, hook banner and
+`=== capture hook done ===` intact), with `interp.txt`, `KNOBSET.txt`, `acceptance.txt` (88 passed / 0
+failed), `cleanup.txt` and `SALVAGE-NOTE.txt` beside it (plus `dmesg.txt`, `interrupts.txt`, `uptime.txt`,
+`lsmod.txt`). Provenance is in `SALVAGE-NOTE.txt`; the aborted verifier's probes in
+`build/register-dumps/diffs/20261005-090644-vrun4/` are SUPERSEDED and decide nothing.
+
+## The cells (salvaged, alias-only above the `0x104000` boundary)
+
+| cell | alias addr | value | meaning | verdict |
+| --- | --- | --- | --- | --- |
+| `A_S1` | `0x40807008` | `0x00000020` | ISPENDR2 w2 PRE-ring (bit 12 clear, bit 5 set) | OK |
+| `A_S3` | `0x40807018` | `0x00001020` | ISPENDR2 w2 POST-ring, THE DECISIVE READ | **bit 12 SET = id `0x4c` pending** |
+| `A_S4` | `0x40808000` | `0x0000004C` | GICC HPPIR POST-ring | `0x4c` - the CPU interface reports it |
+| `A_P1`/`A_P2` | `0x40807020`/`0x40808028` | `0x50AA7E49` | Pad A sentinels | PRESENT - Pad A RAN |
+| `B_D0`..`B_D3` | `0x40808030`..`0x48` | `0x00000000` | the four consumption cells | VOID - never written |
+| `B_P3` | `0x40808050` | `0x00000000` | Pad B sentinel | **ABSENT - Pad B DID NOT RUN** |
+| `WIN` | `0x406B8000` | `0xE59FF018` | window sanity | live, not dead |
+
+Sentinels `A_P1`/`A_P2` are present and `B_P3` is absent (`0x0`), so the page `0x150030..0x150050` was
+never touched. Cell `B_D2` is the one that matters: a LIVE read of ISPENDR2 at that address returns a
+`0x3FF`-class value (as `C2`/`C5`/`A_S2` do), never `0`. A zero read here is an UNWRITTEN page, not a
+measurement.
+
+## The branch: PAD-DID-NOT-RUN (the only name this boot yields)
+
+Decision walk on `trigger2.md` section 4. Rows 1 (`TRIGNAT-COMPLETE`) and 2 (`RING-PENDING-NOT-TAKEN`)
+both bank on `A_S3` bit 12 SET with `A_S4` = `0x4C`, which HOLDS, so GLUE-ONLY and NOTHING are excluded
+and the ring -> device-GIC wire is reproduced (the trigring/gicunmask signature, `0x1020`/`0x4c`). The two
+rows differ ONLY in `B_D0`/`B_D2`, and those cells are VOID. With `B_P3` absent the table's `-` row fires:
+**BRANCH = PAD-DID-NOT-RUN**. That is a record-void classification, not a claim about the dispatcher, and
+NO numbered row can be closed. The declared fallback `A_E0`/`A_E1` reads `0x0`/`0x0`; the row itself flags
+that as ambiguous on a single visit (a first visit reads `0` too), so it decides nothing.
+
+## Why Pad B did not run (a reachability finding, not a patch defect)
+
+Both pad calls ARE in the staged blob: file `0x86F5A` = `41f01df9` (`bl` -> Pad A) and file
+`0x86F7E` = `41f0f2f9` (`bl` -> Pad B), matching `build/tmp/fw-patched/trignat.bin.manifest.json` `sites`. Pad A's site runs
+BEFORE the `0xcece` handshake wait, and its sentinels prove it executed. Pad B's site is the exit of the
+announce routine, behind that wait, and its sentinel is untouched. So the reason is RUNTIME REACHABILITY:
+the `0xcece` handshake did not complete in this boot, execution never arrived at `0x86F7E`, and the
+consumption cells have no producer. This is a SEQUENCING finding. Nothing about the patch is broken.
+
+The device-dispatcher consumption question therefore stays OPEN. One corroborating datum points away from
+a take: the module's own post-release poll saw `out[0] = 8` persist across the full 8000 ms window
+(`dmesg.txt`, `out[0] 0x0 -> 0x8`, bit 3, the H2D mask). A 500 ms-granularity host poll is not `B_D0`, so
+it cannot name row 2 either; it only makes row 1 look less likely.
+
+## The virq negative (host side, separate from the cell branch)
+
+The `virq2.md` port change ran: the module registered as a `struct pci_driver` and the core enabled the
+endpoint (`enabling device (0140 -> 0142)`). The INTx virq was never assigned:
+
+```
+[   39.205438] omo-drv1 0000:00:00.0: of_irq_parse_pci: failed with rc=-22
+[   39.212104] omo-drv1: no endpoint INTx virq (irq=0) - the svc=1 poll service is the stand-in
+[   56.856628] omo-drv1: init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=0 isr0=0
+```
+
+`irq0=0` and `isr0=0`, no `request_irq(...)` line, no `[isr]` line, and `/proc/interrupts` carries NO
+`207:`/`209:` line (`interrupts.txt`). That is `build/tmp/trigger-spec/hostisr.md` ROW B (LINE ASSERTED WITHOUT HOST
+DELIVERY).
+**The ISR never executed**: a handler cannot run on an unbound virq. A brief-wording correction is on the
+record here: the orchestrator's task brief said "the port's ISR code ran", and the capture does NOT
+support it - what ran is the port's new `pci_driver` path, and the ISR is the part that did not.
+
+The `207`/`209` values that DO appear (`/sys/bus/pci/devices/.../irq` and `lspci -vv` "pin A routed to
+IRQ 207") are the CONFIG-SPACE Interrupt Line bytes the core wrote, not the kernel virq the port reads,
+so they do not contradict `irq0=0`. Next thread for the port: assign the virq explicitly (a `map_irq`
+hook, or `pci_assign_irq()` called the vendor's way) instead of relying on the generic parse, or pin the
+driver to the DT virq the way `build/tmp/trigger-spec/hostisr.md` section 1.3 sketches.
+
+## A knob-set note worth keeping
+
+The module's `__this_module.name` is `wifidrv1` (seen as `wifidrv1 49152` in `lsmod.txt`), and the STAGED
+file was `wifidrv1-isr.ko`. The old `MODNAME` gate (`lsmod | grep '^wifidrv1-isr '`) can never match, which
+is exactly what killed the previous attempt's step 4; stage the .ko under its internal name, or gate on
+the real one. (The `KNOBSET.txt` for the salvage carries the same note.)
+
+## The recovery receipt (two device mutations)
+
+`cleanup.txt`: the armed watchdog was cancelled, then recovery ran by hand through its own protocol,
+`./.sshwrap/rsh.sh 'touch /tmp/omo-exp.done'` then `./.sshwrap/rsh.sh '/bin/sh /root/recover-exp.sh'`.
+Those two calls are the ONLY device mutations. The post-recovery probe on a fresh boot: uptime 111 s,
+stock md5 `0e530b976d5a20e87358671f1a577695`, `.omo-pat` 0, `.omo-off` 0, `wifidrv1` loaded 0, hi5622
+modules 2, no leftovers, pstore 3 (no new crash), wiphy 2, ifaces 6, `[SUCC]` on both bands. Health line:
+`WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. The device is back on a
+normal, healthy boot.
+
+## The bounds (declared, not hidden)
+
+1. **Provenance: this is a POST-HOC SALVAGE, not a live capture.** The retry's local driver died at
+   `run-trignat-2.log` `-- [4/7] wait for the completion marker`; the hook was staged detached and wrote
+   its output device-side, so nothing was lost. That resilience is the point of the hardening.
+2. **Pad B's non-execution leaves the consumption half OPEN** (`B_P3` absent -> `B_D0`..`B_D3` void ->
+   PAD-DID-NOT-RUN, no numbered row). Nothing was invented to fill the gap.
+3. **The A cells are alias-only** above the `0x104000` boundary (`0x40807000`-class addresses); the alias
+   model is inherited, and `A_S4` decoding a valid unique id is the support for it.
+4. **The Pad-A ring is the pad's own store, not the vendor's natural trigger.** `A_S5` = `0x8` at the
+   post means the ISR did not preempt Pad A mid-way (a latency datum only).
+5. **Clock skew:** the host clock is the salvage's own 2026-10-05T09:06:44Z; the device clock is skewed
+   (Oct 4), so dmesg/uptime timestamps are kernel-uptime-relative, not wall-clock.
+
+## The next threads
+
+- **The blocker for the branch table:** find what actually completes the `0xcece` handshake at `0x86F74`,
+  or move Pad B's consumption read to a site this boot reaches, so `B_D0`/`B_D2` get a producer and a
+  numbered row (TRIGNAT-COMPLETE vs RING-PENDING-NOT-TAKEN) becomes closable.
+- **The port:** assign the INTx virq so `request_irq` runs (`build/tmp/trigger-spec/hostisr.md` sections 1.3 and 3, `virq2.md`
+  sections 2-3), and re-run with the hardened capture path so one boot carries both halves.
+

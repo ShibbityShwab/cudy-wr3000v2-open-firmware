@@ -79,6 +79,23 @@ branch. Evidence `build/register-dumps/exp/20261005-075136/`; two verifiers CONF
 two first-class plans from the phase's four spec reports: `opensource/docs/HYBRID-IMAGE-PLAN.md` (the graft,
 keep/graft lists, build, A/B-safe flashing, acceptance gates, open decisions) and
 `opensource/docs/TOOLING-IMPROVEMENTS.md` (the ranked 9-item harness list plus the top-3 quick wins).
+A seventh addendum to `gic-view.md` ("the natural-post ring test", variant `trignat`) then ran that next
+branch and it produced NO branch, honestly: the `trignat` instrument (Pad A at the firmware's own natural
+post, Pad B the dispatcher-consumption read) and the endpoint-IRQ port change were both built and staged,
+but no trignat cell was ever captured. The parent RUN failed on the HOST-SIDE `MODNAME` gate
+(`tools/exp.sh` gates step 4 on `lsmod | grep '^wifidrv1-isr '` while the ko's internal name is `wifidrv1`),
+so the capture step never ran; the ONE authorised re-run (same module bytes, renamed to satisfy the gate)
+loaded and completed but its capture hook was reset by the peer, leaving `capture-cmd.txt` at 0 bytes. Every
+trigger2.md section-4 input (`A_S3`, `A_S4`, `A_S5`, `A_S7`, `A_S8`, `B_D0`, `B_D2`, `B_P3`) is therefore
+ABSENT, so all four branches are unsupported and the `PAD-DID-NOT-RUN` label the parsers print is a null
+classification, not a measured value. **The one device-side result that survives is the virq outcome: NOT
+DELIVERED** (`pci_dev->irq=0`, no `request_irq`, `irq0=0 isr0=0`, no `207:`/`209:` line), the `hostisr.md`
+ROW B, and the port change did not reproduce the vendor's `pci_assign_irq() -> 207` path. Evidence
+`build/register-dumps/exp/20261005-083612/` (never created), `build/register-dumps/exp/20261005-084742/`,
+`build/register-dumps/diffs/20261005-083612-vrun3/`; device healthy after recovery. The same session also
+started the reframe the lead directed: `opensource/docs/UPSTREAM-PORT-PLAN.md` (NEW) is the honest inventory
+and staged roadmap for our own fully-current OpenWrt (our kernel + our drivers) and `HYBRID-IMAGE-PLAN.md`
+now carries a `STATUS: FALLBACK` header, retained only as a labeled fallback.
 
 The chain phase 47 named, with where each link now stands:
 
@@ -163,3 +180,13 @@ Every device lane ended healthy: `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 
 `.../20261004-165759-vendorloader/post-recovery-health.txt` and `.../20261004-165759-vendorloader/recovery.log`
 add (synthesized from both files) `STOCKMD5=0e530b976d5a20e87358671f1a577695 PSTORE=3` and a fresh boot after
 the failed vendor-loader boot.
+
+## The trignat retry, salvaged (2026-10-05)
+
+The seventh addendum's SALVAGE resolves it: `gic-view.md` "ADDENDUM 7 - AMENDMENT (2026-10-05)" records the
+hardened retry whose local driver died at step `[4/7]` while the takeover boot stayed live and the
+detached hook's output was pulled post-hoc. **BRANCH = PAD-DID-NOT-RUN**: Pad A rang (the ringed id `0x4c`
+reached the device GIC) but Pad B never executed, so the consumption half stays OPEN and no numbered row
+closes; the virq outcome is NEGATIVE (irq 0, ISR never executed). Evidence
+`build/register-dumps/exp/20261005-090644-salvage/` (`capture-cmd.txt`, `interp.txt`, `acceptance.txt`
+88/0, `cleanup.txt`, `SALVAGE-NOTE.txt`); device recovered healthy.
