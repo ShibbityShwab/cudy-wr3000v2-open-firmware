@@ -2057,3 +2057,211 @@ untouched, submodule `73b1230` in sync on `omo/phase22-hccaccept`.
 - **The take itself.** Site F still says the id is pending, not active, and the CPU still I-masked at the
   fall-through; a sampled instant at a later boot phase (after the routine's critical-section release
   `0x826E0`) is the read that would turn "unwitnessed" into a measured yes or no.
+
+# ADDENDUM 12 (2026-10-05): the quiesce probe - NO-STORM / LATCH-HELD, NOT-QUIESCED (the ladder never fired) / B5 CONFIGURED, STIMULUS UNEXECUTED / RETAINED, the page-10 cells finally hold
+
+The run the ADDENDUM 11 next threads named: arm the mandatory in-ISR bound, run the quiesce ladder, and
+re-test the two corrected witnesses in ONE bounded boot. Evidence
+`build/register-dumps/exp/20261005-135624/` (variant `quiesce`, one detached `exp.sh` cycle via
+`build/tmp/wifidrv1-art/run-quiesce.sh`, start 2026-10-05T13:56:23Z, end 13:59:05Z, `EXP RESULT: PASS`,
+`exp_rc=0`, run log `run-quiesce.log`), the staged blob `build/tmp/fw-patched/inta3.bin` (md5
+`eee1f67370b56eca42316f6eeb490c45`, 928,920 B, == the boot's `/lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat`),
+the staged `.ko` md5 `91fba1dc512536c94bfd1e419173c046` (submodule `2507a42`, CI run 37320054878,
+`omo/phase22-hccaccept` only), the adversarial verifier
+`build/register-dumps/diffs/20261005-135623-vrun9/verdict.txt` (CONFIRMED with three recorded
+corrections) and the instrument verifier `build/register-dumps/diffs/20261005T1401Z-vtool9/verdict.txt`
+(6/6 artifact checks CONFIRMED, the mandatory bound present and structurally sound). The three spec
+reports are `build/tmp/inta-spec/quiesce.md` (the storm mechanism, the allowed quiesce mechanics, and
+knob v4 with the bound), `build/tmp/inta-spec/bisect.md` (which stimulus fired the storm, and the
+single-variable B5 row) and `build/tmp/inta-spec/clocks2.md` (the clocks/CRG decision and the DTS node
+plan, recorded in the port plan).
+
+## The knob v4 deltas
+
+The same frozen `intapost` bitmask (the 41-knob set is NOT widened; the sha256 is unchanged,
+`541060a8...`) plus four NEW module params: `quiesce` (bitmask, default 0), `qbound` (uint, default 64,
+clamped `1..64`), `qwait_ms` (uint, default 5000, clamped `<=5000`) and `bisect` (the single-variable
+override). The `quiesce` bits are `0x1` Q_CONSUME, `0x2` Q_FWACK, `0x4` Q_MASKCLOSE, `0x8`
+Q_ESCALATE, `0x10` Q_LEAVE_MASKED. This run armed `quiesce=0x7 qbound=64 qwait_ms=5000 bisect=5`.
+
+| bit | name | action |
+| --- | --- | --- |
+| `0x1` | Q_CONSUME | the mailbox consumption sequence, rank 1: ack out[3] CA `0x40101438` <= `1`, clear out[1] CA `0x40039014` <= `0`, re-arm out[4] CA `0x40101414` <= `1` - the vendor-implied retire (`quiesce.md` sec. 3a) |
+| `0x2` | Q_FWACK | drive the firmware's own service: CA `0x4000010c` <= `0x0000cece` (the gate register, NOT the IAR `0x4016010c`) |
+| `0x4` | Q_MASKCLOSE | the named, reversible hard stop, LAST: CA `0x400392e8` <= `(saved | 0x18)`, masking the source |
+| `0x8` | Q_ESCALATE | (armed OFF here) the supervisor re-enables and runs the NEXT attempt under a fresh bound |
+| `0x10` | Q_LEAVE_MASKED | (armed OFF here) do not restore the mask at the end |
+
+**THE HARD BOUND (mandatory, non-negotiable):** both ISRs open with a `qbound` test before ANY MMIO
+(`omo_intx_isr` and `omo_intx2_isr`); after `qbound` entries the ISR calls `disable_irq_nosync()` on the
+line(s) it OWNS and prints the count (`IRQ_DISABLED_BOUND irq=%d n=%u bound=%u glue=%08x`). `qbound` is
+clamped `1..64` at init BEFORE `pci_register_driver`, so the bound is in force from the FIRST ISR entry.
+The ISR's own log is bounded too (1 line / 256 entries), so the instrument can never printk-storm. vtool9
+confirmed this in the shipped object: `disable_irq_nosync` x3 and `enable_irq` x2 relocations, both ISR
+bound sites, and NO forbidden CA composed.
+
+## The ladder's mechanism, and why it never ran
+
+The ladder runs INSIDE the ISR (so the first entry, the only entry guaranteed to happen, already
+quiesces), with `1..qbound` split into blocks in rank order: `quiesce=0x7 qbound=64` gives entries 1-21
+consume, 22-42 fwack, 43-64 maskclose, each mechanism re-reading the glue status `0x2ec` and stopping at
+the first block whose post-mechanism re-read is 0 (`QUIESCED_BY_<CONSUME|FWACK|MASKCLOSE>`). The
+process-context supervisor then only RE-ARMS the next attempt when Q_ESCALATE is set; with `0x7` armed
+(no `0x8`), it supervised CONSUME alone.
+
+This boot fired it as a pure arm-and-wait. The ladder cannot execute without an ISR entry, and there was
+none: `isr0=0` at `init done`, `isr_n=0` and `isr2_n=0` at every `[qsv]` BEFORE/AFTER, and
+`/proc/interrupts` `207: 0 0 GIC-0 91 Level omo-drv1`. So the supervisor armed, waited the full 5000 ms,
+and ended. The glue held `raw=0x00000001 mask=0x00000020 stat=0x00000011` for the whole window.
+
+| line | value |
+| --- | --- |
+| `[qsv] BEFORE CONSUME` | `glue{raw=00000001 mask=00000020 stat=00000011} out0=00000008 out1=00000004 isr_n=0 isr2_n=0` |
+| `[qsv] AFTER CONSUME` | `glue=00000011 (was 00000011) bounded=0/0 waited=5000ms isr_n=0 isr2_n=0` |
+| `[qsv] NOT QUIESCED` | the IRQ is left enabled (never re-enable into a storm) |
+| `[qsv] SUPERVISOR DONE` | `quiesced=0 winner=- glue=00000011 irq=enabled maskrestored=0` |
+
+The bound held VACUOUSLY: it was armed (`mode=0x7 bound=64`) from the first entry but never exercised,
+because no interrupt occurred and no mechanism executed. `IRQ_DISABLED_BOUND` never printed, and the 207
+line never fired (`FIRED=False`). This is an honest positive-negative - the storm did not reproduce under
+`bisect=5` - and NOT the design's storm rows: rows 1-3 (QUIESCED-BY-CONSUME/FWACK/MASKCLOSE) need the ISR
+to run a mechanism, and row 4 (BOUNDED-DISABLED) needs `n` to reach K, so none applies.
+
+## The three witnesses: the corrected 209 source arming, the 209 reading, the retention band
+
+**THE CORRECTED 209 SOURCE, ARMED: 3 `[intx2]` lines, no 209 witness, the compiled offset still wrong.**
+v3's `0x10` `dual-line` fix swapped the source from the config byte to the kernel's IRQ with an
+offset-guarded read:
+`[intx2] compiled pci_dev->irq at 0x1ac (vendor 0x184) - using the sysfs virq`. The compiled offset
+(`0x1ac`) still differs from the vendor's (`0x184`), so the port took the sysfs fallback. That fallback
+returned `255`, so `request_irq(209)` was SKIPPED and no second ISR was registered:
+`[intx2] sibling irq(irq=255) cfg INTERRUPT_LINE=0xff (cfg read is not the witness)` and
+`[intx2] no sibling INTx virq (irq=255) - the 209 witness is unavailable`. A `209` counter of 0 is
+therefore VACUOUS here - there is no `209: ... omo-drv1-ep1` `/proc/interrupts` line and no `[isr2]`
+measurement. So witness2.md FLAW 1's fix did not deliver a live witness in this boot, and the
+`[sysfs]` source is still returning 255.
+
+| field | value |
+| --- | --- |
+| compiled offset | `0x1ac` (vendor `0x184`) |
+| sibling sysfs virq | `255` (`irq=255`) |
+| config INTERRUPT_LINE | `0xff` (a cross-check, NOT the gate) |
+| `request_irq(209)` | not called; `209` counter = 0, VACUOUS |
+
+**THE RETAINED CELLS: page 10 FINALLY holds.** The six `N_*` cells on the verified-retaining page 10
+(`0x150000`, at `0x150058..0x150080`) all read back as deposits, and the sentinel is intact:
+`N_SNT = 0x50AA7E49`, with `A_P2 = B_P3 = 0x50AA7E49` on the same page and `F_SNT` (Site F, page 13)
+= `0`. Compare inta2, where all six read 0 including the constant `N_SNT` (the page-14 retention defect
+ADDENDUM 11 records): the page move is now VALIDATED. The deposits themselves decode as a coherent
+pre-take baseline: `N_ACT = 0x0` (not active), `N_ISP = 0x20` bit 12 pending, `N_HPP = 0x3ff` (nothing
+pending for the CPU), `N_OU0 = 0x0` (consumed), `N_PSR = 0x20000193` (I = 1, IRQs masked at the
+fall-through). So the take is still UNWITNESSED, but the sample is now real.
+
+| id | value | meaning |
+| --- | --- | --- |
+| `N_ACT` | `0x0` | not active at the visit |
+| `N_ISP` | `0x20` | bit 12 pending |
+| `N_HPP` | `0x3ff` | nothing pending for the CPU |
+| `N_OU0` | `0x0` | out[0] consumed |
+| `N_PSR` | `0x20000193` | I = 1, IRQs masked |
+| `N_SNT` | `0x50AA7E49` | the pad ran; the page RETAINED |
+| `A_P2` / `B_P3` | `0x50AA7E49` | same-page sentinels intact |
+| `F_SNT` | `0x0` | Site F (page 13), no deposit from that pad this boot |
+
+Addendum 11's question (did page 14 lose the writes, or did the pad never run) is answered by the page-10
+cells: the pad DOES deposit, the earlier void was a page-selection problem, and the retention sentinel
+`N_SNT` is now the in-capture guard witness2.md FLAW 2 asked for.
+
+## The bisect culprit: CONFIGURED, but not exercised
+
+The bisect plan (`bisect.md` sec. 3) was built to name which v3 stimulus latched the 207 storm, or to
+prove the storm needs a bit. This run took row B5, the smallest suspect: `bisect=5` overrode `intapost`
+to `effective=0x10`, i.e. the corrected 209 witness ALONE, with the twin/ETE stimulus (`0x40`) OFF. The
+ring line and the emission counts confirm the single-variable design:
+
+- ring: `---- intapost ring knob 0x0 (bisect=5 effective=0x10, post-release) ----`.
+- `[intx2]` = 3 lines (the 209 source path entered and bailed on `irq=255`); `[intx3]` = 0 lines.
+- `[intapost]` = 0 lines (the knob's older step tags are gone; the [intx2] tag carries this path).
+
+So the 0x40 twin/ETE snapshot + stimulus did NOT run: the single-variable boot HOLDS. But vrun9's
+load-bearing correction stands: "the 209 witness ARMED" OVERSTATES it. The bit was COMPILED IN, its
+runtime stimulus did NOT arm - `omo_dual_line_attach()` fell to its `else` branch and returned
+`-ENODEV`, and there is no `[intx2] request_irq(209 ... rc=0` line. The correct row is **B5 CONFIGURED,
+STIMULUS UNEXECUTED (instrument-side negative)**.
+
+What the run does NOT decide: the storm's culprit. `bisect.md` sec. 0 settled that the pstore storm
+record is an OLDER wifidrv1 boot, not the knob-v3 run, so the storm cannot be attributed to any
+`intapost` bit, and its candidate set survives as (a) the widened read of the twin copy B's raw/status,
+(b) W2 the twin doorbell, (c) W1 the twin mask, (d) the 209 shared-ISR path, (e) the MSI probe (dead by
+design, `CONFIG_PCI_MSI=n`). This boot rules ONE thing: with S2 (`0x40`) absent and S1 (`0x10`)
+configured but inert, no storm followed. So S1/S2 are NOT sufficient causes on this boot - a NEGATIVE ON
+DATA for both, not a positive for either.
+
+## The bounds (declared, not hidden)
+
+1. **No storm, no ISR entry: every ladder row is vacuous.** With no interrupt there is no mechanism
+   execution at all, and the supervisor's `NOT QUIESCED` means "never fired", not "failed to clear".
+   The BEFORE/AFTER table (`glue=00000011` held) is what distinguishes those two readings; the row is
+   NOT quiesce.md's numbered row 4.
+2. **No numbered quiesce.md row is literally satisfied.** Row 6's predicate ("no storm at all - `isr0`
+   small, glue clear") is only HALF met: `isr0=0` yes, but the glue was NOT clear (`stat=0x00000011`,
+   `raw=0x1` held). The honest label is the unnumbered **NO-STORM, LATCH-HELD, NOT-QUIESCED**.
+3. **The 209 witness did not run: a 209 count of 0 is VACUOUS.** Three `[intx2]` lines disclose the
+   instrument-side bailout on `irq=255`; the sibling config byte `0xff` is a cross-check only.
+4. **The 255 anomaly is real and unexplained (the environment claim is unsupported).** The port's
+   in-kernel read returned 255 at t=42.7 s, while the SAME boot's later host reads give
+   `0001:00:00.0 irq=209`, `Interrupt: pin A routed to IRQ 209`, and `interrupts-pre.txt` shows the
+   vendor holding `209: ... hisi_pci_intx`. The defensible statement is: the PORT's read returned 255,
+   so `request_irq(209)` was skipped - not "no usable line at the probe instant". Root cause is not
+   determinable read-only.
+5. **Retention is one boot's datum.** Page 10 retained this time (N_SNT intact, plus the same-page
+   sentinels), which is the strongest retention evidence yet, but it is a single sample.
+6. **Hard rules respected.** No write of CA `0x400392f0` (copy-A W1C) or `0x40039af0` (copy-B W1C); no
+   read of the ack IAR `0x4016010c` or the RC misc `0x10161000`; the gate register `0x4000010c` is a
+   different address and is the only `0x...10c` touched; the `.ko` was staged as `wifidrv1.ko`; the
+   recovery auto-deleted the staged `.omo-pat`.
+7. **The bound is verified statically, not exercised live.** The shipped object carries the bound
+   (`disable_irq_nosync` x3 / `enable_irq` x2, both ISR sites, `qbound` clamped `1..64`), but a
+   future storm boot is what would trip it.
+
+## Verification
+
+The shipped acceptance re-runs to PASS (`EXP RESULT: PASS`, `exp_rc=0`, 14/14 items), and
+`gen_quiesce_evidence.py` reproduces the shipped `KNOBSET.txt`/`interp.txt`/`acceptance.txt`
+BYTE-IDENTICAL (vrun9's independent re-run). vrun9 CONFIRMS the capture, the acceptance (14/14, item 4's
+PASS is vacuous-by-design and disclosed), the counters (`207: 0 0`), the cells (`N_SNT = 0x50AA7E49`),
+the witnesses (`[sig]` 9/9, staged blob `eee1f673...`, stock blob `0e530b97...`), the pstore delta (NO
+new record; the bound did not trip), and the live read-only device check (3 probes, no write, no reboot:
+`WIPHY=2 IFACE=6`, `[SUCC]` both bands, `OMO_OFF=0 STAGED=0 LOADER=0`, stock md5 intact, pstore count 2
+unchanged, 209 live again under the vendor's `hisi_pci_intx`, `207: 0`), with THREE recorded
+corrections: BRANCH 2's "armed" OVERSTATED (now "CONFIGURED, STIMULUS UNEXECUTED"); BRANCH 3's reason
+UNSUPPORTED as worded (the same capture contradicts "not a usable line"); BRANCH 1's row labelling gap
+(no numbered quiesce.md row literally satisfied because the glue not clear). vtool9 returns 6/6 artifact
+checks CONFIRMED: the submodule commit `2507a42` and its pushed branch, the independently re-fetched CI
+`.ko` (md5 + vermagic + undefined-symbol delta), the knob-v4 diff per quiesce.md INCLUDING the bound,
+the firmware selftest + ALL frozen pins, two independent regenerations vs the staged md5, the capstone of
+the inta3 sites, and the runner's hook + TS gate; with the accepted spec deviation (the bound prints
+`bound=%u` plus `n=`) and the notes (the `omo_intapost_run` refactor wording; the unexercised bound;
+the unsettled 255). Also recorded: the 13 pre-existing `register_netdevice` `WARNING:` blocks are NOT
+run-specific (identical 13 in `exp/20261005-115837`, `exp/20261005-103047`, `exp/20261005-090644-salvage`).
+Git carries the pending `opensource` gitlink bump only, master untouched, submodule `2507a42` in sync on
+`omo/phase22-hccaccept`.
+
+## The next threads
+
+- **Make the 209 source deliver a live line.** The sysfs fallback returned 255; source the sibling virq
+  from the port's own `omo_ep1_dev->irq` (ADDENDUM 10's fix) or read the compiled field at the vendor
+  offset, so `request_irq(209)` actually runs and the `209: ... omo-drv1-ep1` witness can be taken.
+- **Re-attribute and re-isolate cleanly now that `bisect` exists.** B5 proved the single-variable boot
+  holds; walk the remaining rows one at a time from the control up (B0 no bit, B1 the widened reads, B3
+  W1, B4 W2, B5 already done), each under the same bound, so a future storm can be NAMED to a step.
+- **Exercise the bound on purpose at least once.** A storm boot is what trips `IRQ_DISABLED_BOUND`; until
+  then the self-disable path is only statically verified, and the cleanest way to close that gap is a
+  single deliberate storm boot, contained and timed.
+- **Re-run the take sample.** The page-10 cells retained and spent on `N_ACT = 0` this boot; page 10 is
+  now a proven home, so probing the same cells at a LATER boot phase (after the critical-section release
+  `0x826E0`) is the read that turns "unwitnessed" into a measured yes or no.
+- **Fix the ladder arm discipline.** The supervisor armed while the storm was absent, so the ladder spent
+  5 s waiting for an entry that never came; a future run should keep `Q_ESCALATE` OFF only when the source
+  is known live, and the supervisor should print an explicit "no entry, nothing exercised" line rather than
+  a bare `winner=-`.

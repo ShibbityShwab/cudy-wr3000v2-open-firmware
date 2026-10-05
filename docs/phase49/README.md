@@ -297,3 +297,39 @@ storm with the glue copy-A post-mask status latched (`0x18`) the port's ISR coul
 window begins after the knob's print points, so it cannot name the step. The one re-run rule was honored (a
 device-side failure, not a named host-side cause). Health after recovery `WIPHY=2 IFACE=6 CAL_SUCC=1
 OMO_OFF=0 STAGED=0 LOADER=0`, pstore 2 records (blk-2 + the new blk-3), hard rules held.
+
+## The quiesce probe: NO-STORM, the bound armed but never tripped, page 10 finally retained (2026-10-05)
+
+`gic-view.md` "ADDENDUM 12 (2026-10-05): the quiesce probe" records the bounded boot the ADDENDUM 11 next
+threads named. Evidence `build/register-dumps/exp/20261005-135624/` (variant `quiesce`, one detached
+`exp.sh` cycle via `run-quiesce.sh`, start 13:56:23Z end 13:59:05Z, `EXP RESULT: PASS`, `exp_rc=0`,
+staged blob `build/tmp/fw-patched/inta3.bin` md5 `eee1f67370b56eca42316f6eeb490c45`, staged `.ko` md5
+`91fba1dc512536c94bfd1e419173c046` at submodule `2507a42`, CI run 37320054878), adversarial verifier
+`build/register-dumps/diffs/20261005-135623-vrun9/verdict.txt` (CONFIRMED with three recorded
+corrections) and instrument verifier `build/register-dumps/diffs/20261005T1401Z-vtool9/verdict.txt` (6/6
+artifact checks CONFIRMED, the mandatory bound present and structurally sound). Specs:
+`build/tmp/inta-spec/{quiesce.md,bisect.md,clocks2.md}`. KNOB V4 adds four module params beside the frozen
+`intapost` set (`quiesce` bitmask, `qbound` clamped `1..64`, `qwait_ms`, `bisect`) and THE HARD BOUND:
+both ISRs `disable_irq_nosync()` after `qbound` entries before ANY MMIO and print `IRQ_DISABLED_BOUND`
+(the ISR's own log is 1 line / 256 entries, so it cannot printk-storm). **BRANCH 1 = NO-STORM, LATCH-HELD,
+NOT-QUIESCED**: the ladder and the bound were armed from the first entry (`mode=0x7 bound=64`), but the
+207 line never fired (`isr0=0`, `isr_n=isr2_n=0`, `/proc/interrupts 207: 0 0`, no `[qsv] entry`), so
+with no ISR entry no mechanism executed; the glue held `raw=0x1 mask=0x20 stat=0x11` the whole 5000 ms and
+the supervisor ended `quiesced=0 winner=- maskrestored=0`. The bound held VACUOUSLY, and no numbered
+quiesce.md row is literally satisfied (row 6's "glue clear" is only half met). **BRANCH 2 = B5 CONFIGURED,
+STIMULUS UNEXECUTED**: `bisect=5` forced `effective=0x10` (the corrected 209 witness alone, twin/ETE
+`0x40` OFF, 3 `[intx2]` / 0 `[intx3]` lines), but the 209 stimulus did not arm - `omo_dual_line_attach()`
+fell to its `else` and the port skipped `request_irq(209)` because the sysfs virq read `255`, and vrun9
+corrected the run's "armed" to "configured". The storm's culprit stays UNNAMED (it is not sufficient-cause
+tested: `0x40` absent and `0x10` inert, no storm followed); bisect.md sec. 0 already settled that the
+pstore storm record is an older wifidrv1 boot, not knob v3. **BRANCH 3 = the 209 witness UNAVAILABLE** (a
+209 count of 0 is vacuous; the same capture shows the host owning 209, `pin A -> IRQ 209`). **BRANCH 4 =
+RETAINED**: the six page-10 cells finally landed (`N_ACT=0x0 N_ISP=0x20 N_HPP=0x3ff N_OU0=0x0
+N_PSR=0x20000193 N_SNT=0x50AA7E49`, with the same-page sentinels `A_P2=B_P3=0x50AA7E49`), VALIDATING
+ADDENDUM 11's page-14 defect fix; the take is still UNWITNESSED. The mandatory bound held
+VACUOUSLY; `IRQ_DISABLED_BOUND` never printed; the pstore set is unchanged (no new record). Health after
+recovery `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0`, stock md5 `0e530b97...`, hard rules held
+(no `0x400392f0`/`0x40039af0` write, no IAR `0x4016010c` or `0x10161000` read; the gate `0x4000010c`
+is a different address). Next threads: make the 209 source deliver a live line, walk the bisect rows from
+the control up (or exercise the bound on purpose), and re-sample the take at a later boot phase now that
+page 10 is a proven home.

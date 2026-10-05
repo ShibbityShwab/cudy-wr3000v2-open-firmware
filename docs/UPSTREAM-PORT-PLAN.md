@@ -164,6 +164,29 @@ reference errors, and the raw vendor `luofu-r116-pinned.dts` fails to parse (its
 not DTS) while the re-expressed skeleton compiles clean. So the Stage 1 skeleton is now compile-verified by a
 real device-tree compiler, and the `stage1b` fallback's `cpp`-plus-sanity-parse result is confirmed.
 
+Clocks decision + DTS node plan (2026-10-05, `build/tmp/inta-spec/clocks2.md`): reuse mainline and
+write NO clock driver for the fixed inputs - the board's five always-on sources stay plain DTS nodes
+(`fixed-clock` for the oscillators plus AHB 200 MHz and APB 100 MHz, `fixed-factor-clock` for the TWD /4
+divider at 250 MHz), so the timers, UART and GPIO consumers just point at `&apb_clk` / `&twd_clk`. The one
+thing that needs a driver is the CRG (gates + PLLs + muxes + reset): there is no mainline match for the
+vendor `hsan,*` strings, so clone the single-CRG model `hisilicon,hi3798cv200-crg` as a NEW
+`hisilicon,luofu-crg` binding, one node = one clock+reset controller, `#clock-cells = <1>` plus
+`#reset-cells = <2>` (offset, bit) reusing the shared `drivers/clk/hisilicon/reset.c` helper, with the
+Kconfig-gated `crg-luofu.c` at the `core_initcall` level so it runs before the 8250_dw/gpio/i2c/mtd
+probes, no regmap at stage 1 (one `devm_platform_ioremap_resource` for the 0x1000 page, `"syscon"` kept in
+the compatible so later children can look the page up). The DTS node plan folds the skeleton's two
+placeholders, `clk:` (pinned `clk@14880000`, `:201`) and `rst:` (pinned `reset0`, `#reset-cells=<2>`,
+`:1394`), into ONE `crg: clock-reset-controller@14880000` node with
+`compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, then repoints every consumer to
+`<&crg IDX>` / `<&crg off bit>` (fmc, gpio0/1, i2c0, pcie0, gmac0), adding a new
+`dt-bindings/clock/luofu.h` for the `LUOFU_CLK_*` ids; the pinned gate/PLL/mux offset-bit geometry and the
+`softrst_val0/1` magic come across verbatim, since the reference tables are hardcoded per-SoC (a new
+compatible is required, not a data entry). Stage 1 stays a pure gate+reset bring-up: gates tagged
+`CLK_IGNORE_UNUSED` so `clk_disable_unused()` cannot kill the live console or NAND, no PLL/mux rate
+changes, and the TWD/SP804 run off the free fixed clocks. The spec's next bench action is a DETACHED
+read-only `devmem` cycle at `0x14880000` to confirm the reconstructed 0x20-group gate offsets, with the
+instrument self-disabling after a small K reads.
+
 ## 5. Source URLs (mainline evidence)
 
 - OpenWrt targets list, no HiSilicon router target (no `luofu`/`hsan`/Hi5671): https://github.com/openwrt/openwrt/tree/master/target/linux
