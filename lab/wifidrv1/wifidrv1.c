@@ -2100,8 +2100,17 @@ static int omo_hw_attach(void)
 	 * DT INTx mapper (exported; a documented negative on this board - no
 	 * interrupt-map) and otherwise leave the svc=1 poll service as the stand-in
 	 * (virq2.md section 4). */
-	omo_irq = omo_pdev->irq;
-	if (omo_irq == 0 || omo_irq == 255) {
+	/* virq3: the module is cross-built against vanilla 5.10 headers (multi_v7_defconfig:
+	 * ->irq at 0x1ac) but runs on the vendor kernel (->irq at 0x184); a direct
+	 * omo_pdev->irq read reads resource[] garbage and discards the virq the core
+	 * already assigned.  Read back PCI_INTERRUPT_LINE (kernel API, offset-immune). */
+	{
+		u8 line = 0;
+
+		if (pci_read_config_byte(omo_pdev, PCI_INTERRUPT_LINE, &line) == 0)
+			omo_irq = line;
+	}
+	if (omo_irq <= 0 || omo_irq == 255) {
 		u8 pin = 0;
 
 		pci_read_config_byte(omo_pdev, PCI_INTERRUPT_PIN, &pin);
