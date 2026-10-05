@@ -125,27 +125,17 @@
 		clock-mult = <1>;	/* 1 GHz / 4 = 250 MHz, pinned:772 */
 	};
 
-	/* ---- SoC CRG: clock + reset controllers (new bindings, TODO) ----
+	/* ---- SoC CRG: clock + reset controllers (new binding) ----
 	 * pinned clk@14880000 ("hsan,clk" + "syscon" + "simple-mfd", :201) and
 	 * crg@14880000 ("hsan,crg", softrst values, :467) share the 0x14880000
-	 * page with reset0 ("hsan,hsan-reset", :1394). */
+	 * page with reset0 ("hsan,hsan-reset", :1394). Folded into ONE controller
+	 * (build/tmp/inta-spec/clocks2.md sec 2). */
 
-	clk: clock-controller@14880000 {
-		compatible = "hisilicon,luofu-clk";
-		#clock-cells = <1>;
+	crg: clock-reset-controller@14880000 {
+		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
 		reg = <0x14880000 0x1000>;	/* pinned:201 */
-		/* TODO binding question: adopt the single #clock-cells=<1> CRG
-		 * index scheme (reference crg-hi3798cv200.c) and fold the pinned
-		 * per-gate/-pll/-mux reg-offset/bit/status/mask/table geometry into
-		 * the driver clock table -- see stage1.md. */
-	};
-
-	rst: reset-controller {
-		compatible = "hisilicon,luofu-reset";
-		#reset-cells = <2>;	/* pinned reset0 :1395 */
-		/* TODO: pinned reset0 has no reg; reset bits live in the CRG
-		 * (0x14880000). Give this node a reg or make it a child of the clk
-		 * syscon; cells are (offset, bit). */
+		#clock-cells = <1>;		/* clk id table in luofu.h */
+		#reset-cells = <2>;		/* (reg-offset, bit), pinned:1395 */
 	};
 
 	/* ---- standard ARM peripherals (free bindings) ---- */
@@ -220,8 +210,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0x10106000 0x1000>;	/* pinned:963 */
-		clocks = <&clk LUOFU_CLK_GPIO0>;
-		resets = <&rst 0x2c 0x14>;	/* pinned:963 */
+		clocks = <&crg LUOFU_CLK_GPIO0>;
+		resets = <&crg 0x2c 0x14>;	/* pinned:963 */
 
 		porta: gpio-port@0 {
 			compatible = "snps,dw-apb-gpio-port";
@@ -241,8 +231,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0x10107000 0x1000>;	/* pinned:988 */
-		clocks = <&clk LUOFU_CLK_GPIO1>;
-		resets = <&rst 0x2c 0x15>;	/* pinned:988 */
+		clocks = <&crg LUOFU_CLK_GPIO1>;
+		resets = <&crg 0x2c 0x15>;	/* pinned:988 */
 
 		portb: gpio-port@0 {
 			compatible = "snps,dw-apb-gpio-port";
@@ -261,8 +251,8 @@
 		compatible = "snps,designware-i2c";
 		reg = <0x10111000 0x1000>;	/* pinned:1013 */
 		interrupts = <0 0x2c 4>;	/* SPI 44, pinned:1013 */
-		clocks = <&clk LUOFU_CLK_I2C0>;
-		resets = <&rst 0x2c 0x18>;	/* pinned:1013 */
+		clocks = <&crg LUOFU_CLK_I2C0>;
+		resets = <&crg 0x2c 0x18>;	/* pinned:1013 */
 		clock-frequency = <100000>;	/* 0x186a0, pinned:1014 */
 		status = "disabled";
 	};
@@ -275,9 +265,9 @@
 		compatible = "hisilicon,luofu-fmc";
 		reg = <0x10a20000 0x1000>,	/* ctrl,    pinned:781 */
 		      <0x1c000000 0x100000>;	/* window */
-		clocks = <&clk LUOFU_CLK_SFC>;
+		clocks = <&crg LUOFU_CLK_SFC>;
 		clock-names = "sfc_clk";
-		resets = <&rst 0x2c 0x0>;	/* pinned:781 */
+		resets = <&crg 0x2c 0x0>;	/* pinned:781 */
 		reset-names = "sfc_rst";
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -294,9 +284,9 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;	/* pinned:885 */
 		phy-mode = "rgmii";		/* pinned:892 */
-		clocks = <&clk LUOFU_CLK_GMAC0>;
-		resets = <&rst 0x30 0xd>,	/* mac_logic, pinned:895 */
-			 <&rst 0x30 0xe>;	/* mac */
+		clocks = <&crg LUOFU_CLK_GMAC0>;
+		resets = <&crg 0x30 0xd>,	/* mac_logic, pinned:895 */
+			 <&crg 0x30 0xe>;	/* mac */
 		reset-names = "mac_logic_reset", "mac_reset";
 		status = "disabled";
 		/* TODO binding question: no mainline hsan,mac; reference
@@ -329,11 +319,11 @@
 		interrupts = <0 0x3b 4>,	/* radm,     pinned:1205 */
 			     <0 0x45 4>;	/* linkdown */
 		interrupt-names = "radm", "linkdown";
-		clocks = <&clk LUOFU_CLK_PCIE0>;
-		resets = <&rst 0x34 0xc>,	/* apb,  pinned:1226 */
-			 <&rst 0x34 0xd>,	/* pcs */
-			 <&rst 0x34 0xe>,	/* phy */
-			 <&rst 0x34 0xf>;	/* ctrl */
+		clocks = <&crg LUOFU_CLK_PCIE0>;
+		resets = <&crg 0x34 0xc>,	/* apb,  pinned:1226 */
+			 <&crg 0x34 0xd>,	/* pcs */
+			 <&crg 0x34 0xe>,	/* phy */
+			 <&crg 0x34 0xf>;	/* ctrl */
 		reset-names = "apb_rst", "pcs_rst", "phy_rst", "ctrl_rst";
 		status = "disabled";
 		/* TODO binding question: DWC glue -- reference pcie-histb.c /

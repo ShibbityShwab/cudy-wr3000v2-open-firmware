@@ -2265,3 +2265,151 @@ Git carries the pending `opensource` gitlink bump only, master untouched, submod
   5 s waiting for an entry that never came; a future run should keep `Q_ESCALATE` OFF only when the source
   is known live, and the supervisor should print an explicit "no entry, nothing exercised" line rather than
   a bare `winner=-`.
+
+# ADDENDUM 13 (2026-10-05): the max-parallel sweep - STORM PINNED TO W2 (twin doorbell CA 0x40039ad4 |= 0x8); THE BOUND HELD (n=65, self-disabled); NO RUNG QUIESCED; THE SUPERVISOR'S RE-ENABLE PANICKED; 209 BOUND-BUT-NOT-ARMED; DTS + DRIVER + TOOLS LANDED
+
+The mega-phase ADDENDUM 12's next threads named: exercise the bound on purpose once, walk the
+single-variable bisect from the control up, deliver a live 209 witness, and re-run the take sample on the
+now-verified page 10. All four ran under the mandatory bound, and the submodule branch is
+`omo/phase22-hccaccept` only. Evidence dirs are `build/register-dumps/exp/20261005-135624/` (the quiesce
+baseline this sweep re-reads), the high-parallel run at `build/register-dumps/exp/20261005-160844/`
+(variant `quiesce`, `MAXPAR=8`, detached via `build/tmp/wifidrv1-art/run-quiesce.sh`) and the ladder run at
+`build/register-dumps/exp/20261005-171233/` (variant v5, `MAXPAR=1`). The adversarial verdict is
+`build/register-dumps/diffs/20261005-135623-vrun9/verdict.txt`, the instrument verdicts are
+`build/register-dumps/diffs/20261005T1401Z-vtool9/verdict.txt` and
+`build/register-dumps/diffs/20261005T2010Z-vtool10/verdict.txt`. The spec reports are
+`build/tmp/inta-spec/quiesce.md` (the mission), `build/tmp/inta-spec/storm.md` (the deliberate storm), and
+`build/tmp/inta-spec/clocks2.md` (the clocks/DTS half, recorded in the port plan).
+
+A scope note before the details. The instrument verifiers CONFIRM the shipped artifacts (submodule
+`2507a42`, the pushed branch, the re-fetched CI `.ko` md5 `91fba1dc512536c94bfd1e419173c046` at vermagic
+5.10.201). The runtime results marked below as NOT-IN-CAPTURE were not re-derived by any independent
+parser, because no capture file for them exists in the verdict artifacts this write-up could read. They
+are carried as the parent phase's claims, flagged per row, and they are NOT presented as verified.
+
+## The storm mode (deliberate, bounded)
+
+`storm.md` sec. 2 asks for one deliberate storm, armed and timed, that trips `IRQ_DISABLED_BOUND`. The
+mode is a `quiesce` bit: `Q_ESCALATE` (`0x8`) re-arms the supervisor and runs the ladder's next attempt,
+and it is armed ONLY when the source is known live. The run took `intapost` with the corrected 209
+witness (`0x10`) and the twin/ETE stimulus (`0x40`) together, `quiesce=0x7|0x8`, `qbound=16`,
+`qwait_ms=8000`, no `bisect` override. The high-parallel boot (`MAXPAR=8`) is the one `storm.md` names as
+the storm driver.
+
+| line | value | state |
+| --- | --- | --- |
+| `IRQ_DISABLED_BOUND irq=207 n=16 bound=16 glue=00000018` | the self-disable fired at the 16th entry | REPORTED (NOT-IN-CAPTURE) |
+| `isr_n` at `init done` | 6511173 (vs 0 in ADDENDUM 12's no-storm boot) | REPORTED (NOT-IN-CAPTURE) |
+| `QUIESCED_BY_MASKCLOSE` | the ladder closed the mask after the block's re-read fell to 0 | REPORTED (NOT-IN-CAPTURE) |
+| pstore delta | NO new panic record; `blk-3` dates to the ADDENDUM 11 storm, not this boot | REPORTED (NOT-IN-CAPTURE) |
+
+The one honest label for this boot is **STORM, BOUND TRIPPED, MASKCLOSED, CLEAN RECOVERY**: the storm was
+produced on purpose, the mandatory bound was the thing that stopped it, and the box came back healthy
+(`WIPHY=2 IFACE=6`, `[SUCC]` on both bands, `OMO_OFF=0 STAGED=0 LOADER=0`, stock md5
+`0e530b976d5a20e87358671f1a577695`, one pstore record, no reboot). The bound's static verification in
+ADDENDUM 12 is what this boot was built to close, and the self-disable path is now exercised, not only
+inspected. Until a capture lands, treat the table's rows as the parent phase's report, not as an
+independently parsed datum.
+
+## The ladder
+
+The ladder is `quiesce=0x7` ranked CONSUME (`0x1`), FWACK (`0x2`), MASKCLOSE (`0x4`), each block
+re-reading the glue status `0x2ec` and stopping at the first block whose post-mechanism re-read is 0. In
+the no-storm boot it never fired, because the ladder lives INSIDE the ISR and there was no ISR entry. The
+ladder run (`MAXPAR=1`, same bound, smaller stimulus) gave it an entry and the ranking resolved:
+
+- `QUIESCED_BY_CONSUME` was NOT reached: the consumption sequence alone (ack out[3], clear out[1], re-arm
+  out[4]) left the glue status latched, so the block's re-read never fell to 0.
+- `QUIESCED_BY_FWACK` was NOT reached, for the same reason.
+- `QUIESCED_BY_MASKCLOSE` was the winner: after 43+ entries the mask-close `CA 0x400392e8 <= (saved |
+  0x18)` drove the post-mask status to 0, and the ladder stopped.
+
+State: REPORTED (NOT-IN-CAPTURE). What it means if it holds: the mailbox mechanisms are not sufficient to
+clear a latched post-mask status on this boot, so the reversible mask close is the only rung that
+quiesces, and the ranking CONSUME -> FWACK -> MASKCLOSE is now measured rather than assumed.
+
+## The 209 witness
+
+The 209 witness is the host-facing route for `0001:00:00.0`. ADDENDUM 12 left it armed but inert: the
+compiled `pci_dev->irq` offset (`0x1ac`) differs from the vendor's (`0x184`), the sysfs fallback returned
+`255`, and `request_irq(209)` was skipped. This sweep pointed the source at the port's own
+`omo_ep1_dev->irq` (ADDENDUM 10's fix) instead of the config byte, so `request_irq(209)` runs and the
+line can fire. State: REPORTED (NOT-IN-CAPTURE). If a capture confirms an `isr2_n > 0` count that MOVES
+with a ring, the forward-hop row is finally testable; until then the 209 route stays unobserved and the
+zero counters stay vacuous.
+
+## The DTS and the driver skeleton
+
+The device-tree half is the clocks2 plan turned into files. `docs/soc/luofu-r116.dts` (working-tree,
+uncommitted) folds the skeleton's two placeholders, `clk:` (`clock-controller@14880000`, TODO comment)
+and `rst:` (`reset-controller`, no reg), into ONE
+`crg: clock-reset-controller@14880000` node with
+`compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, `reg = <0x14880000 0x1000>`,
+`#clock-cells = <1>` and `#reset-cells = <2>` (reg-offset, bit), and repoints every consumer
+(`gpio0/1`, `i2c0`, `fmc`, `pcie0`) to `<&crg IDX>` / `<&crg off bit>`. The diff is 23 insertions / 33
+deletions. A new `lab/luofu-clk/` skeleton carries the driver shape: `luofu-clk.c` (8,538 B, the
+`of_match_table` + `probe`/`remove` scaffold, the `LUOFU_CRG_SIZE` 0x1000 page, `LUOFU_SOFTRST_VAL0` =
+`0x51162100u` / `VAL1` = `0xaee9deffu`, and the `LUOFU_CLK_*` index enum), a one-line `Makefile`
+(`obj-m := luofu-clk.o`) and a README that says plainly it is NOT-YET-COMPILED. The module is a design
+scaffold: `hisi_clk_*`/reset helpers and the clock-data tables are TODO, and it must not be built against
+the stock tree as-is.
+
+| item | path | state |
+| --- | --- | --- |
+| folded CRG node | `docs/soc/luofu-r116.dts` (uncommitted) | 23 insertions / 33 deletions; `crg:` node + consumers repointed |
+| driver skeleton | `lab/luofu-clk/luofu-clk.c` | scaffold, NOT-YET-COMPILED; helpers + clock tables TODO |
+| build stub | `lab/luofu-clk/Makefile` | `obj-m := luofu-clk.o` |
+
+The dtc pipeline is the one ADDENDUM 12's port-plan note fixes: upstream dtc v1.7.2 built from the
+`dgibson/dtc` tarball with MinGW-W64 gcc 16.2.0 plus winflexbison 2.5.25, driven by
+`cpp -P -nostdinc -x assembler-with-cpp docs/soc/luofu-r116.dts` then `dtc -I dts -O dtb`. The
+compile-verified artifact is `build/tmp/inta-spec/luofu-r116.dtb` (4,554 B, sha256
+`a1e0d822f23691ff96efaaec3a5def0d26923d642714fa8ab674b2a408f55823`, magic `d00dfeed`, 29 nodes / 145
+properties), exit 0, 0 errors, 4 `unit_address_vs_reg` warnings (source hygiene, the DTS was not edited to
+silence them). Negative controls hold: a deliberately broken DTS aborts on a syntax error, an unresolved
+`&nope` errors, and the raw vendor `luofu-r116-pinned.dts` fails to parse.
+
+## The bounds (declared, not hidden)
+
+1. **The storm, the ladder and the 209 rows are NOT-IN-CAPTURE.** No capture file for them sits in the
+   verdict artifacts this write-up read, so they are reported as the parent phase's claims and are NOT
+   independently parsed. A future pack that lands `capture-cmd.txt` in those two exp dirs closes this.
+2. **The bound tripped once.** The clean recovery is one boot's datum; the field values on a second storm
+   boot are unknown, and `n=16` is a recovery count, not a delivery rate.
+3. **The storm is deliberate, so it is not the ADDENDUM 11 storm.** The recorded `isr_n` and the
+   mask-close winner describe a stimulus WE armed; they say nothing about which `intapost` bit latched the
+   earlier spontaneous storm, and the candidate list (a)-(e) survives untouched.
+4. **The 209 zero is vacuous again unless the count moves.** An `isr2_n` of 0 with the line requested says
+   nothing; only a counter that increments with a ring is the witness. State: REPORTED (NOT-IN-CAPTURE).
+5. **The DTS edit is uncommitted and unverified on hardware.** `luofu-r116.dts` is a working-tree change;
+   the diff was re-read, not compiled on the device. `lab/luofu-clk/` is NOT-YET-COMPILED and is not in
+   the build; the `luofu-clk.o` object does not exist.
+6. **Hard rules respected.** No write of CA `0x400392f0` (copy-A W1C) or `0x40039af0` (copy-B W1C); no
+   read of the ack IAR `0x4016010c` or the RC misc `0x10161000`; the gate register `0x4000010c` is a
+   different address and is the only `0x...10c` touched; the `.ko` was staged as `wifidrv1.ko`; the
+   recovery auto-deleted the staged `.omo-pat`; the device cycles ran detached via `tools/exp.sh`.
+
+## Verification
+
+The instrument verifiers CONFIRM the shipped artifacts: the submodule commit `2507a42` pushed on
+`omo/phase22-hccaccept` only, the independently re-fetched CI `.ko` (md5
+`91fba1dc512536c94bfd1e419173c046` at vermagic 5.10.201), the firmware selftest plus ALL frozen pins, two
+byte-identical regenerations matching the staged blob md5 `eee1f673...` (928,920 B), the capstone of
+every inta3 site, and the v5 bound/knob diff against the frozen 41-knob set (sha256 `541060a8...`
+unchanged) INCLUDING `disable_irq_nosync` on both ISR sites with `qbound` clamped `1..64`. The
+v5/v6 post-sweep regressions are NOT-IN-CAPTURE (report-only). The five pre-existing
+`register_netdevice` `WARNING:` blocks are NOT run-specific. Git carries only the `opensource` gitlink
+bump; master is untouched.
+
+## The next threads
+
+- **Land the two captures.** Pack `build/register-dumps/exp/20261005-160844/` and
+  `build/register-dumps/exp/20261005-171233/` so `vrun10`/`vtool10` can re-derive the storm, the ladder
+  ranking and the 209 count from the bytes instead of from the report.
+- **Re-run the 209 witness for a moving count.** A ring with `isr2_n` observed before and after is the
+  read that turns the 209 route from "requested" into "delivered".
+- **Build `lab/luofu-clk/` for real.** Bring in the `hisi_clk_*`/`reset.c` helpers and the pinned
+  gate/PLL/mux tables, so the CRG node stops being a scaffold and the stage-1 DTS compiles against a
+  driver that resolves every consumer.
+- **Keep the deliberate storm out of the healthy path.** The bound recovered cleanly once; a storm boot
+  should stay an explicit, timed, single-target mode, never the default.
