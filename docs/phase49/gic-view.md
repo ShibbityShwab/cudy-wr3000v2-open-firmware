@@ -2861,3 +2861,150 @@ sequencing question of 16, now measured to persist even with a real, consumed me
 Post-cycle state: the runner's `[6/7] recover` + `[7/7] verify health` steps ran after the capture
 (the pack-evidence warning about `health.txt` is the mid-sequence state); the final health/pack files
 are the runner's own closure set.
+
+---
+
+# ADDENDUM 17 (2026-10-05): the take probe - VECTOR ENTERED (the CPU takes the IRQ; the mask lifts) / the IAR names 0x1D and 0x40, NEVER 0x4c / the 0x4c thread is UP / the release guard never reached
+
+The cycle addendum 16's own next threads named: spend the canary and answer, in one boot, whether the
+device CPU ever enters the firmware ISR at file `0x82EFC` and reads the acknowledging IAR. The interp
+skeleton landed `TODO`; this block is the interpretation. Everything in the run gic-view record and
+16/16a/16b stands unchanged. Evidence `build/register-dumps/exp/20261005-202555/` (`capture-cmd.txt`,
+`run-take1.log`, `health.txt`, `pstore-delta.txt`, `acceptance.txt`); the instrument's verdict is
+`build/register-dumps/diffs/20261005T2026Z-vtool13/verdict.txt` (CONFIRMED).
+
+### The instrument (take1) and the run
+
+`tools/patch_fw_scratch.py` variant **`take1`** (working tree, +792/-6 vs HEAD `18bb1ab`, uncommitted at
+record time) = the inta3 pads plus three sites from fwprobe.md and one cell pad from giccpu.md. Blob
+`build/tmp/fw-patched/take1.bin`, md5 `0c681650de28488ab75fb5755684f0c7`, size 928920 (size-preserving).
+One cycle, `run-take1.sh`, `TAKE1 RESULT: PASS`, `exp_rc=0`, 20:25:54Z -> 20:28:38Z; the knob is the
+v8 ko of `553342d` (`3f87f1e9...`, unchanged, no ko commit, no CI) with `intapost=0x100 quiesce=0x1 rung=0
+qbound=64 qbound209=8`, so the take question is asked under the reproduced twin storm, not vacuously.
+All ten new cells sit on page 10 (runtime `0x150000`, the retention-verified band; `giccpu.md`'s
+`0x158000` was only a barmap-baseline zero check, so the cells moved down to `0x1500a4..0x1500c8`) and
+read alias-only.
+
+- `V_SITE 0x82EFC` -> the vec pad: `V_MAGIC` (the canary), `V_PSR` (ISR-entry CPSR), `V_CNT`
+  (ISR-entry count = IAR-read count). The pad re-emits the stock `push.w` first, so the handler frame is
+  byte-exact.
+- `M1_SITE 0x82F4A` -> `M1_PSR`, the CPSR in the handler's own `cpsie i` window (expect I=0).
+- `M2_SITE 0x8270A` -> `M2_PSR`, the CPSR at the release guard `0x826E0`.
+- the giccpu pad after the drain companion -> `C_GRP0` (`0x40160114`), `C_GRP1` (`0x40160118`),
+  `C_GRP2` (`0x4016011C`), `F_BPR` (`0x40160108`), plus the `C_SNT` sentinel. `F_CTLR = B_D6`,
+  `F_PMR = B_D7`, `C_PSR = B_D5` are the record's aliases. The acknowledging IAR `0x4016010C` is read by
+  the firmware's own ISR only; no pad reads it.
+
+### Matched branch: ROW 1, VECTOR ENTERED
+
+| cell | value | reading |
+| --- | --- | --- |
+| `V_MAGIC` | `0xA4A4A4A4` | the vec pad ran: the IRQ vector body executed and the IAR read is on the entry path |
+| `V_PSR` | `0x00000193` | ISR-entry CPSR: I=1 (bit 7), M[4:0]=`0x13` SVC, T=1 (bit 5) - the textbook take signature |
+| `V_CNT` | `0x00000004` | the ISR was entered FOUR times this boot |
+| `M1_PSR` | `0x20000113` | I=0, mode SVC: the handler's live `cpsie i` window at `0x82F46` actually ran |
+| `M2_PSR` | `0x00000000` | the release guard `0x8270A` was never reached at a patched visit |
+
+`V_MAGIC == 0xA4A4A4A4` with `V_CNT >= 1` and a valid entry `V_PSR` is fwprobe.md sec.6 **row 1**. The
+device CPU DOES take the interrupt: it enters the firmware ISR and reads the IAR, and the handler's own
+`cpsie i` window then runs with IRQs live (`M1_PSR` I=0). This retires the flat "the CPU never takes the
+IRQ" reading that 16b left open on the strength of `N_ACT=0` alone. The take path is not dead.
+
+### The sampled gates and the disagreement the row-1 cross-check predicted
+
+| cell | CA / source | value | meaning |
+| --- | --- | --- | --- |
+| `C_GRP0` | `0x40160114` | `0x00000000` | the IGRPEN0-prediction word reads 0, so the giccpu.md sec.1c config candidate is NOT the take-off |
+| `C_GRP1` | `0x40160118` | `0x0000001D` | the HPPIR word names **id `0x1D`**, not `0x4c` and not `0x3FF` |
+| `C_GRP2` | `0x4016011C` | `0x00000000` | the ABPR/legacy-IGRPEN1 candidate reads 0 |
+| `F_BPR` | `0x40160108` | `0x00000003` | matches the image's only writer (file `0x8305A`), the CPU interface is armed as designed |
+| `C_PSR` (`B_D5`) | core | `0x20000193` | I=1, SVC: the CPU was masked AT THE DRAIN sample |
+| `F_CTLR` (`B_D6`) | `0x40160100` | `0x00000001` | EnableGrp0 SET, no bit2/bit3 quirk - the giccpu.md sec.2 candidate #3 dies |
+| `F_PMR` (`B_D7`) | `0x40160104` | `0x000000F0` | the live value, above the source priority `0x50`, so no PMR block |
+| `C_SNT` | - | `0x50AA7E49` | the giccpu pad ran; the page retained |
+| `N_ACT` / `F_ACT` | `0x40161308` | `0x00000000` | ISACTIVER2 word 2 bit 12 clear at both post-exit samples |
+| `N_ISP` / `F_ISP` | `0x40161208` | `0x00001021` | word 2 bit 12 SET: source `0x4c` still pending at both samples |
+| `N_HPP` / `A_S4` | `0x40160118` | `0x0000001D` | HPPIR names `0x1D` |
+| `F_HPP` | `0x40160118` | `0x00000040` | HPPIR names `0x40` at the fall-through |
+| `N_OU0` / `F_OU0` | `out[0]` | `0x00000008` | unconsumed at both post-exit samples |
+
+Row 1's own cross-check text says the inta3 cells must agree in the same epoch (`F_ACT`/`N_ACT` bit 12
+SET, `out[0]` 8 -> 0). They do not. The reconciliation is in the HPPIR reads, and it's the load-bearing
+finding: **the IAR never names `0x4c` in this run.** HPPIR - the word that decides which id the IAR read
+returns - names `0x1D` at the site-N/giccpu instants and `0x40` at site F, and it names `0x4c` nowhere.
+So the four ISR entries serviced a higher-priority pending source, `out[0]` for `0x4c` stayed `0x8`, and
+`0x4c`'s own bit stayed pending in `ISPENDR2` (`0x1021`) and never went active (`ISACTIVER2` bit 12 = 0).
+The canary and the site cells are consistent once you keep the two facts apart: the CPU takes IRQs, and
+this boot the arbitration never handed it `0x4c`.
+
+How `0x1D` and `0x40` got pending is the run's open mechanism, and it is stated as an open question, not
+a verdict. `0x1D` is a fresh id, absent from every earlier record in this file (`fn_array[0x1D]` is a
+non-null default at file `0x6E84`, so it has a handler). The twin storm preamble is the standing
+candidate, and the priority ordering between the storm's id and `0x4c`'s priority byte `0x50` is the
+thing to read next. What this boot proves is narrower and solid: the take is not gated by a stuck mask,
+so the remaining wall is which source the arbitration serves, not whether the CPU ever takes an IRQ.
+
+### The sequencing verdict (takeseq.md, refined)
+
+takeseq.md's headline holds: the mask is a per-CPU counter, and the lift lives in the release helper's
+caller (`0x82730` / `0x82B7A` -> `0x826E0`), not in the ETE bring-up, so our takeover never completes
+step 8. Two things move with this run. First, the gate is not a hard wall: the mask DOES lift at points
+in the boot, because the ISR ran four times (`M1_PSR` I=0 confirms a live window). Second, `M2_PSR = 0`
+says the release guard `0x8270A` was never reached, so the release body never issued this boot - the
+bring-up caller's release never ran, exactly the step-8 miss takeseq.md predicted. The picture is
+coherent: the vendor path lifts the mask through a release our takeover skips, and the interrupts the
+CPU does take are the ones whose priority wins while the mask happens to be open. The `0xcece` park exit
+without a full unmask is what leaves `0x4c` unserved.
+
+### The bounds (declared, not hidden)
+
+1. **One-shot latched samples, not a trace.** `V_CNT` is an `ldr/adds/str` that runs with IRQs live, so a
+   nested entry can race it (undercount <= 1 per nested entry); `V_MAGIC` is the binary proof, `V_CNT` the
+   count. `M1_PSR` exists only when `fn_array[id]` is non-null, and both CPSR milestones hold the LAST
+   visit's value, not every visit's.
+2. **The four entries are not source-attributed.** The vec pad fires on ANY firmware IRQ entry, so
+   `V_CNT = 4` counts the shared stub, not `0x4c`'s deliveries. With `0x45` (bit 5) and `0x1D`/`0x40` in
+   play, the run does not say how many of the four were `0x4c`. The HPPIR reads are what argue none were.
+3. **HPPIR alone is not a take record.** HPPIR names the highest-priority pending id; it does not prove
+   the ISR's IAR read returned that id. The priority byte of `0x1D`/`0x40` versus `0x4c` (`0x50`) is not
+   sampled here.
+4. **The interp is the skeleton, filled by this block.** The run's own `interp.txt` landed `TODO`; the
+   rows above are the interpretation, sourced from `capture-cmd.txt` and the record.
+
+### Verification
+
+Instrument verdict `build/register-dumps/diffs/20261005T2026Z-vtool13/verdict.txt`: **CONFIRMED**. The
+selftest asserts every frozen pin (`rc 0`), two independent regenerations are byte-identical to the
+staged blob (`0c681650...`), an independent 174-check byte re-derivation is `174 passed, 0 failed`, and
+the hard-rule audit is clean (no write of `0x400392f0`/`0x40039af0`, no pad reads the IAR, no device
+access). One non-inverting note (D1): the m2 site/pad sits 4 bytes off fwprobe.md's stale sec.3/4 numbers
+because the take1 needs list adds the 106-byte giccpu pad; capstone resolves the branch and the pad
+program is byte-identical apart from the tail displacement.
+
+Run facts: `[sig]` 9/9 (`THE CHIP LEFT ROM STATE`), done marker `init done wiphy=omo-drv1 ifname=omowl1
+hw=1 regs=decoded irq0=207 isr0=65`, window sanity `0xE59FF018`, sentinels present, staged `.omo-pat` ==
+the host blob md5, stock md5 re-verified `0e530b976d5a20e87358671f1a577695`. Host witness: `207: 65 ...
+omo-drv1`, `209: 9 ... omo-drv1-ep1`; the mandatory bound tripped on both storm lines during the
+preamble (`irq=207 n=65 bound=64`, `irq=209 n=9 bound=8`), no `enable_irq` after the trip, `rung=OBSERVE`.
+Health `WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`; no new pstore
+record; 2 wiphys, 6 interfaces, calibration `[SUCC]` on both bands.
+
+### The next threads
+
+- **Read the priority bytes.** Sample `IPRIORITYR` for `0x4c`, `0x1D` and `0x40` (`0x40161400 + 4*id`) at
+  the same post, so the arbitration between the storm's pending ids and `0x4c` (`pri 0x50`) is measured,
+  not guessed.
+- **Attribute the entries.** A pad that stores the IAR-returned id per ISR entry (a banked cell the vec
+  pad cycles through) turns `V_CNT = 4` into four named ids and settles whether any entry served `0x4c`.
+- **Drive the release, not the register.** takeseq.md's step 8 is the miss: exercise the bring-up
+  caller's release (`0x82730`/`0x82B7A` -> `0x826E0`) so the mask lifts through the vendor's own path and
+  then ring `0x4c` alone, with the twin storm quiet, so HPPIR has nothing ahead of it.
+
+### Artifacts
+
+Evidence `build/register-dumps/exp/20261005-202555/`; blob `build/tmp/fw-patched/take1.bin` md5
+`0c681650de28488ab75fb5755684f0c7`; manifest `build/tmp/fw-patched/take1.bin.manifest.json`; runner
+`build/tmp/wifidrv1-art/run-take1.sh`; hook `build/tmp/wifidrv1-art/take1-capture.hook`; verifier
+`build/tmp/wifidrv1-art/take1-verify.py`; instrument verdict
+`build/register-dumps/diffs/20261005T2026Z-vtool13/`; specs `build/tmp/inta-spec/{fwprobe,takeseq,giccpu}.md`;
+ko `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`).
