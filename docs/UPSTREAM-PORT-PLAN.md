@@ -121,6 +121,12 @@ Hard rules unchanged for anything that touches the device: never write CA `0x400
 `0x10161000`; never read the IAR `0x4016010c`; device cycles serial/detached via `tools/exp.sh` only;
 leave the router healthy.
 
+Pinned artifacts (2026-10-05): `opensource/docs/soc/luofu-r116-pinned.dts` (the STATIC per-board DT as
+shipped in flash, machine-extracted, 31,220-byte FDT, sha256 `947ec62d7fba2aed624166a585a5001f5385befba962f071f19ed468dfa270e3`)
+and `opensource/docs/soc/vendor-dt-notes.md` (the vendor DT read from the dumped images: the three blobs
+per flash image, bootargs/`chosen`, memory and reserved-memory, the U-Boot overlay shape). These are the
+Step 1 pin and the Step 2 vendor-DT read; companion mapping table `build/tmp/dt-spec/dt.md`.
+
 ## 5. Source URLs (mainline evidence)
 
 - OpenWrt targets list, no HiSilicon router target (no `luofu`/`hsan`/Hi5671): https://github.com/openwrt/openwrt/tree/master/target/linux
