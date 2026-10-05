@@ -127,6 +127,12 @@ and `opensource/docs/soc/vendor-dt-notes.md` (the vendor DT read from the dumped
 per flash image, bootargs/`chosen`, memory and reserved-memory, the U-Boot overlay shape). These are the
 Step 1 pin and the Step 2 vendor-DT read; companion mapping table `build/tmp/dt-spec/dt.md`.
 
+Stage 1 skeleton landed (2026-10-05): `opensource/docs/soc/luofu-r116.dts` is the first-cut mach DT skeleton
+(Step 3), with every register value, interrupt number and reset/clock cell kept verbatim from the pinned
+tree and only the bindings re-expressed (free bindings in mainline form, vendor `hsan,*` blocks as
+`hisilicon,luofu-*` placeholders with `status = "disabled"`). It is not buildable yet; the build recipe and
+file-by-file rationale live in the stage-1 spec at `build/tmp/inta-spec/stage1.md`.
+
 ## 5. Source URLs (mainline evidence)
 
 - OpenWrt targets list, no HiSilicon router target (no `luofu`/`hsan`/Hi5671): https://github.com/openwrt/openwrt/tree/master/target/linux

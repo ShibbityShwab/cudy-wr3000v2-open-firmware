@@ -1418,3 +1418,321 @@ in the earlier attempt (the pre-fix `.ko` staged for the failed boot), which thi
 - **One boot for both halves.** Pair the corrected staging (the artifact as `wifidrv1.ko`) with the fixed
   port and the hardened capture path so a single cycle carries the B cells and a moving 207 counter.
 
+# ADDENDUM 9 (2026-10-05): the dual-sided INTA test - ROW 2 RING-PENDING-NOT-TAKEN + VIRQ 207 OWNED
+
+Addendum 8's amendment proved both halves in one cycle, but with two setup fixes patched in by hand. This
+run repeats it with the fixes built into the instruments, so the dual-sided INTA test stands on its own
+bytes. Evidence `build/register-dumps/exp/20261005-103047/` (`EXP RESULT: PASS`, acceptance 92 passed / 0
+failed `ALL_OK`, `run-trigcons-2.log` 10:30:46Z to 10:33:18Z, `exp_rc=0`). Two independent verifiers
+CONFIRMED: the instrument-and-provenance pass
+(`build/register-dumps/diffs/20261005T1022Z-vtool5/verdict.txt`) and the record check
+(`build/register-dumps/diffs/20261005T102701Z-vrec4/verdict.txt`).
+
+The name is the point. This is the first cycle in the phase that tests BOTH sides of the interrupt at once:
+the device side (does the firmware take the ringed id?) and the host side (does the port own a line, and has
+an ISR run on it?). The device side answers with a row from `trigger2.md` section 4. The host side answers
+with the ISR counter from `/proc/interrupts` and the port's own `isr0=` printout.
+
+## The question (the two halves the earlier addenda left open)
+
+Addendum 8 - AMENDMENT closed ADDENDUM 8's staging gap and produced ROW 2 plus an owned line. What it did
+not do was pay the fixtures forward: the artifact was hand-renamed to `wifidrv1.ko` and the capture dropped
+into a TS-gated directory, both one-off repairs outside the instruments. This run bakes both fixes in and
+asks the same two questions on clean bytes, so the result is reproducible rather than salvaged.
+
+1. **Consumption half.** Does the device dispatcher take the pending id `0x4c` after the ring lands it in
+   the GIC? The drain-point cells `B_D0`/`B_D2` at the moved Pad-B site decide it.
+2. **INTA half.** With the struct-layout fix in the port, does line 207 carry our handler, and has any ISR
+   run? The ISR counter decides it.
+
+## The instrument
+
+Two instruments, both pinned. The firmware variant is `trigcons` (blob md5
+`5fb51acd68c62699435d2e1fd823d900`, pinned in `tools/patch_fw_scratch.py`): Pad A sits at file `0xc8198`
+(site `0x86f5a`, the firmware's own `out[1]` post) and rings the H2D doorbell once with the glue mask held
+OPEN, then samples; Pad B is MOVED onto the `0xcece` announce gate at file `0xc8366` (site `0x86f74`, stock
+bytes `4cf6ce63` = `movw r3,#0xcece`), so it runs where the wait's own store lands rather than behind it. The
+port is submodule `3ac4820` on branch `omo/phase22-hccaccept`, the struct-layout-proof change that reads
+`PCI_INTERRUPT_LINE` instead of the `pci_dev->irq` field (the vanilla offset `0x1ac` and the vendor offset
+`0x184` disagree, and the old read threw away the core-assigned 207). Artifact md5
+`1f0e80ed9a02b80ab2deb337d288e781`, from CI run 37295389630; the zip's sha256 equals the API digest, so the
+bytes under test are the built bytes.
+
+The gate itself is worth one line of explanation, since it is the fixture that made the earlier Pad B
+unreachable. The announce routine spins on `*(CA 0x4000010c) == 0x0000cece`, and that value appears zero
+times in the image and in every held `.ko`. The register is the host-visible pair-mate of the release at
+BAR0+`0x3b810c`, so a Pad B left behind the wait would never run in a takeover boot (`padb.md` option (a)).
+Moving the pad onto the wait's own `movw` puts it in the executed path, and the run's `B_P3` sentinel is the
+receipt that it did.
+
+## The values (alias view; the BAR0-direct view of these pages reads 0)
+
+| cell | address | value | reads |
+| --- | --- | --- | --- |
+| `A_S3` | `0x40807018` | `0x00001020` | ISPENDR2 word 2, id `0x4c` bit 12 SET, the ring reached the GIC |
+| `A_S4` | `0x40808000` | `0x0000004C` | GICC HPPIR, id `0x4c` pending |
+| `B_D0` | `0x40808030` | `0x00000008` | out[0] `0x40039010`, still pending at the drain point |
+| `B_D1` | `0x40808038` | `0x00000004` | out[1] `0x40039014` |
+| `B_D2` | `0x40808040` | `0x00001020` | ISPENDR2 word 2, bit 12 STILL SET at the drain point |
+| `B_D3` | `0x40808048` | `0x0000004C` | GICC HPPIR, id `0x4c` at the drain point |
+| `B_P3` | `0x40808050` | `0x50AA7E49` | Pad B sentinel, the moved drain-point site RAN |
+
+Sentinels `A_P1` = `A_P2` = `0x50AA7E49`, so both pads ran in this boot. The moved Pad-B site is file
+`0x86F74` (`TRIGCONS_SITE_B`; stock bytes `4cf6ce63`, `movw r3,#0xcece`) now carrying `bl #0x108366`, the
+Pad-B entry, with the old announce-exit site at `0x86F7E` left byte-identical to stock. The four
+carried-forward cells re-verify the earlier branches: `S1` = `0x00001000`, `S1+4` = `0x40161108`, `S2` =
+`0x00000001`, `S2+4` = `0x50AA7E49`.
+
+## The ring test (the device half)
+
+The ring test is the same shape the last four addenda used, now on the fixed instrument. Pad A holds the
+glue mask OPEN (CA `0x400392E8` <= `0x20`; `0x21` is never written this run), rings the H2D doorbell ONCE
+(CA `0x400392D4` <= `0x1`), and samples the distributor and the CPU interface. The ring leaves the host,
+latches the glue raw status, and lands the id in the GIC: `A_S3` reads ISPENDR2 word 2 with bit 12 SET
+(`0x00001020`) and `A_S4` reads HPPIR `0x0000004C`. The wire from the ctrl-rb to the GIC input is alive
+exactly as ADDENDUM 5 and ADDENDUM 6 found. Nothing about the front half changed.
+
+What the run adds is the back half. Pad B, now reachable, reads out[0] and out[1] at the drain point and
+finds the event still pending: `B_D0` = `0x8`, `B_D1` = `0x4`, `B_D2` = `0x00001020` (bit 12 STILL SET),
+`B_D3` = `0x0000004C` (HPPIR still holding the id). So the device dispatcher did not consume the ringed id
+within the window the boot sampled. The ROW-2 branch in `trigger2.md` section 4 fires, and the branch name
+is RING-PENDING-NOT-TAKEN.
+
+## The ISR counter (the host half)
+
+The host side is the second sensor, and it reads cleanly for the first time. The port owns the line:
+
+```
+omo-drv1: request_irq(207, IRQF_SHARED) rc=0
+omo-drv1: init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=0
+207:          0          0     GIC-0  91 Level     omo-drv1
+```
+
+Line 207 is registered to OUR handler with `rc=0`, and the endpoint's `/proc/interrupts` row carries the
+`omo-drv1` action. The counter column is 0. The port's own `isr0=0` agrees: the handler has run zero times.
+Freshness is argued from `interrupts-pre.txt`, which records the vendor's `hisi_pci_intx` action on line 207
+before staging, so the `omo-drv1` action in `interrupts.txt` is this run's and not a leftover from a prior
+boot. VIRQ 207 OWNED, NO ISR OBSERVED. Ownership plus a registered handler is not a delivery, and this run
+does not claim one.
+
+## The two rows
+
+**DEVICE ROW = ROW 2 RING-PENDING-NOT-TAKEN.** The ringed id reached the GIC (`A_S3` bit 12 SET, `A_S4` =
+`0x0000004C` HPPIR) and was STILL PENDING at the drain point (`B_D0` = `0x8`, `B_D1` = `0x4`, `B_D2` bit 12
+SET, `B_D3` = `0x0000004C`), so the device dispatcher did not consume within the observed window. That
+window is bounded and this is a `not yet` per the bounds, not a proof the dispatcher never takes. The ROW-2
+branch string's `never ran` wording is stronger than the bounds support, and the bounds' `not yet` is the
+honest reading.
+
+**HOST ROW = VIRQ 207 OWNED, NO ISR OBSERVED.** The struct-layout-proof fix gives `request_irq(207,
+IRQF_SHARED) rc=0`, `irq0=207 isr0=0` in the done line, and the `207: 0 0 GIC-0 91 Level omo-drv1` row. The
+line is owned by our driver and no ISR has run on it. The earlier virq root cause (the offset mismatch that
+threw away the core-assigned 207) is closed; what stays open is the D2H/INTA host-facing path from a device
+post to that owned line.
+
+## The bounds (declared, not hidden)
+
+1. **The device window is bounded.** The drain-point read is `not yet` at the sampled instant, not a proof of
+   permanent non-consumption; the ROW-2 branch string's `never ran` wording is stronger than the bounds
+   support, and the bounds' `not yet` is the honest reading.
+2. **The host counter is 0**, so `VIRQ OWNED` is ownership plus a registered handler, not a delivery: no ISR
+   has fired and the D2H/INTA path is unobserved. `isr0=0` is a count at the init-done instant and at the
+   capture instant, not at every instant in between.
+3. **Every cell is a single sample at its pad's execution instant.** Pad A samples one pre-ring and one
+   post-ring instant, Pad B one drain-point instant. This is not a timeline. The harness polls the done
+   marker every 3 s and the capture hook waits up to 90 s, so an interrupt delivered between samples is not
+   observable here.
+4. **The A_* and B_* cells are alias-only.** They sit above the `0x104000` aliasing boundary, so their BAR0
+   view reads 0 and they are quoted from the ACP alias; the S/C/E cells below the boundary agree at both
+   views. The aliasing mechanism itself stays UNEXPLAINED and is accepted as a device fact.
+5. **ROW 2 is a suffix of `trigger2.md` section 4's ROW 2.** Rows 1 and 2 share the ring-into-GIC front half;
+   here the back half (the take) did not happen within the window, so row 1 TRIGNAT-COMPLETE stays out of
+   reach and the earlier ADDENDUM 8's `-` row is refined, not repealed.
+6. **Disclosed risks carried:** the ROW-2 branch string's `never ran` wording vs the bounds' `not yet`
+   tension; the gitignored runner's broken recovery selector (safety held, scratch removed by hand);
+   `PACKED.txt` frozen before `health.txt` (so `health.txt` reads MISSING in the inventory, present on
+   disk); CRLF/LF mixing in the evidence text (cosmetic); pre-existing `register_netdevice` WARNs.
+7. **Hard rules respected:** no write of CA `0x400392f0`, no read of `0x10161000`, no read of the IAR
+   `0x4016010c`; the gate register `0x4000010c` is a different address. Device cycles ran serial/detached
+   through `tools/exp.sh`.
+
+## Verification
+
+The capture's `acceptance.txt` is 92 passed / 0 failed (`ALL_OK`) over the trigcons cells, the sentinels,
+and the host witness sections. An independent verifier re-derived the firmware instrument and the capture
+hook (`build/register-dumps/diffs/20261005T1022Z-vtool5/verdict.txt`, CONFIRMED): the `trigcons` variant
+regenerates byte-identical to the staged blob (size 928920 B), its own capstone resolves Pad A and Pad B to
+the declared read/write sets, the 726 changed bytes all sit inside the five sites and five pads, the old
+announce-exit site stays stock, and no forbidden CA is touched. The same verifier fetched the CI artifact for
+run 37295389630 (`gh run download`), matched its md5 to `1f0e80ed9a02b80ab2deb337d288e781`, and confirmed the
+artifact zip's sha256 equals the API digest, so the staged `.ko` is the built-and-published bytes at
+submodule `3ac4820` (`omo/phase22-hccaccept` only, master untouched). The one defect the verifier named was
+in the earlier attempt (the pre-fix `.ko` staged for the failed boot), which this run's staging fix closed.
+`knobset-digest.txt` records the frozen knob-set hash (`541060a8...`) and the three md5s (blob
+`5fb51acd...`, stock `0e530b976...`, `ko 1f0e80ed...`). A second verifier ran the read-only record check
+(`build/register-dumps/diffs/20261005T102701Z-vrec4/verdict.txt`, CONFIRMED) against the five required items.
+
+Provenance holds: the instrument variant is pinned, stock md5 `0e530b976d5a20e87358671f1a577695` is unchanged,
+the device is healthy after recovery (`WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`),
+3 pstore records with no new crash, no takeover leftovers.
+
+## The next threads
+
+- **Reach the take.** Sample the drain point past the bounded window (a second post-handshake instant per
+  `padb.md` option (c)) so the dispatcher's take either fires or is excluded, not just `not yet`.
+- **Fire the host line.** Drive the D2H/INTA path while watching line 207's counter; the owned line moving
+  is the boot witness the virq thread is waiting on.
+- **One boot for both halves.** The staging fix and the TS-gated capture are now in the instruments, so pair
+  the fixed port with the hardened capture and a moving 207 counter in a single cycle.
+
+## The two setup fixes (paid forward, not one-off)
+
+1. **Stage the artifact as `wifidrv1.ko`.** The module's internal name is `wifidrv1`; the old staged
+   filename `wifidrv1-isr.ko` made `exp.sh`'s wait grep the wrong name, which is the root cause of several
+   earlier `timeouts`. Staging the artifact under the module's own name lets the cycle complete.
+2. **A TS-gated capture recovery.** The old recovery selector could grab the stale salvage directory; the
+   TS gate makes it pick the directory whose timestamp is at or after this run's `RUN_TS`, so the capture
+   recovered into `20261005-103047` is the run's own.
+
+## The two remaining unknowns
+
+- **(a) The device dispatcher's non-consumption**, bounded to the observed window: `B_D0` and `B_D2` still
+  show the pending id at the drain point, so the take did not happen inside the window this boot sampled.
+- **(b) The D2H/INTA host-facing path**: line 207 is owned and its counter stays 0, so a device post has not
+  yet fired our owned line and the host-facing route from the device to 207 is still open.
+
+# ADDENDUM 9 - CORRECTION (2026-10-05): the real inta run (110922) - GLUE LATCHED, NO HOST DELIVERY / the unlock landed, the take unobserved
+
+Read this before the ADDENDUM 9 text above. That block describes the WRONG run: its body is the
+`trigcons-2` story and it cites `build/register-dumps/exp/20261005-103047/` as "this run". The heading it
+carries ("the dual-sided INTA test", ROW 2 RING-PENDING-NOT-TAKEN, VIRQ 207 OWNED) is the heading that
+belongs to the real `inta` run, so the block above is SUPERSEDED for everything it says about the `inta`
+variant: its cells, its rows, its instruments, and its verification. Nothing in it was deleted; where the
+two disagree, this block is the record. Its `trigcons-2` content stands on its own elsewhere, as ADDENDUM 8
+- AMENDMENT and in `mem-entries.md`.
+
+The real run is `build/register-dumps/exp/20261005-110922/` (`EXP RESULT: PASS`, `exp_rc=0`, one `exp.sh`
+cycle 11:09:21Z to 11:12:13Z, `run-inta.log`; a capture recovery that found `capture-cmd.txt` already in
+place, "no retry needed"). The variant is `inta`, the acceptance is the run's own `acceptance.txt` (108
+passed / 0 failed, `ALL_OK`, `accept_inta.py`), the adversarial verifier is
+`build/register-dumps/diffs/20261005-110921-vrun6/verdict.txt` (FINAL CONFIRMED, medium-high, with two
+recorded deviations), and the instrument verifier is
+`build/register-dumps/diffs/20261005T1115Z-vtool6/verdict.txt` (CONFIRMED).
+
+## What the inta run actually tested
+
+One knob on the port drives the D2H/INTA ring in four steps and watches the glue latch, the ISR count, and
+`/proc/interrupts` line 207 after each one, and one firmware blob carries the device-side pads (Pad B2 at the
+drain, its companion, and Pad L's delayed 2^24-iteration re-sample of a parked loop). The host-side knob is
+submodule `b5f6aac` ("lab(wifidrv1): post-release D2H/INTA ring knob (intapost)", `omo/phase22-hccaccept`
+only), and the blob under test is `build/tmp/fw-patched/inta.bin`, md5 `bcf14dbeefe45bcfce8df279c06776bd`
+(an independent re-hash this session agrees, and the run's own `knobset-digest.txt` and `PACKED.txt` carry
+the same value). The port's three writes this run are exactly CA `0x400392d4` twice, CA `0x40101434` once,
+and CA `0x4000010c` once (per vrun6 from `wifidrv1.c:2141-2149`), which is why the gate register below is not
+a hard-rule break.
+
+## The host-side intapost steps (four, verbatim in substance)
+
+| step | CA written | raw | status | isr | delta | waited |
+| --- | --- | --- | --- | --- | --- | --- |
+| `0x8` natural-post | `0x4000010c` <= `0x0000cece` | `0x0` -> `0x8` | `0x0` -> `0x18` | `0` -> `0` | `0` | 50 ms |
+| `0x1` H2D doorbell | `0x400392d4` <= `0x1` | `0x8` -> `0x8` | `0x18` -> `0x18` | `0` -> `0` | `0` | 2000 ms |
+| `0x2` D2H set bit3 | `0x400392d4` <= `0x8` | `0x8` -> `0x8` | `0x18` -> `0x18` | `0` -> `0` | `0` | 2000 ms |
+| `0x4` fw D2H doorbell | `0x40101434` <= `0x1` | `0x8` -> `0x8` | `0x18` -> `0x18` | `0` -> `0` | `0` | 2000 ms |
+
+The glue mask read `0x20` (bit 3 open) on every step. Only the first step moved anything: the `0x8` step
+wrote the designed unlock `0x0000cece` to CA `0x4000010c` and read it back (`rb=0xcece`), the natural post
+then ran, and the glue LATCHED, raw `0x0` -> `0x8` (bit 3) and status `0x0` -> `0x18` (bits 3+4). The three
+ring steps changed nothing at all: raw pinned `0x8`, status pinned `0x18`, isr delta `0` each.
+
+## HOST ROW 2: GLUE LATCHED, NO HOST DELIVERY
+
+The glue latched (status `0x18`, bit 3 set, the ISR-readable latch), and nothing reached the kernel. Line
+207 stayed at count 0 and the port's own counter stayed at 0:
+
+```
+omo-drv1: request_irq(207, IRQF_SHARED) rc=0
+omo-drv1: init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=0
+207:          0          0     GIC-0  91 Level     omo-drv1
+```
+
+No `[isr]` line exists in the boot. Freshness holds: `interrupts-pre.txt` records the vendor's
+`hisi_pci_intx` action on line 207 before staging, so the `omo-drv1` action in `interrupts.txt` is this
+run's. The assertion/forward hop (glue -> endpoint INTx -> RC -> host GIC 91) is THE remaining gate.
+
+## The device-side cells (alias view)
+
+| cell | address | value | reads |
+| --- | --- | --- | --- |
+| `B_D2` | `0x40808040` | `0x00001020` | ISPENDR2 word 2, id `0x4c` bit 12 STILL SET at the drain |
+| `B_D4` | `0x4080b000` | `0x00000000` | ISACTIVER2 word 2, NOT taken (IAR never read) |
+| `B_D5` | `0x4080b008` | `0x20000193` | CPSR, I = 1, IRQs masked at the drain |
+| `B_D6` | `0x4080b010` | `0x00000001` | GICC_CTLR bit 0 (CPU interface enabled) |
+| `B_D7` | `0x4080b018` | `0x000000f0` | GICC_PMR `0xf0` |
+| `L1_ISP` | `0x4080c000` | `0x00001020` | ISPENDR2 word 2 at the first Pad-L visit, bit 12 SET |
+| `L1_OU0` | `0x4080c018` | `0x00000008` | out[0], pending at the first Pad-L visit |
+| `L_CNT` | `0x4080c050` | `0x00000001` | Pad L ran ONCE and the loop exited |
+| `L2_ISP` | `0x4080c028` | `0x00000000` | the delayed L2 re-visit sample: bit 12 CLEAR, the block never re-wrote |
+| `L2_OU0` | `0x4080c040` | `0x00000000` | delayed L2 out[0], 0 |
+
+Sentinels `A_P1` = `A_P2` = `B_P3` = `B_P4` = `L_SNT` = `0x50AA7E49`, so every pad ran. The unlock landed:
+**Pad L ran ONCE (`L_CNT=1`), so the `0xcece` loop EXITED**, but the delayed L2 samples are all 0, because
+nothing re-visited the park. No `ISACTIVER2` sample exists after the unlock, so the take is UNOBSERVED after
+it, not disproved.
+
+## The two vrun6 deviations (caveats on the branch labels)
+
+1. **The host-path row is reached on the `0x8` natural-post provenance, not on the `0x2`/`0x4` steps the row
+   names.** Those steps produced delta `0`; the acceptance's bit-3 predicate reads the post-state that the
+   earlier `0x8` step already latched, so the run does not independently witness that the host's own
+   `0x2`/`0x4` writes latch bit 3. The row name still holds in substance, the provenance does not.
+2. **`devcpu.md` section 5 ROW 2's literal predicate is NOT satisfied.** It requires `B_D2` bit 12 SET and
+   `L2_ISP` bit 12 SET and `B_D4` = `L2_ACT` = 0 and `B_D5` I = 1; here `L2_ISP` bit 12 is CLEAR and
+   `L2_OU0` = 0, so ROW 4 also fails on its own clause. NO numbered row is literally satisfied: the named
+   row is a meaning-based classification on the drain instant, and "parked in the `0xcece` handshake" is
+   contradicted by this run's own `L_CNT=1`, which proves the unlock exited the loop.
+
+## The bounds (declared, not hidden)
+
+1. **Instants, not a timeline.** Every cell is one sample at its pad's or step's instant. Pad B2 is one
+drain instant; Pad L's L2 block is the last periodic snapshot of a loop that then exited. A take between
+snapshots is caught only if it persists. The knob's per-step wait is bounded at 2000 ms and the harness
+polls the done marker every 3 s, so an interrupt delivered between samples is not observable here.
+2. **`isr0=0` is a count at two instants** (init-done and capture), so "no host delivery" is "not yet", not
+"never", within this window.
+3. **The pad cells are alias-only.** They sit above the `0x104000` aliasing boundary, so their BAR0 view
+reads 0 and they are quoted from the ACP alias; the S/C/E cells below the boundary agree at both views.
+4. **The CPSR read is form-dependent.** If a part returned flags only, `B_D5`/`L2_PSR` read 0 and the device
+rows are undecidable.
+5. **The unlock's effect is only sampled at its own instant.** The `0x8` step's `rb=0xcece` shows the write
+landed, but nothing re-sampled the park afterwards, so what the firmware did with the unlocked state is
+UNOBSERVED.
+6. **Carried from the superseded block and still true:** `PACKED.txt` was frozen before `health.txt`;
+CRLF/LF mixing in evidence text (cosmetic); pre-existing `register_netdevice` WARNs; and vrun6's two
+git-state notes (`tools/__pycache__/` in the superproject and `opensource/docs/soc/luofu-r116.dts` modified
+in the submodule worktree, neither a commit).
+7. **Hard rules respected:** no write of CA `0x400392f0`, no read of `0x10161000`, no read of the IAR
+`0x4016010c`; the gate register `0x4000010c` is a different address and is the only `0x...10c` touched.
+
+## Verification
+
+The run's own `acceptance.txt` re-runs to 108 passed / 0 failed (`ALL_OK`) and vrun6's independent parser
+reproduces all 50 cells, the dual-view agreement, all five sentinels, and the absence of dead reads. vrun6
+returned FINAL CONFIRMED (medium-high) with the two deviations above, and the live read-only device check
+came back HEALTHY (stock md5 `0e530b976d5a20e87358671f1a577695`). The instrument verifier vtool6 CONFIRMED
+the instruments: two independent regenerations of the `inta` blob are byte-identical at md5
+`bcf14dbeefe45bcfce8df279c06776bd`, its own capstone resolves the new pads, `patch_fw_scratch.py --selftest`
+passes with the new `inta` pin, the port's knob and the hook scan passed read-only, and the selector gate
+cases passed 6/6. Both verifiers confirm the hard rules held.
+
+## The next threads
+
+- **The forward hop.** The glue latched and the host stayed silent, so the next read is the endpoint's
+  INTx configuration-space state: the Command register's Interrupt Disable bit, Device Control 2's INTx
+  signalling disable, and the RC bridge's INTx control, all read-only.
+- **A post-unlock device take sample.** The unlock landed and the loop exited, but no `ISACTIVER2` sample
+  exists after it. One more Pad-L-style re-visit after the `0xcece` write would turn "the take is
+  unobserved after the unlock" into a measured yes or no.
+- **A re-visit for the L2 delayed cells.** The `L2_*` block never re-wrote because nothing returned to the
+  park, so the delayed snapshot needs a pad that re-samples on a later boot phase, not one that exits with
+  the loop.

@@ -221,3 +221,30 @@ observed window; the host row is VIRQ 207 OWNED, no ISR observed (`request_irq(2
 `wifidrv1.ko` (the module's internal name; the old `wifidrv1-isr` filename made the wait grep the wrong name)
 and a TS-gated capture recovery (the old selector grabbed the stale salvage dir). The device dispatcher's
 non-consumption (bounded) and the D2H/INTA host path stay open.
+
+## The real inta run: GLUE LATCHED, NO HOST DELIVERY (2026-10-05)
+
+`gic-view.md` "ADDENDUM 9 - CORRECTION (2026-10-05): the real inta run (110922)" corrects the addendum's
+header: the ADDENDUM 9 block above describes run `20261005-103047` (the `trigcons-2` story) and is
+SUPERSEDED for the `inta` variant it claims to record. The real `inta` run is
+`build/register-dumps/exp/20261005-110922/` (`EXP RESULT: PASS`, `exp_rc=0`, one `exp.sh` cycle 11:09:21Z to
+11:12:13Z, acceptance 108/0 `ALL_OK`), verified by `build/register-dumps/diffs/20261005-110921-vrun6/verdict.txt`
+(FINAL CONFIRMED, medium-high, two recorded deviations) and
+`build/register-dumps/diffs/20261005T1115Z-vtool6/verdict.txt` (CONFIRMED). Instruments: the port knob
+(submodule `b5f6aac`, "lab(wifidrv1): post-release D2H/INTA ring knob (intapost)") plus the fw blob
+`build/tmp/fw-patched/inta.bin` (md5 `bcf14dbeefe45bcfce8df279c06776bd`). The four `[intapost]` steps: the
+`0x8` natural-post wrote the unlock `0x0000cece` to CA `0x4000010c` (`rb=0xcece`) and the glue LATCHED (raw
+`0x0` -> `0x8`, status `0x0` -> `0x18`); steps `0x1` (CA `0x400392d4`), `0x2` (CA `0x400392d4`), and `0x4`
+(CA `0x40101434`) each left raw/status/isr pinned with delta `0`, 2000 ms each. **HOST ROW 2 = GLUE LATCHED,
+NO HOST DELIVERY**: the glue latched but `/proc/interrupts` `207: 0 0 GIC-0 91 Level omo-drv1` stayed
+count 0 and `isr0=0`, so the assertion/forward hop (glue -> endpoint INTx -> RC -> host GIC 91) is the
+remaining gate. **DEVICE**: `B_D2` (ISPENDR2 w2) = `0x1020` pending persists, `B_D4` (ISACTIVER2 w2) = `0x0`
+not taken, `B_D5` (CPSR) = `0x20000193` with I = 1, GICC_CTLR `0x1`, PMR `0xf0`; the unlock LANDED (Pad L ran
+ONCE, `L_CNT=1`, the loop exited) but the delayed `L2_*` cells are all 0 because nothing re-visited the park.
+TWO vrun6 DEVIATIONS: the host row is reached on the `0x8` natural-post provenance, not the `0x2`/`0x4`
+steps the row names (their deltas are 0); and `devcpu.md` section 5 ROW 2's literal predicate is NOT
+satisfied (`L2_ISP` bit 12 clear, `L2_OU0` = 0), so the named row is a meaning-based classification on the
+drain instant and "parked in the `0xcece` handshake" is contradicted by this run's own `L_CNT=1`. The live
+device is healthy; hard rules held (IAR never read, the gate CA `0x4000010c` is the only `0x...10c`
+touched). Next threads: the forward hop (the endpoint's INTx config-space state), a post-unlock device take
+sample, and a re-visit for the `L2` delayed cells.
