@@ -2040,27 +2040,274 @@ static atomic_t omo_isr_n = ATOMIC_INIT(0);
 static int omo_irq;
 static bool omo_irq_owned;
 static bool omo_pci_registered;
+/* the sibling endpoint's line (0001:00:00.0, virq 209 in the takeover) - declared HERE so the
+ * 207 ISR's HARD BOUND can also close the sibling line, and so the quiesce supervisor below can
+ * drive both.  The rest of the isr2 state + omo_intx2_isr live with the intapost knob further on. */
+static atomic_t omo_isr2_n = ATOMIC_INIT(0);
+static int omo_irq2;
+static bool omo_irq2_owned;
+
+/* ======================================================================
+ * PHASE 50 - KNOB v4: the BOUNDED QUIESCE (build/tmp/inta-spec/quiesce.md)
+ *
+ * The 207 storm is a LEVEL (the ctrl-rb glue status CA 0x400392ec = 0x18) that the module's own
+ * write-back does not clear (0x2ec is read-only in the vendor; the DEVICE retires it when the host
+ * acks/re-arms the mailbox - phase21 B.1).  Three host-writable routes, ranked:
+ *   quiesce 0x1 Q_CONSUME   : ack out[3] <= 1, clear out[1] <= 0, re-arm out[4] <= 1 (vendor-implied)
+ *   quiesce 0x2 Q_FWACK     : CA 0x4000010c <= 0x0000cece (drive the firmware's own service)
+ *   quiesce 0x4 Q_MASKCLOSE : CA 0x400392e8 <= (saved | 0x18) - deterministic, reversible, LAST
+ *   quiesce 0x8 Q_ESCALATE  : after a bounded attempt that did not quiesce, run the next under a
+ *                             FRESH bound
+ *   quiesce 0x10 Q_LEAVE_MASKED: do not restore the mask at the end
+ *
+ * THE HARD BOUND IS MANDATORY AND UNCONDITIONAL whenever hw=1: after `qbound` entries (clamped
+ * 1..64) the ISR calls disable_irq_nosync() on the line(s) it owns and prints IRQ_DISABLED_BOUND
+ * with the count - no MMIO happens past the bound.  The ISR's own log is bounded (1 line / 256
+ * entries), so this instrument can never printk-storm.
+ *
+ * NEVER write CA 0x400392f0 / 0x40039af0 (W1C); never read the ack IAR 0x4016010c or the RC misc
+ * 0x10161000.
+ * ====================================================================== */
+
+static unsigned int omo_quiesce;
+module_param_named(quiesce, omo_quiesce, uint, 0444);
+MODULE_PARM_DESC(quiesce,
+	"bitmask: the bounded quiesce ladder, run INSIDE the ISR and supervised after init: "
+	"0x1 = Q_CONSUME (ack out[3] <= 1, clear out[1] <= 0, re-arm out[4] <= 1); "
+	"0x2 = Q_FWACK (CA 0x4000010c <= 0x0000cece, drive the firmware's own service); "
+	"0x4 = Q_MASKCLOSE (CA 0x400392e8 <= saved|0x18 - the named, reversible hard stop, LAST); "
+	"0x8 = Q_ESCALATE (after a bounded attempt that did not quiesce, re-enable the line and run "
+	"the next ranked attempt under a FRESH bound); 0x10 = Q_LEAVE_MASKED (skip the mask restore)");
+
+static unsigned int omo_qbound = 64;
+module_param_named(qbound, omo_qbound, uint, 0444);
+MODULE_PARM_DESC(qbound,
+	"THE HARD BOUND: how many ISR entries may run before the line self-disables with "
+	"disable_irq_nosync() and prints IRQ_DISABLED_BOUND (clamped 1..64; default 64)");
+
+static unsigned int omo_qwait_ms = 5000;
+module_param_named(qwait_ms, omo_qwait_ms, uint, 0444);
+MODULE_PARM_DESC(qwait_ms, "per-attempt supervisor wait in ms (clamped <= 5000; default 5000)");
+
+static unsigned int omo_bisect;
+module_param_named(bisect, omo_bisect, uint, 0444);
+MODULE_PARM_DESC(bisect,
+	"the chosen bisect row (build/tmp/inta-spec/bisect.md): 0 = legacy (intapost alone); "
+	"1 = B1 widened snapshot (0x20, reads + W3); 2 = B2 that snapshot WITHOUT the four new "
+	"twin/ETE reads (0xae4/0xaec/0x50c/0x510); 3 = B3 W1 only (twin mask, no W2 doorbell); "
+	"4 = B4 W2 only (twin doorbell, no W1); 5 = B5 the corrected 209 witness alone (0x10); "
+	"6 = B6 the MSI probe alone (0x80)");
+
+#define OMO_Q_GLUE_RAW		0x2e4		/* the glue RAW status (copy A) */
+#define OMO_Q_MASK_BITS		0x18U		/* the two ctl-rb bits (3+4) the ladder closes */
+#define OMO_Q_ACK_OFF		0x101438UL	/* CA 0x40101438 - out[3] ack, within region 3 */
+#define OMO_Q_REARM_OFF		0x101414UL	/* CA 0x40101414 - out[4] re-arm, within region 3 */
+#define OMO_Q_NATPOST_OFF	0x10cUL		/* CA 0x4000010c - the natural-post companion */
+#define OMO_Q_NATPOST_VAL	0x0000ceceU
+
+static unsigned omo_qmode;		/* the armed attempt(s) the in-ISR ladder consumes */
+static bool omo_bounded;		/* the 207 line was disabled by the bound */
+static bool omo_bounded2;		/* the 209 line was disabled by the bound */
+static bool omo_qsv_done;		/* a mechanism drove the glue to 0 */
+static const char *omo_qwinner;		/* its name, for the final print */
+static unsigned omo_quiet_printed;
+static u32 omo_mask_saved;		/* CA 0x400392e8 before Q_MASKCLOSE */
+static bool omo_mask_saved_valid;
+
+/* ---- the three mechanisms: one MMIO group per ladder entry ---- */
+static void omo_q_consume(void)
+{
+	iowrite32(1U, omo_rel + OMO_Q_ACK_OFF - OMO_IO_WIN);	/* ack    out[3] 0x40101438 <= 1 */
+	iowrite32(0, omo_msg + OMO_MSG1);			/* clear  out[1] 0x40039014 <= 0 */
+	iowrite32(1U, omo_rel + OMO_Q_REARM_OFF - OMO_IO_WIN);	/* re-arm out[4] 0x40101414 <= 1 */
+}
+
+static void omo_q_fwack(void)
+{
+	iowrite32(OMO_Q_NATPOST_VAL, omo_rel + OMO_Q_NATPOST_OFF);	/* CA 0x4000010c <= 0xcece */
+}
+
+static void omo_q_maskclose(void)
+{
+	u32 cur = omo_rd(omo_msg, OMO_CHN_RES);		/* CA 0x400392e8 */
+
+	if (!omo_mask_saved_valid) {
+		omo_mask_saved = cur;
+		omo_mask_saved_valid = true;
+	}
+	iowrite32(cur | OMO_Q_MASK_BITS, omo_msg + OMO_CHN_RES);
+}
+
+/* Split 1..qbound among the armed attempts, in rank order, and run this entry's mechanism once,
+ * then re-read the glue.  A 0 re-read IS the quiesce.  Self-contained: no process-context race. */
+static void omo_q_ladder(unsigned n, u32 st)
+{
+	static const unsigned mech[3] = { 0x1u, 0x2u, 0x4u };
+	static const char *name[3] = { "CONSUME", "FWACK", "MASKCLOSE" };
+	unsigned armed = omo_qmode ? omo_qmode : (omo_quiesce & 0x7u);
+	unsigned cnt = 0, per, rem, i, lo, which = 0;
+
+	if (omo_qsv_done || !armed)
+		return;
+	for (i = 0; i < 3; i++)
+		if (armed & mech[i])
+			cnt++;
+	if (!cnt)
+		return;
+	per = omo_qbound / cnt;
+	rem = omo_qbound % cnt;
+	lo = 1;
+	for (i = 0; i < 3; i++) {
+		unsigned blk, hi;
+
+		if (!(armed & mech[i]))
+			continue;
+		blk = per + (rem ? 1 : 0);
+		if (rem)
+			rem--;
+		hi = lo + blk - 1;
+		if (n >= lo && n <= hi) {
+			which = mech[i];
+			break;
+		}
+		lo = hi + 1;
+	}
+	if (!which)
+		return;
+	if (which == 0x1u)
+		omo_q_consume();
+	else if (which == 0x2u)
+		omo_q_fwack();
+	else
+		omo_q_maskclose();
+	if (omo_rd(omo_msg, OMO_GLUE_STAT) == 0) {
+		omo_qsv_done = true;
+		omo_qmode = 0;
+		for (i = 0; i < 3; i++)
+			if (mech[i] == which)
+				omo_qwinner = name[i];
+		pr_info("omo-drv1: QUIESCED_BY_%s n=%u glue=0x%08x\n",
+			omo_qwinner ? omo_qwinner : "?", n, st);
+	}
+}
+
+/* The knob's supervisor (process context, AFTER the init-done marker so exp.sh captures it all):
+ * run the armed attempts in rank order, each under a fresh, independently-bounded window; if
+ * nothing quiesces, LEAVE the line disabled (never re-enable into a storm). */
+static void omo_quiesce_run(void)
+{
+	static const unsigned mech[3] = { 0x1u, 0x2u, 0x4u };
+	static const char *name[3] = { "CONSUME", "FWACK", "MASKCLOSE" };
+	bool d207 = omo_bounded, d209 = omo_bounded2;
+	unsigned i;
+
+	if (!omo_msg) {
+		pr_info("omo-drv1: [qsv] no message window - quiesce supervisor skipped\n");
+		return;
+	}
+	pr_info("omo-drv1: ---- quiesce supervisor: mask=0x%x bound=%u wait=%ums ----\n",
+		omo_quiesce, omo_qbound, omo_qwait_ms);
+	for (i = 0; i < 3; i++) {
+		unsigned a = mech[i];
+		unsigned long waited = 0;
+		u32 raw, msk, st0, st, o0, o1;
+
+		if (!(omo_quiesce & a) || omo_qsv_done)
+			continue;
+		raw = omo_rd(omo_msg, OMO_Q_GLUE_RAW);
+		msk = omo_rd(omo_msg, OMO_CHN_RES);
+		st0 = omo_rd(omo_msg, OMO_GLUE_STAT);
+		o0 = omo_rd(omo_msg, OMO_MSG0);
+		o1 = omo_rd(omo_msg, OMO_MSG1);
+		pr_info("omo-drv1: [qsv] BEFORE %s glue{raw=%08x mask=%08x stat=%08x} out0=%08x out1=%08x isr_n=%u isr2_n=%u\n",
+			name[i], raw, msk, st0, o0, o1,
+			(unsigned)atomic_read(&omo_isr_n), (unsigned)atomic_read(&omo_isr2_n));
+
+		if (d207 && omo_irq_owned) {
+			enable_irq(omo_irq);	/* only inside this bounded discipline */
+			d207 = false;
+		}
+		if (d209 && omo_irq2_owned) {
+			enable_irq(omo_irq2);
+			d209 = false;
+		}
+		omo_bounded = false;
+		omo_bounded2 = false;
+		atomic_set(&omo_isr_n, 0);		/* fresh, independently-bounded attempt */
+		atomic_set(&omo_isr2_n, 0);
+		omo_qmode = a;				/* arm the in-ISR ladder for THIS attempt */
+
+		while (waited < omo_qwait_ms) {
+			msleep(50);
+			waited += 50;
+			st = omo_rd(omo_msg, OMO_GLUE_STAT);
+			if (st == 0 || omo_bounded || omo_bounded2)
+				break;
+		}
+		st = omo_rd(omo_msg, OMO_GLUE_STAT);
+		if (omo_bounded)
+			d207 = true;
+		if (omo_bounded2)
+			d209 = true;
+		pr_info("omo-drv1: [qsv] AFTER %s glue=%08x (was %08x) bounded=%d/%d waited=%lums isr_n=%u isr2_n=%u\n",
+			name[i], st, st0, omo_bounded, omo_bounded2, waited,
+			(unsigned)atomic_read(&omo_isr_n), (unsigned)atomic_read(&omo_isr2_n));
+		if (st == 0) {
+			omo_qsv_done = true;
+			omo_qwinner = name[i];
+			break;
+		}
+		if (!(omo_quiesce & 0x8u))		/* Q_ESCALATE */
+			break;
+	}
+	omo_qmode = 0;		/* no further in-ISR mechanisms unless re-armed */
+
+	if (omo_qsv_done) {
+		pr_info("omo-drv1: [qsv] QUIESCED_BY_%s\n", omo_qwinner ? omo_qwinner : "?");
+		if (omo_mask_saved_valid && !(omo_quiesce & 0x10u)) {
+			iowrite32(omo_mask_saved, omo_msg + OMO_CHN_RES);
+			pr_info("omo-drv1: [qsv] mask 0x400392e8 restored to 0x%08x\n",
+				omo_mask_saved);
+		}
+	} else {
+		pr_info("omo-drv1: [qsv] NOT QUIESCED - the IRQ is left %s (never re-enable into a storm)\n",
+			(d207 || d209) ? "DISABLED" : "enabled");
+	}
+	pr_info("omo-drv1: [qsv] SUPERVISOR DONE quiesced=%d winner=%s glue=%08x irq=%s maskrestored=%d\n",
+		omo_qsv_done ? 1 : 0, omo_qwinner ? omo_qwinner : "-",
+		omo_rd(omo_msg, OMO_GLUE_STAT), (d207 || d209) ? "DISABLED" : "enabled",
+		(omo_qsv_done && omo_mask_saved_valid && !(omo_quiesce & 0x10u)) ? 1 : 0);
+}
 
 static irqreturn_t omo_intx_isr(int irq, void *dev_id)
 {
-	u32 st, keep;
+	u32 st;
+	unsigned n = (unsigned)atomic_inc_return(&omo_isr_n);
 
-	atomic_inc(&omo_isr_n);
 	(void)dev_id;
-	/* omo_msg may still be unmapped if the line asserts this early (the guard). */
+	if (omo_qbound && n > omo_qbound) {		/* THE HARD BOUND, before any MMIO */
+		if (!omo_bounded) {
+			omo_bounded = true;
+			pr_info("omo-drv1: IRQ_DISABLED_BOUND irq=%d n=%u bound=%u glue=%08x\n",
+				irq, n, omo_qbound,
+				omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0);
+			if (omo_irq_owned)
+				disable_irq_nosync(omo_irq);	/* 207 */
+			if (omo_irq2_owned) {
+				omo_bounded2 = true;
+				disable_irq_nosync(omo_irq2);	/* 209 */
+			}
+		}
+		return IRQ_HANDLED;			/* no MMIO while bounded */
+	}
 	st = omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0;
-	pr_info_ratelimited("omo-drv1: [isr] irq=%d n=%u status=0x%08x\n",
-			    irq, (unsigned int)atomic_read(&omo_isr_n), st);
-
-	/* the vendor's oal_pcie_intx_isr clear: mask the non-device bits off and write
-	 * the remainder back (the same clear omo_glue_service() performs at :942). */
-	keep = st;
-	keep &= ~OMO_STAT_MASK1;
-	keep &= ~OMO_STAT_MASK2;
-	keep &= ~OMO_STAT_MASK3;
-	keep &= ~OMO_STAT_MASK4;
+	if (st && !(omo_quiet_printed++ & 0xffu))	/* bounded log: 1 line / 256 entries */
+		pr_info("omo-drv1: [qsv] entry n=%u mode=0x%x glue=%08x\n", n, omo_qmode, st);
 	if (omo_msg)
-		iowrite32(keep, omo_msg + OMO_GLUE_STAT);
+		omo_q_ladder(n, st);			/* the armed attempts, in rank order */
+	if (omo_msg)					/* the vendor RMW write-back, kept (NEVER 0x400392f0) */
+		iowrite32(st & ~(OMO_STAT_MASK1 | OMO_STAT_MASK2 | OMO_STAT_MASK3 | OMO_STAT_MASK4),
+			  omo_msg + OMO_GLUE_STAT);
 	return IRQ_HANDLED;
 }
 
@@ -2195,19 +2442,24 @@ static void omo_intapost_step(const char *what, u32 ca, void __iomem *win, unsig
 #define OMO_ETE_INTR_CLR	0x50c	/* CA 0x4003950c - the ETE group clear (W3; the vendor's own) */
 #define OMO_ETE_INTR_STAT	0x510	/* CA 0x40039510 - the ETE group status (snapshot) */
 
-static atomic_t omo_isr2_n = ATOMIC_INIT(0);
-static int omo_irq2;
-static bool omo_irq2_owned;
-
 static irqreturn_t omo_intx2_isr(int irq, void *dev_id)
 {
 	u32 st, keep;
+	unsigned n = (unsigned)atomic_inc_return(&omo_isr2_n);
 
-	atomic_inc(&omo_isr2_n);
 	(void)dev_id;
+	if (omo_qbound && n > omo_qbound) {		/* THE HARD BOUND (the sibling line) */
+		if (!omo_bounded2) {
+			omo_bounded2 = true;
+			pr_info("omo-drv1: IRQ_DISABLED_BOUND irq=%d n=%u bound=%u glue=%08x (isr2)\n",
+				irq, n, omo_qbound,
+				omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0);
+			disable_irq_nosync(irq);	/* 209 */
+		}
+		return IRQ_HANDLED;
+	}
 	st = omo_msg ? ioread32(omo_msg + OMO_GLUE_STAT) : 0;
-	pr_info_ratelimited("omo-drv1: [isr2] irq=%d n=%u status=0x%08x\n",
-			    irq, (unsigned int)atomic_read(&omo_isr2_n), st);
+	pr_info_ratelimited("omo-drv1: [isr2] irq=%d n=%u status=0x%08x\n", irq, n, st);
 	keep = st;
 	keep &= ~OMO_STAT_MASK1;
 	keep &= ~OMO_STAT_MASK2;
@@ -2351,11 +2603,20 @@ static void omo_intx2_read_glue(struct omo_intx2_snap *s)
 	s->mask = omo_msg ? omo_rd(omo_msg, OMO_GLUE_MASKREG) : 0xffffffffU;
 	s->stat = omo_msg ? omo_rd(omo_msg, OMO_GLUE_STAT) : 0xffffffffU;
 	s->twin = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0xffffffffU;
-	s->twin_raw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0xffffffffU;
-	s->twin_stat = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0xffffffffU;
+	/* bisect B2: the FOUR registers no record has ever read (0xae4/0xaec/0x50c/0x510) are skipped,
+	 * so a stall here isolates THE READ and not W3 / the rest of the snapshot. */
+	if (omo_bisect == 2) {
+		s->twin_raw = 0xffffffffU;
+		s->twin_stat = 0xffffffffU;
+		s->ete_clr = 0xffffffffU;
+		s->ete_stat = 0xffffffffU;
+	} else {
+		s->twin_raw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0xffffffffU;
+		s->twin_stat = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0xffffffffU;
+		s->ete_clr = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_CLR) : 0xffffffffU;
+		s->ete_stat = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0xffffffffU;
+	}
 	s->ete = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_OFF) : 0xffffffffU;
-	s->ete_clr = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_CLR) : 0xffffffffU;
-	s->ete_stat = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0xffffffffU;
 	s->out0 = omo_msg ? omo_rd(omo_msg, OMO_MSG0) : 0xffffffffU;
 	s->out1 = omo_msg ? omo_rd(omo_msg, OMO_MSG1) : 0xffffffffU;
 	s->isr207 = (u32)atomic_read(&omo_isr_n);
@@ -2442,14 +2703,16 @@ static void omo_intx2_wait(const struct omo_intx2_snap *base)
 	unsigned int ms;
 
 	for (ms = 0; ms < OMO_INTAPOST_TIMEOUT_MS; ms += OMO_INTAPOST_STEP_MS) {
-		u32 raw, st, i207, i209, traw, tst, est;
+		u32 raw, st, i207, i209, traw = 0, tst = 0, est = 0;
 
 		msleep(OMO_INTAPOST_STEP_MS);
 		raw = omo_msg ? omo_rd(omo_msg, OMO_GLUE_RAW) : 0;
 		st = omo_msg ? omo_rd(omo_msg, OMO_GLUE_STAT) : 0;
-		traw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0;
-		tst = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0;
-		est = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0;
+		if (omo_bisect != 2) {		/* B2 must not re-read the four new registers */
+			traw = omo_msg ? omo_rd(omo_msg, OMO_TWIN_RAW) : 0;
+			tst = omo_msg ? omo_rd(omo_msg, OMO_TWIN_STAT) : 0;
+			est = omo_msg ? omo_rd(omo_msg, OMO_ETE_INTR_STAT) : 0;
+		}
 		i207 = (u32)atomic_read(&omo_isr_n);
 		i209 = (u32)atomic_read(&omo_isr2_n);
 		if (raw != base->raw || st != base->stat ||
@@ -2539,9 +2802,11 @@ static void omo_twin_stim_step(struct omo_intx2_snap *prev)
 	u32 m, want, rb, d;
 
 	m = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0;
-	if (m == 0x20U) {
+	if (omo_bisect == 4)
+		pr_info("omo-drv1: [intx3] B4: W1 twin mask 0x40039ae8 left UNWRITTEN (W2-only row)\n");
+	else if (m == 0x20U)
 		pr_info("omo-drv1: [intx3] W1 twin mask 0x40039ae8 already 0x%08x - no write\n", m);
-	} else {
+	else {
 		want = m & OMO_GLUE_CHN_RES_MASK;
 		iowrite32(want, omo_msg + OMO_TWIN_MASK);
 		rb = omo_rd(omo_msg, OMO_TWIN_MASK);
@@ -2555,7 +2820,9 @@ static void omo_twin_stim_step(struct omo_intx2_snap *prev)
 	*prev = post;
 
 	m = omo_msg ? omo_rd(omo_msg, OMO_TWIN_MASK) : 0;
-	if (m == 0x20U) {
+	if (omo_bisect == 3) {
+		pr_info("omo-drv1: [intx3] B3: W2 twin doorbell skipped (W1-only row)\n");
+	} else if (m == 0x20U) {
 		d = omo_rd(omo_msg, OMO_TWIN_DOORBELL);
 		iowrite32(d | 0x8U, omo_msg + OMO_TWIN_DOORBELL);
 		pr_info("omo-drv1: [intx3] W2 twin doorbell 0x40039ad4 <= 0x%08x (rb 0x%08x, self-clearing)\n",
@@ -2681,21 +2948,40 @@ static void omo_intx2_snapshot_run(void)
 		omo_msi_step(&s);
 }
 
+/* the chosen bisect row -> the stimulus bits it arms (build/tmp/inta-spec/bisect.md sec.3).
+ * 0 = legacy (the intapost param alone; row B0 = intapost 0).  The chosen mode for THIS phase's
+ * boot is B5 = 0x10 alone: the corrected 209 witness armed, the twin/ETE stimulus (0x40) OFF. */
+static unsigned omo_bisect_bits(unsigned b)
+{
+	switch (b) {
+	case 1: return 0x20;   /* B1 widened snapshot (reads + W3) */
+	case 2: return 0x20;   /* B2 widened snapshot WITHOUT the four new reads */
+	case 3: return 0x40;   /* B3 W1 only */
+	case 4: return 0x40;   /* B4 W2 only */
+	case 5: return 0x10;   /* B5 the corrected 209 witness alone */
+	case 6: return 0x80;   /* B6 the MSI probe alone */
+	default: return 0;     /* B0: no stimulus */
+	}
+}
+
 static void omo_intapost_run(void)
 {
-	pr_info("omo-drv1: ---- intapost ring knob 0x%x (post-release) ----\n", omo_intapost);
-	if (omo_intapost & 0x10)
+	unsigned bits = omo_bisect ? omo_bisect_bits(omo_bisect) : omo_intapost;
+
+	pr_info("omo-drv1: ---- intapost ring knob 0x%x (bisect=%u effective=0x%x, post-release) ----\n",
+		omo_intapost, omo_bisect, bits);
+	if (bits & 0x10)
 		omo_dual_line_attach();
-	if (omo_intapost & 0x20)
+	if (bits & 0x20)
 		omo_intx2_snapshot_run();
-	if (omo_intapost & 0x8)
+	if (bits & 0x8)
 		omo_intapost_step("0x8-natural-post", 0x4000010cU, omo_rel, OMO_NATPOST_OFF,
 				  OMO_NATPOST_VAL, false);
-	if (omo_intapost & 0x1)
+	if (bits & 0x1)
 		omo_intapost_step("0x1-h2d-doorbell", 0x400392d4U, omo_msg, OMO_MSG_DOORBELL, 0x1U, true);
-	if (omo_intapost & 0x2)
+	if (bits & 0x2)
 		omo_intapost_step("0x2-d2h-set-bit3", 0x400392d4U, omo_msg, OMO_MSG_DOORBELL, 0x8U, true);
-	if (omo_intapost & 0x4)
+	if (bits & 0x4)
 		omo_intapost_step("0x4-fw-d2h-doorbell", 0x40101434U, omo_rel, OMO_D2H_DOORBELL, 0x1U, true);
 }
 
@@ -2885,7 +3171,7 @@ static int omo_hw_attach(void)
 			omo_ackfast();
 
 		/* the D2H/INTA ring knob (hostpath.md section 3.1): post-release, before the mailbox poll */
-		if (omo_intapost)
+		if (omo_intapost || omo_bisect)
 			omo_intapost_run();
 
 		/* POLL FIRST, IMMEDIATELY. An earlier revision slept 500 ms and then did the signature
@@ -3233,6 +3519,19 @@ static int __init omo_wifidrv1_init(void)
 		omo_hw, omo_read_msg5,
 		VND_ND_OPS_OFF, VND_ND_IEEE80211_OFF, VND_ND_PRIV_OFF);
 
+	/* knob v4 clamps (quiesce.md sec.4): the bound is 1..64, the per-attempt wait <= 5000 ms */
+	if (omo_qbound < 1)
+		omo_qbound = 1;
+	if (omo_qbound > 64)
+		omo_qbound = 64;
+	if (omo_qwait_ms > 5000)
+		omo_qwait_ms = 5000;
+	if (omo_hw && (omo_quiesce & 0x7u)) {
+		omo_qmode = omo_quiesce & 0x7u;	/* arm the in-ISR ladder from the FIRST entry */
+		pr_info("omo-drv1: quiesce armed in-ISR: mode=0x%x bound=%u wait=%ums (the bound is mandatory)\n",
+			omo_qmode, omo_qbound, omo_qwait_ms);
+	}
+
 	if (omo_hw) {
 		/* virq2.md section 2: register a pci_driver so the core runs
 		 * pci_assign_irq() (and writes PCI_INTERRUPT_LINE) before .probe;
@@ -3284,6 +3583,11 @@ static int __init omo_wifidrv1_init(void)
 		OMO_WIPHY_NAME, OMO_IFNAME, omo_hw,
 		omo_regs_valid ? "decoded" : "absent",
 		omo_irq, (unsigned int)atomic_read(&omo_isr_n));
+
+	/* the supervisor runs in process context AFTER the init-done marker, so the harness's
+	 * EXP_DONE_CMD already matches and the capture step sees the whole ladder incl. the bound. */
+	if (omo_hw && (omo_quiesce & 0x7u))
+		omo_quiesce_run();
 	return 0;
 }
 
