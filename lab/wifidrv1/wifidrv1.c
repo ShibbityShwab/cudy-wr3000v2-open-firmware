@@ -1349,6 +1349,11 @@ static void __iomem *omo_ep1_iatu;
  * the quiesce block below that also closes it through the 207 ISR's bound. */
 static int omo_irq2;
 static bool omo_irq2_owned;
+/* ep1fix.md: true once .probe ran for the domain-1 sibling 0001:00:00.0, i.e. once the PCI core has
+ * run pci_assign_irq() for it and its irq holds 209.  The 209 arm is gated on THIS, never on EP0's
+ * probe (the ordering bug: EP0's probe returns ~23 s before the sibling is probed, so an arm there
+ * sees irq 0/255 and fails rc=-19 - the three rc=-19 arms of the storm-close ladder). */
+static bool omo_sibling_bound;
 
 static void omo_intrsamp(void)
 {
@@ -2128,6 +2133,25 @@ static atomic_t omo_isr2_n = ATOMIC_INIT(0);
  *
  * NEVER write CA 0x400392f0 / 0x40039af0 (W1C); never read the ack IAR 0x4016010c or the RC misc
  * 0x10161000.
+ *
+ * KNOB v7 (build/tmp/inta-spec/{twinclear,realchain,ep1fix}.md) - three changes, no new knob:
+ *  (a) the TWIN-CLEAR rung is deliberately NOT implemented.  twinclear.md sec.3 ranks the copy-B
+ *      W1C clear (CA 0x40039af0) LAST: it is the same facility as the forbidden copy-A W1C (0x800
+ *      stride, same register file, no vendor writer anywhere to validate the decode), it cannot
+ *      retire a device-sourced LEVEL (best case a one-shot diagnostic) and it destroys the only
+ *      witness (the residual 0x8).  The ranked alternative - the twin's own bit-aligned mask close,
+ *      rungs 5/6 TWINCLOSE/TWIN_UNDO - already ships below (twinq.md sec.3 T0/T1); the twinclose
+ *      runner selects rung 5.  The read-only choice is therefore to close the mask, never to write
+ *      the clear.
+ *  (b) the REAL-CHAIN stimulus hook: `intapost` bit 0x100 submits one real H2D message exactly as
+ *      the vendor host does (cece -> out[0] |= 8 -> doorbell bit 0) and writes NO bit 3 anywhere
+ *      (realchain.md sec.5).  It exists because the only other witness path (bit 0x20 -> the [intx3]
+ *      snapshot) unconditionally performs step D, `0x400392d4 |= 8` - the one write realchain.md
+ *      forbids - so that path cannot host this experiment.
+ *  (c) the EP1 claim fix (ep1fix.md sec.3b): the 209 arm moved out of omo_hw_attach() (EP0's probe,
+ *      ~23 s before pci_assign_irq() ran for EP1) into omo_pci_probe()'s sibling branch, gated on
+ *      omo_sibling_bound.  The sibling probe is where irq=209 exists, so the arm stops failing
+ *      rc=-19 and the witness arms deterministically.
  * ====================================================================== */
 
 /* KNOB v6 (superfix.md + ladder3.md + twinq.md): ONE ladder rung per boot, selected by `rung`.
@@ -2295,7 +2319,12 @@ static bool omo_glue_quiet(void)
  * (raw 0x8 -> stat 0x8 under mask 0x20, so stat = raw & ~mask holds on copy B - unlike copy A),
  * so it de-asserts the level by construction; reversible by snapshot.  T1 (rung 6) writes the
  * reset/vendor value instead.  NEVER the copy-B W1C 0x40039af0.  Runs LAST (it destroys the
- * twin's observability). */
+ * twin's observability).
+ *
+ * twinclear.md sec.3: the copy-B W1C clear (CA 0x40039af0) is ranked LAST (same facility as the
+ * forbidden copy-A W1C, no vendor writer to validate the decode, cannot retire a device-sourced
+ * level) - so the twin-CLEAR rung is deliberately NOT implemented and this mask close IS the
+ * ranked alternative (rank 1).  Never add a write of 0x40039af0. */
 static void omo_q_twinclose(void)
 {
 	u32 m = omo_rd(omo_msg, OMO_TWIN_MASK);
@@ -2578,7 +2607,9 @@ MODULE_PARM_DESC(intapost,
 	"section 5; intx.md section 4); 0x40 = twin-stim: W1 open the twin mask CA 0x40039ae8 and W2 "
 	"ring its doorbell CA 0x40039ad4 (the one new candidate; requires 0x20); 0x80 = the MSI probe, "
 	"LAST and read-only (requires 0x20; twin.md section 4 - the target kernel has no MSI API, so "
-	"the step reports the state and changes nothing)");
+	"the step reports the state and changes nothing); 0x100 = the REAL-CHAIN stimulus (realchain.md "
+	"sec.5, EXCLUSIVE: handshake CA 0x4000010c <= 0x0000cece, then out[0] 0x40039010 |= 8, then the "
+	"H2D doorbell 0x400392d4 bit 0 - writes NO bit 3, never touches the twin)");
 
 #define OMO_GLUE_RAW	0x2e4		/* within the message window -> BAR0 0x3f12e4 */
 #define OMO_GLUE_MASKREG 0x2e8		/* within the message window -> BAR0 0x3f12e8 */
@@ -3206,12 +3237,61 @@ static unsigned omo_bisect_bits(unsigned b)
 	}
 }
 
+/* intapost bit 0x100 - the REAL-CHAIN stimulus (build/tmp/inta-spec/realchain.md sec.5).
+ *
+ * The device rings copy A's D2H-RX bit 3 (CA 0x400392d4, value 8) only from inside its OWN H2D
+ * dispatcher (fw file 0x818c4), and that dispatcher is gated on the device CPU TAKING GIC id 0x4c
+ * (realchain.md sec.2/3: entry alone rings it).  So the smallest thing that can become the device's
+ * own stimulus is to submit one real H2D message exactly as the vendor host does - in the vendor's
+ * order, and with NO bit-3 write anywhere (realchain.md sec.5 step 3):
+ *
+ *   rc1  CA 0x4000010c <= 0x0000cece  the handshake/gate word (the same gate intapost bit 0x8
+ *                                     drives; NOT the forbidden IAR 0x4016010c)
+ *   rc2  CA 0x40039010 |= 0x8          the message post (out[0], the send=3 bitmap)
+ *   rc3  CA 0x400392d4 |= 0x1          the H2D doorbell (out[2] bit 0)
+ *
+ * The witnesses are read-only: out[0]/out[1] (the DEVICE clearing out[0] 8 -> 0 is the chain proof),
+ * the copy-A glue raw/mask/stat, the twin triple (MUST stay as the host left it - the discriminator),
+ * and the ISR counters; each step gets omo_intapost_step's bounded change-detection.  This bit is
+ * EXCLUSIVE: any other intapost stimulus bits are ignored, because bit 0x2 and the 0x20 snapshot's
+ * step D would write bit 3, and 0x40 would touch the twin - both forbidden by realchain.md.  THE HARD
+ * BOUND stays armed (the ISR's own qbound); never 0x400392f0/0x40039af0; never 0x10161000/0x4016010c. */
+static void omo_realchain_step(void)
+{
+	pr_info("omo-drv1: ---- real-chain stimulus 0x100: cece -> out[0] |= 8 -> doorbell bit 0 (NO bit 3, twin untouched) ----\n");
+	pr_info("omo-drv1: [realchain] twin BEFORE raw=%08x mask=%08x stat=%08x (the discriminator; must not move)\n",
+		omo_rd(omo_msg, OMO_TWIN_RAW), omo_rd(omo_msg, OMO_TWIN_MASK),
+		omo_rd(omo_msg, OMO_TWIN_STAT));
+
+	omo_intapost_step("rc1-handshake", 0x4000010cU, omo_rel, OMO_NATPOST_OFF, OMO_NATPOST_VAL, false);
+	pr_info("omo-drv1: [realchain] handshake 0x4000010c rb=%08x (0xcece landed)\n",
+		omo_rd(omo_rel, OMO_NATPOST_OFF));
+	omo_intapost_step("rc2-h2d-post", 0x40039010U, omo_msg, OMO_MSG0, 0x8U, true);
+	omo_intapost_step("rc3-h2d-doorbell", 0x400392d4U, omo_msg, OMO_MSG_DOORBELL, 0x1U, true);
+
+	pr_info("omo-drv1: [realchain] out[0]=%08x out[1]=%08x glue{raw=%08x mask=%08x stat=%08x} twin{raw=%08x mask=%08x stat=%08x} isr_n=%u isr2_n=%u\n",
+		omo_rd(omo_msg, OMO_MSG0), omo_rd(omo_msg, OMO_MSG1),
+		omo_rd(omo_msg, OMO_GLUE_RAW), omo_rd(omo_msg, OMO_GLUE_MASKREG),
+		omo_rd(omo_msg, OMO_GLUE_STAT),
+		omo_rd(omo_msg, OMO_TWIN_RAW), omo_rd(omo_msg, OMO_TWIN_MASK),
+		omo_rd(omo_msg, OMO_TWIN_STAT),
+		(unsigned)atomic_read(&omo_isr_n), (unsigned)atomic_read(&omo_isr2_n));
+	pr_info("omo-drv1: [realchain] VERDICT: out[0] 8 -> 0 = the DEVICE consumed the H2D message (the device rang the chain); out[0] stays 8 = the dispatcher never took GIC id 0x4c\n");
+}
+
 static void omo_intapost_run(void)
 {
 	unsigned bits = omo_bisect ? omo_bisect_bits(omo_bisect) : omo_intapost;
 
 	pr_info("omo-drv1: ---- intapost ring knob 0x%x (bisect=%u effective=0x%x, post-release) ----\n",
 		omo_intapost, omo_bisect, bits);
+	if (bits & 0x100) {		/* the real-chain stimulus is self-contained and exclusive */
+		if (bits & ~0x100u)
+			pr_info("omo-drv1: [realchain] NOTE other intapost bits 0x%x IGNORED (this step must write no bit 3 and never the twin)\n",
+				bits & ~0x100u);
+		omo_realchain_step();
+		return;
+	}
 	if (bits & 0x10)
 		omo_dual_line_attach();
 	if (bits & 0x20)
@@ -3412,14 +3492,11 @@ static int omo_hw_attach(void)
 		if (omo_ackfast_en)
 			omo_ackfast();
 
-		/* ep1 (ep1.md): arm the 209 witness UNCONDITIONALLY on the hw path, BEFORE the storm so
-		 * the sibling line is request_irq()'d and counted during the run.  omo_dual_line_attach()
-		 * is idempotent (it caches omo_irq2 from the port's own pci_driver claim / the
-		 * offset-immune config byte - NEVER sysfs); without this call a run without intapost bit
-		 * 0x10 leaves 209 BOUND-BUT-NOT-ARMED (isr209=0, /sys/kernel/irq/209/actions = "-"). */
-		rc = omo_dual_line_attach();
-		if (rc)
-			pr_err("omo-drv1: [intx2] 209 arm failed rc=%d (the witness stays unarmed)\n", rc);
+		/* ep1fix.md: the 209 arm is NOT here.  This is EP0's .probe, which returns ~23 s BEFORE the
+		 * PCI core probes the domain-1 sibling; at this point pci_assign_irq() has not run for EP1,
+		 * so its irq is 0/255 and omo_dual_line_attach() fails rc=-19 (-ENODEV) - the three rc=-19
+		 * arms of the storm-close ladder.  The arm now lives at the end of omo_pci_probe()'s sibling
+		 * branch, gated on omo_sibling_bound (where irq=209 exists). */
 
 		/* the D2H/INTA ring knob (hostpath.md section 3.1): post-release, before the mailbox poll */
 		if (omo_intapost || omo_bisect)
@@ -3577,6 +3654,7 @@ MODULE_DEVICE_TABLE(pci, omo_pci_ids);
 static int omo_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct pci_dev *want;
+	int rc;
 
 	(void)id;
 	if (!omo_hw)
@@ -3590,8 +3668,19 @@ static int omo_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		if (want == pdev) {
 			pci_dev_put(want);
 			omo_ep1_dev = pci_dev_get(pdev);
+			omo_sibling_bound = true;	/* ep1fix: this probe ran pci_assign_irq() -> irq=209 */
 			pr_info("omo-drv1: [ep1db] sibling domain=%u bound to omo-drv1 (the 209 witness)\n",
 				omo_sibling_domain);
+			/* ep1fix.md: arm the 209 witness HERE - the sibling's own probe, after pci_assign_irq()
+			 * has written its INTx virq (so request_irq(209) is deterministic instead of rc=-19).
+			 * The line gets the small-K bound (qbound209) and, after a bound-trip, is NEVER
+			 * re-enabled (ep1.md sec.2c); free_irq(omo_irq2) on unload only. */
+			if (omo_sibling_bound) {
+				rc = omo_dual_line_attach();
+				if (rc)
+					pr_err("omo-drv1: [intx2] 209 arm failed rc=%d (the witness stays unarmed)\n",
+					       rc);
+			}
 			return 0;
 		}
 		if (want)
