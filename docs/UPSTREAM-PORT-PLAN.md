@@ -127,6 +127,16 @@ and `opensource/docs/soc/vendor-dt-notes.md` (the vendor DT read from the dumped
 per flash image, bootargs/`chosen`, memory and reserved-memory, the U-Boot overlay shape). These are the
 Step 1 pin and the Step 2 vendor-DT read; companion mapping table `build/tmp/dt-spec/dt.md`.
 
+The EP1 209 endpoint comes into focus for stage 2/3 (2026-10-05, `build/tmp/inta-spec/{ep1.md,twinq.md}`,
+ADDENDUM 14): the sibling `0001:00:00.0` binds its `pci_driver` at about t=66.5 s of an insmod boot, and v6's
+deterministic `request_irq(209)` arm runs about 23 s EARLIER (t~43.4 s), so it fails `rc=-19` in 3/3 boots and
+the host-facing endpoint line is never armed. The upstream `hsan,pcie` port should build the sibling bind and
+the EP1 handler together (bind the endpoint, then request its virq, both from the probe) rather than arm
+before the bind, and it must keep the same small-K in-ISR bound (`disable_irq_nosync` after K entries,
+before any MMIO) that both existing ISRs carry, with NO re-enable after a bound-trip; the twin/copy-B
+quiesce predicate (glue stat == 0 AND twin stat == 0) is the port's correctness test for the ctrl-rb IRQ
+path, since a copy-A-only zero stays vacuous.
+
 Clocks land as files + the dtc pipeline becomes the tool of record (2026-10-05, `build/tmp/inta-spec/clocks2.md`, ADDENDUM 13): the skeleton's two placeholders fold into ONE `crg: clock-reset-controller@14880000` node in `opensource/docs/soc/luofu-r116.dts` (`compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, `reg = <0x14880000 0x1000>`, `#clock-cells = <1>`, `#reset-cells = <2>`), with every consumer (`gpio0/1`, `i2c0`, `fmc`, `pcie0`) repointed to `<&crg IDX>` / `<&crg off bit>` (working-tree, 23 insertions / 33 deletions), and the driver skeleton lands at `opensource/lab/luofu-clk/` (`luofu-clk.c` scaffold, NOT-YET-COMPILED, `obj-m := luofu-clk.o`), so the new `hisilicon,luofu-crg` compatible has a home for the pinned gate/PLL/mux tables and the `softrst_val0/1` magic. The dtc pipeline that compiles the skeleton is upstream dtc v1.7.2 (built from the `dgibson/dtc` v1.7.2 tarball with MinGW-W64 gcc 16.2.0 plus winflexbison 2.5.25) driven by `cpp -P -nostdinc -x assembler-with-cpp` then `dtc -I dts -O dtb`, producing `build/tmp/inta-spec/luofu-r116.dtb` (4,554 B, sha256 `a1e0d822f23691ff96efaaec3a5def0d26923d642714fa8ab674b2a408f55823`, magic `d00dfeed`, 29 nodes / 145 properties, exit 0, 0 errors, 4 `unit_address_vs_reg` warnings).
 
 Stage 1 skeleton landed (2026-10-05): `opensource/docs/soc/luofu-r116.dts` is the first-cut mach DT skeleton
@@ -199,3 +209,14 @@ instrument self-disabling after a small K reads.
 - Hisilicon clock/CRG/reset drivers: hi3519/3559a/3620/3660/3670/6220/hip04/hix5hd2, `crg-hi3798cv200.c`, `reset.c` (no `hsan,clk`/`hsan,crg`/`hsan,reset`): https://github.com/torvalds/linux/tree/master/drivers/clk/hisilicon
 - SPI-NAND core + flash drivers: reusable `spi-nand` framework, no `hsan,fmc` controller: https://github.com/torvalds/linux/tree/master/drivers/mtd/nand/spi
 - Hi5671YV200/Hi5622V100: no public mainline driver (closed NDA BSP; web search 2026-10-05); closest open precedent OpenIPC/openhisilicon: https://github.com/OpenIPC/openhisilicon
+
+Status (2026-10-05, `build/tmp/inta-spec/{crgci-result.md,dtslint.md,stage2.md}`, ADDENDUM 15): the
+`luofu-clk` driver skeleton CROSS-COMPILES GREEN in CI (`gh run list` on commit `dff5925` = success twice;
+the `bed58e5` attempt failed first and the block-comment fix carried it, the first cross-build of our own
+driver code), the edited `opensource/docs/soc/luofu-r116.dts` lints PASS under dtc 1.7.2 (dtb 4,506 B,
+sha256 `732104b1818945b69100dc7ad45612360fec0c5297c6ef0ed91689297b5b3946`, errors 0, three cosmetic
+unit-name warnings), and the ranked stage-2 driver inventory is fixed at
+`build/tmp/inta-spec/stage2.md` (CRG -> pinctrl -> PCIe RC -> endpoint -> glue -> wifidrv, with the Kconfig
+symbols per stage). Stage 2's first driver to write is pinctrl. The ctrl-rb IRQ path's correctness test is
+the twin/copy-B quiesce predicate (glue stat == 0 AND twin stat == 0), because a copy-A-only zero stays
+vacuous.

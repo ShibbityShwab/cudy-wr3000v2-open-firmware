@@ -333,3 +333,64 @@ recovery `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0`, stock md5 `0e
 is a different address). Next threads: make the 209 source deliver a live line, walk the bisect rows from
 the control up (or exercise the bound on purpose), and re-sample the take at a later boot phase now that
 page 10 is a proven home.
+
+## The storm closure: three single-rung boots, the fixed supervisor, no rung quiesced (2026-10-05)
+
+`gic-view.md` "ADDENDUM 14 (2026-10-05): the storm closure" records the sequence the ADDENDUM 13 next
+threads named. Evidence: three chained boots, `build/register-dumps/exp/20261005-181512/` (rung 1
+Q_CONSUME), `build/register-dumps/exp/20261005-182024/` (rung 2 Q_FWACK) and
+`build/register-dumps/exp/20261005-182537/` (rung 3 Q_MASKCLOSE), each one detached `tools/exp.sh` cycle,
+`STORMCLOSE-R1/R2/R3 RESULT: PASS` (`exp_rc=0`), staged ko `wifidrv1.ko` md5
+`028f9d1281079c62d5db286f3586b23d` (97,064 B) at submodule `948f814cd6a1adadb4a8032672218445dae67a6f` (CI
+run 37354023564, `omo/phase22-hccaccept` only) and the REUSED firmware `build/tmp/fw-patched/inta3.bin`
+md5 `eee1f67370b56eca42316f6eeb490c45`, staged as the `.omo-pat` overlay. Adversarial verifier
+`build/register-dumps/diffs/20261005T1829Z-vrun11/verdict.txt` (CONFIRMED as a record, D1-D9 recorded)
+and instrument verifier `build/register-dumps/diffs/20261005T1814Z-vtool11/verdict.txt` (CONFIRMED; NO
+unconditional `enable_irq` remains - the module has exactly ONE, fully gated). Specs:
+`build/tmp/inta-spec/{superfix.md,ladder3.md,ep1.md,twinq.md}`. **THE FIXED SUPERVISOR**: v6 deletes the
+v5 bug (the unconditional `enable_irq` at the head of every rung that panicked the box), keeps ONE
+`enable_irq` behind three gates (one probe per boot, both levels clean, a bound-disabled 207 line), runs
+ONE rung in PROCESS CONTEXT on the DISABLED line (the ISR runs no rung), and never re-enables after a
+bound-trip. **THE LADDER, rung by rung**: CONSUME (rung 1) retired glue bit 4 (`0x18 -> 0x08`, the
+phase-21 LIVEBIND signature), FWACK (rung 2) retired nothing (`0x18 -> 0x18`), MASKCLOSE (rung 3) retired
+bit 3 (`0x18 -> 0x10`) and left bit 4 - the opposite survivor - so **NO RUNG QUIESCED**: twinB stat stayed
+`0x08` in all three, zero `QUIESCED_BY_*` lines, and every boot left the line DISABLED (`state=BOUND`).
+**THE STORM + THE BOUND**: the same W2 twin doorbell (`0x40039ad4 |= 8`) re-fired 65 IRQs on 207 in ~16 ms
+in every boot, and THE HARD BOUND tripped exactly once per boot (`IRQ_DISABLED_BOUND irq=207 n=65
+bound=64`), self-disabling before any MMIO with zero `callbacks suppressed`. The opt-in re-enable probe was
+armed (`quiesce=0x8`) but NEVER reached, so no bound #2 was spent. **THE EP1 209 RESULT**: the v6 arm is
+CODE-TRUE, RUN-FALSE - every boot prints `[intx2] no sibling INTx virq (irq=0)` and `209 arm failed
+rc=-19`, because the arm is attempted at t~43.4 s before the sibling's pci_driver bind at t~66.5 s, so
+`isr209=0` and the 209 rows stay VACUOUS. Health after recovery `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0
+STAGED=0 LOADER=0 RECOVER=0`, `OMO_PAT=0`, stock md5 `0e530b976d5a20e87358671f1a577695`, pstore unchanged
+at 3 records; hard rules held (no `0x400392f0`/`0x40039af0` write, no IAR `0x4016010c` or `0x10161000`
+read; the `0x4000010c` gate is a different address). BOUNDS: this sequence IS in-capture (vrun11 re-parsed
+all three boots), but the standalone ledger row is STALE for boot 3, the 209 arm is run-false, and boots
+1/2 lack the processed worker files. Next threads: make the re-enable probe reachable, fix the 209 arm
+timing, and pack the two captures.
+
+## The full-reversal sprint: the 209 witness armed, the twinclose rung clears the twin (2026-10-05)
+
+`gic-view.md` "ADDENDUM 15 (2026-10-05)" records four chained sessions. Run 1 (storm close, ADDENDUM 14)
+held 3/3 boots and measured the ladder: CONSUME retires glue bit 4 (`0x18 -> 0x08`), FWACK nothing,
+MASKCLOSE filters bit 3 (`0x18 -> 0x10`), and the residual `0x08` is the twin copy-B bit. Run 3
+(chip-deep, `build/tmp/inta-spec/chipdeep.md`, offline) places the H2D gate at the DEVICE CPU's take (its
+third precondition, reading the IAR with IRQs live, is never observed; every CPSR has I = 1), voids the old
+"152 moves / 0 filled" DR line (moves were credit turnover, "filled" read word1, which the DR path never
+writes) in favor of the `buf+0x0a == 0x5a5a` header test, and identifies the twin as copy B (CA
+`0x40039800` = copy A + `0x800`). Run 4 (`build/register-dumps/exp/20261005-185140/`, variant `vrun12`,
+verdict `diffs/20261005T1855Z-vrun12/` CONFIRMED with D1-D6, staged ko md5 `4e8088e8...`) is the payoff:
+`request_irq(209, IRQF_SHARED)` returns `rc=0` (the sibling-probe claim fixed the earlier `rc=-19`), the
+line caught `isr2_n=9` before its bound of 8, and the TWINCLOSE rung works - the twin mask write CA
+`0x40039ae8` `0x20 -> 0x28` cleared the twin status `0x08 -> 0x00` (`twin_residual=0x0`) while glue
+copy-A stayed `0x18`, so the FULL quiesce is CONSUME plus TWINCLOSE and the COMBINED RUNG is the next
+experiment. Static companion: copy B has its clear (CA `0x40039af0`) but no vendor code writes it, and the
+copy-A clear `0x400392f0` remains forbidden by the `out[5] <= 8` hang that originated the rule. Run 2
+(upstream-compile) is green: `luofu-clk.ko` cross-builds in CI at `dff5925` (success x2, after the honest
+`bed58e5` fail, block-comment fix, success cycle), the edited DTS lints at dtc 1.7.2 (dtb 4,506 B, sha256
+`732104b1...b3946`, errors 0, three cosmetic warnings), and `build/tmp/inta-spec/stage2.md` carries the
+ranked stage-2 driver inventory (CRG -> pinctrl -> PCIe RC -> endpoint -> glue -> wifidrv). Health: bound
+held on both lines, zero panics, pstore delta none, router healthy. Reported aux gaps: `vrec10` and
+`v-run2` wrote no verdict dir, `v-chip`'s landed in the wrong dir, and run 4's worker files (acceptance,
+rows, MATRIX) stayed missing though `tools/finish-evidence.sh` produced KNOBSET/cleanup/interp (D1).
+Next: the COMBINED QUIESCE RUNG (CONSUME + TWINCLOSE) plus the bounded re-enable probe.
