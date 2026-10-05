@@ -269,3 +269,31 @@ was never established and ROW 5's premise is false. **DEVICE: Site F ran, Site N
 (including the constant `N_SNT`), which the acceptance mis-read as a single-visit boot but which the pad's own
 deposits contradict, so page 14 (`0x157000`) did not retain the writes (a cell-selection defect). Health after
 recovery `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, hard rules held.
+
+## The twin/ETE probe: the run FAILED with no capture, the twin hypothesis is BLOCKED (2026-10-05)
+
+`gic-view.md` "ADDENDUM 11 (2026-10-05): the twin/ETE probe + the corrected witnesses" records the run the
+ADDENDUM 10 next threads named on the twin/ETE layer (the forward-hop layer behind the glue post-mask status,
+as distinct from the host-side copy A). Evidence `build/register-dumps/exp/20261005-130020/` (variant `inta3`,
+one `exp.sh` cycle via `run-inta3.sh`, `EXP RESULT: FAIL`, `exp_rc=1`, staged blob `build/tmp/fw-patched/
+inta3.bin` md5 `eee1f67370b56eca42316f6eeb490c45`, staged `.ko` md5 `e20bf7e571c5a57823e76b7fa849ebf8` at
+submodule `73b1230`, CI run 37312967151), adversarial verifier
+`build/register-dumps/diffs/20261005-131645-vrun8/verdict.txt` (FINAL CONFIRMED, the parent's own
+`CYCLE-FAILED.txt` central claim REFUTED) and instrument verifier
+`build/register-dumps/diffs/20261005T1315Z-vtool8/verdict.txt` (5/5 artifact checks CONFIRMED, one accepted
+spec deviation). Specs: `build/tmp/inta-spec/{twin.md,witness2.md,dtc.md}`. The knob v3 adds two `intapost`
+bits, `0x40` `twin-stim` (W1 the twin mask `0x40039ae8 <= rd & 0xfffffc20`, W2 the twin doorbell
+`0x40039ad4 |= 0x8`) and `0x80` `msi-test` (a read-only probe; `CONFIG_PCI_MSI=n` here), and widens v2's
+`0x20` snapshot with copy B's raw/mask/status and the ETE group, with no 42nd knob. The firmware instrument
+`inta3` is inta2 byte-for-byte except six Site-N cells moved onto the retention-verified page 10
+(`0x150058..0x150080`), per witness2.md FLAW 2, with an `N_SNT` retention sentinel. **ALL THREE BRANCH TABLES
+ARE NO-ROW**: the cycle died at step `[4/7]` (the done marker never appeared), so `capture-cmd.txt` never
+landed and there is no capture to re-parse - a NEGATIVE ON DATA, not a negative on the hypothesis. The twin
+hypothesis ("copy B drives `0000:00:00.0`'s pin") stays BLOCKED, not decided. **The parent's self-report is
+REFUTED:** a NEW pstore panic record (`dmesg-pstore_blk-3`, 69,508 B) in the inta3-only window IS this run's
+dump - `Comm: insmod`, `wifidrv1` frames, and the decisive delta vs inta2 `isr0=0` versus `isr0=6511173` plus
+~350 `[isr] irq=207 ... status=0x00000018` lines (~2.3e6 IRQ/s) to t=244 s. The boot PANICKED on a 207 IRQ
+storm with the glue copy-A post-mask status latched (`0x18`) the port's ISR could not clear; the record's
+window begins after the knob's print points, so it cannot name the step. The one re-run rule was honored (a
+device-side failure, not a named host-side cause). Health after recovery `WIPHY=2 IFACE=6 CAL_SUCC=1
+OMO_OFF=0 STAGED=0 LOADER=0`, pstore 2 records (blk-2 + the new blk-3), hard rules held.

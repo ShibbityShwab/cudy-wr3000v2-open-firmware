@@ -1902,3 +1902,158 @@ records, no new crash); git carries exactly the two expected tracked changes (th
 - **The take itself.** Site F says the id is still pending, not active, and the CPU still I-masked at the
   fall-through; a sampled instant at a later boot phase (after the routine's critical-section release
   0x826E0) is the read that would turn "unwitnessed" into a measured yes or no.
+
+# ADDENDUM 11 (2026-10-05): the twin/ETE probe + the corrected witnesses - THE RUN FAILED WITH NO CAPTURE / the twin-copy hypothesis BLOCKED, not decided (three branch tables all NO-ROW); the reset's signature is a 207 IRQ STORM left in a NEW pstore panic record
+
+The run that ADDENDUM 10's next threads named (the corrected 209 witness plus the retention-band
+Site-N cells) on the twin/ETE layer the vendor kernel never touches. Evidence
+`build/register-dumps/exp/20261005-130020/` (variant `inta3`, one `exp.sh` cycle via
+`build/tmp/wifidrv1-art/run-inta3.sh`, start 2026-10-05T13:00:19Z, `EXP RESULT: FAIL`, `exp_rc=1`,
+run log `run-inta3.log`), the staged blob `build/tmp/fw-patched/inta3.bin` (md5
+`eee1f67370b56eca42316f6eeb490c45`, == the boot's `/lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat`), the
+staged `.ko` md5 `e20bf7e571c5a57823e76b7fa849ebf8` (submodule `73b1230`, CI run 37312967151,
+`omo/phase22-hccaccept` only), the adversarial verifier
+`build/register-dumps/diffs/20261005-131645-vrun8/verdict.txt` (FINAL CONFIRMED with the parent's
+own `CYCLE-FAILED.txt` central claim REFUTED) and the instrument verifier
+`build/register-dumps/diffs/20261005T1315Z-vtool8/verdict.txt` (5/5 artifact checks CONFIRMED, one
+accepted spec deviation). The three spec reports are `build/tmp/inta-spec/twin.md` (the twin/ETE layer,
+the mechanism behind the endpoint INTA, and the MSI option), `build/tmp/inta-spec/witness2.md` (the two
+inta2 witness defects and their fixes) and `build/tmp/inta-spec/dtc.md` (the phase's real dtc, recorded
+in the port plan).
+
+## The knob v3 deltas
+
+The same `intapost` bitmask, four bits, no 42nd knob (the frozen 41-knob set holds). v2's `0x10`
+`dual-line` and `0x20` `snapshot` are joined by two new bits:
+
+| bit | name | action |
+| --- | --- | --- |
+| `0x10` | `dual-line` | the CORRECTED 209 witness (witness2.md FLAW 1): the source is now the KERNEL's IRQ for `0001:00:00.0` (the sysfs `.../irq` value, 209) plus a guarded `pci_get_domain_bus_and_slot()->irq` read, and the config `PCI_INTERRUPT_LINE` byte is a printed CROSS-CHECK that never gates `request_irq`. The guard is a compile-time offset test (`->irq` at `0x184` in the vendor headers, `0x1ac` in the CI's vanilla ones), so the load-safety is preserved where witness2.md's literal `BUILD_BUG_ON` would have failed the build. |
+| `0x20` | `snapshot` | WIDENED: copy B's raw/mask/status (CA `0x40039ae4/0xae8/0xaec`) and the ETE group's mask/clr/status (CA `0x40039508/0x50c/0x510`) join the config, MSI, and copy-A snapshot; the DELTA and the bounded wait now stop on twin raw/stat and ETE stat too; W3 (the vendor's own ETE clear, `oal_pcie_transfer_done`'s RMW) fires only if the ETE status latched. |
+| `0x40` | `twin-stim` | W1: CA `0x40039ae8 <= rd(0xae8) & 0xfffffc20` - the same register family and constant the vendor's own copy-A write uses (`pcie_ete_chn_res`, `0x3ff -> 0x20`), conditional on the twin mask not already reading `0x20`, readback-verified. W2: CA `0x40039ad4 |= 0x8`, the mirror of copy A's documented D2H set, conditional on W1 having taken. This is the one new candidate: a hypothesis, not a reproduction. |
+| `0x80` | `msi-test` | LAST and READ-ONLY. The target kernel has no MSI API (`CONFIG_PCI_MSI=n`; `/proc/kallsyms` has zero `pci_alloc_irq_vectors*`/`pci_irq_vector`/`pci_enable_msi` hits) while the CI's vanilla multi_v7 headers set `CONFIG_PCI_MSI=y`, so the twin.md section 4 shape cannot load here (the first knob-v3 artifact arrived with three UNDEFINED MSI symbols, `insmod` would have failed). The step PROBES and REPORTS: the cap/ctl/Enable/addr/data, the `msi_irqs` sysfs state, the target's API absence, and twin.md row 6's "MSI DEAD" negative. vtool8 accepted this as a justified deviation from the spec. |
+
+The v2 sequence is preserved (A baseline/gates, B `0xcece`, C H2D doorbell, D D2H bit 3, E fw D2H
+doorbell) and the v3 steps follow it. The knob's permitted new writes are exactly CA `0x40039ae8`
+(W1), CA `0x40039ad4` (W2) and CA `0x4003950c` (W3).
+
+## The cells
+
+The firmware instrument is `inta3`, inta2 byte-for-byte EXCEPT the six Site-N cell addresses, which
+move off the non-retaining page 14 (runtime `0x157000`) onto page 10 (runtime `0x150000`, the band that
+retained across the last two runs) at `0x150058..0x150080` - the first free 8-byte slots after the
+page-10 cells the trignat Pad A already uses (`A_S4..A_S8`/`A_P2`/`B_D0..B_D3`/`B_P3` end at
+`0x150050`). Exactly 12 bytes differ from inta2, all inside Pad A(N)'s six `movw` immediates. Site F
+keeps its page-13 cells (`0x155000`, which retained: `F_SNT` was present in inta2).
+
+| id | register | CA | cell (runtime) | capture (alias) | meaning |
+| --- | --- | --- | --- | --- | --- |
+| `N_ACT` | ISACTIVER2 w2 | `0x40161308` | `0x150058` | `0x40808058` | bit 12: 1 = taken/active at the next visit |
+| `N_ISP` | ISPENDR2 w2 | `0x40161208` | `0x150060` | `0x40808060` | bit 12 = pending at the next visit |
+| `N_HPP` | GICC HPPIR | `0x40160118` | `0x150068` | `0x40808068` | `0x4C` (pending) vs `0x3FF` (none) |
+| `N_OU0` | out[0] | `0x40039010` | `0x150070` | `0x40808070` | `8` = unconsumed, `0` = dispatcher ran |
+| `N_PSR` | CPSR (`mrs`) | n/a (core) | `0x150078` | `0x40808078` | I (bit 7) / F (bit 6) / M[4:0] |
+| `N_SNT` | retention sentinel | n/a | `0x150080` | `0x40808080` | `0x50AA7E49` (the pad ran; else VOID) |
+
+`N_SNT` is the retention guard witness2.md FLAW 2 asks for: a future zero read of it is flagged
+VOID-BY-RETENTION, not read as "the routine did not run". Site F's take cells are unchanged from
+ADDENDUM 10.
+
+## The honest branches (all three tables NO-ROW)
+
+The cycle died before any capture landed: `exp.sh` step `[4/7]` timed out (the done marker
+`omo-drv1: init done` never appeared within the 600 s bound), so step `[5/7]` (the capture) never ran
+and `capture-cmd.txt` does not exist. There is no capture to re-parse, so every branch is NO-ROW - a
+NEGATIVE ON DATA, not a negative on the hypothesis.
+
+- **twin.md section 6 (the forward hop, rows 1-9): NO ROW.** Zero `[intx3]` tags on the host. The twin
+  copy B raw/mask/stat (`0x40039ae4/0xae8/0xaec`) was never read; W1/W2 did not run
+  (`W1=no W2=no not-requested=False`); W3 did not run (`cleared=False skipped=False`); no MSI DEAD line
+  exists (the target kernel has no MSI API, so the probe is `rc`-less). `grA`/`grB`, `d207`, `d209`,
+  `dMSI` have no measurements. Rows 1-9 are all out of reach.
+- **witness2.md FLAW 1 (the corrected 209 witness): NO-ROW.** No `[intx2] sibling irq(irq=...)` line, no
+  `request_irq(N, IRQF_SHARED) rc=`, no `/sys/bus/pci/devices/0001:00:00.0/irq` reading, no 209
+  `/proc/interrupts` attribution for `omo-drv1-ep1` exists for this run. Nothing is claimed either way
+  about the v3 read-path fix.
+- **witness2.md FLAW 2 (the six N cells on the retention-verified page 10): NO-ROW.** `N_ACT/N_ISP/
+  N_HPP/N_OU0/N_PSR/N_SNT` and the `F_*` page-13 cells are all n/a. The retention question the run was
+  built to answer is UNANSWERED.
+
+## The reset's signature (the parent's self-report REFUTED)
+
+The `CYCLE-FAILED.txt` this run wrote claimed the box "went down without a trace" and that the lone
+`dmesg-pstore_blk-3` was an older boot. vrun8 FALSIFIED both. A NEW pstore panic record
+(`dmesg-pstore_blk-3`, 69,508 B) appeared in the window whose only device cycle is this RUN (the pstore
+set changed from `{blk-0, blk-1, blk-2}`, stable in every listing through the vrun7 live check at
+2026-10-05T12:04:12Z, to `{blk-2, blk-3}` at this run's own pstore check). It IS this run's dump:
+`Panic#1 Part1`, `Comm: insmod`, `wifidrv1` frames (`register_netdevice <- omo_add_virtual_intf+0xf0/0x12c
+<- omo_wifidrv1_init+0x13c/0x1000`), the same ifindex/ifname/hw shape as the inta2 boot with the timeline
+shifted +2.81 s / +3.11 s (consistent with v3's extra bounded-wait steps having run), and the decisive
+delta vs inta2: `isr0=0` in inta2 versus `isr0=6511173` in blk-3, plus ~350 `[isr] irq=207 ...
+status=0x00000018` lines (~2.3e6 IRQ/s) that inta2 does not have, ending at t=244 s. So the takeover boot
+PANICKED: a 207 interrupt STORM with the glue copy-A post-mask status latched (`0x18`) that the port's ISR
+could not clear, then the box died. The record's window begins mid-boot (the storm's own ~31 KB of `[isr]`
+output evicted everything earlier), which is why it carries none of the knob's `[intx2]`/`[intx3]`/`[sig]`
+lines - the absence of v3 markers is a WINDOW artifact, not evidence the knob did not run. WHICH v3 step
+latched the storm is NOT determinable from this record; `CYCLE-FAILED.txt`'s candidate list stays a
+hypothesis, and its "no data exists" premise and "not from this run" attribution are dead. What survives
+of `CYCLE-FAILED.txt`: the facts it quoted from blk-3 reproduce verbatim, the no-re-run decision was
+correct, and the candidate-cause list (a)-(e) remains a hypothesis list.
+
+## The bounds (declared, not hidden)
+
+1. **No capture, one boot.** The knob v3 never delivered a `[intx3]`/`[intx2]`/cell reading on the host.
+   The device-side trace that does exist is the pstore record, which begins after the knob's print
+   points, so it can bound the FAILURE shape (a 207 storm) but cannot name the step.
+2. **The twin hypothesis is BLOCKED, not decided.** "The twin copy B drives `0000:00:00.0`'s pin" stays a
+   hypothesis: no record read has ever touched `0xae4/0xaec` (only mask `0xae8` in ADDENDUM 10). twin.md
+   rows 1/3, which decide it, were never reached.
+3. **The one-re-run rule was honored (and the failure is device-side).** The authorised re-run is for a
+   named HOST-side cause; the box reset while the takeover module was up, so this cycle stands as a FAIL
+   and no re-run was made. (The CI re-runs recorded in the artifact note are host-side compile fixes.)
+4. **The MSI step is read-only.** No `pci_alloc_irq_vectors` shape can run here; the step is a probe, so
+   it cannot be the cause of the storm.
+5. **Instrument pins re-verified host-side.** The blob regenerates byte-identical (md5 `eee1f673...`,
+   928,920 B) and the `.ko` has NO MSI-shaped undefined symbol, so the load-safety claim holds; vtool8
+   NOTE 1 records the one new undefined symbol (`simple_strtol`, an unconditional `EXPORT_SYMBOL` in 5.10)
+   that local artifacts could not resolve but which is almost certainly fine.
+6. **Hard rules respected.** No write of CA `0x400392f0` (copy-A W1C) or `0x40039af0` (copy-B W1C); no
+   read of the ack IAR `0x4016010c` or the RC misc `0x10161000`; the gate register `0x4000010c` is a
+   different address and is the only `0x...10c` touched; the ko was staged as `wifidrv1.ko`; the recovery
+   auto-deleted the staged `.omo-pat`.
+
+## Verification
+
+The shipped acceptance re-runs to FAIL/`rc=1` (the documented fail-closed branch on the missing capture;
+`acceptance.txt` is `--- FAIL: capture-cmd.txt missing`), and `gen_interp_inta3.py` reproduces the shipped
+`interp.txt` byte-for-byte (sha256 `acd8fa5a...`), carrying the three honest NO-ROW rows. vrun8's
+independent parser confirms no `[intx3]`/`[intx2]`/cell/counter/sanity datum exists in any host file, and
+reproduces the pstore forensics that refute the self-report. vtool8 returns 5/5 artifact checks CONFIRMED
+(the submodule commit `73b1230` pushed on `omo/phase22-hccaccept` only, the independently re-fetched CI
+`.ko`, the firmware selftest plus ALL 14 frozen pins plus the new `INTA3_MD5`, two byte-identical
+regenerations, the capstone of every inta3 site (43/43), the hook/run scan, and the TS-gate cases 6/6),
+with the accepted MSI deviation and the two recorded notes (the `simple_strtol` symbol, and `exp.sh`'s
+run-dir creation timing on a step-`[5/7]`-never-ran cycle). Live read-only device check (3 ssh round-trips,
+no write, no reboot): HEALTHY - stock FIRMWARE.bin md5 `0e530b976d5a20e87358671f1a577695`, zero `.omo-pat`/
+`.omo-off`/staged-ko/loader leftovers, lsmod `hi5622v100_plat + hi5622v100_wifi` with no `wifidrv1`,
+`WIPHY=2 IFACE=6` (`vap0 vap1 vap3 vap8 vap9 vap11`), `[SUCC]` both bands, pstore 2 records (blk-2 + the
+new blk-3), 209 live again (`hisi_pci_intx`), 207 reading 0. The router is healthy and carries no
+filesystem residue of this run (only the pstore dump). Git carries exactly the two expected tracked
+changes (the `opensource` gitlink `4ee616e -> 73b1230` and `tools/patch_fw_scratch.py`, +208/-11), master
+untouched, submodule `73b1230` in sync on `omo/phase22-hccaccept`.
+
+## The next threads
+
+- **Re-open the inta3 FAIL against blk-3 as EVIDENCE.** The 207 storm with the glue copy-A post-mask status
+  pinned `0x18` is a measured device-side signature; the parent should decide whether the no-re-run rule
+  still holds now that the failure has a shape (a 207 IRQ storm is device-side, so by the rule it does).
+- **Fix the mis-attribution.** Correct `CYCLE-FAILED.txt` and the ledger attribution so the record is not
+  misfiled as an older boot; a NEW panic record exists and is this run's.
+- **Ring the twin without the corrected 209 witness live.** If the storm is the direction of interest, the
+  next cycle should isolate ONE v3 delta at a time (the widened twin/ETE reads first, then W1, then W2),
+  so a storm can be attributed to a named step rather than possibly to the newly-live 209 ISR path.
+- **Fix the 209 caller and the retention page, then re-test.** The corrected 209 source and the six page-10
+  N cells remain the two named fixes; they are built and multi-verified, just never captured.
+- **The take itself.** Site F still says the id is pending, not active, and the CPU still I-masked at the
+  fall-through; a sampled instant at a later boot phase (after the routine's critical-section release
+  `0x826E0`) is the read that would turn "unwitnessed" into a measured yes or no.

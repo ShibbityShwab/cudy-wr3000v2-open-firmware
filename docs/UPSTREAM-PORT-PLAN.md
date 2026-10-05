@@ -150,6 +150,20 @@ from the single-CRG model `drivers/clk/hisilicon/crg-hi3798cv200.c`, with `#cloc
 tree already carries the whole gate/PLL/mux offset-bit geometry and the `softrst_val0/1` magic, so the driver
 tables are mechanical transcription.
 
+DTS compiled with a REAL dtc (2026-10-05, `build/tmp/inta-spec/dtc.md`): the tool of record is upstream dtc
+v1.7.2, built locally from the `dgibson/dtc` v1.7.2 tarball (sha256 `3a3f5804...572e`) with MinGW-W64 gcc
+16.2.0 plus winflexbison 2.5.25 (the repo venv has no C toolchain and no pip; the system python 3.12 pip only
+fetches sdists, and the PyPI `dtc` package is a dataclass generator, not the compiler, while the prebuilt
+Windows binaries have unverified provenance). After the standard `cpp` pass, `dtc -I dts -O dtb` compiles
+`opensource/docs/soc/luofu-r116.dts` to `build/tmp/inta-spec/luofu-r116.dtb` (4,554 B, sha256
+`a1e0d822f23691ff96efaaec3a5def0d26923d642714fa8ab674b2a408f55823`, magic `d00dfeed`, 29 nodes / 145
+properties, every `&label` resolved to a phandle) with **exit 0, 0 errors, 4 warnings**, all four of them
+`unit_address_vs_reg` style nits (source hygiene, not syntax; the DTS was NOT edited). Negative controls prove
+the binary discriminates: a deliberately broken DTS aborts on a syntax error, an unresolved `&nope`
+reference errors, and the raw vendor `luofu-r116-pinned.dts` fails to parse (its injected bytecode dump is
+not DTS) while the re-expressed skeleton compiles clean. So the Stage 1 skeleton is now compile-verified by a
+real device-tree compiler, and the `stage1b` fallback's `cpp`-plus-sanity-parse result is confirmed.
+
 ## 5. Source URLs (mainline evidence)
 
 - OpenWrt targets list, no HiSilicon router target (no `luofu`/`hsan`/Hi5671): https://github.com/openwrt/openwrt/tree/master/target/linux
