@@ -2326,11 +2326,11 @@ static void omo_intx2_delta(const char *tag, const struct omo_intx2_snap *p,
 	same[0] = '\0';
 #define OMO_CH(fmt, ...) do { \
 	if (n < (int)sizeof(ch)) \
-		n += scnprintf(ch + n, sizeof(ch) - n, fmt, __VA_ARGS__); \
+		n += scnprintf(ch + n, sizeof(ch) - n, fmt, ##__VA_ARGS__); \
 } while (0)
 #define OMO_SM(fmt, ...) do { \
 	if (m < (int)sizeof(same)) \
-		m += scnprintf(same + m, sizeof(same) - m, fmt, __VA_ARGS__); \
+		m += scnprintf(same + m, sizeof(same) - m, fmt, ##__VA_ARGS__); \
 } while (0)
 
 	if (p->cmd != c->cmd) { OMO_CH("cmd %04x->%04x ", p->cmd, c->cmd); any = true; } else OMO_SM("cmd ");
