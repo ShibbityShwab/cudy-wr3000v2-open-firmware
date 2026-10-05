@@ -133,6 +133,23 @@ tree and only the bindings re-expressed (free bindings in mainline form, vendor 
 `hisilicon,luofu-*` placeholders with `status = "disabled"`). It is not buildable yet; the build recipe and
 file-by-file rationale live in the stage-1 spec at `build/tmp/inta-spec/stage1.md`.
 
+DTS compile check + clocks decision (2026-10-05, `build/tmp/inta-spec/stage1b.md`): the check ran as a
+fallback, because no `dtc`/`fdt*` binary exists anywhere in the repo or on PATH, the repo venv has no pip,
+and the PyPI `dtc` package is a dataclass generator, not the compiler. The substitute was the kernel's own
+preprocess pass, `cpp -P -nostdinc -x assembler-with-cpp opensource/docs/soc/luofu-r116.dts` (exit 0, empty
+stderr, every `LUOFU_CLK_*` macro expanded), followed by a stdlib sanity parse (brace/quote balance, node and
+property grammar over 29 nodes, phandle resolution, `compatible` vs the `dt.md` table, clock/reset cell
+counts against each provider): CLEAN, 0 errors, 0 off-table compatibles, 0 cell-count mismatches, so the
+skeleton demands no DTS edit. Two non-blocking `dtc` warnings remain for a real `make dtbs` (unknown
+`hisilicon,luofu-*` compatibles until bindings land, and `L2: l2-cache` carrying `reg` without a unit
+address). Decision on clocks (`stage1.md`/`stage1b.md`): the fixed input clocks reuse free bindings today
+(`fixed-clock` for the oscillators and AHB/APB, `fixed-factor-clock` for the TWD /4 divider), while the CRG
+(gates/PLLs/muxes plus reset) has no mainline driver and needs one new `hisilicon,luofu-crg` binding cloned
+from the single-CRG model `drivers/clk/hisilicon/crg-hi3798cv200.c`, with `#clock-cells = <1>` and
+`#reset-cells = <2>` (offset, bit) reusing the shared `drivers/clk/hisilicon/reset.c` helper; the pinned
+tree already carries the whole gate/PLL/mux offset-bit geometry and the `softrst_val0/1` magic, so the driver
+tables are mechanical transcription.
+
 ## 5. Source URLs (mainline evidence)
 
 - OpenWrt targets list, no HiSilicon router target (no `luofu`/`hsan`/Hi5671): https://github.com/openwrt/openwrt/tree/master/target/linux

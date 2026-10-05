@@ -248,3 +248,24 @@ drain instant and "parked in the `0xcece` handshake" is contradicted by this run
 device is healthy; hard rules held (IAR never read, the gate CA `0x4000010c` is the only `0x...10c`
 touched). Next threads: the forward hop (the endpoint's INTx config-space state), a post-unlock device take
 sample, and a re-visit for the `L2` delayed cells.
+
+## The INTA knob v2 + the inta2 run: the 209 witness and the post-exit take (2026-10-05)
+
+`gic-view.md` "ADDENDUM 10 (2026-10-05): the forward-hop probe + the post-unlock take" records the run that
+answered ADDENDUM 9 - CORRECTION's two named next threads in one boot. Evidence
+`build/register-dumps/exp/20261005-115837/` (variant `inta2`, one `exp.sh` cycle, staged blob
+`build/tmp/fw-patched/inta2.bin` md5 `545e77a5b12b4e0da8a6923eea29672c`, staged `.ko` md5
+`4d56a0ae3c6f860c86b20a7c3c819605` at submodule `0398e20`, CI run 37305885971), adversarial verifier
+`build/register-dumps/diffs/20261005-115836-vrun7/verdict.txt` (NOT CONFIRMED as a positive) and instrument
+verifier `build/register-dumps/diffs/20261005T1200Z-vtool7/verdict.txt` (5/5 artifact checks CONFIRMED, one
+functional defect found live). Specs: `build/tmp/inta-spec/{intx.md,take2.md,devcpu.md}`. The knob v2 adds
+two `intapost` bits, `0x10` `dual-line` (claim the sibling and take a second counter on 209) and `0x20`
+`snapshot` (the read-only config/MSI/glue comparison), with no 42nd knob. **HOST: no row.** The port read the
+sibling's config `PCI_INTERRUPT_LINE` as `0xff` and skipped `request_irq(209)`, so no 209 measurement exists;
+the same capture shows the kernel owns 209 (sysfs `irq=209`, lspci pin A -> IRQ 209), so the decisive witness
+was never established and ROW 5's premise is false. **DEVICE: Site F ran, Site N is void.** Site F (the
+`0xcece` gate's fall-through `0x86F7E`) is a coherent pre-take baseline (`F_ISP` = `0x1020` bit 12 SET,
+`F_ACT` = `0x0`, `F_PSR` I = 1, `F_OU0` = `0x8`, `F_SNT` = `0x50AA7E49`); all six `N_*` cells read 0
+(including the constant `N_SNT`), which the acceptance mis-read as a single-visit boot but which the pad's own
+deposits contradict, so page 14 (`0x157000`) did not retain the writes (a cell-selection defect). Health after
+recovery `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, hard rules held.

@@ -1736,3 +1736,169 @@ cases passed 6/6. Both verifiers confirm the hard rules held.
 - **A re-visit for the L2 delayed cells.** The `L2_*` block never re-wrote because nothing returned to the
   park, so the delayed snapshot needs a pad that re-samples on a later boot phase, not one that exits with
   the loop.
+
+# ADDENDUM 10 (2026-10-05): the forward-hop probe + the post-unlock take - HOST: NO ROW / the 209 witness never established (config INTERRUPT_LINE read 0xff); DEVICE: SITE F RAN, SITE N VOID (a cell-selection defect, not a single-visit boot)
+
+This is the run that answered ADDENDUM 9 - CORRECTION's two named next threads in one boot: the forward
+hop on the host side (`intx.md`) and the post-unlock take on the device side (`take2.md`), on the INTA knob
+v2. The evidence is `build/register-dumps/exp/20261005-115837/` (variant `inta2`, one `exp.sh` cycle via
+`build/tmp/wifidrv1-art/run-inta2.sh`, start 2026-10-05T11:58:36Z, run log `run-inta2.log`), the staged blob
+is `build/tmp/fw-patched/inta2.bin` (md5 `545e77a5b12b4e0da8a6923eea29672c`, == the boot's
+`/lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat`), the staged `.ko` is md5 `4d56a0ae3c6f860c86b20a7c3c819605`
+(submodule `0398e20`, CI run 37305885971), the adversarial verifier is
+`build/register-dumps/diffs/20261005-115836-vrun7/verdict.txt` (NOT CONFIRMED as a positive, two recorded
+mis-attributions) and the instrument verifier is
+`build/register-dumps/diffs/20261005T1200Z-vtool7/verdict.txt` (5/5 artifact checks CONFIRMED, one functional
+defect found live). The three spec reports are `build/tmp/inta-spec/intx.md` (the host knob v2),
+`build/tmp/inta-spec/take2.md` (the post-exit sites and cells) and `build/tmp/inta-spec/devcpu.md` (why the
+device CPU never took the ringed id).
+
+## The knob v2 deltas
+
+Two new bits on the existing `intapost` knob (no 42nd knob, the frozen 41-knob set kept):
+
+| bit | name | action |
+| --- | --- | --- |
+| `0x10` | `dual-line` | claim the sibling `0001:00:00.0`, read its `PCI_INTERRUPT_LINE`, and `request_irq` it `IRQF_SHARED` under the `omo-drv1-ep1` action, incrementing a second counter `omo_isr2_n` beside `omo_isr_n`. This is the decisive addition: the vendor's live line is 209, not 207. |
+| `0x20` | `snapshot` | the read-only comparison: config (COMMAND/STATUS/INTERRUPT_LINE/PIN), the bounded MSI cap walk, and the glue block (raw `0x2e4`, mask `0x2e8`, status `0x2ec`, twin `0xae8`, ETE `0x508`, out[0]/out[1]) snapshotted before and after every documented write step, deltas printed. |
+
+The port commits are `3089cb7` (the v2 build) and `0398e20` (the one re-run's fix: the zero-variadic
+`OMO_SM` macro needed `##__VA_ARGS__`, a named host-side compile cause, so the single CI compile re-run
+37305488042 -> 37305885971 was authorised), both on `omo/phase22-hccaccept` only. Three conditional enable
+writes are designed (E1 COMMAND bit 10, E2 glue mask `0x2e8`, E3 MSI enable) and all three fired nothing this
+run: E1/E2/E3 each printed `ok` (the gates were already at the vendor state, COMMAND bit 10 clear, mask open,
+MSI disabled). The knob's writes this boot are exactly CA `0x4000010c` (step B), CA `0x400392d4` (steps C, D)
+and CA `0x40101434` (step E).
+
+## The `[intx2]` steps (verbatim in substance)
+
+| step | CA written | value | readback | glue raw -> stat after | isr207 | isr209 |
+| --- | --- | --- | --- | --- | --- | --- |
+| A (baseline) | - | - | - | `0x1` -> `0x11` | 0 | 0 |
+| B `0xcece`-unlock | `0x4000010c` | `0x0000cece` | `0x0000cece` | `0x1` -> `0x8`, `0x11` -> `0x18` | 0 | 0 |
+| C h2d-doorbell | `0x400392d4` | `0x1` | `0x0` | `0x8`, `0x18` (pinned) | 0 | 0 |
+| D d2h-set-bit3 | `0x400392d4` | `0x8` | `0x0` | `0x8`, `0x18` (pinned) | 0 | 0 |
+| E fw-d2h-doorbell | `0x40101434` | `0x1` | `0x0` | `0x8`, `0x18` (pinned) | 0 | 0 |
+
+The `0xcece` step wrote the designed unlock to CA `0x4000010c` and read it back (`rb=0xcece`), the glue
+latched (raw bit 3 `0` -> `1`, post-mask stat `0x11` -> `0x18` = bits 3+4, `0x11` = bit 0 raw plus bit 4), and
+out[0] fell `0x8` -> `0x0`. The three ring steps C/D/E changed nothing at all (raw pinned `0x8`, status pinned
+`0x18`, isr `0` -> `0` each, 2000 ms each). Each tag also carries `cmd=0006` (INTx enabled), `sta=0810`,
+`line=cf pin=01` for the claimed EP0, `msi{found=1 cap=50 ctl=0180 en=0 addr=0 data=0}`, glue mask `0x20`
+(bits 3/4 open), twin `0x3ff`, ETE `0x3f201818`, out0/out1.
+
+## The cells
+
+Site F, the gate's fall-through at file `0x86F7E` (new pad, stock `bde8f843` replaced), one read at the first
+instant after the loop exits:
+
+| id | register | CA | value | meaning |
+| --- | --- | --- | --- | --- |
+| `F_ACT` | ISACTIVER2 w2 | `0x40161308` | `0x0` | bit 12 CLEAR: the IAR was NOT read at the fall-through |
+| `F_ISP` | ISPENDR2 w2 | `0x40161208` | `0x1020` | bit 12 SET: id `0x4c` STILL PENDING |
+| `F_HPP` | GICC HPPIR | `0x40160118` | `0x4C` | the CPU interface names id `0x4c` |
+| `F_OU0` | out[0] | `0x40039010` | `0x8` | UNCONSUMED at the fall-through |
+| `F_PSR` | CPSR | n/a (core) | `0x60000193` | I = 1 (IRQs masked), SVC |
+| `F_SNT` | page-13 sentinel | n/a | `0x50AA7E49` | the pad RAN |
+
+Site N, the send site's next-visit entry at file `0x86F5A` (Pad A's entry widened), all six cells read
+`0x00000000` including `N_SNT` and `N_PSR`, values that cannot legitimately be zero. Kept baseline cells from
+the inta v1 addresses: `B_D4` = `0x0` (ISACTIVER2 not active at the drain), `B_D5` = `0x20000193` (I = 1),
+`A_S3` = `0x1020` (the ring reached the GIC), `A_S4` = `0x4C` (HPPIR). Sentinels `A_P1` = `A_P2` = `B_P3` =
+`B_P4` = `F_SNT` = `0x50AA7E49` all PRESENT; `N_SNT` ABSENT.
+
+## Branch one (host): no row, the 209 witness was never established
+
+No `intx.md` section 4.5 row is satisfied, because the decisive 209 measurement does not exist. The port's
+`omo_dual_line_attach` reads the sibling's config `PCI_INTERRUPT_LINE` (0x3c) and gets `0xff` on this
+takeover boot (`[intx2] no sibling INTx virq (irq=255) - the 209 witness is unavailable`), so it skips
+`request_irq(209)` and there is no `209:` line and no `[isr2]` in `/proc/interrupts`; `isr209` stays 0 on
+every tag, but that zero is VACUOUS (the line was never requested). The SAME capture shows the kernel owns
+209 (`sysfs 0001:00:00.0 irq=209`, `lspci pin A routed to IRQ 209`), and the pre-run snapshot had it live
+(`interrupts-pre.txt: 209: 158016 0 GIC-0 95 Level hisi_pci_intx`). So `intx.md`'s ROW 1
+(FORWARD HOP LIVE, `d209 > 0`) is UNREACHABLE with this build, and ROW 5's premise ("both lines enabled
+and quiet while the glue latches") is FALSE: line 209 was never enabled. The only meaning-supported
+description is the ROW-8 case (the 209 witness is unavailable), but even ROW 8's literal predicate is not
+met (it expects EP1 unclaimable, and the observed cause is a config-space read of `0xff`), and ROW 8 says
+"report and stop, no write" while the module reported and then ran steps B/C/D/E anyway. Root cause is the
+data source, not a hardware absence: EP0's config byte reads `0xcf` correctly, EP1's reads `0xff`, and the
+kernel's 209 for the sibling is the DT / `map_irq` assignment (the RC1 pin routed by the pcie node), which
+sysfs and lspci report from `/sys`, not the config byte. So the host side of this run is a NEGATIVE: the
+decisive witness was not obtained, and the device did not fail to drive 209, our module never listened to
+it.
+
+## Branch two (device): Site F ran, Site N is void - a cell-selection defect, not a single-visit boot
+
+Site F DID run (`F_SNT` present) and its reading is a coherent pre-take baseline: id `0x4c` is STILL PENDING
+and NOT active at the fall-through (`F_ISP` bit 12 SET, `F_ACT` bit 12 CLEAR), the CPU is still I-masked
+(`F_PSR` I = 1), and out[0] is unconsumed (`F_OU0` = `0x8`). That is `take2.md` section 4 ROW 3 in form
+(STILL-PENDING-UNTAKEN), and the take is still UNWITNESSED, exactly the residual the inta v1 run left open.
+The shipped acceptance classified it as ROW 4 NO-SAMPLE with the cause "the routine was not re-entered in
+this boot (single visit)", and that cause is CONTRADICTED by the same pad's own deposits. The send pad is a
+straight-line block: entered by the single instruction site `0x86F5A`, it writes `A_E0`/`A_E1`, then the six
+`N_*` cells, then the reproduced post, the glue mask, out[0] = 8, the `A_S0..A_S8` ring witnesses and
+`A_P1`/`A_P2`. In the capture every LATE deposit is present (`A_S0` = `0x8` ... `A_P2` = `0x50AA7E49`)
+while the `N_*` block is uniformly `0x0`, and two of the six `N_*` values cannot be zero if the block ran
+(`N_SNT` is the constant `0x50AA7E49`, `N_PSR` is a live `mrs` CPSR). A straight-line pad cannot half-run,
+so page 14 (runtime `0x157000`, alias `0x4080E000`) did not RETAIN the pad's writes: a cell-selection or
+mapping defect (the scanner took the next all-zero page without evidence it is writable), not a single-visit
+boot. Pages 9/10/11/12/13 all retain their deposits (`A_*`, `B_*`, `F_*`), so the defect is specific to
+page 14.
+
+## The two mis-attributions (carried as caveats on the labels)
+
+1. **Host**: the module message reads "the 209 witness is unavailable" as if a hardware fact, when the same
+   capture proves the kernel owns 209; the defensible statement is that the port's read of the sibling's
+   config `PCI_INTERRUPT_LINE` returned `0xff` and `request_irq(209)` was skipped. The shipped interp
+generator would have classified this run as ROW 5 ("device-internal"), which over-states a negative built
+on a vacuous `d209 == 0`; the generator has no branch for "209 witness unavailable".
+2. **Device**: the acceptance's "the routine was not re-entered (single visit)" is contradicted by the
+   pad's own other deposits (above). `take2.md` section 4 ROW 4 and section 5 bound 2 also cannot both hold,
+   and the capture matches neither (the `N_*` cells are absent, not a first-visit baseline).
+
+## The bounds (declared, not hidden)
+
+1. **Instants, not a timeline.** `F_*` is one read at the fall-through; `N_*` would be one read at the send
+   site's next entry, but it is void here. The knob's per-step wait is bounded at 2000 ms (50 ms steps,
+   stop on first change), so a delivery between samples is not observable.
+2. **`isr207` = `isr209` = 0 is a count at tag instants**, and the 209 zero is vacuous (never requested).
+3. **The A_*/B_*/F_*/N_* cells are alias-only** (above the `0x104000` boundary, BAR0 view reads 0), quoted
+   from the ACP alias; the S/C/E cells agree at both views.
+4. **The CPSR read is form-dependent**: if a part returned flags only, `F_PSR`/`N_PSR` read 0 and the
+   row-3 split is undecidable.
+5. **Zone gap at verification time**: `pack-inta2-evidence.sh` was not run, so the boot dir carries no
+   `interp.txt`/`acceptance.txt`/`KNOBSET.txt`/`cleanup.txt`/`pstore-check.txt`; the verifier produced the
+   acceptance independently (`acceptance-rerun.txt`).
+6. **Hard rules respected**: no write of CA `0x400392f0`; no read of `0x10161000`; no read of the IAR
+   `0x4016010c` (the gate CA `0x4000010c` is a different address; E1/E2/E3 did not fire).
+
+## Verification
+
+The shipped acceptance re-runs to 100 passed / 4 failed (exit 1), and the four failures are the honest
+structural consequences of the two empties (`N_SNT` absent; no `request_irq(209)`; no `209` /proc line).
+The verifier's independent parser reproduces all 53 labelled reads, the dual-view agreement
+(`S1` = `0x1000`, `S1+4` = `0x40161108`, `S2` = `0x1`, `S2+4` = `0x50AA7E49`), and the absence of dead
+reads (no `0xffffffff`/`0xdeadbeef`), and returned NOT CONFIRMED as a positive with the two mis-attributions
+recorded. The instrument verifier returned 5/5 artifact checks CONFIRMED (the submodule commit, the
+independently re-fetched CI `.ko`, the selftest and all pins plus the new `INTA2_MD5`, two byte-identical
+regenerations matching the staged md5 `545e77a5...`, the capstone of the new sites, the hook read-only scan
+and the runner's TS gate) with ONE functional defect found live: the knob's `0x10` dual-line bit does not
+attach (the config `PCI_INTERRUPT_LINE` read of `0xff` above), so the instrument's headline measurement is
+not delivered. Suggested fix: source the sibling virq from `omo_ep1_dev->irq` (the kernel's assigned 209)
+with the config byte only as a fallback. Provenance: the `inta2` blob regenerates byte-identical (size
+928920 B), the changed bytes all sit inside the six sites and seven pads, no forbidden CA is touched, the
+artifact zip's sha256 == the API digest for CI run 37305885971, and `patch_fw_scratch.py --selftest` passes
+with the new pin. Live read-only device check: the boot is HEALTHY (stock md5
+`0e530b976d5a20e87358671f1a577695`, 0 leftovers, 2 wiphys / 6 interfaces, `[SUCC]` both bands, 3 pstore
+records, no new crash); git carries exactly the two expected tracked changes (the `opensource` gitlink and
+`tools/patch_fw_scratch.py`), both masters untouched, submodule `0398e20` in sync on `omo/phase22-hccaccept`.
+
+## The next threads
+
+- **Fix the 209 witness source.** Take the sibling virq from `omo_ep1_dev->irq` (209) rather than the domain
+  1 config `PCI_INTERRUPT_LINE` (which reads `0xff`), so the forward-hop row becomes testable at all.
+- **Fix the page-14 cell defect.** Re-pick the Site-N page with a writability check (or move Site N onto a
+  page already proven to retain deposits) before the post-exit instrument can adjudicate a take.
+- **The take itself.** Site F says the id is still pending, not active, and the CPU still I-masked at the
+  fall-through; a sampled instant at a later boot phase (after the routine's critical-section release
+  0x826E0) is the read that would turn "unwitnessed" into a measured yes or no.
