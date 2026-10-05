@@ -16,8 +16,8 @@ vendor binaries**, no firmware images, no keys and no credentials. See `NOTICE.m
 | `docs/phase2/` | Detailed decodes: power and regulatory tables, the `alg` dispatch map, and their verification report. |
 | `docs/phase3/` | Full `alg` command table, kernel-trace wire capture, firmware-blob forensics (added by the analysis lanes; see the files for their current state). |
 | `docs/systime-rce-writeup.md` | The command-injection finding in the vendor `systime` page (also published as a gist). |
-| `docs/phase49/gic-view.md` | The GIC delivery study: the device reads its own GIC across the post-unmask ring tests, and ADDENDUM 9 (2026-10-05) records the dual-sided INTA test, ROW 2 RING-PENDING-NOT-TAKEN plus VIRQ 207 owned. |
-| `docs/UPSTREAM-PORT-PLAN.md` | The honest inventory and staged roadmap for our own fully-current OpenWrt (our kernel plus our drivers), with the `docs/soc/luofu-r116.dts` stage-1 skeleton. |
+| `docs/phase49/gic-view.md` | The GIC delivery study: the device reads its own GIC across the post-unmask ring tests, ADDENDUM 9 (2026-10-05) records the dual-sided INTA test (ROW 2 RING-PENDING-NOT-TAKEN plus VIRQ 207 owned), and ADDENDUM 13 records the max-parallel sweep: the deliberate storm with the bound tripped, the ladder ranking, the 209 witness source, and the folded CRG node with the `lab/luofu-clk/` skeleton. |
+| `docs/UPSTREAM-PORT-PLAN.md` | The honest inventory and staged roadmap for our own fully-current OpenWrt (our kernel plus our drivers), with the `docs/soc/luofu-r116.dts` stage-1 skeleton, the folded `crg:` clock+reset node, and the `lab/luofu-clk/` driver skeleton. |
 | `tools/make_custom_tar_v3.py` | Builds a custom rootfs tar from a stock rootfs tar you extracted from **your own** device. |
 | `tools/wifi-cal-snapshot.sh` / `wifi-cal-restore.sh` | Snapshot and restore the Wi-Fi calibration state, dry-run by default. |
 | `tools/web-login.sh` / `rce-probe.sh` | Log into the vendor web UI and probe the systime page (for testing your own fix). |
