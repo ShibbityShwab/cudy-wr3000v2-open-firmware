@@ -1,0 +1,50 @@
+name: lab-module-build
+
+# Sibling of build-load-test-module.yml. That workflow triggers on master only,
+# which a push to an agent branch (the only branch we push, omo/*) cannot
+# trigger; this lane carries the same ARM cross toolchain + 5.10.201 headers and
+# builds a single lab module so an omo/* push gets a real cross-compile.
+# Currently the target is lab/luofu-clk (stage-1 CRG skeleton, no HW writes).
+
+on:
+  push:
+    branches: [ 'omo/**' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+
+      - name: vanilla kernel source
+        run: |
+          curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
+          tar xf linux.tar.xz
+          sed -i 's|#define MODULE_ARCH_VERMAGIC_P2V "p2v8 "|#define MODULE_ARCH_VERMAGIC_P2V ""|' linux-5.10.201/arch/arm/include/asm/vermagic.h
+          grep -n 'P2V' linux-5.10.201/arch/arm/include/asm/vermagic.h
+
+      - name: prepare kernel for external modules
+        run: |
+          cd linux-5.10.201
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          scripts/config --enable SMP --disable PREEMPT --enable MODULE_UNLOAD --disable MODVERSIONS --disable ARM_PATCH_PHYS_VIRT --set-str LOCALVERSION ""
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules_prepare -j"$(nproc)"
+
+      - name: build luofu-clk module
+        run: |
+          cd lab/luofu-clk
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
+      - name: show vermagic
+        run: strings lab/luofu-clk/luofu-clk.ko | grep -m1 vermagic
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luofu-clk-ko
+          path: lab/luofu-clk/luofu-clk.ko

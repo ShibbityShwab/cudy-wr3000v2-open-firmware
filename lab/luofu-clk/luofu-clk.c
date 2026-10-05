@@ -3,11 +3,14 @@
  * luofu-clk: stage-1 skeleton for the Hi5671Y "luofu" CRG clock + reset
  * controller (DT compatible "hisilicon,luofu-crg").
  *
- * ======================  NOT-YET-COMPILED  ======================
- * This is a DESIGN SKELETON, not a buildable driver.  It carries the shape
- * (of_match_table + probe/remove + the regmap plan) that the stage-1 bring-up
- * will fill in; the hisi_clk_*/reset helpers and the real clock-data wiring
- * are left as TODO.  Do not build it against the stock tree as-is.
+ * ==========================  SKELETON  ==========================
+ * A DESIGN SKELETON: it carries the shape (of_match_table + probe/remove +
+ * the regmap plan) that the stage-1 bring-up fills in; the hisi_clk_*/reset
+ * helpers and the real clock-data wiring stay TODO.  It COMPILES against the
+ * vanilla 5.10.201 arm headers in the CI cross-build
+ * (.github/workflows/lab-module-build.yml -> lab/luofu-clk, plus the
+ * build-load-test-module.yml lane) and performs NO register writes: probe
+ * only maps the page and logs the transcribed table sizes.
  * ================================================================
  *
  * Spec: build/tmp/inta-spec/clocks2.md sec 3.  The reference implementation is
@@ -189,6 +192,12 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	 *       on the same MMIO page; #reset-cells=<2> => args[0]=reg-offset,
 	 *       args[1]=bit.  Reproduce LUOFU_SOFTRST_VAL0/1 in the reboot path. */
 
+	/* Keep the transcribed geometry live (not dead code) and prove the
+	 * tables are wired: log the sizes only -- no register access here. */
+	dev_info(&pdev->dev, "luofu-crg: %zu gates, %zu muxes, %zu plls (skeleton)\n",
+		 ARRAY_SIZE(luofu_gates), ARRAY_SIZE(luofu_muxes),
+		 ARRAY_SIZE(luofu_plls));
+
 	platform_set_drvdata(pdev, crg);
 	/* TODO: return the real registration result once the tables are wired. */
 	return 0;
@@ -231,4 +240,4 @@ module_init(luofu_crg_init);
 module_exit(luofu_crg_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton, NOT-YET-COMPILED)");
+MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton)");

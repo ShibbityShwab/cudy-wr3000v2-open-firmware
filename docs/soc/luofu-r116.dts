@@ -82,7 +82,7 @@
 		};
 	};
 
-	memory {
+	memory@80500000 {
 		device_type = "memory";
 		reg = <0x80500000 0x7b00000>;	/* 128 MB, pinned:1169 */
 	};
