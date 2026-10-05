@@ -5,7 +5,7 @@
  *
  * ==========================  SKELETON  ==========================
  * A DESIGN SKELETON: it carries the shape (of_match_table + probe/remove +
- * the regmap plan) that the stage-1 bring-up fills in; the hisi_clk_*/reset
+ * the regmap plan) that the stage-1 bring-up fills in; the hisi_clk_* / reset
  * helpers and the real clock-data wiring stay TODO.  It COMPILES against the
  * vanilla 5.10.201 arm headers in the CI cross-build
  * (.github/workflows/lab-module-build.yml -> lab/luofu-clk, plus the
