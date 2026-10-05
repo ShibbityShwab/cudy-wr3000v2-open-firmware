@@ -483,3 +483,170 @@ crash.
 
 A ring-instrumented run (doorbell plus event-assertion sampling at the ring instant) AND the two convention
 checks: F5 polarity via a known-masked line, and IGROUPR for id `0x4c` plus EnableGrp1. All takeover-safe.
+
+---
+
+# ADDENDUM 4 (2026-10-05): the assertion trio (gicking) - BRANCH-GICK
+
+The ring-instrumented run the previous section named, plus the two convention checks it left open. The
+instrument rings the H2D doorbell itself, pays the fixture forward (held-mask vs open-mask in one boot,
+three reads), and reads GICD_IGROUPR word 2. Evidence `build/register-dumps/exp/20261005-053936/`. One
+`exp.sh` cycle, `EXP RESULT: PASS`, 150 s, healthy recovery. The gicview, gicsend, gicpost and gicmask
+records above stand unchanged; nothing below contradicts a value they recorded.
+
+## The instrument
+
+`tools/patch_fw_scratch.py` variant **`gicking`** (+670/-20, uncommitted at record time) keeps the proven
+four patches and adds a fifth send-pad block, plus the new G cells G0..G3. The pads carry the loads/stores
+the manifest claims and nothing else. Blob `build/tmp/fw-patched/gicking.bin`, md5
+`0f2e431f8e32c040b8ad7e7001f8ab57`, size 928920 (= stock size; `size_unchanged: true`). Manifest
+`build/tmp/fw-patched/gicking.bin.manifest.json`; hooks and run log in `build/tmp/wifidrv1-art/`
+(`gicking-capture.hook`, `run-gicking.sh`, `run-gicking.log`, `gk_verify.py`, `gk_facts.py`).
+
+The send pad at file `0x86f5a` (runtime `0x108198`) is the new work. In order it: reproduces the `out[1]`
+post, writes the glue MASK CA `0x400392e8` <= `0x21` (bit 0 MASKED plus the bit-5 field held), rings the
+H2D doorbell CA `0x400392d4` <= `0x1` **exactly once**, then samples, then restores the mask to the
+vendor-live `0x20` and reads G0/G1, with G2 (IGROUPR) and G3 (page sentinel) last. The other pads are
+`thunk` @ `0x87024` (S1/S1+4/C0..C2/E2/E3), `bringup` @ `0x6ed4` (S2/S2+4/C3..C5), `post` @ `0x87036`
+(E0/E1). The original ISENABLER store at file `0x8702c` is byte-for-byte preserved
+(`manifest.preserved.original_gic_write`); the itet block `0x8702a..0x87035` and every continuation are
+intact; the only deltas are the four `bl`s and the four pad bodies. The acknowledging GICC IAR CA
+`0x4016010c` is NEVER read by this variant; CA `0x400392f0` is untouched; the RC misc window `0x10161000`
+is never read.
+
+## The values
+
+The BAR0/alias agreement holds for the sub-boundary cells (S, C, E); the D/F/G cells sit above the
+`0x104000` boundary and are quoted from the ACP alias.
+
+| cell | register | value (alias view) | meaning |
+| --- | --- | --- | --- |
+| S1 | `0x401035A0` bitmap word | `0x00001000` | bit 12 -> id `0x4c` (BRANCH-1 re-verify) |
+| S1+4 | `0x401035A4` dest | `0x40161108` | enable destination (BRANCH-1 re-verify) |
+| S2 | `0x40103EB4` bring-up state | `0x00000001` | (BRANCH-1 re-verify) |
+| S2+4 | `0x40103EB8` marker | `0x50AA7E49` | handshake (BRANCH-1 re-verify) |
+| C0 | `0x40103EDC` ISENABLER2 word 2 PRE | `0x00000001` | id `0x4c` bit clear before the write |
+| C1 | `0x40103FB4` ISPENDR2 word 2 PRE | `0x00000000` | (BRANCH-1 re-verify) |
+| C2 | `0x40103FE4` GICC HPPIR PRE | `0x000003FF` | decode sanity |
+| C3 | `0x40103FEC` ISPENDR2 word 2 bring-up end | `0x00000000` | (BRANCH-1 re-verify) |
+| C4 | `0x40103FF4` ISACTIVER2 word 2 | `0x00000000` | (BRANCH-1 re-verify) |
+| C5 | `0x40103FFC` GICC HPPIR bring-up end | `0x000003FF` | decode sanity |
+| E0 | `0x40103FB8` ISENABLER2 word 2 POST | `0x00001001` | the enable store LANDED, bit 12 SET |
+| E1 | `0x40103FE8` ISPENDR2 word 2 POST | `0x00000000` | the `0x4c` line not pending at the post |
+| E2 | `0x40103FF0` handshake | `0x50AA7E49` | post pad consumed the request |
+| E3 | `0x40103FF8` APSR | `0x80000093` | N=1 Z=0 C=0 V=0 -> LO held |
+| F5 | `0x407D9008` glue HOST_INTR_MASK (post-ring, MASKED) | `0x00000021` | bit 0 = 1 MASKED, bit 5 held |
+| F6 | `0x407D9010` glue HOST_INTR_RAW_STATUS | `0x00000001` | bit 0 = 1 (the ring latch) |
+| F7 | `0x407D9018` glue HOST_INTR_STATUS (post-mask) | `0x00000000` | bit 0 = 0 while the mask holds it down |
+| G0 | `0x407DA000` glue STATUS, mask OPEN | `0x00000001` | bit 0 = 1 |
+| G1 | `0x407DA008` glue MASK readback | `0x00000020` | restored to the vendor-live `0x20` |
+| G2 | `0x407DA010` GICD_IGROUPR word 2 | `0x00000000` | bit 12 = 0, id `0x4c` is Group 0 |
+| G3 | `0x407DA018` G-page sentinel | `0x50AA7E49` | the G deposits are real |
+
+D0/D4 (ISPENDR2 word 2, post-ring) = `0x00000020`, D1 (HPPIR) = `0x000003FF`, D2 (ISACTIVER2 word 2) =
+`0x00000000`, D3/D5 (send-pad markers) = `0x50AA7E49`, the D0..D5 cells above the boundary (alias view).
+F0 GICC_CTLR = `0x1`, F1 PMR = `0xF0`, F2 ITARGETSR = `0x01010101`, F3 IPRIORITYR = `0xF050F050`, F4 ICFGR =
+`0x55555555` are the gicmask settings, unchanged and re-read here. Window sanity `0x406B8000` = `0xE59FF018`
+(the task-9/task-11 sanity word: the window decoded). No read returned `0xffffffff`, and every sub-boundary
+alias equals its BAR0 value, so nothing here is a window artifact. Sentinels F8 = F9 = D3 = D5 = S2+4 = G3
+= `0x50AA7E49`, all present. `[sig]` 9/9, the done marker landed (`init done wiphy=omo-drv1 ifname=omowl1
+hw=1 regs=decoded`), the `out[1]` witness is present (`out[1] bit 2 set (id 2)`, `poll done: 1 transitions
+in 8000 ms`), and the loaded blob was the staged `.omo-pat` (dmesg
+`[   40.475328] omo-drv1: firmware file /lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat size=928920 bytes`).
+Staged md5 `0f2e431f8e32c040b8ad7e7001f8ab57` (== gicking), stock md5 `0e530b976d5a20e87358671f1a577695`
+(UNCHANGED). `build/register-dumps/exp/20261005-053936/capture-cmd.txt`.
+
+## The three verdicts
+
+**1. RING (BRANCH-GICK-R): the ring LEAVES THE HOST and latches the glue raw status. SUPPORTED at the
+ctrl-rb.** F6 bit 0 = 1, with F8/F9/G3 intact. The attribution is clean: the identical pad with the same
+frozen params and NO ring (gicmask, `build/register-dumps/exp/20261004-194824/acceptance.txt`) read F6 =
+`0x0`; the only actor added in gicking is the `0x400392d4 <= 0x1` store; and the firmware's own dispatcher
+writes value 8 (bit 3) to that CA, which would set raw bit 3, while F6 has bit 3 clear. The raw bit 0 is new
+and is caused by the ring. **The ring does NOT show up at the device GIC, and this boot cannot decide it.**
+D0 and D4 (ISPENDR2 word 2, post-ring) read `0x00000020` with id `0x4c` bit 12 CLEAR, but the sample is
+CONFOUNDED: the glue mask was deliberately held MASKED at that instant (F5 = `0x21`) and the post-mask
+status stayed `0x0` (F7 = `0x0`), so a line gated by the glue mask is expected to leave ISPENDR clear. The
+pad restores the mask OPEN only AFTER the D samples and then reads G0 without re-sampling ISPENDR2, so there
+is no post-unmask GIC sample. The run supports neither "the ring reaches the GIC" nor "the ring fails to
+reach the GIC"; only the ctrl-rb assertion is witnessed.
+
+**2. GROUP (BRANCH-GICK-G): the group gate DIES. SUPPORTED.** G2 (`0x40161088`, GICD_IGROUPR word 2) bit 12
+= 0, so id `0x4c` is Group 0. F0 `0x40160100` GICC_CTLR = `0x1` is exactly the configuration Group 0 needs
+(bit 0 EnableGrp0 SET, bit 1 EnableGrp1 = 0), and E0 = `0x1001` re-proves the id-`0x4c` enable landed in the
+same boot. This is addr.md row B: the group gate is NOT the blocker, and the residual root is the EVENT
+ASSERTION (ctrl-rb -> GIC) side. This closes residual risk (ii) that ADDENDUM 3 named. Note the address is
+LAYOUT-DERIVED (the image holds no IGROUPR literal), so the read is the check; the read path is proven live
+(G1 = `0x20`, G3 page sentinel, WIN sanity, no `0xffffffff`), so `0x0` is a real architectural read, not a
+dead window. One observation carried forward: GIC-400 IGROUPR resets "typically all-1s = Group 1" (addr.md
+section 1d) while the device reads `0x00000000`; the read is the authority and it kills the group-gate root.
+
+**3. POLARITY (BRANCH-GICK-P): "1 = masked" is CONFIRMED in-run. SUPPORTED.** The received convention was
+inherited from a sibling header plus the vendor's live value, not re-derived (ADDENDUM 3 residual risk i).
+This boot pays the fixture forward inside one boot with three reads of the same wire: F6 (raw, MASKED
+instant) bit 0 = 1, F7 (post-mask status, same MASKED instant) bit 0 = 0, and G0 (status once the mask is
+OPEN) bit 0 = 1. That triple separates the three models: the INVERTED model needs F7 bit 0 = 1 with the mask
+at `0x21` and is EXCLUDED (F7 = 0); the INDEPENDENT-RAW-LATCH model needs F7 bit 0 = 1 as well and is
+EXCLUDED (F7 = 0); the RECORD model (mask `0x2e8` bit 0 = 1 masks, `0x2ec = 0x2e4 & ~0x2e8`) predicts the
+observed sequence exactly. The propagation-latency objection is excluded too: the raw bit was ALREADY 1 at
+F6, read BEFORE F7, so F7 = 0 is not a not-yet-settled artifact, and F5 = `0x21` read at the same instant
+proves the mask was really set when F7 read 0. So the polarity is settled from this run's own bytes and no
+longer rests on the header.
+
+## The bounds (declared, not hidden)
+
+1. **Instant samples.** F5/F6/F7/G0/G1 and D0/D4 are one-shot latched reads a few instructions after the
+   ring. "Bit clear at the sampled instant" is not "never set". The F5/G1 same-instant readbacks mitigate
+   this for the glue; they do not for the GIC (bound 2).
+2. **No post-unmask GIC sample (the top bound).** The mask is restored OPEN only after the D samples and
+   the pad never re-reads ISPENDR2, so the ring -> GIC id `0x4c` step is UNRESOLVED in either direction.
+   This is the single most important limit of this boot and the headline of the named next branch.
+3. **The D/F/G cells above `0x104000` are quoted from the ACP alias**; their BAR0-direct reads are not
+   admissible. Sub-boundary cells (S/C/E) are quoted at both views and must agree.
+4. **The G2 address is layout-derived** (no IGROUPR literal in the image); the read is the check, and the
+   live read path makes `0x0` a real value. The G deposits are provable because of G3, not by their values.
+5. **The id is the id-`0x4c` pass** by construction: the gate bitmap `0x1000` admits id `0x4c` (word 2)
+   only, E0's landed word-2 bit 12 is the witness, and E3 = `0x80000093` shows LO held.
+6. **This run's own `interp.txt` / `acceptance.txt` / `KNOBSET.txt` / `cleanup.txt` / `pstore-check.txt`
+   were NOT produced** (`pack-gicking-evidence.sh` did not run). Branch logic is checked against the raw
+   capture and the manifest's own declared branch set, not a narrative.
+7. **No calibration snapshot** (this is a firmware-init lane, not a calibration one; the cleanup below
+   shows both bands at `[SUCC]` after). Device cycle serial/detached via `tools/exp.sh` with the watchdog
+   armed. IAR `0x4016010c` never read, CA `0x400392f0` untouched, RC misc `0x10161000` never read.
+
+## Verification
+
+Two independent verifiers, both CONFIRMED, neither ran the cycle. The runtime verifier
+(`build/register-dumps/diffs/20261005-053936-vrun/verdict.txt`, `parse_gicking.py`) re-parsed the raw
+capture into its own equivalent acceptance (108 passed, 0 failed, `ALL_OK`), re-derived the polarity from
+the F6/F7/G0 triple, and read G2 = `0x0` as addr.md row B; it declared three residuals: R1 (no `interp.txt`,
+so it keyed on the manifest's branch set), R2 (the ring -> GIC step is undecided, the masked-ISPENDR
+confound), and R3 (the staged `.omo-pat` was still present at probe time, and it removed it). The instrument
+verifier (`build/register-dumps/diffs/20261005T054100Z-vtool/verdict.txt`, `vtool_dis.py`) regenerated the
+blob six times, all md5 `0f2e431f...` and byte-identical to the staged blob, and capstone-audited it: the
+selftest PASS, the seven frozen md5s unchanged, `gicking` deterministic, each of the four sites
+re-disassembles to a single `bl` to the matching pad, the ring CA `0x400392d4 <= 0x1` is written exactly
+once (not `0x8`), the mask `0x21 -> 0x20` and every CA->cell pair match the manifest, the original ISENABLER
+store and continuations are byte-identical to the stock image, `changed bytes OUTSIDE 4 sites + 4 pads: 0`,
+and no forbidden CA is written or read. The runtime verifier's independent acceptance and the instrument
+verifier agree on the instrument and on every capture value.
+
+## Health and cleanup
+
+`health.txt` (`build/register-dumps/exp/20261005-053936/health.txt`): `WIFI=1 PLAT=1 WIPHY=2 IFACE=6
+CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. The run's own pack-cleanup did not execute, so the
+staged `.omo-pat` was still on the device at probe time; the runtime verifier removed it under the HARD
+RULE. Its PROBE 1 confirmed the staged file md5 `0f2e431f8e32c040b8ad7e7001f8ab57` was the correct gicking
+blob; the post-remove state: firmware dir back to its 3 stock entries
+(`FIRMWARE.bin` / `cfg_device_hisi.ini` / `cfg_hi5622v100_hisi.ini`), `pat_after` = 0, stock FIRMWARE.bin
+md5 re-verified `0e530b976d5a20e87358671f1a577695`. PROBE 2: no `wifidrv1`, 0 `*.omo-off`, 2 wiphys, 6
+interfaces, 4 vendor `hi5622v100` modules, `get_2g_power_param` / `get_5g_power_param` both `[SUCC]`.
+PROBE 3: 3 pstore records (the same 3 known ones, all dated Oct 2, no new crash) and the 3 known wifi
+exception dumps. The router is healthy with no leftovers.
+
+## Next branch
+
+The named next branch is one follow-up cycle: a device-side ISPENDR2 word-2 read for source `0x4c` AFTER the
+mask is restored open (or a compile-time open mask with no restore), which is the sample this boot is missing
+and the one read that decides the ring -> GIC step. Pair it with an HPPIR decode and an ISACTIVER2 read at
+the same post. All takeover-safe, one serial/detached `tools/exp.sh` cycle, verified against the same hook.

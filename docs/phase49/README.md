@@ -47,6 +47,19 @@ rung, so it cannot separate "never asserts" from "asserts but is dropped". The a
 brief corrections (the `0x3d8` mask CONSTANT vs the real mask register CA `0x400392E8`; the firmware literals
 behind the F addresses) and two inherited conventions flagged as residual risks (the F5 mask polarity, and
 GICC_CTLR bit 0 read without an IGROUPR group check). Evidence `build/register-dumps/exp/20261004-194824/`.
+A fourth addendum to `gic-view.md` ("the assertion trio", variant `gicking`) then ran that addendum's named
+next branch: it rings the H2D doorbell itself and answers all three of its open questions in one boot, with
+the fixture paid forward. **BRANCH-GICK:**
+RING - the ring LEAVES THE HOST and latches the glue raw status (F6 bit 0 = 1, against gicmask's `0x0` on
+the same pad with no ring), but the run does NOT show it reaching the device GIC: the post-ring ISPENDR2
+samples (D0 = D4 = `0x00000020`, id `0x4c` bit 12 clear) were taken with the glue mask DELIBERATELY held
+MASKED (F5 = `0x21`, F7 = `0x0`) and no post-unmask ISPENDR2 read exists, so the ring -> GIC step is
+UNDECIDED in either direction. GROUP - the group gate DIES: G2 GICD_IGROUPR word 2 (`0x40161088`) bit 12 =
+0, so id `0x4c` is Group 0, exactly the configuration F0 GICC_CTLR = `0x1` needs (EnableGrp0 SET, EnableGrp1
+= 0); the residual root is the EVENT ASSERTION side, not the group. POLARITY - "1 = masked" is CONFIRMED
+in-run by the F6/F7/G0 triple in the same boot (raw rises, masked status stays clear, then status rises once
+the mask opens), which excludes both the inverted and the independent-raw-latch models, so the polarity no
+longer rests on the inherited sibling header. Evidence `build/register-dumps/exp/20261005-053936/`.
 
 The chain phase 47 named, with where each link now stands:
 
