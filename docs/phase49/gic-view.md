@@ -758,3 +758,164 @@ loaded, 2 wiphys / 6 interfaces, calibration `[SUCC]` on both bands, no leftover
 
 What natural firmware action should ring the H2D doorbell (the trigger), and does the host ISR vision now
 follow a firmware-side ring?
+
+---
+
+# ADDENDUM 6 (2026-10-05): the trigger test (trigring) - BRANCH T4-BIT12 (the ring -> GIC delta, isolated)
+
+The cycle ADDENDUM 5's own next question named, run as the `trigring` variant. ADDENDUM 5 rang the doorbell
+after opening the mask, but its only pinned GIC sample (H0) sat AFTER the ring while its pre-read (H5) came
+from a DIFFERENT visit, so the mask change and the ring were conflated. This boot puts the pre and post
+samples in the SAME straight-line visit with the glue mask already OPEN, so the single ring store is the
+only actor between them. One `tools/exp.sh` cycle, detached, `EXP RESULT: PASS`, evidence
+`build/register-dumps/exp/20261005-075136/` (07:51:35Z -> 07:54:07Z, `run-trigring.log`); blob
+`build/tmp/fw-patched/trigring.bin` md5 `0769eed122c0506d3afca6b5a8bd8ae9`, an uncommitted working-tree
+addition on top of HEAD `140caee`.
+
+## The instrument
+
+One new pad on the send site file `0x86f5a` (the site gicsend/gicunmask already patched), plus the three
+inherited side-effect-free reads (thunk pad file `0xc8198`, runtime `0x108198`). Sequence: reproduce the
+firmware's own `out[1]` post, open the glue mask (CA `0x400392E8` <= `0x20`; `0x21` NEVER written), take
+T0..T3 PRE-ring, ring the H2D doorbell ONCE (CA `0x400392D4` <= `0x1`), take T4..T7 POST-ring, then return
+to the natural D2H notify. The ring is exactly the research candidate in
+`build/tmp/trigger-spec/trigger.md` section 3.
+
+```
+0xc8198  mrs ip, apsr
+0xc819e  str r2, [r3]              ; reproduce *0x40039014 = 4 (out[1] post)
+0xc81a8  movw r0,#0x20 ; str r0,[r1] (r1=0x400392e8)  ; glue mask OPEN, held across the ring
+T0 0xc81ae  read CA 0x40161208 (ISPENDR2 w2)  -> cell 0x125000
+T1 0xc81c2  read CA 0x40160118 (GICC HPPIR)   -> cell 0x125008
+T2 0xc81d6  read CA 0x400392e4 (glue RAW)     -> cell 0x125010
+T3 0xc81ea  read CA 0x400392ec (glue STATUS)  -> cell 0x125018
+TS1 0xc81fe sentinel 0x50AA7E49               -> cell 0x125020
+0xc8210  movw r1,#0x92d4 ; movt r1,#0x4003 ; movw r0,#1 ; str r0,[r1]   ; THE RING (CA 0x400392D4 <= 1)
+T4 -> CA 0x40161208 -> cell 0x14e000
+T5 -> CA 0x40160118 -> cell 0x14e008
+T6 -> CA 0x400392e4 -> cell 0x14e010
+T7 -> CA 0x400392ec -> cell 0x14e018
+TS2 -> sentinel 0x50AA7E49 -> cell 0x14e020
+0xc828a  b.w #0x86f5e              ; back to the natural D2H notify
+```
+
+Every read is read-only; the acknowledging GICC IAR CA `0x4016010c` is NEVER read, CA `0x400392f0` is
+untouched, and the RC misc window `0x10161000` is never read. Manifest
+`build/tmp/fw-patched/trigring.bin.manifest.json`; verify `build/tmp/wifidrv1-art/trigring_verify.py`.
+
+## The values (T cells above the `0x104000` boundary, quoted from the ACP alias)
+
+| cell | register | value (alias view) | meaning |
+| --- | --- | --- | --- |
+| T0 | ISPENDR2 word 2 (CA `0x40161208`) | `0x00000020` | PRE-ring: bit 12 CLEAR, bit 5 set |
+| T1 | GICC HPPIR (CA `0x40160118`) | `0x000003FF` | PRE-ring: idle |
+| T2 | glue raw (CA `0x400392E4`) | `0x00000000` | PRE-ring: bit 0 clear |
+| T3 | glue status (CA `0x400392EC`) | `0x00000000` | PRE-ring: bit 0 clear |
+| T4 | ISPENDR2 word 2 (CA `0x40161208`) | `0x00001020` | POST-ring: BIT 12 SET = id `0x4c` pending |
+| T5 | GICC HPPIR (CA `0x40160118`) | `0x0000004C` | POST-ring: the CPU interface names id `0x4c` |
+| T6 | glue raw (CA `0x400392E4`) | `0x00000001` | POST-ring: bit 0 latch (the ring left the pad) |
+| T7 | glue status (CA `0x400392EC`) | `0x00000001` | POST-ring: bit 0 passes the OPEN mask |
+| T8 | page-1 sentinel | `0x50AA7E49` | the T0..T3 deposits are real |
+| T9 | page-2 sentinel | `0x50AA7E49` | the T4..T7 deposits are real |
+
+Sanities inherited from gicunmask's pads and reproduced here: S1 = `0x1000`, S1+4 = `0x40161108`, S2 =
+`0x1`, S2+4 = marker; C0 = `0x1`, C1 = `0x0`, C2 = `0x3FF`, C3 = `0x0`, C4 = `0x0`, C5 = `0x3FF`; E0 =
+`0x1001` (the firmware's own id-`0x4c` enable store landed), E1 = `0x0`, E2 = marker, E3 = `0x80000093`;
+window `0x406B8000` = `0xE59FF018` (read path live); `[sig]` 9/9; staged `0769eed1...` / stock
+`0e530b97...`. No read returned `0xffffffff`.
+
+## Matched branch: T4-BIT12 - the ring -> GIC step, isolated
+
+The run's own declared branch set (manifest `.classification`) has four arms. T0 bit 12 is CLEAR, so
+`branch_T0_set` does not apply (nothing was pre-latched at the sampled instant). T4 bit 12 is SET while T0
+was clear, so of `branch_T4_clear_T6_T7_set` (which needs T4 clear) and `branch_both_clear` (which needs
+both clear), neither is reached. **`branch_T4_bit12_set` HOLDS**: the ringed event REACHES the device GIC
+with the mask open IN THE SAME VISIT.
+
+Three things make the attribution sound, not just the raw numbers. First, the PRE/POST pair sits in one
+straight-line visit with the mask held OPEN across both, so the sole intervening actor is the one ring
+store. Second, T6 rising is independent evidence the ring left the pad (CA `0x400392D4` is write-only and
+self-clearing, so the glue raw latch is the presence proof). Third, a T4-only artifact is excluded by the
+sibling lanes: the identical pads with the same frozen params and NO bit-0 ring (gicpost, gicmask, gicking;
+`build/register-dumps/exp/20261004-180736/`, `.../20261004-194824/`, `.../20261005-053936/`) never showed
+ISPENDR2 word 2 bit 12 after their posts. This is the witness set `build/tmp/trigger-spec/trigger.md`
+section 3 predicted (ISPENDR2 bit 12 set plus HPPIR = `0x4c`), and it reproduces gicunmask's exact GIC
+signature (`0x1020` / `0x4c`) now with a same-visit pre sample gicunmask lacked.
+
+## The host-side witness (from `build/tmp/trigger-spec/hostisr.md` section 2, run in the same cycle)
+
+The trigger hook also runs the read-only host witness, so the host side is captured next to the device
+cells. Verbatim from `build/register-dumps/exp/20261005-075136/capture-cmd.txt`:
+
+```
+--- endpoint/port lines in /proc/interrupts (expect a 207:/209: line with an omo-drv1 action, or ABSENT) ---
+(nothing - the grep for `^ *(207|209):` matched no line)
+--- pci_dev->irq for both endpoints (255 = unassigned) ---
+0000:00:00.0 irq=255
+0001:00:00.0 irq=255
+--- lspci -vv Interrupt/MSI ---
+        Interrupt: pin A routed to IRQ 255
+        Capabilities: [50] MSI: Enable- Count=1/1 Maskable+ 64bit+
+--- dmesg omo-drv1 isr lines ---
+(nothing)
+--- dmesg omo-drv1 done line ---
+(nothing - the done line has NO `irq0=/isr0=` fields)
+```
+
+The full `/proc/interrupts` carries only `200..214` (twd/timer/wdg/ttyS0/tvsensor/pcie_link_down x2/pie-ch*):
+NO `207:` and NO `209:` line, and no action named `omo-drv1`. That is exactly `hostisr.md` table ROW B, "LINE
+ASSERTED WITHOUT HOST DELIVERY" (glue latched, no host line). It is reported as OBSERVED, and it settles
+nothing about INTA (bound 4 below): the port registers NO handler, so the missing line is the expected
+absence of an instrument, not proof that INTA failed to reach the kernel. ROW A ("ISR FIRED") is
+UNSUPPORTED, and so is its complement; neither follows from a witness that cannot exist either way.
+
+## The bounds (declared, not hidden)
+
+1. **The T cells are instant samples, not a timing window.** The claim is "set at the sampled instant";
+sampling was not repeated, so persistence is not measured.
+2. **The T cells are quoted from the ACP alias** (above the `0x104000` boundary, per the gicsend aliasing
+fact). The alias model is INHERITED from gicsend/gicmask, not re-demonstrated by a BAR0-direct T read;
+the sentinels surviving and HPPIR decoding a valid unique id support it.
+3. **T0 bit 5 (`0x20`) is a second pending line**, recorded and not attributed. It is present before the
+ring and stays in T4, so it is not caused by the ring.
+4. **The host-side half is NOT decided.** The port registers no IRQ handler (`hostisr.md` section 1.1: zero
+`request_irq`/`free_irq`/`IRQF_` sites; section 1.3 states the test PRESUMES a port change this run did not
+make), so ROW B's null host witness is the absence of an instrument. Any reading of this boot as "ISR
+FIRED" is unsupported.
+5. **The ring actor is DEVICE-side.** The pad rings the doorbell; the vendor's NATURAL trigger is not
+reproduced. This boot proves the wire when rung, and how it reacts when rung, not what rings it in normal
+operation.
+6. **`interp.txt` was not produced** (the packer had not run at probe time). The branch labels above are
+read from the run's own declared set in the manifest plus `trigger.md` section 3 and `hostisr.md` section 3,
+exactly as the gicking and gicunmask precedents were.
+
+## Verification
+
+Two verifiers CONFIRMED (neither ran the cycle). The runtime verifier
+(`build/register-dumps/diffs/20261005-075136-vrun2/verdict.txt`) re-parsed the raw capture with an
+independent parser (70/0), re-ran the boot's own acceptance (62/0) and `trigring_verify.py` (ALL PASS), noted
+the T0..T3/T4..T7 pair is tighter than gicunmask's (same visit, mask open across both), and declared three
+residuals: R1 `interp.txt` absent (branch logic checked against the manifest's declared set), R2 the
+host-side half not decided, R3 the staged `.omo-pat` still present, which it then removed under the HARD
+RULE. The instrument verifier (`build/register-dumps/diffs/20261005T075346Z-vtool2/verdict.txt`) regenerated
+the blob twice (both byte-identical to the staged blob, `0769eed1...`), confirmed the eight earlier pinned
+variant md5s are byte-identical to HEAD `140caee`, capstone-audited every pad (ring CA `0x400392d4` <= `0x1`
+EXACTLY ONCE, mask driven to `0x20` and never `0x21`, every CA->cell pair, `changed bytes OUTSIDE 4 sites +
+4 pads: 0`, original ISENABLER store at file `0x8702c` preserved, no forbidden CA) and audited the hook
+read-only (39 devmem reads, no write argument, no forbidden CA). Two boots, one wire, one signature:
+trigring's T4/T5 reproduce gicunmask's H0/H1 (`0x1020` / `0x4c`).
+
+## Health and cleanup
+
+`health.txt` (`build/register-dumps/exp/20261005-075136/health.txt`): `WIFI=1 PLAT=1 WIPHY=2 IFACE=6
+CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`. The staged `.omo-pat` was removed (verifier R3, under the
+HARD RULE), stock FIRMWARE.bin md5 re-verified `0e530b976d5a20e87358671f1a577695`, no `.omo-off` leftovers,
+vendor modules loaded, 2 wiphys / 6 interfaces, calibration `[SUCC]` on both bands.
+
+## Next branch (one line)
+
+The next test is the HOST ISR acceptance test (`build/tmp/trigger-spec/hostisr.md`): register the missing
+`request_irq` in the port (`hostisr.md` section 1.3), drop the forbidden-IAR `irqwin=1` param from the run,
+and use the `hostisr.md` section 2 hook so the host `207:`/`209:` line and the `[isr]` dmesg line land next
+to the T cells; the `hostisr.md` section 3 table then reads ISR FIRED (A) versus LINE ASSERTED WITHOUT HOST
+DELIVERY (B) from the same boot.

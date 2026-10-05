@@ -68,6 +68,17 @@ interface reports the same id (H1 HPPIR = `0x0000004C`), while the glue latched 
 `0x1`): the device-internal ctrl-rb -> GIC wire is ALIVE, phase-48's dead-link hypothesis is REFUTED, and
 the earlier zeros mean the natural firmware posts never RING the doorbell (a TRIGGER problem, not a dead
 wire). Evidence `build/register-dumps/exp/20261005-072450/`.
+A sixth addendum to `gic-view.md` ("the trigger test", variant `trigring`) then isolated that ring -> GIC
+step in one visit. **BRANCH T4-BIT12:** with the glue mask held OPEN across a SAME-VISIT pre/post pair, the
+pre sample is `0x00000020` (ISPENDR2 word 2, bit 12 CLEAR) and the post sample is `0x00001020` (BIT 12 SET,
+id `0x4c`) with HPPIR = `0x0000004C` and the glue raw/status rising `0x0` -> `0x1`, so the single ring store
+is the only actor between them and the ring -> GIC delta now stands alone. The host-side half is NOT decided:
+the port registers no IRQ handler, so the expected host witness (`hostisr.md` table row B, no `207:`/`209:`
+line) is the absence of an instrument and unsupported either way; that acceptance test is the named next
+branch. Evidence `build/register-dumps/exp/20261005-075136/`; two verifiers CONFIRMED. The same session wrote
+two first-class plans from the phase's four spec reports: `opensource/docs/HYBRID-IMAGE-PLAN.md` (the graft,
+keep/graft lists, build, A/B-safe flashing, acceptance gates, open decisions) and
+`opensource/docs/TOOLING-IMPROVEMENTS.md` (the ranked 9-item harness list plus the top-3 quick wins).
 
 The chain phase 47 named, with where each link now stands:
 
