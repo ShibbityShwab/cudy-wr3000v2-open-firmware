@@ -3008,3 +3008,153 @@ Evidence `build/register-dumps/exp/20261005-202555/`; blob `build/tmp/fw-patched
 `build/tmp/wifidrv1-art/take1-verify.py`; instrument verdict
 `build/register-dumps/diffs/20261005T2026Z-vtool13/`; specs `build/tmp/inta-spec/{fwprobe,takeseq,giccpu}.md`;
 ko `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`).
+---
+
+# ADDENDUM 18 (2026-10-05): the 0x4c selection - THE FLIP LANDS BUT THE TAKE NEVER MOVES (`X_HPP` still 0x1D, `X_ACT` bit12 CLEAR, `X_OU0=8`) / the IAR never names 0x4c / the PPI byte `0x1D` reads back `0xE0` and still out-ranks / one IAR return is the invalid id `0x402`, so this boot's ids are suspect
+
+ADDENDUM 17 named three next threads and the first two are what this cycle answers: read the priority
+bytes at the same post and attribute the entries. The discriminator spec (`build/tmp/inta-spec/select.md`)
+turned that into one mutation: push `0x4c` above every competitor (its byte to `0x00`), drop the
+competitors below it (`0x1d` and `0x40` to `0xF0`), then re-ring and read what the firmware's own IAR
+returns per entry. This block is the interpretation. Evidence `build/register-dumps/exp/20261005-210057/`
+(`capture-cmd.txt`, `run-take2.log`, `dmesg.txt`, `KNOBSET.txt`, `pstore-delta.txt`); the instrument's
+verdict is `build/register-dumps/diffs/20261005T2101Z-vtool14/verdict.txt` (CONFIRMED).
+
+### The instrument (take2 + gicv2)
+
+The staged blob is the `take2` variant of `tools/patch_fw_scratch.py` (working tree, uncommitted at
+record time), md5 `eeeb252f20392f2b0cb861336feb6411`, size 928920 (size-preserving). It layers the
+`gicv2` IAR-source canary (`select.md` sec.5, `gicv2.md`) on top of take1: the `vec` pad now reads the
+IAR itself into r7 (the handler's one read, re-emitted), stores the returned word, the MPIDR, a 4-deep ring
+of the last four ids and the entry counter, and the pad program is byte-verified by capstone. On top of that
+take2 adds the three priority stores and the discriminator read block (`P_ID`, `P_40`, `P_4C`, `G_GRP0`,
+`N_EN0`) plus the after-the-ring readbacks (`X_HPP`, `X_ISP`, `X_ACT`, `X_OU0`, `X_SNT`). One cycle,
+`run-take2.sh`, `TAKE2 RESULT: PASS`, `exp_rc=0`, 21:00:56Z -> 21:03:41Z; the ko is the v8 of `553342d`
+(`3f87f1e9...`, unchanged, no ko commit, no CI) with `intapost=0x100 quiesce=0x1 rung=0 qbound=64
+qbound209=8`, so the question is asked under the reproduced twin storm. All new cells sit on page 10
+(runtime `0x150000`, the retention-verified band) and read alias-only.
+
+### The v2 canary: the take happened four times, and one id is invalid
+
+| cell | value | reading |
+| --- | --- | --- |
+| `V_MAGIC` | `0xA4A4A4A4` | the vec pad ran: the IRQ vector body executed and the IAR read is on the entry path |
+| `V_PSR` | `0x00000193` | ISR-entry CPSR: I=1, M[4:0]=`0x13` SVC, T=1 |
+| `V_CNT` | `0x00000004` | the ISR was entered FOUR times this boot |
+| `V2_CNT` | `0x00000004` | the v2 pad sampled four IAR reads (agrees with `V_CNT`) |
+| `V2_ID` | `0x00000402` | **the NEWEST IAR return word; `ubfx 9:0` = `0x002`, NOT `0x4c` and NOT `0x1d` - and not a valid GIC id** |
+| `V2_MPIDR` | `0x80000000` | low bits 0 -> the take landed on CPU0 |
+| `V2_RING0..3` | `0x00000000`, `0x00000001`, `0x00000002`, `0x00000402` | the ring holds ids `0x0,0x1,0x2` then `0x402` (write order) |
+| `M1_PSR` / `M2_PSR` | `0x20000113` / `0x00000000` | as ADDENDUM 17: the `cpsie i` window runs, the release guard never reached |
+
+`V_MAGIC` live and `V_CNT == V2_CNT == 4` says the CPU took four interrupts and the pad clocked every one.
+The decisive cell is `V2_ID = 0x00000402`: the firmware's own IAR read returned a word whose id field
+(`0x402 & 0x3ff`) is `0x002`, which is not `0x4c`, not `0x1d`, and not the spurious `0x3ff`. The ring's
+first three slots carry the small ids `0x0`,`0x1`,`0x2` and the newest is `0x402`; the ids rotate, so the
+four entries did not all serve the same source.
+
+### The flip landed, and it did NOT hand the take to `0x4c`
+
+| cell | CA / source | value | meaning |
+| --- | --- | --- | --- |
+| `P_ID` | `0x4016141C` w7 (byte1 = id `0x1D`) | `0xF0F0E0F0` | byte1 reads `0xE0`, the authored PPI byte - `0x1D`'s priority was NOT `<= 0x50` |
+| `P_40` | `0x40161440` | `0xF050F0F0` | byte0 `0xF0`: the `0x40` store landed |
+| `P_4C` | `0x4016144C` | `0xF050F000` | byte0 `0x00`: the `0x4c` store landed, so `0x4c` is now the top-priority pending source |
+| `G_GRP0` | `0x40161080` w0 | `0x00000000` | the PPI/SGI bank is group 0 (never sampled before); bit29 = 0 |
+| `N_EN0` | `0x40161100` w0 | `0x2000FFFF` | bit29 SET: id `0x1D` is enabled in `ISENABLER0` |
+| `X_HPP` | `0x40160118` | `0x0000001D` | HPPIR after the ring still names `0x1D` - the GIC's own view did not promote `0x4c` |
+| `X_ISP` | `0x40161208` w2 | `0x00001021` | bit12 SET: `0x4c` still pending |
+| `X_ACT` | `0x40161308` w2 | `0x00000000` | bit12 CLEAR: `0x4c` was never acknowledged (the IAR was never read for it) |
+| `X_OU0` | `0x40039010` | `0x00000008` | out[0] still `0x8`: the dispatcher never consumed it |
+| `F_HPP` | `0x40160118` at site F | `0x0000004C` | at the fall-through the top pending id IS `0x4c`, so the path reaches the point where only the take is missing |
+| `X_SNT` | page sentinel | `0x50AA7E49` | the readback pad ran; the page retained |
+
+This is the load-bearing finding and it cuts against the discriminator's sec.5 expectation. The flip stores
+DID land (`P_4C` byte0 = `0x00`, `P_40` byte0 = `0xF0`), so `0x4c` carries the top priority and
+`0x1d`/`0x40` were pushed to `0xF0`. Yet `X_HPP` still reads `0x1D` and the v2 canary never saw `0x4c`:
+`V2_ID`'s four samples returned small ids and `0x402`, never `0x4c`, and `X_ACT` bit12 stayed clear, so
+the IAR was not read for `0x4c` a single time. `F_HPP = 0x4C` shows the flip DOES put `0x4c` on top at the
+send site's own instant, so the destination is reachable; what the flip did not do is make the four ISR
+entries serve it. The mutation moved the pending-id ranking and left the take exactly where ADDENDUM 17
+found it.
+
+### The `0x1D` residual: the byte reads `0xE0`, so priority-it-first does not explain `HPPIR = 0x1D`
+
+ADDENDUM 17 and select.md sec.4 left one input open: the disasm writes `IPRIORITYR[0x1D] = 0xE0` (file
+`0x8307A`, `prio = 0xE`, LOWER priority than `0x4c`'s `0x50`), yet the record read `HPPIR = 0x1D` at the
+site where `0x4c` is pending. The discriminator's `P_ID` answers the byte question directly: `P_ID` byte1
+reads back `0xE0`, exactly the authored value. So this boot confirms the byte is `0xE0`, and `HPPIR` STILL
+names `0x1D` while `0x4c` sits at priority `0x00`. Under select.md sec.2's rule (`0x4c` at `0x00` beats
+every competitor) that should be impossible for an ordinary SPI comparison: `0x1D`'s effective priority is
+NOT what its byte says. The residual is the PPI-vs-SPI comparison basis, and the group explanation is killed
+too: `G_GRP0` bit29 = 0 while `HPPIR` names `0x1D`, so the PPI and the SPIs share the group-0 space and
+the difference is not grouping. What is left is a banked-PPI priority that is not compared as an SPI's is.
+
+### The `0x402` id: one IAR return is not a valid source id
+
+`V2_ID = 0x00000402` is the run's sharpest anomaly. `0x402` is not a GIC id in any register this file has
+read; the id field (`ubfx 9:0`) of a real IAR read carries a source id or `0x3ff` (spurious), and `0x402`
+is neither. Two readings, stated rather than resolved:
+
+1. **The priority store reached a word it should not have.** Writing `0x4016141D` byte-lane 1 touches the
+   `IPRIORITYR` word for ids `0x1c..0x1f`; a store that also perturbed the SGI/PPI bank could translate oddly
+   at the CPU interface. The ring (`0x0`,`0x1`,`0x2`, then `0x402`) is consistent with the first three
+   entries being PPI/SGI-class small ids and the fourth the perturbed one.
+2. **The pad's IAR read raced the flip.** The pad reads `0x4016010C` at the entry instant; if a store in the
+   same epoch left the IAR transiently reading a stale word, `0x402` is that word.
+
+Either way the honest statement is narrow: in THIS boot the flip did not produce a clean `0x4c` take, and
+one IAR return was not a valid source id. The mutation must be re-run before its per-entry ids are used as
+arbitration evidence.
+
+### The bounds (declared, not hidden)
+
+1. **One shot, four entries, one boot.** `V_CNT = V2_CNT = 4`, and the four ids are not source-attributed
+   beyond the ring's write order. A single-boot anomaly (`0x402`) is not a stable property of the flip.
+2. **The flip's stores are read back, not proven atomic.** `P_4C`/`P_40` read post-write, so the stores
+   landed; whether they landed in the same instant the pad needs (before the ring, without a race) is not
+   observable from these cells.
+3. **HPPIR alone is not a take record.** `X_HPP = 0x1D` and `F_HPP = 0x4C` name the top pending id at two
+   instants; neither proves the ISR's IAR read returned that id. `V2_ID` is the take record, and it never
+   shows `0x4c`.
+4. **The interp is this block.** The run's own `interp.txt` landed `TODO`; the rows above are sourced from
+   `capture-cmd.txt` and `run-take2.log`.
+
+### Verification
+
+Instrument verdict `build/register-dumps/diffs/20261005T2101Z-vtool14/verdict.txt`: **CONFIRMED**. The
+verifier re-derived (not re-read) the take2/gicv2 blobs: the selftest asserts all 17 variant md5 pins plus
+`FW_MD5`/`FW_SIZE`/`BARMAP_MD5`, two independent regenerations of each variant are byte-identical to the
+staged blob (`gicv2 d98189ce...`, `take2 eeeb252f...`), a 193-check independent capstone re-derivation
+passes, the pads are all-zero in stock and mutually disjoint, and the hard-rule scan is clean (no write of
+`0x400392f0`/`0x40039af0`, no pad reads the IAR except the firmware's own, no `0x10161000` access). The ko
+pin is `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`).
+
+Run facts: done marker `init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=65`, window
+sanity `0xE59FF018`, staged `.omo-pat` md5 == the host blob (`eeeb252f...`), stock md5 re-verified
+`0e530b976d5a20e87358671f1a577695`. Host witness: `207: 65 ... omo-drv1`, `209: 9 ... omo-drv1-ep1`; the
+mandatory bound tripped on both storm lines (`irq=207 n=65 bound=64`, `irq=209 n=9 bound=8`), supervisor
+reached `SUPERVISOR DONE quiesced=0 rung=OBSERVE ... state=IDLE`, no `enable_irq` after the trip. Health
+`WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`; no new pstore record (the
+baseline `blk-0/2/3` set is unchanged); 2 wiphys, 6 interfaces, calibration `[SUCC]` on both bands.
+
+### The next threads
+
+- **Re-run the flip clean.** The `0x402` id means this boot's IAR values are suspect. `P_ID` byte1 already
+  reads `0xE0`, so skip the id-`0x1D` store and keep the only mutation as `0x4c -> 0x00`; re-read `V2_ID`
+  per entry.
+- **Test the PPI comparison basis directly.** Since `0x1d` reads `0xE0` and still wins, the comparator is
+  not the byte. Mask `0x1D` at `ISENABLER0` bit29 and re-ring, so `0x1D` leaves the set instead of being
+  out-prioritized; sample the `0x1D` handler's own per-core accept register (`0x4016060C`) for the live view.
+- **Retire the `0x40` re-arm.** select.md sec.0 named `0x40` (EDGE, self-refilling) as the standing
+  lower-id winner. Mask it (`ISENABLER2` bit0) with `0x45` (bit5) and `0x4c` (bit12) still pending, then
+  read which id the next take returns, so arbitration order is measured with `0x40` out of the set.
+
+### Artifacts
+
+Evidence `build/register-dumps/exp/20261005-210057/`; blob `build/tmp/fw-patched/take2.bin` md5
+`eeeb252f20392f2b0cb861336feb6411` (and `gicv2.bin` `d98189ceff6e15582dc6261299cb3477`); runner
+`build/tmp/wifidrv1-art/run-take2.sh`; hook `build/tmp/wifidrv1-art/take2-capture.hook`; verifier
+`build/tmp/wifidrv1-art/take2-verify.py`; instrument verdict
+`build/register-dumps/diffs/20261005T2101Z-vtool14/`; specs `build/tmp/inta-spec/{gicv2,select}.md`; ko
+`3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`).

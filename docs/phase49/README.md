@@ -415,3 +415,50 @@ was never spent, so the second bound has still never tripped on device. Router h
 interfaces, `[SUCC]` both bands, zero leftovers, no new pstore). Next: fetch, verify and run the two boots on
 the landed ko, then spend the second bound on a rung that leaves both levels clean. Full record in
 `gic-view.md` ADDENDUM 16; verdicts `diffs/{20261005T1946Z-vtool12,20261005T1954Z-vrun13}/`.
+
+## ADDENDUM 18 (2026-10-05): the upstream arm B - the pinctrl skeleton lands and its CI lane is green
+
+The stage-2 second driver landed, so the pinctrl row of the stage-2 inventory (`build/tmp/inta-spec/
+stage2.md` row 2, after CRG) now has code and a CI verdict: submodule commit `d4875e6` on
+`omo/phase22-hccaccept` only (`lab(luofu-pinctrl): stage-2 IOMUX skeleton + the pinctrl CI lanes`, 5 files,
++421/-7). It adds `lab/luofu-pinctrl/{luofu-pinctrl.c,Makefile,README.md}`, transcribed from the vendor
+`hi_kpinctrl.ko` (`hsan,luofu-peri-pinctrl`, lsmod use count 5) as 37 pins / 24 groups / 24 functions, with
+`pinctrl_register` and `set_mux` + the pinconf setters as deliberate NO-OPS so the bootloader's mux state is
+preserved; the skeleton maps the pinned `"mux"` (`0x14900100 0x3c`) and `"cfg"` (`0x14940000 0x100`)
+windows read-only and performs no register writes at all. Full design + the vendor ELF evidence is
+`build/tmp/inta-spec/pinctrl.md`.
+
+CI, both lanes: `lab-module-build.yml` (the `omo/**` lane) becomes a `fail-fast: false` matrix over
+`[luofu-clk, luofu-pinctrl]` with a per-module build step, `vermagic` line and `<module>-ko` artifact, and
+the `master`-triggered `build-load-test-module.yml` gets the matching `build luofu-pinctrl module` step, its
+`vermagic` line and the `luofu-pinctrl-ko` upload.
+
+**SMOKE RESULT: CI GREEN.** Run `37371987343` (`lab-module-build`, push, head `d4875e6`, started
+2026-10-05T20:48:08Z) has job `build (luofu-pinctrl)` **success** (2026-10-05T20:54:03Z -> 20:55:34Z, all
+steps including `show vermagic` and the artifact upload green; the sibling `build (luofu-clk)` job is green
+as well), i.e. the skeleton cross-compiles against the vanilla 5.10.201 arm headers exactly as `luofu-clk`
+did at `dff5925` (ADDENDUM 15). Caveats kept: the lane has no `Module.symvers`/`vmlinux` dump so the
+unresolved-symbol check is skipped, and the .ko was never loaded on the device - that task ran no device
+cycle. Next: the per-group pin lists, the per-pin `drv_data {reg_off, shift, func}` behind `set_mux`, the
+`"cfg"` bitfield map behind `pin_config_set`, and the reset deassert (a reset write, deliberately held
+back). Pointers: plan status block `opensource/docs/UPSTREAM-PORT-PLAN.md`; spec `build/tmp/inta-spec/
+pinctrl.md`.
+## ADDENDUM 19 (2026-10-05): the arm-A take probe (take2) - the 0x4c priority flip lands but the take never moves
+
+The discriminator cycle `select.md` sec.5 asked for ran as variant **`take2`** (blob md5
+`eeeb252f20392f2b0cb861336feb6411`), the `gicv2` IAR-source canary layered on take1 plus the three priority
+stores and the readback block. It is recorded in full as `gic-view.md` **ADDENDUM 18** ("the 0x4c
+selection"); this block is the pointer.
+
+The flip stores landed (`P_4C` byte0 `0x00`, `P_40` byte0 `0xF0`), yet the take did not move: `X_HPP` still
+names `0x1D`, `X_ACT` bit12 stayed CLEAR, and `X_OU0` stayed `0x8` in the same epoch, so source `0x4c` was
+never acknowledged and never consumed. At the send-site instant `F_HPP = 0x4C`, so the destination is
+reachable and the pending-id ranking DID move; what the flip could not do is make any of the four ISR
+entries serve it. The `0x1D` residual hardened: `P_ID` byte1 reads back `0xE0`, the authored PPI byte, and
+`HPPIR` still names `0x1D` while `0x4c` sits at priority `0x00`, so priority-first does not explain it and
+the group explanation is killed by `G_GRP0` bit29 = 0. One IAR return word was the invalid id `0x402`, so
+this boot's per-entry ids are suspect and the flip must be re-run clean. Next: re-run the flip with only
+`0x4c -> 0x00` as the mutation, then mask `0x1D` (ISENABLER0 bit29) and `0x40` (ISENABLER2 bit0) to measure
+arbitration with the competitors out of the set. Evidence `build/register-dumps/exp/20261005-210057/`;
+instrument verdict `build/register-dumps/diffs/20261005T2101Z-vtool14/verdict.txt` (CONFIRMED). Health: bound
+held both lines, no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.

@@ -137,6 +137,22 @@ before any MMIO) that both existing ISRs carry, with NO re-enable after a bound-
 quiesce predicate (glue stat == 0 AND twin stat == 0) is the port's correctness test for the ctrl-rb IRQ
 path, since a copy-A-only zero stays vacuous.
 
+The two clock/reset placeholders are now ONE `crg` node, committed (2026-10-05, submodule commit `8a474dd`
+on `omo/phase22-hccaccept`, work `build/tmp/inta-spec/{clocks2.md,dtslint.md}`): `opensource/docs/soc/
+luofu-r116.dts` merges the skeleton's `clk:` (pinned `clk@14880000`) and `rst:` (pinned `reset0`,
+`#reset-cells=<2>`) into a single `crg: clock-reset-controller@14880000`
+(`compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, `reg = <0x14880000 0x1000>`,
+`#clock-cells = <1>`, `#reset-cells = <2>`), with every consumer repointed to `<&crg LUOFU_CLK_*>` /
+`<&crg off bit>` (gpio0/1 `0x2c 0x14/0x15`, i2c0 `0x2c 0x18`, sfc/fmc `0x2c 0x0`, gmac0 `0x30 0xd/0xe`,
+pcie0 `0x34 0xc..0xf`; offsets kept verbatim from the pinned tree) plus the `memory` -> `memory@80500000`
+unit-address fix, alongside the new `hisilicon,luofu-crg` driver skeleton `opensource/lab/luofu-clk/`
+(still NOT-YET-COMPILED against the vendor tree, and `crg-luofu.c`'s Kconfig `core_initcall` placement is
+the stage-1 plan). The edit is dtc-verified: `tools/dtc-check.sh` under dtc 1.7.2 compiles the file to
+`build/tmp/inta-spec/luofu-r116.dtb`, 4,506 B, sha256
+`732104b1818945b69100dc7ad45612360fec0c5297c6ef0ed91689297b5b3946`, errors 0, three cosmetic
+`unit_address_vs_reg` warnings (`dtslint.md` runs 1/2; the CRG node itself lints clean). Caveat kept: the
+DTB in `build/tmp/` is a local, gitignored artifact - the durable thing is the committed `.dts`.
+
 Clocks land as files + the dtc pipeline becomes the tool of record (2026-10-05, `build/tmp/inta-spec/clocks2.md`, ADDENDUM 13): the skeleton's two placeholders fold into ONE `crg: clock-reset-controller@14880000` node in `opensource/docs/soc/luofu-r116.dts` (`compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, `reg = <0x14880000 0x1000>`, `#clock-cells = <1>`, `#reset-cells = <2>`), with every consumer (`gpio0/1`, `i2c0`, `fmc`, `pcie0`) repointed to `<&crg IDX>` / `<&crg off bit>` (working-tree, 23 insertions / 33 deletions), and the driver skeleton lands at `opensource/lab/luofu-clk/` (`luofu-clk.c` scaffold, NOT-YET-COMPILED, `obj-m := luofu-clk.o`), so the new `hisilicon,luofu-crg` compatible has a home for the pinned gate/PLL/mux tables and the `softrst_val0/1` magic. The dtc pipeline that compiles the skeleton is upstream dtc v1.7.2 (built from the `dgibson/dtc` v1.7.2 tarball with MinGW-W64 gcc 16.2.0 plus winflexbison 2.5.25) driven by `cpp -P -nostdinc -x assembler-with-cpp` then `dtc -I dts -O dtb`, producing `build/tmp/inta-spec/luofu-r116.dtb` (4,554 B, sha256 `a1e0d822f23691ff96efaaec3a5def0d26923d642714fa8ab674b2a408f55823`, magic `d00dfeed`, 29 nodes / 145 properties, exit 0, 0 errors, 4 `unit_address_vs_reg` warnings).
 
 Stage 1 skeleton landed (2026-10-05): `opensource/docs/soc/luofu-r116.dts` is the first-cut mach DT skeleton
@@ -191,7 +207,9 @@ placeholders, `clk:` (pinned `clk@14880000`, `:201`) and `rst:` (pinned `reset0`
 `:1394`), into ONE `crg: clock-reset-controller@14880000` node with
 `compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`, then repoints every consumer to
 `<&crg IDX>` / `<&crg off bit>` (fmc, gpio0/1, i2c0, pcie0, gmac0), adding a new
-`dt-bindings/clock/luofu.h` for the `LUOFU_CLK_*` ids; the pinned gate/PLL/mux offset-bit geometry and the
+`dt-bindings/clock/luofu.h` for the `LUOFU_CLK_*` ids (now COMMITTED as `8a474dd` on
+`omo/phase22-hccaccept` - see the arm-A status block above for the dtc verdict); the pinned gate/PLL/mux
+offset-bit geometry and the
 `softrst_val0/1` magic come across verbatim, since the reference tables are hardcoded per-SoC (a new
 compatible is required, not a data entry). Stage 1 stays a pure gate+reset bring-up: gates tagged
 `CLK_IGNORE_UNUSED` so `clk_disable_unused()` cannot kill the live console or NAND, no PLL/mux rate
@@ -220,3 +238,22 @@ unit-name warnings), and the ranked stage-2 driver inventory is fixed at
 symbols per stage). Stage 2's first driver to write is pinctrl. The ctrl-rb IRQ path's correctness test is
 the twin/copy-B quiesce predicate (glue stat == 0 AND twin stat == 0), because a copy-A-only zero stays
 vacuous.
+
+Stage-2 driver #2 landed, and the smoke result is the pinctrl skeleton (2026-10-05, submodule commit
+`d4875e6` on `omo/phase22-hccaccept`, `build/tmp/inta-spec/pinctrl.md`): `lab/luofu-pinctrl/{luofu-pinctrl.c,
+Makefile,README.md}` registers `hsan,luofu-peri-pinctrl` as a platform driver (`of_match_table` +
+`module_platform_driver` probe/remove + `pinctrl_register` over the transcribed 37-pin / 24-group /
+24-function geometry read out of `hi_kpinctrl.ko`), with `set_mux` and the pinconf setters left as
+deliberate NO-OPS so the bootloader's mux state is preserved at stage 2; it maps the pinned `"mux"`
+(`0x14900100`, 0x3c) and `"cfg"` (`0x14940000`, 0x100) windows read-only, leaves `dt_node_to_map` NULL for
+`pinconf_generic_dt_node_to_map()`, and keeps the reset deassert out (that is a reset write). CI is wired in
+both lanes: `lab-module-build.yml` is now a `fail-fast: false` matrix over `[luofu-clk, luofu-pinctrl]`, and
+the `master`-triggered `build-load-test-module.yml` carries the matching build step, `vermagic` line and
+`luofu-pinctrl-ko` artifact. SMOKE RESULT: the cross-build is CI GREEN - run `37371987343` on `d4875e6`
+(`lab-module-build` -> job `build (luofu-pinctrl)`, conclusion success; the sibling `build (luofu-clk)` job
+is green too), so the skeleton compiles against the vanilla 5.10.201 arm headers the same way `luofu-clk`
+did (`pinctrl.md` section 5; the exact `CC [M]`/`LD [M]` tail is quoted in ADDENDUM 18). Caveats kept: this
+lane has no `Module.symvers`/`vmlinux` dump, so the unresolved-symbol check is skipped and the real test
+remains loading the `.ko` against the vendor tree; the driver was never loaded and no device cycle was run by
+that task. Next stage-2 fill-in is the per-pin `drv_data {reg_off, shift, func}`, the real per-group pin
+lists and the `"cfg"` bitfield map behind `set_mux`/`pin_config_set` (`pinctrl.md` section 4).
