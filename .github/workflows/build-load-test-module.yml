@@ -195,6 +195,11 @@ jobs:
           cd lab/luofu-clk
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: build luofu-pinctrl module
+        run: |
+          cd lab/luofu-pinctrl
+          make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
       # ---- ABI-match lane: build the probe and the wifiskel skeleton with the
       # default CONFIG_PM=y headers first, then with CONFIG_PM forced off, so the
       # struct-offset delta is captured in both binaries. ----
@@ -255,6 +260,7 @@ jobs:
           strings lab/fwload/fwload.ko | grep -m1 vermagic
           strings lab/iatuview/iatuview.ko | grep -m1 vermagic
           strings lab/luofu-clk/luofu-clk.ko | grep -m1 vermagic
+          strings lab/luofu-pinctrl/luofu-pinctrl.ko | grep -m1 vermagic
           strings lab/fwboot/fwboot.ko | grep -m1 vermagic
           strings lab/fwhs/fwhs.ko | grep -m1 vermagic
           strings lab/msgd/msgd.ko | grep -m1 vermagic
@@ -436,6 +442,11 @@ jobs:
         with:
           name: luofu-clk-ko
           path: lab/luofu-clk/luofu-clk.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luofu-pinctrl-ko
+          path: lab/luofu-pinctrl/luofu-pinctrl.ko
 
       - uses: actions/upload-artifact@v4
         with:

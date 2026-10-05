@@ -3,8 +3,9 @@ name: lab-module-build
 # Sibling of build-load-test-module.yml. That workflow triggers on master only,
 # which a push to an agent branch (the only branch we push, omo/*) cannot
 # trigger; this lane carries the same ARM cross toolchain + 5.10.201 headers and
-# builds a single lab module so an omo/* push gets a real cross-compile.
-# Currently the target is lab/luofu-clk (stage-1 CRG skeleton, no HW writes).
+# builds the lab modules so an omo/* push gets a real cross-compile.
+# Targets (matrix): lab/luofu-clk (stage-1 CRG skeleton) and lab/luofu-pinctrl
+# (stage-2 IOMUX skeleton); both are no-HW-write scaffolds.
 
 on:
   push:
@@ -14,6 +15,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [luofu-clk, luofu-pinctrl]
     steps:
       - uses: actions/checkout@v4
 
@@ -36,15 +41,15 @@ jobs:
           scripts/config --enable SMP --disable PREEMPT --enable MODULE_UNLOAD --disable MODVERSIONS --disable ARM_PATCH_PHYS_VIRT --set-str LOCALVERSION ""
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules_prepare -j"$(nproc)"
 
-      - name: build luofu-clk module
+      - name: build ${{ matrix.module }} module
         run: |
-          cd lab/luofu-clk
+          cd lab/${{ matrix.module }}
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
       - name: show vermagic
-        run: strings lab/luofu-clk/luofu-clk.ko | grep -m1 vermagic
+        run: strings lab/${{ matrix.module }}/${{ matrix.module }}.ko | grep -m1 vermagic
 
       - uses: actions/upload-artifact@v4
         with:
-          name: luofu-clk-ko
-          path: lab/luofu-clk/luofu-clk.ko
+          name: ${{ matrix.module }}-ko
+          path: lab/${{ matrix.module }}/${{ matrix.module }}.ko
