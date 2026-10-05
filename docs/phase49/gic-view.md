@@ -1166,3 +1166,255 @@ normal, healthy boot.
 - **The port:** assign the INTx virq so `request_irq` runs (`build/tmp/trigger-spec/hostisr.md` sections 1.3 and 3, `virq2.md`
   sections 2-3), and re-run with the hardened capture path so one boot carries both halves.
 
+---
+
+# ADDENDUM 8 (2026-10-05): the consumption-gate retry + the virq root cause - BRANCH PAD-DID-NOT-RUN (unchanged), consumption half still OPEN
+
+Two follow-ups ran against the salvaged capture. The first is the build-node fix `build/tmp/dt-spec/padb.md`
+section 3 chose for the Pad-B reachability failure (`padb.md` option (a): move Pad B's site from file
+`0x86F7E`, behind the never-completing `0xcece` wait, to the wait's OWN `movw r3,#0xcece` at file
+`0x86F74`). The second is the host-side fix for the virq negative (`build/tmp/dt-spec/virq3.md`). Only the
+first is a device cycle; the second is a source reading. This addendum records both, the retry still gives
+**no numbered row**, and the consumption half stays OPEN.
+
+## The instrument
+
+`tools/patch_fw_scratch.py` variant **`trigcons`** (uncommitted working-tree addition on HEAD `2a5a99a`):
+the trignat instrument (Pad A at the natural `out[1]` post, the five-cell B read, the three sentinels
+`0x50AA7E49`) with ONE change, the site move from `0x86F7E` to `0x86F74`. The replaced instruction is now
+the `movw r3,#0xcece` (stock bytes `4cf6ce63`); Pad B reproduces it in its tail, then branches back to the
+loop head `0x86F78`, so the object code from `0x86F7E` on stays byte-identical to stock. Pad B now
+precedes the only blocking instruction in the routine, so no handshake has to complete for the B cells to
+have a producer. The B pagination is also doubled: `B_D0..B_D3` and `B_P3` are read TWICE (a pre-wait set
+and a post-wait set) so one boot can yield both the pre-wait and the post-wait instant. Both pads, the
+site bytes and the new pagination are capstone-audited in the variant's own `ARTIFACT`-style manifest
+(`verify_disasm_trigcons`, `TRIGCONS_SITE_B = 0x86F74`, `TRIGCONS_SITE_B_BYTES == 4cf6ce63`); no forbidden
+CA (`0x400392f0`, `0x10161000`, `0x4016010c`) is read or written. Note the look-alike: the gate register
+is CA `0x4000010c`, NOT the forbidden IAR `0x4016010c`.
+
+## The Pad-B gate finding, re-derived
+
+The gate is a host-side handshake scratch word, and it is the reason Pad B never ran in the salvage. The
+announce routine at file `0x86F74` loads the constant `0x0000CECE` (`movw r3,#0xcece`) and spins at
+`0x86F78..0x86F7C` on `*(CA 0x4000010c) == 0xcece`; a second, IRQ-masked copy of the same wait sits at
+`0x820F8`. Nothing in the image writes it: a literal scan finds `0xcece` **0 times** in `FIRMWARE.bin` and
+**0 hits** of a `movw ... #0xcece` across all six held `*.ko`. The register is the host-visible pair-mate
+of the release register: region idx 3 maps CA `0x40000000..0x4011ffff` at host offset `0x3b8000`, so CA
+`0x4000010c` = BAR0/resource0 offset **`0x3b810c`** (a runtime host write after the firmware's own
+zeroing, not a ROM value). The writer is therefore on the host side of the region-3 window; which vendor
+host stage emits `0xcece` is still [unknown] in the record. Because the loop cannot exit, Pad B's stock
+site at `0x86F7E` is unreachable, which is exactly the runtime reachability finding the salvage recorded,
+not a patch defect.
+
+## The fix's outcome
+
+The site move puts Pad B ahead of the wait, so **Pad B is now guaranteed to run** (`B_P3` = `0x50AA7E49`
+can no longer come back absent), the old site `0x86F7E` is left byte-identical to stock, and the B cells
+finally have a producer. Ceiling stated up front: because it samples pre-wait, the expected read-out is
+row 2 RING-PENDING-NOT-TAKEN, with the residual gate named as the CPU-interface take/enable, past the wire
+that rows 1 and 2 already share. The full root-cause companion is `padb.md` option (c): have the HOST
+write the completing word, a 32-bit store of `0x0000CECE` at BAR0+`0x3b810c` (the same window the port
+already uses for the release at `0x3b8108`), done after the release once the announce is observed. That is
+the protocol-truth fix, since it satisfies the firmware's own wait so the announce routine exits normally
+and Pad B's original post-handshake site is reached at the designed instant, the only option that can
+yield row 1 TRIGNAT-COMPLETE. It needs a `wifidrv1.c` change and therefore rides the submodule CI on
+`omo/phase22-hccaccept` only, never master.
+
+## The virq result and the root cause
+
+The port change (`build/tmp/upstream-spec/virq2.md` section 2) made the module a `struct pci_driver`, and
+the core enabled the endpoint (`enabling device (0140 -> 0142)`). The INTx virq was still never assigned:
+
+```
+[   39.205438] omo-drv1 0000:00:00.0: of_irq_parse_pci: failed with rc=-22
+[   39.212104] omo-drv1: no endpoint INTx virq (irq=0) - the svc=1 poll service is the stand-in
+[   56.856628] omo-drv1: init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=0 isr0=0
+```
+
+No `request_irq(...)` line, no `[isr]` line, and no `207:`/`209:` line in `/proc/interrupts`, so the ISR
+never executed. That is `hostisr.md` **ROW B (LINE ASSERTED WITHOUT HOST DELIVERY)**.
+
+**The rc=-22 cause.** It is the port's OWN fallback call, `of_irq_parse_and_map_pci` (the KERNEL prints the
+string, `drivers/pci/of.c` `of_irq_parse_pci`'s `dev_err` arm, so `rc == -EINVAL`, not `-ENOENT`). The
+fallback is a documented dead end on this board: the endpoint has no OF node, and both RC nodes carry no
+`interrupt-map` and no `interrupt-parent`, so the DT mapper cannot resolve the RC's `interrupts` spec. The
+core assignment was never the thing that broke. The kernel assigns the line itself,
+`pci_device_probe()` calls `pci_assign_irq()` before any `.probe`, resolving INTA through the host
+bridge's `map_irq`, which `hi_pcie_probe` installs as `hi_pcie_map_irq` returning `host->irq` = the RC's
+`radm` line = SPI 59 = GIC hw 91 = **207**. The vendor endpoint driver (`hi5622v100_plat.ko`, `rox_pci0`)
+is what triggers that assignment normally; a takeover hides it, and the port's new `pci_driver`-ness is
+what the change was for. The real reason the port read 0 is a struct-layout mismatch: the module is
+cross-built against vanilla linux-5.10.201 + `multi_v7_defconfig`, where `struct pci_dev->irq` sits at
+**0x1ac**, while the running vendor kernel puts it at **0x184**, so `omo_pdev->irq` read 0 out of
+`resource[]` and threw away the 207 the core had already assigned. (A brief correction is on the record
+here: `interp.txt` section 4 claimed the `/sys` `irq = 207/209` readings are config-space bytes that do
+not contradict `irq0 = 0`; that is false, `/sys/bus/pci/devices/*/irq` IS `pci_dev->irq`.)
+
+**The fix (the port change).** Read the line back through config space instead of the mismatched struct
+field: `pci_read_config_byte(omo_pdev, PCI_INTERRUPT_LINE, &irq)`, which returns the `0xcf` (207) the
+core wrote. The readback landed as submodule commit `3ac4820` ("lab(wifidrv1): read the virq back from
+PCI_INTERRUPT_LINE (struct-layout-proof)") on `omo/phase22-hccaccept`. The declared fallback order if
+assignment still fails is `of_irq_get(<10160000.pcie of_node>, 0)` = the RC's `radm` line, then MSI
+(`pci_alloc_irq_vectors`; the endpoint advertises MSI but the vendor leaves it disabled, expect a
+negative), each guarded by `omo_irq > 0`, since `pci_assign_irq()` clamps only `-1` and `hi_pcie_map_irq`'s
+error path returns `-EIO`. The boot witness that closes the thread is in `virq3.md`/`hostisr.md` section 3:
+a `207: N N GIC-0 91 Level omo-drv1` line with `N > 0` whose counter MOVES with the ring.
+
+## The cells (from the fix's cycle)
+
+`build/register-dumps/exp/20261005-090644-salvage/` remains the reference capture for the branch: `A_P1` =
+`A_P2` = `0x50AA7E49` (Pad A ran), `A_S3` = `0x00001020` (ISPENDR2 w2 bit 12 SET, id `0x4c` pending),
+`A_S4` = `0x0000004C` (HPPIR), `B_P3` ABSENT with `B_D0..B_D3` all-zero (void). The site move changes
+nothing about that walk: the pre-wait and post-wait sets overlap on one visit, and while the handshake is
+never completed they carry the same pre-consumption reading, so the classification is still **row `-`, PAD
+DID NOT RUN as the record's only supportable label, no numbered row closable** (walk: `A_S3` bit 12 SET +
+`A_S4` = `0x4c` exclude GLUE-ONLY and NOTHING; the void `B_*` cells stall rows 1 and 2; the `-` row fires).
+The post-wait half stays a record-void on a single visit, exactly as the salvage flagged.
+
+## The bounds (declared, not hidden)
+
+1. **The retry produces no numbered row and no consumption witness.** It makes Pad B RUN, it does not make
+   the device dispatcher TAKE. Rows 1 and 2 still need either the post-handshake instant (option (c)) or
+   the CPU-interface take.
+2. **The site move forfeits the post-wait instant** (`padb.md` section 4); option (c) restores it but needs
+   a port change and does not fix the CPU-side take, which is a separate thread (`hostisr.md` ROW B).
+3. **The virq root cause is a struct-offset mismatch, not a missing core assignment.** The fix is a config
+   readback; the boot witness (207 line + moving counter) is what proves it, and that witness was not
+   taken in the salvage boot (the port ran the pre-fix bytes, hence `irq0 = 0`).
+4. **Provenance of the salvage capture** is unchanged: it is a POST-HOC assembly of a detached hook's
+   output, not a live harness capture (see ADDENDUM 7 - AMENDMENT and `SALVAGE-NOTE.txt`).
+5. **The `0xcece` emitter is [unknown]** in the record; only its position (host side, region-3 window
+   `0x3b810c`) and mechanism (runtime write after the firmware's own zeroing) are settled.
+6. **Hard rules respected:** no write of CA `0x400392f0`, no read of `0x10161000`, no read of the IAR
+   `0x4016010c`; the gate register `0x4000010c` is a different address.
+
+## Verification
+
+The salvage capture was re-parsed by the acceptance script (88 passed / 0 failed, `ALL_OK`) and
+independently reproduced by `build/register-dumps/diffs/20261005-090644-vrun5/verdict.txt` (CONFIRMED,
+high), which also re-derived the branch with its own parser and flagged the `interp.txt` section-4
+root-cause error that `virq3.md` corrects. `padb.md` section 5 carries the gate disassembly commands
+(`pyenv/Scripts/python.exe` + capstone 5.0.7: thumb disasm of the announce routine and the `0x820F8`
+helper, the literal scans, the pool words showing `0x86fa0 = 0x4000010c`). `virq2.md`/`virq3.md` carry the
+kernel-source quotes (v5.10.201 `pci_device_probe`, `pci_assign_irq`, `pci_read_irq`, `of_irq_parse_pci`),
+the live kallsyms/ksymtab lines, and the `hi_pcie.ko` capstone disassembly of `hi_pcie_map_irq`. The
+`trigcons` variant's own self-test asserts the moved site bytes, the continuation, and the byte-identical
+tail. Device health in the salvage cycle's `cleanup.txt`:
+`WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, stock md5
+`0e530b976d5a20e87358671f1a577695`, 3 pstore records (no new crash), no takeover leftovers.
+
+## The next threads
+
+- **Close the handshake (protocol-truth).** Implement `padb.md` option (c): the port writes
+  `0x0000CECE` to BAR0+`0x3b810c` after the release, so the announce routine exits and Pad B's original
+  site is reached, then run the (a)+(c) combination on ONE boot to give row 1 its chance.
+- **Close the virq.** Re-run the port with the `PCI_INTERRUPT_LINE` readback and take the boot witness
+  (`207:` line with a counter that moves on a ring).
+- **One boot for both halves.** Pair the trigcons build with the fixed port and the hardened capture path
+  so a single cycle carries the B cells and the host witness.
+
+# ADDENDUM 8 - AMENDMENT (2026-10-05): the corrected trigcons-2 run - ROW 2 RING-PENDING-NOT-TAKEN + VIRQ 207 OWNED
+
+The retry landed. The earlier ADDENDUM 8 recorded the failed attempt: Pad B's site move was built but the
+cycle never staged it, so the consumption half stayed OPEN and the virq still read `irq0=0` with no
+`request_irq` line. This amendment carries the corrected run, evidence
+`build/register-dumps/exp/20261005-103047/` (`EXP RESULT: PASS`, acceptance 92 passed / 0 failed, `ALL_OK`,
+`run-trigcons-2.log` 10:30:46Z to 10:33:18Z, `exp_rc=0`). Both halves of the row changed, and both are
+CONFIRMED by an independent verifier (`build/register-dumps/diffs/20261005T1022Z-vtool5/verdict.txt`, the
+instrument-and-provenance pass, plus the record check `20261005T102701Z-vrec4/verdict.txt`). The artifact
+zip's sha256 equals the API digest for CI run 37295389630, and the `.ko` it carries is md5
+`1f0e80ed9a02b80ab2deb337d288e781` from that CI at submodule `3ac4820`, so the bytes under test are the
+built bytes.
+
+## The values (alias view; the BAR0-direct view of these pages reads 0)
+
+| cell | address | value | reads |
+| --- | --- | --- | --- |
+| `A_S3` | `0x40807018` | `0x00001020` | ISPENDR2 word 2, id `0x4c` bit 12 SET, the ring reached the GIC |
+| `A_S4` | `0x40808000` | `0x0000004C` | GICC HPPIR, id `0x4c` pending |
+| `B_D0` | `0x40808030` | `0x00000008` | out[0] `0x40039010`, still pending at the drain point |
+| `B_D1` | `0x40808038` | `0x00000004` | out[1] `0x40039014` |
+| `B_D2` | `0x40808040` | `0x00001020` | ISPENDR2 word 2, bit 12 STILL SET at the drain point |
+| `B_D3` | `0x40808048` | `0x0000004C` | GICC HPPIR, id `0x4c` at the drain point |
+| `B_P3` | `0x40808050` | `0x50AA7E49` | Pad B sentinel, the moved drain-point site RAN |
+
+Sentinels `A_P1` = `A_P2` = `0x50AA7E49`, so both pads ran in this boot. The moved Pad-B site is file
+`0x86F74` (`TRIGCONS_SITE_B`; stock bytes `4cf6ce63`, `movw r3,#0xcece`) now carrying `bl #0x108366`, the
+Pad-B entry, with the old announce-exit site at `0x86F7E` left byte-identical to stock.
+
+## The two rows
+
+**DEVICE ROW = ROW 2 RING-PENDING-NOT-TAKEN.** The ringed id reached the GIC (`A_S3` bit 12 SET, `A_S4` =
+`0x0000004C` HPPIR) and was STILL PENDING at the drain point (`B_D0` = `0x8`, `B_D1` = `0x4`, `B_D2` bit 12
+SET, `B_D3` = `0x0000004C`), so the device dispatcher did not consume within the observed window. That
+window is bounded and this is a `not yet` per the bounds, not a proof the dispatcher never takes.
+
+**HOST ROW = VIRQ 207 OWNED, NO ISR OBSERVED.** The struct-layout-proof fix (submodule `3ac4820`: read
+`PCI_INTERRUPT_LINE` instead of the `pci_dev->irq` field, where the vanilla offset `0x1ac` and the vendor
+offset `0x184` mismatch had thrown away the core-assigned 207) gives `dmesg`
+`omo-drv1: init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=0`,
+`request_irq(207, IRQF_SHARED) rc=0`, and `/proc/interrupts` line `207: 0 0 GIC-0 91 Level omo-drv1`. The
+line is owned by our driver and no ISR has run on it. Freshness is argued from `interrupts-pre.txt`, which
+records the vendor's `hisi_pci_intx` action on line 207 before staging, so the `omo-drv1` action in
+`interrupts.txt` is this run's and not a leftover.
+
+## The two setup fixes that make the run valid
+
+1. **Stage the artifact as `wifidrv1.ko`.** The module's internal name is `wifidrv1`; the old staged filename
+   `wifidrv1-isr.ko` made `exp.sh`'s wait grep the wrong name, which is the root cause of several earlier
+   `timeouts`. Staging the artifact under the module's own name let the cycle complete.
+2. **A TS-gated capture recovery.** The old recovery selector could grab the stale salvage directory; the
+   TS gate makes it pick the directory whose timestamp is at or after this run's `RUN_TS`, so the capture
+   recovered into `20261005-103047` is the run's own.
+
+## The two remaining unknowns
+
+- **(a) The device dispatcher's non-consumption**, bounded to the observed window: `B_D0` and `B_D2` still
+  show the pending id at the drain point, so the take did not happen inside the window this boot sampled.
+- **(b) The D2H/INTA host-facing path**: line 207 is owned and its counter stays 0, so a device post has not
+  yet fired our owned line and the host-facing route from the device to 207 is still open.
+
+## The bounds (declared, not hidden)
+
+1. **The device window is bounded.** The drain-point read is `not yet` at the sampled instant, not a proof of
+   permanent non-consumption; the ROW-2 branch string's `never ran` wording is stronger than the bounds
+   support, and the bounds' `not yet` is the honest reading.
+2. **The host counter is 0**, so `VIRQ OWNED` is ownership plus a registered handler, not a delivery: no ISR
+   has fired and the D2H/INTA path is unobserved.
+3. **The ROW-2 branch in this lane is a suffix of `trigger2.md` section 4's ROW 2.** Rows 1 and 2 share the
+   ring-into-GIC front half; here the back half (the take) did not happen within the window, so the `-` row
+   the earlier ADDENDUM 8 printed is refined, not repealed, and row 1 TRIGNAT-COMPLETE stays out of reach.
+4. **Disclosed risks carried:** the ROW-2 branch string's `never ran` wording vs the bounds' `not yet`
+   tension; the gitignored runner's broken recovery selector (safety held, scratch removed by hand);
+   `PACKED.txt` frozen before `health.txt` (so `health.txt` reads MISSING in the inventory, present on
+   disk); CRLF/LF mixing in the evidence text (cosmetic); pre-existing `register_netdevice` WARNs.
+5. **Provenance holds:** the instrument variant is pinned (`TRIGCONS_MD5` =
+   `5fb51acd68c62699435d2e1fd823d900`, pinned in `tools/patch_fw_scratch.py`), stock md5
+   `0e530b976d5a20e87358671f1a577695` is unchanged, device healthy after recovery
+   (`WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`), 3 pstore records (no new crash),
+   no takeover leftovers, knob-set digest `541060a8...` matches the frozen footer.
+
+## Verification
+
+The capture's `acceptance.txt` is 92 passed / 0 failed (`ALL_OK`) over the trigcons cells, the sentinels,
+and the host witness sections. An independent verifier re-derived the firmware instrument and the capture
+hook (`build/register-dumps/diffs/20261005T1022Z-vtool5/verdict.txt`, CONFIRMED): the `trigcons` variant
+regenerates byte-identical to the staged blob (size 928920 B), its own capstone resolves Pad A and Pad B to
+the declared read/write sets, the 726 changed bytes all sit inside the five sites and five pads, the old
+announce-exit site stays stock, and no forbidden CA is touched. The same verifier fetched the CI artifact
+for run 37295389630 (`gh run download`), matched its md5 to `1f0e80ed9a02b80ab2deb337d288e781`, and confirmed
+the artifact zip's sha256 equals the API digest, so the staged `.ko` is the built-and-published bytes at
+submodule `3ac4820` (`omo/phase22-hccaccept` only, master untouched). The one defect the verifier named was
+in the earlier attempt (the pre-fix `.ko` staged for the failed boot), which this run's staging fix closed.
+`knobset-digest.txt` records the frozen knob-set hash and the three md5s (blob `5fb51acd...`, stock
+`0e530b976...`, `ko 1f0e80ed...`).
+
+## The next threads
+
+- **Reach the take.** Sample the drain point past the bounded window (a second post-handshake instant per
+  `padb.md` option (c)) so the dispatcher's take either fires or is excluded, not just `not yet`.
+- **Fire the host line.** Drive the D2H/INTA path while watching line 207's counter; the owned line moving
+  is the boot witness the virq thread is waiting on.
+- **One boot for both halves.** Pair the corrected staging (the artifact as `wifidrv1.ko`) with the fixed
+  port and the hardened capture path so a single cycle carries the B cells and a moving 207 counter.
+

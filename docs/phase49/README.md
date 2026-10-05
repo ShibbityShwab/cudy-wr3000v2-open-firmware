@@ -189,4 +189,35 @@ detached hook's output was pulled post-hoc. **BRANCH = PAD-DID-NOT-RUN**: Pad A 
 reached the device GIC) but Pad B never executed, so the consumption half stays OPEN and no numbered row
 closes; the virq outcome is NEGATIVE (irq 0, ISR never executed). Evidence
 `build/register-dumps/exp/20261005-090644-salvage/` (`capture-cmd.txt`, `interp.txt`, `acceptance.txt`
-88/0, `cleanup.txt`, `SALVAGE-NOTE.txt`); device recovered healthy.
+88/0, `cleanup.txt`, `SALVAGE-NOTE.txt`
+); device recovered healthy.
+
+## The consumption-gate retry + the virq root cause (2026-10-05)
+
+`gic-view.md` "ADDENDUM 8 (2026-10-05)" closes the two threads the salvage named. The build-node fix is
+`padb.md` option (a): the `trigcons` variant MOVES Pad B from the unreachable announce-exit site (file
+`0x86F7E`) onto the `0xcece` wait's own `movw r3,#0xcece` at file `0x86F74`, so the B cells get a producer
+without any handshake completing, and doubles the pagination into pre-wait and post-wait sets (a single
+boot still yields one instant, so the row stays `-`/PAD-DID-NOT-RUN and no numbered row closes). The
+declared ceiling is pre-consumption: row 2, with the residual gate named as the CPU-interface take. The
+protocol-truth companion is option (c), a HOST write of `0x0000CECE` to BAR0+`0x3b810c`, the only fix that
+can reach row 1. On the host side, the virq negative's real cause is recorded: the `-22` is the port's own
+`of_irq_parse_and_map_pci` fallback (a documented dead end here), and the port threw away the 207 the core
+had ALREADY assigned because vanilla 5.10 `struct pci_dev->irq` sits at 0x1ac while the vendor kernel has
+it at 0x184. The fix reads the line back through `PCI_INTERRUPT_LINE` (submodule `3ac4820`,
+`omo/phase22-hccaccept` only). Companion specs: `build/tmp/dt-spec/padb.md` (the gate + fix) and
+`build/tmp/dt-spec/virq3.md` (the root cause).
+
+## The corrected trigcons-2 run: ROW 2 + VIRQ 207 OWNED (2026-10-05)
+
+The retry the earlier plan could not stage landed. `gic-view.md` "ADDENDUM 8 - AMENDMENT (2026-10-05)"
+records evidence `build/register-dumps/exp/20261005-103047/` (`EXP RESULT: PASS`, acceptance 92/0): the moved
+Pad-B drain-point site ran (`B_P3` = `0x50AA7E49`), the ring reached the device GIC (`A_S3` = `0x00001020`,
+`A_S4` = `0x0000004C`) and was still pending at the drain point (`B_D0` = `0x8`, `B_D1` = `0x4`, `B_D2`
+`0x00001020`, `B_D3` = `0x0000004C`), so the device row is ROW 2 RING-PENDING-NOT-TAKEN within the
+observed window; the host row is VIRQ 207 OWNED, no ISR observed (`request_irq(207, IRQF_SHARED) rc=0`,
+`207: 0 0 GIC-0 91 Level omo-drv1`) via the `PCI_INTERRUPT_LINE` fix (submodule `3ac4820`, run 37295389630,
+`.ko` md5 `1f0e80ed9a02b80ab2deb337d288e781`). Two setup fixes made the run valid: staging the artifact as
+`wifidrv1.ko` (the module's internal name; the old `wifidrv1-isr` filename made the wait grep the wrong name)
+and a TS-gated capture recovery (the old selector grabbed the stale salvage dir). The device dispatcher's
+non-consumption (bounded) and the D2H/INTA host path stay open.
