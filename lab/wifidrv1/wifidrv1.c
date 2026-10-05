@@ -1476,6 +1476,8 @@ static void omo_intrsamp(void)
 	}
 }
 
+
+
 /* PHASE 33 - claim and map the SIBLING endpoint (0001:00:00.0, EP1) so its window can ring
  * the H2D doorbell, exactly as the vendor's chip->dev[0] does.  Only the doorbell CA 0x400392d4
  * is written through it; out[5] CA 0x400392f0 is never written. */
@@ -2060,6 +2062,93 @@ static irqreturn_t omo_intx_isr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+/*
+ * PHASE 49 - THE D2H/INTA RING KNOB (build/tmp/inta-spec/hostpath.md section 3.1).
+ *
+ * Post-release the host impersonates the device's own D2H post chain and watches the glue and
+ * the kernel ISR counter for the latch.  omo_intapost is a bitmask of independent, bounded steps:
+ *   0x1  CA 0x400392d4 |= 0x1  the H2D doorbell bit 0 (out[2]; the control - a raw bit-0 latch)
+ *   0x2  CA 0x400392d4 |= 0x8  the D2H set bit 3 (device2host_rx_intr_set; the sibling's host
+ *                              ISR source)
+ *   0x4  CA 0x40101434 |= 0x1  the firmware's own D2H doorbell register, written by the host
+ *                              (impersonating a device post)
+ *   0x8  CA 0x4000010c  = 0x0000cece  the natural-post companion (padb.md option (c)): it is the
+ *                                    only writer of the 0xcece handshake the announce routine
+ *                                    waits on; run BEFORE the rings
+ *
+ * Each step reads the baseline (glue mask/raw/status + the ISR counter), writes, reads the written
+ * word back (self-clearing registers read 0 - the readback is recorded), then polls raw/status/the
+ * counter for up to 2000 ms in 50 ms steps, stopping on the first CHANGE - no blind sleep - and
+ * prints the first change with both bitmaps and the ISR delta.  Reads go through omo_msg for the
+ * 0x3f1xxx words and omo_rel for the 0x4b9434/0x3b810c words.  NEVER writes CA 0x400392f0
+ * (intr-clear, W1C); NEVER reads the ack IAR CA 0x4016010c or the RC misc 0x10161000.  The gate
+ * register 0x4000010c is a different address from the forbidden IAR 0x4016010c.
+ */
+static unsigned int omo_intapost;
+module_param_named(intapost, omo_intapost, uint, 0444);
+MODULE_PARM_DESC(intapost,
+	"bitmask: ring the D2H/H2D doorbells post-release and watch the glue + the ISR counter "
+	"(phase 49): 0x1 = H2D doorbell CA 0x400392d4 |= 1; 0x2 = D2H set CA 0x400392d4 |= 8; "
+	"0x4 = firmware D2H doorbell CA 0x40101434 |= 1; 0x8 = natural-post companion "
+	"CA 0x4000010c <= 0xcece (run first)");
+
+#define OMO_GLUE_RAW	0x2e4		/* within the message window -> BAR0 0x3f12e4 */
+#define OMO_GLUE_MASKREG 0x2e8		/* within the message window -> BAR0 0x3f12e8 */
+#define OMO_D2H_DOORBELL 0x101434UL	/* CA 0x40101434 within the region-3 window */
+#define OMO_NATPOST_OFF	0x10cUL		/* CA 0x4000010c within the region-3 window */
+#define OMO_NATPOST_VAL	0x0000ceceU
+
+#define OMO_INTAPOST_TIMEOUT_MS	2000
+#define OMO_INTAPOST_STEP_MS	50
+
+static void omo_intapost_step(const char *what, u32 ca, void __iomem *win, unsigned long off,
+			      u32 val, bool or_in)
+{
+	unsigned int ms, waited;
+	u32 mask, raw0, st0, raw, st, isr0, isr, cur, wr, rb;
+
+	mask = omo_rd(omo_msg, OMO_GLUE_MASKREG);
+	raw0 = omo_rd(omo_msg, OMO_GLUE_RAW);
+	st0 = omo_rd(omo_msg, OMO_GLUE_STAT);
+	isr0 = (u32)atomic_read(&omo_isr_n);
+
+	cur = omo_rd(win, off);
+	wr = or_in ? (cur | val) : val;
+	iowrite32(wr, win + off);
+	rb = omo_rd(win, off);
+
+	raw = raw0;
+	st = st0;
+	isr = isr0;
+	waited = 0;
+	for (ms = 0; ms < OMO_INTAPOST_TIMEOUT_MS; ms += OMO_INTAPOST_STEP_MS) {
+		msleep(OMO_INTAPOST_STEP_MS);
+		waited += OMO_INTAPOST_STEP_MS;
+		raw = omo_rd(omo_msg, OMO_GLUE_RAW);
+		st = omo_rd(omo_msg, OMO_GLUE_STAT);
+		isr = (u32)atomic_read(&omo_isr_n);
+		if (raw != raw0 || st != st0 || isr != isr0)
+			break;
+	}
+	pr_info("omo-drv1: [intapost] step=%s ca=0x%08x write=0x%08x rb=0x%08x mask=%08x raw %08x->%08x "
+		"status %08x->%08x isr %u->%u delta=%u waited=%ums\n",
+		what, ca, wr, rb, mask, raw0, raw, st0, st, isr0, isr, isr - isr0, waited);
+}
+
+static void omo_intapost_run(void)
+{
+	pr_info("omo-drv1: ---- intapost ring knob 0x%x (post-release) ----\n", omo_intapost);
+	if (omo_intapost & 0x8)
+		omo_intapost_step("0x8-natural-post", 0x4000010cU, omo_rel, OMO_NATPOST_OFF,
+				  OMO_NATPOST_VAL, false);
+	if (omo_intapost & 0x1)
+		omo_intapost_step("0x1-h2d-doorbell", 0x400392d4U, omo_msg, OMO_MSG_DOORBELL, 0x1U, true);
+	if (omo_intapost & 0x2)
+		omo_intapost_step("0x2-d2h-set-bit3", 0x400392d4U, omo_msg, OMO_MSG_DOORBELL, 0x8U, true);
+	if (omo_intapost & 0x4)
+		omo_intapost_step("0x4-fw-d2h-doorbell", 0x40101434U, omo_rel, OMO_D2H_DOORBELL, 0x1U, true);
+}
+
 /* ---- PCI bring-up (mirrors lab/eteprobe, read-mostly) ------------------ */
 static int omo_hw_attach(void)
 {
@@ -2244,6 +2333,10 @@ static int omo_hw_attach(void)
 
 		if (omo_ackfast_en)
 			omo_ackfast();
+
+		/* the D2H/INTA ring knob (hostpath.md section 3.1): post-release, before the mailbox poll */
+		if (omo_intapost)
+			omo_intapost_run();
 
 		/* POLL FIRST, IMMEDIATELY. An earlier revision slept 500 ms and then did the signature
 		 * read (~40 ms) before polling, so the mailbox was unobserved for the first ~540 ms
