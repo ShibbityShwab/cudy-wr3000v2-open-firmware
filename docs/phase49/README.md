@@ -494,3 +494,24 @@ blocker on the one store the emitter dropped. Health: bound held both lines (`20
 new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands. Next: fix `write_ca_block()` to emit
 `movt r0, value>>16` when `value > 0xFFFF` and re-run take3 unchanged; a rerun whose `E_EN0` bit29 reads CLEAR
 is the first boot that actually tests `tiebreak.md`'s lever.
+
+## ADDENDUM 21 (2026-10-06): the separation (take4) - the emitter fix LANDED and the 0x4C promotion HELD, yet the take still did not move; the residual is the SGI bank
+
+ADDENDUM 20 closed on one line: emit `movt r0, value>>16` in `write_ca_block()` when `value > 0xFFFF` and re-run
+take3 unchanged. That rerun is **take4**, and it's recorded in full as `gic-view.md` **ADDENDUM 20** ("the
+separation"). It is the first boot to actually remove the banked PPI `0x1D` from the ENABLED set (`E_EN0` =
+`0x0000FFFF`, bit29 CLEAR, where take3 read `0x2000FFFF`), and the `0x4C` promotion + the `0x40`/`0x45` mask
+held to the end (`E_P4C` byte0 `0x00`, `E_EN2` = `0x5000`, `E_CTLR` RWP 0). The take still did not move: the
+IAR ring stayed SGI-owned (`V2_ID` id 2, ring `0,1,2,2`) and `0x4C` stayed pending+untaken (`E_ACT` bit12
+CLEAR, `E_OU0` = `0x8`, `E_ISP` bit12 SET). With the PPI gone, `0x4C` becomes the top *enabled* source
+(`F_HPP` = `0x4C`), so the blocker has shifted from the PPI axis to the SGI (bank) axis. One line the `sep.md`
+sec.2 table has no row for: `E_HPP` = `0x3FF` while `0x4C` is pending and enabled (later `F_HPP` = `0x4C`),
+consistent either with a transient or with a group enable gate (`E_CTLR` = `0x1`, EnableGrp1 = 0), not
+separated by the capture. The addendum carries the SGI note as a subsection: an SGI is not a competitor at the
+SPI priority, it sits higher in the same queue, and the SGI bank is at priority byte `0x00`, so any pending IPI
+out-ranks `0x4C` (priority `0x50`) - the next lever is the bank axis, not another SPI-priority write. Evidence
+`build/register-dumps/exp/20261006-124348/`; blob `build/tmp/fw-patched/take4.bin` md5
+`000a26af4d7b12e84d4191ae51dbad6d`, the reused v8 ko `3f87f1e9...`; adversarial verdict
+`build/register-dumps/diffs/20261006T1246Z-vrun17/verdict.txt` (C1-C8 CONFIRMED); instrument verdict
+`build/register-dumps/diffs/20261006T1243Z-vtool16/verdict.txt`. Health: bound held both lines
+(`207 n=65/64`, `209 n=9/8`), no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.

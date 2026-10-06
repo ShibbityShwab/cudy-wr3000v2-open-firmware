@@ -3315,3 +3315,195 @@ Evidence `build/register-dumps/exp/20261005-212711/`; blob `build/tmp/fw-patched
 `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`). Hard rules held: the pad
 writes no `0x400392f0`/`0x40039af0`, no pad reads the IAR except the firmware's own, no `0x10161000` access,
 staged as `wifidrv1.ko`, cycle serial/detached with the bound armed, router left healthy.
+
+---
+
+# ADDENDUM 20 (2026-10-06): the separation - THE EMITTER FIX LANDED (the `0x1D` PPI LEFT THE ENABLED SET) and the `0x4C` PROMOTION HELD, YET THE TAKE STILL DID NOT MOVE: the ring stayed SGI-owned (`0,1,2,2`) and `0x4C` stayed pending+untaken, so the residual is now the SGI BANK, not the PPI; `E_HPP` read `0x3FF`, not `0x4C`, so NO `sep.md` sec.2 row matches verbatim
+
+Task `st_01a1113f`'s boot, `st_01a11137`'s build (`sep.md`), `st_01a11133`'s design. ADDENDUM 19 ended on one
+line: emit `movt r0, value>>16` in `write_ca_block()` when `value > 0xFFFF`, re-stage `wifidrv1.ko`, and run
+the same boot again. take4 is that boot. The emitter fix is measured on-device, and it retired take3's named
+blocker, but the take still did not move. This block is the interpretation; the boot's own `interp.txt` landed
+the finish-evidence skeleton.
+
+Evidence `build/register-dumps/exp/20261006-124348/` (`capture-cmd.txt`, `run-take4.log`, `dmesg.txt`,
+`health.txt`, `pstore-delta.txt`, `KNOBSET.txt`, `PACKED.txt`); adversarial verdict
+`build/register-dumps/diffs/20261006T1246Z-vrun17/verdict.txt` (8/8 CONFIRMED, C1-C8); instrument verdict
+`build/register-dumps/diffs/20261006T1243Z-vtool16/verdict.txt`. Cycle `run-take4.sh` -> `tools/exp.sh`,
+`TAKE4 RESULT: PASS`, `exp_rc=0`, 12:43:47Z -> 12:46:30Z; ko `wifidrv1.ko`
+`3f87f1e9fe5ed9666f27d1f784d34535` (the v8 of `553342d`, reused unchanged, no ko commit, no CI), blob
+`build/tmp/fw-patched/take4.bin` md5 `000a26af4d7b12e84d4191ae51dbad6d` (size-preserving, 928920 B). All new
+cells sit on page 10 (`capture alias 0x406B8000 + runtime`) and read alias-only. Hard rules held: no write of
+CA `0x400392f0`; no read of `0x10161000`; no pad reads the ack IAR `0x4016010c` except the firmware's own; ko
+staged as `wifidrv1.ko`; cycle serial/detached with the bound armed; recover after.
+
+## Short version
+
+The take4 hypothesis is CONFIRMED at the instrument level and FALSIFIED at the physics level. The emitter fix
+landed: `E_EN0` = `0x0000FFFF`, bit29 CLEAR, so the banked TWD PPI `0x1D` really left the ENABLED set, which
+take3 could not do (`E_EN0` = `0x2000FFFF`). The `0x40`/`0x45` mask and the `0x4C` promotion held to the end
+(`E_EN2` = `0x5000`, `E_P4C` byte0 = `0x00`, `E_CTLR` RWP = 0). And still the take did not move: the ring's
+four IAR slots are SGI-class ids `0,1,2,2`, `E_ACT` bit12 CLEAR, `E_OU0` = `0x8`, `E_ISP` bit12 SET. `0x4C`
+stayed pending, never acked, never consumed. The one source that out-ranked it is gone, the next contender is
+the SGI bank, and `F_HPP` = `0x4C` at the later Site F epoch confirms `0x4C` is now the top *enabled* source.
+The blocker shifted from the PPI axis to the SGI (bank) axis, which is exactly where `sginote.md` sec.4 pointed.
+
+## The emitter fix: measured, not predicted
+
+ADDENDUM 19 named `write_ca_block()` (`tools/patch_fw_scratch.py:1779`) as the defect: it emitted `movw(0,
+val & 0xFFFF)` with no `movt` half, so any 32-bit store with a nonzero high halfword silently became its low
+halfword (`0x20000000 -> 0x00000000`). take4 fixes the encoder for values above `0xFFFF` and adds a physical
+presence check. The build side proves it before the boot (`vtool16`): `--check-emitted take4` PASS 8/8, while
+`--check-emitted take3` FAIL (the frozen `0x1D` pair absent from the take3 pad). The device proves it again:
+
+| cell | CA / source | take3 | take4 | reading |
+| --- | --- | --- | --- | --- |
+| `E_EN0` | `0x40161100` w0 (`GICD_ISENABLER`) | `0x2000FFFF` | `0x0000FFFF` | bit29 CLEAR: `0x1D` IS masked now |
+| `N_EN0` | `0x40161100` at Pad A(N) entry | (n/a) | `0x0000FFFF` | bit29 CLEAR at the ring's entry pad too |
+
+The `0x1D` competitor-disable reached `GICD_ICENABLER0`/`ICPENDR0`, something no earlier boot achieved. `sep.md`
+rows 3 and 4 (mask-did-not-take / emitter-bug) are excluded by this line. take3's blocker is retired.
+
+## The separation result: the take still does not move
+
+With `0x1D` out of the enabled set, the two SPI competitors masked and `0x4C` enabled + promoted, the take
+should have been `0x4C`. It was not.
+
+| cell | CA / source | value | meaning |
+| --- | --- | --- | --- |
+| `V2_ID` | the IAR word the firmware's own read (file `0x82f04`) returned | `0x00000402` | `& 0x3ff` = `0x002`, SGI-class, not `0x4C`, not `0x1D` |
+| `V2_RING0..3` | the 4-deep id ring | `0,1,2,` `0x402` | SGI-owned (`0x0,0x1,0x2`), newest slot again the suspect `0x402` |
+| `V2_CNT` / `V_MAGIC` / `V_CNT` | pad | `4` / `0xA4A4A4A4` / `4` | the ISR ran four times, the pad clocked every IAR read |
+| `E_ACT` | `0x40161308` w2 (`ISACTIVER2`) | `0x00000000` | bit12 CLEAR: the IAR was never read for `0x4C` |
+| `E_OU0` | `0x40039010` (`out[0]`) | `0x00000008` | the dispatcher never consumed it |
+| `E_ISP` | `0x40161208` w2 (`ISPENDR2`) | `0x00001021` | bit12 SET: `0x4C` still pending; bits 0/5 = `0x40`/`0x45` |
+| `E_HPP` | `0x40160118` (`GICC_HPPIR`) | `0x000003FF` | nothing signalled at the ring epoch |
+| `F_HPP` | `0x40160118` at Site F | `0x0000004C` | positive control: `0x4C` IS the top pending id later |
+| `E_P4C` | `0x4016144C` byte0 | `0x00` | the promotion held to the END (no late re-write) |
+| `E_EN2` | `0x40161108` w2 | `0x00005000` | bit12 SET (`0x4C` enabled), bits 0/5 CLEAR (`0x40`/`0x45` masked) |
+| `E_CTLR` | `0x40161000` (`GICD_CTLR`) | `0x00000001` | RWP bit31 = 0, EnableGrp0 set |
+| `E_SNT` / `E_PSR` | sentinel / CPSR | `0x50AA7E49` / `0x20000193` | the pad ran; the mask is open at the sample |
+| `E_P1D` | `0x4016141C` byte1 = id `0x1D` | `0xE0` | the PPI's own priority byte, above `0x4C`'s `0x50` |
+
+So the take record never moves even with the mask that landed. The `0x4C` hand-off is not gated by the PPI or
+by priority bytes any more; it is gated by whatever owns the epoch ahead of the SPIs, and that is the SGI bank
+(ids `0`/`1`/`2`). The `0x402` word rides along, unchanged from take2/take3: not a valid GIC id, flagged
+suspect, not modelled.
+
+## The branch table has no matching row, and that is the finding
+
+Read against `sep.md` sec.2:
+
+- **Row 1 (SEPARATED) is FALSE.** `E_ACT` bit12 CLEAR and the ring's newest slot is not `0x4C`.
+- **Rows 3, 4, 5, 6, 7 are EXCLUDED** by the E block (`E_EN0` bit29 CLEAR, `E_P4C` byte0 `0x00`, `E_EN2` =
+  `0x5000`, `E_CTLR` RWP 0, `E_SNT` present).
+- **Row 8 (NO-SAMPLE) is excluded** (`E_SNT` = `0x50AA7E49`).
+- **Row 2 (SGI-TRANSIENT) matches substantively but not literally.** Its precondition wants `E_HPP` == `0x4C`,
+  and here `E_HPP` reads `0x3FF`; its conclusion, that the residual is the SGI bank and `0x4C` is the top
+  *enabled* source, is what the boot shows, witnessed by `F_HPP` = `0x4C` at the later epoch.
+
+The one line the table has no row for: **`E_HPP` = `0x3FF` while `0x4C` is pending AND enabled.** `E_ISP` bit12
+SET and `E_EN2` bit12 SET at the E epoch, yet HPPIR named nothing, then Site F read `F_HPP` = `0x4C`. Two
+readings fit the capture and it does not separate them: (a) a transient, nothing signalled at that exact
+instant and `0x4C` named itself later; (b) a CPU-interface/Distributor **group gate** - `E_CTLR` = `0x1`, so
+EnableGrp0 only and EnableGrp1 = 0, and if SPI `0x4C` is a Group-1 interrupt it is pending+enabled yet not
+signalled. No `GICD_IGROUPR` cell for the SPI bank was captured, so (b) is an inference, not a measurement.
+It is flagged open; it does not invert the negative above.
+
+## The SGI note: the take epoch is owned by transient IPIs, not by priority
+
+Why doesn't the SGI bank yield to a promoted `0x4C`? Because an SGI isn't a competitor on the priority axis at
+all - it sits higher in the same queue, and its own bank sits at the top priority byte. This subsection is the
+model that makes the take4 negative legible; it is static analysis, read-only, no device access.
+
+Ids `0..15` are SGIs (software-generated, per-CPU, banked); `16..31` are PPIs (`0x1D` = the banked TWD timer);
+`32+` are SPIs (`0x40`, `0x45`, `0x4C`). An SGI is raised by one core writing `GICD_SGIR` (`0x40161F00`), so its
+sender is a CPU, not a wire. In the take3/take4 ring (ids `0`, `1`, `2`) those are, by the kernel's own
+`interrupts.txt` labels, **SGI 0 = CPU wakeup, SGI 1 = timer broadcast, SGI 2 = rescheduling** - the standard
+cross-core IPI triad. Both cores send and receive each, ordinary SMP housekeeping in flight at the sampled
+instant.
+
+Firmware sites (re-disassembled for the note): the only SGIR writer in the image is file `0x820C0`, and its
+cross-core raise is **always SGI 1** (TargetListFilter `0b00`, one named core). Its CPU-interface-init callers
+write `set_prio(0,0)` at `0x8305C` and `set_prio(2,0)` at `0x83070`, so **the SGI bank sits at priority byte
+`0x00`**, the maximum. The MPIDR reading `V2_MPIDR` = `0x80000000` is CPU 0, and `dmesg` labels it verbatim
+(`CPU0 ... mpidr 80000000`), so the ring's takes landed on CPU 0 - the only core whose GICC `CTLR.Enable` the
+vendor sets at bring-up (`0xC20A2`).
+
+The model consequence: an SGI is not a *competitor* for `0x4C`, it is **higher in the same queue**. Under the
+recorded rule (priority first, then the LOWEST id), a higher-priority SGI is selected ahead of `0x4C` regardless
+of id, and at equal priority the lower SGI id still wins the tie. With the SGI bank at `0x00`, any pending SGI
+out-ranks `0x4C` (priority `0x50`). **So SGIs are the highest-priority transient traffic in the take window and
+they never block `0x4C` materially - they out-rank it, every time an IPI is in flight.** take4 is the boundary
+probe of that statement: with the PPI and the `0x40`/`0x45` SPIs gone, `0x4C` becomes the top *enabled* SPI
+(`F_HPP` = `0x4C`) while the ring still holds `0,1,2` and the epoch is still owned by the SGI bank. The SPI
+priority axis is exhausted; the next lever is the **bank axis** (mask/quiesce SGI ids `0..6`, or re-rank
+bank-0 bytes `0x40161400..0x4016140F`), not another SPI-priority write.
+
+Bounds (the note's, carried verbatim): (a) `/proc/interrupts` + the 4-slot ring are instants, not a trace;
+(b) the sender routine fixes id 1, ids `0`/`2`/`3` reuse the same `GICD_SGIR` primitive, caller-to-id mapping is
+the standard `IPI_*` assignment; (c) `V2_MPIDR` stores the raw MPIDR, the helper `&3`-masks only for its own
+compare; (d) `0x402` is not a valid id, a sampling-boundary value flagged suspect, not modelled; (e) no device
+access, no write of `0x400392f0`, no host read of `0x4016010c`/`0x10161000`.
+
+## Bounds (declared, not hidden)
+
+1. **No `sep.md` sec.2 row matches verbatim.** The substantive row 2 pattern (SGI-transient residual) is what
+the boot shows, but `E_HPP` = `0x3FF` fails row 2's literal precondition, and `E_HPP` = `0x3FF` while `0x4C`
+is pending+enabled is an open residual (transient vs group gate) the capture cannot separate.
+2. **One shot, four entries.** `V_CNT` = `V2_CNT` = `4`, and the four ids are not source-attributed beyond the
+ring's write order; `0x402` is a single-boot anomaly, not a stable property.
+3. **The `E_EN2` bit14 (`0x4E`) enable is unexplained** (no pad writes it), exactly as take3, consistent with
+the late writer at file `0x7edd8` that registers both `0x4C` and `0x4E`; not load-bearing.
+4. **`E_P40` = `0xF050F050` differs from take2's `P_40` = `0xF050F0F0`** (byte2 `0x50` vs `0xF0`), which says
+the authored priority bytes are per-boot firmware state, so the mask evidence is `E_EN2`, not the byte.
+5. **The interp is this block.** The run's own `interp.txt` landed the finish-evidence skeleton; the rows above
+are sourced from `capture-cmd.txt`, `dmesg.txt`, `health.txt`, `pstore-delta.txt` and the verdict, each named.
+
+## Verification
+
+Adversarial verdict `build/register-dumps/diffs/20261006T1246Z-vrun17/verdict.txt`: **C1-C8 all CONFIRMED**, the
+honest branch being an honest NEGATIVE with a named, partially-shifted cause. C1 the instrument ran and the E
+pad sampled (`V_MAGIC` = `0xA4A4A4A4`, `V_CNT` = 4, `E_SNT` = `0x50AA7E49`, staged blob = take4 md5, stock md5
+`0e530b976d5a20e87358671f1a577695`); C2 THE EMITTER FIX LANDED (`E_EN0` = `0x0000FFFF` bit29 CLEAR where take3
+read `0x2000FFFF`); C3 the take did NOT move (`V2_ID` id 2, ring `0,1,2,2`, `E_ACT` bit12 CLEAR, `E_OU0` 8,
+`E_ISP` bit12 SET); C4 the mask + promotion held (`E_P4C` byte0 `0x00`, `E_EN2` = `0x5000`, `E_CTLR` RWP 0);
+C5 the later positive control `F_HPP` = `0x4C`; C6 the mandatory bound armed and tripped on BOTH lines
+(`207 n=65 bound=64` glue `00000011`; `209 n=9 bound=8`) with `IRQ_LEFT_DISABLED reason=bound`, `rung=OBSERVE`,
+`probe=0`; C7 the router healthy; C8 no crash. The instrument verifier (`vtool16`) re-derived the take4 blobs
+(two regenerations byte-identical, `--check-emitted take4` PASS 8/8), and its live read-only probe found no
+`.omo-pat` leftover, vendor modules loaded, stock md5 unchanged, 2 wiphys, 6 interfaces, calibration `[SUCC]` on
+both bands.
+
+Run facts: `TAKE4 RESULT: PASS`, `exp_rc=0`, `PACKED.txt` device == host blob md5 `000a26af...`; done marker
+`init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=65`; window sanity `0xE59FF018`; the
+bound trips `irq=207 n=65 bound=64` and `irq=209 n=9 bound=8`; supervisor reached `SUPERVISOR DONE
+quiesced=0 rung=OBSERVE ... state=IDLE`; `health.txt` = `WIFI=1 PLAT=1 WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0
+STAGED=0 LOADER=0 RECOVER=0`; `pstore-delta.txt` = NO new record. One named observation, not load-bearing: the
+device rebooted once more between the capture boot and the verifier's probe (probe uptime 49 s vs capture boot
+71.74 s); the router is healthy either way.
+
+## The next threads
+
+- **Move to the bank axis: quiesce the SGI bank, don't touch the SPI priority bytes again.** take4 exhausts the
+  SPI-priority lever (`0x4C` promoted to `0x00`, PPI and `0x40`/`0x45` out of the set, `F_HPP` = `0x4C`) and the
+  ring is still SGI-owned. Mask/quiesce SGI ids `0..6` (or re-rank bank-0 bytes `0x40161400..0x4016140F`) and
+  re-ring, so the epoch is not owned by an IPI.
+- **Separate the `E_HPP` = `0x3FF` residual.** Sample `GICD_IGROUPR` for the SPI bank at the same post, so
+  "transient" (nothing signalled) vs "group gate" (`0x4C` Group-1 while `E_CTLR` enables Group 0 only) is
+  measured, not inferred. This is the one line `sep.md` sec.2 has no row for.
+- **Re-run the flip clean for the `0x402` id.** Keep only `0x4C -> 0x00` as the mutation and re-read `V2_ID`
+  per entry, so the per-entry ids stop carrying the invalid `0x402` word.
+- **Chase the `0x4E` late writer.** `E_EN2` bit14 is SET with no pad writing it; the file `0x7edd8` register
+  path (RAM-table id source, unproven) is the standing suspect.
+
+## Artifacts
+
+Evidence `build/register-dumps/exp/20261006-124348/`; blob `build/tmp/fw-patched/take4.bin` md5
+`000a26af4d7b12e84d4191ae51dbad6d`; retained take1/take2/take3 blobs `0c681650...`/`eeeb252f...`/`072de986...`;
+runner `build/tmp/wifidrv1-art/run-take4.sh`; hook `build/tmp/wifidrv1-art/take4-capture.hook`; instrument
+verdict `build/register-dumps/diffs/20261006T1243Z-vtool16/`; adversarial verdict
+`build/register-dumps/diffs/20261006T1246Z-vrun17/`; specs `build/tmp/inta-spec/{sep.md,sginote.md,emitter.md}`;
+ko `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`). Hard rules held: the pad writes
+no `0x400392f0`/`0x40039af0`, no pad reads the IAR except the firmware's own, no `0x10161000` access, staged as
+`wifidrv1.ko`, cycle serial/detached with the bound armed, router left healthy.
