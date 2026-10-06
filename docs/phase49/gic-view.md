@@ -3674,3 +3674,169 @@ then prove the EOI theory by forcing the release path (the counter/guard state) 
 
 Health after the re-run: stock md5 exact, 0 leftovers, 6 interfaces, 3 pstore records; no panic in either
 attempt.
+
+# ADDENDUM 22 (2026-10-06): the stuck-active - the gate 21a named is a PRIORITY-0 SOURCE HELD ACTIVE (RPR `0x00` at the ring, `0xFF` after the ISR's EOI), retired by the EOI and, per the release path's own sample, never retired when the ISR doesn't run / the RPR comparator ranks above the SGI bank and the group enable, both REFUTED as the stopper / the take6 fast sampler that would NAME the source stalled at the same step the take5 bracket did
+
+21a closed with the gate named: a priority-0 interrupt sits ACTIVE (`GICC_RPR` `0x00000000` at the ring), and
+the promoted `0x4C` cannot signal while it holds, then `RPR` idles (`0xFFFFFFFF`-class read `0xFF`) the instant
+the ISR's own EOI retires it. This addendum asks the two questions 21a left open - WHICH id is the active
+source, and what the state means without the ISR path - and settles both from the artifacts already on disk.
+
+## Short version
+
+The stuck-active is a **priority-0 source held ACTIVE**, read directly: `E5_RPR` (the ring) = `0x00000000`,
+`I5_RPR` (the ISR's post-EOI) = `0x000000FF`, `F5_RPR` (the `0xcece` gate's fall-through) = `0x000000FF`, all in
+ONE boot. Nothing else in the CPU interface moves; `HPPIR` tracks `RPR` exactly (`E_HPP`/`X_HPP`/`N_HPP` =
+`0x3FF` while `0x4C` is pending+enabled+promoted, then `F_HPP` = `0x4C` the moment `RPR` idles). So the take is
+not attempted-and-lost, it is **not attempted while the priority-0 epoch holds**. Two candidate blockers fold
+under it: the **SGI bank** (ids 0 and 2 are the only sources the firmware prices `0x00`) and the **group
+enable** (`0x4C`'s group bit reads `0` at both the ring and the fall-through, so EnableGrp0 covers it). Both are
+REFUTED as the stopper; the comparator is `RPR`. And the release that would end the epoch is counter-gated:
+its own sample point never ran (`M2_PSR` = `0x00000000`), so a priority-0 source can be left active across the
+forward attempt. The instrument that would name the source (`take6`, the 16-instant `pad_stk_fast` reading
+`GICC_RPR` x16 + the word-0 `ISACTIVER` bank + `HPPIR` with the sticky byte) is built and verified but its boot
+**stalled at the same `[4/7]` completion marker the take5 bracket stalled at** - NO-SAMPLE, so the source stays
+named only by the candidate set, never by a fresh cell.
+
+## The stuck-active, read directly from 21a (`exp/20261006-135935`)
+
+| cell | read | tag |
+| --- | --- | --- |
+| `E5_RPR` | `0x00000000` | at the ring a priority-0 source is ACTIVE |
+| `I5_RPR` | `0x000000FF` | inside the ISR, right after the EOI at file `0x82f52` |
+| `F5_RPR` | `0x000000FF` | the `0xcece` gate's fall-through |
+| `E5_SGIP` / `I5_SGIP` / `F5_SGIP` | `0x00000000` / `0x00000000` / `0x20000000` | ISPENDR word 0; bit 29 (id `0x1D`) pends only at the fall-through, never at the ring |
+| `E5_GRP2` / `F5_GRP2` | `0x00000000` / `0x00000000` | IGROUPR word 2: id `0x4C`'s group bit = 0 (group 0) |
+| `E_HPP` / `X_HPP` / `N_HPP` / `F_HPP` | `0x3FF` / `0x3FF` / `0x3FF` / `0x4C` | HPPIR: `0x4C` unsignalable while `RPR` = `0x00`, named the instant `RPR` idles, ONE boot |
+| `E_ACT` / `X_ACT` / `N_ACT` / `F_ACT` | `0` / `0` / `0` / `0` | ISACTIVER word 2 = the SPI-class active bank; ZERO at every vein, so no SPI is the holder |
+| `E_ISP` / `X_ISP` / `N_ISP` / `F_ISP` | `0x00001021` | ISPENDR word 2: bit 12 (`0x4C`) pending at every instant |
+| `E_EN0` | `0x0000FFFF` | ISENABLER word 0: the banked TWD PPI `0x1D` stays MASKED (the ADDENDUM-20 fix held) |
+| `M2_PSR` | `0x00000000` | the release guard's `0x8270A` CPSR sample never ran |
+
+Each value is quoted from `build/register-dumps/exp/20261006-135935/capture-cmd.txt`; the same values stand in
+`build/tmp/inta-spec/stuck.md` sec.0, `eoir.md` sec.0 and `stk3.md` sec.0. The `_SNT` sentinels (`E5_SNT` /
+`I5_SNT` / `F5_SNT`) all read `0x50AA7E49`, so all three instants are real samples, not the `M2_PSR = 0` class of
+written non-event. The one cloud on the boot is the IAR ring's `V2_ID = 0x00000402`, which is not a valid GIC id
+(ADDENDUM 18/20's suspect word); it does not touch the `RPR` differential, which is read straight from the CPU
+interface.
+
+## What is ACTIVE, and what it means
+
+A `GICC_RPR` of `0x00` means a source priced `0x00` is in service. `E_ACT` is `0` at every sampled instant, so
+no SPI-class source is active; the holder is a **word-0 (SGI/PPI bank) source**. The firmware's own CPU-interface
+init prices two ids at `0x00`: `set_prio(0,0x0)` at file `0x8305C` and `set_prio(2,0x0)` at `0x83070` (the
+vendor's `IPRIORITYR[id] = prio<<4` form). Id `0x1D`, the banked TWD PPI, is authored at byte `0xE0` and is
+masked anyway (`E_EN0` bit29 CLEAR), and `set_prio` gives it `0xE0` too. So the candidate holder set is `{SGI 0,
+SGI 2}`, and the IAR ring's standouts (`0`, `1`, `2`) corroborate a word-0 source without ever naming it cleanly
+(`0x402` = the SGI-2-from-CPU-1 read the GICv2 cell decodes).
+
+What it MEANS is a strict-`>` gate. `0x4C` was promoted to priority `0x00` (`E_P4C` byte0 `0x00`) and its group
+bit reads `0` at the ring (`E5_GRP2`) and the fall-through (`F5_GRP2`), with `E_CTLR` = `0x1` (EnableGrp0 SET) -
+so nothing below `RPR` in the ranking is turned away on GROUP grounds. With `RPR` = `0x00` the promoted `0x4C`
+fails the strict `>` test (equal priority does not preempt an active one), so at the `0x00` instants the take is
+not attempted; the instant `RPR` clears to `0xFF`, `F_HPP` reads `0x4C` - the same boot. The `0x4C` promoted to
+life only after the incumbent's `RPR` dropped is the SGI bank cleared of one candidate, plus the group gate
+cleared twice by the read.
+
+## The clear: the EOI retires it, and the release is counter-gated
+
+`E5_RPR` = `0x00` -> `I5_RPR` = `0xFF` across the ISR's own `str r7,[r3]` at file `0x82F52` (the image holds
+exactly one `0x40160110` EOIR reference and exactly one `0x4016010c` IAR reference, re-derived this session). So
+the epoch is NOT stuck forever; it retires the moment the ISR's EOI runs. The catch is the RELEASE path's
+conditions: `0x826E0` owns the epoch's exit (five stores in the release's body; the file `0x82730` caller
+re-enters after its `msr cpsr_c,r1`), and ADDENDUM 21's note stands re-derived here: the release's early-exit
+guard tests the per-CPU pending count and the CPSR interrupt-mask bit, so it RETURNS BEFORE its body unless the
+conditions hold. `M2_PSR` = `0x00000000` means that sample point never executed in this boot, so the release
+returned early or was never called; the half that would restore the mask/counter state is silently skipped, and
+the priority-0 source stays active. That is the mechanism that keeps the epoch alive across the ring's forward
+attempt - the reason the `0x4C` signal never arrives.
+
+## Bounds (declared, not hidden)
+
+1. `CA 0x40160114` = `GICC_RPR` is a GICv2 CPU-interface-convention reading, NOT an image literal: the firmware
+   writes no literal for `0x40160114` or `0x40160118` (0 references in the whole image). The model rests on the
+   behavioral differential (`E5` `0x00` -> `I5`/`F5` `0xFF` after the EOI, and `HPPIR` tracking it), not on the
+   register's name.
+2. The CANDIDATE SET `{SGI 0, SGI 2}` is a derivation from the firmware's own `set_prio` call sites, not a
+   sample: no cell in take1..take5 reads the word-0 `ISACTIVER` bank (`GICD_ISACTIVER0` `0x40161300`), and the
+   firmware never writes it either. The id stays a candidate until an instrument reads the bank.
+3. The EOIR-retires-it result is proven by the `E5/I5/F5` differential; the release-counter story (the `0x82730`
+   early-exit on `M2_PSR` = `0`) is NAMED by re-derived disassembly, not measured (no cell reads `PERCPU+*`).
+4. `0x4C`'s own no-attempt at the `0x00` instants is read (`HPPIR` = `0x3FF` while `E_ISP` bit12 SET and `E_EN2`
+   bit12 SET), but a transient that opened and closed between two coarse instants is not excluded by 21a's
+   three cells alone; only a fast sampler closes that door.
+5. The `0x402` IAR word is this boot's suspect entry; the CPU-interface reads are unaffected.
+
+## Verification
+
+- Values quoted verbatim from `build/register-dumps/exp/20261006-135935/capture-cmd.txt` (`E5_RPR`/`I5_RPR`/
+  `F5_RPR`, `E5_SGIP`/`I5_SGIP`/`F5_SGIP`, `E5_GRP2`/`F5_GRP2`, `E_HPP`/`X_HPP`/`N_HPP`/`F_HPP`, `E_ACT`/`X_ACT`/
+  `N_ACT`/`F_ACT`, `E_ISP`, `E_EN0`, `E_P4C`, `E_CTLR`, `M2_PSR`, `V2_ID`, and the three `_SNT` sentinels).
+- The three-instant bracket is the take5 re-run; `run-take5.log` shows `TAKE5 RESULT: PASS`, `exp_rc=0`; health
+  `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0`.
+- The ISR / release / `set_prio` sites are re-derived with capstone 5.0.7 (THUMB) from `build/tmp/FIRMWARE.bin`
+  (md5 `0e530b976d5a20e87358671f1a577695`) in `build/tmp/inta-spec/stuck.md` sec.1-3, `eoir.md` sec.1 and
+  `stk3.md` sec.0-1.
+- The instrument and its boot state: `build/register-dumps/diffs/20261006T1432Z-vtool18/verdict.txt` (take6 read-only
+  sampler CONFIRMED, C1-C8) and `build/tmp/wifidrv1-art/run-take6.log` (stalled at `[4/7]`).
+- Hard rules held: no write of CA `0x400392f0` / `0x40039af0`; no read of `0x10161000`; the host never reads the
+  ack IAR `0x4016010c` (the ISR's own read at file `0x82F04` is quoted as data); `GICD_SGIR` `0x40161F00` never
+  read; the take6 EOIR force (`GICC_EOIR` `0x40160110`) is gated to `take6f` and was not built.
+
+## The next threads
+
+1. **The fast sampler that NAMES the source** (`take6`): `pad_stk_fast` (172 B, chained after the retained E block
+   at the ring) reads `GICC_RPR` `0x40160114` sixteen times back-to-back into `STK_0..STK_15`, ANDs them into
+   `STK_STICKY` (`0x00000000` iff an `RPR` = `0x00` sample existed), and reads the word-0 active bank
+   `GICD_ISACTIVER0` `0x40161300` into `STK_ACT` (with `HPPIR` into `STK_HPP`); page-10 cells
+   `0x150170..0x1501BC`. It ships read-only (no device write at all), verified `CONFIRMED` by `vtool18`. Its boot
+   STALLED: `run-take6.log` sits at `[4/7] wait for the completion marker` since 14:33Z, no evidence dir exists,
+   no `omo-drv1` line - the SAME run failure the take5 bracket met. The honest label is NO-SAMPLE, so the source
+   stays a candidate. Next: diagnose the loader's `insmod` point (the take5 stall's named open residual) before
+   another reading is waited on.
+2. **The EOIR force** (`take6f`, gated, NOT built): one 32-bit `GICC_EOIR` `0x40160110` write of an
+   `--eoir-id`, then a re-read of `RPR` into `STK_RPR1`. It is the arc's capping proof (row 4 of `stk3.md`: `RPR`
+   drops `0x00 -> 0xFF`, then `HPPIR` `0x3FF -> 0x4C`, then the take), and it is gated: do not build it until
+   `STK_ACT` has named the holder, because a spurious EOIR unwinds a running-priority stack the firmware did not
+   author (`eoir.md` sec.2-3).
+3. **The release guard** (`M2_PSR` = `0`): sample the release path's own CPSR / per-CPU counter at file `0x82730`
+   so the early-exit is MEASURED, then force the epoch to end by retiring the source rather than by another
+   priority write.
+4. **The SGI axis, if the fast sampler reads `STK_STICKY == 0`**: the residual reverts to the bank (row 2 of
+   `stk3.md`), and the lever is the per-CPU SGI/PPI bank at the same instant - a `.ko` GICD write under
+   `omo/phase22-hccaccept`, not another SPI-priority byte (the ADDENDUM-20 axis is exhausted).
+
+## Artifacts
+
+- `build/tmp/inta-spec/stk3.md` (the fast sampler + sticky byte + gated EOIR force), `eoir.md` (the `GICC_EOIR`
+  CA/value and the safety rank), `stuck.md` (the SAMPLES the epoch still needs: which id, and whether it clears)
+  - the three design docs the take6 instrument (and this addendum's mechanism reading) stands on.
+- `build/tmp/inta-spec/{bracket.md,brk3.md,sgi3.md}` - the take5 bracket the re-run closed as ADDENDUM 21a.
+- Instrument verdict: `build/register-dumps/diffs/20261006T1432Z-vtool18/verdict.txt` (`CONFIRMED`; take6 read-only,
+  20 stores all page-10 cells, loads `RPR` x16 / `ISACTIVER0` x1 / `HPPIR` x1).
+- Boot attempt: `build/tmp/wifidrv1-art/run-take6.log` (no evidence dir; stalled at `[4/7]`).
+- Evidence: `build/register-dumps/exp/20261006-135935/capture-cmd.txt` (the 21a three-instant bracket the
+  mechanism reading quotes).
+
+### 22a. THE RE-RUN RAN (appended 2026-10-06 by the orchestrator): ROW 6 - NO-SAMPLE (the module loaded; the instrument's pads never executed)
+
+The sanctioned re-run of `run-take6.sh` (after the device was caught in takeover config, restored via
+`tools/restore-now.sh`, and rebooted twice - the first "reboots" had silently no-opped, caught by the uptime
+trail and since fixed with a boot-id gate) produced `build/register-dumps/exp/20261006-144831/`:
+
+- The CYCLE completed (exit 0; the D6 files generated; NO new pstore record; the cleanup recovered the
+  capture; the device recovered to 6 interfaces on a fresh boot).
+- **The run reads ROW 6 of this addendum's own branch table: `E_SNT == 0x0` = NO-SAMPLE.** Every alias-cell
+  reads zero - including the sentinels that had held `0x50aa7e49` in every take-era boot (`V_MAGIC=0` too:
+  the firmware's pads never ran at all) - while `WIN=0xE59FF018` proves the hook's read path itself is sound,
+  and the module-log shows `wifidrv1(O+)` + both vendor modules LOADED (the module did run; only the patched
+  FIRMWARE's execution is missing).
+- So the take6 pad set (`pad_stk_fast`, 172 B chained after the retained E block) **did not execute the way
+  the take1-take5 pads did** - a PATCH-LAYOUT / execution stall class, distinct from the take4-era patches
+  that ran cleanly (take4's separation boot populated every cell). The take6 EOIR force was never built
+  (the record: it is gated to `take6f`).
+- The stuck-id naming therefore remains OPEN, and the next step is OFFLINE-FIRST: diff the take6 pad's
+  placement/length against the working take4 layout, rebuild through the standing `--check-emitted` gate,
+  and only then spend another cycle (optionally with the `take6f` EOIR-force variant built in).
+- Device state after: healthy - 6 interfaces, stock md5 exact, 0 `.omo-off`, 3 pstore records unchanged,
+  all diagnostic leftovers cleared (the device-side `omo-take6-cap.txt` duplicated this dir's capture).

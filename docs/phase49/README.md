@@ -13,7 +13,8 @@ beside this one in `opensource/docs/phase49/`.
 | scratch boot | 11 | `scratch-boot.md` | `build/register-dumps/exp/20261004-165139/` | BRANCH-1: `enable(0x4c)` EXECUTED; the enable half is settled |
 | vendor-loader | 12 | `vendor-loader.md` | `build/register-dumps/exp/20261004-165759-vendorloader/` | REJECTED: loader does NOT validate; chip fails at runtime |
 | viewport | 13 | `viewport.md` | `build/register-dumps/exp/20261004-171523/` | expected-negative: GIC CA `0x40160000` stays host-invisible |
-| bracket | follow-up | `gic-view.md` ADDENDUM 21 | none (the evidence dir was never created) | the take5 instrument (E5 ring / I5 post-EOI / F5 gate-fall) is verified, but the boot died at the completion marker: NO-SAMPLE, a harness/run failure, no `brk3.md` row closes |
+| bracket | follow-up | `gic-view.md` ADDENDUM 21 | `build/register-dumps/exp/20261006-135935/` (the sanctioned re-run) | the take5 instrument (E5 ring / I5 post-EOI / F5 gate-fall) is verified, but the boot died at the completion marker: NO-SAMPLE, a harness/run failure, no `brk3.md` row closes |
+| stuck-active | follow-up | `gic-view.md` ADDENDUM 22 | `build/register-dumps/exp/20261006-135935/` (21a's three-instant bracket) | the gate 21a named is a PRIORITY-0 SOURCE HELD ACTIVE: `E5_RPR` = `0x0` (ring) vs `I5_RPR`/`F5_RPR` = `0xFF` (post-EOI / gate-fall); the EOI retires it and the release's guard sample never ran (`M2_PSR` = `0`); the SGI bank and the group enable are REFUTED as the stopper, `RPR` is the comparator; the fast sampler that would NAME the source (`take6`) stalled at the same `[4/7]` marker - NO-SAMPLE |
 
 ## What the forward lane measured (one line per chain link)
 
@@ -540,3 +541,32 @@ correctly selected nothing (`capture MISSING: no evidence dir at TS >= 20261006-
 Evidence: none (the dir never existed); log `build/tmp/wifidrv1-art/run-take5.log`; verdicts
 `build/register-dumps/diffs/20261006T1342Z-vtool17/verdict.txt` (instrument, CONFIRMED) and
 `build/register-dumps/diffs/20261006T1353Z-vrun18/verdict.txt` (boot, NO-SAMPLE).
+
+## ADDENDUM 23 (2026-10-06): the stuck-active (take6) - the gate 21a named is a PRIORITY-0 SOURCE HELD ACTIVE, retired by the EOI and never retired when the release guard never runs
+
+ADDENDUM 21a named the gate but not the source; this block names the source's SHAPE and the two refuted
+alternatives. It's recorded in full as `gic-view.md` **ADDENDUM 22** ("the stuck-active"); this block is the
+pointer.
+
+The state is read straight from ADDENDUM 21a's three-instant bracket, one boot (`exp/20261006-135935`): `E5_RPR`
+(the ring) = `0x00000000`, `I5_RPR` (the ISR's post-EOI at file `0x82f58`) = `0x000000FF`, `F5_RPR` (the `0xcece`
+gate's fall-through) = `0x000000FF`. So a **priority-0 source is ACTIVE** at the ring, and the ISR's own EOI
+(file `0x82f52`) retires it. `HPPIR` tracks `RPR` exactly: `E_HPP`/`X_HPP`/`N_HPP` = `0x3FF` while `0x4C` is
+pending+enabled+promoted, then `F_HPP` = `0x4C` the moment `RPR` idles, all in one boot. The take is not
+attempted-and-lost; it is not attempted while the `0x00` epoch holds (strict `>`). Two alternatives are REFUTED:
+the **SGI bank** cannot be the comparator at that instant (`E5_SGIP`/`I5_SGIP` = `0`, `F5_SGIP` = `0x20000000` only
+post-EOI) and the **group enable** is not the gate (`E5_GRP2` = `F5_GRP2` = `0`, `E_CTLR` = `0x1`). The holder is a
+word-0 SGI/PPI: `E_ACT` = `0` at every vein (no SPI active), and the firmware's own `set_prio` prices only SGI `0`
+(file `0x8305C`) and SGI `2` (`0x83070`) at `0x00` - a candidate set, since no cell reads the word-0 bank. The
+release that would end the epoch is counter-gated: `M2_PSR` = `0` means its own sample point never ran, so a
+priority-0 source can be left active across the forward attempt.
+
+The instrument that would NAME the source is `take6` (`pad_stk_fast`, read-only: `GICC_RPR` x16 + the word-0
+`GICD_ISACTIVER0` `0x40161300` + `HPPIR`, sticky byte `STK_STICKY`), verified by `vtool18` CONFIRMED. Its boot
+**stalled at the same `[4/7]` completion marker the take5 bracket did** (`run-take6.log`, 14:33Z, no evidence dir,
+no `omo-drv1` line), so the source stays a candidate and the honest label is NO-SAMPLE, a harness/run failure.
+Bounds: `0x40160114` = `GICC_RPR` is a GICv2 convention (0 image literals); the candidate set is derived from
+`set_prio`, not sampled; the release story is named by disassembly, not measured. Evidence
+`build/register-dumps/exp/20261006-135935/`; specs `build/tmp/inta-spec/{stk3.md,eoir.md,stuck.md}`; verdict
+`build/register-dumps/diffs/20261006T1432Z-vtool18/verdict.txt`. Health: bound held, no new pstore, 2 wiphys / 6
+interfaces, calibration `[SUCC]` both bands.
