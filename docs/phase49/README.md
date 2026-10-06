@@ -625,3 +625,55 @@ vendor-stack boot can no longer PASS on a loaded-but-unbound module. Evidence
 `build/register-dumps/diffs/20261006T1519Z-vtool19/verdict.txt` (instrument, CONFIRMED) and
 `build/register-dumps/diffs/20261006T1523Z-vrun20/verdict.txt` (boot, NO-SAMPLE). Health: bound armed and inert
 (no endpoint, no IRQ), no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.
+
+## ADDENDUM 26 (2026-10-06): the take6f re-run - the instrument RAN and NAMED the stuck id, the force HALF-LANDED, and the gate refused the wrong image slot
+
+ADDENDUM 25 recorded `take6f` built and verified, then lost to the vendor stack (NO-SAMPLE BY CONSTRUCTION).
+This block is the pointer for the SECOND take6f boot, recorded in full as `gic-view.md` **ADDENDUM 24** ("the
+take6f capstone, RE-RUN").
+
+The re-run came under the `race.md` sec.5 mitigation, and the mitigation held: `HIDE_MOVED=2`, the vendor
+boot init could no longer `insmod` its Wi-Fi pair on EITHER slot, so `lsmod` shows `wifidrv1 73728 0` and NO
+`hi5622v100_{plat,wifi}` - the endpoint was free and OUR module bound it (`request_irq(207, IRQF_SHARED)
+rc=0`, `BAR0 base=0x40000000`, the 928 920 B image uploaded). The instrument RAN: every active pad deposited
+its `0x50AA7E49` sentinel (`STK_SNT`, `E_SNT`, `F_SNT`, `B_P3`, `B_P4`, `C_SNT` all present). The 16 `GICC_RPR`
+samples `STK_0..STK_15` read `0x00000000` (16/16), `STK_STICKY = 0x00000000`, and `STK_ACT`
+(`GICD_ISACTIVER0` `0x40161300` word 0) = `0x00000004`. With the sticky zero, that bit NAMES the priority-0
+holder: **SGI 2 (id `0x2`)** - a member of `eoir.md` sec.0's candidate set (a), and the same boot's v2 IAR ring
+agrees (`V2_RING0/1/2/3 = 0,1,2,0x402`, `V2_ID = 0x00000402`). `STK_HPP = 0x3FF` at `RPR = 0x00` is the model:
+`0x4C` pending (`E_ISP = 0x1021`) but not signalable while a priority-0 source runs.
+
+The ranked EOIR force fired with the id the SAME boot had named (`0x2`), so it retired a genuinely ACTIVE
+interrupt and DROPPED the running priority: `STK_RPR1 = 0xFF` after `dsb sy`, against `STK_15 = 0x00` - the
+capping proof's first half, BY TRANSITION. The second half did not land inside the pad (`STK_HPP1 = 0x3FF`,
+not `0x4C`), but it is present one site over in the SAME boot: Site F reads `F_HPP = 0x0000004C` with
+`F_ISP = 0x1021`, `F_ACT = 0x0`. The force is recorded as HALF, not MISSED.
+
+The result is NOT certified, because the cycle boot attached `mtd13 "rootfsa"` (the stock 2.4.15 image, from a
+sibling lane's crash-reboot) instead of `mtd14 "rootfsb"`, so the runner's image gate refused it:
+`INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT`, `TAKE6F RESULT: FAIL`. The cells are a GATE-REFUSED READ - the
+first complete take6/take6f reading of the arc - and the take6f hypothesis moves from UNTESTED to
+MEASURED-BUT-UNCERTIFIED. Restoring slot B and re-running the SAME take6f is what would certify the naming and
+the force; the builder already refuses a bare or mismatched `--eoir-id`, so a wrong-id force cannot be spent by
+accident. The retained take4 frame still reads as take5 left it (`E_EN0 = 0xFFFF`, `E_EN2 = 0x5000`,
+`E_P4C = 0xF050F000`, `E_CTLR = 0x1`), and the mandatory bound armed and hit with no residue
+(`IRQ_DISABLED_BOUND irq=207 n=65 bound=64`, `irq=209 n=9 bound=8`, `SUPERVISOR DONE quiesced=0 state=IDLE`).
+Evidence `build/register-dumps/exp/20261006-154734/`; blob `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f...`;
+verdicts `build/register-dumps/diffs/20261006T1557Z-vrun21/verdict.txt` (boot, GATE-REFUSED) and
+`build/register-dumps/diffs/20261006T1545Z-vtool20/verdict.txt` (runner, CONFIRMED). Health: 2 wiphys / 6
+interfaces, calibration `[SUCC]` both bands, stock md5 unchanged, no new pstore, boot_id moved.
+
+## Verification - vrec19 (2026-10-06): arm A's ADDENDUM-24 record is QUOTED, not merely cited
+
+Adversarial record-check of arm A's ADDENDUM-24 record, host-only and read-only (task `st_01a111f1`, verdict
+`build/register-dumps/diffs/20261006T1605Z-vrec19/verdict.txt`). Four claims CONFIRMED: (C1) this README's
+`## ADDENDUM 24 (2026-10-06): the upstream arm B, continued - the PCIe RC design lands (spec + DT node) and the
+CRG forced probe reads the real part` heading (line 575) and its intra-block pointers resolve; (C2) the
+`gic-view.md` ADDENDUM 24 heading `the take6f capstone, RE-RUN` (line 3989) is quoted verbatim - a DIFFERENT
+record from C1; (C3) that block's `The take6f branch table, row by row` (rows 1-4: the sticky/`STK_ACT` naming,
+the `0xFF` no-`RPR` row, the `STK_SNT != 0x50aa7e49` NO-SAMPLE row, and the `STK_15`/`STK_RPR1`/`STK_HPP1`
+HALF-LANDED row) is reproduced byte-for-byte; (C4) the `mem-entries.md` line-395 entry binds `gic-view.md`
+ADDENDUM 24 + `README.md` ADDENDUM 26 together and does NOT mislabel this arm-B block as its source. The
+same-numbered collision (README 24 = arm B, gic-view 24 = take6f re-run) is kept distinct, as the sources do.
+No device cycle, no commit, no push; the two CA writes and the IAR/RC reads named in the hard rules were not
+made.

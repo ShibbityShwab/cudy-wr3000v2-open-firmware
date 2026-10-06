@@ -311,3 +311,30 @@ properties are still spec-only, `pcierc.md` sec.3). NO CODE AND NO CI YET: there
 `lab/luofu-pcie/` tree, no `luofu-pcie-ko` artifact and no workflow matrix entry, so the design is the
 landed artifact and the driver skeleton (misc-write-only, log the transcribed `iatu_rc`, no DT match on
 a vendor boot so no probe runs) is the plan's stated next step.
+
+The PCIe RC skeleton lands, compiles CI-green, and its smoke PANICS at one misaligned read (2026-10-06, arm B2,
+`build/tmp/inta-spec/{pciskel.md,pciskel-ci.md,pciskel-smoke.md}`, submodule commit `5079cc1` on
+`omo/phase22-hccaccept`): the read-only `lab/luofu-pcie/` skeleton (map `dbi`+`cfg` READ-ONLY, `misc 0x10161000`
+NOT mapped, ZERO writes - the read-only bar proved at the instruction level, since `readl()` inlines to a plain
+`ldr`; 49 stores, none a window base) cross-builds GREEN on the first push (workflow `lab-module-build`, run
+`37488653830`, `verdict: success`, `vermagic=5.10.201 mod_unload ARMv7`, artifact `luofu-pcie-ko`,
+`build/tmp/wifidrv1-art/pciskel/luofu-pcie.ko` md5 `503f9580c29f555a47755ca93e61feeb`), and the smoke runner
+`build/tmp/wifidrv1-art/run-pciskel.sh` is delivered with a fail-closed gate + self-test. THE SMOKE IS A RUN
+FAILURE, NOT A READ FAILURE (`build/register-dumps/exp/20261006T1540Z-pciskel/`, pstore `dmesg-pstore_blk-2`
+Panic#2): gate CLEAN (`boot_id=518f5479...`, uptime 1071s, pat=0, 0 leftovers, 2 wiphys, 6 ifaces, cal `[SUCC]`
+2g+5g, stock md5 pinned), one serial `insmod force_probe=1` - and the probe DID read the live vendor-owned RC
+with 0 writes, then took an **imprecise external abort at the misaligned Link Status read `dbi+0x082`**
+(`readl()` at a 2-byte-aligned PCIe-cap register; the fault address `0xc800a082` = the mapped DBI base +0x82),
+so the kernel panic'd and the box rebooted (NEW `boot_id=7afb325f...`, router healthy, 2 wiphys / 6 ifaces / cal
+`[SUCC]`). A PARTIAL PASS and a real defect, both on the record: the RC's DBI IS live PCI config space with the
+link UP (`dbi+0x004` = `0x00100007`, Command=0x7 = the vendor's write; the aligned `dbi+0x080` word carries
+`Link Status = 0x7012` = **DL_ACTIVE bit 13 set**, 2.5 GT/s x1 = the `pcierc.md` sec 4b safe link-up witness),
+while every word at or past `dbi+0x082` (the iATU readback `0x900+`, the whole `cfg` inventory) was never reached.
+The fix a rerun needs: `readw()` for the 16-bit cap registers (`0x082`; and `0x07c`/`0x080` are Link
+Capabilities / Link Control in the PCIe cap layout), re-pin the `0x080` predictor (ASPM off -> `0x0`, so `expect
+0x3` is a BAD PREDICTION and the `match=NO` is a lost prediction, not a lost measurement), and take link status
+from the aligned `0x080` upper half or the `cfg` copy. The defect is in the skeleton's register TABLE (`readl`
+for every entry, including the one misaligned offset), not the RC design; do NOT re-run the `503f9580...` ko - it
+panics deterministically. Hard rules held by the task: no read of `0x10161000`, no host read of the IAR
+`0x4016010c`, no write of CA `0x400392f0`, ko staged ALWAYS as `wifidrv1.ko`, and the reboot was gated on a NEW
+`boot_id`. Push authorization respected: only the submodule branch `omo/phase22-hccaccept`, never `master`.

@@ -3985,3 +3985,148 @@ serial/detached with the bound armed (`qbound=64`/`qbound209=8`); recover after.
   `build/register-dumps/diffs/20261006T1523Z-vrun20/verdict.txt` (boot, NO-SAMPLE).
 - Specs `build/tmp/inta-spec/{stk3.md,eoir.md,stuck.md,layoutdiff.md}` (`layoutdiff.md` sec.3 the fail-closed
   fix, sec.4 the 66-B pad).
+
+# ADDENDUM 24 (2026-10-06): the take6f capstone, RE-RUN - THE INSTRUMENT RAN: the takeover bound the endpoint, every active pad deposited its sentinel, the sampler NAMED the stuck id (SGI 2), and the EOIR force DROPPED the running priority (`RPR 0x00 -> 0xFF`): the capping proof is HALF-LANDED and the cycle boot came up on the WRONG IMAGE SLOT, so the gate refused the cells (GATE-REFUSED, not FAIL-by-hypothesis, not NO-SAMPLE)
+
+ADDENDUM 23 built `take6f` and verified it, then lost the boot to the vendor stack - NO-SAMPLE BY
+CONSTRUCTION. This addendum is the SECOND take6f boot, under the `race.md` sec.5 mitigation (hide
+BOTH vendor load paths), and it is the first take6f boot in which the instrument is observed to
+execute. The claim LANDED: our module bound `59e7:0005`, BAR0 mapped, the `.omo-pat` was read into the
+chip, and every active pad ran. But the cycle boot came up on `mtd13 "rootfsa"` (the stock 2.4.15
+image) instead of `mtd14 "rootfsb"`, so the runner's standing image gate refused the run: `TAKE6F
+RESULT: FAIL`, `INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT`. The cells are therefore a GATE-REFUSED
+READ - the first complete take6/take6f reading of the arc, recorded as evidence, not as a certified
+result.
+
+## Short version
+
+The re-run (`EOIR_ID=0x2 bash build/tmp/wifidrv1-art/run-take6f.sh`, evidence
+`build/register-dumps/exp/20261006-154734/`, RUN_TS `20261006-154730`) staged the same artifacts as
+ADDENDUM 23 - blob `2c1ae79f892e922d0df0583f87fb1a2c` (10/10 emitted) and the v8 ko `3f87f1e9...`, both
+pins matched - but this time the vendor Wi-Fi pair never loaded. `lsmod` shows `wifidrv1 73728 0` and
+NO `hi5622v100_{plat,wifi}` entry at all: `HIDE_MOVED=2`, the literal path hidden so the vendor boot init
+could no longer `insmod` it on EITHER slot. Our S99 loader therefore found the endpoint free
+(`request_irq(207, IRQF_SHARED) rc=0`, `BAR0 base=0x40000000`, the firmware uploaded its 928 920 B
+image), and the whole instrument chain ran.
+
+The readings, all alias-only (page-10, `0x6b8000 + runtime`): the fast sampler's 16 `GICC_RPR` samples
+`STK_0..STK_15` read `0x00000000` (16/16), the sticky byte `STK_STICKY = 0x00000000`, and `STK_ACT`
+(`GICD_ISACTIVER0` `0x40161300` word 0) = `0x00000004` - bit 2 set. With `STK_STICKY == 0`, that set bit
+NAMES the priority-0 holder: **SGI 2 (id `0x2`)**. It is a member of `eoir.md` sec.0's candidate set
+(a), the firmware's own SGIs, and the same boot's v2 IAR ring agrees: `V2_RING0/1/2/3 = 0,1,2,0x402` with
+`V2_ID = 0x00000402`, so the firmware's ISR EOI'd ids `0,1,2,0x402` and `0x2` is exactly the one still
+ACTIVE. `STK_HPP = 0x000003FF` at `RPR = 0x00` is the `eoir.md` sec.0 model: `0x4C` is pending
+(`E_ISP = 0x00001021`, bit12 set) but NOT signalable while a priority-0 source holds the running
+priority.
+
+The ranked EOIR force then fired with the id the SAME boot had just named (`0x2`). It retired a
+genuinely ACTIVE interrupt (no `eoir.md` sec.2 harm mode 3) and the `GICC_EOIR` write DROPPED the running
+priority: `STK_RPR1 = 0x000000FF` immediately after `dsb sy`, against `STK_15 = 0x00000000`. That is the
+capping proof's FIRST half, BY TRANSITION, in the same boot. The SECOND half did not land inside the pad:
+`STK_HPP1 = 0x000003FF`, not `0x4C`. But the second half is present elsewhere in the SAME boot - Site F
+reads `F_HPP = 0x0000004C` (with `F_ISP = 0x00001021`, `F_ACT = 0x00000000`), i.e. once the priority is
+idle `0x4C` is top-pending, the ADDENDUM 21a reading reproduced in one boot. The force is recorded as
+HALF, not FORCE MISSED: `STK_RPR1 != STK_15` shows it acted on the named active id, and the design's own
+bound (the sampler reads `HPPIR`/`ACT` once, at the window's end) covers the missing instant.
+
+## The take6f branch table, row by row
+
+The instrument's own decision table, read against this boot. Row 3 is the arc-closing row, and it fires.
+
+| row | condition | this boot | verdict |
+| --- | --- | --- | --- |
+| 1 | `STK_STICKY == 0x00` AND `STK_ACT` names a word-0 bit | `0x00000000` / `0x00000004` (bit2) | **THE STUCK ID IS NAMED: SGI 2 (`0x2`)** |
+| 2 | `STK_STICKY == 0xFF` (no `RPR=0x00` sample) | sticky is `0x00`, not `0xFF` | not this row |
+| 3 | `STK_SNT != 0x50aa7e49` -> NO-SAMPLE | `STK_SNT = 0x50AA7E49` | the pad RAN, the block is readable |
+| 4 | `STK_15 == 0x00` AND `STK_RPR1 == 0xFF` AND `STK_HPP1 == 0x4C` | `0x00` / `0xFF` / `0x3FF` | HALF-LANDED (RPR half, not HPPIR half) |
+
+Row 1 plus row 3 is the naming result: the sampler's own cells are complete, so the source the arc could
+never name reads out cleanly as SGI 2. Row 4 is the force result: the RPR drop landed, the HPPIR flip is
+recorded one site over (Site F). The table's fourth-row bound is stated honestly in the pad's own header:
+the HPPIR/ACT re-read happens once, at the window's end, so a flip that settles after that instant is not
+seen by the pad - and here it settled (Site F sees it) rather than not happening.
+
+## The retained take4 frame, and the quiesce witness
+
+The retained frame still reads as take4/take5 left it. `E_EN0 = 0x0000FFFF` (bit 29 CLEAR: the id-`0x1D`
+PPI mask took, the ADDENDUM 20 fix), `E_EN2 = 0x00005000` (bit 12 SET: the `0x4C` enable landed; bits 0/5
+CLEAR: the `0x40`/`0x45` competitors masked), `E_P4C = 0xF050F000` (byte0 `0x00`: the priority-0 store
+held), `E_CTLR = 0x00000001`. `E_ACT = 0` and `F_ACT = 0` at every sampled instant: ISACTIVER2 word 2 is
+zero, so the IAR was never read for `0x4C` (`V2_ID = 0x402`, not `0x4C`) - consistent with the `RPR=0x00`
+block rows 1 and 4 measure.
+
+The mandatory bound did its job with no live-injection residue: `IRQ_DISABLED_BOUND irq=207 n=65
+bound=64`, `irq=209 n=9 bound=8`, and the supervisor reported `SUPERVISOR DONE quiesced=0 rung=OBSERVE
+state=IDLE`. The literal-path guard was armed BEFORE the hide (`GUARD_ALIVE`) and restored unconditionally
+(`LITERAL_RESTORED_WIFI=1 ... POST_DONE`). No new pstore record. The router is healthy: `WIPHY=2 IFACE=6
+CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, stock md5 `0e530b976d5a20e87358671f1a577695` unchanged,
+and the boot_id moved (the reboot gate: pre-run `7afb325f-...`, post `e8e60346-...`).
+
+## Why the cells are GATE-REFUSED and not a result
+
+The claim LANDED, but the boot attached `mtd13 "rootfsa"` (the stock 2.4.15 image) - `show boot_reg: 11`,
+`ubi0: attached mtd13 (name "rootfsa", size 23 MiB)`. The runner's image gate (`race.md` sec.5(2) +
+`layoutdiff.md` sec.3a) requires the CYCLE boot's own image, `mtd14 "rootfsb"`, so it refused:
+`INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT`. The capture hook still read every cell, so the readings above
+are real and complete - they are simply not certified by the gate as a take6f result. The reason the box
+was on slot A is a sibling lane's crash-reboot (the pciskel probe at 15:40:25Z); restoring slot B is a
+separate gated action, not part of this lane. The take6f hypothesis therefore moves from UNTESTED
+(ADDENDUM 23) to MEASURED-BUT-UNCERTIFIED: the naming row and the half-force both fired, and a slot-B
+re-run of the SAME take6f is what would certify them.
+
+## Bounds (declared, not hidden)
+
+1. **One boot, gate-refused.** Every reading is from a single cycle whose image gate refused it; the
+   naming and the half-force are strong but uncertified. A slot-B re-run is the certification.
+2. **The HPPIR half is one site over.** Row 4 asks for `STK_HPP1 == 0x4C`; the boot shows `0x3FF` there and
+   `0x4C` at Site F the same boot. That is a site/instant mismatch, not a contradiction, but it is a
+   mismatch and is recorded as one.
+3. **Alias-only cells.** Every page-10 cell is quoted from the ACP alias (`0x6b8000 + runtime`); the
+   BAR0-direct view of these pages reads zero, the standing boundary phenomenon.
+4. **The id is named, not yet proven to be THE one.** `STK_ACT` names a word-0 bit at the sampled instant;
+   the sampler reads the ACTIVE bank once, at the window's end, so the name is the holder at that instant.
+5. **One cosmetic hook defect, inherited.** The staged hook's `M1_PSR` header carries backticks around
+   `cpsie i` inside a double-quoted echo, so the shell printed `cpsie: not found` into `capture-cmd.txt`.
+   It changes no cell and no verdict (the same defect ADDENDUM 23 records).
+6. **A pre-existing module artifact, not this run's doing.** `dmesg.txt` carries repeated `RTNL:
+   assertion failed` warnings from `omo_add_virtual_intf` inside `omo_wifidrv1_init`; the SAME warnings are
+   in every take-era boot (`exp/20261006-{124348,135935,144831,152035}`), so they are v8-ko init behaviour.
+   The module still completed (`init done wiphy=omo-drv1 ifname=omowl1 hw=1 regs=decoded irq0=207 isr0=65`).
+
+## Verification and health
+
+Adversarial verdict `build/register-dumps/diffs/20261006T1557Z-vrun21/verdict.txt` (the take6f re-run:
+GATE-REFUSED on the wrong image slot; the seven claims carry their readings); the mitigated runner was
+verified separately by `build/register-dumps/diffs/20261006T1545Z-vtool20/verdict.txt` (CONFIRMED: the
+`race.md` sec.5 mitigation, the blob pins unchanged, the standing emitted gate still 10/10). Router healthy
+after the cycle: `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, stock md5
+`0e530b976d5a20e87358671f1a577695` unchanged, no new pstore. Hard rules held: no write of CA
+`0x400392f0`/`0x40039af0`; no read of `0x10161000`; no host read of the ack IAR `0x4016010c` (or the aliased
+`0x40160120`); the instrument's only device write is the single `GICC_EOIR` `0x2` store (register state, a
+reboot clears it); the ko was staged ALWAYS as `wifidrv1.ko`; `qbound=64`/`qbound209=8` armed and hit; no
+reboot was taken outside the cycle.
+
+## The next threads
+
+- **Restore slot B, then re-run the SAME take6f.** The gate's only complaint is the image slot; the box
+  currently sits on stock `rootfsa` because of a sibling lane's crash-reboot. Restoring `rootfsb`
+  (`race.md` sec.6's documented lever) is a separate gated action; the instrument itself needs no change.
+- **Then read `STK_ACT` again.** With a slot-B boot, the same fast sampler should re-name the holder (SGI 2
+  is the prediction this boot makes); the naming is what `take6f`'s `--eoir-id` must match, and the builder
+  already refuses a bare/mismatched id.
+- **The force stays LAST, gated on a measured id.** This boot used `0x2` because the same boot's sampler
+  named it; the rule from `eoir.md` sec.3 rank 1 is unchanged - never build the force on a guess.
+
+## Artifacts
+
+- Evidence `build/register-dumps/exp/20261006-154734/` (`capture-cmd.txt` with
+  `INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT`, the E/STK/F/V2 cell blocks, `dmesg.txt`, `lsmod.txt`,
+  `interrupts.txt`, `health.txt`, `run-take6f.log`, `run-take6f.full.log`).
+- Blob `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f892e922d0df0583f87fb1a2c` (66-B EOIR pad, 10/10
+  emitted); reused ko `wifidrv1.ko` md5 `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`).
+- Runner `build/tmp/wifidrv1-art/run-take6f.sh` (md5 `ed0b590b25c091baf67a3f721d3f9615`); hook
+  `build/tmp/wifidrv1-art/take6f-capture.hook`; verifiers
+  `build/register-dumps/diffs/20261006T1557Z-vrun21/verdict.txt` (boot, GATE-REFUSED) and
+  `build/register-dumps/diffs/20261006T1545Z-vtool20/verdict.txt` (instrument/runner, CONFIRMED).
+- Specs `build/tmp/inta-spec/{race.md,stk3.md,eoir.md,stuck.md,layoutdiff.md}` (`race.md` sec.5 the
+  mitigation, sec.6 the slot lever).
