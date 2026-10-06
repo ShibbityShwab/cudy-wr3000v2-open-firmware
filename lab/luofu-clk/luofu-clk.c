@@ -46,20 +46,30 @@
  * so later blocks (reboot/watchdog children) can
  * syscon_regmap_lookup_by_phandle() this page without a second mapping; only
  * switch to devm_regmap_init_mmio() if a child node actually needs a regmap.
+ *
+ * force_probe=1: the vendor kernel's live DT carries "hsan,clk", not this
+ * driver's compatible, so probe never fires (smoke.md).  force_probe=1
+ * registers a name-matched platform_device (no of_node) that binds through
+ * platform_match()'s name compare only, and the probe maps the pinned CRG page
+ * with devm_ioremap() and runs a READ-ONLY status inventory (crgbind.md).  It
+ * is a no-op the day a luofu DT node exists.
  */
 
 #include <linux/clk-provider.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 
-/* CRG MMIO page.  reg comes from the DT node; the constant documents the
+/* CRG MMIO page.  reg comes from the DT node; the constants document the
  * pinned address (pinned clk@14880000 reg :205, node :201). */
+#define LUOFU_CRG_BASE		0x14880000UL
 #define LUOFU_CRG_SIZE		0x1000UL
 
 /* softrst values for the reset/reboot path (pinned crg@14880000 :479/:480). */
@@ -157,6 +167,42 @@ static const struct luofu_pll luofu_plls[] = {
 	{ "lsw-clk", 0x1e0, 0x90, 0x1b },	/* clk_pll2@01e0 :378 */
 };
 
+/*
+ * force_probe: run the probe body against the hardcoded pinned CRG view
+ * (read-only) with no DT match.  The live vendor DT carries "hsan,clk"
+ * (pinned:201), not this driver's "hisilicon,luofu-crg", so without the knob
+ * the probe never fires (smoke.md).  force_probe=1 synthesizes a name-matched
+ * platform_device so the REAL probe runs; it is a no-op the day a luofu DT
+ * node exists.
+ */
+static int force_probe;
+module_param(force_probe, int, 0444);
+MODULE_PARM_DESC(force_probe,
+	"run the probe body against the hardcoded CRG view (read-only)");
+
+/*
+ * Read-only status inventory table: pinned CRG page 0x14880000 + offset.
+ * lock_mask = bits that must read 1 for the line to be a clean PASS; 0 = log
+ * only.  Only pure-read status words live here: every gate/mux/PLL/misc word
+ * is deliberately excluded so no accidental write is reachable (crgbind.md
+ * sec 4).
+ */
+struct luofu_crg_reg {
+	u16 offset;
+	const char *name;
+	u32 lock_mask;
+};
+
+static const struct luofu_crg_reg luofu_crg_safe[] = {
+	/* clk_pll1 status-offset :376 + status-bit :375; clk_pll2 :388/:387;
+	 * the same word is hsan,rstinfo reg-offset :1406 (rstinfo-mask :1408,
+	 * rstinfo-offset :1409).  bit30 = CPU PLL, bit27 = LSW PLL,
+	 * bits 14..16 = reset reason. */
+	{ 0x090, "CRG_STATUS",  0x48000000u },
+	/* watchdog int-status-offset :1519 -- benign, log only. */
+	{ 0x100, "WDT_ISTATUS", 0x00000000u },
+};
+
 /* Per-instance state. */
 struct luofu_crg {
 	void __iomem *base;
@@ -170,6 +216,37 @@ static const struct of_device_id luofu_crg_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, luofu_crg_match_table);
 
+/*
+ * Read-only status inventory: walk luofu_crg_safe[] and readl() each word.
+ * The only MMIO op reachable through the forced view is readl(); the table
+ * holds offsets only, so a write cannot be expressed here.
+ */
+static void luofu_crg_inventory(struct device *dev, void __iomem *base,
+				bool forced)
+{
+	unsigned int i, ok = 0;
+
+	for (i = 0; i < ARRAY_SIZE(luofu_crg_safe); i++) {
+		const struct luofu_crg_reg *r = &luofu_crg_safe[i];
+		u32 v = readl(base + r->offset);
+
+		if (!r->lock_mask)
+			dev_info(dev, "[0x%03x] %s = 0x%08x (benign, log only)\n",
+				 r->offset, r->name, v);
+		else
+			dev_info(dev, "[0x%03x] %s = 0x%08x (PLL cpu-lock=%u lsw-lock=%u, rst_reason=%u)\n",
+				 r->offset, r->name, v,
+				 !!(v & 0x40000000u), !!(v & 0x08000000u),
+				 (v & 0x1c000u) >> 14);
+		if (r->lock_mask && (v & r->lock_mask) != r->lock_mask)
+			dev_warn(dev, "[0x%03x] %s lock mask 0x%08x not fully set (a status-bit-polarity finding, not a probe failure)\n",
+				 r->offset, r->name, r->lock_mask);
+		ok++;
+	}
+	dev_info(dev, "%s probe PASS: %u/%zu status regs read, 0 writes\n",
+		 forced ? "FORCED" : "DT", ok, ARRAY_SIZE(luofu_crg_safe));
+}
+
 static int luofu_crg_probe(struct platform_device *pdev)
 {
 	struct luofu_crg *crg;
@@ -179,8 +256,22 @@ static int luofu_crg_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* Regmap plan step 1: one shared mapping of the 0x1000 CRG page,
-	 * reused by the clock tables and the reset controller. */
-	crg->base = devm_platform_ioremap_resource(pdev, 0);
+	 * reused by the clock tables and the reset controller.
+	 *
+	 * The forced path has no DT resource: the region is already requested
+	 * by the vendor hi_crg / watchdog drivers, so request_mem_region would
+	 * return -EBUSY.  devm_ioremap() takes no reservation and makes a
+	 * second read-only kernel VA alias to the same page (crgbind.md). */
+	if (pdev->dev.of_node) {
+		crg->base = devm_platform_ioremap_resource(pdev, 0);
+	} else {
+		dev_info(&pdev->dev,
+			 "FORCED probe (no DT match) base=0x%lx size=0x%lx read-only\n",
+			 (unsigned long)LUOFU_CRG_BASE,
+			 (unsigned long)LUOFU_CRG_SIZE);
+		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE,
+					 LUOFU_CRG_SIZE);
+	}
 	if (IS_ERR(crg->base))
 		return PTR_ERR(crg->base);
 
@@ -197,6 +288,11 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	dev_info(&pdev->dev, "luofu-crg: %zu gates, %zu muxes, %zu plls (skeleton)\n",
 		 ARRAY_SIZE(luofu_gates), ARRAY_SIZE(luofu_muxes),
 		 ARRAY_SIZE(luofu_plls));
+
+	/* Read-only status inventory, both paths: walks luofu_crg_safe[] with
+	 * readl() only -- the forced path's evidence and the DT path's first
+	 * hardware access.  No clock/mux/PLL/reset registration runs here. */
+	luofu_crg_inventory(&pdev->dev, crg->base, !pdev->dev.of_node);
 
 	platform_set_drvdata(pdev, crg);
 	/* TODO: return the real registration result once the tables are wired. */
@@ -223,16 +319,53 @@ static struct platform_driver luofu_crg_driver = {
 	},
 };
 
+/*
+ * The force_probe device: name-matched to the driver ("luofu-crg") with id -1
+ * (dev_name "luofu-crg.0"), carrying only the pinned memory resource and no
+ * of_node, so platform_match()'s name compare binds it where
+ * of_driver_match_device() cannot.
+ */
+static struct resource luofu_crg_res =
+	DEFINE_RES_MEM(LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
+
+static struct platform_device luofu_crg_fdev = {
+	.name		= "luofu-crg",
+	.id		= -1,
+	.num_resources	= 1,
+	.resource	= &luofu_crg_res,
+};
+
+static bool luofu_crg_fdev_live;
+
 static int __init luofu_crg_init(void)
 {
+	int ret;
+
 	/* TODO (clocks2.md sec 3): in-tree this becomes core_initcall() so the
 	 * CRG is up before 8250_dw/gpio/i2c/mtd probe.  module_init is fine for
 	 * the loadable lab bring-up. */
-	return platform_driver_register(&luofu_crg_driver);
+	ret = platform_driver_register(&luofu_crg_driver);
+	if (ret)
+		return ret;
+
+	/* The DT-presence guard makes "without a DT match" literal: the forced
+	 * path can never co-exist with a real bind. */
+	if (force_probe) {
+		if (of_find_compatible_node(NULL, NULL, "hisilicon,luofu-crg")) {
+			pr_warn("luofu-crg: force_probe ignored, DT node present (would double-bind)\n");
+		} else if (platform_device_register(&luofu_crg_fdev) == 0) {
+			luofu_crg_fdev_live = true;
+		} else {
+			pr_warn("luofu-crg: force_probe device registration failed\n");
+		}
+	}
+	return 0;
 }
 
 static void __exit luofu_crg_exit(void)
 {
+	if (luofu_crg_fdev_live)
+		platform_device_unregister(&luofu_crg_fdev);
 	platform_driver_unregister(&luofu_crg_driver);
 }
 
@@ -240,4 +373,4 @@ module_init(luofu_crg_init);
 module_exit(luofu_crg_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton)");
+MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + read-only forced probe)");
