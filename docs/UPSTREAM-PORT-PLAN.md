@@ -270,3 +270,44 @@ the lesson is the one a port has to hold: a build check that re-uses the encoder
 the emitted bytes are wrong (the take3 pad shipped `0x00000000` to `ICENABLER0` and the self-check agreed).
 When the ctrl-rb/IRQ-glue driver gets its own ported write path, assert the emitted value back, not the call
 site.
+
+The forced probe reads the real CRG, and the PCIe RC design lands (2026-10-06, arm B,
+`build/tmp/inta-spec/{crgprobe.md,pcierc.md}`): the `luofu-clk` skeleton now has its FIRST
+device-side proof, and stage-2's third row has a written design. THE FORCED PROBE (crgprobe, task
+`st_01a111c4`, runner `build/tmp/wifidrv1-art/run-crgprobe.sh`, ko md5
+`b1a60c988c5dd704a500159cdc9483d2`, staged AS `/tmp/wifidrv1.ko`): one serial device action
+`insmod force_probe=1` -> `rmmod`, gate OK (`boot_id=fec0f09c...`, uptime 1244s, 0 leftovers, 2
+wiphys, 6 ifaces, cal `[SUCC]` 2g+5g), and the driver reads the LIVE pinned CRG `0x14880000` with no
+DT match (`read-only devm_ioremap` + `readl` inventory, 0 writes): `[0x090] CRG_STATUS = 0x6a010008`
+(PLL cpu-lock=1 lsw-lock=1, `rst_reason=4`; lock mask `0x48000000` fully set) and `[0x100]
+WDT_ISTATUS = 0x00000000` (benign), logging `FORCED probe PASS: 2/2 status regs read, 0 writes`.
+`RMMOD_RC=0`, post-health `POST_WIPHY=2 POST_IFACE=6 POST_CAL2G=1 POST_CAL5G=1 POST_LUOFU=0
+POST_LEFTOVERS=0`, `boot_id` UNCHANGED (no reboot). So the reconstructed 0x20-group CRG geometry the
+stage-1 driver transcribes is now CONFIRMED against the live part through its own code, not devmem.
+Two caveats carried: the vendor `hsan,rstinfo` node exposes no `reset_reason` sysfs attr (so the
+consistency check is the internal two-read agreement, `0x6a090008` @15:07Z vs `0x6a010008` @15:10Z,
+same lock bits 30/27 and `rst_reason=4`), and sec.6 of the receipt records a NON-FATAL driver defect -
+the synthetic `luofu-crg` platform_device has no `.release`, so `platform_device_unregister()` in
+`luofu_crg_exit` warns at `drivers/base/core.c:1836` on EVERY unload (kernel taint gains `W`); it is
+emitted after the runner's dmesg snapshot so the harness never saw it, and the fix (fdev `.dev.release`
+or `platform_device_register_simple`) needs a CI rebuild and is out of scope for a receipt. THE PCIe RC
+DESIGN LANDS (task `st_01a111be`, `build/tmp/inta-spec/pcierc.md`): stage-2 row 3 (the DWC RC, the
+block after the CRG and pinctrl) now has a register-level design read from the vendor `hi_pcie.ko`
+(disassembled with `lab/ko_disasm.py`) against the pinned DTS - the five-window layout (`dbi
+0x10160000`, `misc 0x10161000` write-only, `cfg 0x50000000`, `mem 0x40000000`, `io 0x48000000`, RC1
+`+0x4000`/`+0x18000000`), the verbatim `iatu_rc` table (3 viewports: CFG0/MEM/IO) the vendor writes to
+`DBI+0x900+0x200*i`, the 14-step `hi_pcie_probe @0xb8c` init order (clk_bulk_enable -> 4
+`reset_control_deassert` -> `misc+0x00 = 0x40000000` RC mode -> iATU -> endpoint power -> `DBI+0x04 = 7`
+-> LTSSM), why it is a from-scratch host controller rather than a drop-in DWC core (non-DWC `misc`
+block + a dedicated 4 KB `cfg` window instead of ECAM; reuse `pcie-histb.c`'s SHAPE, keep `ranges`
+providing the windows explicitly), and the three port-only constraints (clocks/resets from `&crg`,
+link-up polled via `DBI+0x82`/`cfg+0x82` DL_ACTIVE instead of the read-forbidden `misc+0x100`, `misc`
+writes only). The companion DT node is ALREADY IN THE TREE: `opensource/docs/soc/luofu-r116.dts`
+carries `pcie0: pcie@10160000 { compatible = "hisilicon,luofu-pcie"; ... status = "disabled"; }` with
+the five `reg`/`reg-names`, `interrupts = <0 0x3b 4> (radm, SPI 59) / <0 0x45 4> (linkdown, SPI 69)`,
+`<&crg LUOFU_CLK_PCIE0>` and the four `&crg 0x34 0xc..0xf` resets (committed at submodule
+`fa11572` on `omo/phase22-hccaccept`; the `pcie1` sibling and the `iatu_rc`/`iatu_ep`/`pcie-gpios`
+properties are still spec-only, `pcierc.md` sec.3). NO CODE AND NO CI YET: there is no
+`lab/luofu-pcie/` tree, no `luofu-pcie-ko` artifact and no workflow matrix entry, so the design is the
+landed artifact and the driver skeleton (misc-write-only, log the transcribed `iatu_rc`, no DT match on
+a vendor boot so no probe runs) is the plan's stated next step.

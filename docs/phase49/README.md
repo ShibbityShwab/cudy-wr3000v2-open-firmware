@@ -570,3 +570,30 @@ Bounds: `0x40160114` = `GICC_RPR` is a GICv2 convention (0 image literals); the 
 `build/register-dumps/exp/20261006-135935/`; specs `build/tmp/inta-spec/{stk3.md,eoir.md,stuck.md}`; verdict
 `build/register-dumps/diffs/20261006T1432Z-vtool18/verdict.txt`. Health: bound held, no new pstore, 2 wiphys / 6
 interfaces, calibration `[SUCC]` both bands.
+
+## ADDENDUM 24 (2026-10-06): the upstream arm B, continued - the PCIe RC design lands (spec + DT node) and the CRG forced probe reads the real part
+
+ADDENDUM 18 landed the pinctrl skeleton, stage-2 row 2. This block is the pointer for the two arm-B
+follow-ups recorded in `opensource/docs/UPSTREAM-PORT-PLAN.md` (status block, 2026-10-06).
+
+**Stage-2 row 3 has a design.** `build/tmp/inta-spec/pcierc.md` (task `st_01a111be`) reads the vendor
+`hi_pcie.ko` (disassembled with `lab/ko_disasm.py`) against the pinned DTS and fixes the DWC RC's shape: the
+five-window layout (`dbi 0x10160000`, `misc 0x10161000` WRITE-ONLY, `cfg 0x50000000`, `mem 0x40000000`,
+`io 0x48000000`; RC1 `+0x4000`/`+0x18000000`), the verbatim `iatu_rc` viewport table written to
+`DBI+0x900+0x200*i`, the 14-step `hi_pcie_probe @0xb8c` init order, and the decision to port a from-scratch
+host controller (`pci_scan_root_bus_bridge` + our `pci_ops` over the `cfg` window) rather than drop in the DWC
+core. The companion DT node is already in the tree: `opensource/docs/soc/luofu-r116.dts` carries
+`pcie0: pcie@10160000 { compatible = "hisilicon,luofu-pcie"; ... status = "disabled"; }` (committed at submodule
+`fa11572` on `omo/phase22-hccaccept`). There is **no** `lab/luofu-pcie/`, no `luofu-pcie-ko` artifact and no
+workflow matrix entry yet, so the design is the landed artifact and the skeleton is the next step.
+
+**The CRG forced probe PASSED on the live part.** `build/tmp/inta-spec/crgprobe.md` (runner
+`build/tmp/wifidrv1-art/run-crgprobe.sh`, ko md5 `b1a60c988c5dd704a500159cdc9483d2`, staged as `wifidrv1.ko`):
+one serial `insmod force_probe=1` -> `rmmod`, the driver reading the live CRG `0x14880000` with no DT match and
+ZERO writes, logging `[0x090] CRG_STATUS = 0x6a010008` (PLL lock mask `0x48000000` set, `rst_reason=4`) and
+`[0x100] WDT_ISTATUS = 0x00000000`, then `FORCED probe PASS: 2/2 status regs read, 0 writes`; `boot_id`
+unchanged, router healthy (2 wiphys / 6 interfaces / cal `[SUCC]` both bands). One non-fatal driver defect
+recorded: the synthetic `luofu-crg` platform_device lacks a `.release`, so `rmmod` warns at
+`drivers/base/core.c:1836` on every unload (a driver-source fix, out of scope for the receipt). Pointers: plan
+status block `opensource/docs/UPSTREAM-PORT-PLAN.md`; ledger `mem-entries.md`; specs `build/tmp/inta-spec/
+{pcierc.md,crgprobe.md}`.
