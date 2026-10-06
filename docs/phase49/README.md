@@ -13,6 +13,7 @@ beside this one in `opensource/docs/phase49/`.
 | scratch boot | 11 | `scratch-boot.md` | `build/register-dumps/exp/20261004-165139/` | BRANCH-1: `enable(0x4c)` EXECUTED; the enable half is settled |
 | vendor-loader | 12 | `vendor-loader.md` | `build/register-dumps/exp/20261004-165759-vendorloader/` | REJECTED: loader does NOT validate; chip fails at runtime |
 | viewport | 13 | `viewport.md` | `build/register-dumps/exp/20261004-171523/` | expected-negative: GIC CA `0x40160000` stays host-invisible |
+| bracket | follow-up | `gic-view.md` ADDENDUM 21 | none (the evidence dir was never created) | the take5 instrument (E5 ring / I5 post-EOI / F5 gate-fall) is verified, but the boot died at the completion marker: NO-SAMPLE, a harness/run failure, no `brk3.md` row closes |
 
 ## What the forward lane measured (one line per chain link)
 
@@ -515,3 +516,27 @@ out-ranks `0x4C` (priority `0x50`) - the next lever is the bank axis, not anothe
 `build/register-dumps/diffs/20261006T1246Z-vrun17/verdict.txt` (C1-C8 CONFIRMED); instrument verdict
 `build/register-dumps/diffs/20261006T1243Z-vtool16/verdict.txt`. Health: bound held both lines
 (`207 n=65/64`, `209 n=9/8`), no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.
+
+## ADDENDUM 22 (2026-10-06): the bracket (take5) - the instrument is built and verified, the boot never ran
+
+The three-instant bracket `bracket.md`, `brk3.md` and `sgi3.md` specified was built and verified as
+**`take5`** (blob md5 `a5143c84a10b8e9182be70ba48a634a3`, the reused v8 ko `3f87f1e9...`), and the boot
+produced NO sample. It is recorded in full as `gic-view.md` **ADDENDUM 21** ("the bracket"); this block is
+the pointer.
+
+The instrument rides take4 byte-for-byte and adds only read-only samplers: the same decisive words
+(`GICC_RPR` `0x40160114`, `GICD_ISPENDR0` `0x40161200`, and `0x4C`'s group bit `GICD_IGROUPR2`
+`0x40161088` at the ring and the gate-fall) deposited with the page sentinel at THREE instants of one boot
+(`E5_*` the ring, `I5_*` the ISR's post-EOI via a new site at file `0x82f58`, `F5_*` the `0xcece` gate's
+fall-through). It is verified: `vtool17` CONFIRMED the blob against its pin (two regenerations
+byte-identical), the emitted-bytes check PASS 8/8 on take5 and still REJECTS take3, every new pad is
+read-only with no forbidden CA anywhere, and the whole take5-vs-take4 delta is 175 bytes inside the three
+pads, the one new site and the two retargeted tails, 0 outside. The boot is the failure: the cycle
+`20261006-134010` returned at uptime 32 s and died at the completion marker (no `omo-drv1` line), so the
+evidence dir `build/register-dumps/exp/20261006-134012/` was never created and the runner's capture gate
+correctly selected nothing (`capture MISSING: no evidence dir at TS >= 20261006-134010`). `vrun18` labels it
+**NO-SAMPLE, a HARNESS/RUN FAILURE** (`brk3.md` sec.4 row 11, extended: not even the module ran), so no
+`brk3.md` row closes and take4's conclusion stands unchanged. Router healthy after recovery, no new pstore.
+Evidence: none (the dir never existed); log `build/tmp/wifidrv1-art/run-take5.log`; verdicts
+`build/register-dumps/diffs/20261006T1342Z-vtool17/verdict.txt` (instrument, CONFIRMED) and
+`build/register-dumps/diffs/20261006T1353Z-vrun18/verdict.txt` (boot, NO-SAMPLE).

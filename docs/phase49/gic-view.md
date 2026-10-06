@@ -3507,3 +3507,170 @@ verdict `build/register-dumps/diffs/20261006T1243Z-vtool16/`; adversarial verdic
 ko `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, `omo/phase22-hccaccept`). Hard rules held: the pad writes
 no `0x400392f0`/`0x40039af0`, no pad reads the IAR except the firmware's own, no `0x10161000` access, staged as
 `wifidrv1.ko`, cycle serial/detached with the bound armed, router left healthy.
+
+---
+
+# ADDENDUM 21 (2026-10-06): the bracket - THE INSTRUMENT IS BUILT AND VERIFIED, THE BOOT NEVER RAN: the take5 cycle died at the completion marker (zero `omo-drv1` output, no evidence dir), so the three-instant bracket (E5 ring / I5 post-EOI / F5 gate-fall) produced NO SAMPLE, and the honest label is a HARNESS/RUN FAILURE (brk3.md row 11, extended), not an arbitration result
+
+The bracket is take5: `bracket.md` + `brk3.md` + `sgi3.md` designed it, `st_01a1115e` built and verified
+it, and the boot was supposed to sample ONE state at three instants. It did not run. This addendum records
+the instrument as built and verified, the boot as a failure, and the branch table as still open. The
+take4 conclusion (ADDENDUM 20) stands unchanged, because nothing in this cycle measured the device.
+
+Evidence: **none** - the cycle's evidence dir `build/register-dumps/exp/20261006-134012/` was never created.
+What exists is the runner's log `build/tmp/wifidrv1-art/run-take5.log` (13:40:10Z -> 13:52:14Z, `TAKE5
+RESULT: FAIL`, `exp_rc=1`), the instrument `build/tmp/fw-patched/take5.bin` md5
+`a5143c84a10b8e9182be70ba48a634a3`, the reused v8 ko `wifidrv1.ko` md5 `3f87f1e9fe5ed9666f27d1f784d34535`,
+and the two verifier verdicts, `build/register-dumps/diffs/20261006T1342Z-vtool17/verdict.txt` (instrument,
+CONFIRMED) and `build/register-dumps/diffs/20261006T1353Z-vrun18/verdict.txt` (boot, NO-SAMPLE).
+
+## Short version
+
+The instrument is sound and the boot is a negative on data. `vtool17` CONFIRMED the take5 blob against its
+pin (two independent regenerations byte-identical), the emitted-bytes check PASS 8/8 on take5 and still
+REJECTS take3, every new pad read-only, and the whole take5-vs-take4 delta confined to the three pads, the
+one new ISR site and the two retargeted tails (175 differing bytes, 0 outside the declared regions).
+`vrun18` then found the cycle never reached it: the takeover boot stalled before `module_init`, the log
+shows `!! FAIL [run] device did not return fresh or experiment never finished` at step `[4/7]`, no `omo-drv1`
+line was printed, no evidence dir exists, and the capture-recovery gate correctly refused to touch any older
+dir (`capture MISSING: no evidence dir at TS >= 20261006-134010`). So the three instants `E5_*`, `I5_*`,
+`F5_*` do not exist, and no conclusion about `0x4C`'s servability, the SGI bank, the running priority or the
+group bit can be drawn from this boot.
+
+## The instrument (verified, `vtool17` CONFIRMED)
+
+take5 rides take4 byte-for-byte - the synchronized flip, the v1/v2 canaries, the CPSR milestones, the giccpu
+cells, Pad A(N) with the H2D ring, Pad B2 and its companion, Site F and `select.md`'s readbacks - and adds
+only read-only samplers. The same words, at three instants of one boot, each with the page sentinel
+`0x50AA7E49`:
+
+| instant | epoch | site | cells (runtime, page 10) | reads |
+| --- | --- | --- | --- | --- |
+| `E5_*` | the ring (take4's own E epoch) | chained after the retained `selpost_e` pad, returns to `0x86f5e` | `0x150144..0x150150` | `GICC_RPR` `0x40160114`, `GICD_ISPENDR0` `0x40161200`, `GICD_IGROUPR2` `0x40161088` |
+| `I5_*` | the ISR's post-EOI instant | a NEW site at file `0x82f58`, entered by `bl`, re-emitting the two replaced instructions (`ldr r3,[r4,#0x74]` + `mov r5,r0`) and branching to `0x82f5c` | `0x150154..0x15015C` | `GICC_RPR`, `GICD_ISPENDR0` |
+| `F5_*` | the `0xcece` gate's fall-through (take4's F epoch) | chained after the retained Site F pad, returns to `0x86f82` | `0x150160..0x15016C` | `GICC_RPR`, `GICD_ISPENDR0`, `GICD_IGROUPR2` |
+
+Every read is non-acknowledging; no pad carries a store to any device CA (`vtool17` C4), and no pad or the
+blob references a forbidden CA (`0x400392f0`, `0x40039af0`, `0x10161000`, the ack IAR `0x4016010c`, the
+aliased `0x40160120`, `GICD_SGIR` `0x40161f00`) (`vtool17` C5). The two deviations from the specs are
+recorded in the blob's own note: the free padding left is 274 bytes in fragments of at most 76, so each
+instant is one 52- or 58-byte pad reading the decisive words instead of `bracket.md`'s 27-word block; and
+`brk3.md`'s early site at file `0x82732` was dropped because take4's boot read `M2_PSR = 0x00000000` (that
+path returns before its guard pass), so the post-EOI instant inside the ISR replaces it.
+
+## The boot (NO-SAMPLE, `vrun18`)
+
+| fact | value |
+| --- | --- |
+| runner | `build/tmp/wifidrv1-art/run-take5.sh` -> `tools/exp.sh`, RUN_TS `20261006-134010` |
+| window | 2026-10-06T13:40:10Z -> 13:52:14Z, `exp_rc=1` |
+| staged | blob `a5143c84...` pinned == served, ko `3f87f1e9...` pinned == served, preflight `stock_md5=0e530b97...`, leftovers 0, freshness uptime 3260 s |
+| step | the boot returned at uptime 32 s, then `!! FAIL [run] device did not return fresh or experiment never finished` at `[4/7]` |
+| evidence dir | `build/register-dumps/exp/20261006-134012/` was never created (the harness's own `health.txt` write failed: `No such file or directory`) |
+| marker | no `omo-drv1: init done` line; the module never loaded |
+| capture | `capture MISSING: no evidence dir at TS >= 20261006-134010 (not touching any older dir)` |
+| cells | `E5_*` / `I5_*` / `F5_*` do not exist; no bracket sample of any instant |
+| pstore | unchanged, 3 records (`blk-0`, `blk-2`, `blk-3`); no new crash dump |
+| router | healthy, `wiphy=2/2 iface=6/6 cal_succ=1 omo_off=0 staged=0 loader=0`; the capture hook left `/root/omo-take5-cap.txt` on the device and the post-run probe found `/root/omo-take5*: 0` |
+
+This is `brk3.md` sec.4 row 11's shape (NO-SAMPLE: the pad did not run), extended: here not even the module
+ran, so it is a harness/run fault. The bracket's own rule is explicit that a build or run fault must not be
+read as an arbitration result, and that is the reading recorded here.
+
+## The branch table stays untested
+
+`brk3.md` sec.4's eleven rows all guard on a sentinel (`_SNT` == `0x50AA7E49`), and no instant produced one,
+so every row is `-`/NO-SAMPLE: no numbered row closes, and the two rows that matter (`row 1 SEPARATED`, `row
+2 THE GATE IS THE TIME-VARYING WINDOW`) are untested, not disproved. The predecessor's line stands verbatim:
+in take4 the register that moves is `GICC_HPPIR` (E `0x3FF` -> F `0x4C` in one boot), while `ISPENDR2` bit12,
+`ISACTIVER2` bit12, `out[0]` and the CPSR I bit are equal at E and F. The bracket was meant to catch that
+mover in flight and did not get the chance.
+
+## Bounds (declared, not hidden)
+
+1. **No device sample at all.** Every claim about `0x4C`, the SGI window, `GICC_RPR` and the group bit is
+   inherited from take4/take3 and untouched by this cycle.
+2. **The instrument's verification is static.** `vtool17` re-derived and disassembled the blob; it ran no
+   device cycle, so "verified" means deterministic, read-only and correctly wired, not "measured on device".
+3. **The stall is unexplained.** The boot returned at uptime 32 s and stopped before `module_init`; the
+   cause (loader, boot stage, or the staged blob) is named as the next diagnostic, not diagnosed here.
+4. **The recovered capture is empty on purpose.** The runner refused to attribute any older evidence dir to
+   this run; that is the setup fix from the earlier salvage working as designed.
+
+## Verification and health
+
+Adversarial verdict `build/register-dumps/diffs/20261006T1353Z-vrun18/verdict.txt` (**the take5 boot =
+HARNESS/RUN FAILURE, NO-SAMPLE**); instrument verdict
+`build/register-dumps/diffs/20261006T1342Z-vtool17/verdict.txt` (**CONFIRMED**, C1-C7, one recorded
+deviation: a stale documentation block in the on-disk manifest, which cannot invert any load-bearing claim).
+Router healthy after recovery (`WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0`), no new pstore
+record, `stock_md5 0e530b976d5a20e87358671f1a577695` unchanged. Hard rules held: no write of CA
+`0x400392f0`/`0x40039af0`; no read of `0x10161000`; no host read of the ack IAR `0x4016010c`; the ko staged
+as `wifidrv1.ko`; cycle serial/detached with the bound armed; recover after.
+
+## The next threads
+
+- **Re-run the take5 cycle first.** A fresh `tools/exp.sh` serial/detached run with the bound armed, same
+  pinned blob and ko; the three instants are the whole capture.
+- **If the stall recurs, diagnose the boot/loader stage.** The log names the S99omo loader's `insmod` point
+  as the place to look, before any instrument cell is read.
+- **Then read `brk3.md` sec.4.** Whichever row the three sentinels satisfy is the answering row; the SGI
+  window (`R_SGI_P`/`E_SGI_P`/`E2_SGI_P`) is what separates "window" from "arbitration".
+
+## KO-THREADS
+
+- **take5 (2026-10-06, the runner `build/tmp/wifidrv1-art/run-take5.sh`, hook
+  `build/tmp/wifidrv1-art/take5-capture.hook`, verifier `build/tmp/wifidrv1-art/take5-verify.py`) - the ko
+  commit is UNKNOWN, and the blob rides the patch tool's uncommitted take5 code.** The take5 variant was
+  built by `tools/patch_fw_scratch.py` working-tree state (HEAD `2e1390a`) into
+  `build/tmp/fw-patched/take5.bin` md5 `a5143c84a10b8e9182be70ba48a634a3` (928920 B, size-preserving), and
+  the takeover served the reused v8 ko `wifidrv1.ko` md5 `3f87f1e9fe5ed9666f27d1f784d34535` (the v8 of
+  `553342d`) with no CI run and no submodule commit, so the ko identity is a reuse, not a verified take5
+  build. The ADJUDICATION of the run is the marker `TAKE5`, quoted in the ADDENDUM 21 block above; the
+  verdicts are `build/register-dumps/diffs/20261006T1342Z-vtool17/verdict.txt` (instrument, CONFIRMED) and
+  `build/register-dumps/diffs/20261006T1353Z-vrun18/verdict.txt` (boot, NO-SAMPLE). The runner's
+  capture-recovery gate selected no evidence dir, so there is no `interp.txt` for this cycle either.
+
+## The end of the bracket
+
+The bracket never sampled: the take5 boot died at the completion marker, so the three instants are absent
+and the bank-axis question is untouched. The instrument is on the shelf, verified and ready; the next cycle
+is the same run, with the loader stall diagnosed first if it recurs. Nothing that follows this block in the
+phase ledger closes a numbered row.
+
+### 21a. THE BRACKET RAN (appended 2026-10-06 by the orchestrator): the re-run's samples name the gate - IT IS THE RUNNING PRIORITY
+
+The sanctioned single re-run (`run-take5.sh`, `20261006-135935`, exit 0, no pstore delta, D6 files generated)
+produced the three-instant capture this addendum lacked. Measured:
+
+| cell | E5 (early) | I5 (post-EOI) | F5 (gate-fall) |
+| --- | --- | --- | --- |
+| `GICC_RPR` (running priority) | **`0x00000000`** | `0x000000FF` | `0x000000FF` |
+| `ISPENDR` w0 (the PPI/SGI bank) | `0x00000000` | `0x00000000` | **`0x20000000`** (bit 29 = id `0x1D`) |
+| `GICD_IGROUPR` bank 2 | `0x0` | - | `0x0` |
+
+The same capture's standing cells: `E_HPP=0x3FF` / `X_HPP=0x3FF` / `N_HPP=0x3FF` while `F_HPP=0x0000004C`
+(inside ONE boot), `E_ISP=0x1021` (0x4C pending throughout), `E_ACT=0`, `E_OU0=8`, `E_CTLR=0x01`,
+`E_P4C=0xF050F000` (the promotion held), `E_EN0=0x0000FFFF` (the 0x1D disable held), the v2 ring still SGI-owned
+(`0,1,2,2`), `M2_PSR=0` (the release guard never reached, as in every take-era boot).
+
+**THE GATE, NAMED.** The CPU interface's Running Priority Register reads **`0x00` at the early instant and
+`0xFF` (idle) at both later ones**, and `HPPIR` tracks it exactly: while a **priority-0 interrupt is ACTIVE**,
+every pending source with priority numerically above 0 is blocked from signalling - `HPPIR` legitimately reads
+`0x3FF` (nothing servable) even with `0x4C` pending+enabled+promoted; once the active interrupt retires
+(`RPR=0xFF`), the very same registers name `0x4C` (`F_HPP=0x0000004C`). So the time-varying gate is **the
+running priority of a priority-0 active interrupt**, and the arbitration model of ADDENDUM 18/20 stands behind it.
+
+**The active priority-0 interrupt is most plausibly ONE OF THE FIRMWARE'S OWN SGIs** (the ring serves `0,1,2`;
+SGIs commonly run at priority 0), held active because **the device's interrupt-release path can silently skip
+its EOI** (ADDENDUM 17's counter-based release; `M2_PSR=0` in every sample: the guard's sample point never even
+ran). That single stuck-active SGI would mask the whole board's signalling above priority 0 - a complete,
+self-consistent closure of the arc: the wire works, `0x4C` is selectable, and it is held off only while the
+device's own release path leaves a priority-0 interrupt running.
+
+**The next experiment (one boot, read-only):** sample `RPR` + the IAR returns + `ISACTIVER` continuously (a
+fast bracket) and catch WHICH id the priority-0 active interrupt is (`ISACTIVER` bank bits at the sticky window),
+then prove the EOI theory by forcing the release path (the counter/guard state) and watching `RPR` go idle.
+
+Health after the re-run: stock md5 exact, 0 leftovers, 6 interfaces, 3 pstore records; no panic in either
+attempt.
