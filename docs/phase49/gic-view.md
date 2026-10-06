@@ -3840,3 +3840,148 @@ trail and since fixed with a boot-id gate) produced `build/register-dumps/exp/20
   and only then spend another cycle (optionally with the `take6f` EOIR-force variant built in).
 - Device state after: healthy - 6 interfaces, stock md5 exact, 0 `.omo-off`, 3 pstore records unchanged,
   all diagnostic leftovers cleared (the device-side `omo-take6-cap.txt` duplicated this dir's capture).
+
+# ADDENDUM 23 (2026-10-06): the take6f capstone - THE VENDOR STACK TOOK THE ENDPOINT, SO THE RANKED EOIR FORCE WAS NEVER SPENT: the blob is built and verified (10/10 emitted, 66 B), the runner now FAILs closed, and the boot is NO-SAMPLE BY CONSTRUCTION (the third pad-less boot of the take class)
+
+`layoutdiff.md` sec.4 / `eoir.md` rank 1 specified one more instrument: `take6f`, take6's read-only sampler
+plus the ranked EOIR force (`GICC_EOIR 0x40160110 <= <the stuck id>`), which would prove the arc's capping
+BY TRANSITION in a single boot (`RPR 0x00 -> 0xFF`, then `HPPIR 0x3FF -> 0x4C`, then the take). The
+instrument is built, gated and capstone-verified. The boot then never reached the chip - the vendor Wi-Fi
+stack won the endpoint race - so the capping proof is NOT obtained and no cell is readable. This addendum
+records the instrument, the fix that made the harness FAIL closed, and the honest NO-SAMPLE label.
+
+## Short version
+
+`take6f` (`build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f892e922d0df0583f87fb1a2c`, 928 920 B, the reused
+v8 ko `3f87f1e9fe5ed9666f27d1f784d34535`) rode take6 byte-for-byte and added exactly TWO things: the read-only
+fast sampler `pad_stk_fast` (`GICC_RPR` x16 + the ANDS sticky + the word-0 active bank `GICD_ISACTIVER0`
+`0x40161300` + `HPPIR` + the page sentinel), and the ranked 66-B EOIR force `pad_stk_eoir` (one 32-bit
+`GICC_EOIR` `0x40160110 <= 0x2`, then a post-force `RPR` and `HPPIR` re-read into `STK_RPR1`/`STK_HPP1`).
+`vtool19` CONFIRMED the build (selftest, 10/10 emitted ops, two byte-identical regenerations, the emitted
+force ABSENT from take6, and the runner's gates). The boot was a hardware attach failure: `hardware attach
+failed (no endpoint bound)`, `regs=absent irq0=0 isr0=0`, the 207 line stayed the vendor's `hisi_pci_intx`.
+The vendor glue took both endpoints (`[PCIEL]request pcie intx irq 209/207 succ`) and uploaded its own image
+at 13.16 s, so our `.omo-pat` blob was never read into the chip, NO pad (the fast sampler, the E block, or
+the EOIR force) executed, and every cell reads `0x00000000`. `vrun20` labels it **NO-SAMPLE BY CONSTRUCTION**
+(attempt 1 row 6, extended): a VERIFIED NEGATIVE, not a hypothesis failure, and the third consecutive
+pad-less boot of the take class. The one real gain of exp/20261006-152035 is that the harness now FAILs
+closed (the gate is the verdict, not the read) while keeping the all-zero cells, and the router is left
+healthy.
+
+## The instrument (built and verified, `vtool19` CONFIRMED)
+
+take6f = take6's retained read-only frame (take4's instrument minus the four pads ADDENDUM 21a made
+redundant: `tk_e`, `tk_i`, `tk_f`, `selpost`, every take4 cell at its take4 address, the ten sites of
+`layoutdiff.md` sec.1(4)) plus two pads:
+
+| pad | file | length | what it does |
+| --- | --- | --- | --- |
+| `pad_stk_fast` | `0xc8348` | 172 B | 16 x (`ldr RPR` `0x40160114` + `str` + ANDS fold), `STK_STICKY` `0x1501b0`, `STK_ACT` = `GICD_ISACTIVER0` `0x40161300` -> `0x1501b4`, `STK_HPP` `0x1501b8`, sentinel `0x1501bc` |
+| `pad_stk_eoir` | `0xcb8e4` | 66 B | `GICC_EOIR` `0x40160110 <= 0x2` (the ONE force write), `dsb sy`, then re-read `RPR` -> `STK_RPR1` `0x1501c0` and `HPPIR` -> `STK_HPP1` `0x1501c4`, `b.w 0x86f5e` |
+
+`vtool19` C4/C5 capstone-confirmed both pads byte-for-byte against `layoutdiff.md` sec.4's spec (54 B
+as-built + the 12-B HPPIR deposit = 66 B). C1-C3: `--selftest` PASS with every frozen pin reproduced (take6
+`18d8e2ff...`, take6f `2c1ae79f...`), `--check-emitted take6f.bin` = 10/10 PASS and `take6.bin` = 8/8 PASS
+(the read-only take6 carries NO EOIR op and NO HPPIR deposit), two regenerations byte-identical to the
+shipped blob, and the builder refuses a bare take6f (rc 2, no `--eoir-id`). C6: the runner's gate is real -
+`run-take6f.sh` exits 1 with no `EOIR_ID` or a mismatched one (no device contact), pins
+`BLOB_MD5=2c1ae79f...`, re-runs the emitted gate on the staged blob, and its `EXP_DONE_CMD` now requires the
+three execution lines (`BAR0 base=0x40000000`, the `FIRMWARE.bin.omo-pat size=928920 bytes` upload, and
+`request_irq(207, IRQF_SHARED) rc=0`) and forbids `regs=absent` / `INI_DRV:D]ini_cfg_init`. That last change
+is the fix the take6 layout study named.
+
+## The boot (NO-SAMPLE BY CONSTRUCTION, `vrun20`)
+
+| fact | value |
+| --- | --- |
+| runner | `EOIR_ID=0x2 bash build/tmp/wifidrv1-art/run-take6f.sh` over `tools/exp.sh`, RUN_TS `20261006-152033` |
+| staged | blob `2c1ae79f...` pinned == served (10/10 emitted), ko `3f87f1e9...` pinned == served |
+| attach | `hardware attach failed (no endpoint bound) - continuing without it`; `init done ... regs=absent irq0=0 isr0=0` |
+| endpoint | the vendor stack held both: `207/209 ... hisi_pci_intx`; the vendor uploaded its own image at 13.16 s |
+| cells | every cell `0x00000000`; every pad sentinel (`STK_SNT`, `E_SNT`, `X_SNT`, `N_SNT`, `B_P3`, `B_P4`, `F_SNT`, `C_SNT`) reads `0x0`, none `0x50aa7e49` |
+| window | `WIN 0x4080B000`-class sanity `0xE59FF018` (the ACP window is alive) and `S2+4 0x40103EB8 = 0x00104427` (vendor data), so the zeros mean "the pad did not run", not "the window is dead" |
+| gate | `INSTRUMENT_GATE=NOT_HELD_NO_SAMPLE_BY_CONSTRUCTION`; `TAKE6F RESULT: FAIL`, `exp_rc=1` |
+| pstore | unchanged, 3 records; no crash |
+
+`vrun20`'s tally: C1 (staged + 10/10 + the run FAILed closed) CONFIRMED, C2 (the pads did NOT run) NO, C3
+(the 16 samples + sticky + the namer) UNREADABLE, C4 (the force's effect) UNREADABLE, C5 (the mandatory bound
+armed, INERT: no endpoint, no IRQ, `[qsv] no message window - supervisor skipped`) CONFIRMED, C6 (no new
+pstore) CONFIRMED, C7 (the gated live probe held and the router is healthy) CONFIRMED. So the take6f
+hypothesis stays UNTESTED and nothing about `0x4C`, `RPR`, or the stuck id can be read either way.
+
+## Why it is NO-SAMPLE and not a layout defect
+
+`layoutdiff.md` settles it offline: there is no take6-vs-take4 structural defect. The fast pad's length,
+offset, window, chaining and entry point are all in the class the take4/take5 pads used (the same allocator
+and stock image produced pads that ran in those boots), and take5's `tk_e` was chained off the SAME hop into
+the SAME page-10 alias-only cells and ran (`E5_RPR 0x40808144 = 0x0`, `E5_SNT = 0x50AA7E49`). The failure is
+UPSTREAM of the layout: **the patched blob was never uploaded.** The take6f `lsmod`/`module-log` show the
+vendor stack resident (`hi5622v100_wifi`/`hi5622v100_plat`) where take4/take5's do not, the vendor's PCIe glue
+claimed both endpoints at ~13.0-13.4 s and downloaded its own image, and our module then refused rather than
+fight (`omo_pdev == NULL -> -ENODEV`). With no BAR0 there is no read of the `.omo-pat`, so not one pad can
+execute. The one open item that layout study named (WHY the vendor stack was resident: this boot came up on the
+other `rootfs` slot, `rootfsa` vs take4/take5's `rootfsb`, so the harness's `.omo-off` hide of
+`hi5622v100_{wifi,plat}.ko` may not have applied) is answered here by gating on the OBSERVED state instead: the
+harness's new `EXP_DONE_CMD` requires the instrument's own execution lines, so a vendor-stack boot can no
+longer PASS.
+
+## What stands, and the one line that moved
+
+The take5 arc (ADDENDUM 21a) and the stuck-active reading (ADDENDUM 22) are UNCHANGED - nothing in this cycle
+measured the device. What moved is the HARNESS: the take5 bracket's bare PASS and the take6 re-run's bare PASS
+are gone, replaced by an execution gate that FAILs closed, and this boot is the first to prove it (the
+capture hook read every cell, found all zeros, and the gate decided FAIL). `STK_ACT`, the word-0 active bank
+that would NAME the stuck id, is still unread. Rank 1 of `eoir.md` sec.3 stands and is now better guarded:
+FORCE, LAST, only once the id is measured - and `take6f` cannot be launched without an explicit, matching
+`--eoir-id`, so a wrong-id force cannot be spent by accident.
+
+## Bounds (declared, not hidden)
+
+1. **No device sample.** Every claim about `0x4C`, `RPR`, the SGI window and the group bit is inherited from
+take4/take5 and untouched by this cycle.
+2. **The instrument's verification is static.** `vtool19` re-derived and disassembled the blob; it ran no
+device cycle, so "verified" means deterministic, read-only and correctly wired, not "measured on device".
+3. **The `.omo-pat` was staged but never consumed.** Its md5 exists as a file (`2c1ae79f...`) and is
+byte-identical to the host blob, but no BAR0 means no read into the chip; the zeros are the cells'
+power-on/reset content, not a `GICC_RPR` of `0x00`.
+4. **One cosmetic hook defect, non-inverting.** The staged hook's `M1_PSR` header carries backticks around
+`cpsie i` inside a double-quoted echo, so the shell printed `cpsie: not found` into `capture-cmd.txt` (the
+same artifact the take6 re-run shows). It changes no cell and no verdict; worth a one-line fix.
+
+## Verification and health
+
+Adversarial verdict `build/register-dumps/diffs/20261006T1523Z-vrun20/verdict.txt` (**NO-SAMPLE BY
+CONSTRUCTION**, C1/C5/C6/C7 CONFIRMED, C3/C4 UNREADABLE); instrument verdict
+`build/register-dumps/diffs/20261006T1519Z-vtool19/verdict.txt` (**CONFIRMED**, C1-C6; three non-load-bearing
+deviations D1-D3, none inverting a load-bearing claim: D1 a docs md5/size line for the 54-B as-built blob
+superseded by the shipped 66-B one, D2 the generator `tools/patch_fw_scratch.py` uncommitted on HEAD
+`c43c625`, D3 an adjacent `finish-evidence.sh --check-verdict` no-arg glob defect, recorded not fixed).
+Router healthy after the cycle: `WIPHY=2 IFACE=6 CAL_SUCC=1 OMO_OFF=0 STAGED=0 LOADER=0 RECOVER=0`, stock md5
+`0e530b976d5a20e87358671f1a577695` unchanged, no new pstore. Hard rules held: no write of CA
+`0x400392f0`/`0x40039af0`; no read of `0x10161000`; no host read of the ack IAR `0x4016010c` (or the aliased
+`0x40160120`); `GICD_SGIR 0x40161f00` never read; the ko staged ALWAYS as `wifidrv1.ko`; cycle
+serial/detached with the bound armed (`qbound=64`/`qbound209=8`); recover after.
+
+## The next threads
+
+- **Get the vendor stack out of the boot's way, then re-run the SAME take6f.** The gate's precondition is
+  that the vendor stack does NOT take the endpoint; the reboot-cycle gate now enforces an execution marker, so
+  the run fails closed instead of PASSing on a loaded-but-unbound module. Diagnose the `.omo-off` hide against
+  the actual `rootfs` slot first.
+- **Only then read `STK_ACT`.** If the fast sampler runs, `STK_STICKY == 0` with a word-0 bit set names the
+  priority-0 holder (`{SGI 0, SGI 2}` is the candidate set); that name is what `take6f`'s `--eoir-id` must be.
+- **Spend the EOIR force LAST.** It is the arc's capping proof BY TRANSITION (`RPR 0x00 -> 0xFF`, then
+  `HPPIR 0x3FF -> 0x4C`), gated to `take6f` and gated on a MEASURED id; it is never built on a guess.
+
+## Artifacts
+
+- Evidence `build/register-dumps/exp/20261006-152035/` (`capture-cmd.txt` with
+  `INSTRUMENT_GATE=NOT_HELD_NO_SAMPLE_BY_CONSTRUCTION`, `dmesg.txt`, `lsmod.txt`, `health.txt`,
+  `pstore-delta.txt`); log `build/tmp/wifidrv1-art/run-take6f.log`.
+- Blob `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f892e922d0df0583f87fb1a2c` (66-B EOIR pad, 10/10
+  emitted); reuse ko `wifidrv1.ko` md5 `3f87f1e9fe5ed9666f27d1f784d34535` (v8 of `553342d`, no ko commit, no CI).
+- Runner `build/tmp/wifidrv1-art/run-take6f.sh`; hook `build/tmp/wifidrv1-art/take6f-capture.hook`; verifiers
+  `build/register-dumps/diffs/20261006T1519Z-vtool19/verdict.txt` (instrument, CONFIRMED) and
+  `build/register-dumps/diffs/20261006T1523Z-vrun20/verdict.txt` (boot, NO-SAMPLE).
+- Specs `build/tmp/inta-spec/{stk3.md,eoir.md,stuck.md,layoutdiff.md}` (`layoutdiff.md` sec.3 the fail-closed
+  fix, sec.4 the 66-B pad).

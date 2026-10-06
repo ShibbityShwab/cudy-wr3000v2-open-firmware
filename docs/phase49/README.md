@@ -15,6 +15,7 @@ beside this one in `opensource/docs/phase49/`.
 | viewport | 13 | `viewport.md` | `build/register-dumps/exp/20261004-171523/` | expected-negative: GIC CA `0x40160000` stays host-invisible |
 | bracket | follow-up | `gic-view.md` ADDENDUM 21 | `build/register-dumps/exp/20261006-135935/` (the sanctioned re-run) | the take5 instrument (E5 ring / I5 post-EOI / F5 gate-fall) is verified, but the boot died at the completion marker: NO-SAMPLE, a harness/run failure, no `brk3.md` row closes |
 | stuck-active | follow-up | `gic-view.md` ADDENDUM 22 | `build/register-dumps/exp/20261006-135935/` (21a's three-instant bracket) | the gate 21a named is a PRIORITY-0 SOURCE HELD ACTIVE: `E5_RPR` = `0x0` (ring) vs `I5_RPR`/`F5_RPR` = `0xFF` (post-EOI / gate-fall); the EOI retires it and the release's guard sample never ran (`M2_PSR` = `0`); the SGI bank and the group enable are REFUTED as the stopper, `RPR` is the comparator; the fast sampler that would NAME the source (`take6`) stalled at the same `[4/7]` marker - NO-SAMPLE |
+| take6f capstone | follow-up | `gic-view.md` ADDENDUM 23 | `build/register-dumps/exp/20261006-152035/` | NO-SAMPLE BY CONSTRUCTION: the vendor Wi-Fi stack took both endpoints at ~13.5 s (`hardware attach failed (no endpoint bound)`, `regs=absent irq0=0 isr0=0`), so the blob was never read into the chip and no pad ran (every cell `0x0`, no sentinel `0x50aa7e49`); the ranked 66-B EOIR force is built and verified (`vtool19` CONFIRMED, 10/10 emitted) but was never spent; the harness now FAILs closed (the gate is the verdict) |
 
 ## What the forward lane measured (one line per chain link)
 
@@ -597,3 +598,30 @@ recorded: the synthetic `luofu-crg` platform_device lacks a `.release`, so `rmmo
 `drivers/base/core.c:1836` on every unload (a driver-source fix, out of scope for the receipt). Pointers: plan
 status block `opensource/docs/UPSTREAM-PORT-PLAN.md`; ledger `mem-entries.md`; specs `build/tmp/inta-spec/
 {pcierc.md,crgprobe.md}`.
+
+## ADDENDUM 25 (2026-10-06): the take6f capstone - the vendor stack took the endpoint, so the ranked EOIR force was never spent (NO-SAMPLE BY CONSTRUCTION)
+
+ADDENDUM 23 named the gate but not the source; `eoir.md` rank 1 then specified the instrument that would prove
+the arc caps BY TRANSITION. That instrument is **`take6f`**, and it is recorded in full as `gic-view.md`
+**ADDENDUM 23** ("the take6f capstone"); this block is the pointer.
+
+The build is whole. `take6f.bin` (md5 `2c1ae79f892e922d0df0583f87fb1a2c`, 928 920 B, the reused v8 ko
+`3f87f1e9...`) adds TWO pads to take6's retained read-only frame: the fast sampler `pad_stk_fast` (`GICC_RPR`
+x16 + the ANDS sticky, the word-0 active bank `GICD_ISACTIVER0` `0x40161300` that would NAME the holder, and
+`HPPIR`) and the 66-B EOIR force `pad_stk_eoir` (one 32-bit `GICC_EOIR` `0x40160110 <= 0x2`, then a post-force
+`RPR`/`HPPIR` re-read into `STK_RPR1`/`STK_HPP1` - the capping proof's two halves). `vtool19` CONFIRMED it:
+`--selftest` PASS with both frozen pins reproduced, `--check-emitted take6f.bin` 10/10 (take6 8/8, the force
+absent from take6), two regenerations byte-identical, and the runner's gate fails CLOSED (no matching
+`--eoir-id`, no launch). The boot is the strike-out: `hardware attach failed (no endpoint bound)`,
+`regs=absent irq0=0 isr0=0`, the 207 line stayed the vendor's `hisi_pci_intx`, and the vendor glue took both
+endpoints (`[PCIEL]request pcie intx irq 209/207 succ`) after uploading its own image at 13.16 s, so no BAR0
+was ever mapped and NO pad executed - every cell reads `0x0`, every sentinel (`STK_SNT`, `E_SNT`, `X_SNT`,
+`N_SNT`, `B_P3`, `B_P4`, `F_SNT`, `C_SNT`) reads `0x0`, none `0x50aa7e49`. `vrun20` labels it **NO-SAMPLE BY
+CONSTRUCTION** (`layoutdiff.md` row 6, extended): the take6f hypothesis stays UNTESTED, and the `STK_ACT`
+namer is still unread. The one line that moved is the HARNESS: the cycle's own gate decided FAIL
+(`INSTRUMENT_GATE=NOT_HELD_NO_SAMPLE_BY_CONSTRUCTION`) while the capture hook kept the all-zero cells, so a
+vendor-stack boot can no longer PASS on a loaded-but-unbound module. Evidence
+`build/register-dumps/exp/20261006-152035/`; blob `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f...`; verdicts
+`build/register-dumps/diffs/20261006T1519Z-vtool19/verdict.txt` (instrument, CONFIRMED) and
+`build/register-dumps/diffs/20261006T1523Z-vrun20/verdict.txt` (boot, NO-SAMPLE). Health: bound armed and inert
+(no endpoint, no IRQ), no new pstore, 2 wiphys / 6 interfaces, calibration `[SUCC]` both bands.
