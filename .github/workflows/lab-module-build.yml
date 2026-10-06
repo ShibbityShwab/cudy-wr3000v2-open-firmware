@@ -4,8 +4,9 @@ name: lab-module-build
 # which a push to an agent branch (the only branch we push, omo/*) cannot
 # trigger; this lane carries the same ARM cross toolchain + 5.10.201 headers and
 # builds the lab modules so an omo/* push gets a real cross-compile.
-# Targets (matrix): lab/luofu-clk (stage-1 CRG skeleton) and lab/luofu-pinctrl
-# (stage-2 IOMUX skeleton); both are no-HW-write scaffolds.
+# Targets (matrix): lab/luofu-clk (stage-1 CRG skeleton), lab/luofu-pinctrl
+# (stage-2 IOMUX skeleton) and lab/luofu-pcie (stage-2 read-only PCIe RC
+# skeleton); all three are no-HW-write scaffolds.
 
 on:
   push:
@@ -18,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [luofu-clk, luofu-pinctrl]
+        module: [luofu-clk, luofu-pinctrl, luofu-pcie]
     steps:
       - uses: actions/checkout@v4
 
