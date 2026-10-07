@@ -2,14 +2,14 @@ name: luofu-kernel-config
 
 # The luofu kernel lane (stage-1/2), two jobs:
 #
-#  * `config` (every omo/** push, ~2 min): proves that
-#    lab/luofu-kernel/luofu.fragment is a valid fragment for the kernel that
-#    actually matters - vanilla 5.10.201, the vendor's own version - by running
-#    the kernel's OWN merge_config.sh + olddefconfig against the real Kconfig,
-#    then asserting every requested symbol survived. CONFIG_ARCH_LUOFU has a
-#    real Kconfig entry now (lab/luofu-kernel/mach-luofu + kernel-tree.patch) and
-#    is asserted; the 12 driver-less CONFIG_*_LUOFU symbols are reported as the
-#    to-do list rather than failed on.
+#  * `config` (every omo/** push, ~2 min): applies lab/luofu-kernel/kernel-tree.patch
+#    to a pristine 5.10.201 tree (the same patch the image lane uses) and then
+#    proves that lab/luofu-kernel/luofu.fragment is a valid fragment for the
+#    kernel that actually matters - vanilla 5.10.201, the vendor's own version -
+#    by running the kernel's OWN merge_config.sh + olddefconfig against the real
+#    Kconfig, then asserting every requested symbol survived. CONFIG_ARCH_LUOFU
+#    resolves because of that patch and is asserted; the 12 driver-less
+#    CONFIG_*_LUOFU symbols are reported as the to-do list rather than failed on.
 #
 #  * `kernel` (the IMAGE lane, opt-in, ~25-40 min): builds the first own-kernel
 #    image - vanilla 5.10.201 + our machine (arch/arm/mach-luofu) + our
@@ -47,6 +47,19 @@ jobs:
         run: |
           curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
           tar xf linux.tar.xz
+
+      - name: apply our in-tree additions (the same patch the image lane uses)
+        run: |
+          # The fragment sets CONFIG_ARCH_LUOFU, so this lane has to see the tree
+          # that the image lane builds: the Kconfig/Makefile patch and the files
+          # it points at. It also re-checks, on every push, that the patch still
+          # applies to the pristine 5.10.201 sources.
+          cd linux-5.10.201
+          patch -p1 --dry-run < "$GITHUB_WORKSPACE/lab/luofu-kernel/kernel-tree.patch"
+          patch -p1           < "$GITHUB_WORKSPACE/lab/luofu-kernel/kernel-tree.patch"
+          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu
+          cp "$GITHUB_WORKSPACE/docs/soc/luofu-r116.dts" arch/arm/boot/dts/luofu-r116.dts
+          grep -n 'ARCH_LUOFU' arch/arm/mach-hisi/Kconfig arch/arm/Makefile arch/arm/boot/dts/Makefile
 
       - name: base config
         run: make -C linux-5.10.201 ARCH=arm multi_v7_defconfig
