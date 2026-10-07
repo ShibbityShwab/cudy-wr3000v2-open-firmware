@@ -4661,3 +4661,181 @@ rules held: no write of CA `0x400392f0`/`0x40039af0`, no read of `0x10161000`, n
 - Runner `build/tmp/wifidrv1-art/run-take7b.sh`; capture hook `build/tmp/wifidrv1-art/take7-capture.hook`; the
   capstone baseline `build/register-dumps/exp/20261007-010906/capture-cmd.txt` (take6f's UNGATED `STK_RPR1 =
   0xFF` on the same pre-state).
+
+# ADDENDUM 28 (2026-10-07): the gated pad's structure - arm A: THE DEFECT NAMED AND THE FIX VERIFIED, THE BOOT STILL QUEUED
+
+**Branch name: `PAD-STRUCTURE` (this note is the padstruct record, not a boot verdict).** ADDENDUM 27 left the
+take7b store an UNEXPLAINED skip. This note names the defect, writes the fix, and states plainly that no boot has
+spent it: **the fix is host-verified ONLY; the take7c boot is QUEUED and unwritten, so no device cell cited here
+has moved.**
+
+## Short version
+
+- **The defect.** take7/take7b's gate skips in BOTH complementary polarities because ITS SECOND TERM is the only
+  element that can skip in both boots: take7 shipped `cbz` (skip when `RPR == 0`) and take7b the corrected `cbnz`
+  (skip when `RPR != 0`), so on any stable operand exactly one of the two MUST have fired, and neither did.
+  `TG_RPR = 0x00` pins the PRE-store `RPR` to `0x00`, so guard 1 passed and guard 2 (`GICD_ISACTIVER0` bit 2)
+  decided - while its two immediate neighbours read that bit SET (`TG_ACT0 = 0x04`, `STK_ACT = 0x04`). Guard 2
+  tests a TOGGLING bit (the SGI-2 ACTIVE bit, SET on acknowledge, CLEAR on the handler's EOI) at a single chosen
+  instant, and the pad deposits nothing about what its own gate read, so the skip is indistinguishable from a
+  store that never landed (`vrun24` D2, ADDENDUM 27).
+- **The structural half.** The gate introduced the chain's FIRST Distributor-read -> CPU-interface-write pair
+  (the `GICD_ISACTIVER0` read before the `GICC_EOIR` write), and take7/take7b's only `dsb sy` sits AFTER the
+  store, so it cannot order that read against it; the pad that FIRED (take6f) touched only CPU-interface
+  registers. GICv2/GIC-400 do not order Distributor accesses against CPU-interface accesses.
+- **The fix: `take7c`, a NEW md5-pinned variant** (take7/take7b stay frozen byte-for-byte). Four deltas, all
+  inside the SAME 76-byte force pad at the SAME slot `0xcb8e4`: (1) `TG_PRERPR 0x150204` <- the `GICC_RPR` the
+  guard ITSELF read, BEFORE the `cbnz`; (2) `TG_PREACT 0x150208` <- the `GICD_ISACTIVER0` word the guard ITSELF
+  read, inside the fall-through; (3) a `dsb sy` between the guard's Distributor read and the CPU-interface store;
+  (4) the store made PAGE-RELATIVE through `r2` (`str r0,[r2,#0x10]`), which is 8 B cheaper and funds (1)-(3) at
+  the same size. The post-force `TG_RPR`/`TG_HPP` instant is unchanged, so ADDENDUM 27's "`TG_RPR == 0x00` pins
+  the pre-store `RPR`" argument survives verbatim.
+- **Host-verified.** Three regenerations byte-identical (`take7c.bin` md5 `60e0af1cb7fb32ea9e58178f754dfbf3`);
+  `--check-emitted` PASS 10/10 ops in op order; the take7c-vs-take7b delta is 26 bytes, file `0xcb8fc..0xcb919`,
+  ALL INSIDE the 76-byte force pad; take7b's own blob and md5 are UNCHANGED.
+- **QUEUED.** The boot (`st_01a11417`-shaped cycle, `take7c.bin` staged + two new hook cells) has NOT run. No
+  device action was taken for this record.
+
+## The two-part defect, stated as the spec states it
+
+`padstruct.md` (`st_01a1142a`) refutes all four encoding candidates (a clobbered guard register, a wrong store
+offset/cell, a guard branching past the store, stale flags) directly from the emitted bytes, then names what is
+left. Three of its four parts are a design defect, not an encoding bug:
+
+1. **Guard 2 is the only term that can skip in both boots.** The two polarities are COMPLEMENTARY, so a SET bit
+   forces exactly one of take7/take7b to fire; neither did. With pre-`RPR = 0x00` (pinned by the post-read that
+   follows the pad's own `dsb sy` on both paths), guard 1 passed by construction and guard 2 carried the decision
+   - against both bracketing reads of the same word.
+2. **Guard 2 samples a toggling bit ONCE.** The pad's own design language already distrusts a single instantaneous
+   sample (the fast sampler folds 16 `GICC_RPR` reads into `STK_STICKY` so "a sub-`dsb` transient is never
+   missed"), yet the force pad's guard never got that treatment and samples at an instant the chain chooses.
+3. **The gate is evidence-free (`vrun24` D2).** `TG_RPR`/`TG_HPP` are POST-force, so a skipped store and a store
+   that did not land look identical, and the guard's own two operands are not recorded at all. Two boots were
+   spent on a decision the evidence cannot carry.
+4. **The barrier is on the wrong side.** A `dsb` orders accesses on each side of it; the single post-store `dsb`
+   orders the store against the post-reads but cannot order the `GICD_ISACTIVER0` read against the `GICC_EOIR`
+   write. That cross-interface pair is the ONLY access-ordering difference from the pad that fired.
+
+## The fix (design, verified host-side only)
+
+`tools/patch_fw_scratch.py` gains `pad_stk_eoir_take7c()` (+ the `NOTE_TAKE7C` manifest text, the `TG2_CELLS`
+pair `(0x150204, 0x150208)`, and the extended emitted-bytes gate). Deltas 1-3 are new instrumentation; delta 4 is
+the funding change that keeps the pad at EXACTLY 76 B so no pad, cell, slot, site or chain link moves:
+
+```
+take7b (BEFORE)                                     take7c (AFTER)
+0x10b8fa ldr r5,[r2,#0x14]   ; GICC_RPR (PRE)       0x10b8fa ldr r5,[r2,#0x14]   ; GICC_RPR (PRE)
+         (read discarded)                          0x10b8fc str r5,[r6,#0x3c]   ; *** TG_PRERPR ***
+0x10b8fc cbnz r5,#0x10b91a                          0x10b8fe cbnz r5,#0x10b91a
+0x10b8fe movw/movt r1,#0x40161300                   0x10b900 movw/movt r1,#0x40161300
+0x10b906 ldr r1,[r1]         ; ISACTIVER0 w0        0x10b908 ldr r1,[r1]         ; ISACTIVER0 w0
+         (read discarded)                          0x10b90a str r1,[r6,#0x40]   ; *** TG_PREACT ***
+0x10b908 lsls r5,r1,#0x1e                           0x10b90c lsls r5,r1,#0x1e
+0x10b90a blo  #0x10b91a                             0x10b90e blo  #0x10b91a
+         (no barrier)                              0x10b910 dsb sy              ; *** GICD read -> GICC store ***
+0x10b90c movw/movt r1,#0x40160110                   0x10b914 movw r0,#0x402
+0x10b914 movw r0,#0x402                             0x10b918 str r0,[r2,#0x10]   ; THE STORE, page-relative
+0x10b918 str r0,[r1]                                0x10b91a dsb sy              ; dsb_at (both guards)
+0x10b91a dsb sy              ; dsb_at                ... tail unchanged: TG_RPR / TG_HPP / pop / msr / b.w
+```
+
+The guard POLARITY is take7b's corrected `cbnz r5, dsb_at` (fire only on `RPR == 0`); the
+`lsls r5,r1,#0x1e` / `blo dsb_at` term (bit 2 SET) is unchanged. Every emitted byte is take7b's except the four
+deltas.
+
+**Proof (host-only, this session; public commands):**
+
+```
+pyenv/Scripts/python.exe tools/patch_fw_scratch.py --fw build/tmp/FIRMWARE.bin \
+  --barmap opensource/build/register-dumps/barmap_ep0_bar0.bin --variant take7c --eoir-id 0x402 \
+  --out build/tmp/fw-patched/take7c.bin
+  -> wrote ... (928920 B, md5 60e0af1cb7fb32ea9e58178f754dfbf3); three regenerations byte-identical
+--check-emitted build/tmp/fw-patched/take7c.bin  -> PASS, 10/10 ops in op order
+     EOIR_PAGE 0x40160100 <= 0x2    @ 0xcb8ea  (the r2 GICC-page setup)
+     EOIR_ID   0x40160110 <= 0x402  @ 0xcb914  (the page-relative store)
+--check-emitted take7b.bin -> PASS 9/9 ; take7.bin -> PASS 9/9 ; take6f.bin -> PASS 10/10  (all UNCHANGED)
+--selftest   -> SELFTEST PASS (the frozen TAKE7_MD5 / TAKE7B_MD5 and the canonical-form NEGATIVE fixture hold)
+```
+
+The emitted-bytes gate is EXTENDED, not weakened: take7c carries TWO op entries (the page-relative store AND the
+base register's own setup bytes), each rebuilt from the primitives, so a pad that stores through a register it
+never set to that CA fails exactly like a dropped `movt` half. The selftest also asserts the two new cells are
+zero at BOTH barmap views.
+
+## The QUEUED boot test (the next device window) and the table the pre-state pair closes
+
+Re-run the take7b cycle VERBATIM (serial/detached `tools/exp.sh`; params `hw=1 wr=1 fw=1 release=1 program=1
+fwpath=/lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat intapost=0x100 quiesce=0x1 rung=0 qbound=64 qbound209=8
+qwait_ms=2000`; the slot gate on `mtd14:rootfsb`; a NEW `boot_id` before any reboot; the watchdog armed BEFORE
+the hide; then `recover`, then health: 2 wiphys / 6 ifaces / cal `[SUCC]` / no `.omo-off`) with ONLY two changes:
+the staged blob is `take7c.bin` (md5 `60e0af1cb7fb32ea9e58178f754dfbf3`) and the capture hook reads the two new
+cells (`0x40808204`, `0x40808208`; every other cell, sentinel and label unchanged).
+
+| # | reading | label | next action |
+| - | ------- | ----- | ----------- |
+| 1 | `TG_SNT != 0x50AA7E49` | NO-SAMPLE | the bank pad did not run - do not read the block |
+| 2 | `TG_PRERPR != 0` | GUARD 1 HELD | the pad's OWN `RPR` read was non-zero ~15 instructions after the fast pad's 16 zero samples |
+| 3 | `TG_PRERPR == 0`, `TG_PREACT` bit 2 CLEAR | GUARD 2 HELD, CELL-PROVEN | the distributor term skipped on a bit the neighbours read SET: the single-sample transient, proven for the first time. Next: a sticky/OR-folded ACTIVE term |
+| 4 | `TG_PRERPR == 0`, `TG_PREACT` bit 2 SET, `TG_RPR == 0xFF` | THE STORE LANDED | the barrier + the pair worked; read `TG_HPP` (`0x4C` = rank 1 was the gate; `0x3FF` = the bank/group layer holds `0x4C`) + `TG_GRP2`/`TG_CCTLR`/`TG_ACT2` |
+| 5 | `TG_PRERPR == 0`, `TG_PREACT` bit 2 SET, `TG_RPR == 0x00` | THE STORE DID NOT LAND | the gate passed and the effect is still absent: the residual is PAST the pad (the epoch re-formed in the window), NOT the gate |
+
+Row 3 versus row 5 is exactly the split `vrun24` D2 said no cell could carry. NOT run here: the hook edit and the
+cycle belong to the next device task.
+
+## Bounds (declared, not hidden)
+
+1. **HOST-ONLY.** No device action, no boot, no cell: every take7c statement above comes from the spec
+   (`build/tmp/inta-spec/padstruct.md`), the emitter (`tools/patch_fw_scratch.py`), capstone disassembly of the
+   emitted blob, `--check-emitted`, and `--selftest`. The nought boot cells this record cites are take7b's
+   (ADDENDUM 27), re-read, not re-measured.
+2. **The pre-state pair is ONE instant per term, not a matched series.** It makes the gate's decision PROVABLE;
+   it does not make the toggling ACTIVE bit stable.
+3. **The barrier removes the hazard; it does not prove the hazard was the cause.** Rows 4/5 of the table decide
+   that, and the fix is safe either way - register state, reboot-cleared, no flash, no clock/reset register.
+4. **The store is one 32-bit `GICC_EOIR` write of the value the firmware's own EOI writes** (the full IAR word
+   `0x402` = SGI 2 from source PE 1, file `0x82f52`).
+5. **76 B, SAME slot:** take7b's findings about every other pad hold verbatim, and take7b's blob is byte-UNCHANGED
+   (`--check-emitted` 9/9, `TAKE7B_MD5` frozen in the selftest).
+6. **The new cells read zero at BOTH barmap views** (asserted at build time), and they sit 4 B above
+   `bankgate.md` sec. 5's 15-word block - no existing cell is displaced.
+
+## Verification and health
+
+No device action was taken by this record: the device was not touched, so no health receipt applies here. Sources:
+the fix spec `build/tmp/inta-spec/padstruct.md` (task `st_01a1142a`; sec. 1 the four refuted encodings, sec. 2 the
+defect, sec. 3 the four deltas, sec. 4 the before/after disasm, sec. 5 the host proof, sec. 6 the queued boot +
+the branch table, sec. 7 the bounds) and, for the take7b facts the defect is read from, ADDENDUM 27 in this file
+plus `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt`. Emitter ground truth
+`tools/patch_fw_scratch.py` (`pad_stk_eoir_take7c`, `NOTE_TAKE7C`, `TG2_CELLS`, `_take7c_emitted`); the take7c
+builder `tools/patch_fw_scratch.py` `--variant take7c`; blob `build/tmp/fw-patched/take7c.bin` md5
+`60e0af1cb7fb32ea9e58178f754dfbf3`. The take7c-vs-take7b delta is 26 bytes at file `0xcb8fc..0xcb919`; take7c-vs-
+stock and take7b-vs-stock both change 1810 bytes. Hard rules held: no write of CA `0x400392f0`/`0x40039af0`, no
+read of `0x10161000`, no host read of the ack IAR `0x4016010c` / AIAR `0x40160120`, no `GICD_SGIR` read, dword-
+aligned accesses only, and no commit and no push from this record.
+
+## The next threads
+
+- **Spend the fix: the take7c boot.** The table above is the whole reason the variant exists; it is the D2 gap's
+  first cell-provable answer.
+- **If row 3 lands (GUARD 2 HELD): make the ACTIVE term sticky** (an OR-fold of several `GICD_ISACTIVER0` reads
+  around the instant, in the fast sampler's own idiom) - the single-sample defect then cannot decide anything.
+- **If row 5 lands (STORE DID NOT LAND): stop spending rank levers.** The group-enable write (`GICC_CTLR ->
+  0x3`) and the bank quiesce stay deferred (ADDENDUM 26's reasons stand: the enable admits the pending
+  `0x40`/`0x45`/`0x4C`, the quiesce risks the Wi-Fi doorbell).
+- **One boot, one question.** `take7c` intervenes; keep observation and intervention md5-pinned apart so they
+  never share a verdict (ADDENDUM 26).
+- **A reboot clears all of it.** The vendor bring-up rewrites the GIC every boot; every lever here is register
+  state, boot-scoped, and bound-covered.
+
+## Artifacts
+
+- Fix spec `build/tmp/inta-spec/padstruct.md` (task `st_01a1142a`; the full defect/fix/proof record this addendum
+  condenses).
+- Emitter `tools/patch_fw_scratch.py`: `pad_stk_eoir_take7c()`, the `NOTE_TAKE7C` manifest text, `TG2_CELLS` /
+  `TG_PRERPR` / `TG_PREACT` / `TG2_NAMES`, the take7c emitted-bytes gate and the take7c selftest block.
+- Blob `build/tmp/fw-patched/take7c.bin` md5 `60e0af1cb7fb32ea9e58178f754dfbf3` (frozen take7b
+  `build/tmp/fw-patched/take7b.bin` md5 `f5f5309fab9ae76518b9e1368a9ca768`, take7 `take7.bin` md5
+  `b41b0aacfbd46bd8619d71f197431f49`).
+- Prior record ADDENDUM 27 in this file (the take7b boot and the nine branch rows) and its verdict
+  `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2, the unexplained skip).
+- Not yet written: the take7c capture hook (must add `0x40808204` / `0x40808208`) and the take7c runner.
