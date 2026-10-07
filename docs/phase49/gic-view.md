@@ -4489,3 +4489,175 @@ cycle, nothing staged, no `rmmod` of vendor modules, no commit, no push.
   `3f87f1e9fe5ed9666f27d1f784d34535` (unchanged, no CI).
 - Capstone rc/specs `build/tmp/inta-spec/{stk3,eoir,stuck,layoutdiff}.md`; spec sources ARM IHI0048
   `GICC_HPPIR`/`GICC_CTLR`/`GICC_EOIR` via `arm.jonpalmisc.com` (quoted in `bankgate.md` sec. 7).
+
+# ADDENDUM 27 (2026-10-07): the take7b force - THE SELF-GATE POLARITY IS CURED IN THE BLOB AND THE STORE STILL DID NOT FIRE: the force pad's `cbz` inverted guard is fixed to `cbnz` (one byte, capstone-proven byte-for-byte), the take7b boot RAN clean and everything around the force is CONFIRMED (pins, the 9/9 emitted gate, the sentinels, the SGI-2 naming, the mandatory bound, no new pstore), BUT `TG_RPR` reads `0x00` = the NOFORCE cell again while its immediate neighbours measured the firing pre-state (16/16 `GICC_RPR = 0x00` plus `GICD_ISACTIVER0` bit 2 SET) and take6f's UNGATED force dropped `RPR` to `0xFF` on that same pre-state, so the arc's rank-1-vs-rank-2 question stays OPEN as an UNEXPLAINED skip rather than a clean `no zero epoch`, and the next cycle needs a PRE-force `RPR` deposit (or a matched pre/post pair) before any rank lever is spent
+
+ADDENDUM 26 designed the take7 boot: the corrected EOIR force (the FULL IAR word `0x402` to `GICC_EOIR`
+`0x40160110`, self-gated to fire only when `RPR = 0x00` and `ISACTIVER0` bit 2 is SET) plus the post-force
+bank/group read set R1..R14. That design reached the chip TWICE, and both boots are read here: take7 (vrun23)
+and its one-byte repair take7b (this record). Neither fired the store. This addendum is the arm-A record of the
+take7b boot and of the `gfix.md` repair that produced its blob; the two specs are `build/tmp/inta-spec/gfix.md`
+(the polarity bug, the intent, the fix, the emitted-ops proof) and the design pair `bankgate.md`/`bg2.md`
+(ADDENDUM 26). No device action was taken by THIS record; the cycle was the sibling task `st_01a11417`'s, and
+the official read is the adversarial verdict `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt`.
+
+## Short version
+
+The blob is right and the result is a NEGATIVE, and the two must not be blurred. `take7b.bin` (md5
+`f5f5309fab9ae76518b9e1368a9ca768`) differs from `take7.bin` (md5 `b41b0aacfbd46bd8619d71f197431f49`) at EXACTLY
+one byte: file `0xcb8fd`, `b1 -> b9`. take7 shipped `cbz r5, dsb_at`, which SKIPPED the store when `GICC_RPR ==
+0x00`, the exact state the force exists to retire; the emitter's own comment said `CBNZ` while the opcode said
+`cbz`, and the selftest asserted the wrong op and locked the inversion in. take7b emits `cbnz r5, dsb_at` (skip
+only when `RPR != 0`), the same two bytes, the same `dsb_at`, the same post-force deposits, so the layout and
+every other pad are untouched and the ko (`3f87f1e9fe5ed9666f27d1f784d34535`) needs no rebuild, no CI, no push.
+
+The boot (`build/register-dumps/exp/20261007-020643/`, `TAKE7B RESULT: PASS`, `exp_rc=0`) is clean everywhere
+BUT the experiment itself:
+
+- **`TG_RPR = 0x00000000`** and **`TG_HPP = 0x000003FF`**: the post-force cells read the UNFORCED state. The one
+device write did not take effect; there is no transition to show.
+- **Its immediate neighbours measured the FIRING pre-state.** `STK_STICKY = 0` over 16/16 `GICC_RPR` samples
+  (all sixteen `STK_0..STK_15` read `0x00`) and `STK_ACT = 0x4` names SGI 2 (id `0x2`) the priority-0 incumbent
+  with bit 2 SET, and `V2_ID = V2_RING3 = 0x402` (the firmware's own IAR read). The ring instant is the force
+  pad's immediate predecessor in the executed chain.
+- **The take6f contrast is the load-bearing one.** take6f's UNGATED (bare `0x2`) force on that SAME pre-state
+  DROPPED `RPR` (`STK_RPR1 = 0xFF`, ADDENDUM 25a). take7b's CORRECTED, self-gated, full-word force did not
+  (`TG_RPR = 0x00`). Right gate, right blob, and the store still never landed.
+- **The whole snapshot is the unforced one.** `TG_ACT0 = 0x4` (SGI 2 still active), `TG_PEND0 = 0`, `TG_GRP2 =
+  0` (id `0x4C` is a Group-0 source), `TG_GRP0 = 0`, `TG_CCTLR = 0x1` and `TG_DCTLR = 0x1` (EnableGrp0 = 1,
+  EnableGrp1 = 0), `TG_ISP2 = 0x1021` (`0x4C` bit 12 STILL PENDING), `TG_ACT2 = 0` (`0x4C` NEVER acked), `TG_TGT
+  = 0x01010101`, `TG_PMR = 0xF0`, `TG_ABPR = 0`, `TG_AHPP = 0`.
+- **The PASS is the INSTRUMENT gate, not the experiment.** The runner's `PASS` is `INSTRUMENT_GATE=HELD` (the
+  take7b blob reached the custom slot) plus the health line; the force's own witness is `TG_RPR`, and it reads
+  `0x00`. A PASS here must never be read as "the EOIR force landed".
+
+So the vrun23 DEFECT (the inverted gate) is CURED, and a NEW, unexplained skip takes its place. The rank-1 (the
+id-mismatched EOIR) versus rank-2 (the group) question the boot exists to settle is NOT ANSWERED.
+
+## The branches (read from the take7 branch table; quoted from `vrun24` sec. 3/7)
+
+The `take7b` readings do not satisfy any decision row cleanly. Row by row, against `capture-cmd.txt`:
+
+1. **Row T7-0, NO-SAMPLE: refuted.** `TG_SNT = STK_SNT = N_SNT = B_P3 = B_P4 = F_SNT = C_SNT = 0x50AA7E49`.
+   Every chain pad RAN. (`E_SNT`/`X_SNT` read `0x00000000` = NO-SAMPLE BY CONSTRUCTION, `selpost_e`/`selpost`
+   dropped in this layout, not a failure.)
+2. **Row T7-1, `TG_RPR == 0x00` -> NOFORCE: SATISFIED, and that is the finding.** The row's own reading is "the
+   pre-store self-gate held (RPR != 0 or ISACTIVER0 bit2 clear)", yet the neighbours say pre-`RPR` was `0x00`
+   with bit 2 SET. The row's stated reading is internally strained here (vrun24 D3): the classification table
+   has NO honest row for "the gate is provably correct, the pre-state is the firing state, and the store still
+   did not take".
+3. **Row T7-2, `TG_RPR == 0xFF` AND `TG_HPP == 0x4C` -> rank 1 was the gate: NOT SATISFIED.** No `0xFF`
+   (`TG_RPR = 0x00`), no `0x4C` (`TG_HPP = 0x3FF`).
+4. **Row T7-3, GROUP GATE CONFIRMED: NOT SATISFIED.** It needs `TG_GRP2` bit 12 `= 1` and `TG_CCTLR` bit 1 `=
+   0`; here `TG_GRP2 = 0x00` (bit 12 CLEAR, id `0x4C` is Group 0) and `TG_CCTLR = 0x01` (bit 1 CLEAR), so even a
+   fired force would have matched NEITHER this row nor row T7-4.
+5. **Row T7-4, the BANK owns it: NOT SATISFIED.** It needs `TG_CCTLR` bit 1 `= 1`; it reads `0`, and the
+   unforced snapshot says nothing about who holds `0x4C` (the arc's question stays open).
+6. **Row T7-5, `TG_HPP == 0x4C` AND `TG_AHPP == 0x4C`: NOT SATISFIED.** `TG_AHPP = 0x0`, `TG_HPP = 0x3FF`.
+7. **Row T7-6, `TG_PMR < 0xC0` -> PMR mask: refuted.** `TG_PMR = 0xF0` (>= `0xC0`), so the priority mask does
+   not block `0x4C`'s priority `0x00`.
+8. **Row T7-7, `TG_ACT2` bit 12 SET -> the take moved: NOT SATISFIED.** `TG_ACT2 = 0`, `0x4C` was never acked.
+9. **Row T7-8, `TG_ISP2` bit 12 CLEAR -> a racing clear: NOT SATISFIED.** `TG_ISP2 = 0x1021`, bit 12 still set.
+
+One boot, no row closes. The honest label is the residual, not a verdict.
+
+## Why this is an UNEXPLAINED skip, and what it is NOT
+
+`vrun24` sec. 7 (D1) separates the three candidates the cells can and cannot decide. The post-read sits
+immediately after the `dsb sy` with nothing between it and the store, so `TG_RPR = 0x00` pins the PRE-store
+`RPR` to `0x00` too (had `RPR` been non-zero, the `cbnz` would have skipped with a NON-zero `TG_RPR`). With
+pre-`RPR = 0x00`, the only guard that can skip is the SECOND one, `GICD_ISACTIVER0` bit 2 CLEAR, yet both
+immediate neighbours read that same word with bit 2 SET (`STK_ACT = 0x04`, `TG_ACT0 = 0x04`). The three
+candidates, none provable from the captured cells:
+
+- **(a)** an instantaneous pre-store difference the neighbours cannot see: the force pad's OWN `ISACTIVER0`
+  read saw bit 2 clear (a sub-microsecond transient). Possible; nothing supports it.
+- **(b)** the store DID fire and the full-word `0x402` EOIR did not drop `RPR`. DISFAVOURED: ADDENDUM 21a
+  measured `I5_RPR = 0xFF` right after the firmware's OWN EOI (file `0x82f52`), which writes the same raw IAR
+  word, so `0x402` does drop `RPR` in this image's own ISR.
+- **(c)** the EOIR retired the epoch, the LEVEL SGI-2 re-asserted, and it was re-taken inside the `dsb` window
+  (`RPR` back to `0x00` at the post-read, `TG_ACT0` bit 2 SET again). The pad deposits NO pre-force `RPR`, so
+  (a)/(b)/(c) cannot be split from the cells.
+
+THIS IS NOT: a safety failure (the bound held, no forbidden CA was touched, no flash wrote, the router is
+healthy), a build fault (the blob's one-byte delta and the `cbnz` are capstone-proven), or a NO-SAMPLE (every
+sentinel fired). It is a verified NEGATIVE and an OPEN residual. The one mechanism that WOULD split it is the
+D2 gap: the pad does not deposit its PRE-force `RPR`, so "`RPR == 0x00` at the gate" is INFERRED (post ==
+pre), not cell-proven. That gap is unchanged by take7b and is the next cycle's whole reason to exist.
+
+## Bounds (declared, not hidden)
+
+1. **One instant, no matched pair.** The bank/group block is a single post-force sample; `STK_STICKY` covers
+   `RPR` only, and in this boot it is moot because the force never ran (`bg2.md` sec. 5 bound 1).
+2. **The PASS is the instrument gate.** `INSTRUMENT_GATE=HELD` plus the health line is the runner's `PASS`;
+   it is NOT evidence the force landed. `TG_RPR = 0x00` is the force's own witness.
+3. **The blob is fixed, the ko is not rebuilt.** The whole take7b-vs-take7 delta is one byte (`cmp -l`: file
+   `0xcb8fd`, `0xb1 -> 0xb9`); the 76-B force pad keeps its size, slot (`0xcb8e4`), `dsb_at` and deposits, and
+   the ko md5 `3f87f1e9fe5ed9666f27d1f784d34535` is unchanged, so no ko commit and no CI.
+4. **The pre-force `RPR` is INFERRED.** The pad deposits only the post cells; the D2 gap is exactly what blocks
+   the (a)/(b)/(c) split. Do not read `TG_RPR = 0x00` as a directly measured pre-state.
+5. **The group snapshot is unforced.** `TG_GRP2`/`TG_CCTLR`/`TG_ACT2` describe the pre-force world; they say
+   nothing about who holds `0x4C` once `RPR` drops. `TG_HPP = 0x3FF` here is the unforced state.
+6. **`E_*`/`X_*` cells are NO-SAMPLE BY CONSTRUCTION** in take7-era boots (`selpost_e`/`selpost` dropped):
+   never read them as data.
+7. **`TG_AHPP` `0x40160128`** is the layout-derived NS-view alias, re-verified against the spec offset table at
+   build time. It is NOT the forbidden ack IAR `0x4016010c` or AIAR `0x40160120`, and `GICD_SGIR 0x40161f00`
+   is never read.
+8. **The instrumentation has cosmetic display defects only.** The hook prints a bare `cpsie` and the runner's
+   decision-table echo backtick-quotes `cbz`; both garble DISPLAY TEXT, no cell, pin, gate or bound line
+   (`vrun24` D5). The capture hook's own label still says "take7"; the authoritative records are the pin check
+   and `--check-emitted` (D6). The take7b manifest's `take7b.eoir.gate` string is stale take7 text; the
+   authorities are `take7b.gate_fix` and the capstone disasm (D4).
+
+## Verification and health
+
+No device action was taken by this record. Sources: the official verdict
+`build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (task `st_01a1141d`, adversarial; C1 the pins +
+9/9 emitted gate CONFIRMED, C2 the sentinels CONFIRMED, C3 the SGI-2 naming CONFIRMED, C4 the corrected-EOIR
+force's `RPR` drop FAIL, C5 the mandatory bound CONFIRMED, C6 no new pstore CONFIRMED, C7 the honest branch
+REPORTED as an OPEN residual) and the fix spec `build/tmp/inta-spec/gfix.md` (task `st_01a11411`: the polarity
+bug, the intent, the one-byte fix, the capstone disasm, the two-byte delta). The take7b cycle was the sibling
+task `st_01a11417`'s (`bash build/tmp/wifidrv1-art/run-take7b.sh`, `EOIR_ID=0x402` over `tools/exp.sh`, custom
+slot `mtd14:rootfsb`). Blob `take7b.bin` md5 `f5f5309fab9ae76518b9e1368a9ca768`; ko `wifidrv1.ko` md5
+`3f87f1e9fe5ed9666f27d1f784d34535` (unchanged). The cycle end state, verbatim: `TAKE7B RESULT: PASS`,
+`exp_rc=0`, `POST_WIPHY=2 / POST_IFACE=6 / POST_CAL2G=1 / POST_CAL5G=1 / POST_WIFIDRV1=0 / POST_MTD_NUM=14`,
+`POST_BOOT_ID=ab073ef2-d57d-42ad-971d-c42bc92f80b8`; a live read-only probe read the SAME boot id at uptime
+164s. The mandatory bound was armed before the hide, tripped (`IRQ_DISABLED_BOUND irq=207 n=65 bound=64`,
+`irq=209 n=9 bound=8`), and the literal pair was restored unconditionally. No new pstore record. Router healthy
+on `mtd14:rootfsb` (2.5.24): `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0 WIFIDRV1=0`, stock md5
+`0e530b976d5a20e87358671f1a577695` untouched, zero `.omo-*`/`.omo-pat`/`.omo-off`/`wifidrv1` leftovers. Hard
+rules held: no write of CA `0x400392f0`/`0x40039af0`, no read of `0x10161000`, no host read of the ack IAR
+`0x4016010c`/AIAR `0x40160120`, no `GICD_SGIR` read, no `rmmod` of vendor modules, no commit, no push.
+
+## The next threads
+
+- **Deposit the PRE-force `RPR` (or a matched pre/post pair).** This is the D2 gap and the ONLY thing that
+  splits (a)/(b)/(c). A take7c pad that stores `GICC_RPR` BEFORE the `dsb`/store, next to the post cells,
+  settles whether the gate saw `0x00` and whether the skip was the second guard or a re-take.
+- **Do not spend a rank lever until the force's own witness moves.** No `TG_RPR = 0xFF` means no rank had its
+  day in court; the group-enable write (`GICC_CTLR -> 0x3`) and the bank quiesce stay deferred (ADDENDUM 26's
+  reasons stand: the enable admits the pending `0x40`/`0x45`/`0x4C`, the quiesce risks the Wi-Fi doorbell).
+- **One boot, one question.** `take7` observes; `take7f` intervenes; keep the observation and the intervention
+  md5-pinned apart so they never share a verdict (ADDENDUM 26).
+- **A reboot clears all of it.** The vendor bring-up rewrites the GIC every boot, so every lever here is
+  register state, boot-scoped, and bound-covered.
+
+## Artifacts
+
+- Fix spec `build/tmp/inta-spec/gfix.md` (task `st_01a11411`: sec. 1 the vrun23 inversion, sec. 2 the intent,
+  sec. 3 the `take7b` emitter, sec. 4 the emitted-ops proof, sec. 5 the two-byte delta, sec. 6 what a take7b
+  boot settles).
+- Design pair `build/tmp/inta-spec/{bankgate.md,bg2.md}` (ADDENDUM 26: the ranked gates, R1..R14, the branch
+  table, the deferred levers).
+- Boot `build/register-dumps/exp/20261007-020643/` (`capture-cmd.txt`, `run-take7b.log`, `PACKED.txt`,
+  `interp.txt`, `health.txt`) carries every take7b value quoted here; `capture-cmd.txt` is the hook's own label
+  file and its per-cell value line follows each header.
+- Verdicts `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (take7b, this record's read) and
+  `build/register-dumps/diffs/20261007T0143Z-vrun23/verdict.txt` (take7, the polarity bug, D1).
+- Blobs `build/tmp/fw-patched/take7b.bin` md5 `f5f5309fab9ae76518b9e1368a9ca768` and `take7.bin` md5
+  `b41b0aacfbd46bd8619d71f197431f49` (one byte apart, file `0xcb8fd`); emitter ground truth
+  `tools/patch_fw_scratch.py` (`pad_stk_eoir_take7b`, `pad_stk_bank_take7b`, `cbnz`); ko `wifidrv1.ko` md5
+  `3f87f1e9fe5ed9666f27d1f784d34535` (unchanged, no CI).
+- Runner `build/tmp/wifidrv1-art/run-take7b.sh`; capture hook `build/tmp/wifidrv1-art/take7-capture.hook`; the
+  capstone baseline `build/register-dumps/exp/20261007-010906/capture-cmd.txt` (take6f's UNGATED `STK_RPR1 =
+  0xFF` on the same pre-state).
