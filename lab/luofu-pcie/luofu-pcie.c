@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * luofu-pcie: stage-2 read-only skeleton for the Hi5671Y "luofu" PCIe root
- * complex (two DWC domains, DT compatible "hisilicon,luofu-pcie").
+ * luofu-pcie: stage-2 driver FRAME for the Hi5671Y "luofu" PCIe root complex
+ * (two DWC domains, DT compatible "hisilicon,luofu-pcie").
  *
- * ==========================  SKELETON  ==========================
- * A DESIGN SKELETON: it carries the shape (of_match_table + probe/remove + the
- * from-scratch host-controller plan) that the stage-2 bring-up fills in; the
- * clk/reset wiring, the misc mode/LTSSM writes and the pci_scan_root_bus_bridge
- * registration stay TODO.  It COMPILES against the vanilla 5.10.201 arm headers
- * in the CI cross-build (.github/workflows/lab-module-build.yml -> lab/luofu-pcie,
- * plus the build-load-test-module.yml lane) and performs NO register writes:
- * probe only maps the two READ-SAFE windows and runs a read-only status
- * inventory (FORCED probe: dbi 0x10160000 + cfg 0x50000000 on RC0).
+ * ==========================  DRIVER FRAME  ==========================
+ * The stage-2 DRIVER FRAME: the full platform-driver shape the bring-up fills
+ * in (of_match_table + probe/remove + the from-scratch host-controller plan of
+ * pcierc.md sec 2), with the three per-pcierc.md windows mapped and the read
+ * path proven live.  The clk/reset wiring, the misc mode/LTSSM writes and the
+ * pci_scan_root_bus_bridge registration stay TODO (staged in pcidrv.md).
+ *
+ * What the frame carries NOW:
+ *   - module_init + platform_driver + of_match ("hisilicon,luofu-pcie") +
+ *     probe/remove (pcierc.md sec 4b);
+ *   - ioremap of DBI + config + the WRITE-ONLY port-logic (misc) window, from
+ *     DT reg-names or the pinned CAs;
+ *   - the aligned dword-field accessor (luofu_pcie_read, the access rule);
+ *   - the link-state read path (DL_ACTIVE decode, the safe LTSSM substitute);
+ *   - the force_probe=1 DT-less bench path (the proven smoke path, kept).
+ *
+ * It COMPILES against the vanilla 5.10.201 arm headers in the CI cross-build
+ * (.github/workflows/lab-module-build.yml -> lab/luofu-pcie, plus the
+ * build-load-test-module.yml lane) and performs NO register writes: probe maps
+ * the windows and runs a read-only status inventory (FORCED probe:
+ * dbi 0x10160000 + cfg 0x50000000 + write-only misc 0x10161000 on RC0).
  * ================================================================
  *
  * Spec: build/tmp/inta-spec/pcierc.md (the register receipt is
@@ -22,14 +34,14 @@
  * lab/ko_disasm.py: hi_pcie_probe @0xb8c + the sections in pcierc.md sec 1).
  *
  * The five-window layout the vendor `hi_pcie` maps (pcierc.md sec 1, pinned DTS
- * `reg`/`reg-names`), and what this skeleton does with each:
+ * `reg`/`reg-names`), and what this frame does with each:
  *
  *   reg-name   RC0 CA       size      this module
  *   dbi        0x10160000   0x1000    MAPPED + READ: the RC's own config header
  *                                     (vendor/device id), the DWC Link
  *                                     Control/Status words, the port-logic and
  *                                     the iATU register file
- *   misc       0x10161000   0x3000    NOT MAPPED, NEVER READ.  The SoC
+ *   misc       0x10161000   0x3000    MAPPED, WRITE-ONLY, NEVER READ.  The SoC
  *                                     "port-logic/app" block is write-only
  *                                     host-side (pcierc.md sec 1 + sec 4):
  *                                     mode select misc+0x00, LTSSM enable
@@ -37,6 +49,10 @@
  *                                     A read-only devmem of it PANICKED the
  *                                     box (phase20/host-window.md C.4); the
  *                                     HARD RULE stands for host-side reads.
+ *                                     ioremap() alone performs no bus access,
+ *                                     so the frame maps it ready for the
+ *                                     staged writes; no readl()/writel() may
+ *                                     touch it yet.
  *   cfg        0x50000000   0x1000    MAPPED + READ: the downstream dev-0 config
  *                                     window (iATU viewport 0, target of CFG0)
  *   mem        0x40000000   0x2000000 not mapped here (iATU viewport 1)
@@ -48,7 +64,7 @@
  * the record prescribes are used instead (pcierc.md sec 4b): the DWC Link
  * Status DL_ACTIVE bit at DBI+0x82 / cfg+0x82, plus the DBI port-logic status
  * words (Link Capabilities / Link Control / Link Width-Speed Control).  The raw
- * LTSSM state therefore stays OUT of this skeleton by design - it lives only in
+ * LTSSM state therefore stays OUT of this frame by design - it lives only in
  * the read-forbidden misc window.
  *
  * HARD RULES honoured: never write CA 0x400392f0; never read the RC misc window
@@ -119,11 +135,13 @@
 #define LUOFU_PCIE_RC1_CFG	0x68000000UL
 #define LUOFU_PCIE_CFG_SIZE	0x1000UL
 
-/* Documented-only geometry for the windows this read-only skeleton never maps.
- * misc 0x10161000 is the read-forbidden "port-logic/app" block; mem/io are the
- * iATU viewport 1/2 downstream windows (pcierc.md sec 1).  These constants exist
- * so the DT/CC-port plan is transcribed in one place; nothing dereferences them. */
+/* Geometry for the write-only misc window and the downstream mem/io windows.
+ * misc 0x10161000/0x10165000 is the read-forbidden "port-logic/app" block: the
+ * frame ioremaps it so the staged mode/LTSSM writes have a VA ready, but
+ * nothing dereferences it yet.  mem/io are the iATU viewport 1/2 downstream
+ * windows (pcierc.md sec 1) and stay documented-only constants. */
 #define LUOFU_PCIE_RC0_MISC	0x10161000UL	/* WRITE-ONLY, NEVER READ */
+#define LUOFU_PCIE_RC1_MISC	0x10165000UL	/* WRITE-ONLY, NEVER READ */
 #define LUOFU_PCIE_MISC_SIZE	0x3000UL
 #define LUOFU_PCIE_RC0_MEM	0x40000000UL
 #define LUOFU_PCIE_MEM_SIZE	0x2000000UL
@@ -195,13 +213,14 @@
 /* The two RC domains (pcierc.md sec 1: RC0/RC1, each with its own DBI + cfg). */
 struct luofu_pcie_rc_ca {
 	unsigned long dbi_ca;
+	unsigned long misc_ca;
 	unsigned long cfg_ca;
 	const char *name;
 };
 
 static const struct luofu_pcie_rc_ca luofu_rcs[] = {
-	{ LUOFU_PCIE_RC0_DBI, LUOFU_PCIE_RC0_CFG, "rc0" },
-	{ LUOFU_PCIE_RC1_DBI, LUOFU_PCIE_RC1_CFG, "rc1" },
+	{ LUOFU_PCIE_RC0_DBI, LUOFU_PCIE_RC0_MISC, LUOFU_PCIE_RC0_CFG, "rc0" },
+	{ LUOFU_PCIE_RC1_DBI, LUOFU_PCIE_RC1_MISC, LUOFU_PCIE_RC1_CFG, "rc1" },
 };
 
 /* ------------------------------------------------------------------ *
@@ -328,6 +347,7 @@ static const struct luofu_pcie_reg luofu_cfg_status[] = {
 struct luofu_pcie {
 	void __iomem *dbi;
 	void __iomem *cfg;
+	void __iomem *misc;	/* WRITE-ONLY port-logic: mapped, NEVER read */
 	unsigned int id;
 };
 
@@ -341,24 +361,71 @@ module_param(force_probe, int, 0444);
 MODULE_PARM_DESC(force_probe,
 	"run the probe body against the hardcoded RC0/RC1 CAs (read-only)");
 
-/* Decode a Link Status word (bits 3:0 speed, bit 4 training, bit 13 DL_ACTIVE). */
-static void luofu_pcie_decode_link_status(struct device *dev, const char *win,
-					  u32 v)
-{
-	unsigned int speed = v & LS_SPEED_MASK;
+/*
+ * Link-state read path (pcierc.md sec 4b).  The record's link-up read replaces
+ * the read-forbidden misc+0x100/0x110 (link status / LTSSM) with the DWC Link
+ * Status DL_ACTIVE bit at DBI+0x082 (the RC's own link) and cfg+0x082 (the
+ * downstream endpoint's link).  The register is fetched through the aligned
+ * dword reader -- the containing dword is DBI/cfg+0x080 whose low half is Link
+ * Control and whose high half is Link Status (pciskel-smoke.md sec 4:
+ * 0x080 = 0x70120000 -> {Link Control = 0x0000, Link Status = 0x7012}).
+ *
+ * Link Status fields (pinned by the record): DL_ACTIVE bit 13, link-training
+ * bit 4, negotiated speed bits 3:0 (1 = 2.5 GT/s, 2 = 5 GT/s).  This is the
+ * SAFE proxy for LTSSM=L0: the raw LTSSM state lives only in the
+ * read-forbidden misc+0x110 and is deliberately not decoded here.
+ */
+struct luofu_pcie_link_state {
+	bool up;		/* Link Status DL_ACTIVE (bit 13) */
+	bool training;		/* link training in progress (bit 4) */
+	unsigned int speed;	/* negotiated speed (bits 3:0) */
+	u32 raw;		/* the 16-bit Link Status word */
+};
 
+/* Read + decode the aligned Link Status dword at `off` (DBI+0x082 / cfg+0x082).
+ * The aligned dword reader guarantees one 4-byte-aligned readl(); the Link
+ * Status half is extracted from the containing dword's high half. */
+static struct luofu_pcie_link_state
+luofu_pcie_read_link_status(void __iomem *base, u16 off)
+{
+	struct luofu_pcie_link_state st;
+	u32 v = luofu_pcie_read(base, off, W16);
+
+	st.raw = v;
+	st.up = !!(v & LS_DL_ACTIVE);
+	st.training = !!(v & LS_LINK_TRAINING);
+	st.speed = v & LS_SPEED_MASK;
+	return st;
+}
+
+/* Log one decoded link state. */
+static void luofu_pcie_log_link_state(struct device *dev, const char *win,
+				      const struct luofu_pcie_link_state *st)
+{
 	dev_info(dev,
-		 "  %s link: DL_ACTIVE=%u link-training=%u neg-speed=%u%s\n",
-		 win, !!(v & LS_DL_ACTIVE), !!(v & LS_LINK_TRAINING), speed,
-		 speed == 1 ? " (2.5GT/s)" : speed == 2 ? " (5GT/s)" : "");
+		 "  %s link-state: DL_ACTIVE=%u (link %s), link-training=%u, neg-speed=%u%s\n",
+		 win, st->up, st->up ? "UP" : "DOWN", st->training, st->speed,
+		 st->speed == 1 ? " (2.5GT/s)" : st->speed == 2 ? " (5GT/s)" : "");
+}
+
+/* Read + log the link state for one window; return whether the link is up.
+ * This is the reusable link-up predicate the staged bring-up polls (sec 2). */
+static bool luofu_pcie_report_link(struct device *dev, const char *win,
+				   void __iomem *base, u16 off)
+{
+	struct luofu_pcie_link_state st = luofu_pcie_read_link_status(base, off);
+
+	luofu_pcie_log_link_state(dev, win, &st);
+	return st.up;
 }
 
 /*
  * Read-only inventory of one register table.  Each word is fetched through
- * luofu_pcie_read() at its declared width, so the module's MMIO ops are
- * readb/readw/readl matched to the register - never a 32-bit read of a 2-byte
- * register.  The table holds offsets + widths only, so a write cannot be
- * expressed here.  Returns the number of predicted words that matched.
+ * luofu_pcie_read() (the aligned dword-field accessor), so the only MMIO op is
+ * a 4-byte-aligned readl() of the containing dword; the field's byte lanes are
+ * extracted inside the accessor.  The table holds offsets + widths only, so a
+ * write cannot be expressed here.  Returns the number of predicted words that
+ * matched.
  */
 static unsigned int luofu_pcie_inventory(struct device *dev, const char *win,
 					 void __iomem *base,
@@ -383,8 +450,6 @@ static unsigned int luofu_pcie_inventory(struct device *dev, const char *win,
 		dev_info(dev, "  %s [0x%03x] %s = 0x%04x expect 0x%08x/0x%08x match=%s\n",
 			 win, r->offset, r->name, v, r->expect, r->mask,
 			 (v & r->mask) == r->expect ? "YES" : "NO");
-		if (r->offset == DBI_LINK_STATUS || r->offset == CFG_LINK_STATUS)
-			luofu_pcie_decode_link_status(dev, win, v);
 	}
 	return matched;
 }
@@ -440,6 +505,7 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	struct luofu_pcie *rc;
 	const char *label;
 	unsigned int id, dbi_hits, cfg_hits, pred;
+	bool link_up;
 
 	rc = devm_kzalloc(&pdev->dev, sizeof(*rc), GFP_KERNEL);
 	if (!rc)
@@ -457,25 +523,35 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	if (pdev->dev.of_node) {
 		rc->dbi = devm_platform_ioremap_resource_byname(pdev, "dbi");
 		rc->cfg = devm_platform_ioremap_resource_byname(pdev, "cfg");
+		rc->misc = devm_platform_ioremap_resource_byname(pdev, "misc");
 		label = "DT";
 	} else {
 		dev_info(&pdev->dev,
-			 "FORCED probe (%s, no DT match) dbi=0x%lx cfg=0x%lx read-only\n",
-			 ca->name, ca->dbi_ca, ca->cfg_ca);
+			 "FORCED probe (%s, no DT match) dbi=0x%lx cfg=0x%lx misc=0x%lx (write-only) read-only\n",
+			 ca->name, ca->dbi_ca, ca->cfg_ca, ca->misc_ca);
 		rc->dbi = devm_ioremap(&pdev->dev, ca->dbi_ca, LUOFU_PCIE_DBI_SIZE);
 		rc->cfg = devm_ioremap(&pdev->dev, ca->cfg_ca, LUOFU_PCIE_CFG_SIZE);
+		rc->misc = devm_ioremap(&pdev->dev, ca->misc_ca, LUOFU_PCIE_MISC_SIZE);
 		label = "FORCED";
 	}
 	if (IS_ERR(rc->dbi))
 		return PTR_ERR(rc->dbi);
 	if (IS_ERR(rc->cfg))
 		return PTR_ERR(rc->cfg);
+	/* misc is WRITE-ONLY and unused by the read-only frame, so a mapping
+	 * failure must not fail the probe (the forced smoke reads only dbi/cfg). */
+	if (IS_ERR_OR_NULL(rc->misc)) {
+		dev_warn(&pdev->dev,
+			 "misc (port-logic) window not mapped: %pe (write-only, unused for now)\n",
+			 rc->misc);
+		rc->misc = NULL;
+	}
 
 	/* Keep the transcribed geometry live (not dead code): log the tables the
-	 * skeleton carries, then the read-only inventory -- no register write. */
+	 * frame carries, then the read-only inventory -- no register write. */
 	dev_info(&pdev->dev,
-		 "luofu-pcie %s: %zu iatu_rc entries, windows dbi/cfg mapped (skeleton, write-only misc 0x%lx NOT mapped)\n",
-		 ca->name, ARRAY_SIZE(luofu_iatu_rc0), LUOFU_PCIE_RC0_MISC);
+		 "luofu-pcie %s: %zu iatu_rc entries, dbi/cfg mapped READ-ONLY, misc mapped WRITE-ONLY (frame, 0 writes)\n",
+		 ca->name, ARRAY_SIZE(luofu_iatu_rc0));
 
 	dev_info(&pdev->dev, "---- DBI window status (read-only) ----\n");
 	dbi_hits = luofu_pcie_inventory(&pdev->dev, ca->name, rc->dbi,
@@ -490,9 +566,18 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 					luofu_cfg_status,
 					ARRAY_SIZE(luofu_cfg_status), &pred);
 
+	/* The link-state read path: the safe DL_ACTIVE decode that replaces the
+	 * read-forbidden misc+0x100/+0x110 link/LTSSM reads (pcierc.md sec 4b).
+	 * Both the RC's own link (dbi+0x082) and the endpoint's (cfg+0x082) are
+	 * read; the reusable predicate is luofu_pcie_report_link(). */
+	link_up = luofu_pcie_report_link(&pdev->dev, ca->name, rc->dbi,
+					 DBI_LINK_STATUS);
+	link_up &= luofu_pcie_report_link(&pdev->dev, ca->name, rc->cfg,
+					  CFG_LINK_STATUS);
+
 	dev_info(&pdev->dev,
-		 "%s probe PASS: dbi %u predicted regs matched, cfg %u matched, 0 writes\n",
-		 label, dbi_hits, cfg_hits);
+		 "%s probe PASS: dbi %u predicted regs matched, cfg %u matched, link %s, 0 writes\n",
+		 label, dbi_hits, cfg_hits, link_up ? "UP" : "DOWN");
 
 	platform_set_drvdata(pdev, rc);
 	/* TODO: return the real registration result once the host bridge is wired. */
@@ -518,24 +603,26 @@ static struct platform_driver luofu_pcie_driver = {
 
 /*
  * The force_probe devices: two name-matched platform_devices (id 0 = RC0,
- * id 1 = RC1), each carrying its two pinned memory resources and no of_node,
+ * id 1 = RC1), each carrying its three pinned memory resources and no of_node,
  * so platform_match()'s name compare binds them where of_driver_match_device()
  * cannot.  probe ioremaps the CAs itself (the regions are vendor-owned).
  */
 static struct resource luofu_pcie_res0[] = {
 	DEFINE_RES_MEM(LUOFU_PCIE_RC0_DBI, LUOFU_PCIE_DBI_SIZE),
+	DEFINE_RES_MEM(LUOFU_PCIE_RC0_MISC, LUOFU_PCIE_MISC_SIZE),
 	DEFINE_RES_MEM(LUOFU_PCIE_RC0_CFG, LUOFU_PCIE_CFG_SIZE),
 };
 
 static struct resource luofu_pcie_res1[] = {
 	DEFINE_RES_MEM(LUOFU_PCIE_RC1_DBI, LUOFU_PCIE_DBI_SIZE),
+	DEFINE_RES_MEM(LUOFU_PCIE_RC1_MISC, LUOFU_PCIE_MISC_SIZE),
 	DEFINE_RES_MEM(LUOFU_PCIE_RC1_CFG, LUOFU_PCIE_CFG_SIZE),
 };
 
 static struct platform_device luofu_pcie_fdev[] = {
-	{ .name = "luofu-pcie", .id = 0, .num_resources = 2,
+	{ .name = "luofu-pcie", .id = 0, .num_resources = 3,
 	  .resource = luofu_pcie_res0 },
-	{ .name = "luofu-pcie", .id = 1, .num_resources = 2,
+	{ .name = "luofu-pcie", .id = 1, .num_resources = 3,
 	  .resource = luofu_pcie_res1 },
 };
 
@@ -586,4 +673,4 @@ module_init(luofu_pcie_init);
 module_exit(luofu_pcie_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu PCIe root complex (stage-2 read-only skeleton + forced probe)");
+MODULE_DESCRIPTION("Hi5671Y luofu PCIe root complex (stage-2 driver frame + forced probe)");
