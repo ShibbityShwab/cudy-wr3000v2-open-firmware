@@ -4839,3 +4839,25 @@ aligned accesses only, and no commit and no push from this record.
 - Prior record ADDENDUM 27 in this file (the take7b boot and the nine branch rows) and its verdict
   `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2, the unexplained skip).
 - Not yet written: the take7c capture hook (must add `0x40808204` / `0x40808208`) and the take7c runner.
+
+### 29a. THE TAKE7C BOOT (appended 2026-10-07 by the orchestrator): INSTRUMENT GATE HELD ON THE RIGHT SLOT; THE CAPTURE HOOK TIMED OUT - NO CELLS, QUEUED
+
+The take7c cycle (`build/register-dumps/exp/20261007-024805/`) ran on the CUSTOM image
+(`ubi0: attached mtd14 rootfsb`; `INSTRUMENT_GATE=HELD`) with the module claiming the endpoint
+(`BAR0 base=0x40000000`, `request_irq(207) rc=0`, the six viewports) and the OBSERVE rung reporting cleanly
+(`[qsv] glue{raw=0x1 mask=0x20 stat=0x11} out0=0x8 twin{raw=0x8 mask=0x3ff stat=0x0}` - the no-storm state).
+**The capture hook then timed out** (`capture-writer: waited=90s done=no`), so the take7c cells were never
+read and the capture file holds only the slot/gate receipts (414 B). The pads deposit SILENTLY (they write
+cells, not dmesg), so the module log cannot substitute for the cells. Classification: **NO-SAMPLE BY
+CAPTURE** - the pad fix's live verdict is **QUEUED**, with the hook's wait extended (the `0x40808204` /
+`0x40808208` cells per the note above) for the next device window; nothing about the force's physics is
+claimed here (take6f's ungated firing remains the effect's proof, ADDENDA 25a/27).
+
+**ARM B, SAME WINDOW - THE CRG'S FIRST DELIBERATE FLIP: PASS.** `crgflip-smoke.md`
+(`build/tmp/inta-spec/`): the stage-2 flip ran on the re-armed rank-1 target (`0x14` b`0x18` `i2c0_clk`,
+the CLEAR direction; submodule `3d2e4cd`, CI run 37564223517 success, ko `84a2f1f461cf18b95670c85e10051617`),
+**target restored EXACTLY** (with the clear-direction semantics recorded in the smoke's own body), gate
+fail-closed (one inert stale done-flag removed), device healthy after. With the stage-1 no-op census (48
+stores, 15/16 exact) and the set-only `led_pwm` finding (ADDENDUM 28), the CRG write half now has both
+halves of the discipline measured: the path proven, the semantics mapped, and the first reversible
+experiment spent.
