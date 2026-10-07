@@ -4861,3 +4861,130 @@ fail-closed (one inert stale done-flag removed), device healthy after. With the 
 stores, 15/16 exact) and the set-only `led_pwm` finding (ADDENDUM 28), the CRG write half now has both
 halves of the discipline measured: the path proven, the semantics mapped, and the first reversible
 experiment spent.
+
+# ADDENDUM 30 (2026-10-07): the take7c re-run - arm A: THE CAPTURE LANDED, BOTH GUARDS PASSED CELL-PROVEN, AND THE EOIR STORE STILL DID NOT LAND: the pad-structure / `GICD`->`GICC` ordering hypothesis is REFUTED as the cause, the residual is PAST the pad, and the rank-1-vs-rank-2 arc question stays OPEN
+
+ADDENDUM 28 designed take7c and ADDENDUM 29a recorded its FIRST boot, whose capture hook timed out (a
+CRLF-corrupted hook; `capture-writer: waited=90s done=no`, a 414-B receipt with zero cells). The hook was
+cured to LF and the cycle RE-RAN. This addendum is the arm-A record of that re-run: the boot
+`build/register-dumps/exp/20261007-031654/` (`RUN_TS=20261007-031649`, `TAKE7C RESULT: PASS`, `exp_rc=0`),
+its official verdict `build/register-dumps/diffs/20261007T0320Z-vrun26/verdict.txt` (task `st_01a1145d`, an
+adversarial verifier that ran no device cycle), the CRLF diagnosis `build/tmp/inta-spec/hookfix.md` and its
+proof `build/tmp/wifidrv1-art/_t7c-hookfix-verify.txt` (task `st_01a11456`), the design
+`build/tmp/inta-spec/padstruct.md`, and the emitter `tools/patch_fw_scratch.py`.
+
+The question was narrow and the boot answers it. take7c added two PRE-state deposits to the same 76-byte
+force pad (`TG_PRERPR` = the guard's own `GICC_RPR` read; `TG_PREACT` = the guard's own `GICD_ISACTIVER0` w0
+read), a `dsb sy` between the `GICD` read and the `GICC` store, and a page-relative store, all at the same
+slot `0xcb8e4`. That instrument exists to split what `vrun24` D2 said no cell could carry: was the
+never-firing force a GATE problem (the pad's own operands skipped) or an EFFECT problem (the gate passed and
+the store retired nothing)?
+
+## What the re-run read
+
+The capture landed this time. `capture-cmd.txt` opens with `capture-writer: waited=1s done=yes`, carries the
+`=== omo capture hook (take7c) ... ===` banner and `=== capture hook done ===`, and the runner logs
+`hook-done banners: 1` - not the first run's 90-s timeout and zero banners. The staged hook md5 is
+`7e695f93ce23453c83e878116b78ecfe` (0 CR / 313 LF); the first, failed run had staged the CRLF specimen
+`f16458b66ea31c632c1b47d20138e4ec` (313 CR). So this boot is the FIRST take7c boot whose cells exist to be
+read; the earlier take7c evidence was an empty receipt, not a physical result.
+
+Every sentinel ran. `TG_SNT` and `STK_SNT` both read `0x50AA7E49`, as do `N_SNT`, `B_P3`, `B_P4`, `F_SNT`,
+`C_SNT`, `S2+4` and `E2`; `WIN` reads `0xE59FF018`. `E_SNT` and `X_SNT` read `0x00000000`, which is NO-SAMPLE
+BY CONSTRUCTION: `selpost_e` and `selpost` are dropped in this layout (`bg2.md` sec. 5), and the hook labels
+them so. Not a failure.
+
+Then the two new cells decide it. The pad's OWN operands read:
+
+- `TG_PRERPR` = `0x00000000` - guard 1's `GICC_RPR` read (CA `0x40160114`, deposited BEFORE the guard). Zero
+  means GUARD 1 PASSED.
+- `TG_PREACT` = `0x00000004` - guard 2's `GICD_ISACTIVER0` w0 read (CA `0x40161300`). Bit 2 SET means GUARD 2
+  PASSED, so the store was attempted.
+- `TG_RPR` = `0x00000000` - the post-force witness (CA `0x40160114`). Still zero: the priority-0 epoch was
+  NOT retired.
+- `TG_HPP` = `0x000003FF` - nothing forwarded; the bank/group layer still holds `0x4C`.
+
+Both guards passed on the pad's own evidence, the single EOIR write was attempted, and the effect is still
+absent. That is row T7C-D of the runner's own table (`TG_PRERPR == 0x00` AND `TG_PREACT` bit 2 SET AND
+`TG_RPR == 0x00` -> THE STORE DID NOT LAND), the same split `vrun24` D2 named. The take7c hypothesis
+(`padstruct.md` sec. 2.4, the cross-interface ordering hazard) is REFUTED as the CAUSE: adding the `dsb` and
+the page-relative store changed nothing.
+
+## The post set is the UNFORCED snapshot, and the contrast is honest
+
+The post-force bank/group block reads `TG_ACT0 = 0x00000004` (SGI 2 still ACTIVE), `TG_PEND0 = 0x00000000`,
+`TG_GRP2 = 0x00000000` (bit 12 clear: `0x4C` is a Group-0 source), `TG_GRP0 = 0x00000000`, `TG_CCTLR =
+0x00000001` (EnableGrp0 = 1, EnableGrp1 = 0), `TG_DCTLR = 0x00000001`, `TG_ISP2 = 0x00001021` (bit 12 = `0x4C`
+still pending), `TG_ACT2 = 0x00000000` (bit 12 clear: the IAR never read `0x4C`), `TG_TGT = 0x01010101`,
+`TG_PMR = 0x000000F0`, `TG_ABPR = 0x00000000`, `TG_AHPP = 0x00000000`. These are the UNFORCED values, and they
+match `vrun24`'s take7b post set value-for-value. `TG_GRP2` bit 12 clear and `TG_CCTLR` bit 1 clear must NOT
+be read as a group-gate verdict here: rows T7-2/T7-3/T7-4 all require `TG_RPR == 0xFF`, which did not obtain.
+The block is simply the snapshot of a boot where the force retired nothing.
+
+The contrast is what labels it. On the SAME measured pre-state, take6f's UNGATED force DROPPED `RPR`
+(`STK_RPR1 = 0xFF`, `exp/20261007-010906/capture-cmd.txt`), while take7c's gated full-word `0x402` store did
+not. The gate is provably not the discriminator.
+
+## Bounds (declared, not hidden)
+
+1. **The runner's PASS is the INSTRUMENT GATE, not the force.** `TAKE7C RESULT: PASS` and
+   `INSTRUMENT_GATE=HELD` name the slot/bound/health discipline; the force's own witness is `TG_RPR`, and it
+   reads `0x00`. The PASS must never be read as "the force landed". Exactly as `vrun24` warned for take7b.
+2. **The group reads are ONE instant, not a matched pre/post pair** (`STK_STICKY` covers `RPR` only -
+   `bg2.md` sec-5(1)). Here it is moot for the force's own effect (the write landed nothing), but it is why the
+   (a)/(c) split cannot be closed from this boot.
+3. **The device-side write is one 32-bit `GICC_EOIR` store** of the full IAR word `0x402` (CA `0x40160110`,
+   file `0xcb914`), register state, reboot-cleared, no flash, no clock/reset register. The bank pad deposits
+   no device write (capstone-confirmed).
+4. **The take7c-vs-take7b delta is 26 bytes** at file `0xcb8fc..0xcb919`, ALL INSIDE the 76-byte force pad;
+   take7b's blob is byte-UNCHANGED. The capstone disasm of the shipped pad (`take7c.bin` md5
+   `60e0af1cb7fb32ea9e58178f754dfbf3`) shows the four deltas: the `TG_PRERPR` store at `0x10b8fc` before the
+   `cbnz`, the `TG_PREACT` store at `0x10b90a` inside the fall-through, the `dsb sy` at `0x10b910`, and the
+   page-relative `str r0, [r2, #0x10]` at `0x10b918`.
+5. **No safety deviation.** The bound held (qbound=64/8 armed before the hide, tripped `n=65`/`n=9`,
+   self-disabled `reason=bound`), the literal-path guard was armed before the hide and restored
+   unconditionally (`LITERAL_RESTORED_WIFI=1` / `LITERAL_RESTORED_PLAT=1` / `RESTORE_DONE`), and no new pstore
+   record was produced. The router is healthy on `mtd14:rootfsb` (2.5.24).
+
+## Verification and health
+
+The cycle (`st_01a11456`-shaped, `run-take7c.sh` over `tools/exp.sh`) ran serial/detached staging
+`build/tmp/fw-patched/take7c.bin` (md5 `60e0af1cb7fb32ea9e58178f754dfbf3` = the two pinned regenerations, byte
+identical) as `FIRMWARE.bin.omo-pat` and `wifidrv1.ko` (md5 `3f87f1e9fe5ed9666f27d1f784d34535`) as `wifidrv1.ko`,
+on the CUSTOM slot `mtd14:rootfsb` (`INSTRUMENT_GATE=HELD`). The `--check-emitted` gate held 10/10 ops in op
+order (`EOIR_PAGE 0x40160100 <= 0x2 @ 0xcb8ea`; `EOIR_ID 0x40160110 <= 0x402 @ 0xcb914`). A NEW `boot_id`
+`5f52bdef-e9b7-4eb1-839a-372e3ab2de77` (vs the pre-cycle gate `faef074c-...`) proves the reboot was real, and
+it is the boot the live probes read back. Health: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`; `OMO_OFF=0 STAGED=0
+LOADER=0`; stock blob `0e530b976d5a20e87358671f1a577695` untouched; the vendor pair `hi5622v100_plat` /
+`hi5622v100_wifi` owns both IRQ lines again. Two gated self-guarding read-only probes (filesystem/lsmod/iw
+only, no devmem) each verified the gate FIRST and read `GATE_HELD`; no forbidden CA was touched.
+
+## The next threads
+
+- **Separate "the store retires nothing" from "the epoch re-forms in the window".** `bg2.md` sec-5(1) asks for
+  a matched PRE/POST pair, or a sticky/OR-folded ACTIVE term so the single-sample transient cannot decide
+  anything. That is the next cycle's whole reason to exist.
+- **Stop spending rank levers until the residual is placed.** The group-enable write (`GICC_CTLR -> 0x3`) and
+  the bank quiesce stay deferred (ADDENDUM 26's reasons stand). The rank-1 (id) vs rank-2 (group) question is
+  NOT answered: the post set is the unforced state.
+- **One boot, one question.** take7c intervenes; keep observation and intervention md5-pinned apart so they
+  never share a verdict (ADDENDUM 26).
+- **A reboot clears all of it.** The vendor bring-up rewrites the GIC every boot; every lever here is register
+  state, boot-scoped, and bound-covered.
+
+## Artifacts
+
+- Boot `build/register-dumps/exp/20261007-031654/` (`capture-cmd.txt`, `run-take7c.log`, `PACKED.txt`,
+  `health.txt`, `interp.txt`) carries every take7c value quoted here.
+- Verdict `build/register-dumps/diffs/20261007T0320Z-vrun26/verdict.txt` (C1-C7 CONFIRMED, C8 REPORTED as row
+  T7C-D).
+- Blob `build/tmp/fw-patched/take7c.bin` md5 `60e0af1cb7fb32ea9e58178f754dfbf3` (frozen take7b
+  `f5f5309fab9ae76518b9e1368a9ca768`, take7 `b41b0aacfbd46bd8619d71f197431f49`); runner
+  `build/tmp/wifidrv1-art/run-take7c.sh`; hook `build/tmp/wifidrv1-art/take7c-capture.hook` md5
+  `7e695f93ce23453c83e878116b78ecfe` (the LF-cured hook; the failed first run staged
+  `f16458b66ea31c632c1b47d20138e4ec`).
+- Design `build/tmp/inta-spec/padstruct.md` (task `st_01a1142a`) and the CRLF diagnosis
+  `build/tmp/inta-spec/hookfix.md` + `build/tmp/wifidrv1-art/_t7c-hookfix-verify.txt` (task `st_01a11456`).
+- Prior records ADDENDUM 28 (the take7c design) and ADDENDUM 29a (the first take7c boot, capture timed out)
+  in this file; ADDENDUM 27 (the take7b boot) and its verdict
+  `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2).

@@ -846,3 +846,47 @@ re-checked on disk this session and match the record.
 deposits only post cells, so (a)/(b)/(c) cannot be split) and that G3's closed row is the NOFORCE cell itself.
 Nothing inverts a load-bearing claim. Hard rules held: no device cycle, nothing staged, no commit, no push, and
 no write of CA `0x400392f0`/`0x40039af0` or read of `0x10161000` / the host-side IAR `0x4016010c`.
+
+## ADDENDUM 31 (2026-10-07): the take7c re-run - the capture finally landed, BOTH guards passed cell-proven, and the EOIR store STILL did not land; the pad-structure hypothesis is REFUTED as the cause, the residual is PAST the pad, and the rank-1-vs-rank-2 question stays OPEN
+
+ADDENDUM 28 recorded the take7c design (the corrected EOIR force plus two PRE-state deposits), and ADDENDUM 29a
+recorded its first boot, whose capture hook timed out on a CRLF-corrupted hook (a 414-B receipt with zero
+cells). The hook was cured to LF and the cycle re-ran. This block is the pointer for that re-run, recorded in
+full as `gic-view.md` **ADDENDUM 30** ("the take7c re-run", arm A); as with the earlier blocks, this README's
+numbering is its own, so `gic-view.md` 30 is this block's source.
+
+**The capture landed.** `build/register-dumps/exp/20261007-031654/` (`RUN_TS=20261007-031649`) reads
+`TAKE7C RESULT: PASS`, `exp_rc=0`, `INSTRUMENT_GATE=HELD`, and `capture-cmd.txt` opens with
+`capture-writer: waited=1s done=yes` with the hook banner present (`hook-done banners: 1`) - not the first
+run's 90-s timeout. The LF-cured hook md5 is `7e695f93ce23453c83e878116b78ecfe` (0 CR / 313 LF); the first,
+failed run had staged the CRLF specimen `f16458b66ea31c632c1b47d20138e4ec` (313 CR). This is the FIRST take7c
+boot whose cells exist to be read.
+
+**Both guards passed and the store still did not land.** The pad's OWN operands decide it: `TG_PRERPR =
+0x00000000` (guard 1, the FORCE PAD'S OWN `GICC_RPR` read, PASSED), `TG_PREACT = 0x00000004` (guard 2's own
+`GICD_ISACTIVER0` w0 read, bit 2 SET, PASSED), yet the post-force witness `TG_RPR = 0x00000000` and `TG_HPP =
+0x000003FF`. So the single EOIR write was ATTEMPTED and retired NOTHING. That is the runner's row T7C-D ("THE
+STORE DID NOT LAND"), exactly the split `vrun24` D2 said no cell could carry. The take7c hypothesis
+(`padstruct.md` sec. 2.4, the cross-interface ordering hazard) is REFUTED as the CAUSE: adding the `dsb` and
+the page-relative store changed nothing. The contrast still holds: take6f's UNGATED force DROPPED `RPR` to
+`0xFF` on the SAME measured pre-state, while take7c's gated full-word `0x402` store did not.
+
+**The post set is the UNFORCED snapshot, and the PASS is not inflated.** `TG_ACT0 = 0x04` (SGI 2 still active),
+`TG_ISP2 = 0x1021` (bit 12 = `0x4C` still pending), `TG_ACT2 = 0x00` (bit 12 clear), `TG_GRP2 = 0x00`,
+`TG_CCTLR = 0x01` - the unforced state, matching `vrun24`'s take7b post set value-for-value. `TG_GRP2` bit 12
+clear and `TG_CCTLR` bit 1 clear must NOT be read as a group-gate verdict here (rows T7-2/3/4 need `TG_RPR ==
+0xFF`). The runner's `TAKE7C RESULT: PASS` / `INSTRUMENT_GATE=HELD` name the slot/bound/health discipline
+only; the force's own witness is `TG_RPR`, and it reads `0x00`. The official adversarial verdict is
+`build/register-dumps/diffs/20261007T0320Z-vrun26/verdict.txt` (task `st_01a1145d`; C1-C7 CONFIRMED, C8
+REPORTED as row T7C-D).
+
+**What this is NOT:** a safety failure, a build fault, or a NO-SAMPLE. The bound held (qbound=64/8 armed before
+the hide, tripped `n=65`/`n=9`, self-disabled), the literal-path guard was restored unconditionally
+(`RESTORE_DONE`), no new pstore was produced, and the router is healthy on `mtd14:rootfsb` (2.5.24) at the
+NEW `boot_id 5f52bdef-e9b7-4eb1-839a-372e3ab2de77`: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `OMO_OFF=0 STAGED=0
+LOADER=0`, stock md5 `0e530b976d5a20e87358671f1a577695` untouched. Blob `take7c.bin` md5
+`60e0af1cb7fb32ea9e58178f754dfbf3`; ko `3f87f1e9fe5ed9666f27d1f784d34535`. Hard rules held: no write of CA
+`0x400392f0`/`0x40039af0`, no read of `0x10161000`, no host read of the ack IAR `0x4016010c`/AIAR
+`0x40160120`, no `GICD_SGIR` read, no commit, no push. Next: deposit a matched PRE/POST `RPR` pair (or a
+sticky/OR-folded ACTIVE term) to separate "the store retires nothing" from "the epoch re-forms in the window",
+then re-put the rank-1-vs-rank-2 question to the chip.
