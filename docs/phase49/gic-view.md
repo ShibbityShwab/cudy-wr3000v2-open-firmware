@@ -5267,3 +5267,115 @@ the gadget came out healthy: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0
 `0e530b976d5a20e87358671f1a577695` at pin. One honest note on the class: the five module lanes were not
 byte-frozen into one shared ko artifact set, since they live in one submodule; the CI receipts and the smoke
 ran against the same head, which is the closest a single-checkout sprint gets to a frozen artifact set.
+
+---
+
+# ADDENDUM 34 (2026-10-07): the first own-kernel window - the NO-GO flash abort (branch: ABORT; the boot and rollback branches not taken)
+
+The first own-kernel flash window opened and closed in the same hour, and the honest headline is that it
+was never a flash: the candidate cannot fit the partition, so the runner failed closed with ZERO device
+mutation. This record is written from the receipts and the verdict, not from a device action of its own
+(the recorder ran no cycle, staged nothing, loaded no ko, made no commit and pushed nothing), which is why
+every value below is quoted from a file with its path.
+
+## What the window was
+
+The aim was the port's first milestone since the vendor kernel was ruled out: `mach-luofu` plus our DTB
+plus the three config groups, built by CI into a real `zImage` + `luofu-r116.dtb`, flashed into `kernelb`,
+and booted on slot B while slot A stayed stock. The prep (task `st_01a114cf`, spec
+`build/tmp/inta-spec/kprep.md`, its own status block in `../UPSTREAM-PORT-PLAN.md`) named the delta item by
+item and honestly recorded that none of the three build items existed yet. The GO/NO-GO gate pass
+(`build/tmp/inta-spec/gogate.md`) then turned that prep into seven gates the flash window would either
+satisfy or abort on.
+
+## What the window measured
+
+Everything passed except the shape. The receipts under `build/tmp/kboot/` carry the numbers, and the
+verdict `build/register-dumps/diffs/20261007T0648Z-vkboot/verdict.txt` (task `st_01a1151d`, an adversarial
+verifier that ran no device cycle) re-hashed every pin host-side and confirmed all five claims.
+
+- **The partition bound.** `kboot-candidate.txt`: `kernelb partition (live /proc/mtd, verified): mtd12:
+  00840000 00020000 "kernelb"  = 8,650,752 B`.
+- **The candidate.** `zImage 10,142,208 B sha256 6f04a5a3...`, `luofu-uImage 10,142,272 B sha256 4f8c83ae...`,
+  `luofu-r116.dtb 10,807 B sha256 c3b2c607...`, and the required slice `uImage + DTB = 10153079 B -> over
+  kernelb by 1502327 B`.
+- **The scan that closes the escape hatch.** `kboot-GONOGO.txt`: `A repo-wide scan found NO luofu kernel
+  image <= 8,650,752 B: the only 8,650,752 B images are the two 2.5.24 rollback files (= the current live
+  kernelb).` The CI lane agrees in its own words: `luofu-kernel-config.yml step "kernelb slice arithmetic
+  (does this image fit?)" emits ::warning:: the image does not fit kernelb.`
+- **The gate table.** `G1 kernelb backup exists + matches live mtd12 ... GO`; `G2 device healthy on slot B ...
+  GO`; `G3 boot recipes ... GO`; `G4 observation tooling ... GO`; `G5 rollback ready ... GO`; the slot gate
+  `PASS  mtd_num=14 name=rootfsb dmesg_attach=14 rom=/dev/ubiblock0_0`; `no active cycle: PASS  (ps witness
+  empty)`; then the decisive line, `(2) the image is the full 8,650,752-byte slice ........... **NO-GO**`.
+
+Why the shape gate is the right place to stop is a measurement, not a preference: a bare `zImage` (or a
+bare uImage) makes U-Boot's `bootfip` skip the slot and fall back to A, so a truncated write yields a "no
+crash" that is not a result and can leave `kernelb` corrupt. There was no `mtd erase`, no `mtd write` and
+no read-back hash anywhere in the window; the verifier write-scanned the run's own probes and found only
+reads (`cat`, `ls`, `sha256sum`, `dd if=/dev/mtd12`) plus two `fw_printenv -n bootflag` reads.
+
+## The branches the window did not take
+
+- **The boot branch - NOT ATTEMPTED.** `firstkboot.md` sec.3: `There was no boot to observe. Steps (1)
+  stage, (2) flash, (2b) DTB tail, (3) boot slot B, (4) the bounded observation loop were all skipped - a
+  boot of an unwritten/truncated kernelb proves nothing and risks stranding the router.` All three prep
+  signals (ssh-timing identity read, pstore/ramoops record, userspace sentinel) read N/A.
+- **The rollback branch - VERIFIED READY, NOT EXECUTED.** `kboot-rollback-source.txt`: host
+  `build/custom/kernelb-2.5.24-full.img  size=8650752  sha256=98b11f29...` and device `dd if=/dev/mtd12`
+  read back the same `sha256=98b11f29...`; `MATCH: True`. The stale `dumps/mtd12-kernelb.gz` (`039c7877...`)
+  is the STOCK pairing and was named and excluded, because reinstalling a stock kernelb under the 2.5.24
+  rootfs is the wrong direction of travel.
+- **The flash branch - NEVER ENTERED.** `DECISION: **ABORT the flash.**` `The rollback was NOT needed and
+  NOT executed (kernelb was never touched).`
+
+## The end state
+
+`kboot-final-health.txt`: `FINAL_BOOT=4f8f2940-d1f3-41d7-a61d-67f00de1e41c   (unchanged from the gate - no
+reboot)`; `FINAL_SLOT=14:rootfsb`; `FINAL_WIPHY=2 FINAL_IFACE=6 FINAL_CAL2G=1 FINAL_CAL5G=1`;
+`FINAL_VENDOR=2 FINAL_OMO_OFF=0 FINAL_WIFIDRV1=0`; `FINAL_BOOTFLAG=b`; `FINAL_STAGED_KERNELB=0`;
+`FINAL_KERNELB_SHA=98b11f29... (== live mtd12, unwritten)`; `=> NO new pstore record, NO new kernel fault,
+NO reboot, NO leftovers. Device HEALTHY on 2.5.24.` The gate and the final read share one `boot_id`, so the
+untouchedness is an identity, not an assertion.
+
+## Bounds (declared, not hidden)
+
+1. **This window proves a NEGATIVE, and the negative is the result.** Nothing was flashed, nothing booted,
+   so nothing about our kernel's behaviour on this SoC has been measured. The value is that a wrong-shaped
+   image was refused before it could truncate a partition.
+2. **Two CI build stamps sit in `build/tmp/kboot/`.** The pinned candidate is the `70e46d4` set; the sibling
+   `run-37578879647/MANIFEST.txt` is an earlier build (`efdab959`, zImage `ff97a3cc...`). Both zImages are
+   10,142,208 B and both overflow `kernelb`, so the ABORT holds either way. The verdict names this as D1.
+3. **The receipts live in gitignored local state** (`build/tmp/kboot/`), not in a
+   `build/register-dumps/exp/<TS>/` dir. Disclosed for a later auditor.
+4. **Nothing here touched the GIC.** No MMIO, no register read, no devmem, no ko: the window's only
+   register-class values are the partition geometry and the pinned hashes.
+
+## Hard rules held
+
+CA `0x400392f0` (copy-A W1C) never written; CA `0x40039af0` (copy-B W1C) never written; the IAR
+`0x4016010c` never read; the RC misc `0x10161000` never read; no device cycle run by the window OR by its
+verifier; nothing staged, erased, written to mtd, written to env, written to `boot_reg`, and no reboot; the
+backup verified BEFORE any flash attempt (and no flash followed, so the rule held trivially); the flash
+would have touched `/dev/mtd12` (kernelb) ONLY; the rollback stayed ready; the router ended healthy on
+2.5.24 slot B with `kernelb` sha256 `98b11f29...` unwritten. Push: none made; the authorization is
+`omo/phase22-hccaccept` only, never `master`.
+
+## The next thread
+
+One number moves this window from ABORT to GO: the `uImage + DTB` slice has to come in at or under
+8,650,752 B. That is a build-lane job (a trimmed config, or a `mkimage`'d payload that drops what the box
+never reads), not a flash-window job. The gate table in `gogate.md` already encodes the acceptance, so the
+re-run is one artifact swap once CI emits a candidate that fits. Until then the honest state is what the
+receipts say: every gate GREEN except the shape, nothing mutated, the box healthy.
+
+## Artifacts
+
+- Receipts `build/tmp/kboot/` (`kboot-GONOGO.txt`, `kboot-candidate.txt`, `kboot-gate-raw.txt`,
+  `kboot-rollback-source.txt`, `kboot-final-health.txt`, `MANIFEST.txt`, the run's own `gate.sh` /
+  `final-health.sh` / `pstore-check.sh`).
+- Verdict `build/register-dumps/diffs/20261007T0648Z-vkboot/verdict.txt` (task `st_01a1151d`; C1-C5
+  CONFIRMED, four named deviations, none inverting).
+- Specs `build/tmp/inta-spec/firstkboot.md`, `build/tmp/inta-spec/kprep.md` (sec.3-4),
+  `build/tmp/inta-spec/gogate.md`.
+- Prior records in this file: ADDENDUM 33 (the six-lane code sprint) and, for the lane that produced the
+  candidate, `../UPSTREAM-PORT-PLAN.md`'s kernel-console prep and code-sprint status blocks.
