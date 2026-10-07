@@ -5134,3 +5134,17 @@ every run.
   `build/register-dumps/diffs/20261007T0320Z-vrun26/verdict.txt` (row T7C-D); ADDENDUM 28 (the take7c
   design); ADDENDUM 27 (the take7b boot) and its verdict
   `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2).
+
+### 32. THE CAPSTONE FIRED (appended 2026-10-07 by the orchestrator): THE CORRECTED GATED FORCE RETIRES THE PRIORITY-0 EPOCH
+
+The take7d cycle (`build/register-dumps/exp/20261007-035534/`, exit 0, `GATE_MTD_NUM=14`, uptime 331 s, no
+pstore delta, every device-side leftover 0) measured, in ONE frame: `TG_PRERPR=0x00` (GUARD 1 PASSED - the
+pad's own read saw RPR `0x00`) + `TG_PREACT=0x04` (GUARD 2 PASSED - the deposit sits INSIDE the
+fall-through, so the store WAS ATTEMPTED) -> **`TG_RPR=0x000000FF` (the corrected gated force - the bare
+`0x2` - RETIRED the priority-0 epoch) + `TG_ACT0=0x0` (SGI 2 no longer active)**. The residual narrows to
+the next layer over `0x4C`'s servability (`TG_HPP=0x3FF`, `TG_ISP2=0x1021`, `TG_ACT2=0x0` at that sample;
+`TG_GRP2=0x0` + `TG_CCTLR=0x01` + `TG_PMR=0xF0` leave the group/PMR family as-is; the F-site `0x4C`
+positive control still appears within the same boot class). The ADDENDUM 31 one-byte RCA is thereby
+CONFIRMED LIVE: the full-IAR word (`0x402`, PE field set) was the take7 family's error; the BARE id is
+the correct EOIR form, and the builder's refusal of `0x402` + the bare-`0x2` store are the configuration
+this capstone spent.
