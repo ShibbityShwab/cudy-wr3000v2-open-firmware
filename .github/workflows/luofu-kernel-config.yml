@@ -1,15 +1,31 @@
 name: luofu-kernel-config
 
-# The luofu kernel-config lane (stage-1/2). It proves that the config inventory
-# at lab/luofu-kernel/luofu.fragment is a valid fragment for the kernel that
-# actually matters - vanilla 5.10.201, the vendor's own version - by running the
-# kernel's OWN merge_config.sh + olddefconfig against the real Kconfig, then
-# asserting every requested non-"LUOFU" symbol survived the resolve. Symbols in
-# the fragment that are ours (name contains LUOFU) have no Kconfig entry yet, so
-# they are reported as the to-do list rather than failed on.
+# The luofu kernel lane (stage-1/2), two jobs:
 #
-# Triggers on omo/** (the only branch we push) like lab-module-build.yml; a full
-# boilerplate zImage build is the opt-in `build_kernel` dispatch input.
+#  * `config` (every omo/** push, ~2 min): proves that
+#    lab/luofu-kernel/luofu.fragment is a valid fragment for the kernel that
+#    actually matters - vanilla 5.10.201, the vendor's own version - by running
+#    the kernel's OWN merge_config.sh + olddefconfig against the real Kconfig,
+#    then asserting every requested symbol survived. CONFIG_ARCH_LUOFU has a
+#    real Kconfig entry now (lab/luofu-kernel/mach-luofu + kernel-tree.patch) and
+#    is asserted; the 12 driver-less CONFIG_*_LUOFU symbols are reported as the
+#    to-do list rather than failed on.
+#
+#  * `kernel` (the IMAGE lane, opt-in, ~25-40 min): builds the first own-kernel
+#    image - vanilla 5.10.201 + our machine (arch/arm/mach-luofu) + our
+#    devicetree (docs/soc/luofu-r116.dts) + the fragment - into
+#      linux-5.10.201/arch/arm/boot/zImage
+#      linux-5.10.201/arch/arm/boot/dts/luofu-r116.dtb
+#      linux-5.10.201/luofu-uImage        (mkimage, the kernelb tail's kernel half)
+#    and uploads them with a size+sha256 MANIFEST.txt. Consumer: the prep in
+#    build/tmp/inta-spec/kprep.md sec.3.2 (the kernelb flash) + imgbuild.md.
+#
+# Triggers: `push` to omo/** (the only branch we push) always fires `config`;
+# `kernel` fires when the pushed head commit message carries the marker
+# [build-kernel], or on a workflow_dispatch with build_kernel=true. The marker
+# exists because workflow_dispatch only offers this file once it is on the
+# DEFAULT branch (master carries build-load-test-module.yml only today) - see
+# lab/luofu-kernel/README.md "Build / verify".
 
 on:
   push:
@@ -17,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       build_kernel:
-        description: 'Also cross-build a zImage with the fragment applied'
+        description: 'Also build the luofu image (zImage + DTB + uImage)'
         type: boolean
         default: false
 
@@ -47,25 +63,26 @@ jobs:
             "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           make ARCH=arm olddefconfig
 
-      - name: assert every non-LUOFU requested symbol survived
+      - name: assert the requested symbols resolved
         run: |
           cd linux-5.10.201
           frag="$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           fail=0
-          # requested directives (CONFIG_x=y), skip the ones that are ours
           for sym in $(grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$frag" | cut -d= -f1); do
-            case "$sym" in *LUOFU*) continue;; esac
+            case "$sym" in
+              CONFIG_ARCH_LUOFU) want=required ;;  # Kconfig entry exists: kernel-tree.patch + lab/luofu-kernel/mach-luofu
+              *LUOFU*)           want=todo ;;      # driver not in this tree yet -> reported, never failed
+              *)                 want=required ;;
+            esac
             if grep -qx "$sym=y" .config; then
               echo "  OK    $sym=y"
+            elif [ "$want" = "todo" ]; then
+              echo "  TODO  $sym (driver not in the tree yet - expected)"
             else
               echo "  FAIL  $sym requested but not in final .config"
               grep -w "$sym" .config || true
               fail=1
             fi
-          done
-          echo "--- luofu symbols still needing a Kconfig entry (expected) ---"
-          for sym in $(grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$frag" | cut -d= -f1); do
-            case "$sym" in *LUOFU*) grep -qx "$sym=y" .config && echo "  RESOLVED $sym" || echo "  TODO     $sym (no Kconfig entry yet)";; esac
           done
           exit $fail
 
@@ -75,40 +92,124 @@ jobs:
           path: linux-5.10.201/.config
 
   kernel:
-    # The boilerplate vanilla-kernel build for evaluation: opt-in only, because
-    # a multi_v7_defconfig build is ~20-40 min (config-only is the default lane).
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_kernel }}
+    # The image lane. The job keeps the name of the boilerplate evaluation job
+    # it replaces: same build, now with our machine and our DTB in the tree.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_kernel) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[build-kernel]')) }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
-      - name: cross toolchain + kernel build deps
+      - name: cross toolchain + kernel build deps + mkimage
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf bc bison flex libssl-dev
+          sudo apt-get install -y gcc-arm-linux-gnueabihf bc bison flex libssl-dev \
+                                  u-boot-tools device-tree-compiler
+
+      - name: reference DTS check (the repo's own recipe, upstream dtc)
+        run: |
+          # Independent of the kernel build: the same sources compiled by the
+          # distro dtc, so a DTS/source regression shows up as its own failure.
+          # (tools/dtc-check.sh is the host-side twin of this step; the DTS has
+          # no #include, only #define, so plain cpp is enough.)
+          mkdir -p out
+          cpp -nostdinc -undef -x assembler-with-cpp docs/soc/luofu-r116.dts -o out/luofu-r116.pp.dts
+          dtc -I dts -O dtb -o out/luofu-r116.ref.dtb out/luofu-r116.pp.dts
+          ls -l out/luofu-r116.ref.dtb
+          sha256sum out/luofu-r116.ref.dtb
 
       - name: kernel source (vanilla 5.10.201)
         run: |
           curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
           tar xf linux.tar.xz
 
-      - name: configure base + merge the fragment
+      - name: inject our machine + devicetree + the Kconfig/Makefile wiring
+        run: |
+          cd linux-5.10.201
+          # the three in-tree edits (ARCH_LUOFU under the Hisilicon platform menu,
+          # the machine- hook, our dtb in the dtbs build) - dry-run first so a
+          # drifted upstream file fails loudly instead of half-applying.
+          patch -p1 --dry-run < "$GITHUB_WORKSPACE/lab/luofu-kernel/kernel-tree.patch"
+          patch -p1           < "$GITHUB_WORKSPACE/lab/luofu-kernel/kernel-tree.patch"
+          # the new files are copied, not patched: docs/soc/luofu-r116.dts stays
+          # the single source of truth for the devicetree.
+          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu
+          cp "$GITHUB_WORKSPACE/docs/soc/luofu-r116.dts" arch/arm/boot/dts/luofu-r116.dts
+          ls -l arch/arm/mach-luofu/
+          grep -n 'ARCH_LUOFU' arch/arm/mach-hisi/Kconfig arch/arm/Makefile arch/arm/boot/dts/Makefile
+
+      - name: configure (vanilla base + the fragment)
         run: |
           cd linux-5.10.201
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          cp .config .config.base
           export ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
           scripts/kconfig/merge_config.sh -m .config \
             "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+          diff -u .config.base .config > luofu-config-delta.txt || true
 
-      - name: build zImage + dtbs
+      - name: assert the image's load-bearing symbols
         run: |
           cd linux-5.10.201
-          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j"$(nproc)" zImage dtbs
+          fail=0
+          for sym in CONFIG_ARCH_HISI CONFIG_ARCH_LUOFU CONFIG_SMP CONFIG_COMMON_CLK \
+                     CONFIG_CACHE_L2X0 CONFIG_ARM_GIC CONFIG_SERIAL_8250 \
+                     CONFIG_SERIAL_8250_CONSOLE CONFIG_SERIAL_8250_DW CONFIG_SERIAL_EARLYCON \
+                     CONFIG_MTD CONFIG_MTD_OF_PARTS CONFIG_MTD_SPI_NAND CONFIG_MTD_UBI \
+                     CONFIG_MTD_UBI_BLOCK CONFIG_SQUASHFS CONFIG_UBIFS_FS CONFIG_PSTORE \
+                     CONFIG_PSTORE_RAM CONFIG_PCI CONFIG_CFG80211 CONFIG_MAC80211; do
+            if grep -qx "$sym=y" .config; then
+              echo "  OK    $sym=y"
+            else
+              echo "  FAIL  $sym is not =y in the image config"
+              fail=1
+            fi
+          done
+          echo "--- the delta vs the vanilla multi_v7 base ---"
+          grep -cE '^\+CONFIG_[A-Za-z0-9_]+=' luofu-config-delta.txt || true
+          grep -E '^\+CONFIG_(ARCH_LUOFU|CLK_LUOFU|PINCTRL_LUOFU|PCIE_LUOFU|MTD_NAND_LUOFU|LUOFU_[A-Z0-9]+)=' luofu-config-delta.txt || true
+          exit $fail
+
+      - name: build zImage + our devicetree
+        run: |
+          cd linux-5.10.201
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j"$(nproc)" zImage
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- dtbs
+          test -s arch/arm/boot/zImage
+          test -s arch/arm/boot/dts/luofu-r116.dtb
+          ls -l arch/arm/boot/zImage arch/arm/boot/dts/luofu-r116.dtb
+
+      - name: pack the uImage (the kernel half of the kernelb slice)
+        run: |
+          cd linux-5.10.201
+          # the vendor kernelb header: load = ep = 0x80608000, os=linux, arch=arm,
+          # comp=none (a zImage is self-decompressing), name Linux-5.10.201
+          # (build/tmp/inta-spec/kprep.md sec.1.2 item 6 / sec.3.2).
+          mkimage -A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000 \
+                  -n Linux-5.10.201 -d arch/arm/boot/zImage luofu-uImage
+          ls -l luofu-uImage
+
+      - name: manifest (sizes + sha256)
+        run: |
+          cd linux-5.10.201
+          {
+            echo "# luofu kernel image lane"
+            echo "# commit: $GITHUB_SHA"
+            echo "# base:   linux-5.10.201 multi_v7_defconfig + lab/luofu-kernel/luofu.fragment + lab/luofu-kernel/kernel-tree.patch"
+            echo "# built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            for f in arch/arm/boot/zImage arch/arm/boot/dts/luofu-r116.dtb luofu-uImage .config "$GITHUB_WORKSPACE/out/luofu-r116.ref.dtb"; do
+              printf '%10s  %s  %s\n' "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
+            done
+          } | tee MANIFEST.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: luofu-kernel-zimage
+          name: luofu-kernel-image
           path: |
             linux-5.10.201/arch/arm/boot/zImage
+            linux-5.10.201/arch/arm/boot/dts/luofu-r116.dtb
+            linux-5.10.201/luofu-uImage
             linux-5.10.201/.config
+            linux-5.10.201/luofu-config-delta.txt
+            linux-5.10.201/MANIFEST.txt

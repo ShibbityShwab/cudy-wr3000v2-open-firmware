@@ -35,10 +35,12 @@
 # SoC / platform
 # dmesg: "OF: fdt: Machine model: hsan luofu/R116"; lsmod: hi_basic (18 refs).
 # Dual Cortex-A9; DT enable-method "hisilicon,hsan_smp" (luofu-r116.dts:438).
-# ARCH_HISI is already =y in the base; ARCH_LUOFU is the new mach (a child of
-# the Hisilicon platforms menu in arch/arm/Kconfig).
+# ARCH_HISI is already =y in the base; ARCH_LUOFU is our mach. Its Kconfig
+# entry lives inside the Hisilicon platform-type menu of
+# arch/arm/mach-hisi/Kconfig and arrives with
+# lab/luofu-kernel/kernel-tree.patch (+ the machine itself, mach-luofu/).
 CONFIG_ARCH_HISI=y
-# NEW
+# NEW (Kconfig entry: lab/luofu-kernel/kernel-tree.patch)
 CONFIG_ARCH_LUOFU=y
 CONFIG_SMP=y
 
@@ -47,6 +49,11 @@ CONFIG_SMP=y
 # dmesg:138 "hi_crg: loading out-of-tree module taints kernel" (0.98 s, first);
 # lsmod: hi_crg (1 ref), hi_clk (21), hi_kreset (18). One node provides both
 # clocks and resets: hisilicon,luofu-crg, #clock-cells=1, #reset-cells=2.
+# NOTE: CLK_IGNORE_UNUSED is NOT a CONFIG_ symbol in 5.10.201 - it is a clock
+# flag (include/linux/clk-provider.h) plus the `clk_ignore_unused` kernel
+# command line (drivers/clk/clk.c:1298). It is also moot for the first image:
+# no CRG driver is in the tree, so no gate clock is registered and
+# clk_disable_unused() has nothing of ours to switch off.
 CONFIG_COMMON_CLK=y
 CONFIG_RESET_CONTROLLER=y
 CONFIG_MFD_SYSCON=y

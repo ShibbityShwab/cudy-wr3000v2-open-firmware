@@ -44,10 +44,13 @@ detailed in `build/tmp/inta-spec/pcierc.md` sec.5):
 2. **No trailing comments on a `CONFIG_` line.** `merge_config.sh` compares
    whole lines, so a trailing comment reads as a value change (and a merged
    `.config` would carry junk). Rationale sits in the comment block above.
-3. **`NEW` marks our symbols.** The 13 `CONFIG_*_LUOFU` symbols (plus
-   `ARCH_LUOFU`) have no Kconfig entry yet - each needs one, with a prompt and
-   the matching `select` of rule 1. Until then the CI lane reports exactly
-   those as "requested but not in final `.config`", which is the to-do list.
+3. **`NEW` marks our symbols.** The 12 driver-less `CONFIG_*_LUOFU` symbols
+   have no Kconfig entry yet - each needs one, with a prompt and the matching
+   `select` of rule 1. Until then the CI lane reports exactly those as
+   "requested but not in final `.config`", which is the to-do list.
+   `CONFIG_ARCH_LUOFU` has left that list: it is a real platform now
+   (`mach-luofu/` + `kernel-tree.patch`, see "The image lane") and the fast CI
+   job asserts it like any other symbol.
 4. **`PSTORE_BLK` / `MTD_PSTORE` are deliberately absent.** In 5.10.201
    `PSTORE_BLK` `depends on BROKEN`, and `BROKEN` is promptless with nothing
    selecting it (`init/Kconfig:116`) - pstore-on-MTD is unreachable in a vanilla
@@ -58,14 +61,62 @@ detailed in `build/tmp/inta-spec/pcierc.md` sec.5):
 5. **Baked in, not modules.** The vendor carries many of these as `.ko`; a
    self-contained OpenWrt target wants them `=y` (stage2.md sec.3 note).
 
+## The image lane: `mach-luofu/` + `kernel-tree.patch`
+
+The first own-kernel image is the fragment **plus a machine plus a DTB**, so the
+lane carries the two things the fragment cannot express:
+
+| file | what it is | where it lands in the tree |
+| --- | --- | --- |
+| `mach-luofu/luofu.c` | the machine descriptor: `.dt_compat = "hisilicon,luofu-r116" / "hisilicon,luofu"`, no `.init_machine`, no register access; `.l2c_aux_val = 0x430001` / `.l2c_aux_mask = ~0` replay the vendor PL310 AUX value (pinned:1043) and are also what makes `init_IRQ` call `l2x0_of_init()` at all (`arch/arm/kernel/irq.c:88`) | `arch/arm/mach-luofu/` (copied) |
+| `mach-luofu/Makefile` | `obj-y += luofu.o` | `arch/arm/mach-luofu/` (copied) |
+| `kernel-tree.patch` | `config ARCH_LUOFU` inside `arch/arm/mach-hisi/Kconfig`'s `if ARCH_HISI` menu (the Hisilicon platform-type menu), `machine-$(CONFIG_ARCH_LUOFU) += luofu` in `arch/arm/Makefile`, `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` in `arch/arm/boot/dts/Makefile` | 3 in-tree edits, `patch -p1` |
+| (no file) | the devicetree itself: `docs/soc/luofu-r116.dts`, copied in rather than patched so it stays the single source of truth | `arch/arm/boot/dts/luofu-r116.dts` (copied) |
+
+What this buys, and what it does not:
+
+- **Without the machine** the boot still happens, but implicitly: with
+  `CONFIG_ARCH_MULTIPLATFORM` the DT match falls through to the generic machine
+  in `arch/arm/kernel/devtree.c:216`, whose `.l2c_aux_val = 0 / .l2c_aux_mask = ~0`
+  (plus `arch/arm/kernel/irq.c:88`) reprograms the PL310 AUX register to 0 and
+  warns. Matching our own compatible keeps the vendor's AUX value and ties the
+  DT to the platform.
+- **SMP is not delivered.** The DT's `enable-method` is the vendor's
+  `hisilicon,hsan_smp` (pen/smc) and has no mainline `smp_ops`; expect a UP boot
+  with a warning (see stage 1). `maxcpus=1` is redundant but harmless.
+- **Node coverage is not boot coverage.** `hisilicon,luofu-*` nodes are
+  `status = "disabled"` and/or have no driver in this tree, so the NAND/FMC,
+  PCIe, Ethernet and Wi-Fi blocks stay dark; the console is the free
+  `snps,dw-apb-uart` binding (`CONFIG_SERIAL_8250_DW`) and `earlycon` comes in
+  through `SERIAL_8250_CONSOLE select SERIAL_EARLYCON` +
+  `OF_EARLYCON_DECLARE(uart, "snps,dw-apb-uart", ...)` (`8250_early.c:182`).
+- **`CLK_IGNORE_UNUSED` is not a `CONFIG_`.** 5.10.201 has no such symbol (it is
+  a *clock flag*, `include/linux/clk-provider.h`, plus the `clk_ignore_unused`
+  kernel command line in `drivers/clk/clk.c:1298`). It is moot here anyway: no
+  CRG driver is in the tree, so no gate clock is registered and
+  `clk_disable_unused()` has nothing of ours to turn off.
+
 ## Build / verify
 
-- `opensource/.github/workflows/luofu-kernel-config.yml` (trigger `omo/**` +
-  `workflow_dispatch`) runs the kernel's own `merge_config.sh -m` +
-  `olddefconfig` against the real 5.10.201 Kconfig and asserts every
-  non-`NEW` symbol survived; a full `zImage` build is the opt-in
-  `build_kernel` dispatch input (the boilerplate OpenWrt/vanilla evaluation).
-  Green run: **`37573150202`** on `c40637a` - 47/47 non-`NEW` symbols resolved
-  `=y`, the 13 `NEW` ones listed as the to-do.
+- `opensource/.github/workflows/luofu-kernel-config.yml`, job **`config`**
+  (every `omo/**` push, ~2 min): runs the kernel's own `merge_config.sh -m` +
+  `olddefconfig` against the real 5.10.201 Kconfig and asserts every requested
+  symbol survived. `CONFIG_ARCH_LUOFU` is asserted (it has a Kconfig entry now);
+  the 12 driver-less `CONFIG_*_LUOFU` symbols are reported as the to-do list.
+  Green run of the pre-image version: **`37573150202`** on `c40637a` - 47/47
+  non-`NEW` symbols resolved `=y`, the 13 `NEW` ones listed as the to-do (see
+  `build/tmp/inta-spec/kcfg.md`).
+- Job **`kernel`** (the image lane, ~25-40 min) is the opt-in
+  `build_kernel` dispatch input **and** a push whose head commit message carries
+  the marker `[build-kernel]`. The marker exists because `workflow_dispatch`
+  only offers a workflow file that is on the **default branch**, and `master`
+  still carries `build-load-test-module.yml` alone - the push trigger is the
+  reliable way in from an `omo/**` branch. Artifacts: `zImage`,
+  `arch/arm/boot/dts/luofu-r116.dtb`, `luofu-uImage` (mkimage, `-C none`,
+  load=ep=`0x80608000`), `.config`, `luofu-config-delta.txt`, `MANIFEST.txt`
+  (size + sha256 per file), under the artifact name `luofu-kernel-image`.
+- Download + hash a finished run with
+  `gh run download <run-id> -R ShibbityShwab/cudy-wr3000v2-open-firmware -n luofu-kernel-image -D build/tmp/kboot`.
 - The reasoning and the symbol-by-symbol classification live in
-  `build/tmp/inta-spec/kcfg.md`.
+  `build/tmp/inta-spec/kcfg.md`; the image lane's own receipt (config deltas,
+  artifact hashes, honest gaps) is `build/tmp/inta-spec/imgbuild.md`.

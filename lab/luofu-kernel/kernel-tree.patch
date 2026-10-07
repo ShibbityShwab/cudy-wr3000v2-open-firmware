@@ -1,0 +1,44 @@
+--- a/arch/arm/mach-hisi/Kconfig
++++ b/arch/arm/mach-hisi/Kconfig
+@@ -55,6 +55,20 @@
+ 	help
+ 	  Support for Hisilicon HIX5HD2 SoC family
+ 
++config ARCH_LUOFU
++	bool "Hisilicon luofu (Hi5671Y) family"
++	depends on ARCH_MULTI_V7
++	select CACHE_L2X0
++	select HAVE_ARM_SCU if SMP
++	select HAVE_ARM_TWD if SMP
++	help
++	  Support for the Hisilicon Hi5671Y "luofu" SoC (board R116, the Cudy
++	  WR3000 v2.0). The machine code is arch/arm/mach-luofu/luofu.c: it only
++	  matches the luofu devicetree and programs no hardware itself, so what
++	  comes up is exactly what the DT plus the drivers binding to it can do.
++	  A UP boot is the expected first posture - the DT enable-method is the
++	  vendor's "hisilicon,hsan_smp", which has no mainline smp_ops yet.
++
+ config ARCH_SD5203
+ 	bool "Hisilicon SD5203 family"
+ 	depends on ARCH_MULTI_V5
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -182,6 +182,7 @@
+ machine-$(CONFIG_ARCH_KEYSTONE)		+= keystone
+ machine-$(CONFIG_ARCH_LPC18XX)		+= lpc18xx
+ machine-$(CONFIG_ARCH_LPC32XX)		+= lpc32xx
++machine-$(CONFIG_ARCH_LUOFU)		+= luofu
+ machine-$(CONFIG_ARCH_MESON)		+= meson
+ machine-$(CONFIG_ARCH_MMP)		+= mmp
+ machine-$(CONFIG_ARCH_MPS2)		+= vexpress
+--- a/arch/arm/boot/dts/Makefile
++++ b/arch/arm/boot/dts/Makefile
+@@ -240,6 +240,8 @@
+ 	hi3519-demb.dtb
+ dtb-$(CONFIG_ARCH_HIX5HD2) += \
+ 	hisi-x5hd2-dkb.dtb
++dtb-$(CONFIG_ARCH_LUOFU) += \
++	luofu-r116.dtb
+ dtb-$(CONFIG_ARCH_INTEGRATOR) += \
+ 	integratorap.dtb \
+ 	integratorap-im-pd1.dtb \
