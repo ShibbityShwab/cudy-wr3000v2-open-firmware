@@ -53,8 +53,16 @@
  * platform_match()'s name compare only, and the probe maps the pinned CRG page
  * with devm_ioremap() and runs a READ-ONLY status inventory (crgbind.md).  It
  * is a no-op the day a luofu DT node exists.
+ *
+ * write_test=1 / write_flip=1 (wrspec.md / wrdesign.md, "THE WRITE PATH"
+ * below): the forced path can additionally exercise the CRG's WRITE side as a
+ * bounded, self-terminating probe.  Stage 1 is a no-op flip (set -> clear ->
+ * restore-pre) of every gate in luofu_gates[] with a read-back per step; stage
+ * 2 (compile-gated behind -DLUOFU_CRG_FLIP) flips ONE bit, pcie0_clk, and
+ * restores it.  Both default 0, so a bare insmod stays read-only forever.
  */
 
+#include <linux/bitops.h>
 #include <linux/clk-provider.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -181,6 +189,29 @@ MODULE_PARM_DESC(force_probe,
 	"run the probe body against the hardcoded CRG view (read-only)");
 
 /*
+ * The write-path knobs (wrspec.md sec 2).  Both default 0: a bare insmod has
+ * no store to reach.  write_flip is only meaningful together with write_test=1
+ * on the forced path, and only in a build that defines LUOFU_CRG_FLIP.
+ */
+static int write_test;
+module_param(write_test, int, 0444);
+MODULE_PARM_DESC(write_test,
+	"stage-1 gate no-op write sequence (set->clear->restore-pre, 0 net change); 0 = read-only");
+
+static int write_flip;
+module_param(write_flip, int, 0444);
+MODULE_PARM_DESC(write_flip,
+	"with write_test=1 on the forced path, flip the single pcie0_clk bit (0x20 bit 0x0c) and restore it; needs -DLUOFU_CRG_FLIP");
+
+/*
+ * The store counter that enforces THE BOUND (see "THE WRITE PATH" below):
+ * declared here because the read-only inventory's summary line reports it, so
+ * a bare insmod prints "... 0 writes" and a write_test run ends on the real,
+ * budget-limited count.  LUOFU_WRITE_BUDGET is beside luofu_crg_rmw().
+ */
+static unsigned int luofu_write_count;
+
+/*
  * Read-only status inventory table: pinned CRG page 0x14880000 + offset.
  * lock_mask = bits that must read 1 for the line to be a clean PASS; 0 = log
  * only.  Only pure-read status words live here: every gate/mux/PLL/misc word
@@ -243,9 +274,122 @@ static void luofu_crg_inventory(struct device *dev, void __iomem *base,
 				 r->offset, r->name, r->lock_mask);
 		ok++;
 	}
-	dev_info(dev, "%s probe PASS: %u/%zu status regs read, 0 writes\n",
-		 forced ? "FORCED" : "DT", ok, ARRAY_SIZE(luofu_crg_safe));
+	dev_info(dev, "%s probe PASS: %u/%zu status regs read, %u writes\n",
+		 forced ? "FORCED" : "DT", ok, ARRAY_SIZE(luofu_crg_safe),
+		 luofu_write_count);
 }
+
+/*
+ * ======================= THE WRITE PATH (wrspec.md) =======================
+ * THE BOUND (wrspec.md sec 7 / wrdesign.md sec 6): every store goes through
+ * luofu_crg_rmw(), which counts and REFUSES any store past a fixed budget.
+ * The sequence is finite by construction; no input can make it a sweep.
+ *
+ * DELIBERATELY NOT IMPLEMENTED: wrspec.md sec 1's unconditional
+ * "softrst deassert" writel(0x19f, base + 0x084).  wrdesign.md sec 7 could
+ * not find that constant (HS_CRG_SOFTRST_WAIT / clk_init:7) anywhere in the
+ * repo or in any vendor module, and the LIVE read (crgprobe.md) already
+ * showed the CRG page fully readable with ZERO writes -- the block is not
+ * held in reset for this probe.  A wrong value there costs the boot, not a
+ * register, so an unverified magic is left out until a verified instrument
+ * exists.  The offsets reachable from here are gate/reset latches only
+ * (0x14 / 0x20); no reboot (0x00), resume (0x38), watchdog (0x50/0x64/0x70),
+ * softrst (0x084), mux (0x138) or PLL (0x198/0x1e0) register is ever touched.
+ */
+#define LUOFU_GATE_WRITES	(ARRAY_SIZE(luofu_gates) * 3u)
+#define LUOFU_FLIP_WRITES	2u
+#define LUOFU_WRITE_BUDGET	(LUOFU_GATE_WRITES + LUOFU_FLIP_WRITES)
+
+/*
+ * luofu_crg_rmw - the ONLY write primitive: a dword-aligned read-modify-write
+ * of one bit of a CRG latch, mirroring the vendor (hi_crg_enable/disable,
+ * crgbind.md sec 0).  A 32-bit access is mandatory: a sub-word or misaligned
+ * access on this SoC external-aborts (readw.md), so an unaligned offset is
+ * refused rather than executed.  Returns the value read back after the store
+ * -- the caller's measurement, and the FAIL signal when the store did not
+ * take.
+ */
+static u32 luofu_crg_rmw(void __iomem *base, u16 off, u8 bit, u8 set)
+{
+	u32 v;
+
+	if (off & 3u) {		/* readw.md: misaligned -> external abort */
+		pr_err("luofu-crg: refusing unaligned CRG RMW at +0x%03x\n", off);
+		return readl(base + off);
+	}
+	if (luofu_write_count >= LUOFU_WRITE_BUDGET) {
+		pr_err("luofu-crg: write budget %u exhausted, refusing RMW at +0x%03x\n",
+		       LUOFU_WRITE_BUDGET, off);
+		return readl(base + off);
+	}
+
+	v = readl(base + off);
+	v = set ? (v | BIT(bit)) : (v & ~BIT(bit));
+	writel(v, base + off);
+	luofu_write_count++;
+
+	return readl(base + off);	/* settle-time read-back, one dword */
+}
+
+/*
+ * Stage 1 -- the no-op sequence.  pre is read WITHOUT a store and the sequence
+ * is set -> clear -> restore-pre, so each register ends byte-identical (0 net
+ * change) while the store bus and the gate latch are exercised.  A read-back
+ * that differs from pre is a flip: reported per step and as WRITE_TEST FAIL.
+ */
+static unsigned int luofu_crg_write_test(struct device *dev, void __iomem *base)
+{
+	unsigned int i, flips = 0;
+
+	for (i = 0; i < ARRAY_SIZE(luofu_gates); i++) {
+		const struct luofu_gate *g = &luofu_gates[i];
+		u32 pre = readl(base + g->offset);
+		u32 set, clr, back;
+
+		set  = luofu_crg_rmw(base, g->offset, g->bit, 1);
+		clr  = luofu_crg_rmw(base, g->offset, g->bit, 0);
+		back = luofu_crg_rmw(base, g->offset, g->bit,
+				     !!(pre & BIT(g->bit)));
+
+		if (back != pre)
+			flips++;
+		dev_info(dev, "[STEP %2u] %-12s off=0x%02x bit=0x%02x pre=0x%08x -> set=0x%08x -> clear=0x%08x -> back=0x%08x (%s)\n",
+			 i, g->name, g->offset, g->bit, pre, set, clr, back,
+			 back == pre ? "0 flips" : "FLIP");
+	}
+
+	dev_info(dev, "WRITE_TEST %s %zu/%zu gates no-op (%u flips), %u stores\n",
+		 flips ? "FAIL" : "PASS", ARRAY_SIZE(luofu_gates) - flips,
+		 ARRAY_SIZE(luofu_gates), flips, luofu_write_count);
+	return flips;
+}
+
+#ifdef LUOFU_CRG_FLIP
+/*
+ * Stage 2 -- the ONE permitted real flip, compile-gated so a default CI
+ * artifact physically cannot carry it (wrspec.md sec 3).  pcie0_clk = 0x20
+ * bit 0x0c, the RC0 gate: probed 1 pre-attach and 0 in takeover, so set +
+ * restore is the smallest diff against the desired end state.  Refused, with
+ * no store, unless the pre-read shows the bit CLEAR.
+ */
+static int luofu_crg_write_flip(struct device *dev, void __iomem *base)
+{
+	u32 pre = readl(base + 0x20), set, back;
+
+	if (pre & BIT(0x0c)) {
+		dev_warn(dev, "WRITE_FLIP refused: pcie0_clk (0x20 bit 0x0c) already set (0x%08x)\n",
+			 pre);
+		return -EBUSY;
+	}
+	set  = luofu_crg_rmw(base, 0x20, 0x0c, 1);
+	back = luofu_crg_rmw(base, 0x20, 0x0c, 0);
+	dev_info(dev, "WRITE_FLIP pcie0_clk off=0x20 bit=0x0c pre=0x%08x -> set=0x%08x (bit=%u) -> restored=0x%08x\n",
+		 pre, set, !!(set & BIT(0x0c)), back);
+	if (!(set & BIT(0x0c)))
+		return -EIO;
+	return back == pre ? 0 : -EIO;
+}
+#endif /* LUOFU_CRG_FLIP */
 
 static int luofu_crg_probe(struct platform_device *pdev)
 {
@@ -266,9 +410,11 @@ static int luofu_crg_probe(struct platform_device *pdev)
 		crg->base = devm_platform_ioremap_resource(pdev, 0);
 	} else {
 		dev_info(&pdev->dev,
-			 "FORCED probe (no DT match) base=0x%lx size=0x%lx read-only\n",
+			 "FORCED probe (no DT match) base=0x%lx size=0x%lx write_test=%d write_flip=%d%s\n",
 			 (unsigned long)LUOFU_CRG_BASE,
-			 (unsigned long)LUOFU_CRG_SIZE);
+			 (unsigned long)LUOFU_CRG_SIZE,
+			 write_test, write_flip,
+			 write_test ? "" : " read-only");
 		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE,
 					 LUOFU_CRG_SIZE);
 	}
@@ -293,6 +439,23 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	 * readl() only -- the forced path's evidence and the DT path's first
 	 * hardware access.  No clock/mux/PLL/reset registration runs here. */
 	luofu_crg_inventory(&pdev->dev, crg->base, !pdev->dev.of_node);
+
+	/* THE WRITE PATH (wrspec.md): stage 1 (write_test) and, in a build with
+	 * -DLUOFU_CRG_FLIP, the stage-2 flip.  Both run ONLY on the forced
+	 * (no-DT) path and ONLY behind their 0-default knobs, so an in-tree
+	 * bind -- or a bare insmod -- stays read-only.  The status inventory is
+	 * re-run LAST: the CRG's first and last touch is a read, and the lock
+	 * mask must still hold after the stores. */
+	if (write_test && !pdev->dev.of_node) {
+		luofu_crg_write_test(&pdev->dev, crg->base);
+#ifdef LUOFU_CRG_FLIP
+		if (write_flip)
+			luofu_crg_write_flip(&pdev->dev, crg->base);
+#endif
+		luofu_crg_inventory(&pdev->dev, crg->base, true);
+	} else if (write_test) {
+		dev_warn(&pdev->dev, "write_test=1 ignored: the write path runs only on the forced (no-DT) probe\n");
+	}
 
 	platform_set_drvdata(pdev, crg);
 	/* TODO: return the real registration result once the tables are wired. */
@@ -373,4 +536,4 @@ module_init(luofu_crg_init);
 module_exit(luofu_crg_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + read-only forced probe)");
+MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + forced probe + the bounded write path)");
