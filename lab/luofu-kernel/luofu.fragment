@@ -98,7 +98,6 @@ CONFIG_MTD_SPI_NAND=y
 CONFIG_MTD_OF_PARTS=y
 CONFIG_MTD_UBI=y
 CONFIG_MTD_UBI_BLOCK=y
-CONFIG_MTD_PSTORE=y
 # NEW (stage 2, the hsan,fmc controller - the hardest storage item)
 CONFIG_MTD_NAND_LUOFU=y
 # selected indirectly by MTD_SPI_NAND / MTD_NAND_LUOFU: CONFIG_MTD_NAND_CORE,
@@ -108,14 +107,19 @@ CONFIG_MTD_NAND_LUOFU=y
 # Persistent store + the filesystems the stock rootfs uses
 # lsmod: pstore_blk, pstore_zone, mtdpstore, ubi; the blob loader needs
 # /lib/firmware (FIRMWARE.bin, 928,920 B).
+# NOTE: CONFIG_PSTORE_BLK and CONFIG_MTD_PSTORE are NOT set here. In 5.10.201
+# PSTORE_BLK `depends on BROKEN`, and BROKEN is a promptless symbol nothing
+# selects in vanilla (init/Kconfig:116) - so pstore-on-MTD is unreachable in a
+# vanilla tree and a fragment cannot enable it. The vendor does enable it (their
+# pstore_blk/mtdpstore modules set it), so the luofu port must carry that
+# enablement: `select BROKEN` from the new MTD_NAND_LUOFU entry, or the vendor
+# Kconfig patch. CONFIG_MTD_PSTORE depends on PSTORE_BLK.
 CONFIG_PSTORE=y
-CONFIG_PSTORE_BLK=y
 CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_UBIFS_FS=y
 CONFIG_SQUASHFS=y
 CONFIG_FW_LOADER=y
-# selected indirectly by PSTORE_BLK: CONFIG_PSTORE_ZONE
 
 # ---------------------------------------------------------------------------
 # GPIO / LED / regulator / PWM

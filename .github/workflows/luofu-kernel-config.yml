@@ -38,16 +38,13 @@ jobs:
       - name: merge the fragment + resolve with the kernel's own kconfig
         run: |
           cd linux-5.10.201
-          # merge_config.sh runs `make alldefconfig` INTERNALLY; without ARCH in the
-          # environment that make resolves a HOST (x86) config and every arm symbol
-          # drops out of .config. Export ARCH so the internal make is arm-correct.
+          # Use the documented idiom: textual merge (-m) + `make olddefconfig`, which
+          # resolves dependencies IN PLACE. (The non -m form runs `make alldefconfig`
+          # internally, regenerating from Kconfig defaults - noisy for derived
+          # symbols, and it drops arm context unless ARCH is exported.)
           export ARCH=arm
-          # Non -m form: merge_config.sh runs `make alldefconfig` and then prints
-          # "Value requested for CONFIG_X not in final .config" for anything that
-          # did not survive (missed dependency / promptless symbol).
-          set -o pipefail
-          scripts/kconfig/merge_config.sh .config \
-            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment" | tee merge.log
+          scripts/kconfig/merge_config.sh -m .config \
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           make ARCH=arm olddefconfig
 
       - name: assert every non-LUOFU requested symbol survived
@@ -75,9 +72,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: luofu-kernel-config
-          path: |
-            linux-5.10.201/.config
-            linux-5.10.201/merge.log
+          path: linux-5.10.201/.config
 
   kernel:
     # The boilerplate vanilla-kernel build for evaluation: opt-in only, because
@@ -102,7 +97,7 @@ jobs:
           cd linux-5.10.201
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
           export ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
-          scripts/kconfig/merge_config.sh .config \
+          scripts/kconfig/merge_config.sh -m .config \
             "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
 
