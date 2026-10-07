@@ -34,6 +34,36 @@
  * build-load-test-module.yml lane) and performs NO register writes: probe maps
  * the windows and runs a read-only status inventory (FORCED probe:
  * dbi 0x10160000 + cfg 0x50000000 + write-only misc 0x10161000 on RC0).
+ *
+ * =====================  THE RC WRITE PATH (rcwrite.md)  =====================
+ * The default path above is unchanged and stays store-free.  On top of it sits
+ * the bounded, compile-gated, forced-path-only RC WRITE PATH - the CRG half the
+ * bring-up needs (the vendor order is clock gate ON -> reset deassert
+ * apb->pcs->phy->ctrl, and a CRG reset bit is ACTIVE-LOW: 1 = out of reset):
+ *
+ *   rc_write_test=1  STAGE B - the safest first device step (rcwrite.md sec 3):
+ *                    the no-op RMW census on the RC's OWN CRG words - the first
+ *                    read of the reset word 0x34 and the gate word 0x20, each
+ *                    written back UNCHANGED and read back (PASS iff
+ *                    back == pre).  Idempotent on any latch, ZERO state change,
+ *                    exactly 2 dword-aligned stores.  Admissible vendor-LIVE;
+ *                    fails closed (0 stores) if the RC link already reads DOWN.
+ *
+ *   rc_write_flip=1  STAGE C - the meaningful write (rcwrite.md sec 3):
+ *                    rank 1 SET(deassert) the RC0 reset bits 0x0c..0x0f (the
+ *                    one-way, safe direction - a liveness check), then rank 2
+ *                    the real flip: assert (CLEAR) apb_rst -> observe ->
+ *                    deassert (SET) + read-back, PASS iff post == pre.  A
+ *                    state-changing store on a LIVE RC wedges the DWC link, so
+ *                    it is refused (0 stores) unless the RC is QUIESCED - the
+ *                    RC's own link reads DOWN (endpoint disabled, link down).
+ *
+ * THE BOUND (MANDATORY): every store goes through luofu_rc_store(), the file's
+ * ONLY writel() call site, which enforces the 4-byte alignment rule and REFUSES
+ * any store past a fixed budget (2 + 3 = 5).  The sequences are finite by
+ * construction: no input can make them a sweep.  Barred from every sequence:
+ * CA 0x400392f0, the RC misc window 0x10161000 (never read), host-side IAR
+ * 0x4016010c, and the PLL/mux/softrst/watchdog/reboot registers.
  * ================================================================
  *
  * Spec: build/tmp/inta-spec/pcierc.md (the register receipt is
@@ -123,6 +153,7 @@
  * pci_scan_root_bus_bridge.  Every misc access there is a WRITE.
  */
 
+#include <linux/bitops.h>
 #include <linux/build_bug.h>
 #include <linux/err.h>
 #include <linux/io.h>
@@ -335,8 +366,15 @@ static const char * const luofu_ltssm_names[LTSSM_NR_STATES] = {
  *   clocks = <&crg LUOFU_CLK_PCIE0|1>           # gate reg 0x20, bit 0x0c|0x0d
  *   resets = <&crg 0x34 0x0c..0x0f|0x10..0x13> # apb, pcs, phy, ctrl
  * The stage-1 luofu-clk driver already transcribes LUOFU_CLK_PCIE0/1 and
- * #reset-cells=<2>; the RC driver only consumes them (devm_clk_get /
- * devm_reset_control_get by name), it never touches the CRG page directly. */
+ * #reset-cells=<2>; the staged bring-up consumes them (devm_clk_get /
+ * devm_reset_control_get by name).  The RC WRITE PATH below is the ONE place
+ * this module touches the CRG page itself: a bounded, forced-path-only
+ * instrument over the reset word 0x34 and the gate word 0x20. */
+#define LUOFU_CRG_BASE		0x14880000UL	/* the CRG page (pinned reg :205) */
+#define LUOFU_CRG_SIZE		0x1000UL
+#define LUOFU_RC_GATE_OFF	0x20u	/* peri gate-1: b0x0c pcie0_clk, b0x0d pcie1_clk */
+#define LUOFU_RC_GATE_PCIE0	0x0cu
+#define LUOFU_RC_GATE_PCIE1	0x0du
 #define LUOFU_RST_PCIE_OFF	0x34u
 #define LUOFU_RST_PCIE0_APB	0x0cu
 #define LUOFU_RST_PCIE0_PCS	0x0du
@@ -520,6 +558,11 @@ static void luofu_pcie_check_aligned(void)
 	/* DWC port-logic DEBUG words (the LTSSM read-state machine). */
 	BUILD_BUG_ON(DBI_PORT_DEBUG0 & 3u);
 	BUILD_BUG_ON(DBI_PORT_DEBUG1 & 3u);
+	/* the RC write path's CRG words + page (rcwrite.md sec 3). */
+	BUILD_BUG_ON(LUOFU_CRG_BASE & 3u);
+	BUILD_BUG_ON(LUOFU_CRG_SIZE & 3u);
+	BUILD_BUG_ON(LUOFU_RC_GATE_OFF & 3u);
+	BUILD_BUG_ON(LUOFU_RST_PCIE_OFF & 3u);
 	/* misc write-only offsets (full-word stores, never read). */
 	BUILD_BUG_ON(MISC_RC_MODE & 3u);
 	BUILD_BUG_ON(MISC_APP_CTRL & 3u);
@@ -581,6 +624,7 @@ struct luofu_pcie {
 	void __iomem *dbi;
 	void __iomem *cfg;
 	void __iomem *misc;	/* WRITE-ONLY port-logic: mapped, NEVER read */
+	void __iomem *crg;	/* the CRG page: the write-path instrument home */
 	unsigned int id;
 };
 
@@ -593,6 +637,23 @@ static int force_probe;
 module_param(force_probe, int, 0444);
 MODULE_PARM_DESC(force_probe,
 	"run the probe body against the hardcoded RC0/RC1 CAs (read-only)");
+
+/*
+ * The RC WRITE PATH knobs (rcwrite.md sec 3).  Both default 0, so a bare
+ * insmod of this same artifact reaches no store, and both are reachable only
+ * on the forced (no-DT) path.  Their preconditions differ by design: the no-op
+ * census is the vendor-LIVE instrument (it refuses if the link is DOWN), while
+ * the meaningful write is the QUIESCED one (it refuses if the link is UP).
+ */
+static int rc_write_test;
+module_param(rc_write_test, int, 0444);
+MODULE_PARM_DESC(rc_write_test,
+	"STAGE B no-op RMW census of the RC's CRG reset word 0x34 + gate word 0x20 (write-same + read-back, 2 stores, 0 net change); forced path only; 0 = read-only");
+
+static int rc_write_flip;
+module_param(rc_write_flip, int, 0444);
+MODULE_PARM_DESC(rc_write_flip,
+	"STAGE C meaningful write: rank-1 SET(deassert) of the RC0 reset bits, then rank-2 assert/deassert of apb_rst 0x34 bit 0x0c; needs a QUIESCED RC (link down) and the write path compiled in; 0 = off");
 
 /*
  * Link-state read path (pcierc.md sec 4b).  The record's link-up read replaces
@@ -726,6 +787,247 @@ static void luofu_pcie_iatu_inventory(struct device *dev, void __iomem *dbi,
 	}
 }
 
+/*
+ * ===================== THE RC WRITE PATH (rcwrite.md) =====================
+ * THE BOUND (rcwrite.md sec 3 / sec 5): every store goes through
+ * luofu_rc_store(), which counts and REFUSES any store past a fixed budget.
+ * The sequences are finite by construction - no input can make them a sweep.
+ *
+ * DELIBERATELY NOT IMPLEMENTED (rcwrite.md sec 5 bars): CA 0x400392f0; the RC
+ * misc window 0x10161000/0x10165000 (never read); the host-side IAR 0x4016010c;
+ * and the PLL (0x198/0x1e0), mux (0x138), softrst (0x84), watchdog
+ * (0x50/0x64/0x70) and reboot (0x00) registers.  The only offsets reachable
+ * from here are the CRG reset word 0x34 and the gate word 0x20, both words the
+ * vendor's own hi_crg/hi_kreset/hi_clk RMW without a key (crgnext.md sec 0/2).
+ *
+ * THE RC RESET WORD IS ACTIVE-LOW (crgnext.md sec 1): hi_reset_assert CLEARs the
+ * bit, hi_reset_deassert SETs it, so bit = 1 means OUT of reset.  The reset
+ * CLASS was proven reversible in software by the crgstage2 smoke (the CLEAR of
+ * 0x2c bit 0x18 TOOK, register restored exactly) - the Stage-A(ii) precondition
+ * rcwrite.md sec 3 rank 2 requires before an RC-reset store may be read as a
+ * meaningful write rather than an inert one.
+ */
+#define LUOFU_RC_TEST_WRITES	2u	/* the no-op census: one store per word */
+#define LUOFU_RC_FLIP_WRITES	3u	/* rank 1 SET (1) + rank 2 assert/deassert (2) */
+#define LUOFU_RC_WRITE_BUDGET	(LUOFU_RC_TEST_WRITES + LUOFU_RC_FLIP_WRITES)
+
+/* The RC0 reset bits of the CRG reset word: apb/pcs/phy/ctrl (0x0c..0x0f) -
+ * the deassert mask rank 1 SETs in one dword store. */
+#define LUOFU_RC0_RST_MASK	((1u << LUOFU_RST_PCIE0_APB) | \
+				 (1u << LUOFU_RST_PCIE0_PCS) | \
+				 (1u << LUOFU_RST_PCIE0_PHY) | \
+				 (1u << LUOFU_RST_PCIE0_CTRL))
+
+/* The store counter that enforces THE BOUND.  It is reported by the frame's
+ * final probe line, so a bare insmod prints "0 writes" and an instrument run
+ * ends on the real, budget-limited count. */
+static unsigned int luofu_rc_write_count;
+
+/*
+ * luofu_rc_store - the ONLY store primitive of this module.  It refuses a
+ * non-4-byte-aligned offset (the readw.md external-abort class) and any store
+ * past the fixed budget (THE BOUND), then does exactly one dword-aligned
+ * writel() and returns the read-back.  Staged (__maybe_unused) because a build
+ * with -DLUOFU_RC_WRITE=0 must drop the instruments and keep compiling.
+ */
+static __maybe_unused u32 luofu_rc_store(void __iomem *base, u16 off, u32 val)
+{
+	if (off & 3u) {
+		pr_err("luofu-pcie: refusing unaligned CRG store at +0x%03x\n", off);
+		return readl(base + (off & ~3u));
+	}
+	if (luofu_rc_write_count >= LUOFU_RC_WRITE_BUDGET) {
+		pr_err("luofu-pcie: write budget %u exhausted, refusing store at +0x%03x\n",
+		       LUOFU_RC_WRITE_BUDGET, off);
+		return readl(base + off);
+	}
+
+	writel(val, base + off);
+	luofu_rc_write_count++;
+
+	return readl(base + off);	/* settle-time read-back, one clean dword */
+}
+
+/*
+ * luofu_rc_rmw - a dword-aligned masked read-modify-write of one CRG word:
+ * read the word, replace `mask`'s bits with `set_bits`, store the whole dword
+ * through luofu_rc_store() (bound + alignment enforced), return the read-back.
+ * The vendor's own hi_crg_enable/disable and hi_clk_gate_enable are exactly
+ * this shape (crgnext.md sec 0); never a blind writel of a constant.
+ */
+static __maybe_unused u32 luofu_rc_rmw(void __iomem *base, u16 off, u32 mask,
+				       u32 set_bits)
+{
+	u32 v = readl(base + off);
+
+	v = (v & ~mask) | (set_bits & mask);
+	return luofu_rc_store(base, off, v);
+}
+
+/*
+ * luofu_rc_write_same - the no-op census store: read the word, write the SAME
+ * dword back, read it back.  Idempotent on any latch (a plain R/W latch stores
+ * the identical value; a write-1-SET-only latch sets bits already set and
+ * leaves 0 bits 0) -> zero state change, exactly one store.  It proves the
+ * store bus does not abort and yields the first-ever datum for the word.
+ */
+static __maybe_unused u32 luofu_rc_write_same(void __iomem *base, u16 off)
+{
+	return luofu_rc_store(base, off, readl(base + off));
+}
+
+/*
+ * THE COMPILE GATE, in the LUOFU_CRG_FLIP pattern (wrdesign.md sec 6): the
+ * store is a build-time property, never a runtime accident.  A build line can
+ * always turn it off with -DLUOFU_RC_WRITE=0.  Arming is NOT reachability: the
+ * stores still need force_probe=1 AND rc_write_test=1 (or rc_write_flip=1),
+ * so a bare insmod of this same artifact performs ZERO stores.
+ */
+#ifndef LUOFU_RC_WRITE
+#define LUOFU_RC_WRITE 1	/* armed; build with -DLUOFU_RC_WRITE=0 to drop it */
+#endif
+
+#if LUOFU_RC_WRITE
+
+/*
+ * STAGE B (rcwrite.md sec 3) - THE SAFEST FIRST DEVICE STEP: the no-op RMW
+ * census on the RC's own CRG reset word 0x34 and gate word 0x20 (budget 2
+ * stores + reads).  The reset word has never been read before: its value is a
+ * datum in itself (a 0 bit would mean that RC is held in reset), and it becomes
+ * the reference word for the ranked write.  Its pre-census gate word answers
+ * the SET target for Stage C rank 3 without a store.
+ *
+ *   pre34 = readl(0x34); writel(pre34, 0x34); back34 = readl(0x34)
+ *   pre20 = readl(0x20); writel(pre20, 0x20); back20 = readl(0x20)
+ *   PASS iff no fault && back34 == pre34 && back20 == pre20
+ *
+ * Fail closed (0 stores) if the RC link already reads DOWN: this is the
+ * vendor-LIVE instrument (rcwrite.md sec 2a), so an already-down link is the
+ * unexpected state.
+ */
+static int luofu_pcie_rc_write_test(struct device *dev, void __iomem *crg,
+				    void __iomem *dbi)
+{
+	struct luofu_pcie_link_state st =
+		luofu_pcie_read_link_status(dbi, DBI_LINK_STATUS);
+	u32 pre34, back34, pre20, back20;
+	bool ok;
+
+	if (!st.up) {
+		dev_warn(dev, "RC_WRITE_TEST refused: the RC link reads DOWN (DL_ACTIVE=0) - the no-op census is the vendor-LIVE instrument; 0 stores\n");
+		return -EBUSY;
+	}
+
+	pre34 = readl(crg + LUOFU_RST_PCIE_OFF);
+	dev_info(dev, "RC_WRITE_TEST[1/2] off=0x%02x RC0 reset word pre=0x%08x (apb/pcs/phy/ctrl bits 0x%02x..0x%02x = %u%u%u%u) store 1/2 = write-same\n",
+		 LUOFU_RST_PCIE_OFF, pre34,
+		 LUOFU_RST_PCIE0_APB, LUOFU_RST_PCIE0_CTRL,
+		 !!(pre34 & (1u << LUOFU_RST_PCIE0_APB)),
+		 !!(pre34 & (1u << LUOFU_RST_PCIE0_PCS)),
+		 !!(pre34 & (1u << LUOFU_RST_PCIE0_PHY)),
+		 !!(pre34 & (1u << LUOFU_RST_PCIE0_CTRL)));
+	back34 = luofu_rc_write_same(crg, LUOFU_RST_PCIE_OFF);
+	dev_info(dev, "RC_WRITE_TEST[1/2] off=0x%02x back=0x%08x (%s)\n",
+		 LUOFU_RST_PCIE_OFF, back34,
+		 back34 == pre34 ? "no change" : "CHANGED");
+
+	pre20 = readl(crg + LUOFU_RC_GATE_OFF);
+	dev_info(dev, "RC_WRITE_TEST[2/2] off=0x%02x gate word pre=0x%08x (pcie0_clk b0x%02x=%u, pcie1_clk b0x%02x=%u) store 2/2 = write-same\n",
+		 LUOFU_RC_GATE_OFF, pre20, LUOFU_RC_GATE_PCIE0,
+		 !!(pre20 & (1u << LUOFU_RC_GATE_PCIE0)), LUOFU_RC_GATE_PCIE1,
+		 !!(pre20 & (1u << LUOFU_RC_GATE_PCIE1)));
+	back20 = luofu_rc_write_same(crg, LUOFU_RC_GATE_OFF);
+	dev_info(dev, "RC_WRITE_TEST[2/2] off=0x%02x back=0x%08x (%s)\n",
+		 LUOFU_RC_GATE_OFF, back20,
+		 back20 == pre20 ? "no change" : "CHANGED");
+
+	ok = (back34 == pre34) && (back20 == pre20);
+	dev_info(dev, "RC_WRITE_TEST %s: pre34=0x%08x back34=0x%08x pre20=0x%08x back20=0x%08x, 2/2 no-op stores, %u stores total\n",
+		 ok ? "PASS" : "FAIL", pre34, back34, pre20, back20,
+		 luofu_rc_write_count);
+	if (!ok)
+		dev_err(dev, "RC_WRITE_TEST FAIL: a write-same store changed its word - the latch is not idempotent, do not proceed to a state-changing write\n");
+	return ok ? 0 : -EIO;
+}
+
+/*
+ * STAGE C (rcwrite.md sec 3) - THE MEANINGFUL WRITE: rank 1 SET(deassert) of
+ * the RC0 reset bits (the one-way, safe direction: a no-op while they read 1,
+ * so it is a liveness check) followed by rank 2, the real flip:
+ *
+ *   pre   = readl(0x34); refuse unless apb_rst (bit 0x0c) reads 1 (out of reset)
+ *   set   = rmw(0x34, 0x0c..0x0f, live)     store 1/3 rank 1, the deassert
+ *   obs   = readl(0x20)                    observe, logged only
+ *   inv   = rmw(0x34, 0x0c, clear)         store 2/3 the ASSERT
+ *   post  = rmw(0x34, 0x0c, set)           store 3/3 the DEASSERT (recovery)
+ *   PASS iff post == pre
+ *
+ * QUIESCED PRECONDITION (rcwrite.md sec 2b + sec 3 Stage C): the only
+ * state-changing direction on this word is a CLEAR (assert), and on a LIVE RC
+ * that wedges the DWC link and drops the wiphy - the vendor's hi_clk/hi_kreset
+ * refcounts cannot restore an out-of-band clear, so only the watchdog/reboot
+ * recovers.  The write is therefore admitted ONLY once the endpoint is disabled
+ * and the link is DOWN; under the live vendor stack the link reads UP and the
+ * instrument refuses with ZERO stores.
+ */
+static int luofu_pcie_rc_write_flip(struct device *dev, void __iomem *crg,
+				    void __iomem *dbi)
+{
+	struct luofu_pcie_link_state st =
+		luofu_pcie_read_link_status(dbi, DBI_LINK_STATUS);
+	u32 apb = 1u << LUOFU_RST_PCIE0_APB;
+	u32 pre, rank1, inv, post;
+	bool took;
+
+	if (st.up) {
+		dev_warn(dev, "RC_WRITE_FLIP refused: the RC link reads UP (DL_ACTIVE=1) - a state-changing store on the LIVE RC is not admissible (rcwrite.md sec 2b); the meaningful write needs the quiesced/takeover context; 0 stores\n");
+		return -EBUSY;
+	}
+
+	pre = readl(crg + LUOFU_RST_PCIE_OFF);
+	if (!(pre & apb)) {
+		dev_warn(dev, "RC_WRITE_FLIP refused: apb_rst off=0x%02x bit=0x%02x reads 0 (pre=0x%08x) - the assert target must start deasserted (out of reset); 0 stores\n",
+			 LUOFU_RST_PCIE_OFF, LUOFU_RST_PCIE0_APB, pre);
+		return -EBUSY;
+	}
+
+	dev_info(dev, "RC_WRITE_FLIP rank1 off=0x%02x SET(deassert) RC0 bits 0x%02x..0x%02x: pre=0x%08x store 1/3\n",
+		 LUOFU_RST_PCIE_OFF, LUOFU_RST_PCIE0_APB, LUOFU_RST_PCIE0_CTRL,
+		 pre);
+	rank1 = luofu_rc_rmw(crg, LUOFU_RST_PCIE_OFF, LUOFU_RC0_RST_MASK,
+			     LUOFU_RC0_RST_MASK);
+	dev_info(dev, "RC_WRITE_FLIP rank1 back=0x%08x (one-way: a no-op while the four bits read 1 - a liveness check, not a state change)\n",
+		 rank1);
+
+	/* OBSERVE: the gate word only - a licensed CRG read, and the Stage-C rank-3
+	 * SET target.  Logged, NOT adjudicated (it is dynamic).  The gated blocks
+	 * behind the RC are never read while a gate is cleared. */
+	dev_info(dev, "RC_WRITE_FLIP observe [0x%02x]=0x%08x (dynamic - NOT flip evidence)\n",
+		 LUOFU_RC_GATE_OFF, readl(crg + LUOFU_RC_GATE_OFF));
+
+	dev_info(dev, "RC_WRITE_FLIP rank2 apb_rst off=0x%02x bit=0x%02x store 2/3 = the assert (clear)\n",
+		 LUOFU_RST_PCIE_OFF, LUOFU_RST_PCIE0_APB);
+	inv = luofu_rc_rmw(crg, LUOFU_RST_PCIE_OFF, apb, 0);
+	took = !(inv & apb);
+	dev_info(dev, "RC_WRITE_FLIP assert read-back=0x%08x apb_rst bit=%u (%s)\n",
+		 inv, took ? 0u : 1u,
+		 took ? "the CLEAR TOOK - the reset class honours the ASSERT direction"
+		      : "the CLEAR was IGNORED - the reset class matches the gate class (write-1-set-only)");
+
+	dev_info(dev, "RC_WRITE_FLIP rank2 apb_rst store 3/3 = the deassert (recovery, the vendor-proven direction)\n");
+	post = luofu_rc_rmw(crg, LUOFU_RST_PCIE_OFF, apb, apb);
+
+	dev_info(dev, "RC_WRITE_FLIP: pre=0x%08x -> rank1=0x%08x -> assert=0x%08x -> deassert=0x%08x: %s (%u stores total)\n",
+		 pre, rank1, inv, post,
+		 post == pre ? "PASS post == pre" : "FAIL post != pre",
+		 luofu_rc_write_count);
+	if (post != pre)
+		dev_err(dev, "RC_WRITE_FLIP FAIL: the RC reset word is left at 0x%08x, not pre 0x%08x - recovery = re-deassert (SET) or the SoC watchdog/reset\n",
+			post, pre);
+	return post == pre ? 0 : -EIO;
+}
+#endif /* LUOFU_RC_WRITE */
+
 static const struct of_device_id luofu_pcie_match_table[] = {
 	{ .compatible = "hisilicon,luofu-pcie" },
 	{ /* sentinel */ }
@@ -764,11 +1066,19 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 		label = "DT";
 	} else {
 		dev_info(&pdev->dev,
-			 "FORCED probe (%s, no DT match) dbi=0x%lx cfg=0x%lx misc=0x%lx (write-only) read-only\n",
-			 ca->name, ca->dbi_ca, ca->cfg_ca, ca->misc_ca);
+			 "FORCED probe (%s, no DT match) dbi=0x%lx cfg=0x%lx misc=0x%lx (write-only) crg=0x%lx rc_write_test=%d rc_write_flip=%d\n",
+			 ca->name, ca->dbi_ca, ca->cfg_ca, ca->misc_ca,
+			 (unsigned long)LUOFU_CRG_BASE, rc_write_test, rc_write_flip);
 		rc->dbi = devm_ioremap(&pdev->dev, ca->dbi_ca, LUOFU_PCIE_DBI_SIZE);
 		rc->cfg = devm_ioremap(&pdev->dev, ca->cfg_ca, LUOFU_PCIE_CFG_SIZE);
 		rc->misc = devm_ioremap(&pdev->dev, ca->misc_ca, LUOFU_PCIE_MISC_SIZE);
+		/* The CRG page: the RC write path's instrument home (rcwrite.md).  The
+		 * region is already owned by the vendor hi_crg/watchdog, so
+		 * devm_ioremap() takes no reservation (crgbind.md); ioremap alone
+		 * performs no bus access, so mapping it keeps the read-only default
+		 * read-only.  A mapping failure is NOT fatal for the frame: the
+		 * instrument refuses on a NULL mapping. */
+		rc->crg = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
 		label = "FORCED";
 	}
 	if (IS_ERR(rc->dbi))
@@ -782,6 +1092,12 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 			 "misc (port-logic) window not mapped: %pe (write-only, unused for now)\n",
 			 rc->misc);
 		rc->misc = NULL;
+	}
+	if (IS_ERR_OR_NULL(rc->crg)) {
+		dev_warn(&pdev->dev,
+			 "CRG page not mapped: %pe (the RC write path will refuse)\n",
+			 rc->crg);
+		rc->crg = NULL;
 	}
 
 	/* Keep the transcribed geometry live (not dead code): log the tables the
@@ -817,9 +1133,55 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	 * sec 4b).  This is the vendor's LTSSM read, relocated to the DWC DBI. */
 	luofu_pcie_report_dwc_link(&pdev->dev, ca->name, rc->dbi);
 
+	/* ---- THE RC WRITE PATH (rcwrite.md) ----
+	 * Staged, bounded, forced-path-only, behind two 0-default knobs.  It runs on
+	 * RC0 only: the two CRG words it touches carry BOTH domains' bits, so a
+	 * second pass would only double the store count against the same bound.  A
+	 * bare insmod, or any DT bind, reaches no store. */
+	if ((rc_write_test || rc_write_flip) && !pdev->dev.of_node) {
+		if (!rc->crg) {
+			dev_warn(&pdev->dev, "the CRG page is not mapped - the RC write path refuses (0 stores)\n");
+		} else if (id != 0) {
+			dev_info(&pdev->dev, "luofu-pcie %s: the RC write path runs on RC0 only (the CRG words carry both domains' bits); skipped\n",
+				 ca->name);
+		} else if (rc_write_test && rc_write_flip) {
+			dev_warn(&pdev->dev, "rc_write_test and rc_write_flip are mutually exclusive (the budget bounds one instrument): refusing both\n");
+		} else if (rc_write_test) {
+#if LUOFU_RC_WRITE
+			int wrc = luofu_pcie_rc_write_test(&pdev->dev, rc->crg,
+							   rc->dbi);
+
+			dev_info(&pdev->dev, "RC_WRITE_TEST rc=%d\n", wrc);
+#else
+			dev_warn(&pdev->dev, "rc_write_test=1 ignored: the RC write path is not compiled in (LUOFU_RC_WRITE=0)\n");
+#endif
+		} else {
+#if LUOFU_RC_WRITE
+			int wrc = luofu_pcie_rc_write_flip(&pdev->dev, rc->crg,
+							   rc->dbi);
+
+			dev_info(&pdev->dev, "RC_WRITE_FLIP rc=%d\n", wrc);
+#else
+			dev_warn(&pdev->dev, "rc_write_flip=1 ignored: the RC write path is not compiled in (LUOFU_RC_WRITE=0)\n");
+#endif
+		}
+		/* The CRG's last touch is a read (wrdesign.md sec 6): a read-only
+		 * census of both words after the instrument, plus the store total. */
+		if (rc->crg)
+			dev_info(&pdev->dev, "RC_WRITE after: crg[0x%02x]=0x%08x crg[0x%02x]=0x%08x (%u stores total)\n",
+				 LUOFU_RC_GATE_OFF,
+				 readl(rc->crg + LUOFU_RC_GATE_OFF),
+				 LUOFU_RST_PCIE_OFF,
+				 readl(rc->crg + LUOFU_RST_PCIE_OFF),
+				 luofu_rc_write_count);
+	} else if (rc_write_test || rc_write_flip) {
+		dev_warn(&pdev->dev, "rc_write_test/rc_write_flip ignored: the RC write path runs only on the forced (no-DT) probe\n");
+	}
+
 	dev_info(&pdev->dev,
-		 "%s probe PASS: dbi %u predicted regs matched, cfg %u matched, link %s, 0 writes\n",
-		 label, dbi_hits, cfg_hits, link_up ? "UP" : "DOWN");
+		 "%s probe PASS: dbi %u predicted regs matched, cfg %u matched, link %s, %u writes\n",
+		 label, dbi_hits, cfg_hits, link_up ? "UP" : "DOWN",
+		 luofu_rc_write_count);
 
 	platform_set_drvdata(pdev, rc);
 	/* TODO: return the real registration result once the host bridge is wired. */

@@ -81,6 +81,35 @@ constants: the `pcie_clk` gate (`LUOFU_CLK_PCIE0|1`, gate reg `0x20` bit
 `0x34`, bits `0x0c..0x0f` RC0 / `0x10..0x13` RC1). It is a scaffold, not a
 working host.
 
+## The RC write path (`rcwrite.md`)
+
+On top of the read-only frame sits the staged, bounded RC **write path** - the
+CRG half of the bring-up (`build/tmp/inta-spec/rcwrite.md`). It is
+**compile-gated** (`LUOFU_RC_WRITE`, default 1, in the `LUOFU_CRG_FLIP` pattern)
+and **reachable only** with `force_probe=1` **and** a 0-default knob, on RC0
+only, so a bare insmod of the same artifact performs zero stores.
+
+| knob | what it does | stores | precondition |
+| --- | --- | --- | --- |
+| `rc_write_test=1` | STAGE B, the safest first device step: the **no-op RMW census** on the RC's own CRG words - the first read of the reset word `0x34` and the gate word `0x20`, each written back **unchanged** and read back (`PASS` iff `back == pre`) | 2 | the RC link reads **UP** (it is the vendor-live instrument); refuses with 0 stores if the link already reads DOWN |
+| `rc_write_flip=1` | STAGE C, the **meaningful write**: rank 1 `SET`(deassert) of the RC0 reset bits `0x0c..0x0f` (one-way - a liveness check), then rank 2 the real flip: assert (`CLEAR`) `apb_rst` -> observe -> deassert (`SET`), `PASS` iff `post == pre` | 3 | the RC is **QUIESCED** (its link reads DOWN); refuses with 0 stores under the live vendor stack |
+
+The two CRG words hold **active-low resets** (`1` = out of reset) and the
+vendor's own `hi_crg`/`hi_kreset` drive them as a bare one-bit read-modify-write
+with no unlock key. The reset class was proven reversible in software by the
+crgstage2 smoke (the `CLEAR` of `0x2c` bit `0x18` took, and the word was restored
+exactly) - the Stage-A(ii) precondition rank 2 needs.
+
+`THE BOUND` is mandatory: every store goes through `luofu_rc_store()`, the
+file's only bounded store primitive, which refuses a non-4-byte-aligned offset
+and any store past the fixed budget (`2 + 3 = 5`) and returns a read-back.
+Never in any sequence: CA `0x400392f0`, the RC misc window `0x10161000` (never
+read), the host-side IAR `0x4016010c`, and the PLL/mux/softrst/watchdog/reboot
+registers. The runner `build/tmp/wifidrv1-art/run-rcwrite.sh` gates the device
+(health + slot `mtd14:rootfsb` + no active cycle), stages the ko **always as
+`wifidrv1.ko`**, runs the single serial `insmod rc_write_test=1`, captures the
+per-step dmesg, and `rmmod`s.
+
 ## force_probe
 
 The vendor kernel's live DT carries `hsan,pcie`, not this driver's
@@ -105,10 +134,11 @@ Smoke on the router (`insmod_rc=0` / `luofu-pcie` / `rmmod_rc=0`): with no DT
 match, no probe runs unless `force_probe=1` is passed, so the load proves
 vermagic/ABI only; `force_probe=1` additionally runs the read-only inventory.
 
-## Staged next (the write path + host)
+## Staged next (the host bridge)
 
-The driver deliberately performs **zero register writes**. The staged bring-up
-(`pcierc.md` sec 2, `drvpcie.md` sec 3-4): the `clk_bulk_enable` / 4x
+The default path performs **zero register writes**; the CRG half of the write
+path now lands behind its knobs (`rcwrite.md`, above). Still staged:
+`pcierc.md` sec 2 / `drvpcie.md` sec 3-4 - the `clk_bulk_enable` / 4x
 `reset_control_deassert` from `&crg`, the `misc` writes (mode / LTSSM / linkdown
 irq - write-only full-word stores), the iATU programming, the endpoint power-up
 via `pcie-gpios`, the LTSSM poll, and `pci_host_probe` registration with the
