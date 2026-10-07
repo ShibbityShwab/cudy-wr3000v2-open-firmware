@@ -106,15 +106,21 @@ What this buys, and what it does not:
   Green run of the pre-image version: **`37573150202`** on `c40637a` - 47/47
   non-`NEW` symbols resolved `=y`, the 13 `NEW` ones listed as the to-do (see
   `build/tmp/inta-spec/kcfg.md`).
-- Job **`kernel`** (the image lane, ~25-40 min) is the opt-in
-  `build_kernel` dispatch input **and** a push whose head commit message carries
-  the marker `[build-kernel]`. The marker exists because `workflow_dispatch`
-  only offers a workflow file that is on the **default branch**, and `master`
-  still carries `build-load-test-module.yml` alone - the push trigger is the
-  reliable way in from an `omo/**` branch. Artifacts: `zImage`,
-  `arch/arm/boot/dts/luofu-r116.dtb`, `luofu-uImage` (mkimage, `-C none`,
-  load=ep=`0x80608000`), `.config`, `luofu-config-delta.txt`, `MANIFEST.txt`
-  (size + sha256 per file), under the artifact name `luofu-kernel-image`.
+- Job **`kernel`** (the image lane, ~25-40 min) runs either on a
+  `workflow_dispatch` with `build_kernel: true` (dispatch from this branch works
+  even though the file is not on the default branch yet - run `37579008899`
+  proved it), or on a push whose head commit message carries the marker
+  `[build-kernel]`, which keeps a 30-minute build out of every other push's way.
+- Artifacts (flat, artifact name `luofu-kernel-image`): `zImage`,
+  `luofu-r116.dtb`, `luofu-uImage` (mkimage, `-C none`, load=ep=`0x80608000`),
+  `luofu-image.config` (the `.config`, renamed because `upload-artifact` skips
+  dotfiles), `luofu-r116.ref.dtb` (the same DTS compiled separately by the
+  distro dtc, as a second opinion), `luofu-config-delta.txt` (the base vs. the
+  merged config) and `MANIFEST.txt` (size + sha256 per file). The job pins
+  `KBUILD_BUILD_TIMESTAMP`/`_USER`/`_HOST` (the commit date, `luofu-lane`,
+  `github-actions`) because `scripts/mkcompile_h` otherwise embeds the build
+  wall-clock, and it prints the kernelb-fit arithmetic, warning when
+  uImage+DTB exceeds the 8,650,752-byte partition.
 - Download + hash a finished run with
   `gh run download <run-id> -R ShibbityShwab/cudy-wr3000v2-open-firmware -n luofu-kernel-image -D build/tmp/kboot`.
 - The reasoning and the symbol-by-symbol classification live in

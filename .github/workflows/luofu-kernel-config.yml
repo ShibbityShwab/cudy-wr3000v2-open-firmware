@@ -21,11 +21,11 @@ name: luofu-kernel-config
 #    build/tmp/inta-spec/kprep.md sec.3.2 (the kernelb flash) + imgbuild.md.
 #
 # Triggers: `push` to omo/** (the only branch we push) always fires `config`;
-# `kernel` fires when the pushed head commit message carries the marker
-# [build-kernel], or on a workflow_dispatch with build_kernel=true. The marker
-# exists because workflow_dispatch only offers this file once it is on the
-# DEFAULT branch (master carries build-load-test-module.yml only today) - see
-# lab/luofu-kernel/README.md "Build / verify".
+# `kernel` fires on a workflow_dispatch with build_kernel=true (verified to work
+# from this branch even though the file is not on the default branch yet), or on
+# a push whose head commit message carries the marker [build-kernel] - the marker
+# keeps a 30-minute build out of every other push's way. See lab/luofu-kernel/
+# README.md "Build / verify".
 
 on:
   push:
@@ -110,8 +110,18 @@ jobs:
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_kernel) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[build-kernel]')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 75
+    env:
+      # scripts/mkcompile_h falls back to `date`, so the UTS banner (and with it the
+      # zImage) changes every build; pinning the three stamps to the commit makes
+      # the artifact reproducible for a given commit + runner image.
+      # KBUILD_BUILD_TIMESTAMP is exported to later steps via $GITHUB_ENV below.
+      KBUILD_BUILD_USER: luofu-lane
+      KBUILD_BUILD_HOST: github-actions
     steps:
       - uses: actions/checkout@v4
+
+      - name: reproducible build stamp (the commit date)
+        run: echo "KBUILD_BUILD_TIMESTAMP=$(git log -1 --format=%cI)" >> "$GITHUB_ENV"
 
       - name: cross toolchain + kernel build deps + mkimage
         run: |
@@ -203,26 +213,45 @@ jobs:
                   -n Linux-5.10.201 -d arch/arm/boot/zImage luofu-uImage
           ls -l luofu-uImage
 
-      - name: manifest (sizes + sha256)
+      - name: kernelb slice arithmetic (does this image fit?)
         run: |
           cd linux-5.10.201
+          uimg=$(stat -c %s luofu-uImage)
+          dtb=$(stat -c %s arch/arm/boot/dts/luofu-r116.dtb)
+          part=8650752                     # mtd12 kernelb (kprep.md sec.1.2 item 6)
+          used=$((uimg + dtb))
+          echo "kernelb slice: uImage $uimg B + our DTB $dtb B = $used B of $part B (slack $((part - used)) B)"
+          echo "vendor slice:  uImage 4294160 B + base DTB 31220 B + overlays 4592 + 4920 B = 4334892 B"
+          if [ "$used" -gt "$part" ]; then
+            echo "::warning title=the image does not fit kernelb::uImage+DTB is $used B against kernelb $part B - the flash candidate needs a slimmer config, see build/tmp/inta-spec/imgbuild.md"
+          fi
+
+      - name: stage the artifact set (flat) + manifest (sizes + sha256)
+        run: |
+          cd linux-5.10.201
+          rm -rf out && mkdir -p out
+          cp arch/arm/boot/zImage               out/zImage
+          cp arch/arm/boot/dts/luofu-r116.dtb   out/luofu-r116.dtb
+          cp luofu-uImage                       out/luofu-uImage
+          cp luofu-config-delta.txt             out/luofu-config-delta.txt
+          # named luofu-image.config, not .config: upload-artifact skips dotfiles
+          cp .config                            out/luofu-image.config
+          cp "$GITHUB_WORKSPACE/out/luofu-r116.ref.dtb" out/luofu-r116.ref.dtb
           {
             echo "# luofu kernel image lane"
             echo "# commit: $GITHUB_SHA"
             echo "# base:   linux-5.10.201 multi_v7_defconfig + lab/luofu-kernel/luofu.fragment + lab/luofu-kernel/kernel-tree.patch"
             echo "# built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            for f in arch/arm/boot/zImage arch/arm/boot/dts/luofu-r116.dtb luofu-uImage .config "$GITHUB_WORKSPACE/out/luofu-r116.ref.dtb"; do
+            echo "# stamp:  KBUILD_BUILD_TIMESTAMP=$KBUILD_BUILD_TIMESTAMP"
+            # explicit list: a glob would also hash the MANIFEST being written
+            for f in out/zImage out/luofu-r116.dtb out/luofu-uImage out/luofu-image.config \
+                     out/luofu-r116.ref.dtb out/luofu-config-delta.txt; do
               printf '%10s  %s  %s\n' "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
             done
-          } | tee MANIFEST.txt
+          } | tee out/MANIFEST.txt
+          ls -l out/
 
       - uses: actions/upload-artifact@v4
         with:
           name: luofu-kernel-image
-          path: |
-            linux-5.10.201/arch/arm/boot/zImage
-            linux-5.10.201/arch/arm/boot/dts/luofu-r116.dtb
-            linux-5.10.201/luofu-uImage
-            linux-5.10.201/.config
-            linux-5.10.201/luofu-config-delta.txt
-            linux-5.10.201/MANIFEST.txt
+          path: linux-5.10.201/out
