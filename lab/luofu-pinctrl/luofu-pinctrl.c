@@ -408,17 +408,20 @@ static int luofu_get_group_pins(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-/* Vendor hi_pinctrl_dt_node_to_map (@ .text+0x564) is a 5-arg wrapper: it
- * calls pinconf_generic_dt_node_to_map(..., strict=0) (the vendor kernel
- * backported the later strict parameter). Vanilla 5.10.201's 4-arg form is
- * the equivalent, so this wrapper passes the 4 canonical args. dt_free_map
- * is pinctrl_utils_free_map. */
+/* Vendor hi_pinctrl_dt_node_to_map (@ .text+0x564) is a thin wrapper that
+ * pushes a 5th stack arg 0 and tail-calls pinconf_generic_dt_node_to_map().
+ * Vanilla 5.10.201's signature is pinconf_generic_dt_node_to_map(pctldev,
+ * np_config, map, num_maps, type), and type 0 is PIN_MAP_TYPE_INVALID, so the
+ * equivalent is pinconf_generic_dt_node_to_map_all(). dt_free_map is
+ * pinconf_generic_dt_free_map() (the vendor's pinctrl_utils_free_map is not
+ * exported to modules in vanilla 5.10). */
 static int luofu_dt_node_to_map(struct pinctrl_dev *pctldev,
 				struct device_node *np_config,
 				struct pinctrl_map **map,
 				unsigned int *num_maps)
 {
-	return pinconf_generic_dt_node_to_map(pctldev, np_config, map, num_maps);
+	return pinconf_generic_dt_node_to_map_all(pctldev, np_config, map,
+						  num_maps);
 }
 
 static const struct pinctrl_ops luofu_pctl_ops = {
@@ -426,7 +429,7 @@ static const struct pinctrl_ops luofu_pctl_ops = {
 	.get_group_name = luofu_get_group_name,
 	.get_group_pins = luofu_get_group_pins,
 	.dt_node_to_map = luofu_dt_node_to_map,
-	.dt_free_map = pinctrl_utils_free_map,
+	.dt_free_map = pinconf_generic_dt_free_map,
 };
 
 /* ---- pinmux ops (function enumeration + mux programming) ---- */
