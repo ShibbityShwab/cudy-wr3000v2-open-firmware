@@ -4130,3 +4130,186 @@ reboot was taken outside the cycle.
   `build/register-dumps/diffs/20261006T1545Z-vtool20/verdict.txt` (instrument/runner, CONFIRMED).
 - Specs `build/tmp/inta-spec/{race.md,stk3.md,eoir.md,stuck.md,layoutdiff.md}` (`race.md` sec.5 the
   mitigation, sec.6 the slot lever).
+
+# ADDENDUM 25 (2026-10-07): the official take6f capstone - THE SLOT GATE LANDS (the runner's preflight now REFUSES a wrong-slot boot before anything is armed), THE REBOOT LEVER REFUTES ITSELF (a boot-id-gated reboot did NOT move the slot), AND THE NAMING AND THE HALF-FORCE STAND AS ADDENDUM 24 LEFT THEM (MEASURED-BUT-UNCERTIFIED, pending a slot-B boot)
+
+ADDENDUM 24 measured the instrument and refused to certify it: the cycle boot came up on `mtd13
+"rootfsa"` instead of `mtd14 "rootfsb"`, so the runner's tail gate read the cells and FAILed the run
+(`INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT`). ADDENDUM 25 is the official capstone for that arc, and
+it does two things. It lands the SLOT GATE, the pre-cycle check that makes the same refusal happen
+before a cycle is spent instead of after. And it records the honest state of the two things the arc
+wanted: the naming and the force were measured on a wrong-slot boot, so they stand as they are, strong
+and still uncertified, until a `rootfsb` boot re-runs the SAME `take6f`.
+
+Nothing in this addendum writes a cell that ADDENDUM 24 did not already have. The new material is the
+gate itself, its live refusal, the mechanism that says why a reboot cannot clear it, and the writer
+that can.
+
+## Short version
+
+The slot gate is BUILT AND VERIFIED. It lives in `build/tmp/wifidrv1-art/run-take6f.sh`
+(md5 `41272389eb340815f0397230de1183f5`, 37 869 B) as a block inside `EXP_PREFLIGHT_CMD`, the string
+`tools/exp.sh` runs at `[0/7]` before the watchdog is armed and before anything is staged. It reads
+`/sys/class/ubi/ubi0/mtd_num` plus that `mtdN`'s name in `/proc/mtd`, cross-checks this boot's own
+`ubi0: attached mtd1[34] (name "rootfs[ab]"` dmesg line, and carries four refuse arms: unidentifiable,
+ident-conflict, wrong-image-slot, and the pre-existing literal-path arm that follows it unchanged.
+`vtool21` CONFIRMED all seven claims (`build/register-dumps/diffs/20261007T0044Z-vtool21/verdict.txt`),
+including the 7-arm decision table and the fact that a refusal costs ZERO device contact (a shimmed
+`ssh` shows `ssh_calls=0` on every host-side fail-closed branch).
+
+The live refusal is exact and it is on the record. The runner's own preflight string was run
+read-only against the box and printed:
+
+```
+preflight uptime=279s
+preflight leftovers=0
+preflight attach_failed_residue=0
+preflight stock_md5=0e530b976d5a20e87358671f1a577695
+preflight booted_slot=mtd13 name=rootfsa dmesg_attach=13 rom=/dev/ubiblock0_0 (mtd13=rootfsa stock 2.4.15 | mtd14=rootfsb custom 2.5.24)
+PREFLIGHT_FAIL_wrong_image_slot: booted_slot=mtd13:rootfsa want=mtd14:rootfsb (the CUSTOM image)
+PREFLIGHT_RC=1
+```
+
+The reboot lever was tried and REFUTED. The task's remedy was one boot-id-gated reboot, and it was
+taken: pre `e8e60346-d999-4739-a8d8-7730f0f83c96` -> post `f47bbc77-89d6-47a9-b299-dd38a2c4ca52`,
+uptime reset, box HEALTHY. The post-reboot read was `mtd13 "rootfsa"` again. A reboot does not move
+the slot, and the reason is now measured rather than guessed: `fw_printenv` shows
+`bootcmd=mtd read kernel${bootflag} ${loadaddr};bootfip ${loadaddr}` with `bootflag=a`, so u-boot
+loads `kernela` -> slot A on every boot while that variable says `a`. The in-boot
+`/sys/devices/platform/sysenv/boot_reg` (reads `10`) is a red herring: the sysenv driver OVERWRITES
+it at ~16 s on BOTH slots, which is why `race.md`'s "0x10 -> rootfsb" map was a coincidence.
+
+The naming and the force stay as ADDENDUM 24 left them - MEASURED BUT NOT CERTIFIED. `STK_STICKY =
+0x00000000` with `STK_ACT` (`GICD_ISACTIVER0` `0x40161300` word 0) `= 0x00000004` names the priority-0
+holder as **SGI 2 (id `0x2`)**, and the ranked EOIR force dropped the running priority
+(`STK_RPR1 = 0x000000FF` against `STK_15 = 0x00000000`) while its second half stayed one site over
+(`STK_HPP1 = 0x3FF`, `F_HPP = 0x0000004C`). Both are from a boot the gate REFUSED, so neither becomes
+a CERTIFIED take6f result here. The certification is a slot-B boot that re-runs the SAME instrument;
+the seal is `--eoir-id 0x2`, and the builder already refuses a bare or mismatched id, so the force
+cannot be spent on a guess.
+
+## The gate, and why it is a preflight and not a note
+
+The endpoint's binder is decided about 25 s before our module exists. On the stock slot the vendor's
+boot init insmods its pair by LITERAL path (`wifi_init.sh:79-80` ->
+`/lib/hisilicon/ko/hi5622v100_{plat,wifi}.ko`) and binds `59e7:0005` at 13.4 s, while `tools/exp.sh`'s
+hide renames only the `/lib/modules/<kver>/` copy the CUSTOM image resolves. A cycle booted on
+`mtd13` is therefore a NO-SAMPLE BY CONSTRUCTION: a spent cycle and a FAIL, never a take result. The
+gate's job is to make that a zero-mutation refusal instead.
+
+The identification is `cat /sys/class/ubi/ubi0/mtd_num` plus that mtdN's name in `/proc/mtd`, so
+`13` -> `rootfsa` (stock 2.4.15) and `14` -> `rootfsb` (custom 2.5.24). `vtool21` re-derived that
+choice independently and rejected the two alternatives: `/proc/cmdline` carries no `root=` token
+(init finds the rootfs through UBI), and `boot_reg` is volatile inside a boot. On a refusal the cost
+is one aborted invocation and no mutation: the runner's literal-path bound is cancelled by its own
+restore block after `exp.sh` returns, and the live probe after this session's runs confirms
+`PROBE_LITERAL_OMO_OFF=0`, `PROBE_MODULES_OMO_OFF=0`, `PROBE_GUARD=0`.
+
+## The refusal, and what it correctly does NOT say
+
+The runner's `EXP_CAPTURE_CMD` tail keeps ADDENDUM 24's decisive check on the cycle boot's OWN dmesg
+line (`ubi0: attached mtd14 (name "rootfsb"`). ADDENDUM 24's cells exist precisely because that tail
+gate reads the cells first and refuses second: it reported `NOT_HELD_WRONG_IMAGE_SLOT` while the
+capture hook still pulled every pad deposit. That is the right order for evidence, and it is also why
+the label has to be read carefully. `INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT` is a statement about
+the IMAGE SLOT, not about whether the instrument ran; the instrument's own execution is established
+separately, by `request_irq(207, IRQF_SHARED) rc=0`, `BAR0 base=0x40000000`, the 928 920 B `.omo-pat`
+upload, and the seven active-pad sentinels all reading `0x50AA7E49`.
+
+## The mechanism: why a reboot cannot clear the refusal
+
+A reboot re-enters the same slot, so it cannot satisfy a gate that asks for the other one. The real
+lever is the boot selector. u-boot's `bootcmd` reads `${bootflag}` and `fw_printenv` reports
+`bootflag=a`; moving the box to slot B means writing `bootflag=b` (the B env block into mtd3+mtd4, or
+the equivalent, per `build/custom/FLASH-PLAN.md` "Slot switch recipe"), rebooting, confirming the
+attach line names `mtd14`, and only then spending a cycle. That is a flash/env mutation. It is not
+named in this task, the task's own hard rule is to ABORT on `mtd13/rootfsa`, and `race.md` sec.6 and
+ADDENDUM 24 both defer it to its own gate, so it was raised as a decision, not taken.
+
+## Bounds (declared, not hidden)
+
+1. **No new cells.** Every register reading quoted here is ADDENDUM 24's, from the GATE-REFUSED boot
+   `build/register-dumps/exp/20261006-154734/`. This addendum adds no measurement, only the gate, the
+   refusal, and the mechanism.
+2. **The refusal is a pre-run reading on the STOCK slot.** The exact string was captured with the box
+   on `mtd13`; the `mtd14` PASS arm was exercised against the device's own `/proc/mtd` fixture
+   (`vtool21`, 7/7 arms), not on a live slot-B boot.
+3. **The reboot is evidence of a negative.** One boot-id-gated reboot did not move the slot. It is not
+   proof that no reboot ever could, only that the selector, not the reboot, is the lever.
+4. **`bootflag=a` is the u-boot environment, read via `fw_printenv`.** The write path (mtd3/mtd4) was
+   not exercised here and carries its own risk, namely the `HAZARDS.md` sec.4 rule of full dumps before
+   any write and one slot always stock.
+5. **The naming and the force stay uncertified.** Restating ADDENDUM 24's central honesty point: the
+   SGI-2 name and the `RPR 0x00 -> 0xFF` drop were read on a boot the gate refused, so the capping
+   proof BY TRANSITION at the DESIGNED pad site is still not established.
+
+## Verification and health
+
+Runner verdict `build/register-dumps/diffs/20261007T0044Z-vtool21/verdict.txt` (slot gate CONFIRMED,
+seven claims with two recorded deviations: the staging block's `FATAL`s end only the tee'd subshell,
+and the refusal is before the first CYCLE mutation rather than before the runner's own hide, which its
+restore undoes). Boot verdict `build/register-dumps/diffs/20261007T0050Z-vrun22/verdict.txt` (the
+ADDENDUM 24 take6f re-run: C1-C8 CONFIRMED, the honest branch T6-1 with the force HALF).
+`build/register-dumps/diffs/20261007T0051Z-vrunB4/verdict.txt` is a minted skeleton with no findings
+filed, so nothing is claimed from it. Health after this session: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`,
+`PAT=0 OMO_OFF=0 WIFIDRV1=0`, stock md5 `0e530b976d5a20e87358671f1a577695` unchanged, no new pstore,
+boot_id `f47bbc77-...` on `mtd13`. Hard rules held: no write of CA `0x400392f0`/`0x40039af0`; no read
+of `0x10161000`; no host read of the ack IAR `0x4016010c`; NO device cycle was run at all this session,
+so the bound was not spent and the single permitted device mutation was the boot-id-gated reboot.
+
+## The next threads
+
+- **Flash the selector, then reboot.** `bootflag=b` (B env block to mtd3+mtd4) plus the reboot, then
+  confirm `ubi0: attached mtd14 (name "rootfsb"`. That is the only step between here and a certifying
+  boot; it needs its own gate and its own dumps.
+- **Then re-run the SAME `take6f` and seal it with the measured id.** `--eoir-id 0x2` is the
+  prediction this arc makes. If the sampler names `0x2` again, the seal is honest and the force can be
+  spent on a measured id rather than a guess.
+- **Read only once the slot is right.** The gate is now what stops a wrong-slot run before it costs
+  anything. Leave it in place; it is the instrument that keeps a stock-slot boot from being read as a
+  result a second time.
+
+## Artifacts
+
+- Slot-refusal record `build/register-dumps/exp/20261007-004820-slotrefusal/`
+  (`slotgate-refusal.txt` the exact live preflight block, `reboot-attempt.log` the boot-id-gated
+  reboot with `PRE`/`POST` boot_ids and the post-reboot slot read,
+  `bootflag-mechanism-and-health.txt` the `fw_printenv` / dmesg / `/proc/mtd` evidence and health).
+- Runner `build/tmp/wifidrv1-art/run-take6f.sh` md5 `41272389eb340815f0397230de1183f5` (the slot gate,
+  pinned in `build/tmp/inta-spec/slotgate.md`); spec `build/tmp/inta-spec/{slotgate.md,race.md}`
+  (`slotgate.md` sec.1-3 the identification and the refuse arms, `race.md` sec.5-6 the mitigation and
+  the slot-B lever rationale).
+- Blob `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f892e922d0df0583f87fb1a2c` (66-B EOIR pad, 10/10
+  emitted); ko `wifidrv1.ko` md5 `3f87f1e9fe5ed9666f27d1f784d34535` (v8, unstaged this session).
+- Verdicts `build/register-dumps/diffs/20261007T0044Z-vtool21/verdict.txt` (slot gate, CONFIRMED),
+  `build/register-dumps/diffs/20261007T0050Z-vrun22/verdict.txt` (boot, GATE-REFUSED with T6-1), and
+  `build/register-dumps/diffs/20261006T1557Z-vrun21/verdict.txt` (ADDENDUM 24's boot, GATE-REFUSED).
+
+### 25a. THE OFFICIAL CAPSTONE RAN (appended 2026-10-07 by the orchestrator): SGI 2 NAMED ON THE CORRECT SLOT; THE FORCE DROPS RPR; THE RESIDUAL MOVES TO THE BANK/GROUP
+
+The slot was restored via the record's own verified recipe (`build/custom/env-bootflag-b.bin` into BOTH env
+copies + `boot_reg 0x21`; the fw_setenv path is a trap - the bootloader's selector is the sysenv register,
+and the env CRC is `crc32-little-endian(4)|flags(1)|data(131067)`), and the capstone then passed every gate
+(`GATE_MTD_NUM=14`, wiphy 2 / iface 6 / cal 1-1 / zero leftovers) and ran to completion
+(`build/register-dumps/exp/20261007-010906/`, exit 0, no pstore delta, every device-side leftover 0):
+
+- **EVERY PAD RAN**: the sentinels all read `0x50aa7e49` (`E_SNT/N_SNT/F_SNT/C_SNT/STK_SNT` + the retained
+  pairs) - the take6f layout fix + the slot discipline made the instrument execute end to end.
+- **THE STUCK ID IS NAMED: SGI 2.** `STK_STICKY=0x00000000` (some ring sample read `GICC_RPR=0x00`) and
+  **`STK_ACT=0x00000004`** - word 0 of `GICD_ISACTIVER0`, the bank NO cell had ever read, bit 2 set =
+  **SGI 2 is the priority-0 incumbent pinning the running priority** (`this addendum's T6-1`, verbatim).
+- **THE FORCE DROPS THE RUNNING PRIORITY**: `STK_RPR1=0x000000FF` after the single `GICC_EOIR 0x40160110
+  <= 0x2` write - the priority-0 incumbent retired on our write.
+- **THE RESIDUAL, IN THE INSTRUMENT'S OWN WORDS**: `STK_HPP1=0x000003FF` (not `0x4C`) with `STK_RPR1=0xFF`
+  -> **"the bank/group, not RPR, was blocking"** - a third gate above the two the arc already peeled
+  (arbitration at ADDENDUM 18; the SGI's RPR mask at 21a; now the bank/group selection), consistent with the
+  F-site positive control in this very boot (`F_HPP=0x0000004C`; `E_HPP=0x3FF`).
+- Also in-boot: `E_P4C=0xF050F000` (the promotion held), `E_EN2=0x5000` (the enable), `E_ISP=0x1021`
+  (0x4C pending throughout), `C_GRP0=0x000000FF` (canonical RPR, idle at its sample).
+
+**ARM B, SAME WINDOW**: the width-fixed `luofu-pcie` probe read SEVEN live DBI registers - including
+`dbi+0x004 PCI_COMMAND = 0x00100007` matching the vendor's written value - then took the external abort at
+**RC1's `dbi+0x082`** (fault address `0xc800a082` = RC1's map + 0x82): the readw fix covered rc0's entry;
+**RC1's parallel +0x082 site still reads 32-bit** (the fix is one more width change, per-RC). The crash
+record is pulled (`build/tmp/wifidrv1-art/pciskel-crash-pstore.txt`); the device recovered onto slot B
+unassisted (the slot recipe holds through a panic).

@@ -338,3 +338,41 @@ for every entry, including the one misaligned offset), not the RC design; do NOT
 panics deterministically. Hard rules held by the task: no read of `0x10161000`, no host read of the IAR
 `0x4016010c`, no write of CA `0x400392f0`, ko staged ALWAYS as `wifidrv1.ko`, and the reboot was gated on a NEW
 `boot_id`. Push authorization respected: only the submodule branch `omo/phase22-hccaccept`, never `master`.
+
+The arm-B3 RC probe is complete as a run whose gate REFUSED the image slot (2026-10-07, task `st_01a113d1`,
+report `build/tmp/inta-spec/pciskel-smoke2.md`, raw `build/tmp/wifidrv1-art/pciskel2/{_bootB3-gate-run.log,
+RESULT.txt,_bootB3-dryrun.txt}`): the width-fixed skeleton (`pciskel2`, ko md5 `51376f7608d6e5d60b0bb6fe09eb068e`,
+CI run `37553187016`, submodule commit `6e4cc73`) reached the `insmod force_probe=1` lane with `SELFTEST PASS`
+(the v1 lane's verifier proved to have teeth, A-F), and the run then STOPPED at THE SLOT CHECK before any
+mutation: `GATE FAILED: SLOT(want=mtd14:rootfsb got=mtd13:rootfsa)` - `boot_id=f47bbc77...`, uptime 335 s,
+`slot=mtd13:rootfsa (rom=/dev/ubiblock0_0 dmesg_attach=13)`, the stock 2.4.15, cross-checked three ways
+(`/sys/class/ubi/ubi0/mtd_num`=13, `/proc/mtd` mtd13=`rootfsa`, the boot dmesg `ubi0: attached mtd13`). So the
+run is a GATE-REFUSED, not a probe result, and the device was NOT touched: nothing staged, no insmod, no rmmod,
+no reboot - the health half was GREEN at the same instant (0 `.omo-pat`, 0 `.omo-off`, 0 leftovers,
+`luofu_pcie`/`wifidrv1` absent, `hi_pcie` + the vendor pair loaded, 2 wiphys, 6 ifaces, cal `[SUCC]` 2g+5g,
+`STOCK_MD5` at the pin), so the refusal is the slot alone. The run's FINDING, second observation after
+`race.md` sec.6: a boot-id-gated reboot does NOT flip the slot - the sibling reboot lane (`_capstone-reboot.log`,
+`st_01a113cf`) rebooted 00:42:54Z (`boot_id` `e8e60346` -> `f47bbc77`) and the box returned on
+`NEW_MTD_NUM=13 rootfsa`, `NEW_ATTACH=mtd13`, `boot_reg=10`, the same slot. THE SLOT CHECK is now IN the runner
+(`run-pciskel.sh`, line 167ff + selftest F): `slot_fail()` requires `/sys/class/ubi/ubi0/mtd_num`=14, its
+`/proc/mtd` name `rootfsb`, and the dmesg attach line to agree, and ABORTs on `mtd13`/`rootfsa`, an empty
+`mtd_num` or an ident conflict; ARM-A seriality rides the same gate (while a cycle marker `.omo-pat` / a hidden
+`.omo-off` / an `omo-*-guard.sh` is present, re-read up to 12x10 s = 120 s, then ABORT, never a 2nd device
+action). THE READ SET THE PROBE WILL DELIVER is fixed by the `pciskel2` fix and stays unspent on the device:
+`readw()` for the 16-bit cap registers (the misaligned `readl` at `dbi+0x082` was the v1 external abort), the
+full DBI + `cfg` inventory over a single width-aware accessor, and the **Link Status** read at `dbi+0x082` /
+`cfg+0x082` (`expect 0x2000 mask 0x2000` = DL_ACTIVE), plus `cfg+0x000` re-pinned to `0x000059e7 mask
+0x0000ffff` and `dbi+0x07c` correctly W32 `Link Capabilities` - all four defects the decoded `.rodata` tables
+and the inlined `ldrh` arm (5x `ldrh`) prove at the byte and instruction level (`_ko-bar.txt`,
+`_ko-symcheck.log`, `_ko-storecensus.log`). THE UNBLOCK is a flash/env lever with its own gate, not a reboot:
+restore slot B per `build/custom/FLASH-PLAN.md` "Slot switch recipe" (the B env block to mtd3+mtd4 + the
+selector in `/sys/devices/platform/sysenv/boot_reg`), reboot, confirm `attached mtd14`, then the one-command
+re-run `bash build/tmp/wifidrv1-art/run-pciskel.sh` - the verifier then requires `INSMOD_RC=0`, the rc0 banner +
+window plan, `rc0 [0x082] dbi+0x082` (the Link Status via `readw` - the fix), the 5 rc0 `match=YES` predictions,
+2x `FORCED probe PASS ... 0 writes`, `RMMOD_RC=0`, `LUOFU_AFTER_RMMOD=0`, `STAGED_LEFT=0`, no kernel fault and
+the `boot_id` UNCHANGED end to end. Hard rules held: CA `0x400392f0` never written, `0x10161000` never
+read/mapped (the module carries it only as a `%lx` argument, 0 occurrences in the ko), the host-side IAR
+`0x4016010c` never read, the device action serial + gate-checked, ko always staged as `wifidrv1.ko`, the router
+left healthy (untouched). ASSUMPTION carried (report sec.6): the brief's GATE names THE SLOT CHECK, so it was
+applied literally instead of running the read-only, slot-agnostic probe on the stock image; to take the value
+from the stock slot too, drop the `slot_fail` call from `run-pciskel.sh`.
