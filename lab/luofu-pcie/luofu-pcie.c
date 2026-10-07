@@ -47,13 +47,19 @@
  * polls.  Because misc is read-forbidden host-side, the READ-SAFE substitutes
  * the record prescribes are used instead (pcierc.md sec 4b): the DWC Link
  * Status DL_ACTIVE bit at DBI+0x82 / cfg+0x82, plus the DBI port-logic status
- * words (Link Control / Link Control 2 / Link Width-Speed Control).  The raw
+ * words (Link Capabilities / Link Control / Link Width-Speed Control).  The raw
  * LTSSM state therefore stays OUT of this skeleton by design - it lives only in
  * the read-forbidden misc window.
  *
  * HARD RULES honoured: never write CA 0x400392f0; never read the RC misc window
  * 0x10161000; never read the host-side GICC IAR 0x4016010c; no register write
- * of any kind from this module (readl() is the only MMIO op reachable).
+ * of any kind from this module.  The only MMIO ops are readb()/readw()/readl(),
+ * each picked to match the register's PCI spec width: a 32-bit readl() of a
+ * 2-byte register (e.g. the Link Status at dbi+0x082) is a MISALIGNED access
+ * that external-aborts the bus and PANICKED the box on the first forced probe
+ * (pciskel-smoke.md).  Sub-word registers therefore go through readw()/readb().
+ * TODO (write path): the future 16-bit writes (DBI+0x04 = 7, ASPM |= 3, the
+ * LTSSM |= writes) must use writew(), never writel().
  *
  * force_probe=1: the vendor kernel's live DT carries "hsan,pcie", not this
  * driver's compatible, so probe never fires (pcierc.md sec 5).  force_probe=1
@@ -73,6 +79,7 @@
 
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -110,10 +117,28 @@
  * ------------------------------------------------------------------ */
 #define DBI_VENDOR_DEVICE_ID	0x000u	/* type-1 header id (measurement) */
 #define DBI_COMMAND		0x004u	/* hi_pcie_init_cmd_status_reg writes 7 */
-#define DBI_LINK_CONTROL	0x07cu	/* hi_pcie_target_link_speed writes speed bits */
-#define DBI_LINK_CONTROL2	0x080u	/* hi_pcie_enable_aspm writes |= 3 (L0s|L1) */
+#define DBI_LINK_CAPABILITIES	0x07cu	/* the 32-bit Link Capabilities register */
+#define DBI_LINK_CONTROL	0x080u	/* 16-bit Link Control (ASPM bits 1:0; vendor |= 3) */
 #define DBI_LINK_STATUS		0x082u	/* DL_ACTIVE bit 13 (the safe link-up read) */
 #define DBI_LINK_WIDTH_SPEED	0x80cu	/* hi_pcie_check_link_status |= 0x20000 (retrain) */
+
+/*
+ * Register access widths (PCI/PCIe spec, see build/tmp/inta-spec/readw.md).
+ * The RC's DBI window is PCI *configuration space*, so a read must match the
+ * register's spec width: a 32-bit readl() of a 2-byte register is a misaligned
+ * access the SoC turns into an external abort (SError -> panic, pciskel-smoke.md).
+ * 0x000/0x004/0x008/0x02c are the type-1 header ID/COMMAND/class/subsystem
+ * (16/16/32/16 bits); 0x07c is the 32-bit PCIe-capability Link Capabilities
+ * register, and 0x080/0x082 are the Link Control / Link Status halves (16/16
+ * bits) of the 32-bit word at 0x080.  All three are confirmed by the live RC's
+ * own readback (pciskel-smoke.md sec 4): 0x07c = 0x00734c12 (5GT/s x1, L0s+L1
+ * ASPM support) and 0x080 = 0x70120000 ({Link Control = 0x0000, Link Status =
+ * 0x7012}).  0x80c is the 32-bit Link Width/Speed Control.  The DWC iATU file
+ * (0x900..0x924) is DWC-internal and stays 32-bit.
+ */
+#define W8	1u
+#define W16	2u
+#define W32	4u
 
 /* DWC iATU register file (pcierc.md sec 1).  0x900 selects the viewport; the
  * seven words at 0x904..0x91c are that viewport's CTRL1/CTRL2/base/limit/target.
@@ -197,10 +222,30 @@ static const struct luofu_iatu_entry luofu_iatu_rc1[] = {
  */
 struct luofu_pcie_reg {
 	u16 offset;
+	u8 width;		/* PCI width of the register: W8/W16/W32 */
 	const char *name;
 	u32 expect;
 	u32 mask;
 };
+
+/*
+ * The width-aware read.  This is the fix for the pciskel-smoke.md panic: the
+ * Link Status register at dbi+0x082 / cfg+0x082 is 16-bit, and a 32-bit readl()
+ * of it is a misaligned access the SoC external-aborts on.  Everything reads
+ * through this one function so a register's width cannot be forgotten at a call
+ * site.  Still read-only: readb/readw/readl are the only MMIO ops in the module.
+ */
+static u32 luofu_pcie_read(void __iomem *base, u16 off, u8 width)
+{
+	switch (width) {
+	case W8:
+		return readb(base + off);
+	case W16:
+		return readw(base + off);
+	default:
+		return readl(base + off);
+	}
+}
 
 /* DBI status inventory (read-only).  Only pure-read status words live here; no
  * register with a write side effect is reachable through this table. */
@@ -208,33 +253,46 @@ static const struct luofu_pcie_reg luofu_dbi_status[] = {
 	/* The RC's own type-1 header id: the vendor's `read_conf` exposes only the
 	 * downstream devfn 0, so Linux never reads this and the record carries no
 	 * proven value -> measurement only. */
-	{ DBI_VENDOR_DEVICE_ID, "dbi+0x000  RC vendor/device id (type-1 header)", 0, 0 },
+	{ DBI_VENDOR_DEVICE_ID, W16, "dbi+0x000  RC vendor/device id (type-1 header)", 0, 0 },
 	/* hi_pcie_init_cmd_status_reg writes 7; the I/O-enable bit reads RO0 on this
 	 * SoC (the endpoint's own cfg+0x004 readback is 0x6), so predict MEM|MASTER. */
-	{ DBI_COMMAND,          "dbi+0x004  PCI_COMMAND (vendor writes 7)", 0x00000006u, 0x00000006u },
-	{ DBI_LINK_CONTROL,     "dbi+0x07c  Link Control", 0, 0 },
-	/* hi_pcie_enable_aspm writes |= 3 (L0s + L1). */
-	{ DBI_LINK_CONTROL2,    "dbi+0x080  Link Control 2 (vendor |= 3 ASPM)", 0x00000003u, 0x00000003u },
-	/* The safe link-up read that replaces the forbidden misc+0x100. */
-	{ DBI_LINK_STATUS,      "dbi+0x082  Link Status (DL_ACTIVE bit 13)", LS_DL_ACTIVE, LS_DL_ACTIVE },
+	{ DBI_COMMAND,          W16, "dbi+0x004  PCI_COMMAND (vendor writes 7)", 0x00000006u, 0x00000006u },
+	/* Link Capabilities is its own 32-bit register, not a 16-bit Link Control: the
+	 * live readback 0x00734c12 decodes as max-speed 5GT/s, max-width x1, ASPM
+	 * L0s+L1 support (pciskel-smoke.md sec 4).  Measurement only. */
+	{ DBI_LINK_CAPABILITIES, W32, "dbi+0x07c  Link Capabilities", 0, 0 },
+	/* hi_pcie_enable_aspm writes |= 3 (L0s + L1) into Link Control's ASPM field,
+	 * but the live vendor boot reads that field OFF - the word at 0x080 reads
+	 * {Link Control = 0x0000, Link Status = 0x7012} (pciskel-smoke.md sec 4), so
+	 * the prediction is re-pinned to 0: the pre-fix `expect 3` was a bad
+	 * predictor, not a lost measurement (pciskel-smoke.md sec 7). */
+	{ DBI_LINK_CONTROL,     W16, "dbi+0x080  Link Control (vendor |= 3 ASPM)", 0x00000000u, 0x00000003u },
+	/* The safe link-up read that replaces the forbidden misc+0x100.  W16: a
+	 * 32-bit read of this 2-byte register is the panic. */
+	{ DBI_LINK_STATUS,      W16, "dbi+0x082  Link Status (DL_ACTIVE bit 13)", LS_DL_ACTIVE, LS_DL_ACTIVE },
 	/* Bit 17 is the SPEED_CHANGE trigger (write-1-to-initiate, self-clearing),
 	 * so a 0 readback on a live link is normal -> measurement only. */
-	{ DBI_LINK_WIDTH_SPEED, "dbi+0x80c  Link Width/Speed Ctl (bit17=trigger)", 0, 0 },
+	{ DBI_LINK_WIDTH_SPEED, W32, "dbi+0x80c  Link Width/Speed Ctl (bit17=trigger)", 0, 0 },
 };
 
 /* cfg status inventory (read-only): the downstream endpoint's dev-0 header.
  * Expected values from the live vendor evidence (epinit readback + boot dmesg
  * `pci 0000:00:00.0: [59e7:0005] type 00 class 0x028000`). */
 static const struct luofu_pcie_reg luofu_cfg_status[] = {
-	{ CFG_VENDOR_DEVICE_ID, "cfg+0x000  endpoint vendor/device id [59e7:0005]",
-	  0x000559e7u, 0xffffffffu },
-	{ CFG_COMMAND,          "cfg+0x004  endpoint PCI_COMMAND (MEM|MASTER)",
+	/* W16: the read returns the vendor-ID half only (0x59e7), so the expect must be
+	 * that half - the pre-fix readl carried the full dword 0x000559e7, and a
+	 * full-dword expect can never equal a 16-bit read. */
+	{ CFG_VENDOR_DEVICE_ID, W16, "cfg+0x000  endpoint vendor/device id [59e7:0005]",
+	  0x000059e7u, 0x0000ffffu },
+	{ CFG_COMMAND,          W16, "cfg+0x004  endpoint PCI_COMMAND (MEM|MASTER)",
 	  0x00000006u, 0x00000006u },
-	{ CFG_CLASS_REVISION,   "cfg+0x008  endpoint class/revision (class 0x028000)",
+	/* W32: class/revision is a 32-bit header dword at a 4-byte-aligned offset. */
+	{ CFG_CLASS_REVISION,   W32, "cfg+0x008  endpoint class/revision (class 0x028000)",
 	  0x02800000u, 0xffffff00u },
-	{ CFG_SUBSYSTEM_ID,     "cfg+0x02c  endpoint subsystem vendor (19e5)",
+	{ CFG_SUBSYSTEM_ID,     W16, "cfg+0x02c  endpoint subsystem vendor (19e5)",
 	  0x000019e5u, 0x0000ffffu },
-	{ CFG_LINK_STATUS,      "cfg+0x082  endpoint Link Status (DL_ACTIVE bit 13)",
+	/* W16: sub-word Link Status -> readw, the sibling of the dbi+0x082 bug. */
+	{ CFG_LINK_STATUS,      W16, "cfg+0x082  endpoint Link Status (DL_ACTIVE bit 13)",
 	  LS_DL_ACTIVE, LS_DL_ACTIVE },
 };
 
@@ -268,8 +326,10 @@ static void luofu_pcie_decode_link_status(struct device *dev, const char *win,
 }
 
 /*
- * Read-only inventory of one register table.  readl() is the only MMIO op in
- * the whole module; the table holds offsets only, so a write cannot be
+ * Read-only inventory of one register table.  Each word is fetched through
+ * luofu_pcie_read() at its declared width, so the module's MMIO ops are
+ * readb/readw/readl matched to the register - never a 32-bit read of a 2-byte
+ * register.  The table holds offsets + widths only, so a write cannot be
  * expressed here.  Returns the number of predicted words that matched.
  */
 static unsigned int luofu_pcie_inventory(struct device *dev, const char *win,
@@ -282,17 +342,17 @@ static unsigned int luofu_pcie_inventory(struct device *dev, const char *win,
 	*predicted = 0;
 	for (i = 0; i < n; i++) {
 		const struct luofu_pcie_reg *r = &tab[i];
-		u32 v = readl(base + r->offset);
+		u32 v = luofu_pcie_read(base, r->offset, r->width);
 
 		if (!r->mask) {
-			dev_info(dev, "  %s [0x%03x] %s = 0x%08x (measurement)\n",
-				 win, r->offset, r->name, v);
+			dev_info(dev, "  %s [0x%03x] %s = 0x%04x (%u-bit, measurement)\n",
+				 win, r->offset, r->name, v, r->width * 8);
 			continue;
 		}
 		(*predicted)++;
 		if ((v & r->mask) == r->expect)
 			matched++;
-		dev_info(dev, "  %s [0x%03x] %s = 0x%08x expect 0x%08x/0x%08x match=%s\n",
+		dev_info(dev, "  %s [0x%03x] %s = 0x%04x expect 0x%08x/0x%08x match=%s\n",
 			 win, r->offset, r->name, v, r->expect, r->mask,
 			 (v & r->mask) == r->expect ? "YES" : "NO");
 		if (r->offset == DBI_LINK_STATUS || r->offset == CFG_LINK_STATUS)
