@@ -54,12 +54,16 @@
  * with devm_ioremap() and runs a READ-ONLY status inventory (crgbind.md).  It
  * is a no-op the day a luofu DT node exists.
  *
- * write_test=1 / write_flip=1 (wrspec.md / wrdesign.md, "THE WRITE PATH"
- * below): the forced path can additionally exercise the CRG's WRITE side as a
- * bounded, self-terminating probe.  Stage 1 is a no-op flip (set -> clear ->
- * restore-pre) of every gate in luofu_gates[] with a read-back per step; stage
- * 2 (compile-gated behind -DLUOFU_CRG_FLIP) flips ONE bit, pcie0_clk, and
- * restores it.  Both default 0, so a bare insmod stays read-only forever.
+ * write_test=1 / write_flip=1 (wrspec.md / wrdesign.md / flip.md, "THE WRITE
+ * PATH" below): the forced path can additionally exercise the CRG's WRITE side
+ * as a bounded, self-terminating probe.  Stage 1 is a no-op flip (set -> clear
+ * -> restore-pre) of every gate in luofu_gates[] with a read-back per step;
+ * stage 2 (compile-gated behind LUOFU_CRG_FLIP) is the ONE ranked flip of
+ * flip.md -- gate offset 0x14 bit 0x18 (i2c0_clk), launched in the CLEAR
+ * direction (read -> clear -> observe -> set-back, PASS iff the read-back ==
+ * pre), because that is the only direction whose undo (the SET) is a store this
+ * latch class is measured to honour.  Both knobs default 0, so a bare insmod
+ * stays read-only forever.
  */
 
 #include <linux/bitops.h>
@@ -201,7 +205,7 @@ MODULE_PARM_DESC(write_test,
 static int write_flip;
 module_param(write_flip, int, 0444);
 MODULE_PARM_DESC(write_flip,
-	"with write_test=1 on the forced path, flip the single pcie0_clk bit (0x20 bit 0x0c) and restore it; needs -DLUOFU_CRG_FLIP");
+	"with write_test=1 on the forced path, flip i2c0_clk (0x14 bit 0x18) by ONE slow bit: clear -> observe -> set-back, PASS iff post == pre; needs the flip compiled in (LUOFU_CRG_FLIP)");
 
 /*
  * The store counter that enforces THE BOUND (see "THE WRITE PATH" below):
@@ -364,30 +368,99 @@ static unsigned int luofu_crg_write_test(struct device *dev, void __iomem *base)
 	return flips;
 }
 
-#ifdef LUOFU_CRG_FLIP
 /*
- * Stage 2 -- the ONE permitted real flip, compile-gated so a default CI
- * artifact physically cannot carry it (wrspec.md sec 3).  pcie0_clk = 0x20
- * bit 0x0c, the RC0 gate: probed 1 pre-attach and 0 in takeover, so set +
- * restore is the smallest diff against the desired end state.  Refused, with
- * no store, unless the pre-read shows the bit CLEAR.
+ * ================ STAGE 2 -- THE ARMED FLIP (flip.md) ================
+ * THE COMPILE GATE.  The stage-2 store is a build-time property, never a
+ * runtime accident: everything below sits inside `#if LUOFU_CRG_FLIP`, and a
+ * build line can always turn it off with -DLUOFU_CRG_FLIP=0.  Task st_01a11447
+ * ("arm the flip") sets the default to 1 so the CI lane
+ * (lab-module-build -> luofu-clk-ko) ships the instrument.  Arming is NOT
+ * reachability: the store still needs force_probe=1 AND write_test=1 AND
+ * write_flip=1, so a bare insmod of this same artifact performs ZERO stores.
+ *
+ * THE TARGET (flip.md sec 3 rank 1, sec 4): 0x14 bit 0x18 `i2c0_clk`.  The
+ * i2c0 controller at 0x10111000 has no client node in the pinned tree and no
+ * `i2c` line in any boot log, so nothing behind the gate moves (no bus, no
+ * periodic MMIO); it is also the one gate register whose reg-offset the pinned
+ * DTS states explicitly (`reg-offset = <0x14>`, clk@14880000 :205) instead of
+ * being reconstructed from the unit address.  The gate table entry already
+ * exists (luofu_gates[] LUOFU_CLK_I2C0).
+ *
+ * THE DIRECTION (flip.md sec 1/2) -- the previous shape was WRONG in this
+ * respect.  The crgwrite smoke measured this latch class write-1-SETABLE but
+ * NOT write-0-CLEARABLE (0x14 bit 0x0e: the set took, the clear and its
+ * write-0 "restore" were both ignored), so a SET of an already-0 bit is
+ * one-way here and the old `set -> clear-back` could never come back.  This
+ * instrument therefore launches the CLEAR of an already-set bit:
+ *
+ *   pre = readl(0x14)                       (no store)
+ *   refuse with ZERO stores unless pre bit 0x18 is SET   (the one-way SET
+ *                                                        direction is never
+ *                                                        entered)
+ *   flip = rmw(0x14, 0x18, clear)           store 1
+ *   observe readl(0x90), readl(0x100)       (read-only status words only)
+ *   post = rmw(0x14, 0x18, set)             store 2 -- the undo IS the
+ *                                           direction this latch is measured
+ *                                           to honour
+ *   PASS iff post == pre
+ *
+ * Fails closed: if the clear does not take (the measured expectation) nothing
+ * changed at all.  Budget LUOFU_FLIP_WRITES = 2; a third store is refused.
  */
+#ifndef LUOFU_CRG_FLIP
+#define LUOFU_CRG_FLIP 1	/* armed; build with -DLUOFU_CRG_FLIP=0 to drop it */
+#endif
+
+#if LUOFU_CRG_FLIP
+
+#define LUOFU_FLIP_OFF	0x14u	/* clk@14880000 gate 0, pinned :205 */
+#define LUOFU_FLIP_BIT	0x18	/* i2c0_clk, pinned :226 */
+#define LUOFU_FLIP_NAME	"i2c0_clk"
+
 static int luofu_crg_write_flip(struct device *dev, void __iomem *base)
 {
-	u32 pre = readl(base + 0x20), set, back;
+	u32 pre = readl(base + LUOFU_FLIP_OFF);
+	u32 flip, post;
+	u32 obs[ARRAY_SIZE(luofu_crg_safe)];
+	unsigned int i;
+	bool took;
 
-	if (pre & BIT(0x0c)) {
-		dev_warn(dev, "WRITE_FLIP refused: pcie0_clk (0x20 bit 0x0c) already set (0x%08x)\n",
-			 pre);
+	if (!(pre & BIT(LUOFU_FLIP_BIT))) {
+		dev_warn(dev, "WRITE_FLIP refused: %s off=0x%02x bit=0x%02x reads 0 (pre=0x%08x) - only the CLEAR of an already-set bit is a permitted flip on this latch class (a SET of a 0 bit is one-way), 0 stores\n",
+			 LUOFU_FLIP_NAME, LUOFU_FLIP_OFF, LUOFU_FLIP_BIT, pre);
 		return -EBUSY;
 	}
-	set  = luofu_crg_rmw(base, 0x20, 0x0c, 1);
-	back = luofu_crg_rmw(base, 0x20, 0x0c, 0);
-	dev_info(dev, "WRITE_FLIP pcie0_clk off=0x20 bit=0x0c pre=0x%08x -> set=0x%08x (bit=%u) -> restored=0x%08x\n",
-		 pre, set, !!(set & BIT(0x0c)), back);
-	if (!(set & BIT(0x0c)))
-		return -EIO;
-	return back == pre ? 0 : -EIO;
+
+	dev_info(dev, "WRITE_FLIP %s off=0x%02x bit=0x%02x pre=0x%08x store 1/2 = the clear\n",
+		 LUOFU_FLIP_NAME, LUOFU_FLIP_OFF, LUOFU_FLIP_BIT, pre);
+	flip = luofu_crg_rmw(base, LUOFU_FLIP_OFF, LUOFU_FLIP_BIT, 0);
+	took = !(flip & BIT(LUOFU_FLIP_BIT));
+
+	/* OBSERVE.  These are the only two words the pinned tree licenses as
+	 * pure reads (CRG_STATUS :375/:376, WDT_ISTATUS :1519).  They are logged
+	 * and NOT adjudicated: 0x90 bit 0x13 moves between boots with no store
+	 * at all (crgprobe.md sec 3).  The gate's own block (0x10111000) is never
+	 * read while cleared -- that is the external-abort class. */
+	for (i = 0; i < ARRAY_SIZE(luofu_crg_safe); i++)
+		obs[i] = readl(base + luofu_crg_safe[i].offset);
+	dev_info(dev, "WRITE_FLIP observe [0x%03x]=0x%08x [0x%03x]=0x%08x (dynamic - NOT flip evidence)\n",
+		 luofu_crg_safe[0].offset, obs[0], luofu_crg_safe[1].offset, obs[1]);
+	dev_info(dev, "WRITE_FLIP clear read-back=0x%08x i2c0 bit=%u (%s)\n",
+		 flip, took ? 0u : 1u,
+		 took ? "the clear TOOK - a plain RMW in the clear direction"
+		      : "the clear was IGNORED - write-1-set latch confirmed on a second gate");
+
+	dev_info(dev, "WRITE_FLIP %s store 2/2 = the set-back\n", LUOFU_FLIP_NAME);
+	post = luofu_crg_rmw(base, LUOFU_FLIP_OFF, LUOFU_FLIP_BIT, 1);
+
+	dev_info(dev, "WRITE_FLIP %s: pre=0x%08x -> clear=0x%08x -> set-back=0x%08x: %s (%u stores total)\n",
+		 LUOFU_FLIP_NAME, pre, flip, post,
+		 post == pre ? "PASS post == pre" : "FAIL post != pre",
+		 luofu_write_count);
+	if (post != pre)
+		dev_err(dev, "WRITE_FLIP FAIL: %s left at 0x%08x, not pre 0x%08x - the gate may be left CLEARED; recover = the SoC watchdog/reset\n",
+			LUOFU_FLIP_NAME, post, pre);
+	return post == pre ? 0 : -EIO;
 }
 #endif /* LUOFU_CRG_FLIP */
 
@@ -448,9 +521,16 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	 * mask must still hold after the stores. */
 	if (write_test && !pdev->dev.of_node) {
 		luofu_crg_write_test(&pdev->dev, crg->base);
-#ifdef LUOFU_CRG_FLIP
+#if LUOFU_CRG_FLIP
+		if (write_flip) {
+			int rc;
+
+			rc = luofu_crg_write_flip(&pdev->dev, crg->base);
+			dev_info(&pdev->dev, "WRITE_FLIP rc=%d\n", rc);
+		}
+#else
 		if (write_flip)
-			luofu_crg_write_flip(&pdev->dev, crg->base);
+			dev_warn(&pdev->dev, "write_flip=1 ignored: the flip is not compiled in (LUOFU_CRG_FLIP=0)\n");
 #endif
 		luofu_crg_inventory(&pdev->dev, crg->base, true);
 	} else if (write_test) {
