@@ -5379,3 +5379,307 @@ receipts say: every gate GREEN except the shape, nothing mutated, the box health
   `build/tmp/inta-spec/gogate.md`.
 - Prior records in this file: ADDENDUM 33 (the six-lane code sprint) and, for the lane that produced the
   candidate, `../UPSTREAM-PORT-PLAN.md`'s kernel-console prep and code-sprint status blocks.
+
+# ADDENDUM 35 (2026-10-07): the slot restore - the vendor sysupgrade, the one-way door back to the stock pair (branches: BOTH-SLOTS-STOCK, slot A back on 2.4.15 + slot B on the 2.5.24 kernelb it kept)
+
+The `bootflag` lock the previous addendum pinned is now behind us, and it was a restore, not a flash. This
+record is written from the receipts and the verdict, not from a device action of its own: the recorder ran
+no cycle, staged nothing, rebooted nothing, made no commit and pushed nothing, so every value below is
+quoted from a file with its path.
+
+## What this settles
+
+ADDENDUM 34 closed with the port's first own-kernel boot still owed and the only lever that remained being
+an env/flash mutation. The sibling lane took that lever, but not to slot B: it wrote STOCK 2.5.24 into the
+inactive slot through the vendor's OWN mechanism, which puts the box back on the two-slot stock pair the
+port's first flash window needs as its base and its rollback. Slot A holds stock 2.4.15 again (it was
+running 2.4.15 when the restore began), slot B holds stock 2.5.24, and slot B's own factory `kernelb` was
+never touched - the earlier `98b11f29...` read and the host-side `98b11f29...` backup both predate this
+window and neither moved.
+
+The image is the vendor container, not a flat slice: `firmware/2.5.24.bin` opens with `hboot1tag`, so it
+routes through the vendor's `hi_do_upgrade` path exactly as `recipe.md` sec.4 describes, and the custom
+rootfs the port had been booting from slot B is gone.
+
+## What was run
+
+- The flow, one serial sequence, the vendor's own code path end to end (`recipe.md`; the recipe states the
+  same flow is what the UI's own reboot/apply button issues, and that both paths go through
+  `/lib/upgrade`): login to `/cgi-bin/luci/admin/wizard` (`recipe.md` sec.1) -> upload the `.bin` to
+  `/cgi-bin/luci/admin/system/upgrade` (`sec.2`) -> `sysupgrade -T /tmp/fw.bin` (`"firmware verify ok"`,
+  RC=0) -> `/sbin/sysupgrade /tmp/fw.bin` (`"Commencing upgrade. Closing all shell sessions."`).
+- Flash requested `2026-10-07T08:05:16Z`; the pre-state was `boot_id ec1ab9e0-f402-49ec-8634-53eb6a964014`,
+  `rom_version 2.4.15-20251030-114751`, `bootflag=a`, `/sys/class/ubi/ubi0/mtd_num=13` (rootfsa),
+  `WIPHY=2 IFACE=6 CAL2G=[SUCC] CAL5G=[SUCC]`, `.omo-off=0`, staged ko 0.
+- A UI repair was a precondition, not a side effect: every `/cgi-bin/luci` path answered HTTP 500
+  `module 'bdinfo' not found` because an earlier session's overlay shadowed the stock LuCI tree with an
+  incomplete 2.5.24 copy whose dispatcher wants a `bdinfo` Lua module the slot does not ship. 26 files
+  were restored from `/rom` (backed up to `/tmp/omo-luci-bak/luci.tgz` on the device, tmpfs, so it is gone
+  now and the repair is not reversible from the box) and the login form rendered again.
+
+## The receipts
+
+The upload was accepted by the vendor's own confirm view (quoted from the record, `up_body.html`):
+`Uploaded File: WR3000V2-R116-2.5.24-sysupgrade.bin`, `MD5: bc40580943e8a9865bb8288d3294f687`,
+`Size: 21.00 MB (22024351 B)`. The verifier re-hashed the host artifact itself this session and all three
+agree: `firmware/2.5.24.bin` = sha256 `ded2d835ed22a4fb26a305c999603631ea846dc5ef8f512aa006d72dd31d2f72`,
+md5 `bc40580943e8a9865bb8288d3294f687`, 22,024,351 B.
+
+The reboot and slot receipt (quoted from the record sec.4, and from the device's own syslog in
+`build/tmp/slotrestore/syslog.txt`): exactly ONE boot log (`Booting Linux`, `[0.000000]`) that attaches
+mtd14 - `ubi0: attached mtd14 (name "rootfsb", size 23 MiB)` - while the pre-slot was mtd13 `"rootfsa"`,
+with the in-boot `boot_reg` mirrored the other way round (`show boot_reg: 10` then `store boot_reg: 11`,
+against the old slot's `11 -> 10`). `/etc/rom_version` and the live UI footer both read
+`2.5.24-20260727-122111`, and `/www`'s Last-Modified moved from 30 Oct 2025 to 27 Jul 2026. VERDICT: stock
+2.5.24 is running from mtd14/rootfsb.
+
+Health, every line from the settle before the reboot and the device's own boot log (sec.5): 4 hostapd vaps
+`AP-ENABLED` (vap0/vap3/vap8/vap11), `alg:[SUCC]` x14 (calibration), `netlink_info_cnt:6`, both radios
+beaconing (2.4G SSID Cudy-1C73 ch6 40 MHz, 5G SSID Cudy-1C73-5G ch48 160 MHz), no `.omo-off` module in
+play. The box answers now on 80 and 443 with the unchanged credentials, so `/etc/config` survived the
+switch.
+
+Settle timing, quoted: the restore flash was requested `2026-10-07T08:05:16Z`; the health/log capture is
+stamped `2026-10-07T08:00:3xZ`; the read-only close-out probe ran `2026-10-07T08:2xZ`. This recorder added
+no device contact: it ran no ssh, no devmem, no register read and no cycle, so every figure in this
+addendum is quoted from the restore's own artifacts and the adversarial verdict.
+
+## The verdict, including what it refuses to claim
+
+`build/register-dumps/diffs/20261007T0822Z-vrestore/verdict.txt` (task `st_01a11573`, read-only, host-side,
+one HTTP re-probe over the LAN): C1-C4 CONFIRMED, C5 UNAVAILABLE. The one honest gap is the MANDATED
+GATE: **no NEW `boot_id` read**. The restored slot does not listen on port 22 (only 80/443 are open), so
+`/proc/sys/kernel/random/boot_id` could not be read post-flash and the lab's ssh health probe
+(`.sshwrap/rsh.sh`, the WIPHY/IFACE/CAL/OMO_OFF counters) could not be run either. The reboot is carried
+by convergent indirect witness instead: the ssh session reset at `08:05:17Z`, the release change
+2.4.15 -> 2.5.24, the release-dependent `/www` mtime, a ~12-minute uptime, a single fresh boot log, and
+the slot switch 2.4.15/mtd13/rootfsa -> 2.5.24/mtd14/rootfsb. That is a real precision gap in the gate,
+and the record says so in terms rather than dressing it up.
+
+A stale `File is invalid. Please retry.` alert sits in `up_body.html`; it came from an earlier empty-probe
+POST and the ACCEPTED upload's md5/size block is the confirm view quoted above, so it contradicts nothing.
+
+## The restore's own bounds (declared, not hidden)
+
+The activate ran over ssh (`sysupgrade`), not through the UI page's reboot/apply button. Both issue the
+identical `sysupgrade '/tmp/firmware.img'`; this window used the ssh route, and the UI's login and upload
+were used and captured. One consequence to carry: SSH IS NOT LISTENING on the restored slot, so the port
+lane 2.5.24 is reachable again only after its own access layer is flashed - do not expect the ssh health
+probe to work on this box until then.
+
+What it was NOT: no lab cycle, no ko staged, no devmem, no register window, no bound to trip. The restore
+used the vendor's own mechanism on a verified image, and the rollback (boot the other slot) is inherent to
+the slot pair. Hard rules held by the restore and by its verifier: CA `0x400392f0` never written; CA
+`0x40039af0` never written; the RC misc `0x10161000` never read; the host-side IAR `0x4016010c` never
+read; the device action serial and gate-checked; nothing staged as a module (staged ko 0); no commit, no
+push. The one rule that could not be satisfied to the letter is the reboot gate itself, and sec.7 D3 of
+the verdict is where that is written down.
+
+## Health and cleanup
+
+`WIPHY=2 IFACE=6 CAL2G=[SUCC] CAL5G=[SUCC]`, `.omo-off=0`, staged ko 0, both radios beaconing under the
+stock 2.5.24 UI, no new pstore, box live on 80/443. The device ends HEALTHY on stock 2.5.24, which is the
+preferred state on both slots, and the stock state it replaced is functional too. No `.omo-off` leftovers.
+
+## Artifacts
+
+- Record `build/tmp/slotrestore/restore.md` (task `st_01a1155b`); recipe `build/tmp/slotrestore/recipe.md`.
+- Live captures `build/tmp/slotrestore/` (`login_hdr.txt`, `up_hdr.txt`, `up_body.html`, `wizard.html`,
+  `pg_status.html`, `pg_system.html`, `home2.html`, `syslog.txt`, `syslog.html`).
+- Image `firmware/2.5.24.bin` sha256 `ded2d835...`, md5 `bc405809...`, 22,024,351 B (re-hashed by the
+  verifier this session).
+- Verdict `build/register-dumps/diffs/20261007T0822Z-vrestore/verdict.txt` (C1-C4 CONFIRMED, C5
+  UNAVAILABLE, one limitation).
+- Marker/history: `build/custom/kernelb-2.5.24-full.img` sha256 `98b11f29...` (the slot B kernel rollback
+  source, unwritten this window); stock `FIRMWARE.bin` md5 `0e530b976d5a20e87358671f1a577695`, unchanged.
+- Prior records in this file: ADDENDUM 27 (the reboot lever refuted itself: `bootflag=a` under u-boot's
+  `bootcmd=mtd read kernel${bootflag}`) and ADDENDUM 34 (the first own-kernel window's NO-GO), which named
+  this restore as the route.
+
+## Next branch
+
+One thing turns the gap above into a plain CONFIRMED: read `/proc/sys/kernel/random/boot_id` on the
+restored slot when the port lane's access layer is back, and compare it against the pre-flash id
+`ec1ab9e0-...`. A port lane 2.5.24 flashed over slot B is what CERTIFIES this addendum's gate with the
+direct witness, and it is the same flash the first own-kernel window is waiting on.
+
+# ADDENDUM 36 (2026-10-07): the custom-bin restore - the vendor UI took the bytes and refused the image (branches: CUSTOM-BIN-REFUSED at the RSA gate, box unchanged and HEALTHY; the sentinel and ubiformat branches NOT TAKEN)
+
+This is the record of the custom `.bin` lane's end to end state: an image was BUILT and independently
+verified, the vendor UI was handed it, the UI accepted our bytes and then refused the image at its RSA
+gate, and nothing on the box moved. No restore in the sense of a device change exists to record, because
+no write ever reached a partition; what this addendum restores is the port's own shelf of prepared
+artifacts (the 0.3 rootfs, a 2.5.24-shaped container, and the vendor's one proven writer) at a known,
+verified state. Like ADDENDUM 35, this record is written from receipts, not from a device action of its
+own: the recorder ran one read-only HTTP health probe on the live UI, staged nothing, wrote no register,
+rebooted nothing, made no commit and pushed nothing.
+
+## What this settles
+
+The port lane that has been booting a custom 2.5.24 rootfs understands this: the sentinel/ubiformat route
+documented in `container.md` sec.6 and `build.md` sec.5 is NOT reachable from the vendor UI on this
+build, and the reason is now measured on both halves rather than argued. The upload leg works (our bytes,
+our md5, and our size land in the vendor's own confirm view), and the apply leg is refused by `oem-check`
+before `image_demux` ever runs, so a modified full container cannot ride the UI. A successful run needs a
+shell on the box, and this slot ships none.
+
+The image itself is sound. The independent verdict pinned every claim the builder made: the container has
+the 2.5.24 shape, its single squashfs volume is the 0.3 rootfs, and its kernel is the stock 5.10.201 slice.
+
+## What was built (host only, no device)
+
+`build/tmp/custombin/mkcustombin.py` (task `st_01a115bc`) wrote a UBI volume by hand and spliced it into
+the vendor container, because no packer exists here (`ubinize`, `mksquashfs`, `unsquashfs` are all
+absent). The geometry is re-measured off the stock image: PEB 131,072, `vid_hdr_offset` 2048,
+`data_offset` 4096, LEB 126,976, and the CRC convention `zlib.crc32(buf) ^ 0xFFFFFFFF` big-endian,
+confirmed on every stock field.
+
+- Container `build/tmp/custombin/omo-custom.bin` = 22,155,423 B, sha256
+  `5ee732d6c14e868d825dd8f4f3489a8c3af76cebac9cbbc9a599667823b086ce`, md5
+  `83745b6db1524cb94b565fa227a21d83`. That is the stock 22,024,351 B plus exactly one PEB (+131,072 B),
+  because the 0.3 squashfs is one LEB larger than stock.
+- Raw volume `build/tmp/custombin/omo-custom.ubi` = 16,646,144 B, sha256
+  `94bf00c0376e2842a6e54bab7adbd7f396f0c2ccb6980117f4540912f768ca78` (the `ubiformat` vehicle).
+- Demux payload `build/tmp/custombin/omo-custom.pkg` = 21,627,513 B, md5
+  `77dbc0e59aa8d7040f07768ffcc119c9`; this is the FIT `data` blob at
+  `omo-custom.bin[0x808A4 : 0x808A4+0x14A0279]`, and `crc32(pkg) == 0x8d7f5ce1` equals the container's
+  recomputed FIT `hash@1`.
+- The builder's own self-test re-derives the stock UBI from its payload and compares it byte for byte
+  (`rebuild == stock UBI: True`), then re-checks every EC header, VID header, `data_crc` and vtbl record
+  CRC of the new volume and round-trips its payload back to `rootfs-custom-0.3.sqfs`.
+
+## The verdict (host only, adversarial)
+
+`build/register-dumps/diffs/20261007T0955Z-vbin/verdict.txt` (task `st_01a115c9`, no device cycle, no
+commit, no push): C1 CONFIRMED, C2 CONFIRMED, C3 CONFIRMED, one defect named and bounded.
+
+- C1 the container keeps the 2.5.24 shape. Regions `[0:0x4A2C94]` and `[0x1462C94:]` are byte-identical to
+  stock except for nine FIT/descriptor bytes and four `hash@1` bytes, and every one of them is exactly
+  what the +131,072 B move forces: `totalsize` 0x014807ac -> 0x014a07ac, `size_struct` and `off_strings`
+  and the `data` length each +131,072, the descriptor's UBI size 0x00fc0000 -> 0x00fe0000 (126 -> 127 PEB),
+  the descriptor CRC 0xc423aa02 -> 0xda0ad29a, and `hash@1` @0x1500b74 -> @0x1520b74, 0x6e93800e ->
+  0x8d7f5ce1. Both CRCs recompute to their stored fields.
+- C2 the extracted squashfs is the 0.3 rootfs. `tools/extract_firmware.py` reassembled 15,751,790 B whose
+  sha256 `1f59bddf4b7bfedb2958367192dfe33a9daaa699d2d597c8c9f94b41ae4ced2a` equals
+  `rootfs-custom-0.3.sqfs[:15,751,790]`; inside it are the 0.3 marker
+  `/etc/custom-firmware-version = "omo-minimal-0.3 stock-2.5.24-20260727-122111"` and the ssh layer
+  (`/etc/init.d/omosshd` = dropbear on 22 START=95, its `S95omosshd` enable symlink,
+  `/etc/config/dropbear`, two `authorized_keys`, an md5-crypt root hash in `/etc/shadow`). Both are
+  absent from the stock rootfs, which is the control this claim needs.
+- C3 the kernel is untouched. The uImage at 0x080E5C is `Linux-5.10.201`, 4,292,080 B, load = ep =
+  0x80608000, and the pre-region diff contains zero kernel bytes. 0.3 is built on the 2.5.24 base (same
+  vermagic), so that is expected.
+- The one defect, and it is the whole reason the UI refuses: field R4. The RSA-2048 block at 0x80000 is
+  the STOCK signature, unchanged, because we hold no Cudy private key. The signature covers data our
+  build changed, so `oem-check` fails it by construction. The verdict files six other checks
+  (R1 size cap, R2 header CRC, R3 data CRC, R5 the 0x18 digest, R6 the un-modelled 0x5C u32, R7 the
+  device-side `hi_ipc` check) as PASS, self-consistent, or named-but-unsettleable host-side; R4 is the
+  only rejection, and it is inherent to any un-re-signed image, not a build fault.
+
+## What the vendor UI did with it (the flash attempt, task `st_01a115cb`)
+
+Record `build/tmp/custombin/flash.md`; driver `build/tmp/custombin/ui.sh`; live captures in
+`build/tmp/custombin/rcpt/`. The device is on stock 2.5.24 (slot B, mtd14/rootfsb) with ports 80 and 443
+open and 22 closed, so the UI is the only surface.
+
+- The upload was ACCEPTED as bytes. `POST /cgi-bin/luci/admin/system/upgrade`, the browser's own
+  multipart shape including `cbid.upgrade.1.firmware.upload=true` (without that field the file is
+  dropped; reproduced, then fixed), returned HTTP 200 with the vendor's confirm block populated from OUR
+  file: `Uploaded File: omo-custom.bin`, `MD5: 83745b6db1524cb94b565fa227a21d83`, `Size: 21.13 MB
+  (22155423 B)`. The control, the genuine `firmware/2.5.24.bin`, produced the same block on the same
+  endpoint with `alert-info` and `X-CBI-State: 0`. Transport is fine; the danger state is a content
+  verdict.
+- The image was REFUSED at the gate. Proceed on our image (`cbid.upgrade.1.proceed=1`, which runs
+  `sysupgrade -T /tmp/firmware.img` = `platform_check_image`) returned HTTP 200, `X-CBI-State: 1`,
+  `File is invalid. Please retry.` The same button on the genuine image returned 302 to
+  `/cgi-bin/luci/admin/system/reboot?upgrade=`. The device's own syslog names the failing step:
+  `rsa_verify: rsa verify failed: -1`. That is `oem-check` on the RSA-2048 block, exactly R4. A failed
+  check returns before `image_demux`, so nothing was staged for a write.
+- No reboot happened, and nothing was written. Post-attempt the box still reports one boot on the same
+  slot, the same version, and answers on 80/443. There is no slot switch and no partition write to
+  report.
+
+## The health, and the one probe this recorder ran
+
+The attempt's own capture (sec.5 of `flash.md`, from the live UI): version `2.5.24-20260727-122111`,
+4 hostapd vaps `AP-ENABLED` (vap0/vap3/vap8/vap11), `alg:[SUCC]` x14 across both bands, 6 netdevs, both
+radios beaconing, no `.omo-off`, nothing staged as a module. This recorder added one read-only check of
+its own: `ui.sh login` returned `LOGIN-OK` and `GET /cgi-bin/luci/admin/system/status` returned
+`http:200` with `Firmware Version 2.5.24 US`. Ports re-probed: 80 and 443 open, 22 closed. The box ends
+HEALTHY and unmodified on stock 2.5.24.
+
+## Why the shell-free workaround was closed (both halves measured)
+
+The only documented bypass of the RSA gate is the sentinel `/tmp/upgrade_check_done`:
+`platform_check_image` returns 0 before `oem-check` if the file exists (`lib/upgrade/platform.sh:142-144`),
+and a succeeding check touches it (`:159`). A UI-only route ("verify the genuine image, then swap in the
+custom one, then apply") is closed by the vendor's own model, and the attempt proved it rather than
+assuming it. The upgrade model
+(`decomp/auditB/model__cbi__system__upgrade.lua.txt`) registers a file handler that on EVERY upload runs
+`rm -f $(readlink -f /tmp/firmware.img) /tmp/firmware.img /tmp/upgrade_check_done`. Measured: a stock
+upload then Proceed gives 302 and the sentinel persists (a second Proceed with no upload between still
+gives 302); uploading the custom payload removes the sentinel, and Proceed then gives 200 plus
+`File is invalid`. The custom payload can only reach `/tmp/firmware.img` through an upload, and that
+upload always removes the sentinel, so the two cannot coexist over HTTP. A directory or symlink
+substitution does not satisfy `[ -f ]`, and no path outside the upgrade model writes that file.
+
+Out of band there is no shell primitive either. Port 22 is closed. The documented authenticated `systime`
+injection is INERT on 2.5.24: `POST .../system/systime` with `'; touch /www/omo-rce-test; #` returned 200
+and the marker is ABSENT (`/luci-static/omo-rce-probe.txt` -> 302 while the known-good
+`/luci-static/bootstrap/js/cbi.js` -> 200), which matches `gist-cudy-wr3000v2-systime-rce.md` ("fixed in
+2.5.24") and `PLAN-UART.md`'s audited sweep. No UART adapter is assumed present, so the console last
+resort is out of scope for this lane.
+
+## The branches this record does NOT claim
+
+- The RESTORE branch is not taken: no image was written, so there is no restored state to describe. What
+  is restorable is an artifact shelf, and it is verified intact.
+- The SENTINEL branch (`touch /tmp/upgrade_check_done` then `sysupgrade`) and the UBIFORMAT branch
+  (`ubiformat /dev/mtd13 -y -f omo-custom.ubi`) both need a shell, and neither ran. They stay the route,
+  not a result.
+- The SSH claim is UNCHANGED and PRECISE: this slot ships no dropbear and gates ssh/telnet on the
+  `bdinfo dbg` bit / `/etc/rom_dbg` (`PLAN-UART.md`), so the `.sshwrap/rsh.sh` health probe cannot run
+  here and the `boot_id` read that would turn ADDENDUM 35's C5 gap into a plain CONFIRMED is still
+  unavailable from stock 2.5.24. The custom image is what would restore ssh, and that is exactly the
+  image the vendor check refuses.
+
+## What it was NOT
+
+No lab cycle, no ko staged, no devmem, no register window, no bound to trip, no reboot, no partition
+write. Hard rules held by the builder, the verifier, the UI attempt and this recorder: CA `0x400392f0`
+never written; CA `0x40039af0` never written; the RC misc `0x10161000` never read; the host-side IAR
+`0x4016010c` never read; the device action serial; nothing staged as a module (staged ko 0); no commit,
+no push. Transient residue left on the device, none of it affecting health: a staging
+`/upgrade/firmware.img` plus a `/tmp/firmware.img` symlink, and the sentinel was cleared by the final
+upload. `/upgrade` is wiped at every boot by `init.d/hsan_start:clear_upgrade`, and the vendor's own
+`future 120` cleanup fires when the upgrade form is fetched.
+
+## Artifacts
+
+- Builder `build/tmp/custombin/mkcustombin.py` (task `st_01a115bc`), build record `build.md`, verification
+  record `build/tmp/custombin/verify.sh` + `_verify-run.txt`.
+- Verdict `build/register-dumps/diffs/20261007T0955Z-vbin/verdict.txt` (task `st_01a115c9`; C1-C3
+  CONFIRMED, defect R4 named).
+- Flash attempt `build/tmp/custombin/flash.md` (task `st_01a115cb`), driver `ui.sh`, live captures
+  `build/tmp/custombin/rcpt/` (`login_hdr.txt`, `up_hdr.txt`, `up_body.html`, `proc_hdr.txt`,
+  `proc_body.html`, `get_admin_system_status.html`, `..._syslog.html`, `systime_form.html`,
+  `rce_post.html`).
+- Image sha pins: `omo-custom.bin` `5ee732d6...` 22,155,423 B / md5 `83745b6db1524cb94b565fa227a21d83`;
+  `omo-custom.ubi` `94bf00c0...` 16,646,144 B; `omo-custom.pkg` md5 `77dbc0e59aa8d7040f07768ffcc119c9`;
+  the stock inputs `firmware/2.5.24.bin` `ded2d835...` and `build/custom/rootfs-custom-0.3.sqfs`
+  `55f5c5b4...`.
+- Prior records in this file: ADDENDUM 35 (the slot restore, which put the box back on the stock pair and
+  left it without ssh) and ADDENDUM 32 (the arm-C RC write path), which set the shelf this image was
+  prepared against.
+
+## Next branch
+
+Two moves turn this refusal into a flash. First, a shell on the box, which means either the custom image
+itself (chicken and egg, so not this route) or the port lane's own access layer reaching the restored
+slot. Second, with that shell, the sentinel route already written down: `touch /tmp/upgrade_check_done`,
+then `sysupgrade /root/omo-custom.bin` or `ubiformat /dev/mtd13 -y -f omo-custom.ubi`, then a slot switch
+and a boot. The artifact the writer needs is prepared, since `omo-custom.pkg` is exactly what
+`image_demux` hands the vendor writer and its `crc32` matches the container's `hash@1`. When the port
+lane's 2.5.24 is up with ssh, the first read there is still `/proc/sys/kernel/random/boot_id` against
+ADDENDUM 35's pre-flash id `ec1ab9e0-f402-49ec-8634-53eb6a964014`.
+

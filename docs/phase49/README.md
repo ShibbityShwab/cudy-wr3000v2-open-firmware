@@ -890,3 +890,102 @@ LOADER=0`, stock md5 `0e530b976d5a20e87358671f1a577695` untouched. Blob `take7c.
 `0x40160120`, no `GICD_SGIR` read, no commit, no push. Next: deposit a matched PRE/POST `RPR` pair (or a
 sticky/OR-folded ACTIVE term) to separate "the store retires nothing" from "the epoch re-forms in the window",
 then re-put the rank-1-vs-rank-2 question to the chip.
+
+## ADDENDUM 32 (2026-10-07): the slot restore - the vendor sysupgrade put STOCK 2.5.24 into the inactive slot and rebooted onto it, so the box is back on the stock pair (slot A on stock 2.4.15, slot B on stock 2.5.24 with its own factory `kernelb` untouched)
+
+ADDENDUM 34 of `gic-view.md` closed with the port's first own-kernel boot still owed and the only remaining
+lever being an env/flash mutation. A sibling lane took that lever, but not to slot B: it wrote STOCK 2.5.24
+into the inactive slot through the vendor's OWN mechanism, and the box now sits on the two-slot stock pair
+the first flash window needs as its base. This block is the pointer for the restore, recorded in full as
+`gic-view.md` **ADDENDUM 35** ("the slot restore"); as with the earlier blocks, this README's numbering is
+its own.
+
+**The flow, one serial sequence, the vendor's own code path.** Login to `/cgi-bin/luci/admin/wizard`
+(`recipe.md` sec.1), upload the `.bin` to `/cgi-bin/luci/admin/system/upgrade` (`sec.2`), then
+`sysupgrade -T /tmp/fw.bin` (`"firmware verify ok"`, RC=0) and `/sbin/sysupgrade /tmp/fw.bin`
+(`"Commencing upgrade. Closing all shell sessions."`). The recipe states the same flow is what the UI's own
+reboot/apply button issues, since both go through `/lib/upgrade`; this window used the ssh route and captured
+the UI's login and upload. Flash requested `2026-10-07T08:05:16Z`. A UI repair was a precondition: every
+`/cgi-bin/luci` path answered HTTP 500 `module 'bdinfo' not found` because an earlier session's overlay
+shadowed the stock LuCI tree with an incomplete 2.5.24 copy, so 26 files were restored from `/rom` (backed
+up to `/tmp/omo-luci-bak/luci.tgz`, tmpfs, gone now).
+
+**The receipts.** The upload's own confirm view quotes `MD5: bc40580943e8a9865bb8288d3294f687`, `Size: 21.00
+MB (22024351 B)`, and the verdict re-hashed the host image itself: sha256
+`ded2d835ed22a4fb26a305c999603631ea846dc5ef8f512aa006d72dd31d2f72`, md5 `bc40580943e8a9865bb8288d3294f687`,
+22,024,351 B. The device's own syslog holds exactly ONE boot log and attaches the OTHER rootfs,
+`ubi0: attached mtd14 (name "rootfsb", size 23 MiB)`, where the pre-slot was mtd13 `"rootfsa"` on
+2.4.15-20251030-114751; `/etc/rom_version` and the live UI footer both read `2.5.24-20260727-122111`.
+Health: 4 hostapd vaps `AP-ENABLED` (vap0/vap3/vap8/vap11), `alg:[SUCC]` x14, 6 netdevs, no `.omo-off`.
+
+**Slot A's book-keeping, stated precisely.** Slot A carries STOCK 2.4.15 again, because a wrong-slot boot
+earlier in the day had attached mtd13 and the restore's mechanism writes the slot opposite the RUNNING
+flag. Its own rootfs was never erased, so calling this a slot A restore is right: the box now holds the
+stock 2.4.15 rootfs it booted on, on slot A, with slot B on stock 2.5.24. Slot B's factory `kernelb`
+(`98b11f29...`, the live read and the host-side backup) was never touched, and the custom 2.5.24 rootfs the
+port had been booting from slot B is gone.
+
+**The verdict, including what it refuses to claim.** `build/register-dumps/diffs/20261007T0822Z-vrestore/verdict.txt`
+(task `st_01a11573`, read-only, host-side, one HTTP re-probe over the LAN) files C1-C4 CONFIRMED and C5
+UNAVAILABLE. The residual is the MANDATED GATE: no NEW `boot_id` read. The restored slot does not listen on
+port 22, so `/proc/sys/kernel/random/boot_id` was unreadable post-flash and the ssh health probe could not
+run either; the reboot is carried by convergent indirect witness instead (the ssh session reset at
+`08:05:17Z`, the release change 2.4.15 -> 2.5.24, the release-dependent `/www` mtime, a ~12-minute uptime, a
+single fresh boot log, the slot switch 2.4.15/mtd13/rootfsa -> 2.5.24/mtd14/rootfsb). That is a precision gap
+in the GATE, not in the outcome.
+
+**What it was NOT:** no lab cycle, no ko staged, no devmem, no register window, no bound to trip. Hard rules
+held by the restore and its verifier: CA `0x400392f0` never written; CA `0x40039af0` never written; the RC
+misc `0x10161000` never read; the host-side IAR `0x4016010c` never read; the device action serial and
+gate-checked; nothing staged as a module (staged ko 0); no commit, no push. One consequence to carry: SSH IS
+NOT LISTENING on the restored slot, so the port lane 2.5.24 is reachable again only after its own access
+layer is flashed - do not expect the ssh health probe on this box until then. Recorder: no device action of
+its own, no commit, no push.
+
+**Next:** when the port lane 2.5.24 is back with ssh, read `/proc/sys/kernel/random/boot_id` and compare it
+against the pre-flash id `ec1ab9e0-f402-49ec-8634-53eb6a964014`. That read turns the gate into a plain
+CONFIRMED without re-flashing anything, and it is the same slot the first own-kernel flash window is waiting
+on.
+
+## ADDENDUM 33 (2026-10-07): the custom-bin restore - the vendor UI took the bytes and refused the image at its RSA gate, so the flash route needs a shell the slot does not have, and the box stays healthy on stock 2.5.24
+
+The port lane's prepared image exists and is verified, and the vendor UI will not take it. That is the whole
+of this block's finding: `build/tmp/custombin/omo-custom.bin` is a 2.5.24-shaped container carrying the 0.3
+rootfs on the stock 5.10.201 kernel, an independent verdict confirms every structural claim, and the UI's own
+`oem-check` refuses it because the RSA-2048 block at 0x80000 is still Cudy's. Recorded in full as `gic-view.md`
+**ADDENDUM 36** ("the custom-bin restore"); as with the earlier blocks, this README's numbering is its own.
+
+**The build, in one table.** `mkcustombin.py` (task `st_01a115bc`) writes the UBI volume by hand and splices it
+into the vendor container, because no packer exists in this repo (`ubinize`, `mksquashfs`, `unsquashfs` are all
+absent). The stock geometry is re-measured (PEB 131,072, `vid_hdr_offset` 2048, `data_offset` 4096, LEB 126,976)
+and the CRC convention `zlib.crc32(buf) ^ 0xFFFFFFFF` is confirmed on every existing field. The result is the
+stock container plus exactly one PEB (+131,072 B), with every dependent FIT field moved to match: `omo-custom.bin`
+22,155,423 B sha256 `5ee732d6...b086ce`, md5 `83745b6db1524cb94b565fa227a21d83`; its raw volume `omo-custom.ubi`
+16,646,144 B sha256 `94bf00c0...`; and the demux payload `omo-custom.pkg` md5 `77dbc0e59aa8d7040f07768ffcc119c9`,
+which is exactly what `image_demux` hands the vendor writer.
+
+**The verdict, including the one defect.** `build/register-dumps/diffs/20261007T0955Z-vbin/verdict.txt` (task
+`st_01a115c9`, host-only, no device) confirms C1 (the container keeps the 2.5.24 shape), C2 (the extracted
+squashfs is the 0.3 rootfs, marker and ssh layer included, absent from stock), and C3 (the kernel slice is the
+stock 5.10.201 uImage, byte-identical). The single defect is field R4: the stock RSA block no longer matches the
+modified payload, we hold no Cudy private key, so the strict UI check fails it by construction. That is not a build
+fault, and the verdict files it apart from the six other checks it ran.
+
+**What the UI did.** Login to `/cgi-bin/luci/admin/wizard` returned 302 with `sysauth` set, the upload of
+`omo-custom.bin` was ACCEPTED (the confirm block quotes our own `MD5: 83745b6db1524cb94b565fa227a21d83` and
+`Size: 21.13 MB (22155423 B)`), and Proceed returned 200 with `File is invalid. Please retry.` where the genuine
+image returns 302 to the reboot page. The device syslog names the step: `rsa_verify: rsa verify failed: -1`. No
+reboot, no slot switch, no partition write. The shell-free workaround is closed on both halves: the upgrade model
+deletes `/tmp/upgrade_check_done` on every upload (`decomp/auditB/model__cbi__system__upgrade.lua.txt`), so the
+sentinel and the custom payload cannot coexist over HTTP, and the authenticated `systime` injection is measured
+INERT on 2.5.24.
+
+**Health.** The box ends HEALTHY and unmodified on stock 2.5.24: 4 hostapd vaps `AP-ENABLED`, `alg:[SUCC]` x14,
+6 netdevs, no `.omo-off`, live on 80/443. Hard rules held throughout: CA `0x400392f0` never written, the RC misc
+`0x10161000` never read, nothing staged as a module, no commit, no push. Recorder: one read-only HTTP health probe
+(`LOGIN-OK`, `http:200`), nothing more.
+
+**Next:** the flash route needs a shell, and this slot ships none (stock 2.5.24 gates ssh on the `bdinfo dbg` bit).
+When the port lane reaches the box with ssh, `touch /tmp/upgrade_check_done` then `sysupgrade /root/omo-custom.bin`
+(or `ubiformat /dev/mtd13 -y -f omo-custom.ubi`), then a slot switch and the `boot_id` read that also closes
+ADDENDUM 32's gate gap.
