@@ -48,15 +48,24 @@ detailed in `build/tmp/inta-spec/pcierc.md` sec.5):
    `ARCH_LUOFU`) have no Kconfig entry yet - each needs one, with a prompt and
    the matching `select` of rule 1. Until then the CI lane reports exactly
    those as "requested but not in final `.config`", which is the to-do list.
-4. **Baked in, not modules.** The vendor carries many of these as `.ko`; a
+4. **`PSTORE_BLK` / `MTD_PSTORE` are deliberately absent.** In 5.10.201
+   `PSTORE_BLK` `depends on BROKEN`, and `BROKEN` is promptless with nothing
+   selecting it (`init/Kconfig:116`) - pstore-on-MTD is unreachable in a vanilla
+   tree, so a fragment cannot enable it. The vendor does (hence their
+   `pstore_blk`/`mtdpstore` modules); the luofu port must `select BROKEN` from
+   `MTD_NAND_LUOFU` or carry the vendor Kconfig patch. `PSTORE`,
+   `PSTORE_CONSOLE` and `PSTORE_RAM` are set normally.
+5. **Baked in, not modules.** The vendor carries many of these as `.ko`; a
    self-contained OpenWrt target wants them `=y` (stage2.md sec.3 note).
 
 ## Build / verify
 
 - `opensource/.github/workflows/luofu-kernel-config.yml` (trigger `omo/**` +
-  `workflow_dispatch`) runs the kernel's own `merge_config.sh` +
+  `workflow_dispatch`) runs the kernel's own `merge_config.sh -m` +
   `olddefconfig` against the real 5.10.201 Kconfig and asserts every
   non-`NEW` symbol survived; a full `zImage` build is the opt-in
   `build_kernel` dispatch input (the boilerplate OpenWrt/vanilla evaluation).
+  Green run: **`37573150202`** on `c40637a` - 47/47 non-`NEW` symbols resolved
+  `=y`, the 13 `NEW` ones listed as the to-do.
 - The reasoning and the symbol-by-symbol classification live in
   `build/tmp/inta-spec/kcfg.md`.

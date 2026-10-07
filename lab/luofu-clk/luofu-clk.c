@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * luofu-clk: stage-1 skeleton for the Hi5671Y "luofu" CRG clock + reset
- * controller (DT compatible "hisilicon,luofu-crg").
+ * luofu-clk: the Hi5671Y "luofu" CRG clock + reset controller driver
+ * structure (DT compatible "hisilicon,luofu-crg").
+ *
+ * ================  STAGE-2 DRIVER STRUCTURE  ================
+ * Evolved from the stage-1 design skeleton (which carried only the shape):
+ * the pinned geometry is now the live register model (16 gates + 2 muxes +
+ * 2 PLLs in structs, "THE CRG MODEL") and a real clk_ops set (gate/mux/PLL,
+ * "THE DRIVER OPS") registers a DT onecell clock tree through the generic
+ * clk-provider API.  The forced-probe smoke path and the bounded write
+ * instruments (write_test/write_flip/rst_flip) are UNCHANGED below.
  *
  * ==========================  SKELETON  ==========================
  * A DESIGN SKELETON: it carries the shape (of_match_table + probe/remove +
@@ -131,25 +139,33 @@ struct luofu_gate {
 	u16 offset;
 	u8 bit;
 	const char *name;
+	const char *parent;	/* pinned `clocks = <phandle>` -> output name */
 };
 
+/*
+ * parent = the fixed input clock each gate fans out from, transcribed from the
+ * pinned `clocks = <phandle>` cell (luofu-r116-pinned.dts): <0x6>=apb_clk,
+ * <0x7>=ahb_clk, <0x8>=gemacN_clk, <0x9>=lsw_dp_clk, <0xa>=lsw_pfe_clk.  The
+ * <0x8>/<0x9>/<0xa> parents are FIXED clocks, not other gates -- the gate
+ * output names differ (gemac_clk0 vs gemacN_clk; lsw_dp_clk0 vs lsw_dp_clk).
+ */
 static const struct luofu_gate luofu_gates[] = {
-	{ LUOFU_CLK_SFC,     0x14, 0x00, "sfc_clk"      },	/* :236 */
-	{ LUOFU_CLK_GPIO0,   0x14, 0x14, "gpio0_clk"    },	/* :206 */
-	{ LUOFU_CLK_GPIO1,   0x14, 0x15, "gpio1_clk"    },	/* :216 */
-	{ LUOFU_CLK_I2C0,    0x14, 0x18, "i2c0_clk"     },	/* :226 */
-	{ LUOFU_CLK_LED_PWM, 0x14, 0x0e, "led_pwm"      },	/* :246 */
-	{ LUOFU_CLK_PCIE0,   0x20, 0x0c, "pcie0_clk"    },	/* :286 */
-	{ LUOFU_CLK_PCIE1,   0x20, 0x0d, "pcie1_clk"    },	/* :296 */
-	{ LUOFU_CLK_GMAC0,   0x20, 0x13, "gemac_clk0"   },	/* :306 */
-	{ LUOFU_CLK_GMAC1,   0x20, 0x14, "gemac_clk1"   },	/* :316 */
-	{ LUOFU_CLK_GMAC2,   0x20, 0x15, "gemac_clk2"   },	/* :326 */
-	{ LUOFU_CLK_GMAC3,   0x20, 0x16, "gemac_clk3"   },	/* :336 */
-	{ LUOFU_CLK_GMAC4,   0x20, 0x17, "gemac_clk4"   },	/* :346 */
-	{ LUOFU_CLK_MDIO0,   0x20, 0x03, "mdio_clk0"    },	/* :276 */
-	{ LUOFU_CLK_LSW_DP,  0x20, 0x00, "lsw_dp_clk0"  },	/* :256 */
-	{ LUOFU_CLK_LSW_PFE, 0x20, 0x01, "lsw_pfe_clk0" },	/* :266 */
-	{ LUOFU_CLK_PIE,     0x20, 0x19, "pie_clk0"     },	/* :356 */
+	{ LUOFU_CLK_SFC,     0x14, 0x00, "sfc_clk",      "apb_clk"     },	/* :236 */
+	{ LUOFU_CLK_GPIO0,   0x14, 0x14, "gpio0_clk",    "apb_clk"     },	/* :206 */
+	{ LUOFU_CLK_GPIO1,   0x14, 0x15, "gpio1_clk",    "apb_clk"     },	/* :216 */
+	{ LUOFU_CLK_I2C0,    0x14, 0x18, "i2c0_clk",     "apb_clk"     },	/* :226 */
+	{ LUOFU_CLK_LED_PWM, 0x14, 0x0e, "led_pwm",      "apb_clk"     },	/* :246 */
+	{ LUOFU_CLK_PCIE0,   0x20, 0x0c, "pcie0_clk",    "apb_clk"     },	/* :286 */
+	{ LUOFU_CLK_PCIE1,   0x20, 0x0d, "pcie1_clk",    "apb_clk"     },	/* :296 */
+	{ LUOFU_CLK_GMAC0,   0x20, 0x13, "gemac_clk0",   "gemacN_clk"  },	/* :306 */
+	{ LUOFU_CLK_GMAC1,   0x20, 0x14, "gemac_clk1",   "gemacN_clk"  },	/* :316 */
+	{ LUOFU_CLK_GMAC2,   0x20, 0x15, "gemac_clk2",   "gemacN_clk"  },	/* :326 */
+	{ LUOFU_CLK_GMAC3,   0x20, 0x16, "gemac_clk3",   "gemacN_clk"  },	/* :336 */
+	{ LUOFU_CLK_GMAC4,   0x20, 0x17, "gemac_clk4",   "gemacN_clk"  },	/* :346 */
+	{ LUOFU_CLK_MDIO0,   0x20, 0x03, "mdio_clk0",    "gemacN_clk"  },	/* :276 */
+	{ LUOFU_CLK_LSW_DP,  0x20, 0x00, "lsw_dp_clk0",  "lsw_dp_clk"  },	/* :256 */
+	{ LUOFU_CLK_LSW_PFE, 0x20, 0x01, "lsw_pfe_clk0", "lsw_pfe_clk" },	/* :266 */
+	{ LUOFU_CLK_PIE,     0x20, 0x19, "pie_clk0",     "ahb_clk"     },	/* :356 */
 };
 
 /*
@@ -159,11 +175,14 @@ struct luofu_mux {
 	const char *name;
 	u16 offset;
 	u8 mask;
+	const char *parents[2];	/* pinned `clocks = <ph0 ph1>` -> output names */
 };
 
 static const struct luofu_mux luofu_muxes[] = {
-	{ "cpu_mux",   0x138, 0x8 },	/* cpu_mux@01388  :390 */
-	{ "efuse_mux", 0x138, 0x2 },	/* efuse_mux@0138 :401 */
+	/* cpu_mux: <0x4 0x5> = clk_pll1 "cpu-clk" + clk_pll2 "lsw-clk". */
+	{ "cpu_mux",   0x138, 0x8, { "cpu-clk", "lsw-clk" } },	/* :390 */
+	/* efuse_mux: <0xb 0x3> = efuse_ring_clk + osc. */
+	{ "efuse_mux", 0x138, 0x2, { "efuse_ring_clk", "osc" } },	/* :401 */
 };
 
 /*
@@ -176,11 +195,12 @@ struct luofu_pll {
 	u16 ctrl_offset;
 	u16 status_offset;
 	u8 status_bit;
+	const char *parent;	/* pinned `clocks = <0x3>` = osc */
 };
 
 static const struct luofu_pll luofu_plls[] = {
-	{ "cpu-clk", 0x198, 0x90, 0x1e },	/* clk_pll1@0198 :366 */
-	{ "lsw-clk", 0x1e0, 0x90, 0x1b },	/* clk_pll2@01e0 :378 */
+	{ "cpu-clk", 0x198, 0x90, 0x1e, "osc" },	/* clk_pll1@0198 :366 */
+	{ "lsw-clk", 0x1e0, 0x90, 0x1b, "osc" },	/* clk_pll2@01e0 :378 */
 };
 
 /*
@@ -254,11 +274,39 @@ static const struct luofu_crg_reg luofu_crg_safe[] = {
 	{ 0x100, "WDT_ISTATUS", 0x00000000u },
 };
 
+/*
+ * Per-instance clock wrappers: embed the generic clk_hw and point back at the
+ * owning CRG instance and the transcribed table row (id).  This is the
+ * standalone-module stand-in for the hisi_clock_data infra (crg.h), which a
+ * loadable .ko cannot link: the hisilicon clk helpers are in-tree objects,
+ * not EXPORT_SYMBOL_GPL.
+ */
+struct luofu_gate_clk {
+	struct clk_hw hw;
+	struct luofu_crg *crg;
+	unsigned int id;
+};
+
+struct luofu_pll_clk {
+	struct clk_hw hw;
+	struct luofu_crg *crg;
+	unsigned int id;
+};
+
+struct luofu_mux_clk {
+	struct clk_hw hw;
+	struct luofu_crg *crg;
+	unsigned int id;
+};
+
 /* Per-instance state. */
 struct luofu_crg {
 	void __iomem *base;
-	/* TODO: struct hisi_clock_data *clk_data;        (crg.h)
-	 * TODO: struct reset_controller_dev rcdev;       (reset.c) */
+	struct luofu_gate_clk *gates;
+	struct luofu_pll_clk *plls;
+	struct luofu_mux_clk *muxes;
+	struct clk_hw_onecell_data *clk_data;	/* DT onecell provider payload */
+	/* TODO: struct reset_controller_dev rcdev;       (reset.c) */
 };
 
 static const struct of_device_id luofu_crg_match_table[] = {
@@ -571,6 +619,213 @@ static int luofu_crg_write_rstflip(struct device *dev, void __iomem *base)
 }
 #endif /* LUOFU_CRG_FLIP */
 
+/* ======================================================================
+ * THE DRIVER OPS (stage-2 structure; clocks2.md sec 3 goals 1/2/5)
+ * ======================================================================
+ * A loadable .ko cannot call the hisilicon helpers (hisi_clk_register_gate /
+ * hisi_mux_clock live in drivers/clk/hisilicon, in-tree objects that are not
+ * EXPORT_SYMBOL_GPL), so the CRG geometry is wired through the generic
+ * clk-provider API with OUR OWN clk_ops.  Every store stays on the proven
+ * write discipline: dword-aligned one-bit RMW through luofu_crg_rmw() only
+ * (read -> modify -> writel -> read-back); the out-of-bounds write classes
+ * (mux 0x138, PLL ctrl 0x198/0x1e0, softrst/wdog/reboot) are refused or simply
+ * not expressed.  Every read is a 4-byte-aligned readl() on the CRG page,
+ * which crgprobe.md proved fully readable with ZERO writes.
+ */
+
+#define to_luofu_gate(_hw) container_of(_hw, struct luofu_gate_clk, hw)
+#define to_luofu_pll(_hw)  container_of(_hw, struct luofu_pll_clk, hw)
+#define to_luofu_mux(_hw)  container_of(_hw, struct luofu_mux_clk, hw)
+
+/*
+ * Gate ops: enable/disable are the proven RMW discipline (set/clear ONE bit of
+ * a dword, never a blind writel, always the read-back).  is_enabled is a pure
+ * readl -- it must not consume the write budget.
+ */
+static int luofu_gate_enable(struct clk_hw *hw)
+{
+	struct luofu_gate_clk *g = to_luofu_gate(hw);
+	const struct luofu_gate *d = &luofu_gates[g->id];
+
+	luofu_crg_rmw(g->crg->base, d->offset, d->bit, 1);
+	return 0;
+}
+
+static void luofu_gate_disable(struct clk_hw *hw)
+{
+	struct luofu_gate_clk *g = to_luofu_gate(hw);
+	const struct luofu_gate *d = &luofu_gates[g->id];
+
+	luofu_crg_rmw(g->crg->base, d->offset, d->bit, 0);
+}
+
+static int luofu_gate_is_enabled(struct clk_hw *hw)
+{
+	struct luofu_gate_clk *g = to_luofu_gate(hw);
+	const struct luofu_gate *d = &luofu_gates[g->id];
+
+	return !!(readl(g->crg->base + d->offset) & BIT(d->bit));
+}
+
+static const struct clk_ops luofu_gate_ops = {
+	.enable		= luofu_gate_enable,
+	.disable	= luofu_gate_disable,
+	.is_enabled	= luofu_gate_is_enabled,
+};
+
+/*
+ * PLL ops -- READ-ONLY (clocks2.md sec 3 goal 5: never reprogram a PLL).
+ * recalc_rate returns the ref as a documented passthrough: the boot-configured
+ * CPU/LSW multiplier is not yet transcribed, and the ctrl words (0x198/0x1e0)
+ * are out of bounds for this stage, so no rate field is read.  is_enabled
+ * reads ONLY the pinned status word 0x90 (CRG_STATUS, a licensed pure read) at
+ * the transcribed status_bit.
+ */
+static unsigned long luofu_pll_recalc_rate(struct clk_hw *hw,
+					   unsigned long parent_rate)
+{
+	return parent_rate;
+}
+
+static int luofu_pll_is_enabled(struct clk_hw *hw)
+{
+	struct luofu_pll_clk *p = to_luofu_pll(hw);
+	const struct luofu_pll *d = &luofu_plls[p->id];
+
+	return !!(readl(p->crg->base + d->status_offset) & BIT(d->status_bit));
+}
+
+static const struct clk_ops luofu_pll_ops = {
+	.recalc_rate	= luofu_pll_recalc_rate,
+	.is_enabled	= luofu_pll_is_enabled,
+};
+
+/*
+ * Mux ops: get_parent is a pure read of 0x138 (the page is readable,
+ * crgprobe.md); set_parent REFUSES -- 0x138 is out of bounds for writes
+ * (wrdesign.md sec 1), because a store there switches the CPU PLL source.
+ * Stage 1 never programs a mux.
+ */
+static u8 luofu_mux_get_parent(struct clk_hw *hw)
+{
+	struct luofu_mux_clk *m = to_luofu_mux(hw);
+	const struct luofu_mux *d = &luofu_muxes[m->id];
+	u32 v;
+
+	v = readl(m->crg->base + d->offset);
+	return (v & d->mask) >> __ffs(d->mask);
+}
+
+static int luofu_mux_set_parent(struct clk_hw *hw, u8 index)
+{
+	return -EPERM;	/* mux writes are out of bounds (wrdesign.md sec 1) */
+}
+
+static const struct clk_ops luofu_mux_ops = {
+	.get_parent	= luofu_mux_get_parent,
+	.set_parent	= luofu_mux_set_parent,
+};
+
+/*
+ * luofu_register_clks: build the CRG clock tree on the DT path only.
+ *
+ * Order matters: PLLs register first (they are the muxes' parents), then the
+ * muxes, then the gates; each gate's hw is stored into a onecell provider so a
+ * DT `clocks = <&crg LUOFU_CLK_*>` resolves by index.  Every clock is tagged
+ * CLK_IGNORE_UNUSED so clk_disable_unused() cannot kill a U-Boot-enabled gate
+ * (clocks2.md sec 3 goal 3).  The forced (no-DT) path never reaches here: it
+ * has no of_node, so nothing registers and the smoke path stays read-only
+ * until its 0-default knobs turn.
+ */
+static int luofu_register_clks(struct luofu_crg *crg,
+			       struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	unsigned int i;
+	int ret;
+
+	crg->plls = devm_kcalloc(dev, ARRAY_SIZE(luofu_plls),
+				 sizeof(*crg->plls), GFP_KERNEL);
+	crg->muxes = devm_kcalloc(dev, ARRAY_SIZE(luofu_muxes),
+				  sizeof(*crg->muxes), GFP_KERNEL);
+	crg->gates = devm_kcalloc(dev, ARRAY_SIZE(luofu_gates),
+				  sizeof(*crg->gates), GFP_KERNEL);
+	crg->clk_data = devm_kzalloc(dev, sizeof(*crg->clk_data) +
+				     sizeof(struct clk_hw *) * LUOFU_CLK_NR_CLKS,
+				     GFP_KERNEL);
+	if (!crg->plls || !crg->muxes || !crg->gates || !crg->clk_data)
+		return -ENOMEM;
+
+	for (i = 0; i < ARRAY_SIZE(luofu_plls); i++) {
+		struct luofu_pll_clk *p = &crg->plls[i];
+		struct clk_init_data init = {
+			.name		= luofu_plls[i].name,
+			.ops		= &luofu_pll_ops,
+			.parent_names	= &luofu_plls[i].parent,
+			.num_parents	= 1,
+			.flags		= CLK_IGNORE_UNUSED,
+		};
+
+		p->crg = crg;
+		p->id = i;
+		p->hw.init = &init;
+		ret = devm_clk_hw_register(dev, &p->hw);
+		if (ret) {
+			dev_err(dev, "luofu-crg: pll %s register failed: %d\n",
+				luofu_plls[i].name, ret);
+			return ret;
+		}
+	}
+
+	for (i = 0; i < ARRAY_SIZE(luofu_muxes); i++) {
+		struct luofu_mux_clk *m = &crg->muxes[i];
+		struct clk_init_data init = {
+			.name		= luofu_muxes[i].name,
+			.ops		= &luofu_mux_ops,
+			.parent_names	= luofu_muxes[i].parents,
+			.num_parents	= ARRAY_SIZE(luofu_muxes[i].parents),
+			.flags		= CLK_IGNORE_UNUSED,
+		};
+
+		m->crg = crg;
+		m->id = i;
+		m->hw.init = &init;
+		ret = devm_clk_hw_register(dev, &m->hw);
+		if (ret) {
+			dev_err(dev, "luofu-crg: mux %s register failed: %d\n",
+				luofu_muxes[i].name, ret);
+			return ret;
+		}
+	}
+
+	crg->clk_data->num = LUOFU_CLK_NR_CLKS;
+	for (i = 0; i < ARRAY_SIZE(luofu_gates); i++) {
+		struct luofu_gate_clk *g = &crg->gates[i];
+		const struct luofu_gate *d = &luofu_gates[i];
+		struct clk_init_data init = {
+			.name		= d->name,
+			.ops		= &luofu_gate_ops,
+			.parent_names	= &d->parent,
+			.num_parents	= 1,
+			.flags		= CLK_IGNORE_UNUSED,
+		};
+
+		g->crg = crg;
+		g->id = i;
+		g->hw.init = &init;
+		ret = devm_clk_hw_register(dev, &g->hw);
+		if (ret) {
+			dev_err(dev, "luofu-crg: gate %s register failed: %d\n",
+				d->name, ret);
+			return ret;
+		}
+		crg->clk_data->hws[d->id] = &g->hw;
+	}
+
+	return of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get,
+				      crg->clk_data);
+}
+
 static int luofu_crg_probe(struct platform_device *pdev)
 {
 	struct luofu_crg *crg;
@@ -601,19 +856,30 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	if (IS_ERR(crg->base))
 		return PTR_ERR(crg->base);
 
-	/* TODO: register the gates -- hisi_clk_register_gate() per
-	 *       luofu_gates[] (tagged CLK_IGNORE_UNUSED, goal 3). */
-	/* TODO: register the two muxes -- hisi_mux_clock() per luofu_muxes[]. */
-	/* TODO: register the two PLLs as read-only fixed-rate per luofu_plls[]. */
+	/* Register the CRG clock tree (gates + muxes + PLLs) on the DT path.
+	 * The forced path has no of_node and skips this: no DT clock consumer
+	 * can resolve a synthetic device, and the smoke path must stay write-free
+	 * until its 0-default knobs turn. */
+	if (pdev->dev.of_node) {
+		int ret = luofu_register_clks(crg, pdev);
+
+		if (ret) {
+			dev_err(&pdev->dev,
+				"luofu-crg: clock registration failed: %d\n", ret);
+			return ret;
+		}
+	}
+
 	/* TODO: register the reset controller -- hisi_reset_init(pdev) (reset.c)
 	 *       on the same MMIO page; #reset-cells=<2> => args[0]=reg-offset,
 	 *       args[1]=bit.  Reproduce LUOFU_SOFTRST_VAL0/1 in the reboot path. */
 
-	/* Keep the transcribed geometry live (not dead code) and prove the
-	 * tables are wired: log the sizes only -- no register access here. */
-	dev_info(&pdev->dev, "luofu-crg: %zu gates, %zu muxes, %zu plls (skeleton)\n",
+	/* Prove the tables are wired: the sizes, plus whether the real tree
+	 * registered (DT) or the forced smoke probe is running (skeleton). */
+	dev_info(&pdev->dev, "luofu-crg: %zu gates, %zu muxes, %zu plls%s\n",
 		 ARRAY_SIZE(luofu_gates), ARRAY_SIZE(luofu_muxes),
-		 ARRAY_SIZE(luofu_plls));
+		 ARRAY_SIZE(luofu_plls),
+		 pdev->dev.of_node ? " (CRG clock tree registered)" : " (skeleton)");
 
 	/* Read-only status inventory, both paths: walks luofu_crg_safe[] with
 	 * readl() only -- the forced path's evidence and the DT path's first
@@ -663,7 +929,9 @@ static int luofu_crg_probe(struct platform_device *pdev)
 #endif
 
 	platform_set_drvdata(pdev, crg);
-	/* TODO: return the real registration result once the tables are wired. */
+	/* Clock registration (DT path) already returned its result above; the
+	 * forced smoke path reports 0 after its bounded, self-terminating
+	 * instruments. */
 	return 0;
 }
 
@@ -671,10 +939,12 @@ static int luofu_crg_remove(struct platform_device *pdev)
 {
 	struct luofu_crg *crg = platform_get_drvdata(pdev);
 
-	/* TODO: unregister the reset controller, then the clock tree (reverse
-	 * order of probe).  The devm-managed mapping/kzalloc are freed
-	 * automatically. */
-	(void)crg;
+	/* Drop the DT onecell provider FIRST (reverse order of probe); the
+	 * devm_clk_hw_register'd clocks are then unregistered automatically by
+	 * device-managed teardown. */
+	if (crg && pdev->dev.of_node)
+		of_clk_del_provider(pdev->dev.of_node);
+	/* TODO: unregister the reset controller (reverse order of probe). */
 	return 0;
 }
 
@@ -741,4 +1011,4 @@ module_init(luofu_crg_init);
 module_exit(luofu_crg_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + forced probe + the bounded write path + the stage-2b reset-class flip)");
+MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (gate/mux/PLL clk_ops + DT onecell provider + forced probe + the bounded write path + the stage-2b reset-class flip)");
