@@ -62,8 +62,12 @@
  * flip.md -- gate offset 0x14 bit 0x18 (i2c0_clk), launched in the CLEAR
  * direction (read -> clear -> observe -> set-back, PASS iff the read-back ==
  * pre), because that is the only direction whose undo (the SET) is a store this
- * latch class is measured to honour.  Both knobs default 0, so a bare insmod
- * stays read-only forever.
+ * latch class is measured to honour.  rst_flip=1 adds crgnext.md sec 3's
+ * rank-1 STAGE-2b flip: the RESET class, offset 0x2c bit 0x18 (i2c0_rst), in
+ * its OWN 2-store instrument (assert -> observe -> deassert, PASS iff
+ * post == pre), which answers whether the reset class honours the CLEAR
+ * direction at all -- the class the RC's own 0x34 resets belong to.  All three
+ * knobs default 0, so a bare insmod stays read-only forever.
  */
 
 #include <linux/bitops.h>
@@ -206,6 +210,18 @@ static int write_flip;
 module_param(write_flip, int, 0444);
 MODULE_PARM_DESC(write_flip,
 	"with write_test=1 on the forced path, flip i2c0_clk (0x14 bit 0x18) by ONE slow bit: clear -> observe -> set-back, PASS iff post == pre; needs the flip compiled in (LUOFU_CRG_FLIP)");
+
+/*
+ * rst_flip (crgnext.md sec 3): the STAGE-2b flip -- the RESET class, offset 0x2c
+ * bit 0x18 (i2c0_rst), the class the RC's own 0x34 resets belong to.  It is its
+ * OWN instrument (budget 2 stores, no gate sweep), reachable with force_probe=1
+ * rst_flip=1 ALONE, so the design's "exactly two stores" bound holds without the
+ * stage-1 sweep.  Compiled with the rest of the write path (LUOFU_CRG_FLIP).
+ */
+static int rst_flip;
+module_param(rst_flip, int, 0444);
+MODULE_PARM_DESC(rst_flip,
+	"the crgnext rank-1 reset-class flip: with force_probe=1, assert (clear) -> observe -> deassert (set-back) of i2c0_rst (0x2c bit 0x18), PASS iff post == pre; needs the flip compiled in (LUOFU_CRG_FLIP)");
 
 /*
  * The store counter that enforces THE BOUND (see "THE WRITE PATH" below):
@@ -462,6 +478,97 @@ static int luofu_crg_write_flip(struct device *dev, void __iomem *base)
 			LUOFU_FLIP_NAME, post, pre);
 	return post == pre ? 0 : -EIO;
 }
+
+/*
+ * ===== STAGE 2b -- THE RESET-CLASS FLIP (crgnext.md sec 3, rank 1) =====
+ * The gate class above is write-1-SET-only (the CLEAR was IGNORED on 0x14 b0x18
+ * and on 16/16 bits, flip.md sec 1), so a clock gate is NOT flippable in
+ * software; crgnext.md sec 3 takes the ranked alternative -- exercise the RESET
+ * class on a zero-consumer block.  The reset class is the one the vendor drives
+ * in BOTH directions (`hi_reset_assert` = CLEAR, `hi_reset_deassert` = SET,
+ * crgnext.md sec 1) and the one the RC's dependency lives on
+ * (`resets = <0xf 0x34 0xc..0xf>`, pinned :1226).
+ *
+ * TARGET: CRG offset 0x2c bit 0x18 (abs 0x1488002c) = i2c0_rst, the reset of the
+ * i2c0@0x10111000 controller (pinned `resets = <0xf 0x2c 0x18>` :1021; 1 = out
+ * of reset, the same polarity as the RC's 0x34 bits).  Blast radius: i2c0 has no
+ * client node in the pinned tree and no `i2c` line in any boot log (crgnext.md
+ * sec 3), so nothing behind it moves.
+ *
+ * UNLOCK KEY: NONE.  crgnext.md sec 2 scanned every vendor KO (movw/movt + raw
+ * bytes) and found no key or lock behind the gate/reset store path -- the
+ * vendor's hi_crg_enable/disable are a bare one-bit RMW through the DT-mapped
+ * page -- so no key handling exists here (and none is needed).
+ *
+ * THE SEQUENCE (crgnext.md sec 3, verbatim -- TWO stores, no sweep):
+ *
+ *   pre = readl(0x2c);                          the FIRST read of a reset word
+ *   refuse (0 stores) unless pre bit 0x18 == 1     (out of reset)
+ *   inv = rmw(0x2c, 0x18, clear)                store 1/2 = ASSERT
+ *   observe readl(0x90), readl(0x100)            logged, NOT adjudicated
+ *   post = rmw(0x2c, 0x18, set)                 store 2/2 = DEASSERT, the
+ *                                               restore (the vendor-proven dir)
+ *   PASS iff post == pre
+ *
+ * Fails closed: a CLEAR that is ignored (the class matching the gate class)
+ * changes nothing; a CLEAR that takes followed by a failed set-back leaves i2c0
+ * held in reset -- harmless (no client, no i2c MMIO) and cleared by the next SoC
+ * reset.  Both outcomes are answers: (i) inv == pre -> the CRG latch class is
+ * SET-only and the RC bring-up must be gate/reset SET-only (crgnext.md sec 4.3);
+ * (ii) inv bit 0x18 cleared -> the reset class honours BOTH directions, and the
+ * RC's own 0x34 bits become an admissible target on a QUIESCED RC.  Budget: 2
+ * stores (LUOFU_WRITE_BUDGET keeps the shared bound); a third store is refused.
+ */
+#define LUOFU_RSTFLIP_OFF	0x2cu	/* reset class word, pinned :1021 */
+#define LUOFU_RSTFLIP_BIT	0x18	/* i2c0_rst */
+#define LUOFU_RSTFLIP_NAME	"i2c0_rst"
+
+static int luofu_crg_write_rstflip(struct device *dev, void __iomem *base)
+{
+	u32 pre = readl(base + LUOFU_RSTFLIP_OFF);
+	u32 inv, post;
+	u32 obs[ARRAY_SIZE(luofu_crg_safe)];
+	unsigned int i;
+	bool took;
+
+	if (!(pre & BIT(LUOFU_RSTFLIP_BIT))) {
+		dev_warn(dev, "WRITE_RSTFLIP refused: %s off=0x%02x bit=0x%02x reads 0 (pre=0x%08x) - i2c0 already reads IN reset, so rank 1 has no out-of-reset bit to assert; 0 stores (crgnext.md sec 3 rank-1 precondition; the read-only reset inventory answers instead)\n",
+			 LUOFU_RSTFLIP_NAME, LUOFU_RSTFLIP_OFF, LUOFU_RSTFLIP_BIT,
+			 pre);
+		return -EBUSY;
+	}
+
+	dev_info(dev, "WRITE_RSTFLIP %s off=0x%02x bit=0x%02x pre=0x%08x store 1/2 = the assert (clear)\n",
+		 LUOFU_RSTFLIP_NAME, LUOFU_RSTFLIP_OFF, LUOFU_RSTFLIP_BIT, pre);
+	inv = luofu_crg_rmw(base, LUOFU_RSTFLIP_OFF, LUOFU_RSTFLIP_BIT, 0);
+	took = !(inv & BIT(LUOFU_RSTFLIP_BIT));
+
+	/* OBSERVE.  These are the only two words the pinned tree licenses as
+	 * pure reads (CRG_STATUS :375/:376, WDT_ISTATUS :1519).  Logged and NOT
+	 * adjudicated: both are dynamic.  The i2c0 block (0x10111000) is never
+	 * read, cleared or not -- that is the external-abort class. */
+	for (i = 0; i < ARRAY_SIZE(luofu_crg_safe); i++)
+		obs[i] = readl(base + luofu_crg_safe[i].offset);
+	dev_info(dev, "WRITE_RSTFLIP observe [0x%03x]=0x%08x [0x%03x]=0x%08x (dynamic - NOT flip evidence)\n",
+		 luofu_crg_safe[0].offset, obs[0], luofu_crg_safe[1].offset, obs[1]);
+	dev_info(dev, "WRITE_RSTFLIP assert read-back=0x%08x i2c0_rst bit=%u (%s)\n",
+		 inv, took ? 0u : 1u,
+		 took ? "the CLEAR TOOK - the reset class honours the ASSERT direction"
+		      : "the CLEAR was IGNORED - the reset class matches the gate class (write-1-set-only)");
+
+	dev_info(dev, "WRITE_RSTFLIP %s store 2/2 = the deassert (set-back, the vendor-proven direction)\n",
+		 LUOFU_RSTFLIP_NAME);
+	post = luofu_crg_rmw(base, LUOFU_RSTFLIP_OFF, LUOFU_RSTFLIP_BIT, 1);
+
+	dev_info(dev, "WRITE_RSTFLIP %s: pre=0x%08x -> assert=0x%08x -> deassert=0x%08x: %s (%u stores total)\n",
+		 LUOFU_RSTFLIP_NAME, pre, inv, post,
+		 post == pre ? "PASS post == pre" : "FAIL post != pre",
+		 luofu_write_count);
+	if (post != pre)
+		dev_err(dev, "WRITE_RSTFLIP FAIL: %s left at 0x%08x, not pre 0x%08x - i2c0 may be held in reset (harmless: no client node, no i2c MMIO); recover = the next SoC reset\n",
+			LUOFU_RSTFLIP_NAME, post, pre);
+	return post == pre ? 0 : -EIO;
+}
 #endif /* LUOFU_CRG_FLIP */
 
 static int luofu_crg_probe(struct platform_device *pdev)
@@ -483,11 +590,11 @@ static int luofu_crg_probe(struct platform_device *pdev)
 		crg->base = devm_platform_ioremap_resource(pdev, 0);
 	} else {
 		dev_info(&pdev->dev,
-			 "FORCED probe (no DT match) base=0x%lx size=0x%lx write_test=%d write_flip=%d%s\n",
+			 "FORCED probe (no DT match) base=0x%lx size=0x%lx write_test=%d write_flip=%d rst_flip=%d%s\n",
 			 (unsigned long)LUOFU_CRG_BASE,
 			 (unsigned long)LUOFU_CRG_SIZE,
-			 write_test, write_flip,
-			 write_test ? "" : " read-only");
+			 write_test, write_flip, rst_flip,
+			 (write_test || rst_flip) ? "" : " read-only");
 		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE,
 					 LUOFU_CRG_SIZE);
 	}
@@ -536,6 +643,24 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	} else if (write_test) {
 		dev_warn(&pdev->dev, "write_test=1 ignored: the write path runs only on the forced (no-DT) probe\n");
 	}
+
+#if LUOFU_CRG_FLIP
+	/* STAGE 2b (crgnext.md sec 3): the reset-class flip is its OWN 2-store
+	 * instrument, so rst_flip=1 alone reaches it -- no stage-1 sweep, honouring
+	 * the design's "exactly two stores" bound.  Forced (no-DT) path only. */
+	if (rst_flip && !pdev->dev.of_node) {
+		int rc;
+
+		rc = luofu_crg_write_rstflip(&pdev->dev, crg->base);
+		dev_info(&pdev->dev, "WRITE_RSTFLIP rc=%d\n", rc);
+		luofu_crg_inventory(&pdev->dev, crg->base, true);
+	} else if (rst_flip) {
+		dev_warn(&pdev->dev, "rst_flip=1 ignored: the reset-class flip runs only on the forced (no-DT) probe\n");
+	}
+#else
+	if (rst_flip)
+		dev_warn(&pdev->dev, "rst_flip=1 ignored: the reset-class flip is not compiled in (LUOFU_CRG_FLIP=0)\n");
+#endif
 
 	platform_set_drvdata(pdev, crg);
 	/* TODO: return the real registration result once the tables are wired. */
@@ -616,4 +741,4 @@ module_init(luofu_crg_init);
 module_exit(luofu_crg_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + forced probe + the bounded write path)");
+MODULE_DESCRIPTION("Hi5671Y luofu CRG clock + reset controller (stage-1 skeleton + forced probe + the bounded write path + the stage-2b reset-class flip)");
