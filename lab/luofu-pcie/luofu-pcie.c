@@ -53,13 +53,33 @@
  *
  * HARD RULES honoured: never write CA 0x400392f0; never read the RC misc window
  * 0x10161000; never read the host-side GICC IAR 0x4016010c; no register write
- * of any kind from this module.  The only MMIO ops are readb()/readw()/readl(),
- * each picked to match the register's PCI spec width: a 32-bit readl() of a
- * 2-byte register (e.g. the Link Status at dbi+0x082) is a MISALIGNED access
- * that external-aborts the bus and PANICKED the box on the first forced probe
- * (pciskel-smoke.md).  Sub-word registers therefore go through readw()/readb().
- * TODO (write path): the future 16-bit writes (DBI+0x04 = 7, ASPM |= 3, the
- * LTSSM |= writes) must use writew(), never writel().
+ * of any kind from this module.  readl() is the ONLY MMIO op.
+ *
+ * THE ACCESS RULE (pciskel-smoke.md, readw.md, rcfix.md).  This DBI/CFG window
+ * answers only 4-BYTE-ALIGNED 32-bit accesses (a DWC DBI sits behind a word-wide
+ * APB bridge).  A read whose ADDRESS is not 4-byte aligned external-aborts the
+ * bus - an IMPRECISE abort becomes an SError and panics - whatever the access
+ * WIDTH is.  Both live panics are the 16-bit Link Status register at the
+ * 2-mod-4 offset 0x082:
+ *   - ko 503f9580 (503f9580c29f555a47755ca93e61feeb): readl(dbi + 0x082),
+ *     fault 0xc800a082 = rc0's ioremap 0xc800a000 + 0x82 (pciskel-smoke.md);
+ *   - ko 51376f76 (51376f7608d6e5d60b0bb6fe09eb068e): readw(dbi + 0x082) - the
+ *     "width fix" - fault at rc0's ioremap 0xc9a7d000 + 0x82, PC
+ *     luofu_pcie_inventory+0x7c, faulting instruction `ldrh r4,[r3]` with
+ *     r3 = 0xc9a7d082 and the preceding header reads all correct.  A narrow
+ *     accessor cannot help: 0x082 is 2 mod 4, so NO access of that register is
+ *     ever aligned.
+ * The fix is therefore not a narrower accessor but an ALIGNED one: every field
+ * is fetched by reading the 4-byte-aligned dword that CONTAINS it and
+ * extracting the field's byte lanes.  For 0x082 the containing dword is the
+ * aligned 0x080 whose low half is Link Control and whose high half is Link
+ * Status; the same holds for every other 16/8-bit header field (0x000/0x004/
+ * 0x008(32)/0x02c), each of which is an aligned field of an aligned dword.  All
+ * the DBI reads that succeeded live did so at 4-byte-aligned offsets, so the
+ * aligned dword read is the proven-safe primitive on this window.
+ * TODO (write path): the future DBI writes (DBI+0x04 = 7, ASPM |= 3, LTSSM |=)
+ * must be 4-byte-aligned read-modify-write - readl the dword, modify the field,
+ * writel the whole dword - never a sub-word or non-aligned register store.
  *
  * force_probe=1: the vendor kernel's live DT carries "hsan,pcie", not this
  * driver's compatible, so probe never fires (pcierc.md sec 5).  force_probe=1
@@ -123,18 +143,20 @@
 #define DBI_LINK_WIDTH_SPEED	0x80cu	/* hi_pcie_check_link_status |= 0x20000 (retrain) */
 
 /*
- * Register access widths (PCI/PCIe spec, see build/tmp/inta-spec/readw.md).
- * The RC's DBI window is PCI *configuration space*, so a read must match the
- * register's spec width: a 32-bit readl() of a 2-byte register is a misaligned
- * access the SoC turns into an external abort (SError -> panic, pciskel-smoke.md).
- * 0x000/0x004/0x008/0x02c are the type-1 header ID/COMMAND/class/subsystem
- * (16/16/32/16 bits); 0x07c is the 32-bit PCIe-capability Link Capabilities
- * register, and 0x080/0x082 are the Link Control / Link Status halves (16/16
- * bits) of the 32-bit word at 0x080.  All three are confirmed by the live RC's
- * own readback (pciskel-smoke.md sec 4): 0x07c = 0x00734c12 (5GT/s x1, L0s+L1
- * ASPM support) and 0x080 = 0x70120000 ({Link Control = 0x0000, Link Status =
- * 0x7012}).  0x80c is the 32-bit Link Width/Speed Control.  The DWC iATU file
- * (0x900..0x924) is DWC-internal and stays 32-bit.
+ * Register FIELD widths (PCI/PCIe spec, see build/tmp/inta-spec/readw.md and
+ * rcfix.md).  Under the access rule in the header, the width below no longer
+ * selects an ACCESS width - it names the field's byte lanes inside its
+ * containing dword, and luofu_pcie_read() extracts them.  Spec widths:
+ * 0x000/0x004/0x02c are the type-1 header Vendor/Device ID, PCI_COMMAND and
+ * Subsystem (I/O-Base-Upper on an RC) words (16/16/16 bits); cfg+0x008 is the
+ * 32-bit Class/Revision dword; 0x07c is the 32-bit PCIe-capability Link
+ * Capabilities register; 0x080/0x082 are the Link Control / Link Status halves
+ * (16/16 bits) of the dword at 0x080; 0x80c is the 32-bit Link Width/Speed
+ * Control.  The live RC's own readback confirms the geometry (pciskel-smoke.md
+ * sec 4): 0x07c = 0x00734c12 (5GT/s x1, L0s+L1 ASPM support) and 0x080 =
+ * 0x70120000 ({Link Control = 0x0000, Link Status = 0x7012}).  The DWC iATU
+ * file (0x900..0x924) is a DWC-internal dword block at a 4-byte stride and is
+ * read directly with readl().
  */
 #define W8	1u
 #define W16	2u
@@ -222,29 +244,35 @@ static const struct luofu_iatu_entry luofu_iatu_rc1[] = {
  */
 struct luofu_pcie_reg {
 	u16 offset;
-	u8 width;		/* PCI width of the register: W8/W16/W32 */
+	u8 width;		/* field width W8/W16/W32 = its byte lanes in the dword */
 	const char *name;
 	u32 expect;
 	u32 mask;
 };
 
 /*
- * The width-aware read.  This is the fix for the pciskel-smoke.md panic: the
- * Link Status register at dbi+0x082 / cfg+0x082 is 16-bit, and a 32-bit readl()
- * of it is a misaligned access the SoC external-aborts on.  Everything reads
- * through this one function so a register's width cannot be forgotten at a call
- * site.  Still read-only: readb/readw/readl are the only MMIO ops in the module.
+ * The aligned field read - the fix for both live panics (header comment).  The
+ * window only answers 4-byte-aligned 32-bit accesses, so a read at a 2-mod-4
+ * offset aborts WHATEVER its width; that is why the 16-bit Link Status at 0x082
+ * cannot be read directly (the readw() there was ko 51376f76's panic, the same
+ * fault the readl() had been in ko 503f9580).  Every field is instead fetched
+ * from the 4-byte-aligned dword that contains it: ONE readl() of
+ * `base + (off & ~3u)`, then shift down by the field's byte offset inside that
+ * dword and mask to (width * 8) bits.  For a W32 field at an aligned offset this
+ * is exactly the old readl(); for a sub-word header field it returns the same
+ * value the aligned-address readw() did, and it never issues a non-aligned or
+ * sub-dword MMIO access.  Still read-only: readl() is the module's only MMIO op,
+ * and the tables hold offsets/widths only, so a write cannot be expressed here.
  */
 static u32 luofu_pcie_read(void __iomem *base, u16 off, u8 width)
 {
-	switch (width) {
-	case W8:
-		return readb(base + off);
-	case W16:
-		return readw(base + off);
-	default:
-		return readl(base + off);
-	}
+	u32 word = readl(base + (off & ~3u));
+	unsigned int shift = (off & 3u) * 8u;
+
+	word >>= shift;
+	if (width >= 4u)
+		return word;
+	return word & ((1u << (width * 8u)) - 1u);
 }
 
 /* DBI status inventory (read-only).  Only pure-read status words live here; no
