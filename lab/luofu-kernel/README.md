@@ -116,11 +116,36 @@ What this buys, and what it does not:
   `luofu-image.config` (the `.config`, renamed because `upload-artifact` skips
   dotfiles), `luofu-r116.ref.dtb` (the same DTS compiled separately by the
   distro dtc, as a second opinion), `luofu-config-delta.txt` (the base vs. the
-  merged config) and `MANIFEST.txt` (size + sha256 per file). The job pins
+  merged config), `luofu-slice.txt` (the `size(1)` audit + the kernelb
+  arithmetic) and `MANIFEST.txt` (size + sha256 per file). The job pins
   `KBUILD_BUILD_TIMESTAMP`/`_USER`/`_HOST` (the commit date, `luofu-lane`,
   `github-actions`) because `scripts/mkcompile_h` otherwise embeds the build
-  wall-clock, and it prints the kernelb-fit arithmetic, warning when
-  uImage+DTB exceeds the 8,650,752-byte partition.
+  wall-clock, and it **fails** (exit 1) when the packed uImage exceeds the
+  8,650,752-byte kernelb partition.
+
+## The kernelb size budget (`luofu-shrink.fragment`)
+
+The first image the lane built was 10,142,208 B of zImage / 10,142,272 B of
+uImage - over the 8,650,752-byte `kernelb` partition by 1,502,327 B, which is
+why the flash was aborted (`build/tmp/inta-spec/firstkboot.md`). The overflow is
+the base config, not the partition: `multi_v7_defconfig` carries 30+ machines
+and ~110 platform symbols for ~40 SoCs, while the vendor's own slice uses only
+4,334,892 B of the same partition.
+
+`luofu-shrink.fragment` is applied on top of `luofu.fragment` and switches off
+only what it lists: every other SoC's mach/plat code, the non-luofu driver
+surface (USB/MMC/DRM/FB/audio/media/input/hwmon/BT/SCSI/ATA/sensors), the
+filesystems we do not mount, netfilter/tc, the other network drivers, the
+on-chip peripheral drivers this DT has no binding for, and the optional
+debug/perf/ftrace/EFI machinery - plus the size-oriented pair
+`CC_OPTIMIZE_FOR_SIZE=y` and `BLK_DEV_INITRD=n` (no initramfs in the slice). It
+also carries a small `=y` block of symbols the base only had because *other*
+platforms selected them (`HAVE_ARM_ARCH_TIMER`, `VFP`, `NEON`, the Cortex-A9 and
+PL310 errata, `TMPFS`, `STACKTRACE`, ...) - those would otherwise fall off
+silently. The `kernel` job asserts both groups on every build: the load-bearing
+list must stay `=y` (machine, GIC + architected timer, console, MTD/UBI +
+squashfs/ubifs, pstore, PCIe, wifi, userspace basics) and the dropped families
+must stay off.
 - Download + hash a finished run with
   `gh run download <run-id> -R ShibbityShwab/cudy-wr3000v2-open-firmware -n luofu-kernel-image -D build/tmp/kboot`.
 - The reasoning and the symbol-by-symbol classification live in

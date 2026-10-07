@@ -67,11 +67,16 @@ CONFIG_CLK_LUOFU=y
 # PINCTRL_SINGLE (base MFD pinctrl) is the fallback if the group tables stay
 # declarative; we carry the transcribed hi_kpinctrl geometry instead.
 CONFIG_PINCTRL=y
-CONFIG_PINMUX=y
-CONFIG_PINCONF=y
+# PINMUX and PINCONF are NOT requestable from a fragment: both are
+# `bool "..." if COMPILE_TEST` (drivers/pinctrl/Kconfig:14 / :21), so they are
+# only ever set through a consumer - CONFIG_GENERIC_PINMUX_FUNCTIONS selects
+# PINMUX, CONFIG_GENERIC_PINCONF selects PINCONF - which is what every real
+# pinctrl driver did for us in the multi_v7 base. They belong on the
+# `selected indirectly` line below (rule 1), not here.
 # NEW (stage 2 #2, lab/luofu-pinctrl)
 CONFIG_PINCTRL_LUOFU=y
-# selected indirectly by PINCTRL_LUOFU: CONFIG_GENERIC_PINCONF
+# selected indirectly by PINCTRL_LUOFU: CONFIG_GENERIC_PINMUX_FUNCTIONS ->
+# CONFIG_PINMUX, CONFIG_GENERIC_PINCONF -> CONFIG_PINCONF
 
 # ---------------------------------------------------------------------------
 # PCIe: the two Synopsys DWC root complexes (the DWC framework item)

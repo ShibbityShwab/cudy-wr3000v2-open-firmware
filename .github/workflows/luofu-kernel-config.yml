@@ -20,6 +20,12 @@ name: luofu-kernel-config
 #    and uploads them with a size+sha256 MANIFEST.txt. Consumer: the prep in
 #    build/tmp/inta-spec/kprep.md sec.3.2 (the kernelb flash) + imgbuild.md.
 #
+#    Both jobs merge luofu.fragment AND luofu-shrink.fragment: the former is the
+#    inventory of what the port needs, the latter is the 8,650,752-byte kernelb
+#    size budget (the un-shrunk multi_v7 base was 1,502,327 B over it). The
+#    `kernel` job fails if the packed uImage is over budget, and asserts both
+#    the symbol groups the shrink must not take with it and the fat it drops.
+#
 # Triggers: `push` to omo/** (the only branch we push) always fires `config`;
 # `kernel` fires on a workflow_dispatch with build_kernel=true (verified to work
 # from this branch even though the file is not on the default branch yet), or on
@@ -72,8 +78,11 @@ jobs:
           # internally, regenerating from Kconfig defaults - noisy for derived
           # symbols, and it drops arm context unless ARCH is exported.)
           export ARCH=arm
+          # Same two fragments, same order, as the image lane below: the
+          # inventory first, the kernelb size budget second.
           scripts/kconfig/merge_config.sh -m .config \
-            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment" \
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu-shrink.fragment"
           make ARCH=arm olddefconfig
 
       - name: assert the requested symbols resolved
@@ -167,8 +176,11 @@ jobs:
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
           cp .config .config.base
           export ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+          # luofu.fragment = the port's inventory; luofu-shrink.fragment = the
+          # kernelb size budget (see that file's header for the rationale).
           scripts/kconfig/merge_config.sh -m .config \
-            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment" \
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu-shrink.fragment"
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
           diff -u .config.base .config > luofu-config-delta.txt || true
 
@@ -176,12 +188,27 @@ jobs:
         run: |
           cd linux-5.10.201
           fail=0
-          for sym in CONFIG_ARCH_HISI CONFIG_ARCH_LUOFU CONFIG_SMP CONFIG_COMMON_CLK \
-                     CONFIG_CACHE_L2X0 CONFIG_ARM_GIC CONFIG_SERIAL_8250 \
-                     CONFIG_SERIAL_8250_CONSOLE CONFIG_SERIAL_8250_DW CONFIG_SERIAL_EARLYCON \
-                     CONFIG_MTD CONFIG_MTD_OF_PARTS CONFIG_MTD_SPI_NAND CONFIG_MTD_UBI \
-                     CONFIG_MTD_UBI_BLOCK CONFIG_SQUASHFS CONFIG_UBIFS_FS CONFIG_PSTORE \
-                     CONFIG_PSTORE_RAM CONFIG_PCI CONFIG_CFG80211 CONFIG_MAC80211; do
+          # The shrink must not take the machine, the ARM core, the console, the
+          # storage/mount path, the pstore pair, PCIe or the wifi stack with it.
+          for sym in CONFIG_ARCH_HISI CONFIG_ARCH_LUOFU CONFIG_ARCH_MULTIPLATFORM \
+                     CONFIG_ARCH_MULTI_V7 CONFIG_SMP CONFIG_COMMON_CLK CONFIG_CACHE_L2X0 \
+                     CONFIG_ARM_GIC CONFIG_ARM_ARCH_TIMER CONFIG_HAVE_ARM_ARCH_TIMER \
+                     CONFIG_VFP CONFIG_NEON CONFIG_HIGHMEM CONFIG_TMPFS CONFIG_STACKTRACE \
+                     CONFIG_OF CONFIG_USE_OF CONFIG_SPARSE_IRQ CONFIG_IRQ_DOMAIN CONFIG_TIMER_OF \
+                     CONFIG_SERIAL_8250 CONFIG_SERIAL_8250_CONSOLE CONFIG_SERIAL_8250_DW \
+                     CONFIG_SERIAL_EARLYCON CONFIG_TTY CONFIG_UNIX98_PTYS \
+                     CONFIG_MTD CONFIG_MTD_BLOCK CONFIG_MTD_OF_PARTS CONFIG_MTD_SPI_NAND \
+                     CONFIG_MTD_UBI CONFIG_MTD_UBI_BLOCK CONFIG_SQUASHFS CONFIG_UBIFS_FS \
+                     CONFIG_PSTORE CONFIG_PSTORE_CONSOLE CONFIG_PSTORE_RAM \
+                     CONFIG_PCI CONFIG_PCI_MSI CONFIG_PCIEPORTBUS CONFIG_CFG80211 CONFIG_MAC80211 \
+                     CONFIG_DEVTMPFS CONFIG_DEVTMPFS_MOUNT CONFIG_PROC_FS CONFIG_SYSFS \
+                     CONFIG_BINFMT_ELF CONFIG_UNIX CONFIG_INET CONFIG_MODULES CONFIG_KALLSYMS \
+                     CONFIG_CC_OPTIMIZE_FOR_SIZE CONFIG_I2C CONFIG_I2C_DESIGNWARE_PLATFORM \
+                     CONFIG_SPI CONFIG_NETDEVICES CONFIG_PHYLIB CONFIG_MDIO_DEVICE CONFIG_GPIOLIB \
+                     CONFIG_GPIO_DWAPB CONFIG_PINCTRL CONFIG_NEW_LEDS CONFIG_LEDS_CLASS \
+                     CONFIG_LEDS_GPIO CONFIG_REGULATOR CONFIG_REGULATOR_PWM CONFIG_PWM \
+                     CONFIG_WATCHDOG CONFIG_WATCHDOG_CORE CONFIG_THERMAL CONFIG_CPU_THERMAL \
+                     CONFIG_NVMEM CONFIG_HW_RANDOM CONFIG_CRYPTO_JITTERENTROPY CONFIG_FW_LOADER; do
             if grep -qx "$sym=y" .config; then
               echo "  OK    $sym=y"
             else
@@ -189,8 +216,24 @@ jobs:
               fail=1
             fi
           done
+          # ... and the fat the shrink drops must stay dropped, or it creeps back.
+          for sym in CONFIG_BLK_DEV_INITRD CONFIG_VT CONFIG_INPUT CONFIG_USB_SUPPORT CONFIG_MMC \
+                     CONFIG_DRM CONFIG_FB CONFIG_SCSI CONFIG_ATA CONFIG_HWMON CONFIG_NFS_FS \
+                     CONFIG_XFS_FS CONFIG_BTRFS_FS CONFIG_F2FS_FS CONFIG_NETFILTER CONFIG_FTRACE \
+                     CONFIG_PERF_EVENTS CONFIG_EFI CONFIG_ARCH_MVEBU CONFIG_ARCH_ROCKCHIP \
+                     CONFIG_ARCH_SUNXI CONFIG_ARCH_TEGRA CONFIG_ARCH_EXYNOS CONFIG_ARCH_MXC \
+                     CONFIG_ARCH_QCOM; do
+            if grep -qx "$sym=y" .config; then
+              echo "  FAIL  $sym came back (the shrink is not in effect)"
+              fail=1
+            else
+              echo "  OK    $sym is off"
+            fi
+          done
           echo "--- the delta vs the vanilla multi_v7 base ---"
-          grep -cE '^\+CONFIG_[A-Za-z0-9_]+=' luofu-config-delta.txt || true
+          echo "  added   : $(grep -cE '^\+CONFIG_[A-Za-z0-9_]+=' luofu-config-delta.txt || true) lines"
+          echo "  removed : $(grep -cE '^-CONFIG_[A-Za-z0-9_]+=' luofu-config-delta.txt || true) lines"
+          echo "  =y left : $(grep -cE '^CONFIG_[A-Za-z0-9_]+=y$' .config) (multi_v7 base: $(grep -cE '^CONFIG_[A-Za-z0-9_]+=y$' .config.base))"
           grep -E '^\+CONFIG_(ARCH_LUOFU|CLK_LUOFU|PINCTRL_LUOFU|PCIE_LUOFU|MTD_NAND_LUOFU|LUOFU_[A-Z0-9]+)=' luofu-config-delta.txt || true
           exit $fail
 
@@ -213,17 +256,41 @@ jobs:
                   -n Linux-5.10.201 -d arch/arm/boot/zImage luofu-uImage
           ls -l luofu-uImage
 
-      - name: kernelb slice arithmetic (does this image fit?)
+      - name: size audit (size(1)) + the kernelb budget - the gate
         run: |
           cd linux-5.10.201
+          {
+            echo "--- built-in kernel, size(1) of vmlinux ---"
+            arm-linux-gnueabihf-size vmlinux
+            echo
+            echo "--- image sizes ---"
+            for f in arch/arm/boot/Image arch/arm/boot/zImage luofu-uImage \
+                     arch/arm/boot/dts/luofu-r116.dtb; do
+              printf '%10s  %s\n' "$(stat -c %s "$f")" "$f"
+            done
+          } | tee luofu-size.txt
           uimg=$(stat -c %s luofu-uImage)
           dtb=$(stat -c %s arch/arm/boot/dts/luofu-r116.dtb)
           part=8650752                     # mtd12 kernelb (kprep.md sec.1.2 item 6)
-          used=$((uimg + dtb))
-          echo "kernelb slice: uImage $uimg B + our DTB $dtb B = $used B of $part B (slack $((part - used)) B)"
-          echo "vendor slice:  uImage 4294160 B + base DTB 31220 B + overlays 4592 + 4920 B = 4334892 B"
-          if [ "$used" -gt "$part" ]; then
-            echo "::warning title=the image does not fit kernelb::uImage+DTB is $used B against kernelb $part B - the flash candidate needs a slimmer config, see build/tmp/inta-spec/imgbuild.md"
+          target=8400000                   # the margin target (<= ~8.4 MB)
+          {
+            echo
+            echo "kernelb budget: uImage $uimg B vs the partition $part B"
+            echo "full slice    : uImage $uimg B + our DTB $dtb B = $((uimg + dtb)) B of $part B"
+            echo "margin        : $((part - uimg)) B on the uImage, $((part - uimg - dtb)) B on the slice"
+            echo "vendor slice  : uImage 4294160 B + base DTB 31220 B + overlays 4592 + 4920 B = 4334892 B"
+            if [ "$uimg" -le "$part" ]; then
+              echo "BUDGET: PASS - uImage $uimg B <= $part B"
+            else
+              echo "BUDGET: FAIL - uImage $uimg B > $part B by $((uimg - part)) B"
+            fi
+          } | tee -a luofu-size.txt
+          if [ "$uimg" -gt "$part" ]; then
+            echo "::error title=the image does not fit kernelb::uImage $uimg B against the $part B partition - the flash would not run"
+            exit 1
+          fi
+          if [ "$uimg" -gt "$target" ]; then
+            echo "::warning title=over the 8.4 MB target::uImage is $uimg B, the target is <= $target B"
           fi
 
       - name: stage the artifact set (flat) + manifest (sizes + sha256)
@@ -234,6 +301,7 @@ jobs:
           cp arch/arm/boot/dts/luofu-r116.dtb   out/luofu-r116.dtb
           cp luofu-uImage                       out/luofu-uImage
           cp luofu-config-delta.txt             out/luofu-config-delta.txt
+          cp luofu-size.txt                     out/luofu-slice.txt
           # named luofu-image.config, not .config: upload-artifact skips dotfiles
           cp .config                            out/luofu-image.config
           cp "$GITHUB_WORKSPACE/out/luofu-r116.ref.dtb" out/luofu-r116.ref.dtb
@@ -245,7 +313,7 @@ jobs:
             echo "# stamp:  KBUILD_BUILD_TIMESTAMP=$KBUILD_BUILD_TIMESTAMP"
             # explicit list: a glob would also hash the MANIFEST being written
             for f in out/zImage out/luofu-r116.dtb out/luofu-uImage out/luofu-image.config \
-                     out/luofu-r116.ref.dtb out/luofu-config-delta.txt; do
+                     out/luofu-r116.ref.dtb out/luofu-config-delta.txt out/luofu-slice.txt; do
               printf '%10s  %s  %s\n' "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
             done
           } | tee out/MANIFEST.txt
