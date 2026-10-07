@@ -38,9 +38,14 @@ jobs:
       - name: merge the fragment + resolve with the kernel's own kconfig
         run: |
           cd linux-5.10.201
+          # merge_config.sh runs `make alldefconfig` INTERNALLY; without ARCH in the
+          # environment that make resolves a HOST (x86) config and every arm symbol
+          # drops out of .config. Export ARCH so the internal make is arm-correct.
+          export ARCH=arm
           # Non -m form: merge_config.sh runs `make alldefconfig` and then prints
           # "Value requested for CONFIG_X not in final .config" for anything that
           # did not survive (missed dependency / promptless symbol).
+          set -o pipefail
           scripts/kconfig/merge_config.sh .config \
             "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment" | tee merge.log
           make ARCH=arm olddefconfig
@@ -96,6 +101,7 @@ jobs:
         run: |
           cd linux-5.10.201
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          export ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
           scripts/kconfig/merge_config.sh .config \
             "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
