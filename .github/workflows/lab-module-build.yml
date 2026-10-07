@@ -48,8 +48,59 @@ jobs:
           cd lab/${{ matrix.module }}
           make -C ../../linux-5.10.201 M="$PWD" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 
+      - name: alignment rule (luofu-pcie)
+        if: matrix.module == 'luofu-pcie'
+        run: |
+          python3 - lab/luofu-pcie/luofu-pcie.c <<'EOF'
+          import re, sys
+          src = open(sys.argv[1]).read()
+          # strip comments and string literals so prose cannot trip the guard
+          src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+          src = re.sub(r'//.*', '', src)
+          src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
+          # 1. the panic class: narrow/byte MMIO accessors on a dword-only window
+          for m in re.finditer(r'\b(readb|readw|writeb|writew)\s*\(', src):
+              sys.exit("narrow MMIO accessor '%s' - violates the dword-alignment rule" % m.group(0))
+          # 2. a raw readl/writel offset that is not 4-byte aligned
+          for m in re.finditer(r'\b(readl|writel)\s*\([^)]*\+\s*0x([0-9a-fA-F]+)', src):
+              if int(m.group(2), 16) & 3:
+                  sys.exit("non-dword-aligned literal 0x%s in %s()" % (m.group(2), m.group(1)))
+          print("luofu-pcie alignment rule: PASS")
+          EOF
+
       - name: show vermagic
         run: strings lab/${{ matrix.module }}/${{ matrix.module }}.ko | grep -m1 vermagic
+
+      - name: CRG rule census (luofu-clk only)
+        if: matrix.module == 'luofu-clk'
+        run: |
+          SRC=lab/luofu-clk/luofu-clk.c
+          # dword-only stores: no sub-word store API anywhere in the file
+          if grep -nE '\b(writew|writeb|iowrite16|iowrite8)\b' "$SRC"; then
+            echo "FAIL: sub-word store op found"
+            exit 1
+          fi
+          # exactly one writel() statement in code (the RMW primitive); the
+          # comment mentions are excluded by requiring a statement at line start
+          W=$(grep -cE '^[[:space:]]*writel[[:space:]]*\(' "$SRC" || true)
+          if [ "$W" -ne 1 ]; then
+            echo "FAIL: expected 1 writel() call site, found $W"
+            grep -nE '^[[:space:]]*writel[[:space:]]*\(' "$SRC" || true
+            exit 1
+          fi
+          grep -nE '^[[:space:]]*writel[[:space:]]*\(' "$SRC"
+          # the writel() is the read-modify-write primitive shape
+          grep -nE '^[[:space:]]*writel[[:space:]]*\(v, base \+ off\);' "$SRC" >/dev/null \
+            || { echo "FAIL: writel() is not the RMW primitive shape"; exit 1; }
+          # dword-alignment guard (refuses a non-4-aligned offset)
+          grep -n 'off & 3' "$SRC" >/dev/null \
+            || { echo "FAIL: missing dword-alignment guard (off & 3)"; exit 1; }
+          # no forbidden addresses (CA / RC-misc window / host-side IAR)
+          if grep -nE '400392f0|10161000|4016010c' "$SRC"; then
+            echo "FAIL: forbidden address literal"
+            exit 1
+          fi
+          echo "CRG rule census PASS: 1 writel() in the RMW primitive, dword-only stores, alignment guard present, no forbidden addresses"
 
       - uses: actions/upload-artifact@v4
         with:

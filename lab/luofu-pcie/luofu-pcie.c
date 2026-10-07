@@ -10,13 +10,23 @@
  * path proven live.  The clk/reset wiring, the misc mode/LTSSM writes and the
  * pci_scan_root_bus_bridge registration stay TODO (staged in pcidrv.md).
  *
- * What the frame carries NOW:
+ * What the evolved driver carries NOW (pcidrv.md -> drvpcie.md):
  *   - module_init + platform_driver + of_match ("hisilicon,luofu-pcie") +
  *     probe/remove (pcierc.md sec 4b);
  *   - ioremap of DBI + config + the WRITE-ONLY port-logic (misc) window, from
  *     DT reg-names or the pinned CAs;
- *   - the aligned dword-field accessor (luofu_pcie_read, the access rule);
- *   - the link-state read path (DL_ACTIVE decode, the safe LTSSM substitute);
+ *   - the DWC-style dword-aligned register accessors: luofu_pcie_read() (the
+ *     field reader) + luofu_pcie_write() (the read-modify-write counterpart,
+ *     staged behind the write path) - every MMIO op a 4-byte-aligned 32-bit
+ *     access, compile-time-enforced by luofu_pcie_check_aligned();
+ *   - the link-training/LTSSM read-state machine: the DWC PORT_LOGIC_DEBUG0/1
+ *     words at DBI+0x728/0x72c (the RAW LTSSM state, decoded to a named state,
+ *     plus link-up / link-in-training) - the read-SAFE substitute for the
+ *     read-forbidden SoC misc+0x110;
+ *   - the link-state read path (DL_ACTIVE decode at DBI/cfg+0x082) kept as the
+ *     second, independent link-up predicate;
+ *   - the host-bridge REGISTRATION outline + the reset/clock DEPENDENCY notes
+ *     (the CRG handshake points) - a commented scaffold, not a working host;
  *   - the force_probe=1 DT-less bench path (the proven smoke path, kept).
  *
  * It COMPILES against the vanilla 5.10.201 arm headers in the CI cross-build
@@ -113,6 +123,7 @@
  * pci_scan_root_bus_bridge.  Every misc access there is a WRITE.
  */
 
+#include <linux/build_bug.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
@@ -210,6 +221,132 @@
 #define LS_LINK_TRAINING	(1u << 4)
 #define LS_SPEED_MASK		0xfu
 
+/* ------------------------------------------------------------------ *
+ * DWC port-logic DEBUG words (mainline pcie-designware.h): the DWC-    *
+ * internal LTSSM state machine, readable through the SAME dword-       *
+ * aligned DBI window as the iATU file.  These are the READ-SAFE raw    *
+ * LTSSM state the SoC misc block (misc+0x110) mirrors read-forbidden   *
+ * (pcierc.md sec 4b): the vendor polls misc+0x110, we poll DBI+0x728/  *
+ * 0x72c instead - one 4-byte-aligned readl() each, never misc.         *
+ * ------------------------------------------------------------------ */
+#define DBI_PORT_DEBUG0		0x728u	/* LTSSM state in bits [4:0] */
+#define DBI_PORT_DEBUG1		0x72cu	/* link-up bit 4, in-training bit 29 */
+#define DWC_LTSSM_STATE_MASK	0x1fu
+#define DWC_LTSSM_STATE_L0	0x11u
+#define DWC_LINK_UP		(1u << 4)
+#define DWC_LINK_IN_TRAINING	(1u << 29)
+
+/*
+ * The DWC LTSSM state encodings (Synopsys databook; the same 32 states the
+ * mainline drivers decode).  PORT_LOGIC_DEBUG0 bits [4:0] hold this state;
+ * L0 = 0x11.  This table turns the raw read into a NAMED state - the read-state
+ * machine: the bring-up polls it (and DEBUG1's link-up / in-training bits)
+ * instead of the forbidden misc+0x110.
+ */
+enum luofu_ltssm_state {
+	LTSSM_DETECT_QUIET = 0x00,
+	LTSSM_DETECT_ACT = 0x01,
+	LTSSM_POLL_ACTIVE = 0x02,
+	LTSSM_POLL_COMPLIANCE = 0x03,
+	LTSSM_POLL_CONFIG = 0x04,
+	LTSSM_PRE_DETECT_QUIET = 0x05,
+	LTSSM_DETECT_WAIT = 0x06,
+	LTSSM_CFG_LINKWD_START = 0x07,
+	LTSSM_CFG_LINKWD_ACCEPT = 0x08,
+	LTSSM_CFG_LANENUM_WAIT = 0x09,
+	LTSSM_CFG_LANENUM_ACCEPT = 0x0a,
+	LTSSM_CFG_COMPLETE = 0x0b,
+	LTSSM_CFG_IDLE = 0x0c,
+	LTSSM_RCVRY_LOCK = 0x0d,
+	LTSSM_RCVRY_SPEED = 0x0e,
+	LTSSM_RCVRY_RCVRCFG = 0x0f,
+	LTSSM_RCVRY_IDLE = 0x10,
+	LTSSM_L0 = 0x11,
+	LTSSM_L0S = 0x12,
+	LTSSM_L123_SEND_EIDLE = 0x13,
+	LTSSM_L1_IDLE = 0x14,
+	LTSSM_L2_IDLE = 0x15,
+	LTSSM_L2_TRANSMIT_WAKE = 0x16,
+	LTSSM_DISABLED_ENTRY = 0x17,
+	LTSSM_DISABLED_IDLE = 0x18,
+	LTSSM_DISABLED = 0x19,
+	LTSSM_LPBK_ENTRY = 0x1a,
+	LTSSM_LPBK_ACTIVE = 0x1b,
+	LTSSM_LPBK_EXIT = 0x1c,
+	LTSSM_LPBK_EXIT_TIMEOUT = 0x1d,
+	LTSSM_HOT_RESET_ENTRY = 0x1e,
+	LTSSM_HOT_RESET = 0x1f,
+	LTSSM_NR_STATES = 0x20,
+};
+
+static const char * const luofu_ltssm_names[LTSSM_NR_STATES] = {
+	[LTSSM_DETECT_QUIET]		= "DETECT.QUIET",
+	[LTSSM_DETECT_ACT]		= "DETECT.ACT",
+	[LTSSM_POLL_ACTIVE]		= "POLL.ACTIVE",
+	[LTSSM_POLL_COMPLIANCE]		= "POLL.COMPLIANCE",
+	[LTSSM_POLL_CONFIG]		= "POLL.CONFIG",
+	[LTSSM_PRE_DETECT_QUIET]	= "PRE-DETECT.QUIET",
+	[LTSSM_DETECT_WAIT]		= "DETECT.WAIT",
+	[LTSSM_CFG_LINKWD_START]	= "CFG.LINKWD.START",
+	[LTSSM_CFG_LINKWD_ACCEPT]	= "CFG.LINKWD.ACCEPT",
+	[LTSSM_CFG_LANENUM_WAIT]	= "CFG.LANENUM.WAIT",
+	[LTSSM_CFG_LANENUM_ACCEPT]	= "CFG.LANENUM.ACCEPT",
+	[LTSSM_CFG_COMPLETE]		= "CFG.COMPLETE",
+	[LTSSM_CFG_IDLE]		= "CFG.IDLE",
+	[LTSSM_RCVRY_LOCK]		= "RECOVERY.LOCK",
+	[LTSSM_RCVRY_SPEED]		= "RECOVERY.SPEED",
+	[LTSSM_RCVRY_RCVRCFG]		= "RECOVERY.RCVR.CFG",
+	[LTSSM_RCVRY_IDLE]		= "RECOVERY.IDLE",
+	[LTSSM_L0]			= "L0",
+	[LTSSM_L0S]			= "L0s",
+	[LTSSM_L123_SEND_EIDLE]		= "L1/L2/L3.SEND.EIDLE",
+	[LTSSM_L1_IDLE]			= "L1.IDLE",
+	[LTSSM_L2_IDLE]			= "L2.IDLE",
+	[LTSSM_L2_TRANSMIT_WAKE]	= "L2.TRANSMIT.WAKE",
+	[LTSSM_DISABLED_ENTRY]		= "DISABLED.ENTRY",
+	[LTSSM_DISABLED_IDLE]		= "DISABLED.IDLE",
+	[LTSSM_DISABLED]		= "DISABLED",
+	[LTSSM_LPBK_ENTRY]		= "LOOPBACK.ENTRY",
+	[LTSSM_LPBK_ACTIVE]		= "LOOPBACK.ACTIVE",
+	[LTSSM_LPBK_EXIT]		= "LOOPBACK.EXIT",
+	[LTSSM_LPBK_EXIT_TIMEOUT]	= "LOOPBACK.EXIT.TIMEOUT",
+	[LTSSM_HOT_RESET_ENTRY]		= "HOT.RESET.ENTRY",
+	[LTSSM_HOT_RESET]		= "HOT.RESET",
+};
+
+/* misc (SoC port-logic/app) WRITE-ONLY offsets + the word values the staged
+ * write path stores (pcierc.md sec 2).  The misc block is READ-FORBIDDEN
+ * host-side, so every store is a full-word writel() with a host-side-computed
+ * value - never a read-modify-write (which would read misc).  All offsets are
+ * dword-aligned (checked by luofu_pcie_check_aligned()). */
+#define MISC_RC_MODE		0x00u	/* writel(0x40000000) -> RC mode */
+#define MISC_APP_CTRL		0x1cu	/* iATU-en bit 13, LTSSM-en bit 11 */
+#define MISC_LINKDOWN_IRQ_MASK	0x28u	/* linkdown irq mask bit 12 */
+#define MISC_LINKDOWN_IRQ_STAT	0x2cu	/* linkdown irq status/clear bit 12 */
+#define MISC_MODE_RC		(4u << 28)	/* hi_pcie_set_mode */
+#define MISC_APP_IATU_EN	(1u << 13)	/* 0x2000, hi_pcie_set_iatu */
+#define MISC_APP_LTSSM_EN	(1u << 11)	/* 0x800, hi_pcie_enable_ltssm */
+#define MISC_LINKDOWN_EN	(1u << 12)	/* 0x1000, hi_pcie_enable_linkdown_irq */
+
+/* CRG handshake points (pcierc.md sec 2 + the stage-1 luofu-clk provider).
+ * The RC must have its pcie_clk gate enabled AND its four resets deasserted - in
+ * apb->pcs->phy->ctrl order, each with a delay - before ANY RC register write.
+ * These are the consumer-side IDs the DT node declares (pinned DTS):
+ *   clocks = <&crg LUOFU_CLK_PCIE0|1>           # gate reg 0x20, bit 0x0c|0x0d
+ *   resets = <&crg 0x34 0x0c..0x0f|0x10..0x13> # apb, pcs, phy, ctrl
+ * The stage-1 luofu-clk driver already transcribes LUOFU_CLK_PCIE0/1 and
+ * #reset-cells=<2>; the RC driver only consumes them (devm_clk_get /
+ * devm_reset_control_get by name), it never touches the CRG page directly. */
+#define LUOFU_RST_PCIE_OFF	0x34u
+#define LUOFU_RST_PCIE0_APB	0x0cu
+#define LUOFU_RST_PCIE0_PCS	0x0du
+#define LUOFU_RST_PCIE0_PHY	0x0eu
+#define LUOFU_RST_PCIE0_CTRL	0x0fu
+#define LUOFU_RST_PCIE1_APB	0x10u
+#define LUOFU_RST_PCIE1_PCS	0x11u
+#define LUOFU_RST_PCIE1_PHY	0x12u
+#define LUOFU_RST_PCIE1_CTRL	0x13u
+
 /* The two RC domains (pcierc.md sec 1: RC0/RC1, each with its own DBI + cfg). */
 struct luofu_pcie_rc_ca {
 	unsigned long dbi_ca;
@@ -292,6 +429,102 @@ static u32 luofu_pcie_read(void __iomem *base, u16 off, u8 width)
 	if (width >= 4u)
 		return word;
 	return word & ((1u << (width * 8u)) - 1u);
+}
+
+/* The DWC-style WRITE counterpart: the aligned dword read-modify-write.  Read
+ * the 4-byte-aligned dword that contains the field, replace the field's byte
+ * lanes, write the whole dword back with one writel() at the SAME aligned
+ * address.  No sub-word, no non-aligned store - the only write primitive the
+ * staged write path (pcierc.md sec 2) may use on DBI/cfg.  Staged: not called
+ * while the module stays read-only, so __maybe_unused. */
+static __maybe_unused void luofu_pcie_write(void __iomem *base, u16 off,
+					    u8 width, u32 val)
+{
+	u32 word = readl(base + (off & ~3u));
+	unsigned int shift = (off & 3u) * 8u;
+	u32 mask = (width >= 4u) ? ~0u : ((1u << (width * 8u)) - 1u);
+
+	word &= ~(mask << shift);
+	word |= (val & mask) << shift;
+	writel(word, base + (off & ~3u));
+}
+
+/*
+ * THE LINK-TRAINING / LTSSM READ-STATE MACHINE (pcierc.md sec 4b evolved).
+ * The DWC core exposes its own LTSSM state through the dword-aligned DBI
+ * window: PORT_LOGIC_DEBUG0 (0x728) bits [4:0] = the raw LTSSM state, and
+ * PORT_LOGIC_DEBUG1 (0x72c) bit 4 = link-up, bit 29 = link-in-training
+ * (mainline pcie-designware.h).  This is the READ-SAFE substitute for the
+ * read-forbidden SoC misc+0x110 LTSSM word the vendor polls: one 4-byte-aligned
+ * readl() each, decoded to a named state, never touching misc.  The bring-up
+ * polls this (a) to wait for L0 and (b) to name every intermediate state during
+ * link training.
+ */
+
+/* Read the raw LTSSM state (PORT_LOGIC_DEBUG0 bits [4:0]) and name it. */
+static u8 luofu_pcie_read_ltssm(void __iomem *dbi)
+{
+	return luofu_pcie_read(dbi, DBI_PORT_DEBUG0, W32) & DWC_LTSSM_STATE_MASK;
+}
+
+static const char *luofu_pcie_ltssm_name(u8 state)
+{
+	if (state >= LTSSM_NR_STATES || !luofu_ltssm_names[state])
+		return "UNKNOWN";
+	return luofu_ltssm_names[state];
+}
+
+/* The DWC link-up predicate (mainline dw_pcie_link_up shape): DEBUG1 link-up
+ * bit set AND link-in-training bit clear.  Independent of the DL_ACTIVE read. */
+static bool luofu_pcie_dwc_link_up(void __iomem *dbi)
+{
+	u32 v = luofu_pcie_read(dbi, DBI_PORT_DEBUG1, W32);
+
+	return !!(v & DWC_LINK_UP) && !(v & DWC_LINK_IN_TRAINING);
+}
+
+/* Read + log the DWC LTSSM state machine for one RC domain. */
+static void luofu_pcie_report_dwc_link(struct device *dev, const char *win,
+				       void __iomem *dbi)
+{
+	u8 st = luofu_pcie_read_ltssm(dbi);
+	u32 dbg1 = luofu_pcie_read(dbi, DBI_PORT_DEBUG1, W32);
+
+	dev_info(dev,
+		 "  %s DWC LTSSM [0x728] = 0x%02x (%s); DEBUG1 [0x72c] = 0x%08x: link %s%s\n",
+		 win, st, luofu_pcie_ltssm_name(st), dbg1,
+		 (dbg1 & DWC_LINK_UP) ? "UP" : "DOWN",
+		 (dbg1 & DWC_LINK_IN_TRAINING) ? ", in-training" : "");
+}
+
+/*
+ * THE ALIGNMENT RULE, compile-time enforced.  The DBI/cfg/misc windows answer
+ * only 4-byte-aligned 32-bit accesses (header comment; pciskel-smoke.md).  The
+ * sub-word header fields (0x082, ...) are reached ONLY through
+ * luofu_pcie_read()/write(), which fetch the aligned containing dword; every
+ * RAW readl()/writel() below targets a dword-aligned offset.  These
+ * BUILD_BUG_ONs fail the build the moment an offset constant stops being
+ * 4-byte aligned, so the CI cross-build is the alignment gate.
+ */
+static void luofu_pcie_check_aligned(void)
+{
+	/* iATU register file: a dword block at a 4-byte stride. */
+	BUILD_BUG_ON(DBI_IATU_VIEWPORT & 3u);
+	BUILD_BUG_ON(DBI_IATU_CTRL1 & 3u);
+	BUILD_BUG_ON(DBI_IATU_CTRL2 & 3u);
+	BUILD_BUG_ON(DBI_IATU_LOWER_BASE & 3u);
+	BUILD_BUG_ON(DBI_IATU_UPPER_BASE & 3u);
+	BUILD_BUG_ON(DBI_IATU_LIMIT & 3u);
+	BUILD_BUG_ON(DBI_IATU_LOWER_TARGET & 3u);
+	BUILD_BUG_ON(DBI_IATU_UPPER_TARGET & 3u);
+	/* DWC port-logic DEBUG words (the LTSSM read-state machine). */
+	BUILD_BUG_ON(DBI_PORT_DEBUG0 & 3u);
+	BUILD_BUG_ON(DBI_PORT_DEBUG1 & 3u);
+	/* misc write-only offsets (full-word stores, never read). */
+	BUILD_BUG_ON(MISC_RC_MODE & 3u);
+	BUILD_BUG_ON(MISC_APP_CTRL & 3u);
+	BUILD_BUG_ON(MISC_LINKDOWN_IRQ_MASK & 3u);
+	BUILD_BUG_ON(MISC_LINKDOWN_IRQ_STAT & 3u);
 }
 
 /* DBI status inventory (read-only).  Only pure-read status words live here; no
@@ -507,6 +740,10 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	unsigned int id, dbi_hits, cfg_hits, pred;
 	bool link_up;
 
+	/* Compile-time alignment gate: fails the build if any raw-dword offset
+	 * below stops being 4-byte aligned (the CI cross-build enforces it). */
+	luofu_pcie_check_aligned();
+
 	rc = devm_kzalloc(&pdev->dev, sizeof(*rc), GFP_KERNEL);
 	if (!rc)
 		return -ENOMEM;
@@ -575,6 +812,11 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	link_up &= luofu_pcie_report_link(&pdev->dev, ca->name, rc->cfg,
 					  CFG_LINK_STATUS);
 
+	/* The DWC LTSSM read-state machine (DBI+0x728/0x72c) - the read-safe raw
+	 * LTSSM state, which the SoC misc block mirrors read-forbidden (pcierc.md
+	 * sec 4b).  This is the vendor's LTSSM read, relocated to the DWC DBI. */
+	luofu_pcie_report_dwc_link(&pdev->dev, ca->name, rc->dbi);
+
 	dev_info(&pdev->dev,
 		 "%s probe PASS: dbi %u predicted regs matched, cfg %u matched, link %s, 0 writes\n",
 		 label, dbi_hits, cfg_hits, link_up ? "UP" : "DOWN");
@@ -591,6 +833,93 @@ static int luofu_pcie_remove(struct platform_device *pdev)
 	 * automatically. */
 	return 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * HOST-BRIDGE REGISTRATION OUTLINE (staged - NOT compiled; the module *
+ * stays read-only until the CRG/pinctrl providers are live and the    *
+ * device action is serial + gate-checked).  This is the vendor         *
+ * `hi_pcie_probe` 14-step order (pcierc.md sec 2) mapped onto the      *
+ * modern pci_host_probe() API - a scaffold that names every call the   *
+ * working host will make, with the CRG handshake points called out.    *
+ * ------------------------------------------------------------------ */
+/*
+ * static int luofu_pcie_host_register(struct luofu_pcie *rc)
+ * {
+ *	struct pci_host_bridge *bridge;
+ *	int ret, i;
+ *
+ *	// ---- 0. CRG handshake (DEPENDENCY notes, pcierc.md sec 2) ----
+ *	// The stage-1 luofu-clk provider must already be live.  Before ANY RC
+ *	// register write:
+ *	//   rc->clk = devm_clk_get(dev, "pcie_clk");      // LUOFU_CLK_PCIE0|1
+ *	//   ret = clk_prepare_enable(rc->clk);            // gate 0x20 bit 0x0c|0x0d
+ *	//   rc->rst_apb  = devm_reset_control_get(dev, "apb_rst");  // 0x34 bit 0x0c|0x10
+ *	//   rc->rst_pcs  = devm_reset_control_get(dev, "pcs_rst");  // 0x34 bit 0x0d|0x11
+ *	//   rc->rst_phy  = devm_reset_control_get(dev, "phy_rst");  // 0x34 bit 0x0e|0x12
+ *	//   rc->rst_ctrl = devm_reset_control_get(dev, "ctrl_rst"); // 0x34 bit 0x0f|0x13
+ *	//   reset_control_deassert(rc->rst_apb);  udelay(50);
+ *	//   reset_control_deassert(rc->rst_pcs);  udelay(50);
+ *	//   reset_control_deassert(rc->rst_phy);  udelay(50);
+ *	//   reset_control_deassert(rc->rst_ctrl); udelay(50);
+ *	//   (apb -> pcs -> phy -> ctrl, in that order, each with a delay)
+ *
+ *	// ---- 1..3. RC mode + iATU (misc WRITES + DBI writes) ----
+ *	//   writel(MISC_MODE_RC, rc->misc + MISC_RC_MODE);    // misc+0x00 = RC mode
+ *	//   // misc+0x1c: iATU-en | LTSSM-en, full-word host-computed (no RMW - a
+ *	//   // read-modify-write would READ the read-forbidden misc window):
+ *	//   writel(MISC_APP_IATU_EN | MISC_APP_LTSSM_EN, rc->misc + MISC_APP_CTRL);
+ *	//   for (i = 0; i < 3; i++) {               // the three iatu_rc entries
+ *	//       writel(tab[i].viewport,   rc->dbi + DBI_IATU_VIEWPORT);
+ *	//       writel(tab[i].ctrl1,      rc->dbi + DBI_IATU_CTRL1);
+ *	//       writel(tab[i].ctrl2,      rc->dbi + DBI_IATU_CTRL2);
+ *	//       writel(tab[i].base_lo,    rc->dbi + DBI_IATU_LOWER_BASE);
+ *	//       writel(tab[i].base_hi,    rc->dbi + DBI_IATU_UPPER_BASE);
+ *	//       writel(tab[i].limit,      rc->dbi + DBI_IATU_LIMIT);
+ *	//       writel(tab[i].target_lo,  rc->dbi + DBI_IATU_LOWER_TARGET);
+ *	//       writel(tab[i].target_hi,  rc->dbi + DBI_IATU_UPPER_TARGET);
+ *	//       // DBI+0x900+0x200*i, all dword-aligned
+ *	//   }
+ *
+ *	// ---- 4..6. endpoint power + command + ASPM + link enable ----
+ *	//   luofu_pcie_gpio_power_on(dev);      // pcie-gpios out 0 -> delay -> out 1
+ *	//   luofu_pcie_write(rc->dbi, DBI_COMMAND, W16, 0x7);         // DBI+0x04 = 7
+ *	//   luofu_pcie_write(rc->dbi, DBI_LINK_CONTROL, W16, 0x3);    // ASPM L0s+L1
+ *	//   writel(MISC_APP_IATU_EN | MISC_APP_LTSSM_EN, rc->misc + MISC_APP_CTRL);
+ *
+ *	// ---- 7. link training - the LTSSM READ-STATE MACHINE ----
+ *	//   for (retries = 0; retries < LUOFU_PCIE_LINK_RETRIES; retries++) {
+ *	//       u8 st = luofu_pcie_read_ltssm(rc->dbi);       // DBI+0x728 [4:0]
+ *	//       if (luofu_pcie_dwc_link_up(rc->dbi))         // DBI+0x72c bits 4/29
+ *	//           break;                                   // L0 reached
+ *	//       dev_dbg(dev, "link training: LTSSM %s\n", luofu_pcie_ltssm_name(st));
+ *	//       msleep(LUOFU_PCIE_LINK_POLL_MS);
+ *	//   }
+ *	//   // retrain if needed: DBI+0x80c |= 0x20000 (PORT_LOGIC_SPEED_CHANGE)
+ *
+ *	// ---- 8. linkdown irq (misc write + threaded irq) ----
+ *	//   writel(~MISC_LINKDOWN_EN, rc->misc + MISC_LINKDOWN_IRQ_MASK); // &= ~0x1000
+ *	//   devm_request_threaded_irq(dev, rc->linkdown_irq, NULL,
+ *	//                             luofu_pcie_linkdown_irq, IRQF_ONESHOT, ...);
+ *
+ *	// ---- 9. the HOST-BRIDGE registration (pci_host_probe) ----
+ *	//   bridge = devm_pci_alloc_host_bridge(dev, 0);
+ *	//   if (!bridge)
+ *	//       return -ENOMEM;
+ *	//   bridge->ops = &luofu_pcie_ops;   // .read/.write = the dev-0 cfg-window
+ *	//                                    // pci_ops (pcierc.md sec 1: cfg_base +
+ *	//                                    // where, devfn 0 only)
+ *	//   pci_add_resource(&bridge->windows, &rc->mem_res); // 0x40000000/0x58000000
+ *	//   pci_add_resource(&bridge->windows, &rc->io_res);  // 0x48000000/0x60000000
+ *	//   bridge->map_irq = luofu_pcie_map_irq;    // radm irq (SPI 59/63)
+ *	//   bridge->swizzle_irq = pci_common_swizzle;
+ *	//   ret = pci_host_probe(bridge);            // scan + assign + add devices
+ *	//   // (the vendor's from-scratch shape instead calls
+ *	//   //  pci_scan_root_bus_bridge + pci_bus_size_bridges +
+ *	//   //  pci_bus_assign_resources + pcie_bus_configure_settings +
+ *	//   //  pci_bus_add_devices - pci_host_probe() wraps the same path)
+ *	//   return ret;
+ * }
+ */
 
 static struct platform_driver luofu_pcie_driver = {
 	.probe		= luofu_pcie_probe,
@@ -673,4 +1002,4 @@ module_init(luofu_pcie_init);
 module_exit(luofu_pcie_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Hi5671Y luofu PCIe root complex (stage-2 driver frame + forced probe)");
+MODULE_DESCRIPTION("Hi5671Y luofu PCIe root complex (DWC accessors + LTSSM read-state machine + host-bridge scaffold)");
