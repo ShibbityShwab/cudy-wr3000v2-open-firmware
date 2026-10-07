@@ -740,3 +740,33 @@ host read of the ack IAR `0x4016010c`, NO device cycle run, no reboot, nothing s
 the addendum left it: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0 WIFIDRV1=0`, stock md5 unchanged, on
 `mtd13` stock slot. Next: the flash/env lever (`bootflag=b`, its own gate + its own dumps) -> reboot -> confirm
 `ubi0: attached mtd14` -> re-run the SAME `take6f` sealed with `--eoir-id 0x2` to certify the naming and the force.
+
+## ADDENDUM 28 (2026-10-07): the bank/group gate - `RPR` is drop-able but not the comparator, so the residual moves to the group/bank layer; the one-boot read set (take7) decides rank 1 vs rank 2 vs rank 3, and the group-enable write stays deferred
+
+ADDENDUM 27 recorded the official capstone: the force dropped `RPR` to `0xFF` yet `HPPIR` stayed `0x3FF`, while
+the same boot's Site F read `F_HPP = 0x4C`. This block is the pointer for the arm-A answer to "which gate holds
+`0x4C` now", recorded in full as `gic-view.md` **ADDENDUM 26** ("the bank/group gate"); note the numbering
+slip, `gic-view.md` 26 is this block's source while this README already spent 26 on the take6f re-run.
+
+The new negative: the comparator sits BELOW the `RPR` register. `GICC_HPPIR` is a THREE-WAY signature (`0x3FF` =
+nothing pending, or the top pending's group is disabled in the CPU interface, or the top is Group 0 read
+Non-secure; ARM IHI0048), so two specs rank the surviving layers: rank 1, the force's ID-MISMATCHED EOIR (bare
+`0x2` written where the firmware writes the full IAR word `0x402`) left the priority-0 epoch unretired; rank 2,
+an `0x4C` GROUP stamp against `EnableGrp1 = 0`; rank 3, the SGI/PPI ACTIVE BANK (`STK_ACT = 0x4` = SGI 2).
+`F_HPP = 0x4C` in the SAME boot rules out any static config gate, and the image authors no `IGROUPR` write at
+all, so the stamp is inherited from reset and read only in OTHER boots.
+
+The deciding boot is take7 (design only): the capstone frame byte-for-byte plus the corrected EOIR
+(`GICC_EOIR 0x40160110 <= 0x402`, emitted only if a pre-read shows `RPR = 0x00` with `ISACTIVER0` bit 2 set) and
+the post-force read set R1..R14 (`TG_ACT0` bit 2, `TG_GRP2` bit 12, `TG_GRP0`, the CTLR pair, `TG_TGT`, the PMR/
+ABPR pair). The branch table's load-bearing split: `STK_HPP1 = 0x3FF` with `GRP_I2` bit 12 `= 1` and `GRP_CTLR`
+bit 1 `= 0` CONFIRMS the group gate; `STK_HPP1 = 0x3FF` with the group enabled and `GRP_I2` bit 12 `= 0` PROMOTES
+the bank; `TG_HPP = 0x4C` with the corrected force CLOSES rank 1. The group-enable write (`GICC_CTLR -> 0x3`)
+is deliberately deferred because it admits the already-pending `0x40`/`0x45`/`0x4C` into the vendor ISR at once,
+and the bank quiesce is deferred last because it risks the Wi-Fi doorbell. Specs `build/tmp/inta-spec/{bankgate.md,bg2.md}`
+(tasks `st_01a113ee`/`st_01a113ef`, design only); evidence base `build/register-dumps/exp/20261007-010906/`.
+Hard rules held: no write of CA `0x400392f0`/`0x40039af0`, no read of `0x10161000`, no host read of the ack IAR
+`0x4016010c`/AIAR `0x40160120`, no `GICD_SGIR` read, no device cycle, nothing staged, no commit, no push. Router
+healthy and untouched: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0 WIFIDRV1=0`, stock md5 unchanged, on
+slot B. Next: build take7, run the observation variant once, read `TG_GRP2`/`TG_ACT0`, and only then gate the
+rank-2 group enable (or, if the group is enabled and `0x4C` is Group 0, the rank-3 bank quiesce).

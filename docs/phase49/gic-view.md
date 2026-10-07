@@ -4313,3 +4313,179 @@ and the env CRC is `crc32-little-endian(4)|flags(1)|data(131067)`), and the caps
 **RC1's parallel +0x082 site still reads 32-bit** (the fix is one more width change, per-RC). The crash
 record is pulled (`build/tmp/wifidrv1-art/pciskel-crash-pstore.txt`); the device recovered onto slot B
 unassisted (the slot recipe holds through a panic).
+
+**CORRECTION (appended 2026-10-07, per `build/tmp/inta-spec/rcfix.md`):** the "per-RC" reading above was
+WRONG. `0xc800a082` = **RC0's** map (`c800a000`) + 0x82; the bug was never per-RC - **the readw at a
+2-byte-aligned (but not dword-aligned) offset still aborted the bus.** The rule (now a standing hardware
+note): **every DBI/CFG field must be read from its containing 4-byte-aligned dword** (readl + shift/mask).
+The corrected skeleton (`c35af1a`) PASSED the third smoke with **both RCs' full inventories, the `+0x082`
+Link Status returning, a clean unload and the device up** (`build/tmp/inta-spec/pciskel-smoke3.md`).
+
+# ADDENDUM 26 (2026-10-07): the bank/group gate - `RPR` is drop-able but not the comparator: `STK_HPP1` stays `0x3FF` with `STK_RPR1` at `0xFF` while `F_HPP` reads `0x4C` in the SAME boot, so a third gate sits above the SPIs (rank 1 the force's id-mismatched EOIR left the priority-0 epoch unretired or rank 2 an `0x4C` group stamp against `EnableGrp1 = 0` or rank 3 the SGI/PPI active bank), the one boot that decides it is take7's post-force read set, and the group-enable write is deliberately deferred
+
+ADDENDUM 25a closed the naming and the RPR drop and left one layer standing: with `RPR` idle the promoted `0x4C`
+still did not forward. This block is the pointer and the design record for the arm-A answer to "which gate holds
+`0x4C` now". Two specs were written (design only: no device cycle, no build, no register write):
+`build/tmp/inta-spec/bankgate.md` (the ranked-gate analysis and the take7 design) and
+`build/tmp/inta-spec/bg2.md` (the post-force bank/group read set and its branch table). The `§` and EN DASH used
+below are QUOTED from those specs and from the capstone's `interp.txt`; this addendum's own prose keeps the
+repo's ASCII convention.
+
+## Short version
+
+The gate is NOT the `RPR` register, and that is the new negative. The capstone's force dropped the running
+priority (`STK_RPR1 = 0x000000FF`) yet `HPPIR` did not move (`STK_HPP1 = 0x000003FF`), and the SAME boot's later
+Site F reads `F_HPP = 0x0000004C`. One boot, two instants, opposite answers, and no word the image authors
+changes between them. So the comparator sits BELOW `RPR`.
+
+`GICC_HPPIR` is a THREE-WAY signature, quoted from ARM IHI0048 (sec. 2 of both specs): `0x3FF` means nothing is
+pending OR the top pending's group is disabled in the CPU interface OR the top pending is Group 0 read
+Non-secure; `0x3FE` is the Group-1 Secure read; and a Non-secure read never returns a Group-0 INTID. So
+`STK_HPP1 = 0x3FF` names exactly three layers, and the specs rank them:
+
+- **Rank 1 - the rank/retirement state.** The force wrote a bare `0x2` to `GICC_EOIR` `0x40160110` while the
+  last valid IAR value was `0x402` (`V2_ID`), so it ran inside the spec's UNPREDICTABLE clause (the value must
+  match the last IAR read; for an SGI, bits `[12:10]` name the source PE). The observed split (RPR moves,
+  HPPIR does not) is the signature of a priority drop whose deactivation did not complete.
+- **Rank 2 - the group layer.** With `GICC_CTLR = 0x1` and `GICD_CTLR = 0x1` (`EnableGrp1 = 0` both levels), a
+  Group-1 stamp on `0x4C` blocks it and yields exactly `0x3FF`. The only group read in the capstone is `G_GRP0`
+  (`0x40161080` w0 = `0x0`), the SGI bank, not `0x4C`'s; every `IGROUPR` w2 read on record (`0x40161088` = `0x0`,
+  take5 and gicking) puts `0x4C` in Group 0, but none was taken at the post-force instant.
+- **Rank 3 - the bank.** `STK_ACT = 0x00000004` names SGI 2 as the active incumbent, and the SGI/PPI active
+  bank sits above the SPIs (ADDENDUM 21a/22's SGI note). No cell reads `GICD_IGROUPR2`, `GICD_ISACTIVER2`,
+  `GICD_ISENABLER2` or `GICC_CTLR` at `RPR = 0xFF`, so the whole layer is unmeasured there.
+
+Ranks 4 and 5 (target routing `ITARGETSR`, and the security/DS view) are cheap companions, not causes: the
+image never writes `IGROUPR`, so the group stamp is inherited from reset, and a single-state view degenerates
+the axis to the one `EnableGrp0` bit that is already set.
+
+## The bank/group gate, and why `F_HPP = 0x4C` decides the shape
+
+`F_HPP = 0x4C` in the same boot rules out any STATIC config gate the firmware never rewrites. The image's whole
+GIC-window literal census (both specs, capstone 5.0.7 THUMB on `build/tmp/FIRMWARE.bin` md5
+`0e530b976d5a20e87358671f1a577695`) finds NO literal for `0x40161080` or `0x40161088`: the image's CPU-interface
+init is one write (`0x8302c..0x8305a`: `ICACTIVER0 <= -1`, the `IPRIORITYR[0..7]` init, `GICC_PMR <= 0xFF`,
+`GICC_BPR <= 3`, then `set_prio` for ids `0,1,2,0x1D`), and `GICC_CTLR <= 1` is its only control write. So the
+group stamp is a reset/bootloader inheritance, and a static stamp cannot flip inside a boot against `F_HPP`.
+That points the gate at rank 1 (the retirement state) or at a layer read only while `RPR` was still the live
+gate, which is what `E5_GRP2 = F5_GRP2 = 0` was: a cell taken at `E5_RPR = 0x00`.
+
+## The deciding boot: take7's post-force read set (design only)
+
+One post-force pad settles it, `pad_stk_eoir` extended by the non-acknowledging reads R1..R14 (`bankgate.md` sec.
+4): `TG_RPR` `0x40160114` and `TG_HPP` `0x40160118` (the pop and the signature); `TG_ACT0` `0x40161300` w0 bit 2
+and `TG_PEND0` `0x40161200` w0 (rank 1 - was the epoch retired, was an SGI pending); `TG_GRP2` `0x40161088` w2
+bit 12 and `TG_GRP0` `0x40161080` w0 (rank 2 - is `0x4C` a Group-1 source at the post-force instant); the pair
+`TG_CCTLR`/`TG_DCTLR` (`0x40160100`/`0x40161000`); `TG_ISP2`/`TG_ACT2` (`0x40161208`/`0x40161308`) bit 12; and the
+companions `TG_TGT` `0x4016184c`, `TG_PMR`/`TG_ABPR` `0x40160104`/`0x4016011c`. The self-gating write is the ONE
+ranked lever: `GICC_EOIR` `0x40160110 <= 0x402` (the exact value the firmware's own EOI writes at file `0x82f52`,
+`str r7,[r3]` with `r7` = the IAR word), emitted ONLY if a pre-read shows `RPR = 0x00` with `ISACTIVER0` bit 2
+set. The builder change is in the main checkout (`tools/patch_fw_scratch.py`'s clamp must accept a full IAR
+word), the ko is unchanged (`3f87f1e9fe5ed9666f27d1f784d34535`), so no ko commit, no CI, no push.
+
+## The branches (read from the branch tables; the group-enable write is deferred)
+
+`bg2.md` sec. 4 tabulates eight rows over `GRP_SNT` present plus `GRP_CTLR/PMR/I2/ACT2/EN2`, the retained
+`STK_*` and the take6f pair `STK_RPR1`/`STK_HPP1`. The load-bearing split:
+
+1. **`STK_RPR1 == 0xFF` AND `STK_HPP1 == 0x3FF` AND `GRP_CTLR` bit 1 `== 0` AND `GRP_I2` bit 12 `== 1` -> GROUP
+   GATE CONFIRMED.** With the running priority dropped and `0x4C` pending, enabled and priced `0x00`, the group
+   is the only unrefuted layer: `0x4C` is a Group-1 source with `EnableGrp1 = 0`. Next: the rank-1 write
+   (`GRP_I2` bit 12 -> 0) or the rank-2 write (`GICC_CTLR -> 0x03`) and a re-run.
+2. **`take7f`: `GRP_I2` bit 12 was `1` and (`STK_HPP1 == 0x4C` OR `GRP_ACT2` bit 12 set) -> THE FINAL PROOF.** The
+   write moved `0x4C` into the enabled group in the SAME boot and the IAR read it: `RPR` idle, `HPPIR = 0x4C`,
+   the take. That is the arc's end (`RPR` -> group/CTLR -> take) and the incumbent retires.
+3. **`STK_RPR1 == 0xFF` AND `STK_HPP1 == 0x3FF` AND `GRP_CTLR` bit 1 `== 1` AND `GRP_I2` bit 12 `== 0` AND
+   `GRP_ACT2` bit 12 clear -> NOT GROUP, NOT RPR: THE BANK OWNS IT.** The group is enabled, `0x4C` is a Group-0
+   source, `RPR` is idle, and it still does not forward: the residual is the SGI/PPI ACTIVE bank (`STK_ACT ==
+   0x4`). Next: the rank-3 bank quiesce, a `.ko` `ICENABLER0/1` (CI `omo/phase22-hccaccept`).
+4. **`GRP_PMR < 0xC0` -> PMR MASK.** The priority mask blocks forwarding regardless of group. Next: `GICC_PMR ->
+   0xF0` and a re-run.
+5. **`GRP_ACT2` bit 12 set, or the IAR names `0x4C` with `GRP_EN2` bit 12 set -> TAKEN.** The gate was a
+   transient and the take is proven.
+6. **`take7f`: `GRP_WR` read-back != the written value -> FORCE MISSED (write not visible).** A build/visibility
+   fault, not a model refutation; `E_CTLR` bit 31 `RWP = 0` predicts visibility, so if it differs, rebuild.
+7. **`E_CTLR` bit 1 `== 1` while `STK_HPP1 == 0x3FF` and `GRP_I2` bit 12 `== 1` -> CONTRADICTION (re-measure).** The
+   CTLR sample and the group sample disagree: a stale-cell or build fault, not an arbitration result.
+8. **Any `GRP_*` or `STK_*` sentinel `!= 0x50AA7E49` -> NO-SAMPLE.** That instant's pad did not run; read no cell
+   from it.
+
+Rows 1 and 3 are the split (row 1 names the group, row 3 promotes the bank); row 2 is the arc's end and the
+only intervention row, gated to `take7f` so observation never shares a verdict with intervention. `bankgate.md`
+sec. 5 states the same decision as a rule: `TG_HPP = 0x4C` with the corrected-id force closes rank 1;
+`TG_HPP = 0x3FF` with `TG_ACT0` bit 2 clear AND `TG_GRP2` bit 12 `= 0x1` promotes rank 2 to the gate;
+`TG_HPP = 0x3FF` with `TG_ACT0` bit 2 SET keeps rank 1 and makes the epoch's retirement the fix. The conditional
+second lever (rank 2's group enable, `GICC_CTLR -> 0x3` and/or `GICD_CTLR -> 0x3`) is DELIBERATELY DEFERRED: the
+stamp is unmeasured at the post-force instant, and enabling a group admits the already-pending `0x40`/`0x45`/`0x4C`
+(`E_ISP = 0x1021`) into the vendor ISR at once. The rank-3 bank quiesce is deferred too: it risks the Wi-Fi
+doorbell (`F5_SGIP = 0x20000000` is the live instance).
+
+## Why a bad EOIR is the top rank, not a footnote
+
+The shipped force wrote `0x2` while the firmware's own EOI at file `0x82f52` writes the whole IAR word
+(`0x402`). `bankgate.md` sec. 1 makes that the leading candidate on the spec, not on taste: the write landed in
+the UNPREDICTABLE clause, and the resulting half-done EOI (priority drop without retirement) is exactly the
+split the capstone measured. The corrected force is also strictly safer than the shipped one - it writes the
+value the firmware writes, in the spec's defined branch - and its residual harm mode (an id that is not
+currently active is UNPREDICTABLE; a spurious EOI could stall cross-core housekeeping until the GIC re-pends it)
+is why the pad's pre-read self-gate is mandatory, not optional.
+
+## Bounds (declared, not hidden)
+
+1. **Design only, no new cell.** Every value here is the capstone's (`build/register-dumps/exp/20261007-010906/`,
+   `capture-cmd.txt`, `run-take6f.log`, `interp.txt`); this addendum adds no measurement, only the gate analysis
+   and the take7 design.
+2. **`GICC_HPPIR = 0x3FF` is a three-way signature** - never read it as one thing (group enable, security view,
+   or a rank above `0x4C`).
+3. **The group stamp `0x40161088` was read in OTHER boots**, not at the post-force instant; the capstone read
+   only word 0 (`G_GRP0 = 0x0`). That gap is take7's R5/`TG_GRP2`.
+4. **Ranks 3/4/5 change nothing alone** - they are the cheap companions of R1/R2, and the image authors no
+   `IGROUPR` write, so the stamp is inherited.
+5. **`X_*` cells are NO-SAMPLE in take6-era boots** (take6 dropped the `selpost` pad) - never read `X_*` as data.
+6. **take7 is a design**, and its byte budget depends on dropping the retained `selpost_e` E-block pad (152 B);
+   the pads must not silently truncate (`layoutdiff.md` sec. 4).
+7. **`TG_AHPP` `0x40160128`** is the NS-view alias, layout-derived like every GICC offset; re-verify it against
+   the spec offset table at build time. It is NOT the forbidden ack IAR `0x4016010c` or AIAR `0x40160120`, and
+   `GICD_SGIR 0x40161f00` is never read.
+
+## Verification and health
+
+No device action was taken by the two arm-A tasks or by this record. Sources: `build/tmp/inta-spec/bankgate.md`
+(task `st_01a113ee`, `bankgate.md` sec. 1 the new negative and `F_HPP`, sec. 2 the three-way HPPIR signature,
+sec. 3 the ranked gates, sec. 4 R1..R14, sec. 5 the take7 design and the deferred group lever, sec. 7 the
+literal census and the spec quotes) and `build/tmp/inta-spec/bg2.md` (task `st_01a113ef`, sec. 0 the residual,
+sec. 1 the two variants `take7`/`take7f`, sec. 2 the `GRP_*` cells, sec. 4 the branch table). The boot under
+them is the official capstone `build/register-dumps/exp/20261007-010906/` (ADDENDUM 25a, `EXP RESULT: PASS`,
+blob `2c1ae79f892e922d0df0583f87fb1a2c`, ko `3f87f1e9fe5ed9666f27d1f784d34535`, emitted-bytes 10/10,
+`GATE_MTD_NUM=14`/`rootfsb`). NOTE for cross-reference: `bg2.md` records `bankgate.md` as absent at its read time
+and notes it rather than fabricating it; both files exist now. Router health unchanged and untouched:
+`WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0 WIFIDRV1=0`, stock md5
+`0e530b976d5a20e87358671f1a577695`, on slot B. Hard rules held: no write of CA `0x400392f0`/`0x40039af0`, no read
+of `0x10161000`, no host read of the ack IAR `0x4016010c`/AIAR `0x40160120`, no `GICD_SGIR` read, no device
+cycle, nothing staged, no `rmmod` of vendor modules, no commit, no push.
+
+## The next threads
+
+- **Build take7, run it once, read `TG_GRP2`.** One boot with the corrected EOIR (`0x40160110 <= 0x402`) plus
+  R1..R14 decides rank 1 vs rank 2 vs rank 3. `take7` observes; `take7f` intervenes (the rank-1/2 write), kept
+  md5-pinned apart so the observation and the intervention never share a verdict.
+- **Gate the rank-2 write on the rank-2 read.** `GICC_CTLR -> 0x3` / `GICD_CTLR -> 0x3` ships only if `TG_GRP2`
+  bit 12 reads `1` (or the CTLRs disagree with the stamp); it admits `0x40`/`0x45`/`0x4C` at once.
+- **Gate the rank-3 bank quiesce on the group read.** The SGI-bank `ICENABLER0/1` ships only if the group is
+  enabled and `0x4C` is Group 0. It risks the Wi-Fi doorbell, so it is last.
+- **A reboot clears all of it.** The vendor bring-up rewrites the GIC every boot, so every lever here is
+  register state, boot-scoped, and bound-covered.
+
+## Artifacts
+
+- Specs `build/tmp/inta-spec/{bankgate.md,bg2.md}` (bankgate: sec. 0 the settled state and the mislabelled CA,
+  sec. 1 the spec quotes, sec. 3 the ranked gates, sec. 4 R1..R14, sec. 5 take7, sec. 6 safety, sec. 7 the
+  census and the ledger; bg2: sec. 0 the residual, sec. 1 the two variants, sec. 2 the `GRP_*` cells, sec. 3 the
+  selftest additions, sec. 4 the branch table, sec. 5 safety/bounds/ledger).
+- Boot `build/register-dumps/exp/20261007-010906/` (`capture-cmd.txt`, `run-take6f.log`, `interp.txt`, from
+  ADDENDUM 25a) carries every value quoted here.
+- Emitter ground truth `tools/patch_fw_scratch.py` (`pad_stk_eoir` 11385, `make_take6` 11634); blob
+  `build/tmp/fw-patched/take6f.bin` md5 `2c1ae79f892e922d0df0583f87fb1a2c`; ko `wifidrv1.ko` md5
+  `3f87f1e9fe5ed9666f27d1f784d34535` (unchanged, no CI).
+- Capstone rc/specs `build/tmp/inta-spec/{stk3,eoir,stuck,layoutdiff}.md`; spec sources ARM IHI0048
+  `GICC_HPPIR`/`GICC_CTLR`/`GICC_EOIR` via `arm.jonpalmisc.com` (quoted in `bankgate.md` sec. 7).

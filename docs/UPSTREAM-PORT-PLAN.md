@@ -376,3 +376,44 @@ read/mapped (the module carries it only as a `%lx` argument, 0 occurrences in th
 left healthy (untouched). ASSUMPTION carried (report sec.6): the brief's GATE names THE SLOT CHECK, so it was
 applied literally instead of running the read-only, slot-agnostic probe on the stock image; to take the value
 from the stock slot too, drop the `slot_fail` call from `run-pciskel.sh`.
+
+The arm-B4 RC probe is COMPLETE, and it is the FIRST device run this RC line has ever finished: the RC inventory
+is wide open (2026-10-07, task `st_01a11400`, report `build/tmp/inta-spec/pciskel-smoke3.md` in flight, README
+`build/tmp/wifidrv1-art/pciskel3/README.md`, verdicts `build/register-dumps/diffs/20261007T0135Z-vrunB5/
+verdict.txt` (ALL THREE CLAIMS CONFIRMED) and `build/tmp/wifidrv1-art/pciskel3/{RESULT.txt,SELFTEST.txt,KO.md5,
+run-pciskel.log}`). THE FIX: the read is now an ALIGNED-DWORD one - `luofu_pcie_read()` does one `readl(base +
+(off & ~3u))`, shifts by `(off & 3u) * 8`, then masks to the field width - because the width theory was wrong:
+the v2 `readw()` ko (`51376f76...`) re-crashed at the SAME RC0 `+0x082` address (`0xc800a082`) on an `ldrh`, so
+a *narrower* access is not a legal one, only an *aligned* access is (the two live pstore records, `pciskel3/
+{_ko-bar.txt,pstore-blk-2-v1.txt,pstore-blk-0-v3.txt}`); the fix is submodule commit `c35af1a` on
+`omo/phase22-hccaccept`, CI `lab-module-build` run `37556699784` completed/success, ko md5
+`976a706a3184bdf32fd63b858cd67315`, `readl()` again the module's ONLY MMIO op. THE RUN (gate ADMITTED, not
+refused, `GATE OK: SLOT=mtd14:rootfsb` at `boot_id=131068c7-45e4-4480-a1c1-3f64e2ff8e21`, 2026-10-07T01:34:07Z ->
+01:34:15Z, one serial `insmod force_probe=1` -> `rmmod`, ko staged AS `/tmp/wifidrv1.ko`): BOTH RCs' full DBI +
+`cfg` inventories ran to a clean `FORCED probe PASS ... 0 writes` with NO FAULT, and the read that killed both
+prior kos (imprecise external abort `0x1406`) now RETURNS - `rc0 dbi+0x082 = 0x7012 match=YES` and `rc1
+dbi+0x082 = 0x7012 match=YES` (`DL_ACTIVE` bit 13 SET, `link-training=1 neg-speed=2 (5GT/s)`), with `EC` = 0x0000`,
+`dbi+0x004 = 0x0007`, `dbi+0x07c = 0x734c12` (Link Capabilities), `dbi+0x080 = 0x0000`, `dbi+0x80c = 0x012c`.
+THE NEW LIVE FACTS: `rc1`'s DBI answers exactly as `rc0`'s (`0x0000`/`0x0007`/`0x734c12`/`0x0000`/`0x7012`/
+`0x012c`), so the DWC port logic is identical on both domains and the aligned-dword read is proven on BOTH; the
+iATU selector `[0x900] = 0x00000002` with `iatu_rc[2]` base/limit `0x48000000`/`0x4fffffff` (rc0) and
+`0x60000000`/`0x67ffffff` (rc1), both `match=YES`, joins the `pcierc.md` window plan as measured; and the
+endpoint side reads `cfg+0x000 = 0x59e7`/`cfg+0x004 = 0x0006`/`cfg+0x008 = 0x2800000`/`cfg+0x02c = 0x19e5` - all
+four `match=YES` from BOTH RCs' CFG windows, which no prior ko had ever reached. ONE OPEN SPLIT, flagged not
+explained: both RCs' `cfg+0x082` reads `0x1012` (`DL_ACTIVE`=0, the endpoint-side Link Status) while the DBI's
+reads `0x7012` (=1) - a `match=NO` PREDICTOR disagreement (the endpoint link is still training), not a lost
+measurement. THE UNLOAD AND THE BOX: `RMMOD_RC=0`, `LUOFU_AFTER_RMMOD=0`, `STAGED_LEFT=0`, `POST_WIPHY=2`,
+`POST_IFACE=6`, `POST_CAL2G=1`, `POST_CAL5G=1`, `POST_LUOFU_PCIE=0`, `POST_VENDOR_WIFI=1`,
+`POST_VENDOR_PLAT=1`, `POST_OMO_PAT=0`, `POST_LEFTOVERS=0`, and `boot_id` UNCHANGED (`131068c7...` the same boot
+the run started on - the fix does not crash). `PCISKEL RESULT: PASS`. The unblock this class of record named was
+executed first: the slot was restored via the record's own verified recipe (`build/custom/env-bootflag-b.bin`
+into BOTH env copies + `boot_reg 0x21` for slot B; the arm-B3 lane's literal slot check refused `mtd13:rootfsa`
+an hour earlier - `diffs/20261007T0051Z-vrunB4`), and the SAME take6f capstone boot served both halves
+(ADDENDUM 25a). This closes the RC design's open read question: the port's five windows, the iATU table and the
+vendor-written `DBI+0x04 = 7` are now measured, and what remains for the stage-2 RC driver is the FROM-SCRATCH
+host controller itself (iATU programming, LTSSM, `cfg` accessors), not another measurement. The runner left in
+place carries the SLOT CHECK + arm-A seriality, so the next run refuses before any mutation. Hard rules held
+this session: CA `0x400392f0` never written; `0x10161000` never read or mapped (the ko carries it only as a
+`%lx` argument and its own line says `write-only misc 0x10161000 NOT mapped`); the host-side IAR `0x4016010c`
+never read; the device action serial + gate-checked; ko staged ALWAYS as `wifidrv1.ko`; NO device cycle was run
+by the B4 verifier itself (it performed ONE read-only health/slot probe and made no commit, pushing nothing).
