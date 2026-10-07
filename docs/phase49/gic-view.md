@@ -5148,3 +5148,122 @@ positive control still appears within the same boot class). The ADDENDUM 31 one-
 CONFIRMED LIVE: the full-IAR word (`0x402`, PE field set) was the take7 family's error; the BARE id is
 the correct EOIR form, and the builder's refusal of `0x402` + the bare-`0x2` store are the configuration
 this capstone spent.
+
+---
+
+# ADDENDUM 33 (2026-10-07): the code sprint - six lanes
+
+The 2026-10-07 code sprint turned six of the port's open threads into loadable, CI-built code: the stage-1
+mach DT, the CRG controller, the pinctrl mapping tables, the Wi-Fi service skeleton, the DWC PCIe frame,
+and the kernel-config inventory. Five of the six lanes are loadable `.ko` (four went to the live router for a
+smoke, one is a config file evaluated by its own CI job); none is a data path. The take-family experiment
+(take7a-e, ADDENDUM 30-32 above) ran above all of this and none of it touched the firmware chain: no lane
+writes the Wi-Fi blob, no lane in this addendum caused a reboot, and the router stayed on 2.5.24 with its
+stock md5 pinned. Every submodule commit in this addendum pushed to `omo/phase22-hccaccept` only, with
+nothing to `master`.
+
+**Lane 1 - the mach DT (`dtsx`).** The artifact is `opensource/docs/soc/luofu-r116.dts`, expanded with 20
+nodes re-expressed against new `hisilicon,luofu-*` compatibles and kept register-faithful to the pinned
+vendor tree: the full CRG node with its two PLLs and two muxes, the binary-only `rstinfo` block folded into
+that node, `pinctrl_peri`, both `pcie` domains with their `iatu_rc`/`iatu_ep` tables and `linux,pci-domain`
+ids, `uart0`/`uart1` (`snps,dw-apb-uart`), the `fmc` SPI-NAND controller with its 17 A/B partitions, four
+gemac nodes plus `mdio0` and five PHYs, the three LSW blocks, and `pie`; the `LUOFU_CLK_*` clock-ID block
+grew 7 -> 16 gates, each new vendor node sits `status = "disabled"`, and the efuse, pwm-regulator and
+thermal subsystems were left out on purpose. The CI is `tools/dtc-check.sh` under dtc 1.7.2:
+`dtc-check: PASS size=10807 sha256=c3b2c607409b1c10a9b4864e67fc973426dee8cd7e60567a9e7fef4202549ee1
+errors=0 warnings=3`, the three warnings being the pre-existing `unit_address_vs_reg` nits. No smoke was run
+(a DTS is not a module), and the next rung is the first `mach-luofu` Kconfig entry plus the `crg-luofu.c`
+in-tree landing.
+
+**Lane 2 - the CRG controller (`luofu-clk`).** The artifact is `opensource/lab/luofu-clk/`
+(`luofu-clk.c`, 1,014 lines, plus `bindings/hisilicon,luofu-crg.md`): the pinned geometry (16 gates, 2
+muxes, 2 PLLs) transcribed into structs, wired through the generic `clk-provider.h` API with our own
+`clk_ops`, every clock tagged `CLK_IGNORE_UNUSED`, and a DT onecell provider registering PLLs, then muxes,
+then gates. The CI is `lab-module-build` run `37573235229` on head `4f0373f` (success, all four matrix jobs
+green, artifact `luofu-clk-ko`), whose new `CRG rule census` step asserts exactly one `writel()` (the RMW
+primitive), no sub-word stores and `off & 3` alignment. The smoke is `sprint-smokes.md` section 1: ko md5
+`763c346a78d9b549edc787c1efd620e1`, `insmod force_probe=1` rc=0 then `rmmod` rc=0, the banner
+`FORCED probe (no DT match) base=0x14880000 size=0x1000 write_test=0 write_flip=0 rst_flip=0 read-only`,
+the `[0x090] CRG_STATUS = 0x6a010008` and `[0x100] WDT_ISTATUS = 0x00000000` reads, `0 writes`. The next rung
+is the `reset_controller_dev` the driver still owes, deferred because the reset class is only now being
+characterized (`0x2c` bit `0x18` `i2c0_rst` cleared and restored cleanly in the stage-2b run, so the DEASSERT
+direction works; the clear on the `0x14` gate class is inert, so a clock gate can never be flipped back in
+software), along with the PLL/mux rate math and the move into `drivers/clk/hisilicon`.
+
+**Lane 3 - the pinctrl mapping tables (`luofu-pinctrl`).** The artifact is
+`opensource/lab/luofu-pinctrl/` (611 lines), which replaces the placeholder skeleton with real tables read
+out of the shipped `hi_kpinctrl.ko`: 37 pins (`.data+0x428`), 24 groups with their genuine per-group pin
+lists (`.data+0x68`, pins `.rodata+0x32c..0x3e4`), 24 functions (`.rodata+0x20c`) and the 37 x 5 per-pin mux
+`drv_data` entries (`.data+0x644..0xf84`), each cited to its file offset; `set_mux` and the pinconf setters
+stay no-op stubs so the bootloader mux survives. It is in the `lab-module-build` matrix, so the branch push
+re-triggered that lane, and CI run `37573603109` (head `5a049e15`) is green after one repair: the first cut
+called `pinctrl_utils_free_map`, which vanilla 5.10 does not export, and `5a049e1` swapped in
+`pinconf_generic_dt_node_to_map_all` plus `pinconf_generic_dt_free_map`. The smoke ran, and it is the lane's
+find: `insmod` returned rc=16 (Resource busy) with `Error: Driver 'luofu-pinctrl' is already registered,
+aborting...`, because the vendor `hi_kpinctrl` owns that exact platform-driver name and is bound to the same
+live DT node. Nothing loaded, nothing was touched, and the next rung is to rename `.driver.name` (or drop
+the DT match) and re-run.
+
+**Lane 4 - the Wi-Fi service skeleton (`luofu-wifi`).** The artifact is `opensource/lab/luofu-wifi/` (822
+lines), our own `struct pci_driver` for `59e7:0005`: it maps four pages of the region-3 inbound window, runs
+the announce/handshake state machine, decodes the glue/mailbox on copy A and the twin, and keeps the SR/DR
+ring and credit bookkeeping, all through the aligned-dword accessor with no MMIO store anywhere in the
+source. It also encodes one correction the arc owed: the ETE channel register blocks sit 0x50 apart
+(`SR {0x400,0x450,0x4a0}`, `DR {0x590,0x5e0,0x630,0x680}`), not the `0x114`/`0x6c` strides `wifidrv1.c`
+indexes with, which `credit2.md` section 5 retracts as host struct strides. CI is `lab-module-build` run
+`37573603109` (the matrix lane; the `master`-only `build-load-test-module.yml` lane was not exercised by this
+push and mirrors the others). Its smoke is section 3 of `sprint-smokes.md`: ko md5
+`2fb63afedc8bc335f8a4c4a0eca92309`, `insmod` rc=0 and `rmmod` rc=0 on the default `hw=0` path (registration
+and ABI only, zero PCI contact), with `hw=1` deliberately not exercised because the live endpoint is
+vendor-bound on both domains. The next rung is the glue ISR (`request_irq` the bound endpoint's INTx virq,
+dispatch on status mask `0x3d8`, with the in-ISR bound), then the H2D/D2H service, the rings, and the wiphy.
+
+**Lane 5 - the DWC PCIe frame (`luofu-pcie`).** The artifact is `opensource/lab/luofu-pcie/` (1,005 lines):
+the platform-driver shape plus dword-aligned read AND write accessors (`luofu_pcie_read` / `luofu_pcie_write`),
+an LTSSM read-state machine over the DBI `PORT_LOGIC_DEBUG0/1` words, a compile-time alignment rule
+(`luofu_pcie_check_aligned()` BUILD_BUG_ONs every raw-dword offset) and a commented host-bridge/CRG scaffold;
+the `misc` window stays mapped but write-only and is never read. CI is `lab-module-build` run `37573603109`,
+whose new `alignment rule` step fails the build on any `readb/readw/writeb/writew` and on a misaligned
+literal in a raw `readl/writel`. The smoke is section 4: ko md5 `385fc736ca6088c7b8ebe14cd59d4549`,
+`insmod force_probe=1` rc=0 and `rmmod` rc=0, with the DBI inventory matching 3/3, the config space 4/4, and
+`rc0 [0x082] Link Status = 0x7012` read through the aligned accessor, the very word whose `readw` panicked
+the box earlier; the aggregate `link DOWN` is the AND of the two `DL_ACTIVE` predicates and a measurement,
+not a fault, while the DWC LTSSM independently reads L0. The next rung is to wire the CRG and pinctrl
+providers, then land the staged write path and `pci_host_probe` registration.
+
+**Lane 6 - the kernel-config inventory (`luofu-kernel`).** The artifact is
+`opensource/lab/luofu-kernel/{luofu.fragment,README.md}` plus the new CI lane
+`.github/workflows/luofu-kernel-config.yml`: a delta fragment on `multi_v7_defconfig` at 5.10.201, symbols
+`=y`, 47 non-`LUOFU` symbols plus 13 new ones, each with its vendor evidence in the lane README. The CI is
+that lane's own three runs, and it earned its keep by failing twice on real defects: run `37572753552` on
+`6ad9e48` failed because `merge_config.sh` runs `make alldefconfig` internally without `ARCH`, so the inner
+make resolved a host x86 config (fix `78823b3`, `export ARCH=arm`), and run `37572932947` on `78823b3` then
+caught a genuine finding, `PSTORE_BLK` depends on the promptless `BROKEN` symbol, so pstore-on-MTD is
+unreachable in a vanilla tree without the vendor patch (fix `c40637a`). Run `37573150202` on `c40637a` is
+SUCCESS with 47/47 symbols `=y` and the 13 `LUOFU` ones listed as a to-do. No device smoke applies to a
+config file, and the next rung is the 13 Kconfig entries with their `select`s, which is also what turns the
+lane's opt-in `kernel` job from boilerplate into a real build.
+
+**What the sprint proved, and what it did not.** Five loadable lanes exist where only prose did, each with a
+CI lane that has teeth and, for four of them, a live receipt: two clean load/unload pairs (`luofu-clk`,
+`luofu-pcie`), one clean registration-only load (`luofu-wifi`), one kernel refusal that is a naming finding
+rather than an anomaly (`luofu-pinctrl`), plus a compile-verified DT and a config lane that caught two real
+defects before it went green. None of the six has a data path, an ISR, or a write to any vendor register. The
+one deliberate device write in this sprint's neighbourhood was the stage-2b RESET-class CRG flip (`0x2c` bit
+`0x18`, cleared then restored exactly, PASS), not a lane smoke.
+
+### 33. THE VERDICT (appended 2026-10-07 by the orchestrator): SPRINT RESULT: COMPLETE
+
+The six-lane code sprint is COMPLETE. The DT compiles clean under dtc 1.7.2, and all five module lanes are
+CI-green at submodule head `5a049e15` (the pinctrl hotfix): CI run `37573603109` covers `luofu-clk`,
+`luofu-pinctrl`, `luofu-wifi` and `luofu-pcie` (artifacts `luofu-{clk,pinctrl,pcie,wifi}-ko`, ids
+`11461882241` / `11461976777` / `11461758239` / `11462015122`), and the config lane is green on `c40637a` at
+run `37573150202`. The live pass (`build/tmp/inta-spec/sprint-smokes.md`, runner
+`build/tmp/wifidrv1-art/sprint/run-sprint-smoke.sh`, host UTC 05:04:45Z-05:05:09Z) walked clk, pinctrl, wifi
+and pcie in that order, one serial device action per module, each preceded by its own gate (health plus SLOT
+CHECK `mtd14`/`rootfsb` plus no active cycle): three loaded and unloaded cleanly, one was refused by the
+kernel. The `boot_id 4f8f2940-d1f3-41d7-a61d-67f00de1e41c` was unchanged end to end, no reboot happened, and
+the gadget came out healthy: `WIPHY=2 IFACE=6 CAL2G=1 CAL5G=1`, `PAT=0 OMO_OFF=0 LEFTOVERS=0`, stock md5
+`0e530b976d5a20e87358671f1a577695` at pin. One honest note on the class: the five module lanes were not
+byte-frozen into one shared ko artifact set, since they live in one submodule; the CI receipts and the smoke
+ran against the same head, which is the closest a single-checkout sprint gets to a frozen artifact set.

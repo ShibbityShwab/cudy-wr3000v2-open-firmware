@@ -24,21 +24,43 @@
  * mirror the pinned tree's clock-output-names; (reg-offset, bit) is the
  * vendor gate geometry (pinned clk@14880000, :201) that seeds the driver
  * clock table:
- *   SFC    0  sfc_clk    clk_gate@001400  reg-offset 0x14  bit 0x0   :236
- *   GPIO0  1  gpio0_clk  clk_gate1@001420 reg-offset 0x14  bit 0x14  :206
- *   GPIO1  2  gpio1_clk  clk_gate2@001421 reg-offset 0x14  bit 0x15  :216
- *   I2C0   3  i2c0_clk   clk_gate2@001424 reg-offset 0x14  bit 0x18  :226
- *   PCIE0  4  pcie0_clk  clk_gate@002012 reg-offset 0x20  bit 0xc   :286
- *   PCIE1  5  pcie1_clk  clk_gate@002013 reg-offset 0x20  bit 0xd   :296
- *   GMAC0  6  gemac_clk0 clk_gate@002019 reg-offset 0x20  bit 0x13  :306
+ *   SFC     0  sfc_clk      clk_gate@001400  reg-offset 0x14  bit 0x0   :236
+ *   GPIO0   1  gpio0_clk    clk_gate1@001420 reg-offset 0x14  bit 0x14  :206
+ *   GPIO1   2  gpio1_clk    clk_gate2@001421 reg-offset 0x14  bit 0x15  :216
+ *   I2C0    3  i2c0_clk     clk_gate2@001424 reg-offset 0x14  bit 0x18  :226
+ *   PCIE0   4  pcie0_clk    clk_gate@002012  reg-offset 0x20  bit 0xc   :286
+ *   PCIE1   5  pcie1_clk    clk_gate@002013  reg-offset 0x20  bit 0xd   :296
+ *   GMAC0   6  gemac_clk0   clk_gate@002019  reg-offset 0x20  bit 0x13  :306
+ *   LEDPWM  7  led_pwm      clk_gate@001414  reg-offset 0x14  bit 0xe   :246
+ *   LSW_DP  8  lsw_dp_clk0  clk_gate@002000  reg-offset 0x20  bit 0x0   :256
+ *   LSW_PFE 9  lsw_pfe_clk0 clk_gate@002001  reg-offset 0x20  bit 0x1   :266
+ *   MDIO   10  mdio_clk0    clk_gate@002003  reg-offset 0x20  bit 0x3   :276
+ *   GMAC1  11  gemac_clk1   clk_gate@002020  reg-offset 0x20  bit 0x14  :316
+ *   GMAC2  12  gemac_clk2   clk_gate@002021  reg-offset 0x20  bit 0x15  :326
+ *   GMAC3  13  gemac_clk3   clk_gate@002022  reg-offset 0x20  bit 0x16  :336
+ *   GMAC4  14  gemac_clk4   clk_gate@002023  reg-offset 0x20  bit 0x17  :346
+ *   PIE    15  pie_clk0     clk_gate@002025  reg-offset 0x20  bit 0x19  :356
+ *
+ * The 0x14-group reg-offset is verbatim in the pinned body; each 0x20-group
+ * offset is reconstructed from the clk_gate@0020NN unit address and stays
+ * provisional until bench-confirmed (clocks2.md sec 2 caveat).
  */
-#define LUOFU_CLK_SFC   0
-#define LUOFU_CLK_GPIO0 1
-#define LUOFU_CLK_GPIO1 2
-#define LUOFU_CLK_I2C0  3
-#define LUOFU_CLK_PCIE0 4
-#define LUOFU_CLK_PCIE1 5
-#define LUOFU_CLK_GMAC0 6
+#define LUOFU_CLK_SFC     0
+#define LUOFU_CLK_GPIO0   1
+#define LUOFU_CLK_GPIO1   2
+#define LUOFU_CLK_I2C0    3
+#define LUOFU_CLK_PCIE0   4
+#define LUOFU_CLK_PCIE1   5
+#define LUOFU_CLK_GMAC0   6
+#define LUOFU_CLK_LEDPWM  7
+#define LUOFU_CLK_LSW_DP  8
+#define LUOFU_CLK_LSW_PFE 9
+#define LUOFU_CLK_MDIO   10
+#define LUOFU_CLK_GMAC1  11
+#define LUOFU_CLK_GMAC2  12
+#define LUOFU_CLK_GMAC3  13
+#define LUOFU_CLK_GMAC4  14
+#define LUOFU_CLK_PIE    15
 
 / {
 	#address-cells = <1>;
@@ -50,6 +72,7 @@
 	aliases {
 		serial0 = &uart1;	/* physical console (ttyS0), pinned:181 */
 		serial1 = &uart0;
+		console = &uart1;	/* pinned aliases: console -> uart1@0x1010f000 */
 	};
 
 	chosen {
@@ -136,6 +159,51 @@
 		reg = <0x14880000 0x1000>;	/* pinned:201 */
 		#clock-cells = <1>;		/* clk id table in luofu.h */
 		#reset-cells = <2>;		/* (reg-offset, bit), pinned:1395 */
+
+		/* clock-tree children, verbatim from pinned clk@14880000 (:201).
+		 * Gate geometry = the LUOFU_CLK_* table above; the two PLLs register
+		 * read-only for stage 1 (never reprogram the CPU PLL) and the two
+		 * muxes keep the recovered (reg-offset, mask, table) shape. */
+		pll_cpu: clk-pll-cpu {
+			compatible = "hisilicon,luofu-clk-pll";	/* from hsan,clk-pll :366 */
+			ctrl-offset = <0x198>;
+			status-offset = <0x90>;
+			status-bit = <0x1e>;
+			#clock-cells = <0>;
+		};
+
+		pll_lsw: clk-pll-lsw {
+			compatible = "hisilicon,luofu-clk-pll";	/* :378 */
+			ctrl-offset = <0x1e0>;
+			status-offset = <0x90>;
+			status-bit = <0x1b>;
+			#clock-cells = <0>;
+		};
+
+		cpu_mux: clk-mux-cpu {
+			compatible = "hisilicon,luofu-clk-mux";	/* :390 */
+			reg-offset = <0x138>;
+			mask = <0x8>;
+			table = <0 1>;
+			#clock-cells = <0>;
+		};
+
+		efuse_mux: clk-mux-efuse {
+			compatible = "hisilicon,luofu-clk-mux";	/* :401 */
+			reg-offset = <0x138>;
+			mask = <0x2>;
+			table = <0 1>;
+			#clock-cells = <0>;
+		};
+	};
+
+	/* watchdog on the same 0x14880000 CRG page (pinned watchdog :1300);
+	 * reset values softrst_val0/1 seed the reset path (pinned crg :479). */
+	watchdog {
+		compatible = "hisilicon,luofu-wdt";	/* from hsan,hsan-watchdog */
+		interrupts = <0 2 4>;			/* SPI 2, pinned:1300 */
+		timeout-sec = <30>;			/* 0x1e */
+		status = "disabled";
 	};
 
 	/* ---- standard ARM peripherals (free bindings) ---- */
@@ -259,10 +327,44 @@
 
 	/* ---- vendor-specific blocks: placeholders (new bindings, TODO) ---- */
 
+	/* pinctrl + peripheral IOMUX. pinned pinctrl@0x14900000
+	 * "hsan,luofu-peri-pinctrl" (:1270): a 0x3c-byte mux window (15 x 32-bit
+	 * registers) plus a 0x100-byte config window (64 x 32-bit), reg-names
+	 * "mux" "cfg". Node name carries the first reg base (0x14900100). */
+	pinctrl_peri: pinctrl@14900100 {
+		compatible = "hisilicon,luofu-peri-pinctrl";
+		reg = <0x14900100 0x3c>,		/* mux, pinned:1270 */
+		      <0x14940000 0x100>;		/* cfg */
+		reg-names = "mux", "cfg";
+		status = "disabled";
+		/* TODO binding question: 37 pins / 24 groups / 24 functions
+		 * (pinctrl.md sec 2). The pinned DT selects only the spi group
+		 * plus jtag_gpio2..5 / led0_1 / led1_1 / avs; the two spi states
+		 * below show the (function, groups) mapping shape. */
+
+		spi_default_state: spi-default-state {
+			spi_pmux: spi-pmux {
+				function = "spi";
+				groups = "spi_grp";
+			};
+		};
+
+		spi_sleep_state: spi-sleep-state {
+			spi_sleep_pmux: spi-sleep-pmux {
+				function = "spi";
+				groups = "spi_grp";
+			};
+		};
+	};
+
 	/* SPI-NAND controller. pinned fmc@10a20000 "hsan,fmc" (:781): quad-mode
-	 * SPI-NAND with the A/B partition table (vendor-dt-notes.md sec 6). */
+	 * SPI-NAND on chip-select 1 with the A/B partition table
+	 * (vendor-dt-notes.md sec 6). */
 	fmc: spi-nand@10a20000 {
 		compatible = "hisilicon,luofu-fmc";
+		bus_id = "fmc";			/* pinned:781 */
+		spi_cs = <1>;			/* pinned:781 */
+		enable-quad-mode;		/* pinned:781 */
 		reg = <0x10a20000 0x1000>,	/* ctrl,    pinned:781 */
 		      <0x1c000000 0x100000>;	/* window */
 		clocks = <&crg LUOFU_CLK_SFC>;
@@ -271,15 +373,42 @@
 		reset-names = "sfc_rst";
 		#address-cells = <1>;
 		#size-cells = <1>;
+		ranges;				/* flash-address space maps 1:1 */
 		status = "disabled";
 		/* TODO binding question: reuse the spi-nand core but a new
-		 * hisilicon,luofu-fmc controller driver is needed; the
-		 * fixed-partitions A/B table goes here once it lands. */
+		 * hisilicon,luofu-fmc controller driver is needed. */
+
+		/* 17-partition A/B table, verbatim (vendor-dt-notes.md sec 6). */
+		partitions {
+			compatible = "fixed-partitions";	/* reuse ofpart */
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0      { label = "esbc";        reg = <0x0 0x40000>; };
+			partition@40000  { label = "uboota";      reg = <0x40000 0x100000>; };
+			partition@140000 { label = "ubootb";      reg = <0x140000 0x100000>; };
+			partition@240000 { label = "enva";        reg = <0x240000 0x40000>; };
+			partition@280000 { label = "envb";        reg = <0x280000 0x40000>; };
+			partition@2c0000 { label = "fac";         reg = <0x2c0000 0x200000>; };
+			partition@4c0000 { label = "bdinfo";      reg = <0x4c0000 0x40000>; };
+			partition@500000 { label = "cfga";        reg = <0x500000 0x200000>; };
+			partition@700000 { label = "cfgb";        reg = <0x700000 0x200000>; };
+			partition@900000 { label = "log";         reg = <0x900000 0x440000>; };
+			partition@d40000 { label = "pstore";      reg = <0xd40000 0x40000>; };
+			partition@d80000 { label = "kernela";     reg = <0xd80000 0x840000>; };
+			partition@15c0000 { label = "kernelb";    reg = <0x15c0000 0x840000>; };
+			partition@1e00000 { label = "rootfsa";    reg = <0x1e00000 0x1740000>; };
+			partition@3540000 { label = "rootfsb";    reg = <0x3540000 0x1740000>; };
+			partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
+			partition@6280000 { label = "upgrade";    reg = <0x6280000 0x1d80000>; };
+		};
 	};
 
-	/* gigabit MAC #0 + MDIO bus. pinned gemac@0x14300000 "hsan,mac" (:885)
-	 * and mdio0 "hsan,mdio" (:1124). Five MACs (ports 8..12): gemac0 is
-	 * RGMII, 1..4 are GMII into the internal LSW switch. */
+	/* Ethernet: five gigabit MACs (ports 8..12) + MDIO bus + the internal
+	 * LSW switch. pinned gemac@0x14300000..0x14500000 "hsan,mac" (:885..),
+	 * mdio0 "hsan,mdio" (:1124), lsw_dp "hsan,dp" (:1080), lsw_pfe "hsan,pfe",
+	 * lsw_woe "hsan,lsw_woe", pie@0x10a70000 "hsan,pie" (:1440). gemac0 is
+	 * RGMII, gemac1..4 are GMII into the internal LSW. */
 	gmac0: ethernet@14300000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;	/* pinned:885 */
@@ -293,40 +422,225 @@
 		 * hix5hd2_gmac.c (different family). */
 	};
 
+	gmac1: ethernet@14380000 {
+		compatible = "hisilicon,luofu-gmac";
+		reg = <0x14380000 0x10000>;	/* pinned:900 */
+		phy-mode = "gmii";		/* port 9 */
+		clocks = <&crg LUOFU_CLK_GMAC1>;
+		resets = <&crg 0x30 0xf>,
+			 <&crg 0x30 0x10>;
+		reset-names = "mac_logic_reset", "mac_reset";
+		status = "disabled";
+	};
+
+	gmac2: ethernet@14400000 {
+		compatible = "hisilicon,luofu-gmac";
+		reg = <0x14400000 0x10000>;	/* pinned:907 */
+		phy-mode = "gmii";		/* port 10 */
+		clocks = <&crg LUOFU_CLK_GMAC2>;
+		resets = <&crg 0x30 0x11>,
+			 <&crg 0x30 0x12>;
+		reset-names = "mac_logic_reset", "mac_reset";
+		status = "disabled";
+	};
+
+	gmac3: ethernet@14480000 {
+		compatible = "hisilicon,luofu-gmac";
+		reg = <0x14480000 0x10000>;	/* pinned:914 */
+		phy-mode = "gmii";		/* port 11 */
+		clocks = <&crg LUOFU_CLK_GMAC3>;
+		resets = <&crg 0x30 0x13>,
+			 <&crg 0x30 0x14>;
+		reset-names = "mac_logic_reset", "mac_reset";
+		status = "disabled";
+	};
+
+	gmac4: ethernet@14500000 {
+		compatible = "hisilicon,luofu-gmac";
+		reg = <0x14500000 0x10000>;	/* pinned:921 */
+		phy-mode = "gmii";		/* port 12 */
+		clocks = <&crg LUOFU_CLK_GMAC4>;
+		resets = <&crg 0x30 0x15>,
+			 <&crg 0x30 0x16>;
+		reset-names = "mac_logic_reset", "mac_reset";
+		status = "disabled";
+	};
+
 	mdio0: mdio@14000000 {
 		compatible = "hisilicon,luofu-mdio";
 		reg = <0x14000000 0x1000>;	/* pinned:1124 */
 		#address-cells = <1>;
 		#size-cells = <0>;
+		clocks = <&crg LUOFU_CLK_MDIO>;
+		resets = <&crg 0x30 0x6>,	/* mdio_reset,   pinned:1124 */
+			 <&crg 0x30 0x1a>,	/* gephyall */
+			 <&crg 0x30 0x1b>,	/* gephy0 */
+			 <&crg 0x30 0x1c>,	/* gephy1 */
+			 <&crg 0x30 0x1d>,	/* gephy2 */
+			 <&crg 0x30 0x1e>,	/* gephy3 */
+			 <&crg 0x30 0x1f>;	/* gephy4 */
+		reset-names = "mdio_reset", "gephyall_reset", "gephy0_reset",
+			      "gephy1_reset", "gephy2_reset", "gephy3_reset",
+			      "gephy4_reset";
 		status = "disabled";
-		/* TODO binding question: 5x ethernet-phy-ieee802.3-c22 @ reg 1..5
-		 * (first at pinned:1133) once the mdio driver lands. */
+
+		ethernet-phy@1 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <1>; max-speed = <1000>; };
+		ethernet-phy@2 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <2>; max-speed = <1000>; };
+		ethernet-phy@3 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <3>; max-speed = <1000>; };
+		ethernet-phy@4 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <4>; max-speed = <1000>; };
+		ethernet-phy@5 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <5>; max-speed = <1000>; };
+	};
+
+	/* internal LSW switch: queue/flow/DP + PFE parser + WoE offload. */
+	lsw_dp: ethernet-switch@87b00000 {
+		compatible = "hisilicon,luofu-dp";	/* from hsan,dp :1080 */
+		reg = <0x87b00000 0x400000>,	/* queue */
+		      <0x87f00000 0x100000>,	/* flow */
+		      <0x11000000 0x80000>,	/* dp */
+		      <0x11280000 0x80000>,	/* eps */
+		      <0x11200000 0x80000>,	/* eqm */
+		      <0x11100000 0x80000>,	/* fam */
+		      <0x11080000 0x80000>;	/* ips */
+		reg-names = "queue", "flow", "dp", "eps", "eqm", "fam", "ips";
+		clocks = <&crg LUOFU_CLK_LSW_DP>;
+		resets = <&crg 0x30 0x0>,	/* dp_logic */
+			 <&crg 0x30 0x1>;	/* dp_srst */
+		reset-names = "dp_logic", "dp_srst";
+		status = "disabled";
+		/* NOTE: the board overlay rebases queue 0x87b00000 -> 0x80000000
+		 * (vendor-dt-notes.md sec 8); the pinned base is kept here. */
+	};
+
+	lsw_pfe: ethernet-switch@12100000 {
+		compatible = "hisilicon,luofu-pfe";	/* from hsan,pfe */
+		reg = <0x12100000 0x80000>,	/* ifc */
+		      <0x12180000 0x80000>,	/* l2 */
+		      <0x12280000 0x80000>,	/* napt */
+		      <0x12380000 0x80000>,	/* mcc */
+		      <0x12400000 0x80000>,	/* opp */
+		      <0x12080000 0x80000>,	/* pa */
+		      <0x11180000 0x80000>,	/* pe */
+		      <0x12000000 0x80000>,	/* pfe_glb */
+		      <0x11380000 0x80000>,	/* prbs */
+		      <0x12480000 0x80000>;	/* pub */
+		reg-names = "ifc", "l2", "napt", "mcc", "opp", "pa", "pe",
+			    "pfe_glb", "prbs", "pub";
+		clocks = <&crg LUOFU_CLK_LSW_PFE>;
+		resets = <&crg 0x30 0x3>,
+			 <&crg 0x30 0x4>;
+		reset-names = "pfe_logic", "pfe_srst";
+		status = "disabled";
+	};
+
+	lsw_woe: woe {
+		compatible = "hisilicon,luofu-lsw-woe";	/* from hsan,lsw_woe */
+		dma-coherent;
+		interrupts = <0 0x54 4>,	/* band0_comp_irq, pinned:1050 */
+			     <0 0x53 4>,	/* band1_comp_irq */
+			     <0 0x52 4>,	/* band2_comp_irq */
+			     <0 0x51 4>,	/* band0_txba */
+			     <0 0x50 4>;	/* band1_txba */
+		interrupt-names = "band0_comp_irq", "band1_comp_irq",
+				  "band2_comp_irq", "band0_txba", "band1_txba";
+		status = "disabled";
+	};
+
+	/* packet-ingress engine (WoC ring consumer). pinned pie@0x10a70000
+	 * "hsan,pie" + "hsan,acp-pie" (:1440). */
+	pie: pie@10a70000 {
+		compatible = "hisilicon,luofu-pie";	/* from hsan,pie */
+		reg = <0x10a70000 0x10000>;	/* pinned:1440 */
+		dma-coherent;
+		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
+		clocks = <&crg LUOFU_CLK_PIE>;
+		resets = <&crg 0x30 0x19>;
+		status = "disabled";
 	};
 
 	/* DWC PCIe root complex #0. pinned pcie@0x10160000 "hsan,pcie" +
 	 * "hsan,acp-pcie0" (:1205). NOTE: the "misc" window 0x10161000 is kept
 	 * for reference only -- it MUST NEVER be read at runtime (panics the
-	 * box); measure through the endpoint BAR0/BAR2 instead. */
+	 * box); measure through the endpoint BAR0/BAR2 instead. iatu_rc/iatu_ep
+	 * are the vendor inbound/outbound window tables (phase18/inbound-map.md). */
 	pcie0: pcie@10160000 {
 		compatible = "hisilicon,luofu-pcie";
+		device_type = "pci";
+		#address-cells = <3>;
+		#size-cells = <2>;
+		linux,pci-domain = <0>;	/* pinned:1219 */
+		channel = <0>;
+		hwver = <0x10>;		/* 0x10 = RC mode */
+		capability = <1>;	/* overlay sets 3 */
 		reg = <0x10160000 0x1000>,	/* dbi,  pinned:1205 */
 		      <0x10161000 0x3000>,	/* misc (NEVER read) */
 		      <0x50000000 0x1000>,	/* cfg */
 		      <0x40000000 0x2000000>,	/* mem */
 		      <0x48000000 0x800000>;	/* io */
 		reg-names = "dbi", "misc", "cfg", "mem", "io";
+		/* downstream windows (mem/io/cfg), identity-mapped to the host
+		 * addresses in reg -- the DWC/pcie-histb shape. */
+		ranges = <0x02000000 0 0x40000000 0x40000000 0 0x2000000>,
+			 <0x01000000 0 0x48000000 0x48000000 0 0x800000>,
+			 <0x03000000 0 0x50000000 0x50000000 0 0x1000>;
 		bus-range = <0 0xa>;
 		interrupts = <0 0x3b 4>,	/* radm,     pinned:1205 */
 			     <0 0x45 4>;	/* linkdown */
 		interrupt-names = "radm", "linkdown";
 		clocks = <&crg LUOFU_CLK_PCIE0>;
+		clock-names = "pcie_clk";
 		resets = <&crg 0x34 0xc>,	/* apb,  pinned:1226 */
 			 <&crg 0x34 0xd>,	/* pcs */
 			 <&crg 0x34 0xe>,	/* phy */
 			 <&crg 0x34 0xf>;	/* ctrl */
 		reset-names = "apb_rst", "pcs_rst", "phy_rst", "ctrl_rst";
+		/* vendor iATU tables, verbatim (pinned:1216) */
+		iatu_rc = <0 4 0x80000000 0x50000000 0 0x57ffffff 0 0
+			   1 0 0x80000000 0x40000000 0 0x47ffffff 0x40000000 0
+			   2 2 0x80000000 0x48000000 0 0x4fffffff 0x48000000 0>;
+		iatu_ep = <2 0 0x80000000 0x30000000 0 0x307fffff 0xab000000 0>;
+		acp-gate = <0x10100174 0x2000000 0x0>;	/* ACP gate bit 25 */
 		status = "disabled";
 		/* TODO binding question: DWC glue -- reference pcie-histb.c /
-		 * pcie-hisi.c; keep the vendor iatu_rc/iatu_ep window tables. */
+		 * pcie-hisi.c; our port polls link-up via DBI/cfg, never misc. */
+	};
+
+	/* DWC PCIe root complex #1 (second domain). pinned pcie@0x10164000
+	 * "hsan,pcie" + "hsan,acp-pcie1" (:1236): resets 0x10..0x13, radm/linkdown
+	 * SPI 63/70, ACP gate bit 26, mem/io +0x18000000. */
+	pcie1: pcie@10164000 {
+		compatible = "hisilicon,luofu-pcie";
+		device_type = "pci";
+		#address-cells = <3>;
+		#size-cells = <2>;
+		linux,pci-domain = <1>;	/* pinned:1243 */
+		channel = <1>;
+		hwver = <0x10>;
+		capability = <1>;
+		reg = <0x10164000 0x1000>,	/* dbi,  pinned:1236 */
+		      <0x10165000 0x3000>,	/* misc (NEVER read) */
+		      <0x68000000 0x1000>,	/* cfg */
+		      <0x58000000 0x2000000>,	/* mem */
+		      <0x60000000 0x800000>;	/* io */
+		reg-names = "dbi", "misc", "cfg", "mem", "io";
+		ranges = <0x02000000 0 0x58000000 0x58000000 0 0x2000000>,
+			 <0x01000000 0 0x60000000 0x60000000 0 0x800000>,
+			 <0x03000000 0 0x68000000 0x68000000 0 0x1000>;
+		bus-range = <0 0xa>;
+		interrupts = <0 0x3f 4>,	/* radm,  pinned:1236 */
+			     <0 0x46 4>;	/* linkdown */
+		interrupt-names = "radm", "linkdown";
+		clocks = <&crg LUOFU_CLK_PCIE1>;
+		clock-names = "pcie_clk";
+		resets = <&crg 0x34 0x10>,	/* apb,  pinned:1246 */
+			 <&crg 0x34 0x11>,	/* pcs */
+			 <&crg 0x34 0x12>,	/* phy */
+			 <&crg 0x34 0x13>;	/* ctrl */
+		reset-names = "apb_rst", "pcs_rst", "phy_rst", "ctrl_rst";
+		iatu_rc = <0 4 0x80000000 0x68000000 0 0x6fffffff 0 0
+			   1 0 0x80000000 0x58000000 0 0x5fffffff 0x58000000 0
+			   2 2 0x80000000 0x60000000 0 0x67ffffff 0x60000000 0>;
+		iatu_ep = <2 0 0x80000000 0x30000000 0 0x307fffff 0xab000000 0>;
+		acp-gate = <0x10100174 0x4000000 0x0>;	/* ACP gate bit 26 */
+		status = "disabled";
 	};
 };
