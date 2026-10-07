@@ -1,0 +1,182 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# luofu.fragment - kernel CONFIG_ inventory for the HiSilicon Hi5671Y "luofu" SoC
+# (board R116, Cudy WR3000 v2.0, OpenWrt target "luofu").
+#
+# This is the config delta our own, fully-current kernel needs on top of the
+# vanilla ARMv7 multi-platform base (arch/arm/configs/multi_v7_defconfig, kernel
+# 5.10.201 - the exact version the vendor ships). Consumer: the stage-1..3
+# roadmap in opensource/docs/UPSTREAM-PORT-PLAN.md; per-symbol rationale:
+# build/tmp/inta-spec/stage2.md sec.3 (ranked bring-up inventory) and
+# build/tmp/inta-spec/pcierc.md sec.5 (the PCIe RC); the driver evidence is the
+# live vendor dmesg + lsmod at build/register-dumps/exp/20261005-135624/.
+#
+# Apply (host-side only; writes nothing to the device):
+#   make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+#   scripts/kconfig/merge_config.sh -m .config lab/luofu-kernel/luofu.fragment
+#   make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+#
+# Rules this file follows:
+#  * Only PROMPTED symbols are set here. A config fragment cannot set a
+#    promptless (hidden) symbol - `make alldefconfig` drops the request - so the
+#    hidden framework symbols are listed in the "selected indirectly" blocks and
+#    must be `select`ed by the matching new driver's Kconfig entry.
+#  * No trailing comments on a CONFIG_ line: merge_config.sh compares whole
+#    lines, so a trailing comment reads as a value change. The rationale is the
+#    comment block above each group.
+#  * Symbols suffixed NEW are ours; each needs one Kconfig entry (see README.md).
+#
+# Hard rules do not bite a config file, but the port's device-side rules are
+# unchanged: never write CA 0x400392f0, never read RC misc 0x10161000, never
+# read the host-side IAR 0x4016010c; all device access dword-aligned, serial
+# and gate-checked (/tmp/wifidrv1.ko staging for the take-family).
+
+# ---------------------------------------------------------------------------
+# SoC / platform
+# dmesg: "OF: fdt: Machine model: hsan luofu/R116"; lsmod: hi_basic (18 refs).
+# Dual Cortex-A9; DT enable-method "hisilicon,hsan_smp" (luofu-r116.dts:438).
+# ARCH_HISI is already =y in the base; ARCH_LUOFU is the new mach (a child of
+# the Hisilicon platforms menu in arch/arm/Kconfig).
+CONFIG_ARCH_HISI=y
+# NEW
+CONFIG_ARCH_LUOFU=y
+CONFIG_SMP=y
+
+# ---------------------------------------------------------------------------
+# Clocks + reset: the CRG (the SoC-conditional framework item)
+# dmesg:138 "hi_crg: loading out-of-tree module taints kernel" (0.98 s, first);
+# lsmod: hi_crg (1 ref), hi_clk (21), hi_kreset (18). One node provides both
+# clocks and resets: hisilicon,luofu-crg, #clock-cells=1, #reset-cells=2.
+CONFIG_COMMON_CLK=y
+CONFIG_RESET_CONTROLLER=y
+CONFIG_MFD_SYSCON=y
+# NEW (stage 1, lab/luofu-clk)
+CONFIG_CLK_LUOFU=y
+# selected indirectly by CLK_LUOFU: CONFIG_REGMAP, CONFIG_REGMAP_MMIO
+
+# ---------------------------------------------------------------------------
+# Pinctrl + IOMUX (the SoC-conditional framework item)
+# lsmod: hi_kpinctrl (5 refs); the DT mux+cfg windows at 0x14900100/0x14940000.
+# PINCTRL_SINGLE (base MFD pinctrl) is the fallback if the group tables stay
+# declarative; we carry the transcribed hi_kpinctrl geometry instead.
+CONFIG_PINCTRL=y
+CONFIG_PINMUX=y
+CONFIG_PINCONF=y
+# NEW (stage 2 #2, lab/luofu-pinctrl)
+CONFIG_PINCTRL_LUOFU=y
+# selected indirectly by PINCTRL_LUOFU: CONFIG_GENERIC_PINCONF
+
+# ---------------------------------------------------------------------------
+# PCIe: the two Synopsys DWC root complexes (the DWC framework item)
+# dmesg:317/337 "PCIe:0/1 switch to RC mode" -> "PCI host bridge to bus
+# 0000:00 / 0001:00"; lsmod: hi_pcie. Two domains, linux,pci-domain=<0>/<1>.
+CONFIG_PCI=y
+CONFIG_PCI_MSI=y
+CONFIG_PCIEPORTBUS=y
+# NEW (stage 2 #3, lab/luofu-pcie)
+CONFIG_PCIE_LUOFU=y
+# selected indirectly by PCIE_LUOFU: CONFIG_PCIE_DW, CONFIG_PCIE_DW_HOST,
+# CONFIG_PCI_DOMAINS, CONFIG_PCI_DOMAINS_GENERIC, CONFIG_PCI_MSI_IRQ_DOMAIN
+# (PCIE_DW_HOST also pulls CONFIG_PCIE_DW; it needs PCI_MSI_IRQ_DOMAIN).
+
+# ---------------------------------------------------------------------------
+# UART: the DW APB console
+# dmesg:182 "dw-apb-uart 1010f000.uart1: forbid DMA for kernel console"; both
+# uart0 (0x1010e000) and uart1 (0x1010f000) are snps,dw-apb-uart, console=uart1.
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_8250_DW=y
+
+# ---------------------------------------------------------------------------
+# NAND: the FMC controller + the SPI-NAND framework, plus UBI/pstore
+# dmesg:147 "hi_nand_init HSAN FMC Controller Device Driver, Version 100";
+# lsmod: hi_flash (7 refs), ubi, mtdpstore, pstore_blk, pstore_zone. The DT
+# carries the full A/B partition table (rootfsa/b, kernela/b, pstore, ...).
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_MTD_OF_PARTS=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_MTD_PSTORE=y
+# NEW (stage 2, the hsan,fmc controller - the hardest storage item)
+CONFIG_MTD_NAND_LUOFU=y
+# selected indirectly by MTD_SPI_NAND / MTD_NAND_LUOFU: CONFIG_MTD_NAND_CORE,
+# CONFIG_MTD_NAND_ECC_SW_HAMMING (the FMC's ECC; SW_BCH is the alternative).
+
+# ---------------------------------------------------------------------------
+# Persistent store + the filesystems the stock rootfs uses
+# lsmod: pstore_blk, pstore_zone, mtdpstore, ubi; the blob loader needs
+# /lib/firmware (FIRMWARE.bin, 928,920 B).
+CONFIG_PSTORE=y
+CONFIG_PSTORE_BLK=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_RAM=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_FW_LOADER=y
+# selected indirectly by PSTORE_BLK: CONFIG_PSTORE_ZONE
+
+# ---------------------------------------------------------------------------
+# GPIO / LED / regulator / PWM
+# lsmod: leds_gpio, pwm_regulator, hi_kpmupwm; DT: snps,dw-apb-gpio (gpio0/1),
+# gpio-leds, pwm-regulator, hsan,kpmupwm.
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_DWAPB=y
+CONFIG_NEW_LEDS=y
+CONFIG_LEDS_CLASS=y
+CONFIG_LEDS_GPIO=y
+CONFIG_REGULATOR=y
+CONFIG_REGULATOR_PWM=y
+CONFIG_PWM=y
+
+# ---------------------------------------------------------------------------
+# I2C: the DW I2C controller (already free: snps,designware-i2c)
+# DT: i2c0 under the CRG's i2c0 gate; lsmod has no separate i2c module.
+CONFIG_I2C_DESIGNWARE_PLATFORM=y
+
+# ---------------------------------------------------------------------------
+# Watchdog / thermal / RNG / efuse (SoC-conditional, small new drivers)
+# dmesg:146 "hsan-watchdog-driver 14880000.watchdog: ... timeout=30 sec,
+# nowayout=1"; lsmod: hi_tvsensor, hi_kjent_rng (rng_core), hi_efuse;
+# dmesg:201 hi_jent_rng; dmesg:204-207 hi_efuse_driver match succ.
+CONFIG_WATCHDOG=y
+CONFIG_WATCHDOG_CORE=y
+# NEW
+CONFIG_LUOFU_WATCHDOG=y
+CONFIG_THERMAL=y
+CONFIG_CPU_THERMAL=y
+# NEW (hsan,tvsensor + thermal-zones)
+CONFIG_LUOFU_TVSENSOR=y
+CONFIG_HW_RANDOM=y
+CONFIG_CRYPTO_JITTERENTROPY=y
+# NEW (hi_kjent_rng)
+CONFIG_LUOFU_HWRNG=y
+CONFIG_NVMEM=y
+# NEW (hi_efuse_driver)
+CONFIG_LUOFU_EFUSE=y
+# selected indirectly by LUOFU_TVSENSOR: CONFIG_THERMAL_OF
+
+# ---------------------------------------------------------------------------
+# Ethernet: GMAC + MDIO + the internal LSW switch (the ETH item, stage 3)
+# lsmod: hi_kmac, hi_kphy, hi_kmdio, hi_lsw_dp, hi_lsw_pfe, hi_lsw_pub,
+# hi_kpie; DT: 5x hsan,mac, hsan,mdio + PHYs, the lsw_* nodes. Nearest
+# mainline reference is hix5hd2_gmac.c (different registers - a port).
+CONFIG_NETDEVICES=y
+CONFIG_PHYLIB=y
+CONFIG_MDIO_DEVICE=y
+# NEW
+CONFIG_LUOFU_MDIO=y
+CONFIG_LUOFU_GMAC=y
+CONFIG_LUOFU_LSW=y
+# selected indirectly by LUOFU_MDIO: CONFIG_MDIO_BUS
+
+# ---------------------------------------------------------------------------
+# Wireless: cfg80211/mac80211 for our own Hi5622 driver (stage 3, the long pole)
+# lsmod: wifidrv1; the vendor ships cfg80211.ko/mac80211.ko. Base has them =m;
+# a baked-in target wants =y. The driver itself is from-scratch over the closed
+# 928,920-byte FIRMWARE.bin, so its Kconfig entry is a placeholder for now.
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+# NEW (our wifidrv1; from-scratch, blob kept)
+CONFIG_LUOFU_WIFI=y

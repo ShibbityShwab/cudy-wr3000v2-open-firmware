@@ -1,0 +1,113 @@
+name: luofu-kernel-config
+
+# The luofu kernel-config lane (stage-1/2). It proves that the config inventory
+# at lab/luofu-kernel/luofu.fragment is a valid fragment for the kernel that
+# actually matters - vanilla 5.10.201, the vendor's own version - by running the
+# kernel's OWN merge_config.sh + olddefconfig against the real Kconfig, then
+# asserting every requested non-"LUOFU" symbol survived the resolve. Symbols in
+# the fragment that are ours (name contains LUOFU) have no Kconfig entry yet, so
+# they are reported as the to-do list rather than failed on.
+#
+# Triggers on omo/** (the only branch we push) like lab-module-build.yml; a full
+# boilerplate zImage build is the opt-in `build_kernel` dispatch input.
+
+on:
+  push:
+    branches: [ 'omo/**' ]
+  workflow_dispatch:
+    inputs:
+      build_kernel:
+        description: 'Also cross-build a zImage with the fragment applied'
+        type: boolean
+        default: false
+
+jobs:
+  config:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kernel source (vanilla 5.10.201 = the vendor's version)
+        run: |
+          curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
+          tar xf linux.tar.xz
+
+      - name: base config
+        run: make -C linux-5.10.201 ARCH=arm multi_v7_defconfig
+
+      - name: merge the fragment + resolve with the kernel's own kconfig
+        run: |
+          cd linux-5.10.201
+          # Non -m form: merge_config.sh runs `make alldefconfig` and then prints
+          # "Value requested for CONFIG_X not in final .config" for anything that
+          # did not survive (missed dependency / promptless symbol).
+          scripts/kconfig/merge_config.sh .config \
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment" | tee merge.log
+          make ARCH=arm olddefconfig
+
+      - name: assert every non-LUOFU requested symbol survived
+        run: |
+          cd linux-5.10.201
+          frag="$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
+          fail=0
+          # requested directives (CONFIG_x=y), skip the ones that are ours
+          for sym in $(grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$frag" | cut -d= -f1); do
+            case "$sym" in *LUOFU*) continue;; esac
+            if grep -qx "$sym=y" .config; then
+              echo "  OK    $sym=y"
+            else
+              echo "  FAIL  $sym requested but not in final .config"
+              grep -w "$sym" .config || true
+              fail=1
+            fi
+          done
+          echo "--- luofu symbols still needing a Kconfig entry (expected) ---"
+          for sym in $(grep -E '^CONFIG_[A-Za-z0-9_]+=y$' "$frag" | cut -d= -f1); do
+            case "$sym" in *LUOFU*) grep -qx "$sym=y" .config && echo "  RESOLVED $sym" || echo "  TODO     $sym (no Kconfig entry yet)";; esac
+          done
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luofu-kernel-config
+          path: |
+            linux-5.10.201/.config
+            linux-5.10.201/merge.log
+
+  kernel:
+    # The boilerplate vanilla-kernel build for evaluation: opt-in only, because
+    # a multi_v7_defconfig build is ~20-40 min (config-only is the default lane).
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_kernel }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cross toolchain + kernel build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf bc bison flex libssl-dev
+
+      - name: kernel source (vanilla 5.10.201)
+        run: |
+          curl -sSLo linux.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.201.tar.xz
+          tar xf linux.tar.xz
+
+      - name: configure base + merge the fragment
+        run: |
+          cd linux-5.10.201
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          scripts/kconfig/merge_config.sh .config \
+            "$GITHUB_WORKSPACE/lab/luofu-kernel/luofu.fragment"
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+
+      - name: build zImage + dtbs
+        run: |
+          cd linux-5.10.201
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j"$(nproc)" zImage dtbs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luofu-kernel-zimage
+          path: |
+            linux-5.10.201/arch/arm/boot/zImage
+            linux-5.10.201/.config
