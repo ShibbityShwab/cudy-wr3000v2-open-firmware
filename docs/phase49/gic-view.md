@@ -4988,3 +4988,149 @@ only, no devmem) each verified the gate FIRST and read `GATE_HELD`; no forbidden
 - Prior records ADDENDUM 28 (the take7c design) and ADDENDUM 29a (the first take7c boot, capture timed out)
   in this file; ADDENDUM 27 (the take7b boot) and its verdict
   `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2).
+
+---
+
+# ADDENDUM 31 (2026-10-07): the gated store's RCA - arm A: PAD-RCA: THE STALE-FLAGS HYPOTHESIS IS REFUTED ON THE BYTES, EVERY OTHER DIFFERENCE BETWEEN THE WRITE THAT LANDED AND THE THREE THAT DID NOT IS ELIMINATED BY MEASURED CELLS, THE RESIDUE IS NAMED AS THE WRITTEN WORD'S `[12:10]` SOURCE-PE FIELD, THE ONE-BYTE FIX (`take7d`) IS WRITTEN AND HOST-VERIFIED, AND THE ONE-VARIABLE BOOT STAYS QUEUED
+
+Record written by task `st_01a11477` from the analysis task `st_01a1146a` (`build/tmp/inta-spec/padrca.md`).
+HOST-ONLY: no device action, no ko, no commit, no push. Every byte below was disassembled with capstone
+5.0.7 (THUMB) out of the frozen blobs. Branch `PAD-RCA`.
+
+**The question, in one line.** ADDENDUM 30 closed the take7c re-run with the residual PAST the pad: both
+guards passed cell-proven (`TG_PRERPR = 0x00`, `TG_PREACT = 0x04`), the single EOIR write was attempted,
+and `TG_RPR` still read `0x00` - the same state take6f's UNGATED force retired to `0xFF` on the SAME
+measured pre-state. This addendum is the byte-level RCA of *why*, the elimination table, and the fix.
+
+## 1. The stale-flags hypothesis is REFUTED, and its premise is false
+
+The hypothesis was: *an MRS does not set flags, so an `MRS -> CBNZ` guard tests flags from the previous
+unrelated instruction = an arbitrary guard*. It dies on the shipped bytes of the 76-byte force pad (file
+`0xcb8e4`, runtime `0x10b8e4`):
+
+```
+0x0cb8e4 eff3008c  mrs   ip, apsr           <-- the pad's ONLY MRS (a save, paired with the epilogue msr)
+0x0cb8fa 5569      ldr   r5,[r2,#0x14]      ; GICC_RPR 0x40160114 (PRE) - NO FLAGS
+0x0cb8fc f563      str   r5,[r6,#0x3c]      ; TG_PRERPR 0x150204          - NO FLAGS
+0x0cb8fe 65b9      cbnz  r5,#0xcb91a        ; <-- GUARD 1. CBNZ tests r5 vs ZERO; it NEVER reads APSR.
+0x0cb908 0968      ldr   r1,[r1]            ; GICD_ISACTIVER0 word 0        - NO FLAGS
+0x0cb90a 3164      str   r1,[r6,#0x40]      ; TG_PREACT 0x150208            - NO FLAGS
+0x0cb90c 8d07      lsls  r5,r1,#0x1e        ; C = bit 2 - *THIS* SETS THE FLAGS
+0x0cb90e 04d3      blo   #0xcb91a          ; <-- GUARD 2. BCC tests the C set ONE instruction above.
+0x0cb910 bff34f8f  dsb   sy
+0x0cb914 40f20240  movw  r0,#0x402          ; (take7d: 40f20200 = movw r0,#0x2)  <-- THE OPERAND
+0x0cb918 1061      str   r0,[r2,#0x10]      ; *** GICC_EOIR 0x40160110 <= 0x402 ***
+```
+
+- **(a)** `CBZ`/`CBNZ` do not read APSR at all - ARMv7 Thumb T1 compares the register with zero. Nothing
+  needs to set flags before `0xcb8fe`, and nothing does (`ldr`/`str`/`movw`/`movt` are flag-free). The MRS
+  is a save whose only counterpart is the epilogue `msr`; neither is adjacent to a guard.
+- **(b)** The pad's ONE flag-dependent branch already has its own producer: `blo` tests the C that
+  `lsls r5,r1,#0x1e` set one instruction earlier from `r1` bit 2. That is the carrier, not a residue.
+- **(c)** The bank pad (112 B) and the fast sampler (172 B) carry NO guard to audit - the force pad's two
+  guards are the chain's only conditional branches; there is no second stale-flag site.
+- **(d)** The proposed `tst`/`cmp` fix is a NO-OP: it would set flags no branch reads, and would break the
+  76-byte slot. The hypothesis is rejected on the bytes.
+
+## 2. The cross-boot record: the pre-state is identical, the operand is the only difference
+
+| boot (evidence dir) | blob md5 | EOIR operand | gate | post-force `GICC_RPR` |
+| --- | --- | --- | --- | --- |
+| `20261007-010906` take6f | `2c1ae79f…` | **`0x2`** (bare id), **UNGATED** | none | `STK_RPR1 = 0xFF` - **LANDED** |
+| `20261007-013851` take7 | `b41b0aac…` | `0x402` | `cbz` (skips ON RPR==0) | `TG_RPR = 0x00` (skipped) |
+| `20261007-020643` take7b | `f5f5309f…` | `0x402` | `cbnz` (fire on RPR==0) | `TG_RPR = 0x00` |
+| `20261007-031654` take7c | `60e0af1c…` | `0x402` | `cbnz` + pre-state deposits | `TG_PRERPR=0x00`, `TG_PREACT=0x04`, `TG_RPR=0x00` |
+
+take6f and take7c ran the SAME chain, at the SAME slot and the SAME ring instant, on the SAME pre-state
+(`STK_STICKY = 0x00`, `STK_ACT = 0x04` = SGI 2 active, `STK_HPP = 0x3FF`). take6f's write retired the
+epoch; take7c's did not.
+
+## 3. The elimination table - every other difference, killed by bytes or by a measured cell
+
+| # | candidate | verdict | the evidence that kills it |
+| - | --- | --- | --- |
+| 1 | stale flags | **REFUTED** | sec. 1(a)-(d). |
+| 2 | the guards branch PAST the store | **REFUTED** | both resolve to `0xcb91a` = the post-store `dsb`; the store `0xcb918..919` is before it; `cbnz` imm5 = 12 -> `+28` from `0xcb8fe`. |
+| 3 | a clobbered guard register | **REFUTED** | `r5` is only re-used by `lsls`, AFTER guard 1 decided; the deposits write WRAM; the tail's `ldr r1,[r2,#0x14]/[#0x18]` returned real words (`TG_HPP = 0x3FF`). |
+| 4 | a wrong store address | **REFUTED** | `0x40160100`; `str r0,[r2,#0x10]` -> CA `0x40160110` = GICC_EOIR - the CA the image's own literal pool holds (`0x83020`) and its own EOI writes (`0x82f52`). |
+| 5 | the store wasn't emitted / mis-encoded | **REFUTED** | `--check-emitted` PASS 10/10, in op order, each rebuilt from the primitives. |
+| 6 | the guard/emitter's `dsb sy` | **REFUTED** | take6f landed with NO pre-store `dsb`; take7c carried one and did not. A `dsb` orders accesses; it cannot cancel a store. |
+| 7 | the `GICD` read before the `GICC` write | **REFUTED** | take6f's own chain (the 172-B sampler) reads `GICD_ISACTIVER0` before its store - and that write landed. |
+| 8 | the gate skipped | **REFUTED** | cell-proven passed: `TG_PRERPR = 0x00` + `TG_PREACT = 0x04` -> `lsls #30` sets C = 1 -> `blo` not taken. |
+| 9 | the operand's ID field `[9:0]` | **REFUTED** | `0x2` in the landing write and `0x2` in the non-landing write alike. |
+| 10 | the epoch re-formed in the window | **REFUTED** | `TG_PEND0 = 0x00` (nothing to re-fire), `V2_CNT = 4` in BOTH boots (no nested ack), `TG_ACT0` bit 2 still SET (the write deactivated nothing). |
+
+## 4. The residue and the fix (`take7d`)
+
+**Residue = the written word's `[12:10]` - the SGI source-PE / CPUID field - the ONLY operand difference
+between the one write measured to retire the epoch and the three that did not:** `0x2` = `id 2, source PE
+0` (take6f, landed) vs `0x402` = `id 2, source PE 1` (take7/take7b/take7c, retired nothing). Same CA,
+same chain, same slot, same pre-state, same `[9:0]`; rows 1-10 leave nothing else. **Counter-evidence,
+recorded not hidden:** the firmware's own EOI (`0x82f52 str r7,[r3]`, `r7` = the RAW ack word) writes the
+same `0x402`, and take5's I5 site reads `RPR = 0xFF` right after it - so the field is *not proven* to be
+the comparator (a 4-deep id ring cannot say whether the entry whose EOI was sampled acked the bare `0x2`
+or the `0x402`). The queued boot below is the ONE-variable test of exactly that field.
+
+**The fix - one byte of emitted code.** `take7d` = take7c's entire pad with the operand's `[12:10]`
+CLEARED (`movw r0,#0x2`) - the bare-10-bit-id form take6f landed with:
+
+```
+take7d force pad, file 0xcb8e4, 76 B (the take7c pad with exactly one byte changed):
+  ...40f20200 1061...   ; movw r0,#0x2 ; str r0,[r2,#0x10]   (take7c: 40f20240 = #0x402)
+take7c-vs-take7d blob delta: EXACTLY ONE byte - file 0xcb917: 0x40 -> 0x00
+```
+
+The check that makes the class unshippable: the `take7d` emitter **REFUSES any value whose `[12:10]` are
+SET** (`--eoir-id 0x402` -> rc=2), the emitted-bytes check rebuilds the store AND its `r2` GICC-page setup
+independently (10/10), and the selftest asserts the pad is 76 B at the SAME slot, differs from take7c's in
+exactly offset 51, the `0x402` operand is ABSENT, and five source-PE-SET values are refused.
+
+```
+$ pyenv/Scripts/python.exe tools/patch_fw_scratch.py --fw build/tmp/FIRMWARE.bin \
+    --barmap opensource/build/register-dumps/barmap_ep0_bar0.bin \
+    --variant take7d --eoir-id 0x2 --out build/tmp/fw-patched/take7d.bin
+  take7d: wrote build/tmp/fw-patched/take7d.bin (928920 B, md5 55120820882e07919ba98fedf6695b1b)
+$ pyenv/Scripts/python.exe tools/patch_fw_scratch.py --check-emitted build/tmp/fw-patched/take7d.bin
+  EMITTED-BYTES CHECK: PASS (10/10, in op order)
+    EOIR_PAGE 0x40160100 <= 0x2   @ 0xcb8ea  (40f20012c4f21602)   ; the pad's own r2 GICC page
+    EOIR_ID   0x40160110 <= 0x2   @ 0xcb914  (40f202001061)      ; the source-PE-CLEARED store
+$ pyenv/Scripts/python.exe tools/patch_fw_scratch.py --selftest   -> SELFTEST PASS
+```
+
+## 5. The queued boot (the next device window; NOT run - take7d has not booted)
+
+Re-run the take7c cycle verbatim (`tools/exp.sh` serial/**detached**, params `hw=1 wr=1 fw=1 release=1
+program=1 fwpath=/lib/firmware/hi_wifi/FIRMWARE.bin.omo-pat intapost=0x100 quiesce=0x1 rung=0 qbound=64
+qbound209=8 qwait_ms=2000`, slot gate on `mtd14:rootfsb`, a **NEW `boot_id`** before any reboot, the
+watchdog armed BEFORE the hide, the ko ALWAYS as `wifidrv1.ko` = the reused v8 ko
+`3f87f1e9fe5ed9666f27d1f784d34535`, `recover`, then health 2 wiphys / 6 ifaces / cal `[SUCC]` / no
+`.omo-off`) - with **exactly two changes**: the staged `.omo-pat` is `take7d.bin` (md5
+`55120820882e07919ba98fedf6695b1b`), and the hook/cells are take7c's UNCHANGED (`TG_PRERPR 0x40808204`,
+`TG_PREACT 0x40808208`, `TG_RPR 0x408081c8`, `TG_HPP 0x408081cc`, `TG_SNT 0x408081fc`). The pad's LAYOUT,
+size and slot are identical, so the run is a ONE-variable change of the store's operand.
+
+| # | reading (sentinel `TG_SNT = 0x50AA7E49` first) | label | next action |
+| - | --- | --- | --- |
+| 1 | `TG_PRERPR = 0x00`, `TG_PREACT` bit 2 SET, `TG_RPR = 0xFF` | **THE SOURCE-PE FIELD WAS THE COMPARATOR - THE FIX LANDS** | the rank-1 lever works with the bare id: read `TG_HPP`/`TG_GRP2`/`TG_CCTLR`/`TG_ACT2` to close rank-1 vs rank-2 |
+| 2 | `TG_PRERPR = 0x00`, `TG_PREACT` bit 2 SET, `TG_RPR = 0x00` | **THE OPERAND IS EXONERATED** | the field is not it (the take5 counter-evidence is vindicated): the residual is past the pad; next arm = a NEW md5-pinned variant whose store is HOISTED to the pad's head (the take6f shape) with the gate kept as a POST-hoc audit |
+| 3 | `TG_PRERPR != 0` or `TG_PREACT` bit 2 CLEAR | GUARD HELD, CELL-PROVEN | this boot is unforced; re-run before reading the TG block |
+| 4 | `TG_SNT != 0x50AA7E49` | NO-SAMPLE | the bank pad did not run - do not read the block |
+
+**Bounds:** (1) the operand change is ONE byte and the pad's writes are register state only (a reboot
+restores every GIC register) - the worst case ends in a reboot that clears it; (2) the fix is safe under
+EITHER outcome of the boot (row 1 is the fix, row 2 costs one boot and names the next arm); (3) the take5
+counter-evidence is a live limitation of this RCA, not a hidden one; (4) `take6f`/`take7`/`take7b`/`take7c`
+are byte-frozen (`--check-emitted` 9/9, 9/9, 9/9, 10/10) and their md5 pins are asserted by `--selftest` on
+every run.
+
+## Artifacts
+
+- RCA `build/tmp/inta-spec/padrca.md` (task `st_01a1146a`); emitter + check `tools/patch_fw_scratch.py`.
+- Blob `build/tmp/fw-patched/take7d.bin` md5 `55120820882e07919ba98fedf6695b1b` (+ manifest); the
+  take7c-vs-take7d delta is exactly file `0xcb917`: `0x40 -> 0x00`.
+- Frozen pins: take7c `60e0af1cb7fb32ea9e58178f754dfbf3`, take7b `f5f5309fab9ae76518b9e1368a9ca768`, take7
+  `b41b0aacfbd46bd8619d71f197431f49`, take6f `0e530b976d5a20e87358671f1a577695` / `2c1ae79f…`.
+- Prior records: ADDENDUM 30 (the take7c re-run) and its verdict
+  `build/register-dumps/diffs/20261007T0320Z-vrun26/verdict.txt` (row T7C-D); ADDENDUM 28 (the take7c
+  design); ADDENDUM 27 (the take7b boot) and its verdict
+  `build/register-dumps/diffs/20261007T0212Z-vrun24/verdict.txt` (D1/D2).
