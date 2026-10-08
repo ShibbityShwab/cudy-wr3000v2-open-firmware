@@ -161,3 +161,38 @@
  
  	mov	r7, r1
  	mov	r8, r2
+
+-----------------------------------------------------------
+# Pre-MMU bisection crumbs: 0xC0DE000C after __vet_atags, 0xC0DE000D after
+# __fixup_smp/__fixup_pv_table (just before __create_page_tables). Combined
+# with 0xC0DE0005/0006 these pin the failing stage of the pre-MMU head path.
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -116,6 +116,12 @@
+ 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+ 	 */
+ 	bl	__vet_atags
++		/* lab breadcrumb 0xC0DE000C: __vet_atags returned */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x000C
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ #ifdef CONFIG_SMP_ON_UP
+ 	bl	__fixup_smp
+ #endif
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -121,6 +121,12 @@
+ #endif
+ #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+ 	bl	__fixup_pv_table
++		/* lab breadcrumb 0xC0DE000D: __fixup_smp/__fixup_pv_table done, before __create_page_tables */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x000D
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ #endif
+ 	bl	__create_page_tables
+ 
