@@ -1,0 +1,77 @@
+name: bsp-tr6560-build
+
+# Baseline build of the Triductor TR6560 BSP (the Banana Pi BPI-Wifi6
+# THG6500-TAX2 / OpenWrt 22.03 fork) so the project can build its own firmware
+# for this SoC family. Board material for the Cudy WR3000 v2 lives in
+# lab/cudy-wr3000v2/ and is overlaid onto the BSP tree before the build.
+#
+# Dispatch only: nothing fires until a human runs this from the Actions tab.
+# There are deliberately no push / pull_request triggers.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install build dependencies (SDK manual)
+        run: |
+          # The i386 multilib pair (libc6-dev-i386, lib32stdc++6) needs the i386
+          # architecture enabled before apt can resolve either package.
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libncurses-dev unzip bzip2 gawk file python3 rsync \
+            subversion wget gettext git automake libc6-dev-i386 lib32stdc++6
+
+      - name: clone BSP (Triductor TR6560 / OpenWrt 22.03)
+        run: |
+          git clone --depth 1 \
+            https://github.com/BPI-SINOVOIP/THG6500-TAX2-OPENWRT-BSP.git bsp
+
+      - name: overlay board material (lab/cudy-wr3000v2 -> BSP tree)
+        run: |
+          # Board files mirror the BSP tree layout (e.g. target/linux/tr6560/...).
+          # CUDY.md and README.md are documentation, not board material, so they
+          # are excluded and never clobber the BSP's own README.md. The device
+          # tree arrives from the dtscmp lane (build/tmp/bsp-notes/dtscmp/cudy.dts)
+          # and is placed under lab/cudy-wr3000v2/ before this step overlays it.
+          rsync -a --exclude=README.md --exclude=CUDY.md lab/cudy-wr3000v2/ bsp/
+
+      - name: update feeds
+        working-directory: bsp
+        run: ./scripts/feeds update -a
+
+      - name: install feeds
+        working-directory: bsp
+        run: ./scripts/feeds install -a
+
+      - name: build firmware (committed .config at the BSP root)
+        working-directory: bsp
+        run: |
+          # The BSP commits its full .config at the repo root (it selects
+          # tr6560/generic/DEVICE_THG6500-TAX2, arm_cortex-a9 + musl). `make`
+          # consumes it directly; there is no separate defconfig to expand.
+          test -f .config || { echo "BSP committed .config missing" >&2; exit 1; }
+          make -j"$(nproc)"
+
+      - name: upload bin/targets
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsp-bin-targets
+          path: bsp/bin/targets
+          if-no-files-found: error
+
+      - name: upload built images
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsp-tr6560-images
+          path: bsp/bin/targets/tr6560/generic/*
+          if-no-files-found: error
