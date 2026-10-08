@@ -125,3 +125,39 @@
   ARM_BE8(setend	be )			@ ensure we are in BE8 mode
  
   THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
+
+-----------------------------------------------------------
+# MMU-window breadcrumbs: 0xC0DE0005 after __create_page_tables (pre-MMU physical
+# store, safe by construction) and 0xC0DE0006 as the first instruction of
+# __mmap_switched (first post-MMU execution; probes whether the early page tables
+# already cover the SoC register window).
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -123,6 +123,12 @@
+ 	bl	__fixup_pv_table
+ #endif
+ 	bl	__create_page_tables
++		/* lab breadcrumb 0xC0DE0005: __create_page_tables returned (pre-MMU, physical write) */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x0005
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ 
+ 	/*
+ 	 * The following calls CPU specific code in a position independent
+--- a/arch/arm/kernel/head-common.S
++++ b/arch/arm/kernel/head-common.S
+@@ -75,6 +75,12 @@
+  */
+ 	__INIT
+ __mmap_switched:
++		/* lab breadcrumb 0xC0DE0006: first post-MMU instruction (SoC-mapping probe) */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x0006
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ 
+ 	mov	r7, r1
+ 	mov	r8, r2
