@@ -44,6 +44,13 @@ CONFIG_ARCH_HISI=y
 CONFIG_ARCH_LUOFU=y
 CONFIG_SMP=y
 
+# Boot behavior: append panic=5 to the loader's cmdline (EXTEND keeps its
+# "console=ttyS0,115200 earlycon"). A panic then reboots instead of hanging,
+# so the boot's total wall time reads back as the death-time meter; while the
+# hsan watchdog is still armed it also bounds any pre-mach-init death at 30 s.
+CONFIG_CMDLINE_EXTEND=y
+CONFIG_CMDLINE="panic=5"
+
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
 # dmesg:138 "hi_crg: loading out-of-tree module taints kernel" (0.98 s, first);
