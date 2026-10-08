@@ -42,3 +42,37 @@
  dtb-$(CONFIG_ARCH_INTEGRATOR) += \
  	integratorap.dtb \
  	integratorap-im-pd1.dtb \
+
+# ---------------------------------------------------------------------------
+# Decompressor breadcrumbs: 0xC0DE000A on entry (physical write while the MMU
+# is still off; r3/r4 are free at that point - r7/r8 hold the saved r1/r2),
+# 0xC0DE000B after cache_off, just before entering the kernel proper.
+# A stale value of either proves the decompressor stage was reached.
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -218,6 +218,12 @@
+ #endif
+ 		mov	r7, r1			@ save architecture ID
+ 		mov	r8, r2			@ save atags pointer
++		/* lab breadcrumb: decompressor entered (physical write, MMU off) */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x000A
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ 
+ #ifndef CONFIG_CPU_V7M
+ 		/*
+@@ -620,6 +626,12 @@
+ 		add	r1, r1, r0		@ end of inflated image
+ 		bl	cache_clean_flush
+ 		bl	cache_off
++		/* lab breadcrumb: decompression done, about to enter the kernel */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r1, #0x000B
++		movt	r1, #0xC0DE
++		str	r1, [r3]
+ 
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		mrs	r0, spsr		@ Get saved CPU boot mode
