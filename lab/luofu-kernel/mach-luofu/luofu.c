@@ -21,6 +21,12 @@
  * path) and has no mainline smp_ops yet, so a UP boot with a warning is the
  * expected first-boot posture.
  *
+ * dt_compat carries "hsan-luofu": the vendor u-boot's bootfip hands the
+ * kernel ITS OWN DT (root compatible "hsan-luofu", /chosen bootargs =
+ * "noinitrd cma=0 console=ttyS0,115200 earlycon ..."), not the appended one;
+ * without this entry setup_machine_fdt finds no machine and the boot panics
+ * before init_early ever runs (observed: the 0xc18 breadcrumb untouched).
+ *
  * Breadcrumbs: the sysctrl register 0x10100c18 is inert, writable and
  * survives warm resets (verified live).  Each stage below stamps a distinct
  * value there so a later boot of the vendor system (or a devmem read) shows
@@ -92,6 +98,7 @@ static void __init luofu_init_machine(void)
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
 	"hisilicon,luofu",
+	"hsan-luofu",
 	NULL,
 };
 
