@@ -5,12 +5,7 @@
  *
  * This is the machine hook of the first own-kernel image: match our
  * devicetree (opensource/docs/soc/luofu-r116.dts) and let the generic arm
- * code populate the platform devices the DT declares. There is deliberately
- * no .init_machine, no map_io and no register access here - the vendor's
- * hi_* modules are what touched the SoC's CRG / pinctrl / PCIe windows, and
- * none of them are in this tree. A boot of this image therefore proves the
- * image shape (zImage + our DTB in the kernelb tail) and the console, not
- * the bring-up of any block that still needs a ported driver.
+ * code populate the platform devices the DT declares.
  *
  * .l2c_aux_val / .l2c_aux_mask: replay the AUX-control value the vendor
  * writes (opensource/docs/soc/luofu-r116-pinned.dts:1043, l2c_aux_val =
@@ -26,9 +21,39 @@
  * path) and has no mainline smp_ops yet, so a UP boot with a warning is the
  * expected first-boot posture. The vendor bootargs already pass maxcpus=2
  * nr_cpus=2 - harmless until the SMP port lands (stage 1).
+ *
+ * init_machine: disarm the SoC watchdog the vendor u-boot arms ~1 s into
+ * every boot.  Nothing in this tree pets it, so a boot is reset after the
+ * 30 s timeout (the "all LEDs flash" loop); the stop magic pair below comes
+ * from the vendor DT (luofu-r116-pinned.dts hsan-watchdog) and a surviving
+ * boot is the first proof our kernel runs its own C past the loader.
  */
 #include <linux/init.h>
+#include <linux/io.h>
+#include <linux/printk.h>
 #include <asm/mach/arch.h>
+
+#define LUOFU_CRG_BASE		0x14880000
+#define HSAN_WDT_EN_OFFSET	0x64	/* vendor DT en-offset "d" */
+#define HSAN_WDT_STOP0		0xabcd5116
+#define HSAN_WDT_STOP1		0xed574447
+
+static void __init luofu_wdt_disarm(void)
+{
+	void __iomem *crg = ioremap(LUOFU_CRG_BASE, 0x1000);
+
+	if (!crg)
+		return;
+
+	writel(HSAN_WDT_STOP0, crg + HSAN_WDT_EN_OFFSET);
+	writel(HSAN_WDT_STOP1, crg + HSAN_WDT_EN_OFFSET + 4);
+	(void)readl(crg + HSAN_WDT_EN_OFFSET);	/* flush the write pair */
+
+	pr_info("luofu: hsan watchdog disarmed (stop magic %08x %08x)\n",
+		HSAN_WDT_STOP0, HSAN_WDT_STOP1);
+
+	iounmap(crg);
+}
 
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
@@ -38,6 +63,7 @@ static const char *const luofu_dt_compat[] __initconst = {
 
 DT_MACHINE_START(LUOFU, "HiSilicon Hi5671Y (luofu)")
 	.dt_compat	= luofu_dt_compat,
+	.init_machine	= luofu_wdt_disarm,
 	.l2c_aux_val	= 0x430001,
 	.l2c_aux_mask	= ~0,
 MACHINE_END
