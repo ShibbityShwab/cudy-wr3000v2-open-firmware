@@ -34,8 +34,15 @@
  *   0xC0DE0001  reach setup_arch / init_early
  *   0xC0DE0002  reach machine init (init_machine)
  *   0xC0DE0003  machine init returned (the watchdog disarm below ran)
+ *   0xC0DE0010  early_initcall ran (core init done)
+ *   0xC0DE0020  late_initcall ran (all initcalls done, rootfs mount next)
  * A byte-identical value from a previous boot means the kernel died before
  * that stage; the pre-boot sentinel 0xFEEDFACE means no stage ran at all.
+ *
+ * .restart: the SoC reset magic from the vendor DT (reset-val0 0x55aa5a5a /
+ * reset-val1 0xaa55a5a5 at the clr-offset pair 0x6c/0x70).  Without it a
+ * panic with panic=5 would hang instead of rebooting, because mainline has
+ * no restart driver for this CRG yet.
  *
  * init_machine: disarm the SoC watchdog the vendor u-boot arms ~1 s into
  * every boot.  Nothing in this tree pets it, so a boot is reset after the
@@ -46,6 +53,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/printk.h>
+#include <linux/reboot.h>
 #include <asm/mach/arch.h>
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
@@ -58,6 +66,9 @@
 #define HSAN_WDT_EN_OFFSET	0x64	/* vendor DT en-offset "d" (val1/commit word) */
 #define HSAN_WDT_STOP0		0xabcd5116
 #define HSAN_WDT_STOP1		0xed574447
+#define HSAN_WDT_CLR_OFFSET	0x70	/* vendor DT clr-offset "p" (reset val1) */
+#define HSAN_WDT_RESET0		0x55aa5a5a
+#define HSAN_WDT_RESET1		0xaa55a5a5
 
 static void __init luofu_crumb(u32 value)
 {
@@ -70,6 +81,38 @@ static void __init luofu_crumb(u32 value)
 	(void)readl(sysctrl + LUOFU_CRUMB_OFFSET);
 	iounmap(sysctrl);
 }
+
+static void luofu_restart(enum reboot_mode mode, const char *cmd)
+{
+	void __iomem *crg = ioremap(LUOFU_CRG_BASE, 0x1000);
+
+	if (crg) {
+		writel(HSAN_WDT_RESET0, crg + HSAN_WDT_CLR_OFFSET - 4);
+		writel(HSAN_WDT_RESET1, crg + HSAN_WDT_CLR_OFFSET);
+		(void)readl(crg + HSAN_WDT_CLR_OFFSET);
+		iounmap(crg);
+	}
+
+	/* if the reset magic did not take, park until the watchdog or a
+	 * power cycle
+	 */
+	for (;;)
+		;
+}
+
+static int __init luofu_early_crumb(void)
+{
+	luofu_crumb(0xc0de0010);
+	return 0;
+}
+early_initcall(luofu_early_crumb);
+
+static int __init luofu_late_crumb(void)
+{
+	luofu_crumb(0xc0de0020);
+	return 0;
+}
+late_initcall(luofu_late_crumb);
 
 static void __init luofu_early(void)
 {
@@ -106,6 +149,7 @@ DT_MACHINE_START(LUOFU, "HiSilicon Hi5671Y (luofu)")
 	.dt_compat	= luofu_dt_compat,
 	.init_early	= luofu_early,
 	.init_machine	= luofu_init_machine,
+	.restart	= luofu_restart,
 	.l2c_aux_val	= 0x430001,
 	.l2c_aux_mask	= ~0,
 MACHINE_END
