@@ -48,13 +48,40 @@
 # is still off; r3/r4 are free at that point - r7/r8 hold the saved r1/r2),
 # 0xC0DE000B after cache_off, just before entering the kernel proper.
 # A stale value of either proves the decompressor stage was reached.
+
+# ---------------------------------------------------------------------------
+# Decompressor breadcrumbs, graded: 0xC0DE0008 at the absolute entry (the
+# first instructions after the legacy header branch), 0xC0DE0009 once the
+# hyp-stub call returned, 0xC0DE000A after r7/r8 hold the saved boot
+# registers, 0xC0DE000B after cache_off just before entering the kernel.
+# Physical writes while the MMU is off; r3/r4 are free at every point and
+# the boot ABI registers (r0-r2, later r7/r8) are never touched.
 --- a/arch/arm/boot/compressed/head.S
 +++ b/arch/arm/boot/compressed/head.S
-@@ -218,6 +218,12 @@
+@@ -211,13 +211,31 @@
+ 
+ 		__EFI_HEADER
+ 1:
++		/* lab breadcrumb: decompressor entry (very first instructions) */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x0008
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+  ARM_BE8(	setend	be		)	@ go BE8 if compiled for BE8
+  AR_CLASS(	mrs	r9, cpsr	)
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		bl	__hyp_stub_install	@ get into SVC mode, reversibly
  #endif
++		/* lab breadcrumb: hyp-stub install returned */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x0009
++		movt	r4, #0xC0DE
++		str	r4, [r3]
  		mov	r7, r1			@ save architecture ID
  		mov	r8, r2			@ save atags pointer
-+		/* lab breadcrumb: decompressor entered (physical write, MMU off) */
++		/* lab breadcrumb: r7/r8 saved (arg save path) */
 +		movw	r3, #:lower16:0x10100C18
 +		movt	r3, #:upper16:0x10100C18
 +		movw	r4, #0x000A
@@ -63,16 +90,16 @@
  
  #ifndef CONFIG_CPU_V7M
  		/*
-@@ -620,6 +626,12 @@
+@@ -620,6 +638,12 @@
  		add	r1, r1, r0		@ end of inflated image
  		bl	cache_clean_flush
  		bl	cache_off
 +		/* lab breadcrumb: decompression done, about to enter the kernel */
 +		movw	r3, #:lower16:0x10100C18
 +		movt	r3, #:upper16:0x10100C18
-+		movw	r1, #0x000B
-+		movt	r1, #0xC0DE
-+		str	r1, [r3]
++		movw	r4, #0x000B
++		movt	r4, #0xC0DE
++		str	r4, [r3]
  
  #ifdef CONFIG_ARM_VIRT_EXT
  		mrs	r0, spsr		@ Get saved CPU boot mode
