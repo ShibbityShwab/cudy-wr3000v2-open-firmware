@@ -103,3 +103,25 @@
  
  #ifdef CONFIG_ARM_VIRT_EXT
  		mrs	r0, spsr		@ Get saved CPU boot mode
+
+-----------------------------------------------------------
+# Kernel-proper breadcrumb: 0xC0DE0004 at stext, the first instruction of the
+# decompressed kernel (physical write, MMU off, r3/r4 free, boot ABI untouched).
+# This extends the ladder across the decompressor->kernel handoff, the last
+# unobserved stage.
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -74,7 +74,13 @@
+ 	.arm
+ 
+ 	__HEAD
+ ENTRY(stext)
++		/* lab breadcrumb: kernel stext entry (0xC0DE0004) - first instruction of the kernel proper */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x0004
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
+ 
+  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
