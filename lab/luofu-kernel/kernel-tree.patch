@@ -196,3 +196,22 @@
  #endif
  	bl	__create_page_tables
  
+
+-----------------------------------------------------------
+# Separator crumb 0xC0DE000E between __fixup_smp and __fixup_pv_table:
+# 000C + no 000E => died inside __fixup_smp; 000E => died in __fixup_pv_table.
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -119,6 +119,12 @@
+ #ifdef CONFIG_SMP_ON_UP
+ 	bl	__fixup_smp
+ #endif
++		/* lab breadcrumb 0xC0DE000E: __fixup_smp done (before __fixup_pv_table) */
++		movw	r3, #:lower16:0x10100C18
++		movt	r3, #:upper16:0x10100C18
++		movw	r4, #0x000E
++		movt	r4, #0xC0DE
++		str	r4, [r3]
+ #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+ 	bl	__fixup_pv_table
+ #endif
