@@ -215,3 +215,20 @@
  #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
  	bl	__fixup_pv_table
  #endif
+
+-----------------------------------------------------------
+# ARCH_MULTIPLATFORM selects ARM_PATCH_PHYS_VIRT unconditionally, which defeats
+# the fragment's 'is not set' during olddefconfig. Scope the select to
+# !ARCH_LUOFU so our target gets the static PLAT_PHYS_OFFSET translation and
+# __fixup_pv_table is not built (it is the function that hung: 0xC0DE000E).
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -319,7 +319,7 @@
+ 	select ARCH_SPARSEMEM_ENABLE
+ 	select ARCH_SELECT_MEMORY_MODEL
+ 	select ARM_HAS_SG_CHAIN
+-	select ARM_PATCH_PHYS_VIRT
++	select ARM_PATCH_PHYS_VIRT if !ARCH_LUOFU
+ 	select AUTO_ZRELADDR
+ 	select TIMER_OF
+ 	select COMMON_CLK
