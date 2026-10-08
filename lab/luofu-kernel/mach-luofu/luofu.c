@@ -34,7 +34,7 @@
 #include <asm/mach/arch.h>
 
 #define LUOFU_CRG_BASE		0x14880000
-#define HSAN_WDT_EN_OFFSET	0x64	/* vendor DT en-offset "d" */
+#define HSAN_WDT_EN_OFFSET	0x64	/* vendor DT en-offset "d" (val1/commit word) */
 #define HSAN_WDT_STOP0		0xabcd5116
 #define HSAN_WDT_STOP1		0xed574447
 
@@ -45,8 +45,11 @@ static void __init luofu_wdt_disarm(void)
 	if (!crg)
 		return;
 
-	writel(HSAN_WDT_STOP0, crg + HSAN_WDT_EN_OFFSET);
-	writel(HSAN_WDT_STOP1, crg + HSAN_WDT_EN_OFFSET + 4);
+	/* The enable pair occupies [0x60]=val0 .. [0x64]=val1; the stop pair
+	 * is written to the same two slots (val1 = the commit word).
+	 */
+	writel(HSAN_WDT_STOP0, crg + HSAN_WDT_EN_OFFSET - 4);
+	writel(HSAN_WDT_STOP1, crg + HSAN_WDT_EN_OFFSET);
 	(void)readl(crg + HSAN_WDT_EN_OFFSET);	/* flush the write pair */
 
 	pr_info("luofu: hsan watchdog disarmed (stop magic %08x %08x)\n",
