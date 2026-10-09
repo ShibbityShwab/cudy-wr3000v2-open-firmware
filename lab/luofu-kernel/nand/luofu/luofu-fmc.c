@@ -989,7 +989,28 @@ static struct timer_list luofu_log_timer;
  */
 static void luofu_log_tick(struct timer_list *t)
 {
+	/*
+	 * dumper->active IS THE MISSING PIECE, and the mark landing without any
+	 * text is what found it.  kmsg_dump_get_line_nolock() opens with:
+	 *
+	 *	if (!dumper->active)
+	 *		goto out;		(returns false, *len = 0)
+	 *
+	 * and `active` is set in exactly one place - kmsg_dump() itself, on its way
+	 * into a dumper's callback.  So a dumper whose callback is never called (as
+	 * here, because this kernel never panics) stays inactive forever, and every
+	 * iteration returns false on the first call.  The mark was written, the
+	 * buffer was refreshed, and the log was silently empty.
+	 *
+	 * Setting it around the walk is safe and is this dumper's own state: nothing
+	 * else iterates through it, kmsg_dump() re-sets it on the panic path, and
+	 * kmsg_dump_get_line() takes logbuf_lock itself - so this neither races the
+	 * lock nor disturbs a concurrent panic.
+	 */
+	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_kmsg.active = false;
+
 	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
 }
 
