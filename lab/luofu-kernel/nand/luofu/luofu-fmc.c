@@ -776,9 +776,9 @@ static struct luofu_fmc *luofu_ubi_fmc;
  * the same mistake the constants made one phase earlier, in a place the macro
  * order check does not look.
  */
-static void *luofu_log_b;	/* the log ring - our own DMA allocation */
+static void *luofu_log_b;	/* the log ring */
 static dma_addr_t luofu_log_dma;
-static void *luofu_diag_buf;	/* the diagnostic buffer, likewise */
+static void *luofu_diag_buf;	/* the diagnostic buffer */
 static dma_addr_t luofu_diag_dma;
 static struct kmsg_dumper luofu_kmsg;
 
@@ -1013,7 +1013,32 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * read back were simply whatever RAM happened to hold.  memremap() exists for
  * exactly this and is what ramoops itself uses.
  */
+/*
+ * THE LOG AND DIAGNOSTIC BUFFERS GO IN THE VENDOR-PRESERVED WINDOW, AT FIXED
+ * ADDRESSES, WITH A COLLISION CHECK.
+ *
+ * Two wrong answers bracket the right one, and both were measured:
+ *
+ *  * A COHERENT ALLOCATION DOES NOT SURVIVE.  dmam_alloc_coherent() hands out
+ *    ordinary System RAM (this kernel has no CMA), and the vendor's kernel boots
+ *    afterwards and reuses it freely.  A fire parked the ring at 0x820F2000 and
+ *    read back the vendor's own kernel text.
+ *
+ *  * A FIXED ADDRESS IS RIGHT, BUT ONLY IF NOTHING ELSE WANTS IT.  The window
+ *    below 0x80608000 survives every vendor boot - that is where the vendor's
+ *    kernel does NOT load, and a breadcrumb cell at 0x80600f20 there has
+ *    survived dozens of fires.  The earlier failure was never the address: it
+ *    was that the FMC driver's own DMA landing zone had been allocated INTO the
+ *    same bytes, so the instrument overwrote what it was measuring.
+ *
+ * So: fixed addresses in that window, and the driver CHECKS at registration that
+ * they do not overlap its own DMA buffer, shifting clear if they do.  The chosen
+ * address is stamped into the crumb so the readback never has to guess.
+ */
+#define LUOFU_LOG_BASE		0x80602000	/* in the surviving window */
+#define LUOFU_LOG_STRIDE	0x1000		/* slot size when shifting clear */
 #define LUOFU_LOG_SIZE		0x200		/* 512 B log ring */
+#define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
 /*
@@ -1250,6 +1275,8 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 
 static int luofu_log_register(struct luofu_fmc *fmc)
 {
+	int i;
+
 	/*
 	 * __va, NOT ioremap AND NOT memremap - both of them returned NULL for this
 	 * RAM, which is why no mark ever appeared.
@@ -1273,10 +1300,32 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * kind of mapping, and those values survived a reset and were read back with
 	 * devmem from the vendor system.
 	 */
-	luofu_log_b = dmam_alloc_coherent(fmc->dev, LUOFU_LOG_SIZE,
-					  &luofu_log_dma, GFP_KERNEL);
-	luofu_diag_buf = dmam_alloc_coherent(fmc->dev, LUOFU_DIAG_SIZE,
-					     &luofu_diag_dma, GFP_KERNEL);
+	/*
+	 * FIXED ADDRESSES IN THE SURVIVING WINDOW, SHIFTED CLEAR OF OUR OWN DMA.
+	 *
+	 * The driver's DMA landing zone is 0x2200 bytes and its address is whatever
+	 * the allocator chose; the earlier corruption happened because the instrument
+	 * was placed inside it.  Checking here is what makes a fixed address safe:
+	 * if the chosen slot overlaps the DMA buffer, move up a slot and check again.
+	 */
+	{
+		u64 dma_lo = (u64)fmc->dma_addr;
+		u64 dma_hi = dma_lo + 0x2200;
+		u64 base = LUOFU_LOG_BASE + LUOFU_LOG_STRIDE;
+
+		for (i = 0; i < 8; i++, base += LUOFU_LOG_STRIDE) {
+			if (base + 2 * LUOFU_LOG_SIZE <= dma_lo ||
+			    base >= dma_hi)
+				break;
+		}
+		if (base + 2 * LUOFU_LOG_SIZE > 0x80608000)
+			base = LUOFU_LOG_BASE;
+
+		luofu_log_dma = (dma_addr_t)base;
+		luofu_diag_dma = (dma_addr_t)(base + LUOFU_LOG_SIZE);
+	}
+	luofu_log_b = (void *)__va((phys_addr_t)luofu_log_dma);
+	luofu_diag_buf = (void *)__va((phys_addr_t)luofu_diag_dma);
 
 	/*
 	 * NOTHING IS WRITTEN HERE, and a fire is why.  An armed mark written to
