@@ -188,7 +188,7 @@ static void __init luofu_init_machine(void)
 
 /* layout-perturbation probe (part of the mcr-lottery experiment) */
 static const char luofu_layout_probe[] __used =
-	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789";
+	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789" "pad1";
 
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
