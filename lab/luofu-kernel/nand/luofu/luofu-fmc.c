@@ -733,13 +733,25 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  * 0x73717369 is a distinct, documented value.
  */
 #define LUOFU_ROOTFS_VOL_ID	0
+
+/*
+ * ubi_attach_mtd_dev() is deliberately not part of UBI's public header, so this
+ * declares it.  That is sound for BUILT-IN code: EXPORT_SYMBOL gates module
+ * loading, not vmlinux links.  The production path still attaches from the
+ * kernel's own command line (ubi.mtd=rootfsb), which is a late_initcall and so
+ * has already run by the time this hook does; the direct call here exists to
+ * learn WHY that one did not take, by reading the errno it leaves behind.
+ */
+int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num,
+		       int vid_hdr_offset, int max_beb_per1024);
+#define LUOFU_UBI_DEV_NUM_AUTO	(-1)
+
 static struct luofu_fmc *luofu_ubi_fmc;
 
 static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
 	struct ubi_volume_desc *desc;
-	struct mtd_info *part;
 	u8 buf[4] = { 0 };
 	u32 word;
 	int err;
@@ -750,35 +762,25 @@ static int __init luofu_fmc_ubi_probe(void)
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
 		/*
-		 * The volume would not open, and the useful question is WHY, so the
-		 * failure value carries both facts that separate the cases:
-		 *
-		 *  - can the mtd partition UBI was TOLD to attach still be resolved
-		 *    by name here?  If not, the partition is not there any more.
-		 *
-		 *  - does the ubiblock device exist?  ubiblock0_0 is created by
-		 *    ubiblock_init() from ubi.block=0,0, and it can only exist if
-		 *    ubi0 attached AND volume 0 opened for it.  So its presence is
-		 *    independent evidence that UBI really is up.
-		 *
-		 *   0xE0000000  neither       -> the partition is gone
-		 *   0xE0000001  ubiblock only -> UBI is up; this hook failed for
-		 *                               some other reason
-		 *   0xE0000002  partition only-> UBI did NOT attach
-		 *   0xE0000003  both          -> UBI is up and volume 0 is readable
+		 * UBI is not up.  Rather than guess which of the candidate causes it
+		 * is, ASK: attach it here and stamp what happens.  If this attach
+		 * fails, its errno names the cause exactly; if it succeeds, then the
+		 * kernel's own command-line attach is what did not take.
 		 */
-		word = LUOFU_RPT_FAIL(0);
-
-		part = get_mtd_device_nm("rootfsb");
-		if (!IS_ERR(part)) {
-			word |= 2;
-			put_mtd_device(part);
+		err = ubi_attach_mtd_dev(fmc->mtd, LUOFU_UBI_DEV_NUM_AUTO, 0, 0);
+		if (err < 0) {
+			/* 0xE1 <errno>: the attach itself refuses, with the reason */
+			luofu_fmc_crumb(fmc, 11,
+					0xe1000000 | ((-err) & 0xff));
+			return 0;
 		}
-		if (blk_lookup_devt("ubiblock0_0", 0))
-			word |= 1;
 
-		luofu_fmc_crumb(fmc, 11, word);
-		return 0;
+		/* it attached as ubi<err> - now say whether the volume reads */
+		desc = ubi_open_volume(err, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
+		if (IS_ERR(desc)) {
+			luofu_fmc_crumb(fmc, 11, 0x500b0000 | (err & 0xff));
+			return 0;
+		}
 	}
 
 	err = ubi_read(desc, 0, buf, 0, 4);
