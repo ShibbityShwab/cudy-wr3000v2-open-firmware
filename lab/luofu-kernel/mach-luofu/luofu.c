@@ -100,6 +100,8 @@ static void luofu_restart(enum reboot_mode mode, const char *cmd)
 		;
 }
 
+static void __init luofu_site_probe(void);
+
 static int __init luofu_early_crumb(void)
 {
 	luofu_crumb(0xc0de0010);
