@@ -188,7 +188,7 @@ static const char luofu_layout_probe[] __used =
 /* dice fuel: perturb the layout a little; the throw loop repeats with different
  * lengths until an instrumented build lands in the 0020 class. */
 static const char luofu_dice[] __used =
-	"dice-4-"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+	"dice-4-0123456789-abcdefghij-klmnopqrst-uvwxyz-ABCDEFGHIJ-KLMNOPQRST-UVWXYZ-9876543210";
 
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
