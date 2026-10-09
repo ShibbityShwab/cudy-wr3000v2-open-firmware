@@ -83,6 +83,55 @@ ENTRY(stext)
 		movw	r4, #0x0004
 		movt	r4, #0xC0DE
 		str	r4, [r3]
+		/*
+		 * The vendor's decompressor runs with caches on and leaves dirty D-cache
+		 * lines behind; the ARM boot protocol says the loader must leave the
+		 * caches clean, and this kernel (like mainline) only *invalidates* L1 at
+		 * v7_invalidate_l1 - which would DISCARD that dirty data and leave stale
+		 * content in RAM.  Whether a stale line aliases something the pre-MMU
+		 * boot path needs (page tables, the turn-on page) depends on the
+		 * decompression's access pattern - i.e. on the kernel's layout.  That is
+		 * the layout-dependent death at the mcr (0xC0DE0017 vs 0xC0DE0020).
+		 * Clean+invalidate the whole D-cache here, before anything else.
+		 * Adapted verbatim from v7_flush_dcache_all (arch/arm/mm/cache-v7.S);
+		 * runs pre-MMU; clobbers only r0-r7/r9-r11 (r1/r2 boot args untouched).
+		 */
+		dmb
+		mrc	p15, 1, r0, c0, c0, 1		@ read clidr
+		mov	r3, r0, lsr #23
+		ands	r3, r3, #7 << 1
+		beq	9f
+8:		mov	r10, #0
+7:		add	r2, r10, r10, lsr #1
+		mov	r1, r0, lsr r2
+		and	r1, r1, #7
+		cmp	r1, #2
+		blt	6f
+		mcr	p15, 2, r10, c0, c0, 0
+		isb
+		mrc	p15, 1, r1, c0, c0, 0
+		and	r2, r1, #7
+		add	r2, r2, #4
+		movw	r4, #0x3ff
+		ands	r4, r4, r1, lsr #3
+		clz	r5, r4
+		movw	r7, #0x7fff
+		ands	r7, r7, r1, lsr #13
+5:		mov	r9, r7
+4:		orr	r11, r10, r4, lsl r5
+		orr	r11, r11, r9, lsl r2
+		mcr	p15, 0, r11, c7, c14, 2		@ clean & invalidate by set/way
+		subs	r9, r9, #1
+		bge	4b
+		subs	r4, r4, #1
+		bge	5b
+6:		add	r10, r10, #2
+		cmp	r3, r10
+		bgt	7b
+9:		mov	r10, #0
+		mcr	p15, 2, r10, c0, c0, 0
+		dsb	st
+		isb
  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
 
  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
