@@ -75,12 +75,6 @@ ENDPROC(__vet_atags)
  */
 	__INIT
 __mmap_switched:
-		/* lab breadcrumb 0xC0DE0006: first post-MMU instruction (SoC-mapping probe) */
-		movw	r3, #:lower16:0x10100C18
-		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x0006
-		movt	r4, #0xC0DE
-		str	r4, [r3]
 
 	mov	r7, r1
 	mov	r8, r2
