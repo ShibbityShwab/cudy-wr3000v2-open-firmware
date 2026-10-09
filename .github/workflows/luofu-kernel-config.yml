@@ -247,7 +247,12 @@ jobs:
       - name: build zImage + our devicetree
         run: |
           cd linux-5.10.201
-          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j"$(nproc)" zImage
+          # TEXT_OFFSET=0x608000: the vendor's own layout - this SoC's kernel is designed to
+          # link at 0x80608000 (PA), exactly above the 6 MB lsw_napt_reserved block at
+          # 0x80000000 (see the platform DTS). The default 0x8000 links for 0x80008000, which
+          # makes the runtime-vs-link delta 0xC0600000 - failing __fixup_pv_table's 16 MiB
+          # alignment gate (measured live: C18=0xC0DE0014, delta captured at 0xC0600000).
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- TEXT_OFFSET=0x608000 -j"$(nproc)" zImage
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- dtbs
           test -s arch/arm/boot/zImage
           test -s arch/arm/boot/dts/luofu-r116.dtb
