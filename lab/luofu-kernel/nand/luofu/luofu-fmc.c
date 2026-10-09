@@ -102,6 +102,7 @@
 
 #include <linux/bits.h>
 #include <linux/delay.h>
+#include <linux/crc32.h>
 #include <linux/dma-mapping.h>
 #include <linux/genhd.h>
 #include <linux/io.h>
@@ -732,19 +733,17 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  * block device the root= line names is resolvable.  The +1 is deliberate, and
  * 0x73717369 is a distinct, documented value.
  */
+/* the rootfs is volume 0 on the UBI device; its NAME is "squashfs" */
 #define LUOFU_ROOTFS_VOL_ID	0
 
 /*
- * ubi_attach_mtd_dev() is deliberately not part of UBI's public header, so this
- * declares it.  That is sound for BUILT-IN code: EXPORT_SYMBOL gates module
- * loading, not vmlinux links.  The production path still attaches from the
- * kernel's own command line (ubi.mtd=rootfsb), which is a late_initcall and so
- * has already run by the time this hook does; the direct call here exists to
- * learn WHY that one did not take, by reading the errno it leaves behind.
+ * A note worth writing down, because getting it wrong made every valid header
+ * in a partition dump look corrupt: UBI's crc32() is initialised with
+ * 0xFFFFFFFF and carries no final inversion, so the value on the flash equals
+ * zlib's crc32 XOR 0xffffffff.  Checking the dump with zlib alone reported 120
+ * of 120 EC headers as bad when all 120 were fine.
  */
-int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num,
-		       int vid_hdr_offset, int max_beb_per1024);
-#define LUOFU_UBI_DEV_NUM_AUTO	(-1)
+#define LUOFU_UBI_CRC32_INIT	0xffffffffU
 
 static struct luofu_fmc *luofu_ubi_fmc;
 
@@ -754,8 +753,9 @@ static int __init luofu_fmc_ubi_probe(void)
 	struct ubi_volume_desc *desc;
 	struct mtd_info *part;
 	u8 buf[4] = { 0 };
+	size_t retlen;
 	u32 word;
-	int err;
+	int i, err;
 
 	if (!fmc || !fmc->mtd)
 		return 0;
@@ -763,40 +763,71 @@ static int __init luofu_fmc_ubi_probe(void)
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
 		/*
-		 * UBI is not up.  Ask rather than guess: attach what the kernel's
-		 * own ubi.mtd= attaches - the PARTITION NAMED "rootfsb" - and stamp
-		 * the outcome.
+		 * UBI is not up, and the attach refuses our partition with -EINVAL.
+		 * Every -EINVAL on UBI's attach path has been accounted for from its
+		 * source and none should trip for this geometry, and the flash's own
+		 * EC headers are valid - so the remaining suspect is what OUR READ
+		 * PATH hands UBI.
 		 *
-		 * The first version of this called ubi_attach_mtd_dev() on the
-		 * MASTER mtd, which is a DIFFERENT device: the master spans the
-		 * whole 128 MiB chip including regions that are not UBI at all, so
-		 * whatever that call returned was not necessarily the kernel's
-		 * error.  Attaching the same mtd the kernel names is what makes this
-		 * reading comparable.
+		 * So ask the flash.  ubi_io_read_ec_hdr() accepts a PEB when the
+		 * header's magic, version, CRC and geometry fields all check out;
+		 * this replicates exactly that test over the first 32 PEBs of the
+		 * partition and stamps how many pass and where it stopped.
+		 *
+		 * The expected answer is known from an independent dump of this same
+		 * partition: its first 120 PEBs all carry a valid EC header.
+		 *   0x5C2000FF  all 32 passed  -> the read path is fine
+		 *   0x5C<pass><first bad PEB>  -> it stopped there
+		 *   0x5CE00000|errno           -> mtd_read() itself refused
 		 */
-		word = 0xe2000000;
 		part = get_mtd_device_nm("rootfsb");
 		if (IS_ERR(part)) {
-			luofu_fmc_crumb(fmc, 11, word);
+			luofu_fmc_crumb(fmc, 11, 0xe2000000);
 			return 0;
 		}
 
-		err = ubi_attach_mtd_dev(part, LUOFU_UBI_DEV_NUM_AUTO, 0, 0);
+		for (i = 0; i < 32; i++) {
+			u8 w[64];
+			u32 magic, vho, doff, crc, calc;
+			u64 ec;
+
+			retlen = 0;
+			err = mtd_read(part, (loff_t)i * fmc->spec.block_size,
+				       64, &retlen, w);
+			if (err) {
+				put_mtd_device(part);
+				luofu_fmc_crumb(fmc, 11,
+						0xe0000000 | ((-err) & 0xff));
+				return 0;
+			}
+
+			magic = ((u32)w[0] << 24) | ((u32)w[1] << 16) |
+				((u32)w[2] << 8) | (u32)w[3];
+			vho = ((u32)w[16] << 24) | ((u32)w[17] << 16) |
+			      ((u32)w[18] << 8) | (u32)w[19];
+			doff = ((u32)w[20] << 24) | ((u32)w[21] << 16) |
+			       ((u32)w[22] << 8) | (u32)w[23];
+			crc = ((u32)w[60] << 24) | ((u32)w[61] << 16) |
+			      ((u32)w[62] << 8) | (u32)w[63];
+			ec = 0;
+			{
+				int k;
+				for (k = 0; k < 8; k++)
+					ec = (ec << 8) | w[8 + k];
+			}
+			calc = crc32(LUOFU_UBI_CRC32_INIT, w, 60);
+
+			if (magic != 0x55424923 || w[4] != 1 ||
+			    vho != 2048 || doff != 4096 ||
+			    ec > 0x7fffffffULL || crc != calc)
+				break;
+		}
+
 		put_mtd_device(part);
-
-		if (err < 0) {
-			/* 0xE1 <errno>: the attach itself refuses, with the reason */
-			luofu_fmc_crumb(fmc, 11,
-					0xe1000000 | ((-err) & 0xff));
-			return 0;
-		}
-
-		/* it attached as ubi<err> - now say whether the volume reads */
-		desc = ubi_open_volume(err, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
-		if (IS_ERR(desc)) {
-			luofu_fmc_crumb(fmc, 11, 0x500b0000 | (err & 0xff));
-			return 0;
-		}
+		luofu_fmc_crumb(fmc, 11, 0x5c000000 |
+				((u32)(i & 0xff) << 16) |
+				(i == 32 ? 0xff : (u32)(i & 0xff)));
+		return 0;
 	}
 
 	err = ubi_read(desc, 0, buf, 0, 4);
