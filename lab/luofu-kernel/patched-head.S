@@ -531,44 +531,22 @@ ENDPROC(__enable_mmu)
 ENTRY(__turn_mmu_on)
 	mov	r0, r0
 	instr_sync
-		/* lab breadcrumb 0xC0DE0017; captures now go to RAM at 0x80600F00 (below the
-		 * kernel/zImage/pgtbl, inside the 1:1 span, survives the boot cycle and is
-		 * devmem-readable): +0x00 crumb, +0x04 r0 (control), +0x08 r4 (TTBR0),
-		 * +0x0c r8 (TTBR1), +0x10 r13 (ret target) */
+		/* lab breadcrumb 0xC0DE0017 + captured inputs: r0->+4 (control), r4->+8 (TTBR0),
+		 * r8->+c (TTBR1), r13->+10 (the VA this will ret to) */
 		movw	ip, #:lower16:0x10100C18
 		movt	ip, #:upper16:0x10100C18
 		movw	r3, #0x0017
 		movt	r3, #0xC0DE
-		str	r3, [ip]
-		movw	ip, #:lower16:0x80600F00
-		movt	ip, #:upper16:0x80600F00
 		str	r3, [ip]
 		str	r0, [ip, #4]
 		str	r4, [ip, #8]
 		str	r8, [ip, #12]
 		str	r13, [ip, #16]
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
-		/* lab breadcrumb 0xC0DE0018: post-MMU.  The section-granular idmap covers
-		 * 0x80600000-0x807FFFFF 1:1, so a store to 0x80600F00 works - and that page
-		 * sits BELOW the vendor kernel's span, so it survives the vendor boot. */
-		movw	ip, #:lower16:0x80600F00
-		movt	ip, #:upper16:0x80600F00
-		movw	r3, #0x0018
-		movt	r3, #0xC0DE
-		str	r3, [ip, #0x18]
-		add	r4, ip, #0x18
-		mcr	p15, 0, r4, c7, c10, 1		@ DCCMVAC: clean the line
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	instr_sync
 	mov	r3, r3
 	mov	r3, r13
-		/* lab breadcrumb 0xC0DE0019: about to branch to the VA (r13 captured below) */
-		str	r3, [ip, #0x1c]
-		str	r13, [ip, #0x20]
-		add	r4, ip, #0x1c
-		mcr	p15, 0, r4, c7, c10, 1		@ DCCMVAC: clean both lines
-		add	r4, ip, #0x20
-		mcr	p15, 0, r4, c7, c10, 1
 	ret	r3
 __turn_mmu_on_end:
 ENDPROC(__turn_mmu_on)

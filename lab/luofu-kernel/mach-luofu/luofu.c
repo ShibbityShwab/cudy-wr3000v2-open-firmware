@@ -52,11 +52,8 @@
  */
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/of_fdt.h>
 #include <linux/printk.h>
 #include <linux/reboot.h>
-#include <linux/string.h>
-#include <asm/byteorder.h>
 #include <asm/mach/arch.h>
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
@@ -117,53 +114,8 @@ static int __init luofu_late_crumb(void)
 }
 late_initcall(luofu_late_crumb);
 
-/*
- * The BSP's prebuilt NAND stack (tri_fmc/tri_nand/perbuilt .o objects) binds to
- * compatible = "tri,fmc" and "tri,flashinfo_reserved".  The vendor DT we boot
- * with - the loader hands the kernel ITS dtb, we are pinned to it - says
- * "hsan,fmc"/"hsan,flashinfo_reserved" for the same hardware.  Both rewrites
- * are byte-for-byte equal length (8->8, 23->23 including the NUL), so patch
- * the live blob in place from init_early, long before any driver probes.
- */
-extern void *initial_boot_params;
-
-static void __init luofu_dt_rewrite(void)
-{
-	static const struct {
-		const char *from;
-		const char *to;
-	} swaps[] = {
-		{ "hsan,fmc",                "tri,fmc" },
-		{ "hsan,flashinfo_reserved", "tri,flashinfo_reserved" },
-	};
-	u8 *blob = initial_boot_params;
-	u32 totalsize;
-	int i;
-
-	if (!blob)
-		return;
-	if (be32_to_cpup((__be32 *)blob) != 0xd00dfeed)
-		return;
-	totalsize = be32_to_cpup((__be32 *)(blob + 4));
-
-	for (i = 0; i < ARRAY_SIZE(swaps); i++) {
-		size_t n = strlen(swaps[i].from);
-		u8 *p = blob, *end = blob + totalsize - n;
-
-		if (strlen(swaps[i].to) + 1 != n)
-			continue;	/* equal length is the whole trick */
-		for (; p <= end; p++) {
-			if (!memcmp(p, swaps[i].from, n)) {
-				memcpy(p, swaps[i].to, n);
-				break;
-			}
-		}
-	}
-}
-
 static void __init luofu_early(void)
 {
-	luofu_dt_rewrite();
 	luofu_crumb(LUOFU_CRUMB_EARLY);
 }
 
@@ -185,12 +137,6 @@ static void __init luofu_init_machine(void)
 
 	luofu_crumb(LUOFU_CRUMB_DONE);
 }
-
-/* layout-perturbation probe: deliberately shifts the binary so we can tell whether
- * the MMU-on hang is content/layout-sensitive (it looks like it is).
- */
-static const char luofu_layout_probe[] __used =
-	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789";
 
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
