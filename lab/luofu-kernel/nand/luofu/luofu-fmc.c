@@ -938,16 +938,23 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * driver registered.
 		 */
 		{
-			struct mtd_info *m;
-			int n = 0;
+			int n;
 
-			mtd_for_each_device(m) {
+			/*
+			 * 5.10 has no mtd_for_each_device(); the idiom is get_mtd_device(NULL, i)
+			 * walking the index until it fails.  That the kernel caught this and the
+			 * CI build reported it before any fire is the check working as intended.
+			 */
+			for (n = 0; n < 24; n++) {
+				struct mtd_info *m = get_mtd_device(NULL, n);
+
+				if (IS_ERR(m))
+					break;
 				pr_err("FMC: mtd[%d] name=%s type=%d size=%llu esz=%u wsz=%u\n",
-				       n++, m->name, m->type,
+				       n, m->name, m->type,
 				       (unsigned long long)m->size,
 				       m->erasesize, m->writesize);
-				if (n > 20)
-					break;
+				put_mtd_device(m);
 			}
 		}
 		part = get_mtd_device_nm("rootfsb");
