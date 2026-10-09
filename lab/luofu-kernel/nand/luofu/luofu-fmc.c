@@ -902,14 +902,14 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * read back were simply whatever RAM happened to hold.  memremap() exists for
  * exactly this and is what ramoops itself uses.
  */
-#define LUOFU_LOG_SAFE		0x809A0000	/* outside our image */
-#define LUOFU_LOG_PRESERVED	0x80606000	/* vendor-preserved, inside our .data */
-#define LUOFU_LOG_SIZE		0x2000		/* 8 KiB each, newest kept */
+#define LUOFU_LOG_SAFE		0x809A0000	/* outside our image - but scrubbed */
+#define LUOFU_LOG_PRESERVED	0x80600000	/* the PROVEN-surviving zone */
+#define LUOFU_LOG_SIZE		0x1000		/* 4 KiB each, newest kept */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
 
 static void *luofu_log_a;	/* 0x809A0000 */
-static void *luofu_log_b;	/* 0x80606000 */
+static void *luofu_log_b;	/* 0x80600000 */
 static struct kmsg_dumper luofu_kmsg;
 
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
@@ -960,27 +960,23 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	luofu_log_b = memremap(LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE, MEMREMAP_WB);
 
 	/*
-	 * AN ARMED MARK, written now while the kernel is alive, because a readback
-	 * of zeroes and stray code cannot distinguish "the mapping failed" from
-	 * "the dumper never fired":
+	 * NOTHING IS WRITTEN HERE, and a fire is why.  An armed mark written to
+	 * BOTH buffers at registration - while the kernel is alive - moved the
+	 * failure forward rather than backward: the boot then reached the mach's
+	 * late_initcall crumb (C18 = 0xC0DE0020) and died before late_initcall_sync,
+	 * leaving C1C at its earlier stage-B value, so the hook never ran at all.
+	 * The only thing that had changed is that these writes finally succeeded.
+	 * Buffer B sits inside our own .data, where four live bytes break a
+	 * structure the kernel reads later; buffer A is outside our image but the
+	 * vendor scrubs it, so a mark there would never have been readable anyway.
 	 *
-	 *   0xC0DE10A0  mapped, but the dumper did not run
-	 *   0xC0DE1055  the dumper ran (it writes this over the armed mark)
-	 *   neither     the mapping failed, or the region was scrubbed
-	 *
-	 * Four bytes per buffer, written once.
+	 * The mapping question is answered through the SYSCtrl crumb instead - the
+	 * one channel that has always worked, because it is I/O rather than RAM -
+	 * stamped from the stage-D hook, which runs after everything else and so
+	 * cannot have its crumb overwritten.  Both buffers are therefore written
+	 * ONLY from the panic path, when corrupting our own data cannot cost
+	 * anything but the reboot the kernel is about to perform regardless.
 	 */
-	if (luofu_log_a) {
-		u32 mark = LUOFU_LOG_ARMED;
-
-		memcpy(luofu_log_a, &mark, sizeof(mark));
-	}
-	if (luofu_log_b) {
-		u32 mark = LUOFU_LOG_ARMED;
-
-		memcpy(luofu_log_b, &mark, sizeof(mark));
-	}
-
 	if (!luofu_log_a && !luofu_log_b)
 		return -ENOMEM;
 
