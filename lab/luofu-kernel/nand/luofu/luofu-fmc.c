@@ -756,12 +756,15 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  * build failed with "undeclared (first use in this function)" - the identifiers
  * were present, but not yet in scope.
  *
- * They sit below 0x80601000, so clear of the flash-spec ATAG, and inside the same
- * 4 KiB that hundreds of printk writes per boot have already proven inert.
+ * They are OFFSETS INTO OUR OWN COHERENT BUFFER now, not fixed addresses.  They
+ * used to be absolute addresses chosen because a breadcrumb cell had survived
+ * there - and that region turned out to be exactly where the FMC driver's DMA
+ * landing zone had been placed, so the instrument was corrupting the thing it
+ * was measuring.  See the note at LUOFU_DIAG_SIZE.
  */
-#define LUOFU_DIAG_AT0		0x80600e00	/* read at PEB offset 0    */
-#define LUOFU_DIAG_AT2K		0x80600e80	/* read at PEB offset 2048 */
-#define LUOFU_DIAG_META		0x80600ec0	/* err0, retlen0, err1, retlen1 */
+#define LUOFU_DIAG_META_OFF	0	/* err, retlen */
+#define LUOFU_DIAG_REC_OFF	8	/* then the record bytes */
+#define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
 
 static struct luofu_fmc *luofu_ubi_fmc;
 
@@ -867,32 +870,11 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * console buffer at 0x80600c00 where devmem can read them.
 		 */
 		/*
-		 * SCAN EVERY PEB'S VID HEADER, mirroring what validate_vid_hdr()
-		 * checks, and park the summary in RAM.
-		 *
-		 * This replaces a two-offset spot check that came back byte-perfect:
-		 * reads at PEB 0 offsets 0 and 2048 returned "UBI#" and "UBI!" exactly
-		 * as the vendor's driver does.  So the read path is right where it was
-		 * checked, and the rejection must come from a PEB that was NOT checked -
-		 * consistent with the captured log, whose ubi_dump_vid_hdr() showed
-		 * vol_type 102, a value no valid header ever carries, on some PEB other
-		 * than the one just verified.
-		 *
-		 * The checks mirror validate_vid_hdr()'s, because -EINVAL on UBI's
-		 * VID-header path comes from nowhere else: magic (a wrong one returns a
-		 * different code), then the fields it compares against the set it accepts.
-		 *
-		 * Parked at LUOFU_DIAG_AT0, away from the console buffer, because the
-		 * panic dump overwrites the newest kilobyte of the log.
-		 *
-		 *  [0] PEBs whose VID header passed all checks
-		 *  [1] first failing PEB number, or 0xffffffff if none
-		 *  [2] that PEB's magic
-		 *  [3] that PEB's vol_type          (valid: 1 dynamic, 2 static)
-		 *  [4] that PEB's compat            (valid: 0..3)
-		 *  [5] that PEB's lnum
-		 *  [6] that PEB's data_size
-		 *  [7] that PEB's stored hdr_crc
+		 * (The scan that used to live here - every PEB's VID header checked against
+		 * what validate_vid_hdr() mirrors - did its job: it showed PEB 0 carrying
+		 * compat 5 and otherwise being clean, which is what led to the UBI patch.
+		 * It is gone now because the buffer it parked into was inside the FMC
+		 * driver's DMA landing zone, so its later readings were its own output.)
 		 */
 		/*
 		 * PARK OUR OWN READ OF THE VOLUME-TABLE RECORD UBI OBJECTED TO.
@@ -918,8 +900,8 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * a partial offset within a page is exactly what luofu_mtd_read() computes
 		 * but nothing has ever verified.
 		 *
-		 * The 172 bytes go to LUOFU_DIAG_AT0 with err and retlen ahead of them, so
-		 * the comparison against the vendor's all-zero-plus-CRC is a devmem read.
+		 * The 172 bytes go to the diagnostic buffer with err and retlen ahead of
+		 * them, so the comparison is a devmem read at an address the log reports.
 		 */
 		{
 			u8 rec[172];
@@ -937,8 +919,12 @@ static int __init luofu_fmc_ubi_probe(void)
 
 			meta[0] = (u32)e;
 			meta[1] = (u32)rl;
-			memcpy((void *)__va(LUOFU_DIAG_AT0), meta, sizeof(meta));
-			memcpy((void *)__va(LUOFU_DIAG_AT0 + 8), rec, sizeof(rec));
+			if (luofu_diag_buf) {
+				memcpy(luofu_diag_buf + LUOFU_DIAG_META_OFF,
+				       meta, sizeof(meta));
+				memcpy(luofu_diag_buf + LUOFU_DIAG_REC_OFF,
+				       rec, sizeof(rec));
+			}
 		}
 		return 0;
 	}
@@ -1013,16 +999,39 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * read back were simply whatever RAM happened to hold.  memremap() exists for
  * exactly this and is what ramoops itself uses.
  */
-#define LUOFU_LOG_SAFE		0x809A0000	/* outside our image - but scrubbed */
-#define LUOFU_LOG_PRESERVED	0x80600c00	/* astride the PROVEN-surviving cell */
-#define LUOFU_LOG_SIZE		0x200		/* 512 B, ending where the diagnostics begin */
+#define LUOFU_LOG_SIZE		0x200		/* 512 B log ring */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
+/*
+ * THE LOG AND THE DIAGNOSTICS LIVE IN THEIR OWN COHERENT ALLOCATIONS NOW.
+ *
+ * They used to live at fixed addresses - 0x80600c00 for the ring, 0x80600e00 for
+ * the diagnostics - chosen because a breadcrumb cell at 0x80600f20 had survived
+ * there for many fires.  THAT REASONING WAS WRONG, and the cost was this whole
+ * investigation: the FMC driver allocates its DMA landing zone with
+ *
+ *	dmam_alloc_coherent(dev, 0x2200, &fmc->dma_addr, GFP_KERNEL)
+ *
+ * whose address the allocator picks, and it picked that same region.  The
+ * hardware reads a flash page into it, luofu_fmc_read_page() copies it out with
+ * memcpy_fromio(), and MY CONSOLE WAS OVERWRITING IT ON EVERY PRINTK.  Every page
+ * this driver read was therefore returning my own log text - which is exactly
+ * what the parked record showed: ")\n\n<4>[    4".
+ *
+ * So the fault UBI reported was produced by the instrument observing it.  Both
+ * buffers now come from dmam_alloc_coherent() and collide with nothing, and the
+ * log ring's PHYSICAL address is stamped into a crumb so devmem can find it -
+ * the log itself carries the diagnostic buffer's address, so one crumb bootstraps
+ * the whole readback.
+ */
+#define LUOFU_LOG_STEP		44		/* crumb: log ring's physical address */
 #define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
 #define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
-static void *luofu_log_a;	/* 0x809A0000 */
-static void *luofu_log_b;	/* 0x80600000 */
+static void *luofu_log_b;	/* the log ring - our own DMA allocation */
+static dma_addr_t luofu_log_dma;
+static void *luofu_diag_buf;	/* the diagnostic buffer, likewise */
+static dma_addr_t luofu_diag_dma;
 static struct kmsg_dumper luofu_kmsg;
 
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
@@ -1058,7 +1067,6 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 			    enum kmsg_dump_reason reason)
 {
 	luofu_kmsg_to(luofu_log_b, dumper);
-	luofu_kmsg_to(luofu_log_a, dumper);
 }
 
 static struct notifier_block luofu_panic_nb;
@@ -1211,7 +1219,6 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 				LUOFU_LOG_PANIC_VAL);
 
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
-	luofu_kmsg_to(luofu_log_a, &luofu_kmsg);
 
 	return NOTIFY_DONE;
 }
@@ -1241,8 +1248,10 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * kind of mapping, and those values survived a reset and were read back with
 	 * devmem from the vendor system.
 	 */
-	luofu_log_a = (void *)__va(LUOFU_LOG_SAFE);
-	luofu_log_b = (void *)__va(LUOFU_LOG_PRESERVED);
+	luofu_log_b = dmam_alloc_coherent(fmc->dev, LUOFU_LOG_SIZE,
+					  &luofu_log_dma, GFP_KERNEL);
+	luofu_diag_buf = dmam_alloc_coherent(fmc->dev, LUOFU_DIAG_SIZE,
+					     &luofu_diag_dma, GFP_KERNEL);
 
 	/*
 	 * NOTHING IS WRITTEN HERE, and a fire is why.  An armed mark written to
@@ -1262,7 +1271,7 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * ONLY from the panic path, when corrupting our own data cannot cost
 	 * anything but the reboot the kernel is about to perform regardless.
 	 */
-	if (!luofu_log_a && !luofu_log_b)
+	if (!luofu_log_b)
 		return -ENOMEM;
 
 	luofu_kmsg.dump = luofu_kmsg_dump;
@@ -1309,6 +1318,19 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * at all - see luofu_console_write.
 	 */
 	register_console(&luofu_console);
+
+	/*
+	 * BOOTSTRAP THE READBACK WITH ONE CRUMB.  The log ring's PHYSICAL address
+	 * goes to the crumb value cell - the channel in this phase that has never
+	 * lied, because it is I/O rather than RAM - and everything else is found
+	 * from there: the log itself carries the diagnostic buffer's address, which
+	 * the driver prints below.  One 32-bit value bootstraps the whole readback
+	 * with no hard-coded address anywhere.
+	 */
+	luofu_fmc_crumb(fmc, LUOFU_LOG_STEP, (u32)luofu_log_dma);
+
+	pr_err("FMC: log dma=%pad diag dma=%pad\n",
+	       &luofu_log_dma, &luofu_diag_dma);
 
 	return 0;
 }
