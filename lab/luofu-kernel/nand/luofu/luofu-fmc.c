@@ -109,6 +109,8 @@
 #include <linux/kmsg_dump.h>
 #include <linux/memremap.h>
 #include <linux/notifier.h>
+#include <linux/timer.h>
+#include <linux/workqueue.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
@@ -953,6 +955,48 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 
 static struct notifier_block luofu_panic_nb;
 
+static void luofu_log_work_fn(struct work_struct *w);
+static void luofu_log_tick(struct timer_list *t);
+
+static struct work_struct luofu_log_work;
+static struct timer_list luofu_log_timer;
+
+/*
+ * A TIMER THAT SNAPSHOTS THE LOG WHILE THE KERNEL IS ALIVE, because the panic
+ * hooks turned out to be aimed at an event that never happens.
+ *
+ * The panic notifier answered its own question by NOT firing: C18 stayed at the
+ * stage-D hook's crumb (0xC0DE500B) instead of becoming step 42, which means the
+ * kernel never entered panic() at all.  It hangs where the root device never
+ * appears, something then resets the box, and a hang calls neither kmsg_dump()
+ * nor any notifier - which is why every panic-based design returned an empty
+ * buffer no matter how many of its own faults were fixed.
+ *
+ * So the capture stops waiting for a die and instead refreshes the buffer every
+ * few seconds from a workqueue.  Whatever the kernel is doing when it finally
+ * goes down - hanging, panicking, or being reset out from under us - the buffer
+ * already holds the most recent log, because it was written while the kernel was
+ * still running.
+ *
+ * A workqueue rather than the timer callback directly, because kmsg_dump_get_line
+ * takes printk's internal lock and must not be called from softirq context.
+ *
+ * NO CRUMB IS STAMPED.  The buffer's own contents are the proof: it lives in the
+ * window the vendor's own memory map confirms is untouched - below 0x80608000,
+ * where the vendor's kernel code begins - so if the timer runs at all, the mark
+ * and the text are both readable, and no second channel is needed to say so.
+ */
+static void luofu_log_work_fn(struct work_struct *w)
+{
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+}
+
+static void luofu_log_tick(struct timer_list *t)
+{
+	schedule_work(&luofu_log_work);
+	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
+}
+
 static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
 {
 	/* the crumb FIRST: it goes to SYSCtrl, which has never failed */
@@ -1029,6 +1073,14 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 */
 	luofu_panic_nb.notifier_call = luofu_panic_notify;
 	atomic_notifier_chain_register(&panic_notifier_list, &luofu_panic_nb);
+
+	/*
+	 * And the snapshot timer, which is the hook that does not depend on the
+	 * kernel ever panicking - see luofu_log_work_fn for why that matters.
+	 */
+	INIT_WORK(&luofu_log_work, luofu_log_work_fn);
+	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
+	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
 
 	return 0;
 }
