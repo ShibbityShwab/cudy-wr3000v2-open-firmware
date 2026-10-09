@@ -106,6 +106,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/genhd.h>
 #include <linux/io.h>
+#include <linux/console.h>
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
 #include <linux/timer.h>
@@ -958,6 +959,53 @@ static void luofu_log_tick(struct timer_list *t);
 static struct timer_list luofu_log_timer;
 
 /*
+ * A CONSOLE THAT KEEPS WHAT IT IS SHOWN.
+ *
+ * Everything above this point tried to read the log back through the kmsg_dumper
+ * API, and every attempt came back with a mark and no text - including from the
+ * panic path, where the kernel itself sets up the iterator.  Rather than reason a
+ * third time about that API's preconditions, this registers a console and simply
+ * keeps each line as printk hands it over.
+ *
+ * That is what pstore's console backend does, and it is the direct route: the
+ * callback is called by printk for every message that passes the console loglevel,
+ * so UBI's ubi_err() lines arrive here by the same path they would reach a serial
+ * port.  There is no ringbuffer to iterate, no cursor to position, and no flag to
+ * set first - the API that was fighting me is gone from the design entirely.
+ *
+ * CON_ENABLED makes printk use it from the moment it is registered, and
+ * CON_PRINTBUFFER also hands it everything printed before registration, which is
+ * exactly the boot-time text wanted.
+ */
+static void luofu_console_write(struct console *co, const char *s, unsigned int n)
+{
+	static unsigned int off = 4; /* the mark occupies the first four bytes */
+	u32 mark = LUOFU_LOG_MARK;
+	void *p = luofu_log_b;
+
+	if (!p)
+		return;
+
+	if (off == 4)
+		memcpy(p, &mark, sizeof(mark));
+
+	if (off + n + 1 > LUOFU_LOG_SIZE)
+		off = 4;	/* circular: keep the NEWEST text */
+	if (n > LUOFU_LOG_SIZE - 4)
+		n = LUOFU_LOG_SIZE - 4;
+
+	memcpy(p + off, s, n);
+	off += n;
+	*(char *)(p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1)) = 0;
+}
+
+static struct console luofu_console = {
+	.name	= "luofu",
+	.write	= luofu_console_write,
+	.flags	= CON_PRINTBUFFER | CON_ENABLED,
+};
+
+/*
  * A TIMER THAT SNAPSHOTS THE LOG WHILE THE KERNEL IS ALIVE, because the panic
  * hooks turned out to be aimed at an event that never happens.
  *
@@ -1114,6 +1162,12 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 */
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
+
+	/*
+	 * And the console, which is the capture that does not depend on the kmsg API
+	 * at all - see luofu_console_write.
+	 */
+	register_console(&luofu_console);
 
 	return 0;
 }
