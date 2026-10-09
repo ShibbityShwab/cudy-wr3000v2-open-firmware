@@ -762,6 +762,12 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  * landing zone had been placed, so the instrument was corrupting the thing it
  * was measuring.  See the note at LUOFU_DIAG_SIZE.
  */
+/*
+ * Offsets into the diagnostic buffer.  The sampling loop uses a 40-byte stride
+ * (err/retlen plus 32 bytes), so the per-offset macros are no longer used; they
+ * stay declared because the log's address is derived from LUOFU_LOG_SIZE and the
+ * slot arithmetic reads more clearly with them named.
+ */
 #define LUOFU_DIAG_META_OFF	0	/* err, retlen */
 #define LUOFU_DIAG_REC_OFF	8	/* then the record bytes */
 #define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
@@ -884,61 +890,57 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * console buffer at 0x80600c00 where devmem can read them.
 		 */
 		/*
-		 * (The scan that used to live here - every PEB's VID header checked against
-		 * what validate_vid_hdr() mirrors - did its job: it showed PEB 0 carrying
-		 * compat 5 and otherwise being clean, which is what led to the UBI patch.
-		 * It is gone now because the buffer it parked into was inside the FMC
-		 * driver's DMA landing zone, so its later readings were its own output.)
-		 */
-		/*
-		 * PARK OUR OWN READ OF THE VOLUME-TABLE RECORD UBI OBJECTED TO.
+		 * SAMPLE SEVERAL OFFSETS, BECAUSE THE FAILURE IS OFFSET-DEPENDENT.
 		 *
-		 * UBI's words, finally readable because the console ring now keeps only its
-		 * output, moved the fault off the VID header entirely:
+		 * UBI's own words, from a log that is finally trustworthy (the buffer
+		 * survives the vendor and no longer collides with anything):
 		 *
+		 *   ubi0: scanning is finished
 		 *   ubi0 error: vtbl_check: bad CRC at record 6: 0xaae09698, not 0x000000
-		 *   UBI error: cannot attach mtd14
+		 *   ubi0 error: ubi_read_volume_table: ...
+		 *   attach_mtd_dev: failed to attach mtd14, error -22
 		 *
-		 * The compat widening did its job - UBI read the layout volume and got all
-		 * the way to validating its records - and then rejected record 6.
+		 * Scanning COMPLETES, so every VID header is fine and the compat patch did
+		 * its job - the failure is in the volume table's data.  The vendor's flash
+		 * has record 6 (at byte 5128) as an all-zero record with a valid CRC, while
+		 * this driver returns the 66CC pattern of stale RAM and claims success.
 		 *
-		 * Ground truth from the vendor's own MTD driver, at the record's offset:
-		 * the record is EMPTY (all zeros) with a VALID CRC of 0xF116C36B.  UBI
-		 * instead computed 0xaae09698 and saw a stored CRC of zero, so what this
-		 * read path returns at byte 5128 of the volume differs from what is on the
-		 * flash.
+		 * And the fault is NOT uniform: 32-byte reads at offsets 0 and 2048 matched
+		 * the vendor byte for byte, and 5128 does not.  So this samples four
+		 * offsets across the first PEB's page structure - 0 and 2048 (page 0 and
+		 * page 1, both previously correct), 4096 (the data area's first byte) and
+		 * 5128 (record 6, the one UBI objects to) - and parks each with its own
+		 * err and retlen, so the pattern names the defect instead of a theory.
 		 *
-		 * 5128 is 4096 + 6 * 172: record 6 of the layout volume's first LEB, which
-		 * sits at the EC header's data_offset.  Every offset this driver has been
-		 * checked at so far - 0 and 2048 - is a PAGE BOUNDARY; this one is not, and
-		 * a partial offset within a page is exactly what luofu_mtd_read() computes
-		 * but nothing has ever verified.
-		 *
-		 * The 172 bytes go to the diagnostic buffer with err and retlen ahead of
-		 * them, so the comparison is a devmem read at an address the log reports.
+		 * Layout in the diagnostic buffer:
+		 *   +0    err, retlen for offset 0
+		 *   +8    the 32 bytes read there
+		 *   ...   then 2048, 4096 and 5128 at the same stride
 		 */
 		{
-			u8 rec[172];
-			size_t rl = 0;
+			static const u32 offs[4] = { 0, 2048, 4096, 5128 };
+			u8 buf[32];
 			u32 meta[2];
-			int e;
+			int s;
 
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part))
 				return 0;
 
-			memset(rec, 0, sizeof(rec));
-			e = mtd_read(part, 5128, 172, &rl, rec);
-			put_mtd_device(part);
+			for (s = 0; s < 4; s++) {
+				size_t rl = 0;
+				int e;
 
-			meta[0] = (u32)e;
-			meta[1] = (u32)rl;
-			if (luofu_diag_buf) {
-				memcpy(luofu_diag_buf + LUOFU_DIAG_META_OFF,
-				       meta, sizeof(meta));
-				memcpy(luofu_diag_buf + LUOFU_DIAG_REC_OFF,
-				       rec, sizeof(rec));
+				memset(buf, 0, sizeof(buf));
+				e = mtd_read(part, offs[s], 32, &rl, buf);
+				if (!luofu_diag_buf)
+					break;
+				meta[0] = (u32)e;
+				meta[1] = (u32)rl;
+				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
+				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
 			}
+			put_mtd_device(part);
 		}
 		return 0;
 	}
