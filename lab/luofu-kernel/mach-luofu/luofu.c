@@ -138,6 +138,12 @@ static void __init luofu_init_machine(void)
 	luofu_crumb(LUOFU_CRUMB_DONE);
 }
 
+/* layout-perturbation probe: deliberately shifts the binary so we can tell whether
+ * the MMU-on hang is content/layout-sensitive (it looks like it is).
+ */
+static const char luofu_layout_probe[] __used =
+	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789";
+
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
 	"hisilicon,luofu",
