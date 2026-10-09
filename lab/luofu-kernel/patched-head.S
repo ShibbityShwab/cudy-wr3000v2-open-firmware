@@ -547,6 +547,19 @@ ENTRY(__turn_mmu_on)
 		str	r4, [ip, #8]
 		str	r8, [ip, #12]
 		str	r13, [ip, #16]
+		/* pre-mcr marker (MMU off: writes always reach RAM) to the post-mcr slot:
+		 * if 0x80700F18 reads 0xC0DE0008 after the boot, execution never got past
+		 * the mcr (or the post-mcr store itself faulted); 0xC0DE0018 means it did. */
+		movw	ip, #:lower16:0x80700F18
+		movt	ip, #:upper16:0x80700F18
+		movw	r3, #0x0008
+		movt	r3, #0xC0DE
+		str	r3, [ip]
+		movw	ip, #:lower16:0x10100C18
+		movt	ip, #:upper16:0x10100C18
+		movw	r3, #0x0017
+		movt	r3, #0xC0DE
+		str	r3, [ip]
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
 		/* lab breadcrumb 0xC0DE0018: post-MMU; the 1:1 idmap covers ONLY this code's own
 		 * page (pa 0x80700000-0x80700FFF), so the store must land in that page - 0xF00
