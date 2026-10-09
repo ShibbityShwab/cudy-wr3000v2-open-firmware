@@ -672,7 +672,20 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	mtd->dev.of_node = fmc->dev->of_node;
 	mtd->name = "luofu-nand";
 	mtd->type = MTD_NANDFLASH;
-	mtd->flags = MTD_CAP_NANDFLASH & ~MTD_WRITEABLE;
+	/*
+	 * MTD_NO_ERASE is not decoration: add_mtd_device() refuses a device that
+	 * provides no ->_erase and has not declared it -
+	 *
+	 *   WARN_ON((!mtd->erasesize || !master->_erase) &&
+	 *           !(mtd->flags & MTD_NO_ERASE))
+	 *
+	 * - and this driver provides no erase precisely because it must not
+	 * modify the flash.  The live fire found that check the honest way: the
+	 * first MTD-registration boot returned 0xE0000009, the step-9 failure,
+	 * and the source says why.  UBI is unaffected - its build.c mentions
+	 * MTD_NO_ERASE zero times and keys only on MTD_WRITEABLE.
+	 */
+	mtd->flags = (MTD_CAP_NANDFLASH & ~MTD_WRITEABLE) | MTD_NO_ERASE;
 	mtd->size = fmc->spec.tri_size;
 	mtd->erasesize = fmc->spec.block_size;
 	mtd->writesize = fmc->spec.page_size;
