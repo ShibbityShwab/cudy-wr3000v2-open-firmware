@@ -208,17 +208,31 @@ ENTRY(stext)
 		/* lab instrument: sample the alternatives pair-table the descriptor at the
 		 * (stable) physical address 0x80608244 points to, POST-walk, pre-MMU: read
 		 * the patched instruction word at sites 0/102/301 -> 0x80600F20/24/28.
-		 * Identical code: differing results between build classes = the walk's
-		 * stores landed (or didn't) - the coherence question, measured. */
+		 * 0xC0DEDEEE in a cell = descriptor not where expected, sampling skipped. */
+		movw	ip, #:lower16:0x80600F20
+		movt	ip, #:upper16:0x80600F20
+		movw	r7, #0xdeee
+		movt	r7, #0xC0DE
+		str	r7, [ip]
+		str	r7, [ip, #4]
+		str	r7, [ip, #8]
 		movw	r0, #:lower16:0x80608244
 		movt	r0, #:upper16:0x80608244
 		ldmia	r0, {r3, r4, r5}
-		subs	r3, r0, r3			@ delta (runtime - link)
-		adds	r4, r4, r3			@ table start (runtime VA == phys here)
-		movw	ip, #:lower16:0x80600F20
-		movt	ip, #:upper16:0x80600F20
-		ldr	r6, [r4]			@ entry0.addr
-		add	r6, r6, r3
+		subs	r3, r0, r3			@ delta if this really is the descriptor
+		cmn	r3, #0x800000			@ |delta| sanity: ~-0x3FA00000 expected
+		bpl	7f
+		adds	r4, r4, r3			@ candidate table start
+		ldr	r6, [r4]			@ entry0.addr (link-time)
+		add	r6, r6, r3			@ runtime addr
+		movw	r5, #:lower16:0x80600000
+		movt	r5, #:upper16:0x80600000
+		subs	r7, r6, r5
+		bmi	7f
+		movw	r5, #:lower16:0x81200000
+		movt	r5, #:upper16:0x81200000
+		subs	r7, r5, r6
+		bmi	7f				@ outside the kernel span -> skip
 		ldr	r7, [r6]			@ the (possibly patched) word
 		str	r7, [ip]
 		ldr	r6, [r4, #816]			@ entry102.addr
@@ -229,6 +243,7 @@ ENTRY(stext)
 		add	r6, r6, r3
 		ldr	r7, [r6]
 		str	r7, [ip, #8]
+7:
 #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
 	bl	__fixup_pv_table
 		/* lab breadcrumb 0xC0DE000D: __fixup_smp/__fixup_pv_table done, before __create_page_tables */
