@@ -548,12 +548,15 @@ ENTRY(__turn_mmu_on)
 		str	r8, [ip, #12]
 		str	r13, [ip, #16]
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
-		/* lab breadcrumb 0xC0DE0018: post-MMU (1:1 map live); RAM store via the idmap */
+		/* lab breadcrumb 0xC0DE0018: post-MMU (1:1 map live); RAM store via the idmap,
+		 * then clean the line to PoC so DRAM shows it after the watchdog reset */
 		movw	ip, #:lower16:0x80600F00
 		movt	ip, #:upper16:0x80600F00
 		movw	r3, #0x0018
 		movt	r3, #0xC0DE
 		str	r3, [ip, #0x18]
+		add	r4, ip, #0x18
+		mcr	p15, 0, r4, c7, c10, 1		@ DCCMVAC: clean the line
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	instr_sync
 	mov	r3, r3
@@ -561,6 +564,10 @@ ENTRY(__turn_mmu_on)
 		/* lab breadcrumb 0xC0DE0019: about to branch to the VA (r13 captured below) */
 		str	r3, [ip, #0x1c]
 		str	r13, [ip, #0x20]
+		add	r4, ip, #0x1c
+		mcr	p15, 0, r4, c7, c10, 1		@ DCCMVAC: clean both lines
+		add	r4, ip, #0x20
+		mcr	p15, 0, r4, c7, c10, 1
 	ret	r3
 __turn_mmu_on_end:
 ENDPROC(__turn_mmu_on)
