@@ -739,6 +739,7 @@ static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
 	struct ubi_volume_desc *desc;
+	struct mtd_info *part;
 	u8 buf[4] = { 0 };
 	u32 word;
 	int err;
@@ -748,7 +749,35 @@ static int __init luofu_fmc_ubi_probe(void)
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
-		luofu_fmc_crumb(fmc, 11, LUOFU_RPT_FAIL(11));
+		/*
+		 * The volume would not open, and the useful question is WHY, so the
+		 * failure value carries both facts that separate the cases:
+		 *
+		 *  - can the mtd partition UBI was TOLD to attach still be resolved
+		 *    by name here?  If not, the partition is not there any more.
+		 *
+		 *  - does the ubiblock device exist?  ubiblock0_0 is created by
+		 *    ubiblock_init() from ubi.block=0,0, and it can only exist if
+		 *    ubi0 attached AND volume 0 opened for it.  So its presence is
+		 *    independent evidence that UBI really is up.
+		 *
+		 *   0xE0000000  neither       -> the partition is gone
+		 *   0xE0000001  ubiblock only -> UBI is up; this hook failed for
+		 *                               some other reason
+		 *   0xE0000002  partition only-> UBI did NOT attach
+		 *   0xE0000003  both          -> UBI is up and volume 0 is readable
+		 */
+		word = LUOFU_RPT_FAIL(0);
+
+		part = get_mtd_device_nm("rootfsb");
+		if (!IS_ERR(part)) {
+			word |= 2;
+			put_mtd_device(part);
+		}
+		if (blk_lookup_devt("ubiblock0_0", 0))
+			word |= 1;
+
+		luofu_fmc_crumb(fmc, 11, word);
 		return 0;
 	}
 
