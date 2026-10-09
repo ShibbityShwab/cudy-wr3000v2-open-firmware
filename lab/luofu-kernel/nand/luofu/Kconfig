@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# The FMC controller driver.  It must be built in (=y), not a module: the
+# rootfs lives on this controller, so a module would only load after the
+# kernel had already failed to find its root.
+#
+# Stage A (probe + READ ID + the sysctrl breadcrumbs) lives in luofu-fmc.c;
+# the register map, the command recipes and the vendor-vs-BSP poll decision
+# are documented at the top of that file.
+
+config MTD_NAND_LUOFU
+	bool "Hisilicon luofu (Hi5671Y) FMC NAND controller"
+	depends on ARCH_LUOFU || COMPILE_TEST
+	depends on OF
+	help
+	  The flash memory controller of the Hisilicon Hi5671Y "luofu" SoC
+	  (board R116, the Cudy WR3000 v2.0): a command engine plus a DMA
+	  engine at MMIO 0x10a20000 driving the board's SPI-NAND on chip
+	  select 1.
+
+	  Stage A -- what this option builds today -- maps the controller,
+	  resets the die and reads the chip ID, reporting each step through
+	  the SoC's sysctrl scratch pair (0x10100c18/0x10100c1c) because the
+	  board has no console.  It registers no mtd_info and cannot write to
+	  the flash.  The page-read path and the MTD/SPI-NAND integration are
+	  stage B.
+
+	  Say Y here if you are building the luofu kernel.

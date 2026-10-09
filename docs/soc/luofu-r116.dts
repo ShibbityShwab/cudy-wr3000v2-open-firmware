@@ -374,9 +374,10 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;				/* flash-address space maps 1:1 */
-		status = "disabled";
-		/* TODO binding question: reuse the spi-nand core but a new
-		 * hisilicon,luofu-fmc controller driver is needed. */
+		/* stage A: lab/luofu-kernel/nand/luofu probes here, maps the
+		 * controller, resets the die, reads the chip ID and reports the
+		 * result through the sysctrl breadcrumbs.  No mtd_info yet. */
+		status = "okay";
 
 		/* 17-partition A/B table, verbatim (vendor-dt-notes.md sec 6). */
 		partitions {

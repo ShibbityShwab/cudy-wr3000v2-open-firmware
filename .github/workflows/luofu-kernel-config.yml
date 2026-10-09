@@ -70,7 +70,16 @@ jobs:
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-compressed-head.S" arch/arm/boot/compressed/head.S
           cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu
           cp "$GITHUB_WORKSPACE/docs/soc/luofu-r116.dts" arch/arm/boot/dts/luofu-r116.dts
+          # The FMC/NAND driver. Copied, then wired by APPENDING to the two
+          # upstream files: an append cannot drift with an upstream context
+          # change the way a patch hunk can, and both files tolerate a leaf
+          # added at the end. This is what turns CONFIG_MTD_NAND_LUOFU from a
+          # TODO into a symbol that resolves.
+          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/nand/luofu" drivers/mtd/nand/luofu
+          echo 'source "drivers/mtd/nand/luofu/Kconfig"' >> drivers/mtd/nand/Kconfig
+          echo 'obj-$(CONFIG_MTD_NAND_LUOFU) += luofu/'        >> drivers/mtd/nand/Makefile
           grep -n 'ARCH_LUOFU' arch/arm/mach-hisi/Kconfig arch/arm/Makefile arch/arm/boot/dts/Makefile
+          grep -n 'MTD_NAND_LUOFU' drivers/mtd/nand/Kconfig drivers/mtd/nand/Makefile
 
       - name: base config
         run: make -C linux-5.10.201 ARCH=arm multi_v7_defconfig
@@ -176,7 +185,16 @@ jobs:
           # the single source of truth for the devicetree.
           cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu
           cp "$GITHUB_WORKSPACE/docs/soc/luofu-r116.dts" arch/arm/boot/dts/luofu-r116.dts
-          ls -l arch/arm/mach-luofu/
+          # The FMC/NAND driver (stage A: map + reset + READ ID). Copied, then
+          # wired by APPENDING to the two upstream files, the same way the
+          # config job does it: an append cannot drift with an upstream
+          # context change the way a patch hunk can, and both files tolerate
+          # a leaf added at the end.
+          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/nand/luofu" drivers/mtd/nand/luofu
+          echo 'source "drivers/mtd/nand/luofu/Kconfig"' >> drivers/mtd/nand/Kconfig
+          echo 'obj-$(CONFIG_MTD_NAND_LUOFU) += luofu/'        >> drivers/mtd/nand/Makefile
+          grep -n 'MTD_NAND_LUOFU' drivers/mtd/nand/Kconfig drivers/mtd/nand/Makefile
+          ls -l arch/arm/mach-luofu/ drivers/mtd/nand/luofu/
           grep -n 'ARCH_LUOFU' arch/arm/mach-hisi/Kconfig arch/arm/Makefile arch/arm/boot/dts/Makefile
 
       - name: configure (vanilla base + the fragment)
@@ -207,6 +225,7 @@ jobs:
                      CONFIG_SERIAL_8250 CONFIG_SERIAL_8250_CONSOLE CONFIG_SERIAL_8250_DW \
                      CONFIG_SERIAL_EARLYCON CONFIG_TTY CONFIG_UNIX98_PTYS \
                      CONFIG_MTD CONFIG_MTD_BLOCK CONFIG_MTD_OF_PARTS CONFIG_MTD_SPI_NAND \
+                     CONFIG_MTD_NAND_LUOFU \
                      CONFIG_MTD_UBI CONFIG_MTD_UBI_BLOCK CONFIG_SQUASHFS CONFIG_UBIFS_FS \
                      CONFIG_PSTORE CONFIG_PSTORE_CONSOLE CONFIG_PSTORE_RAM \
                      CONFIG_PCI CONFIG_PCI_MSI CONFIG_PCIEPORTBUS CONFIG_CFG80211 CONFIG_MAC80211 \

@@ -102,10 +102,30 @@ What this buys, and what it does not:
   (every `omo/**` push, ~2 min): runs the kernel's own `merge_config.sh -m` +
   `olddefconfig` against the real 5.10.201 Kconfig and asserts every requested
   symbol survived. `CONFIG_ARCH_LUOFU` is asserted (it has a Kconfig entry now);
-  the 12 driver-less `CONFIG_*_LUOFU` symbols are reported as the to-do list.
+  the remaining driver-less `CONFIG_*_LUOFU` symbols are reported as the to-do
+  list. `CONFIG_MTD_NAND_LUOFU` has left that list: `nand/luofu/Kconfig`
+  defines it and both jobs wire it in, so it now resolves to `=y`.
   Green run of the pre-image version: **`37573150202`** on `c40637a` - 47/47
   non-`NEW` symbols resolved `=y`, the 13 `NEW` ones listed as the to-do (see
   `build/tmp/inta-spec/kcfg.md`).
+
+### The FMC/NAND driver (`nand/luofu/`)
+
+The flash controller at 0x10a20000 is what the rootfs lives behind, so the
+lane carries its driver from here on. `nand/luofu/luofu-fmc.c` is **stage A**:
+it maps the controller and its 1 MiB window, resets the die, reads the 5-byte
+READ ID and reports each step through the sysctrl scratch pair 0x10100c18 /
+0x10100c1c (the same registers the mach breadcrumbs use - this board has no
+console). It compiles in **no write path at all** and registers no `mtd_info`,
+so it cannot modify the flash. The register map, the command recipes and the
+one place the BSP and the vendor disagree (which register the completion poll
+reads) are documented at the top of that file; the full decoded spec is
+`docs/phase50/nand-fmc-port-spec.md`. Stage B adds the page read and the MTD
+integration.
+
+Both jobs wire it in by copying the directory and **appending** two lines to
+`drivers/mtd/nand/Kconfig` and `drivers/mtd/nand/Makefile`, rather than adding
+patch hunks: an append has no upstream context to drift against.
 - Job **`kernel`** (the image lane, ~25-40 min) runs either on a
   `workflow_dispatch` with `build_kernel: true` (dispatch from this branch works
   even though the file is not on the default branch yet - run `37579008899`

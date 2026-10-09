@@ -117,7 +117,14 @@ CONFIG_MTD_SPI_NAND=y
 CONFIG_MTD_OF_PARTS=y
 CONFIG_MTD_UBI=y
 CONFIG_MTD_UBI_BLOCK=y
-# NEW (stage 2, the hsan,fmc controller - the hardest storage item)
+# The hsan,fmc controller. The Kconfig entry now EXISTS (lab/luofu-kernel/
+# nand/luofu/Kconfig, wired in by both jobs of luofu-kernel-config.yml via a
+# copy + two appends to drivers/mtd/nand/{Kconfig,Makefile}), so this symbol
+# resolves to =y instead of falling out of the merge. What it builds today is
+# stage A of the driver - map + die reset + READ ID + the sysctrl breadcrumbs,
+# with no write path compiled in and no mtd_info registered; the page-read /
+# MTD integration and the partition table come in stage B
+# (docs/phase50/nand-fmc-port-spec.md sec. f).
 CONFIG_MTD_NAND_LUOFU=y
 # selected indirectly by MTD_SPI_NAND / MTD_NAND_LUOFU: CONFIG_MTD_NAND_CORE,
 # CONFIG_MTD_NAND_ECC_SW_HAMMING (the FMC's ECC; SW_BCH is the alternative).
