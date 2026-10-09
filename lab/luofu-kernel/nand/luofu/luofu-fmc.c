@@ -1223,10 +1223,25 @@ static void luofu_log_tick(struct timer_list *t)
 
 static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
 {
-	/* the crumb FIRST: it goes to SYSCtrl, which has never failed */
+	/*
+	 * THE CRUMB CARRIES THE LOG RING'S PHYSICAL ADDRESS, not a marker.
+	 *
+	 * It used to carry LUOFU_LOG_PANIC_VAL, and that was a design mistake: the
+	 * address is stamped at step 44 from luofu_log_register, but this notifier
+	 * runs LATER in the same boot and the crumb cell holds one value, last write
+	 * wins - so the address was overwritten before it could be read, and the
+	 * marker that replaced it told me something I could already infer from the
+	 * boot having panicked at all.
+	 *
+	 * With the log living in its own coherent allocation, its address cannot be
+	 * predicted either: this kernel has no CMA, so dma_alloc_coherent() serves
+	 * from the page allocator and the address is whatever those pages were.  This
+	 * notifier is the LAST thing to touch the crumb, so this is the value that
+	 * survives to be read.
+	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
-				LUOFU_LOG_PANIC_VAL);
+				(u32)(uintptr_t)luofu_log_dma);
 
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 
