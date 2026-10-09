@@ -85,7 +85,6 @@
  * FIRST in the match table below.  The driver's own binding stays as the
  * second entry so it still binds if the appended tree is ever the one used.
  */
- */
 
 #include <linux/bits.h>
 #include <linux/delay.h>
