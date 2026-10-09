@@ -187,7 +187,13 @@ ENTRY(stext)
 	ldr	r12, [r10, #PROCINFO_INITFUNC]
 	add	r12, r12, r10
 	ret	r12
-1:	b	__enable_mmu
+1:		/* lab breadcrumb 0xC0DE0015: proc init (__v7_setup) returned; r0=ctrl, r4=tbl (ip dead here) */
+	movw	ip, #:lower16:0x10100C18
+	movt	ip, #:upper16:0x10100C18
+	movw	r3, #0x0015
+	movt	r3, #0xC0DE
+	str	r3, [ip]
+	b	__enable_mmu
 ENDPROC(stext)
 	.ltorg
 #ifndef CONFIG_XIP_KERNEL
@@ -475,6 +481,12 @@ __secondary_data:
  *  r13 = *virtual* address to jump to upon completion
  */
 __enable_mmu:
+		/* lab breadcrumb 0xC0DE0016: __enable_mmu entered (r5 reloaded below at DACR_INIT) */
+		movw	ip, #:lower16:0x10100C18
+		movt	ip, #:upper16:0x10100C18
+		movw	r3, #0x0016
+		movt	r3, #0xC0DE
+		str	r3, [ip]
 #if defined(CONFIG_ALIGNMENT_TRAP) && __LINUX_ARM_ARCH__ < 6
 	orr	r0, r0, #CR_A
 #else
