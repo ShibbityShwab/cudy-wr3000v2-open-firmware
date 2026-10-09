@@ -118,45 +118,49 @@ static int __init luofu_late_crumb(void)
 late_initcall(luofu_late_crumb);
 
 /*
- * The BSP's prebuilt NAND stack (tri_fmc/tri_nand/perbuilt .o objects) binds to
- * compatible = "tri,fmc" and "tri,flashinfo_reserved".  The vendor DT we boot
- * with - the loader hands the kernel ITS dtb, we are pinned to it - says
- * "hsan,fmc"/"hsan,flashinfo_reserved" for the same hardware.  Both rewrites
- * are byte-for-byte equal length (8->8, 23->23 including the NUL), so patch
- * the live blob in place from init_early, long before any driver probes.
+ * The BSP's prebuilt NAND stack binds to compatible = "tri,fmc" and
+ * "tri,flashinfo_reserved".  The vendor DT we boot with says "hsan,..." for
+ * the same hardware; both rewrites are byte-for-byte equal length, so patch
+ * the live blob in place from init_early.  Deliberately minimal code (no
+ * string helpers, fixed stores) - the previous libc-flavoured version's
+ * linked footprint was large enough to shift the kernel into the
+ * layout-dependent death at the MMU-enable (0xC0DE0017).
  */
 extern void *initial_boot_params;
 
 static void __init luofu_dt_rewrite(void)
 {
-	static const struct {
-		const char *from;
-		const char *to;
-	} swaps[] = {
-		{ "hsan,fmc",                "tri,fmc" },
-		{ "hsan,flashinfo_reserved", "tri,flashinfo_reserved" },
-	};
 	u8 *blob = initial_boot_params;
 	u32 totalsize;
-	int i;
+	u8 *p, *end;
 
 	if (!blob)
 		return;
 	if (be32_to_cpup((__be32 *)blob) != 0xd00dfeed)
 		return;
 	totalsize = be32_to_cpup((__be32 *)(blob + 4));
+	end = blob + totalsize - 24;
 
-	for (i = 0; i < ARRAY_SIZE(swaps); i++) {
-		size_t n = strlen(swaps[i].from);
-		u8 *p = blob, *end = blob + totalsize - n;
-
-		if (strlen(swaps[i].to) + 1 != n)
-			continue;	/* equal length is the whole trick */
-		for (; p <= end; p++) {
-			if (!memcmp(p, swaps[i].from, n)) {
-				memcpy(p, swaps[i].to, n);
-				break;
-			}
+	for (p = blob; p <= end; p++) {
+		if (!(p[0] == 'h' && p[1] == 's' && p[2] == 'a' && p[3] == 'n'))
+			continue;
+		if (p[4] == ',' && p[5] == 'f' && p[6] == 'm' && p[7] == 'c') {
+			/* "hsan,fmc" (8 incl NUL) -> "tri,fmc" (8 incl NUL) */
+			p[0] = 't'; p[1] = 'r'; p[2] = 'i'; p[3] = ',';
+			p[4] = 'f'; p[5] = 'm'; p[6] = 'c'; p[7] = 0;
+			continue;
+		}
+		if (p[4] == ',' && p[5] == 'f' && p[6] == 'l' && p[7] == 'a' &&
+		    p[8] == 's' && p[9] == 'h' && p[10] == 'i' && p[11] == 'n' &&
+		    p[12] == 'f' && p[13] == 'o' && p[14] == '_') {
+			/* "hsan,flashinfo_reserved" (24) -> "tri,flashinfo_reserved" (23);
+			 * the old NUL at p[23] still terminates the shorter string. */
+			p[0] = 't'; p[1] = 'r'; p[2] = 'i'; p[3] = ',';
+			p[4] = 'f'; p[5] = 'l'; p[6] = 'a'; p[7] = 's';
+			p[8] = 'h'; p[9] = 'i'; p[10] = 'n'; p[11] = 'f';
+			p[12] = 'o'; p[13] = '_'; p[14] = 'r'; p[15] = 'e';
+			p[16] = 's'; p[17] = 'e'; p[18] = 'r'; p[19] = 'v';
+			p[20] = 'e'; p[21] = 'd'; p[22] = 0;
 		}
 	}
 }
