@@ -548,10 +548,11 @@ ENTRY(__turn_mmu_on)
 		str	r8, [ip, #12]
 		str	r13, [ip, #16]
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
-		/* lab breadcrumb 0xC0DE0018: post-MMU (1:1 map live); RAM store via the idmap,
-		 * then clean the line to PoC so DRAM shows it after the watchdog reset */
-		movw	ip, #:lower16:0x80600F00
-		movt	ip, #:upper16:0x80600F00
+		/* lab breadcrumb 0xC0DE0018: post-MMU; the 1:1 idmap covers ONLY this code's own
+		 * page (pa 0x80700000-0x80700FFF), so the store must land in that page - 0xF00
+		 * is free RAM there.  Clean the line to PoC so DRAM shows it after a reset. */
+		movw	ip, #:lower16:0x80700F00
+		movt	ip, #:upper16:0x80700F00
 		movw	r3, #0x0018
 		movt	r3, #0xC0DE
 		str	r3, [ip, #0x18]
