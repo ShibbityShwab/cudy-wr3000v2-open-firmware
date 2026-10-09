@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-hisi/Kconfig
 +++ b/arch/arm/mach-hisi/Kconfig
-@@ -55,6 +55,20 @@
+@@ -55,6 +55,21 @@
  	help
  	  Support for Hisilicon HIX5HD2 SoC family
  
@@ -10,6 +10,7 @@
 +	select CACHE_L2X0
 +	select HAVE_ARM_SCU if SMP
 +	select HAVE_ARM_TWD if SMP
++	select UNINLINE_SPIN_UNLOCK	# the prebuilt tri_* NAND objects call _raw_spin_unlock
 +	help
 +	  Support for the Hisilicon Hi5671Y "luofu" SoC (board R116, the Cudy
 +	  WR3000 v2.0). The machine code is arch/arm/mach-luofu/luofu.c: it only
@@ -59,3 +60,26 @@
 # Physical writes while the MMU is off; r3/r4 are free at every point and
 # the boot ABI registers (r0-r2, later r7/r8) are never touched.
 
+-----------------------------------------------------------
+# NAND wiring: the BSP's prebuilt triductor stack (copied whole by the workflow) + its
+# Kconfig entry.  The vendor DT strings are rewritten in luofu.c init_early.
+--- a/drivers/mtd/Makefile
++++ b/drivers/mtd/Makefile
+@@ -31,3 +31,4 @@
+ obj-$(CONFIG_MTD_SPI_NOR)	+= spi-nor/
+ obj-$(CONFIG_MTD_UBI)		+= ubi/
+ obj-$(CONFIG_MTD_HYPERBUS)	+= hyperbus/
++obj-$(CONFIG_MTD_TRIDUCTOR_NAND)	+= triductor/
+--- a/drivers/mtd/Kconfig
++++ b/drivers/mtd/Kconfig
+@@ -220,3 +220,10 @@
+ source "drivers/mtd/hyperbus/Kconfig"
+ 
+ endif # MTD
++
++config MTD_TRIDUCTOR_NAND
++	tristate "Triductor nand device support"
++	depends on MTD
++	select MTD_BLKDEVS
++	help
++	  Triductor nand device driver.
