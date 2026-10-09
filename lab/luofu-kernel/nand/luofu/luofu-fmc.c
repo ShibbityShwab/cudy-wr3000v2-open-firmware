@@ -872,50 +872,78 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * differ in EXACTLY one config line, the CONFIG_CMDLINE string - shows those
  * parameters alone killed the boot between init_machine and the first initcall,
  * which is precisely where parse_args() runs.  This design has no parameters at
- * all: the address is a constant here, and the panic path is what triggers it.
+ * all.
  *
- * The region is deliberately ABOVE our own kernel image.  Image is 9,984,344
- * bytes loaded at 0x80008000, spanning to about 0x8098D4D8, so a buffer written
- * there from inside this driver would corrupt the code writing it. 0x809A0000
- * sits between that end and the 0x80A00000 ceiling of the flashinfo reserved
- * window - the only place that is both outside our kernel and reserved by the
- * vendor's devicetree too, which is what lets it be read back with devmem after
- * this kernel folds over.
+ * TWO BUFFERS, because the two candidate regions each fail a different way, and
+ * one fire should say which:
+ *
+ *   0x809A0000 - outside our own kernel (Image is 9,984,344 bytes from
+ *                0x80008000, ending about 0x8098D4D8) and inside the flashinfo
+ *                reserved window.  But a fire showed the log written here reads
+ *                back EMPTY, which is what the record predicts: the vendor's own
+ *                image span "scrubs everything above 0x80608000" on its return.
+ *
+ *   0x80606000 - BELOW 0x80608000, the zone the record measured as surviving the
+ *                vendor - but that zone is inside our own kernel's .data, so
+ *                writing there at any normal time would corrupt the running
+ *                kernel.  At PANIC time it does not matter: the kernel is
+ *                already dead and its only remaining job is to reboot.
+ *
+ * So both are written, and only from the panic path - nothing is written at
+ * registration, precisely so a live kernel is never touched.  Whichever reads
+ * back afterwards identifies the surviving region as well as carrying the log.
  */
-#define LUOFU_LOG_BASE		0x809A0000
-#define LUOFU_LOG_SIZE		0x20000		/* 128 KiB of printk */
+#define LUOFU_LOG_SAFE		0x809A0000	/* outside our image */
+#define LUOFU_LOG_PRESERVED	0x80606000	/* vendor-preserved, inside our .data */
+#define LUOFU_LOG_SIZE		0x2000		/* 8 KiB each, newest kept */
+#define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
 
-static void __iomem *luofu_log_buffer;
+static void __iomem *luofu_log_a;	/* 0x809A0000 */
+static void __iomem *luofu_log_b;	/* 0x80606000 */
 static struct kmsg_dumper luofu_kmsg;
 
-static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
-			    enum kmsg_dump_reason reason)
+static void luofu_kmsg_to(void __iomem *p, struct kmsg_dumper *dumper)
 {
 	static char line[256];
-	void __iomem *p = luofu_log_buffer;
 	size_t len, off = 0;
 
 	if (!p)
 		return;
 
+	/* the mark first, so a reader can tell "ran" from "never ran" */
+	writel(LUOFU_LOG_MARK, p);
+	off = 4;
+
 	kmsg_dump_rewind(dumper);
 
-	while (off + sizeof(line) < LUOFU_LOG_SIZE &&
-	       kmsg_dump_get_line(dumper, true, line, sizeof(line), &len)) {
-		if (len > LUOFU_LOG_SIZE - off - 1)
-			len = LUOFU_LOG_SIZE - off - 1;
+	/* circular: when the buffer fills, start over so the NEWEST log survives */
+	while (kmsg_dump_get_line(dumper, true, line, sizeof(line), &len)) {
+		if (len > sizeof(line) - 1)
+			len = sizeof(line) - 1;
+		if (off + len + 1 > LUOFU_LOG_SIZE)
+			off = 4;
 		memcpy_toio(p + off, line, len);
 		off += len;
 		writeb('\n', p + off);
 		off++;
 	}
+
+	writeb(0, p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1));
+}
+
+static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
+			    enum kmsg_dump_reason reason)
+{
+	luofu_kmsg_to(luofu_log_b, dumper);
+	luofu_kmsg_to(luofu_log_a, dumper);
 }
 
 static int luofu_log_register(struct luofu_fmc *fmc)
 {
-	luofu_log_buffer = devm_ioremap(fmc->dev, LUOFU_LOG_BASE,
-					LUOFU_LOG_SIZE);
-	if (!luofu_log_buffer)
+	luofu_log_a = devm_ioremap(fmc->dev, LUOFU_LOG_SAFE, LUOFU_LOG_SIZE);
+	luofu_log_b = devm_ioremap(fmc->dev, LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE);
+
+	if (!luofu_log_a && !luofu_log_b)
 		return -ENOMEM;
 
 	luofu_kmsg.dump = luofu_kmsg_dump;
