@@ -96,6 +96,17 @@ ENTRY(stext)
 		 * Adapted verbatim from v7_flush_dcache_all (arch/arm/mm/cache-v7.S);
 		 * runs pre-MMU; clobbers only r0-r7/r9-r11 (r1/r2 boot args untouched).
 		 */
+		/*
+		 * The ARM boot protocol requires the MMU *and* D-cache off at kernel
+		 * entry; the vendor's decompressor leaves the D-cache ON.  With the
+		 * MMU off, cached pre-MMU writes (page tables, our own breadcrumbs)
+		 * need not reach RAM, and the coherence behaviour across the
+		 * __turn_mmu_on transition then depends on which lines happen to be
+		 * resident - i.e. on the kernel's layout (the 0xC0DE0017 lottery).
+		 * Fix: clean+invalidate the D-cache fully, then explicitly clear
+		 * SCTLR.C.  The kernel sets its own control value at the mcr later,
+		 * so nothing needs restoring.
+		 */
 		dmb
 		mrc	p15, 1, r0, c0, c0, 1		@ read clidr
 		mov	r3, r0, lsr #23
@@ -130,6 +141,12 @@ ENTRY(stext)
 		bgt	7b
 9:		mov	r10, #0
 		mcr	p15, 2, r10, c0, c0, 0
+		dsb	st
+		isb
+		/* now switch the D-cache OFF (boot protocol) */
+		mrc	p15, 0, r0, c1, c0, 0
+		bic	r0, r0, #0x4			@ clear C (D-cache)
+		mcr	p15, 0, r0, c1, c0, 0
 		dsb	st
 		isb
  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
