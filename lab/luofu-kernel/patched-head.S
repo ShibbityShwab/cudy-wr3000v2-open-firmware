@@ -150,11 +150,6 @@ ENTRY(stext)
 		dsb	st
 		isb
  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
-		/* text-size dice: a padded block right after stext shifts all following code.
-		 * Text-size changes are what flip the 0017/0020 class; strings (rodata) do not. */
-	.rept	48
-	nop
-	.endr
 
  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
