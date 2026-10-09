@@ -68,8 +68,6 @@ jobs:
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-head.S"        arch/arm/kernel/head.S
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-head-common.S" arch/arm/kernel/head-common.S
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-compressed-head.S" arch/arm/boot/compressed/head.S
-          # the BSP's prebuilt NAND stack (objects only) - linked via the Makefile hook:
-          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/nand/triductor" drivers/mtd/triductor
           cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu
           cp "$GITHUB_WORKSPACE/docs/soc/luofu-r116.dts" arch/arm/boot/dts/luofu-r116.dts
           grep -n 'ARCH_LUOFU' arch/arm/mach-hisi/Kconfig arch/arm/Makefile arch/arm/boot/dts/Makefile
@@ -174,8 +172,6 @@ jobs:
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-head.S"        arch/arm/kernel/head.S
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-head-common.S" arch/arm/kernel/head-common.S
           cp "$GITHUB_WORKSPACE/lab/luofu-kernel/patched-compressed-head.S" arch/arm/boot/compressed/head.S
-          # the BSP's prebuilt NAND stack (objects only) - linked via the Makefile hook:
-          cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/nand/triductor" drivers/mtd/triductor
           # the new files are copied, not patched: docs/soc/luofu-r116.dts stays
           # the single source of truth for the devicetree.
           cp -r "$GITHUB_WORKSPACE/lab/luofu-kernel/mach-luofu" arch/arm/mach-luofu

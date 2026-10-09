@@ -60,27 +60,3 @@
 # Physical writes while the MMU is off; r3/r4 are free at every point and
 # the boot ABI registers (r0-r2, later r7/r8) are never touched.
 
------------------------------------------------------------
-# NAND wiring: the BSP's prebuilt triductor stack (drivers/mtd/triductor/, copied
-# whole by the workflow) + its Kconfig entry.  The vendor DT strings are rewritten
-# in luofu.c init_early so "tri,fmc"/"tri,flashinfo_reserved" matches.
---- a/drivers/mtd/Makefile
-+++ b/drivers/mtd/Makefile
-@@ -31,3 +31,4 @@
- obj-$(CONFIG_MTD_SPI_NOR)	+= spi-nor/
- obj-$(CONFIG_MTD_UBI)		+= ubi/
- obj-$(CONFIG_MTD_HYPERBUS)	+= hyperbus/
-+obj-$(CONFIG_MTD_TRIDUCTOR_NAND)	+= triductor/
---- a/drivers/mtd/Kconfig
-+++ b/drivers/mtd/Kconfig
-@@ -220,3 +220,10 @@
- source "drivers/mtd/hyperbus/Kconfig"
- 
- endif # MTD
-+
-+config MTD_TRIDUCTOR_NAND
-+	tristate "Triductor nand device support"
-+	depends on MTD
-+	select MTD_BLKDEVS
-+	help
-+	  Triductor nand device driver.
