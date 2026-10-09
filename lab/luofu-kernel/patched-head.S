@@ -219,9 +219,15 @@ ENTRY(stext)
 		movw	r0, #:lower16:0x80608244
 		movt	r0, #:upper16:0x80608244
 		ldmia	r0, {r3, r4, r5}
-		subs	r3, r0, r3			@ delta if this really is the descriptor
-		cmn	r3, #0x800000			@ |delta| sanity: ~-0x3FA00000 expected
-		bpl	7f
+		subs	r3, r0, r3			@ delta if this really is the descriptor (~0xC0000000)
+		movw	r6, #:lower16:0xbff00000
+		movt	r6, #:upper16:0xbff00000
+		cmp	r3, r6
+		blo	7f
+		movw	r6, #:lower16:0xc0100000
+		movt	r6, #:upper16:0xc0100000
+		cmp	r3, r6
+		bhi	7f				@ delta outside the plausible band -> skip
 		adds	r4, r4, r3			@ candidate table start
 		ldr	r6, [r4]			@ entry0.addr (link-time)
 		add	r6, r6, r3			@ runtime addr
