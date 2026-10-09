@@ -917,29 +917,45 @@ static int __init luofu_fmc_ubi_probe(void)
 		 *   +8    the 32 bytes read there
 		 *   ...   then 2048, 4096 and 5128 at the same stride
 		 */
+		/*
+		 * WHICH MTD IS "rootfsb"?  There may be more than one.
+		 *
+		 * The four-offset sample produced something this driver cannot do: reads with
+		 * err = 0 and retlen = 0.  luofu_mtd_read() sets *retlen = done on every path
+		 * that returns 0, so a (0, 0) result cannot have come through it - and the
+		 * payloads carry a fixed 14-byte stale patch (4cfb74e7 668a0751 7536bd0c
+		 * d17e0000) at BOTH offset 0 and offset 5128, which is not flash at any
+		 * offset.
+		 *
+		 * Which means get_mtd_device_nm("rootfsb") is resolving to some OTHER mtd
+		 * device with the same name - plausibly one registered by the vendor's own
+		 * NAND driver if that is compiled into this kernel, in which case it would
+		 * also be the device ubi.mtd=rootfsb picks, and every UBI reading this phase
+		 * has been about that driver rather than ours.
+		 *
+		 * So: enumerate every registered mtd and print its name, type and geometry,
+		 * then report what rootfsb resolved to and whether it is the one our FMC
+		 * driver registered.
+		 */
 		{
-			static const u32 offs[4] = { 0, 2048, 4096, 5128 };
-			u8 buf[32];
-			u32 meta[2];
-			int s;
+			struct mtd_info *m;
+			int n = 0;
 
-			part = get_mtd_device_nm("rootfsb");
-			if (IS_ERR(part))
-				return 0;
-
-			for (s = 0; s < 4; s++) {
-				size_t rl = 0;
-				int e;
-
-				memset(buf, 0, sizeof(buf));
-				e = mtd_read(part, offs[s], 32, &rl, buf);
-				if (!luofu_diag_buf)
+			mtd_for_each_device(m) {
+				pr_err("FMC: mtd[%d] name=%s type=%d size=%llu esz=%u wsz=%u\n",
+				       n++, m->name, m->type,
+				       (unsigned long long)m->size,
+				       m->erasesize, m->writesize);
+				if (n > 20)
 					break;
-				meta[0] = (u32)e;
-				meta[1] = (u32)rl;
-				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
-				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
 			}
+		}
+		part = get_mtd_device_nm("rootfsb");
+		if (!IS_ERR(part)) {
+			pr_err("FMC: rootfsb -> name=%s type=%d size=%llu esz=%u wsz=%u priv=%px\n",
+			       part->name, part->type,
+			       (unsigned long long)part->size,
+			       part->erasesize, part->writesize, part->priv);
 			put_mtd_device(part);
 		}
 		return 0;
