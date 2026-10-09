@@ -831,6 +831,43 @@ static int __init luofu_fmc_ubi_probe(void)
 		luofu_fmc_crumb(fmc, 11, 0x5c000000 |
 				((u32)(i & 0xff) << 16) |
 				(i == 32 ? 0xff : (u32)(i & 0xff)));
+
+		/*
+		 * AND PRINT WHAT THIS READ PATH ACTUALLY RETURNS, at two offsets, side
+		 * by side - which is the measurement the whole phase could not make
+		 * until the console capture worked.
+		 *
+		 * UBI's own words, now readable in RAM, name the fault: it dumps a VID
+		 * header whose fields are garbage and refuses the attach with -22.  The
+		 * vendor's MTD driver, reading the same flash, returns a perfectly valid
+		 * VID header at byte 2048 of every PEB - "UBI!", vol_type 1, compat 5,
+		 * vol_id 0x7FFFEFFF.
+		 *
+		 * The EC scan above passed 32 of 32 because it reads ONLY at offset 0 of
+		 * each PEB (i * block_size), and every earlier validation of this read
+		 * path did the same.  So the first question is simply whether this read
+		 * path agrees with itself at the two offsets - and printing both answers
+		 * it in one fire instead of one crumb at a time.
+		 *
+		 * Offsets sent to the ringbuffer through pr_err so they land in the
+		 * console buffer at 0x80600c00 where devmem can read them.
+		 */
+		{
+			u8 at0[32], at2k[32];
+			size_t rl0 = 0, rl1 = 0;
+			int e0, e1;
+
+			part = get_mtd_device_nm("rootfsb");
+			if (!IS_ERR(part)) {
+				e0 = mtd_read(part, 0, 32, &rl0, at0);
+				e1 = mtd_read(part, 2048, 32, &rl1, at2k);
+				pr_err("FMC: read off0 err=%d rl=%zu %*phN\n",
+				       e0, rl0, 32, at0);
+				pr_err("FMC: read off2048 err=%d rl=%zu %*phN\n",
+				       e1, rl1, 32, at2k);
+				put_mtd_device(part);
+			}
+		}
 		return 0;
 	}
 
