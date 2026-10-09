@@ -865,6 +865,34 @@ static int __init luofu_fmc_ubi_probe(void)
 				       e0, rl0, 32, at0);
 				pr_err("FMC: read off2048 err=%d rl=%zu %*phN\n",
 				       e1, rl1, 32, at2k);
+
+				/*
+				 * AND PARK THE RAW BYTES AT FIXED ADDRESSES, because the
+				 * printed copies do not survive: the panic that follows
+				 * dumps a partition list and a stack trace straight over
+				 * the newest kilobyte of the console buffer, which is
+				 * where these lines land.  devmem reads them here without
+				 * any interleaving at all.  These sit in the same proven
+				 * region as the console buffer itself - the 4 KiB below the
+				 * flash-spec ATAG at 0x80601000, which hundreds of printk
+				 * calls per boot have already written through without harm.
+				 *
+				 *  0x80600e00  32 bytes read at PEB offset 0     (expect "UBI#")
+				 *  0x80600e80  32 bytes read at PEB offset 2048  (expect "UBI!")
+				 *  0x80600ec0  e0, rl0, e1, rl1 as four words
+				 */
+				memcpy((void *)__va(LUOFU_DIAG_AT0), at0, 32);
+				memcpy((void *)__va(LUOFU_DIAG_AT2K), at2k, 32);
+				{
+					u32 meta[4];
+
+					meta[0] = (u32)e0;
+					meta[1] = (u32)rl0;
+					meta[2] = (u32)e1;
+					meta[3] = (u32)rl1;
+					memcpy((void *)__va(LUOFU_DIAG_META), meta,
+					       sizeof(meta));
+				}
 				put_mtd_device(part);
 			}
 		}
@@ -943,9 +971,17 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  */
 #define LUOFU_LOG_SAFE		0x809A0000	/* outside our image - but scrubbed */
 #define LUOFU_LOG_PRESERVED	0x80600c00	/* astride the PROVEN-surviving cell */
-#define LUOFU_LOG_SIZE		0x400		/* 1 KiB, newest kept */
+#define LUOFU_LOG_SIZE		0x200		/* 512 B, ending where the diagnostics begin */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
+/*
+ * Raw read bytes parked where devmem can read them without interleaving.
+ * Below 0x80601000, so clear of the flash-spec ATAG, and inside the same
+ * 4 KiB that hundreds of printk writes per boot have already proven inert.
+ */
+#define LUOFU_DIAG_AT0		0x80600e00	/* read at PEB offset 0    */
+#define LUOFU_DIAG_AT2K		0x80600e80	/* read at PEB offset 2048 */
+#define LUOFU_DIAG_META		0x80600ec0	/* err0, retlen0, err1, retlen1 */
 #define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
 #define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
