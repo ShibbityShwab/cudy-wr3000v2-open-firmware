@@ -49,7 +49,9 @@
 	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - PG_DIR_SIZE
 
 	.macro	pgtbl, rd, phys
-	add	\rd, \phys, #TEXT_OFFSET
+	movw	r3, #:lower16:TEXT_OFFSET
+	movt	r3, #:upper16:TEXT_OFFSET
+	add	\rd, \phys, r3
 	sub	\rd, \rd, #PG_DIR_SIZE
 	.endm
 
