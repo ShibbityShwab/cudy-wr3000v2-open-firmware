@@ -50,8 +50,12 @@
  *                      payload: the GET FEATURES 0xc0 status byte
  *   c18 = 0xC0DE5005   READ ID completed
  *                      payload: ID bytes 0..3, big-endian
- *   c18 = 0xC0DE5006   all steps completed
- *                      payload: the PASS value below
+ *   c18 = 0xC0DE5006   all stage-A steps completed
+ *                      payload: the stage-A pass value below
+ *   c18 = 0xC0DE5007   the flash-spec operands were resolved
+ *                      payload: 0x5001_0007 | from_atag ? bit16 : 0
+ *   c18 = 0xC0DE5008   a page was read through the DMA engine
+ *                      payload: the page's first four bytes (the pass value)
  *   c18 = 0xC0DE50En   failed at step n
  *
  * WHICH CELL TO READ, AND WHY IT IS NOT c18.  The mach code stamps its own
@@ -60,7 +64,10 @@
  * up holding the mach's value and the driver's crumb is gone.  c1c is the
  * cell that holds, and the reading is self-describing there:
  *
- *   c1c = 0x8C2C_xxyy    PASS - 0x8C2C is the die's signature, xx the
+ *   c1c = 0x2349_4255    STAGE B PASS - the first page of rootfsa begins with
+ *                        the ASCII "UBI#", UBI's EC header magic: the DMA page
+ *                        read returned real flash contents
+ *   c1c = 0x8C2C_xxyy    STAGE A PASS - 0x8C2C is the die's signature, xx the
  *                        configuration byte (0xb0) and yy the status (0xc0)
  *   c1c = 0x5000_000n    the probe reached step n and stopped there; a boot
  *                        that hangs in this driver leaves the last step it
@@ -88,9 +95,11 @@
 
 #include <linux/bits.h>
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 
@@ -159,6 +168,7 @@
 
 /* FMC_OP values, all read out of tri_spi_nand_drv.o / hi_flash.ko */
 #define FMC_OP_CMD_ONLY		0x81	/* START | cmd (the RESET form)     */
+/* FMC_OP values, all read out of tri_spi_nand_drv.o / hi_flash.ko */
 #define FMC_OP_GET_FEATURE	0xc5	/* START | addr | data-in    */
 #define FMC_OP_RDID		0x185	/* START | dummy | data-in   */
 
@@ -180,11 +190,55 @@
 #define LUOFU_CRUMB_PAYLOAD_OFF	0xc1c
 #define LUOFU_CRUMB_NAND	0xc0de5000
 
-/* The c1c protocol: progress, failure, and the pass value. */
+/* The c1c protocol: progress, failure, and the pass values. */
 #define LUOFU_RPT_STEP(n)	(0x50000000u | ((n) & 0xffu))
 #define LUOFU_RPT_FAIL(n)	(0xe0000000u | ((n) & 0xffu))
+#define LUOFU_RPT_STAGEB(n)	(0x50010000u | ((n) & 0xffu))
 
 #define LUOFU_CRUMB_STEP_MASK	0xff
+
+/* Where the page read lands: the first page of the rootfsa partition.  Chip
+ * offset 0x1e00000 over a 2048-byte page is row 0xF00. */
+#define LUOFU_ROOTFSA_OFFSET	0x1e00000
+
+/* The UBI EC header magic, "UBI#": the pass value of the stage-B page read. */
+#define LUOFU_UBI_MAGIC		0x23494255
+
+/*
+ * The flash-spec record.  The bootloader leaves it in the reserved region its
+ * own devicetree declares - on this board reserved-memory/flashinfo@0x80800000,
+ * reg = <0x80600000 0x400000>, atag-offset = <0x1000> - inside ATAG tag
+ * 0x5441000a.  The vendor's tri_nand_probe() walks it as: index = payload[0],
+ * then the 52-byte record at payload + 0x18 * index + 2.  The field offsets
+ * below are not inferred: they are the offsets the vendor's own DMA routine
+ * loads from (spec+0x28/0x29 for the address cycles, +0x2c/+0x2d/+0x2e for the
+ * read interface type, command and dummy).
+ */
+#define LUOFU_ATAG_FLASHINFO	0x5441000a
+#define LUOFU_ATAG_WINDOW	0x400
+#define LUOFU_SPEC_SIZE		0x34
+#define LUOFU_SPEC_TRI_SIZE	0x04
+#define LUOFU_SPEC_BLOCK_SIZE	0x08
+#define LUOFU_SPEC_PAGE_SIZE	0x0c
+#define LUOFU_SPEC_OOB_SIZE	0x10
+#define LUOFU_SPEC_ECC_TYPE	0x24
+#define LUOFU_SPEC_RD_ADDR_CYC	0x28
+#define LUOFU_SPEC_WR_ADDR_CYC	0x29
+#define LUOFU_SPEC_ER_ADDR_CYC	0x2a
+#define LUOFU_SPEC_RD_IF_TYPE	0x2c
+#define LUOFU_SPEC_RD_CMD	0x2d
+#define LUOFU_SPEC_RD_DUMMY	0x2e
+#define LUOFU_SPEC_WR_IF_TYPE	0x2f
+#define LUOFU_SPEC_WR_CMD	0x30
+#define LUOFU_SPEC_WR_DUMMY	0x31
+
+struct luofu_nand_spec {
+	u32	tri_size, block_size, page_size, oob_size, ecc_type;
+	u8	rd_addr_cyc, wr_addr_cyc, er_addr_cyc;
+	u8	rd_if_type, rd_cmd, rd_dummy;
+	u8	wr_if_type, wr_cmd, wr_dummy;
+	bool	from_atag;
+};
 
 struct luofu_fmc {
 	struct device	*dev;
@@ -192,6 +246,9 @@ struct luofu_fmc {
 	void __iomem	*window;
 	void __iomem	*crumb;		/* 8 bytes: crumb + payload */
 	u32		cs;
+	struct luofu_nand_spec spec;
+	void		*dma_buf;
+	dma_addr_t	dma_addr;
 };
 
 /* ------------------------------------------------------------------ */
@@ -346,6 +403,187 @@ static int luofu_fmc_read_id(struct luofu_fmc *fmc, u8 id[5])
 }
 
 /* ------------------------------------------------------------------ */
+/* Stage B: the flash-spec operands and the DMA page read                */
+/* ------------------------------------------------------------------ */
+
+static void luofu_spec_defaults(struct luofu_nand_spec *s)
+{
+	*s = (struct luofu_nand_spec){
+		.tri_size = 0x08000000, .block_size = 0x00020000,
+		.page_size = 0x800, .oob_size = 0x40, .ecc_type = 1,
+		.rd_addr_cyc = 5, .wr_addr_cyc = 5, .er_addr_cyc = 3,
+		.rd_if_type = 3, .rd_cmd = 0x6b, .rd_dummy = 1,
+		.wr_if_type = 3, .wr_cmd = 0x32, .wr_dummy = 0,
+		.from_atag = false,
+	};
+}
+
+/*
+ * Read the operands out of the bootloader's own table, the way the vendor's
+ * tri_nand_probe() does.  On any problem the recovered values above are kept,
+ * and from_atag records which happened so a boot can say so.
+ */
+static void luofu_fmc_spec_get(struct luofu_fmc *fmc)
+{
+	struct device_node *np;
+	struct resource res;
+	void __iomem *base, *p, *end, *payload = NULL, *rec;
+	u32 size = 0, atag_off = 0;
+	u8 index;
+
+	luofu_spec_defaults(&fmc->spec);
+
+	np = of_find_compatible_node(NULL, NULL, "hsan,flashinfo_reserved");
+	if (!np)
+		return;
+	if (of_address_to_resource(np, 0, &res))
+		goto out_node;
+	if (of_property_read_u32(np, "atag-offset", &atag_off))
+		goto out_node;
+
+	base = ioremap(res.start + atag_off, LUOFU_ATAG_WINDOW);
+	if (!base)
+		goto out_node;
+	end = base + LUOFU_ATAG_WINDOW;
+
+	for (p = base; p + 8 <= end; p += 4 * size) {
+		size = readl(p);
+		if (!size)
+			break;
+		if (readl(p + 4) == LUOFU_ATAG_FLASHINFO) {
+			payload = p + 8;
+			break;
+		}
+	}
+
+	if (!payload)
+		goto out_map;
+
+	index = readb(payload);
+	rec = payload + 0x18 * index + 2;
+	if (rec + LUOFU_SPEC_SIZE > end)
+		goto out_map;
+
+	fmc->spec.tri_size = readl(rec + LUOFU_SPEC_TRI_SIZE);
+	fmc->spec.block_size = readl(rec + LUOFU_SPEC_BLOCK_SIZE);
+	fmc->spec.page_size = readl(rec + LUOFU_SPEC_PAGE_SIZE);
+	fmc->spec.oob_size = readl(rec + LUOFU_SPEC_OOB_SIZE);
+	fmc->spec.ecc_type = readl(rec + LUOFU_SPEC_ECC_TYPE);
+	fmc->spec.rd_addr_cyc = readb(rec + LUOFU_SPEC_RD_ADDR_CYC);
+	fmc->spec.wr_addr_cyc = readb(rec + LUOFU_SPEC_WR_ADDR_CYC);
+	fmc->spec.er_addr_cyc = readb(rec + LUOFU_SPEC_ER_ADDR_CYC);
+	fmc->spec.rd_if_type = readb(rec + LUOFU_SPEC_RD_IF_TYPE);
+	fmc->spec.rd_cmd = readb(rec + LUOFU_SPEC_RD_CMD);
+	fmc->spec.rd_dummy = readb(rec + LUOFU_SPEC_RD_DUMMY);
+	fmc->spec.wr_if_type = readb(rec + LUOFU_SPEC_WR_IF_TYPE);
+	fmc->spec.wr_cmd = readb(rec + LUOFU_SPEC_WR_CMD);
+	fmc->spec.wr_dummy = readb(rec + LUOFU_SPEC_WR_DUMMY);
+	fmc->spec.from_atag = true;
+
+out_map:
+	iounmap(base);
+out_node:
+	of_node_put(np);
+}
+
+/* SET FEATURES: the byte goes out from the data window, then the op is issued. */
+static int luofu_fmc_set_feature(struct luofu_fmc *fmc, u8 addr, u8 val)
+{
+	u8 saved = luofu_fmc_ecc_type_get(fmc);
+	int ret;
+
+	luofu_fmc_ecc_type_set(fmc, 0);
+
+	writeb(val, fmc->window);
+	writel(SPINAND_CMD_SET_FEATURE, fmc->regs + FMC_CMD);
+	writel(addr, fmc->regs + FMC_ADDRL);
+	writel(luofu_fmc_cs_field(fmc) | FMC_OPCFG_ADDR_MASK,
+	       fmc->regs + FMC_OP_CFG);
+	writel(1, fmc->regs + FMC_DATA_NUM);
+	writel(FMC_OP_GET_FEATURE, fmc->regs + FMC_OP);
+
+	ret = luofu_fmc_wait_cmd(fmc);
+	luofu_fmc_ecc_type_set(fmc, saved);
+
+	return ret;
+}
+
+/*
+ * Quad I/O needs the die's configuration register QE bit.  That is a write to
+ * the die's CONFIGURATION register, not to the flash array - it is the same
+ * write the vendor's driver performs on every boot when the devicetree carries
+ * enable-quad-mode, and a die RESET clears it again.
+ */
+static int luofu_fmc_quad_enable(struct luofu_fmc *fmc)
+{
+	u8 cfg;
+	int ret;
+
+	ret = luofu_fmc_get_feature(fmc, SPINAND_FEAT_CONFIG, &cfg);
+	if (ret)
+		return ret;
+	if (cfg & BIT(0))
+		return 0;
+
+	return luofu_fmc_set_feature(fmc, SPINAND_FEAT_CONFIG, cfg | BIT(0));
+}
+
+/*
+ * The DMA page read.  saddr_d0/d1/oob point at one buffer split 0x1000 data /
+ * 0x1000 data / 0x200 OOB; addrh/addrl carry the row; op_cfg carries the
+ * interface type, address cycles and dummy count; op_ctrl carries the command
+ * and the operation type, and the store that writes it starts the engine.
+ */
+static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
+{
+	u8 saved = luofu_fmc_ecc_type_get(fmc);
+	u32 op_cfg, op_ctrl;
+	int i, ret;
+
+	if (!fmc->dma_buf)
+		return -ENOMEM;
+
+	luofu_fmc_ecc_type_set(fmc, 0);
+
+	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(fmc->dma_addr + 0x1000, fmc->regs + FMC_SADDR_D1);
+	writel(fmc->dma_addr + 0x2000, fmc->regs + FMC_SADDR_OOB);
+
+	writel(row >> 16, fmc->regs + FMC_ADDRH);
+	writel(row << 16, fmc->regs + FMC_ADDRL);
+
+	op_cfg = luofu_fmc_cs_field(fmc) |
+		 ((u32)(fmc->spec.rd_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
+		 ((u32)(fmc->spec.rd_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
+		 ((u32)fmc->spec.rd_dummy & FMC_OPCFG_DUMMY_MASK);
+	writel(op_cfg, fmc->regs + FMC_OP_CFG);
+
+	op_ctrl = ((u32)fmc->spec.rd_cmd << 16) | 1;
+
+	mb();
+	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
+	mb();
+
+	for (i = 0; i < FMC_CMD_POLLS; i++) {
+		if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY))
+			break;
+		udelay(1);
+	}
+
+	if (i == FMC_CMD_POLLS) {
+		dev_err(fmc->dev, "FMC: DMA page read timed out\n");
+		ret = -ETIMEDOUT;
+	} else {
+		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		ret = 0;
+	}
+
+	luofu_fmc_ecc_type_set(fmc, saved);
+
+	return ret;
+}
+
+/* ------------------------------------------------------------------ */
 /* Probe                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -355,7 +593,8 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	struct luofu_fmc *fmc;
 	u8 id[5] = { 0 };
 	u8 status = 0, config = 0;
-	u32 cfg;
+	u8 *page;
+	u32 cfg, word;
 	int ret;
 
 	fmc = devm_kzalloc(dev, sizeof(*fmc), GFP_KERNEL);
@@ -443,11 +682,62 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		 id[0], id[1], id[2], id[3], id[4], config, status);
 
 	/*
-	 * Stage B attaches here: the mainline SPI-NAND core (already selected
-	 * by CONFIG_MTD_SPI_NAND, whose esmt_8c table carries this die) reached
-	 * through a spi-mem controller, or a direct mtd_info.  Both need the
-	 * DMA page-read operands that come from the bootloader flash-spec table.
+	 * STAGE B: the page read.
+	 *
+	 * The operands come out of the bootloader's own flash-spec table, parsed
+	 * the way the vendor's driver parses it; the die is put into the quad
+	 * configuration that table describes; and one page is read through the
+	 * DMA engine from the start of the rootfsa partition.  The page's first
+	 * four bytes are what the reader cell ends up holding, so the pass value
+	 * is the data itself rather than a proxy for it: 0x23494255 is the ASCII
+	 * "UBI#", UBI's EC header magic, and it is what the first page of a
+	 * healthy rootfsa partition must begin with.
 	 */
+	luofu_fmc_spec_get(fmc);
+	if (!fmc->spec.page_size)
+		fmc->spec.page_size = 0x800;
+
+	luofu_fmc_crumb(fmc, 7, LUOFU_RPT_STAGEB(7) |
+				 (fmc->spec.from_atag ? BIT(16) : 0));
+
+	dev_info(dev, "FMC: spec from %s: page %u oob %u block %u; read if %u cmd %02x dummy %u cyc %u\n",
+		 fmc->spec.from_atag ? "the ATAG" : "the recovered defaults",
+		 fmc->spec.page_size, fmc->spec.oob_size, fmc->spec.block_size,
+		 fmc->spec.rd_if_type, fmc->spec.rd_cmd, fmc->spec.rd_dummy,
+		 fmc->spec.rd_addr_cyc);
+
+	if (luofu_fmc_quad_enable(fmc))
+		dev_warn(dev, "FMC: could not enable quad I/O; the page read may not answer\n");
+
+	if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32)))
+		dev_warn(dev, "FMC: could not set the 32-bit DMA mask\n");
+
+	fmc->dma_buf = dmam_alloc_coherent(dev, 0x2200, &fmc->dma_addr, GFP_KERNEL);
+	if (!fmc->dma_buf) {
+		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
+		return -ENOMEM;
+	}
+
+	page = devm_kzalloc(dev, fmc->spec.page_size, GFP_KERNEL);
+	if (!page) {
+		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
+		return -ENOMEM;
+	}
+
+	ret = luofu_fmc_read_page(fmc,
+				  LUOFU_ROOTFSA_OFFSET / fmc->spec.page_size, page);
+	if (ret) {
+		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
+		return ret;
+	}
+
+	word = ((u32)page[0]) | ((u32)page[1] << 8) |
+	       ((u32)page[2] << 16) | ((u32)page[3] << 24);
+	luofu_fmc_crumb(fmc, 8, word);
+
+	dev_info(dev, "FMC: rootfsa page 0 begins %02x %02x %02x %02x%s\n",
+		 page[0], page[1], page[2], page[3],
+		 word == LUOFU_UBI_MAGIC ? "  (UBI# - the page read works)" : "");
 
 	return 0;
 }
