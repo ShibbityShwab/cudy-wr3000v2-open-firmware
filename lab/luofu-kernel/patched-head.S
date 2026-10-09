@@ -258,14 +258,19 @@ ENTRY(stext)
 		bmi	7f				@ outside the kernel span -> skip
 		ldr	r7, [r6]			@ the (possibly patched) word
 		str	r7, [ip]
+		mcr	p15, 0, ip, c7, c10, 1		@ clean the cell line to PoC
 		ldr	r6, [r4, #816]			@ entry102.addr
 		add	r6, r6, r3
 		ldr	r7, [r6]
 		str	r7, [ip, #4]
+		add	r6, ip, #4
+		mcr	p15, 0, r6, c7, c10, 1
 		ldr	r6, [r4, #2408]		@ entry301.addr
 		add	r6, r6, r3
 		ldr	r7, [r6]
 		str	r7, [ip, #8]
+		add	r6, ip, #8
+		mcr	p15, 0, r6, c7, c10, 1
 7:
 #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
 	bl	__fixup_pv_table
