@@ -58,3 +58,38 @@
 # registers, 0xC0DE000B after cache_off just before entering the kernel.
 # Physical writes while the MMU is off; r3/r4 are free at every point and
 # the boot ABI registers (r0-r2, later r7/r8) are never touched.
+
+
+# ---------------------------------------------------------------------------
+# UBI: accept the layout volume's compatibility marker.
+#
+# This board's factory flash was written by the vendor's UBI, and its layout
+# volume - PEBs 0 and 1 - carries compat = 5 in the VID header.  Mainline's
+# validate_vid_hdr() accepts only {0,1,2,3} for internal volumes and rejects
+# anything else with "bad compat" and -EINVAL, which ubi_attach_mtd_dev() then
+# reports as the error we have been chasing all phase:
+#
+#     ubi0 error: ubi_attach_mtd_dev: failed to attach mtd14, error -22
+#
+# The header is otherwise perfect, verified byte for byte against the vendor's
+# own MTD driver: magic "UBI!", version 1, vol_type 1, copy_flag 0,
+# vol_id 0x7FFFEFFF, lnum 0, and a header CRC that verifies against UBI's own
+# convention (init 0xFFFFFFFF, no final inversion).  Only PEBs 0 and 1 carry
+# compat = 5; every data PEB carries 0 and passes already.  The vendor's own
+# kernel attaches this flash without complaint, so its UBI accepts the value.
+#
+# Accepting it here is safe for the only thing this kernel does with the
+# volume, which is READ it.  The compat field tells a WRITER whether it may
+# touch the volume, and this driver has no write path at all - MTD_NO_ERASE and
+# no _write callback, deliberately, since stage A.
+--- a/drivers/mtd/ubi/io.c
++++ b/drivers/mtd/ubi/io.c
+@@ -867,6 +867,7 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
+ 	if (vol_id >= UBI_INTERNAL_VOL_START && compat != UBI_COMPAT_DELETE &&
+ 	    compat != UBI_COMPAT_RO && compat != UBI_COMPAT_PRESERVE &&
+-	    compat != UBI_COMPAT_REJECT) {
++	    compat != UBI_COMPAT_REJECT &&
++	    compat != 5) {
+ 		ubi_err(ubi, "bad compat");
+ 		goto bad;
+ 	}
