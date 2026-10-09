@@ -866,49 +866,99 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * Offsets sent to the ringbuffer through pr_err so they land in the
 		 * console buffer at 0x80600c00 where devmem can read them.
 		 */
+		/*
+		 * SCAN EVERY PEB'S VID HEADER, mirroring what validate_vid_hdr()
+		 * checks, and park the summary in RAM.
+		 *
+		 * This replaces a two-offset spot check that came back byte-perfect:
+		 * reads at PEB 0 offsets 0 and 2048 returned "UBI#" and "UBI!" exactly
+		 * as the vendor's driver does.  So the read path is right where it was
+		 * checked, and the rejection must come from a PEB that was NOT checked -
+		 * consistent with the captured log, whose ubi_dump_vid_hdr() showed
+		 * vol_type 102, a value no valid header ever carries, on some PEB other
+		 * than the one just verified.
+		 *
+		 * The checks mirror validate_vid_hdr()'s, because -EINVAL on UBI's
+		 * VID-header path comes from nowhere else: magic (a wrong one returns a
+		 * different code), then the fields it compares against the set it accepts.
+		 *
+		 * Parked at LUOFU_DIAG_AT0, away from the console buffer, because the
+		 * panic dump overwrites the newest kilobyte of the log.
+		 *
+		 *  [0] PEBs whose VID header passed all checks
+		 *  [1] first failing PEB number, or 0xffffffff if none
+		 *  [2] that PEB's magic
+		 *  [3] that PEB's vol_type          (valid: 1 dynamic, 2 static)
+		 *  [4] that PEB's compat            (valid: 0..3)
+		 *  [5] that PEB's lnum
+		 *  [6] that PEB's data_size
+		 *  [7] that PEB's stored hdr_crc
+		 */
 		{
-			u8 at0[32], at2k[32];
-			size_t rl0 = 0, rl1 = 0;
-			int e0, e1;
+			u32 diag[8];
+			int k, pass = 0, bad = -1;
 
+			memset(diag, 0, sizeof(diag));
+			diag[1] = 0xffffffffu;
+
+			/*
+			 * Re-acquired here because the part above was released with
+			 * put_mtd_device() before this block, and using it after that
+			 * would be a use-after-free.
+			 */
 			part = get_mtd_device_nm("rootfsb");
-			if (!IS_ERR(part)) {
-				e0 = mtd_read(part, 0, 32, &rl0, at0);
-				e1 = mtd_read(part, 2048, 32, &rl1, at2k);
-				pr_err("FMC: read off0 err=%d rl=%zu %*phN\n",
-				       e0, rl0, 32, at0);
-				pr_err("FMC: read off2048 err=%d rl=%zu %*phN\n",
-				       e1, rl1, 32, at2k);
-
-				/*
-				 * AND PARK THE RAW BYTES AT FIXED ADDRESSES, because the
-				 * printed copies do not survive: the panic that follows
-				 * dumps a partition list and a stack trace straight over
-				 * the newest kilobyte of the console buffer, which is
-				 * where these lines land.  devmem reads them here without
-				 * any interleaving at all.  These sit in the same proven
-				 * region as the console buffer itself - the 4 KiB below the
-				 * flash-spec ATAG at 0x80601000, which hundreds of printk
-				 * calls per boot have already written through without harm.
-				 *
-				 *  0x80600e00  32 bytes read at PEB offset 0     (expect "UBI#")
-				 *  0x80600e80  32 bytes read at PEB offset 2048  (expect "UBI!")
-				 *  0x80600ec0  e0, rl0, e1, rl1 as four words
-				 */
-				memcpy((void *)__va(LUOFU_DIAG_AT0), at0, 32);
-				memcpy((void *)__va(LUOFU_DIAG_AT2K), at2k, 32);
-				{
-					u32 meta[4];
-
-					meta[0] = (u32)e0;
-					meta[1] = (u32)rl0;
-					meta[2] = (u32)e1;
-					meta[3] = (u32)rl1;
-					memcpy((void *)__va(LUOFU_DIAG_META), meta,
-					       sizeof(meta));
-				}
-				put_mtd_device(part);
+			if (IS_ERR(part)) {
+				diag[0] = 0xdead0001u;
+				memcpy((void *)__va(LUOFU_DIAG_AT0), diag,
+				       sizeof(diag));
+				return 0;
 			}
+
+			for (k = 0; k < 128; k++) {
+				u8 vh[64];
+				size_t rl = 0;
+				u32 magic, crc, calc;
+				u8 vt, cp;
+
+				err = mtd_read(part,
+					       (loff_t)k * fmc->spec.block_size + 2048,
+					       64, &rl, vh);
+				if (err || rl != 64) {
+					bad = k;
+					break;
+				}
+
+				magic = ((u32)vh[0] << 24) | ((u32)vh[1] << 16) |
+					((u32)vh[2] << 8) | (u32)vh[3];
+				vt = vh[5];
+				cp = vh[7];
+				crc = ((u32)vh[60] << 24) | ((u32)vh[61] << 16) |
+				      ((u32)vh[62] << 8) | (u32)vh[63];
+				calc = crc32(LUOFU_UBI_CRC32_INIT, vh, 60);
+
+				if (magic != 0x55424921 || vt < 1 || vt > 2 ||
+				    cp > 3 || crc != calc) {
+					bad = k;
+					diag[2] = magic;
+					diag[3] = vt;
+					diag[4] = cp;
+					diag[5] = ((u32)vh[12] << 24) |
+						  ((u32)vh[13] << 16) |
+						  ((u32)vh[14] << 8) | (u32)vh[15];
+					diag[6] = ((u32)vh[20] << 24) |
+						  ((u32)vh[21] << 16) |
+						  ((u32)vh[22] << 8) | (u32)vh[23];
+					diag[7] = crc;
+					break;
+				}
+				pass++;
+			}
+
+			diag[0] = (u32)pass;
+			diag[1] = (u32)bad;
+			memcpy((void *)__va(LUOFU_DIAG_AT0), diag, sizeof(diag));
+
+			put_mtd_device(part);
 		}
 		return 0;
 	}
