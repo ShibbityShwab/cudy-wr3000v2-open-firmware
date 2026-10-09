@@ -749,6 +749,20 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  */
 #define LUOFU_UBI_CRC32_INIT	0xffffffffU
 
+/*
+ * Where the raw read bytes are parked for devmem, defined HERE because the hook
+ * below writes them and the stage-E block that first declared them sits further
+ * down the file.  A first attempt defined them next to the console buffer and the
+ * build failed with "undeclared (first use in this function)" - the identifiers
+ * were present, but not yet in scope.
+ *
+ * They sit below 0x80601000, so clear of the flash-spec ATAG, and inside the same
+ * 4 KiB that hundreds of printk writes per boot have already proven inert.
+ */
+#define LUOFU_DIAG_AT0		0x80600e00	/* read at PEB offset 0    */
+#define LUOFU_DIAG_AT2K		0x80600e80	/* read at PEB offset 2048 */
+#define LUOFU_DIAG_META		0x80600ec0	/* err0, retlen0, err1, retlen1 */
+
 static struct luofu_fmc *luofu_ubi_fmc;
 
 static int __init luofu_fmc_ubi_probe(void)
@@ -974,14 +988,6 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 #define LUOFU_LOG_SIZE		0x200		/* 512 B, ending where the diagnostics begin */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
-/*
- * Raw read bytes parked where devmem can read them without interleaving.
- * Below 0x80601000, so clear of the flash-spec ATAG, and inside the same
- * 4 KiB that hundreds of printk writes per boot have already proven inert.
- */
-#define LUOFU_DIAG_AT0		0x80600e00	/* read at PEB offset 0    */
-#define LUOFU_DIAG_AT2K		0x80600e80	/* read at PEB offset 2048 */
-#define LUOFU_DIAG_META		0x80600ec0	/* err0, retlen0, err1, retlen1 */
 #define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
 #define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
