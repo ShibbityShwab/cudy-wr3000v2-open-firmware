@@ -56,6 +56,10 @@
  *                      payload: 0x5001_0007 | from_atag ? bit16 : 0
  *   c18 = 0xC0DE5008   a page was read through the DMA engine
  *                      payload: the page's first four bytes (the pass value)
+ *   c18 = 0xC0DE5009   the mtd device registered and the partition table parsed
+ *                      payload: 0x5001_0009 | (the master mtd index & 0xff)
+ *   c18 = 0xC0DE500A   rootfsb was read back through the mtd layer
+ *                      payload: its first four bytes (the stage-C pass value)
  *   c18 = 0xC0DE50En   failed at step n
  *
  * WHICH CELL TO READ, AND WHY IT IS NOT c18.  The mach code stamps its own
@@ -64,9 +68,12 @@
  * up holding the mach's value and the driver's crumb is gone.  c1c is the
  * cell that holds, and the reading is self-describing there:
  *
- *   c1c = 0x2349_4255    STAGE B PASS - the first page of rootfsa begins with
- *                        the ASCII "UBI#", UBI's EC header magic: the DMA page
- *                        read returned real flash contents
+ *   c1c = 0x2349_4255    the pass value of stages B AND C.  In stage B it is
+ *                        the first page of rootfsa read through the DMA engine;
+ *                        in stage C it is the same four bytes read back through
+ *                        the MTD layer from the partition named "rootfsb".
+ *                        Either way it is the ASCII "UBI#", UBI's EC header
+ *                        magic - the data itself, not a proxy for it.
  *   c1c = 0x8C2C_xxyy    STAGE A PASS - 0x8C2C is the die's signature, xx the
  *                        configuration byte (0xb0) and yy the status (0xc0)
  *   c1c = 0x5000_000n    the probe reached step n and stopped there; a boot
@@ -98,6 +105,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/mtd/mtd.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -221,6 +229,8 @@
 #define LUOFU_SPEC_BLOCK_SIZE	0x08
 #define LUOFU_SPEC_PAGE_SIZE	0x0c
 #define LUOFU_SPEC_OOB_SIZE	0x10
+#define LUOFU_SPEC_PAGE_SHIFT	0x14
+#define LUOFU_SPEC_ERASE_SHIFT	0x18
 #define LUOFU_SPEC_ECC_TYPE	0x24
 #define LUOFU_SPEC_RD_ADDR_CYC	0x28
 #define LUOFU_SPEC_WR_ADDR_CYC	0x29
@@ -234,6 +244,7 @@
 
 struct luofu_nand_spec {
 	u32	tri_size, block_size, page_size, oob_size, ecc_type;
+	u32	page_shift, erase_shift;
 	u8	rd_addr_cyc, wr_addr_cyc, er_addr_cyc;
 	u8	rd_if_type, rd_cmd, rd_dummy;
 	u8	wr_if_type, wr_cmd, wr_dummy;
@@ -245,6 +256,8 @@ struct luofu_fmc {
 	void __iomem	*regs;
 	void __iomem	*window;
 	void __iomem	*crumb;		/* 8 bytes: crumb + payload */
+	struct mtd_info	*mtd;
+	u8		*page_buf;
 	u32		cs;
 	struct luofu_nand_spec spec;
 	void		*dma_buf;
@@ -411,6 +424,7 @@ static void luofu_spec_defaults(struct luofu_nand_spec *s)
 	*s = (struct luofu_nand_spec){
 		.tri_size = 0x08000000, .block_size = 0x00020000,
 		.page_size = 0x800, .oob_size = 0x40, .ecc_type = 1,
+		.page_shift = 11, .erase_shift = 17,
 		.rd_addr_cyc = 5, .wr_addr_cyc = 5, .er_addr_cyc = 3,
 		.rd_if_type = 3, .rd_cmd = 0x6b, .rd_dummy = 1,
 		.wr_if_type = 3, .wr_cmd = 0x32, .wr_dummy = 0,
@@ -468,6 +482,8 @@ static void luofu_fmc_spec_get(struct luofu_fmc *fmc)
 	fmc->spec.block_size = readl(rec + LUOFU_SPEC_BLOCK_SIZE);
 	fmc->spec.page_size = readl(rec + LUOFU_SPEC_PAGE_SIZE);
 	fmc->spec.oob_size = readl(rec + LUOFU_SPEC_OOB_SIZE);
+	fmc->spec.page_shift = readl(rec + LUOFU_SPEC_PAGE_SHIFT);
+	fmc->spec.erase_shift = readl(rec + LUOFU_SPEC_ERASE_SHIFT);
 	fmc->spec.ecc_type = readl(rec + LUOFU_SPEC_ECC_TYPE);
 	fmc->spec.rd_addr_cyc = readb(rec + LUOFU_SPEC_RD_ADDR_CYC);
 	fmc->spec.wr_addr_cyc = readb(rec + LUOFU_SPEC_WR_ADDR_CYC);
@@ -584,6 +600,94 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 }
 
 /* ------------------------------------------------------------------ */
+/* Stage C: the MTD device                                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The mtd_info is registered READ-ONLY, and deliberately so: the flags are
+ * MTD_CAP_NANDFLASH with MTD_WRITEABLE cleared, and no _write/_erase/
+ * _write_oob is provided at all.  That is sufficient for a rootfs boot, and
+ * UBI's own attach code says so in as many words -
+ *
+ *   if (!(ubi->mtd->flags & MTD_WRITEABLE)) {
+ *           ubi_msg(ubi, "MTD device %d is write-protected, attach in read-only mode");
+ *           ubi->ro_mode = 1;
+ *   }
+ *
+ * (drivers/mtd/ubi/build.c, v5.10) - and it keeps this driver's oldest
+ * property intact: there is still no path in this file that can modify the
+ * flash.  A page read is the only thing it ever asks the chip for.
+ */
+static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
+			  size_t *retlen, u_char *buf)
+{
+	struct luofu_fmc *fmc = mtd->priv;
+	size_t done = 0;
+	int ret;
+
+	*retlen = 0;
+	if (from < 0 || from + len > mtd->size)
+		return -EINVAL;
+
+	while (done < len) {
+		loff_t pos = from + done;
+		u32 row = div_u64(pos, mtd->writesize);
+		size_t off = pos - (loff_t)row * mtd->writesize;
+		size_t chunk = min_t(size_t, mtd->writesize - off, len - done);
+
+		ret = luofu_fmc_read_page(fmc, row, fmc->page_buf);
+		if (ret)
+			return ret;
+
+		memcpy(buf + done, fmc->page_buf + off, chunk);
+		done += chunk;
+	}
+
+	*retlen = done;
+	return 0;
+}
+
+/*
+ * The bad-block marker is not read yet.  This returns "good" for every block,
+ * which is a placeholder and not a claim: UBI's own scan reads every PEB's EC
+ * header and marks a PEB bad when that read fails, so a genuinely bad block is
+ * still caught - by UBI, one layer up, rather than here.
+ */
+static int luofu_mtd_block_isbad(struct mtd_info *mtd, loff_t ofs)
+{
+	return 0;
+}
+
+static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
+{
+	struct mtd_info *mtd;
+
+	mtd = devm_kzalloc(fmc->dev, sizeof(*mtd), GFP_KERNEL);
+	if (!mtd)
+		return -ENOMEM;
+
+	mtd->priv = fmc;
+	mtd->dev.parent = fmc->dev;
+	/* the partitions subnode hangs off the fmc node, which is what ofpart reads */
+	mtd->dev.of_node = fmc->dev->of_node;
+	mtd->name = "luofu-nand";
+	mtd->type = MTD_NANDFLASH;
+	mtd->flags = MTD_CAP_NANDFLASH & ~MTD_WRITEABLE;
+	mtd->size = fmc->spec.tri_size;
+	mtd->erasesize = fmc->spec.block_size;
+	mtd->writesize = fmc->spec.page_size;
+	mtd->writebufsize = fmc->spec.page_size;
+	mtd->oobsize = fmc->spec.oob_size;
+	mtd->owner = THIS_MODULE;
+	mtd->_read = luofu_mtd_read;
+	mtd->_block_isbad = luofu_mtd_block_isbad;
+
+	fmc->mtd = mtd;
+
+	return mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
+}
+
+/* ------------------------------------------------------------------ */
 /* Probe                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -591,9 +695,11 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct luofu_fmc *fmc;
+	struct mtd_info *part;
 	u8 id[5] = { 0 };
 	u8 status = 0, config = 0;
 	u8 *page;
+	size_t retlen;
 	u32 cfg, word;
 	int ret;
 
@@ -738,6 +844,43 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	dev_info(dev, "FMC: rootfsa page 0 begins %02x %02x %02x %02x%s\n",
 		 page[0], page[1], page[2], page[3],
 		 word == LUOFU_UBI_MAGIC ? "  (UBI# - the page read works)" : "");
+
+	/*
+	 * STAGE C: register the MTD device, then prove the partition table.
+	 *
+	 * Registering alone would be observable only as an index, so the probe
+	 * then looks the rootfsb partition up BY NAME and reads its first page
+	 * THROUGH the mtd layer - the path UBI will use, and the very name this
+	 * driver's command line will hand to ubi.mtd=.  If that read returns
+	 * UBI#'s four bytes, then the device registered, ofpart parsed the
+	 * table, the partition exists under the name UBI will ask for, and the
+	 * read survives the mtd page arithmetic.
+	 */
+	if (luofu_fmc_register_mtd(fmc)) {
+		luofu_fmc_crumb(fmc, 9, LUOFU_RPT_FAIL(9));
+		return 0;
+	}
+	luofu_fmc_crumb(fmc, 9, LUOFU_RPT_STAGEB(9) | (fmc->mtd->index & 0xff));
+
+	part = get_mtd_device_nm("rootfsb");
+	if (IS_ERR(part)) {
+		luofu_fmc_crumb(fmc, 10, LUOFU_RPT_FAIL(10));
+		return 0;
+	}
+
+	page[0] = page[1] = page[2] = page[3] = 0;
+	retlen = 0;
+	if (mtd_read(part, 0, 4, &retlen, page)) {
+		luofu_fmc_crumb(fmc, 10, LUOFU_RPT_FAIL(10));
+	} else {
+		word = ((u32)page[0]) | ((u32)page[1] << 8) |
+		       ((u32)page[2] << 16) | ((u32)page[3] << 24);
+		luofu_fmc_crumb(fmc, 10, word);
+	}
+
+	dev_info(dev, "FMC: mtd%d registered; rootfsb is mtd%d; its first 4 bytes read back %02x %02x %02x %02x\n",
+		 fmc->mtd->index, part->index, page[0], page[1], page[2], page[3]);
+	put_mtd_device(part);
 
 	return 0;
 }
