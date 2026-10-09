@@ -48,9 +48,22 @@
  *                      payload: the GET FEATURES 0xc0 status byte
  *   c18 = 0xC0DE5004   READ ID completed
  *                      payload: ID bytes 0..3, big-endian
- *   c18 = 0xC0DE5005   configuration register read back
- *                      payload: id[4] << 24 | 0xb0 << 16 | 0xc0 << 8 | cfg_bits
+ *   c18 = 0xC0DE5005   all steps completed
+ *                      payload: id[0]<<24 | id[1]<<16 | config<<8 | status
  *   c18 = 0xC0DE50E0|n step n failed (n as above)
+ *
+ * WHICH CELL TO READ, AND WHY IT IS NOT c18.  The mach code stamps its own
+ * 0xC0DE0020 at late_initcall (level 7), which runs AFTER this driver's
+ * device_initcall probe (level 6) - so on a boot that gets that far, c18 ends
+ * up holding the mach's value and the driver's crumb is gone.  Nothing else
+ * writes c1c, so the RESULT lives there and survives.  The reading is:
+ *
+ *   c1c = 0x8C2C_xxyy     success; 0x8C2C is the die's signature, xx the
+ *                         configuration byte (0xb0) and yy the status (0xc0)
+ *   c1c = 0xE0DE_00xy     the READ ID ran but answered xy as its first two
+ *                         bytes, i.e. 0x8C2C's absence is a measurement
+ *   c1c = 0x0000_50nn     the probe stopped at step nn (a hang leaves this)
+ *   c1c = 0xFACEFEED      the poison value: the driver never ran at all
  *
  * A payload of 0 from a boot that reached the stage means the register read
  * returned 0; the breadcrumb alone never proves a value, so every stage
@@ -353,7 +366,8 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	if (cfg & FMC_CFG_IS_RAW_NAND) {
 		dev_err(dev, "the controller is in raw-NAND mode (FMC_CFG=%08x), not SPI\n",
 			cfg);
-		luofu_fmc_crumb(fmc, 0xe0 | 2, cfg);
+		luofu_fmc_crumb(fmc, 0xe0 | 2,
+				0x0000e000 | (cfg & 0xffff));
 		return -ENODEV;
 	}
 
@@ -363,38 +377,44 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
-		luofu_fmc_crumb(fmc, 0xe0 | 3, (u32)ret);
+		luofu_fmc_crumb(fmc, 5, 0x00005000 | (3 & 0xff));
 		return ret;
 	}
 	luofu_fmc_crumb(fmc, 3, status);
 
 	ret = luofu_fmc_read_id(fmc, id);
 	if (ret) {
-		luofu_fmc_crumb(fmc, 0xe0 | 4, (u32)ret);
+		luofu_fmc_crumb(fmc, 5, 0x00005000 | (4 & 0xff));
 		return ret;
 	}
 
 	luofu_fmc_crumb(fmc, 4, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
 				((u32)id[2] << 8) | (u32)id[3]);
 
+	if (id[0] != LUOFU_NAND_ID0 || id[1] != LUOFU_NAND_ID1) {
+		dev_warn(dev, "unexpected SPI-NAND id %02x %02x (expected %02x %02x)\n",
+			 id[0], id[1], LUOFU_NAND_ID0, LUOFU_NAND_ID1);
+		/* leave a self-describing failure in the surviving cell */
+		luofu_fmc_crumb(fmc, 0xe0 | 4,
+				0xe0de0000 | ((u32)id[0] << 8) | (u32)id[1]);
+		return -ENODEV;
+	}
+
 	if (luofu_fmc_get_feature(fmc, SPINAND_FEAT_CONFIG, &config))
 		config = 0xff;
 	if (luofu_fmc_get_feature(fmc, SPINAND_FEAT_STATUS, &status))
 		status = 0xff;
 
-	luofu_fmc_crumb(fmc, 5, ((u32)id[4] << 24) | ((u32)config << 16) |
-				((u32)status << 8));
+	/*
+	 * The last write of the probe, and the one the reader keys on: the two
+	 * ID bytes that identify the die, then the two feature bytes.  See the
+	 * header for why this lands in c1c.
+	 */
+	luofu_fmc_crumb(fmc, 5, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
+				((u32)config << 8) | (u32)status);
 
 	dev_info(dev, "FMC: READ ID %02x %02x %02x %02x %02x, config %02x, status %02x\n",
 		 id[0], id[1], id[2], id[3], id[4], config, status);
-
-	if (id[0] != LUOFU_NAND_ID0 || id[1] != LUOFU_NAND_ID1) {
-		dev_warn(dev, "unexpected SPI-NAND id %02x %02x (expected %02x %02x)\n",
-			 id[0], id[1], LUOFU_NAND_ID0, LUOFU_NAND_ID1);
-		luofu_fmc_crumb(fmc, 4 | 0x40,
-				((u32)id[0] << 24) | ((u32)id[1] << 16) |
-				((u32)id[2] << 8) | (u32)id[3]);
-	}
 
 	/*
 	 * Stage B attaches here: the mainline SPI-NAND core (already selected
