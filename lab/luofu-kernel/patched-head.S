@@ -149,12 +149,13 @@ ENTRY(stext)
 		str	r4, [r3]
 #endif
 	bl	__create_page_tables
-		/* lab breadcrumb 0xC0DE0005: __create_page_tables returned (pre-MMU, physical write) */
-		movw	r3, #:lower16:0x10100C18
-		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x0005
-		movt	r4, #0xC0DE
-		str	r4, [r3]
+		/* lab breadcrumb 0xC0DE0005: __create_page_tables returned (r5/r6 = dead scratch; r4 = the
+		 * page-table address MUST survive - it feeds mov r8, r4 at line 184 and __enable_mmu) */
+		movw	r5, #:lower16:0x10100C18
+		movt	r5, #:upper16:0x10100C18
+		movw	r6, #0x0005
+		movt	r6, #0xC0DE
+		str	r6, [r5]
 
 	/*
 	 * The following calls CPU specific code in a position independent
