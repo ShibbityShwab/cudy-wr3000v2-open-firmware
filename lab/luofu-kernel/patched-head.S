@@ -216,18 +216,26 @@ ENTRY(stext)
 		str	r7, [ip]
 		str	r7, [ip, #4]
 		str	r7, [ip, #8]
-		movw	r0, #:lower16:0x80608244
-		movt	r0, #:upper16:0x80608244
-		ldmia	r0, {r3, r4, r5}
-		subs	r3, r0, r3			@ delta if this really is the descriptor (~0xC0000000)
-		movw	r6, #:lower16:0xbff00000
-		movt	r6, #:upper16:0xbff00000
-		cmp	r3, r6
-		blo	7f
-		movw	r6, #:lower16:0xc0100000
-		movt	r6, #:upper16:0xc0100000
-		cmp	r3, r6
-		bhi	7f				@ delta outside the plausible band -> skip
+		movw	r0, #:lower16:0x80608000	@ scan for the alternatives descriptor: a word W at
+		movt	r0, #:upper16:0x80608000	@ address A with small positive (A - W) - the self-ref
+		movw	r1, #:lower16:0x80609000
+		movt	r1, #:upper16:0x80609000
+8:		ldr	r3, [r0]
+		subs	r6, r0, r3			@ candidate delta (A - stored link-VA)
+		movw	r7, #:lower16:0xbff00000
+		movt	r7, #:upper16:0xbff00000
+		cmp	r6, r7
+		blo	5f
+		movw	r7, #:lower16:0xc0100000
+		movt	r7, #:upper16:0xc0100000
+		cmp	r6, r7
+		bls	9f				@ delta in the 0xC00... band -> descriptor found
+5:		add	r0, r0, #4
+		cmp	r0, r1
+		blo	8b
+		b	7f				@ not found -> cells stay poisoned
+9:		ldmia	r0, {r3, r4, r5}
+		mov	r3, r6			@ the delta from the scan
 		adds	r4, r4, r3			@ candidate table start
 		ldr	r6, [r4]			@ entry0.addr (link-time)
 		add	r6, r6, r3			@ runtime addr
