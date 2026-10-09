@@ -205,6 +205,30 @@ ENTRY(stext)
 		movw	r4, #0x000E
 		movt	r4, #0xC0DE
 		str	r4, [r3]
+		/* lab instrument: sample the alternatives pair-table the descriptor at the
+		 * (stable) physical address 0x80608244 points to, POST-walk, pre-MMU: read
+		 * the patched instruction word at sites 0/102/301 -> 0x80600F20/24/28.
+		 * Identical code: differing results between build classes = the walk's
+		 * stores landed (or didn't) - the coherence question, measured. */
+		movw	r0, #:lower16:0x80608244
+		movt	r0, #:upper16:0x80608244
+		ldmia	r0, {r3, r4, r5}
+		subs	r3, r0, r3			@ delta (runtime - link)
+		adds	r4, r4, r3			@ table start (runtime VA == phys here)
+		movw	ip, #:lower16:0x80600F20
+		movt	ip, #:upper16:0x80600F20
+		ldr	r6, [r4]			@ entry0.addr
+		add	r6, r6, r3
+		ldr	r7, [r6]			@ the (possibly patched) word
+		str	r7, [ip]
+		ldr	r6, [r4, #816]			@ entry102.addr
+		add	r6, r6, r3
+		ldr	r7, [r6]
+		str	r7, [ip, #4]
+		ldr	r6, [r4, #2408]		@ entry301.addr
+		add	r6, r6, r3
+		ldr	r7, [r6]
+		str	r7, [ip, #8]
 #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
 	bl	__fixup_pv_table
 		/* lab breadcrumb 0xC0DE000D: __fixup_smp/__fixup_pv_table done, before __create_page_tables */
