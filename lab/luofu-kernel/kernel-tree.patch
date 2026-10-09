@@ -252,3 +252,46 @@
  	str	r3, [r7, #LOW_OFFSET]	@ save to __pv_offset low bits
  	b	__fixup_a_pv_table
  ENDPROC(__fixup_pv_table)
+
+-----------------------------------------------------------
+# PV deep-instrumentation: 0xC0DE0013 after the stores (captures the delta to C18+4 and
+# the pfn to C18+8), and the 16MiB gate's bne rerouted through 0xC0DE0014 (captures the
+# delta too) before the original b __error. This ends the silent-__error ambiguity.
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -614,6 +614,14 @@
+ 	mov	r0, r8, lsr #PAGE_SHIFT	@ convert to PFN
+ 	str	r0, [r6]	@ save computed PHYS_OFFSET to __pv_phys_pfn_offset
+ 	strcc	ip, [r7, #HIGH_OFFSET]	@ save to __pv_offset high bits
++		/* lab breadcrumb 0xC0DE0013: stores done, pre-gate; delta->+4, pfn->+8 (ip/r6 dead) */
++		movw	ip, #:lower16:0x10100C18
++		movt	ip, #:upper16:0x10100C18
++		movw	r6, #0x0013
++		movt	r6, #0xC0DE
++		str	r6, [ip]
++		str	r3, [ip, #4]
++		str	r0, [ip, #8]
+ 	mov	r6, r3, lsr #24	@ constant for add/sub instructions
+ 	teq	r3, r6, lsl #24 @ must be 16MiB aligned
+ THUMB(	it	ne		@ cross section branch )
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -617,7 +617,17 @@
+ 	mov	r6, r3, lsr #24	@ constant for add/sub instructions
+ 	teq	r3, r6, lsl #24 @ must be 16MiB aligned
+ THUMB(	it	ne		@ cross section branch )
+-	bne	__error
++	bne	9f
++	b	10f
++9:		/* lab breadcrumb 0xC0DE0014: 16MiB gate FAILED; delta->+4 */
++		movw	ip, #:lower16:0x10100C18
++		movt	ip, #:upper16:0x10100C18
++		movw	r6, #0x0014
++		movt	r6, #0xC0DE
++		str	r6, [ip]
++		str	r3, [ip, #4]
++	b	__error
++10:
+ 	str	r3, [r7, #LOW_OFFSET]	@ save to __pv_offset low bits
+ 	b	__fixup_a_pv_table
+ ENDPROC(__fixup_pv_table)
