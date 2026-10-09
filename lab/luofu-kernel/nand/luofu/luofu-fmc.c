@@ -107,6 +107,7 @@
 #include <linux/genhd.h>
 #include <linux/io.h>
 #include <linux/kmsg_dump.h>
+#include <linux/memremap.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
@@ -892,6 +893,14 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * So both are written, and only from the panic path - nothing is written at
  * registration, precisely so a live kernel is never touched.  Whichever reads
  * back afterwards identifies the surviving region as well as carrying the log.
+ *
+ * WHY memremap AND NOT ioremap - the answer to a fire that returned no marks at
+ * all, not even the armed one written while the kernel was alive: BOTH buffers
+ * are RAM, and on ARM `ioremap()` REFUSES valid RAM outright, via
+ * WARN_ON(pfn_valid(pfn)) in __arm_ioremap_pfn_caller() - "Don't allow RAM to be
+ * mapped". So both calls returned NULL, nothing was ever written, and the values
+ * read back were simply whatever RAM happened to hold.  memremap() exists for
+ * exactly this and is what ramoops itself uses.
  */
 #define LUOFU_LOG_SAFE		0x809A0000	/* outside our image */
 #define LUOFU_LOG_PRESERVED	0x80606000	/* vendor-preserved, inside our .data */
@@ -899,21 +908,21 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
 
-static void __iomem *luofu_log_a;	/* 0x809A0000 */
-static void __iomem *luofu_log_b;	/* 0x80606000 */
+static void *luofu_log_a;	/* 0x809A0000 */
+static void *luofu_log_b;	/* 0x80606000 */
 static struct kmsg_dumper luofu_kmsg;
 
-static void luofu_kmsg_to(void __iomem *p, struct kmsg_dumper *dumper)
+static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 {
 	static char line[256];
-	size_t len, off = 0;
+	size_t len, off = 4;
+	u32 mark = LUOFU_LOG_MARK;
 
 	if (!p)
 		return;
 
 	/* the mark first, so a reader can tell "ran" from "never ran" */
-	writel(LUOFU_LOG_MARK, p);
-	off = 4;
+	memcpy(p, &mark, sizeof(mark));
 
 	kmsg_dump_rewind(dumper);
 
@@ -923,13 +932,13 @@ static void luofu_kmsg_to(void __iomem *p, struct kmsg_dumper *dumper)
 			len = sizeof(line) - 1;
 		if (off + len + 1 > LUOFU_LOG_SIZE)
 			off = 4;
-		memcpy_toio(p + off, line, len);
+		memcpy(p + off, line, len);
 		off += len;
-		writeb('\n', p + off);
+		*(char *)(p + off) = '\n';
 		off++;
 	}
 
-	writeb(0, p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1));
+	*(char *)(p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1)) = 0;
 }
 
 static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
@@ -941,27 +950,36 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 
 static int luofu_log_register(struct luofu_fmc *fmc)
 {
-	luofu_log_a = devm_ioremap(fmc->dev, LUOFU_LOG_SAFE, LUOFU_LOG_SIZE);
-	luofu_log_b = devm_ioremap(fmc->dev, LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE);
+	/*
+	 * memremap, NOT ioremap, and the difference cost a fire: on ARM ioremap()
+	 * refuses RAM outright (WARN_ON(pfn_valid(pfn)) in __arm_ioremap_pfn_caller),
+	 * and both of these buffers are RAM - so both ioremaps returned NULL, nothing
+	 * was ever written, and the readback showed only whatever RAM already held.
+	 */
+	luofu_log_a = memremap(LUOFU_LOG_SAFE, LUOFU_LOG_SIZE, MEMREMAP_WB);
+	luofu_log_b = memremap(LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE, MEMREMAP_WB);
 
 	/*
-	 * AN ARMED MARK, written now while the kernel is alive, because a fire
-	 * showed only ZEROES and one word of ARM code where the buffers should
-	 * have been - which cannot distinguish "the mapping failed" from "the
-	 * dumper never fired".  These four bytes each settle it:
+	 * AN ARMED MARK, written now while the kernel is alive, because a readback
+	 * of zeroes and stray code cannot distinguish "the mapping failed" from
+	 * "the dumper never fired":
 	 *
 	 *   0xC0DE10A0  mapped, but the dumper did not run
 	 *   0xC0DE1055  the dumper ran (it writes this over the armed mark)
 	 *   neither     the mapping failed, or the region was scrubbed
 	 *
-	 * Only four bytes per buffer, and only here - a size a fire already proved
-	 * survivable in this exact region, since the previous instrument wrote
-	 * 4-byte cells at 0x80600F20 inside the same .data for many fires.
+	 * Four bytes per buffer, written once.
 	 */
-	if (luofu_log_a)
-		writel(LUOFU_LOG_ARMED, luofu_log_a);
-	if (luofu_log_b)
-		writel(LUOFU_LOG_ARMED, luofu_log_b);
+	if (luofu_log_a) {
+		u32 mark = LUOFU_LOG_ARMED;
+
+		memcpy(luofu_log_a, &mark, sizeof(mark));
+	}
+	if (luofu_log_b) {
+		u32 mark = LUOFU_LOG_ARMED;
+
+		memcpy(luofu_log_b, &mark, sizeof(mark));
+	}
 
 	if (!luofu_log_a && !luofu_log_b)
 		return -ENOMEM;
