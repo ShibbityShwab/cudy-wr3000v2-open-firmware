@@ -204,10 +204,3 @@ CONFIG_MAC80211=y
 # NEW (our wifidrv1; from-scratch, blob kept)
 CONFIG_LUOFU_WIFI=y
 
-
-# ---------------------------------------------------------------------------
-# PV is unnecessary on this SoC: PHYS_OFFSET is a compile-time constant
-# (0x80000000), and __fixup_pv_table is the function that hung the kernel
-# (crumb 0xC0DE000E fired, 0xC0DE000D never did). With PV off the kernel uses
-# the static PLAT_PHYS_OFFSET translation and __fixup_pv_table is not built.
-# CONFIG_ARM_PATCH_PHYS_VIRT is not set
