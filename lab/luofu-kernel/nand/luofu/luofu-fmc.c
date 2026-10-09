@@ -106,6 +106,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/genhd.h>
 #include <linux/io.h>
+#include <linux/kmsg_dump.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
@@ -856,6 +857,74 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 #endif /* CONFIG_MTD_UBI */
 
 /* ------------------------------------------------------------------ */
+/* Stage E: capture the kernel log on panic                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * THIS BOARD HAS NO CONSOLE, so every failure in this phase has been INFERRED
+ * from blank cells - while the kernel was writing the reason to printk the whole
+ * time.  This captures that log at the one moment it is guaranteed to exist: the
+ * panic our kernel takes at the rootfs mount, after UBI has already had its say
+ * at late_initcall.
+ *
+ * A kmsg_dumper rather than ramoops, and a fire is why.  ramoops needed six
+ * parameters on the command line, and a diff of the two build artifacts - which
+ * differ in EXACTLY one config line, the CONFIG_CMDLINE string - shows those
+ * parameters alone killed the boot between init_machine and the first initcall,
+ * which is precisely where parse_args() runs.  This design has no parameters at
+ * all: the address is a constant here, and the panic path is what triggers it.
+ *
+ * The region is deliberately ABOVE our own kernel image.  Image is 9,984,344
+ * bytes loaded at 0x80008000, spanning to about 0x8098D4D8, so a buffer written
+ * there from inside this driver would corrupt the code writing it. 0x809A0000
+ * sits between that end and the 0x80A00000 ceiling of the flashinfo reserved
+ * window - the only place that is both outside our kernel and reserved by the
+ * vendor's devicetree too, which is what lets it be read back with devmem after
+ * this kernel folds over.
+ */
+#define LUOFU_LOG_BASE		0x809A0000
+#define LUOFU_LOG_SIZE		0x20000		/* 128 KiB of printk */
+
+static void __iomem *luofu_log_buffer;
+static struct kmsg_dumper luofu_kmsg;
+
+static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
+			    enum kmsg_dump_reason reason)
+{
+	static char line[256];
+	void __iomem *p = luofu_log_buffer;
+	size_t len, off = 0;
+
+	if (!p)
+		return;
+
+	kmsg_dump_rewind(dumper);
+
+	while (off + sizeof(line) < LUOFU_LOG_SIZE &&
+	       kmsg_dump_get_line(dumper, true, line, sizeof(line), &len)) {
+		if (len > LUOFU_LOG_SIZE - off - 1)
+			len = LUOFU_LOG_SIZE - off - 1;
+		memcpy_toio(p + off, line, len);
+		off += len;
+		writeb('\n', p + off);
+		off++;
+	}
+}
+
+static int luofu_log_register(struct luofu_fmc *fmc)
+{
+	luofu_log_buffer = devm_ioremap(fmc->dev, LUOFU_LOG_BASE,
+					LUOFU_LOG_SIZE);
+	if (!luofu_log_buffer)
+		return -ENOMEM;
+
+	luofu_kmsg.dump = luofu_kmsg_dump;
+	luofu_kmsg.max_reason = KMSG_DUMP_PANIC;
+
+	return kmsg_dump_register(&luofu_kmsg);
+}
+
+/* ------------------------------------------------------------------ */
 /* Probe                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1062,6 +1131,14 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 
 	/* stage D's hook looks the driver state up here, at late_initcall_sync */
 	luofu_ubi_fmc = fmc;
+
+	/*
+	 * Stage E: from here on, a panic writes the kernel log into RAM where it
+	 * can be read back from the vendor system.  Registered last so that
+	 * failing to get the buffer cannot spoil any of the measurements above.
+	 */
+	if (luofu_log_register(fmc))
+		dev_warn(dev, "FMC: could not arm the panic log capture\n");
 
 	return 0;
 }

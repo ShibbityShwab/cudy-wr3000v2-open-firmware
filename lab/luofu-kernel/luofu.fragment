@@ -49,36 +49,21 @@ CONFIG_SMP=y
 # so the boot's total wall time reads back as the death-time meter; while the
 # hsan watchdog is still armed it also bounds any pre-mach-init death at 30 s.
 #
-# ramoops IS THE INSTRUMENT THAT ENDS THE GUESSING.  This board has no console,
-# so any driver error - UBI's especially - has been invisible and every failure
-# has had to be inferred.  ramoops gives printk a RAM-backed console, and RAM
-# needs no write path, so it works even though this driver cannot write flash
-# (which is why pstore_blk, needing the pstore MTD partition, is out).
-#
-# It must be configured HERE rather than by devicetree because the kernel boots
-# the VENDOR's devicetree, not ours.
-#
-# THE REGION IS 0x809A0000, and the first attempt at 0x80602000 was wrong for a
-# reason worth writing down: OUR OWN KERNEL'S IMAGE spans roughly
-# 0x80008000..0x8098D4D8 (Image is 9,984,344 bytes), so 0x80602000 is INSIDE the
-# running kernel - an 8 KiB log buffer written there corrupts the very code that
-# is writing it.  The flashinfo reserved area runs 0x80600000..0x80A00000, so the
-# window between the end of our image (0x8098D4D8) and that ceiling is the one
-# spot that is BOTH outside our kernel AND reserved by the vendor's devicetree
-# too - which is what makes it survive the handover to be read back with devmem.
-#
-# ignore_loglevel is deliberately NOT here.  It was in the first attempt and the
-# kernel then died between init_machine and the first initcall - the exact window
-# where it floods the console path - and it is unnecessary anyway: pstore's
-# console callback receives everything at or above the console loglevel, and
-# UBI's ubi_err() messages are KERN_ERR, so they arrive without it.
+# NO ramoops PARAMETERS HERE, and that is a measured decision rather than a
+# preference.  Six of them were added to this string and the kernel then died
+# BETWEEN init_machine AND THE FIRST INITCALL - C18 froze at 0xC0DE0003, the
+# mach's own crumb - which is exactly the window where parse_args() runs.  A diff
+# of the two build artifacts confirmed the cause: they differ in EXACTLY one
+# config line, this one.  So the log is no longer captured by ramoops: the driver
+# registers a kmsg_dumper instead, which takes no command-line parameters at all
+# and fires on the panic this kernel already takes at the rootfs mount.
 #
 # panic=5 MUST STAY IN THIS ONE VALUE.  CONFIG_CMDLINE is a string symbol, so a
 # second CONFIG_CMDLINE line anywhere in a fragment does not add to it - it
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init ramoops.mem_address=0x809A0000 ramoops.mem_size=0x4000 ramoops.record_size=0x1000 ramoops.console_size=0x2000 ramoops.ftrace_size=0 ramoops.pmsg_size=0"
+CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
