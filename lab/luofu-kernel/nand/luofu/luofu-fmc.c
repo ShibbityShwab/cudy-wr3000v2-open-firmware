@@ -894,71 +894,51 @@ static int __init luofu_fmc_ubi_probe(void)
 		 *  [6] that PEB's data_size
 		 *  [7] that PEB's stored hdr_crc
 		 */
+		/*
+		 * PARK OUR OWN READ OF THE VOLUME-TABLE RECORD UBI OBJECTED TO.
+		 *
+		 * UBI's words, finally readable because the console ring now keeps only its
+		 * output, moved the fault off the VID header entirely:
+		 *
+		 *   ubi0 error: vtbl_check: bad CRC at record 6: 0xaae09698, not 0x000000
+		 *   UBI error: cannot attach mtd14
+		 *
+		 * The compat widening did its job - UBI read the layout volume and got all
+		 * the way to validating its records - and then rejected record 6.
+		 *
+		 * Ground truth from the vendor's own MTD driver, at the record's offset:
+		 * the record is EMPTY (all zeros) with a VALID CRC of 0xF116C36B.  UBI
+		 * instead computed 0xaae09698 and saw a stored CRC of zero, so what this
+		 * read path returns at byte 5128 of the volume differs from what is on the
+		 * flash.
+		 *
+		 * 5128 is 4096 + 6 * 172: record 6 of the layout volume's first LEB, which
+		 * sits at the EC header's data_offset.  Every offset this driver has been
+		 * checked at so far - 0 and 2048 - is a PAGE BOUNDARY; this one is not, and
+		 * a partial offset within a page is exactly what luofu_mtd_read() computes
+		 * but nothing has ever verified.
+		 *
+		 * The 172 bytes go to LUOFU_DIAG_AT0 with err and retlen ahead of them, so
+		 * the comparison against the vendor's all-zero-plus-CRC is a devmem read.
+		 */
 		{
-			u32 diag[8];
-			int k, pass = 0, bad = -1;
+			u8 rec[172];
+			size_t rl = 0;
+			u32 meta[2];
+			int e;
 
-			memset(diag, 0, sizeof(diag));
-			diag[1] = 0xffffffffu;
-
-			/*
-			 * Re-acquired here because the part above was released with
-			 * put_mtd_device() before this block, and using it after that
-			 * would be a use-after-free.
-			 */
 			part = get_mtd_device_nm("rootfsb");
-			if (IS_ERR(part)) {
-				diag[0] = 0xdead0001u;
-				memcpy((void *)__va(LUOFU_DIAG_AT0), diag,
-				       sizeof(diag));
+			if (IS_ERR(part))
 				return 0;
-			}
 
-			for (k = 0; k < 128; k++) {
-				u8 vh[64];
-				size_t rl = 0;
-				u32 magic, crc, calc;
-				u8 vt, cp;
-
-				err = mtd_read(part,
-					       (loff_t)k * fmc->spec.block_size + 2048,
-					       64, &rl, vh);
-				if (err || rl != 64) {
-					bad = k;
-					break;
-				}
-
-				magic = ((u32)vh[0] << 24) | ((u32)vh[1] << 16) |
-					((u32)vh[2] << 8) | (u32)vh[3];
-				vt = vh[5];
-				cp = vh[7];
-				crc = ((u32)vh[60] << 24) | ((u32)vh[61] << 16) |
-				      ((u32)vh[62] << 8) | (u32)vh[63];
-				calc = crc32(LUOFU_UBI_CRC32_INIT, vh, 60);
-
-				if (magic != 0x55424921 || vt < 1 || vt > 2 ||
-				    cp > 3 || crc != calc) {
-					bad = k;
-					diag[2] = magic;
-					diag[3] = vt;
-					diag[4] = cp;
-					diag[5] = ((u32)vh[12] << 24) |
-						  ((u32)vh[13] << 16) |
-						  ((u32)vh[14] << 8) | (u32)vh[15];
-					diag[6] = ((u32)vh[20] << 24) |
-						  ((u32)vh[21] << 16) |
-						  ((u32)vh[22] << 8) | (u32)vh[23];
-					diag[7] = crc;
-					break;
-				}
-				pass++;
-			}
-
-			diag[0] = (u32)pass;
-			diag[1] = (u32)bad;
-			memcpy((void *)__va(LUOFU_DIAG_AT0), diag, sizeof(diag));
-
+			memset(rec, 0, sizeof(rec));
+			e = mtd_read(part, 5128, 172, &rl, rec);
 			put_mtd_device(part);
+
+			meta[0] = (u32)e;
+			meta[1] = (u32)rl;
+			memcpy((void *)__va(LUOFU_DIAG_AT0), meta, sizeof(meta));
+			memcpy((void *)__va(LUOFU_DIAG_AT0 + 8), rec, sizeof(rec));
 		}
 		return 0;
 	}
