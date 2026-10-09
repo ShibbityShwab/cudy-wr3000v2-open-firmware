@@ -106,6 +106,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
+#include <linux/mtd/ubi.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -701,6 +702,64 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 }
 
 /* ------------------------------------------------------------------ */
+/* Stage D: observe the rootfs volume through UBI                       */
+/* ------------------------------------------------------------------ */
+
+#if IS_ENABLED(CONFIG_MTD_UBI)
+/*
+ * The ATTACH is done by the kernel, from the command line this build carries
+ * (ubi.mtd=rootfsb), because ubi_attach_mtd_dev() is deliberately not part of
+ * UBI's public interface.  This hook does the part that has to be observable:
+ * it opens the volume named "rootfs" through the PUBLIC UBI API and reads its
+ * first four bytes, so the reader cell ends up holding the volume's own data.
+ *
+ * It runs at late_initcall_sync - after every late_initcall, and so after
+ * UBI's own module_init has attached whatever the command line named.
+ *
+ * The expected value: a squashfs superblock begins with the magic "hsqs", which
+ * as a little-endian word is 0x73717368.  Like stages B and C, the pass value
+ * is the data itself rather than a proxy for it.
+ */
+static struct luofu_fmc *luofu_ubi_fmc;
+
+static int __init luofu_fmc_ubi_probe(void)
+{
+	struct luofu_fmc *fmc = luofu_ubi_fmc;
+	struct ubi_volume_desc *desc;
+	u8 buf[4] = { 0 };
+	u32 word;
+	int err;
+
+	if (!fmc || !fmc->mtd)
+		return 0;
+
+	desc = ubi_open_volume_nm(0, "rootfs", UBI_READONLY);
+	if (IS_ERR(desc)) {
+		luofu_fmc_crumb(fmc, 11, LUOFU_RPT_FAIL(11));
+		return 0;
+	}
+
+	err = ubi_read(desc, 0, buf, 0, 4);
+	ubi_close_volume(desc);
+
+	if (err) {
+		luofu_fmc_crumb(fmc, 11, LUOFU_RPT_FAIL(11));
+		return 0;
+	}
+
+	word = ((u32)buf[0]) | ((u32)buf[1] << 8) |
+	       ((u32)buf[2] << 16) | ((u32)buf[3] << 24);
+	luofu_fmc_crumb(fmc, 11, word);
+
+	dev_info(fmc->dev, "FMC: ubi0 volume \"rootfs\" begins %02x %02x %02x %02x\n",
+		 buf[0], buf[1], buf[2], buf[3]);
+
+	return 0;
+}
+late_initcall_sync(luofu_fmc_ubi_probe);
+#endif /* CONFIG_MTD_UBI */
+
+/* ------------------------------------------------------------------ */
 /* Probe                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -904,6 +963,9 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	dev_info(dev, "FMC: mtd%d registered; rootfsb is mtd%d; its first 4 bytes read back %02x %02x %02x %02x\n",
 		 fmc->mtd->index, part->index, page[0], page[1], page[2], page[3]);
 	put_mtd_device(part);
+
+	/* stage D's hook looks the driver state up here, at late_initcall_sync */
+	luofu_ubi_fmc = fmc;
 
 	return 0;
 }

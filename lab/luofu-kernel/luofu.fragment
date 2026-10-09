@@ -44,12 +44,17 @@ CONFIG_ARCH_HISI=y
 CONFIG_ARCH_LUOFU=y
 CONFIG_SMP=y
 
-# Boot behavior: append panic=5 to the loader's cmdline (EXTEND keeps its
-# "console=ttyS0,115200 earlycon"). A panic then reboots instead of hanging,
+# Boot behavior: append our command line to the loader's (EXTEND keeps its
+# "console=ttyS0,115200 earlycon").  A panic then reboots instead of hanging,
 # so the boot's total wall time reads back as the death-time meter; while the
 # hsan watchdog is still armed it also bounds any pre-mach-init death at 30 s.
+#
+# panic=5 MUST STAY IN THIS ONE VALUE.  CONFIG_CMDLINE is a string symbol, so a
+# second CONFIG_CMDLINE line anywhere in a fragment does not add to it - it
+# REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
+# rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5"
+CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
@@ -105,6 +110,23 @@ CONFIG_PCIE_LUOFU=y
 CONFIG_SERIAL_8250=y
 CONFIG_SERIAL_8250_CONSOLE=y
 CONFIG_SERIAL_8250_DW=y
+
+# The root device, and the safety net that goes WITH it.
+#
+# The kernel attaches UBI to the rootfs partition itself and exposes the volume
+# as a block device, then mounts that as the root filesystem.  The partition is
+# named rather than numbered, so our registration order does not have to match
+# the vendor's mtd numbering.  The ubi.mtd/root/rootwait values are appended by
+# the single CONFIG_CMDLINE above, next to panic=5 - they belong in ONE string.
+#
+# init=/nonexistent-init IS THE SAFETY NET, not a typo, and it is what makes this
+# step safe to fire.  Our kernel has no network driver, so a boot that SUCCEEDS
+# in mounting a rootfs would reach a userspace reachable by neither ssh nor the
+# bootreg failover - a power cycle would be the only way back.  Naming an init
+# that cannot exist means a successful mount still ends in "Requested init ...
+# failed" plus panic=5 plus the mach's .restart - exactly the path that returns
+# the box to the vendor today.  Both outcomes therefore self-recover, and the
+# readback cell is what tells them apart.
 
 # ---------------------------------------------------------------------------
 # NAND: the FMC controller + the SPI-NAND framework, plus UBI/pstore
