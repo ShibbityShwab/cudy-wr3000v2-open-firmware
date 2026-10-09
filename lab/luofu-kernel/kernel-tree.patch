@@ -21,6 +21,7 @@
  config ARCH_SD5203
  	bool "Hisilicon SD5203 family"
  	depends on ARCH_MULTI_V5
+
 --- a/arch/arm/Makefile
 +++ b/arch/arm/Makefile
 @@ -182,6 +182,7 @@
@@ -31,6 +32,7 @@
  machine-$(CONFIG_ARCH_MESON)		+= meson
  machine-$(CONFIG_ARCH_MMP)		+= mmp
  machine-$(CONFIG_ARCH_MPS2)		+= vexpress
+
 --- a/arch/arm/boot/dts/Makefile
 +++ b/arch/arm/boot/dts/Makefile
 @@ -240,6 +240,8 @@
@@ -56,6 +58,7 @@
 # registers, 0xC0DE000B after cache_off just before entering the kernel.
 # Physical writes while the MMU is off; r3/r4 are free at every point and
 # the boot ABI registers (r0-r2, later r7/r8) are never touched.
+
 --- a/arch/arm/boot/compressed/head.S
 +++ b/arch/arm/boot/compressed/head.S
 @@ -211,13 +211,31 @@
@@ -109,190 +112,3 @@
 # decompressed kernel (physical write, MMU off, r3/r4 free, boot ABI untouched).
 # This extends the ladder across the decompressor->kernel handoff, the last
 # unobserved stage.
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -74,7 +74,13 @@
- 	.arm
- 
- 	__HEAD
- ENTRY(stext)
-+		/* lab breadcrumb: kernel stext entry (0xC0DE0004) - first instruction of the kernel proper */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x0004
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
-  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
- 
-  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
-
------------------------------------------------------------
-# MMU-window breadcrumbs: 0xC0DE0005 after __create_page_tables (pre-MMU physical
-# store, safe by construction) and 0xC0DE0006 as the first instruction of
-# __mmap_switched (first post-MMU execution; probes whether the early page tables
-# already cover the SoC register window).
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -123,6 +123,12 @@
- 	bl	__fixup_pv_table
- #endif
- 	bl	__create_page_tables
-+		/* lab breadcrumb 0xC0DE0005: __create_page_tables returned (pre-MMU, physical write) */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x0005
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- 
- 	/*
- 	 * The following calls CPU specific code in a position independent
---- a/arch/arm/kernel/head-common.S
-+++ b/arch/arm/kernel/head-common.S
-@@ -75,6 +75,12 @@
-  */
- 	__INIT
- __mmap_switched:
-+		/* lab breadcrumb 0xC0DE0006: first post-MMU instruction (SoC-mapping probe) */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x0006
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- 
- 	mov	r7, r1
- 	mov	r8, r2
-
------------------------------------------------------------
-# Pre-MMU bisection crumbs: 0xC0DE000C after __vet_atags, 0xC0DE000D after
-# __fixup_smp/__fixup_pv_table (just before __create_page_tables). Combined
-# with 0xC0DE0005/0006 these pin the failing stage of the pre-MMU head path.
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -116,6 +116,12 @@
- 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
- 	 */
- 	bl	__vet_atags
-+		/* lab breadcrumb 0xC0DE000C: __vet_atags returned */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x000C
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- #ifdef CONFIG_SMP_ON_UP
- 	bl	__fixup_smp
- #endif
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -121,6 +121,12 @@
- #endif
- #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
- 	bl	__fixup_pv_table
-+		/* lab breadcrumb 0xC0DE000D: __fixup_smp/__fixup_pv_table done, before __create_page_tables */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x000D
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- #endif
- 	bl	__create_page_tables
- 
-
------------------------------------------------------------
-# Separator crumb 0xC0DE000E between __fixup_smp and __fixup_pv_table:
-# 000C + no 000E => died inside __fixup_smp; 000E => died in __fixup_pv_table.
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -119,6 +119,12 @@
- #ifdef CONFIG_SMP_ON_UP
- 	bl	__fixup_smp
- #endif
-+		/* lab breadcrumb 0xC0DE000E: __fixup_smp done (before __fixup_pv_table) */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x000E
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
- 	bl	__fixup_pv_table
- #endif
-
-
------------------------------------------------------------
-# PV instrumentation instead of disabling PV (the config route broke the CI build):
-# 0xC0DE000F at __fixup_pv_table's entry (before the ldmia that reloads r3-r7) and
-# 0xC0DE0011 right after the 16MiB alignment gate (ip/r6 dead there). 000F + no 0011
-# => hung before/at the __error gate; 0011 => hung inside the pv_table walk.
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -603,6 +603,12 @@
-  */
- 	__HEAD
- __fixup_pv_table:
-+		/* lab breadcrumb 0xC0DE000F: __fixup_pv_table entered (r3/r4 free pre-adr) */
-+		movw	r3, #:lower16:0x10100C18
-+		movt	r3, #:upper16:0x10100C18
-+		movw	r4, #0x000F
-+		movt	r4, #0xC0DE
-+		str	r4, [r3]
- 	adr	r0, 1f
- 	ldmia	r0, {r3-r7}
- 	mvn	ip, #0
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -618,6 +618,12 @@
- 	teq	r3, r6, lsl #24 @ must be 16MiB aligned
- THUMB(	it	ne		@ cross section branch )
- 	bne	__error
-+		/* lab breadcrumb 0xC0DE0011: 16MiB alignment gate passed (ip/r6 dead here) */
-+		movw	ip, #:lower16:0x10100C18
-+		movt	ip, #:upper16:0x10100C18
-+		movw	r6, #0x0011
-+		movt	r6, #0xC0DE
-+		str	r6, [ip]
- 	str	r3, [r7, #LOW_OFFSET]	@ save to __pv_offset low bits
- 	b	__fixup_a_pv_table
- ENDPROC(__fixup_pv_table)
-
-
------------------------------------------------------------
-# PV deep-instrumentation v2 (context-corrected for cumulative application): 0xC0DE0013
-# after the stores captures the delta (C18+4) and pfn (C18+8); the 16MiB gate's bne now
-# routes through 0xC0DE0014 (also capturing the delta) before the original b __error.
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -614,6 +614,14 @@
- 	mov	r0, r8, lsr #PAGE_SHIFT	@ convert to PFN
- 	str	r0, [r6]	@ save computed PHYS_OFFSET to __pv_phys_pfn_offset
- 	strcc	ip, [r7, #HIGH_OFFSET]	@ save to __pv_offset high bits
-+		/* lab breadcrumb 0xC0DE0013: stores done, pre-gate; delta->+4, pfn->+8 (ip/r6 dead) */
-+		movw	ip, #:lower16:0x10100C18
-+		movt	ip, #:upper16:0x10100C18
-+		movw	r6, #0x0013
-+		movt	r6, #0xC0DE
-+		str	r6, [ip]
-+		str	r3, [ip, #4]
-+		str	r0, [ip, #8]
- 	mov	r6, r3, lsr #24	@ constant for add/sub instructions
- 	teq	r3, r6, lsl #24 @ must be 16MiB aligned
- THUMB(	it	ne		@ cross section branch )
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -661,7 +661,17 @@
- 	mov	r6, r3, lsr #24	@ constant for add/sub instructions
- 	teq	r3, r6, lsl #24 @ must be 16MiB aligned
- THUMB(	it	ne		@ cross section branch )
--	bne	__error
-+	bne	9f
-+	b	10f
-+9:		/* lab breadcrumb 0xC0DE0014: 16MiB gate FAILED; delta->+4 */
-+		movw	ip, #:lower16:0x10100C18
-+		movt	ip, #:upper16:0x10100C18
-+		movw	r6, #0x0014
-+		movt	r6, #0xC0DE
-+		str	r6, [ip]
-+		str	r3, [ip, #4]
-+	b	__error
-+10:
- 		/* lab breadcrumb 0xC0DE0011: 16MiB alignment gate passed (ip/r6 dead here) */
- 		movw	ip, #:lower16:0x10100C18
- 		movt	ip, #:upper16:0x10100C18
