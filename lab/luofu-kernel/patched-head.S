@@ -229,13 +229,22 @@ ENTRY(stext)
 		movw	r7, #:lower16:0xc0100000
 		movt	r7, #:upper16:0xc0100000
 		cmp	r6, r7
-		bls	9f				@ delta in the 0xC00... band -> descriptor found
+		bhi	5f
+		/* second discriminator: the real alternatives descriptor's words 1,2
+		 * span exactly 6744 bytes (0x1A58) - the {addr,value} pair-table size */
+		ldr	r3, [r0, #4]
+		ldr	r4, [r0, #8]
+		subs	r7, r4, r3
+		movw	r6, #0x1a58
+		cmp	r7, r6
+		bne	5f
+		b	9f				@ both tests pass -> descriptor found
 5:		add	r0, r0, #4
 		cmp	r0, r1
 		blo	8b
 		b	7f				@ not found -> cells stay poisoned
 9:		ldmia	r0, {r3, r4, r5}
-		mov	r3, r6			@ the delta from the scan
+		subs	r3, r0, r3			@ recompute the delta
 		adds	r4, r4, r3			@ candidate table start
 		ldr	r6, [r4]			@ entry0.addr (link-time)
 		add	r6, r6, r3			@ runtime addr
