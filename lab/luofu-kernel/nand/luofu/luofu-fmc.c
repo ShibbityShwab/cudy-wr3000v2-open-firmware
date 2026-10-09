@@ -108,6 +108,7 @@
 #include <linux/io.h>
 #include <linux/kmsg_dump.h>
 #include <linux/memremap.h>
+#include <linux/notifier.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
@@ -903,10 +904,12 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * exactly this and is what ramoops itself uses.
  */
 #define LUOFU_LOG_SAFE		0x809A0000	/* outside our image - but scrubbed */
-#define LUOFU_LOG_PRESERVED	0x80600000	/* the PROVEN-surviving zone */
-#define LUOFU_LOG_SIZE		0x1000		/* 4 KiB each, newest kept */
+#define LUOFU_LOG_PRESERVED	0x80600c00	/* astride the PROVEN-surviving cell */
+#define LUOFU_LOG_SIZE		0x400		/* 1 KiB, newest kept */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
+#define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
+#define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
 static void *luofu_log_a;	/* 0x809A0000 */
 static void *luofu_log_b;	/* 0x80600000 */
@@ -946,6 +949,21 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 {
 	luofu_kmsg_to(luofu_log_b, dumper);
 	luofu_kmsg_to(luofu_log_a, dumper);
+}
+
+static struct notifier_block luofu_panic_nb;
+
+static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
+{
+	/* the crumb FIRST: it goes to SYSCtrl, which has never failed */
+	if (luofu_ubi_fmc)
+		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
+				LUOFU_LOG_PANIC_VAL);
+
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_kmsg_to(luofu_log_a, &luofu_kmsg);
+
+	return NOTIFY_DONE;
 }
 
 static int luofu_log_register(struct luofu_fmc *fmc)
@@ -993,8 +1011,26 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * kmsg_dump's own definition.
 	 */
 	luofu_kmsg.max_reason = KMSG_DUMP_MAX;
+	kmsg_dump_register(&luofu_kmsg);
 
-	return kmsg_dump_register(&luofu_kmsg);
+	/*
+	 * A PANIC NOTIFIER AS WELL, because the log capture has failed silently
+	 * five separate ways and one question none of those fixes ever answered is
+	 * whether the panic happens at all - and whether a hook on that path runs.
+	 * The panic notifier is the earliest hook inside panic(), so it fires even
+	 * if the later restart path misbehaves.
+	 *
+	 * Its first act is a CRUMB, to the SYSCtrl cell - the one channel in this
+	 * phase that has never once failed, because it is I/O rather than RAM.  That
+	 * crumb is an unambiguous answer: if it appears, the panic happened and a
+	 * panic-time hook runs; if it does not, the kernel never panicked and every
+	 * RAM theory so far has been about the wrong event entirely.  Either way the
+	 * reader learns one specific thing instead of reading another absence.
+	 */
+	luofu_panic_nb.notifier_call = luofu_panic_notify;
+	atomic_notifier_chain_register(&panic_notifier_list, &luofu_panic_nb);
+
+	return 0;
 }
 
 /* ------------------------------------------------------------------ */
