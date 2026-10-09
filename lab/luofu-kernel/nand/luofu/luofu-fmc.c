@@ -768,6 +768,20 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 
 static struct luofu_fmc *luofu_ubi_fmc;
 
+/*
+ * THE LOG AND DIAGNOSTIC BUFFERS, declared HERE rather than beside the console
+ * code that allocates them, because the stage-D hook below writes into the
+ * diagnostic buffer and sits further up the file.  A first attempt declared them
+ * down there and the build failed with "undeclared (first use in this function)" -
+ * the same mistake the constants made one phase earlier, in a place the macro
+ * order check does not look.
+ */
+static void *luofu_log_b;	/* the log ring - our own DMA allocation */
+static dma_addr_t luofu_log_dma;
+static void *luofu_diag_buf;	/* the diagnostic buffer, likewise */
+static dma_addr_t luofu_diag_dma;
+static struct kmsg_dumper luofu_kmsg;
+
 static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
@@ -1028,11 +1042,7 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 #define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
 #define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
-static void *luofu_log_b;	/* the log ring - our own DMA allocation */
-static dma_addr_t luofu_log_dma;
-static void *luofu_diag_buf;	/* the diagnostic buffer, likewise */
-static dma_addr_t luofu_diag_dma;
-static struct kmsg_dumper luofu_kmsg;
+static void luofu_console_write(struct console *co, const char *s, unsigned int n);
 
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 {
