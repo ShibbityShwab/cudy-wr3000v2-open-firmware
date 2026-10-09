@@ -129,30 +129,19 @@ late_initcall(luofu_late_crumb);
  */
 static void __init luofu_site_probe(void)
 {
-	u32 *p, *desc = NULL;
 	volatile u32 *cells = (volatile u32 *)0xcf000f20;
+	u32 *desc = (u32 *)0xc06082e8;	/* verified offset in the built image */
+	u32 d = (u32)desc - desc[0];
+	u32 *tbl;
 
-	/* scan the first KB of .text only - the descriptor sits near 0x2E8-0x3A8 */
-	for (p = (u32 *)0xc0608000; p < (u32 *)0xc0608400; p++) {
-		u32 d = (u32)p - *p;
-
-		if (d < 0x10000 && (p[2] - p[1]) == 0x1a58) {
-			desc = p;
-			break;
-		}
-	}
-	if (!desc) {
+	if (d >= 0x10000 || (desc[2] - desc[1]) != 0x1a58) {
 		cells[0] = 0xc0dedeee;
 		return;
 	}
 	cells[0] = (u32)desc;
-	/* one site only: entry0's patched word (stock=0x00000001, patched=0x00000000) */
-	{
-		u32 *tbl = (u32 *)desc[1];
-
-		cells[1] = tbl[0];
-		cells[2] = *(u32 *)tbl[0];
-	}
+	tbl = (u32 *)desc[1];
+	cells[1] = tbl[0];
+	cells[2] = *(u32 *)tbl[0];		/* entry0's site word: stock 00000001 / patched 00000000 */
 }
 
 static void __init luofu_early(void)
