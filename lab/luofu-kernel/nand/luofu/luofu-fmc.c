@@ -981,7 +981,18 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 		return -ENOMEM;
 
 	luofu_kmsg.dump = luofu_kmsg_dump;
-	luofu_kmsg.max_reason = KMSG_DUMP_PANIC;
+	/*
+	 * KMSG_DUMP_MAX, NOT KMSG_DUMP_PANIC - and getting this wrong is why no
+	 * mark ever appeared even once the mapping worked.  kmsg_dump() skips any
+	 * dumper with `reason > max_reason`, and on this kernel the panic path
+	 * reaches a dumper only through emergency_restart(), which dumps with
+	 * KMSG_DUMP_EMERG.  The enum runs UNDEF, PANIC, OOPS, EMERG, SHUTDOWN,
+	 * MAX - so EMERG is 3 and PANIC is 1, and setting max_reason to PANIC
+	 * filtered out the only dump this kernel ever performs.  panic() itself
+	 * never calls kmsg_dump at all; printk.c contains no such call outside
+	 * kmsg_dump's own definition.
+	 */
+	luofu_kmsg.max_reason = KMSG_DUMP_MAX;
 
 	return kmsg_dump_register(&luofu_kmsg);
 }
