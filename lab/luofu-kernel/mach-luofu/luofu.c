@@ -103,6 +103,7 @@ static void luofu_restart(enum reboot_mode mode, const char *cmd)
 static int __init luofu_early_crumb(void)
 {
 	luofu_crumb(0xc0de0010);
+	luofu_site_probe();
 	return 0;
 }
 early_initcall(luofu_early_crumb);
@@ -113,6 +114,44 @@ static int __init luofu_late_crumb(void)
 	return 0;
 }
 late_initcall(luofu_late_crumb);
+
+/*
+ * Site probe: read the alternatives pair-table's patched words from C, post-MMU,
+ * through the kernel's full linear map (by early_initcall time), into a cell page
+ * at pa 0x8F000F20 / va 0xCF000F20 - far above every kernel span (survives the
+ * vendor boot) and devmem-readable afterwards.
+ * The descriptor is found in early .text by its shape: a word W at address P with
+ * a tiny (P - W) (both are link VAs in C) and (word2 - word1) == 0x1A58, the
+ * pair-table size.  Cells: [0]=descriptor VA, [1]=entry0.addr, [2..4]=site words
+ * for entries 0, 102, 301 (stock vs patched is the measurement).
+ */
+static void __init luofu_site_probe(void)
+{
+	u32 *p, *desc = NULL;
+	volatile u32 *cells = (volatile u32 *)0xcf000f20;
+	u32 i;
+
+	for (p = (u32 *)0xc0608000; p < (u32 *)0xc0610000; p++) {
+		u32 d = (u32)p - *p;
+
+		if (d < 0x10000 && (p[2] - p[1]) == 0x1a58) {
+			desc = p;
+			break;
+		}
+	}
+	if (!desc) {
+		cells[0] = 0xc0dedeee;
+		return;
+	}
+	cells[0] = (u32)desc;
+	cells[1] = desc[1];
+	for (i = 0; i < 3; i++) {
+		u32 e = (i == 0) ? 0 : (i == 1) ? 102 : 301;
+		u32 *tbl = (u32 *)desc[1];
+
+		cells[2 + i] = *(u32 *)tbl[e * 2];
+	}
+}
 
 static void __init luofu_early(void)
 {
