@@ -49,12 +49,26 @@ CONFIG_SMP=y
 # so the boot's total wall time reads back as the death-time meter; while the
 # hsan watchdog is still armed it also bounds any pre-mach-init death at 30 s.
 #
+# ramoops IS THE INSTRUMENT THAT ENDS THE GUESSING.  This board has no console,
+# so any driver error - UBI's especially - has been invisible and every failure
+# has had to be inferred.  ramoops gives printk a RAM-backed console, and RAM
+# needs no write path, so it works even though this driver cannot write flash
+# (which is why pstore_blk, needing the pstore MTD partition, is out).
+#
+# It must be configured HERE rather than by devicetree because the kernel boots
+# the VENDOR's devicetree, not ours.  The region is chosen to satisfy three
+# things: it sits inside the flashinfo reserved area (0x80600000 + 4 MiB), which
+# both kernels' devicetrees reserve so neither allocates it; it is clear of the
+# flash-spec ATAG at 0x80601000; and it is BELOW 0x80608000, the zone already
+# measured to survive the vendor kernel's return - because the log is read back
+# with devmem from the vendor system after this kernel folds over.
+#
 # panic=5 MUST STAY IN THIS ONE VALUE.  CONFIG_CMDLINE is a string symbol, so a
 # second CONFIG_CMDLINE line anywhere in a fragment does not add to it - it
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init"
+CONFIG_CMDLINE="panic=5 ignore_loglevel ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init ramoops.mem_address=0x80602000 ramoops.mem_size=0x4000 ramoops.record_size=0x1000 ramoops.console_size=0x2000 ramoops.ftrace_size=0 ramoops.pmsg_size=0"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
