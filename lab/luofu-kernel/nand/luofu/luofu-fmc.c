@@ -896,6 +896,7 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 #define LUOFU_LOG_SAFE		0x809A0000	/* outside our image */
 #define LUOFU_LOG_PRESERVED	0x80606000	/* vendor-preserved, inside our .data */
 #define LUOFU_LOG_SIZE		0x2000		/* 8 KiB each, newest kept */
+#define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
 
 static void __iomem *luofu_log_a;	/* 0x809A0000 */
@@ -942,6 +943,25 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 {
 	luofu_log_a = devm_ioremap(fmc->dev, LUOFU_LOG_SAFE, LUOFU_LOG_SIZE);
 	luofu_log_b = devm_ioremap(fmc->dev, LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE);
+
+	/*
+	 * AN ARMED MARK, written now while the kernel is alive, because a fire
+	 * showed only ZEROES and one word of ARM code where the buffers should
+	 * have been - which cannot distinguish "the mapping failed" from "the
+	 * dumper never fired".  These four bytes each settle it:
+	 *
+	 *   0xC0DE10A0  mapped, but the dumper did not run
+	 *   0xC0DE1055  the dumper ran (it writes this over the armed mark)
+	 *   neither     the mapping failed, or the region was scrubbed
+	 *
+	 * Only four bytes per buffer, and only here - a size a fire already proved
+	 * survivable in this exact region, since the previous instrument wrote
+	 * 4-byte cells at 0x80600F20 inside the same .data for many fires.
+	 */
+	if (luofu_log_a)
+		writel(LUOFU_LOG_ARMED, luofu_log_a);
+	if (luofu_log_b)
+		writel(LUOFU_LOG_ARMED, luofu_log_b);
 
 	if (!luofu_log_a && !luofu_log_b)
 		return -ENOMEM;
