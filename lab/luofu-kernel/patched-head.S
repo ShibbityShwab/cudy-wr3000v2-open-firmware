@@ -83,72 +83,6 @@ ENTRY(stext)
 		movw	r4, #0x0004
 		movt	r4, #0xC0DE
 		str	r4, [r3]
-		/*
-		 * The vendor's decompressor runs with caches on and leaves dirty D-cache
-		 * lines behind; the ARM boot protocol says the loader must leave the
-		 * caches clean, and this kernel (like mainline) only *invalidates* L1 at
-		 * v7_invalidate_l1 - which would DISCARD that dirty data and leave stale
-		 * content in RAM.  Whether a stale line aliases something the pre-MMU
-		 * boot path needs (page tables, the turn-on page) depends on the
-		 * decompression's access pattern - i.e. on the kernel's layout.  That is
-		 * the layout-dependent death at the mcr (0xC0DE0017 vs 0xC0DE0020).
-		 * Clean+invalidate the whole D-cache here, before anything else.
-		 * Adapted verbatim from v7_flush_dcache_all (arch/arm/mm/cache-v7.S);
-		 * runs pre-MMU; clobbers only r0-r7/r9-r11 (r1/r2 boot args untouched).
-		 */
-		/*
-		 * The ARM boot protocol requires the MMU *and* D-cache off at kernel
-		 * entry; the vendor's decompressor leaves the D-cache ON.  With the
-		 * MMU off, cached pre-MMU writes (page tables, our own breadcrumbs)
-		 * need not reach RAM, and the coherence behaviour across the
-		 * __turn_mmu_on transition then depends on which lines happen to be
-		 * resident - i.e. on the kernel's layout (the 0xC0DE0017 lottery).
-		 * Fix: clean+invalidate the D-cache fully, then explicitly clear
-		 * SCTLR.C.  The kernel sets its own control value at the mcr later,
-		 * so nothing needs restoring.
-		 */
-		dmb
-		mrc	p15, 1, r0, c0, c0, 1		@ read clidr
-		mov	r3, r0, lsr #23
-		ands	r3, r3, #7 << 1
-		beq	9f
-8:		mov	r10, #0
-7:		add	r2, r10, r10, lsr #1
-		mov	r1, r0, lsr r2
-		and	r1, r1, #7
-		cmp	r1, #2
-		blt	6f
-		mcr	p15, 2, r10, c0, c0, 0
-		isb
-		mrc	p15, 1, r1, c0, c0, 0
-		and	r2, r1, #7
-		add	r2, r2, #4
-		movw	r4, #0x3ff
-		ands	r4, r4, r1, lsr #3
-		clz	r5, r4
-		movw	r7, #0x7fff
-		ands	r7, r7, r1, lsr #13
-5:		mov	r9, r7
-4:		orr	r11, r10, r4, lsl r5
-		orr	r11, r11, r9, lsl r2
-		mcr	p15, 0, r11, c7, c14, 2		@ clean & invalidate by set/way
-		subs	r9, r9, #1
-		bge	4b
-		subs	r4, r4, #1
-		bge	5b
-6:		add	r10, r10, #2
-		cmp	r3, r10
-		bgt	7b
-9:		mov	r10, #0
-		mcr	p15, 2, r10, c0, c0, 0
-		dsb	st
-		isb
-		/* now switch the D-cache OFF (boot protocol) */
-		mrc	p15, 0, r0, c1, c0, 0
-		bic	r0, r0, #0x4			@ clear C (D-cache)
-		mcr	p15, 0, r0, c1, c0, 0
-		dsb	st
-		isb
  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
 
  THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
@@ -608,6 +542,22 @@ ENTRY(__turn_mmu_on)
 		str	r4, [ip, #8]
 		str	r8, [ip, #12]
 		str	r13, [ip, #16]
+		/* minimal site reader (pre-MMU, physical): descriptor at 0x80608244 (verified
+		 * in the 6d904f5 image); read entry0's site word -> cell 0x8F000F20 (+delta).
+		 * Uses only r3/r5/r6/ip - r0/r4/r8/r13 stay untouched for the mcr. */
+		movw	ip, #:lower16:0x80608244
+		movt	ip, #:upper16:0x80608244
+		ldr	r3, [ip]
+		ldr	r5, [ip, #4]
+		subs	r3, ip, r3			@ delta (~0xC0000000)
+		adds	r5, r5, r3			@ table runtime address
+		ldr	r6, [r5]			@ entry0.addr (link)
+		adds	r6, r6, r3			@ site runtime address
+		ldr	r6, [r6]			@ the measured site word
+		movw	ip, #:lower16:0x8f000f20
+		movt	ip, #:upper16:0x8f000f20
+		str	r6, [ip]			@ cell0 = site word (stock 00000001 / patched 00000000)
+		str	r3, [ip, #4]			@ cell1 = delta (sanity)
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	instr_sync

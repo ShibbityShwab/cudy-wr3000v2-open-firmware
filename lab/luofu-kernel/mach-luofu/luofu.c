@@ -100,12 +100,9 @@ static void luofu_restart(enum reboot_mode mode, const char *cmd)
 		;
 }
 
-static void __init luofu_site_probe(void);
-
 static int __init luofu_early_crumb(void)
 {
 	luofu_crumb(0xc0de0010);
-	luofu_site_probe();
 	return 0;
 }
 early_initcall(luofu_early_crumb);
@@ -116,33 +113,6 @@ static int __init luofu_late_crumb(void)
 	return 0;
 }
 late_initcall(luofu_late_crumb);
-
-/*
- * Site probe: read the alternatives pair-table's patched words from C, post-MMU,
- * through the kernel's full linear map (by early_initcall time), into a cell page
- * at pa 0x8F000F20 / va 0xCF000F20 - far above every kernel span (survives the
- * vendor boot) and devmem-readable afterwards.
- * The descriptor is found in early .text by its shape: a word W at address P with
- * a tiny (P - W) (both are link VAs in C) and (word2 - word1) == 0x1A58, the
- * pair-table size.  Cells: [0]=descriptor VA, [1]=entry0.addr, [2..4]=site words
- * for entries 0, 102, 301 (stock vs patched is the measurement).
- */
-static void __init luofu_site_probe(void)
-{
-	volatile u32 *cells = (volatile u32 *)0xcf000f20;
-	u32 *desc = (u32 *)0xc06082e8;	/* verified offset in the built image */
-	u32 d = (u32)desc - desc[0];
-	u32 *tbl;
-
-	if (d >= 0x10000 || (desc[2] - desc[1]) != 0x1a58) {
-		cells[0] = 0xc0dedeee;
-		return;
-	}
-	cells[0] = (u32)desc;
-	tbl = (u32 *)desc[1];
-	cells[1] = tbl[0];
-	cells[2] = *(u32 *)tbl[0];		/* entry0's site word: stock 00000001 / patched 00000000 */
-}
 
 static void __init luofu_early(void)
 {
@@ -167,17 +137,6 @@ static void __init luofu_init_machine(void)
 
 	luofu_crumb(LUOFU_CRUMB_DONE);
 }
-
-/* layout-perturbation probe: deliberately shifts the binary so we can tell whether
- * the MMU-on hang is content/layout-sensitive (it looks like it is).
- */
-static const char luofu_layout_probe[] __used =
-	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789";
-
-/* dice fuel: perturb the layout a little; the throw loop repeats with different
- * lengths until an instrumented build lands in the 0020 class. */
-static const char luofu_dice[] __used =
-	"dice-4-0123456789-abcdefghij-klmnopqrst-uvwxyz-ABCDEFGHIJ-KLMNOPQRST-UVWXYZ-9876543210";
 
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",

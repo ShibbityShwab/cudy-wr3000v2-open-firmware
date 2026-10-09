@@ -58,4 +58,3 @@
 # registers, 0xC0DE000B after cache_off just before entering the kernel.
 # Physical writes while the MMU is off; r3/r4 are free at every point and
 # the boot ABI registers (r0-r2, later r7/r8) are never touched.
-
