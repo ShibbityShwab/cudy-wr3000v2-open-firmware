@@ -277,7 +277,7 @@
  THUMB(	it	ne		@ cross section branch )
 --- a/arch/arm/kernel/head.S
 +++ b/arch/arm/kernel/head.S
-@@ -623,7 +623,17 @@
+@@ -661,7 +661,17 @@
  	mov	r6, r3, lsr #24	@ constant for add/sub instructions
  	teq	r3, r6, lsl #24 @ must be 16MiB aligned
  THUMB(	it	ne		@ cross section branch )
@@ -293,6 +293,6 @@
 +		str	r3, [ip, #4]
 +	b	__error
 +10:
- 		/* 0x11 */
+ 		/* lab breadcrumb 0xC0DE0011: 16MiB alignment gate passed (ip/r6 dead here) */
  		movw	ip, #:lower16:0x10100C18
  		movt	ip, #:upper16:0x10100C18
