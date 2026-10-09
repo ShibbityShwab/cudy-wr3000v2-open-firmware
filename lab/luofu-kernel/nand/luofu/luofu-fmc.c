@@ -40,34 +40,51 @@
  * kernel has folded back to it, exactly like the arch/arm/mach-luofu
  * breadcrumbs:
  *
- *   c18 = 0xC0DE5001   probe entered, controller + window mapped
+ *   c18 = 0xC0DE5001   probe entered, the report cell mapped
+ *                      payload: 0
+ *   c18 = 0xC0DE5002   controller + window mapped
  *                      payload: the chip select
- *   c18 = 0xC0DE5002   FMC_CFG read
+ *   c18 = 0xC0DE5003   FMC_CFG read
  *                      payload: FMC_CFG
- *   c18 = 0xC0DE5003   die reset completed and ready
+ *   c18 = 0xC0DE5004   die reset completed and ready
  *                      payload: the GET FEATURES 0xc0 status byte
- *   c18 = 0xC0DE5004   READ ID completed
+ *   c18 = 0xC0DE5005   READ ID completed
  *                      payload: ID bytes 0..3, big-endian
- *   c18 = 0xC0DE5005   all steps completed
- *                      payload: id[0]<<24 | id[1]<<16 | config<<8 | status
- *   c18 = 0xC0DE50E0|n step n failed (n as above)
+ *   c18 = 0xC0DE5006   all steps completed
+ *                      payload: the PASS value below
+ *   c18 = 0xC0DE50En   failed at step n
  *
  * WHICH CELL TO READ, AND WHY IT IS NOT c18.  The mach code stamps its own
  * 0xC0DE0020 at late_initcall (level 7), which runs AFTER this driver's
  * device_initcall probe (level 6) - so on a boot that gets that far, c18 ends
- * up holding the mach's value and the driver's crumb is gone.  Nothing else
- * writes c1c, so the RESULT lives there and survives.  The reading is:
+ * up holding the mach's value and the driver's crumb is gone.  c1c is the
+ * cell that holds, and the reading is self-describing there:
  *
- *   c1c = 0x8C2C_xxyy     success; 0x8C2C is the die's signature, xx the
- *                         configuration byte (0xb0) and yy the status (0xc0)
- *   c1c = 0xE0DE_00xy     the READ ID ran but answered xy as its first two
- *                         bytes, i.e. 0x8C2C's absence is a measurement
- *   c1c = 0x0000_50nn     the probe stopped at step nn (a hang leaves this)
- *   c1c = 0xFACEFEED      the poison value: the driver never ran at all
+ *   c1c = 0x8C2C_xxyy    PASS - 0x8C2C is the die's signature, xx the
+ *                        configuration byte (0xb0) and yy the status (0xc0)
+ *   c1c = 0x5000_000n    the probe reached step n and stopped there; a boot
+ *                        that hangs in this driver leaves the last step it
+ *                        entered, which is the whole point of stamping the
+ *                        entry to each step and not just the exits
+ *   c1c = 0xE000_000n    the probe failed at step n
+ *   c1c = 0x18C5387D     THE DRIVER NEVER RAN.  This is not a driver value:
+ *                        it is r0 as patched-head.S writes it at its 0x0017
+ *                        site (str r3,[ip] then str r0,[ip,#4], ip =
+ *                        0x10100C18), i.e. the cell still holds the last
+ *                        thing the head code put there.  Seeing it means the
+ *                        probe was never called, which is a device-tree match
+ *                        problem, not a hardware one.
+ *   c1c = 0xFACEFEED     the pre-fire poison: the box never rebooted.
  *
- * A payload of 0 from a boot that reached the stage means the register read
- * returned 0; the breadcrumb alone never proves a value, so every stage
- * records its payload.
+ * WHERE THE DEVICE TREE COMES FROM, because it decides the match table.  The
+ * vendor u-boot's bootfip hands the kernel ITS OWN devicetree, not the one
+ * appended to our zImage - our root is "hisilicon,luofu-r116" while the mach's
+ * dt_compat carries "hsan-luofu", and the kernel still matches, so the tree in
+ * use is the vendor's.  In that tree the node is `fmc@10a20000 { compatible =
+ * "hsan,fmc"; ... }` with no status property, which is why that string comes
+ * FIRST in the match table below.  The driver's own binding stays as the
+ * second entry so it still binds if the appended tree is ever the one used.
+ */
  */
 
 #include <linux/bits.h>
@@ -156,11 +173,17 @@
 #define LUOFU_NAND_ID0		0x8c
 #define LUOFU_NAND_ID1		0x2c
 
-/* The sysctrl scratch pair the mach breadcrumbs use (arch/arm/mach-luofu). */
+/* The sysctrl scratch pair the mach breadcrumbs use (arch/arm/mach-luofu).
+ * The head code writes a PAIR at its 0x0017 site - the crumb to c18 and r0 to
+ * c1c - so a c1c holding r0's 0x18C5387D is the "never ran" signature. */
 #define LUOFU_SYSCTRL_BASE	0x10100000
 #define LUOFU_CRUMB_OFFSET	0xc18
 #define LUOFU_CRUMB_PAYLOAD_OFF	0xc1c
 #define LUOFU_CRUMB_NAND	0xc0de5000
+
+/* The c1c protocol: progress, failure, and the pass value. */
+#define LUOFU_RPT_STEP(n)	(0x50000000u | ((n) & 0xffu))
+#define LUOFU_RPT_FAIL(n)	(0xe0000000u | ((n) & 0xffu))
 
 #define LUOFU_CRUMB_STEP_MASK	0xff
 
@@ -342,6 +365,15 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 
 	fmc->dev = dev;
 
+	/*
+	 * Map the report cell and stamp the ENTRY before anything else can fail:
+	 * "the probe was called at all" is what separates a missing
+	 * device-tree match from a failure inside this function, and it is the
+	 * fact a wasted boot costs the most to get wrong.
+	 */
+	fmc->crumb = devm_ioremap(dev, LUOFU_SYSCTRL_BASE + LUOFU_CRUMB_OFFSET, 8);
+	luofu_fmc_crumb(fmc, 1, LUOFU_RPT_STEP(1));
+
 	fmc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(fmc->regs))
 		return dev_err_probe(dev, PTR_ERR(fmc->regs),
@@ -352,22 +384,18 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(fmc->window),
 				     "cannot map the FMC data window\n");
 
-	/* Optional: without it the driver still runs, it just cannot report. */
-	fmc->crumb = devm_ioremap(dev, LUOFU_SYSCTRL_BASE + LUOFU_CRUMB_OFFSET, 8);
-
 	if (device_property_read_u32(dev, "spi_cs", &fmc->cs))
 		fmc->cs = 1;	/* the pinned DT value */
 
-	luofu_fmc_crumb(fmc, 1, fmc->cs);
+	luofu_fmc_crumb(fmc, 2, LUOFU_RPT_STEP(2));
 
 	cfg = readl(fmc->regs + FMC_CFG);
-	luofu_fmc_crumb(fmc, 2, cfg);
+	luofu_fmc_crumb(fmc, 3, cfg);
 
 	if (cfg & FMC_CFG_IS_RAW_NAND) {
 		dev_err(dev, "the controller is in raw-NAND mode (FMC_CFG=%08x), not SPI\n",
 			cfg);
-		luofu_fmc_crumb(fmc, 0xe0 | 2,
-				0x0000e000 | (cfg & 0xffff));
+		luofu_fmc_crumb(fmc, 3, LUOFU_RPT_FAIL(3));
 		return -ENODEV;
 	}
 
@@ -377,26 +405,25 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
-		luofu_fmc_crumb(fmc, 5, 0x00005000 | (3 & 0xff));
+		luofu_fmc_crumb(fmc, 4, LUOFU_RPT_FAIL(4));
 		return ret;
 	}
-	luofu_fmc_crumb(fmc, 3, status);
+	luofu_fmc_crumb(fmc, 4, LUOFU_RPT_STEP(4));
 
 	ret = luofu_fmc_read_id(fmc, id);
 	if (ret) {
-		luofu_fmc_crumb(fmc, 5, 0x00005000 | (4 & 0xff));
+		luofu_fmc_crumb(fmc, 5, LUOFU_RPT_FAIL(5));
 		return ret;
 	}
 
-	luofu_fmc_crumb(fmc, 4, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
+	luofu_fmc_crumb(fmc, 5, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
 				((u32)id[2] << 8) | (u32)id[3]);
 
 	if (id[0] != LUOFU_NAND_ID0 || id[1] != LUOFU_NAND_ID1) {
 		dev_warn(dev, "unexpected SPI-NAND id %02x %02x (expected %02x %02x)\n",
 			 id[0], id[1], LUOFU_NAND_ID0, LUOFU_NAND_ID1);
-		/* leave a self-describing failure in the surviving cell */
-		luofu_fmc_crumb(fmc, 0xe0 | 4,
-				0xe0de0000 | ((u32)id[0] << 8) | (u32)id[1]);
+		luofu_fmc_crumb(fmc, 5, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
+					((u32)id[2] << 8) | (u32)id[3]);
 		return -ENODEV;
 	}
 
@@ -410,7 +437,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * ID bytes that identify the die, then the two feature bytes.  See the
 	 * header for why this lands in c1c.
 	 */
-	luofu_fmc_crumb(fmc, 5, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
+	luofu_fmc_crumb(fmc, 6, ((u32)id[0] << 24) | ((u32)id[1] << 16) |
 				((u32)config << 8) | (u32)status);
 
 	dev_info(dev, "FMC: READ ID %02x %02x %02x %02x %02x, config %02x, status %02x\n",
@@ -427,6 +454,13 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id luofu_fmc_of_match[] = {
+	/*
+	 * "hsan,fmc" FIRST: it is the string in the devicetree the vendor u-boot
+	 * actually hands this kernel (fmc@10a20000, no status property, so the
+	 * node is live).  The second entry is our own binding, used only if the
+	 * appended tree is ever the one that boots - see the file header.
+	 */
+	{ .compatible = "hsan,fmc" },
 	{ .compatible = "hisilicon,luofu-fmc" },
 	{ }
 };
