@@ -1106,6 +1106,20 @@ static struct timer_list luofu_log_timer;
  * CON_PRINTBUFFER also hands it everything printed before registration, which is
  * exactly the boot-time text wanted.
  */
+static bool luofu_mentions_ubi(const char *s, unsigned int n)
+{
+	unsigned int i;
+
+	for (i = 0; i + 3 <= n; i++) {
+		if ((s[i] == 'u' || s[i] == 'U') &&
+		    (s[i + 1] == 'b' || s[i + 1] == 'B') &&
+		    (s[i + 2] == 'i' || s[i + 2] == 'I'))
+			return true;
+	}
+
+	return false;
+}
+
 static void luofu_console_write(struct console *co, const char *s, unsigned int n)
 {
 	static unsigned int off = 4; /* the mark occupies the first four bytes */
@@ -1113,6 +1127,24 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 	void *p = luofu_log_b;
 
 	if (!p)
+		return;
+
+	/*
+	 * KEEP ONLY UBI'S OWN OUTPUT, and the reason is a measurement rather than a
+	 * preference: the ring is 512 bytes, which is roughly eight messages, and a
+	 * whole boot passes between UBI's attach attempt at late_initcall and the
+	 * panic that follows the failed mount.  Everything UBI said was therefore long
+	 * overwritten by the time the panic notifier could copy it out - which is why
+	 * every reading so far showed the attach FAILING without showing WHICH CHECK
+	 * failed, even though UBI prints exactly that line.
+	 *
+	 * UBI's messages are few, so a ring of only those holds all of them, including
+	 * the specific reason, no matter how long the boot runs afterwards.  The
+	 * match is deliberately loose - any chunk containing "ubi" case-insensitively -
+	 * because printk may hand a message over in more than one piece and the pieces
+	 * around the keyword carry the detail.
+	 */
+	if (!luofu_mentions_ubi(s, n))
 		return;
 
 	if (off == 4)
