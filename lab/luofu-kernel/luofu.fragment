@@ -58,12 +58,34 @@ CONFIG_SMP=y
 # registers a kmsg_dumper instead, which takes no command-line parameters at all
 # and fires on the panic this kernel already takes at the rootfs mount.
 #
+#
+# rootwait IS DELIBERATELY ABSENT, and that one token is why no log was ever captured.
+#
+# With rootwait set, init/do_mounts.c does this:
+#
+#     if ((ROOT_DEV == 0) && root_wait) {
+#             while (driver_probe_done() != 0 ||
+#                    (ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
+#                     msleep(5);
+#     }
+#
+# and /dev/ubiblock0_0 can never appear, because UBI refuses to attach. So the kernel
+# spins there FOR EVER: it never panics, the panic notifier never fires, and the
+# kmsg_dumper - whose precondition (dumper->active) is set only by kmsg_dump(), which
+# a panic would call - is never invoked. A fire confirmed this from the other side:
+# with rootwait on the command line the panic notifier's crumb was absent, so the
+# kernel genuinely never entered panic().
+#
+# Without rootwait the same failure reaches mount_block_root(), every filesystem fails
+# and the kernel PANICS - which is the path the log-capture mechanism was actually
+# designed for, and on which kmsg_dump() sets the iterator up itself.
+#
 # panic=5 MUST STAY IN THIS ONE VALUE.  CONFIG_CMDLINE is a string symbol, so a
 # second CONFIG_CMDLINE line anywhere in a fragment does not add to it - it
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait init=/nonexistent-init"
+CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/nonexistent-init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
