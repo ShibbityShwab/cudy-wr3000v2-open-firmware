@@ -752,6 +752,7 @@ static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
 	struct ubi_volume_desc *desc;
+	struct mtd_info *part;
 	u8 buf[4] = { 0 };
 	u32 word;
 	int err;
@@ -762,12 +763,27 @@ static int __init luofu_fmc_ubi_probe(void)
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
 		/*
-		 * UBI is not up.  Rather than guess which of the candidate causes it
-		 * is, ASK: attach it here and stamp what happens.  If this attach
-		 * fails, its errno names the cause exactly; if it succeeds, then the
-		 * kernel's own command-line attach is what did not take.
+		 * UBI is not up.  Ask rather than guess: attach what the kernel's
+		 * own ubi.mtd= attaches - the PARTITION NAMED "rootfsb" - and stamp
+		 * the outcome.
+		 *
+		 * The first version of this called ubi_attach_mtd_dev() on the
+		 * MASTER mtd, which is a DIFFERENT device: the master spans the
+		 * whole 128 MiB chip including regions that are not UBI at all, so
+		 * whatever that call returned was not necessarily the kernel's
+		 * error.  Attaching the same mtd the kernel names is what makes this
+		 * reading comparable.
 		 */
-		err = ubi_attach_mtd_dev(fmc->mtd, LUOFU_UBI_DEV_NUM_AUTO, 0, 0);
+		word = 0xe2000000;
+		part = get_mtd_device_nm("rootfsb");
+		if (IS_ERR(part)) {
+			luofu_fmc_crumb(fmc, 11, word);
+			return 0;
+		}
+
+		err = ubi_attach_mtd_dev(part, LUOFU_UBI_DEV_NUM_AUTO, 0, 0);
+		put_mtd_device(part);
+
 		if (err < 0) {
 			/* 0xE1 <errno>: the attach itself refuses, with the reason */
 			luofu_fmc_crumb(fmc, 11,
