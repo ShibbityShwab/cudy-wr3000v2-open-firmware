@@ -253,10 +253,11 @@
  	b	__fixup_a_pv_table
  ENDPROC(__fixup_pv_table)
 
+
 -----------------------------------------------------------
-# PV deep-instrumentation: 0xC0DE0013 after the stores (captures the delta to C18+4 and
-# the pfn to C18+8), and the 16MiB gate's bne rerouted through 0xC0DE0014 (captures the
-# delta too) before the original b __error. This ends the silent-__error ambiguity.
+# PV deep-instrumentation v2 (context-corrected for cumulative application): 0xC0DE0013
+# after the stores captures the delta (C18+4) and pfn (C18+8); the 16MiB gate's bne now
+# routes through 0xC0DE0014 (also capturing the delta) before the original b __error.
 --- a/arch/arm/kernel/head.S
 +++ b/arch/arm/kernel/head.S
 @@ -614,6 +614,14 @@
@@ -276,7 +277,7 @@
  THUMB(	it	ne		@ cross section branch )
 --- a/arch/arm/kernel/head.S
 +++ b/arch/arm/kernel/head.S
-@@ -617,7 +617,17 @@
+@@ -623,7 +623,17 @@
  	mov	r6, r3, lsr #24	@ constant for add/sub instructions
  	teq	r3, r6, lsl #24 @ must be 16MiB aligned
  THUMB(	it	ne		@ cross section branch )
@@ -292,6 +293,6 @@
 +		str	r3, [ip, #4]
 +	b	__error
 +10:
- 	str	r3, [r7, #LOW_OFFSET]	@ save to __pv_offset low bits
- 	b	__fixup_a_pv_table
- ENDPROC(__fixup_pv_table)
+ 		/* 0x11 */
+ 		movw	ip, #:lower16:0x10100C18
+ 		movt	ip, #:upper16:0x10100C18
