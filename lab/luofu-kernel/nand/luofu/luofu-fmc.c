@@ -842,6 +842,16 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
 		return -ENOMEM;
 	}
+	/*
+	 * The mtd read hook gets its own frame through fmc->page_buf, so the two
+	 * MUST be the same allocation - and the first MTD fire is what said so:
+	 * page_buf was left NULL, mtd_read() reached memcpy_fromio() with a NULL
+	 * destination, and the kernel panicked between the step-9 and step-10
+	 * crumbs.  That is why C18 stayed at 0xC0DE5009 with no step-10 value
+	 * ever deposited, and why the box took several panic/reboot cycles before
+	 * the vendor failover returned.
+	 */
+	fmc->page_buf = page;
 
 	ret = luofu_fmc_read_page(fmc,
 				  LUOFU_ROOTFSA_OFFSET / fmc->spec.page_size, page);
