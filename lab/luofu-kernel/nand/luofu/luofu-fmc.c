@@ -107,10 +107,8 @@
 #include <linux/genhd.h>
 #include <linux/io.h>
 #include <linux/kmsg_dump.h>
-#include <linux/memremap.h>
 #include <linux/notifier.h>
 #include <linux/timer.h>
-#include <linux/workqueue.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
@@ -955,10 +953,8 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 
 static struct notifier_block luofu_panic_nb;
 
-static void luofu_log_work_fn(struct work_struct *w);
 static void luofu_log_tick(struct timer_list *t);
 
-static struct work_struct luofu_log_work;
 static struct timer_list luofu_log_timer;
 
 /*
@@ -978,22 +974,22 @@ static struct timer_list luofu_log_timer;
  * already holds the most recent log, because it was written while the kernel was
  * still running.
  *
- * A workqueue rather than the timer callback directly, because kmsg_dump_get_line
- * takes printk's internal lock and must not be called from softirq context.
+ * A timer callback rather than a workqueue, and the difference was measured: the
+ * workqueue version produced an empty buffer even though workqueue_init() runs
+ * before do_basic_setup() and so before this wait.  Doing the copy directly in
+ * the timer removes a moving part.  It is safe because kmsg_dump_get_line takes
+ * logbuf_lock with logbuf_lock_irqsave, and logbuf_lock is a DEFINE_RAW_SPINLOCK
+ * - a raw spinlock taken with interrupts off, so it is usable from softirq
+ * context and cannot sleep.
  *
  * NO CRUMB IS STAMPED.  The buffer's own contents are the proof: it lives in the
  * window the vendor's own memory map confirms is untouched - below 0x80608000,
  * where the vendor's kernel code begins - so if the timer runs at all, the mark
  * and the text are both readable, and no second channel is needed to say so.
  */
-static void luofu_log_work_fn(struct work_struct *w)
-{
-	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
-}
-
 static void luofu_log_tick(struct timer_list *t)
 {
-	schedule_work(&luofu_log_work);
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
 }
 
@@ -1013,13 +1009,30 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 static int luofu_log_register(struct luofu_fmc *fmc)
 {
 	/*
-	 * memremap, NOT ioremap, and the difference cost a fire: on ARM ioremap()
-	 * refuses RAM outright (WARN_ON(pfn_valid(pfn)) in __arm_ioremap_pfn_caller),
-	 * and both of these buffers are RAM - so both ioremaps returned NULL, nothing
-	 * was ever written, and the readback showed only whatever RAM already held.
+	 * __va, NOT ioremap AND NOT memremap - both of them returned NULL for this
+	 * RAM, which is why no mark ever appeared.
+	 *
+	 * ioremap() refusing RAM is documented ARM behaviour (WARN_ON(pfn_valid(pfn))
+	 * in __arm_ioremap_pfn_caller), and memremap() turned out to be no better
+	 * here: with a timer refreshing the buffer every three seconds and a
+	 * workqueue proven to be running well before the root-device wait, an empty
+	 * buffer could only mean luofu_log_b itself was NULL.  Two mapping APIs, two
+	 * failures, and no mark to show for either.
+	 *
+	 * These addresses are ordinary RAM inside the devicetree's memory node - the
+	 * vendor's own map shows 80600000-87ffffff as System RAM - so the linear map
+	 * already covers them and __va() is the correct way to reach them from kernel
+	 * code.  No new mapping to fail, no cache-type question to get wrong: this is
+	 * simply where that memory lives.
+	 *
+	 * Writes through the linear map are cached, and that is acceptable for a
+	 * measured reason rather than a hopeful one: an earlier instrument in this
+	 * phase wrote 4-byte breadcrumb cells into this very region through this same
+	 * kind of mapping, and those values survived a reset and were read back with
+	 * devmem from the vendor system.
 	 */
-	luofu_log_a = memremap(LUOFU_LOG_SAFE, LUOFU_LOG_SIZE, MEMREMAP_WB);
-	luofu_log_b = memremap(LUOFU_LOG_PRESERVED, LUOFU_LOG_SIZE, MEMREMAP_WB);
+	luofu_log_a = (void *)__va(LUOFU_LOG_SAFE);
+	luofu_log_b = (void *)__va(LUOFU_LOG_PRESERVED);
 
 	/*
 	 * NOTHING IS WRITTEN HERE, and a fire is why.  An armed mark written to
@@ -1076,9 +1089,8 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 
 	/*
 	 * And the snapshot timer, which is the hook that does not depend on the
-	 * kernel ever panicking - see luofu_log_work_fn for why that matters.
+	 * kernel ever panicking - see luofu_log_tick for why that matters.
 	 */
-	INIT_WORK(&luofu_log_work, luofu_log_work_fn);
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
 
