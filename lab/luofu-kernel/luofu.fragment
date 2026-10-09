@@ -119,9 +119,6 @@ CONFIG_MTD_UBI=y
 CONFIG_MTD_UBI_BLOCK=y
 # NEW (stage 2, the hsan,fmc controller - the hardest storage item)
 CONFIG_MTD_NAND_LUOFU=y
-# the prebuilt NAND objects call the out-of-line _raw_spin_unlock symbol: only
-# DEFINED when UNINLINE_SPIN_UNLOCK=y (kernel/locking/spinlock.c:179)
-CONFIG_UNINLINE_SPIN_UNLOCK=y
 # selected indirectly by MTD_SPI_NAND / MTD_NAND_LUOFU: CONFIG_MTD_NAND_CORE,
 # CONFIG_MTD_NAND_ECC_SW_HAMMING (the FMC's ECC; SW_BCH is the alternative).
 

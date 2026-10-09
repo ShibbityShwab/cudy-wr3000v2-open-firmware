@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-hisi/Kconfig
 +++ b/arch/arm/mach-hisi/Kconfig
-@@ -55,6 +55,21 @@
+@@ -55,6 +55,20 @@
  	help
  	  Support for Hisilicon HIX5HD2 SoC family
  
@@ -10,7 +10,6 @@
 +	select CACHE_L2X0
 +	select HAVE_ARM_SCU if SMP
 +	select HAVE_ARM_TWD if SMP
-+	select UNINLINE_SPIN_UNLOCK	# the prebuilt tri_* NAND objects call _raw_spin_unlock
 +	help
 +	  Support for the Hisilicon Hi5671Y "luofu" SoC (board R116, the Cudy
 +	  WR3000 v2.0). The machine code is arch/arm/mach-luofu/luofu.c: it only
