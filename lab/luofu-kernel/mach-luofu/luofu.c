@@ -185,6 +185,11 @@ static void __init luofu_init_machine(void)
 static const char luofu_layout_probe[] __used =
 	"perturb-0123456789-0123456789-0123456789-0123456789-0123456789";
 
+/* dice fuel: perturb the layout a little; the throw loop repeats with different
+ * lengths until an instrumented build lands in the 0020 class. */
+static const char luofu_dice[] __used =
+	"dice-3-deadbeefcafe";
+
 static const char *const luofu_dt_compat[] __initconst = {
 	"hisilicon,luofu-r116",
 	"hisilicon,luofu",
