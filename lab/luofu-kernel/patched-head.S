@@ -530,6 +530,12 @@ ENDPROC(__enable_mmu)
 ENTRY(__turn_mmu_on)
 	mov	r0, r0
 	instr_sync
+		/* lab breadcrumb 0xC0DE0017: last instruction before the MMU-enable mcr (r3 reloaded at line+2) */
+		movw	ip, #:lower16:0x10100C18
+		movt	ip, #:upper16:0x10100C18
+		movw	r3, #0x0017
+		movt	r3, #0xC0DE
+		str	r3, [ip]
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	instr_sync
