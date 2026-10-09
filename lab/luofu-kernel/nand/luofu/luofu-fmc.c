@@ -103,6 +103,7 @@
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/genhd.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
@@ -710,16 +711,28 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
  * The ATTACH is done by the kernel, from the command line this build carries
  * (ubi.mtd=rootfsb), because ubi_attach_mtd_dev() is deliberately not part of
  * UBI's public interface.  This hook does the part that has to be observable:
- * it opens the volume named "rootfs" through the PUBLIC UBI API and reads its
- * first four bytes, so the reader cell ends up holding the volume's own data.
+ * it opens the rootfs volume through the PUBLIC UBI API and reads its first
+ * four bytes, so the reader cell ends up holding the volume's own data.
+ *
+ * IT OPENS THE VOLUME BY ID, NOT BY NAME - and a fire is what taught that.  The
+ * first version asked for a volume named "rootfs" and returned 0xE000000B (the
+ * step-11 failure) on real hardware.  The live system then answered why:
+ * /sys/class/ubi/ubi0_0/name is "squashfs", not "rootfs" - and the string
+ * "rootfs" does not occur anywhere in a dump of the partition either.  Volume 0
+ * is the rootfs and its id is the stable fact; the name was my assumption.
  *
  * It runs at late_initcall_sync - after every late_initcall, and so after
- * UBI's own module_init has attached whatever the command line named.
+ * UBI's own module_init has attached whatever the command line named, and after
+ * ubiblock_init has had its chance to create the block device.
  *
- * The expected value: a squashfs superblock begins with the magic "hsqs", which
- * as a little-endian word is 0x73717368.  Like stages B and C, the pass value
- * is the data itself rather than a proxy for it.
+ * The pass value is a squashfs superblock's magic "hsqs", which as a
+ * little-endian word is 0x73717368, PLUS ONE when blk_lookup_devt() resolves
+ * "ubiblock0_0" - the very call name_to_dev_t() makes for the root= line.  One
+ * cell therefore carries both halves: the volume reads through UBI, and the
+ * block device the root= line names is resolvable.  The +1 is deliberate, and
+ * 0x73717369 is a distinct, documented value.
  */
+#define LUOFU_ROOTFS_VOL_ID	0
 static struct luofu_fmc *luofu_ubi_fmc;
 
 static int __init luofu_fmc_ubi_probe(void)
@@ -733,7 +746,7 @@ static int __init luofu_fmc_ubi_probe(void)
 	if (!fmc || !fmc->mtd)
 		return 0;
 
-	desc = ubi_open_volume_nm(0, "rootfs", UBI_READONLY);
+	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
 		luofu_fmc_crumb(fmc, 11, LUOFU_RPT_FAIL(11));
 		return 0;
@@ -749,10 +762,15 @@ static int __init luofu_fmc_ubi_probe(void)
 
 	word = ((u32)buf[0]) | ((u32)buf[1] << 8) |
 	       ((u32)buf[2] << 16) | ((u32)buf[3] << 24);
+
+	if (blk_lookup_devt("ubiblock0_0", 0))
+		word++;
+
 	luofu_fmc_crumb(fmc, 11, word);
 
-	dev_info(fmc->dev, "FMC: ubi0 volume \"rootfs\" begins %02x %02x %02x %02x\n",
-		 buf[0], buf[1], buf[2], buf[3]);
+	dev_info(fmc->dev, "FMC: ubi0 volume %d begins %02x %02x %02x %02x, ubiblock0_0 %s\n",
+		 LUOFU_ROOTFS_VOL_ID, buf[0], buf[1], buf[2], buf[3],
+		 word & 1 ? "resolves" : "does NOT resolve");
 
 	return 0;
 }
