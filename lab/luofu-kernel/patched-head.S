@@ -554,10 +554,10 @@ ENTRY(__turn_mmu_on)
 		ldr	r6, [r5]			@ entry0.addr (link)
 		adds	r6, r6, r3			@ site runtime address
 		ldr	r6, [r6]			@ the measured site word
-		movw	ip, #:lower16:0x8f000f20
-		movt	ip, #:upper16:0x8f000f20
+		movw	ip, #:lower16:0x80600f20
+		movt	ip, #:upper16:0x80600f20
 		str	r6, [ip]			@ cell0 = site word (stock 00000001 / patched 00000000)
-		str	r3, [ip, #4]			@ cell1 = delta (sanity)
+		str	r3, [ip, #4]			@ cell1 = delta (sanity ~0xC0000000)
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	instr_sync
