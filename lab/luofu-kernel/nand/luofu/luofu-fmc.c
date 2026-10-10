@@ -638,6 +638,32 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 */
 	memset(fmc->dma_buf, 0, fmc->spec.page_size + LUOFU_DMA_SPLICE_LEN);
 
+	/*
+	 * SENTINEL: does the controller actually write past the page size?
+	 *
+	 * The tail probe came back with exactly ONE difference in sixteen samples,
+	 * across two pages: page 11 offset 2032..2035 read f1160000 where the flash
+	 * holds f116c36b. Page 11 is the page whose record UBI rejects; page 2 matched
+	 * everywhere, splice region included.
+	 *
+	 * With the de-interleave, the returned page's byte 2032 comes from staging
+	 * 2046, so its last two bytes come from staging 2048..2049 - PAST the page
+	 * size, in the region the splice pushes in. Those read zero.
+	 *
+	 * Zero could mean the controller wrote nothing there, or wrote zeros. So mark
+	 * that region with 0xAA after the memset and before the operation: if the
+	 * probe still reads zeros the transfer stopped at the page size and the copy
+	 * must not reach past it; if it reads AAAA the controller wrote and something
+	 * downstream is losing it.
+	 */
+	{
+		u8 *tail = (u8 *)fmc->dma_buf + fmc->spec.page_size;
+		int q;
+
+		for (q = 0; q < 16; q++)
+			tail[q] = 0xaa;
+	}
+
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
