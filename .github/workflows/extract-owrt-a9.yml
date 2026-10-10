@@ -1,0 +1,79 @@
+# Extracts the Cortex-A9 OpenWrt userspace binaries so they can be disassembled LOCALLY.
+#
+# WHY THIS EXISTS: init executes on our kernel and is killed by SIGILL. To find out WHICH
+# instruction, the kernel is being made to print the faulting pc (CONFIG_DEBUG_USER +
+# user_debug=1), and then that address has to be disassembled - which needs the actual file.
+#
+# THE VENDOR KERNEL CANNOT PROVIDE IT: mounting the same squashfs on the vendor system reads
+# /etc/openwrt_release fine but gives "I/O error" on bin/busybox and cp produces 0-byte files -
+# metadata and small fragment-stored files work, real xz data blocks do not. OUR kernel reads
+# it well enough to execute init, so the image is sound and the vendor's squashfs/xz path is
+# the limitation.
+#
+# Triggered ONLY by a change to this file, on any branch, so pushing it does NOT start a
+# kernel build (that workflow watches omo/** only).
+name: extract-owrt-a9
+
+on:
+  push:
+    paths:
+      - '.github/workflows/extract-owrt-a9.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: the mvebu/cortexa9 image (arm_cortex-a9_vfpv3-d16)
+        run: |
+          set -eux
+          curl -sSLo img.bin https://downloads.openwrt.org/releases/25.12.5/targets/mvebu/cortexa9/openwrt-25.12.5-mvebu-cortexa9-globalscale_mirabox-squashfs-sysupgrade.bin
+          ls -l img.bin
+
+      - name: carve the squashfs out of it (marker 0, uImage 2048, squashfs at 3883008)
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import struct
+          b = open("img.bin","rb").read()
+          i = b.find(b"hsqs")
+          blk, frags, comp = struct.unpack("<I", b[i+12:i+16])[0], struct.unpack("<I", b[i+16:i+20])[0], struct.unpack("<H", b[i+20:i+22])[0]
+          bytes_used = struct.unpack("<Q", b[i+40:i+48])[0]
+          print("squashfs at", i, "block", blk, "comp", comp, "bytes_used", bytes_used)
+          open("root.sqfs","wb").write(b[i:i+bytes_used])
+          PY
+          ls -l root.sqfs
+
+      - name: unsquash and keep the binaries that matter
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y squashfs-tools
+          unsquashfs -q -d root root.sqfs
+          cat root/etc/openwrt_release
+          mkdir -p out
+          cp root/sbin/init out/init
+          cp root/lib/libc.so out/libc.so
+          cp root/bin/busybox out/busybox
+          for f in root/sbin/procd root/lib/ld-musl-armhf.so.1; do
+            [ -e "$f" ] && cp "$f" out/ || true
+          done
+          ls -l out
+
+      - name: what the compiler actually required
+        run: |
+          set -eux
+          for f in out/init out/libc.so out/busybox; do
+            echo "=== $f ==="
+            file "$f"
+            readelf -h "$f" | egrep 'Machine|Flags|Entry'
+            readelf -A "$f" 2>/dev/null | egrep -i 'cpu_arch|VFP|DIV_use|SIMD|FP_arch' || true
+            echo "--- hardware divide / vfpv4 in the code ---"
+            (arm-linux-gnueabihf-objdump -d "$f" 2>/dev/null || objdump -d "$f") | egrep -c '\b(udiv|sdiv|vfma|vfms)\b' || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-a9-binaries
+          path: out/
+          if-no-files-found: error
