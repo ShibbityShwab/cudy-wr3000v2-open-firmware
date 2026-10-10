@@ -1087,8 +1087,6 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * the whole readback.
  */
 #define LUOFU_LOG_STEP		44		/* crumb: log ring's physical address */
-#define LUOFU_LOG_PANIC_STEP	42		/* crumb: the panic notifier fired */
-#define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
 static void luofu_console_write(struct console *co, const char *s, unsigned int n);
 
