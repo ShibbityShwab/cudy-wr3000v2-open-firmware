@@ -640,27 +640,30 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 
 	
 	/*
-	 * PROGRAM THE TRANSFER LENGTH.
+	 * PROGRAM THE TRANSFER LENGTH - AND THE COUNT THAT ACTUALLY BOUNDS IT.
 	 *
-	 * The sentinel answered the question it was asked: 0xAA written over the
-	 * staging buffer past the page size SURVIVED the read. The controller wrote
-	 * nothing there, so the transfer stops at exactly 2048 bytes - and the page's
-	 * final bytes never arrive.
+	 * The sentinel answered the first question: 0xAA written over the staging buffer
+	 * past the page size SURVIVED the read, so the controller transferred nothing
+	 * there. The transfer stops at exactly 2048 bytes.
 	 *
-	 * The register list says why. FMC_DMA_LEN at 0x40 is the transfer length, and
-	 * the vendor's own DMA read writes it - in hi_flash.ko, hi_sfc_hw_dma_read takes
-	 * the length in r3 and stores it with "str r2, [r0, #0x40]" - while this driver
-	 * never touches it, leaving the reset default of one page.
+	 * Writing FMC_DMA_LEN at 0x40 did not change that, and the read-back proved the
+	 * write LANDED - it reads back 0x820 afterwards. So 0x40 is not the byte count.
 	 *
-	 * The controller's output is not a bare page: it carries spare bytes inside it
-	 * (which is the splice this driver already de-interleaves), so the length has to
-	 * cover the page PLUS that spare, otherwise the tail of the page is simply not
-	 * transferred. The spare measured at 14 bytes for the one splice per 2048-byte
-	 * page; the vendor lays out 16 per 1024-byte sector, so 32 covers the case
-	 * generously and the extra can only add bytes beyond what the copy reads.
+	 * THE REGISTER THE DRIVER HAS NEVER WRITTEN IS FMC_DATA_NUM AT 0x38, which is
+	 * named exactly what it is: the data count. Nothing here has ever set it, so the
+	 * transfer has been bounded by whatever it resets to - one page - which is the
+	 * 2048 the sentinel measured.
 	 *
-	 * Set before the operation, like the vendor's, not after.
+	 * Both are written now. The controller's output is not a bare page: it carries
+	 * spare bytes inside it, which is the splice this driver already de-interleaves,
+	 * so the count has to cover the page PLUS that spare or the tail never arrives.
+	 * The splice measured 14 bytes for the one insertion per page; 32 covers the
+	 * vendor's 16-per-1024-byte-sector layout generously, and surplus can only
+	 * produce bytes beyond what the copy reads.
+	 *
+	 * Set before the operation, like the vendor does.
 	 */
+	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DATA_NUM);
 	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DMA_LEN);
 
 	mb();
@@ -1138,6 +1141,8 @@ static int __init luofu_fmc_ubi_probe(void)
 					regs[3] = readl(fmc->regs + 0x30);
 					regs[4] = readl(fmc->regs + 0x68);
 					regs[5] = readl(fmc->regs + 0x3c);
+					regs[6] = readl(fmc->regs + 0x38);
+					regs[7] = readl(fmc->regs + 0x40);
 				}
 			}
 		}
