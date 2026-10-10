@@ -966,6 +966,7 @@ static int luofu_w_err;
  * 6 the plant did not read back (the read path, not the erase, is then the thing at issue).
  */
 static u32 luofu_e_test;
+static u32 luofu_e_retries;
 
 /*
  * ------------------------------------------------------------------ *
@@ -1643,16 +1644,42 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * data on a later boot.
 	 */
 	for (block = 1, nblocks = div_u64(part->size, part->erasesize); block < nblocks; block++) {
-		memset(&ei, 0, sizeof(ei));
-		ei.addr = (u64)block * part->erasesize;
-		ei.len = part->erasesize;
-		err = mtd_erase(part, &ei);
+		int tries;
+
+		for (tries = 0; tries < 3; tries++) {
+			memset(&ei, 0, sizeof(ei));
+			ei.addr = (u64)block * part->erasesize;
+			ei.len = part->erasesize;
+			err = mtd_erase(part, &ei);
+			if (err)
+				break;
+
+			/*
+			 * EVERY BLOCK IS VERIFIED AND RE-ERASED IF IT DID NOT TAKE.
+			 *
+			 * The erase works - three probes seeded with a known pattern all read back ff - but this loop
+			 * issues 176 commands back to back, each carrying a single WRITE ENABLE, and any block still
+			 * busy when the next command arrives loses its erase. That is why a whole-partition erase left
+			 * a scattering of dirty blocks, at a DIFFERENT set each boot, which is exactly how it presented
+			 * from the outside: JFFS2 pointing at a new offset every time.
+			 *
+			 * The three-block self-test could never see this because each of its erases is separated by a
+			 * read and a fresh write enable.
+			 */
+			word = 0x5a5a5a5au;
+			err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
+			if (!err && got == 4 && word == 0xffffffffu)
+				break;
+		}
 		if (err) {
 			dev_info(fmc->dev, "FMC: erase stopped at block %u: %d\n", block, err);
 			break;
 		}
+		if (tries > 0)
+			luofu_e_retries++;
 	}
-	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data before marking it\n", block);
+	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data; %u needed a second pass\n",
+		 block, luofu_e_retries);
 
 	/*
 	 * AND THE ERASE IS READ BACK BEFORE IT IS TRUSTED - AT BOTH ENDS OF THE PARTITION.
