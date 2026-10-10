@@ -250,6 +250,24 @@
 #define LUOFU_SPEC_WR_CMD	0x30
 #define LUOFU_SPEC_WR_DUMMY	0x31
 
+/*
+ * THE SPLICE - KEPT, BECAUSE REMOVING IT MADE THINGS WORSE.
+ *
+ * The plain copy was tried with the vendor's full configuration, order and three
+ * destinations - every variable controlled at last - and UBI fell back to record 6,
+ * accepting only four records. With this de-interleave it accepts 117.
+ *
+ * So this driver's raw buffer DOES carry the splice, even though the vendor's own
+ * raw buffer, read live at its SADDR_D0, does not: page 3 there holds f116c36b at
+ * 1044 in both its raw and its logical output, 172 bytes apart like every record.
+ * The two drivers differ structurally, in something around the operation that no
+ * register value, order or configuration field accounts for.
+ *
+ * 1040 and 14 are the measured pair.
+ */
+#define LUOFU_DMA_SPLICE_OFF	1040u
+#define LUOFU_DMA_SPLICE_LEN	14u
+
 
 
 
@@ -739,20 +757,22 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			ret = -ETIMEDOUT;
 		} else {
 			/*
-			 * A PLAIN COPY - THE HARDWARE DOES NOT SPLICE.
+			 * DE-INTERLEAVE THE SPARE AREA OUT OF THE DATA - STILL NEEDED.
 			 *
-			 * Read live at its own destination, the vendor's raw DMA buffer holds the
-			 * record CRCs at exactly the offsets its logical page does:
-			 *
-			 *   f116c36b in LOGICAL page 3: [12, 184, ... 1044, 1216, ...]
-			 *   f116c36b in RAW     page 3: [1044]
-			 *
-			 * 172 bytes apart, the record length, and the raw agrees. THERE IS NO SPLICE
-			 * IN THE HARDWARE'S OUTPUT. The de-interleave this driver has carried was
-			 * compensating for a defect of its own - and it is why the page loses its
-			 * last fourteen bytes, because the copy skipped them.
+			 * The plain copy was tried with everything else matched and UBI fell back to
+			 * record 6. With this it accepts 117. Whatever else is true of the vendor's
+			 * read path, THIS driver's raw buffer carries a 14-byte splice at 1040, and
+			 * removing it here corrupts every record from the sixth on.
 			 */
-		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		if (fmc->spec.page_size == 2048) {
+			memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
+			memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
+				      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
+				      LUOFU_DMA_SPLICE_LEN,
+				      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
+		} else {
+			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		}
 		ret = 0;
 		}
 	}
