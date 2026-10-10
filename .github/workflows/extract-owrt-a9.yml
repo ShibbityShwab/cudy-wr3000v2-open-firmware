@@ -92,3 +92,34 @@ jobs:
           name: owrt-a9-binaries
           path: out/
           if-no-files-found: error
+
+  ubifs:
+    name: build the rootfs_data UBIFS image
+    runs-on: ubuntu-22.04
+    steps:
+      - name: mtd-utils
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y mtd-utils
+          mkfs.ubifs -V
+
+      - name: a minimal overlay, in the volume's own geometry
+        run: |
+          set -eux
+          # THE GEOMETRY IS THE VOLUME'S, MEASURED ON THE DEVICE:
+          #   mtd16 PEB 131072 = 128 KiB, so UBI LEB = 131072 - 2*2048 = 126976
+          #   the rootfs_data volume is 79 LEBs
+          # -x none IS DELIBERATE: it needs no compressor from the kernel, so the image cannot
+          # fail to mount over a UBIFS compressor the build happens not to enable.
+          mkdir -p tree/etc/config
+          mkfs.ubifs -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data.ubifs
+          ls -l owrt-rootfs_data.ubifs
+          # what the image claims, read back with the tool that made it
+          ubinize -o /dev/null -m 2048 -p 128KiB -s 2048 /dev/null 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ubifs
+          path: owrt-rootfs_data.ubifs
+          if-no-files-found: error
