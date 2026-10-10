@@ -1149,8 +1149,29 @@ static int luofu_fmc_erase_block(struct luofu_fmc *fmc, u32 row)
 	 */
 	luofu_fmc_ecc_type_set(fmc, 0);
 
+	/*
+	 * THE ERASE ADDRESS IS NOT SHIFTED, AND THIS LINE HAD THE WRITE'S ENCODING.
+	 *
+	 * The vendor's own erase wrapper, from its symbol table:
+	 *
+	 *     hi_spi_nand_hw_erase(regs, addr, cs, cmd):  ADDRH = 0 ; ADDRL = addr   (VERBATIM)
+	 *
+	 * while its WRITE path does ADDRH = row >> 16 and ADDRL = row << 16. The two ops do not share an
+	 * address encoding, and this driver copied the write's shift into the erase - so every erase
+	 * command carried an address in the wrong half of the register, was accepted, and did nothing.
+	 * The partition was BYTE-IDENTICAL after the driver reported "erased 176 blocks of rootfs_data",
+	 * which is the same junk at the same offset that JFFS2 kept rejecting:
+	 *
+	 *     jffs2: Incompatible feature node (0xe009) found at offset 0x00181758
+	 *
+	 * ADDRH = 0 is consistent with a page row here: a 128 KiB block is 64 pages and the device has
+	 * about 15,104 of them, all inside a 16-bit field.
+	 *
+	 * IT WENT UNNOTICED BECAUSE ONLY THE WRITE PATH WAS EVER MEASURED. mism counts how many bytes a
+	 * page differs by after programming - it certifies writes and says nothing at all about erases.
+	 */
 	writel(0, fmc->regs + FMC_ADDRH);
-	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(row, fmc->regs + FMC_ADDRL);
 	writel(SPINAND_CMD_BLOCK_ERASE, fmc->regs + FMC_CMD);
 	writel(1, fmc->regs + FMC_DMA_LEN);
 	writel(luofu_fmc_cs_field(fmc) | 0x30, fmc->regs + FMC_OP_CFG);
@@ -1560,6 +1581,19 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 		}
 	}
 	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data before marking it\n", block);
+
+	/*
+	 * AND THE ERASE IS READ BACK BEFORE IT IS TRUSTED.
+	 *
+	 * This is the check whose absence let a wrong address encoding survive: the driver reported 176
+	 * blocks erased while the partition kept every byte it started with, and nothing contradicted it.
+	 * An erase is the one operation that cannot be verified by its own return value, so it is verified
+	 * by reading the flash afterwards - the same discipline the write path already uses.
+	 */
+	word = 0x5a5a5a5au;
+	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
+	dev_info(fmc->dev, "FMC: after the erase, rootfs_data begins 0x%08x (%s)\n", word,
+		 (err || got != 4) ? "read failed" : (word == 0xffffffffu ? "erased" : "STILL HOLDS DATA"));
 
 	memset(page, 0xff, part->writesize);
 	memcpy(page, marker, sizeof(marker));
