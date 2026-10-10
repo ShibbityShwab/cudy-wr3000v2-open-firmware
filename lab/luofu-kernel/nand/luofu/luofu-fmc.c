@@ -962,30 +962,29 @@ static int __init luofu_fmc_ubi_probe(void)
 						((u32)fmc->mtd->index & 0xfffu));
 
 			/*
-			 * SAMPLE FOUR OFFSETS INSIDE ONE PARTITION.
+			 * SAMPLE FOUR POINTS WITHIN **ONE PAGE**, which is where the fault showed up.
 			 *
-			 * The enumeration settled identity and refuted my last hypothesis together:
+			 * The previous sampling matched the vendor exactly at 0, 2048 and 4096 and
+			 * diverged only at 5128 - and 5128 is 1032 bytes into the SAME page as 4096.
+			 * So page_buf[0..32] is real and page_buf[1032..] is stale, which is the
+			 * signature of a SHORT PAGE COPY: the hardware or the copy fills only part
+			 * of the page and the rest is whatever the buffer held before.
 			 *
-			 *   FMC: mtd[0] esbc size=262144 off=0
-			 *        ... size=23068672 off=80216064   (0x1600000 at 0x4C80000)
+			 * These four offsets are all inside page 2 - 4096, +512, +1024, +1536 - so
+			 * the vendor's flash is all zeros at every one of them, and any non-zero
+			 * byte in our read marks exactly where the fill stops.
 			 *
-			 * CONFIG_MTD_OF_PARTS does not add partitions BESIDE the master - IT
-			 * RE-REGISTERS THE MASTER AS a set of partitions.  This driver's single MTD
-			 * is therefore replaced by the vendor's seventeen from the DT, the master is
-			 * no longer registered at all, and the index my crumb carried (0) was a stale
-			 * field on an unregistered struct - a number I reported as evidence and that
-			 * meant nothing.
-			 *
-			 * The partitions tile the flash exactly (0x6280000 + 0x1d80000 = 0x8000000),
-			 * so the master is full-size and the suspicion returns to where it started:
-			 * the page read.  What has never been measured is this driver's read at
-			 * several offsets WITHIN one partition, so that is what this does - 0, 2048,
-			 * 4096 and 5128 of rootfsb, each with its own err and retlen, parked in our
-			 * own coherent buffer for devmem to read.
+			 * page_size, writesize and the page-buffer allocation are all printed too,
+			 * since a mismatch between them would produce precisely this shape.
 			 */
-			static const u32 offs[4] = { 0, 2048, 4096, 5128 };
+			static const u32 offs[4] = { 4096, 4608, 5120, 5632 };
 			u8 buf[32];
 			int s;
+
+			pr_err("FMC: spec page_size=%u oob=%u block=%u ; page_buf=%u\n",
+			       fmc->spec.page_size, fmc->spec.oob_size,
+			       fmc->spec.block_size,
+			       fmc->mtd ? (unsigned)fmc->mtd->writesize : 0);
 
 			/* acquired here, released after the loop - the reads below need it */
 			part = get_mtd_device_nm("rootfsb");
