@@ -1613,13 +1613,28 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * the write path already uses.
 	 */
 	nblocks = div_u64(part->size, part->erasesize);
-	for (block = 0; block < nblocks; block += nblocks - 1) {
-		word = 0x5a5a5a5au;
-		err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
-		dev_info(fmc->dev, "FMC: after the erase, block %u of %u begins 0x%08x (%s)\n",
-			 block, nblocks - 1, word,
-			 (err || got != 4) ? "read failed" : (word == 0xffffffffu ? "erased" : "STILL HOLDS DATA"));
+	block = nblocks - 1;
+	memset(page, 0x5a, part->writesize);
+	err = mtd_write(part, (loff_t)block * part->erasesize, part->writesize, &got, page);
+	if (err) {
+		dev_info(fmc->dev, "FMC: erase self-test could not plant a pattern in block %u: %d\n", block, err);
+		kfree(page);
+		goto out;
 	}
+	word = 0;
+	err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
+	dev_info(fmc->dev, "FMC: erase self-test: block %u planted as 0x%08x\n", block, word);
+
+	memset(&ei, 0, sizeof(ei));
+	ei.addr = (u64)block * part->erasesize;
+	ei.len = part->erasesize;
+	err = mtd_erase(part, &ei);
+
+	word = 0;
+	err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
+	dev_info(fmc->dev, "FMC: erase self-test: block %u reads 0x%08x after erasing it (%s)\n", block, word,
+		 (err || got != 4) ? "read failed" :
+		 (word == 0xffffffffu ? "ERASE WORKS" : (word == 0x5a5a5a5au ? "ERASE DID NOTHING" : "something else")));
 
 	memset(page, 0xff, part->writesize);
 	memcpy(page, marker, sizeof(marker));
