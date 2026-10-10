@@ -1424,6 +1424,90 @@ static dma_addr_t luofu_diag_dma;
 static struct kmsg_dumper luofu_kmsg;
 static struct timer_list luofu_log_timer;
 
+/*
+ * WHY TWELVE BYTES HAVE TO BE WRITTEN BEFORE THE OVERLAY CAN EVER WORK.
+ *
+ * fstools does not mount an empty partition and does not format one. From its own source:
+ *
+ *     switch (volume_identify(data)) {
+ *     case FS_NONE:
+ *             ULOG_WARN("no usable overlay filesystem found, using tmpfs overlay\n");
+ *             return ramoverlay();
+ *
+ * and mtd_volume_identify() decides FS_NONE against FS_JFFS2 on exactly four bytes at offset 0:
+ *
+ *     sz = read(p->fd, &deadc0de, sizeof(deadc0de));
+ *     if (deadc0de == ~0) { ...ioctl(p->fd, MEMREADOOB, &oob); }
+ *     if (__be16_to_cpu(deadc0de) == 0x1985 || __be16_to_cpu(deadc0de >> 16) == 0x1985)
+ *             return FS_JFFS2;
+ *     return FS_NONE;
+ *
+ * An erased partition reads ffffffff, so it is FS_NONE, so the overlay is a tmpfs and every setting
+ * written at runtime dies with the next boot. Nothing in the shipped rootfs can fix that: OpenWrt has
+ * no mkfs at all, and the vendor's own driver cannot even erase this partition - "mtd write" against
+ * it returns an erase error. OUR driver can, and both its erase and its program paths are measured,
+ * with byte-identical read-back.
+ *
+ * So the first four bytes become 85 19, which is 0x1985 little-endian, and identify() answers
+ * FS_JFFS2. The twelve bytes written are a real JFFS2 cleanmarker - magic, nodetype, length and a
+ * valid hdr_crc - so the filesystem accepts the block rather than complaining about it.
+ *
+ * IT ONLY EVER WRITES AN UNTOUCHED PARTITION. If the first four bytes are anything but ff, there is
+ * already an overlay here and this returns without touching anything.
+ */
+static void luofu_jffs2_mark(struct luofu_fmc *fmc)
+{
+	static const u8 marker[12] = {
+		0x85, 0x19, 0x03, 0x20, 0x0c, 0x00, 0x00, 0x00, 0xd8, 0x6f, 0x3c, 0x81
+	};
+	struct erase_info ei;
+	struct mtd_info *part;
+	u8 *page;
+	u32 word = 0;
+	size_t got = 0;
+	int err;
+
+	part = get_mtd_device_nm("rootfs_data");
+	if (IS_ERR(part))
+		return;
+
+	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
+	if (err || got != 4 || word != 0xffffffffu) {
+		dev_info(fmc->dev, "FMC: rootfs_data already carries 0x%08x; leaving it alone\n", word);
+		goto out;
+	}
+
+	page = kzalloc(part->writesize, GFP_KERNEL);
+	if (!page)
+		goto out;
+
+	memset(&ei, 0, sizeof(ei));
+	ei.addr = 0;
+	ei.len = part->erasesize;
+	err = mtd_erase(part, &ei);
+	if (err) {
+		dev_info(fmc->dev, "FMC: could not erase rootfs_data block 0: %d\n", err);
+		kfree(page);
+		goto out;
+	}
+
+	memset(page, 0xff, part->writesize);
+	memcpy(page, marker, sizeof(marker));
+	err = mtd_write(part, 0, part->writesize, &got, page);
+	kfree(page);
+	if (err) {
+		dev_info(fmc->dev, "FMC: could not write the jffs2 marker: %d\n", err);
+		goto out;
+	}
+
+	word = 0;
+	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
+	dev_info(fmc->dev, "FMC: wrote the jffs2 marker; read back 0x%08x (%s)\n",
+		 word, (word != 0xffffffffu && (word & 0xffff) == 0x1985) ? "identifies as FS_JFFS2" : "NOT the magic");
+out:
+	put_mtd_device(part);
+}
+
 static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
@@ -1474,6 +1558,8 @@ static int __init luofu_fmc_ubi_probe(void)
 			 part->index, fmc->mtd->index);
 		put_mtd_device(part);
 	}
+
+	luofu_jffs2_mark(fmc);
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
