@@ -64,6 +64,36 @@ jobs:
           done
           ls -l out
 
+      - name: how does OpenWrt itself find or make this volume?
+        run: |
+          set -eux
+          echo "=== the tools it has for making filesystems ==="
+          ls -l root/sbin/mkfs.* root/usr/sbin/mkfs.* 2>/dev/null || echo "(no mkfs.* in the image)"
+          ls -l root/sbin/*fs* root/usr/sbin/*fs* 2>/dev/null || true
+          echo
+          echo "=== where mount_root lives ==="
+          ls -l root/sbin/mount_root root/etc/preinit root/lib/preinit 2>/dev/null || true
+          echo
+          echo "=== the UBI/overlay logic, as the scripts state it ==="
+          for f in root/sbin/mount_root root/lib/functions/*.sh root/lib/preinit/* ; do
+            [ -f "$f" ] || continue
+            if grep -l -iE 'ubifs|rootfs_data|overlay|f2fs|jffs2' "$f" >/dev/null 2>&1; then
+              echo "---- $f"
+              grep -n -iE 'ubifs|rootfs_data|overlay|f2fs|jffs2|mkfs|format' "$f" | head -40
+            fi
+          done
+          echo
+          echo "=== and the strings inside the fstools library, which does the real work ==="
+          for lib in root/lib/libfstools.so* ; do
+            [ -f "$lib" ] || continue
+            echo "-- $lib"
+            strings -a "$lib" | grep -iE 'rootfs_data|ubifs|f2fs|jffs2|mkfs|format|switch|overlay' | sort -u | head -40
+          done
+          echo
+          echo "=== /lib/upgrade + any image-metadata that names the overlay device ==="
+          ls root/lib/upgrade 2>/dev/null | head
+          grep -rn -iE 'rootfs_data' root/etc root/lib 2>/dev/null | head -20 || true
+
       - name: what the compiler actually required
         run: |
           set -eux
