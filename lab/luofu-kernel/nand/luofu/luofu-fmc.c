@@ -725,23 +725,43 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	writel(1, fmc->regs + FMC_DATA_NUM);
 
 	/*
-	 * INTERRUPT-DRIVEN COMPLETION - ATTEMPTED AND REVERTED.
+	 * THE VENDOR'S INTERRUPT-DRIVEN COMPLETION - WITH THE ENABLE IT NEEDS.
 	 *
-	 * The vendor's real page read (hi_spi_nand_drv_dma_read) waits on the DMA
-	 * completion interrupt rather than a busy bit, and that is very likely the
-	 * remaining difference. But copying that in broke the path outright: with
-	 * FMC_INT_CLR written before the operation, the busy bit never asserted and the
-	 * probe died at step 8 with LUOFU_RPT_FAIL(8).
+	 * hi_spi_nand_drv_dma_read does not poll a busy bit at all:
 	 *
-	 * So the sequence needs more than the two registers this attempt used - the
-	 * vendor also calls hi_fmc_en_interrupt(1) before the operation and (0) after,
-	 * which is FMC_INT_EN at 0x1c, and it does NOT rely on the busy bit at all.
-	 * That is the next thing to implement, deliberately and on its own, rather than
-	 * folded in beside another change.
+	 *     hi_fmc_clr_interrupt()
+	 *     hi_fmc_en_interrupt(1)          <- ENABLED FIRST
+	 *     bl  #0x2d80                     <- the operation
+	 *     hi_fmc_int_status_get()         <- then the interrupt is waited on
+	 *     hi_fmc_en_interrupt(0)
+	 *     hi_fmc_clr_interrupt()
+	 *
+	 * The first attempt at this wrote only FMC_INT_CLR and FMC_INT_STATUS and broke
+	 * the read outright - the probe died at step 8 with the busy bit never
+	 * asserting. THE MISSING PIECE WAS THE ENABLE: without FMC_INT_EN set, the
+	 * controller's completion machinery is off, which is why nothing behaved.
+	 *
+	 * So: enable, clear, start, wait for the completion bit, disable, clear. The busy
+	 * polls stay afterwards as a second confirmation rather than the only one.
 	 */
+	writel(1, fmc->regs + FMC_INT_EN);
+	writel(1, fmc->regs + FMC_INT_CLR);
+
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
+
+	for (i = 0; i < FMC_CMD_POLLS; i++) {
+		if (readl(fmc->regs + FMC_INT_STATUS) & 1)
+			break;
+		udelay(1);
+	}
+
+	if (i == FMC_CMD_POLLS)
+		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
+
+	writel(0, fmc->regs + FMC_INT_EN);
+	writel(1, fmc->regs + FMC_INT_CLR);
 
 	/*
 	 * WAIT FOR BUSY TO ASSERT, THEN FOR IT TO CLEAR - two phases, not one.
