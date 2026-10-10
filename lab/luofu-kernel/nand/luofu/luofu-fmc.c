@@ -1347,13 +1347,13 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 */
 	p = get_mtd_device_nm("rootfs_data");
 	if (IS_ERR(p)) {
-		dev_info(&fmc->dev, "FMC: no rootfs_data partition (%ld)\n", PTR_ERR(p));
+		dev_info(fmc->dev, "FMC: no rootfs_data partition (%ld)\n", PTR_ERR(p));
 	} else {
 		u8 h[8] = {0};
 		size_t got = 0;
 		int rr = mtd_read(p, 0, sizeof(h), &got, h);
 
-		dev_info(&fmc->dev,
+		dev_info(fmc->dev,
 			 "FMC: rootfs_data is mtd%d size=%llx read=%d got=%zu: %02x %02x %02x %02x %02x %02x %02x %02x\n",
 			 p->index, (unsigned long long)p->size, rr, got,
 			 h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
@@ -1362,7 +1362,7 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 
 	p = get_mtd_device_nm("upgrade");
 	if (!IS_ERR(p)) {
-		dev_info(&fmc->dev, "FMC: upgrade is mtd%d, and the master is mtd%d\n",
+		dev_info(fmc->dev, "FMC: upgrade is mtd%d, and the master is mtd%d\n",
 			 p->index, mtd->index);
 		put_mtd_device(p);
 	}
