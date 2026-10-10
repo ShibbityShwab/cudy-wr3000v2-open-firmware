@@ -222,6 +222,27 @@ CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_UBIFS_FS=y
 CONFIG_SQUASHFS=y
+
+# ---------------------------------------------------------------------------
+# SQUASHFS: DIRECT, NOT FILE_CACHE.
+#
+# THE VENDOR'S 5.10.201 KERNEL MOUNTS OUR OPENWRT IMAGE - WITH ITS XZ - FROM THE SAME
+# /dev/mtdblock16, WHICH PROVES THE IMAGE, THE FLASH AND THE COMPRESSION ARE ALL SOUND.
+# Our kernel does not: it takes a data abort inside vfs_get_tree <- mount_block_root and
+# panics. So the difference is in this kernel.
+#
+# FILE_CACHE allocates a decompression buffer of BLOCK_SIZE PER OPEN FILE. The OpenWrt
+# image uses 256 KiB blocks, so each open file costs a 256 KiB contiguous allocation and
+# a mount that walks the tree makes several at once. FILE_DIRECT reads into the page
+# cache instead and allocates nothing on that path - which is what a memory-constrained
+# ARM board wants, and the likeliest reason the vendor's kernel takes this image happily.
+#
+# It is also the one setting whose absence shows up as a fault DURING THE MOUNT rather
+# than as a clean error: an allocation failure inside the mount path is exactly where a
+# data abort in vfs_get_tree comes from.
+CONFIG_SQUASHFS_FILE_DIRECT=y
+# CONFIG_SQUASHFS_FILE_CACHE is not set
+
 CONFIG_FW_LOADER=y
 
 # ---------------------------------------------------------------------------

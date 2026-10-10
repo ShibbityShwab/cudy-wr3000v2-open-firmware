@@ -1421,6 +1421,23 @@ late_initcall_sync(luofu_fmc_ubi_probe);
 
 static void luofu_console_write(struct console *co, const char *s, unsigned int n);
 
+/*
+ * SET BY THE DUMPER, HONOURED BY THE CONSOLE.
+ *
+ * kmsg_dump() runs INSIDE panic() BEFORE the notifier chain, so luofu_kmsg_to() gets
+ * the complete log and writes it into the ring. But the console hook is still
+ * registered and printk keeps calling it for everything panic() and the rest of the
+ * death path print afterwards - AND IT WAS OVERWRITING THE DUMP WITH ITS OWN FILTERED
+ * TEXT. That is why the last fire's ring held the driver's own probe lines and one
+ * stale userspace line, and NOT ONE WORD of the panic: the dumper had already written
+ * "Unable to handle kernel paging request ..." and the console had written over it.
+ *
+ * The dumper runs first and sets this; the console checks it and stops. The ring's
+ * final content is therefore the complete, unfiltered log, ending in whatever the
+ * kernel said on the way down.
+ */
+static bool luofu_log_frozen;
+
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 {
 	static char line[256];
@@ -1429,6 +1446,9 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 
 	if (!p)
 		return;
+
+	/* THE CONSOLE STOPS HERE - see luofu_log_frozen. */
+	luofu_log_frozen = true;
 
 	/* the mark first, so a reader can tell "ran" from "never ran" */
 	memcpy(p, &mark, sizeof(mark));
@@ -1502,23 +1522,6 @@ static struct timer_list luofu_reboot_timer;
  * CON_PRINTBUFFER also hands it everything printed before registration, which is
  * exactly the boot-time text wanted.
  */
-static bool luofu_wanted_chunk(const char *s, unsigned int n)
-{
-	static const char *const keep[] = { "ubi", "FMC" };
-	unsigned int i, k;
-
-	for (k = 0; k < ARRAY_SIZE(keep); k++) {
-		const char *w = keep[k];
-		unsigned int wl = strlen(w);
-
-		for (i = 0; i + wl <= n; i++) {
-			if (!strncmp(s + i, w, wl))
-				return true;
-		}
-	}
-
-	return false;
-}
 
 static void luofu_console_write(struct console *co, const char *s, unsigned int n)
 {
@@ -1529,23 +1532,22 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 	if (!p)
 		return;
 
-	/*
-	 * KEEP ONLY UBI'S OWN OUTPUT, and the reason is a measurement rather than a
-	 * preference: the ring is 512 bytes, which is roughly eight messages, and a
-	 * whole boot passes between UBI's attach attempt at late_initcall and the
-	 * panic that follows the failed mount.  Everything UBI said was therefore long
-	 * overwritten by the time the panic notifier could copy it out - which is why
-	 * every reading so far showed the attach FAILING without showing WHICH CHECK
-	 * failed, even though UBI prints exactly that line.
-	 *
-	 * UBI's messages are few, so a ring of only those holds all of them, including
-	 * the specific reason, no matter how long the boot runs afterwards.  The
-	 * match is deliberately loose - any chunk containing "ubi" case-insensitively -
-	 * because printk may hand a message over in more than one piece and the pieces
-	 * around the keyword carry the detail.
-	 */
-	if (!luofu_wanted_chunk(s, n))
+	if (luofu_log_frozen)
 		return;
+
+	/*
+	 * THE FILTER IS GONE, AND SO IS THE REASON FOR IT.
+	 *
+	 * It kept only chunks containing "ubi" or "FMC" because the ring was 512 bytes -
+	 * about eight messages - and a whole boot's other output would have evicted the
+	 * one line that said why the attach failed. The ring is 16 KiB now and circular,
+	 * so keeping everything means the ring holds the NEWEST 16 KiB of the boot no
+	 * matter how much is printed. That is strictly more useful: the mount, the init,
+	 * the panic's own trace, and the lines either side of every error.
+	 *
+	 * The dumper's copy is unfiltered as well, so a panic now writes the complete
+	 * log and then freezes this hook.
+	 */
 
 	if (off == 4)
 		memcpy(p, &mark, sizeof(mark));
