@@ -1101,6 +1101,7 @@ static int __init luofu_fmc_ubi_probe(void)
 				22528 + 2032, 22528 + 2036, 22528 + 2040, 22528 + 2044,
 			};
 			u32 map[16];
+			u32 regs_before = 0;
 			int s;
 
 			if (fmc->mtd)
@@ -1111,6 +1112,19 @@ static int __init luofu_fmc_ubi_probe(void)
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part))
 				return 0;
+
+			/*
+			 * HOW MANY BYTES DOES ONE PAGE READ ACTUALLY TRANSFER?
+			 *
+			 * 0x38 (FMC_DATA_NUM) reads 4128 both in builds that write to it and in
+			 * builds that do not, so it is untouched by writing - and that makes it
+			 * usable: its DELTA across a single read is exactly what the controller
+			 * moved. If the delta is 2048 the page really is one truncated transfer
+			 * and the spare must come from elsewhere; if it is larger, the bytes are
+			 * arriving and the copy is dropping them.
+			 */
+			if (fmc->regs)
+				regs_before = readl(fmc->regs + 0x38);
 
 			for (s = 0; s < 16; s++) {
 				u32 v = 0;
@@ -1123,6 +1137,11 @@ static int __init luofu_fmc_ubi_probe(void)
 
 			if (luofu_diag_buf) {
 				u32 *regs = (u32 *)(luofu_diag_buf + 128);
+
+				if (fmc->regs) {
+					regs[12] = regs_before;
+					regs[13] = readl(fmc->regs + 0x38);
+				}
 
 				memcpy(luofu_diag_buf, map, sizeof(map));
 
