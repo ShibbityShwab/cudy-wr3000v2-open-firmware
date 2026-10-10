@@ -1886,12 +1886,34 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 * notifier is the LAST thing to touch the crumb, so this is the value that
 	 * survives to be read.
 	 */
+	/*
+	 * THE WALK NEEDS dumper->active, AND kmsg_dump() HAS JUST CLEARED IT.
+	 *
+	 * kmsg_dump_get_line_nolock() opens with `if (!dumper->active) goto out;`, and
+	 * kmsg_dump() sets active on its way INTO a callback and CLEARS IT AGAIN ON THE WAY OUT.
+	 * This notifier runs from the panic notifier chain, which panic() calls AFTER kmsg_dump()
+	 * has returned - so active is false, the walk produces NOTHING, and the ring keeps
+	 * whatever an earlier boot left there.  That is why a panicking boot and a stale boot look
+	 * identical from devmem.
+	 *
+	 * The timer sets it by hand for the same reason. So does this now.
+	 */
+	luofu_kmsg.active = true;
+	luofu_log_frozen = true;
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_kmsg.active = false;
+
+	/*
+	 * AND THE CRUMB GOES AFTER THE WALK, NOT BEFORE.
+	 *
+	 * It used to be written first, which made its line count meaningless - luofu_log_lines is
+	 * only set by the walk, so a crumb written before it always reported zero lines and I read
+	 * that as an empty log.  After the walk the number is real.
+	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				(luofu_log_ticks << 16) | (luofu_log_lines & 0xffff));
 
-	luofu_log_frozen = true;
-	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
 	return NOTIFY_DONE;
