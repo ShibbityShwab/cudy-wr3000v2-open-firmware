@@ -250,20 +250,7 @@
 #define LUOFU_SPEC_WR_CMD	0x30
 #define LUOFU_SPEC_WR_DUMMY	0x31
 
-/*
- * THE SPLICE, NOW COMBINED WITH THE VENDOR'S SINGLE-DESTINATION FLOW.
- *
- * The two have never been tested together. With three destinations armed - the
- * original wiring - the window measured 14 bytes and UBI accepted 117 records
- * before refusing. With one destination it measures 12, sits at a different
- * offset, and UBI refuses at record 6. So the destination count changes the
- * window without being the whole of it, and the de-interleave that removed it
- * was removed at the same time as the destinations - never evaluated with them.
- *
- * 1040 and 14 remain the measured pair from the original fit.
- */
-#define LUOFU_DMA_SPLICE_OFF	1040u
-#define LUOFU_DMA_SPLICE_LEN	14u
+
 
 
 
@@ -752,28 +739,20 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			ret = -ETIMEDOUT;
 		} else {
 			/*
-			 * DE-INTERLEAVE, WITH THE VENDOR'S SINGLE DESTINATION STILL ARMED.
+			 * A PLAIN COPY - THE HARDWARE DOES NOT SPLICE.
 			 *
-			 * The plain copy was tried alone and the window is still there - 12 bytes
-			 * where the three-destination build measured 14 - so the destination count
-			 * changes the window without being the whole of it.  The de-interleave
-			 * that removes it has never run in this configuration.
+			 * Read live at its own destination, the vendor's raw DMA buffer holds the
+			 * record CRCs at exactly the offsets its logical page does:
 			 *
-			 * The second copy reaches page_size + SPLICE_LEN in the source, because
-			 * the page's last bytes live beyond a bare page_size in the staging buffer.
-			 * With only ONE destination armed the controller may now deposit them,
-			 * which the earlier sentinel test could not have seen: that test ran with
-			 * three destinations armed, the very wiring being changed here.
+			 *   f116c36b in LOGICAL page 3: [12, 184, ... 1044, 1216, ...]
+			 *   f116c36b in RAW     page 3: [1044]
+			 *
+			 * 172 bytes apart, the record length, and the raw agrees. THERE IS NO SPLICE
+			 * IN THE HARDWARE'S OUTPUT. The de-interleave this driver has carried was
+			 * compensating for a defect of its own - and it is why the page loses its
+			 * last fourteen bytes, because the copy skipped them.
 			 */
-		if (fmc->spec.page_size == 2048) {
-			memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
-			memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
-				      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
-				      LUOFU_DMA_SPLICE_LEN,
-				      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
-		} else {
-			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
-		}
+		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
 		ret = 0;
 		}
 	}
@@ -1909,6 +1888,22 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		dev_warn(dev, "FMC: could not set the 32-bit DMA mask\n");
 
 	fmc->dma_buf = dmam_alloc_coherent(dev, 0x2200, &fmc->dma_addr, GFP_KERNEL);
+
+	/*
+	 * THE THREE DESTINATIONS, ONCE - the way the vendor sets them.
+	 *
+	 * Its live block shows all three programmed (D0 = 0x820e0000, D1 = 0x820e1000,
+	 * OOB = 0x820e2000) and its before/after read shows NONE of them changing per
+	 * read: only ADDRL moves. So they are configured once and left alone.
+	 *
+	 * This driver wrote them on EVERY read, which is an extra register write in the
+	 * middle of the operation sequence that the working implementation does not
+	 * make.
+	 */
+	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(fmc->dma_addr + 0x1000, fmc->regs + FMC_SADDR_D1);
+	writel(fmc->dma_addr + 0x2000, fmc->regs + FMC_SADDR_OOB);
+
 	if (!fmc->dma_buf) {
 		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
 		return -ENOMEM;
