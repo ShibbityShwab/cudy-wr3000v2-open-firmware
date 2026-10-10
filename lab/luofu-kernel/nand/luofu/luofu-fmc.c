@@ -627,8 +627,16 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 *
 	 * This is a correctness fix regardless of the mechanism: a read must never
 	 * return bytes the device did not produce.
+	 *
+	 * AND IT MUST COVER THE WHOLE SOURCE WINDOW, NOT JUST THE PAGE. The copy below
+	 * reads page_size + LUOFU_DMA_SPLICE_LEN bytes out of the staging buffer,
+	 * because the splice pushes the tail 14 bytes further along. Zeroing only
+	 * page_size leaves those last 14 bytes holding the PREVIOUS read's data, and
+	 * they land in the last 14 bytes of the page returned to the caller. That is
+	 * precisely what record 118 showed: UBI computed the correct 0xf116c36b from
+	 * the flash and read a stored 0xf1160000, the final two bytes stale.
 	 */
-	memset(fmc->dma_buf, 0, fmc->spec.page_size);
+	memset(fmc->dma_buf, 0, fmc->spec.page_size + LUOFU_DMA_SPLICE_LEN);
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
