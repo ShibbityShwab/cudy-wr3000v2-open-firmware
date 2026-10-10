@@ -610,10 +610,30 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * the transfer size is geometry rather than a per-read length, and its
 	 * single-page transfer produces a COMPLETE page.
 	 */
-	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
-
-	writel(row >> 16, fmc->regs + FMC_ADDRH);
+		/*
+	 * THE VENDOR'S EXACT ORDER, from hi_sfc_hw_dma_read:
+	 *
+	 *   str r1, [r0, #0x2c]   ADDRL
+	 *   str r1, [r0, #0x28]   ADDRH
+	 *   str r3, [r0, #0x4c]   SADDR_D0
+	 *   str r2, [r0, #0x40]   DMA_LEN
+	 *   str r1, [r0, #0x30]   OP_CFG
+	 *   dsb ; arm_heavy_mb
+	 *   str r3, [r5, #0x68]   OP_CTRL
+	 *
+	 * AND ITS DMA_LEN HOLDS 1 - its LIVE register says so - one page as a count
+	 * rather than a byte length. Writing 2080 there was a request expressed in units
+	 * the hardware does not use, which is why it changed nothing.
+	 *
+	 * AND THE RAW EVIDENCE THAT THE ORDER MATTERS: reading the vendor's own DMA
+	 * destination (SADDR_D0 = 0x8207c000) while its kernel runs shows its output IS
+	 * the logical page - f1 16 c3 6b at offset 2032, no splice, untouched past 2048.
+	 * The hardware can deliver a clean page; this driver's sequence is what does not.
+	 */
 	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(row >> 16, fmc->regs + FMC_ADDRH);
+	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(1, fmc->regs + FMC_DMA_LEN);
 
 	op_cfg = luofu_fmc_cs_field(fmc) |
 		 ((u32)(fmc->spec.rd_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
