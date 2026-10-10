@@ -265,8 +265,6 @@
  *
  * 1040 and 14 are the measured pair.
  */
-#define LUOFU_DMA_SPLICE_OFF	1040u
-#define LUOFU_DMA_SPLICE_LEN	14u
 
 
 
@@ -589,15 +587,33 @@ static int luofu_fmc_quad_enable(struct luofu_fmc *fmc)
  */
 static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 {
-	u8 saved = luofu_fmc_ecc_type_get(fmc);
 	u32 op_cfg, op_ctrl;
 	int i, ret;
 
 	if (!fmc->dma_buf)
 		return -ENOMEM;
 
-	luofu_fmc_ecc_type_set(fmc, 0);
-
+	/*
+	 * THE ECC ENGINE STAYS ON FOR A PAGE READ - AND THAT IS THE WHOLE FIX.
+	 *
+	 * This function used to open with luofu_fmc_ecc_type_set(fmc, 0) and restore
+	 * afterwards, copied by analogy from the ID and feature paths - where disabling it
+	 * IS right, because those are single-byte transfers the ECC engine must not touch
+	 * (the comment above luofu_fmc_get_feature says exactly that).
+	 *
+	 * WITH ECC DISABLED THE CONTROLLER EMITS THE RAW STREAM: the page's data with its
+	 * spare area spliced inline. That is the 14-byte window at offset 1040 this driver
+	 * has been de-interleaving out, and it is why the page lost its last 14 data bytes -
+	 * the spare had displaced them.
+	 *
+	 * AND THE VENDOR'S PAGE READ NEVER TOUCHES THE ECC TYPE. hi_spi_nand_hw_read
+	 * writes five registers - ADDRH, ADDRL, SADDR_D0, OP_CFG, OP_CTRL - and no FMC_CFG
+	 * write at all, so its reads run with the ECC engine in whatever state init left
+	 * it. Its raw buffer is clean because the engine stripped the spare.
+	 *
+	 * So the engine is left alone here, and the copy below is plain: the output is
+	 * already the page.
+	 */
 	/*
 	 * ONLY SADDR_D0, THE WAY THE VENDOR DOES IT.
 	 *
@@ -672,7 +688,7 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * return bytes the device did not produce.
 	 *
 	 * AND IT MUST COVER THE WHOLE SOURCE WINDOW, NOT JUST THE PAGE. The copy below
-	 * reads page_size + LUOFU_DMA_SPLICE_LEN bytes out of the staging buffer,
+	 * reads the page out of the staging buffer,
 	 * because the splice pushes the tail 14 bytes further along. Zeroing only
 	 * page_size leaves those last 14 bytes holding the PREVIOUS read's data, and
 	 * they land in the last 14 bytes of the page returned to the caller. That is
@@ -786,19 +802,9 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			 * read path, THIS driver's raw buffer carries a 14-byte splice at 1040, and
 			 * removing it here corrupts every record from the sixth on.
 			 */
-		if (fmc->spec.page_size == 2048) {
-			memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
-			memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
-				      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
-				      LUOFU_DMA_SPLICE_LEN,
-				      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
-		} else {
-			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
-		}
+		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
 		ret = 0;
 	}
-
-	luofu_fmc_ecc_type_set(fmc, saved);
 
 	return ret;
 }
