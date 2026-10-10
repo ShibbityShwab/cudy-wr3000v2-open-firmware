@@ -1462,6 +1462,12 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * newest lines rather than the oldest.
  */
 #define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB, inside the 4 KiB that lands */
+
+/*
+ * AND A SCRATCH BUFFER TO SLIDE IN, so the window is filled between lines rather than
+ * inside one - see luofu_kmsg_to.
+ */
+#define LUOFU_LOG_SCRATCH	0x4000		/* 16 KiB of lines, newest kept */
 #define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
@@ -1607,24 +1613,13 @@ static void luofu_stamp(u32 slot, u32 value)
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 {
 	static char line[256];
-	size_t len, off = 4;
+	static char scratch[LUOFU_LOG_SCRATCH];
+	size_t len, off = 4, s = 0;
 	u32 mark = LUOFU_LOG_MARK;
 
 	if (!p)
 		return;
 
-	/*
-	 * ZERO THE WINDOW FIRST, SO WHAT IS READ IS ONLY WHAT WAS WRITTEN.
-	 *
-	 * The last fire's text was legible but cut apart: stack frames spliced through by stale
-	 * fragments, "Zone rangrom [<c0708c50>]" where two different lines overlapped. The ring is
-	 * 16 KiB of fixed memory that nothing clears between boots, and the dump only rewrites the
-	 * first 3.5 KiB of it - so anything the previous contents left behind shows through.
-	 *
-	 * AN EARLIER ATTEMPT TO WRITE AT REGISTRATION KILLED THE BOOT, and that is why this is here
-	 * and not there: this function now runs only from the panic path and the 5-second tick, and
-	 * the panic path is terminal. Zeroing here cannot shorten a boot that is already over.
-	 */
 	memset(p, 0, LUOFU_LOG_KEEP);
 	memcpy(p, &mark, sizeof(mark));
 
@@ -1638,28 +1633,56 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 			len = sizeof(line) - 1;
 
 		/*
-		 * STOP AT LUOFU_LOG_KEEP BYTES, AND KEEP THE NEWEST BY COPYING OVER THE OLDEST.
+		 * A SCRATCH BUFFER, SO THE SLIDE HAPPENS BETWEEN LINES AND NOT INSIDE ONE.
 		 *
-		 * The ring's non-zero span has been 4152 bytes on every fire - 4 KB of text and
-		 * twelve of zeros - while the walk reports 205 lines. That is a write that starts
-		 * and then stops, and the boundary is suspiciously close to one page. Whether the
-		 * region past it is mapped, writable, or simply faults, the way to find out is to
-		 * never go there: cap the ring buffer the dumper actually writes to, and slide it
-		 * so the NEWEST lines survive instead of the oldest.
+		 * The window used to be written directly and slid with off = 4 whenever the next line
+		 * would not fit. That cuts a line in half and splices the newest text into the middle
+		 * of the oldest - which is what the last fire showed: six apparent "wraps" inside one
+		 * 3.5 KiB window, each between a late timestamp and 0.000000, and a kernel warning
+		 * whose header was visible while its body was chopped into fragments.
 		 *
-		 * The panic is at the END of the log, which is exactly what sliding keeps.
+		 * So lines accumulate here first. When the scratch fills, the oldest HALF is dropped,
+		 * moved down, and the cut is moved forward to the next newline - so every byte that
+		 * reaches the window is a whole line, and the newest lines are the ones that survive.
 		 */
-		if (off + len + 1 > LUOFU_LOG_KEEP)
-			off = 4;
+		if (s + len + 1 > sizeof(scratch)) {
+			size_t keep_from = sizeof(scratch) / 2;
 
-		memcpy(p + off, line, len);
-		off += len;
-		*(char *)(p + off) = '\n';
-		off++;
+			while (keep_from < s && scratch[keep_from] != '\n')
+				keep_from++;
+
+			if (keep_from < s)
+				keep_from++;
+
+			memmove(scratch, scratch + keep_from, s - keep_from);
+			s -= keep_from;
+		}
+
+		memcpy(scratch + s, line, len);
+		s += len;
+		scratch[s++] = '\n';
+	}
+
+	/*
+	 * AND ONLY THE TAIL REACHES THE RING, STARTING AT A LINE BOUNDARY.
+	 */
+	{
+		size_t start = s > LUOFU_LOG_KEEP - 4 ? s - (LUOFU_LOG_KEEP - 4) : 0;
+
+		if (start) {
+			while (start < s && scratch[start] != '\n')
+				start++;
+			if (start < s)
+				start++;
+		}
+
+		memcpy(p + off, scratch + start, s - start);
+		off += s - start;
 	}
 
 	*(char *)(p + (off < LUOFU_LOG_KEEP ? off : LUOFU_LOG_KEEP - 1)) = 0;
 }
+
 static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 			    enum kmsg_dump_reason reason)
 {
