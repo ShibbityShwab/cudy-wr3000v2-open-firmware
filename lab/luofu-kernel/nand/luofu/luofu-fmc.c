@@ -915,6 +915,20 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 }
 
 /*
+ * STEP 47: THE FIRST WRITE REPORTING ON ITSELF - the mismatch count and the recipe it used.
+ * See luofu_fmc_write_page for the encoding and for why it exists.
+ */
+#define LUOFU_LOG_WRITE_STEP	47
+
+/*
+ * AND THE GUARD LIVES UP HERE, ABOVE EVERY USE OF IT.  The checker named this edit's three
+ * ordering mistakes in one pass - this variable, luofu_ubi_fmc, and the step define - and it is
+ * the same class that has cost this project more than any other: a build that is four minutes
+ * long is a slow way to learn that a name appears before it is declared.
+ */
+static bool luofu_write_tested;
+
+/*
  * ------------------------------------------------------------------ *
  * THE WRITE PATH.  ITS SEQUENCES ARE NOT GUESSES.                     *
  * ------------------------------------------------------------------ *
@@ -972,13 +986,21 @@ static int luofu_fmc_wait_ready(struct luofu_fmc *fmc)
 	u8 v;
 	int i, ret;
 
+	/*
+	 * AND THIS POLLS WITH udelay, NOT usleep_range, BECAUSE ITS CALLERS HOLD A SPINLOCK WITH
+	 * INTERRUPTS OFF.  usleep_range() sleeps, and sleeping under spin_lock_irqsave() is
+	 * "scheduling while atomic" - the reset path can afford usleep_range because it runs from
+	 * probe in process context, but a write or an erase arrives through the MTD core with the
+	 * lock held.  A NAND program or erase completes in well under a millisecond, so a 100 us
+	 * spin is the right shape here anyway.
+	 */
 	for (i = 0; i < FMC_READY_POLLS; i++) {
 		ret = luofu_fmc_get_feature_raw(fmc, SPINAND_FEAT_STATUS, &v);
 		if (ret)
 			return ret;
 		if (!(v & BIT(0)))
 			return 0;
-		usleep_range(FMC_READY_DELAY_US, FMC_READY_DELAY_US * 2);
+		udelay(100);
 	}
 
 	dev_err(fmc->dev, "FMC: program/erase never finished\n");
@@ -1049,6 +1071,50 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	}
 
 	ret = luofu_fmc_wait_ready(fmc);
+	if (ret)
+		return ret;
+
+	/*
+	 * AND THEN THE FIRST WRITE PROVES ITSELF, BECAUSE A SILENT NO-OP LOOKED EXACTLY LIKE A
+	 * SUCCESSFUL WRITE.
+	 *
+	 * The fire that made UBIFS format this volume reported no error from this driver at all -
+	 * the completion interrupt fired, the ready poll came back clear - AND NOT ONE BYTE OF THE
+	 * FLASH CHANGED:
+	 *
+	 *     non-0xff bytes in the first 4 KiB of rootfs_data: 0
+	 *
+	 * So every stage of the sequence "succeeded" without writing.  This reads the page straight
+	 * back through the read path - the one that is known good, since the rootfs mounts through
+	 * it - counts the differing bytes, and puts the count in a crumb next to the recipe values
+	 * this write actually used.  One fire then says whether the command, the address, the
+	 * interface type or the OOB destination is the piece that is wrong.
+	 *
+	 *     C18 = 0xC0DE502F
+	 *     C1C = (mismatches << 24) | (wr_cmd << 16) | (wr_if_type << 13) |
+	 *           (wr_addr_cyc << 10) | (wr_dummy << 6)
+	 */
+	if (!luofu_write_tested) {
+		u32 mism = 0, i2;
+
+		luofu_write_tested = true;
+
+		memset(fmc->page_buf, 0, fmc->spec.page_size);
+		if (luofu_fmc_read_page(fmc, row, fmc->page_buf) == 0) {
+			for (i2 = 0; i2 < fmc->spec.page_size; i2++)
+				if (((const u8 *)fmc->page_buf)[i2] != ((const u8 *)fmc->dma_buf)[i2])
+					mism++;
+		} else {
+			mism = 0xffffffff;
+		}
+
+		luofu_fmc_crumb(fmc, LUOFU_LOG_WRITE_STEP,
+				((mism & 0xffu) << 24) |
+				(((u32)fmc->spec.wr_cmd & 0xffu) << 16) |
+				(((u32)fmc->spec.wr_if_type & 7u) << 13) |
+				(((u32)fmc->spec.wr_addr_cyc & 7u) << 10) |
+				(((u32)fmc->spec.wr_dummy & 0xfu) << 6));
+	}
 
 	return ret;
 }
