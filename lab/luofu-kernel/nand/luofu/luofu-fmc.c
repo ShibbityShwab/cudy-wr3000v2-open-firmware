@@ -106,6 +106,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/genhd.h>
 #include <linux/io.h>
+#include <linux/string.h>
 #include <linux/console.h>
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
@@ -583,6 +584,31 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 
 	op_ctrl = ((u32)fmc->spec.rd_cmd << 16) | 1;
 
+	/*
+	 * CLEAR THE STAGING BUFFER BEFORE THE READ, because the controller does not
+	 * write every byte of a page.
+	 *
+	 * The page map settled it: sampling four bytes every sixteen across page 2 and
+	 * diffing against the vendor's own mtd14, 26 of 128 samples differ - and EVERY
+	 * differing sample is a place where the flash holds ZEROS.  Where the flash has
+	 * data, this driver matches it.  Worse, a whole run at 1664..1791 carries the
+	 * 66CC pattern of RAM that was never written at all: the staging buffer holding
+	 * whatever the allocation contained, handed out as flash content.
+	 *
+	 * So the hardware leaves zero regions unwritten, and every read returns
+	 * whatever was in the buffer there.  Zeroing first makes those bytes read as
+	 * zeros - which is what the flash actually holds.  It also explains the EC
+	 * scan's 32 of 32: its 64-byte reads at offset 0 sit in a region the controller
+	 * always fills.
+	 *
+	 * BEFORE the operation is started, not after - doing it afterwards would wipe
+	 * the very data the controller just deposited.
+	 *
+	 * This is a correctness fix regardless of the mechanism: a read must never
+	 * return bytes the device did not produce.
+	 */
+	memset(fmc->dma_buf, 0, fmc->spec.page_size);
+
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
@@ -593,18 +619,7 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * The original loop broke as soon as BUSY read CLEAR, and immediately after
 	 * the operation is started the hardware has not set it yet - so the loop could
 	 * exit on its very first iteration and memcpy_fromio() would copy the buffer
-	 * WHILE THE DMA WAS STILL FILLING IT.
-	 *
-	 * That is exactly what the measurements show: a bad window at a CONSISTENT
-	 * in-page offset on every page (the timing is deterministic, so the copy always
-	 * outruns the DMA at the same point) whose CONTENT DIFFERS between pages (it is
-	 * whatever the DMA had managed to write by then).  A fixed fill length would
-	 * cut every page identically and a fixed collision would leave identical stale
-	 * bytes - neither of which is what was observed.
-	 *
-	 * So: wait for BUSY to appear, then wait for it to clear, and only then copy.
-	 * If BUSY never appears the controller never started, which is a real fault and
-	 * reports as one instead of silently copying stale memory.
+	 * while the DMA was still filling it.
 	 */
 	for (i = 0; i < FMC_CMD_POLLS; i++) {
 		if (readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY)
