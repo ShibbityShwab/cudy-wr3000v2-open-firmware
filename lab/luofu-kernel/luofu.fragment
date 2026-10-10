@@ -85,7 +85,7 @@ CONFIG_SMP=y
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
+CONFIG_CMDLINE="panic=5 root=/dev/mtdblock16 rootfstype=squashfs init=/sbin/init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
@@ -150,7 +150,24 @@ CONFIG_SERIAL_8250_DW=y
 # the vendor's mtd numbering.  The ubi.mtd/root/rootwait values are appended by
 # the single CONFIG_CMDLINE above, next to panic=5 - they belong in ONE string.
 #
-# init=/sbin/init NOW, AND THE GUARD MOVED INTO THE KERNEL.
+# ROOT IS NOW A REAL OpenWrt ROOTFS ON A RAW MTD PARTITION, AND IT IS OURS.
+#
+# OpenWrt 25.12.5's generic ARMv7 squashfs rootfs (3.66 MB, XZ, 256 KiB blocks) was written to
+# mtd16 - the vendor's "upgrade" staging partition, unused and 99.65% erased, backed up before
+# the write and verified after it with the vendor's own `mtd verify` (Success) plus matching
+# md5s. The rootfs path is deliberately NOT the vendor's UBI volume: a raw squashfs on
+# /dev/mtdblock16 needs no UBI attach and no volume table, so the boot depends on the smallest
+# possible set of things working.
+#
+# The kernel supports every piece: CONFIG_MTD_BLOCK (so /dev/mtdblock16 exists),
+# CONFIG_SQUASHFS + CONFIG_SQUASHFS_XZ (the image's compression), CONFIG_DEVTMPFS and
+# CONFIG_DEVTMPFS_MOUNT (so /dev appears for the init).
+#
+# THE OLD UBI PARAMETERS ARE GONE. ubi.mtd=rootfsb / ubi.block=0,0 / root=/dev/ubiblock0_0 are
+# all removed - they were needed to hand the VENDOR's UBI volume to the kernel, and this root
+# does not use UBI at all. panic=5 stays, always.
+#
+# init=/sbin/init AND THE GUARD MOVED INTO THE KERNEL.
 #
 # For most of this work the init was /nonexistent-init, and it was the safety net:
 # our kernel has no network driver, so a boot that SUCCEEDED in mounting a rootfs
