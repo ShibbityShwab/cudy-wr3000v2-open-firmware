@@ -253,7 +253,15 @@
 /*
  * WHERE THE CONTROLLER SPLICES ITS SPARE AREA INTO THE DATA STREAM.
  *
- * TWO INDEPENDENT MEASUREMENTS SAY SIXTEEN BYTES PER 1024-BYTE SECTOR:
+ * FOURTEEN BYTES AT 1040 - AND THE SIXTEEN-BYTE ALTERNATIVE WAS TRIED AND REFUTED.
+ *
+ * Taking the OOB layout to mean a 16-byte spare per 1024-byte sector, so that the
+ * skip moved to 1024, made UBI's complaint move BACKWARD: it had accepted 117
+ * records and began rejecting at 5. So the data really is [0..1039] plus
+ * [1040..2033], the spare slot really is 14 bytes at 1040, and the 0xFFFF in the OOB
+ * buffer is the first two bytes of the ECC field, not the size of the splice.
+ *
+ * The original measurements, kept for the record:
  *
  *  - the OOB buffer, read back for the first time, holds 0xFFFF - the bad-block
  *    marker - followed by ECC bytes, i.e. the classic [1024 data][2 bbm][14 ecc]
@@ -266,8 +274,8 @@
  * in the discriminating range.  Sixteen is what the hardware's own structures
  * say, so the splice is taken as [1024 data][16 spare] repeated.
  */
-#define LUOFU_DMA_SPLICE_OFF	1024u
-#define LUOFU_DMA_SPLICE_LEN	16u
+#define LUOFU_DMA_SPLICE_OFF	1040u
+#define LUOFU_DMA_SPLICE_LEN	14u
 
 /*
  * WHICH PAGE THE DIAGNOSTIC MAPS.  Page 2 is where the splice was found; page 9
