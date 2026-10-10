@@ -949,29 +949,52 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * driver registered.
 		 */
 		{
-			struct mtd_info *m = fmc->mtd;
+			int n;
 
 			/*
-			 * OUR OWN MTD'S INDEX goes into the crumb's low bits.  The log's
-			 * physical address is slot-aligned, so its low twelve bits are free -
-			 * and the index is the one number that decides everything: UBI's own
-			 * message says it is attaching "mtd14", which is the VENDOR's partition
-			 * number, so this kernel has the vendor's partition table registered too
-			 * and "rootfsb" has been resolving to that device rather than ours.
-			 *
-			 * The low bits of this crumb value say which index OUR driver got.
+			 * OUR OWN MTD'S INDEX goes into the crumb's low bits - the log's physical
+			 * address is slot-aligned, so they are free - because the crumb is read
+			 * even when the log is not.
 			 */
-			if (m)
+			if (fmc->mtd)
 				luofu_fmc_crumb(fmc, LUOFU_LOG_PANIC_STEP,
 						((u32)luofu_log_dma & 0xfffff000u) |
-						((u32)m->index & 0xfffu));
+						((u32)fmc->mtd->index & 0xfffu));
+
+			/*
+			 * AND ENUMERATE THE MTDS, because the crumb says ours is index 0 while
+			 * UBI's message says it attaches mtd14.
+			 *
+			 * The config has no vendor NAND driver - but it does have
+			 * CONFIG_MTD_OF_PARTS, and this kernel boots the VENDOR's devicetree.
+			 * So the partitions the vendor's DT declares are created as CHILDREN OF
+			 * OUR MTD, and mtd14 is very likely a partition of our own device at the
+			 * vendor's rootfsb offset.  That would make mtd14 the RIGHT device to
+			 * attach to - the same flash, described by the vendor's own table - and
+			 * put the fault back in how a partitioned read reaches the chip.
+			 *
+			 * Printing indices, names, sizes and offsets settles which it is.
+			 */
+			for (n = 0; n < 24; n++) {
+				struct mtd_info *m = get_mtd_device(NULL, n);
+
+				if (IS_ERR(m))
+					break;
+				pr_err("FMC: mtd[%d] name=%s type=%d size=%llu esz=%u wsz=%u off=%llu\n",
+				       m->index, m->name, m->type,
+				       (unsigned long long)m->size,
+				       m->erasesize, m->writesize,
+				       (unsigned long long)m->part.offset);
+				put_mtd_device(m);
+			}
 		}
 		part = get_mtd_device_nm("rootfsb");
 		if (!IS_ERR(part)) {
-			pr_err("FMC: rootfsb -> name=%s type=%d size=%llu esz=%u wsz=%u priv=%px\n",
-			       part->name, part->type,
+			pr_err("FMC: rootfsb -> index=%d name=%s size=%llu off=%llu priv=%px\n",
+			       part->index, part->name,
 			       (unsigned long long)part->size,
-			       part->erasesize, part->writesize, part->priv);
+			       (unsigned long long)part->part.offset,
+			       part->priv);
 			put_mtd_device(part);
 		}
 		return 0;
