@@ -1050,21 +1050,30 @@ static int __init luofu_fmc_ubi_probe(void)
 		 */
 		{
 			/*
-			 * MAP THE WHOLE PAGE AT 16-BYTE RESOLUTION.
+			 * THE PAGE TAIL AND THE SPLICE, on page 2 and page 11 side by side.
 			 *
-			 * The double-read came back and AGREEED: two reads of offset 1040 return
-			 * identical bytes, so the data is STABLE AND WRONG there - not a race (the
-			 * fixed CRC across boots already said so) and not a stale cache.
+			 * The widened memset did NOT change UBI's stored 0xf1160000 - the last two
+			 * bytes of record 118's CRC are still zero - so a stale staging buffer was
+			 * not the source of them. The zeros are the hardware's.
 			 *
-			 * The three bracketing samples also pinned the blob exactly: 4cfb74e7
-			 * 668a0751 7536bd0c d17e0000 occupies +1040..+1053 and nothing else, and each
-			 * page carries its own different blob. So rather than guess at more offsets,
-			 * this samples 4 bytes every 16 across the whole page - 128 samples, exactly
-			 * the 512 bytes of the diagnostic buffer - and the vendor's same offsets are
-			 * readable from mtd14 with dd. That maps EVERY differing window in one fire
-			 * instead of one guessed offset at a time.
+			 * Our model says the copy takes 1040 bytes direct, skips 14, then takes the
+			 * rest - so the returned page's final 14 bytes come from the staging
+			 * buffer's 2048..2061. Record 118's CRC sits at page 11 offset 2032..2035,
+			 * which is source 2046..2049: its last two bytes therefore come from
+			 * 2048..2049, and they read zero.
+			 *
+			 * So this samples the splice region AND the last 16 bytes of page 2 and
+			 * page 11 - the page whose record UBI rejects and a page it accepts, side by
+			 * side. The vendor's same offsets decide whether that tail is the hardware's
+			 * content or the copy's.
 			 */
-			u32 map[128];
+			static const u32 probes[16] = {
+				4096 + 1032,  4096 + 1040,  4096 + 1048,  4096 + 1056,
+				4096 + 2032,  4096 + 2036,  4096 + 2040,  4096 + 2044,
+				22528 + 1032, 22528 + 1040, 22528 + 1048, 22528 + 1056,
+				22528 + 2032, 22528 + 2036, 22528 + 2040, 22528 + 2044,
+			};
+			u32 map[16];
 			int s;
 
 			if (fmc->mtd)
@@ -1076,11 +1085,11 @@ static int __init luofu_fmc_ubi_probe(void)
 			if (IS_ERR(part))
 				return 0;
 
-			for (s = 0; s < 128; s++) {
+			for (s = 0; s < 16; s++) {
 				u32 v = 0;
 				size_t rl = 0;
 
-				mtd_read(part, LUOFU_MAP_PAGE_OFF + s * 16, 4, &rl, (u8 *)&v);
+				mtd_read(part, probes[s], 4, &rl, (u8 *)&v);
 				map[s] = v;
 			}
 			put_mtd_device(part);
