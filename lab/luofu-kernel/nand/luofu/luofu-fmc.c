@@ -1371,7 +1371,27 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  */
 #define LUOFU_LOG_BASE		0x80602000	/* in the surviving window */
 #define LUOFU_LOG_STRIDE	0x1000		/* slot size when shifting clear */
-#define LUOFU_LOG_SIZE		0x200		/* 512 B log ring */
+/*
+ * 16 KiB, NOT 512 BYTES.
+ *
+ * The ring used to be 0x200 - about eight lines. It was enough to prove the instrument
+ * worked, and not enough to hold a boot. By the time the last fire's panic dumped the
+ * log, the newest 500 bytes were the driver's own probe lines and a single userspace
+ * line, and the messages that matter most had been overwritten: the VFS mount, "Run
+ * /sbin/init", procd's preinit. That fire DID reach userspace - a regulatory.db load
+ * failure was the last line - but the log could not show how it got there.
+ *
+ * 0x4000 holds roughly 136 lines, which is a full boot. The window runs
+ * 0x80602000..0x80608000, so a 16 KiB ring at 0x80603000 with a 512-byte diagnostic
+ * buffer at 0x80607000 ends at 0x80607200, inside it with 3.5 KiB to spare. The
+ * collision check reserves ring + diag rather than twice the ring, so the ring can use
+ * the space the diag does not.
+ *
+ * AND THE DUMPER IS THE PART THAT MATTERS HERE: luofu_kmsg_to copies the WHOLE kmsg
+ * log, unfiltered, and wraps when it fills - so the ring always holds the NEWEST text,
+ * which is the mount and the init, not the probe's own noise.
+ */
+#define LUOFU_LOG_SIZE		0x4000		/* 16 KiB log ring - see below */
 #define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
@@ -1680,13 +1700,13 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 		u64 base = LUOFU_LOG_BASE + LUOFU_LOG_STRIDE;
 
 		for (i = 0; i < 8; i++, base += LUOFU_LOG_STRIDE) {
-			if ((base + 2 * LUOFU_LOG_SIZE <= dma_lo ||
+			if ((base + LUOFU_LOG_SIZE + LUOFU_DIAG_SIZE <= dma_lo ||
 			     base >= dma_hi) &&
-			    (!pb_hi || base + 2 * LUOFU_LOG_SIZE <= pb_lo ||
+			    (!pb_hi || base + LUOFU_LOG_SIZE + LUOFU_DIAG_SIZE <= pb_lo ||
 			     base >= pb_hi))
 				break;
 		}
-		if (base + 2 * LUOFU_LOG_SIZE > 0x80608000)
+		if (base + LUOFU_LOG_SIZE + LUOFU_DIAG_SIZE > 0x80608000)
 			base = LUOFU_LOG_BASE;
 
 		luofu_log_dma = (dma_addr_t)base;
