@@ -1483,6 +1483,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	u8 *page;
 	u32 word = 0;
 	u32 block = 1;
+	u32 nblocks;
 	size_t got = 0;
 	int err;
 
@@ -1548,7 +1549,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * destructive path is unreachable for a live overlay, and the routine therefore cannot eat user
 	 * data on a later boot.
 	 */
-	for (block = 1; block < part->size / part->erasesize; block++) {
+	for (block = 1, nblocks = div_u64(part->size, part->erasesize); block < nblocks; block++) {
 		memset(&ei, 0, sizeof(ei));
 		ei.addr = (u64)block * part->erasesize;
 		ei.len = part->erasesize;
