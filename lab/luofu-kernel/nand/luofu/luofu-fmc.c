@@ -1087,12 +1087,29 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	struct luofu_fmc *fmc = mtd->priv;
 	size_t done = 0;
 	unsigned long flags;
+	u32 rem;
 	int ret = 0;
 
+	/*
+	 * AND THE ALIGNMENT CHECK USES div_u64_rem, NOT A `%`.
+	 *
+	 * `to` is a loff_t, so `to % mtd->writesize` is a SIGNED 64-bit remainder and GCC lowers it to
+	 * __aeabi_ldivmod - a libgcc helper the kernel does not link against:
+	 *
+	 *   arm-linux-gnueabihf-ld: drivers/mtd/nand/luofu/luofu-fmc.o: in function `luofu_mtd_write':
+	 *   luofu-fmc.c:(.text+0x1978): undefined reference to `__aeabi_ldivmod'
+	 *
+	 * div_u64_rem() is the kernel's own answer - it emits the inline __do_div64 sequence instead -
+	 * and it is the same reason the read path reaches rows through div_u64 rather than `pos / size`.
+	 * `len` needs no such care: size_t is 32 bits on this target.
+	 */
 	*retlen = 0;
 	if (to < 0 || to + len > mtd->size)
 		return -EINVAL;
-	if (len % mtd->writesize || to % mtd->writesize)
+	if (len % mtd->writesize)
+		return -EINVAL;
+	div_u64_rem(to, mtd->writesize, &rem);
+	if (rem)
 		return -EINVAL;
 
 	while (done < len) {
