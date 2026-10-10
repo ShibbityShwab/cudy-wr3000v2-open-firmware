@@ -250,32 +250,7 @@
 #define LUOFU_SPEC_WR_CMD	0x30
 #define LUOFU_SPEC_WR_DUMMY	0x31
 
-/*
- * WHERE THE CONTROLLER SPLICES ITS SPARE AREA INTO THE DATA STREAM.
- *
- * FOURTEEN BYTES AT 1040 - AND THE SIXTEEN-BYTE ALTERNATIVE WAS TRIED AND REFUTED.
- *
- * Taking the OOB layout to mean a 16-byte spare per 1024-byte sector, so that the
- * skip moved to 1024, made UBI's complaint move BACKWARD: it had accepted 117
- * records and began rejecting at 5. So the data really is [0..1039] plus
- * [1040..2033], the spare slot really is 14 bytes at 1040, and the 0xFFFF in the OOB
- * buffer is the first two bytes of the ECC field, not the size of the splice.
- *
- * The original measurements, kept for the record:
- *
- *  - the OOB buffer, read back for the first time, holds 0xFFFF - the bad-block
- *    marker - followed by ECC bytes, i.e. the classic [1024 data][2 bbm][14 ecc]
- *    layout, which is a 16-byte spare per sector;
- *  - 0x38 reads 4128, which is exactly 2 x (2048 + 16): two transfers of a page
- *    plus sixteen spare bytes.
- *
- * An earlier fit of our samples against the vendor's mtd14 preferred 14, but it
- * was fitting a splice whose position it could not see - the vendor holds no data
- * in the discriminating range.  Sixteen is what the hardware's own structures
- * say, so the splice is taken as [1024 data][16 spare] repeated.
- */
-#define LUOFU_DMA_SPLICE_OFF	1040u
-#define LUOFU_DMA_SPLICE_LEN	14u
+
 
 /*
  * WHICH PAGE THE DIAGNOSTIC MAPS.  Page 2 is where the splice was found; page 9
@@ -603,9 +578,24 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 
 	luofu_fmc_ecc_type_set(fmc, 0);
 
+	/*
+	 * ONLY SADDR_D0, THE WAY THE VENDOR DOES IT.
+	 *
+	 * hi_sfc_hw_dma_read writes exactly one destination - "str r3, [r0, #0x4c]" -
+	 * and nothing else.  This driver also pointed SADDR_D1 at dma_addr + 0x1000
+	 * and SADDR_OOB at dma_addr + 0x2000 on every read, and THAT is the most
+	 * likely source of the fourteen-byte window this page has been losing: with
+	 * three destinations armed, the controller splits the page's spare bytes
+	 * between them and drops a window into the data.
+	 *
+	 * The evidence for the vendor's shape is direct.  Reading its LIVE registers
+	 * at 0x10a20000 before and after a real read through its own driver, exactly
+	 * ONE register moved: ADDRL.  DMA_LEN stayed 1, DATA_NUM stayed 1, OP_CFG and
+	 * OP_CTRL never changed.  So it writes the address per read and nothing else,
+	 * the transfer size is geometry rather than a per-read length, and its
+	 * single-page transfer produces a COMPLETE page.
+	 */
 	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
-	writel(fmc->dma_addr + 0x1000, fmc->regs + FMC_SADDR_D1);
-	writel(fmc->dma_addr + 0x2000, fmc->regs + FMC_SADDR_OOB);
 
 	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(row << 16, fmc->regs + FMC_ADDRL);
@@ -676,7 +666,13 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 *
 	 * Set before the operation, like the vendor does.
 	 */
-	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DMA_LEN);
+	/*
+	 * NO PER-READ LENGTH WRITE.  The vendor does not do one: its DMA_LEN sat at 1
+	 * through a real read, and writing 2080 here - which the read-back confirmed
+	 * lands - changed nothing at all.  If the transfer size is geometry, this
+	 * register is not the lever, and writing it only invents a difference from
+	 * the one implementation that works.
+	 */
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
@@ -711,39 +707,18 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			ret = -ETIMEDOUT;
 		} else {
 			/*
-			 * DE-INTERLEAVE THE SPARE AREA OUT OF THE DATA.
+			 * A PLAIN COPY, WITH NO DE-INTERLEAVE.
 			 *
-			 * The controller does not write a bare page: it writes the first 1040
-			 * bytes of data and then 14 bytes of spare area before continuing with
-			 * the rest.  Fitting that model against the vendor's own mtd14 - "below
-			 * the insertion copy direct, at and above it copy from 14 bytes
-			 * earlier" - matches EVERY sample where the vendor holds data, 128 of
-			 * 128, with no failures.
-			 *
-			 * A straight page-sized copy therefore splices 14 bytes of spare into
-			 * the middle of the page, and that is exactly the corruption UBI
-			 * rejects: volume-table record 6 begins at offset 1032, so it is the
-			 * record that straddles the splice.
-			 *
-			 * Both constants are measured rather than chosen: 1040 is where the
-			 * bytes stop matching, and 14 is the distance the tail is displaced.
+			 * The splice this driver has been removing was never in the flash.  The
+			 * vendor reads a complete 2048-byte page with ONE destination armed and no
+			 * length write, and its output is the reference this driver has been
+			 * measuring against.  With the extra destinations removed, the staging
+			 * buffer should hold the page directly - and the fourteen bytes that were
+			 * being cut out of it will simply be part of the data, where UBI expects
+			 * them.
 			 */
-			if (fmc->spec.page_size == 2048) {
-				/*
-				 * [1024 data][16 spare], twice: copy the first sector, skip the
-				 * spare, then copy the second sector. The second copy runs to
-				 * page_size + SPLICE_LEN in the source, because the source holds
-				 * both spare bytes as well as both sectors of data.
-				 */
-				memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
-				memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
-					      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
-					      LUOFU_DMA_SPLICE_LEN,
-					      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
-			} else {
-				memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
-			}
-			ret = 0;
+		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		ret = 0;
 		}
 	}
 
