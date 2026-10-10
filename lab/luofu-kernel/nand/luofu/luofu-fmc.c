@@ -667,12 +667,22 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * Set before the operation, like the vendor does.
 	 */
 	/*
-	 * NO PER-READ LENGTH WRITE.  The vendor does not do one: its DMA_LEN sat at 1
-	 * through a real read, and writing 2080 here - which the read-back confirmed
-	 * lands - changed nothing at all.  If the transfer size is geometry, this
-	 * register is not the lever, and writing it only invents a difference from
-	 * the one implementation that works.
+	 * FMC_DATA_NUM, THE ONE REGISTER THIS DRIVER LEAVES DIFFERENT FROM THE VENDOR.
+	 *
+	 * The live comparison said so: through a real read the vendor's 0x38 holds 1,
+	 * and ours holds 4128 in every build - a value nothing here ever wrote, left
+	 * over from whatever ran before.  Its DMA_LEN also sits at 1 and is not touched
+	 * per read, so the pair reads as a count rather than a byte length.
+	 *
+	 * AND THE DESTINATION CHANGE MOVED THE FAULT, WHICH IS WHY THIS IS WORTH TRYING:
+	 * with three destinations armed the fourteen-byte window appeared as always;
+	 * with one destination the same fragment moved and the splice changed size. So
+	 * the plumbing does affect the layout, and the one plumbing value still
+	 * differing from the working implementation is this register.
+	 *
+	 * Set to the vendor's value, before the operation like everything else here.
 	 */
+	writel(1, fmc->regs + FMC_DATA_NUM);
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
