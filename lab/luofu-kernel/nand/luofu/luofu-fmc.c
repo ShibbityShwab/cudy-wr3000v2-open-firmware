@@ -120,6 +120,8 @@
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
+#include <asm/cacheflush.h>
+#include <asm/outercache.h>
 
 /* ------------------------------------------------------------------ */
 /* Register map (offsets from 0x10a20000), from the DWARF struct        */
@@ -1681,6 +1683,27 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	}
 
 	*(char *)(p + (off < LUOFU_LOG_KEEP ? off : LUOFU_LOG_KEEP - 1)) = 0;
+
+	/*
+	 * AND FLUSH IT TO DRAM, OR NOTHING HERE SURVIVES TO BE READ.
+	 *
+	 * Every write to this region goes through the linear map and is therefore CACHED, and
+	 * this board is reset by a watchdog or by a dead kernel with no cache maintenance in
+	 * between. Whatever dirty lines happen to be evicted on their own reach DRAM; the rest
+	 * never leave L1/L2 and are gone the moment the vendor image boots.
+	 *
+	 * THAT IS THE 32-BYTE SIGNATURE IN THE WINDOW: this fire's text, cut apart by
+	 * one-cache-line pieces of the previous fire's text and by stretches of zeros a
+	 * half-evicted memset left behind. It is also why every crumb register has always
+	 * agreed with itself - the FMC registers are I/O space, UNCACHED, so they land
+	 * immediately - while every RAM stamp and this window have had to be read with a grain
+	 * of salt. The earlier "the two paths meet" reading was true only because the line it
+	 * compared happened to have been evicted before the reset.
+	 *
+	 * THE FIX IS TO NOT LEAVE IT TO LUCK.
+	 */
+	__cpuc_flush_dcache_area(p, LUOFU_LOG_KEEP);
+	outer_flush_range(__pa(p), __pa(p) + LUOFU_LOG_KEEP);
 }
 
 static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
