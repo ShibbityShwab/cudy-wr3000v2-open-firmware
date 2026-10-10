@@ -1773,6 +1773,22 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	writel(0x00000100, fmc->regs + 0xbc);
 	writel(0x00000005, fmc->regs + 0xfc);
 
+	/*
+	 * AND THE TWO THE PAGE READ DEPENDS ON - SET ONCE, HERE.
+	 *
+	 * hi_spi_nand_hw_read writes FIVE registers and neither of these. But a build that
+	 * removed this driver's per-read writes of them died at step 8, on the first page
+	 * read - so the values are needed, and the vendor's page read does not supply them
+	 * because ITS INIT DOES. Its live block holds 1 in both.
+	 *
+	 * That is the whole difference: this driver was setting them on every read to make
+	 * up for never setting them at all. Setting them here, once, is what the working
+	 * implementation does - and it lets the per-read sequence be exactly the vendor's
+	 * five writes.
+	 */
+	writel(1, fmc->regs + FMC_DMA_LEN);
+	writel(1, fmc->regs + FMC_DATA_NUM);
+
 	dev_info(dev, "FMC: vendor block programmed: t=%08x 14=%08x 34=%08x 48=%08x\n",
 		 readl(fmc->regs + FMC_TIMING_SPI_CFG),
 		 readl(fmc->regs + 0x14), readl(fmc->regs + 0x34),
