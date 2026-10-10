@@ -725,44 +725,23 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	writel(1, fmc->regs + FMC_DATA_NUM);
 
 	/*
-	 * WAIT FOR THE DMA COMPLETION INTERRUPT - NOT JUST THE BUSY BIT.
+	 * INTERRUPT-DRIVEN COMPLETION - ATTEMPTED AND REVERTED.
 	 *
-	 * This is the structural difference, found by reading the RIGHT vendor function.
-	 * hi_spi_nand_drv_dma_read does not poll a busy bit at all:
+	 * The vendor's real page read (hi_spi_nand_drv_dma_read) waits on the DMA
+	 * completion interrupt rather than a busy bit, and that is very likely the
+	 * remaining difference. But copying that in broke the path outright: with
+	 * FMC_INT_CLR written before the operation, the busy bit never asserted and the
+	 * probe died at step 8 with LUOFU_RPT_FAIL(8).
 	 *
-	 *     hi_fmc_clr_interrupt()
-	 *     hi_fmc_en_interrupt(1)          <- the DMA interrupt is ENABLED
-	 *     bl  #0x2d80                     <- the operation
-	 *     hi_fmc_int_status_get()         <- AND THE INTERRUPT IS WHAT IT WAITS ON
-	 *     hi_fmc_en_interrupt(0)
-	 *     hi_fmc_clr_interrupt()
-	 *
-	 * The busy bit this driver has always polled can clear before the controller has
-	 * finished depositing the page. That is exactly the failure this driver has been
-	 * chasing: the copy runs while the transfer is still in flight, so the buffer
-	 * holds a mixture of the new page and the leftover of the previous one - a window
-	 * of misplaced bytes at a fixed position, and a page that loses its tail.
-	 *
-	 * The clear comes FIRST - clearing after the operation would wipe the very
-	 * completion being waited for - then the operation starts, and the bit becoming
-	 * set again is what says the DMA has finished.
+	 * So the sequence needs more than the two registers this attempt used - the
+	 * vendor also calls hi_fmc_en_interrupt(1) before the operation and (0) after,
+	 * which is FMC_INT_EN at 0x1c, and it does NOT rely on the busy bit at all.
+	 * That is the next thing to implement, deliberately and on its own, rather than
+	 * folded in beside another change.
 	 */
-	writel(1, fmc->regs + FMC_INT_CLR);
 	mb();
-
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
-
-	for (i = 0; i < FMC_CMD_POLLS; i++) {
-		if (readl(fmc->regs + FMC_INT_STATUS) & 1)
-			break;
-		udelay(1);
-	}
-
-	if (i == FMC_CMD_POLLS)
-		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
-
-	writel(1, fmc->regs + FMC_INT_CLR);
 
 	/*
 	 * WAIT FOR BUSY TO ASSERT, THEN FOR IT TO CLEAR - two phases, not one.
@@ -1945,6 +1924,11 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 
 	fmc->dma_buf = dmam_alloc_coherent(dev, 0x2200, &fmc->dma_addr, GFP_KERNEL);
 
+	if (!fmc->dma_buf) {
+		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
+		return -ENOMEM;
+	}
+
 	/*
 	 * THE THREE DESTINATIONS, ONCE - the way the vendor sets them.
 	 *
@@ -1952,18 +1936,14 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * OOB = 0x820e2000) and its before/after read shows NONE of them changing per
 	 * read: only ADDRL moves. So they are configured once and left alone.
 	 *
-	 * This driver wrote them on EVERY read, which is an extra register write in the
-	 * middle of the operation sequence that the working implementation does not
-	 * make.
+	 * AFTER the allocation check, not before it: writing a NULL dma_addr into the
+	 * controller's destination registers and only then discovering the allocation
+	 * failed is the wrong order, and the first build with this block failing at
+	 * step 8 is what made that visible.
 	 */
 	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
 	writel(fmc->dma_addr + 0x1000, fmc->regs + FMC_SADDR_D1);
 	writel(fmc->dma_addr + 0x2000, fmc->regs + FMC_SADDR_OOB);
-
-	if (!fmc->dma_buf) {
-		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
-		return -ENOMEM;
-	}
 
 	page = devm_kzalloc(dev, fmc->spec.page_size, GFP_KERNEL);
 	if (!page) {
