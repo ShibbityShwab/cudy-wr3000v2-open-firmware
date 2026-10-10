@@ -1704,32 +1704,37 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	 * AND ONLY THE TAIL REACHES THE RING, STARTING AT A LINE BOUNDARY.
 	 */
 	/*
-	 * TEMPORARY: THE HEAD, NOT THE TAIL - AND THE REASON IS SPECIFIC.
+	 * AND BACK TO THE TAIL, WITH A WINDOW THAT NO LONGER HIDES ANYTHING.
 	 *
-	 * The tail has done its job. It gave the whole failure in the kernel's own words: UBI
-	 * attaches, "VFS: Mounted root (squashfs filesystem) readonly on device 254:0", init is
-	 * exec'd, and then init dies of signal 4.
+	 * The head dump was for one specific line - what vfp_init() printed at half a second. That
+	 * question is answered now, and from two directions at once: elf_hwcap came back as
+	 * 0x00008896 with no HWCAP_VFP, and the VENDOR's own kernel on this same silicon reports
+	 * the same thing to the same extent -
 	 *
-	 * What it CANNOT give is the answer, because the answer is printed at about half a second
-	 * by a core_initcall:
+	 *     vendor /proc/cpuinfo:  Features : half thumb fastmult edsp tls
+	 *     CPU part : 0xc09
 	 *
-	 *     pr_info("VFP support v0.3: ");
-	 *     if (VFP_arch) { pr_cont("not present
-"); return 0; }   <- returns BEFORE
-	 *     ...
-	 *     elf_hwcap |= HWCAP_VFP;                                  <- this line
+	 * - and the vendor's own userspace is SOFT-FLOAT (e_flags 0x05000200, EF_ARM_ABI_FLOAT_SOFT).
+	 * This part has no usable FPU, which is why the vendor never built a hard-float userspace
+	 * for it. Our rootfs was hard-float (0x05000400) and every floating point instruction in it
+	 * trapped as SIGILL, which is the signal that killed init.
 	 *
-	 * elf_hwcap read back as 0x00008896 - HALF, THUMB, FAST_MULT, EDSP, THUMBEE, TLS and NO
-	 * VFP, NO NEON, NO VFPv3. So vfp_init() DID take that early return, and the log already
-	 * says what it printed. Keeping the head is what makes it readable.
-	 *
-	 * This is switched back to the tail once that line has been read.
+	 * So the root now in the volume is soft-float too, and what matters from here is what a
+	 * RUNNING userspace does - which lives at the END of the log. With 15 KiB kept instead of
+	 * 3.5 KiB, the tail also reaches back far enough to cover questions like this one.
 	 */
 	{
-		size_t take = s > LUOFU_LOG_KEEP - 4 ? LUOFU_LOG_KEEP - 4 : s;
+		size_t start = s > LUOFU_LOG_KEEP - 4 ? s - (LUOFU_LOG_KEEP - 4) : 0;
 
-		memcpy(p + off, scratch, take);
-		off += take;
+		if (start) {
+			while (start < s && scratch[start] != '\n')
+				start++;
+			if (start < s)
+				start++;
+		}
+
+		memcpy(p + off, scratch + start, s - start);
+		off += s - start;
 	}
 
 	*(char *)(p + (off < LUOFU_LOG_KEEP ? off : LUOFU_LOG_KEEP - 1)) = 0;
