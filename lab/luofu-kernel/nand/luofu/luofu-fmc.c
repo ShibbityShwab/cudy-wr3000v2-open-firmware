@@ -663,7 +663,6 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 *
 	 * Set before the operation, like the vendor does.
 	 */
-	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DATA_NUM);
 	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DMA_LEN);
 
 	mb();
@@ -1143,6 +1142,15 @@ static int __init luofu_fmc_ubi_probe(void)
 					regs[5] = readl(fmc->regs + 0x3c);
 					regs[6] = readl(fmc->regs + 0x38);
 					regs[7] = readl(fmc->regs + 0x40);
+					/*
+					 * And the block's own configuration, set once at probe time. If
+					 * the transfer is bounded by a geometry setting rather than by a
+					 * per-operation length, it lives in one of these.
+					 */
+					regs[8] = readl(fmc->regs + FMC_CFG);
+					regs[9] = readl(fmc->regs + FMC_GLOBAL_CFG);
+					regs[10] = readl(fmc->regs + FMC_FLASH_INFO);
+					regs[11] = readl(fmc->regs + 0x20);
 				}
 			}
 		}
