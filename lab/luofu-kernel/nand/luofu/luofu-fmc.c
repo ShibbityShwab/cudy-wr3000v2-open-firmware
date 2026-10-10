@@ -1535,6 +1535,17 @@ static void *luofu_diag_buf;	/* the diagnostic buffer */
 static dma_addr_t luofu_diag_dma;
 static struct kmsg_dumper luofu_kmsg;
 static struct timer_list luofu_log_timer;
+/*
+ * AND THE SAFETY RESTART'S TIMER IS DECLARED HERE, ABOVE EVERYTHING THAT WRITES FLASH, NOT AT THE BOTTOM
+ * WHERE IT USED TO LIVE - AND ITS TIMEOUT MOVES WITH IT.
+ *
+ * It is armed from luofu_jffs2_mark() before that function erases anything, and a use above its
+ * declaration is the mistake this file has made more than once: the one where the compiler is the only
+ * reader that notices. A macro has the same rule, which is why LUOFU_SAFETY_SECS is here and not a
+ * thousand lines down.
+ */
+#define LUOFU_SAFETY_SECS	180
+static struct timer_list luofu_reboot_timer;
 
 /*
  * WHY TWELVE BYTES HAVE TO BE WRITTEN BEFORE THE OVERLAY CAN EVER WORK.
@@ -1569,6 +1580,20 @@ static struct timer_list luofu_log_timer;
  */
 static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 {
+	/*
+	 * THE SAFETY RESTART IS ARMED HERE, FIRST, AND THAT ORDERING IS THE POINT.
+	 *
+	 * It is normally armed much later, in the init path at the bottom of this file - AFTER this function
+	 * runs. So when the erase loop below hung a boot, the one mechanism this project relies on to return
+	 * the box was not yet in place, and the box stayed in this kernel with the boot selector still
+	 * pointing at it: a loop, not a crash, and no watchdog recovery because there was nothing wrong for
+	 * a watchdog to see.
+	 *
+	 * Anything that writes flash belongs behind that timer. Arming it twice is harmless - mod_timer
+	 * simply moves it - and the later call is left where it is so this does not depend on this one being
+	 * reached.
+	 */
+	mod_timer(&luofu_reboot_timer, jiffies + LUOFU_SAFETY_SECS * HZ);
 	static const u8 marker[12] = {
 		0x85, 0x19, 0x03, 0x20, 0x0c, 0x00, 0x00, 0x00, 0xb1, 0xb0, 0x1e, 0xe4
 	};
@@ -2648,9 +2673,7 @@ static struct notifier_block luofu_panic_nb;
  * convenience: it is the replacement for the guard, and it must stay until this
  * kernel has a network driver and a userspace that can be reached.
  */
-#define LUOFU_SAFETY_SECS	180
 
-static struct timer_list luofu_reboot_timer;
 
 /*
  * A CONSOLE THAT KEEPS WHAT IT IS SHOWN.
