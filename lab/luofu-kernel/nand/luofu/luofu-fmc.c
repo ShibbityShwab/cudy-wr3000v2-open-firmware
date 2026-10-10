@@ -757,40 +757,27 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 		udelay(1);
 	}
 
-	if (i == FMC_CMD_POLLS)
-		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
-
 	writel(0, fmc->regs + FMC_INT_EN);
 	writel(1, fmc->regs + FMC_INT_CLR);
 
 	/*
-	 * WAIT FOR BUSY TO ASSERT, THEN FOR IT TO CLEAR - two phases, not one.
+	 * THE BUSY POLLS ARE GONE, AND THAT IS THE POINT.
 	 *
-	 * The original loop broke as soon as BUSY read CLEAR, and immediately after
-	 * the operation is started the hardware has not set it yet - so the loop could
-	 * exit on its very first iteration and memcpy_fromio() would copy the buffer
-	 * while the DMA was still filling it.
+	 * The first interrupt build failed at step 8 even with FMC_INT_EN written, and
+	 * the reason is this driver was doing BOTH: it waited up to 100 ms for the
+	 * completion interrupt - long enough for the operation to finish - and then ran
+	 * the old "wait for BUSY to ASSERT" loop, which timed out because by then BUSY
+	 * was already clear and the transfer was long done. That timeout returned
+	 * -ETIMEDOUT and killed the probe at step 8.
+	 *
+	 * The vendor polls no busy bit anywhere in this path. THE INTERRUPT IS THE
+	 * COMPLETION CONDITION, and waiting for it REPLACES the busy polls rather than
+	 * adding to them.
 	 */
-	for (i = 0; i < FMC_CMD_POLLS; i++) {
-		if (readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY)
-			break;
-		udelay(1);
-	}
-
 	if (i == FMC_CMD_POLLS) {
-		dev_err(fmc->dev, "FMC: DMA never asserted busy\n");
+		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
 		ret = -ETIMEDOUT;
 	} else {
-		for (i = 0; i < FMC_CMD_POLLS; i++) {
-			if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY))
-				break;
-			udelay(1);
-		}
-
-		if (i == FMC_CMD_POLLS) {
-			dev_err(fmc->dev, "FMC: DMA page read timed out\n");
-			ret = -ETIMEDOUT;
-		} else {
 			/*
 			 * DE-INTERLEAVE THE SPARE AREA OUT OF THE DATA - STILL NEEDED.
 			 *
@@ -809,7 +796,6 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
 		}
 		ret = 0;
-		}
 	}
 
 	luofu_fmc_ecc_type_set(fmc, saved);
