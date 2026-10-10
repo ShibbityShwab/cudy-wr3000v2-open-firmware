@@ -660,12 +660,33 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * The interrupt enable/clear brackets are the caller's (0x3318 does clr, en(1),
 	 * call, wait, en(0), clr), so they stay - before the setup, as the caller does.
 	 */
-	writel(1, fmc->regs + FMC_INT_EN);
-	writel(1, fmc->regs + FMC_INT_CLR);
-
 	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(row << 16, fmc->regs + FMC_ADDRL);
 	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+
+	/*
+	 * THE TWO REGISTERS THIS CONTROLLER NEEDS PER OPERATION - MEASURED, THREE TIMES.
+	 *
+	 * hi_spi_nand_hw_read writes five registers and neither of these. That was tried:
+	 *
+	 *     without them entirely            -> step 8, the first page read, fails
+	 *     set once in the probe's config   -> step 8, the first page read, fails
+	 *     set once just before that read   -> step 8, the first page read, fails
+	 *
+	 * So the value does not survive from before the operation TO THE MOMENT THE HARDWARE
+	 * USES IT. The vendor can omit them because its init runs after its identification
+	 * and nothing between that and a read clears them - which is not true of this
+	 * driver's sequence. Whatever the reason, three builds say the same thing: on THIS
+	 * driver's path they must be written immediately before the operation.
+	 *
+	 * Kept in the position the working build used, so the only difference from a known
+	 * good build is the feature-0xB0 configuration above.
+	 */
+	writel(1, fmc->regs + FMC_DMA_LEN);
+	writel(1, fmc->regs + FMC_DATA_NUM);
+	writel(1, fmc->regs + FMC_INT_EN);
+	writel(1, fmc->regs + FMC_INT_CLR);
+
 	writel(op_cfg, fmc->regs + FMC_OP_CFG);
 
 	mb();
@@ -1921,23 +1942,6 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 */
 	fmc->page_buf = page;
 
-	/*
-	 * THE TWO REGISTERS THE PAGE READ DEPENDS ON - SET HERE, AFTER THE IDENTIFICATION.
-	 *
-	 * hi_spi_nand_hw_read writes FIVE registers and neither of these. That is not
-	 * because they are unnecessary: a build that removed this driver's writes of them
-	 * died at step 8 on the first page read. AND SETTING THEM EARLIER IN THIS PROBE DID
-	 * NOT HELP EITHER - that build died at the same step. So something between the
-	 * configuration block and this point resets them: the die reset, the RDID and the
-	 * feature reads all run in between, and any of them can.
-	 *
-	 * The vendor's init sets them once and its values survive, because its init runs
-	 * after ITS identification. Setting them here - after this driver's - is the same
-	 * arrangement: once, before the first read, and out of the per-read sequence so
-	 * that sequence stays the vendor's five writes.
-	 */
-	writel(1, fmc->regs + FMC_DMA_LEN);
-	writel(1, fmc->regs + FMC_DATA_NUM);
 
 	ret = luofu_fmc_read_page(fmc,
 				  LUOFU_ROOTFSA_OFFSET / fmc->spec.page_size, page);
