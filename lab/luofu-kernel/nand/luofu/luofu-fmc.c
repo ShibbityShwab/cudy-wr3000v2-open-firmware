@@ -1942,10 +1942,29 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 * A page number inside the 0x8060xxxx window needs 12 bits, so the low three hex digits
 	 * of the page number fit beside a line count in the top bits.
 	 */
+	/*
+	 * AND NOW THE VIRTUAL POINTER'S TOP BYTE, BECAUSE THE PHYSICAL ADDRESS IS RIGHT.
+	 *
+	 * The previous fire read back 0x000CD603: 205 lines and page bits 0x603, and
+	 * (0x80603000 >> 12) & 0xfff IS 0x603 - so luofu_log_dma IS 0x80603000, exactly what this
+	 * driver asked for. The address was never the problem.
+	 *
+	 * What has never been checked is what __va() TURNED IT INTO. luofu_log_b =
+	 * __va((phys_addr_t)luofu_log_dma), and on ARM that is x - PHYS_OFFSET + PAGE_OFFSET. If
+	 * PHYS_OFFSET is 0x80000000 the ring lives at 0xC0603000 and is reachable; if it is
+	 * something else, every write through luofu_log_b lands in unmapped space and vanishes -
+	 * which is exactly what the ring, the diagnostic buffer and every RAM stamp have done
+	 * since this phase began.
+	 *
+	 *     C1C = (lines << 8) | ((luofu_log_b >> 24) & 0xff)
+	 *
+	 * 0xC0 means the mapper produced the expected kernel virtual address. 0x40 means it
+	 * produced the PHYSICAL address unmodified - which is the shape that makes writes vanish.
+	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
-				((luofu_log_lines & 0xfffff) << 12) |
-				((((u32)luofu_log_dma >> 12) & 0xfffu)));
+				((luofu_log_lines & 0xfffff) << 8) |
+				((((u32)(uintptr_t)luofu_log_b >> 24) & 0xffu)));
 
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
