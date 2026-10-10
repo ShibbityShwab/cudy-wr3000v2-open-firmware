@@ -1275,8 +1275,6 @@ static int luofu_mtd_block_isbad(struct mtd_info *mtd, loff_t ofs)
 static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 {
 	struct mtd_info *mtd;
-	struct mtd_info *p;
-	int ret;
 
 	mtd = devm_kzalloc(fmc->dev, sizeof(*mtd), GFP_KERNEL);
 	if (!mtd)
@@ -1330,44 +1328,7 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 
 	fmc->mtd = mtd;
 
-	ret = mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
-	if (ret)
-		return ret;
-
-	/*
-	 * THE MTD TABLE, REPORTED BY NAME RATHER THAN ASSUMED.
-	 *
-	 * mount_root resolves the partition called rootfs_data through /proc/mtd and then mounts the
-	 * NUMBER it gets back, so both the number and the contents are things it acts on - and neither
-	 * has ever been measured on this kernel. A read of the first eight bytes says which partition
-	 * the name lands on and what is inside it: an erased one reads ff, and anything else names the
-	 * filesystem already there.
-	 *
-	 * The read is the same path the mounted rootfs uses, and it happens once, at probe.
-	 */
-	p = get_mtd_device_nm("rootfs_data");
-	if (IS_ERR(p)) {
-		dev_info(fmc->dev, "FMC: no rootfs_data partition (%ld)\n", PTR_ERR(p));
-	} else {
-		u8 h[8] = {0};
-		size_t got = 0;
-		int rr = mtd_read(p, 0, sizeof(h), &got, h);
-
-		dev_info(fmc->dev,
-			 "FMC: rootfs_data is mtd%d size=%llx read=%d got=%zu: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-			 p->index, (unsigned long long)p->size, rr, got,
-			 h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
-		put_mtd_device(p);
-	}
-
-	p = get_mtd_device_nm("upgrade");
-	if (!IS_ERR(p)) {
-		dev_info(fmc->dev, "FMC: upgrade is mtd%d, and the master is mtd%d\n",
-			 p->index, mtd->index);
-		put_mtd_device(p);
-	}
-
-	return 0;
+	return mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1477,6 +1438,42 @@ static int __init luofu_fmc_ubi_probe(void)
 
 	if (!fmc || !fmc->mtd)
 		return 0;
+
+	/*
+	 * THE MTD TABLE, REPORTED BY NAME RATHER THAN ASSUMED - AND REPORTED FROM HERE ON PURPOSE.
+	 *
+	 * This ran from the probe at first and its output NEVER SURVIVED: the log ring keeps the
+	 * TAIL, and the probe prints before the first line the window still retains (3.508 s), so the
+	 * measurement was taken and thrown away. Printing from this late_initcall puts it at about
+	 * 4.0 s, inside what is kept. That is the same failure as the crumb the tick overwrote, one
+	 * layer up: the instrument wrote, and the channel kept only the newest.
+	 *
+	 * mount_root resolves the partition called rootfs_data through /proc/mtd and mounts the NUMBER
+	 * it gets back, so both the number and the contents are things it acts on. A read of the first
+	 * eight bytes says which partition the name lands on and what is inside it: erased reads ff,
+	 * and anything else names the filesystem already sitting there.
+	 */
+	part = get_mtd_device_nm("rootfs_data");
+	if (IS_ERR(part)) {
+		dev_info(fmc->dev, "FMC: no rootfs_data partition (%ld)\n", PTR_ERR(part));
+	} else {
+		u8 h[8] = { 0 };
+		size_t got = 0;
+		int rr = mtd_read(part, 0, sizeof(h), &got, h);
+
+		dev_info(fmc->dev,
+			 "FMC: rootfs_data is mtd%d size=%llx read=%d got=%zu: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+			 part->index, (unsigned long long)part->size, rr, got,
+			 h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+		put_mtd_device(part);
+	}
+
+	part = get_mtd_device_nm("upgrade");
+	if (!IS_ERR(part)) {
+		dev_info(fmc->dev, "FMC: upgrade is mtd%d, and the master is mtd%d\n",
+			 part->index, fmc->mtd->index);
+		put_mtd_device(part);
+	}
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
