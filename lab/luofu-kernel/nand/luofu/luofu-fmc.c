@@ -1320,6 +1320,24 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	mtd->writesize = fmc->spec.page_size;
 	mtd->writebufsize = fmc->spec.page_size;
 	mtd->oobsize = fmc->spec.oob_size;
+	/*
+	 * oobavail IS NOT DERIVED FROM oobsize, AND LEAVING IT ZERO BREAKS JFFS2 ON EVERY PARTITION.
+	 *
+	 * jffs2_nand_flash_setup() reads it directly:
+	 *
+	 *     if (!c->mtd->oobsize)
+	 *             return 0;
+	 *     if (c->mtd->oobavail == 0) {
+	 *             pr_err("inconsistent device description\n");
+	 *             return -EINVAL;
+	 *     }
+	 *
+	 * so a device that declares an OOB but no available bytes in it is called inconsistent and the
+	 * mount is refused. That is the whole of the "jffs2: inconsistent device description" this board
+	 * printed at 10.147 s, and it is why the overlay could never mount even after the partition was
+	 * marked FS_JFFS2.
+	 */
+	mtd->oobavail = fmc->spec.oob_size;
 	mtd->owner = THIS_MODULE;
 	mtd->_read = luofu_mtd_read;
 	mtd->_write = luofu_mtd_write;
@@ -1549,6 +1567,8 @@ static int __init luofu_fmc_ubi_probe(void)
 			 "FMC: rootfs_data is mtd%d size=%llx read=%d got=%zu: %02x %02x %02x %02x %02x %02x %02x %02x\n",
 			 part->index, (unsigned long long)part->size, rr, got,
 			 h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+		dev_info(fmc->dev, "FMC: geometry: writesize %u erasesize %u oobsize %u oobavail %u\n",
+			 part->writesize, part->erasesize, part->oobsize, part->oobavail);
 		put_mtd_device(part);
 	}
 
