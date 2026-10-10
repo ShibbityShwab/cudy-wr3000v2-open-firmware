@@ -980,26 +980,21 @@ static int __init luofu_fmc_ubi_probe(void)
 		 */
 		{
 			/*
-			 * READ THE SAME OFFSET TWICE - the collision theory is REFUTED and this is
-			 * what is left.
+			 * MAP THE WHOLE PAGE AT 16-BYTE RESOLUTION.
 			 *
-			 * The addresses came back: page_buf=c062a040, which is physical 0x0062a040 -
-			 * nowhere near the log at physical 0x80603000. No overlap, so the ring was
-			 * correctly left where it was, and my page_buf hypothesis is wrong.
+			 * The double-read came back and AGREEED: two reads of offset 1040 return
+			 * identical bytes, so the data is STABLE AND WRONG there - not a race (the
+			 * fixed CRC across boots already said so) and not a stale cache.
 			 *
-			 * What IS established: a 16-byte window at page offset 1040 is wrong on
-			 * every page, 1056 is fine on every page, and the stale content DIFFERS
-			 * between pages. A fixed fill length would cut all pages identically; a
-			 * fixed buffer collision would leave the same stale bytes everywhere. Neither
-			 * matches.
-			 *
-			 * So this samples 1032, 1040 and 1048 to bracket the window, and then reads
-			 * 1040 A SECOND TIME. If two reads of the same offset disagree, the window is
-			 * not stale memory at all but data that changes between reads - which would
-			 * mean the copy is racing the hardware rather than reading a dead buffer.
+			 * The three bracketing samples also pinned the blob exactly: 4cfb74e7
+			 * 668a0751 7536bd0c d17e0000 occupies +1040..+1053 and nothing else, and each
+			 * page carries its own different blob. So rather than guess at more offsets,
+			 * this samples 4 bytes every 16 across the whole page - 128 samples, exactly
+			 * the 512 bytes of the diagnostic buffer - and the vendor's same offsets are
+			 * readable from mtd14 with dd. That maps EVERY differing window in one fire
+			 * instead of one guessed offset at a time.
 			 */
-			static const u32 offs[4] = { 4096 + 1032, 4096 + 1040, 4096 + 1048, 4096 + 1040 };
-			u8 buf[32];
+			u32 map[128];
 			int s;
 
 			if (fmc->mtd)
@@ -1007,26 +1002,21 @@ static int __init luofu_fmc_ubi_probe(void)
 						((u32)luofu_log_dma & 0xfffff000u) |
 						((u32)fmc->mtd->index & 0xfffu));
 
-			/* acquired here, released below - the reads need it */
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part))
 				return 0;
 
-			for (s = 0; s < 4; s++) {
+			for (s = 0; s < 128; s++) {
+				u32 v = 0;
 				size_t rl = 0;
-				u32 meta[2];
-				int e;
 
-				memset(buf, 0, sizeof(buf));
-				e = mtd_read(part, offs[s], 32, &rl, buf);
-				if (!luofu_diag_buf)
-					break;
-				meta[0] = (u32)e;
-				meta[1] = (u32)rl;
-				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
-				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
+				mtd_read(part, 4096 + s * 16, 4, &rl, (u8 *)&v);
+				map[s] = v;
 			}
 			put_mtd_device(part);
+
+			if (luofu_diag_buf)
+				memcpy(luofu_diag_buf, map, sizeof(map));
 		}
 		return 0;
 	}
