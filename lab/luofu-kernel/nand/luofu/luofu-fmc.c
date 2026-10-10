@@ -636,33 +636,32 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * precisely what record 118 showed: UBI computed the correct 0xf116c36b from
 	 * the flash and read a stored 0xf1160000, the final two bytes stale.
 	 */
-	memset(fmc->dma_buf, 0, fmc->spec.page_size + LUOFU_DMA_SPLICE_LEN);
+	memset(fmc->dma_buf, 0, fmc->spec.page_size + 32);
 
+	
 	/*
-	 * SENTINEL: does the controller actually write past the page size?
+	 * PROGRAM THE TRANSFER LENGTH.
 	 *
-	 * The tail probe came back with exactly ONE difference in sixteen samples,
-	 * across two pages: page 11 offset 2032..2035 read f1160000 where the flash
-	 * holds f116c36b. Page 11 is the page whose record UBI rejects; page 2 matched
-	 * everywhere, splice region included.
+	 * The sentinel answered the question it was asked: 0xAA written over the
+	 * staging buffer past the page size SURVIVED the read. The controller wrote
+	 * nothing there, so the transfer stops at exactly 2048 bytes - and the page's
+	 * final bytes never arrive.
 	 *
-	 * With the de-interleave, the returned page's byte 2032 comes from staging
-	 * 2046, so its last two bytes come from staging 2048..2049 - PAST the page
-	 * size, in the region the splice pushes in. Those read zero.
+	 * The register list says why. FMC_DMA_LEN at 0x40 is the transfer length, and
+	 * the vendor's own DMA read writes it - in hi_flash.ko, hi_sfc_hw_dma_read takes
+	 * the length in r3 and stores it with "str r2, [r0, #0x40]" - while this driver
+	 * never touches it, leaving the reset default of one page.
 	 *
-	 * Zero could mean the controller wrote nothing there, or wrote zeros. So mark
-	 * that region with 0xAA after the memset and before the operation: if the
-	 * probe still reads zeros the transfer stopped at the page size and the copy
-	 * must not reach past it; if it reads AAAA the controller wrote and something
-	 * downstream is losing it.
+	 * The controller's output is not a bare page: it carries spare bytes inside it
+	 * (which is the splice this driver already de-interleaves), so the length has to
+	 * cover the page PLUS that spare, otherwise the tail of the page is simply not
+	 * transferred. The spare measured at 14 bytes for the one splice per 2048-byte
+	 * page; the vendor lays out 16 per 1024-byte sector, so 32 covers the case
+	 * generously and the extra can only add bytes beyond what the copy reads.
+	 *
+	 * Set before the operation, like the vendor's, not after.
 	 */
-	{
-		u8 *tail = (u8 *)fmc->dma_buf + fmc->spec.page_size;
-		int q;
-
-		for (q = 0; q < 16; q++)
-			tail[q] = 0xaa;
-	}
+	writel(fmc->spec.page_size + 32, fmc->regs + FMC_DMA_LEN);
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
