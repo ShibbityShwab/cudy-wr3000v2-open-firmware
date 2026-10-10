@@ -938,24 +938,22 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * driver registered.
 		 */
 		{
-			int n;
+			struct mtd_info *m = fmc->mtd;
 
 			/*
-			 * 5.10 has no mtd_for_each_device(); the idiom is get_mtd_device(NULL, i)
-			 * walking the index until it fails.  That the kernel caught this and the
-			 * CI build reported it before any fire is the check working as intended.
+			 * OUR OWN MTD'S INDEX goes into the crumb's low bits.  The log's
+			 * physical address is slot-aligned, so its low twelve bits are free -
+			 * and the index is the one number that decides everything: UBI's own
+			 * message says it is attaching "mtd14", which is the VENDOR's partition
+			 * number, so this kernel has the vendor's partition table registered too
+			 * and "rootfsb" has been resolving to that device rather than ours.
+			 *
+			 * The low bits of this crumb value say which index OUR driver got.
 			 */
-			for (n = 0; n < 24; n++) {
-				struct mtd_info *m = get_mtd_device(NULL, n);
-
-				if (IS_ERR(m))
-					break;
-				pr_err("FMC: mtd[%d] name=%s type=%d size=%llu esz=%u wsz=%u\n",
-				       n, m->name, m->type,
-				       (unsigned long long)m->size,
-				       m->erasesize, m->writesize);
-				put_mtd_device(m);
-			}
+			if (m)
+				luofu_fmc_crumb(fmc, LUOFU_LOG_PANIC_STEP,
+						((u32)luofu_log_dma & 0xfffff000u) |
+						((u32)m->index & 0xfffu));
 		}
 		part = get_mtd_device_nm("rootfsb");
 		if (!IS_ERR(part)) {
@@ -1154,15 +1152,19 @@ static struct timer_list luofu_log_timer;
  * CON_PRINTBUFFER also hands it everything printed before registration, which is
  * exactly the boot-time text wanted.
  */
-static bool luofu_mentions_ubi(const char *s, unsigned int n)
+static bool luofu_wanted_chunk(const char *s, unsigned int n)
 {
-	unsigned int i;
+	static const char *const keep[] = { "ubi", "FMC" };
+	unsigned int i, k;
 
-	for (i = 0; i + 3 <= n; i++) {
-		if ((s[i] == 'u' || s[i] == 'U') &&
-		    (s[i + 1] == 'b' || s[i + 1] == 'B') &&
-		    (s[i + 2] == 'i' || s[i + 2] == 'I'))
-			return true;
+	for (k = 0; k < ARRAY_SIZE(keep); k++) {
+		const char *w = keep[k];
+		unsigned int wl = strlen(w);
+
+		for (i = 0; i + wl <= n; i++) {
+			if (!strncmp(s + i, w, wl))
+				return true;
+		}
 	}
 
 	return false;
@@ -1192,7 +1194,7 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 	 * because printk may hand a message over in more than one piece and the pieces
 	 * around the keyword carry the detail.
 	 */
-	if (!luofu_mentions_ubi(s, n))
+	if (!luofu_wanted_chunk(s, n))
 		return;
 
 	if (off == 4)
