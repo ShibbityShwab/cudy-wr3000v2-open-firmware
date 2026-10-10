@@ -1002,6 +1002,7 @@ static dma_addr_t luofu_log_dma;
 static void *luofu_diag_buf;	/* the diagnostic buffer */
 static dma_addr_t luofu_diag_dma;
 static struct kmsg_dumper luofu_kmsg;
+static struct timer_list luofu_log_timer;
 
 static int __init luofu_fmc_ubi_probe(void)
 {
@@ -1529,7 +1530,6 @@ static void luofu_log_tick(struct timer_list *t)
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 }
 
-static struct timer_list luofu_log_timer;
 
 static struct notifier_block luofu_panic_nb;
 
