@@ -1445,7 +1445,7 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  */
 #define LUOFU_LOG_STEP		44		/* crumb: log ring's physical address */
 
-static void luofu_console_write(struct console *co, const char *s, unsigned int n);
+static void __maybe_unused luofu_console_write(struct console *co, const char *s, unsigned int n);
 
 /*
  * SET BY THE DUMPER, HONOURED BY THE CONSOLE.
@@ -1758,7 +1758,7 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 	*(char *)(p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1)) = 0;
 }
 
-static struct console luofu_console = {
+static struct console __maybe_unused luofu_console = {
 	.name	= "luofu",
 	.write	= luofu_console_write,
 	.flags	= CON_PRINTBUFFER | CON_ENABLED,
@@ -1972,12 +1972,20 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	mod_timer(&luofu_reboot_timer, jiffies + LUOFU_SAFETY_SECS * HZ);
 
 	/*
-	 * And the console, which is registered for the early text but which - measured - only
-	 * ever delivers its CON_PRINTBUFFER dump. It is kept because it is harmless and
-	 * because the registration dump is real text; it is NOT the instrument.
+	 * THE CONSOLE IS NOT REGISTERED ANY MORE, AND THE MEASUREMENT IS WHY.
+	 *
+	 * The tick crumb now carries (ticks << 16) | lines, and the last fire read back
+	 * 0x002E00E6: 46 ticks and 230 LINES.  The kernel's log IS readable and the kmsg walk
+	 * DOES work - but the ring only ever shows about fifty lines of early boot.
+	 *
+	 * THE CONSOLE IS THE OTHER WRITER. Its write callback keeps its own static offset and
+	 * appends every chunk printk hands it, into the same buffer the dumper rewrites from
+	 * offset 4 every 500 ms. Two writers, one region, neither aware of the other - so what
+	 * survives is whichever wrote last, and the console writes after every printk.
+	 *
+	 * With it unregistered the ring belongs to the dumper alone, which also freezes on
+	 * panic - so what devmem reads is exactly what the kernel logged.
 	 */
-	register_console(&luofu_console);
-
 	/*
 	 * And the periodic dumper, which IS the instrument - see luofu_log_tick.
 	 */
