@@ -1249,7 +1249,24 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 		return -EINVAL;
 
 	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
-		u32 row = div_u64(pos, mtd->writesize);
+		/*
+		 * A BLOCK NUMBER, UNSHIFTED - AND IT TAKES BOTH, WHICH BLOCK 0 CANNOT SHOW.
+		 *
+		 * The erase address is the block index (pos / erasesize), not the page row the write path uses,
+		 * and the vendor stores it verbatim with ADDRH = 0 rather than shifting it into the high half.
+		 *
+		 * Block 0 is the one address where a page row and a block number are the SAME value, so it
+		 * erased correctly under either convention - and the read-back below, which only ever looks at
+		 * the start of the partition, reported "erased" while blocks 1..175 were never touched. JFFS2
+		 * said so by pointing at a DIFFERENT offset each time, which is the signature of "unerased
+		 * somewhere" rather than "this particular block is bad":
+		 *
+		 *     0x00181758  before the address encoding was fixed at all
+		 *     0x00621798  after, with every block past the first still missing its target
+		 *
+		 * ADDRH = 0 is consistent with a block index on this part: 176 blocks, far inside 16 bits.
+		 */
+		u32 row = div_u64(pos, mtd->erasesize);
 
 		if (luofu_e_n < 0xff)
 			luofu_e_n++;
@@ -1583,17 +1600,26 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data before marking it\n", block);
 
 	/*
-	 * AND THE ERASE IS READ BACK BEFORE IT IS TRUSTED.
+	 * AND THE ERASE IS READ BACK BEFORE IT IS TRUSTED - AT BOTH ENDS OF THE PARTITION.
 	 *
 	 * This is the check whose absence let a wrong address encoding survive: the driver reported 176
-	 * blocks erased while the partition kept every byte it started with, and nothing contradicted it.
-	 * An erase is the one operation that cannot be verified by its own return value, so it is verified
-	 * by reading the flash afterwards - the same discipline the write path already uses.
+	 * blocks erased while the partition kept every byte it started with. And a first version of the
+	 * check was still not enough, because it sampled only block 0 - THE ONE ADDRESS WHERE A PAGE ROW
+	 * AND A BLOCK NUMBER ARE THE SAME VALUE, so it reported "erased" while every block past the first
+	 * was untouched. A read-back that only looks where two conventions agree cannot tell them apart.
+	 *
+	 * So it samples the first block and the last one. An erase is the one operation that cannot be
+	 * verified by its own return value, so it is verified by reading the flash - the same discipline
+	 * the write path already uses.
 	 */
-	word = 0x5a5a5a5au;
-	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
-	dev_info(fmc->dev, "FMC: after the erase, rootfs_data begins 0x%08x (%s)\n", word,
-		 (err || got != 4) ? "read failed" : (word == 0xffffffffu ? "erased" : "STILL HOLDS DATA"));
+	nblocks = div_u64(part->size, part->erasesize);
+	for (block = 0; block < nblocks; block += nblocks - 1) {
+		word = 0x5a5a5a5au;
+		err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
+		dev_info(fmc->dev, "FMC: after the erase, block %u of %u begins 0x%08x (%s)\n",
+			 block, nblocks - 1, word,
+			 (err || got != 4) ? "read failed" : (word == 0xffffffffu ? "erased" : "STILL HOLDS DATA"));
+	}
 
 	memset(page, 0xff, part->writesize);
 	memcpy(page, marker, sizeof(marker));
