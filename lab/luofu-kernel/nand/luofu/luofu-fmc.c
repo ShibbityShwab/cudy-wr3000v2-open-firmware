@@ -1250,23 +1250,24 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 
 	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
 		/*
-		 * A BLOCK NUMBER, UNSHIFTED - AND IT TAKES BOTH, WHICH BLOCK 0 CANNOT SHOW.
+		 * THE ERASE ADDRESS IS THE PAGE ROW OF THE BLOCK'S FIRST PAGE, STORED UNSHIFTED.
 		 *
-		 * The erase address is the block index (pos / erasesize), not the page row the write path uses,
-		 * and the vendor stores it verbatim with ADDRH = 0 rather than shifting it into the high half.
+		 * Three encodings have now been run against a partition with a known pattern planted in its
+		 * LAST block, which is the only place that can tell them apart - block 0 is address 0 under
+		 * every convention, and a read-back of erased flash proves nothing at all:
 		 *
-		 * Block 0 is the one address where a page row and a block number are the SAME value, so it
-		 * erased correctly under either convention - and the read-back below, which only ever looks at
-		 * the start of the partition, reported "erased" while blocks 1..175 were never touched. JFFS2
-		 * said so by pointing at a DIFFERENT offset each time, which is the signature of "unerased
-		 * somewhere" rather than "this particular block is bad":
+		 *   page row, shifted    (row << 16)                  -> partition byte-identical, nothing erased
+		 *   page row, unshifted  (row)                        -> JFFS2's complaint MOVED, so erasing happened
+		 *   block index, unshifted (pos / erasesize)           -> "ERASE DID NOTHING" on a planted pattern
 		 *
-		 *     0x00181758  before the address encoding was fixed at all
-		 *     0x00621798  after, with every block past the first still missing its target
+		 * The middle one is the one that did something, and it also matches the vendor's wrapper, which
+		 * stores the address verbatim with ADDRH = 0:
 		 *
-		 * ADDRH = 0 is consistent with a block index on this part: 176 blocks, far inside 16 bits.
+		 *     hi_spi_nand_hw_erase(regs, addr, cs, cmd):  ADDRH = 0 ; ADDRL = addr   (VERBATIM)
+		 *
+		 * ADDRH = 0 fits a page row on this part: 15,104 pages, inside 16 bits.
 		 */
-		u32 row = div_u64(pos, mtd->erasesize);
+		u32 row = div_u64(pos, mtd->writesize);
 
 		if (luofu_e_n < 0xff)
 			luofu_e_n++;
