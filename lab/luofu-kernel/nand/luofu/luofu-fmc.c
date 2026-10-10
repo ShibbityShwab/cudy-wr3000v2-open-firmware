@@ -1442,6 +1442,14 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * which is the mount and the init, not the probe's own noise.
  */
 #define LUOFU_LOG_SIZE		0x4000		/* 16 KiB log ring - see below */
+
+/*
+ * AND ONLY THE FIRST 4 KB OF IT IS EVER WRITTEN. The walk reports 205 lines and the ring's
+ * non-zero span has been 4152 bytes - 4 KB of text and twelve of zeros - on every fire. The
+ * boundary is close to one page, so the dumper is capped just inside it and slides, keeping the
+ * newest lines rather than the oldest.
+ */
+#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB, inside the 4 KiB that lands */
 #define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
 #define LUOFU_LOG_ARMED		0xc0de10a0	/* "the buffer was mapped" */
 #define LUOFU_LOG_MARK		0xc0de1055	/* "the dumper ran" */
@@ -1593,28 +1601,40 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	if (!p)
 		return;
 
-	/* the mark first, so a reader can tell "ran" from "never ran" */
 	memcpy(p, &mark, sizeof(mark));
 
 	kmsg_dump_rewind(dumper);
 
-	/* circular: when the buffer fills, start over so the NEWEST log survives */
 	luofu_log_lines = 0;
 	while (kmsg_dump_get_line(dumper, true, line, sizeof(line), &len)) {
 		luofu_log_lines++;
+
 		if (len > sizeof(line) - 1)
 			len = sizeof(line) - 1;
-		if (off + len + 1 > LUOFU_LOG_SIZE)
+
+		/*
+		 * STOP AT LUOFU_LOG_KEEP BYTES, AND KEEP THE NEWEST BY COPYING OVER THE OLDEST.
+		 *
+		 * The ring's non-zero span has been 4152 bytes on every fire - 4 KB of text and
+		 * twelve of zeros - while the walk reports 205 lines. That is a write that starts
+		 * and then stops, and the boundary is suspiciously close to one page. Whether the
+		 * region past it is mapped, writable, or simply faults, the way to find out is to
+		 * never go there: cap the ring buffer the dumper actually writes to, and slide it
+		 * so the NEWEST lines survive instead of the oldest.
+		 *
+		 * The panic is at the END of the log, which is exactly what sliding keeps.
+		 */
+		if (off + len + 1 > LUOFU_LOG_KEEP)
 			off = 4;
+
 		memcpy(p + off, line, len);
 		off += len;
 		*(char *)(p + off) = '\n';
 		off++;
 	}
 
-	*(char *)(p + (off < LUOFU_LOG_SIZE ? off : LUOFU_LOG_SIZE - 1)) = 0;
+	*(char *)(p + (off < LUOFU_LOG_KEEP ? off : LUOFU_LOG_KEEP - 1)) = 0;
 }
-
 static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 			    enum kmsg_dump_reason reason)
 {
