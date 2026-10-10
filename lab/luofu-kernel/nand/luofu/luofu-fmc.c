@@ -250,6 +250,21 @@
 #define LUOFU_SPEC_WR_CMD	0x30
 #define LUOFU_SPEC_WR_DUMMY	0x31
 
+/*
+ * THE SPLICE, NOW COMBINED WITH THE VENDOR'S SINGLE-DESTINATION FLOW.
+ *
+ * The two have never been tested together. With three destinations armed - the
+ * original wiring - the window measured 14 bytes and UBI accepted 117 records
+ * before refusing. With one destination it measures 12, sits at a different
+ * offset, and UBI refuses at record 6. So the destination count changes the
+ * window without being the whole of it, and the de-interleave that removed it
+ * was removed at the same time as the destinations - never evaluated with them.
+ *
+ * 1040 and 14 remain the measured pair from the original fit.
+ */
+#define LUOFU_DMA_SPLICE_OFF	1040u
+#define LUOFU_DMA_SPLICE_LEN	14u
+
 
 
 /*
@@ -717,17 +732,28 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			ret = -ETIMEDOUT;
 		} else {
 			/*
-			 * A PLAIN COPY, WITH NO DE-INTERLEAVE.
+			 * DE-INTERLEAVE, WITH THE VENDOR'S SINGLE DESTINATION STILL ARMED.
 			 *
-			 * The splice this driver has been removing was never in the flash.  The
-			 * vendor reads a complete 2048-byte page with ONE destination armed and no
-			 * length write, and its output is the reference this driver has been
-			 * measuring against.  With the extra destinations removed, the staging
-			 * buffer should hold the page directly - and the fourteen bytes that were
-			 * being cut out of it will simply be part of the data, where UBI expects
-			 * them.
+			 * The plain copy was tried alone and the window is still there - 12 bytes
+			 * where the three-destination build measured 14 - so the destination count
+			 * changes the window without being the whole of it.  The de-interleave
+			 * that removes it has never run in this configuration.
+			 *
+			 * The second copy reaches page_size + SPLICE_LEN in the source, because
+			 * the page's last bytes live beyond a bare page_size in the staging buffer.
+			 * With only ONE destination armed the controller may now deposit them,
+			 * which the earlier sentinel test could not have seen: that test ran with
+			 * three destinations armed, the very wiring being changed here.
 			 */
-		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		if (fmc->spec.page_size == 2048) {
+			memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
+			memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
+				      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
+				      LUOFU_DMA_SPLICE_LEN,
+				      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
+		} else {
+			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		}
 		ret = 0;
 		}
 	}
