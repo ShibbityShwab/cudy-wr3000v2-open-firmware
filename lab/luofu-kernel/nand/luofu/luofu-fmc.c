@@ -264,6 +264,13 @@
 #define LUOFU_DMA_SPLICE_OFF	1040u
 #define LUOFU_DMA_SPLICE_LEN	14u
 
+/*
+ * WHICH PAGE THE DIAGNOSTIC MAPS.  Page 2 is where the splice was found; page 9
+ * is where record 118 lives, the record UBI now rejects after record 6 started
+ * passing.  9 * 2048 = 18432.
+ */
+#define LUOFU_MAP_PAGE_OFF	18432u
+
 struct luofu_nand_spec {
 	u32	tri_size, block_size, page_size, oob_size, ecc_type;
 	u32	page_shift, erase_shift;
@@ -1065,7 +1072,7 @@ static int __init luofu_fmc_ubi_probe(void)
 				u32 v = 0;
 				size_t rl = 0;
 
-				mtd_read(part, 4096 + s * 16, 4, &rl, (u8 *)&v);
+				mtd_read(part, LUOFU_MAP_PAGE_OFF + s * 16, 4, &rl, (u8 *)&v);
 				map[s] = v;
 			}
 			put_mtd_device(part);
