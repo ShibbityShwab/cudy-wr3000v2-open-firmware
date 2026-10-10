@@ -962,46 +962,53 @@ static int __init luofu_fmc_ubi_probe(void)
 						((u32)fmc->mtd->index & 0xfffu));
 
 			/*
-			 * ONLY THE LINES THAT DECIDE THE QUESTION, because the ring is 512 bytes
-			 * and the panic dump that follows overwrites most of a full enumeration -
-			 * which is exactly what happened to the last one.
+			 * SAMPLE FOUR OFFSETS INSIDE ONE PARTITION.
 			 *
-			 * mtd14 IS A PARTITION OF OUR DEVICE: the last fire showed mtd[15]
-			 * "rootfs_data" at offset 0x3540000, which is precisely where the vendor's
-			 * own layout puts it.  So the vendor's DT table is attached to our MTD and
-			 * UBI has been reading our hardware - and the question left is whether a
-			 * read through such a partition can reach the chip at all.
+			 * The enumeration settled identity and refuted my last hypothesis together:
 			 *
-			 * The numbers that answer it: our master mtd's SIZE (a partition offset
-			 * beyond it would make every read out there fail the bounds check), what
-			 * rootfsb's own offset and size are, and what master it hangs from.
+			 *   FMC: mtd[0] esbc size=262144 off=0
+			 *        ... size=23068672 off=80216064   (0x1600000 at 0x4C80000)
+			 *
+			 * CONFIG_MTD_OF_PARTS does not add partitions BESIDE the master - IT
+			 * RE-REGISTERS THE MASTER AS a set of partitions.  This driver's single MTD
+			 * is therefore replaced by the vendor's seventeen from the DT, the master is
+			 * no longer registered at all, and the index my crumb carried (0) was a stale
+			 * field on an unregistered struct - a number I reported as evidence and that
+			 * meant nothing.
+			 *
+			 * The partitions tile the flash exactly (0x6280000 + 0x1d80000 = 0x8000000),
+			 * so the master is full-size and the suspicion returns to where it started:
+			 * the page read.  What has never been measured is this driver's read at
+			 * several offsets WITHIN one partition, so that is what this does - 0, 2048,
+			 * 4096 and 5128 of rootfsb, each with its own err and retlen, parked in our
+			 * own coherent buffer for devmem to read.
 			 */
-			for (n = 0; n < 24; n++) {
-				struct mtd_info *m = get_mtd_device(NULL, n);
+			static const u32 offs[4] = { 0, 2048, 4096, 5128 };
+			u8 buf[32];
+			int s;
 
-				if (IS_ERR(m))
+			/* acquired here, released after the loop - the reads below need it */
+			part = get_mtd_device_nm("rootfsb");
+			if (IS_ERR(part))
+				return 0;
+
+			for (s = 0; s < 4; s++) {
+				size_t rl = 0;
+				u32 meta[2];
+				int e;
+
+				memset(buf, 0, sizeof(buf));
+				e = mtd_read(part, offs[s], 32, &rl, buf);
+				if (!luofu_diag_buf)
 					break;
-				if (m->index == 0 || m->index == 14 || m->index == 15)
-					pr_err("FMC: mtd[%d] %s size=%llu off=%llu\n",
-					       m->index, m->name,
-					       (unsigned long long)m->size,
-					       (unsigned long long)m->part.offset);
-				put_mtd_device(m);
+				meta[0] = (u32)e;
+				meta[1] = (u32)rl;
+				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
+				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
 			}
-			pr_err("FMC: master=%s size=%llu wsz=%u esz=%u\n",
-			       fmc->mtd ? fmc->mtd->name : "(none)",
-			       (unsigned long long)(fmc->mtd ? fmc->mtd->size : 0),
-			       fmc->mtd ? fmc->mtd->writesize : 0,
-			       fmc->mtd ? fmc->mtd->erasesize : 0);
 		}
-		part = get_mtd_device_nm("rootfsb");
-		if (!IS_ERR(part)) {
-			pr_err("FMC: rootfsb idx=%d off=%llu size=%llu\n",
-			       part->index,
-			       (unsigned long long)part->part.offset,
-			       (unsigned long long)part->size);
+		if (!IS_ERR(part))
 			put_mtd_device(part);
-		}
 		return 0;
 	}
 
