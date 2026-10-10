@@ -143,7 +143,30 @@ jobs:
           # -x none IS DELIBERATE: it needs no compressor from the kernel, so the image cannot
           # fail to mount over a UBIFS compressor the build happens not to enable.
           mkdir -p tree/etc/config
-          mkfs.ubifs -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data.ubifs
+          # -F IS THE FLAG THAT WAS MISSING, AND IT IS NOT OPTIONAL HERE.
+          #
+          # The image occupies 13 LEBs; the volume is 79. mkfs.ubifs records both (leb_cnt 13,
+          # max_leb_cnt 79) and WITHOUT -F it leaves flags = 0x00000000 - no UBIFS_SB_SPACE_FIXUP.
+          # The kernel only fixes up free space when that flag is set:
+          #
+          #     if (!c->ro_mount && c->space_fixup)
+          #             err = ubifs_fixup_free_space(c);
+          #
+          # so without it the filesystem's accounting never matches a 79-LEB volume and the index
+          # reads as nonsense - which is exactly what "ubifs_read_nnode: error -22 reading nnode at
+          # 7:41" is. -F is what OpenWrt's own image build passes for a volume that is larger than
+          # the image written into it.
+          mkfs.ubifs -F -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data.ubifs
+          echo "=== the superblock it just wrote ==="
+          python3 - <<'PY'
+          import struct
+          b = open("owrt-rootfs_data.ubifs","rb").read()
+          ch = struct.unpack("<IIQIBB2s", b[:24])
+          flags, min_io, leb, cnt, maxc = struct.unpack("<IIIII", b[28:48])
+          fmt = struct.unpack("<I", b[80:84])
+          print("node_type", ch[4], "min_io", min_io, "leb_size", leb, "leb_cnt", cnt, "max_leb_cnt", maxc)
+          print("FLAGS = 0x%08x  (UBIFS_SB_SPACE_FIXUP = 0x2)  fmt_version %d" % (flags, fmt[0]))
+          PY
           ls -l owrt-rootfs_data.ubifs
           # what the image claims, read back with the tool that made it
           ubinize -o /dev/null -m 2048 -p 128KiB -s 2048 /dev/null 2>/dev/null || true
