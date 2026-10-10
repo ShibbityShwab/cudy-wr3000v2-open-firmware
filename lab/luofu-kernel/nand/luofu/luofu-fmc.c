@@ -1438,6 +1438,9 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
  * kernel said on the way down.
  */
 static bool luofu_log_frozen;
+static struct luofu_fmc *luofu_fmc_stamp;
+
+#define LUOFU_LOG_TICK_STEP	45
 static u32 luofu_log_ticks;
 static u32 luofu_log_lines;
 
@@ -1615,6 +1618,24 @@ static void luofu_log_tick(struct timer_list *t)
 		return;
 
 	luofu_log_ticks++;
+
+	/*
+	 * THE CRUMB FIRST, THROUGH I/O RATHER THAN RAM.
+	 *
+	 * Six fires went into RAM addresses - a raw physical pointer, diag + 1024, a constant,
+	 * and the ring's tail - and none of them landed, while a hang means the tick may fault
+	 * before it finishes. C18/C1C are memory-mapped registers this driver has written on
+	 * every successful boot: step 45 with the tick count as the payload cannot have the
+	 * wrong address, and it is written BEFORE the dump and the stamps so a later fault
+	 * cannot erase it.
+	 *
+	 *   C18 = 0xc0de502d, C1C = tick count   the timer ran, this many times
+	 *   C18 = 0xc0de502a, C1C = log address  the panic notifier overwrote it
+	 *   C18 = 0xc0de0020                     a hang - the mach's crumb, no tick survived
+	 */
+	if (luofu_fmc_stamp)
+		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP, luofu_log_ticks);
+
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 	luofu_kmsg.active = false;
@@ -1932,6 +1953,7 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	/*
 	 * And the periodic dumper, which IS the instrument - see luofu_log_tick.
 	 */
+	luofu_fmc_stamp = fmc;
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 
