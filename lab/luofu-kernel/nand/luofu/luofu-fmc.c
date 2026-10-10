@@ -1476,12 +1476,13 @@ static struct timer_list luofu_log_timer;
 static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 {
 	static const u8 marker[12] = {
-		0x85, 0x19, 0x03, 0x20, 0x0c, 0x00, 0x00, 0x00, 0xd8, 0x6f, 0x3c, 0x81
+		0x85, 0x19, 0x03, 0x20, 0x0c, 0x00, 0x00, 0x00, 0xb1, 0xb0, 0x1e, 0xe4
 	};
 	struct erase_info ei;
 	struct mtd_info *part;
 	u8 *page;
 	u32 word = 0;
+	u32 block = 1;
 	size_t got = 0;
 	int err;
 
@@ -1529,6 +1530,35 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 		kfree(page);
 		goto out;
 	}
+
+	/*
+	 * AND THE WHOLE PARTITION IS ERASED, NOT JUST THE FIRST BLOCK.
+	 *
+	 * JFFS2 scans everything, and it found this at 1.5 MB into a partition I had only ever probed at
+	 * block 0 and block 128:
+	 *
+	 *     jffs2: Incompatible feature node (0xe009) found at offset 0x00181758
+	 *
+	 * which stops the mount dead. A partition that is erased at block 0 but carries junk further in
+	 * has never held a filesystem, and JFFS2 will not adopt it.
+	 *
+	 * THE ERASE CAN ONLY EVER HIT A PARTITION THAT HAS NEVER HELD AN OVERLAY, because it runs only
+	 * behind the guard above: the first four bytes must read ff ff ff ff. A filesystem that has ever
+	 * been mounted writes block 0, so the guard sees it and this returns without touching anything - the
+	 * destructive path is unreachable for a live overlay, and the routine therefore cannot eat user
+	 * data on a later boot.
+	 */
+	for (block = 1; block < part->size / part->erasesize; block++) {
+		memset(&ei, 0, sizeof(ei));
+		ei.addr = (u64)block * part->erasesize;
+		ei.len = part->erasesize;
+		err = mtd_erase(part, &ei);
+		if (err) {
+			dev_info(fmc->dev, "FMC: erase stopped at block %u: %d\n", block, err);
+			break;
+		}
+	}
+	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data before marking it\n", block);
 
 	memset(page, 0xff, part->writesize);
 	memcpy(page, marker, sizeof(marker));
