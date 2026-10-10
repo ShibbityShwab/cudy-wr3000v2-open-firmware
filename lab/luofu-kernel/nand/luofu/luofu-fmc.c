@@ -1481,9 +1481,26 @@ static u32 luofu_log_lines;
 #define LUOFU_STAMP_BASE  0x80607800
 #define LUOFU_STAMP_PANIC 0xc0de9a11u
 
+/*
+ * __va(), BECAUSE A PHYSICAL ADDRESS IS NOT A POINTER - and the first version of this
+ * function got that wrong. It wrote to (void *)0x80607800 directly, assuming the window
+ * was identity-mapped, and every stamp read back zero INCLUDING the panic marker, whose
+ * crumb lands every single fire. That is what proved the write was the failure rather
+ * than the timer.
+ *
+ * THE RING ALREADY SHOWED THE RIGHT WAY, three lines below where these live:
+ *
+ *     luofu_log_b = (void *)__va((phys_addr_t)luofu_log_dma);
+ *
+ * and the comment above it says in as many words that __va() is how this region is
+ * reached from the kernel. On ARM __va(0x80607800) is not 0x80607800, so the raw
+ * pointer went to unmapped or I/O space and the store vanished.
+ *
+ * WHEN THE ADDRESSING QUESTION IS ALREADY ANSWERED IN THE FILE, READ THE ANSWER.
+ */
 static void luofu_stamp(u32 slot, u32 value)
 {
-	writel(value, (void *)(uintptr_t)(LUOFU_STAMP_BASE + slot * 4));
+	writel(value, (void *)__va((phys_addr_t)(LUOFU_STAMP_BASE + slot * 4)));
 }
 
 
