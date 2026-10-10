@@ -108,7 +108,7 @@
 #include <linux/io.h>
 #include <linux/string.h>
 #include <linux/reboot.h>
-#include <linux/mutex.h>
+#include <linux/spinlock.h>
 #include <linux/console.h>
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
@@ -316,7 +316,18 @@ static void luofu_fmc_crumb(struct luofu_fmc *fmc, u32 step, u32 payload)
 }
 
 /*
- * THE READ PATH SHARES ONE DMA BUFFER, SO IT NEEDS A LOCK.
+ * THE READ PATH SHARES ONE DMA BUFFER, SO IT NEEDS A LOCK - AND IT MUST BE A SPINLOCK,
+ * NOT A MUTEX.
+ *
+ * The lock was a mutex first, on the reasoning that two readers must not stage into
+ * fmc->dma_buf at the same time. That reasoning was right and the primitive was wrong:
+ * UBI CALLS mtd_read() WITH A SPINLOCK HELD, and a mutex SLEEPS. Sleeping in atomic
+ * context is what the measured hang looks like from outside - it is hard, it kills the
+ * timers, the safety timer never fires, and the box's own watchdog is what returns it.
+ *
+ * spin_lock_irqsave/restore rather than plain spin_lock, because this driver's own read
+ * path never needs interrupts - its completion condition is a status BIT it polls - and
+ * UBI may call it with interrupts on or off.
  *
  * luofu_fmc_read_page() stages every page through fmc->dma_buf and copies out of
  * fmc->page_buf, and luofu_mtd_read() calls it in a loop. Both buffers belong to the
@@ -333,7 +344,7 @@ static void luofu_fmc_crumb(struct luofu_fmc *fmc, u32 step, u32 payload)
  * The probe's direct calls to luofu_fmc_read_page() stay outside this lock on purpose -
  * they run single-threaded at late_initcall, before any of this is reachable.
  */
-static DEFINE_MUTEX(luofu_fmc_read_lock);
+static DEFINE_SPINLOCK(luofu_fmc_read_lock);
 
 static u32 luofu_phase;
 
@@ -857,13 +868,14 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 {
 	struct luofu_fmc *fmc = mtd->priv;
 	size_t done = 0;
+	unsigned long flags;
 	int ret = 0;
 
 	*retlen = 0;
 	if (from < 0 || from + len > mtd->size)
 		return -EINVAL;
 
-	mutex_lock(&luofu_fmc_read_lock);
+	spin_lock_irqsave(&luofu_fmc_read_lock, flags);
 
 	while (done < len) {
 		loff_t pos = from + done;
@@ -879,7 +891,7 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 		done += chunk;
 	}
 
-	mutex_unlock(&luofu_fmc_read_lock);
+	spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
 
 	*retlen = done;
 	return ret;
