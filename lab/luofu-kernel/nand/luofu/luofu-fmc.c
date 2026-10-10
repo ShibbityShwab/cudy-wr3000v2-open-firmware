@@ -1131,14 +1131,21 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 			break;
 	}
 
-	if (ret) {
+	/*
+	 * AND THERE IS NO state, NO MTD_ERASE_DONE AND NO mtd_erase_callback HERE,
+	 * BECAUSE 5.10 REMOVED THEM.  The erase op is synchronous now: the driver
+	 * does the work and returns 0 or an errno, and the core owns the rest.  The
+	 * build said so exactly - "'struct erase_info' has no member named 'state'",
+	 * "'MTD_ERASE_FAILED' undeclared", "implicit declaration of function
+	 * 'mtd_erase_callback'" - which is the compiler being a better reader of the
+	 * API than I was.
+	 *
+	 * fail_addr is kept because it is still a member, and it is the one thing the
+	 * core cannot know on its own: WHICH block failed.
+	 */
+	if (ret)
 		instr->fail_addr = pos;
-		instr->state = MTD_ERASE_FAILED;
-	} else {
-		instr->state = MTD_ERASE_DONE;
-	}
 
-	mtd_erase_callback(instr);
 	return ret;
 }
 
