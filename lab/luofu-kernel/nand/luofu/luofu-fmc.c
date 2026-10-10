@@ -1438,6 +1438,37 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
  * kernel said on the way down.
  */
 static bool luofu_log_frozen;
+static u32 luofu_log_ticks;
+static u32 luofu_log_lines;
+
+/*
+ * LIVENESS STAMPS, IN THE DIAGNOSTIC BUFFER.
+ *
+ * The ring cannot answer the question that matters here: after six fires it still holds the
+ * same 4150 bytes of early boot, and whether that is (a) the timer never running, (b) the
+ * kernel log genuinely being 4 KiB, or (c) the dump being truncated is not decidable from
+ * its contents. What IS decidable from a stamp.
+ *
+ * These sit at diag + 1024, well clear of the probe's sample array at diag + 0 and its
+ * register block at diag + 128, and the diag buffer is a separate allocation from the ring -
+ * so a stamp here is written by the tick whether or not the kmsg walk returns anything.
+ *
+ * ONE READ AFTER A FIRE NOW SEPARATES THE HYPOTHESES:
+ *   [1024] ticks        how many times the 500 ms timer ran (0 = it never fired)
+ *   [1028] jiffies      the last tick's jiffies (against the panic's, shows how long it lived)
+ *   [1032] walked       lines the last kmsg walk returned (0 = the log buffer was empty)
+ *   [1036] did the panic notifier run (a fixed pattern)
+ */
+#define LUOFU_STAMP_OFF   1024
+#define LUOFU_STAMP_PANIC 0xc0de9a11u
+
+static void luofu_stamp(u32 slot, u32 value)
+{
+	u32 *p = (u32 *)((char *)luofu_diag_buf + LUOFU_STAMP_OFF);
+
+	if (luofu_diag_buf)
+		writel(value, &p[slot]);
+}
 
 
 
@@ -1456,7 +1487,9 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	kmsg_dump_rewind(dumper);
 
 	/* circular: when the buffer fills, start over so the NEWEST log survives */
+	luofu_log_lines = 0;
 	while (kmsg_dump_get_line(dumper, true, line, sizeof(line), &len)) {
+		luofu_log_lines++;
 		if (len > sizeof(line) - 1)
 			len = sizeof(line) - 1;
 		if (off + len + 1 > LUOFU_LOG_SIZE)
@@ -1523,9 +1556,14 @@ static void luofu_log_tick(struct timer_list *t)
 	if (!luofu_log_b)
 		return;
 
+	luofu_log_ticks++;
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 	luofu_kmsg.active = false;
+
+	luofu_stamp(0, luofu_log_ticks);
+	luofu_stamp(1, (u32)jiffies);
+	luofu_stamp(2, luofu_log_lines);
 
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 }
@@ -1700,6 +1738,7 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				(u32)(uintptr_t)luofu_log_dma);
 
+	luofu_stamp(3, LUOFU_STAMP_PANIC);
 	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 
