@@ -1661,7 +1661,28 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
  * on its way into a callback that, outside a panic, is never called. Setting it around the
  * walk is safe: kmsg_dump_get_line() takes logbuf_lock itself, and the panic path re-sets it.
  */
-#define LUOFU_LOG_TICK_MS   500
+/*
+ * FIVE SECONDS, NOT FIVE HUNDRED MILLISECONDS - THE INSTRUMENT WAS STRANGLING THE KERNEL.
+ *
+ * The periodic dump walks the WHOLE log - 242 lines when this was measured - and kmsg_dump_get_line
+ * takes logbuf_lock for each one. From a timer, which is SOFTIRQ CONTEXT, that is 242 locked
+ * iterations with interrupts held off, and at a 500 ms cadence the kernel was losing a large
+ * fraction of its interrupt time to my own instrument.
+ *
+ * AND THAT IS THE MEASURED FAILURE, EXACTLY:
+ *
+ *     printk stopped at  ~4 s     starved by the walk
+ *     the tick stopped at 47      ~23.5 s, when the system finally gave out
+ *     the safety timer never fired, so timers died too
+ *     the box's own watchdog is what returned it
+ *
+ * A hard, DETERMINISTIC hang - the tick count was identical on two consecutive fires - which is what
+ * starvation looks like and what no race looks like.
+ *
+ * The panic path keeps its full walk: a panic is terminal, so starving it costs nothing. Only the
+ * periodic one is slowed, and at 5 s a reading still carries the log from up to 20 s into the boot.
+ */
+#define LUOFU_LOG_TICK_MS   5000
 
 static void luofu_log_tick(struct timer_list *t)
 {
