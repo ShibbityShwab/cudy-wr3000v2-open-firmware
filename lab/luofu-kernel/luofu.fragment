@@ -85,7 +85,7 @@ CONFIG_SMP=y
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 root=/dev/mtdblock16 rootfstype=squashfs init=/sbin/init"
+CONFIG_CMDLINE="panic=5 ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
