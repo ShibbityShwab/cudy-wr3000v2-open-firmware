@@ -176,3 +176,32 @@ jobs:
           name: owrt-rootfs-data-ubifs
           path: owrt-rootfs_data.ubifs
           if-no-files-found: error
+
+  ext4overlay:
+    name: an ext4 rootfs_data for the UBI volume
+    runs-on: ubuntu-22.04
+    steps:
+      - name: an ext4 filesystem labelled rootfs_data, sized to the volume
+        run: |
+          set -eux
+          # THE VOLUME IS 79 LEBs OF 126976 = 10,031,104 bytes. Build JUST UNDER it.
+          #
+          # WHY EXT4 AND NOT UBIFS OR F2FS:
+          #   - UBIFS cannot be created here at all (OpenWrt ships no mkfs, the kernel never formats)
+          #   - f2fs is not in this kernel: "# CONFIG_F2FS_FS is not set"
+          #   - ext4 IS: "CONFIG_EXT4_FS=y"
+          #   - and libfstools carries "mkfs.ext4 -q -F -L rootfs_data %s" - the label this must carry
+          #
+          # It goes INSIDE the UBI volume and reaches userspace as /dev/ubiblockC_V, which is a real
+          # block device - which is exactly what ext4 needs and what NAND cannot provide directly.
+          dd if=/dev/zero of=rootfs_data.ext4 bs=1M count=9
+          truncate -s 10027008 rootfs_data.ext4
+          mkfs.ext4 -q -F -L rootfs_data rootfs_data.ext4
+          ls -l rootfs_data.ext4
+          dumpe2fs -h rootfs_data.ext4 2>/dev/null | egrep 'Block count|Block size|Filesystem volume name|Filesystem features' | head -6
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ext4
+          path: rootfs_data.ext4
+          if-no-files-found: error
