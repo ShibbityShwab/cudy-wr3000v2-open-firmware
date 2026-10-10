@@ -108,6 +108,7 @@
 #include <linux/io.h>
 #include <linux/string.h>
 #include <linux/reboot.h>
+#include <linux/mutex.h>
 #include <linux/console.h>
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
@@ -834,11 +835,13 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 {
 	struct luofu_fmc *fmc = mtd->priv;
 	size_t done = 0;
-	int ret;
+	int ret = 0;
 
 	*retlen = 0;
 	if (from < 0 || from + len > mtd->size)
 		return -EINVAL;
+
+	mutex_lock(&luofu_fmc_read_lock);
 
 	while (done < len) {
 		loff_t pos = from + done;
@@ -848,14 +851,16 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 
 		ret = luofu_fmc_read_page(fmc, row, fmc->page_buf);
 		if (ret)
-			return ret;
+			break;
 
 		memcpy(buf + done, fmc->page_buf + off, chunk);
 		done += chunk;
 	}
 
+	mutex_unlock(&luofu_fmc_read_lock);
+
 	*retlen = done;
-	return 0;
+	return ret;
 }
 
 /*
@@ -1440,6 +1445,26 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 static bool luofu_log_frozen;
 static struct luofu_fmc *luofu_fmc_stamp;
 
+/*
+ * THE READ PATH SHARES ONE DMA BUFFER, SO IT NEEDS A LOCK.
+ *
+ * luofu_fmc_read_page() stages every page through fmc->dma_buf and copies out of
+ * fmc->page_buf, and luofu_mtd_read() calls it in a loop. Both buffers belong to the
+ * device, not to the caller. Until now nothing serialised them, which is fine while the
+ * only caller is a single-threaded probe - AND NOT FINE ONCE UBI IS IMPLICATED: ubiattach
+ * scans with its own workqueue and runs ubi_bgt0d in the background, so two reads can be
+ * inside read_page at the same time, staging into the same 0x2200 bytes.
+ *
+ * AND THE SYMPTOM MATCHES. The boot does not fault and does not panic - it HANGS, about
+ * 23 seconds in, which the tick crumb measured (46 ticks of 500 ms). A shared staging
+ * buffer under concurrent readers is exactly that shape: progress until the overlap, then
+ * no progress at all.
+ *
+ * The probe's direct calls to luofu_fmc_read_page() stay outside this lock on purpose -
+ * they run single-threaded at late_initcall, before any of this is reachable.
+ */
+static DEFINE_MUTEX(luofu_fmc_read_lock);
+
 #define LUOFU_LOG_TICK_STEP	45
 static u32 luofu_log_ticks;
 static u32 luofu_log_lines;
@@ -1634,7 +1659,8 @@ static void luofu_log_tick(struct timer_list *t)
 	 *   C18 = 0xc0de0020                     a hang - the mach's crumb, no tick survived
 	 */
 	if (luofu_fmc_stamp)
-		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP, luofu_log_ticks);
+		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
+				(luofu_log_ticks << 16) | (luofu_log_lines & 0xffff));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
