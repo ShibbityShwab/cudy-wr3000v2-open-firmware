@@ -875,23 +875,35 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 	if (from < 0 || from + len > mtd->size)
 		return -EINVAL;
 
-	spin_lock_irqsave(&luofu_fmc_read_lock, flags);
-
+	/*
+	 * THE LOCK COVERS THE SHARED BUFFER, NOT THE WHOLE TRANSFER.
+	 *
+	 * It used to be taken once around the entire loop, with irqsave - and a UBI attach reads
+	 * 128 KiB erase blocks, which is 64 pages per call, each of which can sit in its own
+	 * completion poll. Holding interrupts off across that is not a lock, it is a way to starve
+	 * the timers: the 180-second safety timer never fires, printk stops, and the SoC watchdog
+	 * is what finally resets the box.
+	 *
+	 * fmc->dma_buf and fmc->page_buf are the only shared state, and they are touched inside
+	 * luofu_fmc_read_page, so the lock goes there - per page, held for microseconds.
+	 */
 	while (done < len) {
 		loff_t pos = from + done;
 		u32 row = div_u64(pos, mtd->writesize);
 		size_t off = pos - (loff_t)row * mtd->writesize;
 		size_t chunk = min_t(size_t, mtd->writesize - off, len - done);
 
+		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
 		ret = luofu_fmc_read_page(fmc, row, fmc->page_buf);
+		if (ret == 0)
+			memcpy(buf + done, fmc->page_buf + off, chunk);
+		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+
 		if (ret)
 			break;
 
-		memcpy(buf + done, fmc->page_buf + off, chunk);
 		done += chunk;
 	}
-
-	spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
 
 	*retlen = done;
 	return ret;
