@@ -962,40 +962,47 @@ static int __init luofu_fmc_ubi_probe(void)
 						((u32)fmc->mtd->index & 0xfffu));
 
 			/*
-			 * DIFF A WHOLE RECORD - the fault is a PARTIAL one, not a page-sized one.
+			 * FIND THE FILL BOUNDARY, ON TWO PAGES.
 			 *
-			 * Read against the vendor's own mtd14 at the same offsets, three of the four
-			 * matched BYTE FOR BYTE - including f116c36b, the CRC an empty volume-table
-			 * record carries, which I had wrongly assumed was not in the flash at all.
-			 * My "vendor: all zeros" label was an ASSUMPTION rather than a measurement.
-			 * The one divergence is at 5136: the first 16 bytes of that window are right
-			 * and the rest is stale.
+			 * The full-record diff against the vendor's own mtd14 came back with exactly
+			 * eighteen differing bytes: 8..21 and 168..171. Record 6 starts at flash byte
+			 * 5128, which is page 2 offset 1032 - so the differences are page offsets
+			 * 1040..1053 (a stale 14-byte patch) and 168..171 of the record, its CRC.
+			 * Everything below page offset 1040 is correct.
 			 *
-			 * So this reads the whole 172-byte record 6 - the exact read UBI makes and
-			 * rejects - and parks it for a byte-for-byte comparison with the vendor's.  A
-			 * diff shows which bytes are wrong and where they start, which 32-byte samples
-			 * are too small to show.
+			 * That is exactly why UBI reports "bad CRC at record 6": it computes the CRC
+			 * over our corrupted bytes and gets 0xaae09698 where the flash says 0xf116c36b.
 			 *
-			 * Sizes are known consistent: page_size 2048, oob 64, block 131072, page_buf
-			 * 2048.  There is no size mismatch to fix.
+			 * So the fill stops somewhere between 1039 and 1040. This samples four points
+			 * either side of that on page 2, and the same four on page 3, to see whether
+			 * the boundary is per page or global - and the boundary's value is the clue to
+			 * what the hardware was actually told to transfer.
 			 */
-			u8 rec[172];
-			size_t rl = 0;
-			u32 meta[2];
-			int e;
+			static const u32 offs[8] = {
+				4096 + 1008, 4096 + 1024, 4096 + 1040, 4096 + 1056,
+				6144 + 1008, 6144 + 1024, 6144 + 1040, 6144 + 1056,
+			};
+			u8 buf[32];
+			int s;
 
-			/* acquired here, released below - the read needs it */
+			/* acquired here, released below - the reads need it */
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part))
 				return 0;
 
-			memset(rec, 0, sizeof(rec));
-			e = mtd_read(part, 5128, 172, &rl, rec);
-			if (luofu_diag_buf) {
+			for (s = 0; s < 8; s++) {
+				size_t rl = 0;
+				u32 meta[2];
+				int e;
+
+				memset(buf, 0, sizeof(buf));
+				e = mtd_read(part, offs[s], 32, &rl, buf);
+				if (!luofu_diag_buf)
+					break;
 				meta[0] = (u32)e;
 				meta[1] = (u32)rl;
-				memcpy(luofu_diag_buf, meta, sizeof(meta));
-				memcpy(luofu_diag_buf + 8, rec, sizeof(rec));
+				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
+				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
 			}
 			put_mtd_device(part);
 		}
