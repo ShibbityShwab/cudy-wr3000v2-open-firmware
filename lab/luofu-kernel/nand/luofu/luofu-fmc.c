@@ -1478,7 +1478,29 @@ static u32 luofu_log_lines;
  *   [0x80607808]  lines    lines the last kmsg walk returned
  *   [0x8060780c]  the panic notifier's fixed marker 0xc0de9a11
  */
-#define LUOFU_STAMP_BASE  0x80607800
+/*
+ * THE STAMPS LIVE AT THE END OF THE RING - A BUFFER THIS DRIVER HAS ALREADY PROVEN IT CAN
+ * WRITE, RATHER THAN AN ADDRESS I GUESSED.
+ *
+ * Two attempts at a guessed address failed in two different ways, and the second one hung the
+ * whole boot: C18 stopped at the mach's late_initcall crumb instead of reaching the panic
+ * notifier, and the safety timer - not a panic - is what returned the box. The only new thing
+ * the 500 ms tick does is write this stamp, so a store into unmapped or bus space is what
+ * stopped it.
+ *
+ * The ring at luofu_log_dma is written every boot and read back every boot, through luofu_log_b.
+ * The text uses the first few KB of 16 KiB, so the last 16 bytes are free, and a stamp placed
+ * through luofu_log_b cannot have the wrong address - it is the same pointer the log uses.
+ *
+ *   [ring + 0x3FF0]  ticks     how many times the 500 ms timer ran   (0 = it never fired)
+ *   [ring + 0x3FF4]  jiffies   the last tick's jiffies
+ *   [ring + 0x3FF8]  lines     lines the last kmsg walk returned
+ *   [ring + 0x3FFC]  the panic notifier's marker 0xc0de9a11
+ *
+ * AND THEY ARE WRITTEN AFTER THE DUMP, not before, so the dump's circular write cannot land
+ * on top of them.
+ */
+#define LUOFU_STAMP_OFF   (LUOFU_LOG_SIZE - 16)
 #define LUOFU_STAMP_PANIC 0xc0de9a11u
 
 /*
@@ -1500,7 +1522,10 @@ static u32 luofu_log_lines;
  */
 static void luofu_stamp(u32 slot, u32 value)
 {
-	writel(value, (void *)__va((phys_addr_t)(LUOFU_STAMP_BASE + slot * 4)));
+	if (!luofu_log_b)
+		return;
+
+	writel(value, (char *)luofu_log_b + LUOFU_STAMP_OFF + slot * 4);
 }
 
 
@@ -1771,9 +1796,9 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				(u32)(uintptr_t)luofu_log_dma);
 
-	luofu_stamp(3, LUOFU_STAMP_PANIC);
 	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
 	return NOTIFY_DONE;
 }
