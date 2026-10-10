@@ -1601,6 +1601,19 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	if (!p)
 		return;
 
+	/*
+	 * ZERO THE WINDOW FIRST, SO WHAT IS READ IS ONLY WHAT WAS WRITTEN.
+	 *
+	 * The last fire's text was legible but cut apart: stack frames spliced through by stale
+	 * fragments, "Zone rangrom [<c0708c50>]" where two different lines overlapped. The ring is
+	 * 16 KiB of fixed memory that nothing clears between boots, and the dump only rewrites the
+	 * first 3.5 KiB of it - so anything the previous contents left behind shows through.
+	 *
+	 * AN EARLIER ATTEMPT TO WRITE AT REGISTRATION KILLED THE BOOT, and that is why this is here
+	 * and not there: this function now runs only from the panic path and the 5-second tick, and
+	 * the panic path is terminal. Zeroing here cannot shorten a boot that is already over.
+	 */
+	memset(p, 0, LUOFU_LOG_KEEP);
 	memcpy(p, &mark, sizeof(mark));
 
 	kmsg_dump_rewind(dumper);
