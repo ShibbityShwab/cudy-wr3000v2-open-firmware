@@ -950,32 +950,53 @@ static int __init luofu_fmc_ubi_probe(void)
 		 */
 		{
 			/*
-			 * THE BOUNDARY IS AT PAGE OFFSET 1040, ON EVERY PAGE - so it is NOT a
-			 * transfer length - and the stale content DIFFERS between pages, which means
-			 * something is writing over a buffer.
+			 * READ THE SAME OFFSET TWICE - the collision theory is REFUTED and this is
+			 * what is left.
 			 *
-			 * Same class as the DMA collision two phases back, at a DIFFERENT
-			 * allocation: the fixed addresses chosen for the log and diagnostic buffers
-			 * were checked against fmc->dma_addr and NOT against fmc->page_buf, which is
-			 * a separate devm_kzalloc(page_size) that can land anywhere in RAM.
+			 * The addresses came back: page_buf=c062a040, which is physical 0x0062a040 -
+			 * nowhere near the log at physical 0x80603000. No overlap, so the ring was
+			 * correctly left where it was, and my page_buf hypothesis is wrong.
 			 *
-			 * If page_buf sits where the ring sits, every printk overwrites part of the
-			 * page staging buffer. That leaves reads at offset 0 correct - the EC scan
-			 * passed 32 of 32 - while corrupting the region the volume-table records
-			 * live in, which is exactly the shape observed.
+			 * What IS established: a 16-byte window at page offset 1040 is wrong on
+			 * every page, 1056 is fine on every page, and the stale content DIFFERS
+			 * between pages. A fixed fill length would cut all pages identically; a
+			 * fixed buffer collision would leave the same stale bytes everywhere. Neither
+			 * matches.
 			 *
-			 * So print both addresses and their sizes, and extend the collision check in
-			 * luofu_log_register to cover page_buf as well as the DMA zone.
+			 * So this samples 1032, 1040 and 1048 to bracket the window, and then reads
+			 * 1040 A SECOND TIME. If two reads of the same offset disagree, the window is
+			 * not stale memory at all but data that changes between reads - which would
+			 * mean the copy is racing the hardware rather than reading a dead buffer.
 			 */
+			static const u32 offs[4] = { 4096 + 1032, 4096 + 1040, 4096 + 1048, 4096 + 1040 };
+			u8 buf[32];
+			int s;
+
 			if (fmc->mtd)
 				luofu_fmc_crumb(fmc, LUOFU_LOG_PANIC_STEP,
 						((u32)luofu_log_dma & 0xfffff000u) |
 						((u32)fmc->mtd->index & 0xfffu));
 
-			pr_err("FMC: page_buf=%px size=%u ; log=%px diag=%px dma=%llx\n",
-			       fmc->page_buf, fmc->spec.page_size,
-			       luofu_log_b, luofu_diag_buf,
-			       (unsigned long long)fmc->dma_addr);
+			/* acquired here, released below - the reads need it */
+			part = get_mtd_device_nm("rootfsb");
+			if (IS_ERR(part))
+				return 0;
+
+			for (s = 0; s < 4; s++) {
+				size_t rl = 0;
+				u32 meta[2];
+				int e;
+
+				memset(buf, 0, sizeof(buf));
+				e = mtd_read(part, offs[s], 32, &rl, buf);
+				if (!luofu_diag_buf)
+					break;
+				meta[0] = (u32)e;
+				meta[1] = (u32)rl;
+				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
+				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
+			}
+			put_mtd_device(part);
 		}
 		return 0;
 	}
