@@ -771,6 +771,17 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 #define LUOFU_DIAG_META_OFF	0	/* err, retlen */
 #define LUOFU_DIAG_REC_OFF	8	/* then the record bytes */
 #define LUOFU_DIAG_SIZE		0x200		/* 512 B diagnostic buffer */
+/*
+ * Crumb steps.  Declared HERE, above the hook, because the hook stamps one of them -
+ * and that fact survived two failed attempts to fix it: first a batch whose addition
+ * failed while its removal succeeded, leaving the macros gone altogether, and then a
+ * checker that reported "no order problems" precisely because nothing was defined to
+ * be out of order.  The checker now also fails on any LUOFU_* identifier that is USED
+ * but never DEFINED, which is the gap that let the second attempt through.
+ */
+#define LUOFU_LOG_STEP		44		/* crumb: log ring's physical address */
+#define LUOFU_LOG_PANIC_STEP	42		/* crumb: log address + our mtd index */
+#define LUOFU_LOG_PANIC_VAL	0xc0de1042
 
 static struct luofu_fmc *luofu_ubi_fmc;
 
