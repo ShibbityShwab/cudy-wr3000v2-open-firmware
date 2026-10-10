@@ -85,7 +85,7 @@ CONFIG_SMP=y
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/nonexistent-init"
+CONFIG_CMDLINE="panic=5 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
@@ -150,14 +150,21 @@ CONFIG_SERIAL_8250_DW=y
 # the vendor's mtd numbering.  The ubi.mtd/root/rootwait values are appended by
 # the single CONFIG_CMDLINE above, next to panic=5 - they belong in ONE string.
 #
-# init=/nonexistent-init IS THE SAFETY NET, not a typo, and it is what makes this
-# step safe to fire.  Our kernel has no network driver, so a boot that SUCCEEDS
-# in mounting a rootfs would reach a userspace reachable by neither ssh nor the
-# bootreg failover - a power cycle would be the only way back.  Naming an init
-# that cannot exist means a successful mount still ends in "Requested init ...
-# failed" plus panic=5 plus the mach's .restart - exactly the path that returns
-# the box to the vendor today.  Both outcomes therefore self-recover, and the
-# readback cell is what tells them apart.
+# init=/sbin/init NOW, AND THE GUARD MOVED INTO THE KERNEL.
+#
+# For most of this work the init was /nonexistent-init, and it was the safety net:
+# our kernel has no network driver, so a boot that SUCCEEDED in mounting a rootfs
+# would reach a userspace reachable by neither ssh nor the bootreg failover, and a
+# power cycle would be the only way back.
+#
+# THAT GUARD IS NOW REPLACED BY A BETTER ONE.  luofu-fmc.c arms a 180-second kernel
+# timer that prints a marker and calls emergency_restart() - the same call panic()
+# makes, from softirq context, independent of what userspace is doing.  Whatever
+# happens after the mount, the box returns to the vendor on its own and the readback
+# cells still get read.  See LUOFU_SAFETY_SECS in the driver: it must stay until this
+# kernel has a network driver and a userspace that can be reached.
+#
+# So this step can now boot the real init and find out how far userspace gets.
 
 # ---------------------------------------------------------------------------
 # NAND: the FMC controller + the SPI-NAND framework, plus UBI/pstore

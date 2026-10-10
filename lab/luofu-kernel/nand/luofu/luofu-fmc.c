@@ -107,6 +107,7 @@
 #include <linux/genhd.h>
 #include <linux/io.h>
 #include <linux/string.h>
+#include <linux/reboot.h>
 #include <linux/console.h>
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
@@ -1442,6 +1443,27 @@ static void luofu_log_tick(struct timer_list *t);
 static struct timer_list luofu_log_timer;
 
 /*
+ * THE SAFETY TIMER - WHAT MAKES A REAL INIT SAFE TO BOOT.
+ *
+ * The fragment's comment explains why init=/nonexistent-init has been the guard all
+ * along: with no network driver, a boot that SUCCEEDS in mounting a rootfs reaches a
+ * userspace reachable by neither ssh nor the bootreg failover, and a power cycle would
+ * be the only way back.
+ *
+ * A KERNEL TIMER REMOVES THAT LIMIT. It runs in softirq context, independent of
+ * whatever userspace is doing, and it can call emergency_restart() - the same call
+ * panic() makes. So if userspace comes up and does nothing useful, or hangs, the box
+ * still returns to the vendor on its own, and the readback cells still get read.
+ *
+ * It fires unconditionally, once, well after the mount attempt. It is not a
+ * convenience: it is the replacement for the guard, and it must stay until this
+ * kernel has a network driver and a userspace that can be reached.
+ */
+#define LUOFU_SAFETY_SECS	180
+
+static struct timer_list luofu_reboot_timer;
+
+/*
  * A CONSOLE THAT KEEPS WHAT IT IS SHOWN.
  *
  * Everything above this point tried to read the log back through the kmsg_dumper
@@ -1554,6 +1576,13 @@ static struct console luofu_console = {
  * where the vendor's kernel code begins - so if the timer runs at all, the mark
  * and the text are both readable, and no second channel is needed to say so.
  */
+static void luofu_reboot_tick(struct timer_list *t)
+{
+	pr_emerg("FMC: SAFETY TIMER FIRED after %d s - returning the box to the vendor\n",
+		 LUOFU_SAFETY_SECS);
+	emergency_restart();
+}
+
 static void luofu_log_tick(struct timer_list *t)
 {
 	/*
@@ -1725,6 +1754,14 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 */
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
+
+	/*
+	 * And the safety timer, armed once and never cancelled - see its declaration
+	 * for why it exists. It is what lets a real init be booted without the risk of
+	 * stranding the router in a userspace nothing can reach.
+	 */
+	timer_setup(&luofu_reboot_timer, luofu_reboot_tick, 0);
+	mod_timer(&luofu_reboot_timer, jiffies + LUOFU_SAFETY_SECS * HZ);
 
 	/*
 	 * And the console, which is the capture that does not depend on the kmsg API
