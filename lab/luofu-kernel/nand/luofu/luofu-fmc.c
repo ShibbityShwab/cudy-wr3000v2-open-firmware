@@ -1961,10 +1961,28 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 * 0xC0 means the mapper produced the expected kernel virtual address. 0x40 means it
 	 * produced the PHYSICAL address unmodified - which is the shape that makes writes vanish.
 	 */
+	/*
+	 * AND NOW: DOES THE DUMPER SEE ITS OWN WRITE?
+	 *
+	 * 0xC0 came back, so __va() produced 0xC06xxxxx - the pointer is right, the physical
+	 * address 0x80603000 is right, and the translation is right. Yet the text at 0x80603000,
+	 * read with devmem, is this kernel's FIRST boot and never changes.
+	 *
+	 * So the last possibility is that what the dumper writes through luofu_log_b is not what
+	 * devmem reads at the address the driver computed. That is a statement about the two
+	 * paths, and it is testable in one word: read the ring back through its OWN pointer and
+	 * put the result in the crumb.
+	 *
+	 *     C1C = (lines << 16) | (*(u32 *)(luofu_log_b + 4) & 0xffff)
+	 *
+	 * The first text the dumper writes sits at offset 4, right after the mark. If devmem shows
+	 * one value there and the crumb shows another, the two paths do not meet - and THAT is the
+	 * fault, not the address, not __va(), and not the walk.
+	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
-				((luofu_log_lines & 0xfffff) << 8) |
-				((((u32)(uintptr_t)luofu_log_b >> 24) & 0xffu)));
+				((luofu_log_lines & 0xffffu) << 16) |
+				((*(volatile u32 *)((char *)luofu_log_b + 4)) & 0xffffu));
 
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
