@@ -224,6 +224,21 @@ CONFIG_UBIFS_FS=y
 CONFIG_SQUASHFS=y
 
 # ---------------------------------------------------------------------------
+# THE KERNEL LOG BUFFER WAS 4 KiB, WHICH IS WHY THE DUMPER KEPT SHOWING 0.HAT BOOT.
+#
+# CONFIG_LOG_BUF_SHIFT has been small enough that the whole kernel log wraps at 4092
+# bytes - the ring's last dumps all ended MID-LINE, at literally 4092 bytes of text,
+# with the same "[ 0.000000] L2C-310 ..." lines no matter how far the boot actually got.
+# So every luofu_kmsg_to() copy was the same 4 KiB of the OLDEST boot text, and the
+# instrument looked like it was reading a kernel that died at 0.15 s.
+#
+# 64 KiB holds a whole boot, which makes the panic dump worth reading: the log the
+# kernel hands over at panic time is the trace this project needs, and the console
+# capture covers everything before it.
+CONFIG_LOG_BUF_SHIFT=16
+
+
+# ---------------------------------------------------------------------------
 # SQUASHFS: DIRECT, NOT FILE_CACHE.
 #
 # THE VENDOR'S 5.10.201 KERNEL MOUNTS OUR OPENWRT IMAGE - WITH ITS XZ - FROM THE SAME

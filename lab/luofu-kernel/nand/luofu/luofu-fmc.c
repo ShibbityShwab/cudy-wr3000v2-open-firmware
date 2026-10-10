@@ -1447,9 +1447,6 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	if (!p)
 		return;
 
-	/* THE CONSOLE STOPS HERE - see luofu_log_frozen. */
-	luofu_log_frozen = true;
-
 	/* the mark first, so a reader can tell "ran" from "never ran" */
 	memcpy(p, &mark, sizeof(mark));
 
@@ -1473,14 +1470,24 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 			    enum kmsg_dump_reason reason)
 {
+	/*
+	 * THE CONSOLE STOPS HERE, AND ONLY HERE.
+	 *
+	 * kmsg_dump() runs INSIDE panic() before the notifier chain, so this is the real
+	 * death path. Freezing the console now means the ring's final content is the
+	 * complete log as the kernel saw it, and nothing printed on the way down can
+	 * overwrite it.
+	 *
+	 * IT MUST NOT BE SET ANYWHERE SHARED. luofu_kmsg_to() has two other callers, and
+	 * one of them was a 3-second timer - so the flag got set at t=3s, the console
+	 * stopped capturing there, and the ring ended up holding the kernel's own 4 KiB
+	 * log buffer rather than the boot.
+	 */
+	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, dumper);
 }
 
 static struct notifier_block luofu_panic_nb;
-
-static void luofu_log_tick(struct timer_list *t);
-
-static struct timer_list luofu_log_timer;
 
 /*
  * THE SAFETY TIMER - WHAT MAKES A REAL INIT SAFE TO BOOT.
@@ -1605,32 +1612,27 @@ static void luofu_reboot_tick(struct timer_list *t)
 	emergency_restart();
 }
 
-static void luofu_log_tick(struct timer_list *t)
-{
-	/*
-	 * dumper->active IS THE MISSING PIECE, and the mark landing without any
-	 * text is what found it.  kmsg_dump_get_line_nolock() opens with:
-	 *
-	 *	if (!dumper->active)
-	 *		goto out;		(returns false, *len = 0)
-	 *
-	 * and `active` is set in exactly one place - kmsg_dump() itself, on its way
-	 * into a dumper's callback.  So a dumper whose callback is never called (as
-	 * here, because this kernel never panics) stays inactive forever, and every
-	 * iteration returns false on the first call.  The mark was written, the
-	 * buffer was refreshed, and the log was silently empty.
-	 *
-	 * Setting it around the walk is safe and is this dumper's own state: nothing
-	 * else iterates through it, kmsg_dump() re-sets it on the panic path, and
-	 * kmsg_dump_get_line() takes logbuf_lock itself - so this neither races the
-	 * lock nor disturbs a concurrent panic.
-	 */
-	luofu_kmsg.active = true;
-	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
-	luofu_kmsg.active = false;
-
-	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
-}
+/*
+ * THERE IS NO SNAPSHOT TIMER ANY MORE, AND THAT IS THE FIX.
+ *
+ * A 3-second timer used to call luofu_kmsg_to() to work around dumper->active never
+ * being set - kmsg_dump_get_line_nolock() returns false immediately unless the dumper
+ * is active, and nothing sets it for a dumper whose callback has never run. The timer
+ * set it by hand and walked the log.
+ *
+ * BUT THE CALLBACK RUNS NOW. This kernel always panics at the end of the boot (that is
+ * what panic=5 and init=/nonexistent-init were for, and what the mount attempt still
+ * does), so kmsg_dump() really does invoke luofu_kmsg_dump and sets active on its way in.
+ * The workaround is obsolete.
+ *
+ * AND IT WAS ACTIVELY HARMFUL: the timer's copy wrote the kernel's log buffer from
+ * OFFSET 4 of the ring - over the top of what the console hook had been accumulating
+ * THERE. The kernel's own log buffer is 4 KiB (CONFIG_LOG_BUF_SHIFT), so every copy is
+ * the same 4092 bytes of the OLDEST boot text, which is why the ring kept showing
+ * "[ 0.000000] L2C-310 ..." no matter how far the boot actually got. THE CONSOLE IS THE
+ * ONLY INSTRUMENT THAT CAN HOLD MORE THAN 4 KiB, BECAUSE IT RECEIVES EACH LINE AS IT IS
+ * PRINTED, AND THE TIMER WAS OVERWRITING IT.
+ */
 
 static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
 {
@@ -1654,6 +1656,7 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				(u32)(uintptr_t)luofu_log_dma);
 
+	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 
 	return NOTIFY_DONE;
@@ -1769,13 +1772,6 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 */
 	luofu_panic_nb.notifier_call = luofu_panic_notify;
 	atomic_notifier_chain_register(&panic_notifier_list, &luofu_panic_nb);
-
-	/*
-	 * And the snapshot timer, which is the hook that does not depend on the
-	 * kernel ever panicking - see luofu_log_tick for why that matters.
-	 */
-	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
-	mod_timer(&luofu_log_timer, jiffies + 3 * HZ);
 
 	/*
 	 * And the safety timer, armed once and never cancelled - see its declaration
