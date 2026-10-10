@@ -1459,15 +1459,31 @@ static u32 luofu_log_lines;
  *   [1032] walked       lines the last kmsg walk returned (0 = the log buffer was empty)
  *   [1036] did the panic notifier run (a fixed pattern)
  */
-#define LUOFU_STAMP_OFF   1024
+/*
+ * A FIXED PHYSICAL ADDRESS, NOT THE DIAGNOSTIC BUFFER.
+ *
+ * The first attempt put these at diag + 1024 and read back zero for all four - including
+ * the panic marker, whose crumb provably landed a line earlier. Two candidate explanations
+ * and no way to separate them from here (luofu_diag_buf being NULL, or the diag being
+ * somewhere other than log + LOG_SIZE after the ring grew from 0x200 to 0x4000), which is
+ * the same trap as before: an instrument whose address is uncertain reports absence.
+ *
+ * SO THE STAMPS GET AN ADDRESS THAT CANNOT BE WRONG. 0x80607800 is inside the surviving
+ * window (0x80602000..0x80608000), past the ring (ends 0x80607000) and past the diagnostic
+ * buffer (ends 0x80607200), in the same identity-mapped region the ring itself uses - and
+ * nothing else in this driver writes there.
+ *
+ *   [0x80607800]  ticks    how many times the 500 ms timer ran   (0 = it never fired)
+ *   [0x80607804]  jiffies  the last tick's jiffies
+ *   [0x80607808]  lines    lines the last kmsg walk returned
+ *   [0x8060780c]  the panic notifier's fixed marker 0xc0de9a11
+ */
+#define LUOFU_STAMP_BASE  0x80607800
 #define LUOFU_STAMP_PANIC 0xc0de9a11u
 
 static void luofu_stamp(u32 slot, u32 value)
 {
-	u32 *p = (u32 *)((char *)luofu_diag_buf + LUOFU_STAMP_OFF);
-
-	if (luofu_diag_buf)
-		writel(value, &p[slot]);
+	writel(value, (void *)(uintptr_t)(LUOFU_STAMP_BASE + slot * 4));
 }
 
 
