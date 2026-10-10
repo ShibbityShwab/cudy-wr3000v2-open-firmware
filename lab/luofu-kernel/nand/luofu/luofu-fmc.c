@@ -335,6 +335,8 @@ static void luofu_fmc_crumb(struct luofu_fmc *fmc, u32 step, u32 payload)
  */
 static DEFINE_MUTEX(luofu_fmc_read_lock);
 
+static u32 luofu_phase;
+
 /* ------------------------------------------------------------------ */
 /* The register layer                                                   */
 /* ------------------------------------------------------------------ */
@@ -1474,7 +1476,6 @@ static void __maybe_unused luofu_console_write(struct console *co, const char *s
  */
 static bool luofu_log_frozen;
 static struct luofu_fmc *luofu_fmc_stamp;
-static u32 luofu_phase;
 
 
 
