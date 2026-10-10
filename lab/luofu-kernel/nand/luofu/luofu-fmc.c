@@ -1143,6 +1143,30 @@ static int __init luofu_fmc_ubi_probe(void)
 					regs[13] = readl(fmc->regs + 0x38);
 				}
 
+				/*
+				 * AND WHAT IS IN THE OOB BUFFER?
+				 *
+				 * 0x38 turned out to be static - 4128 before and after sixteen reads -
+				 * so it is not a counter and that instrument is dead. Every per-operation
+				 * register is now ruled out by measurement.
+				 *
+				 * The one thing never looked at is where the spare area goes. This driver
+				 * points FMC_SADDR_OOB at dma_buf + 0x2000 and has NEVER READ IT BACK. If
+				 * the controller deposits the page's spare bytes there, then the data
+				 * transfer really is a clean 2048 and the splice this driver de-interleaves
+				 * out of the data is something else entirely.
+				 *
+				 * The vendor's own flash reads carry an OOB destination too, and this is the
+				 * only buffer in the driver whose contents have never been examined.
+				 */
+				{
+					const u8 *oob = (const u8 *)fmc->dma_buf + 0x2000;
+					int q;
+
+					for (q = 0; q < 16; q++)
+						regs[16 + q] = ((const u32 *)oob)[q];
+				}
+
 				memcpy(luofu_diag_buf, map, sizeof(map));
 
 				/*
