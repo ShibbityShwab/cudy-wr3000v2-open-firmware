@@ -1843,7 +1843,7 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
-				(u32)(uintptr_t)luofu_log_dma);
+				(luofu_log_ticks << 16) | (luofu_log_lines & 0xffff));
 
 	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
