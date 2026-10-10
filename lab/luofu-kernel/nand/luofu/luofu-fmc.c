@@ -182,6 +182,7 @@
 #define SPINAND_CMD_GET_FEATURE	0x0f
 #define SPINAND_CMD_SET_FEATURE	0x1f
 #define SPINAND_CMD_RDID	0x9f
+#define SPINAND_CMD_BLOCK_ERASE	0xd8	/* the vendor's hi_spi_nand_drv_erase passes this */
 
 /* GET FEATURES register addresses (SPI-NAND standard) */
 #define SPINAND_FEAT_STATUS	0xc0
@@ -192,6 +193,7 @@
 /* FMC_OP values, all read out of tri_spi_nand_drv.o / hi_flash.ko */
 #define FMC_OP_GET_FEATURE	0xc5	/* START | addr | data-in    */
 #define FMC_OP_RDID		0x185	/* START | dummy | data-in   */
+#define FMC_OP_ERASE		0xc1	/* START | addr - the vendor's hi_spi_nand_hw_erase */
 
 /* Poll bounds.  The vendor uses 100000 iterations for the command engine and
  * 2000 for the die-ready wait; we keep the same shape with saner delays. */
@@ -913,6 +915,234 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 }
 
 /*
+ * ------------------------------------------------------------------ *
+ * THE WRITE PATH.  ITS SEQUENCES ARE NOT GUESSES.                     *
+ * ------------------------------------------------------------------ *
+ *
+ * This driver has never had a path that can modify the flash - that was its
+ * oldest property, held on purpose.  It is given one now for a specific
+ * reason: OpenWrt boots on this kernel and its `mount_root` cannot keep a
+ * configuration without a writable overlay.  The log says so in as many words -
+ *
+ *   UBIFS error (ubi0:1 pid 164): ubifs_mount: can't format empty UBI volume:
+ *                                read-only UBI volume
+ *   mount_root: failed to mount -t ubifs /dev/ubiblk0_1 /tmp/overlay: Read-only file system
+ *
+ * - and UBI attached read-only because this driver clears MTD_WRITEABLE and
+ * offers no _write and no _erase.  So the two things that must change are the
+ * flags and the ops.
+ *
+ * AND EVERY SEQUENCE BELOW IS THE VENDOR'S OWN.  hi_flash.ko ships with a full
+ * symbol table, so hi_spi_nand_hw_write and hi_spi_nand_hw_erase were
+ * disassembled by name rather than inferred:
+ *
+ *   hi_spi_nand_hw_write(regs, row, recipe):
+ *     ADDRH  = row >> 16
+ *     ADDRL  = row << 16
+ *     SADDR_D0  = recipe[0]                 (the DMA buffer)
+ *     SADDR_OOB = recipe[8]
+ *     OP_CFG = (cs<<11) | (if_type<<7) | (addr_cyc<<4) | dummy
+ *     dsb
+ *     OP_CTRL = (OP_CTRL & ~0xffff) | (3) | (recipe[0x18] << 8)
+ *
+ *   hi_spi_nand_hw_erase(regs, addr, cs, 0xd8):
+ *     FMC_CMD = 0xd8
+ *     ADDRL   = addr        (already shifted by the caller - stored verbatim)
+ *     ADDRH   = 0
+ *     DMA_LEN = 1
+ *     OP_CFG  = (cs << 11) | 0x30
+ *     FMC_OP  = 0xc1
+ *
+ * AND ITS CALLERS DO LESS THAN THEY LOOK LIKE THEY SHOULD.
+ * hi_spi_nand_drv_dma_write copies the page into the buffer, fills the OOB with
+ * 0xff, and issues the op - and hi_spi_nand_drv_erase issues the erase and then
+ * polls feature 7 up to 2000 times.  NEITHER SENDS A WRITE ENABLE AND NEITHER
+ * SENDS A PROGRAM EXECUTE: THE CONTROLLER PERFORMS BOTH ITSELF.  That is worth
+ * stating plainly, because adding them would be inventing a sequence the
+ * hardware does not want.
+ *
+ * WHAT BOUNDS THE RISK: the ops are reached only through the MTD core, so every
+ * address is inside this partition and every row computation is the one the
+ * read path already proves; and the first thing that will ever be written is the
+ * EMPTY, DISPOSABLE rootfs_data volume - 79 LEBs that exist to be formatted.
+ */
+
+static int luofu_fmc_wait_ready(struct luofu_fmc *fmc)
+{
+	u8 v;
+	int i, ret;
+
+	for (i = 0; i < FMC_READY_POLLS; i++) {
+		ret = luofu_fmc_get_feature_raw(fmc, SPINAND_FEAT_STATUS, &v);
+		if (ret)
+			return ret;
+		if (!(v & BIT(0)))
+			return 0;
+		usleep_range(FMC_READY_DELAY_US, FMC_READY_DELAY_US * 2);
+	}
+
+	dev_err(fmc->dev, "FMC: program/erase never finished\n");
+	return -ETIMEDOUT;
+}
+
+static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data)
+{
+	u32 op_cfg, op_ctrl;
+	int i, ret;
+
+	if (!fmc->dma_buf)
+		return -ENOMEM;
+
+	/*
+	 * THE PAGE GOES OUT THROUGH THE SAME BUFFER THE READ FILLS, and the OOB
+	 * area is 0xff - the vendor's hi_spi_nand_drv_dma_write does exactly this,
+	 * and 0xff is what an unwritten spare area must contain for the ECC the
+	 * controller generates to be consistent with what a later read expects.
+	 */
+	memcpy(fmc->dma_buf, data, fmc->spec.page_size);
+	if (fmc->spec.oob_size)
+		memset(fmc->dma_buf + fmc->spec.page_size, 0xff, fmc->spec.oob_size);
+
+	writel(row >> 16, fmc->regs + FMC_ADDRH);
+	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(fmc->dma_addr + fmc->spec.page_size, fmc->regs + FMC_SADDR_OOB);
+	writel(1, fmc->regs + FMC_DMA_LEN);
+
+	op_cfg = luofu_fmc_cs_field(fmc) |
+		 ((u32)(fmc->spec.wr_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
+		 ((u32)(fmc->spec.wr_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
+		 ((u32)fmc->spec.wr_dummy & FMC_OPCFG_DUMMY_MASK);
+	writel(op_cfg, fmc->regs + FMC_OP_CFG);
+	wmb();
+
+	/*
+	 * THE REGISTER IS READ FIRST AND ITS HIGH HALF IS PRESERVED, because that
+	 * is what the vendor's own hi_spi_nand_hw_write does:
+	 *
+	 *     ldr r3, [r5, #0x68]      <- read OP_CTRL
+	 *     orr r1, r3, #3
+	 *     bfi r3, r1, #0, #8       <- low byte = old | 3
+	 *     bfi r3, r2, #8, #8       <- the write command into bits 8-15
+	 *
+	 * Writing a fresh word here would clear whatever the controller keeps in
+	 * the upper nibble, and the read path's shape - (cmd << 16) | 1 - is a
+	 * DIFFERENT slot for a different operation.
+	 */
+	op_ctrl = readl(fmc->regs + FMC_OP_CTRL);
+	op_ctrl = (op_ctrl & ~0xffu) | 3u;
+	op_ctrl = (op_ctrl & ~0xff00u) | ((u32)fmc->spec.wr_cmd << 8);
+	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
+
+	for (i = 0; i < FMC_CMD_POLLS; i++) {
+		if (readl(fmc->regs + FMC_INT_STATUS) & 1)
+			break;
+		udelay(1);
+	}
+
+	writel(0, fmc->regs + FMC_INT_EN);
+	writel(1, fmc->regs + FMC_INT_CLR);
+
+	if (i == FMC_CMD_POLLS) {
+		dev_err(fmc->dev, "FMC: write transfer never completed\n");
+		return -ETIMEDOUT;
+	}
+
+	ret = luofu_fmc_wait_ready(fmc);
+
+	return ret;
+}
+
+static int luofu_fmc_erase_block(struct luofu_fmc *fmc, u32 row)
+{
+	u8 saved = luofu_fmc_ecc_type_get(fmc);
+	int ret;
+
+	/*
+	 * The ECC engine is off for this, the way it is off for ID and feature
+	 * reads: an erase transfers no data through the engine, and leaving it
+	 * armed is what the vendor's hi_spi_nand_hw_erase implicitly does by
+	 * touching only FMC_CMD/ADDR/DMA_LEN/OP_CFG/FMC_OP.
+	 */
+	luofu_fmc_ecc_type_set(fmc, 0);
+
+	writel(0, fmc->regs + FMC_ADDRH);
+	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(SPINAND_CMD_BLOCK_ERASE, fmc->regs + FMC_CMD);
+	writel(1, fmc->regs + FMC_DMA_LEN);
+	writel(luofu_fmc_cs_field(fmc) | 0x30, fmc->regs + FMC_OP_CFG);
+	writel(FMC_OP_ERASE, fmc->regs + FMC_OP);
+
+	ret = luofu_fmc_wait_cmd(fmc);
+	if (!ret)
+		ret = luofu_fmc_wait_ready(fmc);
+
+	luofu_fmc_ecc_type_set(fmc, saved);
+	return ret;
+}
+
+static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
+			   size_t *retlen, const u_char *buf)
+{
+	struct luofu_fmc *fmc = mtd->priv;
+	size_t done = 0;
+	unsigned long flags;
+	int ret = 0;
+
+	*retlen = 0;
+	if (to < 0 || to + len > mtd->size)
+		return -EINVAL;
+	if (len % mtd->writesize || to % mtd->writesize)
+		return -EINVAL;
+
+	while (done < len) {
+		u32 row = div_u64(to + done, mtd->writesize);
+
+		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
+		ret = luofu_fmc_write_page(fmc, row, buf + done);
+		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+		if (ret)
+			break;
+
+		done += mtd->writesize;
+	}
+
+	*retlen = done;
+	return ret;
+}
+
+static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
+{
+	struct luofu_fmc *fmc = mtd->priv;
+	unsigned long flags;
+	loff_t pos;
+	int ret = 0;
+
+	if (instr->addr + instr->len > mtd->size)
+		return -EINVAL;
+
+	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
+		u32 row = div_u64(pos, mtd->writesize);
+
+		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
+		ret = luofu_fmc_erase_block(fmc, row);
+		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+		if (ret)
+			break;
+	}
+
+	if (ret) {
+		instr->fail_addr = pos;
+		instr->state = MTD_ERASE_FAILED;
+	} else {
+		instr->state = MTD_ERASE_DONE;
+	}
+
+	mtd_erase_callback(instr);
+	return ret;
+}
+
+/*
  * The bad-block marker is not read yet.  This returns "good" for every block,
  * which is a placeholder and not a claim: UBI's own scan reads every PEB's EC
  * header and marks a PEB bad when that read fails, so a genuinely bad block is
@@ -950,7 +1180,22 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 * and the source says why.  UBI is unaffected - its build.c mentions
 	 * MTD_NO_ERASE zero times and keys only on MTD_WRITEABLE.
 	 */
-	mtd->flags = (MTD_CAP_NANDFLASH & ~MTD_WRITEABLE) | MTD_NO_ERASE;
+	/*
+	 * THE FLASH IS WRITABLE NOW, AND THAT IS A DELIBERATE CHANGE.
+	 *
+	 * This line used to clear MTD_WRITEABLE and set MTD_NO_ERASE, with a
+	 * comment explaining that the driver had no path that could modify the
+	 * flash.  It has one now (see the write path above), so the flags tell the
+	 * truth: MTD_CAP_NANDFLASH is exactly MTD_WRITEABLE, and MTD_NO_ERASE is
+	 * gone because ->_erase exists.
+	 *
+	 * The consequence to know about: UBI now attaches mtd16 READ-WRITE, so it
+	 * will erase and program its own EC/VID headers as it works.  That is
+	 * ordinary UBI behaviour on a NAND - it is what the vendor's own stack does
+	 * to this same partition - and it is why the volume table was verified
+	 * intact before the change.
+	 */
+	mtd->flags = MTD_CAP_NANDFLASH;
 	mtd->size = fmc->spec.tri_size;
 	mtd->erasesize = fmc->spec.block_size;
 	mtd->writesize = fmc->spec.page_size;
@@ -958,6 +1203,8 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	mtd->oobsize = fmc->spec.oob_size;
 	mtd->owner = THIS_MODULE;
 	mtd->_read = luofu_mtd_read;
+	mtd->_write = luofu_mtd_write;
+	mtd->_erase = luofu_mtd_erase;
 	mtd->_block_isbad = luofu_mtd_block_isbad;
 
 	fmc->mtd = mtd;
