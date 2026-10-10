@@ -1465,18 +1465,15 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * newest lines rather than the oldest.
  */
 /*
- * AND IT IS 15 KiB NOW, NOT 3.5 KiB, BECAUSE THE 4 KiB LIMIT WAS NEVER REAL.
+ * BACK TO 3.5 KiB, WHICH IS THE SIZE THAT LOGGED A WHOLE BOOT.
  *
- * The cap was set to stay inside "the 4 KiB that lands", which was a misreading: what landed was
- * whatever the cache happened to evict before the reset, and the 32-byte holes were its signature.
- * With the flush in place the whole 16 KiB window survives, so the dump can use 15 KiB of it and
- * still stop short of the 0x4000 end (0x80603000 + 0x3c04 < 0x80607000).
- *
- * That matters right now: the answer to the FPU question is printed by a core_initcall at about
- * half a second, and a 3.5 KiB tail of a 20 KiB log never reaches it.
+ * It was raised to 15 KiB to reach an early line. The fire after that change walked only 4092
+ * bytes and stopped mid-record at "VFP support" - which is either printk dying there or the walk
+ * hitting an incompletely written record, and the difference matters more than the extra reach.
+ * The 3.5 KiB configuration is the one that produced UBI, the mount and "Run /sbin/init" in the
+ * window, so it is the one to reason from while the userspace question is settled.
  */
-#define LUOFU_LOG_KEEP		0x3c00		/* 15 KiB of the 16 KiB window - see below */
-
+#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB - the size that logged a whole boot */
 /*
  * AND A SCRATCH BUFFER TO SLIDE IN, so the window is filled between lines rather than
  * inside one - see luofu_kmsg_to.

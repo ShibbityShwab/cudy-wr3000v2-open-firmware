@@ -96,9 +96,7 @@ CONFIG_CMDLINE_EXTEND=y
 #
 # UDBG_UNDEFINED is 1, so user_debug=1 is exactly that bit and nothing else.
 # ---------------------------------------------------------------------------
-CONFIG_DEBUG_KERNEL=y
-CONFIG_DEBUG_USER=y
-CONFIG_CMDLINE="panic=5 user_debug=1 no_hash_pointers ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
+CONFIG_CMDLINE="panic=5 ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
