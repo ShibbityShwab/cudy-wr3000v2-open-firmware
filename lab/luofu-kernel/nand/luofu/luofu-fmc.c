@@ -1438,6 +1438,48 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
  */
 static bool luofu_log_frozen;
 
+/*
+ * AND THE PERIODIC DUMPER IS BACK, BECAUSE IT IS THE ONLY PART OF THIS THAT EVER WORKED.
+ *
+ * The console hook was removed from the job by measurement, not by preference. The ring's
+ * non-zero span after the last fire was 4150 bytes - dense from offset 4 to about 4100 and
+ * NOTHING AFTER. That is exactly what CON_PRINTBUFFER hands a console at registration: the
+ * log that already exists. THE CONSOLE NEVER CAPTURED A SINGLE LINE AFTER THAT POINT, and
+ * the "FMC:" lines I had been reading in earlier fires were never its work - they came
+ * from the 3-second dumper timer, which is why removing the timer lost them and why the
+ * ring went back to showing 0.15 s of boot.
+ *
+ * So the timer returns, with the two things it needed all along:
+ *
+ *   - THE KERNEL LOG BUFFER IS 64 KiB NOW (CONFIG_LOG_BUF_SHIFT=16). Before, every dump
+ *     could only ever produce the same 4 KiB, which is why every reading looked identical.
+ *   - THE FREEZE IS PANIC-ONLY, so this timer cannot stop anything from capturing.
+ *
+ * The dump rewrites the ring from offset 4 with everything the log holds, circularly, so
+ * the ring keeps the NEWEST 16 KiB. Running every 500 ms means the last dump before the
+ * panic carries the whole boot, and the panic path dumps again on top of it.
+ *
+ * AND dumper->active MUST BE SET BY HAND HERE. kmsg_dump_get_line_nolock() returns false
+ * immediately unless the dumper is active, and kmsg_dump() is the only thing that sets it -
+ * on its way into a callback that, outside a panic, is never called. Setting it around the
+ * walk is safe: kmsg_dump_get_line() takes logbuf_lock itself, and the panic path re-sets it.
+ */
+#define LUOFU_LOG_TICK_MS   500
+
+static void luofu_log_tick(struct timer_list *t)
+{
+	if (!luofu_log_b)
+		return;
+
+	luofu_kmsg.active = true;
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_kmsg.active = false;
+
+	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
+}
+
+static struct timer_list luofu_log_timer;
+
 static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 {
 	static char line[256];
@@ -1782,10 +1824,17 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	mod_timer(&luofu_reboot_timer, jiffies + LUOFU_SAFETY_SECS * HZ);
 
 	/*
-	 * And the console, which is the capture that does not depend on the kmsg API
-	 * at all - see luofu_console_write.
+	 * And the console, which is registered for the early text but which - measured - only
+	 * ever delivers its CON_PRINTBUFFER dump. It is kept because it is harmless and
+	 * because the registration dump is real text; it is NOT the instrument.
 	 */
 	register_console(&luofu_console);
+
+	/*
+	 * And the periodic dumper, which IS the instrument - see luofu_log_tick.
+	 */
+	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
+	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 
 	/*
 	 * BOOTSTRAP THE READBACK WITH ONE CRUMB.  The log ring's PHYSICAL address
