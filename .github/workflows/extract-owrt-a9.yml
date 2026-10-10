@@ -205,3 +205,39 @@ jobs:
           name: owrt-rootfs-data-ext4
           path: rootfs_data.ext4
           if-no-files-found: error
+
+  ubifs2004:
+    name: the UBIFS image from 20.04-era mtd-utils (the version variable)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: the same image, built by the toolkit of the kernel's own era
+        run: |
+          set -eux
+          # THE REMAINING VARIABLE IS THE TOOLKIT VERSION, AND IT IS THE ONE THING THAT DIFFERS
+          # BETWEEN THIS IMAGE AND THE IMAGES REAL DEVICES SHIP WITH.
+          #
+          # The kernel's validate_nnode rejects a packed LPT branch whose lnum falls outside
+          # [lpt_first, lpt_last] - bounds it derives from the VOLUME, while mkfs laid the image out
+          # for leb_cnt 13 of 79. The -F space fixup exists to reconcile exactly that, it ran, and it
+          # still failed. So: same flags, same geometry, OLDER mkfs.
+          docker run --rm -v "$PWD:/o" -w /o ubuntu:20.04 sh -c '
+            set -eux
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mtd-utils
+            mkfs.ubifs -V
+            mkdir -p tree/etc/config
+            mkfs.ubifs -F -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data_2004.ubifs
+            ls -l owrt-rootfs_data_2004.ubifs
+            python3 - <<PY
+import struct
+b=open("owrt-rootfs_data_2004.ubifs","rb").read()
+fl,mi,leb,cnt,mx=struct.unpack("<IIIII", b[28:48])
+print("20.04 mkfs: min_io",mi,"leb",leb,"leb_cnt",cnt,"max_leb_cnt",mx,"FLAGS 0x%08x"%fl)
+PY
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ubifs-2004
+          path: owrt-rootfs_data_2004.ubifs
+          if-no-files-found: error
