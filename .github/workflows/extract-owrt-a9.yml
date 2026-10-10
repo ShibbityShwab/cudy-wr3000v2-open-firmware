@@ -48,8 +48,12 @@ jobs:
         run: |
           set -eux
           sudo apt-get update -qq
-          sudo apt-get install -y squashfs-tools
-          unsquashfs -q -d root root.sqfs
+          sudo apt-get install -y squashfs-tools binutils-arm-linux-gnueabihf
+          # dev/console is a character device and we are not root, so unsquashfs exits 2
+          # AFTER extracting everything else - 939 of 940 entries. That is fine and the
+          # binaries are all there; tolerating the non-zero exit is the point.
+          unsquashfs -q -no-progress -d root root.sqfs || true
+          test -f root/bin/busybox
           cat root/etc/openwrt_release
           mkdir -p out
           cp root/sbin/init out/init
@@ -69,7 +73,11 @@ jobs:
             readelf -h "$f" | egrep 'Machine|Flags|Entry'
             readelf -A "$f" 2>/dev/null | egrep -i 'cpu_arch|VFP|DIV_use|SIMD|FP_arch' || true
             echo "--- hardware divide / vfpv4 in the code ---"
-            (arm-linux-gnueabihf-objdump -d "$f" 2>/dev/null || objdump -d "$f") | egrep -c '\b(udiv|sdiv|vfma|vfms)\b' || true
+            arm-linux-gnueabihf-objdump -d "$f" > dis.txt 2>/dev/null || true
+            echo "disassembly lines:" $(wc -l < dis.txt)
+            echo "udiv/sdiv/vfma/vfms count:" $(egrep -c '\b(udiv|sdiv|vfma|vfms)\b' dis.txt || true)
+            egrep -m3 -B3 -A3 '\b(udiv|sdiv|vfma|vfms)\b' dis.txt || echo "  (none found)"
+            rm -f dis.txt
           done
 
       - uses: actions/upload-artifact@v4
