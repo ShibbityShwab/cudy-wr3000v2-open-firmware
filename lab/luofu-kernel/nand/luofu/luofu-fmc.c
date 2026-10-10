@@ -253,16 +253,21 @@
 /*
  * WHERE THE CONTROLLER SPLICES ITS SPARE AREA INTO THE DATA STREAM.
  *
- * Measured, not chosen: fitting "copy below 1040 directly, copy from 14 bytes
- * earlier at and above it" against the vendor's own mtd14 matches every sample
- * where the vendor holds data, with no failures.  The first 1040 bytes of the
- * page are correct either way; at 1040 the controller inserts its spare area.
+ * TWO INDEPENDENT MEASUREMENTS SAY SIXTEEN BYTES PER 1024-BYTE SECTOR:
  *
- * These sit up here with the other layout constants because read_page(), which
- * uses them, is defined long before the log block further down.
+ *  - the OOB buffer, read back for the first time, holds 0xFFFF - the bad-block
+ *    marker - followed by ECC bytes, i.e. the classic [1024 data][2 bbm][14 ecc]
+ *    layout, which is a 16-byte spare per sector;
+ *  - 0x38 reads 4128, which is exactly 2 x (2048 + 16): two transfers of a page
+ *    plus sixteen spare bytes.
+ *
+ * An earlier fit of our samples against the vendor's mtd14 preferred 14, but it
+ * was fitting a splice whose position it could not see - the vendor holds no data
+ * in the discriminating range.  Sixteen is what the hardware's own structures
+ * say, so the splice is taken as [1024 data][16 spare] repeated.
  */
-#define LUOFU_DMA_SPLICE_OFF	1040u
-#define LUOFU_DMA_SPLICE_LEN	14u
+#define LUOFU_DMA_SPLICE_OFF	1024u
+#define LUOFU_DMA_SPLICE_LEN	16u
 
 /*
  * WHICH PAGE THE DIAGNOSTIC MAPS.  Page 2 is where the splice was found; page 9
@@ -716,6 +721,12 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 			 * bytes stop matching, and 14 is the distance the tail is displaced.
 			 */
 			if (fmc->spec.page_size == 2048) {
+				/*
+				 * [1024 data][16 spare], twice: copy the first sector, skip the
+				 * spare, then copy the second sector. The second copy runs to
+				 * page_size + SPLICE_LEN in the source, because the source holds
+				 * both spare bytes as well as both sectors of data.
+				 */
 				memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
 				memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
 					      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
