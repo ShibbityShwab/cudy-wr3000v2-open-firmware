@@ -1489,6 +1489,27 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	if (IS_ERR(part))
 		return;
 
+	/*
+	 * AND THE PARTITION DECLARES NO OOB, WHICH IS WHAT STOPS JFFS2 ASKING FOR ONE.
+	 *
+	 * With the geometry finally consistent, the mount got past the check and failed on the next thing:
+	 *
+	 *     jffs2: cannot read OOB for EB at 00000000, requested 8 bytes, read 0 bytes, error -95
+	 *
+	 * -95 is -EOPNOTSUPP: this driver registers no _read_oob, and JFFS2 wants the cleanmarker from the
+	 * spare area. jffs2_nand_flash_setup() offers the way out in its first three lines:
+	 *
+	 *     if (!c->mtd->oobsize)
+	 *             return 0;
+	 *
+	 * so a device that declares no OOB is mounted the ordinary way, with the cleanmarker IN BAND -
+	 * which is exactly what the twelve bytes below are, a struct jffs2_unknown_node. Declaring it here
+	 * rather than on the master is deliberate: mtd16 keeps the real geometry so UBI's attach, which
+	 * carries the mounted rootfs, is not disturbed by a change made for the overlay's benefit.
+	 */
+	part->oobsize = 0;
+	part->oobavail = 0;
+
 	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
 	if (err || got != 4 || word != 0xffffffffu) {
 		dev_info(fmc->dev, "FMC: rootfs_data already carries 0x%08x; leaving it alone\n", word);
