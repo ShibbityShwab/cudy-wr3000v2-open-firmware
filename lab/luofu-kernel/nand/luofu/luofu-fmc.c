@@ -724,9 +724,45 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 */
 	writel(1, fmc->regs + FMC_DATA_NUM);
 
+	/*
+	 * WAIT FOR THE DMA COMPLETION INTERRUPT - NOT JUST THE BUSY BIT.
+	 *
+	 * This is the structural difference, found by reading the RIGHT vendor function.
+	 * hi_spi_nand_drv_dma_read does not poll a busy bit at all:
+	 *
+	 *     hi_fmc_clr_interrupt()
+	 *     hi_fmc_en_interrupt(1)          <- the DMA interrupt is ENABLED
+	 *     bl  #0x2d80                     <- the operation
+	 *     hi_fmc_int_status_get()         <- AND THE INTERRUPT IS WHAT IT WAITS ON
+	 *     hi_fmc_en_interrupt(0)
+	 *     hi_fmc_clr_interrupt()
+	 *
+	 * The busy bit this driver has always polled can clear before the controller has
+	 * finished depositing the page. That is exactly the failure this driver has been
+	 * chasing: the copy runs while the transfer is still in flight, so the buffer
+	 * holds a mixture of the new page and the leftover of the previous one - a window
+	 * of misplaced bytes at a fixed position, and a page that loses its tail.
+	 *
+	 * The clear comes FIRST - clearing after the operation would wipe the very
+	 * completion being waited for - then the operation starts, and the bit becoming
+	 * set again is what says the DMA has finished.
+	 */
+	writel(1, fmc->regs + FMC_INT_CLR);
 	mb();
+
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
+
+	for (i = 0; i < FMC_CMD_POLLS; i++) {
+		if (readl(fmc->regs + FMC_INT_STATUS) & 1)
+			break;
+		udelay(1);
+	}
+
+	if (i == FMC_CMD_POLLS)
+		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
+
+	writel(1, fmc->regs + FMC_INT_CLR);
 
 	/*
 	 * WAIT FOR BUSY TO ASSERT, THEN FOR IT TO CLEAR - two phases, not one.
