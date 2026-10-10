@@ -232,6 +232,28 @@ CONFIG_PSTORE=y
 CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_UBIFS_FS=y
+
+# ---------------------------------------------------------------------------
+# AND JFFS2, WHICH IS HOW THIS BOARD'S OVERLAY IS ACTUALLY SUPPOSED TO WORK.
+#
+# The devicetree has always carried the vendor's own partition table, including
+#
+#     partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; }
+#
+# which comes up as mtd15 - the exact partition name and number OpenWrt's mount_root looks for.
+# It never got used because a UBI volume named rootfs_data also existed and mount_root prefers
+# that, and the UBI path means UBIFS: a filesystem that has to be created by a mkfs tool that
+# OpenWrt does not ship and this kernel does not auto-format.
+#
+# JFFS2 HAS NO SUCH PROBLEM. ITS FORMAT IS ERASED FLASH: mount an all-0xff MTD partition with
+# -t jffs2 and the kernel builds the filesystem as files are written. That is exactly why the
+# rootfs carries jffs2mark and jffs2reset as factoryreset links and no mkfs anywhere. And the
+# partition is verified erased - 0 non-0xff bytes in its first 4 KiB.
+#
+# So the volume that was shadowing it goes away, and this goes in.
+# ---------------------------------------------------------------------------
+CONFIG_JFFS2_FS=y
+CONFIG_JFFS2_FS_DEBUG=0
 CONFIG_SQUASHFS=y
 
 # ---------------------------------------------------------------------------
