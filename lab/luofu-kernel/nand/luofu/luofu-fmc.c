@@ -1464,7 +1464,18 @@ late_initcall_sync(luofu_fmc_ubi_probe);
  * boundary is close to one page, so the dumper is capped just inside it and slides, keeping the
  * newest lines rather than the oldest.
  */
-#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB, inside the 4 KiB that lands */
+/*
+ * AND IT IS 15 KiB NOW, NOT 3.5 KiB, BECAUSE THE 4 KiB LIMIT WAS NEVER REAL.
+ *
+ * The cap was set to stay inside "the 4 KiB that lands", which was a misreading: what landed was
+ * whatever the cache happened to evict before the reset, and the 32-byte holes were its signature.
+ * With the flush in place the whole 16 KiB window survives, so the dump can use 15 KiB of it and
+ * still stop short of the 0x4000 end (0x80603000 + 0x3c04 < 0x80607000).
+ *
+ * That matters right now: the answer to the FPU question is printed by a core_initcall at about
+ * half a second, and a 3.5 KiB tail of a 20 KiB log never reaches it.
+ */
+#define LUOFU_LOG_KEEP		0x3c00		/* 15 KiB of the 16 KiB window - see below */
 
 /*
  * AND A SCRATCH BUFFER TO SLIDE IN, so the window is filled between lines rather than
@@ -1692,18 +1703,33 @@ static void luofu_kmsg_to(void *p, struct kmsg_dumper *dumper)
 	/*
 	 * AND ONLY THE TAIL REACHES THE RING, STARTING AT A LINE BOUNDARY.
 	 */
+	/*
+	 * TEMPORARY: THE HEAD, NOT THE TAIL - AND THE REASON IS SPECIFIC.
+	 *
+	 * The tail has done its job. It gave the whole failure in the kernel's own words: UBI
+	 * attaches, "VFS: Mounted root (squashfs filesystem) readonly on device 254:0", init is
+	 * exec'd, and then init dies of signal 4.
+	 *
+	 * What it CANNOT give is the answer, because the answer is printed at about half a second
+	 * by a core_initcall:
+	 *
+	 *     pr_info("VFP support v0.3: ");
+	 *     if (VFP_arch) { pr_cont("not present
+"); return 0; }   <- returns BEFORE
+	 *     ...
+	 *     elf_hwcap |= HWCAP_VFP;                                  <- this line
+	 *
+	 * elf_hwcap read back as 0x00008896 - HALF, THUMB, FAST_MULT, EDSP, THUMBEE, TLS and NO
+	 * VFP, NO NEON, NO VFPv3. So vfp_init() DID take that early return, and the log already
+	 * says what it printed. Keeping the head is what makes it readable.
+	 *
+	 * This is switched back to the tail once that line has been read.
+	 */
 	{
-		size_t start = s > LUOFU_LOG_KEEP - 4 ? s - (LUOFU_LOG_KEEP - 4) : 0;
+		size_t take = s > LUOFU_LOG_KEEP - 4 ? LUOFU_LOG_KEEP - 4 : s;
 
-		if (start) {
-			while (start < s && scratch[start] != '\n')
-				start++;
-			if (start < s)
-				start++;
-		}
-
-		memcpy(p + off, scratch + start, s - start);
-		off += s - start;
+		memcpy(p + off, scratch, take);
+		off += take;
 	}
 
 	*(char *)(p + (off < LUOFU_LOG_KEEP ? off : LUOFU_LOG_KEEP - 1)) = 0;
