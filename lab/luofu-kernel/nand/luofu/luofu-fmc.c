@@ -962,52 +962,43 @@ static int __init luofu_fmc_ubi_probe(void)
 						((u32)fmc->mtd->index & 0xfffu));
 
 			/*
-			 * SAMPLE FOUR POINTS WITHIN **ONE PAGE**, which is where the fault showed up.
+			 * DIFF A WHOLE RECORD - the fault is a PARTIAL one, not a page-sized one.
 			 *
-			 * The previous sampling matched the vendor exactly at 0, 2048 and 4096 and
-			 * diverged only at 5128 - and 5128 is 1032 bytes into the SAME page as 4096.
-			 * So page_buf[0..32] is real and page_buf[1032..] is stale, which is the
-			 * signature of a SHORT PAGE COPY: the hardware or the copy fills only part
-			 * of the page and the rest is whatever the buffer held before.
+			 * Read against the vendor's own mtd14 at the same offsets, three of the four
+			 * matched BYTE FOR BYTE - including f116c36b, the CRC an empty volume-table
+			 * record carries, which I had wrongly assumed was not in the flash at all.
+			 * My "vendor: all zeros" label was an ASSUMPTION rather than a measurement.
+			 * The one divergence is at 5136: the first 16 bytes of that window are right
+			 * and the rest is stale.
 			 *
-			 * These four offsets are all inside page 2 - 4096, +512, +1024, +1536 - so
-			 * the vendor's flash is all zeros at every one of them, and any non-zero
-			 * byte in our read marks exactly where the fill stops.
+			 * So this reads the whole 172-byte record 6 - the exact read UBI makes and
+			 * rejects - and parks it for a byte-for-byte comparison with the vendor's.  A
+			 * diff shows which bytes are wrong and where they start, which 32-byte samples
+			 * are too small to show.
 			 *
-			 * page_size, writesize and the page-buffer allocation are all printed too,
-			 * since a mismatch between them would produce precisely this shape.
+			 * Sizes are known consistent: page_size 2048, oob 64, block 131072, page_buf
+			 * 2048.  There is no size mismatch to fix.
 			 */
-			static const u32 offs[4] = { 4096, 4608, 5120, 5632 };
-			u8 buf[32];
-			int s;
+			u8 rec[172];
+			size_t rl = 0;
+			u32 meta[2];
+			int e;
 
-			pr_err("FMC: spec page_size=%u oob=%u block=%u ; page_buf=%u\n",
-			       fmc->spec.page_size, fmc->spec.oob_size,
-			       fmc->spec.block_size,
-			       fmc->mtd ? (unsigned)fmc->mtd->writesize : 0);
-
-			/* acquired here, released after the loop - the reads below need it */
+			/* acquired here, released below - the read needs it */
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part))
 				return 0;
 
-			for (s = 0; s < 4; s++) {
-				size_t rl = 0;
-				u32 meta[2];
-				int e;
-
-				memset(buf, 0, sizeof(buf));
-				e = mtd_read(part, offs[s], 32, &rl, buf);
-				if (!luofu_diag_buf)
-					break;
+			memset(rec, 0, sizeof(rec));
+			e = mtd_read(part, 5128, 172, &rl, rec);
+			if (luofu_diag_buf) {
 				meta[0] = (u32)e;
 				meta[1] = (u32)rl;
-				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
-				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
+				memcpy(luofu_diag_buf, meta, sizeof(meta));
+				memcpy(luofu_diag_buf + 8, rec, sizeof(rec));
 			}
-		}
-		if (!IS_ERR(part))
 			put_mtd_device(part);
+		}
 		return 0;
 	}
 
