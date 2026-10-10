@@ -950,6 +950,23 @@ static u32 luofu_w_n, luofu_e_n, luofu_w_mism, luofu_w_cmd;
 static int luofu_w_err;
 
 /*
+ * AND THE SELF-TEST'S VERDICT, WHICH HAS TO GO SOMEWHERE THAT SURVIVES.
+ *
+ * Its first version printed, and JFFS2's scan drowned it: that filesystem logs a line per 16 bytes of
+ * every block it dislikes - thousands of lines - and the log ring keeps the TAIL, so the one measurement
+ * that could have settled the erase was pushed out of the window by the very problem it was measuring.
+ *
+ * So the verdicts go into a global and the TICK carries them, the same channel the write counters use,
+ * because the tick is the last writer and cannot be overwritten:
+ *
+ *     C1C = (writes << 24) | (erases << 16) | (err << 15) | (t1 << 8) | (t25 << 4) | (tlast)
+ *
+ * one nibble per probe block: 1 ERASE WORKS, 2 ERASE DID NOTHING, 3 read returned zeros, 4 read failed,
+ * 6 the plant did not read back (the read path, not the erase, is then the thing at issue).
+ */
+static u32 luofu_e_test;
+
+/*
  * ------------------------------------------------------------------ *
  * THE WRITE PATH.  ITS SEQUENCES ARE NOT GUESSES.                     *
  * ------------------------------------------------------------------ *
@@ -1267,7 +1284,7 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 		 *
 		 * ADDRH = 0 fits a page row on this part: 15,104 pages, inside 16 bits.
 		 */
-		u32 row = div_u64(pos, mtd->writesize);
+		u32 row = div_u64(pos, mtd->erasesize);
 
 		if (luofu_e_n < 0xff)
 			luofu_e_n++;
@@ -1616,6 +1633,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	nblocks = div_u64(part->size, part->erasesize);
 	for (block = 0; block < 3; block++) {
 		u32 probe = (block == 0) ? 1 : ((block == 1) ? 25 : nblocks - 1);
+		u32 t = 0;
 
 		memset(page, 0x5a + block, part->writesize);
 		err = mtd_write(part, (loff_t)probe * part->erasesize, part->writesize, &got, page);
@@ -1637,11 +1655,12 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 
 		word = 0;
 		err = mtd_read(part, (loff_t)probe * part->erasesize, 4, &got, (u8 *)&word);
-		dev_info(fmc->dev, "FMC: self-test: block %u reads 0x%08x after erasing (%s)\n", probe, word,
-			 (err || got != 4) ? "READ FAILED" :
-			 (word == 0xffffffffu ? "ERASE WORKS" :
-			  (word == *(u32 *)page ? "ERASE DID NOTHING" :
-			   (word == 0 ? "read returned ZEROS - neither the pattern nor erased flash" : "something else"))));
+		t = (err || got != 4) ? 4 :
+		    (word == 0xffffffffu) ? 1 :
+		    (word == *(u32 *)page) ? 2 :
+		    (word == 0) ? 3 : 6;
+		luofu_e_test &= ~(0xfu << (4 * (2 - block)));
+		luofu_e_test |= (t & 0xfu) << (4 * (2 - block));
 	}
 
 	memset(page, 0xff, part->writesize);
@@ -2531,8 +2550,8 @@ static void luofu_log_tick(struct timer_list *t)
 				((luofu_w_n & 0xffu) << 24) |
 				((luofu_e_n & 0xffu) << 16) |
 				((u32)(luofu_w_err ? 1 : 0) << 15) |
-				((luofu_w_cmd & 0xffu) << 4) |
-				((luofu_w_mism & 0xfu)));
+				((luofu_e_test & 0xfffu) << 3) |
+				(((luofu_w_mism & 0x7u) << 0)));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
