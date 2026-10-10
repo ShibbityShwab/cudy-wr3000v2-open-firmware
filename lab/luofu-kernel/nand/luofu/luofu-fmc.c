@@ -1706,8 +1706,23 @@ static void luofu_log_tick(struct timer_list *t)
 	 *   C18 = 0xc0de0020                     a hang - the mach's crumb, no tick survived
 	 */
 	if (luofu_fmc_stamp)
+		/*
+		 * THE PAYLOAD CARRIES THE LOG'S PAGE NUMBER, NOT THE TICK COUNT.
+		 *
+		 * The walk returns 205 lines and the ring at 0x80603000 is byte-for-byte the same as
+		 * every previous fire - its newest timestamp is 4.380 s and its banner is this
+		 * kernel's own first boot. Every I/O write this driver makes sticks; every RAM
+		 * write vanishes. So the ring pointer is aimed at memory that does not hold what is
+		 * written through it, and the address is the thing I have never been able to read:
+		 * the crumb that carries it is overwritten by this tick every 5 s.
+		 *
+		 *     C1C = (phase << 28) | ((log_dma >> 12) & 0x0ffffff)
+		 *
+		 * The window is 0x80602000..0x80608000, so a page number is six bits of the low 24,
+		 * and the phase stays readable in the top nibble.
+		 */
 		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
-				(luofu_phase << 16) | (luofu_log_ticks & 0xffff));
+				(luofu_phase << 28) | (((u32)luofu_log_dma >> 12) & 0x0ffffffu));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
@@ -1910,9 +1925,27 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 * only set by the walk, so a crumb written before it always reported zero lines and I read
 	 * that as an empty log.  After the walk the number is real.
 	 */
+	/*
+	 * THE PANIC CRUMB CARRIES THE LOG'S PAGE, BECAUSE THIS IS THE PATH THAT RUNS.
+	 *
+	 * The last boot panicked inside five seconds, so the tick never fired once - zero ticks -
+	 * and ONLY THIS DUMP EXECUTED. It walked 205 lines and wrote them through luofu_log_b, and
+	 * the ring at 0x80603000 is byte-for-byte unchanged: its newest timestamp is 4.380 s and
+	 * its banner is this kernel's FIRST boot. Every I/O write this driver makes sticks; every
+	 * RAM write vanishes.
+	 *
+	 * So the address is the thing worth spending this payload on. The line count was already
+	 * proven - 205 - and the tick carries the phase when a boot lives long enough for it.
+	 *
+	 *     C1C = (lines << 12) | ((log_dma >> 12) & 0xfff)
+	 *
+	 * A page number inside the 0x8060xxxx window needs 12 bits, so the low three hex digits
+	 * of the page number fit beside a line count in the top bits.
+	 */
 	if (luofu_ubi_fmc)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
-				(luofu_log_ticks << 16) | (luofu_log_lines & 0xffff));
+				((luofu_log_lines & 0xfffff) << 12) |
+				((((u32)luofu_log_dma >> 12) & 0xfffu)));
 
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
