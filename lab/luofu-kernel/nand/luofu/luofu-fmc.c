@@ -1925,6 +1925,38 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	if (luofu_fmc_quad_enable(fmc))
 		dev_warn(dev, "FMC: could not enable quad I/O; the page read may not answer\n");
 
+	/*
+	 * THE VENDOR'S FEATURE 0xB0 BITS - CLEAR BIT 4, SET BIT 6.
+	 *
+	 * hi_spi_nand_drv_dma_read's setup does this before every page read:
+	 *
+	 *     mov r1, #0xb0        ; feature 0xb0
+	 *     mov r2, #0xf         ; read 15 bytes
+	 *     bl  <read>           ;   -> ldrb r3, [sp, #3]
+	 *     bic r3, r3, #0x10    ; CLEAR BIT 4
+	 *     orr r3, r3, #0x40    ; SET   BIT 6
+	 *     mov r2, #0x1f        ; write 31 bytes
+	 *     bl  <write>
+	 *
+	 * AND THIS DRIVER NEVER TOUCHES EITHER BIT. Its only write to 0xb0 is
+	 * cfg | BIT(0) for the quad enable. Bits 4 and 6 of the configuration register
+	 * govern how the chip emits array data, and a driver that leaves them at the
+	 * die's defaults can get an output stream carrying spare bytes where the working
+	 * one gets a clean page - which is exactly the 14-byte window at 1040 that this
+	 * driver has had to de-interleave out.
+	 *
+	 * Read-modify-write, preserving whatever else the die has, and done AFTER the
+	 * quad enable so bit 0 is kept.
+	 */
+	if (!luofu_fmc_get_feature(fmc, SPINAND_FEAT_CONFIG, &config)) {
+		u8 wanted = (config & ~BIT(4)) | BIT(6);
+
+		dev_info(dev, "FMC: feature 0xb0 %02x -> %02x (vendor clears bit 4, sets bit 6)\n",
+			 config, wanted);
+		if (luofu_fmc_set_feature(fmc, SPINAND_FEAT_CONFIG, wanted))
+			dev_warn(dev, "FMC: could not write feature 0xb0\n");
+	}
+
 	if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32)))
 		dev_warn(dev, "FMC: could not set the 32-bit DMA mask\n");
 
