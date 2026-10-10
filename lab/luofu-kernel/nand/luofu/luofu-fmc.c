@@ -1119,8 +1119,27 @@ static int __init luofu_fmc_ubi_probe(void)
 			}
 			put_mtd_device(part);
 
-			if (luofu_diag_buf)
+			if (luofu_diag_buf) {
+				u32 *regs = (u32 *)(luofu_diag_buf + 128);
+
 				memcpy(luofu_diag_buf, map, sizeof(map));
+
+				/*
+				 * What the controller registers hold AFTER every read. FMC_DMA_LEN is
+				 * at 0x40 and the vendor's own DMA read writes it before the operation,
+				 * so if the write takes effect its value should be visible here. The
+				 * vendor also clears 0x28 and stores an argument in 0x2c on every read,
+				 * which this driver has never touched.
+				 */
+				if (fmc->regs) {
+					regs[0] = readl(fmc->regs + 0x28);
+					regs[1] = readl(fmc->regs + 0x2c);
+					regs[2] = readl(fmc->regs + 0x40);
+					regs[3] = readl(fmc->regs + 0x30);
+					regs[4] = readl(fmc->regs + 0x68);
+					regs[5] = readl(fmc->regs + 0x3c);
+				}
+			}
 		}
 		return 0;
 	}
