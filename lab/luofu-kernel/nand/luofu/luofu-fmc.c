@@ -1782,6 +1782,61 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		 cfg, readl(fmc->regs + FMC_GLOBAL_CFG),
 		 readl(fmc->regs + FMC_TIMING_SPI_CFG), fmc->cs);
 
+	/*
+	 * PROGRAM THE VENDOR'S REGISTERS.
+	 *
+	 * Reading the vendor's LIVE FMC block at 0x10a20000 while its kernel runs, and
+	 * comparing it against this driver's map, showed something neither the register
+	 * campaign nor the raw-buffer comparison had exposed: THIS DRIVER NEVER WRITES A
+	 * CONFIG REGISTER AT ALL. Its whole block sits at reset defaults. The vendor's
+	 * driver programs at least fifteen, and its non-default values are:
+	 *
+	 *     0x08 TIMING_SPI  = 0x0000006f
+	 *     0x0c PND_PWIDTH  = 0x00000333
+	 *     0x10 PND_OPIDLE  = 0x00088880
+	 *     0x14             = 0x08888888
+	 *     0x34             = 0x00001000
+	 *     0x48             = 0x00000007
+	 *     0x6c             = 0x00ffffff
+	 *     0xa0             = 0x80808080
+	 *     0xa4             = 0x00006060
+	 *     0xa8             = 0x000000ff
+	 *     0xb0             = 0x0000007f
+	 *     0xb4             = 0x01372b2b
+	 *     0xb8             = 0x0000ffff
+	 *     0xbc             = 0x00000100
+	 *     0xfc             = 0x00000005
+	 *
+	 * 0x34 IS 0x1000 - TWO PAGES - which is the shape of a threshold or depth, and
+	 * exactly the kind of register that would bound a transfer and leave a page's
+	 * last bytes behind. None of these were ever set here, so every read this driver
+	 * has done ran against a configuration the working implementation does not use.
+	 *
+	 * The values are taken from the vendor's live block, not invented, and written
+	 * once at probe time the way its driver does. 0x00 and 0x04 are left alone: the
+	 * read-back showed both already identical.
+	 */
+	writel(0x0000006f, fmc->regs + FMC_TIMING_SPI_CFG);
+	writel(0x00000333, fmc->regs + FMC_PND_PWIDTH_CFG);
+	writel(0x00088880, fmc->regs + FMC_PND_OPIDLE_CFG);
+	writel(0x08888888, fmc->regs + 0x14);
+	writel(0x00001000, fmc->regs + 0x34);
+	writel(0x00000007, fmc->regs + 0x48);
+	writel(0x00ffffff, fmc->regs + 0x6c);
+	writel(0x80808080, fmc->regs + 0xa0);
+	writel(0x00006060, fmc->regs + 0xa4);
+	writel(0x000000ff, fmc->regs + 0xa8);
+	writel(0x0000007f, fmc->regs + 0xb0);
+	writel(0x01372b2b, fmc->regs + 0xb4);
+	writel(0x0000ffff, fmc->regs + 0xb8);
+	writel(0x00000100, fmc->regs + 0xbc);
+	writel(0x00000005, fmc->regs + 0xfc);
+
+	dev_info(dev, "FMC: vendor block programmed: t=%08x 14=%08x 34=%08x 48=%08x\n",
+		 readl(fmc->regs + FMC_TIMING_SPI_CFG),
+		 readl(fmc->regs + 0x14), readl(fmc->regs + 0x34),
+		 readl(fmc->regs + 0x48));
+
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
 		luofu_fmc_crumb(fmc, 4, LUOFU_RPT_FAIL(4));
