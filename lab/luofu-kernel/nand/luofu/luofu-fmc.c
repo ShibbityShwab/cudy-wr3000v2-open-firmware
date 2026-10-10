@@ -587,18 +587,48 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
 
+	/*
+	 * WAIT FOR BUSY TO ASSERT, THEN FOR IT TO CLEAR - two phases, not one.
+	 *
+	 * The original loop broke as soon as BUSY read CLEAR, and immediately after
+	 * the operation is started the hardware has not set it yet - so the loop could
+	 * exit on its very first iteration and memcpy_fromio() would copy the buffer
+	 * WHILE THE DMA WAS STILL FILLING IT.
+	 *
+	 * That is exactly what the measurements show: a bad window at a CONSISTENT
+	 * in-page offset on every page (the timing is deterministic, so the copy always
+	 * outruns the DMA at the same point) whose CONTENT DIFFERS between pages (it is
+	 * whatever the DMA had managed to write by then).  A fixed fill length would
+	 * cut every page identically and a fixed collision would leave identical stale
+	 * bytes - neither of which is what was observed.
+	 *
+	 * So: wait for BUSY to appear, then wait for it to clear, and only then copy.
+	 * If BUSY never appears the controller never started, which is a real fault and
+	 * reports as one instead of silently copying stale memory.
+	 */
 	for (i = 0; i < FMC_CMD_POLLS; i++) {
-		if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY))
+		if (readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY)
 			break;
 		udelay(1);
 	}
 
 	if (i == FMC_CMD_POLLS) {
-		dev_err(fmc->dev, "FMC: DMA page read timed out\n");
+		dev_err(fmc->dev, "FMC: DMA never asserted busy\n");
 		ret = -ETIMEDOUT;
 	} else {
-		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
-		ret = 0;
+		for (i = 0; i < FMC_CMD_POLLS; i++) {
+			if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY))
+				break;
+			udelay(1);
+		}
+
+		if (i == FMC_CMD_POLLS) {
+			dev_err(fmc->dev, "FMC: DMA page read timed out\n");
+			ret = -ETIMEDOUT;
+		} else {
+			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+			ret = 0;
+		}
 	}
 
 	luofu_fmc_ecc_type_set(fmc, saved);
