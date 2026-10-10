@@ -1614,28 +1614,35 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * the write path already uses.
 	 */
 	nblocks = div_u64(part->size, part->erasesize);
-	block = nblocks - 1;
-	memset(page, 0x5a, part->writesize);
-	err = mtd_write(part, (loff_t)block * part->erasesize, part->writesize, &got, page);
-	if (err) {
-		dev_info(fmc->dev, "FMC: erase self-test could not plant a pattern in block %u: %d\n", block, err);
-		kfree(page);
-		goto out;
+	for (block = 0; block < 3; block++) {
+		u32 probe = (block == 0) ? 1 : ((block == 1) ? 25 : nblocks - 1);
+
+		memset(page, 0x5a + block, part->writesize);
+		err = mtd_write(part, (loff_t)probe * part->erasesize, part->writesize, &got, page);
+		if (err) {
+			dev_info(fmc->dev, "FMC: self-test could not plant in block %u: %d\n", probe, err);
+			continue;
+		}
+		word = 0;
+		err = mtd_read(part, (loff_t)probe * part->erasesize, 4, &got, (u8 *)&word);
+		dev_info(fmc->dev, "FMC: self-test: block %u planted 0x%02x%02x%02x%02x, read back 0x%08x (%s)\n",
+			 probe, page[0], page[1], page[2], page[3], word,
+			 (err || got != 4) ? "READ FAILED" :
+			 (word == *(u32 *)page ? "matches" : "DOES NOT MATCH - the read path is not showing the write"));
+
+		memset(&ei, 0, sizeof(ei));
+		ei.addr = (u64)probe * part->erasesize;
+		ei.len = part->erasesize;
+		err = mtd_erase(part, &ei);
+
+		word = 0;
+		err = mtd_read(part, (loff_t)probe * part->erasesize, 4, &got, (u8 *)&word);
+		dev_info(fmc->dev, "FMC: self-test: block %u reads 0x%08x after erasing (%s)\n", probe, word,
+			 (err || got != 4) ? "READ FAILED" :
+			 (word == 0xffffffffu ? "ERASE WORKS" :
+			  (word == *(u32 *)page ? "ERASE DID NOTHING" :
+			   (word == 0 ? "read returned ZEROS - neither the pattern nor erased flash" : "something else"))));
 	}
-	word = 0;
-	err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
-	dev_info(fmc->dev, "FMC: erase self-test: block %u planted as 0x%08x\n", block, word);
-
-	memset(&ei, 0, sizeof(ei));
-	ei.addr = (u64)block * part->erasesize;
-	ei.len = part->erasesize;
-	err = mtd_erase(part, &ei);
-
-	word = 0;
-	err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
-	dev_info(fmc->dev, "FMC: erase self-test: block %u reads 0x%08x after erasing it (%s)\n", block, word,
-		 (err || got != 4) ? "read failed" :
-		 (word == 0xffffffffu ? "ERASE WORKS" : (word == 0x5a5a5a5au ? "ERASE DID NOTHING" : "something else")));
 
 	memset(page, 0xff, part->writesize);
 	memcpy(page, marker, sizeof(marker));
