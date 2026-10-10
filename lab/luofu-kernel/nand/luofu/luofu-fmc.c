@@ -183,6 +183,7 @@
 #define SPINAND_CMD_SET_FEATURE	0x1f
 #define SPINAND_CMD_RDID	0x9f
 #define SPINAND_CMD_BLOCK_ERASE	0xd8	/* the vendor's hi_spi_nand_drv_erase passes this */
+#define SPINAND_CMD_WRITE_ENABLE 0x06	/* sent before EVERY erase by hi_fmc_write_reg_en */
 
 /* GET FEATURES register addresses (SPI-NAND standard) */
 #define SPINAND_FEAT_STATUS	0xc0
@@ -1156,7 +1157,43 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 static int luofu_fmc_erase_block(struct luofu_fmc *fmc, u32 row)
 {
 	u8 saved = luofu_fmc_ecc_type_get(fmc);
-	int ret;
+	u32 ifmode;
+	int i, ret;
+
+	/*
+	 * WRITE ENABLE FIRST - AND THIS IS THE STEP WHOSE ABSENCE MADE EVERY ERASE DO NOTHING.
+	 *
+	 * The vendor calls hi_fmc_write_reg_en() before every erase, and it is not a formality:
+	 *
+	 *     r7 = (*regs >> 5) & 7            save the three interface bits
+	 *     *regs = (*regs & ~(7 << 5))
+	 *     *(regs + 0x24) = 0x06            FMC_CMD = WRITE ENABLE
+	 *     *(regs + 0x3c) = 0x81            FMC_OP  = SEND COMMAND
+	 *     poll (regs + 0x3c) & 1           bounded, with a delay between reads
+	 *     *regs |= r7 << 5                 restore
+	 *
+	 * A chip that has not been write-enabled REFUSES the following block erase, and the controller reports
+	 * no error for it - which is exactly what three separate address encodings looked like from outside: a
+	 * command accepted, and a partition byte-identical afterwards. JFFS2 reading the planted pattern back
+	 * off block 1 is what proved the pattern was still there.
+	 *
+	 * The PROGRAM path needs no equivalent: its command carries the enable itself, which is why the marker
+	 * has always written correctly while nothing was ever erased.
+	 */
+	ifmode = readl(fmc->regs);
+	writel(ifmode & ~(7u << 5), fmc->regs);
+	writel(SPINAND_CMD_WRITE_ENABLE, fmc->regs + FMC_CMD);
+	writel(FMC_OP_CMD_ONLY, fmc->regs + FMC_OP);
+	for (i = 0; i < 100000; i++) {
+		if (readl(fmc->regs + FMC_OP) & FMC_OP_BUSY)
+			break;
+		udelay(1);
+	}
+	writel(ifmode, fmc->regs);
+	if (i >= 100000) {
+		dev_info(fmc->dev, "FMC: write enable never completed\n");
+		return -ETIMEDOUT;
+	}
 
 	/*
 	 * The ECC engine is off for this, the way it is off for ID and feature
@@ -1284,7 +1321,7 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 		 *
 		 * ADDRH = 0 fits a page row on this part: 15,104 pages, inside 16 bits.
 		 */
-		u32 row = div_u64(pos, mtd->erasesize);
+		u32 row = div_u64(pos, mtd->writesize);
 
 		if (luofu_e_n < 0xff)
 			luofu_e_n++;
