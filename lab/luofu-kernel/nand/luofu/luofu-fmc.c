@@ -949,62 +949,33 @@ static int __init luofu_fmc_ubi_probe(void)
 		 * driver registered.
 		 */
 		{
-			int n;
-
 			/*
-			 * OUR OWN MTD'S INDEX goes into the crumb's low bits - the log's physical
-			 * address is slot-aligned, so they are free - because the crumb is read
-			 * even when the log is not.
+			 * THE BOUNDARY IS AT PAGE OFFSET 1040, ON EVERY PAGE - so it is NOT a
+			 * transfer length - and the stale content DIFFERS between pages, which means
+			 * something is writing over a buffer.
+			 *
+			 * Same class as the DMA collision two phases back, at a DIFFERENT
+			 * allocation: the fixed addresses chosen for the log and diagnostic buffers
+			 * were checked against fmc->dma_addr and NOT against fmc->page_buf, which is
+			 * a separate devm_kzalloc(page_size) that can land anywhere in RAM.
+			 *
+			 * If page_buf sits where the ring sits, every printk overwrites part of the
+			 * page staging buffer. That leaves reads at offset 0 correct - the EC scan
+			 * passed 32 of 32 - while corrupting the region the volume-table records
+			 * live in, which is exactly the shape observed.
+			 *
+			 * So print both addresses and their sizes, and extend the collision check in
+			 * luofu_log_register to cover page_buf as well as the DMA zone.
 			 */
 			if (fmc->mtd)
 				luofu_fmc_crumb(fmc, LUOFU_LOG_PANIC_STEP,
 						((u32)luofu_log_dma & 0xfffff000u) |
 						((u32)fmc->mtd->index & 0xfffu));
 
-			/*
-			 * FIND THE FILL BOUNDARY, ON TWO PAGES.
-			 *
-			 * The full-record diff against the vendor's own mtd14 came back with exactly
-			 * eighteen differing bytes: 8..21 and 168..171. Record 6 starts at flash byte
-			 * 5128, which is page 2 offset 1032 - so the differences are page offsets
-			 * 1040..1053 (a stale 14-byte patch) and 168..171 of the record, its CRC.
-			 * Everything below page offset 1040 is correct.
-			 *
-			 * That is exactly why UBI reports "bad CRC at record 6": it computes the CRC
-			 * over our corrupted bytes and gets 0xaae09698 where the flash says 0xf116c36b.
-			 *
-			 * So the fill stops somewhere between 1039 and 1040. This samples four points
-			 * either side of that on page 2, and the same four on page 3, to see whether
-			 * the boundary is per page or global - and the boundary's value is the clue to
-			 * what the hardware was actually told to transfer.
-			 */
-			static const u32 offs[8] = {
-				4096 + 1008, 4096 + 1024, 4096 + 1040, 4096 + 1056,
-				6144 + 1008, 6144 + 1024, 6144 + 1040, 6144 + 1056,
-			};
-			u8 buf[32];
-			int s;
-
-			/* acquired here, released below - the reads need it */
-			part = get_mtd_device_nm("rootfsb");
-			if (IS_ERR(part))
-				return 0;
-
-			for (s = 0; s < 8; s++) {
-				size_t rl = 0;
-				u32 meta[2];
-				int e;
-
-				memset(buf, 0, sizeof(buf));
-				e = mtd_read(part, offs[s], 32, &rl, buf);
-				if (!luofu_diag_buf)
-					break;
-				meta[0] = (u32)e;
-				meta[1] = (u32)rl;
-				memcpy(luofu_diag_buf + s * 40, meta, sizeof(meta));
-				memcpy(luofu_diag_buf + s * 40 + 8, buf, sizeof(buf));
-			}
-			put_mtd_device(part);
+			pr_err("FMC: page_buf=%px size=%u ; log=%px diag=%px dma=%llx\n",
+			       fmc->page_buf, fmc->spec.page_size,
+			       luofu_log_b, luofu_diag_buf,
+			       (unsigned long long)fmc->dma_addr);
 		}
 		return 0;
 	}
@@ -1379,11 +1350,15 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	{
 		u64 dma_lo = (u64)fmc->dma_addr;
 		u64 dma_hi = dma_lo + 0x2200;
+		u64 pb_lo = (u64)(uintptr_t)fmc->page_buf;
+		u64 pb_hi = pb_lo ? pb_lo + fmc->spec.page_size : 0;
 		u64 base = LUOFU_LOG_BASE + LUOFU_LOG_STRIDE;
 
 		for (i = 0; i < 8; i++, base += LUOFU_LOG_STRIDE) {
-			if (base + 2 * LUOFU_LOG_SIZE <= dma_lo ||
-			    base >= dma_hi)
+			if ((base + 2 * LUOFU_LOG_SIZE <= dma_lo ||
+			     base >= dma_hi) &&
+			    (!pb_hi || base + 2 * LUOFU_LOG_SIZE <= pb_lo ||
+			     base >= pb_hi))
 				break;
 		}
 		if (base + 2 * LUOFU_LOG_SIZE > 0x80608000)
