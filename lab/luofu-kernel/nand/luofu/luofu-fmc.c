@@ -122,6 +122,7 @@
 #include <linux/property.h>
 #include <asm/cacheflush.h>
 #include <asm/outercache.h>
+#include <asm/hwcap.h>
 
 /* ------------------------------------------------------------------ */
 /* Register map (offsets from 0x10a20000), from the DWARF struct        */
@@ -1520,6 +1521,29 @@ static struct luofu_fmc *luofu_fmc_stamp;
 
 
 #define LUOFU_LOG_TICK_STEP	45
+
+/*
+ * STEP 46: elf_hwcap, THE KERNEL'S OWN ANSWER TO "IS THE FPU AVAILABLE".
+ *
+ * init executes and is killed by signal 4 - SIGILL - on BOTH an arm_cortex-a15_neon-vfpv4 rootfs
+ * and an arm_cortex-a9_vfpv3-d16 one.  Two userspaces compiled for different baselines failing
+ * identically points away from the compiler and at the kernel: if VFP was never enabled, EVERY
+ * floating point instruction in ANY hard-float userspace traps as an illegal instruction.
+ *
+ * CONFIG_VFP and CONFIG_NEON are both set in the built config - the config lane asserts them - so
+ * the question is not whether the code is compiled in but whether the kernel actually brought the
+ * FPU up.  That is exactly what elf_hwcap records, and the bits that matter here are:
+ *
+ *     bit  6  HWCAP_VFP        the FPU is usable
+ *     bit 12  HWCAP_NEON
+ *     bit 13  HWCAP_VFPv3
+ *     bit 16  HWCAP_VFPv4
+ *     bit 17  HWCAP_IDIVA      hardware divide - set on A7/A15, NEVER on A9
+ *     bit 19  HWCAP_VFPD32     32 double registers - set on A9, clear on d16 cores
+ *
+ * SO A VALUE WITHOUT bit 6 IS THE ANSWER, and a value WITH it sends the search back to userspace.
+ */
+#define LUOFU_LOG_HWCAP_STEP	46
 static u32 luofu_log_ticks;
 static u32 luofu_log_lines;
 
@@ -2074,6 +2098,15 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				((luofu_log_lines & 0xffffu) << 16) |
 				((*(volatile u32 *)((char *)luofu_log_b + 4)) & 0xffffu));
+
+	/*
+	 * AND THE LAST WORD GOES TO elf_hwcap, BECAUSE THE QUESTION IS NOW ABOUT THE FPU.
+	 *
+	 * This overwrites the crumb above on purpose: two writes to one cell, last one wins.  The
+	 * line count (205, every fire) and the readback byte (proven to match devmem) have both
+	 * done their job; the value that is still unknown is whether this kernel enabled the FPU.
+	 */
+	luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_HWCAP_STEP, elf_hwcap);
 
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 

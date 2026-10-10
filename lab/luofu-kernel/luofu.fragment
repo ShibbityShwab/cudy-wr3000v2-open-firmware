@@ -85,7 +85,20 @@ CONFIG_SMP=y
 # REPLACES it, and losing panic=5 would mean a panicking kernel hangs instead of
 # rebooting, which is precisely what returns this box to the vendor.
 CONFIG_CMDLINE_EXTEND=y
-CONFIG_CMDLINE="panic=5 ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
+# ---------------------------------------------------------------------------
+# AND user_debug=1, SO AN ILLEGAL INSTRUCTION NAMES ITSELF.
+#
+# init is exec'd and then killed by signal 4.  Nothing in the log says WHICH instruction, because
+# ARM's do_undefinstr() prints that only under CONFIG_DEBUG_USER and only when user_debug has the
+# UDBG_UNDEFINED bit.  With it, the kernel prints "init (1): undefined instruction: pc=..." AND
+# dumps the registers - which turns "something in userspace faults" into an address that can be
+# disassembled.
+#
+# UDBG_UNDEFINED is 1, so user_debug=1 is exactly that bit and nothing else.
+# ---------------------------------------------------------------------------
+CONFIG_DEBUG_KERNEL=y
+CONFIG_DEBUG_USER=y
+CONFIG_CMDLINE="panic=5 user_debug=1 ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
