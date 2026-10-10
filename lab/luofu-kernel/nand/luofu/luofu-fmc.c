@@ -929,6 +929,27 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 static bool luofu_write_tested;
 
 /*
+ * AND THE COUNTERS THE TICK REPORTS, BECAUSE THE FIRST SELF-TEST'S CRUMB WAS OVERWRITTEN.
+ *
+ * The write reported on itself into crumb step 47 and the next fire read step 45 back - the TICK writes
+ * that cell every five seconds and LAST WRITE WINS, so a report made once at 9 seconds was gone by 180.
+ *
+ * THE FIRST QUESTION IS NOT WHAT THE SEQUENCE DID BUT WHETHER IT RAN AT ALL. If mtd->_write is never
+ * reached, every line of the program sequence is beside the point. So the MTD entry points count their
+ * own calls, the self-test stores its result, and the TICK - which is by construction the last writer -
+ * carries all of it:
+ *
+ *     C18 = 0xC0DE502D   (step 45, unchanged)
+ *     C1C = (writes << 24) | (erases << 16) | (err) << 15 | (wr_cmd << 4) | (mismatches >> 8)
+ *
+ * writes/erases cl?amped to 0xff; err = 1 if any returned an error; mismatches >> 8 so that a clean
+ * page reads 0 and a wholly wrong one reads 8. The phase and the log address that used to live here are
+ * not lost by this - both were read back and recorded (phase 4, log_dma 0x80603000).
+ */
+static u32 luofu_w_n, luofu_e_n, luofu_w_mism, luofu_w_cmd;
+static int luofu_w_err;
+
+/*
  * ------------------------------------------------------------------ *
  * THE WRITE PATH.  ITS SEQUENCES ARE NOT GUESSES.                     *
  * ------------------------------------------------------------------ *
@@ -1108,12 +1129,8 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 			mism = 0xffffffff;
 		}
 
-		luofu_fmc_crumb(fmc, LUOFU_LOG_WRITE_STEP,
-				((mism & 0xffu) << 24) |
-				(((u32)fmc->spec.wr_cmd & 0xffu) << 16) |
-				(((u32)fmc->spec.wr_if_type & 7u) << 13) |
-				(((u32)fmc->spec.wr_addr_cyc & 7u) << 10) |
-				(((u32)fmc->spec.wr_dummy & 0xfu) << 6));
+		luofu_w_mism = mism >> 8;
+		luofu_w_cmd = (u32)fmc->spec.wr_cmd & 0xffu;
 	}
 
 	return ret;
@@ -1181,9 +1198,15 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	while (done < len) {
 		u32 row = div_u64(to + done, mtd->writesize);
 
+			if (luofu_w_n < 0xff)
+			luofu_w_n++;
+
 		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
 		ret = luofu_fmc_write_page(fmc, row, buf + done);
 		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+
+		if (ret)
+			luofu_w_err = 1;
 		if (ret)
 			break;
 
@@ -1207,9 +1230,15 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
 		u32 row = div_u64(pos, mtd->writesize);
 
+		if (luofu_e_n < 0xff)
+			luofu_e_n++;
+
 		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
 		ret = luofu_fmc_erase_block(fmc, row);
 		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+
+		if (ret)
+			luofu_w_err = 1;
 		if (ret)
 			break;
 	}
@@ -2201,8 +2230,32 @@ static void luofu_log_tick(struct timer_list *t)
 		 * The window is 0x80602000..0x80608000, so a page number is six bits of the low 24,
 		 * and the phase stays readable in the top nibble.
 		 */
+		/*
+		 * AND NOW THE TICK CARRIES THE WRITE PATH'S REPORT, BECAUSE THE TICK IS THE LAST WRITER.
+		 *
+		 * The write's own self-test put its answer in step 47 at about nine seconds and the fire
+		 * read step 45 back, because this crumb writes every five seconds and last write wins.
+		 * A report that only survives if nothing else runs is not a report. So the tick - which
+		 * by construction has the final word - carries it instead.
+		 *
+		 *     C1C = (writes << 24) | (erases << 16) | (err << 15) | (wr_cmd << 4) | (mismatches >> 8)
+		 *
+		 * writes and erases are counts of how often the MTD ENTRY POINTS were reached at all,
+		 * clamped to 0xff - THE FIRST QUESTION IS WHETHER THE SEQUENCE RAN, NOT WHAT IT DID. err is
+		 * 1 if any call returned an error. mismatches >> 8 is 0 for a page that read back clean and
+		 * 8 for one where every byte differs. And wr_cmd is the vendor's own programming command,
+		 * read out of its spec table, which is the one input to the sequence that has never been
+		 * checked against a real value.
+		 *
+		 * The phase and the log address that used to live here are not lost: both were read back
+		 * long ago and recorded (phase 4, log_dma 0x80603000).
+		 */
 		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
-				(luofu_phase << 28) | (((u32)luofu_log_dma >> 12) & 0x0ffffffu));
+				((luofu_w_n & 0xffu) << 24) |
+				((luofu_e_n & 0xffu) << 16) |
+				((u32)(luofu_w_err ? 1 : 0) << 15) |
+				((luofu_w_cmd & 0xffu) << 4) |
+				((luofu_w_mism & 0xfu)));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
