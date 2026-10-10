@@ -315,6 +315,26 @@ static void luofu_fmc_crumb(struct luofu_fmc *fmc, u32 step, u32 payload)
 	writel(LUOFU_CRUMB_NAND | (step & LUOFU_CRUMB_STEP_MASK), fmc->crumb);
 }
 
+/*
+ * THE READ PATH SHARES ONE DMA BUFFER, SO IT NEEDS A LOCK.
+ *
+ * luofu_fmc_read_page() stages every page through fmc->dma_buf and copies out of
+ * fmc->page_buf, and luofu_mtd_read() calls it in a loop. Both buffers belong to the
+ * device, not to the caller. Until now nothing serialised them, which is fine while the
+ * only caller is a single-threaded probe - AND NOT FINE ONCE UBI IS IMPLICATED: ubiattach
+ * scans with its own workqueue and runs ubi_bgt0d in the background, so two reads can be
+ * inside read_page at the same time, staging into the same 0x2200 bytes.
+ *
+ * AND THE SYMPTOM MATCHES. The boot does not fault and does not panic - it HANGS, about
+ * 23 seconds in, which the tick crumb measured (46 ticks of 500 ms). A shared staging
+ * buffer under concurrent readers is exactly that shape: progress until the overlap, then
+ * no progress at all.
+ *
+ * The probe's direct calls to luofu_fmc_read_page() stay outside this lock on purpose -
+ * they run single-threaded at late_initcall, before any of this is reachable.
+ */
+static DEFINE_MUTEX(luofu_fmc_read_lock);
+
 /* ------------------------------------------------------------------ */
 /* The register layer                                                   */
 /* ------------------------------------------------------------------ */
@@ -1445,25 +1465,7 @@ static void luofu_console_write(struct console *co, const char *s, unsigned int 
 static bool luofu_log_frozen;
 static struct luofu_fmc *luofu_fmc_stamp;
 
-/*
- * THE READ PATH SHARES ONE DMA BUFFER, SO IT NEEDS A LOCK.
- *
- * luofu_fmc_read_page() stages every page through fmc->dma_buf and copies out of
- * fmc->page_buf, and luofu_mtd_read() calls it in a loop. Both buffers belong to the
- * device, not to the caller. Until now nothing serialised them, which is fine while the
- * only caller is a single-threaded probe - AND NOT FINE ONCE UBI IS IMPLICATED: ubiattach
- * scans with its own workqueue and runs ubi_bgt0d in the background, so two reads can be
- * inside read_page at the same time, staging into the same 0x2200 bytes.
- *
- * AND THE SYMPTOM MATCHES. The boot does not fault and does not panic - it HANGS, about
- * 23 seconds in, which the tick crumb measured (46 ticks of 500 ms). A shared staging
- * buffer under concurrent readers is exactly that shape: progress until the overlap, then
- * no progress at all.
- *
- * The probe's direct calls to luofu_fmc_read_page() stay outside this lock on purpose -
- * they run single-threaded at late_initcall, before any of this is reachable.
- */
-static DEFINE_MUTEX(luofu_fmc_read_lock);
+
 
 #define LUOFU_LOG_TICK_STEP	45
 static u32 luofu_log_ticks;
