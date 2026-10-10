@@ -635,59 +635,117 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * the logical page - f1 16 c3 6b at offset 2032, no splice, untouched past 2048.
 	 * The hardware can deliver a clean page; this driver's sequence is what does not.
 	 */
-	/*
-	 * THE VENDOR'S PAGE READ, WRITE FOR WRITE.
-	 *
-	 * hi_spi_nand_hw_read is the function that actually reads a page - it is reached
-	 * through hi_spi_nand_drv_dma_read -> 0x3318 -> 0x303c, and the dispatcher's
-	 * mode-0 branch resolves to it. Reading it end to end, it writes FIVE registers
-	 * and nothing else:
-	 *
-	 *   lsr r3, r1, #0x10  str r3, [r0, #0x28]   ADDRH = row >> 16
-	 *   lsl r1, r1, #0x10  str r1, [r0, #0x2c]   ADDRL = row << 16
-	 *   ldr r3, [r4]       str r3, [r0, #0x4c]   SADDR_D0
-	 *   (build OP_CFG from the spec)  str r1, [r0, #0x30]   OP_CFG
-	 *   dsb ; arm_heavy_mb
-	 *   mov r3, #1 ; bfi r3, r2, #0x10, #8 ; str r3, [r5, #0x68]   OP_CTRL
-	 *
-	 * EVERY VALUE MATCHES THIS DRIVER'S. WHAT DOES NOT MATCH IS THE COUNT: this
-	 * driver also wrote FMC_DMA_LEN and FMC_DATA_NUM here, and the vendor's page read
-	 * writes NEITHER. Both were added on the strength of the vendor's live values
-	 * being 1 - but the vendor sets those once at init and leaves them alone, so
-	 * writing them per operation is a difference the working implementation does not
-	 * have. They are gone.
-	 *
-	 * The interrupt enable/clear brackets are the caller's (0x3318 does clr, en(1),
-	 * call, wait, en(0), clr), so they stay - before the setup, as the caller does.
-	 */
-	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(1, fmc->regs + FMC_DMA_LEN);
+
+	op_cfg = luofu_fmc_cs_field(fmc) |
+		 ((u32)(fmc->spec.rd_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
+		 ((u32)(fmc->spec.rd_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
+		 ((u32)fmc->spec.rd_dummy & FMC_OPCFG_DUMMY_MASK);
+	writel(op_cfg, fmc->regs + FMC_OP_CFG);
+
+	op_ctrl = ((u32)fmc->spec.rd_cmd << 16) | 1;
 
 	/*
-	 * THE TWO REGISTERS THIS CONTROLLER NEEDS PER OPERATION - MEASURED, THREE TIMES.
+	 * CLEAR THE STAGING BUFFER BEFORE THE READ, because the controller does not
+	 * write every byte of a page.
 	 *
-	 * hi_spi_nand_hw_read writes five registers and neither of these. That was tried:
+	 * The page map settled it: sampling four bytes every sixteen across page 2 and
+	 * diffing against the vendor's own mtd14, 26 of 128 samples differ - and EVERY
+	 * differing sample is a place where the flash holds ZEROS.  Where the flash has
+	 * data, this driver matches it.  Worse, a whole run at 1664..1791 carries the
+	 * 66CC pattern of RAM that was never written at all: the staging buffer holding
+	 * whatever the allocation contained, handed out as flash content.
 	 *
-	 *     without them entirely            -> step 8, the first page read, fails
-	 *     set once in the probe's config   -> step 8, the first page read, fails
-	 *     set once just before that read   -> step 8, the first page read, fails
+	 * So the hardware leaves zero regions unwritten, and every read returns
+	 * whatever was in the buffer there.  Zeroing first makes those bytes read as
+	 * zeros - which is what the flash actually holds.  It also explains the EC
+	 * scan's 32 of 32: its 64-byte reads at offset 0 sit in a region the controller
+	 * always fills.
 	 *
-	 * So the value does not survive from before the operation TO THE MOMENT THE HARDWARE
-	 * USES IT. The vendor can omit them because its init runs after its identification
-	 * and nothing between that and a read clears them - which is not true of this
-	 * driver's sequence. Whatever the reason, three builds say the same thing: on THIS
-	 * driver's path they must be written immediately before the operation.
+	 * BEFORE the operation is started, not after - doing it afterwards would wipe
+	 * the very data the controller just deposited.
 	 *
-	 * Kept in the position the working build used, so the only difference from a known
-	 * good build is the feature-0xB0 configuration above.
+	 * This is a correctness fix regardless of the mechanism: a read must never
+	 * return bytes the device did not produce.
+	 *
+	 * AND IT MUST COVER THE WHOLE SOURCE WINDOW, NOT JUST THE PAGE. The copy below
+	 * reads page_size + LUOFU_DMA_SPLICE_LEN bytes out of the staging buffer,
+	 * because the splice pushes the tail 14 bytes further along. Zeroing only
+	 * page_size leaves those last 14 bytes holding the PREVIOUS read's data, and
+	 * they land in the last 14 bytes of the page returned to the caller. That is
+	 * precisely what record 118 showed: UBI computed the correct 0xf116c36b from
+	 * the flash and read a stored 0xf1160000, the final two bytes stale.
 	 */
-	writel(1, fmc->regs + FMC_DMA_LEN);
+	memset(fmc->dma_buf, 0, fmc->spec.page_size + 32);
+
+	
+	/*
+	 * PROGRAM THE TRANSFER LENGTH - AND THE COUNT THAT ACTUALLY BOUNDS IT.
+	 *
+	 * The sentinel answered the first question: 0xAA written over the staging buffer
+	 * past the page size SURVIVED the read, so the controller transferred nothing
+	 * there. The transfer stops at exactly 2048 bytes.
+	 *
+	 * Writing FMC_DMA_LEN at 0x40 did not change that, and the read-back proved the
+	 * write LANDED - it reads back 0x820 afterwards. So 0x40 is not the byte count.
+	 *
+	 * THE REGISTER THE DRIVER HAS NEVER WRITTEN IS FMC_DATA_NUM AT 0x38, which is
+	 * named exactly what it is: the data count. Nothing here has ever set it, so the
+	 * transfer has been bounded by whatever it resets to - one page - which is the
+	 * 2048 the sentinel measured.
+	 *
+	 * Both are written now. The controller's output is not a bare page: it carries
+	 * spare bytes inside it, which is the splice this driver already de-interleaves,
+	 * so the count has to cover the page PLUS that spare or the tail never arrives.
+	 * The splice measured 14 bytes for the one insertion per page; 32 covers the
+	 * vendor's 16-per-1024-byte-sector layout generously, and surplus can only
+	 * produce bytes beyond what the copy reads.
+	 *
+	 * Set before the operation, like the vendor does.
+	 */
+	/*
+	 * FMC_DATA_NUM, THE ONE REGISTER THIS DRIVER LEAVES DIFFERENT FROM THE VENDOR.
+	 *
+	 * The live comparison said so: through a real read the vendor's 0x38 holds 1,
+	 * and ours holds 4128 in every build - a value nothing here ever wrote, left
+	 * over from whatever ran before.  Its DMA_LEN also sits at 1 and is not touched
+	 * per read, so the pair reads as a count rather than a byte length.
+	 *
+	 * AND THE DESTINATION CHANGE MOVED THE FAULT, WHICH IS WHY THIS IS WORTH TRYING:
+	 * with three destinations armed the fourteen-byte window appeared as always;
+	 * with one destination the same fragment moved and the splice changed size. So
+	 * the plumbing does affect the layout, and the one plumbing value still
+	 * differing from the working implementation is this register.
+	 *
+	 * Set to the vendor's value, before the operation like everything else here.
+	 */
 	writel(1, fmc->regs + FMC_DATA_NUM);
+
+	/*
+	 * THE VENDOR'S INTERRUPT-DRIVEN COMPLETION - WITH THE ENABLE IT NEEDS.
+	 *
+	 * hi_spi_nand_drv_dma_read does not poll a busy bit at all:
+	 *
+	 *     hi_fmc_clr_interrupt()
+	 *     hi_fmc_en_interrupt(1)          <- ENABLED FIRST
+	 *     bl  #0x2d80                     <- the operation
+	 *     hi_fmc_int_status_get()         <- then the interrupt is waited on
+	 *     hi_fmc_en_interrupt(0)
+	 *     hi_fmc_clr_interrupt()
+	 *
+	 * The first attempt at this wrote only FMC_INT_CLR and FMC_INT_STATUS and broke
+	 * the read outright - the probe died at step 8 with the busy bit never
+	 * asserting. THE MISSING PIECE WAS THE ENABLE: without FMC_INT_EN set, the
+	 * controller's completion machinery is off, which is why nothing behaved.
+	 *
+	 * So: enable, clear, start, wait for the completion bit, disable, clear. The busy
+	 * polls stay afterwards as a second confirmation rather than the only one.
+	 */
 	writel(1, fmc->regs + FMC_INT_EN);
 	writel(1, fmc->regs + FMC_INT_CLR);
-
-	writel(op_cfg, fmc->regs + FMC_OP_CFG);
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
@@ -1794,7 +1852,6 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	writel(0x00000100, fmc->regs + 0xbc);
 	writel(0x00000005, fmc->regs + 0xfc);
 
-
 	dev_info(dev, "FMC: vendor block programmed: t=%08x 14=%08x 34=%08x 48=%08x\n",
 		 readl(fmc->regs + FMC_TIMING_SPI_CFG),
 		 readl(fmc->regs + 0x14), readl(fmc->regs + 0x34),
@@ -1941,7 +1998,6 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * the vendor failover returned.
 	 */
 	fmc->page_buf = page;
-
 
 	ret = luofu_fmc_read_page(fmc,
 				  LUOFU_ROOTFSA_OFFSET / fmc->spec.page_size, page);
