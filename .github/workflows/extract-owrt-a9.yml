@@ -241,3 +241,29 @@ PY
           name: owrt-rootfs-data-ubifs-2004
           path: owrt-rootfs_data_2004.ubifs
           if-no-files-found: error
+
+  fstoolsbin:
+    name: the fstools binaries, to read what it actually checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: pull out everything that decides the overlay
+        run: |
+          set -eux
+          mkdir -p out
+          for f in root/sbin/mount_root root/lib/libfstools.so root/lib/preinit/80_mount_root ; do
+            [ -f "$f" ] && cp "$f" out/$(basename "$f") || true
+          done
+          ls -l out
+          file out/* 2>/dev/null || true
+          echo "=== the strings around the DECISION, in order ==="
+          for b in out/mount_root out/libfstools.so ; do
+            [ -f "$b" ] || continue
+            echo "---- $b"
+            strings -a -t x "$b" | grep -iE 'rootfs_data|jffs2|ubifs|f2fs|ext4|mtd|overlay|mark|format|magic|switch|rom|/dev/' | head -60
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-fstools-binaries
+          path: out/
+          if-no-files-found: error
