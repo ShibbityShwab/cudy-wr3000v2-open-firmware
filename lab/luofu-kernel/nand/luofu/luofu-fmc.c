@@ -1032,6 +1032,8 @@ static struct timer_list luofu_log_timer;
 static int __init luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
+
+	luofu_phase = 1;
 	struct ubi_volume_desc *desc;
 	struct mtd_info *part;
 	u8 buf[4] = { 0 };
@@ -1323,8 +1325,16 @@ static int __init luofu_fmc_ubi_probe(void)
 		 LUOFU_ROOTFS_VOL_ID, buf[0], buf[1], buf[2], buf[3],
 		 word & 1 ? "resolves" : "does NOT resolve");
 
+	luofu_phase = 3;
 	return 0;
 }
+static int __init luofu_fmc_ubi_probe_done(void)
+{
+	luofu_phase = 4;
+	return 0;
+}
+late_initcall_sync(luofu_fmc_ubi_probe_done);
+
 late_initcall_sync(luofu_fmc_ubi_probe);
 #endif /* CONFIG_MTD_UBI */
 
@@ -1464,6 +1474,7 @@ static void __maybe_unused luofu_console_write(struct console *co, const char *s
  */
 static bool luofu_log_frozen;
 static struct luofu_fmc *luofu_fmc_stamp;
+static u32 luofu_phase;
 
 
 
@@ -1662,7 +1673,7 @@ static void luofu_log_tick(struct timer_list *t)
 	 */
 	if (luofu_fmc_stamp)
 		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
-				(luofu_log_ticks << 16) | (luofu_log_lines & 0xffff));
+				(luofu_phase << 16) | (luofu_log_ticks & 0xffff));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
@@ -1990,6 +2001,7 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * And the periodic dumper, which IS the instrument - see luofu_log_tick.
 	 */
 	luofu_fmc_stamp = fmc;
+	luofu_phase = 2;
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 
