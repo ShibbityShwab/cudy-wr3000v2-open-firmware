@@ -1,0 +1,82 @@
+name: repack-openwrt-rootfs
+
+# MEASURED, every squashfs on this bench:
+#
+#   WR3000V2-2.5.24.zip.rootfs.sqfs   131072  xz
+#   WR3000V2-2.4.15.zip.rootfs.sqfs   131072  xz
+#   stock/rootfs-live.sqfs            131072  xz
+#   Jeton AX3000 rootfs               131072  xz
+#   build/custom/*.sqfs               131072  xz
+#   owrt-rootfs.sqfs                  262144  xz   ONLY 256 KiB ONE, AND THE ONE WHOSE
+#                                                  MOUNT FAULTS IN vfs_get_tree
+#
+# Our kernel is CONFIG_SQUASHFS_DECOMP_SINGLE: one decompression buffer of block_size.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/repack-openwrt-rootfs.yml'
+
+jobs:
+  repack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install squashfs tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq squashfs-tools wget
+
+      - name: Download the OpenWrt generic ARMv7 squashfs rootfs
+        run: |
+          set -euo pipefail
+          URL="https://downloads.openwrt.org/releases/25.12.5/targets/armsr/armv7/openwrt-25.12.5-armsr-armv7-generic-squashfs-rootfs.img.gz"
+          wget --tries=3 --timeout=120 -O in.img.gz "$URL"
+          gzip -dc in.img.gz > in.sqfs
+          ls -l in.sqfs
+
+      - name: Extract it
+        run: |
+          set -euo pipefail
+          mkdir -p rootfs
+          sudo unsquashfs -d rootfs in.sqfs
+          ls rootfs | head -20
+          ls -l rootfs/sbin/init rootfs/bin/busybox
+          cat rootfs/etc/openwrt_release
+          sudo du -sh rootfs
+
+      - name: Repack with 128 KiB blocks
+        run: |
+          set -euo pipefail
+          sudo mksquashfs rootfs owrt-128k.sqfs -b 131072 -comp xz -noappend -all-root
+          ls -l owrt-128k.sqfs
+          python3 - <<'PY'
+          import struct
+          d = open("owrt-128k.sqfs","rb").read(96)
+          assert d[:4] == b"hsqs", "not a squashfs"
+          bs = struct.unpack("<I", d[12:16])[0]
+          comp = struct.unpack("<H", d[20:22])[0]
+          used = struct.unpack("<Q", d[40:48])[0]
+          print("block_size=%d compression_id=%d bytes_used=%d" % (bs, comp, used))
+          print("FITS IN mtd16:", used <= 0x1d80000)
+          open("owrt-128k.trimmed.sqfs","wb").write(open("owrt-128k.sqfs","rb").read(used))
+          print("trimmed bytes:", used)
+          PY
+
+      - name: Verify it mounts on the runner
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/verify
+          sudo mount -o loop,ro owrt-128k.trimmed.sqfs /mnt/verify
+          ls /mnt/verify | head -16
+          cat /mnt/verify/etc/openwrt_release
+          test -x /mnt/verify/sbin/init && echo "sbin/init present and executable"
+          sudo umount /mnt/verify
+
+      - name: Upload the repacked rootfs
+        uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-128k
+          path: owrt-128k.trimmed.sqfs
+          if-no-files-found: error
+          retention-days: 30
