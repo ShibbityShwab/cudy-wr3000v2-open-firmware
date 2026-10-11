@@ -10,7 +10,9 @@
  * drv_data ({reg_off, shift, func_name} x5 + cfg_off) are all transcribed
  * below from the shipped module and cited to their .ko offsets. The ops
  * tables keep the mainline pinctrl_ops/pinmux_ops/pinconf_ops shape; set_mux
- * and the pinconf setters remain NO-OP stubs (no register writes), so the
+ * applies the vendor's decoded per-pin RMW (the board is already muxed by
+ * vendor/U-Boot, so a mux is only written when a consumer asks), while the
+ * pinconf setters remain NO-OP stubs (no register writes), so the
  * bootloader/vendor mux state is preserved -- the transcribed tables are data
  * for the next fill-in, not yet executed.
  *
@@ -71,6 +73,7 @@
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinmux.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 /* MMIO windows (reg-names "mux"/"cfg"; luofu-r116-pinned.dts:1270). */
 #define LUOFU_MUX_BASE	0x14900100UL
@@ -376,7 +379,7 @@ static const struct luofu_mux_entry luofu_pin_mux[37][5] = {
 struct luofu_pinctrl {
 	struct device *dev;
 	struct pinctrl_dev *pctldev;
-	void __iomem *mux_base;	/* "mux" window, no writes */
+	void __iomem *mux_base;	/* "mux" window; written only by set_mux */
 	void __iomem *cfg_base;	/* "cfg"  window, no writes */
 };
 
@@ -465,22 +468,34 @@ static int luofu_set_mux(struct pinctrl_dev *pctldev,
 			 unsigned int func_selector,
 			 unsigned int group_selector)
 {
-	/*
-	 * NO-OP STUB (no register writes): the board is already muxed by the
-	 * vendor/U-Boot, so preserving bootloader state is deliberate. When the
-	 * fill-in lands, the vendor algorithm (hi_pinmux_set_mux @ .text+0x348)
-	 * is, for every pin in luofu_groups[group_selector]:
-	 *   for (i = 0; i < 5; i++) {
-	 *       e = luofu_pin_mux[pin][i];
-	 *       v  = readl(mux_base + e->reg);            // dword-aligned RMW
-	 *       v &= ~(1 << e->shift);
-	 *       if (!strcmp(e->func, luofu_function_names[func_selector]))
-	 *           v |= 1 << e->shift;
-	 *       writel(v, mux_base + e->reg);
-	 *   }
-	 * and, if the group carries mux_mask (jtag_gpio2..5), a mask/value RMW of
-	 * mux_base[mux_reg]. All accesses are 32-bit aligned.
-	 */
+	struct luofu_pinctrl *priv = pinctrl_dev_get_drvdata(pctldev);
+	const struct luofu_pingroup *g = &luofu_groups[group_selector];
+	const char *want = luofu_function_names[func_selector];
+	unsigned int i, k;
+
+	for (i = 0; i < g->npins; i++) {
+		unsigned int pin = g->pins[i];
+
+		for (k = 0; k < 5; k++) {
+			const struct luofu_mux_entry *e = &luofu_pin_mux[pin][k];
+			u32 v;
+
+			v = readl(priv->mux_base + e->reg);
+			v &= ~(1u << e->shift);
+			if (!strcmp(e->func, want))
+				v |= 1u << e->shift;
+			writel(v, priv->mux_base + e->reg);
+		}
+	}
+
+	if (g->mux_mask) {
+		u32 v = readl(priv->mux_base + g->mux_reg);
+
+		v &= ~g->mux_mask;
+		v |= g->mux_val & g->mux_mask;
+		writel(v, priv->mux_base + g->mux_reg);
+	}
+
 	return 0;
 }
 
