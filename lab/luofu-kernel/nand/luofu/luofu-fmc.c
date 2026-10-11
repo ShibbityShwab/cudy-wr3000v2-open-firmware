@@ -1548,6 +1548,32 @@ static struct timer_list luofu_log_timer;
 static struct timer_list luofu_reboot_timer;
 
 /*
+ * THE ERASE IS OFF BY DEFAULT, AND THE REASON IS A FIRE.
+ *
+ * luofu_jffs2_mark() erases the WHOLE rootfs_data partition - 176 blocks at 128 KiB each - and then
+ * samples every eighth block back. That happens inside the boot path (it is called from
+ * luofu_fmc_ubi_probe at late_initcall), and the read-back timer above is only LUOFU_SAFETY_SECS
+ * long. The file's own note already records the shape of the hazard: "a block that has not finished
+ * erasing can sit in wait_ready for 200 ms", so the loop's cost is not bounded by anything this
+ * code controls, while the timer's is 180 s.
+ *
+ * Two things are true regardless of how the boot failure of 2026-10-11 is finally attributed:
+ *   - a DIAGNOSTIC routine has no business performing the largest write this driver ever issues;
+ *   - an unbounded-cost operation must be opt-in, not the default - the rule every other luofu
+ *     driver already follows (read-only until a measurement justifies a store).
+ *
+ * So the erase is opt-in:
+ *
+ *   insmod luofu-fmc.ko omo_mark=1
+ *
+ * and with the default (0) the partition is left exactly as found. The write path itself is
+ * unchanged and still measured; only its automatic invocation at boot is gone.
+ */
+static unsigned int omo_mark;
+module_param_named(mark, omo_mark, uint, 0644);
+MODULE_PARM_DESC(mark, "1 = erase rootfs_data and write the JFFS2 cleanmarker at boot (default 0: leave the partition untouched)");
+
+/*
  * WHY TWELVE BYTES HAVE TO BE WRITTEN BEFORE THE OVERLAY CAN EVER WORK.
  *
  * fstools does not mount an empty partition and does not format one. From its own source:
@@ -1580,6 +1606,18 @@ static struct timer_list luofu_reboot_timer;
  */
 static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 {
+	/*
+	 * OPT-IN, AND THAT IS THE WHOLE POINT: the erase below is the largest write this driver ever
+	 * issues and it runs from the boot path, so the default is to leave the partition alone. See
+	 * the omo_mark declaration for why. Gating HERE rather than at the call site matters: the
+	 * caller continues into the UBI read-only diagnosis, which is useful and must still run.
+	 */
+	if (!omo_mark) {
+		dev_info(fmc->dev,
+			 "FMC: rootfs_data left untouched (omo_mark=0; insmod with omo_mark=1 to erase and mark)\n");
+		return;
+	}
+
 	/*
 	 * THE SAFETY RESTART IS ARMED HERE, FIRST, AND THAT ORDERING IS THE POINT.
 	 *
