@@ -253,6 +253,42 @@
 
 	/* ---- DesignWare peripherals (free bindings) ---- */
 
+	tvsensor: tvsensor@14900500 {
+		compatible = "hisilicon,luofu-tvsensor";
+		reg = <0x14900500 0x14>;		/* pinned:1487 */
+		#thermal-sensor-cells = <0>;
+		interrupts = <0 0 4>;		/* SPI 0, pinned:1484 */
+		hwver = <3>;			/* pinned:1482 */
+		int-base-offset = <0xc>;	/* pinned:1483 */
+		trim = <0 0>;			/* pinned:1488 */
+		addition-en;
+		efuse-trim-en;
+		status = "disabled";
+	};
+
+	thermal-zones {
+		/* one zone, from the vendor's own tree (pinned:1432-1468) */
+		cls0: cls0 {
+			polling-delay = <1000>;			/* pinned:1437 */
+			polling-delay-passive = <100>;
+			sustainable-power = <2000>;			/* pinned:1439 */
+			thermal-sensors = <&tvsensor>;
+
+			trips {
+				trip-point@0 {
+					temperature = <115000>;	/* 0x1c138 */
+					hysteresis = <3000>;
+					type = "passive";
+				};
+				trip-point@1 {
+					temperature = <125000>;	/* 0x1e848 */
+					hysteresis = <3000>;
+					type = "critical";
+				};
+			};
+		};
+	};
+
 	uart0: serial@1010e000 {
 		compatible = "snps,dw-apb-uart";
 		reg = <0x1010e000 0x1000>;	/* pinned:1490 */
