@@ -634,12 +634,15 @@ not_relocated:	mov	r0, #0
 		add	r1, r1, r0		@ end of inflated image
 		bl	cache_clean_flush
 		bl	cache_off
-		/* lab breadcrumb: decompression done, about to enter the kernel */
+		/* lab breadcrumb: decompression done, about to enter the kernel.
+		 * Uses r5/r6, NOT r4: r4 holds the kernel entry address that
+		 * __enter_kernel's 'mov pc, r4' jumps to, and clobbering it sends the
+		 * jump to the crumb value instead of the decompressed image. */
 		movw	r3, #:lower16:0x10100C18
 		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x000B
-		movt	r4, #0xC0DE
-		str	r4, [r3]
+		movw	r6, #0x000B
+		movt	r6, #0xC0DE
+		str	r6, [r3]
 
 #ifdef CONFIG_ARM_VIRT_EXT
 		mrs	r0, spsr		@ Get saved CPU boot mode
