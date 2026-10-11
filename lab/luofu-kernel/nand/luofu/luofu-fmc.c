@@ -3400,10 +3400,6 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	if (luofu_log_register(fmc))
 		dev_warn(dev, "FMC: could not arm the panic log capture\n");
 
-#ifdef CONFIG_MTD_UBI
-	luofu_fmc_ubi_probe();
-#endif
-
 	return 0;
 }
 
@@ -3427,7 +3423,40 @@ static struct platform_driver luofu_fmc_driver = {
 		.of_match_table	= luofu_fmc_of_match,
 	},
 };
-module_platform_driver(luofu_fmc_driver);
+
+/*
+ * ONE initcall, AND IT MUST BE late_initcall_sync - NOT module_platform_driver.
+ *
+ * A module may expand module_init() exactly once, and this module needs its
+ * rootfs check to run AFTER UBI's own init has attached the volume the command
+ * line names (see the comment above luofu_fmc_ubi_probe).  Those two facts have
+ * one resolution, and it is this one: do the platform_driver_register() from
+ * inside a single late_initcall_sync(), so the driver is registered AND the UBI
+ * probe still runs last.
+ *
+ * A fire is what taught this, and the lesson is worth keeping: the earlier form
+ * of this file had THREE module_init-expanding macros (late_initcall_sync x2
+ * plus module_platform_driver) and therefore never compiled.  "Fixing" that by
+ * calling luofu_fmc_ubi_probe() from the driver's probe instead DID compile -
+ * and it silently moved the rootfs check to before UBI attached, so the volume
+ * was not there and userspace never started.  A compile fix that changes WHEN a
+ * step runs is not a compile fix.
+ */
+static int __init luofu_fmc_init(void)
+{
+	int ret;
+
+	ret = platform_driver_register(&luofu_fmc_driver);
+	if (ret)
+		return ret;
+
+#ifdef CONFIG_MTD_UBI
+	luofu_fmc_ubi_probe();
+#endif
+
+	return 0;
+}
+late_initcall_sync(luofu_fmc_init);
 
 MODULE_AUTHOR("the luofu port");
 MODULE_DESCRIPTION("Hisilicon luofu (Hi5671Y) FMC SPI-NAND controller (stage A)");
