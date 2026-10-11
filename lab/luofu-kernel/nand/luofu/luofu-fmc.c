@@ -1778,7 +1778,12 @@ out:
 	put_mtd_device(part);
 }
 
-static int __init luofu_fmc_ubi_probe(void)
+static void luofu_fmc_ubi_probe_done(void)
+{
+	luofu_phase = 4;
+}
+
+static int luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
 
@@ -2115,16 +2120,10 @@ static int __init luofu_fmc_ubi_probe(void)
 		 word & 1 ? "resolves" : "does NOT resolve");
 
 	luofu_phase = 3;
+	luofu_fmc_ubi_probe_done();
 	return 0;
 }
-static int __init luofu_fmc_ubi_probe_done(void)
-{
-	luofu_phase = 4;
-	return 0;
-}
-late_initcall_sync(luofu_fmc_ubi_probe_done);
 
-late_initcall_sync(luofu_fmc_ubi_probe);
 #endif /* CONFIG_MTD_UBI */
 
 /* ------------------------------------------------------------------ */
@@ -3400,6 +3399,10 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 */
 	if (luofu_log_register(fmc))
 		dev_warn(dev, "FMC: could not arm the panic log capture\n");
+
+#ifdef CONFIG_MTD_UBI
+	luofu_fmc_ubi_probe();
+#endif
 
 	return 0;
 }
