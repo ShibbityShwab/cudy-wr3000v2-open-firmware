@@ -212,29 +212,20 @@ start:
 
 		__EFI_HEADER
 1:
-		/* lab breadcrumb: decompressor entry (very first instructions) */
-		movw	r3, #:lower16:0x10100C18
-		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x0008
-		movt	r4, #0xC0DE
-		str	r4, [r3]
+		/* The decompressor prologue MUST come first.  An earlier revision put a
+		breadcrumb before `setend`/`mrs r9`/the r7-r8 saves, which overwrites the
+		entry sequence the bootloader hands control to. */
  ARM_BE8(	setend	be		)	@ go BE8 if compiled for BE8
  AR_CLASS(	mrs	r9, cpsr	)
 #ifdef CONFIG_ARM_VIRT_EXT
 		bl	__hyp_stub_install	@ get into SVC mode, reversibly
 #endif
-		/* lab breadcrumb: hyp-stub install returned */
-		movw	r3, #:lower16:0x10100C18
-		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x0009
-		movt	r4, #0xC0DE
-		str	r4, [r3]
 		mov	r7, r1			@ save architecture ID
 		mov	r8, r2			@ save atags pointer
-		/* lab breadcrumb: r7/r8 saved (arg save path) */
+		/* lab breadcrumb: the decompressor prologue has completed */
 		movw	r3, #:lower16:0x10100C18
 		movt	r3, #:upper16:0x10100C18
-		movw	r4, #0x000A
+		movw	r4, #0x0008
 		movt	r4, #0xC0DE
 		str	r4, [r3]
 
