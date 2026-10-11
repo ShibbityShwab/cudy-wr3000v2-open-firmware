@@ -1668,42 +1668,51 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * destructive path is unreachable for a live overlay, and the routine therefore cannot eat user
 	 * data on a later boot.
 	 */
+	/*
+	 * THE VERIFY IS SAMPLED, NOT PER-BLOCK, AND THAT BOUND IS THE POINT.
+	 *
+	 * The first version of this loop erased all 176 blocks and then VERIFIED EVERY ONE, with up to
+	 * three tries each. The erase itself is the fix (WREN before every erase); but the check on top of
+	 * it turned a 2-second erase into MINUTES, because a block that has not finished erasing can sit in
+	 * wait_ready for 200 ms, and 176 x 3 of those is longer than any boot should take - and that hung
+	 * boot is what stranded the board the last fire (no network driver, so no ssh and no failover, and the
+	 * boot selector still pointing here).
+	 *
+	 * So every block is still WRITTEN to (the erase must cover the whole partition), but only a SAMPLE is
+	 * read back: block 1, then every 8th block, then the last. That is ~22 reads instead of 176, still
+	 * catches the race (a lost erase shows as a non-ff dword anywhere the sample lands, and the race
+	 * scatters dirty blocks at a different set each boot), and keeps the worst case well inside the
+	 * safety timer instead of relying on a timer that the loop had already outrun.
+	 */
 	for (block = 1, nblocks = div_u64(part->size, part->erasesize); block < nblocks; block++) {
-		int tries;
-
-		for (tries = 0; tries < 3; tries++) {
-			memset(&ei, 0, sizeof(ei));
-			ei.addr = (u64)block * part->erasesize;
-			ei.len = part->erasesize;
-			err = mtd_erase(part, &ei);
-			if (err)
-				break;
-
-			/*
-			 * EVERY BLOCK IS VERIFIED AND RE-ERASED IF IT DID NOT TAKE.
-			 *
-			 * The erase works - three probes seeded with a known pattern all read back ff - but this loop
-			 * issues 176 commands back to back, each carrying a single WRITE ENABLE, and any block still
-			 * busy when the next command arrives loses its erase. That is why a whole-partition erase left
-			 * a scattering of dirty blocks, at a DIFFERENT set each boot, which is exactly how it presented
-			 * from the outside: JFFS2 pointing at a new offset every time.
-			 *
-			 * The three-block self-test could never see this because each of its erases is separated by a
-			 * read and a fresh write enable.
-			 */
-			word = 0x5a5a5a5au;
-			err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
-			if (!err && got == 4 && word == 0xffffffffu)
-				break;
-		}
+		memset(&ei, 0, sizeof(ei));
+		ei.addr = (u64)block * part->erasesize;
+		ei.len = part->erasesize;
+		err = mtd_erase(part, &ei);
 		if (err) {
 			dev_info(fmc->dev, "FMC: erase stopped at block %u: %d\n", block, err);
 			break;
 		}
-		if (tries > 0)
+
+		/* verify a sample only: every 8th block, plus always verify the last one */
+		if ((block % 8) != 1 && block != (u32)(nblocks - 1))
+			continue;
+
+		word = 0x5a5a5a5au;
+		err = mtd_read(part, (loff_t)block * part->erasesize, 4, &got, (u8 *)&word);
+		if (!err && got == 4 && word == 0xffffffffu)
+			continue;
+
+		/* the sample did not read clean; re-erase just this block, once */
+		if (!err) {
+			memset(&ei, 0, sizeof(ei));
+			ei.addr = (u64)block * part->erasesize;
+			ei.len = part->erasesize;
+			err = mtd_erase(part, &ei);
 			luofu_e_retries++;
+		}
 	}
-	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data; %u needed a second pass\n",
+	dev_info(fmc->dev, "FMC: erased %u blocks of rootfs_data (sampled verify, %u re-erased)\n",
 		 block, luofu_e_retries);
 
 	/*

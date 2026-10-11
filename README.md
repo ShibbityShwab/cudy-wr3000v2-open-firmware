@@ -7,6 +7,35 @@ vendor kernel 5.10.201, OpenWrt 22.03.6 based vendor userland).
 This repository contains **only our own work**: scripts, documentation and analysis. It contains **no
 vendor binaries**, no firmware images, no keys and no credentials. See `NOTICE.md`.
 
+## Progress at a glance
+
+Score = how far the artifact record proves a subsystem was carried (evidence-graded, no test suite).
+Measured 2026-10-11; the full per-lane ledger with citations is in the parent repo's `PROGRESS.md` /
+`PROGRESS.html`.
+
+| | score |
+| --- | --- |
+| **REVERSAL** (reading the closed Wi-Fi stack) | **~68%** |
+| **REBUILD** (our own kernel + our own OpenWrt) | **~35%** |
+| **OVERALL** toward the goal (our kernel, our drivers, no vendor kernel) | **~51%** |
+
+**Done / strong:** the whole Wi-Fi stack is *read* - firmware disassembled+symbolised, register/BAR/ring
+maps, the 414-entry `alg` API, calibration store, HCC protocol (77 handlers), FMC/NAND spec. Our own
+`wifidrv` registers a wiphy + netdev, claims both endpoints, loads and releases the firmware CPU, and
+elicits the firmware's dialogue.
+
+**Blocked (the hardware wall):** the Wi-Fi chip's interrupt delivery to the GIC is device-internal -
+JTAG (no hardware) and the vendor source (silent) are the only instruments, both unavailable
+(`docs/phase48/host-side-closed.md`).
+
+**The long pole - our own kernel (sections C below in the ledger):** device tree 70%, config fragment
+75%, and the `lab/luofu-*` drivers still stubs or scaffolds (NAND 55% - erase works; clk 45%, pinctrl
+40%, PCIe 25% - its writes are commented out). The Ethernet/switch driver is 0% (no file) and the
+upstream OpenWrt target is 0%.
+
+**Left, in order:** un-strand the board (bound the NAND erase-verify loop); finish NAND (erase race +
+UBI/JFFS2); write the Ethernet/switch driver; fill the driver stubs; the Wi-Fi wall + data path.
+
 ## What is in here
 
 | Path | What it is |
