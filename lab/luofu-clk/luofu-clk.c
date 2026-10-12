@@ -312,6 +312,20 @@ struct luofu_crg {
 
 static const struct of_device_id luofu_crg_match_table[] = {
 	{ .compatible = "hisilicon,luofu-crg" },
+	/*
+	 * THE ONE THAT MATTERS, and the reason the NIC never came up.
+	 *
+	 * The kernel does NOT use the DT we build and append: vendor u-boot's bootfip hands it ITS OWN
+	 * device tree (root compatible "hsan-luofu"), and in that tree the clock/reset block is
+	 * "hsan,crg".  With only the "hisilicon,luofu-crg" entry this driver registered and then matched
+	 * NO device: probe never ran (0xC90 stayed 0x00000000), the clock provider was never registered,
+	 * and gmac + mdio both died at clock acquisition - no PHY bus, no eth0.
+	 *
+	 * The gmac and mdio drivers already carry the vendor alias alongside their own ('hsan,mac',
+	 * 'hsan,mdio'), which is exactly why THEIR probes run and fire crumbs while the CRG's did not.
+	 * Editing the DTS crg node could never help - the kernel never reads it.
+	 */
+	{ .compatible = "hsan,crg" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, luofu_crg_match_table);

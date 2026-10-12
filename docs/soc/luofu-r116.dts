@@ -155,7 +155,19 @@
 	 * (build/tmp/inta-spec/clocks2.md sec 2). */
 
 	crg: clock-reset-controller@14880000 {
-		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+		/* NO "syscon" HERE, and that is the fix for the NIC.
+		 *
+		 * 0xC90 read 0x00000000 across a fire: luofu_crg_probe's FIRST statement - a crumb written before
+		 * anything that can fail - never executed, while driver_find("luofu-crg") succeeded.  So the
+		 * DRIVER registers but never gets a DEVICE.  The reason is this compatibility list: syscon is a
+		 * platform driver matching "syscon" and registers very early, so it claims the device before
+		 * luofu-crg is ever offered it.  Nothing in this tree uses syscon semantics on the CRG - the
+		 * mach maps it directly and the clock/reset consumers go through the provider - so dropping the
+		 * entry leaves exactly one match.  "simple-mfd" stays: the clk-pll/clk-mux children need it.
+		 *
+		 * Without the CRG provider, both NIC drivers die at clock acquisition (gmac 0xC0DE6F03, mdio
+		 * 0xC0DE7F03), there is no PHY bus and no eth0. */
+		compatible = "hisilicon,luofu-crg", "simple-mfd";
 		reg = <0x14880000 0x1000>;	/* pinned:201 */
 		#clock-cells = <1>;		/* clk id table in luofu.h */
 		#reset-cells = <2>;		/* (reg-offset, bit), pinned:1395 */
