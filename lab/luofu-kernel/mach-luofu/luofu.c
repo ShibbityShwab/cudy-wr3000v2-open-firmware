@@ -137,8 +137,28 @@ static int __init luofu_late_crumb(void)
 	struct clk *clk;
 	u32 mask;
 	const char *clkres = "n/a";
+	void __iomem *sc;
 
-	luofu_crumb(0xc0de0020);
+	/*
+	 * FIRST, before anything that can fail or fault: prove this initcall ran at all, into 0xC1C.
+	 *
+	 * 0xC18 is useless for that - the FMC's own late_initcall_sync deposits 0xc0de502d there and runs
+	 * afterwards, so a crumb at 0xC18 is always overwritten and "did my code run" is unanswerable.
+	 * 0xC1C is WORSE, and this cost several fires: it is the FMC's PAYLOAD cell - luofu_fmc_crumb()
+	 * writes it on EVERY tick (every 5 s), so anything deposited there is overwritten within seconds
+	 * and reads back 0.  A controlled test settled it: written from the VENDOR (which runs no FMC
+	 * driver) 0xC1C held its value across a reboot, which is exactly why it looked usable.
+	 *
+	 * 0xC8C is neither: verified writable, verified sticky across a vendor reboot, and touched by
+	 * nothing in this tree.  THIS is the cell to deposit answers in.
+	 *
+	 * 0xC0DE8C00 = reached this point.  The low bits are OR'd in below as each answer resolves.
+	 */
+	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (sc) {
+		writel(0xc0de8c00, sc + 0xc8c);
+		(void)readl(sc + 0xc8c);
+	}
 
 	drv = driver_find("luofu-crg", &platform_bus_type);
 
@@ -155,34 +175,21 @@ static int __init luofu_late_crumb(void)
 		clkres = "nonode";
 	}
 
-	pr_info("luofu: LATE drv=%s eth0=%s clk=%s\n",
-		drv ? "yes" : "NO", nd ? "yes" : "NO", clkres);
-
 	/*
-	 * The print above is a courtesy; the CRUMB is the instrument.  The ring's window starts at the
-	 * FMC's late_initcall_sync (~4.0 s) and this late_initcall runs BEFORE that, so its output lands
-	 * outside the window - the same lossy-instrument trap, one level down.
-	 *
-	 * And it writes 0xc1c, NOT 0xc18: the FMC's own late_initcall_sync deposits 0xc0de502d into 0xc18
-	 * and that runs AFTER this one, so a crumb here would simply be overwritten.  0xc1c is the
-	 * neighbouring sysctrl word, unused by the FMC, and it survives the boot so it can be read back
-	 * from the vendor slot.  Encoded: bit8 = crg driver registered, bit4 = eth0 exists,
-	 * bit0 = the crg clock provider answered.
+	 * bit8 = crg driver registered, bit4 = eth0 exists, bit0 = the crg clock provider answered.
 	 */
-	mask = 0xc0de1c00;
+	mask = 0xc0de8c00;
 	if (drv)
 		mask |= 0x100;
 	if (nd)
 		mask |= 0x010;
 	if (!strcmp(clkres, "ok"))
 		mask |= 0x001;
-	{
-		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
-		if (sc) {
-			writel(mask, sc + 0xc1c);
-			(void)readl(sc + 0xc1c);
-			iounmap(sc);
-		}
+
+	if (sc) {
+		writel(mask, sc + 0xc8c);
+		(void)readl(sc + 0xc8c);
+		iounmap(sc);
 	}
 
 	return 0;
