@@ -10,14 +10,19 @@ vendor binaries**, no firmware images, no keys and no credentials. See `NOTICE.m
 ## Progress at a glance
 
 Score = how far the artifact record proves a subsystem was carried (evidence-graded, no test suite).
-Measured 2026-10-11; the full per-lane ledger with citations is in the parent repo's `PROGRESS.md` /
+Measured **2026-10-12** against the record: 214 phase reports, 48 lab programs, 7 `lab/luofu-*`
+drivers. The full per-lane ledger with citations is in the parent repo's `PROGRESS.md` /
 `PROGRESS.html`.
 
-| | score |
-| --- | --- |
-| **REVERSAL** (reading the closed Wi-Fi stack) | **~68%** |
-| **REBUILD** (our own kernel + our own OpenWrt) | **~35%** |
-| **OVERALL** toward the goal (our kernel, our drivers, no vendor kernel) | **~51%** |
+| | score | since 10-11 |
+| --- | --- | --- |
+| **REVERSAL** (reading the closed Wi-Fi stack) | **~68%** | unchanged - the wall is hardware |
+| **REBUILD** (our own kernel + our own OpenWrt) | **~39%** | **up from ~35%** |
+| **OVERALL** toward the goal (our kernel, our drivers, no vendor kernel) | **~53%** | **up from ~51%** |
+
+> **The headline fact, and it is not a percentage:** our own kernel **already booted OpenWrt 25.12.5
+> userspace** on this board (2026-10-10; ledger PHASE 50em/50en). What is left is *drivers and
+> polish*, not whether the thing bootstraps.
 
 **Done / strong:** the whole Wi-Fi stack is *read* - firmware disassembled+symbolised, register/BAR/ring
 maps, the 414-entry `alg` API, calibration store, HCC protocol (77 handlers), FMC/NAND spec. Our own
@@ -28,13 +33,24 @@ elicits the firmware's dialogue.
 JTAG (no hardware) and the vendor source (silent) are the only instruments, both unavailable
 (`docs/phase48/host-side-closed.md`).
 
-**The long pole - our own kernel (sections C below in the ledger):** device tree 70%, config fragment
-75%, and the `lab/luofu-*` drivers still stubs or scaffolds (NAND 55% - erase works; clk 45%, pinctrl
-40%, PCIe 25% - its writes are commented out). The Ethernet/switch driver is 0% (no file) and the
-upstream OpenWrt target is 0%.
+**The rebuild - a driver for every device-tree node that had none.** All seven `lab/luofu-*`
+drivers now carry real implementations: `luofu-pinctrl` applies the vendor's decoded `set_mux` RMW;
+`luofu-clk` has full gate/mux/PLL ops (its `set_parent` refuses `-EPERM` **by design** - writing
+`0x138` switches the CPU PLL source); `luofu-pcie` and `luofu-wifi` are read-only frames; and
+**four new drivers** landed: `luofu-gmac` (Ethernet MAC, phylink + net_device), `luofu-wdt`
+(watchdog, values read from the vendor DT binding), `luofu-mdio` (MDIO bus), `luofu-thermal`
+(temperature, conversion decoded and verified). Our device tree also gained the **thermal zone it
+was missing entirely** (`tvsensor@14900500` + `thermal-zones/cls0`).
 
-**Left, in order:** un-strand the board (bound the NAND erase-verify loop); finish NAND (erase race +
-UBI/JFFS2); write the Ethernet/switch driver; fill the driver stubs; the Wi-Fi wall + data path.
+**The build no longer needs CI.** WSL2 + `gcc-arm-linux-gnueabihf` builds every module AND the
+kernel image locally (`tools\local-build.bat <module>`; 9/9 modules verified, `kernelb` budget
+PASS). GitHub Actions is now used only to publish, never to check.
+
+**Left, in order:** one fire to confirm the boot fix (the `rootfs_data` erase is now **opt-in**,
+`omo_mark` default 0, so a boot no longer writes 176 blocks inside a 180 s timer); the Ethernet path
+end to end (the MAC enable bit is staged behind the write guard); `luofu-mdio`'s bit positions
+(staged behind `layout_verified` - transfers refuse rather than guess); the internal switch driver;
+the Wi-Fi wall + data path.
 
 ## What is in here
 
