@@ -3463,38 +3463,48 @@ static struct platform_driver luofu_fmc_driver = {
 };
 
 /*
- * ONE initcall, AND IT MUST BE late_initcall_sync - NOT module_platform_driver.
+ * THE ORDERING *IS* THE BOOT - AND IT IS MEASURED, NOT REASONED.
  *
- * A module may expand module_init() exactly once, and this module needs its
- * rootfs check to run AFTER UBI's own init has attached the volume the command
- * line names (see the comment above luofu_fmc_ubi_probe).  Those two facts have
- * one resolution, and it is this one: do the platform_driver_register() from
- * inside a single late_initcall_sync(), so the driver is registered AND the UBI
- * probe still runs last.
+ * `ubi.mtd=<name>` is NOT resolved when the command line is parsed.  ubi_mtd_param_parse only
+ * STORES the string (drivers/mtd/ubi/build.c: `strcpy(&p->name[0], tokens[0])`); the name becomes
+ * a device in open_mtd_device() -> get_mtd_device_nm(), called from ubi_init(), which is a
+ * LATE_INITCALL (build.c:1322 `late_initcall(ubi_init)`).
  *
- * A fire is what taught this, and the lesson is worth keeping: the earlier form
- * of this file had THREE module_init-expanding macros (late_initcall_sync x2
- * plus module_platform_driver) and therefore never compiled.  "Fixing" that by
- * calling luofu_fmc_ubi_probe() from the driver's probe instead DID compile -
- * and it silently moved the rootfs check to before UBI attached, so the volume
- * was not there and userspace never started.  A compile fix that changes WHEN a
- * step runs is not a compile fix.
+ * So the partition named "upgrade" must already be REGISTERED by the time ubi_init runs - and
+ * only this driver registers it.  device_initcall (level 6) runs BEFORE late_initcall (level 7);
+ * late_initcall_sync (7s) runs AFTER it.
+ *
+ * FIRE 28's own log, recovered from the ring at 0x80603000, is the evidence:
+ *
+ *     /dev/root: Can't open blockdev
+ *     VFS: Cannot open root device "ubiblock0_0" or unknown-block(0,0): error -6
+ *     Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)
+ *
+ * UBI never attached mtd16, so ubiblock never created ubiblock0_0, so root= could not open.
+ * Registering this driver from late_initcall_sync put it after ubi_init and produced exactly
+ * that panic.  `module_platform_driver` is therefore required, not stylistic: it is the level
+ * that makes the partitions exist in time.
  */
-static int __init luofu_fmc_init(void)
+module_platform_driver(luofu_fmc_driver);
+
+/*
+ * The diagnostic stays LATE on purpose: it reports what UBI did, so it must run AFTER ubi_init -
+ * which is why it gets its own initcall rather than being called from the driver's probe.
+ *
+ * NOTE for the module build: this file now defines TWO initcall macros, which is legal for a
+ * BUILT-IN driver (init.h gives them distinct levels) but NOT for a loadable module (module.h
+ * collapses every initcall to module_init, and a module may define init_module once).  This
+ * driver is `CONFIG_MTD_NAND_LUOFU=y` in the image, which is the configuration that has always
+ * been the real one; a `=m` build of this file is not a meaningful test.
+ */
+static int __init luofu_fmc_ubi_diag(void)
 {
-	int ret;
-
-	ret = platform_driver_register(&luofu_fmc_driver);
-	if (ret)
-		return ret;
-
 #ifdef CONFIG_MTD_UBI
 	luofu_fmc_ubi_probe();
 #endif
-
 	return 0;
 }
-late_initcall_sync(luofu_fmc_init);
+late_initcall_sync(luofu_fmc_ubi_diag);
 
 MODULE_AUTHOR("the luofu port");
 MODULE_DESCRIPTION("Hisilicon luofu (Hi5671Y) FMC SPI-NAND controller (stage A)");
