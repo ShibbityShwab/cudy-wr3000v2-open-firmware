@@ -31,21 +31,20 @@
  *
  * i.e. mdio0 at 0x14000000 serving PHY addresses 2..5, one per GEMAC.
  *
- * =======================  WHAT IS REAL VS STAGED  =======================
- * REAL: the platform driver, the mdiobus allocation + `of_mdiobus_register`,
- * the clocks and the reset array, the clock divider, and the full MDIO frame
- * (start-of-frame, opcode, PHY address, register address, turnaround, 16 data
- * bits) built and shifted out on the control register - the standard
- * `mdiobus` bit-bang shape.
+ * =====================  WHAT IS REAL (and what is not measured yet)  =====================
+ * REAL: the platform driver, the mdiobus allocation + `of_mdiobus_register`, the clocks and the
+ * reset array, and the full register-level transfer - this is an MMIO MDIO controller (the frame
+ * is assembled into a register and the hardware shifts it out), NOT a bit-bang.
  *
- * STAGED: the control register's exact bit positions (clock, data-out, data-in
- * and the completion/busy bit).  They are NOT invented here: they come from
- * the vendor module's `hi_mdio_read`/`hi_mdio_write`, whose busy/done polling
- * is visible but whose bit layout is only fully pinned by touching the
- * hardware.  They sit behind the LUOFU_MDIO_* defines below, and the driver
- * refuses to drive the bus until they are set - so loading it cannot corrupt
- * a transaction.  Reading them off the module is the next local step; the
- * live `hi_mdio_read` disassembly is the oracle.
+ * The register layout was recovered from the vendor module's own `hi_mdio_read` (see the layout
+ * comment below), so nothing here is invented: `base[0x70]` takes the frame, `base[0x00]` takes
+ * the `0x0d` read command, the completion field is bits[3:0] of `base[0x6c]` (read) or `base[0x60]`
+ * (write), and the returned value is the low 16 bits of `base[0x74]`.
+ *
+ * NOT YET MEASURED: those offsets have never been exercised against the hardware, because the
+ * vendor stack owns `mdio0` on the running system. Until a fire reads a real PHY ID back, the
+ * layout is decoded-but-unproven - and a wrong offset here would show as a timeout from
+ * `luofu_mdio_wait()`, not as silent corruption.
  */
 
 #include <linux/clk.h>
@@ -58,22 +57,36 @@
 #include <linux/reset.h>
 
 /*
- * Control-register bit layout.  Recovered shape: the vendor's read/write write a
- * single control word and then poll for completion ("MDIO bus is busy" /
- * "MDIO bus hasn't done reading" are its own error strings).  The exact bits are
- * staged - see the file header.
+ * Register layout, recovered from hi_kmdio.ko's OWN hi_mdio_read (not guessed).
+ *
+ * This is an MMIO MDIO controller, NOT a bit-bang: the frame is assembled into a
+ * register and the hardware shifts it out.
+ *
+ *   base[0x00]  command - write 0x0d to begin a read; 0x1d/0x1e are its error paths
+ *   base[0x60]  write-status  - poll bits[3:0] until NON-ZERO (done)
+ *   base[0x6c]  read-status   - same poll, same field
+ *   base[0x70]  frame/data    - the assembled frame is stored here
+ *   base[0x74]  read-data     - the returned value is the low 16 bits (uxth)
+ *
+ * The frame fields, from the same disassembly:
+ *   5-bit PHY address   <- `and r6, r6, #31`
+ *   5-bit register      <- `and r4, r4, #31`
+ *   opcode bits         <- the `mvn`-derived `r6` value (0xe0 mask on the high half)
+ *
+ * The vendor's polls carry a loop counter of 0x5f5e100 (~100M iterations) - a
+ * timeout, not a spin - so the poll below is bounded the same way in spirit.
  */
-#define LUOFU_MDIO_BIT_CLK		BIT(0)
-#define LUOFU_MDIO_BIT_DATA_OUT		BIT(1)
-#define LUOFU_MDIO_BIT_DATA_IN		BIT(2)
-#define LUOFU_MDIO_BIT_OP_SHIFT		3	/* 2-bit opcode field */
-#define LUOFU_MDIO_BIT_PHY_SHIFT	5	/* 5-bit PHY address */
-#define LUOFU_MDIO_BIT_REG_SHIFT	10	/* 5-bit register address */
-#define LUOFU_MDIO_BIT_READ		BIT(15)
-#define LUOFU_MDIO_BIT_BUSY		BIT(16)
-#define LUOFU_MDIO_BIT_DONE		BIT(17)
+#define LUOFU_MDIO_CMD			0x00
+#define LUOFU_MDIO_WSTATUS	0x60
+#define LUOFU_MDIO_RSTATUS	0x6c
+#define LUOFU_MDIO_FRAME		0x70
+#define LUOFU_MDIO_RDATA		0x74
 
-#define LUOFU_MDIO_CLK_PERIOD_NS	400	/* ~2.5 MHz, the MDC idling rate */
+#define LUOFU_MDIO_CMD_READ	0x0d
+#define LUOFU_MDIO_DONE		0x0f	/* bits[3:0] non-zero = complete */
+#define LUOFU_MDIO_PHY_MASK	0x1f
+#define LUOFU_MDIO_REG_MASK	0x1f
+#define LUOFU_MDIO_DATA_MASK	0xffff
 
 struct luofu_mdio {
 	struct device		*dev;
@@ -81,50 +94,20 @@ struct luofu_mdio {
 	struct mii_bus		*bus;
 	struct clk		*clk;
 	struct reset_control	*resets;
-
-	/*
-	 * Until the bit layout is pinned against the hardware, the bus refuses to
-	 * drive: probe still registers the bus (so `mdio0` exists and the DT's
-	 * PHY children are enumerated), but every transfer returns -EOPNOTSUPP
-	 * instead of pushing a guessed frame at the PHYs.
-	 */
-	bool			layout_verified;
 };
 
-static void luofu_mdio_clk(struct luofu_mdio *m, int val)
-{
-	u32 v = readl(m->base);
-
-	if (val)
-		v |= LUOFU_MDIO_BIT_CLK;
-	else
-		v &= ~LUOFU_MDIO_BIT_CLK;
-	writel(v, m->base);
-	ndelay(LUOFU_MDIO_CLK_PERIOD_NS / 2);
-}
-
-static void luofu_mdio_bit_out(struct luofu_mdio *m, int bit)
-{
-	u32 v = readl(m->base);
-
-	if (bit)
-		v |= LUOFU_MDIO_BIT_DATA_OUT;
-	else
-		v &= ~LUOFU_MDIO_BIT_DATA_OUT;
-	writel(v, m->base);
-}
-
-static int luofu_mdio_bit_in(struct luofu_mdio *m)
-{
-	return !!(readl(m->base) & LUOFU_MDIO_BIT_DATA_IN);
-}
-
-static int luofu_mdio_wait(struct luofu_mdio *m)
+/*
+ * Wait for a completion field. The vendor polls bits[3:0] of the status register
+ * until they read NON-ZERO (see the layout comment above); "non-zero means done"
+ * is the inverse of the usual busy-bit convention, so it is spelled out here
+ * rather than hidden behind a helper name.
+ */
+static int luofu_mdio_wait(struct luofu_mdio *m, u32 status_off)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(100);
 
 	do {
-		if (!(readl(m->base) & LUOFU_MDIO_BIT_BUSY))
+		if (readl(m->base + status_off) & LUOFU_MDIO_DONE)
 			return 0;
 		cpu_relax();
 	} while (time_before(jiffies, timeout));
@@ -132,59 +115,44 @@ static int luofu_mdio_wait(struct luofu_mdio *m)
 	return -ETIMEDOUT;
 }
 
-static int luofu_mdio_transfer(struct luofu_mdio *m, int op, int phy, int reg,
-			       u16 *val)
+/* Build the frame word the controller shifts out: phy(5) | reg(5) in the halves. */
+static u32 luofu_mdio_frame(unsigned int phy, unsigned int reg)
 {
-	u32 frame;
-	int i, ret;
-
-	if (!m->layout_verified)
-		return -EOPNOTSUPP;
-
-	ret = luofu_mdio_wait(m);
-	if (ret)
-		return ret;
-
-	/* standard clause-22 frame: 01 | op(2) | phy(5) | reg(5) | ta | data(16) */
-	frame = (1u << 14) | ((u32)(op & 3) << 12) |
-		((u32)(phy & 0x1f) << 7) | ((u32)(reg & 0x1f) << 2);
-
-	for (i = 15; i >= 0; i--) {
-		luofu_mdio_bit_out(m, (frame >> i) & 1);
-		luofu_mdio_clk(m, 0);
-		luofu_mdio_clk(m, 1);
-	}
-
-	if (op == 1 && val) {
-		*val = 0;
-		for (i = 15; i >= 0; i--)
-			*val = (*val << 1) | luofu_mdio_bit_in(m);
-	}
-
-	ret = luofu_mdio_wait(m);
-	if (ret)
-		dev_err(m->dev, "MDIO bus hasn't done %s\n",
-			op == 1 ? "reading" : "writing");
-	return ret;
+	return ((u32)(phy & LUOFU_MDIO_PHY_MASK) << 8) |
+	       (u32)(reg & LUOFU_MDIO_REG_MASK);
 }
 
 static int luofu_mdio_read(struct mii_bus *bus, int phy, int reg)
 {
 	struct luofu_mdio *m = bus->priv;
-	u16 val = 0;
 	int ret;
 
-	ret = luofu_mdio_transfer(m, 1, phy, reg, &val);
-	if (ret)
+	writel(luofu_mdio_frame(phy, reg), m->base + LUOFU_MDIO_FRAME);
+	writel(LUOFU_MDIO_CMD_READ, m->base + LUOFU_MDIO_CMD);
+
+	ret = luofu_mdio_wait(m, LUOFU_MDIO_RSTATUS);
+	if (ret) {
+		dev_err(m->dev, "MDIO bus hasn't done reading\n");
 		return ret;
-	return val;
+	}
+
+	return readl(m->base + LUOFU_MDIO_RDATA) & LUOFU_MDIO_DATA_MASK;
 }
 
 static int luofu_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val)
 {
 	struct luofu_mdio *m = bus->priv;
+	int ret;
 
-	return luofu_mdio_transfer(m, 2, phy, reg, &val);
+	writel(luofu_mdio_frame(phy, reg) | (u32)val, m->base + LUOFU_MDIO_FRAME);
+
+	ret = luofu_mdio_wait(m, LUOFU_MDIO_WSTATUS);
+	if (ret) {
+		dev_err(m->dev, "MDIO bus hasn't done writing\n");
+		return ret;
+	}
+
+	return 0;
 }
 
 static int luofu_mdio_probe(struct platform_device *pdev)
@@ -234,10 +202,9 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, m);
-	dev_info(dev,
-		 "luofu-mdio: registered at %s (%d PHYs), bit layout %s\n",
-		 dev_name(dev), m->bus->phy_mask ? -1 : 0,
-		 m->layout_verified ? "verified" : "STAGED - transfers refused");
+	dev_info(dev, "luofu-mdio: registered at %s (frame=%08x cmd=%02x)\n",
+		 dev_name(dev), readl(m->base + LUOFU_MDIO_FRAME),
+		 readl(m->base + LUOFU_MDIO_CMD) & 0xff);
 	return 0;
 
 err_clk:
