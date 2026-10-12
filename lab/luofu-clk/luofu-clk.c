@@ -330,6 +330,142 @@ static const struct of_device_id luofu_crg_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, luofu_crg_match_table);
 
+/* luofu_crg_rmw is defined further down; the per-node gate provider below needs it. */
+static u32 luofu_crg_rmw(void __iomem *base, u16 off, u8 bit, u8 set);
+
+#define LUOFU_SYSCTRL_BASE	0x10100000UL
+
+/*
+ * ============================ THE VENDOR CLOCK MODEL ============================
+ *
+ * The active device tree is the VENDOR's (root compatible "hsan-luofu"), and its clock model is not
+ * the onecell provider above.  Measured on the running device:
+ *
+ *   mdio0/clocks   = 00 00 00 4c    one cell, a bare PHANDLE ('L')
+ *   gemac0/clocks  = 00 00 00 42    one cell, a bare PHANDLE ('B')
+ *
+ * i.e. `clocks = <&some_clk_node>` with NO index cell - #clock-cells = <0>, one clock per node.  Each
+ * gate is its own node under clk@14880000 and carries the gate geometry in its reg:
+ *
+ *   /proc/device-tree/clk@14880000/clk_gate@002003   hsan,clk-gate   phandle 'L'  <- mdio0
+ *   /proc/device-tree/clk@14880000/clk_gate@002019   hsan,clk-gate   phandle 'B'  <- gemac0
+ *
+ * 0x2003 = offset 0x20, bit 0x03 - which is exactly this driver's own LUOFU_CLK_MDIO0 entry.  So the
+ * geometry comes from the node's reg and the central table is not consulted at all; note gemac0 points
+ * at 0x2019 where our table says bit 0x13, another reason to derive rather than look up.
+ *
+ * WHY THIS IS NEEDED AT ALL: the onecell provider above registers on the crg node expecting consumers
+ * shaped `clocks = <&crg N>`.  The vendor tree's consumers are shaped `clocks = <&clk_gate@...>`.  The
+ * two models cannot resolve each other, so devm_clk_get() failed even after the provider registered
+ * (gmac 0xC0DE6F03, mdio 0xC0DE7F03) and there was no PHY bus and no eth0.
+ */
+struct luofu_vgate {
+	struct clk_hw hw;
+	void __iomem *base;
+	u16 offset;
+	u8 bit;
+};
+
+static int luofu_vgate_enable(struct clk_hw *hw)
+{
+	struct luofu_vgate *v = container_of(hw, struct luofu_vgate, hw);
+
+	luofu_crg_rmw(v->base, v->offset, v->bit, 1);
+	return 0;
+}
+
+static void luofu_vgate_disable(struct clk_hw *hw)
+{
+	struct luofu_vgate *v = container_of(hw, struct luofu_vgate, hw);
+
+	luofu_crg_rmw(v->base, v->offset, v->bit, 0);
+}
+
+static int luofu_vgate_is_enabled(struct clk_hw *hw)
+{
+	struct luofu_vgate *v = container_of(hw, struct luofu_vgate, hw);
+
+	return !!(readl(v->base + v->offset) & BIT(v->bit));
+}
+
+static const struct clk_ops luofu_vgate_ops = {
+	.enable		= luofu_vgate_enable,
+	.disable	= luofu_vgate_disable,
+	.is_enabled	= luofu_vgate_is_enabled,
+};
+
+static int luofu_vgate_probe(struct platform_device *pdev)
+{
+	struct luofu_vgate *v;
+	struct clk *clk;
+	struct clk_init_data init = { 0 };
+	u32 reg;
+	int ret;
+
+	if (of_property_read_u32(pdev->dev.of_node, "reg", &reg))
+		return -EINVAL;
+
+	v = devm_kzalloc(&pdev->dev, sizeof(*v), GFP_KERNEL);
+	if (!v)
+		return -ENOMEM;
+
+	/* devm_ioremap, no reservation: the page is claimed by syscon/others. */
+	v->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
+	if (!v->base)
+		return -ENOMEM;
+
+	v->offset = (u16)(reg >> 8);		/* 0x2003 -> offset 0x20 */
+	v->bit    = (u8)(reg & 0xff);		/* 0x2003 -> bit    0x03 */
+
+	init.name = kasprintf(GFP_KERNEL, "%s", pdev->dev.of_node->name);
+	init.ops = &luofu_vgate_ops;
+	init.num_parents = 0;			/* orphan: provider is enough for clk_get */
+	init.flags = CLK_IGNORE_UNUSED;
+	v->hw.init = &init;
+
+	ret = devm_clk_hw_register(&pdev->dev, &v->hw);
+	if (ret)
+		return ret;
+
+	clk = v->hw.clk;
+	if (IS_ERR(clk))
+		return PTR_ERR(clk);
+
+	/* #clock-cells = <0>: a bare phandle is the clock. */
+	ret = of_clk_add_provider(pdev->dev.of_node, of_clk_src_simple_get, clk);
+	if (ret)
+		return ret;
+
+	pr_info("luofu-clk: gate %s off=0x%02x bit=0x%02x registered (0-cell)\n",
+		pdev->dev.of_node->name, v->offset, v->bit);
+
+	/* Diagnostic in the free cell 0xC9C: did the per-node gate probe run at all, and with what
+	 * geometry?  The pr_info above is early enough to fall outside the 16 KiB ring window. */
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+		if (sc) {
+			writel(0xc0de9000 | (v->bit & 0xff), sc + 0xc9c);
+			(void)readl(sc + 0xc9c);
+			iounmap(sc);
+		}
+	}
+	return 0;
+}
+
+static const struct of_device_id luofu_vgate_match[] = {
+	{ .compatible = "hsan,clk-gate" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, luofu_vgate_match);
+
+static struct platform_driver luofu_vgate_driver = {
+	.probe	= luofu_vgate_probe,
+	.driver	= {
+		.name		= "luofu-clk-gate",
+		.of_match_table	= luofu_vgate_match,
+	},
+};
+
 /*
  * Read-only status inventory: walk luofu_crg_safe[] and readl() each word.
  * The only MMIO op reachable through the forced view is readl(); the table
@@ -752,6 +888,102 @@ static const struct clk_ops luofu_mux_ops = {
  * has no of_node, so nothing registers and the smoke path stays read-only
  * until its 0-default knobs turn.
  */
+/*
+ * REGISTER THE PER-NODE GATE PROVIDERS BY WALKING THE DT - no platform devices involved.
+ *
+ * Measured: the vgate crumb in 0xC9C stayed 0x00000000, so the platform-driver route never fired.  The
+ * vendor's gate nodes live under clk@14880000 (compatible "hsan,clk"), which is NOT a bus in
+ * of_default_bus_match_table - so of_platform_default_populate creates devices for the ROOT's children
+ * and then recurses only into bus nodes.  Its children are therefore never turned into platform
+ * devices, and a platform_driver can never bind them.  That is not fixable in the DTS either, because
+ * the active tree is the vendor's.
+ *
+ * Walking them here needs no devices at all.  The gate geometry comes from each node's own reg
+ * (0x2003 -> offset 0x20, bit 0x03), which is also the authoritative number: the vendor's gemac0
+ * points at clk_gate@002019 (bit 0x19) where our own table says bit 0x13.
+ */
+static int luofu_register_vgates(struct device *dev)
+{
+	struct device_node *clk_np, *child;
+	int n = 0;
+	int seen = 0, matched = 0, regok = 0, hwreg = 0;
+
+	/*
+	 * ADDRESS THE NODE EXACTLY, NOT BY COMPATIBLE MATCH.
+	 *
+	 * `of_find_compatible_node(NULL, NULL, "hsan,clk")` was measured returning a node with 212 children
+	 * and ZERO of them gates (crumb 0xDED40000: seen=0xD4 matched=0), while the node the device
+	 * actually exposes - /proc/device-tree/clk@14880000 - has ~20 `hsan,clk-gate` children.  The
+	 * string match was landing elsewhere.  The path is the one already verified on the running box, so
+	 * use it, and keep the compatible match only as a fallback.
+	 */
+	clk_np = of_find_node_by_path("/clk@14880000");
+	if (!clk_np)
+		clk_np = of_find_compatible_node(NULL, NULL, "hsan,clk");
+	if (!clk_np)
+		return 0;
+
+	for_each_child_of_node(clk_np, child) {
+		struct luofu_vgate *v;
+		struct clk_init_data init = { 0 };
+		struct clk *clk;
+		u32 reg;
+
+		seen++;
+		if (!of_device_is_compatible(child, "hsan,clk-gate"))
+			continue;
+		matched++;
+		if (of_property_read_u32(child, "reg", &reg))
+			continue;
+		regok++;
+
+		v = devm_kzalloc(dev, sizeof(*v), GFP_KERNEL);
+		if (!v)
+			continue;
+		v->base = devm_ioremap(dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
+		if (!v->base)
+			continue;
+		v->offset = (u16)(reg >> 8);
+		v->bit = (u8)(reg & 0xff);
+
+		/*
+		 * A UNIQUE name per gate.  child->name is "clk_gate" for every one of them, and
+		 * clk_hw_register rejects a duplicate name - which would make every registration
+		 * after the first fail.  The node's unit address is unique by construction.
+		 */
+		init.name = kasprintf(GFP_KERNEL, "%s", of_node_full_name(child));
+		init.ops = &luofu_vgate_ops;
+		init.flags = CLK_IGNORE_UNUSED;
+		v->hw.init = &init;
+
+		if (devm_clk_hw_register(dev, &v->hw))
+			continue;
+		hwreg++;
+		clk = v->hw.clk;
+		if (IS_ERR(clk))
+			continue;
+		if (of_clk_add_provider(child, of_clk_src_simple_get, clk))
+			continue;
+		n++;
+	}
+
+	of_node_put(clk_np);
+	pr_info("luofu-clk: gates seen=%d matched=%d reg_ok=%d hw_reg=%d providers=%d\n",
+		seen, matched, regok, hwreg, n);
+
+	/* Diagnostic in 0xC9C: one nibble per stage, so a single fire names where the loop stops. */
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+		if (sc) {
+			writel(0xdec00000 | (seen << 16) | ((matched & 0xf) << 12) |
+			       ((regok & 0xf) << 8) | ((hwreg & 0xf) << 4) | (n & 0xf), sc + 0xc9c);
+			(void)readl(sc + 0xc9c);
+			iounmap(sc);
+		}
+	}
+	return n;
+}
+
 static int luofu_register_clks(struct luofu_crg *crg,
 			       struct platform_device *pdev)
 {
@@ -979,6 +1211,9 @@ static int luofu_crg_probe(struct platform_device *pdev){
 			return ret;
 		}
 		luofu_diag(0xc0de5002);	/* the clock tree IS registered */
+
+		/* The per-node gate providers the vendor tree's consumers actually reference. */
+		luofu_register_vgates(&pdev->dev);
 	}
 
 	/* TODO: register the reset controller -- hisi_reset_init(pdev) (reset.c)
@@ -1095,14 +1330,11 @@ static bool luofu_crg_fdev_live;
 
 static int __init luofu_crg_init(void)
 {
-	int ret;
-
 	/* TODO (clocks2.md sec 3): in-tree this becomes core_initcall() so the
 	 * CRG is up before 8250_dw/gpio/i2c/mtd probe.  module_init is fine for
 	 * the loadable lab bring-up. */
-	ret = platform_driver_register(&luofu_crg_driver);
-	if (ret)
-		return ret;
+	platform_driver_register(&luofu_crg_driver);
+	platform_driver_register(&luofu_vgate_driver);
 
 	/* The DT-presence guard makes "without a DT match" literal: the forced
 	 * path can never co-exist with a real bind. */
