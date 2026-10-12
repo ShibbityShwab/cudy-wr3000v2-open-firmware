@@ -454,7 +454,10 @@
 		resets = <&crg 0x30 0xd>,	/* mac_logic, pinned:895 */
 			 <&crg 0x30 0xe>;	/* mac */
 		reset-names = "mac_logic_reset", "mac_reset";
-		status = "disabled";
+		/* OKAY, not disabled: see the note on mdio0 - the driver is linked into the
+		 * kernel image and cannot bind to a node the firmware has switched off.
+		 * This is the rgmii port (8), the one that carries the wired LAN. */
+		status = "okay";
 		/* TODO binding question: no mainline hsan,mac; reference
 		 * hix5hd2_gmac.c (different family). */
 	};
@@ -519,7 +522,11 @@
 		reset-names = "mdio_reset", "gephyall_reset", "gephy0_reset",
 			      "gephy1_reset", "gephy2_reset", "gephy3_reset",
 			      "gephy4_reset";
-		status = "disabled";
+		/* OKAY, not disabled.  The driver is linked into the kernel image (verified in
+		 * vmlinux) and a node the firmware has switched off can never bind - which is
+		 * exactly why nothing probed and there was no eth0.  The five PHY children
+		 * below are what phylink needs to find a PHY on this bus. */
+		status = "okay";
 
 		ethernet-phy@1 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <1>; max-speed = <1000>; };
 		ethernet-phy@2 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <2>; max-speed = <1000>; };
