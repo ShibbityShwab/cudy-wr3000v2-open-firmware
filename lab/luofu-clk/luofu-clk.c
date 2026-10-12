@@ -967,20 +967,59 @@ static int luofu_register_vgates(struct device *dev)
 		n++;
 	}
 
-	of_node_put(clk_np);
-	pr_info("luofu-clk: gates seen=%d matched=%d reg_ok=%d hw_reg=%d providers=%d\n",
-		seen, matched, regok, hwreg, n);
-
-	/* Diagnostic in 0xC9C: one nibble per stage, so a single fire names where the loop stops. */
+	/*
+	 * Diagnostic in 0xC9C: the FIRST FOUR BYTES OF THE NODE'S NAME, big-endian, so the cell reads as
+	 * ASCII and the next fire says WHICH node was walked rather than leaving it to inference.
+	 *
+	 * That matters here: the walk reported seen=212 children with 0 gates, while the device's own
+	 * /proc/device-tree/clk@14880000 shows ~20 gate children - so it is walking something else.  A node
+	 * with ~212 children is plausibly the ROOT.  Path lookup and compatible lookup both gave 212, and
+	 * this tells them apart: "clk@" (0x636c6b40) means the right node, anything else names the wrong one.
+	 */
 	{
 		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 		if (sc) {
-			writel(0xdec00000 | (seen << 16) | ((matched & 0xf) << 12) |
-			       ((regok & 0xf) << 8) | ((hwreg & 0xf) << 4) | (n & 0xf), sc + 0xc9c);
+			u32 tag = ((u32)(u8)clk_np->full_name[0] << 24) |
+				  ((u32)(u8)clk_np->full_name[1] << 16) |
+				  ((u32)(u8)clk_np->full_name[2] << 8)  |
+				  ((u32)(u8)clk_np->full_name[3]);
+			writel(tag, sc + 0xc9c);
 			(void)readl(sc + 0xc9c);
 			iounmap(sc);
 		}
 	}
+
+	/*
+	 * THE DECISIVE SMALL STEP: deposit the POINTER VALUE itself.
+	 *
+	 * The previous fire's name stamp did not produce readable ASCII - the cell read 0xDED40000, which is
+	 * also what the stage counters write.  Two readings fit: the name block never ran, OR it ran and the
+	 * node's name is literally non-ASCII (0xDE 0xD4 ...), i.e. the lookup returned a BOGUS node.  A bogus
+	 * node also explains seen=212 children when clk@14880000 has 24 and the root has 73.
+	 *
+	 * So write the pointer.  A real device_node lives in kernel lowmem and looks like 0xC0xxxxxx or
+	 * 0x8xxxxxxx; anything else means the lookup is returning garbage and no amount of provider
+	 * composition will help.  This is the cheapest way to tell those two apart.
+	 */
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+		if (sc) {
+			writel((u32)(unsigned long)clk_np, sc + 0xc9c);
+			(void)readl(sc + 0xc9c);
+			iounmap(sc);
+		}
+	}
+
+	pr_info("luofu-clk: gates seen=%d matched=%d reg_ok=%d hw_reg=%d providers=%d node=%s\n",
+		seen, matched, regok, hwreg, n, clk_np ? clk_np->full_name : "(null)");
+
+	of_node_put(clk_np);
+
+	/*
+	 * The pointer stamp is now the LAST write to 0xC9C, so it is what the next read sees.  Previously
+	 * the stage counters came after it and overwrote it, which is why three builds with three different
+	 * payloads all read back 0xDED40000.
+	 */
 	return n;
 }
 
