@@ -142,7 +142,62 @@ static void luofu_gmac_mac_link_up(struct phylink_config *cfg,
 	(void)rx_pause;
 }
 
+/*
+ * THIS TREE'S phylink REQUIRES mac_ops->validate.
+ *
+ * drivers/net/phy/phylink.c here is the older API:
+ *
+ *     static int phylink_validate(struct phylink *pl, unsigned long *supported, ...)
+ *     {
+ *             pl->mac_ops->validate(pl->config, supported, state);
+ *             return phylink_is_empty_linkmode(supported) ? -EINVAL : 0;
+ *     }
+ *
+ * It calls the op unconditionally, and phylink_create() calls phylink_validate() before it returns.
+ * Our ops table had only mac_config/mac_link_down/mac_link_up, so that call went through a NULL
+ * pointer - the prefetch abort at phylink_validate+0x18 with the trace
+ *
+ *     __pabt_svc <- phylink_validate+0x18 <- phylink_create+0x134 <- luofu_gmac_probe+0x128
+ *
+ * Fill in the supported/advertising masks for an RGMII MAC behind a PHY, and respect the interface
+ * the caller asks for.
+ */
+static void luofu_gmac_validate(struct phylink_config *cfg,
+				unsigned long *supported,
+				struct phylink_link_state *state)
+{
+	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
+
+	switch (state->interface) {
+	case PHY_INTERFACE_MODE_RGMII:
+	case PHY_INTERFACE_MODE_RGMII_ID:
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+	case PHY_INTERFACE_MODE_RGMII_TXID:
+	case PHY_INTERFACE_MODE_GMII:
+		break;
+	default:
+		/* Unknown mode for this MAC: report nothing so phylink_validate() returns -EINVAL
+		 * rather than proceeding on an empty mask. */
+		linkmode_zero(supported);
+		return;
+	}
+
+	phylink_set(mask, MII);
+	phylink_set(mask, 10baseT_Half);
+	phylink_set(mask, 10baseT_Full);
+	phylink_set(mask, 100baseT_Half);
+	phylink_set(mask, 100baseT_Full);
+	phylink_set(mask, 1000baseT_Full);
+	phylink_set(mask, Pause);
+	phylink_set(mask, Asym_Pause);
+
+	bitmap_and(supported, supported, mask, __ETHTOOL_LINK_MODE_MASK_NBITS);
+	bitmap_and(state->advertising, state->advertising, mask,
+		   __ETHTOOL_LINK_MODE_MASK_NBITS);
+}
+
 static const struct phylink_mac_ops luofu_gmac_phylink_ops = {
+	.validate	= luofu_gmac_validate,
 	.mac_config	= luofu_gmac_mac_config,
 	.mac_link_down	= luofu_gmac_mac_link_down,
 	.mac_link_up	= luofu_gmac_mac_link_up,
@@ -285,8 +340,24 @@ static int luofu_gmac_probe(struct platform_device *pdev)
 		iface = PHY_INTERFACE_MODE_NA;
 
 	g->pl_config.dev = &pdev->dev;
-	g->pl_config.type = PHYLINK_NETDEV;
-	g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
+	/*
+	 * PHYLINK_DEV, NOT PHYLINK_NETDEV.
+	 *
+	 * This tree's phylink_create() does:
+	 *
+	 *     if (config->type == PHYLINK_NETDEV)
+	 *             pl->netdev = to_net_dev(config->dev);   // container_of(dev, struct net_device, dev)
+	 *
+	 * and we hand it &pdev->dev - a PLATFORM device.  container_of() on that yields a bogus
+	 * net_device *, which phylink_validate() then dereferences a few lines later:
+	 *
+	 *     BUG at phylink_validate+0x18/0x2c
+	 *       phylink_validate <- phylink_create <- luofu_gmac_probe+0x128
+	 *
+	 * config->dev is the *device* form here, so declare it as such.
+	 */
+	g->pl_config.type = PHYLINK_DEV;
+g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 				    &luofu_gmac_phylink_ops);
 	if (IS_ERR(g->phylink)) {
 		ret = PTR_ERR(g->phylink);

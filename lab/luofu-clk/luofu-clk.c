@@ -1185,10 +1185,35 @@ static int luofu_register_resets(struct luofu_crg *crg, struct platform_device *
 	crg->rcdev.ops		= &luofu_reset_ops;
 	crg->rcdev.owner	= THIS_MODULE;
 	crg->rcdev.dev		= &pdev->dev;
-	crg->rcdev.of_node	= pdev->dev.of_node;
 	crg->rcdev.of_reset_n_cells = 2;
 	crg->rcdev.of_xlate	= luofu_reset_of_xlate;
 	crg->rcdev.nr_resets	= 0x10000;	/* (offset, bit) is resolved in of_xlate */
+
+	/*
+	 * BIND TO THE NODE THE CONSUMERS ACTUALLY REFERENCE.
+	 *
+	 * Every NIC reset specifier in the active tree is 3 cells and points at ONE phandle:
+	 *
+	 *   /proc/device-tree/gemac@0x14300000/resets =
+	 *       00 00 00 0f | 00 00 00 30 | 00 00 00 0d   |   00 00 00 0f | 00 00 00 30 | 00 00 00 0e
+	 *       phandle 0xf  offset 0x30  bit 0xd            phandle 0xf  offset 0x30  bit 0xe
+	 *
+	 * and phandle 0x0f belongs to the TOP-LEVEL node `reset0`:
+	 *
+	 *   /proc/device-tree/reset0/compatible   = "hsan,hsan-reset"
+	 *   /proc/device-tree/reset0/#reset-cells = 2          <- (offset, bit), exactly our xlate
+	 *
+	 * This driver registers on crg@14880000, which NO consumer references, so
+	 * devm_reset_control_get() failed for every NIC (gmac/mdio stop at step 4 = resets).  Point the
+	 * rcdev at reset0 when it exists; keep the crg node only as a fallback.
+	 */
+	crg->rcdev.of_node = of_find_node_by_path("/reset0");
+	/* sysfs shows the node as `reset0`; try the 0x14880000-style name too before giving up. */
+	if (!crg->rcdev.of_node)
+		crg->rcdev.of_node = of_find_compatible_node(NULL, NULL, "hsan,hsan-reset");
+	if (!crg->rcdev.of_node)
+		crg->rcdev.of_node = pdev->dev.of_node;
+	dev_info(&pdev->dev, "luofu-crg: resets bound to %s\n", crg->rcdev.of_node->full_name);
 
 	return devm_reset_controller_register(&pdev->dev, &crg->rcdev);
 }
