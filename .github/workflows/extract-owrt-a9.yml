@@ -1,0 +1,269 @@
+# Extracts the SOFT-FLOAT (kirkwood/arm_xscale) OpenWrt binaries so they can be checked LOCALLY.
+#
+# WHY THIS EXISTS: init executes on our kernel and is killed by SIGILL. To find out WHICH
+# instruction, the kernel is being made to print the faulting pc (CONFIG_DEBUG_USER +
+# user_debug=1), and then that address has to be disassembled - which needs the actual file.
+#
+# THE VENDOR KERNEL CANNOT PROVIDE IT: mounting the same squashfs on the vendor system reads
+# /etc/openwrt_release fine but gives "I/O error" on bin/busybox and cp produces 0-byte files -
+# metadata and small fragment-stored files work, real xz data blocks do not. OUR kernel reads
+# it well enough to execute init, so the image is sound and the vendor's squashfs/xz path is
+# the limitation.
+#
+# Triggered ONLY by a change to this file, on any branch, so pushing it does NOT start a
+# kernel build (that workflow watches omo/** only).
+name: extract-owrt-a9
+
+on:
+  push:
+    paths:
+      - '.github/workflows/extract-owrt-a9.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: the mvebu/cortexa9 image (arm_cortex-a9_vfpv3-d16)
+        run: |
+          set -eux
+          curl -sSLo img.bin https://downloads.openwrt.org/releases/25.12.5/targets/kirkwood/generic/openwrt-25.12.5-kirkwood-generic-iom_iconnect-1.1-squashfs-sysupgrade.bin
+          ls -l img.bin
+
+      - name: carve the squashfs out of it (marker 0, uImage 2048, squashfs at 3883008)
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import struct
+          b = open("img.bin","rb").read()
+          i = b.find(b"hsqs")
+          blk, frags, comp = struct.unpack("<I", b[i+12:i+16])[0], struct.unpack("<I", b[i+16:i+20])[0], struct.unpack("<H", b[i+20:i+22])[0]
+          bytes_used = struct.unpack("<Q", b[i+40:i+48])[0]
+          print("squashfs at", i, "block", blk, "comp", comp, "bytes_used", bytes_used)
+          open("root.sqfs","wb").write(b[i:i+bytes_used])
+          PY
+          ls -l root.sqfs
+
+      - name: unsquash and keep the binaries that matter
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y squashfs-tools binutils-arm-linux-gnueabihf
+          # dev/console is a character device and we are not root, so unsquashfs exits 2
+          # AFTER extracting everything else - 939 of 940 entries. That is fine and the
+          # binaries are all there; tolerating the non-zero exit is the point.
+          unsquashfs -q -no-progress -d root root.sqfs || true
+          test -f root/bin/busybox
+          cat root/etc/openwrt_release
+          mkdir -p out
+          cp root/sbin/init out/init
+          cp root/lib/libc.so out/libc.so
+          cp root/bin/busybox out/busybox
+          for f in root/sbin/procd root/lib/ld-musl-armhf.so.1; do
+            [ -e "$f" ] && cp "$f" out/ || true
+          done
+          ls -l out
+
+      - name: how does OpenWrt itself find or make this volume?
+        run: |
+          set -eux
+          echo "=== the tools it has for making filesystems ==="
+          ls -l root/sbin/mkfs.* root/usr/sbin/mkfs.* 2>/dev/null || echo "(no mkfs.* in the image)"
+          ls -l root/sbin/*fs* root/usr/sbin/*fs* 2>/dev/null || true
+          echo
+          echo "=== where mount_root lives ==="
+          ls -l root/sbin/mount_root root/etc/preinit root/lib/preinit 2>/dev/null || true
+          echo
+          echo "=== the UBI/overlay logic, as the scripts state it ==="
+          for f in root/sbin/mount_root root/lib/functions/*.sh root/lib/preinit/* ; do
+            [ -f "$f" ] || continue
+            if grep -l -iE 'ubifs|rootfs_data|overlay|f2fs|jffs2' "$f" >/dev/null 2>&1; then
+              echo "---- $f"
+              grep -n -iE 'ubifs|rootfs_data|overlay|f2fs|jffs2|mkfs|format' "$f" | head -40
+            fi
+          done
+          echo
+          echo "=== and the strings inside the fstools library, which does the real work ==="
+          for lib in root/lib/libfstools.so* ; do
+            [ -f "$lib" ] || continue
+            echo "-- $lib"
+            strings -a "$lib" | grep -iE 'rootfs_data|ubifs|f2fs|jffs2|mkfs|format|switch|overlay' | sort -u | head -40
+          done
+          echo
+          echo "=== /lib/upgrade + any image-metadata that names the overlay device ==="
+          ls root/lib/upgrade 2>/dev/null | head
+          grep -rn -iE 'rootfs_data' root/etc root/lib 2>/dev/null | head -20 || true
+
+      - name: what the compiler actually required
+        run: |
+          set -eux
+          for f in out/init out/libc.so out/busybox; do
+            echo "=== $f ==="
+            file "$f"
+            readelf -h "$f" | egrep 'Machine|Flags|Entry'
+            readelf -A "$f" 2>/dev/null | egrep -i 'cpu_arch|VFP|DIV_use|SIMD|FP_arch' || true
+            echo "--- hardware divide / vfpv4 in the code ---"
+            arm-linux-gnueabihf-objdump -d "$f" > dis.txt 2>/dev/null || true
+            echo "disassembly lines:" $(wc -l < dis.txt)
+            echo "--- FP + divide (need VFP/IDIV, absent on this part) ---"
+            egrep -c '\b(udiv|sdiv|vfma|vfms|vadd|vmov|vldr|vstr|vpush|vpop)\b' dis.txt || true
+            echo "--- swp/swpb (this silicon reports NO HWCAP_SWP) ---"
+            egrep -c '\b(swp|swpb)\b' dis.txt || true
+            egrep -m2 -B4 -A2 '\b(swp|swpb)\b' dis.txt || echo "  (no swp)"
+            echo "--- ldrex/strex (safe: ARMv6+ atomics) ---"
+            egrep -c '\b(ldrex|strex|ldrexb|strexb|ldrexd|strexd)\b' dis.txt || true
+            echo "--- first FP sighting, if any ---"
+            egrep -m1 -B3 -A1 '\b(vmov|vldr|vstr|vadd|vpush|vpop)\b' dis.txt || echo "  (no FP at all)"
+            rm -f dis.txt
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-a9-binaries
+          path: out/
+          if-no-files-found: error
+
+  ubifs:
+    name: build the rootfs_data UBIFS image
+    runs-on: ubuntu-22.04
+    steps:
+      - name: mtd-utils
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y mtd-utils
+          mkfs.ubifs -V
+
+      - name: a minimal overlay, in the volume's own geometry
+        run: |
+          set -eux
+          # THE GEOMETRY IS THE VOLUME'S, MEASURED ON THE DEVICE:
+          #   mtd16 PEB 131072 = 128 KiB, so UBI LEB = 131072 - 2*2048 = 126976
+          #   the rootfs_data volume is 79 LEBs
+          # -x none IS DELIBERATE: it needs no compressor from the kernel, so the image cannot
+          # fail to mount over a UBIFS compressor the build happens not to enable.
+          mkdir -p tree/etc/config
+          # -F IS THE FLAG THAT WAS MISSING, AND IT IS NOT OPTIONAL HERE.
+          #
+          # The image occupies 13 LEBs; the volume is 79. mkfs.ubifs records both (leb_cnt 13,
+          # max_leb_cnt 79) and WITHOUT -F it leaves flags = 0x00000000 - no UBIFS_SB_SPACE_FIXUP.
+          # The kernel only fixes up free space when that flag is set:
+          #
+          #     if (!c->ro_mount && c->space_fixup)
+          #             err = ubifs_fixup_free_space(c);
+          #
+          # so without it the filesystem's accounting never matches a 79-LEB volume and the index
+          # reads as nonsense - which is exactly what "ubifs_read_nnode: error -22 reading nnode at
+          # 7:41" is. -F is what OpenWrt's own image build passes for a volume that is larger than
+          # the image written into it.
+          mkfs.ubifs -F -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data.ubifs
+          echo "=== the superblock it just wrote ==="
+          python3 - <<'PY'
+          import struct
+          b = open("owrt-rootfs_data.ubifs","rb").read()
+          ch = struct.unpack("<IIQIBB2s", b[:24])
+          flags, min_io, leb, cnt, maxc = struct.unpack("<IIIII", b[28:48])
+          fmt = struct.unpack("<I", b[80:84])
+          print("node_type", ch[4], "min_io", min_io, "leb_size", leb, "leb_cnt", cnt, "max_leb_cnt", maxc)
+          print("FLAGS = 0x%08x  (UBIFS_SB_SPACE_FIXUP = 0x2)  fmt_version %d" % (flags, fmt[0]))
+          PY
+          ls -l owrt-rootfs_data.ubifs
+          # what the image claims, read back with the tool that made it
+          ubinize -o /dev/null -m 2048 -p 128KiB -s 2048 /dev/null 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ubifs
+          path: owrt-rootfs_data.ubifs
+          if-no-files-found: error
+
+  ext4overlay:
+    name: an ext4 rootfs_data for the UBI volume
+    runs-on: ubuntu-22.04
+    steps:
+      - name: an ext4 filesystem labelled rootfs_data, sized to the volume
+        run: |
+          set -eux
+          # THE VOLUME IS 79 LEBs OF 126976 = 10,031,104 bytes. Build JUST UNDER it.
+          #
+          # WHY EXT4 AND NOT UBIFS OR F2FS:
+          #   - UBIFS cannot be created here at all (OpenWrt ships no mkfs, the kernel never formats)
+          #   - f2fs is not in this kernel: "# CONFIG_F2FS_FS is not set"
+          #   - ext4 IS: "CONFIG_EXT4_FS=y"
+          #   - and libfstools carries "mkfs.ext4 -q -F -L rootfs_data %s" - the label this must carry
+          #
+          # It goes INSIDE the UBI volume and reaches userspace as /dev/ubiblockC_V, which is a real
+          # block device - which is exactly what ext4 needs and what NAND cannot provide directly.
+          dd if=/dev/zero of=rootfs_data.ext4 bs=1M count=9
+          truncate -s 10027008 rootfs_data.ext4
+          mkfs.ext4 -q -F -L rootfs_data rootfs_data.ext4
+          ls -l rootfs_data.ext4
+          dumpe2fs -h rootfs_data.ext4 2>/dev/null | egrep 'Block count|Block size|Filesystem volume name|Filesystem features' | head -6
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ext4
+          path: rootfs_data.ext4
+          if-no-files-found: error
+
+  ubifs2004:
+    name: the UBIFS image from 20.04-era mtd-utils (the version variable)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: the same image, built by the toolkit of the kernel's own era
+        run: |
+          set -eux
+          # THE REMAINING VARIABLE IS THE TOOLKIT VERSION, AND IT IS THE ONE THING THAT DIFFERS
+          # BETWEEN THIS IMAGE AND THE IMAGES REAL DEVICES SHIP WITH.
+          #
+          # The kernel's validate_nnode rejects a packed LPT branch whose lnum falls outside
+          # [lpt_first, lpt_last] - bounds it derives from the VOLUME, while mkfs laid the image out
+          # for leb_cnt 13 of 79. The -F space fixup exists to reconcile exactly that, it ran, and it
+          # still failed. So: same flags, same geometry, OLDER mkfs.
+          docker run --rm -v "$PWD:/o" -w /o ubuntu:20.04 sh -c '
+            set -eux
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mtd-utils
+            mkfs.ubifs -V
+            mkdir -p tree/etc/config
+            mkfs.ubifs -F -x none -m 2048 -e 126976 -c 79 -r tree -o owrt-rootfs_data_2004.ubifs
+            ls -l owrt-rootfs_data_2004.ubifs
+            python3 - <<PY
+import struct
+b=open("owrt-rootfs_data_2004.ubifs","rb").read()
+fl,mi,leb,cnt,mx=struct.unpack("<IIIII", b[28:48])
+print("20.04 mkfs: min_io",mi,"leb",leb,"leb_cnt",cnt,"max_leb_cnt",mx,"FLAGS 0x%08x"%fl)
+PY
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-rootfs-data-ubifs-2004
+          path: owrt-rootfs_data_2004.ubifs
+          if-no-files-found: error
+
+  fstoolsbin:
+    name: the fstools binaries, to read what it actually checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: pull out everything that decides the overlay
+        run: |
+          set -eux
+          mkdir -p out
+          for f in root/sbin/mount_root root/lib/libfstools.so root/lib/preinit/80_mount_root ; do
+            [ -f "$f" ] && cp "$f" out/$(basename "$f") || true
+          done
+          ls -l out
+          file out/* 2>/dev/null || true
+          echo "=== the strings around the DECISION, in order ==="
+          for b in out/mount_root out/libfstools.so ; do
+            [ -f "$b" ] || continue
+            echo "---- $b"
+            strings -a -t x "$b" | grep -iE 'rootfs_data|jffs2|ubifs|f2fs|ext4|mtd|overlay|mark|format|magic|switch|rom|/dev/' | head -60
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owrt-fstools-binaries
+          path: out/
+          if-no-files-found: error
