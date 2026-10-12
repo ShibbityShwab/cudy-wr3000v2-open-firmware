@@ -211,6 +211,32 @@ static const struct ethtool_ops luofu_gmac_ethtool_ops = {
 
 /* ---- platform driver ---- */
 
+/*
+ * Driver-level diagnostic, deposited in sysctrl 0xC8C.
+ *
+ * 0xC18 and 0xC1C are NOT available: they are the FMC's crumb/payload pair and its tick rewrites
+ * both every 5 s.  0xC8C is free, writable and sticky across a reboot.
+ *
+ * Last write wins, so reading it back says HOW FAR THE PROBE GOT:
+ *   0xC0DE60NN  gmac reached step NN
+ *   0xC0DE6FNN  gmac FAILED at step NN
+ * (mdio uses 0xC0DE70NN / 0xC0DE7FNN.)  Without this the only visible symptom was "no eth0",
+ * which cannot distinguish "never probed" from "probed and bailed at the reset lookup".
+ */
+#define LUOFU_DIAG_BASE	0x10100000UL
+#define LUOFU_DIAG_OFF	0xc8c
+
+static void luofu_diag(u32 v)
+{
+	void __iomem *p = ioremap(LUOFU_DIAG_BASE, 0x1000);
+
+	if (!p)
+		return;
+	writel(v, p + LUOFU_DIAG_OFF);
+	(void)readl(p + LUOFU_DIAG_OFF);
+	iounmap(p);
+}
+
 static int luofu_gmac_probe(struct platform_device *pdev)
 {
 	struct luofu_gmac *g;
@@ -228,23 +254,31 @@ static int luofu_gmac_probe(struct platform_device *pdev)
 	g->dev = &pdev->dev;
 	platform_set_drvdata(pdev, g);
 
+	luofu_diag(0xc0de6001);	/* entry: the probe was reached at all */
+
 	g->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(g->base)) {
 		ret = PTR_ERR(g->base);
+		luofu_diag(0xc0de6f02);
 		goto err_free;
 	}
+	luofu_diag(0xc0de6002);
 
 	g->nclks = devm_clk_bulk_get_all(&pdev->dev, &g->clks);
 	if (g->nclks < 0) {
 		ret = g->nclks;
+		luofu_diag(0xc0de6f03);	/* no clock provider to attach to */
 		goto err_free;
 	}
+	luofu_diag(0xc0de6003 | (g->nclks & 0xf));
 
 	g->resets = devm_reset_control_array_get(&pdev->dev, false, false);
 	if (IS_ERR(g->resets)) {
 		ret = PTR_ERR(g->resets);
+		luofu_diag(0xc0de6f04);	/* no reset controller (optional=false -> fatal) */
 		goto err_free;
 	}
+	luofu_diag(0xc0de6004);
 
 	ret = of_get_phy_mode(pdev->dev.of_node, &iface);
 	if (ret)
