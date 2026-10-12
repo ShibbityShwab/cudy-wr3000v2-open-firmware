@@ -58,6 +58,7 @@
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
 #define LUOFU_CRUMB_OFFSET	0xc18
+#define LUOFU_BOOTREG_OFFSET	0xc08	/* slot selector: low byte 0x10 = A pair, 0x11 = B pair */
 #define LUOFU_CRUMB_EARLY	0xc0de0001
 #define LUOFU_CRUMB_MACH	0xc0de0002
 #define LUOFU_CRUMB_DONE	0xc0de0003
@@ -114,8 +115,45 @@ static int __init luofu_late_crumb(void)
 }
 late_initcall(luofu_late_crumb);
 
+/*
+ * THE FALLBACK ARM - what makes a test boot self-recovering.
+ *
+ * u-boot selects the boot pair from the low byte of sysctrl 0x10100c08 and uses a RECORDED value
+ * verbatim: 0x10 -> the A pair (kernela + rootfsa), 0x11 -> the B pair (kernelb + rootfsb).  It only
+ * re-validates when that byte reads 0.  That is why a kernel which fails here is retried forever
+ * instead of falling through - the failure is invisible to the loader.
+ *
+ * This is called before the crumb, i.e. before anything that can fail, and flips the low bit, so the
+ * NEXT boot selects the OTHER pair.  If this kernel works the flip costs nothing (the next boot
+ * simply lands on the other pair).  If it does not, the next boot lands on the other pair - the
+ * vendor kernel on a test rig - and the board returns with no hand on the reset button.
+ */
+static void __init luofu_arm_fallback(void)
+{
+	void __iomem *sysctrl = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	u32 val, new;
+
+	if (!sysctrl)
+		return;
+
+	val = readl(sysctrl + LUOFU_BOOTREG_OFFSET);
+	if ((val & 0xff) != 0x10 && (val & 0xff) != 0x11) {
+		iounmap(sysctrl);
+		return;	/* not a value u-boot would honour - leave it alone */
+	}
+
+	new = val ^ 1u;		/* 0x10 <-> 0x11, low byte only */
+	writel(new, sysctrl + LUOFU_BOOTREG_OFFSET);
+	(void)readl(sysctrl + LUOFU_BOOTREG_OFFSET);
+	iounmap(sysctrl);
+
+	pr_info("luofu: fallback armed - next boot selects the other pair (%08x -> %08x)\n",
+		val, new);
+}
+
 static void __init luofu_early(void)
 {
+	luofu_arm_fallback();
 	luofu_crumb(LUOFU_CRUMB_EARLY);
 }
 
