@@ -156,7 +156,7 @@ static int luofu_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val)
 }
 
 #define LUOFU_DIAG_BASE	0x10100000UL
-#define LUOFU_DIAG_OFF	0xc8c
+#define LUOFU_DIAG_OFF	0xc98	/* mdio's OWN cell - 0xC8C is the mach's, 0xC90 the CRG's, 0xC94 gmac's */
 
 static void luofu_diag(u32 v)
 {

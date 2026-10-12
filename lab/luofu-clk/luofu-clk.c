@@ -895,6 +895,20 @@ static int luofu_register_resets(struct luofu_crg *crg, struct platform_device *
 	return devm_reset_controller_register(&pdev->dev, &crg->rcdev);
 }
 
+#define LUOFU_DIAG_BASE	0x10100000UL
+#define LUOFU_DIAG_OFF	0xc90	/* CRG's OWN cell - see the note below */
+
+static void luofu_diag(u32 v)
+{
+	void __iomem *p = ioremap(LUOFU_DIAG_BASE, 0x1000);
+
+	if (!p)
+		return;
+	writel(v, p + LUOFU_DIAG_OFF);
+	(void)readl(p + LUOFU_DIAG_OFF);
+	iounmap(p);
+}
+
 static int luofu_crg_probe(struct platform_device *pdev){
 	struct luofu_crg *crg;
 
@@ -917,6 +931,7 @@ static int luofu_crg_probe(struct platform_device *pdev){
 		 * reservation and makes a second read-only kernel VA alias to the same
 		 * page, which is exactly what this block's own note above recommends and
 		 * what the forced path already does. */
+		luofu_diag(0xc0de5000);	/* crg: probe entered */
 		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
 	} else {
 		dev_info(&pdev->dev,
@@ -928,21 +943,28 @@ static int luofu_crg_probe(struct platform_device *pdev){
 		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE,
 					 LUOFU_CRG_SIZE);
 	}
-	if (IS_ERR(crg->base))
+	if (IS_ERR(crg->base)) {
+		luofu_diag(0xc0de5f01);	/* crg: ioremap failed */
 		return PTR_ERR(crg->base);
+	}
 
 	/* Register the CRG clock tree (gates + muxes + PLLs) on the DT path.
 	 * The forced path has no of_node and skips this: no DT clock consumer
 	 * can resolve a synthetic device, and the smoke path must stay write-free
 	 * until its 0-default knobs turn. */
 	if (pdev->dev.of_node) {
-		int ret = luofu_register_clks(crg, pdev);
+		int ret;
+
+		luofu_diag(0xc0de5001);	/* crg: reached clock registration */
+		ret = luofu_register_clks(crg, pdev);
 
 		if (ret) {
+			luofu_diag(0xc0de5f02);	/* clocks did NOT register: every consumer then sees no clock */
 			dev_err(&pdev->dev,
 				"luofu-crg: clock registration failed: %d\n", ret);
 			return ret;
 		}
+		luofu_diag(0xc0de5002);	/* the clock tree IS registered */
 	}
 
 	/* TODO: register the reset controller -- hisi_reset_init(pdev) (reset.c)

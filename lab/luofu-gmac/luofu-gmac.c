@@ -224,7 +224,7 @@ static const struct ethtool_ops luofu_gmac_ethtool_ops = {
  * which cannot distinguish "never probed" from "probed and bailed at the reset lookup".
  */
 #define LUOFU_DIAG_BASE	0x10100000UL
-#define LUOFU_DIAG_OFF	0xc8c
+#define LUOFU_DIAG_OFF	0xc94	/* gmac's OWN cell - 0xC8C is the mach's, 0xC90 the CRG's, 0xC98 mdio's */
 
 static void luofu_diag(u32 v)
 {
