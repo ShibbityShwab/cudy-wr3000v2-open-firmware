@@ -80,6 +80,7 @@
 
 #include <linux/bitops.h>
 #include <linux/clk-provider.h>
+#include <linux/delay.h>		/* udelay, for the self-deasserting reset */
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
@@ -306,7 +307,7 @@ struct luofu_crg {
 	struct luofu_pll_clk *plls;
 	struct luofu_mux_clk *muxes;
 	struct clk_hw_onecell_data *clk_data;	/* DT onecell provider payload */
-	/* TODO: struct reset_controller_dev rcdev;       (reset.c) */
+	struct reset_controller_dev rcdev;	/* #reset-cells = <2>: (reg-offset, bit) */
 };
 
 static const struct of_device_id luofu_crg_match_table[] = {
@@ -826,8 +827,75 @@ static int luofu_register_clks(struct luofu_crg *crg,
 				      crg->clk_data);
 }
 
-static int luofu_crg_probe(struct platform_device *pdev)
+/*
+ * The reset half of the CRG.  The DT declares `#reset-cells = <2>` and consumers write
+ * `resets = <&crg 0x30 0xd>` -- args[0] is the CRG register offset, args[1] the bit, exactly as the
+ * TODO this replaces recorded.  Assert SETS the bit and deassert CLEARS it, which is the polarity the
+ * vendor's own rst_flip instrument establishes for this block.
+ *
+ * This exists because gmac/mdio ask for their resets with devm_reset_control_array_get(dev, false,
+ * false) - the third argument is `optional` and it is FALSE, so a missing provider is a hard probe
+ * failure rather than something to carry on without.  That is why the NIC could not bind however
+ * healthy the clock tree was.
+ */
+#define LUOFU_RESET_OFF(id)	(((id) >> 16) & 0xffff)
+#define LUOFU_RESET_BIT(id)	((id) & 0xffff)
+
+static int luofu_reset_of_xlate(struct reset_controller_dev *rcdev,
+				const struct of_phandle_args *spec)
 {
+	if (spec->args_count != 2)
+		return -EINVAL;
+	return ((spec->args[0] & 0xffff) << 16) | (spec->args[1] & 0xffff);
+}
+
+static int luofu_reset_apply(struct reset_controller_dev *rcdev,
+			     unsigned long id, bool assert)
+{
+	struct luofu_crg *crg = container_of(rcdev, struct luofu_crg, rcdev);
+
+	luofu_crg_rmw(crg->base, (u16)LUOFU_RESET_OFF(id), (u8)LUOFU_RESET_BIT(id), assert);
+	return 0;
+}
+
+static int luofu_reset_assert(struct reset_controller_dev *rcdev, unsigned long id)
+{
+	return luofu_reset_apply(rcdev, id, true);
+}
+
+static int luofu_reset_deassert(struct reset_controller_dev *rcdev, unsigned long id)
+{
+	return luofu_reset_apply(rcdev, id, false);
+}
+
+/* Self-deasserting: assert, settle, then release. */
+static int luofu_reset_reset(struct reset_controller_dev *rcdev, unsigned long id)
+{
+	luofu_reset_apply(rcdev, id, true);
+	udelay(1);
+	return luofu_reset_apply(rcdev, id, false);
+}
+
+static const struct reset_control_ops luofu_reset_ops = {
+	.reset		= luofu_reset_reset,
+	.assert		= luofu_reset_assert,
+	.deassert	= luofu_reset_deassert,
+};
+
+static int luofu_register_resets(struct luofu_crg *crg, struct platform_device *pdev)
+{
+	crg->rcdev.ops		= &luofu_reset_ops;
+	crg->rcdev.owner	= THIS_MODULE;
+	crg->rcdev.dev		= &pdev->dev;
+	crg->rcdev.of_node	= pdev->dev.of_node;
+	crg->rcdev.of_reset_n_cells = 2;
+	crg->rcdev.of_xlate	= luofu_reset_of_xlate;
+	crg->rcdev.nr_resets	= 0x10000;	/* (offset, bit) is resolved in of_xlate */
+
+	return devm_reset_controller_register(&pdev->dev, &crg->rcdev);
+}
+
+static int luofu_crg_probe(struct platform_device *pdev){
 	struct luofu_crg *crg;
 
 	crg = devm_kzalloc(&pdev->dev, sizeof(*crg), GFP_KERNEL);
@@ -842,7 +910,14 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	 * return -EBUSY.  devm_ioremap() takes no reservation and makes a
 	 * second read-only kernel VA alias to the same page (crgbind.md). */
 	if (pdev->dev.of_node) {
-		crg->base = devm_platform_ioremap_resource(pdev, 0);
+		/* devm_ioremap, NOT devm_platform_ioremap_resource: the latter calls
+		 * request_mem_region(), and this node is also `"syscon"` - syscon claims
+		 * 0x14880000 first, so the reservation returns -EBUSY and probe returned
+		 * SILENTLY (there is no print on that path).  devm_ioremap takes no
+		 * reservation and makes a second read-only kernel VA alias to the same
+		 * page, which is exactly what this block's own note above recommends and
+		 * what the forced path already does. */
+		crg->base = devm_ioremap(&pdev->dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
 	} else {
 		dev_info(&pdev->dev,
 			 "FORCED probe (no DT match) base=0x%lx size=0x%lx write_test=%d write_flip=%d rst_flip=%d%s\n",
@@ -873,6 +948,13 @@ static int luofu_crg_probe(struct platform_device *pdev)
 	/* TODO: register the reset controller -- hisi_reset_init(pdev) (reset.c)
 	 *       on the same MMIO page; #reset-cells=<2> => args[0]=reg-offset,
 	 *       args[1]=bit.  Reproduce LUOFU_SOFTRST_VAL0/1 in the reboot path. */
+	if (pdev->dev.of_node) {
+		int rret = luofu_register_resets(crg, pdev);
+
+		if (rret)
+			dev_err(&pdev->dev,
+				"luofu-crg: reset controller registration failed: %d\n", rret);
+	}
 
 	/* Prove the tables are wired: the sizes, plus whether the real tree
 	 * registered (DT) or the forced smoke probe is running (skeleton). */

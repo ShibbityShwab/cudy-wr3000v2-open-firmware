@@ -54,6 +54,12 @@
 #include <linux/io.h>
 #include <linux/printk.h>
 #include <linux/reboot.h>
+#include <linux/device.h>
+#include <linux/platform_device.h>
+#include <linux/netdevice.h>
+#include <linux/string.h>
+#include <linux/clk.h>
+#include <linux/of.h>
 #include <asm/mach/arch.h>
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
@@ -108,9 +114,77 @@ static int __init luofu_early_crumb(void)
 }
 early_initcall(luofu_early_crumb);
 
+/*
+ * The ring at 0x80603000 is only 16 KiB (0x80603000-0x80607000) and a boot writes more than that,
+ * so its visible window starts around 4.0 s - at the FMC's messages.  In link order the CRG's
+ * initcall (c0e31e14) runs BEFORE the FMC's (c0e31e4c) and gmac/mdio sit just after, so anything
+ * those drivers print is OLDER than the ring window and simply cannot be read back.  "No luofu-crg
+ * line" is therefore not evidence the CRG did not probe; the instrument is lossy exactly where the
+ * question is.
+ *
+ * A late_initcall runs late enough to land INSIDE the window (the FMC's late diag at ~4.0 s is
+ * visible), so the binding state is reported from here instead.  Three answers, in the order they
+ * discriminate:
+ *   - crg driver registered at all?      driver_find on the platform bus
+ *   - did the NIC reach userspace?       eth0 on init_net
+ *   - did the clock provider resolve?    of_clk_get on the crg node
+ */
 static int __init luofu_late_crumb(void)
 {
+	struct device_driver *drv;
+	struct net_device *nd;
+	struct device_node *crg_np;
+	struct clk *clk;
+	u32 mask;
+	const char *clkres = "n/a";
+
 	luofu_crumb(0xc0de0020);
+
+	drv = driver_find("luofu-crg", &platform_bus_type);
+
+	nd = dev_get_by_name(&init_net, "eth0");
+
+	crg_np = of_find_compatible_node(NULL, NULL, "hisilicon,luofu-crg");
+	if (crg_np) {
+		clk = of_clk_get(crg_np, 0);
+		if (IS_ERR(clk))
+			clkres = (PTR_ERR(clk) == -EPROBE_DEFER) ? "defer" : "err";
+		else
+			clkres = "ok";
+	} else {
+		clkres = "nonode";
+	}
+
+	pr_info("luofu: LATE drv=%s eth0=%s clk=%s\n",
+		drv ? "yes" : "NO", nd ? "yes" : "NO", clkres);
+
+	/*
+	 * The print above is a courtesy; the CRUMB is the instrument.  The ring's window starts at the
+	 * FMC's late_initcall_sync (~4.0 s) and this late_initcall runs BEFORE that, so its output lands
+	 * outside the window - the same lossy-instrument trap, one level down.
+	 *
+	 * And it writes 0xc1c, NOT 0xc18: the FMC's own late_initcall_sync deposits 0xc0de502d into 0xc18
+	 * and that runs AFTER this one, so a crumb here would simply be overwritten.  0xc1c is the
+	 * neighbouring sysctrl word, unused by the FMC, and it survives the boot so it can be read back
+	 * from the vendor slot.  Encoded: bit8 = crg driver registered, bit4 = eth0 exists,
+	 * bit0 = the crg clock provider answered.
+	 */
+	mask = 0xc0de1c00;
+	if (drv)
+		mask |= 0x100;
+	if (nd)
+		mask |= 0x010;
+	if (!strcmp(clkres, "ok"))
+		mask |= 0x001;
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+		if (sc) {
+			writel(mask, sc + 0xc1c);
+			(void)readl(sc + 0xc1c);
+			iounmap(sc);
+		}
+	}
+
 	return 0;
 }
 late_initcall(luofu_late_crumb);
