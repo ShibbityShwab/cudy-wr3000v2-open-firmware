@@ -902,124 +902,137 @@ static const struct clk_ops luofu_mux_ops = {
  * (0x2003 -> offset 0x20, bit 0x03), which is also the authoritative number: the vendor's gemac0
  * points at clk_gate@002019 (bit 0x19) where our own table says bit 0x13.
  */
+/*
+ * REGISTER THE GATE PROVIDERS BY EXACT PATH - no tree search at all.
+ *
+ * The active tree is captured on disk (build/tmp/dt-spec/tar_base.dts) and its __symbols__ names every
+ * clock by path:
+ *
+ *     mdio_clk0  = "/clk@14880000/clk_gate@002003"
+ *     gemac_clk0 = "/clk@14880000/clk_gate@002019"
+ *
+ * An earlier version walked the children of a located node and reported seen=212 children with
+ * matched=0 - a count matching NO node in any tree available here (root = 64 captured / 73 on the
+ * device, the clock node = 24).  Rather than keep guessing which node that was, drop the search: name
+ * each node by path.  A path either resolves or it does not, which makes each provider provable, and
+ * reading "reg" off the resolved node still yields the authoritative (offset,bit) pair.
+ */
+static const char * const luofu_gate_paths[] = {
+	"/clk@14880000/clk_gate@001400",	/* sfc      0x14 bit 0x0  */
+	"/clk@14880000/clk_gate@001414",	/* led_pwm  0x14 bit 0xe  */
+	"/clk@14880000/clk_gate1@001420",	/* gpio0    0x14 bit 0x14 */
+	"/clk@14880000/clk_gate2@001421",	/* gpio1    0x14 bit 0x15 */
+	"/clk@14880000/clk_gate2@001424",	/* i2c0     0x14 bit 0x18 */
+	"/clk@14880000/clk_gate@002000",	/* lsw_dp   0x20 bit 0x0  */
+	"/clk@14880000/clk_gate@002001",	/* lsw_pfe  0x20 bit 0x1  */
+	"/clk@14880000/clk_gate@002003",	/* MDIO     0x20 bit 0x3   <- the NICs need these */
+	"/clk@14880000/clk_gate@002012",	/* pcie0    0x20 bit 0xc  */
+	"/clk@14880000/clk_gate@002013",	/* pcie1    0x20 bit 0xd  */
+	"/clk@14880000/clk_gate@002019",	/* GMAC0    0x20 bit 0x13  <- */
+	"/clk@14880000/clk_gate@002020",	/* GMAC1    0x20 bit 0x14  <- */
+	"/clk@14880000/clk_gate@002021",	/* GMAC2    0x20 bit 0x15  <- */
+	"/clk@14880000/clk_gate@002022",	/* GMAC3    0x20 bit 0x16  <- */
+	"/clk@14880000/clk_gate@002023",	/* GMAC4    0x20 bit 0x17  <- */
+	"/clk@14880000/clk_gate@002025",	/* pie      0x20 bit 0x19 */
+};
+
 static int luofu_register_vgates(struct device *dev)
 {
-	struct device_node *clk_np, *child;
-	int n = 0;
-	int seen = 0, matched = 0, regok = 0, hwreg = 0;
+	int i, n = 0, resolved = 0;
+	int s_reg = 0, s_kz = 0, s_io = 0, s_hw = 0, s_prov = 0;
 
-	/*
-	 * ADDRESS THE NODE EXACTLY, NOT BY COMPATIBLE MATCH.
-	 *
-	 * `of_find_compatible_node(NULL, NULL, "hsan,clk")` was measured returning a node with 212 children
-	 * and ZERO of them gates (crumb 0xDED40000: seen=0xD4 matched=0), while the node the device
-	 * actually exposes - /proc/device-tree/clk@14880000 - has ~20 `hsan,clk-gate` children.  The
-	 * string match was landing elsewhere.  The path is the one already verified on the running box, so
-	 * use it, and keep the compatible match only as a fallback.
-	 */
-	clk_np = of_find_node_by_path("/clk@14880000");
-	if (!clk_np)
-		clk_np = of_find_compatible_node(NULL, NULL, "hsan,clk");
-	if (!clk_np)
-		return 0;
-
-	for_each_child_of_node(clk_np, child) {
+	for (i = 0; i < ARRAY_SIZE(luofu_gate_paths); i++) {
+		struct device_node *np;
 		struct luofu_vgate *v;
 		struct clk_init_data init = { 0 };
 		struct clk *clk;
-		u32 reg;
+		u32 bit, off;
 
-		seen++;
-		if (!of_device_is_compatible(child, "hsan,clk-gate"))
+		np = of_find_node_by_path(luofu_gate_paths[i]);
+		if (!np)
 			continue;
-		matched++;
-		if (of_property_read_u32(child, "reg", &reg))
-			continue;
-		regok++;
+		resolved++;
+		/*
+		 * THE GEOMETRY IS NOT IN A \"reg\" PROPERTY.  Read straight from the captured active
+		 * tree (build/tmp/dt-spec/tar_base.dts), a gate node looks like:
+		 *
+		 *   clk_gate@002003 {
+		 *       #clock-cells = <0x0>;        <- confirms the per-node 0-cell model
+		 *       bit          = <0x3>;        <- the BIT is its own u32 property
+		 *       reg-offset   = " ";          <- a STRING for the 0x20 group ...
+		 *       clocks       = <0x8>;        <- parent by phandle
+		 *   };
+		 *   clk_gate@001400 { bit = <0x0>; reg-offset = <0x14>; };   <- NUMERIC for 0x14 group
+		 *
+		 * There is NO \"reg\" property - which is exactly why reading one always failed
+		 * (measured reg_ok=0 for all 16 paths, so every stage after it was zero too).
+		 *
+		 * For the 0x20 group reg-offset is an empty string and the offset comes from the UNIT
+		 * ADDRESS: clk_gate@002003 -> 0x2003 -> offset 0x20, with the low byte as the bit.
+		 */
+		if (of_property_read_u32(np, "bit", &bit))
+			goto next;
+		s_reg++;
 
 		v = devm_kzalloc(dev, sizeof(*v), GFP_KERNEL);
 		if (!v)
-			continue;
+			goto next;
+		s_kz++;
 		v->base = devm_ioremap(dev, LUOFU_CRG_BASE, LUOFU_CRG_SIZE);
 		if (!v->base)
-			continue;
-		v->offset = (u16)(reg >> 8);
-		v->bit = (u8)(reg & 0xff);
+			goto next;
+		s_io++;
 
-		/*
-		 * A UNIQUE name per gate.  child->name is "clk_gate" for every one of them, and
-		 * clk_hw_register rejects a duplicate name - which would make every registration
-		 * after the first fail.  The node's unit address is unique by construction.
-		 */
-		init.name = kasprintf(GFP_KERNEL, "%s", of_node_full_name(child));
+		/* Prefer a numeric reg-offset (the 0x14 group); otherwise derive it from the unit
+		 * address (the 0x20 group, where reg-offset is the string " "). */
+		if (!of_property_read_u32(np, "reg-offset", &off)) {
+			v->offset = (u16)off;
+		} else {
+			const char *at = strchr(np->full_name, '@');
+			u32 addr = at ? (u32)simple_strtoul(at + 1, NULL, 16) : 0;
+			v->offset = (u16)(addr >> 8);
+		}
+		v->bit = (u8)bit;
+
+		/* Several nodes share the name "clk_gate" and clk_hw_register rejects duplicates, so
+		 * key the clock name on the full path, which is unique by construction. */
+		init.name = kasprintf(GFP_KERNEL, "%s", np->full_name);
 		init.ops = &luofu_vgate_ops;
 		init.flags = CLK_IGNORE_UNUSED;
 		v->hw.init = &init;
 
 		if (devm_clk_hw_register(dev, &v->hw))
-			continue;
-		hwreg++;
+			goto next;
+		s_hw++;
 		clk = v->hw.clk;
 		if (IS_ERR(clk))
-			continue;
-		if (of_clk_add_provider(child, of_clk_src_simple_get, clk))
-			continue;
+			goto next;
+		if (of_clk_add_provider(np, of_clk_src_simple_get, clk))
+			goto next;
+		s_prov++;
 		n++;
+next:
+		of_node_put(np);
 	}
 
-	/*
-	 * Diagnostic in 0xC9C: the FIRST FOUR BYTES OF THE NODE'S NAME, big-endian, so the cell reads as
-	 * ASCII and the next fire says WHICH node was walked rather than leaving it to inference.
-	 *
-	 * That matters here: the walk reported seen=212 children with 0 gates, while the device's own
-	 * /proc/device-tree/clk@14880000 shows ~20 gate children - so it is walking something else.  A node
-	 * with ~212 children is plausibly the ROOT.  Path lookup and compatible lookup both gave 212, and
-	 * this tells them apart: "clk@" (0x636c6b40) means the right node, anything else names the wrong one.
-	 */
+	pr_info("luofu-clk: paths=%d/%d reg=%d kz=%d io=%d hw=%d prov=%d\n",
+		resolved, (int)ARRAY_SIZE(luofu_gate_paths), s_reg, s_kz, s_io, s_hw, s_prov);
+
+	/* Two cells, most decisive LAST so nothing overwrites it:
+	 *   0xC9C = paths resolved (high)  |  providers (low)
+	 *   0xC98 is in use by mdio, so use 0xC80 for the stage vector (verified-writable, unused). */
 	{
 		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 		if (sc) {
-			u32 tag = ((u32)(u8)clk_np->full_name[0] << 24) |
-				  ((u32)(u8)clk_np->full_name[1] << 16) |
-				  ((u32)(u8)clk_np->full_name[2] << 8)  |
-				  ((u32)(u8)clk_np->full_name[3]);
-			writel(tag, sc + 0xc9c);
+			writel(((u32)resolved << 16) | (u32)n, sc + 0xc9c);
 			(void)readl(sc + 0xc9c);
+			writel(0xae000000u | ((u32)(s_reg & 0xff) << 16) |
+			       ((u32)(s_kz & 0xff) << 12) | ((u32)(s_io & 0xff) << 8) |
+			       ((u32)(s_hw & 0xff) << 4) | (u32)(s_prov & 0xf), sc + 0xc80);
+			(void)readl(sc + 0xc80);
 			iounmap(sc);
 		}
 	}
-
-	/*
-	 * THE DECISIVE SMALL STEP: deposit the POINTER VALUE itself.
-	 *
-	 * The previous fire's name stamp did not produce readable ASCII - the cell read 0xDED40000, which is
-	 * also what the stage counters write.  Two readings fit: the name block never ran, OR it ran and the
-	 * node's name is literally non-ASCII (0xDE 0xD4 ...), i.e. the lookup returned a BOGUS node.  A bogus
-	 * node also explains seen=212 children when clk@14880000 has 24 and the root has 73.
-	 *
-	 * So write the pointer.  A real device_node lives in kernel lowmem and looks like 0xC0xxxxxx or
-	 * 0x8xxxxxxx; anything else means the lookup is returning garbage and no amount of provider
-	 * composition will help.  This is the cheapest way to tell those two apart.
-	 */
-	{
-		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
-		if (sc) {
-			writel((u32)(unsigned long)clk_np, sc + 0xc9c);
-			(void)readl(sc + 0xc9c);
-			iounmap(sc);
-		}
-	}
-
-	pr_info("luofu-clk: gates seen=%d matched=%d reg_ok=%d hw_reg=%d providers=%d node=%s\n",
-		seen, matched, regok, hwreg, n, clk_np ? clk_np->full_name : "(null)");
-
-	of_node_put(clk_np);
-
-	/*
-	 * The pointer stamp is now the LAST write to 0xC9C, so it is what the next read sees.  Previously
-	 * the stage counters came after it and overwrote it, which is why three builds with three different
-	 * payloads all read back 0xDED40000.
-	 */
 	return n;
 }
 
