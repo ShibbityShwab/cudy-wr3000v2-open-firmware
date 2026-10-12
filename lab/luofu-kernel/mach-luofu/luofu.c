@@ -76,6 +76,10 @@
 #define HSAN_WDT_CLR_OFFSET	0x70	/* vendor DT clr-offset "p" (reset val1) */
 #define HSAN_WDT_RESET0		0x55aa5a5a
 #define HSAN_WDT_RESET1		0xaa55a5a5
+/* vendor DT set-offset "P" (0x50) and the ARM pair, enable-val0/1 */
+#define HSAN_WDT_SET_OFFSET	0x50
+#define HSAN_WDT_ARM0		0x4f4e5452	/* "ONTR" */
+#define HSAN_WDT_ARM1		0x12345116
 
 static void __init luofu_crumb(u32 value)
 {
@@ -97,12 +101,28 @@ static void luofu_restart(enum reboot_mode mode, const char *cmd)
 		writel(HSAN_WDT_RESET0, crg + HSAN_WDT_CLR_OFFSET - 4);
 		writel(HSAN_WDT_RESET1, crg + HSAN_WDT_CLR_OFFSET);
 		(void)readl(crg + HSAN_WDT_CLR_OFFSET);
+
+		/*
+		 * BACKSTOP, and the reason this function used to be able to strand the board.
+		 *
+		 * The reset pair above is the vendor's own reset-val0/1 written to clr-offset, so it is the
+		 * right thing to try first - but if it does not take, the old code parked in `for (;;) ;`
+		 * with the SoC watchdog already DISARMED by init_machine. Nothing could then recover the
+		 * box: no timer, no watchdog, no reset - only a hand on the power.
+		 *
+		 * So arm the watchdog before parking. Its own reset is a hardware event, independent of
+		 * anything this kernel does from here on, and the boot it triggers runs u-boot again, which
+		 * reads the slot selector the fallback arm has already flipped - i.e. it lands on the other
+		 * pair. Values are the vendor DT's: enable-val0/1 at set-offset "P".
+		 */
+		writel(HSAN_WDT_ARM0, crg + HSAN_WDT_SET_OFFSET);
+		writel(HSAN_WDT_ARM1, crg + HSAN_WDT_SET_OFFSET + 4);
+		(void)readl(crg + HSAN_WDT_SET_OFFSET + 4);
 		iounmap(crg);
 	}
 
-	/* if the reset magic did not take, park until the watchdog or a
-	 * power cycle
-	 */
+	pr_emerg("luofu: restart magic did not take - parking; the watchdog is armed and will do it\n");
+
 	for (;;)
 		;
 }
