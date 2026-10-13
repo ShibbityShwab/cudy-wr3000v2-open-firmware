@@ -399,9 +399,34 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 
 	ret = phylink_of_phy_connect(g->phylink, pdev->dev.of_node, 0);
 	if (ret) {
+		luofu_diag(0xc0de6f05 | (ret & 0xf));	/* phy_connect FAILED */
+
+		/*
+		 * DEFER, DO NOT SETTLE FOR A PHY-LESS NETDEV.
+		 *
+		 * -ENODEV here is almost certainly NOT "this board has no PHY": the DT carries phy-handle
+		 * and mdio0 is a SEPARATE DRIVER, so of_phy_find_device() returns NULL whenever the gmac is
+		 * probed before mdio0 has registered its PHYs.  Measure: the mdio driver's crumb is the one
+		 * that survives in 0xC1C, i.e. mdio probes LAST - so the gmac's connect ran while the PHY
+		 * was still absent, failed with -ENODEV, and the old code kept a netdev with no PHY
+		 * forever ("a later mdio0 can bind it" was never implemented - nothing re-connects).
+		 *
+		 * Returning -EPROBE_DEFER makes the driver core retry this probe after mdio0 is up, which
+		 * is the standard way to express this dependency.
+		 */
+		if (ret == -ENODEV || ret == -EPROBE_DEFER) {
+			luofu_diag(0xc0de6f07);	/* deferring: waiting for mdio0 to register the PHYs */
+			ret = -EPROBE_DEFER;
+			/*
+			 * A DEFERRAL IS RETRIED, so release what this attempt enabled.  The clocks are
+			 * refcounted in the CCF and err_free does not disable them, so without this every
+			 * retry would leave another enable behind (harmless functionally - the clock just
+			 * stays on - but wrong, and it would hide a genuine leak later).
+			 */
+			clk_bulk_disable_unprepare(g->nclks, g->clks);
+			goto err_phylink;
+		}
 		dev_warn(&pdev->dev, "no PHY (phy-handle/fixed-link?): %d\n", ret);
-		/* keep the netdev: a fixed-link or a later mdio0 can bind it */
-		luofu_diag(0xc0de6f05 | (ret & 0xf));	/* phy_connect FAILED - this is the no-uplink case */
 	} else {
 		luofu_diag(0xc0de6005);		/* phy_connect OK */
 	}
