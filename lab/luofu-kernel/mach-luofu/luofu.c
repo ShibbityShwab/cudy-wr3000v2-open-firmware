@@ -60,6 +60,9 @@
 #include <linux/string.h>
 #include <linux/clk.h>
 #include <linux/of.h>
+#include <linux/mm.h>		/* high_memory, swapper_pg_dir */
+#include <asm/pgtable.h>		/* pgd_offset_k, pmd_offset, pgd_val, pmd_val */
+#include <asm/memory.h>		/* VMALLOC_START, VMALLOC_END */
 #include <asm/mach/arch.h>
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
@@ -210,6 +213,147 @@ static int __init luofu_late_crumb(void)
 		writel(mask, sc + 0xc8c);
 		(void)readl(sc + 0xc8c);
 		iounmap(sc);
+	}
+
+	/*
+	 * THE PAGE-TABLE PROBE.
+	 *
+	 * Measured 2026-10-13: our kernel Oopses at ~13 s inside console_on_rootfs() -> filp_open()
+	 * -> tty_open -> n_tty_open -> vzalloc -> map_kernel_range_noflush, faulting on a PAGE-TABLE
+	 * LOAD, and show_pte() then faults WALKING those same tables.  A faulting walker means the
+	 * tables are wrong, not one address.  Two possibilities, and they need different fixes:
+	 *
+	 *   (a) the PGD entry for the vmalloc region is ABSENT  -> vmalloc's mapping was never set up
+	 *   (b) it is PRESENT but the pmd/pte is bogus         -> the tables were written wrong
+	 *
+	 * This has to be reported from INSIDE our kernel: the vendor boot rebuilds the tables, so a
+	 * post-mortem /dev/mem read of that page returns the VENDOR's, not ours (measured - 0x80604000
+	 * read all zeros under the vendor while our log ring at 0x80603000 was still intact).
+	 *
+	 * It is printed rather than crumbed because the log RING survives the warm watchdog reset and
+	 * the vendor kernel can read it back with `dd if=/dev/mem` - the free post-mortem channel.
+	 * Keep it to ONE line: the ring is only ~16 KiB and the early lines are already being lost.
+	 */
+	{
+		unsigned long vs = (unsigned long)VMALLOC_START;
+		unsigned long fa = 0xc97e8000UL;	/* the address in the Oops registers */
+		pgd_t *p_vs = pgd_offset_k(vs);
+		pgd_t *p_fa = pgd_offset_k(fa);
+		u32 e_vs = pgd_val(*p_vs);
+		u32 e_fa = pgd_val(*p_fa);
+		u32 enc;
+		void __iomem *sc2;
+
+		/*
+		 * BOTH CHANNELS, BECAUSE THE RING EVICTS.
+		 *
+		 * The printk alone did NOT survive: the ring holds only the newest ~16 KiB and the Oops
+		 * trace is longer than that, so the line was pushed out before the crash - measured, it
+		 * was absent while the crash trace was present.  So the ANSWER also goes into a crumb cell,
+		 * which is sticky and does not get evicted.
+		 *
+		 * A crumb is 32 bits, so it carries the discriminating facts, not prose:
+		 *   bit0            pgd entry for VMALLOC_START is ZERO   (mapping never set up)
+		 *   bit1            pgd entry for 0xc97e8000 is ZERO      (the faulting address)
+		 *   bits 8..15      high_memory >> 24                    (0xC8 for 128 MiB at PAGE_OFFSET)
+		 *   bits 16..31     VMALLOC_START >> 24
+		 *
+		 * Reading it: bit0=1 -> the vmalloc PGD was never populated (an init/bounds problem).
+		 *             bit0=0 -> the table EXISTS and is wrong (a corruption problem).
+		 * Those need different fixes, which is the whole point of measuring instead of guessing.
+		 */
+		enc = (e_vs ? 0u : 1u) | (e_fa ? 0u : 2u)
+		    | (((u32)((unsigned long)high_memory >> 24)) & 0xffu) << 8
+		    | (((u32)(vs >> 24)) & 0xffffu) << 16;
+
+		sc2 = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+		if (sc2) {
+			writel(enc, sc2 + 0xc9c);	/* stickier than the ring, and never evicted */
+			(void)readl(sc2 + 0xc9c);
+		}
+
+		/*
+		 * REPRODUCE THE ALLOCATION IN OUR OWN CODE.
+		 *
+		 * The root table is exonerated: a previous probe READ swapper_pg_dir successfully (marker
+		 * 0xC0DE9A02), so init_mm.pgd is mapped and the fault is inside vmap_p4d_range - on ARM
+		 * (folded p4d/pud) that is vmap_pmd_range -> pmd_alloc() -> pmd_alloc_one().
+		 *
+		 * Calling pmd_alloc() HERE buys one thing the trace cannot give: if it faults, the Oops
+		 * names luofu_late_crumb, a function I control, instead of the generic mapper.  The stage is
+		 * recorded as it goes so the last surviving value says how far it got.
+		 *
+		 * CELL CHOICE MATTERS AND COST A READING: the previous probe put its results in 0xC90/0xC94,
+		 * and 0xC94 came back holding 0xC0DE6006 - the GMAC's crumb.  That is OUR OWN deferral fix
+		 * at work: the gmac now defers and re-probes AFTER mdio0, and that retry can land after this
+		 * late_initcall, so it overwrote the cell.  0xC8C is this mach's own cell and 0xC9C already
+		 * survived a whole crash; nothing else writes either.
+		 */
+		if (sc2) {
+			unsigned long a = 0xc97e8000UL;
+			u32 st = 0xc0de8b00;
+
+			writel(st | 1, sc2 + 0xc8c);	/* 1: about to call pud_offset/pmd_alloc */
+			(void)readl(sc2 + 0xc8c);
+			{
+				p4d_t *q = p4d_offset(pgd_offset_k(a), a);
+				pud_t *u;
+				pmd_t *mm;
+
+				writel(st | 2, sc2 + 0xc8c);	/* 2: p4d_offset returned */
+				(void)readl(sc2 + 0xc8c);
+
+				u = pud_offset(q, a);
+
+				writel(st | 3, sc2 + 0xc8c);	/* 3: pud_offset returned */
+				(void)readl(sc2 + 0xc8c);
+
+				mm = pmd_alloc(&init_mm, u, a);
+
+				writel(st | 4 | (mm ? 8u : 0u), sc2 + 0xc8c);
+				if (mm) {
+					writel((u32)pmd_val(*mm), sc2 + 0xc9c);
+					(void)readl(sc2 + 0xc9c);
+				}
+			}
+			writel(st | 0xf, sc2 + 0xc8c);	/* 0xF: the whole path completed */
+			(void)readl(sc2 + 0xc8c);
+
+			/*
+			 * DOES THE KERNEL KNOW WHERE IT IS?
+			 *
+			 * The allocation above SUCCEEDED (stage 0xF, pmd non-NULL), so nothing is structurally
+			 * broken - the same call faults only later, inside kernel_init_freeable.  The suspect is
+			 * the physical<->virtual map being off by the difference between the kernel's LINK base
+			 * and where it was LOADED:
+			 *
+			 *     DTB memory node 0x80500000 + TEXT_OFFSET 0x608000 = 0x80b08000 (expected)
+			 *     the uImage loads at                                 0x80608000 (actual)
+			 *     difference                                          0x500000
+			 *
+			 * If PHYS_OFFSET disagrees with reality, memblock reserves the wrong ranges, free_initmem()
+			 * releases pages it does not own, and the allocator can then hand out a page overlapping the
+			 * page tables - corrupting exactly those tables at the first vmalloc that needs a new pmd.
+			 *
+			 * virt_to_phys() answers it directly: swapper_pg_dir's virtual is 0xC0604000, so a correct
+			 * map must return 0x80604000.  Anything else IS the bug.
+			 */
+			{
+				phys_addr_t pg_phys = virt_to_phys((void *)swapper_pg_dir);
+				phys_addr_t me_phys = virt_to_phys((void *)luofu_late_crumb);
+
+				writel((u32)pg_phys, sc2 + 0xc8c);	/* expect 0x80604000 */
+				(void)readl(sc2 + 0xc8c);
+				writel((u32)me_phys, sc2 + 0xc9c);	/* our own phys, for cross-check */
+				(void)readl(sc2 + 0xc9c);
+			}
+			iounmap(sc2);
+		}
+
+		pr_info("LUOFU-PG high=%08lx vs=%08lx ve=%08lx pgd=%08lx vs_e=%08x fa_e=%08x\n",
+			(unsigned long)high_memory, vs,
+			(unsigned long)VMALLOC_END, (unsigned long)swapper_pg_dir,
+			e_vs, e_fa);
 	}
 
 	return 0;

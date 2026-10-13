@@ -1544,7 +1544,21 @@ static struct timer_list luofu_log_timer;
  * reader that notices. A macro has the same rule, which is why LUOFU_SAFETY_SECS is here and not a
  * thousand lines down.
  */
-#define LUOFU_SAFETY_SECS	180
+/*
+ * THE SAFETY RESTART'S TIMER.
+ *
+ * 180 s was chosen when our kernel could not reach a usable state: the timer's whole job was to
+ * hand the box back to the vendor instead of leaving it dark.  THAT PREMISE IS NOW OUT OF DATE -
+ * measured 2026-10-13, our kernel boots, its MAC defers for mdio0, retries, connects to a real PHY
+ * and registers its netdev (crumb 0xC0DE6006).  It is now a system worth LOGGING INTO, and 180 s
+ * cannot be used to do that: the restart fires before anyone can reach it.
+ *
+ * So the window is 900 s - long enough to ssh in on our own kernel and read the things only a live
+ * shell can reach (the log ring, eth0's link state, /proc), short enough that a hang still returns
+ * the box by itself.  The risk stays bounded either way: our kernel arms the FALLBACK (it flips the
+ * slot selector) on the way up, so even a hang is one power cycle from the vendor slot.
+ */
+#define LUOFU_SAFETY_SECS	900
 static struct timer_list luofu_reboot_timer;
 
 /*

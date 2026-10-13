@@ -318,6 +318,71 @@ CONFIG_I2C_DESIGNWARE_PLATFORM=y
 # dmesg:201 hi_jent_rng; dmesg:204-207 hi_efuse_driver match succ.
 CONFIG_WATCHDOG=y
 CONFIG_WATCHDOG_CORE=y
+
+# THE PERSISTED LOG - the instrument that makes a HANG readable.
+#
+# Our kernel boots, registers the MDIO bus and the gmac netdev with a real PHY, then HANGS: the
+# timers die (the 900 s safety timer never fires), the pstore gets no Oops/panic record (nothing
+# panicked), and the SoC watchdog resets the box ~40 s in.  So the log ring - which holds the
+# answer - dies with the box, and ONE 32-bit crumb cell cannot say where it stopped.
+#
+# The board already HAS the persistent region and the console backend:
+#     partition@d40000 { label = "pstore"; reg = <0xd40000 0x40000>; }    (mtd10, 256 KiB)
+#     CONFIG_PSTORE=y / CONFIG_PSTORE_CONSOLE=y
+# and the VENDOR kernel proves the path works end to end - its own boot says:
+#     mtd mtd10: mtdoops-pstore: Attached to MTD device 10
+#     pstore: Registered pstore_blk as persistent store backend
+# and /sys/fs/pstore on the stock box holds three ~69 KB dmesg-pstore_blk records.
+#
+# MTD_PSTORE depends on PSTORE_BLK, so both are needed.  mtdpstore finds the partition by its
+# LABEL (no blkdev parameter).  Sizes are budgeted against the 256 KiB partition: kmsg + console
+# at 112 KiB each leaves headroom for the pmsg/ftrace rings.
+#
+# With this, EVERY future boot writes its console to mtd10 as it happens - so a hang leaves the
+# last thing the kernel said in flash, readable from the vendor slot with no shell on our kernel.
+#
+# AND WHY `BROKEN` MATTERS HERE.  In this kernel PSTORE_BLK carries `depends on BROKEN`:
+#
+#     config PSTORE_BLK
+#             depends on PSTORE
+#             depends on BLOCK
+#             depends on BROKEN        <- cannot be selected AT ALL without it
+#     config MTD_PSTORE
+#             depends on PSTORE_BLK
+#
+# and `config BROKEN` (init/Kconfig:116) is a PROMPTLESS bool, so a line here does NOT work -
+# measured 2026-10-13: neither symbol reached .config and mtd10 stayed 0xff after a full boot.
+# The enablement comes from `select BROKEN` in our own nand/luofu/Kconfig, which is the route the
+# NOTE above already named.  These two lines only take EFFECT because of that select.
+# Set 2026-10-13 to test whether mark_readonly() is what breaks the vmalloc path:
+#
+# Measured: our kernel Oopses at ~13 s inside kernel_init_freeable -> console_on_rootfs ->
+# filp_open -> n_tty_open -> vzalloc -> map_kernel_range_noflush, faulting on a page-table LOAD.
+# Every structural suspect has been exonerated by direct measurement:
+#
+#   init_mm.pgd (swapper_pg_dir) is mapped and readable   (probe marker 0xC0DE9A02)
+#   pgd[VMALLOC_START] exists, bounds correct            (crumb 0xC8C802)
+#   p4d_offset -> pud_offset -> pmd_alloc SUCCEEDS       (stage 0xC0DE8B0F, pmd non-NULL)
+#   virt_to_phys(swapper_pg_dir) = 0x80604000, correct   (crumb 0xC8C)
+#
+# So the SAME CALL works at initcall time and fails a second later, and between those two points
+# kernel_init_freeable does exactly two things: mark_readonly() and free_initmem().  STRICT_KERNEL_RWX
+# is the switch for the first - and on ARM mark_rodata_ro() splits SECTION mappings, needing page
+# tables of its own, immediately before the first vmalloc that needs a fresh pmd.
+#
+# DEBUG_ALIGN_RODATA goes with it: it is what allows the finer-grained split in the first place.
+#
+# If the crash DISAPPEARS with these off, mark_readonly() is the cause and the fix belongs there.
+# If it PERSISTS, free_initmem() is the remaining candidate and the next test targets that.
+# CONFIG_STRICT_KERNEL_RWX is not set
+# CONFIG_STRICT_MODULE_RWX is not set
+# CONFIG_DEBUG_ALIGN_RODATA is not set
+
+CONFIG_PSTORE_BLK=y
+CONFIG_MTD_PSTORE=y
+CONFIG_PSTORE_BLK_KMSG_SIZE=112
+CONFIG_PSTORE_BLK_CONSOLE_SIZE=112
+CONFIG_PSTORE_BLK_MAX_REASON=2
 # NEW
 CONFIG_LUOFU_WATCHDOG=y
 CONFIG_THERMAL=y

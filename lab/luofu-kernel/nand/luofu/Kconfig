@@ -12,6 +12,24 @@ config MTD_NAND_LUOFU
 	bool "Hisilicon luofu (Hi5671Y) FMC NAND controller"
 	depends on ARCH_LUOFU || COMPILE_TEST
 	depends on OF
+	#
+	# OUR ROUTE TO PSTORE_BLK.  In 5.10.201 `config PSTORE_BLK` carries `depends on BROKEN`, and
+	# `config BROKEN` (init/Kconfig:116) is a PROMPTLESS bool - no prompt, so a fragment line
+	# `CONFIG_BROKEN=y` is silently ignored and `olddefconfig` then DROPS PSTORE_BLK/MTD_PSTORE
+	# with it.  Measured 2026-10-13: the symbols never reached .config and mtd10 stayed 0xff after
+	# a full boot, which is indistinguishable from "the kernel died too early" - the whole reason
+	# the persisted log was being built.
+	#
+	# `select` is the only mechanism that can set a promptless bool, and this symbol is ours and
+	# always =y in our builds.  It is the route the fragment's own NOTE already named.  With BROKEN
+	# selected, the fragment's CONFIG_PSTORE_BLK/CONFIG_MTD_PSTORE lines take, and the kernel
+	# writes its console to the `pstore` mtd partition continuously - so a HANG leaves the log in
+	# flash instead of dying with the box's RAM.
+	#
+	# BROKEN here only makes those symbols SELECTABLE; nothing else is selected by it.
+	select BROKEN
+	select PSTORE_BLK
+	select MTD_PSTORE
 	help
 	  The flash memory controller of the Hisilicon Hi5671Y "luofu" SoC
 	  (board R116, the Cudy WR3000 v2.0): a command engine plus a DMA
