@@ -222,7 +222,34 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	ret = of_mdiobus_register(m->bus, dev->of_node);
 	if (ret) {
 		dev_err(dev, "Cannot register as MDIO bus!\n");
+		luofu_diag(0xc0de7f05);	/* bus registration FAILED */
 		goto err_clk;
+	}
+	luofu_diag(0xc0de7005);	/* bus registration returned OK */
+
+	/*
+	 * HOW MANY PHYs DID THE BUS ACTUALLY FIND, AND CAN WE READ THE ONE THE MAC WILL USE?
+	 *
+	 * phylink cannot attach a PHY that was never enumerated, and the MAC's link never came up
+	 * ("configuring for phy/gmii link mode" and nothing more) even after phy-handle was added.
+	 * The vendor's log for the same silicon shows the PHY at mdio address 2, so probe that one
+	 * directly: a real ID here means the MDIO transfers work and any remaining fault is upstream
+	 * in phylink; an all-ones/zero ID means the transfers themselves are not working.
+	 */
+	{
+		int i, n = 0;
+		for (i = 0; i < PHY_MAX_ADDR; i++)
+			if (mdiobus_get_phy(m->bus, i))
+				n++;
+		luofu_diag(0xc0de7006 | (n & 0xf));
+
+		{
+			int id = mdiobus_read(m->bus, 2, MII_PHYSID1);
+			int bmcr = mdiobus_read(m->bus, 2, MII_BMCR);
+			dev_info(dev, "luofu-mdio: phy_count=%d phy2 id1=%04x bmcr=%04x\n",
+				 n, id & 0xffff, bmcr & 0xffff);
+			luofu_diag(0xc0de7007 | ((id & 0xff) << 8) | (n & 0xf));
+		}
 	}
 
 	platform_set_drvdata(pdev, m);

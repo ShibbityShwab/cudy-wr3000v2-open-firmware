@@ -371,11 +371,15 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 	if (ret) {
 		dev_warn(&pdev->dev, "no PHY (phy-handle/fixed-link?): %d\n", ret);
 		/* keep the netdev: a fixed-link or a later mdio0 can bind it */
+		luofu_diag(0xc0de6f05 | (ret & 0xf));	/* phy_connect FAILED - this is the no-uplink case */
+	} else {
+		luofu_diag(0xc0de6005);		/* phy_connect OK */
 	}
 
 	ret = register_netdev(ndev);
 	if (ret)
 		goto err_phylink;
+	luofu_diag(0xc0de6006);		/* netdev registered */
 
 	dev_info(&pdev->dev,
 		 "luofu-gmac: %s registered, iface=%s, %d clk(s), MAC ctrl=0x%08x\n",
