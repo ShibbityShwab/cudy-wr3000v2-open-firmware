@@ -155,13 +155,26 @@ static int luofu_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val)
 	return 0;
 }
 
+/*
+ * THE VENDOR BOOT CLOBBERS THIS CELL.
+ *
+ * 0xC98 is fine for reading during OUR boot, but once our kernel's fallback hands the board back
+ * the vendor kernel's own boot overwrites it - measured 2026-10-13: after a fire, 0xC98 read
+ * 0xE3520010 while the FMC's own 0xC18/0xC1C still held our values.  So every crumb is ALSO
+ * deposited in luofu_net_diag, which the FMC's 5-second tick carries in its surviving payload.
+ */
 #define LUOFU_DIAG_BASE	0x10100000UL
 #define LUOFU_DIAG_OFF	0xc98	/* mdio's OWN cell - 0xC8C is the mach's, 0xC90 the CRG's, 0xC94 gmac's */
 
+extern u32 luofu_net_diag;
+
 static void luofu_diag(u32 v)
 {
-	void __iomem *p = ioremap(LUOFU_DIAG_BASE, 0x1000);
+	void __iomem *p;
 
+	luofu_net_diag = v;	/* survive the fallback: the FMC tick carries this */
+
+	p = ioremap(LUOFU_DIAG_BASE, 0x1000);
 	if (!p)
 		return;
 	writel(v, p + LUOFU_DIAG_OFF);

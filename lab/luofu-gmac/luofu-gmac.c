@@ -278,13 +278,26 @@ static const struct ethtool_ops luofu_gmac_ethtool_ops = {
  * (mdio uses 0xC0DE70NN / 0xC0DE7FNN.)  Without this the only visible symptom was "no eth0",
  * which cannot distinguish "never probed" from "probed and bailed at the reset lookup".
  */
+/*
+ * THE VENDOR BOOT CLOBBERS THIS CELL.
+ *
+ * 0xC94 is fine for reading during OUR boot, but once our kernel's fallback hands the board back
+ * the vendor kernel's own boot overwrites it.  So every crumb is ALSO deposited in luofu_net_diag,
+ * which the FMC's 5-second tick carries in its surviving payload (0xC1C) - the only channel that
+ * outlives a fallback.
+ */
 #define LUOFU_DIAG_BASE	0x10100000UL
 #define LUOFU_DIAG_OFF	0xc94	/* gmac's OWN cell - 0xC8C is the mach's, 0xC90 the CRG's, 0xC98 mdio's */
 
+extern u32 luofu_net_diag;
+
 static void luofu_diag(u32 v)
 {
-	void __iomem *p = ioremap(LUOFU_DIAG_BASE, 0x1000);
+	void __iomem *p;
 
+	luofu_net_diag = v;	/* survive the fallback: the FMC tick carries this */
+
+	p = ioremap(LUOFU_DIAG_BASE, 0x1000);
 	if (!p)
 		return;
 	writel(v, p + LUOFU_DIAG_OFF);

@@ -2350,6 +2350,22 @@ static struct luofu_fmc *luofu_fmc_stamp;
  */
 #define LUOFU_LOG_HWCAP_STEP	46
 static u32 luofu_log_ticks;
+
+/*
+ * THE SURVIVING CHANNEL FOR THE OTHER DRIVERS' CRUMBS.
+ *
+ * Each driver has its own diag cell (mach 0xC8C, CRG 0xC90, gmac 0xC94, mdio 0xC98), and every one
+ * of those is clobbered by the vendor boot once our kernel's fallback hands the board back.  So a
+ * crumb read AFTER a fallback says nothing about our drivers - measured 2026-10-13: a fire whose
+ * mdio cell read 0x62CE0000 (vendor garbage) while 0xC18/0xC1C still held OUR FMC tick.
+ *
+ * The FMC's own pair is the only proven survivor (the vendor kernel never touches it), and its tick
+ * is the LAST writer in a boot.  So the other drivers deposit the crumb they want kept here, and
+ * the tick carries it in its payload.  Low 16 bits is exactly the discriminating part of their
+ * values: the mdio/gmac crumbs are 0xC0DE7xxx / 0xC0DE6xxx, so 0x7EFB and 0x6006 fit whole.
+ */
+u32 luofu_net_diag;
+EXPORT_SYMBOL_GPL(luofu_net_diag);
 static u32 luofu_log_lines;
 
 /*
@@ -2681,12 +2697,23 @@ static void luofu_log_tick(struct timer_list *t)
 		 * The phase and the log address that used to live here are not lost: both were read back
 		 * long ago and recorded (phase 4, log_dma 0x80603000).
 		 */
+		/*
+		 * AND THE LOW 16 BITS CARRY THE NIC's LAST CRUMB.
+		 *
+		 * The FMC's write/erase counts stay in the top 16 ("did the sequence run" is still the first
+		 * question worth answering there), and the bottom half now carries whatever the gmac/mdio
+		 * drivers last deposited in luofu_net_diag.  This is the ONLY way to read their result after
+		 * a fallback - their own cells do not survive the vendor boot.
+		 *
+		 *   C1C = (writes<<24) | (erases<<16) | (luofu_net_diag & 0xffff)
+		 *
+		 * So 0xC1C = 0xBA00_7EFB means: 0xBA writes reached the MTD entry points, and the mdio
+		 * driver's last crumb was 0xC0DE7EFB = of_mdiobus_register returned -5.
+		 */
 		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
 				((luofu_w_n & 0xffu) << 24) |
 				((luofu_e_n & 0xffu) << 16) |
-				((u32)(luofu_w_err ? 1 : 0) << 15) |
-				((luofu_e_test & 0xfffu) << 3) |
-				(((luofu_w_mism & 0x7u) << 0)));
+				(luofu_net_diag & 0xffffu));
 
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
