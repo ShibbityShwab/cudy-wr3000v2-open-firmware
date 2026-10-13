@@ -219,6 +219,26 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	/*
+	 * RELEASE THE RESETS.  THIS IS THE -EIO.
+	 *
+	 * The probe fetched the reset array and never deasserted it, so the MDIO block stayed held in
+	 * reset.  Every transfer then timed out in luofu_mdio_wait(), and that timeout is what
+	 * propagated out of get_phy_c22_id() -> get_phy_device() -> of_mdiobus_register() as **-EIO**.
+	 * That is why the failure was never on the clause-22 error paths (those converge on
+	 * -ENODEV/-EINVAL) and why the file's own header predicted "a timeout from luofu_mdio_wait()".
+	 *
+	 * reset_control_deassert() dispatches to reset_control_array_deassert() for an array handle
+	 * (drivers/reset/core.c:411), so the devm_reset_control_array_get() result is used directly.
+	 * Clock first: the block must have a clock when it comes out of reset.
+	 */
+	ret = reset_control_deassert(m->resets);
+	if (ret) {
+		luofu_diag(0xc0de7f06);	/* could not release the resets */
+		goto err_clk;
+	}
+	luofu_diag(0xc0de7005);	/* resets released */
+
 	m->bus = devm_mdiobus_alloc_size(dev, 0);
 	if (!m->bus) {
 		ret = -ENOMEM;
@@ -279,6 +299,12 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	}
 
 	ret = of_mdiobus_register(m->bus, dev->of_node);
+	/*
+	 * WITH THE RESETS RELEASED, -EIO SHOULD BE GONE AND THIS SHOULD BE 0 (crumb 0xC0DE7E00).
+	 * If it is still -EIO, the fault moved into the transfer itself and the register layout
+	 * (base[0x70] frame / [0x00] cmd / [0x6c] status / [0x74] data - decoded from the vendor's
+	 * hi_kmdio.ko but never exercised) is the remaining suspect.
+	 */
 	luofu_diag(0xc0de7e00 | (ret & 0xff));
 	if (ret) {
 		goto err_clk;

@@ -348,6 +348,23 @@ static int luofu_gmac_probe(struct platform_device *pdev)
 	}
 	luofu_diag(0xc0de6004);
 
+	/*
+	 * RELEASE THE RESETS - the same defect the mdio driver had.
+	 *
+	 * The resets were fetched and never deasserted, so the MAC stayed held in reset: no transfer,
+	 * no PHY, no link.  The clocks are already enabled above (clk_bulk_prepare_enable), which is
+	 * the order this needs - a clock before the block comes out of reset.
+	 *
+	 * reset_control_deassert() dispatches to reset_control_array_deassert() for an array handle
+	 * (drivers/reset/core.c:411), so the devm_reset_control_array_get() result is used directly.
+	 */
+	ret = reset_control_deassert(g->resets);
+	if (ret) {
+		luofu_diag(0xc0de6f06);	/* could not release the resets */
+		goto err_free;
+	}
+	luofu_diag(0xc0de6013);	/* resets released (gmac's own code - must not collide with mdio's 0xC0DE7005) */
+
 	ret = of_get_phy_mode(pdev->dev.of_node, &iface);
 	if (ret)
 		iface = PHY_INTERFACE_MODE_NA;
