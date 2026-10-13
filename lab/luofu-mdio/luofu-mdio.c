@@ -219,37 +219,56 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	m->bus->parent = dev;
 	snprintf(m->bus->id, MII_BUS_ID_SIZE, "%s", dev_name(dev));
 
-	ret = of_mdiobus_register(m->bus, dev->of_node);
-	if (ret) {
-		dev_err(dev, "Cannot register as MDIO bus!\n");
-		luofu_diag(0xc0de7f05);	/* bus registration FAILED */
-		goto err_clk;
-	}
-	luofu_diag(0xc0de7005);	/* bus registration returned OK */
-
 	/*
-	 * HOW MANY PHYs DID THE BUS ACTUALLY FIND, AND CAN WE READ THE ONE THE MAC WILL USE?
+	 * CRUMBS, NOT PRINTS.
 	 *
-	 * phylink cannot attach a PHY that was never enumerated, and the MAC's link never came up
-	 * ("configuring for phy/gmii link mode" and nothing more) even after phy-handle was added.
-	 * The vendor's log for the same silicon shows the PHY at mdio address 2, so probe that one
-	 * directly: a real ID here means the MDIO transfers work and any remaining fault is upstream
-	 * in phylink; an all-ones/zero ID means the transfers themselves are not working.
+	 * Early-boot dev_info() lines scroll out of the 16 KiB ring - measured: the bus-node and
+	 * child-reg prints never appeared.  So every stage goes to a crumb, most decisive LAST:
+	 *
+	 *   0xC0DE7D00 / 0xC0DE7D01   node not / IS available
+	 *   0xC0DE7C00 | n            children walked
+	 *   0xC0DE7B00 | (addr<<4) | (rc & 0xf)   per-child registration result
+	 *   0xC0DE7E00 | (rc & 0xff)  final of_mdiobus_register return code
 	 */
-	{
-		int i, n = 0;
-		for (i = 0; i < PHY_MAX_ADDR; i++)
-			if (mdiobus_get_phy(m->bus, i))
-				n++;
-		luofu_diag(0xc0de7006 | (n & 0xf));
+	luofu_diag(of_device_is_available(dev->of_node) ? 0xc0de7d01 : 0xc0de7d00);
 
-		{
-			int id = mdiobus_read(m->bus, 2, MII_PHYSID1);
-			int bmcr = mdiobus_read(m->bus, 2, MII_BMCR);
-			dev_info(dev, "luofu-mdio: phy_count=%d phy2 id1=%04x bmcr=%04x\n",
-				 n, id & 0xffff, bmcr & 0xffff);
-			luofu_diag(0xc0de7007 | ((id & 0xff) << 8) | (n & 0xf));
+	{
+		struct device_node *ch;
+		int n = 0;
+
+		for_each_available_child_of_node(dev->of_node, ch) {
+			u32 r;
+			n++;
+			(void)r;
 		}
+		luofu_diag(0xc0de7c00 | (n & 0xff));
+
+		/*
+		 * Register the children ONE AT A TIME so the failing child is identifiable, instead of
+		 * handing the whole tree to of_mdiobus_register() and getting only its -EIO back.
+		 */
+		for_each_available_child_of_node(dev->of_node, ch) {
+			struct phy_device *phy;
+			u32 r;
+			int rc;
+
+			if (of_property_read_u32(ch, "reg", &r))
+				continue;
+			phy = get_phy_device(m->bus, (int)r, false);
+			if (IS_ERR(phy)) {
+				rc = PTR_ERR(phy);
+				luofu_diag(0xc0de7b00 | (((u32)r & 0xf) << 4) | ((u32)(-rc) & 0xf));
+			} else {
+				luofu_diag(0xc0de7b00 | (((u32)r & 0xf) << 4) | 0xf);
+				phy_device_free(phy);
+			}
+		}
+	}
+
+	ret = of_mdiobus_register(m->bus, dev->of_node);
+	luofu_diag(0xc0de7e00 | (ret & 0xff));
+	if (ret) {
+		goto err_clk;
 	}
 
 	platform_set_drvdata(pdev, m);
