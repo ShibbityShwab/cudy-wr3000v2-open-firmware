@@ -462,6 +462,11 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;	/* pinned:885 */
 		phy-mode = "rgmii";		/* pinned:892 */
+		/* phy-handle IS REQUIRED: without it phylink_of_phy_connect() finds no PHY and
+		 * the link never comes up (our log stalled at "configuring for phy/gmii link
+		 * mode" with no Link is Up, while the vendor reports eth0 on mdio0:02).
+		 * The five PHYs hang off mdio0 at addresses 1..5. */
+		phy-handle = <&phy2>;
 		clocks = <&crg LUOFU_CLK_GMAC0>;
 		resets = <&crg 0x30 0xd>,	/* mac_logic, pinned:895 */
 			 <&crg 0x30 0xe>;	/* mac */
@@ -478,6 +483,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14380000 0x10000>;	/* pinned:900 */
 		phy-mode = "gmii";		/* port 9 */
+		phy-handle = <&phy3>;
 		clocks = <&crg LUOFU_CLK_GMAC1>;
 		resets = <&crg 0x30 0xf>,
 			 <&crg 0x30 0x10>;
@@ -489,6 +495,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14400000 0x10000>;	/* pinned:907 */
 		phy-mode = "gmii";		/* port 10 */
+		phy-handle = <&phy4>;
 		clocks = <&crg LUOFU_CLK_GMAC2>;
 		resets = <&crg 0x30 0x11>,
 			 <&crg 0x30 0x12>;
@@ -500,6 +507,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14480000 0x10000>;	/* pinned:914 */
 		phy-mode = "gmii";		/* port 11 */
+		phy-handle = <&phy5>;
 		clocks = <&crg LUOFU_CLK_GMAC3>;
 		resets = <&crg 0x30 0x13>,
 			 <&crg 0x30 0x14>;
@@ -511,6 +519,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14500000 0x10000>;	/* pinned:921 */
 		phy-mode = "gmii";		/* port 12 */
+		phy-handle = <&phy1>;
 		clocks = <&crg LUOFU_CLK_GMAC4>;
 		resets = <&crg 0x30 0x15>,
 			 <&crg 0x30 0x16>;
@@ -540,11 +549,11 @@
 		 * below are what phylink needs to find a PHY on this bus. */
 		status = "okay";
 
-		ethernet-phy@1 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <1>; max-speed = <1000>; };
-		ethernet-phy@2 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <2>; max-speed = <1000>; };
-		ethernet-phy@3 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <3>; max-speed = <1000>; };
-		ethernet-phy@4 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <4>; max-speed = <1000>; };
-		ethernet-phy@5 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <5>; max-speed = <1000>; };
+		phy1: ethernet-phy@1 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <1>; max-speed = <1000>; };
+		phy2: ethernet-phy@2 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <2>; max-speed = <1000>; };
+		phy3: ethernet-phy@3 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <3>; max-speed = <1000>; };
+		phy4: ethernet-phy@4 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <4>; max-speed = <1000>; };
+		phy5: ethernet-phy@5 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <5>; max-speed = <1000>; };
 	};
 
 	/* internal LSW switch: queue/flow/DP + PFE parser + WoE offload. */
