@@ -96,7 +96,7 @@ CONFIG_CMDLINE_EXTEND=y
 #
 # UDBG_UNDEFINED is 1, so user_debug=1 is exactly that bit and nothing else.
 # ---------------------------------------------------------------------------
-CONFIG_CMDLINE="panic=5 maxcpus=1 nr_cpus=1 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init pstore_blk.blkdev=31:10"
+CONFIG_CMDLINE="panic=5 maxcpus=1 nr_cpus=1 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init pstore_blk.blkdev=pstore ip=192.168.10.1:192.168.10.2:192.168.10.1:255.255.255.0::eth2:off"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
@@ -275,7 +275,21 @@ CONFIG_LOG_BUF_SHIFT=18
 # 64 KiB holds a whole boot, which makes the panic dump worth reading: the log the
 # kernel hands over at panic time is the trace this project needs, and the console
 # capture covers everything before it.
-CONFIG_LOG_BUF_SHIFT=16
+# KERNEL-SIDE IP CONFIG, SO THE BOX ANSWERS EVEN IF USERSPACE DIES.
+#
+# MEASURED: our kernel opens the wired netdev and mac_link_up programs the MAC (link up, 100 Mbps).
+# The NIC works.  But nothing answers on the wire - the rootfs is the vendor's and our boot returns
+# about two minutes in.  With CONFIG_IP_PNP the KERNEL ITSELF takes the address from the cmdline
+# (ip=...) with no userspace involved, so ping/ssh reach OUR kernel directly and the window becomes
+# observable at all.
+#   ip=<client>:<server>:<gw>:<netmask>::<device>:<autoconf>
+#   eth2 is the wired port: gmac 0x14480000 = the vendor's eth2 = mdio0:04 = the cable.
+CONFIG_IP_PNP=y
+
+# NOTE: this file had CONFIG_LOG_BUF_SHIFT TWICE (18 above, 16 here) and the LAST one wins, so the
+# ring stayed 64 KiB and the early boot kept evicting - which is why the gmac/mdio lines could never
+# be read.  One value, and it must be the big one.
+CONFIG_LOG_BUF_SHIFT=18
 
 
 # ---------------------------------------------------------------------------
