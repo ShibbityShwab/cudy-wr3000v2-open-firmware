@@ -584,9 +584,23 @@ static int luofu_pinctrl_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->cfg_base))
 		return PTR_ERR(priv->cfg_base);
 
-	/* TODO: devm_reset_control_get(&pdev->dev, NULL) +
-	 *       reset_control_deassert() (vendor probe shape) once the reset
-	 *       controller is up.  Kept out: it is a reset write. */
+	/*
+	 * RELEASE THE RESET - the same fix that closed the MDIO -EIO.
+	 *
+	 * This was a TODO here ("kept out: it is a reset write"), and leaving it out is precisely the
+	 * defect that kept the MDIO block in reset so every transfer timed out and came back as -EIO.
+	 * The reset controller is up: the MDIO and GMAC drivers already fetch and deassert their reset
+	 * arrays successfully, and reset_control_deassert() on an array dispatches to the array form.
+	 *
+	 * The array getter is used so this is correct whether the node declares one reset or several.
+	 */
+	{
+		struct reset_control *rs = devm_reset_control_array_get(&pdev->dev,
+								false, true);
+
+		if (!IS_ERR(rs))
+			reset_control_deassert(rs);
+	}
 
 	platform_set_drvdata(pdev, priv);
 

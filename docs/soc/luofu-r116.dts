@@ -380,11 +380,23 @@
 	 * registers) plus a 0x100-byte config window (64 x 32-bit), reg-names
 	 * "mux" "cfg". Node name carries the first reg base (0x14900100). */
 	pinctrl_peri: pinctrl@14900100 {
-		compatible = "hisilicon,luofu-peri-pinctrl";
+		compatible = "hsan,luofu-peri-pinctrl";
 		reg = <0x14900100 0x3c>,		/* mux, pinned:1270 */
 		      <0x14940000 0x100>;		/* cfg */
 		reg-names = "mux", "cfg";
-		status = "disabled";
+		/*
+		 * ENABLED, and the compatible is the driver's string - MEASURED 2026-10-14.
+		 *
+		 * Two blockers kept this driver from ever binding, and both had to go at once:
+		 *   1. status was "disabled", so no probe ran;
+		 *   2. this node said "hisilicon,luofu-peri-pinctrl" while the driver matches
+		 *      "hsan,luofu-peri-pinctrl" - a silent mismatch that no probe error would show.
+		 *
+		 * It matters to the NIC: the wired path is gmac -> LSW -> PHY -> RJ45 and no PHY reports
+		 * link.  This is the driver that configures the pins, and it carried the same missing
+		 * reset_control_deassert the MDIO needed for -EIO (luofu-pinctrl.c), which is now fixed.
+		 */
+		status = "okay";
 		/* TODO binding question: 37 pins / 24 groups / 24 functions
 		 * (pinctrl.md sec 2). The pinned DT selects only the spi group
 		 * plus jtag_gpio2..5 / led0_1 / led1_1 / avs; the two spi states

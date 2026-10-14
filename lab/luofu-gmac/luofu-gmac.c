@@ -98,6 +98,13 @@ luofu_gmac_write_ready(struct luofu_gmac *g, u32 off, u32 val)
 
 /* ---- phylink glue ---- */
 
+/*
+ * Defined further down; declared here because mac_link_up() uses it.
+ * WITHOUT THIS THE BUILD FAILED and four fires in a row wrote a STALE image - the arm
+ * toolchain rejects the implicit declaration, so nothing after this line ever shipped.
+ */
+static void luofu_diag(u32 v);
+
 static struct luofu_gmac *pl_to_gmac(struct phylink_config *cfg)
 {
 	return container_of(cfg, struct luofu_gmac, pl_config);
