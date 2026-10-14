@@ -103,6 +103,39 @@ static struct luofu_gmac *pl_to_gmac(struct phylink_config *cfg)
 	return container_of(cfg, struct luofu_gmac, pl_config);
 }
 
+/*
+ * THE MAC ONLY PASSES TRAFFIC ONCE ITS PORT MODE IS PROGRAMMED.
+ *
+ * These were empty stubs: the netdev registered, a real PHY attached, and the MAC was never told
+ * the link speed - so nothing flowed. That is exactly "looks healthy, carries nothing".
+ *
+ * The offsets and the algorithm come from the MAINLINE driver for this IP,
+ * drivers/net/ethernet/hisilicon/hix5hd2_gmac.c (present in this kernel tree):
+ *
+ *     #define PORT_MODE		0x0040		<- matches the silicon
+ *     #define MODE_CHANGE_EN	0x01b4
+ *     #define BIT_MODE_CHANGE_EN	BIT(0)
+ *
+ * and its hix5hd2_config_port() writes PORT_MODE with the mode-change bit ENABLED around the
+ * write:  mode_change = BIT(0) -> PORT_MODE = speed -> mode_change = 0.
+ *
+ * THE VALUES ARE MEASURED, NOT PORTED.  This silicon is a different revision from the mainline
+ * one, and its encoding differs: mainline's GMAC_SPEED_1000 is 0x05, while a live 1 Gbps link on
+ * THIS board reads
+ *
+ *     0x14380000 (eth0, carrier 0)  PORT_MODE = 0x000C0408
+ *     0x14480000 (eth2, carrier 1)  PORT_MODE = 0x010C0008   <- 1 Gbps, link up
+ *
+ * read straight off the vendor's running kernel through /dev/mem.  So the link-up value below is
+ * the one this hardware actually produced, not a copy of another revision's table.
+ */
+#define LUOFU_GMAC_PORT_MODE		0x0040
+#define LUOFU_GMAC_MODE_CHANGE_EN	0x01b4
+#define LUOFU_GMAC_MODE_CHANGE_BIT	BIT(0)
+
+/* measured on the vendor's live 1 Gbps link (see above) */
+#define LUOFU_PORT_MODE_1000		0x010c0008
+
 static void luofu_gmac_mac_config(struct phylink_config *cfg,
 				  unsigned int mode,
 				  const struct phylink_link_state *st)
@@ -110,9 +143,20 @@ static void luofu_gmac_mac_config(struct phylink_config *cfg,
 	struct luofu_gmac *g = pl_to_gmac(cfg);
 
 	/*
-	 * The mode/speed/duplex words are the MAC-configuration registers the
-	 * vendor sets in hi_mac_link_up; their offsets and values are staged
-	 * behind the write guard until they are measured on the device.
+	 * DELIBERATELY DOES NOT TOUCH THE MAC.
+	 *
+	 * phylink calls mac_config() during SETUP - phylink_create() calls phylink_validate(), and the
+	 * first mac_config() can happen from the probe path, long before a PHY exists or the link has
+	 * negotiated anything.  Writing the MAC there cost a boot: an access to this block before it
+	 * is ready hangs the AHB bus, and the box never reached its first timer tick (crumb 0xC18
+	 * still held the poison, no userspace, no ring lines).
+	 *
+	 * THE MODE CHANGE BELONGS IN mac_link_up(), which is what the mainline driver does too -
+	 * hix5hd2_config_port() is called from hix5hd2_adjust_link(), the LINK callback, never from a
+	 * config-time path.
+	 *
+	 * mac_config is also the right place for genuinely static configuration (RGMII delay, interface
+	 * mode); none of that is measured for this silicon yet, so it stays a no-op rather than a guess.
 	 */
 	(void)g;
 	(void)mode;
@@ -122,9 +166,13 @@ static void luofu_gmac_mac_config(struct phylink_config *cfg,
 static void luofu_gmac_mac_link_down(struct phylink_config *cfg,
 				     unsigned int mode, phy_interface_t iface)
 {
-	(void)cfg;
+	struct luofu_gmac *g = pl_to_gmac(cfg);
+
 	(void)mode;
 	(void)iface;
+
+	/* Clear the MAC enable: the mainline driver resets the interface on link down. */
+	writel(0, g->base + LUOFU_GMAC_CTRL);
 }
 
 static void luofu_gmac_mac_link_up(struct phylink_config *cfg,
@@ -132,14 +180,32 @@ static void luofu_gmac_mac_link_up(struct phylink_config *cfg,
 				   unsigned int mode, phy_interface_t iface,
 				   int speed, int duplex, bool tx_pause, bool rx_pause)
 {
-	(void)cfg;
+	struct luofu_gmac *g = pl_to_gmac(cfg);
+
 	(void)phy;
 	(void)mode;
 	(void)iface;
-	(void)speed;
-	(void)duplex;
 	(void)tx_pause;
 	(void)rx_pause;
+
+	/*
+	 * Order matters and follows the mainline driver: configure the PORT MODE first, then enable
+	 * the MAC.  Enabling before the mode is right would let the MAC drive a mis-configured port.
+	 */
+	if (speed == SPEED_1000) {
+		writel(LUOFU_GMAC_MODE_CHANGE_BIT, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
+		writel(LUOFU_PORT_MODE_1000, g->base + LUOFU_GMAC_PORT_MODE);
+		writel(0, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
+	}
+
+	/* Enable the MAC - the bit this driver already defines as living in LUOFU_GMAC_CTRL. */
+	writel(LUOFU_GMAC_MAC_EN, g->base + LUOFU_GMAC_CTRL);
+
+	/*
+	 * AND LEAVE A MARK, so a fire says whether this path ran at all: 0xC94 is the gmac's own diag
+	 * cell.  0xC0DE6100|speed means link_up executed; the speed nibble distinguishes 1G/100/10.
+	 */
+	luofu_diag(0xc0de6100 | ((speed == SPEED_1000) ? 1 : (speed == SPEED_100 ? 2 : 3)));
 }
 
 /*
