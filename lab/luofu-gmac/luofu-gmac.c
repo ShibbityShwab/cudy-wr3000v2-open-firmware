@@ -56,6 +56,7 @@
 #include <linux/phylink.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
+#include <linux/rtnetlink.h>	/* rtnl_lock/rtnl_unlock - WITHOUT THIS THE FILE DOES NOT COMPILE */
 
 /* GEMAC register window (dword-aligned; see the file header). */
 #define LUOFU_GMAC_CTRL		0x00	/* MAC control: the enable bit lives here */
@@ -496,6 +497,27 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 	ndev->ethtool_ops = &luofu_gmac_ethtool_ops;
 
 	ret = phylink_of_phy_connect(g->phylink, pdev->dev.of_node, 0);
+	/*
+	 * PUT THE ERROR WHERE IT CAN BE SEEN - AND IT IS THE WHOLE QUESTION NOW.
+	 *
+	 * This call DOES NOT DEFER, so it took the dev_warn path below: its return was neither
+	 * -ENODEV nor -EPROBE_DEFER, then the probe continued to register_netdev with NO PHY.  The
+	 * crumb for it (0xC0DE6F05|ret) is written BEFORE the value that later overwrites the cell,
+	 * so its cause has never actually been visible.
+	 *
+	 * 0xC88 is written by nothing else, and unlike 0xC80 it demonstrably accepts writes (0xC84,
+	 * written by the mdio driver, holds a live value where 0xC80 holds stale silicon state).
+	 * Encoding: 0xE0000000 | (ret as two's-complement 28 bits) - any value starting 0xE is an
+	 * error code; 0x00000000 means it succeeded.
+	 */
+	{
+		void __iomem *pe = ioremap(LUOFU_DIAG_BASE, 0x1000);
+		if (pe) {
+			writel(0xe0000000u | ((u32)ret & 0x0fffffffu), pe + 0xc88);
+			(void)readl(pe + 0xc88);
+			iounmap(pe);
+		}
+	}
 	if (ret) {
 		luofu_diag(0xc0de6f05 | (ret & 0xf));	/* phy_connect FAILED */
 
@@ -535,6 +557,23 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 	luofu_diag(0xc0de6006);		/* netdev registered */
 
 	/*
+	 * OPEN IT.  THIS IS WHY THE LINK NEVER CAME UP.
+	 *
+	 * MEASURED: phylink_of_phy_connect() returns 0 here (0xC88 = 0) - the PHY is found, attached,
+	 * and the netdev registered.  But phylink only starts its PHY state machine from phylink_start(),
+	 * which runs from ndo_open.  Nothing opened the interface, so the PHY was never polled, the
+	 * link (which the PHY itself reports as up - BMSR 0xCDEF) was never noticed, mac_link_up never
+	 * ran, and the MAC was never told its speed.  That is the whole remaining gap.
+	 *
+	 * The rootfs is the vendor's and its network config names the vendor's interfaces, so relying
+	 * on userspace to bring these up is not something this bring-up can assume.  Opening it here
+	 * makes the PHY start negotiating at probe time, which is what the bench needs.
+	 */
+	rtnl_lock();
+	dev_open(ndev, NULL);
+	rtnl_unlock();
+
+	/*
 	 * THE PHY'S OWN ANSWER - AND IT MUST BE THE LAST WRITE.
 	 *
 	 * A first attempt read this in the mdio probe, BEFORE of_mdiobus_register(), and the mdio
@@ -560,24 +599,32 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 		luofu_diag(_val);
 
 		/*
-		 * ALSO STRAIGHT INTO A FREE CELL, AND THAT IS THE POINT.
+		 * AND ONE CELL PER MAC, BECAUSE THE LAST WRITER WAS HIDING THE OTHERS.
 		 *
-		 * The survivor (luofu_net_diag -> C1C low 16) is known to work, but on the last fire it
-		 * showed 0x6006 - the gmac's OWN earlier crumb - which is consistent with two very different
-		 * worlds: this block never ran, OR the value was later overwritten.  A second copy in a cell
-		 * NOTHING ELSE WRITES separates them:
-		 *   0xC80 == _val  -> the block ran, and anything odd is the channel
-		 *   0xC80 unchanged -> the block never executed at all
-		 * 0xC80 is free: the known writers are 0xC8C (mach), 0xC90 (crg), 0xC94 (gmac), 0xC98 (mdio).
+		 * Four macs probe this driver and they all wrote the SAME cell, so a NULL from the last one
+		 * made every earlier success invisible - which is exactly how "of_phy_find_device returns
+		 * NULL" got read as "there is no phy anywhere" instead of "one mac cannot resolve its phy".
+		 *
+		 * Cell = 0xC80 + 4*(index), index by reg base: 14380000->0, 14400000->1, 14480000->2,
+		 * 14500000->3.  0xC80/C84/C88/0xC8C are the free diagnostics; gmac0 (14300000) is disabled
+		 * so it never indexes negatively.  A value of 0xC0DE60EE in a cell = that mac got NULL;
+		 * anything else carries (phyaddr<<16)|BMSR for THAT mac.
 		 */
 		{
-			void __iomem *p = ioremap(0x10100000UL, 0x1000);
-			if (p) {
-				writel(_val, p + 0xc80);
-				(void)readl(p + 0xc80);
-				iounmap(p);
+			/* UNCONDITIONAL, NO INDEX MATH.  An indexed version left all four cells holding values
+			 * from ancient experiments, so the expression or its guard was the suspect.  This is the
+			 * simplest thing that can work: if the block runs, 0xC80 changes. */
+			void __iomem *pm = ioremap(LUOFU_DIAG_BASE, 0x1000);
+			if (pm) {
+				writel(_val, pm + 0xc80);
+				(void)readl(pm + 0xc80);
+				iounmap(pm);
 			}
 		}
+
+		dev_info(&pdev->dev, "luofu-gmac: PHYLOOKUP base=%08x phy=%s val=%08x\n",
+			 (unsigned)(pdev->resource[0].start),
+			 pd ? dev_name(&pd->mdio.dev) : "NULL", _val);
 	}
 
 	dev_info(&pdev->dev,
