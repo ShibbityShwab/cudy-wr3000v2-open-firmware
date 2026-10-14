@@ -96,7 +96,7 @@ CONFIG_CMDLINE_EXTEND=y
 #
 # UDBG_UNDEFINED is 1, so user_debug=1 is exactly that bit and nothing else.
 # ---------------------------------------------------------------------------
-CONFIG_CMDLINE="panic=5 ubi.mtd=upgrade ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init"
+CONFIG_CMDLINE="panic=5 maxcpus=1 nr_cpus=1 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init pstore_blk.blkdev=31:10"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
@@ -259,7 +259,14 @@ CONFIG_SQUASHFS=y
 # ---------------------------------------------------------------------------
 # THE KERNEL LOG BUFFER WAS 4 KiB, WHICH IS WHY THE DUMPER KEPT SHOWING 0.HAT BOOT.
 #
-# CONFIG_LOG_BUF_SHIFT has been small enough that the whole kernel log wraps at 4092
+# A BIG LOG BUFFER IS THE WHOLE DIAGNOSTIC.
+#
+# The console ring at RAM offset 0x80603000 is the ONLY place our kernel's log can be read - the box
+# falls back to the vendor and dmesg then shows the VENDOR's boot.  At shift 16 (64 KiB) the
+# gmac/mdio/phylink lines printed at ~6 s are EVICTED by userspace at 16-23 s, so every NIC diagnosis
+# this session was blind.  Shift 18 = 256 KiB keeps the early boot in the ring until it can be read.
+# 256 KiB is a rounding error against this board's RAM and the partition budget is unaffected.
+CONFIG_LOG_BUF_SHIFT=18
 # bytes - the ring's last dumps all ended MID-LINE, at literally 4092 bytes of text,
 # with the same "[ 0.000000] L2C-310 ..." lines no matter how far the boot actually got.
 # So every luofu_kmsg_to() copy was the same 4 KiB of the OLDEST boot text, and the
