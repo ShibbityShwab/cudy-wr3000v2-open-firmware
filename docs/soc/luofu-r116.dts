@@ -488,7 +488,23 @@
 		resets = <&crg 0x30 0xf>,
 			 <&crg 0x30 0x10>;
 		reset-names = "mac_logic_reset", "mac_reset";
-		status = "disabled";
+		/*
+		 * OKAY, not disabled - MEASURED 2026-10-14.
+		 *
+		 * Only gmac0 was enabled, and the wired link never came up (no carrier, phylink never
+		 * called mac_link_up).  The reason: the cable is NOT in gmac0's jack.  Read off the
+		 * vendor's running kernel, only ONE of its MACs has carrier, and it is 0x14480000:
+		 *
+		 *     /sys/class/net/eth0/carrier = 0    (0x14380000)
+		 *     /sys/class/net/eth1/carrier = 0
+		 *     /sys/class/net/eth2/carrier = 1    (0x14480000)   <- THE CABLE
+		 *     /sys/class/net/eth3/carrier = 0
+		 *
+		 * and in THIS tree 0x14480000 is gmac3.  So every gmii MAC is enabled here: the jack that
+		 * is actually wired is not knowable from the schematic alone, and a disabled node cannot
+		 * bind the driver that would tell us.
+		 */
+		status = "okay";
 	};
 
 	gmac2: ethernet@14400000 {
@@ -500,7 +516,7 @@
 		resets = <&crg 0x30 0x11>,
 			 <&crg 0x30 0x12>;
 		reset-names = "mac_logic_reset", "mac_reset";
-		status = "disabled";
+		status = "okay";	/* see the gmac1 note - the wired jack is not gmac0's */
 	};
 
 	gmac3: ethernet@14480000 {
@@ -512,7 +528,7 @@
 		resets = <&crg 0x30 0x13>,
 			 <&crg 0x30 0x14>;
 		reset-names = "mac_logic_reset", "mac_reset";
-		status = "disabled";
+		status = "okay";	/* MEASURED: the vendor's live carrier is on 0x14480000 = this node */
 	};
 
 	gmac4: ethernet@14500000 {
@@ -524,7 +540,7 @@
 		resets = <&crg 0x30 0x15>,
 			 <&crg 0x30 0x16>;
 		reset-names = "mac_logic_reset", "mac_reset";
-		status = "disabled";
+		status = "okay";	/* see the gmac1 note - the wired jack is not gmac0's */
 	};
 
 	mdio0: mdio@14000000 {
