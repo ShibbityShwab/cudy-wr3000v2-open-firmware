@@ -479,23 +479,28 @@
 		 * mode" with no Link is Up, while the vendor reports eth0 on mdio0:02).
 		 * The five PHYs hang off mdio0 at addresses 1..5. */
 		phy-handle = <&phy2>;
+		/*
+		 * DISABLED: THE VENDOR DOES NOT USE THIS MAC AT ALL.
+		 *
+		 * Read from the vendor's own dmesg + sysfs, the wired ports are EXACTLY four:
+		 *   14380000 -> mdio0:02     14400000 -> mdio0:03
+		 *   14480000 -> mdio0:04     14500000 -> mdio0:05
+		 * 14300000 appears NOWHERE.  Our tree had it as the only enabled MAC with phy2, which
+		 * bound a nonexistent port to a real PHY - and left the port that carries the cable
+		 * pointing at the wrong one.  Leaving it enabled would also put TWO macs on phy2.
+		 */
 		clocks = <&crg LUOFU_CLK_GMAC0>;
 		resets = <&crg 0x30 0xd>,	/* mac_logic, pinned:895 */
 			 <&crg 0x30 0xe>;	/* mac */
 		reset-names = "mac_logic_reset", "mac_reset";
-		/* OKAY, not disabled: see the note on mdio0 - the driver is linked into the
-		 * kernel image and cannot bind to a node the firmware has switched off.
-		 * This is the rgmii port (8), the one that carries the wired LAN. */
-		status = "okay";
-		/* TODO binding question: no mainline hsan,mac; reference
-		 * hix5hd2_gmac.c (different family). */
+		status = "disabled";
 	};
 
 	gmac1: ethernet@14380000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14380000 0x10000>;	/* pinned:900 */
 		phy-mode = "gmii";		/* port 9 */
-		phy-handle = <&phy3>;
+		phy-handle = <&phy2>;	/* vendor: 14380000.gemac eth0 -> mdio0:02 */
 		clocks = <&crg LUOFU_CLK_GMAC1>;
 		resets = <&crg 0x30 0xf>,
 			 <&crg 0x30 0x10>;
@@ -523,7 +528,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14400000 0x10000>;	/* pinned:907 */
 		phy-mode = "gmii";		/* port 10 */
-		phy-handle = <&phy4>;
+		phy-handle = <&phy3>;	/* vendor: 14400000.gemac eth1 -> mdio0:03 */
 		clocks = <&crg LUOFU_CLK_GMAC2>;
 		resets = <&crg 0x30 0x11>,
 			 <&crg 0x30 0x12>;
@@ -535,7 +540,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14480000 0x10000>;	/* pinned:914 */
 		phy-mode = "gmii";		/* port 11 */
-		phy-handle = <&phy5>;
+		phy-handle = <&phy4>;	/* ★ vendor: 14480000.gemac eth2 -> mdio0:04 - THIS IS THE WIRED PORT (Link is Up 1Gbps/Full) */
 		clocks = <&crg LUOFU_CLK_GMAC3>;
 		resets = <&crg 0x30 0x13>,
 			 <&crg 0x30 0x14>;
@@ -547,7 +552,7 @@
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14500000 0x10000>;	/* pinned:921 */
 		phy-mode = "gmii";		/* port 12 */
-		phy-handle = <&phy1>;
+		phy-handle = <&phy5>;	/* vendor: 14500000.gemac eth3 -> mdio0:05 */
 		clocks = <&crg LUOFU_CLK_GMAC4>;
 		resets = <&crg 0x30 0x15>,
 			 <&crg 0x30 0x16>;
@@ -577,7 +582,6 @@
 		 * below are what phylink needs to find a PHY on this bus. */
 		status = "okay";
 
-		phy1: ethernet-phy@1 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <1>; max-speed = <1000>; };
 		phy2: ethernet-phy@2 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <2>; max-speed = <1000>; };
 		phy3: ethernet-phy@3 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <3>; max-speed = <1000>; };
 		phy4: ethernet-phy@4 { compatible = "ethernet-phy-ieee802.3-c22"; reg = <4>; max-speed = <1000>; };

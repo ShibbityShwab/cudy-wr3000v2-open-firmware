@@ -50,6 +50,7 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
+#include <linux/of_mdio.h>	/* of_phy_find_device - WITHOUT THIS THE FILE DOES NOT COMPILE */
 #include <linux/of_net.h>
 #include <linux/phy.h>
 #include <linux/phylink.h>
@@ -532,6 +533,52 @@ g->phylink = phylink_create(&g->pl_config, pdev->dev.fwnode, iface,
 	if (ret)
 		goto err_phylink;
 	luofu_diag(0xc0de6006);		/* netdev registered */
+
+	/*
+	 * THE PHY'S OWN ANSWER - AND IT MUST BE THE LAST WRITE.
+	 *
+	 * A first attempt read this in the mdio probe, BEFORE of_mdiobus_register(), and the mdio
+	 * probe's OWN later crumb (0xC0DE7E00) then the gmac's (0xC0DE6006) both overwrote it - so
+	 * the survivor carried 0x6006 and told me nothing.  Here nothing follows it.
+	 *
+	 * BMSR bit 2 is LINK STATUS.  That one bit splits the whole problem in half:
+	 *   set   -> the PHY HAS a link, and the fault is downstream (phylink / MAC configuration)
+	 *   clear -> the PHY itself never linked, and no MAC-side change can fix it
+	 *
+	 * The PHY ADDRESS is carried alongside because FIVE macs probe and the last one wins: without
+	 * it I cannot tell which PHY answered.  PHY 4 is the wired port (the vendor's running kernel
+	 * has carrier ONLY on eth2 = gemac 0x14480000 = mdio0:04).
+	 */
+	{
+		struct phy_device *pd = of_phy_find_device(pdev->dev.of_node);
+		u32 _val = 0xc0de60ee;
+		if (pd) {
+			int bmsr = phy_read(pd, MII_BMSR);
+			_val = ((u32)pd->mdio.addr << 16) |
+			       (bmsr < 0 ? (0x8000 | ((-bmsr) & 0x7fff)) : (bmsr & 0xffff));
+		}
+		luofu_diag(_val);
+
+		/*
+		 * ALSO STRAIGHT INTO A FREE CELL, AND THAT IS THE POINT.
+		 *
+		 * The survivor (luofu_net_diag -> C1C low 16) is known to work, but on the last fire it
+		 * showed 0x6006 - the gmac's OWN earlier crumb - which is consistent with two very different
+		 * worlds: this block never ran, OR the value was later overwritten.  A second copy in a cell
+		 * NOTHING ELSE WRITES separates them:
+		 *   0xC80 == _val  -> the block ran, and anything odd is the channel
+		 *   0xC80 unchanged -> the block never executed at all
+		 * 0xC80 is free: the known writers are 0xC8C (mach), 0xC90 (crg), 0xC94 (gmac), 0xC98 (mdio).
+		 */
+		{
+			void __iomem *p = ioremap(0x10100000UL, 0x1000);
+			if (p) {
+				writel(_val, p + 0xc80);
+				(void)readl(p + 0xc80);
+				iounmap(p);
+			}
+		}
+	}
 
 	dev_info(&pdev->dev,
 		 "luofu-gmac: %s registered, iface=%s, %d clk(s), MAC ctrl=0x%08x\n",

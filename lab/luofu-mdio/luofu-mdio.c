@@ -253,6 +253,28 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	snprintf(m->bus->id, MII_BUS_ID_SIZE, "%s", dev_name(dev));
 
 	/*
+	 * THE PHY'S OWN ANSWER - AND IT MUST BE THE LAST WRITE.
+	 *
+	 * A first attempt read this in the mdio probe, BEFORE of_mdiobus_register(), and the mdio
+	 * probe's OWN later crumb (0xC0DE7E00) then the gmac's (0xC0DE6006) both overwrote it - so
+	 * the survivor carried 0x6006 and told me nothing.  Here nothing follows it.
+	 *
+	 * BMSR bit 2 is LINK STATUS.  That one bit splits the whole problem in half:
+	 *   set   -> the PHY HAS a link, and the fault is downstream (phylink / MAC configuration)
+	 *   clear -> the PHY itself never linked, and no MAC-side change can fix it
+	 *
+	 * The gmac probe already reports 0xC0DE60EE here, i.e. of_phy_find_device() returned NULL -
+	 * there is no phy_device in this kernel.  That is consistent with of_mdiobus_register()
+	 * succeeding while finding ZERO phys (it returns 0 either way), which would leave phylink with
+	 * nothing to attach and no link ever forming.  So ask the hardware directly, over our own
+	 * controller, with nothing else touching this value afterwards.
+	 *
+	 * PHY 4 is the wired port: the vendor's running kernel has carrier ONLY on
+	 * eth2 = gemac 0x14480000 = mdio0:04.
+	 */
+	luofu_diag((u32)luofu_mdio_read(m->bus, 4, MII_BMSR) & 0xffff);
+
+	/*
 	 * CRUMBS, NOT PRINTS.
 	 *
 	 * Early-boot dev_info() lines scroll out of the 16 KiB ring - measured: the bus-node and
@@ -306,6 +328,37 @@ static int luofu_mdio_probe(struct platform_device *pdev)
 	 * hi_kmdio.ko but never exercised) is the remaining suspect.
 	 */
 	luofu_diag(0xc0de7e00 | (ret & 0xff));
+
+	/*
+	 * ASK THE PHY DIRECTLY - BUT IN ITS OWN CELL, NOT THROUGH luofu_diag().
+	 *
+	 * luofu_diag() writes the survivor AND 0xC98, which is the mdio's own cell - and the per-child
+	 * registration crumbs above (0xC0DE7B00 | (addr<<4) | 0xf means THAT PHY REGISTERED) live
+	 * there.  Writing my read over them is exactly how the answer to "did the bus find any phys"
+	 * got erased on the last fire.  0xC84 is free: 0xC80 gmac phy value, 0xC8C mach, 0xC90 crg,
+	 * 0xC94 gmac, 0xC98 mdio.
+	 *
+	 * BMSR bit 2 = LINK STATUS, bit 5 = autoneg complete.  Measured 0xCDEF on the previous fire,
+	 * so the CONTROLLER works; if the phys still fail to register, the fault is enumeration.
+	 */
+	{
+		void __iomem *p84 = ioremap(LUOFU_DIAG_BASE, 0x1000);
+		if (p84) {
+			u32 b = (u32)luofu_mdio_read(m->bus, 4, MII_BMSR) & 0xffff;
+			writel(b, p84 + 0xc84);
+			(void)readl(p84 + 0xc84);
+			iounmap(p84);
+		}
+		/* A STRING, ON PURPOSE, AND IT IS THE ONLY REASON THIS LINE EXISTS.
+		 *
+		 * Twice now the cell 0xC84 came back 0 while the source plainly contained this block, so the
+		 * question "is my edit actually in the kernel that boots" could not be answered from the
+		 * cells.  strings/objdump tricks all misled earlier (compressed zImage; missing objdump;
+		 * comments not making it into the binary).  This literal is searched out of the built
+		 * vmlinux directly - if it is absent, my code is not in the image and nothing else matters. */
+		dev_info(dev, "luofu-mdio: PHYPROBE-C84 bmsr=%08x\n",
+			 readl(p84 ? p84 + 0xc84 : m->base));
+	}
 	if (ret) {
 		goto err_clk;
 	}
