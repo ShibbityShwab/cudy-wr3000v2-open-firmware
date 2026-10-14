@@ -398,7 +398,41 @@ static struct platform_driver luofu_mdio_driver = {
 		.of_match_table	= luofu_mdio_of_match,
 	},
 };
-module_platform_driver(luofu_mdio_driver);
+/*
+ * REGISTER EARLIER THAN device_initcall, AND THAT IS A FUNCTIONAL REQUIREMENT.
+ *
+ * WHY THIS IS NOT A STYLE CHOICE.  The gmac driver calls phylink_of_phy_connect(), which needs the
+ * PHYs this bus registers; before they exist it returns -ENODEV and the gmac returns -EPROBE_DEFER.
+ * A deferral is retried from deferred_probe_work, which runs AFTER the initcall levels have all
+ * completed - and `ipconfig` is a late_initcall:
+ *
+ *     ip_auto_config:  late_initcall(ip_auto_config)      (level 7)
+ *     gmac, mdio:      module_platform_driver             (level 6)
+ *
+ * so with both at level 6 the sequence is mdio-probe, gmac-probe (DEFERS), ipconfig - and ipconfig
+ * runs BEFORE the deferred retry has made the netdev.  `ipconfig` matches its interface BY NAME
+ * (`!strcmp(dev->name, user_dev_name)` in net/ipv4/ipconfig.c) and prints
+ * "IP-Config: Device `eth2' not found", leaving the kernel with no address even though the link is
+ * up and the MAC is programmed.  Measured: our kernel ran ~78 s and never answered ssh.
+ *
+ * subsys_initcall (level 4) puts the PHYs in place BEFORE the gmac's first attempt, so the gmac
+ * succeeds immediately, registers eth2 at level 6, and ipconfig at level 7 finds it.
+ *
+ * The wrappers are explicit because module_platform_driver() used to GENERATE these names.
+ */
+static int __init luofu_mdio_driver_init(void)
+{
+	return platform_driver_register(&luofu_mdio_driver);
+}
+
+static void __exit luofu_mdio_driver_exit(void)
+{
+	platform_driver_unregister(&luofu_mdio_driver);
+}
+
+subsys_initcall(luofu_mdio_driver_init);
+module_exit(luofu_mdio_driver_exit);
+MODULE_LICENSE("GPL");
 
 MODULE_DESCRIPTION("Hi5671Y luofu MDIO bus driver");
 MODULE_LICENSE("GPL v2");
