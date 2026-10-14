@@ -96,7 +96,7 @@ CONFIG_CMDLINE_EXTEND=y
 #
 # UDBG_UNDEFINED is 1, so user_debug=1 is exactly that bit and nothing else.
 # ---------------------------------------------------------------------------
-CONFIG_CMDLINE="panic=5 maxcpus=1 nr_cpus=1 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init pstore_blk.blkdev=pstore pstore_blk.best_effort=1 ip=192.168.10.1:192.168.10.2:192.168.10.1:255.255.255.0::eth2:off"
+CONFIG_CMDLINE="panic=5 maxcpus=1 nr_cpus=1 ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs init=/sbin/init pstore_blk.blkdev=pstore ip=192.168.10.1:192.168.10.2:192.168.10.1:255.255.255.0::eth2:off"
 
 # ---------------------------------------------------------------------------
 # Clocks + reset: the CRG (the SoC-conditional framework item)
