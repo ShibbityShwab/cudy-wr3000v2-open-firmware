@@ -587,7 +587,19 @@
 		resets = <&crg 0x30 0x0>,	/* dp_logic */
 			 <&crg 0x30 0x1>;	/* dp_srst */
 		reset-names = "dp_logic", "dp_srst";
-		status = "disabled";
+		/*
+		 * OKAY, not disabled - MEASURED 2026-10-14.
+		 *
+		 * The wired path is gmac -> THIS SWITCH -> PHY -> RJ45 (the DTS's own note: "gemac1..4 are
+		 * GMII into the internal LSW").  With the switch unbound, its clocks were never enabled and
+		 * its resets never released, so the gmii PHYs behind it never negotiated - and gmac0's jack
+		 * is not the wired one.  Measured on the vendor: exactly one MAC carries carrier and it is
+		 * 0x14480000, a gmii port into this switch.
+		 *
+		 * The driver only has to make the block ALIVE (clocks + resets); it configures nothing,
+		 * matching the same minimal treatment the mdio driver needed for -EIO.
+		 */
+		status = "okay";
 		/* NOTE: the board overlay rebases queue 0x87b00000 -> 0x80000000
 		 * (vendor-dt-notes.md sec 8); the pinned base is kept here. */
 	};
@@ -610,7 +622,7 @@
 		resets = <&crg 0x30 0x3>,
 			 <&crg 0x30 0x4>;
 		reset-names = "pfe_logic", "pfe_srst";
-		status = "disabled";
+		status = "okay";	/* see the lsw_dp note - the gmii PHYs hang off this switch */
 	};
 
 	lsw_woe: woe {

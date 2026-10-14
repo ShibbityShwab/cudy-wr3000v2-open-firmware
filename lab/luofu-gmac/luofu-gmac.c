@@ -378,6 +378,30 @@ static int luofu_gmac_probe(struct platform_device *pdev)
 	phy_interface_t iface;
 	int ret;
 
+	/*
+	 * THE SWITCH, IF THIS IS ONE - make it alive, then stop.
+	 *
+	 * Enable its clock and release its resets; register no netdev (the MACs do that) and touch no
+	 * register.  Without this the gmii PHYs behind the switch never negotiate.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node, "hisilicon,luofu-dp") ||
+	    of_device_is_compatible(pdev->dev.of_node, "hisilicon,luofu-pfe")) {
+		struct clk *ck = devm_clk_get(&pdev->dev, NULL);
+		struct reset_control *rs;
+
+		if (!IS_ERR(ck))
+			clk_prepare_enable(ck);
+
+		rs = devm_reset_control_array_get(&pdev->dev, false, true);
+		if (!IS_ERR(rs))
+			reset_control_deassert(rs);
+
+		luofu_diag(of_device_is_compatible(pdev->dev.of_node,
+						   "hisilicon,luofu-dp") ?
+			   0xc0de6201 : 0xc0de6202);
+		return 0;
+	}
+
 	ndev = alloc_etherdev(sizeof(*g));
 	if (!ndev)
 		return -ENOMEM;
@@ -529,6 +553,22 @@ static int luofu_gmac_remove(struct platform_device *pdev)
 static const struct of_device_id luofu_gmac_of_match[] = {
 	{ .compatible = "hisilicon,luofu-gmac" },
 	{ .compatible = "hsan,mac" },	/* the vendor tree's string */
+	/*
+	 * THE INTERNAL SWITCH IS BOUND HERE TOO, AND ONLY TO BE MADE ALIVE.
+	 *
+	 * The wired path is gmac -> internal LSW -> PHY -> RJ45 (the DT's own note: "gemac1..4 are
+	 * GMII into the internal LSW").  Both switch blocks sat `disabled` with nothing binding them,
+	 * so their gate clocks were never enabled and their resets never released - and the gmii PHYs
+	 * behind the switch never negotiated a link.  That is what "MAC registered, PHY attached, no
+	 * carrier" looked like: measured on the vendor, exactly one MAC carries carrier and it is a
+	 * gmii port into this switch.
+	 *
+	 * This driver does NOT configure the switch.  The vendor's own silicon comes up with usable
+	 * defaults once the block is clocked and out of reset, and the goal here is reachability, not
+	 * switch features.  Same minimal treatment that closed the MDIO -EIO.
+	 */
+	{ .compatible = "hisilicon,luofu-dp" },
+	{ .compatible = "hisilicon,luofu-pfe" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, luofu_gmac_of_match);
