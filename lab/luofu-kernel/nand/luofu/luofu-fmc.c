@@ -4293,6 +4293,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * tolerated rather than fatal - this driver has to keep booting to report what it found, and
 	 * an instrument that cannot run is worse than one that reports a failure.
 	 */
+#if 0 /* BISECT-D-CLK */
 	fmc->clk = devm_clk_get(dev, "sfc_clk");
 	if (IS_ERR(fmc->clk)) {
 		dev_warn(dev, "FMC: no sfc_clk (%ld) - the block may not be clocked\n",
@@ -4309,6 +4310,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 				 clk_get_rate(fmc->clk));
 		}
 	}
+#endif /* BISECT-D-CLK-END */
 	/*
 	 * BISECT-D 2026-10-15: the sfc_clk enable and the three reset deasserts are DISABLED.
 	 *
@@ -4330,6 +4332,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * takes all three in one call, which is why the vendor's three __devm_reset_control_get calls
 	 * collapse to one here.  Optional: the DT may omit them, and a failure must not stop the probe.
 	 */
+#if 0 /* BISECT-D-RST */
 	fmc->rst = devm_reset_control_array_get_optional_exclusive(dev);
 	if (IS_ERR(fmc->rst)) {
 		dev_warn(dev, "FMC: reset controls unavailable (%ld)\n", PTR_ERR(fmc->rst));
@@ -4342,6 +4345,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		else
 			dev_info(dev, "FMC: resets released\n");
 	}
+#endif /* BISECT-D-RST-END */
 
 	if (device_property_read_u32(dev, "spi_cs", &fmc->cs))
 		fmc->cs = 1;	/* the pinned DT value */
