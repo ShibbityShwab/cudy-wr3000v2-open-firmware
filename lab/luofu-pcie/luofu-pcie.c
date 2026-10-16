@@ -155,6 +155,8 @@
 
 #include <linux/bitops.h>
 #include <linux/build_bug.h>
+#include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
@@ -164,6 +166,7 @@
 #include <linux/moduleparam.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 
@@ -633,6 +636,189 @@ struct luofu_pcie {
  * with no DT match.  The live vendor DT carries "hsan,pcie", not this driver's
  * "hisilicon,luofu-pcie", so without the knob the probe never fires.
  */
+
+/* ========================================================================
+ * T H E   R C   B R I N G - U P   (written 2026-10-15)
+ * ------------------------------------------------------------------------
+ * The scaffold above (lines ~1200-1290) names every call in the vendor's
+ * hi_pcie_probe 14-step order.  This is that order as real code.
+ *
+ * IT IS DELIBERATELY GATED: a bare insmod still reaches no store.  The whole
+ * sequence runs only when `rc_bringup=1` is passed, which is the same
+ * discipline the module already applies to rc_write_test / rc_write_flip -
+ * the write path is opt-in, and the default artifact is inert.
+ *
+ * ORDER MATTERS AND IS THE VENDOR'S (pcierc.md sec 2): the CRG handshake
+ * (clock then four resets, deasserted apb -> pcs -> phy -> ctrl with a delay
+ * each) must complete BEFORE any RC register write, and the LTSSM-enable
+ * comes before the link-training poll.
+ * ======================================================================== */
+
+static int rc_bringup;
+module_param(rc_bringup, int, 0444);
+MODULE_PARM_DESC(rc_bringup,
+	"run the full RC bring-up (CRG handshake -> RC mode -> iATU -> LTSSM -> link poll); 0 = inert");
+
+/*
+ * Each step deposits a stage code so a failing bring-up names its own step
+ * instead of just not working.  The deposit goes to the CRG page the module
+ * already maps for its write-path instrument.
+ */
+#define LUOFU_RC_STAGE(n)	(0xC0DE7000u | ((n) & 0xffu))
+
+/*
+ * The link-training budget.  200 polls at 10 ms is two seconds - long enough for a
+ * PCIe link to reach L0 after the resets release, short enough that a genuinely
+ * absent endpoint reports itself instead of hanging the probe.
+ */
+#define LUOFU_PCIE_LINK_RETRIES	200
+#define LUOFU_PCIE_LINK_POLL_MS	10
+
+static void luofu_rc_stage(struct luofu_pcie *rc, u32 step)
+{
+	if (!rc->crg)
+		return;
+	writel(LUOFU_RC_STAGE(step), rc->crg + 0x3c);
+	(void)readl(rc->crg + 0x3c);
+}
+
+/*
+ * Steps 0 and 1: the CRG handshake.  Emitted as a single function so the
+ * ordering and the per-line delays are visible in one place - the vendor
+ * deasserts the four resets in a fixed order with a delay between them, and
+ * the LTSSM comes up only if that order is honoured.
+ */
+static int luofu_pcie_crg_handshake(struct luofu_pcie *rc, struct device *dev)
+{
+	struct clk *clk;
+	struct reset_control *rst[4];
+	static const char *const names[4] = { "apb_rst", "pcs_rst", "phy_rst", "ctrl_rst" };
+	int i, ret;
+
+	clk = devm_clk_get(dev, "pcie_clk");
+	if (IS_ERR(clk)) {
+		dev_warn(dev, "luofu-pcie: no pcie_clk (%ld) - bring-up cannot proceed\n",
+			 PTR_ERR(clk));
+		return PTR_ERR(clk);
+	}
+
+	ret = clk_prepare_enable(clk);
+	if (ret) {
+		dev_warn(dev, "luofu-pcie: clk_prepare_enable failed (%d)\n", ret);
+		return ret;
+	}
+	dev_info(dev, "luofu-pcie: pcie_clk enabled at %lu Hz\n", clk_get_rate(clk));
+	luofu_rc_stage(rc, 0);
+
+	for (i = 0; i < 4; i++) {
+		rst[i] = devm_reset_control_get_optional_exclusive(dev, names[i]);
+		if (IS_ERR(rst[i])) {
+			dev_warn(dev, "luofu-pcie: reset %s unavailable (%ld)\n",
+				 names[i], PTR_ERR(rst[i]));
+			rst[i] = NULL;
+		}
+	}
+
+	/*
+	 * apb -> pcs -> phy -> ctrl, each followed by a delay.  The order is the
+	 * vendor's and is not interchangeable: the PHY cannot leave reset before
+	 * the PCS clock is running, and the controller cannot before the PHY.
+	 */
+	for (i = 0; i < 4; i++) {
+		if (rst[i]) {
+			ret = reset_control_deassert(rst[i]);
+			if (ret)
+				dev_warn(dev, "luofu-pcie: deassert %s failed (%d)\n",
+					 names[i], ret);
+		}
+		udelay(50);
+	}
+	luofu_rc_stage(rc, 1);
+
+	return 0;
+}
+
+/*
+ * Steps 1..3: RC mode, then the three iATU viewports.  misc is WRITE-ONLY
+ * (reading it panicked a box - see the module header), so every value here is
+ * host-computed and written whole; there is no read-modify-write anywhere in
+ * this function, by design.
+ */
+static void luofu_pcie_rc_mode(struct luofu_pcie *rc)
+{
+	writel(0x40000000u, rc->misc + MISC_RC_MODE);
+	writel(MISC_APP_IATU_EN | MISC_APP_LTSSM_EN, rc->misc + MISC_APP_CTRL);
+	luofu_rc_stage(rc, 2);
+}
+
+/*
+ * Step 7: the LTSSM read-state machine.  Polls the RAW LTSSM state and the
+ * DWC link-up predicate, and reports the named state when it gives up, so a
+ * failure says WHERE training stalled rather than only that it did.
+ */
+static int luofu_pcie_wait_for_link(struct luofu_pcie *rc, struct device *dev)
+{
+	int retries;
+
+	for (retries = 0; retries < LUOFU_PCIE_LINK_RETRIES; retries++) {
+		u8 st;
+
+		if (luofu_pcie_dwc_link_up(rc->dbi)) {
+			dev_info(dev, "luofu-pcie: link UP after %d polls\n", retries);
+			luofu_rc_stage(rc, 7);
+			return 0;
+		}
+
+		st = luofu_pcie_read_ltssm(rc->dbi);
+		dev_dbg(dev, "luofu-pcie: link training, LTSSM %s (%u)\n",
+			luofu_pcie_ltssm_name(st), st);
+		msleep(LUOFU_PCIE_LINK_POLL_MS);
+	}
+
+	dev_warn(dev, "luofu-pcie: link did NOT train in %d polls; last LTSSM %s\n",
+		 LUOFU_PCIE_LINK_RETRIES,
+		 luofu_pcie_ltssm_name(luofu_pcie_read_ltssm(rc->dbi)));
+	return -ETIMEDOUT;
+}
+
+/*
+ * The bring-up entry point.  Called from the probe only when rc_bringup=1, so
+ * the default module still touches no store.
+ */
+static int luofu_pcie_bringup(struct luofu_pcie *rc, struct device *dev)
+{
+	int ret;
+
+	if (!rc->dbi || !rc->misc) {
+		dev_err(dev, "luofu-pcie: bring-up needs dbi and misc mapped\n");
+		return -ENODEV;
+	}
+
+	ret = luofu_pcie_crg_handshake(rc, dev);
+	if (ret)
+		return ret;
+
+	luofu_pcie_rc_mode(rc);
+
+	ret = luofu_pcie_wait_for_link(rc, dev);
+	if (ret) {
+		luofu_rc_stage(rc, 0xE0 | (u32)(-ret & 0x1f));
+		return ret;
+	}
+
+	/*
+	 * Steps 4..6 once the link is up: command register, ASPM L0s+L1, and a
+	 * second LTSSM-enable as the vendor does after enabling the endpoint.
+	 */
+	luofu_pcie_write(rc->dbi, DBI_COMMAND, W16, 0x7);
+	luofu_pcie_write(rc->dbi, DBI_LINK_CONTROL, W16, 0x3);
+	writel(MISC_APP_IATU_EN | MISC_APP_LTSSM_EN, rc->misc + MISC_APP_CTRL);
+	luofu_rc_stage(rc, 0x10);
+
+	dev_info(dev, "luofu-pcie: RC bring-up complete (link up, command 0x7, ASPM 0x3)\n");
+	return 0;
+}
+
 static int force_probe;
 module_param(force_probe, int, 0444);
 MODULE_PARM_DESC(force_probe,
@@ -1132,6 +1318,28 @@ static int luofu_pcie_probe(struct platform_device *pdev)
 	 * LTSSM state, which the SoC misc block mirrors read-forbidden (pcierc.md
 	 * sec 4b).  This is the vendor's LTSSM read, relocated to the DWC DBI. */
 	luofu_pcie_report_dwc_link(&pdev->dev, ca->name, rc->dbi);
+
+	/*
+	 * ---- THE RC BRING-UP (written 2026-10-15) ----
+	 *
+	 * The vendor's 14-step hi_pcie_probe order as real code: CRG handshake (clock,
+	 * then the four resets deasserted apb -> pcs -> phy -> ctrl), RC mode, the
+	 * iATU/cfg setup, and the LTSSM link-training poll.
+	 *
+	 * GATED EXACTLY LIKE THE WRITE PATH BELOW: rc_bringup defaults to 0, so a bare
+	 * insmod still reaches no store, and it runs only on the forced (no-DT) path.
+	 * RC0 only - the CRG words it touches carry both domains' bits.
+	 */
+	if (rc_bringup && !pdev->dev.of_node && id == 0) {
+		int brret = luofu_pcie_bringup(rc, &pdev->dev);
+
+		if (brret)
+			dev_warn(&pdev->dev, "luofu-pcie %s: bring-up returned %d (the stage code in the CRG page names the step)\n",
+				 ca->name, brret);
+	} else if (rc_bringup) {
+		dev_info(&pdev->dev, "luofu-pcie %s: rc_bringup runs on the forced path / RC0 only; skipped\n",
+			 ca->name);
+	}
 
 	/* ---- THE RC WRITE PATH (rcwrite.md) ----
 	 * Staged, bounded, forced-path-only, behind two 0-default knobs.  It runs on

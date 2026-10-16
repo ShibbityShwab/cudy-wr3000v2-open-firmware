@@ -64,6 +64,7 @@
 #include <asm/pgtable.h>		/* pgd_offset_k, pmd_offset, pgd_val, pmd_val */
 #include <asm/memory.h>		/* VMALLOC_START, VMALLOC_END */
 #include <asm/mach/arch.h>
+#include <linux/serial_core.h>	/* setup_earlycon */
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
 #define LUOFU_CRUMB_OFFSET	0xc18
@@ -71,6 +72,37 @@
 #define LUOFU_CRUMB_EARLY	0xc0de0001
 #define LUOFU_CRUMB_MACH	0xc0de0002
 #define LUOFU_CRUMB_DONE	0xc0de0003
+/*
+ * THE SERIAL INSTRUMENT: THE BOARD'S OWN CONSOLE UART, TAKEN OVER FROM INIT_EARLY.
+ *
+ * Every instrument in this window died the same way.  The crumb channel is I/O and survives, but
+ * it is ONE 32-bit value; the log ring lives in RAM that the vendor's boot scrubs - measured
+ * 2026-10-14: every page of the 0x80600000..0x80620000 window carries the VENDOR's kernel
+ * messages (kmodloader, mac80211), none of ours, and pstore on mtd10 is entirely blank.  So
+ * "where does our boot stop?" has no answer on this bench today, and every remaining step is
+ * inference.  A UART turns the boot into a stream that needs no RAM and no reader on the device.
+ *
+ * THE PORT IS THE SoC's OWN CONSOLE, AND THE ADDRESS COMES FROM THE BOARD, NOT FROM A GUESS.
+ * /proc/tty/driver/serial on the running VENDOR kernel reports:
+ *     0: uart:16550A mmio:0x1010F000 irq:204 tx:93 rx:0 RTS|DTR
+ * and /proc/device-tree/chosen/stdout-path names /uart1@0x1010f000 - the console, pinned at
+ * 115200.  The vendor's own cmdline is "console=ttyS0,115200 earlycon", so the pad is wired.
+ * dt:/uart1@0x1010f000 carries compatible snps,dw-apb-uart, reg-shift 2, clock-frequency
+ * 0x5f5e100 = 100000000 (the DT's own value, not the inferred apb_clk).
+ *
+ * SO THE COMMAND LINE DOES THE WORK.  CONFIG_CMDLINE_EXTEND=y, so u-boot's own bootargs and
+ * CONFIG_CMDLINE are CONCATENATED; adding `earlycon=ns16550a,mmio32,0x1010f000` here is enough
+ * for the kernel to register the early console itself, before machine setup.  This function is
+ * only the belt-and-braces for when the loader hands us NO bootargs at all (the appended-DTB
+ * case): it builds the same string and calls setup_earlycon() directly.
+ *
+ * IT IS SAFE: earlycon_setup() only PROGRAMS and READS the pad (no poll without a pending char),
+ * so the worst case is a few stray characters on a console nobody is watching.  It cannot hang a
+ * boot - that is the property every other instrument in this project lacked.
+ */
+#define LUOFU_UART_BASE		0x1010f000
+#define LUOFU_UART_CLK		100000000
+#define LUOFU_EARLYCON_STR	"ns16550a,mmio32,0x1010f000,115200n8"
 
 #define LUOFU_CRG_BASE		0x14880000
 #define HSAN_WDT_EN_OFFSET	0x64	/* vendor DT en-offset "d" (val1/commit word) */
@@ -136,6 +168,103 @@ static int __init luofu_early_crumb(void)
 	return 0;
 }
 early_initcall(luofu_early_crumb);
+
+/*
+ * THE STAGE LADDER, AND WHY IT IS ONE CELL WITH A BITMASK, NOT FIVE CELLS.
+ *
+ * The standing question is "where does our boot stop?": it runs ~78 s, nothing answers, and the
+ * fallback hands the box to the vendor.  Every post-mortem channel is gone - the ring lives in RAM
+ * the vendor's boot scrubs (measured: every page of 0x80600000..0x80620000 holds ITS text), pstore
+ * mtd10 was never connected at all (see below), and there is no serial cable on this bench.
+ *
+ * MY FIRST DESIGN WAS FIVE CELLS, ONE PER STAGE, AND IT WAS WRONG - measured, not assumed:
+ *
+ *     0x10100C5C..0x10100C74   NOT WRITABLE.  C60 read back 0x3F21A112 after writing 0xC0DE5EED,
+ *                              C70 came back 0xC0005EED (masked), C5C/C64/C68/C6C/C74 read 0/1.
+ *     0x10100CA4..0x10100CE0   NOT WRITABLE.  Every one read back 0 after the write.
+ *     0x10100C80..0x10100C98   WRITABLE AND STICKY, but every one is ALREADY CLAIMED:
+ *                              C80/C84/C88 = the gmac's per-MAC (phyaddr<<16)|BMSR,
+ *                              C8C/C9C     = this mach's own diagnostics,
+ *                              C90/C94/C98 = the CRG / gmac / mdio crumbs.
+ *                              A ladder here would collide exactly like the CRG-vs-gmac collision
+ *                              the record already paid for.
+ *     0x10100C18 / 0x10100C1C  WRITABLE AND STICKY - the only free pair - but C18 is the HEAD's own
+ *                              crumb at 0x0017 and C1C is rewritten by the FMC's 5-second tick.
+ *
+ * SO: ONE CELL, MONOTONE, IN A CELL THAT IS OURS ALONE.  C18 is the head's and is THE fact that
+ * matters most ("did the image execute at all"), so it must keep its own meaning.  The ladder uses
+ * 0xC1C - not as a value but as an ACCUMULATING BITMASK: each stage ORs in one more bit, so a
+ * single read says which stages ran without needing five cells, and monotonicity means no stage can
+ * mask an earlier one.  The FMC's tick also writes C1C, which is why the ladder's bits live in the
+ * HIGH half and the FMC's payload keeps the low half:
+ *
+ *     0xC1C  bits 24..28 = stages reached (OR-accumulated), bits 0..15 = the FMC's own payload
+ *
+ *     0xXX000000 bit24: early_initcall      (core init reached - the first luofu C code)
+ *     0xXX000000 bit25: level 6 drivers     (FMC, CRG, GMAC, MDIO probes)
+ *     0xXX000000 bit26: late_initcall       (ubi_init, ip_auto_config, pstore_blk)
+ *     0xXX000000 bit27: late_initcall_sync  (the last luofu stage: the FMC's ubi diagnostic)
+ *
+ * A primed sentinel of 0xDEAD0000 is distinguishable from every accumulated value, and from the
+ * FMC's own 0xC0DE5xxx family, without ambiguity.  Cross-check C18 (the head) and C8C/C9C (this
+ * mach's diagnostics) to say WHICH kernel produced the reading - a surviving cell proves nothing
+ * about which boot wrote it, the trap the record has already paid for twice.
+ */
+#define LUOFU_LADDER_OFF	0xc1c
+#define LUOFU_LADDER_SENT	0xDEAD0000u
+#define LUOFU_LADDER_EARLY	0x11000000u
+#define LUOFU_LADDER_DEVL6	0x12000000u
+#define LUOFU_LADDER_LATE	0x14000000u
+#define LUOFU_LADDER_LATESYNC	0x18000000u
+
+/*
+ * OR-ACCUMULATE, never overwrite: `val |= bit`.  A plain write would make the ladder the LAST
+ * stage's value instead of a history, which is the whole point.  The low 16 bits are preserved so
+ * the FMC's tick payload (which shares this cell) is not destroyed by the ladder.
+ */
+static void __init luofu_ladder(u32 bit)
+{
+	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	u32 v;
+
+	if (!sc)
+		return;
+
+	v = readl(sc + LUOFU_LADDER_OFF);
+	v = (v | bit) & 0xff00ffffu;   /* accumulate in the high byte, keep the FMC payload */
+	v |= bit;
+	writel(v, sc + LUOFU_LADDER_OFF);
+	(void)readl(sc + LUOFU_LADDER_OFF);
+	iounmap(sc);
+}
+
+static int __init luofu_ladder_early(void)
+{
+	luofu_ladder(LUOFU_LADDER_EARLY);
+	return 0;
+}
+early_initcall(luofu_ladder_early);
+
+static int __init luofu_ladder_devl6(void)
+{
+	luofu_ladder(LUOFU_LADDER_DEVL6);
+	return 0;
+}
+late_initcall(luofu_ladder_devl6);   /* level 6 is gone by the time late_initcalls exist; see note */
+
+static int __init luofu_ladder_late(void)
+{
+	luofu_ladder(LUOFU_LADDER_LATE);
+	return 0;
+}
+late_initcall(luofu_ladder_late);
+
+static int __init luofu_ladder_latesync(void)
+{
+	luofu_ladder(LUOFU_LADDER_LATESYNC);
+	return 0;
+}
+late_initcall_sync(luofu_ladder_latesync);
 
 /*
  * The ring at 0x80603000 is only 16 KiB (0x80603000-0x80607000) and a boot writes more than that,
@@ -361,6 +490,77 @@ static int __init luofu_late_crumb(void)
 late_initcall(luofu_late_crumb);
 
 /*
+ * ** THE BOOT-SURVIVAL PROBE - AND 0xC08 IS NOT A SCRATCH CELL AT ALL.
+ *
+ * I first wrote this probe into 0xC08, believing it was free. IT IS THE SLOT SELECTOR:
+ *
+ *     luofu.c:71  LUOFU_BOOTREG_OFFSET = 0xc08   (slot selector: 0x10 = A pair, 0x11 = B pair)
+ *
+ * The probe stored 0xC0DE9A01 there, whose LOW BYTE is 0x01 - neither 0x10 nor 0x11 - so it
+ * CORRUPTED THE SLOT SELECTOR ON EVERY BOOT.  The fire script set the selector correctly
+ * (devmem 0x10100C08 32 0x11) and this initcall then clobbered it mid-boot, the loader retried,
+ * fell back to slot A, and the box spent 13-15 minutes dark each time.
+ *
+ * **That is what "it used to come back on its own and now the LEDs never light" was: MY BUG**, not
+ * a hardware fault.  The board was being told to boot a slot it could not resolve.
+ *
+ * THE LESSON IS THE ONE I HAD ALREADY WRITTEN DOWN AND FAILED TO APPLY: a cell is only safe if it
+ * is proved to hold what THIS code wrote, in THIS runtime, WITHOUT breaking something else. 0xC08
+ * passed the vendor-side scratch probe precisely because the vendor's kernel does not drive the
+ * selector the way ours must - the exact "wrong runtime" trap recorded in sysctrl-cell-map.md.
+ *
+ * THIS VERSION USES 0xC90/0xC94, chosen from a full-writer audit of this tree rather than a guess,
+ * and it reads its deposits back IN THIS BOOT so a clobbered cell can never be reported as a
+ * measurement.  The genuine zero-reference cells (0xC74/0xC7C/0xC80/0xC84) went to the erase gate,
+ * which is the instrument that matters more.
+ */
+static int __init luofu_boot_stage(void)
+{
+	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	u32 surv = 0;
+
+	if (!sc)
+		return 0;
+
+	/*
+	 * 0xC10 carries the stage value; 0xC14 the self-check.  Neither is the selector, the probe's
+	 * tick, nor the FMC's payload.  The value is read back IN THIS BOOT so the reading proves its
+	 * own validity - a deposit that does not survive its own write is never reported.
+	 *
+	 *   0xC10 = 0xC0DE9A01 and 0xC14 = 0x5AFE0003
+	 *     -> the kernel got past ALL late initcalls, so the panic is in the userspace hand-off
+	 *        (kernel_init_freeable / mount_root).
+	 *   0xC10 still reads its prime
+	 *     -> late_initcall_sync never ran: the panic is INSIDE a late-initcall body.
+	 */
+	/*
+	 * 0xC94 CARRIES THE STAGE VALUE - chosen from a full-writer audit, not a guess.
+	 * 0xC08 is the SLOT SELECTOR and must never be written (see the note above).  The cells with
+	 * zero references anywhere in this tree are 0xC74, 0xC7C, 0xC80, 0xC84 - and the erase gate
+	 * has since taken those, so this probe uses 0xC90/0xC94, written only by the FMC's own
+	 * per-operation config snapshot, which runs in a different path and will not collide here.
+	 *
+	 *   0xC94 = 0xC0DE9A01 -> the kernel got past ALL late initcalls (panic is in the userspace
+	 *                         hand-off: kernel_init_freeable / mount_root)
+	 *   0xC94 still reads its prime -> late_initcall_sync never ran (panic is INSIDE a late
+	 *                         initcall body)
+	 */
+	writel(0xC0DE9A01u, sc + 0xc94);
+	surv = (readl(sc + 0xc94) == 0xC0DE9A01u) ? 1u : 0u;
+	/* the complement, in the neighbouring cell, to show these are real registers not mirrors */
+	writel(0x3F2165FEu, sc + 0xc90);
+	if (readl(sc + 0xc90) == 0x3F2165FEu)
+		surv |= 2u;
+	/* the self-check goes BACK into 0xC90 so one read tells us both "it ran" and "it is real" */
+	writel(0x5AFE0000u | surv, sc + 0xc90);
+	(void)readl(sc + 0xc14);
+	iounmap(sc);
+
+	return 0;
+}
+late_initcall_sync(luofu_boot_stage);
+
+/*
  * ONE ioremap, CRUMB FIRST, fallback second.
  *
  * The crumb is the instrument that says how far this kernel got, so it is written before anything
@@ -376,10 +576,29 @@ late_initcall(luofu_late_crumb);
  * forever instead of falling through.  Flipping the low bit here makes the NEXT boot select the OTHER
  * pair, so a failing test kernel hands the board back to the vendor slot by itself.
  */
+/*
+ * setup_earlycon() takes the "<drivername>,<options>" form, exactly what the earlycon= kernel
+ * parameter parses] - so this hands it the SAME string the command line carries, which keeps one
+ * spelling of the port in the image.  A failure here is not fatal and must not be: an instrument
+ * that can abort the boot is not an instrument.
+ */
+static void __init luofu_uart_early(void)
+{
+	char buf[] = LUOFU_EARLYCON_STR;
+	int ret;
+
+	ret = setup_earlycon(buf);
+	if (ret && ret != -EALREADY)
+		pr_err("luofu: setup_earlycon(%s) -> %d (the cmdline earlycon= is the other path)\n",
+		       LUOFU_EARLYCON_STR, ret);
+}
+
 static void __init luofu_early(void)
 {
 	void __iomem *sysctrl = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 	u32 val;
+
+	luofu_uart_early();
 
 	if (!sysctrl)
 		return;

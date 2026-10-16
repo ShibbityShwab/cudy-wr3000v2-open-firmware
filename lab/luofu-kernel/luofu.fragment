@@ -355,6 +355,34 @@ CONFIG_WATCHDOG_CORE=y
 #     pstore: Registered pstore_blk as persistent store backend
 # and /sys/fs/pstore on the stock box holds three ~69 KB dmesg-pstore_blk records.
 #
+# ★ THE NAME WAS THE WHOLE BUG 2026-10-14 (fixed here).  `pstore_blk.blkdev` is resolved by
+#   `psblk_get_bdev()` -> `blkdev_get_by_path(blkdev, ...)` (fs/pstore/blk.c), i.e. it wants a PATH,
+#   and mtdblock disks are named `/dev/mtdblock%d` (`add_mtd_blktrans_dev`: `"%s%d", tr->name,
+#   new->devnum`).  MEASURED on the running vendor: /dev/mtdblock10 exists, `/proc/devices` shows
+#   `31 mtdblock`, `/proc/partitions` shows `31 10 256 mtdblock10`.  The previous setting of `pstore`
+#   was never a device: it is mtd10's PARTITION LABEL, which matters to `ubi.mtd=` and to
+#   `mtdpstore` (it strcmp's `mtd->name`), but NOT to the block-device lookup.  So pstore_blk_init at
+#   level 7 failed to open its backend on every boot and `/sys/fs/pstore` stayed empty while mtd10
+#   stayed 0xff - indistinguishable from "the kernel died too early", which is exactly the
+#   ambiguity this instrument was built to remove.
+#
+# THE VENDOR'S OWN BOX SHOWS THE SAME SYMPTOM, and that is the confirmation: its
+#   /sys/module/pstore_blk/parameters/blkdev reads `pstore`, best_effort=N, console_size=0, and its
+#   /sys/fs/pstore is EMPTY despite the pstore mount being live.  So the stock firmware never had a
+#   working pstore either - the empty-mtd10 reading was never "our kernel is too broken to write".
+#
+# WHY ONE PATH IS ENOUGH: `pstore_blk` registers a GENERIC block backend (psblk_generic_blk_write)
+# built from the bdev alone; `mtdpstore` is a separate, more specific backend that matches by NAME
+# and adds a panic_write.  pstore accepts only ONE backend, so pointing blkdev at /dev/mtdblock10
+# gives us the capture with no MTD name match required.  (mtdpstore would additionally need the
+# string "pstore", which cannot ALSO be a block path - the two consumers disagree, and pstore_blk is
+# the one that runs.)
+#
+# THE ORDERING CHECKS OUT in the built vmlinux: `init_mtdblock6` creates /dev/mtdblock* before
+# `pstore_blk_init7` opens it, and `mtdpstore_init6` sits between them:
+#     __initcall_init_mtd6 -> init_mtdblock6 -> mtdpstore_init6 -> luofu_fmc_driver_init6 ->
+#     pstore_blk_init7 -> luofu_fmc_ubi_diag7s
+#
 # MTD_PSTORE depends on PSTORE_BLK, so both are needed.  mtdpstore finds the partition by its
 # LABEL (no blkdev parameter).  Sizes are budgeted against the 256 KiB partition: kmsg + console
 # at 112 KiB each leaves headroom for the pmsg/ftrace rings.
@@ -401,9 +429,17 @@ CONFIG_WATCHDOG_CORE=y
 
 CONFIG_PSTORE_BLK=y
 CONFIG_MTD_PSTORE=y
+# THE BLOCK DEVICE, BAKED IN AS WELL AS PASSED ON THE CMDLINE.
+#   `pstore_blk.blkdev` was "pstore" - mtd10's LABEL, not a device path - so
+#   `psblk_get_bdev()` -> `blkdev_get_by_path("pstore")` failed and the backend never attached
+#   (verified against the running vendor: /dev/mtdblock10 exists, its own pstore is empty with the
+#   same parameter).  Setting it HERE as well as in CONFIG_CMDLINE means the capture does not depend
+#   on the loader appending our command line at all - the value is compiled into the parameter
+#   table, and the two spellings agree.
+CONFIG_PSTORE_BLK_BLKDEV="/dev/mtdblock10"
 CONFIG_PSTORE_BLK_KMSG_SIZE=112
 CONFIG_PSTORE_BLK_CONSOLE_SIZE=112
-CONFIG_PSTORE_BLK_MAX_REASON=2
+CONFIG_PSTORE_BLK_MAX_REASON=4
 # NEW
 CONFIG_LUOFU_WATCHDOG=y
 CONFIG_THERMAL=y
