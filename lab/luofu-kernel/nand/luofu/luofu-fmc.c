@@ -135,6 +135,7 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 #include <linux/notifier.h>
 #include <linux/timer.h>
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
 #include <linux/of.h>
@@ -2270,6 +2271,247 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 static struct luofu_fmc *luofu_ubi_fmc;
 
 /*
+ * THE UBI VERDICT: COMPUTED WHERE IT IS LEGAL, REPORTED WHERE IT IS VISIBLE.
+ *
+ * luofu_fmc_ubi_probe() runs at late_initcall_sync - process context, so it may open a UBI
+ * volume - but panic() calls dump_stack() BEFORE kmsg_dump(), and the trace plus the root
+ * partition list fill the entire 3.5 KiB window on their own. Two fires proved the consequence:
+ * every line this hook prints is pushed out of the newest-KEEP window no matter how it is placed.
+ *
+ * The kmsg dumper is called AFTER dump_stack(), so a line printed there is the newest line in the
+ * log when luofu_kmsg_to() copies the tail - inside the window by construction.
+ *
+ * So the hook computes and stores, and the dumper prints. The dumper cannot compute: opening a UBI
+ * volume takes a mutex, which is illegal with interrupts off.
+ */
+static long luofu_ubi_diag_err = -4096;	/* -EBADR: the hook never reached its verdict */
+static u32 luofu_ubi_diag_printed;
+
+/*
+ * THE ATTACH PROBE'S ANSWER, AND THE DECLARATION IT NEEDS.
+ *
+ * `ubi_open_volume` returning -ENODEV (measured, C1C = 0x0A025A13) says there is no ubi0, which is
+ * consistent with TWO worlds: `ubi_init` saw mtd_devs == 0, or its own attach refused mtd13. Only an
+ * attach of our own can tell them apart, and that means calling ubi_attach_mtd_dev(), which lives in
+ * drivers/mtd/ubi/ubi.h (internal) and is not EXPORT_SYMBOL'd - neither matters for BUILT-IN code,
+ * which can call it with a local declaration.
+ *
+ *   code 0x00  the attach SUCCEEDED (so ubi_init had not attached it)
+ *   code 0x13  -ENODEV   the name "rootfsa" did not resolve to an MTD at all
+ *   code 0x16  -EINVAL   the attach refused the partition  <- the record's long-standing suspect
+ *   code 0x11  -EEXIST   already attached, i.e. ubi_init DID attach and the -ENODEV came from
+ *                        somewhere else entirely
+ *   code 0xee  the probe never ran
+ */
+extern int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num,
+			      int vid_hdr_offset, int max_beb_per1024);
+
+static u32 luofu_ubi_attach_code = 0xeeu;
+
+/*
+ * AND THE EC-HEADER ACCEPTANCE WALK'S ANSWER, POINTED AT THE RIGHT PARTITION THIS TIME.
+ *
+ * The walk that already exists in the IS_ERR branch runs over **"rootfsb"** - which is mtd14, EMPTY -
+ * while `ubi.mtd=rootfsa` is the partition UBI is actually given. So the one instrument built to
+ * answer "does our read path hand UBI a header it accepts?" has been reading the wrong flash all
+ * along. This repeats UBI's own ubi_io_read_ec_hdr() acceptance test (magic 0x55424923, version 1,
+ * vid_hdr_offset 2048, data_offset 4096, EC counter <= 0x7fffffff, and the stored CRC equal to
+ * crc32(LUOFU_UBI_CRC32_INIT, hdr, 60)) over the first 32 PEBs of **mtd13**, and counts the passes:
+ *
+ *   32            every header UBI tests would be accepted -> the refusal is BEYOND the EC headers
+ *   0..31         it stopped at that PEB                       -> our read path hands UBI garbage
+ *   0xee          the name "rootfsa" did not resolve to an MTD
+ */
+static u32 luofu_ec_passes = 0xeeu;
+
+/*
+ * WHICH TEST FAILED, AND THE LITERAL FIRST BYTES - because "0 passes" is ambiguous today.
+ *
+ *   C18 low byte (step)   0x00..0x20 = the walk got that many PEBs through UBI's test
+ *                         0xee      = the name "rootfsa" did not resolve
+ *                         0xf0      = mtd_read() itself refused (got != 64)
+ *                         0xf1..0xf6 = PEB 0 was read but REJECTED on magic / version /
+ *                                     vid_hdr_offset / data_offset / EC counter / CRC
+ *   C1C                    (writes<<24)|(erases<<16)|(h[0]<<8)|h[1]
+ *
+ * The two literal bytes are the point: the EC magic must read 55 42 49 23 ("UBI#"), so h[0]h[1] =
+ * 0x5542 says the read path is delivering the RIGHT page, while anything else says it is not - and
+ * that single fact decides whether the next move is the read path or a field/CRC constant.
+ */
+static u32 luofu_ec_h0 = 0xbeefu;
+
+/*
+ * THE ONE RELATIVE MEASUREMENT THAT MATTERS NOW: two partitions' first two bytes, side by side.
+ *
+ * mtd_read() over mtd13 PEB 0 succeeds and yields 00 00 where the flash holds "UBI#" - so either
+ * the read path is dead everywhere, or mtd13's PARTITION BASE OFFSET is wrong and we are reading
+ * unwritten flash. mtd12 ("kernelb") holds the very slice this fire writes, whose first bytes are the
+ * uImage magic 27 05 19 56 - content known independently of our driver. So one crumb holds both:
+ *
+ *   C1C = (kb[0]<<24) | (kb[1]<<16) | (ra[0]<<8) | ra[1]
+ *
+ *   0x27055542  both correct    -> the read path is ALIVE; the fault is mtd13's offset arithmetic
+ *   0x27050000  only rootfsa zero -> same conclusion, rootfsa specifically reads unwritten flash
+ *   0x00000000  both zero        -> the READ PATH IS DEAD and returns zeros for every page
+ *
+ * The write/erase counters are dropped from this fire's crumb (they were 10 and 2) because four
+ * literal bytes are worth more than a number already known.
+ */
+static u32 luofu_kb_b = 0xbeefu;
+
+/*
+ * AND THE QUESTION ONE SOURCE READING REFRAMED (2026-10-17): DOES UBI EVER SEE ITS OWN ATTACH
+ * ARGUMENT?
+ *
+ * `ubi.mtd=rootfsa` is a MODULE parameter - module_param_call(mtd, ubi_mtd_param_parse, ...) at
+ * build.c:1471 - which expands to __param_call -> __param -> __module_param_call, and that macro
+ * carries its own `__modparam_` section. A name containing "param" does NOT match `__param_obs`,
+ * so init/main.c's obsolete_checksetup() finds no __setup for it and unknown_bootoption() drops it
+ * on the dot (`if (strnchr(param, len, '.')) return 0;`) into the list that load_module() replays
+ * with the module name as the prefix. That replay happens in kernel_init_freeable(), but ubi_init
+ * is a late_initcall and runs AFTER it - so the initcall ordering does not save the parameter, and
+ * for a built-in that prefix is the module's own name "ubi".
+ *
+ * Whether the replay really calls ubi_mtd_param_parse() for a BUILT-IN was never traced end to end,
+ * and this project has already paid for the mirror question in kernel/params.c. So it is MEASURED,
+ * in one number: how many UBI VOLUMES exist when this probe runs. ubi_init has already run by
+ * late_initcall_sync, and when ubi_attach_mtd_dev() succeeds it attaches VOLUME_COUNT volumes
+ * (autoresize + 255 + 128, less its own unsigned underflow) - so:
+ *
+ *   volumes > 255    ubi_init ATTACHED something -> the parameter DOES reach UBI, and the stage-D
+ *                    hook's own attach was refused only because it was already attached (-EEXIST)
+ *   volumes == 0     ubi_init attached nothing  -> mtd_devs was 0, i.e. the parameter never
+ *                    reached UBI and the command line is the whole story
+ *
+ * The count is read-only (a throwaway kobject probe, see luofu_ubi_vols_of), so the instrument
+ * cannot perturb the system it measures - the rule this lane paid for with five instruments that
+ * did.
+ */
+static u32 luofu_ubi_vols = 0xbeefu;
+
+/* the public-API answer IMMEDIATELY after our own attach returned 0 (0 = the volume opened) */
+static u32 luofu_ubi_post_code = 0xfffu;	/* the attach never succeeded */
+
+/*
+ * AND THE ONE THING THIS HOOK STILL MEASURES: A PUBLIC-API OPEN OF THE ROOTFS VOLUME.
+ *
+ * It is the SAME call the hook already makes 200 lines down, so nothing new is being relied on;
+ * what is new is that the answer gets into a channel that survives. On the vendor stack the same
+ * open returns a descriptor and the volume's first four bytes are "hsqs" (the squashfs magic) -
+ * read from the live device, 2026-10-17 - so 0x000 means the device exists AND the volume is the
+ * image the box actually boots.
+ *
+ *   code 0x019   -ENODEV: no ubi0 at all  -> ubi_init attached nothing -> ubi.mtd never reached it
+ *   code 0x000   the volume OPENED        -> ubi.mtd DID reach UBI and attached rootfsa
+ *   code 0x33c   -ERANGE / others         -> a volume table that parsed but holds no volume 0
+ *
+ * The code goes to C80 with the same 0xC0DE0000 tag the old ubi_open_volume verdict used, so a
+ * reader that predates this comment reads it unchanged.
+ */
+
+
+/*
+ * HOW MANY VOLUMES DOES UBI DEVICE @dev HAVE? ubi%u must not already exist under the throwaway
+ * parent, or create_and_add hands back the real kobject and the "exists" probe reads YES for a
+ * device that has none. So the count is "ubi%u_%u exists" over 0..7 - the sysfs names of volumes
+ * are fixed by UBI's own class code (ubi%d_%d) and are a stable ABI.
+ */
+
+/*
+ * AND THE QUESTION THAT ONE SOURCE READING REFRAMED (2026-10-17): DOES UBI EVER SEE ITS OWN
+ * ATTACH ARGUMENT?
+ *
+ * `ubi.mtd=rootfsa` is a MODULE parameter: module_param_call(mtd, ubi_mtd_param_parse, ...) at
+ * build.c:1471, which expands to __param_call -> __param -> __module_param_call, and that macro
+ * carries its own `__modparam_` section - a name that contains "param", so `__param_obs` does
+ * not match it. init/main.c's obsolete_checksetup() therefore finds no __setup for it and
+ * unknown_bootoption() drops it on the dot (`if (strnchr(param, len, '.')) return 0;`) into the
+ * list that load_module() replays. The load happens in kernel_init_freeable(), but ubi_init is a
+ * late_initcall, which runs AFTER it - so the ordering does not save it, and for a built-in %s
+ * is the module's own name.
+ *
+ * Whether the replay actually calls ubi_mtd_param_parse() for a BUILT-IN was never traced end to
+ * end, and the project has already been burned by the mirror question on kernel/params.c. So it
+ * is measured instead of argued, in a single number: how many UBI VOLUMES exist at the time of
+ * this probe. ubi_init runs before this late_initcall_sync hook, and it attaches VOLUMES_COUNT
+ * (autoresize + 255 + 128, minus its own unsigned underflow) whenever ubi_attach_mtd_dev()
+ * succeeds - so:
+ *
+ *   volumes 300+     ubi_init ATTACHED something -> the parameter does reach UBI, and the
+ *                    stage-D hook's own attach was refused only by -EEXIST
+ *   volumes 0        ubi_init attached nothing  -> mtd_devs was 0, i.e. the parameter never
+ *                    reached UBI and the command line is the whole story
+ *   code 0x00        our own attach SUCCEEDED   -> nobody had attached, and mtd13 is fine
+ *
+ * The counter itself is read-only (sysfs), so this instrument cannot perturb what it measures.
+ */
+
+/*
+ * ONE REPORTER, CALLED FROM EVERY PATH THAT MIGHT BE THE SURVIVING ONE.
+ *
+ * Measured 2026-10-16: printing this from the stage-D hook does NOT survive (panic()'s
+ * dump_stack() trace plus the root partition list fill the whole 3.5 KiB window on their own), and
+ * printing it from luofu_kmsg_dump() did NOT appear either - the disassembly shows the call in the
+ * object, so the callback is simply not the path that captures. What DOES capture is the 5-second
+ * tick, whose luofu_kmsg_to() is the last writer of the ring (C18 finishes at step 45, the tick).
+ *
+ * So the reporter is idempotent and is called from the tick, the panic notifier and the dumper:
+ * whichever path runs, the line is printed immediately before that path copies the log, which is
+ * the only placement that is inside the newest-KEEP window by construction. The sentinel makes it
+ * a no-op until the hook has actually reached a verdict.
+ */
+/*
+ * AND A VERDICT CELL THAT NOTHING ELSE WRITES, BECAUSE THE LOG KEEPS LOSING THIS ONE LINE.
+ *
+ * Three fires were spent trying to deliver the UBI verdict through the log: from the hook, from
+ * luofu_kmsg_dump() (where the object provably contains the call) and from the tick immediately
+ * before its own luofu_kmsg_to(). None appeared, and the flash confirms it - the captured window
+ * ends with the hook's `luofu_jffs2_mark` line and nothing after it. Rather than keep fighting a
+ * channel whose window is consumed by something outside this driver, put the answer where the
+ * project has always been able to read it: a sysctrl cell, read with devmem from the vendor.
+ *
+ * C18/C1C are NOT usable - the ladder, the tick and the panic notifier all write them, and the
+ * tick lands last on every boot. 0x10100C80/0x10100C84 are outside every one of those writers.
+ *
+ *   C80 = 0xC0DE0000 | (-err & 0xfff)   the ubi_open_volume verdict   (0 = it opened)
+ *   C84 = 0x600DF00D if saved_command_line contains "ubi.mtd=", else 0xDEADBEEF
+ *
+ * Both are primed to 0x55555555 by the fire, so a readback cannot be a stale value from an
+ * earlier boot - the trap this project has already paid for twice.
+ */
+static void luofu_ubi_diag_print(void)
+{
+	if (luofu_ubi_diag_printed || luofu_ubi_diag_err == -4096)
+		return;
+
+	luofu_ubi_diag_printed = 1;
+	pr_info("LUFU DIAG: ubi_open_volume(0,0) err=%ld; mtd=%d; cmdline=[%s]\n",
+		luofu_ubi_diag_err,
+		luofu_ubi_fmc && luofu_ubi_fmc->mtd ? luofu_ubi_fmc->mtd->index : -1,
+		saved_command_line);
+}
+
+static void luofu_verdict_cell(u32 off, u32 v)
+{
+	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+	if (!sc)
+		return;
+
+	writel(v, sc + off);
+	(void)readl(sc + off);
+	iounmap(sc);
+}
+
+static void luofu_ubi_verdict(long err)
+{
+	luofu_ubi_diag_err = err;
+	luofu_verdict_cell(0x80, 0xc0de0000u | ((u32)(-err) & 0xfffu));
+	luofu_verdict_cell(0x84, strstr(saved_command_line, "ubi.mtd=") ?
+					0x600df00du : 0xdeadbeefu);
+}
+
+/*
  * THE LOG AND DIAGNOSTIC BUFFERS, declared HERE rather than beside the console
  * code that allocates them, because the stage-D hook below writes into the
  * diagnostic buffer and sits further up the file.  A first attempt declared them
@@ -2599,6 +2841,158 @@ static int luofu_fmc_ubi_probe(void)
 		return 0;
 
 	/*
+	 * THE READ-ONLY UBI PROBE - run FIRST, so its answer is set even if a later step in this hook
+	 * exits early, and folded into the tick's crumb (see luofu_ubi_post_code). It takes the mtd
+	 * reference because the name must be shown to resolve; it attaches nothing.
+	 */
+	{
+		struct mtd_info *p13 = get_mtd_device_nm("rootfsa");
+
+		if (IS_ERR(p13)) {
+			luofu_ubi_attach_code = (u32)(-PTR_ERR(p13)) & 0xffu;
+		} else {
+			/*
+			 * NO ATTACH OF OUR OWN. THE HOOK MEASURES, IT DOES NOT ATTACH.
+			 *
+			 * Three fires produced the anomaly and then the dark box:
+			 *
+			 *   attach  C1C = 0x0A026A16   ubi_attach_mtd_dev(mtd13) answered -EINVAL
+			 *   kb      C1C = 0x00000000   (that fire's separate crumb)
+			 *   vols    C1C = 0x0A000000   the SAME call answered 0 = ATTACH SUCCEEDED
+			 *
+			 * for ONE partition, whose 64-byte EC header the project holds a dump of (UBI#, version
+			 * 1, vid_hdr_offset 2048, data_offset 4096, EC 16, a valid CRC), and which the KERNEL'S
+			 * OWN ubi_init attached successfully at the same initcall level in fire `attach`. The
+			 * one state variable that differs between the -EINVAL fire and the success fire is
+			 * whether an attach object already existed - so a SECOND attach is not going to settle
+			 * anything; it is the thing whose behaviour changes.
+			 *
+			 * This call was also made WITHOUT ubi_devices_mutex, which ubi_attach_mtd_dev()
+			 * documents as required. It is removed rather than repaired: the parameter question
+			 * ("does ubi.mtd reach UBI?") is answered just as well by ASKING UBI WHAT IT HAS - an
+			 * attach that succeeded for whoever called it leaves volumes behind, and
+			 * ubi_open_volume() sees them. That probe is read-only, takes no internal structure, and
+			 * is the same call this hook already makes further down.
+			 */
+			{
+				struct ubi_volume_desc *vd =
+					ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
+
+				luofu_ubi_post_code = IS_ERR(vd) ?
+					((u32)(-PTR_ERR(vd)) & 0xfffu) : 0x000u;
+				if (!IS_ERR(vd)) {
+					u8 h4[4] = { 0 };
+					int rd = 0;
+					int rr = ubi_read(vd, 0, h4, 0, 4);
+
+					if (!rr)
+						rd = ((int)h4[0] << 24) | ((int)h4[1] << 16) |
+						     ((int)h4[2] << 8) | (int)h4[3];
+					ubi_close_volume(vd);
+					if (!rr)
+						luofu_ubi_post_code = 0x1000u | ((u32)rd & 0xffu);
+					else
+						luofu_ubi_post_code = 0x2000u | ((u32)(-rr) & 0xffu);
+				}
+				put_mtd_device(p13);
+				luofu_ubi_attach_code = 0x99u;	/* nothing attached by this probe */
+			}
+		}
+	}
+
+	/*
+	 * THE EC-HEADER ACCEPTANCE WALK, OVER THE PARTITION UBI IS ACTUALLY GIVEN. Read-only: it takes
+	 * the mtd reference and reads; nothing here writes flash. See luofu_ec_passes.
+	 */
+	{
+		struct mtd_info *ec = get_mtd_device_nm("rootfsa");
+
+		if (IS_ERR(ec)) {
+			luofu_ec_passes = 0xeeu;
+		} else {
+			u8 h[64];
+			size_t got = 0;
+			u32 k, passes = 0, bad = 0;
+
+			for (k = 0; k < 32; k++) {
+				u32 magic, vho, doff, crc, calc;
+				u64 ecnt;
+				int j;
+
+				got = 0;
+				if (mtd_read(ec, (loff_t)k * ec->erasesize, 64, &got, h) ||
+				    got != sizeof(h)) {
+					bad = 0xf0u;
+					break;
+				}
+
+				if (k == 0)
+					luofu_ec_h0 = ((u32)h[0] << 8) | (u32)h[1];
+
+				magic = ((u32)h[0] << 24) | ((u32)h[1] << 16) |
+					((u32)h[2] << 8) | (u32)h[3];
+				vho = ((u32)h[16] << 24) | ((u32)h[17] << 16) |
+				      ((u32)h[18] << 8) | (u32)h[19];
+				doff = ((u32)h[20] << 24) | ((u32)h[21] << 16) |
+				       ((u32)h[22] << 8) | (u32)h[23];
+				crc = ((u32)h[60] << 24) | ((u32)h[61] << 16) |
+				      ((u32)h[62] << 8) | (u32)h[63];
+				ecnt = 0;
+				for (j = 0; j < 8; j++)
+					ecnt = (ecnt << 8) | h[8 + j];
+				calc = crc32(LUOFU_UBI_CRC32_INIT, h, 60);
+
+				if (magic != 0x55424923u) {
+					bad = 0xf1u;
+					break;
+				}
+				if (h[4] != 1) {
+					bad = 0xf2u;
+					break;
+				}
+				if (vho != 2048) {
+					bad = 0xf3u;
+					break;
+				}
+				if (doff != 4096) {
+					bad = 0xf4u;
+					break;
+				}
+				if (ecnt > 0x7fffffffULL) {
+					bad = 0xf5u;
+					break;
+				}
+				if (crc != calc) {
+					bad = 0xf6u;
+					break;
+				}
+
+				passes++;
+			}
+
+			put_mtd_device(ec);
+			luofu_ec_passes = bad ? bad : (passes & 0xffu);
+		}
+	}
+
+	/*
+	 * AND THE SAME TWO BYTES FROM A PARTITION WHOSE CONTENT IS KNOWN INDEPENDENTLY OF US.
+	 * Read-only. See luofu_kb_b for what the pair decides.
+	 */
+	{
+		struct mtd_info *kb = get_mtd_device_nm("kernelb");
+
+		if (!IS_ERR(kb)) {
+			u8 b[8] = { 0 };
+			size_t got2 = 0;
+
+			if (!mtd_read(kb, 0, sizeof(b), &got2, b) && got2 >= 2)
+				luofu_kb_b = ((u32)b[0] << 8) | (u32)b[1];
+			put_mtd_device(kb);
+		}
+	}
+
+	/*
 	 * THE MTD TABLE, REPORTED BY NAME RATHER THAN ASSUMED - AND REPORTED FROM HERE ON PURPOSE.
 	 *
 	 * This ran from the probe at first and its output NEVER SURVIVED: the log ring keeps the
@@ -2640,6 +3034,8 @@ static int luofu_fmc_ubi_probe(void)
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
+		/* STORE, DO NOT PRINT - see the note on luofu_ubi_diag_err. */
+		luofu_ubi_verdict(PTR_ERR(desc));
 		/*
 		 * UBI is not up, and the attach refuses our partition with -EINVAL.
 		 * Every -EINVAL on UBI's attach path has been accounted for from its
@@ -2903,6 +3299,7 @@ static int luofu_fmc_ubi_probe(void)
 	ubi_close_volume(desc);
 
 	if (err) {
+		luofu_ubi_verdict(err);
 		luofu_fmc_crumb(fmc, 11, LUOFU_RPT_FAIL(11));
 		return 0;
 	}
@@ -2919,6 +3316,7 @@ static int luofu_fmc_ubi_probe(void)
 		 LUOFU_ROOTFS_VOL_ID, buf[0], buf[1], buf[2], buf[3],
 		 word & 1 ? "resolves" : "does NOT resolve");
 
+	luofu_ubi_verdict(0);
 	luofu_phase = 3;
 	luofu_fmc_ubi_probe_done();
 	return 0;
@@ -3024,15 +3422,20 @@ static int luofu_fmc_ubi_probe(void)
  * newest lines rather than the oldest.
  */
 /*
- * BACK TO 3.5 KiB, WHICH IS THE SIZE THAT LOGGED A WHOLE BOOT.
+ * BACK TO 3.5 KiB: THE 15 KiB WINDOW IS A MEASURED NEGATIVE (2026-10-16).
  *
- * It was raised to 15 KiB to reach an early line. The fire after that change walked only 4092
- * bytes and stopped mid-record at "VFP support" - which is either printk dying there or the walk
- * hitting an incompletely written record, and the difference matters more than the extra reach.
- * The 3.5 KiB configuration is the one that produced UBI, the mount and "Run /sbin/init" in the
- * window, so it is the one to reason from while the userspace question is settled.
+ * The prose in luofu_kmsg_to asks for 15 KiB while this constant said 0x0e00, so a fire was spent
+ * setting it to 0x3c00 with nothing else changed. RESULT: mtd9 came back ENTIRELY 0xff - the
+ * snapshot wrote NOTHING - and the only surviving crumb was the stage-D hook's own step 42, so the
+ * panic path's capture never completed. That is the same negative the 2026-10-14 15 KiB attempt
+ * produced ("walked only 4092 bytes"), now with LUOFU_LOG_SCRATCH left at 16 KiB, so the scratch is
+ * not the limiting variable either. A wider window is NOT how to reach the UBI messages; a print
+ * that lands inside the 3.5 KiB tail is, because the stage-D hook's own lines are provably in it.
+ *
+ * Do not raise this again without first explaining what makes the snapshot survive the larger
+ * memset + d-cache flush in panic context.
  */
-#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB - the size that logged a whole boot */
+#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB - the width that actually lands */
 /*
  * AND A SCRATCH BUFFER TO SLIDE IN, so the window is filled between lines rather than
  * inside one - see luofu_kmsg_to.
@@ -3349,6 +3752,23 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
 	 * stopped capturing there, and the ring ended up holding the kernel's own 4 KiB
 	 * log buffer rather than the boot.
 	 */
+	/*
+	 * ★ THE ONE PLACE A DIAGNOSTIC IS GUARANTEED TO SURVIVE THE WINDOW.
+	 *
+	 * panic() calls dump_stack() BEFORE it calls kmsg_dump(), so the trace and the root partition
+	 * list are already in the log when this runs, and they fill the whole 3.5 KiB window on their
+	 * own. A line printed HERE is the newest line in the log when luofu_kmsg_to() copies the tail,
+	 * and is therefore inside the window by construction - which is what no earlier placement was.
+	 *
+	 * `saved_command_line` is printed because "ubi.mtd= is in the command line" has been an
+	 * inference from the source in every prior session on this board; this reads it back out of the
+	 * kernel that actually ran, next to the errno that says whether UBI has a device at all.
+	 *
+	 * The guard makes it once per boot: this dumper is also driven by the tick's
+	 * kmsg_dump(KMSG_DUMP_EMERG), and the log must not grow a copy of itself every five seconds.
+	 */
+	luofu_ubi_diag_print();
+
 	luofu_log_frozen = true;
 	luofu_kmsg_to(luofu_log_b, dumper);
 }
@@ -3652,20 +4072,43 @@ static void luofu_log_tick(struct timer_list *t)
 		 * AND THE LOW 16 BITS CARRY THE NIC's LAST CRUMB.
 		 *
 		 * The FMC's write/erase counts stay in the top 16 ("did the sequence run" is still the first
-		 * question worth answering there), and the bottom half now carries whatever the gmac/mdio
-		 * drivers last deposited in luofu_net_diag.  This is the ONLY way to read their result after
-		 * a fallback - their own cells do not survive the vendor boot.
+		 * question worth answering there), and the bottom half carries the UBI verdict, because the
+		 * tick is the LAST writer of C18/C1C on every boot measured - the panic notifier's step 42
+		 * is overwritten by it minutes later, and C80/C84 are rewritten by the VENDOR's own boot
+		 * (primed to 0x55555555, read back 0x00020000/0x00001200 - they are not free cells).
 		 *
-		 *   C1C = (writes<<24) | (erases<<16) | (luofu_net_diag & 0xffff)
+		 *   C1C = (writes<<24) | (erases<<16) | 0x5A00 | code
 		 *
-		 * So 0xC1C = 0xBA00_7EFB means: 0xBA writes reached the MTD entry points, and the mdio
-		 * driver's last crumb was 0xC0DE7EFB = of_mdiobus_register returned -5.
+		 *   code 0x00  ubi_open_volume(0,0) OPENED - UBI has a device
+		 *   code 0x16  -EINVAL (22)  the attach refused the partition
+		 *   code 0x13  -ENODEV (19)  no UBI device at all
+		 *   code 0xee  the stage-D hook never reached a verdict
+		 *
+		 * The 0x5A tag makes the field self-identifying, so 0x5AEE can never be mistaken for a
+		 * net_diag value. TRADE, stated plainly: this replaces the `luofu_net_diag & 0xffff`
+		 * survivor channel that used to live here. The gmac/mdio crumbs are still deposited in
+		 * luofu_net_diag and can be re-exposed once this question is answered; the UBI verdict
+		 * cannot be obtained any other way, because three log placements and two crumb cells were
+		 * measured failing first.
 		 */
-		luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
-				((luofu_w_n & 0xffu) << 24) |
-				((luofu_e_n & 0xffu) << 16) |
-				(luofu_net_diag & 0xffffu));
+		/*
+		 * The step itself carries the EC verdict on this fire (values >= 0xf0, plus 0xee, mean the
+		 * walk did not get 32 clean PEBs), so the payload is free to hold the literal first two
+		 * bytes read from mtd13's PEB 0 - see the note on luofu_ec_h0.
+		 */
+		/*
+	 *   C1C = (flag<<24) | (volumes<<16) | (kernelb[0]<<8) | mtd13[0]
+	 *
+	 * kept as FOUR bytes, unlike the earlier three-field form, because the smallest field the
+	 * reader can still distinguish is one byte on this channel.
+	 */
+	luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
+				((luofu_ec_h0 == 0x5542u ? 0x05u : 0x0au) << 24) |
+				((luofu_ec_h0 == 0x5542u ? luofu_ubi_vols : luofu_ubi_post_code) << 16) |
+				((luofu_kb_b & 0xffu) << 8) |
+				(luofu_ec_h0 & 0xffu));
 
+	luofu_ubi_diag_print();
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
 	luofu_kmsg.active = false;
@@ -3929,6 +4372,7 @@ static void luofu_fault_capture_raw(void)
 
 static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
 {
+	luofu_ubi_diag_print();
 	luofu_fault_capture_raw();
 	/*
 	 * THE CRUMB CARRIES THE LOG RING'S PHYSICAL ADDRESS, not a marker.
