@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# luofu-kernel: HiSilicon luofu (Hi5671Y) PCIe root complex.
+#
+# The driver source is pci/luofu-pcie.c in this tree.  Wire it into a kernel
+# by adding these two symbols to drivers/pci/controller/Kconfig and the line
+#   obj-$(CONFIG_LUOFU_PCIE) += luofu-pcie.o
+# to drivers/pci/controller/Makefile.
+
+config LUOFU_PCIE
+	tristate "HiSilicon luofu PCIe root complex (read-only frame)"
+	depends on PCI
+	default n
+	help
+	  Platform driver for the two Synopsys DWC PCIe root-complex domains in
+	  the HiSilicon Hi5671Y "luofu" SoC (DT compatible
+	  "hisilicon,luofu-pcie").
+
+	  The default build is READ-ONLY: probe maps the DBI, config and
+	  write-only misc windows and runs a status inventory (link state, iATU
+	  readback, DWC LTSSM state).  It does not register a host bridge yet.
+
+	  The RC bring-up (clock/reset handshake, RC mode, iATU/LTSSM enable,
+	  link poll) is compiled only with
+	  CONFIG_LUOFU_PCIE_ENABLE_LINK_WRITES, which is default n.
+
+config LUOFU_PCIE_ENABLE_LINK_WRITES
+	bool "luofu PCIe: compile the RC link-writing bring-up"
+	depends on LUOFU_PCIE
+	default n
+	help
+	  Compile the stores that program the luofu PCIe root complex: the CRG
+	  clock/reset handshake, the misc RC-mode and iATU/LTSSM-enable words,
+	  the DBI command and Link Control read-modify-writes, and the bounded
+	  rc_write_test/rc_write_flip CRG instrument.
+
+	  Default n, for measured reasons recorded in pcie-forced-probe.md and
+	  pcie-bringup-written.md:
+	   - the DBI/CFG windows answer only 4-byte-aligned 32-bit accesses; a
+	     read of the 2-byte Link Status at dbi+0x082 panicked a live box with
+	     both readl() and readw().  A write path of sub-word or unaligned
+	     stores is the same fault class;
+	   - the misc window is write-only host-side (a read of it panicked a
+	     box), so the bring-up stores cannot be checked by read-back, and a
+	     state-changing CRG reset store on a LIVE RC wedges the DWC link.
+
+	  Enabling this is a deliberate, serial, health-gated device experiment.
+	  The runtime knobs (rc_bringup, rc_write_test/rc_write_flip) and the
+	  forced no-DT probe are still required.  Say N unless you are running
+	  that experiment.
