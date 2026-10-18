@@ -2399,21 +2399,31 @@ static int __init luofu_fmc_ubi_early(void)
 {
 	void __iomem *sc;
 
-	if (luofu_ubi_early_done)
-		return 0;
-	luofu_ubi_early_val = *(volatile u32 *)LUOFU_UBI_MTD_DEVS;
-
-	/*
-	 * Reported here as well as from the tick: the tick is 5 s late and the
-	 * answer is this hook's alone, and the tick's copy is unconditional so
-	 * the two can never disagree.
-	 */
 	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
-	if (sc) {
-		writel(luofu_ubi_early_val, sc + 0x8c);
-		(void)readl(sc + 0x8c);
-		iounmap(sc);
+	if (!sc)
+		return 0;
+	/*
+	 * LIVE `mtd_devs` (0x3F) vs THE SENTINEL (0xEE) IS ITSELF THE ANSWER.
+	 *
+	 * The guard used to be checked BEFORE the ioremap, and ubi3 came back with
+	 * 0xC0C = 0 and the tick at full strength: either this hook never ran or it
+	 * ran and wrote 0, and nothing in flash could tell those apart. So the write
+	 * comes FIRST and unconditional, and the byte identifies the branch:
+	 *
+	 *   0xEE  the guard was already set - this hook did not run, or ran twice
+	 *   0x00  mtd_devs really was 0   -> ubi.mtd NEVER reached ubi_init
+	 *   0x01+ it did reach it (the count)
+	 *
+	 * Read-only: one load from the built-in UBI module's own static.
+	 */
+	if (luofu_ubi_early_done) {
+		writel(0xc0de0000u | 0xeeu, sc + 0x04);
+	} else {
+		luofu_ubi_early_val = *(volatile u32 *)LUOFU_UBI_MTD_DEVS;
+		writel(0xc0de0000u | (luofu_ubi_early_val & 0xffu), sc + 0x04);
 	}
+	(void)readl(sc + 0x04);
+	iounmap(sc);
 	return 0;
 }
 device_initcall(luofu_fmc_ubi_early);
@@ -2538,11 +2548,19 @@ static void luofu_phase_cell(u32 off, u32 v)
 	luofu_verdict_cell(off, v);
 }
 
+/*
+ * THE UBI VERDICT'S OWN PAIR MOVES TO 0xC04/0xC0C.
+ *
+ * 0xC80/0xC84 are the VENDOR'S OWN stable pair (measured twice, 2026-10-17 and again
+ * 2026-10-18: 0x00020000 / 0x00001200, unchanged across boots), so a value there cannot
+ * be attributed to our kernel - the defect that voided the 2026-10-16 reading. 0xC04 and
+ * 0xC0C scan as exact-write scratch on the vendor and have zero references in this tree.
+ */
 static void luofu_ubi_verdict(long err)
 {
 	luofu_ubi_diag_err = err;
-	luofu_verdict_cell(0x80, 0xc0de0000u | ((u32)(-err) & 0xfffu));
-	luofu_verdict_cell(0x84, strstr(saved_command_line, "ubi.mtd=") ?
+	luofu_verdict_cell(0x04, 0xc0de0000u | ((u32)(-err) & 0xfffu));
+	luofu_verdict_cell(0x0c, strstr(saved_command_line, "ubi.mtd=") ?
 					0x600df00du : 0xdeadbeefu);
 }
 
@@ -4143,8 +4161,13 @@ static void luofu_log_tick(struct timer_list *t)
 				((luofu_kb_b & 0xffu) << 8) |
 				(luofu_ec_h0 & 0xffu));
 
-	luofu_phase_cell(0x80, 0xc0de0020u);
-	luofu_phase_cell(0x8c, luofu_ubi_early_val);
+	/*
+	 * 0xC0C, NOT 0xC8C: the tick owns 0xC18/0xC1C, and 0xC8C was already spent
+	 * - it read back the tick's own ring address (0x80604000) on the 2026-10-18
+	 * fire. 0xC0C has no writer in this tree. The 0xC0DE tag makes the cell
+	 * self-identifying: anything else means this hook never ran.
+	 */
+	luofu_phase_cell(0x0c, 0xc0de0000u | (luofu_ubi_early_val & 0xffu));
 
 	luofu_ubi_diag_print();
 	luofu_kmsg.active = true;
