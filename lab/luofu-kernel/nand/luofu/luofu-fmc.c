@@ -2390,6 +2390,32 @@ static u32 luofu_kb_b = 0xbeefu;
 static u32 luofu_ubi_vols = 0xbeefu;
 
 #ifdef CONFIG_MTD_UBI
+/*
+ * THE PREMISE THIS INSTRUMENT WAS BUILT ON IS RETIRED, AND THE KERNEL'S OWN SOURCE RETIRES IT
+ * (2026-10-18).
+ *
+ * Stage D2 assumed "an unclaimed dotted parameter is replayed by load_module() from
+ * kernel_init_freeable(), after which ubi_init's level sees nothing". That is not this kernel.
+ * init/main.c does the replay inside do_initcalls():
+ *
+ *     for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
+ *             strcpy(command_line, saved_command_line);
+ *             do_initcall_level(level, command_line);
+ *     }
+ *
+ * and do_initcall_level() calls parse_args(..., __start___param, ..., level, level, ...) BEFORE it
+ * runs that level's initcalls. Every built-in module parameter - ubi.mtd, which lives in
+ * __param - is therefore offered the whole saved command line at EVERY level, ubi_init included,
+ * by construction. There is also no NOAUTO option anywhere in this tree to switch that off; the
+ * plan to disable one was based on a kernel feature this version does not have.
+ *
+ * What survives is the ADDRESS DERIVATION below, and the honesty about what its reading showed:
+ * 0 on every fire that could report at all, which is ambiguous (a non-writable cell reads exactly
+ * like a count of zero), so it decides nothing either way. Detail:
+ * [[cudy-wr3000v2/ubi-param-2026-10-18]].
+ *
+ * The address, for the record, was derived rather than guessed:
+ */
 #define LUOFU_UBI_MTD_DEVS	0xc0e07c84u
 
 static u32 luofu_ubi_early_val = 0xbeefu;
@@ -2411,8 +2437,9 @@ static int __init luofu_fmc_ubi_early(void)
 	 * comes FIRST and unconditional, and the byte identifies the branch:
 	 *
 	 *   0xEE  the guard was already set - this hook did not run, or ran twice
-	 *   0x00  mtd_devs really was 0   -> ubi.mtd NEVER reached ubi_init
-	 *   0x01+ it did reach it (the count)
+	 *   0x00  the read was 0 - and NOT a verdict, because the cell has been
+	 *         seen to read 0 even for a value that could not have been 0
+	 *   0x01+ the read value, when the cell is writable on this boot
 	 *
 	 * Read-only: one load from the built-in UBI module's own static.
 	 */
