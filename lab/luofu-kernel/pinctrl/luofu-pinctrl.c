@@ -1,9 +1,11 @@
 /* PROVENANCE - published copy of the luofu pinctrl driver, added 2026-10-18.
- * Source: opensource/lab/luofu-pinctrl/luofu-pinctrl.c, blob at commit
- *   eb29735 (last commit to touch it on master), sha256 7246eaf0...b277b6.
- * The 640 lines below are BYTE-IDENTICAL; check with
- *   tail -n +8 pinctrl/luofu-pinctrl.c | sha256sum
- * No code was changed. Device-free copy: it has never been loaded on this bench.
+ * Source: opensource/lab/luofu-pinctrl/luofu-pinctrl.c (see the commit below).
+ * DELTA (one line, measured): <linux/reset.h> added to the include block. Without
+ * it the driver does not compile - devm_reset_control_array_get and
+ * reset_control_deassert are implicit-declaration errors under the kernel's
+ * -Werror=implicit-function-declaration. Proven by building both copies as
+ * external modules against /opt/kbuild/linux-5.10.201.
+ * Everything else is unchanged. Device-free copy: never loaded on this bench.
  */
 // SPDX-License-Identifier: GPL-2.0
 /*
@@ -75,6 +77,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinconf-generic.h>
