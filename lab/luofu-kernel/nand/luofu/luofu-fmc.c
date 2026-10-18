@@ -2389,6 +2389,36 @@ static u32 luofu_kb_b = 0xbeefu;
  */
 static u32 luofu_ubi_vols = 0xbeefu;
 
+#ifdef CONFIG_MTD_UBI
+#define LUOFU_UBI_MTD_DEVS	0xc0e07c84u
+
+static u32 luofu_ubi_early_val = 0xbeefu;
+static int luofu_ubi_early_done;
+
+static int __init luofu_fmc_ubi_early(void)
+{
+	void __iomem *sc;
+
+	if (luofu_ubi_early_done)
+		return 0;
+	luofu_ubi_early_val = *(volatile u32 *)LUOFU_UBI_MTD_DEVS;
+
+	/*
+	 * Reported here as well as from the tick: the tick is 5 s late and the
+	 * answer is this hook's alone, and the tick's copy is unconditional so
+	 * the two can never disagree.
+	 */
+	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (sc) {
+		writel(luofu_ubi_early_val, sc + 0x8c);
+		(void)readl(sc + 0x8c);
+		iounmap(sc);
+	}
+	return 0;
+}
+device_initcall(luofu_fmc_ubi_early);
+#endif
+
 /* the public-API answer IMMEDIATELY after our own attach returned 0 (0 = the volume opened) */
 static u32 luofu_ubi_post_code = 0xfffu;	/* the attach never succeeded */
 
@@ -2501,6 +2531,11 @@ static void luofu_verdict_cell(u32 off, u32 v)
 	writel(v, sc + off);
 	(void)readl(sc + off);
 	iounmap(sc);
+}
+
+static void luofu_phase_cell(u32 off, u32 v)
+{
+	luofu_verdict_cell(off, v);
 }
 
 static void luofu_ubi_verdict(long err)
@@ -4108,6 +4143,9 @@ static void luofu_log_tick(struct timer_list *t)
 				((luofu_kb_b & 0xffu) << 8) |
 				(luofu_ec_h0 & 0xffu));
 
+	luofu_phase_cell(0x80, 0xc0de0020u);
+	luofu_phase_cell(0x8c, luofu_ubi_early_val);
+
 	luofu_ubi_diag_print();
 	luofu_kmsg.active = true;
 	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
@@ -5075,8 +5113,13 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 		 fmc->mtd->index, part->index, page[0], page[1], page[2], page[3]);
 	put_mtd_device(part);
 
-	/* stage D's hook looks the driver state up here, at late_initcall_sync */
+	/*
+	 * stage D's hook looks the driver state up here, and stage D2 (the
+	 * device_initcall reporter) is on the initcall table next to the
+	 * driver, so both need it published before this probe returns.
+	 */
 	luofu_ubi_fmc = fmc;
+	luofu_ubi_early_done = 1;
 
 	/*
 	 * Stage E: from here on, a panic writes the kernel log into RAM where it
