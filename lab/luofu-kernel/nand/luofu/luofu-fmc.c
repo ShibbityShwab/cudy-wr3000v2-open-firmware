@@ -315,7 +315,15 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 
 /* And the START KICK written to FMC_OP_CTRL (0x68) - also literal. */
 #define LUOFU_OP_CTRL_READ	1u	/* hi_nand_hw_read:      mov r3,#1 ; str r3,[r4,#0x68] */
+/*
+ * AND THE START KICK, from the same sample: during a page program the vendor's OP_CTRL
+ * carries bit 0 SET (0x006B3203 - start | command 0x32), and the command in bits 8-15 is
+ * the real 0x32, not a table guess. The read's kick is 1; the program's is 3 | (cmd << 8).
+ */
 #define LUOFU_OP_CTRL_WRITE	3u	/* hi_nand_hw_write:     mov r3,#3 ; str r3,[r4,#0x68] */
+#define LUOFU_OP_CFG_WRITE	0x9D0u	/* measured live during a vendor page program, 2026-10-18 */
+
+static u32 luofu_w_opcfg;
 
 /*
  * ★ THE READ'S ADDRESS-CYCLE COUNT IS 2, AND THE ATAG TABLE SAYS 5. THE HARDWARE IS RIGHT.
@@ -1503,12 +1511,40 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	writel(1, fmc->regs + FMC_INT_EN);
 	writel(1, fmc->regs + FMC_INT_CLR);
 
+	/*
+	 * ★★★★★ OP_CFG IS A LITERAL OPCODE, AND THE PROGRAM'S IS 0x9D0 - MEASURED, NOT PACKED.
+	 *
+	 * The read path already records this (LUOFU_OP_CFG_READ = 0x50, from hi_nand_hw_read):
+	 * the vendor does NOT field-pack this register. Its READ value taken live off the
+	 * controller is 0x9A1, its ERASE 0x810, and the value it holds the moment a page
+	 * program starts - sampled 2026-10-18 from the running vendor's own kernel while it
+	 * wrote rootfs_data - is 0x9D0:
+	 *
+	 *     read 0x9A1   erase 0x810   PROGRAM 0x9D0      (and 0x9D0 appeared only during
+	 *     writes, never during reads or erases, over 108 samples of the same write loop)
+	 *
+	 * THIS PATH BUILT 0x9D1 INSTEAD - the field-pack theory's answer, which differs from
+	 * the hardware's by exactly the DUMMY-CYCLE bit. A program needs no dummy cycle, so
+	 * the controller was clocking one extra cycle before expecting the device to take
+	 * data - the program accepted it, reported completion, and the array never changed.
+	 * That is the same failure the READ path had when it packed addr_cyc=5 and got the
+	 * controller's own output back; it was fixed there by taking the hardware's value.
+	 *
+	 * The packed value is kept in a local only for the crumb, so a fire can show what the
+	 * old expression produced against what is now written.
+	 */
 	op_cfg = luofu_fmc_cs_field(fmc) |
 		 ((u32)(fmc->spec.wr_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
 		 ((u32)(fmc->spec.wr_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
 		 ((u32)fmc->spec.wr_dummy & FMC_OPCFG_DUMMY_MASK);
-	writel(op_cfg, fmc->regs + FMC_OP_CFG);
+	writel(LUOFU_OP_CFG_WRITE, fmc->regs + FMC_OP_CFG);
 	wmb();
+
+	/*
+	 * AND KEEP THE SHAPE FOR THE CRUMB: the packed value the old code would have written.
+	 * Nothing reads it for control flow; the fire reads the cells.
+	 */
+	luofu_w_opcfg = op_cfg;
 
 	/*
 	 * THE REGISTER IS READ FIRST AND ITS HIGH HALF IS PRESERVED, because that
@@ -4189,12 +4225,11 @@ static void luofu_log_tick(struct timer_list *t)
 				(luofu_ec_h0 & 0xffu));
 
 	/*
-	 * 0xC0C, NOT 0xC8C: the tick owns 0xC18/0xC1C, and 0xC8C was already spent
-	 * - it read back the tick's own ring address (0x80604000) on the 2026-10-18
-	 * fire. 0xC0C has no writer in this tree. The 0xC0DE tag makes the cell
-	 * self-identifying: anything else means this hook never ran.
+	 * 0xC04, NOT 0xC70: 0xC70 is this driver's own READ-data deposit (luofu_fmc_read_page's
+	 * poison report), so a value there is overwritten the moment the read path runs - the
+	 * same defect as 0xC8C. 0xC04 has no writer in this tree.
 	 */
-	luofu_phase_cell(0x0c, 0xc0de0000u | (luofu_ubi_early_val & 0xffu));
+	luofu_phase_cell(0x04, 0xc0de0000u | (luofu_ubi_early_val & 0xffu));
 
 	luofu_ubi_diag_print();
 	luofu_kmsg.active = true;
