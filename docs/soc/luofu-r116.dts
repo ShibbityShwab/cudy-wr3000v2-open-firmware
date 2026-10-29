@@ -154,23 +154,183 @@
 	 * page with reset0 ("hsan,hsan-reset", :1394). Folded into ONE controller
 	 * (build/tmp/inta-spec/clocks2.md sec 2). */
 
-	crg: clock-reset-controller@14880000 {
-		/* NO "syscon" HERE, and that is the fix for the NIC.
+	crg: crg@14880000 {
+		/*
+		 * ONE NODE, BECAUSE THAT IS WHAT OUR DRIVER EXPECTS (reverted 2026-10-30).
 		 *
-		 * 0xC90 read 0x00000000 across a fire: luofu_crg_probe's FIRST statement - a crumb written before
-		 * anything that can fail - never executed, while driver_find("luofu-crg") succeeded.  So the
-		 * DRIVER registers but never gets a DEVICE.  The reason is this compatibility list: syscon is a
-		 * platform driver matching "syscon" and registers very early, so it claims the device before
-		 * luofu-crg is ever offered it.  Nothing in this tree uses syscon semantics on the CRG - the
-		 * mach maps it directly and the clock/reset consumers go through the provider - so dropping the
-		 * entry leaves exactly one match.  "simple-mfd" stays: the clk-pll/clk-mux children need it.
+		 * The vendor splits this page into crg@ (resets) and clk@ (20 gate children) because it has
+		 * TWO drivers, hi_crg and hi_clk. This tree has ONE - luofu-crg - which builds its gates by
+		 * walking ITS OWN children and registers both the clock and the reset provider from them.
 		 *
-		 * Without the CRG provider, both NIC drivers die at clock acquisition (gmac 0xC0DE6F03, mdio
-		 * 0xC0DE7F03), there is no PHY bus and no eth0. */
-		compatible = "hisilicon,luofu-crg", "simple-mfd";
+		 * Copying the vendor's split therefore broke us in a way that looked like a hardware fault:
+		 * with the gate children under a "hsan,clk" node that NO driver matches, luofu_crg_probe found
+		 * no children and returned -ENODEV, so there was no clock provider. The FMC's
+		 * devm_clk_get("sfc_clk") then returned -EPROBE_DEFER, luofu_fmc_probe returned early, and
+		 * NO mtd device was ever registered - which is why ubi.mtd=rootfsb had nothing to open and
+		 * mount_root had no root. Every flash read returned zeros because the flash was never probed.
+		 *
+		 * So: the compatible stays the vendor's ("hsan,crg" - that part was a real fix), and the
+		 * children come back under this node where our driver looks for them.
+		 */
+		compatible = "hsan,crg";
 		reg = <0x14880000 0x1000>;	/* pinned:201 */
 		#clock-cells = <1>;		/* clk id table in luofu.h */
 		#reset-cells = <2>;		/* (reg-offset, bit), pinned:1395 */
+
+		/*
+		 * THE GATE CHILDREN - 16 of them, FIRST in this node and in LUOFU_CLK_* order.
+		 *
+		 * The provider registers one clock per child that carries reg-offset+bit, and indexes them
+		 * by CHILD ORDER (data->hws[i] = i++). So the order below IS the clock ID table: index 0 =
+		 * SFC, 6 = GMAC0, 10 = MDIO, and so on. With none of these present no gate registered and
+		 * every consumer got an invalid index.
+		 *
+		 * Geometry is the vendor gate table in the header comment (pinned clk@14880000).
+		 */
+		gate_sfc_clk: clk-gate-sfc_clk {
+			/* LUOFU_CLK_SFC - index 0; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x14>;
+			bit = <0x0>;
+			clock-output-names = "sfc_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_gpio0_clk: clk-gate-gpio0_clk {
+			/* LUOFU_CLK_GPIO0 - index 1; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x14>;
+			bit = <0x14>;
+			clock-output-names = "gpio0_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_gpio1_clk: clk-gate-gpio1_clk {
+			/* LUOFU_CLK_GPIO1 - index 2; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x14>;
+			bit = <0x15>;
+			clock-output-names = "gpio1_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_i2c0_clk: clk-gate-i2c0_clk {
+			/* LUOFU_CLK_I2C0 - index 3; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x14>;
+			bit = <0x18>;
+			clock-output-names = "i2c0_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_pcie0_clk: clk-gate-pcie0_clk {
+			/* LUOFU_CLK_PCIE0 - index 4; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0xc>;
+			clock-output-names = "pcie0_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_pcie1_clk: clk-gate-pcie1_clk {
+			/* LUOFU_CLK_PCIE1 - index 5; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0xd>;
+			clock-output-names = "pcie1_clk";
+			#clock-cells = <0>;
+		};
+
+		gate_gemac_clk0: clk-gate-gemac_clk0 {
+			/* LUOFU_CLK_GMAC0 - index 6; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x13>;
+			clock-output-names = "gemac_clk0";
+			#clock-cells = <0>;
+		};
+
+		gate_led_pwm: clk-gate-led_pwm {
+			/* LUOFU_CLK_LEDPWM - index 7; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x14>;
+			bit = <0xe>;
+			clock-output-names = "led_pwm";
+			#clock-cells = <0>;
+		};
+
+		gate_lsw_dp_clk0: clk-gate-lsw_dp_clk0 {
+			/* LUOFU_CLK_LSW_DP - index 8; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x0>;
+			clock-output-names = "lsw_dp_clk0";
+			#clock-cells = <0>;
+		};
+
+		gate_lsw_pfe_clk0: clk-gate-lsw_pfe_clk0 {
+			/* LUOFU_CLK_LSW_PFE - index 9; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x1>;
+			clock-output-names = "lsw_pfe_clk0";
+			#clock-cells = <0>;
+		};
+
+		gate_mdio_clk0: clk-gate-mdio_clk0 {
+			/* LUOFU_CLK_MDIO - index 10; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x3>;
+			clock-output-names = "mdio_clk0";
+			#clock-cells = <0>;
+		};
+
+		gate_gemac_clk1: clk-gate-gemac_clk1 {
+			/* LUOFU_CLK_GMAC1 - index 11; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x14>;
+			clock-output-names = "gemac_clk1";
+			#clock-cells = <0>;
+		};
+
+		gate_gemac_clk2: clk-gate-gemac_clk2 {
+			/* LUOFU_CLK_GMAC2 - index 12; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x15>;
+			clock-output-names = "gemac_clk2";
+			#clock-cells = <0>;
+		};
+
+		gate_gemac_clk3: clk-gate-gemac_clk3 {
+			/* LUOFU_CLK_GMAC3 - index 13; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x16>;
+			clock-output-names = "gemac_clk3";
+			#clock-cells = <0>;
+		};
+
+		gate_gemac_clk4: clk-gate-gemac_clk4 {
+			/* LUOFU_CLK_GMAC4 - index 14; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x17>;
+			clock-output-names = "gemac_clk4";
+			#clock-cells = <0>;
+		};
+
+		gate_pie_clk0: clk-gate-pie_clk0 {
+			/* LUOFU_CLK_PIE - index 15; the provider indexes by CHILD ORDER */
+			compatible = "hsan,clk-gate";
+			reg-offset = <0x20>;
+			bit = <0x19>;
+			clock-output-names = "pie_clk0";
+			#clock-cells = <0>;
+		};
+
 
 		/* clock-tree children, verbatim from pinned clk@14880000 (:201).
 		 * Gate geometry = the LUOFU_CLK_* table above; the two PLLs register
