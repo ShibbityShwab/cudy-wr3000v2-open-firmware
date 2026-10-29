@@ -128,9 +128,92 @@ static void __init luofu_crumb(u32 value)
 	iounmap(sysctrl);
 }
 
+/*
+ * The same write, WITHOUT __init: luofu_restart can run at any time, long after init memory is freed, so
+ * calling the __init version above would read freed memory (modpost flags exactly that as a section
+ * mismatch). This one is deliberately a plain function.
+ */
+static void luofu_crumb_live(u32 value)
+{
+	void __iomem *sysctrl = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+	if (!sysctrl)
+		return;
+
+	writel(value, sysctrl + LUOFU_CRUMB_OFFSET);
+	(void)readl(sysctrl + LUOFU_CRUMB_OFFSET);
+	iounmap(sysctrl);
+}
+
 static void luofu_restart(enum reboot_mode mode, const char *cmd)
 {
 	void __iomem *crg = ioremap(LUOFU_CRG_BASE, 0x1000);
+
+	/*
+	 * ★ DID THE BOX REACH THIS FUNCTION AT ALL? (2026-10-27 04:15Z)
+	 *
+	 * Every eliminations so far assumes the ~6 s death is a PANIC that reaches the restart handler. That
+	 * assumption has never been tested, and it is testable with no new instrument: this crumb is written
+	 * inside the restart path, and nothing runs after it (the function then either resets the SoC or parks
+	 * with the watchdog armed), so it is the LAST writer on C18 - it cannot be overwritten by the tick.
+	 *
+	 *   C18 = 0xC0DE5245 after a fire   the box PANICKED and went through machine_restart
+	 *   anything else                   it never reached the restart path - the death is a HANG, not a panic
+	 *
+	 * That distinction decides the next lane: a panic invites a fault-record hunt, a hang invites a
+	 * lockup/deadlock hunt, and the two have nothing in common.
+	 */
+	luofu_crumb_live(0xc0de5245);
+
+	/*
+	 * CARRY THE late_initcall_sync PROBE'S ANSWER THROUGH THE PANIC (2026-10-30).
+	 *
+	 * The read-only `blk_lookup_devt("ubiblock0_0")` probe runs in
+	 * luofu_fmc_ubi_diag() and writes its result to 0xC04 - but the VENDOR BOOT ZEROES 0xC04, so
+	 * reading it after the fallback returns 0x00000000 and the answer is lost. That voided the
+	 * [wroot] fire entirely.
+	 *
+	 * C18 is different: THIS function writes it and nothing runs afterwards, which is why
+	 * 0xC0DE5245 has been read back correctly after every vendor boot this session. So re-stamp the
+	 * probe's answer here, where it survives:
+	 *
+	 *   0xC0DE5245  the restart path ran; the probe's cell read 0 or was never written
+	 *   0xC0DE5246  the restart path ran AND ubiblock0_0 RESOLVED (C04 was 0xC0DE9A01)
+	 *   0xC0DE5247  the restart path ran AND it did NOT resolve (C04 was 0xC0DE9A02)
+	 */
+	{
+		void __iomem *pSc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+		if (pSc) {
+			u32 probe = readl(pSc + 0xc04);
+			/*
+			 * CARRY THE LOW BYTE THROUGH (2026-10-30).
+			 *
+			 * luofu_fmc_ubi_diag (level 7, and it demonstrably RUNS now) writes its verdict to 0xC04
+			 * as 0xC0DE9A00 | code, where code describes what UBI can actually see - the partition
+			 * lookup, the EC header, and the VID header at +0x800.
+			 *
+			 * 0xC04 is zeroed by the vendor boot, but THIS function runs before that, on the
+			 * restart path. So the code is copied into the low byte of the C18 stamp, which is the
+			 * one cell proven to survive:
+			 *
+			 *   0xC0DE52E1  partition "rootfsb" not found by name
+			 *   0xC0DE528x  EC magic bad (x = magic's top byte & 0x3f)
+			 *   0xC0DE524x  EC magic OK but vid_hdr_offset != 0x800
+			 *   0xC0DE52A0  EC + vid_hdr_offset OK and PEB0+0x800 reads 'U' - UBI's view is clean
+			 *   0xC0DE52B0  EC OK but PEB0+0x800 reads 0x00 - the 2026-10-21 finding, reproduced
+			 *   0xC0DE52Cx  EC OK, VID reads something else
+			 *
+			 * The older 0xC0DE9A01/0x9A02 values keep their old mapping for compatibility.
+			 */
+			if ((probe & 0xFFFFFF00u) == 0xC0DE9A00u)
+				luofu_crumb_live(0xc0de5200u | (probe & 0xffu));
+			else if (probe == 0xC0DE9A01u)
+				luofu_crumb_live(0xc0de5246);
+			else if (probe == 0xC0DE9A02u)
+				luofu_crumb_live(0xc0de5247);
+		}
+	}
 
 	if (crg) {
 		writel(HSAN_WDT_RESET0, crg + HSAN_WDT_CLR_OFFSET - 4);
@@ -250,11 +333,40 @@ static int __init luofu_ladder_devl6(void)
 	luofu_ladder(LUOFU_LADDER_DEVL6);
 	return 0;
 }
-late_initcall(luofu_ladder_devl6);   /* level 6 is gone by the time late_initcalls exist; see note */
+/*
+ * A LEVEL-6 MARKER MUST BE REGISTERED AT LEVEL 6.
+ *
+ * This was `late_initcall(luofu_ladder_devl6)` with a note admitting "level 6 is gone by the time
+ * late_initcalls exist". That made the bit useless for the one question it exists to answer: if
+ * the boot dies inside a device_initcall, a marker registered at level 7 never runs either, so its
+ * absence is indistinguishable from the death happening later. Both outcomes look identical - the
+ * same defect as the FMC exit marker that sat after a `return`.
+ *
+ * Measured 2026-10-30 [wexit]: C18 = 0xC0DE50FF proves luofu_fmc_probe COMPLETES, so the death is
+ * in some other level-6 probe or in the level transition. This marker is the bisect point:
+ *   C1C top byte 0x12 present -> level 7 was reached; the death is after it
+ *   C1C still 0xC0DE5FFF       -> the death is in a level-6 device_initcall
+ */
+device_initcall(luofu_ladder_devl6);
 
 static int __init luofu_ladder_late(void)
 {
 	luofu_ladder(LUOFU_LADDER_LATE);
+	/*
+	 * ORDERING STAMP IN C18, NOT C1C.
+	 *
+	 * The ladder ORs its stage bits into C1C, but the FMC writes C1C unconditionally on every
+	 * crumb - so a bit deposited BEFORE the FMC probe is destroyed by it and can never be read
+	 * back. That made "the level-6 marker never fired" indistinguishable from "it fired and was
+	 * overwritten", and one fire was spent on that ambiguity.
+	 *
+	 * C18's last writer inside the probe is the 0xFF exit crumb (0xC0DE50FF); nothing in the FMC
+	 * writes C18 again after it. So a stamp here is only possible if level 7 was actually reached:
+	 *
+	 *   C18 = 0xC0DE1414 -> late_initcall ran AFTER the FMC probe returned; the death is later
+	 *   C18 = 0xC0DE50FF -> level 7 never ran; the death is inside level 6 or the level transition
+	 */
+	luofu_crumb(0xC0DE1414u);
 	return 0;
 }
 late_initcall(luofu_ladder_late);
@@ -316,7 +428,7 @@ static int __init luofu_late_crumb(void)
 
 	nd = dev_get_by_name(&init_net, "eth0");
 
-	crg_np = of_find_compatible_node(NULL, NULL, "hisilicon,luofu-crg");
+	crg_np = of_find_compatible_node(NULL, NULL, "hsan,crg");
 	if (crg_np) {
 		clk = of_clk_get(crg_np, 0);
 		if (IS_ERR(clk))
@@ -621,14 +733,25 @@ static void __init luofu_init_machine(void)
 
 	luofu_crumb(LUOFU_CRUMB_MACH);
 
+	/*
+	 * ★ THE WATCHDOG IS LEFT ARMED ON PURPOSE (2026-10-26 18:30Z).
+	 *
+	 * This used to write the stop magic here, contradicting the driver: luofu-wdt's probe sets
+	 * WDOG_HW_RUNNING ("the hardware is live, core, please ping it") while this function disarmed the very
+	 * timer it was told to service. The watchdog was therefore neither a watchdog nor a hazard - and the
+	 * boot had no independent reset source at all.
+	 *
+	 * Leaving u-boot's armed timer running gives both halves: the core's servicing workqueue pings it, so a
+	 * healthy kernel survives indefinitely (what G6 needs), and a kernel that panics or hangs stops pinging,
+	 * so the hardware still resets it (what would make a panic=0 experiment safe).
+	 *
+	 * The disarm is removed, not moved. If the core ever fails to ping, the box resets at the u-boot timeout
+	 * and the vendor takes over - the failure mode this bench already lives with.
+	 */
 	crg = ioremap(LUOFU_CRG_BASE, 0x1000);
 	if (crg) {
-		writel(HSAN_WDT_STOP0, crg + HSAN_WDT_EN_OFFSET - 4);
-		writel(HSAN_WDT_STOP1, crg + HSAN_WDT_EN_OFFSET);
-		(void)readl(crg + HSAN_WDT_EN_OFFSET);	/* flush the write pair */
+		pr_info("luofu: hsan watchdog LEFT ARMED - luofu-wdt services it; hardware resets a hung kernel\n");
 		iounmap(crg);
-		pr_info("luofu: hsan watchdog disarmed (stop magic %08x %08x)\n",
-			HSAN_WDT_STOP0, HSAN_WDT_STOP1);
 	}
 
 	luofu_crumb(LUOFU_CRUMB_DONE);
