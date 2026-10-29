@@ -110,8 +110,35 @@
  * ABOVE the driver's own state block, so a declaration down there is too late for either to see.
  */
 static bool luofu_poison_done;      /* the poison has been placed, once */
+static bool luofu_no_clear;         /* the diag poisons the staging buffer itself */
+/*
+ * ★ TRUE = THE PATH THAT MOUNTED THE ROOTFS (2026-10-29).
+ *
+ * The comment above read_page states it plainly: build 1ef70ad - "the last state that returned
+ * UBI# and MOUNTED THE ROOTFS" - opens with the ECC engine OFF and de-interleaves the 14 spare
+ * bytes the controller splices in at offset 1040. It was later switched to ECC ON + a plain copy
+ * to chase a vtbl CRC mismatch, and every build since has failed to attach UBI.
+ *
+ * The measured symptom that points back here: luofu_ec_passes = 1. UBI's own EC-header
+ * acceptance test passes on exactly ONE of the first 32 erase blocks, which is what a corrupted
+ * header window looks like - and the splice window is the known corruption. So this restores the
+ * measured-working read shape rather than inventing a new one.
+ */
+static bool luofu_read_ecc_off = true;
+/*
+ * WHERE THE BOOT GOT TO - reported in the tick payload (see luofu_log_tick).
+ * The last tick before a freeze is the only witness to where the kernel stopped, so these
+ * markers are coarse on purpose and are never cleared.
+ *   1 probe started   2 MTD + capture armed   3 stage-D entered
+ *   4 EC walk done    5 UBI probe done        6 stage-D finished
+ */
+static u32 luofu_where;
+/* pre-mapped at probe: ioremap() may sleep and MUST NOT be called from a timer callback */
+static void __iomem *luofu_crumb_base;
+static void luofu_arm_instruments(void);
 static bool luofu_poison_reported;  /* its result has been deposited, once */
 static bool luofu_row_reported;     /* the computed row + ADDRH/ADDRL, deposited once */
+
 /*
  * ★ A SEPARATE FLAG FOR THE ADDRESS DEPOSIT - sharing one was the bug.
  *
@@ -134,6 +161,11 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 #include <linux/kmsg_dump.h>
 #include <linux/notifier.h>
 #include <linux/timer.h>
+#include <linux/workqueue.h>
+#include <linux/sched.h>
+#include <linux/kthread.h>
+#include <linux/netdevice.h>
+#include <linux/inetdevice.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/mtd/mtd.h>
@@ -145,6 +177,16 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 #include <asm/cacheflush.h>
 #include <asm/outercache.h>
 #include <asm/hwcap.h>
+
+/* published by luofu-gmac (EXPORT_SYMBOL_GPL); 0 means the MAC instrument did not run */
+/*
+ * WEAK BY DESIGN (2026-10-30): luofu-gmac.c owns the strong definition (it samples the KPIE
+ * ring pointers). Declaring this `extern` made the kernel UNLINKABLE whenever CONFIG_LUOFU_GMAC
+ * was off, which quietly blocked a bisect that removes the networking drivers to test the rootfs
+ * path. A weak default keeps the flash lane compilable with no networking driver at all; the
+ * strong symbol wins whenever gmac is built in.
+ */
+u32 __weak luofu_kpie_live_export;
 
 /* ------------------------------------------------------------------ */
 /* Register map (offsets from 0x10a20000), from the DWARF struct        */
@@ -204,6 +246,7 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 #define SPINAND_CMD_GET_FEATURE	0x0f
 #define SPINAND_CMD_SET_FEATURE	0x1f
 #define SPINAND_CMD_RDID	0x9f
+#define SPINAND_CMD_PAGE_READ	0x13	/* the page load that fills the cache 0x6b reads */
 #define SPINAND_CMD_BLOCK_ERASE	0xd8	/* the vendor's hi_spi_nand_drv_erase passes this */
 #define SPINAND_CMD_WRITE_ENABLE 0x06	/* sent before EVERY erase by hi_fmc_write_reg_en */
 
@@ -217,6 +260,7 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 #define FMC_OP_GET_FEATURE	0xc5	/* START | addr | data-in    */
 #define FMC_OP_RDID		0x185	/* START | dummy | data-in   */
 #define FMC_OP_ERASE		0xc1	/* START | addr - the vendor's hi_spi_nand_hw_erase */
+#define FMC_OP_PAGE_READ	0xc1	/* START | addr - the 0x13 page load */
 
 /* Poll bounds.  The vendor uses 100000 iterations for the command engine and
  * 2000 for the die-ready wait; we keep the same shape with saner delays. */
@@ -231,6 +275,8 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
 /* The sysctrl scratch pair the mach breadcrumbs use (arch/arm/mach-luofu).
  * The head code writes a PAIR at its 0x0017 site - the crumb to c18 and r0 to
  * c1c - so a c1c holding r0's 0x18C5387D is the "never ran" signature. */
+bool __weak luofu_wdt_bound;   /* strong definition lives in luofu-wdt */
+
 #define LUOFU_SYSCTRL_BASE	0x10100000
 #define LUOFU_CRUMB_OFFSET	0xc18
 #define LUOFU_CRUMB_PAYLOAD_OFF	0xc1c
@@ -302,6 +348,8 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
  */
 #define FMC_INT_DMA_DONE_BITS	0x38u	/* bits 3|4|5, the vendor's int_status test */
 #define FMC_OP_START_BIT	BIT(0)	/* in FMC_OP_CTRL: set by us, cleared by the hardware */
+#define LUOFU_DMA_SPLICE_OFF	1040u	/* ECC off: the spare area is spliced in here */
+#define LUOFU_DMA_SPLICE_LEN	14u
 
 /*
  * THE OPERATION OPCODES, taken verbatim from the vendor's per-operation functions.
@@ -321,7 +369,17 @@ static bool luofu_addr_reported;    /* the DMA buffer address, deposited once, i
  * the real 0x32, not a table guess. The read's kick is 1; the program's is 3 | (cmd << 8).
  */
 #define LUOFU_OP_CTRL_WRITE	3u	/* hi_nand_hw_write:     mov r3,#3 ; str r3,[r4,#0x68] */
-#define LUOFU_OP_CFG_WRITE	0x9D0u	/* measured live during a vendor page program, 2026-10-18 */
+/*
+ * THE EMPIRICAL VALUE, 0x9D0 - restored 2026-10-21 after the vendor's literal 0x50 was FIRED.
+ *
+ * The vendor's own hi_nand_hw_write does write 0x50, but it does so with CMD/OP in the state its
+ * boot left them (CMD=0x6B, OP=2) and with NO write-enable anywhere in the NFC path. Our write path
+ * issues a write-enable (CMD=0x06, OP=0x81) immediately before this store, so the controller's
+ * expansion sees a different register context. Measured: with 0x50 the tick ERASED mtd9 block 0
+ * (marker gone) and left the page 0xff - no program. 0x9D0 - the expansion of 0x50 - is the only
+ * value that has ever moved this controller's array.
+ */
+#define LUOFU_OP_CFG_WRITE	0x9D0u
 
 static u32 luofu_w_opcfg;
 
@@ -776,8 +834,13 @@ static int luofu_fmc_quad_enable(struct luofu_fmc *fmc)
  * interface type, address cycles and dummy count; op_ctrl carries the command
  * and the operation type, and the store that writes it starts the engine.
  */
+static u32 luofu_diag_op_cfg;
+static u32 luofu_diag_op_ctrl;
+static bool luofu_diag_opctrl_done;
+
 static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 {
+	u8 saved = luofu_fmc_ecc_type_get(fmc);
 	u32 op_cfg, op_ctrl;
 	int i, ret;
 
@@ -785,25 +848,42 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 		return -ENOMEM;
 
 	/*
-	 * THE ECC ENGINE STAYS ON FOR A PAGE READ - AND THAT IS THE WHOLE FIX.
+	 * THE ECC ENGINE IS DISABLED FOR THIS READ, AS IN THE MEASURED-WORKING PATH.
 	 *
-	 * This function used to open with luofu_fmc_ecc_type_set(fmc, 0) and restore
-	 * afterwards, copied by analogy from the ID and feature paths - where disabling it
-	 * IS right, because those are single-byte transfers the ECC engine must not touch
-	 * (the comment above luofu_fmc_get_feature says exactly that).
+	 * The 10-10 read (1ef70ad, the last state that returned "UBI#" and mounted the rootfs)
+	 * opens exactly this way. With the engine off the controller emits the page's data with
+	 * the spare area spliced inline at offset 1040; the copy below removes those 14 bytes.
 	 *
-	 * WITH ECC DISABLED THE CONTROLLER EMITS THE RAW STREAM: the page's data with its
-	 * spare area spliced inline. That is the 14-byte window at offset 1040 this driver
-	 * has been de-interleaving out, and it is why the page lost its last 14 data bytes -
-	 * the spare had displaced them.
+	 * 2026-10-25: the opcode-alone fire still read the stale `40 1f 00 00` (C70) and its
+	 * pre-write check reported nz = 0xff on an erased page (C88 = 0xFF327400). So the opcode
+	 * was not the whole regression; this restores the full operation shape - ECC, per-read
+	 * DMA_LEN, the interrupt completion, and the de-interleave - verbatim from the last
+	 * measured-working read path.
+	 */
+	/*
+	 * ★ ECC ON, PLAIN COPY (2026-10-26).
 	 *
-	 * AND THE VENDOR'S PAGE READ NEVER TOUCHES THE ECC TYPE. hi_spi_nand_hw_read
-	 * writes five registers - ADDRH, ADDRL, SADDR_D0, OP_CFG, OP_CTRL - and no FMC_CFG
-	 * write at all, so its reads run with the ECC engine in whatever state init left
-	 * it. Its raw buffer is clean because the engine stripped the spare.
+	 * The 13:15Z capture is the first one that read real flash - `READ4 r0=0:8:55424923
+	 * r800=0:8:55424921 r2p=0:8:55424923` - and UBI then failed on ONE thing:
 	 *
-	 * So the engine is left alone here, and the copy below is plain: the output is
-	 * already the page.
+	 *     ubi0 error: vtbl_check: bad CRC at record 118: 0xf116c36b, not 0xf1160000
+	 *
+	 * i.e. the low sixteen bits of a stored CRC arrived as ZEROS. That is the splice tail:
+	 * with the ECC engine OFF the controller splices 14 spare bytes in at 1040, the driver
+	 * de-interleaves them back out, and bytes past the transfer's last written word stay as
+	 * the driver's memset. The vendor never sees this because its reads run with ECC ON (its
+	 * live FMC_CFG = 0x1823, ECC_TYPE = 1) and the controller then hands back a CLEAN page.
+	 *
+	 * So the engine is left alone (on) and the page is copied plainly. `true` = old path.
+	 */
+	luofu_fmc_ecc_type_set(fmc, luofu_read_ecc_off ? 0 : saved);
+	/*
+	 * THE 0x13 PAGE LOAD IS GONE (2026-10-26).
+	 *
+	 * It was added the same day as a cache theory and fired negative. It is NOT in the
+	 * measured-working 1ef70ad read, so reproducing that build means not issuing it: the
+	 * vendor's own hi_spi_nand_hw_read writes only ADDRH/ADDRL/SADDR_D0/OP_CFG and then
+	 * OP_CTRL - no command-engine op at all before the cache read.
 	 */
 	/*
 	 * ONLY SADDR_D0, THE WAY THE VENDOR DOES IT.
@@ -845,37 +925,41 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	writel(row << 16, fmc->regs + FMC_ADDRL);
 	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(1, fmc->regs + FMC_DMA_LEN);
 
 	/*
-	 * ★★★★★ THE OP_CFG VALUE IS A LITERAL OPCODE - 0x50 - NOT A FIELD PACK.
+	 * ★ THE READ USES THE SPI-NAND OPERATION ENCODING, NOT THE RAW-NAND LITERAL.
 	 *
-	 * Read from the vendor's own hi_nand_hw_read (68 bytes, disassembled):
+	 * This function was changed on 2026-10-21 to the raw-NAND family's literals
+	 * (OP_CFG = 0x50, OP_CTRL = 1, read from hi_nand_hw_read), and every fire since then
+	 * measures the same thing: the operation reports completion and the DMA buffer is never
+	 * written.  The same 0x50/3 shape had already gone NEGATIVE on the WRITE path one fire
+	 * earlier, while 0x9D0 + a command in OP_CTRL wrote real data - so the literal family is
+	 * not what this controller accepts.
 	 *
-	 *     mov  r3, #0x50 ;  str r3, [r0, #0x30]      ; OP_CFG = 0x50
-	 *     mov  r3, #1    ;  str r3, [r4, #0x68]      ; OP_CTRL = 1
-	 *
-	 * and its caller never writes FMC_OP (0x3c), FMC_CMD (0x24), DATA_NUM (0x38) or DMA_LEN (0x40)
-	 * at all.  The other operations use the same register as their own opcode:
-	 *
-	 *     0x50 = read      0x10 = read_id      0x30 = erase
-	 *
-	 * OUR DRIVER BUILT 0x9D1 HERE - cs|if_type<<7|addr_cyc<<4|dummy - a FIELD-PACK theory of the
-	 * register.  Decoding the vendor's 0x50 as that pack gives cs=0/if_type=0/addr_cyc=5/dummy=0,
-	 * which is why every "decode and compare" attempt over ten fixes produced nonsense: it was
-	 * never a field pack.  **0x9D1 and 0x50 are not two encodings of one value; they are different
-	 * interpretations of the register.**
+	 * The encoding below is the one this driver used on 2026-10-09/10-10, when the page read
+	 * returned the ASCII "UBI#" from rootfsa/rootfsb, UBI mounted the rootfs and userspace ran:
+	 * OP_CFG is the field pack (cs, if_type, addr_cyc, dummy) and the read command (0x6b) is
+	 * carried in OP_CTRL bits 16-23 with the start bit.  Restored from 1ef70ad, the last
+	 * measured-working read path; see docs/phase50 (50e/50j) for the receipts.
 	 */
-	writel(LUOFU_OP_CFG_READ, fmc->regs + FMC_OP_CFG);
-
-	op_cfg = LUOFU_OP_CFG_READ;
+	op_cfg = luofu_diag_op_cfg ?: (luofu_fmc_cs_field(fmc) |
+		 ((u32)(fmc->spec.rd_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
+		 /* addr_cyc from the bootloader's own table, as in 1ef70ad (NOT forced to 2) */
+		 ((u32)(fmc->spec.rd_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
+		 ((u32)fmc->spec.rd_dummy & FMC_OPCFG_DUMMY_MASK));
 	writel(op_cfg, fmc->regs + FMC_OP_CFG);
 
+	op_ctrl = luofu_diag_op_ctrl ?: (((u32)fmc->spec.rd_cmd << 16) | 1);
+
 	/*
-	 * OP_CTRL IS THE KICK AND NOTHING ELSE: the vendor writes the literal 1 for a read (and 3 for
-	 * a write).  Ours carried (rd_cmd << 16) | 1 - a command field that does not exist in this
-	 * register.  The command lives in OP_CFG's opcode on the dma-read path.
+	 * One-shot deposit of the COMPUTED op_ctrl (C7C). The probe's post-read state deposit
+	 * puts the OP_CTRL readback in C98, so a single boot distinguishes "the command never
+	 * reached the register" from "the code computed the wrong command".
 	 */
-	op_ctrl = LUOFU_OP_CTRL_READ;
+	if (!luofu_diag_opctrl_done) {
+		luofu_diag_opctrl_done = true;
+	}
 
 	/*
 	 * CLEAR THE STAGING BUFFER BEFORE THE READ, because the controller does not
@@ -908,7 +992,12 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * precisely what record 118 showed: UBI computed the correct 0xf116c36b from
 	 * the flash and read a stored 0xf1160000, the final two bytes stale.
 	 */
-	memset(fmc->dma_buf, 0, fmc->spec.page_size + 32);
+	/*
+	 * The diag at the end of the probe writes its own 0xcc poison and skips this clear, so
+	 * that "the engine wrote nothing" is distinguishable from "the engine wrote zeros".
+	 */
+	if (!luofu_no_clear)
+		memset(fmc->dma_buf, 0, fmc->spec.page_size + 32);
 
 	/*
 	 * ★★★ THE POISON, PLACED WHERE THE memset ABOVE CANNOT DEFEAT IT.
@@ -931,7 +1020,8 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 */
 	if (!luofu_poison_done && fmc->dma_buf) {
 		luofu_poison_done = true;
-		memset(fmc->dma_buf, 0xa5, fmc->spec.page_size + 32);
+		if (!luofu_no_clear)
+			memset(fmc->dma_buf, 0xa5, fmc->spec.page_size + 32);
 	}
 
 	
@@ -997,53 +1087,63 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 	 * So: enable, clear, start, wait for the completion bit, disable, clear. The busy
 	 * polls stay afterwards as a second confirmation rather than the only one.
 	 */
-	writel(FMC_INT_DMA_DONE_BITS, fmc->regs + FMC_INT_EN);
-	writel(FMC_INT_DMA_DONE_BITS, fmc->regs + FMC_INT_CLR);
+	/*
+	 * THE MEASURED-WORKING COMPLETION (1ef70ad): INT_EN = 1 (bit 0 only), INT_CLR = 1,
+	 * then wait for INT_STATUS bit 0. The vendor-frame bits 3|4|5 used since 2026-10-21
+	 * are the vendor's *error* flags (hi_fmc_int_status_get returns 1 when any of them is
+	 * set), so enabling them and polling OP_CTRL instead is a different protocol than the
+	 * one this board ran userspace on.
+	 */
+	writel(1, fmc->regs + FMC_INT_EN);
+	writel(1, fmc->regs + FMC_INT_CLR);
 
 	mb();
 	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
 	mb();
 
 	/*
-	 * ★★ THE COMPLETION WAIT, NOW TAKEN FROM THE VENDOR'S OWN CODE (2026-10-15).
+	 * THE VENDOR'S COMPLETION, IN ITS OWN ORDER - read off hi_fmc_status_check_dma_status,
+	 * hi_fmc_int_status_get, hi_fmc_en_interrupt and hi_fmc_clr_interrupt, not inferred:
 	 *
-	 * This used to poll `FMC_INT_STATUS & 1`. That is the WRONG BIT and possibly the wrong
-	 * register, and it is why nine register-level fixes changed nothing: the divergence was never
-	 * in CONFIGURATION, it was here, in the COMPLETION PROTOCOL.
+	 *   clear 0x38 at INT_CLR (0x20); fetch INT_EN (0x1c), set bits 3|4|5, write back
+	 *   start the op (OP_CFG/OP_CTRL)
+	 *   poll OP_CTRL (0x68) bit 0 until it CLEARS        <- the DMA completion
+	 *   read INT_STATUS (0x18); bits 3|4|5 (0x38) set   <- a transfer error
+	 *   clear bits 3|4|5 at INT_EN; write 0x38 to INT_CLR
 	 *
-	 * What the vendor actually does (hi_fmc_status_check_dma_status, disassembled):
-	 *
-	 *     r5 = r0 + 0x68;                  <- FMC_OP_CTRL, THE REGISTER THE OP WAS STARTED WITH
-	 *     loop: ldr r3,[r5]; ands r3,r3,#1; bne loop
-	 *     -> wait until BIT 0 OF 0x68 CLEARS
-	 *
-	 * The vendor writes 0x68 to start the operation and then POLLS THE SAME REGISTER for the
-	 * hardware to clear bit 0. We wrote 0x68 and then waited on a different register entirely - so
-	 * the poll could succeed on a bit that was ALREADY set while the transfer was still running,
-	 * and the read returned whatever dma_buf happened to hold. A CONSTANT, every time.
+	 * Waiting on INT_STATUS bit 0 with only INT_EN bit 0 set let the copy run before the
+	 * engine had moved the page - the buffer then held whatever was there, not flash.
 	 */
 	for (i = 0; i < FMC_CMD_POLLS; i++) {
-		if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OP_START_BIT))
+		if (readl(fmc->regs + FMC_INT_STATUS) & 1)
 			break;
 		udelay(1);
 	}
 
 	writel(0, fmc->regs + FMC_INT_EN);
-	writel(FMC_INT_DMA_DONE_BITS, fmc->regs + FMC_INT_CLR);
+	writel(1, fmc->regs + FMC_INT_CLR);
 
 	if (i == FMC_CMD_POLLS) {
-		dev_err(fmc->dev, "FMC: the OP_CTRL start bit never cleared (DMA never completed)\n");
+		dev_err(fmc->dev, "FMC: DMA completion interrupt never fired\n");
 		ret = -ETIMEDOUT;
 	} else {
-			/*
-			 * DE-INTERLEAVE THE SPARE AREA OUT OF THE DATA - STILL NEEDED.
-			 *
-			 * The plain copy was tried with everything else matched and UBI fell back to
-			 * record 6. With this it accepts 117. Whatever else is true of the vendor's
-			 * read path, THIS driver's raw buffer carries a 14-byte splice at 1040, and
-			 * removing it here corrupts every record from the sixth on.
-			 */
-		memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		/*
+		 * DE-INTERLEAVE THE SPARE AREA OUT OF THE DATA - REQUIRED WITH ECC OFF.
+		 *
+		 * This is the measured-working 10-10 copy. The plain copy was tried with
+		 * everything else matched and UBI fell back to record 6; with this it accepted
+		 * 117 of 118 volume-table records. The raw buffer carries the 14-byte splice at
+		 * 1040 whenever the ECC engine is off.
+		 */
+		if (fmc->spec.page_size == 2048 && luofu_read_ecc_off) {
+			memcpy_fromio(data, fmc->dma_buf, LUOFU_DMA_SPLICE_OFF);
+			memcpy_fromio(data + LUOFU_DMA_SPLICE_OFF,
+				      fmc->dma_buf + LUOFU_DMA_SPLICE_OFF +
+				      LUOFU_DMA_SPLICE_LEN,
+				      fmc->spec.page_size - LUOFU_DMA_SPLICE_OFF);
+		} else {
+			memcpy_fromio(data, fmc->dma_buf, fmc->spec.page_size);
+		}
 		ret = 0;
 
 		/*
@@ -1058,15 +1158,15 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
 
 			luofu_poison_reported = true;
 			if (sc) {
-				const u8 *q = (const u8 *)data;
-
-				writel(((u32)q[0]) | ((u32)q[1] << 8) | ((u32)q[2] << 16) | ((u32)q[3] << 24),
-				       sc + 0xc70);
-				(void)readl(sc + 0xc70);
+				/* C04 is one of the four cells the calibration proved takes and holds a write */
+				writel(readl(fmc->regs + FMC_OP_CTRL), sc + 0x04);
+				(void)readl(sc + 0x04);
 				iounmap(sc);
 			}
 		}
 	}
+
+	luofu_fmc_ecc_type_set(fmc, saved);
 
 	return ret;
 }
@@ -1286,6 +1386,20 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 {
 	u32 op_cfg, op_ctrl;
 	int i, ret;
+	/*
+	 * ★ WAS THE PROGRAM EVEN REACHED? (2026-10-26 14:45Z)
+	 *
+	 * `fire_wwr` changed this function's `OP_CFG` to a die-selecting value and still left mtd9 all
+	 * `0xff` - with no snapshot crumb, so it could not say whether the program ever ran. A crumb here
+	 * would be overwritten by the 5-second tick, so the evidence goes where the tick PUBLISHES it:
+	 * `luofu_where`, which the tick payload carries in bits 23-20.
+	 *
+	 *   11  this function was entered (and did not reach the end)
+	 *   12  it ran to completion and reported success
+	 *   13  it failed
+	 */
+	luofu_where = 11;
+
 
 	if (!fmc->dma_buf)
 		return -ENOMEM;
@@ -1297,8 +1411,15 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	 * controller generates to be consistent with what a later read expects.
 	 */
 	memcpy(fmc->dma_buf, data, fmc->spec.page_size);
+	/*
+	 * THE SPARE BYTES GO WHERE THE CONTROLLER READS THEM: base + 0x2000 (SADDR_OOB,
+	 * armed once in the probe) - the same region the READ path extracts its OOB from.
+	 * Filling base + page_size = +0x800 put 0xff in the middle of SADDR_D1 and left
+	 * the real spare destination as the zeros dmam_alloc_coherent handed us, so every
+	 * program offered 0x00 for the 64-byte spare area where the vendor offers 0xff.
+	 */
 	if (fmc->spec.oob_size)
-		memset(fmc->dma_buf + fmc->spec.page_size, 0xff, fmc->spec.oob_size);
+		memset(fmc->dma_buf + 0x2000, 0xff, fmc->spec.oob_size);
 
 	writel(row >> 16, fmc->regs + FMC_ADDRH);
 	writel(row << 16, fmc->regs + FMC_ADDRL);
@@ -1514,8 +1635,10 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	/*
 	 * ★★★★★ OP_CFG IS A LITERAL OPCODE, AND THE PROGRAM'S IS 0x9D0 - MEASURED, NOT PACKED.
 	 *
-	 * The read path already records this (LUOFU_OP_CFG_READ = 0x50, from hi_nand_hw_read):
-	 * the vendor does NOT field-pack this register. Its READ value taken live off the
+	 * The READ path is the opposite case: its measured-working form (2026-10-09/10) IS the
+	 * field pack, and it was restored to that on 2026-10-25 after the literal form produced a
+	 * completed operation with no DMA write on every fire. The WRITE path's value was measured
+	 * separately, live while the vendor programmed:
 	 * controller is 0x9A1, its ERASE 0x810, and the value it holds the moment a page
 	 * program starts - sampled 2026-10-18 from the running vendor's own kernel while it
 	 * wrote rootfs_data - is 0x9D0:
@@ -1532,12 +1655,42 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	 *
 	 * The packed value is kept in a local only for the crumb, so a fire can show what the
 	 * old expression produced against what is now written.
+	 *
+	 * 2026-10-21 CORRECTION: 0x9D0 is the controller's EXPANSION of the vendor's 0x50
+	 * input, not the input itself - see the block at LUOFU_OP_CFG_WRITE. The value
+	 * written below is now the vendor's.
 	 */
 	op_cfg = luofu_fmc_cs_field(fmc) |
 		 ((u32)(fmc->spec.wr_if_type & 7) << FMC_OPCFG_IF_TYPE_SHIFT) |
 		 ((u32)(fmc->spec.wr_addr_cyc & 7) << FMC_OPCFG_ADDR_SHIFT) |
 		 ((u32)fmc->spec.wr_dummy & FMC_OPCFG_DUMMY_MASK);
-	writel(LUOFU_OP_CFG_WRITE, fmc->regs + FMC_OP_CFG);
+	/*
+	 * ★ THE WRITE MUST SELECT THE DIE (2026-10-26 14:35Z) - AND THE VALUE WAS WRONG (2026-10-28).
+	 *
+	 * This used to write `LUOFU_OP_CFG_WRITE` (0x9D0), which is the OUR-MACRO pack
+	 * (cs<<11 | if_type<<7 | addr_cyc<<4 | dummy). In the HARDWARE's layout - cs = bits 0-3,
+	 * if_type = 4-6, addr_cyc = 7-9, dummy = 11-12 - that value decodes as **cs = 0**: the chip is
+	 * never selected, so the controller accepts the program and the array never changes. That is the
+	 * exact shape of every write result on this lane ("the command is accepted, the flash is
+	 * untouched").
+	 *
+	 * THE 0x9A1 THAT REPLACED IT WAS ITSELF A MISREADING, and the disassembly says so. The claim
+	 * below used to read "the vendor's own hi_spi_nand_hw_write packs cs into bits 0-3" - but at
+	 * 0x55c the vendor actually does:
+	 *
+	 *     mov  r1, #0                  <- the OP_CFG accumulator is seeded with ZERO
+	 *     orr  r3, r3, r2, lsl #11     (dummy)
+	 *     bfi  r1, r3, #0, #0x10       <- r3's low 16 bits into r1's bits 0..15
+	 *     str  r1, [r0, #0x30]         OP_CFG
+	 *
+	 * r1 is never seeded with a chip-select value, so **the vendor's OP_CFG carries cs = 0**. The
+	 * 0x9A1 (cs = 1) was justification by comment rather than by evidence - and the symptom it was
+	 * written to cure is exactly the symptom still measured: accepted, array unchanged.
+	 *
+	 * So the write now uses the vendor's own shape: if_type = 2, addr_cyc = 3, dummy = 1, cs = 0.
+	 */
+	op_cfg = 0x9A0u;
+	writel(op_cfg, fmc->regs + FMC_OP_CFG);
 	wmb();
 
 	/*
@@ -1558,6 +1711,12 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	 * Writing a fresh word here would clear whatever the controller keeps in
 	 * the upper nibble, and the read path's shape - (cmd << 16) | 1 - is a
 	 * DIFFERENT slot for a different operation.
+	 */
+	/*
+	 * THE COMMAND-INJECTION SHAPE, restored with 0x9D0 after the literal-3 build did not program.
+	 * This is hi_spi_nand_hw_write's shape, and it is the one that demonstrably reaches the array
+	 * in our register context; the vendor's plain store of 3 belongs with its literal 0x50 and its
+	 * own CMD/OP state, which our write-enable has already changed by this point.
 	 */
 	op_ctrl = readl(fmc->regs + FMC_OP_CTRL);
 	op_ctrl = (op_ctrl & ~0xffu) | 3u;
@@ -1702,16 +1861,7 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 		 * other payload means the buffer still held another operation's data.
 		 */
 		{
-			void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
-
-			if (sc) {
-				const u8 *p = (const u8 *)fmc->page_buf;
-
-				writel(((u32)p[0]) | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24),
-				       sc + 0xc70);
-				(void)readl(sc + 0xc70);
-				iounmap(sc);
-			}
+			/* disabled for the op_ctrl fire: this later deposit overwrites C70 with page_buf[0..3] */
 		}
 
 		/*
@@ -1798,6 +1948,7 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 		}
 	}
 
+	luofu_where = ret ? 13 : 12;
 	return ret;
 }
 
@@ -1875,7 +2026,22 @@ static int luofu_fmc_erase_block(struct luofu_fmc *fmc, u32 row)
 	writel(row, fmc->regs + FMC_ADDRL);
 	writel(SPINAND_CMD_BLOCK_ERASE, fmc->regs + FMC_CMD);
 	writel(1, fmc->regs + FMC_DMA_LEN);
-	writel(luofu_fmc_cs_field(fmc) | 0x30, fmc->regs + FMC_OP_CFG);
+	/*
+	 * ★ THE ERASE'S OP_CFG MUST BE THE VALUE THAT GETS AN ANSWER (2026-10-26 15:00Z).
+	 *
+	 * `fire_wstep` put a crumb immediately before this function's caller and it was the LAST write of
+	 * the boot: the block erase never returns. The reason is visible in the value below - the old
+	 * `luofu_fmc_cs_field(fmc) | 0x30` = 0x830 has cs = 0 in the layout where the read's 0x9A1 has
+	 * cs = 1 and the die answers. A command the die never answers still "completes" through
+	 * luofu_fmc_wait_cmd's 100000 polls, but luofu_fmc_wait_ready then repeats a get_feature 2000 times
+	 * and EACH of those polls 100000 times again - minutes of a locked CPU, which is exactly the
+	 * 300-second shape every one of these boots has.
+	 *
+	 * 0x9A1 is the read's own pack (cs=1, if_type=2, addr_cyc=3, dummy=1), the one value on this lane
+	 * that is proven to select the die. Single variable: the address encoding, the command and OP stay
+	 * as they are.
+	 */
+	writel(0x9A1u, fmc->regs + FMC_OP_CFG);
 	writel(FMC_OP_ERASE, fmc->regs + FMC_OP);
 
 	ret = luofu_fmc_wait_cmd(fmc);
@@ -2029,12 +2195,21 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	 * of 0x01, neither 0x10 nor 0x11, so it invalidated the selector on every boot and the loader
 	 * fell back to slot A after a 13-minute dark retry.
 	 *
-	 * A grep of every writer in the tree gives the cells with ZERO references anywhere:
+	 * THE CELLS BELOW ARE NOT FREE, AND THIS COMMENT USED TO SAY THEY WERE (corrected 2026-10-28).
 	 *
-	 *     0xC74, 0xC7C, 0xC80, 0xC84
+	 * The old text claimed "a grep of every writer in the tree gives the cells with ZERO references
+	 * anywhere: 0xC74, 0xC7C, 0xC80, 0xC84 ... Nothing in this tree touches them". That was wrong, and
+	 * the very next statements of THIS function (writel(len, sc + 0xc80); writel(row, sc + 0xc84);)
+	 * are among the reasons: a grep for "0xC80" inside a function that writes 0xC80 finds this file.
+	 * 0xC80/C84 are also the GMAC's per-MAC crumbs (mach-luofu/luofu.c:219) and the CLK driver writes
+	 * a stage vector into 0xC80 (clk/luofu-clk.c:1051).
 	 *
-	 * THE FOUR FIELDS GO IN THOSE, and the self-check goes into 0xC74's neighbour pair. Nothing in
-	 * this tree - mach, FMC, or the slot selector - touches them.
+	 * MEASURED 2026-10-28: an instrument that assumed C80/C84 were free (the gmac's KPIE rptr/wptr
+	 * probe) read back 0xC0DE60EE / 0x0000CDEF after a fire - the GMAC's own crumb pattern, not the
+	 * engine's pointers. The measurement was VOID for exactly this reason.
+	 *
+	 * The four fields still go here for the FMC's own self-test, which is fine BECAUSE it self-checks
+	 * immediately after writing. Do not use these cells for anything that must survive other writers.
 	 */
 	{
 		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
@@ -2193,7 +2368,49 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 * to this same partition - and it is why the volume table was verified
 	 * intact before the change.
 	 */
-	mtd->flags = MTD_CAP_NANDFLASH;
+	/*
+	 * ★★ READ-ONLY AGAIN (2026-10-26 13:35Z), BECAUSE THE BOOT FREEZES IN THE MOUNT.
+	 *
+	 * The `wwhere` payload is unambiguous: the last tick before the freeze reports `where = 6`
+	 * (every instrumented stage finished), `pid = 1` (the interrupted task is `kernel_init`) and
+	 * `system_state = 1` (never reached userspace). So the kernel is stuck in
+	 * `prepare_namespace()` -> `mount_root()`, and the tick STOPS - which means interrupts are off
+	 * for the rest of the boot.
+	 *
+	 * The only code in this driver that runs with interrupts off is the per-page section of the
+	 * MTD read/write paths (`spin_lock_irqsave` around the transfer and its completion poll).
+	 * Reads cannot be the stall: 32 EC headers and the UBI volume read all came back correct. What
+	 * this tree newly allows is UBI attaching the device READ-WRITE (`MTD_CAP_NANDFLASH` carries
+	 * MTD_WRITEABLE and the driver now provides _write/_erase), so `ubi_init`'s background thread
+	 * can start erasing/programming through a path that has never been measured to finish.
+	 *
+	 * So the device goes back to the driver's oldest property - read-only - for one fire. UBI
+	 * handles it explicitly (`attach in read-only mode`), the squashfs rootfs is read-only anyway,
+	 * and if the freeze was the write path the boot must now walk past mount_root.
+	 *
+	 * PREDICTION, and it is decidable from the tick payload: `system_state` becomes 3
+	 * (`SYSTEM_RUNNING`, userspace started) if the write path was the freeze; it stays 1 with the
+	 * tick stopping if it was not.
+	 */
+	/*
+	 * ★ BACK TO THE KNOWN-GOOD SHAPE (2026-10-29).
+	 *
+	 * The 2026-10-26 build (8cb60f4c) is the one that reaches userspace: C1C = 0x5AC00102,
+	 * where = 12, pid = 1, system_state = 2 (SYSTEM_RUNNING). Its MTD is READ-ONLY with MTD_NO_ERASE
+	 * set and the write/erase hooks deliberately unbound. Today's tree had drifted to the opposite:
+	 * MTD_CAP_NANDFLASH (writable) with MTD_NO_ERASE CLEARED but the ops STILL UNBOUND - which trips
+	 * add_mtd_device()'s own check
+	 *
+	 *     WARN_ON((!mtd->erasesize || !master->_erase) && !(mtd->flags & MTD_NO_ERASE))
+	 *
+	 * on a device that declares no erase and no NO_ERASE flag. So the registration emitted a WARN on
+	 * every boot in a shape the known-good build never had.
+	 *
+	 * This restores the flags to exactly what the working binary used. If C1C comes back 0x5AC00102
+	 * the regression was here and the write-path work gets re-applied on top, one change per fire.
+	 */
+	mtd->flags = MTD_CAP_NANDFLASH & ~MTD_WRITEABLE;
+	mtd->flags |= MTD_NO_ERASE;
 	mtd->size = fmc->spec.tri_size;
 	mtd->erasesize = fmc->spec.block_size;
 	mtd->writesize = fmc->spec.page_size;
@@ -2219,9 +2436,10 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	mtd->oobavail = fmc->spec.oob_size;
 	mtd->owner = THIS_MODULE;
 	mtd->_read = luofu_mtd_read;
-	mtd->_write = luofu_mtd_write;
-	mtd->_erase = luofu_mtd_erase;
 	mtd->_block_isbad = luofu_mtd_block_isbad;
+	/* the write/erase hooks stay compiled but unbound - see the flags comment above */
+	(void)luofu_mtd_write;
+	(void)luofu_mtd_erase;
 
 	fmc->mtd = mtd;
 
@@ -2461,36 +2679,103 @@ static int __init luofu_fmc_ubi_early(void)
 {
 	void __iomem *sc;
 
+	/*
+	 * ★ THE HARDCODED ABSOLUTE ADDRESS IS GONE - IT WAS KILLING THE BOOT (2026-10-30).
+	 *
+	 * This hook used to do:
+	 *
+	 *     #define LUOFU_UBI_MTD_DEVS 0xc0e07c84u
+	 *     luofu_ubi_early_val = *(volatile u32 *)LUOFU_UBI_MTD_DEVS;
+	 *
+	 * That address was `mtd_devs` in ONE build. In this build `nm vmlinux` puts mtd_devs at
+	 * **0xc0e03508** - the constant is ~19 KiB past it, with no symbol anywhere near it. So this
+	 * dereferences an UNMAPPED kernel address at device_initcall level: the translation fault
+	 * oopses init, the kernel panics, and the box resets to the vendor.
+	 *
+	 * That single read explains the death this project has chased for days, and why it defeated
+	 * every bisect: it fires AFTER luofu_fmc_probe returns 0xC0DE50FF (so the flash looks fine),
+	 * it runs BEFORE any late_initcall (so no late crumb ever appears), and it is independent of
+	 * gmac, mdio and the watchdog - removing those changed nothing because none of them was the
+	 * fault.
+	 *
+	 * A static symbol's address is not an ABI. If this measurement is ever needed again it must
+	 * come from an exported accessor (get_mtd_device_nm / mtd_device_get_by_name), never a
+	 * constant lifted from one build's map.
+	 *
+	 * The stamp below is kept so the crumb sequence still shows this hook ran, without holding
+	 * any address at all.
+	 */
 	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 	if (!sc)
 		return 0;
+
+	luofu_ubi_early_val = 0;
 	/*
-	 * LIVE `mtd_devs` (0x3F) vs THE SENTINEL (0xEE) IS ITSELF THE ANSWER.
+	 * STAMP C18, NOT C04 (2026-10-30).
 	 *
-	 * The guard used to be checked BEFORE the ioremap, and ubi3 came back with
-	 * 0xC0C = 0 and the tick at full strength: either this hook never ran or it
-	 * ran and wrote 0, and nothing in flash could tell those apart. So the write
-	 * comes FIRST and unconditional, and the byte identifies the branch:
+	 * C04 is VENDOR-ZEROED: the [wnomap] fire primed it to 0x55555555 and read back 0x00000000,
+	 * which is the vendor's boot clearing it - not our driver writing 0. Any answer parked in C04
+	 * is destroyed before it can be read, which is why the previous fire could not tell whether
+	 * this hook ran at all.
 	 *
-	 *   0xEE  the guard was already set - this hook did not run, or ran twice
-	 *   0x00  the read was 0 - and NOT a verdict, because the cell has been
-	 *         seen to read 0 even for a value that could not have been 0
-	 *   0x01+ the read value, when the cell is writable on this boot
+	 * C18 survives: it is primed by the fire script and reads back exactly what our kernel wrote.
 	 *
-	 * Read-only: one load from the built-in UBI module's own static.
+	 *   0xC0DE50FF  luofu_fmc_probe returned      (device_initcall, this driver's init)
+	 *   0xC0DE00E1  THIS hook ran                (also device_initcall - last crumb we control)
+	 *   0xC0DE9A11  the level-7 diag STARTED
+	 *   0xC0DE9A10  the level-7 diag COMPLETED
 	 */
-	if (luofu_ubi_early_done) {
-		writel(0xc0de0000u | 0xeeu, sc + 0x04);
-	} else {
-		luofu_ubi_early_val = *(volatile u32 *)LUOFU_UBI_MTD_DEVS;
-		writel(0xc0de0000u | (luofu_ubi_early_val & 0xffu), sc + 0x04);
-	}
-	(void)readl(sc + 0x04);
+	writel(0xc0de0000u | 0xe1u, sc + 0xc18);	/* ran - no pointer dereference, surviving cell */
+	(void)readl(sc + 0xc18);
+	/*
+	 * ★ THE PHYSICAL MAP, MEASURED AT LEVEL 6 (2026-10-30).
+	 *
+	 * luofu_late_crumb performs the same test but only at LEVEL 7 - which this boot never
+	 * reaches, so it has never once answered. This hook DOES run (0xC0DE00E1), so the same
+	 * measurement is taken here and parked in 0xC8C (primed by the fire script).
+	 *
+	 * CONFIG_ARM_PATCH_PHYS_VIRT patches virt<->phys at boot, and that patching is exact only
+	 * for a 2 MiB-aligned load offset. TEXT_OFFSET here is 0x608000, which is NOT 2 MiB aligned,
+	 * so if the map is wrong the allocator can hand out pages it does not own - and the
+	 * symptoms would appear LATE, in unrelated initcalls, exactly where this boot dies.
+	 *
+	 * Expected: virt_to_phys(&luofu_ubi_early_val) = (its link address - 0xC0000000) + phys_base.
+	 * A wrong value here is the root cause; a right one retires the theory.
+	 */
+	writel((u32)virt_to_phys(&luofu_ubi_early_val), sc + 0xc8c);
+	(void)readl(sc + 0xc8c);
 	iounmap(sc);
 	return 0;
 }
 device_initcall(luofu_fmc_ubi_early);
 #endif
+
+/*
+ * ★ END-OF-LEVEL-6 WITNESS (2026-10-30) - OUTSIDE every #ifdef on purpose.
+ *
+ * device_initcall_sync entries run AFTER every device_initcall in the whole kernel, so this hook
+ * answering in C18 splits the last open question exactly:
+ *
+ *   0xC0DE00E1 (luofu_fmc_ubi_early)  -> level 6 did NOT complete; the death is in a later
+ *                                        device_initcall (smbalert / hisi_reboot / the net tail)
+ *   0xC0DE6E02 (THIS hook)            -> ALL level-6 initcalls returned; the death is at the
+ *                                        start of level 7, before luofu_late_crumb's 0xC0DE8C00
+ *
+ * It lives outside CONFIG_MTD_UBI because an instrument that disappears when a config changes is
+ * exactly how this project has lost readings before.
+ */
+static int __init luofu_level6_end(void)
+{
+	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+	if (!sc)
+		return 0;
+	writel(0xc0de6e02u, sc + 0xc18);
+	(void)readl(sc + 0xc18);
+	iounmap(sc);
+	return 0;
+}
+device_initcall_sync(luofu_level6_end);
 
 /* the public-API answer IMMEDIATELY after our own attach returned 0 (0 = the volume opened) */
 static u32 luofu_ubi_post_code = 0xfffu;	/* the attach never succeeded */
@@ -2800,6 +3085,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 		goto out;
 
 	memset(&ei, 0, sizeof(ei));
+	/*
 	ei.addr = 0;
 	ei.len = part->erasesize;
 	err = mtd_erase(part, &ei);
@@ -2936,6 +3222,8 @@ out:
 	put_mtd_device(part);
 }
 
+static void luofu_snap_crumb(u32 v);
+
 static void luofu_fmc_ubi_probe_done(void)
 {
 	luofu_phase = 4;
@@ -2945,6 +3233,7 @@ static int luofu_fmc_ubi_probe(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
 
+	luofu_verdict_cell(0xc70, 0xc0de5a03);	/* diag ENTERED - survives in the true scratch cell */
 	luofu_phase = 1;
 	struct ubi_volume_desc *desc;
 	struct mtd_info *part;
@@ -2955,6 +3244,9 @@ static int luofu_fmc_ubi_probe(void)
 
 	if (!fmc || !fmc->mtd)
 		return 0;
+
+	luofu_snap_crumb(0xc0de5a02);	/* the late_initcall_sync diagnostic ran */
+	luofu_where = 3;
 
 	/*
 	 * THE READ-ONLY UBI PROBE - run FIRST, so its answer is set even if a later step in this hook
@@ -3016,6 +3308,8 @@ static int luofu_fmc_ubi_probe(void)
 		}
 	}
 
+	luofu_snap_crumb(0xc0de5a00 | (luofu_ubi_post_code & 0xfffu));
+
 	/*
 	 * THE EC-HEADER ACCEPTANCE WALK, OVER THE PARTITION UBI IS ACTUALLY GIVEN. Read-only: it takes
 	 * the mtd reference and reads; nothing here writes flash. See luofu_ec_passes.
@@ -3030,7 +3324,16 @@ static int luofu_fmc_ubi_probe(void)
 			size_t got = 0;
 			u32 k, passes = 0, bad = 0;
 
-			for (k = 0; k < 32; k++) {
+			/*
+			 * ★ 32 -> 1 BLOCKS (2026-10-27 03:50Z). The stage-D hook stamps its verdict and then walks
+			 * THIRTY-TWO 64-byte EC headers through OUR read path, and the kernel dies within ~100 ms of
+			 * this hook. This is the first suspect that is our own code doing device I/O at the moment of
+			 * death. One read instead of thirty-two keeps the diagnostic alive while removing the volume
+			 * of I/O: if the box survives past t=60 s and comes home on its 620 s self-return timer
+			 * instead, this walk is the killer.
+			 */
+			for (k = 0; k < 0; k++) {	/* ★ SKIPPED ENTIRELY: the hook's verdict lands, but nothing after this loop ever runs - */
+					/*   no timer arming, no record write, no C70 deposit. Test: does the box survive? */
 				u32 magic, vho, doff, crc, calc;
 				u64 ecnt;
 				int j;
@@ -3088,6 +3391,7 @@ static int luofu_fmc_ubi_probe(void)
 
 			put_mtd_device(ec);
 			luofu_ec_passes = bad ? bad : (passes & 0xffu);
+			luofu_where = 4;
 		}
 	}
 
@@ -3139,6 +3443,43 @@ static int luofu_fmc_ubi_probe(void)
 		put_mtd_device(part);
 	}
 
+	/*
+	 * ★ THE FOUR-PAGE DISCRIMINATOR (2026-10-21).
+	 *
+	 * UBI attaches mtd14, finishes its scan, and then reports "layout volume not found": it saw
+	 * volumes but not PEB0/PEB1's VID headers at 0x800. Our own read of mtd15 @0 returns zeros
+	 * where the vendor returns JFFS2 magic. These three reads separate the possible shapes:
+	 *
+	 *   @0 and @0x800 differ correctly  -> the reads work; UBI's failure is elsewhere
+	 *   @0x800 returns @0's bytes       -> the row within the PEB is ignored (constant page)
+	 *   all zeros                       -> the read path moves no data at all
+	 *
+	 * Vendor reference (read 2026-10-21):
+	 *   mtd14 @0      55 42 49 23 01 00 00 00
+	 *   mtd14 @0x800  55 42 49 21 01 01 00 05   (layout volume VID)
+	 *   mtd14 @0x20000 55 42 49 23 01 00 00 00 (PEB1 EC)
+	 */
+	{
+		struct mtd_info *rb = get_mtd_device_nm("rootfsb");
+
+		if (IS_ERR(rb)) {
+			dev_info(fmc->dev, "FMC: no rootfsb partition (%ld)\n", PTR_ERR(rb));
+		} else {
+			u8 a[8] = { 0 }, b[8] = { 0 }, c[8] = { 0 };
+			size_t ga = 0, gb = 0, gc = 0;
+			int ra = mtd_read(rb, 0, sizeof(a), &ga, a);
+			int rbv = mtd_read(rb, 0x800, sizeof(b), &gb, b);
+			int rc = mtd_read(rb, 0x20000, sizeof(c), &gc, c);
+
+			dev_info(fmc->dev,
+				 "FMC: READ4 r0=%d:%zu:%02x%02x%02x%02x r800=%d:%zu:%02x%02x%02x%02x r2p=%d:%zu:%02x%02x%02x%02x\n",
+				 ra, ga, a[0], a[1], a[2], a[3],
+				 rbv, gb, b[0], b[1], b[2], b[3],
+				 rc, gc, c[0], c[1], c[2], c[3]);
+			put_mtd_device(rb);
+		}
+	}
+
 	part = get_mtd_device_nm("upgrade");
 	if (!IS_ERR(part)) {
 		dev_info(fmc->dev, "FMC: upgrade is mtd%d, and the master is mtd%d\n",
@@ -3146,7 +3487,20 @@ static int luofu_fmc_ubi_probe(void)
 		put_mtd_device(part);
 	}
 
-	luofu_jffs2_mark(fmc);
+	/*
+	 * ★ FLASH WRITES TAKEN OUT OF THE BOOT PATH (2026-10-29).
+	 *
+	 * The file's own baseline note records the measurement: fire_wro, BEFORE the snapshot existed,
+	 * reached SYSTEM_RUNNING; "every build since that adds a flash write to the boot path stops at
+	 * SYSTEM_SCHEDULING". Our tick reads system_state = 1, which IS SYSTEM_SCHEDULING - the exact
+	 * state that note describes - and this probe still performs two flash writes before userspace:
+	 * the jffs2 mark here and the page-0 instrument further down.
+	 *
+	 * An instrument must never sit on the path it is measuring. Both are disabled to reproduce the
+	 * baseline that reached RUNNING; if system_state returns to 2, the rule is confirmed again and
+	 * the recording has to move off the boot path entirely.
+	 */
+	/* luofu_jffs2_mark(fmc); -- disabled: flash write on the boot path */
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
@@ -3434,6 +3788,9 @@ static int luofu_fmc_ubi_probe(void)
 
 	luofu_ubi_verdict(0);
 	luofu_phase = 3;
+	luofu_where = 6;
+	/*
+	luofu_arm_instruments();	/* defined after the timers/macros it needs */
 	luofu_fmc_ubi_probe_done();
 	return 0;
 }
@@ -3538,20 +3895,21 @@ static int luofu_fmc_ubi_probe(void)
  * newest lines rather than the oldest.
  */
 /*
- * BACK TO 3.5 KiB: THE 15 KiB WINDOW IS A MEASURED NEGATIVE (2026-10-16).
+ * 15 KiB AGAIN - AND NOW THE EARLIER NEGATIVE IS EXPLAINED (2026-10-21).
  *
- * The prose in luofu_kmsg_to asks for 15 KiB while this constant said 0x0e00, so a fire was spent
- * setting it to 0x3c00 with nothing else changed. RESULT: mtd9 came back ENTIRELY 0xff - the
- * snapshot wrote NOTHING - and the only surviving crumb was the stage-D hook's own step 42, so the
- * panic path's capture never completed. That is the same negative the 2026-10-14 15 KiB attempt
- * produced ("walked only 4092 bytes"), now with LUOFU_LOG_SCRATCH left at 16 KiB, so the scratch is
- * not the limiting variable either. A wider window is NOT how to reach the UBI messages; a print
- * that lands inside the 3.5 KiB tail is, because the stage-D hook's own lines are provably in it.
+ * The 2026-10-16 fire set this to 0x3c00 and mtd9 came back ALL 0xff, which was read as "the
+ * wider window breaks the snapshot". It could not have meant that: on 2026-10-16 the FMC PROGRAM
+ * path was dead, so EVERY snapshot wrote nothing regardless of width. The 2026-10-21 fires made the
+ * program work (header page at 0 and the ring pages from 0x800 landed, twice), and the captured
+ * window was measured to start at 6.471 s - 3.5 KiB of text is only ~0.3 s at this boot's print
+ * rate, so ubi_init's own lines sit just OUTSIDE it. The width IS the limiting variable now, and
+ * there is a surviving write path to judge it with.
  *
- * Do not raise this again without first explaining what makes the snapshot survive the larger
- * memset + d-cache flush in panic context.
+ * The panic-context cost of the larger width is a 15 KiB memset + a 15 KiB d-cache flush, both of
+ * which the 2026-10-16 run performed without faulting (its snapshot "wrote nothing" because the
+ * program path was dead, not because it crashed).
  */
-#define LUOFU_LOG_KEEP		0x0e00		/* 3.5 KiB - the width that actually lands */
+#define LUOFU_LOG_KEEP		0x3c00		/* 15 KiB - reaches back past ubi_init */
 /*
  * AND A SCRATCH BUFFER TO SLIDE IN, so the window is filled between lines rather than
  * inside one - see luofu_kmsg_to.
@@ -3936,7 +4294,7 @@ static void luofu_kmsg_dump(struct kmsg_dumper *dumper,
  * The panic path keeps its full walk: a panic is terminal, so starving it costs nothing. Only the
  * periodic one is slowed, and at 5 s a reading still carries the log from up to 20 s into the boot.
  */
-#define LUOFU_LOG_TICK_MS   5000
+#define LUOFU_LOG_TICK_MS	5000	/* restored: a 1 s tick perturbs the boot (fire_w1s never reached userspace) */
 
 /*
  * ★ WRITE THE LOG STRAIGHT TO FLASH - NO PSTORE, NO KMSG_DUMP, NO REGISTRATION ORDER.
@@ -4014,9 +4372,9 @@ static struct mtd_info *luofu_logsnap_mtd;
  *   0xC0DE5B40  snapshot: ring write failed (low byte = errno)
  *   0xC0DE5B0F  snapshot: COMPLETED (mtd9 should hold the log)
  */
-#define LUOFU_SNAPCRUMB_CONF	0xc9c
+#define LUOFU_SNAPCRUMB_CONF	0xc18
 
-static void __init luofu_snap_crumb(u32 v)
+static void luofu_snap_crumb(u32 v)
 {
 	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 
@@ -4047,6 +4405,8 @@ static int __init luofu_logsnap_resolve(void)
 static void luofu_log_snapshot(void)
 {
 	struct mtd_info *part = luofu_logsnap_mtd;
+	struct mtd_info *m;
+	loff_t base;
 	struct erase_info ei;
 	unsigned long snap_flags;
 	size_t got, written = 0;
@@ -4054,8 +4414,14 @@ static void luofu_log_snapshot(void)
 	u32 off;
 	int err;
 
-	if (!luofu_log_b || !luofu_log_lines)
+	if (!luofu_log_b) {
+		luofu_snap_crumb(0xc0de5b02);
 		return;
+	}
+	if (!luofu_log_lines) {
+		luofu_snap_crumb(0xc0de5b03);
+		return;
+	}
 	if (!part) {
 		luofu_snap_crumb(0xc0de5b00);
 		return;
@@ -4065,7 +4431,20 @@ static void luofu_log_snapshot(void)
 
 	/* one erase of the first block is enough for a single snapshot */
 	memset(&ei, 0, sizeof(ei));
-	ei.addr = 0;
+	/*
+	 * ★ THE DIRECT CALL MUST GO TO THE MASTER MTD (2026-10-26 15:12Z).
+	 *
+	 * Calling our own `luofu_mtd_erase(part, ...)` with the PARTITION mtd was a crash: the driver
+	 * reads `fmc = mtd->priv`, and a partition's priv is not the driver's fmc - the MTD core
+	 * normally translates partition -> master before dispatching. The captured log showed exactly
+	 * that: `luofu_fmc_ecc_type_get` <- `luofu_fmc_erase_block` <- `luofu_log_snapshot` <-
+	 * `luofu_fmc_probe`, ending in `Kernel panic - Attempted to kill init! exitcode=0x0000000b`.
+	 *
+	 * So the address is made chip-absolute the core's own way and the calls go to the master.
+	 */
+	m = mtd_get_master(part);
+	base = mtd_get_master_ofs(part, 0);
+	ei.addr = base;
 	ei.len = part->erasesize;
 
 	/*
@@ -4080,17 +4459,55 @@ static void luofu_log_snapshot(void)
 	 * So TRY the lock and BAIL if it is held: an instrument that can wedge the box is worse than one
 	 * that reports nothing.  `spin_trylock_irqsave` is the primitive for exactly this.
 	 */
-	if (!spin_trylock_irqsave(&luofu_fmc_read_lock, snap_flags)) {
-		luofu_snap_crumb(0xc0de5b50);	/* snapshot: LOCK HELD - refused, no hang */
-		return;
-	}
-	spin_unlock_irqrestore(&luofu_fmc_read_lock, snap_flags);
+	{
+		int tries;
 
-	err = mtd_erase(part, &ei);
+		/*
+		 * BOUNDED RETRY (2026-10-21): a live reader holds this only for the duration of one
+		 * page transfer (tens of microseconds), so a single trylock can be refused by a
+		 * sampler that is merely mid-read at the instant the panic lands - and that lost a
+		 * whole boot's capture (C18 read 0xC0DE502A with mtd9 untouched). Twenty tries at
+		 * 50 us is 1 ms of bounded wait and still cannot hang on a dead holder.
+		 */
+		for (tries = 0; tries < 2000; tries++) {
+			if (spin_trylock_irqsave(&luofu_fmc_read_lock, snap_flags))
+				break;
+			udelay(500);
+		}
+		if (tries == 2000) {
+			luofu_snap_crumb(0xc0de5b50);	/* snapshot: LOCK HELD - refused, no hang */
+			return;
+		}
+		spin_unlock_irqrestore(&luofu_fmc_read_lock, snap_flags);
+	}
+
+	/*
+	 * ★ DIRECT PROGRAMMING (2026-10-26 13:40Z): the MTD is READ-ONLY, and the snapshot must still write.
+	 *
+	 * The read-only flags are what stop UBI attaching read-write and freezing the box in its mount
+	 * (fire `wro`), but they also make `mtd_erase()`/`mtd_write()` refuse - which is why that fire's
+	 * panic (C18 = 0xC0DE502E, the notifier's last crumb) left mtd9 EMPTY.
+	 *
+	 * These call the driver's own entry points instead of the MTD core's wrappers: the writeable flag
+	 * is an `mtd_erase()` policy decision, not a property of this driver's program path, so the log
+	 * can still be written while every other writer - UBI included - stays locked out.
+	 */
+	/*
+	 * ★ STEP CRUMBS (2026-10-26 14:52Z). `fire_wreach` showed the kthread never returned from this
+	 * function: `C18 = 0xC0DE50E6` (its walk crumb) was the LAST write, with no tick after it - so the
+	 * box hangs HERE, inside the flash erase/program. Because a hang stops the 5-second tick, a crumb
+	 * stamped at each step SURVIVES and names the exact call that wedges:
+	 *   0xC0DE5B61 before the erase   0xC0DE5B62 after the erase
+	 *   0xC0DE5B63 before the header  0xC0DE5B64 after the header
+	 *   0xC0DE5B65 before the ring    0xC0DE5B66 after the ring
+	 */
+	luofu_snap_crumb(0xc0de5b61);
+	err = luofu_mtd_erase(m, &ei);
 	if (err) {
 		luofu_snap_crumb(0xc0de5b10 | (err & 0xff));
 		return;
 	}
+	luofu_snap_crumb(0xc0de5b62);
 
 	page = kmalloc(part->writesize, GFP_ATOMIC);
 	if (!page) {
@@ -4102,7 +4519,18 @@ static void luofu_log_snapshot(void)
 	memset(page, 0xff, part->writesize);
 	((u32 *)page)[0] = LUOFU_LOGSNAP_MAGIC;
 	((u32 *)page)[1] = luofu_log_lines;
-	err = mtd_write(part, 0, part->writesize, &got, page);
+	/*
+	 * ★ SELF-READ OF THE RING (2026-10-26 15:40Z). The header page (a kmalloc buffer) reads back perfectly
+	 * while the pages copied from `luofu_log_b` read back mangled, so the question is what THIS kernel
+	 * actually sees in that RAM buffer at snapshot time. Stashing its first 16 bytes in the header puts the
+	 * answer in the one page that is provably readable.
+	 */
+	if (luofu_log_b) {
+		memcpy((u8 *)page + 8, luofu_log_b, 16);
+	}
+	luofu_snap_crumb(0xc0de5b63);
+	err = luofu_mtd_write(m, base, part->writesize, &got, page);
+	luofu_snap_crumb(0xc0de5b64);
 	kfree(page);
 	if (err) {
 		luofu_snap_crumb(0xc0de5b30 | (err & 0xff));
@@ -4114,25 +4542,448 @@ static void luofu_log_snapshot(void)
 	 * Then the ring itself, page by page, stopping at the first failure rather than hammering a
 	 * partition that is refusing writes.  LUOFU_LOG_SIZE is 16 KiB, so this is a handful of pages.
 	 */
+	luofu_snap_crumb(0xc0de5b65);
+	/*
+	 * ★ STAGE THE RING THROUGH A KMALLOC BUFFER (2026-10-26 15:44Z).
+	 *
+	 * Page 0 (written from a kmalloc page) reads back byte-exact, while the ring pages written straight
+	 * from \`luofu_log_b\` (0x80603000) come back with bits CLEARED - and a raw ECC-off read returns the
+	 * same wrong bytes, so the corruption is in the write, not the read. The only difference between the
+	 * two paths is the source address, so every ring page is copied through the kmalloc buffer first.
+	 * If the pages then read back clean, that address is the defect; if they still mangle, the ring content
+	 * itself is being torn by a concurrent writer and the next step is to snapshot the ring under a lock.
+	 */
 	for (off = 0; off + part->writesize <= LUOFU_LOG_SIZE; off += part->writesize) {
-		err = mtd_write(part, (loff_t)written, part->writesize, &got,
-				(u8 *)luofu_log_b + off);
+		memcpy(page, (u8 *)luofu_log_b + off, part->writesize);
+		err = luofu_mtd_write(m, base + (loff_t)written, part->writesize, &got, page);
 		if (err) {
 			luofu_snap_crumb(0xc0de5b40 | (err & 0xff));
 			return;
 		}
 		written += got;
+		/*
+		 * ★ ONE RING PAGE ONLY (2026-10-26 15:46Z). Page 0 (one write, fresh buffer) is always perfect; the
+		 * ring page written immediately after it is always corrupted, identically, whether it comes from
+		 * `luofu_log_b` or from a kmalloc staging buffer. Writing exactly ONE ring page and stopping tells the
+		 * two remaining stories apart: clean = state carried between consecutive writes (dma_buf / DATA_NUM);
+		 * corrupted = the content of a 2 KiB ring page cannot survive the write at all.
+		 */
+		break;
 	}
 
+	luofu_snap_crumb(0xc0de5b66);
+	/*
+	 * ★ WRITE-THEN-READ-BACK VERDICT (2026-10-26 16:25Z).
+	 *
+	 * Everything so far compares the flash against the ring LONG after the snapshot, so a later writer can
+	 * mask it. This reads the ring page back INSIDE the same call, immediately after the write, and records
+	 * the verdict in a one-word page (log page 10, beyond the pages the snapshot writes): word0 =
+	 * 0xC0DE9001 when the read-back matches what was written, 0xC0DE9002 when it does not, word1 = the
+	 * mismatch count. A single word is far more robust to whatever mangles the prose pages, so a clean read
+	 * of page 10 is itself the answer.
+	 */
+	if (written >= part->writesize) {
+		u8 *chk = kmalloc(part->writesize, GFP_ATOMIC);
+		u8 *ver = kmalloc(part->writesize, GFP_ATOMIC);
+
+		if (chk && ver) {
+			u32 mm = 0, q;
+			size_t g2 = 0;
+
+			memcpy(chk, (u8 *)luofu_log_b, part->writesize);
+			luofu_mtd_read(m, base + part->writesize, part->writesize, &g2, chk);
+			for (q = 0; q < part->writesize; q++) {
+				u8 want = ((u8 *)luofu_log_b)[q];
+
+				if (chk[q] != want)
+					mm++;
+			}
+			memset(ver, 0xff, part->writesize);
+			((u32 *)ver)[0] = mm ? 0xC0DE9002u : 0xC0DE9001u;
+			((u32 *)ver)[1] = mm;
+			memcpy(&((u8 *)ver)[8], chk, 16);
+			luofu_mtd_write(m, base + 10 * part->writesize, part->writesize, &g2, ver);
+		}
+		kfree(chk);
+		kfree(ver);
+	}
 	luofu_snap_crumb(0xc0de5b0f);	/* COMPLETED */
+}
+
+/*
+ * THE TICK'S PROCESS-CONTEXT HALF.
+ *
+ * luofu_log_snapshot() calls mtd_erase()/mtd_write(), which take mutexes and can sleep - so it
+ * cannot run from the timer callback (softirq). The 13:18Z fire put the whole sequence inline in
+ * the timer and mtd9 stayed empty with `C18 = 0xC0DE502D`, the tick's own crumb, never one of the
+ * 0xC0DE5Bxx crumbs the snapshot writes on every path: the snapshot was never reached. Running it
+ * here gives it process context, where the mtd stack is legal.
+ */
+static int luofu_raw_log_program(void);   /* defined below the work function */
+static void luofu_log_work_fn(struct work_struct *w)
+{
+	/*
+	 * THE LADDER (2026-10-26). The tick's crumb proves the timer ran; these prove what the
+	 * PROCESS-CONTEXT half did, through the driver's own devm-mapped crumb cell rather than the
+	 * snapshot's separate ioremap - so a silent ioremap failure cannot hide the answer.
+	 *
+	 *   0xC0DE50E5  the workqueue ran at all
+	 *   0xC0DE50E6  the kmsg walk finished (payload = line count)
+	 *   0xC0DE5Bxx  luofu_log_snapshot()'s own verdict (last writer wins)
+	 */
+	if (luofu_ubi_fmc)
+		luofu_fmc_crumb(luofu_ubi_fmc, 0xE5, 0xC0DE5E05);
+
+	if (!luofu_log_b)
+		return;
+
+	luofu_kmsg.active = true;
+	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
+	luofu_kmsg.active = false;
+
+	if (luofu_ubi_fmc)
+		luofu_fmc_crumb(luofu_ubi_fmc, 0xE6, luofu_log_lines);
+
+	/*
+	 * ★ LOCKED PATH ONLY WHILE ALIVE (2026-10-26 14:22Z).
+	 *
+	 * `fire_wraw` ran the lock-free programmer from this kthread and it was both ineffective and harmful:
+	 * mtd9 stayed all `0xff`, and the write self-test's mismatch count flipped from `0x00327400`
+	 * (0 mismatches) to `0xFF327400` (every byte) - writing `fmc->dma_buf` without the lock while
+	 * userspace is reading corrupts a live transfer. So the raw path is reserved for the DEAD box, where
+	 * there is nothing left to corrupt, and stays out of the live loop.
+	 */
+	luofu_log_snapshot();
+}
+static DECLARE_WORK(luofu_log_work, luofu_log_work_fn);
+
+/*
+ * ★ ONE LATE SNAPSHOT, AFTER THE MOUNT (2026-10-26 16:05Z).
+ *
+ * A snapshot in the probe's path stops the boot at SYSTEM_SCHEDULING (measured: `fire_wrawfix` 1 vs
+ * `fire_wclean` 2), while the same driver with no flash traffic reaches SYSTEM_RUNNING. So the capture moves
+ * to ONE shot at +12 s: the probe runs at ~3.6 s and mount_root() follows within a second or two, so this is
+ * window G3's literal lines live in, and the write cannot disturb the mount it is describing.
+ */
+static struct delayed_work luofu_log_late;
+static void luofu_log_late_fn(struct work_struct *w)
+{
+	luofu_log_work_fn(NULL);
+}
+static DECLARE_DELAYED_WORK(luofu_log_late, luofu_log_late_fn);
+
+/*
+ * ★ LOCK-FREE LOG PROGRAMMING (2026-10-26 14:20Z).
+ *
+ * The panic that ends these boots happens INSIDE this driver's locked region (`C18 = 0xC0DE5B50`
+ * on two fires, with mtd9 erased and unprogrammed), so the notifier's trylock runs on the CPU that
+ * already holds the lock and can never succeed - a spinlock cannot be taken twice on one CPU.
+ *
+ * This programs the kthread's already-copied log ring (luofu_log_b) straight to the log
+ * partition through the driver's own page/erase entry points, which do NOT take
+ * luofu_fmc_read_lock. It is deliberately crude: it runs when the box is dying, so it prefers
+ * "the bytes land" over any pretence of concurrency.
+ */
+static u8 luofu_raw_page[2048] __aligned(64);
+
+static int luofu_raw_log_program(void)
+{
+	struct luofu_fmc *fmc = luofu_ubi_fmc;
+	struct mtd_info *part = luofu_logsnap_mtd;
+	u32 row0, pages, i;
+	int err;
+
+	if (!fmc || !part || !luofu_log_b || !luofu_log_lines)
+		return -EINVAL;
+	if (fmc->spec.page_size > sizeof(luofu_raw_page))
+		return -EINVAL;
+
+	row0 = div_u64(mtd_get_master_ofs(part, 0), fmc->spec.page_size);
+
+	err = luofu_fmc_erase_block(fmc, row0);
+	if (err)
+		return err;
+
+	memset(luofu_raw_page, 0xff, fmc->spec.page_size);
+	((u32 *)luofu_raw_page)[0] = LUOFU_LOGSNAP_MAGIC;
+	((u32 *)luofu_raw_page)[1] = luofu_log_lines;
+	err = luofu_fmc_write_page(fmc, row0, luofu_raw_page);
+	if (err)
+		return err;
+
+	pages = LUOFU_LOG_SIZE / fmc->spec.page_size;
+	if (pages > 8)
+		pages = 8;
+	for (i = 0; i < pages; i++) {
+		/*
+		 * ★ THIS IS THE WRITE THAT WAS CORRUPT (2026-10-26 15:50Z).
+		 *
+		 * Pages written from \`luofu_log_b\` come back with bits cleared, while the SAME bytes staged
+		 * through a kmalloc buffer read back perfect - and this raw programmer, which runs from the panic
+		 * notifier AFTER the snapshot, rewrites pages 1..N from that address and so masked every clean
+		 * snapshot. Staging here is the fix the snapshot's own staging could not show.
+		 */
+		memcpy(luofu_raw_page, (u8 *)luofu_log_b + i * fmc->spec.page_size,
+		       fmc->spec.page_size);
+		err = luofu_fmc_write_page(fmc, row0 + 1 + i, luofu_raw_page);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+/*
+ * ★ IS THERE A NETWORK? (2026-10-26 13:45Z) - published through the tick payload's `where` field.
+ *
+ * The boot now reaches userspace and idles, and nothing answers on 192.168.10.1 or 192.168.1.1,
+ * while the flash log has not been recoverable on any boot that reaches userspace. This asks the
+ * kernel directly, from the kthread (process context), and lets the tick - the one channel that
+ * always survives - publish the answer:
+ *
+ *   7  no netdev named eth0 exists
+ *   8  eth0 exists, carrier DOWN
+ *   9  eth0 exists, carrier UP   (the driver thinks the wire is alive)
+ *   10 eth0 exists, carrier UP, and an IPv4 address is configured
+ */
+static u32 luofu_net_state(void)
+{
+	struct net_device *nd = dev_get_by_name(&init_net, "eth0");
+	u32 st = 8;
+
+	if (!nd)
+		return 7;
+
+	rcu_read_lock();
+	if (netif_carrier_ok(nd)) {
+		struct in_device *in = rcu_dereference(nd->ip_ptr);
+
+		st = (in && rcu_dereference(in->ifa_list)) ? 10 : 9;
+	}
+	rcu_read_unlock();
+	dev_put(nd);
+	return st;
+}
+
+/*
+ * ★ THE KTHREAD TRIGGER (2026-10-26 13:42Z).
+ *
+ * Three triggers have now failed to put anything in mtd9 on a boot that reaches userspace: the timer
+ * inline (softirq cannot run mtd erase/program), `schedule_work()` from the timer (the work never
+ * ran - the ladder crumb it writes first never appeared once the tick had overwritten the cell), and
+ * the panic path (no panic happens on a boot that reaches userspace and idles).
+ *
+ * A kthread is the one trigger left that is process context, does not depend on the workqueue pool,
+ * and keeps running after `kernel_init` hands over to userspace. It also snapshots PART the boot has
+ * already passed, which is exactly what is missing: every capture so far predates the mount.
+ */
+static int luofu_snap_thread(void *unused)
+{
+	while (!kthread_should_stop()) {
+		msleep(8000);
+		luofu_log_work_fn(NULL);
+		luofu_where = luofu_net_state();
+	}
+	return 0;
+}
+
+extern bool luofu_wdt_bound;	/* exported by luofu-wdt: true once its probe completed */
+
+/*
+ * ★ BOUNDED SELF-RETURN (2026-10-26 18:35Z).
+ *
+ * With the watchdog now LEFT ARMED and petted by the core, a healthy kernel survives indefinitely - which
+ * is what G6 wants but also means a test could leave the box on OUR kernel with no way back (no console,
+ * no network, no power control on this bench). This one-shot timer makes every lab image self-returning:
+ * it calls emergency_restart() after LUOFU_HOME_TIMER_S, and luofu_restart parks and arms the watchdog,
+ * which resets the box into the vendor.
+ */
+#define LUOFU_HOME_TIMER_S	620	/* long: the box must stay up for a ping test */
+static struct timer_list luofu_home_timer;
+
+/*
+ * ★ DELIBERATE PANIC, TO TEST THE CAPTURE PATH ITSELF (2026-10-26 22:05Z).
+ *
+ * The real death never leaves a fault record, but the notifier IS registered and the panic path once wrote a
+ * whole boot log. This isolates the variable: panic from a KNOWINGLY HEALTHY point, 15 s after probe, and
+ * read fac row 2368 next boot. Capture present = the path works and the real death never reaches it;
+ * capture absent = the capture path itself is broken and must be rebuilt before it can answer anything.
+ */
+#define LUOFU_PANIC_TEST_S 15
+static struct timer_list luofu_panic_test_timer;
+static void luofu_panic_test_tick(struct timer_list *t) { /* DISABLED: it masked the natural death */ }
+
+static void luofu_home_tick(struct timer_list *t)
+{
+	/*
+	 * ★ THE DISCRIMINATOR (2026-10-27 09:45Z): how many log ticks actually ran?
+	 *
+	 * The home timer provably fires (luofu_restart's crumb 0xC0DE5245 lands after every surviving boot),
+	 * while the 5 s log tick has never once been observed writing a cell. Rather than guess again, the
+	 * home tick - the one timer known to run - reports the tick counter on its way out:
+	 *
+	 *     C1C = 0xC0DE4B00 | luofu_log_ticks
+	 *
+	 * C1C is safe for this because luofu_restart() writes only C18. So after recovery the low byte is the
+	 * answer: 0 means the 5 s timer NEVER fired, anything else means it fires and the fault was in my
+	 * cell writes all along.
+	 */
+	if (luofu_crumb_base) {
+		writel(0xc0de4b00u | (luofu_log_ticks & 0xffu), luofu_crumb_base + 0xc1c);
+		(void)readl(luofu_crumb_base + 0xc1c);
+	}
+	pr_emerg("luofu: lab image returning to the vendor after %d s (%u ticks)\n",
+		 LUOFU_HOME_TIMER_S, luofu_log_ticks);
+	emergency_restart();
+}
+
+/*
+ * ★ BIT 6 OF THE TICK PAYLOAD: IS PID 1 STILL THERE? (2026-10-27 01:05Z)
+ *
+ * The cells survive the vendor fallback - every fire reads our own C18/C1C back after it - so the LAST
+ * tick before a panic is recoverable. A kernel panics with "Attempted to kill init" the moment PID 1 stops,
+ * which is the leading explanation for the ~30 s death. If that is what happens, the final tick (up to 5 s
+ * earlier) may already show init gone:
+ *
+ *   C1C = 0x5AC00182  RUNNING, watchdog bound, init ALIVE at the last tick
+ *   C1C = 0x5AC001C2  the same, but PID 1 was ALREADY GONE at the last tick
+ */
+#define LUOFU_TICK_INIT_GONE 0x40u
+static bool luofu_init_alive(void)
+{
+	struct task_struct *tsk = pid_task(find_vpid(1), PIDTYPE_PID);
+
+	return tsk != NULL;
+}
+
+/*
+ * ★ A CHEAP 100 ms BEAT, IN ITS OWN CELL (2026-10-27 02:05Z).
+ *
+ * The last turn proved a 1 Hz LOG tick perturbs the boot (that image never reached userspace), so the
+ * stopwatch must be nearly free. This timer does exactly one writel and nothing else: it stamps
+ *
+ *     C18 = 0xC0DE7A00 | (beats & 0xff)      "this kernel was alive at beat N"
+ *
+ * while the 5 s log tick keeps C1C. A panic leaves the last beat behind, so the death is measurable to
+ * ~100 ms without any log work on the fast path - and the beat count also says whether the death lands on a
+ * tick boundary.
+ */
+#define LUOFU_BEAT_MS 100
+static struct timer_list luofu_beat_timer;
+static u32 luofu_beats;
+static void luofu_beat_tick(struct timer_list *t)
+{
+	/*
+	 * C9C, NOT C18: the 5 s log tick owns C18 and always writes AFTER this beat, so a beat there is
+	 * overwritten before any fire can read it (fire_wbeat proved exactly that - C18 came back as the tick's
+	 * 0xC0DE502D). C9C also survives the vendor fallback (read back every fire), and the last writer wins -
+	 * which, at 100 ms cadence, is this timer, right up to the moment the kernel dies.
+	 */
+	/*
+	 * ★ THE BEAT TAKES C1C (2026-10-27 03:02Z). C1C is the ONLY cell this kernel demonstrably owns, and
+	 * fire_wbeat/fire_wbeat2 proved every other candidate belongs to another writer. So the beat spends it:
+	 * C1C becomes the beat counter itself (100 ms per beat), which gives the kernel's lifetime directly,
+	 * and the 5 s tick's payload (system_state / luofu_where / watchdog bit) is lost in THIS build only.
+	 */
+	/*
+	 * ★ C88, because the hook owns C18/C1C (2026-10-27 03:25Z). `luofu_fmc_crumb` writes BOTH C18 and C1C,
+	 * and the stage-D hook uses it - so a beat there is masked by the hook's own value within 100 ms of it
+	 * (which is what `fire_wns` showed: 0xC0DE500B / 0x73717369 instead of a count). C88 is written once, by
+	 * the FMC self-test at probe, and is free after that, so the beat owns it from the probe onward.
+	 */
+	/*
+	 * ★ C18 ONLY, SO THE TICK KEEPS C1C (2026-10-29).
+	 *
+	 * luofu_fmc_crumb() writes BOTH C18 and C1C, so at a 100 ms cadence the beat overwrites the 5 s
+	 * tick's C1C payload and the tick's system_state / luofu_where / watchdog bits are never readable.
+	 * That is exactly what made the no-watchdog test inconclusive: C1C came back as a beat COUNT
+	 * (19) instead of a state payload, so nothing was learned about system_state.
+	 *
+	 * Writing only C18 keeps the beat count readable where it already survives, and leaves C1C to
+	 * the tick - which is the value this experiment needs to read.
+	 */
+	if (luofu_fmc_stamp) {
+		void __iomem *bc = ioremap(0x10100c18u, 4);
+		if (bc) { writel(0xc0de7000u | ((++luofu_beats) & 0xfffu), bc); 
+			wmb(); iounmap(bc); }
+	}
+
+	/*
+	 * ★ DO NOT ioremap FROM THIS TIMER (2026-10-29) - measured, and it is why this block is gone.
+	 *
+	 * Feeding the watchdog from the beat looked free, and the fire proved otherwise: with
+	 * ioremap()+iounmap() on every 100 ms beat the beat counter came back **1** instead of 36, so
+	 * the kernel died on the first or second beat and the 70 s return was the unserviced watchdog
+	 * firing after it had already stopped. An ioremap/iounmap pair ten times a second is not a pet,
+	 * it is a vmalloc storm, and it killed the thing it was meant to keep alive.
+	 *
+	 * If this lane is retried, the mapping must be created ONCE (probe time, stored in the driver
+	 * struct) and the timer must only writel into it.
+	 */
+
+	mod_timer(&luofu_beat_timer, jiffies + msecs_to_jiffies(LUOFU_BEAT_MS));
 }
 
 static void luofu_log_tick(struct timer_list *t)
 {
+	/*
+	 * ★ THE FIRST CRUMB GOES BEFORE EVERY GUARD (2026-10-26 16:20Z).
+	 *
+	 * The tick used to begin with `if (!luofu_log_b) return;`, so a missing 0xC0DE502D could mean
+	 * either "the timer never fired" or "luofu_log_b was NULL" - and that ambiguity cost a turn
+	 * reading a watchdog fire. This crumb distinguishes them:
+	 *
+	 *   0xC0DE502C  the timer FIRED; payload = luofu_log_ticks (so 0 means the first fire)
+	 *   0xC0DE502D  ... and the walk proceeded (the existing crumb)
+	 */
+	/*
+	 * ★ STAMP-FREE (2026-10-27 09:15Z). This guarded on `luofu_fmc_stamp`, which is only set inside
+	 * luofu_log_register() - the branch of an else-if chain that is often not taken. So the tick fired
+	 * every 5 s and wrote NOTHING, and every fire since read back the stage-D hook's C1C instead of a tick
+	 * payload. A mute instrument reads exactly like a negative result; that is what it was.
+	 * luofu_phase_cell() does its own ioremap and needs no stamp, so the crumb cannot be gated out.
+	 */
+	/*
+	 * PRE-MAPPED, because ioremap() may sleep and a timer callback runs in softirq context - the
+	 * reason the stamp-free version wrote nothing. luofu_crumb_base is mapped once in the probe.
+	 */
+	/*
+	 * ★ THE TICK WAS WRITING THROUGH A NULL MAPPING (2026-10-29).
+	 *
+	 * These writes were gated on luofu_crumb_base, a raw ioremap(0x10100000, 0x1000) made in the
+	 * probe. The PROBE’s own crumbs work - step 0xE1 lands in C1C every fire - but those go through
+	 * fmc->crumb, a devm_ioremap of the SAME page made by the driver core. So the two mappings differ
+	 * in outcome, and the tick’s is the one that fails: luofu_crumb_base is NULL, the guard silently
+	 * skips every write, and the kernel tells us nothing about the boot it just had.
+	 *
+	 * Falling back to fmc->crumb is the fix the record itself proposed, and it costs one pointer: a
+	 * mapping the driver core already owns and has already proven works.
+	 */
+	if (!luofu_crumb_base && luofu_fmc_stamp && luofu_fmc_stamp->crumb)
+		luofu_crumb_base = luofu_fmc_stamp->crumb;
+	if (luofu_crumb_base) {
+		writel(0xc0de5000u | (luofu_log_ticks & 0xffu), luofu_crumb_base + 0xc1c);
+	/*
+	 * ★ THE ENGINE'S OWN ANSWER (2026-10-28). C1C is the one cell this kernel demonstrably owns
+	 * (the tick is its last writer and every fire reads it back). When the MAC has published a live
+	 * KPIE rptr/wptr pair, C1C carries THEM instead of the tick count, so a fire decides:
+	 *
+	 *   C1C = 0x4B00_0000 | (wptr << 16) | rptr   -> the engine's pointers, low 16 bits each
+	 *   bits 31..24 = 0x4B                        -> "the MAC instrument ran"
+	 *
+	 * rptr advancing between fires means the engine CONSUMED our descriptor; rptr static means it
+	 * never looked, and the fault is the kick or the channel programming.
+	 */
+	if (luofu_kpie_live_export)
+		writel(0x4b000000u | luofu_kpie_live_export, luofu_crumb_base + 0xc1c);
+		writel(0xc0de4b00u | (luofu_log_ticks & 0xffu), luofu_crumb_base + 0xc18);
+		(void)readl(luofu_crumb_base + 0xc18);
+	}
+	luofu_log_ticks++;
+
 	if (!luofu_log_b)
 		return;
 
-	luofu_log_ticks++;
 
 	/*
 	 * THE CRUMB FIRST, THROUGH I/O RATHER THAN RAM.
@@ -4218,11 +5069,30 @@ static void luofu_log_tick(struct timer_list *t)
 	 * kept as FOUR bytes, unlike the earlier three-field form, because the smallest field the
 	 * reader can still distinguish is one byte on this channel.
 	 */
+	/*
+	 * ★ THE TICK PAYLOAD BECOMES THE UBI/MOUNT ANSWER (2026-10-26).
+	 *
+	 * This cell is the ONE instrument that has never failed to survive the vendor's fallback boot:
+	 * every fire reads C1C back with our kernel's own value in it. The old packing hid the one
+	 * number that matters behind `luofu_ubi_vols` (a sentinel that nothing ever updates), so the
+	 * fires have been reporting 0xBEEF where the UBI verdict should be.
+	 *
+	 *    bits 31-24  0x5A        the tag, so this cannot be mistaken for a vendor value
+	 *    bits 23-20  system_state 0/1 = booting, 3 = past free_initmem (userspace is up)
+	 *    bits 19-8   luofu_ubi_post_code, written by the stage-D hook's read-only probe:
+	 *                  0xfff = never attempted, 0x000 = volume opened,
+	 *                  0x1000|x = opened and the volume's first byte is x,
+	 *                  0x2000|e = opened, the read failed with errno e,
+	 *                  0x0ee/0x0ef = ubi_open_volume refused with that errno
+	 *    bits 7-0    luofu_ec_passes (0..32 clean EC headers, 0xf0+ = the check code that failed)
+	 */
 	luofu_fmc_crumb(luofu_fmc_stamp, LUOFU_LOG_TICK_STEP,
-				((luofu_ec_h0 == 0x5542u ? 0x05u : 0x0au) << 24) |
-				((luofu_ec_h0 == 0x5542u ? luofu_ubi_vols : luofu_ubi_post_code) << 16) |
-				((luofu_kb_b & 0xffu) << 8) |
-				(luofu_ec_h0 & 0xffu));
+			(0x5Au << 24) |
+			((luofu_where & 0xfu) << 20) |
+			(((u32)(current->pid) & 0xfffu) << 8) |
+			(((u32)system_state & 0x3fu) |
+			 ((luofu_init_alive() ? 0u : LUOFU_TICK_INIT_GONE)) |
+			 (luofu_wdt_bound ? 0x80u : 0u)));
 
 	/*
 	 * 0xC04, NOT 0xC70: 0xC70 is this driver's own READ-data deposit (luofu_fmc_read_page's
@@ -4232,9 +5102,16 @@ static void luofu_log_tick(struct timer_list *t)
 	luofu_phase_cell(0x04, 0xc0de0000u | (luofu_ubi_early_val & 0xffu));
 
 	luofu_ubi_diag_print();
-	luofu_kmsg.active = true;
-	luofu_kmsg_to(luofu_log_b, &luofu_kmsg);
-	luofu_kmsg.active = false;
+	/*
+	 * 2026-10-25: THE TICK'S KMSG WALK AND SNAPSHOT ARE OUT OF THE BOOT PATH.
+	 *
+	 * The stage crumb is the measurement: C18 = 0xC0DE502D and never 0xC0DE5B05,
+	 * so the tick dies inside luofu_kmsg_to(). It walks the whole ring in SOFTIRQ
+	 * taking logbuf_lock per line, and the snapshot then calls mtd_erase/mtd_write
+	 * from that same context - operations that can sleep. The panic path still runs
+	 * both (kmsg_dump() calls the dumper before the notifier chain). If the boot
+	 * survives past 5 s now, the instrument was the hang.
+	 */
 
 	/*
 	 * ★ AND PUSH IT TO PSTORE, EVERY TICK - THIS IS THE INSTRUMENT THAT SURVIVED.
@@ -4253,7 +5130,6 @@ static void luofu_log_tick(struct timer_list *t)
 	 * Its own dumper filter is KMSG_DUMP_MAX, so KMSG_DUMP_EMERG passes.  A failure here must not
 	 * stop the boot or the other instruments, so the call is unconditional and unchecked.
 	 */
-	kmsg_dump(KMSG_DUMP_EMERG);
 
 	/*
 	 * ★ AND THE ONE THAT ACTUALLY WORKS: write the ring straight to flash.
@@ -4262,14 +5138,57 @@ static void luofu_log_tick(struct timer_list *t)
 	 * registered at all (see luofu_log_snapshot's header).  This is the channel that does not depend
 	 * on pstore, on a panic that never happens, or on any registration order: the driver writes the
 	 * log it already holds to a partition it already knows how to program.
+	 *
+	 * 2026-10-21: a gate held this back until after ubi_init to test whether the first
+	 * erase/program poisoned UBI's reads. It did not (the failure was identical), and the gate
+	 * cost the capture on a boot that HANGS - a hang never reaches the panic notifier - so the
+	 * tick snapshots unconditionally again.
 	 */
-	luofu_log_snapshot();
+	/*
+	 * 2026-10-26: THE SNAPSHOT IS BACK IN THE TICK - BUT FROM A WORKQUEUE, NOT FROM THE TIMER.
+	 *
+	 * Fired at 13:18Z with the walk inline and mtd9 came back empty, with `C18 = 0xC0DE502D`:
+	 * that is the tick's OWN step crumb (line above), never any of the snapshot's `0xC0DE5Bxx`
+	 * crumbs - and luofu_log_snapshot() writes one on EVERY path, including its first three
+	 * early returns. So the timer never reached it: `luofu_kmsg_to()` did not return.
+	 *
+	 * That is the softirq problem the 2026-10-25 note named and never disproved: a timer_list
+	 * callback runs in softirq context, and the kmsg walk takes logbuf_lock per line - exactly
+	 * the context where a printk on the same CPU turns the walk into a deadlock. The panic path
+	 * works because a notifier runs in process context; that is also why the only capture this
+	 * lane has ever had came from a panic.
+	 *
+	 * So the tick only SCHEDULES the walk + snapshot, and the workqueue runs them where the mtd
+	 * erase/program are legal. A hang here costs one workqueue thread, not the boot.
+	 */
+	schedule_work(&luofu_log_work);
 
 	luofu_stamp(0, luofu_log_ticks);
 	luofu_stamp(1, (u32)jiffies);
 	luofu_stamp(2, luofu_log_lines);
 
+	/*
+	 * NOT ONE-SHOT (2026-10-26, later than the note below): the payload above IS the instrument
+	 * now - it carries system_state and the UBI verdict - so the tick must keep refreshing, and
+	 * the LAST tick before a freeze is the one that reports the newest state. The one-shot idea
+	 * (making the workqueue's crumb the last writer) was tried and is retired: the workqueue never
+	 * ran at all, so a crumb it might have written is not a channel to plan around.
+	 */
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
+}
+
+/*
+ * THE DETERMINISTIC CAPTURE POINT - see the arming site in the probe.
+ *
+ * A timer, not a workqueue, on purpose: it must fire even if every thread is stuck, so the
+ * capture does not depend on scheduler progress. panic() itself is what invokes the dumper.
+ */
+#define LUOFU_CAPTURE_SECS	9
+static struct timer_list luofu_capture_timer;
+
+static void luofu_capture_tick(struct timer_list *t)
+{
+	panic("luofu-capture: %ds\n", LUOFU_CAPTURE_SECS);
 }
 
 
@@ -4476,7 +5395,21 @@ static void luofu_fault_capture_raw(void)
 	const unsigned long *sp;
 	size_t i;
 
-	if (!fmc || !fmc->dma_buf)
+	/*
+	 * THE dma_buf GUARD WAS EATING EVERY CRASH RECORD (2026-10-28).
+	 *
+	 * This read `if (!fmc || !fmc->dma_buf) return;` - and the notifier entry stamp proved the
+	 * function RUNS (C84 = 0xC0DEAA01) while both crash channels stayed empty, so one of those two
+	 * was NULL and the capture returned before writing a byte.
+	 *
+	 * The dma_buf requirement is simply wrong: luofu_fmc_write_page() below programs OP_CFG/OP_CTRL
+	 * and moves the page through the registers - it never touches fmc->dma_buf, which only the READ
+	 * path uses as a bounce buffer. Requiring it here made a panic-time capture depend on a buffer
+	 * that exists only for reads that are not happening.
+	 *
+	 * So the guard is now the only thing the write actually needs: the FMC instance.
+	 */
+	if (!fmc)
 		return;
 
 	memset(rec, 0, sizeof(rec));
@@ -4488,9 +5421,70 @@ static void luofu_fault_capture_raw(void)
 	for (i = 0; i < 60; i++)
 		rec[4 + i] = (u32)sp[i];
 
-	/* the fac partition's last block: 2 MiB / 128 KiB = 16 blocks, so row 15 */
-	(void)luofu_fmc_erase_block(fmc, 15 * 64);
-	(void)luofu_fmc_write_page(fmc, 15 * 64, rec);
+	/*
+	 * ★ THE ROW WAS IN rootfsa, NOT fac (fixed 2026-10-26 16:02Z).
+	 *
+	 * This used to write row \`15 * 64\` = 960 = byte 0x1E0000, on the comment's assumption that the
+	 * fac partition starts at offset 0. It does not: the partition table puts fac at 0x2C0000-0x4C0000 and
+	 * **rootfsa starts at exactly 0x1E0000**, so every panic erased the first block of rootfsa, which the
+	 * device confirms begins with \`UBI#\` - i.e. that write destroyed a UBI EC header, not a spare fac
+	 * block. A panic capture must never take the rootfs with it.
+	 *
+	 * fac's last block is (0x4C0000 / 2048) - 64 = 2368 = byte 0x4A0000, inside fac.
+	 */
+	/*
+	 * ★ WRITE THE RECORD WHERE THE PANIC PATH HAS ACTUALLY WORKED (2026-10-26 22:55Z).
+	 *
+	 * `fire_wpt` panicked deliberately from a healthy point and the fac row-2368 capture still came back all
+	 * 0xff, so THIS write is what is broken - not the notifier, which is registered and which once captured a
+	 * whole boot log into mtd9 during `fire_werase`. So the record goes to mtd9 page 12, through the same
+	 * driver entry points the log capture uses, and the fac row is left alone.
+	 */
+	/*
+	 * ★ THE PARTITION HANDLE HAS ALWAYS BEEN NULL (2026-10-28).
+	 *
+	 * This guarded on luofu_logsnap_mtd, and the file itself says at line ~6155 that it "has been
+	 * NULL" - so the capture skipped its ONE flash write on every panic, and mtd9 page 12 kept
+	 * whatever an earlier boot left there. That is why three nights of crash hunting produced no
+	 * record from the panic path while the same write_page entry point was proven byte-exact.
+	 *
+	 * The fallback below already existed elsewhere in this file (get_mtd_device_nm("log")), so this
+	 * is the same resolution applied at the point where it decides whether the record is written.
+	 */
+	{
+		struct mtd_info *lm = luofu_logsnap_mtd ? luofu_logsnap_mtd
+						     : get_mtd_device_nm("log");
+
+		if (!IS_ERR_OR_NULL(lm)) {
+			u32 row12 = div_u64(mtd_get_master_ofs(lm, 0),
+					   fmc->spec.page_size) + 12;
+			int wret;
+
+			/*
+			 * ★ THE RESULT IS NO LONGER DISCARDED (2026-10-28).
+			 *
+			 * `(void)luofu_fmc_write_page(...)` made a FAILED write and a SKIPPED write look
+			 * identical from outside - and three fires came back with a clean 0xFF/leftover page
+			 * either way. So the return code is recorded in 0xC94, which luofu_boot_stage fills in
+			 * late_initcall_sync and NOTHING touches afterwards:
+			 *
+			 *   C94 = 0xBEEF0000 | (ret & 0xff)
+			 *
+			 * 0 means the program reported success. Anything else is the actual errno, so the next
+			 * fire says whether the flash refused the write or the driver never got that far.
+			 */
+			wret = luofu_fmc_write_page(fmc, row12, rec);
+			{
+				void __iomem *rc = ioremap(0x10100c94u, 4);
+
+				if (rc) {
+					writel(0xbeef0000u | ((u32)wret & 0xffu), rc);
+					wmb();
+					iounmap(rc);
+				}
+			}
+		}
+	}
 }
 
 static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *p)
@@ -4603,25 +5597,38 @@ static int luofu_panic_notify(struct notifier_block *nb, unsigned long v, void *
 	 * which is exactly where the mutex-taking lookup and the mtd write are legal - the same context
 	 * argument that made the tick wrong.  The partition pointer is already cached by the probe.
 	 */
-	luofu_log_snapshot();
+	/*
+	 * THE RAW PATH IS FOR THIS MOMENT ONLY (2026-10-26 14:22Z).
+	 *
+	 * If the panic happened inside this driver's locked region - which is what `C18 = 0xC0DE5B50` says -
+	 * then the snapshot's trylock can never succeed on this CPU, and a lock cannot help. The log ring
+	 * was already copied to RAM by the kthread while the box was alive, so the raw programmer writes it
+	 * through the driver's own page/erase entry points with no lock at all. Only here: `fire_wraw`
+	 * proved that doing it while the system is alive corrupts a live transfer.
+	 */
+	if (luofu_raw_log_program())
+		luofu_log_snapshot();
 
 	/*
-	 * Both channels, because the crumb is I/O and the snapshot is flash: the crumb is written even
-	 * if the write path fails, so a fire always says which step was reached.
+	 * ★ THE NOTIFIER STOPS CLOBBERING THE CRUMB PAIR (2026-10-26 14:02Z).
+	 *
+	 * These two writes are what destroyed the tick payload on every boot that reaches userspace:
+	 * `fire_wkt` and `fire_wnet` both came back with `C18 = 0xC0DE502E` / `C1C = elf_hwcap` - the
+	 * panic notifier's own words - overwriting the LAST TICK's payload, which is where the driver's
+	 * live state (stage, interrupted pid, system_state, and now the network state) is carried. The
+	 * snapshot below still runs; only these two deposits are retired.
+	 *
+	 * What is lost: a crumb saying "a panic happened". What is gained: the one channel that has ever
+	 * survived the vendor's fallback keeps the last thing the running kernel said.
 	 */
-	if (luofu_ubi_fmc)
+	if (luofu_ubi_fmc && false)
 		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_PANIC_STEP,
 				((luofu_log_lines & 0xffffu) << 16) |
 				((*(volatile u32 *)((char *)luofu_log_b + 4)) & 0xffffu));
 
-	/*
-	 * AND THE LAST WORD GOES TO elf_hwcap, BECAUSE THE QUESTION IS NOW ABOUT THE FPU.
-	 *
-	 * This overwrites the crumb above on purpose: two writes to one cell, last one wins.  The
-	 * line count (205, every fire) and the readback byte (proven to match devmem) have both
-	 * done their job; the value that is still unknown is whether this kernel enabled the FPU.
-	 */
-	luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_HWCAP_STEP, elf_hwcap);
+	/* retired with the pair above - see that comment */
+	if (false)
+		luofu_fmc_crumb(luofu_ubi_fmc, LUOFU_LOG_HWCAP_STEP, elf_hwcap);
 
 	luofu_stamp(3, LUOFU_STAMP_PANIC);
 
@@ -4680,11 +5687,35 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 		if (base + LUOFU_LOG_SIZE + LUOFU_DIAG_SIZE > 0x80608000)
 			base = LUOFU_LOG_BASE;
 
-		luofu_log_dma = (dma_addr_t)base;
-		luofu_diag_dma = (dma_addr_t)(base + LUOFU_LOG_SIZE);
+		/*
+		 * ★ DO NOT MAP IT (2026-10-30) - THIS REGION WAS CORRUPTING KERNEL MEMORY.
+		 *
+		 * LUOFU_LOG_BASE is 0x80602000 and LUOFU_LOG_SIZE is 0x4000, so the driver claimed
+		 * physical 0x80602000..0x80606200 and __va()'d it into kernel memory. But that range is
+		 * inside the DT memory node (0x80500000 + 0x7b00000) and **nothing ever reserves it**:
+		 * there is no memblock_reserve, no request_mem_region, nothing. To memblock it is free
+		 * RAM, sitting just below the kernel image at 0x80608000.
+		 *
+		 * luofu_kmsg_to(luofu_log_b, ...) then copies up to 16 KiB of kernel log straight into
+		 * whatever the allocator may have placed there - a slab, a list_head, a page table.
+		 *
+		 * That is the memory corruption this project has chased for days. It explains every
+		 * property of the failure: it happens AFTER the FMC probe sets this up, it shows up LATE
+		 * and in code with no connection to flash, it is IDENTICAL regardless of which drivers
+		 * are compiled out (none of them is the victim - they are all just downstream), and it
+		 * is deterministic because the allocator layout is.
+		 *
+		 * The ring has also never once produced a reading on this bench (mtd9 always came back
+		 * empty), so it is being disabled rather than repaired: every writer already guards on
+		 * `if (!luofu_log_b)`. Reserving the window properly would need an early memblock_reserve
+		 * and a physical address chosen against the real map - that is a separate piece of work
+		 * and it must not be done by guessing a constant.
+		 */
+		luofu_log_dma = 0;
+		luofu_diag_dma = 0;
 	}
-	luofu_log_b = (void *)__va((phys_addr_t)luofu_log_dma);
-	luofu_diag_buf = (void *)__va((phys_addr_t)luofu_diag_dma);
+	luofu_log_b = NULL;
+	luofu_diag_buf = NULL;
 
 	/*
 	 * NOTHING IS WRITTEN HERE, and a fire is why.  An armed mark written to
@@ -4772,6 +5803,36 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
 	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
 
+	/* the 100 ms beat lives here, in the probe path - not inside the tick, where an earlier
+	 * splice put it and where timer_setup on a pending timer is wrong (fire_wbeat3 proved it). */
+	timer_setup(&luofu_beat_timer, luofu_beat_tick, 0);
+	mod_timer(&luofu_beat_timer, jiffies + msecs_to_jiffies(LUOFU_BEAT_MS));
+
+	/*
+	 * ★ THE DETERMINISTIC CAPTURE: PANIC AT A CHOSEN SECOND (2026-10-26).
+	 *
+	 * The panic path is the ONE evidence channel this lane has ever had work: `fire_warm2`
+	 * panicked on its own at 6.7 s and mtd9 came back with the whole boot, while every
+	 * non-panicking boot since has left mtd9 untouched (the tick's flash snapshot never lands).
+	 *
+	 * So stop waiting for a die and choose the moment: this timer panics at
+	 * LUOFU_CAPTURE_SECS, which sits AFTER ubi_init (6 s) and after the rootfs mount, so the
+	 * captured log answers the two questions the boot has never been able to answer about
+	 * itself: did UBI attach mtd14, and did the rootfs mount / init run?
+	 *
+	 * panic=5 in the cmdline then returns the box to the vendor by itself. If the boot is dead
+	 * before this second, the timer still fires - it runs in softirq context, independent of
+	 * whatever the kernel is stuck in - unless interrupts are off, which is what a second,
+	 * earlier capture point would be for.
+	 */
+	/*
+	 * The capture timer stays DISARMED: a panic from a timer runs its notifier in softirq, where
+	 * luofu_log_snapshot()'s mtd_erase/mtd_write cannot run - the 13:27Z fire proved it (mtd9 empty,
+	 * C18 still the tick's crumb, never the notifier's 0x2A). The panic path is only usable from
+	 * process context, e.g. a real VFS panic.
+	 */
+	(void)luofu_capture_tick;
+
 	/*
 	 * BOOTSTRAP THE READBACK WITH ONE CRUMB.  The log ring's PHYSICAL address
 	 * goes to the crumb value cell - the channel in this phase that has never
@@ -4791,6 +5852,8 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 /* ------------------------------------------------------------------ */
 /* Probe                                                                */
 /* ------------------------------------------------------------------ */
+
+
 
 static int luofu_fmc_probe(struct platform_device *pdev)
 {
@@ -4817,7 +5880,9 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * fact a wasted boot costs the most to get wrong.
 	 */
 	fmc->crumb = devm_ioremap(dev, LUOFU_SYSCTRL_BASE + LUOFU_CRUMB_OFFSET, 8);
+	luofu_fmc_crumb(fmc, 0x98, 0xC0DE9801u);	/* PROBE START marker */
 	luofu_fmc_crumb(fmc, 1, LUOFU_RPT_STEP(1));
+	luofu_where = 1;
 
 	fmc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(fmc->regs))
@@ -4860,10 +5925,23 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * tolerated rather than fatal - this driver has to keep booting to report what it found, and
 	 * an instrument that cannot run is worse than one that reports a failure.
 	 */
-#if 0 /* BISECT-D-CLK */
+#if 1 /* clock enable re-enabled 2026-10-25: it was bisected out on 10-15 and every 10-25 read has
+       * run without it; the vendor's own sfc_clk is enable=1 at 100 MHz */
 	fmc->clk = devm_clk_get(dev, "sfc_clk");
 	if (IS_ERR(fmc->clk)) {
-		dev_warn(dev, "FMC: no sfc_clk (%ld) - the block may not be clocked\n",
+		/*
+		 * NEVER DEFER FOREVER (2026-10-30).
+		 *
+		 * This used to `return -EPROBE_DEFER` when the clock provider was not up yet. When the
+		 * provider NEVER appears - which is what a DTS/driver mismatch produces - the probe simply
+		 * never runs: no mtd device is registered, ubi.mtd=rootfsb has nothing to open, and every
+		 * flash read returns zeros because the flash was never probed at all.
+		 *
+		 * That failure is indistinguishable from a broken read path and cost this project a night.
+		 * The block is already clocked by u-boot - the vendor's own sfc_clk is enable=1 at 100 MHz
+		 * before Linux starts - so a missing provider is logged and tolerated, never fatal.
+		 */
+		dev_warn(dev, "FMC: no sfc_clk (%ld) - continuing, the block is clocked by the bootloader\n",
 			 PTR_ERR(fmc->clk));
 		fmc->clk = NULL;
 	} else {
@@ -4983,10 +6061,42 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	writel(0x00000100, fmc->regs + 0xbc);
 	writel(0x00000005, fmc->regs + 0xfc);
 
+	/*
+	 * hi_spi_nand_hw_init writes these two explicitly; this probe only assumed them
+	 * ("0x00 and 0x04 left alone: read-back showed both identical"). Set the normal
+	 * opmode bit and clear the write-protect bit by hand, as the vendor does.
+	 */
+	writel(readl(fmc->regs + FMC_CFG) | FMC_CFG_NORMAL_MODE,
+	       fmc->regs + FMC_CFG);
+	writel(readl(fmc->regs + FMC_GLOBAL_CFG) | BIT(6),
+	       fmc->regs + FMC_GLOBAL_CFG);
+
 	dev_info(dev, "FMC: vendor block programmed: t=%08x 14=%08x 34=%08x 48=%08x\n",
 		 readl(fmc->regs + FMC_TIMING_SPI_CFG),
 		 readl(fmc->regs + 0x14), readl(fmc->regs + 0x34),
 		 readl(fmc->regs + 0x48));
+
+	/*
+	 * ★ EVERYTHING THAT CAN RETURN EARLY NOW HAPPENS AFTER THE EVIDENCE CHANNEL IS ARMED.
+	 *
+	 * Three fires in a row (2026-10-26 12:45Z, 13:05Z, 13:12Z) came back with mtd9 empty,
+	 * no panic crumb, and the tick's 0xC0DE502D as the only writing - which means the probe
+	 * RETURNED EARLY and the two things that could have reported the reason (the MTD device
+	 * the panic snapshot needs, and the kmsg dumper itself) were armed only at the END of
+	 * this function. The die reset and the ID read below are exactly the steps that return
+	 * early, so the geometry (defaults; the ATAG node does not exist in this devicetree) is
+	 * fixed here and the channel is armed BEFORE them. The page/DA buffers are allocated
+	 * later, so luofu_log_register's overlap check runs against zero and is harmless.
+	 */
+	luofu_fmc_spec_get(fmc);
+	if (!fmc->spec.page_size)
+		fmc->spec.page_size = 0x800;
+	luofu_ubi_fmc = fmc;
+	luofu_where = 2;
+	if (luofu_fmc_register_mtd(fmc))
+		dev_warn(dev, "FMC: MTD registration failed - no capture channel\n");
+	else if (luofu_log_register(fmc))
+		dev_warn(dev, "FMC: could not arm the panic log capture\n");
 
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
@@ -5056,9 +6166,11 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * "UBI#", UBI's EC header magic, and it is what the first page of a
 	 * healthy rootfsa partition must begin with.
 	 */
-	luofu_fmc_spec_get(fmc);
-	if (!fmc->spec.page_size)
-		fmc->spec.page_size = 0x800;
+	/*
+	 * (The MTD device and the panic capture were armed above, before the die reset and the
+	 * ID read, so a probe that returns early still hands back its dmesg. Nothing is
+	 * registered here any more.)
+	 */
 
 	luofu_fmc_crumb(fmc, 7, LUOFU_RPT_STAGEB(7) |
 				 (fmc->spec.from_atag ? BIT(16) : 0));
@@ -5107,6 +6219,13 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32)))
 		dev_warn(dev, "FMC: could not set the 32-bit DMA mask\n");
 
+	/*
+	 * BACK TO dmam_alloc_coherent (2026-10-21, later). The vendor's dma_alloc_attrs(0xcc0) was
+	 * replicated as DMA_ATTR_FORCE_CONTIGUOUS and FIRED: the returned address was unchanged
+	 * (0x81a6c000), the DMA still wrote nothing, and the boot changed shape (a hang with the tick's
+	 * crumb only, no panic). The attribute is not the missing piece; the negative is recorded in
+	 * [[cudy-wr3000v2/fmc-read-path-degradation-2026-10-21]].
+	 */
 	fmc->dma_buf = dmam_alloc_coherent(dev, 0x2200, &fmc->dma_addr, GFP_KERNEL);
 
 	if (!fmc->dma_buf) {
@@ -5146,11 +6265,28 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 */
 	fmc->page_buf = page;
 
+	/*
+	 * READ-TIME REGISTER STATE. The read's result depends only on read ORDER (1st 0x1F40,
+	 * 2nd 0x00080080) and no configuration moved it, so deposit the controller's own state
+	 * after the read and compare it with the vendor's recorded live block: FMC_CFG,
+	 * GLOBAL_CFG, OP_CTRL and DATA_NUM go to C90/C94/C98/C78.
+	 */
+	luofu_diag_op_cfg = 0;
+	luofu_diag_op_ctrl = 0;
 	ret = luofu_fmc_read_page(fmc,
 				  LUOFU_ROOTFSA_OFFSET / fmc->spec.page_size, page);
+	if (!ret) {
+		/* state deposit removed: C90/C94/C98 are claimed by later boot stages */
+	}
+	luofu_diag_op_cfg = 0;
+	luofu_diag_op_ctrl = 0;
 	if (ret) {
 		luofu_fmc_crumb(fmc, 8, LUOFU_RPT_FAIL(8));
-		return ret;
+		dev_err(dev, "FMC: rootfsa page 0 read failed (%d): buf=%02x %02x %02x %02x int=%08x opctrl=%08x\n",
+			ret, page[0], page[1], page[2], page[3],
+			readl(fmc->regs + FMC_INT_STATUS), readl(fmc->regs + FMC_OP_CTRL));
+		/* the capture is armed above, so the failure itself becomes evidence */
+		panic("luofu-fmc: rootfsa page 0 read failed: %d\n", ret);
 	}
 
 	word = ((u32)page[0]) | ((u32)page[1] << 8) |
@@ -5172,7 +6308,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * table, the partition exists under the name UBI will ask for, and the
 	 * read survives the mtd page arithmetic.
 	 */
-	if (luofu_fmc_register_mtd(fmc)) {
+	if (!fmc->mtd) {
 		luofu_fmc_crumb(fmc, 9, LUOFU_RPT_FAIL(9));
 		return 0;
 	}
@@ -5207,14 +6343,188 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	luofu_ubi_early_done = 1;
 
 	/*
-	 * Stage E: from here on, a panic writes the kernel log into RAM where it
-	 * can be read back from the vendor system.  Registered last so that
-	 * failing to get the buffer cannot spoil any of the measurements above.
+	 * Stage E: the panic capture was armed right after the geometry was known (see the
+	 * early MTD/log registration above), because arming it here meant a probe that failed
+	 * before this point left no evidence at all.
 	 */
-	if (luofu_log_register(fmc))
-		dev_warn(dev, "FMC: could not arm the panic log capture\n");
+
+	/*
+	 * One snapshot from the probe itself (process context, known-good point), then the kthread takes
+	 * over so the capture follows the boot past mount_root and into userspace.
+	 */
+	/*
+	 * ★ INSTRUMENT OFF FOR THIS BASELINE (2026-10-26 15:55Z).
+	 *
+	 * \`fire_wro\` (before the snapshot existed) reached SYSTEM_RUNNING; every build since that adds a
+	 * flash write to the boot path stops at SYSTEM_SCHEDULING. The rule is to difference a new failure
+	 * against a boot with the instrument REMOVED, so this image runs the driver fixes and the C1C tick only -
+	 * no snapshot, no kthread, no mtd9 traffic at all. If system_state returns to 2 (RUNNING) the boot
+	 * failure was the instrument's, not the driver's, and the log must move out of the critical path.
+	 */
+	luofu_where = luofu_net_state();
+	schedule_delayed_work(&luofu_log_late, 12 * HZ);
+	timer_setup(&luofu_home_timer, luofu_home_tick, 0);
+	mod_timer(&luofu_home_timer, jiffies + LUOFU_HOME_TIMER_S * HZ);
+
+	/*
+	 * ★ ARM THE TICK HERE, UNCONDITIONALLY (2026-10-27 08:35Z).
+	 *
+	 * The tick was only ever armed inside luofu_log_register(), which sits in an `else if` chain - so in
+	 * every build where an earlier branch was taken the tick never ran at all. That is why the last several
+	 * fires read back the stage-D hook's C1C (0x73717369) instead of a tick payload: not a wedge, simply no
+	 * tick. It also cost the beat twice.
+	 *
+	 * The tick is the only channel that carries luofu_net_state() - 7 no eth0 / 8 carrier down / 9 carrier
+	 * up no IP / 10 carrier up WITH IP - which is exactly the reading G4 needs. Arm it on the one path that
+	 * always runs, so the cell cannot be silent for want of a branch.
+	 */
+	luofu_crumb_base = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);	/* here, where it is SURE to run */
+	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
+	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
+
+	/*
+	 * ★ THE ECC-GEOMETRY PATTERN TEST (2026-10-26 15:22Z).
+	 *
+	 * The header page programs and reads back perfectly while the prose pages read back mangled. Both
+	 * obvious causes are eliminated (the write already runs with ECC ON; SADDR_OOB is exactly the region
+	 * the write fills), so the question is whether OUR controller and the VENDOR's reader agree on the
+	 * ECC sector geometry.
+	 *
+	 * This writes a known 2048-byte pattern to log page 12 - outside the 9 pages the snapshot uses, so it
+	 * survives the log - and the vendor shell then reads that page back: if the pattern returns clean the
+	 * geometry matches and the mangling is in our ring content; if it mangles the same way, the geometry
+	 * itself is the mismatch.
+	 */
+	{
+		/* resolve it HERE if the global was never set: luofu_logsnap_resolve() lives in the same
+		 * never-taken else-if branch as everything else, so luofu_logsnap_mtd has been NULL. */
+		struct mtd_info *lp = luofu_logsnap_mtd ? luofu_logsnap_mtd : get_mtd_device_nm("log");
+		u32 prow = 0;
+		int pi;
+
+		/*
+		 * ★ ENABLED, AND CARRYING THE RECORD (2026-10-27 11:10Z).
+		 *
+		 * This exact call wrote page 12 and the VENDOR read it back byte-exact - that is G2. It was then
+		 * disabled with the others, and every instrument since has been silent because the sysctrl cells are
+		 * re-initialised by the vendor's fallback boot before they can be read (the objective's own note has
+		 * said so all along). So the evidence rides the channel that is PROVEN, from a probe that does run.
+		 *
+		 *   bytes 0..3   "LUFU"
+		 *   bytes 4..7   jiffies
+		 *   bytes 8..11  luofu_net_state()   7 no eth0 / 8 carrier down / 9 no IP / 10 up WITH IP
+		 *   bytes 12..15 luofu_log_ticks
+		 *   bytes 16..19 0xC0DE1234 sentinel
+		 */
+		if (lp) {
+			prow = div_u64(mtd_get_master_ofs(lp, 0), fmc->spec.page_size) + 12;
+			for (pi = 0; pi < fmc->spec.page_size; pi++)
+				luofu_raw_page[pi] = (u8)(pi & 0xff);
+			memcpy(luofu_raw_page, "LUFU", 4);
+			*(u32 *)(luofu_raw_page + 4) = (u32)jiffies;
+			*(u32 *)(luofu_raw_page + 8) = luofu_net_state();
+			*(u32 *)(luofu_raw_page + 12) = (u32)luofu_log_ticks;
+			*(u32 *)(luofu_raw_page + 16) = 0xc0de1234u;
+			/* luofu_fmc_write_page(fmc, prow, luofu_raw_page); -- disabled: boot-path flash write */
+		}
+	}
+
+
+	/*
+	 * ★ THE PANIC-ONLY CAPTURE (2026-10-26).
+	 *
+	 * Every fire since 2026-10-26 10:31Z has ended in a HANG (C18 = the tick's 0xC0DE502D,
+	 * never the panic notifier's 0x2A) and a hang leaves mtd9 untouched - so the only boot
+	 * that ever handed back its dmesg was the one that panicked on its own. This diag makes
+	 * the capture deterministic: poison the staging buffer with 0xcc (skipping the read
+	 * path's own clear), read rootfsb page 0 with the restored 1ef70ad sequence, print every
+	 * register that should have moved, and PANIC - but only if the bytes are not UBI#, so a
+	 * read that finally works still lets the boot continue to UBI.
+	 *
+	 * The 0xcc poison is what separates the three outcomes: cc cc cc cc = the DMA wrote
+	 * nothing; UBI# = the read works; anything else = what the engine actually delivers.
+	 */
+	{
+		u32 drow = 0x3540000u / fmc->spec.page_size;
+		u8 *dbuf = fmc->page_buf;
+		u8 *dma = fmc->dma_buf;
+		u32 dw;
+		int dret;
+
+		dev_info(dev, "FMC DIAG pre: cfg=%08x gcfg=%08x opcfg=%08x opctrl=%08x op=%08x dnum=%08x dmalen=%08x saddr=%08x int=%08x ien=%08x\n",
+			 readl(fmc->regs + FMC_CFG), readl(fmc->regs + FMC_GLOBAL_CFG),
+			 readl(fmc->regs + FMC_OP_CFG), readl(fmc->regs + FMC_OP_CTRL),
+			 readl(fmc->regs + FMC_OP), readl(fmc->regs + FMC_DATA_NUM),
+			 readl(fmc->regs + FMC_DMA_LEN), readl(fmc->regs + FMC_SADDR_D0),
+			 readl(fmc->regs + FMC_INT_STATUS), readl(fmc->regs + FMC_INT_EN));
+
+		luofu_no_clear = true;
+		memset(dma, 0xcc, fmc->spec.page_size + 32);
+		dret = luofu_fmc_read_page(fmc, drow, dbuf);
+		luofu_no_clear = false;
+
+		dev_info(dev, "FMC DIAG read: row=%x ret=%d bytes=%02x %02x %02x %02x %02x %02x %02x %02x | dma=%02x %02x %02x %02x\n",
+			 drow, dret, dbuf[0], dbuf[1], dbuf[2], dbuf[3],
+			 dbuf[4], dbuf[5], dbuf[6], dbuf[7],
+			 dma[0], dma[1], dma[2], dma[3]);
+		dev_info(dev, "FMC DIAG post: addr=%08x/%08x opcfg=%08x opctrl=%08x op=%08x dnum=%08x dmalen=%08x int=%08x\n",
+			 readl(fmc->regs + FMC_ADDRH), readl(fmc->regs + FMC_ADDRL),
+			 readl(fmc->regs + FMC_OP_CFG), readl(fmc->regs + FMC_OP_CTRL),
+			 readl(fmc->regs + FMC_OP), readl(fmc->regs + FMC_DATA_NUM),
+			 readl(fmc->regs + FMC_DMA_LEN), readl(fmc->regs + FMC_INT_STATUS));
+
+		dw = (u32)dbuf[0] | ((u32)dbuf[1] << 8) |
+		     ((u32)dbuf[2] << 16) | ((u32)dbuf[3] << 24);
+		luofu_fmc_crumb(fmc, 0xE1, dw);
+		if (dw != LUOFU_UBI_MAGIC)
+			panic("luofu-fmc: rootfsb page 0 = %08x, not UBI#\n", dw);
+
+	}
+
+	/*
+	 * PROBE EXIT MARKER - and it must be written BEFORE the return.
+	 *
+	 * The original 0x99 marker was placed after `return 0;`, which made it unreachable dead code:
+	 * its absence could never mean "the probe did not finish", so a boot that stopped at 0xE1 was
+	 * indistinguishable from one that finished cleanly. That cost a whole fire on 2026-10-30 and a
+	 * published claim that had to be withdrawn.
+	 *
+	 *   C18 = 0xC0DE50FF  -> the probe RAN TO ITS RETURN (death is after it, before late_initcall)
+	 *   C18 = 0xC0DE50E1  -> the death is INSIDE this probe, after the rootfsb read
+	 */
+	luofu_fmc_crumb(fmc, 0xFF, 0xC0DE5FFFu);
 
 	return 0;
+	/*
+	 * ★ PROBE-TIME FLASH INSTRUMENT (2026-10-28).
+	 *
+	 * Everything else this session tried was a TIMER CALLBACK, and no timer in this kernel has ever
+	 * been observed to fire in a way a fire could read. The probe is different: G1 and G2 prove it
+	 * runs, and G2 proved the write path too - a pattern written through luofu_fmc_write_page was read
+	 * back byte-exact by the VENDOR driver. So the evidence goes in at PROBE time, to page 20, which
+	 * no other writer in this tree touches (the snapshot uses page 12, the header page 0).
+	 *
+	 *   [0]  "PROB"
+	 *   [4]  jiffies        - is the clock running at probe time
+	 *   [8]  system_state   - 3 = SYSTEM_RUNNING
+	 *   [12] log_ticks      - 0 proves no timer fired before this point
+	 *   [16] 0x50524f42     - sentinel
+	 *   [20] num_online_cpus()
+	 */
+	luofu_fmc_crumb(fmc, 0x99, 0xC0DE9901u);	/* PROBE END marker: C1C must read 0xC0DE9901 if the probe completes */
+	if (luofu_ubi_fmc) {
+		u8 *r = kzalloc(2048, GFP_KERNEL);
+		if (r) {
+			memcpy(r, "PROB", 4);
+			*(u32 *)(r + 4)  = (u32)jiffies;
+			*(u32 *)(r + 8)  = (u32)system_state;
+			*(u32 *)(r + 12) = (u32)luofu_log_ticks;
+			*(u32 *)(r + 16) = 0x50524f42u;
+			*(u32 *)(r + 20) = (u32)num_online_cpus();
+			luofu_fmc_write_page(luofu_ubi_fmc, 20, r);
+			kfree(r);
+		}
+	}
 	/*
 	 * WINDOW MARKER: the probe is about to RETURN.
 	 *
@@ -5291,12 +6601,273 @@ module_platform_driver(luofu_fmc_driver);
 static int __init luofu_fmc_ubi_diag(void)
 {
 #ifdef CONFIG_MTD_UBI
-	luofu_fmc_ubi_probe();
+	/*
+	 * ROOT-DEVICE EXISTENCE PROBE (2026-10-30) - READ-ONLY, NO UBI OPEN.
+	 *
+	 * [wdtb] and [wdtb2] reproduced identically (same pinned md5, same cells, same 310 s): the
+	 * kernel now completes EVERY initcall and then dies in the userspace handoff. ubi_init is a
+	 * level-7 initcall, so by this late_initcall_sync hook it has already run and
+	 * ubiblock_init has had its chance to create the root device.
+	 *
+	 * The question is whether mount_root can find its root at all. blk_lookup_devt() is the very
+	 * call name_to_dev_t() makes for the `root=/dev/ubiblock0_0` line, and it only does a lookup -
+	 * it does NOT open the volume, so it cannot block or fault the way ubi_open_volume() does
+	 * (which is why luofu_fmc_ubi_probe stays disabled).
+	 *
+	 *   0xC04 = 0xC0DE9A01  ubiblock0_0 RESOLVES (dev_t found) -> the root device exists;
+	 *                       the failure is the squashfs mount or a later handoff step
+	 *   0xC04 = 0xC0DE9A02  ubiblock0_0 does NOT resolve     -> ubi attached no block device;
+	 *                       the failure is in ubi.block=0,0 / the attach, not in mount_root
+	 *   0xC18 = 0xC0DE9A10  the probe itself ran to completion (proof the hook executes)
+	 *
+	 * 0xC04 and 0xC0C are the UBI verdict cells; they read ZERO on a boot that never reaches
+	 * luofu_ubi_verdict, which is exactly the state both wdtb fires left them in - so writing them
+	 * here cannot destroy a reading.
+	 */
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+		if (sc) {
+			/*
+			 * STAMP THE START SEPARATELY FROM THE ANSWER (2026-10-30).
+			 *
+			 * [wxlat] left C18 = 0xC0DE50FF (the probe's exit marker) while C1C carried the
+			 * ladder's LATESYNC bit - so the boot reached the 7s level but this hook never wrote.
+			 * Those two facts are only reconcilable if the death is BETWEEN two level-7s
+			 * initcalls. A start stamp distinguishes "never ran" (C18 stays 0x50FF) from "ran and
+			 * died in blk_lookup" (C18 = 0xC0DE9A11), which the single end-stamp could not.
+			 */
+			writel(0xC0DE9A11u, sc + 0xc18);
+			(void)readl(sc + 0xc18);
+		}
+	}
+	{
+		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+		if (sc) {
+			/*
+			 * ★ WHAT UBI ACTUALLY SEES (2026-10-30).
+			 *
+			 * [wnocorrupt] proved this hook RUNS - the boot now completes every initcall and
+			 * reaches level 7. Its answer so far is only "ubiblock0_0 does not resolve", which
+			 * is the symptom, not the cause. ubi_attach_mtd_dev fails because it cannot find the
+			 * LAYOUT VOLUME, and it looks for that by:
+			 *
+			 *   read EC header at PEB+0, take vid_hdr_offset from it,
+			 *   then read the VID header at PEB+vid_hdr_offset.
+			 *
+			 * The 2026-10-21 note recorded mtd14 @0x800 returning ZEROS - but that was measured
+			 * when the flash probe was NOT EVEN RUNNING (no clock provider), so it has never been
+			 * re-measured on a boot that works. This does it through the MTD layer, which is the
+			 * same path UBI takes.
+			 *
+			 * Encoded into C04 as 0xC0DE9A00 | code, and luofu_restart folds the low byte into
+			 * C18 (0xC0DE52xx), which survives the vendor boot:
+			 *
+			 *   0xE1        get_mtd_device_nm("rootfsb") FAILED - the partition is not named that
+			 *   0x80|hi     EC magic is not "UBI#"; hi = the magic's top byte
+			 *   0x40|off    EC magic OK but vid_hdr_offset != 0x800; off = (vidoff >> 8) & 0x3f
+			 *   0xA0        EC OK, vid_hdr_offset = 0x800, and PEB0+0x800 reads 'U' (0x55)
+			 *   0xB0        EC OK, but PEB0+0x800 reads 0x00  <- reproduces the 2026-10-21 finding
+			 *   0xC0|hi     EC OK, VID reads something else; hi = that byte's top nibble
+			 */
+			struct mtd_info *part;
+			u8 b[64];
+			size_t rl = 0;
+			u32 code;
+
+			writel(0xC0DE9A11u, sc + 0xc18);
+			(void)readl(sc + 0xc18);
+
+			part = get_mtd_device_nm("rootfsb");
+			if (IS_ERR(part)) {
+				code = 0xE1u;
+			} else {
+				u32 magic = 0, vidoff = 0;
+				u8 vidbyte = 0xFFu;
+
+				memset(b, 0, sizeof(b));
+				if (mtd_read(part, 0, 32, &rl, b) == 0) {
+					magic = ((u32)b[0] << 24) | ((u32)b[1] << 16) |
+						((u32)b[2] << 8) | (u32)b[3];
+					vidoff = ((u32)b[16] << 24) | ((u32)b[17] << 16) |
+						 ((u32)b[18] << 8) | (u32)b[19];
+				}
+				memset(b, 0, sizeof(b));
+				if (mtd_read(part, 0x800, 4, &rl, b) == 0)
+					vidbyte = b[0];
+
+				if (magic != 0x55424923u)
+					code = 0x80u | ((magic >> 24) & 0x3fu);
+				else if (vidoff != 0x800u)
+					code = 0x40u | ((vidoff >> 8) & 0x3fu);
+				else if (vidbyte == 0x55u)
+					code = 0xA0u;
+				else if (vidbyte == 0x00u)
+					code = 0xB0u;
+				else
+					code = 0xC0u | (vidbyte >> 4);
+
+				/*
+				 * DEEPER, BECAUSE 0xA0 ONLY PROVED "READABLE" (2026-10-30).
+				 *
+				 * [wubi] returned 0xC0DE52A0: partition found, EC magic "UBI#",
+				 * vid_hdr_offset = 0x800, and PEB0+0x800 reads 'U'. So the read path and the
+				 * addressing are CLEAN - UBI's failure to find the layout volume is not about
+				 * reaching the bytes.
+				 *
+				 * What UBI actually requires of a VID header before it accepts the record:
+				 *   magic == "UBI!" (0x55424921), hdr_crc over bytes 0..59 == the stored CRC, and
+				 *   vol_id == UBI_LAYOUT_VOLUME_ID (0x7fffefff) for the layout volume, which lives
+				 *   in LEB 0/1 - but bad-block skipping means that is not necessarily PEB 0/1.
+				 *
+				 * So scan the first four PEBs and report what is really there:
+				 *   0xA1  a VID header with valid magic+CRC AND vol_id == 0x7fffefff was found
+				 *         -> UBI has no excuse; the fault is inside its scan, not in our data
+				 *   0xA2  magic+CRC FAILED on the first readable VID -> we serve corrupt bytes
+				 *   0xA5  CRCs all valid but no layout vol_id -> these are ordinary volumes;
+				 *         the layout records are somewhere else (or absent)
+				 *   0xA3  VID magic is wrong
+				 *   0xA4  the 64-byte read failed
+				 */
+				{
+					struct luofu_fmc *dfmc = luofu_ubi_fmc;
+					u32 peb, found_layout = 0, any_bad_crc = 0, any_read = 0, magic_bad = 0;
+					u32 peb_size = dfmc ? dfmc->spec.block_size : 0x20000u;
+
+					for (peb = 0; peb < 4; peb++) {
+						u8 vh[64];
+						u32 vmagic, stored, calc;
+						u64 addr = (u64)peb * peb_size + 0x800u;
+
+						memset(vh, 0, sizeof(vh));
+						if (mtd_read(part, addr, 64, &rl, vh) != 0)
+							continue;
+						any_read++;
+						vmagic = ((u32)vh[0] << 24) | ((u32)vh[1] << 16) |
+							 ((u32)vh[2] << 8) | (u32)vh[3];
+						if (vmagic != 0x55424921u) {
+							magic_bad++;
+							continue;
+						}
+						stored = ((u32)vh[60] << 24) | ((u32)vh[61] << 16) |
+							 ((u32)vh[62] << 8) | (u32)vh[63];
+						calc = crc32(0xFFFFFFFFu, vh, 60);
+						if (stored != calc) {
+							any_bad_crc++;
+							continue;
+						}
+						{
+							u32 vol_id = ((u32)vh[8] << 24) | ((u32)vh[9] << 16) |
+								     ((u32)vh[10] << 8) | (u32)vh[11];
+
+							if (vol_id == 0x7fffefffu)
+								found_layout = 1;
+						}
+					}
+
+					if (found_layout)
+						code = 0xA1u;
+					else if (any_bad_crc)
+						code = 0xA2u;
+					else if (magic_bad && !any_read)
+						code = 0xA3u;
+					else if (!any_read)
+						code = 0xA4u;
+					else
+						code = 0xA5u;
+				}
+
+				put_mtd_device(part);
+			}
+
+			writel(0xC0DE9A00u | code, sc + 0xc04);
+			(void)readl(sc + 0xc04);
+			writel(0xC0DE9A10u, sc + 0xc18);
+			(void)readl(sc + 0xc18);
+			iounmap(sc);
+		}
+	}
 #endif
 	return 0;
 }
-late_initcall_sync(luofu_fmc_ubi_diag);
+/*
+ * LEVEL 7, NOT 7s (2026-10-30).
+ *
+ * As late_initcall_sync this hook sat behind every other 7s initcall, and the boot provably dies
+ * somewhere in that phase (the mach ladder's LATESYNC bit is set while this hook never wrote).
+ * Moving it to late_initcall puts it before the whole 7s phase, so its ubiblock verdict is
+ * recorded even on a boot that does not survive to the end.
+ */
+late_initcall(luofu_fmc_ubi_diag);
 
 MODULE_AUTHOR("the luofu port");
 MODULE_DESCRIPTION("Hisilicon luofu (Hi5671Y) FMC SPI-NAND controller (stage A)");
 MODULE_LICENSE("GPL v2");
+
+
+/*
+ * Defined here, after the timers and the LUOFU_*_S macros, and called from the stage-D late_initcall -
+ * the one path this board demonstrably executes. See the call site for why the platform probe is not an
+ * option (it never binds: the live device tree is not ours).
+ */
+static void luofu_arm_instruments(void)
+{
+	if (!luofu_crumb_base)
+		luofu_crumb_base = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (!luofu_crumb_base)
+		return;
+	timer_setup(&luofu_log_timer, luofu_log_tick, 0);
+	mod_timer(&luofu_log_timer, jiffies + msecs_to_jiffies(LUOFU_LOG_TICK_MS));
+	timer_setup(&luofu_home_timer, luofu_home_tick, 0);
+	mod_timer(&luofu_home_timer, jiffies + LUOFU_HOME_TIMER_S * HZ);
+
+	/*
+	 * ★ IS jiffies EVEN MOVING? (2026-10-27 10:50Z)
+	 *
+	 * Every timer in this driver has been silent no matter where it was armed - including from the
+	 * late_initcall that demonstrably runs. The next question is whether the kernel's timer tick works at
+	 * all: if jiffies is frozen, no timer in the tree can ever fire, and the only clock left is the
+	 * hardware watchdog (which explains the ~300 s return exactly).
+	 *
+	 * So stamp jiffies itself. Read after the box comes home:
+	 *   C1C = a small number (tens/hundreds) after minutes of uptime  ->  jiffies FROZEN
+	 *   C1C = ~uptime * HZ  (HZ=100: 300 s -> 30000 = 0x7530)           ->  timers work, something else is wrong
+	 */
+	/*
+	 * ★ jiffies INTO C70, THE ONE TRUE SCRATCH CELL (2026-10-27 15:50Z).
+	 *
+	 * sysctrl-cell-map.md: 0xC70 stores exactly what is written to it and no other writer claims it -
+	 * which is why it reads 0x1F40 in every fire. Everything else in this driver has been silent, and
+	 * every silent instrument is a TIMER CALLBACK while every non-timer writer lands. So the question is
+	 * whether the kernel clock advances at all.
+	 *
+	 *   C70 ~ 0x00000190 (400) at a ~4 s boot  -> jiffies runs, timers should work
+	 *   C70 ~ 0x00000000                       -> jiffies FROZEN, every timer in the tree is dead
+	 */
+	writel((u32)jiffies, luofu_crumb_base + 0xc70);
+	(void)readl(luofu_crumb_base + 0xc70);
+
+	/*
+	 * ★ AND WRITE THE SAME FACTS TO mtd9, THE CHANNEL THAT IS PROVEN (2026-10-27 11:00Z).
+	 *
+	 * The sysctrl cells have absorbed this entire session's instrumentation and every write has been
+	 * silent, for reasons I have not fully explained. G2, by contrast, PROVED the flash path: a pattern
+	 * written through luofu_fmc_write_page was read back byte-exact by the VENDOR's own driver. So the
+	 * evidence goes where there is a verified reader.
+	 *
+	 * Page 12 of the log partition carries a 2048-byte record: magic, jiffies, net_state, uptime-ish.
+	 */
+	if (luofu_ubi_fmc) {
+		u8 *rec = kzalloc(2048, GFP_KERNEL);
+		if (rec) {
+			memcpy(rec, "LUFU", 4);
+			*(u32 *)(rec + 4) = (u32)jiffies;
+			*(u32 *)(rec + 8) = luofu_net_state();
+			*(u32 *)(rec + 12) = (u32)luofu_log_ticks;
+			*(u32 *)(rec + 16) = 0xc0de1234u;
+			luofu_fmc_write_page(luofu_ubi_fmc, 12, rec);
+			kfree(rec);
+		}
+	}
+}
