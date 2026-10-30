@@ -373,9 +373,37 @@
 	 * reset values softrst_val0/1 seed the reset path (pinned crg :479). */
 	watchdog {
 		compatible = "hisilicon,luofu-wdt";	/* from hsan,hsan-watchdog */
+		/*
+		 * ★★★★ ENABLED WITH THE VALUES THE DRIVER REQUIRES, FROM THE VENDOR NODE (2026-10-30)
+		 *
+		 * This node used to carry `status = "disabled"` and NONE of the offsets below, so the
+		 * platform device was never created, luofu_wdt_probe never ran, its pet timer was never
+		 * armed, and NOTHING FED THE WATCHDOG U-BOOT LEAVES RUNNING. The board reset 45-70 s into
+		 * every boot of our kernel - which looked exactly like a userspace failure and was not.
+		 *
+		 * The proof it is armed: every fire readout shows WDT70 = 0xAA55A5A5 and
+		 * WDT64 = 0x12345116, which are this node's reset-val1 and enable-val1.
+		 *
+		 * Values copied verbatim from docs/soc/vendor-2.4.15.dts. Petting = reset-val0 then
+		 * reset-val1 written to clr-offset (0x70), which is what luofu_wdt_pet() does.
+		 */
+		hwver = <0x02>;
+		reg = <0x14880000 0x1000>;
+		timeout-sec = <0x1e>;			/* 0x1e */
+		timeout-min = <0x01>;
+		timeout-max = <0x200>;
 		interrupts = <0 2 4>;			/* SPI 2, pinned:1300 */
-		timeout-sec = <30>;			/* 0x1e */
-		status = "disabled";
+		reset-val0 = <0x55aa5a5a>;
+		reset-val1 = <0xaa55a5a5>;
+		stop-val0 = <0xabcd5116>;
+		stop-val1 = <0xed574447>;
+		enable-val0 = <0x4f4e5452>;
+		enable-val1 = <0x12345116>;
+		set-offset = <0x50>;
+		en-offset = <0x64>;
+		clr-offset = <0x70>;
+		int-status-offset = <0x100>;
+		status = "okay";
 	};
 
 	/* ---- standard ARM peripherals (free bindings) ---- */
