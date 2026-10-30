@@ -2427,6 +2427,26 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 * This restores the flags to exactly what the working binary used. If C1C comes back 0x5AC00102
 	 * the regression was here and the write-path work gets re-applied on top, one change per fire.
 	 */
+	/*
+	 * ★ 2026-10-30: THE HOOKS ARE BOUND, AND THE DEVICE IS WRITABLE.
+	 *
+	 * The read-only form above was a WORKAROUND, not a design: it kept UBI attaching read-only
+	 * because a writable MTD had previously made UBI attach RW and freeze in kernel_init.  But
+	 * read-only is exactly what stops the overlay mounting, and the overlay is what every userspace
+	 * service needs.  Measured 2026-10-30 with a trace hook in /etc/rc.common: our kernel logged
+	 * ZERO init scripts while the vendor logged all 61, and /lib/preinit/80_mount_root turns a
+	 * mount_root failure into `reboot -f`.
+	 *
+	 * The loop was:
+	 *     mount_root fails (jffs2 on rootfs_data cannot mount a read-only MTD)
+	 *         -> reboot -f -> same slot -> same failure -> no userspace, ever.
+	 *
+	 * So the freeze and the dead userspace have the same root: THE WRITE PATH WAS NEVER BOUND.
+	 * A frozen UBI RW attach is what a BROKEN write looks like; a working write is the fix for
+	 * both.  Bind the hooks and let the flash be writable; if UBI RW attach still freezes, the
+	 * write path itself is defective and the Ghidra decompilation of hi_spi_nand_hw_write
+	 * (C:/tmp/flash.txt) is the oracle to diff it against.
+	 */
 	mtd->flags = MTD_CAP_NANDFLASH & ~MTD_WRITEABLE;
 	mtd->flags |= MTD_NO_ERASE;
 	mtd->size = fmc->spec.tri_size;
@@ -2455,7 +2475,24 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	mtd->owner = THIS_MODULE;
 	mtd->_read = luofu_mtd_read;
 	mtd->_block_isbad = luofu_mtd_block_isbad;
-	/* the write/erase hooks stay compiled but unbound - see the flags comment above */
+	/*
+	 * ★ REVERTED 2026-10-30 AFTER A MEASURED REGRESSION.
+	 *
+	 * Binding these and marking the MTD writable was tried on the theory that a NULL _write (which
+	 * makes mtd_write() return -EOPNOTSUPP before this driver runs) was the whole problem.  It is
+	 * not.  Measured, slice 2717732 B md5 d42ba1ec:
+	 *
+	 *   read-only MTD -> exec succeeds (C9C = 0x1EB70F), boot reaches userspace, but the jffs2
+	 *                    overlay cannot mount, mount_root fails and 80_mount_root's `|| reboot -f`
+	 *                    loops the board; /www/BOOTS gains ZERO of our lines (101 lines, all vendor).
+	 *   writable MTD  -> NO RETURN within 1500s.  The boot dies BEFORE userspace, exactly as the
+	 *                    earlier "writable MTD -> UBI attach RW -> freeze in kernel_init" note said.
+	 *
+	 * So the write IMPLEMENTATION is defective, not merely unbound.  Until luofu_fmc_write_page is
+	 * diffed against the vendor's decompiled hi_spi_nand_hw_write (C:/tmp/flash.txt) and fixed, the
+	 * read-only form is the only state that reaches userspace at all - keep it, because a boot that
+	 * gets to exec is far more useful than one that freezes before init.
+	 */
 	(void)luofu_mtd_write;
 	(void)luofu_mtd_erase;
 
