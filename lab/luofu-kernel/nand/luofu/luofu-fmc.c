@@ -6487,6 +6487,22 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	else if (luofu_log_register(fmc))
 		dev_warn(dev, "FMC: could not arm the panic log capture\n");
 
+	/*
+	 * ★ THE OVERLAY PRECONDITION - OUTSIDE THE BRANCH, SO A REGISTRATION WARNING CANNOT SKIP IT.
+	 *
+	 * History, because it took four attempts: the call was commented out ("boot-path write", true
+	 * only while FMC_OP_BUSY was inverted), then lived in luofu_fmc_ubi_probe() (never a registered
+	 * initcall), then in luofu_fmc_ubi_diag() behind `if (luofu_ubi_fmc)` (crumb says mark code 0 -
+	 * never called), then HERE but inside the else-branch of the registration check - so a
+	 * registration WARNING (dev_warn above) would skip it, exactly as it may have done.
+	 *
+	 * And the placement itself matters: luofu_jffs2_mark() opens with get_mtd_device_nm(
+	 * "rootfs_data"), which cannot resolve a partition that is not registered yet. This sits after
+	 * the registration ATTEMPT, so the partition exists if registration worked, and the function
+	 * bails harmlessly via IS_ERR if it did not.
+	 */
+	luofu_jffs2_mark(fmc);
+
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
 		luofu_fmc_crumb(fmc, 4, LUOFU_RPT_FAIL(4));
