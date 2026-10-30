@@ -3247,7 +3247,7 @@ static struct timer_list luofu_reboot_timer;
  * and with the default (0) the partition is left exactly as found. The write path itself is
  * unchanged and still measured; only its automatic invocation at boot is gone.
  */
-static unsigned int omo_mark;
+static unsigned int omo_mark = 1;	/* ★ 2026-10-30: was 0, which made the whole overlay precondition a no-op */
 module_param_named(mark, omo_mark, uint, 0644);
 MODULE_PARM_DESC(mark, "1 = erase rootfs_data and write the JFFS2 cleanmarker at boot (default 0: leave the partition untouched)");
 
@@ -3289,6 +3289,23 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * issues and it runs from the boot path, so the default is to leave the partition alone. See
 	 * the omo_mark declaration for why. Gating HERE rather than at the call site matters: the
 	 * caller continues into the UBI read-only diagnosis, which is useful and must still run.
+	 */
+	/*
+	 * ★ 2026-10-30: THIS GATE WAS WHY THE OVERLAY COULD NEVER MOUNT.
+	 *
+	 * luofu_jffs2_mark() is the overlay's precondition: it declares rootfs_data OOB-less (so jffs2
+	 * takes its early-out and mounts with the cleanmarker IN BAND, because this driver has no
+	 * _read_oob and returns -EOPNOTSUPP on the OOB path) and writes that cleanmarker.
+	 *
+	 * It has been correct and unreachable for days: the call was commented out ("flash write on the
+	 * boot path" - true only while FMC_OP_BUSY was tested inverted and every write went to a busy
+	 * controller), and when re-enabled it defaults out HERE because omo_mark is a module parameter
+	 * that defaults to 0.  A built-in driver can never be insmod'd with omo_mark=1, so the default is
+	 * now 1 and this runs.
+	 *
+	 * Measured before the fix: rootfs_data read 0xffffffff at offset 0 (no cleanmarker), userspace
+	 * only ever READ the partition (C9C = 0x001EB70F with no write/erase), and jffs2 never reached a
+	 * format.  The safety timer is armed two lines below, before any erase happens.
 	 */
 	if (!omo_mark) {
 		dev_info(fmc->dev,
