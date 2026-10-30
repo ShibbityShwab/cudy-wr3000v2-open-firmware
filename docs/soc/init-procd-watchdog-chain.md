@@ -117,16 +117,49 @@ from `/etc/rc.local`.** Under the vendor, `watchdog` is the feeder; under ours, 
 
 ## 5. procd's pid-1 path is a six-stage state machine
 
-`FUN_00020728` dispatches through a jump table Ghidra could not recover:
+**Recovered 2026-10-30.** Ghidra reported the dispatch as an unrecoverable indirect jump; `objdump`
+shows it is a **branch table**, which is why it looked opaque:
 
 ```
-uVar1 = *(state) - 1;
-if (uVar1 < 6) (*(code *)(uVar1 * 4 + 0x1fd74))();   /* 6 handlers */
-else ulog(3, "...");
+fd6c: addls pc, pc, r3, lsl #2      ; switch on (state - 1), states 1..6
+fd70: b 105d4                       ; default
+fd74: b fd8c   fd78: b ff18   fd7c: b 10178
+fd80: b 1044c  fd84: b 10478  fd88: b 10574
 ```
 
-Six function pointers sit at `0x1fd74`. Recovering them is the next step: the stage that does not
-complete is where procd blocks, and that is the remaining question in the boot chain.
+Each handler's strings were resolved from the PIC literals (literal = target - (pc + 8) at the
+`add rX, pc, rX` instruction):
+
+| state | entry | log | then |
+|---|---|---|---|
+| 1 | `0xfd8c` | `- early -` | `/etc/hotplug.json` |
+| 2 | `0xff18` | `console` | **`getpwnam("ubus")`** |
+| 3 | `0x10178` | `- init -` | `/etc/inittab` |
+| 4 | `0x1044c` | `- init complete -` | `respawnlate` |
+| 5 | `0x10478` | - | 20-byte buffer setup |
+| 6 | `0x10574` | - | `signal(SIGCHLD)` |
+
+**All of it is satisfiable on this rootfs:** `/etc/passwd` carries `ubus:x:81:81:...`, and
+`/etc/inittab`, `/etc/hotplug.json` and `/etc/rc.d` all exist. So procd's stages do not fail for want
+of files - which is why the hang is NOT in this state machine.
+
+## 6. THE ACTUAL MECHANISM: no `/dev/watchdog` means nothing can feed it
+
+Putting the pieces together: u-boot arms the watchdog (**30 s**), and the feeder is userspace -
+`/sbin/init` opens `/dev/watchdog` and passes the fd to procd. **If our kernel has no watchdog driver
+bound, `/dev/watchdog` does not exist, init cannot open it, procd inherits nothing, nothing pings, and
+the board resets 30 s after userspace starts.**
+
+That is exactly the observed 70 s total (boot + 30 s), and it is why enabling the watchdog DT node
+made the boot survive **1500 s** - the device finally existed for userspace to feed.
+
+So both earlier readings were half-right and half-wrong:
+
+- **The watchdog fix was necessary** - without a `/dev/watchdog`, userspace cannot feed a timer that
+  u-boot already armed, no matter what procd does.
+- **But it is not sufficient, and it is not "the" fix** - a fed watchdog only keeps a stuck system
+  alive. The network still has to come up.
+
 
 ## Reproducing
 
