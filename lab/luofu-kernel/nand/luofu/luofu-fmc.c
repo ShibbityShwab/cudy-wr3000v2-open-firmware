@@ -6074,6 +6074,22 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 		luofu_log_dma = 0;
 		luofu_diag_dma = 0;
 	}
+	/*
+	 * ★ REVERTED 2026-10-30 - THE kmalloc RING MADE THE BOOT WORSE, NOT BETTER.
+	 *
+	 * The reasoning was sound: the ring was disabled because its FIXED PHYSICAL address corrupted
+	 * kernel memory, and disabling it also skipped the kmsg-dumper registration, so no log was ever
+	 * captured. Allocating normally should have fixed both.
+	 *
+	 * Measured, slice 2718668 md5 de6c833a: C9C came back 0x001EB70A - EARLIER in the kernel_init
+	 * ladder than the 0x001EB70F this tree reached without it - and mtd9 still read back only a
+	 * truncated "<6>[ 0.00" fragment. So the ring either is not the thing that populates mtd9, or it
+	 * costs the boot more than the log is worth.
+	 *
+	 * Reverted to the state that reaches exec. The log channel needs its own investigation (which
+	 * writer actually persists to mtd9, since luofu_log_snapshot's get_mtd_device_nm("log") was
+	 * already measured as never writing anything on 2026-10-14) rather than another attempt here.
+	 */
 	luofu_log_b = NULL;
 	luofu_diag_buf = NULL;
 
