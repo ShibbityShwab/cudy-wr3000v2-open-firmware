@@ -3168,7 +3168,7 @@ static struct timer_list luofu_log_timer;
  * the box by itself.  The risk stays bounded either way: our kernel arms the FALLBACK (it flips the
  * slot selector) on the way up, so even a hang is one power cycle from the vendor slot.
  */
-#define LUOFU_SAFETY_SECS	900
+#define LUOFU_SAFETY_SECS	50	/* TEST BUILD: the measurement lands in ~15 s; do not sit here for 15 min */
 static struct timer_list luofu_reboot_timer;
 
 /*
@@ -5017,7 +5017,7 @@ extern bool luofu_wdt_bound;	/* exported by luofu-wdt: true once its probe compl
  * it calls emergency_restart() after LUOFU_HOME_TIMER_S, and luofu_restart parks and arms the watchdog,
  * which resets the box into the vendor.
  */
-#define LUOFU_HOME_TIMER_S	620	/* long: the box must stay up for a ping test */
+#define LUOFU_HOME_TIMER_S	45	/* TEST BUILD: return to the vendor quickly so fires iterate */
 static struct timer_list luofu_home_timer;
 
 /*
@@ -6877,6 +6877,7 @@ static void __init luofu_write_selftest(void)
 	void __iomem *sc;
 	u32 i, bad = 0, row, brow, stamp;
 	u32 ppb;
+	u32 erase_left = 0;
 
 	/*
 	 * ★ INFORMATION GATE FIRST, BEFORE ANY GUARD (2026-10-30).
@@ -6910,6 +6911,41 @@ static void __init luofu_write_selftest(void)
 
 	spin_lock_irqsave(&luofu_fmc_read_lock, flags);
 	luofu_fmc_erase_block(fmc, brow);
+	/*
+	 * ★ ERASE IS PROVEN SEPARATELY, BECAUSE IT WAS NEVER TESTED.
+	 *
+	 * The write test below is erase -> write -> read -> compare.  If the erase silently FAILED and
+	 * the block happened to already be blank, that sequence still compares equal - so a passing
+	 * write test says NOTHING about erase.  jffs2 needs erase to actually erase.
+	 *
+	 * So: after the erase, read the page back and count bytes that are NOT 0xff.  An erased page
+	 * must be all 0xff.
+	 */
+	/*
+	 * ★ ERASE IS PROVEN ACROSS THE WHOLE BLOCK, NOT JUST PAGE 0.
+	 *
+	 * The first version read back only the block's first page.  A PARTIAL erase - page 0 cleared,
+	 * the other 63 pages still holding data - would pass that test and still leave jffs2 looking at
+	 * garbage, which is exactly the "no valid JFFS2 nodes" it reports on this partition.  So sample
+	 * the first, second, middle and last page of the block.
+	 */
+	erase_left = 0;
+	{
+		u32 sp[4];
+		int s;
+		sp[0] = row; sp[1] = row + 1; sp[2] = brow + (ppb / 2); sp[3] = brow + ppb - 1;
+		for (s = 0; s < 4; s++) {
+			u32 nz = 0;
+			memset(fmc->page_buf, 0, fmc->spec.page_size);
+			luofu_fmc_read_page(fmc, sp[s], fmc->page_buf);
+			for (i = 0; i < fmc->spec.page_size; i++)
+				if (((u8 *)fmc->page_buf)[i] != 0xff)
+					nz++;
+			if (nz)
+				erase_left++;	/* count WHICH samples were dirty, 1..4 */
+		}
+	}
+
 	luofu_fmc_write_page(fmc, row, fmc->dma_buf);
 	memset(fmc->page_buf, 0, fmc->spec.page_size);
 	luofu_fmc_read_page(fmc, row, fmc->page_buf);
@@ -6932,6 +6968,10 @@ static void __init luofu_write_selftest(void)
 		luofu_selftest_code = 2;
 	else
 		luofu_selftest_code = (bad > 0xffu) ? 0xffu : bad;
+
+	/* an incomplete erase outranks the write result: 0xF0 | how many of the 4 samples were dirty */
+	if (erase_left)
+		luofu_selftest_code = 0xf0u | (u32)erase_left;
 
 	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 	if (sc) {
