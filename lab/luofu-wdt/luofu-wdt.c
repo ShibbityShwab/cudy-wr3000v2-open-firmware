@@ -43,6 +43,7 @@
  */
 
 #include <linux/io.h>
+#include <linux/jiffies.h>
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -73,7 +74,24 @@ struct luofu_wdt {
 	u32	timeout_field;
 	unsigned int	hwver;
 	struct timer_list	pet_timer;	/* ★ pings unconditionally: nothing opens /dev/watchdog */
+	unsigned long	pet_deadline;	/* ★ jiffies after which the pet STOPS (see luofu_wdt_pet) */
+	bool		pet_expired;
 };
+
+/*
+ * ★ THE PET MUST EXPIRE - OTHERWISE A HUNG BOOT IS A PERMANENT STRAND.
+ *
+ * u-boot arms this timer on EVERY boot (WDT70/WDT64 in every preflight readout).  A bootstrap pet
+ * that pings forever therefore takes the board's ONLY automatic recovery away: if userspace never
+ * brings the network up, nothing else feeds the watchdog, our timer keeps it alive, and the box sits
+ * dark until somebody holds the RESET button.  Measured 2026-10-30: a fire whose userspace never
+ * came up returned "NO RETURN within 1500s" and had to be waited out.
+ *
+ * So pet only long enough for userspace to get itself up.  When the budget is gone, stop feeding and
+ * let the HARDWARE reset the board back to the vendor slot - the watchdog then does the job it was
+ * always doing before this driver existed.
+ */
+#define LUOFU_WDT_PET_BUDGET_MS	180000	/* 3 min: boot + userspace + network */
 
 static void luofu_wdt_stamp(u32 v);
 
@@ -178,6 +196,16 @@ static void luofu_wdt_pet(struct timer_list *t)
 
 	writel(w->reset_val0, w->base + w->clr_offset);
 	writel(w->reset_val1, w->base + w->clr_offset);
+
+	/* budget exhausted -> stop feeding, let the hardware recover the board */
+	if (time_after(jiffies, w->pet_deadline)) {
+		if (!w->pet_expired) {
+			w->pet_expired = true;
+			pr_warn("luofu-wdt: pet budget spent - releasing the watchdog so a hung boot resets\n");
+		}
+		return;
+	}
+
 	mod_timer(&w->pet_timer, jiffies + msecs_to_jiffies(LUOFU_WDT_PET_MS));
 }
 
@@ -354,6 +382,8 @@ static int luofu_wdt_probe(struct platform_device *pdev)
 	 * the watchdog core does later.
 	 */
 	timer_setup(&w->pet_timer, luofu_wdt_pet, 0);
+	w->pet_deadline = jiffies + msecs_to_jiffies(LUOFU_WDT_PET_BUDGET_MS);
+	w->pet_expired = false;
 	mod_timer(&w->pet_timer, jiffies + msecs_to_jiffies(LUOFU_WDT_PET_MS));
 
 	luofu_wdt_stamp(0xC0DE7D05u);	/* about to register with the watchdog core */
