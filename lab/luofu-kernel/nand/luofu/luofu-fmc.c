@@ -2861,7 +2861,7 @@ static int __init luofu_ubi_post(void)
 /* DISABLED for [wcrmb]: luofu_ubi_post writes C04, which would overwrite the deepest UBI crumb.
  * The crumb ladder in ubi_init/open_mtd_device/ubi_attach_mtd_dev/ubi_attach/scan_peb is the
  * instrument for this fire; re-enable it once the ladder has been read. */
-late_initcall_sync(luofu_ubi_post);
+/* late_initcall_sync(luofu_ubi_post); */  /* banked: 0x1EB500C8 = ubi0 attached + ubiblock resolved */
 
 /* the public-API answer IMMEDIATELY after our own attach returned 0 (0 = the volume opened) */
 static u32 luofu_ubi_post_code = 0xfffu;	/* the attach never succeeded */
@@ -4920,6 +4920,27 @@ static void luofu_home_tick(struct timer_list *t)
 	}
 	pr_emerg("luofu: lab image returning to the vendor after %d s (%u ticks)\n",
 		 LUOFU_HOME_TIMER_S, luofu_log_ticks);
+	/*
+	 * ★★★★★ RESTORE THE VENDOR SLOT BEFORE REBOOTING (2026-10-30).
+	 *
+	 * This lab image used to rely on the HARDWARE WATCHDOG to hand the board back: nothing fed
+	 * it, so it reset ~70 s in and u-boot fell through to the vendor. Once the watchdog was
+	 * fixed (DT node enabled, pet timer armed), that escape hatch disappeared - and a boot that
+	 * reached userspace WITHOUT bringing the network up simply stayed there. This timer then
+	 * called emergency_restart(), u-boot read the selector still pointing at slot B, booted the
+	 * same image, and looped: the board was stranded for 25 minutes and needed a RESET hold.
+	 *
+	 * 0x10 is the VENDOR pair - the value the fire script writes to boot the vendor. Writing it
+	 * here makes a failed lab image a ten-minute inconvenience instead of a strand.
+	 *
+	 * NOT the 2026-10-2x bug: that was an initcall stamping a DIAGNOSTIC value (0xC0DE9A01,
+	 * low byte 0x01 - neither 0x10 nor 0x11) into 0xC08 mid-boot, corrupting the selector on
+	 * every boot. This is one deliberate write of a VALID selector on the restart path.
+	 */
+	if (luofu_crumb_base) {
+		writel(0x10u, luofu_crumb_base + 0xc08);
+		(void)readl(luofu_crumb_base + 0xc08);
+	}
 	emergency_restart();
 }
 
@@ -5821,6 +5842,20 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * ONLY from the panic path, when corrupting our own data cannot cost
 	 * anything but the reboot the kernel is about to perform regardless.
 	 */
+		/*
+		 * ★ THE PANIC CRUMB DOES NOT NEED THE LOG RING - MOVED ABOVE THE GUARD (2026-10-30).
+		 *
+		 * This registration used to sit BELOW `if (!luofu_log_b) return -ENOMEM;`, and the log
+		 * ring is disabled (its unreserved fixed-address window was corrupting memory), so this
+		 * function returned early and the notifier was NEVER REGISTERED. That is why no boot
+		 * since then has carried 0xC0DE502E: not because the kernel never panicked, but because
+		 * nothing was listening - and the absence was being read as "it hangs".
+		 *
+		 * A panic crumb is a sysctrl I/O write; it needs no RAM buffer. Register it first.
+		 */
+		luofu_panic_nb.notifier_call = luofu_panic_notify;
+		atomic_notifier_chain_register(&panic_notifier_list, &luofu_panic_nb);
+		
 	if (!luofu_log_b)
 		return -ENOMEM;
 
@@ -5853,8 +5888,7 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 	 * RAM theory so far has been about the wrong event entirely.  Either way the
 	 * reader learns one specific thing instead of reading another absence.
 	 */
-	luofu_panic_nb.notifier_call = luofu_panic_notify;
-	atomic_notifier_chain_register(&panic_notifier_list, &luofu_panic_nb);
+		/* moved above the luofu_log_b guard - see there */
 
 	/*
 	 * And the safety timer, armed once and never cancelled - see its declaration
@@ -6876,49 +6910,44 @@ static int __init luofu_fmc_ubi_diag(void)
 
 					{
 					/*
-					 * ★★★★★ ALIGNMENT TEST: THE SAME BYTES, TWO READ SHAPES (2026-10-30)
+					 * ★★★★★ DOES A LARGE ECC-ON READ HANG? (2026-10-30)
 					 *
-					 * [w2copy] C9C = 0xF1160000 (PEB0) and C8C = 0xF1160000 (PEB1): BOTH copies of
-					 * the volume table read identically wrong, so this is NOT media/ECC on one page -
-					 * our driver is systematically returning F1 16 00 00 where the vendor returns
-					 * F1 16 C3 6B. Record 118 sits at 0x5F48 and its CRC word at 0x5FF0, i.e. page
-					 * offset 0x7F0 - the TAIL of the page.
+					 * [wpost2] C9C = 0x1EB500C8: ubi0 ATTACHED and ubiblock0_0 RESOLVED. The boot still
+					 * falls back to the vendor before userspace, and C18 = 0xC0DE50E5 (the log-ring
+					 * workqueue) with NO panic crumb (0xC0DE502E) - so what follows ubiblock is a HANG,
+					 * not a panic. mount_root is the next thing to run, and it reads the rootfs through
+					 * ubiblock in LARGE sequential chunks; every read this driver has been proved on
+					 * tonight was 4 to 4096 bytes.
 					 *
-					 * So read the SAME four bytes two ways:
-					 *   C9C = 4-byte read at 0x5FF0            (starts exactly on the word)
-					 *   C8C = the same 4 bytes inside a 256-byte read starting at 0x5F00 (offset 0xF0)
-					 * If the two differ, the defect depends on where the read STARTS - a chunking
-					 * or page-offset bug in the copy path, not a data problem.
-					 * If both read 0xF1160000, the bytes are lost regardless of shape and the fault is
-					 * in how the page itself is fetched or decoded.
+					 * So crumb BEFORE and AFTER an 8 KiB read with the ECC engine on:
+					 *   C9C = 0x1EB6B0  the read was ENTERED and never returned  -> it hangs
+					 *   C9C = 0x1EB6AF  the read RETURNED (low half = a checksum) -> it is fine
 					 */
 					{
-						u8 *big = kmalloc(256, GFP_KERNEL);
+						u8 *lb = kmalloc(8192, GFP_KERNEL);
 						void __iomem *fsc;
 
-						if (big) {
-							u32 a = 0xdeadbeefu, b = 0xdeadbee1u;
-							u8 w4[4];
-
-							memset(w4, 0, 4);
-							if (mtd_read(part, 0x5ff0u, 4, &rl, w4) == 0)
-								a = ((u32)w4[0] << 24) | ((u32)w4[1] << 16) |
-								     ((u32)w4[2] << 8) | (u32)w4[3];
-
-							memset(big, 0, 256);
-							if (mtd_read(part, 0x5f00u, 256, &rl, big) == 0)
-								b = ((u32)big[0xf0] << 24) | ((u32)big[0xf1] << 16) |
-								     ((u32)big[0xf2] << 8) | (u32)big[0xf3];
+						if (lb) {
+							u32 cs = 0u;
 
 							fsc = ioremap(0x10100000, 0x1000);
 							if (fsc) {
-								writel(a, fsc + 0xc9c);
-								writel(b, fsc + 0xc8c);
+								writel(0x1eb600b0u, fsc + 0xc9c);
 								(void)readl(fsc + 0xc9c);
-								(void)readl(fsc + 0xc8c);
 								iounmap(fsc);
 							}
-							kfree(big);
+
+							memset(lb, 0, 8192);
+							if (mtd_read(part, 0x1000u, 8192, &rl, lb) == 0)
+								cs = crc32(0xFFFFFFFFu, lb, 8192) & 0xffffu;
+
+							fsc = ioremap(0x10100000, 0x1000);
+							if (fsc) {
+								writel(0x1eb600afu | (cs << 16), fsc + 0xc9c);
+								(void)readl(fsc + 0xc9c);
+								iounmap(fsc);
+							}
+							kfree(lb);
 						}
 					}
 					}
