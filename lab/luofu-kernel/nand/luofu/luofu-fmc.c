@@ -342,6 +342,22 @@ bool __weak luofu_wdt_bound;   /* strong definition lives in luofu-wdt */
  */
 #define LUOFU_SCRATCH_OFF	0x4c80000ULL
 #define LUOFU_SCRATCH_LEN	0x3380000ULL
+/*
+ * ★ AND THE DIAGNOSTIC PARTITIONS, WHICH MY OWN GATE WAS SILENCING (2026-10-30).
+ *
+ * This driver writes its kernel-log ring to mtd9 (`log`, 0x900000) and pstore to mtd10 - and both sit
+ * BELOW 0x4c80000, so the scratch gate refused every one of those writes.  That is why several fires
+ * produced no readable kernel output: the channel existed, and this guard blocked it.
+ *
+ *   0x900000 + 0x440000 = 0xd40000   log      (the ring read back with dd|strings)
+ *   0xd40000 + 0x040000 = 0xd80000   pstore
+ *
+ * Neither is read by the boot path, so admitting them costs nothing and restores the ONLY channel
+ * that can explain a kernel-side failure.  Still refused: esbc, both u-boot slots, both env slots,
+ * fac, cfga/b, bdinfo, kernela/b and rootfsa/b.
+ */
+#define LUOFU_DIAG_OFF		0x900000ULL
+#define LUOFU_DIAG_LEN		0x480000ULL
 #define LUOFU_CRUMB_OFFSET	0xc18
 #define LUOFU_CRUMB_PAYLOAD_OFF	0xc1c
 #define LUOFU_CRUMB_NAND	0xc0de5000
@@ -2224,8 +2240,10 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	 * pstore, kernel*, rootfs* - returns -EROFS here, so a wrong write cannot brick the box.
 	 * Lift this gate only when a known pattern reads back byte-identical from `upgrade`.
 	 */
-	if ((u64)mtd_get_master_ofs(mtd, to) < LUOFU_SCRATCH_OFF ||
-	    (u64)mtd_get_master_ofs(mtd, to) + len > LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN)
+	if (!((u64)mtd_get_master_ofs(mtd, to) >= LUOFU_SCRATCH_OFF &&
+	      (u64)mtd_get_master_ofs(mtd, to) + len <= LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN) &&
+	    !((u64)mtd_get_master_ofs(mtd, to) >= LUOFU_DIAG_OFF &&
+	      (u64)mtd_get_master_ofs(mtd, to) + len <= LUOFU_DIAG_OFF + LUOFU_DIAG_LEN))
 		return -EROFS;
 	if (len % mtd->writesize)
 		return -EINVAL;
@@ -2407,8 +2425,10 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	if (instr->addr + instr->len > mtd->size)
 		return -EINVAL;
 	/* scratch gate - see the long note in luofu_mtd_write; only `upgrade` may be erased */
-	if ((u64)mtd_get_master_ofs(mtd, instr->addr) < LUOFU_SCRATCH_OFF ||
-	    (u64)mtd_get_master_ofs(mtd, instr->addr) + instr->len > LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN)
+	if (!((u64)mtd_get_master_ofs(mtd, instr->addr) >= LUOFU_SCRATCH_OFF &&
+	      (u64)mtd_get_master_ofs(mtd, instr->addr) + instr->len <= LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN) &&
+	    !((u64)mtd_get_master_ofs(mtd, instr->addr) >= LUOFU_DIAG_OFF &&
+	      (u64)mtd_get_master_ofs(mtd, instr->addr) + instr->len <= LUOFU_DIAG_OFF + LUOFU_DIAG_LEN))
 		return -EROFS;
 
 	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
@@ -3282,6 +3302,8 @@ MODULE_PARM_DESC(mark, "1 = erase rootfs_data and write the JFFS2 cleanmarker at
  * IT ONLY EVER WRITES AN UNTOUCHED PARTITION. If the first four bytes are anything but ff, there is
  * already an overlay here and this returns without touching anything.
  */
+u32 luofu_mark_code = 0;
+EXPORT_SYMBOL(luofu_mark_code);
 static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 {
 	/*
@@ -3308,6 +3330,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * format.  The safety timer is armed two lines below, before any erase happens.
 	 */
 	if (!omo_mark) {
+		luofu_mark_code = 2;
 		dev_info(fmc->dev,
 			 "FMC: rootfs_data left untouched (omo_mark=0; insmod with omo_mark=1 to erase and mark)\n");
 		return;
@@ -3340,8 +3363,11 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	int err;
 
 	part = get_mtd_device_nm("rootfs_data");
-	if (IS_ERR(part))
+	if (IS_ERR(part)) {
+		luofu_mark_code = 3;
 		return;
+	}
+	luofu_mark_code = 1;
 
 	/*
 	 * AND THE PARTITION DECLARES NO OOB, WHICH IS WHAT STOPS JFFS2 ASKING FOR ONE.
@@ -3366,13 +3392,16 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 
 	err = mtd_read(part, 0, 4, &got, (u8 *)&word);
 	if (err || got != 4 || word != 0xffffffffu) {
+		luofu_mark_code = 4;
 		dev_info(fmc->dev, "FMC: rootfs_data already carries 0x%08x; leaving it alone\n", word);
 		goto out;
 	}
 
 	page = kzalloc(part->writesize, GFP_KERNEL);
-	if (!page)
+	if (!page) {
+		luofu_mark_code = 5;
 		goto out;
+	}
 
 	memset(&ei, 0, sizeof(ei));
 	/*
@@ -3380,6 +3409,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	ei.len = part->erasesize;
 	err = mtd_erase(part, &ei);
 	if (err) {
+		luofu_mark_code = 6;
 		dev_info(fmc->dev, "FMC: could not erase rootfs_data block 0: %d\n", err);
 		kfree(page);
 		goto out;
@@ -3500,6 +3530,7 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	err = mtd_write(part, 0, part->writesize, &got, page);
 	kfree(page);
 	if (err) {
+		luofu_mark_code = 7;
 		dev_info(fmc->dev, "FMC: could not write the jffs2 marker: %d\n", err);
 		goto out;
 	}
