@@ -1254,6 +1254,55 @@ static int luofu_fmc_read_page(struct luofu_fmc *fmc, u32 row, void *data)
  * property intact: there is still no path in this file that can modify the
  * flash.  A page read is the only thing it ever asks the chip for.
  */
+/*
+ * ★ DID USERSPACE EVER TOUCH THE OVERLAY PARTITION?
+ *
+ * This is the measurement that splits the last two hypotheses, and nothing else could make it.
+ *
+ * OURS=0 in /www/BOOTS cannot tell "preinit never reached mount_root" apart from "jffs2 looked at
+ * rootfs_data and refused", because the trace hook lives in /etc/rc.common - sourced by rc.d scripts
+ * only, never by the preinit hooks - and /www is unwritable until the overlay mounts anyway.
+ *
+ * So the flash hooks report instead.  Any access to rootfs_data (0x4c80000..0x6280000) stamps C9C:
+ *
+ *     0x1EB80001  something READ rootfs_data   -> preinit reached the overlay step
+ *     0x1EB80002  something WROTE rootfs_data  -> jffs2 tried to format/update it
+ *     0x1EB80003  something ERASED rootfs_data
+ *     0x001EB70F  untouched                   -> userspace never got as far as the overlay
+ *
+ * ONE-SHOT: jffs2 reads a partition thousands of times while mounting, and an ioremap per access is
+ * exactly the cost that froze an earlier boot.  After the first stamp this is a single flag test.
+ */
+static bool luofu_ovl_noted;
+
+static void luofu_ovl_note(loff_t chip, u32 op)
+{
+	void __iomem *sc;
+
+	if (luofu_ovl_noted)
+		return;
+	/*
+	 * ★ IGNORE READS.  jffs2 ALWAYS reads first (that is op 1, and it is what every fire so far has
+	 * reported), so a one-shot on the first access can never say whether a FORMAT was attempted.
+	 * Stamping only write/erase makes the instrument answer the question that matters:
+	 *
+	 *     0x1EB80002 / 0x1EB80003   jffs2 tried to write or erase rootfs_data -> it attempted to format
+	 *     0x001EB70F                it only ever read, so the format never started
+	 */
+	if (op == 1)
+		return;
+	if (chip < (loff_t)0x4c80000 || chip >= (loff_t)0x6280000)
+		return;
+
+	luofu_ovl_noted = true;
+	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (!sc)
+		return;
+	writel(0x1EB80000u | (op & 0xfu), sc + 0xc9c);
+	(void)readl(sc + 0xc9c);
+	iounmap(sc);
+}
+
 static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 			  size_t *retlen, u_char *buf)
 {
@@ -1263,6 +1312,8 @@ static int luofu_mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 	int ret = 0;
 
 	*retlen = 0;
+	/* ★ DID USERSPACE EVER TOUCH THE OVERLAY PARTITION?  (see the note at luofu_ovl_note) */
+	luofu_ovl_note(mtd_get_master_ofs(mtd, from), 1);
 	if (from < 0 || from + len > mtd->size)
 		return -EINVAL;
 
@@ -2152,6 +2203,7 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	 * `len` needs no such care: size_t is 32 bits on this target.
 	 */
 	*retlen = 0;
+	luofu_ovl_note(mtd_get_master_ofs(mtd, to), 2);
 	if (to < 0 || to + len > mtd->size)
 		return -EINVAL;
 	/*
@@ -2222,6 +2274,8 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	unsigned long flags;
 	loff_t pos;
 	int ret = 0;
+
+	luofu_ovl_note(mtd_get_master_ofs(mtd, instr->addr), 3);
 
 	/*
 	 * ★ INFORMATION GATE: DID OUR ERASE CODE RUN AT ALL?
@@ -3719,7 +3773,25 @@ static int luofu_fmc_ubi_probe(void)
 	 * baseline that reached RUNNING; if system_state returns to 2, the rule is confirmed again and
 	 * the recording has to move off the boot path entirely.
 	 */
-	/* luofu_jffs2_mark(fmc); -- disabled: flash write on the boot path */
+	/*
+	 * ★ RE-ENABLED 2026-10-30: THE REASON IT WAS DISABLED IS GONE.
+	 *
+	 * It was taken out because "every build since that adds a flash write to the boot path stops at
+	 * SYSTEM_SCHEDULING" - a fair reading WHEN THE WRITE PATH WAS BROKEN.  The defect was
+	 * FMC_OP_BUSY tested inverted at the program and erase sites, so every command was handed to a
+	 * busy controller and no write ever landed.  That is fixed and the driver now PROVES itself:
+	 * erase clears a whole 128 KiB block (four sampled pages all 0xff) and a written page reads back
+	 * byte-identical (C9C top byte 0).
+	 *
+	 * And this call is not an instrument - it is the OVERLAY'S PRECONDITION.  It declares the
+	 * rootfs_data partition as having NO OOB (so jffs2 skips the OOB/cleanmarker path this driver
+	 * cannot serve: no _read_oob, -EOPNOTSUPP) and writes the in-band cleanmarker jffs2 then finds.
+	 *
+	 * MEASURED WITHOUT IT [wfmt]: userspace READ rootfs_data and then stopped - "only reads, the
+	 * format never started" (C9C = 0x001EB70F, op 1 never followed by a write or erase).  jffs2 bails
+	 * at jffs2_nand_flash_setup before it can format anything.
+	 */
+	luofu_jffs2_mark(fmc);
 
 	desc = ubi_open_volume(0, LUOFU_ROOTFS_VOL_ID, UBI_READONLY);
 	if (IS_ERR(desc)) {
@@ -6870,6 +6942,46 @@ module_platform_driver(luofu_fmc_driver);
  */
 u32 luofu_selftest_code = 1;
 EXPORT_SYMBOL(luofu_selftest_code);
+/*
+ * ★★★ ERASE THE OVERLAY PARTITION SO JFSS2 CAN FORMAT IT (2026-10-30).
+ *
+ * Measured [wovl]: C9C = 0x1EB80001 - userspace READ rootfs_data.  So preinit DOES reach the
+ * overlay step, jffs2 DOES look at the partition, and it refuses with
+ *
+ *     "Cowardly refusing to erase blocks on filesystem with no valid JFFS2 nodes"
+ *
+ * because the partition still holds the garbage left by an earlier format attempt.  jffs2 will not
+ * reformat a partition that contains rubbish; it needs one that is BLANK.  The vendor image never
+ * hit this because its own kernel wrote valid nodes the first time.
+ *
+ * So blank it: erase every block of rootfs_data (0x4c80000, 0x1600000 long = 176 x 128 KiB) before
+ * userspace starts.  An erase is ~1-2 ms, so the whole partition costs well under a second - nothing
+ * against a 50 s budget.  Then mount_root finds an erased partition, jffs2 formats it, the overlay
+ * mounts, and userspace finally runs with somewhere to write.
+ *
+ * This only ever touches rootfs_data; rootfsa/rootfsb and both kernel slots are outside the gate.
+ */
+static void __init luofu_blank_overlay(struct luofu_fmc *fmc)
+{
+	unsigned long flags;
+	u32 row, ppb, nblk, b;
+
+	if (!fmc || !fmc->spec.page_size || !fmc->spec.block_size)
+		return;
+
+	ppb = fmc->spec.block_size / fmc->spec.page_size;
+	if (!ppb)
+		return;
+
+	row = (u32)(0x4c80000ULL / fmc->spec.page_size);
+	nblk = (u32)(0x1600000ULL / fmc->spec.block_size);
+
+	spin_lock_irqsave(&luofu_fmc_read_lock, flags);
+	for (b = 0; b < nblk; b++)
+		luofu_fmc_erase_block(fmc, row + b * ppb);
+	spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+}
+
 static void __init luofu_write_selftest(void)
 {
 	struct luofu_fmc *fmc = luofu_ubi_fmc;
@@ -7288,6 +7400,24 @@ static int __init luofu_fmc_ubi_diag(void)
 	 * literally the last statement before return.  The ubi verdict it displaces is already known
 	 * (ubiblock0_0 resolves), so nothing is lost.
 	 */
+	/* ★ and blank the overlay partition so jffs2 can format it (see luofu_blank_overlay) */
+	luofu_blank_overlay(luofu_ubi_fmc);
+
+	/*
+	 * ★ AND DECLARE THE OVERLAY PARTITION OOB-LESS + WRITE ITS CLEANMARKER.
+	 *
+	 * This is the overlay's PRECONDITION, not an instrument, and it was sitting inside
+	 * luofu_fmc_ubi_probe() - which is NOT registered as an initcall and therefore never runs.
+	 *
+	 * MEASURED WITHOUT IT [wfmt]: userspace READ rootfs_data and stopped. jffs2 got past the scan and
+	 * died at jffs2_nand_flash_setup, which needs the spare-area cleanmarker, asks for an OOB read,
+	 * and this driver has no _read_oob (-EOPNOTSUPP). Declaring the partition as having NO OOB makes
+	 * jffs2 take its own early-out and mount with the cleanmarker in band, which is what
+	 * luofu_jffs2_mark then writes.
+	 */
+	if (luofu_ubi_fmc)
+		luofu_jffs2_mark(luofu_ubi_fmc);
+
 	luofu_write_selftest();
 	return 0;
 }
