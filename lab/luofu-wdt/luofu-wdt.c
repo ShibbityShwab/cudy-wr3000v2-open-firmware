@@ -91,7 +91,7 @@ struct luofu_wdt {
  * let the HARDWARE reset the board back to the vendor slot - the watchdog then does the job it was
  * always doing before this driver existed.
  */
-#define LUOFU_WDT_PET_BUDGET_MS	180000	/* 3 min: boot + userspace + network */
+#define LUOFU_WDT_PET_BUDGET_MS	900000	/* 15 min: boot + userspace + jffs2 format of a 22 MB overlay */
 
 static void luofu_wdt_stamp(u32 v);
 

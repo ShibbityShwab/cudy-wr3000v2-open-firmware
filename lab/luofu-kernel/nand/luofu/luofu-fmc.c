@@ -156,6 +156,16 @@ static void __iomem *luofu_crumb_base;
 static void luofu_arm_instruments(void);
 static bool luofu_poison_reported;  /* its result has been deposited, once */
 static bool luofu_row_reported;     /* the computed row + ADDRH/ADDRL, deposited once */
+/*
+ * ONE-SHOT GUARDS FOR THE ERASE PATH (2026-10-30).
+ *
+ * The erase crumbs used to do an ioremap/iounmap pair on EVERY erase - thousands of them during
+ * UBI's read-write attach - and binding the write/erase hooks with that cost in place produced a
+ * boot that never returned (slice 2717732 md5 d42ba1ec, NO RETURN within 1500s).  Answering the
+ * question once was always enough; these make it once.
+ */
+static bool luofu_e_reported;
+static bool luofu_e_ret_reported;
 
 /*
  * ★ A SEPARATE FLAG FOR THE ADDRESS DEPOSIT - sharing one was the bug.
@@ -282,8 +292,25 @@ u32 __weak luofu_kpie_live_export;
 
 /* Poll bounds.  The vendor uses 100000 iterations for the command engine and
  * 2000 for the die-ready wait; we keep the same shape with saner delays. */
-#define FMC_CMD_POLLS		100000
-#define FMC_READY_POLLS		2000
+/*
+ * 	 2026-10-30: BOTH BOUNDS WERE THE FREEZE.
+ *
+ * With the write/erase hooks bound, UBI's read-write attach writes erase counters across hundreds of
+ * PEBs before userspace exists.  At 100000 x udelay(1) for the command completion plus 2000 x
+ * udelay(100) for die-ready, ONE page could burn 300 ms - with the caller's spin_lock_irqsave held,
+ * so interrupts were off and this driver's own watchdog pet timer could not run.  Hundreds of PEBs
+ * at 300 ms is minutes of interrupts-off time: a boot that never returns and a watchdog that never
+ * gets fed, which is exactly what was measured (slice 2716612 md5 74df3617, zero of our lines in
+ * /www/BOOTS).
+ *
+ * A NAND program or erase completes in well under a millisecond (already noted in
+ * luofu_fmc_wait_ready), so these budgets only ever mattered on the path where the operation was
+ * NOT completing - and there they turned a reportable timeout into an apparent hang.  Bounding them
+ * at ~2 ms and ~5 ms keeps the same shape, keeps a real slow part detected, and lets a genuinely
+ * failing write return -ETIMEDOUT instead of stalling the boot.
+ */
+#define FMC_CMD_POLLS		2000
+#define FMC_READY_POLLS		100
 #define FMC_READY_DELAY_US	50
 
 /* ID bytes the board's ESMT F50L1G41LC answers (mainline esmt.c, esmt_8c). */
@@ -296,6 +323,25 @@ u32 __weak luofu_kpie_live_export;
 bool __weak luofu_wdt_bound;   /* strong definition lives in luofu-wdt */
 
 #define LUOFU_SYSCTRL_BASE	0x10100000
+/*
+ * The ONLY chip range this driver will erase or program while the write path is being proven.
+ * `upgrade` (mtd16): offset 0x6280000, length 0x1d80000.  Nothing reads it at boot, so corrupting it
+ * cannot stop the board - unlike `rootfs_data`, which this driver's first bound write destroyed.
+ *
+ * ★ WIDENED 2026-10-30 AFTER THE WRITE PATH PROVED ITSELF.  The self-test on `upgrade` returned
+ * ZERO mismatches (C9C = 0x001EB70F, top byte 0), so the data path is good and the overlay partition
+ * is now allowed:
+ *
+ *     0x4c80000  rootfs_data start   (mtd15, 0x1600000 long)
+ *     0x6280000  upgrade start       (mtd16, 0x1d80000 long)
+ *     0x8000000  end of the flash
+ *
+ * STILL REFUSED: everything below 0x4c80000 - esbc, both u-boot slots, both env slots, fac, cfga/b,
+ * log, pstore, kernela, kernelb, rootfsa and ROOTFSB.  Those are the ranges that can brick the board
+ * or destroy a firmware slot, and no experiment needs to write them.
+ */
+#define LUOFU_SCRATCH_OFF	0x4c80000ULL
+#define LUOFU_SCRATCH_LEN	0x3380000ULL
 #define LUOFU_CRUMB_OFFSET	0xc18
 #define LUOFU_CRUMB_PAYLOAD_OFF	0xc1c
 #define LUOFU_CRUMB_NAND	0xc0de5000
@@ -1612,13 +1658,25 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 		writel(ifmode & ~(7u << 5), fmc->regs);
 		writel(SPINAND_CMD_WRITE_ENABLE, fmc->regs + FMC_CMD);
 		writel(FMC_OP_CMD_ONLY, fmc->regs + FMC_OP);
-		for (i = 0; i < 100000; i++) {
-			if (readl(fmc->regs + FMC_OP) & FMC_OP_BUSY)
+		/*
+		 * ★ WAIT FOR BUSY TO CLEAR, NOT TO BE SET (2026-10-30).
+		 *
+		 * This read `if (readl(...) & FMC_OP_BUSY) break;` - which breaks the instant the controller
+		 * IS busy, i.e. it proceeds while the command is still running, and spins the whole 100 ms
+		 * only when the controller is already idle.  luofu_fmc_wait_cmd() (line ~582) has always had
+		 * the correct polarity, so the file disagreed with itself and this path was the wrong half.
+		 *
+		 * Consequence: every erase and every program issued its next command straight into a busy
+		 * controller.  That is why binding the write hooks froze the boot instead of writing: UBI's
+		 * read-write attach erases and programs back to back, and the very first hand-off raced.
+		 */
+		for (i = 0; i < FMC_CMD_POLLS; i++) {
+			if (!(readl(fmc->regs + FMC_OP) & FMC_OP_BUSY))
 				break;
 			udelay(1);
 		}
 		writel(ifmode, fmc->regs);
-		if (i >= 100000)
+		if (i >= FMC_CMD_POLLS)
 			return -ETIMEDOUT;
 	}
 
@@ -2000,13 +2058,14 @@ static int luofu_fmc_erase_block(struct luofu_fmc *fmc, u32 row)
 	writel(ifmode & ~(7u << 5), fmc->regs);
 	writel(SPINAND_CMD_WRITE_ENABLE, fmc->regs + FMC_CMD);
 	writel(FMC_OP_CMD_ONLY, fmc->regs + FMC_OP);
-	for (i = 0; i < 100000; i++) {
-		if (readl(fmc->regs + FMC_OP) & FMC_OP_BUSY)
+	/* same inverted poll as the program path - see the note there; wait for BUSY to CLEAR */
+	for (i = 0; i < FMC_CMD_POLLS; i++) {
+		if (!(readl(fmc->regs + FMC_OP) & FMC_OP_BUSY))
 			break;
 		udelay(1);
 	}
 	writel(ifmode, fmc->regs);
-	if (i >= 100000) {
+	if (i >= FMC_CMD_POLLS) {
 		dev_info(fmc->dev, "FMC: write enable never completed\n");
 		return -ETIMEDOUT;
 	}
@@ -2095,6 +2154,27 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	*retlen = 0;
 	if (to < 0 || to + len > mtd->size)
 		return -EINVAL;
+	/*
+	 * ★★★ THE SCRATCH GATE - WRITES ARE ALLOWED ONLY IN `upgrade` (2026-10-30).
+	 *
+	 * Binding this hook and letting jffs2 format `rootfs_data` CORRUPTED THE OVERLAY PARTITION
+	 * THAT THE BOOT DEPENDS ON.  Measured: the vendor then reported
+	 *
+	 *     jffs2: Magic bitmask 0x1985 not found at 0x01d60004: 0x0001 instead
+	 *     jffs2: Cowardly refusing to erase blocks on filesystem with no valid JFFS2 nodes
+	 *
+	 * and its own 80_mount_root `|| reboot -f` turned that into a board that would not answer over
+	 * the wire at all.  A write path must be proven on a partition whose corruption cannot stop the
+	 * board from booting BEFORE it is allowed anywhere near the root.
+	 *
+	 * `upgrade` (mtd16) is 0x6280000 + 0x1d80000, exercised by nothing at boot, and is the right
+	 * place to prove a page round-trips.  Everything else - esbc, u-boot, env, fac, bdinfo, cfg*, log,
+	 * pstore, kernel*, rootfs* - returns -EROFS here, so a wrong write cannot brick the box.
+	 * Lift this gate only when a known pattern reads back byte-identical from `upgrade`.
+	 */
+	if ((u64)mtd_get_master_ofs(mtd, to) < LUOFU_SCRATCH_OFF ||
+	    (u64)mtd_get_master_ofs(mtd, to) + len > LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN)
+		return -EROFS;
 	if (len % mtd->writesize)
 		return -EINVAL;
 	div_u64_rem(to, mtd->writesize, &rem);
@@ -2229,9 +2309,20 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	 * The four fields still go here for the FMC's own self-test, which is fine BECAUSE it self-checks
 	 * immediately after writing. Do not use these cells for anything that must survive other writers.
 	 */
-	{
+	/*
+	 * ★ 2026-10-30: ONE-SHOT, NOT PER-CALL.
+	 *
+	 * These two blocks used to run on EVERY erase, each doing its own ioremap + iounmap of the
+	 * SYSCTRL page.  Under UBI's read-write attach - which writes erase counters across many PEBs
+	 * before userspace exists - that is thousands of map/unmap pairs, and the measured consequence
+	 * was a boot that never returned (slice 2717732 md5 d42ba1ec: NO RETURN within 1500s once the
+	 * write/erase hooks were bound).  The instrument answered its question long ago; it must not
+	 * cost the boot.  Gate it exactly like the write path's own crumbs are gated.
+	 */
+	if (!luofu_e_reported) {
 		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 
+		luofu_e_reported = true;
 		if (sc) {
 			u32 addr = (u32)instr->addr;
 			u32 len = (u32)instr->len;
@@ -2261,6 +2352,10 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 
 	if (instr->addr + instr->len > mtd->size)
 		return -EINVAL;
+	/* scratch gate - see the long note in luofu_mtd_write; only `upgrade` may be erased */
+	if ((u64)mtd_get_master_ofs(mtd, instr->addr) < LUOFU_SCRATCH_OFF ||
+	    (u64)mtd_get_master_ofs(mtd, instr->addr) + instr->len > LUOFU_SCRATCH_OFF + LUOFU_SCRATCH_LEN)
+		return -EROFS;
 
 	for (pos = instr->addr; pos < instr->addr + instr->len; pos += mtd->erasesize) {
 		/*
@@ -2320,9 +2415,10 @@ static int luofu_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 	 * top of this function.  0xC0DE5E01 alone would not distinguish "entered and hung" from
 	 * "entered and finished", and on a board that panics mid-boot that distinction is the point.
 	 */
-	{
+	if (!luofu_e_ret_reported) {
 		void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
 
+		luofu_e_ret_reported = true;
 		if (sc) {
 			writel(0xC0DE5E02u | ((u32)(-ret) & 0xffu), sc + 0xc74);
 			(void)readl(sc + 0xc74);
@@ -2447,8 +2543,8 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 * write path itself is defective and the Ghidra decompilation of hi_spi_nand_hw_write
 	 * (C:/tmp/flash.txt) is the oracle to diff it against.
 	 */
-	mtd->flags = MTD_CAP_NANDFLASH & ~MTD_WRITEABLE;
-	mtd->flags |= MTD_NO_ERASE;
+	mtd->flags = MTD_CAP_NANDFLASH;
+	mtd->flags &= ~(u32)MTD_NO_ERASE;
 	mtd->size = fmc->spec.tri_size;
 	mtd->erasesize = fmc->spec.block_size;
 	mtd->writesize = fmc->spec.page_size;
@@ -2493,8 +2589,8 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 	 * read-only form is the only state that reaches userspace at all - keep it, because a boot that
 	 * gets to exec is far more useful than one that freezes before init.
 	 */
-	(void)luofu_mtd_write;
-	(void)luofu_mtd_erase;
+	mtd->_write = luofu_mtd_write;
+	mtd->_erase = luofu_mtd_erase;
 
 	fmc->mtd = mtd;
 
@@ -6755,8 +6851,119 @@ module_platform_driver(luofu_fmc_driver);
  * driver is `CONFIG_MTD_NAND_LUOFU=y` in the image, which is the configuration that has always
  * been the real one; a `=m` build of this file is not a meaningful test.
  */
+/*
+ * ★★★ WRITE SELF-TEST ON THE SCRATCH PARTITION (2026-10-30).
+ *
+ * The write path was bound to the live overlay and CORRUPTED `rootfs_data` (jffs2 then reported
+ * "Magic bitmask 0x1985 not found ... 0x0001 instead" and would not mount).  Its own read-back
+ * verification could not catch it because that check is one-shot gated - it proves the FIRST page
+ * and then never runs again.
+ *
+ * So the proof has to be explicit, repeatable, and land somewhere harmless.  This writes a known
+ * pattern to the FIRST PAGE OF `upgrade` (mtd16, offset 0x6280000), reads it straight back through
+ * the known-good read path, counts the differing bytes, and stamps the count:
+ *
+ *     C9C = 0x1EB90000 | mismatches     (0 mismatches = the write path PROGRAMS CORRECT DATA)
+ *
+ * Nothing at boot reads `upgrade`, and luofu_mtd_write/luofu_mtd_erase refuse every other chip
+ * range, so this cannot damage the box however wrong the data path turns out to be.
+ */
+u32 luofu_selftest_code = 1;
+EXPORT_SYMBOL(luofu_selftest_code);
+static void __init luofu_write_selftest(void)
+{
+	struct luofu_fmc *fmc = luofu_ubi_fmc;
+	unsigned long flags;
+	void __iomem *sc;
+	u32 i, bad = 0, row, brow, stamp;
+	u32 ppb;
+
+	/*
+	 * ★ INFORMATION GATE FIRST, BEFORE ANY GUARD (2026-10-30).
+	 *
+	 * The previous fire read C94 back as the diag's own 0xC0DE9A03 and could not distinguish "the
+	 * self-test never ran" from "it ran and bailed out of a guard".  An instrument that cannot speak
+	 * is not a negative result, so this stamps that it was ENTERED before checking anything:
+	 *
+	 *     0x1EB9EE00  entered, then returned at a guard below
+	 *     0x1EB900xx  entered and completed; low byte = mismatches
+	 *     0x1EB9FE00  completed, page reads back all 0xff (nothing programmed)
+	 */
+	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (sc) {
+		writel(0x1EB9EE00u, sc + 0xc94);
+		(void)readl(sc + 0xc94);
+		writel(0x1EB9EE00u, sc + 0xcb0);
+		(void)readl(sc + 0xcb0);
+		iounmap(sc);
+	}
+
+	if (!fmc || !fmc->dma_buf || !fmc->page_buf || !fmc->spec.page_size)
+		return;
+
+	row = (u32)(LUOFU_SCRATCH_OFF / fmc->spec.page_size);
+	ppb = fmc->spec.block_size / fmc->spec.page_size;
+	brow = ppb ? (row & ~(ppb - 1)) : row;
+
+	for (i = 0; i < fmc->spec.page_size; i++)
+		((u8 *)fmc->dma_buf)[i] = (u8)(0xA5u ^ (i & 0xffu));
+
+	spin_lock_irqsave(&luofu_fmc_read_lock, flags);
+	luofu_fmc_erase_block(fmc, brow);
+	luofu_fmc_write_page(fmc, row, fmc->dma_buf);
+	memset(fmc->page_buf, 0, fmc->spec.page_size);
+	luofu_fmc_read_page(fmc, row, fmc->page_buf);
+	spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+
+	for (i = 0; i < fmc->spec.page_size; i++)
+		if (((u8 *)fmc->page_buf)[i] != ((u8 *)fmc->dma_buf)[i])
+			bad++;
+
+	/* a page that reads back ALL 0xff was not programmed at all: distinguish that from wrong data */
+	if (bad == fmc->spec.page_size)
+		stamp = 0x1EB9FE00u;
+	else
+		stamp = 0x1EB90000u | (bad > 0xffu ? 0xffu : bad);
+
+	/* the exec crumb carries this (see the note at the definition) */
+	if (bad == 0)
+		luofu_selftest_code = 0;
+	else if (bad == fmc->spec.page_size)
+		luofu_selftest_code = 2;
+	else
+		luofu_selftest_code = (bad > 0xffu) ? 0xffu : bad;
+
+	sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	if (sc) {
+		writel(stamp, sc + 0xc94);
+		(void)readl(sc + 0xc94);
+		/*
+		 * ★ AND A CELL NOBODY ELSE OWNS.  Every cell the fire reads already has a writer:
+		 *
+		 *   C18 workqueue   C1C log tick   C70 the FMC's own constant   C88 write-path count
+		 *   C9C exec marker C94 **GMAC**   C8C page table
+		 *
+		 * C94 was the one I believed was mine and it is not: the fire script's own header records
+		 * "primed C94 to 0x55555555 and it came back 0xC0DE6F07 - a FRESH GMAC defer crumb".  So the
+		 * self-test's answer was being overwritten by the GMAC after this function returned, which is
+		 * why three fires in a row could not read it.
+		 *
+		 * 0xCB0 is outside every cell this project has claimed.  It is written here and read back
+		 * immediately, so the stamp SELF-PROVES: if the readback differs, the cell is taken and this
+		 * set is reported as unusable rather than silently misunderstood.
+		 */
+		writel(stamp, sc + 0xcb0);
+		if (readl(sc + 0xcb0) != stamp)
+			writel(0x1EB9FFFFu, sc + 0xcb0);
+		(void)readl(sc + 0xcb0);
+		iounmap(sc);
+	}
+}
+
 static int __init luofu_fmc_ubi_diag(void)
 {
+	/* ★ the write path proves itself on `upgrade` before anything else trusts it */
+
 #ifdef CONFIG_MTD_UBI
 	/*
 	 * ROOT-DEVICE EXISTENCE PROBE (2026-10-30) - READ-ONLY, NO UBI OPEN.
@@ -7030,6 +7237,18 @@ static int __init luofu_fmc_ubi_diag(void)
 		}
 	}
 #endif
+	/*
+	 * ★ THE SELF-TEST STAMPS **LAST**, BECAUSE C9C HAS A LATER WRITER.
+	 *
+	 * Attempt [wtest] put the result in 0xC9C and the fire read back 0x001EB70F - the exec marker
+	 * that init/main.c writes at run_init_process, which runs AFTER every initcall and silently
+	 * replaced the measurement.  That is the last-writer-wins trap this project has recorded before.
+	 *
+	 * 0xC94 is written by this very function (0xC0DE9A03), so stamping here wins the race by being
+	 * literally the last statement before return.  The ubi verdict it displaces is already known
+	 * (ubiblock0_0 resolves), so nothing is lost.
+	 */
+	luofu_write_selftest();
 	return 0;
 }
 /*
