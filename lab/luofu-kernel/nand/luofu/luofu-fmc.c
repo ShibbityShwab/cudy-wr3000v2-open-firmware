@@ -124,7 +124,25 @@ static bool luofu_no_clear;         /* the diag poisons the staging buffer itsel
  * header window looks like - and the splice window is the known corruption. So this restores the
  * measured-working read shape rather than inventing a new one.
  */
-static bool luofu_read_ecc_off = true;
+/*
+ * ★★★★★ ECC OFF WAS THE RECORD-118 BUG - SWITCHED OFF 2026-10-30.
+ *
+ * When this is true the driver runs every read with the ECC engine DISABLED and
+ * de-interleaves the controller's 14-byte spare splice at offset 1040. That path gets UBI
+ * to accept 117 of 118 volume-table records - and the one it loses is record 118, whose
+ * stored CRC arrives as 0xf1160000 instead of 0xf116c36b: the low sixteen bits are the
+ * tail of the page, past the transfer's last written word, and they stay as the driver's
+ * memset. That single record fails vtbl_check, ubi_read_volume_table returns -EINVAL and
+ * mount_root gets no root device.
+ *
+ * Measured tonight: BOTH copies of the volume table (PEB0 and PEB1) return the same wrong
+ * value, and it is wrong for a 4-byte read, a 172-byte read and a 4096-byte read alike - so
+ * it is the page fetch, not the copy path. The vendor reads the same bytes as f1 16 c3 6b
+ * because its reads run with the ECC engine ON.
+ *
+ * So the engine is left ON and the page is copied plainly (see luofu_fmc_read_page).
+ */
+static bool luofu_read_ecc_off = false;
 /*
  * WHERE THE BOOT GOT TO - reported in the tick payload (see luofu_log_tick).
  * The last tick before a freeze is the only witness to where the kernel stopped, so these
@@ -2776,6 +2794,74 @@ static int __init luofu_level6_end(void)
 	return 0;
 }
 device_initcall_sync(luofu_level6_end);
+
+/*
+ * ★ THE FIRST PROBE THAT RUNS AFTER UBI (2026-10-30).
+ *
+ * Every diagnostic so far ran at level 7 BEFORE ubi_init:
+ *
+ *     __initcall_luofu_fmc_ubi_diag7   c0cadf04
+ *     __initcall_ubi_init7             c0cadf08
+ *
+ * so none of them could ever observe what UBI actually did. They proved the FLASH is correct
+ * (partition, EC magic, EC CRC, vid_hdr_offset, layout VID header, volume-0 VTBL record) and
+ * still could not say whether ubi0 attached.
+ *
+ * ubiblock_create_from_param() calls ubi_open_volume(0, 0, UBI_READONLY) for `ubi.block=0,0`, so
+ * if ubi0 is not attached that call fails and NO block device appears - exactly the symptom. This
+ * hook is late_initcall_sync, which runs after BOTH ubi_init and ubiblock_init, and it asks the
+ * question directly:
+ *
+ *   0x40  ubi_get_device_info(0) returned 0        -> ubi0 IS attached
+ *   0x20  ubi_get_device_info(0) returned -ENODEV  -> ubi0 did NOT attach
+ *   0x08  blk_lookup_devt("ubiblock0_0") resolved
+ *   0x80  the probe ran
+ *
+ * Expected if everything works: 0xC8 (attached + block device). 0xA0 = attached but no block
+ * device. 0xA0 without 0x40 = UBI never attached at all, which would move the whole investigation
+ * from "what does UBI read" to "why did attach fail".
+ */
+static int __init luofu_ubi_post(void)
+{
+#ifdef CONFIG_MTD_UBI
+	void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+	if (sc) {
+		struct ubi_device_info di;
+		u32 bits = 0x80u;
+		int e;
+
+		memset(&di, 0, sizeof(di));
+		e = ubi_get_device_info(0, &di);
+		bits |= (e == 0) ? 0x40u : 0x20u;
+		if (blk_lookup_devt("ubiblock0_0", 0))
+			bits |= 0x08u;
+
+		/*
+		 * ★ C9C NOW, WITH A SELF-IDENTIFYING PREFIX (2026-10-30).
+		 *
+		 * C04 would be folded into C18 by luofu_restart, but several later writers also touch
+		 * C18 (the log-ring workqueue stamps 0xC0DE50E5 there), so the fold is not reliable
+		 * for this question. The fire PRIMES C9C to 0x55555555, so a reading of 0x1eb5xxxx is
+		 * proof this write landed:
+		 *
+		 *   0x40  ubi_get_device_info(0) returned 0   -> ubi0 IS attached
+		 *   0x20  it returned -ENODEV                 -> ubi0 did NOT attach
+		 *   0x08  blk_lookup_devt("ubiblock0_0") resolved
+		 *   0x80  the probe ran
+		 * 0xC8 = attached AND the block device exists = mount_root has its root device.
+		 */
+		writel(0x1eb50000u | bits, sc + 0xc9c);
+		(void)readl(sc + 0xc9c);
+		iounmap(sc);
+	}
+#endif
+	return 0;
+}
+/* DISABLED for [wcrmb]: luofu_ubi_post writes C04, which would overwrite the deepest UBI crumb.
+ * The crumb ladder in ubi_init/open_mtd_device/ubi_attach_mtd_dev/ubi_attach/scan_peb is the
+ * instrument for this fire; re-enable it once the ladder has been read. */
+late_initcall_sync(luofu_ubi_post);
 
 /* the public-API answer IMMEDIATELY after our own attach returned 0 (0 = the volume opened) */
 static u32 luofu_ubi_post_code = 0xfffu;	/* the attach never succeeded */
@@ -6681,32 +6767,46 @@ static int __init luofu_fmc_ubi_diag(void)
 
 			part = get_mtd_device_nm("rootfsb");
 			if (IS_ERR(part)) {
-				code = 0xE1u;
+				code = 0x81u;	/* ran, and the partition name did not resolve */
 			} else {
 				u32 magic = 0, vidoff = 0;
 				u8 vidbyte = 0xFFu;
+				u32 ec_crc_stored = 0, ec_crc_calc = 1;
+				u32 bits = 0x80u;	/* the probe ran */
 
 				memset(b, 0, sizeof(b));
-				if (mtd_read(part, 0, 32, &rl, b) == 0) {
+				if (mtd_read(part, 0, 64, &rl, b) == 0) {
 					magic = ((u32)b[0] << 24) | ((u32)b[1] << 16) |
 						((u32)b[2] << 8) | (u32)b[3];
 					vidoff = ((u32)b[16] << 24) | ((u32)b[17] << 16) |
 						 ((u32)b[18] << 8) | (u32)b[19];
+					/*
+					 * THE EC HEADER'S OWN CRC - THE ONE THING THE FIRST PROBE SKIPPED.
+					 *
+					 * [wubi2] returned 0xA1: a VID header with valid magic, valid CRC and
+					 * vol_id = 0x7fffefff DOES exist in PEB0-3. That contradicts UBI's own
+					 * "the layout volume was not found", so the difference must be upstream of
+					 * the VID header - and it is: UBI validates the EC header CRC before it will
+					 * look at a VID header at all, and the earlier probe read only 32 bytes so it
+					 * never checked bytes 60..63.
+					 *
+					 * UBI checks the EC header of EVERY PEB during the scan. A bad EC CRC makes
+					 * it reject the PEB outright.
+					 */
+					ec_crc_stored = ((u32)b[60] << 24) | ((u32)b[61] << 16) |
+							((u32)b[62] << 8) | (u32)b[63];
+					ec_crc_calc = crc32(0xFFFFFFFFu, b, 60);
 				}
 				memset(b, 0, sizeof(b));
 				if (mtd_read(part, 0x800, 4, &rl, b) == 0)
 					vidbyte = b[0];
 
 				if (magic != 0x55424923u)
-					code = 0x80u | ((magic >> 24) & 0x3fu);
+					bits |= 0x40u;	/* EC magic wrong */
 				else if (vidoff != 0x800u)
-					code = 0x40u | ((vidoff >> 8) & 0x3fu);
-				else if (vidbyte == 0x55u)
-					code = 0xA0u;
-				else if (vidbyte == 0x00u)
-					code = 0xB0u;
-				else
-					code = 0xC0u | (vidbyte >> 4);
+					bits |= 0x10u;	/* EC vid_hdr_offset wrong */
+				else if (ec_crc_stored != ec_crc_calc)
+					bits |= 0x20u;	/* EC magic OK but the EC CRC is BAD - UBI rejects the PEB */
 
 				/*
 				 * DEEPER, BECAUSE 0xA0 ONLY PROVED "READABLE" (2026-10-30).
@@ -6734,6 +6834,7 @@ static int __init luofu_fmc_ubi_diag(void)
 					struct luofu_fmc *dfmc = luofu_ubi_fmc;
 					u32 peb, found_layout = 0, any_bad_crc = 0, any_read = 0, magic_bad = 0;
 					u32 peb_size = dfmc ? dfmc->spec.block_size : 0x20000u;
+					u32 layout_peb = 0xFFFFFFFFu;
 
 					for (peb = 0; peb < 4; peb++) {
 						u8 vh[64];
@@ -6761,26 +6862,100 @@ static int __init luofu_fmc_ubi_diag(void)
 							u32 vol_id = ((u32)vh[8] << 24) | ((u32)vh[9] << 16) |
 								     ((u32)vh[10] << 8) | (u32)vh[11];
 
-							if (vol_id == 0x7fffefffu)
+							if (vol_id == 0x7fffefffu) {
 								found_layout = 1;
+								layout_peb = peb;
+							}
 						}
 					}
 
 					if (found_layout)
-						code = 0xA1u;
+						bits |= 0x04u;	/* a valid layout-volume VID header exists */
 					else if (any_bad_crc)
-						code = 0xA2u;
-					else if (magic_bad && !any_read)
-						code = 0xA3u;
-					else if (!any_read)
-						code = 0xA4u;
-					else
-						code = 0xA5u;
+						bits |= 0x02u;	/* VID magic right, CRC failed */
+
+					{
+					/*
+					 * ★★★★★ ALIGNMENT TEST: THE SAME BYTES, TWO READ SHAPES (2026-10-30)
+					 *
+					 * [w2copy] C9C = 0xF1160000 (PEB0) and C8C = 0xF1160000 (PEB1): BOTH copies of
+					 * the volume table read identically wrong, so this is NOT media/ECC on one page -
+					 * our driver is systematically returning F1 16 00 00 where the vendor returns
+					 * F1 16 C3 6B. Record 118 sits at 0x5F48 and its CRC word at 0x5FF0, i.e. page
+					 * offset 0x7F0 - the TAIL of the page.
+					 *
+					 * So read the SAME four bytes two ways:
+					 *   C9C = 4-byte read at 0x5FF0            (starts exactly on the word)
+					 *   C8C = the same 4 bytes inside a 256-byte read starting at 0x5F00 (offset 0xF0)
+					 * If the two differ, the defect depends on where the read STARTS - a chunking
+					 * or page-offset bug in the copy path, not a data problem.
+					 * If both read 0xF1160000, the bytes are lost regardless of shape and the fault is
+					 * in how the page itself is fetched or decoded.
+					 */
+					{
+						u8 *big = kmalloc(256, GFP_KERNEL);
+						void __iomem *fsc;
+
+						if (big) {
+							u32 a = 0xdeadbeefu, b = 0xdeadbee1u;
+							u8 w4[4];
+
+							memset(w4, 0, 4);
+							if (mtd_read(part, 0x5ff0u, 4, &rl, w4) == 0)
+								a = ((u32)w4[0] << 24) | ((u32)w4[1] << 16) |
+								     ((u32)w4[2] << 8) | (u32)w4[3];
+
+							memset(big, 0, 256);
+							if (mtd_read(part, 0x5f00u, 256, &rl, big) == 0)
+								b = ((u32)big[0xf0] << 24) | ((u32)big[0xf1] << 16) |
+								     ((u32)big[0xf2] << 8) | (u32)big[0xf3];
+
+							fsc = ioremap(0x10100000, 0x1000);
+							if (fsc) {
+								writel(a, fsc + 0xc9c);
+								writel(b, fsc + 0xc8c);
+								(void)readl(fsc + 0xc9c);
+								(void)readl(fsc + 0xc8c);
+								iounmap(fsc);
+							}
+							kfree(big);
+						}
+					}
+					}
 				}
+				/*
+				 * AND THE THING THAT ACTUALLY MATTERS: did a root device appear?
+				 * bit 3 set = blk_lookup_devt("ubiblock0_0") RESOLVED. Without this the code
+				 * says what the flash looks like but not whether UBI accepted it.
+				 */
+				if (blk_lookup_devt("ubiblock0_0", 0))
+					bits |= 0x08u;
+
+				code = bits;
 
 				put_mtd_device(part);
 			}
 
+			/*
+			 * BITMASK, NOT A SEQUENCE OF OVERWRITES (2026-10-30).
+			 *
+			 * The previous version wrote code = 0x90 for a bad EC CRC and then the PEB scan
+			 * ASSIGNED code again, so a bad EC CRC was MASKED whenever the layout VID was found -
+			 * which is exactly the case we are trying to explain. Every verdict below is now an
+			 * independent bit, so nothing can hide another answer.
+			 *
+			 *   0x80  the probe ran
+			 *   0x40  EC magic is not "UBI#"
+			 *   0x20  EC magic OK but the EC header CRC (bytes 60..63) is BAD
+			 *   0x10  EC magic OK but vid_hdr_offset != 0x800
+			 *   0x08  blk_lookup_devt("ubiblock0_0") RESOLVED - UBI accepted the flash
+			 *   0x04  a VID header with magic+CRC+vol_id 0x7fffefff was found in PEB0..3
+			 *   0x02  a VID header magic was right but its CRC failed
+			 *   0x01  get_mtd_device_nm("rootfsb") FAILED
+			 *
+			 * So 0x84 = everything readable but UBI did not attach; 0xA4 = same plus a BAD EC CRC;
+			 * 0x8C = the root device appeared.
+			 */
 			writel(0xC0DE9A00u | code, sc + 0xc04);
 			(void)readl(sc + 0xc04);
 			writel(0xC0DE9A10u, sc + 0xc18);
