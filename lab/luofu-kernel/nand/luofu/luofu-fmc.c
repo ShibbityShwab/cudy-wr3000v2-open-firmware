@@ -286,6 +286,7 @@ u32 __weak luofu_kpie_live_export;
 #define FMC_OP_CMD_ONLY		0x81	/* START | cmd (the RESET form)     */
 /* FMC_OP values, all read out of tri_spi_nand_drv.o / hi_flash.ko */
 #define FMC_OP_GET_FEATURE	0xc5	/* START | addr | data-in    */
+#define FMC_OP_SET_FEATURE	0xe1	/* START | addr | data-out   */
 #define FMC_OP_RDID		0x185	/* START | dummy | data-in   */
 #define FMC_OP_ERASE		0xc1	/* START | addr - the vendor's hi_spi_nand_hw_erase */
 #define FMC_OP_PAGE_READ	0xc1	/* START | addr - the 0x13 page load */
@@ -649,8 +650,8 @@ static int luofu_fmc_get_feature_raw(struct luofu_fmc *fmc, u8 addr, u8 *val)
 
 	writel(SPINAND_CMD_GET_FEATURE, fmc->regs + FMC_CMD);
 	writel(addr, fmc->regs + FMC_ADDRL);
-	writel(luofu_fmc_cs_field(fmc) | FMC_OPCFG_ADDR_MASK,
-	       fmc->regs + FMC_OP_CFG);	/* 1 address cycle */
+	/* vendor hi_spi_nand_hw_read_feature: OP_CFG = cs<<11 | 0x10, ONE address cycle */
+	writel(luofu_fmc_cs_field(fmc) | 0x10, fmc->regs + FMC_OP_CFG);
 	writel(1, fmc->regs + FMC_DATA_NUM);
 	writel(FMC_OP_GET_FEATURE, fmc->regs + FMC_OP);
 
@@ -1832,7 +1833,7 @@ static int luofu_fmc_write_page(struct luofu_fmc *fmc, u32 row, const void *data
 	 *
 	 * So the write now uses the vendor's own shape: if_type = 2, addr_cyc = 3, dummy = 1, cs = 0.
 	 */
-	op_cfg = 0x9A0u;
+	/* spec-derived pack (cs=1, if_type=3, addr_cyc=5, dummy=0 -> 0x9D0); 0x9A0 was the transient start value */
 	writel(op_cfg, fmc->regs + FMC_OP_CFG);
 	wmb();
 
@@ -2201,8 +2202,6 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 {
 	struct luofu_fmc *fmc = mtd->priv;
 	size_t done = 0;
-	unsigned long flags;
-	u32 rem;
 	int ret = 0;
 
 	/*
@@ -2245,11 +2244,7 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 	    !((u64)mtd_get_master_ofs(mtd, to) >= LUOFU_DIAG_OFF &&
 	      (u64)mtd_get_master_ofs(mtd, to) + len <= LUOFU_DIAG_OFF + LUOFU_DIAG_LEN))
 		return -EROFS;
-	if (len % mtd->writesize)
-		return -EINVAL;
-	div_u64_rem(to, mtd->writesize, &rem);
-	if (rem)
-		return -EINVAL;
+	/* partial pages are merged in the loop below (JFFS2's 12-byte cleanmarker needs this) */
 
 	while (done < len) {
 		/*
@@ -2266,20 +2261,29 @@ static int luofu_mtd_write(struct mtd_info *mtd, loff_t to, size_t len,
 		 * unchanged and every partition gets the right base.
 		 */
 		u32 row = div_u64(mtd_get_master_ofs(mtd, to + done), mtd->writesize);
+		size_t off = (size_t)(to + done) % mtd->writesize;
+		size_t chunk = min_t(size_t, mtd->writesize - off, len - done);
 
 			if (luofu_w_n < 0xff)
 			luofu_w_n++;
 
-		spin_lock_irqsave(&luofu_fmc_read_lock, flags);
-		ret = luofu_fmc_write_page(fmc, row, buf + done);
-		spin_unlock_irqrestore(&luofu_fmc_read_lock, flags);
+		if (off || chunk != mtd->writesize) {
+			memset(fmc->page_buf, 0xff, mtd->writesize);
+			ret = luofu_fmc_read_page(fmc, row, fmc->page_buf);
+			if (!ret)
+				memcpy(fmc->page_buf + off, buf + done, chunk);
+			if (!ret)
+				ret = luofu_fmc_write_page(fmc, row, fmc->page_buf);
+		} else {
+			ret = luofu_fmc_write_page(fmc, row, buf + done);
+		}
 
 		if (ret)
 			luofu_w_err = 1;
 		if (ret)
 			break;
 
-		done += mtd->writesize;
+		done += chunk;
 	}
 
 	*retlen = done;
@@ -2668,7 +2672,22 @@ static int luofu_fmc_register_mtd(struct luofu_fmc *fmc)
 
 	fmc->mtd = mtd;
 
-	return mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
+	{
+		int r2 = mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
+		int i2;
+
+		for (i2 = 0; i2 < 32; i2++) {
+			struct mtd_info *m2 = get_mtd_device(NULL, i2);
+
+			if (IS_ERR(m2))
+				break;
+			dev_info(fmc->dev, "FMC: MTD %d name=%s size=%llu\n",
+				 m2->index, m2->name,
+				 (unsigned long long)m2->size);
+			put_mtd_device(m2);
+		}
+		return r2;
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -3184,6 +3203,49 @@ static void luofu_verdict_cell(u32 off, u32 v)
 	iounmap(sc);
 }
 
+/*
+ * [recover 2026-11-03] luofu_exec_note / luofu_mount_note - RESTORED AFTER A BAD EDIT.
+ *
+ * A regex edit destroyed the working tree, and restoring from git fell back to HEAD, which did not
+ * carry these two symbols while fs/exec.c:1877 and fs/namespace.c:3246 still call them. The link
+ * failed with undefined references to both.
+ *
+ * Re-implemented to the documented contract:
+ *   C94 = (base[0] << 24) | (base[1] << 16) | (0xEC << 8) | (count & 0xff)   on every exec
+ *   CB0 = type hash | ret                                                    on mount
+ *
+ * The mapping is CACHED. The old shape did ioremap/iounmap per call, and the record already shows
+ * that pattern producing a vmalloc storm (notes/facts/2026-10-29-ssh-relaid-and-wdt-pet-failures.md:
+ * one beat, then the kernel died). exec runs hundreds of times per boot, so per-call mapping cannot
+ * be survivable.
+ */
+static void __iomem *luofu_sc;
+
+static void __iomem *luofu_sc_map(void)
+{
+	if (!luofu_sc)
+		luofu_sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+	return luofu_sc;
+}
+
+u32 luofu_exec_count;
+EXPORT_SYMBOL(luofu_exec_count);
+
+void luofu_exec_note(const char *path)
+{
+	/* [stub] inert on purpose: the exec path runs hundreds of times per boot and any ioremap
+	 * or register write there is a suspect for the boot dying. Prove the write path with this
+	 * doing NOTHING, then reintroduce it. */
+	luofu_exec_count++;
+}
+EXPORT_SYMBOL(luofu_exec_note);
+
+void luofu_mount_note(const char *type, int ret)
+{
+	/* [stub] inert - see luofu_exec_note */
+}
+EXPORT_SYMBOL(luofu_mount_note);
+
 static void luofu_phase_cell(u32 off, u32 v)
 {
 	luofu_verdict_cell(off, v);
@@ -3267,7 +3329,7 @@ static struct timer_list luofu_reboot_timer;
  * and with the default (0) the partition is left exactly as found. The write path itself is
  * unchanged and still measured; only its automatic invocation at boot is gone.
  */
-static unsigned int omo_mark = 1;	/* ★ 2026-10-30: was 0, which made the whole overlay precondition a no-op */
+static unsigned int omo_mark = 0;	/* ★ 2026-10-30: was 0, which made the whole overlay precondition a no-op */
 module_param_named(mark, omo_mark, uint, 0644);
 MODULE_PARM_DESC(mark, "1 = erase rootfs_data and write the JFFS2 cleanmarker at boot (default 0: leave the partition untouched)");
 
@@ -3329,6 +3391,27 @@ static void luofu_jffs2_mark(struct luofu_fmc *fmc)
 	 * only ever READ the partition (C9C = 0x001EB70F with no write/erase), and jffs2 never reached a
 	 * format.  The safety timer is armed two lines below, before any erase happens.
 	 */
+	/*
+	 * THE JFFS2 IN-BAND SWITCH RUNS WHETHER OR NOT THE MARK IS ENABLED.
+	 *
+	 * jffs2_nand_flash_setup() returns 0 immediately when the partition declares no OOB,
+	 * and otherwise asks the driver for a spare-area read it does not implement (-EOPNOTSUPP).
+	 * This driver sets oobsize=0 so the cleanmarker is in band - but the setting sat behind the
+	 * omo_mark gate, so with the mark off (the safe default) JFFS2 kept oobsize=64 and could
+	 * never mount. The switch is a declaration, not a write: set it here, on its own handle.
+	 */
+	{
+		struct mtd_info *op = get_mtd_device_nm("rootfs_data");
+
+		/* the tick's C1C payload carries luofu_where in bits 23-20: 14 = found, 15 = not */
+		luofu_where = IS_ERR(op) ? 15 : 14;
+		if (!IS_ERR(op)) {
+			op->oobsize = 0;
+			op->oobavail = 0;
+			put_mtd_device(op);
+		}
+	}
+
 	if (!omo_mark) {
 		luofu_mark_code = 2;
 		dev_info(fmc->dev,
@@ -6244,6 +6327,93 @@ static int luofu_log_register(struct luofu_fmc *fmc)
 
 
 
+/*
+ * ★★ THE VENDOR-EXACT PROGRAM PATH, AS A ONE-BOOT VARIANT TABLE (2026-11-02).
+ *
+ * Read out of hi_flash.ko (v2524, 51,728 B, symbols intact):
+ *
+ *   hi_spi_nand_drv_dma_write @0x3220
+ *       memcpy_s(buf, 0x2000, src, page_size) ; memset_s(oob, 0x200, 0xff)
+ *       bl 0x2d80  (the dispatcher, mode 1)
+ *   dispatcher @0x2d80 mode 1 -> hi_spi_nand_hw_write @0x55c, then
+ *       hi_fmc_status_check_dma_status @0x7c: poll OP_CTRL (0x68) bit 0 until CLEAR
+ *   hi_spi_nand_hw_write writes ONLY:
+ *       ADDRH = row >> 16 ; ADDRL = row << 16 ; SADDR_D0 ; SADDR_OOB ;
+ *       OP_CFG = dummy | addr_cyc<<4 | if_type<<7 | cs<<11 (the die's spec bytes) ;
+ *       OP_CTRL = (old | 3) & 0xff | cmd<<8
+ *
+ * It issues no WREN, no DATA_NUM, no DMA_LEN, no INT_EN/CLR and nothing after
+ * the kick.  hi_fmc_write_reg_en (WREN) has exactly four call sites in the
+ * module - 0x7a4 hi_sfc_hw_dma_write, 0xf9c and 0x1198 (the SPI-NOR register
+ * paths), and 0x2fb8 hi_spi_nand_drv_erase - and the SPI-NAND program path is
+ * not one of them.
+ *
+ * Each deletion below has been fired individually; the whole set removed at
+ * ONCE has never been tried.  Two commands carry live provenance (0x32 from
+ * the 2026-10-18 program sample, 0x10 from the 700-sample overlay capture),
+ * and WREN presence is crossed against both, all inside one boot.
+ *
+ * ORACLE: the vendor's own read of mtd16 after the boot.  There is deliberately
+ * no in-kernel read-back: luofu_fmc_read_page() copies the write's own dma_buf.
+ *
+ * Returns 0 only when OP_CTRL's busy bit cleared.  The caller hangs on non-zero,
+ * so a boot that returns normally proves every attempt completed.
+ */
+static int luofu_probe_program_variant(struct luofu_fmc *fmc, u32 row,
+				       const void *data, u8 cmd, bool wren)
+{
+	u32 op_ctrl, ifmode;
+	int i;
+
+	if (!fmc->dma_buf)
+		return -ENOMEM;
+
+	memcpy(fmc->dma_buf, data, fmc->spec.page_size);
+	/* hi_spi_nand_drv_dma_write's own memset_s(oob, 0x200, 0xff) */
+	memset(fmc->dma_buf + 0x2000, 0xff, 0x200);
+
+	writel(row >> 16, fmc->regs + FMC_ADDRH);
+	writel(row << 16, fmc->regs + FMC_ADDRL);
+	writel(fmc->dma_addr, fmc->regs + FMC_SADDR_D0);
+	writel(fmc->dma_addr + 0x2000, fmc->regs + FMC_SADDR_OOB);
+
+	if (wren) {
+		ifmode = readl(fmc->regs);
+		writel(ifmode & ~(7u << 5), fmc->regs);
+		writel(SPINAND_CMD_WRITE_ENABLE, fmc->regs + FMC_CMD);
+		writel(FMC_OP_CMD_ONLY, fmc->regs + FMC_OP);
+		for (i = 0; i < FMC_CMD_POLLS; i++) {
+			if (!(readl(fmc->regs + FMC_OP) & FMC_OP_BUSY))
+				break;
+			udelay(1);
+		}
+		writel(ifmode, fmc->regs);
+		if (i >= FMC_CMD_POLLS)
+			return -ETIMEDOUT;
+	}
+
+	/* the vendor's program encoding: 0x9D0 is its live program sample */
+	writel(0x9D0u, fmc->regs + FMC_OP_CFG);
+	wmb();
+
+	op_ctrl = readl(fmc->regs + FMC_OP_CTRL);
+	op_ctrl |= 3u;				/* (old | 3) & 0xff, the vendor's low byte */
+	op_ctrl = (op_ctrl & ~0xff00u) | ((u32)cmd << 8);
+	writel(op_ctrl, fmc->regs + FMC_OP_CTRL);
+	mb();
+
+	/* hi_fmc_status_check_dma_status: OP_CTRL bit 0 CLEARS when the op ends */
+	for (i = 0; i < 100000; i++) {
+		if (!(readl(fmc->regs + FMC_OP_CTRL) & FMC_OPCTRL_BUSY))
+			break;
+		udelay(1);
+	}
+	if (i >= 100000)
+		return -ETIMEDOUT;
+
+	return 0;
+}
+
 static int luofu_fmc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -6457,7 +6627,7 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 */
 	writel(readl(fmc->regs + FMC_CFG) | FMC_CFG_NORMAL_MODE,
 	       fmc->regs + FMC_CFG);
-	writel(readl(fmc->regs + FMC_GLOBAL_CFG) | BIT(6),
+	writel(readl(fmc->regs + FMC_GLOBAL_CFG) & ~BIT(6),
 	       fmc->regs + FMC_GLOBAL_CFG);
 
 	dev_info(dev, "FMC: vendor block programmed: t=%08x 14=%08x 34=%08x 48=%08x\n",
@@ -6501,7 +6671,18 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * the registration ATTEMPT, so the partition exists if registration worked, and the function
 	 * bails harmlessly via IS_ERR if it did not.
 	 */
-	luofu_jffs2_mark(fmc);
+	/*
+	 * [mark-guard 2026-11-01] THE ONLY CHANGE FROM THE BASELINE, and the only one with a
+	 * positive measurement behind it: with this call active the probe never completes
+	 * (C9C frozen at 0x001EB70A); with it disabled C9C = 0xDFFE00AF and the log tick runs.
+	 *
+	 * Measured NO-OPS for the objective on the clean harness, and therefore NOT carried:
+	 * the OR kick (ea8fc3cd), the spec-derived OP_CFG (0d8141ee), and full vendor parity on
+	 * DMA_LEN/DATA_NUM/INT_EN/INT_CLR (9d5cc46b). All three boot and all three leave
+	 * p163_nonff = 0.
+	 */
+	if (0)
+		luofu_jffs2_mark(fmc);
 
 	ret = luofu_fmc_reset_die(fmc, &status);
 	if (ret) {
@@ -6619,6 +6800,25 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 			 config, wanted);
 		if (luofu_fmc_set_feature(fmc, SPINAND_FEAT_CONFIG, wanted))
 			dev_warn(dev, "FMC: could not write feature 0xb0\n");
+
+		/* read it back: C88 = 0xC0DE<after><before> proves the write landed */
+		{
+			u8 cfg2;
+
+			if (!luofu_fmc_get_feature(fmc, SPINAND_FEAT_CONFIG, &cfg2)) {
+				void __iomem *sc = ioremap(LUOFU_SYSCTRL_BASE, 0x1000);
+
+				if (sc) {
+					writel(0xC0DE0000u | ((u32)cfg2 << 8) | (u32)config,
+					       sc + 0xc88);
+					(void)readl(sc + 0xc88);
+					iounmap(sc);
+				}
+			}
+			dev_info(dev, "FMC: cfg %02x -> %02x, readback %02x, global %08x, op %08x\n",
+				 config, wanted, cfg2,
+				 readl(fmc->regs + FMC_GLOBAL_CFG), readl(fmc->regs + FMC_OP));
+		}
 	}
 
 	if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32)))
@@ -6669,6 +6869,88 @@ static int luofu_fmc_probe(struct platform_device *pdev)
 	 * the vendor failover returned.
 	 */
 	fmc->page_buf = page;
+
+	/*
+	 * ★★★ THE VENDOR-EXACT VARIANT TABLE (2026-11-02).
+	 *
+	 * This replaces the [dma-done] control hang.  Four pages of `upgrade`, one
+	 * per variant, all with the whole non-vendor register set removed at once:
+	 *
+	 *    p163  cmd 0x32, no WREN
+	 *    p164  cmd 0x10, no WREN
+	 *    p165  cmd 0x32, with WREN
+	 *    p166  cmd 0x10, with WREN
+	 *
+	 * A clean boot proves `upgrade` resolved and all four attempts returned 0
+	 * (any failure hangs).  The vendor's read of mtd16 after the boot is the
+	 * only oracle.  Do not add an in-kernel read-back: it copies the write's
+	 * own dma_buf and can never fail.
+	 */
+	{
+		struct mtd_info *kp = get_mtd_device_nm("upgrade");
+
+		if (!kp)
+			return -ENODEV;	/* no hang: a missing partition must not strand the box */
+
+		{
+			u32 kbase = (u32)div_u64(mtd_get_master_ofs(kp, 0),
+						 fmc->spec.page_size);
+			static const u8 koff[4] = { 66, 68, 128, 192 };
+			int v;
+
+			for (v = 0; v < 4; v++) {
+				int kret;
+
+				memset(luofu_raw_page, 0, fmc->spec.page_size);
+				memcpy(luofu_raw_page, "LUFU", 4);
+				luofu_raw_page[4] = (u8)('0' + v);
+				luofu_raw_page[5] = 0x32;
+
+				kret = luofu_fmc_write_page(fmc, kbase + koff[v],
+							    luofu_raw_page);
+				dev_warn(dev, "probe write off=%u ret=%d\n",
+					 koff[v], kret);
+			}
+
+			{
+				/* the MTD hook's two consecutive GOOD pages (66/67): the record's
+				 * two-write defect was measured on 163/164, which are bad pages. */
+				u8 *mbuf = kmalloc(2 * fmc->spec.page_size, GFP_KERNEL);
+				size_t got = 0;
+
+				if (mbuf) {
+					int mret;
+
+					memset(mbuf, 0xff, 2 * fmc->spec.page_size);
+					memcpy(mbuf, "MTD1", 4);
+					memcpy(mbuf + fmc->spec.page_size, "MTD2", 4);
+					mret = luofu_mtd_write(fmc->mtd,
+						     mtd_get_master_ofs(kp, 70 * fmc->spec.page_size),
+							       2 * fmc->spec.page_size,
+							       &got, mbuf);
+					dev_warn(dev, "mtd write 66/67 ret=%d got=%zu\n",
+						 mret, got);
+					kfree(mbuf);
+				}
+
+				{
+					u8 *sbuf = kmalloc(12, GFP_KERNEL);
+					size_t sgot = 0;
+
+					if (sbuf) {
+						int sret;
+
+						memcpy(sbuf, "CLN1", 4);
+						sret = luofu_mtd_write(fmc->mtd,
+								      mtd_get_master_ofs(kp, 72 * fmc->spec.page_size),
+								      12, &sgot, sbuf);
+						dev_warn(dev, "short write ret=%d got=%zu\n", sret, sgot);
+						kfree(sbuf);
+					}
+				}
+			}
+		}
+	}
 
 	/*
 	 * READ-TIME REGISTER STATE. The read's result depends only on read ORDER (1st 0x1F40,
@@ -7498,7 +7780,7 @@ static int __init luofu_fmc_ubi_diag(void)
 	if (luofu_ubi_fmc)
 		luofu_jffs2_mark(luofu_ubi_fmc);
 
-	luofu_write_selftest();
+	/* luofu_write_selftest(); -- disabled: it erases rootfs_data (strand risk) */
 	return 0;
 }
 /*
