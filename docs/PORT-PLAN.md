@@ -1,3 +1,6 @@
+> **SUPERSEDED 2026-11-15. History only; state claims here are not current.**
+> The live status is the parent repository STATUS.md; the procedure is its RUNBOOK.md.
+
 # Port plan: what "latest OpenWrt with fully open drivers and firmware" would take
 
 Written 2026-10-01. Nothing in this file is done yet; it is the honest map, with what is already in

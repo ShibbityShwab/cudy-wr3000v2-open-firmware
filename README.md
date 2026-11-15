@@ -1,5 +1,9 @@
 # WR3000 V2.0 open firmware toolkit
 
+> **Snapshot note (2026-11-15).** This is the published half, not the live status.
+> The live status is the parent repository's `STATUS.md`; the procedure is its
+> `RUNBOOK.md`. The score table below was measured 2026-10-12 and is kept as history.
+
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,
 vendor kernel 5.10.201, OpenWrt 22.03.6 based vendor userland).
@@ -42,9 +46,10 @@ drivers now carry real implementations: `luofu-pinctrl` applies the vendor's dec
 (temperature, conversion decoded and verified). Our device tree also gained the **thermal zone it
 was missing entirely** (`tvsensor@14900500` + `thermal-zones/cls0`).
 
-**The build no longer needs CI.** WSL2 + `gcc-arm-linux-gnueabihf` builds every module AND the
-kernel image locally (`tools\local-build.bat <module>`; 9/9 modules verified, `kernelb` budget
-PASS). GitHub Actions is now used only to publish, never to check.
+**The build no longer needs CI.** The parent `RUNBOOK.md` builds locally on Linux with the ARM
+toolchain in `build/linux-kbuild/toolchain` (9/9 modules verified, `kernelb` budget PASS). The old
+Windows `tools\local-build.bat` wrapper is archived. GitHub Actions is used only to publish,
+never to check.
 
 **Left, in order:** one fire to confirm the boot fix (the `rootfs_data` erase is now **opt-in**,
 `omo_mark` default 0, so a boot no longer writes 176 blocks inside a 180 s timer); the Ethernet path
@@ -56,6 +61,8 @@ the Wi-Fi wall + data path.
 
 | Path | What it is |
 | --- | --- |
+| `docs/ROADMAP-OPENWRT.md` | The current roadmap to a complete open-source OpenWrt submission (2026-11-14). |
+| `docs/VENDOR-STACK-ON-MAINLINE.md` | The working recipe for loading the vendor's driver stack on our kernel (2026-11-14). |
 | `docs/FLASH-PLAN.md` | The verified build, flash, A/B slot switch and recovery procedure. |
 | `docs/DRIVER-BLACKBOX.md` | Black-box study of the vendor Wi-Fi stack: PCIe identity, driver symbol map, firmware load map, power/regulatory tables, the `iwpriv alg` dispatch chain, and the calibration surface. |
 | `docs/phase2/` | Detailed decodes: power and regulatory tables, the `alg` dispatch map, and their verification report. |

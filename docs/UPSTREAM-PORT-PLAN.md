@@ -1,3 +1,6 @@
+> **PLAN SNAPSHOT 2026-10-05. The current roadmap is ROADMAP-OPENWRT.md; the live status is the parent STATUS.md.**
+> This file is kept as the earlier plan of record.
+
 # UPSTREAM-PORT PLAN: our own, fully-current OpenWrt on Cudy WR3000 v2.0 (no vendor kernel)
 
 Scope: from the vendor `luofu` stack to a mainline port, an inventory of every block our stack must drive,

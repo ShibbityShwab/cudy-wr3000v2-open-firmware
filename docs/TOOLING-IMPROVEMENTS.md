@@ -1,3 +1,6 @@
+> **SUPERSEDED 2026-11-15. History only; state claims here are not current.**
+> The live status is the parent repository STATUS.md; the procedure is its RUNBOOK.md.
+
 # TOOLING IMPROVEMENTS: make the device loop faster and more reliable
 
 Ranked, actionable list for the experiment harness. Every item names the exact files and the verification

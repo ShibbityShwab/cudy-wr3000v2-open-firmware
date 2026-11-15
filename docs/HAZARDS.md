@@ -36,3 +36,36 @@ volatile.
 
 The slot and recovery rules from `FLASH-PLAN.md` are unchanged and non-negotiable: full dumps before any
 write, one slot always stock, and the slot switch only through the env blocks plus the boot register.
+
+## 5. Never replace /etc/rc.d/luofu wholesale (2026-11-15)
+
+A shadow that replaced the vendor script with `exit 0` took the box off the network: the
+script's first line is `insmod hi_kpinctrl`, and without the pinmux there is no MDIO, no
+Ethernet, and no Wi-Fi. Any shadow must be a filtered copy of the vendor script that
+keeps the pinctrl and the switch and drops only the modules our drivers own. Run
+`tools/check-init-shadow.sh` before every fire.
+
+## 6. The initramfs /vendor mount can be read-only (2026-11-15)
+
+On some strap states `/dev/mtdblock15` opens read-only, so the init's `wfile()` writes
+to `/vendor/upper` are silent. The same partition is writable from userspace through
+`/overlay`. Mount jffs2 with the `rw` option and check the result; remount `rw` if the
+superblock is still read-only. Tag the mount errno into a cell before writing.
+
+## 7. Vendor modules need .plt sections and near allocation (2026-11-14)
+
+Every vendor module lacks `.plt` and `.init.plt` because the vendor kernel had
+`CONFIG_ARM_MODULE_PLTS=n`. Add zero-size sections with `objcopy` and keep
+`module_alloc` in the near region. Do not patch the loader to tolerate the missing
+sections; that broke the boot 5/5 while the controls booted 3/3.
+
+## 8. An unowned sysctrl cell is not safe (2026-11-01)
+
+"No driver writes it" says nothing about what the address does in hardware. Three
+marks on unowned cells stranded the box. Read only cells whose last writer is known.
+
+## 9. The forbidden register list
+
+Never write CA `0x400392f0`. Never read the RC misc window `0x10161000`; a read-only
+`devmem` there panicked the box. Never `rmmod` the vendor modules, including
+`wifi_debug.ko`.

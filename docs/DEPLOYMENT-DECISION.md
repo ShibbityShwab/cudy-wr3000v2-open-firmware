@@ -1,3 +1,6 @@
+> **SUPERSEDED 2026-11-15. History only; state claims here are not current.**
+> The live status is the parent repository STATUS.md; the procedure is its RUNBOOK.md.
+
 # Deployment decision: what "latest OpenWrt" can mean on this board (2026-10-02)
 
 This file answers the deployment half of the plan with evidence, and states the one deployment that

@@ -1,1 +1,10 @@
 build/
+
+# Lab build products
+lab/**/*.ko
+lab/**/*.o
+lab/**/*.mod
+lab/**/*.mod.c
+lab/**/*.cmd
+lab/**/Module.symvers
+lab/**/modules.order

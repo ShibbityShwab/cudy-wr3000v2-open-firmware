@@ -1,3 +1,6 @@
+> **SUPERSEDED 2026-11-15. History only; state claims here are not current.**
+> The live status is the parent repository STATUS.md; the procedure is its RUNBOOK.md.
+
 # TIMELINE AND WAY FORWARD (handoff for a new agent, 2026-10-04)
 
 Purpose: one document that gives a fresh agent the whole project - what happened, in order, with

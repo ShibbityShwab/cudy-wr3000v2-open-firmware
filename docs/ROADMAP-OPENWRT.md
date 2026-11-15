@@ -18,7 +18,7 @@ Deliverables, all in this repository:
   overlay shadows, arms the watchdog keeper, loads the 22-module vendor stack in dependency order.
 - `tools/patch-vendor-modules.sh` - reproducible `.plt` patching for a module directory.
 - `docs/VENDOR-STACK-ON-MAINLINE.md` - the loader recipe and the two blockers.
-- The kernel tree, DTS and build lane in the private half (`tools/lab-src`, `tools\local-build.bat`).
+- The kernel tree, DTS and build lane in the private half (`tools/lab-src`, the parent `RUNBOOK.md`; the old Windows `tools\local-build.bat` is archived).
 
 Evidence: G4 green, ping 3/3, `Hi-GEMAC ... eth2` and `br-lan port 1(eth2)` in dmesg.
 
@@ -105,7 +105,7 @@ Deliverable: a rootfs that boots with no vendor userspace component.
 
 | # | milestone | gate |
 | --- | --- | --- |
-| M1 | hybrid image reproducible from a clean checkout | `tools\local-build.bat kernel` + the patch script + the smoke test |
+| M1 | hybrid image reproducible from a clean checkout | `tools/lab-src` + the parent RUNBOOK build lane + the patch script + the smoke test |
 | M2 | `eth2` up with **no vendor network modules** | our MDIO + PHY + GEMAC, vendor stack removed |
 | M3 | LAN ports forward through our switch driver | our LSW, `hi_lsw_*` removed |
 | M4 | WiFi decision executed | source received, or the blob documented, or the rewrite scoped |

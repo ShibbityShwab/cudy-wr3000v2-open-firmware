@@ -1,3 +1,6 @@
+> **SUPERSEDED 2026-11-15. History only; state claims here are not current.**
+> The live status is the parent repository STATUS.md; the procedure is its RUNBOOK.md.
+
 # Where the port actually stands (corrected 2026-10-02, after re-reading the record)
 
 This file corrects a framing error made in the deployment decision earlier today. That decision
