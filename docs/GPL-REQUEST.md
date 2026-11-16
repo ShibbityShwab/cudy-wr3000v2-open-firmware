@@ -1,8 +1,12 @@
 # GPL source request: Cudy WR3000 v2.0 (HiSilicon luofu)
 
-**Status: draft, ready to send.** This is the request that turns the Wi-Fi blocker (and every other
-binary module) from a reverse-engineering problem into a compliance question. Send it to Cudy support
-and to their GPL contact, and keep the reply in this repository as evidence.
+**Status (2026-11-17): SENT 2026-10-01; NO REPLY HELD.** The parent ledger
+(`mem-entries.md`) and `PORT-SURFACE.md` / `PORT-PLAN.md` record the request as sent on
+2026-10-01; `JETON-GPL-EMAIL.txt` is the separate Jeton (same-SoC) letter, still a draft.
+The repository does **not** hold a copy of the sent message, a delivery receipt, or the reply -
+that is an evidence gap to close, not a reason to call the request unsent. The letter below is
+the canonical text. If it is re-sent, save the sent copy + receipt here and update this block.
+Do not describe this request as "draft, ready to send" in other documents.
 
 ---
 

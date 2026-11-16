@@ -1,12 +1,20 @@
 # Roadmap: from a working box to a complete open-source OpenWrt submission
 
-**As of 2026-11-14 the bench box runs the stock Cudy image on a vanilla 5.10.201 kernel.** The vendor's
-userspace, its binary-only driver stack (via patched modules, see `VENDOR-STACK-ON-MAINLINE.md`), the
-MT76 WiFi and both network paths work: `eth2` up, `br-lan` 192.168.10.1, ping 3/3.
+> **Status 2026-11-17: aspirational plan, not current state.** This document was written
+> 2026-11-14 around a hybrid bench image and has not been executed. Do not read any milestone
+> as met without a receipt, and do not treat bench gates as upstream progress. The live state
+> is the parent repository's `STATUS.md`; publication blockers are in
+> `docs/PUBLISH-READINESS.md`.
 
-That is a hybrid image, not an open-source port. This document is the concrete plan to close the gap,
-block by block, and land it in OpenWrt. Each phase states the deliverable, the method, and the evidence
-that closes it.
+**Bench state at the time of writing (2026-11-14, superseded):** the vendor userspace and its
+binary-only driver stack (via patched modules, see `VENDOR-STACK-ON-MAINLINE.md`) ran on a
+vanilla 5.10.201 kernel, Ethernet up at `eth2`, `br-lan` 192.168.10.1, ping 3/3. As of
+2026-11-16 the box is back on vendor stock and the slice-delivery lane is blocked (parent
+`STATUS.md` section 3); the Wi-Fi is **Hi5622V100**, not MT76 (an earlier line here was wrong).
+
+That hybrid is not an open-source port. This document is the concrete plan to close the gap,
+block by block, and land it in OpenWrt. Each phase states the deliverable, the method, and the
+evidence that closes it.
 
 ---
 
@@ -89,13 +97,20 @@ Deliverable: a rootfs that boots with no vendor userspace component.
 
 ## Phase 5 - the OpenWrt submission
 
-- **Target**: `target/linux/luofu` (Hi5671, dual Cortex-A9, R116). The DTS already exists in
-  `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts`; the kernel config is in the private build lane.
+- **Target**: `target/linux/luofu` (Hi5671, dual Cortex-A9, R116). **None exists yet** - not in
+  this repository and not upstream. The private build tree has a working `luofu-r116.dts`, but it
+  is a stage-1 skeleton with vendor `hsan,*` compatibles, a `lab` partition, and no bindings; it
+  is not a submittable DTS. The kernel config is in the private build lane.
 - **Drivers**: send the clean-room drivers upstream first, as separate patch series, with devicetree
   bindings: FMC/NAND, CRG, WDT, pinctrl, MDIO, PHY, GEMAC, LSW, PCIe. Upstream review is the gate;
   land them in `drivers/` before the target.
-- **Target and image recipe**: PR to `openwrt/openwrt` with the target, the image recipe (uImage +
-  dual-image + UBI layout), and the device profile.
+- **Target and image recipe**: PR to `openwrt/openwrt` with the target, the image recipe, and
+  the device profile. The recipe must encode the measured boot constraints, not just
+  "uImage + dual-image": the loader (`bootcmd=mtd read kernel${bootflag}; bootfip`) accepts
+  only a FIP package, the 8,650,752-byte kernel slot holds `uImage + the fixed 40,732-byte
+  FIP/DTBO trailer`, a failed boot leaves a status word that makes `bootfip` reject the slot,
+  and the trailer is vendor-derived and cannot currently be regenerated from published
+  material. Solving that is part of the submission, not an afterthought.
 - **Compliance**: the GPL request from Phase 3, plus `NOTICE.md` in this repository as the evidence
   trail. Track the vendor's response as part of the submission, not as an afterthought.
 - **Device page**: the OpenWrt wiki entry with the hardware identity warning from
@@ -106,7 +121,7 @@ Deliverable: a rootfs that boots with no vendor userspace component.
 | # | milestone | gate |
 | --- | --- | --- |
 | M1 | hybrid image reproducible from a clean checkout | `tools/lab-src` + the parent RUNBOOK build lane + the patch script + the smoke test |
-| M2 | `eth2` up with **no vendor network modules** | our MDIO + PHY + GEMAC, vendor stack removed |
+| M2 | `eth2` up with **no vendor network modules** | our MDIO + PHY + GEMAC, vendor stack removed - **NOT MET**: the bound PHY driver is the vendor's `hi_kphy` |
 | M3 | LAN ports forward through our switch driver | our LSW, `hi_lsw_*` removed |
 | M4 | WiFi decision executed | source received, or the blob documented, or the rewrite scoped |
 | M5 | rootfs with no vendor userspace | standard OpenWrt init + packages |

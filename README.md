@@ -1,15 +1,21 @@
 # WR3000 V2.0 open firmware toolkit
 
-> **Snapshot note (2026-11-15).** This is the published half, not the live status.
+> **Snapshot note (2026-11-17).** This is the published half, not the live status.
 > The live status is the parent repository's `STATUS.md`; the procedure is its
 > `RUNBOOK.md`. The score table below was measured 2026-10-12 and is kept as history.
+> **Publication status: NOT READY** - the publish checklist is
+> `docs/PUBLISH-READINESS.md`. The vendor `.o` files that were tracked here were untracked on
+> 2026-11-17, but they remain in the published history until it is purged.
 
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,
 vendor kernel 5.10.201, OpenWrt 22.03.6 based vendor userland).
 
-This repository contains **only our own work**: scripts, documentation and analysis. It contains **no
-vendor binaries**, no firmware images, no keys and no credentials. See `NOTICE.md`.
+This repository is intended to contain **only our own work**: scripts, documentation, analysis,
+and reverse-engineered kernel drivers. It must contain **no vendor binaries** (no `.ko/.o`,
+firmware blobs, calibration data, or extracted bootloader images), no firmware images, no keys and
+no credentials. See `NOTICE.md` and the publication checklist in `docs/PUBLISH-READINESS.md`
+(there is a history-purge step pending from 2026-11-17).
 
 ## Progress at a glance
 
@@ -24,9 +30,11 @@ drivers. The full per-lane ledger with citations is in the parent repo's `PROGRE
 | **REBUILD** (our own kernel + our own OpenWrt) | **~39%** | **up from ~35%** |
 | **OVERALL** toward the goal (our kernel, our drivers, no vendor kernel) | **~53%** | **up from ~51%** |
 
-> **The headline fact, and it is not a percentage:** our own kernel **already booted OpenWrt 25.12.5
-> userspace** on this board (2026-10-10; ledger PHASE 50em/50en). What is left is *drivers and
-> polish*, not whether the thing bootstraps.
+> **The headline fact, and it is not a percentage:** our own 5.10 kernel booted a generic
+> `armsr/armv7` OpenWrt 25.12.5 userspace on this board (2026-10-10; ledger PHASE 50em/50en).
+> That proves the userspace handoff, not a device target: there is still no OpenWrt target, DTS,
+> image recipe, or driver series for this board, and the Wi-Fi/switch/GPL blockers stand. What is
+> left is still substantial engineering, not polish.
 
 **Done / strong:** the whole Wi-Fi stack is *read* - firmware disassembled+symbolised, register/BAR/ring
 maps, the 414-entry `alg` API, calibration store, HCC protocol (77 handlers), FMC/NAND spec. Our own
@@ -97,7 +105,13 @@ the Wi-Fi wall + data path.
 
 ## Legal
 
-Our scripts and documentation are MIT licensed (see `LICENSE`). Vendor components are not included and
-remain the vendor's. Note that the vendor Wi-Fi kernel module declares `license=GPL` in its metadata
-while shipping as a binary; if you need its source, ask the vendor for it under GPLv2 section 3.
-Everyone using this toolkit is responsible for the radio regulations of their own country.
+Our scripts, documentation and Python/JS tools are MIT licensed (see `LICENSE`). The kernel
+code under `lab/` is **GPL-2.0** (each file carries `SPDX-License-Identifier: GPL-2.0` and
+`MODULE_LICENSE("GPL")`); a GPL-2.0 license text and per-file copyright notices are still to be
+added. The drivers were reverse-engineered from the vendor's GPL-licensed binaries by
+disassembly and are published as GPL-2.0 derived works - this is not a "clean-room" claim.
+
+Vendor components are not included and remain the vendor's. The vendor Wi-Fi kernel module
+declares `license=GPL` while shipping as a binary; the GPL source request status is in
+`docs/GPL-REQUEST.md` (sent 2026-10-01, no reply held). Everyone using this toolkit is
+responsible for the radio regulations of their own country.
