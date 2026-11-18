@@ -1,0 +1,539 @@
+# SMP-RE: the vendor enable-method "hisilicon,hsan_smp" - decode, design and staged plan
+
+Status: **2026-11-18, host-only research + draft code. No device, no boot, no bench.**
+Scope: what the stock firmware private SMP enable-method actually does, what of it can
+be recovered from local artifacts, the draft mainline-style implementation (patch
+[018]), its dependencies and risks, and the staged plan from a mergeable UP-first
+target to an attended SMP bring-up.
+
+Evidence markers used everywhere in this document: **[V]** a value read from a local
+artifact or a bench record that exists in this repository; **[I]** an interpretation
+that follows from [V] facts but is not itself measured; **[U]** an open question that
+needs an attended measurement or a document that does not exist locally; **[X]** a
+claim that the local evidence contradicts. The extraction and hashes behind every [V]
+in this document are in the local evidence bundle
+build/linux-kbuild/waves/upstream-6.18-smp-20261118/ (gitignored); section 2 below lists
+the exact commands and every value quoted.
+
+---
+
+## 1. The question, and the answer in one paragraph
+
+The board devicetree says:
+
+    cpus { enable-method = "hisilicon,hsan_smp"; ... };
+
+and no mainline ARM kernel has a CPU method of that name, so the current draft target
+boots UP and the repository has carried an explicit TODO for the stage-1 SMP port.
+The vendor enable-method is a **pen-release**: the boot CPU writes the physical entry
+address of the secondary kernel entry point into a SYSCTRL word (SYSCTRL + 0xc00),
+clears two "resume" bits that belong to the target core in a CRG word (CRG + 0x38, bit
+pairs from the vendor DT core-info property), and sends the ARM wakeup IPI. There is
+**no SMC, no PSCI, no secure-monitor call in the Linux-side release path**; the vendor
+kernel is a self-contained pen + reset-bit + IPI implementation. That much is decoded
+[V] from the two stock vendor vmlinux images and their base devicetree. What remains
+open [U] is exactly the hardware semantics around the write (which unit consumes the
+pen word, what the CRG bits physically gate, and whether the bootloader has already
+enabled the SCU) - i.e. the part that only an attended boot can settle. This document
+therefore delivers the decoded spec plus a fail-safe platsmp port and keeps the actual
+SMP claim behind the attended-bring-up gate.
+
+---
+
+## 2. How this was decoded (all host-side, reproducible)
+
+The local source of truth is the **stock vendor kernel as it sits in the dumped kernel
+slot**, plus the vendor base DTB that the stock loader hands to it:
+
+| item | source | size / identity |
+| --- | --- | --- |
+| stock kernel slot A | dumps/router-20261108/full/mtd11-kernela.bin | 8,650,752 B, sha256 6c7c0784... |
+| vendor kernel image | uImage inside the slot, payload at file offset 0x40 (zImage, XZ stream at payload offset 0x3cf7) | vmlinux 12,207,156 B, sha256 779f7b39... |
+| vendor base DTB | follows the uImage at file offset 0x418610 | 31,220 B, sha256 947ec62d... |
+| other stock release | firmware/WR3000V2-R116-2.5.24-...sysupgrade.bin, uImage at 0x80e5c | vmlinux also 12,207,156 B, sha256 27eda71b... |
+| stock boot console | build/uart-logs/20261107T191003Z-poweron-uboot.log | vendor kernel, 2 CPUs (section 4.5) |
+
+Two independent verification points make this a strong basis [V]:
+
+* The 2.5.24 kernel is a *different build* of the same design (same decompressed size
+  and same 76,769 recovered symbols, different bytes and shifted function addresses),
+  and its hsan_boot_secondary is instruction-for-instruction identical to the 2.4.15
+  one after stripping absolute branch targets. The design is not a one-off.
+* The base DTB hash matches the one an independent 2026-11-18 lane cited
+  (MISC-SOC-BLOCKS.md section 12), i.e. two separate reads of the same dump agree.
+
+The vendor vmlinux is a raw (uncompressed) ARM kernel image; it has no ELF headers, so
+the analysis needed the **kallsyms table** to be recovered from the image:
+
+1. the uImage payload is a self-decompressing zImage; the XZ stream at payload offset
+   0x3cf7 decompresses to the raw 12,207,156-byte vmlinux (xz --single-stream -dc);
+2. the kallsyms anchor is the relative_base word 0xc0008000 followed by
+   num_syms = 76769 at image offset 0x80e460; the 5.10 kallsyms layout follows it
+   (offsets array, relative base, num_syms, compressed names, markers, token table,
+   token index, all labels 4-byte aligned), and decoding it yields a complete symbol
+   table (hi_arch_init_early, hsan_boot_secondary, hsan_smp_ops,
+   __cpu_method_of_table_hsan_smp, the early-initcall array, ...);
+3. the two kernel functions are then disassembled with the project own ARM toolchain
+   and cross-checked against the vendor DT and the stock boot log.
+
+The analysis scripts and the full symbol tables are kept with the local evidence bundle
+(not in this repository): kallsyms3.py, dumpmem.py, scan_refs.py, kallsyms-vendor.txt,
+vendor-full.dis, 00-raw-dumps.txt, 00-vendor-dtb-smp.txt.
+
+**What the local modules add: nothing.** SMP bring-up is built-in machine code in
+5.10.201; none of the 58 vendor hi_*.ko modules contains an SMP or platsmp path (they
+are drivers). The useful artifacts are the two vmlinux images, the vendor base DTB and
+the stock UART capture. The vendor U-Boot blobs are only a lead: uboota.bin contains
+one early data table at file offset 0x5e0 that holds 0x10100c00 (the pen word),
+0x14880050 and 0x10180000 (the SCU base), consistent with a bootloader/ROM-side role in
+the release, but no instruction-level consumer has been decoded [U].
+
+---
+
+## 3. What the vendor method actually is
+
+### 3.1 Registration
+
+The vendor arch/arm/mach-hisi/platsmp.c (their file path is in the image strings)
+registers a fourth entry in the standard CPU-method table, next to the three mainline
+Hisilicon methods:
+
+    __cpu_method_of_table (vendor vmlinux, VA 0xC0A1DBE8):
+      hip01_smp   "hisilicon,hip01-smp"     -> hip01_smp_ops
+      hix5hd2_smp "hisilicon,hix5hd2-smp"   -> hix5hd2_smp_ops
+      hi3xxx_smp  "hisilicon,hi3620-smp"    -> hi3xxx_smp_ops
+      hsan_smp    "hisilicon,hsan_smp"      -> hsan_smp_ops     <- this board
+
+and the machine descriptor __mach_desc_HSAN has .smp = NULL, so the DT
+/cpus/enable-method string is what selects it (the normal ARM DT CPU-method path). The
+vendor machine dt_compat list is {hsan-xiling, hsan-luofu, hsan-baiyun, hsan-emei,
+hsan,tiangong0/1/2} [V].
+
+### 3.2 The operations table has only one operation
+
+hsan_smp_ops is a 4-pointer table, i.e. the vendor kernel was built with
+CONFIG_HOTPLUG_CPU=n (the hotplug fields do not exist in the struct):
+
+| field | value |
+| --- | --- |
+| smp_init_cpus | NULL |
+| smp_prepare_cpus | NULL |
+| smp_secondary_init | NULL |
+| smp_boot_secondary | 0xC075525C hsan_boot_secondary |
+
+Consequences, all [V] from the table plus the kernel sources:
+
+* the vendor method does **not** enable the Cortex-A9 SCU. Nothing in the method calls
+  scu_enable(); the only scu_enable caller in that kernel is the mainline
+  hisi_enable_scu_a9(), reachable only from hi3xxx_smp_prepare_cpus(), which this
+  board never calls. Either the bootloader leaves the SCU enabled or the vendor relies
+  on something else; that is [U].
+* there is no per-core secondary init and no CPU hotplug/offline support. A port must
+  not advertise .cpu_die/.cpu_kill, and CONFIG_HOTPLUG_CPU should stay off for this
+  platform until CPU-offline is understood.
+* the actual release is therefore one function, and it needs two register pages that
+  the vendor machine early_initcall prepared before smp_init() runs.
+
+### 3.3 Register preparation - hi_arch_init_early
+
+The vendor registers hi_arch_init_early as an **early_initcall** (its entry is in the
+pre-SMP early-initcall array, i.e. it runs before smp_init() releases CPU1). It parses
+the vendor DT and fills one static array (VA 0xC0BAD420, symbol g_hsan_mach_addr) [V]:
+
+| index | DT source | value | used by |
+| --- | --- | --- | --- |
+| [0] | hsan,sysctrl reg ioremap | SYSCTRL base 0x10100000 | - |
+| [1] | hsan,crg reg ioremap | CRG base 0x14880000 | - |
+| [2] | CRG + reboot-offset = 0x00 | restart command word | machine restart (patch 010 path) |
+| [3] | CRG + resume-offset = **0x38** | **CPU resume register** | **SMP release** |
+| [4] | SYSCTRL + smp-offset = **0xc00** | **CPU pen / jump word** | **SMP release** |
+| [5],[6] | softrst_val0 = 0x51162100, softrst_val1 = 0xaee9deff | restart magic words | machine restart (patch 010 path) |
+| [7] | hsan,rstinfo record_addr = 0x10100c10 (ioremap 4) | reset record | machine restart (patch 010 path) |
+| [8..11] | CRG core-info = <0x16 0x18 0x17 0x19> | per-CPU resume bits | **SMP release** |
+
+Vendor base-DTB nodes, verbatim [V]:
+
+    cpus { enable-method = "hisilicon,hsan_smp"; ... };
+    crg@14880000 { compatible = "hsan,crg"; reg = <0x14880000 0x1000>;
+                   resume-offset = <0x38>; reboot-offset = <0x00>;
+                   reboot-base-index = <0x00>;
+                   core-info = <0x16 0x18 0x17 0x19>;
+                   softrst_val0 = <0x51162100>; softrst_val1 = <0xaee9deff>; };
+    sysctrl: system-controller@10100000 { compatible = "hsan,sysctrl", "syscon";
+                   reg = <0x10100000 0x1000>; smp-offset = <0xc00>; };
+    rstinfo@0x14880000 { compatible = "hsan,rstinfo"; reg = <0x14880000 0x1000>;
+                   reg-offset = <0x90>; record_addr = <0x10100c10>; ... };
+
+Note that resume-offset is the SMP resume word, not a "soft-reset magic word": the two
+softrst_val* cells are written by the vendor machine restart into CRG + reboot-offset
+(that is patch 010 path), while the SMP release only reads and modifies the word at
+CRG + 0x38 [V].
+
+### 3.4 The release - hsan_boot_secondary
+
+Reconstructed from the disassembly (the hsan_smp_ops.smp_boot_secondary target;
+identical body in both stock kernels) [V]:
+
+    static int hsan_boot_secondary(unsigned int cpu, struct task_struct *idle)
+    {
+            u32 val, bits;
+            unsigned int bit0, bit1;
+
+            if (cpu_logical_map(cpu) != 0 && g_hsan_mach_addr[4])
+                    writel(__pa_symbol(secondary_startup), g_hsan_mach_addr[4]);
+
+            if (cpu <= 1) {
+                    bit0 = g_hsan_mach_addr[8 + cpu * 2 + 0];  /* core-info[2c]   */
+                    bit1 = g_hsan_mach_addr[8 + cpu * 2 + 1];  /* core-info[2c+1] */
+                    val  = readl(g_hsan_mach_addr[3]);         /* CRG + 0x38      */
+                    bits = (1U << bit0) | (1U << bit1);
+                    writel(val & ~bits, g_hsan_mach_addr[3]);
+            }
+
+            arch_send_wakeup_ipi_mask(cpumask_of(cpu));  /* IPI_WAKEUP = GIC SGI 1 */
+            return 0;
+    }
+
+Facts that matter for a port:
+
+* The pen value is __pa_symbol(secondary_startup), i.e. a computed physical address,
+  not a magic constant. In both stock kernels it resolves to 0x80609680 because the
+  vendor kernel executes at physical 0x80608000 (PHYS_OFFSET 0x80600000, TEXT_OFFSET
+  0x8000). Our own kernel reaches the same physical base through the
+  TEXT_OFFSET = 0x00608000 scheme, so the same expression should yield 0x80609680
+  there too - but this is exactly the value an attended boot must read back and
+  verify [U].
+* The release is **ordered**: pen write, then resume-bit clear, then wakeup IPI.
+* Only bits 0x16/0x18 (CPU0) and 0x17/0x19 (CPU1) of the resume word are cleared; the
+  rest of the word is preserved (read-modify-write, 32-bit accesses).
+* Only CPUs 0 and 1 exist in this method; the SoC has exactly two Cortex-A9 cores.
+* There is no SMC/HVC anywhere in the function, no cache maintenance and no barrier
+  beyond what writel and the IPI send provide.
+
+### 3.5 What the stock system proves
+
+The stock vendor kernel really does bring up both cores on this board [V]
+(build/uart-logs/20261107T191003Z-poweron-uboot.log):
+
+    [    0.180432] CPU1: thread -1, cpu 1, socket 0, mpidr 80000001
+    [    0.180441] CPU1: Spectre v2: using BPIALL workaround
+    [    0.191232] smp: Brought up 1 node, 2 CPUs
+    [    0.195339] SMP: Total of 2 processors activated (3987.86 BogoMIPS).
+
+That is the target state for our own kernel, and it is also the evidence that the
+sequence above is the working one and not a dead branch of the vendor machine code.
+
+---
+
+## 4. Evidence ledger: [V] decoded, [I] inferred, [U] open, [X] contradicted
+
+| claim | grade | basis |
+| --- | --- | --- |
+| the vendor method name is hisilicon,hsan_smp and it is selected from the vendor DT | [V] | vendor base DTB; __cpu_method_of_table entry; machine descriptor .smp = NULL |
+| the method is implemented in the vendor arch/arm/mach-hisi/platsmp.c, appended to the mainline Hisilicon method table | [V] | image string arch/arm/mach-hisi/platsmp.c; four-entry method table; recovered symbols |
+| the ops table contains only smp_boot_secondary; no prepare/init/hotplug | [V] | 16-byte hsan_smp_ops with three NULL slots; no hotplug symbols in kallsyms |
+| release = pen write (SYSCTRL+0xc00) + resume-bit clear (CRG+0x38, bits 0x16/0x18/0x17/0x19) + IPI_WAKEUP | [V] | hsan_boot_secondary disassembly; vendor DT properties |
+| the pen value is __pa_symbol(secondary_startup) | [V] | instruction sequence at 0xC0755288..0xC0755298 (computed 0x80609680) |
+| the vendor brings both cores up on this board | [V] | stock UART capture above |
+| the same design is in both stock releases (2.4.15 and 2.5.24) | [V] | two extracted vmlinux images; identical function body after address stripping |
+| ***no SMC in the release path*** | [V]/[X] | no SMC/HVC/secure-monitor instruction in hsan_boot_secondary; the repository earlier "pen/smc" phrasing is not supported - "pen" [V], "SMC" [X] |
+| the SCU is enabled by the bootloader, not by Linux | [I] | the vendor method never calls scu_enable(); a working second core needs the SCU - either the loader enabled it or something not in this method did [U] |
+| the pen word is consumed by the bootloader/ROM secondary stub | [I] | self-consistent with the pen+reset-bit+IPI order; the U-Boot blobs contain the word in an early data table; no instruction-level consumer decoded [U] |
+| the CRG resume bits gate core clock/reset/power state | [I] | the vendor property is named "resume" and the method clears exactly two bits per core; the physical function of the bits is [U] |
+| our platsmp port needs a prepare hook to enable the SCU | [I] | mainline precedent (hisi_enable_scu_a9); safe and testable on the first attended boot |
+| SMP is a hard prerequisite for the first upstream submission | [I] | no: SoC platform, NAND, console and wired network can be submitted in a UP-first form; SMP is a quality step, not an acceptance requirement |
+
+---
+
+## 5. The draft implementation (patch 018)
+
+### 5.1 Method name and registration
+
+New file arch/arm/mach-hisilicon/platsmp.c, built as
+obj-$(CONFIG_SMP) += platsmp.o, with:
+
+    static const struct smp_operations luofu_smp_ops __initconst = {
+            .smp_prepare_cpus   = luofu_smp_prepare_cpus,
+            .smp_boot_secondary = luofu_smp_boot_secondary,
+    };
+
+    CPU_METHOD_OF_DECLARE(luofu_smp, "hisilicon,luofu-smp", &luofu_smp_ops);
+
+The DT method name is **hisilicon,luofu-smp**, not the vendor string. Reasons: the
+vendor string names the vendor internal platform ("hsan" is their board family, not a
+SoC binding), it is vendor-private and undocumented, and this repository documented
+naming convention for the SoC blocks is hisilicon,luofu-* (see the CRG, watchdog, FMC,
+MDIO, GEMAC, PCIe, thermal, pinctrl, PIE, switch and selector patches). A DT that still
+carries the vendor string simply does not match and keeps booting UP - fail-safe by
+construction.
+
+### 5.2 Operations
+
+luofu_smp_prepare_cpus():
+
+1. enable the Cortex-A9 SCU exactly like mainline mach-hisi does (scu_a9_has_base(),
+   scu_a9_get_base(), ioremap(SZ_4K), scu_enable(), iounmap()); the vendor method does
+   not do this, so the port adds it explicitly instead of relying on the loader [I];
+2. locate and map the two pages by compatible: hisilicon,luofu-sysctrl (page
+   0x10100000, already a syscon node from patch 010) and hisilicon,luofu-crg (page
+   0x14880000, the syscon/simple-mfd node from patch 004), then store
+   pen = sysctrl + 0xc00 and resume = crg + 0x38.
+
+luofu_smp_boot_secondary():
+
+1. if either page could not be mapped, return -ENODEV (the boot continues UP - the
+   method never writes a guessed address);
+2. reject a CPU index for which the port has no resume-bit pair (-EINVAL);
+3. write __pa_symbol(secondary_startup) to the pen word (vendor condition: non-zero
+   logical CPU);
+4. read-modify-write the CRG resume word, clearing BIT(bit0) | BIT(bit1) from the
+   driver-data table;
+5. arch_send_wakeup_ipi_mask(cpumask_of(cpu)).
+
+The port deliberately has **no** .smp_init_cpus, .smp_secondary_init (the 6.18 generic
+secondary path covers what is needed) and no hotplug operations; there is no CPU
+offline support, matching the vendor table (section 3.2).
+
+### 5.3 Where the values live
+
+* The register **offsets** (pen 0xc00, resume 0x38) and the **core-resume bit numbers**
+  (0x16/0x18 for CPU0, 0x17/0x19 for CPU1) are SoC facts and are **driver data in
+  platsmp.c**, each with the vendor-property citation:
+  - #define LUOFU_SMP_PEN_OFFSET 0x0c00   (vendor DT smp-offset)
+  - #define LUOFU_CRG_RESUME_OFFSET 0x38  (vendor DT resume-offset)
+  - static const u8 luofu_resume_bits[][2] (vendor DT core-info)
+* That is deliberate: the vendor numeric properties are not exposed as a new DT
+  binding surface. The two MMIO pages are referenced by their existing syscon node
+  compatibles, so no new phandle, no new YAML and no overlap with the syscon/driver
+  regmaps.
+* If an attended measurement ever shows board-to-board variance in those values, the
+  correct evolution is to promote them into the existing sysctrl/CRG bindings (with a
+  YAML update and the evidence attached), not to hardcode new numbers blindly.
+
+### 5.4 DT shape
+
+One property on the existing node:
+
+    cpus {
+            #address-cells = <1>;
+            #size-cells = <0>;
+            enable-method = "hisilicon,luofu-smp";
+
+            cpu@0 { ... };
+            cpu@1 { ... };
+    };
+
+and the two syscon nodes must exist (they do; patches 004 and 010):
+
+    sysctrl: system-controller@10100000 {
+            compatible = "hisilicon,luofu-sysctrl", "syscon";
+            reg = <0x10100000 0x1000>;
+    };
+
+    crg: crg@14880000 { compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"; ... };
+
+No other DT change is required by the implementation. The enable-method line is shipped
+in the incoming integration patch (section 8) and is the single-line switch that turns
+the release on; without it the board boots UP, which is the staged fallback.
+
+### 5.5 Why not the vendor shape
+
+* Reusing "hisilicon,hsan_smp" would put a vendor-private string into a documented
+  target and freeze their internal board-family name into an ABI. [X] reject.
+* Exposing vendor properties smp-offset/resume-offset/core-info on the new
+  hisilicon,luofu-* bindings would add undocumented, unmeasured properties to bindings
+  that are otherwise review-ready. The values are needed, so they become driver data
+  (the same pattern the CRG gate table and the FMC register data already use).
+* A PSCI description is impossible: the vendor kernel is not a PSCI client and has no
+  psci node; inventing one would be a fiction. [X] reject.
+* A dedicated new hisilicon,luofu-smp node with its own reg is unnecessary and would
+  create a second claim on the SYSCTRL/CRG pages that already have syscon nodes.
+
+---
+
+## 6. Dependencies
+
+| dependency | state | consequence for SMP |
+| --- | --- | --- |
+| SYSCTRL page (0x10100000) node | hisilicon,luofu-sysctrl syscon exists (patch 010) | pen word at +0xc00; if the node is absent the port stays inert |
+| CRG page (0x14880000) node | hisilicon,luofu-crg syscon/simple-mfd exists (patch 004) | resume word at +0x38; same fail-safe |
+| Cortex-A9 SCU | CONFIG_HAVE_ARM_SCU selected by ARCH_LUOFU when SMP (patch 001 Kconfig); the target kernel config already resolves CONFIG_SMP=y, HAVE_ARM_SCU=y, HAVE_ARM_TWD=y (validated, section 12) | the port enables the SCU explicitly; if the loader already did, scu_enable() is harmless |
+| GIC | arm,cortex-a9-gic DT node + irqchip; 6.18 sets up the IPI range via set_smp_ipi_range() | IPI_WAKEUP must be routable to the secondary; a wrong GIC CPU-interface setup shows up as a hung CPU1 |
+| TWD timer | arm,cortex-a9-twd-timer node with twd_clk (fixed-factor from the corrector clock) | a wrong TWD clock leaves CPU1 with a broken local timer (boot may still complete, then fail late) |
+| PL310 L2 / AUX | machine descriptor l2c_aux_val/l2c_aux_mask, PL310 node | the cache must already be coherent for the released core; the vendor early hook replays the AUX value from DT, our machine does it statically |
+| CPU clocks / OPP / PLL | vendor CPU nodes carry clocks/OPP/nvmem, but the release path does **not** touch them; the port does not model them either | the CPU frequency at boot is whatever the loader/CRG leaves; a later cpufreq/OPP driver is independent work |
+| kernel physical load address | TEXT_OFFSET 0x00608000 (patches 002/003): kernel executes at 0x80608000, same physical base as the vendor kernel | __pa_symbol(secondary_startup) must resolve to the actual physical address; attended boot should read the pen word back and compare with the expectation derived from System.map |
+| bootloader secondary stub | [U] the pen word consumer is not decoded | if the loader does not implement it, the release silently fails (CPU1 never comes up) - detect via failed-to-boot/boot timeout, not via a crash |
+| secure world | [U] whether a secure monitor traps the SYSCTRL/CRG writes | the first attended run is the only way to tell |
+
+---
+
+## 7. Risks and mitigations
+
+1. **Second-core hang (highest).** If the release sequence is subtly wrong for our
+   kernel (wrong pen value, wrong resume bits, wrong order, secure-world trap), CPU1 may
+   start executing garbage or never come up. Mitigations: the release is fail-safe when
+   the DT pages are missing; for the attended run keep the recovery door armed and the
+   UART capture read-only; first run with the release compiled in but the DT method
+   absent (UP boot proves the machine/DT), then one single-variable fire with the method
+   enabled. A wrong entry address is a CPU1 crash, not a CPU0 crash; CPU0 keeps
+   running, which makes the failure observable.
+2. **Cache/coherency.** Releasing CPU1 with the SCU not enabled would run CPU1
+   non-coherent and corrupt memory. The port enables the SCU before the release; the
+   first attended run must confirm the SCU control register state (read-only) and that
+   CPU1 enters through the normal secondary_startup (not a secure-monitor trampoline).
+3. **GIC/TWD setup.** CPU1 needs its GIC CPU interface and TWD local timer; both are
+   generic 6.18 paths once the CPU is online. A wrong twd_clk or a missing TWD node
+   produces a late failure, so the attended acceptance must include a soak test and
+   /proc/interrupts per-CPU sanity.
+4. **Register read-modify-write on a shared word.** CRG+0x38 may be touched by other
+   consumers (the vendor restart path clears/sets unrelated CRG words, and the clock/
+   reset drivers own different offsets). The port does a single RMW of the whole word in
+   the boot_secondary path, which the generic boot path serialises per CPU; still, the
+   first attended run should capture the word before/after (read-only) and confirm only
+   the two expected bits changed.
+5. **No CPU hotplug / offline.** CONFIG_HOTPLUG_CPU should stay off for this platform;
+   with hotplug enabled the generic hotplug path would see NULL ops and refuse CPU
+   offline, but the DT/CPU topology may still advertise offline-capable CPUs. Document
+   that CPU offline is unsupported (vendor table has no fields for it).
+6. **UP-first instability if the method is missing.** With two cpu@ nodes in the DT and
+   no matching enable-method, 6.18 marks both CPUs possible and then cannot boot CPU1;
+   this is exactly the situation the bench line hit on 5.10, where a kernel built
+   without smp_ops and booted with nr_cpus=2 faulted in the scheduler some 14 s into
+   userspace, while maxcpus=1 was stable [V] (parent ledger 2026-10-12, phases 81/82).
+   Consequences for staging: an UP-first *submission* should either ship a single cpu@0
+   node or carry maxcpus=1 in the bootargs until the release is verified; the current
+   draft target instead ships the enable-method, so this failure mode is designed out.
+7. **Vendor-property drift.** If a future vendor build changes the pen/resume values,
+   the driver data would be wrong. The stock 2.4.15 and 2.5.24 builds agree today [V];
+   the attended bring-up should capture the vendor DT values and the register readback
+   so the constants can be confirmed against the board.
+8. **Documentation/claim drift.** The repository previously described the path as
+   "pen/smc" and the TR6560 BSP as the reference. The SMC half is contradicted by the
+   decoded method [X]; the TR6560 BSP remains only a *code-shape* reference (it has a
+   real CPU_METHOD_OF_DECLARE platsmp with different bindings; its source is not in this
+   repository). Do not cite it as the register contract.
+
+---
+
+## 8. Staged plan (spec -> UP-first mergeable -> attended bring-up)
+
+| stage | deliverable | what it proves | gates |
+| --- | --- | --- | --- |
+| **S0 - spec (this document + patch 018 draft + validation, host-only)** | decoded register/sequence spec; arch/arm/mach-hisilicon/platsmp.c; machine Kconfig/Makefile/descriptor refactor; DTS enable-method in the integration patch; full-series validation | that the port builds, the DT is schema-clean and the evidence is reproducible | SMP-RE.md reviewed; series 001-018 applies/compiles; no hardware claim |
+| **S1 - UP-first mergeable refactor** | the same patch 018, shipped **without** the DTS enable-method hunk (and, for an upstream submission, with a single cpu@0 node); CONFIG_SMP=y with an unmatched method leaves the boot UP | that the machine/DT/platform code is reviewable and safe with no SMP claim | UP boot on the attended board (one fire) with the method absent; dmesg must not try to bring up CPU1 |
+| **S2 - attended SMP bring-up** | the one-line DT enable-method + cpu@1; a gated fire sequence | that the decoded release actually works on our kernel | single-variable fires, recovery door armed, UART read-only capture; acceptance below |
+| **S3 - upstream** | patch 018 + the DTS change in the submission series, with this evidence summary | reviewer-facing SMP support | S2 acceptance + review |
+
+The current tree state: patch 018 is in the series and the DTS enable-method is in the
+incoming shared patch, i.e. the tree describes the S2 end state. The hunk is a single
+line and can be dropped for an S1 submission without touching the driver (the driver
+stays inert without it).
+
+**S2 acceptance (attended, all required):**
+
+* boot log shows the release: no CPU1 timeout, and "smp: Brought up ... 2 CPUs";
+* /proc/cpuinfo lists both processors; /sys/devices/system/cpu/cpu1/online exists;
+* /proc/interrupts shows per-CPU timer/IPI activity on CPU1;
+* a >= 10 minute soak with the box reachable (no scheduler/RCU stall, no oops);
+* read-back of the pen word and the resume word before/after the release, captured to
+  the evidence bundle;
+* the same fire repeated once from a cold boot (a single sample is not evidence);
+* recovery path re-verified (the box must end on the known-good slot).
+
+**S2 failure modes and what they mean:** CPU1 never online + failed-to-boot = the pen
+consumer or the resume bits are wrong for our kernel; CPU1 online then hang = TWD/GIC/
+SCU ordering; CPU0 crash during the release = the write landed on a wrong address (the
+port only writes the two mapped pages, so this would mean a DT/mapping error, and the
+fire must be reverted to the UP image).
+
+---
+
+## 9. Effort
+
+* Decode + spec + draft patch + host validation (this lane): **~1.5 engineer-days**
+  (one day of binary/symbol RE plus half a day of drafting/validation) - done.
+* S1 UP-first integration/review polish: **0.5-1 day** (mostly the same file plus review
+  text; no new dependencies).
+* S2 attended bring-up: **one bench session (0.5-1 day)** including the recovery
+  contingency; risk of a second session if the release is wrong.
+* S3 upstream review iterations: **1-2 review rounds**; the code is small, the main
+  review question will be "does it work" and "why driver data instead of DT
+  properties" - both answerable with this document.
+
+Compare with the other open blocks (LSW switch driver and PCIe are multi-week efforts;
+this is a small, self-contained platform port).
+
+---
+
+## 10. Open questions ([U]) and how to close each
+
+| # | question | close with |
+| --- | --- | --- |
+| U1 | physical semantics of CRG+0x38 bits 0x16..0x19 (clock gate? reset? power?) | read-only register census before/after a stock vendor boot; then before/after one own-kernel release |
+| U2 | who consumes the pen word (bootloader stub, ROM WFI loop, secure firmware) | vendor U-Boot/bootram disassembly (local blobs) and one UART capture of a failed release |
+| U3 | is the SCU enabled by the loader? | read SCU control register (read-only) on a stock boot and on our first boot |
+| U4 | does our TEXT_OFFSET scheme give the vendor pen value 0x80609680? | first fire: read the pen word back from SYSCTRL and compare with the expected __pa_symbol value |
+| U5 | does the release work without an explicit secure-world handshake/any SMC? | the S2 fire itself (the decoded method contains no SMC; if it fails, look at secure firmware) |
+| U6 | TWD clock on CPU1 and per-CPU GIC interface after release | /proc/interrupts, dmesg timer lines, soak |
+| U7 | CPU hotplug/offline support | out of scope; if ever needed, re-RE the vendor die path (none exists in the stock table) |
+| U8 | board-to-board variance of pen/resume bits | one attended boot on a second unit if/when available |
+| U9 | OPP/cpufreq interaction with SMP | independent cpufreq work; not a release-path dependency |
+| U10 | whether the vendor bootargs (maxcpus=2 nr_cpus=2 additional_cpus=1) reach our kernel | target-design 5.6; one attended boot |
+
+---
+
+## 11. What this document does NOT claim
+
+* No boot, no bench, no fire. Nothing here was run on the router.
+* No SMP claim for our kernel yet: the release is decoded from vendor binaries and the
+  port is host-compiled only.
+* No upstream acceptance claim: patch 018 is a draft; the submission series in
+  opensource/upstream/ still ends at 017 and this document does not edit it.
+* No invented register values: every number in section 3 is cited to the vendor
+  vmlinux/DT/boot log; interpretations are [I] and unknowns are [U].
+
+---
+
+## 12. Validation of the draft (host-only, 2026-11-18)
+
+Isolated validation in a btrfs-reflink copy of the shared clone
+(a copy of the 001-017 lane's clone; openwrt main
+27663a0, linux-6.18.60, the tree own OpenWrt GCC 14.4.0). The shared clone was not
+modified. **No device, router, UART, TFTP, flash or bench tool was touched.** Logs,
+hashes and the intermediate trees are in the local evidence bundle
+build/linux-kbuild/waves/upstream-6.18-smp-20261118/.
+
+| check | result |
+| --- | --- |
+| patch 018 as delivered | 6,955 B, sha256 5509ca59...; new platsmp.c (159 lines) + Makefile + Kconfig + luofu.c comment |
+| pristine 6.18.60 series apply | fresh linux-6.18.60 tree; patches 001-018 applied in order with patch -p1: RC=0, no .rej/.orig; only pre-existing offset adjustments in patch 008 (Kconfig/Makefile hunks, expected because that patch was generated against the OpenWrt-prepared tree); the resulting mach-hisilicon files are byte-identical to the validated series tree |
+| patch 018 dry-run + apply | on a pristine+001-017 tree: patch -p1 --dry-run RC=0; real apply RC=0; result byte-identical to the committed series tree; git apply --check RC=0 |
+| OpenWrt prepare, series 001-018 | make target/linux/prepare V=s: RC=0 (1,202 patching-file lines, no .rej/.orig) |
+| full kernel compile | make target/linux/compile V=s -j$(nproc): RC=0, 20m06s; zImage 3,264,472 B sha256 ae59d998...; **0 warnings attributable to any new/changed file** (the 38 modpost "missing MODULE_DESCRIPTION" warnings are the exact same pre-existing baseline as the 001-017 lane and the restart lane) |
+| new objects in the build | arch/arm/mach-hisilicon/platsmp.o compiled; symbols in System.map: luofu_smp_boot_secondary, luofu_smp_prepare_cpus, luofu_smp_ops, __cpu_method_of_table_luofu_smp, luofu_smp_pen/resume |
+| TEXT_OFFSET unchanged | arch/arm/Makefile: textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000 (unchanged); System.map: _text = stext = 0xc0608000 (unchanged) |
+| SMP-related config | CONFIG_ARCH_LUOFU=y, CONFIG_SMP=y, CONFIG_HAVE_ARM_SCU=y, CONFIG_HAVE_ARM_TWD=y, CONFIG_ARM_CPU_TOPOLOGY=y; no config change is needed by the patch |
+| config derivation idempotency | make kernel_oldconfig three runs, RC=0 each; the resulting kernel .config is byte-identical to the 001-017 lane build (sha256 1b9b084e...); the canonically re-derived target config-6.18 has the same 300-symbol set as the delivered fragment and is byte-idempotent across runs (sha256 4106877f...) |
+| dt_binding_check | RC=0 for all 13 series YAMLs (dtschema 2026.9; yamllint unavailable - that one lint step is skipped, same caveat as the earlier lanes) |
+| board DTS | repo DTS with the enable-method hunk: cpp RC=0; patched-kernel dtc RC=0, **zero warnings**; DTB 10,710 B sha256 bc599a4e... |
+| DTS schema validation | dt-validate -s processed-schema.json: RC=0, only the same six pre-existing findings as the 001-017 lane (arm,sp804 compatible too short; two UART clock-names findings per UART); no finding names /cpus, enable-method or any node introduced by this patch |
+| incoming shared.patch | git apply --check RC=0 and git apply RC=0 on a fresh git archive of the opensource HEAD; the four edited files byte-identical to the delivered copies; patch -p1 --dry-run RC=0; sha256 081c5987... |
+| checkpatch | platsmp.c 0 errors / 0 warnings; Kconfig, Makefile, luofu.c 0/0 each; the bare patch file only reports the expected "missing commit description/Signed-off-by" metadata that the working patch format does not carry (the review-form submission copy adds those separately; 018 is not yet in that copy) |
+| static safety scan | platsmp.c performs no register access at probe/prepare beyond ioremap; the only writes are the two vendor-decoded words in smp_boot_secondary; the fail-safe path returns -ENODEV and never writes a guessed value; no lab/bench breadcrumbs, no vendor strings, no private paths |
+
+---
+
+## 13. References
+
+* vendor evidence bundle (local, gitignored): the artifacts listed in section 2 and
+  01-RE-evidence.md in the same directory;
+* ../target-skeleton/target/linux/hisilicon/patches-6.18/018-arm-mach-hisilicon-smp.patch -
+  the draft implementation;
+* ../target-skeleton/docs/incoming/smp/SUMMARY.md - the integration record and the
+  incoming shared.patch (DTS enable-method + documentation updates);
+* TARGET-DESIGN.md sections 6.2/7.1/8.5 (SMP rows), README.md (status),
+  SKELETON-SMOKE.md (build validation history);
+* MISC-SOC-BLOCKS.md section 6.3 - the SYSCTRL page cell census (0x10100c00 SMP release
+  word was recorded there as [U]; this document closes the decode and leaves the
+  physical semantics open).
