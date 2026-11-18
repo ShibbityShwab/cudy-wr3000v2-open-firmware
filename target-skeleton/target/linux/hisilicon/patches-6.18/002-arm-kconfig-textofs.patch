@@ -1,0 +1,32 @@
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -393,6 +393,8 @@
+ 
+ source "arch/arm/mach-hisi/Kconfig"
+ 
++source "arch/arm/mach-hisilicon/Kconfig"
++
+ source "arch/arm/mach-imx/Kconfig"
+ 
+ source "arch/arm/mach-ixp4xx/Kconfig"
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -169,6 +169,10 @@
+ textofs-$(CONFIG_ARCH_QCOM_RESERVE_SMEM) := 0x00208000
+ textofs-$(CONFIG_ARCH_MESON) := 0x00208000
+ textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000
++# The stock loader stages the kernel slot at 0x83200000 and the decompressor
++# computes (pc & 0xf8000000) + TEXT_OFFSET; with 0x00608000 this lands the
++# kernel at 0x80608000, which is the uImage load/entry address the loader uses.
++textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000
+ 
+ # Machine directory name.  This list is sorted alphanumerically
+ # by CONFIG_* macro name.
+@@ -193,6 +197,7 @@
+ machine-$(CONFIG_ARCH_KEYSTONE)		+= keystone
+ machine-$(CONFIG_ARCH_LPC18XX)		+= lpc18xx
+ machine-$(CONFIG_ARCH_LPC32XX)		+= lpc32xx
++machine-$(CONFIG_ARCH_LUOFU)		+= hisilicon
+ machine-$(CONFIG_ARCH_MESON)		+= meson
+ machine-$(CONFIG_ARCH_MMP)		+= mmp
+ machine-$(CONFIG_ARCH_MV78XX0)		+= mv78xx0

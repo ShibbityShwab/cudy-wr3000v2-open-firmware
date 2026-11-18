@@ -1,0 +1,104 @@
+--- /dev/null
++++ b/arch/arm/mach-hisilicon/Kconfig
+@@ -0,0 +1,16 @@
++# SPDX-License-Identifier: GPL-2.0-only
++
++config ARCH_LUOFU
++	bool "HiSilicon luofu (Hi5671Y) family"
++	depends on ARCH_HISI
++	select CACHE_L2X0
++	select HAVE_ARM_SCU if SMP
++	select HAVE_ARM_TWD if SMP
++	help
++	  Support for the HiSilicon Hi5671Y "luofu" SoC family and the
++	  Cudy WR3000 v2.0 board (board R116).
++
++	  The machine code only matches the board devicetree and programs no
++	  hardware itself; the drivers and DT nodes bound to it do the work.
++	  A UP-only boot is the first supported posture: there is no mainline
++	  smp_ops for this SoC yet.
+--- /dev/null
++++ b/arch/arm/mach-hisilicon/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0-only
++
++obj-y += luofu.o
+--- /dev/null
++++ b/arch/arm/mach-hisilicon/luofu.c
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Machine descriptor for the HiSilicon Hi5671Y "luofu" SoC
++ * (Cudy WR3000 v2.0, board R116).
++ *
++ * The descriptor matches the board devicetree and programs no hardware
++ * itself, so the booted system is exactly what the DT plus the drivers bound
++ * to it can do.
++ *
++ * Deliberately not set in this descriptor:
++ *
++ *   .map_io		- a DT platform; the early mapping is the generic
++ *			  debug_ll_io_init() default.
++ *   .init_early	- nothing is needed before the DT is unflattened: the
++ *			  console and the interrupt controller are DT nodes.
++ *   .init_time		- the generic DT timer/clocksource setup covers this
++ *			  SoC (SP804 and the Cortex-A9 TWD timer are described
++ *			  in the board DTS).
++ *   .init_machine	- the DT-declared platform devices are populated
++ *			  generically (drivers/of/platform.c) once the machine
++ *			  matches.
++ *   .smp		- TODO: there is no mainline smp_ops for this SoC yet.
++ *			  The vendor DT's enable-method is the vendor-private
++ *			  "hisilicon,hsan_smp" and the second core is not
++ *			  brought up: this machine is UP-only for now. A
++ *			  platsmp port plus a documented DT enable-method is
++ *			  required before SMP can be claimed.
++ *   .restart		- TODO: no reset/reboot driver for the CRG block
++ *			  exists yet, so a panic or reboot cannot reset the
++ *			  SoC through a documented interface. The reset magic
++ *			  observed on the bench lives in the vendor DT and is
++ *			  not understood well enough to hard-code here.
++ *
++ * L2 cache: the PL310 AUX value is the one the vendor bootloader/DT programs
++ * (l2c_aux_val = 0x430001, vendor DT l2c-aux-val; l2c_aux_mask = 0xffb0fffe).
++ * arch/arm/kernel/irq.c only calls l2x0_of_init() when one of
++ * l2c_aux_val/l2c_aux_mask is non-zero, so these two fields are also what
++ * enables the PL310 at all on this machine; with both zero the generic DT
++ * fallback would never touch the cache controller.
++ *
++ * The value decodes as:
++ *   0x430001 = L310_AUX_CTRL_FULL_LINE_ZERO		(BIT(0))
++ *            | L310_AUX_CTRL_ASSOCIATIVITY_16		(BIT(16))
++ *            | L2C_AUX_CTRL_WAY_SIZE(1)		(BIT(17))
++ *            | L2C_AUX_CTRL_SHARED_OVERRIDE		(BIT(22))
++ *
++ * TODO(l2c): the vendor DT also carries l2c_aux_mask = 0xffb0fffe, i.e. it
++ * preserves the latency fields read back from the hardware; this descriptor
++ * clears everything first and then programs 0x430001 (mask ~0), the same
++ * pair the lab machine used and booted with. Confirm the mask and the
++ * latency fields on hardware before submitting, and move to the standard
++ * arm,data-latency / arm,tag-latency properties if they describe the block.
++ *
++ * dt_compat: the draft board DTS root compatible is
++ * "hisilicon,luofu-r116", "hisilicon,luofu". "cudy,wr3000-v2" is the
++ * intended board-level compatible once the DTS and the OpenWrt device match
++ * agree on it (TODO in target-skeleton/dts/luofu-r116.dts); a dt_compat
++ * entry the DT does not carry never matches and is harmless, so it is kept
++ * here as the documented target for that cleanup.
++ */
++#include <linux/init.h>
++
++#include <asm/mach/arch.h>
++
++static const char *const luofu_dt_compat[] __initconst = {
++	"cudy,wr3000-v2",
++	"hisilicon,luofu-r116",
++	"hisilicon,luofu",
++	NULL,
++};
++
++DT_MACHINE_START(LUOFU, "HiSilicon Hi5671Y (luofu)")
++	.dt_compat	= luofu_dt_compat,
++	.l2c_aux_val	= 0x430001,
++	.l2c_aux_mask	= ~0,
++MACHINE_END

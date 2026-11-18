@@ -1,9 +1,14 @@
 # Target-skeleton smoke test (2026-11-18)
 
-**Status: structure accepted by OpenWrt main; nothing compiled, imaged, or booted.**
+**Status: structure accepted by OpenWrt main; kernel patch series applies and the
+config re-derives with the tree's own OpenWrt GCC 14.4 toolchain; the machine code
+compiles; the full kernel build is blocked by one documented platform-patch defect
+(`TEXT_OFFSET`). Nothing imaged or booted.**
 
-This page records the first host-side validation of [`target-skeleton/`](../target-skeleton/README.md)
-against a real OpenWrt tree. It is not a build result and must not be cited as one.
+This page records the host-side validation of [`target-skeleton/`](../target-skeleton/README.md)
+against a real OpenWrt tree (two sessions on 2026-11-18: the target-layout smoke test
+below, and the kernel patch/config session appended at the end). It is not a build
+result and must not be cited as one.
 
 ## Environment
 
@@ -89,3 +94,341 @@ restructured to match the tree that accepted it:
    legitimate input, not fabrication (TARGET-DESIGN.md 5.2, 5.3).
 4. `platform.sh`/sysupgrade metadata and the A/B selector/install path (TARGET-DESIGN.md 5.4, 5.5).
 5. Switch driver (DSA vs switchdev) before `board.d` can assign any interface (TARGET-DESIGN.md 8.1).
+
+(Items 1-2 above were addressed at draft level in the later 2026-11-18 session below;
+items 3-5 remain.)
+
+---
+
+## 2026-11-18 (later session): kernel patch series + config re-derivation + compile stage
+
+**Status: the series applies cleanly in the real tree; the config re-derives with the
+tree's own OpenWrt GCC 14.4.0 toolchain (idempotent); the new machine code compiles with
+that toolchain; the full kernel build is blocked by ONE platform-patch defect (the
+non-immediate `TEXT_OFFSET`). No image, no boot. Publication NOT READY.**
+
+Second host-side session against the same clone: `openwrt main` `27663a0`,
+`linux-6.18.60`, no feeds updated, no device. The first pass derived the config with a
+cross-compiler override before the tree's toolchain existed; the canonical top-level
+`make kernel_oldconfig` was then run to completion (toolchain built from source) and
+the compile stage was repeated with the real compiler. Logs and artifacts are local-only
+under `build/linux-kbuild/waves/upstream-6.18-patches-20261118/` (gitignored; sha256
+list inside). None of this is a build result for the target: the target's image recipe,
+drivers and userspace do not exist.
+
+### What was added to the skeleton
+
+| artifact | sha256 |
+| --- | --- |
+| `target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch` | `996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d` |
+| `target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch` | `278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796` |
+| `target/linux/hisilicon/luofu/config-6.18` (re-derived with the tree's GCC 14.4 toolchain, annotated) | `2fdf4aea7a8074137d3e949684f17fc24155c9a7d10765cae8fd3b5d74057731` |
+
+- `001`: new `arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c}`. `ARCH_LUOFU`
+  depends on the existing upstream `ARCH_HISI` (it is not redefined); the machine
+  descriptor sets only `dt_compat` (`cudy,wr3000-v2`, `hisilicon,luofu-r116`,
+  `hisilicon,luofu`) and the L2 AUX replay (`0x430001`, mask `~0`, with a TODO to
+  verify the vendor mask `0xffb0fffe` and decode the latency fields on hardware).
+  `map_io`/`init_early`/`init_time`/`init_machine` are intentionally not set (DT
+  platform defaults; `drivers/of/platform.c` populates the DT platform devices);
+  `.smp` and `.restart` are documented TODOs (UP-only first submission; no reboot
+  driver). No bench breadcrumbs / vendor symbol stubs / vendor `dt_compat` from the
+  lab `mach-luofu/luofu.c`.
+- `002`: `source "arch/arm/mach-hisilicon/Kconfig"` in `arch/arm/Kconfig`,
+  `machine-$(CONFIG_ARCH_LUOFU) += hisilicon` and
+  `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` in `arch/arm/Makefile`.
+- `003-arm-dts-makefile.patch` was **not** created on purpose: the board DTS is
+  delivered by the target's `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism; adding a
+  second copy under `arch/arm/boot/dts` would be the hand-maintained duplicate the
+  design forbids (TARGET-DESIGN.md section 6.1).
+- `luofu/config-6.18`: the 5.10 copy was replaced by the re-derived 6.18 delta
+  (derivation and provenance below). `config-5.10` stays as the 5.10 reference.
+
+### Environment shims needed (host-only, outside the repository, reversible)
+
+The clone has no OpenWrt toolchain and no feeds; the earlier `make defconfig` run had
+not built host tools. Three local shims were required. They are **not** part of the
+deliverable, but without them the tree's own stages cannot start:
+
+1. `staging_dir/host/bin/{m4,flex,bison}` symlinked to the system tools. Without them
+   the kernel kconfig build dies with
+   `flex: fatal internal error, exec of .../staging_dir/host/bin/m4 failed`.
+2. `staging_dir/host/bin/bison` replaced with a wrapper that runs the system
+   `/usr/bin/bison` with `BISON_PKGDATADIR=/usr/share/bison`; the plain symlink fails
+   with `bison: .../share/bison/m4sugar/m4sugar.m4: cannot open: No such file or
+   directory` because bison resolves its data dir from its own path.
+3. cross-compiler override on the make command line,
+   `KERNEL_CROSS=<repo>/build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-`,
+   `KERNEL_CC=...-gcc` (Arm GNU Toolchain 11.3). Without it:
+   `scripts/Kconfig.include:40: C compiler 'arm-openwrt-linux-muslgnueabi-gcc' not
+   found`. The tree's own toolchain is gcc-14.4.0 (visible in the `KCFLAGS` of every
+   OpenWrt log line) and was not built in the first pass; the canonical top-level
+   `make kernel_oldconfig` starts by building the host tools and the toolchain, and the
+   first bounded attempt was cut off at the host-tools stage (RC=124, evidence log
+   `13-kernel_oldconfig-toplevel.log`). That attempt was later completed: see the
+   canonical re-derivation in Stage 2 and the canonical compile rerun in Stage 3.
+
+### Stage 1 - patch application: PASS
+
+Copied the repository `target/linux/hisilicon/` to the clone, added the target DTS as
+`target/linux/hisilicon/dts/luofu-r116.dts` (the existing smoke-test layout), and ran:
+
+```
+$ cd /home/shibbityshwab/openwrt-lab
+$ make target/linux/prepare
+...
+time: target/linux/prereq#0.04#0.03#0.07
+RC=0
+```
+
+Result: `RC=0`; the tree was re-extracted and patched
+(`build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60`), no
+`.rej`/`.orig` files, and the patched tree contains:
+
+```
+arch/arm/mach-hisilicon/Kconfig   (ARCH_LUOFU)
+arch/arm/mach-hisilicon/Makefile  (obj-y += luofu.o)
+arch/arm/mach-hisilicon/luofu.c   (DT_MACHINE_START LUOFU)
+arch/arm/Kconfig:396              source "arch/arm/mach-hisilicon/Kconfig"
+arch/arm/Makefile:175             textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000
+arch/arm/Makefile:200             machine-$(CONFIG_ARCH_LUOFU) += hisilicon
+```
+
+Both patches also pass `patch -p1 --dry-run` against the pristine 6.18.60 source
+(`checking file ...`, exit 0). Caveat: the first prepare invocation that added the
+patch directory printed only the outer make lines; the resulting tree was verified
+file-by-file instead (the `.prepared` stamp name changed from `5a37066a...` to
+`a3192102...`, i.e. the kernel file-digest dependency forced the re-extract).
+
+### Stage 2 - kernel config derivation: PASS, after fixing the placeholder
+
+Command (the tree's own path, non-interactive preset on stdin):
+
+```
+$ cd openwrt-lab
+$ yes '' | make -C target/linux TOPDIR=$PWD oldconfig V=s \
+      KERNEL_CROSS=<repo>/build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf- \
+      KERNEL_CC=<...>-gcc
+...
+/home/shibbityshwab/openwrt-lab/scripts/kconfig.pl - '>' \
+    target/linux/generic/config-6.18 \
+    build_dir/.../linux-6.18.60/.config target/linux/generic/config-filter \
+    > target/linux/hisilicon/luofu/config-6.18
+RC=0
+```
+
+That is the OpenWrt path exactly: `scripts/kconfig.pl + generic target` merge, kernel
+`make oldconfig`, then `scripts/kconfig.pl - '>'` diff against the generic config
+(with `generic/config-filter`) written back to the subtarget config.
+
+**Placeholder bug found first (why the old `config-6.18` was wrong):** with the
+5.10-derived reference as input, oldconfig *succeeds* but silently loses the platform:
+`# CONFIG_ARCH_MULTI_V7 is not set` (the reference only carried lab values, not the
+ARM platform selection), so `ARCH_MULTI_CPU_AUTO` falls back to ARMv5 and the delta
+contains `CONFIG_CPU_ARM926T=y`, big-endian, no `ARCH_HISI`/`ARCH_LUOFU`. Evidence:
+`05-baseline-derived-config-6.18` in the evidence directory. This is the proof the
+previous placeholder did **not** validate a 6.18 build.
+
+**Fix + re-derivation:** the user-selectable symbols the local lab 5.10.201 `.config`
+has were restored before the derivation (`ARCH_MULTIPLATFORM=y`, `ARCH_MULTI_V7=y`,
+`ARM_THUMB=y`, `VFP=y`, `VFPv3=y`; `CPU_LITTLE_ENDIAN` resolved from the choice).
+Re-running the same command gave `RC=0` with:
+
+```
+CONFIG_ARCH_HISI=y
+CONFIG_ARCH_LUOFU=y
+CONFIG_ARCH_MULTI_V7=y
+CONFIG_CPU_V7=y
+CONFIG_CPU_LITTLE_ENDIAN=y
+CONFIG_SMP=y
+CONFIG_NR_CPUS=2
+CONFIG_VFP=y
+CONFIG_VFPv3=y
+```
+
+A second run with the derived file as input reproduced **byte-identical** output and a
+byte-identical kernel `.config` (`CONFIG_DERIVATION_IDEMPOTENT`,
+`KCONFIG_IDEMPOTENT`). The final committed file is the machine-derived delta plus
+comments; `scripts/kconfig.pl` merges it to exactly the same map as the un-annotated
+delta with no warnings (`ANNOTATED_CONFIG_MERGES_IDENTICALLY`).
+
+**Provenance of the delta** (marked inline in the file; the first-pass version had 282
+symbols, the committed canonical one has 281 - see above):
+
+- 6 user-selectable symbols restored before derivation (**[P]**); 46 symbols whose value
+  is carried from the lab 5.10.201 reference (**[L]**); the rest are what 6.18
+  oldconfig/select-default resolution produced (not a design choice).
+- 22 symbols in the 5.10 reference are **not** in the delta because they equal the
+  generic config (`CONFIG_MTD`, `CONFIG_NET`, `CONFIG_SERIAL_8250`,
+  `CONFIG_JFFS2_FS`, `CONFIG_SQUASHFS`, ... - the delta format omits generic values).
+- 13 reference symbols were **dropped** by 6.18: 9 do not exist in the upstream tree at
+  all (`CONFIG_LUOFU_WATCHDOG`, `CONFIG_LUOFU_GMAC`, `CONFIG_LUOFU_MDIO`,
+  `CONFIG_LUOFU_PHY`, `CONFIG_MTD_NAND_LUOFU`, `CONFIG_MDIO_DEVICE`,
+  `CONFIG_MDIO_DEVRES`, `CONFIG_MTD_SPI_NAND`, `CONFIG_PCI_MSI_IRQ_DOMAIN` - the
+  drivers still have to be written), and 4 exist but are hidden/select-only in 6.18
+  (`CONFIG_I2C_DESIGNWARE_PLATFORM`, `CONFIG_MTD_NAND_CORE`, `CONFIG_PCIE_DW`,
+  `CONFIG_PCIE_DW_HOST`), so they are only enabled by a driver that selects them.
+- `CONFIG_PHYLINK` 5.10 y -> 6.18 m: it is a promptless tristate selected by its users
+  (here `NET_DSA=m`); y was never user-settable.
+- 12 `[D-default]` symbols (other Hisilicon SoCs' clock/reset/thermal drivers) are on
+  only because `ARCH_HISI=y` has `default ARCH_HISI` in their Kconfig entries. They
+  should be pruned or the defaults tightened before submission.
+
+**Canonical re-derivation (same session, after the toolchain build):** the
+top-level, tree-native command was then run to completion -
+
+```
+$ cd /home/shibbityshwab/openwrt-lab
+$ yes '' | timeout 1800 make kernel_oldconfig -j16
+...
+RC=0
+```
+
+It first built the OpenWrt host tools and the tree's own toolchain from source
+(`arm-openwrt-linux-muslgnueabi-gcc (OpenWrt GCC 14.4.0 toolchain-c0e63334e4) 14.4.0`,
+~13.5 minutes wall clock), then ran the same `target/linux oldconfig` path with that
+toolchain and wrote `luofu/config-6.18`. That canonical delta has **281 symbols** and
+contains the same platform selection (the 282-symbol first-pass delta differs only by
+`CONFIG_GCC_ASM_GOTO_OUTPUT_BROKEN`, a compiler-feature symbol that GCC 14.4 does not
+set). A second canonical run reproduced `luofu/config-6.18` **byte-identically**
+(`CANONICAL_DERIVATION_IDEMPOTENT`), and the committed annotated file merges through
+`scripts/kconfig.pl` to exactly the same config as the un-annotated delta
+(`ANNOTATED_CONFIG_MERGES_IDENTICALLY`, no warnings). **The committed
+`config-6.18` is this canonical delta.** Evidence: logs `14-`, `15-`, `16-`, `17-`
+in the evidence directory.
+
+**Not proven by this stage:** the config boots nothing, and the compile stage below
+still fails on one platform-patch defect.
+
+### Stage 3 - compile stage: FAIL, on one platform-patch blocker
+
+**First attempt (before the OpenWrt toolchain existed; bench GCC 11.3 override):**
+
+```
+$ cd openwrt-lab
+$ make target/linux/compile V=s \
+      KERNEL_CROSS=<repo>/build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf- \
+      KERNEL_CC=<...>-gcc -j16
+...
+RC=2
+```
+
+The OpenWrt configure step inside compile completed (headers_install, .config from
+`kconfig.pl`, vermagic) and the kernel build started. Two independent failures were
+seen in this first attempt:
+
+**Blocker 1 - the platform patch's `TEXT_OFFSET` value is not an ARM immediate
+(patch-specific, must be fixed before the series can build a kernel):**
+
+```
+AS      arch/arm/kernel/head.o
+arch/arm/kernel/head.S:123: Error: invalid constant (608000) after fixup
+arch/arm/kernel/head.S:188: Error: invalid constant (608000) after fixup
+make[8]: *** [scripts/Makefile.build:430: arch/arm/kernel/head.o] Error 1
+```
+
+`0x00608000` needs bits 15 and 21/22 set, which cannot be encoded in the rotated 8-bit
+immediate of `sub r8, r8, #TEXT_OFFSET` (head.S:123) or of the `pgtbl` macro's
+`add \rd, \phys, #TEXT_OFFSET` (head.S:68, expanded at :188). The decompressor has the
+same problem at `arch/arm/boot/compressed/head.S:312` (`add r4, r0, #TEXT_OFFSET`) and
+`:410` (`sub r0, r4, #TEXT_OFFSET`). The value is fixed by the load-address
+derivation (the stock loader stages the slot at `0x83200000` and the kernel must land
+at `0x80608000`; TARGET-DESIGN.md sections 3.2/5.2), so it cannot simply be changed to
+an encodable value. The lab tree patched these files as bench edits (TARGET-DESIGN.md
+section 7.2 lists them as edits that must be reworked); the **clean core patch is not
+written**: it needs literal-pool loads (`ldr rX, =TEXT_OFFSET`) in both files with a
+spare scratch register, and upstream review for early-boot assembly. This blocks the
+whole kernel build, not just the luofu machine.
+
+**Blocker 2 - GNU GCC 11.3 vs `retain` + `CONFIG_WERROR` (environment, not the
+patch):**
+
+```
+net/bpf/test_run.c:511:1: error: 'retain' attribute ignored [-Werror=attributes]
+net/core/filter.c:12084:1: error: 'retain' attribute ignored [-Werror=attributes]
+kernel/bpf/helpers.c:2207:1: error: 'retain' attribute ignored [-Werror=attributes]
+mm/slab_common.c:1310:1: error: 'retain' attribute ignored [-Werror=attributes]
+kernel/cgroup/rstat.c:130:1: error: 'retain' attribute ignored [-Werror=attributes]
+... 94 occurrences
+RC=2
+```
+
+GCC 11.3 answers `__has_attribute(__retain__)` with true but ignores the attribute at
+codegen. 6.18 defines `__retain` when `CONFIG_LD_DEAD_CODE_DATA_ELIMINATION` or
+`CONFIG_LTO_CLANG` is set; the OpenWrt generic config sets
+`CONFIG_LD_DEAD_CODE_DATA_ELIMINATION=y` and `CONFIG_WERROR=y`, so the warning becomes
+an error. This was an environment mismatch, not a repository problem.
+
+**Canonical rerun with the tree's own OpenWrt GCC 14.4.0 toolchain:**
+
+```
+$ cd openwrt-lab
+$ make target/linux/compile V=s -j16
+...
+  AS      arch/arm/kernel/head.o
+arch/arm/kernel/head.S:123: Error: invalid constant (608000) after fixup
+arch/arm/kernel/head.S:188: Error: invalid constant (608000) after fixup
+make[8]: *** [scripts/Makefile.build:430: arch/arm/kernel/head.o] Error 1
+...
+RC=2
+```
+
+Result: **0** `retain` errors (blocker 2 is gone with the supported compiler, exactly
+as expected); the **only** remaining compile failure is blocker 1. The machine object
+`arch/arm/mach-hisilicon/luofu.o` was **compiled with GCC 14.4**
+(`6028 bytes`, `__mach_desc_LUOFU` + `"HiSilicon Hi5671Y (luofu)"` + the three
+`dt_compat` strings, no warning/error attributed to the new files), so kbuild accepts
+the machine descriptor under the canonical config; `head.S` stops the image.
+Evidence: `18-compile-stage-canonical-toolchain.log`.
+
+**Evidence-only build (local workarounds, NOT delivered):** to separate blocker 1 from
+the rest of the patch/config, the build was rerun with (a) `CONFIG_WERROR` turned off
+**in the build tree's kernel `.config` only`** (needed only for the bench GCC 11.3
+pass) and (b) a make-command-line override `TEXT_OFFSET=0x00008000` (encodable, wrong
+load address) instead of the platform value:
+
+```
+$ make -C build_dir/.../linux-6.18.60 ARCH=arm CROSS_COMPILE=<...>- \
+      TEXT_OFFSET=0x00008000 -j16 zImage
+...
+  OBJCOPY arch/arm/boot/zImage
+  Kernel: arch/arm/boot/zImage is ready
+RC=0
+```
+
+Result: `arch/arm/boot/zImage`, 3,205,816 bytes, sha256
+`9e79d5914573beaf7878bdb1c25ece36dfa8afbf1388264956b9c7810d50461d`. **This is not a
+deliverable image and proves no boot**: it has the wrong TEXT_OFFSET (the real one must
+be `0x00608000`), no FIP trailer, no rootfs, it was built with the bench GCC 11.3
+rather than OpenWrt's toolchain, and nothing was written to the router. It only shows
+that the patch/config do not break the rest of the kernel build.
+
+### What this proves, and what it does not
+
+Proven (host-only, no device): the patch series applies cleanly in the OpenWrt 6.18
+kernel tree; the Kconfig integration selects `ARCH_LUOFU`; the config derivation
+through the tree's own top-level `make kernel_oldconfig` with the tree's own OpenWrt
+GCC 14.4.0 toolchain is reproducible and idempotent; the cleaned machine descriptor
+compiles with that toolchain; and the kernel compiles up to `arch/arm/kernel/head.o`
+with only the `TEXT_OFFSET` defect stopping it (an evidence-only zImage was also built
+with local workarounds, not a deliverable).
+
+Not proven: a kernel image with the correct text offset/load address, no image, no FIP
+trailer in a slice, no rootfs, no `dtbs_check`/binding review, no
+`platform.sh`/sysupgrade, no A/B selector protocol, no SMP (UP-only), no restart
+driver, no boot, no device interaction, no driver series. Publication is still NOT
+READY.
+
+### Remaining blockers
+
+1. `TEXT_OFFSET=0x00608000` non-immediate core patch (4 assembly sites; see Stage 3) -
+   the only compile blocker for the kernel with this platform textofs; pending a clean
+   early-boot assembly patch and upstream review.
+2. Driver + dt-binding series (watchdog, CRG, thermal, pinctrl, FMC, MDIO/PHY/GEMAC,
+   switch, PCIe) - nothing exists; hidden 6.18 symbols must be selected by the new
+   drivers.
+3. Prune/tighten the 12 `[D-default]` other-SoC Hisilicon drivers (or decide to keep
+   them).
+4. Image recipe/trailer/sysupgrade/install path and the A/B selector (TARGET-DESIGN.md
+   5.2-5.5), `dtbs_check`, and then one attended boot - none attempted here.
+

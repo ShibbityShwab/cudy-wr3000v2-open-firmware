@@ -4,11 +4,15 @@
 >
 > This directory contains a first-pass, reviewable **shape** of the OpenWrt target
 > files described in [TARGET-DESIGN.md](../docs/TARGET-DESIGN.md) sections 4-6.
-> Nothing here has been built inside an OpenWrt tree, and nothing here has ever run
-> on a router. The only executable artifact is `tools/fip-slice.py`, and its safe path
-> is the read-only `check` mode. The design these files encode is not accepted
-> upstream, no OpenWrt target, board DTS, image recipe or driver series exists yet,
-> and there is no device page. **Do not read this directory as upstream progress.**
+> It has been exercised against `openwrt main` (`27663a0`) at the target-metadata,
+> kernel-prepare and kernel-config stages, and the machine code in the draft kernel
+> patch series compiles there (2026-11-18 - see [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)).
+> **No kernel has been built with the OpenWrt toolchain, no image exists, and
+> nothing here has ever run on a router.** The only executable artifact is
+> `tools/fip-slice.py`, and its safe path is the read-only `check` mode. The design
+> these files encode is not accepted upstream, no driver series, image recipe or
+> device page exists yet, and there is no device page. **Do not read this directory
+> as upstream progress.**
 >
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
@@ -37,8 +41,10 @@ Everything here is marked one of:
 | `target/linux/hisilicon/Makefile` | target definition: `ARCH:=arm`, `BOARD:=hisilicon`, `SUBTARGETS:=luofu`, feature flags, kernel-version placeholder, default package sketch (**SCHEMATIC**) | `target/linux/hisilicon/Makefile` |
 | `target/linux/hisilicon/Kconfig` | review stub: the kernel platform Kconfig bits the target needs (documented, not applied) plus two target build options (**SCHEMATIC**; OpenWrt targets normally have no such file - see the header) | `target/linux/hisilicon/` only after upstream review; the platform symbols belong in the kernel patch `arch/arm/mach-hisilicon/Kconfig` |
 | `target/linux/hisilicon/luofu/target.mk` | subtarget: board name, `CPU_TYPE:=cortex-a9`, NAND feature, package sketch (**SCHEMATIC**) | `target/linux/hisilicon/luofu/target.mk` |
-| `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | placeholder copy of the 5.10 reference under the tree's kernel version; **not re-derived** - does not validate a 6.18 build | same, after a real `olddefconfig` re-derivation |
+| `target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch` | draft kernel machine support: new `arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c}`; `ARCH_LUOFU` (under the existing upstream `ARCH_HISI`), clean UP-only DT machine descriptor for `hisilicon,luofu-r116`/`hisilicon,luofu`, documented TODO for the `cudy,wr3000-v2` compat, SMP, restart and the L2 AUX replay. **Applies cleanly in the 6.18 tree and the machine object compiles**; never upstreamed, never booted. | `target/linux/hisilicon/patches-<ver>/` |
+| `target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch` | draft core ARM integration: source the new mach Kconfig from `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon`, `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` (load-address derivation, TARGET-DESIGN.md 3.2/5.2). Applies cleanly; the textofs value **does not compile in stock 6.18** - see SKELETON-SMOKE.md blocker 1. | same |
+| `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / unmarked oldconfig resolution); idempotent under a second run. It enables `ARCH_HISI`+`ARCH_LUOFU`, the machine code and a partial kernel build succeed; **the kernel build stops on the `TEXT_OFFSET` blocker and nothing boots** | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
@@ -242,27 +248,44 @@ They are not a drop-in target. The mapping is:
     ├── target/linux/hisilicon/                 ├── target/linux/hisilicon/
     │   ├── Makefile                            │   ├── Makefile
     │   ├── Kconfig                             │   ├── Kconfig
+    │   ├── patches-6.18/                       │   ├── patches-6.18/
+    │   │   ├── 001-arm-mach-hisilicon-luofu.patch
+    │   │   └── 002-arm-kconfig-textofs.patch
     │   └── luofu/                              │   └── luofu/
     │       ├── target.mk                       │       ├── target.mk
-    │       ├── config-<release>                │       ├── config-5.10  (reference only)
+    │       ├── config-<release>                │       ├── config-5.10  (5.10 reference)
+    │       │                                   │       └── config-6.18  (re-derived)
     │       ├── image/Makefile                  │       ├── image/Makefile
     │       ├── profiles/                       │       ├── profiles/
     │       └── base-files/...                  │       └── base-files/...
     ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
     └── scripts/fip-slice.py                    <- tools/fip-slice.py
 
-plus a **kernel patch series that does not exist yet** (TARGET-DESIGN.md sections 4.1,
-7). At minimum that series must add:
+The **draft kernel patch series** (written 2026-11-18; TARGET-DESIGN.md sections 4.1, 7)
+is `patches-6.18/`:
 
-- `arch/arm/mach-hisilicon/Kconfig` with `ARCH_HISI` + `ARCH_LUOFU` (template is in
-  `target/linux/hisilicon/Kconfig`);
-- `arch/arm/mach-hisilicon/Makefile`: `machine-$(CONFIG_ARCH_LUOFU) += luofu`;
-- `arch/arm/boot/dts/Makefile`: `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb`;
-- `arch/arm/Makefile`: `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000`;
-- a clean `mach-luofu` machine descriptor (the lab one carries bench breadcrumbs and
-  a `dt_compat` for the vendor tree - none of which may be submitted);
-- the driver + dt-binding series (watchdog, CRG, thermal, pinctrl, FMC, MDIO/PHY/GE-
-  MAC, switch, PCIe - TARGET-DESIGN.md section 7), each with its YAML;
+- `001` adds `arch/arm/mach-hisilicon/Kconfig` with `ARCH_LUOFU` as a platform under
+  the already-existing upstream `ARCH_HISI` (the upstream tree defines `ARCH_HISI` in
+  `arch/arm/mach-hisi/Kconfig`; it must not be redefined), the machine Makefile
+  (`obj-y += luofu.o`) and the cleaned `luofu.c` machine descriptor. The descriptor
+  sets only `dt_compat` and the L2 AUX replay; `map_io`/`init_early`/`init_time`/
+  `init_machine` are deliberately left at their DT-platform defaults, `.smp` is TODO
+  (UP-only first submission, no mainline `smp_ops` for the vendor enable-method) and
+  `.restart` is TODO (no reboot driver yet). No bench breadcrumbs, no vendor symbol
+  stubs, no vendor-facing `dt_compat`.
+- `002` wires it into core ARM: `source "arch/arm/mach-hisilicon/Kconfig"` in
+  `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon` and
+  `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` in `arch/arm/Makefile`. The textofs
+  value is required by the load-address derivation (section 3.4) but it does **not**
+  compile in stock 6.18 - see blocker 1 in SKELETON-SMOKE.md.
+- No `003-arm-dts-makefile.patch`: the board DTS is delivered through the target's
+  `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
+  copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
+
+Still missing from the submission:
+
+- the driver + dt-binding series (watchdog, CRG, thermal, pinctrl, FMC, MDIO/PHY/GEMAC,
+  switch, PCIe - TARGET-DESIGN.md section 7), each with its YAML;
 - a `platform.sh` implementing `platform_check_image`/`platform_do_upgrade`
   (TARGET-DESIGN.md section 5.4) - **not written**;
 - the sysupgrade container wrapper that adds the kernel slice, rootfs UBI and
@@ -294,6 +317,26 @@ Checked on the author's host on 2026-11-18, nothing more:
   `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`) and
   `make target/linux/prepare` RC=0 (kernel 6.18.60). No compile/image/boot. Details:
   [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
+- **Kernel patch series + config re-derivation (2026-11-18, host-only)**: both draft
+  patches apply cleanly to `linux-6.18.60` in the same `openwrt main` clone
+  (`patch -p1 --dry-run` PASS, `make target/linux/prepare` RC=0, no `.rej`); the
+  patched tree has `arch/arm/mach-hisilicon/` and the `textofs`/machine lines. The
+  canonical top-level `make kernel_oldconfig` was run to completion: it built the
+  tree's own OpenWrt GCC 14.4.0 toolchain from source (~13.5 minutes) and emitted a new
+  `luofu/config-6.18` delta - `ARCH_HISI=y`, `ARCH_LUOFU=y`, ARMv7/LE/VFP, 281
+  symbols - and a second run was byte-identical. The machine object
+  `arch/arm/mach-hisilicon/luofu.o` **compiles** with that toolchain and its
+  `DT_MACHINE_START` entry is in the object. With that toolchain
+  **`make target/linux/compile` fails on ONE blocker**: stock
+  `arch/arm/kernel/head.S` cannot encode `#TEXT_OFFSET = 0x00608000` as an ARM
+  immediate - patch-specific; the clean core patch is **not written**. An earlier pass
+  with the bench GCC 11.3 also hit 94 `retain`-attribute errors under
+  `CONFIG_WERROR`; that was the unsupported compiler and is gone with the tree's GCC
+  14.4. A local, **non-delivered** workaround (kernel-`.config` `CONFIG_WERROR` off +
+  `TEXT_OFFSET=0x00008000`) built a 3,205,816-byte zImage; that proves the rest of the
+  patch/config builds but is **not** a bootable image and is **not** evidence that the
+  target works. Exact commands, errors and logs:
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host. dtc emits
   exactly one expected warning: `unique_unit_address: /clock-reset-controller@14880000
   duplicate unit-address (also used in node /watchdog@14880000)` - that is the
@@ -302,11 +345,14 @@ Checked on the author's host on 2026-11-18, nothing more:
   `make dtbs_check`, no kernel build.
 - `base-files/etc/board.d/02_network`: `sh -n` passes.
 - The target Makefiles were **parsed by OpenWrt main's make** in the smoke test above
-  (`make defconfig` and `make target/linux/prepare`); they have still never been
-  compiled, imaged or booted, and the Kconfig stub/profile file are not used by main.
+  (`make defconfig` and `make target/linux/prepare`); the kernel machine code from the
+  draft patch series compiles (above), but the target's own image recipe has never been
+  built, imaged or booted, and the Kconfig stub/profile file are not used by main.
 
-**Not done, and not claimed:** no OpenWrt build, no kernel build, no image build, no
-boot, no device interaction, no UART, no bench tool run, no driver/binding review.
+**Not done, and not claimed:** no kernel image with the correct text offset/load
+address, no image build, no boot, no device interaction, no UART, no bench tool run, no
+driver/binding review. (The tree's own toolchain was built and a kernel compile was
+attempted in the canonical run; it stops at the documented `TEXT_OFFSET` blocker.)
 
 ---
 
@@ -336,6 +382,18 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
    mac80211 and the firmware is closed (TARGET-DESIGN.md section 8.3).
 10. **Publication sequence** - history purge before any of this can point at a public
     tree.
+11. **TEXT_OFFSET is not an ARM immediate** - `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000`
+    (required by the load-address derivation) is used with `#TEXT_OFFSET` in
+    `arch/arm/kernel/head.S` (two sites, incl. the `pgtbl` macro) and
+    `arch/arm/boot/compressed/head.S` (two sites); the assembler rejects it
+    (`invalid constant (608000) after fixup`). A clean core patch (literal-pool loads)
+    is **not written**; it blocks compilation of the whole kernel and therefore the
+    first real build.
+12. **OpenWrt toolchain** - RESOLVED for the canonical derivation/compile: the tree's
+    own GCC 14.4.0 toolchain was built from source by `make kernel_oldconfig`
+    (~13.5 minutes) and used both for the committed `config-6.18` and for the compile
+    stage; the earlier GCC 11.3 `retain`/`CONFIG_WERROR` failure is gone. What remains
+    for a first real kernel build is blocker 11 (`TEXT_OFFSET`), not the toolchain.
 
 Skeleton-specific findings recorded while writing the files:
 
@@ -345,11 +403,14 @@ Skeleton-specific findings recorded while writing the files:
   OpenWrt's `board_name`/sysupgrade match and the DTS compatible order must be made to
   agree; the decision is open (an upstream board DTS would normally carry a
   `cudy,wr3000-v2` compatible first).
-- **Kernel config filename**: `config-5.10` is committed because 5.10.201 is the only
-  kernel with lab evidence. TARGET-DESIGN.md section 4.1 says follow the release under
-  development (6.12 was recorded on 2026-10-01; re-verify). The Makefile carries a
-  `KERNEL_PATCHVER` placeholder with that caveat; the config must be re-derived, not
-  renamed.
+- **Kernel config**: `config-5.10` is committed because 5.10.201 is the only kernel
+  with lab evidence; `config-6.18` is now **re-derived** through the tree's own
+  `oldconfig` path (2026-11-18, see section 5). Re-deriving it with the previous
+  5.10-derived reference as input silently dropped the whole platform (no
+  `ARCH_MULTI_V7` -> ARMv5/ARM926T fallback); fixing the input by restoring the
+  user-selectable symbols the lab config has (`ARCH_MULTIPLATFORM`, `ARCH_MULTI_V7`,
+  `ARM_THUMB`, `VFP`, `VFPv3`) is what makes it select `ARCH_HISI`/`ARCH_LUOFU`.
+  Regenerating with the derived file is idempotent.
 - **Duplicate unit address at 0x14880000**: the vendor watchdog and CRG share the
   page. The draft keeps both nodes with a TODO; dtc warns, deliberately. The upstream
   shape must resolve this (child of a syscon, or a narrower reg window).
@@ -359,21 +420,36 @@ Skeleton-specific findings recorded while writing the files:
   0..15 in the binding). Marked NEEDS-VERIFICATION in the DTS; it only matters if the
   SP804 is used (the board uses the TWD).
 - **Kconfig placement**: a target directory normally has no `Kconfig`; the required
-  `ARCH_HISI`/`ARCH_LUOFU` symbols belong in the kernel patch. The file here is a
-  review stub and says so.
+  platform symbols belong in the kernel patch. The file here is a review stub and says
+  so. The patch series now defines `ARCH_LUOFU` in `arch/arm/mach-hisilicon/Kconfig`
+  **depending on** the upstream `ARCH_HISI` rather than redefining `ARCH_HISI`
+  (redefining it would be a Kconfig duplicate); an alternative upstream shape would be
+  to add the platform to the existing `arch/arm/mach-hisi/Kconfig`, which review would
+  decide.
+- **ARCH_HISI defaults**: enabling `ARCH_HISI` default-enables the clock/reset/thermal
+  drivers of other Hisilicon SoCs (`default ARCH_HISI` in their Kconfig). The
+  re-derived config marks them `[D-default]`; they should be pruned or the defaults
+  tightened before submission.
+- **003-arm-dts-makefile not needed**: the target delivers the board DTS through
+  `dts/` + `DEVICE_DTS_DIR := ../dts`; a parallel `arch/arm/boot/dts` entry would be
+  the hand-maintained duplicate the design forbids.
 
 ---
 
 ## 7. Safety and publication constraints honored
 
 - No device was touched: no bench tools, no UART, no SSH, no flash. This is a
-  host-side documentation/skeleton deliverable.
+  host-side documentation/skeleton deliverable; the 2026-11-18 patch/config session ran
+  only OpenWrt make targets and a kernel compile in the local clone.
 - No vendor binaries, `.o/.ko`, firmware blobs, calibration data, extracted DTBs,
   U-Boot images, credentials or dumps are present. Named values (`0xd7b7ab1e`,
   40,732, slot sizes, addresses) are structural facts already documented in the
   published `TARGET-DESIGN.md`/`phase42-decode` analysis.
 - No false buildability: every file says SCHEMATIC/UNTESTED, and this README states
-  plainly that nothing here builds or boots.
+  plainly what did and did not build. What exists: the patches apply, the config
+  re-derives and the machine object compiles (2026-11-18, section 5). What does not:
+  the OpenWrt toolchain build, the image, and any boot. An evidence-only local zImage
+  (with two workarounds, in the local clone) is not a target build and is not shipped.
 - The publication caveat stands: the `opensource/` submodule is **NOT READY** until
   the history purge in [PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md) is done.
 
