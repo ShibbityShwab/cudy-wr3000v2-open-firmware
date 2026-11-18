@@ -12,7 +12,7 @@
  * invented one. The board now has draft drivers and YAML bindings for the CRG
  * clock/reset controller, the watchdog, the FMC SPI-NAND controller, the
  * network trio (MDIO bus, Genius PHY, partial GEMAC) and machine restart
- * (patches-6.18/004-012); every other proposed binding still does not exist.
+ * (patches-6.18/004-014); every other proposed binding still does not exist.
  * The GEMAC driver is a resource/validation half only - it has no data path -
  * so its nodes stay disabled, and the restart driver's reset command is
  * PROVISIONAL (see its node). Do not submit this file as-is.
@@ -870,80 +870,102 @@
 		};
 	};
 
-	/* ---- PCIe: two DWC root complexes (deferred; binding TODO) ------ */
+	/* ---- PCIe: two DWC root complexes (patch 013) ------------------ */
 
 	/*
-	 * TODO(binding/driver): both root complexes are DWC-based. The lab PCIe
-	 * driver is a READ-ONLY FRAME plus an unvalidated compile-gated
-	 * bring-up; it is not a host controller and does not call
-	 * pci_host_probe() (TARGET-DESIGN.md 7.1). A wired-only first
-	 * submission can defer PCIe and Wi-Fi (8.2); these nodes stay disabled
-	 * so the addresses are documented.
+	 * Two DesignWare-based root complexes. Binding:
+	 * Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+	 * and driver drivers/pci/controller/dwc/pcie-luofu.c (patch 013).
 	 *
-	 * HARD RULE, DO NOT LOSE THIS WHEN REWRITING THE NODE:
-	 * the "misc" window 0x10161000 is kept for reference only and MUST NEVER
-	 * BE READ at runtime - a read-only devmem there panicked the box. The
-	 * driver must poll link state via DBI/cfg and measure through the
-	 * endpoint BAR0/BAR2 instead.
+	 * HARD RULE: the "misc" window (RC0 0x10161000, RC1 0x10165000) is
+	 * write-only and MUST NEVER BE READ at runtime - a read-only devmem
+	 * there panicked the box. The driver writes the recorded root-complex
+	 * mode and LTSSM-enable words there and observes link state through
+	 * the DBI (DEBUG0/DEBUG1, Link Status) instead.
 	 *
-	 * TODO(driver-data): the vendor iATU inbound/outbound tables and the
-	 * acp-gate bits (0x10100174 bit 25/26) are init data, not DT properties
-	 * (TARGET-DESIGN.md 6.2). They are deliberately absent here.
+	 * HARD RULE: the DBI and configuration windows answer only
+	 * 4-byte-aligned 32-bit accesses; the driver's accessors comply.
+	 *
+	 * The dbi/misc/config windows are declared here. The memory and I/O
+	 * outbound windows are expressed by "ranges" (the driver derives the
+	 * iATU viewports from it); the measured vendor iATU plan - viewport 0
+	 * CFG0 config window to bus 0, viewport 1 MEM 0x40000000 to
+	 * 0x40000000, viewport 2 IO 0x48000000 to 0x48000000 (RC1:
+	 * 0x68000000/0x58000000/0x60000000) - matches these ranges. The vendor
+	 * iatu_rc/iatu_ep tables and the acp-gate bits (0x10100174 bit 25/26)
+	 * are driver/SoC init data, not devicetree ABI.
+	 *
+	 * The nodes stay DISABLED: the device write path (misc mode/LTSSM, DBI
+	 * setup, iATU writes) has never been measured on this board. The reset
+	 * polarity is settled (active-low 0x34 bits; the first CRG driver
+	 * revision was inverted and patch 014 fixes it), so once the write path
+	 * is validated in an attended hardware run these nodes can be enabled.
+	 *
+	 * The Wi-Fi endpoints are the vendor 59e7:0005 functions; their driver
+	 * is vendor-only and out of scope ([X]). They are documented as
+	 * disabled child nodes (the PCI core enumerates them from config
+	 * space; no mainline driver binds them).
 	 */
 	pcie0: pcie@10160000 {
-		compatible = "hisilicon,luofu-pcie";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-pcie";
 		device_type = "pci";
 		#address-cells = <3>;
 		#size-cells = <2>;
 		linux,pci-domain = <0>;
 		reg = <0x10160000 0x1000>,	/* dbi */
 		      <0x10161000 0x3000>,	/* misc - NEVER READ */
-		      <0x50000000 0x1000>,	/* cfg */
-		      <0x40000000 0x2000000>,	/* mem */
-		      <0x48000000 0x800000>;	/* io */
-		reg-names = "dbi", "misc", "cfg", "mem", "io";
-		ranges = <0x02000000 0 0x40000000 0x40000000 0 0x2000000>,
-			 <0x01000000 0 0x48000000 0x48000000 0 0x800000>,
-			 <0x03000000 0 0x50000000 0x50000000 0 0x1000>;
+		      <0x50000000 0x1000>;	/* config window */
+		reg-names = "dbi", "misc", "config";
+		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>,
+			 <0x01000000 0x0 0x48000000 0x48000000 0x0 0x800000>;
 		bus-range = <0 0xa>;
-		interrupts = <0 0x3b 4>,	/* SPI 59 (vendor numbering) */
-			     <0 0x45 4>;	/* SPI 69 */
+		interrupts = <0 0x3b 4>,	/* radm, SPI 59 */
+			     <0 0x45 4>;	/* linkdown, SPI 69 */
 		interrupt-names = "radm", "linkdown";
 		clocks = <&crg LUOFU_CLK_PCIE0>;
-		clock-names = "pcie_clk";
-		/* TODO(reset-binding): vendor cells (0x34, 0xc..0xf) */
+		clock-names = "pcie";
+		resets = <&crg 0x34 0xc>, <&crg 0x34 0xd>,
+			 <&crg 0x34 0xe>, <&crg 0x34 0xf>;
+		reset-names = "apb", "pcs", "phy", "ctrl";
+		num-lanes = <1>;		/* measured Link Cap: x1 */
 		status = "disabled";
-		/*
-		 * TODO(binding): legacy INTx needs interrupt-map/interrupt-map-mask
-		 * or an MSI parent; neither is designed yet. The Wi-Fi endpoint
-		 * also carries a device-internal GIC source (SPI 76) that is not
-		 * described in any DT (vendor-dt-notes.md 4).
-		 */
+
+		wifi@0,0 {
+			compatible = "pci59e7,0005";
+			reg = <0x00000000 0x0 0x0 0x0 0x0>;
+			status = "disabled";
+		};
 	};
 
 	pcie1: pcie@10164000 {
-		compatible = "hisilicon,luofu-pcie";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-pcie";
 		device_type = "pci";
 		#address-cells = <3>;
 		#size-cells = <2>;
 		linux,pci-domain = <1>;
 		reg = <0x10164000 0x1000>,	/* dbi */
 		      <0x10165000 0x3000>,	/* misc - NEVER READ */
-		      <0x68000000 0x1000>,	/* cfg */
-		      <0x58000000 0x2000000>,	/* mem */
-		      <0x60000000 0x800000>;	/* io */
-		reg-names = "dbi", "misc", "cfg", "mem", "io";
-		ranges = <0x02000000 0 0x58000000 0x58000000 0 0x2000000>,
-			 <0x01000000 0 0x60000000 0x60000000 0 0x800000>,
-			 <0x03000000 0 0x68000000 0x68000000 0 0x1000>;
+		      <0x68000000 0x1000>;	/* config window */
+		reg-names = "dbi", "misc", "config";
+		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>,
+			 <0x01000000 0x0 0x60000000 0x60000000 0x0 0x800000>;
 		bus-range = <0 0xa>;
-		interrupts = <0 0x3f 4>,	/* SPI 63 (vendor numbering) */
-			     <0 0x46 4>;	/* SPI 70 */
+		interrupts = <0 0x3f 4>,	/* radm, SPI 63 */
+			     <0 0x46 4>;	/* linkdown, SPI 70 */
 		interrupt-names = "radm", "linkdown";
 		clocks = <&crg LUOFU_CLK_PCIE1>;
-		clock-names = "pcie_clk";
-		/* TODO(reset-binding): vendor cells (0x34, 0x10..0x13) */
+		clock-names = "pcie";
+		resets = <&crg 0x34 0x10>, <&crg 0x34 0x11>,
+			 <&crg 0x34 0x12>, <&crg 0x34 0x13>;
+		reset-names = "apb", "pcs", "phy", "ctrl";
+		num-lanes = <1>;		/* measured Link Cap: x1 */
 		status = "disabled";
+
+		wifi@0,0 {
+			compatible = "pci59e7,0005";
+			reg = <0x00000000 0x0 0x0 0x0 0x0>;
+			status = "disabled";
+		};
 	};
 
 	/* ---- absent nodes, on purpose ---------------------------------- */

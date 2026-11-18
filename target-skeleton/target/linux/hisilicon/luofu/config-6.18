@@ -50,7 +50,7 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
-#   [N]  new in the luofu driver series (patches-6.18/004-012):
+#   [N]  new in the luofu driver series (patches-6.18/004-014):
 #        the drivers and the dependencies they select. The 2026-11-18
 #        canonical derivation predates these Kconfig entries, so the lines
 #        were added by hand; for 004-005 a canonical re-derivation with the
@@ -265,6 +265,9 @@ CONFIG_IRQSTACKS=y
 CONFIG_IRQ_DOMAIN=y
 CONFIG_IRQ_DOMAIN_HIERARCHY=y
 CONFIG_IRQ_FORCED_THREADING=y
+# [N] selected by CONFIG_PCIE_DW_HOST (patches-6.18/013): the
+#     message-signalled-interrupt library the DesignWare host core links
+CONFIG_IRQ_MSI_LIB=y
 CONFIG_IRQ_WORK=y
 # [L] from the lab 5.10.201 reference
 CONFIG_JFFS2_ZLIB=y
@@ -361,10 +364,27 @@ CONFIG_PAGE_SIZE_LESS_THAN_256KB=y
 CONFIG_PAGE_SIZE_LESS_THAN_64KB=y
 # [L] from the lab 5.10.201 reference
 CONFIG_PCI=y
+# [N] selected by CONFIG_PCIE_LUOFU_HOST (patches-6.18/013): the DesignWare
+#     host-core library, its hidden host/EP switches, and the PCI ECAM and
+#     host-common helpers it selects. PCIE_DW_DEBUGFS is a prompt
+#     (depends on DEBUG_FS) that oldconfig resolves to n. These are not in
+#     the 2026-11-18 canonical delta because no controller selected
+#     PCIE_DW there.
+CONFIG_PCIE_DW=y
+# CONFIG_PCIE_DW_DEBUGFS is not set
+CONFIG_PCIE_DW_HOST=y
 # CONFIG_PCIE_HISI_STB is not set
+# [N] new driver in patches-6.18/013 (luofu PCIe host: two DWC root
+#     complexes, dedicated config-window accessor, aligned-dword DBI access,
+#     CRG gate clock + four resets; the devicetree nodes stay disabled until
+#     the unmeasured write path is validated on hardware; the CRG reset
+#     polarity question is closed by patch 014)
+CONFIG_PCIE_LUOFU_HOST=y
 CONFIG_PCI_DOMAINS=y
 # [L] from the lab 5.10.201 reference
 CONFIG_PCI_DOMAINS_GENERIC=y
+CONFIG_PCI_ECAM=y
+CONFIG_PCI_HOST_COMMON=y
 # [L] from the lab 5.10.201 reference
 CONFIG_PCI_MSI=y
 CONFIG_PERF_USE_VMALLOC=y

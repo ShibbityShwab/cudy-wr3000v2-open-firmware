@@ -28,7 +28,10 @@ Genius PHY (`008`) and a **partial** GEMAC binding/resource driver (`009`, no da
 its DTS nodes stay disabled) - added in the sixth session the same day - and the FMC
 SPI-NAND controller (`006`, a SPI-MEM controller with the mainline SPI-NAND stack behind
 it; it consumes the CRG `sfc_clk` gate and `sfc_rst` reset and adds `CONFIG_SPI` /
-`CONFIG_MTD_SPI_NAND`), and, from the seventh session, the machine-restart driver (`010`: SYSCTRL boot-selector save, a PROVISIONAL CRG software-reset command and a CRG watchdog fallback). None of them has run on hardware.
+`CONFIG_MTD_SPI_NAND`), the machine-restart driver (`010`: SYSCTRL boot-selector save, a
+PROVISIONAL CRG software-reset command and a CRG watchdog fallback), pinctrl (`011`), thermal
+(`012`) and the DWC PCIe host controller (`013`, RC nodes disabled - the Wi-Fi endpoint is `[X]`),
+with the CRG reset polarity corrected by `014`. None of them has run on hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;

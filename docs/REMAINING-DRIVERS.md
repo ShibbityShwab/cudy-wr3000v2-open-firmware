@@ -88,7 +88,7 @@ the path". That assumption is **not supported** by the vendor modules. [V]
 
 | evidence | what it shows |
 | --- | --- |
-| `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_kmac.ko` (75,116 B, `vermagic 5.10.201 SMP mod_unload ARMv7`, `depends: hi_kpie,hi_basic,ksecurec`) exports only MAC functions (`hi_gemac_probe`, `hi_mac_config`, `hi_mac_link_up/down`, `hi_mac_hw_*`, `hi_mac_net_xmit`, `hi_net_mii_register`) and imports **`hi_net_dev_probe`, `hi_net_dev_open`, `hi_net_dev_close`, `hi_net_dev_remove`, `hi_net_dev_xmit`** (symbol table; [V] local fixture). It imports **no** `dma_*`, `napi_*`, `alloc_netdev_mqs` or `netif_napi_add` — it cannot own a ring or a netdev. |
+| `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_kmac.ko` (75,116 B, `vermagic 5.10.201 SMP mod_unload ARMv7`, `depends: hi_kpie,hi_basic,ksecurec`) exports the MAC functions (`hi_gemac_probe`, `hi_mac_config`, `hi_mac_link_up/down`, `hi_mac_hw_*`, `hi_mac_net_xmit`, `hi_net_mii_register`) and imports **`hi_net_dev_probe`, `hi_net_dev_open`, `hi_net_dev_close`, `hi_net_dev_remove`, `hi_net_dev_xmit`** plus the netdev/phylink allocators (`alloc_etherdev_mqs`, `register_netdev`, `free_netdev`, `phylink_*`): `hi_mac_probe` allocates/registers the per-port netdev and phylink, then calls `hi_net_dev_probe(dev, &desc8)` ([V] symbol table; [PIE-DATAPATH.md](PIE-DATAPATH.md) section 2.1). It imports **no** `dma_*` or `napi_*` — it owns the netdev, not a ring. |
 | `hi_mac_net_xmit+0x0` disassembly (`arm-none-linux-gnueabihf-objdump`): `add r1, r1, #0x5a0; add r1, r1, #8; b hi_net_dev_xmit` with `R_ARM_JUMP24 hi_net_dev_xmit` — the MAC `ndo_start_xmit` computes `netdev_priv = dev + 0x5a8` and tail-calls the **PIE** helper. [V] |
 | `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_kpie.ko` (68,524 B, `depends: ksecurec,hi_basic`) defines `hi_net_dev_probe/open/close/remove/xmit`, `hi_net_rx_proc`, `g_api_priv`, `g_rx_queue`, and the ring/NAPI/DMA implementation: `hi_pie_drv_rx_init/rx_kick/rx_recv/rx_poll`, `hi_pie_drv_tx_init`, `hi_pie_drv_xmit`, `hi_pie_tx_send`, `hi_pie_tx_set_desc/get_desc/get_rptr/set_wptr`, `hi_pie_rx_set_addr/set_owner/set_wptr/get_rptr`, plus `hi_net_tx_hook/rx_hook` and `hi_net_woc_*`. It imports `alloc_netdev_mqs`, `ether_setup`, `netif_napi_add`, `napi_enable`, `dma_alloc_attrs`, `dma_map_page_attrs`. [V] |
 | The vendor init script `parent:rootfs-2.4.15/etc/rc.d/luofu` loads `hi_kpie` (and pins four PIE IRQs, `pie-ch0..ch3`, affinity 1/2/1/2) **before** `hi_lsw_*` and **before** `hi_kmdio`/`hi_kphy`/`hi_kmac`; the load order is also recorded in [VENDOR-STACK-ON-MAINLINE.md](VENDOR-STACK-ON-MAINLINE.md) "The load order". [V] |
@@ -98,8 +98,12 @@ the path". That assumption is **not supported** by the vendor modules. [V]
 
 `GEMAC port (phylink MAC, config only) <-> internal LSW (forwarding/queues) <-> PIE (packet engine, rings/DMA/NAPI) <-> netdev`
 
-with the netdev lifecycle and TX/RX rings owned by **`hi_kpie`**, not by the MAC. The MAC driver
-configures the port and the PHY link; it carries no descriptor ring of its own.
+with the per-port netdev and phylink owned by the **MAC** and the rings/DMA/NAPI owned by
+**`hi_kpie`** (the MAC registers the netdev and tail-calls the PIE xmit helper; it carries no
+descriptor ring of its own). The full evidence-graded specification of the PIE half - window and
+variant, register model, ring/descriptor geometry, channel/IRQ model, TX/RX flows, egress
+qid/port mapping, DMA/ACP, staging plan - is [PIE-DATAPATH.md](PIE-DATAPATH.md) (2026-11-18,
+743 lines), which also corrects this table's earlier "MAC cannot own a netdev" wording.
 
 ### 1.2 What this changes
 
@@ -698,6 +702,10 @@ different engine with different descriptors (section 1.2). [V]
 
 ### 6.3 Port plan
 
+The detailed PIE register/ring/descriptor/channel/egress specification and the staged
+implementation plan are in [PIE-DATAPATH.md](PIE-DATAPATH.md) (2026-11-18); this section keeps
+the summary view and the dependency/effort framing.
+
 **Design fork to settle first (host-only):**
 
 - **Option E1 (vendor shape): a packet-engine driver (PIE) owns the netdevs/NAPI/DMA and exposes a
@@ -901,7 +909,7 @@ subject to review; its [V] rows are the only ones that may be quoted without the
 | --- | --- | --- | --- | --- | --- |
 | **pinctrl** | [V] DT windows `0x14900100/0x14940000`; 37 pins/24 groups/24 functions/per-pin mux data transcribed (`../lab/luofu-pinctrl/`); 8 vendor state nodes; `hi_kpinctrl.ko` 17,636 B; load-bearing (ledger 2026-11-15 01:30); `mdio1_grp`/`rgmii0_grp` in the table | [U] pinconf field semantics; probe/default pin state; MDIO state-switch question; reset (none in vendor node); binding | mainline pinctrl driver + YAML; reproduce vendor initial state; consumer states (MDIO/GEMAC); 2-3 host + 1-2 bench | CRG only indirectly (no reset cell today); consumers MDIO `007` / GEMAC `009` | **Yes** except validation |
 | **thermal** | [V] sensor node `0x14900500` (hwver 3), conversion formula verified; trips 115000 passive / 125000 critical (hysteresis 3000), poll 1000 ms, sustainable-power 2000; `hi_tvsensor` 60 syms (v1/v4); net-cooling device `hsan,net-cdev` (CAR on eth0-4) | [U] threshold/int/enable/trim registers; trip policy vs our cooling; window size; IRQ use | mainline thermal sensor + of-thermal zone; v1 no cooling map; 1-2 host + 1 bench | none hard; optional cooling device -> LSW CAR (block D) | **Yes** except validation |
-| **PCIe host** | [V] two DWC RCs, window table dbi/misc/cfg/mem/io CAs, `iatu_rc` 3 viewports/RC, 4 CRG resets + gate clocks, radm/linkdown IRQs; measured DBI/cfg values incl. both endpoints `59e7:0005`; misc write-only/never read, aligned-dword rule; vendor `hi_pcie` uses `devm_pci_alloc_host_bridge`/`pci_scan_root_bus_bridge`; endpoint power GPIOs from overlay; endpoint driver `hi5622v100_plat`+wifi [X] | [U] real host driver (iATU/ranges, LTSSM, cfg accessor, IRQs), write-path validation, ACP/coherency, L1SS pinmux, endpoint binding shape; Wi-Fi [X] | DWC host driver (`pcie-luofu`), `ranges` from `iatu_rc`, binding; enumeration milestone; 6-10 host + 2-3 bench | CRG `004`; restart contract; ACP question; no FMC/MDIO dependency | **Yes** for code/compile; enumeration bench-only |
+| **PCIe host** | [V] two DWC RCs, window table dbi/misc/cfg/mem/io CAs, `iatu_rc` 3 viewports/RC, 4 CRG resets + gate clocks, radm/linkdown IRQs; measured DBI/cfg values incl. both endpoints `59e7:0005`; misc write-only/never read, aligned-dword rule; vendor `hi_pcie` uses `devm_pci_alloc_host_bridge`/`pci_scan_root_bus_bridge`; endpoint power GPIOs from overlay; endpoint driver `hi5622v100_plat`+wifi [X] | [U] enumeration/write-path validation, ACP/coherency, L1SS pinmux, endpoint binding shape; Wi-Fi [X]. **Draft host driver written 2026-11-18 as patch `013`** (resets/RC mode/`ranges`/iATU/link handling/`pci_host_probe`, hard rules encoded; endpoint nodes disabled); **reset polarity fixed by patch `014`** | DWC host driver (`pcie-luofu`), `ranges` from `iatu_rc`, binding; enumeration milestone; 6-10 host + 2-3 bench | CRG `004`+`014`; restart contract; ACP question; no FMC/MDIO dependency | **Yes** for code/compile; enumeration bench-only |
 | **LSW switch** | [V] DT windows dp(7)+pfe(10)+woe(5 IRQs), `port_bitmap`, resets/clocks; modules `hi_lsw_pub/dp/pfe`, `hi_swa` (switchdev events + rootif), `hi_kcfe_*`, `hi_khslink`; load order; board map WAN=eth3, LAN=eth0-2; **no source in either tree**, BSP is blobs | [U] every register/table semantic; port model; queue window base; qid/port map; rootif/CFE contract; switchdev object details | **switchdev** (recommended) two-phase: D1 minimal forwarding, D2 offload; 15-25 host + 4-8 bench (D2 +10-15) | PIE/GEMAC block E; CRG `004`; MDIO/PHY/GEMAC `007`-`009`; optional Wi-Fi [X] | **Yes** for RE/design/code; **no** for any hardware validation |
 | **GEMAC data path (PIE)** | [V] patch `009` refuses probe (no ring code); MAC phylink/config facts + PORT_MODE `0x010c0008`; **data path is PIE** (`hi_kpie` owns netdev/NAPI/DMA; `hi_mac_net_xmit` tail-calls `hi_net_dev_xmit`; 4 channels/IRQs, pie DT rings, `dma-coherent`, ACP words); 403-symbol module is the RE source | [U] PIE descriptor/ring register model; qid/port egress mapping; DMA coherency/ACP; ring-size semantics; netdev ownership design | write the PIE spec from `hi_kpie` RE, then ring+NAPI driver, then GEMAC netdev wiring + minimal LSW; 8-15 host + 3-5 bench | patch `009` + `007` + `008` + `004`; LSW D1 for egress; ACP; restart | **Yes** for RE/code; traffic bench-only |
 

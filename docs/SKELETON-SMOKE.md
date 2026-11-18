@@ -1854,3 +1854,61 @@ placeholder zone cls0 became cls0-thermal (a pre-existing dt-validate error is g
 Not proven: threshold/enable/trim/IRQ register model is [U] and deliberately not implemented;
 the reg width and the trip policy are [I]/vendor policy rather than our measurement; no clock or
 reset is modelled; hardware behaviour is unverified - no boot/image/bench claim.
+
+
+## 2026-11-18 (tenth session): DWC PCIe host controller (patch 013)
+
+Patch 013-arm-pci-luofu-host.patch (sha256
+73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202) adds
+drivers/pci/controller/dwc/pcie-luofu.c (467 lines, DWC host glue: the CRG clock plus the four
+named apb/pcs/phy/ctrl resets through the reset API, the write-only misc RC-mode/iATU-enable/
+LTSSM-enable full-word stores, aligned-dword read_dbi/write_dbi, a config-window pci_ops using
+pci_generic_config_read32/write32, CFG0 iATU viewport programming, mem/IO iATU viewports derived
+from the DT ranges through the framework, link wait/report and pci_host_probe), the Kconfig/
+Makefile CONFIG_PCIE_LUOFU_HOST entry and Documentation/devicetree/bindings/pci/
+hisilicon,luofu-pcie.yaml (built on pci-host-bridge.yaml). The shared DTS edits rewrite both PCIe
+nodes (reg-names dbi/misc/config, corrected ranges, pcie clock, the four resets, num-lanes=1 and
+documented-but-disabled pci59e7,0005 endpoint children); the RC nodes stay disabled because the
+write path is unmeasured and the Wi-Fi endpoint driver is [X].
+
+Design rules encoded: never read the RC misc window 0x10161000 (write-only stores only), only
+4-byte-aligned dword MMIO accesses, no forbidden CA writes; the iATU tables are driver data, not
+vendor DT props.
+
+Validated in the isolated clone /home/shibbityshwab/openwrt-lab-pcie (series 001-013): pristine
+dry-run RC=0; prepare RC=0; full compile RC=0 in 1m56s with 0 warnings and CONFIG_WERROR=y;
+zImage 3,262,016 B sha256 392d5861...; driver built-in (luofu_pcie_probe in System.map);
+_TEXT/TEXT_OFFSET contract unchanged; dt_binding_check RC=0; board DTS compiles RC=0 with zero
+warnings (DTB 10,133 B sha256 46fac7ad...); dt-validate RC=0 with no PCIe diagnostic; config
+canonical re-derivation byte-identical (306 symbols incl. CONFIG_PCIE_LUOFU_HOST=y); checkpatch
+0/0/0; static scans clean (no misc read, aligned readl only, no vendor-only DT props, no lab/bench
+breadcrumbs).
+
+Not proven: misc wrapper store semantics, iATU-enable/LTSSM bit interaction, CFG0 per-access
+programming, DWC version word 0x8f8, endpoint power GPIOs, radm/linkdown handling, MSI/INTx,
+dma-ranges, ACP, ASPM/L1SS. The Wi-Fi PCIe endpoint remains [X]; no boot/enumeration claim.
+
+## 2026-11-18 (cross-lane fix): CRG reset polarity (patch 014)
+
+The PCIe lane found a real defect in patch 004: the vendor CRG reset class is ACTIVE-LOW
+(hi_kreset: assert = clear the bit, deassert = set it), while patch 004 implemented the opposite.
+The measured evidence is the live census read of 0x14880034 = 0x000ff309 with both PCIe root
+complexes up: the four RC0 reset bits are SET in the released state (UPSTREAM-PORT-PLAN arm B/C;
+REMAINING-DRIVERS block C). As shipped before 014, reset_control_deassert() would have CLEARED
+those bits and driven the RC into reset.
+
+Patch 014-arm-crg-reset-polarity.patch (sha256
+739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227) swaps the two operations in
+luofu_crg_reset_set (assert clears, deassert sets), inverts luofu_crg_reset_status (asserted =
+bit clear) and documents the measured polarity in the driver comment and the CRG YAML. Every
+consumer (FMC, MDIO/GEMAC, PCIe, watchdog fallback) uses the standard reset API, so releasing a
+line now sets its bit as the hardware expects; nothing else needs to change.
+
+Validation: patch 014 applies cleanly to the 004-created files (patch -p1 dry-run and real apply
+in a scratch tree); in the combined verification tree (series 001-013 already prepared and
+compiled) the patched crg-luofu.o compiles with the tree's OpenWrt GCC 14.4.0 (driver object
+27,460 B) and the series 001-013 full compile itself was RC=0 with zero warnings (zImage
+3,262,144 B sha256 8654b99a...; all CONFIG_LUOFU_* symbols present; DTS 10,133 B zero warnings;
+0 error/warning lines in the compile log). Drive strength: the polarity fix is host-compiled
+only and has never run on hardware - the reset class is documented, not hardware-proven by this
+series.

@@ -298,9 +298,11 @@ They are not a drop-in target. The mapping is:
     ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
     └── scripts/fip-slice.py                    <- tools/fip-slice.py
 
-The blocks that still have no driver in this tree (PCIe host, internal LSW switch and the GEMAC
-data path) have an evidence-graded port plan in
-[../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md).
+The blocks that still have no driver in this tree (internal LSW switch and the GEMAC data path)
+have an evidence-graded port plan in
+[../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md); the PIE packet-engine data path
+(the GEMAC netdev's missing half) has its own register/ring/descriptor specification in
+[../docs/PIE-DATAPATH.md](../docs/PIE-DATAPATH.md).
 
 The **draft kernel patch series** (written 2026-11-18; TARGET-DESIGN.md sections 4.1, 7)
 is `patches-6.18/`:
@@ -387,14 +389,27 @@ is `patches-6.18/`:
   the vendor trips (115 C passive / 125 C critical, 3 C hysteresis, 1 s polling) and no
   cooling map; threshold/IRQ/enable/trim registers are undecoded and unwritten. YAML
   `Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml`.
+- `013` adds the DWC PCIe host controller draft: `drivers/pci/controller/dwc/pcie-luofu.c`
+  (+ YAML) programs the two root complexes from the DT `ranges`/iATU data, with clocks,
+  resets, RC mode and link handling; the hard rules are encoded (never read the misc
+  window, aligned dwords only). The Wi-Fi PCIe endpoint is [X], so the endpoint nodes are
+  documented but not enabled. YAML
+  `Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml`.
+- `014` fixes the CRG reset polarity discovered by the PCIe lane: the vendor reset class is
+  active-low (assert clears the bit, deassert sets it; measured `0x14880034 = 0x000ff309`
+  with both RCs up), so patch `004`'s original assert=set/deassert=clear was inverted.
+  Patch `014` swaps the two operations and inverts `reset_control_status`; all reset
+  consumers (FMC, MDIO/GEMAC, PCIe) now release their lines through the standard API
+  correctly. Host-compiled only.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
 
 Still missing from the submission:
 
-- the rest of the driver + dt-binding series (switch, PCIe, GEMAC data path -
-  TARGET-DESIGN.md section 7); pinctrl (`011`) and thermal (`012`) are now drafted too. The
+- the rest of the driver + dt-binding series (switch, GEMAC data path -
+  TARGET-DESIGN.md section 7); pinctrl (`011`), thermal (`012`) and the PCIe host (`013`,
+  endpoint [X]) are now drafted too. The
   CRG/WDT (`004`/`005`), FMC SPI-NAND (`006`), network trio (`007`-`009`), restart (`010`),
   pinctrl (`011`) and thermal (`012`) drafts exist with their YAMLs (the PHY driver needs
   none), but they are host-compile-validated only: no bench run, no boot, no upstream
