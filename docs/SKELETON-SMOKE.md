@@ -2533,3 +2533,40 @@ kernel has never been booted. The attended checks remaining: one boot with a rea
 probe to print `clk_summary` (CPU/LSW PLL rates, `cpu_mux`/`efuse_mux` parents, gate
 parents) and read the two control words at `0x198`/`0x1e0`; and a read-only census of
 the `0x90` status bits. No write experiment is needed for this read-only stage.
+
+---
+
+## 2026-11-18 (first-install session): stock-to-image path designed + fail-closed tooling
+
+The first-install question of TARGET-DESIGN.md §5.5 is now answered as a design, host-side
+only. The chosen path is the measured vendor-root install (option 2): from a root shell on
+the stock firmware, write the FIP kernel slice with mtd (by label) and ubiformat the rootfs
+UBI into the inactive pair, read both regions back with full-region sha256, then hand over
+the boot selector by writing the written pair's recorded low byte (0x10 = A pair, 0x11 = B
+pair) to the SYSCTRL cell - never the env blocks, never the active pair, never
+rootfs_data/upgrade/vendor data.
+
+Deliverables (parent private repository unless noted):
+
+- [FIRST-INSTALL.md](FIRST-INSTALL.md) (this published half) - design: preconditions, exact
+  sequence, expected loader/UART output, rollback/recovery cost, risks, attended
+  checklist, [U] list;
+- parent `tools/first-install-stock.sh` - read-only by default; writes only with
+  `--write`/`--handover`/`--reboot` plus `--attended` and `--recovery-armed` and a
+  validated `--image`; drives the box through the project rsh/rscp helpers, feeds the
+  device side over ssh stdin, re-derives partitions by label, validates the container with
+  `luofu-image.py check-container` plus independent byte checks, verifies full-region
+  sha256 read-backs, moves the selector last, and prints the recovery plan on every
+  failure path;
+- parent `tools/tests/first-install.test.sh` - mocked harness (fake `/proc/mtd`,
+  `/sys`, fake mtd devices, mtd/ubiformat/sync/reboot/fw_printenv/dmesg/df shims, fake
+  rsh/rscp, synthetic container): 144/144 assertions pass.
+
+Validation was host-only: `bash -n` clean on the tool, `sh -n` clean on the embedded
+device script, the real built container (6,185,262 B sha256 `362ca4ec...`) passes the
+real `luofu-image.py check-container` in a dry run, and the harness covers pair selection
+both ways, kernel-before-rootfs write order, both full-region read-backs, every refusal
+path, read-back and bad-block aborts, env-never-written, and the reboot classification.
+Nothing was written, flashed, booted or recovered; the first attended execution, the loader
+env re-stamp, the first boot of the written pair and the recovery cost of a
+successful-but-unwanted boot remain [U] (FIRST-INSTALL.md sections 8-11).

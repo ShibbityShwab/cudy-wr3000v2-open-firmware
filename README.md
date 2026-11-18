@@ -14,8 +14,11 @@
 > remaining-block plans are [`docs/REMAINING-DRIVERS.md`](docs/REMAINING-DRIVERS.md),
 > [`docs/LSW-SPEC.md`](docs/LSW-SPEC.md), [`docs/PIE-DATAPATH.md`](docs/PIE-DATAPATH.md) and
 > [`docs/MISC-SOC-BLOCKS.md`](docs/MISC-SOC-BLOCKS.md), the A/B selector contract is reconstructed
-> in [`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md), and the GPL request record (kept for
-> provenance; not a project gate) is [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md).
+> in [`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md), the GPL request record (kept for
+> provenance; not a project gate) is [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the
+> first-install path from stock firmware to a generated image is designed host-side in
+> [`docs/FIRST-INSTALL.md`](docs/FIRST-INSTALL.md) (fail-closed tooling; never executed on
+> hardware).
 >
 > The first-pass files are in [`target-skeleton/`](target-skeleton/README.md) (status
 > UNTESTED/SCHEMATIC), indexed by [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target

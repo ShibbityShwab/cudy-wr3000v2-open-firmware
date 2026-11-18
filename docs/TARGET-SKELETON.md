@@ -79,7 +79,8 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 **What is still [U]/TODO** (full list in TARGET-DESIGN.md section 12 and the skeleton README):
 one attended boot of a generated trailer; the sysupgrade container/install path
 (host-side A/B write path implemented in `platform.sh` + patch `017`, never run on
-hardware) and the selector protocol (recorded A/B values measured; the env re-stamp, the cell's
+hardware; the stock-to-image first-install path is designed and tooled host-side in
+[FIRST-INSTALL.md](FIRST-INSTALL.md), also never executed) and the selector protocol (recorded A/B values measured; the env re-stamp, the cell's
 upper 24 bits and one attended A/B validation still owed; the boot-time recorder now exists
 host-side but has never run); a bench-verified reset path (the
 patch-`010` CRG command pair is PROVISIONAL); MAC/efuse source; switch DSA-vs-switchdev; the
@@ -91,4 +92,6 @@ purge pending, [PUBLISH-READINESS.md](PUBLISH-READINESS.md)). The skeleton conta
 binaries, blobs, dumps or credentials.
 
 **Reading order:** [TARGET-DESIGN.md](TARGET-DESIGN.md) -> [ROADMAP-OPENWRT.md](ROADMAP-OPENWRT.md)
--> [SKELETON-SMOKE.md](SKELETON-SMOKE.md) & the trailer doc -> [`../target-skeleton/README.md`](../target-skeleton/README.md).
+-> [SKELETON-SMOKE.md](SKELETON-SMOKE.md) & the trailer doc ->
+[FIRST-INSTALL.md](FIRST-INSTALL.md) (stock-to-image first-install design) ->
+[`../target-skeleton/README.md`](../target-skeleton/README.md).

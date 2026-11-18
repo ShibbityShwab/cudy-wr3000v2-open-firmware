@@ -115,6 +115,16 @@
 > the CPU mux can never be switched (it selects the CPU clock source). The series
 > (001-019) applies/prepares/compiles host-side; **nothing has booted**.
 >
+> **2026-11-18 (first-install session): the stock-to-image install path is DESIGNED and
+> host-side tooling exists.** The parent (private) repository gains
+> `tools/first-install-stock.sh` (read-only by default; writes only with explicit
+> attended + recovery-armed flags; writes only the inactive pair by mtd label /
+> ubiformat; full-region read-backs; selector handover last; never env/active/rootfs_data)
+> and `tools/tests/first-install.test.sh` (144 mocked assertions passing). The design,
+> preconditions, expected loader/UART output, rollback/recovery cost and the [U] list are
+> in [FIRST-INSTALL.md](../docs/FIRST-INSTALL.md). **Nothing has been executed on a
+> router; the first install remains an attended bench step.**
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).
@@ -772,8 +782,9 @@ Checked on the author's host on 2026-11-18, nothing more:
 **Not done, and not claimed:** the built sysupgrade container has never been
 booted or written to a device (one attended boot of a generated FIP trailer is still
 required), the A/B install path has never run on hardware (implemented host-side and
-mocked-tested only; one attended A/B validation is owed), no first-install/factory
-path exists, no device interaction, no UART, no bench tool run, and no network data
+mocked-tested only; one attended A/B validation is owed), the first-install path is
+designed host-side with fail-closed tooling and mocked tests but has never run, no device
+interaction, no UART, no bench tool run, and no network data
 path (the GEMAC driver is a resource/binding half only and its DTS nodes are
 disabled). The image is a host build product with a real OpenWrt rootfs,
 not a release. The four driver bindings (CRG, watchdog, MDIO, GEMAC) pass
@@ -921,5 +932,7 @@ Skeleton-specific findings recorded while writing the files:
 3. [TARGET-SKELETON.md](../docs/TARGET-SKELETON.md) - short index of this directory.
 4. `docs/phase42-decode/report.md` - the loader gate decode.
 5. `docs/soc/vendor-dt-notes.md` - the vendor DT read (partitions, overlays, compatibles).
-6. `docs/FLASH-PLAN.md` - measured slot switch / UBI geometry.
-7. [PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md) - why this half is not public yet.
+6. [FIRST-INSTALL.md](../docs/FIRST-INSTALL.md) - the stock-to-image first-install design,
+   tooling, risks and the [U] list.
+7. `docs/FLASH-PLAN.md` - measured slot switch / UBI geometry.
+8. [PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md) - why this half is not public yet.

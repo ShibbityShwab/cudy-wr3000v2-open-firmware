@@ -488,8 +488,16 @@ The device page must not be written, and the target must not claim installabilit
 these is executed end to end on a recovered unit.
 
 **Status (2026-11-18)**: the *upgrade* half of the A/B path is now implemented
-host-side (§5.4) but the *first-install/factory* question above is still open;
-nothing has been flashed.
+host-side (§5.4) and the *first-install* path is now **designed and implemented
+host-side** as option 2: [FIRST-INSTALL.md](FIRST-INSTALL.md) is the design and the
+parent (private) repository carries a fail-closed, read-only-by-default installer tool
+plus a mocked test harness. It writes only the inactive pair (kernel by mtd label,
+rootfs by ubiformat), verifies both regions with full-region sha256 read-backs, and
+performs the handover by writing the written pair's measured record value into the
+SYSCTRL cell; it never writes the env blocks, the active pair, rootfs_data or the vendor
+data partitions. It has **never run on hardware**: the first attended execution, the
+loader env re-stamp, the first boot of the written pair and the recovery cost of a
+successful-but-unwanted boot are all still [U] (FIRST-INSTALL.md sections 8-11).
 
 ### 5.6 Boot arguments
 
@@ -678,7 +686,9 @@ Do not present the bench wifidrv/takeover line as an upstream driver. [V] `PORT-
 - The trailer is currently copied from a vendor-derived local artifact and **cannot be regenerated
   from published material yet**; §5.2 is the plan to close that. [V] `PUBLISH-READINESS.md`
   checklist item "Reproducible artifact"; ledger 2026-11-17 00:20.
-- Install path (§5.5) is open; no device page can be written before it is executed.
+- Install path (§5.5): a host-side design and fail-closed tool now exist
+  ([FIRST-INSTALL.md](FIRST-INSTALL.md)), but the path is **unexecuted**; no device page
+  can be written before one attended end-to-end install on a recovered unit.
 
 ### 8.5 Environment/selector and SMP
 
@@ -829,8 +839,15 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
    region, and why the bench artifact was cut to 40,732 B. (§3.2, §5.2)
 2. **Boot arguments** - how `root=`/`ubi.*` reaches the kernel; whether the loader overrides
    `/chosen/bootargs` from its environment. (§5.6)
-3. **Install path** - characterization of the stock TFTP recovery write path vs the documented
-   vendor-root install. (§5.5)
+3. **Install path** - DESIGNED AND IMPLEMENTED HOST-SIDE 2026-11-18: the documented
+   vendor-root install (option 2) is encoded in the parent tool
+   tools/first-install-stock.sh, with design, preconditions, expected UART/loader
+   output, rollback/recovery cost and the [U] list in
+   [FIRST-INSTALL.md](FIRST-INSTALL.md). The tool is read-only by default, refuses
+   without the attended/recovery flags, writes only the inactive pair and never the env,
+   and its mocked tests pass 144/144. Still [U]: one attended end-to-end execution
+   (write -> handover -> first boot), the loader env re-stamp, the recovery cost after a
+   successful boot, and the stock TFTP recovery write path (§5.5).
 4. **Selector protocol** - exact env-block/bootreg write sequence and value for both pairs; a
    read path usable from Linux. Patch `010` only writes back the value it has just read
    (a write-same), so the protocol itself is still open. (§3.4)
