@@ -4,6 +4,13 @@
 the plans below has run on hardware. It is a new document; it edits no shared file. The files that
 would need a one-line update *if* these plans are accepted are listed in section 13.
 
+**Measured update 2026-11-18 (task-45, read-only):** the attended readback this document asked for
+in 5.5 has been taken on one stock vendor boot: the CRG gate/reset/mux/PLL words, the live
+`clk_summary` rates and the three SYSCTRL cells are now [V] (section 5.6, 6.3;
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) sections 4-5). The PLL recalc equation is
+validated by the measured CPU rate; the PLL2 post-divider mapping, the corrector-rate delta and
+all write paths remain open. No register write was made.
+
 This is the companion to [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) (blocks A-E: pinctrl,
 thermal, PCIe, LSW, GEMAC/PIE). It covers the blocks that page deliberately left as "decide per
 block" (TARGET-DESIGN section 7.1, last rows) and that [TARGET-DESIGN.md](TARGET-DESIGN.md) open
@@ -677,7 +684,7 @@ the reference transcription for the in-tree driver. [V]
 | `lsw_dp_clk` | 166 MHz | `lsw_dp_clk` | the LSW-DP gate |
 | `lsw_pfe_clk` | 333 MHz | `lsw_pfe_clk` | the LSW-PFE gate |
 | `efuse_ring_clk` | 20 MHz | `fixed_clk1` | the efuse mux input |
-| `corrector_clk` | 1 GHz | `corrector_fixed_clk` | TWD: `fixed_factor_clk` /4 = 250 MHz (`twd_clk`) |
+| `corrector_clk` | 1 GHz in the pinned DTS, but **measured 1.2 GHz** (2026-11-18, 5.6) | `corrector_fixed_clk` | TWD: `fixed_factor_clk` /4 = **measured 300 MHz** (`twd_clk`); the live rate is not the static DT value and the source of the difference is [U] |
 
 **Gate parent table** [V] (pinned DTS lines 206-365; transcribed in the lab binding note section
 "Clock gate table"): the 16 gates, their `reg-offset` (`0x14` or `0x20`), bit, and parent:
@@ -750,8 +757,11 @@ generic (non-table) path is the one that runs here. [V]
   property contributing 0. The writer (offset `0x4c4`) sets busy bit 7 of the control byte, writes the assembled word(s),
   clears bit 7 and polls the status bit; the `round_rate` non-table path treats the PLL as an
   integer multiplier of the reference clamped to `16..3200` [V]. `mode == 1` selects a
-  7-word (28-byte) frequency-table entry path; no `freq-table` exists here. [V] Rates must be
-  confirmed by one readback; the recalc equation itself is now decoded [V], the on-board rate is not.
+  7-word (28-byte) frequency-table entry path; no `freq-table` exists here. [V] **Measured
+  2026-11-18:** the equation is now validated against the live CPU rate; the raw words and the
+  decode are in 5.6. PLL1 (CPU) reproduces 1200 MHz exactly. PLL2 decodes to a 2000 MHz raw rate
+  whose division down to the LSW 333/166/100 MHz domains is not explained by the decoded
+  divider-select fields yet - that residual stays [U] and `set_rate` stays unimplemented.
 
 ### 5.4 The gap list (what a follow-up patch must do)
 
@@ -783,8 +793,11 @@ generic (non-table) path is the one that runs here. [V]
 **Status (2026-11-18):** items 1-4 are delivered by patch `019` (fixed clocks plus
 DT-provided parents, read-only PLL/mux clock outputs, probe-free-of-writes and
 `CLK_IGNORE_UNUSED`); item 5 is applied there as well (the provisional wording is retired in
-the driver comment). The attended PLL rate/control-word readback and any write path remain
-open; see the patch header and `patches-6.18/019-arm-clk-luofu-clock-tree.patch`.
+the driver comment). **The attended PLL rate/control-word readback was taken on the stock boot on
+2026-11-18** (5.6): the equation is validated by PLL1, the on-board CPU rate is 1.2 GHz and the
+LOCK bits are set. Any PLL/mux **write path** remains open and unimplemented; the PLL2
+divider-select residual (5.6) must be settled before a `set_rate`. See the patch header and
+`patches-6.18/019-arm-clk-luofu-clock-tree.patch`.
 
 ### 5.5 Dependencies, risks, offline-vs-attended, effort
 
@@ -798,12 +811,58 @@ open; see the patch header and `patches-6.18/019-arm-clk-luofu-clock-tree.patch`
   (harmless for gates with no consumers, but a port must verify `is_enabled` against the vendor
   value in a boot log or a bench read).
 - Offline: everything except the rate readback - fixed clocks, per-gate parents, PLL/mux read-only
-  clocks, YAML/`dt_binding_check`, compile. Attended: one boot (any kernel with the new
-  driver, or the vendor kernel with a read-only tool) to print `clk_summary` and the two
-  control words, confirming the parent selection and the PLL equation. No write experiment is
-  needed for the read-only stage.
+  clocks, YAML/`dt_binding_check`, compile. Attended: **DONE 2026-11-18** - one read-only stock
+  boot printed `clk_summary` and both PLL control-word pairs, confirming the parent selection
+  and the PLL1 equation (5.6). No write experiment was performed; a write path (and the PLL2
+  divider question) remains attended work.
 - Effort: **M** for fixed clocks + per-gate parents (host-only, low risk); **L** for the PLL/mux
   rate model plus an attended readback (the equation is the risky part).
+
+### 5.6 Measured CRG/PLL/clock state on the stock vendor boot (2026-11-18) [V]
+
+Read-only inventory of the running vendor system (one boot; each word identical in two passes;
+evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` plus its `followup/clk_summary.txt`;
+analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 4). No write was made.
+
+| offset | value | reading |
+| --- | --- | --- |
+| `0x14` | `0x01360ef1` | gate word 0x14: bit0 (sfc_clk) set, bit14 (led_pwm) clear - matches the live consumers; other set bits are outside the cross-checkable gate nodes, [U] |
+| `0x20` | `0x02f8300b` | gate word 0x20: bits 0/1/3/12/13/19-23/25 = lsw_dp, lsw_pfe, mdio, pcie0/1, gemac0-4, pie gates all left enabled |
+| `0x2c` | `0x0d300e01` | reset word, raw |
+| `0x30` | `0xfe7fe05b` | reset word: bits 0/1 (dp_logic/dp_srst), 3/4 (pfe_logic/pfe_srst), 25 (PIE reset 0x19) set = blocks out of reset |
+| `0x34` | `0x000ff309` | reset word: bits 16-19 (PCIe RC resets 0x10-0x13) set = both RCs out of reset |
+| `0x38` | `0x00200000` | resume word: CPU resume bits 0x16/0x18/0x17/0x19 all clear on the running 2-CPU boot [I consistent with release]; bit21 [U] |
+| `0x90` | `0x6a010008` | PLL status: bits 30 (CPU PLL) and 27 (LSW PLL) set = both locked (mask check pass) |
+| `0x100` | `0x00000000` | watchdog ISTATUS, healthy |
+| `0x138` | `0x00018042` | mux word: bit1 = efuse mux source (osc), bit3 = CPU mux source (CPU PLL, 0 -> cpu_pll) - matches CPU 1.2 GHz / efuse 20 MHz; bits 6/15/16 [U] |
+| `0x198` / `0x19c` | `0x8103c11c` / `0x11000000` | PLL1 control words |
+| `0x1e0` / `0x1e4` | `0x81064548` / `0x11000000` | PLL2 control words |
+
+**Live clk tree (debugfs `clk_summary`) measured [V]:** osc 20 MHz; corrector_clk **1.2 GHz**
+(enable 1) with fixed_factor_clk **300 MHz**; efuse_ring_clk/efuse-clk-mux 20 MHz (0 users);
+lsw-clk 100 MHz (0); cpu-clk and cpu-clk-mux 1.2 GHz (0); lsw_pfe_clk/lsw_pfe_clk0 333 MHz
+(1/1); lsw_dp_clk/lsw_dp_clk0 166 MHz (1/1); gemacN_clk 125 MHz (5 users: mdio_clk0,
+gemac_clk1-4; gemac_clk0 gate is enabled in the bitmap but has no consumer); ahb_clk/pie_clk0
+200 MHz (1/1); apb_clk 100 MHz (9 users). The fixed inputs and per-gate parents of 5.2 are
+confirmed for every gate with a consumer. The 1.2 GHz/300 MHz corrector values differ from the
+pinned DTS's 1 GHz fixed clock - the vendor corrector path is not the static DT value here, and
+the reason stays [U]; do not change our DTS fixed-clock from this single sample.
+
+**PLL decode against the measured CPU rate [V]/[U]:** with the equation of 5.3,
+
+- **PLL1:** int=60, frac=0, fbdiv=1, byte0=0x1c (integer-only bit set; divider-select 1/1) ->
+  20 MHz * 60 / 1 = **1200 MHz**, exactly the measured `cpu-clk` 1.2 GHz. The recalc equation is
+  **validated by measurement** [V].
+- **PLL2:** int=100, frac=0, fbdiv=1, byte0=0x48 (integer-only set; divider-select fields 4 and
+  5) -> raw **2000 MHz**, while the LSW domains run at 333/166/100 MHz. Recorded arithmetic: a
+  single /4 gives 500 MHz (not observed); 4*5=20 gives exactly 100 MHz (matches `lsw-clk`);
+  2000/6 and 2000/12 give the 333/166 MHz PFE/DP rates, but 6 and 12 are not the decoded
+  divider-select fields. **How PLL2 reaches the LSW rates is therefore still [U]**; it may
+  involve an undecoded intermediate/post divider or the downstream LSW clock cells. `set_rate`
+  must not be implemented from this sample; a future run should also read the CRG divider/mux
+  cells downstream of the PLLs.
+
+---
 
 ## 6. Block K - SYSCTRL / SYSENV: the boot selector and the other cells
 
@@ -874,10 +933,10 @@ SYSCTRL/rstinfo nodes, which is what patch `010` is reconstructing. [V]
 
 | cell | address | evidence | state |
 | --- | --- | --- | --- |
-| SMP release word | `0x10100c00` | DT `smp-offset = <0xc00>` on `hsan,sysctrl` (pinned DTS line 1430) | **[U]** semantics; the vendor SMP enable-method is `hisilicon,hsan_smp` (the `cpus` node) and the built-in machine strings include `hisilicon,hsan_smp`; the SMP lane owns this |
-| boot selector | `0x10100c08` | DT `bootreg-offset` on `hsan,sysenv` (line 1418); SELECTOR-0x21 | [V] values 0x00/0x10/0x11 (+ bench 0x21); patch `017` owns it |
+| SMP release word | `0x10100c00` | DT `smp-offset = <0xc00>` on `hsan,sysctrl` (pinned DTS line 1430) | **Measured 2026-11-18 [V]: `0x80609680`** on the stock 2-CPU boot, identical to the SMP-RE decoded `__pa_symbol(secondary_startup)` - the release target is confirmed. Physical consumer/semantics still [U] and the write belongs to the SMP lane ([SMP-RE.md](SMP-RE.md) 3.4) |
+| boot selector | `0x10100c08` | DT `bootreg-offset` on `hsan,sysenv` (line 1418); SELECTOR-0x21 | [V] values 0x00/0x10/0x11 (+ bench 0x21); patch `017` owns it. **Measured 2026-11-18: the full cell is `0x00000010`** - low byte 0x10 (pair A) and the upper 24 bits are zero, closing the upper-bits [U] for this boot |
 | board-id word | unknown offset (property absent) | `board_id-offset` read by `hi_ksysenv` but **not present in this board's base DTB** | **[U]** offset and contents; the two bit fields the driver decodes are [V] but unreachable on this unit |
-| reset record | `0x10100c10` | `rstinfo` node `record_addr = <0x10100c10>` (pinned DTS line 1404) | **[U]** layout/writer; the vendor machine code reads it; do not model |
+| reset record | `0x10100c10` | `rstinfo` node `record_addr = <0x10100c10>` (pinned DTS line 1404) | **Measured 2026-11-18 [V]: `0x82000000`** (first live baseline); layout/writer still **[U]** - the vendor machine code reads it; do not model |
 | lab bench crumbs | `0x10100c18` (inert) and the `0x10100c94` word the fire recipe writes | lab machine source `parent:tools/lab-src/arch/arm/mach-luofu/luofu.c` line 30; FLASH-PLAN slot recipe; SELECTOR-0x21 section 5.4 | **bench-only, never model in a target**; `0xc94` meaning is [U] |
 
 The three nodes' DT properties are also a warning list: `hsan,crg` carries `core-info =
@@ -1025,8 +1084,8 @@ first upstream submission except the MAC wiring and (optionally) the CRG parents
 | **H. RNG** | node has no resources; module wraps software `jitterentropy_rng` as hwrng (quality 512); `urngd` also runs | nothing to port - no hardware block exists locally | none (use mainline `jitterentropy_rng` / `urngd`) | none | - | none | **drop** |
 | **I. LED PWM** | node + registers + clock gate + reset + pin functions; no driver in either rootfs or the vmlinux; no consumer; overlaps pinctrl window | driver, semantics, consumer | PWM chip + `leds-pwm` | pinctrl page sharing | - | L | **out of scope** |
 | **I. PMU PWM** | single register, clock `osc`, one channel, `vdd_logic` pwm-regulator consumer, `avs` pin function; probe/apply model | field arithmetic; real hwver; safety envelope | PWM + standard `pwm-regulator` | pinctrl `avs`; cpufreq/OPP if used | offline / power-rail attended | M | **later (order 6)** |
-| **J. CRG** | all fixed clocks, per-gate parents, PLL nodes (ctrl/status), mux nodes, vendor register model | in-tree parent table; fixed clocks in DTS; PLL equation; mux write policy | common clock framework (extend patch `004`) | efuse mux; GEMAC/LSW clocks | mostly offline; readback attended | M (parents) / L (PLL) | **do parents (order 2)**, PLL read-only (order 5) |
-| **K. SYSCTRL/SYSENV** | syscon + selector ABI (patches `010`/`017`); vendor sysenv driver decoded; cell census | `0xc00`/`0xc0c`/`0xc10` semantics; `board_id-offset` absent on this board | keep sysfs selector ABI; optional read-only nvmem child | patch `010`/`017`; SMP lane | offline; no attended work yet | S | **document/defer (order 3)** |
+| **J. CRG** | all fixed clocks, per-gate parents, PLL nodes (ctrl/status), mux nodes, vendor register model; **measured 2026-11-18: gate/reset/mux/PLL raw words + live clk tree rates** (5.6) | in-tree parent table; fixed clocks in DTS; PLL equation **validated by PLL1**; PLL2 divider-select mapping and mux write policy [U] | common clock framework (extend patch `004`) | efuse mux; GEMAC/LSW clocks | mostly offline; readback **done** 2026-11-18; writes remain | M (parents) / L (PLL) | **do parents (order 2)**, PLL read-only (order 5) |
+| **K. SYSCTRL/SYSENV** | syscon + selector ABI (patches `010`/`017`); vendor sysenv driver decoded; cell census; **measured 2026-11-18: `0xc00=0x80609680`, `0xc08=0x10` (upper 24 bits zero), `0xc10=0x82000000`** | `0xc00`/`0xc10` physical semantics; `board_id-offset` absent on this board | keep sysfs selector ABI; optional read-only nvmem child | patch `010`/`017`; SMP lane | offline; read-only baseline **done** 2026-11-18 | S | **document/defer (order 3)** |
 
 ## 12. Evidence map (claim -> artifact)
 
@@ -1045,9 +1104,11 @@ first upstream submission except the MAC wiring and (optionally) the CRG parents
 | LED PWM dead | census: no `.ko` in `parent:rootfs-2.4.15/lib/hisilicon/ko` or the 2.5.24 tree matches `ledpwm`/`steptable`; zero `ledpwm` strings in the extracted vmlinux; board overlay has `gpio-leds` only; pinctrl window overlap vs pinned DTS line 1060 and patch `011` |
 | PMU PWM = `vdd_logic` regulator | pinned DTS `pwm@1` (1361-1369), `reg@0` (1370-1381), `avs` pinmux (367-370); `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_kpmupwm.ko` (md5 `f739c6de...`) probe/apply; `parent:rootfs-2.4.15/etc/rc.d/luofu` lines 14-22; pwm-regulator binding `parent:build/linux-kbuild/linux-5.10.201/Documentation/devicetree/bindings/regulator/pwm-regulator.txt` |
 | CRG parents/PLL/mux model | vendor DT (pinned 201-411, 467-482); patch `0004` header (all gates on APB); `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_clk.ko` (md5 `3b331b90...`) gate/mux/PLL functions and property strings; lab transcription [../lab/luofu-clk/bindings/hisilicon,luofu-crg.md](../lab/luofu-clk/bindings/hisilicon,luofu-crg.md) |
+| CRG measured gate/reset/mux/PLL words + live clk tree (2026-11-18, stock boot) | `parent:build/bench-inventory/20261118T130512Z-inv1-run/inventory.json` entries group `crg`; `followup/clk_summary.txt`; analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 4 |
 | `0x20`-group gate offsets are real | raw DTB decode (sha256 `947ec62d...`): explicit `reg-offset = <0x20>` on every `clk_gate@0020NN` node; resolves the PROVISIONAL note in patch `004` |
 | efuse mux is written by the efuse driver | `hi_efuse.ko` imports `clk_set_parent` and calls it at write start (`hi_efuse_write` 0x56c); `hi_clk.ko` `hi_clk_mux_set_parent` 0x80 writes `0x138` |
 | SYSCTRL/SYSENV cells | patches `010`/`017`; [SELECTOR-0x21.md](SELECTOR-0x21.md) sections 1, 5.2; `parent:rootfs-2.4.15/lib/hisilicon/ko/hi_ksysenv.ko` (md5 `e325b525...`) probe/show/store offsets; `hi_sysctrl.ko` (md5 `8356e81d...`) exports |
+| SYSCTRL measured cells (2026-11-18, stock boot; same boot + crosscheck vs sysfs) | `parent:build/bench-inventory/20261118T130512Z-inv1-run/inventory.json` entries group `sysctrl` + `crosschecks`; analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 5 |
 | vendor machine restart/`rstinfo` strings | extracted vendor vmlinux strings at file offsets `0x903e08`-`0x9041c4` (`System Reboot(%s)`, `hsan,crg`, `core-info`, `softrst_val0/1`, `hsan,sysctrl`, `hsan,rstinfo`, `record_addr`, `hisilicon,hsan_smp`) |
 | GEMAC patch has no MAC setter | [`0009-net-gmac-luofu.patch`](../upstream/series-6.18/series/0009-net-gmac-luofu.patch): 0 occurrences of `ndo_set_mac_address` |
 | nvmem MAC path exists in the 5.10 tree | `parent:build/linux-kbuild/linux-5.10.201/drivers/of/of_net.c` 57-79, 103-120; `net/ethernet/eth.c` 534-560 |
@@ -1134,6 +1195,15 @@ Other local artifacts cited:
 | `0x14900800` | PMU PWM (one 32-bit word) | see section 4.2 |
 | `0x14948000` | efuse data window (256 B) | read-only in a port |
 | `0x10100c00`/`0xc08`/`0xc10` | SYSCTRL: SMP release / boot selector / reset record | selector via patch `017`; others [U] |
+
+**Measured 2026-11-18 [V] (one stock boot, read-only; full analysis
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) sections 4-5):** CRG `0x14=0x01360ef1`,
+`0x20=0x02f8300b`, `0x2c=0x0d300e01`, `0x30=0xfe7fe05b`, `0x34=0x000ff309`,
+`0x38=0x00200000`, `0x90=0x6a010008`, `0x100=0`, `0x138=0x00018042`,
+PLL1 `0x198/0x19c = 0x8103c11c/0x11000000`, PLL2 `0x1e0/0x1e4 = 0x81064548/0x11000000`;
+SYSCTRL `0xc00=0x80609680`, `0xc08=0x00000010`, `0xc10=0x82000000`. The PLL1 equation is
+validated by the measured 1.2 GHz CPU rate; PLL2's division to the 333/166/100 MHz LSW domains
+remains [U]. These are the vendor system's post-boot values, not a write recipe.
 
 ## Appendix D - how each [V] check was made (reproducible host-only procedure)
 

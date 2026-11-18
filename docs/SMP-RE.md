@@ -1,6 +1,11 @@
 # SMP-RE: the vendor enable-method "hisilicon,hsan_smp" - decode, design and staged plan
 
-Status: **2026-11-18, host-only research + draft code. No device, no boot, no bench.**
+Status: **2026-11-18, host-only research + draft code. No boot of our kernel, no SMP
+release attempted.** A read-only inventory of the stock vendor boot on the same day did read the
+live SYSCTRL pen word back (0x10100c00 = 0x80609680) and the live `/proc/cmdline`; those two
+measured data points are recorded in sections 2, 3.4/3.5 and 10, and in
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 5. They confirm the decode; they do not
+run anything.
 Scope: what the stock firmware private SMP enable-method actually does, what of it can
 be recovered from local artifacts, the draft mainline-style implementation (patch
 [018]), its dependencies and risks, and the staged plan from a mergeable UP-first
@@ -53,7 +58,7 @@ slot**, plus the vendor base DTB that the stock loader hands to it:
 | other stock release | firmware/WR3000V2-R116-2.5.24-...sysupgrade.bin, uImage at 0x80e5c | vmlinux also 12,207,156 B, sha256 27eda71b... |
 | stock boot console | build/uart-logs/20261107T191003Z-poweron-uboot.log | vendor kernel, 2 CPUs (section 4.5) |
 
-Two independent verification points make this a strong basis [V]:
+Independent verification points make this a strong basis [V]:
 
 * The 2.5.24 kernel is a *different build* of the same design (same decompressed size
   and same 76,769 recovered symbols, different bytes and shifted function addresses),
@@ -61,6 +66,13 @@ Two independent verification points make this a strong basis [V]:
   one after stripping absolute branch targets. The design is not a one-off.
 * The base DTB hash matches the one an independent 2026-11-18 lane cited
   (MISC-SOC-BLOCKS.md section 12), i.e. two separate reads of the same dump agree.
+* A read-only inventory of the *running* stock vendor system on 2026-11-18 read the live
+  SYSCTRL+0xc00 pen word as **0x80609680** - exactly the value the decoded
+  `__pa_symbol(secondary_startup)` expression computes for the vendor kernel - and read the live
+  `/proc/cmdline` as `noinitrd cma=0 console=ttyS0,115200 earlycon maxcpus=2 nr_cpus=2
+  additional_cpus=1`. Both are [V] measured on that boot (evidence
+  `parent:build/bench-inventory/20261118T130512Z-inv1-run/`; analysis
+  [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 5).
 
 The vendor vmlinux is a raw (uncompressed) ARM kernel image; it has no ELF headers, so
 the analysis needed the **kallsyms table** to be recovered from the image:
@@ -199,10 +211,11 @@ Facts that matter for a port:
 * The pen value is __pa_symbol(secondary_startup), i.e. a computed physical address,
   not a magic constant. In both stock kernels it resolves to 0x80609680 because the
   vendor kernel executes at physical 0x80608000 (PHYS_OFFSET 0x80600000, TEXT_OFFSET
-  0x8000). Our own kernel reaches the same physical base through the
-  TEXT_OFFSET = 0x00608000 scheme, so the same expression should yield 0x80609680
-  there too - but this is exactly the value an attended boot must read back and
-  verify [U].
+  0x8000). **Measured 2026-11-18 [V]:** the live pen word on the stock boot is
+  0x80609680, so the decoded expression is confirmed against the running vendor kernel.
+  Our own kernel reaches the same physical base through the TEXT_OFFSET = 0x00608000 scheme, so
+  the same expression should yield 0x80609680 there too - but only our first fire can read our
+  kernel's value back and verify it [U].
 * The release is **ordered**: pen write, then resume-bit clear, then wakeup IPI.
 * Only bits 0x16/0x18 (CPU0) and 0x17/0x19 (CPU1) of the resume word are cleared; the
   rest of the word is preserved (read-modify-write, 32-bit accesses).
@@ -223,6 +236,13 @@ The stock vendor kernel really does bring up both cores on this board [V]
 That is the target state for our own kernel, and it is also the evidence that the
 sequence above is the working one and not a dead branch of the vendor machine code.
 
+The 2026-11-18 read-only inventory adds two live confirmations on the same stock boot
+(no boot of our kernel): the SYSCTRL pen word read **0x80609680** [V], and the live
+`/proc/cmdline` carries `maxcpus=2 nr_cpus=2 additional_cpus=1` [V] - the loader does pass the
+2-CPU bootargs through to the vendor kernel, and the box really is running a 2-CPU
+configuration at the time of the read. Whether our kernel receives the same bootargs from the
+stock loader is still an attended-boot question (U10).
+
 ---
 
 ## 4. Evidence ledger: [V] decoded, [I] inferred, [U] open, [X] contradicted
@@ -234,6 +254,8 @@ sequence above is the working one and not a dead branch of the vendor machine co
 | the ops table contains only smp_boot_secondary; no prepare/init/hotplug | [V] | 16-byte hsan_smp_ops with three NULL slots; no hotplug symbols in kallsyms |
 | release = pen write (SYSCTRL+0xc00) + resume-bit clear (CRG+0x38, bits 0x16/0x18/0x17/0x19) + IPI_WAKEUP | [V] | hsan_boot_secondary disassembly; vendor DT properties |
 | the pen value is __pa_symbol(secondary_startup) | [V] | instruction sequence at 0xC0755288..0xC0755298 (computed 0x80609680) |
+| the **live** pen word is 0x80609680 on the stock boot | [V] | 2026-11-18 read-only inventory, SYSCTRL+0xc00, repeat=2 identical; this matches the computed value - the decode is confirmed against hardware (the consumer/physical semantics remain [U]) |
+| the stock loader passes `maxcpus=2 nr_cpus=2 additional_cpus=1` to the vendor kernel | [V] | 2026-11-18 read-only inventory, live /proc/cmdline; matches the stock boot log's 2-CPU bring-up. Our-kernel delivery still [U] |
 | the vendor brings both cores up on this board | [V] | stock UART capture above |
 | the same design is in both stock releases (2.4.15 and 2.5.24) | [V] | two extracted vmlinux images; identical function body after address stripping |
 | ***no SMC in the release path*** | [V]/[X] | no SMC/HVC/secure-monitor instruction in hsan_boot_secondary; the repository earlier "pen/smc" phrasing is not supported - "pen" [V], "SMC" [X] |
@@ -473,21 +495,23 @@ this is a small, self-contained platform port).
 | U1 | physical semantics of CRG+0x38 bits 0x16..0x19 (clock gate? reset? power?) | read-only register census before/after a stock vendor boot; then before/after one own-kernel release |
 | U2 | who consumes the pen word (bootloader stub, ROM WFI loop, secure firmware) | vendor U-Boot/bootram disassembly (local blobs) and one UART capture of a failed release |
 | U3 | is the SCU enabled by the loader? | read SCU control register (read-only) on a stock boot and on our first boot |
-| U4 | does our TEXT_OFFSET scheme give the vendor pen value 0x80609680? | first fire: read the pen word back from SYSCTRL and compare with the expected __pa_symbol value |
+| U4 | does our TEXT_OFFSET scheme give the vendor pen value 0x80609680? | **half closed 2026-11-18:** the vendor kernel's live pen word was measured as 0x80609680 (SYSCTRL+0xc00, stock boot), so the decoded expression and the vendor value agree. Remaining: our first fire must read our kernel's pen word back and compare with the expected __pa_symbol value |
 | U5 | does the release work without an explicit secure-world handshake/any SMC? | the S2 fire itself (the decoded method contains no SMC; if it fails, look at secure firmware) |
 | U6 | TWD clock on CPU1 and per-CPU GIC interface after release | /proc/interrupts, dmesg timer lines, soak |
 | U7 | CPU hotplug/offline support | out of scope; if ever needed, re-RE the vendor die path (none exists in the stock table) |
 | U8 | board-to-board variance of pen/resume bits | one attended boot on a second unit if/when available |
 | U9 | OPP/cpufreq interaction with SMP | independent cpufreq work; not a release-path dependency |
-| U10 | whether the vendor bootargs (maxcpus=2 nr_cpus=2 additional_cpus=1) reach our kernel | target-design 5.6; one attended boot |
+| U10 | whether the vendor bootargs (maxcpus=2 nr_cpus=2 additional_cpus=1) reach our kernel | **half closed 2026-11-18:** the live `/proc/cmdline` on the stock boot carries them, so the loader does hand them to the vendor kernel. Remaining: one attended boot of our kernel to see whether the stock loader passes the same args (target-design 5.6) |
 
 ---
 
 ## 11. What this document does NOT claim
 
-* No boot, no bench, no fire. Nothing here was run on the router.
+* No boot of this port, no bench, no fire. A **read-only** inventory of the stock vendor system on
+  2026-11-18 did read the live pen word and `/proc/cmdline` back (section 2); that is a stock-boot
+  measurement used to confirm the decode, not a run of the patch-018 port.
 * No SMP claim for our kernel yet: the release is decoded from vendor binaries and the
-  port is host-compiled only.
+  port is host-compiled only; the vendor pen word is measured, our kernel's is not.
 * No upstream acceptance claim: patch 018 is a draft; the submission series in
   opensource/upstream/ still ends at 017 and this document does not edit it.
 * No invented register values: every number in section 3 is cited to the vendor

@@ -2,10 +2,18 @@
 
 **Status 2026-11-18 (task-22, lane `pie-datapath-re`): specification only - no driver code, no
 shared-file edits, no device access.** Host-only reverse engineering of the vendor packet engine
-("PIE", `hsan,pie` @ `0x10a70000`) from the local module fixtures; nothing here has been booted,
-run on the router, or validated against hardware. The companion plan in section 11 is the
-minimal path from patch `009`'s partial GEMAC to a working netdev. Publication remains
-**NOT READY** ([../README.md](../README.md)); this document does not change that.
+("PIE", `hsan,pie` @ `0x10a70000`) from the local module fixtures; the driver has never been
+booted or run on the router. The companion plan in section 11 is the minimal path from patch
+`009`'s partial GEMAC to a working netdev. Publication remains **NOT READY**
+([../README.md](../README.md)); this document does not change that.
+
+**Measured update 2026-11-18 (task-45, read-only):** the P3 register inventory has now been taken
+on one stock vendor boot with the read-only inventory tool and analysed in
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md). Sections 4.5 and 5.4 record the measured
+global/per-channel words, the active-channel model, the ring/channel configs and the live
+post-overlay `rx_ring`/`tx_ring` values; where the measurements differ from the base-DT-derived
+model the text below is corrected and the delta is called out. PIE still has no booted driver and
+no write to the block has ever been made from our side. [V] measured, single boot, no writes.
 
 Read [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 1 and section 6 first: they establish
 *that* the wired data path is PIE and *what* was missing. This document supplies the missing
@@ -45,18 +53,25 @@ raw dumps are kept (gitignored) under
    are `+0x0c` (16-bit read pointer); RX interrupt status `0x0300 + ch*4`, mask
    `0x0400 + ch*4`; global enable `0x3200` bit 0. Full table in section 4. [V] offsets, some
    field semantics [I].
-4. **Ring geometry from the board DT:** `rx_ring = <0xa 0x800 ...>` (four entries) and
-   `tx_ring = <0xc 0x4>`; the driver allocates descriptor rings as `32 B << N` and computes
-   descriptor count `1 << N`, with `N` taken from the first word of each ring pair, and uses the
-   second word as the RX buffer size (clamped to <= 9600 B, default 2048) / TX channel count.
-   Descriptor stride is therefore 32 bytes; the pair-word semantics are a strong inference ([I],
-   see section 5.1). [V] parse and allocation code, [I] decoding.
+4. **Ring geometry from the live board DT:** the *base* DT carries `rx_ring = <0xa 0x800 ...>`
+   (four pairs) and `tx_ring = <0xc 0x4>`, but the **live post-U-Boot-overlay node the stock driver
+   actually parses** carries `rx_ring = <0x8 0x600 0x8 0x600>` (two pairs) and
+   `tx_ring = <0xc 0x2>` - measured 2026-11-18 (section 5.4). The driver allocates descriptor
+   rings as `32 B << N` and computes descriptor count `1 << N`, with `N` taken from the first
+   word of each ring pair, and uses the second word as the RX buffer size (clamped to <= 9600 B,
+   default 2048) / TX channel count. The readback of the programmed channel-config registers
+   confirms the live first words: TX `0x2004=0xc`, RX `0x3004=0x8`. Descriptor stride is 32
+   bytes; the second-word/0x3504 semantics are still [I] (see section 5.4). [V] parse and
+   allocation code + live readback, [I] decoding of the size word.
 5. **Four interrupt vectors do not mean four channels.** The driver requests 4 IRQs
    (SPI 88-91) whose per-vector device data names two channel indices each -
    `pie-ch0,7`, `pie-ch1,6`, `pie-ch2,5`, `pie-ch3,4` - over an 8-channel slot space; 16 NAPI
    instances exist for the 16-channel hardware generation. This refines the "4 channels/IRQs"
    summary in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 6.1. [V] names/counts,
-   [I] the 4-wired + 4-WoC channel split.
+   [I] the 4-wired + 4-WoC channel split. Measured correction (2026-11-18): on the stock wired
+   boot only channels 0 and 1 are configured (the live overlay sizes 2 RX pairs / 2 TX channels),
+   so only the first two vectors' wired channels do work here; the 4 vectors are a hardware
+   property, not the live channel count (section 5.4).
 6. **Egress port/qid is a cross-module contract, not a PIE register.** A netdev TX resolves its
    port context through `g_api_priv[(port<<8) | vport]`, then hands a per-port queue handle (put
    there by the LSW's queue hook) plus a port descriptor to the PIE TX engine. The switch side
@@ -139,7 +154,7 @@ carries a placeholder node ([../target-skeleton/dts/luofu-r116.dts](../target-sk
 | `hwver` | `<0x250>` | selects the v250 descriptor/register generation [V] |
 | `clocks` | one clock (the CRG gate `pie_clk0`, id 15, gate1 bit 0x19 in patch `004`) | [V] |
 | `resets` | `(0x30, 0x19)` in the vendor CRG cell form | [V] vendor DT; the target CRG binding uses the same two-cell form ([TARGET-DESIGN.md](TARGET-DESIGN.md) section 7.1; [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 0.3) |
-| `rx_ring` / `tx_ring` / `woc_rx_ring` / `woc_tx_ring` | `<0xa 0x800 ...>` (4 pairs) / `<0xc 0x4>` / same-as-rx / same-as-tx | driver ring sizing data, not decoded semantics (section 5.2) |
+| `rx_ring` / `tx_ring` / `woc_rx_ring` / `woc_tx_ring` | base DT: `<0xa 0x800 ...>` (4 pairs) / `<0xc 0x4>` / same-as-rx / same-as-tx. **Live (after the U-Boot overlay, measured 2026-11-18): `<0x8 0x600 0x8 0x600>` (2 pairs) / `<0xc 0x2>`; `woc_*` live values not read** | driver ring sizing data; the live values are what the stock driver parses (section 5.4) |
 
 **Variant selection is recovered.** `hi_pie_probe` reads the DT `hwver` (property name string at
 `.rodata.str1.4+0x5c0`) and passes it to `hi_pie_drv_init`; the dispatch at
@@ -270,6 +285,29 @@ The vendor driver keeps: a controller block at `.bss+0` (`g_ctrl`) with the ops-
 `.bss+0x1c18`. These offsets are **driver-private**, useful only to understand the vendor module; a
 clean-room driver does not need to reproduce them. [V]
 
+### 4.5 Measured register state on the stock vendor boot (2026-11-18) [V]
+
+Read-only inventory of the running vendor system (one boot, repeat=2, every value identical in
+both passes; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/`, analysis in
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 2). Only offsets that were in the
+allowlist are listed; ch4-7 ring blocks were **not** read (the P3 plan below reads ring blocks
+for ch0-3 only).
+
+| offset | value | reading |
+| --- | --- | --- |
+| `0x1000` | `0x000a01c8` | bit0 clear, bits6-8 set - matches the reg_init model (check pass) |
+| `0x2200` | `0x0045e000` | raw; meaning [U] |
+| `0x3200` | `0x00002001` | bit0 global RX enable set (also bit13 set) |
+| `0x3204` / `0x3208` | `0x0` / `0x7d` | match the reg_init write values |
+| `0x3404` | `0x00001b04` | raw; the "2 bits per channel" [I] model is not contradicted but not decoded |
+| `0x3408` | `0x0` | no channel has a ring over 9600 B (matches) |
+| `0x3700` | `0x0000ffff` | **not zero/unwritten although the board DT has no `gro_ring`** - either the loader or an unconditional reg_init wrote it; semantics [U] |
+| `0x0180/0x0200/0x0380 + ch*4` | `1` each, for **all** ch0-7 | reg-init per-channel defaults; written for all 8 slots, not only wired ch0-3 |
+| `0x3210/0x3290/0x3310 + ch*4` | `3` / `2` / `8` each, for **all** ch0-7 | reg-init per-channel defaults; field meanings [U] |
+| `0x0300 + ch*4` RX IRQ status | `0` for ch0-7 | idle boot, nothing pending at sample time |
+| `0x0400 + ch*4` RX IRQ mask | ch0=0, ch1=0, ch2=1, ch3=1, ch4-7=0 | configured channels unmasked; unconfigured ch2/ch3 masked. The 0 on ch4-7 does not fit the "all start masked" write model - raw value recorded, [U] |
+| `0x3504/0x3514/0x3524/0x3534` | `0xc` each | see 5.4 - tracks the live size word (0x600>>7), not the descriptor-ring byte size |
+
 ---
 
 ## 5. Rings, channels, descriptors
@@ -371,6 +409,48 @@ descriptors below it. [V]
   is safe. [V] code, [I] that the value is the CPU index.
 - The vendor init script pins the four IRQ affinities to CPUs 1/2/1/2
   (`parent:rootfs-2.4.15/etc/rc.d/luofu` lines 28-45). [V]
+
+### 5.4 Measured ring/channel configuration (2026-11-18) [V]
+
+The live post-overlay pie node is the configuration the stock driver parsed; the follow-up
+readback of `/proc/device-tree/pie@0x10a70000/{rx_ring,tx_ring}` (raw big-endian bytes saved in
+`parent:build/bench-inventory/20261118T130512Z-inv1-run/followup/`) gives:
+
+    rx_ring = <0x8 0x600 0x8 0x600>     # 2 pairs: 2 RX channels, N=8, size word 0x600
+    tx_ring = <0xc 0x2>                 # N=0xc, 2 TX channels
+
+The measured programmed state matches that live node and settles the active-channel model:
+
+| register | ch0 | ch1 | ch2 | ch3 |
+| --- | --- | --- | --- | --- |
+| TX base `0x2000 + ch*0x10` | `0x825c0000` | `0x82600000` | `0` | `0` |
+| TX config `0x2004 + ch*0x10` | `0xc` | `0xc` | `0` | `0` |
+| RX base `0x3000 + ch*0x10` | `0x82420000` | `0x82518000` | `0` | `0` |
+| RX config `0x3004 + ch*0x10` | `0x8` | `0x8` | `0` | `0` |
+| pointers `+0x08/+0x0c` | `0x639 / 0x06390639` (TX), `0xe600e5 / 0xe7` (RX) | analogues, nonzero | `0` | `0` |
+
+Consequences for the model in 5.1/5.3:
+
+- **The ring-pair first word is the programmed channel config** (TX `0xc` = live `tx_ring[0]`;
+  RX `0x8` = live `rx_ring[0]`). This closes the P3 question "do the ring pair first words really
+  encode N?" as [V] for the live values; the descriptor-count arithmetic `1 << N` stays [I]
+  (still not observable from a register value alone).
+- **The live board is a 2 RX + 2 TX channel configuration**, not 4+4. Ring sizes implied by the
+  code shape: RX 32 B << 8 = 8 KiB ring, 256 descriptors; TX 32 B << 12 = 128 KiB ring, 4096
+  descriptors. The base-DT 4-pair/4-channel configuration is superseded by the U-Boot overlay
+  (section 3). The 8 channel slots and 4 IRQ vectors are unchanged hardware facts.
+- `0x3504 + ch*0x10` reads `0xc` on all four ch0-3 addresses (including the unconfigured
+  ch2/ch3, whose ring/config registers are zero). `0xc` equals the live size word `0x600 >> 7`;
+  it does **not** equal the descriptor-ring byte size `0x2000 >> 7 = 0x40` and not the base-DT
+  `0x100`. [I] the register tracks the per-channel size word in 128-byte units (or a
+  global/mirrored copy of it); the exact semantic and why inactive channels read the same value
+  remain [U]. Do not use it as a per-channel ring-size register until that is settled.
+- P3 is **closed** for the inventory questions in section 10 that are register-readable on one
+  stock boot: every read returned a plausible value, static words were stable, the programmed
+  configs match the live DT, and the dynamic pointers moved. P3 is **not** a green light for
+  writes or for a traffic claim: the untouched [U] rows below (descriptor bit maps, RX status
+  semantics, behavior under traffic, ACP, pre-Linux state) remain, and the ch4-7/WoC ring state
+  was outside the run's allowlist.
 
 ---
 
@@ -564,15 +644,27 @@ Ordering constraints that matter to a clean-room design: [V]/[I]
 | TX completion without TX IRQ (poll-only) | [V] code, [U] silicon behaviour under load | bench under sustained TX |
 | Restart/recovery after a PIE wedge on the AHB | [U]/bench-only | no driver may add reset semantics; recovery is the physical RESET+TFTP card ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 7.3) |
 
+**Measured status 2026-11-18 (inv1 read-only run, [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)).**
+The rows that are register-readable on one stock boot are now closed or partly closed: "ring
+pair-word semantics" is [V] for the first word (programmed config == live DT first word); the
+per-channel words, `0x3404/0x3408/0x3700` and the RX IRQ status/mask are [V] raw values (their
+bit meanings remain [U]); the bootloader/firmware pre-initialization row is partially closed
+(post-boot state only); the channel-pairing row is partially closed (the live active set is
+ch0/ch1 of 8 slots; the `pie-chN,M` pairing digit is still [U]). The descriptor bit maps, the RX
+status semantics, traffic behavior, the ACP question and any pre-Linux state are **not** closed by
+this run - it read registers, it did not exercise the engine or write anything.
+
 ---
 
 ## 11. Minimal implementation plan: from patch 009 to a working netdev
 
 > **Status 2026-11-18:** a refusing draft of stages P1/P2 exists as patch `015`
 > (`drivers/net/ethernet/hisilicon/luofu-pie.c`): it validates resources and allocates the
-> coherent ring bookkeeping, then returns `-EOPNOTSUPP` without touching the engine, because the
-> read-only P3 inventory has not been captured. The offsets/descriptor accessors/IRQ schedule
-> below are compiled scaffolding where recovered; unrecovered fields stay zero and TODO.
+> coherent ring bookkeeping, then returns `-EOPNOTSUPP` without touching the engine. **The P3
+> read-only inventory has since been captured** (inv1 run + DT follow-up, 2026-11-18; section 5.4,
+> [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)); feeding it into patch 015 and the P4
+> bring-up is the next PIE step. The offsets/descriptor accessors/IRQ schedule below are compiled
+> scaffolding where recovered; unrecovered fields stay zero and TODO.
 
 ### 11.1 Shape decision (recommended)
 
@@ -610,7 +702,7 @@ if a binding property is wanted, use documented `hisilicon,rx-ring`-style proper
 | **P0 - spec** (this document) | register/descriptor/channel/qid/ACP model; fixture hashes; commands | document review; links resolve; no invented values (every numeric cited) |
 | **P1 - PIE binding + probe skeleton** | new `hisilicon,luofu-pie.yaml` (reg 64 KiB, 4 interrupts, clocks/resets, `dma-coherent`, SoC-variant data instead of the vendor `hwver` property); `CONFIG_LUOFU_PIE` (tristate, `depends on OF`) with a `[N]` provenance entry in the config; driver probe does clock/reset/ioremap/IRQ acquisition + `reg_init` ordering, then stops before enabling anything | `make target/linux/prepare` and `make target/linux/compile` RC=0 with `CONFIG_WERROR=y`; `dt_binding_check` PASS; board DTS zero dtc warnings; config re-derivation idempotent (only the new `[N]` line changes). No hardware. |
 | **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | compile/checkpatch clean; static self-checks; no hardware |
-| **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | every recovered offset reads a plausible, stable value; the inventory settles the [I]/[U] rows of section 10 that are register-readable. **No writes.** |
+| **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | **DONE 2026-11-18** on the stock vendor boot (read-only, no writes): every allowlisted offset returned a plausible value, static words were stable, the dynamic pointers moved, and the programmed TX/RX channel configs equal the live overlay `tx_ring[0]/rx_ring[0]` (section 5.4; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` + `followup/`). Acceptance met for the register-readable [I]/[U] rows; see section 10 for what the run does **not** settle. |
 | **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), calls PIE probe, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> PIE + phylink; enable only gmac3 (the bench-measured cable port) and the pie node in the DTS via `shared.patch` | benched with recovery armed: netdev appears, carrier up, TX doorbell advances the ring read pointer, no lockup; **no traffic claim yet** |
 | **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the four live ports, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | M2-equivalent: ping between the host and a LAN port through our netdev with no vendor network module bound |
 | **P6 - upstream series** | split patches (PIE engine, GEMAC netdev, LSW minimal), bindings, config, DTS; document hardware-unverified behaviour honestly | review/checkpatch; bench evidence recorded separately |
@@ -656,9 +748,11 @@ P6: 2-3 sessions. These refine [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) sect
    is therefore the right place for the netdev half - it needs a data-path backend, not a
    different owner.
 2. **"4 PIE channels" needs detail.** Four is the number of **interrupt vectors** (and of RX/TX
-   rings configured on this board); the engine has 8 channel slots on 0x250 (16 on the 0x260+
+   rings configured in the *base* DT); the engine has 8 channel slots on 0x250 (16 on the 0x260+
    layout) and each vector services two channels (section 5.3). A driver that assumes four IRQs ==
-   four channels will mis-mask the second channel of each vector.
+   four channels will mis-mask the second channel of each vector. **Measured correction
+   (2026-11-18):** on the stock board the U-Boot overlay sizes 2 RX pairs and 2 TX channels, so
+   only ch0/ch1 are armed and only the vectors serving them do wired work (section 5.4).
 3. **The pie node's `hwver = <0x250>` is not mentioned in the block-E summary.** It is the single
    most important input to the ops-table choice (section 3) and must be reproduced (as driver data
    or a variant compatible) in our binding.
@@ -699,6 +793,7 @@ P6: 2-3 sessions. These refine [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) sect
 | ring DT parsing/validation and allocation sizes | `hi_pie_probe` strings at `.rodata.str1.4+0x628` (`rx_ring`), `+0x660` (`gro_ring`), `+0x66c` (`tx_ring`), `+0x69c/0x6a8` (`woc_*`), `+0x648` (`"mac mtu(…)"`); `hi_pie_drv_tx_init@0x3614`, `hi_pie_drv_rx_init@0x3ca0` |
 | 4 IRQs, per-vector channel pairs, names, affinities | `.data+0x4` table + `.rodata.str1.4+0x548..0x56c`; `hi_pie_drv_init` IRQ loop; `parent:rootfs-2.4.15/etc/rc.d/luofu` lines 28-45 |
 | TX/RX flows and descriptor ownership/doorbells | `hi_net_dev_xmit@0x637c`, `hi_pie_drv_xmit@0x42ac`, `hi_pie_tx_send@0x3250`, `hi_pie_rx_interrupt@0x3f88`, `hi_pie_rx_poll@0x4058`, `hi_pie_drv_rx_recv@0x3870`, `hi_pie_drv_rx_addbuf@0x3a24`, `hi_net_rx_proc@0x6568` |
+| PIE P3 measured register/channel state (2026-11-18, stock boot) | `parent:build/bench-inventory/20261118T130512Z-inv1-run/inventory.json` entries group `pie`; `followup/pie_rx_ring.bin`, `followup/pie_tx_ring.bin`; analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) sections 2 and 6 |
 | qid/port mapping split across PIE context and LSW | `g_api_priv` entry layout from `hi_net_dev_probe@0x5eec`/`hi_net_dev_xmit`/`hi_net_dev_open`; `hi_lsw_dp` imports and `hi_pie_map_init@0x56e8`; `hi_lsw_pfe!port_qid_map_set@0x26b8`/`qid_map_set@0x25dc`; `hi_lsw_pub!hi_lsw_write@0x354` |
 | DMA coherency/ACP facts | pie DT properties ([soc/luofu-r116-pinned.dts](soc/luofu-r116-pinned.dts) lines 1253-1269); `hi_kpie` `dma-coherent`/`dma_*` call sites and `__symbol_get` at `+0x2420` (v300 reg-init), strings `"hi_acp_notifier_call_chain"` etc.; `hi_acp.ko` (6,756 B) notifier and RMW writer |
 | init order | `hi_pie_probe` / `hi_pie_drv_init` call order; vendor `rc.d/luofu`; target DTS and patches `004`/`007`/`008`/`009` |
@@ -728,8 +823,11 @@ blob, or extracted artifact is committed to this repository.
 
 1. Are the IRQ vectors' second channels the WoC channels, and does the wired-only driver need to
    service them at all? (section 5.3) [I]/[U]
-2. Do the ring pair first words really encode `log2(descriptor count)`? A read-only register
-   inventory after a stock boot answers this by reading the programmed channel config registers.
+2. Do the ring pair first words really encode `log2(descriptor count)`? **Answered for the live
+   values (2026-11-18):** the programmed config registers equal the live DT first words (TX
+   `0x2004=0xc` = `tx_ring[0]`, RX `0x3004=0x8` = `rx_ring[0]`, section 5.4), so the driver
+   programs the first word as the shift; the descriptor-count arithmetic itself remains [I], and
+   the second-word/`0x3504` encoding is still [U].
 3. Which LSW register window is synthetic module 6, and what are the port/vport/QID number spaces?
    (section 7) [U] - block-D RE, not PIE RE.
 4. Does 0x250 require ACP attribute programming by software, or is the bootloader's configuration
@@ -745,5 +843,7 @@ blob, or extracted artifact is committed to this repository.
 guessing its register block, descriptor size, doorbell/ownership model or IRQ/NAPI shape. What it
 cannot do by itself is deliver frames: the egress port/qid decision crosses into the internal LSW,
 so the honest milestone ordering is PIE rings -> one GEMAC netdev -> minimal LSW map -> traffic.
-Nothing in this plan is hardware-verified; the first device contact is a read-only, attended,
-recovery-armed inventory.
+The first device contact has now happened - a read-only, attended inventory on 2026-11-18 plus its
+DT follow-up, which closed P3 and corrected the live channel model. Nothing in the *driver* plan
+is hardware-verified: no PIE register write has been made, and the descriptor/status/traffic and
+ACP questions remain open.

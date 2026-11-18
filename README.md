@@ -13,7 +13,9 @@
 > vendor-lane spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md), the
 > remaining-block plans are [`docs/REMAINING-DRIVERS.md`](docs/REMAINING-DRIVERS.md),
 > [`docs/LSW-SPEC.md`](docs/LSW-SPEC.md), [`docs/PIE-DATAPATH.md`](docs/PIE-DATAPATH.md) and
-> [`docs/MISC-SOC-BLOCKS.md`](docs/MISC-SOC-BLOCKS.md), the A/B selector contract is reconstructed
+> [`docs/MISC-SOC-BLOCKS.md`](docs/MISC-SOC-BLOCKS.md), the first live silicon inventory (600
+> read-only register/table reads) is [`docs/INVENTORY-2026-11-18.md`](docs/INVENTORY-2026-11-18.md),
+> the A/B selector contract is reconstructed
 > in [`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md), the GPL request record (kept for
 > provenance; not a project gate) is [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the
 > first-install path from stock firmware to a generated image is designed host-side in

@@ -1,9 +1,17 @@
 # LSW-SPEC: the internal LSW switch - an evidence-graded RE specification
 
 **Status 2026-11-18: research document only.** This file contains **no driver code**, it has
-**never run on hardware**, and it does not modify any shared file. It is the block-D deliverable
-promised by [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5 and it resolves the open
-question that [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7 deferred to "LSW block-D RE".
+**never run under our own driver**, and it does not modify any shared file. It is the block-D
+deliverable promised by [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5 and it resolves the
+open question that [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7 deferred to "LSW block-D RE".
+
+**Measured update 2026-11-18 (task-45, read-only):** the first attended read-only inventory has
+been taken on the stock vendor boot, and its DT follow-up read the live post-overlay
+`lsw_dp`/`lsw_pfe` windows and the `opp` qid tables A/B. Sections 5.2, 5.4, 6.3, 7.3 and 12.3
+now carry the measured values; the queue/flow DDR base, the window-name order and the D1b W1
+baseline are no longer [U]. The full analysis is [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md);
+recorded facts are [V] for that one boot, and **no register write has been made** (D1b write set
+and the register-write campaign are untouched).
 
 The subject is the internal Ethernet switch of the Hi5671Y "luofu" SoC (Cudy WR3000 v2 board,
 `R116`): the vendor modules `hi_lsw_pub.ko`, `hi_lsw_dp.ko`, `hi_lsw_pfe.ko`, `hi_swa.ko`, the
@@ -495,6 +503,17 @@ fixtures are these two probe loops [V], so no other module registers windows int
 layer. That is why the synthetic addresses carried by the qid-map code (`0x0604xxxx`) must map
 to one of the ten PFE windows and not to a hidden window.
 
+**Measured live-DT confirmation (2026-11-18) [V]:** the running stock kernel's post-overlay
+`/proc/device-tree/lsw_dp/reg` and `lsw_pfe/reg` (raw big-endian bytes saved under
+`parent:build/bench-inventory/20261118T130512Z-inv1-run/followup/`) reproduce the two tables
+exactly: `lsw_dp` `reg-names = "queue flow dp eps eqm fam ips"` with windows
+`0x11000000/0x11280000/0x11200000/0x11100000/0x11080000` (all `0x80000`), and `lsw_pfe`
+`reg-names = "ifc l2 napt mcc opp pa pe pfe_glb prbs pub"` with
+`0x12100000/0x12180000/0x12280000/0x12380000/0x12400000/0x12080000/0x11180000/0x12000000/0x11380000/0x12480000`
+(all `0x80000`). The window map and the DT-name order are therefore measured on the live node,
+not only decoded from the fixtures. The only live difference from the base DT is the
+queue/flow base (5.4).
+
 ### 5.3 Registers observed in the fixtures [V addresses; semantics U unless stated]
 
 Only addresses that appear as literal constants feeding `hi_lsw_read/write/tab128` are listed.
@@ -519,8 +538,9 @@ attended (section 12).** [I]
 ### 5.4 The `queue` and `flow` windows are DDR memory, not MMIO [V/I]
 
 The DT gives `lsw_dp` seven windows, but the driver registers only five; the two unregistered
-ones are `queue` (`0x87b00000`, 4 MB) and `flow` (`0x87f00000`, 1 MB). Three independent
-observations say they are **memory the engine consumes**, not register pages:
+ones are `queue` and `flow` (base-DT values `0x87b00000`, 4 MB and `0x87f00000`, 1 MB; the
+live post-overlay values are measured below). Three independent observations say they are
+**memory the engine consumes**, not register pages:
 
 1. no `hi_lsw_reg_module()` call (and therefore no synthetic-address access) ever covers them;
 2. both fall inside the DDR aperture described by the vendor DT (`memory@0x80500000`, 128 MB at
@@ -533,11 +553,22 @@ observations say they are **memory the engine consumes**, not register pages:
    `queue` window is also the one that the vendor DT overlay fixes up [V strings; exact
    iteration partially [U]].
 
-Which base a clean-room driver must program (`0x87b00000` as in the base DT, or `0x80000000`
-after the U-Boot overlay) is **[U]** and is explicitly flagged "do not fix without measuring" in
-[../target-skeleton/dts/luofu-r116.dts](../target-skeleton/dts/luofu-r116.dts) and
-[REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.1. A bench read of the live vendor
-kernel's reserved-memory/DT (or of the queue engine's own window) is the only legitimate answer.
+**Measured 2026-11-18 - the live base is [V], not [U].** The read-only follow-up read the running
+stock kernel's post-overlay node (same boot as the register inventory, boot_id unchanged) and the
+raw big-endian `reg` bytes decode to:
+
+| live window | address | size |
+| --- | --- | --- |
+| `queue` | `0x80000000` | `0x400000` (4 MiB) |
+| `flow` | `0x80400000` | `0x100000` (1 MiB) |
+
+So the U-Boot overlay does rebase the queue/flow windows to the bottom of DDR (from the base-DT
+`0x87b00000`/`0x87f00000`) on this board, and the engine consumes those regions at those
+addresses. The base-DT values in our conversion source are pre-overlay values and must not be
+programmed from the base tree. A clean-room driver still must not map these as MMIO: they are
+reserved DDR the engine reads/writes, and how to reserve/account for them in the binding is a
+design question (D1b). The queue/flow *layout* inside the regions remains [U]. Evidence:
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3.1.
 
 ### 5.5 Clocks, resets, IRQs [V from the vendor DT, semantics U]
 
@@ -568,7 +599,7 @@ driver.
 ~~~
 lsw_dp (7 DT windows, 5 registered)             lsw_pfe (10 DT windows, 10 registered)
   queue 0x87b00000/0x80000000 (DDR)              ifc      0x12100000  id 0
-  flow  0x87f00000 (DDR)                         l2       0x12180000  id 1
+  flow  0x87f00000/0x80400000 (DDR)              l2       0x12180000  id 1
   dp    0x11000000  id 0x40                      napt     0x12280000  id 3
   eps   0x11280000  id 0x41                      mcc      0x12380000  id 5
   eqm   0x11200000  id 0x42                      opp      0x12400000  id 6
@@ -638,7 +669,9 @@ values do not match the live-port set {9,10,11,12}. The semantic mapping is ther
 Do not invent a decoding; the candidate explanations (two independent bitmaps for two hardware
 port groups; a bitmap of 8 queue-port groups; a per-block port mask) all remain open. The
 vendor's own U-Boot overlay does not modify `port_bitmap` [V], so the base-DT value is what the
-shipped kernel runs with.
+shipped kernel runs with. **Measured 2026-11-18 [V]:** the live post-overlay
+`/proc/device-tree/lsw_dp/port_bitmap` bytes are `00 00 0f 01 00 00 1f f0` -> `<0xf01 0x1ff0>`,
+identical to the base DT; the bitmap semantics remain [U] (the live read does not decode it).
 
 Another unresolved probe-level detail worth recording: while iterating the u64, the vendor code
 tests bit 16 of the low word (`ubfx r3, r7, #16, #1`) and stores the result into the queue-manager
@@ -769,6 +802,25 @@ The PIE-DATAPATH statement "qid_map_set writes four consecutive 32-bit words bui
 Also confirmed now: **module 6 = opp window `0x12400000`**, offset `0x42800`/`0x43800`
 (~266 KB and ~276 KB into the window - within the `0x80000` size, so the bounds checks in
 `hi_lsw_write` pass). [V]
+
+**Measured table contents on the stock vendor boot (2026-11-18) [V].** The read-only inventory
+read all 128 words of table A and all 256 words of table B; both passes agreed on every word.
+Every non-zero entry carries the `0x100` flag and the low byte is the qid:
+
+| table | offsets read | non-zero words | populated ports | qids (low byte) |
+| --- | --- | --- | --- | --- |
+| A | `opp+0x42800 .. 0x429fc` | 72 / 128 | ports 4..12, 8 slots each; ports 0-3 and 13-15 zero | `0x101..0x148` = qids 1..72, contiguous: port4 q1-8, port5 q9-16, ..., port12 q65-72 |
+| B | `opp+0x43800 .. 0x43bfc` | 128 / 256 | ports 40..43, 8 slots each, each 16-byte entry = the same word four times; ports 44-47 zero | `0x149..0x168` = qids 73..104, contiguous: port40 q73-80, ..., port43 q97-104 |
+
+**Correction to an earlier reading:** table B is **not** all-zero on this boot - ports 40..43 are
+populated (the earlier "table B all zero" note predates the actual reads). Reading the two tables
+together [I]: the vendor allocates **one contiguous qid space 1..104** across the 9 table-A ports
+(4..12) and the 4 table-B ports (40..43), 8 qids per port, qid 0 unused; the 40..47 class (only
+40..43 active here) is the special/high port class whose meaning is still [U]. [V] the contents,
+the `0x100` flag, the port ranges and the slot count; [U]/[I] the port identity and why the
+special class exists. This is the D1b **W1** baseline; W2 can now derive the write set on paper,
+W3-W6 remain attended write work (12.3). Evidence:
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3.3.
 
 ### 7.4 EPS per-channel queue-port map (`hi_pie_map_init`) [V code shape]
 
@@ -1237,13 +1289,19 @@ These are read-only and can be taken on the current bench line without touching 
 Each item must be captured to an absolute path under `build/uart-logs/` or
 `build/linux-kbuild/waves/<date>-lsw/` as evidence with the command line. **No register writes.**
 
+**Status 2026-11-18:** item 3's core question is **closed** - the live post-overlay `lsw_dp`
+reg gives `queue = 0x80000000/0x400000` and `flow = 0x80400000/0x100000` (5.4), and the
+register inventory captured the W1 baseline (7.3) plus the window-name order (5.2). The
+`/proc/meminfo`/reserved-memory early-dmesg cross-check (item 4) was not taken, nor were the
+`/proc/hsan` DFX dumps (items 1, 6); both remain separate bounded reads.
+
 ### 12.3 Register-write campaign (D1b, attended, one variable at a time)
 
 Only after a bootable 6.18 target exists (or with a dedicated safe test image):
 
 | step | read/write | question answered | rollback |
 | --- | --- | --- | --- |
-| W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes | power cycle |
+| W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes - **DONE 2026-11-18 (read-only inv1):** the post-vendor-boot baseline is measured (values in [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3, incl. the qid table A/B contents). W2 can be derived from it; no write was made | power cycle |
 | W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete | n/a |
 | W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling | power cycle |
 | W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right | power cycle |
@@ -1274,9 +1332,9 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 
 | block | evidence | missing | plan | depends on | can do offline |
 | --- | --- | --- | --- | --- | --- |
-| **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 DT windows | [U] meaning of most offsets/fields; why ids 2/4 skipped; DDR `queue`/`flow` base | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
-| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>`; 5 virtual-port DT props (absent) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
-| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values; module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) | [U] EQM command-word bit layout; queue/flow DDR layout; PIE<->LSW binding timing; virtual-port defaults consumer | D1b write set; D1c host path | PIE 015; eqm traced values | **Partly** (code); writes bench-only |
+| **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 live DT windows with names, and the **live DDR `queue`/`flow` base** measured 2026-11-18 (5.4) | [U] meaning of most offsets/fields; why ids 2/4 skipped; queue/flow *layout* inside the DDR regions | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
+| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18); 5 virtual-port DT props (absent) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
+| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) | [U] EQM command-word bit layout; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer | D1b write set; D1c host path | PIE 015; eqm traced values | **Partly** (code); writes bench-only |
 | **MAC learning / FDB** | [V] hardware L2 window + counters (`port_move/age_drop/sport_clash/search_ok_mc/search_fail_mc`); CFE software FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_br_fdb_check_addr` patched bridge); learning libs `hi_kcfe_lrn_l2` etc. call `hi_cfe_acc_*`/`hi_adp_flow_*`; no L2 table writer symbol | [U] L2 table format/access; whether FDB offload must go through flows; aging/port-move semantics | D2 | D1 | **Partly** (D2 design only) |
 | **VLAN / ACL** | [V] tag action table (`tag_write/dump`, `hi_cfe_tag_*`), VLAN filter API + `vlan_filter` proc, subif model (with its "no second-layer untag subif" limitation); IFC classifier field list (~40 L2-L4 fields), action fields pq/pq_en/car/statis; CAR/mirror/NAPT/MCC symbols | [U] per-port VLAN/PVID table location and encoding; IFC row encoding; ACL semantics | D2 (VLAN/FDB), D3 (flow) | D1, GPL src optional | **No** (bench/RE needed) |
 | **CFE/rootif contract** | [V] rootif = named netdev in 32-slot CFE table; NETDEV_UP/DOWN/UNREGISTER driven; interface attrs/FDB/hooks/tags/netdev vif; `g_intf_bypass=1` then `hi_swa` loaded ("switch adaptor for openwrt"); `hi_swa` switchdev handlers are stubs | [U] full CFE hook semantics; why bypass mode exists beyond the 5 bypass branches seen | **not reproduced**; standard Linux switchdev contract | - | **Yes** (design) |
@@ -1287,8 +1345,10 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 1. `port_bitmap` words' semantics and the "root bit" interpretation (6.3).
 2. LSW internal port numbering vs MAC `port` numbers and the special port classes 40..47 and >47
    (6.2, 7.3).
-3. Whether the `queue`/`flow` windows are the DDR regions and their live base after the U-Boot
-   overlay (5.4).
+3. ~~Whether the `queue`/`flow` windows are the DDR regions and their live base after the U-Boot
+   overlay (5.4).~~ **RESOLVED 2026-11-18:** live base `queue = 0x80000000/4 MiB`,
+   `flow = 0x80400000/1 MiB` after the overlay ([INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)
+   section 3.1). The layout inside the regions remains [U].
 4. EQM indirect table command-word encoding (which bits select table/index/data) (7.5).
 5. Meaning of the DP probe's five virtual-port properties (absent on this board) and the
    cumulative/default-256 computation (6.5).
@@ -1336,6 +1396,8 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | CFE bypass + load order | `parent:rootfs-2.4.15/etc/init.d/hsan_prepare` lines ~55-71; `parent:rootfs-2.4.15/etc/rc.d/luofu` |
 | board port mapping | `parent:rootfs-2.4.15/etc/board.d/02_network`; [ETHERNET-BRINGUP-FRAMING.md](ETHERNET-BRINGUP-FRAMING.md) section 2 (measured vendor dmesg) |
 | DT windows/clocks/resets/IRQs | [soc/luofu-r116-pinned.dts](soc/luofu-r116-pinned.dts) lines 1078-1123, 885-955, 122-127; overlay note [soc/vendor-dt-notes.md](soc/vendor-dt-notes.md) section 8 |
+| live post-overlay windows + queue/flow base + port_bitmap (2026-11-18) | `parent:build/bench-inventory/20261118T130512Z-inv1-run/followup/{lsw_dp_reg.bin,lsw_dp_reg_names.txt,lsw_pfe_reg.bin,lsw_pfe_reg_names.txt,port_bitmap.bin}`; analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3 |
+| qid table A/B runtime contents and D1b W1 baseline (2026-11-18) | `parent:build/bench-inventory/20261118T130512Z-inv1-run/inventory.json` entries group `lsw` (`opp+0x42800`/`0x43800`); analysis [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) sections 3.2-3.3 |
 | skeleton placeholders | [../target-skeleton/dts/luofu-r116.dts](../target-skeleton/dts/luofu-r116.dts) (`lsw_dp`/`lsw_pfe` disabled nodes) |
 | PIE contract (cross-ref) | [PIE-DATAPATH.md](PIE-DATAPATH.md) sections 2, 7 |
 
@@ -1362,10 +1424,12 @@ Local RE artifacts (gitignored, regenerable with 2.3): parent
    (9.3), with the qualification that DSA remains theoretically possible only if a tag format
    is ever found (none today).
 
-**Open questions** (each maps to an item in 13.2 and a bench step in 12.3): the queue/flow DDR
-base; the EQM command word; `port_bitmap` decoding; the internal port id mapping; where
-VLAN/PVID lives; L2 table access; the virtual-port defaults; the `dpu_srst` mismatch; EQM
-table-19 layout; IFC row encoding.
+**Open questions** (each maps to an item in 13.2 and a bench step in 12.3): the EQM command
+word; `port_bitmap` decoding; the internal port id mapping; where VLAN/PVID lives; L2 table
+access; the virtual-port defaults; the `dpu_srst` mismatch; EQM table-19 layout; IFC row
+encoding. **The queue/flow DDR base is resolved** (live `0x80000000`/`0x80400000`, 5.4) and the
+D1b W1 baseline was measured on 2026-11-18 ([INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md));
+what remains for D1b is W2 (the written write-set derivation) and the W3-W6 write experiments.
 
 **What would change this document:** (a) the GPL source arriving - sections 5-8 become a port
 check, and 13.2 shrinks; (b) a bootable 6.18 target - the bench campaign becomes possible and

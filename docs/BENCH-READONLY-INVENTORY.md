@@ -1,8 +1,13 @@
 # BENCH-READONLY-INVENTORY - attended read-only register/table inventory (LSW, PIE, CRG, SYSCTRL)
 
-**Status:** tool + mock tests built and tested host-only on 2026-11-18. The tool has **never
-been executed against the router**, and this document makes no hardware-measured claim. The
-first attended run is the next action; everything below is the procedure for that run.
+**Status:** tool + mock tests built 2026-11-18; the first attended read-only run was executed
+the same day (**COMPLETE, 600/600 allowlisted reads, one boot, 0 errors, no writes**). The
+measured results, the 16 expected-token corrections and the closed [U] items are recorded in
+[INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md); the procedure below remains the runbook for
+repeat runs. The built-in context capture was empty on the first run because stock busybox lacks
+`od`; the tool now uses `hexdump` with an `od` fallback (145/145 mock assertions still pass),
+and the first run's DT/clk values were re-read read-only into a provenance-stamped
+`followup/` sub-bundle.
 
 **Scope:** one attended, human-supervised, READ-ONLY bench session on the stock vendor system
 that captures the register/table baseline the LSW, PIE and clock work needs. The tool is
@@ -526,9 +531,11 @@ tests only prove the tool's own logic and its inability to write.
 ---
 ## 13. Limitations and honesty
 
-- The tool has never been run against the router. Every expected-value token is a placeholder
-  derived from the specs, not a measurement; a failed check is not proof that the spec is
-  wrong or that the box is faulty.
+- The tool has now been run once (2026-11-18, read-only): 600/600 reads, one boot, no writes.
+  Every expected-value token is still a spec-derived placeholder, not a measurement; a failed
+  check is not proof that the spec is wrong or that the box is faulty. The 16 PIE mismatches on
+  the first run were spec-token assumptions corrected from the measurements (see
+  [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)).
 - One snapshot per boot. The register state is the vendor system's live state; it can only be
   compared like-with-like (same image, same slot, same boot phase). Uptime is captured so a
   later reviewer knows how late in the boot the sample was taken.
@@ -563,8 +570,8 @@ tests only prove the tool's own logic and its inability to write.
 ---
 ## 15. Follow-ups (not part of this deliverable)
 
-1. First attended run per section 5; archive the evidence; add the parent:EVIDENCE-INDEX.md row
-   and a dated parent:mem-entries.md entry.
+1. First attended run (done 2026-11-18; evidence archived; parent EVIDENCE-INDEX/ledger rows
+   added). Repeat runs are only needed after a state change or for a new group/allowlist.
 2. Feed the PIE P3 results into patch 015 (and update PIE-DATAPATH.md section 10 statuses).
 3. Feed the CRG PLL decode into patch 019 (confirm or correct the decoded equation).
 4. Take the bounded /proc/hsan DFX read (LSW-SPEC.md section 12.2 items 1/6) on the same
