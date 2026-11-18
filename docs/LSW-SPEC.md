@@ -11,7 +11,10 @@ been taken on the stock vendor boot, and its DT follow-up read the live post-ove
 now carry the measured values; the queue/flow DDR base, the window-name order and the D1b W1
 baseline are no longer [U]. The full analysis is [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md);
 recorded facts are [V] for that one boot, and **no register write has been made** (D1b write set
-and the register-write campaign are untouched).
+and the register-write campaign are untouched). The target-skeleton patch `021` implements the
+read-only half: a W1 baseline probe (windows, powered-state gate, 30-word register baseline, both
+qid maps re-derived and compared word for word) that contains no register write and always fails
+closed; the derived W2 write set is tabulated in section 7.7. It has never run on hardware.
 
 The subject is the internal Ethernet switch of the Hi5671Y "luofu" SoC (Cudy WR3000 v2 board,
 `R116`): the vendor modules `hi_lsw_pub.ko`, `hi_lsw_dp.ko`, `hi_lsw_pfe.ko`, `hi_swa.ko`, the
@@ -879,6 +882,43 @@ over_share_drop/qtail_drop/gtail_drop/gchip_drop/cong_drop/qmc_drop/sch_drop`. T
 the *meaning* of the queue structure could be read on a live vendor kernel (read-only procfs
 dump) - it is the cheapest bench inventory item and is listed in section 12.2. [V strings]
 
+### 7.7 D1b W2: the derived write set (paper only, 2026-11-18) [I]
+
+Patch `021` in the target skeleton turns the W1 measurement into a checkable
+model and validates it **read-only** (it contains no `writel()`); it does not
+write the switch.  The table below is what the attended W3-W6 campaign would
+execute, with the evidence grade of every row.  The driver's register-map
+header (`luofu-switch-regs.h`) is the single source of truth for the offsets;
+this table is the review view.
+
+| # | write | value / shape | evidence | status |
+| --- | --- | --- | --- | --- |
+| C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | not implemented - W3, attended |
+| C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | not implemented - W3, attended |
+| R1 | `dp` probe config | `dp+0x1c = (u16 \| 0x10000)`, `dp+0x64 = 1` then cell selector, `dp+0x68 = 0` | code shape [V]; measured final values [V]; field meaning [U] | not written |
+| R2 | `eps` queue/DFX | `eps+0x1008` | measured 0 [V]; writer/meaning [U] | not in write set |
+| R3 | `eqm` probe init | `eqm+0x18 = 0x80001cc0`, `+0x38 = 0x7f0`, `+0x40` bit31 enable, `+0xa4` RMW with `(value-0x40)` in bits 0..13 | code shape [V]; measured final values [V]; register semantics [U] | not written |
+| R4 | `fam` queue/cell comparison | `fam+0x504` RMW (measured `0x2000`) | code shape [V]; write semantic [U] | not in write set |
+| R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | not written |
+| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | not written - W4 target |
+| Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | not written - W5 target |
+| Q3 | qid allocation | one contiguous qid space from **1**, 8 qids per port, qid 0 unused; populated rows are table-A ports 4..12 (qids 1..72) and table-B ports 40..43 (qids 73..104) | measured contents [V]; allocator policy [I] | model only |
+| Q4 | qid map, port > 47 class | word index `slot/2 + port*4 - 64` of table A, one word per slot written twice per pair of slots | code shape only partially recovered [V]/[U] | deliberately not modelled |
+| P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` | value [V] in the base DT and on the live node; semantics [U] | baseline check only, never used to enable anything |
+| D1 | queue/flow DDR | `queue = 0x80000000/4 MiB`, `flow = 0x80400000/1 MiB` | base/size measured live after the loader fixup [V]; layout inside [U]; how the engine is told the base [U] | validated from DT, never ioremapped or written |
+| E1 | EQM indirect table (queue table 19 / 1000-cell entry), IFC/L2/VLAN tables | command word, entry layouts | [U] | excluded from the write set by design |
+
+**What patch `021` verified without writing (W2 exit, read-only).**  The
+derived allocation model (Q1-Q3) reproduces all 384 measured qid-map words
+(128 table-A words + 256 table-B words) on a block that passes the powered-state
+gate and matches the 30-word W1 register baseline.  That is the evidence the
+write set rests on: the *write shape* (Q1/Q2) is decoded from the vendor code,
+the *values* are measured, and the model is checked against the silicon before
+any write.  What it still does not prove is that writing them has the intended
+effect (W4/W5), the correct values for our own (non-vendor-initialised) block
+state (W3 readback), or the meaning of the port ids the rows belong to
+(13.2 item 2).
+
 ---
 
 ## 8. Forwarding, MAC learning, VLAN and ACL tables
@@ -1302,7 +1342,7 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image):
 | step | read/write | question answered | rollback |
 | --- | --- | --- | --- |
 | W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes - **DONE 2026-11-18 (read-only inv1):** the post-vendor-boot baseline is measured (values in [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3, incl. the qid table A/B contents). W2 can be derived from it; no write was made | power cycle |
-| W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete | n/a |
+| W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete - **DONE 2026-11-18 (read-only, host-only):** derived write set tabulated in section 7.7; patch `021` re-derives the qid-map model and validates it against all 384 measured table words without writing, and gates the read on the measured powered state; every write itself is still unimplemented | n/a |
 | W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling | power cycle |
 | W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right | power cycle |
 | W5 | add remaining MAC ports; default-forwarding test | D1c exit | power cycle |
@@ -1333,8 +1373,8 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | block | evidence | missing | plan | depends on | can do offline |
 | --- | --- | --- | --- | --- | --- |
 | **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 live DT windows with names, and the **live DDR `queue`/`flow` base** measured 2026-11-18 (5.4) | [U] meaning of most offsets/fields; why ids 2/4 skipped; queue/flow *layout* inside the DDR regions | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
-| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18); 5 virtual-port DT props (absent) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
-| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) | [U] EQM command-word bit layout; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer | D1b write set; D1c host path | PIE 015; eqm traced values | **Partly** (code); writes bench-only |
+| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18); 5 virtual-port DT props (absent); patch `021` models the two DDR windows, the port_bitmap value check and per-port owner-device resolution (port netdevs stay with the GEMAC side) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
+| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits); **W2 model derived and validated read-only 2026-11-18** (patch `021`: the contiguous qid 1..104 allocation reproduces all 384 measured qid-map words; 7.7) | [U] EQM command-word bit layout; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer; whether the writes have the intended effect (W4/W5) | D1b write set; D1c host path | PIE 015; eqm traced values | **Yes** (code); writes bench-only |
 | **MAC learning / FDB** | [V] hardware L2 window + counters (`port_move/age_drop/sport_clash/search_ok_mc/search_fail_mc`); CFE software FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_br_fdb_check_addr` patched bridge); learning libs `hi_kcfe_lrn_l2` etc. call `hi_cfe_acc_*`/`hi_adp_flow_*`; no L2 table writer symbol | [U] L2 table format/access; whether FDB offload must go through flows; aging/port-move semantics | D2 | D1 | **Partly** (D2 design only) |
 | **VLAN / ACL** | [V] tag action table (`tag_write/dump`, `hi_cfe_tag_*`), VLAN filter API + `vlan_filter` proc, subif model (with its "no second-layer untag subif" limitation); IFC classifier field list (~40 L2-L4 fields), action fields pq/pq_en/car/statis; CAR/mirror/NAPT/MCC symbols | [U] per-port VLAN/PVID table location and encoding; IFC row encoding; ACL semantics | D2 (VLAN/FDB), D3 (flow) | D1, GPL src optional | **No** (bench/RE needed) |
 | **CFE/rootif contract** | [V] rootif = named netdev in 32-slot CFE table; NETDEV_UP/DOWN/UNREGISTER driven; interface attrs/FDB/hooks/tags/netdev vif; `g_intf_bypass=1` then `hi_swa` loaded ("switch adaptor for openwrt"); `hi_swa` switchdev handlers are stubs | [U] full CFE hook semantics; why bypass mode exists beyond the 5 bypass branches seen | **not reproduced**; standard Linux switchdev contract | - | **Yes** (design) |

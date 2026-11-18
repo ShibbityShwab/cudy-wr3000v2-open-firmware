@@ -2740,3 +2740,129 @@ by the out-of-tree lab driver, not by this in-tree driver. Nothing has booted.
    descriptors may be produced but no frame is guaranteed to leave a MAC port.
 4. Confirm the ACP coherency question for 0x250 under traffic (PIE-DATAPATH section 8).
 
+
+## 2026-11-18 (LSW init session): internal-switch read-only D1b baseline probe (patch 021)
+
+**Status: HOST-ONLY, READ-ONLY. Nothing has run on the board; no boot, image, flash or
+bench claim. Publication remains NOT READY.**
+
+Patch `021-net-lsw-init-luofu.patch` (sha256
+`de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e`) extends the
+patch-`016` internal-switch D1a skeleton with the measured 2026-11-18 "W1" baseline
+([INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3) and turns it into a
+**read-only D1b baseline probe**. It adds a measured register-map header
+(`drivers/net/ethernet/hisilicon/luofu-switch-regs.h`), extends the binding/board DTS to
+the two engine DDR windows plus the CRG syscon phandle and `port-bitmap`, and extends
+`luofu-switch.c` with: the 17-window resource model (15 MMIO windows mapped, the two DDR
+regions validated but never mapped), a powered-state gate (CRG gate word `0x20` bits 0/1
+read-only through the CRG syscon, four reset lines through the reset API - the reset class
+is active-low per patch `014`), a 30-word measured register baseline, a word-for-word
+read-only validation of both qid maps against a derived contiguous allocation model, and
+per-port owner-device resolution for the switchdev port model. **The driver contains no
+`writel()`**: no register is written, no clock is enabled, no reset is driven, no netdev
+or switchdev notifier is registered, and probe always fails closed with `-EOPNOTSUPP`.
+The DTS node stays `disabled`.
+
+### Design decisions
+
+- **17 windows, two kinds.** The vendor `lsw_dp` node has 7 windows, two of which
+  (`queue`, `flow`) are DDR the engine consumes, and `lsw_pfe` has 10 MMIO windows.
+  The binding models one switch with 17 windows in address order: the measured live DDR
+  bases `queue = 0x80000000/4 MiB` and `flow = 0x80400000/1 MiB` (post-loader-fixup
+  values, [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3.1) plus the 15
+  x 512 KiB register pages.  The driver validates base+size of the DDR windows against the
+  measured values and never ioremaps them; the layout inside the regions stays [U].
+- **No hardware ID register is invented.** The read-only inventory found no ID register on
+  this block; identity is the devicetree `hwver` (0x250, match data) plus the measured
+  register/table baseline.  The baseline exact-match checks are deliberately strict: they
+  encode "this is the one measured boot's state", not a semantic claim, and a mismatch is a
+  refusal to proceed rather than a hardware fault.
+- **Powered-state gate before any read.**  The inventory was taken on a clocked,
+  out-of-reset block.  The 6.18 clock consumer API has no "is enabled" query
+  (`clk_is_enabled()` was removed), so the probe reads the CRG gate word `0x20` bits
+  0/1 through the CRG **syscon** (a read of the shared page; the driver never writes it)
+  and checks the four reset lines through `reset_control_status()`.  If the block is
+  unclocked or held in reset the probe refuses without a single block access.
+- **W2 model validated without writing.**  The vendor qid-map write shape is decoded
+  ([LSW-SPEC.md](LSW-SPEC.md) 7.3) and the measured tables are [V].  The driver re-derives
+  the allocation ("one contiguous qid space from 1, 8 qids per port, populated rows in
+  order") and compares every word: 128 table-A words + 256 table-B words (four identical
+  u32 per 16-byte entry) = 384 words.  That is the D1b W2 exit criterion applied read-only;
+  the derived write set is tabulated in [LSW-SPEC.md](LSW-SPEC.md) 7.7 and is **not
+  implemented**.
+- **No netdev/switchdev registration.**  The port netdevs belong to the GEMAC side, whose
+  data path does not exist (patch `009` is a resource/binding half; patch `020` adds a
+  draft netdev front end only behind its attended arm gate).  The probe resolves each port's
+  `ethernet` phandle to its owning platform device and records it, but a switchdev
+  notifier without real port netdevs would reproduce the vendor's stub behaviour; it is
+  therefore not registered.
+
+### Validation (isolated clone + pristine tree; shared clone untouched)
+
+Series validation in an isolated clone copy (`/home/shibbityshwab/openwrt-lab-lswinit`,
+copied from the clock-tree clone; no shared clone was modified) and in a fresh pristine
+`linux-6.18.60` extraction:
+
+- the full series **001-021** applies to pristine `linux-6.18.60` in order: 21 patches,
+  82 files patched, **0 failed hunks, 0 `.rej`/`.orig`, RC=0** (patch `020`, the
+  parallel PIE lane, is included at its snapshot sha256
+  `806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8`; patch `021`
+  applies after it with a 6-line offset in `drivers/net/ethernet/hisilicon/Kconfig`);
+- `make target/linux/prepare` RC=0 (1,215 patching lines, no rejects) and
+  `make target/linux/compile V=s -j10` **RC=0 under `CONFIG_WERROR=y` with 0 errors and
+  0 warnings** (121 s wall clock; zImage 3,279,096 B sha256
+  `96b927d35e2e6c6be9980c7683de20c20a288a5df58ddf08ed7fbbe9bb1e92d3`;
+  `CONFIG_LUOFU_SWITCH=y`, `CONFIG_PHYLINK=y`, `luofu_switch_probe` in
+  `System.map`);
+- `_text = 0xc0608000` and `swapper_pg_dir = 0xc0604000`; the compressed early-boot
+  code materializes `movw #0x8000` / `movt #0x60` (0x00608000) at both head.S sites,
+  so the `TEXT_OFFSET` contract is unchanged;
+- the kernel config delta (including patch `020`'s `CONFIG_PHYLINK=y`
+  resolution) is **symbol-identical** to the committed delta after a canonical
+  `make kernel_oldconfig` (0 symbol diff; the regenerated file body differs only in the
+  hand-maintained provenance header) and two consecutive `kernel_oldconfig` runs emit a
+  byte-identical file (sha256 `76aaafc8b51fe94f7989c99572da583467b1ec922e56a82f357c12b83737bc7f`);
+  patch `021` adds no Kconfig symbol, so it cannot change the delta;
+- `dt_binding_check` **RC=0** for `Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml`
+  (dtschema 2026.9; the tree's optional `yamllint` step is skipped - the package is not
+  installed on the host, same limitation as previous sessions);
+- the board DTS compiles with the patched kernel's own dtc to **11,516 B**
+  (sha256 `43c1e94bef3e3e35a639523aab57b7d2618f0f02ef26c60747be89e674c24638`) with
+  **zero warnings**; `dt-validate` against the generated
+  processed schema produces **no diagnostic for the switch node** (10 pre-existing
+  diagnostics remain on unrelated TODO nodes, e.g. the SP804 timer and the UARTs - a
+  full-draft `dtbs_check` is still not claimed clean);
+- `checkpatch.pl --no-tree -f`: **0 errors / 0 warnings / 0 checks** on the modified
+  Kconfig, the 931-line driver, the 214-line register header and the 223-line YAML;
+- `shared.patch` applies to the `opensource/` root (dry-run, apply and byte-compare).
+
+Static checks on the driver: no `writel()`/`writew()`/`writeb()` outside comments, no
+`regmap_write`/`regmap_update_bits`, no `clk_enable`/`clk_prepare_enable`, no
+`reset_control_assert`/`reset_control_deassert`, no `register_netdev`/switchdev
+registration, and the two DDR windows are explicitly `continue`d before the ioremap call.
+The read set contains only offsets the 2026-11-18 inventory actually read.
+
+### What this proves and what it does not
+
+Proven (host-only): the patch is clean upstream-style code, applies and compiles in the
+series, the binding passes `dt_binding_check`, the board DTS is warning-free and the switch
+node validates, and the compiled driver would refuse safely (the refusal path is the only
+exit from probe).  The model is checked against measured state - but only by inspection of
+code paths and by the numbers in this document: **the probe has never run, not even on a
+stock vendor boot**, so the gate/table comparison logic and the powered-state read have
+never executed on ARM.
+
+Not proven: any hardware behaviour.  The write set has never been executed (W3-W6), the
+EQM indirect command word/queue-table layout and the classifier/L2/VLAN formats remain
+unknown, the LSW-vs-MAC port-id mapping and the 40..47 class meaning remain unknown, and
+whether the block can be read safely in a *state* other than the measured vendor one is
+untested (the gate only proves CRG clock/reset state).  No boot, no bench run, no image and
+no upstream review.  The next hardware step is the attended W3 (gates/resets only) followed
+by W4/W5 qid-map writes.
+
+Evidence (local-only, gitignored):
+`build/linux-kbuild/waves/2026-11-18-lsw-init/` - 21-patch snapshot + sha256,
+`final-series-validation.log`, `prepare-final-0021.log`, `compile-001-021.log`,
+`board-dts-final.dtb`, `dt-validate-final.out`, `apply-series.log`,
+`static-checks.log` and the delivered patch bytes.
+

@@ -685,20 +685,34 @@
 	/*
 	 * Internal LSW switch: binding
 	 * Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
-	 * (patch 016). One switch with 15 MMIO windows: the five queue-manager
-	 * windows (dp/ips/fam/eqm/eps) and the ten classifier/forwarding windows
-	 * (prbs/pfe_glb/pa/ifc/l2/napt/mcc/opp/pub/pe) that the vendor tree
-	 * describes as two separate nodes. The vendor "queue"/"flow" regions are
-	 * DDR memory consumed by the engine, not MMIO windows, and their live
-	 * base is not established; they are not modelled here.
+	 * (patches 016/021). One switch with 15 MMIO windows - the five
+	 * queue-manager windows (dp/ips/fam/eqm/eps) and the ten
+	 * classifier/forwarding windows (prbs/pfe_glb/pa/ifc/l2/napt/mcc/opp/
+	 * pub/pe) that the vendor tree describes as two separate nodes - plus the
+	 * two DDR regions the engine consumes:
 	 *
-	 * The in-tree driver is DRAFT probe scaffolding: it validates these
-	 * resources and the port model, then refuses to program the switch
-	 * (-EOPNOTSUPP) until the register/queue/port-id model has been verified
-	 * on hardware (LSW-SPEC.md D1a/D1b). The node therefore stays disabled;
-	 * do not enable it before the attended inventory and write-set review:
-	 * an access to an unknown register in this block can cut the CPU/console
-	 * path on a board with no validated restart.
+	 *   queue  0x80000000  4 MiB
+	 *   flow   0x80400000  1 MiB
+	 *
+	 * Those two bases are the measured live post-loader-fixup values
+	 * (read-only inventory 2026-11-18, LSW-SPEC.md 5.4); the vendor base DT
+	 * says 0x87b00000/0x87f00000 and its U-Boot overlay rebases them.  Our
+	 * loader-match overlay is a no-op, so this base DTB has to carry the final
+	 * values itself.  The regions lie below the kernel memory node
+	 * (0x80500000), so Linux never maps them as RAM; the driver validates the
+	 * base/size and never ioremaps them.  The layout inside the regions is
+	 * unknown.
+	 *
+	 * The in-tree driver is a READ-ONLY baseline probe (patch 021): it
+	 * validates these resources, the port model, the two CRG port_bitmap
+	 * cells and - only when the block is already clocked and out of reset -
+	 * the measured register baseline and the two qid maps.  It never writes a
+	 * register, never enables a clock, never drives a reset, registers no
+	 * netdev/switchdev notifier and always refuses to program the switch
+	 * (-EOPNOTSUPP).  The node therefore stays disabled; do not enable it
+	 * before the attended write campaign and write-set review: an access to an
+	 * unknown register in this block can cut the CPU/console path on a board
+	 * with no validated restart.
 	 *
 	 * The port children are the switchdev model (not DSA): each wired port is
 	 * a netdev owned by its GEMAC node and the switch port names it with the
@@ -711,7 +725,9 @@
 	 */
 	lsw: ethernet-switch@11000000 {
 		compatible = "hisilicon,luofu-switch";
-		reg = <0x11000000 0x80000>,	/* dp */
+		reg = <0x80000000 0x400000>,	/* queue: DDR, validated not mapped */
+		      <0x80400000 0x100000>,	/* flow: DDR, validated not mapped */
+		      <0x11000000 0x80000>,	/* dp */
 		      <0x11080000 0x80000>,	/* ips */
 		      <0x11100000 0x80000>,	/* fam */
 		      <0x11180000 0x80000>,	/* pe */
@@ -726,14 +742,17 @@
 		      <0x12380000 0x80000>,	/* mcc */
 		      <0x12400000 0x80000>,	/* opp */
 		      <0x12480000 0x80000>;	/* pub */
-		reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
-			    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp",
-			    "pub";
+		reg-names = "queue", "flow", "dp", "ips", "fam", "pe", "eqm",
+			    "eps", "prbs", "pfe_glb", "pa", "ifc", "l2", "napt",
+			    "mcc", "opp", "pub";
 		clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
 		clock-names = "lsw_dp_clk", "lsw_pfe_clk";
 		resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
 			 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
 		reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
+		hisilicon,crg = <&crg>;
+		/* measured live value, vendor cell order; semantics unknown */
+		hisilicon,port-bitmap = <0xf01 0x1ff0>;
 		status = "disabled";
 
 		ethernet-ports {
