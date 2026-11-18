@@ -778,20 +778,24 @@
 	/*
 	 * PIE packet engine: binding
 	 * Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
-	 * (patch 015). The in-tree driver is DRAFT scaffolding: it validates
-	 * these resources, builds the coherent ring bookkeeping and then
-	 * refuses to arm the engine (-EOPNOTSUPP) until a read-only register
-	 * inventory of the block has been captured on the running hardware.
-	 * The node therefore stays disabled. Do not enable it before that
-	 * inventory: an access to this window before the block is ready has
-	 * hung the SoC bus, and the board has no validated restart path.
+	 * (patch 015, extended by patch 020). The in-tree driver is a DRAFT
+	 * ring engine: the register/channel model was measured by the
+	 * 2026-11-18 read-only inventory and the coherent rings, channel
+	 * initialization, interrupt/NAPI receive path and TX producer are
+	 * implemented, but the RX completion decode is still unknown, the
+	 * switch egress map does not exist and the engine is only started by
+	 * an explicit "luofu_pie.arm=1" opt-in. The node therefore stays
+	 * disabled. Do not enable it without the attended bring-up: the first
+	 * write to this block is a bench event, and the board has no validated
+	 * restart path.
 	 *
 	 * The four interrupts are the four recovered per-vector lines; each
 	 * vector serves the channel pair named by interrupt-names (channels
 	 * 4-7 are the Wi-Fi offload half and are not wired into this driver).
-	 * Ring geometry (descriptor count, buffer size, channel counts) is
-	 * driver data, not devicetree properties: the vendor rx_ring/tx_ring
-	 * pair encoding is inferred, not an ABI.
+	 * The ring tables are the measured live board configuration: two RX
+	 * channels of log2(256) descriptors with 1536-byte buffers and two TX
+	 * channels of log2(4096) descriptors (2026-11-18 follow-up readback of
+	 * the vendor's post-overlay node).
 	 */
 	pie: pie@10a70000 {
 		compatible = "hisilicon,luofu-pie";
@@ -801,6 +805,8 @@
 		clocks = <&crg LUOFU_CLK_PIE>;
 		resets = <&crg 0x30 0x19>;
 		dma-coherent;
+		hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
+		hisilicon,tx-ring = <0xc 0x2>;
 		status = "disabled";
 	};
 
@@ -809,11 +815,13 @@
 	/*
 	 * GEMAC: binding
 	 * Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
-	 * (patch 009). The in-tree driver port is PARTIAL: it validates the
-	 * resources described here, but the TX/RX ring DMA data path is not
-	 * implemented, so probe refuses to run and no netdev is registered
+	 * (patch 009, netdev/phylink glue added by patch 020). The in-tree
+	 * driver is a DRAFT: the MAC owns the net_device and phylink front
+	 * end and forwards its transmit path to the PIE packet engine; it only
+	 * registers a netdev after the PIE backend has armed its data path,
+	 * and only the measured 1 Gbps link-up/link-down MAC words are written
 	 * (TARGET-DESIGN.md 7.1). The nodes are disabled - enabling one would
-	 * only log a probe error until the data path exists.
+	 * only log a probe error until the PIE engine is armed.
 	 * The bind keeps the lab shape plus the two CRG reset lines.
 	 * NEEDS-VERIFICATION: the gmac0..4 -> mdio phy mapping below is the
 	 * vendor runtime mapping (14380000 -> mdio addr 2, 14400000 -> 3,

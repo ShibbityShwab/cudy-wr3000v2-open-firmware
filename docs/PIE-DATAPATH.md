@@ -81,10 +81,12 @@ raw dumps are kept (gitignored) under
    `dma_alloc_attrs`/`dma_map_page_attrs` rings, no cache maintenance). The ACP block is the
    vendor's coherency programming path; whether 0x250 needs it (the ACP call recovered from the
    module is in the **v300** register-init path only) is [U] and bench-only. Section 8.
-8. **Nothing may touch the PIE MMIO on hardware before an attended, recovery-armed read-only
-   inventory.** Patch `009`'s header records that an access to this block before it was ready
-   hung the board's AHB bus; there is no restart path ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md)
-   section 7.3). Section 12.2. [V]
+8. **Nothing may touch the PIE MMIO on hardware before an attended, recovery-armed step.**
+   Patch `009`'s header records that an access to this block before it was ready hung the board's
+   AHB bus; there is no restart path ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 7.3).
+   The read-only inventory has since been taken (P3 above) and patch `020` implements the ring
+   engine, but its arm path is gated behind an explicit `luofu_pie.arm=1` command-line opt-in so
+   a normal boot still never touches the block. Section 12.2. [V]
 
 ---
 
@@ -658,13 +660,19 @@ this run - it read registers, it did not exercise the engine or write anything.
 
 ## 11. Minimal implementation plan: from patch 009 to a working netdev
 
-> **Status 2026-11-18:** a refusing draft of stages P1/P2 exists as patch `015`
-> (`drivers/net/ethernet/hisilicon/luofu-pie.c`): it validates resources and allocates the
-> coherent ring bookkeeping, then returns `-EOPNOTSUPP` without touching the engine. **The P3
-> read-only inventory has since been captured** (inv1 run + DT follow-up, 2026-11-18; section 5.4,
-> [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)); feeding it into patch 015 and the P4
-> bring-up is the next PIE step. The offsets/descriptor accessors/IRQ schedule below are compiled
-> scaffolding where recovered; unrecovered fields stay zero and TODO.
+> **Status 2026-11-18 (PIE-datapath session):** P1/P2 are implemented as patches `015` +
+> `020` (`drivers/net/ethernet/hisilicon/luofu-pie.c`). Patch `020` is the draft ring engine
+> built from the P3 measured baseline: coherent 32-byte descriptor rings for the two active RX/TX
+> channels, the recovered v250 global/per-channel register initialization, mask/unmask + NAPI
+> receive sequencing, the global RX enable at `0x3200` bit 0, a TX producer with poll-only
+> completion, and a read-back verification that tears the engine down on any mismatch. The engine
+> is **armed only with the explicit `luofu_pie.arm=1` command-line opt-in**; without it probe
+> validates every resource and refuses before the first register write, clock enable or reset
+> toggle. The RX completion **decode is still [U]** - the poll consumes completions by read
+> pointer and re-arms the descriptors without handing buffers to the stack - and patch `009`'s
+> GEMAC is now a draft phylink/netdev front end that only registers when this backend is armed
+> (P4 partial). Traffic delivery (P5) still needs the LSW egress map; the remaining [U] rows are
+> listed in section 10.
 
 ### 11.1 Shape decision (recommended)
 
@@ -701,9 +709,9 @@ if a binding property is wanted, use documented `hisilicon,rx-ring`-style proper
 | --- | --- | --- |
 | **P0 - spec** (this document) | register/descriptor/channel/qid/ACP model; fixture hashes; commands | document review; links resolve; no invented values (every numeric cited) |
 | **P1 - PIE binding + probe skeleton** | new `hisilicon,luofu-pie.yaml` (reg 64 KiB, 4 interrupts, clocks/resets, `dma-coherent`, SoC-variant data instead of the vendor `hwver` property); `CONFIG_LUOFU_PIE` (tristate, `depends on OF`) with a `[N]` provenance entry in the config; driver probe does clock/reset/ioremap/IRQ acquisition + `reg_init` ordering, then stops before enabling anything | `make target/linux/prepare` and `make target/linux/compile` RC=0 with `CONFIG_WERROR=y`; `dt_binding_check` PASS; board DTS zero dtc warnings; config re-derivation idempotent (only the new `[N]` line changes). No hardware. |
-| **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | compile/checkpatch clean; static self-checks; no hardware |
+| **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | **DONE 2026-11-18 as patch `020`** (host-compiled only, arm-gated): rings, recovered init/mask sequencing, NAPI RX poll (completion/refill only - no decode), TX producer, exported backend; compile/checkpatch/bindings/DTS clean. No hardware. |
 | **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | **DONE 2026-11-18** on the stock vendor boot (read-only, no writes): every allowlisted offset returned a plausible value, static words were stable, the dynamic pointers moved, and the programmed TX/RX channel configs equal the live overlay `tx_ring[0]/rx_ring[0]` (section 5.4; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` + `followup/`). Acceptance met for the register-readable [I]/[U] rows; see section 10 for what the run does **not** settle. |
-| **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), calls PIE probe, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> PIE + phylink; enable only gmac3 (the bench-measured cable port) and the pie node in the DTS via `shared.patch` | benched with recovery armed: netdev appears, carrier up, TX doorbell advances the ring read pointer, no lockup; **no traffic claim yet** |
+| **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), checks that the PIE backend is armed, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> phylink; enable only gmac3 (the bench-measured cable port) and the pie node in the DTS via `shared.patch` | **HALF DONE 2026-11-18 as patch `020`** (host-compiled only): the netdev/phylink glue + TX forwarding exist and are gated on the armed backend; the DTS nodes are still `disabled` and nothing has run. Bench gate unchanged: netdev appears, carrier up, TX doorbell advances the TX read pointer, no lockup; **no traffic claim** |
 | **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the four live ports, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | M2-equivalent: ping between the host and a LAN port through our netdev with no vendor network module bound |
 | **P6 - upstream series** | split patches (PIE engine, GEMAC netdev, LSW minimal), bindings, config, DTS; document hardware-unverified behaviour honestly | review/checkpatch; bench evidence recorded separately |
 
