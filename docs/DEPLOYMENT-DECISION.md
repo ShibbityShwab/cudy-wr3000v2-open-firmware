@@ -79,8 +79,11 @@ stock:
 
 Hard rules for that deployment, unchanged [repo: `docs/FLASH-PLAN.md`, `docs/HAZARDS.md`]:
 full dumps before any write (held: mtd0-mtd16), **one slot always stock**, kernel slot writes must
-write the whole 8,650,752-byte slice, `scp -O` only, UART is the last resort, and the slot selector is
-`boot_reg` (`0x10` = A, `0x21` = B) plus **both** env copies.
+write the whole 8,650,752-byte slice, `scp -O` only, UART is the last resort, and the bench slot
+switch is the env `bootflag` plus the `boot_reg` marker (`0x10` A / `0x21` B, the
+project's bench value; normalised on the same boot, never persistent - see
+[`SELECTOR-0x21.md`](SELECTOR-0x21.md)). The installed target path instead relies on the
+loader's mismatch failover and a boot-time running-pair recorder.
 
 ## 5. What this file commits the loop to
 

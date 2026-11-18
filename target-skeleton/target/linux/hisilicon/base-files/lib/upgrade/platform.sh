@@ -17,38 +17,61 @@
 #   1. re-runs platform_check_image (defence in depth: a direct do_stage2
 #      invocation must not write an unvalidated container);
 #   2. resolves the ACTIVE pair from two independent in-boot witnesses that
-#      must agree: the luofu-selector sysfs current_pair (the SYSCTRL cell the
-#      loader reads on the next boot) and the rootfs slot this system booted
-#      from (/sys/class/ubi/ubi0/mtd_num cross-checked with that mtd's
-#      /proc/mtd label). /proc/cmdline is not used: the measured boot carries
-#      no slot token;
+#      must agree: the luofu-selector sysfs current_pair (the SYSCTRL cell's
+#      record of the pair) and the rootfs slot this system booted from
+#      (/sys/class/ubi/ubi0/mtd_num cross-checked with that mtd's /proc/mtd
+#      label). /proc/cmdline is not used: the measured boot carries no slot
+#      token. This check is only valid because the target image records the
+#      running pair on every boot (base-files/etc/init.d/luofu_record_pair),
+#      so the cell and the booted rootfs agree again after init;
 #   3. selects the INACTIVE pair by /proc/mtd label (kernelb+rootfsb after an
 #      A boot, kernela+rootfsa after a B boot) and validates the measured
 #      partition sizes and the container members against them;
 #   4. writes the kernel slice (mtd write; erase+write) and the rootfs UBI
 #      (ubiformat) to the inactive pair only, then reads both regions back and
 #      verifies them;
-#   5. syncs, and only then moves the selector to the inactive pair, reading
-#      it back. On any failure the selector is left - or restored - on the
-#      active pair, so the next boot still comes up on the untouched pair.
-#      The selector write is last because there is no way back from a
-#      half-written pair except the other pair;
+#   5. syncs, and only then writes the inactive pair's value into the selector
+#      record, reading it back. The bootloader selects the pair from its env
+#      bootflag, so writing the value that does not match the env is what
+#      makes the next boot take the bootloader's failover path: it re-stamps
+#      the env to the written pair, saves it and boots it; its bootfip then
+#      stores the opposite value, and the new image's boot pair recorder
+#      re-records the running pair once that boot succeeds. On any failure the
+#      selector is left - or restored - on the active pair, so the next boot
+#      still comes up on the untouched pair. The selector write is last
+#      because there is no way back from a half-written pair except the other
+#      pair;
 #   6. returns and lets /lib/upgrade/do_stage2 run its existing reboot path.
 #      This function never reboots, never erases rootfs_data (mtd15 is a
-#      separate shared partition) and never writes the env copies.
+#      separate shared partition) and never writes the env copies: the env
+#      belongs to the bootloader, and its mismatch/failover path is the
+#      supported re-stamp.
 #
-# Selector evidence (measured, nothing invented):
-#   - 0x10 = A pair, 0x11 = B pair: the loader's own "bootreg init, set 10 /
-#     set 11" console prints and a controlled 0x11 -> A/B -> B test with the
-#     running rootfs slot read back (parent BENCH-FACTS.md section 5; ledger
-#     phase 67). The cell is sticky across resets.
-#   - 0x21 = the stock "sysenv" userspace manual/recovery B handover; its
-#     post-boot stability has never been measured, so an in-boot 0x21 (or any
-#     other unmeasured value) refuses the automated handover.
-#   - env blocks enva (mtd3) / envb (mtd4): the controlled tests showed the
-#     env bootflag is an output the loader re-stamps from the cell, so this
-#     path does not write them. Not writing them is the [U] part one attended
-#     A/B validation still has to confirm.
+# Selector evidence (corrected 2026-11-18 from docs/SELECTOR-0x21.md; measured,
+# nothing invented):
+#   - The bootloader selects the pair from the env "bootflag" (bootcmd reads
+#     kernel${bootflag}); the SYSCTRL cell is the loader's *record* of the
+#     pair, not a second selector. 0x10 = A pair recorded, 0x11 = B pair
+#     recorded: the loader's own "bootreg init, set 10 / set 11" prints, its
+#     bootfip opposite-pair store and the controlled 0x10/0x11 tests (parent
+#     BENCH-FACTS.md section 5; ledger phase 67). The cell is sticky across
+#     warm resets and is cleared by a true power-on.
+#   - On every boot bootfip stores the OPPOSITE pair's low byte (low-byte
+#     read-modify-write, upper bits preserved); a recorded value that
+#     contradicts the env on the next boot makes the loader re-stamp the env
+#     and boot the other pair. A successful boot is only stable if userspace
+#     re-records the running pair, which the target image does in
+#     base-files/etc/init.d/luofu_record_pair (START=96, after
+#     /etc/init.d/done). Without it the reboot after a normal boot silently
+#     follows the failover path back to the old pair.
+#   - 0x21 is the project's measured *bench* handover value (FLASH-PLAN.md /
+#     tools/fire-device.sh), not a vendor value: vendor userspace writes only
+#     0x10/0x11, the loader discards the 0x20 marker bit on the same boot and
+#     0x21 never persists. An in-boot 0x21 (or 0x00, or any other unmeasured
+#     value) still refuses the automated handover, as before.
+#   - Env blocks enva (mtd3) / envb (mtd4): the bootloader owns them and
+#     re-stamps them only on its mismatch/failover path. This path never
+#     writes them. One attended A/B validation has to confirm the re-stamp.
 #
 # Rules kept from the earlier refusal design: labels, never bare MTD numbers;
 # never U-Boot's TFTP fipupdate_eth/rootfsupdate_eth (they overwrite both
@@ -338,6 +361,19 @@ _luofu_err() {
 	echo "hisilicon/luofu: $*" >&2
 }
 
+_luofu_warn() {
+	echo "hisilicon/luofu: WARNING: $*" >&2
+}
+
+# The image's boot pair recorder re-records the running pair after every
+# successful boot; it is what keeps the selector record and the booted pair
+# in agreement (and what stops a normal reboot from taking the loader's
+# failover path). Checked as a warning only: refusals are unchanged.
+_luofu_recorder_present() {
+	[ -e "$LUOFU_TEST_ROOT/etc/init.d/luofu_record_pair" ] ||
+		[ -e /etc/init.d/luofu_record_pair ]
+}
+
 # Exactly one /proc/mtd entry for a label -> "<mtdN> <size-hex>". More than
 # one match is treated as no match: the label must be unambiguous.
 _luofu_mtd_lookup() { # <label>
@@ -526,6 +562,8 @@ platform_do_upgrade() {
 
 	active="$(_luofu_active_pair)" || return 1
 	target="$(_luofu_other_pair "$active")"
+
+	_luofu_recorder_present || _luofu_warn "no boot pair recorder at /etc/init.d/luofu_record_pair on this system; the post-boot pair recording is what keeps the selector stable - do not hand over to a build without it"
 	klabel="kernel$target"
 	rlabel="rootfs$target"
 

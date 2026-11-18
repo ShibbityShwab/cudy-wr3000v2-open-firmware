@@ -152,7 +152,9 @@ Review points:
 3. **LUOFU_SWITCH vs LUOFU_PIE** placement inside the file differs (one in
    the ARM if, one outside).  Move LUOFU_SWITCH inside `if ARM || ARM64 ||
    COMPILE_TEST` with PIE/GMAC; no functional bug, but reviewers notice.
-4. 0017 adds one extra blank line before `config LUOFU_SELECTOR`; clean it.
+4. ~~0017 adds one extra blank line before `config LUOFU_SELECTOR`~~ -
+   **fixed 2026-11-18** in the corrected patch (now one blank line); keep it
+   clean when editing the patch again.
 5. The new drivers/pinctrl/hisilicon/ directory needs both the
    `source`/`obj-y` lines in drivers/pinctrl/{Kconfig,Makefile} (0011 has
    them) and its own Kconfig/Makefile; add this directory to MAINTAINERS

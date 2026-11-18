@@ -66,7 +66,10 @@ FMC SPI-NAND (critical storage path; ECC/OOB/quad-enable semantics
 unverified, and it depends on a v6.19 SPI-NAND chip entry), pinctrl
 (consumer/default pin states unmeasured), PCIe host (never enumerated;
 write-only misc-window rules only), and the A/B boot selector (new sysfs
-ABI; post-boot selector protocol not fully measured).
+ABI; the recorded-pair contract is reconstructed from local evidence - the
+bootloader env selects the pair, the SYSCTRL cell is its opposite-pair/failed-
+boot record, and a boot-time recorder in the target image is required for
+stability - but the protocol is not hardware-validated).
 
 **4. RFC / partial drafts, do not merge** - 0009, 0010, 0015, 0016
 GEMAC (binding/resource half only; probe refuses, no netdev, no data
@@ -130,10 +133,10 @@ until the hardware inventory/write set exists.
 | 1 | sequential apply of the 17 series files to pristine 6.18.60 | patch(1) 17/17 RC=0; git am 17/17 RC=0; resulting trees identical; 0 fuzz, 0 rejects | 04-validation.md, validation/ |
 | 2 | offset note | only 0008 has offsets (-75, -12 in drivers/net/phy/{Kconfig,Makefile}) because the source patch was generated against an OpenWrt-patched kernel tree; content applies cleanly | 04-validation.md |
 | 3 | checkpatch.pl --no-tree (series patch mode, default and --strict) | 0 errors; 46 warnings, all explained (binding split, MAINTAINERS, 16 long lines, 2 help paragraphs, strict-only spinlock/alignment checks) | 04-validation.md, validation/checkpatch-*.log |
-| 4 | full kernel compile of 0001-0017 | make target/linux/prepare RC=0 (1,198 patching lines, 0 rej/orig); make target/linux/compile RC=0, 0 warnings under CONFIG_WERROR=y, zImage 3,262,472 B sha256 a4e4f6c0...; TEXT_OFFSET contract 0x80608000 unchanged | SKELETON-SMOKE.md (A/B install session) |
-| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped) | SKELETON-SMOKE.md sessions 5-12, A/B session |
-| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings, DTB 10,664 B sha256 5726f7cd... | SKELETON-SMOKE.md (A/B install session) |
-| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical, 309 symbols, idempotent | SKELETON-SMOKE.md (A/B install session) |
+| 4 | full kernel compile of 0001-0017 (re-run 2026-11-18 after the selector correction) | make target/linux/prepare RC=0 (1,198 patching lines, 0 rej/orig); make target/linux/compile RC=0, 0 warnings under CONFIG_WERROR=y, zImage 3,265,056 B sha256 5b417ce9...; CONFIG_LUOFU_SELECTOR=y built in; TEXT_OFFSET contract 0x80608000 unchanged | SKELETON-SMOKE.md (selector-fix session) |
+| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped); the corrected boot-selector YAML re-checked 2026-11-18 | SKELETON-SMOKE.md sessions 5-12, A/B + selector-fix sessions |
+| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings, DTB 10,664 B sha256 5726f7cd... (re-run 2026-11-18: unchanged) | SKELETON-SMOKE.md (A/B install + selector-fix sessions) |
+| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18) | SKELETON-SMOKE.md (A/B install + selector-fix sessions) |
 | 8 | OpenWrt image chain (not kernel submission scope) | make world RC=0 in an isolated clone, reproducible container | SKELETON-SMOKE.md (image-recipe session) |
 | 9 | hardware | none. no boot, no probe-on-silicon, no register I/O, no UART/TFTP/flash, no device | - |
 
@@ -165,7 +168,7 @@ done.
 | 0015 PIE | **DRAFT**: scaffolding only; probe allocates nothing permanent and returns -EOPNOTSUPP before touching a register. Not mergeable. |
 | 0016 LSW | **DRAFT / D1a skeleton**: validates 15 windows, clocks, resets and the switchdev port model, then refuses with -EOPNOTSUPP before any register access. Not mergeable. |
 | 0013 PCIe | **RFC**: encodes the measured hard access rules (never read the misc window, aligned dwords only) but has never enumerated an endpoint. |
-| 0017 selector | **RFC**: new sysfs ABI; read path is measured, post-boot protocol/env re-stamp is not. ABI must be reviewed before freezing. |
+| 0017 selector | **RFC**: new sysfs ABI. The recorded-pair contract is reconstructed from local evidence (docs/SELECTOR-0x21.md: env bootflag selects, the cell records, 0x21 is the project's bench value and never persists) and the store now does the loader-style low-byte read-modify-write; post-boot stability depends on a boot-time recorder in the target image (not this series), and the env re-stamp and the cell's upper 24 bits remain unmeasured. ABI must be reviewed before freezing. |
 | 0006 FMC | **RFC**: storage path is critical and its ECC/OOB/quad-enable semantics are unverified. |
 | 0011 pinctrl | **RFC**: probe writes nothing and consumer states are unmeasured; applying guessed muxes could break console/NAND. |
 
@@ -186,7 +189,8 @@ splits by subsystem and by readiness:
    its consumers.
 3. **RFC series with an explicit open-work statement:** 0011 pinctrl,
    0006 FMC (only after the v6.19 ESMT chip entry lands), 0013 PCIe,
-   0010 restart + 0017 selector (needs the sysupgrade protocol story).
+   0010 restart + 0017 selector (needs the sysupgrade protocol story and the
+   target's boot-time pair recorder).
 4. **Do not send yet:** 0009 GEMAC, 0015 PIE, 0016 LSW.  They are
    refusing/partial drafts; post as RFC only when asking for design
    direction, clearly marked `[RFC PATCH]`, and never as a working

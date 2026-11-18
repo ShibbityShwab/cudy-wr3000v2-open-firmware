@@ -277,16 +277,21 @@
 	};
 
 	/*
-	 * A/B boot selector: the SYSCTRL cell at 0xc08 that the stock loader reads
-	 * on the next boot. 0x10 selects the A pair (kernela + rootfsa) and 0x11
-	 * the B pair (kernelb + rootfsb), both measured; 0x21 is the vendor sysenv
-	 * manual/recovery B handover and is only reported, never written by the
-	 * automated install path.
+	 * A/B boot selector: the SYSCTRL cell at 0xc08 that records the firmware
+	 * pair. The bootloader selects the pair from its env bootflag (bootcmd
+	 * reads kernel${bootflag}); its bootfip stores the opposite pair's low byte
+	 * before Linux starts and userspace re-records the running pair after a
+	 * successful boot. 0x10 = A pair recorded (kernela + rootfsa), 0x11 = B
+	 * pair recorded (kernelb + rootfsb); 0x21 is the project's bench handover
+	 * value (never written by vendor userspace) and is only reported, never
+	 * written by the automated install path.
 	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
 	 *          hisilicon,luofu-boot-selector.yaml
 	 * Probe performs no register access; the driver writes the cell only when
-	 * userspace stores into next_pair. Enabled because the A/B sysupgrade path
-	 * (base-files/lib/upgrade/platform.sh) requires it; harmless on a boot
+	 * userspace stores into next_pair, as a low-byte read-modify-write that
+	 * preserves the upper 24 bits and verifies the read-back.
+	 * Enabled because the A/B sysupgrade path (base-files/lib/upgrade/platform.sh)
+	 * requires it; harmless on a boot
 	 * that never touches the selector.
 	 */
 	boot-selector {

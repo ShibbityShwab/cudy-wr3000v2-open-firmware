@@ -327,14 +327,14 @@ NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0017-soc-luofu-boot-selector.patch
 WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
-#70: 
+#84: 
 new file mode 100644
 
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
 
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
 
-total: 0 errors, 3 warnings, 0 checks, 372 lines checked
+total: 0 errors, 3 warnings, 0 checks, 436 lines checked
 
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.

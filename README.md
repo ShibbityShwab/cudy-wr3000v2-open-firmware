@@ -14,7 +14,11 @@
 > spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md). These are designs and
 > schematics, not a working target: **no image, driver series or boot exists yet** (the draft
 > target's kernel does compile; the full 001-017 series, a host-built target image and an A/B
-> install path now exist as host-validated drafts, and the review-form submission series with
+> install path now exist as host-validated drafts, the A/B selector contract was corrected on
+2026-11-18 against local evidence ([`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md): the loader's
+env `bootflag` selects the pair and the SYSCTRL cell is its record, patch 017 now does the
+loader-style low-byte store, and the target image gains a boot-time running-pair recorder), and
+the review-form submission series with
 > cover letter/commit messages/MAINTAINERS proposal is
 > [`upstream/series-6.18/`](upstream/series-6.18/README.md) - but nothing has been booted/flashed
 > and several drivers are refusing drafts). The first-pass files are in

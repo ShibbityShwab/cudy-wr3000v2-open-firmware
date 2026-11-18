@@ -187,41 +187,58 @@ From the vendor base DTB (`soc/vendor-dt-notes.md` §6; the same table is in the
 
 ### 3.4 Slot selection and environment
 
-- Selector cell: sysctrl/sysenv `0x10100C08`. U-Boot prints `bootreg init, set 10` (A pair) or
-  `set 11` (B pair); a manual slot-B fire wrote `0x21`; `0x10` is the A pair and `0x11` the
-  B pair in the loader's own print. [V] parent `BENCH-FACTS.md` §5. The exact write semantics
-  for both slots are only partly measured - an A-side handover value is **not established**, and
-  the old "plain `fw_setenv` works" assumption was wrong (the binary is a symlink to
-  `fw_printenv`). [V] same section; **treat the selector protocol as [U] until one attended
-  A/B validation**.
-- Selector interface and handover recipe (patch `017`, host-only): a
-  `drivers/soc/hisilicon/luofu-selector.c` sysfs interface reads the cell
-  (`current_pair`: `a`, `b`, plus the documented `manual-b`, `uninitialised` and
-  `unknown` states) and stores only the two measured recorded-pair values
-  (`next_pair`: `a` -> 0x10, `b` -> 0x11) with a read-back check; probe
-  performs no register access and the page stays a shared syscon (no second
-  mapping). The recorded values moved the pair in both directions in the
-  controlled tests (0x11 -> B, 0x10 -> A), so both recorded handovers are [V].
-  A complete `sysupgrade` remains [U]: no attended upgrade has run, and the
-  loader's env re-stamp and the post-boot cell state still need one A/B
-  validation. [I]
-- A draft restart driver (patch `010`) saves the selector before a reset by
-  reading the cell and writing the same value back. That preserves the pair without
-  inventing the value the stock path writes, but it does not close the protocol: the
-  Linux read path for `sysupgrade` and one attended A/B validation remain open. [I]
-- Environment blocks: `enva` (mtd3) and `envb` (mtd4), 128 KiB each; the measured block layout is
-  `crc32-little-endian(4) | flags(1) | data(131067)`; the bench writes **both** copies when
-  switching. [V] `FLASH-PLAN.md` "Slot switch recipe"; [I] an upstream helper that reproduces
-  the format and is validated.
-- Stock U-Boot environment (from `dumps/router-20261108/enva.bin`, local evidence) also carries
-  TFTP update commands: `fipupdate_eth` writes both kernel slots; `squashfsupdate_eth` /
-  `rootfsupdate_eth` write both rootfs slots. This is an **installation/recovery** path that
+- **The env `bootflag` is the selector; the SYSCTRL cell is its record.** `bootcmd` is
+  `mtd read kernel${bootflag} ${loadaddr}; bootfip ${loadaddr}`, so the loader boots the pair
+  named by the environment. The 32-bit cell at 0x10100c08 (low byte) records the pair: on every
+  boot `bootfip` stores the **opposite** pair of the env (0x11 for an A boot, 0x10 for a B boot)
+  with a low-byte read-modify-write, and a recorded value that contradicts the env on the next
+  boot makes the loader print "boot from kernelX failed, change to kernelY", re-stamp the env to
+  the other pair, save it and boot that pair. 0x00 is the value a true power-on clears the cell to;
+  the loader then initialises it from the env. [V] the reconstruction in
+  [`SELECTOR-0x21.md`](SELECTOR-0x21.md) (dumped loader disassembly + read-only console
+  captures). **Treat the protocol as [U] on hardware until one attended A/B validation**; the
+  measured facts are the loader's own prints and the disassembly, not our own boots.
+- **A boot is only stable if userspace re-records the running pair.** The vendor firmware does
+  it at boot-done time (`/etc/init.d/hsan_appm` -> `boot_done`, ~16-30 s); our target image
+  does it in `base-files/etc/init.d/luofu_record_pair` (START=96, after
+  `/etc/init.d/done`). Without that step the loader's opposite-pair marker survives every boot
+  and the reboot after a normal boot would silently take the failover path back to the previous
+  pair. [V] same reconstruction.
+- **0x21 is the project's bench handover value, not a vendor one.** The vendor userspace writes only
+  0x10/0x11 (`libhi_upgrade.so`, the 2.5.24 `platform.sh`); 0x21 originates in the project's
+  fire recipe (`FLASH-PLAN.md` slot switch). The loader ignores the 0x20 marker bit, treats 0x21
+  as "not the opposite pair" and normalises the low byte on the same boot, so **0x21 never
+  persists**. The older claim that the vendor writes 0x21 is contradicted by the local rootfs
+  trees. [V] [`SELECTOR-0x21.md`](SELECTOR-0x21.md) 2.2/5.4.
+- **Selector interface (patch `017`, host-only).** A `drivers/soc/hisilicon/luofu-selector.c`
+  sysfs interface reads the cell (`current_pair`: `a`, `b`, `manual-b`, `uninitialised`,
+  `unknown`) and stores only the two measured recorded-pair values (`next_pair`: `a` -> 0x10,
+  `b` -> 0x11) using the loader-style **low-byte read-modify-write** (upper 24 bits preserved and
+  unmeasured) with a whole-cell read-back check; probe performs no register access and the page
+  stays a shared syscon (no second mapping). The recorded values moved the pair in both directions
+  in the controlled tests (0x11 -> B, 0x10 -> A). [V]/[I] A complete `sysupgrade` remains [U]: no
+  attended upgrade has run, and the loader's env re-stamp and the post-boot cell state still need
+  one A/B validation.
+- **A draft restart driver (patch `010`) saves the selector before a reset** by reading the cell
+  and writing the same value back. That preserves whatever is recorded - the running pair **only
+  after** the boot-time recorder has run; before that it preserves the loader's opposite-pair
+  marker, which is the correct failover behaviour but not a successful-boot record. [I]
+- **Environment blocks**: `enva` (mtd3) and `envb` (mtd4), 128 KiB each; the measured block
+  layout is `crc32-little-endian(4) | flags(1) | data(131067)`. The bootloader owns them and
+  re-stamps them only on its mismatch/failover path; the installed path never writes them. The
+  older bench recipe that wrote **both** copies is history and must not be copied into
+  `sysupgrade`. [V] [`SELECTOR-0x21.md`](SELECTOR-0x21.md) 1.2/3.2; [U] the exact flags-byte
+  semantics.
+- **Stock U-Boot environment** (from `dumps/router-20261108/enva.bin`, local evidence) also
+  carries TFTP update commands: `fipupdate_eth` writes both kernel slots; `squashfsupdate_eth`
+  / `rootfsupdate_eth` write both rootfs slots. This is an **installation/recovery** path that
   ignores A/B semantics; `sysupgrade` must not use it. [V] local env dump; [U] its use as the
   factory-install path (§5.5).
-- Bootloader failover: a failed handover is followed by a failover read of the other slot, but the
-  older claim *"a failed boot leaves a status word that makes bootfip reject the slot"* is **not
+- **Bootloader failover is the mismatch path above**, not a status word: a failed handover leaves
+  the opposite-pair marker, and the next boot re-stamps the env and boots the other pair. The older
+  claim *"a failed boot leaves a status word that makes bootfip reject the slot"* is **not
   supported** by the 2026-11-16 captures. Do not build a rollback plan on it. [V]
-  `BENCH-FACTS.md` §5.
+  [`SELECTOR-0x21.md`](SELECTOR-0x21.md) 3.4.
 
 ---
 
@@ -441,10 +458,13 @@ lesson is in parent `LESSONS.md` 21):
 **What not to rely on**: the vendor "slot failed" status word (§3.4). Rollback is by keeping the
 other pair bootable and switching back, not by assuming the loader rejects a bad slot.
 
-**Status (2026-11-18)**: steps 1-5 are implemented in
-`base-files/lib/upgrade/platform.sh` (`platform_do_upgrade`), with the selector
-store as the last step after both read-backs, and a mocked host-side test
-(`tools/test-platform-abinstall.sh`). Nothing has run on hardware; the
+**Status (2026-11-18, updated by the selector-fix session)**: steps 1-5 are
+implemented in `base-files/lib/upgrade/platform.sh` (`platform_do_upgrade`), with the
+selector store as the last step after both read-backs, and a mocked host-side
+test (`tools/test-platform-abinstall.sh`). The two-witness step 1 is valid
+because the image records the running pair on every boot
+(`base-files/etc/init.d/luofu_record_pair`); the handover is the loader's
+mismatch path (§3.4), not an env write. Nothing has run on hardware; the
 env-block re-stamp and one attended A/B validation remain [U].
 
 ### 5.5 Installation path - open question

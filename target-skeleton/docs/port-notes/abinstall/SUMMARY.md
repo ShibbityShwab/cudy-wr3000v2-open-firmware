@@ -10,6 +10,17 @@ exact selector values and the commands/results of the A/B install session
 (shared task-27, agent `ab-install`). Nothing here is a boot, flash or install
 claim.
 
+> **Correction (2026-11-18, selector-fix session).** The selector claims below are
+> superseded by [`docs/SELECTOR-0x21.md`](../../../../docs/SELECTOR-0x21.md). The pair is
+> selected by the loader's env `bootflag`; the SYSCTRL cell is its opposite-pair/failed-boot
+> record; `0x21` is the project's bench marker (vendor userspace writes only `0x10`/`0x11`)
+> and is normalised on the same boot, never persistent; patch `017` now uses the loader-style
+> low-byte read-modify-write, and the target image must (and now does) re-record the running pair
+> at boot in `base-files/etc/init.d/luofu_record_pair`. The install sequence and the
+> validation results in this file stand as the state of this session; the corrected contract is
+> in [`docs/SELECTOR-0x21.md`](../../../../docs/SELECTOR-0x21.md) and the selector-fix
+> session's own record.
+
 This directory is the hand-off: `shared.patch` (apply from the `opensource/`
 root) contains the README, SKELETON-SMOKE, TARGET-DESIGN, TARGET-SKELETON,
 port-notes, board-DTS, config and target-Makefile updates. Directly edited
@@ -26,15 +37,16 @@ The stock loader selects the complete firmware pair from a 32-bit SYSCTRL cell
 | --- | --- | --- |
 | `0x10` | A pair = `kernela` (mtd11) + `rootfsa` (mtd13) | loader's own "bootreg init, set 10"; controlled write -> reboot -> booted A pair with the running rootfs read back. Parent `BENCH-FACTS.md` section 5; ledger phase 67. |
 | `0x11` | B pair = `kernelb` (mtd12) + `rootfsb` (mtd14) | loader's "set 11"; controlled write -> reboot -> booted B pair. Same sources. |
-| `0x21` | vendor "sysenv" manual/recovery B handover (the vendor slot-switch recipe writes it) | measured as a write that boots B (`FLASH-PLAN.md` "Slot switch recipe"; `BENCH-FACTS.md` section 5). Its post-boot cell state has never been measured -> the kernel reports it as `manual-b` and the automated installer refuses it. |
+| `0x21` | the project's bench handover marker (written by `FLASH-PLAN.md` / `tools/fire-device.sh`, not by vendor userspace) | the loader ignores the `0x20` bit, treats 0x21 as "not the opposite pair" and normalises the low byte on the same boot, so it never persists. The kernel reports it as `manual-b` and the automated installer refuses it. [V] `SELECTOR-0x21.md` 2.2/5.4 |
 | `0x00` | un-initialised at a true power-on; the loader validates and records a pair | `BENCH-FACTS.md` section 5. Reported as `uninitialised`; the automated installer refuses it. |
 
-- **The env blocks are not a second selector.** `enva`/`envb` (mtd3/mtd4,
-  format `crc32-LE(4) | flags(1) | data(131067)`) are re-stamped by the loader
-  from the cell; the controlled tests found the env `bootflag` to be an
-  output, and the earlier "plain `fw_setenv` works" path is a known trap.
-  The install path therefore writes the cell and **not** the env blocks; one
-  attended A/B validation has to confirm the re-stamp.
+- **The env `bootflag` is the selector; the cell is its record.** `enva`/`envb`
+  (mtd3/mtd4, format `crc32-LE(4) | flags(1) | data(131067)`) are owned by the loader,
+  which re-stamps them only on its mismatch/failover path. The earlier "plain
+  `fw_setenv` works" path is a known trap. The install path therefore writes the cell
+  record and **not** the env blocks; a boot that reaches userspace must re-record the running
+  pair (the target's boot-time recorder), and one attended A/B validation has to confirm the
+  re-stamp. [V] `SELECTOR-0x21.md` 3.2-3.4.
 - The cell is shared with the machine-restart driver (patch `010`, which
   write-sames it before a reset). Patch `017` talks to the same SYSCTRL
   regmap and never maps or claims the page, so there is no second ioremap and
@@ -90,10 +102,10 @@ The stock loader selects the complete firmware pair from a 32-bit SYSCTRL cell
 /sys/devices/platform/luofu-selector/next_pair      WO  "a" -> 0x10, "b" -> 0x11; -EINVAL otherwise; -EIO if read-back differs
 ```
 
-The store writes the full dword (the measured `devmem 0x10100C08 32 0x10/0x11`
-operation), warns but proceeds when the current cell is outside the measured
-encodings (so a damaged cell can be repaired from userspace), and verifies the
-read-back. The manual/recovery value `0x21` is deliberately not reachable
+The store is a low-byte read-modify-write, like the loader's own `bootfip` store and the
+vendor sysenv driver: the upper 24 bits (unmeasured) are preserved and the whole cell is read
+back; it warns but proceeds when the current cell is outside the measured encodings (so a
+damaged cell can be repaired from userspace). The manual/recovery value `0x21` is deliberately not reachable
 from this interface.
 
 ## 5. Mocked host-side tests

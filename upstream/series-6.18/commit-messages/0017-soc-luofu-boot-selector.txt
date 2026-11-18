@@ -1,21 +1,32 @@
 soc: hisilicon: add Luofu A/B boot selector
 
-Add a sysfs interface to the A/B boot-selector cell in the SYSCTRL page
-of the HiSilicon Hi5671Y "luofu" SoC (0x10100000 + 0x0c08 on this
-board).  The stock loader boots the firmware pair named by the low byte
-and keeps the recorded value sticky across resets: 0x10 is the A pair,
-0x11 the B pair, 0x21 a manual/recovery handover written by the stock
-sysenv interface, and 0x00 the power-on value.
+Add a sysfs interface to the SYSCTRL cell in the HiSilicon Hi5671Y
+"luofu" SoC (0x10100000 + 0x0c08 on this board) that records the A/B
+firmware pair (kernela + rootfsa, or kernelb + rootfsb).
+
+The stock loader selects the pair from its environment (bootflag) and
+uses the cell as its record of the pair: before Linux starts it stores
+the opposite pair's low byte (0x11 for an A boot, 0x10 for a B boot), and
+a boot that reaches userspace has to re-record the running pair or the
+next reset takes the loader's failover path and switches back.  The
+important encodings are therefore 0x10 (A recorded), 0x11 (B recorded)
+and 0x00 (the value a true power-on clears the cell to); 0x21 is the
+project's measured bench handover value, not a vendor one - vendor
+userspace writes only 0x10/0x11 and the loader discards the 0x20 marker
+bit on the same boot, so 0x21 never persists.
 
 current_pair decodes the cell; next_pair accepts only the two measured
-recorded-pair values and verifies the read-back.  Probe performs no
-register access, and the SYSCTRL page stays a shared syscon with the
-machine-restart driver.
+recorded-pair values and writes them with a low-byte read-modify-write
+that preserves the upper 24 bits (exactly like the loader's own store and
+the vendor sysenv driver) and verifies the whole cell read-back.  Probe
+performs no register access, and the SYSCTRL page stays a shared syscon
+with the machine-restart driver.
 
-This interface is needed by the A/B sysupgrade path, which is host-only
-so far.  It is an RFC: the post-boot selector protocol, the env-block
-re-stamp and the first boot of a written pair are not measured, and the
-sysfs ABI has to be reviewed and frozen before it can be relied on.
+This interface is needed by the A/B sysupgrade path and by the target's
+boot-time pair recorder; both are host-only so far.  It is an RFC: the
+env-block re-stamp, the first boot of a written pair and the meaning of
+the cell's upper 24 bits are not measured, and the sysfs ABI has to be
+reviewed and frozen before it can be relied on.
 
 Host-compiled against linux-6.18.60, binding checked with
 dt_binding_check and checkpatch; never run on hardware.

@@ -11,7 +11,11 @@ rationale, and a repeatable host-only validation, plus a commit-ready
 Status: **host-only submission form; no hardware validation of any kind.**
 Sequential application to pristine linux-6.18.60 and checkpatch pass
 (see 04-validation.md); the series compiles and its bindings validate
-(recorded elsewhere); nothing has booted.
+(recorded elsewhere); nothing has booted.  The form was regenerated on
+2026-11-18 after patch 0017 (A/B boot selector) was corrected against the
+local evidence reconstruction `../docs/SELECTOR-0x21.md`; the series,
+commit message, validation logs and hashes were all regenerated in that
+pass.
 
 ## What is in here
 
@@ -75,12 +79,14 @@ To regenerate the series after editing a message:
   two spinlock comments, two alignments), not behavioural defects.  [V]
 - series diff bodies are byte-identical to the source patches apart from
   the inserted git extended headers; hashes recorded.  [V]
-- recorded earlier (not re-run here): the whole series builds in the
-  OpenWrt patched tree (prepare RC=0, compile RC=0, 0 warnings under
-  CONFIG_WERROR=y, zImage sha256 `a4e4f6c0...`), every new binding passes
-  dt_binding_check, the board DTS compiles with zero warnings, and the
-  kernel config re-derivation is idempotent.  Details and citations:
-  04-validation.md section 9.  [V for the recorded commands/results]
+- re-run for the corrected series (2026-11-18) in an isolated clone: the
+  whole series builds in the OpenWrt patched tree (prepare RC=0, 1,198
+  patching lines, 0 rej/orig; compile RC=0, **0 warnings** under
+  CONFIG_WERROR=y; zImage 3,265,056 B sha256 `5b417ce9...`;
+  `CONFIG_LUOFU_SELECTOR=y` built in), the corrected boot-selector binding
+  passes dt_binding_check, the board DTS compiles with zero warnings, and
+  the kernel config re-derivation is idempotent (309/309 symbols).  Details
+  and citations: 04-validation.md sections 9 and 13.  [V]
 
 ## What a reviewer should NOT expect
 
@@ -94,8 +100,14 @@ To regenerate the series after editing a message:
   TX/RX DMA model do not exist yet.
 - **Not a working storage/PCIe/restart/selector claim.**  The FMC
   (0006), PCIe host (0013), restart (0010) and A/B selector (0017) are RFC
-  or provisional: hardware semantics are unmeasured.  None of them has
-  been validated on this board.
+  or provisional: hardware semantics are unmeasured.  For 0017 the
+  recorded-pair contract is now reconstructed from local evidence (env
+  `bootflag` selects the pair, the SYSCTRL cell records it, 0x21 is the
+  project's bench value and never persists) and the store is the loader-style
+  low-byte read-modify-write, but the protocol and the env re-stamp are not
+  hardware-validated and its post-boot stability depends on a boot-time
+  recorder in the target image, not on this series.  None of these drivers
+  has been validated on this board.
 - **No Wi-Fi.**  Hi5622V100 is vendor-only [X]; the series contains no
   Wi-Fi code and makes no radio claim.
 - **No board DTS in this series.**  The draft DTS lives in

@@ -2231,3 +2231,97 @@ Not proven: any hardware behaviour. The post-boot cell value, the loader's
 env re-stamp, NAND read-back under ECC, bad-block behaviour, the first boot of
 the written pair and rollback are all still [U]. The A/B protocol is closed
 only by one attended validation.
+
+## 2026-11-18 (selector-fix session): corrected selector contract + boot pair recorder
+
+**Status: patch 017 and the target's base-files were corrected against the local
+evidence reconstruction (docs/SELECTOR-0x21.md), the target image gained the
+boot-time running-pair recorder, and everything was re-validated host-side.
+NOTHING HAS BOOTED OR BEEN FLASHED and no hardware behaviour is claimed.**
+
+### What changed
+
+- **Patch 017 corrected** (task-31): the comments, Kconfig help, YAML binding and
+  ABI doc no longer claim a vendor 0x21 provenance. They now state the
+  evidence: the bootloader selects the pair from its env bootflag, the SYSCTRL
+  cell is its opposite-pair/failed-boot record (0x10 = A recorded, 0x11 = B
+  recorded, 0x00 = power-on cleared, 0x21 = the project's bench handover
+  value), and vendor userspace writes only 0x10/0x11. The next_pair
+  store is now the loader-style **low-byte read-modify-write** (upper 24 bits
+  preserved, whole-cell read-back, -EIO if it does not stick); probe still performs
+  no register access and the page stays a shared syscon.
+- **Boot-time running-pair recorder** (new
+  base-files/etc/init.d/luofu_record_pair): START=96, after
+  /etc/init.d/done; derives the booted rootfs pair from
+  /sys/class/ubi/ubi0/mtd_num + its /proc/mtd label (optional
+  /proc/cmdline ubi.mtd= cross-check), waits bounded for the selector
+  interface, logs, and records the running pair only when the cell holds one of the
+  two established pairs and differs (idempotent). It never writes
+  manual/unknown values, never blocks the boot for long and never touches the env
+  blocks. This is the target's equivalent of the vendor boot_done step and is
+  what keeps the two-witness installer check valid.
+- **platform.sh contract comments corrected**: the env is the selector (not an
+  output re-stamped from the cell); the handover is the loader's mismatch path;
+  the two-witness check is documented as valid only because the recorder runs on
+  every boot; a warning (not a refusal - refusals unchanged) is emitted if the
+  running system has no recorder.
+- **Incoming shared edits** (target-skeleton/docs/incoming/selectorfix/shared.patch):
+  TARGET-DESIGN 3.4/5.4, SKELETON-SMOKE (this session), TARGET-SKELETON,
+  target-skeleton/README, the DTS boot-selector comment, and correction notes in
+  FLASH-PLAN, HYBRID-IMAGE-PLAN, DEPLOYMENT-DECISION and the abinstall port-notes.
+- **Review form regenerated**: commit message 0017 rewritten, series/0017 and
+  01-commit-messages.md regenerated (gen-series.py --check clean), validation
+  logs/hashes replaced, cover letter/README/04-validation updated. This session
+  record is itself part of the shared patch.
+
+### Validation (isolated clones; no device)
+
+- **Upstream series** (tools/run-validation.sh on the pristine 6.18.60 tarball):
+  patch(1) 17/17 RC=0 (0 fuzz, the two known 0008 offsets), git am 17/17 RC=0,
+  trees identical, checkpatch default/strict 0 errors / 46 warnings (0017: 3
+  review items, 436 checked lines). Logs/hashes replaced under
+  upstream/series-6.18/validation/.
+- **Kernel clone** (/home/shibbityshwab/openwrt-lab-selectorfix-k, a reflink copy
+  of the A/B-install lane clone, target reinstalled): make target/linux/prepare V=s
+  RC=0 (1,198 patching lines, no .rej/.orig in the kernel tree);
+  make target/linux/compile V=s -j16 RC=0, **0 warnings / 0 errors** under
+  CONFIG_WERROR=y; zImage 3,265,056 B sha256
+  5b417ce976d8bc7fb90f34056e3a3da02f271f1613fb7945ec54d99639839bb1;
+  CONFIG_LUOFU_SELECTOR=y built in; _text=stext=0xc0608000,
+  DTEXT_OFFSET=0x00608000.
+- **Binding/DTS/config**: boot-selector YAML dt_binding_check RC=0; board DTS
+  cpp+kernel dtc RC=0 zero warnings (10,664 B DTB sha256 5726f7cd...,
+  unchanged - only comments change in the DTS source, delivered via the shared
+  patch); dt-validate RC=0, no boot-selector diagnostic; config re-derivation
+  RC=0 twice, byte-identical (4106877f...), 309/309 symbols identical;
+  checkpatch file-mode 0 on driver/YAML/ABI.
+- **Mocked harness** (tools/test-platform-abinstall.sh): 94/94 fixture
+  assertions and 100/100 with the real 6,185,262 B container
+  (e869f105... from the previous lane). Covered: install path (unchanged
+  refusals + the recorder warning), recorder recording/idempotence/fail-safe paths
+  and the corrected record semantics.
+- **Image rebuild** (/home/shibbityshwab/openwrt-lab-selectorfix-img, a reflink
+  copy of the image clone, target reinstalled): make world -j16 RC=0 with
+  **0 warnings / 0 errors**; the rebuilt container is 6,185,262 B sha256
+  362ca4ece4df2b77b0e527ad5d948bbd997201ccb3bf6e2518d5ddaccbb59899; its rootfs
+  carries /etc/init.d/luofu_record_pair (mode 0755, byte-identical to the
+  repository file) and the enabled /etc/rc.d/S96luofu_record_pair symlink, and
+  tools/luofu-image.py check-container PASSes; the harness passes 100/100
+  against this new container.
+- sh -n clean on the installed recorder and platform.sh; bash -n clean on
+  the harness.
+
+### What this proves and what it does not
+
+Proven host-only: the corrected patch applies to pristine 6.18.60 and through
+the series; the series prepares and compiles with no warnings; the binding
+passes dt_binding_check; the board DTS compiles cleanly; the config delta is
+idempotent; checkpatch is clean; the driver's low-byte RMW store builds and is
+file-checkpatch-clean; the recorder is installed and enabled in the built
+rootfs and behaves correctly against mocked sysfs/proc; the install path keeps
+its ordering and refusals and now documents/depends on the recorder.
+
+Not proven: any hardware behaviour. The in-boot cell value versus the running
+pair (including after our recorder), the POR clearing chain, the meaning of the
+cell's upper 24 bits, the env re-stamp, the first boot of a written pair and the
+full A/B install are all still [U]; the recorder has never run on hardware.

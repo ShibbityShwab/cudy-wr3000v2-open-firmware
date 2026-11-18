@@ -1,18 +1,18 @@
-3d68b97 soc: hisilicon: add Luofu A/B boot selector
-b629fea net: ethernet: hisilicon: add Luofu switch probe skeleton
-ec349db net: ethernet: hisilicon: add Luofu PIE packet engine draft
-30cb96b clk: hisilicon: fix Luofu CRG reset polarity
-26b8d9d PCI: dwc: add Luofu PCIe host controller
-154cc9d thermal: add Luofu thermal sensor driver
-6b87595 pinctrl: hisilicon: add Luofu peripheral pin controller
-84ed1d6 power: reset: add Luofu machine restart driver
-43cf6af net: ethernet: hisilicon: add partial Luofu GEMAC driver
-953b37c net: phy: add driver for HiSilicon Luofu "Genius" PHYs
-f9f65d2 net: mdio: luofu: add MDIO bus controller
-79a781c spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
-926cbc3 watchdog: luofu: add Hi5671Y watchdog support
-ca6f723 clk: hisilicon: add Luofu CRG clock and reset controller
-f4fe249 ARM: head: materialize TEXT_OFFSET with mov_l
-35b70b9 ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
-81e215a ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
-77f6da4 pristine linux-6.18.60
+e169302 soc: hisilicon: add Luofu A/B boot selector
+17e9a61 net: ethernet: hisilicon: add Luofu switch probe skeleton
+f55f385 net: ethernet: hisilicon: add Luofu PIE packet engine draft
+656b69b clk: hisilicon: fix Luofu CRG reset polarity
+f73ddfd PCI: dwc: add Luofu PCIe host controller
+378395d thermal: add Luofu thermal sensor driver
+54959ef pinctrl: hisilicon: add Luofu peripheral pin controller
+b405672 power: reset: add Luofu machine restart driver
+bf7aafe net: ethernet: hisilicon: add partial Luofu GEMAC driver
+a35b3ad net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+744207e net: mdio: luofu: add MDIO bus controller
+a2bd2c8 spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+09d9709 watchdog: luofu: add Hi5671Y watchdog support
+5a17f0d clk: hisilicon: add Luofu CRG clock and reset controller
+596bbdb ARM: head: materialize TEXT_OFFSET with mov_l
+3ad45fc ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+7aa7a24 ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+8f4371b pristine linux-6.18.60

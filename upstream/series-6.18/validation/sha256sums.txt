@@ -18,7 +18,7 @@ ac8f98c997726554d8956ac1a28c7c3729522caf0764694118279e9dab07f594  series/0012-ar
 0a4baee01693408da8489a6fc5657e4d03d71318c9a8ebd78219fbade450adfc  series/0014-arm-crg-reset-polarity.patch
 649d165c4afdd743b9b8a9128eb652353b92a77a0e3045427a59644634523529  series/0015-net-pie-luofu.patch
 aa067ceb43ac49aa00f78c6ca4ec75b0b78c55adc601ea752cfac7432aaf3374  series/0016-net-lsw-luofu.patch
-2edb7a5ada1ff9d63a72e46d6e4ad069c8dbe9052163c6ac411fbb7790f7e52d  series/0017-soc-luofu-boot-selector.patch
+1bac7bdd1aad268ab4cb354485e9e565d0a03322e7f3d2d56dc1a452e0682c7f  series/0017-soc-luofu-boot-selector.patch
 
 ## source tree patches (opensource/target-skeleton/target/linux/hisilicon/patches-6.18/)
 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch
@@ -37,7 +37,7 @@ dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb  ../../target-s
 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227  ../../target-skeleton/target/linux/hisilicon/patches-6.18/014-arm-crg-reset-polarity.patch
 fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2  ../../target-skeleton/target/linux/hisilicon/patches-6.18/015-net-pie-luofu.patch
 c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch
-c639642a7648bf4f4c16390560f81afb496ff7afd16e7a3b0b08e6d9bfef524b  ../../target-skeleton/target/linux/hisilicon/patches-6.18/017-soc-luofu-boot-selector.patch
+c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/017-soc-luofu-boot-selector.patch
 
 ## kernel tarball used for validation (read-only; not copied)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

@@ -3,9 +3,13 @@
 Result summary: **PASS** for the host-only checks requested for this
 submission form.  The 17 commit-ready series files apply in order to a
 pristine linux-6.18.60 tree with both patch(1) and git am, the resulting
-trees are identical, and checkpatch reports 0 errors.  There is no
-hardware validation of any kind; the build/binding/DTS/config results
-recorded earlier are summarised in section 9 and were not re-run here.
+trees are identical, and checkpatch reports 0 errors.  The series was
+regenerated and every check in this document re-run on 2026-11-18 after the
+A/B selector patch (0017) and the target base-files were corrected against
+the local evidence reconstruction (docs/SELECTOR-0x21.md); section 13
+records that re-validation, including the kernel compile, binding, DTS and
+config checks, which are otherwise summarised in section 9.  There is no
+hardware validation of any kind.
 
 Evidence tags: [V] verified by the command/run cited, [I] inferred,
 [U] unmeasured, [X] blocked.
@@ -21,13 +25,17 @@ Evidence tags: [V] verified by the command/run cited, [I] inferred,
   The extracted tree reports VERSION=6, PATCHLEVEL=18, SUBLEVEL=60.  [V]
 - Series input: `series/0001-...0017` generated from
   `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/` by
-  `tools/gen-series.py`.  No existing patch or target-skeleton document
-  was modified by this work.  [V]
+  `tools/gen-series.py`.  Patch 0017 (and its commit message) was
+  corrected on 2026-11-18 (low-byte read-modify-write store, evidence-based
+  0x21 provenance, ABI/YAML wording); the other 16 source patches were not
+  changed.  The target's base-files (`platform.sh` and the new
+  `etc/init.d/luofu_record_pair`) and the mocked harness are not part of
+  the kernel series.  [V]
 - Tool versions: git 2.56.0, GNU patch 2.8.1, GNU tar 1.35, xz 5.8.4,
   checkpatch.pl 0.32 (from the 6.18.60 tree), perl 5.44.  [V]
 - Scratch directory (not committed, local-only):
-  `build/linux-kbuild/waves/upstream-6.18-series-20261118/` (gitignored
-  by the parent repository).  [V]
+  `build/linux-kbuild/waves/2026-11-18-selectorfix/upstream-validation/`
+  (gitignored by the parent repository).  [V]
 - The checks below were run by `tools/run-validation.sh` and can be
   reproduced with one command (section 11).
 
@@ -97,9 +105,11 @@ tree, then `git am <series file>` in order.  [V]
       0016 net: ethernet: hisilicon: add Luofu switch probe skeleton
       0017 soc: hisilicon: add Luofu A/B boot selector
 
-- combined diff of the 17 commits: `59 files changed, 6199 insertions(+),
+- combined diff of the 17 commits: `59 files changed, 6263 insertions(+),
   4 deletions(-)` (33 files added, 26 modified; no binary, object,
-  firmware or DTB file added - checked by extension).  [V]
+  firmware or DTB file added - checked by extension).  The increase over the
+  earlier record (6199) is the corrected boot-selector driver/ABI/YAML and its
+  commit message.  [V]
 - commit messages and `Signed-off-by` lines survive `git am` unchanged;
   see `validation/git-log.txt`.  [V]
 - no author/committer configuration other than the local scratch identity
@@ -159,14 +169,16 @@ CHECKs, not WARNINGs.  The patch-mode result above is the one that matters
 for review.  [V]
 
 Checkpatch RC is 1 for patches with warnings (by design); the validation
-script fails only on ERROR lines, and none exist.  [V]
+script fails only on ERROR lines, and none exist.  Patch 0017 is now 436
+checked lines (it grew with the corrected comments/ABI and no new warnings).  [V]
 
-## 7. What was not run in this validation
+## 7. What was not run in the checkpatch/apply validation
 
-Per the task: no kernel rebuild was performed (it is expensive and was
-already recorded for the whole series - see section 9), no device was
-touched, and no `dt_binding_check`/`dtbs_check` was re-run (already
-recorded per binding - section 9).  [V]
+No device was touched.  The kernel rebuild, `dt_binding_check`, DTS
+compile and config re-derivation are not part of `tools/run-validation.sh`;
+they were re-run separately in the isolated clone for this corrected series
+and are recorded in section 13 (the earlier per-lane records are in
+section 9).  [V]
 
 The `--use-tree` run of the validation script reuses an already-extracted
 tree; the final run for the committed logs extracted the tarball from
@@ -266,3 +278,57 @@ Host-specific absolute paths in the committed logs were replaced by
 
 The full run also produced `patch-tree/` and `amtree/` (two ~1.4 GB kernel
 trees) inside the gitignored scratch directory; they are disposable.
+
+## 13. Selector-correction re-validation (2026-11-18, shared task-31)
+
+The A/B selector driver (0017) and the target's base-files were corrected
+against the local evidence reconstruction `opensource/docs/SELECTOR-0x21.md`:
+0x21 is the project's bench handover value and not a vendor value; the
+bootloader selects the pair from its env `bootflag` and the SYSCTRL cell
+is its record; and the store is now the loader-style low-byte
+read-modify-write (upper 24 bits preserved) with a whole-cell read-back.
+Because the source patch changed, the series was regenerated and every check
+in this document was re-run; this run supersedes the earlier record.  [V]
+
+- series 0017 sha256 `1bac7bdd1aad268ab4cb354485e9e565d0a03322e7f3d2d56dc1a452e0682c7f`;
+  source patch sha256 `c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d`;
+  commit message rewritten; `tools/gen-series.py --check` clean.  [V]
+- sequential patch(1): 17/17 RC=0; git am: 17/17 RC=0; resulting trees
+  identical; checkpatch default and strict: 0 errors / 46 warnings (0017
+  still 3 - the MAINTAINERS and binding-split review items).  [V]
+- isolated kernel clone (a reflink copy of the A/B-install lane's clone):
+  `make target/linux/prepare V=s` RC=0 (1,198 patching lines, no
+  `.rej`/`.orig` in the kernel tree); `make target/linux/compile V=s
+  -j16` RC=0, **0 warnings and 0 errors** under `CONFIG_WERROR=y`;
+  zImage 3,265,056 B sha256
+  `5b417ce976d8bc7fb90f34056e3a3da02f271f1613fb7945ec54d99639839bb1`;
+  `CONFIG_LUOFU_SELECTOR=y` built in; `_text = stext = 0xc0608000` and
+  `DTEXT_OFFSET=0x00608000` (TEXT_OFFSET contract unchanged).  [V]
+- boot-selector YAML `dt_binding_check` RC=0; board DTS cpp + kernel dtc
+  RC=0 with zero warnings (DTB 10,664 B sha256 `5726f7cd...`, unchanged
+  because only comments in the DTS source change, delivered via the incoming
+  shared-doc patch); `dt-validate` RC=0 and no boot-selector diagnostic.  [V]
+- config canonical re-derivation, two runs: RC=0/RC=0, byte-identical
+  (`4106877fdb6dad7ee9d5d2895ed6eb878da0c6a70ff4067d664be3da380a2a1f`),
+  309/309 symbols identical to the delivered delta.  [V]
+- checkpatch file-mode: 0 errors / 0 warnings on the corrected driver, YAML
+  and ABI doc.  [V]
+- mocked sysupgrade harness (install path + boot-time recorder): 94/94
+  fixture assertions and 100/100 with the real 6,185,262 B container
+  (sha256 `e869f105...`).  [V]
+- image build in a second isolated clone with the corrected target and the
+  recorder: `make world -j16` RC=0 (0 warnings, 0 errors) produced a
+  6,185,262 B container sha256
+  `362ca4ece4df2b77b0e527ad5d948bbd997201ccb3bf6e2518d5ddaccbb59899`;
+  the rootfs carries `/etc/init.d/luofu_record_pair` (mode 0755, byte-identical
+  to the repository file) and the enabled `/etc/rc.d/S96luofu_record_pair`
+  symlink; `tools/luofu-image.py check-container` PASS; the mocked harness
+  passes 100/100 against this newly built container.  [V]
+- the boot-time pair recorder (target base-files, not this kernel series) is
+  enabled in the built rootfs and behaviourally covered by the mocked tests;
+  it has never run on hardware.  [V]/[U]
+
+Everything hardware-related remains [U]: no boot, no flash, no UART, no
+device.  The env re-stamp, the cell's upper 24 bits and the first boot of a
+written pair still need the attended A/B validation.
+

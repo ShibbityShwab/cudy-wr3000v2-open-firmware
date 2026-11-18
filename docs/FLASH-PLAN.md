@@ -192,6 +192,14 @@ The custom image booted from slot B and is verified live:
 
 ## Slot switch recipe (empirical, verified)
 
+> **NOTE (2026-11-18, corrected by [`SELECTOR-0x21.md`](SELECTOR-0x21.md)).** This is the
+> project's bench recipe, not vendor behaviour. The pair is selected by the env `bootflag`
+> (`bootcmd` reads `kernel${bootflag}`); the `boot_reg` cell is the loader's opposite-pair/
+> failed-boot record. `0x21` is the project's marker value, written only by this recipe: the
+> loader ignores the `0x20` bit and normalises the low byte on the same boot, so `0x21` never
+> persists. Recovery still relies on a true power-on clearing the cell. Do not copy this recipe
+> into a target installer.
+
 - The selector is the sysenv register at `/sys/devices/platform/sysenv/boot_reg`:
   - `0x10` boots slot A; `0x21` boots slot B (also write the env copies to match).
 - Env copies live at mtd3 and mtd4; write BOTH with the same 128 KiB block:

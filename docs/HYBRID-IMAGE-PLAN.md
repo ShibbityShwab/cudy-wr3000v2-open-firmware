@@ -95,6 +95,11 @@ upgrade-in-place graft: keep the vendor base, bring in the newest userland where
 
 ### 3.1 Slot facts
 
+> **NOTE (2026-11-18, corrected by [`SELECTOR-0x21.md`](SELECTOR-0x21.md)).** The env
+> `bootflag` selects the pair; the `boot_reg` cell is the loader's record and `0x21` is the
+> project's bench marker, normalised on the same boot and never persistent. The steps below are
+> the historical bench procedure, not a target-installer design.
+
 - A/B slots are real and switchable: `bootcmd=mtd read kernel${bootflag}`; the live selector is the sysenv
   register `/sys/devices/platform/sysenv/boot_reg` (`0x10` -> slot A, `0x21` -> slot B); both env copies sit
   at mtd3 / mtd4 (block = `crc32-LE(4) | flags(1) | data(131067)`),

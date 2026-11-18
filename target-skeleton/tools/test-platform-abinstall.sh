@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # test-platform-abinstall.sh - host-side mocked tests for the luofu A/B
-# sysupgrade install path.
+# sysupgrade install path and the boot-time pair recorder.
 #
 # STATUS: host-only. No router, UART, TFTP, flash or bench tool is touched.
 #
@@ -14,9 +14,17 @@
 #     /proc/mtd                                  -> fixture file (stock 17 slots)
 #     /sys/class/ubi/ubi0/mtd_num                -> fixture file (booted rootfs)
 #     /sys/devices/platform/luofu-selector/*     -> fixture files (the driver ABI)
+#     /proc/cmdline                              -> fixture file (optional slot token)
+#     /etc/init.d/luofu_record_pair              -> fixture copy of the real recorder
 #     mtd, ubiformat, sync, reboot               -> shims on PATH that log each
 #                                                   call and write image bytes
 #                                                   into fake /dev/mtdN files
+#
+#   The second half runs the real boot-time recorder
+#   target/linux/hisilicon/base-files/etc/init.d/luofu_record_pair in a POSIX
+#   shell against the same fixture root (mocked ubi0/mtd_num, /proc/mtd,
+#   /proc/cmdline and selector sysfs): the core-utils `sh` on the host and the
+#   busybox ash on the device share the syntax the script uses.
 #
 #   platform.sh exposes the LUOFU_TEST_ROOT hook for exactly this purpose; on
 #   the device it is unset and every path is absolute. The image is a real tar
@@ -24,7 +32,7 @@
 #   magics, or a real built sysupgrade.bin supplied with --container (then the
 #   real platform_check_image runs too, not the stub).
 #
-# SCENARIOS
+# INSTALL-PATH SCENARIOS
 #   1. A boot  -> writes kernelb+rootfsb, selector b, kernel write first
 #   2. B boot  -> writes kernela+rootfsa, selector a
 #   3. selector 0x21 manual-b        -> refuse, no write
@@ -38,7 +46,23 @@
 #  11. rootfs slot write fails       -> refuse, selector untouched
 #  12. selector store fails          -> refuse, selector stays on the active pair
 #  13. platform_check_image fails    -> refuse, no write
-#  14. real built container          -> only with --container; full path, rc 0
+#  14. no boot pair recorder         -> install proceeds, warns (refusals unchanged)
+#  15. real built container          -> only with --container; full path, rc 0
+#
+# RECORDER SCENARIOS (the boot-time record-running-pair service)
+#  16. A boot, cell records b        -> writes a, read-back verified; a second
+#                                       run is a no-op (idempotent assertion)
+#  17. B boot, cell records a        -> writes b
+#  18. running pair already recorded -> no write (read-only next_pair proves it)
+#  19. cell manual-b                 -> no write, fails safe
+#  20. cell unknown                  -> no write, fails safe
+#  21. no selector interface         -> no write, bounded wait, fails safe
+#  22. no ubi0/mtd_num               -> no write, fails safe
+#  23. mtd label is not rootfsa/b    -> no write, fails safe
+#  24. next_pair store fails         -> reports failure, cell unchanged
+#  25. read-back does not match      -> reports failure, no false success
+#  26. cmdline disagrees with ubi0   -> no write, fails safe
+#  27. cmdline agrees (ubi.mtd=N)    -> writes the running pair
 #
 # EXIT: 0 every scenario passed, 1 at least one failed.
 #
@@ -54,6 +78,7 @@ set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 default_platform="$SCRIPT_DIR/../target/linux/hisilicon/base-files/lib/upgrade/platform.sh"
+RECORDER="$SCRIPT_DIR/../target/linux/hisilicon/base-files/etc/init.d/luofu_record_pair"
 container=""
 platform_path="$default_platform"
 keep=0
@@ -76,6 +101,10 @@ done
 
 [ -f "$platform_path" ] || {
 	echo "platform.sh not found: $platform_path" >&2
+	exit 2
+}
+[ -f "$RECORDER" ] || {
+	echo "recorder not found: $RECORDER" >&2
 	exit 2
 }
 
@@ -207,6 +236,15 @@ echo "reboot: platform_do_upgrade must not reboot (the framework does)" >&2
 exit 1
 SHIM
 	chmod +x "$CASE/bin/reboot"
+
+	# The recorder logs through logger(1); the shim appends to a known file so
+	# the tests can assert on the service's decisions without relying on the
+	# host's syslog.
+	cat > "$CASE/bin/logger" <<'SHIM'
+#!/bin/sh
+echo "logger: $*" >> "$LUOFU_TEST_LOG"
+SHIM
+	chmod +x "$CASE/bin/logger"
 }
 
 # Fixture: stock 17-slot partition map, booted rootfs slot, selector state.
@@ -220,9 +258,14 @@ new_case() { # <name> [<selector>] [<ubi-mtd-num>]
 	mkdir -p "$CASE/root/proc" \
 		"$CASE/root/sys/class/ubi/ubi0" \
 		"$CASE/root/sys/devices/platform/luofu-selector" \
+		"$CASE/root/etc/init.d" \
 		"$CASE/root/dev" "$CASE/root/tmp" \
 		"$CASE/bin" "$CASE/log" "$CASE/img"
 	: > "$CMDLOG"
+	# The boot pair recorder is part of the image; platform.sh only checks for
+	# its presence (warning only), and the recorder scenarios run it below.
+	cp "$RECORDER" "$CASE/root/etc/init.d/luofu_record_pair"
+	: > "$CASE/root/proc/cmdline"
 
 	cat > "$CASE/root/proc/mtd" <<'MTD'
 dev:    size   erasesize  name
@@ -325,6 +368,38 @@ run_do_upgrade() {
 	echo "$CASE_RC" > "$CASE/log/rc"
 }
 
+
+# Run the real boot-time recorder in a POSIX shell against the fixture root.
+# <wait-seconds>: bounded selector wait, 0 keeps the tests instant.
+run_recorder() {
+	local wait="${1:-0}"
+	local out="$CASE/log/recorder.log"
+
+	(
+		export LUOFU_TEST_ROOT="$CASE/root"
+		export LUOFU_TEST_LOG="$out"
+		export LUOFU_RECORD_WAIT="$wait"
+		export PATH="$CASE/bin:$ORIG_PATH"
+		env sh -c '. "$1"; start' sh "$RECORDER"
+	) > "$out" 2>&1
+	CASE_RC=$?
+	echo "$CASE_RC" > "$CASE/log/recorder.rc"
+}
+
+# Set the fixture kernel command line (empty file = no slot token, the
+# measured stock case).
+cmdline_set() {
+	printf '%s\n' "$1" > "$CASE/root/proc/cmdline"
+}
+
+# Make the selector next_pair unwritable for the fixture user: a recorder
+# that tried to store would fail, so this proves a "no write" decision.
+selector_freeze() {
+	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	printf '%s\n' "$1" > "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	chmod 444 "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+}
+
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
@@ -358,6 +433,7 @@ case_a_to_b() {
 	check_match "A->B re-ran the container check" "stub-check-ok" "$CMDLOG"
 	check_match "A->B verified the kernel read-back" "read back byte-identical" "$CASE/log/out.log"
 	check_match "A->B passed the UBI header read-back" "UBI#/UBI! headers" "$CASE/log/out.log"
+	check_no_match "A->B (recorder present) does not warn about the recorder" "no boot pair recorder" "$CASE/log/out.log"
 }
 
 case_b_to_a() {
@@ -507,6 +583,144 @@ case_check_refuse() {
 	check_match "check refusal is reported" "validation failed again" "$CASE/log/out.log"
 }
 
+
+case_no_recorder() {
+	note "a running system without the boot pair recorder: install still proceeds, warning only"
+	new_case no-recorder a 13
+	rm -f "$CASE/root/etc/init.d/luofu_record_pair"
+	local image
+	image=$(make_container "$CASE" 4096 8192)
+	run_do_upgrade "$image" stub-ok
+	check_eq "no-recorder install exit status (refusals unchanged)" 0 "$CASE_RC"
+	check_match "no-recorder install warns that the recorder is missing" "no boot pair recorder" "$CASE/log/out.log"
+	if [ "$CASE_RC" -eq 0 ]; then
+		check_eq "no-recorder install still moved the selector" b "$(selector_value)"
+	fi
+}
+
+# --- boot-time pair recorder ------------------------------------------------
+
+case_rec_a_boot() {
+	note "recorder: A boot, bootfip left the B marker (0x11) in the cell; must record a"
+	new_case rec-a-boot b 13
+	run_recorder 0
+	check_eq "recorder A exit status" 0 "$CASE_RC"
+	check_eq "recorder A wrote the running pair a" a "$(selector_value)"
+	check_match "recorder A logged the record" "recording the running pair a" "$CASE/log/recorder.log"
+	run_recorder 0
+	check_eq "recorder A second run exit status" 0 "$CASE_RC"
+	check_eq "recorder A second run kept a" a "$(selector_value)"
+	check_match "recorder A second run is a no-op (idempotent)" "already recorded" "$CASE/log/recorder.log"
+}
+
+case_rec_b_boot() {
+	note "recorder: B boot, bootfip left the A marker (0x10) in the cell; must record b"
+	new_case rec-b-boot a 14
+	run_recorder 0
+	check_eq "recorder B exit status" 0 "$CASE_RC"
+	check_eq "recorder B wrote the running pair b" b "$(selector_value)"
+	check_match "recorder B logged the record" "recording the running pair b" "$CASE/log/recorder.log"
+}
+
+case_rec_already_recorded() {
+	note "recorder: the running pair is already recorded; the read-only next_pair proves no write"
+	new_case rec-already a 13
+	selector_freeze a
+	run_recorder 0
+	check_eq "recorder already-recorded exit status" 0 "$CASE_RC"
+	check_eq "recorder already-recorded left the cell alone" a "$(selector_value)"
+	check_match "recorder already-recorded says so" "already recorded" "$CASE/log/recorder.log"
+}
+
+case_rec_manual_b() {
+	note "recorder: cell manual-b must never be overwritten"
+	new_case rec-manual-b manual-b 14
+	run_recorder 0
+	check_eq "recorder manual-b exit status" 0 "$CASE_RC"
+	check_eq "recorder manual-b left the cell untouched" manual-b "$(selector_value)"
+	check_match "recorder manual-b fails safe" "not one of the two established recorded pairs" "$CASE/log/recorder.log"
+}
+
+case_rec_unknown() {
+	note "recorder: an unknown cell value must never be overwritten"
+	new_case rec-unknown unknown 13
+	run_recorder 0
+	check_eq "recorder unknown exit status" 0 "$CASE_RC"
+	check_eq "recorder unknown left the cell untouched" unknown "$(selector_value)"
+	check_match "recorder unknown fails safe" "not one of the two established recorded pairs" "$CASE/log/recorder.log"
+}
+
+case_rec_no_selector() {
+	note "recorder: a missing selector interface after the bounded wait must not block the boot"
+	new_case rec-no-selector b 13
+	rm -f "$CASE/root/sys/devices/platform/luofu-selector/current_pair" \
+		"$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	run_recorder 1
+	check_eq "recorder no-selector exit status" 0 "$CASE_RC"
+	check_match "recorder no-selector fails safe after the bounded wait" "no luofu-selector interface" "$CASE/log/recorder.log"
+}
+
+case_rec_no_ubi() {
+	note "recorder: without ubi0/mtd_num the booted pair is unknown and nothing is written"
+	new_case rec-no-ubi b 13
+	rm -f "$CASE/root/sys/class/ubi/ubi0/mtd_num"
+	run_recorder 0
+	check_eq "recorder no-ubi exit status" 0 "$CASE_RC"
+	check_eq "recorder no-ubi left the cell untouched" b "$(selector_value)"
+	check_match "recorder no-ubi fails safe" "cannot identify the booted rootfs pair" "$CASE/log/recorder.log"
+}
+
+case_rec_bad_label() {
+	note "recorder: an mtd label that is not rootfsa/rootfsb is not a pair witness"
+	new_case rec-bad-label b 15
+	run_recorder 0
+	check_eq "recorder bad-label exit status" 0 "$CASE_RC"
+	check_eq "recorder bad-label left the cell untouched" b "$(selector_value)"
+	check_match "recorder bad-label fails safe" "cannot identify the booted rootfs pair" "$CASE/log/recorder.log"
+}
+
+case_rec_store_fails() {
+	note "recorder: a failing next_pair store must be reported and the cell left alone"
+	new_case rec-store-fails b 13
+	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	mkdir "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	run_recorder 0
+	check_ne "recorder store-failure exit status is a failure" 0 "$CASE_RC"
+	check_eq "recorder store-failure left the cell untouched" b "$(selector_value)"
+	check_match "recorder store-failure is reported" "FAILED to store pair a" "$CASE/log/recorder.log"
+}
+
+case_rec_readback_mismatch() {
+	note "recorder: a store whose read-back does not match must not report success"
+	new_case rec-readback b 13
+	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	printf 'a\n' > "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	run_recorder 0
+	check_ne "recorder read-back mismatch exit status is a failure" 0 "$CASE_RC"
+	check_eq "recorder read-back mismatch left current_pair on the stale value" b "$(selector_value)"
+	check_match "recorder read-back mismatch is reported" "FAILED: the selector reads 'b' after writing pair a" "$CASE/log/recorder.log"
+}
+
+case_rec_cmdline_disagree() {
+	note "recorder: a cmdline slot token that contradicts ubi0 must not write"
+	new_case rec-cmdline-disagree b 13
+	cmdline_set "console=ttyS0 ubi.mtd=rootfsb"
+	run_recorder 0
+	check_eq "recorder cmdline-disagreement exit status" 0 "$CASE_RC"
+	check_eq "recorder cmdline-disagreement left the cell untouched" b "$(selector_value)"
+	check_match "recorder cmdline-disagreement fails safe" "kernel command line names pair b but ubi0 is rootfsa" "$CASE/log/recorder.log"
+}
+
+case_rec_cmdline_agree() {
+	note "recorder: a matching numeric cmdline ubi.mtd token is an extra witness, not a contradiction"
+	new_case rec-cmdline-agree b 13
+	cmdline_set "console=ttyS0 ubi.mtd=13"
+	run_recorder 0
+	check_eq "recorder cmdline-agreement exit status" 0 "$CASE_RC"
+	check_eq "recorder cmdline-agreement recorded the running pair a" a "$(selector_value)"
+	check_match "recorder cmdline-agreement logged the record" "recording the running pair a" "$CASE/log/recorder.log"
+}
+
 case_real_container() {
 	note "real built container: the real platform_check_image plus the write path"
 	[ -n "$container" ] || return 0
@@ -541,6 +755,19 @@ case_kernel_write_fails
 case_root_write_fails
 case_selector_write_fails
 case_check_refuse
+case_no_recorder
+case_rec_a_boot
+case_rec_b_boot
+case_rec_already_recorded
+case_rec_manual_b
+case_rec_unknown
+case_rec_no_selector
+case_rec_no_ubi
+case_rec_bad_label
+case_rec_store_fails
+case_rec_readback_mismatch
+case_rec_cmdline_disagree
+case_rec_cmdline_agree
 case_real_container
 
 echo

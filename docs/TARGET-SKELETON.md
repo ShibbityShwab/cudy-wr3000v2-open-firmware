@@ -35,8 +35,13 @@ PROVISIONAL CRG software-reset command and a CRG watchdog fallback), pinctrl (`0
 the PIE packet-engine draft (`015`; resources + ring scaffolding, refuses to bring up the
 unverified data path), the internal LSW switch D1a skeleton (`016`) and the A/B
 boot-selector interface (`017`: `current_pair`/`next_pair` sysfs over the shared
-SYSCTRL cell; probe performs no register access), with the CRG reset polarity corrected
-by `014`. None of them has run on hardware.
+SYSCTRL cell; probe performs no register access; `next_pair` is the loader-style low-byte
+read-modify-write), with the CRG reset polarity corrected by `014`. The target image also
+gains the boot-time pair recorder (patch `017` plus
+`base-files/etc/init.d/luofu_record_pair`, corrected 2026-11-18 against
+[`SELECTOR-0x21.md`](SELECTOR-0x21.md): the env `bootflag` selects the pair, the SYSCTRL
+cell is the loader's record, and userspace must re-record the running pair after every boot).
+None of them has run on hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;
@@ -63,8 +68,10 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 - gate magic `0xd7b7ab1e` at `0x40 + ih_size + base-DTB totalsize`;
 - rootfs slot `<= 24,313,856` B, squashfs in a static UBI volume `squashfs`;
 - `rootfs_data` stays **JFFS2** for the first submission;
-- A/B sysupgrade writes only the inactive pair and switches the measured selector/environment
-  mechanism; container metadata schema is proposed, not frozen;
+- A/B sysupgrade writes only the inactive pair, then moves the SYSCTRL record; the bootloader's
+  env mismatch path selects the new pair on the next boot and the target image's boot-time
+  recorder re-records the running pair (see [`SELECTOR-0x21.md`](SELECTOR-0x21.md)); container
+  metadata schema is proposed, not frozen;
 - uImage load/entry must be derived from the loader staging base and the kernel's
   `TEXT_OFFSET`, not copied blind;
 - stock partition map (17 partitions), no lab `lab` partition.
@@ -72,8 +79,9 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 **What is still [U]/TODO** (full list in TARGET-DESIGN.md section 12 and the skeleton README):
 one attended boot of a generated trailer; the sysupgrade container/install path
 (host-side A/B write path implemented in `platform.sh` + patch `017`, never run on
-hardware) and the selector protocol (recorded A/B values measured; the env re-stamp
-and one attended A/B validation still owed); a bench-verified reset path (the
+hardware) and the selector protocol (recorded A/B values measured; the env re-stamp, the cell's
+upper 24 bits and one attended A/B validation still owed; the boot-time recorder now exists
+host-side but has never run); a bench-verified reset path (the
 patch-`010` CRG command pair is PROVISIONAL); MAC/efuse source; switch DSA-vs-switchdev; the
 GEMAC TX/RX ring/DMA data path (the driver is a resource/binding half only); SMP; Wi-Fi scope;
 board compatible vs OpenWrt device name.

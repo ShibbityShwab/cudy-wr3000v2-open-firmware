@@ -14,4 +14,4 @@
 0014-arm-crg-reset-polarity.patch :: total: 0 errors, 1 warnings, 45 lines checked
 0015-net-pie-luofu.patch :: total: 0 errors, 2 warnings, 715 lines checked
 0016-net-lsw-luofu.patch :: total: 0 errors, 2 warnings, 646 lines checked
-0017-soc-luofu-boot-selector.patch :: total: 0 errors, 3 warnings, 372 lines checked
+0017-soc-luofu-boot-selector.patch :: total: 0 errors, 3 warnings, 436 lines checked
