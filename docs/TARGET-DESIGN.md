@@ -319,6 +319,16 @@ against 5.10.201 and include bench-only symbols. [V] `lab/luofu-kernel/luofu.fra
 
 ## 5. Image recipe
 
+> **Status 2026-11-18 (image-recipe session):** the recipe below is implemented in
+> `target-skeleton/target/linux/hisilicon/image/` (`Makefile`, `luofu.mk`,
+> `luofu-ubinize.cfg`) plus `base-files/lib/upgrade/platform.sh` and
+> `tools/luofu-image.py`, and it was executed host-side in an isolated `openwrt main`
+> clone: `make world -j16` RC=0 with a generated trailer, a validated kernel slice, a
+> squashfs-in-static-UBI rootfs and a sysupgrade container (sizes/hashes and
+> commands in SKELETON-SMOKE.md, image-recipe session). Nothing has booted;
+> section 5.2's attended boot, section 5.4's selector protocol and section 5.5's
+> install path remain [U], and `platform_do_upgrade` refuses to write.
+
 ### 5.1 Required build products
 
 | product | requirement | source of truth |
@@ -492,7 +502,7 @@ New/derived bindings (propose one YAML per driver; all [I]):
 | GEMAC | `hisilicon,luofu-gmac` | **written** as patch `009`: YAML `net/hisilicon,luofu-gmac.yaml`; `phy-mode`, `phy-handle`, one clock and the two CRG reset lines are described; the driver is **PARTIAL** (binding/resource validation only; probe refuses because the TX/RX ring DMA model is not decoded), so the DTS nodes stay `disabled`; `gmac0` is not used by the vendor (mapping: 14380000->phy2, 14400000->phy3, 14480000->phy4 (wired), 14500000->phy5) |
 | MDIO | `hisilicon,luofu-mdio` | **written** as patch `007`: YAML `net/hisilicon,luofu-mdio.yaml`; the four PHY children are standard `ethernet-phy-ieee802.3-c22`; the seven CRG resets are described and released by the driver before the bus scan |
 | PHY | no node driver; standard PHY child nodes | **written** as patch `008`: a PHYLIB driver for the Hisilicon "Genius" PHY (ID `0x20669a00`, mask `0xffffff00`), bound via PHY ID, not DT compatible, so no YAML is added; the vendor firmware patch load is a TODO |
-| internal switch | `hisilicon,luofu-dp`/`-pfe`/`-lsw-woe`, `hisilicon,luofu-pie` | **specified** in [LSW-SPEC.md](LSW-SPEC.md) (2026-11-18): switchdev over per-port netdevs (not DSA), synthetic module-id register map, port/queue/qid model, table formats, D0-D2 plan; driver and binding still unwritten. The vendor switchdev handlers are stubs in the shipped build and its rootif write is a userspace compatibility layer, not a hardware API. |
+| internal switch | `hisilicon,luofu-dp`/`-pfe`/`-lsw-woe`, `hisilicon,luofu-pie` | **D1a written** as patch `016` (2026-11-18): the `hisilicon,luofu-switch` binding (`net/hisilicon,luofu-switch.yaml`) combines the 15 recovered MMIO windows of the vendor `lsw_dp`/`lsw_pfe` nodes (the vendor `queue`/`flow` DDR regions are not modelled - memory the engine consumes, live base [U]); the two CRG clocks, four CRG resets and a switchdev port model (`ethernet-ports` children naming the GEMAC netdev each port uses) are described. The driver is a **probe skeleton**: it validates resources and port model, then refuses to program the switch (`-EOPNOTSUPP`) until the register/queue/port-id model is measured; the DTS node stays `disabled`. Framework decision per [LSW-SPEC.md](LSW-SPEC.md) 9.3: **switchdev over per-port netdevs, not DSA** (no CPU-port tag exists in the recovered model). D1b-D1d (write set, host queue binding, bridge) are still TODO; the vendor switchdev handlers are stubs and its rootif write is a userspace compatibility layer, not a hardware API. |
 | PCIe host | `hisilicon,luofu-pcie` (two domains), vendor `iatu_rc`/`iatu_ep`/`acp-gate` props | **written** as patch `013`: `drivers/pci/controller/dwc/pcie-luofu.c` (+ YAML `pci/hisilicon,luofu-pcie.yaml`) programs the two RCs from DT `ranges`/iATU data with clocks, resets, RC mode and link handling; driver init data carries the iATU tables, and the hard rules are encoded (never read the `misc` window, aligned dwords only). The Wi-Fi endpoint is [X] and its nodes are not enabled. Host compile only; never booted. Reset release now uses the fixed polarity from patch `014`. |
 | thermal | `hisilicon,luofu-tvsensor` + `thermal-zones` | **written** as patch `012`: `drivers/thermal/luofu_tvsensor.c` (read-only, vendor v4 conversion, 6.18 of-thermal API) + YAML `thermal/hisilicon,luofu-tvsensor.yaml`; the DTS zone `cls0-thermal` uses the vendor trips (115/125 C, 3 C hysteresis, 1 s polling) with no cooling map; threshold/IRQ/enable/trim registers are [U] and not written. Host compile only; never booted. |
 | sysctrl/sysenv | vendor blocks `hsan,sysctrl`, `hsan,sysenv`, `hsan,rstinfo` are **not** in the lab DTS | **partly written** as patch `010`: a `hisilicon,luofu-sysctrl` syscon node for page `0x10100000` (boot selector at `0xc08`) plus the `hisilicon,luofu-reboot` node that consumes it; YAMLs `soc/hisilicon/hisilicon,luofu-sysctrl.yaml` and `power/reset/hisilicon,luofu-reboot.yaml`. Still TODO: the nvmem/sysupgrade read path and the selector protocol itself (§3.4) |
@@ -571,10 +581,14 @@ into the switch (`0x14480000` = `eth2` on the vendor). [V] `ETHERNET-BRINGUP-FRA
 `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts:774-837`. The switch blocks are described in the
 DT (`lsw_dp` 7 register windows, `lsw_pfe` 10 windows, `lsw_woe`, `pie`), and the vendor
 implementations are `hi_lsw_*`/`hi_swa` modules. **No driver source exists in any tree.** This is
-the largest SoC-side work item. Driver design question: DSA (idiomatic for a multi-port internal
-switch) vs a switchdev/netdev-per-port driver; the vendor stack uses its own switchdev/HYFI glue
-(the multi-step port in `VENDOR-SKB-BRIDGE-PORT.md`), which is an argument for a clean DSA design
-with our own port model rather than reproducing the vendor ABI. [I]
+the largest SoC-side work item. **Framework decision (2026-11-18, [LSW-SPEC.md](LSW-SPEC.md)
+9.3): switchdev over per-port netdevs, not DSA** - the recovered model has no CPU-port tag, each
+wired port already has its own GEMAC netdev, and the vendor's own (stub) integration is
+switchdev. The first slice is **D1a**, patch `016`: a `hisilicon,luofu-switch` binding and probe
+skeleton that validates the register windows, clocks, resets and port model and then refuses to
+program the switch; the DTS node stays `disabled`, so a normal boot never reaches it. The
+forwarding milestone (D1b-D1d: reviewed write set, PIE host-queue binding, Linux bridge) still
+needs the attended register inventory and is the largest remaining SoC data-path item. [I]
 
 ### 8.2 PCIe host
 

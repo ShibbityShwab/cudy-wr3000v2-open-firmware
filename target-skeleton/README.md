@@ -27,10 +27,28 @@
 > child). A seventh session added the **machine-restart driver** (patch `010` -
 > a restart handler over the SYSCTRL and CRG syscon nodes: boot-selector
 > save, CRG software-reset command and a CRG watchdog fallback; the reset
-> command is PROVISIONAL). All of them compile as built-ins into the same 6.18
-> kernel build (host-only) and have **never run on hardware**. The design these files
+> command is PROVISIONAL). Further sessions added pinctrl (`011`), thermal (`012`),
+> the DWC PCIe host (`013`), the CRG reset-polarity fix (`014`) and the **PIE packet
+> engine draft** (`015` - refuses to arm the engine until its register inventory is
+> captured). A twelfth session added the **internal-switch D1a probe skeleton**
+> (patch `016` - binding/resource/port-model validation only; the probe refuses to
+> program the switch, the node stays disabled and the switch is modelled as
+> switchdev over the GEMAC port netdevs, not DSA). All of them compile as built-ins
+> into the same 6.18 kernel build (host-only) and have **never run on hardware**.
+> The design these files
 > encode is not accepted upstream: the rest of the driver series, image recipe and device
 > page do not exist. **Do not read this directory as upstream progress.**
+>
+> **2026-11-18 (image-recipe session): the image chain is IMPLEMENTED and was
+> built host-side.** `image/luofu.mk` now carries real `Build/` stages for the
+> whole recipe (zImage -> legacy uImage with the derived load/entry -> generated
+> FIP trailer -> validated kernel slice -> manifest -> squashfs in a static UBI
+> volume -> sysupgrade container), `base-files/lib/upgrade/platform.sh`
+> implements a structural `platform_check_image` and **refuses**
+> `platform_do_upgrade` (A/B selector [U]), and `tools/luofu-image.py`
+> builds/validates the rootfs UBI and the container. A full `make world` in an isolated `openwrt main` clone (commit `27663a0`, `linux-6.18.60`, patches `001`-`015`) then completed RC=0 and produced a 6,175,022-byte `...-squashfs-sysupgrade.bin` (sha256 `ea143b03...`) whose kernel slice, rootfs UBI and `fip-manifest.txt` were re-validated from the built bytes (see SKELETON-SMOKE.md, image-recipe session).
+> Nothing has booted; there is still no install/factory path. Details and hashes:
+> [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (image-recipe session).
 >
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
@@ -70,19 +88,22 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch` | network trio 3/3, **PARTIAL**: new `drivers/net/ethernet/hisilicon/luofu-gmac.c` (platform driver; claims the binding and validates reg/clocks/resets/phy-mode/phy-handle, then **refuses to probe** - the TX/RX ring DMA model is not implemented and has never been decoded, so no netdev is registered), Kconfig/Makefile (`CONFIG_LUOFU_GMAC`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. **Host kernel compile RC=0, no warnings**; `dt_binding_check` pass; the GEMAC DTS nodes stay `disabled`. **Not a data-path driver; never booted.** | same |
 | `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`) and the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial); with patches `001`-`009` the **full kernel compiles** (RC=0) and nothing boots | same |
-| `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial) and the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`); with patches `001`-`016` the **full kernel compiles** (RC=0) and nothing boots | same |
+| `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` + `image/luofu-ubinize.cfg` | board image Makefile (main idiom: `image.mk`, includes the subtarget file, `BuildImage`) plus the **real** target image chain: `kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest`, then `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata`. Every target-specific stage validates its own output and fails closed. **host-built 2026-11-18** (never booted) | `target/linux/hisilicon/image/` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
+| `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` **REFUSES to write** because the A/B selector protocol and the install path are [U]. **`sh -n` clean; host-tested against the real built container and against corrupted/foreign variants; never run on hardware** | same path (board-level base-files) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
 | `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added) and the GEMAC nodes match patch `009` but stay `status = "disabled"` because the GEMAC driver has no data path; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
 | `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
-| `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | a host build helper (not an OpenWrt tree file); its steps still have to be wired into `image/luofu.mk` |
+| `tools/luofu-image.py` | host assembly/validation helper for the image recipe: `rootfs-ubi` (squashfs -> one static UBI volume named `squashfs` with the measured geometry; re-parses EC/VID headers, their CRCs, the layout volume table, every static-LEB data CRC and the rootfs slot budget), `sysupgrade` (deterministic tar with `CONTROL`, `kernel`, `root`, `fip-manifest.txt`, `INSTALL-STATUS.txt`; cross-checks the slice against a manifest re-derived from the bytes) and `check-container` (independent read-back of a built container). Refuses vendor-derived input paths and unknown ubinize-cfg keys; never touches a device | `scripts/luofu-image.py` |
+| `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | the standalone host reproduction that produced the first own-artifact slice (never booted); its steps are now also wired into `image/luofu.mk` |
 | `../docs/TARGET-SKELETON.md` | one-page index/status of this skeleton, pointing back at TARGET-DESIGN.md | nowhere (repo documentation) |
 
 Deliberately **absent**: a factory/install image stanza (the install path is an open
-question, TARGET-DESIGN.md section 5.5), a sysupgrade `platform.sh` (needs the A/B
-selector protocol, section 3.4), any Wi-Fi or switch driver, and any U-Boot source.
+question, TARGET-DESIGN.md section 5.5) and a working `platform_do_upgrade` write path
+(the A/B selector protocol is [U], section 3.4; `platform.sh` exists but refuses to
+write), any Wi-Fi or switch driver, and any U-Boot source.
 
 ---
 
@@ -293,10 +314,19 @@ They are not a drop-in target. The mapping is:
     │       ├── config-<release>                │       ├── config-5.10  (5.10 reference)
     │       │                                   │       └── config-6.18  (re-derived)
     │       ├── image/Makefile                  │       ├── image/Makefile
+    │       │                                   │       ├── image/luofu.mk
+    │       │                                   │       ├── image/luofu-ubinize.cfg
     │       ├── profiles/                       │       ├── profiles/
     │       └── base-files/...                  │       └── base-files/...
-    ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
-    └── scripts/fip-slice.py                    <- tools/fip-slice.py
+    │                                           │           (lib/upgrade/platform.sh)
+    ├── target/linux/hisilicon/dts/luofu-r116.dts         <- dts/luofu-r116.dts
+    ├── target/linux/hisilicon/dts/luofu-r116-overlay.dtso
+    │                                           <- dts/luofu-r116-overlay.dts
+    │                                              RENAMED: the DEVICE_DTS_OVERLAY rule
+    │                                              only compiles .dtso sources
+    ├── target/linux/hisilicon/Makefile         must set KERNELNAME:=zImage
+    ├── scripts/fip-slice.py                    <- tools/fip-slice.py
+    └── scripts/luofu-image.py                  <- tools/luofu-image.py
 
 The remaining data path and switch blocks have evidence-graded specifications: the PIE
 packet-engine data path in [../docs/PIE-DATAPATH.md](../docs/PIE-DATAPATH.md) (a refusing draft
@@ -411,29 +441,47 @@ is `patches-6.18/`:
   compiled scaffolding with the unrecovered fields left zero and marked TODO. The DTS node is
   disabled; the data path remains unverified. YAML
   `Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml`.
+- `016` adds the internal LSW switch **D1a** probe skeleton: `drivers/net/ethernet/
+  hisilicon/luofu-switch.c` (+ YAML) validates the 15 switch MMIO windows, the two
+  CRG gate clocks, the four CRG reset lines and the switch port model
+  (`ethernet-ports` children naming the GEMAC node that owns each port's netdev),
+  then refuses to probe (`-EOPNOTSUPP`) because the register/queue/port-id model has
+  never been measured on hardware. The switch is modelled as switchdev over the
+  per-port GEMAC netdevs, not as DSA (no CPU-port tag exists in the recovered model;
+  LSW-SPEC.md 9.3). No register is read or written, no clock/reset is driven, no
+  netdev or switchdev notifier is registered; the node stays `disabled`. The vendor
+  `queue`/`flow` DDR regions and the WoE block are deliberately not modelled. The
+  forwarding milestone (D1b-D1d) still needs the attended register inventory and the
+  reviewed write set. YAML
+  `Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml`.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
 
 Still missing from the submission:
 
-- the rest of the driver + dt-binding series (switch, GEMAC data path -
-  TARGET-DESIGN.md section 7); pinctrl (`011`), thermal (`012`) and the PCIe host (`013`,
-  endpoint [X]) are now drafted too. The
+- the rest of the driver + dt-binding series (switch data path, GEMAC data path -
+  TARGET-DESIGN.md section 7); pinctrl (`011`), thermal (`012`), the PCIe host (`013`,
+  endpoint [X]) and the PIE packet engine (`015`, draft) are now drafted too. The
   CRG/WDT (`004`/`005`), FMC SPI-NAND (`006`), network trio (`007`-`009`), restart (`010`),
-  pinctrl (`011`) and thermal (`012`) drafts exist with their YAMLs (the PHY driver needs
-  none), but they are host-compile-validated only: no bench run, no boot, no upstream
-  review. The GEMAC driver is a **resource/binding half only** - the TX/RX ring DMA data
-  path is not implemented, so there is no Ethernet data path yet (MDIO + PHY are complete
-  ports);
+  pinctrl (`011`), thermal (`012`), PCIe host (`013`), CRG reset-polarity fix (`014`),
+  PIE (`015`) and internal-switch D1a skeleton (`016`) drafts exist with their YAMLs (the
+  PHY driver needs none), but they are host-compile-validated only: no bench run, no boot,
+  no upstream review. The GEMAC driver is a **resource/binding half only** - the TX/RX
+  ring DMA data path is not implemented, so there is no Ethernet data path yet (MDIO +
+  PHY are complete ports); the switch driver (`016`) is a **probe skeleton only** - it
+  validates resources and refuses to program the switch, so there is no forwarding either;
 - a bench-verified reset path: patch `010` compiles and binds, but which of its
   write sequences actually resets the SoC is unmeasured; the CRG command
   pair is PROVISIONAL and the selector protocol is still [U]
   (TARGET-DESIGN.md section 3.4);
-- a `platform.sh` implementing `platform_check_image`/`platform_do_upgrade`
-  (TARGET-DESIGN.md section 5.4) - **not written**;
-- the sysupgrade container wrapper that adds the kernel slice, rootfs UBI and
-  `fip-manifest.txt` to `CONTROL` - **not written**;
+- the A/B install path: `platform.sh` now implements a real structural
+  `platform_check_image`, but `platform_do_upgrade` **refuses to write** because
+  the selector protocol and the install path are still [U] (TARGET-DESIGN.md 3.4,
+  5.4, 5.5);
+- the sysupgrade container schema is implemented in the recipe and every field is
+  cross-checked at build time, but it is **not frozen** and no container has been
+  written to a device;
 - a trailer generator (TARGET-DESIGN.md section 5.2) - **written and structurally validated** (`tools/fip-slice.py make-trailer`, byte-exact against both vendor containers); a novel generated trailer still needs one attended boot.
 
 The DTS delivery is an open question: OpenWrt targets commonly keep board DTS files
@@ -567,22 +615,61 @@ Checked on the author's host on 2026-11-18, nothing more:
   DMA-OOB and quad-enable semantics and the v6.19 ESMT chip-entry dependency are open.**
   Exact commands/results: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (sixth
   session, FMC/NAND port).
+- **Internal LSW switch D1a probe skeleton (2026-11-18, twelfth host-only session)**:
+  patch `016` adds `drivers/net/ethernet/hisilicon/luofu-switch.c`, its YAML binding,
+  `CONFIG_LUOFU_SWITCH` and the board DTS switch node (disabled). Results: the patch
+  applies to pristine `linux-6.18.60` (`patch -p1 --dry-run` RC=0) and in the isolated
+  clone (`make target/linux/prepare` RC=0); the full kernel compiles
+  (`make target/linux/compile V=s -j16` **RC=0**, tree's own OpenWrt GCC 14.4.0,
+  `CONFIG_WERROR=y`, **0 warnings from the new files**), with `CONFIG_LUOFU_SWITCH=y`
+  built-in and `luofu_lsw_probe` in `System.map`; zImage 3263624 B sha256
+  `201ba86863d8ee6c14d865702ee2339cd3e373c30fbb4b94983afcc2d72df83f`; the board DTS compiles with the patched kernel's own dtc to a
+  10538 B DTB (sha256 `ff34bc7f7e744b61bbc0ca7bd0934317e46d837c87d024592fc08335ed5ce4a0`) with **zero warnings**; `dt_binding_check`
+  passes for the new YAML; `checkpatch.pl` reports 0 errors / 0 warnings / 0 checks;
+  the probe path has no MMIO access at all and refuses with `-EOPNOTSUPP`.
+  **Nothing was booted or bench-tested; the switch register/queue/port-id model remains
+  unmeasured.** Exact commands/results:
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (twelfth session).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host with the patched
   kernel's own dtc (1.7.2) and **zero warnings** (the former deliberate
   `unique_unit_address` collision between the CRG and watchdog nodes is resolved by the
   syscon-parent design - see the driver-session bullet above). This is a kernel-dtc
   compile of the target DTS plus a subtree schema validation; a full-draft-DTS
   `dtbs_check` is still NOT clean because every other node still has a TODO binding.
-- `base-files/etc/board.d/02_network`: `sh -n` passes.
-- The target Makefiles were **parsed by OpenWrt main's make** in the smoke test above
-  (`make defconfig` and `make target/linux/prepare`); the kernel machine code from the
-  draft patch series compiles (above), but the target's own image recipe has never been
-  built, imaged or booted, and the Kconfig stub/profile file are not used by main.
+- `base-files/etc/board.d/02_network` and `lib/upgrade/platform.sh`: `sh -n` passes.
+- **Image recipe build (2026-11-18, image-recipe host-only session)**: the real
+  target image chain in `image/luofu.mk` (plus `image/luofu-ubinize.cfg`,
+  `base-files/lib/upgrade/platform.sh` and `tools/luofu-image.py`) was installed
+  in an isolated `openwrt main` clone (`27663a0`, `linux-6.18.60`, patches
+  `001`-`015`) and the whole tree was built: `make defconfig` RC=0 and
+  `make world -j16` RC=0. The build produced
+  `bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`
+  (6,175,022 B, sha256 `ea143b03d9d248b3e2b21723ef639e42817e66da847285496ebbc46e12756881`)
+  from a 3,283,008-byte FIP kernel slice (`23c3286b...`) and a 2,883,584-byte
+  rootfs UBI (`d3c5611c...`, static volume `squashfs`, 22 PEBs = 2 layout + 20
+  data). The slice carries a uImage (`Linux-6.18.60`, ih_size 3,272,457,
+  load/entry `0x80608000`) with the DTB appended, a trailer generated from OUR
+  board DTB + loader-match overlay (10,487 B) and the gate magic `0xd7b7ab1e`
+  at `0x32171a`; `image/luofu.mk` recomputes and asserts the load/entry address
+  from the loader staging base and `TEXT_OFFSET`, and reads `_text` back from
+  the built `vmlinux` with the target `nm`. The container carries
+  `CONTROL`, `kernel`, `root`, `fip-manifest.txt` and `INSTALL-STATUS.txt`
+  (NOT FLASHABLE); `tools/luofu-image.py check-container` re-validated every
+  field from the final bytes, `platform_check_image` (sourced from
+  `base-files/lib/upgrade/platform.sh`) accepted the real artifact and refused
+  corrupted/foreign variants, and two consecutive `make world` runs produced a
+  byte-identical image (REPRODUCIBLE). **Nothing was booted, and
+  `platform_do_upgrade` still refuses to write.** Details, commands and exact
+  sizes/hashes: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)
+  (image-recipe session).
 
-**Not done, and not claimed:** no bootable image (no rootfs/UBI, no sysupgrade container,
-no install path), no appended DTB, no boot, no device interaction, no UART, no bench tool
-run, and no network data path (the GEMAC driver is a resource/binding half only and its
-DTS nodes are disabled). The four driver bindings (CRG, watchdog, MDIO, GEMAC) pass
+**Not done, and not claimed:** the built sysupgrade container has never been
+booted or written to a device (one attended boot of a generated FIP trailer is still
+required), no install/factory path exists (`platform_do_upgrade` refuses because the
+A/B selector protocol is [U]), no device interaction, no UART, no bench tool run, and
+no network data path (the GEMAC driver is a resource/binding half only and its DTS
+nodes are disabled). The image is a host build product with a real OpenWrt rootfs,
+not a release. The four driver bindings (CRG, watchdog, MDIO, GEMAC) pass
 `dt_binding_check` (the PHY driver needs none) but have had no upstream review, and
 a full-draft-DTS `dtbs_check` is still not clean (every other node has a TODO binding). The
 zImage produced by the compile stage and the uImage + FIP slice assembled by
@@ -600,9 +687,10 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
    `fip-slice.py make-trailer`, byte-exact against both vendor containers), and the
    first generated trailer has now been assembled into a complete slice by
    `tools/build-kernel-slice.sh` (structurally validated, never booted). What remains:
-   one attended boot of a novel generated trailer before the image recipe relies on it,
-   wiring the host steps into `image/luofu.mk`, and the unknowns listed in
-   TRAILER-FORMAT.md (constant meanings, 628-byte slot region).
+   one attended boot of a novel generated trailer; the host steps are now wired into
+   `image/luofu.mk` and the whole image chain is host-built (SKELETON-SMOKE.md,
+   image-recipe session), and the unknowns listed in TRAILER-FORMAT.md (constant
+   meanings, 628-byte slot region).
 2. **Boot arguments** - how the rootfs selector reaches the kernel, and whether the
    stock U-Boot overrides `/chosen/bootargs`.
 3. **Install path** - stock TFTP recovery vs a documented vendor-root install
@@ -613,8 +701,12 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
    device page.
 6. **Overlay filesystem** - JFFS2 kept for the first submission (decision in
    TARGET-DESIGN.md section 5.3); conversion to UBI is a later option only.
-7. **Switch driver model** - DSA vs switchdev; blocks the board `02_network` port map
-   and the DTS switch nodes.
+7. **Switch driver model** - **RESOLVED 2026-11-18: switchdev over per-port netdevs, not
+   DSA** (no CPU-port tag in the recovered model; each wired port already has a GEMAC
+   netdev; the vendor integration is switchdev; LSW-SPEC.md 9.3). The binding's
+   `ethernet-ports` children are the port model and the first slice is the patch-`016`
+   D1a probe skeleton. Still open: the switch data path itself (D1b-D1d need the attended
+   register inventory/write set) and the board `02_network` port map.
 8. **SMP** - no `platsmp` port; the draft DTS is UP-only.
 9. **Wi-Fi scope statement** - out of the first submission; the vendor stack is not
    mac80211 and the firmware is closed (TARGET-DESIGN.md section 8.3).

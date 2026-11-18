@@ -705,9 +705,9 @@ def cmd_manifest(args):
     lines.extend([
         "gate-offset: 0x%x" % info["gate_offset"],
         "gate-magic: 0x%08x" % info["gate_value"],
-        "# platform_check_image (not written yet) must recompute every field "
-        "above from the received bytes and refuse anything else "
-        "(TARGET-DESIGN.md 5.4).",
+        "# platform_check_image (target/linux/hisilicon/base-files/lib/"
+        "upgrade/platform.sh) must recompute every field above from the "
+        "received bytes and refuse anything else (TARGET-DESIGN.md 5.4).",
     ])
     out = Path(args.output)
     if out.exists() and not args.force:

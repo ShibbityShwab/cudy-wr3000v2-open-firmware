@@ -1,0 +1,658 @@
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -181,4 +181,17 @@
+ 
+ 	  If you are unsure, say N.
+ 
++config LUOFU_SWITCH
++	tristate "HiSilicon Luofu internal LSW switch (draft, probe refuses)"
++	depends on OF
++	help
++	  Platform driver for the internal Ethernet switch of the Hi5671Y
++	  "luofu" SoC, the switch core between the GEMAC ports and the PHY side
++	  of the wired data path.  This is a draft port: it validates the
++	  register windows, the clocks, the resets and the devicetree switch port
++	  model, then refuses to program the switch until the register, queue and
++	  port-id model has been verified against the running hardware.  The
++	  board devicetree keeps the node disabled.  Say N unless you are
++	  working on that port.
++
+ endif # NET_VENDOR_HISILICON
+--- a/drivers/net/ethernet/hisilicon/Makefile
++++ b/drivers/net/ethernet/hisilicon/Makefile
+@@ -5,2 +5,3 @@
+ 
++obj-$(CONFIG_LUOFU_SWITCH) += luofu-switch.o
+ obj-$(CONFIG_HIX5HD2_GMAC) += hix5hd2_gmac.o
+--- /dev/null
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -0,0 +1,447 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" internal LAN switch - D1a resource/binding draft.
++ *
++ * STATUS: HOST-ONLY PROBE SKELETON.  NO REGISTER IS READ OR WRITTEN, NO CLOCK
++ * IS ENABLED, NO RESET IS DRIVEN, NO INTERRUPT IS REQUESTED AND NO NETWORK
++ * PORT IS REGISTERED.  probe() validates the documented resources and the
++ * switch port model, then fails closed with -EOPNOTSUPP.
++ *
++ * Why probe must not program the switch yet
++ * -----------------------------------------
++ * The switch (the vendor's hi_lsw_pub/hi_lsw_dp/hi_lsw_pfe module family) has
++ * no source in any tree and no datasheet. Its register map, queue maps and
++ * classifier table formats were recovered offline from the vendor modules,
++ * but none of that model has been measured on this board: several items are
++ * explicitly unknown (the devicetree port_bitmap decoding, the mapping from
++ * the MAC port numbers to the switch's internal port ids, the EQM indirect
++ * command word, the high port classes of the qid maps, the VLAN/L2 table
++ * formats). An access to an unknown part of this block can cut the
++ * CPU/console path, and the board has no validated in-kernel restart path, so
++ * a probe that programmed the switch from inferred semantics would trade the
++ * only working configuration for no evidence. The D1a shape implemented here
++ * is therefore: bind and validate, map the windows without touching the
++ * block, and refuse.
++ *
++ * What the switch is
++ * ------------------
++ * The wired path is GEMAC -> internal switch -> PHY -> RJ45; the SoC owns the
++ * queue/egress decision and the classification/forwarding tables, while the
++ * host side of the data path is the separate PIE packet engine. There is no
++ * DSA-style CPU-port tag anywhere in the recovered model and every wired port
++ * already has its own netdev (created by the GEMAC driver), so the switch is
++ * modelled as a switchdev switch core with per-port netdevs, not as a DSA
++ * switch. The vendor's own switchdev handlers are compiled stubs in the
++ * shipped build, so the offload layer is ours to write, not to copy.
++ *
++ * What this draft validates
++ * -------------------------
++ * - 15 MMIO windows of 512 KiB each: the five queue-manager windows
++ *   ("dp", "ips", "fam", "eqm", "eps") and the ten
++ *   classification/forwarding windows ("prbs", "pfe_glb", "pa", "ifc", "l2",
++ *   "napt", "mcc", "opp", "pub", "pe"). The vendor devicetree describes the
++ *   same block as two nodes (a queue-manager node and a parser node); they
++ *   are one switch, and this driver owns both window sets so the binding is
++ *   complete before any part of the block is ever programmed.
++ * - two CRG gate clocks (lsw_dp_clk, lsw_pfe_clk) and the four CRG reset
++ *   lines of the block (dp_logic, dp_srst, pfe_logic, pfe_srst). They are
++ *   acquired and named, not acted on: enabling the gates or pulsing the
++ *   resets is a bring-up operation, not a probe-time fact.
++ * - the switch port model: one child per port under "ethernet-ports", each
++ *   carrying a port index (reg) and an "ethernet" phandle to the node that
++ *   provides that port's netdev. The index is a devicetree ordering index,
++ *   not the recovered hardware port id: the mapping between the MAC port
++ *   numbers and the switch's internal port ids is one of the unknowns above.
++ * - the SoC variant through the OF match data (v250; the vendor devicetree
++ *   carries hwver = <0x250> on both switch nodes and the recovered probes
++ *   branch on that generation).
++ *
++ * What it deliberately does not do
++ * --------------------------------
++ * - no register access at all: there is no readl()/writel() in this file,
++ *   no table access, no doorbell;
++ * - no clock enable and no reset assert/deassert;
++ * - no netdev registration and no switchdev notifier: the per-port netdevs
++ *   are owned by the GEMAC driver and are disabled today, so there is no
++ *   port to attach a notifier to. A notifier that ignored every object would
++ *   reproduce exactly the vendor's stub behaviour and freeze an empty ABI;
++ * - no queue/qid-map/EQM programming and no classifier table writes: those
++ *   need the attended register inventory and a reviewed write set first;
++ * - no modelling of the vendor "queue"/"flow" DDR windows: they are memory
++ *   the engine consumes rather than MMIO, and which base is live after the
++ *   U-Boot overlay has not been measured;
++ * - no WoE node: that block has no driver and no software evidence.
++ *
++ * Next steps
++ * ----------
++ * D1a is this resource/binding gate. D1b needs an attended, read-only
++ * inventory of the switch windows on the stock vendor kernel and then a
++ * reviewed write set (clock/reset, qid maps for the host and the four MAC
++ * ports, EQM queue entries). D1c binds the PIE host queues and attempts the
++ * first forwarding; D1d adds the Linux bridge. Do not enable the devicetree
++ * node before those gates pass.
++ *
++ * Recorded resource facts this file relies on:
++ * - the five queue-manager windows above are 0x80000 bytes each, as are all
++ *   ten parser/forwarding windows (vendor devicetree; recovered window
++ *   registration tables agree);
++ * - the two clocks are gate clocks of the CRG, and the four resets are CRG
++ *   reset lines in the 0x30 reset word;
++ * - the switch requests no interrupt of its own: the vendor modules contain
++ *   no request_irq()/devm_request_irq() at all. The WoE block is the only
++ *   interrupt consumer in that family and has no driver.
++ */
++
++#include <linux/bitops.h>
++#include <linux/clk.h>
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/reset.h>
++#include <linux/sizes.h>
++
++/* The two window groups of the switch. */
++#define LUOFU_LSW_DP_WINDOWS		5
++#define LUOFU_LSW_PFE_WINDOWS		10
++#define LUOFU_LSW_NUM_WINDOWS		\
++	(LUOFU_LSW_DP_WINDOWS + LUOFU_LSW_PFE_WINDOWS)
++
++/* Every register window of the block is 512 KiB. */
++#define LUOFU_LSW_WINDOW_SIZE		SZ_512K
++
++/*
++ * Two CRG gate clocks and four CRG reset lines are described by the vendor
++ * devicetree for the two switch sub-blocks.
++ */
++#define LUOFU_LSW_NUM_CLOCKS		2
++#define LUOFU_LSW_NUM_RESETS		4
++
++/*
++ * Upper bound for the devicetree port count. The recovered queue-manager
++ * port table has 46 entries, so a port index that does not fit it could not
++ * have a queue-manager entry in the recovered model. This is a sanity bound
++ * on the software model, not a claim about the hardware port namespace.
++ */
++#define LUOFU_LSW_MAX_PORTS		46
++
++/**
++ * struct luofu_lsw_variant - match data of one supported SoC generation
++ * @hwver: register generation word the vendor devicetree carries
++ * @name: printable variant name
++ */
++struct luofu_lsw_variant {
++	u32 hwver;
++	const char *name;
++};
++
++/**
++ * struct luofu_lsw_port - one switch port from the devicetree port model
++ * @index: devicetree port index (reg), ordering only
++ * @ethernet: node that provides the netdev for this port
++ */
++struct luofu_lsw_port {
++	u32 index;
++	struct device_node *ethernet;
++};
++
++/**
++ * struct luofu_lsw - driver state
++ * @dev: device
++ * @variant: matched SoC generation
++ * @window: mapped register windows, indexed like luofu_lsw_window_names[]
++ * @clk: CRG gate clocks, indexed like luofu_lsw_clock_names[]
++ * @reset: CRG reset lines, indexed like luofu_lsw_reset_names[]
++ * @ports: parsed devicetree port model
++ * @num_ports: number of parsed ports
++ */
++struct luofu_lsw {
++	struct device *dev;
++	const struct luofu_lsw_variant *variant;
++	void __iomem *window[LUOFU_LSW_NUM_WINDOWS];
++	struct clk *clk[LUOFU_LSW_NUM_CLOCKS];
++	struct reset_control *reset[LUOFU_LSW_NUM_RESETS];
++	struct luofu_lsw_port ports[LUOFU_LSW_MAX_PORTS];
++	unsigned int num_ports;
++};
++
++static const struct luofu_lsw_variant luofu_lsw_v250 = {
++	.hwver = 0x250,
++	.name = "v250",
++};
++
++/*
++ * The register windows in devicetree order (sorted by address). The names are
++ * the recorded register-block names of the vendor devicetree; the driver
++ * looks them up by name so the binding, not the ordering, is the ABI.
++ */
++static const char * const luofu_lsw_window_names[LUOFU_LSW_NUM_WINDOWS] = {
++	"dp", "ips", "fam", "pe", "eqm", "eps", "prbs", "pfe_glb",
++	"pa", "ifc", "l2", "napt", "mcc", "opp", "pub",
++};
++
++static const char * const luofu_lsw_clock_names[LUOFU_LSW_NUM_CLOCKS] = {
++	"lsw_dp_clk",
++	"lsw_pfe_clk",
++};
++
++static const char * const luofu_lsw_reset_names[LUOFU_LSW_NUM_RESETS] = {
++	"dp_logic",
++	"dp_srst",
++	"pfe_logic",
++	"pfe_srst",
++};
++
++/*
++ * Resource validation. Everything here is a device-model lookup, a resource
++ * claim or an ioremap(); no register is read or written, the clocks are not
++ * enabled and the reset lines are not driven.
++ */
++static int luofu_lsw_check_windows(struct luofu_lsw *lsw)
++{
++	struct platform_device *pdev = to_platform_device(lsw->dev);
++	unsigned int i;
++
++	for (i = 0; i < LUOFU_LSW_NUM_WINDOWS; i++) {
++		const char *name = luofu_lsw_window_names[i];
++		struct resource *res;
++
++		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, name);
++		if (!res)
++			return dev_err_probe(lsw->dev, -ENODEV,
++					     "missing %s register window\n",
++					     name);
++		if (resource_size(res) != LUOFU_LSW_WINDOW_SIZE)
++			return dev_err_probe(lsw->dev, -EINVAL,
++					     "window %s is %#llx bytes, expected %#x\n",
++					     name,
++					     (unsigned long long)resource_size(res),
++					     LUOFU_LSW_WINDOW_SIZE);
++
++		lsw->window[i] = devm_platform_ioremap_resource_byname(pdev,
++								      name);
++		if (IS_ERR(lsw->window[i]))
++			return dev_err_probe(lsw->dev,
++					     PTR_ERR(lsw->window[i]),
++					     "cannot map the %s window\n",
++					     name);
++	}
++
++	return 0;
++}
++
++static int luofu_lsw_check_clocks(struct luofu_lsw *lsw)
++{
++	unsigned int i;
++
++	for (i = 0; i < LUOFU_LSW_NUM_CLOCKS; i++) {
++		lsw->clk[i] = devm_clk_get(lsw->dev, luofu_lsw_clock_names[i]);
++		if (IS_ERR(lsw->clk[i]))
++			return dev_err_probe(lsw->dev, PTR_ERR(lsw->clk[i]),
++					     "missing %s clock\n",
++					     luofu_lsw_clock_names[i]);
++	}
++
++	return 0;
++}
++
++static int luofu_lsw_check_resets(struct luofu_lsw *lsw)
++{
++	unsigned int i;
++
++	for (i = 0; i < LUOFU_LSW_NUM_RESETS; i++) {
++		lsw->reset[i] = devm_reset_control_get_exclusive(lsw->dev,
++							 luofu_lsw_reset_names[i]);
++		if (IS_ERR(lsw->reset[i]))
++			return dev_err_probe(lsw->dev,
++					     PTR_ERR(lsw->reset[i]),
++					     "missing %s reset line\n",
++					     luofu_lsw_reset_names[i]);
++	}
++
++	return 0;
++}
++
++static void luofu_lsw_ports_release(struct luofu_lsw *lsw)
++{
++	while (lsw->num_ports) {
++		struct luofu_lsw_port *port = &lsw->ports[--lsw->num_ports];
++
++		of_node_put(port->ethernet);
++		port->ethernet = NULL;
++	}
++}
++
++/*
++ * Parse the devicetree port model. The model is design-level: it describes
++ * which netdev each switch port will be attached to, but nothing here may be
++ * used to program the switch until the hardware port id mapping has been
++ * measured. A duplicate index or phandle is rejected because it would make
++ * the later port-to-netdev binding ambiguous.
++ */
++static int luofu_lsw_parse_ports(struct luofu_lsw *lsw)
++{
++	struct device_node *ports __free(device_node) =
++		of_get_child_by_name(lsw->dev->of_node, "ethernet-ports");
++	u64 seen = 0;
++	int ret = 0;
++
++	if (!ports)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "missing ethernet-ports node\n");
++
++	for_each_child_of_node_scoped(ports, child) {
++		struct device_node *ethernet;
++		unsigned int i;
++		u32 index;
++
++		ret = of_property_read_u32(child, "reg", &index);
++		if (ret) {
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: missing switch port index (reg)\n",
++				      child);
++			goto out;
++		}
++
++		if (index >= LUOFU_LSW_MAX_PORTS) {
++			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: port index %u is outside the recovered 0..%u port table\n",
++				      child, index, LUOFU_LSW_MAX_PORTS - 1);
++			goto out;
++		}
++
++		if (seen & BIT_ULL(index)) {
++			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: duplicate switch port index %u\n",
++				      child, index);
++			goto out;
++		}
++
++		if (lsw->num_ports >= LUOFU_LSW_MAX_PORTS) {
++			ret = -E2BIG;
++			dev_err_probe(lsw->dev, ret,
++				      "too many switch ports\n");
++			goto out;
++		}
++
++		ethernet = of_parse_phandle(child, "ethernet", 0);
++		if (!ethernet) {
++			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: missing ethernet phandle\n",
++				      child);
++			goto out;
++		}
++
++		if (ethernet == lsw->dev->of_node) {
++			dev_err_probe(lsw->dev, -EINVAL,
++				      "%pOF: ethernet phandle points at the switch itself\n",
++				      child);
++			of_node_put(ethernet);
++			ret = -EINVAL;
++			goto out;
++		}
++
++		for (i = 0; i < lsw->num_ports; i++)
++			if (lsw->ports[i].ethernet == ethernet)
++				break;
++		if (i < lsw->num_ports) {
++			dev_err_probe(lsw->dev, -EINVAL,
++				      "%pOF: duplicate ethernet phandle %pOF\n",
++				      child, ethernet);
++			of_node_put(ethernet);
++			ret = -EINVAL;
++			goto out;
++		}
++
++		lsw->ports[lsw->num_ports].index = index;
++		lsw->ports[lsw->num_ports].ethernet = ethernet;
++		lsw->num_ports++;
++		seen |= BIT_ULL(index);
++	}
++
++	if (!lsw->num_ports) {
++		ret = -EINVAL;
++		dev_err_probe(lsw->dev, ret,
++			      "ethernet-ports node has no port\n");
++	}
++
++out:
++	if (ret)
++		luofu_lsw_ports_release(lsw);
++	return ret;
++}
++
++static int luofu_lsw_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct luofu_lsw *lsw;
++	int ret;
++
++	lsw = devm_kzalloc(dev, sizeof(*lsw), GFP_KERNEL);
++	if (!lsw)
++		return -ENOMEM;
++	lsw->dev = dev;
++
++	lsw->variant = of_device_get_match_data(dev);
++	if (!lsw->variant)
++		return dev_err_probe(dev, -EINVAL, "missing SoC variant data\n");
++	if (lsw->variant->hwver < 0x200 || lsw->variant->hwver >= 0x300)
++		return dev_err_probe(dev, -EINVAL,
++				     "variant v%x has no recovered switch model\n",
++				     lsw->variant->hwver);
++
++	ret = luofu_lsw_check_windows(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_lsw_check_clocks(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_lsw_check_resets(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_lsw_parse_ports(lsw);
++	if (ret)
++		return ret;
++
++	dev_info(dev,
++		 "LSW %s: %u windows mapped, %u clocks, %u resets and %u ports validated; no register was accessed\n",
++		 lsw->variant->name, LUOFU_LSW_NUM_WINDOWS,
++		 LUOFU_LSW_NUM_CLOCKS, LUOFU_LSW_NUM_RESETS, lsw->num_ports);
++
++	luofu_lsw_ports_release(lsw);
++
++	/*
++	 * Refuse to bring the switch up. The node is disabled, so a normal boot
++	 * never reaches this point; the error is loud exactly for the person
++	 * who enables the node before the D1 bring-up campaign is done.
++	 */
++	return dev_err_probe(dev, -EOPNOTSUPP,
++			     "switch programming not verified: LSW register/queue/port-id model has never been measured; refusing to program the switch\n");
++}
++
++static const struct of_device_id luofu_lsw_of_match[] = {
++	{ .compatible = "hisilicon,luofu-switch", .data = &luofu_lsw_v250 },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_lsw_of_match);
++
++static struct platform_driver luofu_lsw_driver = {
++	.probe = luofu_lsw_probe,
++	.driver = {
++		.name = "luofu-switch",
++		.of_match_table = luofu_lsw_of_match,
++	},
++};
++module_platform_driver(luofu_lsw_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (draft: probe refuses)");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+@@ -0,0 +1,179 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/net/hisilicon,luofu-switch.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu internal Ethernet switch
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" SoC contains an internal Ethernet switch. The wired data
++  path is MAC -> internal switch -> PHY -> RJ45: the five GEMAC instances are
++  the MAC side, the switch owns the queue/egress decision and the
++  classification/forwarding tables, and the host side of the data path is the
++  separate PIE packet engine.
++
++  There is no DSA-style CPU-port tag in the recovered model and every wired
++  port already has its own netdev, so the switch is described as a generic
++  Ethernet switch with an "ethernet-ports" node (switchdev model, not DSA).
++  Each port child names the node that provides its netdev through the
++  "ethernet" phandle.
++
++  The switch register space is described by 15 windows of 512 KiB each: five
++  queue-manager windows ("dp", "ips", "fam", "eqm", "eps") and ten
++  classification/forwarding windows ("prbs", "pfe_glb", "pa", "ifc", "l2",
++  "napt", "mcc", "opp", "pub", "pe"). The vendor devicetree describes the same
++  block as two separate nodes; they are one switch and are combined here. The
++  vendor "queue" (4 MiB) and "flow" (1 MiB) regions are DDR memory consumed by
++  the engine, not MMIO windows, and which base is live after the bootloader
++  devicetree fixups is not established, so they are deliberately not modelled.
++
++  The Linux driver is a draft: it validates these resources and the port
++  model, then refuses to probe until the register, queue and port-id model has
++  been verified on the hardware. The node must stay disabled until then.
++
++properties:
++  compatible:
++    const: hisilicon,luofu-switch
++
++  reg:
++    minItems: 15
++    maxItems: 15
++    description:
++      The 15 switch register windows, 512 KiB each; the names are given by
++      reg-names.
++
++  reg-names:
++    items:
++      - const: dp
++      - const: ips
++      - const: fam
++      - const: pe
++      - const: eqm
++      - const: eps
++      - const: prbs
++      - const: pfe_glb
++      - const: pa
++      - const: ifc
++      - const: l2
++      - const: napt
++      - const: mcc
++      - const: opp
++      - const: pub
++
++  clocks:
++    maxItems: 2
++    description: Gate clocks of the queue-manager and parser sub-blocks.
++
++  clock-names:
++    items:
++      - const: lsw_dp_clk
++      - const: lsw_pfe_clk
++
++  resets:
++    maxItems: 4
++    description: Reset lines of the two sub-blocks from the CRG.
++
++  reset-names:
++    items:
++      - const: dp_logic
++      - const: dp_srst
++      - const: pfe_logic
++      - const: pfe_srst
++
++  ethernet-ports:
++    type: object
++    description: The ports of the internal switch.
++    properties:
++      '#address-cells':
++        const: 1
++      '#size-cells':
++        const: 0
++    patternProperties:
++      '^ethernet-port@[0-9a-f]+$':
++        type: object
++        $ref: /schemas/net/ethernet-switch-port.yaml#
++        properties:
++          reg:
++            maxItems: 1
++            description: |
++              Devicetree port index used to order the switch ports. It is not
++              the recovered hardware port id: the mapping between the MAC port
++              numbers and the switch's internal port ids is not established.
++          ethernet:
++            $ref: /schemas/types.yaml#/definitions/phandle
++            description: |
++              Phandle to the Ethernet controller node that provides this
++              port's netdev (a GEMAC node on this board).
++        required:
++          - reg
++          - ethernet
++        unevaluatedProperties: false
++    required:
++      - '#address-cells'
++      - '#size-cells'
++    additionalProperties: false
++
++required:
++  - compatible
++  - reg
++  - reg-names
++  - clocks
++  - clock-names
++  - resets
++  - reset-names
++  - ethernet-ports
++
++allOf:
++  - $ref: /schemas/net/ethernet-switch.yaml#
++
++additionalProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
++
++    crg: system-controller@14880000 {
++        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++        reg = <0x14880000 0x1000>;
++        #clock-cells = <1>;
++        #reset-cells = <2>;
++    };
++
++    ethernet-switch@11000000 {
++        compatible = "hisilicon,luofu-switch";
++        reg = <0x11000000 0x80000>, <0x11080000 0x80000>,
++              <0x11100000 0x80000>, <0x11180000 0x80000>,
++              <0x11200000 0x80000>, <0x11280000 0x80000>,
++              <0x11380000 0x80000>, <0x12000000 0x80000>,
++              <0x12080000 0x80000>, <0x12100000 0x80000>,
++              <0x12180000 0x80000>, <0x12280000 0x80000>,
++              <0x12380000 0x80000>, <0x12400000 0x80000>,
++              <0x12480000 0x80000>;
++        reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
++                    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp", "pub";
++        clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
++        clock-names = "lsw_dp_clk", "lsw_pfe_clk";
++        resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
++                 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
++        reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
++        status = "disabled";
++
++        ethernet-ports {
++            #address-cells = <1>;
++            #size-cells = <0>;
++
++            ethernet-port@0 {
++                reg = <0>;
++                ethernet = <&gmac1>;
++            };
++
++            ethernet-port@1 {
++                reg = <1>;
++                ethernet = <&gmac2>;
++            };
++        };
++    };

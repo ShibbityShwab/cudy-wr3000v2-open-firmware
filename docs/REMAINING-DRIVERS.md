@@ -631,6 +631,16 @@ switch@...:                       # one node per block family, or one switch nod
   # CPU/host port points at the PIE node (section 6). WoE interrupts on a subnode if in scope.
 ~~~
 
+**D1a is written** as patch `016` (2026-11-18, host-only, zero devices): one
+`hisilicon,luofu-switch` node combining the five queue-manager and ten
+classifier/forwarding MMIO windows of the vendor `lsw_dp`/`lsw_pfe` nodes (the vendor
+`queue`/`flow` DDR regions are not modelled: memory the engine consumes, live base [U]),
+two clocks, four resets, and an `ethernet-ports` child model whose port nodes name the
+GEMAC node that owns each port's netdev. The driver validates all of it and then refuses
+to program the switch (`-EOPNOTSUPP`; no MMIO access at all); the DTS node stays
+`disabled`. Nothing below changes: D1b-D1d still need the attended inventory and the
+reviewed write set.
+
 **Implementation steps (two phases):**
 
 - **Phase D1 - minimal forwarding (the wired milestone):** port map, VLAN/PVID handling for the

@@ -601,55 +601,83 @@
 	};
 
 	/*
-	 * TODO(binding): the internal LSW switch has NO driver in any tree - it
-	 * is the largest new SoC-side work item. The lab-split nodes below keep
-	 * the measured register windows and interrupts; they are NOT the
-	 * submission shape. TARGET-DESIGN.md 6.2 proposes one switch binding
-	 * (or switch + parser subnodes) with the switch's port model, and 8.1
-	 * asks for a DSA-vs-switchdev decision. Enable nothing until the driver
-	 * exists: status="okay" for a block with no driver is a review finding.
-	 * The wired path is gmac -> this switch -> PHY -> RJ45 (TARGET-DESIGN.md
-	 * 8.1); the bench measured the cable on the gmac3/0x14480000 GMII port,
-	 * but the per-port jack map is still board-schematic work.
+	 * Internal LSW switch: binding
+	 * Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+	 * (patch 016). One switch with 15 MMIO windows: the five queue-manager
+	 * windows (dp/ips/fam/eqm/eps) and the ten classifier/forwarding windows
+	 * (prbs/pfe_glb/pa/ifc/l2/napt/mcc/opp/pub/pe) that the vendor tree
+	 * describes as two separate nodes. The vendor "queue"/"flow" regions are
+	 * DDR memory consumed by the engine, not MMIO windows, and their live
+	 * base is not established; they are not modelled here.
+	 *
+	 * The in-tree driver is DRAFT probe scaffolding: it validates these
+	 * resources and the port model, then refuses to program the switch
+	 * (-EOPNOTSUPP) until the register/queue/port-id model has been verified
+	 * on hardware (LSW-SPEC.md D1a/D1b). The node therefore stays disabled;
+	 * do not enable it before the attended inventory and write-set review:
+	 * an access to an unknown register in this block can cut the CPU/console
+	 * path on a board with no validated restart.
+	 *
+	 * The port children are the switchdev model (not DSA): each wired port is
+	 * a netdev owned by its GEMAC node and the switch port names it with the
+	 * "ethernet" phandle. The port index (reg) is a devicetree ordering index
+	 * only - the mapping to the recovered LSW hardware port ids is still
+	 * unknown - and the GEMAC<->PHY mapping is the measured one (14380000 ->
+	 * phy2/eth0, 14400000 -> phy3/eth1, 14480000 -> phy4/eth2 (the bench
+	 * cable port), 14500000 -> phy5/eth3). gmac0 is unused by the vendor and
+	 * is not a switch port here.
 	 */
-	lsw_dp: ethernet-switch@87b00000 {
-		compatible = "hisilicon,luofu-dp";	/* TODO(binding) */
-		reg = <0x87b00000 0x400000>,	/* queue */
-		      <0x87f00000 0x100000>,	/* flow */
-		      <0x11000000 0x80000>,	/* dp */
-		      <0x11280000 0x80000>,	/* eps */
-		      <0x11200000 0x80000>,	/* eqm */
+	lsw: ethernet-switch@11000000 {
+		compatible = "hisilicon,luofu-switch";
+		reg = <0x11000000 0x80000>,	/* dp */
+		      <0x11080000 0x80000>,	/* ips */
 		      <0x11100000 0x80000>,	/* fam */
-		      <0x11080000 0x80000>;	/* ips */
-		reg-names = "queue", "flow", "dp", "eps", "eqm", "fam", "ips";
-		clocks = <&crg LUOFU_CLK_LSW_DP>;
-		/* TODO(reset-binding): vendor cells (0x30, 0x0) and (0x30, 0x1) */
-		status = "disabled";
-		/*
-		 * NEEDS-VERIFICATION: the vendor board overlay rebases the queue
-		 * window 0x87b00000 -> 0x80000000 (vendor-dt-notes.md 8). Which
-		 * base a Linux driver must program is NOT established; do not
-		 * "fix" this address without measuring.
-		 */
-	};
-
-	lsw_pfe: ethernet-switch@12100000 {
-		compatible = "hisilicon,luofu-pfe";	/* TODO(binding) */
-		reg = <0x12100000 0x80000>,	/* ifc */
+		      <0x11180000 0x80000>,	/* pe */
+		      <0x11200000 0x80000>,	/* eqm */
+		      <0x11280000 0x80000>,	/* eps */
+		      <0x11380000 0x80000>,	/* prbs */
+		      <0x12000000 0x80000>,	/* pfe_glb */
+		      <0x12080000 0x80000>,	/* pa */
+		      <0x12100000 0x80000>,	/* ifc */
 		      <0x12180000 0x80000>,	/* l2 */
 		      <0x12280000 0x80000>,	/* napt */
 		      <0x12380000 0x80000>,	/* mcc */
 		      <0x12400000 0x80000>,	/* opp */
-		      <0x12080000 0x80000>,	/* pa */
-		      <0x11180000 0x80000>,	/* pe */
-		      <0x12000000 0x80000>,	/* pfe_glb */
-		      <0x11380000 0x80000>,	/* prbs */
 		      <0x12480000 0x80000>;	/* pub */
-		reg-names = "ifc", "l2", "napt", "mcc", "opp", "pa", "pe",
-			    "pfe_glb", "prbs", "pub";
-		clocks = <&crg LUOFU_CLK_LSW_PFE>;
-		/* TODO(reset-binding): vendor cells (0x30, 0x3) and (0x30, 0x4) */
+		reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
+			    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp",
+			    "pub";
+		clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
+		clock-names = "lsw_dp_clk", "lsw_pfe_clk";
+		resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
+			 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
+		reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
 		status = "disabled";
+
+		ethernet-ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ethernet-port@0 {
+				reg = <0>;		/* ordering index, not a hw id */
+				ethernet = <&gmac1>;	/* eth0 */
+			};
+
+			ethernet-port@1 {
+				reg = <1>;
+				ethernet = <&gmac2>;	/* eth1 */
+			};
+
+			ethernet-port@2 {
+				reg = <2>;
+				ethernet = <&gmac3>;	/* eth2, the bench cable port */
+			};
+
+			ethernet-port@3 {
+				reg = <3>;
+				ethernet = <&gmac4>;	/* eth3 */
+			};
+		};
 	};
 
 	lsw_woe: woe {

@@ -14,11 +14,12 @@ only an index. The design source of truth remains [TARGET-DESIGN.md](TARGET-DESI
 `image/Makefile` plus `image/luofu.mk` device stanza, board-level `base-files`), a draft
 upstreamable board DTS under the target `dts/` directory, and the fail-closed FIP-slice tool.
 
-**What it is not.** Not imaged, not rootfs-packaged, not booted, not accepted upstream. The
-host sessions proved that OpenWrt main's `make defconfig`/`prepare` accept the target, that the
-kernel patch series compiles a 6.18 kernel with the real `TEXT_OFFSET`, and that an own-artifact
-kernel slice (our zImage + our base DTB + our loader-match overlay + a generated trailer)
-satisfies every check the decoded `bootfip` performs. Nothing has been flashed or booted; the
+**What it is not.** Not flashed, not booted, not accepted upstream. The host sessions proved that
+OpenWrt main's `make defconfig`/`prepare` accept the target, that the kernel patch series compiles
+a 6.18 kernel with the real `TEXT_OFFSET`, and that the image recipe builds end-to-end: an
+isolated `make world` produced a reproducible squashfs sysupgrade image with our own FIP kernel
+slice, rootfs UBI and manifest (all structurally re-validated from the finished image; never
+flashed or booted). The
 **rest** of the driver/binding series (switch, PCIe, GEMAC data path), rootfs/UBI, sysupgrade
 `platform.sh` metadata and the install path do not exist, and a novel trailer still needs one
 attended boot. The drivers written so far exist as host-compiled

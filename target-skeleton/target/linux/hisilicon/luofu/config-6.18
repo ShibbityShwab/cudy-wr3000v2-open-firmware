@@ -303,6 +303,12 @@ CONFIG_LUOFU_FMC=y
 #     read-only register/channel inventory has been captured on hardware;
 #     the devicetree node stays disabled)
 CONFIG_LUOFU_PIE=y
+# [N] new driver in patches-6.18/016 (luofu internal LSW switch, D1a DRAFT:
+#     the probe validates the register windows, the CRG clocks/resets and the
+#     devicetree port model, then refuses to program the switch (-EOPNOTSUPP)
+#     until the register/queue/port-id model has been measured; the devicetree
+#     node stays disabled)
+CONFIG_LUOFU_SWITCH=y
 # [L] from the lab 5.10.201 reference
 CONFIG_MDIO_BUS=y
 # CONFIG_MFD_HI655X_PMIC is not set

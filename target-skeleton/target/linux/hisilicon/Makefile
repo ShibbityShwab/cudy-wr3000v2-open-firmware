@@ -30,6 +30,11 @@ BOARDNAME:=HiSilicon ARM SoCs
 FEATURES:=squashfs nand ubifs
 SUBTARGETS:=luofu
 
+# The image recipe wraps arch/arm/boot/zImage into the legacy uImage + FIP
+# trailer. Kernel/CopyImage only copies the products named here into $(KDIR),
+# so a board without KERNELNAME produces no zImage for the image stage.
+KERNELNAME:=zImage
+
 # TARGET-DESIGN.md 4.1: follow the kernel of the OpenWrt release under
 # development; do not hardcode a kernel in code. 6.12 was the release under
 # development in the 2026-10-01 snapshot (PORT-PLAN.md); re-verify before use.

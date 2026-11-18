@@ -1959,3 +1959,186 @@ boot/image/install/bench. The attended P3 read-only inventory is the next hardwa
 currently blocked); until then the node must stay disabled.
 
 Combined whole-series verification (in the scratch tree, patches 001-015 applied from the repo): make target/linux/prepare RC=0 and make target/linux/compile RC=0 with 0 warnings/errors; zImage 3,262,792 B sha256 c82d0ffe...; all CONFIG_LUOFU_* drivers built in (including the polarity-fixed CRG); combined DTS compiles with zero warnings (DTB 10,193 B).
+
+
+## 2026-11-18 (twelfth session): internal LSW switch D1a probe skeleton (patch 016)
+
+Patch 016-net-lsw-luofu.patch (sha256
+c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a) adds
+drivers/net/ethernet/hisilicon/luofu-switch.c, its Kconfig/Makefile entry
+(CONFIG_LUOFU_SWITCH), Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml and
+the board DTS node (disabled). This is the D1a gate of the internal-switch plan (LSW-SPEC.md
+sections 10.4/11): a resource/binding/probe skeleton, not a switch driver.
+
+Design decisions: the vendor tree describes the switch as two nodes (lsw_dp: 7 windows,
+lsw_pfe: 10 windows), but it is one switch, so the binding is one hisilicon,luofu-switch node
+with the 15 MMIO windows (five queue-manager + ten classifier/forwarding, 512 KiB each). The
+vendor queue (4 MiB) and flow (1 MiB) regions are DDR memory the engine consumes, not MMIO
+windows, and their live base is unestablished ([U]), so they are deliberately not modelled.
+The two CRG gate clocks and four CRG reset lines are acquired by name but never enabled or
+driven. The framework question is settled as switchdev, not DSA (no CPU-port tag; per-port
+netdevs exist; LSW-SPEC.md 9.3), so the port model is an ethernet-ports child list where each
+port has a reg ordering index (explicitly NOT the recovered hardware port id) and an ethernet
+phandle to the GEMAC node that owns that port's netdev. The probe validates all of it, logs,
+frees the port references and returns -EOPNOTSUPP; a file-wide grep for readl/writel finds none
+(the windows are only ioremapped), no clock is enabled, no reset is toggled, no interrupt is
+requested, no netdev is registered and no switchdev notifier is installed (there is no port
+netdev to attach to; an empty notifier would reproduce the vendor's stub behaviour). The DTS
+node stays disabled, so a normal boot never reaches the refusal.
+
+Validation (isolated clone /home/shibbityshwab/openwrt-lab-lsw, target tree re-synced to the
+committed 001-015 state plus patch 016 and the delivered DTS/config edits; the stale kernel
+build directory was removed so make target/linux/prepare re-extracted 6.18.60 and re-applied
+the whole series from scratch): pristine 6.18.60 dry-run of 016 RC=0; chained apply of
+001-016 RC=0 (60 patching lines, 0 rej/orig); prepare RC=0 (1,193 patching lines, 0 rej/orig,
+the 016 hunks applied without offsets); full compile RC=0 with 0 warnings under
+CONFIG_WERROR=y; zImage 3263624 B sha256 201ba86863d8ee6c14d865702ee2339cd3e373c30fbb4b94983afcc2d72df83f; luofu_lsw_probe and
+luofu_lsw_driver in System.map; TEXT_OFFSET contract unchanged;
+CONFIG_LUOFU_SWITCH=y; dt_binding_check RC=0; board DTS zero warnings (DTB 10538 B
+sha256 ff34bc7f7e744b61bbc0ca7bd0934317e46d837c87d024592fc08335ed5ce4a0); dt-validate reports no diagnostic for the switch node; config canonical
+re-derivation byte-identical and symbol-identical to the delivered delta; checkpatch 0/0/0 on
+the driver (447 lines) and the YAML (179 lines); shared.patch dry-run/apply/byte-compare OK;
+static checks show no MMIO access in the probe, no netdev/switchdev registration, no exported
+ABI and no lab/bench breadcrumbs or forbidden addresses.
+
+Not proven: any hardware behaviour. The register/queue/port-id model is recovered offline from
+the vendor modules and has never been measured on this board; the port_bitmap decoding, the
+LSW-vs-MAC port-id mapping, the EQM command word, the qid-map high-port classes and the
+classifier/VLAN table formats all remain [U]. The driver has never run on ARM, never mapped the
+real windows at runtime and never registered a port; no boot, no image, no install path and no
+bench run. The next hardware step is the attended, read-only register inventory plus a reviewed
+write set (LSW-SPEC.md 12.3 W1/W2), after which D1b-D1d (queue maps, PIE host binding, bridge
+forwarding) can start. Publication remains NOT READY.
+
+## 2026-11-18 (image-recipe session): the image chain is wired and built
+
+**Status: the target image recipe is implemented and produced a full, validated
+sysupgrade container in an isolated `openwrt main` clone (`make world -j16`
+RC=0). The artifact has NEVER BOOTED and is NOT installable: the A/B selector
+protocol and the install path are [U], `platform_do_upgrade` refuses to write,
+and no factory/install image exists. Nothing here is a boot or flash claim.**
+
+### What changed
+
+- `target/linux/hisilicon/image/luofu.mk` is no longer a sketch. The real
+  chain is `kernel-bin | luofu-check-textofs | append-dtb | uImage none |
+  luofu-fip-slice | luofu-fip-manifest` for the kernel and
+  `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata` for the
+  image; `image/luofu.mk` derives the load/entry address from the loader
+  staging base and `TEXT_OFFSET`, regenerates the FIP trailer from our own
+  board DTB + loader-match overlay (`fip-slice.py make-trailer`, libfdt apply
+  required), assembles/validates the slice with the slot budget and
+  load/entry assertions (`fip-slice.py assemble`), writes a manifest, builds
+  the squashfs-in-static-UBI rootfs from the measured geometry (checked-in
+  `image/luofu-ubinize.cfg`) and packages the container. Every stage fails the
+  build closed.
+- `target/linux/hisilicon/image/luofu-ubinize.cfg` (new): one static volume
+  named `squashfs`, vol_id=0, and a placeholder for the rootfs image path.
+- `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` (new): real
+  structural `platform_check_image` (tar/`CONTROL`, uImage load/entry, FIP
+  trailer/gate/descriptor constants, UBI volume shape, manifest-vs-bytes,
+  slot budgets) and a **refusing** `platform_do_upgrade` with the full TODO
+  list that must be closed before any write is allowed.
+- `target/linux/hisilicon/Makefile`: `KERNELNAME:=zImage` added - without it
+  `Kernel/CopyImage` never copies a zImage into $(KDIR) and the image chain
+  has no kernel input.
+- `tools/luofu-image.py` (new; OpenWrt-tree mapping `scripts/luofu-image.py`):
+  `rootfs-ubi`, `sysupgrade` and `check-container`, all fail-closed; it
+  re-parses EC/VID/data CRCs, the layout volume table and the static `squashfs`
+  volume, refuses vendor input paths and unknown ubinize-cfg keys.
+- `tools/fip-slice.py`: the generated manifest comment no longer says that
+  `platform_check_image` is unwritten.
+- The target mapping must place `dts/luofu-r116.dts` as
+  `target/linux/hisilicon/dts/luofu-r116.dts` and `dts/luofu-r116-overlay.dts`
+  as `.../luofu-r116-overlay.dtso` (the `DEVICE_DTS_OVERLAY` rule only
+  compiles `.dtso` sources), and the two tools as `scripts/fip-slice.py` and
+  `scripts/luofu-image.py`.
+
+### How it was run (isolated clone, no shared tree modified)
+
+    cp -a --reflink=auto /home/shibbityshwab/openwrt-lab-verify /home/shibbityshwab/openwrt-lab-image
+    # install target/linux/hisilicon/, the two dts files and the two scripts as above
+    make defconfig                       # RC=0
+    make world -j16                      # RC=0
+
+The clone was built from patches `001`-`015` (`linux-6.18.60`), the state
+stated for this task. Patch `016` (task-26, LSW) and its
+`CONFIG_LUOFU_SWITCH=y` `config-6.18` line were completed after this build;
+they are not part of these artifacts (re-run `make world -j16` after
+integration; the hashes will change). A second identical `make world -j16`
+produced a byte-identical image.
+
+One pre-existing clone-copy artefact had to be repaired before the build
+succeeded: the copied `staging_dir` carried absolute paths to the source clone
+(553 files; 131 text files such as `.pc` wrappers and autoconf/libtool
+scripts) which produced duplicate staging include paths and broke the `apk`
+host build on a shadowed `<endian.h>`. Rewriting the text files to the new
+clone path fixed it; this is a reused-clone issue, not a target issue.
+
+### Results
+
+- Image: `bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`
+  - **6,175,022 B**, sha256 `ea143b03d9d248b3e2b21723ef639e42817e66da847285496ebbc46e12756881`
+  - members `sysupgrade-cudy_wr3000-v2/{CONTROL,INSTALL-STATUS.txt,fip-manifest.txt,kernel,root}`
+    plus standard appended fwtool metadata (`supported_devices` =
+    `cudy,wr3000-v2 hisilicon,luofu-r116 hisilicon,luofu`; revision
+    `r0-27663a0`).
+- Kernel slice: `cudy_wr3000-v2-kernel.bin`, **3,283,008 B**, sha256
+  `23c3286b631a20d1a8fa0d7671d0bea1d7dfbd7f8fdcf7c85a084fba3c5ca636`;
+  uImage `Linux-6.18.60` with the DTB appended (`ih_size` 3,272,457 B),
+  load/entry `0x80608000`; trailer 10,487 B generated from our DTB + overlay;
+  gate `0xd7b7ab1e` at `0x32171a`; 5,367,744 B under the slot budget.
+- Rootfs UBI: `cudy_wr3000-v2-rootfs.ubi`, **2,883,584 B**, sha256
+  `d3c5611cf49395a7a99c8703331b6545a5b543ae9781041e2571e80a9faff2e7`;
+  22 PEBs = 2 layout + 20 data, single static volume `squashfs` (LEB
+  126,976 B), all header/data CRCs verified; 21,430,272 B under the slot
+  budget. Its source `root.squashfs` is 2,481,002 B (sha256 `c079a1d6...`).
+- zImage: 3,262,264 B sha256 `b3227ac3d0ab5265c73d1d25c773767d6c72fc974d85209521620af41664c060`;
+  System.map is deleted by an incremental OpenWrt modules rebuild, so the
+  recipe reads `_text` from `vmlinux` with the target `nm` (0xc0608000; the
+  fallback path was exercised by the rebuild).
+- Base DTB 10,193 B sha256 `4e4a0304...`, loader-match overlay DTBO 230 B
+  sha256 `8e4ab83b...`, manifest 945 B sha256 `bd976870...`.
+
+### Checks actually run
+
+- `tools/luofu-image.py check-container` on the final `.bin`: **PASS**
+  (independent re-read of CONTROL, kernel slice load/entry/trailer/gate/
+  descriptor, UBI volume shape, manifest-vs-bytes, slot budgets).
+- `platform_check_image` from `base-files/lib/upgrade/platform.sh`, run
+  host-side against the real image: **PASS**; corrupted-image, wrong-board and
+  foreign-image variants refused (RC=1 / RC=1 / RC=74);
+  `platform_do_upgrade` returns 1 with the [U] refusal text.
+- Negative tests: fabricated uImage load/entry, slot-budget overflow,
+  non-squashfs rootfs, tampered/unknown-key ubinize cfg, corrupted UBI data
+  CRC, manifest/sha mismatch - all refused.
+- `sh -n`/`bash -n` clean on `platform.sh`; the recipe was parsed and executed
+  by the real OpenWrt make.
+
+### What this proves and what it does not
+
+Proven: the image chain is valid OpenWrt idiom and builds end to end from our
+own DTB/overlay/kernel/rootfs; the derived load/entry and the FIP gate are
+asserted at build time; the rootfs UBI has the measured shape; the container
+is structurally self-consistent under independent re-validation; the build is
+reproducible byte-for-byte.
+
+Not proven: anything about booting. The stock loader accepting a novel
+generated trailer, kernel execution, rootfs mount and overlay, the A/B
+selector protocol, the install path and the boot-argument hand-off are all
+still [U]. The image is a host build product, not a release and not a
+flashable upgrade.
+
+### Next blockers
+
+1. One attended boot of a generated trailer / kernel slice (and then of the
+   rootfs UBI) on a recovered unit.
+2. Measure the A/B selector read/write path (both env copies, `0x10100C08`)
+   and only then implement `platform_do_upgrade`.
+3. Execute one install path end to end (vendor-root documented installer or a
+   characterized TFTP recovery) before adding any factory/install stanza.
+4. Integrate patch `016` with its `config-6.18` symbol and re-run the full
+   build.
+5. Decide the boot-argument hand-off (`/chosen/bootargs` override question),
+   then prove the rootfs mounts.
+

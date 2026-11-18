@@ -9,7 +9,7 @@
 #
 # WHAT IT DOES (all host-side, all fail-closed)
 #   1. cpp + the build tree's dtc:  dts/luofu-r116.dts          -> luofu-r116.dtb
-#   2. the same dtc:                dts/luofu-r116-overlay.dts -> ...-overlay.dtbo
+#   2. the same dtc:                dts/luofu-r116-overlay.dtso -> ...-overlay.dtbo
 #      (asserted: valid FDT header, base root compatible, the decoded overlay
 #       match properties, and one fragment targeting "/" with a no-op __overlay__)
 #   3. the build tree's mkimage:    linux-6.18.60 zImage       -> legacy uImage
@@ -65,7 +65,7 @@
 #   --base-dts FILE        base board DTS
 #                          (default: target-skeleton/dts/luofu-r116.dts)
 #   --overlay-dts FILE     loader-match overlay DTS
-#                          (default: target-skeleton/dts/luofu-r116-overlay.dts)
+#                          (default: target-skeleton/dts/luofu-r116-overlay.dtso)
 #   --loader-stage ADDR    U-Boot kernel-slot staging base (default: 0x83200000)
 #   --text-offset ADDR     kernel TEXT_OFFSET (default: 0x00608000)
 #   --expect-board-id N    board strap / board_id the loader must select
@@ -194,7 +194,7 @@ DTC=${DTC:-"$KERNEL_DIR/scripts/dtc/dtc"}
 CPP=${CPP:-cpp}
 PYTHON3=${PYTHON3:-python3}
 BASE_DTS=${BASE_DTS:-"$SKEL_DIR/dts/luofu-r116.dts"}
-OVERLAY_DTS=${OVERLAY_DTS:-"$SKEL_DIR/dts/luofu-r116-overlay.dts"}
+OVERLAY_DTS=${OVERLAY_DTS:-"$SKEL_DIR/dts/luofu-r116-overlay.dtso"}
 LOADER_STAGE=${LOADER_STAGE:-0x83200000}
 TEXT_OFFSET=${TEXT_OFFSET:-0x00608000}
 EXPECT_BOARD_ID=${EXPECT_BOARD_ID:-3}
