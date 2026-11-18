@@ -52,7 +52,9 @@ and no lab driver that became one):
 
 Out of scope: the Wi-Fi driver itself (**[X]**, [TARGET-DESIGN.md](TARGET-DESIGN.md) section 8.3),
 SMP, efuse/nvmem/RNG/LED PWM/PMU PWM/clk-corrector (TARGET-DESIGN section 7.1), the bootloader and
-the image recipe. The FMC/CRG/watchdog/MDIO/PHY drivers are landed as patches `004`-`008` and appear
+the image recipe. The deferred blocks now have their own decode and decisions in
+[MISC-SOC-BLOCKS.md](MISC-SOC-BLOCKS.md) (2026-11-18: MAC source resolved, efuse-write/RNG/LED-PWM
+not work items, PMU PWM optional, CRG parents/PLLs decoded), and SMP has its own spec. The FMC/CRG/watchdog/MDIO/PHY drivers are landed as patches `004`-`008` and appear
 only as dependencies.
 
 ### 0.3 The shared-page contract every new driver must keep

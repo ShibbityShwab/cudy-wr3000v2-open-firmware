@@ -7,29 +7,27 @@
 > `docs/PUBLISH-READINESS.md`. The vendor `.o` files that were tracked here were untracked on
 > 2026-11-17, but they remain in the published history until it is purged.
 >
-> **Design layer (2026-11-18).** The missing upstream design now exists: the concrete
-> target/DTS/image plan is [`docs/TARGET-DESIGN.md`](docs/TARGET-DESIGN.md), the refreshed phase
-> view is [`docs/ROADMAP-OPENWRT.md`](docs/ROADMAP-OPENWRT.md), the GPL request status/follow-up is
-> [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the optional hybrid vendor-lane feasibility
-> spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md). These are designs and
-> schematics, not a working target: **no image, driver series or boot exists yet** (the draft
-> target's kernel does compile; the full 001-017 series, a host-built target image and an A/B
-> install path now exist as host-validated drafts, the A/B selector contract was corrected on
-2026-11-18 against local evidence ([`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md): the loader's
-env `bootflag` selects the pair and the SYSCTRL cell is its record, patch 017 now does the
-loader-style low-byte store, and the target image gains a boot-time running-pair recorder), and
-the review-form submission series with
-> cover letter/commit messages/MAINTAINERS proposal is
-> [`upstream/series-6.18/`](upstream/series-6.18/README.md) - but nothing has been booted/flashed
-> and several drivers are refusing drafts). The first-pass files are in
-> [`target-skeleton/`](target-skeleton/README.md) (status UNTESTED/SCHEMATIC), indexed by
-> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target layout was accepted by
-> OpenWrt main's `make defconfig` and `make target/linux/prepare`; the draft kernel patch series
-> (including the 2026-11-18 early-boot `TEXT_OFFSET` fix) now builds the full `linux-6.18.60`
-> kernel with OpenWrt's own GCC 14.4.0 toolchain and the correct `0x80608000` load/entry address,
-> **but no target image, FIP trailer, rootfs or boot exists** - see
-> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md). The FIP trailer format is decoded with a
-> byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)).
+> **Design layer (2026-11-18).** The upstream design layer exists as host-validated drafts, not
+> a working target: the target/DTS/image plan is [`docs/TARGET-DESIGN.md`](docs/TARGET-DESIGN.md),
+> the phase view is [`docs/ROADMAP-OPENWRT.md`](docs/ROADMAP-OPENWRT.md), the optional hybrid
+> vendor-lane spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md), the
+> remaining-block plans are [`docs/REMAINING-DRIVERS.md`](docs/REMAINING-DRIVERS.md),
+> [`docs/LSW-SPEC.md`](docs/LSW-SPEC.md), [`docs/PIE-DATAPATH.md`](docs/PIE-DATAPATH.md) and
+> [`docs/MISC-SOC-BLOCKS.md`](docs/MISC-SOC-BLOCKS.md), the A/B selector contract is reconstructed
+> in [`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md), and the GPL request record (kept for
+> provenance; not a project gate) is [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md).
+>
+> The first-pass files are in [`target-skeleton/`](target-skeleton/README.md) (status
+> UNTESTED/SCHEMATIC), indexed by [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target
+> layout was accepted by OpenWrt main's `make defconfig` and `make target/linux/prepare`; the
+> 001-017 patch series builds the full `linux-6.18.60` kernel with OpenWrt's own GCC 14.4.0
+> toolchain and the correct `0x80608000` load/entry address; the FIP trailer format is decoded
+> with a byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)); and a
+> real target image now builds end-to-end (`make world` RC=0, host-only) with an A/B install path
+> and a boot-time running-pair recorder. **Nothing has been booted or flashed, several drivers are
+> refusing drafts, and publication is NOT READY** - see
+> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md) and the review-form
+> [`upstream/series-6.18/`](upstream/series-6.18/README.md).
 
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,
