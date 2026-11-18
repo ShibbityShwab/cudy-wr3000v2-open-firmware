@@ -46,8 +46,10 @@ include $(INCLUDE_DIR)/target.mk
 
 # TODO(final package list - TARGET-DESIGN.md 4.2). Keep this deliberately
 # short and conservative: do not add a package for a driver or feature that
-# does not exist yet, and do not let kmod-mtd-rw stand in for a real update
-# path (the sysupgrade recipe is TARGET-DESIGN.md 5.4, and it is not written).
-DEFAULT_PACKAGES += kmod-mtd-rw
+# does not exist yet. ubi-utils is required by the A/B sysupgrade write path
+# (platform_do_upgrade calls ubiformat); the ramfs copy list in
+# package/base-files/files/lib/upgrade/stage2 asks for ubiformat, so the image
+# must actually ship it. kmod-mtd-rw is not a substitute for it.
+DEFAULT_PACKAGES += kmod-mtd-rw ubi-utils
 
 $(eval $(call BuildTarget))

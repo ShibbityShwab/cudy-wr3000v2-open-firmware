@@ -32,9 +32,11 @@ it; it consumes the CRG `sfc_clk` gate and `sfc_rst` reset and adds `CONFIG_SPI`
 `CONFIG_MTD_SPI_NAND`), the machine-restart driver (`010`: SYSCTRL boot-selector save, a
 PROVISIONAL CRG software-reset command and a CRG watchdog fallback), pinctrl (`011`), thermal
 (`012`), the DWC PCIe host controller (`013`, RC nodes disabled - the Wi-Fi endpoint is `[X]`)
-and the PIE packet-engine draft (`015`; resources + ring scaffolding, refuses to bring up the
-unverified data path), with the CRG reset polarity corrected by `014`. None of them has run on
-hardware.
+the PIE packet-engine draft (`015`; resources + ring scaffolding, refuses to bring up the
+unverified data path), the internal LSW switch D1a skeleton (`016`) and the A/B
+boot-selector interface (`017`: `current_pair`/`next_pair` sysfs over the shared
+SYSCTRL cell; probe performs no register access), with the CRG reset polarity corrected
+by `014`. None of them has run on hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;
@@ -68,8 +70,11 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 - stock partition map (17 partitions), no lab `lab` partition.
 
 **What is still [U]/TODO** (full list in TARGET-DESIGN.md section 12 and the skeleton README):
-one attended boot of a generated trailer; wiring the custom image chain; sysupgrade
-container/install path and selector protocol; a bench-verified reset path (the patch-`010` CRG command pair is PROVISIONAL and the selector protocol is still [U]); MAC/efuse source; switch DSA-vs-switchdev; the
+one attended boot of a generated trailer; the sysupgrade container/install path
+(host-side A/B write path implemented in `platform.sh` + patch `017`, never run on
+hardware) and the selector protocol (recorded A/B values measured; the env re-stamp
+and one attended A/B validation still owed); a bench-verified reset path (the
+patch-`010` CRG command pair is PROVISIONAL); MAC/efuse source; switch DSA-vs-switchdev; the
 GEMAC TX/RX ring/DMA data path (the driver is a resource/binding half only); SMP; Wi-Fi scope;
 board compatible vs OpenWrt device name.
 

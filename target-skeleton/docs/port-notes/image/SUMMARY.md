@@ -6,6 +6,12 @@ its own bytes. It has NEVER BOOTED, and it is NOT installable: the A/B boot
 selector protocol and the install path are [U] and `platform_do_upgrade`
 refuses to write. Nothing here is a boot, flash or install claim.**
 
+> UPDATE 2026-11-18 (abinstall session): the refusing `platform_do_upgrade`
+> recorded below has since been replaced by a host-only A/B install path
+> (patch `017` + `base-files/lib/upgrade/platform.sh` +
+> `tools/test-platform-abinstall.sh`); see ../abinstall/SUMMARY.md. The image
+> and its build evidence below are unchanged; nothing has been flashed.
+
 This directory is the hand-off of the image-recipe session for task-25:
 `shared.patch` (apply from the `opensource/` root) contains the README,
 SKELETON-SMOKE and TARGET-DESIGN updates; this file records the commands,

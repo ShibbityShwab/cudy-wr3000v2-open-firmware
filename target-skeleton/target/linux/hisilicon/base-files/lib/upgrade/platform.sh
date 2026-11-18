@@ -3,44 +3,62 @@
 # platform.sh - OpenWrt sysupgrade platform hooks for the HiSilicon luofu R116
 # (Cudy WR3000 v2.0) target.
 #
-# STATUS: SKELETON / FAIL-CLOSED / NEVER RUN ON HARDWARE.
+# STATUS: HOST-ONLY / NEVER RUN ON HARDWARE / NO DEVICE CLAIM.
 #
-# platform_check_image() is real: it reads the container built by
-# image/luofu.mk and re-derives, from the received bytes only, every structural
-# field the recipe claimed (tar layout, CONTROL, uImage header, FIP trailer and
-# gate magic, descriptor constants, rootfs UBI volume shape, fip-manifest.txt
-# cross-check, slot budgets). It refuses anything else, including a vendor
-# recovery.bin.
+# platform_check_image() re-derives, from the received bytes only, every
+# structural field the image recipe claimed (tar layout, CONTROL, uImage
+# header, FIP trailer and gate magic, descriptor constants, rootfs UBI volume
+# shape, fip-manifest.txt cross-check, slot budgets). It refuses anything
+# else, including a vendor recovery.bin. The container still says NOT
+# FLASHABLE: that is a provenance statement (this build has never booted),
+# not a write gate - platform_do_upgrade is the A/B install path.
 #
-# platform_do_upgrade() REFUSES to write. The A/B boot-selector protocol
-# (sysenv cell 0x10100C08) and the install path are [U] (TARGET-DESIGN.md 3.4,
-# 5.4, 5.5):
-#   - the exact A-side handover value is not established and the older
-#     "plain fw_setenv works" assumption is wrong;
-#   - the environment-block writer (crc32-LE | flags | data, both enva/envb)
-#     has never been validated as a Linux-side write;
-#   - no path has been executed end to end on a recovered unit.
-# Writing the inactive kernel/rootfs pair without the selector handover would
-# at best install an unbootable slot and at worst overwrite the bootable pair
-# after a later handover. So this function does nothing but refuse.
+# platform_do_upgrade() implements that path host-side, fail-closed:
+#   1. re-runs platform_check_image (defence in depth: a direct do_stage2
+#      invocation must not write an unvalidated container);
+#   2. resolves the ACTIVE pair from two independent in-boot witnesses that
+#      must agree: the luofu-selector sysfs current_pair (the SYSCTRL cell the
+#      loader reads on the next boot) and the rootfs slot this system booted
+#      from (/sys/class/ubi/ubi0/mtd_num cross-checked with that mtd's
+#      /proc/mtd label). /proc/cmdline is not used: the measured boot carries
+#      no slot token;
+#   3. selects the INACTIVE pair by /proc/mtd label (kernelb+rootfsb after an
+#      A boot, kernela+rootfsa after a B boot) and validates the measured
+#      partition sizes and the container members against them;
+#   4. writes the kernel slice (mtd write; erase+write) and the rootfs UBI
+#      (ubiformat) to the inactive pair only, then reads both regions back and
+#      verifies them;
+#   5. syncs, and only then moves the selector to the inactive pair, reading
+#      it back. On any failure the selector is left - or restored - on the
+#      active pair, so the next boot still comes up on the untouched pair.
+#      The selector write is last because there is no way back from a
+#      half-written pair except the other pair;
+#   6. returns and lets /lib/upgrade/do_stage2 run its existing reboot path.
+#      This function never reboots, never erases rootfs_data (mtd15 is a
+#      separate shared partition) and never writes the env copies.
 #
-# WHAT platform_do_upgrade MUST DO BEFORE IT IS ENABLED (TARGET-DESIGN.md 5.4):
-#   1. read the active pair from the loader's bootreg/sysenv state (exact Linux
-#      read path is [U]) - never assume, and never use a bare MTD number;
-#   2. write ONLY the inactive pair, located by /proc/mtd label
-#      (kernela+kernelb / rootfsa+rootfsb), kernel slot via mtd write, rootfs
-#      via ubiformat of the UBI image;
-#   3. read back a hash of both written regions and compare with the container;
-#   4. update BOTH environment copies and the boot selector with the MEASURED
-#      recipe, then reboot;
-#   5. keep rootfs_data (JFFS2 overlay) unless -n; the two slots share it, so an
-#      upgrade is not atomic across the overlay;
-#   6. never use U-Boot's TFTP fipupdate_eth/rootfsupdate_eth commands (they
-#      overwrite both slots);
-#   7. rollback is by switching back to the other pair, NOT by relying on a
-#      "slot failed" status word (that older claim is not supported by the
-#      2026-11-16 captures).
-# Only after one attended A/B validation may platform_do_upgrade be implemented.
+# Selector evidence (measured, nothing invented):
+#   - 0x10 = A pair, 0x11 = B pair: the loader's own "bootreg init, set 10 /
+#     set 11" console prints and a controlled 0x11 -> A/B -> B test with the
+#     running rootfs slot read back (parent BENCH-FACTS.md section 5; ledger
+#     phase 67). The cell is sticky across resets.
+#   - 0x21 = the stock "sysenv" userspace manual/recovery B handover; its
+#     post-boot stability has never been measured, so an in-boot 0x21 (or any
+#     other unmeasured value) refuses the automated handover.
+#   - env blocks enva (mtd3) / envb (mtd4): the controlled tests showed the
+#     env bootflag is an output the loader re-stamps from the cell, so this
+#     path does not write them. Not writing them is the [U] part one attended
+#     A/B validation still has to confirm.
+#
+# Rules kept from the earlier refusal design: labels, never bare MTD numbers;
+# never U-Boot's TFTP fipupdate_eth/rootfsupdate_eth (they overwrite both
+# slots); never a "slot failed" status word (the captures do not support it) -
+# rollback is switching back to the other pair, which stays bootable.
+#
+# The mocked host-side harness for this file is tools/test-platform-abinstall.sh;
+# it runs the real functions against a fake /proc/mtd, selector sysfs and
+# mtd/ubiformat/sync/reboot commands (and the real container check when a
+# built sysupgrade.bin is supplied).
 
 REQUIRE_IMAGE_METADATA=1
 
@@ -281,16 +299,318 @@ platform_check_image() {
 	# 4. rootfs UBI shape
 	_luofu_check_rootfs_ubi "$tmpdir/root" || return 1
 
-	echo "hisilicon/luofu: image check passed (structural only; A/B install path [U], do not flash)"
+	echo "hisilicon/luofu: image check passed (structural only; the A/B install path writes the inactive pair, never the active one)"
 	return 0
 	)
 }
 
+# ===========================================================================
+# A/B install path (platform_do_upgrade)
+# ===========================================================================
+#
+# Everything below runs from /lib/upgrade/do_stage2 inside the sysupgrade
+# ramfs, so only binaries that switch_to_ramfs() copies are available. The
+# extra RAMFS_COPY_BIN entries are needed by the re-run of platform_check_image
+# (mktemp, sha256sum) and by the kernel read-back hash (head); they are busybox
+# applet symlinks, not second copies. Tool availability is still checked
+# explicitly so a missing tool fails closed instead of writing half a pair.
+RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp sha256sum head"
+
+# /proc/mtd on the R116 reports rootfsa/rootfsb as 0x1740000 = 24,379,392 B
+# (parent dumps/router-20261108/full/proc_mtd.txt). The image recipe's
+# LUOFU_ROOTFS_SLOT_SIZE (24,313,856 B) is the container/UBI budget INSIDE that
+# partition, not the partition size; the write path checks the partition
+# against the measured size and each container member against the budget.
+LUOFU_ROOTFS_PART_SIZE=24379392
+
+# Host-side test hook: unset (empty prefix) on the device. The mocked harness
+# (tools/test-platform-abinstall.sh) exports it as a directory tree so the
+# /proc, /sys and /dev lookups resolve inside a fixture; the commands it runs
+# are shimmed on PATH. The image path is never relocated by this.
+LUOFU_TEST_ROOT="${LUOFU_TEST_ROOT:-}"
+LUOFU_MTD_TABLE="$LUOFU_TEST_ROOT/proc/mtd"
+LUOFU_UBI_SYS="$LUOFU_TEST_ROOT/sys/class/ubi"
+LUOFU_SELECTOR_DIR="$LUOFU_TEST_ROOT/sys/devices/platform/luofu-selector"
+LUOFU_DEV_DIR="$LUOFU_TEST_ROOT/dev"
+LUOFU_WORK_DIR="$LUOFU_TEST_ROOT/tmp/luofu-upgrade"
+
+_luofu_err() {
+	echo "hisilicon/luofu: $*" >&2
+}
+
+# Exactly one /proc/mtd entry for a label -> "<mtdN> <size-hex>". More than
+# one match is treated as no match: the label must be unambiguous.
+_luofu_mtd_lookup() { # <label>
+	awk -v want="\"$1\"" '
+		$1 ~ /^mtd[0-9]+:$/ {
+			name = $4
+			for (i = 5; i <= NF; i++)
+				name = name " " $i
+			if (name == want) {
+				print substr($1, 1, length($1) - 1), $2
+				found++
+			}
+		}
+		END { exit(found == 1 ? 0 : 1) }
+	' "$LUOFU_MTD_TABLE"
+}
+
+# Exactly one /proc/mtd entry for "<mtdN>" -> unquoted partition label.
+_luofu_mtd_label() { # <mtdN>
+	local label
+
+	label="$(awk -v want="$1:" '
+		$1 == want {
+			name = $4
+			for (i = 5; i <= NF; i++)
+				name = name " " $i
+			print name
+			found++
+		}
+		END { exit(found == 1 ? 0 : 1) }
+	' "$LUOFU_MTD_TABLE")" || return 1
+	label="${label#\"}"
+	label="${label%\"}"
+	[ -n "$label" ] || return 1
+	echo "$label"
+}
+
+_luofu_mtd_size() { # <8-hex-digit size> -> decimal
+	case "$1" in
+	''|*[!0-9a-fA-F]*) return 1 ;;
+	esac
+	echo "$((0x$1))"
+}
+
+# The selector sysfs interface (patches-6.18/017) is the only accepted
+# read/write path for the SYSCTRL boot-selector cell.
+_luofu_selector_read() {
+	local pair
+
+	[ -r "$LUOFU_SELECTOR_DIR/current_pair" ] || return 1
+	read -r pair _ < "$LUOFU_SELECTOR_DIR/current_pair" 2>/dev/null || return 1
+	[ -n "$pair" ] || return 1
+	echo "$pair"
+}
+
+_luofu_selector_write() { # <a|b>
+	local want="$1" got
+
+	printf '%s\n' "$want" > "$LUOFU_SELECTOR_DIR/next_pair" 2>/dev/null || return 1
+	got="$(_luofu_selector_read)" || return 1
+	[ "$got" = "$want" ] || return 1
+	return 0
+}
+
+# The pair this system really booted from, via the UBI rootfs device: the same
+# witness the bench slot gate used (ubi0's mtd_num cross-checked against that
+# mtd's /proc/mtd label). /proc/cmdline is deliberately not used - the measured
+# boot carries no slot token.
+_luofu_booted_rootfs_pair() {
+	local mtdnum label pair
+
+	[ -r "$LUOFU_UBI_SYS/ubi0/mtd_num" ] || return 1
+	read -r mtdnum _ < "$LUOFU_UBI_SYS/ubi0/mtd_num" 2>/dev/null || return 1
+	case "$mtdnum" in
+	''|*[!0-9]*) return 1 ;;
+	esac
+	label="$(_luofu_mtd_label "mtd$mtdnum")" || return 1
+	case "$label" in
+	rootfsa) pair=a ;;
+	rootfsb) pair=b ;;
+	*) return 1 ;;
+	esac
+	echo "$pair"
+}
+
+_luofu_active_pair() {
+	local selector_pair rootfs_pair
+
+	selector_pair="$(_luofu_selector_read)" || {
+		_luofu_err "no luofu-selector interface at $LUOFU_SELECTOR_DIR/current_pair (CONFIG_LUOFU_SELECTOR and the devicetree node are required); refusing"
+		return 1
+	}
+	case "$selector_pair" in
+	a|b) ;;
+	*)
+		_luofu_err "boot selector state '$selector_pair' is not one of the two established recorded pairs (0x10=a, 0x11=b); 0x21 manual/recovery and 0x00 un-initialised are not accepted for an automated handover; refusing"
+		return 1
+		;;
+	esac
+
+	rootfs_pair="$(_luofu_booted_rootfs_pair)" || {
+		_luofu_err "cannot identify the booted rootfs slot (ubi0/mtd_num missing or its /proc/mtd label is not rootfsa/rootfsb); refusing"
+		return 1
+	}
+	[ "$selector_pair" = "$rootfs_pair" ] || {
+		_luofu_err "boot selector says pair $selector_pair but this system booted rootfs$rootfs_pair; refusing (stale or partial handover)"
+		return 1
+	}
+	echo "$rootfs_pair"
+}
+
+_luofu_other_pair() {
+	[ "$1" = a ] && echo b || echo a
+}
+
+# Resolve one pair's kernel and rootfs partitions and check the measured
+# sizes. Prints "<kernel-dev> <kernel-size> <rootfs-dev> <rootfs-size>".
+_luofu_pair_slots() { # <pair>
+	local pair="$1" kpart rpart kdev ksize rdev rsize
+
+	kpart="$(_luofu_mtd_lookup "kernel$pair")" || {
+		_luofu_err "no unique /proc/mtd partition named kernel$pair; refusing"
+		return 1
+	}
+	kdev="$LUOFU_DEV_DIR/${kpart%% *}"
+	ksize="$(_luofu_mtd_size "${kpart#* }")" || {
+		_luofu_err "cannot read the size of kernel$pair from /proc/mtd; refusing"
+		return 1
+	}
+	rpart="$(_luofu_mtd_lookup "rootfs$pair")" || {
+		_luofu_err "no unique /proc/mtd partition named rootfs$pair; refusing"
+		return 1
+	}
+	rdev="$LUOFU_DEV_DIR/${rpart%% *}"
+	rsize="$(_luofu_mtd_size "${rpart#* }")" || {
+		_luofu_err "cannot read the size of rootfs$pair from /proc/mtd; refusing"
+		return 1
+	}
+
+	[ "$ksize" -eq "$LUOFU_KERNEL_SLOT_SIZE" ] || {
+		_luofu_err "kernel$pair is $ksize B, not the measured $LUOFU_KERNEL_SLOT_SIZE B kernel slot; refusing"
+		return 1
+	}
+	[ "$rsize" -eq "$LUOFU_ROOTFS_PART_SIZE" ] || {
+		_luofu_err "rootfs$pair is $rsize B, not the measured $LUOFU_ROOTFS_PART_SIZE B rootfs partition; refusing"
+		return 1
+	}
+
+	echo "$kdev $ksize $rdev $rsize"
+}
+
+# md5 of the first <size> bytes of a device. The read is block-aligned and
+# truncated with head, so it works against a /dev/mtdN char device and against
+# the mocked regular-file devices.
+_luofu_region_md5() { # <device> <size>
+	local dev="$1" size="$2" blocks
+
+	blocks=$(( (size + LUOFU_UBI_PEB_SIZE - 1) / LUOFU_UBI_PEB_SIZE ))
+	dd if="$dev" bs="$LUOFU_UBI_PEB_SIZE" count="$blocks" 2>/dev/null |
+		head -c "$size" | md5sum | cut -d' ' -f1
+}
+
 platform_do_upgrade() {
-	# FAIL-CLOSED BY DESIGN - see the header for the full TODO list.
-	echo "hisilicon/luofu: REFUSING to upgrade: the A/B boot-selector protocol" >&2
-	echo "  (sysenv 0x10100C08) and the install path are NOT validated [U]" >&2
-	echo "  (TARGET-DESIGN.md 3.4, 5.4, 5.5). Nothing has been written." >&2
-	echo "  Do not enable this path until one attended A/B validation has run." >&2
-	return 1
+	local image="$1"
+	local workdir="$LUOFU_WORK_DIR"
+	local active target klabel rlabel slots
+	local kdev ksize rdev rsize
+	local kfile rfile kbytes rbytes kmd5 kmd5_read
+	local magic vid
+
+	# The framework calls platform_check_image before stage 2, but this
+	# function re-runs the full byte-level check: a direct do_stage2
+	# invocation must not write an unvalidated container.
+	platform_check_image "$image" || {
+		_luofu_err "container validation failed again inside platform_do_upgrade; nothing was written"
+		return 1
+	}
+
+	command -v mtd >/dev/null 2>&1 &&
+		command -v ubiformat >/dev/null 2>&1 &&
+		command -v md5sum >/dev/null 2>&1 &&
+		command -v head >/dev/null 2>&1 || {
+		_luofu_err "the upgrade tools (mtd, ubiformat, md5sum, head) are missing from the upgrade environment; refusing (the image needs the ubi-utils package)"
+		return 1
+	}
+
+	active="$(_luofu_active_pair)" || return 1
+	target="$(_luofu_other_pair "$active")"
+	klabel="kernel$target"
+	rlabel="rootfs$target"
+
+	slots="$(_luofu_pair_slots "$target")" || return 1
+	set -- $slots
+	kdev="$1"
+	ksize="$2"
+	rdev="$3"
+	rsize="$4"
+
+	[ -e "$kdev" ] || { _luofu_err "$kdev (partition $klabel) does not exist; refusing"; return 1; }
+	[ -e "$rdev" ] || { _luofu_err "$rdev (partition $rlabel) does not exist; refusing"; return 1; }
+	[ -r "$kdev" ] && [ -w "$kdev" ] || {
+		_luofu_err "$kdev (partition $klabel) is not readable and writable; refusing (a read-only slot cannot take the kernel)"; return 1; }
+	[ -r "$rdev" ] && [ -w "$rdev" ] || {
+		_luofu_err "$rdev (partition $rlabel) is not readable and writable; refusing (a read-only slot cannot take the rootfs)"; return 1; }
+
+	v "hisilicon/luofu: A/B install: booted pair $active (selector and booted rootfs agree), writing the inactive pair $target"
+	v "hisilicon/luofu: kernel $klabel = $kdev ($ksize B), rootfs $rlabel = $rdev ($rsize B)"
+
+	# The work directory lives in the upgrade ramfs; it is removed at the end
+	# of a successful write and thrown away with the ramfs on a failed one.
+	rm -rf "$workdir"
+	mkdir -p "$workdir" || { _luofu_err "cannot create $workdir; refusing"; return 1; }
+
+	_luofu_tar_member "$image" "sysupgrade-$LUOFU_BOARD_NAME/kernel" "$workdir/kernel" || {
+		_luofu_err "cannot extract the kernel member from the container; refusing"; return 1; }
+	_luofu_tar_member "$image" "sysupgrade-$LUOFU_BOARD_NAME/root" "$workdir/root" || {
+		_luofu_err "cannot extract the root member from the container; refusing"; return 1; }
+	kfile="$workdir/kernel"
+	rfile="$workdir/root"
+
+	kbytes="$(wc -c < "$kfile")"
+	rbytes="$(wc -c < "$rfile")"
+	[ "$kbytes" -gt 0 ] && [ "$kbytes" -le "$ksize" ] || {
+		_luofu_err "kernel member is $kbytes B, does not fit the $ksize B $klabel slot; refusing"; return 1; }
+	# The rootfs member is bounded by the image budget (24,313,856 B, the
+	# same value platform_check_image enforces), not by the whole 24,379,392 B
+	# partition: the recipe's UBI layout only guarantees the former.
+	[ "$rbytes" -gt 0 ] && [ "$rbytes" -le "$LUOFU_ROOTFS_SLOT_SIZE" ] || {
+		_luofu_err "rootfs member is $rbytes B, over the $LUOFU_ROOTFS_SLOT_SIZE B rootfs image budget; refusing"; return 1; }
+	[ "$(_luofu_hex32 "$kfile" 0)" = 27051956 ] || {
+		_luofu_err "kernel member does not start with the legacy uImage magic; refusing"; return 1; }
+	[ "$(_luofu_hex32 "$rfile" 0)" = 55424923 ] || {
+		_luofu_err "rootfs member does not start with the UBI# magic; refusing"; return 1; }
+
+	# --- kernel slot: erase+write, then verify the read-back md5 -----------
+	v "hisilicon/luofu: writing the $kbytes B kernel slice to $klabel"
+	mtd write "$kfile" "$kdev" || {
+		_luofu_err "mtd write to $klabel failed; the selector still names pair $active, which remains intact - reboot and retry"
+		return 1
+	}
+	kmd5="$(md5sum "$kfile" | cut -d' ' -f1)"
+	kmd5_read="$(_luofu_region_md5 "$kdev" "$kbytes")"
+	[ -n "$kmd5" ] && [ "$kmd5" = "$kmd5_read" ] || {
+		_luofu_err "kernel read-back md5 mismatch on $klabel ($kmd5_read != $kmd5); the selector still names pair $active - refusing the handover"
+		return 1
+	}
+	v "hisilicon/luofu: kernel $klabel read back byte-identical (md5 $kmd5)"
+
+	# --- rootfs slot: ubiformat the UBI image, then re-read PEB 0 ----------
+	v "hisilicon/luofu: ubiformat the $rbytes B rootfs UBI image to $rlabel"
+	ubiformat "$rdev" -y -f "$rfile" || {
+		_luofu_err "ubiformat of $rlabel failed; the selector still names pair $active, which remains intact - reboot and retry"
+		return 1
+	}
+	magic="$(_luofu_hex32 "$rdev" 0)"
+	vid="$(_luofu_hex32 "$rdev" "$LUOFU_UBI_VID_HDR_OFFSET")"
+	[ "$magic" = 55424923 ] && [ "$vid" = 55424921 ] || {
+		_luofu_err "rootfs read-back on $rlabel lost the UBI headers (EC 0x$magic, VID 0x$vid); the selector still names pair $active - refusing the handover"
+		return 1
+	}
+	v "hisilicon/luofu: rootfs $rlabel read back with UBI#/UBI! headers at PEB 0"
+
+	# --- last step: durable writes, then move the selector -----------------
+	sync
+	_luofu_selector_write "$target" || {
+		_luofu_err "could not move the boot selector to pair $target (the next_pair store or its read-back failed); restoring pair $active"
+		_luofu_selector_write "$active" ||
+			_luofu_err "could not restore the selector either - check $LUOFU_SELECTOR_DIR/current_pair before rebooting"
+		return 1
+	}
+	sync
+	rm -rf "$workdir"
+
+	v "hisilicon/luofu: A/B install complete: pair $target written and selected (selector reads $target); the framework reboots into it"
+	return 0
 }

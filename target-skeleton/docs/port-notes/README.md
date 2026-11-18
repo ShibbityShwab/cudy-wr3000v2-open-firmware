@@ -8,5 +8,6 @@ files. The patches themselves live in ../../target/linux/hisilicon/patches-6.18/
 - fmc/ - SPI-MEM controller + SPI-NAND (patch 006)
 - net/ - MDIO bus + Genius PHY + partial GEMAC (patches 007-009)
 - lsw/ - internal LSW switch D1a probe skeleton + binding (patch 016)
+- abinstall/ - A/B boot selector interface (017) + sysupgrade write path + mocked test (host-only)
 
 Nothing here is vendor code or a deliverable image; publication of the parent half is NOT READY.

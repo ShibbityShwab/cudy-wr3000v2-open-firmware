@@ -193,6 +193,17 @@ From the vendor base DTB (`soc/vendor-dt-notes.md` §6; the same table is in the
   the old "plain `fw_setenv` works" assumption was wrong (the binary is a symlink to
   `fw_printenv`). [V] same section; **treat the selector protocol as [U] until one attended
   A/B validation**.
+- Selector interface and handover recipe (patch `017`, host-only): a
+  `drivers/soc/hisilicon/luofu-selector.c` sysfs interface reads the cell
+  (`current_pair`: `a`, `b`, plus the documented `manual-b`, `uninitialised` and
+  `unknown` states) and stores only the two measured recorded-pair values
+  (`next_pair`: `a` -> 0x10, `b` -> 0x11) with a read-back check; probe
+  performs no register access and the page stays a shared syscon (no second
+  mapping). The recorded values moved the pair in both directions in the
+  controlled tests (0x11 -> B, 0x10 -> A), so both recorded handovers are [V].
+  A complete `sysupgrade` remains [U]: no attended upgrade has run, and the
+  loader's env re-stamp and the post-boot cell state still need one A/B
+  validation. [I]
 - A draft restart driver (patch `010`) saves the selector before a reset by
   reading the cell and writing the same value back. That preserves the pair without
   inventing the value the stock path writes, but it does not close the protocol: the
@@ -410,8 +421,10 @@ volume name/geometry and length <= 0x1740000; refuse anything else (including a 
 **`platform_do_upgrade`** [I], using `/proc/mtd` **labels** (never a bare number; the venue
 lesson is in parent `LESSONS.md` 21):
 
-1. Determine the active pair from the boot selector (read the sysenv cell and/or the loader's
-   recorded value; exact read path [U], §3.4).
+1. Determine the active pair from two in-boot witnesses that must agree: the
+   `luofu-selector` `current_pair` sysfs (the SYSCTRL cell, §3.4) and the rootfs
+   slot actually booted from (`/sys/class/ubi/ubi0/mtd_num` + its `/proc/mtd`
+   label). `/proc/cmdline` carries no slot token. [I]
 2. Target = the other pair: `kernela`+`rootfsa` or `kernelb`+`rootfsb`.
 3. Erase/write the kernel slot with the slice; `ubiformat` the target rootfs slot with the UBI
    image; verify by reading back a hash.
@@ -426,6 +439,12 @@ lesson is in parent `LESSONS.md` 21):
 
 **What not to rely on**: the vendor "slot failed" status word (§3.4). Rollback is by keeping the
 other pair bootable and switching back, not by assuming the loader rejects a bad slot.
+
+**Status (2026-11-18)**: steps 1-5 are implemented in
+`base-files/lib/upgrade/platform.sh` (`platform_do_upgrade`), with the selector
+store as the last step after both read-backs, and a mocked host-side test
+(`tools/test-platform-abinstall.sh`). Nothing has run on hardware; the
+env-block re-stamp and one attended A/B validation remain [U].
 
 ### 5.5 Installation path - open question
 
@@ -446,6 +465,10 @@ written is not available on this specific bench. Opening the design questions:
 
 The device page must not be written, and the target must not claim installability, until one of
 these is executed end to end on a recovered unit.
+
+**Status (2026-11-18)**: the *upgrade* half of the A/B path is now implemented
+host-side (§5.4) but the *first-install/factory* question above is still open;
+nothing has been flashed.
 
 ### 5.6 Boot arguments
 
@@ -638,8 +661,10 @@ Do not present the bench wifidrv/takeover line as an upstream driver. [V] `PORT-
 
 ### 8.5 Environment/selector and SMP
 
-Partially measured (§3.4) / missing (§7.1). Both are small but block `sysupgrade` and "a router
-that behaves like a router"; the A/B protocol must be closed with attended bench validation.
+Partially measured (§3.4) and now partly implemented host-side: patch `017` provides
+the validated read/store interface and `platform.sh` the A/B write path. Both are
+host-only; the protocol is closed only by one attended A/B validation (the env
+re-stamp is the remaining [U]).
 
 ### 8.6 GPL source dependency
 

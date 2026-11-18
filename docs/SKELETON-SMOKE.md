@@ -2142,3 +2142,92 @@ flashable upgrade.
 5. Decide the boot-argument hand-off (`/chosen/bootargs` override question),
    then prove the rootfs mounts.
 
+
+## 2026-11-18 (A/B install session): selector interface + sysupgrade write path
+
+**Status: the A/B selector read/write interface and `platform_do_upgrade` are
+IMPLEMENTED and validated host-side; NOTHING HAS BOOTED OR BEEN FLASHED.** The
+container still says NOT FLASHABLE (it has never booted) and one attended A/B
+validation remains owed.
+
+### What changed
+
+- patch `017` adds `drivers/soc/hisilicon/luofu-selector.c`, its YAML binding,
+  Kconfig/Makefile and an ABI doc: `current_pair` (read-only; 0x10 = a,
+  0x11 = b, 0x21 = manual-b, 0x00 = uninitialised, anything else unknown) and
+  `next_pair` (write-only; accepts only "a" -> 0x10 and "b" -> 0x11, verifies
+  the read-back, -EINVAL otherwise) over the shared SYSCTRL syscon cell at
+  0xc08. Probe performs no register access; the page stays shared with the
+  machine-restart driver (patch `010`), so there is no second mapping.
+- the board DTS gains the enabled `boot-selector` node (sysctrl phandle +
+  `hisilicon,selector-offset = <0x0c08>`), `CONFIG_LUOFU_SELECTOR=y` joins the
+  config delta and `ubi-utils` joins `DEFAULT_PACKAGES` (the write path calls
+  `ubiformat`, which `switch_to_ramfs()` copies only if it is installed).
+- `base-files/lib/upgrade/platform.sh`: `platform_check_image` is unchanged in
+  scope; `platform_do_upgrade` is implemented. The active pair is the
+  `luofu-selector` `current_pair` AND the booted rootfs slot
+  (`/sys/class/ubi/ubi0/mtd_num` + its `/proc/mtd` label), which must agree.
+  The target is the other pair, located by label (`kernelb`+`rootfsb` after an
+  A boot, `kernela`+`rootfsa` after a B boot). Kernel first (`mtd write`,
+  erase+write), then the rootfs (`ubiformat`), each read back (kernel md5
+  equals the member; the rootfs re-reads the UBI#/UBI! headers). Only then
+  `sync` and the selector store, read back. Any failure leaves or restores the
+  selector on the active pair, so the next boot still comes up on the
+  untouched pair; the function never reboots (the framework does), never
+  erases `rootfs_data` (mtd15, a separate shared partition) and never writes
+  the env blocks. `/proc/mtd` is the only partition source; the measured
+  kernel slot (8,650,752 B), the rootfs partition (24,379,392 B) and the image
+  budget (24,313,856 B) are all checked.
+- `tools/test-platform-abinstall.sh` (new): host-side mocked harness that
+  sources the real `platform.sh` and runs `platform_do_upgrade` against fake
+  `/proc/mtd`, fake `ubi0/mtd_num`, fake selector sysfs and
+  `mtd`/`ubiformat`/`sync`/`reboot` shims. 52/52 assertions pass against the synthetic fixture containers; with
+  `--container` the same suite runs the real built sysupgrade.bin
+  (6,185,262 B, sha256 `0303d76a...`) through the real
+  `platform_check_image` and all 58 assertions pass.
+
+### Validation (isolated clone `/home/shibbityshwab/openwrt-lab-abinstall`)
+
+- OpenWrt main commit `27663a0`, `linux-6.18.60`; the target was installed
+  from the repository skeleton with patch `017` and the shared edits, the
+  kernel build dir deleted and re-created by `prepare`.
+- `patch -p1 --dry-run` of `017` against pristine `linux-6.18.60`: RC=0;
+  serial apply `001`-`017`: RC=0, 0 `.rej`/`.orig`.
+- `make target/linux/prepare V=s`: RC=0 (1,198 patching lines, 0 rej/orig).
+- `make target/linux/compile V=s -j16`: RC=0, **0 warnings** under
+  `CONFIG_WERROR=y`; `CONFIG_LUOFU_SELECTOR=y` built-in
+  (`luofu_selector_probe` etc. in `System.map`); zImage 3,262,472 B sha256
+  `a4e4f6c0612317dd1b4ea98f86408de811f6af8635c419b5d9fc7113c1ed5b2e`;
+  `_text = stext = 0xc0608000` and `DTEXT_OFFSET=0x00608000` (TEXT_OFFSET
+  contract unchanged).
+- `make ARCH=arm dt_binding_check
+  DT_SCHEMA_FILES=Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-boot-selector.yaml`:
+  RC=0 (`yamllint` unavailable, that lint step skipped as in earlier lanes).
+- stock DTS compile (cpp + kernel dtc): RC=0, **zero warnings**, DTB 10,664 B
+  sha256 `5726f7cd3798113a0881c86a9e2778860b5171ef2ee29fbb93970a6bb8a6b857`;
+  `dt-validate` RC=0 with no `boot-selector` diagnostic (the pre-existing
+  draft-DTS uart diagnostics remain, unrelated to this node).
+- config canonical re-derivation, two runs: RC=0/RC=0, byte-identical
+  (`4106877fdb6dad7ee9d5d2895ed6eb878da0c6a70ff4067d664be3da380a2a1f`) and
+  symbol-identical to the delivered delta (309/309 symbols).
+- `checkpatch.pl`: 0 errors / 0 warnings on the driver (251 lines), the YAML
+  (59 lines) and the ABI doc (37 lines).
+- `sh -n` on the installed `platform.sh`: RC=0; `bash -n` on the harness: RC=0.
+- `tools/test-platform-abinstall.sh`: 52/52 fixture assertions; 58/58 with
+  `--container` on the real built sysupgrade.bin (6,185,262 B sha256
+  `0303d76a987fd16aeee7833db0d8188d6390129c62e1fc048560a971b922dce2`,
+  the artifact recorded by the image-recipe lane).
+
+### What this proves and what it does not
+
+Proven (host-only): patch `017` applies to pristine `linux-6.18.60` and after
+`001`-`016`; the whole series prepares and compiles with no warnings; the
+selector YAML passes `dt_binding_check`; the board DTS compiles with zero
+warnings; the config re-derivation is idempotent; `checkpatch` is clean; the
+mocked install path selects the right inactive pair, writes in the right
+order, moves the selector last and refuses every bad input tested.
+
+Not proven: any hardware behaviour. The post-boot cell value, the loader's
+env re-stamp, NAND read-back under ECC, bad-block behaviour, the first boot of
+the written pair and rollback are all still [U]. The A/B protocol is closed
+only by one attended validation.

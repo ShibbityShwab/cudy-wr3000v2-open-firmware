@@ -53,10 +53,12 @@
  *   - LEDs / keys: only overlay evidence exists; they need the standard
  *     gpio-leds/gpio-keys-polled bindings plus confirmed GPIO polarity
  *     (see the comment near the end of the root node);
- *   - sysctrl/sysenv boot-selector provider: only the minimum SYSCTRL
- *     syscon node the restart driver needs exists (patch 010); the A/B
- *     selector protocol itself is still [U] (TARGET-DESIGN.md 3.4, 6.2,
- *     7.1) and no sysenv/nvmem interface is modelled.
+ *   - sysctrl/sysenv boot-selector provider: the SYSCTRL syscon node from
+ *     patch 010 plus the boot-selector driver/node from patch 017, which
+ *     exposes the measured 0x10 (A) / 0x11 (B) cell through current_pair /
+ *     next_pair sysfs and keeps probe free of register access. The rest of
+ *     the protocol is still [U] (TARGET-DESIGN.md 3.4, 6.2, 7.1) and the
+ *     vendor sysenv/nvmem interface is not modelled.
  *
  * Expected to parse after the C preprocessor + dtc, but it does NOT build in a
  * kernel tree (no headers, no machine match, no dtbs_check clean run) and it
@@ -244,12 +246,12 @@
 	 * modelled: the A/B boot-selector cell at 0xc08 that the stock loader
 	 * reads on the next boot (the reboot driver saves it before a reset) and
 	 * the reset-info record at 0xc10. The page must be a syscon so the reboot
-	 * driver shares one mapping; a future nvmem provider for the
-	 * selector/reset-info cells would live here (TARGET-DESIGN.md 3.4, 6.2).
+	 * and boot-selector drivers share one mapping (TARGET-DESIGN.md 3.4,
+	 * 6.2).
 	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
 	 *          hisilicon,luofu-sysctrl.yaml
-	 * TODO(nvmem): the Linux read path for the selector that a sysupgrade
-	 * helper needs is still [U]; this node does not make the protocol known.
+	 * TODO(nvmem): the reset-info record has no reader yet; the boot-selector
+	 * cell is exposed by the separate luofu-boot-selector node below.
 	 */
 	sysctrl: system-controller@10100000 {
 		compatible = "hisilicon,luofu-sysctrl", "syscon";
@@ -272,6 +274,25 @@
 		compatible = "hisilicon,luofu-reboot";
 		hisilicon,sysctrl = <&sysctrl>;
 		hisilicon,crg = <&crg>;
+	};
+
+	/*
+	 * A/B boot selector: the SYSCTRL cell at 0xc08 that the stock loader reads
+	 * on the next boot. 0x10 selects the A pair (kernela + rootfsa) and 0x11
+	 * the B pair (kernelb + rootfsb), both measured; 0x21 is the vendor sysenv
+	 * manual/recovery B handover and is only reported, never written by the
+	 * automated install path.
+	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
+	 *          hisilicon,luofu-boot-selector.yaml
+	 * Probe performs no register access; the driver writes the cell only when
+	 * userspace stores into next_pair. Enabled because the A/B sysupgrade path
+	 * (base-files/lib/upgrade/platform.sh) requires it; harmless on a boot
+	 * that never touches the selector.
+	 */
+	boot-selector {
+		compatible = "hisilicon,luofu-boot-selector";
+		hisilicon,sysctrl = <&sysctrl>;
+		hisilicon,selector-offset = <0x0c08>;
 	};
 
 	/* ---- CRG: clock gates + reset controller (shared page) --------- */

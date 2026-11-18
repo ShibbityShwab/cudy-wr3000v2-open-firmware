@@ -44,11 +44,24 @@
 > whole recipe (zImage -> legacy uImage with the derived load/entry -> generated
 > FIP trailer -> validated kernel slice -> manifest -> squashfs in a static UBI
 > volume -> sysupgrade container), `base-files/lib/upgrade/platform.sh`
-> implements a structural `platform_check_image` and **refuses**
-> `platform_do_upgrade` (A/B selector [U]), and `tools/luofu-image.py`
+> implements a structural `platform_check_image` and a host-side A/B
+> `platform_do_upgrade` (writes only the inactive pair, selector last;
+> still never run on hardware), and `tools/luofu-image.py`
 > builds/validates the rootfs UBI and the container. A full `make world` in an isolated `openwrt main` clone (commit `27663a0`, `linux-6.18.60`, patches `001`-`015`) then completed RC=0 and produced a 6,175,022-byte `...-squashfs-sysupgrade.bin` (sha256 `ea143b03...`) whose kernel slice, rootfs UBI and `fip-manifest.txt` were re-validated from the built bytes (see SKELETON-SMOKE.md, image-recipe session).
 > Nothing has booted; there is still no install/factory path. Details and hashes:
 > [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (image-recipe session).
+>
+> **2026-11-18 (A/B install session): the selector interface and the write path
+> are IMPLEMENTED host-side.** Patch `017` adds
+> `drivers/soc/hisilicon/luofu-selector.c` (`current_pair` / `next_pair` sysfs
+> over the shared SYSCTRL boot-register cell; probe reads no register; the
+> store accepts only the measured recorded pairs 0x10/0x11 and verifies the
+> read-back), `platform.sh` now writes the inactive kernel/rootfs pair and
+> moves the selector as the last step, and `tools/test-platform-abinstall.sh`
+> runs the real functions against mocked `/proc/mtd`, selector sysfs and
+> mtd/ubiformat/reboot shims. 58/58 mocked assertions pass, including the real built container. The container still says
+> NOT FLASHABLE: **nothing has booted or been flashed**, and one attended A/B
+> validation plus the env-block question are still open.
 >
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
@@ -88,22 +101,24 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch` | network trio 3/3, **PARTIAL**: new `drivers/net/ethernet/hisilicon/luofu-gmac.c` (platform driver; claims the binding and validates reg/clocks/resets/phy-mode/phy-handle, then **refuses to probe** - the TX/RX ring DMA model is not implemented and has never been decoded, so no netdev is registered), Kconfig/Makefile (`CONFIG_LUOFU_GMAC`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. **Host kernel compile RC=0, no warnings**; `dt_binding_check` pass; the GEMAC DTS nodes stay `disabled`. **Not a data-path driver; never booted.** | same |
 | `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial) and the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`); with patches `001`-`016` the **full kernel compiles** (RC=0) and nothing boots | same |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig. It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial), the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`) and the boot selector (`CONFIG_LUOFU_SELECTOR`); with patches `001`-`017` the **full kernel compiles** (RC=0) and nothing boots | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` + `image/luofu-ubinize.cfg` | board image Makefile (main idiom: `image.mk`, includes the subtarget file, `BuildImage`) plus the **real** target image chain: `kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest`, then `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata`. Every target-specific stage validates its own output and fails closed. **host-built 2026-11-18** (never booted) | `target/linux/hisilicon/image/` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
-| `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` **REFUSES to write** because the A/B selector protocol and the install path are [U]. **`sh -n` clean; host-tested against the real built container and against corrupted/foreign variants; never run on hardware** | same path (board-level base-files) |
+| `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` implements the A/B install path host-side (two in-boot witnesses must agree on the active pair, the inactive kernel+rootfs slots are located by `/proc/mtd` label, written with `mtd`/`ubiformat`, read back, and only then the selector moves; it never touches the active pair, `rootfs_data` or the env blocks). **`sh -n` clean; host-checked against the real built container and corrupted/foreign variants; install path mocked-tested by `tools/test-platform-abinstall.sh`; never run on hardware** | same path (board-level base-files) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
-| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added) and the GEMAC nodes match patch `009` but stay `status = "disabled"` because the GEMAC driver has no data path; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
+| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added) and the GEMAC nodes match patch `009` but stay `status = "disabled"` because the GEMAC driver has no data path; the SYSCTRL syscon also carries the machine-restart (`010`) and boot-selector (`017`) nodes, the latter enabled because its probe performs no register access; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
 | `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
 | `tools/luofu-image.py` | host assembly/validation helper for the image recipe: `rootfs-ubi` (squashfs -> one static UBI volume named `squashfs` with the measured geometry; re-parses EC/VID headers, their CRCs, the layout volume table, every static-LEB data CRC and the rootfs slot budget), `sysupgrade` (deterministic tar with `CONTROL`, `kernel`, `root`, `fip-manifest.txt`, `INSTALL-STATUS.txt`; cross-checks the slice against a manifest re-derived from the bytes) and `check-container` (independent read-back of a built container). Refuses vendor-derived input paths and unknown ubinize-cfg keys; never touches a device | `scripts/luofu-image.py` |
 | `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | the standalone host reproduction that produced the first own-artifact slice (never booted); its steps are now also wired into `image/luofu.mk` |
+| `tools/test-platform-abinstall.sh` | host-side mocked test for the A/B install path: sources the real `base-files/lib/upgrade/platform.sh`, exports the script's `LUOFU_TEST_ROOT` hook to a fixture tree and runs `platform_do_upgrade` against fake `/proc/mtd`, fake `/sys/class/ubi/ubi0/mtd_num`, fake selector sysfs and `mtd`/`ubiformat`/`sync`/`reboot` shims. Covers A->B and B->A slot selection, the kernel-then-rootfs-then-sync write order, the last-step selector move, and refusals for an unmeasured selector, a selector/rootfs pair mismatch, a missing selector, slot-budget overflows, a foreign image, a failing kernel/rootfs write, a failing selector store and a failed container re-check; with `--container` it also runs the real built image through the real `platform_check_image` | repo tool (host-only; no device) |
 | `../docs/TARGET-SKELETON.md` | one-page index/status of this skeleton, pointing back at TARGET-DESIGN.md | nowhere (repo documentation) |
 
-Deliberately **absent**: a factory/install image stanza (the install path is an open
-question, TARGET-DESIGN.md section 5.5) and a working `platform_do_upgrade` write path
-(the A/B selector protocol is [U], section 3.4; `platform.sh` exists but refuses to
-write), any Wi-Fi or switch driver, and any U-Boot source.
+Deliberately **absent**: a factory/install image stanza (the first-install path is an
+open question, TARGET-DESIGN.md section 5.5), any Wi-Fi or switch driver, and any
+U-Boot source. The A/B write path now exists host-side (`platform_do_upgrade`, selector
+driver patch `017`), but it has never run on hardware and the install path remains
+unvalidated (TARGET-DESIGN.md section 3.4).
 
 ---
 
@@ -475,10 +490,10 @@ Still missing from the submission:
   write sequences actually resets the SoC is unmeasured; the CRG command
   pair is PROVISIONAL and the selector protocol is still [U]
   (TARGET-DESIGN.md section 3.4);
-- the A/B install path: `platform.sh` now implements a real structural
-  `platform_check_image`, but `platform_do_upgrade` **refuses to write** because
-  the selector protocol and the install path are still [U] (TARGET-DESIGN.md 3.4,
-  5.4, 5.5);
+- the A/B install path: `platform.sh` implements the real structural
+  `platform_check_image` and a host-side A/B `platform_do_upgrade` (inactive pair
+  only, selector written last, mocked tests), but the selector protocol and the
+  install path are still [U] on hardware (TARGET-DESIGN.md 3.4, 5.4, 5.5);
 - the sysupgrade container schema is implemented in the recipe and every field is
   cross-checked at build time, but it is **not frozen** and no container has been
   written to a device;
@@ -662,13 +677,32 @@ Checked on the author's host on 2026-11-18, nothing more:
   `platform_do_upgrade` still refuses to write.** Details, commands and exact
   sizes/hashes: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)
   (image-recipe session).
+- **A/B install path (2026-11-18, A/B install host-only session)**: patch `017`
+  adds the `luofu-selector` sysfs interface and `017`+shared edits add its board
+  DTS node and `CONFIG_LUOFU_SELECTOR=y`; `platform.sh` now implements
+  `platform_do_upgrade` (selector + booted-rootfs pair cross-check, inactive pair
+  by label, kernel `mtd write` then `ubiformat`, read-backs, selector last) and
+  `tools/test-platform-abinstall.sh` runs it against mocked MTD/sysfs/tools.
+    Validation in the isolated clone: patch `017` applies to pristine
+  `linux-6.18.60` and after `001`-`016`; `make target/linux/prepare` RC=0
+  (1,198 patching lines, 0 rej/orig) and `make target/linux/compile V=s
+  -j16` RC=0 with **0 warnings** (`CONFIG_WERROR=y`); zImage 3,262,472 B
+  sha256 `a4e4f6c0...`; `_text = 0xc0608000` and `DTEXT_OFFSET=0x00608000`
+  (TEXT_OFFSET unchanged); `dt_binding_check` RC=0; board DTS zero warnings
+  (10,664 B DTB sha256 `5726f7cd...`); config re-derivation idempotent
+  (`4106877f...`, 309 symbols identical); `checkpatch` 0/0/0; `sh -n` clean;
+  mocked harness 58/58 including the real 6,185,262 B container
+  (`0303d76a...`).
+  **Nothing has booted, nothing was flashed**: the env-block re-stamp and one
+  attended A/B validation remain [U].
 
 **Not done, and not claimed:** the built sysupgrade container has never been
 booted or written to a device (one attended boot of a generated FIP trailer is still
-required), no install/factory path exists (`platform_do_upgrade` refuses because the
-A/B selector protocol is [U]), no device interaction, no UART, no bench tool run, and
-no network data path (the GEMAC driver is a resource/binding half only and its DTS
-nodes are disabled). The image is a host build product with a real OpenWrt rootfs,
+required), the A/B install path has never run on hardware (implemented host-side and
+mocked-tested only; one attended A/B validation is owed), no first-install/factory
+path exists, no device interaction, no UART, no bench tool run, and no network data
+path (the GEMAC driver is a resource/binding half only and its DTS nodes are
+disabled). The image is a host build product with a real OpenWrt rootfs,
 not a release. The four driver bindings (CRG, watchdog, MDIO, GEMAC) pass
 `dt_binding_check` (the PHY driver needs none) but have had no upstream review, and
 a full-draft-DTS `dtbs_check` is still not clean (every other node has a TODO binding). The
