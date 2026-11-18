@@ -1,7 +1,7 @@
 From 33e46a7f3c7bf8de0c8a2404a9ab78395a75b95f Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 06/17] spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+Subject: [PATCH 06/18] spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
 
 Add the flash-memory controller of the HiSilicon Hi5671Y "luofu" SoC as
 a SPI-MEM controller.  On this board the FMC drives an ESMT F50L1G41LC

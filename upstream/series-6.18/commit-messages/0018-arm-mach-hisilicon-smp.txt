@@ -1,0 +1,56 @@
+ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+
+Add platform SMP bring-up for the HiSilicon Hi5671Y "luofu" SoC
+(Cudy WR3000 v2.0, board R116).  The second Cortex-A9 is released by a
+devicetree CPU enable-method registered as "hisilicon,luofu-smp" in a
+new arch/arm/mach-hisilicon/platsmp.c.
+
+The release sequence is decoded from the stock vendor kernel's private
+"hisilicon,hsan_smp" method and its base devicetree; two independent
+vendor builds (5.10.201 2.4.15 and 2.5.24) carry an
+instruction-identical release body.  opensource/docs/SMP-RE.md carries
+the evidence trail: recovered vendor symbol table, hsan_smp_ops,
+hsan_boot_secondary and the vendor /cpus, SYSCTRL and CRG properties.
+The release is:
+
+  1. write __pa_symbol(secondary_startup) into the SYSCTRL pen word at
+     SYSCTRL + 0xc00 (vendor DT smp-offset = <0xc00>);
+  2. read-modify-write the CRG resume word at CRG + 0x38 (vendor DT
+     resume-offset = <0x38>), clearing the two resume bits of the target
+     core: 0x16/0x18 for CPU0 and 0x17/0x19 for CPU1 (vendor DT
+     core-info = <0x16 0x18 0x17 0x19>);
+  3. send the IPI_WAKEUP wakeup IPI to the target core.
+
+There is no SMC, PSCI or secure-monitor call in the decoded release
+path.  The vendor operations table has no prepare, secondary-init or
+hotplug operation, so this port enables the Cortex-A9 SCU itself (the
+mainline mach-hisi idiom) and maps the two syscon pages by their
+existing compatibles before the release.  The register offsets and the
+resume-bit numbers are SoC facts kept as driver data with the vendor
+property citations; no new devicetree binding, property or YAML is
+introduced.  The machine Kconfig help text, the Makefile and the
+machine-descriptor comment are updated accordingly.
+
+The method name is deliberately "hisilicon,luofu-smp", not the vendor
+string "hisilicon,hsan_smp": the vendor string names their internal
+board family, and a devicetree that still carries it simply does not
+match and boots UP.  Without a matching method, or when either syscon
+node is missing, the code stays inert: smp_boot_secondary() returns
+-ENODEV and never writes a guessed pen address.
+
+This support is RFC and attended.  The release has never run on our
+kernel, no CPU1 has ever been brought up by this code, and the physical
+semantics of the CRG resume bits, the pen-word consumer and the SCU
+pre-state are unmeasured.  The acceptance gate is the two-stage plan in
+SMP-RE.md section 8: S1 ships the platform UP-first (drop the one-line
+devicetree enable-method hunk and, upstream, keep a single cpu@0 node -
+two DT CPUs without a matching method is the known 5.10 bench failure
+mode); S2 is a single-variable attended bring-up with the recovery door
+armed and the UART capture read-only, followed by a soak and a repeat
+cold boot.
+
+Host-compiled against linux-6.18.60 in the target lane (platsmp.o
+built, no warning attributable to the new or changed files); never run
+on hardware, no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

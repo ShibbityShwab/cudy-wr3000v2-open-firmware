@@ -2325,3 +2325,50 @@ Not proven: any hardware behaviour. The in-boot cell value versus the running
 pair (including after our recorder), the POR clearing chain, the meaning of the
 cell's upper 24 bits, the env re-stamp, the first boot of a written pair and the
 full A/B install are all still [U]; the recorder has never run on hardware.
+
+---
+
+## 2026-11-18 (SMP-RE session): platsmp port 018, host validation only
+
+The vendor SMP enable-method was decoded and a platsmp port drafted (task-32). The
+release sequence (SYSCTRL pen word at `0xc00`, CRG resume-bit read-modify-write at
+`0x38` with the bit numbers from the vendor `core-info`, then the wakeup IPI; no
+SMC/PSCI) comes from the two stock vendor vmlinux images and the vendor base DTB;
+[SMP-RE.md](SMP-RE.md) is the evidence + design + staged-plan document and
+`patches-6.18/018-arm-mach-hisilicon-smp.patch` is the implementation (new
+`arch/arm/mach-hisilicon/platsmp.c`, `CPU_METHOD_OF_DECLARE` for the documented
+method `hisilicon,luofu-smp`, machine Kconfig/Makefile/descriptor refactor). The DTS
+`enable-method` line and the doc updates are in the incoming integration patch
+(`docs/incoming/smp/`), not edited here.
+
+Validated host-only in an isolated btrfs-reflink copy of the shared clone
+(`openwrt-lab-smp`, `openwrt main` `27663a0`, `linux-6.18.60`, the tree's own
+OpenWrt GCC 14.4.0; the shared clone was not modified):
+
+- patches `001`-`018` apply to a fresh pristine `linux-6.18.60` tree in order,
+  RC=0, no `.rej`/`.orig`; patch `018` dry-run on the `001`-`017` tree RC=0 and
+  byte-identical after apply;
+- `make target/linux/prepare` RC=0 (1,202 patching-file lines), then
+  `make target/linux/compile` **RC=0** (20m06s), zImage 3,264,472 B sha256
+  `ae59d998...`, **zero warnings attributable to any new/changed file** (the 38
+  modpost `missing MODULE_DESCRIPTION` warnings are the exact same pre-existing
+  baseline as the 001-017 and restart lanes);
+- `arch/arm/mach-hisilicon/platsmp.o` is built and its symbols are in System.map
+  (`luofu_smp_boot_secondary`, `luofu_smp_prepare_cpus`, `luofu_smp_ops`,
+  `__cpu_method_of_table_luofu_smp`);
+- `TEXT_OFFSET` unchanged: `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` and
+  `_text = stext = 0xc0608000`; SMP symbols already resolved in the config
+  (`CONFIG_SMP=y`, `CONFIG_HAVE_ARM_SCU=y`, `CONFIG_HAVE_ARM_TWD=y`) - the patch
+  needs no config change;
+- `make kernel_oldconfig` three runs RC=0; the resulting kernel `.config` is
+  byte-identical to the 001-017 build and the re-derived target `config-6.18`
+  fragment has the same 300-symbol set and is byte-idempotent;
+- `dt_binding_check` RC=0 for all 13 series YAMLs; the board DTS (with the
+  enable-method hunk) compiles with **zero dtc warnings** (DTB 10,710 B sha256
+  `bc599a4e...`); `dt-validate` has only the same six pre-existing findings as the
+  001-017 lane and none naming the SMP nodes;
+- checkpatch: `platsmp.c` 0/0 and the three edited files 0/0.
+
+Not proven: any hardware behaviour. The release has never run on our kernel; the
+second-core hang/cache/coherency/GIC/TWD risks and the attended acceptance gates are
+in [SMP-RE.md](SMP-RE.md). No device, router, UART, TFTP or flash tool was touched.

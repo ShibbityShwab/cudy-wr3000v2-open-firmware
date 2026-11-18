@@ -1,0 +1,273 @@
+From 3439f529ac9b0c1bed620c0cf22cbae7587004a6 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 18/18] ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+
+Add platform SMP bring-up for the HiSilicon Hi5671Y "luofu" SoC
+(Cudy WR3000 v2.0, board R116).  The second Cortex-A9 is released by a
+devicetree CPU enable-method registered as "hisilicon,luofu-smp" in a
+new arch/arm/mach-hisilicon/platsmp.c.
+
+The release sequence is decoded from the stock vendor kernel's private
+"hisilicon,hsan_smp" method and its base devicetree; two independent
+vendor builds (5.10.201 2.4.15 and 2.5.24) carry an
+instruction-identical release body.  opensource/docs/SMP-RE.md carries
+the evidence trail: recovered vendor symbol table, hsan_smp_ops,
+hsan_boot_secondary and the vendor /cpus, SYSCTRL and CRG properties.
+The release is:
+
+  1. write __pa_symbol(secondary_startup) into the SYSCTRL pen word at
+     SYSCTRL + 0xc00 (vendor DT smp-offset = <0xc00>);
+  2. read-modify-write the CRG resume word at CRG + 0x38 (vendor DT
+     resume-offset = <0x38>), clearing the two resume bits of the target
+     core: 0x16/0x18 for CPU0 and 0x17/0x19 for CPU1 (vendor DT
+     core-info = <0x16 0x18 0x17 0x19>);
+  3. send the IPI_WAKEUP wakeup IPI to the target core.
+
+There is no SMC, PSCI or secure-monitor call in the decoded release
+path.  The vendor operations table has no prepare, secondary-init or
+hotplug operation, so this port enables the Cortex-A9 SCU itself (the
+mainline mach-hisi idiom) and maps the two syscon pages by their
+existing compatibles before the release.  The register offsets and the
+resume-bit numbers are SoC facts kept as driver data with the vendor
+property citations; no new devicetree binding, property or YAML is
+introduced.  The machine Kconfig help text, the Makefile and the
+machine-descriptor comment are updated accordingly.
+
+The method name is deliberately "hisilicon,luofu-smp", not the vendor
+string "hisilicon,hsan_smp": the vendor string names their internal
+board family, and a devicetree that still carries it simply does not
+match and boots UP.  Without a matching method, or when either syscon
+node is missing, the code stays inert: smp_boot_secondary() returns
+-ENODEV and never writes a guessed pen address.
+
+This support is RFC and attended.  The release has never run on our
+kernel, no CPU1 has ever been brought up by this code, and the physical
+semantics of the CRG resume bits, the pen-word consumer and the SCU
+pre-state are unmeasured.  The acceptance gate is the two-stage plan in
+SMP-RE.md section 8: S1 ships the platform UP-first (drop the one-line
+devicetree enable-method hunk and, upstream, keep a single cpu@0 node -
+two DT CPUs without a matching method is the known 5.10 bench failure
+mode); S2 is a single-variable attended bring-up with the recovery door
+armed and the UART capture read-only, followed by a soak and a repeat
+cold boot.
+
+Host-compiled against linux-6.18.60 in the target lane (platsmp.o
+built, no warning attributable to the new or changed files); never run
+on hardware, no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ arch/arm/mach-hisilicon/Kconfig   |    5 +
+ arch/arm/mach-hisilicon/Makefile  |    1 
+ arch/arm/mach-hisilicon/luofu.c   |   12 +--
+ arch/arm/mach-hisilicon/platsmp.c |  159 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 169 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm/mach-hisilicon/Kconfig b/arch/arm/mach-hisilicon/Kconfig
+--- a/arch/arm/mach-hisilicon/Kconfig
++++ b/arch/arm/mach-hisilicon/Kconfig
+@@ -12,5 +12,6 @@ config ARCH_LUOFU
+ 
+ 	  The machine code only matches the board devicetree and programs no
+ 	  hardware itself; the drivers and DT nodes bound to it do the work.
+-	  A UP-only boot is the first supported posture: there is no mainline
+-	  smp_ops for this SoC yet.
++	  SMP is brought up by the platform SMP code through the documented
++	  "hisilicon,luofu-smp" devicetree enable-method; a devicetree without
++	  that method boots UP.
+diff --git a/arch/arm/mach-hisilicon/Makefile b/arch/arm/mach-hisilicon/Makefile
+--- a/arch/arm/mach-hisilicon/Makefile
++++ b/arch/arm/mach-hisilicon/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ 
+ obj-y += luofu.o
++obj-$(CONFIG_SMP) += platsmp.o
+diff --git a/arch/arm/mach-hisilicon/luofu.c b/arch/arm/mach-hisilicon/luofu.c
+--- a/arch/arm/mach-hisilicon/luofu.c
++++ b/arch/arm/mach-hisilicon/luofu.c
+@@ -19,12 +19,12 @@
+  *   .init_machine	- the DT-declared platform devices are populated
+  *			  generically (drivers/of/platform.c) once the machine
+  *			  matches.
+- *   .smp		- TODO: there is no mainline smp_ops for this SoC yet.
+- *			  The vendor DT's enable-method is the vendor-private
+- *			  "hisilicon,hsan_smp" and the second core is not
+- *			  brought up: this machine is UP-only for now. A
+- *			  platsmp port plus a documented DT enable-method is
+- *			  required before SMP can be claimed.
++ *   .smp		- SMP is not a machine hook: it is selected by the
++ *			  devicetree enable-method "hisilicon,luofu-smp",
++ *			  implemented by arch/arm/mach-hisilicon/platsmp.c
++ *			  (decoded from the vendor's "hisilicon,hsan_smp"
++ *			  release path; see opensource/docs/SMP-RE.md). A
++ *			  devicetree without that method boots UP.
+  *   .restart		- TODO: no reset/reboot driver for the CRG block
+  *			  exists yet, so a panic or reboot cannot reset the
+  *			  SoC through a documented interface. The reset magic
+diff --git a/arch/arm/mach-hisilicon/platsmp.c b/arch/arm/mach-hisilicon/platsmp.c
+new file mode 100644
+--- /dev/null
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -0,0 +1,159 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * SMP bring-up for the HiSilicon Hi5671Y "luofu" SoC
++ * (Cudy WR3000 v2.0, board R116).
++ *
++ * The vendor kernel (5.10.201) releases the second Cortex-A9 through a
++ * devicetree enable-method called "hisilicon,hsan_smp". The method and its
++ * register effects are decoded from the two stock vendor kernels and their
++ * base devicetree; opensource/docs/SMP-RE.md carries the evidence trail
++ * (vendor vmlinux symbol table, the hsan_smp_ops table, hsan_boot_secondary
++ * and the vendor /cpus, SYSCTRL and CRG nodes). The release is:
++ *
++ *	1. write __pa_symbol(secondary_startup) into the SYSCTRL "pen" word at
++ *	   SYSCTRL + 0xc00 (the vendor DT property smp-offset = <0xc00>);
++ *	2. read-modify-write the CRG "resume" word at CRG + 0x38 (the vendor
++ *	   DT property resume-offset = <0x38>) and clear the two bits that
++ *	   belong to the target core - bits 0x16/0x18 for CPU0 and 0x17/0x19
++ *	   for CPU1, the vendor DT property core-info = <0x16 0x18 0x17 0x19>;
++ *	3. send the IPI_WAKEUP IPI to the target core.
++ *
++ * The vendor smp_operations table has no smp_prepare_cpus() at all, so this
++ * port enables the Cortex-A9 SCU explicitly and maps the two pages before
++ * the release. The register values are the vendor's, but this exact sequence
++ * has never been run on this kernel: SMP-RE.md has the attended bring-up
++ * plan. If either page is missing from the devicetree the method stays inert
++ * (the boot remains UP) and smp_boot_secondary() fails with -ENODEV instead
++ * of writing a guessed address.
++ *
++ * The devicetree method name is deliberately NOT the vendor's
++ * "hisilicon,hsan_smp": that string names the vendor's internal platform
++ * ("hsan" is their board family), while the documented method name for this
++ * SoC family is "hisilicon,luofu-smp". The board DTS must use:
++ *
++ *	cpus {
++ *		enable-method = "hisilicon,luofu-smp";
++ *		...
++ *	};
++ *
++ * The core-resume bit numbers are SoC facts, so they are driver data here
++ * (like the CRG gate table in the clock driver), not new DT properties.
++ */
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/printk.h>
++#include <linux/sizes.h>
++#include <linux/smp.h>
++
++#include <asm/page.h>
++#include <asm/smp_plat.h>
++#include <asm/smp_scu.h>
++
++#define LUOFU_SYSCTRL_COMPAT	"hisilicon,luofu-sysctrl"
++#define LUOFU_CRG_COMPAT	"hisilicon,luofu-crg"
++
++/* Vendor DT: hsan,sysctrl { smp-offset = <0xc00>; } */
++#define LUOFU_SMP_PEN_OFFSET	0x0c00
++/* Vendor DT: hsan,crg { resume-offset = <0x38>; } */
++#define LUOFU_CRG_RESUME_OFFSET	0x38
++
++/*
++ * Vendor DT: hsan,crg { core-info = <0x16 0x18 0x17 0x19>; } - two
++ * "resume" bits per core, in the CRG resume word.
++ */
++static const u8 luofu_resume_bits[][2] = {
++	{ 0x16, 0x18 },	/* CPU0 */
++	{ 0x17, 0x19 },	/* CPU1 */
++};
++
++static void __iomem *luofu_smp_pen;
++static void __iomem *luofu_smp_resume;
++
++static void __init luofu_enable_scu(void)
++{
++	void __iomem *scu_base;
++
++	if (!scu_a9_has_base())
++		return;
++
++	scu_base = ioremap(scu_a9_get_base(), SZ_4K);
++	if (!scu_base) {
++		pr_err("luofu: failed to map the SCU\n");
++		return;
++	}
++
++	scu_enable(scu_base);
++	iounmap(scu_base);
++}
++
++static void __iomem *__init luofu_iomap_compat(const char *compat)
++{
++	struct device_node *np;
++	void __iomem *base;
++
++	np = of_find_compatible_node(NULL, NULL, compat);
++	if (!np) {
++		pr_err("luofu: no %s node, SMP release disabled\n", compat);
++		return NULL;
++	}
++
++	base = of_iomap(np, 0);
++	of_node_put(np);
++	if (!base)
++		pr_err("luofu: failed to map %s\n", compat);
++
++	return base;
++}
++
++static void __init luofu_smp_prepare_cpus(unsigned int max_cpus)
++{
++	void __iomem *sysctrl, *crg;
++
++	luofu_enable_scu();
++
++	sysctrl = luofu_iomap_compat(LUOFU_SYSCTRL_COMPAT);
++	crg = luofu_iomap_compat(LUOFU_CRG_COMPAT);
++	if (!sysctrl || !crg)
++		return;
++
++	luofu_smp_pen = sysctrl + LUOFU_SMP_PEN_OFFSET;
++	luofu_smp_resume = crg + LUOFU_CRG_RESUME_OFFSET;
++}
++
++static int luofu_smp_boot_secondary(unsigned int cpu, struct task_struct *idle)
++{
++	unsigned int bit0, bit1;
++	u32 val;
++
++	if (!luofu_smp_pen || !luofu_smp_resume)
++		return -ENODEV;
++
++	if (cpu >= ARRAY_SIZE(luofu_resume_bits)) {
++		pr_warn("luofu: no resume bits for CPU%u\n", cpu);
++		return -EINVAL;
++	}
++
++	/*
++	 * The vendor code skips the pen write for a logical CPU 0 and handles
++	 * only the two cores of this SoC; the logical map for CPU1 is 1.
++	 */
++	if (cpu_logical_map(cpu) != 0)
++		writel_relaxed(__pa_symbol(secondary_startup), luofu_smp_pen);
++
++	bit0 = luofu_resume_bits[cpu][0];
++	bit1 = luofu_resume_bits[cpu][1];
++	val = readl_relaxed(luofu_smp_resume);
++	writel_relaxed(val & ~(BIT(bit0) | BIT(bit1)), luofu_smp_resume);
++
++	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
++
++	return 0;
++}
++
++static const struct smp_operations luofu_smp_ops __initconst = {
++	.smp_prepare_cpus	= luofu_smp_prepare_cpus,
++	.smp_boot_secondary	= luofu_smp_boot_secondary,
++};
++
++CPU_METHOD_OF_DECLARE(luofu_smp, "hisilicon,luofu-smp", &luofu_smp_ops);

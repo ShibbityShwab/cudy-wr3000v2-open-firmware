@@ -1,9 +1,9 @@
 # MAINTAINERS proposal - HiSilicon luofu (Hi5671Y) platform
 
 Status: proposal for the luofu 6.18 series.  A real submission needs this
-as its own small patch, either as patch 17/18 of the platform series or as
-the first patch of the first driver series (MAINTAINERS get_maintainer
-lookups must find the new files).
+as its own small patch, either as the last patch of the platform series
+(now 18/18) or as the first patch of the first driver series (MAINTAINERS
+get_maintainer lookups must find the new files).
 
 ## Maintainer identity
 
@@ -71,6 +71,11 @@ Notes on the variant:
   "RFC"** - `RFC` is the series/cover-letter marker for patches that are
   not mergeable yet (see 01-commit-messages.md status column).  Do not
   write `S: RFC` in MAINTAINERS.
+- `F: arch/arm/mach-hisilicon/` covers both the machine files added by
+  0001 and `platsmp.c` added by patch 0018; no separate
+  `F: arch/arm/mach-hisilicon/platsmp.c` line is needed and would be
+  redundant.  The entry needs no update for 0018 (which adds no binding,
+  header or new directory).  [V]
 - `F: arch/arm/boot/dts/hisilicon/luofu-*` covers the future board DTS
   patch; it does not exist in this series.  Do not use
   `F: arch/arm/boot/dts/hisilicon/` without the prefix: it would claim the
@@ -105,8 +110,10 @@ maintainers that the subsystem trees will route by their own entries.
 | --- | --- |
 | ready-for-review patches (0004, 0005, 0007, 0008, 0012, 0014) | add the SoC entry (this file) in the same submission window; `S: Maintained` |
 | RFC patches (0001-0003, 0006, 0011, 0013, 0017) | same entry when posted; the RFC marker goes in the subject, not in MAINTAINERS |
+| SMP patch 0018 (RFC, attended) | same entry when posted; its file is already covered by `F: arch/arm/mach-hisilicon/`; post only after the attended S2 bring-up and not as part of the UP-first set |
 | draft/refusing patches (0009, 0010, 0015, 0016) | do not post as merge candidates; if they are posted at all, use `[RFC PATCH]` and still reference the same entry (files are already covered) |
 
 The identity must be updated in all 13 YAML files at the same time as this
 entry; see `grep -rl 18537102+ShibbityShwab@users.noreply.github.com
-Documentation/devicetree/bindings/`.
+Documentation/devicetree/bindings/`.  Patch 0018 (SMP) adds no YAML or
+header, so it does not change that list.

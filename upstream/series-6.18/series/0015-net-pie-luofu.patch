@@ -1,7 +1,7 @@
 From 7f79d10d0d016b1ec3ffde707111a26fda800fa5 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 15/17] net: ethernet: hisilicon: add Luofu PIE packet engine draft
+Subject: [PATCH 15/18] net: ethernet: hisilicon: add Luofu PIE packet engine draft
 
 Add draft scaffolding for the PIE packet engine of the HiSilicon Hi5671Y
 "luofu" SoC, the DMA/ring half of the wired data path.  The driver

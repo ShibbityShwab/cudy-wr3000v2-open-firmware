@@ -99,3 +99,9 @@ patching file drivers/soc/hisilicon/luofu-selector.c
 patching file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-boot-selector.yaml
 patching file Documentation/ABI/testing/sysfs-driver-luofu-selector
 PATCH_RC[0017-soc-luofu-boot-selector.patch]=0
+### [18] 0018-arm-mach-hisilicon-smp.patch
+patching file arch/arm/mach-hisilicon/Kconfig
+patching file arch/arm/mach-hisilicon/Makefile
+patching file arch/arm/mach-hisilicon/luofu.c
+patching file arch/arm/mach-hisilicon/platsmp.c
+PATCH_RC[0018-arm-mach-hisilicon-smp.patch]=0

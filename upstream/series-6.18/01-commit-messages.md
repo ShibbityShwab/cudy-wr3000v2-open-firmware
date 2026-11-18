@@ -17,7 +17,7 @@ subsystem as described in 00-cover-letter.md.
 
 ## Group 1 - core platform (RFC)
 
-### 0001/17  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+### 0001/18  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
 
 Status: RFC
 
@@ -50,7 +50,7 @@ and has never booted.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0002/17  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+### 0002/18  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
 
 Status: RFC
 
@@ -74,7 +74,7 @@ builds together with the following early-boot change.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0003/17  ARM: head: materialize TEXT_OFFSET with mov_l
+### 0003/18  ARM: head: materialize TEXT_OFFSET with mov_l
 
 Status: RFC
 
@@ -101,7 +101,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 2 - peripheral drivers, ready for review
 
-### 0004/17  clk: hisilicon: add Luofu CRG clock and reset controller
+### 0004/18  clk: hisilicon: add Luofu CRG clock and reset controller
 
 Status: ready-for-review
 
@@ -137,7 +137,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0005/17  watchdog: luofu: add Hi5671Y watchdog support
+### 0005/18  watchdog: luofu: add Hi5671Y watchdog support
 
 Status: ready-for-review
 
@@ -168,7 +168,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0007/17  net: mdio: luofu: add MDIO bus controller
+### 0007/18  net: mdio: luofu: add MDIO bus controller
 
 Status: ready-for-review
 
@@ -197,7 +197,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0008/17  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+### 0008/18  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
 
 Status: ready-for-review
 
@@ -222,7 +222,7 @@ Host-compiled against linux-6.18.60; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0012/17  thermal: add Luofu thermal sensor driver
+### 0012/18  thermal: add Luofu thermal sensor driver
 
 Status: ready-for-review
 
@@ -252,7 +252,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0014/17  clk: hisilicon: fix Luofu CRG reset polarity
+### 0014/18  clk: hisilicon: fix Luofu CRG reset polarity
 
 Status: ready-for-review
 
@@ -280,7 +280,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 3 - peripheral drivers, RFC
 
-### 0006/17  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+### 0006/18  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
 
 Status: RFC
 
@@ -320,7 +320,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0011/17  pinctrl: hisilicon: add Luofu peripheral pin controller
+### 0011/18  pinctrl: hisilicon: add Luofu peripheral pin controller
 
 Status: RFC
 
@@ -355,7 +355,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0013/17  PCI: dwc: add Luofu PCIe host controller
+### 0013/18  PCI: dwc: add Luofu PCIe host controller
 
 Status: RFC
 
@@ -388,7 +388,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0017/17  soc: hisilicon: add Luofu A/B boot selector
+### 0017/18  soc: hisilicon: add Luofu A/B boot selector
 
 Status: RFC
 
@@ -431,7 +431,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 4 - RFC / partial drafts, do not merge
 
-### 0009/17  net: ethernet: hisilicon: add partial Luofu GEMAC driver
+### 0009/18  net: ethernet: hisilicon: add partial Luofu GEMAC driver
 
 Status: RFC (partial, refuses probe)
 
@@ -462,7 +462,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0010/17  power: reset: add Luofu machine restart driver
+### 0010/18  power: reset: add Luofu machine restart driver
 
 Status: RFC (provisional reset)
 
@@ -496,7 +496,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0015/17  net: ethernet: hisilicon: add Luofu PIE packet engine draft
+### 0015/18  net: ethernet: hisilicon: add Luofu PIE packet engine draft
 
 Status: draft (do not merge)
 
@@ -527,7 +527,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0016/17  net: ethernet: hisilicon: add Luofu switch probe skeleton
+### 0016/18  net: ethernet: hisilicon: add Luofu switch probe skeleton
 
 Status: draft (do not merge)
 
@@ -560,6 +560,71 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
+## Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)
+
+### 0018/18  ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+
+Status: RFC (attended)
+
+~~~
+ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+
+Add platform SMP bring-up for the HiSilicon Hi5671Y "luofu" SoC
+(Cudy WR3000 v2.0, board R116).  The second Cortex-A9 is released by a
+devicetree CPU enable-method registered as "hisilicon,luofu-smp" in a
+new arch/arm/mach-hisilicon/platsmp.c.
+
+The release sequence is decoded from the stock vendor kernel's private
+"hisilicon,hsan_smp" method and its base devicetree; two independent
+vendor builds (5.10.201 2.4.15 and 2.5.24) carry an
+instruction-identical release body.  opensource/docs/SMP-RE.md carries
+the evidence trail: recovered vendor symbol table, hsan_smp_ops,
+hsan_boot_secondary and the vendor /cpus, SYSCTRL and CRG properties.
+The release is:
+
+  1. write __pa_symbol(secondary_startup) into the SYSCTRL pen word at
+     SYSCTRL + 0xc00 (vendor DT smp-offset = <0xc00>);
+  2. read-modify-write the CRG resume word at CRG + 0x38 (vendor DT
+     resume-offset = <0x38>), clearing the two resume bits of the target
+     core: 0x16/0x18 for CPU0 and 0x17/0x19 for CPU1 (vendor DT
+     core-info = <0x16 0x18 0x17 0x19>);
+  3. send the IPI_WAKEUP wakeup IPI to the target core.
+
+There is no SMC, PSCI or secure-monitor call in the decoded release
+path.  The vendor operations table has no prepare, secondary-init or
+hotplug operation, so this port enables the Cortex-A9 SCU itself (the
+mainline mach-hisi idiom) and maps the two syscon pages by their
+existing compatibles before the release.  The register offsets and the
+resume-bit numbers are SoC facts kept as driver data with the vendor
+property citations; no new devicetree binding, property or YAML is
+introduced.  The machine Kconfig help text, the Makefile and the
+machine-descriptor comment are updated accordingly.
+
+The method name is deliberately "hisilicon,luofu-smp", not the vendor
+string "hisilicon,hsan_smp": the vendor string names their internal
+board family, and a devicetree that still carries it simply does not
+match and boots UP.  Without a matching method, or when either syscon
+node is missing, the code stays inert: smp_boot_secondary() returns
+-ENODEV and never writes a guessed pen address.
+
+This support is RFC and attended.  The release has never run on our
+kernel, no CPU1 has ever been brought up by this code, and the physical
+semantics of the CRG resume bits, the pen-word consumer and the SCU
+pre-state are unmeasured.  The acceptance gate is the two-stage plan in
+SMP-RE.md section 8: S1 ships the platform UP-first (drop the one-line
+devicetree enable-method hunk and, upstream, keep a single cpu@0 node -
+two DT CPUs without a matching method is the known 5.10 bench failure
+mode); S2 is a single-variable attended bring-up with the recovery door
+armed and the UART capture read-only, followed by a soak and a repeat
+cold boot.
+
+Host-compiled against linux-6.18.60 in the target lane (platsmp.o
+built, no warning attributable to the new or changed files); never run
+on hardware, no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+~~~
+
 ## Mapping table
 
 | # | series file | source tree patch | subject | status |
@@ -581,6 +646,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 15 | series/0015-net-pie-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/015-net-pie-luofu.patch | net: ethernet: hisilicon: add Luofu PIE packet engine draft | draft (do not merge) |
 | 16 | series/0016-net-lsw-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch | net: ethernet: hisilicon: add Luofu switch probe skeleton | draft (do not merge) |
 | 17 | series/0017-soc-luofu-boot-selector.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/017-soc-luofu-boot-selector.patch | soc: hisilicon: add Luofu A/B boot selector | RFC |
+| 18 | series/0018-arm-mach-hisilicon-smp.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/018-arm-mach-hisilicon-smp.patch | ARM: mach-hisilicon: add Hi5671Y SMP bring-up support | RFC (attended) |
 
 ## Status legend
 
@@ -591,6 +657,9 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
   question, or an interface that has to be reviewed first.
 - RFC (partial, refuses probe) / draft (do not merge): explicitly not
   mergeable; posted for direction only.
+- RFC (attended): host-validated platform code whose acceptance requires
+  a single-variable, recovery-armed bench session; not part of the
+  UP-first mergeable set.
 - Every patch also needs the mechanical binding split warned about by
   checkpatch, and a MAINTAINERS entry; see 02-maintainers-proposal.md
   and 04-validation.md.
@@ -599,23 +668,24 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 | # | series sha256 | source patch sha256 |
 | --- | --- | --- |
-| 01 | cfd76ce0083c6e5724281d2dc2749511f38d67a7e2554757e3682e4185f0cb60 | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
-| 02 | 8499e5ee2784a5135f990ea1f7304c1537e7b238ac2ef68fdc5a4fd9bf849d75 | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
-| 03 | f8380610ea959d406f74c153b89aa79a7bfff960f4cf28e4225f525a28a0aa52 | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
-| 04 | 8d9e57d4f965e6aa7ed02c1c0fe7e1766700818e6e2eca45726b20196f3c6bb5 | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
-| 05 | 3ad34f843533e905d26d67b458538d6d262bcd7da4a18aa79a2bd6e0fc5f8de5 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
-| 06 | e60ca7d66c64f9d3121c3059eedb488677f38fc5883debafa36b99a122884ac5 | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
-| 07 | 9f0fab5eaad98fbe2106433e0c18d2d74f5b5452af87b92450f2ed51fb2ee0ee | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
-| 08 | 81e6b3182850a3a3a88c4a305c3e94ee3cce2c1be457b030e0a700f24a3ff096 | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
-| 09 | 88c6738c80e9c04a8bb216b0875f03ee178d82e59012ffe4136f2e80bde0a568 | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
-| 10 | 87522e8e6d5ef403cb0ec3087bb709c735981ca1d5a894fb61ca4cc9ac812a8e | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
-| 11 | 7cf8f96dc4f36616b85141264fd71b817ec3d0a1a09b143b9049a55014744c89 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
-| 12 | ac8f98c997726554d8956ac1a28c7c3729522caf0764694118279e9dab07f594 | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
-| 13 | 8a5ef07a5c531f932a97c677114343a4c4f95e4d1b034c17aa276c2ec4424049 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
-| 14 | 0a4baee01693408da8489a6fc5657e4d03d71318c9a8ebd78219fbade450adfc | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
-| 15 | 649d165c4afdd743b9b8a9128eb652353b92a77a0e3045427a59644634523529 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
-| 16 | aa067ceb43ac49aa00f78c6ca4ec75b0b78c55adc601ea752cfac7432aaf3374 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
-| 17 | 1bac7bdd1aad268ab4cb354485e9e565d0a03322e7f3d2d56dc1a452e0682c7f | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
+| 01 | a5d111aaa51cd0816b907827f2d053add1f1ac0a0c6ad70517da2764b526234e | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
+| 02 | 21f052e49d14f78acae87d360d70ba77c8518084c9a774fc25079ea45c8befa9 | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
+| 03 | 6041ef8905ab9e249be9208a0a0ba219560c62be98be3d5e902b3e9a880eeb9c | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
+| 04 | 933a7e911064894b83a15e16e33133cad1bf2a020a9115e4605b2d2f1ce01865 | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
+| 05 | 613278c2fa302e364018a8c391a156568510ff60e00b317bce3471109965ec18 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
+| 06 | af6eecc707dee364c02c8c0d766bb2fc11a841f35fa2e048c64a073e13d5605a | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
+| 07 | 7423bf91fc5a51daa529b6a4cf189142a13c21ef3911cb96a929bcd3a876f999 | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
+| 08 | 793bbbfe6a50c39b75f980d3cf604d52fbc1911ded6da67af38bf3c1138adfa8 | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
+| 09 | b316a301d43020c889b8c4c43016b4ce7f34c505b0c6b176a47aad268d696f73 | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
+| 10 | 3ba4c42f786340256556b75b8c660e69c28f7e43f746059a6dda9c271522c934 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
+| 11 | 8680d652ce46c0580c2fd69d8ca7bf2accf5408383cc6fbd147dc8e43fdcfc88 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
+| 12 | 325eb162d294b2c7105fa4db49c1add96ff76b061a8237e13d68233f6bff6243 | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
+| 13 | 8b2ebc38e5cfe1f5faf03d74c89afb1bd231176c54a55e5b6c760d416ccf9fd6 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
+| 14 | 83b66d1ccc9d6f5ab0744635aa9cbb04d3ffac4cbd97cec659057f93ee7d5ad5 | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
+| 15 | 1ca26231a20d991409a5c660207a653fc658e93781d4a59f8a75e4eb9d4243a7 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
+| 16 | 9e17fe076a99be7af7307df9111093fc4dd39a07653429d688d418c610ae31db | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
+| 17 | c58107a58f0618956fd5f73ec36c41bd89a0443e1167869f783a4a975ee37566 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
+| 18 | b4268e65d5e3d7ad4aa7bc2c9a733234649484b904041b46d77c92f621091e75 | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
 
 The series diff bodies are byte-identical to the source patches apart from
 the git extended headers inserted by the generator (diff --git and

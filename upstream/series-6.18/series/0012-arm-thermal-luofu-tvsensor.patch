@@ -1,7 +1,7 @@
 From e09ef404a4202adb94512f19204cf96dc5ed1d4f Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 12/17] thermal: add Luofu thermal sensor driver
+Subject: [PATCH 12/18] thermal: add Luofu thermal sensor driver
 
 Add a read-only thermal sensor driver for the HiSilicon Hi5671Y "luofu"
 SoC.  The die temperature is the low 16 bits of the word at offset

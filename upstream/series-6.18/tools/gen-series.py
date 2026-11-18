@@ -57,6 +57,7 @@ SERIES = [
     ("0015-net-pie-luofu", "draft (do not merge)"),
     ("0016-net-lsw-luofu", "draft (do not merge)"),
     ("0017-soc-luofu-boot-selector", "RFC"),
+    ("0018-arm-mach-hisilicon-smp", "RFC (attended)"),
 ]
 
 
@@ -85,6 +86,9 @@ GROUPS = [
         "0010-arm-luofu-restart",
         "0015-net-pie-luofu",
         "0016-net-lsw-luofu",
+    ]),
+    ("Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)", [
+        "0018-arm-mach-hisilicon-smp",
     ]),
 ]
 
@@ -202,6 +206,9 @@ def mapping_doc(series: list, hashes: dict) -> str:
     add("  question, or an interface that has to be reviewed first.")
     add("- RFC (partial, refuses probe) / draft (do not merge): explicitly not")
     add("  mergeable; posted for direction only.")
+    add("- RFC (attended): host-validated platform code whose acceptance requires")
+    add("  a single-variable, recovery-armed bench session; not part of the")
+    add("  UP-first mergeable set.")
     add("- Every patch also needs the mechanical binding split warned about by")
     add("  checkpatch, and a MAINTAINERS entry; see 02-maintainers-proposal.md")
     add("  and 04-validation.md.")

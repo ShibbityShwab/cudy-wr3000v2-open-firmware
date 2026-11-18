@@ -15,3 +15,4 @@
 0015-net-pie-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 715 lines checked
 0016-net-lsw-luofu.patch :: total: 0 errors, 2 warnings, 2 checks, 646 lines checked
 0017-soc-luofu-boot-selector.patch :: total: 0 errors, 3 warnings, 0 checks, 436 lines checked
+0018-arm-mach-hisilicon-smp.patch :: total: 0 errors, 1 warnings, 0 checks, 189 lines checked

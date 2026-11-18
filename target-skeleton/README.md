@@ -75,6 +75,17 @@
 > re-records the running pair after every successful boot. Without it the reboot after a normal
 > boot would silently take the loader's failover path. Host-only: nothing has booted.
 >
+> **2026-11-18 (SMP-RE session): the vendor SMP enable-method is DECODED and the port
+> is drafted host-side.** Patch `018` adds `arch/arm/mach-hisilicon/platsmp.c`
+> (`CPU_METHOD_OF_DECLARE(luofu_smp, "hisilicon,luofu-smp")`, SCU enable, fail-safe
+> missing-node path) plus the machine Kconfig/Makefile/descriptor refactor; the DTS
+> selects the method in the incoming integration patch. The release sequence (SYSCTRL pen
+> word at `0xc00`, CRG resume bits at `0x38` from the vendor `core-info`, wakeup IPI;
+> no SMC/PSCI) is decoded from both stock vendor vmlinux images and the vendor base DTB
+> and documented in [SMP-RE.md](../docs/SMP-RE.md), with the staged UP-first -> attended
+> plan and the [U] list. The series (001-018) applies/prepares/compiles host-side; **the
+> release has never run on hardware**.
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).

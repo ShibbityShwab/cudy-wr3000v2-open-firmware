@@ -32,3 +32,5 @@ Applying: net: ethernet: hisilicon: add Luofu switch probe skeleton
 AM_RC[0016-net-lsw-luofu.patch]=0
 Applying: soc: hisilicon: add Luofu A/B boot selector
 AM_RC[0017-soc-luofu-boot-selector.patch]=0
+Applying: ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+AM_RC[0018-arm-mach-hisilicon-smp.patch]=0

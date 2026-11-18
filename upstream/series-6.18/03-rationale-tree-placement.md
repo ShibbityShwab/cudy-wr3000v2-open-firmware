@@ -15,6 +15,7 @@ drivers/pinctrl/hisilicon directory).
 | block | series patches | placement | why / alternative |
 | --- | --- | --- | --- |
 | machine | 0001, 0002 | new arch/arm/mach-hisilicon/, ARCH_LUOFU under existing ARCH_HISI | new SoC family, not part of mach-hisi; see section 2 |
+| SMP bring-up | 0018 | new arch/arm/mach-hisilicon/platsmp.c | CPU_METHOD_OF_DECLARE("hisilicon,luofu-smp"); no new binding, reuses the CRG/SYSCTRL syscon nodes (0004/0010); staged separately, see section 9 |
 | early boot / TEXT_OFFSET | 0003 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | general ARM change; see section 3 |
 | CRG clocks/resets | 0004, 0014 | drivers/clk/hisilicon/crg-luofu.c | existing hisilicon clk directory |
 | CRG dt-bindings header | 0004 | include/dt-bindings/clock/hisilicon,luofu-crg.h | clock-ID ABI, next to the binding |
@@ -164,6 +165,10 @@ Review points:
    child (0005) and the sysctrl consumers (0010, 0017) to share one
    regmap.  If review asks for a different syscon layout, 0005/0010/0017
    all need a matching change.
+7. 0018 adds no Kconfig symbol: it adds `obj-$(CONFIG_SMP) += platsmp.o`
+   to the new machine Makefile and updates the ARCH_LUOFU help text.  No
+   config delta is needed (CONFIG_SMP=y and the HAVE_ARM_SCU/TWD selects
+   already come from 0001/0002); see SMP-RE.md section 3.
 
 ## 6. Series order, dependency matrix and bisectability
 
@@ -189,6 +194,7 @@ dependencies:
 | 0015 | 0004 | 0004, 0014 |
 | 0016 | 0004 | 0004, 0014 |
 | 0017 | - | 0010 (sysctrl binding, shared node) |
+| 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series |
 
 **Bisectability problem: 0014 is too late.**  0014 fixes the CRG reset
 polarity (active-low), and it is placed after 0006, 0007 and 0013, which
@@ -216,6 +222,9 @@ Other ordering constraints:
   Either order works for compilation; the restart patch should come first
   because the binding is there.
 - 0011/0012 are independent of the rest and can be reviewed in parallel.
+- 0018 is last: it edits files created by 0001 and maps the syscon nodes
+  from 0004/0010.  It is not part of the UP-first submission; the staging
+  (S1 UP-first, S2 attended) is section 9.
 
 ## 7. Conflicts and merge-order hazards
 
@@ -225,6 +234,7 @@ series is split across subsystem trees):
 | file(s) | patches | hazard |
 | --- | --- | --- |
 | arch/arm/Kconfig, arch/arm/Makefile | 0002 (0003 separate tree) | arm-soc/ARM tree churn; rebase before sending |
+| arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c} | 0001, 0018 | 0018 edits files introduced by 0001 and is last in the series; no in-series conflict, but a split submission must rebase it on the platform series |
 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | 0003 | ARM core tree; conflicts with any early-boot change |
 | drivers/clk/hisilicon/crg-luofu.c, binding yaml | 0004, 0014 | fold 0014 into 0004 (see above) |
 | drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016 | three insertions in the same two files; order is 0009 -> 0015 -> 0016 in the consolidated tree.  If 0009 lands alone, 0015/0016 need a rebase (they are drafts, so this should not matter soon) |
@@ -240,7 +250,7 @@ remove the split-submission conflict risk: rebase each subsystem series on
 the receiving tree before posting, especially 0002/0003 (ARM core) and the
 net/ethernet/hisilicon trio.
 
-## 8. Why the series files are numbered 0001-0017
+## 8. Why the series files are numbered 0001-0018
 
 The four-digit filenames under `series/` are a consolidated review form and
 are not the numbering a maintainer will see.  A real submission renumbers
@@ -251,7 +261,48 @@ per subsystem series and always puts bindings before drivers:
     ...
 
 The `series/NNNN-*.patch` files are format-patch style with
-`[PATCH NN/17]` subjects so that `git am` reproduces the commit subjects
+`[PATCH NN/18]` subjects so that `git am` reproduces the commit subjects
 and messages exactly; the mapping table in 01-commit-messages.md maps each
 file back to its source patch in
 `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/`.
+## 9. SMP staging (patch 0018) - UP-first vs attended
+
+Patch 0018 is the only patch in the series that can bring up a second
+core, and it is deliberately staged outside the UP-first mergeable set
+(00-cover-letter.md scope item 5, 01-commit-messages.md group 5).  The
+decision is made in the devicetree, not by the kernel patch: without a
+matching `/cpus/enable-method` the method cannot bind, the code stays
+inert and the platform boots UP.
+
+**S1 - UP-first (no SMP claim).**  Keep 0018 in the series but do not
+enable it: drop the one-line `/cpus/enable-method = "hisilicon,luofu-smp"`
+hunk from the board DTS (the hunk lives in the target's DTS, not in this
+kernel series), and for an upstream DTS submission ship a single
+`cpu@0` node.  The failure mode to avoid is known from the bench: on
+5.10, two DT CPUs with no matching method left both CPUs marked possible,
+CPU1 never came up, and the box faulted in the scheduler about 14 s into
+userspace, while `maxcpus=1` was stable (parent ledger 2026-10-12,
+phases 81/82) [V].  The same shape on 6.18 (two CPU nodes, no matching
+method) cannot boot CPU1 either [I] - so S1 needs the hunk dropped and,
+upstream, a single cpu@0 node.  The current consolidated form describes
+the S2 end state, not S1.
+
+**S2 - attended bring-up (the acceptance gate).**  Add the
+enable-method (and `cpu@1`) and run single-variable fires with the
+recovery door armed and the UART capture read-only.  Acceptance is the
+SMP-RE.md section 8 list: "smp: Brought up ... 2 CPUs" in the boot log,
+both processors in /proc/cpuinfo, per-CPU timer/IPI activity in
+/proc/interrupts, a >=10 minute soak, the pen/resume registers read back
+before and after the release, one repeat cold boot and the recovery path
+re-verified.  The physical semantics of the release remain [U]: the
+pen-word consumer, the CRG resume-bit function and the SCU pre-state have
+not been measured.
+
+Why the values are driver data and not DT properties: pen offset 0xc00,
+resume offset 0x38 and the per-core resume bit numbers are
+vendor-private, undocumented values.  Exposing them would add unmeasured
+properties to the otherwise reviewable luofu bindings, while the
+existing SYSCTRL/CRG syscon nodes already provide the two pages
+(SMP-RE.md section 5.5).  No CPU hotplug is advertised:
+`CONFIG_HOTPLUG_CPU` stays off, matching the vendor operations table
+(SMP-RE.md sections 3.2 and 7.5).

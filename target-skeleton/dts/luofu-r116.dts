@@ -151,12 +151,13 @@
 		#size-cells = <0>;
 
 		/*
-		 * TODO(smp): the vendor DT uses
-		 * enable-method = "hisilicon,hsan_smp" (pen/smc release path);
-		 * there is no mainline smp_ops for it, so the draft is UP-only
-		 * and has no enable-method. Add "hisilicon,luofu-smp" only with
-		 * the platsmp port and its binding (TARGET-DESIGN.md 6.2, 7.1).
+		 * SMP release path, decoded from the vendor's private
+		 * "hisilicon,hsan_smp" method (SYSCTRL pen word at 0xc00, CRG
+		 * resume word at 0x38, then the wakeup IPI). TARGET-DESIGN.md
+		 * 6.2 and 7.1; driver patches-6.18/018, evidence SMP-RE.md.
+		 * A devicetree without this property boots UP.
 		 */
+		enable-method = "hisilicon,luofu-smp";
 
 		cpu@0 {
 			device_type = "cpu";

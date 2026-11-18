@@ -1,7 +1,7 @@
 From 5dcb27b074cf3447b0a2ffae3862ccfa629e137d Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 08/17] net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+Subject: [PATCH 08/18] net: phy: add driver for HiSilicon Luofu "Genius" PHYs
 
 Add a PHYLIB driver for the HiSilicon "Genius" clause 22 PHYs (PHY ID
 0x20669a00, mask 0xffffff00) behind the internal switch of the Hi5671Y
