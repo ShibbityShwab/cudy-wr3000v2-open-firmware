@@ -12,13 +12,16 @@
 > view is [`docs/ROADMAP-OPENWRT.md`](docs/ROADMAP-OPENWRT.md), the GPL request status/follow-up is
 > [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the optional hybrid vendor-lane feasibility
 > spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md). These are designs and
-> schematics, not a working target: **no OpenWrt target, board DTS, image recipe or driver series
-> has been built or tested yet.** The first-pass files are in
+> schematics, not a working target: **no image, driver series or boot exists yet** (the draft
+> target's kernel does compile - see the next paragraph). The first-pass files are in
 > [`target-skeleton/`](target-skeleton/README.md) (status UNTESTED/SCHEMATIC), indexed by
-> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md); its target layout was accepted by
-> OpenWrt main's `make defconfig` and `make target/linux/prepare` (no compile/image/boot - see
-> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md)), and the FIP trailer format is decoded with
-> a byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)).
+> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target layout was accepted by
+> OpenWrt main's `make defconfig` and `make target/linux/prepare`; the draft kernel patch series
+> (including the 2026-11-18 early-boot `TEXT_OFFSET` fix) now builds the full `linux-6.18.60`
+> kernel with OpenWrt's own GCC 14.4.0 toolchain and the correct `0x80608000` load/entry address,
+> **but no target image, FIP trailer, rootfs or boot exists** - see
+> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md). The FIP trailer format is decoded with a
+> byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)).
 
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,

@@ -5,14 +5,16 @@
 > This directory contains a first-pass, reviewable **shape** of the OpenWrt target
 > files described in [TARGET-DESIGN.md](../docs/TARGET-DESIGN.md) sections 4-6.
 > It has been exercised against `openwrt main` (`27663a0`) at the target-metadata,
-> kernel-prepare and kernel-config stages, and the machine code in the draft kernel
-> patch series compiles there (2026-11-18 - see [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)).
-> **No kernel has been built with the OpenWrt toolchain, no image exists, and
-> nothing here has ever run on a router.** The only executable artifact is
-> `tools/fip-slice.py`, and its safe path is the read-only `check` mode. The design
-> these files encode is not accepted upstream, no driver series, image recipe or
-> device page exists yet, and there is no device page. **Do not read this directory
-> as upstream progress.**
+> kernel-prepare, kernel-config and kernel-compile stages: the draft patch series,
+> including the 2026-11-18 early-boot `TEXT_OFFSET` fix (`003`), builds the full
+> `linux-6.18.60` kernel with the tree's own OpenWrt GCC 14.4.0 toolchain and the real
+> `0x80608000` load/entry address (2026-11-18 - see
+> [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)). **No image exists, no trailer or
+> rootfs was built, and nothing here has ever run on a router.** The only executable
+> artifact is `tools/fip-slice.py`, and its safe path is the read-only `check` mode.
+> The design these files encode is not accepted upstream, no driver series, image
+> recipe or device page exists yet, and there is no device page. **Do not read this
+> directory as upstream progress.**
 >
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
@@ -42,9 +44,10 @@ Everything here is marked one of:
 | `target/linux/hisilicon/Kconfig` | review stub: the kernel platform Kconfig bits the target needs (documented, not applied) plus two target build options (**SCHEMATIC**; OpenWrt targets normally have no such file - see the header) | `target/linux/hisilicon/` only after upstream review; the platform symbols belong in the kernel patch `arch/arm/mach-hisilicon/Kconfig` |
 | `target/linux/hisilicon/luofu/target.mk` | subtarget: board name, `CPU_TYPE:=cortex-a9`, NAND feature, package sketch (**SCHEMATIC**) | `target/linux/hisilicon/luofu/target.mk` |
 | `target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch` | draft kernel machine support: new `arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c}`; `ARCH_LUOFU` (under the existing upstream `ARCH_HISI`), clean UP-only DT machine descriptor for `hisilicon,luofu-r116`/`hisilicon,luofu`, documented TODO for the `cudy,wr3000-v2` compat, SMP, restart and the L2 AUX replay. **Applies cleanly in the 6.18 tree and the machine object compiles**; never upstreamed, never booted. | `target/linux/hisilicon/patches-<ver>/` |
-| `target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch` | draft core ARM integration: source the new mach Kconfig from `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon`, `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` (load-address derivation, TARGET-DESIGN.md 3.2/5.2). Applies cleanly; the textofs value **does not compile in stock 6.18** - see SKELETON-SMOKE.md blocker 1. | same |
+| `target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch` | draft core ARM integration: source the new mach Kconfig from `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon`, `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` (load-address derivation, TARGET-DESIGN.md 3.2/5.2). Applies cleanly; compiles together with patch `003` below, which makes the non-immediate offset assemble. | same |
+| `target/linux/hisilicon/patches-6.18/003-arm-textofs-nonimmediate.patch` | draft core ARM early-boot fix (2026-11-18): replaces the four `#TEXT_OFFSET` ARM immediates (`arch/arm/kernel/head.S` stext + `pgtbl` macro, `arch/arm/boot/compressed/head.S` two sites) with the kernel's portable `mov_l` constant macro, so the required `0x00608000` text offset assembles (ARM can only encode an 8-bit rotated immediate). Applies cleanly; **full kernel compile RC=0**; load/entry verified at `0x80608000` from the built artifacts. Not reviewed upstream. | same |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / unmarked oldconfig resolution); idempotent under a second run. It enables `ARCH_HISI`+`ARCH_LUOFU`, the machine code and a partial kernel build succeed; **the kernel build stops on the `TEXT_OFFSET` blocker and nothing boots** | same |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / unmarked oldconfig resolution); idempotent under a second run. It enables `ARCH_HISI`+`ARCH_LUOFU`; with patches `001`-`003` the **full kernel now compiles** (RC=0, 2026-11-18 third session) and nothing boots | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
@@ -234,9 +237,12 @@ in `arch/arm/Makefile`, so the platform patch must set
     uImage ih_load == ih_ep == (loader_stage & 0xf8000000) + TEXT_OFFSET
 
 The lab hit a link-address defect by not doing this (TARGET-DESIGN.md section 3.2;
-ledger PHASE 93-100). This skeleton's image Makefile names the derivation and
-`tools/fip-slice.py assemble --loader-stage/--text-offset` asserts it; the real build
-wiring is still TODO.
+ledger PHASE 93-100). Patch `003` (section 4) makes the kernel boot code materialize
+this non-immediate `TEXT_OFFSET` (`mov_l`) so the linker `textofs` contract and the
+`0x80608000` derivation hold in a real build; with `001`-`003` the full kernel compiles
+and `System.map` gives `_text = 0xc0608000`. This skeleton's image Makefile names the
+derivation and `tools/fip-slice.py assemble --loader-stage/--text-offset` asserts it;
+the real build wiring is still TODO.
 
 ---
 
@@ -250,7 +256,8 @@ They are not a drop-in target. The mapping is:
     │   ├── Kconfig                             │   ├── Kconfig
     │   ├── patches-6.18/                       │   ├── patches-6.18/
     │   │   ├── 001-arm-mach-hisilicon-luofu.patch
-    │   │   └── 002-arm-kconfig-textofs.patch
+    │   │   ├── 002-arm-kconfig-textofs.patch
+    │   │   └── 003-arm-textofs-nonimmediate.patch
     │   └── luofu/                              │   └── luofu/
     │       ├── target.mk                       │       ├── target.mk
     │       ├── config-<release>                │       ├── config-5.10  (5.10 reference)
@@ -276,9 +283,14 @@ is `patches-6.18/`:
 - `002` wires it into core ARM: `source "arch/arm/mach-hisilicon/Kconfig"` in
   `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon` and
   `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000` in `arch/arm/Makefile`. The textofs
-  value is required by the load-address derivation (section 3.4) but it does **not**
-  compile in stock 6.18 - see blocker 1 in SKELETON-SMOKE.md.
-- No `003-arm-dts-makefile.patch`: the board DTS is delivered through the target's
+  value is required by the load-address derivation (section 3.4); on its own it does
+  not compile in stock 6.18 (the value is not an ARM immediate) - see `003`.
+- `003` makes that non-immediate text offset assemble in the early boot code: it
+  replaces the four `#TEXT_OFFSET` immediates with the kernel's portable `mov_l`
+  constant macro (`movw`/`movt` on ARMv7; literal load on pre-ARMv7), keeping the
+  linker `textofs` contract and the load address unchanged. With `001`-`003` the full
+  kernel compiles; details and evidence in SKELETON-SMOKE.md (third session).
+- No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
 
@@ -315,7 +327,8 @@ Checked on the author's host on 2026-11-18, nothing more:
 - **OpenWrt main smoke test (2026-11-18)**: copied into `openwrt main` (commit
   `27663a0`), `make defconfig` PASS (generated
   `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`) and
-  `make target/linux/prepare` RC=0 (kernel 6.18.60). No compile/image/boot. Details:
+  `make target/linux/prepare` RC=0 (kernel 6.18.60). No image/boot at that stage; the
+  full kernel compile came later the same day (third bullet below). Details:
   [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
 - **Kernel patch series + config re-derivation (2026-11-18, host-only)**: both draft
   patches apply cleanly to `linux-6.18.60` in the same `openwrt main` clone
@@ -326,17 +339,30 @@ Checked on the author's host on 2026-11-18, nothing more:
   `luofu/config-6.18` delta - `ARCH_HISI=y`, `ARCH_LUOFU=y`, ARMv7/LE/VFP, 281
   symbols - and a second run was byte-identical. The machine object
   `arch/arm/mach-hisilicon/luofu.o` **compiles** with that toolchain and its
-  `DT_MACHINE_START` entry is in the object. With that toolchain
-  **`make target/linux/compile` fails on ONE blocker**: stock
-  `arch/arm/kernel/head.S` cannot encode `#TEXT_OFFSET = 0x00608000` as an ARM
-  immediate - patch-specific; the clean core patch is **not written**. An earlier pass
-  with the bench GCC 11.3 also hit 94 `retain`-attribute errors under
-  `CONFIG_WERROR`; that was the unsupported compiler and is gone with the tree's GCC
-  14.4. A local, **non-delivered** workaround (kernel-`.config` `CONFIG_WERROR` off +
-  `TEXT_OFFSET=0x00008000`) built a 3,205,816-byte zImage; that proves the rest of the
-  patch/config builds but is **not** a bootable image and is **not** evidence that the
-  target works. Exact commands, errors and logs:
-  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
+  `DT_MACHINE_START` entry is in the object. At that point `make target/linux/compile`
+  stopped on ONE blocker: stock `arch/arm/kernel/head.S` cannot encode
+  `#TEXT_OFFSET = 0x00608000` as an ARM immediate. An earlier pass with the bench GCC
+  11.3 also hit 94 `retain`-attribute errors under `CONFIG_WERROR`; that was the
+  unsupported compiler and is gone with the tree's GCC 14.4. A local, **non-delivered**
+  workaround (kernel-`.config` `CONFIG_WERROR` off + `TEXT_OFFSET=0x00008000`) built a
+  3,205,816-byte zImage; that proved the rest of the patch/config builds but was **not**
+  a bootable image and **not** evidence that the target works. Exact commands, errors
+  and logs: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
+- **`TEXT_OFFSET` fix + full kernel compile (2026-11-18, third host-only session)**:
+  patch `003` (section 4) makes the non-encodable `0x00608000` assemble via `mov_l`.
+  In the same clone, with the kernel build tree removed so it is a clean build,
+  `make target/linux/prepare` RC=0 and `make target/linux/compile V=s -j16` **RC=0**
+  with the tree's own OpenWrt GCC 14.4.0 toolchain (`CONFIG_WERROR=y`; no make
+  override): `arch/arm/boot/zImage`, 3,205,200 B, sha256
+  `45ad00d502ed7b2386f83db794e9015267f4f9d66de8d0deaab8aca24cf18d10`. `System.map`
+  gives `_text = 0xc0608000` / `swapper_pg_dir = 0xc0604000`, and the linked early
+  boot code contains the `movw/movt` `0x00608000` materialization at all four sites;
+  the load/entry derivation is `(0x83200000 & 0xf8000000) + 0x00608000 = 0x80608000`,
+  i.e. the image recipe's `mkimage -a 0x80608000 -e 0x80608000` is unchanged. **This
+  is a compile product, not an image**: no FIP trailer, no rootfs, no boot. Evidence
+  is local-only under
+  `build/linux-kbuild/waves/upstream-6.18-textoffset-20261118/`; exact disassembly,
+  hashes and derivation: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host. dtc emits
   exactly one expected warning: `unique_unit_address: /clock-reset-controller@14880000
   duplicate unit-address (also used in node /watchdog@14880000)` - that is the
@@ -349,10 +375,11 @@ Checked on the author's host on 2026-11-18, nothing more:
   draft patch series compiles (above), but the target's own image recipe has never been
   built, imaged or booted, and the Kconfig stub/profile file are not used by main.
 
-**Not done, and not claimed:** no kernel image with the correct text offset/load
-address, no image build, no boot, no device interaction, no UART, no bench tool run, no
-driver/binding review. (The tree's own toolchain was built and a kernel compile was
-attempted in the canonical run; it stops at the documented `TEXT_OFFSET` blocker.)
+**Not done, and not claimed:** no target image (no uImage/FIP slice and no rootfs), no
+trailer assembled into a slice, no boot, no device interaction, no UART, no bench tool
+run, no driver/binding review, no `dtbs_check`. The zImage produced by the compile stage
+is an intermediate build product with the correct `TEXT_OFFSET`/load-address derivation;
+it is not a deliverable image and has never been loaded on hardware.
 
 ---
 
@@ -382,18 +409,18 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
    mac80211 and the firmware is closed (TARGET-DESIGN.md section 8.3).
 10. **Publication sequence** - history purge before any of this can point at a public
     tree.
-11. **TEXT_OFFSET is not an ARM immediate** - `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000`
-    (required by the load-address derivation) is used with `#TEXT_OFFSET` in
-    `arch/arm/kernel/head.S` (two sites, incl. the `pgtbl` macro) and
-    `arch/arm/boot/compressed/head.S` (two sites); the assembler rejects it
-    (`invalid constant (608000) after fixup`). A clean core patch (literal-pool loads)
-    is **not written**; it blocks compilation of the whole kernel and therefore the
-    first real build.
-12. **OpenWrt toolchain** - RESOLVED for the canonical derivation/compile: the tree's
-    own GCC 14.4.0 toolchain was built from source by `make kernel_oldconfig`
-    (~13.5 minutes) and used both for the committed `config-6.18` and for the compile
-    stage; the earlier GCC 11.3 `retain`/`CONFIG_WERROR` failure is gone. What remains
-    for a first real kernel build is blocker 11 (`TEXT_OFFSET`), not the toolchain.
+11. **TEXT_OFFSET is not an ARM immediate** - **RESOLVED 2026-11-18 (third host-only
+    session)** by `patches-6.18/003-arm-textofs-nonimmediate.patch`: the four
+    `#TEXT_OFFSET` immediates (`arch/arm/kernel/head.S` stext + `pgtbl` macro,
+    `arch/arm/boot/compressed/head.S` two sites) now materialize the constant with
+    `mov_l`. The full kernel compiles (RC=0) with `0x00608000` and the load/entry
+    derivation still resolves to `0x80608000` (section 5; SKELETON-SMOKE.md third
+    session). The patch is not reviewed upstream; no offset change was made.
+12. **OpenWrt toolchain** - RESOLVED: the tree's own GCC 14.4.0 toolchain was built
+    from source by `make kernel_oldconfig` (~13.5 minutes) and used for the committed
+    `config-6.18`, the failed pre-fix compile and the successful post-fix full kernel
+    compile; the earlier GCC 11.3 `retain`/`CONFIG_WERROR` failure is gone. The
+    toolchain is no longer a blocker for the kernel build.
 
 Skeleton-specific findings recorded while writing the files:
 
@@ -430,9 +457,10 @@ Skeleton-specific findings recorded while writing the files:
   drivers of other Hisilicon SoCs (`default ARCH_HISI` in their Kconfig). The
   re-derived config marks them `[D-default]`; they should be pruned or the defaults
   tightened before submission.
-- **003-arm-dts-makefile not needed**: the target delivers the board DTS through
+- **No arm-dts Makefile patch needed**: the target delivers the board DTS through
   `dts/` + `DEVICE_DTS_DIR := ../dts`; a parallel `arch/arm/boot/dts` entry would be
-  the hand-maintained duplicate the design forbids.
+  the hand-maintained duplicate the design forbids. (The `003` slot in
+  `patches-6.18/` is the TEXT_OFFSET boot-code fix, not a DTS patch.)
 
 ---
 
@@ -447,9 +475,12 @@ Skeleton-specific findings recorded while writing the files:
   published `TARGET-DESIGN.md`/`phase42-decode` analysis.
 - No false buildability: every file says SCHEMATIC/UNTESTED, and this README states
   plainly what did and did not build. What exists: the patches apply, the config
-  re-derives and the machine object compiles (2026-11-18, section 5). What does not:
-  the OpenWrt toolchain build, the image, and any boot. An evidence-only local zImage
-  (with two workarounds, in the local clone) is not a target build and is not shipped.
+  re-derives, and the full kernel compiles with the tree's own OpenWrt GCC 14.4.0
+  toolchain and the correct `0x80608000` load-address derivation (2026-11-18, section 5;
+  third-session evidence in SKELETON-SMOKE.md). What does not: any image (FIP slice,
+  trailer, rootfs) and any boot. The zImage from that compile is an intermediate build
+  product, not a target image; the earlier evidence-only workaround zImage is superseded
+  and nothing is shipped.
 - The publication caveat stands: the `opensource/` submodule is **NOT READY** until
   the history purge in [PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md) is done.
 

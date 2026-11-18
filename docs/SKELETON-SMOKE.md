@@ -1,14 +1,18 @@
 # Target-skeleton smoke test (2026-11-18)
 
-**Status: structure accepted by OpenWrt main; kernel patch series applies and the
-config re-derives with the tree's own OpenWrt GCC 14.4 toolchain; the machine code
-compiles; the full kernel build is blocked by one documented platform-patch defect
-(`TEXT_OFFSET`). Nothing imaged or booted.**
+**Status: structure accepted by OpenWrt main; the kernel patch series (including the
+2026-11-18 early-boot `TEXT_OFFSET` fix, patch `003`) applies; the config re-derives
+with the tree's own OpenWrt GCC 14.4 toolchain; and `make target/linux/compile` now
+completes RC=0, producing `arch/arm/boot/zImage` with the correct `0x80608000`
+load/entry address. Nothing imaged or booted: no FIP trailer, no rootfs, no boot, no
+driver series.**
 
 This page records the host-side validation of [`target-skeleton/`](../target-skeleton/README.md)
-against a real OpenWrt tree (two sessions on 2026-11-18: the target-layout smoke test
-below, and the kernel patch/config session appended at the end). It is not a build
-result and must not be cited as one.
+against a real OpenWrt tree (three sessions on 2026-11-18: the target-layout smoke test
+below, the kernel patch/config session, and the `TEXT_OFFSET` + full-kernel-compile
+session appended at the end). It is not a target build result and must not be cited as
+one: the only build it records is the kernel compile product itself, with no image,
+trailer, rootfs or boot.
 
 ## Environment
 
@@ -106,6 +110,12 @@ items 3-5 remain.)
 tree's own OpenWrt GCC 14.4.0 toolchain (idempotent); the new machine code compiles with
 that toolchain; the full kernel build is blocked by ONE platform-patch defect (the
 non-immediate `TEXT_OFFSET`). No image, no boot. Publication NOT READY.**
+
+> **Update (third session, same day, below):** the compile blocker described in this
+> section (the non-immediate `TEXT_OFFSET`) is fixed by patch `003`; the full kernel
+> compile now reaches RC=0 and produces `zImage` with load/entry `0x80608000`. Every
+> other statement in this section (config derivation, patch application, no image, no
+> boot) still stands. See the third-session section at the end.
 
 Second host-side session against the same clone: `openwrt main` `27663a0`,
 `linux-6.18.60`, no feeds updated, no device. The first pass derived the config with a
@@ -335,10 +345,10 @@ same problem at `arch/arm/boot/compressed/head.S:312` (`add r4, r0, #TEXT_OFFSET
 derivation (the stock loader stages the slot at `0x83200000` and the kernel must land
 at `0x80608000`; TARGET-DESIGN.md sections 3.2/5.2), so it cannot simply be changed to
 an encodable value. The lab tree patched these files as bench edits (TARGET-DESIGN.md
-section 7.2 lists them as edits that must be reworked); the **clean core patch is not
-written**: it needs literal-pool loads (`ldr rX, =TEXT_OFFSET`) in both files with a
-spare scratch register, and upstream review for early-boot assembly. This blocks the
-whole kernel build, not just the luofu machine.
+section 7.2 lists them as edits that must be reworked). At the time of this session the
+clean core patch had not been written; it was written later the same day as patch `003`
+(third session below), using `mov_l` (portable constant materialization) at all four
+sites. Without it the failure blocks the whole kernel build, not just the luofu machine.
 
 **Blocker 2 - GNU GCC 11.3 vs `retain` + `CONFIG_WERROR` (environment, not the
 patch):**
@@ -422,8 +432,9 @@ READY.
 ### Remaining blockers
 
 1. `TEXT_OFFSET=0x00608000` non-immediate core patch (4 assembly sites; see Stage 3) -
-   the only compile blocker for the kernel with this platform textofs; pending a clean
-   early-boot assembly patch and upstream review.
+   the only compile blocker for the kernel with this platform textofs. **FIXED in the
+   third session below** by `patches-6.18/003-arm-textofs-nonimmediate.patch` (mov_l);
+   upstream review of that patch is still pending.
 2. Driver + dt-binding series (watchdog, CRG, thermal, pinctrl, FMC, MDIO/PHY/GEMAC,
    switch, PCIe) - nothing exists; hidden 6.18 symbols must be selected by the new
    drivers.
@@ -431,4 +442,143 @@ READY.
    them).
 4. Image recipe/trailer/sysupgrade/install path and the A/B selector (TARGET-DESIGN.md
    5.2-5.5), `dtbs_check`, and then one attended boot - none attempted here.
+
+---
+
+## 2026-11-18 (third session): early-boot `TEXT_OFFSET` fix + full kernel compile
+
+**Status: the kernel compiles end-to-end. With the new core patch `003`, the canonical
+OpenWrt stages (`make target/linux/prepare`, `make target/linux/compile -j16`) reach
+RC=0 using the tree's own OpenWrt GCC 14.4.0 toolchain, `arch/arm/boot/zImage` is
+produced (3,205,200 B), and the built early boot code carries the real
+`TEXT_OFFSET = 0x00608000` / load address `0x80608000` with no make-command-line
+override. **No image, no FIP trailer, no rootfs, no boot, no driver series. Publication
+NOT READY.** Host-only, same clone (`openwrt main` `27663a0`, `linux-6.18.60`);
+evidence logs are local-only under
+`build/linux-kbuild/waves/upstream-6.18-textoffset-20261118/` and this repository
+contains none of them.
+
+### The defect (recap from Stage 3 / blocker 1)
+
+`#TEXT_OFFSET` is used as an ARM immediate in four places:
+`arch/arm/kernel/head.S:123` (`sub r8, r8, #TEXT_OFFSET`, PHYS_OFFSET recovery),
+`arch/arm/kernel/head.S:68` (the `pgtbl` macro's `add \rd, \phys, #TEXT_OFFSET`,
+expanded at `:188`) and `arch/arm/boot/compressed/head.S:312` / `:410` (the
+decompressor's final-kernel-address computation and the ATAG-to-DTB fallback). ARM
+immediates are an 8-bit value rotated by an even number of bits; `0x00608000` (bits 22,
+21 and 15 set) is not encodable, so the assembler reports
+`invalid constant (608000) after fixup`. The value itself is required by the image
+design: the stock loader stages the slot at `0x83200000`, and
+`(0x83200000 & 0xf8000000) + 0x00608000 = 0x80608000`, the bench-proven kernel
+load/entry address (TARGET-DESIGN.md 3.2; skeleton README 3.4).
+
+### Chosen approach (option (a)): make the offset work in the boot code
+
+New patch `target/linux/hisilicon/patches-6.18/003-arm-textofs-nonimmediate.patch`,
+sha256 `407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c`. It replaces
+each immediate with the kernel's own portable constant-move macro `mov_l`
+(`arch/arm/include/asm/assembler.h`): `movw`+`movt` on ARMv7 (no literal pool, no
+relocation), `ldr dst, =imm` on older CPUs. `mov_l` is already used in
+`arch/arm/kernel/head.S` itself (`secondary_startup`), so no new abstraction is
+introduced. The alternative (option (b)) - changing `textofs` to an encodable value
+such as `0x00800000` (load `0x80800000`) - was rejected on evidence: it would
+invalidate the only bench-derived kernel-slot address identity and require a new
+attended boot to re-establish the address story, while option (a) keeps the proven
+`0x80608000` contract and changes nothing loader-facing. Patch `002` and
+`image/luofu.mk` are therefore unchanged.
+
+### Exact commands and pass/fail
+
+Baseline (before the fix) reproduced in the same clone:
+
+```
+$ cd /home/shibbityshwab/openwrt-lab
+$ make target/linux/compile V=s -j16
+  AS      arch/arm/kernel/head.o
+arch/arm/kernel/head.S:123: Error: invalid constant (608000) after fixup
+arch/arm/kernel/head.S:188: Error: invalid constant (608000) after fixup
+...
+RC=2
+```
+
+After copying the three patches and the config into the clone target directory, the
+kernel build tree was removed (clean build, no stale workaround objects) and:
+
+```
+$ make target/linux/prepare
+RC=0                                    # no .rej/.orig; patch 003 applied
+$ make target/linux/compile V=s -j16
+...
+  AS      arch/arm/kernel/head.o
+  AS      arch/arm/boot/compressed/head.o
+  LD      arch/arm/boot/compressed/vmlinux
+  OBJCOPY arch/arm/boot/zImage
+  Kernel: arch/arm/boot/zImage is ready
+time: target/linux/compile#1179.62#72.37#104.27
+RC=0
+```
+
+- toolchain used: `arm-openwrt-linux-muslgnueabi-gcc (OpenWrt GCC 14.4.0
+  toolchain-c0e63334e4) 14.4.0` (the tree's own).
+- `CONFIG_WERROR=y` in the kernel `.config` - no WERROR workaround.
+- both `.head.o.cmd` carry `-DTEXT_OFFSET=0x00608000` from patch `002`; no
+  `TEXT_OFFSET=` or `KERNEL_CROSS=` make override was used.
+- `arch/arm/boot/zImage`: **3,205,200 bytes**, sha256
+  `45ad00d502ed7b2386f83db794e9015267f4f9d66de8d0deaab8aca24cf18d10`.
+- an incremental relink of the same tree reproduced the same zImage byte-for-byte.
+
+### Address story verified from the built artifacts
+
+- `System.map`: `_text = stext = 0xc0608000`, `swapper_pg_dir = 0xc0604000`,
+  `_stext = 0xc0700000`; `CONFIG_PAGE_OFFSET=0xC0000000`.
+- the four patched sites in the linked code are `movw/movt` pairs:
+  - `vmlinux 0xc0608050`: `movw r5,#0x8000; movt r5,#0x60; sub r8,r8,r5`, preceded
+    by the PC-relative `adr_l r8,_text`, so at run time r8 is the physical `_text`
+    and the subtraction yields PHYS_OFFSET;
+  - `vmlinux 0xc060808c` (`__create_page_tables`): `movw r4,#0x8000;
+    movt r4,#0x60; add r4,r4,r8; sub r4,r4,#0x4000`, so the initial page tables land
+    0x4000 below the final kernel address;
+  - decompressor `0xd4`: `movw r4,#0x8000; movt r4,#0x60; add r4,r0,r4` with
+    `r0 = pc & 0xf8000000` - precisely the `(pc & 0xf8000000) + TEXT_OFFSET`
+    computation;
+  - decompressor `0x18c`: `movw r0,#0x8000; movt r0,#0x60; sub r0,r4,r0`.
+- the built zImage's own `.table` (file offset 0x69ec) carries `0x00608000` as its
+  TEXT_OFFSET field.
+- derivation check: `0x83200000 & 0xf8000000 = 0x80000000`; `+ 0x00608000` =
+  **0x80608000** = physical `_text` (`0xc0608000 - 0xc0000000 + 0x80000000`).
+- therefore the image recipe's values are unchanged:
+  `mkimage -A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000`, with
+  `ih_load == ih_ep == (loader_stage & 0xf8000000) + TEXT_OFFSET == 0x80608000`.
+- portability check: re-assembling the same patched sources with
+  `-D__LINUX_ARM_ARCH__=6` (the `ldr` literal branch of `mov_l`) also assembles and
+  pools the new `0x00608000` literal in the existing literal pools. The target config
+  (`CONFIG_CPU_V7`) takes the `movw/movt` branch.
+
+### What this proves and what it does not
+
+Proven (host-only): the patch series plus the canonical config build the whole 6.18
+kernel with OpenWrt's own GCC 14.4.0 toolchain and with the real, non-encodable
+`TEXT_OFFSET`; the produced boot code materializes `0x00608000` correctly and the
+load/entry derivation is `0x80608000`; there is no locally applied build workaround.
+
+Still not proven (and not attempted): no target image, no FIP trailer, no rootfs, no
+sysupgrade container, no `platform.sh`, no `dtbs_check`, no SMP, no restart driver,
+no boot, no device interaction, no driver series. The zImage is an intermediate
+`target/linux/compile` product, not a deliverable image, and it has never been loaded
+on hardware. Publication remains NOT READY; patch `003` has not been reviewed upstream.
+
+### Remaining blockers (updated)
+
+1. Driver + dt-binding series (watchdog, CRG, thermal, pinctrl, FMC, MDIO/PHY/GEMAC,
+   switch, PCIe) - nothing exists.
+2. Image recipe wiring: FIP trailer generation into the slice, UBI rootfs, sysupgrade
+   wrapper/manifest, `platform.sh` + A/B selector (TARGET-DESIGN.md 5.2-5.5).
+3. `dtbs_check`/binding review of the draft DTS, and prune/tighten the 12
+   `[D-default]` other-SoC Hisilicon drivers.
+4. Upstream review/submission of patches `001`-`003`, then one attended boot of a
+   full image.
+
+Evidence: local-only `build/linux-kbuild/waves/upstream-6.18-textoffset-20261118/`
+(`00-README.md` indexes the baseline/fix logs, disassembly, hashes and the derivation);
+it is gitignored and none of it is in this repository.
 

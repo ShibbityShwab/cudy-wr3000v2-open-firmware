@@ -1,0 +1,50 @@
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -64,8 +64,14 @@
+ 	.long	0
+ 	.popsection
+ 
++	/*
++	 * TEXT_OFFSET is platform specific and may not be encodable as an
++	 * ARM immediate.  mov_l materializes an arbitrary 32-bit constant:
++	 * movw/movt on ARMv7 and later, a literal load on older CPUs.
++	 */
+ 	.macro	pgtbl, rd, phys
+-	add	\rd, \phys, #TEXT_OFFSET
++	mov_l	\rd, TEXT_OFFSET
++	add	\rd, \rd, \phys
+ 	sub	\rd, \rd, #PG_DIR_SIZE
+ 	.endm
+ 
+@@ -120,7 +126,8 @@
+ 
+ #ifndef CONFIG_XIP_KERNEL
+ 	adr_l	r8, _text			@ __pa(_text)
+-	sub	r8, r8, #TEXT_OFFSET		@ PHYS_OFFSET
++	mov_l	r5, TEXT_OFFSET		@ not necessarily an immediate
++	sub	r8, r8, r5			@ PHYS_OFFSET
+ #else
+ 	ldr	r8, =PLAT_PHYS_OFFSET		@ always constant in this case
+ #endif
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -309,7 +309,8 @@
+ 1:
+ #endif /* CONFIG_USE_OF */
+ 		/* Determine final kernel image address. */
+-		add	r4, r0, #TEXT_OFFSET
++		mov_l	r4, TEXT_OFFSET
++		add	r4, r0, r4
+ #else
+ 		ldr	r4, =zreladdr
+ #endif
+@@ -407,7 +408,8 @@
+ 		 * of RAM and hope for the best.
+ 		 */
+ 		cmp	r0, #1
+-		sub	r0, r4, #TEXT_OFFSET
++		mov_l	r0, TEXT_OFFSET
++		sub	r0, r4, r0
+ 		bic	r0, r0, #1
+ 		add	r0, r0, #0x100
+ 		mov	r1, r6
