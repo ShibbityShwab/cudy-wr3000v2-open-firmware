@@ -13,7 +13,11 @@
 > [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the optional hybrid vendor-lane feasibility
 > spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md). These are designs and
 > schematics, not a working target: **no image, driver series or boot exists yet** (the draft
-> target's kernel does compile - see the next paragraph). The first-pass files are in
+> target's kernel does compile; the full 001-017 series, a host-built target image and an A/B
+> install path now exist as host-validated drafts, and the review-form submission series with
+> cover letter/commit messages/MAINTAINERS proposal is
+> [`upstream/series-6.18/`](upstream/series-6.18/README.md) - but nothing has been booted/flashed
+> and several drivers are refusing drafts). The first-pass files are in
 > [`target-skeleton/`](target-skeleton/README.md) (status UNTESTED/SCHEMATIC), indexed by
 > [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target layout was accepted by
 > OpenWrt main's `make defconfig` and `make target/linux/prepare`; the draft kernel patch series

@@ -1,0 +1,83 @@
+From 7f4d6ee0347564693d07add1a1cb8b0a818e2db2 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 14/17] clk: hisilicon: fix Luofu CRG reset polarity
+
+The reset class of the luofu CRG page is active-low: a reset line is
+released by SETTING its bit and driven into reset by CLEARING it.  The
+initial CRG driver implemented the opposite, so reset_control_deassert()
+from any consumer would have asserted the line instead of releasing it.
+
+The polarity is measured, not assumed: the live census of 0x14880034
+reads 0x000ff309 with both PCIe root complexes up, i.e. the four RC0
+reset bits are set in the released state.  Swap the two operations in
+luofu_crg_reset_set() and invert reset_control_status() accordingly.
+
+This fixes the FMC, MDIO/GEMAC and PCIe consumers.  They all use the
+standard reset API and need no change.
+
+Host-compiled against linux-6.18.60; the polarity itself was measured on
+the vendor kernel, but this driver has never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ drivers/clk/hisilicon/crg-luofu.c                  |   14 ++++++++++++--
+ .../bindings/clock/hisilicon,luofu-crg.yaml        |    7 +++++++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/hisilicon/crg-luofu.c b/drivers/clk/hisilicon/crg-luofu.c
+--- a/drivers/clk/hisilicon/crg-luofu.c
++++ b/drivers/clk/hisilicon/crg-luofu.c
+@@ -187,6 +187,15 @@
+ 	}
+ }
+ 
++/*
++ * The reset class of the CRG page (the vendor hi_kreset shape) is ACTIVE-LOW:
++ * the bit is SET when the line is released (deasserted) and CLEARED to drive
++ * the line into reset. This is measured, not assumed: the live census of
++ * 0x14880034 reads 0x000ff309 with both PCIe root complexes up, i.e. the four
++ * RC0 reset bits are set in the released state (UPSTREAM-PORT-PLAN arm B/C;
++ * REMAINING-DRIVERS block C). Assert must therefore clear the bit and
++ * deassert must set it.
++ */
+ static int luofu_crg_reset_set(struct reset_controller_dev *rcdev,
+ 			       unsigned long id, bool assert)
+ {
+@@ -198,7 +207,7 @@
+ 
+ 	spin_lock_irqsave(&crg->lock, flags);
+ 	ret = regmap_update_bits(crg->regmap, offset, BIT(bit),
+-				 assert ? BIT(bit) : 0);
++				 assert ? 0 : BIT(bit));
+ 	spin_unlock_irqrestore(&crg->lock, flags);
+ 
+ 	return ret;
+@@ -227,7 +236,8 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	return !!(val & BIT(id & 0xff));
++	/* The bit is set when the line is released; asserted means cleared. */
++	return !(val & BIT(id & 0xff));
+ }
+ 
+ static int luofu_crg_reset(struct reset_controller_dev *rcdev,
+diff --git a/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml b/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+--- a/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
++++ b/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+@@ -33,6 +33,13 @@
+   word and the bit number. Only the three reset words are accepted; a specifier
+   can therefore never write the watchdog, soft-reset, mux or PLL words.
+ 
++  The reset lines are active-low release bits: the vendor reset class sets a
++  bit to release the line and clears it to drive the line into reset. This is
++  measured on the live part (0x14880034 reads 0x000ff309 with both PCIe root
++  complexes up, i.e. the four RC0 reset bits are set while released). Consumers
++  use the standard reset API: assert drives the line into reset, deassert
++  releases it.
++
+ properties:
+   compatible:
+     items:

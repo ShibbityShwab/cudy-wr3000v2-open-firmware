@@ -1,0 +1,29 @@
+clk: hisilicon: add Luofu CRG clock and reset controller
+
+Add a driver for the CRG (Clock Reset Generator) of the HiSilicon
+Hi5671Y "luofu" SoC.  The CRG is a 4 KiB system-controller page whose
+clock-gate bits (0x14/0x20), reset bits (0x2c/0x30/0x34) and watchdog
+words (0x50/0x64/0x70/0x100) are interleaved, so the node is modelled as
+"hisilicon,luofu-crg", "syscon", "simple-mfd" and this driver uses the
+parent syscon regmap: it never claims or maps the MMIO page, and neither
+does the watchdog child.  That is also what removes the lab lane's
+second-claim -EBUSY workaround.
+
+The 16 gate clocks are described by driver data indexed by the clock IDs
+in include/dt-bindings/clock/hisilicon,luofu-crg.h; the devicetree only
+carries the index, not the gate geometry.  Resets keep the two-cell
+(register offset, bit) specifier documented in the binding, and the
+offsets are range-checked to the three reset words so that a devicetree
+can never write the watchdog, reboot, soft-reset, mux or PLL words by
+accident.
+
+Deliberately not implemented: the per-gate parent/PLL/mux model (rates
+are not modelled yet; every gate is currently parented on the APB clock),
+named reset IDs, and the reboot/soft-reset/mux/PLL words.  The gate
+geometry is provisional until it is confirmed against the running vendor
+kernel, and the binding says so.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

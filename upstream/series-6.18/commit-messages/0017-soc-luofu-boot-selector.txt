@@ -1,0 +1,23 @@
+soc: hisilicon: add Luofu A/B boot selector
+
+Add a sysfs interface to the A/B boot-selector cell in the SYSCTRL page
+of the HiSilicon Hi5671Y "luofu" SoC (0x10100000 + 0x0c08 on this
+board).  The stock loader boots the firmware pair named by the low byte
+and keeps the recorded value sticky across resets: 0x10 is the A pair,
+0x11 the B pair, 0x21 a manual/recovery handover written by the stock
+sysenv interface, and 0x00 the power-on value.
+
+current_pair decodes the cell; next_pair accepts only the two measured
+recorded-pair values and verifies the read-back.  Probe performs no
+register access, and the SYSCTRL page stays a shared syscon with the
+machine-restart driver.
+
+This interface is needed by the A/B sysupgrade path, which is host-only
+so far.  It is an RFC: the post-boot selector protocol, the env-block
+re-stamp and the first boot of a written pair are not measured, and the
+sysfs ABI has to be reviewed and frozen before it can be relied on.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check and checkpatch; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

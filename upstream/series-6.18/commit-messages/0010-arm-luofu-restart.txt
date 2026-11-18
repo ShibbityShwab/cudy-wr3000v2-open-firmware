@@ -1,0 +1,27 @@
+power: reset: add Luofu machine restart driver
+
+Add a restart driver for the HiSilicon Hi5671Y "luofu" SoC.  The SoC has
+no ARM architectural reset that takes the whole chip down; the vendor
+sequence saves the SYSCTRL A/B boot-selector cell, asks the CRG for a
+software reset and falls back to the CRG watchdog if the command does
+not take.  Both pages are syscon nodes shared with the CRG/watchdog and
+boot-selector drivers, so this driver never maps or claims MMIO itself.
+
+Measured facts: the selector cell at SYSCTRL+0xc08 uses 0x10 for the A
+pair and 0x11 for the B pair and is sticky across resets, so the driver
+writes back only the value it has just read (a write-same) and leaves
+unrecognised values alone; it therefore cannot move the board to another
+slot.  The CRG reboot command pair is the vendor devicetree's own value
+and is PROVISIONAL: the write order and register width have never been
+measured.  It is confined to the reboot word and bounded by a 1 s
+watchdog fallback instead of parking forever, which is exactly the
+failure mode that stranded the board on the bench.
+
+This is an RFC: the reset sequence must be validated on hardware with
+recovery armed before it can be merged.  Probe performs no register
+access; never run on hardware.
+
+Host-compiled against linux-6.18.60, both bindings checked with
+dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

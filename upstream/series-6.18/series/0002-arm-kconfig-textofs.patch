@@ -1,0 +1,60 @@
+From 32f29a89349399f5c592f986b294984acc4e11cc Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 02/17] ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+
+Wire the new arch/arm/mach-hisilicon directory into the ARM build: source
+its Kconfig, add the machine directory and set
+textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000.
+
+The text offset is a hardware contract, not a preference.  The stock
+loader stages the kernel slot at 0x83200000 and the decompressor computes
+(pc & 0xf8000000) + TEXT_OFFSET, so 0x00608000 makes the kernel link and
+start at 0x80608000, which is the uImage load/entry address the loader
+uses.  That contract is derived and asserted by the image recipe rather
+than hardcoded.
+
+0x00608000 is not encodable as an ARM immediate, so this patch only
+builds together with the following early-boot change.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ arch/arm/Kconfig  |    2 ++
+ arch/arm/Makefile |    5 +++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -393,6 +393,8 @@
+ 
+ source "arch/arm/mach-hisi/Kconfig"
+ 
++source "arch/arm/mach-hisilicon/Kconfig"
++
+ source "arch/arm/mach-imx/Kconfig"
+ 
+ source "arch/arm/mach-ixp4xx/Kconfig"
+diff --git a/arch/arm/Makefile b/arch/arm/Makefile
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -169,6 +169,10 @@
+ textofs-$(CONFIG_ARCH_QCOM_RESERVE_SMEM) := 0x00208000
+ textofs-$(CONFIG_ARCH_MESON) := 0x00208000
+ textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000
++# The stock loader stages the kernel slot at 0x83200000 and the decompressor
++# computes (pc & 0xf8000000) + TEXT_OFFSET; with 0x00608000 this lands the
++# kernel at 0x80608000, which is the uImage load/entry address the loader uses.
++textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000
+ 
+ # Machine directory name.  This list is sorted alphanumerically
+ # by CONFIG_* macro name.
+@@ -193,6 +197,7 @@
+ machine-$(CONFIG_ARCH_KEYSTONE)		+= keystone
+ machine-$(CONFIG_ARCH_LPC18XX)		+= lpc18xx
+ machine-$(CONFIG_ARCH_LPC32XX)		+= lpc32xx
++machine-$(CONFIG_ARCH_LUOFU)		+= hisilicon
+ machine-$(CONFIG_ARCH_MESON)		+= meson
+ machine-$(CONFIG_ARCH_MMP)		+= mmp
+ machine-$(CONFIG_ARCH_MV78XX0)		+= mv78xx0

@@ -1,0 +1,22 @@
+net: mdio: luofu: add MDIO bus controller
+
+Add the MDIO bus controller of the HiSilicon Hi5671Y "luofu" SoC: a
+polled clause 22 master for the PHYs behind the internal switch
+(addresses 2..5 on this board) with no interrupt.
+
+The register model (0x20 done/acknowledge, 0x2c busy, 0x30 frame word,
+0x38 read data) was recovered from the vendor hi_kmdio.ko module, and
+this exact transaction sequence completed real clause 22 reads on the
+SoC from an earlier out-of-tree 5.10 driver (the Genius PHY ID read back
+as 0x20669a09).  This in-tree 6.18 version is a port of that sequence
+and has been host-compiled only.
+
+The gate clock and the seven reset lines come from the CRG provider; the
+clock is enabled before the resets are deasserted.  That ordering is the
+one assumption to confirm on the first hardware run, and it is stated in
+the driver comment.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

@@ -1,0 +1,18 @@
+net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+
+Add a PHYLIB driver for the HiSilicon "Genius" clause 22 PHYs (PHY ID
+0x20669a00, mask 0xffffff00) behind the internal switch of the Hi5671Y
+"luofu" SoC.  Their clause 22 register set is standard, so the driver
+uses the generic helpers and exists to bind the device to a named
+SoC-owned driver instead of the generic PHY.
+
+Not implemented, on purpose: the vendor per-PHY firmware patch
+(hi_ephy_*.bin) is not loaded.  Its format and effect are not decoded,
+and it is the first suspect if link training differs from the vendor
+stack.  The PHY is matched by PHY ID, not by a devicetree compatible, so
+the PHY child nodes stay standard ethernet-phy-ieee802.3-c22 and no
+binding is added.
+
+Host-compiled against linux-6.18.60; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

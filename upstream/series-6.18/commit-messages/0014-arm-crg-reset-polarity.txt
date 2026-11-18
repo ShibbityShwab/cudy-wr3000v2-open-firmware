@@ -1,0 +1,19 @@
+clk: hisilicon: fix Luofu CRG reset polarity
+
+The reset class of the luofu CRG page is active-low: a reset line is
+released by SETTING its bit and driven into reset by CLEARING it.  The
+initial CRG driver implemented the opposite, so reset_control_deassert()
+from any consumer would have asserted the line instead of releasing it.
+
+The polarity is measured, not assumed: the live census of 0x14880034
+reads 0x000ff309 with both PCIe root complexes up, i.e. the four RC0
+reset bits are set in the released state.  Swap the two operations in
+luofu_crg_reset_set() and invert reset_control_status() accordingly.
+
+This fixes the FMC, MDIO/GEMAC and PCIe consumers.  They all use the
+standard reset API and need no change.
+
+Host-compiled against linux-6.18.60; the polarity itself was measured on
+the vendor kernel, but this driver has never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

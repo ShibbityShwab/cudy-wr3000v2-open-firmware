@@ -1,0 +1,33 @@
+spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+
+Add the flash-memory controller of the HiSilicon Hi5671Y "luofu" SoC as
+a SPI-MEM controller.  On this board the FMC drives an ESMT F50L1G41LC
+SPI-NAND die; the mainline SPI-NAND stack (drivers/mtd/nand/spi) owns
+chip detection, on-die ECC, the OOB layout, bad-block handling and
+partition parsing, so this driver only implements the command engine,
+the DMA engine for page/OOB transfers and the memory-mapped data window.
+The root filesystem of the board lives on this controller.
+
+The vendor devicetree properties become standard SPI properties
+(spi_cs becomes the child's reg, enable-quad-mode becomes
+spi-tx/rx-bus-width); bus_id is dropped.  The vendor driver's custom
+mtd_info, sysctrl breadcrumbs, JFFS2/UBI in-tree hacks and "read ECC
+off" flag are not carried over.
+
+Deliberately not done, because none of it has been run on hardware: the
+fifteen further vendor init words whose meaning is unknown are not
+written, the die is not reset and its quad-enable bit is untouched, and
+there is no interrupt.  The FMC ECC semantics (host ECC vs on-die
+pass-through), the OOB bytes the DMA engine returns and whether the
+SPI-NAND core's reset clears the quad-enable bit remain unverified.
+
+This is an RFC: the storage path is critical and the semantics above
+must be confirmed before merge.  The controller also depends on the
+ESMT F50L1G41LC chip entry, which is a v6.19 addition and is not in
+linux-6.18.60, so it must be submitted after that entry (or with it) and
+is only buildable today through the OpenWrt generic backport.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

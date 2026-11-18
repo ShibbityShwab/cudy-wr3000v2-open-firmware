@@ -1,0 +1,26 @@
+net: ethernet: hisilicon: add Luofu switch probe skeleton
+
+Add the D1a resource/binding skeleton for the internal LSW switch of the
+HiSilicon Hi5671Y "luofu" SoC.  The vendor tree describes the switch as
+two nodes, but it is one device: the binding is one node with the 15
+recovered MMIO windows (five queue-manager and ten classifier/
+forwarding, 512 KiB each), two CRG gate clocks, four CRG reset lines and
+an ethernet-ports port model.  The vendor queue/flow DDR regions are not
+modelled because their live base is unknown.
+
+The switch is modelled as switchdev over the per-port GEMAC netdevs, not
+as DSA: there is no CPU-port tag in the recovered model and every wired
+port already has its own netdev.  The recovered register, queue and
+port-id model has never been measured on this board, and an access to an
+unknown part of the block can cut the CPU/console path.
+
+probe() validates the resources and the port model, then refuses with
+-EOPNOTSUPP.  No register is read or written, no clock/reset is driven,
+no netdev or switchdev notifier is registered, and the node stays
+disabled.  This is an RFC and not mergeable; the attended inventory and
+a reviewed write set (LSW-SPEC.md D1b-D1d) are required first.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

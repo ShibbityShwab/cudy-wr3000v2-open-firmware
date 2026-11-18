@@ -1,13 +1,13 @@
 # Target design: an upstream OpenWrt port for the Cudy WR3000 v2.0 (HiSilicon luofu / Hi5671Y)
 
 **Status: 2026-11-18. Design proposal - not a submission, not a receipt, not progress.**
-No OpenWrt submission exists today. The target files, board DTS and the first two drivers
-(CRG clock/reset, watchdog) are drafts under [`../target-skeleton/`](../target-skeleton/README.md):
-they are host-compile/binding-validated only (SKELETON-SMOKE.md, fifth session), never booted and
-not reviewed upstream. That is a recorded fact, not a judgement: the parent
-`EVIDENCE-INDEX.md` row *"Upstream submission is not started"* and the ledger entry
-**2026-11-17 00:20** say it, no target PR exists, and the rest of the driver/image/sysupgrade
-series is still missing.
+No OpenWrt submission exists today. The target files, board DTS, the kernel patch series
+`patches-6.18/001-017` and a first-pass image/install path are drafts under
+[`../target-skeleton/`](../target-skeleton/README.md): they are host-compile/binding-validated
+(the series builds a full 6.18 kernel and a real target image, SKELETON-SMOKE.md), never booted or
+flashed and not reviewed upstream. Several drivers are explicitly refusing drafts (GEMAC partial,
+PIE 015, LSW 016) and the image carries a NOT FLASHABLE marker until the attended validations
+close. No target PR exists; that remains the recorded fact.
 
 This document is the concrete design that the roadmap phases point at. It exists so a reviewer
 can see the target layout, the boot/image requirements (including the vendor loader's FIP
@@ -23,6 +23,7 @@ claimed as "target work".
 | `PORT-STATUS.md`, `PORT-PLAN.md`, `DEPLOYMENT-DECISION.md`, `HYBRID-IMAGE-PLAN.md` | History (marked SUPERSEDED/FALLBACK in their own headers). Not design inputs. |
 | `PORT-SURFACE.md` | The measured Wi-Fi port cost. This file does not repeat its numbers; the Wi-Fi blocker below points into it. |
 | `VENDOR-SKB-BRIDGE-PORT.md` | Separate multi-step port of the vendor HYFI/bridge userspace contract (the v17 ceiling); not part of the first upstream target. |
+| [`../upstream/series-6.18/README.md`](../upstream/series-6.18/README.md) | Review-form submission series for the kernel/binding patches 001-017 (cover letter, commit messages, MAINTAINERS proposal, sequential-apply validation); a review artifact, not a submission. |
 | `PUBLISH-READINESS.md`, `NOTICE.md`, `README.md` | This half is **NOT READY to publish** (vendor `.o` history purge pending). Nothing in this file changes that. |
 | parent `STATUS.md`, `EVIDENCE-INDEX.md`, `mem-entries.md` | Live state and the only evidence of record. The newest dated ledger entry wins. |
 

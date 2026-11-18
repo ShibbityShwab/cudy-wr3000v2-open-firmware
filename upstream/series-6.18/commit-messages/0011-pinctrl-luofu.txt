@@ -1,0 +1,28 @@
+pinctrl: hisilicon: add Luofu peripheral pin controller
+
+Add a pin controller for the peripheral IOMUX of the HiSilicon Hi5671Y
+"luofu" SoC: 37 pins, 24 groups and 24 functions in two register windows
+(mux 0x14900100/0x3c, cfg 0x14940000/0x100), with pinmux, pinconf and
+generic devicetree state parsing.
+
+The tables were re-verified from the vendor pin controller module for
+this SoC: the per-pin five-hit mux table, the group-level mux fields,
+cfg offset = 4 * pin and the six generic pinconf fields (bias pull-up/
+pull-down, raw 3-bit drive strength, schmitt, input enable, output
+level).  probe writes no register, matching the vendor probe, and
+selecting a function walks the vendor algorithm: clear every hit first,
+then set the bits that name the requested function.
+
+Consumer pin states are deliberately not attached.  The vendor
+devicetree attaches none either, and which groups the MDIO/GEMAC/FMC/
+UART nodes need is not measured; guessed states could remux the console
+or NAND.  The drive-strength mA mapping is also unknown, so the raw
+field value is used.
+
+This is an RFC: the probe-time/default pin state and consumer-state
+requirements are open and no state has ever been applied on hardware.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

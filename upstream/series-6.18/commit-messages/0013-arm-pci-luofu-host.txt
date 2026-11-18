@@ -1,0 +1,26 @@
+PCI: dwc: add Luofu PCIe host controller
+
+Add the DWC-based PCIe host controller for the two root complexes of the
+HiSilicon Hi5671Y "luofu" SoC (RC0 at 0x10160000, RC1 at 0x10164000).
+Each root complex is a DesignWare core with a SoC wrapper for the
+root-complex mode and LTSSM enable, plus a dedicated 4 KiB configuration
+window that has to be reached through the outbound iATU (CFG0) rather
+than ECAM, so the DWC host framework's ECAM path does not apply.
+
+The driver programs the iATU viewports from the devicetree ranges, does
+only 4-byte-aligned 32-bit DBI/configuration accesses, and encodes the
+measured hard rules: the misc window is write-only and must never be
+read (a userspace read of 0x10161000 panicked the board), and sub-word
+or misaligned accesses fault.  The gate clock and the four active-low
+resets per root complex come from the CRG.
+
+This is an RFC: the wrapper store semantics, the iATU-enable/LTSSM bit
+interaction, the DWC version word, endpoint power, MSI/INTx and real
+enumeration have never been validated.  The Wi-Fi endpoint behind RC0
+has no mainline driver and is out of scope; the devicetree nodes stay
+disabled.  Never run on hardware.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

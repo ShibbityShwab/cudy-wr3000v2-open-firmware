@@ -1,0 +1,24 @@
+net: ethernet: hisilicon: add partial Luofu GEMAC driver
+
+Add the resource/binding half of the GEMAC driver for the HiSilicon
+Hi5671Y "luofu" SoC.  The wired path is GEMAC into the internal switch;
+the five instances make up switch ports 8..12, instance 0 is an unused
+RGMII MAC, and the wired jack measured on the vendor system is instance
+3 (0x14480000, port 11).  PHY attachment uses the standard phy-mode/
+phy-handle properties and the MDIO bus driver.
+
+This driver deliberately does not register a netdev.  The TX/RX ring and
+DMA programming model has never been decoded (the earlier out-of-tree
+5.10 driver had no ring code at all), and an access to this block before
+it is ready has hung the board's AHB bus.  probe() validates the
+resources and refuses; the devicetree nodes stay disabled.
+
+This is an RFC with the hardware-facing half missing; it must not be
+merged as a working network driver.  The remaining work is the ring/DMA
+model, NAPI TX/RX, DMA mapping and port-mode programming from the
+phylink link-up callback.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

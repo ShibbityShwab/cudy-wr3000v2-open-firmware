@@ -1,0 +1,23 @@
+thermal: add Luofu thermal sensor driver
+
+Add a read-only thermal sensor driver for the HiSilicon Hi5671Y "luofu"
+SoC.  The die temperature is the low 16 bits of the word at offset
+0x24, converted with the vendor v4 formula
+
+    ((165 * raw - 32835) / 100) * 1000 - 40000   millidegrees
+
+reproduced operation for operation, including the truncating division,
+so the reported values match the vendor kernel.  The sensor is
+registered as an of-thermal sensor with
+devm_thermal_of_zone_register().
+
+The thermal zone, its trips (115 C passive, 125 C critical, 3 C
+hysteresis) and the 1 s polling delay are board devicetree data.  The
+threshold, interrupt, enable and trim registers are not decoded and are
+not written; the node claims no interrupt and the driver has no write
+path at all.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

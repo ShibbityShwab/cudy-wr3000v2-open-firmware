@@ -1,0 +1,381 @@
+From 36ac7edcbb61f6ca582225837f3778ba79512e55 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 05/17] watchdog: luofu: add Hi5671Y watchdog support
+
+Add a watchdog driver for the watchdog function of the luofu CRG page.
+The watchdog has no reg of its own: it is a child of the CRG syscon node
+and uses the parent regmap, so the CRG page is mapped exactly once and
+the lab lane's devm_ioremap() workaround is gone.
+
+The register values are the vendor's own hwver-2 data, matched against
+the live register state, and are kept in the driver rather than exposed
+as vendor-only devicetree properties: enable writes to 0x64, timeout is
+the (secs - 1) field at bits [18:10] of 0x50, and 0x70 keeps the timer
+fed.  The encoding is validated against the vendor kernel's live
+0x30007400 / 30 s pair.
+
+No restart handler and no interrupt: the reset path is unverified and a
+restart handler in a watchdog driver could arm the timer, and the
+status/IRQ semantics of 0x100 are not decoded.  Probe performs no
+register access; the hardware is written only from the standard watchdog
+operations after userspace opens the device.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ drivers/watchdog/Kconfig                           |   13 +
+ drivers/watchdog/Makefile                          |    1 
+ drivers/watchdog/luofu-wdt.c                       |  247 ++++++++++++++++++++
+ .../bindings/watchdog/hisilicon,luofu-wdt.yaml     |   55 ++++
+ 4 files changed, 316 insertions(+)
+
+diff --git a/drivers/watchdog/Kconfig b/drivers/watchdog/Kconfig
+--- a/drivers/watchdog/Kconfig
++++ b/drivers/watchdog/Kconfig
+@@ -468,6 +468,19 @@
+ 	   To compile this driver as a module, choose M here: the
+ 	   module will be called armada_37xx_wdt.
+ 
++config LUOFU_WDT
++	tristate "HiSilicon Luofu watchdog"
++	depends on ARCH_LUOFU || COMPILE_TEST
++	select MFD_SYSCON
++	select WATCHDOG_CORE
++	help
++	  Watchdog timer for the HiSilicon Hi5671Y "luofu" SoC. The watchdog
++	  registers live in the CRG system-controller page and are accessed
++	  through the parent syscon regmap; the driver is polled.
++
++	  To compile this driver as a module, choose M here: the module will
++	  be called luofu-wdt.
++
+ config ASM9260_WATCHDOG
+ 	tristate "Alphascale ASM9260 watchdog"
+ 	depends on MACH_ASM9260 || COMPILE_TEST
+diff --git a/drivers/watchdog/Makefile b/drivers/watchdog/Makefile
+--- a/drivers/watchdog/Makefile
++++ b/drivers/watchdog/Makefile
+@@ -40,6 +40,7 @@
+ obj-$(CONFIG_ARM_SP805_WATCHDOG) += sp805_wdt.o
+ obj-$(CONFIG_ARM_SBSA_WATCHDOG) += sbsa_gwdt.o
+ obj-$(CONFIG_ARMADA_37XX_WATCHDOG) += armada_37xx_wdt.o
++obj-$(CONFIG_LUOFU_WDT) += luofu-wdt.o
+ obj-$(CONFIG_AIROHA_WATCHDOG) += airoha_wdt.o
+ obj-$(CONFIG_ASM9260_WATCHDOG) += asm9260_wdt.o
+ obj-$(CONFIG_AT91RM9200_WATCHDOG) += at91rm9200_wdt.o
+diff --git a/drivers/watchdog/luofu-wdt.c b/drivers/watchdog/luofu-wdt.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/watchdog/luofu-wdt.c
+@@ -0,0 +1,247 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" watchdog
++ *
++ * The watchdog is one function of the 4 KiB CRG system-controller page at
++ * 0x14880000: its registers (0x50 set-timeout, 0x64 enable, 0x70 clear/ping,
++ * 0x100 status) are interleaved with the clock-gate and reset bits of the
++ * CRG driver.  It therefore has no reg of its own and must be a child of the
++ * hisilicon,luofu-crg node: both drivers share one syscon regmap, so neither
++ * claims the MMIO region exclusively.  This driver never maps the page.
++ *
++ * The register values below are the vendor's own devicetree values, matched
++ * against its live register state; they are driver data rather than
++ * devicetree properties so that the binding carries no vendor-only
++ * properties:
++ *
++ *   enable:  write enable-val1 then enable-val0 to 0x64
++ *   stop:    write stop-val0 then stop-val1 to 0x64
++ *   clear:   write reset-val0 then reset-val1 to 0x70 (keeps the timer fed)
++ *   timeout: read-modify-write of the (secs - 1) field at bits [18:10] of 0x50
++ *
++ * The timeout encoding is the vendor driver's hwver-2 path, which is this
++ * board: the vendor's own live 0x50 value (0x30007400) decodes to 30 s with
++ * this formula and its log says "timeout=30 sec".  Recovered hwver-0/1
++ * encodings exist in the vendor driver but no supported compatible uses them,
++ * so they are recorded here instead of being advertised as dead code:
++ *   hwver 0: clear mask 0xfffff007, field at bit 3,  value (secs - 1)
++ *   hwver 1: clear mask 0xfff003ff, field at bit 10, value (2 * secs - 1)
++ *
++ * Discipline: probe performs no register accesses at all; the hardware is
++ * written only from ->start/->stop/->ping/->set_timeout, i.e. after userspace
++ * opens /dev/watchdog and asks for it.
++ *
++ * Deliberately not implemented:
++ *   - a restart handler.  The vendor reset path goes through the sysctrl and
++ *     boot-selector registers, which are not understood well enough to
++ *     hard-code; a wrong reset sequence would strand the board.  Reboot
++ *     belongs to a future reset driver, not here.
++ *   - interrupt support.  The block has a status/interrupt register at 0x100
++ *     (SPI 2 on this board) but its semantics are unverified, so the driver is
++ *     polled and the node claims no interrupt.  Registering an unused IRQ just
++ *     to "use" the documented number would be wrong.
++ *   - .get_timeleft: the remaining-count register is not decoded.
++ *   - WDOG_HW_RUNNING detection: the enable state is a magic value pair, not a
++ *     status bit, so whether the bootloader left the watchdog running cannot be
++ *     read from a documented register.  Probe stays hands-off.
++ */
++
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/watchdog.h>
++
++/* Register offsets within the shared CRG system-controller page. */
++#define LUOFU_WDT_EN_OFFSET		0x64
++#define LUOFU_WDT_SET_OFFSET		0x50
++#define LUOFU_WDT_CLR_OFFSET		0x70
++
++/*
++ * hwver-2 timeout encoding: the field is bits [18:10] of SET_OFFSET and the
++ * value is (seconds - 1).  LUOFU_WDT_TIMEOUT_MASK is the vendor driver's
++ * clear mask; the inverted mask is what regmap_update_bits() needs.
++ */
++#define LUOFU_WDT_TIMEOUT_MASK		0xfff803ff
++#define LUOFU_WDT_TIMEOUT_SHIFT		10
++
++struct luofu_wdt_soc_data {
++	unsigned int	en_offset;
++	unsigned int	set_offset;
++	unsigned int	clr_offset;
++	u32		enable_val0;
++	u32		enable_val1;
++	u32		stop_val0;
++	u32		stop_val1;
++	u32		reset_val0;
++	u32		reset_val1;
++};
++
++struct luofu_wdt {
++	struct watchdog_device		wdd;
++	struct regmap			*regmap;
++	const struct luofu_wdt_soc_data	*data;
++};
++
++static const struct luofu_wdt_soc_data luofu_wdt_hwver2 = {
++	.en_offset	= LUOFU_WDT_EN_OFFSET,
++	.set_offset	= LUOFU_WDT_SET_OFFSET,
++	.clr_offset	= LUOFU_WDT_CLR_OFFSET,
++	.enable_val0	= 0x4f4e5452,
++	.enable_val1	= 0x12345116,
++	.stop_val0	= 0xabcd5116,
++	.stop_val1	= 0xed574447,
++	.reset_val0	= 0x55aa5a5a,
++	.reset_val1	= 0xaa55a5a5,
++};
++
++static int luofu_wdt_start(struct watchdog_device *wdd)
++{
++	struct luofu_wdt *w = watchdog_get_drvdata(wdd);
++	const struct luofu_wdt_soc_data *d = w->data;
++	int ret;
++
++	/* Enable order is the vendor's: val1 first, then val0. */
++	ret = regmap_write(w->regmap, d->en_offset, d->enable_val1);
++	if (ret)
++		return ret;
++
++	return regmap_write(w->regmap, d->en_offset, d->enable_val0);
++}
++
++static int luofu_wdt_stop(struct watchdog_device *wdd)
++{
++	struct luofu_wdt *w = watchdog_get_drvdata(wdd);
++	const struct luofu_wdt_soc_data *d = w->data;
++	int ret;
++
++	ret = regmap_write(w->regmap, d->en_offset, d->stop_val0);
++	if (ret)
++		return ret;
++
++	return regmap_write(w->regmap, d->en_offset, d->stop_val1);
++}
++
++static int luofu_wdt_ping(struct watchdog_device *wdd)
++{
++	struct luofu_wdt *w = watchdog_get_drvdata(wdd);
++	const struct luofu_wdt_soc_data *d = w->data;
++	int ret;
++
++	ret = regmap_write(w->regmap, d->clr_offset, d->reset_val0);
++	if (ret)
++		return ret;
++
++	return regmap_write(w->regmap, d->clr_offset, d->reset_val1);
++}
++
++static int luofu_wdt_set_timeout(struct watchdog_device *wdd,
++				 unsigned int timeout)
++{
++	struct luofu_wdt *w = watchdog_get_drvdata(wdd);
++	const struct luofu_wdt_soc_data *d = w->data;
++	int ret;
++
++	if (timeout < wdd->min_timeout || timeout > wdd->max_timeout)
++		return -EINVAL;
++
++	ret = regmap_update_bits(w->regmap, d->set_offset,
++				 ~LUOFU_WDT_TIMEOUT_MASK,
++				 (timeout - 1) << LUOFU_WDT_TIMEOUT_SHIFT);
++	if (ret)
++		return ret;
++
++	wdd->timeout = timeout;
++
++	return 0;
++}
++
++static const struct watchdog_info luofu_wdt_info = {
++	.options	= WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING |
++			  WDIOF_MAGICCLOSE,
++	.identity	= "HiSilicon luofu watchdog",
++};
++
++static const struct watchdog_ops luofu_wdt_ops = {
++	.owner		= THIS_MODULE,
++	.start		= luofu_wdt_start,
++	.stop		= luofu_wdt_stop,
++	.ping		= luofu_wdt_ping,
++	.set_timeout	= luofu_wdt_set_timeout,
++};
++
++static int luofu_wdt_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct luofu_wdt *w;
++	int ret;
++
++	w = devm_kzalloc(dev, sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++
++	if (!dev->parent || !dev->parent->of_node)
++		return dev_err_probe(dev, -ENODEV,
++				     "must be a child of the CRG system controller\n");
++
++	w->data = of_device_get_match_data(dev);
++	if (!w->data)
++		return dev_err_probe(dev, -ENODEV, "missing hwver data\n");
++
++	/*
++	 * The registers live in the parent's CRG page; the parent node is a
++	 * syscon, so the shared regmap is the only MMIO accessor.  No
++	 * request_mem_region()/ioremap() here (or in the CRG driver).
++	 */
++	w->regmap = syscon_node_to_regmap(dev->parent->of_node);
++	if (IS_ERR(w->regmap))
++		return dev_err_probe(dev, PTR_ERR(w->regmap),
++				     "failed to get parent CRG regmap\n");
++
++	w->wdd.info = &luofu_wdt_info;
++	w->wdd.ops = &luofu_wdt_ops;
++	w->wdd.parent = dev;
++	w->wdd.min_timeout = 1;
++	w->wdd.max_timeout = 512;
++
++	/* Board default; a valid DT timeout-sec replaces it. */
++	w->wdd.timeout = 30;
++	ret = watchdog_init_timeout(&w->wdd, 0, dev);
++	if (ret)
++		dev_warn(dev, "invalid timeout-sec, using %u s\n", w->wdd.timeout);
++
++	watchdog_set_drvdata(&w->wdd, w);
++	watchdog_stop_on_reboot(&w->wdd);
++	watchdog_stop_on_unregister(&w->wdd);
++
++	ret = devm_watchdog_register_device(dev, &w->wdd);
++	if (ret)
++		return ret;
++
++	dev_info(dev, "registered, timeout %u s (max %u s)\n",
++		 w->wdd.timeout, w->wdd.max_timeout);
++
++	return 0;
++}
++
++static const struct of_device_id luofu_wdt_of_match[] = {
++	{ .compatible = "hisilicon,luofu-wdt", .data = &luofu_wdt_hwver2 },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_wdt_of_match);
++
++static struct platform_driver luofu_wdt_driver = {
++	.probe = luofu_wdt_probe,
++	.driver = {
++		.name = "luofu-wdt",
++		.of_match_table = luofu_wdt_of_match,
++	},
++};
++module_platform_driver(luofu_wdt_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu watchdog");
++MODULE_LICENSE("GPL");
+diff --git a/Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml b/Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml
+new file mode 100644
+--- /dev/null
++++ b/Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml
+@@ -0,0 +1,55 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/watchdog/hisilicon,luofu-wdt.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu watchdog
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" watchdog is one function of the CRG (Clock Reset
++  Generator) system-controller page: its set-timeout (0x50), enable (0x64),
++  clear/ping (0x70) and status (0x100) registers are interleaved with the CRG
++  clock-gate and reset bits. The node therefore has no reg of its own and must
++  be a child of the hisilicon,luofu-crg system controller; the driver uses the
++  parent syscon regmap instead of claiming a second MMIO region.
++
++  The driver is polled: the block has an interrupt output (SPI 2 on this
++  board), but its status semantics are not established and the node does not
++  claim the interrupt. The 1..512 s timeout limits are driver data.
++
++allOf:
++  - $ref: watchdog.yaml#
++
++properties:
++  compatible:
++    const: hisilicon,luofu-wdt
++
++  reg: false
++
++required:
++  - compatible
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    bus {
++        #address-cells = <1>;
++        #size-cells = <1>;
++
++        system-controller@14880000 {
++            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++            reg = <0x14880000 0x1000>;
++            #clock-cells = <1>;
++            #reset-cells = <2>;
++
++            watchdog {
++                compatible = "hisilicon,luofu-wdt";
++                timeout-sec = <30>;
++            };
++        };
++    };

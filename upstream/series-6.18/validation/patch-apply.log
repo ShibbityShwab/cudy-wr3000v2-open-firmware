@@ -1,0 +1,101 @@
+### [1] 0001-arm-mach-hisilicon-luofu.patch
+patching file arch/arm/mach-hisilicon/Kconfig
+patching file arch/arm/mach-hisilicon/Makefile
+patching file arch/arm/mach-hisilicon/luofu.c
+PATCH_RC[0001-arm-mach-hisilicon-luofu.patch]=0
+### [2] 0002-arm-kconfig-textofs.patch
+patching file arch/arm/Kconfig
+patching file arch/arm/Makefile
+PATCH_RC[0002-arm-kconfig-textofs.patch]=0
+### [3] 0003-arm-textofs-nonimmediate.patch
+patching file arch/arm/kernel/head.S
+patching file arch/arm/boot/compressed/head.S
+PATCH_RC[0003-arm-textofs-nonimmediate.patch]=0
+### [4] 0004-arm-clk-reset-luofu-crg.patch
+patching file drivers/clk/hisilicon/Kconfig
+patching file drivers/clk/hisilicon/Makefile
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file include/dt-bindings/clock/hisilicon,luofu-crg.h
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+PATCH_RC[0004-arm-clk-reset-luofu-crg.patch]=0
+### [5] 0005-arm-watchdog-luofu-wdt.patch
+patching file drivers/watchdog/Kconfig
+patching file drivers/watchdog/Makefile
+patching file drivers/watchdog/luofu-wdt.c
+patching file Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml
+PATCH_RC[0005-arm-watchdog-luofu-wdt.patch]=0
+### [6] 0006-arm-mtd-nand-luofu-fmc.patch
+patching file drivers/spi/Kconfig
+patching file drivers/spi/Makefile
+patching file drivers/spi/spi-luofu-fmc.c
+patching file Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml
+PATCH_RC[0006-arm-mtd-nand-luofu-fmc.patch]=0
+### [7] 0007-net-mdio-luofu.patch
+patching file drivers/net/mdio/Kconfig
+patching file drivers/net/mdio/Makefile
+patching file drivers/net/mdio/mdio-luofu.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml
+PATCH_RC[0007-net-mdio-luofu.patch]=0
+### [8] 0008-net-phy-luofu.patch
+patching file drivers/net/phy/Kconfig
+Hunk #1 succeeded at 253 (offset -75 lines).
+patching file drivers/net/phy/Makefile
+Hunk #1 succeeded at 63 (offset -12 lines).
+patching file drivers/net/phy/luofu-phy.c
+PATCH_RC[0008-net-phy-luofu.patch]=0
+### [9] 0009-net-gmac-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+PATCH_RC[0009-net-gmac-luofu.patch]=0
+### [10] 0010-arm-luofu-restart.patch
+patching file drivers/power/reset/Kconfig
+patching file drivers/power/reset/Makefile
+patching file drivers/power/reset/luofu-reboot.c
+patching file Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml
+patching file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml
+PATCH_RC[0010-arm-luofu-restart.patch]=0
+### [11] 0011-pinctrl-luofu.patch
+patching file drivers/pinctrl/Kconfig
+patching file drivers/pinctrl/Makefile
+patching file drivers/pinctrl/hisilicon/Kconfig
+patching file drivers/pinctrl/hisilicon/Makefile
+patching file drivers/pinctrl/hisilicon/pinctrl-luofu.c
+patching file Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml
+PATCH_RC[0011-pinctrl-luofu.patch]=0
+### [12] 0012-arm-thermal-luofu-tvsensor.patch
+patching file drivers/thermal/Kconfig
+patching file drivers/thermal/Makefile
+patching file drivers/thermal/luofu_tvsensor.c
+patching file Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml
+PATCH_RC[0012-arm-thermal-luofu-tvsensor.patch]=0
+### [13] 0013-arm-pci-luofu-host.patch
+patching file drivers/pci/controller/dwc/Kconfig
+patching file drivers/pci/controller/dwc/Makefile
+patching file drivers/pci/controller/dwc/pcie-luofu.c
+patching file Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+PATCH_RC[0013-arm-pci-luofu-host.patch]=0
+### [14] 0014-arm-crg-reset-polarity.patch
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+PATCH_RC[0014-arm-crg-reset-polarity.patch]=0
+### [15] 0015-net-pie-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+PATCH_RC[0015-net-pie-luofu.patch]=0
+### [16] 0016-net-lsw-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+PATCH_RC[0016-net-lsw-luofu.patch]=0
+### [17] 0017-soc-luofu-boot-selector.patch
+patching file drivers/soc/hisilicon/Kconfig
+patching file drivers/soc/hisilicon/Makefile
+patching file drivers/soc/hisilicon/luofu-selector.c
+patching file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-boot-selector.yaml
+patching file Documentation/ABI/testing/sysfs-driver-luofu-selector
+PATCH_RC[0017-soc-luofu-boot-selector.patch]=0

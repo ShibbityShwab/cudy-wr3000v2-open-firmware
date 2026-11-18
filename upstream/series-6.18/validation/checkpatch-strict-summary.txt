@@ -1,0 +1,17 @@
+0001-arm-mach-hisilicon-luofu.patch :: total: 0 errors, 1 warnings, 0 checks, 95 lines checked
+0002-arm-kconfig-textofs.patch :: total: 0 errors, 0 warnings, 0 checks, 25 lines checked
+0003-arm-textofs-nonimmediate.patch :: total: 0 errors, 0 warnings, 0 checks, 42 lines checked
+0004-arm-clk-reset-luofu-crg.patch :: total: 0 errors, 18 warnings, 2 checks, 492 lines checked
+0005-arm-watchdog-luofu-wdt.patch :: total: 0 errors, 2 warnings, 0 checks, 328 lines checked
+0006-arm-mtd-nand-luofu-fmc.patch :: total: 0 errors, 2 warnings, 0 checks, 767 lines checked
+0007-net-mdio-luofu.patch :: total: 0 errors, 3 warnings, 0 checks, 325 lines checked
+0008-net-phy-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 72 lines checked
+0009-net-gmac-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 255 lines checked
+0010-arm-luofu-restart.patch :: total: 0 errors, 2 warnings, 0 checks, 394 lines checked
+0011-pinctrl-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 1003 lines checked
+0012-arm-thermal-luofu-tvsensor.patch :: total: 0 errors, 2 warnings, 0 checks, 217 lines checked
+0013-arm-pci-luofu-host.patch :: total: 0 errors, 2 warnings, 0 checks, 621 lines checked
+0014-arm-crg-reset-polarity.patch :: total: 0 errors, 1 warnings, 0 checks, 45 lines checked
+0015-net-pie-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 715 lines checked
+0016-net-lsw-luofu.patch :: total: 0 errors, 2 warnings, 2 checks, 646 lines checked
+0017-soc-luofu-boot-selector.patch :: total: 0 errors, 3 warnings, 0 checks, 372 lines checked

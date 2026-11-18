@@ -1,0 +1,24 @@
+watchdog: luofu: add Hi5671Y watchdog support
+
+Add a watchdog driver for the watchdog function of the luofu CRG page.
+The watchdog has no reg of its own: it is a child of the CRG syscon node
+and uses the parent regmap, so the CRG page is mapped exactly once and
+the lab lane's devm_ioremap() workaround is gone.
+
+The register values are the vendor's own hwver-2 data, matched against
+the live register state, and are kept in the driver rather than exposed
+as vendor-only devicetree properties: enable writes to 0x64, timeout is
+the (secs - 1) field at bits [18:10] of 0x50, and 0x70 keeps the timer
+fed.  The encoding is validated against the vendor kernel's live
+0x30007400 / 30 s pair.
+
+No restart handler and no interrupt: the reset path is unverified and a
+restart handler in a watchdog driver could arm the timer, and the
+status/IRQ semantics of 0x100 are not decoded.  Probe performs no
+register access; the hardware is written only from the standard watchdog
+operations after userspace opens the device.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check; never run on hardware.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

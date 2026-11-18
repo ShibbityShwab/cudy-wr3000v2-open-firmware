@@ -119,7 +119,8 @@ against fake `/proc/mtd` (stock 17-slot map), fake
 
 Results: 52/52 assertions pass against the synthetic fixture containers; with
   `--container` the same suite runs the real built sysupgrade.bin
-  (6,185,262 B, sha256 `0303d76a...`) through the real
+  (6,185,262 B, sha256 `0303d76a...` for the 001-016 build, `e869f105...` for the final
+  001-017 build) through the real
   `platform_check_image` and all 58 assertions pass.
 
 ## 6. Validation in the isolated clone
@@ -157,7 +158,9 @@ deleted and re-created by `make target/linux/prepare`, then
 - `sh -n` on the installed `platform.sh`: RC=0; `bash -n` on the harness: RC=0.
 - `tools/test-platform-abinstall.sh`: 52/52 fixture assertions; 58/58 with
   `--container` on the real built sysupgrade.bin (6,185,262 B sha256
-  `0303d76a987fd16aeee7833db0d8188d6390129c62e1fc048560a971b922dce2`,
+  `0303d76a987fd16aeee7833db0d8188d6390129c62e1fc048560a971b922dce2` (001-016 build;
+  final 001-017 build `e869f105ee547a6017a86926ae5629730b51b165a9303d179c7c1fe819f44065`, 58/58
+  also PASS),
   the artifact recorded by the image-recipe lane).
 
 ## 7. Proven vs unverified

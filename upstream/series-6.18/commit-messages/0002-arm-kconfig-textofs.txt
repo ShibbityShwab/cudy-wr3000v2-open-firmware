@@ -1,0 +1,17 @@
+ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+
+Wire the new arch/arm/mach-hisilicon directory into the ARM build: source
+its Kconfig, add the machine directory and set
+textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000.
+
+The text offset is a hardware contract, not a preference.  The stock
+loader stages the kernel slot at 0x83200000 and the decompressor computes
+(pc & 0xf8000000) + TEXT_OFFSET, so 0x00608000 makes the kernel link and
+start at 0x80608000, which is the uImage load/entry address the loader
+uses.  That contract is derived and asserted by the image recipe rather
+than hardcoded.
+
+0x00608000 is not encodable as an ARM immediate, so this patch only
+builds together with the following early-boot change.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

@@ -1,0 +1,26 @@
+ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+
+Add a machine descriptor for the HiSilicon Hi5671Y "luofu" SoC and the
+Cudy WR3000 v2.0 (board R116).  The platform is described entirely by
+devicetree; the descriptor only matches the board and replays the PL310
+AUX value that the vendor bootloader programs (0x430001 with mask
+0xffb0fffe, which is also what enables the cache controller through
+l2x0_of_init()), so the machine code itself programs no hardware.
+
+ARCH_LUOFU is defined in a new arch/arm/mach-hisilicon/Kconfig under the
+existing upstream ARCH_HISI symbol rather than in mach-hisi, because
+this SoC is not part of the hi3xxx/hiP0x family that directory
+implements; the new machine directory keeps the platform code separate
+and the board stays a pure devicetree platform.
+
+The machine is UP-only for now.  The vendor devicetree's enable-method
+is the vendor-private "hisilicon,hsan_smp" and there is no mainline
+smp_ops for the second Cortex-A9, so .smp is left unset and a UP boot is
+the documented first posture.  .restart is likewise unset until the CRG
+reset sequence has been validated (the later restart-driver patch
+provides it as a separate, provisional driver).
+
+This is an RFC platform series: the machine has been host-compiled only
+and has never booted.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

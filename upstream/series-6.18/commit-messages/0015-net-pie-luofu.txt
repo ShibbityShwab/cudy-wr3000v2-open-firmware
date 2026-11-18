@@ -1,0 +1,24 @@
+net: ethernet: hisilicon: add Luofu PIE packet engine draft
+
+Add draft scaffolding for the PIE packet engine of the HiSilicon Hi5671Y
+"luofu" SoC, the DMA/ring half of the wired data path.  The driver
+claims the binding, validates the 64 KiB register window, the CRG
+clock/reset and the four named interrupts, allocates the coherent RX/TX
+descriptor rings and then refuses to arm the engine with -EOPNOTSUPP.
+
+It touches no register, enables no clock, toggles no reset, requests no
+interrupt and registers no NAPI instance.  The register/channel
+inventory has never been captured on hardware, several ring-pair words
+are only inferred, and an access to this block before it is ready has
+hung the board bus.  The recovered offsets, descriptor accessors and IRQ
+schedule are compiled scaffolding with the unrecovered fields marked
+TODO.
+
+This is an RFC and not mergeable: the attended read-only register
+inventory is the next step and must precede any data-path code.  The
+devicetree node stays disabled.  Never run on hardware.
+
+Host-compiled against linux-6.18.60, binding checked with
+dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

@@ -1,0 +1,18 @@
+ARM: head: materialize TEXT_OFFSET with mov_l
+
+TEXT_OFFSET is platform specific and the 0x00608000 offset required by
+the luofu platform cannot be encoded as an ARM immediate.  The early boot
+code uses #TEXT_OFFSET arithmetic in four places, which makes such a
+platform unbuildable.
+
+Replace the immediate arithmetic with the kernel's own mov_l macro, which
+emits movw/movt on ARMv7 and a literal load on older CPUs.  The linker
+textofs contract and the resulting load address are unchanged for every
+existing platform.  For the luofu platform the built kernel's
+disassembly was checked at all four sites and materializes 0x00608000,
+with _text = stext = 0xc0608000 and the load/entry address 0x80608000.
+
+This is an ARM core patch carried by a single-platform series; review by
+the ARM maintainers is expected before the platform can rely on it.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

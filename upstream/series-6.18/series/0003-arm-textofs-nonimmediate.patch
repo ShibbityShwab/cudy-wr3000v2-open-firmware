@@ -1,0 +1,79 @@
+From 90c9b8ab811100dd4bcb363feb54ed7395590dca Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 03/17] ARM: head: materialize TEXT_OFFSET with mov_l
+
+TEXT_OFFSET is platform specific and the 0x00608000 offset required by
+the luofu platform cannot be encoded as an ARM immediate.  The early boot
+code uses #TEXT_OFFSET arithmetic in four places, which makes such a
+platform unbuildable.
+
+Replace the immediate arithmetic with the kernel's own mov_l macro, which
+emits movw/movt on ARMv7 and a literal load on older CPUs.  The linker
+textofs contract and the resulting load address are unchanged for every
+existing platform.  For the luofu platform the built kernel's
+disassembly was checked at all four sites and materializes 0x00608000,
+with _text = stext = 0xc0608000 and the load/entry address 0x80608000.
+
+This is an ARM core patch carried by a single-platform series; review by
+the ARM maintainers is expected before the platform can rely on it.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ arch/arm/kernel/head.S          |   11 +++++++++--
+ arch/arm/boot/compressed/head.S |    6 ++++--
+ 2 files changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm/kernel/head.S b/arch/arm/kernel/head.S
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -64,8 +64,14 @@
+ 	.long	0
+ 	.popsection
+ 
++	/*
++	 * TEXT_OFFSET is platform specific and may not be encodable as an
++	 * ARM immediate.  mov_l materializes an arbitrary 32-bit constant:
++	 * movw/movt on ARMv7 and later, a literal load on older CPUs.
++	 */
+ 	.macro	pgtbl, rd, phys
+-	add	\rd, \phys, #TEXT_OFFSET
++	mov_l	\rd, TEXT_OFFSET
++	add	\rd, \rd, \phys
+ 	sub	\rd, \rd, #PG_DIR_SIZE
+ 	.endm
+ 
+@@ -120,7 +126,8 @@
+ 
+ #ifndef CONFIG_XIP_KERNEL
+ 	adr_l	r8, _text			@ __pa(_text)
+-	sub	r8, r8, #TEXT_OFFSET		@ PHYS_OFFSET
++	mov_l	r5, TEXT_OFFSET		@ not necessarily an immediate
++	sub	r8, r8, r5			@ PHYS_OFFSET
+ #else
+ 	ldr	r8, =PLAT_PHYS_OFFSET		@ always constant in this case
+ #endif
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -309,7 +309,8 @@
+ 1:
+ #endif /* CONFIG_USE_OF */
+ 		/* Determine final kernel image address. */
+-		add	r4, r0, #TEXT_OFFSET
++		mov_l	r4, TEXT_OFFSET
++		add	r4, r0, r4
+ #else
+ 		ldr	r4, =zreladdr
+ #endif
+@@ -407,7 +408,8 @@
+ 		 * of RAM and hope for the best.
+ 		 */
+ 		cmp	r0, #1
+-		sub	r0, r4, #TEXT_OFFSET
++		mov_l	r0, TEXT_OFFSET
++		sub	r0, r4, r0
+ 		bic	r0, r0, #1
+ 		add	r0, r0, #0x100
+ 		mov	r1, r6
