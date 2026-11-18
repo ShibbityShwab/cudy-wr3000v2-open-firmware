@@ -346,10 +346,15 @@ uImage + trailer.bin = kernel slice
      - `uImage total + trailer <= 8,650,752`.
 - The build must assert the uImage load/entry address against the kernel's computed
   `TEXT_OFFSET`/staging base rather than hardcoding 0x80608000 without a check (§3.2). [I]
-- [U] The exact overlay match rule and the minimal property set that satisfies the loader's
-  `vendor_id`/`board_id` match are only partly reversed (the loader's error strings are
-  `No valid overlay`, `Copy match dtb fail, use the default`, `Match dtbo fail, use the default
-  dtb`). The generation helper plus **one attended boot** is the closure.
+- [V] The overlay match rule and descriptor are decoded (2026-11-18): vendor_id env vs overlay
+  `vendor_id`, `compatible` strstr against an 11-row family table, `board_id` vs env or the 4-bit
+  strap; the 96-byte descriptor is a 32-byte header + 32-byte entries, with hard-checked `32`
+  constants, and the applier applies the first matching overlay with libfdt. The generator is
+  implemented as `target-skeleton/tools/fip-slice.py make-trailer` and reproduces the vendor
+  2.4.15 and 2.5.24 containers byte-for-byte; it is not yet wired into the image recipe. Full
+  byte tables and checks: `target-skeleton/docs/TRAILER-FORMAT.md`. Remaining closure: **one
+  attended boot** of a novel generated trailer, plus the meaning of the constant fields and the
+  628-byte slot-only region. [U] for those unknowns only.
 
 ### 5.3 Rootfs and overlay
 
@@ -729,8 +734,13 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
 
 ## 12. Open questions / TODO list
 
-1. **Trailer regeneration** - exact source of the 40,732-byte length; the overlay match rule; the
-   minimal property set; whether the 96-byte padding must be present. (§3.2, §5.2)
+1. **Trailer regeneration** - DECODED AND IMPLEMENTED 2026-11-18: descriptor layout, gate rule,
+   overlay match table and validation order are documented in
+   [../target-skeleton/docs/TRAILER-FORMAT.md](../target-skeleton/docs/TRAILER-FORMAT.md);
+   `fip-slice.py make-trailer` reproduces the vendor 2.4.15 (40,828 B) and 2.5.24 containers
+   byte-for-byte from user-supplied base DTB + overlays. Remaining: one attended boot of a novel
+   generated trailer, the meaning of the hard-checked `32` constants and the 628-byte slot-only
+   region, and why the bench artifact was cut to 40,732 B. (§3.2, §5.2)
 2. **Boot arguments** - how `root=`/`ubi.*` reaches the kernel; whether the loader overrides
    `/chosen/bootargs` from its environment. (§5.6)
 3. **Install path** - characterization of the stock TFTP recovery write path vs the documented

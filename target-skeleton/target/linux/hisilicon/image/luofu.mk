@@ -136,6 +136,7 @@ define Device/cudy_wr3000-v2
 	DEVICE_MODEL := WR3000
 	DEVICE_VARIANT := v2.0 (HiSilicon luofu R116)
 	DEVICE_DTS := luofu-r116
+	DEVICE_DTS_DIR := ../dts
 	KERNEL_SIZE := 8650752
 	# MUST equal KERNEL_LOADADDR above (the (stage & 0xf8000000)+TEXT_OFFSET
 	# derivation); the real recipe must assert it, not repeat it blindly.

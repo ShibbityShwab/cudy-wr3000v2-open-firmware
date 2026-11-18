@@ -38,11 +38,12 @@ Everything here is marked one of:
 | `target/linux/hisilicon/Kconfig` | review stub: the kernel platform Kconfig bits the target needs (documented, not applied) plus two target build options (**SCHEMATIC**; OpenWrt targets normally have no such file - see the header) | `target/linux/hisilicon/` only after upstream review; the platform symbols belong in the kernel patch `arch/arm/mach-hisilicon/Kconfig` |
 | `target/linux/hisilicon/luofu/target.mk` | subtarget: board name, `CPU_TYPE:=cortex-a9`, NAND feature, package sketch (**SCHEMATIC**) | `target/linux/hisilicon/luofu/target.mk` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/image/Makefile` | device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch, sysupgrade metadata sketch; lists the non-negotiable facts inline (**SCHEMATIC**) | `target/linux/hisilicon/luofu/image/Makefile` |
-| `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk` | legacy device-profile sketch (**SCHEMATIC**) | same path (only if the targeted release uses profiles) |
-| `target/linux/hisilicon/luofu/base-files/etc/board.d/02_network` | board detection / network-defaults sketch; deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
-| `dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy; proposed compatibles are **not** bindings (**UNTESTED**) | `target/linux/hisilicon/dts/luofu-r116.dts` and/or a kernel patch adding `arch/arm/boot/dts/luofu-r116.dts` (delivery mechanism is an open question) |
-| `tools/fip-slice.py` | read-only slice validator + fail-closed assembler/manifest generator; **refuses** to fabricate the trailer or skip the gate check; no vendor data embedded | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
+| `target/linux/hisilicon/luofu/config-6.18` | placeholder copy of the 5.10 reference under the tree's kernel version; **not re-derived** - does not validate a 6.18 build | same, after a real `olddefconfig` re-derivation |
+| `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
+| `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
+| `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
+| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy; proposed compatibles are **not** bindings (**UNTESTED**); the target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
+| `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
 | `../docs/TARGET-SKELETON.md` | one-page index/status of this skeleton, pointing back at TARGET-DESIGN.md | nowhere (repo documentation) |
 
 Deliberately **absent**: a factory/install image stanza (the install path is an open
@@ -62,7 +63,7 @@ the parent repository; they are **not** evidence that any target builds or boots
 | Stock loader boots with `bootcmd=mtd read kernel${bootflag} ${loadaddr}; bootfip ${loadaddr}`; `loadaddr=0x83200000`, `bootflag=a/b` | TARGET-DESIGN.md section 3.1; parent `BENCH-FACTS.md` section 5; local env dump (not published) |
 | `bootfip` accepts only the vendor FIP package (uImage + trailer); a bare uImage is refused | TARGET-DESIGN.md section 3.1; `docs/phase42-decode/report.md`; ledger 2026-10-14 |
 | The pre-entry gate is the overlay-container magic `0xd7b7ab1e` at `0x40 + ih_size + base-DTB totalsize`; entry is taken only if the applier returns 0 | TARGET-DESIGN.md section 3.2; `docs/phase42-decode/report.md` section 2; ledger PHASE 95/99 (2026-10-11) |
-| The trailer is exactly **40,732 bytes** in the working lane and is copied verbatim into every slice; it is not rebuilt | TARGET-DESIGN.md section 3.2; parent `tools/fire-preflight.sh` (fails if `tail -c 40732` differs); ledger 2026-11-17 08:05 |
+| The bench lane carries a fixed **40,732-byte** trailer copied verbatim into every slice. The format was decoded offline on 2026-11-18 (from the local U-Boot binary + artifacts); `make-trailer` now reproduces the vendor 2.4.15 container (40,828 B) and the 2.5.24 container byte-for-byte from user-supplied inputs. The bench lane itself still copies the fixed artifact until a generated trailer has had one attended boot | `docs/TRAILER-FORMAT.md`; ledger 2026-11-18 (trailer decode); parent `tools/fire-preflight.sh`; ledger 2026-11-17 08:05 |
 | Trailer anatomy: base DTB 31,220 B + 96-byte descriptor + overlay 4,592 B (board_id 0) + overlay 4,920 B (board_id 3); container total 9,608 B; the fixed artifact is 96 B shorter than the vendor tail (missing bytes inside the last overlay's 1,024-byte FDT padding) | TARGET-DESIGN.md section 3.2; ledger PHASE 91; re-parsed locally on 2026-11-18 from the local-only artifact (the artifact is not in this repo) |
 | uImage identity in the bench lane: `mkimage -A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000 -n Linux-5.10.201`; `bootfip` reads it as `Image Name: Linux-5.10.201` | TARGET-DESIGN.md section 3.2; local build lane `build-3dl.sh`; ledger PHASE 100/125 |
 | Load/entry address follows from the loader staging base and the kernel's `TEXT_OFFSET`: `(0x83200000 & 0xf8000000) + 0x00608000 = 0x80608000`; the lab hit this as a link-address defect | TARGET-DESIGN.md section 3.2; ledger PHASE 93-100 |
@@ -74,11 +75,19 @@ the parent repository; they are **not** evidence that any target builds or boots
 | Stock U-Boot checksum verifiers are off the boot path; the uImage hcrc/dcrc checks are not what refuses a slice | TARGET-DESIGN.md section 3.1; `docs/phase42-decode/report.md` section 2 |
 | DTS node values (addresses, interrupts, clock/reset geometry, partitions, PHY mapping, thermal trips) | `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts` (parent tracked mirror); `docs/soc/vendor-dt-notes.md`; TARGET-DESIGN.md section 6 |
 
-**Not verified anywhere** (and therefore not claimed by this skeleton): the overlay
-match rule, descriptor words at +8..+28, the reason for the 96-byte short trailer,
-whether the stock loader overrides `/chosen/bootargs`, how `root=`/UBI arguments reach
-the kernel, the selector protocol for both pairs, the Linux read path for the boot
-selector, the MAC-address source, the install path, and any driver or DTS build.
+**Decoded on 2026-11-18 (offline, see `docs/TRAILER-FORMAT.md`):** the overlay
+match rule (vendor_id env + compatible-family table + board_id/strap), the descriptor
+shape (+8/+12/+20 are hard-checked `32`, +16 is the entry count, entries are 32-byte
+totalsize/offset records), the 96-byte short-trailer explanation (zero FDT padding cut),
+the loader validation order (uImage header only, no CRC, FDT header, applier, overlay
+apply), and the fact that the vendor containers can be generated byte-for-byte.
+
+**Still not verified:** the meaning of the +8/+12/+20 constants and the unvalidated
++24/+28/entry reserved words, the 628-byte slot-only scrambled region after the
+container, whether the stock loader overrides `/chosen/bootargs`, how `root=`/UBI
+arguments reach the kernel, the selector protocol for both pairs, the Linux read path
+for the boot selector, the MAC-address source, the install path, and any driver or DTS
+build. One attended boot of a novel generated trailer is still required.
 See TARGET-DESIGN.md section 12.
 
 ---
@@ -89,34 +98,76 @@ These come from the stock loader and were found the hard way on the bench (TARGE
 section 3). Any future recipe that contradicts one of them is wrong. The image
 `Makefile` repeats them inline.
 
-### 3.1 Kernel slot = legacy uImage + fixed 40,732-byte FIP trailer
+### 3.1 Kernel slot = legacy uImage + FIP overlay-container trailer
 
     +------------------+-----------------------------+---------------------------+
     | uImage header    | kernel payload              | FIP trailer               |
-    | 0x40 bytes       | zImage (+ appended DTB)     | FIXED 40,732 bytes        |
+    | 0x40 bytes       | zImage (+ appended DTB)     | base DTB + descriptor +   |
+    |                  |                             | board DTBO overlays       |
     +------------------+-----------------------------+---------------------------+
     ^ slice offset 0                                 ^ 0x40 + ih_size
 
 - The slot budget is **8,650,752 bytes**. Anything larger must fail the build.
-- The trailer is **not** generated by the bench: the verified lane copies a fixed
-  artifact whose md5 is recorded in the parent lane (`7e5a83c0...`) and whose sha256
-  is recorded in TARGET-DESIGN.md section 3.2 (`336b0792...`, abbreviated there); the
-  artifact itself is local-only and is **not** in this repository. An upstream recipe
-  must regenerate a byte-identical or semantically equivalent trailer from our own
-  sources and prove it with one attended boot (TARGET-DESIGN.md section 5.2). Until
-  then `tools/fip-slice.py` refuses to generate one.
-- Anatomy (trailer-relative): base DTB at 0 (FDT `d00dfeed`, totalsize 31,220 =
-  0x79f4); 96-byte overlay-container descriptor at 31,220; overlay 0 4,592 B at
-  31,316; overlay 1 4,920 B at 35,908. Descriptor container total = 9,608 B, so the
-  nominal end is 40,828 B. The fixed lab artifact is 40,732 B, i.e. 96 B short, and the
-  missing bytes are inside the last overlay's 1,024-byte FDT trailing padding (logical
-  content ends at 39,804 B). Both lengths have booted on this bench; **why 40,732 was
-  derived is not documented** [U] (TARGET-DESIGN.md sections 3.2, 12 item 1).
-- Measured descriptor words (big-endian): `+0 magic d7b7ab1e`, `+4 container total
-  0x2588 (9608)`, `+32 overlay-0 size`, `+36 descriptor length 96`, `+64 overlay-1
-  size`, `+68 0x1250 (4688; semantics NOT reversed)`. Words at +8..+28 are measured
-  but unreversed. This is analysis, not embedded data; the tool recomputes everything
-  from the file it is given.
+- Trailer anatomy (the vendor 2.4.15 container, 40,828 B; values recovered from
+  the local-only stock slot dump and the vendor sysupgrade image): base DTB at 0
+  (FDT `d00dfeed`, totalsize 31,220 = 0x79f4); 96-byte overlay-container
+  descriptor at 31,220 (32-byte header + 2 x 32-byte entries for this board);
+  overlay 0 4,592 B at 31,316 (board_id 0); overlay 1 4,920 B at 35,908
+  (board_id 3, this R116). The descriptor's container total is 9,608 B, so the
+  nominal end is 40,828 B. A second independent vendor container in the 2.5.24
+  firmware (base DTB 31,300; overlays 4,604/4,968; total 9,668) has the same
+  descriptor shape. See `docs/TRAILER-FORMAT.md` for the byte tables.
+- The fixed bench-lane trailer is **40,732 bytes and is byte-identical to the
+  first 40,732 bytes of that 40,828-byte container**: the last 96 bytes of the
+  last overlay's 1,024-byte all-zero FDT trailing padding are absent (its
+  logical content still ends at 39,804 B). Both lengths have booted on the
+  bench. The loader tolerates the short version because the applier never
+  compares the declared container total with the bytes present, and the overlay
+  is opened into a 128 KiB work buffer where the missing bytes fall in unused
+  FDT padding. **Why the artifact was cut to 40,732 is not documented** [U];
+  the arithmetic 31,220 + 4,592 + 4,920 = 40,732 (the old descriptor-less tail
+  size) suggests the historical length was kept [I]. The 40,732 size is a lab
+  convention enforced by the fire preflight, not a loader requirement.
+- The 96-byte descriptor is now **fully decoded** (2026-11-18 disassembly of the
+  on-device U-Boot 2022.07 build; big-endian words, relative to the descriptor):
+  header `+0` magic `0xd7b7ab1e`, `+4` container total (the loader only
+  checks it is <= 8 MiB), `+8`/`+12`/`+20` required constant **32** (their meanings
+  are [U]; the loader accepts nothing else), `+16` entry count (<= 64, the
+  applier's loop bound), `+24`/`+28` unread zero. Entries start at `+32`, stride
+  32, count entries: entry `+0` = that overlay's FDT totalsize (the loader does
+  not read it), entry `+4` = overlay offset relative to the descriptor (read; the
+  target must be a valid FDT <= 128 KiB), entry `+8..+28` unread zero.
+  Correcting the earlier reading: `+36` is entry 0's offset (96 = 32 + 32 x
+  count), not a stored descriptor length; `+68` is entry 1's offset (4,688 =
+  96 + 4,592). `tools/fip-slice.py` recomputes all of this from the file it is
+  given; no vendor bytes are embedded.
+- The overlay match rule is **decoded** as well: the loader compares the
+  overlay's root `vendor_id` with the environment's `vendorid` (stock: `hsan`),
+  then matches the first `compatible` string against an 11-row
+  family/vendor table (our row is `luofu`/`hsan`; `hsan-luofu` contains the
+  token), then selects by `board_id`: against an environment `boardid` if one
+  is set, otherwise against the hardware board strap read from four pinctrl
+  "cfg" registers (`0x14940000 + 4*{0x0a,0x0b,0x12,0x13}`, bit 6). The R116
+  strap value is 3 (the board_id=3 overlay is the one the stock loader applied
+  to this unit). The **first** matching overlay is applied to the base DTB with
+  libfdt `fdt_overlay_apply`; if none matches, the applier returns non-zero,
+  `bootfip` prints "boot apply overlay fail" and never jumps. Details and
+  evidence: `docs/TRAILER-FORMAT.md` section 6.
+- `bootfip` validates the uImage magic, the ARM architecture byte, a non-zero
+  `ih_size`, the base DTB header and then the gate/descriptor/overlay checks
+  above; it does **not** verify the uImage hcrc/dcrc or the load/entry address.
+  A generated trailer must therefore satisfy the structural checks, and the
+  build must still derive/assert the load address (section 3.4).
+- The fixed artifact (`md5 7e5a83c0...`, sha256 `336b0792...`) is local-only and
+  is **not** in this repository; the verified lane keeps copying it. From
+  2026-11-18 `tools/fip-slice.py make-trailer` can generate a structurally
+  validated trailer from a user-supplied base DTB + overlays (fail-closed,
+  mirroring every decoded loader check, and reproducing both recorded vendor
+  containers byte-for-byte in its regression test). That generation is **not
+  hardware-proven**: one attended boot on a recovered unit is still required
+  before the image recipe relies on it (TARGET-DESIGN.md section 5.2). A
+  generated trailer is not 40,732 B; that size is only the bench-lane
+  convention.
 
 ### 3.2 The gate magic is checked before kernel entry
 
@@ -216,7 +267,7 @@ plus a **kernel patch series that does not exist yet** (TARGET-DESIGN.md section
   (TARGET-DESIGN.md section 5.4) - **not written**;
 - the sysupgrade container wrapper that adds the kernel slice, rootfs UBI and
   `fip-manifest.txt` to `CONTROL` - **not written**;
-- a trailer generator (TARGET-DESIGN.md section 5.2) - **not written**.
+- a trailer generator (TARGET-DESIGN.md section 5.2) - **written and structurally validated** (`tools/fip-slice.py make-trailer`, byte-exact against both vendor containers); a novel generated trailer still needs one attended boot.
 
 The DTS delivery is an open question: OpenWrt targets commonly keep board DTS files
 under `target/linux/<board>/dts/`, while a new SoC DTS may be cleaner as a kernel patch
@@ -229,13 +280,20 @@ section 6.1).
 
 Checked on the author's host on 2026-11-18, nothing more:
 
-- `tools/fip-slice.py`: `python3 -m py_compile` passes. Its `check`/`assemble`/
-  `manifest` paths were exercised against a **synthetic** uImage (built in /tmp with a
-  correct mkimage-style header) concatenated with the local-only 40,732-byte bench
-  trailer, and against deliberately corrupted variants (tampered gate magic, truncated
-  input, bad uImage magic, wrong load address, overwrite without `--force`): the
-  expected pass/fail outcomes were observed. `make-trailer` refuses with exit code 3.
-  No vendor bytes were copied into the repository.
+- `tools/fip-slice.py`: `python3 -m py_compile` passes. `check`/`assemble`/`manifest`
+  were exercised against a synthetic uImage + the local-only 40,732-byte bench trailer
+  and against corrupted variants (tampered gate magic, truncated input, bad uImage
+  magic, wrong load address, overwrite without `--force`): expected pass/fail outcomes.
+  **`make-trailer` is implemented and was validated offline**: from local-only vendor
+  inputs it reproduces the 2.4.15 container (40,828 B) and the 2.5.24 container
+  byte-for-byte, and the generator refuses mismatched vendor/board/family, oversized
+  overlays, non-FDT inputs and failed libfdt overlay application. No vendor bytes were
+  copied into the repository; one attended boot of a novel trailer remains required.
+- **OpenWrt main smoke test (2026-11-18)**: copied into `openwrt main` (commit
+  `27663a0`), `make defconfig` PASS (generated
+  `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`) and
+  `make target/linux/prepare` RC=0 (kernel 6.18.60). No compile/image/boot. Details:
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host. dtc emits
   exactly one expected warning: `unique_unit_address: /clock-reset-controller@14880000
   duplicate unit-address (also used in node /watchdog@14880000)` - that is the
@@ -243,8 +301,9 @@ Checked on the author's host on 2026-11-18, nothing more:
   cannot keep both nodes. This is a **syntax** result only: no bindings, no
   `make dtbs_check`, no kernel build.
 - `base-files/etc/board.d/02_network`: `sh -n` passes.
-- The Makefiles/Kconfig/profile: **not parsed by make**, never built, and not checked
-  against any OpenWrt tree (none is present in this checkout).
+- The target Makefiles were **parsed by OpenWrt main's make** in the smoke test above
+  (`make defconfig` and `make target/linux/prepare`); they have still never been
+  compiled, imaged or booted, and the Kconfig stub/profile file are not used by main.
 
 **Not done, and not claimed:** no OpenWrt build, no kernel build, no image build, no
 boot, no device interaction, no UART, no bench tool run, no driver/binding review.
@@ -255,9 +314,11 @@ boot, no device interaction, no UART, no bench tool run, no driver/binding revie
 
 Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
 
-1. **Trailer regeneration** - the 40,732 derivation, the overlay match rule, the
-   minimal property set, whether the 96 missing bytes matter. Blocks
-   `fip-slice.py make-trailer` and the image recipe.
+1. **Trailer regeneration** - decoded and implemented (`docs/TRAILER-FORMAT.md`,
+   `fip-slice.py make-trailer`, byte-exact against both vendor containers); what
+   remains is one attended boot of a novel generated trailer before the image recipe
+   relies on it, plus the unknowns listed in TRAILER-FORMAT.md (constant meanings,
+   628-byte slot region).
 2. **Boot arguments** - how the rootfs selector reaches the kernel, and whether the
    stock U-Boot overrides `/chosen/bootargs`.
 3. **Install path** - stock TFTP recovery vs a documented vendor-root install

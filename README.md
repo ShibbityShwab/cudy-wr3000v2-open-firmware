@@ -15,7 +15,10 @@
 > schematics, not a working target: **no OpenWrt target, board DTS, image recipe or driver series
 > has been built or tested yet.** The first-pass files are in
 > [`target-skeleton/`](target-skeleton/README.md) (status UNTESTED/SCHEMATIC), indexed by
-> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md).
+> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md); its target layout was accepted by
+> OpenWrt main's `make defconfig` and `make target/linux/prepare` (no compile/image/boot - see
+> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md)), and the FIP trailer format is decoded with
+> a byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)).
 
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,

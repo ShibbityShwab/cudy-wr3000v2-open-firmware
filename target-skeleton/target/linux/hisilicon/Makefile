@@ -35,7 +35,7 @@ SUBTARGETS:=luofu
 # development in the 2026-10-01 snapshot (PORT-PLAN.md); re-verify before use.
 # The only kernel this project has lab evidence for is 5.10.201, which is why
 # luofu/config-5.10 is committed as a REFERENCE - it is not the final config.
-KERNEL_PATCHVER:=6.12
+KERNEL_PATCHVER:=6.18
 
 include $(INCLUDE_DIR)/target.mk
 

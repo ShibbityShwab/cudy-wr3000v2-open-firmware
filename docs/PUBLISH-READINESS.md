@@ -11,8 +11,11 @@ The upstream design layer was added on 2026-11-18: `TARGET-DESIGN.md` (target/su
 DTS conversion, FIP/trailer/dual-slot/sysupgrade recipe, driver readiness, acceptance criteria),
 the refreshed `ROADMAP-OPENWRT.md`, the `GPL-REQUEST.md` status/tracking/follow-up pack, the
 refreshed `DOCUMENTATION-HUNT.md`, the optional `VENDOR-SKB-BRIDGE-PORT.md` spec, and the
-schematic `target-skeleton/` (10 files, UNTESTED - it has never been built inside an OpenWrt tree
-or run on the router; its FIP tool deliberately refuses to fabricate the trailer descriptor).
+schematic `target-skeleton/` (UNTESTED - never compiled, imaged or booted on the router; its
+target layout was accepted by OpenWrt main's `make defconfig` + `make target/linux/prepare`, see
+`SKELETON-SMOKE.md`, and its FIP tool now decodes and structurally generates trailers, reproducing
+the vendor containers byte-for-byte - `../target-skeleton/docs/TRAILER-FORMAT.md`; no novel
+trailer has been booted).
 
 None of the publish checklist items below is closed by this: the vendor `.o` history purge, the
 GPL-2.0 license text/DCO sign-offs, the missing GPL reply/receipt, and the Wi-Fi/LAN-switch
