@@ -2444,78 +2444,92 @@ availability is argued from `CONFIG_DEVTMPFS_MOUNT=y` + the MTD core (not measur
 the addresses cannot reach a netdev until the LSW switch port map exists
 (TARGET-DESIGN.md 8.1). No device, router, UART, TFTP or flash tool was touched.
 
-## 2026-11-18 (bdinfo MAC provisioning session): factory LAN/WAN MACs from bdinfo
+## 2026-11-18 (CRG clock-tree session): gate parents, fixed clocks, read-only PLLs/muxes (patch 019)
 
-**Status: the target image now provisions its LAN/WAN MAC addresses from the factory
-`bdinfo` partition, and the whole logic is host-validated; NOTHING HAS BOOTED and no MAC
-has been read from a real unit or applied to a netdev.**
+The CRG clock tree was decoded from the vendor module and the patch-`004` driver was
+extended with the clock-parent, PLL and mux model (task-35). The decode and the
+remaining [U] items are in [MISC-SOC-BLOCKS.md](MISC-SOC-BLOCKS.md) section 5; the patch
+header carries the exact register/field notes. **Host-only: no device, router, UART,
+TFTP, flash or bench tool was touched; nothing was booted.**
 
-### What changed
+### What was added
 
-- `target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` (new): reads the
-  plaintext 6-byte factory MAC at `bdinfo+0xde00` through `mtd_get_mac_binary` (direct
-  `/dev/mtdN` character-device fallback, found by partition label), validates it,
-  derives LAN = base MAC and WAN = base+1 with the vendor `macaddr_add` arithmetic, and
-  falls back to a clearly logged locally-administered random pair when the partition is
-  missing/corrupt; the bdinfo partition is only ever read.
-- `target/linux/hisilicon/base-files/etc/board.d/02_network`: sources the helper and
-  records both addresses through `ucidef_set_interface_macaddr` (the normal board.d ->
-  board.json -> `/bin/config_generate` -> netifd path). The interface placeholder is
-  deliberately untouched (the switch port map is still missing, TARGET-DESIGN.md 8.1), so
-  until that map exists the addresses are recorded in board.json only. The file also stops
-  sourcing the non-existent `/lib/functions/board.sh`; this release defines
-  `board_config_update`/`board_config_flush` in `/lib/functions/uci-defaults.sh` and
-  the read/MAC helpers in `/lib/functions/system.sh`.
-- `tools/test-mac-provisioning.sh` (new): host-only mocked harness for the helper (fake
-  `/proc/mtd`, fake mtd devices, mocked `mtd_get_mac_binary`/`/dev/urandom`/
-  `ucidef_set_interface_macaddr` seams): 103/103 assertions pass.
-- no kernel patch, config delta or DTS change is part of this lane.
+- `drivers/clk/hisilicon/crg-luofu.c`: the 16 gate clocks are parented on their real
+  input clocks (apb/ahb/gemacN/lsw_dp/lsw_pfe, decoded from the vendor devicetree)
+  instead of the previous single `apb_clk` parent; the two PLLs (control words at
+  `0x198`/`0x1e0`, status word `0x90` bits 30/27) and the two muxes (`0x138` bit 3 CPU,
+  bit 1 efuse) are registered as read-only clock outputs of the same provider. The
+  provider resolves its seven input clocks from the node `clocks`/`clock-names` with
+  `of_property_match_string` + `of_clk_get_parent_name`, so no global clock name is
+  guessed. The probe remains register-free; all clocks are `CLK_IGNORE_UNUSED`.
+- `include/dt-bindings/clock/hisilicon,luofu-crg.h`: four new indices appended
+  (`LUOFU_CLK_PLL_CPU` 16, `LUOFU_CLK_PLL_LSW` 17, `LUOFU_CLK_CPU_MUX` 18,
+  `LUOFU_CLK_EFUSE_MUX` 19; `LUOFU_CLK_NR` 20). The existing 16 gate IDs are not
+  renumbered.
+- the YAML binding gains the required `clocks`/`clock-names` input-clock model and its
+  example; the PLL/mux description states they are read-only. No new Kconfig symbol or
+  config line: the driver is still `CONFIG_LUOFU_CRG`.
+- the target DTS (in the incoming integration patch, not edited here) gains the four
+  missing fixed clocks (`gemacN_clk` 125 MHz, `lsw_dp_clk` 166 MHz, `lsw_pfe_clk`
+  333 MHz, `efuse_ring_clk` 20 MHz) and the `clocks`/`clock-names` on the CRG node.
 
-### Rules implemented (evidence: MISC-SOC-BLOCKS.md section 1)
+### The decode (why the values are what they are)
 
-- LAN = the factory base MAC itself; WAN = LAN+1 under the vendor/OpenWrt `macaddr_add`
-  rule (OUI preserved, low 24 bits incremented modulo 2^24, so `...:ff:ff:ff` wraps to
-  `...:00:00:00`). Sources: vendor 2.5.24 `99_fixwan:41` (LAN from
-  `mtd_get_mac_binary bdinfo 0xde00`), vendor 2.4.15 `board.d/02_network:25-29`
-  (canonicalized `bdinfo mac` for LAN, +1 for WAN, `ucidef_set_interface_macaddr`),
-  vendor 2.4.15 `99_fixwan:17-52` (per-port application).
-- validation rejects non-MAC input, all-zero, all-`0xff` (erased), multicast,
-  locally-administered, OUI `00:00:00` and the `...:ff:ff:ff` WAN-wrap case. The last
-  two are conservative project policy [I], not vendor rules; a rejected copy is logged and
-  replaced with a random pair, never "repaired".
-- the U-Boot env `ethaddr` is not read or written (it is a locally-administered loader
-  value, MISC-SOC-BLOCKS 1.2), and no factory bytes are printed or embedded anywhere.
+The vendor `hi_clk.ko` (GPL, not stripped, 15,556 B, md5
+`3b331b9058e13bc409dd8f0040af3b11`, identical in the 2.4.15 and 2.5.24 rootfs) was
+disassembled host-side. `hi_pll_recalc_rate` decodes a fractional PLL:
+`rate = parent * (int + frac/2^24) / fbdiv`, followed by two divider-select fields
+(`word0[10:8]` and `word0[6:4]`, each `+ div-factor`, skipped when zero; bit 3 of word0
+byte 0 selects the integer-only path). The fields are [V] and the arithmetic order is
+taken from the module; the on-board value is **not** measured - the boot-programmed
+words have never been read back, so the derived rate is [U] until a `clk_summary`/
+control-word readback (attended). The writer (`0x4c4`) busy/re-lock protocol was
+decoded but is **not** implemented: its feedback-word encoding is not verified and a
+wrong store can hang the core. The muxes are read-only (`set_parent` returns
+`-EOPNOTSUPP`): `0x138` bit 3 selects the CPU clock source and must never be writable,
+and the efuse mux is only switched by an efuse programming path that this tree does not
+have.
 
-### Validation (isolated clone; shared clone untouched)
+### Verification (exact commands and results)
 
-    cp -a --reflink=auto /home/shibbityshwab/openwrt-lab /home/shibbityshwab/openwrt-lab-mac
-    make defconfig
-    make world -j16
+Validated in an isolated btrfs-reflink copy of the shared clone (`openwrt-lab-clk`,
+`openwrt main` `27663a0`, `linux-6.18.60`, the OpenWrt GCC 14.4.0 of that tree; the
+shared clone was not modified):
 
-- `make defconfig`: RC=0, `CONFIG_TARGET_PROFILE="DEVICE_cudy_wr3000-v2"`.
-- `make world -j16`: **RC=0** (started 18:34, image written 18:44 = about 10 minutes on
-  16 cores in the cache-reused clone; an explicit incremental `make world -j16` re-run
-  also returned RC=0), built container
-  `openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`, **6,185,262 B**,
-  sha256 `54652e56241e26eba0e95bc7fa663950c6e69ddb834dba77beb5b1afbeea2cac`;
-  `scripts/luofu-image.py check-container` PASS on the built bytes.
-- built rootfs: `/lib/functions/luofu-mac.sh` (mode 0644) and `/etc/board.d/02_network`
-  (mode 0755) are present in the built squashfs and byte-identical to the repository files;
-  `sh -n` clean on the installed copies and `tools/test-mac-provisioning.sh` passes
-  103/103 when pointed at them.
-- the target tree for the build came from `opensource` HEAD (`5989404`, series
-  `001`-`018`) plus this lane's two base-files files; the concurrently in-flight patch
-  `019` (CRG clock tree) was excluded on purpose;
-- logs and hashes: `/home/shibbityshwab/openwrt-lab-mac/evidence-mac-20261118/`
-  (machine-local, outside the repository: the shared-clone build is not a repo artifact).
+- patches `001`-`019` apply to a fresh pristine `linux-6.18.60` tree in order, RC=0,
+  no `.rej`/`.orig`; patch `019` dry-run on the `001`-`018` tree RC=0, apply RC=0,
+  `git apply --check` RC=0, and the applied files are byte-identical to the series
+  tree;
+- `make target/linux/prepare` RC=0 (patch `019` applied: 3 patching-file lines), then
+  `make target/linux/compile` **RC=0**, **0 warnings** in the whole log and 0 errors;
+  `arch/arm/boot/zImage` 3,264,560 B sha256 `4456b0ec...`,
+  `drivers/clk/hisilicon/crg-luofu.o` 43,900 B;
+- `TEXT_OFFSET` unchanged: `textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000`; both
+  `arch/arm/kernel/.head.o.cmd` and `arch/arm/boot/compressed/.head.o.cmd` carry
+  `-DTEXT_OFFSET=0x00608000`; `System.map` gives `_text = stext = 0xc0608000`;
+  the CRG objects are linked (`luofu_crg_probe`, `luofu_crg_pll_recalc_rate`,
+  `luofu_crg_mux_get_parent` in `System.map`);
+- config: no patch-introduced symbols; `make kernel_oldconfig` five runs RC=0, the
+  re-derived target `config-6.18` is byte-idempotent (`4106877f...`, 300 symbols, the
+  same set as the `001`-`018` lane) and the kernel `.config` is byte-identical to that
+  lane (`1b9b084e...`); `CONFIG_LUOFU_CRG=y` and `CONFIG_COMMON_CLK=y` unchanged;
+- `dt_binding_check` for the extended YAML: RC=0, the example preprocesses and compiles
+  (`DTEX`/`DTC [C]`), no diagnostic mentions the file; the only non-yamllint caveat is
+  the same pre-existing `realtek,rtl8152.yaml` schema note and the "yamllint not
+  installed" skip as the earlier lanes;
+- board DTS (with the four fixed clocks + CRG `clocks`/`clock-names`): cpp RC=0;
+  patched-kernel `dtc` RC=0 with **zero warnings (stderr 0 bytes)**; DTB 11,346 B
+  sha256 `a31ab53f...`; `dt-validate` RC=0 with only the same six pre-existing findings
+  as the 001-018 lane and **none** naming the CRG or a new clock node;
+- checkpatch: `crg-luofu.c` 0/0, the dt-bindings header 0/0 and the YAML 0/0; the bare
+  patch file only reports the expected working-format metadata ("Missing commit
+  description") plus the series-wide "DT binding docs should be a separate patch" note
+  (the whole 001-019 series keeps binding+driver in one patch per block).
 
-### What this proves / does not prove
-
-Proven host-only: the board.d path reads the right six bytes of the right partition,
-validates and derives the vendor LAN/WAN addresses, records them through the standard
-board.json path, logs and falls back on every bad input tested, never writes the factory
-partition, and the image installs the files. Not proven: any hardware behaviour. The
-bdinfo read has never run on a booted target; preinit `/dev/mtdN`/`/dev/mtdblockN`
-availability is argued from `CONFIG_DEVTMPFS_MOUNT=y` + the MTD core (not measured); and
-the addresses cannot reach a netdev until the LSW switch port map exists
-(TARGET-DESIGN.md 8.1). No device, router, UART, TFTP or flash tool was touched.
+Not proven: any hardware behaviour, and specifically the PLL **rate values** (the
+equation is decoded from the module, not measured), the PLL status-bit meaning and the
+mux parent read-back. No device, router, UART, TFTP or flash tool was touched; the
+kernel has never been booted. The attended checks remaining: one boot with a read-only
+probe to print `clk_summary` (CPU/LSW PLL rates, `cpu_mux`/`efuse_mux` parents, gate
+parents) and read the two control words at `0x198`/`0x1e0`; and a read-only census of
+the `0x90` status bits. No write experiment is needed for this read-only stage.

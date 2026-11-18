@@ -1,7 +1,7 @@
 From c6a43594cd17259dcb6725ffb76444fc3dd10df3 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 17/18] soc: hisilicon: add Luofu A/B boot selector
+Subject: [PATCH 17/19] soc: hisilicon: add Luofu A/B boot selector
 
 Add a sysfs interface to the SYSCTRL cell in the HiSilicon Hi5671Y
 "luofu" SoC (0x10100000 + 0x0c08 on this board) that records the A/B

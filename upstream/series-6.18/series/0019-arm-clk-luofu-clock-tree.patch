@@ -1,0 +1,1025 @@
+From 7cf1d38315bbfefbea7b7dfdaf1c12836e91e41d Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 19/19] clk: hisilicon: add the Luofu CRG clock tree
+
+Extend the CRG clock provider of the HiSilicon Hi5671Y "luofu" SoC with
+the clock tree that the initial CRG clock/reset controller deliberately
+left out: the 16 gate clocks now hang off their real input clocks, and
+the two PLLs and the two muxes of the CRG page are registered as
+read-only clock outputs of the same provider.
+
+The gate parents are decoded from the vendor devicetree
+(MISC-SOC-BLOCKS.md section 5.2): sfc, gpio0/gpio1, i2c0, led_pwm and
+pcie0/pcie1 on apb_clk; gemac_clk0..4 and mdio_clk0 on gemacN_clk;
+lsw_dp_clk0 on lsw_dp_clk; lsw_pfe_clk0 on lsw_pfe_clk; pie_clk0 on
+ahb_clk.  The provider does not guess those names: it resolves the
+seven input clocks from the node's clocks/clock-names with
+of_property_match_string() and of_clk_get_parent_name(), and the
+binding now requires both properties.  The gate register/bit geometry
+remains driver data.
+
+The two PLLs (control words at 0x198 and 0x1e0, shared status word at
+0x90 bits 30/27) and the two muxes (0x138 bits 3 and 1) are registered
+as read-only clocks with the appended indices LUOFU_CLK_PLL_CPU (16),
+LUOFU_CLK_PLL_LSW (17), LUOFU_CLK_CPU_MUX (18) and
+LUOFU_CLK_EFUSE_MUX (19); LUOFU_CLK_NR becomes 20.  Appending the IDs
+does not renumber the existing gate ABI.
+
+The PLL rate equation is decoded from the vendor hi_clk.ko
+(hi_pll_recalc_rate: parent * (int + frac / 2^24) / fbdiv, then the two
+divider-select fields with the absent vendor "div-factor" term as 0)
+and cross-checked against the vendor DT field layout.  The provider
+implements recalc_rate and is_enabled only: there is no set_rate, and
+no PLL or mux enable/disable.  The on-board control words have never
+been read back on this board, so the decoded rates remain read-only
+and unmeasured.  The vendor writer's busy-bit/re-lock protocol is
+decoded but not implemented because the feedback-word encoding is not
+verified, and a wrong PLL store can hang the CPU.
+
+The muxes are read-only for the same safety reason.  0x138 bit 3
+selects the CPU clock source between the two PLLs and must never be
+writable; bit 1 is the efuse ring source, which only the vendor efuse
+programming path ever switches and which this tree does not port (the
+efuse cells are one-way fences and key material).  set_parent() returns
+-EOPNOTSUPP for both, and the parent tables are decoded from the vendor
+devicetree, never measured.
+
+Gates are registered with CLK_IGNORE_UNUSED so that
+clk_disable_unused() cannot gate a clock the bootloader left enabled
+(the NAND boot path is behind the SFC gate).  Probe stays free of
+register writes; the clock words are only read when a consumer asks
+for a rate, a parent or a status.
+
+This patch adds no Kconfig symbol and no config line: it only extends
+the existing CONFIG_LUOFU_CRG driver and its binding and clock-ID
+header.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors); the extended binding passes dt_binding_check.  The driver
+has never run on hardware: no PLL rate, PLL status, mux parent or gate
+state is measured, and there is no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ .../bindings/clock/hisilicon,luofu-crg.yaml        |   97 +++
+ drivers/clk/hisilicon/crg-luofu.c                  |  677 +++++++++++++++++---
+ include/dt-bindings/clock/hisilicon,luofu-crg.h    |   19 -
+ 3 files changed, 697 insertions(+), 96 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml b/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+--- a/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
++++ b/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+@@ -23,11 +23,24 @@ description: |
+   reset providers, and the watchdog child obtains the same register map through
+   the syscon instead of mapping the page a second time.
+ 
+-  The clock outputs are gate clocks. Their register/bit geometry is driver
+-  data; the devicetree ABI is the single-cell index defined in
+-  include/dt-bindings/clock/hisilicon,luofu-crg.h. Gate parents are not modelled
+-  yet (the driver parents every gate on the board APB clock); that is a
+-  documented driver limitation, not part of the binding.
++  The clock provider exposes four groups of clocks:
++
++  - 16 gate clocks whose register/bit geometry is driver data; the devicetree
++    ABI is the single-cell index defined in
++    include/dt-bindings/clock/hisilicon,luofu-crg.h;
++  - the two PLLs (CPU PLL at 0x198, LSW PLL at 0x1e0) and the two muxes in
++    0x138 (CPU source select bit 3, efuse source select bit 1), also addressed
++    by their clock index.
++
++  The gate parents, the PLL parents and the mux parents are decoded from the
++  vendor devicetree and are provided to the driver through the node's clocks /
++  clock-names properties: the driver does not guess parent clock names. All
++  seven input clocks are required (see clock-names).
++
++  The PLL and mux clocks are read-only: their rates can be read, but no driver
++  in this provider programs a PLL or switches a mux. The CPU mux must never be
++  writable because it selects the CPU clock source; the efuse mux is only ever
++  switched by an efuse programming path, which is not part of this binding.
+ 
+   The reset specifier is two cells: the CRG page register offset of the reset
+   word and the bit number. Only the three reset words are accepted; a specifier
+@@ -50,10 +63,34 @@ properties:
+   reg:
+     maxItems: 1
+ 
++  clocks:
++    maxItems: 7
++    description:
++      Input clocks of the CRG, named by clock-names.
++
++  clock-names:
++    items:
++      enum:
++        - osc
++        - ahb
++        - apb
++        - gemacN
++        - lsw_dp
++        - lsw_pfe
++        - efuse_ring
++    minItems: 7
++    maxItems: 7
++    description: |
++      osc is the reference of both PLLs and one input of the efuse mux,
++      efuse_ring is the other efuse mux input. The remaining clocks are the
++      parents of the gate outputs: apb for the APB, PCIe, SFC, GPIO, I2C and
++      LED-PWM gates, ahb for the PIE gate, gemacN for the five GEMAC gates and
++      the MDIO gate, lsw_dp/lsw_pfe for the internal switch gates.
++
+   '#clock-cells':
+     const: 1
+     description: |
+-      The single cell is a gate clock index from
++      The single cell is a clock index from
+       include/dt-bindings/clock/hisilicon,luofu-crg.h.
+ 
+   '#reset-cells':
+@@ -72,6 +109,8 @@ properties:
+ required:
+   - compatible
+   - reg
++  - clocks
++  - clock-names
+   - '#clock-cells'
+   - '#reset-cells'
+ 
+@@ -83,9 +122,55 @@ examples:
+         #address-cells = <1>;
+         #size-cells = <1>;
+ 
++        osc: clock-osc {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <20000000>;
++        };
++
++        ahb: clock-ahb {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <200000000>;
++        };
++
++        apb: clock-apb {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <100000000>;
++        };
++
++        gemacn: clock-gemacn {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <125000000>;
++        };
++
++        lsw_dp: clock-lsw-dp {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <166000000>;
++        };
++
++        lsw_pfe: clock-lsw-pfe {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <333000000>;
++        };
++
++        efuse_ring: clock-efuse-ring {
++            compatible = "fixed-clock";
++            #clock-cells = <0>;
++            clock-frequency = <20000000>;
++        };
++
+         system-controller@14880000 {
+             compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+             reg = <0x14880000 0x1000>;
++            clocks = <&osc>, <&ahb>, <&apb>, <&gemacn>,
++                     <&lsw_dp>, <&lsw_pfe>, <&efuse_ring>;
++            clock-names = "osc", "ahb", "apb", "gemacN", "lsw_dp",
++                          "lsw_pfe", "efuse_ring";
+             #clock-cells = <1>;
+             #reset-cells = <2>;
+ 
+diff --git a/drivers/clk/hisilicon/crg-luofu.c b/drivers/clk/hisilicon/crg-luofu.c
+--- a/drivers/clk/hisilicon/crg-luofu.c
++++ b/drivers/clk/hisilicon/crg-luofu.c
+@@ -8,9 +8,10 @@
+  *   0x14, 0x20		clock gate enable bits, one bit per gate output
+  *   0x2c, 0x30, 0x34	reset control bits, one bit per reset line
+  *   0x50, 0x64, 0x70, 0x100	watchdog registers (separate driver)
+- *   0x00, 0x38, 0x84, 0x138, 0x198, 0x1e0
+- *			reboot, resume, soft-reset, mux and PLL words; none of
+- *			them is touched by this driver (see below)
++ *   0x90		PLL status word (one status bit per PLL)
++ *   0x138		the two clock muxes (bit 1 efuse, bit 3 CPU)
++ *   0x198, 0x1e0	PLL control word pairs (two consecutive words per PLL)
++ *   0x00, 0x38, 0x84	reboot, resume and soft-reset words; not touched here
+  *
+  * Because the page cannot be claimed exclusively by one driver, the node is
+  * described as a "syscon" + "simple-mfd" system controller and every driver
+@@ -18,33 +19,56 @@
+  * request_mem_region() or ioremap() itself, and neither does the watchdog
+  * child, so the page is mapped exactly once even though two drivers use it.
+  *
+- * The clock outputs are gate clocks.  The gate geometry (register offset and
+- * bit) is driver data; the DT ABI is only the index, see
+- * include/dt-bindings/clock/hisilicon,luofu-crg.h.  Every gate is currently
+- * parented on the APB clock: the real parent clocks (the GEMAC/LSW PLL
+- * outputs) are part of the clock-tree work that is not done yet, and rates
+- * must not be "fixed" by editing the gates before that model exists.
++ * The clock outputs are modelled as one provider with four groups of clocks:
++ *
++ *  - 16 gate clocks (0x14/0x20), the consumer ABI plane;
++ *  - the two PLLs (CPU at 0x198, LSW at 0x1e0), READ-ONLY;
++ *  - the two muxes (0x138), READ-ONLY.
++ *
++ * The gate geometry (register offset and bit) is driver data; the DT ABI is
++ * only the index, see include/dt-bindings/clock/hisilicon,luofu-crg.h.  Each
++ * gate is parented on the real input clock of its leaf block, decoded from
++ * the vendor devicetree (MISC-SOC-BLOCKS.md section 5.2): the APB gates on
++ * apb_clk, the PCIe gates on apb_clk, the five GEMAC gates and the MDIO gate
++ * on gemacN_clk, the LSW data-path/PFE gates on lsw_dp_clk/lsw_pfe_clk and
++ * the PIE gate on ahb_clk.  The provider's input clocks are named by the
++ * devicetree node's clock-names and resolved through of_clk_get_parent_name(),
++ * so the clock tree is described in the DT instead of being guessed from a
++ * global name.
++ *
++ * The PLLs and muxes are registered but deliberately read-only:
++ *
++ *  - PLL rates are derived from the control words on demand (recalc_rate and
++ *    is_enabled only); there is no .set_rate.  The vendor write protocol
++ *    (busy bit, re-lock poll) is decoded but the encoding of the feedback
++ *    words has not been verified by a register readback on this board, and a
++ *    wrong store can lock up the CPU.  Confirm the rate equation on hardware
++ *    before any write support is added; see the comments at the PLL ops.
++ *  - The CPU mux (0x138 bit 3) selects the CPU clock source between the two
++ *    PLLs; it must never be writable.  The efuse mux (0x138 bit 1) is written
++ *    by the vendor efuse driver only while programming efuses; no efuse write
++ *    path is ported (the cells are one-way fences and key material), so this
++ *    driver does not accept set_parent for either mux.
+  *
+  * The reset provider uses a two-cell specifier: the CRG page register offset
+  * of the reset word and the bit number.  The offsets are restricted to the
+  * three reset words above so that a devicetree reset specifier can never
+- * write the watchdog, soft-reset, mux or PLL words.  The bit polarity
+- * (assert sets the bit, deassert clears it) has not been exercised on
+- * hardware: no in-tree consumer uses the provider yet, and the vendor's
+- * reset-controller description has the opposite polarity.  Confirm the
+- * polarity on hardware before adding reset consumers.
++ * write the watchdog, soft-reset, mux or PLL words.  The reset class is
++ * active-low: a set bit releases the line (patch 014).
+  *
+  * Deliberately not implemented here:
+  *   - reboot/reset of the SoC (the vendor path writes sysctrl/bootreg
+  *     registers that are not understood; a wrong sequence would wedge the
+- *     board, so arch/arm/mach-hisilicon/luofu.c also leaves .restart unset);
+- *   - the soft-reset magic words, the mux at 0x138 and the two PLLs
+- *     (0x198/0x1e0): they are outside the gate/reset model and some of them
+- *     are dangerous to write.
++ *     board, so arch/arm/mach-hisilicon/luofu.c also leaves .restart unset
++ *     and the hisilicon,luofu-reboot driver keeps the provisional path);
++ *   - the soft-reset magic words and any write to the reboot/resume words;
++ *   - any write to the PLL control words or the mux word.
+  */
+ 
++#include <linux/bitfield.h>
+ #include <linux/clk-provider.h>
+ #include <linux/err.h>
++#include <linux/math64.h>
+ #include <linux/mfd/syscon.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -67,53 +91,241 @@
+ /* Reset id = (register offset << 8) | bit. */
+ #define LUOFU_CRG_NR_RESETS	0x10000
+ 
+-struct luofu_crg {
+-	struct regmap			*regmap;
+-	spinlock_t			lock;
+-	struct reset_controller_dev	rcdev;
++/* Mux word shared by the CPU clock mux and the efuse mux. */
++#define LUOFU_CRG_MUX_OFFSET	0x138
++
++/*
++ * PLL control words (two consecutive 32-bit words at ctrl_offset) and the
++ * shared status word.  The field layout is the decoded vendor hi_clk.ko
++ * model: word0[23:12] integer feedback field, word0[29:24] feedback divider,
++ * word1[23:0] fractional feedback, word0 byte 0 bit 3 is the integer-mode
++ * select and word0 bits 4..6 / 8..10 are divider-select fields.
++ */
++#define LUOFU_CRG_PLL_STATUS_OFFSET	0x90
++
++#define LUOFU_PLL_INT_MASK		GENMASK(23, 12)
++#define LUOFU_PLL_FBDIV_MASK		GENMASK(29, 24)
++#define LUOFU_PLL_DIV1_MASK		GENMASK(10, 8)
++#define LUOFU_PLL_DIV2_MASK		GENMASK(6, 4)
++#define LUOFU_PLL_FRAC_MASK		GENMASK(23, 0)
++/* Bit 3 of word0 byte 0: set means "do not use the fractional field". */
++#define LUOFU_PLL_INT_MODE		BIT(3)
++/* Busy protocol bit of word0 byte 0; only ever set by the vendor writer. */
++#define LUOFU_PLL_BUSY			BIT(7)
++
++#define LUOFU_PLL_CPU_CTRL_OFFSET	0x198
++#define LUOFU_PLL_LSW_CTRL_OFFSET	0x1e0
++#define LUOFU_PLL_CPU_STATUS_BIT	30
++#define LUOFU_PLL_LSW_STATUS_BIT	27
++
++/*
++ * Input clocks of the provider.  The first group is described by the
++ * devicetree node's clock-names; the last two are the provider's own PLL
++ * outputs and are named by this driver (the provider cannot reference its
++ * own clocks from DT).
++ */
++enum luofu_crg_clk_src {
++	LUOFU_SRC_OSC = 0,
++	LUOFU_SRC_AHB,
++	LUOFU_SRC_APB,
++	LUOFU_SRC_GEMACN,
++	LUOFU_SRC_LSW_DP,
++	LUOFU_SRC_LSW_PFE,
++	LUOFU_SRC_EFUSE_RING,
++	LUOFU_SRC_PLL_CPU,
++	LUOFU_SRC_PLL_LSW,
++	LUOFU_SRC_NR,
+ };
+ 
+-struct luofu_crg_gate {
+-	struct clk_hw	hw;
+-	struct regmap	*regmap;
+-	unsigned int	offset;
+-	u8		bit;
+-	spinlock_t	*lock;
++/* clock-names entries for LUOFU_SRC_OSC .. LUOFU_SRC_EFUSE_RING, in order. */
++static const char *const luofu_crg_dt_clocks[] = {
++	[LUOFU_SRC_OSC]		= "osc",
++	[LUOFU_SRC_AHB]		= "ahb",
++	[LUOFU_SRC_APB]		= "apb",
++	[LUOFU_SRC_GEMACN]	= "gemacN",
++	[LUOFU_SRC_LSW_DP]	= "lsw_dp",
++	[LUOFU_SRC_LSW_PFE]	= "lsw_pfe",
++	[LUOFU_SRC_EFUSE_RING]	= "efuse_ring",
+ };
+ 
++/* Names of the provider's own PLL outputs, used as mux parents. */
++#define LUOFU_PLL_CPU_NAME	"pll_cpu"
++#define LUOFU_PLL_LSW_NAME	"pll_lsw"
++
++/* The gate parent is the leaf block's real input clock, not a name guess. */
+ struct luofu_crg_gate_data {
+ 	const char	*name;
+ 	unsigned int	offset;
+ 	u8		bit;
++	u8		parent;		/* enum luofu_crg_clk_src */
+ };
+ 
+ /*
+- * One entry per LUOFU_CLK_* index.  The designated initializers tie each gate
+- * to its DT clock index; a missing entry is caught by the probe's name check.
+- * The two 0x20-group offsets are reconstructed from the vendor unit-address
+- * encoding and remain provisional until confirmed on hardware.
++ * One entry per LUOFU_CLK_* gate index.  The designated initializers tie each
++ * gate to its DT clock index; a missing entry is caught by the probe's name
++ * check.  The parent column is the decoded vendor gate parent
++ * (MISC-SOC-BLOCKS.md section 5.2).
+  */
+-static const struct luofu_crg_gate_data luofu_crg_gates[LUOFU_CLK_NR] = {
+-	[LUOFU_CLK_SFC]		= { .name = "sfc_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x00 },
+-	[LUOFU_CLK_GPIO0]	= { .name = "gpio0_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x14 },
+-	[LUOFU_CLK_GPIO1]	= { .name = "gpio1_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x15 },
+-	[LUOFU_CLK_I2C0]	= { .name = "i2c0_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x18 },
+-	[LUOFU_CLK_PCIE0]	= { .name = "pcie0_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0c },
+-	[LUOFU_CLK_PCIE1]	= { .name = "pcie1_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0d },
+-	[LUOFU_CLK_GMAC0]	= { .name = "gemac_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x13 },
+-	[LUOFU_CLK_LEDPWM]	= { .name = "led_pwm",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x0e },
+-	[LUOFU_CLK_LSW_DP]	= { .name = "lsw_dp_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x00 },
+-	[LUOFU_CLK_LSW_PFE]	= { .name = "lsw_pfe_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x01 },
+-	[LUOFU_CLK_MDIO]	= { .name = "mdio_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x03 },
+-	[LUOFU_CLK_GMAC1]	= { .name = "gemac_clk1",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x14 },
+-	[LUOFU_CLK_GMAC2]	= { .name = "gemac_clk2",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x15 },
+-	[LUOFU_CLK_GMAC3]	= { .name = "gemac_clk3",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x16 },
+-	[LUOFU_CLK_GMAC4]	= { .name = "gemac_clk4",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x17 },
+-	[LUOFU_CLK_PIE]		= { .name = "pie_clk0",		.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x19 },
++static const struct luofu_crg_gate_data luofu_crg_gates[] = {
++	[LUOFU_CLK_SFC] = {
++		.name = "sfc_clk", .offset = LUOFU_CRG_GATE0_OFFSET,
++		.bit = 0x00, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_GPIO0] = {
++		.name = "gpio0_clk", .offset = LUOFU_CRG_GATE0_OFFSET,
++		.bit = 0x14, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_GPIO1] = {
++		.name = "gpio1_clk", .offset = LUOFU_CRG_GATE0_OFFSET,
++		.bit = 0x15, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_I2C0] = {
++		.name = "i2c0_clk", .offset = LUOFU_CRG_GATE0_OFFSET,
++		.bit = 0x18, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_PCIE0] = {
++		.name = "pcie0_clk", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x0c, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_PCIE1] = {
++		.name = "pcie1_clk", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x0d, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_GMAC0] = {
++		.name = "gemac_clk0", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x13, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_LEDPWM] = {
++		.name = "led_pwm", .offset = LUOFU_CRG_GATE0_OFFSET,
++		.bit = 0x0e, .parent = LUOFU_SRC_APB,
++	},
++	[LUOFU_CLK_LSW_DP] = {
++		.name = "lsw_dp_clk0", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x00, .parent = LUOFU_SRC_LSW_DP,
++	},
++	[LUOFU_CLK_LSW_PFE] = {
++		.name = "lsw_pfe_clk0", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x01, .parent = LUOFU_SRC_LSW_PFE,
++	},
++	[LUOFU_CLK_MDIO] = {
++		.name = "mdio_clk0", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x03, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_GMAC1] = {
++		.name = "gemac_clk1", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x14, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_GMAC2] = {
++		.name = "gemac_clk2", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x15, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_GMAC3] = {
++		.name = "gemac_clk3", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x16, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_GMAC4] = {
++		.name = "gemac_clk4", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x17, .parent = LUOFU_SRC_GEMACN,
++	},
++	[LUOFU_CLK_PIE] = {
++		.name = "pie_clk0", .offset = LUOFU_CRG_GATE1_OFFSET,
++		.bit = 0x19, .parent = LUOFU_SRC_AHB,
++	},
+ };
+ 
+-/* Parent of the gate outputs until the real clock tree is modelled. */
+-static const char *const luofu_crg_gate_parent = "apb_clk";
++/* The PLLs are read-only clocks; only the decode geometry is driver data. */
++struct luofu_crg_pll_data {
++	const char	*name;
++	u16		ctrl_offset;
++	u16		status_offset;
++	u8		status_bit;
++	u8		parent;		/* enum luofu_crg_clk_src */
++	u8		clk_id;
++	/*
++	 * Vendor "div-factor" property (a rate-correction term).  It is absent
++	 * on this board, so the decoded default 0 is used; the index is kept
++	 * explicit so a board that carries the property has one obvious place
++	 * to add it.
++	 */
++	u8		div_factor;
++};
++
++static const struct luofu_crg_pll_data luofu_crg_plls[] = {
++	{
++		.name		= LUOFU_PLL_CPU_NAME,
++		.ctrl_offset	= LUOFU_PLL_CPU_CTRL_OFFSET,
++		.status_offset	= LUOFU_CRG_PLL_STATUS_OFFSET,
++		.status_bit	= LUOFU_PLL_CPU_STATUS_BIT,
++		.parent		= LUOFU_SRC_OSC,
++		.clk_id		= LUOFU_CLK_PLL_CPU,
++		.div_factor	= 0,
++	},
++	{
++		.name		= LUOFU_PLL_LSW_NAME,
++		.ctrl_offset	= LUOFU_PLL_LSW_CTRL_OFFSET,
++		.status_offset	= LUOFU_CRG_PLL_STATUS_OFFSET,
++		.status_bit	= LUOFU_PLL_LSW_STATUS_BIT,
++		.parent		= LUOFU_SRC_OSC,
++		.clk_id		= LUOFU_CLK_PLL_LSW,
++		.div_factor	= 0,
++	},
++};
++
++/*
++ * The muxes are read-only clocks too.  The vendor table cells decode as
++ * <0 1> for both muxes, so the masked bit value is the parent index.
++ */
++struct luofu_crg_mux_data {
++	const char	*name;
++	u16		offset;
++	u8		mask;
++	u8		clk_id;
++	u8		parents[2];	/* enum luofu_crg_clk_src */
++};
++
++static const struct luofu_crg_mux_data luofu_crg_muxes[] = {
++	{
++		.name	= "cpu_mux",
++		.offset	= LUOFU_CRG_MUX_OFFSET,
++		.mask	= 0x8,
++		.clk_id	= LUOFU_CLK_CPU_MUX,
++		.parents = { LUOFU_SRC_PLL_CPU, LUOFU_SRC_PLL_LSW },
++	},
++	{
++		.name	= "efuse_mux",
++		.offset	= LUOFU_CRG_MUX_OFFSET,
++		.mask	= 0x2,
++		.clk_id	= LUOFU_CLK_EFUSE_MUX,
++		.parents = { LUOFU_SRC_EFUSE_RING, LUOFU_SRC_OSC },
++	},
++};
++
++struct luofu_crg {
++	struct regmap			*regmap;
++	spinlock_t			lock;
++	/* Clock names the provider can parent a clock on, by enum order. */
++	const char			*clk_src_names[LUOFU_SRC_NR];
++	struct reset_controller_dev	rcdev;
++};
++
++struct luofu_crg_gate {
++	struct clk_hw		hw;
++	struct regmap		*regmap;
++	const struct luofu_crg_gate_data *data;
++	spinlock_t		*lock;
++};
++
++struct luofu_crg_pll {
++	struct clk_hw			hw;
++	struct regmap			*regmap;
++	const struct luofu_crg_pll_data	*data;
++};
++
++struct luofu_crg_mux {
++	struct clk_hw			hw;
++	struct regmap			*regmap;
++	const struct luofu_crg_mux_data	*data;
++};
+ 
+ static int luofu_crg_gate_enable(struct clk_hw *hw)
+ {
+@@ -122,8 +334,8 @@ static int luofu_crg_gate_enable(struct clk_hw *hw)
+ 	int ret;
+ 
+ 	spin_lock_irqsave(gate->lock, flags);
+-	ret = regmap_update_bits(gate->regmap, gate->offset,
+-				 BIT(gate->bit), BIT(gate->bit));
++	ret = regmap_update_bits(gate->regmap, gate->data->offset,
++				 BIT(gate->data->bit), BIT(gate->data->bit));
+ 	spin_unlock_irqrestore(gate->lock, flags);
+ 
+ 	return ret;
+@@ -135,7 +347,8 @@ static void luofu_crg_gate_disable(struct clk_hw *hw)
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(gate->lock, flags);
+-	regmap_update_bits(gate->regmap, gate->offset, BIT(gate->bit), 0);
++	regmap_update_bits(gate->regmap, gate->data->offset,
++			   BIT(gate->data->bit), 0);
+ 	spin_unlock_irqrestore(gate->lock, flags);
+ }
+ 
+@@ -145,11 +358,11 @@ static int luofu_crg_gate_is_enabled(struct clk_hw *hw)
+ 	unsigned int val;
+ 	int ret;
+ 
+-	ret = regmap_read(gate->regmap, gate->offset, &val);
++	ret = regmap_read(gate->regmap, gate->data->offset, &val);
+ 	if (ret)
+ 		return ret;
+ 
+-	return !!(val & BIT(gate->bit));
++	return !!(val & BIT(gate->data->bit));
+ }
+ 
+ static const struct clk_ops luofu_crg_gate_ops = {
+@@ -158,6 +371,150 @@ static const struct clk_ops luofu_crg_gate_ops = {
+ 	.is_enabled	= luofu_crg_gate_is_enabled,
+ };
+ 
++/*
++ * PLL rate derivation, decoded from the vendor hi_clk.ko
++ * (hi_pll_recalc_rate) and cross-checked against the field layout in
++ * MISC-SOC-BLOCKS.md section 5.3.  In exact arithmetic:
++ *
++ *   rate = parent_rate * (int + frac / 2^24) / fbdiv
++ *
++ * followed by the two decoded divider-select fields (each is "skip when
++ * zero", and the vendor adds its absent-on-this-board div-factor term):
++ *
++ *   div1 = word0[10:8] + div_factor
++ *   div2 = word0[6:4]  + div_factor
++ *
++ * Bit 3 of word0 byte 0 selects the integer-only path: when set the
++ * fractional word is not added.  The vendor module performs the divisions in
++ * the written order with truncation, so this keeps the same operation order
++ * rather than re-arranging the fraction (the difference is at most one LSB of
++ * the final rate and matters if a consumer compares rates exactly).
++ *
++ * The field positions and the operation order are [V] (vendor DT plus the
++ * module disassembly of hi_pll_recalc_rate).  What is [U] is the on-board
++ * value: the boot-programmed words have never been read back on this board,
++ * so the derived rates are read-only and must be confirmed by a
++ * clock-summary readback before being trusted by anything that computes a
++ * divider (e.g. UART or cpufreq).  No write path
++ * exists on purpose: the writer's busy/re-lock protocol is decoded but its
++ * feedback-word encoding is not verified, and a wrong PLL store can hang the
++ * core.
++ */
++static unsigned long luofu_crg_pll_recalc_rate(struct clk_hw *hw,
++					       unsigned long parent_rate)
++{
++	struct luofu_crg_pll *pll = container_of(hw, struct luofu_crg_pll, hw);
++	const struct luofu_crg_pll_data *data = pll->data;
++	u64 rate;
++	u32 word0, word1, fbdiv, frac, div;
++
++	if (regmap_read(pll->regmap, data->ctrl_offset, &word0))
++		return 0;
++	if (regmap_read(pll->regmap, data->ctrl_offset + 4, &word1))
++		return 0;
++
++	fbdiv = FIELD_GET(LUOFU_PLL_FBDIV_MASK, word0);
++	if (!fbdiv) {
++		/*
++		 * The write protocol's call path was observed to compose a zero
++		 * feedback-divider field.  The bootloader's words are expected
++		 * to divide by a non-zero value; a zero here means the words are
++		 * not in the decoded layout, so report "unknown rate" rather
++		 * than faulting on a divide.
++		 */
++		return 0;
++	}
++
++	rate = div_u64((u64)parent_rate * FIELD_GET(LUOFU_PLL_INT_MASK, word0),
++		       fbdiv);
++
++	if (!(word0 & LUOFU_PLL_INT_MODE)) {
++		frac = FIELD_GET(LUOFU_PLL_FRAC_MASK, word1);
++		rate += div_u64((u64)parent_rate * frac, fbdiv) >> 24;
++	}
++
++	div = FIELD_GET(LUOFU_PLL_DIV1_MASK, word0) + data->div_factor;
++	if (div)
++		rate = div_u64(rate, div);
++
++	div = FIELD_GET(LUOFU_PLL_DIV2_MASK, word0) + data->div_factor;
++	if (div)
++		rate = div_u64(rate, div);
++
++	/* A rate above ULONG_MAX cannot be represented on 32-bit ARM. */
++	if (rate > ULONG_MAX) {
++		pr_warn_once("luofu-crg: %s decoded rate overflow\n", data->name);
++		return 0;
++	}
++
++	return (unsigned long)rate;
++}
++
++/*
++ * The PLL status word is the only "is this PLL up" information the vendor
++ * exposes: one bit per PLL in 0x90.  Reading it is a pure read of a status
++ * word; the vendor's own inventory table treats it as read-only.
++ */
++static int luofu_crg_pll_is_enabled(struct clk_hw *hw)
++{
++	struct luofu_crg_pll *pll = container_of(hw, struct luofu_crg_pll, hw);
++	unsigned int val;
++	int ret;
++
++	ret = regmap_read(pll->regmap, pll->data->status_offset, &val);
++	if (ret)
++		return ret;
++
++	return !!(val & BIT(pll->data->status_bit));
++}
++
++static const struct clk_ops luofu_crg_pll_ops = {
++	.recalc_rate	= luofu_crg_pll_recalc_rate,
++	.is_enabled	= luofu_crg_pll_is_enabled,
++	/*
++	 * No .set_rate/.enable/.disable: the PLLs are parented on osc, are
++	 * already running when Linux starts and must stay read-only until the
++	 * rate equation and the writer's re-lock protocol are confirmed on
++	 * hardware.
++	 */
++};
++
++/* A pure read of the mux word; the parent index is the masked bit value. */
++static u8 luofu_crg_mux_get_parent(struct clk_hw *hw)
++{
++	struct luofu_crg_mux *mux = container_of(hw, struct luofu_crg_mux, hw);
++	unsigned int val;
++
++	if (regmap_read(mux->regmap, mux->data->offset, &val))
++		return 0;
++
++	return (val & mux->data->mask) >> __ffs(mux->data->mask);
++}
++
++/*
++ * The mux word is read-only in this driver, on purpose:
++ *
++ *  - 0x138 bit 3 is the CPU clock source select between the CPU PLL and the
++ *    LSW PLL.  A wrong write there changes the CPU clock and can hang the
++ *    core, so it must never be writable through the clock API.
++ *  - 0x138 bit 1 is the efuse ring-clock source, written by the vendor efuse
++ *    driver only while programming.  There is no efuse write path here (the
++ *    cells are one-way fences and key material), so nothing may flip it.  If
++ *    an efuse programming driver is ever added it must own that write itself
++ *    (it is a one-bit read-modify-write of a shared word, so it must also own
++ *    the mux driver's locking) - do not turn this into a generic writable mux
++ *    without that consumer.
++ */
++static int luofu_crg_mux_set_parent(struct clk_hw *hw, u8 index)
++{
++	return -EOPNOTSUPP;
++}
++
++static const struct clk_ops luofu_crg_mux_ops = {
++	.get_parent	= luofu_crg_mux_get_parent,
++	.set_parent	= luofu_crg_mux_set_parent,
++};
++
+ /*
+  * Two-cell reset specifier: (CRG page register offset, bit).  Only the three
+  * documented reset words are accepted; the check is what makes the raw-offset
+@@ -259,12 +616,175 @@ static const struct reset_control_ops luofu_crg_reset_ops = {
+ 	.reset		= luofu_crg_reset,
+ };
+ 
++/*
++ * Resolve the provider's input-clock names from the node's clock-names and
++ * clocks properties.  of_clk_get_parent_name() returns the name of the
++ * referenced clock (its clock-output-names), which is exactly what the clock
++ * framework resolves parent names against, so no global-name guesswork is
++ * involved.  The last two entries are the provider's own PLL outputs.
++ */
++static int luofu_crg_resolve_clocks(struct luofu_crg *crg,
++				    struct device *dev)
++{
++	struct device_node *np = dev->of_node;
++	const char *name;
++	int i, index;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_crg_dt_clocks); i++) {
++		index = of_property_match_string(np, "clock-names",
++						 luofu_crg_dt_clocks[i]);
++		if (index < 0)
++			return dev_err_probe(dev, index,
++					     "missing clock-names entry \"%s\"\n",
++					     luofu_crg_dt_clocks[i]);
++
++		name = of_clk_get_parent_name(np, index);
++		if (!name)
++			return dev_err_probe(dev, -EINVAL,
++					     "clock \"%s\" has no name\n",
++					     luofu_crg_dt_clocks[i]);
++		crg->clk_src_names[i] = name;
++	}
++
++	crg->clk_src_names[LUOFU_SRC_PLL_CPU] = LUOFU_PLL_CPU_NAME;
++	crg->clk_src_names[LUOFU_SRC_PLL_LSW] = LUOFU_PLL_LSW_NAME;
++
++	return 0;
++}
++
++static int luofu_crg_register_gates(struct luofu_crg *crg, struct device *dev,
++				    struct clk_hw_onecell_data *clk_data)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_crg_gates); i++) {
++		const struct luofu_crg_gate_data *data = &luofu_crg_gates[i];
++		struct clk_init_data init = { };
++		struct luofu_crg_gate *gate;
++
++		if (!data->name)
++			return dev_err_probe(dev, -EINVAL,
++					     "gate %u has no description\n", i);
++		if (data->parent >= LUOFU_SRC_NR)
++			return dev_err_probe(dev, -EINVAL,
++					     "gate %s has an invalid parent\n",
++					     data->name);
++
++		gate = devm_kzalloc(dev, sizeof(*gate), GFP_KERNEL);
++		if (!gate)
++			return -ENOMEM;
++
++		gate->regmap = crg->regmap;
++		gate->data = data;
++		gate->lock = &crg->lock;
++
++		init.name = data->name;
++		init.ops = &luofu_crg_gate_ops;
++		init.parent_names = &crg->clk_src_names[data->parent];
++		init.num_parents = 1;
++		/*
++		 * Never let clk_disable_unused() gate a clock the bootloader
++		 * left enabled: several peripherals are already running when
++		 * Linux starts (the NAND boot path is behind the SFC gate).
++		 */
++		init.flags = CLK_IGNORE_UNUSED;
++		gate->hw.init = &init;
++
++		ret = devm_clk_hw_register(dev, &gate->hw);
++		if (ret)
++			return dev_err_probe(dev, ret, "failed to register %s\n",
++					     data->name);
++
++		clk_data->hws[i] = &gate->hw;
++	}
++
++	return 0;
++}
++
++static int luofu_crg_register_plls(struct luofu_crg *crg, struct device *dev,
++				   struct clk_hw_onecell_data *clk_data)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_crg_plls); i++) {
++		const struct luofu_crg_pll_data *data = &luofu_crg_plls[i];
++		struct clk_init_data init = { };
++		struct luofu_crg_pll *pll;
++
++		pll = devm_kzalloc(dev, sizeof(*pll), GFP_KERNEL);
++		if (!pll)
++			return -ENOMEM;
++
++		pll->regmap = crg->regmap;
++		pll->data = data;
++
++		init.name = data->name;
++		init.ops = &luofu_crg_pll_ops;
++		init.parent_names = &crg->clk_src_names[data->parent];
++		init.num_parents = 1;
++		init.flags = CLK_IGNORE_UNUSED;
++		pll->hw.init = &init;
++
++		ret = devm_clk_hw_register(dev, &pll->hw);
++		if (ret)
++			return dev_err_probe(dev, ret, "failed to register %s\n",
++					     data->name);
++
++		clk_data->hws[data->clk_id] = &pll->hw;
++	}
++
++	return 0;
++}
++
++static int luofu_crg_register_muxes(struct luofu_crg *crg, struct device *dev,
++				    struct clk_hw_onecell_data *clk_data)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_crg_muxes); i++) {
++		const struct luofu_crg_mux_data *data = &luofu_crg_muxes[i];
++		const char *parents[ARRAY_SIZE(data->parents)];
++		struct clk_init_data init = { };
++		struct luofu_crg_mux *mux;
++		unsigned int j;
++
++		for (j = 0; j < ARRAY_SIZE(parents); j++)
++			parents[j] = crg->clk_src_names[data->parents[j]];
++
++		mux = devm_kzalloc(dev, sizeof(*mux), GFP_KERNEL);
++		if (!mux)
++			return -ENOMEM;
++
++		mux->regmap = crg->regmap;
++		mux->data = data;
++
++		init.name = data->name;
++		init.ops = &luofu_crg_mux_ops;
++		init.parent_names = parents;
++		init.num_parents = ARRAY_SIZE(parents);
++		init.flags = CLK_IGNORE_UNUSED;
++		mux->hw.init = &init;
++
++		ret = devm_clk_hw_register(dev, &mux->hw);
++		if (ret)
++			return dev_err_probe(dev, ret, "failed to register %s\n",
++					     data->name);
++
++		clk_data->hws[data->clk_id] = &mux->hw;
++	}
++
++	return 0;
++}
++
+ static int luofu_crg_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct clk_hw_onecell_data *clk_data;
+ 	struct luofu_crg *crg;
+-	int i, ret;
++	int ret;
+ 
+ 	crg = devm_kzalloc(dev, sizeof(*crg), GFP_KERNEL);
+ 	if (!crg)
+@@ -277,43 +797,28 @@ static int luofu_crg_probe(struct platform_device *pdev)
+ 
+ 	spin_lock_init(&crg->lock);
+ 
++	ret = luofu_crg_resolve_clocks(crg, dev);
++	if (ret)
++		return ret;
++
+ 	clk_data = devm_kzalloc(dev, struct_size(clk_data, hws, LUOFU_CLK_NR),
+ 				GFP_KERNEL);
+ 	if (!clk_data)
+ 		return -ENOMEM;
+ 	clk_data->num = LUOFU_CLK_NR;
+ 
+-	for (i = 0; i < LUOFU_CLK_NR; i++) {
+-		const struct luofu_crg_gate_data *data = &luofu_crg_gates[i];
+-		struct clk_init_data init = { };
+-		struct luofu_crg_gate *gate;
++	/* Parents first: the muxes and gates register against these names. */
++	ret = luofu_crg_register_plls(crg, dev, clk_data);
++	if (ret)
++		return ret;
+ 
+-		if (!data->name)
+-			return dev_err_probe(dev, -EINVAL,
+-					     "gate %d has no description\n", i);
++	ret = luofu_crg_register_muxes(crg, dev, clk_data);
++	if (ret)
++		return ret;
+ 
+-		gate = devm_kzalloc(dev, sizeof(*gate), GFP_KERNEL);
+-		if (!gate)
+-			return -ENOMEM;
+-
+-		gate->regmap = crg->regmap;
+-		gate->offset = data->offset;
+-		gate->bit = data->bit;
+-		gate->lock = &crg->lock;
+-
+-		init.name = data->name;
+-		init.ops = &luofu_crg_gate_ops;
+-		init.parent_names = &luofu_crg_gate_parent;
+-		init.num_parents = 1;
+-		gate->hw.init = &init;
+-
+-		ret = devm_clk_hw_register(dev, &gate->hw);
+-		if (ret)
+-			return dev_err_probe(dev, ret, "failed to register %s\n",
+-					     data->name);
+-
+-		clk_data->hws[i] = &gate->hw;
+-	}
++	ret = luofu_crg_register_gates(crg, dev, clk_data);
++	if (ret)
++		return ret;
+ 
+ 	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, clk_data);
+ 	if (ret)
+diff --git a/include/dt-bindings/clock/hisilicon,luofu-crg.h b/include/dt-bindings/clock/hisilicon,luofu-crg.h
+--- a/include/dt-bindings/clock/hisilicon,luofu-crg.h
++++ b/include/dt-bindings/clock/hisilicon,luofu-crg.h
+@@ -3,10 +3,15 @@
+  * Clock indices for the HiSilicon Hi5671Y "luofu" CRG block.
+  *
+  * The order of this list is the DT ABI, not a hardware fact: each index is
+- * one gate clock output of the CRG and the driver's gate table is indexed by
++ * one clock output of the CRG provider and the driver's tables are indexed by
+  * these IDs, so an index may never be renumbered or reused.  Consumers use
+- * clocks = <&crg LUOFU_CLK_*>.  The gate register and bit that each ID drives
+- * are driver data, not devicetree data.
++ * clocks = <&crg LUOFU_CLK_*>.
++ *
++ * The first 16 indices are the gate clocks whose register/bit geometry is
++ * driver data (not devicetree data).  The last four are the read-only PLL and
++ * mux outputs of the same provider: they exist so a future CPU-frequency or
++ * efuse driver can reference them without inventing a new provider, and they
++ * are not wired to any consumer yet.
+  */
+ #ifndef _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H
+ #define _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H
+@@ -28,6 +33,12 @@
+ #define LUOFU_CLK_GMAC4		14
+ #define LUOFU_CLK_PIE		15
+ 
+-#define LUOFU_CLK_NR		16
++/* Read-only PLL and mux outputs of the CRG (0x198 / 0x1e0 / 0x138 model). */
++#define LUOFU_CLK_PLL_CPU	16	/* CPU PLL, control words at 0x198 */
++#define LUOFU_CLK_PLL_LSW	17	/* LSW PLL, control words at 0x1e0 */
++#define LUOFU_CLK_CPU_MUX	18	/* CPU clock source mux, 0x138 bit 3 */
++#define LUOFU_CLK_EFUSE_MUX	19	/* efuse ring source mux, 0x138 bit 1 */
++
++#define LUOFU_CLK_NR		20
+ 
+ #endif /* _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H */

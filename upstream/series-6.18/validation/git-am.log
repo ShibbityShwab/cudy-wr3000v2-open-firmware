@@ -34,3 +34,5 @@ Applying: soc: hisilicon: add Luofu A/B boot selector
 AM_RC[0017-soc-luofu-boot-selector.patch]=0
 Applying: ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
 AM_RC[0018-arm-mach-hisilicon-smp.patch]=0
+Applying: clk: hisilicon: add the Luofu CRG clock tree
+AM_RC[0019-arm-clk-luofu-clock-tree.patch]=0

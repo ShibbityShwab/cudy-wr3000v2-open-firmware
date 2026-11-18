@@ -1,26 +1,27 @@
 # sha256 of the commit-ready series files and of the source tree patches.
 # Generated on the author host on 2026-11-18 for series-6.18.
-# Regenerated for the 18-patch series (patch 0018, SMP bring-up) and re-verified.
+# Regenerated for the 19-patch series (patch 0019, CRG clock tree) and re-verified.
 
 ## series/
-a5d111aaa51cd0816b907827f2d053add1f1ac0a0c6ad70517da2764b526234e  series/0001-arm-mach-hisilicon-luofu.patch
-21f052e49d14f78acae87d360d70ba77c8518084c9a774fc25079ea45c8befa9  series/0002-arm-kconfig-textofs.patch
-6041ef8905ab9e249be9208a0a0ba219560c62be98be3d5e902b3e9a880eeb9c  series/0003-arm-textofs-nonimmediate.patch
-933a7e911064894b83a15e16e33133cad1bf2a020a9115e4605b2d2f1ce01865  series/0004-arm-clk-reset-luofu-crg.patch
-613278c2fa302e364018a8c391a156568510ff60e00b317bce3471109965ec18  series/0005-arm-watchdog-luofu-wdt.patch
-af6eecc707dee364c02c8c0d766bb2fc11a841f35fa2e048c64a073e13d5605a  series/0006-arm-mtd-nand-luofu-fmc.patch
-7423bf91fc5a51daa529b6a4cf189142a13c21ef3911cb96a929bcd3a876f999  series/0007-net-mdio-luofu.patch
-793bbbfe6a50c39b75f980d3cf604d52fbc1911ded6da67af38bf3c1138adfa8  series/0008-net-phy-luofu.patch
-b316a301d43020c889b8c4c43016b4ce7f34c505b0c6b176a47aad268d696f73  series/0009-net-gmac-luofu.patch
-3ba4c42f786340256556b75b8c660e69c28f7e43f746059a6dda9c271522c934  series/0010-arm-luofu-restart.patch
-8680d652ce46c0580c2fd69d8ca7bf2accf5408383cc6fbd147dc8e43fdcfc88  series/0011-pinctrl-luofu.patch
-325eb162d294b2c7105fa4db49c1add96ff76b061a8237e13d68233f6bff6243  series/0012-arm-thermal-luofu-tvsensor.patch
-8b2ebc38e5cfe1f5faf03d74c89afb1bd231176c54a55e5b6c760d416ccf9fd6  series/0013-arm-pci-luofu-host.patch
-83b66d1ccc9d6f5ab0744635aa9cbb04d3ffac4cbd97cec659057f93ee7d5ad5  series/0014-arm-crg-reset-polarity.patch
-1ca26231a20d991409a5c660207a653fc658e93781d4a59f8a75e4eb9d4243a7  series/0015-net-pie-luofu.patch
-9e17fe076a99be7af7307df9111093fc4dd39a07653429d688d418c610ae31db  series/0016-net-lsw-luofu.patch
-c58107a58f0618956fd5f73ec36c41bd89a0443e1167869f783a4a975ee37566  series/0017-soc-luofu-boot-selector.patch
-b4268e65d5e3d7ad4aa7bc2c9a733234649484b904041b46d77c92f621091e75  series/0018-arm-mach-hisilicon-smp.patch
+2869afdc466dff306055d651ddf1a90e440581302584a5373846bd5f4430021d  series/0001-arm-mach-hisilicon-luofu.patch
+fd546bc1b766b6ee40c4bbcdb2ff05ae2129e361aec02c2f33bee327f197776b  series/0002-arm-kconfig-textofs.patch
+f4deebdfad5506f4bbc61b640f45f809a2d3fcd73352d4e83c16ce1e0d081aad  series/0003-arm-textofs-nonimmediate.patch
+68e9e65416365a655b751ebdefb03d239cbb978d8a581f5b1a319ee228094333  series/0004-arm-clk-reset-luofu-crg.patch
+7491a46dafeae7db87531db250522b8cf198ccb0347261e81e7548b13ce18513  series/0005-arm-watchdog-luofu-wdt.patch
+ec6283983b147a0ccbc2e3c4610d21007c83435282d716ead04c0391265a446a  series/0006-arm-mtd-nand-luofu-fmc.patch
+bf1708dff63a4eb315222e1d7e64f99121154a6ab0c717a1d52ce7441610caab  series/0007-net-mdio-luofu.patch
+5a01a5ed7076c6e7ce81d82b97cab8f6728ee59d99319db48f21b3ad54706e15  series/0008-net-phy-luofu.patch
+751ec872a854d38a43cd608f0e1d173c83af4ad29385985e53b0bc46fab7ac8e  series/0009-net-gmac-luofu.patch
+5918db43f03f86ef77f2cb93ca16cf1e4dacc57a7784022b28fae2598e886ed8  series/0010-arm-luofu-restart.patch
+d851b2bfdb20c34c2b016f3ec876dc624101778c5d042310e0ae908ade5284f3  series/0011-pinctrl-luofu.patch
+313b518fde4330e1529b82a65fd5efcef5a44494aa9e0dd48d266d8f1be029d8  series/0012-arm-thermal-luofu-tvsensor.patch
+60167e217752a9e4c1fdb31ff933ba7bfd66b509fe9f7f682b6db1e0e9fe37ca  series/0013-arm-pci-luofu-host.patch
+6b9f29929d1eedb61d9beb624ab069e9cbb9f9cf98f517995266d1e971cd0d55  series/0014-arm-crg-reset-polarity.patch
+147ea9f29d7540fc1bd90a59dd4691fb2ec89bc9e8a5dc28b4d81e6fab32cb91  series/0015-net-pie-luofu.patch
+527acd0ceae7c6a9c26814ee4be7cbb3a697688b22b5ee82e0337a0ad3d22c37  series/0016-net-lsw-luofu.patch
+78502be36a953c618dcf502d5a094d931d2cf0f589df035cb1a6e2bf1e8e52cc  series/0017-soc-luofu-boot-selector.patch
+cf7357e2668bbf86410c0fccd96ee71d57d89cb6bb7e1dc6197f555a5502df71  series/0018-arm-mach-hisilicon-smp.patch
+9d9a89799f6398cc61c8e2bc4e23aa53c723c7d31ba18d2bb00fe4b76fe0ea5d  series/0019-arm-clk-luofu-clock-tree.patch
 
 ## source tree patches (opensource/target-skeleton/target/linux/hisilicon/patches-6.18/)
 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch
@@ -41,6 +42,7 @@ fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2  ../../target-s
 c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch
 c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/017-soc-luofu-boot-selector.patch
 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b  ../../target-skeleton/target/linux/hisilicon/patches-6.18/018-arm-mach-hisilicon-smp.patch
+9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/019-arm-clk-luofu-clock-tree.patch
 
 ## kernel tarball used for validation (read-only; not copied)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

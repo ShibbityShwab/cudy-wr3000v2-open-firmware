@@ -105,3 +105,8 @@ patching file arch/arm/mach-hisilicon/Makefile
 patching file arch/arm/mach-hisilicon/luofu.c
 patching file arch/arm/mach-hisilicon/platsmp.c
 PATCH_RC[0018-arm-mach-hisilicon-smp.patch]=0
+### [19] 0019-arm-clk-luofu-clock-tree.patch
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file include/dt-bindings/clock/hisilicon,luofu-crg.h
+PATCH_RC[0019-arm-clk-luofu-clock-tree.patch]=0

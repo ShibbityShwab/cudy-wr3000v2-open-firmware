@@ -17,7 +17,7 @@ subsystem as described in 00-cover-letter.md.
 
 ## Group 1 - core platform (RFC)
 
-### 0001/18  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+### 0001/19  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
 
 Status: RFC
 
@@ -50,7 +50,7 @@ and has never booted.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0002/18  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+### 0002/19  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
 
 Status: RFC
 
@@ -74,7 +74,7 @@ builds together with the following early-boot change.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0003/18  ARM: head: materialize TEXT_OFFSET with mov_l
+### 0003/19  ARM: head: materialize TEXT_OFFSET with mov_l
 
 Status: RFC
 
@@ -99,9 +99,9 @@ the ARM maintainers is expected before the platform can rely on it.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-## Group 2 - peripheral drivers, ready for review
+## Group 2 - peripheral drivers and clock tree, ready for review
 
-### 0004/18  clk: hisilicon: add Luofu CRG clock and reset controller
+### 0004/19  clk: hisilicon: add Luofu CRG clock and reset controller
 
 Status: ready-for-review
 
@@ -137,7 +137,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0005/18  watchdog: luofu: add Hi5671Y watchdog support
+### 0005/19  watchdog: luofu: add Hi5671Y watchdog support
 
 Status: ready-for-review
 
@@ -168,7 +168,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0007/18  net: mdio: luofu: add MDIO bus controller
+### 0007/19  net: mdio: luofu: add MDIO bus controller
 
 Status: ready-for-review
 
@@ -197,7 +197,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0008/18  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+### 0008/19  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
 
 Status: ready-for-review
 
@@ -222,7 +222,7 @@ Host-compiled against linux-6.18.60; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0012/18  thermal: add Luofu thermal sensor driver
+### 0012/19  thermal: add Luofu thermal sensor driver
 
 Status: ready-for-review
 
@@ -252,7 +252,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0014/18  clk: hisilicon: fix Luofu CRG reset polarity
+### 0014/19  clk: hisilicon: fix Luofu CRG reset polarity
 
 Status: ready-for-review
 
@@ -278,9 +278,76 @@ the vendor kernel, but this driver has never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
+### 0019/19  clk: hisilicon: add the Luofu CRG clock tree
+
+Status: ready-for-review (read-only clock tree)
+
+~~~
+clk: hisilicon: add the Luofu CRG clock tree
+
+Extend the CRG clock provider of the HiSilicon Hi5671Y "luofu" SoC with
+the clock tree that the initial CRG clock/reset controller deliberately
+left out: the 16 gate clocks now hang off their real input clocks, and
+the two PLLs and the two muxes of the CRG page are registered as
+read-only clock outputs of the same provider.
+
+The gate parents are decoded from the vendor devicetree
+(MISC-SOC-BLOCKS.md section 5.2): sfc, gpio0/gpio1, i2c0, led_pwm and
+pcie0/pcie1 on apb_clk; gemac_clk0..4 and mdio_clk0 on gemacN_clk;
+lsw_dp_clk0 on lsw_dp_clk; lsw_pfe_clk0 on lsw_pfe_clk; pie_clk0 on
+ahb_clk.  The provider does not guess those names: it resolves the
+seven input clocks from the node's clocks/clock-names with
+of_property_match_string() and of_clk_get_parent_name(), and the
+binding now requires both properties.  The gate register/bit geometry
+remains driver data.
+
+The two PLLs (control words at 0x198 and 0x1e0, shared status word at
+0x90 bits 30/27) and the two muxes (0x138 bits 3 and 1) are registered
+as read-only clocks with the appended indices LUOFU_CLK_PLL_CPU (16),
+LUOFU_CLK_PLL_LSW (17), LUOFU_CLK_CPU_MUX (18) and
+LUOFU_CLK_EFUSE_MUX (19); LUOFU_CLK_NR becomes 20.  Appending the IDs
+does not renumber the existing gate ABI.
+
+The PLL rate equation is decoded from the vendor hi_clk.ko
+(hi_pll_recalc_rate: parent * (int + frac / 2^24) / fbdiv, then the two
+divider-select fields with the absent vendor "div-factor" term as 0)
+and cross-checked against the vendor DT field layout.  The provider
+implements recalc_rate and is_enabled only: there is no set_rate, and
+no PLL or mux enable/disable.  The on-board control words have never
+been read back on this board, so the decoded rates remain read-only
+and unmeasured.  The vendor writer's busy-bit/re-lock protocol is
+decoded but not implemented because the feedback-word encoding is not
+verified, and a wrong PLL store can hang the CPU.
+
+The muxes are read-only for the same safety reason.  0x138 bit 3
+selects the CPU clock source between the two PLLs and must never be
+writable; bit 1 is the efuse ring source, which only the vendor efuse
+programming path ever switches and which this tree does not port (the
+efuse cells are one-way fences and key material).  set_parent() returns
+-EOPNOTSUPP for both, and the parent tables are decoded from the vendor
+devicetree, never measured.
+
+Gates are registered with CLK_IGNORE_UNUSED so that
+clk_disable_unused() cannot gate a clock the bootloader left enabled
+(the NAND boot path is behind the SFC gate).  Probe stays free of
+register writes; the clock words are only read when a consumer asks
+for a rate, a parent or a status.
+
+This patch adds no Kconfig symbol and no config line: it only extends
+the existing CONFIG_LUOFU_CRG driver and its binding and clock-ID
+header.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors); the extended binding passes dt_binding_check.  The driver
+has never run on hardware: no PLL rate, PLL status, mux parent or gate
+state is measured, and there is no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+~~~
+
 ## Group 3 - peripheral drivers, RFC
 
-### 0006/18  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+### 0006/19  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
 
 Status: RFC
 
@@ -320,7 +387,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0011/18  pinctrl: hisilicon: add Luofu peripheral pin controller
+### 0011/19  pinctrl: hisilicon: add Luofu peripheral pin controller
 
 Status: RFC
 
@@ -355,7 +422,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0013/18  PCI: dwc: add Luofu PCIe host controller
+### 0013/19  PCI: dwc: add Luofu PCIe host controller
 
 Status: RFC
 
@@ -388,7 +455,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0017/18  soc: hisilicon: add Luofu A/B boot selector
+### 0017/19  soc: hisilicon: add Luofu A/B boot selector
 
 Status: RFC
 
@@ -431,7 +498,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 4 - RFC / partial drafts, do not merge
 
-### 0009/18  net: ethernet: hisilicon: add partial Luofu GEMAC driver
+### 0009/19  net: ethernet: hisilicon: add partial Luofu GEMAC driver
 
 Status: RFC (partial, refuses probe)
 
@@ -462,7 +529,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0010/18  power: reset: add Luofu machine restart driver
+### 0010/19  power: reset: add Luofu machine restart driver
 
 Status: RFC (provisional reset)
 
@@ -496,7 +563,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0015/18  net: ethernet: hisilicon: add Luofu PIE packet engine draft
+### 0015/19  net: ethernet: hisilicon: add Luofu PIE packet engine draft
 
 Status: draft (do not merge)
 
@@ -527,7 +594,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0016/18  net: ethernet: hisilicon: add Luofu switch probe skeleton
+### 0016/19  net: ethernet: hisilicon: add Luofu switch probe skeleton
 
 Status: draft (do not merge)
 
@@ -562,7 +629,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)
 
-### 0018/18  ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+### 0018/19  ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
 
 Status: RFC (attended)
 
@@ -647,6 +714,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 16 | series/0016-net-lsw-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch | net: ethernet: hisilicon: add Luofu switch probe skeleton | draft (do not merge) |
 | 17 | series/0017-soc-luofu-boot-selector.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/017-soc-luofu-boot-selector.patch | soc: hisilicon: add Luofu A/B boot selector | RFC |
 | 18 | series/0018-arm-mach-hisilicon-smp.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/018-arm-mach-hisilicon-smp.patch | ARM: mach-hisilicon: add Hi5671Y SMP bring-up support | RFC (attended) |
+| 19 | series/0019-arm-clk-luofu-clock-tree.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/019-arm-clk-luofu-clock-tree.patch | clk: hisilicon: add the Luofu CRG clock tree | ready-for-review (read-only clock tree) |
 
 ## Status legend
 
@@ -660,6 +728,11 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 - RFC (attended): host-validated platform code whose acceptance requires
   a single-variable, recovery-armed bench session; not part of the
   UP-first mergeable set.
+- ready-for-review (read-only clock tree): the provider only exposes read
+  paths (no set_rate/set_parent write path).  Its PLL rate equation and
+  mux/gate parents are decoded from the vendor module/devicetree and have
+  never been measured on the board, so those values stay unmeasured until
+  the read-only bench readback.
 - Every patch also needs the mechanical binding split warned about by
   checkpatch, and a MAINTAINERS entry; see 02-maintainers-proposal.md
   and 04-validation.md.
@@ -668,24 +741,25 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 | # | series sha256 | source patch sha256 |
 | --- | --- | --- |
-| 01 | a5d111aaa51cd0816b907827f2d053add1f1ac0a0c6ad70517da2764b526234e | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
-| 02 | 21f052e49d14f78acae87d360d70ba77c8518084c9a774fc25079ea45c8befa9 | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
-| 03 | 6041ef8905ab9e249be9208a0a0ba219560c62be98be3d5e902b3e9a880eeb9c | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
-| 04 | 933a7e911064894b83a15e16e33133cad1bf2a020a9115e4605b2d2f1ce01865 | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
-| 05 | 613278c2fa302e364018a8c391a156568510ff60e00b317bce3471109965ec18 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
-| 06 | af6eecc707dee364c02c8c0d766bb2fc11a841f35fa2e048c64a073e13d5605a | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
-| 07 | 7423bf91fc5a51daa529b6a4cf189142a13c21ef3911cb96a929bcd3a876f999 | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
-| 08 | 793bbbfe6a50c39b75f980d3cf604d52fbc1911ded6da67af38bf3c1138adfa8 | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
-| 09 | b316a301d43020c889b8c4c43016b4ce7f34c505b0c6b176a47aad268d696f73 | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
-| 10 | 3ba4c42f786340256556b75b8c660e69c28f7e43f746059a6dda9c271522c934 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
-| 11 | 8680d652ce46c0580c2fd69d8ca7bf2accf5408383cc6fbd147dc8e43fdcfc88 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
-| 12 | 325eb162d294b2c7105fa4db49c1add96ff76b061a8237e13d68233f6bff6243 | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
-| 13 | 8b2ebc38e5cfe1f5faf03d74c89afb1bd231176c54a55e5b6c760d416ccf9fd6 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
-| 14 | 83b66d1ccc9d6f5ab0744635aa9cbb04d3ffac4cbd97cec659057f93ee7d5ad5 | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
-| 15 | 1ca26231a20d991409a5c660207a653fc658e93781d4a59f8a75e4eb9d4243a7 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
-| 16 | 9e17fe076a99be7af7307df9111093fc4dd39a07653429d688d418c610ae31db | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
-| 17 | c58107a58f0618956fd5f73ec36c41bd89a0443e1167869f783a4a975ee37566 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
-| 18 | b4268e65d5e3d7ad4aa7bc2c9a733234649484b904041b46d77c92f621091e75 | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
+| 01 | 2869afdc466dff306055d651ddf1a90e440581302584a5373846bd5f4430021d | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
+| 02 | fd546bc1b766b6ee40c4bbcdb2ff05ae2129e361aec02c2f33bee327f197776b | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
+| 03 | f4deebdfad5506f4bbc61b640f45f809a2d3fcd73352d4e83c16ce1e0d081aad | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
+| 04 | 68e9e65416365a655b751ebdefb03d239cbb978d8a581f5b1a319ee228094333 | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
+| 05 | 7491a46dafeae7db87531db250522b8cf198ccb0347261e81e7548b13ce18513 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
+| 06 | ec6283983b147a0ccbc2e3c4610d21007c83435282d716ead04c0391265a446a | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
+| 07 | bf1708dff63a4eb315222e1d7e64f99121154a6ab0c717a1d52ce7441610caab | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
+| 08 | 5a01a5ed7076c6e7ce81d82b97cab8f6728ee59d99319db48f21b3ad54706e15 | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
+| 09 | 751ec872a854d38a43cd608f0e1d173c83af4ad29385985e53b0bc46fab7ac8e | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
+| 10 | 5918db43f03f86ef77f2cb93ca16cf1e4dacc57a7784022b28fae2598e886ed8 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
+| 11 | d851b2bfdb20c34c2b016f3ec876dc624101778c5d042310e0ae908ade5284f3 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
+| 12 | 313b518fde4330e1529b82a65fd5efcef5a44494aa9e0dd48d266d8f1be029d8 | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
+| 13 | 60167e217752a9e4c1fdb31ff933ba7bfd66b509fe9f7f682b6db1e0e9fe37ca | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
+| 14 | 6b9f29929d1eedb61d9beb624ab069e9cbb9f9cf98f517995266d1e971cd0d55 | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
+| 15 | 147ea9f29d7540fc1bd90a59dd4691fb2ec89bc9e8a5dc28b4d81e6fab32cb91 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
+| 16 | 527acd0ceae7c6a9c26814ee4be7cbb3a697688b22b5ee82e0337a0ad3d22c37 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
+| 17 | 78502be36a953c618dcf502d5a094d931d2cf0f589df035cb1a6e2bf1e8e52cc | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
+| 18 | cf7357e2668bbf86410c0fccd96ee71d57d89cb6bb7e1dc6197f555a5502df71 | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
+| 19 | 9d9a89799f6398cc61c8e2bc4e23aa53c723c7d31ba18d2bb00fe4b76fe0ea5d | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
 
 The series diff bodies are byte-identical to the source patches apart from
 the git extended headers inserted by the generator (diff --git and

@@ -100,6 +100,12 @@
  *   13  gemac_clk3   0x20         0x16
  *   14  gemac_clk4   0x20         0x17
  *   15  pie_clk0     0x20         0x19
+ *
+ * Indices 16-19 are the CRG's own read-only PLL and mux outputs added by patch
+ * 019 (LUOFU_CLK_PLL_CPU 16, LUOFU_CLK_PLL_LSW 17, LUOFU_CLK_CPU_MUX 18,
+ * LUOFU_CLK_EFUSE_MUX 19). No node consumes them yet; they exist so a future
+ * cpufreq or efuse-programming driver can reference the decoded clocks without
+ * a second provider. This tree never writes a PLL or switches a mux.
  */
 #include <dt-bindings/clock/hisilicon,luofu-crg.h>
 
@@ -223,6 +229,42 @@
 		clock-output-names = "apb_clk";
 	};
 
+	/*
+	 * The four remaining fixed input clocks of the CRG tree, verbatim from
+	 * the vendor devicetree fixed-clock nodes (pinned lines 955-961,
+	 * 1090-1097 and 1108-1115). They are not programmable: gemacN_clk is
+	 * the parent of the five GEMAC gate clocks and the MDIO gate,
+	 * lsw_dp_clk/lsw_pfe_clk parent the internal-switch gate clocks, and
+	 * efuse_ring_clk is one input of the efuse mux (the other is osc).
+	 */
+	gemacn_clk: fixed-clock-gemacn {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <125000000>;	/* 125 MHz */
+		clock-output-names = "gemacN_clk";
+	};
+
+	lsw_dp_clk: fixed-clock-lsw-dp {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <166000000>;	/* 166 MHz */
+		clock-output-names = "lsw_dp_clk";
+	};
+
+	lsw_pfe_clk: fixed-clock-lsw-pfe {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <333000000>;	/* 333 MHz */
+		clock-output-names = "lsw_pfe_clk";
+	};
+
+	efuse_ring_clk: fixed-clock-efuse-ring {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <20000000>;	/* 20 MHz */
+		clock-output-names = "efuse_ring_clk";
+	};
+
 	corrector_clk: fixed-clock-corrector {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -324,17 +366,26 @@
 	 *
 	 * Clock cells: one cell, the LUOFU_CLK_* index from the dt-bindings
 	 * header (included above); the gate geometry is driver data.
+	 *
+	 * Clock tree (patch 019): the node's clocks/clock-names below describe the
+	 * real parents the CRG driver wires, decoded from the vendor devicetree
+	 * (MISC-SOC-BLOCKS.md 5.2): the 16 gates fan out from apb_clk, ahb_clk,
+	 * gemacN_clk, lsw_dp_clk and lsw_pfe_clk; the two PLLs (control words at
+	 * 0x198 and 0x1e0, status word 0x90) run from osc; the two muxes in
+	 * 0x138 select the CPU PLL/lsw PLL (bit 3) and efuse_ring/osc (bit 1).
+	 * The driver resolves these by name, it does not guess global clock names.
+	 * The PLLs and muxes are READ-ONLY clocks in patch 019: recalc_rate plus
+	 * the 0x90 status bit for the PLLs, get_parent for the muxes; there is no
+	 * set_rate/set_parent. 0x138 bit 3 selects the CPU clock source and must
+	 * never become writable; 0x138 bit 1 is only ever flipped by an efuse
+	 * programming path, which this tree does not have.
+	 *
 	 * Reset cells: two cells, (CRG page register offset, bit). The driver
 	 * restricts the offset to the three reset words so a specifier can never
 	 * write the watchdog, soft-reset, mux or PLL words.
 	 * TODO(reset-ids): replacing the raw (offset, bit) cells with a named
 	 * reset-ID table is the next submission cleanup (TARGET-DESIGN.md 6.2);
 	 * the cell form is documented in the binding, not invented.
-	 * TODO(driver): the two PLLs (ctrl 0x198/0x1e0, status 0x90 bits 0x1e/
-	 * 0x1b) and the two muxes (0x138 masks 0x8/0x2) are not modelled; the
-	 * lab instrumentation treated them as read-only and one of the mux
-	 * writes switches the CPU clock source, so do not add write support
-	 * without a measurement plan.
 	 * TODO(restart): the reset command is the CRG reboot register at 0x00
 	 * (vendor reboot-offset; softrst_val0/1), not the 0x84 soft-reset word.
 	 * Patch 010 implements it PROVISIONALLY in the hisilicon,luofu-reboot
@@ -347,6 +398,10 @@
 		reg = <0x14880000 0x1000>;
 		#clock-cells = <1>;
 		#reset-cells = <2>;
+		clocks = <&osc_clk>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
+			 <&lsw_dp_clk>, <&lsw_pfe_clk>, <&efuse_ring_clk>;
+		clock-names = "osc", "ahb", "apb", "gemacN", "lsw_dp",
+			      "lsw_pfe", "efuse_ring";
 
 		/*
 		 * Watchdog: no reg and no interrupt. Its registers are

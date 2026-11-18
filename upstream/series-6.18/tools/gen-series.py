@@ -58,6 +58,8 @@ SERIES = [
     ("0016-net-lsw-luofu", "draft (do not merge)"),
     ("0017-soc-luofu-boot-selector", "RFC"),
     ("0018-arm-mach-hisilicon-smp", "RFC (attended)"),
+    ("0019-arm-clk-luofu-clock-tree",
+     "ready-for-review (read-only clock tree)"),
 ]
 
 
@@ -67,13 +69,14 @@ GROUPS = [
         "0002-arm-kconfig-textofs",
         "0003-arm-textofs-nonimmediate",
     ]),
-    ("Group 2 - peripheral drivers, ready for review", [
+    ("Group 2 - peripheral drivers and clock tree, ready for review", [
         "0004-arm-clk-reset-luofu-crg",
         "0005-arm-watchdog-luofu-wdt",
         "0007-net-mdio-luofu",
         "0008-net-phy-luofu",
         "0012-arm-thermal-luofu-tvsensor",
         "0014-arm-crg-reset-polarity",
+        "0019-arm-clk-luofu-clock-tree",
     ]),
     ("Group 3 - peripheral drivers, RFC", [
         "0006-arm-mtd-nand-luofu-fmc",
@@ -209,6 +212,11 @@ def mapping_doc(series: list, hashes: dict) -> str:
     add("- RFC (attended): host-validated platform code whose acceptance requires")
     add("  a single-variable, recovery-armed bench session; not part of the")
     add("  UP-first mergeable set.")
+    add("- ready-for-review (read-only clock tree): the provider only exposes read")
+    add("  paths (no set_rate/set_parent write path).  Its PLL rate equation and")
+    add("  mux/gate parents are decoded from the vendor module/devicetree and have")
+    add("  never been measured on the board, so those values stay unmeasured until")
+    add("  the read-only bench readback.")
     add("- Every patch also needs the mechanical binding split warned about by")
     add("  checkpatch, and a MAINTAINERS entry; see 02-maintainers-proposal.md")
     add("  and 04-validation.md.")

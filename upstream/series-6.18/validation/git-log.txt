@@ -1,19 +1,20 @@
-ee2e548 ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
-2d7b8e0 soc: hisilicon: add Luofu A/B boot selector
-26ef988 net: ethernet: hisilicon: add Luofu switch probe skeleton
-d5da6e7 net: ethernet: hisilicon: add Luofu PIE packet engine draft
-fd90ee6 clk: hisilicon: fix Luofu CRG reset polarity
-39f0db1 PCI: dwc: add Luofu PCIe host controller
-1b71556 thermal: add Luofu thermal sensor driver
-5fd15f1 pinctrl: hisilicon: add Luofu peripheral pin controller
-dfd5e79 power: reset: add Luofu machine restart driver
-135d052 net: ethernet: hisilicon: add partial Luofu GEMAC driver
-e078be3 net: phy: add driver for HiSilicon Luofu "Genius" PHYs
-278ed21 net: mdio: luofu: add MDIO bus controller
-67957c8 spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
-15a6c18 watchdog: luofu: add Hi5671Y watchdog support
-37a9dfd clk: hisilicon: add Luofu CRG clock and reset controller
-43235f4 ARM: head: materialize TEXT_OFFSET with mov_l
-dc8d33d ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
-c6e8467 ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
-7956e71 pristine linux-6.18.60
+118b05e clk: hisilicon: add the Luofu CRG clock tree
+2484e4e ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+62cc1d1 soc: hisilicon: add Luofu A/B boot selector
+f46d8c9 net: ethernet: hisilicon: add Luofu switch probe skeleton
+fb4ab4e net: ethernet: hisilicon: add Luofu PIE packet engine draft
+02c96ab clk: hisilicon: fix Luofu CRG reset polarity
+aed60c5 PCI: dwc: add Luofu PCIe host controller
+e868293 thermal: add Luofu thermal sensor driver
+41733df pinctrl: hisilicon: add Luofu peripheral pin controller
+6d4997c power: reset: add Luofu machine restart driver
+c3ff652 net: ethernet: hisilicon: add partial Luofu GEMAC driver
+a2e4cc5 net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+bfabb0f net: mdio: luofu: add MDIO bus controller
+59f0774 spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+61f99b1 watchdog: luofu: add Hi5671Y watchdog support
+00277a9 clk: hisilicon: add Luofu CRG clock and reset controller
+d6accde ARM: head: materialize TEXT_OFFSET with mov_l
+5a24f1f ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+a6429cf ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+f9ace6a pristine linux-6.18.60

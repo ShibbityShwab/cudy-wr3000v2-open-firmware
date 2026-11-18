@@ -17,9 +17,9 @@ drivers/pinctrl/hisilicon directory).
 | machine | 0001, 0002 | new arch/arm/mach-hisilicon/, ARCH_LUOFU under existing ARCH_HISI | new SoC family, not part of mach-hisi; see section 2 |
 | SMP bring-up | 0018 | new arch/arm/mach-hisilicon/platsmp.c | CPU_METHOD_OF_DECLARE("hisilicon,luofu-smp"); no new binding, reuses the CRG/SYSCTRL syscon nodes (0004/0010); staged separately, see section 9 |
 | early boot / TEXT_OFFSET | 0003 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | general ARM change; see section 3 |
-| CRG clocks/resets | 0004, 0014 | drivers/clk/hisilicon/crg-luofu.c | existing hisilicon clk directory |
-| CRG dt-bindings header | 0004 | include/dt-bindings/clock/hisilicon,luofu-crg.h | clock-ID ABI, next to the binding |
-| CRG binding | 0004, 0014 | Documentation/devicetree/bindings/clock/ | one flat binding file |
+| CRG clocks/resets | 0004, 0014, 0019 | drivers/clk/hisilicon/crg-luofu.c | existing hisilicon clk directory |
+| CRG dt-bindings header | 0004, 0019 | include/dt-bindings/clock/hisilicon,luofu-crg.h | clock-ID ABI, next to the binding |
+| CRG binding | 0004, 0014, 0019 | Documentation/devicetree/bindings/clock/ | one flat binding file |
 | watchdog | 0005 | drivers/watchdog/luofu-wdt.c | top-level watchdog menu; no subsystem subdirectory |
 | FMC SPI-NAND | 0006 | drivers/spi/spi-luofu-fmc.c | it is a SPI-MEM controller, not a raw-NAND controller; binding under mtd/ (6.18 has no mtd/nand binding dir) |
 | MDIO | 0007 | drivers/net/mdio/mdio-luofu.c | existing mdio-hisi-femac.c precedent |
@@ -123,7 +123,7 @@ Kconfig is where most review nits will come from.  Current placement
 | symbol | file | dependencies / selects | note |
 | --- | --- | --- | --- |
 | ARCH_LUOFU | arch/arm/mach-hisilicon/Kconfig (sourced by arch/arm/Kconfig) | depends on ARCH_HISI; select CACHE_L2X0; select HAVE_ARM_SCU/TWD if SMP | UP-only posture |
-| LUOFU_CRG | drivers/clk/hisilicon/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST; COMMON_CLK; select MFD_SYSCON, RESET_CONTROLLER | bool |
+| LUOFU_CRG | drivers/clk/hisilicon/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST; COMMON_CLK; select MFD_SYSCON, RESET_CONTROLLER | bool; 0019 adds no symbol |
 | LUOFU_WDT | drivers/watchdog/Kconfig (global menu) | depends on ARCH_LUOFU \|\| COMPILE_TEST; select MFD_SYSCON, WATCHDOG_CORE | tristate |
 | LUOFU_FMC | drivers/spi/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST; MTD_SPI_NAND | name should probably be SPI_LUOFU_FMC (subsystem prefix) |
 | LUOFU_MDIO | drivers/net/mdio/Kconfig | depends on HAS_IOMEM && OF_MDIO | no ARCH_LUOFU dependency (bus driver) |
@@ -169,10 +169,17 @@ Review points:
    to the new machine Makefile and updates the ARCH_LUOFU help text.  No
    config delta is needed (CONFIG_SMP=y and the HAVE_ARM_SCU/TWD selects
    already come from 0001/0002); see SMP-RE.md section 3.
+8. 0019 adds no Kconfig symbol and no config line either: it extends the
+   existing CONFIG_LUOFU_CRG driver, its clock-ID header and its YAML
+   binding only.  The recorded 001-0019 target build needed no config
+   delta; the kernel_oldconfig re-derivation stayed byte-idempotent.  The
+   new inputs (the seven fixed clocks and the gate parents) are board-DTS
+   content, not Kconfig content, and they are not part of this kernel
+   series.
 
 ## 6. Series order, dependency matrix and bisectability
 
-Consolidated order is 0001 -> 0017.  Compile-time and DT-time
+Consolidated order is 0001 -> 0019.  Compile-time and DT-time
 dependencies:
 
 | patch | needs (compile) | needs (DT behaviour) |
@@ -195,6 +202,7 @@ dependencies:
 | 0016 | 0004 | 0004, 0014 |
 | 0017 | - | 0010 (sysctrl binding, shared node) |
 | 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series |
+| 0019 | 0004 (it edits the CRG driver, clock-ID header and YAML binding 0004 adds) | 0004 (CRG syscon node); the seven input clocks, the gate-parent clocks and the two mux parents are board-DTS content, not in this series |
 
 **Bisectability problem: 0014 is too late.**  0014 fixes the CRG reset
 polarity (active-low), and it is placed after 0006, 0007 and 0013, which
@@ -222,9 +230,13 @@ Other ordering constraints:
   Either order works for compilation; the restart patch should come first
   because the binding is there.
 - 0011/0012 are independent of the rest and can be reviewed in parallel.
-- 0018 is last: it edits files created by 0001 and maps the syscon nodes
-  from 0004/0010.  It is not part of the UP-first submission; the staging
+- 0018 edits files created by 0001 and maps the syscon nodes from
+  0004/0010.  It is not part of the UP-first submission; the staging
   (S1 UP-first, S2 attended) is section 9.
+- 0019 is the last consolidated patch: it extends the CRG provider added
+  by 0004 and builds on the reset-polarity fix 0014.  A real submission
+  either folds it into the CRG series after 0004/0014 or posts it as a
+  follow-up clock-tree patch; it must not precede 0004.
 
 ## 7. Conflicts and merge-order hazards
 
@@ -236,7 +248,7 @@ series is split across subsystem trees):
 | arch/arm/Kconfig, arch/arm/Makefile | 0002 (0003 separate tree) | arm-soc/ARM tree churn; rebase before sending |
 | arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c} | 0001, 0018 | 0018 edits files introduced by 0001 and is last in the series; no in-series conflict, but a split submission must rebase it on the platform series |
 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | 0003 | ARM core tree; conflicts with any early-boot change |
-| drivers/clk/hisilicon/crg-luofu.c, binding yaml | 0004, 0014 | fold 0014 into 0004 (see above) |
+| drivers/clk/hisilicon/crg-luofu.c, binding yaml, clock-ID header | 0004, 0014, 0019 | fold 0014 and 0019 into 0004, or post 0019 as the follow-up clock-tree patch after the CRG provider series |
 | drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016 | three insertions in the same two files; order is 0009 -> 0015 -> 0016 in the consolidated tree.  If 0009 lands alone, 0015/0016 need a rebase (they are drafts, so this should not matter soon) |
 | drivers/net/ethernet/hisilicon/Kconfig | 0009/0015 inside `if ARM || ARM64 || COMPILE_TEST`, 0016 outside it | move 0016 inside (see section 5) |
 | Documentation/devicetree/bindings/soc/hisilicon/ | 0010 (sysctrl yaml), 0017 (boot-selector yaml) | different files, no textual conflict; both reference the same syscon node in the DTS, so the DTS patch must wait for both |
@@ -250,7 +262,7 @@ remove the split-submission conflict risk: rebase each subsystem series on
 the receiving tree before posting, especially 0002/0003 (ARM core) and the
 net/ethernet/hisilicon trio.
 
-## 8. Why the series files are numbered 0001-0018
+## 8. Why the series files are numbered 0001-0019
 
 The four-digit filenames under `series/` are a consolidated review form and
 are not the numbering a maintainer will see.  A real submission renumbers
@@ -261,7 +273,7 @@ per subsystem series and always puts bindings before drivers:
     ...
 
 The `series/NNNN-*.patch` files are format-patch style with
-`[PATCH NN/18]` subjects so that `git am` reproduces the commit subjects
+`[PATCH NN/19]` subjects so that `git am` reproduces the commit subjects
 and messages exactly; the mapping table in 01-commit-messages.md maps each
 file back to its source patch in
 `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/`.

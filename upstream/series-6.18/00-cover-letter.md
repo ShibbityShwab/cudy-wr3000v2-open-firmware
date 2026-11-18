@@ -1,4 +1,4 @@
-# [PATCH 00/18] ARM: hisilicon: add Hi5671Y "luofu" (Cudy WR3000 v2) platform and driver support
+# [PATCH 00/19] ARM: hisilicon: add Hi5671Y "luofu" (Cudy WR3000 v2) platform and driver support
 
 > Submission form for review, not a release. **Nothing in this series has
 > ever run on hardware.** Read "Test evidence" and "No hardware validation"
@@ -6,7 +6,7 @@
 
 ## What this series is
 
-This is an 18-patch kernel series for the HiSilicon Hi5671Y "luofu" SoC
+This is a 19-patch kernel series for the HiSilicon Hi5671Y "luofu" SoC
 (2x Cortex-A9, PL310 L2, 128 MiB DDR3) and the Cudy WR3000 v2.0 board
 (board R116, 128 MiB NAND, Hi5622V100 Wi-Fi).  The unit ships OpenWrt
 22.03.6 on kernel 5.10.201 and its stock U-Boot boots a FIP container from
@@ -17,12 +17,18 @@ The series adds:
 
 - the ARM machine and early-boot support needed to build for the platform
   (0001-0003);
-- an RFC, attended SMP bring-up (0018) whose CPU1 release is decoded from
-  the stock vendor kernel and has never run on our kernel.  It is staged
-  separately and is not part of the UP-first mergeable set;
 - the documented-minimum drivers and devicetree bindings for the blocks
   whose register/protocol model is currently understood well enough to
   describe (0004-0008, 0011-0014, 0017);
+- the CRG clock-tree extension (0019): the 16 gate clocks are parented on
+  their decoded vendor-DT input clocks, and the two PLLs and the two muxes
+  are registered as read-only clocks with no set_rate/set_parent write
+  path.  The PLL rate equation and the mux/gate parents are decoded from
+  the vendor hi_clk.ko and the vendor devicetree and have never been
+  measured on the board;
+- an RFC, attended SMP bring-up (0018) whose CPU1 release is decoded from
+  the stock vendor kernel and has never run on our kernel.  It is staged
+  separately and is not part of the UP-first mergeable set;
 - RFC or partial drivers for the blocks where the hardware model is not
   complete (0006, 0009-0011, 0013, 0015-0017).  These are explicitly
   marked and several refuse to probe.
@@ -59,14 +65,24 @@ patches are UP-first: the machine descriptor leaves `.smp` unset (patch
 0001 describes that state).  SMP bring-up is the separate, attended patch
 0018 below and is not part of this mergeable set.
 
-**2. Peripheral drivers, ready for review** - 0004, 0005, 0007, 0008,
-0012, 0014
-CRG clock/reset, watchdog, MDIO bus, Genius PHY, thermal sensor, and the
-CRG reset-polarity fix.  "Ready" means: the implemented subset is backed by
-a citable artifact (measured register, decoded vendor devicetree/module, or
-a documented software interface), probe does not write unverified
-hardware, and known gaps are documented in the driver.  It does not mean
-the driver has been validated on hardware - none has.
+**2. Peripheral drivers and clock tree, ready for review** - 0004,
+0005, 0007, 0008, 0012, 0014, 0019
+CRG clock/reset, watchdog, MDIO bus, Genius PHY, thermal sensor, the CRG
+reset-polarity fix, and the CRG clock-tree extension.  "Ready" means: the
+implemented subset is backed by a citable artifact (measured register,
+decoded vendor devicetree/module, or a documented software interface),
+probe does not write unverified hardware, and known gaps are documented in
+the driver.  It does not mean the driver has been validated on hardware -
+none has.  0019 is review-ready as a read-only provider extension: it
+registers the PLLs and muxes with recalc_rate/is_enabled/get_parent only
+(no set_rate, no enable/disable, set_parent returns -EOPNOTSUPP), so the
+driver cannot mis-program a clock.  Its values are the caveat: the PLL
+rate equation and the mux/gate parents are decoded from the vendor
+hi_clk.ko and the vendor devicetree, and the boot-programmed control
+words have never been read back on this board.  Treat the decoded rates
+and parents as [U] until one attended read-only clk_summary plus
+control-word readback.  The CPU mux (0x138 bit 3) must never become
+writable: it selects the CPU clock source.
 
 **3. Peripheral drivers, RFC** - 0006, 0011, 0013, 0017
 FMC SPI-NAND (critical storage path; ECC/OOB/quad-enable semantics
@@ -127,9 +143,13 @@ cpu@0 node.
   ARCH_LUOFU; 0004 (CRG) must precede 0005, 0006, 0007, 0009, 0013, 0015
   and 0016 at the devicetree/clock-reset level; 0014 fixes 0004 and should
   be folded into it before a real submission; 0010 introduces the SYSCTRL
-  binding that 0017 also uses.  0018 is last: it compiles independently but
-  maps the pen/resume pages through the CRG syscon node (0004) and the
-  SYSCTRL syscon node (0010), and stays inert if either is missing.
+  binding that 0017 also uses.  0018 maps the pen/resume pages through
+  the CRG syscon node (0004) and the SYSCTRL syscon node (0010), and stays
+  inert if either is missing.  0019 is last: it extends the CRG provider
+  added by 0004 and builds on the 0014 reset-polarity fix; its binding
+  makes seven input clocks (clocks/clock-names) required on the CRG node,
+  and the board DTS that provides them is OpenWrt-target content, not part
+  of this kernel series.
 - 0018's devicetree enable-method (`hisilicon,luofu-smp`) is not in this
   series: the board DTS is OpenWrt-target content and is excluded above.
   A DT without the property boots UP (unmatched CPU method) - that is the
@@ -138,7 +158,11 @@ cpu@0 node.
   project's OpenWrt target skeleton and consumes the bindings added here;
   a kernel DTS submission is a later series (arch/arm/boot/dts/hisilicon/
   already exists in 6.18, so it is a file+Makefile addition, not a new
-  directory).
+  directory).  For 0019 that DTS dependency is explicit: the CRG node must
+  carry the seven fixed input clocks and their clock-names (osc, ahb, apb,
+  gemacN, lsw_dp, lsw_pfe, efuse_ring) and the two mux-parent clocks; the
+  target DTS gets them from the clock-tree lane, and an upstream DTS
+  series must add them before the CRG can probe.
 - The FMC controller (0006) needs the ESMT F50L1G41LC SPI-NAND chip entry,
   which is a v6.19 addition; it is not in 6.18.60 and is currently supplied
   by OpenWrt's generic backport 434.  Do not post 0006 before that entry
@@ -158,13 +182,13 @@ cpu@0 node.
 
 | # | check | result | evidence |
 | --- | --- | --- | --- |
-| 1 | sequential apply of the 18 series files to pristine 6.18.60 | patch(1) 18/18 RC=0; git am 18/18 RC=0; resulting trees identical; 0 fuzz, 0 rejects | 04-validation.md, validation/ |
+| 1 | sequential apply of the 19 series files to pristine 6.18.60 | patch(1) 19/19 RC=0; git am 19/19 RC=0; resulting trees identical; 0 fuzz, 0 rejects | 04-validation.md, validation/ |
 | 2 | offset note | only 0008 has offsets (-75, -12 in drivers/net/phy/{Kconfig,Makefile}) because the source patch was generated against an OpenWrt-patched kernel tree; content applies cleanly | 04-validation.md |
-| 3 | checkpatch.pl --no-tree (series patch mode, default and --strict) | 0 errors; 47 warnings, all explained (15 MAINTAINERS, 14 binding split, 16 long lines, 2 help paragraphs; plus 4 strict-only CHECKs) | 04-validation.md, validation/checkpatch-*.log |
-| 4 | full kernel compile of 0001-0018 (SMP lane, 2026-11-18) | make target/linux/prepare RC=0 (1,202 patching lines, 0 rej/orig); make target/linux/compile RC=0, no compiler warning attributable to a new or changed file (the 38 modpost MODULE_DESCRIPTION messages are the pre-existing baseline), zImage 3,264,472 B sha256 ae59d998...; platsmp.o built with the luofu_smp_* symbols; CONFIG_LUOFU_SELECTOR=y; TEXT_OFFSET contract 0x80608000 unchanged; config re-derivation byte-idempotent | SKELETON-SMOKE.md (SMP session), target-skeleton/docs/port-notes/smp/SUMMARY.md |
-| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped); the corrected boot-selector YAML re-checked 2026-11-18; 0018 adds no binding | SKELETON-SMOKE.md sessions 5-12, A/B + selector-fix + SMP sessions |
-| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane) | SKELETON-SMOKE.md (A/B install + selector-fix sessions), port-notes/smp/SUMMARY.md |
-| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18) | SKELETON-SMOKE.md (A/B install + selector-fix sessions) |
+| 3 | checkpatch.pl --no-tree (series patch mode, default and --strict) | 0 errors; 49 warnings, all explained (15 MAINTAINERS, 16 binding split, 16 long lines, 2 help paragraphs; plus 6 strict-only CHECKs) | 04-validation.md, validation/checkpatch-*.log |
+| 4 | full kernel compile of 0001-0019 (clock-tree lane, 2026-11-18) | make target/linux/prepare RC=0 (patch 019 applied, no rej/orig); make target/linux/compile RC=0, 0 warnings and 0 errors under CONFIG_WERROR=y, zImage 3,264,560 B sha256 4456b0ec...; crg-luofu.o built with luofu_crg_pll_recalc_rate/luofu_crg_mux_get_parent, CONFIG_LUOFU_CRG=y; no new Kconfig symbol (config-6.18 re-derivation byte-idempotent 4106877f..., kernel .config byte-identical to the 001-0018 lane); TEXT_OFFSET contract 0x80608000 unchanged | SKELETON-SMOKE.md (clock-tree session), target-skeleton/docs/port-notes/clk/SUMMARY.md |
+| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped); the corrected boot-selector YAML re-checked 2026-11-18; the extended CRG YAML (0019) checked 2026-11-18; 0018 adds no binding and 0019 no new YAML file | SKELETON-SMOKE.md sessions 5-12, A/B + selector-fix + SMP + clock-tree sessions |
+| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane); 11,346 B sha256 a31ab53f... with the seven CRG fixed clocks and the SMP line (clock-tree lane) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree sessions), port-notes/smp/SUMMARY.md, port-notes/clk/SUMMARY.md |
+| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18); 0019 adds no symbol and the 001-0019 re-derivation is byte-idempotent at the same hash | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree sessions) |
 | 8 | OpenWrt image chain (not kernel submission scope) | make world RC=0 in an isolated clone, reproducible container | SKELETON-SMOKE.md (image-recipe session) |
 | 9 | hardware | none. no boot, no probe-on-silicon, no register I/O, no CPU1 release, no UART/TFTP/flash, no device | - |
 
@@ -181,7 +205,10 @@ drivers has ever probed on this board, and the SMP release (0018) has
 never brought up CPU1 on our kernel.  The kernel built from this series
 therefore proves compilation and interface conformance only.  Known open
 hardware questions include: whether the CRG gate geometry is correct, the
-FMC ECC/OOB/quad-enable semantics, the pinctrl default/consumer states,
+decoded CRG PLL rate equation and control-word values, the mux and
+gate parents (none of the clock rates or parents has ever been read back
+on this board), the FMC ECC/OOB/quad-enable semantics, the pinctrl
+default/consumer states,
 the PCIe wrapper/link bring-up, the GEMAC ring/DMA model, the PIE channel
 model, the LSW register/queue/port-id model, the restart command sequence
 and selector protocol, and the SMP pen-word consumer, CRG resume-bit
@@ -202,10 +229,11 @@ TARGET-DESIGN.md section 10 is done.
 | 0006 FMC | **RFC**: storage path is critical and its ECC/OOB/quad-enable semantics are unverified. |
 | 0011 pinctrl | **RFC**: probe writes nothing and consumer states are unmeasured; applying guessed muxes could break console/NAND. |
 | 0018 SMP | **RFC / ATTENDED**: decoded vendor pen/resume/IPI CPU1 release in a new platsmp.c; has never released a CPU on our kernel. Not in the UP-first set; S1 drops the DTS enable-method hunk (UP boot), S2 is a single-variable attended bring-up with recovery armed. Register values are driver data, no new binding. |
+| 0019 clock tree | **READ-ONLY / DECODED**: registers the CRG PLLs and muxes with read-only ops (no set_rate, set_parent refused) and parents the gates on the decoded vendor-DT input clocks. The PLL rate equation, field layout and mux/gate parents are decoded from the vendor hi_clk.ko and devicetree; the on-board control words, rates and parents have never been measured. No new Kconfig symbol; the binding extension requires seven input clocks from the (out-of-series) board DTS. |
 
 ## Recommended submission sequence
 
-Do not post this consolidated 18-patch file set as one series.  It is
+Do not post this consolidated 19-patch file set as one series.  It is
 consolidated here so the whole design can be reviewed.  A real submission
 splits by subsystem and by readiness:
 
@@ -214,10 +242,11 @@ splits by subsystem and by readiness:
    UP-only, is acceptable, and whether the TEXT_OFFSET change (0003)
    should be a separate generic ARM improvement.  No DTS yet.
 2. **Ready-for-review series, small and independent:** 0004 (with 0014
-   folded in) -> clk/reset maintainers; 0005 -> watchdog; 0007 -> netdev
+   folded in, and 0019 as the immediate clock-tree follow-up - or folded
+   in as well) -> clk/reset maintainers; 0005 -> watchdog; 0007 -> netdev
    MDIO; 0008 -> netdev PHY; 0012 -> thermal.  Each with its binding
    split out and its Kconfig/Makefile patch.  Send the CRG provider before
-   its consumers.
+   its consumers, and do not post 0019 before 0004.
 3. **RFC series with an explicit open-work statement:** 0011 pinctrl,
    0006 FMC (only after the v6.19 ESMT chip entry lands), 0013 PCIe,
    0010 restart + 0017 selector (needs the sysupgrade protocol story and the
@@ -245,20 +274,22 @@ carried as an OpenWrt target patch stack.
 
 ## Known review items to fix before sending
 
-1. **Split bindings out of driver patches.** checkpatch warns 14 times
+1. **Split bindings out of driver patches.** checkpatch warns 16 times
    that DT binding docs/includes should be a separate patch.  One binding
    patch per driver, before its driver patch; the dt-bindings clock header
-   of 0004 also goes with the binding.
+   and binding hunks of 0004 and 0019 also go with the binding.
 2. **Add the MAINTAINERS entry** (02-maintainers-proposal.md); checkpatch
    warns 15 times about new files without it (0018 adds platsmp.c).
 3. **Mechanical checkpatch cleanups:** wrap the 16 over-long CRG clock
-   table lines (112 > 100 columns), add comments to the two spinlock_t
-   declarations, fix two continuation-line alignments in luofu-switch.c,
+   table lines (112 > 100 columns), add comments to the spinlock_t
+   declarations (the two in 0004 plus the two 0019 re-adds when it rewrites
+   the structs), fix two continuation-line alignments in luofu-switch.c,
    and expand the LUOFU_MDIO / LUOFU_PHY Kconfig help text to at least
    four lines.
-4. **Fold 0014 into 0004** and **regenerate 0008 against mainline** (it
-   currently applies with -75/-12 offsets because it was generated against
-   an OpenWrt-patched kernel tree).
+4. **Fold 0014 into 0004** (and decide whether 0019 is folded in or
+   posted as the follow-up clock-tree patch) and **regenerate 0008 against
+   mainline** (it currently applies with -75/-12 offsets because it was
+   generated against an OpenWrt-patched kernel tree).
 5. **Naming consistency:** LUOFU_FMC sits in drivers/spi and would be
    expected to be SPI_LUOFU_FMC; decide before the spi maintainers see it.
    The thermal driver file is luofu_tvsensor.c (underscore) while most new

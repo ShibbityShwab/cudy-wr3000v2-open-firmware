@@ -1,0 +1,60 @@
+clk: hisilicon: add the Luofu CRG clock tree
+
+Extend the CRG clock provider of the HiSilicon Hi5671Y "luofu" SoC with
+the clock tree that the initial CRG clock/reset controller deliberately
+left out: the 16 gate clocks now hang off their real input clocks, and
+the two PLLs and the two muxes of the CRG page are registered as
+read-only clock outputs of the same provider.
+
+The gate parents are decoded from the vendor devicetree
+(MISC-SOC-BLOCKS.md section 5.2): sfc, gpio0/gpio1, i2c0, led_pwm and
+pcie0/pcie1 on apb_clk; gemac_clk0..4 and mdio_clk0 on gemacN_clk;
+lsw_dp_clk0 on lsw_dp_clk; lsw_pfe_clk0 on lsw_pfe_clk; pie_clk0 on
+ahb_clk.  The provider does not guess those names: it resolves the
+seven input clocks from the node's clocks/clock-names with
+of_property_match_string() and of_clk_get_parent_name(), and the
+binding now requires both properties.  The gate register/bit geometry
+remains driver data.
+
+The two PLLs (control words at 0x198 and 0x1e0, shared status word at
+0x90 bits 30/27) and the two muxes (0x138 bits 3 and 1) are registered
+as read-only clocks with the appended indices LUOFU_CLK_PLL_CPU (16),
+LUOFU_CLK_PLL_LSW (17), LUOFU_CLK_CPU_MUX (18) and
+LUOFU_CLK_EFUSE_MUX (19); LUOFU_CLK_NR becomes 20.  Appending the IDs
+does not renumber the existing gate ABI.
+
+The PLL rate equation is decoded from the vendor hi_clk.ko
+(hi_pll_recalc_rate: parent * (int + frac / 2^24) / fbdiv, then the two
+divider-select fields with the absent vendor "div-factor" term as 0)
+and cross-checked against the vendor DT field layout.  The provider
+implements recalc_rate and is_enabled only: there is no set_rate, and
+no PLL or mux enable/disable.  The on-board control words have never
+been read back on this board, so the decoded rates remain read-only
+and unmeasured.  The vendor writer's busy-bit/re-lock protocol is
+decoded but not implemented because the feedback-word encoding is not
+verified, and a wrong PLL store can hang the CPU.
+
+The muxes are read-only for the same safety reason.  0x138 bit 3
+selects the CPU clock source between the two PLLs and must never be
+writable; bit 1 is the efuse ring source, which only the vendor efuse
+programming path ever switches and which this tree does not port (the
+efuse cells are one-way fences and key material).  set_parent() returns
+-EOPNOTSUPP for both, and the parent tables are decoded from the vendor
+devicetree, never measured.
+
+Gates are registered with CLK_IGNORE_UNUSED so that
+clk_disable_unused() cannot gate a clock the bootloader left enabled
+(the NAND boot path is behind the SFC gate).  Probe stays free of
+register writes; the clock words are only read when a consumer asks
+for a rate, a parent or a status.
+
+This patch adds no Kconfig symbol and no config line: it only extends
+the existing CONFIG_LUOFU_CRG driver and its binding and clock-ID
+header.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors); the extended binding passes dt_binding_check.  The driver
+has never run on hardware: no PLL rate, PLL status, mux parent or gate
+state is measured, and there is no Tested-by.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

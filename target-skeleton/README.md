@@ -104,6 +104,17 @@
 > helper and board script installed in the rootfs. **Nothing has booted; no MAC has been
 > read from a real unit or applied to a netdev.**
 >
+> **2026-11-18 (CRG clock-tree session): the CRG clock tree is MODELLED, read-only.** Patch
+> `019` extends the patch-`004` CRG driver with the decoded vendor clock tree: the 16 gate
+> clocks are parented on their real input clocks (apb/ahb/gemacN/lsw_dp/lsw_pfe), the two
+> PLLs (control words at `0x198`/`0x1e0`, status word `0x90`) and the two muxes
+> (`0x138`) are read-only clock outputs of the same provider (header IDs 16-19), and the
+> node's `clocks`/`clock-names` now describe all seven input clocks, with the four missing
+> fixed clocks added to the DTS. The PLL rate equation is decoded from the vendor
+> `hi_clk.ko` disassembly but is **unverified on hardware**; there is no `set_rate` and
+> the CPU mux can never be switched (it selects the CPU clock source). The series
+> (001-019) applies/prepares/compiles host-side; **nothing has booted**.
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).

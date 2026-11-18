@@ -1,7 +1,7 @@
 From 1bda80c51078ed65ed51e57597c417e258e79ffd Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 11/18] pinctrl: hisilicon: add Luofu peripheral pin controller
+Subject: [PATCH 11/19] pinctrl: hisilicon: add Luofu peripheral pin controller
 
 Add a pin controller for the peripheral IOMUX of the HiSilicon Hi5671Y
 "luofu" SoC: 37 pins, 24 groups and 24 functions in two register windows

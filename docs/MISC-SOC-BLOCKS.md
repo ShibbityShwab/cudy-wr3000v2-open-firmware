@@ -742,15 +742,16 @@ generic (non-table) path is the one that runs here. [V]
   `ctrl-offset` (`0x198`/`0x1e0`) and acknowledged through `0x90` bit 30/27. The
   read (recalc) path decodes a fractional PLL: a 12-bit integer field at word0 bits `23:12`, a
   24-bit fraction at word1 bits `23:0`, a 6-bit feedback divider in word0 byte3, and
-  divider-select bits in word0 byte0 (bit 3 selects the fractional path; bits 4..6 and the
-  `div-factor` driver property scale the result). The exact arithmetic is **[I]**: the field
-  positions are [V], the equation shape is inferred, and `div-factor` is absent on this
-  board, so the correction terms the vendor module would apply cannot be computed from this DT. The
-  writer (offset `0x4c4`) sets busy bit 7 of the control byte, writes the assembled word(s),
+  divider-select bits in word0 byte0 (bit 3 set selects the integer-only path, cleared selects
+  the fractional path; bits 4..6 and 8..10 are divider-select fields and the `div-factor`
+  driver property adds to both). The arithmetic was decoded from the module disassembly
+  (`hi_pll_recalc_rate`): `rate = parent * (int + frac/2^24) / fbdiv`, then each non-zero
+  divider-select value is applied as an integer division, with the absent `div-factor`
+  property contributing 0. The writer (offset `0x4c4`) sets busy bit 7 of the control byte, writes the assembled word(s),
   clears bit 7 and polls the status bit; the `round_rate` non-table path treats the PLL as an
   integer multiplier of the reference clamped to `16..3200` [V]. `mode == 1` selects a
   7-word (28-byte) frequency-table entry path; no `freq-table` exists here. [V] Rates must be
-  confirmed by readback; do not assume the recalc equation.
+  confirmed by one readback; the recalc equation itself is now decoded [V], the on-board rate is not.
 
 ### 5.4 The gap list (what a follow-up patch must do)
 
@@ -778,6 +779,12 @@ generic (non-table) path is the one that runs here. [V]
    clock, as the lab driver does).
 5. **Retire the "provisional" caveat** on the `0x20`-group gates (section 5.2) - that is a
    comment-only change, listed in section 13.
+
+**Status (2026-11-18):** items 1-4 are delivered by patch `019` (fixed clocks plus
+DT-provided parents, read-only PLL/mux clock outputs, probe-free-of-writes and
+`CLK_IGNORE_UNUSED`); item 5 is applied there as well (the provisional wording is retired in
+the driver comment). The attended PLL rate/control-word readback and any write path remain
+open; see the patch header and `patches-6.18/019-arm-clk-luofu-clock-tree.patch`.
 
 ### 5.5 Dependencies, risks, offline-vs-attended, effort
 
