@@ -9,11 +9,12 @@
  * (tools/lab-src/arch/arm/boot/dts/luofu-r116.dts in the parent repository).
  * Every register base, interrupt number, clock/reset cell and partition below
  * is a lab-measured value (or an explicitly marked vendor-DT fact), not an
- * invented one. The CRG clock/reset provider and the watchdog now have draft
- * drivers, YAML bindings and a dt-bindings clock header
- * (patches-6.18/004-arm-clk-reset-luofu-crg.patch and
- * 005-arm-watchdog-luofu-wdt.patch); every other proposed binding still does
- * not exist. Do not submit this file as-is.
+ * invented one. The CRG clock/reset provider, the watchdog and the network
+ * trio (MDIO bus, Genius PHY, partial GEMAC) now have draft drivers and YAML
+ * bindings (patches-6.18/004, 005, 007, 008, 009); every other proposed
+ * binding still does not exist. The GEMAC driver is a resource/validation
+ * half only - it has no data path - so its nodes stay disabled. Do not submit
+ * this file as-is.
  *
  * HOW TO READ THE MARKERS:
  *   TODO(binding)        a devicetree binding that must be written/agreed
@@ -454,70 +455,90 @@
 	};
 
 	/*
-	 * TODO(binding): the FMC / SPI-NAND controller. The lab driver matches
-	 * the vendor props bus_id/spi_cs/enable-quad-mode; the upstream binding
-	 * must replace them with standard SPI-NAND/MTD properties where
-	 * possible (TARGET-DESIGN.md 6.2). The node name itself is undecided
-	 * (NAND controller vs SPI controller + SPI-NAND child).
-	 * Facts kept: controller at 0x10a20000 + 1 MiB window at 0x1c000000,
-	 * chip-select 1, quad mode, 2048-byte pages / 64-byte OOB / 128 KiB
-	 * erase blocks (TARGET-DESIGN.md 2).
-	 * TODO(binding): enva/envb are the U-Boot environment blocks; the
-	 * u-boot,env representation and its format compatibility are [U]
-	 * (TARGET-DESIGN.md 6.2). The sysupgrade path DOES write both env
-	 * copies (3.4), so those partitions cannot be marked read-only without
-	 * a different write path.
+	 * FMC / SPI-NAND controller. The controller is a SPI-MEM controller
+	 * (TARGET-DESIGN.md 6.2; opensource/docs/phase50/nand-fmc-port-spec.md
+	 * section (f)), so this node is a SPI bus and the flash die is its
+	 * spi-nand child. The mainline SPI-NAND stack then owns chip detection,
+	 * on-die ECC, OOB layout, bad-block handling and the partition table;
+	 * the controller driver is patches-6.18/006 (drivers/spi/spi-luofu-fmc.c).
+	 * The binding replaces the lab driver's vendor props:
+	 *   - bus_id = "fmc"      -> nothing (the node and its binding);
+	 *   - spi_cs = <1>        -> the child's reg = <1>;
+	 *   - enable-quad-mode    -> spi-tx/rx-bus-width = <4>. The die's quad
+	 *                           enable bit is set by the bootloader, which
+	 *                           reads this flash in quad mode; the mainline
+	 *                           ESMT entry has no QE quirk, so a die reset
+	 *                           performed by Linux is a bring-up question.
+	 * Facts kept: register file at 0x10a20000 + 1 MiB data window at
+	 * 0x1c000000, chip-select 1, quad mode, 2048-byte pages / 64-byte OOB /
+	 * 128 KiB erase blocks (TARGET-DESIGN.md 2). The sfc_clk gate is the
+	 * LUOFU_CLK_SFC ID from patch 004; sfc_rst is the CRG two-cell reset
+	 * specifier (offset 0x2c, bit 0), which the CRG binding and driver
+	 * range-check to the reset words.
+	 * TODO(hw): spi-max-frequency is informational only - the driver does not
+	 * program the SPI clock and the bootloader leaves the FMC timing
+	 * registers configured; the value is a conservative placeholder.
+	 * TODO(hw): the FMC ECC engine semantics (host ECC vs on-die
+	 * pass-through), the OOB bytes the DMA engine returns, and whether a
+	 * Linux die reset clears the die's quad-enable bit are unverified; see
+	 * docs/port-notes/fmc/SUMMARY.md.
 	 */
-	fmc: nand-controller@10a20000 {
-		compatible = "hisilicon,luofu-fmc";	/* TODO(binding): proposal */
-		reg = <0x10a20000 0x1000>,	/* controller */
-		      <0x1c000000 0x100000>;	/* flash window */
+	fmc: spi@10a20000 {
+		compatible = "hisilicon,luofu-fmc";
+		reg = <0x10a20000 0x1000>,	/* register file */
+		      <0x1c000000 0x100000>;	/* memory-mapped data window */
+		reg-names = "regs", "window";
 		clocks = <&crg LUOFU_CLK_SFC>;
 		clock-names = "sfc_clk";
-		/* TODO(reset-binding): vendor cells (0x2c, 0x0) */
+		resets = <&crg 0x2c 0x0>;	/* sfc_rst: CRG 0x2c bit 0 */
+		reset-names = "sfc_rst";
 		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
+		#size-cells = <0>;
 		status = "okay";
-		/*
-		 * TODO(driver): the lab FMC has no real bad-block handling
-		 * (luofu_mtd_block_isbad returns 0), carries bench breadcrumbs and
-		 * the vendor "read ECC off" debug flag; all must be reworked
-		 * before submission (TARGET-DESIGN.md 7.1).
-		 */
 
-		/*
-		 * Stock 17-partition A/B table, verbatim from the vendor base
-		 * DTB (vendor-dt-notes.md 6). Total NAND 0x8000000 = 128 MB.
-		 * The lab "lab" partition is deliberately NOT here; the vendor
-		 * upgrade partition keeps its stock 0x1d80000 size
-		 * (TARGET-DESIGN.md 3.3).
-		 * TODO(binding): review "read-only" flags for partitions OpenWrt
-		 * must never write; the env partitions are written by the
-		 * measured slot switch, so they are not read-only in this draft.
-		 */
-		partitions {
-			compatible = "fixed-partitions";
-			#address-cells = <1>;
-			#size-cells = <1>;
+		flash@1 {
+			compatible = "spi-nand";
+			reg = <1>;			/* chip-select 1 */
+			spi-max-frequency = <50000000>;	/* TODO(hw): informational */
+			spi-tx-bus-width = <4>;
+			spi-rx-bus-width = <4>;
 
-			partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
-			partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
-			partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
-			partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
-			partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
-			partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
-			partition@4c0000 { label = "bdinfo";	reg = <0x4c0000 0x40000>; };
-			partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
-			partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
-			partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
-			partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
-			partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
-			partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
-			partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
-			partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
-			partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
-			partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
+			/*
+			 * Stock 17-partition A/B table, verbatim from the vendor base
+			 * DTB (vendor-dt-notes.md 6). Total NAND 0x8000000 = 128 MB.
+			 * The lab "lab" partition is deliberately NOT here; the vendor
+			 * upgrade partition keeps its stock 0x1d80000 size
+			 * (TARGET-DESIGN.md 3.3).
+			 * TODO(binding): review "read-only" flags for partitions OpenWrt
+			 * must never write; the env partitions are written by the
+			 * measured slot switch, so they are not read-only in this draft.
+			 * TODO(binding): enva/envb are the U-Boot environment blocks; the
+			 * u-boot,env representation and its format compatibility are [U]
+			 * (TARGET-DESIGN.md 6.2).
+			 */
+			partitions {
+				compatible = "fixed-partitions";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
+				partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
+				partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
+				partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
+				partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
+				partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
+				partition@4c0000 { label = "bdinfo";	reg = <0x4c0000 0x40000>; };
+				partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
+				partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
+				partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
+				partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
+				partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
+				partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
+				partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
+				partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
+				partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
+				partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
+			};
 		};
 	};
 
@@ -605,85 +626,104 @@
 	/* ---- Ethernet: five gigabit MACs + MDIO + internal switch -------- */
 
 	/*
-	 * TODO(binding): GEMAC. Binds are the lab shape; the upstream binding
-	 * must document phy-mode/phy-handle/clocks/resets. NEEDS-VERIFICATION:
-	 * the gmac0..4 -> mdio phy mapping below is the vendor runtime mapping
-	 * (14380000 -> mdio addr 2, 14400000 -> 3, 14480000 -> 4 (the wired
-	 * jack on the bench unit), 14500000 -> 5; TARGET-DESIGN.md 6.2). The
-	 * vendor does not use gmac0 at all, hence disabled; do not enable it
-	 * (a second MAC on phy2 would be wrong).
-	 * TODO(driver): the lab GEMAC has no TX/RX ring DMA proven ("No TX
-	 * path yet: the rings are staged", TARGET-DESIGN.md 7.1).
+	 * GEMAC: binding
+	 * Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+	 * (patch 009). The in-tree driver port is PARTIAL: it validates the
+	 * resources described here, but the TX/RX ring DMA data path is not
+	 * implemented, so probe refuses to run and no netdev is registered
+	 * (TARGET-DESIGN.md 7.1). The nodes are disabled - enabling one would
+	 * only log a probe error until the data path exists.
+	 * The bind keeps the lab shape plus the two CRG reset lines.
+	 * NEEDS-VERIFICATION: the gmac0..4 -> mdio phy mapping below is the
+	 * vendor runtime mapping (14380000 -> mdio addr 2, 14400000 -> 3,
+	 * 14480000 -> 4 (the wired jack on the bench unit), 14500000 -> 5;
+	 * TARGET-DESIGN.md 6.2). The vendor does not use gmac0 at all; do not
+	 * enable it (a second MAC on phy2 would be wrong).
 	 */
 	gmac0: ethernet@14300000 {
-		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;
 		phy-mode = "rgmii";
 		phy-handle = <&phy2>;
 		clocks = <&crg LUOFU_CLK_GMAC0>;
-		/* TODO(reset-binding): vendor cells (0x30, 0xd) and (0x30, 0xe) */
+		resets = <&crg 0x30 0xd>, <&crg 0x30 0xe>;
+		reset-names = "mac-logic", "mac";
 		status = "disabled";
 	};
 
 	gmac1: ethernet@14380000 {
-		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14380000 0x10000>;
 		phy-mode = "gmii";
 		phy-handle = <&phy2>;
 		clocks = <&crg LUOFU_CLK_GMAC1>;
-		/* TODO(reset-binding): vendor cells (0x30, 0xf), (0x30, 0x10) */
-		status = "okay";
+		resets = <&crg 0x30 0xf>, <&crg 0x30 0x10>;
+		reset-names = "mac-logic", "mac";
+		status = "disabled";
 	};
 
 	gmac2: ethernet@14400000 {
-		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14400000 0x10000>;
 		phy-mode = "gmii";
 		phy-handle = <&phy3>;
 		clocks = <&crg LUOFU_CLK_GMAC2>;
-		/* TODO(reset-binding): vendor cells (0x30, 0x11), (0x30, 0x12) */
-		status = "okay";
+		resets = <&crg 0x30 0x11>, <&crg 0x30 0x12>;
+		reset-names = "mac-logic", "mac";
+		status = "disabled";
 	};
 
 	gmac3: ethernet@14480000 {
-		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14480000 0x10000>;
 		phy-mode = "gmii";
 		phy-handle = <&phy4>;	/* bench-measured cable port (gmac3) */
 		clocks = <&crg LUOFU_CLK_GMAC3>;
-		/* TODO(reset-binding): vendor cells (0x30, 0x13), (0x30, 0x14) */
-		status = "okay";
+		resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
+		reset-names = "mac-logic", "mac";
+		status = "disabled";
 	};
 
 	gmac4: ethernet@14500000 {
-		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14500000 0x10000>;
 		phy-mode = "gmii";
 		phy-handle = <&phy5>;
 		clocks = <&crg LUOFU_CLK_GMAC4>;
-		/* TODO(reset-binding): vendor cells (0x30, 0x15), (0x30, 0x16) */
-		status = "okay";
+		resets = <&crg 0x30 0x15>, <&crg 0x30 0x16>;
+		reset-names = "mac-logic", "mac";
+		status = "disabled";
 	};
 
 	/*
-	 * TODO(binding): MDIO. The five PHY children are standard
-	 * ethernet-phy-ieee802.3-c22 nodes; the bus controller binding is a
-	 * TODO. The Genius PHY (ID 0x20669a00, mask 0xffffff00) binds via PHY
-	 * ID, not DT compatible; the vendor per-PHY firmware patch load is a
-	 * TODO (TARGET-DESIGN.md 6.2, 7.1).
+	 * MDIO bus controller: binding
+	 * Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml
+	 * (patch 007), driver drivers/net/mdio/mdio-luofu.c. The PHY children
+	 * stay standard ethernet-phy-ieee802.3-c22 nodes: the Genius PHY (ID
+	 * 0x20669a00, mask 0xffffff00) binds through its PHY ID (patch 008),
+	 * not through a devicetree compatible, and the vendor per-PHY firmware
+	 * patch load is a driver TODO (TARGET-DESIGN.md 6.2, 7.1).
+	 * The seven resets are the MDIO bus reset, the global PHY reset and the
+	 * five per-PHY resets; the driver releases them after enabling the bus
+	 * clock and before the bus is scanned.
 	 * NEEDS-VERIFICATION: the PHY addresses 2..5 are the vendor runtime
 	 * mapping; PHY address 1 is not used by the vendor and is not modelled.
 	 */
 	mdio0: mdio@14000000 {
-		compatible = "hisilicon,luofu-mdio";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-mdio";
 		reg = <0x14000000 0x1000>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		clocks = <&crg LUOFU_CLK_MDIO>;
-		/*
-		 * TODO(reset-binding): vendor cells (0x30, 0x6) mdio,
-		 * (0x30, 0x1a) gephyall, (0x30, 0x1b..0x1f) gephy0..4.
-		 */
+		resets = <&crg 0x30 0x6>,	/* mdio */
+			 <&crg 0x30 0x1a>,	/* gephyall */
+			 <&crg 0x30 0x1b>,	/* gephy0 */
+			 <&crg 0x30 0x1c>,	/* gephy1 */
+			 <&crg 0x30 0x1d>,	/* gephy2 */
+			 <&crg 0x30 0x1e>,	/* gephy3 */
+			 <&crg 0x30 0x1f>;	/* gephy4 */
+		reset-names = "mdio", "gephyall", "gephy0", "gephy1",
+			      "gephy2", "gephy3", "gephy4";
 		status = "okay";
 
 		phy2: ethernet-phy@2 {

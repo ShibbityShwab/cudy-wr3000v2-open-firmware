@@ -1,0 +1,267 @@
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -25,6 +25,17 @@ config HIX5HD2_GMAC
+ 	help
+ 	  This selects the hix5hd2 mac family network device.
+ 
++config LUOFU_GMAC
++	tristate "HiSilicon Luofu GEMAC support (partial, no data path)"
++	depends on OF
++	help
++	  Platform driver for the HiSilicon Hi5671Y "luofu" GEMAC. This is
++	  a partial port: it claims the documented binding and validates the
++	  platform resources, but the TX/RX ring DMA data path is not
++	  implemented, so probe refuses to register a network device. The
++	  board devicetree keeps the MAC nodes disabled until the data path
++	  exists. Say N unless you are working on that port.
++
+ config HISI_FEMAC
+ 	tristate "Hisilicon Fast Ethernet MAC device support"
+ 	depends on HAS_IOMEM
+--- a/drivers/net/ethernet/hisilicon/Makefile
++++ b/drivers/net/ethernet/hisilicon/Makefile
+@@ -4,6 +4,7 @@
+ #
+ 
+ obj-$(CONFIG_HIX5HD2_GMAC) += hix5hd2_gmac.o
++obj-$(CONFIG_LUOFU_GMAC) += luofu-gmac.o
+ obj-$(CONFIG_HIP04_ETH) += hip04_eth.o
+ obj-$(CONFIG_HNS_MDIO) += hns_mdio.o
+ obj-$(CONFIG_HNS) += hns/
+--- /dev/null
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -0,0 +1,137 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" GEMAC - resource/binding half only, no data path.
++ *
++ * STATUS: PARTIAL PORT.  This driver claims the documented devicetree binding
++ * and validates the platform resources, but it deliberately does not register
++ * a network device and its probe fails: without the missing data path a
++ * net_device could only drop frames, which would look functional to
++ * userspace.  The devicetree nodes stay disabled until the missing half
++ * exists.
++ *
++ * What is established (and cited):
++ *   - the vendor driver (hi_kmac.ko) is a phylink MAC driver over
++ *     clk_bulk_* and a reset array, with plain readl/writel register access;
++ *   - the five instances are ports 8..12 of the internal switch: instance 0
++ *     is RGMII (unused by the vendor) and instances 1..4 are GMII into the
++ *     switch; the wired jack measured on the vendor system is instance 3
++ *     (0x14480000,
++ *     port 11);
++ *   - PHY attachment uses the standard phy-mode/phy-handle properties and the
++ *     MDIO bus driver in mdio-luofu.c;
++ *   - a few register words were observed read-only on the vendor's running
++ *     kernel (PORT_MODE 0x0040, MODE_CHANGE_EN 0x01b4).
++ *
++ * What does not exist, and is why this file stops at resource validation:
++ *   - the TX/RX ring and DMA programming model.  It has never been decoded.
++ *     The previous out-of-tree 5.10 driver had no ring code at all (its
++ *     transmit path dropped every frame) and the vendor's transmit helper
++ *     (hi_net_dev_xmit) is exported by another vendor module, not by the MAC
++ *     module.  Writing a model from guesses is not acceptable: an access to
++ *     this block before it is ready has hung the board's AHB bus.
++ *
++ * TODO(data-path): decode the ring/DMA registers from a citable source,
++ * implement NAPI TX/RX with DMA mapping, program the port mode from the
++ * phylink link-up callback, and enable the devicetree nodes.  Until then the
++ * driver refuses to probe.
++ */
++
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_mdio.h>
++#include <linux/of_net.h>
++#include <linux/phy.h>
++#include <linux/platform_device.h>
++#include <linux/reset.h>
++
++/*
++ * Check that the node carries what the binding requires.  This is the only
++ * work the driver can do correctly today: acquiring the resources proves that
++ * the described hardware matches the binding, without touching a register.
++ */
++static int luofu_gmac_check_dt(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct clk_bulk_data *clks;
++	struct reset_control *resets;
++	struct device_node *phy;
++	phy_interface_t iface;
++	int nclks, ret;
++
++	ret = of_get_phy_mode(dev->of_node, &iface);
++	if (ret)
++		return dev_err_probe(dev, ret, "missing or invalid phy-mode\n");
++
++	switch (iface) {
++	case PHY_INTERFACE_MODE_GMII:
++	case PHY_INTERFACE_MODE_RGMII:
++		break;
++	default:
++		return dev_err_probe(dev, -EINVAL, "unsupported phy-mode %s\n",
++				     phy_modes(iface));
++	}
++
++	phy = of_parse_phandle(dev->of_node, "phy-handle", 0);
++	if (phy)
++		of_node_put(phy);
++	else if (!of_phy_is_fixed_link(dev->of_node))
++		return dev_err_probe(dev, -EINVAL, "missing phy-handle\n");
++
++	nclks = devm_clk_bulk_get_all(dev, &clks);
++	if (nclks < 0)
++		return dev_err_probe(dev, nclks, "failed to get clocks\n");
++	if (nclks != 1)
++		return dev_err_probe(dev, -EINVAL, "expected 1 clock, got %d\n",
++				     nclks);
++
++	resets = devm_reset_control_array_get_exclusive(dev);
++	if (IS_ERR(resets))
++		return dev_err_probe(dev, PTR_ERR(resets),
++				     "failed to get resets\n");
++
++	return 0;
++}
++
++static int luofu_gmac_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	void __iomem *base;
++	int ret;
++
++	base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	ret = luofu_gmac_check_dt(pdev);
++	if (ret)
++		return ret;
++
++	/*
++	 * Refuse the probe: registering a net_device here would create an
++	 * interface that can never carry a packet.  The devicetree nodes are
++	 * disabled, so a normal boot never reaches this point; the error is
++	 * loud exactly for the person who enables a node early.
++	 */
++	return dev_err_probe(dev, -EOPNOTSUPP,
++			     "TX/RX ring DMA is not implemented; refusing to register a non-functional netdev\n");
++}
++
++static const struct of_device_id luofu_gmac_of_match[] = {
++	{ .compatible = "hisilicon,luofu-gmac" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_gmac_of_match);
++
++static struct platform_driver luofu_gmac_driver = {
++	.probe = luofu_gmac_probe,
++	.driver = {
++		.name = "luofu-gmac",
++		.of_match_table = luofu_gmac_of_match,
++	},
++};
++module_platform_driver(luofu_gmac_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (partial: no data path)");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+@@ -0,0 +1,94 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/net/hisilicon,luofu-gmac.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu gigabit ethernet MAC
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" SoC has five gigabit MAC instances. Instance 0 is an
++  RGMII port that the board does not use; instances 1..4 are GMII ports into
++  the internal switch (ports 9..12). Each instance has its own gate clock and
++  two reset lines from the CRG, and attaches to one PHY on the shared MDIO bus
++  through the standard phy-mode/phy-handle properties.
++
++  The register window is the MAC control/status block. The transmit and
++  receive ring DMA programming model of this controller is not documented yet;
++  the Linux driver is a partial port that only validates these resources and
++  refuses to register a network device. The nodes are therefore disabled until
++  the data path is implemented.
++
++allOf:
++  - $ref: ethernet-controller.yaml#
++
++properties:
++  compatible:
++    const: hisilicon,luofu-gmac
++
++  reg:
++    maxItems: 1
++
++  clocks:
++    maxItems: 1
++    description: MAC gate clock from the CRG.
++
++  resets:
++    maxItems: 2
++    description: MAC logic reset and MAC core reset, both from the CRG.
++
++  reset-names:
++    items:
++      - const: mac-logic
++      - const: mac
++
++  phy-mode:
++    enum:
++      - gmii
++      - rgmii
++
++required:
++  - compatible
++  - reg
++  - clocks
++  - resets
++  - reset-names
++  - phy-mode
++  - phy-handle
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
++
++    crg: system-controller@14880000 {
++        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++        reg = <0x14880000 0x1000>;
++        #clock-cells = <1>;
++        #reset-cells = <2>;
++    };
++
++    mdio {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        phy4: ethernet-phy@4 {
++            compatible = "ethernet-phy-ieee802.3-c22";
++            reg = <4>;
++            max-speed = <1000>;
++        };
++    };
++
++    ethernet@14480000 {
++        compatible = "hisilicon,luofu-gmac";
++        reg = <0x14480000 0x10000>;
++        phy-mode = "gmii";
++        phy-handle = <&phy4>;
++        clocks = <&crg LUOFU_CLK_GMAC3>;
++        resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
++        reset-names = "mac-logic", "mac";
++    };

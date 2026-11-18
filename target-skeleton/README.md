@@ -18,10 +18,16 @@
 > `tools/build-kernel-slice.sh` (host-only, fail-closed, refuses vendor-derived inputs).
 > On 2026-11-18 (fifth session) the first draft **driver series** was added: the board's
 > CRG clock/reset controller (patch `004`) and watchdog (patch `005`) with their YAML
-> bindings, device-tree clock-id header and DTS nodes. They compile as built-ins into the
-> same 6.18 kernel build (host-only) and have **never run on hardware**. The design these
-> files encode is not accepted upstream: the rest of the driver series, image recipe and
-> device page do not exist. **Do not read this directory as upstream progress.**
+> bindings, device-tree clock-id header and DTS nodes. A sixth session added the network
+> trio: an MDIO bus controller (`007`), the Genius PHY driver (`008`) and a **partial**
+> GEMAC binding/resource driver (`009` - the TX/RX ring DMA data path is not implemented,
+> so the GEMAC nodes stay disabled). The same session also added the board's **FMC
+> SPI-NAND controller** (patch `006` - a SPI-MEM controller with the mainline SPI-NAND
+> stack behind it, its YAML binding and the DTS conversion to a SPI bus + `spi-nand`
+> child). All of them compile as built-ins into the same 6.18
+> kernel build (host-only) and have **never run on hardware**. The design these files
+> encode is not accepted upstream: the rest of the driver series, image recipe and device
+> page do not exist. **Do not read this directory as upstream progress.**
 >
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
@@ -55,12 +61,16 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/003-arm-textofs-nonimmediate.patch` | draft core ARM early-boot fix (2026-11-18): replaces the four `#TEXT_OFFSET` ARM immediates (`arch/arm/kernel/head.S` stext + `pgtbl` macro, `arch/arm/boot/compressed/head.S` two sites) with the kernel's portable `mov_l` constant macro, so the required `0x00608000` text offset assembles (ARM can only encode an 8-bit rotated immediate). Applies cleanly; **full kernel compile RC=0**; load/entry verified at `0x80608000` from the built artifacts. Not reviewed upstream. | same |
 | `target/linux/hisilicon/patches-6.18/004-arm-clk-reset-luofu-crg.patch` | first real upstream-style driver (2026-11-18, fifth session): new `drivers/clk/hisilicon/crg-luofu.c` (16 gate clocks + 2-cell-offset reset controller over one **syscon regmap**; gate geometry is driver data, clock IDs are the DT ABI), `include/dt-bindings/clock/hisilicon,luofu-crg.h`, YAML `Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_CRG`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **never booted, never bench-run**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/patches-6.18/005-arm-watchdog-luofu-wdt.patch` | first real upstream-style driver (2026-11-18, fifth session): new `drivers/watchdog/luofu-wdt.c` (6.18 `devm` watchdog API; hwver-2 register values are driver data; child of the CRG syscon node, so **no second MMIO claim**; no restart handler/IRQ - documented TODOs), YAML `Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_WDT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **never booted, never bench-run**. | same |
+| `target/linux/hisilicon/patches-6.18/006-arm-mtd-nand-luofu-fmc.patch` | FMC SPI-NAND controller (2026-11-18, sixth session): new `drivers/spi/spi-luofu-fmc.c`, a SPI-MEM controller for the 0x10a20000 FMC; the mainline SPI-NAND stack (`drivers/mtd/nand/spi`, ESMT `F50L1G41LC`) owns chip detection, on-die ECC, OOB layout, bad-block handling and the 17 `fixed-partitions`; YAML `Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_FMC`) and the SPI/SPI-NAND config symbols. Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, 0 warnings from the new files**; `dt_binding_check` pass; **never booted, never bench-run** - the FMC ECC, DMA-OOB and quad-enable semantics are unverified. NOTE: the ESMT F50L1G41LC chip entry is a v6.19 addition supplied here by OpenWrt's generic backport `434-...`. | `target/linux/hisilicon/patches-<ver>/` |
+| `target/linux/hisilicon/patches-6.18/007-net-mdio-luofu.patch` | network trio 1/3 (2026-11-18, sixth session): new `drivers/net/mdio/mdio-luofu.c` (6.18 MDIO bus API; the frame/status/data register model and the polled handshake are the ones a previous out-of-tree 5.10 driver exercised on the lab board), Kconfig/Makefile (`CONFIG_LUOFU_MDIO` in `drivers/net/mdio/`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml`. Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **never booted, never bench-run**. | `target/linux/hisilicon/patches-<ver>/` |
+| `target/linux/hisilicon/patches-6.18/008-net-phy-luofu.patch` | network trio 2/3: new `drivers/net/phy/luofu-phy.c` (PHYLIB driver for the Hisilicon "Genius" PHY, PHY ID `0x20669a00` / mask `0xffffff00`; generic clause 22 ops; the vendor per-PHY firmware patch is **not** loaded - documented TODO), Kconfig/Makefile (`CONFIG_LUOFU_PHY`). No YAML by design: PHY drivers match by PHY ID and the PHY children stay standard `ethernet-phy-ieee802.3-c22` nodes. **Host kernel compile RC=0, no warnings**; `checkpatch` clean; **never booted**. | same |
+| `target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch` | network trio 3/3, **PARTIAL**: new `drivers/net/ethernet/hisilicon/luofu-gmac.c` (platform driver; claims the binding and validates reg/clocks/resets/phy-mode/phy-handle, then **refuses to probe** - the TX/RX ring DMA model is not implemented and has never been decoded, so no netdev is registered), Kconfig/Makefile (`CONFIG_LUOFU_GMAC`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. **Host kernel compile RC=0, no warnings**; `dt_binding_check` pass; the GEMAC DTS nodes stay `disabled`. **Not a data-path driver; never booted.** | same |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT`; with patches `001`-`005` the **full kernel now compiles** (RC=0) and nothing boots | same |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`) and the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial); with patches `001`-`009` the **full kernel compiles** (RC=0) and nothing boots | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
-| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG and watchdog nodes now match their written bindings (one syscon system-controller node + watchdog child, clock IDs from the header); every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
+| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added) and the GEMAC nodes match patch `009` but stay `status = "disabled"` because the GEMAC driver has no data path; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
 | `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
 | `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | a host build helper (not an OpenWrt tree file); its steps still have to be wired into `image/luofu.mk` |
@@ -321,16 +331,51 @@ is `patches-6.18/`:
   `Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml`. It has no
   `reg`: it is the child of the CRG syscon node, which is what removes the lab-lane
   `-EBUSY`/`devm_ioremap()` workaround and keeps probe register-free.
+- `006` adds the FMC SPI-NAND controller: `drivers/spi/spi-luofu-fmc.c` is a SPI-MEM
+  controller for the 0x10a20000 FMC (the command engine for command/address/short-data
+  phases, the measured DMA engine for page + OOB transfers), and the mainline SPI-NAND
+  stack supplies chip detection, the on-die ECC engine, the ESMT OOB layout, bad-block
+  handling and the 17 `fixed-partitions`. The lab driver's custom `mtd_info`, sysctrl
+  breadcrumbs, JFFS2/UBI edits and "read ECC off" flag are absent. The vendor DT props
+  become standard SPI properties (`spi_cs` -> the child's `reg`, `enable-quad-mode` ->
+  `spi-{tx,rx}-bus-width`), the DTS node becomes a SPI bus with a `spi-nand` child, and the
+  controller consumes the CRG clock cell (`LUOFU_CLK_SFC`) and the 2-cell reset
+  (`<&crg 0x2c 0x0>`). The YAML is
+  `Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml`. NOTE: the ESMT
+  F50L1G41LC chip entry is a v6.19 upstream addition and reaches this 6.18 target through
+  OpenWrt's generic backport
+  `434-v6.19-mtd-spinand-esmt-add-support-for-F50L1G41LC.patch` - not vanilla 6.18.60.
+- `007` adds the MDIO bus controller: `drivers/net/mdio/mdio-luofu.c` (platform
+  driver + `devm_mdiobus_alloc_size`/`of_mdiobus_register`, gate clock via
+  `devm_clk_get_enabled`, the seven CRG resets as a reset array). The transfer is the
+  decoded MMIO handshake (`0x20` done/ack, `0x2c` busy, `0x30` frame, `0x38` data) that a
+  previous out-of-tree 5.10 driver exercised on the lab board; this port has only been
+  host-compiled. Clock IDs/resets come from the CRG provider. YAML
+  `Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml`.
+- `008` adds the Genius PHY driver: `drivers/net/phy/luofu-phy.c`, a PHYLIB driver matched
+  by PHY ID (`0x20669a00`/mask `0xffffff00`) with the generic clause 22 ops, so the PHY
+  children stay standard `ethernet-phy-ieee802.3-c22` nodes and no YAML is added (PHY
+  drivers are ID-matched upstream). The vendor per-PHY firmware patch is a documented TODO.
+- `009` adds the GEMAC **partial** port: `drivers/net/ethernet/hisilicon/luofu-gmac.c`
+  claims the binding and validates the resources (one clock, two reset lines, phy-mode,
+  phy-handle) and then refuses to probe, because the TX/RX ring DMA programming model has
+  never been decoded and a guessed model could hang the bus. The driver registers no
+  netdev, and the DTS GEMAC nodes are `disabled`; YAML
+  `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. The data path is the
+  remaining blocker before Ethernet can be claimed.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
 
 Still missing from the submission:
 
-- the rest of the driver + dt-binding series (thermal, pinctrl, FMC, MDIO/PHY/GEMAC,
-  switch, PCIe - TARGET-DESIGN.md section 7), each with its YAML. The CRG clock/reset
-  controller (`004`) and watchdog (`005`) drafts now exist with their YAMLs, but they
-  are host-compile-validated only: no bench run, no boot, no upstream review;
+- the rest of the driver + dt-binding series (thermal, pinctrl, switch, PCIe -
+  TARGET-DESIGN.md section 7), each with its YAML. The CRG/WDT (`004`/`005`), FMC
+  SPI-NAND (`006`) and network trio (`007`-`009`) drafts exist with their YAMLs (the PHY
+  driver needs none), but they are host-compile-validated only: no bench run, no boot, no
+  upstream review. The GEMAC
+  driver is a **resource/binding half only** - the TX/RX ring DMA data path is not
+  implemented, so there is no Ethernet data path yet (MDIO + PHY are complete ports);
 - a `platform.sh` implementing `platform_check_image`/`platform_do_upgrade`
   (TARGET-DESIGN.md section 5.4) - **not written**;
 - the sysupgrade container wrapper that adds the kernel slice, rootfs UBI and
@@ -430,6 +475,44 @@ Checked on the author's host on 2026-11-18, nothing more:
   touches a register. **Nothing was booted or bench-tested; the binding maintainer entry
   and the upstream review are open.** Exact commands/results:
   [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (fifth session).
+- **Network trio - MDIO bus, Genius PHY, partial GEMAC (2026-11-18, sixth host-only
+  session)**: patches `007` (MDIO bus controller on the 6.18 MDIO API), `008`
+  (Genius PHY driver, ID-matched, no binding) and `009` (GEMAC binding + resource
+  driver, **partial: no TX/RX ring DMA data path**) plus the DTS/config edits. Results:
+  all three apply to pristine `linux-6.18.60` (`patch -p1 --dry-run` RC=0) and in
+  the clone (`make target/linux/prepare` RC=0); the full kernel compiles
+  (`make target/linux/compile V=s -j16` **RC=0**, 1284.97 s, tree's own
+  OpenWrt GCC 14.4.0, `CONFIG_WERROR=y`, **0 warnings**), with
+  `CONFIG_LUOFU_MDIO=y` + `CONFIG_LUOFU_PHY=y` + `CONFIG_LUOFU_GMAC=y`
+  built-in and all three probes in `System.map`; `zImage` 3,223,728 B sha256
+  `2749c294fe95b6fe3ece2ecc26357dbb44d0aa5e5fc765699e8865f0a6e5b6f5` (the `TEXT_OFFSET` contract is unchanged:
+  `_text = 0xc0608000`). The board DTS compiles with the patched kernel's own dtc
+  to a 9,459 B DTB (sha256 `f6781920eedc8421ffbe5d72aa6adecc9f64509ee2316f62263aabd5f4f9c887`) with **zero warnings**.
+  `dt_binding_check` passes for both new YAMLs (dtschema 2026.9; `yamllint`
+  unavailable, that lint step skipped); `checkpatch.pl` reports 0 errors / 0 warnings
+  / 0 checks on all three drivers; there are no lab/bench breadcrumbs or vendor-only
+  properties. **The GEMAC driver registers no netdev and refuses to probe** (the ring/DMA
+  model is not decoded) and its DTS nodes are `disabled`; MDIO and PHY are complete
+  ports. Nothing was booted or bench-tested. Exact commands/results:
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (sixth session).
+- **FMC SPI-NAND controller (2026-11-18, sixth host-only session)**: patch `006` adds the
+  FMC as a SPI-MEM controller with the mainline SPI-NAND stack behind it, its YAML binding
+  and the DTS conversion (SPI bus + `spi-nand` child with the 17 fixed partitions).
+  Results: the patch applies to pristine `linux-6.18.60` (`patch -p1 --dry-run` RC=0) and
+  in an isolated clone copy (`make target/linux/prepare` RC=0); the full kernel compiles
+  (`make target/linux/compile V=s -j16` **RC=0**, 109 s wall clock, tree's own OpenWrt GCC
+  14.4.0, `CONFIG_WERROR=y`, **0 warnings from the new files**), with `CONFIG_LUOFU_FMC=y`
+  built-in and `luofu_fmc_probe` / `luofu_fmc_exec_op` in `System.map`; `zImage`
+  3,248,984 B sha256 `51f340ad...`. The board DTS compiles with the patched kernel's own
+  dtc (1.7.2) to a 9,163 B DTB (sha256 `3541b267...`) with **zero warnings**, and its FMC
+  subtree validates against the binding schema (`dt-validate` RC=0). `dt_binding_check`
+  passes for the YAML (dtschema 2026.9; `yamllint` unavailable, that lint step skipped).
+  The hand-added config delta is symbol-identical to a canonical `make kernel_oldconfig`
+  re-derivation (285/285, idempotent, merged config identical). `checkpatch.pl`: 0 errors /
+  0 warnings on the driver and the YAML. **Nothing was booted or bench-tested; the ECC,
+  DMA-OOB and quad-enable semantics and the v6.19 ESMT chip-entry dependency are open.**
+  Exact commands/results: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (sixth
+  session, FMC/NAND port).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host with the patched
   kernel's own dtc (1.7.2) and **zero warnings** (the former deliberate
   `unique_unit_address` collision between the CRG and watchdog nodes is resolved by the
@@ -444,7 +527,9 @@ Checked on the author's host on 2026-11-18, nothing more:
 
 **Not done, and not claimed:** no bootable image (no rootfs/UBI, no sysupgrade container,
 no install path), no appended DTB, no boot, no device interaction, no UART, no bench tool
-run. The two new driver bindings pass `dt_binding_check` but have had no upstream review, and
+run, and no network data path (the GEMAC driver is a resource/binding half only and its
+DTS nodes are disabled). The four driver bindings (CRG, watchdog, MDIO, GEMAC) pass
+`dt_binding_check` (the PHY driver needs none) but have had no upstream review, and
 a full-draft-DTS `dtbs_check` is still not clean (every other node has a TODO binding). The
 zImage produced by the compile stage and the uImage + FIP slice assembled by
 `tools/build-kernel-slice.sh` are host build products that satisfy the *decoded* loader
@@ -493,6 +578,17 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
     `config-6.18`, the failed pre-fix compile and the successful post-fix full kernel
     compile; the earlier GCC 11.3 `retain`/`CONFIG_WERROR` failure is gone. The
     toolchain is no longer a blocker for the kernel build.
+
+13. **GEMAC data path** - the TX/RX ring and DMA programming model is not decoded, so
+    patch `009` is a resource/binding half only (no netdev; its DTS nodes are
+    disabled). This blocks the wired Ethernet data path; MDIO + PHY are complete ports.
+    The vendor GPL source (request open) or a citable reverse-engineering record is the
+    prerequisite.
+14. **Genius PHY firmware patch** - the vendor driver downloads a per-PHY firmware patch
+    (`lsw/hi_ephy_%xv%x.bin`) before link training; its format and necessity are not
+    decoded. The 6.18 PHY driver uses the generic clause 22 path and loads nothing; if
+    hardware tests show a link-training difference from the vendor stack, that patch is
+    the first suspect (a hypothesis to test, not a claim).
 
 Skeleton-specific findings recorded while writing the files:
 
@@ -545,8 +641,9 @@ Skeleton-specific findings recorded while writing the files:
 ## 7. Safety and publication constraints honored
 
 - No device was touched: no bench tools, no UART, no SSH, no flash. This is a
-  host-side documentation/skeleton deliverable; the 2026-11-18 patch/config session ran
-  only OpenWrt make targets and a kernel compile in the local clone.
+  host-side documentation/skeleton deliverable; the 2026-11-18 patch/config sessions
+  (including the sixth-session network port) ran only OpenWrt make targets and a kernel
+  compile in the local clone.
 - No vendor binaries, `.o/.ko`, firmware blobs, calibration data, extracted DTBs,
   U-Boot images, credentials or dumps are present. Named values (`0xd7b7ab1e`,
   40,732, slot sizes, addresses) are structural facts already documented in the

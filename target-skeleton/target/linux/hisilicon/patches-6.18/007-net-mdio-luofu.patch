@@ -1,0 +1,337 @@
+--- a/drivers/net/mdio/Kconfig
++++ b/drivers/net/mdio/Kconfig
+@@ -104,6 +104,14 @@ config MDIO_HISI_FEMAC
+ 	  This module provides a driver for the MDIO busses found in the
+ 	  Hisilicon SoC that have an Fast Ethernet MAC.
+ 
++config LUOFU_MDIO
++	tristate "HiSilicon Luofu MDIO bus controller"
++	depends on HAS_IOMEM && OF_MDIO
++	help
++	  This module provides a driver for the MDIO bus controller of the
++	  HiSilicon Hi5671Y "luofu" SoC. It is a polled clause 22 master for
++	  the PHYs behind the internal switch.
++
+ config MDIO_I2C
+ 	tristate
+ 	depends on I2C
+--- a/drivers/net/mdio/Makefile
++++ b/drivers/net/mdio/Makefile
+@@ -16,6 +16,7 @@ obj-$(CONFIG_MDIO_HISI_FEMAC)		+= mdio-hisi-femac.o
+ obj-$(CONFIG_MDIO_I2C)			+= mdio-i2c.o
+ obj-$(CONFIG_MDIO_IPQ4019)		+= mdio-ipq4019.o
+ obj-$(CONFIG_MDIO_IPQ8064)		+= mdio-ipq8064.o
++obj-$(CONFIG_LUOFU_MDIO)		+= mdio-luofu.o
+ obj-$(CONFIG_MDIO_MOXART)		+= mdio-moxart.o
+ obj-$(CONFIG_MDIO_MSCC_MIIM)		+= mdio-mscc-miim.o
+ obj-$(CONFIG_MDIO_MVUSB)		+= mdio-mvusb.o
+--- /dev/null
++++ b/drivers/net/mdio/mdio-luofu.c
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * MDIO bus controller driver for the HiSilicon Hi5671Y "luofu" SoC.
++ *
++ * The controller is a polled clause 22 master for the PHYs of the board's
++ * internal switch (addresses 2..5 on this board) and has no interrupt.
++ *
++ * The register model below is not invented.  It was recovered from the
++ * vendor's hi_kmdio.ko module and the transaction sequence was then exercised
++ * on the SoC by a previous out-of-tree 5.10 version of this driver,
++ * which completed real clause 22 reads (the Genius PHY ID read back as
++ * 0x20669a09).  This in-tree 6.18 version is a port of that sequence; it has
++ * been host-compiled only and has not run on a board yet.
++ *
++ *   0x20  write status/acknowledge: bit 0 or bit 1 set = transfer complete
++ *   0x2c  status: bits 18:16 non-zero = controller busy
++ *   0x30  frame word: clause 22 frame in bits 31:16, write data in bits 15:0
++ *   0x38  read data: low 16 bits
++ *
++ * A read waits for busy to clear, writes the frame, polls 0x20 for done,
++ * writes the observed acknowledgment value back, waits for busy to clear
++ * again and reads 0x38.  A write uses the same sequence with the payload in
++ * the low half of the frame word.  The frame word is
++ *
++ *   BIT(15) | (reg << 8) | phy
++ *
++ * i.e. the clause 22 start-of-frame plus the read opcode, with the register
++ * and PHY address fields in the positions the controller expects.
++ *
++ * The MDIO clock gate and the seven reset lines (bus reset, global PHY reset
++ * and one reset per PHY) come from the CRG.  The clock is enabled before the
++ * resets are deasserted.  The CRG reset polarity has not been exercised on
++ * hardware before this driver, so the first hardware run has to confirm that
++ * the bus actually comes out of reset; that is the one ordering assumption in
++ * the probe path.
++ */
++
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_mdio.h>
++#include <linux/phy.h>
++#include <linux/platform_device.h>
++#include <linux/reset.h>
++
++/* Register offsets inside the controller's 4 KiB window. */
++#define LUOFU_MDIO_WSTATUS	0x20
++#define LUOFU_MDIO_STATUS	0x2c
++#define LUOFU_MDIO_FRAME	0x30
++#define LUOFU_MDIO_RDATA	0x38
++
++/* 0x2c bits 18:16: non-zero while a frame is in flight. */
++#define LUOFU_MDIO_BUSY_MASK	GENMASK(18, 16)
++/* 0x20 bits 1:0: either acknowledgment or the "already done" bit. */
++#define LUOFU_MDIO_DONE_MASK	GENMASK(1, 0)
++
++#define LUOFU_MDIO_FRAME_SOF	BIT(15)
++#define LUOFU_MDIO_PHY_MASK	GENMASK(4, 0)
++#define LUOFU_MDIO_REG_MASK	GENMASK(12, 8)
++#define LUOFU_MDIO_DATA_MASK	GENMASK(15, 0)
++
++/* Poll interval and bound for one transfer. */
++#define LUOFU_MDIO_POLL_US	10
++#define LUOFU_MDIO_TIMEOUT_US	100000
++
++struct luofu_mdio {
++	void __iomem		*base;
++	struct clk		*clk;
++	struct reset_control	*resets;
++	struct mii_bus		*bus;
++};
++
++static u32 luofu_mdio_frame(int phy, int reg)
++{
++	return LUOFU_MDIO_FRAME_SOF |
++	       ((reg << 8) & LUOFU_MDIO_REG_MASK) |
++	       (phy & LUOFU_MDIO_PHY_MASK);
++}
++
++static int luofu_mdio_wait_ready(struct luofu_mdio *m)
++{
++	u32 status;
++
++	return readl_poll_timeout_atomic(m->base + LUOFU_MDIO_STATUS, status,
++					 !(status & LUOFU_MDIO_BUSY_MASK),
++					 LUOFU_MDIO_POLL_US,
++					 LUOFU_MDIO_TIMEOUT_US);
++}
++
++/* Run one frame handshake; the caller has already built the 0x30 word. */
++static int luofu_mdio_xfer(struct luofu_mdio *m, u32 frame)
++{
++	u32 status;
++	int ret;
++
++	ret = luofu_mdio_wait_ready(m);
++	if (ret)
++		return ret;
++
++	writel(frame, m->base + LUOFU_MDIO_FRAME);
++
++	ret = readl_poll_timeout_atomic(m->base + LUOFU_MDIO_WSTATUS, status,
++					status & LUOFU_MDIO_DONE_MASK,
++					LUOFU_MDIO_POLL_US,
++					LUOFU_MDIO_TIMEOUT_US);
++	if (ret)
++		return ret;
++
++	/* Acknowledge the completion by writing the observed value back. */
++	writel(status, m->base + LUOFU_MDIO_WSTATUS);
++
++	return luofu_mdio_wait_ready(m);
++}
++
++static int luofu_mdio_read(struct mii_bus *bus, int phy, int reg)
++{
++	struct luofu_mdio *m = bus->priv;
++	int ret;
++
++	ret = luofu_mdio_xfer(m, luofu_mdio_frame(phy, reg) << 16);
++	if (ret)
++		return ret;
++
++	return readl(m->base + LUOFU_MDIO_RDATA) & LUOFU_MDIO_DATA_MASK;
++}
++
++static int luofu_mdio_write(struct mii_bus *bus, int phy, int reg, u16 val)
++{
++	struct luofu_mdio *m = bus->priv;
++
++	return luofu_mdio_xfer(m, (luofu_mdio_frame(phy, reg) << 16) | val);
++}
++
++static int luofu_mdio_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct luofu_mdio *m;
++	int ret;
++
++	m = devm_kzalloc(dev, sizeof(*m), GFP_KERNEL);
++	if (!m)
++		return -ENOMEM;
++
++	m->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(m->base))
++		return PTR_ERR(m->base);
++
++	/* The gate clock must be running before the bus is taken out of reset. */
++	m->clk = devm_clk_get_enabled(dev, NULL);
++	if (IS_ERR(m->clk))
++		return dev_err_probe(dev, PTR_ERR(m->clk),
++				     "failed to get/enable MDIO clock\n");
++
++	m->resets = devm_reset_control_array_get_exclusive(dev);
++	if (IS_ERR(m->resets))
++		return dev_err_probe(dev, PTR_ERR(m->resets),
++				     "failed to get resets\n");
++
++	ret = reset_control_deassert(m->resets);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to deassert resets\n");
++
++	m->bus = devm_mdiobus_alloc_size(dev, 0);
++	if (!m->bus)
++		return -ENOMEM;
++
++	m->bus->name = "luofu-mdio";
++	m->bus->read = luofu_mdio_read;
++	m->bus->write = luofu_mdio_write;
++	m->bus->priv = m;
++	m->bus->parent = dev;
++	snprintf(m->bus->id, MII_BUS_ID_SIZE, "%s", dev_name(dev));
++
++	ret = of_mdiobus_register(m->bus, dev->of_node);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to register MDIO bus\n");
++
++	platform_set_drvdata(pdev, m);
++
++	return 0;
++}
++
++static void luofu_mdio_remove(struct platform_device *pdev)
++{
++	struct luofu_mdio *m = platform_get_drvdata(pdev);
++
++	mdiobus_unregister(m->bus);
++	reset_control_assert(m->resets);
++}
++
++static const struct of_device_id luofu_mdio_of_match[] = {
++	{ .compatible = "hisilicon,luofu-mdio" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_mdio_of_match);
++
++static struct platform_driver luofu_mdio_driver = {
++	.probe = luofu_mdio_probe,
++	.remove = luofu_mdio_remove,
++	.driver = {
++		.name = "luofu-mdio",
++		.of_match_table = luofu_mdio_of_match,
++	},
++};
++module_platform_driver(luofu_mdio_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu MDIO bus controller");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml
+@@ -0,0 +1,93 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/net/hisilicon,luofu-mdio.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu MDIO bus controller
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" SoC has one MDIO bus controller that serves the PHYs of
++  the internal switch (four populated PHY addresses on this board). The
++  controller is a clause 22 master with a polled handshake and no interrupt;
++  the driver uses the standard MDIO bus API and the PHY children are standard
++  clause 22 devices.
++
++  The MDC rate is fixed by the SoC (there is no frequency divider in the
++  documented register set), so clock-frequency is not described.
++
++  The bus reset and the global and per-PHY resets are lines of the CRG reset
++  controller; this node lists all seven so the MDIO driver can release them
++  before the bus is scanned.
++
++$ref: mdio.yaml#
++
++properties:
++  compatible:
++    const: hisilicon,luofu-mdio
++
++  reg:
++    maxItems: 1
++
++  clocks:
++    maxItems: 1
++    description: Gate clock for the MDIO controller.
++
++  resets:
++    maxItems: 7
++    description:
++      The MDIO controller reset, the global PHY reset and the five per-PHY
++      resets, in that order.
++
++  reset-names:
++    items:
++      - const: mdio
++      - const: gephyall
++      - const: gephy0
++      - const: gephy1
++      - const: gephy2
++      - const: gephy3
++      - const: gephy4
++
++required:
++  - compatible
++  - reg
++  - clocks
++  - resets
++  - reset-names
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
++
++    crg: system-controller@14880000 {
++        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++        reg = <0x14880000 0x1000>;
++        #clock-cells = <1>;
++        #reset-cells = <2>;
++    };
++
++    mdio@14000000 {
++        compatible = "hisilicon,luofu-mdio";
++        reg = <0x14000000 0x1000>;
++        #address-cells = <1>;
++        #size-cells = <0>;
++        clocks = <&crg LUOFU_CLK_MDIO>;
++        resets = <&crg 0x30 0x6>, <&crg 0x30 0x1a>,
++                 <&crg 0x30 0x1b>, <&crg 0x30 0x1c>,
++                 <&crg 0x30 0x1d>, <&crg 0x30 0x1e>,
++                 <&crg 0x30 0x1f>;
++        reset-names = "mdio", "gephyall", "gephy0", "gephy1",
++                      "gephy2", "gephy3", "gephy4";
++
++        ethernet-phy@2 {
++            compatible = "ethernet-phy-ieee802.3-c22";
++            reg = <2>;
++            max-speed = <1000>;
++        };
++    };

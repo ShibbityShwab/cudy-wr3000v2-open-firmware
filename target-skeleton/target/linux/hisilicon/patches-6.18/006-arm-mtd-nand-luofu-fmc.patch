@@ -1,0 +1,779 @@
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -469,6 +469,19 @@
+ 	  This enables support for HiSilicon v3xx SPI NOR flash controller
+ 	  found in hi16xx chipsets.
+ 
++config LUOFU_FMC
++	tristate "HiSilicon Luofu FMC SPI-NAND controller"
++	depends on ARCH_LUOFU || COMPILE_TEST
++	depends on MTD_SPI_NAND
++	help
++	  SPI-NAND flash controller of the HiSilicon Hi5671Y "luofu" SoC.
++	  The driver is a SPI-MEM controller; the flash chip itself is handled
++	  by the generic SPI-NAND stack.  The root filesystem of the board
++	  lives on this controller, so it must be built in (=y) there.
++
++	  To compile this driver as a module, choose M here: the module will
++	  be called spi-luofu-fmc.
++
+ config SPI_NXP_FLEXSPI
+ 	tristate "NXP Flex SPI controller"
+ 	depends on ARCH_LAYERSCAPE || ARCH_MXC || COMPILE_TEST
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -69,6 +69,7 @@
+ obj-$(CONFIG_SPI_GXP)			+= spi-gxp.o
+ obj-$(CONFIG_SPI_HISI_KUNPENG)		+= spi-hisi-kunpeng.o
+ obj-$(CONFIG_SPI_HISI_SFC_V3XX)		+= spi-hisi-sfc-v3xx.o
++obj-$(CONFIG_LUOFU_FMC)			+= spi-luofu-fmc.o
+ obj-$(CONFIG_SPI_IMG_SPFI)		+= spi-img-spfi.o
+ obj-$(CONFIG_SPI_IMX)			+= spi-imx.o
+ obj-$(CONFIG_SPI_INGENIC)		+= spi-ingenic.o
+--- /dev/null
++++ b/drivers/spi/spi-luofu-fmc.c
+@@ -0,0 +1,635 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" FMC SPI-NAND flash controller
++ *
++ * The FMC is the SoC's flash block: a 4 KiB register file at 0x10a20000 plus
++ * a 1 MiB memory-mapped data window at 0x1c000000.  On this board it drives
++ * an ESMT F50L1G41LC SPI-NAND die (128 MiB, 2048-byte pages, 64-byte OOB,
++ * 128 KiB erase blocks) on chip select 1.
++ *
++ * Two engines share the register file:
++ *
++ *  - a command engine (CMD/ADDRH/ADDRL/OP_CFG/DATA_NUM/OP) for byte-sized
++ *    command, address and data phases; data returns through the window;
++ *  - a DMA engine (ADDRH/ADDRL/OP_CFG/SADDR_D0/DMA_LEN/DATA_NUM/OP_CTRL)
++ *    for full page and OOB transfers.  Completion is reported by OP_CTRL
++ *    bit 0 on reads and by INT_STATUS bit 0 on writes.
++ *
++ * The driver is a SPI-MEM controller.  The mainline SPI-NAND stack
++ * (drivers/mtd/nand/spi) owns chip detection, the on-die ECC engine, the OOB
++ * layout, bad-block handling and partition parsing, so this file only moves
++ * bytes and never speaks raw NAND: the raw-NAND core cannot bind an SPI-NAND
++ * die because the two protocols use different command sets.
++ *
++ * Register offsets, the OP/OP_CFG encodings and both transfer sequences are
++ * taken from the documented register model for this block; on the vendor
++ * kernel they are the implementation whose read path mounts the stock UBI
++ * rootfs and whose write path was proven byte-exact.  The two page-data
++ * interface values below are the measured register values, not a field
++ * decomposition this driver claims to understand.
++ *
++ * Deliberately not done here, because none of it has been run on hardware:
++ *
++ *  - only the two documented mode bits are programmed at probe (normal mode,
++ *    write-protect off).  The vendor driver writes fifteen further words whose
++ *    meaning is unknown; they are not written here.  The bootloader has
++ *    already been running the flash, so enabling any of them needs a
++ *    measurement on hardware.
++ *  - the die is not reset and the quad-enable bit of the die is not touched:
++ *    the SPI-NAND core issues its own reset, and the bootloader leaves the die
++ *    in quad mode on this board.
++ *  - no interrupt: every known implementation polls and neither devicetree
++ *    wires an IRQ for this block.
++ *  - the FMC ECC type field is left at the values measured on this board for page
++ *    transfers (1) and command/feature accesses (0).  Whether that field
++ *    selects a host ECC engine or an on-die pass-through mode is not
++ *    established; the mainline on-die ECC engine is used, which relies on the
++ *    die's own status bits.
++ */
++
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/reset.h>
++#include <linux/spi/spi.h>
++#include <linux/spi/spi-mem.h>
++
++/* Register map (offsets from the 0x10a20000 register file). */
++#define LUOFU_FMC_CFG			0x00
++#define LUOFU_FMC_GLOBAL_CFG		0x04
++#define LUOFU_FMC_INT_STATUS		0x18
++#define LUOFU_FMC_INT_EN		0x1c
++#define LUOFU_FMC_INT_CLR		0x20
++#define LUOFU_FMC_CMD			0x24
++#define LUOFU_FMC_ADDRH			0x28
++#define LUOFU_FMC_ADDRL			0x2c
++#define LUOFU_FMC_OP_CFG		0x30
++#define LUOFU_FMC_DATA_NUM		0x38
++#define LUOFU_FMC_OP			0x3c
++#define LUOFU_FMC_DMA_LEN		0x40
++#define LUOFU_FMC_SADDR_D0		0x4c
++#define LUOFU_FMC_SADDR_D1		0x50
++#define LUOFU_FMC_SADDR_OOB		0x5c
++#define LUOFU_FMC_OP_CTRL		0x68
++
++/* FMC_CFG */
++#define LUOFU_FMC_CFG_NORMAL_MODE	BIT(0)
++#define LUOFU_FMC_CFG_IS_RAW_NAND	BIT(2)
++#define LUOFU_FMC_CFG_ECC_TYPE_SHIFT	5
++#define LUOFU_FMC_CFG_ECC_TYPE_MASK	GENMASK(7, 5)
++
++/* FMC_GLOBAL_CFG */
++#define LUOFU_FMC_GLOBAL_CFG_WP_EN	BIT(6)
++
++/* FMC_OP_CFG: dummy cycles, address cycles, interface type, chip select. */
++#define LUOFU_FMC_OP_CFG_CS_SHIFT	11
++#define LUOFU_FMC_OP_CFG_CS_MASK	GENMASK(12, 11)
++
++/*
++ * FMC_OP encoding.  The values below reproduce every command byte observed in
++ * the vendor and BSP objects: 0x81 (command only), 0x85 (command + data in),
++ * 0xc1 (command + address), 0xc5 (command + address + data) and 0x185
++ * (command + dummy + data in).
++ */
++#define LUOFU_FMC_OP_START		BIT(7)
++#define LUOFU_FMC_OP_SEND_CMD		BIT(0)
++#define LUOFU_FMC_OP_ADDR_PHASE		BIT(6)
++#define LUOFU_FMC_OP_DATA_PHASE		BIT(2)
++#define LUOFU_FMC_OP_DUMMY_PHASE	BIT(8)
++
++/*
++ * FMC_OP_CTRL low bits: operation type; the store that writes it starts the
++ * DMA engine, and bit 0 reads back set until the transfer has completed.
++ */
++#define LUOFU_FMC_OP_CTRL_READ		1
++#define LUOFU_FMC_OP_CTRL_WRITE		3
++#define LUOFU_FMC_OP_CTRL_BUSY		BIT(0)
++
++/* Device-side command opcodes; everything else is passed through verbatim. */
++#define LUOFU_SPINAND_CMD_PAGE_READ	0x13
++#define LUOFU_SPINAND_CMD_PROG_EXECUTE	0x10
++
++/*
++ * Measured page-data interface packs written to OP_CFG (chip select excluded):
++ * interface type 3, five address cycles, and one dummy cycle on reads only.
++ * These are the values measured on this board for page read and page program.
++ */
++#define LUOFU_FMC_PAGE_IFACE_READ	0x1d1
++#define LUOFU_FMC_PAGE_IFACE_WRITE	0x1d0
++
++/* The FMC ECC type field values used by the measured-working sequences. */
++#define LUOFU_FMC_ECC_TYPE_OFF		0
++#define LUOFU_FMC_ECC_TYPE_PAGE		1
++
++/* Command-engine data phases are window accesses; this is a sanity bound. */
++#define LUOFU_FMC_CMD_DATA_MAX		8
++
++/* DMA buffer split, as the vendor's dma_init arms it: data0, data1, OOB. */
++#define LUOFU_FMC_DMA_BUF_SIZE		0x2200
++#define LUOFU_FMC_DMA_DATA1_OFF		0x1000
++#define LUOFU_FMC_OOB_OFF		0x2000
++
++/* Completion polls: bounded to 100 ms (100000 x 1 us polls, as measured). */
++#define LUOFU_FMC_POLL_DELAY_US		10
++#define LUOFU_FMC_POLL_TIMEOUT_US	100000
++
++struct luofu_fmc;
++
++struct luofu_fmc_drvdata {
++	u32	page_size;
++	u32	oob_size;
++	u32	num_cs;
++};
++
++struct luofu_fmc {
++	struct device			*dev;
++	struct spi_controller		*ctlr;
++	void __iomem			*regs;
++	void __iomem			*window;
++	struct clk			*clk;
++	struct reset_control		*rst;
++	void				*dma_buf;
++	dma_addr_t			dma_addr;
++	const struct luofu_fmc_drvdata	*drvdata;
++	u32				row;
++	u8				write_cmd;
++	bool				row_valid;
++	bool				write_staged;
++};
++
++static u8 luofu_fmc_ecc_type_get(struct luofu_fmc *fmc)
++{
++	return (readl(fmc->regs + LUOFU_FMC_CFG) & LUOFU_FMC_CFG_ECC_TYPE_MASK) >>
++	       LUOFU_FMC_CFG_ECC_TYPE_SHIFT;
++}
++
++static void luofu_fmc_ecc_type_set(struct luofu_fmc *fmc, u8 type)
++{
++	u32 cfg = readl(fmc->regs + LUOFU_FMC_CFG);
++
++	cfg &= ~LUOFU_FMC_CFG_ECC_TYPE_MASK;
++	cfg |= (u32)type << LUOFU_FMC_CFG_ECC_TYPE_SHIFT;
++	writel(cfg, fmc->regs + LUOFU_FMC_CFG);
++}
++
++/*
++ * Wait for the command engine to finish the operation it was started with.
++ * The vendor's hi_fmc_status_check() polls FMC_OP bit 0 until it clears.
++ */
++static int luofu_fmc_wait_cmd(struct luofu_fmc *fmc)
++{
++	u32 val;
++	int ret;
++
++	ret = readl_poll_timeout(fmc->regs + LUOFU_FMC_OP, val,
++				 !(val & LUOFU_FMC_OP_SEND_CMD),
++				 LUOFU_FMC_POLL_DELAY_US,
++				 LUOFU_FMC_POLL_TIMEOUT_US);
++	if (ret) {
++		dev_err(fmc->dev, "command engine timed out (op=%08x)\n", val);
++		return ret;
++	}
++
++	return 0;
++}
++
++/*
++ * The command-engine path: one command, optional address, optional dummy
++ * cycles and optional short data phase (status/feature/ID bytes).  The die's
++ * ECC engine must not see these transfers, so the ECC type field is cleared
++ * and restored around the operation, as both the BSP and the vendor do.
++ */
++static int luofu_fmc_cmd_op(struct luofu_fmc *fmc, u8 cs,
++			    const struct spi_mem_op *op)
++{
++	u32 op_cfg = (u32)cs << LUOFU_FMC_OP_CFG_CS_SHIFT;
++	u32 op_reg = LUOFU_FMC_OP_START | LUOFU_FMC_OP_SEND_CMD;
++	u8 saved = luofu_fmc_ecc_type_get(fmc);
++	int ret;
++
++	if (op->addr.nbytes) {
++		op_cfg |= op->addr.nbytes << 4;
++		op_reg |= LUOFU_FMC_OP_ADDR_PHASE;
++	}
++	if (op->dummy.nbytes) {
++		op_cfg |= min_t(u32, op->dummy.nbytes, 0xf);
++		op_reg |= LUOFU_FMC_OP_DUMMY_PHASE;
++	}
++	if (op->data.nbytes)
++		op_reg |= LUOFU_FMC_OP_DATA_PHASE;
++
++	luofu_fmc_ecc_type_set(fmc, LUOFU_FMC_ECC_TYPE_OFF);
++
++	if (op->data.nbytes && op->data.dir == SPI_MEM_DATA_OUT)
++		memcpy_toio(fmc->window, op->data.buf.out, op->data.nbytes);
++
++	writel(op->cmd.opcode, fmc->regs + LUOFU_FMC_CMD);
++	writel(op->addr.nbytes ? (u32)op->addr.val : 0, fmc->regs + LUOFU_FMC_ADDRL);
++	writel(0, fmc->regs + LUOFU_FMC_ADDRH);
++	writel(op_cfg, fmc->regs + LUOFU_FMC_OP_CFG);
++	if (op->data.nbytes)
++		writel(op->data.nbytes, fmc->regs + LUOFU_FMC_DATA_NUM);
++	writel(op_reg, fmc->regs + LUOFU_FMC_OP);
++
++	ret = luofu_fmc_wait_cmd(fmc);
++	if (!ret && op->data.nbytes && op->data.dir == SPI_MEM_DATA_IN)
++		memcpy_fromio(op->data.buf.in, fmc->window, op->data.nbytes);
++
++	luofu_fmc_ecc_type_set(fmc, saved);
++
++	return ret;
++}
++
++/*
++ * One full-page DMA transfer.  The address registers carry the page row the
++ * same way the measured page operation does: ADDRL holds the low 16 row bits
++ * in its upper half (the column is zero), ADDRH the row bits above that.
++ */
++static int luofu_fmc_dma_xfer(struct luofu_fmc *fmc, u8 cs, u32 row,
++			      bool write, u8 opcode)
++{
++	u32 op_cfg = ((u32)cs << LUOFU_FMC_OP_CFG_CS_SHIFT) |
++		     (write ? LUOFU_FMC_PAGE_IFACE_WRITE :
++			      LUOFU_FMC_PAGE_IFACE_READ);
++	u8 saved = luofu_fmc_ecc_type_get(fmc);
++	u32 val;
++	int ret;
++
++	luofu_fmc_ecc_type_set(fmc, LUOFU_FMC_ECC_TYPE_PAGE);
++
++	writel((row & 0xffff) << 16, fmc->regs + LUOFU_FMC_ADDRL);
++	writel(row >> 16, fmc->regs + LUOFU_FMC_ADDRH);
++	writel(fmc->dma_addr, fmc->regs + LUOFU_FMC_SADDR_D0);
++	writel(1, fmc->regs + LUOFU_FMC_DMA_LEN);
++	writel(op_cfg, fmc->regs + LUOFU_FMC_OP_CFG);
++	writel(1, fmc->regs + LUOFU_FMC_DATA_NUM);
++
++	writel(1, fmc->regs + LUOFU_FMC_INT_EN);
++	writel(1, fmc->regs + LUOFU_FMC_INT_CLR);
++	mb();	/* arm the completion status before starting the engine */
++
++	if (write) {
++		val = readl(fmc->regs + LUOFU_FMC_OP_CTRL);
++		val = (val & ~0xffu) | LUOFU_FMC_OP_CTRL_WRITE;
++		val = (val & ~0xff00u) | ((u32)opcode << 8);
++		mb();	/* the engine samples the control word on the store */
++		writel(val, fmc->regs + LUOFU_FMC_OP_CTRL);
++		mb();	/* the start store must be visible before polling */
++
++		ret = readl_poll_timeout(fmc->regs + LUOFU_FMC_INT_STATUS, val,
++					 val & BIT(0),
++					 LUOFU_FMC_POLL_DELAY_US,
++					 LUOFU_FMC_POLL_TIMEOUT_US);
++	} else {
++		/*
++		 * The controller does not write every byte of an erased page:
++		 * clear the staging buffer first so a read can never return
++		 * bytes the die did not produce.
++		 */
++		memset(fmc->dma_buf, 0, fmc->drvdata->page_size + 32);
++		mb();	/* the clear must land before the engine writes */
++		writel((((u32)opcode) << 16) | LUOFU_FMC_OP_CTRL_READ,
++		       fmc->regs + LUOFU_FMC_OP_CTRL);
++		mb();	/* the start store must be visible before polling */
++
++		ret = readl_poll_timeout(fmc->regs + LUOFU_FMC_OP_CTRL, val,
++					 !(val & LUOFU_FMC_OP_CTRL_BUSY),
++					 LUOFU_FMC_POLL_DELAY_US,
++					 LUOFU_FMC_POLL_TIMEOUT_US);
++	}
++
++	writel(0, fmc->regs + LUOFU_FMC_INT_EN);
++	writel(1, fmc->regs + LUOFU_FMC_INT_CLR);
++	luofu_fmc_ecc_type_set(fmc, saved);
++
++	if (ret) {
++		dev_err(fmc->dev, "%s page %u timed out (op_ctrl=%08x)\n",
++			write ? "write" : "read", row,
++			readl(fmc->regs + LUOFU_FMC_OP_CTRL));
++		return ret;
++	}
++
++	return 0;
++}
++
++/*
++ * Logical layout of one page as the SPI-NAND core expects it: the data bytes
++ * followed by the OOB bytes.  The DMA engine returns them in two regions of
++ * one buffer (data at +0, OOB at +0x2000).
++ */
++static int luofu_fmc_copy_from_image(struct luofu_fmc *fmc, u32 off,
++				     u32 nbytes, u8 *buf)
++{
++	u32 page = fmc->drvdata->page_size;
++	u32 oob = fmc->drvdata->oob_size;
++
++	if (off < page) {
++		u32 n = min_t(u32, nbytes, page - off);
++
++		memcpy(buf, fmc->dma_buf + off, n);
++		off += n;
++		buf += n;
++		nbytes -= n;
++	}
++
++	if (!nbytes)
++		return 0;
++
++	off -= page;
++	if (off >= oob || nbytes > oob - off)
++		return -EIO;
++
++	memcpy(buf, fmc->dma_buf + LUOFU_FMC_OOB_OFF + off, nbytes);
++
++	return 0;
++}
++
++/*
++ * Page-cache read: the SPI-NAND core asked for part of the page cache after
++ * loading a page.  Transfer the whole page with the DMA engine (its proven
++ * granularity) and serve the requested window out of the result.
++ */
++static int luofu_fmc_page_read(struct luofu_fmc *fmc, u8 cs,
++			       const struct spi_mem_op *op)
++{
++	int ret;
++
++	if (!fmc->row_valid)
++		return -EIO;
++
++	ret = luofu_fmc_dma_xfer(fmc, cs, fmc->row, false, op->cmd.opcode);
++	if (ret)
++		return ret;
++
++	return luofu_fmc_copy_from_image(fmc, op->addr.val, op->data.nbytes,
++					 op->data.buf.in);
++}
++
++/*
++ * Program-load: stage the page and OOB the SPI-NAND core produced.  The
++ * actual program happens when PROGRAM EXECUTE arrives, because only that
++ * operation carries the row and because the controller's write engine
++ * performs load and program as one operation.
++ */
++static int luofu_fmc_page_write(struct luofu_fmc *fmc, u8 cs,
++				const struct spi_mem_op *op)
++{
++	u32 page = fmc->drvdata->page_size;
++	u32 oob = fmc->drvdata->oob_size;
++
++	if (op->addr.val || op->data.nbytes != page + oob)
++		return -EOPNOTSUPP;
++
++	memcpy(fmc->dma_buf, op->data.buf.out, page);
++	memcpy(fmc->dma_buf + LUOFU_FMC_OOB_OFF, op->data.buf.out + page, oob);
++
++	fmc->write_cmd = op->cmd.opcode;
++	fmc->write_staged = true;
++
++	return 0;
++}
++
++/*
++ * Page load (0x13): a command-engine operation; it also records the row that
++ * the following page-cache read needs, because that operation only carries a
++ * column address.
++ */
++static int luofu_fmc_page_load(struct luofu_fmc *fmc, u8 cs,
++			       const struct spi_mem_op *op)
++{
++	int ret;
++
++	ret = luofu_fmc_cmd_op(fmc, cs, op);
++	if (!ret) {
++		fmc->row = op->addr.val;
++		fmc->row_valid = true;
++	}
++
++	return ret;
++}
++
++/*
++ * Program execute (0x10): the row is known here, so this is where the DMA
++ * write runs.  Doing the write at this point reproduces the measured write
++ * sequence, which never issues a command-engine PROGRAM EXECUTE.
++ */
++static int luofu_fmc_program_execute(struct luofu_fmc *fmc, u8 cs,
++				     const struct spi_mem_op *op)
++{
++	int ret;
++
++	if (!fmc->write_staged || op->addr.nbytes != 3)
++		return -EIO;
++
++	ret = luofu_fmc_dma_xfer(fmc, cs, op->addr.val, true, fmc->write_cmd);
++	fmc->write_staged = false;
++
++	return ret;
++}
++
++static bool luofu_fmc_supports_op(struct spi_mem *mem,
++				  const struct spi_mem_op *op)
++{
++	struct luofu_fmc *fmc = spi_controller_get_devdata(mem->spi->controller);
++	u32 page = fmc->drvdata->page_size;
++	u32 oob = fmc->drvdata->oob_size;
++
++	if (op->cmd.nbytes != 1 || op->cmd.buswidth != 1 || op->cmd.dtr)
++		return false;
++
++	if (op->addr.nbytes) {
++		if (op->addr.buswidth != 1 || op->addr.dtr)
++			return false;
++		if (op->addr.nbytes > 4)
++			return false;
++	}
++
++	if (op->dummy.nbytes) {
++		if (op->dummy.buswidth != 1 || op->dummy.dtr)
++			return false;
++		if (op->dummy.nbytes > 0xf)
++			return false;
++	}
++
++	if (!op->data.nbytes)
++		return true;
++
++	if (op->data.dtr)
++		return false;
++
++	if (op->data.nbytes <= LUOFU_FMC_CMD_DATA_MAX)
++		return op->data.buswidth == 1;
++
++	/*
++	 * Page-cache traffic.  The board wires the die as quad and both page
++	 * transfers use the measured quad interface pack; the row is delivered
++	 * by PAGE READ / PROGRAM EXECUTE, so the cache operation itself only
++	 * carries the two-byte column address.
++	 */
++	if (op->data.buswidth != 4)
++		return false;
++	if (op->addr.nbytes != 2)
++		return false;
++
++	if (op->data.dir == SPI_MEM_DATA_IN) {
++		if (op->data.nbytes != page && op->data.nbytes != oob &&
++		    op->data.nbytes != page + oob)
++			return false;
++		return (u64)op->addr.val + op->data.nbytes <= (u64)page + oob;
++	}
++
++	return op->addr.val == 0 && op->data.nbytes == page + oob;
++}
++
++static int luofu_fmc_exec_op(struct spi_mem *mem,
++			     const struct spi_mem_op *op)
++{
++	struct luofu_fmc *fmc = spi_controller_get_devdata(mem->spi->controller);
++	u8 cs = spi_get_chipselect(mem->spi, 0);
++
++	switch (op->cmd.opcode) {
++	case LUOFU_SPINAND_CMD_PAGE_READ:
++		return luofu_fmc_page_load(fmc, cs, op);
++	case LUOFU_SPINAND_CMD_PROG_EXECUTE:
++		return luofu_fmc_program_execute(fmc, cs, op);
++	default:
++		break;
++	}
++
++	if (op->data.nbytes > LUOFU_FMC_CMD_DATA_MAX) {
++		if (op->data.dir == SPI_MEM_DATA_IN)
++			return luofu_fmc_page_read(fmc, cs, op);
++
++		return luofu_fmc_page_write(fmc, cs, op);
++	}
++
++	return luofu_fmc_cmd_op(fmc, cs, op);
++}
++
++static const struct spi_controller_mem_ops luofu_fmc_mem_ops = {
++	.supports_op	= luofu_fmc_supports_op,
++	.exec_op	= luofu_fmc_exec_op,
++};
++
++static int luofu_fmc_probe(struct platform_device *pdev)
++{
++	const struct luofu_fmc_drvdata *drvdata;
++	struct device *dev = &pdev->dev;
++	struct spi_controller *ctlr;
++	struct luofu_fmc *fmc;
++	u32 cfg, global_cfg;
++	int ret;
++
++	drvdata = of_device_get_match_data(dev);
++	if (!drvdata)
++		return -ENODEV;
++
++	ctlr = devm_spi_alloc_host(dev, sizeof(*fmc));
++	if (!ctlr)
++		return -ENOMEM;
++
++	fmc = spi_controller_get_devdata(ctlr);
++	fmc->dev = dev;
++	fmc->ctlr = ctlr;
++	fmc->drvdata = drvdata;
++
++	fmc->regs = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(fmc->regs))
++		return dev_err_probe(dev, PTR_ERR(fmc->regs),
++				     "failed to map the FMC registers\n");
++
++	fmc->window = devm_platform_ioremap_resource(pdev, 1);
++	if (IS_ERR(fmc->window))
++		return dev_err_probe(dev, PTR_ERR(fmc->window),
++				     "failed to map the FMC data window\n");
++
++	fmc->clk = devm_clk_get_enabled(dev, "sfc_clk");
++	if (IS_ERR(fmc->clk))
++		return dev_err_probe(dev, PTR_ERR(fmc->clk),
++				     "failed to get the SFC clock\n");
++
++	fmc->rst = devm_reset_control_get_exclusive(dev, "sfc_rst");
++	if (IS_ERR(fmc->rst))
++		return dev_err_probe(dev, PTR_ERR(fmc->rst),
++				     "failed to get the SFC reset line\n");
++
++	/*
++	 * The bootloader has already released this block to read the kernel,
++	 * so the line is deasserted rather than pulsed.  Pulsing it would
++	 * reset a controller whose timing configuration is bootloader data;
++	 * that needs a measurement, not a guess.
++	 */
++	ret = reset_control_deassert(fmc->rst);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to release the FMC reset\n");
++
++	cfg = readl(fmc->regs + LUOFU_FMC_CFG);
++	if (cfg & LUOFU_FMC_CFG_IS_RAW_NAND) {
++		dev_err(dev, "FMC is in raw-NAND mode (FMC_CFG=%08x)\n", cfg);
++		return -ENODEV;
++	}
++
++	writel(cfg | LUOFU_FMC_CFG_NORMAL_MODE, fmc->regs + LUOFU_FMC_CFG);
++
++	global_cfg = readl(fmc->regs + LUOFU_FMC_GLOBAL_CFG);
++	writel(global_cfg & ~LUOFU_FMC_GLOBAL_CFG_WP_EN,
++	       fmc->regs + LUOFU_FMC_GLOBAL_CFG);
++
++	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to set the DMA mask\n");
++
++	fmc->dma_buf = dmam_alloc_coherent(dev, LUOFU_FMC_DMA_BUF_SIZE,
++					   &fmc->dma_addr, GFP_KERNEL);
++	if (!fmc->dma_buf)
++		return -ENOMEM;
++
++	writel(fmc->dma_addr, fmc->regs + LUOFU_FMC_SADDR_D0);
++	writel(fmc->dma_addr + LUOFU_FMC_DMA_DATA1_OFF,
++	       fmc->regs + LUOFU_FMC_SADDR_D1);
++	writel(fmc->dma_addr + LUOFU_FMC_OOB_OFF,
++	       fmc->regs + LUOFU_FMC_SADDR_OOB);
++
++	ctlr->dev.of_node = dev->of_node;
++	ctlr->num_chipselect = drvdata->num_cs;
++	ctlr->mode_bits = SPI_RX_QUAD | SPI_TX_QUAD;
++	ctlr->mem_ops = &luofu_fmc_mem_ops;
++
++	dev_info(dev, "FMC: cfg=%08x global_cfg=%08x, %u-byte pages, %u-byte OOB\n",
++		 cfg, global_cfg, drvdata->page_size, drvdata->oob_size);
++
++	return devm_spi_register_controller(dev, ctlr);
++}
++
++static const struct luofu_fmc_drvdata luofu_fmc_f50l1g41lc_data = {
++	.page_size	= 2048,
++	.oob_size	= 64,
++	.num_cs		= 4,
++};
++
++static const struct of_device_id luofu_fmc_of_match[] = {
++	{
++		.compatible = "hisilicon,luofu-fmc",
++		.data = &luofu_fmc_f50l1g41lc_data,
++	},
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_fmc_of_match);
++
++static struct platform_driver luofu_fmc_driver = {
++	.probe = luofu_fmc_probe,
++	.driver = {
++		.name = "luofu-fmc",
++		.of_match_table = luofu_fmc_of_match,
++	},
++};
++module_platform_driver(luofu_fmc_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu FMC SPI-NAND controller");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml
+@@ -0,0 +1,106 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/mtd/hisilicon,luofu-fmc.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu FMC SPI-NAND flash controller
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The FMC (Flash Memory Controller) of the HiSilicon Hi5671Y "luofu" SoC
++  drives an SPI-NAND flash die.  It is a SPI-MEM controller: this node is a
++  SPI bus and the flash die is its child, handled by the generic SPI-NAND
++  stack.
++
++  The controller has a register file and a memory-mapped data window.  Page
++  transfers are performed by the controller's DMA engine, command and status
++  accesses by its command engine; completion is polled because the block has
++  no interrupt wiring on this SoC.
++
++allOf:
++  - $ref: /schemas/spi/spi-controller.yaml#
++
++properties:
++  compatible:
++    const: hisilicon,luofu-fmc
++
++  reg:
++    items:
++      - description: FMC register file
++      - description: memory-mapped flash data window
++
++  reg-names:
++    items:
++      - const: regs
++      - const: window
++
++  clocks:
++    maxItems: 1
++
++  clock-names:
++    items:
++      - const: sfc_clk
++
++  resets:
++    maxItems: 1
++
++  reset-names:
++    items:
++      - const: sfc_rst
++
++required:
++  - compatible
++  - reg
++  - reg-names
++  - clocks
++  - clock-names
++  - resets
++  - reset-names
++  - '#address-cells'
++  - '#size-cells'
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    crg: system-controller@14880000 {
++        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++        reg = <0x14880000 0x1000>;
++        #clock-cells = <1>;
++        #reset-cells = <2>;
++    };
++
++    spi@10a20000 {
++        compatible = "hisilicon,luofu-fmc";
++        reg = <0x10a20000 0x1000>, <0x1c000000 0x100000>;
++        reg-names = "regs", "window";
++        clocks = <&crg 0>;	/* LUOFU_CLK_SFC, see the CRG binding */
++        clock-names = "sfc_clk";
++        resets = <&crg 0x2c 0x0>;
++        reset-names = "sfc_rst";
++
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        flash@1 {
++            compatible = "spi-nand";
++            reg = <1>;
++            spi-max-frequency = <50000000>;
++            spi-tx-bus-width = <4>;
++            spi-rx-bus-width = <4>;
++
++            partitions {
++                compatible = "fixed-partitions";
++                #address-cells = <1>;
++                #size-cells = <1>;
++
++                partition@0 {
++                    label = "esbc";
++                    reg = <0x0 0x40000>;
++                };
++            };
++        };
++    };

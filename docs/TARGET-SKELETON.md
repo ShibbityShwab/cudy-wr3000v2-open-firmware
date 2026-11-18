@@ -19,11 +19,16 @@ host sessions proved that OpenWrt main's `make defconfig`/`prepare` accept the t
 kernel patch series compiles a 6.18 kernel with the real `TEXT_OFFSET`, and that an own-artifact
 kernel slice (our zImage + our base DTB + our loader-match overlay + a generated trailer)
 satisfies every check the decoded `bootfip` performs. Nothing has been flashed or booted; the
-**rest** of the driver/binding series (thermal, pinctrl, FMC, MDIO/PHY/GEMAC, switch, PCIe),
+**rest** of the driver/binding series (thermal, pinctrl, switch, PCIe),
 rootfs/UBI, sysupgrade `platform.sh` metadata and the install path do not exist, and a novel
-trailer still needs one attended boot. The first two real drivers - CRG clock/reset (patch 004)
-and watchdog (patch 005) with their YAML bindings - exist as host-compiled drafts only
-(2026-11-18, fifth session; never run on hardware).
+trailer still needs one attended boot. The drivers written so far exist as host-compiled
+drafts only: CRG clock/reset (patch `004`) and watchdog (patch `005`) with their YAML
+bindings (2026-11-18, fifth session), plus the network trio - MDIO bus controller (`007`),
+Genius PHY (`008`) and a **partial** GEMAC binding/resource driver (`009`, no data path;
+its DTS nodes stay disabled) - added in the sixth session the same day - and the FMC
+SPI-NAND controller (`006`, a SPI-MEM controller with the mainline SPI-NAND stack behind
+it; it consumes the CRG `sfc_clk` gate and `sfc_rst` reset and adds `CONFIG_SPI` /
+`CONFIG_MTD_SPI_NAND`). None of them has run on hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;
@@ -57,10 +62,10 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 - stock partition map (17 partitions), no lab `lab` partition.
 
 **What is still [U]/TODO** (full list in TARGET-DESIGN.md section 12 and the skeleton README):
-one attended boot of a generated trailer; kernel platform patch + machine descriptor/DTS
-Makefile entry; kernel-config re-derivation for the shipping release; wiring the custom image
-chain; sysupgrade container/install path and selector protocol; MAC/efuse source; switch
-DSA-vs-switchdev; SMP; Wi-Fi scope; board compatible vs OpenWrt device name.
+one attended boot of a generated trailer; wiring the custom image chain; sysupgrade
+container/install path and selector protocol; MAC/efuse source; switch DSA-vs-switchdev; the
+GEMAC TX/RX ring/DMA data path (the driver is a resource/binding half only); SMP; Wi-Fi scope;
+board compatible vs OpenWrt device name.
 
 **Publication.** Part of the `opensource/` half whose publication is **NOT READY** (history
 purge pending, [PUBLISH-READINESS.md](PUBLISH-READINESS.md)). The skeleton contains no vendor

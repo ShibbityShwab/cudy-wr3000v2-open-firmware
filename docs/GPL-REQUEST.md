@@ -4,7 +4,9 @@
 REPOSITORY.**
 
 The parent ledger (`mem-entries.md`), `PORT-SURFACE.md` and `PORT-PLAN.md` record the
-request as sent on 2026-10-01. The channel recorded in the parent
+request as sent on 2026-10-01. On 2026-11-18 the project owner confirmed in session that the
+request was sent when the project started and that no reply was ever received - this confirms
+the recorded status; it does not supply the missing sent copy or delivery receipt. The channel recorded in the parent
 `TIMELINE-AND-WAY-FORWARD.md` is email to `support@cudy.com`. The repository does **not**
 hold a copy of the sent message, a delivery receipt, or the reply - that is an evidence gap
 to close (see "Evidence trail"), not a reason to call the request unsent. The Jeton (same-SoC)
@@ -114,6 +116,7 @@ not silently rewrite it - the vendor has (or is entitled to) this version.
 | 2026-10-09 | Jeton (same-SoC, separate obligor) letter rewritten; still a draft, not sent | draft email to `support@jeton-tech.ru` | `JETON-GPL-EMAIL.txt` (parent repo, changelog); `../NOTICE.md` | **DRAFT - NOT SENT** as of 2026-11-17 |
 | 2026-11-17 | status reconciled as "sent, not draft"; evidence gap recorded | repo edit | `PUBLISH-READINESS.md` item 3; published-half commit `fbd4a72` | **RECORDED** |
 | 2026-11-18 | follow-up message + escalation ladder written (below) | this file | parent `mem-entries.md` 2026-11-17 00:20; web checks above | **READY TO SEND** - not sent |
+| 2026-11-18 | project owner confirmed in session that the original request was sent at project start and no reply was ever received | direct statement | this file; session 2026-11-18 | **CONFIRMED BY SENDER** - still no sent copy/receipt held |
 | (pending) | reply, delivery receipt, or auto-reply | - | save here | **NOT RECEIVED** |
 
 ---
