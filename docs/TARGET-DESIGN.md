@@ -840,7 +840,15 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
    has no plaintext MAC, and the U-Boot `ethaddr` is a locally-administered random value, not the
    factory MAC; the vendor MAC driver starts netdevs with random MACs and relies on userspace
    `ndo_set_mac_address`. Details and the nvmem/device-page plan: [MISC-SOC-BLOCKS.md](MISC-SOC-BLOCKS.md)
-   section 1. [V]
+   section 1. [V] The userspace half is now **implemented host-side in the target skeleton**:
+   `target-skeleton/target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` reads
+   `bdinfo+0xde00` (`mtd_get_mac_binary`, with a direct `/dev/mtdN` fallback), validates the
+   address, derives LAN/WAN exactly as the vendor scripts do and records both with
+   `ucidef_set_interface_macaddr` from `board.d/02_network`; a missing/corrupt copy falls back to a
+   logged, locally-administered random pair and the factory partition is never written.
+   `tools/test-mac-provisioning.sh` passes its mocked assertions and the files are installed by the
+   image build. The addresses only reach a netdev once the switch port map exists (open question 7),
+   and nothing has run on hardware. [I]
 6. **Overlay filesystem** - keep JFFS2 `rootfs_data` or convert to UBI at install. (§5.3)
 7. **Switch driver model** - DSA vs switchdev; port numbering; whether PIE/WoC is in v1 scope. (§8.1)
 8. **SMP - decoded and drafted; attended bring-up open.** The vendor `hisilicon,hsan_smp`

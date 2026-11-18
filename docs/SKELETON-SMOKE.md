@@ -2372,3 +2372,150 @@ OpenWrt GCC 14.4.0; the shared clone was not modified):
 Not proven: any hardware behaviour. The release has never run on our kernel; the
 second-core hang/cache/coherency/GIC/TWD risks and the attended acceptance gates are
 in [SMP-RE.md](SMP-RE.md). No device, router, UART, TFTP or flash tool was touched.
+
+## 2026-11-18 (bdinfo MAC provisioning session): factory LAN/WAN MACs from bdinfo
+
+**Status: the target image now provisions its LAN/WAN MAC addresses from the factory
+`bdinfo` partition, and the whole logic is host-validated; NOTHING HAS BOOTED and no MAC
+has been read from a real unit or applied to a netdev.**
+
+### What changed
+
+- `target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` (new): reads the
+  plaintext 6-byte factory MAC at `bdinfo+0xde00` through `mtd_get_mac_binary` (direct
+  `/dev/mtdN` character-device fallback, found by partition label), validates it,
+  derives LAN = base MAC and WAN = base+1 with the vendor `macaddr_add` arithmetic, and
+  falls back to a clearly logged locally-administered random pair when the partition is
+  missing/corrupt; the bdinfo partition is only ever read.
+- `target/linux/hisilicon/base-files/etc/board.d/02_network`: sources the helper and
+  records both addresses through `ucidef_set_interface_macaddr` (the normal board.d ->
+  board.json -> `/bin/config_generate` -> netifd path). The interface placeholder is
+  deliberately untouched (the switch port map is still missing, TARGET-DESIGN.md 8.1), so
+  until that map exists the addresses are recorded in board.json only. The file also stops
+  sourcing the non-existent `/lib/functions/board.sh`; this release defines
+  `board_config_update`/`board_config_flush` in `/lib/functions/uci-defaults.sh` and
+  the read/MAC helpers in `/lib/functions/system.sh`.
+- `tools/test-mac-provisioning.sh` (new): host-only mocked harness for the helper (fake
+  `/proc/mtd`, fake mtd devices, mocked `mtd_get_mac_binary`/`/dev/urandom`/
+  `ucidef_set_interface_macaddr` seams): 103/103 assertions pass.
+- no kernel patch, config delta or DTS change is part of this lane.
+
+### Rules implemented (evidence: MISC-SOC-BLOCKS.md section 1)
+
+- LAN = the factory base MAC itself; WAN = LAN+1 under the vendor/OpenWrt `macaddr_add`
+  rule (OUI preserved, low 24 bits incremented modulo 2^24, so `...:ff:ff:ff` wraps to
+  `...:00:00:00`). Sources: vendor 2.5.24 `99_fixwan:41` (LAN from
+  `mtd_get_mac_binary bdinfo 0xde00`), vendor 2.4.15 `board.d/02_network:25-29`
+  (canonicalized `bdinfo mac` for LAN, +1 for WAN, `ucidef_set_interface_macaddr`),
+  vendor 2.4.15 `99_fixwan:17-52` (per-port application).
+- validation rejects non-MAC input, all-zero, all-`0xff` (erased), multicast,
+  locally-administered, OUI `00:00:00` and the `...:ff:ff:ff` WAN-wrap case. The last
+  two are conservative project policy [I], not vendor rules; a rejected copy is logged and
+  replaced with a random pair, never "repaired".
+- the U-Boot env `ethaddr` is not read or written (it is a locally-administered loader
+  value, MISC-SOC-BLOCKS 1.2), and no factory bytes are printed or embedded anywhere.
+
+### Validation (isolated clone; shared clone untouched)
+
+    cp -a --reflink=auto /home/shibbityshwab/openwrt-lab /home/shibbityshwab/openwrt-lab-mac
+    make defconfig
+    make world -j16
+
+- `make defconfig`: RC=0, `CONFIG_TARGET_PROFILE="DEVICE_cudy_wr3000-v2"`.
+- `make world -j16`: **RC=0** (started 18:34, image written 18:44 = about 10 minutes on 16 cores in the cache-reused clone; an explicit incremental \`make world -j16\` re-run also returned RC=0), built container `openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`,
+  **6,185,262 B**, sha256 `54652e56241e26eba0e95bc7fa663950c6e69ddb834dba77beb5b1afbeea2cac`; `tools/luofu-image.py check-container`
+  PASS on the built bytes.
+- built rootfs: `/lib/functions/luofu-mac.sh` (mode 0644) and `/etc/board.d/02_network`
+  (mode 0755) are present and byte-identical to the repository files; `sh -n` clean on
+  the installed copies and `tools/test-mac-provisioning.sh` passes 103/103 when pointed
+  at them.
+- the target tree for the build came from `opensource` HEAD (`5989404`, series
+  `001`-`018`) plus this lane's two base-files files; the concurrently in-flight patch
+  `019` (CRG clock tree) was excluded on purpose.
+
+### What this proves / does not prove
+
+Proven host-only: the board.d path reads the right six bytes of the right partition,
+validates and derives the vendor LAN/WAN addresses, records them through the standard
+board.json path, logs and falls back on every bad input tested, never writes the factory
+partition, and the image installs the files. Not proven: any hardware behaviour. The
+bdinfo read has never run on a booted target; preinit `/dev/mtdN`/`/dev/mtdblockN`
+availability is argued from `CONFIG_DEVTMPFS_MOUNT=y` + the MTD core (not measured); and
+the addresses cannot reach a netdev until the LSW switch port map exists
+(TARGET-DESIGN.md 8.1). No device, router, UART, TFTP or flash tool was touched.
+
+## 2026-11-18 (bdinfo MAC provisioning session): factory LAN/WAN MACs from bdinfo
+
+**Status: the target image now provisions its LAN/WAN MAC addresses from the factory
+`bdinfo` partition, and the whole logic is host-validated; NOTHING HAS BOOTED and no MAC
+has been read from a real unit or applied to a netdev.**
+
+### What changed
+
+- `target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` (new): reads the
+  plaintext 6-byte factory MAC at `bdinfo+0xde00` through `mtd_get_mac_binary` (direct
+  `/dev/mtdN` character-device fallback, found by partition label), validates it,
+  derives LAN = base MAC and WAN = base+1 with the vendor `macaddr_add` arithmetic, and
+  falls back to a clearly logged locally-administered random pair when the partition is
+  missing/corrupt; the bdinfo partition is only ever read.
+- `target/linux/hisilicon/base-files/etc/board.d/02_network`: sources the helper and
+  records both addresses through `ucidef_set_interface_macaddr` (the normal board.d ->
+  board.json -> `/bin/config_generate` -> netifd path). The interface placeholder is
+  deliberately untouched (the switch port map is still missing, TARGET-DESIGN.md 8.1), so
+  until that map exists the addresses are recorded in board.json only. The file also stops
+  sourcing the non-existent `/lib/functions/board.sh`; this release defines
+  `board_config_update`/`board_config_flush` in `/lib/functions/uci-defaults.sh` and
+  the read/MAC helpers in `/lib/functions/system.sh`.
+- `tools/test-mac-provisioning.sh` (new): host-only mocked harness for the helper (fake
+  `/proc/mtd`, fake mtd devices, mocked `mtd_get_mac_binary`/`/dev/urandom`/
+  `ucidef_set_interface_macaddr` seams): 103/103 assertions pass.
+- no kernel patch, config delta or DTS change is part of this lane.
+
+### Rules implemented (evidence: MISC-SOC-BLOCKS.md section 1)
+
+- LAN = the factory base MAC itself; WAN = LAN+1 under the vendor/OpenWrt `macaddr_add`
+  rule (OUI preserved, low 24 bits incremented modulo 2^24, so `...:ff:ff:ff` wraps to
+  `...:00:00:00`). Sources: vendor 2.5.24 `99_fixwan:41` (LAN from
+  `mtd_get_mac_binary bdinfo 0xde00`), vendor 2.4.15 `board.d/02_network:25-29`
+  (canonicalized `bdinfo mac` for LAN, +1 for WAN, `ucidef_set_interface_macaddr`),
+  vendor 2.4.15 `99_fixwan:17-52` (per-port application).
+- validation rejects non-MAC input, all-zero, all-`0xff` (erased), multicast,
+  locally-administered, OUI `00:00:00` and the `...:ff:ff:ff` WAN-wrap case. The last
+  two are conservative project policy [I], not vendor rules; a rejected copy is logged and
+  replaced with a random pair, never "repaired".
+- the U-Boot env `ethaddr` is not read or written (it is a locally-administered loader
+  value, MISC-SOC-BLOCKS 1.2), and no factory bytes are printed or embedded anywhere.
+
+### Validation (isolated clone; shared clone untouched)
+
+    cp -a --reflink=auto /home/shibbityshwab/openwrt-lab /home/shibbityshwab/openwrt-lab-mac
+    make defconfig
+    make world -j16
+
+- `make defconfig`: RC=0, `CONFIG_TARGET_PROFILE="DEVICE_cudy_wr3000-v2"`.
+- `make world -j16`: **RC=0** (started 18:34, image written 18:44 = about 10 minutes on
+  16 cores in the cache-reused clone; an explicit incremental `make world -j16` re-run
+  also returned RC=0), built container
+  `openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`, **6,185,262 B**,
+  sha256 `54652e56241e26eba0e95bc7fa663950c6e69ddb834dba77beb5b1afbeea2cac`;
+  `scripts/luofu-image.py check-container` PASS on the built bytes.
+- built rootfs: `/lib/functions/luofu-mac.sh` (mode 0644) and `/etc/board.d/02_network`
+  (mode 0755) are present in the built squashfs and byte-identical to the repository files;
+  `sh -n` clean on the installed copies and `tools/test-mac-provisioning.sh` passes
+  103/103 when pointed at them.
+- the target tree for the build came from `opensource` HEAD (`5989404`, series
+  `001`-`018`) plus this lane's two base-files files; the concurrently in-flight patch
+  `019` (CRG clock tree) was excluded on purpose;
+- logs and hashes: `/home/shibbityshwab/openwrt-lab-mac/evidence-mac-20261118/`
+  (machine-local, outside the repository: the shared-clone build is not a repo artifact).
+
+### What this proves / does not prove
+
+Proven host-only: the board.d path reads the right six bytes of the right partition,
+validates and derives the vendor LAN/WAN addresses, records them through the standard
+board.json path, logs and falls back on every bad input tested, never writes the factory
+partition, and the image installs the files. Not proven: any hardware behaviour. The
+bdinfo read has never run on a booted target; preinit `/dev/mtdN`/`/dev/mtdblockN`
+availability is argued from `CONFIG_DEVTMPFS_MOUNT=y` + the MTD core (not measured); and
+the addresses cannot reach a netdev until the LSW switch port map exists
+(TARGET-DESIGN.md 8.1). No device, router, UART, TFTP or flash tool was touched.

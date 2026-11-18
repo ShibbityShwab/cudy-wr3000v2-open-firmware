@@ -86,6 +86,24 @@
 > plan and the [U] list. The series (001-018) applies/prepares/compiles host-side; **the
 > release has never run on hardware**.
 >
+> **2026-11-18 (bdinfo MAC provisioning session): the target image provisions
+> its LAN/WAN MAC addresses from the factory MAC, host-validated only.**
+> `base-files/lib/functions/luofu-mac.sh` (new, sourced by
+> `base-files/etc/board.d/02_network`) reads the plaintext 6-byte factory MAC at
+> `bdinfo+0xde00` (the vendor 2.5.24 read path: `mtd_get_mac_binary bdinfo 0xde00`,
+> with a direct `/dev/mtdN` fallback found by partition label), validates it (unicast,
+> universally administered, not erased/zero, OUI/NIC sanity), derives LAN = base MAC and
+> WAN = base+1 exactly like the vendor scripts, and records both through the standard
+> `ucidef_set_interface_macaddr` board.json path; a missing/corrupt copy falls back to a
+> clearly logged locally-administered random pair, and the factory partition is only ever
+> read. The interface map itself stays a placeholder (the LSW switch driver is still
+> missing), so the addresses are recorded but cannot reach a netdev yet.
+> `tools/test-mac-provisioning.sh` runs 103 mocked assertions (fake `/proc/mtd`, fake
+> mtd devices, mocked helpers; all pass), and a full `make world -j16` in an isolated
+> clone produced openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin (6,185,262 B, sha256 `54652e56241e26eba0e95bc7fa663950c6e69ddb834dba77beb5b1afbeea2cac`) with the
+> helper and board script installed in the rootfs. **Nothing has booted; no MAC has been
+> read from a real unit or applied to a netdev.**
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).
@@ -129,7 +147,9 @@ Everything here is marked one of:
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` implements the A/B install path host-side (two in-boot witnesses must agree on the active pair, the inactive kernel+rootfs slots are located by `/proc/mtd` label, written with `mtd`/`ubiformat`, read back, and only then the selector moves; it never touches the active pair, `rootfs_data` or the env blocks). **`sh -n` clean; host-checked against the real built container and corrupted/foreign variants; install path mocked-tested by `tools/test-platform-abinstall.sh`; never run on hardware**. The two-witness active-pair check is only valid because the image re-records the running pair on every boot (recorder row below); the handover is the loader's env-mismatch path, not an env write (corrected 2026-11-18, [`SELECTOR-0x21.md`](../docs/SELECTOR-0x21.md)) | same path (board-level base-files) |
 | `target/linux/hisilicon/base-files/etc/init.d/luofu_record_pair` | boot-time running-pair recorder (2026-11-18 selector-fix session): `START=96`, after `/etc/init.d/done`; derives the booted rootfs pair from `/sys/class/ubi/ubi0/mtd_num` plus that mtd's `/proc/mtd` label (with an optional `/proc/cmdline` `ubi.mtd=` cross-check), waits a bounded time for the luofu-selector interface, logs through syslog, and writes the running pair to `next_pair` only when the recorded value is one of the two established pairs and differs (idempotent; a matching record means no write). It never writes manual/unknown values, never blocks the boot indefinitely and never touches the env blocks. `sh -n` clean; mocked-tested in `tools/test-platform-abinstall.sh`; enabled automatically by the image (`prepare_rootfs` creates `S96luofu_record_pair`); **never run on hardware** | same path (board-level base-files) |
-| `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
+| `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC** for the interface map) and calls the factory-MAC provisioning helper below, recording LAN/WAN addresses through the standard `ucidef_set_interface_macaddr` board.json path (**host-validated**, never booted) | same path (mode 0755) |
+| `target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` | factory-MAC provisioning helper (2026-11-18): reads the plaintext 6-byte `bdinfo` copy at `0xde00` with `mtd_get_mac_binary` (direct `/dev/mtdN` fallback), validates it (unicast, universally administered, not erased/zero, OUI/NIC sanity incl. the `...:ff:ff:ff` WAN-wrap case), derives LAN = base MAC and WAN = base+1 exactly like the vendor scripts, records both with `ucidef_set_interface_macaddr`, and falls back to a logged locally-administered random pair when bdinfo is missing/corrupt; the bdinfo partition is never written. `sh -n` clean; mocked-tested by `tools/test-mac-provisioning.sh`; **never run on hardware** | same path (board-level base-files) |
+| `tools/test-mac-provisioning.sh` | host-side mocked test for the factory-MAC provisioning: sources the real `luofu-mac.sh` with `LUOFU_MAC_TEST_ROOT` pointing at a fake `/proc/mtd`, fake mtd devices and mocked `mtd_get_mac_binary`/`/dev/urandom`/`ucidef_set_interface_macaddr` seams. Covers both read paths, label-not-index lookup, the exact `0xde00` offset (with decoys elsewhere), normalization, every validation rejection, the vendor `macaddr_add` increment (incl. the NIC-field wrap) against the system.sh implementation, random-fallback bit handling/failure, the apply order and that the factory bytes are never modified: **103/103 assertions pass** (2026-11-18) | repo tool (host-only; no device) |
 | `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added) and the GEMAC nodes match patch `009` but stay `status = "disabled"` because the GEMAC driver has no data path; the SYSCTRL syscon also carries the machine-restart (`010`) and boot-selector (`017`) nodes, the latter enabled because its probe performs no register access; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
 | `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
@@ -180,8 +200,11 @@ apply), and the fact that the vendor containers can be generated byte-for-byte.
 +24/+28/entry reserved words, the 628-byte slot-only scrambled region after the
 container, whether the stock loader overrides `/chosen/bootargs`, how `root=`/UBI
 arguments reach the kernel, the selector protocol for both pairs, the Linux read path
-for the boot selector, the MAC-address source, the install path, and any driver or DTS
-build. One attended boot of a novel generated trailer is still required.
+for the boot selector, the install path, and any driver or DTS build. The factory-MAC
+source is resolved (`bdinfo+0xde00`, TARGET-DESIGN.md open question 5) and the target
+provisioning is implemented and mocked-tested, but **nothing has read bdinfo on a booted
+target yet** and the addresses reach a netdev only once the switch port map exists. One
+attended boot of a novel generated trailer is still required.
 See TARGET-DESIGN.md section 12.
 
 ---

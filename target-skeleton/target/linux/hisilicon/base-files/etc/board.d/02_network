@@ -3,14 +3,17 @@
 #
 # target/linux/hisilicon/luofu/base-files/etc/board.d/02_network
 #
-# STATUS: SCHEMATIC / UNTESTED / NOT A WORKING TARGET.
+# STATUS: SCHEMATIC TARGET / UNTESTED ON HARDWARE. The one part of this file
+# that is host-validated is the factory-MAC provisioning below (it is exercised
+# by tools/test-mac-provisioning.sh against mocked /proc/mtd, mtd devices and
+# ucidef helpers); the interface assignment is still a placeholder.
 #
-# Mapping: <openwrt>/target/linux/hisilicon/luofu/base-files/etc/board.d/02_network
-# (mode 0755). The board.d helper names and the sourcing layout differ between
-# OpenWrt releases; this file follows the board_config_update/board_config_flush
-# shape and must be checked against the release being targeted.
+# Mapping: <openwrt>/target/linux/hisilicon/base-files/etc/board.d/02_network
+# (mode 0755). In this OpenWrt release board.d scripts are sourced by
+# /bin/board_detect and share /etc/board.json through board_config_update /
+# board_config_flush, both defined in /lib/functions/uci-defaults.sh.
 #
-# WHY THIS IS NOT FINAL, IN ONE FACT:
+# WHY THE INTERFACE ASSIGNMENT IS NOT FINAL, IN ONE FACT:
 #   the wired path is gmac -> internal LSW switch -> PHY -> RJ45, and the LSW
 #   switch has NO driver in any tree (TARGET-DESIGN.md 8.1). Until the switch
 #   driver and its port model exist there is no correct LAN/WAN interface
@@ -18,6 +21,27 @@
 #   board-wide fact: the only measured fact is that on the bench unit the
 #   carrier-carrying GMII port is 0x14480000, behind the vendor switch
 #   (TARGET-DESIGN.md 6.2; ETHERNET-BRINGUP-FRAMING.md 2).
+#
+# FACTORY MAC PROVISIONING (implemented host-side; see lib/functions/luofu-mac.sh)
+#   The factory MAC is the plaintext 6-byte copy at bdinfo+0xde00 [V]
+#   (MISC-SOC-BLOCKS.md section 1.1). The vendor userspace uses it as the LAN
+#   base address and adds 1 for WAN:
+#     parent:rootfs-2.4.15/etc/board.d/02_network:25-29
+#       lan_mac = macaddr_canonicalize $(bdinfo mac)
+#       wan_mac = macaddr_add $lan_mac 1
+#       ucidef_set_interface_macaddr lan $lan_mac
+#       ucidef_set_interface_macaddr wan $wan_mac
+#     parent:rootfs-2.5.24/etc/uci-defaults/99_fixwan:41
+#       lan_mac = mtd_get_mac_binary bdinfo 0xde00
+#   luofu_mac_setup() reads the same bytes through mtd_get_mac_binary or a
+#   direct /dev/mtdN read, validates the address (unicast, universally
+#   administered, not erased), derives WAN = LAN+1 in the low 24 bits, and
+#   luofu_mac_apply() records both in the lan/wan board.json entries with the
+#   standard ucidef_set_interface_macaddr. No valid factory MAC -> a clearly
+#   logged, locally-administered random fallback (never invented factory data).
+#   The entries take effect through /bin/config_generate once the switch port
+#   map gives the interfaces their device/ports (TODO(switch) below); while the
+#   placeholder configures no netdev, the MACs are recorded in board.json only.
 #
 # TODO(switch, TARGET-DESIGN.md 8.1):
 #   - decide DSA vs switchdev and model the internal switch's ports;
@@ -31,8 +55,9 @@
 # sysupgrade's board match and this case statement must agree. The final
 # compatible order is an open question (see README "Open questions").
 
-. /lib/functions/board.sh
 . /lib/functions/uci-defaults.sh
+. /lib/functions/system.sh
+. /lib/functions/luofu-mac.sh
 
 board_config_update
 
@@ -41,6 +66,13 @@ hisilicon,luofu-r116|cudy,wr3000-v2)
 	# PLACEHOLDER. No interface is configured on purpose: inventing one here
 	# would produce a netifd config for a device that does not exist.
 	:
+	# Factory MAC provisioning is independent of the interface placeholder:
+	# the addresses are recorded for the lan/wan entries that the switch port
+	# map will define. Failure to obtain any address is logged by the helper
+	# and must not abort board configuration.
+	if luofu_mac_setup; then
+		luofu_mac_apply
+	fi
 	;;
 *)
 	echo "Unsupported board: $(board_name)" >&2

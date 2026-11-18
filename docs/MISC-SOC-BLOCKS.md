@@ -186,13 +186,18 @@ optional) or the device tree must carry the address (next paragraph).
 
 **Upstream target (v1) [I].** Two clean options, in preference order:
 
-1. **Userspace, no new binding.** Give the target's `base-files/etc/board.d/02_network` the
-   vendor's 2.5.24 recipe: `mtd_get_mac_binary bdinfo 0xde00` for the LAN base MAC and
-   `macaddr_add $lan_mac 1` for WAN, then `ucidef_set_interface_macaddr`. This uses only
-   OpenWrt's standard `/lib/functions/system.sh` helper, needs no kernel code, works with the
+1. **Userspace, no new binding - implemented host-side (2026-11-18).** The target's
+   `base-files/lib/functions/luofu-mac.sh` (sourced by `base-files/etc/board.d/02_network`)
+   applies the vendor's 2.5.24 recipe: `mtd_get_mac_binary bdinfo 0xde00` (with a direct
+   `/dev/mtdN` fallback) for the LAN base MAC and `macaddr_add $lan_mac 1` for WAN, then
+   `ucidef_set_interface_macaddr` for both; the factory partition is only read. This uses only
+   OpenWrt's standard `/lib/functions/system.sh` helpers, needs no kernel code, works with the
    current Linux `of_get_mac_address` fallback (random + netifd override), and matches what
    the vendor does. It does mean the first boot must have run board.d before the interface is
-   configured - standard OpenWrt behaviour.
+   configured - standard OpenWrt behaviour. Host-validated by
+   `target-skeleton/tools/test-mac-provisioning.sh` (mocked `/proc/mtd`, mtd devices and
+   helpers); **it has never read bdinfo on a booted target**, and the addresses become effective
+   only when the switch port map supplies the interface device/ports (TARGET-DESIGN.md 8.1).
 2. **Kernel-side nvmem cell [I], larger.** The 5.10.201 tree in use *does* support
    `nvmem-cell-names = "mac-address"`: `of_get_mac_address()` falls back to
    `of_get_mac_addr_nvmem()` (`drivers/of/of_net.c:57-79,103-120`) which calls
@@ -232,17 +237,22 @@ options.
 ### 1.5 Dependencies, risk, effort
 
 - Depends on: patch `009` (GEMAC, for `.ndo_set_mac_address`/MAC consumption), the target's
-  `base-files` board.d (not yet written), and - for option 2 only - a new nvmem provider.
+  `base-files` board.d (now written host-side: `lib/functions/luofu-mac.sh` +
+  `etc/board.d/02_network`), and - for option 2 only - a new nvmem provider.
 - Risk [I]: the vendor's increment rule is "last 3 bytes +1, wrap modulo 2^24" with **no**
   multicast/local-bit handling; a factory MAC that ends `...ff:ff:ff` would wrap the WAN MAC
   into the base's prefix. The base MAC's vendor OUI makes the risk small, but a target should
   validate `is_valid_ether_addr` and refuse rather than write an invalid address.
   Local-administered env `ethaddr` must never be mixed with the factory MAC: two netdevs on
   one unit would then disagree about their identity, and the "random MAC saved to env" path in
-  this loader can persist a wrong one across resets.
-- Effort: **S** (option 1, userspace + GEMAC one-liner) / **M** (option 2, provider + binding +
-  dt_binding_check). No bench required for either; option 1 needs one attended boot to see the
-  netdev accept the address.
+  this loader can persist a wrong one across resets. The target implementation does exactly
+  that: it rejects multicast, locally-administered, all-zero, all-`0xff` and OUI-`00:00:00`
+  copies plus the `...:ff:ff:ff` WAN-wrap case, logs the reason and uses a random
+  locally-administered pair instead; the bdinfo partition is only ever read.
+- Effort: **S** (option 1, userspace) - the userspace half is written and host-validated; the
+  GEMAC `.ndo_set_mac_address` consumer is still patch `009`'s TODO. **M** for option 2
+  (provider + binding + dt_binding_check). No bench required for either; option 1 needs one
+  attended boot to see bdinfo read and the netdev accept the address.
 
 ## 2. Block G - efuse / nvmem
 
