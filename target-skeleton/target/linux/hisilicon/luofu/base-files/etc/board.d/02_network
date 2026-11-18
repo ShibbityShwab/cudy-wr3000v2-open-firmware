@@ -1,0 +1,53 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# target/linux/hisilicon/luofu/base-files/etc/board.d/02_network
+#
+# STATUS: SCHEMATIC / UNTESTED / NOT A WORKING TARGET.
+#
+# Mapping: <openwrt>/target/linux/hisilicon/luofu/base-files/etc/board.d/02_network
+# (mode 0755). The board.d helper names and the sourcing layout differ between
+# OpenWrt releases; this file follows the board_config_update/board_config_flush
+# shape and must be checked against the release being targeted.
+#
+# WHY THIS IS NOT FINAL, IN ONE FACT:
+#   the wired path is gmac -> internal LSW switch -> PHY -> RJ45, and the LSW
+#   switch has NO driver in any tree (TARGET-DESIGN.md 8.1). Until the switch
+#   driver and its port model exist there is no correct LAN/WAN interface
+#   assignment to write here. Do not hardcode the bench unit's cable port as a
+#   board-wide fact: the only measured fact is that on the bench unit the
+#   carrier-carrying GMII port is 0x14480000, behind the vendor switch
+#   (TARGET-DESIGN.md 6.2; ETHERNET-BRINGUP-FRAMING.md 2).
+#
+# TODO(switch, TARGET-DESIGN.md 8.1):
+#   - decide DSA vs switchdev and model the internal switch's ports;
+#   - then replace the placeholder below with the real port map, e.g.
+#       ucidef_set_interfaces_lan_wan "<lan ifaces>" "<wan iface>"
+#     plus any ucidef_set_interface_* for the model;
+#   - confirm every port role from the board schematic, not from the vendor
+#     overlay.
+# TODO(board name): the root compatible of the draft DTS is
+# "hisilicon,luofu-r116"; the image recipe sketch uses "cudy,wr3000-v2".
+# sysupgrade's board match and this case statement must agree. The final
+# compatible order is an open question (see README "Open questions").
+
+. /lib/functions/board.sh
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+case "$(board_name)" in
+hisilicon,luofu-r116|cudy,wr3000-v2)
+	# PLACEHOLDER. No interface is configured on purpose: inventing one here
+	# would produce a netifd config for a device that does not exist.
+	:
+	;;
+*)
+	echo "Unsupported board: $(board_name)" >&2
+	exit 1
+	;;
+esac
+
+board_config_flush
+
+exit 0

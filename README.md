@@ -6,6 +6,16 @@
 > **Publication status: NOT READY** - the publish checklist is
 > `docs/PUBLISH-READINESS.md`. The vendor `.o` files that were tracked here were untracked on
 > 2026-11-17, but they remain in the published history until it is purged.
+>
+> **Design layer (2026-11-18).** The missing upstream design now exists: the concrete
+> target/DTS/image plan is [`docs/TARGET-DESIGN.md`](docs/TARGET-DESIGN.md), the refreshed phase
+> view is [`docs/ROADMAP-OPENWRT.md`](docs/ROADMAP-OPENWRT.md), the GPL request status/follow-up is
+> [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the optional hybrid vendor-lane feasibility
+> spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md). These are designs and
+> schematics, not a working target: **no OpenWrt target, board DTS, image recipe or driver series
+> has been built or tested yet.** The first-pass files are in
+> [`target-skeleton/`](target-skeleton/README.md) (status UNTESTED/SCHEMATIC), indexed by
+> [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md).
 
 Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
 (`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,

@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# target/linux/hisilicon/luofu/config-5.10
+#
+# STATUS: SCHEMATIC. THIS IS NOT THE FINAL UPSTREAM KERNEL CONFIG.
+#
+# Why it exists: the only kernel this project has lab evidence for is 5.10.201,
+# the vendor/bench kernel (TARGET-DESIGN.md 2 and 7). This file is a
+# hand-curated subset of that kernel's .config: the symbols the target needs,
+# not the whole config. It is committed so a reviewer can see the required
+# feature set. It is NOT the config for the kernel the target will ship.
+#
+# The upstream target must:
+#   1. pick the kernel of the OpenWrt release under development
+#      (TARGET-DESIGN.md 4.1; 6.12 was recorded in the 2026-10-01 snapshot,
+#      re-verify) and rename this file to match;
+#   2. port the lab drivers forward and rename the working names below
+#      (MTD_NAND_LUOFU, LUOFU_GMAC, LUOFU_MDIO, LUOFU_PHY,
+#      LUOFU_WATCHDOG are lab names from tools/lab-src, not upstream names);
+#   3. regenerate the file against the real tree and audit it with the
+#      fragment-audit process (opensource/lab/luofu-kernel/fragment-audit.md);
+#   4. drop every bench-only symbol. The lab fragments in
+#      opensource/lab/luofu-kernel/luofu.fragment and luofu-shrink.fragment are
+#      the starting inventory, not this file and not a target.
+#
+# Derivation: grepped from the local-only lab .config
+# (build/linux-kbuild/linux-5.10.201/.config) on 2026-11-18. Bench-only values
+# are quoted only where the bench used a non-default. Anything not listed keeps
+# the kernel default.
+#
+# Nothing below has been compiled as a target config.
+
+# --- platform / CPU -------------------------------------------------------
+CONFIG_ARCH_HISI=y
+CONFIG_ARCH_LUOFU=y
+CONFIG_CPU_V7=y
+CONFIG_SMP=y
+CONFIG_SMP_ON_UP=y
+CONFIG_NR_CPUS=2
+CONFIG_VMSPLIT_3G=y
+CONFIG_HIGHMEM=y
+CONFIG_CACHE_L2X0=y
+# Cortex-A9 / PL310 errata the bench kernel enables. TODO: derive from the
+# real SoC revision instead of copying the bench set (TARGET-DESIGN.md 4.2).
+CONFIG_PL310_ERRATA_588369=y
+CONFIG_PL310_ERRATA_727915=y
+CONFIG_PL310_ERRATA_753970=y
+CONFIG_PL310_ERRATA_769419=y
+# The loader passes its own DT, not ours (TARGET-DESIGN.md 3.1); the appended
+# DTB is standard hygiene only. TODO: confirm this is what the appended-DTB
+# image flow should use.
+CONFIG_ARM_APPENDED_DTB=y
+CONFIG_ARM_ATAG_DTB_COMPAT=y
+CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_FROM_BOOTLOADER=y
+# TEXT_OFFSET is NOT a .config symbol on arm: it comes from textofs-y in
+# arch/arm/Makefile and must be added by the platform patch
+# (textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000; TARGET-DESIGN.md 3.2).
+
+# --- clocks / reset (lab CRG driver) --------------------------------------
+CONFIG_COMMON_CLK=y
+CONFIG_RESET_CONTROLLER=y
+
+# --- console / serial -----------------------------------------------------
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_8250_DW=y
+CONFIG_SERIAL_8250_NR_UARTS=2
+CONFIG_SERIAL_8250_RUNTIME_UARTS=2
+CONFIG_SERIAL_EARLYCON=y
+
+# --- GPIO / I2C / pinctrl -------------------------------------------------
+CONFIG_GPIO_DWAPB=y
+CONFIG_I2C_DESIGNWARE_PLATFORM=y
+CONFIG_PINCTRL=y
+CONFIG_PINCONF=y
+CONFIG_GENERIC_PINCONF=y
+# The luofu pinctrl driver is a lab driver with no binding and no pinconf
+# implementation yet (TARGET-DESIGN.md 7.1); its Kconfig symbol does not exist
+# in the lab .config under a stable name, so it is a TODO, not a CONFIG line.
+
+# --- watchdog -------------------------------------------------------------
+CONFIG_WATCHDOG=y
+CONFIG_WATCHDOG_CORE=y
+# LAB NAME - upstream rename + driver series required (TARGET-DESIGN.md 7.1).
+CONFIG_LUOFU_WATCHDOG=y
+
+# --- MTD / NAND / UBI / filesystems --------------------------------------
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_BLKDEVS=y
+CONFIG_MTD_OF_PARTS=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_MTD_NAND_CORE=y
+# LAB NAME - the FMC/SPI-NAND controller driver (TARGET-DESIGN.md 7.1).
+CONFIG_MTD_NAND_LUOFU=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_MTD_UBI_WL_THRESHOLD=4096
+CONFIG_MTD_UBI_BEB_LIMIT=20
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_LZO=y
+# rootfs_data stays JFFS2 for the first submission (TARGET-DESIGN.md 5.3).
+CONFIG_JFFS2_FS=y
+CONFIG_JFFS2_FS_WRITEBUFFER=y
+CONFIG_JFFS2_ZLIB=y
+# TODO: UBIFS is needed only if the overlay decision changes to UBI; the
+# current design keeps JFFS2, so this line is provisional.
+CONFIG_UBIFS_FS=y
+
+# --- pstore (TODO: decision needed) --------------------------------------
+# TARGET-DESIGN.md 4.2 records that PSTOR_BLK/MTD_PSTORE are not reachable in
+# a vanilla tree; the bench used /dev/mtdblock10. Choose pstore story before
+# enabling any of this.
+CONFIG_PSTORE=y
+CONFIG_PSTORE_RAM=y
+CONFIG_PSTORE_BLK=y
+CONFIG_PSTORE_BLK_BLKDEV="/dev/mtdblock10"
+
+# --- networking / switch / PHY -------------------------------------------
+CONFIG_NET=y
+CONFIG_VLAN_8021Q=y
+CONFIG_BRIDGE=y
+CONFIG_NET_SWITCHDEV=y
+# TODO: NET_DSA only if the switch driver is designed as DSA
+# (TARGET-DESIGN.md 8.1).
+CONFIG_NET_DSA=m
+CONFIG_MDIO_BUS=y
+CONFIG_MDIO_DEVICE=y
+CONFIG_MDIO_DEVRES=y
+CONFIG_PHYLIB=y
+CONFIG_PHYLINK=y
+# LAB NAMES - MDIO/GEMAC/PHY drivers (TARGET-DESIGN.md 7.1). No upstream
+# binding exists for any of them.
+CONFIG_LUOFU_GMAC=y
+CONFIG_LUOFU_MDIO=y
+CONFIG_LUOFU_PHY=y
+
+# --- PCIe (deferred design; TARGET-DESIGN.md 8.2) -------------------------
+# A wired-only first submission can defer PCIe/Wi-Fi. Kept so the required
+# host-controller options are visible; the lab driver is a read-only frame,
+# not a host controller.
+CONFIG_PCI=y
+CONFIG_PCI_DOMAINS_GENERIC=y
+CONFIG_PCI_MSI=y
+CONFIG_PCI_MSI_IRQ_DOMAIN=y
+CONFIG_PCIE_DW=y
+CONFIG_PCIE_DW_HOST=y
+
+# --- thermal --------------------------------------------------------------
+CONFIG_THERMAL=y
+CONFIG_THERMAL_OF=y
+# The tvsensor driver is a lab driver with no binding yet (TARGET-DESIGN.md 7.1);
+# its Kconfig symbol is a TODO.
+
+# --- OpenWrt userspace basics --------------------------------------------
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_PRINTK=y
+# TODO: NVMEM only if an efuse/nvmem provider is needed (MAC address source is
+# not established; TARGET-DESIGN.md 12 item 5).
+CONFIG_NVMEM=y

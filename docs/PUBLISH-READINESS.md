@@ -5,6 +5,20 @@
 the basis of an upstream submission. The live bench state is the parent repo's `STATUS.md`;
 this file is about publication, not about the router.
 
+## Update 2026-11-18 (design layer added; nothing in the checklist below is closed)
+
+The upstream design layer was added on 2026-11-18: `TARGET-DESIGN.md` (target/subtarget layout,
+DTS conversion, FIP/trailer/dual-slot/sysupgrade recipe, driver readiness, acceptance criteria),
+the refreshed `ROADMAP-OPENWRT.md`, the `GPL-REQUEST.md` status/tracking/follow-up pack, the
+refreshed `DOCUMENTATION-HUNT.md`, the optional `VENDOR-SKB-BRIDGE-PORT.md` spec, and the
+schematic `target-skeleton/` (10 files, UNTESTED - it has never been built inside an OpenWrt tree
+or run on the router; its FIP tool deliberately refuses to fabricate the trailer descriptor).
+
+None of the publish checklist items below is closed by this: the vendor `.o` history purge, the
+GPL-2.0 license text/DCO sign-offs, the missing GPL reply/receipt, and the Wi-Fi/LAN-switch
+statements remain open. There is still **no working OpenWrt target, board DTS, image recipe or
+driver series**, and no upstream submission has been made.
+
 ## What was wrong (audit 2026-11-17)
 
 1. **Ten vendor object files were tracked** under `lab/luofu-kernel/nand/` (`triductor/*.o`,

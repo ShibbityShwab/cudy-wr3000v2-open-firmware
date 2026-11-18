@@ -1,0 +1,841 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * luofu-r116.dts - DRAFT device tree for the Cudy WR3000 v2.0
+ * (HiSilicon Hi5671Y "luofu", board R116).
+ *
+ * STATUS: UNTESTED / SCHEMATIC / NOT A WORKING TARGET.
+ *
+ * This file is a DRAFT derived from the tracked lab DTS
+ * (tools/lab-src/arch/arm/boot/dts/luofu-r116.dts in the parent repository).
+ * Every register base, interrupt number, clock/reset cell and partition below
+ * is a lab-measured value (or an explicitly marked vendor-DT fact), not an
+ * invented one. NONE of the proposed bindings exists yet: no YAML, no
+ * dt-bindings header, no driver. Do not submit this file as-is.
+ *
+ * HOW TO READ THE MARKERS:
+ *   TODO(binding)        a devicetree binding that must be written/agreed
+ *                        before this node is submittable.
+ *   TODO(driver)         code that must exist for the node to be meaningful.
+ *   NEEDS-VERIFICATION   a value taken from the lab tree whose meaning is not
+ *                        confirmed against the board/upstream binding.
+ *   [U]                  "unverified/open" per TARGET-DESIGN.md reading legend.
+ *
+ * WHAT WAS DELIBERATELY CHANGED FROM THE LAB DTS:
+ *   - the bench-only "lab" partition is gone; the stock 0x1d80000 "upgrade"
+ *     size is restored (TARGET-DESIGN.md 3.3; vendor-dt-notes.md section 6);
+ *   - bench breadcrumb/instrumentation comments and sysctrl writes are gone
+ *     (TARGET-DESIGN.md 7.2);
+ *   - vendor "hsan,*" compatibles are replaced with "hisilicon,luofu-*"
+ *     PROPOSALS, each with the binding TODO (TARGET-DESIGN.md 6.2);
+ *   - the vendor iATU tables, acp-gate cells and other binary-derived props
+ *     are not carried: they become driver init data (TARGET-DESIGN.md 6.2);
+ *   - the vendor enable-method "hisilicon,hsan_smp" is removed: there is no
+ *     mainline smp_ops yet, so this is an UP-only draft (TARGET-DESIGN.md 7.1);
+ *   - clock/reset specifiers keep the lab shape (1-cell clock id, 2-cell
+ *     (offset, bit) reset) ONLY so the lab values stay readable; the reset
+ *     form is a TODO to convert to a documented id table.
+ *
+ * WHAT IS NOT HERE ON PURPOSE:
+ *   - Wi-Fi (Hi5622V100): vendor-only, no open driver, out of the first
+ *     submission scope (TARGET-DESIGN.md 8.3);
+ *   - LEDs / keys: only overlay evidence exists; they need the standard
+ *     gpio-leds/gpio-keys-polled bindings plus confirmed GPIO polarity
+ *     (see the comment near the end of the root node);
+ *   - sysctrl/sysenv boot-selector provider: no binding yet; the A/B
+ *     selector protocol is [U] (TARGET-DESIGN.md 3.4, 6.2, 7.1).
+ *
+ * Expected to parse after the C preprocessor + dtc, but it does NOT build in a
+ * kernel tree (no headers, no machine match, no dtbs_check clean run) and it
+ * has never been booted. Provenance of the facts: TARGET-DESIGN.md sections
+ * 3 and 6, opensource/docs/soc/vendor-dt-notes.md, and the lab DTS itself.
+ */
+
+/dts-v1/;
+
+/*
+ * TODO(binding): move these clock IDs to
+ * include/dt-bindings/clock/hisilicon,luofu-crg.h when the CRG binding is
+ * written (TARGET-DESIGN.md 6.2). They are the lab driver's child-order table;
+ * the (reg-offset, bit) geometry is the vendor gate table. The 0x14-group
+ * offsets are verbatim; the 0x20-group offsets are reconstructed and stay
+ * provisional until bench-confirmed (lab DTS header; clocks2.md caveat).
+ *
+ *   id  name         gate offset  bit
+ *    0  sfc_clk      0x14         0x00
+ *    1  gpio0_clk    0x14         0x14
+ *    2  gpio1_clk    0x14         0x15
+ *    3  i2c0_clk     0x14         0x18
+ *    4  pcie0_clk    0x20         0x0c
+ *    5  pcie1_clk    0x20         0x0d
+ *    6  gemac_clk0   0x20         0x13
+ *    7  led_pwm      0x14         0x0e
+ *    8  lsw_dp_clk0  0x20         0x00
+ *    9  lsw_pfe_clk0 0x20         0x01
+ *   10  mdio_clk0    0x20         0x03
+ *   11  gemac_clk1   0x20         0x14
+ *   12  gemac_clk2   0x20         0x15
+ *   13  gemac_clk3   0x20         0x16
+ *   14  gemac_clk4   0x20         0x17
+ *   15  pie_clk0     0x20         0x19
+ */
+#define LUOFU_CLK_SFC     0
+#define LUOFU_CLK_GPIO0   1
+#define LUOFU_CLK_GPIO1   2
+#define LUOFU_CLK_I2C0    3
+#define LUOFU_CLK_PCIE0   4
+#define LUOFU_CLK_PCIE1   5
+#define LUOFU_CLK_GMAC0   6
+#define LUOFU_CLK_LEDPWM  7
+#define LUOFU_CLK_LSW_DP  8
+#define LUOFU_CLK_LSW_PFE 9
+#define LUOFU_CLK_MDIO   10
+#define LUOFU_CLK_GMAC1  11
+#define LUOFU_CLK_GMAC2  12
+#define LUOFU_CLK_GMAC3  13
+#define LUOFU_CLK_GMAC4  14
+#define LUOFU_CLK_PIE    15
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	model = "Cudy WR3000 v2.0 (HiSilicon luofu R116)";
+
+	/*
+	 * TODO(compat): an upstream board compatible should carry a
+	 * vendor,model string first (e.g. "cudy,wr3000-v2"). This draft keeps
+	 * the lab strings because the final order interacts with OpenWrt's
+	 * board_name/sysupgrade match (README "Open questions"). The stock
+	 * loader passes its OWN DT to the kernel, so this string does not
+	 * decide the stock-loader boot on this unit (TARGET-DESIGN.md 3.1);
+	 * it does decide whether a future mainline kernel/machine matches.
+	 */
+	compatible = "hisilicon,luofu-r116", "hisilicon,luofu";
+	interrupt-parent = <&gic>;
+
+	aliases {
+		/* physical console is uart1@1010f000 = ttyS0 (vendor-dt-notes.md 2) */
+		serial0 = &uart1;
+		serial1 = &uart0;
+		/*
+		 * TODO: the vendor tree also has aliases { console = <&uart1>; }.
+		 * That property is not a standard alias; keep it out until the
+		 * binding question is settled.
+		 */
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		/*
+		 * TODO(bootargs): the stock loader supplies /chosen/bootargs
+		 * from ITS tree: "noinitrd cma=0 console=ttyS0,115200 earlycon
+		 * maxcpus=2 nr_cpus=2 additional_cpus=1" (vendor-dt-notes.md 2).
+		 * Where the root filesystem selector (root=/ubi.mtd=/ubi.block=)
+		 * comes from is NOT established, and it is unknown whether the
+		 * stock U-Boot overrides bootargs from its environment
+		 * (TARGET-DESIGN.md 5.6). Do not add a bootargs property here
+		 * until that is closed with one attended boot.
+		 */
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * TODO(smp): the vendor DT uses
+		 * enable-method = "hisilicon,hsan_smp" (pen/smc release path);
+		 * there is no mainline smp_ops for it, so the draft is UP-only
+		 * and has no enable-method. Add "hisilicon,luofu-smp" only with
+		 * the platsmp port and its binding (TARGET-DESIGN.md 6.2, 7.1).
+		 */
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a9";
+			reg = <0>;
+			/*
+			 * TODO(driver): the vendor cpu@0 also carries clocks /
+			 * cpu-supply / operating-points-v2 / nvmem-cells. Those
+			 * need the CRG + efuse + pwm-regulator drivers/bindings;
+			 * a fixed-rate CPU is acceptable for a first submission if
+			 * documented (TARGET-DESIGN.md 6.2).
+			 */
+		};
+
+		cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a9";
+			reg = <1>;
+		};
+	};
+
+	/*
+	 * 128 MB DDR3 at 0x80500000 (vendor DT: reg = <0x80500000 0x7b00000>;
+	 * 123 MB above the SoC window). NEEDS-VERIFICATION: the low 5 MB below
+	 * 0x80500000 are the SoC/ACP view, not system DRAM (vendor-dt-notes.md 3).
+	 */
+	memory@80500000 {
+		device_type = "memory";
+		reg = <0x80500000 0x7b00000>;
+	};
+
+	/*
+	 * TODO(reserved-memory): the vendor base DTB reserves a 16 KiB
+	 * "flashinfo" window at 0x80600000 (the node name in the vendor tree
+	 * says 0x80800000 - a stale name; the address is 0x80600000;
+	 * phase42-decode/report.md section 2 and vendor-dt-notes.md 3).
+	 * Whether the upstream kernel needs this reservation, and why the
+	 * vendor U-Boot stages a bootram there, is [U]. Do not add a
+	 * reserved-memory node until it is measured; an unneeded reserved
+	 * region is a review finding, a missing one can corrupt firmware data.
+	 */
+
+	/* ---- fixed input clocks (free bindings) ------------------------- */
+
+	osc_clk: fixed-clock-osc {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <20000000>;	/* 20 MHz */
+		clock-output-names = "osc";
+	};
+
+	ahb_clk: fixed-clock-ahb {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;	/* 200 MHz */
+		clock-output-names = "ahb_clk";
+	};
+
+	apb_clk: fixed-clock-apb {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <100000000>;	/* 100 MHz */
+		clock-output-names = "apb_clk";
+	};
+
+	corrector_clk: fixed-clock-corrector {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <1000000000>;	/* 1 GHz */
+		clock-output-names = "corrector_clk";
+	};
+
+	twd_clk: twd-clock {
+		compatible = "fixed-factor-clock";
+		#clock-cells = <0>;
+		clocks = <&corrector_clk>;
+		clock-div = <4>;	/* 1 GHz / 4 = 250 MHz */
+		clock-mult = <1>;
+		clock-output-names = "twd_clk";
+	};
+
+	/* ---- CRG: clocks + resets (new binding, TODO) ------------------ */
+
+	/*
+	 * The vendor splits 0x14880000 into clk@ (20 gate children) and crg@
+	 * (resets) because it has two drivers. Our lab driver is ONE driver
+	 * (luofu-crg) that registers both providers from its own children, so
+	 * this draft folds the page into one node. TODO(binding): propose
+	 *   Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+	 * The lab driver currently matches the VENDOR string "hsan,crg"; the
+	 * upstream compatible below is a rename proposal, not a fact.
+	 * TODO(reset-binding): the 2-cell (offset, bit) reset form below is the
+	 * vendor form kept for readability; the submission must expose a
+	 * documented reset-id table and drop the raw (offset, bit) cells
+	 * (TARGET-DESIGN.md 6.2).
+	 */
+	crg: clock-reset-controller@14880000 {
+		compatible = "hisilicon,luofu-crg";	/* TODO(binding): proposal */
+		reg = <0x14880000 0x1000>;
+		#clock-cells = <1>;
+		#reset-cells = <2>;	/* TODO(reset-binding): convert to <1> + ids */
+		/*
+		 * TODO(driver-data): the two PLLs (pll_cpu ctrl 0x198 / status
+		 * 0x90 bit 0x1e; pll_lsw ctrl 0x1e0 / status 0x90 bit 0x1b)
+		 * and the two muxes (cpu mux 0x138 mask 0x8; efuse mux 0x138
+		 * mask 0x2) are driver data now; do not turn them into DT
+		 * properties without a binding.
+		 */
+	};
+
+	/* ---- watchdog (new binding, TODO) ------------------------------ */
+
+	/*
+	 * TODO(binding): the watchdog lives on the SAME 0x14880000 CRG page as
+	 * the controller above. Two nodes claiming the same 0x1000 window is not
+	 * acceptable; decide before submission: a child of the CRG/syscon node,
+	 * or a narrower reg window (TARGET-DESIGN.md 6.2 row "watchdog").
+	 * TODO(driver-data): the vendor magic values (reset/stop/enable val0/1,
+	 * set/en/clr/int-status offsets) currently appear as vendor DT
+	 * properties; they must become driver data or documented properties -
+	 * decide one representation (TARGET-DESIGN.md 6.2, 7.1).
+	 * Facts kept: hwver 2, SPI 2, timeout 1..512 s (board uses 30 s).
+	 */
+	watchdog: watchdog@14880000 {
+		compatible = "hisilicon,luofu-wdt";	/* TODO(binding): proposal */
+		reg = <0x14880000 0x1000>;
+		interrupts = <0 2 4>;			/* SPI 2 (vendor numbering) */
+		timeout-sec = <30>;
+		status = "disabled";
+	};
+
+	/* ---- standard ARM peripherals (free bindings) ------------------ */
+
+	gic: interrupt-controller@10181000 {
+		compatible = "arm,cortex-a9-gic";
+		#interrupt-cells = <3>;
+		interrupt-controller;
+		reg = <0x10181000 0x1000>,	/* distributor */
+		      <0x10180100 0x100>;	/* CPU interface */
+	};
+
+	scu@10180000 {
+		compatible = "arm,cortex-a9-scu";
+		reg = <0x10180000 0x1000>;
+	};
+
+	/*
+	 * NEEDS-VERIFICATION: the lab DTS carries vendor l2c_aux_val = 0x430001,
+	 * l2c_aux_mask = 0xffb0fffe and cache-way-size-sel = 1 as vendor DT
+	 * props. In mainline these become the machine descriptor's
+	 * l2c_aux_val/l2c_aux_mask (arch/arm/kernel/irq.c only calls
+	 * l2x0_of_init() when one is non-zero) and the AUX fields are derived
+	 * from arm,tag-latency / arm,data-latency - translate before adding any
+	 * latency property here.
+	 */
+	L2: l2-cache@7f000000 {
+		compatible = "arm,pl310-cache";
+		reg = <0x7f000000 0x1000>;
+		cache-level = <2>;
+		cache-unified;
+	};
+
+	local_timer: local-timer@10180600 {
+		compatible = "arm,cortex-a9-twd-timer";
+		reg = <0x10180600 0x20>;
+		interrupts = <1 13 0x301>;	/* PPI 13 (mainline encoding) */
+		clocks = <&twd_clk>;
+	};
+
+	/*
+	 * Cortex-A9 has no ARM architected timer; the TWD above is the per-CPU
+	 * timer source. There is no arm,armv7-timer node on this SoC.
+	 */
+
+	/*
+	 * NEEDS-VERIFICATION: the vendor value is <1 0x2f 4> (cell 0x2f = 47),
+	 * but mainline GIC PPI cells are 0..15 (Linux maps them to INTIDs
+	 * 16+n). Do not trust this as a PPI 47; re-derive it from the vendor
+	 * driver or the schematic before the node is used. It only matters if
+	 * the SP804 is kept as a timer source; the board uses the TWD.
+	 */
+	timer@10104000 {
+		compatible = "arm,sp804";
+		reg = <0x10104000 0x1000>;
+		interrupts = <1 0x2f 4>;
+		clocks = <&apb_clk>;
+	};
+
+	/* ---- DesignWare peripherals (free bindings) -------------------- */
+
+	uart0: serial@1010e000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x1010e000 0x1000>;
+		reg-shift = <2>;
+		interrupts = <0 0x2d 4>;	/* SPI 45 in the vendor numbering */
+		clocks = <&apb_clk>;
+		clock-names = "apb_pclk";
+		status = "disabled";
+	};
+
+	uart1: serial@1010f000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x1010f000 0x1000>;
+		reg-shift = <2>;
+		interrupts = <0 0x2e 4>;	/* SPI 46 */
+		clocks = <&apb_clk>;
+		clock-names = "apb_pclk";
+		status = "okay";		/* physical console ttyS0 */
+	};
+
+	gpio0: gpio@10106000 {
+		compatible = "snps,dw-apb-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x10106000 0x1000>;
+		clocks = <&crg LUOFU_CLK_GPIO0>;
+		/*
+		 * TODO(reset-binding): vendor cells (0x2c, 0x14); the reset
+		 * provider shape is not agreed yet.
+		 */
+
+		porta: gpio-port@0 {
+			compatible = "snps,dw-apb-gpio-port";
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&gic>;
+			interrupts = <0 0x31 4>;	/* SPI 49 */
+			reg = <0>;
+			snps,nr-gpios = <32>;
+		};
+	};
+
+	gpio1: gpio@10107000 {
+		compatible = "snps,dw-apb-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x10107000 0x1000>;
+		clocks = <&crg LUOFU_CLK_GPIO1>;
+		/* TODO(reset-binding): vendor cells (0x2c, 0x15) */
+
+		portb: gpio-port@0 {
+			compatible = "snps,dw-apb-gpio-port";
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&gic>;
+			interrupts = <0 0x32 4>;	/* SPI 50 */
+			reg = <0>;
+			snps,nr-gpios = <5>;
+		};
+	};
+
+	i2c0: i2c@10111000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x10111000 0x1000>;
+		interrupts = <0 0x2c 4>;	/* SPI 44 */
+		clocks = <&crg LUOFU_CLK_I2C0>;
+		clock-frequency = <100000>;
+		/* TODO(reset-binding): vendor cells (0x2c, 0x18) */
+		status = "disabled";
+	};
+
+	/* ---- vendor-specific blocks: placeholders, no binding ---------- */
+
+	/*
+	 * TODO(binding): peripheral pinctrl + IOMUX. The lab driver matches the
+	 * VENDOR string "hsan,luofu-peri-pinctrl"; upstream proposal is a
+	 * documented "hisilicon,luofu-pinctrl" with pinmux/pinconf groups from
+	 * the 37 pins / 24 groups / 24 functions tables. The pinconf setters
+	 * are stubs in the lab driver (TARGET-DESIGN.md 6.2, 7.1).
+	 * The lab measurement matters: enabling this block was required for the
+	 * wired path to behave (it configures the pins the MDIO/GMAC path
+	 * needs); a "disabled" node here does NOT mean the hardware does not
+	 * need it - it means the driver/binding is not ready.
+	 */
+	pinctrl_peri: pinctrl@14900100 {
+		compatible = "hisilicon,luofu-pinctrl";	/* TODO(binding): proposal */
+		reg = <0x14900100 0x3c>,	/* mux window */
+		      <0x14940000 0x100>;	/* cfg window */
+		reg-names = "mux", "cfg";
+		status = "disabled";
+		/* TODO(binding): the spi/jtag/led/avs pin states go here */
+	};
+
+	/*
+	 * TODO(binding): the FMC / SPI-NAND controller. The lab driver matches
+	 * the vendor props bus_id/spi_cs/enable-quad-mode; the upstream binding
+	 * must replace them with standard SPI-NAND/MTD properties where
+	 * possible (TARGET-DESIGN.md 6.2). The node name itself is undecided
+	 * (NAND controller vs SPI controller + SPI-NAND child).
+	 * Facts kept: controller at 0x10a20000 + 1 MiB window at 0x1c000000,
+	 * chip-select 1, quad mode, 2048-byte pages / 64-byte OOB / 128 KiB
+	 * erase blocks (TARGET-DESIGN.md 2).
+	 * TODO(binding): enva/envb are the U-Boot environment blocks; the
+	 * u-boot,env representation and its format compatibility are [U]
+	 * (TARGET-DESIGN.md 6.2). The sysupgrade path DOES write both env
+	 * copies (3.4), so those partitions cannot be marked read-only without
+	 * a different write path.
+	 */
+	fmc: nand-controller@10a20000 {
+		compatible = "hisilicon,luofu-fmc";	/* TODO(binding): proposal */
+		reg = <0x10a20000 0x1000>,	/* controller */
+		      <0x1c000000 0x100000>;	/* flash window */
+		clocks = <&crg LUOFU_CLK_SFC>;
+		clock-names = "sfc_clk";
+		/* TODO(reset-binding): vendor cells (0x2c, 0x0) */
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+		status = "okay";
+		/*
+		 * TODO(driver): the lab FMC has no real bad-block handling
+		 * (luofu_mtd_block_isbad returns 0), carries bench breadcrumbs and
+		 * the vendor "read ECC off" debug flag; all must be reworked
+		 * before submission (TARGET-DESIGN.md 7.1).
+		 */
+
+		/*
+		 * Stock 17-partition A/B table, verbatim from the vendor base
+		 * DTB (vendor-dt-notes.md 6). Total NAND 0x8000000 = 128 MB.
+		 * The lab "lab" partition is deliberately NOT here; the vendor
+		 * upgrade partition keeps its stock 0x1d80000 size
+		 * (TARGET-DESIGN.md 3.3).
+		 * TODO(binding): review "read-only" flags for partitions OpenWrt
+		 * must never write; the env partitions are written by the
+		 * measured slot switch, so they are not read-only in this draft.
+		 */
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
+			partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
+			partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
+			partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
+			partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
+			partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
+			partition@4c0000 { label = "bdinfo";	reg = <0x4c0000 0x40000>; };
+			partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
+			partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
+			partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
+			partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
+			partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
+			partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
+			partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
+			partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
+			partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
+			partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
+		};
+	};
+
+	/*
+	 * TODO(binding): the internal LSW switch has NO driver in any tree - it
+	 * is the largest new SoC-side work item. The lab-split nodes below keep
+	 * the measured register windows and interrupts; they are NOT the
+	 * submission shape. TARGET-DESIGN.md 6.2 proposes one switch binding
+	 * (or switch + parser subnodes) with the switch's port model, and 8.1
+	 * asks for a DSA-vs-switchdev decision. Enable nothing until the driver
+	 * exists: status="okay" for a block with no driver is a review finding.
+	 * The wired path is gmac -> this switch -> PHY -> RJ45 (TARGET-DESIGN.md
+	 * 8.1); the bench measured the cable on the gmac3/0x14480000 GMII port,
+	 * but the per-port jack map is still board-schematic work.
+	 */
+	lsw_dp: ethernet-switch@87b00000 {
+		compatible = "hisilicon,luofu-dp";	/* TODO(binding) */
+		reg = <0x87b00000 0x400000>,	/* queue */
+		      <0x87f00000 0x100000>,	/* flow */
+		      <0x11000000 0x80000>,	/* dp */
+		      <0x11280000 0x80000>,	/* eps */
+		      <0x11200000 0x80000>,	/* eqm */
+		      <0x11100000 0x80000>,	/* fam */
+		      <0x11080000 0x80000>;	/* ips */
+		reg-names = "queue", "flow", "dp", "eps", "eqm", "fam", "ips";
+		clocks = <&crg LUOFU_CLK_LSW_DP>;
+		/* TODO(reset-binding): vendor cells (0x30, 0x0) and (0x30, 0x1) */
+		status = "disabled";
+		/*
+		 * NEEDS-VERIFICATION: the vendor board overlay rebases the queue
+		 * window 0x87b00000 -> 0x80000000 (vendor-dt-notes.md 8). Which
+		 * base a Linux driver must program is NOT established; do not
+		 * "fix" this address without measuring.
+		 */
+	};
+
+	lsw_pfe: ethernet-switch@12100000 {
+		compatible = "hisilicon,luofu-pfe";	/* TODO(binding) */
+		reg = <0x12100000 0x80000>,	/* ifc */
+		      <0x12180000 0x80000>,	/* l2 */
+		      <0x12280000 0x80000>,	/* napt */
+		      <0x12380000 0x80000>,	/* mcc */
+		      <0x12400000 0x80000>,	/* opp */
+		      <0x12080000 0x80000>,	/* pa */
+		      <0x11180000 0x80000>,	/* pe */
+		      <0x12000000 0x80000>,	/* pfe_glb */
+		      <0x11380000 0x80000>,	/* prbs */
+		      <0x12480000 0x80000>;	/* pub */
+		reg-names = "ifc", "l2", "napt", "mcc", "opp", "pa", "pe",
+			    "pfe_glb", "prbs", "pub";
+		clocks = <&crg LUOFU_CLK_LSW_PFE>;
+		/* TODO(reset-binding): vendor cells (0x30, 0x3) and (0x30, 0x4) */
+		status = "disabled";
+	};
+
+	lsw_woe: woe {
+		compatible = "hisilicon,luofu-lsw-woe";	/* TODO(binding) */
+		dma-coherent;
+		interrupts = <0 0x54 4>,	/* SPI 84 (vendor numbering) */
+			     <0 0x53 4>,	/* SPI 83 */
+			     <0 0x52 4>,	/* SPI 82 */
+			     <0 0x51 4>,	/* SPI 81 */
+			     <0 0x50 4>;	/* SPI 80 */
+		interrupt-names = "band0_comp_irq", "band1_comp_irq",
+				  "band2_comp_irq", "band0_txba", "band1_txba";
+		status = "disabled";
+	};
+
+	/*
+	 * TODO(binding/driver): packet-ingress engine (WoC ring consumer); it
+	 * only matters if WoC/PIE is in scope for v1 (TARGET-DESIGN.md 6.2,
+	 * 8.1). The vendor overlay sizes the rings; those values are driver
+	 * data, not DT until a binding exists.
+	 */
+	pie: pie@10a70000 {
+		compatible = "hisilicon,luofu-pie";	/* TODO(binding) */
+		reg = <0x10a70000 0x10000>;
+		dma-coherent;
+		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
+		clocks = <&crg LUOFU_CLK_PIE>;
+		/* TODO(reset-binding): vendor cell (0x30, 0x19) */
+		status = "disabled";
+	};
+
+	/* ---- Ethernet: five gigabit MACs + MDIO + internal switch -------- */
+
+	/*
+	 * TODO(binding): GEMAC. Binds are the lab shape; the upstream binding
+	 * must document phy-mode/phy-handle/clocks/resets. NEEDS-VERIFICATION:
+	 * the gmac0..4 -> mdio phy mapping below is the vendor runtime mapping
+	 * (14380000 -> mdio addr 2, 14400000 -> 3, 14480000 -> 4 (the wired
+	 * jack on the bench unit), 14500000 -> 5; TARGET-DESIGN.md 6.2). The
+	 * vendor does not use gmac0 at all, hence disabled; do not enable it
+	 * (a second MAC on phy2 would be wrong).
+	 * TODO(driver): the lab GEMAC has no TX/RX ring DMA proven ("No TX
+	 * path yet: the rings are staged", TARGET-DESIGN.md 7.1).
+	 */
+	gmac0: ethernet@14300000 {
+		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		reg = <0x14300000 0x10000>;
+		phy-mode = "rgmii";
+		phy-handle = <&phy2>;
+		clocks = <&crg LUOFU_CLK_GMAC0>;
+		/* TODO(reset-binding): vendor cells (0x30, 0xd) and (0x30, 0xe) */
+		status = "disabled";
+	};
+
+	gmac1: ethernet@14380000 {
+		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		reg = <0x14380000 0x10000>;
+		phy-mode = "gmii";
+		phy-handle = <&phy2>;
+		clocks = <&crg LUOFU_CLK_GMAC1>;
+		/* TODO(reset-binding): vendor cells (0x30, 0xf), (0x30, 0x10) */
+		status = "okay";
+	};
+
+	gmac2: ethernet@14400000 {
+		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		reg = <0x14400000 0x10000>;
+		phy-mode = "gmii";
+		phy-handle = <&phy3>;
+		clocks = <&crg LUOFU_CLK_GMAC2>;
+		/* TODO(reset-binding): vendor cells (0x30, 0x11), (0x30, 0x12) */
+		status = "okay";
+	};
+
+	gmac3: ethernet@14480000 {
+		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		reg = <0x14480000 0x10000>;
+		phy-mode = "gmii";
+		phy-handle = <&phy4>;	/* bench-measured cable port (gmac3) */
+		clocks = <&crg LUOFU_CLK_GMAC3>;
+		/* TODO(reset-binding): vendor cells (0x30, 0x13), (0x30, 0x14) */
+		status = "okay";
+	};
+
+	gmac4: ethernet@14500000 {
+		compatible = "hisilicon,luofu-gmac";	/* TODO(binding) */
+		reg = <0x14500000 0x10000>;
+		phy-mode = "gmii";
+		phy-handle = <&phy5>;
+		clocks = <&crg LUOFU_CLK_GMAC4>;
+		/* TODO(reset-binding): vendor cells (0x30, 0x15), (0x30, 0x16) */
+		status = "okay";
+	};
+
+	/*
+	 * TODO(binding): MDIO. The five PHY children are standard
+	 * ethernet-phy-ieee802.3-c22 nodes; the bus controller binding is a
+	 * TODO. The Genius PHY (ID 0x20669a00, mask 0xffffff00) binds via PHY
+	 * ID, not DT compatible; the vendor per-PHY firmware patch load is a
+	 * TODO (TARGET-DESIGN.md 6.2, 7.1).
+	 * NEEDS-VERIFICATION: the PHY addresses 2..5 are the vendor runtime
+	 * mapping; PHY address 1 is not used by the vendor and is not modelled.
+	 */
+	mdio0: mdio@14000000 {
+		compatible = "hisilicon,luofu-mdio";	/* TODO(binding) */
+		reg = <0x14000000 0x1000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&crg LUOFU_CLK_MDIO>;
+		/*
+		 * TODO(reset-binding): vendor cells (0x30, 0x6) mdio,
+		 * (0x30, 0x1a) gephyall, (0x30, 0x1b..0x1f) gephy0..4.
+		 */
+		status = "okay";
+
+		phy2: ethernet-phy@2 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <2>;
+			max-speed = <1000>;
+		};
+		phy3: ethernet-phy@3 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <3>;
+			max-speed = <1000>;
+		};
+		phy4: ethernet-phy@4 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <4>;
+			max-speed = <1000>;
+		};
+		phy5: ethernet-phy@5 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <5>;
+			max-speed = <1000>;
+		};
+	};
+
+	/* ---- thermal (new binding, TODO) ------------------------------- */
+
+	/*
+	 * TODO(binding): thermal sensor driver. The conversion is decoded and
+	 * numerically verified; threshold/enable writes need a measurement
+	 * decision (TARGET-DESIGN.md 7.1). Vendor hwver 3; the vendor vendor
+	 * properties (int-base-offset, trim, addition-en, efuse-trim-en) are
+	 * NOT carried - decide driver data vs documented props.
+	 */
+	tvsensor: thermal-sensor@14900500 {
+		compatible = "hisilicon,luofu-tvsensor";	/* TODO(binding) */
+		reg = <0x14900500 0x14>;
+		#thermal-sensor-cells = <0>;
+		interrupts = <0 0 4>;	/* SPI 0 */
+		status = "disabled";
+	};
+
+	thermal-zones {
+		/* One zone; trip points are the vendor tree's own (TARGET-DESIGN.md 6.2). */
+		cls0: cls0 {
+			polling-delay = <1000>;
+			polling-delay-passive = <100>;
+			sustainable-power = <2000>;
+			thermal-sensors = <&tvsensor>;
+
+			trips {
+				trip-point0 {
+					temperature = <115000>;
+					hysteresis = <3000>;
+					type = "passive";
+				};
+
+				trip-point1 {
+					temperature = <125000>;
+					hysteresis = <3000>;
+					type = "critical";
+				};
+			};
+		};
+	};
+
+	/* ---- PCIe: two DWC root complexes (deferred; binding TODO) ------ */
+
+	/*
+	 * TODO(binding/driver): both root complexes are DWC-based. The lab PCIe
+	 * driver is a READ-ONLY FRAME plus an unvalidated compile-gated
+	 * bring-up; it is not a host controller and does not call
+	 * pci_host_probe() (TARGET-DESIGN.md 7.1). A wired-only first
+	 * submission can defer PCIe and Wi-Fi (8.2); these nodes stay disabled
+	 * so the addresses are documented.
+	 *
+	 * HARD RULE, DO NOT LOSE THIS WHEN REWRITING THE NODE:
+	 * the "misc" window 0x10161000 is kept for reference only and MUST NEVER
+	 * BE READ at runtime - a read-only devmem there panicked the box. The
+	 * driver must poll link state via DBI/cfg and measure through the
+	 * endpoint BAR0/BAR2 instead.
+	 *
+	 * TODO(driver-data): the vendor iATU inbound/outbound tables and the
+	 * acp-gate bits (0x10100174 bit 25/26) are init data, not DT properties
+	 * (TARGET-DESIGN.md 6.2). They are deliberately absent here.
+	 */
+	pcie0: pcie@10160000 {
+		compatible = "hisilicon,luofu-pcie";	/* TODO(binding) */
+		device_type = "pci";
+		#address-cells = <3>;
+		#size-cells = <2>;
+		linux,pci-domain = <0>;
+		reg = <0x10160000 0x1000>,	/* dbi */
+		      <0x10161000 0x3000>,	/* misc - NEVER READ */
+		      <0x50000000 0x1000>,	/* cfg */
+		      <0x40000000 0x2000000>,	/* mem */
+		      <0x48000000 0x800000>;	/* io */
+		reg-names = "dbi", "misc", "cfg", "mem", "io";
+		ranges = <0x02000000 0 0x40000000 0x40000000 0 0x2000000>,
+			 <0x01000000 0 0x48000000 0x48000000 0 0x800000>,
+			 <0x03000000 0 0x50000000 0x50000000 0 0x1000>;
+		bus-range = <0 0xa>;
+		interrupts = <0 0x3b 4>,	/* SPI 59 (vendor numbering) */
+			     <0 0x45 4>;	/* SPI 69 */
+		interrupt-names = "radm", "linkdown";
+		clocks = <&crg LUOFU_CLK_PCIE0>;
+		clock-names = "pcie_clk";
+		/* TODO(reset-binding): vendor cells (0x34, 0xc..0xf) */
+		status = "disabled";
+		/*
+		 * TODO(binding): legacy INTx needs interrupt-map/interrupt-map-mask
+		 * or an MSI parent; neither is designed yet. The Wi-Fi endpoint
+		 * also carries a device-internal GIC source (SPI 76) that is not
+		 * described in any DT (vendor-dt-notes.md 4).
+		 */
+	};
+
+	pcie1: pcie@10164000 {
+		compatible = "hisilicon,luofu-pcie";	/* TODO(binding) */
+		device_type = "pci";
+		#address-cells = <3>;
+		#size-cells = <2>;
+		linux,pci-domain = <1>;
+		reg = <0x10164000 0x1000>,	/* dbi */
+		      <0x10165000 0x3000>,	/* misc - NEVER READ */
+		      <0x68000000 0x1000>,	/* cfg */
+		      <0x58000000 0x2000000>,	/* mem */
+		      <0x60000000 0x800000>;	/* io */
+		reg-names = "dbi", "misc", "cfg", "mem", "io";
+		ranges = <0x02000000 0 0x58000000 0x58000000 0 0x2000000>,
+			 <0x01000000 0 0x60000000 0x60000000 0 0x800000>,
+			 <0x03000000 0 0x68000000 0x68000000 0 0x1000>;
+		bus-range = <0 0xa>;
+		interrupts = <0 0x3f 4>,	/* SPI 63 (vendor numbering) */
+			     <0 0x46 4>;	/* SPI 70 */
+		interrupt-names = "radm", "linkdown";
+		clocks = <&crg LUOFU_CLK_PCIE1>;
+		clock-names = "pcie_clk";
+		/* TODO(reset-binding): vendor cells (0x34, 0x10..0x13) */
+		status = "disabled";
+	};
+
+	/* ---- absent nodes, on purpose ---------------------------------- */
+
+	/*
+	 * LEDs / keys: NOT in the lab DTS; the vendor board overlay (board_id=3)
+	 * adds gpio-keys-polled (reset gpio 0x16, wps gpio 0x17, poll 20 ms) and
+	 * gpio-leds (oem:green:{status,wan,lan,internet,wifi,wifi5g});
+	 * gpio 0x1c appears in the overlay's pcie-gpios (vendor-dt-notes.md 8).
+	 * Those are overlay evidence, not board schematics: add standard
+	 * gpio-keys-polled / gpio-leds nodes only once the GPIO numbering,
+	 * polarity and board names are confirmed; TARGET-DESIGN.md 6.2 lists
+	 * both as free bindings.
+	 *
+	 * sysctrl / sysenv: the vendor r116 build has "hsan,sysctrl",
+	 * "hsan,sysenv", "hsan,rstinfo" blocks, not in the lab DTS. The A/B
+	 * boot selector lives in sysenv (cell 0x10100C08; values 0x10 = A pair,
+	 * 0x11 = B pair per the loader's own print; a manual B write used 0x21;
+	 * the A-side handover value is NOT established). Upstream needs a
+	 * syscon/nvmem provider or a small platform driver plus a binding
+	 * (TARGET-DESIGN.md 3.4, 6.2, 7.1). Do not invent it here.
+	 *
+	 * efuse / RNG / LED PWM / PMU PWM / clk-corrector / net-cdev / woe_*:
+	 * vendor "hsan,*" blocks in the pinned tree; not needed for a
+	 * wired-first first submission, and unused blocks must not get invented
+	 * bindings (TARGET-DESIGN.md 6.2). The MAC address source is [U] - the
+	 * efuse/nvmem question depends on it (TARGET-DESIGN.md 12 item 5).
+	 *
+	 * Wi-Fi (Hi5622V100): PCIe endpoints with a vendor-binary, non-mac80211
+	 * driver over a closed firmware blob. Out of the first submission scope
+	 * (TARGET-DESIGN.md 8.3). No node.
+	 */
+};
