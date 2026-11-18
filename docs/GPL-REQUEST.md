@@ -17,6 +17,12 @@ the parent repository).
 The *follow-up* message below is a draft until the sent copy and a receipt are saved in this
 directory and the tracking table is updated.
 
+**Project decision (2026-11-18): the request is not a project gate and no further action is
+required.** After 2026-10-01 with no reply, the project treats the vendor source as an optional
+accelerator (it would mainly shorten the LSW/PIE/Wi-Fi work) and continues by its own reverse
+engineering. This page is kept as a provenance/licensing record and as the ready-to-use lever if
+anyone ever wants to escalate.
+
 **Publication status of this repository: NOT READY.** This file documents a legal request and
 adds no vendor content, but the published half still has an open history purge (ten vendor
 `.o` files removed from HEAD on 2026-11-17 but still in published history). See
