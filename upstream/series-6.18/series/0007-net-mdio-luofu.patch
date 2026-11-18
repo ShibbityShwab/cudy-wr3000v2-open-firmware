@@ -1,7 +1,7 @@
 From 5dd3bfb2be7d72b0be8a0f7bae332d9d7cd7d620 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 07/19] net: mdio: luofu: add MDIO bus controller
+Subject: [PATCH 07/21] net: mdio: luofu: add MDIO bus controller
 
 Add the MDIO bus controller of the HiSilicon Hi5671Y "luofu" SoC: a
 polled clause 22 master for the PHYs behind the internal switch

@@ -17,3 +17,5 @@
 0017-soc-luofu-boot-selector.patch :: total: 0 errors, 3 warnings, 0 checks, 436 lines checked
 0018-arm-mach-hisilicon-smp.patch :: total: 0 errors, 1 warnings, 0 checks, 189 lines checked
 0019-arm-clk-luofu-clock-tree.patch :: total: 0 errors, 2 warnings, 2 checks, 931 lines checked
+0020-net-pie-datapath-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 2111 lines checked
+0021-net-lsw-init-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 1456 lines checked

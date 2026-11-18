@@ -1,0 +1,46 @@
+net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+
+Extend the D1a internal-switch skeleton to the D1b read-only baseline
+probe, built from the register and qid-map facts measured on the stock
+vendor boot of 2026-11-18 (INVENTORY-2026-11-18.md section 3,
+LSW-SPEC.md sections 7.3 and 12.3).
+
+The binding grows to the measured shape: 17 MMIO windows (the 15
+512 KiB register pages plus the 4 MiB queue and 1 MiB flow DDR
+regions), the CRG syscon phandle used for the gate and reset state, and
+the measured hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
+luofu-switch-regs.h holds the measured register map with an evidence
+grade on every offset and value, plus the derived qid-table write
+geometry documented as the paper W2 write set.
+
+probe() is fail-closed and read-only.  It first checks the measured
+powered state of the block - CRG gate word 0x20 bits 0/1 set and the
+four reset lines released with the active-low polarity fixed earlier in
+the series - and refuses without touching the block if that state does
+not hold.  It then reads and validates 30 measured baseline words and
+re-derives both qid maps from the port model, comparing all 384 words
+(128 table A + 256 table B) against the measured contents.  The driver
+contains no writel(), enables no clock, drives no reset, registers no
+netdev and no notifier, and still exits probe with -EOPNOTSUPP; the
+devicetree node stays disabled.  The qid-table write geometry is
+documented but not executed.
+
+The write campaign is not closed and the attended W2-W6 checks are
+still owed: W2 exists only as a paper write set validated read-only on
+one boot, W3 is the first own-kernel clock/reset write, W4 writes one
+qid table and sends one frame, W5 adds the remaining populated rows and
+W6 verifies learning-off/forward-all.  A second boot or unit read-only
+inventory is also needed to test whether the measured baseline is
+stable.  What the writes do to the hardware, the meanings of the port
+ids and the layout of the other switch tables remain [U].
+
+This is an RFC and not mergeable.  The driver has never run on hardware:
+the values it carries were read from the stock vendor system by a
+fail-closed read-only inventory tool, not by this driver, and it writes
+no register.  No boot, no image and no flash is involved.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors under CONFIG_WERROR=y); the extended binding passes
+dt_binding_check and the board DTS compiles with zero warnings.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

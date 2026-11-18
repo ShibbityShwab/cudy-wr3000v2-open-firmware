@@ -1,7 +1,7 @@
 From 3439f529ac9b0c1bed620c0cf22cbae7587004a6 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 18/19] ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+Subject: [PATCH 18/21] ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
 
 Add platform SMP bring-up for the HiSilicon Hi5671Y "luofu" SoC
 (Cudy WR3000 v2.0, board R116).  The second Cortex-A9 is released by a

@@ -1,7 +1,7 @@
 From 51929016f1c46efa2ecc67f02e7e07258a1fa9d9 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 09/19] net: ethernet: hisilicon: add partial Luofu GEMAC driver
+Subject: [PATCH 09/21] net: ethernet: hisilicon: add partial Luofu GEMAC driver
 
 Add the resource/binding half of the GEMAC driver for the HiSilicon
 Hi5671Y "luofu" SoC.  The wired path is GEMAC into the internal switch;

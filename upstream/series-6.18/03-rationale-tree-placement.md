@@ -24,14 +24,16 @@ drivers/pinctrl/hisilicon directory).
 | FMC SPI-NAND | 0006 | drivers/spi/spi-luofu-fmc.c | it is a SPI-MEM controller, not a raw-NAND controller; binding under mtd/ (6.18 has no mtd/nand binding dir) |
 | MDIO | 0007 | drivers/net/mdio/mdio-luofu.c | existing mdio-hisi-femac.c precedent |
 | PHY | 0008 | drivers/net/phy/luofu-phy.c | PHYLIB driver matched by PHY ID; no binding on purpose |
-| GEMAC | 0009 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory |
+| GEMAC | 0009, 0020 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory; 0020 adds the phylink/netdev front end |
 | restart | 0010 | drivers/power/reset/luofu-reboot.c | machine restart policy as a platform driver, next to hisi-reboot.c |
 | sysctrl binding | 0010 | Documentation/devicetree/bindings/soc/hisilicon/ | syscon page binding |
 | pinctrl | 0011 | new drivers/pinctrl/hisilicon/ | no hisilicon pinctrl directory exists in 6.18; new dir needs Kconfig source + obj-y entries |
 | thermal | 0012 | drivers/thermal/luofu_tvsensor.c | existing hisi_thermal.c precedent (underscore naming matches that file) |
 | PCIe host | 0013 | drivers/pci/controller/dwc/pcie-luofu.c | DWC host glue belongs with the other DWC host drivers |
-| PIE | 0015 | drivers/net/ethernet/hisilicon/luofu-pie.c | Ethernet data path, next to GEMAC |
-| LSW switch | 0016 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists |
+| PIE | 0015, 0020 | drivers/net/ethernet/hisilicon/luofu-pie.c | Ethernet data path, next to GEMAC; 0020 is the arm-gated ring engine |
+| PIE/GEMAC interface | 0020 | drivers/net/ethernet/hisilicon/luofu-pie.h | private front-end/engine interface shared by luofu-gmac.c and luofu-pie.c; not a stable ABI |
+| LSW switch | 0016, 0021 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists; 0021 is the read-only D1b baseline probe |
+| LSW register map | 0021 | drivers/net/ethernet/hisilicon/luofu-switch-regs.h | measured register/qid-map map with per-item evidence grade |
 | boot selector | 0017 | drivers/soc/hisilicon/luofu-selector.c | SoC sysfs interface, next to kunpeng_hccs.c |
 | board DTS | not in series | future arch/arm/boot/dts/hisilicon/luofu-r116.dts + Makefile | section 4 |
 
@@ -128,9 +130,9 @@ Kconfig is where most review nits will come from.  Current placement
 | LUOFU_FMC | drivers/spi/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST; MTD_SPI_NAND | name should probably be SPI_LUOFU_FMC (subsystem prefix) |
 | LUOFU_MDIO | drivers/net/mdio/Kconfig | depends on HAS_IOMEM && OF_MDIO | no ARCH_LUOFU dependency (bus driver) |
 | LUOFU_PHY | drivers/net/phy/Kconfig | none | PHY-ID matched; tristate |
-| LUOFU_GMAC | drivers/net/ethernet/hisilicon/Kconfig, inside `if NET_VENDOR_HISILICON` + `if ARM \|\| ARM64 \|\| COMPILE_TEST` | depends on OF | net vendor menu convention |
-| LUOFU_PIE | same file, before `endif #HNS3` (inside both ifs) | depends on OF | draft; tristate |
-| LUOFU_SWITCH | same file, immediately before `endif #NET_VENDOR_HISILICON` | depends on OF | outside the ARM if - inconsistent with PIE/GMAC, should move inside for consistency |
+| LUOFU_GMAC | drivers/net/ethernet/hisilicon/Kconfig, inside `if NET_VENDOR_HISILICON` + `if ARM \|\| ARM64 \|\| COMPILE_TEST` | depends on OF, depends on LUOFU_PIE; selects PHYLINK (0020) | net vendor menu convention; 0020 changes CONFIG_PHYLINK m -> y in the resolved config |
+| LUOFU_PIE | same file, before `endif #HNS3` (inside both ifs) | depends on OF | draft arm-gated ring engine (0020); tristate |
+| LUOFU_SWITCH | same file, immediately before `endif #NET_VENDOR_HISILICON` | depends on OF | outside the ARM if - inconsistent with PIE/GMAC, should move inside for consistency; read-only D1b probe (0021) |
 | PCIE_LUOFU_HOST | drivers/pci/controller/dwc/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST, OF, PCI_MSI; select PCIE_DW_HOST | bool |
 | LUOFU_REBOOT | drivers/power/reset/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST; select MFD_SYSCON | bool |
 | PINCTRL_LUOFU | new drivers/pinctrl/hisilicon/Kconfig | depends on ARCH_LUOFU \|\| COMPILE_TEST, OF; select PINMUX, PINCONF, GENERIC_PINCONF | bool |
@@ -152,7 +154,8 @@ Review points:
    maintainers see it.
 3. **LUOFU_SWITCH vs LUOFU_PIE** placement inside the file differs (one in
    the ARM if, one outside).  Move LUOFU_SWITCH inside `if ARM || ARM64 ||
-   COMPILE_TEST` with PIE/GMAC; no functional bug, but reviewers notice.
+   COMPILE_TEST` with PIE/GMAC; no functional bug, but reviewers notice
+   (0009/0015/0020 are inside, 0016/0021 outside).
 4. ~~0017 adds one extra blank line before `config LUOFU_SELECTOR`~~ -
    **fixed 2026-11-18** in the corrected patch (now one blank line); keep it
    clean when editing the patch again.
@@ -176,10 +179,17 @@ Review points:
    new inputs (the seven fixed clocks and the gate parents) are board-DTS
    content, not Kconfig content, and they are not part of this kernel
    series.
+9. 0020 changes one resolved kernel config symbol: LUOFU_GMAC now depends
+   on LUOFU_PIE and selects PHYLINK, so CONFIG_PHYLINK resolves `y`
+   instead of `m`; the PIE-datapath lane verified the config delta as
+   symbol-identical through a canonical `make kernel_oldconfig`.  0021
+   adds no Kconfig symbol (CONFIG_LUOFU_SWITCH already exists).  Both
+   patches add only private headers, which the MAINTAINERS entry lists
+   explicitly (see 02-maintainers-proposal.md).
 
 ## 6. Series order, dependency matrix and bisectability
 
-Consolidated order is 0001 -> 0019.  Compile-time and DT-time
+Consolidated order is 0001 -> 0021.  Compile-time and DT-time
 dependencies:
 
 | patch | needs (compile) | needs (DT behaviour) |
@@ -203,6 +213,8 @@ dependencies:
 | 0017 | - | 0010 (sysctrl binding, shared node) |
 | 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series |
 | 0019 | 0004 (it edits the CRG driver, clock-ID header and YAML binding 0004 adds) | 0004 (CRG syscon node); the seven input clocks, the gate-parent clocks and the two mux parents are board-DTS content, not in this series |
+| 0020 | 0009, 0015 (it rewrites the GEMAC and PIE drivers and bindings they add); 0004/0014 headers at compile time | 0004, 0014 (CRG clock/reset ABI); the ring tables and node enablement are board-DTS content, and the measured inventory is outside the series |
+| 0021 | 0016 (it rewrites the switch driver and binding 0016 adds), 0020 (same ethernet Kconfig file, applied before it), 0004 (CRG state) | 0004, 0014 (CRG gate/reset state, read-only); the 17-window DTS model, CRG phandle and port bitmap are board-DTS content, and the measured inventory is outside the series |
 
 **Bisectability problem: 0014 is too late.**  0014 fixes the CRG reset
 polarity (active-low), and it is placed after 0006, 0007 and 0013, which
@@ -233,10 +245,20 @@ Other ordering constraints:
 - 0018 edits files created by 0001 and maps the syscon nodes from
   0004/0010.  It is not part of the UP-first submission; the staging
   (S1 UP-first, S2 attended) is section 9.
-- 0019 is the last consolidated patch: it extends the CRG provider added
-  by 0004 and builds on the reset-polarity fix 0014.  A real submission
-  either folds it into the CRG series after 0004/0014 or posts it as a
-  follow-up clock-tree patch; it must not precede 0004.
+- 0019 is the last of the clock/peripheral block: it extends the CRG
+  provider added by 0004 and builds on the reset-polarity fix 0014.  A
+  real submission either folds it into the CRG series after 0004/0014 or
+  posts it as a follow-up clock-tree patch; it must not precede 0004.
+- 0020 must follow 0009 and 0015 (it rewrites the drivers and bindings
+  those patches add) and 0004/0014 (the CRG clock/reset ABI it uses).  It
+  is the last of the two net data-path patches.
+- 0021 must follow 0016 (same driver and binding) and 0020 (same
+  `drivers/net/ethernet/hisilicon/Kconfig` file; 0020's insertion comes
+  first, so 0021 applies with a 6-line offset).  It is the last patch of
+  the consolidated series.
+- Both 0020 and 0021 depend on the 2026-11-18 measured inventory
+  (`../../docs/INVENTORY-2026-11-18.md`), which is a bench artifact and not a
+  patch; section 10 records the staging.
 
 ## 7. Conflicts and merge-order hazards
 
@@ -249,20 +271,22 @@ series is split across subsystem trees):
 | arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c} | 0001, 0018 | 0018 edits files introduced by 0001 and is last in the series; no in-series conflict, but a split submission must rebase it on the platform series |
 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | 0003 | ARM core tree; conflicts with any early-boot change |
 | drivers/clk/hisilicon/crg-luofu.c, binding yaml, clock-ID header | 0004, 0014, 0019 | fold 0014 and 0019 into 0004, or post 0019 as the follow-up clock-tree patch after the CRG provider series |
-| drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016 | three insertions in the same two files; order is 0009 -> 0015 -> 0016 in the consolidated tree.  If 0009 lands alone, 0015/0016 need a rebase (they are drafts, so this should not matter soon) |
-| drivers/net/ethernet/hisilicon/Kconfig | 0009/0015 inside `if ARM || ARM64 || COMPILE_TEST`, 0016 outside it | move 0016 inside (see section 5) |
+| drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016, 0020, 0021 | five insertions in the same two files; order is 0009 -> 0015 -> 0016 -> 0020 -> 0021 in the consolidated tree.  0020 makes LUOFU_GMAC depend on LUOFU_PIE, and 0021's Kconfig hunk applies with a 6-line offset because 0020 edits the same file first.  If 0009 lands alone, 0015/0016/0020/0021 need a rebase (they are drafts, so this should not matter soon) |
+| drivers/net/ethernet/hisilicon/Kconfig | 0009/0015/0020 inside `if ARM || ARM64 || COMPILE_TEST`, 0016/0021 outside it | move both outside entries inside (see section 5) |
+| drivers/net/ethernet/hisilicon/luofu-{gmac,pie,switch}.c and their bindings | 0009, 0015, 0016, 0020, 0021 | 0020 and 0021 rewrite files and bindings created by the earlier draft patches; keep the draft block together when rebasing |
 | Documentation/devicetree/bindings/soc/hisilicon/ | 0010 (sysctrl yaml), 0017 (boot-selector yaml) | different files, no textual conflict; both reference the same syscon node in the DTS, so the DTS patch must wait for both |
 | drivers/soc/hisilicon/{Kconfig,Makefile} | 0017 | no conflict, but the Kconfig file is small; rebase against kunpeng changes |
 | drivers/pinctrl/{Kconfig,Makefile} | 0011 | new directory + 2 top-level insertion lines; low risk |
 | drivers/spi, drivers/net/mdio, drivers/net/phy, drivers/thermal, drivers/pci/controller/dwc, drivers/power/reset, drivers/watchdog | one patch each | low risk; subsystem trees move fast, rebase before sending |
 
 The consolidated series applies cleanly in order to pristine 6.18.60
-(validated; only 0008 has offsets - see 04-validation.md).  That does not
-remove the split-submission conflict risk: rebase each subsystem series on
-the receiving tree before posting, especially 0002/0003 (ARM core) and the
-net/ethernet/hisilicon trio.
+(validated; only 0008 and 0021 have offsets - see 04-validation.md).  That
+does not remove the split-submission conflict risk: rebase each subsystem
+series on the receiving tree before posting, especially 0002/0003 (ARM
+core) and the net/ethernet/hisilicon net series, whose draft block
+(0009/0015/0016/0020/0021) is rewritten in place by its own follow-ups.
 
-## 8. Why the series files are numbered 0001-0019
+## 8. Why the series files are numbered 0001-0021
 
 The four-digit filenames under `series/` are a consolidated review form and
 are not the numbering a maintainer will see.  A real submission renumbers
@@ -273,10 +297,11 @@ per subsystem series and always puts bindings before drivers:
     ...
 
 The `series/NNNN-*.patch` files are format-patch style with
-`[PATCH NN/19]` subjects so that `git am` reproduces the commit subjects
+`[PATCH NN/21]` subjects so that `git am` reproduces the commit subjects
 and messages exactly; the mapping table in 01-commit-messages.md maps each
 file back to its source patch in
 `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/`.
+
 ## 9. SMP staging (patch 0018) - UP-first vs attended
 
 Patch 0018 is the only patch in the series that can bring up a second
@@ -318,3 +343,43 @@ existing SYSCTRL/CRG syscon nodes already provide the two pages
 (SMP-RE.md section 5.5).  No CPU hotplug is advertised:
 `CONFIG_HOTPLUG_CPU` stays off, matching the vendor operations table
 (SMP-RE.md sections 3.2 and 7.5).
+
+## 10. PIE and LSW staging (patches 0020 and 0021)
+
+Both patches are follow-ups to drafts already in the series and both
+encode the 2026-11-18 measured inventory.  They are staged as untrusted
+drafts, not as working data paths, and both are grouped with the
+RFC/partial drafts in 00-cover-letter.md and 01-commit-messages.md.
+
+**Measured-inventory dependency.**  0020 and 0021 embed values measured on
+the stock vendor system by the read-only inventory run of 2026-11-18
+(`../../docs/INVENTORY-2026-11-18.md`): the PIE channel/ring/IRQ
+configuration for 0020, and the LSW 30-word baseline plus the 384 qid-map
+words for 0021.  That measurement is the dependency: it is not in any
+patch and cannot be re-derived from the tree, and both drivers are
+fail-closed when the measured state does not hold.  A second boot/unit
+inventory is still owed before the baseline can be called stable.
+
+**Ordering.**  0020 must follow 0015 (it rewrites `luofu-pie.c` and its
+binding) and 0009 (it rewrites `luofu-gmac.c` and its binding/Kconfig
+entry).  0021 must follow 0016 (it rewrites `luofu-switch.c` and its
+binding) and applies after 0020, because 0020 edits the same
+`drivers/net/ethernet/hisilicon/Kconfig` first (it applies with a 6-line
+offset in the consolidated series).  Both sit after 0004/0014, whose CRG
+clock/reset ABI they consume (0021 read-only).
+
+**Staging.**  0020 keeps the PIE engine behind the kernel command-line
+`luofu_pie.arm=1` gate: probe validates the resources and ring tables and
+then refuses with -EOPNOTSUPP before the first register write, both
+devicetree nodes stay disabled, and the armed path (the only PIE MMIO
+write path in the series) has never run.  The RX completion decode and the
+internal-switch egress map are still [U], so no frame is delivered even
+when armed.  0021 contains no `writel()`, enables no clock, drives no
+reset and always refuses probe; it validates the measured powered state,
+the baseline words and the qid maps read-only and never programs a table.
+The write campaigns that gate them are one attended, recovery-armed PIE
+arm session (`target-skeleton/docs/port-notes/pie/SUMMARY.md` section 6)
+and the LSW W2-W6 sequence (`target-skeleton/docs/port-notes/lsw/SUMMARY.md`
+section 5, LSW-SPEC.md section 12.3).  Until those run, both patches are
+`[RFC PATCH]` design-review material only; 0021's read-only property means
+it can be reviewed without any write risk.

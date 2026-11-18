@@ -60,6 +60,10 @@ SERIES = [
     ("0018-arm-mach-hisilicon-smp", "RFC (attended)"),
     ("0019-arm-clk-luofu-clock-tree",
      "ready-for-review (read-only clock tree)"),
+    ("0020-net-pie-datapath-luofu",
+     "draft (do not merge; arm-gated data path)"),
+    ("0021-net-lsw-init-luofu",
+     "draft (do not merge; read-only baseline probe)"),
 ]
 
 
@@ -89,6 +93,8 @@ GROUPS = [
         "0010-arm-luofu-restart",
         "0015-net-pie-luofu",
         "0016-net-lsw-luofu",
+        "0020-net-pie-datapath-luofu",
+        "0021-net-lsw-init-luofu",
     ]),
     ("Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)", [
         "0018-arm-mach-hisilicon-smp",
@@ -209,6 +215,16 @@ def mapping_doc(series: list, hashes: dict) -> str:
     add("  question, or an interface that has to be reviewed first.")
     add("- RFC (partial, refuses probe) / draft (do not merge): explicitly not")
     add("  mergeable; posted for direction only.")
+    add("- draft (do not merge; arm-gated data path): 0020 is the first patch")
+    add("  that contains writes to the PIE engine.  They are reachable only")
+    add("  through the kernel command line opt-in luofu_pie.arm=1, the probe")
+    add("  refuses before the first write otherwise, both devicetree nodes stay")
+    add("  disabled, and the armed path has never executed.  RX completion")
+    add("  decode is still [U].")
+    add("- draft (do not merge; read-only baseline probe): 0021 never writes a")
+    add("  register, enables no clock and drives no reset; it validates the")
+    add("  measured LSW baseline and the derived qid maps read-only and always")
+    add("  refuses probe.  The attended W2-W6 write campaign is still owed.")
     add("- RFC (attended): host-validated platform code whose acceptance requires")
     add("  a single-variable, recovery-armed bench session; not part of the")
     add("  UP-first mergeable set.")

@@ -110,3 +110,18 @@ patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
 patching file drivers/clk/hisilicon/crg-luofu.c
 patching file include/dt-bindings/clock/hisilicon,luofu-crg.h
 PATCH_RC[0019-arm-clk-luofu-clock-tree.patch]=0
+### [20] 0020-net-pie-datapath-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+PATCH_RC[0020-net-pie-datapath-luofu.patch]=0
+### [21] 0021-net-lsw-init-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+Hunk #1 succeeded at 188 (offset 6 lines).
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+PATCH_RC[0021-net-lsw-init-luofu.patch]=0

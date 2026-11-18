@@ -1,4 +1,4 @@
-# [PATCH 00/19] ARM: hisilicon: add Hi5671Y "luofu" (Cudy WR3000 v2) platform and driver support
+# [PATCH 00/21] ARM: hisilicon: add Hi5671Y "luofu" (Cudy WR3000 v2) platform and driver support
 
 > Submission form for review, not a release. **Nothing in this series has
 > ever run on hardware.** Read "Test evidence" and "No hardware validation"
@@ -6,7 +6,7 @@
 
 ## What this series is
 
-This is a 19-patch kernel series for the HiSilicon Hi5671Y "luofu" SoC
+This is a 21-patch kernel series for the HiSilicon Hi5671Y "luofu" SoC
 (2x Cortex-A9, PL310 L2, 128 MiB DDR3) and the Cudy WR3000 v2.0 board
 (board R116, 128 MiB NAND, Hi5622V100 Wi-Fi).  The unit ships OpenWrt
 22.03.6 on kernel 5.10.201 and its stock U-Boot boots a FIP container from
@@ -30,15 +30,21 @@ The series adds:
   the stock vendor kernel and has never run on our kernel.  It is staged
   separately and is not part of the UP-first mergeable set;
 - RFC or partial drivers for the blocks where the hardware model is not
-  complete (0006, 0009-0011, 0013, 0015-0017).  These are explicitly
-  marked and several refuse to probe.
+  complete (0006, 0009-0011, 0013, 0015-0017, 0020, 0021).  These are
+  explicitly marked and several refuse to probe;
+- the first draft of the wired data path (0020: PIE ring engine plus the
+  GEMAC netdev/phylink front end) and the read-only internal-switch
+  baseline probe (0021).  Both are drafts built on the 2026-11-18
+  read-only register inventory of the stock vendor system; 0020 is
+  fail-closed behind a command-line arm gate that has never been used,
+  and 0021 never writes a register at all.
 
 It deliberately does **not** contain: the board DTS, the SMP devicetree
 enable-method (0018 is inert without it; it belongs to the attended board
-DTS stage), the Wi-Fi driver, the internal-switch data path, the GEMAC
-TX/RX data path, the PIE data path, or any OpenWrt target/image-recipe
-files.  See "Scope split" and
-"Dependencies".
+DTS stage), the Wi-Fi driver, a working or boot-tested internal-switch or
+GEMAC/PIE data path (0020 is an arm-gated draft that has never run, and
+0021 only validates measured state read-only), or any OpenWrt
+target/image-recipe files.  See "Scope split" and "Dependencies".
 
 ## Target hardware
 
@@ -94,13 +100,35 @@ bootloader env selects the pair, the SYSCTRL cell is its opposite-pair/failed-
 boot record, and a boot-time recorder in the target image is required for
 stability - but the protocol is not hardware-validated).
 
-**4. RFC / partial drafts, do not merge** - 0009, 0010, 0015, 0016
-GEMAC (binding/resource half only; probe refuses, no netdev, no data
-path), machine restart (provisional CRG reset command), PIE packet engine
-(ring scaffolding only; probe refuses), and the internal LSW switch (D1a
-resource/binding skeleton; probe refuses).  These are included so the
-design can be reviewed as a whole; they are not submission candidates
-until the hardware inventory/write set exists.
+**4. RFC / partial drafts, do not merge** - 0009, 0010, 0015, 0016,
+0020, 0021
+GEMAC (0009: binding/resource half only; probe refuses, no netdev, no
+data path), machine restart (0010: provisional CRG reset command), PIE
+packet engine (0015: ring scaffolding that refuses to probe), the
+internal LSW switch (0016: D1a resource/binding skeleton that refuses to
+probe), and the two follow-up drafts built on the 2026-11-18 read-only
+register inventory of the stock vendor system:
+
+- 0020 replaces the PIE scaffolding with the recovered ring engine and
+  adds the GEMAC netdev/phylink front end that forwards transmit into it.
+  The data path is fail-closed: probe returns -EOPNOTSUPP before the
+  first register write unless `luofu_pie.arm=1` is passed on the kernel
+  command line, both devicetree nodes stay disabled, and the armed path
+  (the only PIE MMIO write path in the series) has never executed.  The
+  RX completion status/length decode is still [U], so no received frame
+  is handed to the stack, and frames cannot reach a wire until the
+  internal-switch egress map exists.
+- 0021 turns the LSW skeleton into a read-only D1b baseline probe: it
+  validates the measured powered state, 30 measured baseline words and
+  both derived qid maps against all 384 measured table words, then
+  refuses.  It contains no `writel()`, enables no clock, drives no reset
+  and registers no netdev; the values it carries were read from the
+  stock vendor system by a fail-closed read-only inventory tool, not by
+  the driver.  The attended W2-W6 write campaign is still owed.
+
+These are included so the design can be reviewed as a whole; they are not
+submission candidates until the hardware write experiments (one attended
+PIE arm-gate session; the LSW W3-W6 campaign) have run.
 
 **5. SMP bring-up (RFC, attended; not in the UP-first set)** - 0018
 The CPU1 release (pen word, CRG resume bits, wakeup IPI) is decoded from
@@ -145,11 +173,12 @@ cpu@0 node.
   be folded into it before a real submission; 0010 introduces the SYSCTRL
   binding that 0017 also uses.  0018 maps the pen/resume pages through
   the CRG syscon node (0004) and the SYSCTRL syscon node (0010), and stays
-  inert if either is missing.  0019 is last: it extends the CRG provider
-  added by 0004 and builds on the 0014 reset-polarity fix; its binding
-  makes seven input clocks (clocks/clock-names) required on the CRG node,
-  and the board DTS that provides them is OpenWrt-target content, not part
-  of this kernel series.
+  inert if either is missing.  0019 extends the CRG provider added by 0004
+  and builds on the 0014 reset-polarity fix; its binding makes seven input
+  clocks (clocks/clock-names) required on the CRG node, and the board DTS
+  that provides them is OpenWrt-target content, not part of this kernel
+  series.  0020 and 0021 are last; see the two bullets below for their
+  ordering constraints.
 - 0018's devicetree enable-method (`hisilicon,luofu-smp`) is not in this
   series: the board DTS is OpenWrt-target content and is excluded above.
   A DT without the property boots UP (unmatched CPU method) - that is the
@@ -163,6 +192,23 @@ cpu@0 node.
   gemacN, lsw_dp, lsw_pfe, efuse_ring) and the two mux-parent clocks; the
   target DTS gets them from the clock-tree lane, and an upstream DTS
   series must add them before the CRG can probe.
+- 0020 depends on 0009 and 0015: it rewrites `luofu-gmac.c` and its
+  Kconfig entry and YAML binding (0009) and the PIE driver and binding
+  (0015), so both must precede it; 0004/0014 provide the CRG clock/reset
+  ABI it consumes.  Its ring tables and node enablement are board-DTS
+  content, not part of this kernel series.
+- 0021 depends on 0016 (it extends the same driver and YAML binding) and
+  applies after 0020, which edits the same
+  `drivers/net/ethernet/hisilicon/Kconfig` first (it therefore applies
+  with a small line offset in that file); 0004/0014 provide the CRG
+  gate/reset state it checks read-only.  Its 17-window DTS model, the CRG
+  phandle and the port bitmap are board-DTS content, not part of this
+  kernel series.
+- Both 0020 and 0021 encode facts measured by the 2026-11-18 read-only
+  inventory of the stock vendor system
+  (`../../docs/INVENTORY-2026-11-18.md`): that artifact is the dependency
+  for the numbers, and a second boot/unit inventory is still owed before
+  the measured baseline can be called stable.
 - The FMC controller (0006) needs the ESMT F50L1G41LC SPI-NAND chip entry,
   which is a v6.19 addition; it is not in 6.18.60 and is currently supplied
   by OpenWrt's generic backport 434.  Do not post 0006 before that entry
@@ -182,13 +228,13 @@ cpu@0 node.
 
 | # | check | result | evidence |
 | --- | --- | --- | --- |
-| 1 | sequential apply of the 19 series files to pristine 6.18.60 | patch(1) 19/19 RC=0; git am 19/19 RC=0; resulting trees identical; 0 fuzz, 0 rejects | 04-validation.md, validation/ |
-| 2 | offset note | only 0008 has offsets (-75, -12 in drivers/net/phy/{Kconfig,Makefile}) because the source patch was generated against an OpenWrt-patched kernel tree; content applies cleanly | 04-validation.md |
-| 3 | checkpatch.pl --no-tree (series patch mode, default and --strict) | 0 errors; 49 warnings, all explained (15 MAINTAINERS, 16 binding split, 16 long lines, 2 help paragraphs; plus 6 strict-only CHECKs) | 04-validation.md, validation/checkpatch-*.log |
-| 4 | full kernel compile of 0001-0019 (clock-tree lane, 2026-11-18) | make target/linux/prepare RC=0 (patch 019 applied, no rej/orig); make target/linux/compile RC=0, 0 warnings and 0 errors under CONFIG_WERROR=y, zImage 3,264,560 B sha256 4456b0ec...; crg-luofu.o built with luofu_crg_pll_recalc_rate/luofu_crg_mux_get_parent, CONFIG_LUOFU_CRG=y; no new Kconfig symbol (config-6.18 re-derivation byte-idempotent 4106877f..., kernel .config byte-identical to the 001-0018 lane); TEXT_OFFSET contract 0x80608000 unchanged | SKELETON-SMOKE.md (clock-tree session), target-skeleton/docs/port-notes/clk/SUMMARY.md |
-| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped); the corrected boot-selector YAML re-checked 2026-11-18; the extended CRG YAML (0019) checked 2026-11-18; 0018 adds no binding and 0019 no new YAML file | SKELETON-SMOKE.md sessions 5-12, A/B + selector-fix + SMP + clock-tree sessions |
-| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane); 11,346 B sha256 a31ab53f... with the seven CRG fixed clocks and the SMP line (clock-tree lane) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree sessions), port-notes/smp/SUMMARY.md, port-notes/clk/SUMMARY.md |
-| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18); 0019 adds no symbol and the 001-0019 re-derivation is byte-idempotent at the same hash | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree sessions) |
+| 1 | sequential apply of the 21 series files to pristine 6.18.60 | patch(1) 21/21 RC=0; git am 21/21 RC=0; resulting trees identical; 0 fuzz, 0 rejects | 04-validation.md, validation/ |
+| 2 | offset note | 0008 has two offsets (-75, -12 in drivers/net/phy/{Kconfig,Makefile}) because the source patch was generated against an OpenWrt-patched kernel tree, and 0021 has one 6-line offset in drivers/net/ethernet/hisilicon/Kconfig because 0020 edits that file first; all content applies cleanly | 04-validation.md |
+| 3 | checkpatch.pl --no-tree (series patch mode, default and --strict) | 0 errors; 53 warnings, all explained (17 MAINTAINERS, 18 binding split, 16 long lines, 2 help paragraphs; plus 6 strict-only CHECKs) | 04-validation.md, validation/checkpatch-*.log |
+| 4 | full kernel compile of 0001-0020 and 0001-0021 (PIE-datapath and LSW-init lanes, 2026-11-18) | both series prepare RC=0 (no .rej/.orig from the new patches) and compile RC=0, 0 warnings and 0 errors under CONFIG_WERROR=y; zImage 3,276,656 B sha256 dfc7b753... (001-0020) and 3,279,096 B sha256 96b927d3... (001-0021); luofu-pie.o/luofu-gmac.o/luofu-switch.o built, PIE/GEMAC/phylink/switch symbols in System.map; CONFIG_LUOFU_PIE=y, CONFIG_LUOFU_GMAC=y, CONFIG_LUOFU_SWITCH=y, CONFIG_PHYLINK=y; config deltas symbol-identical and byte-idempotent; TEXT_OFFSET contract 0x80608000 unchanged. The earlier 001-0019 clock-tree build remains current (prepare RC=0, compile RC=0, zImage 3,264,560 B sha256 4456b0ec..., CONFIG_LUOFU_CRG=y) | SKELETON-SMOKE.md (clock-tree, PIE-datapath and LSW-init sessions), target-skeleton/docs/port-notes/{clk,pie,lsw}/SUMMARY.md |
+| 5 | dt_binding_check per new YAML | RC=0 for every binding (dtschema 2026.9; yamllint unavailable, that one lint step skipped); the corrected boot-selector YAML re-checked 2026-11-18; the extended CRG YAML (0019), PIE/GMAC YAML (0020) and switch YAML (0021) checked 2026-11-18 in their lanes; 0018/0019/0020/0021 add no new YAML file | SKELETON-SMOKE.md sessions 5-12, A/B + selector-fix + SMP + clock-tree + PIE-datapath + LSW-init sessions |
+| 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane); 11,346 B sha256 a31ab53f... with the seven CRG fixed clocks and the SMP line (clock-tree lane); 11,430 B sha256 d3a9dd86... with the PIE ring tables (PIE-datapath lane); 11,516 B sha256 43c1e94b... with the switch windows and port bitmap (LSW-init lane) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init sessions), port-notes/{smp,clk,pie,lsw}/SUMMARY.md |
+| 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18); 0019 adds no symbol and the 001-0019 re-derivation is byte-idempotent at the same hash; the 001-0020 delta changes only CONFIG_PHYLINK m -> y, and 0021 adds no symbol (001-0021 re-derivation symbol-identical/byte-idempotent 76aaafc8...) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init sessions) |
 | 8 | OpenWrt image chain (not kernel submission scope) | make world RC=0 in an isolated clone, reproducible container | SKELETON-SMOKE.md (image-recipe session) |
 | 9 | hardware | none. no boot, no probe-on-silicon, no register I/O, no CPU1 release, no UART/TFTP/flash, no device | - |
 
@@ -209,12 +255,14 @@ decoded CRG PLL rate equation and control-word values, the mux and
 gate parents (none of the clock rates or parents has ever been read back
 on this board), the FMC ECC/OOB/quad-enable semantics, the pinctrl
 default/consumer states,
-the PCIe wrapper/link bring-up, the GEMAC ring/DMA model, the PIE channel
-model, the LSW register/queue/port-id model, the restart command sequence
-and selector protocol, and the SMP pen-word consumer, CRG resume-bit
-semantics and SCU pre-state (SMP-RE.md sections 7-10).  Reviewers should
-treat every driver as an RFC until the corresponding hardware step in
-TARGET-DESIGN.md section 10 is done.
+the PCIe wrapper/link bring-up, the GEMAC/PIE ring, descriptor and
+status/length model (0020 cannot decode the RX completion status yet),
+the LSW powered-state transition and qid-map write effects (W3-W6; 0021
+only validates the measured read-only baseline), the restart command
+sequence and selector protocol, and the SMP pen-word consumer, CRG
+resume-bit semantics and SCU pre-state (SMP-RE.md sections 7-10).
+Reviewers should treat every driver as an RFC until the corresponding
+hardware step in TARGET-DESIGN.md section 10 is done.
 
 ## Draft / refusing status (explicit)
 
@@ -224,6 +272,8 @@ TARGET-DESIGN.md section 10 is done.
 | 0010 restart | **RFC / PROVISIONAL**: selector save is measured, but the CRG software-reset command pair and its write order/width were never measured. Must not merge without recovery-armed hardware validation. |
 | 0015 PIE | **DRAFT**: scaffolding only; probe allocates nothing permanent and returns -EOPNOTSUPP before touching a register. Not mergeable. |
 | 0016 LSW | **DRAFT / D1a skeleton**: validates 15 windows, clocks, resets and the switchdev port model, then refuses with -EOPNOTSUPP before any register access. Not mergeable. |
+| 0020 PIE datapath + GEMAC front end | **DRAFT / ARM-GATED**: implements the coherent PIE rings, IRQ/NAPI scaffolding, TX producer and the GEMAC netdev/phylink front end, but every PIE MMIO write is behind the `luofu_pie.arm=1` command-line opt-in and probe refuses before the first write otherwise; both DT nodes stay disabled and the armed path has never run. The RX completion decode and the internal-switch egress map are [U], so no frame is delivered. Not mergeable. |
+| 0021 LSW baseline probe | **DRAFT / READ-ONLY**: validates the measured powered state, 30 baseline words and all 384 measured qid-map words, contains no register write, enables no clock, drives no reset, registers no netdev, and still refuses probe. The attended W2-W6 write campaign is owed. Not mergeable. |
 | 0013 PCIe | **RFC**: encodes the measured hard access rules (never read the misc window, aligned dwords only) but has never enumerated an endpoint. |
 | 0017 selector | **RFC**: new sysfs ABI. The recorded-pair contract is reconstructed from local evidence (docs/SELECTOR-0x21.md: env bootflag selects, the cell records, 0x21 is the project's bench value and never persists) and the store now does the loader-style low-byte read-modify-write; post-boot stability depends on a boot-time recorder in the target image (not this series), and the env re-stamp and the cell's upper 24 bits remain unmeasured. ABI must be reviewed before freezing. |
 | 0006 FMC | **RFC**: storage path is critical and its ECC/OOB/quad-enable semantics are unverified. |
@@ -233,7 +283,7 @@ TARGET-DESIGN.md section 10 is done.
 
 ## Recommended submission sequence
 
-Do not post this consolidated 19-patch file set as one series.  It is
+Do not post this consolidated 21-patch file set as one series.  It is
 consolidated here so the whole design can be reviewed.  A real submission
 splits by subsystem and by readiness:
 
@@ -251,10 +301,14 @@ splits by subsystem and by readiness:
    0006 FMC (only after the v6.19 ESMT chip entry lands), 0013 PCIe,
    0010 restart + 0017 selector (needs the sysupgrade protocol story and the
    target's boot-time pair recorder).
-4. **Do not send yet:** 0009 GEMAC, 0015 PIE, 0016 LSW.  They are
-   refusing/partial drafts; post as RFC only when asking for design
-   direction, clearly marked `[RFC PATCH]`, and never as a working
-   Ethernet/switch port.
+4. **Do not send yet:** 0009 GEMAC, 0015 PIE, 0016 LSW, and their
+   follow-up drafts 0020 (PIE datapath + GEMAC front end) and 0021 (LSW
+   read-only baseline probe).  They are refusing/partial drafts; post as
+   RFC only when asking for design direction, clearly marked
+   `[RFC PATCH]`, and never as a working Ethernet/switch port.  0020 is
+   additionally blocked on the attended arm-gate session and 0021 on the
+   LSW W3-W6 write campaign; 0021 is read-only, so a reviewer can inspect
+   it without any write risk.
 5. **SMP only after the attended bring-up (0018):** do not include it in
    the UP-first set.  The S1 submission is 0001-0003 without the
    devicetree enable-method (and, upstream, with a single cpu@0 node); the
@@ -274,12 +328,14 @@ carried as an OpenWrt target patch stack.
 
 ## Known review items to fix before sending
 
-1. **Split bindings out of driver patches.** checkpatch warns 16 times
+1. **Split bindings out of driver patches.** checkpatch warns 18 times
    that DT binding docs/includes should be a separate patch.  One binding
    patch per driver, before its driver patch; the dt-bindings clock header
-   and binding hunks of 0004 and 0019 also go with the binding.
+   and binding hunks of 0004/0019, and the PIE/GMAC/switch binding hunks of
+   0020/0021, also go with their bindings.
 2. **Add the MAINTAINERS entry** (02-maintainers-proposal.md); checkpatch
-   warns 15 times about new files without it (0018 adds platsmp.c).
+   warns 17 times about new files without it (0018 adds platsmp.c, 0020
+   adds luofu-pie.h and 0021 adds luofu-switch-regs.h).
 3. **Mechanical checkpatch cleanups:** wrap the 16 over-long CRG clock
    table lines (112 > 100 columns), add comments to the spinlock_t
    declarations (the two in 0004 plus the two 0019 re-adds when it rewrites
@@ -310,6 +366,17 @@ carried as an OpenWrt target patch stack.
    (`CONFIG_HOTPLUG_CPU` stays off, matching the vendor ops table); and
    the method string is `hisilicon,luofu-smp`, not the vendor's
    `hisilicon,hsan_smp`.
+10. **PIE/LSW (0020/0021) review answers:** the PIE MMIO write path is
+   reachable only through the `luofu_pie.arm=1` command-line opt-in, the
+   probe refuses before the first write otherwise, and both devicetree
+   nodes stay disabled; the ring tables are binding arrays of measured
+   values, not board policy; the RX completion status/length decode is
+   still [U] and no frame is delivered.  The LSW probe is read-only, its
+   baseline values are facts of one measured vendor boot (not yet a stable
+   platform property), the two DDR windows are engine-consumed memory and
+   not register pages, and the qid-map write geometry is documented but
+   not executed.  The MAINTAINERS patterns must cover the new
+   `luofu-pie.h` and `luofu-switch-regs.h` headers.
 
 ## Where the evidence lives
 
@@ -318,9 +385,13 @@ carried as an OpenWrt target patch stack.
   03-rationale-tree-placement.md, 04-validation.md, README.md,
   commit-messages/, series/, tools/, validation/.
 - Recorded validation sessions: opensource/docs/SKELETON-SMOKE.md
-  (third to twelfth sessions, image-recipe, A/B, selector-fix and SMP
-  sessions), opensource/docs/TARGET-DESIGN.md sections 4-7 and 9-12,
+  (third to twelfth sessions, image-recipe, A/B, selector-fix, SMP,
+  clock-tree, PIE-datapath and LSW-init sessions),
+  opensource/docs/TARGET-DESIGN.md sections 4-7 and 9-12,
   opensource/docs/SMP-RE.md (SMP decode and staging),
+  opensource/docs/PIE-DATAPATH.md and opensource/docs/LSW-SPEC.md
+  (register/data-path models), opensource/docs/INVENTORY-2026-11-18.md
+  (the measured baseline that 0020/0021 embed),
   opensource/target-skeleton/docs/port-notes/*/SUMMARY.md.
 - Current live state and the publication boundary:
   opensource/docs/PUBLISH-READINESS.md (NOT READY: vendor .o history

@@ -1,0 +1,53 @@
+net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+
+Complete the HiSilicon Hi5671Y "luofu" wired data path as a paired GEMAC
+netdev front end and PIE packet-engine ring backend, built from the
+2026-11-18 read-only register inventory of the stock vendor system
+(INVENTORY-2026-11-18.md section 2, PIE-DATAPATH.md sections 3-5).
+
+The PIE driver now implements the coherent descriptor rings and the
+recovered channel bring-up for the measured board configuration: two RX
+channels of 256 32-byte descriptors with 1536-byte buffers and two TX
+channels of 4096 descriptors.  Ring geometry comes from the new
+hisilicon,rx-ring and hisilicon,tx-ring binding tables; the DMA mask is
+32-bit and all descriptors and RX buffers are coherent allocations.
+Initialization follows the recovered v250 register sequence: all eight
+interrupt masks set first, then only the wired channels unmasked, then
+the global RX enable.  The receive handler masks and write-1-clears the
+status word and schedules NAPI; the poll recycles descriptors by the RX
+read pointer and counts the completions as drops.  Transmit maps the
+skb, writes only the recovered length/address/owner words (the offload
+words stay zero), advances a free-running pointer and rings the
+per-channel doorbell; TX completion is poll-only because the vendor
+engine has no TX interrupt.  WoC rings and channels, ACP attributes and
+the GRO ring are deliberately not programmed.
+
+The data path is fail-closed.  probe() validates the resources and the
+ring tables and then returns -EOPNOTSUPP before the first register
+write unless luofu_pie.arm=1 is on the kernel command line, and the
+board devicetree keeps both nodes disabled.  The armed path is the only
+code that writes PIE MMIO: it enables the PIE clock, releases the CRG
+reset, requests the four interrupt vectors and registers NAPI, then
+reads back every programmed register and halts the engine if a read
+does not match.  The GEMAC front end registers its net_device and
+phylink instance only when the PIE backend is armed; its only MAC
+writes are the measured 1 Gbps link-up words, and mac_config() stays a
+no-op because touching the block from phylink's config callback hung
+the AHB bus in the lab.  Frames still cannot reach a wire: the RX
+completion status/length fields are still [U] and the internal-switch
+egress port/qid map does not exist.
+
+Kconfig now makes LUOFU_GMAC depend on LUOFU_PIE and select PHYLINK; the
+PIE binding gains the measured ring tables and the GEMAC binding
+describes the front-end/engine split.
+
+This is a draft and not mergeable.  Every register value was measured on
+the stock vendor system, not by this code; no PIE or GEMAC register has
+been written, the engine has never been armed, no frame has been sent or
+received, and nothing has booted.  The first write needs the attended,
+recovery-armed bench session listed in the lane summary.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors under CONFIG_WERROR=y); both bindings pass dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

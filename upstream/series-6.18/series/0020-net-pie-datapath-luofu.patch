@@ -1,0 +1,2221 @@
+From dd314bf1f1de507654d29d7230bff76dbc5e3503 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 08:20:00 +0700
+Subject: [PATCH 20/21] net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+
+Complete the HiSilicon Hi5671Y "luofu" wired data path as a paired GEMAC
+netdev front end and PIE packet-engine ring backend, built from the
+2026-11-18 read-only register inventory of the stock vendor system
+(INVENTORY-2026-11-18.md section 2, PIE-DATAPATH.md sections 3-5).
+
+The PIE driver now implements the coherent descriptor rings and the
+recovered channel bring-up for the measured board configuration: two RX
+channels of 256 32-byte descriptors with 1536-byte buffers and two TX
+channels of 4096 descriptors.  Ring geometry comes from the new
+hisilicon,rx-ring and hisilicon,tx-ring binding tables; the DMA mask is
+32-bit and all descriptors and RX buffers are coherent allocations.
+Initialization follows the recovered v250 register sequence: all eight
+interrupt masks set first, then only the wired channels unmasked, then
+the global RX enable.  The receive handler masks and write-1-clears the
+status word and schedules NAPI; the poll recycles descriptors by the RX
+read pointer and counts the completions as drops.  Transmit maps the
+skb, writes only the recovered length/address/owner words (the offload
+words stay zero), advances a free-running pointer and rings the
+per-channel doorbell; TX completion is poll-only because the vendor
+engine has no TX interrupt.  WoC rings and channels, ACP attributes and
+the GRO ring are deliberately not programmed.
+
+The data path is fail-closed.  probe() validates the resources and the
+ring tables and then returns -EOPNOTSUPP before the first register
+write unless luofu_pie.arm=1 is on the kernel command line, and the
+board devicetree keeps both nodes disabled.  The armed path is the only
+code that writes PIE MMIO: it enables the PIE clock, releases the CRG
+reset, requests the four interrupt vectors and registers NAPI, then
+reads back every programmed register and halts the engine if a read
+does not match.  The GEMAC front end registers its net_device and
+phylink instance only when the PIE backend is armed; its only MAC
+writes are the measured 1 Gbps link-up words, and mac_config() stays a
+no-op because touching the block from phylink's config callback hung
+the AHB bus in the lab.  Frames still cannot reach a wire: the RX
+completion status/length fields are still [U] and the internal-switch
+egress port/qid map does not exist.
+
+Kconfig now makes LUOFU_GMAC depend on LUOFU_PIE and select PHYLINK; the
+PIE binding gains the measured ring tables and the GEMAC binding
+describes the front-end/engine split.
+
+This is a draft and not mergeable.  Every register value was measured on
+the stock vendor system, not by this code; no PIE or GEMAC register has
+been written, the engine has never been armed, no frame has been sent or
+received, and nothing has booted.  The first write needs the attended,
+recovery-armed bench session listed in the lane summary.
+
+Host-compiled against linux-6.18.60 in the target lane (0 warnings,
+0 errors under CONFIG_WERROR=y); both bindings pass dt_binding_check.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ drivers/net/ethernet/hisilicon/Kconfig             |   28 
+ drivers/net/ethernet/hisilicon/luofu-pie.c         | 1321 ++++++++++++++++----
+ drivers/net/ethernet/hisilicon/luofu-pie.h         |   22 
+ drivers/net/ethernet/hisilicon/luofu-gmac.c        |  391 +++++-
+ .../bindings/net/hisilicon,luofu-pie.yaml          |   40 +
+ .../bindings/net/hisilicon,luofu-gmac.yaml         |   16 
+ 6 files changed, 1434 insertions(+), 384 deletions(-)
+
+diff --git a/drivers/net/ethernet/hisilicon/Kconfig b/drivers/net/ethernet/hisilicon/Kconfig
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -26,14 +26,18 @@
+ 	  This selects the hix5hd2 mac family network device.
+ 
+ config LUOFU_GMAC
+-	tristate "HiSilicon Luofu GEMAC support (partial, no data path)"
++	tristate "HiSilicon Luofu GEMAC support"
+ 	depends on OF
++	depends on LUOFU_PIE
++	select PHYLINK
+ 	help
+ 	  Platform driver for the HiSilicon Hi5671Y "luofu" GEMAC. This is
+-	  a partial port: it claims the documented binding and validates the
+-	  platform resources, but the TX/RX ring DMA data path is not
+-	  implemented, so probe refuses to register a network device. The
+-	  board devicetree keeps the MAC nodes disabled until the data path
++	  a draft port: the MAC owns the net_device and phylink front end
++	  and forwards its transmit path to the PIE packet engine
++	  (CONFIG_LUOFU_PIE), which owns the DMA rings. The driver refuses
++	  to register a network device unless the PIE backend has armed its
++	  data path, and the board devicetree keeps the MAC nodes disabled.
++	  Frames cannot reach a wire until the internal switch egress map
+ 	  exists. Say N unless you are working on that port.
+ 
+ config HISI_FEMAC
+@@ -154,16 +158,18 @@
+ endif #HNS3
+ 
+ config LUOFU_PIE
+-	tristate "HiSilicon Luofu PIE packet engine (draft, data path disabled)"
++	tristate "HiSilicon Luofu PIE packet engine (draft ring engine)"
+ 	depends on OF
+ 	help
+ 	  Platform driver for the Hi5671Y "luofu" PIE packet engine, the
+ 	  DMA/ring half of the wired Ethernet data path.  This is a draft
+-	  port: it validates the described resources and builds the ring
+-	  bookkeeping, then refuses to arm the engine until the register and
+-	  channel model has been verified against the running hardware.  The
+-	  board devicetree keeps the node disabled.  Say N unless you are
+-	  working on that port.
++	  port: it implements the recovered coherent descriptor rings,
++	  channel initialization, interrupt/NAPI receive path and a TX
++	  producer, but the RX completion decode is still unknown and the
++	  internal switch egress map does not exist.  The engine therefore
++	  starts only when "luofu_pie.arm=1" is given on the kernel command
++	  line (attended bench bring-up) and the board devicetree keeps the
++	  node disabled.  Say N unless you are working on that port.
+ 
+ endif # ARM || ARM64 || COMPILE_TEST
+ 
+diff --git a/drivers/net/ethernet/hisilicon/luofu-pie.c b/drivers/net/ethernet/hisilicon/luofu-pie.c
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -1,170 +1,145 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * HiSilicon Hi5671Y "luofu" PIE packet engine - draft scaffolding.
++ * HiSilicon Hi5671Y "luofu" PIE packet engine - ring-engine draft.
+  *
+- * STATUS: DRAFT SCAFFOLDING, DATA PATH NOT STARTED.  The driver claims the
+- * documented binding, validates the platform resources, allocates the
+- * coherent descriptor rings and then refuses to bring the engine up.  The
+- * board devicetree node stays disabled; enabling it only logs the refusal.
++ * STATUS: DRAFT DATA PATH.  The engine model below is written from the
++ * recovered v250 register/descriptor shape and from the first read-only
++ * register inventory of the running vendor system (2026-11-18).  Arming the
++ * engine writes MMIO, enables a CRG clock, releases a CRG reset and requests
++ * interrupts, so it is deliberately behind an explicit opt-in: probe only
++ * starts the data path when the "arm" module parameter is set, and the board
++ * devicetree keeps the node disabled.  With the gate closed the probe
++ * validates every resource and refuses with -EOPNOTSUPP without touching the
++ * engine registers, the clock, the reset or an interrupt.
+  *
+- * The engine owns the DMA rings, the NAPI instances and the per-port context
+- * table of the wired data path; the GEMAC instances are phylink front ends
+- * that hand frames to it.  This file is the ring-engine half of that port.
++ * What is implemented (all host-compiled only, never run on hardware):
+  *
+- * Why probe stops before the first register write
+- * -----------------------------------------------
+- * Arming the engine means programming its MMIO: global control, per-channel
+- * ring base/size, RX write pointers and interrupt masks, then the TX/RX
+- * doorbells.  The register offsets have been recovered from the vendor
+- * module, but (a) the meaning of several per-channel words is not known,
+- * (b) the ring-pair words the vendor driver consumes from its board overlay
+- * are read as log2(descriptor count) only by inference from the allocation
+- * arithmetic, and (c) the state this block is left in by the bootloader has
+- * never been inventoried.  An access to this class of block before it is
+- * ready has hung the SoC bus on this board, and the board has no validated
+- * in-kernel restart path, so a probe that armed the engine from inferred
+- * semantics would trade the only working configuration for no evidence.
+- *
+- * This driver therefore fails closed: it touches no register, enables no
+- * clock, toggles no reset, requests no interrupt and registers no NAPI
+- * instance.  The steps that close the gap:
+- *
+- *   1. capture an attended, read-only inventory of the PIE window on the
+- *      running board: 0x1000, the TX/RX ring blocks (0x2000/0x3000) for
+- *      channels 0-3, 0x0300/0x0400 status/mask, 0x3200, 0x3404, 0x3408,
+- *      0x3504 and the interrupt status words; record raw values;
+- *   2. reconcile the inventory with the recovered model and settle the
+- *      inferred items: ring-pair word semantics (read back 0x2004/0x3004/
+- *      0x3504 after the vendor init), the RX descriptor status/length bits,
+- *      and the per-vector channel pairing;
+- *   3. implement global and per-channel register init from those values,
+- *      then RX ring arming, NAPI and interrupt registration (the scaffolding
+- *      at the end of this file is the intended shape, not yet wired);
+- *   4. implement the TX producer only after the RX path is understood and a
+- *      descriptor with zeroed offload words has been proven to transmit;
+- *   5. the switch egress port/qid map is a separate block: it is required
+- *      before a frame can leave an external port, and is not part of this
+- *      driver.
+- *
+- * Recorded facts this driver relies on:
+- *
+- *   - register offsets (all from the 64 KiB window at 0x10a70000): TX ring
+- *     base/config/write-pointer/read-pointer at 0x2000 + ch*0x10 + 0x00/
+- *     0x04/0x08/0x0c; the same four words for RX at 0x3000 + ch*0x10; RX
+- *     interrupt status 0x0300 + ch*4 (bit 0, write 1 to clear) and mask
+- *     0x0400 + ch*4 (1 = masked); global RX enable 0x3200 bit 0;
+- *   - descriptors are 32 bytes.  RX descriptor fields: u32 DMA address at
+- *     +4 and the owner bit in byte +3 bit 2 (the driver sets it when handing
+- *     a buffer to the engine; the engine clears it on completion).  TX
+- *     descriptor fields: u16 length at +0, u32 DMA address at +4 and the
+- *     valid/owner bit in byte +3 bit 2.  Every other descriptor word is not
+- *     recovered and must stay zero until it is;
+- *   - the board is the v250 register generation (vendor devicetree hwver
+- *     0x250).  It configures 4 RX and 4 TX channels and 4 interrupt
+- *     vectors; each vector is associated with a channel pair (0/7, 1/6,
+- *     2/5, 3/4).  Only the lower channel of each pair carries wired traffic
+- *     here; the other half belongs to the Wi-Fi offload path, is not
+- *     initialized by this driver and must not be serviced;
+- *   - the board ring geometry the vendor driver consumes: log2 RX
+- *     descriptors 10 (1024 descriptors, 32 KiB ring per channel), log2 TX
+- *     descriptors 12 (4096 descriptors, 128 KiB ring per channel), RX
+- *     buffer size 2048 bytes.  These are driver data here, not devicetree
+- *     properties: the vendor property names are not an ABI for this driver
+- *     and their decoding is inferred, so they stay constants until the
+- *     inventory confirms the registers;
+- *   - the engine is coherent-DMA only: the vendor driver allocates coherent
+- *     rings and buffers and performs no cache maintenance, and the block
+- *     relies on the SoC coherency configuration.  The binding requires
+- *     dma-coherent and this driver refuses a node without it.
++ *   - resource validation: 64 KiB register window, one CRG gate clock, one
++ *     CRG reset line, four named interrupts, dma-coherent, 32-bit DMA mask;
++ *   - the measured ring geometry from the board's live devicetree: two RX
++ *     channels (log2 descriptors 8, 1536-byte buffers) and two TX channels
++ *     (log2 descriptors 12); the ring tables are the binding properties
++ *     "hisilicon,rx-ring"/"hisilicon,tx-ring" so the board describes its own
++ *     configuration instead of the driver hard-coding one board's overlay;
++ *   - coherent descriptor rings and coherent RX buffers, allocated with the
++ *     DMA API only (no cache maintenance), exactly the vendor model;
++ *   - the global and per-channel register initialization recovered from the
++ *     vendor v250 reg_init/rx_init_chan/tx_init_chan functions, with every
++ *     written word annotated by evidence class below;
++ *   - the RX interrupt path: mask all channels, request the four vectors,
++ *     arm the active RX rings, unmask the active channels, set the global RX
++ *     enable bit (0x3200 bit 0), then read the programmed registers back and
++ *     fail closed if they do not match;
++ *   - a NAPI poll that consumes RX completions by read pointer and re-arms
++ *     the descriptors.  It does NOT decode the completion status/length
++ *     words: their bit layout is still [U], so the buffers are recycled
++ *     without being handed to the network stack (each completion is counted
++ *     as a drop).  This keeps the ring engine honest and observable;
++ *   - a TX producer that linearizes the skb, maps it coherently, writes one
++ *     32-byte descriptor with only the recovered fields (length, address,
++ *     owner) and rings the channel doorbell; completions are reclaimed by
++ *     polling the TX read pointer (the vendor has no TX completion IRQ).
+  *
+- * What this driver does implement:
++ * What this file deliberately does not do:
+  *
+- *   - resource validation: 64 KiB register window, one CRG gate clock, one
+- *     CRG reset line, four named interrupts, dma-coherent and a 32-bit DMA
+- *     mask.  The clock is not enabled and the reset line is not driven: both
+- *     are bring-up operations, not probe-time facts;
+- *   - the coherent ring bookkeeping: 4 RX and 4 TX rings with the board
+- *     geometry, allocated with dma_alloc_attrs(dev, size, &dma, GFP_KERNEL,
+- *     0) and freed again on the refusal path - no descriptor is armed;
+- *   - the recovered register map, descriptor field accessors and the NAPI/
+- *     interrupt scaffolding, compiled but not wired (marked below).
++ *   - no RX skb delivery: the RX status/length decode is [U] (PIE-DATAPATH
++ *     section 5.2); a guessed decode would corrupt frames;
++ *   - no per-port context table and no netdev: that is the GEMAC half.  The
++ *     driver exports a tiny backend API (luofu_pie_armed/probed/xmit) for
++ *     luofu-gmac.c, and the MAC forwards its netdev transmit path here;
++ *   - no switch egress port/qid programming.  Until the internal switch map
++ *     exists a transmitted descriptor is not guaranteed to reach a MAC port;
++ *   - no WoC channels, no GRO rings, no ACP programming: channels 4-7 and the
++ *     Wi-Fi offload rings are not initialized or serviced, and the ACP
++ *     coherency question for 0x250 is [U]/bench-only (PIE-DATAPATH section 8).
+  *
+- * What this driver deliberately does not do:
++ * Evidence map
++ * ------------
++ *  [V]  recovered from the vendor v250 ops table (PIE-DATAPATH sections 3-5)
++ *       and/or measured on the running vendor boot by the 2026-11-18 read-only
++ *       inventory (INVENTORY-2026-11-18.md section 2).  Specifically measured:
++ *       the two active channels, TX config 0xc / RX config 0x8 (== the live
++ *       tx_ring[0]/rx_ring[0]), ring bases in DDR, the per-channel init words
++ *       0x180/0x200/0x380 = 1, 0x3210/0x3290/0x3310 = 3/2/8, 0x3204 = 0,
++ *       0x3208 = 0x7d, the RX IRQ masks (ch0/1 = 0, ch2/3 = 1), the RX IRQ
++ *       status words (all 0 on an idle boot), 0x1000 = 0xa01c8, 0x3200 =
++ *       0x2001 and 0x3504..0x3534 = 0xc.
++ *  [I]  inferred from recovered code shape, not observable on the boot:
++ *       descriptor-count = 1 << shift, the second RX ring word as the buffer
++ *       size, 0x3504 = buffer size >> 7, free-running 16/32-bit doorbell
++ *       counters, the RX owner-bit direction, per-CPU TX channel choice.
++ *  [U]  unknown/not programmed: the RX completion decode, 0x3404 per-channel
++ *       field values, 0x3700 GRO size (the board has no GRO ring - left
++ *       alone), the WoC half of the engine, and any behaviour under traffic.
+  *
+- *   - no register read or write, no clock enable, no reset toggle and no
+- *     interrupt request: the probe never gets that far;
+- *   - no RX completion decode or TX producer: the RX status/length words and
+- *     the TX offload words are not recovered, and a guessed decode would
+- *     corrupt frames once the engine is armed;
+- *   - no per-port context table or netdev interface: that is the stage after
+- *     the engine can be armed; exporting an interface with no consumer would
+- *     freeze an ABI on unverified behaviour.
++ * There is no reset/restart semantics in this driver: recovery on a wedged
++ * AHB is the physical RESET+TFTP card, and a driver must not add a reset path
++ * of its own (PIE-DATAPATH section 12.2).
+  */
+ 
+ #include <linux/bitops.h>
+ #include <linux/clk.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/errno.h>
++#include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
++#include <linux/minmax.h>
+ #include <linux/module.h>
+ #include <linux/netdevice.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/reset.h>
+ #include <linux/sizes.h>
++#include <linux/skbuff.h>
++#include <linux/smp.h>
+ #include <linux/string.h>
+ #include <linux/unaligned.h>
+ 
++#include "luofu-pie.h"
++
+ /* The whole PIE window, as described by the binding. */
+ #define LUOFU_PIE_REG_SIZE		SZ_64K
+ 
+-/* One interrupt vector per wired channel pair. */
++/* One interrupt vector per wired channel pair; channel slots of the engine. */
+ #define LUOFU_PIE_NUM_IRQS		4
++#define LUOFU_PIE_CHAN_SLOTS		8
+ 
+-/* The 32-byte hardware descriptor and the ring-pointer arithmetic. */
+-#define LUOFU_PIE_DESC_SIZE		32
+-#define LUOFU_PIE_DESC_ADDR_SHIFT	5
++/* The wired channels are the lower channel of every vector pair (0-3). */
++#define LUOFU_PIE_MAX_RX_CHANS		4
++#define LUOFU_PIE_MAX_TX_CHANS		4
+ 
+-/* Wired channels on this board; the rest of the slots belong to Wi-Fi offload. */
+-#define LUOFU_PIE_WIRED_RX_CHANS	4
+-#define LUOFU_PIE_WIRED_TX_CHANS	4
+-#define LUOFU_PIE_CHAN_SLOTS		8
++/* The 32-byte hardware descriptor. */
++#define LUOFU_PIE_DESC_SIZE		32
+ 
+-/*
+- * Board ring geometry, taken from the vendor board overlay values the vendor
+- * driver consumes: rx_ring pairs <0xa 0x800> (log2 descriptors 10, buffer
+- * size 2048) and tx_ring <0xc 0x4> (log2 descriptors 12, 4 TX channels).
+- * The first-word decoding is inferred from the vendor allocation arithmetic,
+- * not measured; the inventory in the header comment settles it by reading
+- * back the channel configuration registers.
+- */
+-#define LUOFU_PIE_RX_DESC_SHIFT		10
+-#define LUOFU_PIE_TX_DESC_SHIFT		12
+-#define LUOFU_PIE_RX_BUF_SIZE		2048
++/* Ring geometry bounds for the binding properties. */
++#define LUOFU_PIE_DESC_SHIFT_MIN	4
++#define LUOFU_PIE_DESC_SHIFT_MAX	12
++#define LUOFU_PIE_RX_BUF_MIN		256
+ #define LUOFU_PIE_RX_BUF_MAX		9600
++#define LUOFU_PIE_RX_SIZE_UNIT		128
++
++/* NAPI weight: the vendor default (the optional board property is absent). */
++#define LUOFU_PIE_NAPI_WEIGHT		64
+ 
+ /* The generation whose register model this file encodes. */
+ #define LUOFU_PIE_HWVER_V250		0x250
+ 
+ /*
+- * Register map of the v250 generation.
++ * Register map of the v250 generation (all recovered, PIE-DATAPATH 4).
+  *
+- * Per-channel TX ring block: base address, channel configuration word, write
+- * pointer (the doorbell) and read pointer (completion).  The write pointer is
+- * a full 32-bit store; the read pointer uses the low 16 bits.
++ * Per-channel TX ring block at 0x2000 + ch*0x10: base address, channel
++ * configuration word, write pointer (the doorbell, full 32-bit store) and read
++ * pointer (completion, 16-bit).  The RX block is the same shape at 0x3000 +
++ * ch*0x10; its write-pointer word carries the 16-bit write pointer in bits
++ * 15:0 and a second ("sf") pointer in bits 31:16, so it needs a
++ * read-modify-write.
+  */
+ #define LUOFU_PIE_TX_BASE_OFF(ch)	(0x2000 + (ch) * 0x10)
+ #define LUOFU_PIE_TX_CFG_OFF(ch)	(LUOFU_PIE_TX_BASE_OFF(ch) + 0x04)
+ #define LUOFU_PIE_TX_WPTR_OFF(ch)	(LUOFU_PIE_TX_BASE_OFF(ch) + 0x08)
+ #define LUOFU_PIE_TX_RPTR_OFF(ch)	(LUOFU_PIE_TX_BASE_OFF(ch) + 0x0c)
+ 
+-/*
+- * Per-channel RX ring block: the same four words.  The RX write-pointer word
+- * carries the 16-bit write pointer in bits 15:0 and a second ("sf") pointer in
+- * bits 31:16, so it is a read-modify-write; the read pointer again uses the
+- * low 16 bits.
+- */
+ #define LUOFU_PIE_RX_BASE_OFF(ch)	(0x3000 + (ch) * 0x10)
+ #define LUOFU_PIE_RX_CFG_OFF(ch)	(LUOFU_PIE_RX_BASE_OFF(ch) + 0x04)
+ #define LUOFU_PIE_RX_WPTR_OFF(ch)	(LUOFU_PIE_RX_BASE_OFF(ch) + 0x08)
+@@ -175,17 +150,49 @@
+ #define LUOFU_PIE_RX_IRQ_MASK_OFF(ch)	(0x0400 + (ch) * 4)
+ #define LUOFU_PIE_RX_IRQ_BIT		BIT(0)
+ 
+-/* Global RX enable. */
++/* Global control word: bit 0 cleared and bits 6-8 set by reg_init. */
++#define LUOFU_PIE_GLOBAL_CTRL_OFF	0x1000
++#define LUOFU_PIE_GLOBAL_CTRL_BIT0	BIT(0)
++#define LUOFU_PIE_GLOBAL_CTRL_BITS	(GENMASK(8, 6))
++
++/* Global RX enable: bit 0. */
+ #define LUOFU_PIE_RX_EN_OFF		0x3200
+ #define LUOFU_PIE_RX_EN_BIT		BIT(0)
+ 
++/* Per-channel reg-init words: offsets and the values the vendor writes. */
++#define LUOFU_PIE_REG_180_OFF(ch)	(0x0180 + (ch) * 4)
++#define LUOFU_PIE_REG_200_OFF(ch)	(0x0200 + (ch) * 4)
++#define LUOFU_PIE_REG_380_OFF(ch)	(0x0380 + (ch) * 4)
++#define LUOFU_PIE_REG_180_VAL		1
++#define LUOFU_PIE_REG_200_VAL		1
++#define LUOFU_PIE_REG_380_VAL		1
++
++#define LUOFU_PIE_REG_3210_OFF(ch)	(0x3210 + (ch) * 4)
++#define LUOFU_PIE_REG_3290_OFF(ch)	(0x3290 + (ch) * 4)
++#define LUOFU_PIE_REG_3310_OFF(ch)	(0x3310 + (ch) * 4)
++#define LUOFU_PIE_REG_3210_VAL		3
++#define LUOFU_PIE_REG_3290_VAL		2
++#define LUOFU_PIE_REG_3310_VAL		8
++
++#define LUOFU_PIE_REG_3204_OFF		0x3204
++#define LUOFU_PIE_REG_3208_OFF		0x3208
++#define LUOFU_PIE_REG_3204_VAL		0
++#define LUOFU_PIE_REG_3208_VAL		0x7d
++
++/* Single-channel mode bit in the global RX enable word (bit 1) [I]. */
++#define LUOFU_PIE_RX_EN_SINGLE_BIT	BIT(1)
++
+ /*
+- * Per-channel RX ring-size configuration.  The 8-channel layout writes
+- * ring_size >> 7 at 0x3500 + ch*0x10 + 0x04; the "128-byte units" reading is
+- * inferred and the inventory has to confirm it.
++ * Per-channel RX ring-size configuration: the value is the RX buffer size in
++ * 128-byte units.  The measured 0x3504 readback of 0xc equals the live size
++ * word 0x600 >> 7, not the descriptor-ring size - the decode is [I], the
++ * readback correlation is [V].
+  */
+ #define LUOFU_PIE_RX_SIZE_OFF(ch)	(0x3500 + (ch) * 0x10 + 0x04)
+-#define LUOFU_PIE_RX_SIZE_UNIT		128
++
++/* 0x3404/0x3408 are written to zero by reg_init; per-channel use is [U]. */
++#define LUOFU_PIE_REG_3404_OFF		0x3404
++#define LUOFU_PIE_REG_3408_OFF		0x3408
+ 
+ /* Descriptor field offsets; only the recovered fields are named. */
+ #define LUOFU_PIE_DESC_OWNER_BYTE	3
+@@ -194,9 +201,6 @@
+ #define LUOFU_PIE_TX_DESC_LEN		0
+ #define LUOFU_PIE_TX_DESC_ADDR		4
+ 
+-/* NAPI weight: the vendor default; the optional board property is absent. */
+-#define LUOFU_PIE_NAPI_WEIGHT		64
+-
+ /**
+  * struct luofu_pie_variant - match data of one supported SoC generation
+  * @hwver: register generation word the vendor devicetree carries
+@@ -222,8 +226,8 @@
+  * @desc_bytes: allocation size of the descriptor array
+  * @entries: number of descriptors (power of two)
+  * @shift: log2 of @entries
+- * @wptr: software copy of the producer index (unused until bring-up)
+- * @rptr: software copy of the completion index (unused until bring-up)
++ * @wptr: software producer counter (free-running, [I] doorbell value)
++ * @rptr: software completion counter (free-running, [I])
+  */
+ struct luofu_pie_ring {
+ 	void *desc;
+@@ -236,7 +240,41 @@
+ };
+ 
+ /**
+- * struct luofu_pie_irq - per-vector interrupt context (bring-up stage)
++ * struct luofu_pie_rx_buf - one RX buffer handed to the engine
++ * @skb: the buffer skb (never delivered while the decode is [U])
++ * @dma: coherent DMA address written into the descriptor
++ */
++struct luofu_pie_rx_buf {
++	struct sk_buff *skb;
++	dma_addr_t dma;
++};
++
++/**
++ * struct luofu_pie_tx_buf - one TX skb owned by a descriptor
++ * @skb: the skb, freed when the descriptor is reclaimed
++ * @dma: DMA address mapped for the engine
++ * @len: mapped length
++ */
++struct luofu_pie_tx_buf {
++	struct sk_buff *skb;
++	dma_addr_t dma;
++	u32 len;
++};
++
++/**
++ * struct luofu_pie_napi - one RX channel's NAPI instance
++ * @napi: the NAPI context (the engine's private container netdev owns it)
++ * @pie: back pointer to the controller
++ * @ch: RX channel index
++ */
++struct luofu_pie_napi {
++	struct napi_struct napi;
++	struct luofu_pie *pie;
++	unsigned int ch;
++};
++
++/**
++ * struct luofu_pie_irq - per-vector interrupt context
+  * @pie: back pointer to the controller
+  * @vector: interrupt vector index, 0..3
+  */
+@@ -247,6 +285,30 @@
+ 
+ /**
+  * struct luofu_pie - driver state
++ * @dev: owning device
++ * @base: register window
++ * @variant: matched SoC variant data
++ * @clk: CRG gate clock
++ * @resets: CRG reset line
++ * @irq: the four vector numbers
++ * @irq_priv: per-vector interrupt context
++ * @napi_netdev: private, never-registered netdev that owns the NAPI contexts
++ * @napi: per-RX-channel NAPI instances
++ * @napi_added: number of NAPI instances registered
++ * @napi_enabled: number of NAPI instances enabled
++ * @rx_ring: per-RX-channel descriptor rings
++ * @rx_buf: per-RX-channel buffer bookkeeping
++ * @rx_chans: number of active RX channels
++ * @rx_shift: per-RX-channel log2 descriptor count
++ * @rx_buf_size: per-RX-channel buffer size in bytes
++ * @rx_dropped: completions recycled without a decode (draft counter)
++ * @tx_ring: per-TX-channel descriptor rings
++ * @tx_buf: per-TX-channel skb bookkeeping
++ * @tx_chans: number of active TX channels
++ * @tx_shift: log2 descriptor count of every TX ring
++ * @tx_completed: reclaimed TX descriptors (draft counter)
++ * @clk_enabled: the gate clock is on and the reset line was released
++ * @armed: the engine is programmed and may be used by the MAC
+  */
+ struct luofu_pie {
+ 	struct device *dev;
+@@ -256,11 +318,44 @@
+ 	struct reset_control *resets;
+ 	int irq[LUOFU_PIE_NUM_IRQS];
+ 	struct luofu_pie_irq irq_priv[LUOFU_PIE_NUM_IRQS];
+-	struct luofu_pie_ring rx_ring[LUOFU_PIE_WIRED_RX_CHANS];
+-	struct luofu_pie_ring tx_ring[LUOFU_PIE_WIRED_TX_CHANS];
+-	struct napi_struct napi[LUOFU_PIE_WIRED_RX_CHANS];
++	struct net_device *napi_netdev;
++	struct luofu_pie_napi napi[LUOFU_PIE_MAX_RX_CHANS];
++	unsigned int napi_added;
++	unsigned int napi_enabled;
++	struct luofu_pie_ring rx_ring[LUOFU_PIE_MAX_RX_CHANS];
++	struct luofu_pie_rx_buf *rx_buf[LUOFU_PIE_MAX_RX_CHANS];
++	unsigned int rx_chans;
++	u32 rx_shift[LUOFU_PIE_MAX_RX_CHANS];
++	u32 rx_buf_size[LUOFU_PIE_MAX_RX_CHANS];
++	u64 rx_dropped;
++	struct luofu_pie_ring tx_ring[LUOFU_PIE_MAX_TX_CHANS];
++	struct luofu_pie_tx_buf *tx_buf[LUOFU_PIE_MAX_TX_CHANS];
++	unsigned int tx_chans;
++	u32 tx_shift;
++	u64 tx_completed;
++	bool clk_enabled;
++	bool armed;
+ };
+ 
++/* Backend gate shared with the GEMAC front end. */
++enum luofu_pie_state {
++	LUOFU_PIE_STATE_ABSENT = 0,
++	LUOFU_PIE_STATE_REFUSED,
++	LUOFU_PIE_STATE_ARMED,
++};
++
++static enum luofu_pie_state luofu_pie_state = LUOFU_PIE_STATE_ABSENT;
++static struct luofu_pie *luofu_pie_ctrl;
++
++/*
++ * Arm gate: the engine is started only when this is set on the kernel command
++ * line (luofu_pie.arm=1).  A normal boot must not program the PIE block - the
++ * first write to the engine is an attended bench event, not a host test.
++ */
++static bool luofu_pie_arm_gate;
++module_param_named(arm, luofu_pie_arm_gate, bool, 0444);
++MODULE_PARM_DESC(arm, "Arm the PIE packet engine data path (default off; attended bench bring-up only)");
++
+ static const struct luofu_pie_variant luofu_pie_v250 = {
+ 	.hwver = LUOFU_PIE_HWVER_V250,
+ 	.name = "v250",
+@@ -278,55 +373,212 @@
+ 	"ch3-4",
+ };
+ 
+-/*
+- * Descriptor accessors for the recovered fields.  They are scaffolding for
+- * the producer/refill stage: nothing in this file calls them yet.
+- */
+-static inline struct luofu_pie_desc *luofu_pie_desc_at(void *ring, u32 index)
+-{
+-	return (struct luofu_pie_desc *)((u8 *)ring + index * LUOFU_PIE_DESC_SIZE);
+-}
++/* The recovered channel pair of every vector; the lower channel is wired. */
++static const u8 luofu_pie_vector_chans[LUOFU_PIE_NUM_IRQS][2] = {
++	{ 0, 7 },
++	{ 1, 6 },
++	{ 2, 5 },
++	{ 3, 4 },
++};
+ 
+-static inline u32 luofu_pie_ring_next(u32 index, u32 entries)
++static inline struct luofu_pie_desc *luofu_pie_desc_at(void *ring, u32 index)
+ {
+-	/* @entries is a power of two by construction (1 << shift). */
+-	return (index + 1) & (entries - 1);
++	return (struct luofu_pie_desc *)((u8 *)ring +
++					 index * LUOFU_PIE_DESC_SIZE);
+ }
+ 
+ static inline void luofu_pie_rx_desc_set_buf(struct luofu_pie_desc *desc,
+-					     dma_addr_t addr, bool owned)
++					     dma_addr_t addr)
+ {
+-	put_unaligned_le32(lower_32_bits(addr), &desc->bytes[LUOFU_PIE_RX_DESC_ADDR]);
+-	if (owned)
+-		desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] |= LUOFU_PIE_DESC_OWNER_BIT;
+-	else
+-		desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] &=
+-			~LUOFU_PIE_DESC_OWNER_BIT;
++	/* [V] address at +4 and owner bit 2 of byte 3 (PIE-DATAPATH 5.2). */
++	put_unaligned_le32(lower_32_bits(addr),
++			   &desc->bytes[LUOFU_PIE_RX_DESC_ADDR]);
++	desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] |= LUOFU_PIE_DESC_OWNER_BIT;
+ }
+ 
+ static inline void luofu_pie_tx_desc_set_buf(struct luofu_pie_desc *desc,
+ 					     dma_addr_t addr, u16 len)
+ {
+ 	/*
+-	 * Normal non-TSO descriptor: length, address and the valid/owner bit
+-	 * are recovered.  The type/checksum bits and the +8..+19 words are
+-	 * not recovered and stay zero.
++	 * Normal non-TSO descriptor: only length, address and the valid/owner
++	 * bit are recovered.  The type/checksum fields and the +8..+19 words
++	 * are not recovered and stay zero (PIE-DATAPATH 5.2).
+ 	 */
+ 	memset(desc, 0, sizeof(*desc));
+ 	put_unaligned_le16(len, &desc->bytes[LUOFU_PIE_TX_DESC_LEN]);
+-	put_unaligned_le32(lower_32_bits(addr), &desc->bytes[LUOFU_PIE_TX_DESC_ADDR]);
++	put_unaligned_le32(lower_32_bits(addr),
++			   &desc->bytes[LUOFU_PIE_TX_DESC_ADDR]);
+ 	desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] = LUOFU_PIE_DESC_OWNER_BIT;
+ }
+ 
+-/* Recovered RX/TX doorbell and enable accessors (bring-up stage only). */
+-static inline void luofu_pie_tx_doorbell(struct luofu_pie *pie, unsigned int ch,
+-					 u32 wptr)
++/* Ring allocation: coherent, 32-byte descriptors, 32 << shift bytes. */
++static int luofu_pie_ring_alloc(struct luofu_pie *pie,
++				struct luofu_pie_ring *ring, u32 shift)
++{
++	size_t bytes = (size_t)LUOFU_PIE_DESC_SIZE << shift;
++
++	ring->desc = dma_alloc_attrs(pie->dev, bytes, &ring->desc_dma,
++				     GFP_KERNEL, 0);
++	if (!ring->desc)
++		return -ENOMEM;
++
++	ring->desc_bytes = bytes;
++	ring->entries = 1U << shift;
++	ring->shift = shift;
++	ring->wptr = 0;
++	ring->rptr = 0;
++
++	return 0;
++}
++
++static void luofu_pie_ring_free(struct luofu_pie *pie,
++				struct luofu_pie_ring *ring)
++{
++	if (!ring->desc)
++		return;
++
++	dma_free_attrs(pie->dev, ring->desc_bytes, ring->desc, ring->desc_dma,
++		       0);
++	memset(ring, 0, sizeof(*ring));
++}
++
++/* Free every RX/TX buffer and ring; safe on a partially armed controller. */
++static void luofu_pie_rings_free(struct luofu_pie *pie)
++{
++	unsigned int ch, i;
++
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		if (!pie->rx_buf[ch])
++			goto free_rx_ring;
++		for (i = 0; i < pie->rx_ring[ch].entries; i++) {
++			struct luofu_pie_rx_buf *b = &pie->rx_buf[ch][i];
++
++			if (b->dma)
++				dma_unmap_single(pie->dev, b->dma,
++						 pie->rx_buf_size[ch],
++						 DMA_FROM_DEVICE);
++			if (b->skb)
++				dev_kfree_skb(b->skb);
++			b->skb = NULL;
++			b->dma = 0;
++		}
++free_rx_ring:
++		luofu_pie_ring_free(pie, &pie->rx_ring[ch]);
++	}
++
++	for (ch = 0; ch < pie->tx_chans; ch++) {
++		if (!pie->tx_buf[ch])
++			goto free_tx_ring;
++		for (i = 0; i < pie->tx_ring[ch].entries; i++) {
++			struct luofu_pie_tx_buf *b = &pie->tx_buf[ch][i];
++
++			if (b->skb) {
++				dma_unmap_single(pie->dev, b->dma, b->len,
++						 DMA_TO_DEVICE);
++				dev_kfree_skb(b->skb);
++				b->skb = NULL;
++			}
++			b->dma = 0;
++			b->len = 0;
++		}
++free_tx_ring:
++		luofu_pie_ring_free(pie, &pie->tx_ring[ch]);
++	}
++}
++
++/*
++ * Global and per-channel register initialization, following the recovered
++ * vendor v250 reg_init sequence.  Every write below is either [V] recovered
++ * code or a [V] measured post-init value; where the vendor value is [U] it is
++ * identified in the comment and the write is only the documented default.
++ */
++static void luofu_pie_reg_init(struct luofu_pie *pie)
++{
++	u32 val;
++	unsigned int ch;
++
++	/* 0x1000: clear bit 0, set bits 6-8, preserve the rest. [V] */
++	val = readl(pie->base + LUOFU_PIE_GLOBAL_CTRL_OFF);
++	val &= ~LUOFU_PIE_GLOBAL_CTRL_BIT0;
++	val |= LUOFU_PIE_GLOBAL_CTRL_BITS;
++	writel(val, pie->base + LUOFU_PIE_GLOBAL_CTRL_OFF);
++
++	/*
++	 * All channels start masked.  This loops over all eight slots, which
++	 * is also a safety property: the uninitialized Wi-Fi offload half of
++	 * each vector can never raise an interrupt we do not service.
++	 */
++	for (ch = 0; ch < LUOFU_PIE_CHAN_SLOTS; ch++)
++		writel(LUOFU_PIE_RX_IRQ_BIT,
++		       pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
++
++	/*
++	 * Per-channel defaults for the active wired channels.  The measured
++	 * vendor boot has these values on all eight slots; the semantics are
++	 * [U], but the documented reg_init values are 1/1/1 and 3/2/8.  The
++	 * inactive slots (including the WoC half) are deliberately left in
++	 * their loader state because those paths are not ours to program.
++	 */
++	for (ch = 0; ch < max(pie->rx_chans, pie->tx_chans); ch++) {
++		writel(LUOFU_PIE_REG_180_VAL,
++		       pie->base + LUOFU_PIE_REG_180_OFF(ch));
++		writel(LUOFU_PIE_REG_200_VAL,
++		       pie->base + LUOFU_PIE_REG_200_OFF(ch));
++		writel(LUOFU_PIE_REG_380_VAL,
++		       pie->base + LUOFU_PIE_REG_380_OFF(ch));
++		writel(LUOFU_PIE_REG_3210_VAL,
++		       pie->base + LUOFU_PIE_REG_3210_OFF(ch));
++		writel(LUOFU_PIE_REG_3290_VAL,
++		       pie->base + LUOFU_PIE_REG_3290_OFF(ch));
++		writel(LUOFU_PIE_REG_3310_VAL,
++		       pie->base + LUOFU_PIE_REG_3310_OFF(ch));
++	}
++
++	/* Remaining documented reg_init defaults. [V] writes, [U] meaning. */
++	writel(LUOFU_PIE_REG_3204_VAL, pie->base + LUOFU_PIE_REG_3204_OFF);
++	writel(LUOFU_PIE_REG_3208_VAL, pie->base + LUOFU_PIE_REG_3208_OFF);
++	writel(0, pie->base + LUOFU_PIE_REG_3404_OFF);
++	writel(0, pie->base + LUOFU_PIE_REG_3408_OFF);
++
++	/*
++	 * 0x3200: the documented reg_init model clears bits 0-1 and sets bit 1
++	 * only in single-channel mode [I]; the measured two-channel word has
++	 * bit 1 clear.  Bits 2-7 are preserved from the current value; the
++	 * global RX enable bit (0) stays clear until the rings are armed.
++	 */
++	val = readl(pie->base + LUOFU_PIE_RX_EN_OFF);
++	val = (val & ~GENMASK(7, 0)) | (val & GENMASK(7, 2));
++	if (pie->rx_chans == 1)
++		val |= LUOFU_PIE_RX_EN_SINGLE_BIT;
++	writel(val, pie->base + LUOFU_PIE_RX_EN_OFF);
++}
++
++/* Program one RX channel from the ring configuration. */
++static void luofu_pie_rx_chan_init(struct luofu_pie *pie, unsigned int ch)
++{
++	struct luofu_pie_ring *ring = &pie->rx_ring[ch];
++
++	writel(lower_32_bits(ring->desc_dma),
++	       pie->base + LUOFU_PIE_RX_BASE_OFF(ch));
++	writel(ring->shift, pie->base + LUOFU_PIE_RX_CFG_OFF(ch));
++	writel(0, pie->base + LUOFU_PIE_RX_WPTR_OFF(ch));
++	writel(pie->rx_buf_size[ch] / LUOFU_PIE_RX_SIZE_UNIT,
++	       pie->base + LUOFU_PIE_RX_SIZE_OFF(ch));
++}
++
++/* Program one TX channel from the ring configuration. */
++static void luofu_pie_tx_chan_init(struct luofu_pie *pie, unsigned int ch)
+ {
+-	writel(wptr, pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
++	struct luofu_pie_ring *ring = &pie->tx_ring[ch];
++
++	writel(lower_32_bits(ring->desc_dma),
++	       pie->base + LUOFU_PIE_TX_BASE_OFF(ch));
++	writel(ring->shift, pie->base + LUOFU_PIE_TX_CFG_OFF(ch));
++	writel(0, pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
+ }
+ 
+-static inline void luofu_pie_rx_kick(struct luofu_pie *pie, unsigned int ch,
+-				     u16 wptr)
++/* Set the RX write pointer (bits 15:0; the upper "sf" half is preserved). */
++static void luofu_pie_rx_kick(struct luofu_pie *pie, unsigned int ch, u16 wptr)
+ {
+ 	void __iomem *reg = pie->base + LUOFU_PIE_RX_WPTR_OFF(ch);
+ 	u32 val = readl(reg);
+@@ -335,18 +587,420 @@
+ 	writel(val, reg);
+ }
+ 
+-static inline void luofu_pie_rx_enable(struct luofu_pie *pie)
++static void luofu_pie_rx_enable(struct luofu_pie *pie)
+ {
+ 	u32 val = readl(pie->base + LUOFU_PIE_RX_EN_OFF);
+ 
+ 	writel(val | LUOFU_PIE_RX_EN_BIT, pie->base + LUOFU_PIE_RX_EN_OFF);
+ }
+ 
++/* Fill one RX ring with freshly allocated buffers and arm all descriptors. */
++static int luofu_pie_rx_ring_fill(struct luofu_pie *pie, unsigned int ch)
++{
++	struct luofu_pie_ring *ring = &pie->rx_ring[ch];
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ring->entries; i++) {
++		struct luofu_pie_rx_buf *b = &pie->rx_buf[ch][i];
++		struct sk_buff *skb;
++		dma_addr_t dma;
++
++		/*
++		 * The vendor allocates the per-frame buffer plus 128 bytes of
++		 * headroom; coherent mapping only, no cache maintenance. [V]
++		 */
++		skb = netdev_alloc_skb_ip_align(pie->napi_netdev,
++						pie->rx_buf_size[ch] + 128);
++		if (!skb) {
++			ret = -ENOMEM;
++			goto err_unmap;
++		}
++		dma = dma_map_single(pie->dev, skb->data, pie->rx_buf_size[ch],
++				     DMA_FROM_DEVICE);
++		if (dma_mapping_error(pie->dev, dma)) {
++			dev_kfree_skb(skb);
++			ret = -ENOMEM;
++			goto err_unmap;
++		}
++		b->skb = skb;
++		b->dma = dma;
++		luofu_pie_rx_desc_set_buf(luofu_pie_desc_at(ring->desc, i),
++					  dma);
++	}
++
++	/*
++	 * The producer counter is free-running; pushing "entries" makes every
++	 * populated descriptor visible to the engine ([I] doorbell model, the
++	 * 16-bit field has room for the measured 256-descriptor ring).
++	 */
++	ring->rptr = 0;
++	ring->wptr = ring->entries;
++	dma_wmb();
++	luofu_pie_rx_kick(pie, ch, ring->wptr & 0xffff);
++
++	return 0;
++
++err_unmap:
++	/* The caller's halt path frees the partially filled ring. */
++	return ret;
++}
++
++/* Allocate one TX ring and its skb bookkeeping (no buffers are armed yet). */
++static int luofu_pie_tx_ring_alloc(struct luofu_pie *pie, unsigned int ch)
++{
++	struct luofu_pie_ring *ring = &pie->tx_ring[ch];
++
++	pie->tx_buf[ch] = devm_kcalloc(pie->dev, ring->entries,
++				       sizeof(*pie->tx_buf[ch]), GFP_KERNEL);
++	if (!pie->tx_buf[ch])
++		return -ENOMEM;
++
++	return 0;
++}
++
++/* Read back every register the arm sequence programs and verify the values. */
++static int luofu_pie_verify(struct luofu_pie *pie)
++{
++	struct luofu_pie_ring *ring;
++	u32 val;
++	unsigned int ch;
++
++	val = readl(pie->base + LUOFU_PIE_GLOBAL_CTRL_OFF);
++	if (val & LUOFU_PIE_GLOBAL_CTRL_BIT0) {
++		dev_err(pie->dev, "global control bit 0 still set (%#x)\n", val);
++		return -EIO;
++	}
++	if ((val & LUOFU_PIE_GLOBAL_CTRL_BITS) != LUOFU_PIE_GLOBAL_CTRL_BITS) {
++		dev_err(pie->dev, "global control bits 6-8 not set (%#x)\n",
++			val);
++		return -EIO;
++	}
++
++	val = readl(pie->base + LUOFU_PIE_RX_EN_OFF);
++	if (!(val & LUOFU_PIE_RX_EN_BIT)) {
++		dev_err(pie->dev, "global RX enable bit not set (%#x)\n", val);
++		return -EIO;
++	}
++
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		ring = &pie->rx_ring[ch];
++		if (readl(pie->base + LUOFU_PIE_RX_BASE_OFF(ch)) !=
++		    lower_32_bits(ring->desc_dma)) {
++			dev_err(pie->dev, "RX%u ring base readback mismatch\n",
++				ch);
++			return -EIO;
++		}
++		if (readl(pie->base + LUOFU_PIE_RX_CFG_OFF(ch)) !=
++		    ring->shift) {
++			dev_err(pie->dev, "RX%u config readback mismatch\n", ch);
++			return -EIO;
++		}
++		if (readl(pie->base + LUOFU_PIE_RX_SIZE_OFF(ch)) !=
++		    pie->rx_buf_size[ch] / LUOFU_PIE_RX_SIZE_UNIT) {
++			dev_err(pie->dev, "RX%u size readback mismatch\n", ch);
++			return -EIO;
++		}
++		if (readl(pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch)) &
++		    LUOFU_PIE_RX_IRQ_BIT) {
++			dev_err(pie->dev, "RX%u interrupt still masked\n", ch);
++			return -EIO;
++		}
++	}
++
++	for (ch = 0; ch < pie->tx_chans; ch++) {
++		ring = &pie->tx_ring[ch];
++		if (readl(pie->base + LUOFU_PIE_TX_BASE_OFF(ch)) !=
++		    lower_32_bits(ring->desc_dma)) {
++			dev_err(pie->dev, "TX%u ring base readback mismatch\n",
++				ch);
++			return -EIO;
++		}
++		if (readl(pie->base + LUOFU_PIE_TX_CFG_OFF(ch)) !=
++		    ring->shift) {
++			dev_err(pie->dev, "TX%u config readback mismatch\n", ch);
++			return -EIO;
++		}
++	}
++
++	return 0;
++}
++
++/* Mask every RX channel interrupt and clear the global RX enable. */
++static void luofu_pie_rx_disable(struct luofu_pie *pie)
++{
++	u32 val;
++	unsigned int ch;
++
++	for (ch = 0; ch < LUOFU_PIE_CHAN_SLOTS; ch++)
++		writel(LUOFU_PIE_RX_IRQ_BIT,
++		       pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
++
++	val = readl(pie->base + LUOFU_PIE_RX_EN_OFF);
++	writel(val & ~LUOFU_PIE_RX_EN_BIT,
++	       pie->base + LUOFU_PIE_RX_EN_OFF);
++}
++
++/*
++ * Park the engine: mask and disable RX, stop NAPI, free the rings and
++ * buffers, then park the block in reset and gate its clock.  Called on probe
++ * error paths and from the devres action; safe for a partially armed state.
++ */
++static void luofu_pie_halt(struct luofu_pie *pie)
++{
++	unsigned int ch;
++
++	pie->armed = false;
++
++	if (pie->clk_enabled)
++		luofu_pie_rx_disable(pie);
++
++	while (pie->napi_enabled) {
++		ch = --pie->napi_enabled;
++		napi_disable(&pie->napi[ch].napi);
++	}
++	while (pie->napi_added) {
++		ch = --pie->napi_added;
++		netif_napi_del(&pie->napi[ch].napi);
++	}
++
++	luofu_pie_rings_free(pie);
++
++	if (pie->napi_netdev) {
++		free_netdev(pie->napi_netdev);
++		pie->napi_netdev = NULL;
++	}
++
++	if (pie->clk_enabled) {
++		reset_control_assert(pie->resets);
++		clk_disable_unprepare(pie->clk);
++		pie->clk_enabled = false;
++	}
++}
++
++static irqreturn_t luofu_pie_rx_interrupt(int irq, void *data)
++{
++	struct luofu_pie_irq *priv = data;
++	struct luofu_pie *pie = priv->pie;
++	irqreturn_t ret = IRQ_NONE;
++	unsigned int i;
++
++	if (!READ_ONCE(pie->armed))
++		return IRQ_NONE;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_pie_vector_chans[0]); i++) {
++		unsigned int ch = luofu_pie_vector_chans[priv->vector][i];
++
++		/*
++		 * The upper channel of each pair is the Wi-Fi offload half of
++		 * the engine.  It is not initialized here and its interrupt is
++		 * left masked; never service it.
++		 */
++		if (ch >= pie->rx_chans)
++			continue;
++		if (readl(pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch)) &
++		    LUOFU_PIE_RX_IRQ_BIT)
++			continue;
++		if (!(readl(pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch)) &
++		      LUOFU_PIE_RX_IRQ_BIT))
++			continue;
++		if (!napi_schedule_prep(&pie->napi[ch].napi))
++			continue;
++
++		/* Recorded order: schedule, mask, acknowledge, then poll. */
++		writel(LUOFU_PIE_RX_IRQ_BIT,
++		       pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
++		writel(LUOFU_PIE_RX_IRQ_BIT,
++		       pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch));
++		__napi_schedule(&pie->napi[ch].napi);
++		ret = IRQ_HANDLED;
++	}
++
++	return ret;
++}
++
++static int luofu_pie_rx_poll(struct napi_struct *napi, int budget)
++{
++	struct luofu_pie_napi *np = container_of(napi, struct luofu_pie_napi,
++						 napi);
++	struct luofu_pie *pie = np->pie;
++	unsigned int ch = np->ch;
++	struct luofu_pie_ring *ring = &pie->rx_ring[ch];
++	u32 hw_rptr, delta;
++	unsigned int done = 0;
++
++	hw_rptr = readl(pie->base + LUOFU_PIE_RX_RPTR_OFF(ch)) & 0xffff;
++	delta = (hw_rptr - (ring->rptr & 0xffff)) & 0xffff;
++	if (delta > ring->entries)
++		delta = ring->entries;
++
++	while (done < budget && done < delta) {
++		u32 index = (ring->rptr + done) & (ring->entries - 1);
++		struct luofu_pie_desc *desc =
++			luofu_pie_desc_at(ring->desc, index);
++
++		/*
++		 * The engine clears the owner bit when it has written a
++		 * completion ([I] direction).  Stop at the first descriptor
++		 * that is still owned by the engine.
++		 */
++		if (desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] &
++		    LUOFU_PIE_DESC_OWNER_BIT)
++			break;
++
++		/*
++		 * The completion status/length decode is [U], so the buffer
++		 * is NOT handed to the stack: the descriptor is re-armed for
++		 * the next frame and the completion is accounted as a drop.
++		 * The DMA mapping stays valid (coherent, never unmapped until
++		 * the channel is halted), so no cache work is needed.
++		 */
++		desc->bytes[LUOFU_PIE_DESC_OWNER_BYTE] |=
++			LUOFU_PIE_DESC_OWNER_BIT;
++		pie->rx_dropped++;
++		done++;
++	}
++
++	if (done) {
++		ring->rptr += done;
++		ring->wptr += done;
++		dma_wmb();
++		luofu_pie_rx_kick(pie, ch, ring->wptr & 0xffff);
++	}
++
++	/* Re-open the channel only when this poll consumed its budget. */
++	if (done < budget) {
++		napi_complete_done(napi, done);
++		writel(0, pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
++	}
++
++	return done;
++}
++
++/* Reclaim TX descriptors the engine has completed (poll-only, no TX IRQ). */
++static void luofu_pie_tx_reclaim(struct luofu_pie *pie, unsigned int ch)
++{
++	struct luofu_pie_ring *ring = &pie->tx_ring[ch];
++	u32 hw_rptr, delta;
++
++	hw_rptr = readl(pie->base + LUOFU_PIE_TX_RPTR_OFF(ch)) & 0xffff;
++	delta = (hw_rptr - (ring->rptr & 0xffff)) & 0xffff;
++	if (delta > ring->entries)
++		delta = ring->entries;
++
++	while (delta--) {
++		u32 index = ring->rptr & (ring->entries - 1);
++		struct luofu_pie_tx_buf *b = &pie->tx_buf[ch][index];
++
++		if (b->skb) {
++			dma_unmap_single(pie->dev, b->dma, b->len,
++					 DMA_TO_DEVICE);
++			dev_kfree_skb_any(b->skb);
++			b->skb = NULL;
++			pie->tx_completed++;
++		}
++		ring->rptr++;
++	}
++}
++
++/**
++ * luofu_pie_xmit - queue one skb into the PIE TX ring
++ * @skb: the frame to transmit (consumed on NETDEV_TX_OK)
++ * @ndev: the MAC net_device, for the software statistics
++ *
++ * Returns NETDEV_TX_OK when the frame was queued or dropped, NETDEV_TX_BUSY
++ * when the ring is temporarily full.  The engine counts descriptors from the
++ * current CPU modulo the configured channel count ([I] mirror of the vendor
++ * per-CPU TX channel selection).
++ */
++netdev_tx_t luofu_pie_xmit(struct sk_buff *skb, struct net_device *ndev)
++{
++	struct luofu_pie *pie = READ_ONCE(luofu_pie_ctrl);
++	struct luofu_pie_ring *ring;
++	struct luofu_pie_tx_buf *b;
++	struct luofu_pie_desc *desc;
++	unsigned int ch;
++	dma_addr_t dma;
++	u32 used;
++	u16 len;
++
++	if (!pie || !READ_ONCE(pie->armed)) {
++		dev_kfree_skb_any(skb);
++		ndev->stats.tx_dropped++;
++		return NETDEV_TX_OK;
++	}
++
++	if (skb->len > U16_MAX || skb->len == 0)
++		goto drop;
++
++	/* One descriptor per frame: the recovered TX field is a single u16. */
++	if (skb_is_nonlinear(skb) && skb_linearize(skb))
++		goto drop;
++
++	ch = raw_smp_processor_id() % pie->tx_chans;
++	ring = &pie->tx_ring[ch];
++	luofu_pie_tx_reclaim(pie, ch);
++
++	used = ring->wptr - ring->rptr;
++	if (used >= ring->entries)
++		goto drop;
++
++	dma = dma_map_single(pie->dev, skb->data, skb->len, DMA_TO_DEVICE);
++	if (dma_mapping_error(pie->dev, dma))
++		goto drop;
++
++	b = &pie->tx_buf[ch][ring->wptr & (ring->entries - 1)];
++	if (WARN_ON(b->skb)) {
++		dma_unmap_single(pie->dev, dma, skb->len, DMA_TO_DEVICE);
++		goto drop;
++	}
++
++	len = skb->len;
++	desc = luofu_pie_desc_at(ring->desc, ring->wptr & (ring->entries - 1));
++	luofu_pie_tx_desc_set_buf(desc, dma, len);
++	b->skb = skb;
++	b->dma = dma;
++	b->len = len;
++	ring->wptr++;
++
++	/* Doorbell: a full 32-bit write starts transmission of the ring. */
++	dma_wmb();
++	writel(ring->wptr, pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
++
++	ndev->stats.tx_packets++;
++	ndev->stats.tx_bytes += skb->len;
++
++	return NETDEV_TX_OK;
++
++drop:
++	dev_kfree_skb_any(skb);
++	ndev->stats.tx_dropped++;
++	return NETDEV_TX_OK;
++}
++EXPORT_SYMBOL_GPL(luofu_pie_xmit);
++
++/* True once the engine has been armed and the MAC may use the backend. */
++bool luofu_pie_armed(void)
++{
++	struct luofu_pie *pie = READ_ONCE(luofu_pie_ctrl);
++
++	return pie && READ_ONCE(pie->armed);
++}
++EXPORT_SYMBOL_GPL(luofu_pie_armed);
++
+ /*
+- * Resource validation.  Everything here is a device-model lookup or a DMA
+- * capability check; no register is touched and neither the clock nor the
+- * reset line is driven.
++ * True once this driver's probe has run at all (armed or refused).  The MAC
++ * front end uses this to distinguish "PIE will still probe" (defer) from "PIE
++ * refused to arm" (fail closed, do not register a netdev).
+  */
++bool luofu_pie_probed(void)
++{
++	return READ_ONCE(luofu_pie_state) != LUOFU_PIE_STATE_ABSENT;
++}
++EXPORT_SYMBOL_GPL(luofu_pie_probed);
++
++/* ---- resource / devicetree validation (no hardware access at all) ---- */
++
+ static int luofu_pie_check_resources(struct luofu_pie *pie)
+ {
+ 	struct platform_device *pdev = to_platform_device(pie->dev);
+@@ -383,6 +1037,8 @@
+ 					     "missing interrupt %s\n",
+ 					     luofu_pie_irq_names[i]);
+ 		pie->irq[i] = ret;
++		pie->irq_priv[i].pie = pie;
++		pie->irq_priv[i].vector = i;
+ 	}
+ 
+ 	if (!of_property_read_bool(pie->dev->of_node, "dma-coherent"))
+@@ -392,6 +1048,83 @@
+ 	return 0;
+ }
+ 
++/*
++ * Parse and validate the board ring configuration.  The values are the live
++ * post-U-Boot-overlay configuration of the vendor system (2026-11-18): two RX
++ * pairs <8 0x600> and two TX channels <0xc 2>.
++ */
++static int luofu_pie_parse_rings(struct luofu_pie *pie)
++{
++	struct device_node *np = pie->dev->of_node;
++	u32 vals[2 * LUOFU_PIE_MAX_RX_CHANS];
++	unsigned int ch;
++	int n;
++
++	n = of_property_count_elems_of_size(np, "hisilicon,rx-ring",
++					    sizeof(u32));
++	if (n < 0)
++		return dev_err_probe(pie->dev, n,
++				     "missing hisilicon,rx-ring\n");
++	if (n % 2 || n < 2 || n > 2 * LUOFU_PIE_MAX_RX_CHANS)
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "hisilicon,rx-ring has %d words, expected 2..%d in pairs\n",
++				     n, 2 * LUOFU_PIE_MAX_RX_CHANS);
++	if (of_property_read_u32_array(np, "hisilicon,rx-ring", vals, n))
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "cannot read hisilicon,rx-ring\n");
++
++	pie->rx_chans = n / 2;
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		u32 shift = vals[2 * ch];
++		u32 size = vals[2 * ch + 1];
++
++		if (shift < LUOFU_PIE_DESC_SHIFT_MIN ||
++		    shift > LUOFU_PIE_DESC_SHIFT_MAX)
++			return dev_err_probe(pie->dev, -EINVAL,
++					     "RX%u descriptor shift %u out of range\n",
++					     ch, shift);
++		if (size < LUOFU_PIE_RX_BUF_MIN || size > LUOFU_PIE_RX_BUF_MAX)
++			return dev_err_probe(pie->dev, -EINVAL,
++					     "RX%u buffer size %u out of range\n",
++					     ch, size);
++		if (size % LUOFU_PIE_RX_SIZE_UNIT)
++			return dev_err_probe(pie->dev, -EINVAL,
++					     "RX%u buffer size %u is not a multiple of %u\n",
++					     ch, size, LUOFU_PIE_RX_SIZE_UNIT);
++		pie->rx_shift[ch] = shift;
++		pie->rx_buf_size[ch] = size;
++	}
++
++	n = of_property_count_elems_of_size(np, "hisilicon,tx-ring",
++					    sizeof(u32));
++	if (n < 0)
++		return dev_err_probe(pie->dev, n,
++				     "missing hisilicon,tx-ring\n");
++	if (n != 2)
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "hisilicon,tx-ring has %d words, expected 2\n",
++				     n);
++	if (of_property_read_u32_array(np, "hisilicon,tx-ring", vals, 2))
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "cannot read hisilicon,tx-ring\n");
++
++	if (vals[0] < LUOFU_PIE_DESC_SHIFT_MIN ||
++	    vals[0] > LUOFU_PIE_DESC_SHIFT_MAX)
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "TX descriptor shift %u out of range\n",
++				     vals[0]);
++	if (vals[1] < 1 || vals[1] > LUOFU_PIE_MAX_TX_CHANS)
++		return dev_err_probe(pie->dev, -EINVAL,
++				     "TX channel count %u out of range\n",
++				     vals[1]);
++	pie->tx_shift = vals[0];
++	pie->tx_chans = vals[1];
++
++	return 0;
++}
++
++/* ---- the arm sequence ---- */
++
+ static int luofu_pie_setup_dma(struct luofu_pie *pie)
+ {
+ 	int ret;
+@@ -404,68 +1137,134 @@
+ }
+ 
+ /*
+- * Coherent ring allocation, exactly the model the vendor driver uses:
+- * dma_alloc_attrs() with no attributes (i.e. coherent), 32-byte descriptors
+- * and 32 << shift bytes per channel ring.  No cache maintenance is added.
++ * Arm the engine.  Order is the recovered vendor order (PIE-DATAPATH 9):
++ * clock -> reset -> SRAM/global init -> per-channel init -> RX rings -> TX
++ * rings -> NAPI/IRQs -> unmask -> global RX enable, and then a read-back
++ * verification of everything that was programmed.
+  */
+-static int luofu_pie_ring_alloc(struct luofu_pie *pie,
+-				struct luofu_pie_ring *ring, u32 shift)
++static int luofu_pie_arm(struct luofu_pie *pie)
+ {
+-	size_t bytes = (size_t)LUOFU_PIE_DESC_SIZE << shift;
++	unsigned int ch;
++	int ret;
+ 
+-	ring->desc = dma_alloc_attrs(pie->dev, bytes, &ring->desc_dma,
+-				     GFP_KERNEL, 0);
+-	if (!ring->desc)
+-		return -ENOMEM;
++	ret = clk_prepare_enable(pie->clk);
++	if (ret)
++		return dev_err_probe(pie->dev, ret, "cannot enable PIE clock\n");
++	pie->clk_enabled = true;
+ 
+-	ring->desc_bytes = bytes;
+-	ring->entries = 1U << shift;
+-	ring->shift = shift;
++	/* Vendor order: assert the reset line, then deassert it immediately. */
++	ret = reset_control_reset(pie->resets);
++	if (ret) {
++		dev_err_probe(pie->dev, ret, "cannot release PIE reset\n");
++		goto err_halt;
++	}
+ 
+-	return 0;
+-}
++	/*
++	 * From here on the engine is being programmed: no register access
++	 * happens before this point and every following write is annotated in
++	 * reg_init()/rx_chan_init()/tx_chan_init().
++	 */
++	luofu_pie_reg_init(pie);
+ 
+-static void luofu_pie_ring_free(struct luofu_pie *pie,
+-				struct luofu_pie_ring *ring)
+-{
+-	if (!ring->desc)
+-		return;
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		ret = luofu_pie_ring_alloc(pie, &pie->rx_ring[ch],
++					   pie->rx_shift[ch]);
++		if (ret)
++			goto err_halt;
++		luofu_pie_rx_chan_init(pie, ch);
++	}
++	for (ch = 0; ch < pie->tx_chans; ch++) {
++		ret = luofu_pie_ring_alloc(pie, &pie->tx_ring[ch],
++					   pie->tx_shift);
++		if (ret)
++			goto err_halt;
++		luofu_pie_tx_chan_init(pie, ch);
++	}
+ 
+-	dma_free_attrs(pie->dev, ring->desc_bytes, ring->desc, ring->desc_dma,
+-		       0);
+-	memset(ring, 0, sizeof(*ring));
+-}
++	/* The private netdev only exists to own the NAPI contexts. */
++	pie->napi_netdev = alloc_netdev(0, "luofu-pie%d", NET_NAME_ENUM,
++					ether_setup);
++	if (!pie->napi_netdev) {
++		ret = -ENOMEM;
++		goto err_halt;
++	}
+ 
+-static void luofu_pie_rings_free(struct luofu_pie *pie)
+-{
+-	unsigned int i;
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		struct luofu_pie_napi *np = &pie->napi[ch];
+ 
+-	for (i = 0; i < LUOFU_PIE_WIRED_RX_CHANS; i++)
+-		luofu_pie_ring_free(pie, &pie->rx_ring[i]);
+-	for (i = 0; i < LUOFU_PIE_WIRED_TX_CHANS; i++)
+-		luofu_pie_ring_free(pie, &pie->tx_ring[i]);
+-}
++		np->pie = pie;
++		np->ch = ch;
++		netif_napi_add(pie->napi_netdev, &np->napi,
++			       luofu_pie_rx_poll);
++		pie->napi_added++;
++		napi_enable(&np->napi);
++		pie->napi_enabled++;
++	}
+ 
+-static int luofu_pie_rings_alloc(struct luofu_pie *pie)
+-{
+-	unsigned int i;
+-	int ret;
++	for (ch = 0; ch < LUOFU_PIE_NUM_IRQS; ch++) {
++		ret = devm_request_irq(pie->dev, pie->irq[ch],
++				       luofu_pie_rx_interrupt, 0,
++				       luofu_pie_irq_names[ch],
++				       &pie->irq_priv[ch]);
++		if (ret)
++			goto err_halt;
++	}
+ 
+-	for (i = 0; i < LUOFU_PIE_WIRED_RX_CHANS; i++) {
+-		ret = luofu_pie_ring_alloc(pie, &pie->rx_ring[i],
+-					   LUOFU_PIE_RX_DESC_SHIFT);
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		pie->rx_buf[ch] = devm_kcalloc(pie->dev,
++					       pie->rx_ring[ch].entries,
++					       sizeof(*pie->rx_buf[ch]),
++					       GFP_KERNEL);
++		if (!pie->rx_buf[ch]) {
++			ret = -ENOMEM;
++			goto err_halt;
++		}
++		ret = luofu_pie_rx_ring_fill(pie, ch);
+ 		if (ret)
+-			return ret;
++			goto err_halt;
+ 	}
+ 
+-	for (i = 0; i < LUOFU_PIE_WIRED_TX_CHANS; i++) {
+-		ret = luofu_pie_ring_alloc(pie, &pie->tx_ring[i],
+-					   LUOFU_PIE_TX_DESC_SHIFT);
++	for (ch = 0; ch < pie->tx_chans; ch++) {
++		ret = luofu_pie_tx_ring_alloc(pie, ch);
+ 		if (ret)
+-			return ret;
++			goto err_halt;
+ 	}
+ 
++	/*
++	 * Unmask only the active wired channels; the other half of each
++	 * vector (ch4-7) stays masked.  The measured vendor boot leaves the
++	 * inactive ch2/3 masked too, which this matches.
++	 */
++	WRITE_ONCE(pie->armed, true);
++	for (ch = 0; ch < pie->rx_chans; ch++)
++		writel(0, pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
++
++	/* Global RX enable, bit 0 of 0x3200. */
++	luofu_pie_rx_enable(pie);
++
++	ret = luofu_pie_verify(pie);
++	if (ret)
++		goto err_halt;
++
++	dev_info(pie->dev,
++		 "PIE %s armed: %u RX channels, %u TX channels, %u interrupts\n",
++		 pie->variant->name, pie->rx_chans, pie->tx_chans,
++		 LUOFU_PIE_NUM_IRQS);
++
+ 	return 0;
++
++err_halt:
++	luofu_pie_halt(pie);
++	return ret;
++}
++
++static void luofu_pie_disarm(void *data)
++{
++	struct luofu_pie *pie = data;
++
++	WRITE_ONCE(luofu_pie_ctrl, NULL);
++	WRITE_ONCE(luofu_pie_state, LUOFU_PIE_STATE_ABSENT);
++	luofu_pie_halt(pie);
+ }
+ 
+ static int luofu_pie_probe(struct platform_device *pdev)
+@@ -491,91 +1290,41 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = luofu_pie_setup_dma(pie);
++	ret = luofu_pie_parse_rings(pie);
+ 	if (ret)
+ 		return ret;
+ 
+ 	/*
+-	 * Allocate the coherent bookkeeping the bring-up stage will program.
+-	 * This exercises the allocation model and records the geometry.  The
+-	 * rings are freed before probe returns and no descriptor is armed, no
+-	 * register is written and the engine is never told they exist.
++	 * Fail closed: with the arm gate closed nothing is written and the
++	 * device is left unbound.  This is the normal boot path - the board
++	 * devicetree keeps the node disabled anyway.
+ 	 */
+-	ret = luofu_pie_rings_alloc(pie);
+-	if (ret) {
+-		luofu_pie_rings_free(pie);
+-		return dev_err_probe(dev, ret, "cannot allocate coherent rings\n");
++	if (!luofu_pie_arm_gate) {
++		WRITE_ONCE(luofu_pie_state, LUOFU_PIE_STATE_REFUSED);
++		return dev_err_probe(dev, -EOPNOTSUPP,
++				     "data path not armed: set luofu_pie.arm=1 for an attended bench bring-up\n");
+ 	}
+ 
+-	dev_info(dev,
+-		 "PIE %s: %u RX rings of %u descriptors, %u TX rings of %u descriptors, %u interrupts\n",
+-		 pie->variant->name, LUOFU_PIE_WIRED_RX_CHANS,
+-		 1U << LUOFU_PIE_RX_DESC_SHIFT, LUOFU_PIE_WIRED_TX_CHANS,
+-		 1U << LUOFU_PIE_TX_DESC_SHIFT, LUOFU_PIE_NUM_IRQS);
+-
+-	luofu_pie_rings_free(pie);
+-
+-	/*
+-	 * Refuse to bring the data path up.  The node is disabled, so a normal
+-	 * boot never reaches this point; the error is loud exactly for the
+-	 * person who enables the node before the inventory is done.
+-	 */
+-	return dev_err_probe(dev, -EOPNOTSUPP,
+-			     "data path not started: PIE register/channel inventory is not captured; refusing to arm the engine\n");
+-}
+-
+-/*
+- * ---------------------------------------------------------------------
+- * Data-path scaffolding (not reachable while the data path is refused).
+- *
+- * The block below records the recovered v250 register/descriptor/IRQ shape
+- * so the bring-up stage cannot silently re-invent it.  probe() requests no
+- * interrupt and registers no NAPI instance, so none of this runs until the
+- * inventory gate above is lifted.  The poll callback is deliberately absent:
+- * the RX completion decode is not recovered, and the stage that implements it
+- * installs netif_napi_add_weight() with LUOFU_PIE_NAPI_WEIGHT.
+- * ---------------------------------------------------------------------
+- */
+-static const u8 luofu_pie_vector_chans[LUOFU_PIE_NUM_IRQS][2] = {
+-	{ 0, 7 },
+-	{ 1, 6 },
+-	{ 2, 5 },
+-	{ 3, 4 },
+-};
++	ret = luofu_pie_setup_dma(pie);
++	if (ret) {
++		WRITE_ONCE(luofu_pie_state, LUOFU_PIE_STATE_REFUSED);
++		return ret;
++	}
+ 
+-static irqreturn_t __maybe_unused luofu_pie_rx_interrupt(int irq, void *data)
+-{
+-	struct luofu_pie_irq *priv = data;
+-	struct luofu_pie *pie = priv->pie;
+-	unsigned int i;
++	ret = luofu_pie_arm(pie);
++	if (ret) {
++		WRITE_ONCE(luofu_pie_state, LUOFU_PIE_STATE_REFUSED);
++		return ret;
++	}
+ 
+-	for (i = 0; i < ARRAY_SIZE(luofu_pie_vector_chans[0]); i++) {
+-		unsigned int ch = luofu_pie_vector_chans[priv->vector][i];
++	ret = devm_add_action_or_reset(dev, luofu_pie_disarm, pie);
++	if (ret)
++		return ret;
+ 
+-		/*
+-		 * The upper channel of each pair is the Wi-Fi offload half of
+-		 * the engine.  It is not initialized here, so its status must
+-		 * not be serviced.
+-		 */
+-		if (ch >= LUOFU_PIE_WIRED_RX_CHANS)
+-			continue;
+-		if (readl(pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch)) &
+-		    LUOFU_PIE_RX_IRQ_BIT)
+-			continue;
+-		if (!(readl(pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch)) &
+-		      LUOFU_PIE_RX_IRQ_BIT))
+-			continue;
+-		if (!napi_schedule_prep(&pie->napi[ch]))
+-			continue;
+-		/* Recorded order: schedule, mask, acknowledge, then poll. */
+-		writel(LUOFU_PIE_RX_IRQ_BIT,
+-		       pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
+-		writel(LUOFU_PIE_RX_IRQ_BIT,
+-		       pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch));
+-		__napi_schedule(&pie->napi[ch]);
+-	}
++	WRITE_ONCE(luofu_pie_ctrl, pie);
++	WRITE_ONCE(luofu_pie_state, LUOFU_PIE_STATE_ARMED);
+ 
+-	return IRQ_HANDLED;
++	return 0;
+ }
+ 
+ static const struct of_device_id luofu_pie_of_match[] = {
+@@ -593,5 +1342,5 @@
+ };
+ module_platform_driver(luofu_pie_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu PIE packet engine (draft: data path disabled)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu PIE packet engine (draft ring engine)");
+ MODULE_LICENSE("GPL");
+diff --git a/drivers/net/ethernet/hisilicon/luofu-pie.h b/drivers/net/ethernet/hisilicon/luofu-pie.h
+new file mode 100644
+--- /dev/null
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.h
+@@ -0,0 +1,22 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Internal data-path interface between the Hi5671Y "luofu" GEMAC front end
++ * (luofu-gmac.c) and the PIE packet engine (luofu-pie.c).
++ *
++ * The MAC owns the net_device and phylink; the engine owns the DMA rings,
++ * interrupts and NAPI.  There is exactly one PIE instance on this SoC, so the
++ * engine publishes a singleton backend rather than a port/queue API: the MAC
++ * checks that it is armed before registering a netdev and then forwards its
++ * transmit path to it.  This interface is a draft and not a stable ABI.
++ */
++#ifndef _LUOFU_PIE_H
++#define _LUOFU_PIE_H
++
++#include <linux/netdevice.h>
++#include <linux/types.h>
++
++bool luofu_pie_armed(void);
++bool luofu_pie_probed(void);
++netdev_tx_t luofu_pie_xmit(struct sk_buff *skb, struct net_device *ndev);
++
++#endif /* _LUOFU_PIE_H */
+diff --git a/drivers/net/ethernet/hisilicon/luofu-gmac.c b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -1,121 +1,355 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * HiSilicon Hi5671Y "luofu" GEMAC - resource/binding half only, no data path.
++ * HiSilicon Hi5671Y "luofu" GEMAC - netdev/phylink front end over PIE.
+  *
+- * STATUS: PARTIAL PORT.  This driver claims the documented devicetree binding
+- * and validates the platform resources, but it deliberately does not register
+- * a network device and its probe fails: without the missing data path a
+- * net_device could only drop frames, which would look functional to
+- * userspace.  The devicetree nodes stay disabled until the missing half
+- * exists.
++ * STATUS: DRAFT.  The MAC is a phylink front end; it owns the net_device and
++ * hands frames to the PIE ring engine (luofu-pie.c), which owns the DMA rings.
++ * The driver registers a net_device only when the PIE backend has armed its
++ * data path; otherwise it refuses, so a node that is enabled early can never
++ * produce an interface that silently drops every frame.  The board devicetree
++ * keeps the MAC nodes disabled.
+  *
+  * What is established (and cited):
+- *   - the vendor driver (hi_kmac.ko) is a phylink MAC driver over
+- *     clk_bulk_* and a reset array, with plain readl/writel register access;
+- *   - the five instances are ports 8..12 of the internal switch: instance 0
+- *     is RGMII (unused by the vendor) and instances 1..4 are GMII into the
++ *   - the vendor driver (hi_kmac.ko) is a phylink MAC driver: it allocates the
++ *     netdev (alloc_etherdev_mqs), registers it, and its ndo_start_xmit
++ *     tail-calls the packet engine (PIE-DATAPATH section 2.1).  This driver
++ *     reproduces that split: netdev + phylink here, rings in luofu-pie.c;
++ *   - the five instances are ports 8..12 of the internal switch: instance 0 is
++ *     RGMII (unused by the vendor) and instances 1..4 are GMII into the
+  *     switch; the wired jack measured on the vendor system is instance 3
+- *     (0x14480000,
+- *     port 11);
++ *     (0x14480000, port 11);
++ *   - the MAC port registers were measured on the live vendor system and
++ *     exercised by the out-of-tree lab driver on this same board
++ *     (lab/luofu-gmac/luofu-gmac.c, ETHERNET-BRINGUP-FRAMING.md): a live
++ *     1 Gbps link reads PORT_MODE 0x0040 = 0x010c0008, a link-down port reads
++ *     0x000c0408, and the port-mode update is bracketed by MODE_CHANGE_EN
++ *     0x01b4 bit 0 before/after the write.  The MAC enable bit is bit 0 of
++ *     CTRL 0x00 as exercised by the lab driver;
+  *   - PHY attachment uses the standard phy-mode/phy-handle properties and the
+- *     MDIO bus driver in mdio-luofu.c;
+- *   - a few register words were observed read-only on the vendor's running
+- *     kernel (PORT_MODE 0x0040, MODE_CHANGE_EN 0x01b4).
++ *     MDIO bus driver in mdio-luofu.c.
+  *
+- * What does not exist, and is why this file stops at resource validation:
+- *   - the TX/RX ring and DMA programming model.  It has never been decoded.
+- *     The previous out-of-tree 5.10 driver had no ring code at all (its
+- *     transmit path dropped every frame) and the vendor's transmit helper
+- *     (hi_net_dev_xmit) is exported by another vendor module, not by the MAC
+- *     module.  Writing a model from guesses is not acceptable: an access to
+- *     this block before it is ready has hung the board's AHB bus.
++ * What this driver does NOT do:
++ *   - it programs no MAC filter/address register and no static MAC
++ *     configuration: the only MAC writes are the measured link-up/link-down
++ *     words above, and mac_config() is deliberately a no-op (the lab driver
++ *     proved that touching the block from phylink's config path can hang the
++ *     AHB bus before the first timer tick);
++ *   - it programs no RX/TX descriptor: that is the PIE engine;
++ *   - it does not deliver received frames: the PIE RX completion decode is
++ *     [U], so the PIE poll recycles RX buffers and this netdev has no RX path
++ *     yet (PIE-DATAPATH section 5.2);
++ *   - no switch egress: with the internal switch unprogrammed a transmitted
++ *     descriptor is not guaranteed to reach a MAC port (PIE-DATAPATH section
++ *     7), so the link can only be validated, not used to carry traffic.
+  *
+- * TODO(data-path): decode the ring/DMA registers from a citable source,
+- * implement NAPI TX/RX with DMA mapping, program the port mode from the
+- * phylink link-up callback, and enable the devicetree nodes.  Until then the
+- * driver refuses to probe.
++ * Every write in mac_link_up() is therefore [V] (measured values on this
++ * board, executed by the lab driver); everything else is a draft.
+  */
+ 
+ #include <linux/clk.h>
++#include <linux/etherdevice.h>
++#include <linux/ethtool.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
++#include <linux/netdevice.h>
+ #include <linux/of.h>
+-#include <linux/of_mdio.h>
+ #include <linux/of_net.h>
+ #include <linux/phy.h>
++#include <linux/phylink.h>
+ #include <linux/platform_device.h>
+ #include <linux/reset.h>
++#include <linux/rtnetlink.h>
++
++#include "luofu-pie.h"
++
++/* MAC port registers (dword-aligned window; see the file header). */
++#define LUOFU_GMAC_CTRL		0x0000
++#define LUOFU_GMAC_PORT_MODE	0x0040
++#define LUOFU_GMAC_MODE_CHANGE_EN	0x01b4
++
++#define LUOFU_GMAC_MAC_EN		BIT(0)
++#define LUOFU_GMAC_MODE_CHANGE_BIT	BIT(0)
++
++/* Measured on the vendor's live 1 Gbps link (see the file header). */
++#define LUOFU_GMAC_PORT_MODE_1000	0x010c0008
++
++struct luofu_gmac {
++	struct device *dev;
++	struct net_device *ndev;
++	void __iomem *base;
++	struct clk_bulk_data *clks;
++	int nclks;
++	struct reset_control *resets;
++	struct phylink *phylink;
++	struct phylink_config pl_config;
++	bool clk_enabled;
++};
++
++static struct luofu_gmac *pl_to_gmac(struct phylink_config *config)
++{
++	return container_of(config, struct luofu_gmac, pl_config);
++}
+ 
+ /*
+- * Check that the node carries what the binding requires.  This is the only
+- * work the driver can do correctly today: acquiring the resources proves that
+- * the described hardware matches the binding, without touching a register.
++ * phylink's config-time callback.  Deliberately does not touch the MAC: the
++ * lab driver measured that a register access from this path (which runs from
++ * phylink_create at probe time, long before a link exists) hangs the AHB bus
++ * on this board and the box never reaches its first timer tick.  The link
++ * mode change belongs in mac_link_up() (the vendor's own driver does the
++ * same).
+  */
+-static int luofu_gmac_check_dt(struct platform_device *pdev)
++static void luofu_gmac_mac_config(struct phylink_config *config,
++				  unsigned int mode,
++				  const struct phylink_link_state *state)
+ {
+-	struct device *dev = &pdev->dev;
+-	struct clk_bulk_data *clks;
+-	struct reset_control *resets;
+-	struct device_node *phy;
+-	phy_interface_t iface;
+-	int nclks, ret;
++	(void)config;
++	(void)mode;
++	(void)state;
++}
+ 
+-	ret = of_get_phy_mode(dev->of_node, &iface);
+-	if (ret)
+-		return dev_err_probe(dev, ret, "missing or invalid phy-mode\n");
++static void luofu_gmac_mac_link_down(struct phylink_config *config,
++				     unsigned int mode,
++				     phy_interface_t interface)
++{
++	struct luofu_gmac *g = pl_to_gmac(config);
+ 
+-	switch (iface) {
+-	case PHY_INTERFACE_MODE_GMII:
+-	case PHY_INTERFACE_MODE_RGMII:
+-		break;
+-	default:
+-		return dev_err_probe(dev, -EINVAL, "unsupported phy-mode %s\n",
+-				     phy_modes(iface));
++	(void)mode;
++	(void)interface;
++
++	/* Clear the MAC enable - the measured link-down sequence. [V] */
++	writel(0, g->base + LUOFU_GMAC_CTRL);
++}
++
++static void luofu_gmac_mac_link_up(struct phylink_config *config,
++				   struct phy_device *phy, unsigned int mode,
++				   phy_interface_t interface, int speed,
++				   int duplex, bool tx_pause, bool rx_pause)
++{
++	struct luofu_gmac *g = pl_to_gmac(config);
++
++	(void)phy;
++	(void)mode;
++	(void)interface;
++	(void)duplex;
++	(void)tx_pause;
++	(void)rx_pause;
++
++	/*
++	 * The only PORT_MODE value measured on this board is the 1 Gbps
++	 * link-up word.  For any other speed there is no measured encoding,
++	 * so the driver leaves the port untouched instead of guessing
++	 * (mainline's different IP revision uses a different encoding).
++	 */
++	if (speed != SPEED_1000) {
++		netdev_warn(g->ndev,
++			    "no measured PORT_MODE value for %d Mbps; leaving the MAC port unconfigured\n",
++			    speed);
++		return;
+ 	}
+ 
+-	phy = of_parse_phandle(dev->of_node, "phy-handle", 0);
+-	if (phy)
+-		of_node_put(phy);
+-	else if (!of_phy_is_fixed_link(dev->of_node))
+-		return dev_err_probe(dev, -EINVAL, "missing phy-handle\n");
+-
+-	nclks = devm_clk_bulk_get_all(dev, &clks);
+-	if (nclks < 0)
+-		return dev_err_probe(dev, nclks, "failed to get clocks\n");
+-	if (nclks != 1)
+-		return dev_err_probe(dev, -EINVAL, "expected 1 clock, got %d\n",
+-				     nclks);
+-
+-	resets = devm_reset_control_array_get_exclusive(dev);
+-	if (IS_ERR(resets))
+-		return dev_err_probe(dev, PTR_ERR(resets),
+-				     "failed to get resets\n");
++	/*
++	 * Order follows the measured sequence: enable the mode change, write
++	 * the port mode, close the mode change, then enable the MAC. [V]
++	 */
++	writel(LUOFU_GMAC_MODE_CHANGE_BIT,
++	       g->base + LUOFU_GMAC_MODE_CHANGE_EN);
++	writel(LUOFU_GMAC_PORT_MODE_1000, g->base + LUOFU_GMAC_PORT_MODE);
++	writel(0, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
++	writel(LUOFU_GMAC_MAC_EN, g->base + LUOFU_GMAC_CTRL);
++}
++
++static const struct phylink_mac_ops luofu_gmac_phylink_ops = {
++	.mac_config	= luofu_gmac_mac_config,
++	.mac_link_down	= luofu_gmac_mac_link_down,
++	.mac_link_up	= luofu_gmac_mac_link_up,
++};
++
++static int luofu_gmac_open(struct net_device *ndev)
++{
++	struct luofu_gmac *g = netdev_priv(ndev);
++	int ret;
++
++	ret = phylink_of_phy_connect(g->phylink, g->dev->of_node, 0);
++	if (ret)
++		return ret;
++
++	phylink_start(g->phylink);
++	netif_start_queue(ndev);
+ 
+ 	return 0;
+ }
+ 
++static int luofu_gmac_stop(struct net_device *ndev)
++{
++	struct luofu_gmac *g = netdev_priv(ndev);
++
++	netif_stop_queue(ndev);
++	phylink_stop(g->phylink);
++	phylink_disconnect_phy(g->phylink);
++
++	return 0;
++}
++
++static netdev_tx_t luofu_gmac_xmit(struct sk_buff *skb, struct net_device *ndev)
++{
++	return luofu_pie_xmit(skb, ndev);
++}
++
++static void luofu_gmac_get_stats64(struct net_device *ndev,
++				   struct rtnl_link_stats64 *stats)
++{
++	netdev_stats_to_stats64(stats, &ndev->stats);
++}
++
++static const struct net_device_ops luofu_gmac_netdev_ops = {
++	.ndo_open		= luofu_gmac_open,
++	.ndo_stop		= luofu_gmac_stop,
++	.ndo_start_xmit		= luofu_gmac_xmit,
++	.ndo_get_stats64	= luofu_gmac_get_stats64,
++};
++
++static void luofu_gmac_get_drvinfo(struct net_device *ndev,
++				   struct ethtool_drvinfo *info)
++{
++	strscpy(info->driver, "luofu-gmac", sizeof(info->driver));
++}
++
++static const struct ethtool_ops luofu_gmac_ethtool_ops = {
++	.get_drvinfo		= luofu_gmac_get_drvinfo,
++	.get_link		= ethtool_op_get_link,
++};
++
+ static int luofu_gmac_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+-	void __iomem *base;
++	struct net_device *ndev;
++	struct luofu_gmac *g;
++	phy_interface_t iface;
+ 	int ret;
+ 
+-	base = devm_platform_ioremap_resource(pdev, 0);
+-	if (IS_ERR(base))
+-		return PTR_ERR(base);
++	/*
++	 * Fail closed: a netdev may only exist when the packet engine backend
++	 * has armed its rings.  If the PIE driver has probed and refused the
++	 * arm gate, registering a netdev would hide that; return loudly.  If
++	 * it has not probed yet, defer and retry after it does.
++	 */
++	if (!luofu_pie_armed()) {
++		if (luofu_pie_probed())
++			return dev_err_probe(dev, -EOPNOTSUPP,
++					     "PIE backend refused to arm; refusing to register a netdev with no data path\n");
++		return -EPROBE_DEFER;
++	}
++
++	ndev = alloc_etherdev(sizeof(*g));
++	if (!ndev)
++		return -ENOMEM;
++
++	SET_NETDEV_DEV(ndev, dev);
++	g = netdev_priv(ndev);
++	g->dev = dev;
++	g->ndev = ndev;
++	platform_set_drvdata(pdev, g);
++
++	g->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(g->base)) {
++		ret = PTR_ERR(g->base);
++		goto err_free;
++	}
++
++	g->nclks = devm_clk_bulk_get_all(dev, &g->clks);
++	if (g->nclks < 0) {
++		ret = g->nclks;
++		goto err_free;
++	}
++	if (g->nclks != 1) {
++		ret = dev_err_probe(dev, -EINVAL, "expected 1 clock, got %d\n",
++				    g->nclks);
++		goto err_free;
++	}
+ 
+-	ret = luofu_gmac_check_dt(pdev);
++	g->resets = devm_reset_control_array_get_exclusive(dev);
++	if (IS_ERR(g->resets)) {
++		ret = PTR_ERR(g->resets);
++		goto err_free;
++	}
++
++	ret = of_get_phy_mode(dev->of_node, &iface);
+ 	if (ret)
+-		return ret;
++		goto err_free;
++	switch (iface) {
++	case PHY_INTERFACE_MODE_GMII:
++	case PHY_INTERFACE_MODE_RGMII:
++		break;
++	default:
++		ret = dev_err_probe(dev, -EINVAL, "unsupported phy-mode %s\n",
++				    phy_modes(iface));
++		goto err_free;
++	}
+ 
+ 	/*
+-	 * Refuse the probe: registering a net_device here would create an
+-	 * interface that can never carry a packet.  The devicetree nodes are
+-	 * disabled, so a normal boot never reaches this point; the error is
+-	 * loud exactly for the person who enables a node early.
++	 * Bring the port out of reset: clock first, then release the resets,
++	 * the same order the lab driver measured as required (a clock before
++	 * the block leaves reset). [V]
+ 	 */
+-	return dev_err_probe(dev, -EOPNOTSUPP,
+-			     "TX/RX ring DMA is not implemented; refusing to register a non-functional netdev\n");
++	ret = clk_bulk_prepare_enable(g->nclks, g->clks);
++	if (ret)
++		goto err_free;
++	g->clk_enabled = true;
++	ret = reset_control_deassert(g->resets);
++	if (ret) {
++		dev_err_probe(dev, ret, "cannot release MAC reset\n");
++		goto err_clk;
++	}
++
++	g->pl_config.dev = dev;
++	g->pl_config.type = PHYLINK_DEV;
++	g->pl_config.mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
++					MAC_10 | MAC_100 | MAC_1000FD;
++	__set_bit(iface, g->pl_config.supported_interfaces);
++
++	g->phylink = phylink_create(&g->pl_config, dev->fwnode, iface,
++				    &luofu_gmac_phylink_ops);
++	if (IS_ERR(g->phylink)) {
++		ret = PTR_ERR(g->phylink);
++		goto err_reset;
++	}
++
++	ndev->netdev_ops = &luofu_gmac_netdev_ops;
++	ndev->ethtool_ops = &luofu_gmac_ethtool_ops;
++
++	ret = register_netdev(ndev);
++	if (ret)
++		goto err_phylink;
++
++	dev_info(dev,
++		 "luofu-gmac: %s registered (PIE TX backend armed; RX delivery is a draft TODO)\n",
++		 ndev->name);
++
++	return 0;
++
++err_phylink:
++	phylink_destroy(g->phylink);
++err_reset:
++	reset_control_assert(g->resets);
++err_clk:
++	clk_bulk_disable_unprepare(g->nclks, g->clks);
++err_free:
++	free_netdev(ndev);
++	return ret;
++}
++
++static void luofu_gmac_remove(struct platform_device *pdev)
++{
++	struct luofu_gmac *g = platform_get_drvdata(pdev);
++
++	unregister_netdev(g->ndev);
++	rtnl_lock();
++	phylink_disconnect_phy(g->phylink);
++	rtnl_unlock();
++	phylink_destroy(g->phylink);
++	reset_control_assert(g->resets);
++	clk_bulk_disable_unprepare(g->nclks, g->clks);
++	free_netdev(g->ndev);
+ }
+ 
+ static const struct of_device_id luofu_gmac_of_match[] = {
+@@ -126,6 +360,7 @@
+ 
+ static struct platform_driver luofu_gmac_driver = {
+ 	.probe = luofu_gmac_probe,
++	.remove = luofu_gmac_remove,
+ 	.driver = {
+ 		.name = "luofu-gmac",
+ 		.of_match_table = luofu_gmac_of_match,
+@@ -133,5 +368,5 @@
+ };
+ module_platform_driver(luofu_gmac_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (partial: no data path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE)");
+ MODULE_LICENSE("GPL");
+diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml b/Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+@@ -23,10 +23,19 @@
+   board only channels 0-3 carry wired traffic; the other half of each pair is
+   the Wi-Fi offload path.
+ 
+-  The Linux driver is a draft: it validates these resources, builds the ring
+-  bookkeeping and refuses to start the engine until the register and channel
+-  model has been verified against a read-only inventory of the running
+-  hardware.  The node must stay disabled until then.
++  The ring tables describe the engine's RX/TX configuration.  Each RX word
++  pair is the log2 of the number of 32-byte descriptors in that channel's
++  coherent ring and the per-frame RX buffer size in bytes; the TX pair is
++  the log2 descriptor count of every TX ring and the number of TX channels.
++  The measured configuration of the stock board (live post-bootloader
++  devicetree, 2026-11-18) is two RX channels <0x8 0x600> each and two TX
++  channels <0xc 0x2>.
++
++  The Linux driver is a draft: it implements the coherent rings, the
++  recovered channel initialization, the interrupt/NAPI receive path and a TX
++  producer, but the RX completion decode is still unknown and the internal
++  switch egress map does not exist, so the engine is only started by an
++  explicit attended opt-in and the node must stay disabled.
+ 
+ properties:
+   compatible:
+@@ -62,6 +71,25 @@
+ 
+   dma-coherent: true
+ 
++  hisilicon,rx-ring:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    description: |
++      RX channel table, two words per RX channel: log2 of the number of
++      32-byte descriptors in the channel's coherent ring, and the per-frame
++      RX buffer size in bytes.  The measured board configuration is two
++      pairs <0x8 0x600>.
++    minItems: 2
++    maxItems: 8
++
++  hisilicon,tx-ring:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    description: |
++      TX ring table: log2 of the number of 32-byte descriptors in every TX
++      ring, and the number of TX channels.  The measured board configuration
++      is <0xc 0x2>.
++    minItems: 2
++    maxItems: 2
++
+ required:
+   - compatible
+   - reg
+@@ -70,6 +98,8 @@
+   - clocks
+   - resets
+   - dma-coherent
++  - hisilicon,rx-ring
++  - hisilicon,tx-ring
+ 
+ additionalProperties: false
+ 
+@@ -92,5 +122,7 @@
+         clocks = <&crg LUOFU_CLK_PIE>;
+         resets = <&crg 0x30 0x19>;
+         dma-coherent;
++        hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
++        hisilicon,tx-ring = <0xc 0x2>;
+         status = "disabled";
+     };
+diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml b/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+@@ -16,11 +16,17 @@
+   two reset lines from the CRG, and attaches to one PHY on the shared MDIO bus
+   through the standard phy-mode/phy-handle properties.
+ 
+-  The register window is the MAC control/status block. The transmit and
+-  receive ring DMA programming model of this controller is not documented yet;
+-  the Linux driver is a partial port that only validates these resources and
+-  refuses to register a network device. The nodes are therefore disabled until
+-  the data path is implemented.
++  The register window is the MAC control/status block.  The transmit and
++  receive rings are owned by the PIE packet engine node, not by this one: the
++  MAC is a phylink front end, allocates the net_device and forwards its
++  transmit path to the PIE backend.  Frames cannot reach a wire until the
++  internal switch's egress port/qid map exists, and received frames are not
++  delivered until the PIE RX completion decode is recovered.
++
++  The Linux driver is a draft: it only registers a network device when the
++  PIE backend has armed its data path, and the nodes stay disabled until that
++  data path is validated.  The only MAC register writes it performs are the
++  measured 1 Gbps link-up/link-down words.
+ 
+ allOf:
+   - $ref: ethernet-controller.yaml#
