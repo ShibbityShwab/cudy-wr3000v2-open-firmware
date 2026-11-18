@@ -19,9 +19,9 @@ host sessions proved that OpenWrt main's `make defconfig`/`prepare` accept the t
 kernel patch series compiles a 6.18 kernel with the real `TEXT_OFFSET`, and that an own-artifact
 kernel slice (our zImage + our base DTB + our loader-match overlay + a generated trailer)
 satisfies every check the decoded `bootfip` performs. Nothing has been flashed or booted; the
-**rest** of the driver/binding series (thermal, pinctrl, switch, PCIe),
-rootfs/UBI, sysupgrade `platform.sh` metadata and the install path do not exist, and a novel
-trailer still needs one attended boot. The drivers written so far exist as host-compiled
+**rest** of the driver/binding series (switch, PCIe, GEMAC data path), rootfs/UBI, sysupgrade
+`platform.sh` metadata and the install path do not exist, and a novel trailer still needs one
+attended boot. The drivers written so far exist as host-compiled
 drafts only: CRG clock/reset (patch `004`) and watchdog (patch `005`) with their YAML
 bindings (2026-11-18, fifth session), plus the network trio - MDIO bus controller (`007`),
 Genius PHY (`008`) and a **partial** GEMAC binding/resource driver (`009`, no data path;

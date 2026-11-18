@@ -298,8 +298,8 @@ They are not a drop-in target. The mapping is:
     ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
     └── scripts/fip-slice.py                    <- tools/fip-slice.py
 
-The blocks that still have no driver in this tree (pinctrl, thermal, PCIe, internal LSW switch and
-the GEMAC data path) have an evidence-graded port plan in
+The blocks that still have no driver in this tree (PCIe host, internal LSW switch and the GEMAC
+data path) have an evidence-graded port plan in
 [../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md).
 
 The **draft kernel patch series** (written 2026-11-18; TARGET-DESIGN.md sections 4.1, 7)
@@ -371,19 +371,36 @@ is `patches-6.18/`:
   netdev, and the DTS GEMAC nodes are `disabled`; YAML
   `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. The data path is the
   remaining blocker before Ethernet can be claimed.
+- `010` adds the provisional machine-restart driver: `drivers/power/reset/luofu-reboot.c`
+  plus YAMLs for the reboot node and a `hisilicon,luofu-sysctrl` syscon node. It saves the
+  boot selector with a read-back/write-same (only the measured A/B encodings), writes the
+  vendor softrst pair to the CRG reboot word (PROVISIONAL - the exact order/width was never
+  measured) and falls back to a bounded watchdog arm rather than parking the box. Probe
+  performs no register access; nothing has run on hardware.
+- `011` adds the peripheral pinctrl driver: `drivers/pinctrl/hisilicon/pinctrl-luofu.c`
+  (6.18 pinctrl framework, 37 pins / 24 groups / 24 functions re-verified from the vendor
+  module, pinconf bits decoded from the module's config ops) + YAML; probe writes no mux or
+  cfg register, and consumer pin states remain open. YAML
+  `Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml`.
+- `012` adds the thermal sensor: `drivers/thermal/luofu_tvsensor.c` (read-only, vendor v4
+  conversion on `+0x24`, 6.18 of-thermal API) + YAML, with the DTS `cls0-thermal` zone using
+  the vendor trips (115 C passive / 125 C critical, 3 C hysteresis, 1 s polling) and no
+  cooling map; threshold/IRQ/enable/trim registers are undecoded and unwritten. YAML
+  `Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml`.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
 
 Still missing from the submission:
 
-- the rest of the driver + dt-binding series (thermal, pinctrl, switch, PCIe -
-  TARGET-DESIGN.md section 7), each with its YAML. The CRG/WDT (`004`/`005`), FMC
-  SPI-NAND (`006`) and network trio (`007`-`009`) drafts exist with their YAMLs (the PHY
-  driver needs none), but they are host-compile-validated only: no bench run, no boot, no
-  upstream review. The GEMAC
-  driver is a **resource/binding half only** - the TX/RX ring DMA data path is not
-  implemented, so there is no Ethernet data path yet (MDIO + PHY are complete ports);
+- the rest of the driver + dt-binding series (switch, PCIe, GEMAC data path -
+  TARGET-DESIGN.md section 7); pinctrl (`011`) and thermal (`012`) are now drafted too. The
+  CRG/WDT (`004`/`005`), FMC SPI-NAND (`006`), network trio (`007`-`009`), restart (`010`),
+  pinctrl (`011`) and thermal (`012`) drafts exist with their YAMLs (the PHY driver needs
+  none), but they are host-compile-validated only: no bench run, no boot, no upstream
+  review. The GEMAC driver is a **resource/binding half only** - the TX/RX ring DMA data
+  path is not implemented, so there is no Ethernet data path yet (MDIO + PHY are complete
+  ports);
 - a bench-verified reset path: patch `010` compiles and binds, but which of its
   write sequences actually resets the SoC is unmeasured; the CRG command
   pair is PROVISIONAL and the selector protocol is still [U]

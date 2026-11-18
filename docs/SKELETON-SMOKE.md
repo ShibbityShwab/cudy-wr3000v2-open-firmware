@@ -1782,3 +1782,75 @@ Not proven / not claimed - any hardware behaviour:
    sharing the watchdog constants with patch `005`.
 
 Evidence: local-only `build/linux-kbuild/waves/upstream-6.18-restart-20261118/`.
+
+
+## 2026-11-18 (eighth session): peripheral pinctrl (patch 011)
+
+Patch 011-pinctrl-luofu.patch (sha256 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442)
+adds drivers/pinctrl/hisilicon/pinctrl-luofu.c (848 lines; mainline pinctrl platform driver with
+pinctrl/pinmux/pinconf ops and pinconf_generic_dt_node_to_map_all), the new
+drivers/pinctrl/hisilicon Kconfig/Makefile wiring (CONFIG_PINCTRL_LUOFU bool), and
+Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml (two register windows:
+mux 0x3c, cfg 0x100; 37 pin names, 24 group names, 24 function names; generic state form).
+
+Design decisions and findings:
+- The vendor tables were re-verified directly from the local hi_kpinctrl.ko fixture (read-only
+  pyelftools/capstone): 37 pins, 24 groups with real pin lists, 24 functions, the per-pin 5-hit
+  mux table, group-level mux RMW fields, and cfg_off = 4*pin for every pin - the port is checked
+  against the binary, not only the older transcription.
+- Pinconf was decoded from the module's config ops: pull-up [0], pull-down [1],
+  drive-strength [4:2] (raw 3-bit), schmitt [5], input-enable [7], output level [10] (5.10
+  PIN_CONFIG_OUTPUT renamed to 6.18 PIN_CONFIG_LEVEL). Unsupported params fail loudly instead of
+  being stubbed. The vendor probe writes no mux/cfg register, so our probe performs no register
+  access and calls no reset.
+- No consumer pin states are attached: the vendor DTS attaches none to MDIO/GEMAC/FMC/UART, and
+  which states the wired path needs is [U]. Adding guessed states could remux the console/NAND.
+
+Verified in the isolated clone /home/shibbityshwab/openwrt-lab-pinctrl (openwrt main 27663a0,
+linux-6.18.60, OpenWrt GCC 14.4.0, CONFIG_WERROR=y, series 001-010 + 011; thermal 012 excluded):
+pristine dry-run RC=0; make target/linux/prepare RC=0; full make target/linux/compile -j16 RC=0
+(0 warnings, CC drivers/pinctrl/hisilicon/pinctrl-luofu.o 52,336 B); zImage 3,252,544 B sha256
+a4686a41...; _text=stext=0xc0608000 and -DTEXT_OFFSET=0x00608000 unchanged (0x80608000 contract);
+CONFIG_PINCTRL_LUOFU=y linked (System.map luofu_pinctrl_probe); dt_binding_check RC=0 (yamllint
+unavailable, only that lint skipped); board DTS cpp+kernel-dtc RC=0 with zero stderr (DTB 9,887 B
+sha256 eddb76f5...); config canonical re-derivation RC=0 twice, byte-identical and
+symbol-identical (290 symbols); checkpatch 0 errors / 0 warnings / 0 checks; MMIO only through
+devm_platform_ioremap_resource_byname; no lab/bench/vendor breadcrumbs.
+
+Not proven: never probed or applied on hardware; probe-time/default pin state, consumer state
+requirements, drive-strength mA mapping and the MDIO two-state question remain [U]. No boot/image/
+bench claims.
+
+## 2026-11-18 (ninth session): thermal sensor + zone (patch 012)
+
+Patch 012-arm-thermal-luofu-tvsensor.patch (sha256
+3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f) adds
+drivers/thermal/luofu_tvsensor.c (read-only sensor registered with
+devm_thermal_of_zone_register(), thermal_zone_device_ops.get_temp), its Kconfig/Makefile entry
+(CONFIG_LUOFU_TVSENSOR), and Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml.
+The board DTS placeholder becomes a real sensor node (reg widened from the vendor 0x14 to 0x100,
+vendor IRQ SPI 0 not claimed) plus the cls0-thermal zone with the vendor trips (115 C passive /
+125 C critical, 3 C hysteresis, polling-delay = 1000) and no cooling map.
+
+Design decisions:
+- The conversion is the vendor v4 path reproduced operation for operation: read +0x24 & 0xffff,
+  compute ((165*raw - 32835)/100)*1000 - 40000 millidegrees (raw 240 -> 27.0 C), so values match
+  the vendor kernel bit for bit.
+- Registry through the 6.18 of-thermal API (the old thermal_zone_of_device_ops interface is gone).
+- The reg window is widened to the containing 256-byte block; the vendor's page-granular ioremap
+  masked the too-small DT window. Nothing beyond +0x24 is touched.
+- Polled, no interrupt, no writes: threshold/IRQ/enable/trim registers are undecoded and no store
+  to the block was measured. No cooling map (the vendor cooling device is a network rate limiter
+  that depends on the LSW block); sustainable-power is dropped (units [U]).
+
+Verified in the isolated clone /home/shibbityshwab/openwrt-lab-thermal (series 001-010 + 012):
+pristine dry-run RC=0; prepare RC=0; full compile RC=0 with 0 warnings (zImage 3,250,848 B sha256
+34ed6116...; a supplementary CONFIG_WERROR=y rebuild was also RC=0 and produced the identical
+zImage); dt_binding_check RC=0; board DTS cpp+dtc RC=0, zero warnings (DTB 9,799 B sha256
+2677acd7...); config canonical re-derivation byte-identical (298 symbols); checkpatch 0/0/0.
+Caught in the lane: thermal-zones.yaml requires child names matching *-thermal, so the old
+placeholder zone cls0 became cls0-thermal (a pre-existing dt-validate error is gone).
+
+Not proven: threshold/enable/trim/IRQ register model is [U] and deliberately not implemented;
+the reg width and the trip policy are [I]/vendor policy rather than our measurement; no clock or
+reset is modelled; hardware behaviour is unverified - no boot/image/bench claim.

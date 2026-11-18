@@ -50,7 +50,7 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
-#   [N]  new in the luofu driver series (patches-6.18/004-010):
+#   [N]  new in the luofu driver series (patches-6.18/004-012):
 #        the drivers and the dependencies they select. The 2026-11-18
 #        canonical derivation predates these Kconfig entries, so the lines
 #        were added by hand; for 004-005 a canonical re-derivation with the
@@ -307,6 +307,9 @@ CONFIG_MIGRATION=y
 CONFIG_MMU_LAZY_TLB_REFCOUNT=y
 CONFIG_MODULES_USE_ELF_REL=y
 # CONFIG_MTD_PSTORE is not set
+# [N] new driver in patches-6.18/012 (luofu thermal sensor: read-only
+#     temperature + of-thermal zone; no threshold/cooling writes yet)
+CONFIG_LUOFU_TVSENSOR=y
 # [N] the SPI-NAND stack consumed by CONFIG_LUOFU_FMC (patches-6.18/006):
 #     the generic SPI-NAND driver (user-selectable) plus the NAND core/ECC
 #     glue it pulls in. The two select-only symbols are part of the delta
@@ -375,6 +378,10 @@ CONFIG_PHYLINK=m
 # CONFIG_PHY_HISI_INNO_USB2 is not set
 # [L] from the lab 5.10.201 reference
 CONFIG_PINCTRL=y
+# [N] new driver in patches-6.18/011 (luofu peripheral pinctrl: pinmux plus
+#     the six decoded pin configuration parameters; probe performs no register
+#     access and no pinctrl state is wired into the board devicetree yet)
+CONFIG_PINCTRL_LUOFU=y
 # [L] from the lab 5.10.201 reference
 CONFIG_PL310_ERRATA_588369=y
 # [L] from the lab 5.10.201 reference

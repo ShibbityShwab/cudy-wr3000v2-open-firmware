@@ -12,7 +12,7 @@
  * invented one. The board now has draft drivers and YAML bindings for the CRG
  * clock/reset controller, the watchdog, the FMC SPI-NAND controller, the
  * network trio (MDIO bus, Genius PHY, partial GEMAC) and machine restart
- * (patches-6.18/004-010); every other proposed binding still does not exist.
+ * (patches-6.18/004-012); every other proposed binding still does not exist.
  * The GEMAC driver is a resource/validation half only - it has no data path -
  * so its nodes stay disabled, and the restart driver's reset command is
  * PROVISIONAL (see its node). Do not submit this file as-is.
@@ -479,23 +479,37 @@
 	/* ---- vendor-specific blocks: placeholders, no binding ---------- */
 
 	/*
-	 * TODO(binding): peripheral pinctrl + IOMUX. The lab driver matches the
-	 * VENDOR string "hsan,luofu-peri-pinctrl"; upstream proposal is a
-	 * documented "hisilicon,luofu-pinctrl" with pinmux/pinconf groups from
-	 * the 37 pins / 24 groups / 24 functions tables. The pinconf setters
-	 * are stubs in the lab driver (TARGET-DESIGN.md 6.2, 7.1).
-	 * The lab measurement matters: enabling this block was required for the
-	 * wired path to behave (it configures the pins the MDIO/GMAC path
-	 * needs); a "disabled" node here does NOT mean the hardware does not
-	 * need it - it means the driver/binding is not ready.
+	 * Peripheral pinctrl + IOMUX. Binding:
+	 * Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml
+	 * and driver drivers/pinctrl/hisilicon/pinctrl-luofu.c (patch 011).
+	 * The block owns the mux window (the function-select bits of all pins)
+	 * and the per-pin configuration window. The tables (37 pins / 24 groups
+	 * / 24 functions) are the ones the vendor pin controller uses; enabling
+	 * this block was required for the wired path to behave, and a disabled
+	 * node here does NOT mean the hardware does not need it.
+	 *
+	 * Probe performs no register access: the vendor's probe-time pin state
+	 * is not known and the bootloader has already configured the pins, so a
+	 * pin state is only programmed when a consumer requests one through the
+	 * standard pinctrl interface.
+	 * TODO(consumers): no pinctrl state is attached to any device node yet.
+	 * The vendor devicetree attaches none to its device nodes either (its
+	 * state nodes are looked up by name from its modules), and which groups
+	 * the MDIO/GEMAC/FMC/UART nodes must select is unverified; do not add
+	 * consumer states before that is established. The transcribed mux table
+	 * does contain the mdio1 (pins 10/11) and rgmii0 (pins 12-23) functions
+	 * that the wired path needs.
+	 * TODO(pinconf): the six pin configuration parameters the block
+	 * implements are supported by the driver, but no state uses the generic
+	 * pin configuration properties yet and the drive-strength field has no
+	 * known mA mapping.
 	 */
 	pinctrl_peri: pinctrl@14900100 {
-		compatible = "hisilicon,luofu-pinctrl";	/* TODO(binding): proposal */
+		compatible = "hisilicon,luofu-pinctrl";
 		reg = <0x14900100 0x3c>,	/* mux window */
 		      <0x14940000 0x100>;	/* cfg window */
 		reg-names = "mux", "cfg";
-		status = "disabled";
-		/* TODO(binding): the spi/jtag/led/avs pin states go here */
+		status = "okay";
 	};
 
 	/*
@@ -792,29 +806,52 @@
 		};
 	};
 
-	/* ---- thermal (new binding, TODO) ------------------------------- */
+	/* ---- thermal: sensor + zone (patch 012) ------------------------ */
 
 	/*
-	 * TODO(binding): thermal sensor driver. The conversion is decoded and
-	 * numerically verified; threshold/enable writes need a measurement
-	 * decision (TARGET-DESIGN.md 7.1). Vendor hwver 3; the vendor vendor
-	 * properties (int-base-offset, trim, addition-en, efuse-trim-en) are
-	 * NOT carried - decide driver data vs documented props.
+	 * Temperature sensor. The die temperature is the low 16 bits of the
+	 * word at offset 0x24, converted by the driver with the vendor v4
+	 * formula (decoded and numerically verified). The vendor devicetree
+	 * declares a 0x14-byte reg for a driver that reads +0x24, so the
+	 * window is widened here to the containing 0x100-byte register block:
+	 * a reg shorter than 0x28 would not cover the register the driver
+	 * uses.
+	 * Binding: Documentation/devicetree/bindings/thermal/
+	 *          hisilicon,luofu-tvsensor.yaml
+	 * The node is enabled: the vendor kernel registers and polls this
+	 * exact block, so the read path is not unknown hardware - but no
+	 * threshold, interrupt, enable or trim register has been decoded,
+	 * and the driver writes no register at all. The vendor interrupt
+	 * (SPI 0) is deliberately not claimed: without a threshold model
+	 * there is nothing to service, and the zone polls instead.
+	 * TODO(hw): whether the block needs a clock gate or a reset from
+	 * Linux is unverified; the vendor devicetree has neither.
 	 */
 	tvsensor: thermal-sensor@14900500 {
-		compatible = "hisilicon,luofu-tvsensor";	/* TODO(binding) */
-		reg = <0x14900500 0x14>;
+		compatible = "hisilicon,luofu-tvsensor";
+		reg = <0x14900500 0x100>;
 		#thermal-sensor-cells = <0>;
-		interrupts = <0 0 4>;	/* SPI 0 */
-		status = "disabled";
+		status = "okay";
 	};
 
 	thermal-zones {
-		/* One zone; trip points are the vendor tree's own (TARGET-DESIGN.md 6.2). */
-		cls0: cls0 {
+		/*
+		 * One zone for the single on-die sensor. The vendor tree calls
+		 * it "cls0"; the node name adds the binding-required "-thermal"
+		 * suffix. The trips are the vendor values (115 C passive, 125 C
+		 * critical, 3 C hysteresis); they are vendor policy data, not a
+		 * measurement made on this board, and no cooling device is mapped
+		 * yet. The vendor cooling map points at its network rate-limiting
+		 * cooling device, whose LSW/CAR model does not exist in this tree,
+		 * so v1 keeps the zone and trips without cooling-maps. The vendor
+		 * sustainable-power value is likewise omitted: its units are
+		 * unverified and it is only consumed by the power_allocator
+		 * governor, which no cooling device here could use. The vendor
+		 * trip-point@0/@2 numbering becomes trip-point0/1: node names
+		 * have no meaning beyond uniqueness and trip-point@1 was absent.
+		 */
+		cls0: cls0-thermal {
 			polling-delay = <1000>;
-			polling-delay-passive = <100>;
-			sustainable-power = <2000>;
 			thermal-sensors = <&tvsensor>;
 
 			trips {
