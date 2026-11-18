@@ -9,12 +9,13 @@
  * (tools/lab-src/arch/arm/boot/dts/luofu-r116.dts in the parent repository).
  * Every register base, interrupt number, clock/reset cell and partition below
  * is a lab-measured value (or an explicitly marked vendor-DT fact), not an
- * invented one. The CRG clock/reset provider, the watchdog and the network
- * trio (MDIO bus, Genius PHY, partial GEMAC) now have draft drivers and YAML
- * bindings (patches-6.18/004, 005, 007, 008, 009); every other proposed
- * binding still does not exist. The GEMAC driver is a resource/validation
- * half only - it has no data path - so its nodes stay disabled. Do not submit
- * this file as-is.
+ * invented one. The board now has draft drivers and YAML bindings for the CRG
+ * clock/reset controller, the watchdog, the FMC SPI-NAND controller, the
+ * network trio (MDIO bus, Genius PHY, partial GEMAC) and machine restart
+ * (patches-6.18/004-010); every other proposed binding still does not exist.
+ * The GEMAC driver is a resource/validation half only - it has no data path -
+ * so its nodes stay disabled, and the restart driver's reset command is
+ * PROVISIONAL (see its node). Do not submit this file as-is.
  *
  * HOW TO READ THE MARKERS:
  *   TODO(binding)        a devicetree binding that must be written/agreed
@@ -52,8 +53,10 @@
  *   - LEDs / keys: only overlay evidence exists; they need the standard
  *     gpio-leds/gpio-keys-polled bindings plus confirmed GPIO polarity
  *     (see the comment near the end of the root node);
- *   - sysctrl/sysenv boot-selector provider: no binding yet; the A/B
- *     selector protocol is [U] (TARGET-DESIGN.md 3.4, 6.2, 7.1).
+ *   - sysctrl/sysenv boot-selector provider: only the minimum SYSCTRL
+ *     syscon node the restart driver needs exists (patch 010); the A/B
+ *     selector protocol itself is still [U] (TARGET-DESIGN.md 3.4, 6.2,
+ *     7.1) and no sysenv/nvmem interface is modelled.
  *
  * Expected to parse after the C preprocessor + dtc, but it does NOT build in a
  * kernel tree (no headers, no machine match, no dtbs_check clean run) and it
@@ -233,6 +236,44 @@
 		clock-output-names = "twd_clk";
 	};
 
+	/* ---- SYSCTRL: boot selector + reset info (shared page) ---------- */
+
+	/*
+	 * The SYSCTRL page at 0x10100000 carries SoC-level control registers
+	 * shared between functions. Only the minimum the written drivers need is
+	 * modelled: the A/B boot-selector cell at 0xc08 that the stock loader
+	 * reads on the next boot (the reboot driver saves it before a reset) and
+	 * the reset-info record at 0xc10. The page must be a syscon so the reboot
+	 * driver shares one mapping; a future nvmem provider for the
+	 * selector/reset-info cells would live here (TARGET-DESIGN.md 3.4, 6.2).
+	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
+	 *          hisilicon,luofu-sysctrl.yaml
+	 * TODO(nvmem): the Linux read path for the selector that a sysupgrade
+	 * helper needs is still [U]; this node does not make the protocol known.
+	 */
+	sysctrl: system-controller@10100000 {
+		compatible = "hisilicon,luofu-sysctrl", "syscon";
+		reg = <0x10100000 0x1000>;
+	};
+
+	/*
+	 * Machine restart: saves the SYSCTRL A/B boot selector, issues the CRG
+	 * software-reset command and falls back to the CRG watchdog if the reset
+	 * does not take. Both target pages are shared, so the node only
+	 * references the syscon nodes and has no reg.
+	 * Binding: Documentation/devicetree/bindings/power/reset/
+	 *          hisilicon,luofu-reboot.yaml
+	 * PROVISIONAL: the CRG reset command pair (vendor softrst_val0/val1 at
+	 * reboot-offset 0x00) is derived from the vendor devicetree and has never
+	 * been run on hardware; the boot-selector encoding is measured. See
+	 * patches-6.18/010 and docs/incoming/restart/SUMMARY.md.
+	 */
+	reboot {
+		compatible = "hisilicon,luofu-reboot";
+		hisilicon,sysctrl = <&sysctrl>;
+		hisilicon,crg = <&crg>;
+	};
+
 	/* ---- CRG: clock gates + reset controller (shared page) --------- */
 
 	/*
@@ -267,9 +308,12 @@
 	 * lab instrumentation treated them as read-only and one of the mux
 	 * writes switches the CPU clock source, so do not add write support
 	 * without a measurement plan.
-	 * TODO(restart): no SoC reset/reboot path is modelled (soft-reset magic
-	 * at 0x84); reboot would need the sysctrl/boot-selector writes that are
-	 * not understood (TARGET-DESIGN.md 3.4, 6.2).
+	 * TODO(restart): the reset command is the CRG reboot register at 0x00
+	 * (vendor reboot-offset; softrst_val0/1), not the 0x84 soft-reset word.
+	 * Patch 010 implements it PROVISIONALLY in the hisilicon,luofu-reboot
+	 * driver together with the SYSCTRL boot-selector save; the exact write
+	 * order and whether the pair belongs in one register or two adjacent
+	 * ones are unverified (TARGET-DESIGN.md 3.4, 6.2).
 	 */
 	crg: system-controller@14880000 {
 		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
@@ -877,13 +921,14 @@
 	 * polarity and board names are confirmed; TARGET-DESIGN.md 6.2 lists
 	 * both as free bindings.
 	 *
-	 * sysctrl / sysenv: the vendor r116 build has "hsan,sysctrl",
-	 * "hsan,sysenv", "hsan,rstinfo" blocks, not in the lab DTS. The A/B
-	 * boot selector lives in sysenv (cell 0x10100C08; values 0x10 = A pair,
-	 * 0x11 = B pair per the loader's own print; a manual B write used 0x21;
-	 * the A-side handover value is NOT established). Upstream needs a
-	 * syscon/nvmem provider or a small platform driver plus a binding
-	 * (TARGET-DESIGN.md 3.4, 6.2, 7.1). Do not invent it here.
+	 * sysctrl / sysenv: the minimum SYSCTRL syscon node the restart driver
+	 * uses is modelled above (0x10100000, boot selector at 0xc08, patch 010).
+	 * The vendor "hsan,sysenv"/"hsan,rstinfo" interface is NOT modelled: the
+	 * A/B selector protocol is still [U] (values 0x10 = A pair, 0x11 = B pair
+	 * per the loader's own print; a manual B write used 0x21; the A-side
+	 * handover value is NOT established), and a sysupgrade read path needs an
+	 * nvmem provider plus one attended A/B validation (TARGET-DESIGN.md 3.4,
+	 * 6.2, 7.1). Do not invent the rest here.
 	 *
 	 * efuse / RNG / LED PWM / PMU PWM / clk-corrector / net-cdev / woe_*:
 	 * vendor "hsan,*" blocks in the pinned tree; not needed for a

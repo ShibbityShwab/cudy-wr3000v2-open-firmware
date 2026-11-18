@@ -193,6 +193,10 @@ From the vendor base DTB (`soc/vendor-dt-notes.md` §6; the same table is in the
   the old "plain `fw_setenv` works" assumption was wrong (the binary is a symlink to
   `fw_printenv`). [V] same section; **treat the selector protocol as [U] until one attended
   A/B validation**.
+- A draft restart driver (patch `010`) saves the selector before a reset by
+  reading the cell and writing the same value back. That preserves the pair without
+  inventing the value the stock path writes, but it does not close the protocol: the
+  Linux read path for `sysupgrade` and one attended A/B validation remain open. [I]
 - Environment blocks: `enva` (mtd3) and `envb` (mtd4), 128 KiB each; the measured block layout is
   `crc32-little-endian(4) | flags(1) | data(131067)`; the bench writes **both** copies when
   switching. [V] `FLASH-PLAN.md` "Slot switch recipe"; [I] an upstream helper that reproduces
@@ -482,7 +486,7 @@ New/derived bindings (propose one YAML per driver; all [I]):
 | --- | --- | --- |
 | board root | `hisilicon,luofu-r116`, `hisilicon,luofu` | keep; add the loader-match properties (`vendor_id`, `board_id`, `board_name`) in the trailer base DTB/overlays only if the match rule requires it (§5.2) |
 | CRG clocks+reset | `hsan,crg` + 16 `hsan,clk-gate` + 2 mux + 2 PLL children | **written** as patch `004`: one `hisilicon,luofu-crg` syscon + simple-mfd node with YAML `clock/hisilicon,luofu-crg.yaml` and header `dt-bindings/clock/hisilicon,luofu-crg.h`; the 16 gates are a driver-side table indexed by the header's IDs (no fake child nodes), and `#reset-cells=<2>` remains the lab `(offset, bit)` form documented and range-checked in the binding/YAML. Still TODO: named reset-ID table, per-gate parent/PLL/mux model, bench-confirm the provisional 0x20-group offsets |
-| watchdog | `hisilicon,luofu-wdt` | **written** as patch `005`: child of the CRG syscon node (no `reg`, no overlapping MMIO), YAML `watchdog/hisilicon,luofu-wdt.yaml`; the vendor magic values/offsets are hwver-2 driver data, no vendor DT properties, no IRQ and no restart handler (both documented TODOs) |
+| watchdog | `hisilicon,luofu-wdt` | **written** as patch `005`: child of the CRG syscon node (no `reg`, no overlapping MMIO), YAML `watchdog/hisilicon,luofu-wdt.yaml`; the vendor magic values/offsets are hwver-2 driver data, no vendor DT properties, no IRQ and no restart handler (both documented TODOs; the restart policy now lives in the patch-`010` `hisilicon,luofu-reboot` driver, which uses the watchdog only as a fallback) |
 | peripheral pinctrl | still **`hsan,luofu-peri-pinctrl`** (the measured driver string) | rename to a documented binding, e.g. `hisilicon,luofu-pinctrl`, with `pinmux`/`pinconf` groups from the 37 pins / 24 groups / 24 functions tables; YAML + `dt-bindings/pinctrl/hisilicon,luofu-pinctrl.h`; enable the nodes the board needs (SPI/JTAG/LED/AVS) |
 | FMC / SPI-NAND | `hisilicon,luofu-fmc` with `bus_id`/`spi_cs`/`enable-quad-mode` vendor props and 17 `fixed-partitions` children | **written** as patch `006`: the controller is a SPI-MEM controller (`drivers/spi/spi-luofu-fmc.c`) and the mainline SPI-NAND stack behind it (`drivers/mtd/nand/spi`, ESMT `F50L1G41LC`) owns chip detection, on-die ECC, OOB layout, bad-block handling and `fixed-partitions`; YAML `Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml` (flat `mtd/` - 6.18 has no `mtd/nand/` binding directory). The vendor props are gone: `spi_cs` -> the child's `reg`, `enable-quad-mode` -> `spi-{tx,rx}-bus-width = <4>`, `bus_id` -> nothing; the DTS node becomes a SPI bus with one `spi-nand` child, and its `sfc_rst` reset consumes the CRG 2-cell form (`<&crg 0x2c 0x0>`) and its clock the `LUOFU_CLK_SFC` ID. Still TODO: `u-boot,env` for `enva`/`envb` ([U] format compatibility), read-only flags, the unverified ECC/DMA/partition semantics, and the ESMT F50L1G41LC chip entry is a v6.19 addition that this 6.18 target gets from OpenWrt's generic backport `434-...F50L1G41LC.patch`. Host compile only; never booted. |
 | GEMAC | `hisilicon,luofu-gmac` | **written** as patch `009`: YAML `net/hisilicon,luofu-gmac.yaml`; `phy-mode`, `phy-handle`, one clock and the two CRG reset lines are described; the driver is **PARTIAL** (binding/resource validation only; probe refuses because the TX/RX ring DMA model is not decoded), so the DTS nodes stay `disabled`; `gmac0` is not used by the vendor (mapping: 14380000->phy2, 14400000->phy3, 14480000->phy4 (wired), 14500000->phy5) |
@@ -491,7 +495,7 @@ New/derived bindings (propose one YAML per driver; all [I]):
 | internal switch | `hisilicon,luofu-dp`/`-pfe`/`-lsw-woe`, `hisilicon,luofu-pie` | one switch binding (or switch + parser subnodes) with the switch's port model; decide DSA vs switchdev in the driver design; YAML `net/hisilicon,luofu-switch.yaml` |
 | PCIe host | `hisilicon,luofu-pcie` (two domains), vendor `iatu_rc`/`iatu_ep`/`acp-gate` props | DWC-based binding where standard; vendor iATU tables become driver init data, not DT; the `misc` window must not be read by the driver (hard rule); YAML `pci/hisilicon,luofu-pcie.yaml` |
 | thermal | `hisilicon,luofu-tvsensor` + `thermal-zones` | keep; YAML `thermal/hisilicon,luofu-tvsensor.yaml`; trip points from DT |
-| sysctrl/sysenv | vendor blocks `hsan,sysctrl`, `hsan,sysenv`, `hsan,rstinfo` are **not** in the lab DTS | add the minimum needed: a `syscon`/nvmem provider for the boot selector and reset-info; the A/B selector needs an upstream-safe interface (see §7.1); YAML `soc/hisilicon,luofu-sysctrl.yaml` |
+| sysctrl/sysenv | vendor blocks `hsan,sysctrl`, `hsan,sysenv`, `hsan,rstinfo` are **not** in the lab DTS | **partly written** as patch `010`: a `hisilicon,luofu-sysctrl` syscon node for page `0x10100000` (boot selector at `0xc08`) plus the `hisilicon,luofu-reboot` node that consumes it; YAMLs `soc/hisilicon/hisilicon,luofu-sysctrl.yaml` and `power/reset/hisilicon,luofu-reboot.yaml`. Still TODO: the nvmem/sysupgrade read path and the selector protocol itself (§3.4) |
 | SMP | `enable-method = "hisilicon,hsan_smp"` | a documented method, e.g. `hisilicon,luofu-smp`, plus `platsmp` port; the TR6560 BSP has a real `platsmp.c` as a reference shape (`CPU_METHOD_OF_DECLARE`) but different bindings, so it is reference only |
 | CPU OPP/regulators | absent (TODO in lab DTS) | optional for a first submission: fixed-rate CPU is acceptable if documented; otherwise OPP table + `pwm-regulator` + efuse/nvmem cells; YAMLs as needed |
 | efuse/RNG/LED PWM/PMU PWM/clk-corrector/net-cdev/woe_dev/woe_wifi | absent from the lab DTS; `hsan,*` in the pinned tree | decide per block: needed (efuse/nvmem for MAC? - [U], PWM for LEDs, RNG as hwrng) or out of scope for v1; do not invent bindings for unused blocks |
@@ -510,6 +514,11 @@ Additional must-do cleanup to be upstream-reviewable [I]:
 ## 7. Drivers: what exists and what is missing
 
 ### 7.1 Existing lab drivers (parent `tools/lab-src`, tracked mirror of the live 5.10.201 tree)
+
+For the blocks that still have no driver in this tree (peripheral pinctrl, thermal, PCIe host,
+internal LSW switch and the GEMAC data path), the evidence-graded port plan - what the repo
+knows, what is missing, the framework, dependencies and effort - is
+[REMAINING-DRIVERS.md](REMAINING-DRIVERS.md).
 
 The tracked mirror is the source of record for the bench kernel; the published snapshots under
 `lab/` are older and some of their READMEs are stale (the pinctrl README still says
@@ -530,8 +539,8 @@ snapshot READMEs. [V] `tools/lab-src/FILES`; `tools/check-lab-src.sh`.
 | PCIe host | `lab/luofu-pcie/luofu-pcie.c` (1,664 lines) | [V] read-only inventory frame; DWC link state; a compile-gated bring-up exists but **was never validated**; the driver does not call `pci_host_probe()`; the misc window is write-only/forbidden to read; sub-word/unaligned accesses fault (panic class) | [I] a real DWC host controller: clocks/resets, RC mode, iATU programming from `ranges`, LTSSM poll, endpoint power GPIOs, `pci_host_probe`, linkdown IRQ; binding; never read `0x10161000` |
 | thermal | `lab/luofu-thermal/luofu-thermal.c` | [V] temperature conversion decoded and numerically verified; threshold writes staged | [I] YAML/binding; trip points from DT already exist; threshold/enable writes need a measurement decision; small submission |
 | Wi-Fi | `lab/luofu-wifi/`, `lab/wifidrv0`, `lab/wifidrv1` | [V] a cfg80211 wiphy+netdev was registered in an earlier phase; the takeover reaches the firmware dialogue; **no data path**; see §8.3 | [X] blocked; not part of the first submission |
-| machine | `tools/lab-src/arch/arm/mach-luofu/luofu.c` (~1,040 lines) | [V] machine descriptor, L2 AUX replay, bench breadcrumbs into sysctrl, no `smp_ops`, boot-time hacks | [I] split it: clean `mach-luofu` + drivers; delete breadcrumbs and bench-only writes; add SMP or document UP; upstream machine/board match |
-| sysenv / boot selector | **none** | [V] the vendor mechanism is only observed (cell + env copies); no driver exists | [I] an upstream-safe interface: syscon/nvmem cell + helper for `sysupgrade`, or a small platform driver; needs the selector protocol closed (§3.4) |
+| machine | `tools/lab-src/arch/arm/mach-luofu/luofu.c` (~1,040 lines) | [V] machine descriptor, L2 AUX replay, bench breadcrumbs into sysctrl, no `smp_ops`, boot-time hacks | [I] split it: clean `mach-luofu` + drivers; delete breadcrumbs and bench-only writes; add SMP or document UP; upstream machine/board match. The lab `.restart` hook is replaced by the patch-`010` `hisilicon,luofu-reboot` driver (no machine hook; the bench-only crumb writes are gone) |
+| sysenv / boot selector | **none** | [V] the vendor mechanism is only observed (cell + env copies); no driver exists (only the lab machine wrote the cell) | [I] **draft written** as patch `010`: `hisilicon,luofu-sysctrl` syscon node + `drivers/power/reset/luofu-reboot.c`, which saves the selector with a read-back write-same before a reset and then issues the PROVISIONAL CRG reset command; the read path a `sysupgrade` helper needs and the selector protocol remain [U]. **Host compile only; never booted.** |
 | SMP | **none** - lab machine has no `smp_ops` | [V] `luofu.c` header says a UP boot with a warning is expected; the vendor DT method has no mainline match | [I] `platsmp` port (pen/smc release address from the vendor DT/sysctrl); reference shape in the TR6560 BSP `arch/arm/mach-triductor/platsmp.c` (different bindings) |
 | efuse/nvmem, RNG, LED PWM, PMU PWM, clk-corrector, net cooling | fragment requests `CONFIG_LUOFU_HWRNG`/`EFUSE` but **no source exists**; the lab DTS has no nodes | [V] `lab/luofu-kernel/fragment-audit.md` ("7 requested LUOFU symbols never reached .config; of those 3 have neither a Kconfig entry nor a source file: HWRNG, EFUSE, LSW") | [I] decide per block; efuse may be needed for MAC address handling ([U] where the MAC address actually comes from - not established in the repo); LED PWM needed only if LEDs are modelled on it |
 
@@ -682,10 +691,11 @@ device fact, not a percentage.
 
 **Explicitly not met today** (2026-11-18): every row above except the identity warning. There
 is no target PR, no DTS submission, no image recipe, no install path and no WiFi answer; the
-target/DTS drafts and the driver drafts under `../target-skeleton/` (CRG, watchdog, MDIO
-bus, Genius PHY, partial GEMAC) are host-only skeleton work (compile/binding-validated, never
-booted, not reviewed upstream), the GEMAC data path does not exist, and the thermal, pinctrl,
-FMC, switch and PCIe drivers are still unwritten.
+target/DTS drafts and the driver drafts under `../target-skeleton/` (CRG, watchdog, FMC/SPI-NAND,
+MDIO bus, Genius PHY, partial GEMAC, provisional restart) are host-only skeleton work
+(compile/binding-validated, never booted, not reviewed upstream); the GEMAC data path does not
+exist, and the thermal, pinctrl, switch and PCIe drivers are still unwritten - their port plans
+are in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md).
 
 ---
 
@@ -753,7 +763,8 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
 3. **Install path** - characterization of the stock TFTP recovery write path vs the documented
    vendor-root install. (§5.5)
 4. **Selector protocol** - exact env-block/bootreg write sequence and value for both pairs; a
-   read path usable from Linux. (§3.4)
+   read path usable from Linux. Patch `010` only writes back the value it has just read
+   (a write-same), so the protocol itself is still open. (§3.4)
 5. **MAC address / efuse** - where the unit's MACs come from (bdinfo/fac/efuse); needed for
    `nvmem` cells and the device page. [U]
 6. **Overlay filesystem** - keep JFFS2 `rootfs_data` or convert to UBI at install. (§5.3)

@@ -1,0 +1,409 @@
+--- a/drivers/power/reset/Kconfig
++++ b/drivers/power/reset/Kconfig
+@@ -117,6 +117,16 @@
+ 	help
+ 	  Reboot support for Hisilicon boards.
+ 
++config LUOFU_REBOOT
++	bool "HiSilicon Luofu machine restart"
++	depends on ARCH_LUOFU || COMPILE_TEST
++	select MFD_SYSCON
++	help
++	  Restart driver for the HiSilicon Hi5671Y "luofu" SoC.  It saves the
++	  SYSCTRL A/B boot selector, issues the CRG software-reset command and
++	  falls back to the CRG watchdog if the reset does not take.  The reset
++	  command sequence is prototype-quality and unverified on hardware.
++
+ config POWER_RESET_LINKSTATION
+ 	tristate "Buffalo LinkStation power-off driver"
+ 	depends on ARCH_MVEBU || COMPILE_TEST
+--- a/drivers/power/reset/Makefile
++++ b/drivers/power/reset/Makefile
+@@ -12,6 +12,7 @@
+ obj-$(CONFIG_POWER_RESET_GPIO) += gpio-poweroff.o
+ obj-$(CONFIG_POWER_RESET_GPIO_RESTART) += gpio-restart.o
+ obj-$(CONFIG_POWER_RESET_HISI) += hisi-reboot.o
++obj-$(CONFIG_LUOFU_REBOOT) += luofu-reboot.o
+ obj-$(CONFIG_POWER_RESET_LINKSTATION) += linkstation-poweroff.o
+ obj-$(CONFIG_POWER_RESET_MACSMC) += macsmc-reboot.o
+ obj-$(CONFIG_POWER_RESET_MSM) += msm-poweroff.o
+--- /dev/null
++++ b/drivers/power/reset/luofu-reboot.c
+@@ -0,0 +1,258 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" machine restart
++ *
++ * The SoC has no ARM architectural reset that takes the whole chip down: a
++ * machine restart is a command to the CRG (clock/reset generator) block plus,
++ * on the stock software path, a save of the A/B boot-selector cell that the
++ * loader reads on the next boot.  Both blocks are syscon nodes in the board
++ * devicetree, so this driver is a restart policy over two shared regmaps and
++ * never maps or claims an MMIO page itself.
++ *
++ * Register facts and where they come from (2026-11-18):
++ *
++ * - SYSCTRL boot selector, 0x10100000 + 0x0c08 (vendor sysenv node
++ *   bootreg-offset = 0xc08 [V]; live A/B tests [V]).  The low byte is 0x10 for
++ *   the A pair and 0x11 for the B pair; 0x00 makes the loader validate and
++ *   record a value, and 0x21 was written by the vendor sysenv interface as a
++ *   handover.  The cell is sticky across a warm reset.  The driver therefore
++ *   only writes back the value it has just read (a write-same): it preserves
++ *   the pair and cannot move the board to a different slot, and a value that
++ *   is not one of the two established encodings is left untouched.
++ *
++ * - CRG software-reset command, 0x14880000 + 0x00 (vendor crg node properties
++ *   reboot-offset = <0x0> and softrst_val0/val1 [V]; the recovered CRG access
++ *   rules name 0x00 the reboot register [V]).  PROVISIONAL: the pair is the
++ *   vendor's own values (the second is the bitwise complement of the first)
++ *   and the offset is the one the vendor node names, but the write order and
++ *   whether the pair belongs in one register or two adjacent ones have NOT
++ *   been measured.  This is the one write whose exact semantics are unproven;
++ *   it is confined to the reboot register (never the soft-reset 0x84, resume
++ *   0x38, mux 0x138 or PLL 0x198/0x1e0 words), and the watchdog fallback
++ *   below bounds a command that does not take.
++ *
++ * - CRG watchdog, 0x14880000 + 0x50/0x64 (hwver-2 set/enable words and the
++ *   vendor magic pairs [V] from the vendor watchdog node; the same values the
++ *   luofu watchdog driver uses).  If the CRG command does not reset the SoC,
++ *   the handler arms the watchdog with a 1 s timeout and waits for the
++ *   hardware reset.  Parking forever with no reset and no timer armed is
++ *   exactly what can strand a board, so this driver never parks.
++ *
++ * Discipline: probe performs no register access at all - the first register
++ * touch happens inside the restart handler, i.e. only when userspace asks for
++ * a reboot.  There is no ioremap(), no request_mem_region() and no exclusive
++ * claim on either page; both regmaps come from the syscon nodes.
++ *
++ * This is a host-compiled prototype, not a verified reset path: the selector
++ * write-same and the watchdog fallback use established encodings, while the
++ * CRG software-reset command is PROVISIONAL as described above.  Do not call
++ * a machine running this driver "reset verified" until one attended hardware
++ * run has confirmed which write actually resets the SoC.
++ */
++
++#include <linux/delay.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/reboot.h>
++#include <linux/regmap.h>
++
++/* SYSCTRL page (0x10100000): A/B boot selector. */
++#define LUOFU_SYSCTRL_BOOTREG_OFFSET	0x0c08
++#define LUOFU_BOOTREG_PAIR_MASK		0x000000ff
++#define LUOFU_BOOTREG_PAIR_A		0x10
++#define LUOFU_BOOTREG_PAIR_B		0x11
++
++/* CRG page (0x14880000): software-reset command and watchdog. */
++#define LUOFU_CRG_REBOOT_OFFSET		0x0000
++#define LUOFU_CRG_SOFTRST_VAL0		0x51162100
++#define LUOFU_CRG_SOFTRST_VAL1		0xaee9deff
++
++#define LUOFU_WDT_SET_OFFSET		0x0050
++#define LUOFU_WDT_EN_OFFSET		0x0064
++#define LUOFU_WDT_TIMEOUT_MASK		0xfff803ff
++#define LUOFU_WDT_TIMEOUT_SHIFT		10
++#define LUOFU_WDT_ENABLE_VAL0		0x4f4e5452
++#define LUOFU_WDT_ENABLE_VAL1		0x12345116
++#define LUOFU_WDT_TIMEOUT_SECS		1
++
++struct luofu_reboot {
++	struct device *dev;
++	struct regmap *sysctrl;
++	struct regmap *crg;
++};
++
++/*
++ * Save the boot selector the loader will read after the reset.
++ *
++ * The cell is sticky, so in the normal case this is a write-same of the value
++ * that is already there.  It is done anyway because the stock path saves it
++ * before resetting, and a write-same is the only form this driver can justify
++ * from the measured data: the value the stock path writes is not established,
++ * so nothing is invented here.
++ */
++static void luofu_reboot_preserve_selector(struct luofu_reboot *priv)
++{
++	u32 val;
++	int ret;
++
++	ret = regmap_read(priv->sysctrl, LUOFU_SYSCTRL_BOOTREG_OFFSET, &val);
++	if (ret) {
++		dev_warn(priv->dev, "cannot read the boot selector: %d\n", ret);
++		return;
++	}
++
++	if ((val & LUOFU_BOOTREG_PAIR_MASK) != LUOFU_BOOTREG_PAIR_A &&
++	    (val & LUOFU_BOOTREG_PAIR_MASK) != LUOFU_BOOTREG_PAIR_B) {
++		dev_warn(priv->dev,
++			 "boot selector 0x%08x is not an A/B pair encoding, leaving it untouched\n",
++			 val);
++		return;
++	}
++
++	ret = regmap_write(priv->sysctrl, LUOFU_SYSCTRL_BOOTREG_OFFSET, val);
++	if (ret)
++		dev_warn(priv->dev, "cannot save the boot selector: %d\n", ret);
++}
++
++/*
++ * Ask the CRG for a software reset.
++ *
++ * PROVISIONAL: the vendor pair and the vendor reboot-register offset, but not
++ * the exact sequence.  If this does not reset the SoC the handler falls back
++ * to the watchdog below, so a wrong sequence costs a slower reboot, not a
++ * stranded board.
++ */
++static void luofu_reboot_crg_soft_reset(struct luofu_reboot *priv)
++{
++	int ret;
++
++	ret = regmap_write(priv->crg, LUOFU_CRG_REBOOT_OFFSET,
++			   LUOFU_CRG_SOFTRST_VAL0);
++	if (ret) {
++		dev_err(priv->dev, "cannot write the CRG reset command: %d\n",
++			ret);
++		return;
++	}
++
++	ret = regmap_write(priv->crg, LUOFU_CRG_REBOOT_OFFSET,
++			   LUOFU_CRG_SOFTRST_VAL1);
++	if (ret)
++		dev_err(priv->dev, "cannot complete the CRG reset command: %d\n",
++			ret);
++}
++
++/*
++ * Arm the watchdog as the reset source of last resort.
++ *
++ * hwver-2 timeout encoding: bits [18:10] of the set word hold (seconds - 1);
++ * the enable pair is written val1 first, then val0, the vendor order.
++ */
++static void luofu_reboot_wdt_arm(struct luofu_reboot *priv)
++{
++	u32 timeout;
++	int ret;
++
++	ret = regmap_read(priv->crg, LUOFU_WDT_SET_OFFSET, &timeout);
++	if (ret) {
++		dev_emerg(priv->dev, "cannot read the watchdog word: %d\n", ret);
++		return;
++	}
++
++	timeout &= LUOFU_WDT_TIMEOUT_MASK;
++	timeout |= (LUOFU_WDT_TIMEOUT_SECS - 1) << LUOFU_WDT_TIMEOUT_SHIFT;
++
++	ret = regmap_write(priv->crg, LUOFU_WDT_SET_OFFSET, timeout);
++	if (ret) {
++		dev_emerg(priv->dev, "cannot set the watchdog timeout: %d\n",
++			  ret);
++		return;
++	}
++
++	ret = regmap_write(priv->crg, LUOFU_WDT_EN_OFFSET,
++			   LUOFU_WDT_ENABLE_VAL1);
++	if (!ret)
++		ret = regmap_write(priv->crg, LUOFU_WDT_EN_OFFSET,
++				   LUOFU_WDT_ENABLE_VAL0);
++	if (ret)
++		dev_emerg(priv->dev, "cannot enable the watchdog: %d\n", ret);
++}
++
++static int luofu_restart_handler(struct sys_off_data *data)
++{
++	struct luofu_reboot *priv = data->cb_data;
++
++	dev_emerg(priv->dev, "restart: saving the boot selector\n");
++	luofu_reboot_preserve_selector(priv);
++
++	luofu_reboot_crg_soft_reset(priv);
++
++	/*
++	 * The CRG command resets the SoC before this point in the working
++	 * case; reaching here means it did not take.  A watchdog reset is a
++	 * hardware event and still runs the loader, which reads the selector
++	 * saved above.
++	 */
++	dev_emerg(priv->dev,
++		  "CRG software reset did not take; arming the watchdog\n");
++	luofu_reboot_wdt_arm(priv);
++	mdelay(1500);
++
++	dev_emerg(priv->dev, "the watchdog fallback did not reset the SoC\n");
++
++	return NOTIFY_DONE;
++}
++
++static int luofu_reboot_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct luofu_reboot *priv;
++	int ret;
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	priv->dev = dev;
++
++	priv->sysctrl = syscon_regmap_lookup_by_phandle(dev->of_node,
++							"hisilicon,sysctrl");
++	if (IS_ERR(priv->sysctrl))
++		return dev_err_probe(dev, PTR_ERR(priv->sysctrl),
++				     "cannot get the SYSCTRL regmap\n");
++
++	priv->crg = syscon_regmap_lookup_by_phandle(dev->of_node,
++						    "hisilicon,crg");
++	if (IS_ERR(priv->crg))
++		return dev_err_probe(dev, PTR_ERR(priv->crg),
++				     "cannot get the CRG regmap\n");
++
++	ret = devm_register_restart_handler(dev, luofu_restart_handler, priv);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "cannot register the restart handler\n");
++
++	dev_info(dev, "registered restart handler (boot selector + CRG reset + watchdog fallback)\n");
++
++	return 0;
++}
++
++static const struct of_device_id luofu_reboot_of_match[] = {
++	{ .compatible = "hisilicon,luofu-reboot" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_reboot_of_match);
++
++static struct platform_driver luofu_reboot_driver = {
++	.probe = luofu_reboot_probe,
++	.driver = {
++		.name = "luofu-reboot",
++		.of_match_table = luofu_reboot_of_match,
++	},
++};
++module_platform_driver(luofu_reboot_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu machine restart");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml
+@@ -0,0 +1,69 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/power/reset/hisilicon,luofu-reboot.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu machine restart
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" SoC is restarted by saving the SYSCTRL A/B boot selector
++  and issuing the CRG software-reset command.  There is no ARM architectural
++  reset that takes the whole chip down.  Both blocks are syscon nodes shared
++  with other functions (the SYSCTRL page also carries the reset-info record,
++  the CRG page also carries the clock/reset and watchdog registers), so this
++  node only references them and has no register range of its own.
++
++  The reset sequence itself is prototype-quality: the boot selector encoding
++  is measured, while the CRG command pair is derived from the vendor
++  devicetree and has not been verified on hardware.
++
++properties:
++  compatible:
++    const: hisilicon,luofu-reboot
++
++  hisilicon,sysctrl:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description:
++      phandle to the SYSCTRL syscon node that holds the A/B boot selector
++
++  hisilicon,crg:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description:
++      phandle to the CRG syscon node that holds the software-reset command
++      register and the watchdog
++
++required:
++  - compatible
++  - hisilicon,sysctrl
++  - hisilicon,crg
++
++additionalProperties: false
++
++examples:
++  - |
++    bus {
++        #address-cells = <1>;
++        #size-cells = <1>;
++
++        sysctrl: system-controller@10100000 {
++            compatible = "hisilicon,luofu-sysctrl", "syscon";
++            reg = <0x10100000 0x1000>;
++        };
++
++        crg: system-controller@14880000 {
++            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++            reg = <0x14880000 0x1000>;
++            #clock-cells = <1>;
++            #reset-cells = <2>;
++        };
++
++        reboot {
++            compatible = "hisilicon,luofu-reboot";
++            hisilicon,sysctrl = <&sysctrl>;
++            hisilicon,crg = <&crg>;
++        };
++    };
+--- /dev/null
++++ b/Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml
+@@ -0,0 +1,44 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/soc/hisilicon/hisilicon,luofu-sysctrl.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu system controller
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The Hi5671Y "luofu" SYSCTRL page holds SoC-level control registers that are
++  shared between functions: the A/B boot-selector cell at 0xc08 (read by the
++  stock bootloader on the next boot), the stash cell used by the CPU
++  hold/release path at 0xc00 and the reset-info record at 0xc10.  The page is
++  therefore modelled as a syscon so drivers share one mapping; no driver
++  claims the registers exclusively.
++
++  Only the boot selector has a consumer today (the reboot driver, which saves
++  the value before resetting).  A future nvmem provider for the selector and
++  reset-info cells would live on this node.
++
++properties:
++  compatible:
++    items:
++      - const: hisilicon,luofu-sysctrl
++      - const: syscon
++
++  reg:
++    maxItems: 1
++
++required:
++  - compatible
++  - reg
++
++additionalProperties: false
++
++examples:
++  - |
++    system-controller@10100000 {
++        compatible = "hisilicon,luofu-sysctrl", "syscon";
++        reg = <0x10100000 0x1000>;
++    };

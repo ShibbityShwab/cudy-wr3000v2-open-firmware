@@ -1554,3 +1554,231 @@ Not proven / not claimed - any hardware behaviour:
    attended boot - unchanged.
 
 Evidence: local-only `build/linux-kbuild/waves/upstream-6.18-fmc-20261118/`.
+
+---
+
+## 2026-11-18 (seventh session): machine restart (patch 010)
+
+**Status: the first upstream-style machine-restart path for this SoC is written as a platform
+driver with two YAML bindings, the board DTS gets a SYSCTRL syscon node and the reboot node,
+and the driver/rootfs config gains `CONFIG_LUOFU_REBOOT=y`. The patch applies cleanly to
+pristine `linux-6.18.60` and in the OpenWrt clone, the full kernel compiles as a built-in
+with zero warnings, both bindings pass `dt_binding_check`, the board DTS compiles with the
+patched kernel's own dtc to a DTB with zero warnings and the two new nodes validate against
+their schemas, and `checkpatch` is clean. The CRG software-reset command itself is
+**PROVISIONAL** (the vendor devicetree values and the vendor reboot-register offset are
+used, but the exact write order/width has never been measured), and the selector protocol
+stays [U]. NOTHING HAS BEEN BOOTED OR RUN ON HARDWARE AND THE RESET PATH IS NOT CLAIMED TO
+WORK; publication remains NOT READY.**
+
+Host-only, in an isolated btrfs-reflink copy of the clone
+(`/home/shibbityshwab/openwrt-lab-restart`; `openwrt main` `27663a0`, `linux-6.18.60`,
+the tree's own OpenWrt GCC 14.4.0 toolchain). The shared `openwrt-lab` clone was not
+modified by this lane; no router, UART, TFTP, flash or bench tool was touched.
+
+### What was added
+
+| artifact | sha256 |
+| --- | --- |
+| `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | `3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095` |
+| `target/linux/hisilicon/dts/luofu-r116.dts` (adds the SYSCTRL syscon node and the reboot node) | `42c6ffa30b74f1108d2045ae1814e1b3da709752f1e327aabc26b8871752b9b4` |
+| `target/linux/hisilicon/luofu/config-6.18` (`CONFIG_LUOFU_REBOOT=y`) | `25c27473b3bc52ae2d0a207acb4126080578e8c28d59b2656ff0960c9fc7a9c8` |
+
+`010` adds:
+- `drivers/power/reset/luofu-reboot.c`: the restart handler. Three steps: save the SYSCTRL
+  A/B boot selector with a read-back write-same; write the vendor `softrst_val0`/`val1`
+  pair to the CRG reboot register at page offset `0x00`; if that does not reset the SoC,
+  set the CRG watchdog to a 1 s expiry and arm its vendor enable pair, then wait a bounded
+  time. Probe only obtains the two syscon regmaps and registers the handler - it performs
+  no register access at all.
+- `drivers/power/reset/{Kconfig,Makefile}`: `CONFIG_LUOFU_REBOOT` (bool,
+  `depends on ARCH_LUOFU || COMPILE_TEST`, `select MFD_SYSCON`).
+- `Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml` and
+  `Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml`.
+
+### Design decisions (and why)
+
+1. **A standalone `drivers/power/reset/` platform driver, not a machine `.restart` hook.**
+   This is the upstream shape for SoC restart implementations (the directory already holds
+   `hisi-reboot.c`, `syscon-reboot.c`, `gpio-restart.c`), it keeps the mach file clean,
+   and it matches the target design's "future reset driver" note (TARGET-DESIGN.md 7.1).
+   The driver shares the two syscon pages instead of claiming them: SYSCTRL is a new
+   `hisilicon,luofu-sysctrl` syscon node and CRG is the existing
+   `hisilicon,luofu-crg` syscon node. There is no `ioremap()` and no
+   `request_mem_region()` in the driver, so the lab lane's overlapping-MMIO failure mode
+   cannot recur.
+2. **The boot-selector write is a write-same, never the lab's hard-coded `0x10`.** The
+   measured facts are the cell offset (`0xc08`), the A/B encodings (`0x10`/`0x11`) and
+   that the cell is sticky across a warm reset. The value the stock restart path writes is
+   not measured, so the driver reads the cell, validates the encoding and writes the same
+   value back - it preserves whichever pair booted and cannot move the board to another
+   slot. An unrecognised value (including the observed `0x21` handover) is left untouched
+   with a warning.
+3. **The CRG reset command is PROVISIONAL and is labelled so in the driver, the binding and
+   the DTS.** The values (`0x51162100`/`0xaee9deff`, the second the bitwise complement of
+   the first) and the register offset (`reboot-offset = <0x0>`) are the vendor devicetree's
+   own; the recovered access rules name `0x00` the reboot register and mark it as a store
+   the read-only lab instruments must not perform (i.e. writing it is expected to reset the
+   SoC). What is *not* measured is whether the pair goes to one register or two adjacent
+   words and in which order - the driver writes both to `0x00` (the vendor watchdog pair
+   shape) and nothing is invented. The write is confined to the reboot register: no
+   soft-reset (`0x84`), resume (`0x38`), mux (`0x138`) or PLL (`0x198`/`0x1e0`)
+   word is ever touched, so a wrong command cannot reprogram clocks.
+4. **A failed reset must not strand the board, so the watchdog is the bounded fallback.**
+   PHASE 85 in the parent ledger is the evidence: the old restart path wrote its reset
+   sequence, parked forever, and the SoC watchdog had already been disarmed - only a hand on
+   the power returned the box. The fix was to arm the watchdog before parking. This driver
+   keeps that backstop with the watchdog driver's own vendor hwver-2 values (1 s expiry,
+   enable val1-then-val0) and **never parks**: after arming it waits 1.5 s and returns, so
+   `machine_restart()` still gets to print its "Reboot failed" message.
+5. **Why not extend the watchdog driver or `POWER_RESET_HISI`:** patch `005` deliberately
+   has no restart handler (arming the watchdog from the watchdog driver is the wrong layer,
+   and the reset path was unverified); `POWER_RESET_HISI` binds `"hisilicon,sysctrl"` and
+   writes `0xdeadbeef` at a `reboot-offset` prop this SoC's vendor node does not have, and
+   matching that compatible would give it an MMIO claim next to the syscon; `syscon-reboot`
+   cannot express selector-save + two-stage reset. The watchdog enable constants therefore
+   appear in both `005` and `010` - a known review smell, named in the port summary rather
+   than hidden.
+6. **Probe is read-only, and `checkpatch`/static checks are part of the gate.** The first
+   MMIO access happens in the restart handler only; loading the driver cannot arm the timer,
+   write the selector or reset anything. The delivered drivers/YAMLs contain no lab/bench
+   breadcrumbs and no private-repository references.
+
+### Verification (exact commands and results)
+
+All logs/artifacts are local-only (gitignored) under
+`build/linux-kbuild/waves/upstream-6.18-restart-20261118/`; nothing there is committed.
+
+**1. Patch applies to pristine `linux-6.18.60`** (unpacked from the clone's
+`dl/linux-6.18.60.tar.xz`):
+
+```
+$ cd .../upstream-6.18-restart-20261118/a            # pristine tree
+$ patch -p1 --dry-run -i 010-arm-luofu-restart.patch
+checking file drivers/power/reset/Kconfig
+checking file drivers/power/reset/Makefile
+checking file drivers/power/reset/luofu-reboot.c
+checking file Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml
+checking file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml
+RC=0
+```
+
+**2. OpenWrt prepare** (the isolated clone copy, target patches `001`-`010` plus the DTS
+and config edits; the prep step re-extracts the kernel and applies every generic backport):
+
+```
+$ cd /home/shibbityshwab/openwrt-lab-restart && make target/linux/prepare V=s
+Applying .../patches-6.18/010-arm-luofu-restart.patch using plaintext:
+patching file drivers/power/reset/Kconfig
+...
+RC=0   (1,169 "patching file" lines over the generic + target patches; 0 .rej/.orig files)
+```
+
+**3. Full kernel compile** with the tree's own OpenWrt GCC 14.4.0 and `CONFIG_WERROR=y`
+(no make-command-line override):
+
+```
+$ make target/linux/compile V=s -j16
+  CC      drivers/power/reset/luofu-reboot.o
+...
+  Kernel: arch/arm/boot/zImage is ready
+RC=0
+```
+
+- `arch/arm/boot/zImage`: **3,251,336 B**, sha256 `e548bc7b4c54160da2b482fcb2111d5569227c1132ba4c0299ba2e665d26aeb4`.
+- kernel `.config`: `CONFIG_LUOFU_REBOOT=y`, plus the existing `CONFIG_POWER_RESET=y`,
+  `CONFIG_MFD_SYSCON=y`, `CONFIG_REGMAP=y` and the rest of the series symbols.
+- the driver is built-in and linked: System.map has `luofu_reboot_probe` and
+  `luofu_restart_handler` (luofu_reboot_probe (c0ba94a8), luofu_restart_handler (c07082cc)).
+- **0 warning lines** in the whole compile log.
+- the load-address contract is unchanged: `_text = stext = 0xc0608000` in System.map and
+  `-DTEXT_OFFSET=0x00608000` in both early-boot `.cmd` files.
+
+**4. Board DTS -> DTB with the patched kernel's own dtc:**
+
+```
+$ cpp -nostdinc -I <kernel>/include -I <kernel>/arch/arm/boot/dts -undef \
+      -D__DTS__ -x assembler-with-cpp -o luofu-r116.dts.preprocessed dts/luofu-r116.dts
+$ <kernel>/scripts/dtc/dtc -I dts -O dtb -o luofu-r116.dtb luofu-r116.dts.preprocessed
+RC=0, stderr EMPTY (zero warnings)
+```
+
+- DTB: **9,891 B**, sha256 `f23fc9319c3f0d9fc3cad6aa0a6578fde9a5f4f182ba27a5ff00f5cea44383cb`.
+- node checks: `/reboot` has compatible `"hisilicon,luofu-reboot"` and the
+  `hisilicon,sysctrl`/`hisilicon,crg` phandles; `/system-controller@10100000` has
+  compatible `"hisilicon,luofu-sysctrl", "syscon"` and `reg = <0x10100000 0x1000>`.
+
+**5. Device-tree binding validation:**
+
+```
+$ PATH=<dtschema-venv>/bin:$PATH make ARCH=arm dt_binding_check \
+      DT_SCHEMA_FILES="Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml:Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml"
+  DTEX    .../hisilicon,luofu-reboot.example.dts
+  DTC [C] .../hisilicon,luofu-reboot.example.dtb
+  DTEX    .../hisilicon,luofu-sysctrl.example.dts
+  DTC [C] .../hisilicon,luofu-sysctrl.example.dtb
+RC=0
+```
+
+dtschema **2026.9**; `yamllint` is not installed, so the tree's YAML-lint step is skipped
+with its own warning - the only validation step not exercised (same limitation as the
+earlier sessions). The real board DTB was also run through `dt-validate`: RC=0 and **no
+message names the reboot or SYSCTRL node** (the remaining messages are the pre-existing TODO
+nodes: sp804 compatible, UART clock-names, thermal zone naming). A full-draft-DTS
+`dtbs_check` is still not clean and is not claimed.
+
+**6. Static checks:**
+
+```
+$ scripts/checkpatch.pl --no-tree -f drivers/power/reset/luofu-reboot.c
+  total: 0 errors, 0 warnings, 258 lines checked
+$ scripts/checkpatch.pl --no-tree -f Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml
+  total: 0 errors, 0 warnings, 69 lines checked
+$ scripts/checkpatch.pl --no-tree -f Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml
+  total: 0 errors, 0 warnings, 44 lines checked
+```
+
+- no `ioremap()`/`request_mem_region()`/`platform_get_resource()` in the driver; both pages
+  are obtained through `syscon_regmap_lookup_by_phandle()`;
+- the probe body contains no `regmap_read`/`regmap_write` call (no register touch before a
+  reboot is requested);
+- no lab/bench breadcrumb or private-repository reference in the driver or the two YAMLs
+  (`grep -i 'lab|bench'` -> no matches); no `0xc0de*`/vendor `hsan,*` strings.
+
+**7. Config provenance:** canonically re-derived with the new Kconfig in the tree: `yes '' | make kernel_oldconfig` RC=0 emitted 297 config-symbol lines that are **identical** to the annotated `luofu/config-6.18` after stripping comments (`CONFIG_SYMBOLS_IDENTICAL`), including `CONFIG_LUOFU_REBOOT=y`; a second run was byte-identical (`IDEMPOTENT_BYTE_IDENTICAL`) and the clone's target config was restored afterwards. The driver's `select MFD_SYSCON` adds no resolved line because MFD_SYSCON was already in the delta.
+
+### What this proves and what it does not
+
+Proven (host-only): the restart driver and its two bindings are real code that applies to
+pristine 6.18.60, applies in the OpenWrt platform-patch order and builds into the board
+kernel as a built-in with zero warnings under `CONFIG_WERROR=y`; the two YAMLs pass
+`dt_binding_check` and the board DTS nodes validate against them; the board DTS compiles
+with zero dtc warnings; `checkpatch` is clean; probe cannot write a register; and the load
+contract/TEXT_OFFSET is unchanged.
+
+Not proven / not claimed - any hardware behaviour:
+
+- whether writing the vendor complementary pair to CRG offset `0x00` actually resets the
+  SoC; the write order and whether the pair belongs in one register or two adjacent words
+  are unmeasured (PROVISIONAL);
+- whether the 1 s watchdog arming sequence from our own kernel takes: the values are the
+  vendor driver's hwver-2 values and the watchdog has been observed resetting this board
+  through the bootloader's own arming, but this exact sequence from Linux has not been run
+  here;
+- what `0x21` means as a selector value (the driver leaves it untouched);
+- the selector protocol itself: the Linux read path for `sysupgrade` and one attended A/B
+  validation remain open (TARGET-DESIGN.md 3.4);
+- no boot, no bench, no device, no image: **publication remains NOT READY**.
+
+### Remaining TODOs for the restart port
+
+1. One attended bench cycle in the order given in `docs/incoming/restart/SUMMARY.md`: the
+   watchdog fallback alone, then the CRG command variants as separate measured runs, then
+   the selector save + one A/B validation.
+2. Upstream review items: split the two binding YAMLs into their own patches (checkpatch's
+   "DT binding docs and includes should be a separate patch"; this series keeps them with
+   the driver like `004`/`005`), maintainer identity, phandle property naming, whether an
+   `nvmem` cell provider should expose the selector instead of a driver-private write, and
+   sharing the watchdog constants with patch `005`.
+
+Evidence: local-only `build/linux-kbuild/waves/upstream-6.18-restart-20261118/`.

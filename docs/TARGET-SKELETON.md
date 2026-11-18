@@ -28,7 +28,7 @@ Genius PHY (`008`) and a **partial** GEMAC binding/resource driver (`009`, no da
 its DTS nodes stay disabled) - added in the sixth session the same day - and the FMC
 SPI-NAND controller (`006`, a SPI-MEM controller with the mainline SPI-NAND stack behind
 it; it consumes the CRG `sfc_clk` gate and `sfc_rst` reset and adds `CONFIG_SPI` /
-`CONFIG_MTD_SPI_NAND`). None of them has run on hardware.
+`CONFIG_MTD_SPI_NAND`), and, from the seventh session, the machine-restart driver (`010`: SYSCTRL boot-selector save, a PROVISIONAL CRG software-reset command and a CRG watchdog fallback). None of them has run on hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;
@@ -63,7 +63,7 @@ the image recipe relies on it. Full byte tables, checks and remaining unknowns:
 
 **What is still [U]/TODO** (full list in TARGET-DESIGN.md section 12 and the skeleton README):
 one attended boot of a generated trailer; wiring the custom image chain; sysupgrade
-container/install path and selector protocol; MAC/efuse source; switch DSA-vs-switchdev; the
+container/install path and selector protocol; a bench-verified reset path (the patch-`010` CRG command pair is PROVISIONAL and the selector protocol is still [U]); MAC/efuse source; switch DSA-vs-switchdev; the
 GEMAC TX/RX ring/DMA data path (the driver is a resource/binding half only); SMP; Wi-Fi scope;
 board compatible vs OpenWrt device name.
 

@@ -50,7 +50,7 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
-#   [N]  new in the luofu driver series (patches-6.18/004-005 and 007-009):
+#   [N]  new in the luofu driver series (patches-6.18/004-010):
 #        the drivers and the dependencies they select. The 2026-11-18
 #        canonical derivation predates these Kconfig entries, so the lines
 #        were added by hand; for 004-005 a canonical re-derivation with the
@@ -60,7 +60,9 @@
 #        symbols already in this delta (CONFIG_OF_MDIO, CONFIG_MDIO_BUS,
 #        CONFIG_PHYLIB), so they add no resolved dependency line; GEMAC is
 #        partial (binding/resource driver only, no data path - see its
-#        Kconfig help).
+#        Kconfig help). The 010 restart driver is a bool that selects
+#        CONFIG_MFD_SYSCON, which is already in this delta, so it adds no
+#        resolved dependency line either.
 #
 # WHAT THE 5.10 REFERENCE HAD THAT IS NOT IN THIS DELTA
 #   * inherited from target/linux/generic/config-6.18 (equal value, therefore
@@ -283,6 +285,10 @@ CONFIG_LUOFU_GMAC=y
 CONFIG_LUOFU_MDIO=y
 # [N] new driver in patches-6.18/008 (luofu Genius PHY)
 CONFIG_LUOFU_PHY=y
+# [N] new driver in patches-6.18/010 (luofu machine restart: SYSCTRL
+#     boot-selector save + CRG software-reset command + CRG watchdog
+#     fallback; the reset command sequence is PROVISIONAL and unverified)
+CONFIG_LUOFU_REBOOT=y
 # [N] new driver in patches-6.18/005 (luofu watchdog)
 CONFIG_LUOFU_WDT=y
 # [N] new driver in patches-6.18/006 (luofu FMC SPI-NAND controller, a
@@ -291,9 +297,10 @@ CONFIG_LUOFU_FMC=y
 # [L] from the lab 5.10.201 reference
 CONFIG_MDIO_BUS=y
 # CONFIG_MFD_HI655X_PMIC is not set
-# [N] selected by CONFIG_LUOFU_CRG and CONFIG_LUOFU_WDT (shared syscon regmap
-#     for the 0x14880000 page); not in the 2026-11-18 derived delta because the
-#     Kconfig entries did not exist yet
+# [N] selected by CONFIG_LUOFU_CRG, CONFIG_LUOFU_WDT and CONFIG_LUOFU_REBOOT
+#     (shared syscon regmaps for the 0x14880000 and 0x10100000 pages); not in
+#     the 2026-11-18 derived delta because the Kconfig entries did not exist
+#     yet
 CONFIG_MFD_SYSCON=y
 CONFIG_MIGHT_HAVE_CACHE_L2X0=y
 CONFIG_MIGRATION=y
@@ -399,8 +406,8 @@ CONFIG_RD_GZIP=y
 CONFIG_REED_SOLOMON=y
 CONFIG_REED_SOLOMON_DEC8=y
 CONFIG_REED_SOLOMON_ENC8=y
-# [N] selected by CONFIG_MFD_SYSCON, which CONFIG_LUOFU_CRG and CONFIG_LUOFU_WDT
-#     select; added with the 2026-11-18 driver series
+# [N] selected by CONFIG_MFD_SYSCON, which CONFIG_LUOFU_CRG, CONFIG_LUOFU_WDT
+#     and CONFIG_LUOFU_REBOOT select; added with the 2026-11-18 driver series
 CONFIG_REGMAP=y
 CONFIG_REGMAP_MMIO=y
 # [L] from the lab 5.10.201 reference

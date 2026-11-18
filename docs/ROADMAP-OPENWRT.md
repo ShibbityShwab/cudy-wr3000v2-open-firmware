@@ -41,7 +41,8 @@ parent `STATUS.md` section 3, parent `EVIDENCE-INDEX.md` "Bench kernel line 2026
 parent ledger 2026-11-18 06:50 (and 2026-11-17 20:15/20:40 for the ABI findings).
 
 **Upstream track.** Nothing above changes this: there is no target/DTS/image recipe/driver
-series, no install path, and no WiFi answer. The measured blockers stand:
+series, no install path, and no WiFi answer. The measured blockers stand; the remaining-driver
+order, evidence and effort estimates are in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md).
 
 - Wi-Fi: the vendor module is not a mac80211 driver (0 mac80211 symbols, a vendor MAC inside
   the module, 211 symbols imported through a vendor `HW_RTOS_NS` namespace) over a closed
@@ -50,8 +51,8 @@ series, no install path, and no WiFi answer. The measured blockers stand:
 - Internal LSW switch: no driver source exists; only reverse-engineered vendor modules.
 - PCIe host: the lab PCIe driver is a read-only frame plus an unvalidated, compile-gated
   bring-up; it is not a host controller.
-- A/B `sysupgrade` and the stock loader's FIP container: the trailer is currently copied
-  from a vendor-derived artifact and cannot yet be regenerated from published material; the
+- A/B `sysupgrade` and the stock loader's FIP container: the trailer format is decoded and a
+  fail-closed generator exists (TRAILER-FORMAT.md), but no novel trailer has been booted; the
   install path is unproven (see TARGET-DESIGN.md sections 3, 5).
 
 **What this plan is for.** The phases below describe the work shape and the history of how it

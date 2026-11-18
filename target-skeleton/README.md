@@ -24,7 +24,10 @@
 > so the GEMAC nodes stay disabled). The same session also added the board's **FMC
 > SPI-NAND controller** (patch `006` - a SPI-MEM controller with the mainline SPI-NAND
 > stack behind it, its YAML binding and the DTS conversion to a SPI bus + `spi-nand`
-> child). All of them compile as built-ins into the same 6.18
+> child). A seventh session added the **machine-restart driver** (patch `010` -
+> a restart handler over the SYSCTRL and CRG syscon nodes: boot-selector
+> save, CRG software-reset command and a CRG watchdog fallback; the reset
+> command is PROVISIONAL). All of them compile as built-ins into the same 6.18
 > kernel build (host-only) and have **never run on hardware**. The design these files
 > encode is not accepted upstream: the rest of the driver series, image recipe and device
 > page do not exist. **Do not read this directory as upstream progress.**
@@ -65,6 +68,7 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/007-net-mdio-luofu.patch` | network trio 1/3 (2026-11-18, sixth session): new `drivers/net/mdio/mdio-luofu.c` (6.18 MDIO bus API; the frame/status/data register model and the polled handshake are the ones a previous out-of-tree 5.10 driver exercised on the lab board), Kconfig/Makefile (`CONFIG_LUOFU_MDIO` in `drivers/net/mdio/`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml`. Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **never booted, never bench-run**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/patches-6.18/008-net-phy-luofu.patch` | network trio 2/3: new `drivers/net/phy/luofu-phy.c` (PHYLIB driver for the Hisilicon "Genius" PHY, PHY ID `0x20669a00` / mask `0xffffff00`; generic clause 22 ops; the vendor per-PHY firmware patch is **not** loaded - documented TODO), Kconfig/Makefile (`CONFIG_LUOFU_PHY`). No YAML by design: PHY drivers match by PHY ID and the PHY children stay standard `ethernet-phy-ieee802.3-c22` nodes. **Host kernel compile RC=0, no warnings**; `checkpatch` clean; **never booted**. | same |
 | `target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch` | network trio 3/3, **PARTIAL**: new `drivers/net/ethernet/hisilicon/luofu-gmac.c` (platform driver; claims the binding and validates reg/clocks/resets/phy-mode/phy-handle, then **refuses to probe** - the TX/RX ring DMA model is not implemented and has never been decoded, so no netdev is registered), Kconfig/Makefile (`CONFIG_LUOFU_GMAC`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. **Host kernel compile RC=0, no warnings**; `dt_binding_check` pass; the GEMAC DTS nodes stay `disabled`. **Not a data-path driver; never booted.** | same |
+| `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
 | `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig (fifth session, 2026-11-18). It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`) and the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC partial); with patches `001`-`009` the **full kernel compiles** (RC=0) and nothing boots | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` | board image Makefile (includes `image.mk` and the subtarget file) plus the device stanza, kernel-slice assembly calling the FIP tool, UBI rootfs sketch and sysupgrade metadata sketch (**SCHEMATIC**) | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` |
@@ -294,6 +298,10 @@ They are not a drop-in target. The mapping is:
     ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
     └── scripts/fip-slice.py                    <- tools/fip-slice.py
 
+The blocks that still have no driver in this tree (pinctrl, thermal, PCIe, internal LSW switch and
+the GEMAC data path) have an evidence-graded port plan in
+[../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md).
+
 The **draft kernel patch series** (written 2026-11-18; TARGET-DESIGN.md sections 4.1, 7)
 is `patches-6.18/`:
 
@@ -376,6 +384,10 @@ Still missing from the submission:
   upstream review. The GEMAC
   driver is a **resource/binding half only** - the TX/RX ring DMA data path is not
   implemented, so there is no Ethernet data path yet (MDIO + PHY are complete ports);
+- a bench-verified reset path: patch `010` compiles and binds, but which of its
+  write sequences actually resets the SoC is unmeasured; the CRG command
+  pair is PROVISIONAL and the selector protocol is still [U]
+  (TARGET-DESIGN.md section 3.4);
 - a `platform.sh` implementing `platform_check_image`/`platform_do_upgrade`
   (TARGET-DESIGN.md section 5.4) - **not written**;
 - the sysupgrade container wrapper that adds the kernel slice, rootfs UBI and
