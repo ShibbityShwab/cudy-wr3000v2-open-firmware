@@ -31,7 +31,8 @@
 #   That the stock loader accepts a NOVEL slice or that the kernel boots. That
 #   needs ONE ATTENDED BOOT on a recovered unit (TARGET-DESIGN.md 5.2, 9;
 #   TRAILER-FORMAT.md 8). There is no rootfs, no sysupgrade container, no
-#   install path and no driver series here. Publication remains NOT READY.
+#   install path and only the first two drivers (CRG, watchdog) ported; the
+#   rest of the driver series is not. Publication remains NOT READY.
 #
 # INPUTS ARE NEVER FABRICATED
 #   The only inputs are our DTS sources, the target kernel build product
@@ -673,4 +674,5 @@ printf '%s\n' \
     "NOT PROVEN: that the stock loader accepts this NOVEL slice or that the kernel" \
     "        boots. One attended boot on a recovered unit is still required" \
     "        (TARGET-DESIGN.md 5.2, 9). No rootfs, no sysupgrade container, no" \
-    "        install path, no driver series. Publication NOT READY."
+    "        install path, and only the first two drivers (CRG, watchdog) ported;" \
+    "        the rest of the driver series is not. Publication NOT READY."

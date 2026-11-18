@@ -50,6 +50,12 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
+#   [N]  new in the luofu driver series (patches-6.18/004-005): the two drivers
+#        and the syscon/regmap dependencies they select. The 2026-11-18
+#        canonical derivation predates their Kconfig entries, so these lines
+#        were added by hand; a canonical re-derivation with the new patches
+#        applied produces the same symbol set (verified 2026-11-18: the only
+#        differences are absent annotations and the emitted line order).
 #
 # WHAT THE 5.10 REFERENCE HAD THAT IS NOT IN THIS DELTA
 #   * inherited from target/linux/generic/config-6.18 (equal value, therefore
@@ -262,9 +268,17 @@ CONFIG_LOCK_DEBUGGING_SUPPORT=y
 CONFIG_LOCK_SPIN_ON_OWNER=y
 CONFIG_LZO_COMPRESS=y
 CONFIG_LZO_DECOMPRESS=y
+# [N] new driver in patches-6.18/004 (luofu CRG clock + reset controller)
+CONFIG_LUOFU_CRG=y
+# [N] new driver in patches-6.18/005 (luofu watchdog)
+CONFIG_LUOFU_WDT=y
 # [L] from the lab 5.10.201 reference
 CONFIG_MDIO_BUS=y
 # CONFIG_MFD_HI655X_PMIC is not set
+# [N] selected by CONFIG_LUOFU_CRG and CONFIG_LUOFU_WDT (shared syscon regmap
+#     for the 0x14880000 page); not in the 2026-11-18 derived delta because the
+#     Kconfig entries did not exist yet
+CONFIG_MFD_SYSCON=y
 CONFIG_MIGHT_HAVE_CACHE_L2X0=y
 CONFIG_MIGRATION=y
 CONFIG_MMU_LAZY_TLB_REFCOUNT=y
@@ -362,6 +376,10 @@ CONFIG_RD_GZIP=y
 CONFIG_REED_SOLOMON=y
 CONFIG_REED_SOLOMON_DEC8=y
 CONFIG_REED_SOLOMON_ENC8=y
+# [N] selected by CONFIG_MFD_SYSCON, which CONFIG_LUOFU_CRG and CONFIG_LUOFU_WDT
+#     select; added with the 2026-11-18 driver series
+CONFIG_REGMAP=y
+CONFIG_REGMAP_MMIO=y
 # [L] from the lab 5.10.201 reference
 CONFIG_RESET_CONTROLLER=y
 # [D-default] ARCH_HISI default, other-SoC Hisilicon driver

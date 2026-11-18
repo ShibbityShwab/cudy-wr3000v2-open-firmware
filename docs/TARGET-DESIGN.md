@@ -1,10 +1,13 @@
 # Target design: an upstream OpenWrt port for the Cudy WR3000 v2.0 (HiSilicon luofu / Hi5671Y)
 
 **Status: 2026-11-18. Design proposal - not a submission, not a receipt, not progress.**
-No OpenWrt target, board DTS, image recipe or driver series exists today. That is a recorded
-fact, not a judgement: the parent `EVIDENCE-INDEX.md` row *"Upstream submission is not started"*
-and the ledger entry **2026-11-17 00:20** say it, and `git ls-files` in this submodule contains
-no `target/linux` or `image/Makefile` path.
+No OpenWrt submission exists today. The target files, board DTS and the first two drivers
+(CRG clock/reset, watchdog) are drafts under [`../target-skeleton/`](../target-skeleton/README.md):
+they are host-compile/binding-validated only (SKELETON-SMOKE.md, fifth session), never booted and
+not reviewed upstream. That is a recorded fact, not a judgement: the parent
+`EVIDENCE-INDEX.md` row *"Upstream submission is not started"* and the ledger entry
+**2026-11-17 00:20** say it, no target PR exists, and the rest of the driver/image/sysupgrade
+series is still missing.
 
 This document is the concrete design that the roadmap phases point at. It exists so a reviewer
 can see the target layout, the boot/image requirements (including the vendor loader's FIP
@@ -478,8 +481,8 @@ New/derived bindings (propose one YAML per driver; all [I]):
 | block | current compatible in lab DTS | proposed upstream binding / action |
 | --- | --- | --- |
 | board root | `hisilicon,luofu-r116`, `hisilicon,luofu` | keep; add the loader-match properties (`vendor_id`, `board_id`, `board_name`) in the trailer base DTB/overlays only if the match rule requires it (§5.2) |
-| CRG clocks+reset | `hsan,crg` + 16 `hsan,clk-gate` + 2 mux + 2 PLL children | one `hisilicon,luofu-crg` clock+reset controller node (the lab driver already models it), `#clock-cells=<1>`, reset specifier converted from the vendor 2-cell `(offset, bit)` form to a documented id table; YAML `clock/hisilicon,luofu-crg.yaml`, headers `dt-bindings/clock/hisilicon,luofu-crg.h` + reset ids |
-| watchdog | `hisilicon,luofu-wdt` | keep; YAML `watchdog/hisilicon,luofu-wdt.yaml`; the vendor magic values/offsets become driver data (they are currently DT properties - decide one representation) |
+| CRG clocks+reset | `hsan,crg` + 16 `hsan,clk-gate` + 2 mux + 2 PLL children | **written** as patch `004`: one `hisilicon,luofu-crg` syscon + simple-mfd node with YAML `clock/hisilicon,luofu-crg.yaml` and header `dt-bindings/clock/hisilicon,luofu-crg.h`; the 16 gates are a driver-side table indexed by the header's IDs (no fake child nodes), and `#reset-cells=<2>` remains the lab `(offset, bit)` form documented and range-checked in the binding/YAML. Still TODO: named reset-ID table, per-gate parent/PLL/mux model, bench-confirm the provisional 0x20-group offsets |
+| watchdog | `hisilicon,luofu-wdt` | **written** as patch `005`: child of the CRG syscon node (no `reg`, no overlapping MMIO), YAML `watchdog/hisilicon,luofu-wdt.yaml`; the vendor magic values/offsets are hwver-2 driver data, no vendor DT properties, no IRQ and no restart handler (both documented TODOs) |
 | peripheral pinctrl | still **`hsan,luofu-peri-pinctrl`** (the measured driver string) | rename to a documented binding, e.g. `hisilicon,luofu-pinctrl`, with `pinmux`/`pinconf` groups from the 37 pins / 24 groups / 24 functions tables; YAML + `dt-bindings/pinctrl/hisilicon,luofu-pinctrl.h`; enable the nodes the board needs (SPI/JTAG/LED/AVS) |
 | FMC / SPI-NAND | `hisilicon,luofu-fmc` with `bus_id`/`spi_cs`/`enable-quad-mode` vendor props and 17 `fixed-partitions` children | new binding for the controller; replace vendor props with standard SPI-NAND/MTD properties where possible; keep `fixed-partitions`; add `u-boot,env` (or the measured equivalent) for `enva`/`envb` - [U] format compatibility; YAML `mtd/nand/hisilicon,luofu-fmc.yaml` |
 | GEMAC | `hisilicon,luofu-gmac` | keep; YAML `net/hisilicon,luofu-gmac.yaml`; `phy-mode`, `phy-handle`, clocks/resets stay; `gmac0` disabled (vendor does not use it - measured mapping: 14380000->phy2, 14400000->phy3, 14480000->phy4 (wired), 14500000->phy5) |
@@ -517,8 +520,8 @@ snapshot READMEs. [V] `tools/lab-src/FILES`; `tools/check-lab-src.sh`.
 | block | live source (parent repo) | verified now | what is needed for upstream |
 | --- | --- | --- | --- |
 | FMC/NAND | `tools/lab-src/drivers/mtd/nand/luofu/luofu-fmc.c` (~8,000 lines) | [V] read path G1 green; write path byte-exact G2 (phase53-write-path-proof.md); MTD registration, partitions, UBI/JFFS2; 18 partitions on the lab kernel | [I] binding + YAML; remove lab breadcrumbs (sysctrl `0xc18/0xc1c`), the JFFS2/UBI in-tree patches and the `compat=5` UBI acceptance; real bad-block handling (`luofu_mtd_block_isbad` currently returns 0); ECC/BBT review; probe/remove and error paths for upstream; the vendor "read ECC off" debug flag must go |
-| CRG clocks/reset | `tools/lab-src/arch/arm/mach-luofu/crg.c` (~200 lines) and the more complete `drivers/clk/luofu/luofu-clk.c` snapshot (`lab/luofu-clk`, 1,461 lines) | [V] gate clocks + reset provider implemented from the pinned tree (the clock-provider side is the published 1,461-line snapshot); probe-time behaviour on a fired kernel is not re-verified here; the 0x20-group offsets are reconstructed and PROVISIONAL (binding doc says so) | [I] move to `drivers/clk/hisilicon` + `drivers/reset`; convert reset cells; bench-confirm the provisional gate offsets; parent/rate model (PLLs read-only is a documented compromise); dt-bindings + YAML |
-| watchdog | `tools/lab-src/drivers/watchdog/luofu-wdt.c` (234 lines) | [V] decompiled fully; timeout encoding for hwver 0/1/2; probe reads only; the board's hwver=2 path matches the live set-offset | [I] binding/YAML; decide DT-property vs driver-data for the magic values; reboot integration belongs to the sysctrl/reboot driver, not here |
+| CRG clocks/reset | `tools/lab-src/arch/arm/mach-luofu/crg.c` (~200 lines) and the more complete `drivers/clk/luofu/luofu-clk.c` snapshot (`lab/luofu-clk`, 1,461 lines) | [V] gate clocks + reset provider implemented from the pinned tree (the clock-provider side is the published 1,461-line snapshot); probe-time behaviour on a fired kernel is not re-verified here; the 0x20-group offsets are reconstructed and PROVISIONAL (binding doc says so) | [I] **draft in-tree driver written** (2026-11-18, patch `004`): `drivers/clk/hisilicon/crg-luofu.c` + `dt-bindings/clock/hisilicon,luofu-crg.h` + YAML binding; gates are a driver-side table indexed by the documented clock IDs (no fake child nodes), resets keep the documented 2-cell form, and the reset provider now sets `of_reset_n_cells = 2` (the lab `-EINVAL` from `devm_reset_control_array_get()` is explained). Still open: bench-confirm the 0x20-group gate offsets, per-gate parent/PLL/mux model (rates are not modelled), named reset-ID table, reset polarity, upstream review. **Host compile only; never booted.** |
+| watchdog | `tools/lab-src/drivers/watchdog/luofu-wdt.c` (234 lines) | [V] decompiled fully; timeout encoding for hwver 0/1/2; probe reads only; the board's hwver=2 path matches the live set-offset | [I] **draft in-tree driver written** (2026-11-18, patch `005`): `drivers/watchdog/luofu-wdt.c` + YAML binding, 6.18 watchdog API (`devm`, `.set_timeout/.start/.stop/.ping`, DT `timeout-sec`), the magic values and offsets are hwver-2 driver data, and the watchdog is a child of the CRG syscon node so there is no overlapping MMIO claim (the lab `-EBUSY`/`devm_ioremap()` workaround is gone). No restart handler (reset path unverified) and no IRQ (status semantics unverified) - both documented TODOs. Still open: bench-confirm clear/enable ordering and boot-time running state, upstream review. **Host compile only; never booted.** |
 | pinctrl | `lab/luofu-pinctrl/luofu-pinctrl.c` (published snapshot; 640 lines body) | [V] 37 pins / 24 groups / 24 functions transcribed; `set_mux` implemented from the vendor algorithm; pinconf setters are no-op stubs | [I] dt-bindings + YAML; rename compatible; implement pinconf (bias/drive/slew); reset handling; prove on hardware |
 | MDIO | `tools/lab-src/drivers/net/ethernet/luofu/luofu-mdio.c` (508 lines) | [V] MMIO transfer layout recovered from `hi_kmdio.ko`; live vendor topology measured (PHY 2..5 on `mdio0`); the lab MDIO/GEMAC carry a link, but with the vendor `hi_kphy` bound (M2 not met) | [I] binding/YAML; document/measure every transfer bit position (the older snapshot README's `layout_verified` staging note does not exist as a symbol in the current source); integrate with the PHY driver; upstream has a standard MDIO API - no vendor glue |
 | Genius PHY | `tools/lab-src/drivers/net/ethernet/luofu/luofu-phy.c` (44 lines) | [V] PHY ID/mask recovered; genphy ops only; link/autoneg expected to work without the vendor patch | [I] a proper PHY driver submission; the per-PHY firmware patch (`lsw/hi_ephy_%xv%x.bin`) load path is a TODO; regulator/clock ties if any |
@@ -677,8 +680,11 @@ device fact, not a percentage.
 14. Publication preconditions met (history purge, licences, provenance, reproducible
     kernel/trailer artifacts).
 
-**Explicitly not met today** (2026-11-18): every row above except the identity warning. No target,
-DTS submission, image recipe, driver series, install path, or WiFi answer exists.
+**Explicitly not met today** (2026-11-18): every row above except the identity warning. There
+is no target PR, no DTS submission, no image recipe, no install path and no WiFi answer; the
+target/DTS drafts and the first two driver drafts under `../target-skeleton/` are host-only
+skeleton work (compile/binding-validated, never booted, not reviewed upstream), and the rest of
+the driver series does not exist.
 
 ---
 
@@ -720,7 +726,7 @@ for S0; S1-S4 do need bench sessions and a recovery plan.
 | G4 (Ethernet on our kernel) is vendor-module-backed; M2 NOT MET | parent `STATUS.md` §2 gate table; `EVIDENCE-INDEX.md` G4 row; ledger 2026-11-14 23:15 |
 | Every vendor module declares GPL; request sent 2026-10-01, no reply | `GPL-REQUEST.md`; `EVIDENCE-INDEX.md` "Vendor GPL obligation" row; the parent ledger records the request as sent 2026-10-01 with no reply |
 | Wi-Fi port surface (211 namespaced symbols, 0 mac80211, closed 928,920-byte blob) | `PORT-SURFACE.md`; `EVIDENCE-INDEX.md` G5 row; ledger phase 22f/25 entries (2026-10-02/03) |
-| No OpenWrt target/DTS/image recipe/driver series exists | `EVIDENCE-INDEX.md` "Upstream submission is not started" row; ledger **2026-11-17 00:20**; `git ls-files` in this submodule |
+| No OpenWrt submission (target PR / DTS / image recipe / full driver series) exists; the `target-skeleton/` drafts and the first two drivers (CRG, watchdog) are host-only, never booted, never reviewed | `EVIDENCE-INDEX.md` "Upstream submission is not started" row; ledger **2026-11-17 00:20**; `target-skeleton/README.md` section 5; SKELETON-SMOKE.md fifth session |
 | Publication not ready (history purge) | `PUBLISH-READINESS.md`; `NOTICE.md`; `README.md` snapshot note |
 | Bench lab-kernel ceiling (v17) | parent `STATUS.md` §3; ledger **2026-11-18 06:50**; `EVIDENCE-INDEX.md` "Bench kernel line 2026-11-17/18" section |
 | BSP target skeleton as prior art (different board/bindings) | `phase50/bsp-build-status.md` §1-3 |

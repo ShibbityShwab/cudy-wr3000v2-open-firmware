@@ -9,8 +9,11 @@
  * (tools/lab-src/arch/arm/boot/dts/luofu-r116.dts in the parent repository).
  * Every register base, interrupt number, clock/reset cell and partition below
  * is a lab-measured value (or an explicitly marked vendor-DT fact), not an
- * invented one. NONE of the proposed bindings exists yet: no YAML, no
- * dt-bindings header, no driver. Do not submit this file as-is.
+ * invented one. The CRG clock/reset provider and the watchdog now have draft
+ * drivers, YAML bindings and a dt-bindings clock header
+ * (patches-6.18/004-arm-clk-reset-luofu-crg.patch and
+ * 005-arm-watchdog-luofu-wdt.patch); every other proposed binding still does
+ * not exist. Do not submit this file as-is.
  *
  * HOW TO READ THE MARKERS:
  *   TODO(binding)        a devicetree binding that must be written/agreed
@@ -25,15 +28,22 @@
  *     size is restored (TARGET-DESIGN.md 3.3; vendor-dt-notes.md section 6);
  *   - bench breadcrumb/instrumentation comments and sysctrl writes are gone
  *     (TARGET-DESIGN.md 7.2);
- *   - vendor "hsan,*" compatibles are replaced with "hisilicon,luofu-*"
- *     PROPOSALS, each with the binding TODO (TARGET-DESIGN.md 6.2);
+ *   - vendor "hsan,*" compatibles are replaced with "hisilicon,luofu-*";
+ *     the CRG and watchdog bindings are now written, the rest are still
+ *     proposals with a binding TODO (TARGET-DESIGN.md 6.2);
  *   - the vendor iATU tables, acp-gate cells and other binary-derived props
  *     are not carried: they become driver init data (TARGET-DESIGN.md 6.2);
  *   - the vendor enable-method "hisilicon,hsan_smp" is removed: there is no
  *     mainline smp_ops yet, so this is an UP-only draft (TARGET-DESIGN.md 7.1);
  *   - clock/reset specifiers keep the lab shape (1-cell clock id, 2-cell
- *     (offset, bit) reset) ONLY so the lab values stay readable; the reset
- *     form is a TODO to convert to a documented id table.
+ *     (offset, bit) reset); the clock IDs now come from the dt-bindings
+ *     header and the 2-cell reset form is documented in the CRG binding, with
+ *     the named-reset-id table still a TODO (TARGET-DESIGN.md 6.2);
+ *   - the 0x14880000 page is one syscon + simple-mfd system-controller node:
+ *     the CRG driver owns the clock/reset providers and the watchdog is a
+ *     child using the shared regmap, instead of two nodes claiming the same
+ *     MMIO window (the old drift produced the duplicate-unit-address dtc
+ *     warning and an -EBUSY probe in the lab tree).
  *
  * WHAT IS NOT HERE ON PURPOSE:
  *   - Wi-Fi (Hi5622V100): vendor-only, no open driver, out of the first
@@ -53,12 +63,19 @@
 /dts-v1/;
 
 /*
- * TODO(binding): move these clock IDs to
- * include/dt-bindings/clock/hisilicon,luofu-crg.h when the CRG binding is
- * written (TARGET-DESIGN.md 6.2). They are the lab driver's child-order table;
- * the (reg-offset, bit) geometry is the vendor gate table. The 0x14-group
- * offsets are verbatim; the 0x20-group offsets are reconstructed and stay
- * provisional until bench-confirmed (lab DTS header; clocks2.md caveat).
+ * CRG clock IDs: the one-cell clock index ABI between this DTS and the CRG
+ * clock provider (patches-6.18/004; binding
+ * Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml). The
+ * numbering is fixed by the dt-bindings header and the driver's gate table is
+ * indexed by it; an index may never be renumbered or reused.
+ *
+ * The (register offset, bit) geometry that each ID names is driver data, not
+ * DT data. It is listed here only as a review reference; the driver's table in
+ * drivers/clk/hisilicon/crg-luofu.c is authoritative. The 0x14-group offsets
+ * are verbatim from the pinned vendor tree; the 0x20-group offsets are
+ * reconstructed from the vendor unit-address encoding and stay PROVISIONAL
+ * until bench-confirmed (lab DTS header; clocks2.md caveat) - that is a driver
+ * TODO, not a DT fact:
  *
  *   id  name         gate offset  bit
  *    0  sfc_clk      0x14         0x00
@@ -78,22 +95,7 @@
  *   14  gemac_clk4   0x20         0x17
  *   15  pie_clk0     0x20         0x19
  */
-#define LUOFU_CLK_SFC     0
-#define LUOFU_CLK_GPIO0   1
-#define LUOFU_CLK_GPIO1   2
-#define LUOFU_CLK_I2C0    3
-#define LUOFU_CLK_PCIE0   4
-#define LUOFU_CLK_PCIE1   5
-#define LUOFU_CLK_GMAC0   6
-#define LUOFU_CLK_LEDPWM  7
-#define LUOFU_CLK_LSW_DP  8
-#define LUOFU_CLK_LSW_PFE 9
-#define LUOFU_CLK_MDIO   10
-#define LUOFU_CLK_GMAC1  11
-#define LUOFU_CLK_GMAC2  12
-#define LUOFU_CLK_GMAC3  13
-#define LUOFU_CLK_GMAC4  14
-#define LUOFU_CLK_PIE    15
+#include <dt-bindings/clock/hisilicon,luofu-crg.h>
 
 / {
 	#address-cells = <1>;
@@ -230,54 +232,69 @@
 		clock-output-names = "twd_clk";
 	};
 
-	/* ---- CRG: clocks + resets (new binding, TODO) ------------------ */
+	/* ---- CRG: clock gates + reset controller (shared page) --------- */
 
 	/*
-	 * The vendor splits 0x14880000 into clk@ (20 gate children) and crg@
-	 * (resets) because it has two drivers. Our lab driver is ONE driver
-	 * (luofu-crg) that registers both providers from its own children, so
-	 * this draft folds the page into one node. TODO(binding): propose
-	 *   Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
-	 * The lab driver currently matches the VENDOR string "hsan,crg"; the
-	 * upstream compatible below is a rename proposal, not a fact.
-	 * TODO(reset-binding): the 2-cell (offset, bit) reset form below is the
-	 * vendor form kept for readability; the submission must expose a
-	 * documented reset-id table and drop the raw (offset, bit) cells
-	 * (TARGET-DESIGN.md 6.2).
+	 * The CRG (Clock Reset Generator) page at 0x14880000 carries the clock
+	 * gate bits (0x14/0x20), the reset bits (0x2c/0x30/0x34) AND the
+	 * watchdog registers (0x50/0x64/0x70/0x100) interleaved in ONE 4 KiB
+	 * window, so no single driver can claim the window exclusively. The
+	 * page is therefore modelled as a syscon + simple-mfd system
+	 * controller:
+	 *
+	 *   - the CRG driver (patches-6.18/004; binding
+	 *     Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml)
+	 *     owns the clock-gate and reset providers;
+	 *   - the watchdog child below (patches-6.18/005; binding
+	 *     Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml)
+	 *     uses the same syscon regmap, so neither driver maps or claims the
+	 *     page a second time. This is the upstream shape for interleaved
+	 *     functions; the old two-node draft produced a duplicate-unit-
+	 *     address dtc warning and, on the lab kernel, an -EBUSY probe that
+	 *     was worked around with a bare devm_ioremap().
+	 *
+	 * Clock cells: one cell, the LUOFU_CLK_* index from the dt-bindings
+	 * header (included above); the gate geometry is driver data.
+	 * Reset cells: two cells, (CRG page register offset, bit). The driver
+	 * restricts the offset to the three reset words so a specifier can never
+	 * write the watchdog, soft-reset, mux or PLL words.
+	 * TODO(reset-ids): replacing the raw (offset, bit) cells with a named
+	 * reset-ID table is the next submission cleanup (TARGET-DESIGN.md 6.2);
+	 * the cell form is documented in the binding, not invented.
+	 * TODO(driver): the two PLLs (ctrl 0x198/0x1e0, status 0x90 bits 0x1e/
+	 * 0x1b) and the two muxes (0x138 masks 0x8/0x2) are not modelled; the
+	 * lab instrumentation treated them as read-only and one of the mux
+	 * writes switches the CPU clock source, so do not add write support
+	 * without a measurement plan.
+	 * TODO(restart): no SoC reset/reboot path is modelled (soft-reset magic
+	 * at 0x84); reboot would need the sysctrl/boot-selector writes that are
+	 * not understood (TARGET-DESIGN.md 3.4, 6.2).
 	 */
-	crg: clock-reset-controller@14880000 {
-		compatible = "hisilicon,luofu-crg";	/* TODO(binding): proposal */
+	crg: system-controller@14880000 {
+		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
 		reg = <0x14880000 0x1000>;
 		#clock-cells = <1>;
-		#reset-cells = <2>;	/* TODO(reset-binding): convert to <1> + ids */
+		#reset-cells = <2>;
+
 		/*
-		 * TODO(driver-data): the two PLLs (pll_cpu ctrl 0x198 / status
-		 * 0x90 bit 0x1e; pll_lsw ctrl 0x1e0 / status 0x90 bit 0x1b)
-		 * and the two muxes (cpu mux 0x138 mask 0x8; efuse mux 0x138
-		 * mask 0x2) are driver data now; do not turn them into DT
-		 * properties without a binding.
+		 * Watchdog: no reg and no interrupt. Its registers are
+		 * interleaved into the parent page, so it uses the parent syscon
+		 * regmap (the binding requires this parent-child relationship).
+		 * timeout-sec is the vendor's 30 s; the 1..512 s limits are
+		 * driver data. The block does have an interrupt output at SPI 2
+		 * in the vendor tree, but its status semantics are unverified,
+		 * so the driver is polled and the node claims no interrupt - do
+		 * not add one "because the vendor DT has it".
+		 * TODO(hardware): whether the bootloader leaves the watchdog
+		 * running is not established (the enable state is a magic value
+		 * pair, not a status bit), so the driver cannot set
+		 * WDOG_HW_RUNNING at probe; measure before relying on it.
 		 */
-	};
-
-	/* ---- watchdog (new binding, TODO) ------------------------------ */
-
-	/*
-	 * TODO(binding): the watchdog lives on the SAME 0x14880000 CRG page as
-	 * the controller above. Two nodes claiming the same 0x1000 window is not
-	 * acceptable; decide before submission: a child of the CRG/syscon node,
-	 * or a narrower reg window (TARGET-DESIGN.md 6.2 row "watchdog").
-	 * TODO(driver-data): the vendor magic values (reset/stop/enable val0/1,
-	 * set/en/clr/int-status offsets) currently appear as vendor DT
-	 * properties; they must become driver data or documented properties -
-	 * decide one representation (TARGET-DESIGN.md 6.2, 7.1).
-	 * Facts kept: hwver 2, SPI 2, timeout 1..512 s (board uses 30 s).
-	 */
-	watchdog: watchdog@14880000 {
-		compatible = "hisilicon,luofu-wdt";	/* TODO(binding): proposal */
-		reg = <0x14880000 0x1000>;
-		interrupts = <0 2 4>;			/* SPI 2 (vendor numbering) */
-		timeout-sec = <30>;
-		status = "disabled";
+		watchdog {
+			compatible = "hisilicon,luofu-wdt";
+			timeout-sec = <30>;
+			status = "okay";
+		};
 	};
 
 	/* ---- standard ARM peripherals (free bindings) ------------------ */

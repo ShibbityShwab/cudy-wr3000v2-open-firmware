@@ -1,0 +1,507 @@
+--- a/drivers/clk/hisilicon/Kconfig
++++ b/drivers/clk/hisilicon/Kconfig
+@@ -52,6 +52,18 @@
+ 	help
+ 	  Build the Hisilicon Hi6220 clock driver based on the common clock framework.
+ 
++config LUOFU_CRG
++	bool "HiSilicon Luofu CRG clock and reset controller"
++	depends on ARCH_LUOFU || COMPILE_TEST
++	depends on COMMON_CLK
++	select MFD_SYSCON
++	select RESET_CONTROLLER
++	help
++	  Clock gate and reset controller for the HiSilicon Hi5671Y "luofu"
++	  SoC. The CRG register page is a system controller shared with the
++	  watchdog driver through a syscon regmap, so this driver claims no
++	  MMIO resource of its own.
++
+ config RESET_HISI
+ 	bool "HiSilicon Reset Controller Driver"
+ 	depends on ARCH_HISI || COMPILE_TEST
+--- a/drivers/clk/hisilicon/Makefile
++++ b/drivers/clk/hisilicon/Makefile
+@@ -15,6 +15,7 @@
+ obj-$(CONFIG_COMMON_CLK_HI3670) += clk-hi3670.o
+ obj-$(CONFIG_COMMON_CLK_HI3798CV200)	+= crg-hi3798cv200.o
+ obj-$(CONFIG_COMMON_CLK_HI6220)	+= clk-hi6220.o
++obj-$(CONFIG_LUOFU_CRG)	+= crg-luofu.o
+ obj-$(CONFIG_RESET_HISI)	+= reset.o
+ obj-$(CONFIG_STUB_CLK_HI6220)	+= clk-hi6220-stub.o
+ obj-$(CONFIG_STUB_CLK_HI3660)	+= clk-hi3660-stub.o
+--- /dev/null
++++ b/drivers/clk/hisilicon/crg-luofu.c
+@@ -0,0 +1,344 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HiSilicon Hi5671Y "luofu" CRG clock and reset controller
++ *
++ * The CRG block is a 4 KiB system-controller page at 0x14880000. Several
++ * functions are interleaved in that page:
++ *
++ *   0x14, 0x20		clock gate enable bits, one bit per gate output
++ *   0x2c, 0x30, 0x34	reset control bits, one bit per reset line
++ *   0x50, 0x64, 0x70, 0x100	watchdog registers (separate driver)
++ *   0x00, 0x38, 0x84, 0x138, 0x198, 0x1e0
++ *			reboot, resume, soft-reset, mux and PLL words; none of
++ *			them is touched by this driver (see below)
++ *
++ * Because the page cannot be claimed exclusively by one driver, the node is
++ * described as a "syscon" + "simple-mfd" system controller and every driver
++ * sharing it uses the same syscon regmap.  This driver therefore never calls
++ * request_mem_region() or ioremap() itself, and neither does the watchdog
++ * child, so the page is mapped exactly once even though two drivers use it.
++ *
++ * The clock outputs are gate clocks.  The gate geometry (register offset and
++ * bit) is driver data; the DT ABI is only the index, see
++ * include/dt-bindings/clock/hisilicon,luofu-crg.h.  Every gate is currently
++ * parented on the APB clock: the real parent clocks (the GEMAC/LSW PLL
++ * outputs) are part of the clock-tree work that is not done yet, and rates
++ * must not be "fixed" by editing the gates before that model exists.
++ *
++ * The reset provider uses a two-cell specifier: the CRG page register offset
++ * of the reset word and the bit number.  The offsets are restricted to the
++ * three reset words above so that a devicetree reset specifier can never
++ * write the watchdog, soft-reset, mux or PLL words.  The bit polarity
++ * (assert sets the bit, deassert clears it) has not been exercised on
++ * hardware: no in-tree consumer uses the provider yet, and the vendor's
++ * reset-controller description has the opposite polarity.  Confirm the
++ * polarity on hardware before adding reset consumers.
++ *
++ * Deliberately not implemented here:
++ *   - reboot/reset of the SoC (the vendor path writes sysctrl/bootreg
++ *     registers that are not understood; a wrong sequence would wedge the
++ *     board, so arch/arm/mach-hisilicon/luofu.c also leaves .restart unset);
++ *   - the soft-reset magic words, the mux at 0x138 and the two PLLs
++ *     (0x198/0x1e0): they are outside the gate/reset model and some of them
++ *     are dangerous to write.
++ */
++
++#include <linux/clk-provider.h>
++#include <linux/err.h>
++#include <linux/mfd/syscon.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/reset-controller.h>
++#include <linux/spinlock.h>
++
++#include <dt-bindings/clock/hisilicon,luofu-crg.h>
++
++/* Gate registers: the two words that carry the gate enable bits. */
++#define LUOFU_CRG_GATE0_OFFSET	0x14
++#define LUOFU_CRG_GATE1_OFFSET	0x20
++
++/* Reset words; nothing outside these three is a reset. */
++#define LUOFU_CRG_RESET0_OFFSET	0x2c
++#define LUOFU_CRG_RESET1_OFFSET	0x30
++#define LUOFU_CRG_RESET2_OFFSET	0x34
++
++/* Reset id = (register offset << 8) | bit. */
++#define LUOFU_CRG_NR_RESETS	0x10000
++
++struct luofu_crg {
++	struct regmap			*regmap;
++	spinlock_t			lock;
++	struct reset_controller_dev	rcdev;
++};
++
++struct luofu_crg_gate {
++	struct clk_hw	hw;
++	struct regmap	*regmap;
++	unsigned int	offset;
++	u8		bit;
++	spinlock_t	*lock;
++};
++
++struct luofu_crg_gate_data {
++	const char	*name;
++	unsigned int	offset;
++	u8		bit;
++};
++
++/*
++ * One entry per LUOFU_CLK_* index.  The designated initializers tie each gate
++ * to its DT clock index; a missing entry is caught by the probe's name check.
++ * The two 0x20-group offsets are reconstructed from the vendor unit-address
++ * encoding and remain provisional until confirmed on hardware.
++ */
++static const struct luofu_crg_gate_data luofu_crg_gates[LUOFU_CLK_NR] = {
++	[LUOFU_CLK_SFC]		= { .name = "sfc_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x00 },
++	[LUOFU_CLK_GPIO0]	= { .name = "gpio0_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x14 },
++	[LUOFU_CLK_GPIO1]	= { .name = "gpio1_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x15 },
++	[LUOFU_CLK_I2C0]	= { .name = "i2c0_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x18 },
++	[LUOFU_CLK_PCIE0]	= { .name = "pcie0_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0c },
++	[LUOFU_CLK_PCIE1]	= { .name = "pcie1_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0d },
++	[LUOFU_CLK_GMAC0]	= { .name = "gemac_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x13 },
++	[LUOFU_CLK_LEDPWM]	= { .name = "led_pwm",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x0e },
++	[LUOFU_CLK_LSW_DP]	= { .name = "lsw_dp_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x00 },
++	[LUOFU_CLK_LSW_PFE]	= { .name = "lsw_pfe_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x01 },
++	[LUOFU_CLK_MDIO]	= { .name = "mdio_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x03 },
++	[LUOFU_CLK_GMAC1]	= { .name = "gemac_clk1",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x14 },
++	[LUOFU_CLK_GMAC2]	= { .name = "gemac_clk2",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x15 },
++	[LUOFU_CLK_GMAC3]	= { .name = "gemac_clk3",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x16 },
++	[LUOFU_CLK_GMAC4]	= { .name = "gemac_clk4",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x17 },
++	[LUOFU_CLK_PIE]		= { .name = "pie_clk0",		.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x19 },
++};
++
++/* Parent of the gate outputs until the real clock tree is modelled. */
++static const char *const luofu_crg_gate_parent = "apb_clk";
++
++static int luofu_crg_gate_enable(struct clk_hw *hw)
++{
++	struct luofu_crg_gate *gate = container_of(hw, struct luofu_crg_gate, hw);
++	unsigned long flags;
++	int ret;
++
++	spin_lock_irqsave(gate->lock, flags);
++	ret = regmap_update_bits(gate->regmap, gate->offset,
++				 BIT(gate->bit), BIT(gate->bit));
++	spin_unlock_irqrestore(gate->lock, flags);
++
++	return ret;
++}
++
++static void luofu_crg_gate_disable(struct clk_hw *hw)
++{
++	struct luofu_crg_gate *gate = container_of(hw, struct luofu_crg_gate, hw);
++	unsigned long flags;
++
++	spin_lock_irqsave(gate->lock, flags);
++	regmap_update_bits(gate->regmap, gate->offset, BIT(gate->bit), 0);
++	spin_unlock_irqrestore(gate->lock, flags);
++}
++
++static int luofu_crg_gate_is_enabled(struct clk_hw *hw)
++{
++	struct luofu_crg_gate *gate = container_of(hw, struct luofu_crg_gate, hw);
++	unsigned int val;
++	int ret;
++
++	ret = regmap_read(gate->regmap, gate->offset, &val);
++	if (ret)
++		return ret;
++
++	return !!(val & BIT(gate->bit));
++}
++
++static const struct clk_ops luofu_crg_gate_ops = {
++	.enable		= luofu_crg_gate_enable,
++	.disable	= luofu_crg_gate_disable,
++	.is_enabled	= luofu_crg_gate_is_enabled,
++};
++
++/*
++ * Two-cell reset specifier: (CRG page register offset, bit).  Only the three
++ * documented reset words are accepted; the check is what makes the raw-offset
++ * cell form safe to hand to a devicetree consumer.
++ */
++static int luofu_crg_reset_xlate(struct reset_controller_dev *rcdev,
++				 const struct of_phandle_args *reset_spec)
++{
++	unsigned int offset, bit;
++
++	if (reset_spec->args_count != 2)
++		return -EINVAL;
++
++	offset = reset_spec->args[0];
++	bit = reset_spec->args[1];
++
++	if (bit > 31)
++		return -EINVAL;
++
++	switch (offset) {
++	case LUOFU_CRG_RESET0_OFFSET:
++	case LUOFU_CRG_RESET1_OFFSET:
++	case LUOFU_CRG_RESET2_OFFSET:
++		return (offset << 8) | bit;
++	default:
++		return -EINVAL;
++	}
++}
++
++static int luofu_crg_reset_set(struct reset_controller_dev *rcdev,
++			       unsigned long id, bool assert)
++{
++	struct luofu_crg *crg = container_of(rcdev, struct luofu_crg, rcdev);
++	unsigned int offset = id >> 8;
++	unsigned int bit = id & 0xff;
++	unsigned long flags;
++	int ret;
++
++	spin_lock_irqsave(&crg->lock, flags);
++	ret = regmap_update_bits(crg->regmap, offset, BIT(bit),
++				 assert ? BIT(bit) : 0);
++	spin_unlock_irqrestore(&crg->lock, flags);
++
++	return ret;
++}
++
++static int luofu_crg_reset_assert(struct reset_controller_dev *rcdev,
++				  unsigned long id)
++{
++	return luofu_crg_reset_set(rcdev, id, true);
++}
++
++static int luofu_crg_reset_deassert(struct reset_controller_dev *rcdev,
++				    unsigned long id)
++{
++	return luofu_crg_reset_set(rcdev, id, false);
++}
++
++static int luofu_crg_reset_status(struct reset_controller_dev *rcdev,
++				  unsigned long id)
++{
++	struct luofu_crg *crg = container_of(rcdev, struct luofu_crg, rcdev);
++	unsigned int val;
++	int ret;
++
++	ret = regmap_read(crg->regmap, id >> 8, &val);
++	if (ret)
++		return ret;
++
++	return !!(val & BIT(id & 0xff));
++}
++
++static int luofu_crg_reset(struct reset_controller_dev *rcdev,
++			   unsigned long id)
++{
++	int ret;
++
++	ret = luofu_crg_reset_assert(rcdev, id);
++	if (ret)
++		return ret;
++
++	return luofu_crg_reset_deassert(rcdev, id);
++}
++
++static const struct reset_control_ops luofu_crg_reset_ops = {
++	.assert		= luofu_crg_reset_assert,
++	.deassert	= luofu_crg_reset_deassert,
++	.status		= luofu_crg_reset_status,
++	.reset		= luofu_crg_reset,
++};
++
++static int luofu_crg_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct clk_hw_onecell_data *clk_data;
++	struct luofu_crg *crg;
++	int i, ret;
++
++	crg = devm_kzalloc(dev, sizeof(*crg), GFP_KERNEL);
++	if (!crg)
++		return -ENOMEM;
++
++	crg->regmap = syscon_node_to_regmap(dev->of_node);
++	if (IS_ERR(crg->regmap))
++		return dev_err_probe(dev, PTR_ERR(crg->regmap),
++				     "failed to get CRG syscon regmap\n");
++
++	spin_lock_init(&crg->lock);
++
++	clk_data = devm_kzalloc(dev, struct_size(clk_data, hws, LUOFU_CLK_NR),
++				GFP_KERNEL);
++	if (!clk_data)
++		return -ENOMEM;
++	clk_data->num = LUOFU_CLK_NR;
++
++	for (i = 0; i < LUOFU_CLK_NR; i++) {
++		const struct luofu_crg_gate_data *data = &luofu_crg_gates[i];
++		struct clk_init_data init = { };
++		struct luofu_crg_gate *gate;
++
++		if (!data->name)
++			return dev_err_probe(dev, -EINVAL,
++					     "gate %d has no description\n", i);
++
++		gate = devm_kzalloc(dev, sizeof(*gate), GFP_KERNEL);
++		if (!gate)
++			return -ENOMEM;
++
++		gate->regmap = crg->regmap;
++		gate->offset = data->offset;
++		gate->bit = data->bit;
++		gate->lock = &crg->lock;
++
++		init.name = data->name;
++		init.ops = &luofu_crg_gate_ops;
++		init.parent_names = &luofu_crg_gate_parent;
++		init.num_parents = 1;
++		gate->hw.init = &init;
++
++		ret = devm_clk_hw_register(dev, &gate->hw);
++		if (ret)
++			return dev_err_probe(dev, ret, "failed to register %s\n",
++					     data->name);
++
++		clk_data->hws[i] = &gate->hw;
++	}
++
++	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, clk_data);
++	if (ret)
++		return ret;
++
++	crg->rcdev.owner = THIS_MODULE;
++	crg->rcdev.dev = dev;
++	crg->rcdev.of_node = dev->of_node;
++	crg->rcdev.ops = &luofu_crg_reset_ops;
++	crg->rcdev.nr_resets = LUOFU_CRG_NR_RESETS;
++	/*
++	 * The specifier is two cells, so of_reset_n_cells must say so.  Without
++	 * it the reset core compares args_count (2) against a zero cell count,
++	 * warns and returns -EINVAL for every consumer.
++	 */
++	crg->rcdev.of_reset_n_cells = 2;
++	crg->rcdev.of_xlate = luofu_crg_reset_xlate;
++
++	return devm_reset_controller_register(dev, &crg->rcdev);
++}
++
++static const struct of_device_id luofu_crg_of_match[] = {
++	{ .compatible = "hisilicon,luofu-crg" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, luofu_crg_of_match);
++
++static struct platform_driver luofu_crg_driver = {
++	.probe = luofu_crg_probe,
++	.driver = {
++		.name = "luofu-crg",
++		.of_match_table = luofu_crg_of_match,
++	},
++};
++builtin_platform_driver(luofu_crg_driver);
++
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu CRG clock and reset controller");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/include/dt-bindings/clock/hisilicon,luofu-crg.h
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
++/*
++ * Clock indices for the HiSilicon Hi5671Y "luofu" CRG block.
++ *
++ * The order of this list is the DT ABI, not a hardware fact: each index is
++ * one gate clock output of the CRG and the driver's gate table is indexed by
++ * these IDs, so an index may never be renumbered or reused.  Consumers use
++ * clocks = <&crg LUOFU_CLK_*>.  The gate register and bit that each ID drives
++ * are driver data, not devicetree data.
++ */
++#ifndef _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H
++#define _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H
++
++#define LUOFU_CLK_SFC		0	/* FMC / SPI-NAND controller */
++#define LUOFU_CLK_GPIO0		1
++#define LUOFU_CLK_GPIO1		2
++#define LUOFU_CLK_I2C0		3
++#define LUOFU_CLK_PCIE0		4
++#define LUOFU_CLK_PCIE1		5
++#define LUOFU_CLK_GMAC0		6
++#define LUOFU_CLK_LEDPWM	7
++#define LUOFU_CLK_LSW_DP	8
++#define LUOFU_CLK_LSW_PFE	9
++#define LUOFU_CLK_MDIO		10
++#define LUOFU_CLK_GMAC1		11
++#define LUOFU_CLK_GMAC2		12
++#define LUOFU_CLK_GMAC3		13
++#define LUOFU_CLK_GMAC4		14
++#define LUOFU_CLK_PIE		15
++
++#define LUOFU_CLK_NR		16
++
++#endif /* _DT_BINDINGS_CLOCK_HISILICON_LUOFU_CRG_H */
+--- /dev/null
++++ b/Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+@@ -0,0 +1,90 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/clock/hisilicon,luofu-crg.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: HiSilicon Luofu CRG clock and reset controller
++
++maintainers:
++  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
++
++description: |
++  The CRG (Clock Reset Generator) of the HiSilicon Hi5671Y "luofu" SoC is a
++  4 KiB system-controller page. Several independent functions are interleaved
++  in it:
++
++  - 0x14, 0x20: clock gate enable bits, one bit per gate output (this driver);
++  - 0x2c, 0x30, 0x34: reset control bits, one bit per reset line (this driver);
++  - 0x50, 0x64, 0x70, 0x100: watchdog registers (child node, separate driver).
++
++  One MMIO region cannot be owned by two drivers, so the node is described as a
++  "syscon" + "simple-mfd" system controller: the CRG driver owns the clock and
++  reset providers, and the watchdog child obtains the same register map through
++  the syscon instead of mapping the page a second time.
++
++  The clock outputs are gate clocks. Their register/bit geometry is driver
++  data; the devicetree ABI is the single-cell index defined in
++  include/dt-bindings/clock/hisilicon,luofu-crg.h. Gate parents are not modelled
++  yet (the driver parents every gate on the board APB clock); that is a
++  documented driver limitation, not part of the binding.
++
++  The reset specifier is two cells: the CRG page register offset of the reset
++  word and the bit number. Only the three reset words are accepted; a specifier
++  can therefore never write the watchdog, soft-reset, mux or PLL words.
++
++properties:
++  compatible:
++    items:
++      - const: hisilicon,luofu-crg
++      - const: syscon
++      - const: simple-mfd
++
++  reg:
++    maxItems: 1
++
++  '#clock-cells':
++    const: 1
++    description: |
++      The single cell is a gate clock index from
++      include/dt-bindings/clock/hisilicon,luofu-crg.h.
++
++  '#reset-cells':
++    const: 2
++    description: |
++      First cell: CRG page register offset of the reset word (0x2c, 0x30 or
++      0x34). Second cell: bit number within that word (0..31).
++
++  watchdog:
++    type: object
++    $ref: /schemas/watchdog/hisilicon,luofu-wdt.yaml#
++    description:
++      Watchdog whose registers are interleaved into the CRG page. It has no
++      reg of its own and shares this node's syscon regmap.
++
++required:
++  - compatible
++  - reg
++  - '#clock-cells'
++  - '#reset-cells'
++
++additionalProperties: false
++
++examples:
++  - |
++    bus {
++        #address-cells = <1>;
++        #size-cells = <1>;
++
++        system-controller@14880000 {
++            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++            reg = <0x14880000 0x1000>;
++            #clock-cells = <1>;
++            #reset-cells = <2>;
++
++            watchdog {
++                compatible = "hisilicon,luofu-wdt";
++                timeout-sec = <30>;
++            };
++        };
++    };

@@ -19,8 +19,11 @@ host sessions proved that OpenWrt main's `make defconfig`/`prepare` accept the t
 kernel patch series compiles a 6.18 kernel with the real `TEXT_OFFSET`, and that an own-artifact
 kernel slice (our zImage + our base DTB + our loader-match overlay + a generated trailer)
 satisfies every check the decoded `bootfip` performs. Nothing has been flashed or booted; the
-driver/binding series, rootfs/UBI, sysupgrade `platform.sh` metadata and the install path do not
-exist, and a novel trailer still needs one attended boot.
+**rest** of the driver/binding series (thermal, pinctrl, FMC, MDIO/PHY/GEMAC, switch, PCIe),
+rootfs/UBI, sysupgrade `platform.sh` metadata and the install path do not exist, and a novel
+trailer still needs one attended boot. The first two real drivers - CRG clock/reset (patch 004)
+and watchdog (patch 005) with their YAML bindings - exist as host-compiled drafts only
+(2026-11-18, fifth session; never run on hardware).
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;

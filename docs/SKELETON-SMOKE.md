@@ -5,17 +5,21 @@
 with the tree's own OpenWrt GCC 14.4 toolchain; and `make target/linux/compile` now
 completes RC=0, producing `arch/arm/boot/zImage` with the correct `0x80608000`
 load/entry address. A first FIP kernel slice was then assembled from our own DTB +
-overlay + uImage and structurally validated (fourth session below); nothing has been
-booted: no rootfs, no sysupgrade container, no install path, no boot, no driver
-series.**
+overlay + uImage and structurally validated (fourth session below). The first two
+**real drivers** - CRG clock/reset controller (`004`) and watchdog (`005`), with
+device-tree bindings - were added and compile into the same kernel (fifth session
+below); they have **never run on hardware**. Nothing has been booted: no rootfs, no
+sysupgrade container, no install path, no boot, and the rest of the driver series does
+not exist.**
 
 This page records the host-side validation of [`target-skeleton/`](../target-skeleton/README.md)
-against a real OpenWrt tree (four sessions on 2026-11-18: the target-layout smoke test
+against a real OpenWrt tree (five sessions on 2026-11-18: the target-layout smoke test
 below, the kernel patch/config session, the `TEXT_OFFSET` + full-kernel-compile
-session, and the first own-artifact FIP kernel slice appended at the end). It is not a
-target build result and must not be cited as one: the only build products it records
-are the kernel compile product and a structurally validated kernel slice - no rootfs,
-no sysupgrade container, no install image and no boot.
+session, the first own-artifact FIP kernel slice, and the first driver series appended
+at the end). It is not a target build result and must not be cited as one: the build
+products it records are the kernel compile product, a structurally validated kernel
+slice and the two driver objects linked into that kernel - no rootfs, no sysupgrade
+container, no install image and no boot.
 
 ## Environment
 
@@ -784,4 +788,280 @@ run directories (full script stdout, per-step logs, dtb/dtbo/uImage/trailer/slic
 SHA256SUMS/SIZES), the reproducibility comparison, xxd byte structure, independent-tool
 checks, exact commands and git state. None of it is committed; the published tree contains
 only the sources and the script.
+
+---
+
+## 2026-11-18 (fifth session): first real drivers - CRG clock/reset + watchdog
+
+**Status: the first two upstream-style drivers for this board are written, with device-tree
+bindings in the shape upstream review expects, and they compile as built-ins into the same
+`linux-6.18.60` kernel the `TEXT_OFFSET` series builds (`make target/linux/compile -j16`
+RC=0, 1190 s, no warning from the new files). The delivered patches apply cleanly to pristine
+6.18.60 and in the OpenWrt clone; `dt_binding_check` passes for both YAMLs; the draft board DTS
+compiles to a DTB with the patched kernel's own dtc with ZERO warnings (the old deliberate
+`unique_unit_address` collision is gone); the hand-added kernel-config delta is
+symbol-identical to a canonical `make kernel_oldconfig` re-derivation with the new Kconfig;
+and an independent cross-check confirms the DTS clock IDs, the driver gate table and the
+dt-bindings header agree. Nothing has been booted or run on hardware: no bench, no device, no
+boot claims; publication NOT READY.**
+
+Host-only, same clone (`openwrt main` `27663a0`, `linux-6.18.60`, the tree's own OpenWrt
+GCC 14.4.0 toolchain). No router, UART, TFTP, flash or bench tool was used.
+
+### What was added
+
+| artifact | sha256 |
+| --- | --- |
+| `target/linux/hisilicon/patches-6.18/004-arm-clk-reset-luofu-crg.patch` | `bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0` |
+| `target/linux/hisilicon/patches-6.18/005-arm-watchdog-luofu-wdt.patch` | `b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be` |
+| `target/linux/hisilicon/luofu/config-6.18` (two `[N]` driver symbols plus the syscon/regmap selects; now symbol-identical to a canonical re-derivation) | `03ac74d1a167b8e05716d9409b19251a5bd2056a08545380d8d58ea28a9bb5aa` |
+| `dts/luofu-r116.dts` (one CRG syscon node + watchdog child, no gate children, clock IDs from the header) | `2b395a292221174213a2e0e6532f1a78d5f3ffcf03dcdc9e18a92b3c67ed5b57` |
+
+`004` adds:
+- `drivers/clk/hisilicon/crg-luofu.c`: the 16 CRG gate clocks and the reset controller from
+  one node.
+- `include/dt-bindings/clock/hisilicon,luofu-crg.h`: the clock-ID ABI (IDs 0..15 keep the
+  existing ordering contract; `LUOFU_CLK_NR` = 16).
+- `Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml`.
+- `drivers/clk/hisilicon/{Kconfig,Makefile}`: `CONFIG_LUOFU_CRG=y`.
+
+`005` adds:
+- `drivers/watchdog/luofu-wdt.c`: the watchdog on the 6.18 watchdog API, hwver-2 register
+  data.
+- `Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml`.
+- `drivers/watchdog/{Kconfig,Makefile}`: `CONFIG_LUOFU_WDT=y`.
+
+### Design decisions (and why)
+
+1. **One shared 0x14880000 page -> one `syscon` + `simple-mfd` node, one regmap, two
+   drivers.** The CRG gate bits (0x14/0x20), reset bits (0x2c/0x30/0x34) and watchdog registers
+   (0x50/0x64/0x70/0x100) are interleaved in one 4 KiB page, so no driver may claim it
+   exclusively. The node is `compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd"`; the
+   CRG driver and the watchdog child both obtain the page with
+   `syscon_node_to_regmap()` and the syscon core maps it once. Neither driver contains a
+   `request_mem_region()` or `ioremap()` call, so there is no overlapping resource and no
+   second mapping. The lab lane had exactly the failure this removes: the CRG claimed the page
+   and the watchdog probe returned `-EBUSY` until it was worked around with a bare
+   `devm_ioremap()` (ledger 2026-11-13 16:00/16:29). `simple-mfd` populates the watchdog
+   child; `syscon` is the documented regmap contract, so the watchdog still works if
+   `CONFIG_LUOFU_CRG` is disabled. Rejected alternative: two nodes with overlapping `reg`
+   and one of them using bare `devm_ioremap()` (not upstream acceptable).
+2. **Compatibles:** `hisilicon,luofu-crg` (controller) and `hisilicon,luofu-wdt` (child),
+   each with a YAML binding. The watchdog node carries no vendor-only properties: the hwver,
+   register offsets and magic values are hwver-2 driver data attached to the compatible's
+   match entry.
+3. **Clock gates: a driver-side table indexed by the documented clock IDs, not 16 child
+   nodes.** The gates share two registers, and per-gate child nodes would have no `reg` (they
+   are not devices) and would require an invented binding for the bit position. The DT ABI is
+   the one-cell index from the header; the driver's designated-initializer table is indexed by
+   the same IDs and the probe rejects a missing entry. This is the table+ID shape used by
+   modern SoC clock drivers (sunxi-ng, meson, renesas CPG); child-node-per-gate is the
+   deprecated TI shape and would describe no hardware. The clock IDs, ordering and the
+   gate/(offset,bit) geometry are unchanged from the lab driver, so every existing consumer
+   specifier keeps its meaning.
+4. **Reset cells: two cells, `(CRG page register offset, bit)`.** This preserves the lab
+   driver's specifier (documented in the YAML and the DTS). The xlate rejects any offset
+   outside `0x2c/0x30/0x34`, so a reset specifier can never write the watchdog, soft-reset,
+   mux or PLL words. The driver also sets `rcdev.of_reset_n_cells = 2`: the lab driver did not,
+   which is why `devm_reset_control_array_get()` returned `-EINVAL` for every two-cell
+   consumer (ledger 2026-11-13 21:41) - that bug is now fixed and explained. A named reset-ID
+   table remains a submission TODO (it changes every consumer's cells and needs an agreed
+   inventory).
+5. **Watchdog:** 6.18 watchdog API (`devm_watchdog_register_device`, `.start/.stop/.ping/
+   .set_timeout`, DT `timeout-sec`, min 1 s / max 512 s from driver data). The vendor write
+   pairs/order are preserved exactly: enable val1 then val0 to 0x64, stop val0 then val1 to
+   0x64, ping reset-val0 then reset-val1 to 0x70, and the hwver-2 timeout field `(secs - 1)`
+   at bits [18:10] of 0x50 (clear mask `0xfff803ff`). Probe performs **no register access at
+   all**, so loading the driver cannot arm the timer.
+6. **Interrupt SPI 2 and restart are deliberately absent, not fake.** The block has a
+   status/interrupt register at 0x100 (SPI 2 in the vendor tree), but its semantics are
+   unverified, so the driver is polled and the node claims no `interrupts` property. There is
+   no restart handler: the vendor reset path writes sysctrl/boot-selector registers that are not
+   understood, and a wrong reset sequence would strand the board - a documented TODO. The
+   watchdog therefore cannot reboot the chip by itself; that belongs to a future reset driver.
+
+### Verification (exact commands and results)
+
+All logs and artifacts are local-only (gitignored) under
+`build/linux-kbuild/waves/upstream-6.18-drivers-20261118/`; a `00-README.md` there indexes
+them with the git state. The repository contains only the sources and these docs.
+
+**1. Patches apply to pristine `linux-6.18.60`** (unpacked from the clone's
+`dl/linux-6.18.60.tar.xz`):
+
+```
+$ cd .../upstream-6.18-drivers-20261118/a          # pristine tree
+$ patch -p1 --dry-run -i 004-arm-clk-reset-luofu-crg.patch
+checking file drivers/clk/hisilicon/Kconfig
+checking file drivers/clk/hisilicon/Makefile
+checking file drivers/clk/hisilicon/crg-luofu.c
+checking file include/dt-bindings/clock/hisilicon,luofu-crg.h
+checking file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+RC=0
+$ patch -p1 --dry-run -i 005-arm-watchdog-luofu-wdt.patch
+checking file drivers/watchdog/Kconfig
+checking file drivers/watchdog/Makefile
+checking file drivers/watchdog/luofu-wdt.c
+checking file Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml
+RC=0
+```
+
+**2. OpenWrt prepare** (patches/config/DTS copied into the clone's target):
+
+```
+$ cd /home/shibbityshwab/openwrt-lab && make target/linux/prepare
+RC=0
+```
+
+No `.rej`/`.orig` files; the patched tree contains
+`drivers/clk/hisilicon/crg-luofu.c`, `drivers/watchdog/luofu-wdt.c`,
+`include/dt-bindings/clock/hisilicon,luofu-crg.h` and the Kconfig/Makefile hooks.
+
+**3. Full kernel compile** with the tree's own OpenWrt GCC 14.4.0 (`CONFIG_WERROR=y`, no
+make-command-line override):
+
+```
+$ make target/linux/compile V=s -j16
+  CC      drivers/clk/hisilicon/crg-luofu.o
+  CC      drivers/watchdog/luofu-wdt.o
+...
+  Kernel: arch/arm/boot/zImage is ready
+time: target/linux/compile#1190.22#74.07#104.94
+RC=0
+```
+
+- `arch/arm/boot/zImage`: **3,222,416 B**, sha256
+  `50cd07a1025e19e747e281ac3fb89e96e2b82f42594ddbeada2528a150dc528b`.
+- kernel `.config`: `CONFIG_LUOFU_CRG=y`, `CONFIG_LUOFU_WDT=y`, `CONFIG_MFD_SYSCON=y`,
+  `CONFIG_REGMAP=y`, `CONFIG_RESET_CONTROLLER=y`, `CONFIG_WATCHDOG_CORE=y`.
+- both drivers are built-in and linked: `System.map` has `luofu_crg_probe` (`c0b25d08`) and
+  `luofu_wdt_probe` (`c0ba5ce4`).
+- **0 warnings from the new files.** The build emits 38 pre-existing
+  `WARNING: modpost: missing MODULE_DESCRIPTION()` lines for unrelated generic modules
+  (netfilter, phylink, ppp, ...); none mentions luofu/crg/wdt.
+- the load-address contract is unchanged: both `.head.o.cmd` files carry
+  `-DTEXT_OFFSET=0x00608000` and `System.map` has `_text = stext = 0xc0608000`
+  (load/entry 0x80608000 via the loader staging base).
+
+**4. Board DTS -> DTB with the patched kernel's own dtc:**
+
+```
+$ cpp -nostdinc -I <kernel>/include -I <kernel>/arch/arm/boot/dts -undef \
+      -D__DTS__ -x assembler-with-cpp -o luofu-r116.dts.preprocessed dts/luofu-r116.dts
+$ <kernel>/scripts/dtc/dtc -I dts -O dtb -o luofu-r116.dtb luofu-r116.dts.preprocessed
+DTC 1.7.2-g52f07dcc, RC=0, stderr EMPTY (zero warnings)
+```
+
+- DTB: **8,944 B**, sha256
+  `86396521d9db8f4abccfdb155e83b0ac99dc677f283a2a82015f391d96126df8`.
+- node checks (system `fdtget`): `/system-controller@14880000` has compatible
+  `["hisilicon,luofu-crg", "syscon", "simple-mfd"]`, `#clock-cells = <1>`,
+  `#reset-cells = <2>`, and its only child is `watchdog`. The watchdog child has exactly
+  `compatible = "hisilicon,luofu-wdt"`, `timeout-sec = <30>`, `status = "okay"` - no
+  `reg`, no `interrupts`, no vendor-only properties.
+- the same DTS also compiles through the delivered host slice script
+  (`tools/build-kernel-slice.sh --out .../slice-check`): PASS, DTB 8,944 B (same sha256),
+  trailer 9,238 B, FIP slice 3,231,718 B sha256
+  `0c28771dadfffeb25e5329800ebcdeb0a36f06fadb930896a1271d7a40706fe1` with gate at
+  `0x314ec0` and uImage load/ep `0x80608000`. Structural only: that slice has never been
+  booted and is still not flashable through the bench lane (fixed 40,732-byte trailer).
+
+**5. Clock-ID contract cross-check** (independent Python re-read of the DTB and the patch
+text, not the tools' own asserts):
+
+- all 16 dt-bindings IDs have a gate-table entry with the expected name and the designated
+  initializer index equals the ID (`driver_table_matches_header_order: True`);
+- all 15 existing clock consumers use the expected index (`mismatches: []`): fmc/sfc=0,
+  gpio0=1, gpio1=2, i2c0=3, pcie0=4, pcie1=5, gmac0=6, lsw_dp=8, lsw_pfe=9, mdio=10,
+  gmac1=11, gmac2=12, gmac3=13, gmac4=14, pie=15; led_pwm=7 has no consumer yet;
+- no `clk-gate` child nodes remain under the controller node.
+
+**6. Device-tree binding validation:**
+
+```
+$ PATH=<dtschema-venv>/bin:$PATH make ARCH=arm dt_binding_check \
+      DT_SCHEMA_FILES=".../clock/hisilicon,luofu-crg.yaml:.../watchdog/hisilicon,luofu-wdt.yaml"
+  SCHEMA  Documentation/devicetree/bindings/processed-schema.json
+  CHKDT   ./Documentation/devicetree/bindings
+  DTEX    Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.example.dts
+  DTC [C] Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.example.dtb
+  DTEX    Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.example.dts
+  DTC [C] Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.example.dtb
+RC=0
+$ dt-doc-validate -u Documentation/devicetree/bindings <both yamls>   -> RC=0
+$ dt-validate -s processed-schema.json ...crg.example.dtb             -> RC=0
+$ dt-validate -s processed-schema.json ...wdt.example.dtb             -> RC=0
+```
+
+dtschema **2026.9** was installed in a throwaway venv for this check (`pip install dtschema`;
+the tree requires >= 2023.9). `yamllint` is not installed, so the tree's YAML-lint step is
+skipped with its own warning - that is the only step not exercised. The real board DTB's CRG
+subtree was also validated against the same processed schema: RC=0, no errors for the
+controller or the watchdog child (only the synthetic wrapper root lacked
+`compatible`/`model`). A **full**-draft-DTS `dtbs_check` is NOT clean and is not claimed:
+every other node still has a TODO binding (TARGET-DESIGN.md 6.2).
+
+**7. Kernel-config provenance:** with the new Kconfig in the tree, the canonical top-level
+
+```
+$ yes '' | make kernel_oldconfig
+RC=0
+```
+
+target emitted 286 config-symbol lines, **identical** to the annotated
+`luofu/config-6.18` after stripping comments (`CONFIG_SYMBOLS_IDENTICAL`; only the emitted
+line order differs), and the kernel `.config` was byte-identical before and after the re-run
+(`KCONFIG_UNCHANGED`). The two hand-added `[N]` driver symbols and the syscon/regmap selects
+they pull in are therefore exactly what the tree derives; the committed file stays annotated.
+
+**8. Static sanity of the submitted code:**
+
+- no `request_mem_region()`/`ioremap()`/`platform_get_resource()` call in either driver;
+  both obtain the page only via `syscon_node_to_regmap()`;
+- neither probe body contains any `regmap_read`/`regmap_write`/`regmap_update_bits`
+  (probe cannot arm the timer or touch a gate);
+- `scripts/checkpatch.pl --no-tree -f`: **0 errors, 0 warnings** for both drivers and the
+  dt-bindings header (346 / 247 / 33 lines);
+- the delivered driver code contains no lab/bench breadcrumbs or private-repository references
+  (0 matches for `TARGET-DESIGN`, `opensource`, `target-skeleton`, `bench`, `lab`).
+
+### What this proves and what it does not
+
+Proven (host-only): the two drivers are real code with bindings that pass `dt_binding_check`;
+they apply to pristine 6.18.60 and build into the board kernel with zero warnings; the DTS uses
+them with zero dtc warnings and the clock-ID/geometry contract is internally consistent; the
+shared-page design removes the overlapping MMIO claim without any special-case mapping (there
+is no mapping in the drivers at all); and the target kernel config is canonically derived.
+
+Not proven / not claimed - any hardware behaviour:
+
+- the 0x20-group gate offsets are reconstructed from the vendor encoding (PROVISIONAL);
+- reset polarity (the driver preserves the lab behaviour; the vendor description says the
+  opposite; no in-tree consumer uses the resets yet) and the per-gate clock parents/PLLs/muxes;
+- watchdog enable/stop magic-value ordering at run time, whether the bootloader leaves the
+  watchdog running (no `WDOG_HW_RUNNING` detection), and the 0x100 status/interrupt
+  semantics;
+- no restart handler exists at all (documented TODO - the vendor reset path is not understood);
+- no boot, no bench, no device, no image: the FIP slice above is structural only and never
+  flashable through the bench lane. **Publication remains NOT READY.**
+
+### Remaining TODOs for the driver series
+
+1. Attended-bench confirmation of the gate register/bit map, reset polarity, and watchdog
+   clear/enable ordering and boot-time state; then decide `CLK_IGNORE_UNUSED`/rate modelling
+   for boot-enabled gates and a `WDOG_HW_RUNNING` read.
+2. Upstream review items: named reset-ID table, per-gate parent clock model (PLLs/muxes at
+   0x198/0x1e0/0x138, read-only until measured), maintainer identity in the two YAMLs
+   (currently the repository's git identity as a placeholder), and whether the CRG should be
+   split across `drivers/clk/hisilicon` + `drivers/reset` (it is one MFD block, so this draft
+   registers both providers from the clock driver).
+3. The rest of the driver/binding series (thermal, pinctrl, FMC, MDIO/PHY/GEMAC, switch,
+   PCIe), the image recipe/trailer wiring, rootfs/sysupgrade, and one attended boot of a
+   generated trailer - unchanged from the earlier sessions.
+
+Evidence: local-only
+`build/linux-kbuild/waves/upstream-6.18-drivers-20261118/` (gitignored); its `00-README.md`
+indexes the pristine/patched trees, the dry-run/prepare/compile logs, the dtc and
+`dt_binding_check` logs, the cross-check script/output, the config re-derivation logs and the
+slice re-export. None of it is committed.
 
