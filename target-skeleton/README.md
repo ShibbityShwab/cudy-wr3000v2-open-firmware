@@ -9,9 +9,13 @@
 > including the 2026-11-18 early-boot `TEXT_OFFSET` fix (`003`), builds the full
 > `linux-6.18.60` kernel with the tree's own OpenWrt GCC 14.4.0 toolchain and the real
 > `0x80608000` load/entry address (2026-11-18 - see
-> [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)). **No image exists, no trailer or
-> rootfs was built, and nothing here has ever run on a router.** The only executable
-> artifact is `tools/fip-slice.py`, and its safe path is the read-only `check` mode.
+> [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)). A first **FIP kernel slice** was then
+> assembled from our own base DTB + loader-match overlay + uImage and structurally
+> validated (2026-11-18, fourth session; `tools/build-kernel-slice.sh`). **It has never
+> been booted; there is no rootfs, no sysupgrade container and no install image, and
+> nothing here has ever run on a router.** The executable artifacts are
+> `tools/fip-slice.py` (safe read-only paths: `check`, `check-trailer`) and
+> `tools/build-kernel-slice.sh` (host-only, fail-closed, refuses vendor-derived inputs).
 > The design these files encode is not accepted upstream, no driver series, image
 > recipe or device page exists yet, and there is no device page. **Do not read this
 > directory as upstream progress.**
@@ -52,7 +56,9 @@ Everything here is marked one of:
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC**) | same path (mode 0755) |
 | `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy; proposed compatibles are **not** bindings (**UNTESTED**); the target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
+| `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
+| `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | a host build helper (not an OpenWrt tree file); its steps still have to be wired into `image/luofu.mk` |
 | `../docs/TARGET-SKELETON.md` | one-page index/status of this skeleton, pointing back at TARGET-DESIGN.md | nowhere (repo documentation) |
 
 Deliberately **absent**: a factory/install image stanza (the install path is an open
@@ -176,7 +182,11 @@ section 3). Any future recipe that contradicts one of them is wrong. The image
   hardware-proven**: one attended boot on a recovered unit is still required
   before the image recipe relies on it (TARGET-DESIGN.md section 5.2). A
   generated trailer is not 40,732 B; that size is only the bench-lane
-  convention.
+  convention. **The first generated trailer was assembled into a complete slice
+  on 2026-11-18 (fourth session): 8,984 B base DTB + 64 B descriptor + 230 B
+  match overlay = 9,278 B trailer, 3,214,542 B slice, sha256 `3311a3e5...`;
+  structurally validated only, never booted - see
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).**
 
 ### 3.2 The gate magic is checked before kernel entry
 
@@ -242,7 +252,8 @@ this non-immediate `TEXT_OFFSET` (`mov_l`) so the linker `textofs` contract and 
 `0x80608000` derivation hold in a real build; with `001`-`003` the full kernel compiles
 and `System.map` gives `_text = 0xc0608000`. This skeleton's image Makefile names the
 derivation and `tools/fip-slice.py assemble --loader-stage/--text-offset` asserts it;
-the real build wiring is still TODO.
+`tools/build-kernel-slice.sh` now performs the derivation and assertion end-to-end on
+the host (2026-11-18), but the real OpenWrt build wiring is still TODO.
 
 ---
 
@@ -359,10 +370,23 @@ Checked on the author's host on 2026-11-18, nothing more:
   boot code contains the `movw/movt` `0x00608000` materialization at all four sites;
   the load/entry derivation is `(0x83200000 & 0xf8000000) + 0x00608000 = 0x80608000`,
   i.e. the image recipe's `mkimage -a 0x80608000 -e 0x80608000` is unchanged. **This
-  is a compile product, not an image**: no FIP trailer, no rootfs, no boot. Evidence
-  is local-only under
+  is a compile product, not a bootable image**: it had no FIP trailer, no rootfs and
+  was never booted (the fourth-session bullet below adds the structurally validated
+  slice). Evidence is local-only under
   `build/linux-kbuild/waves/upstream-6.18-textoffset-20261118/`; exact disassembly,
   hashes and derivation: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md).
+- **First own-artifact FIP kernel slice (2026-11-18, fourth host-only session)**:
+  `tools/build-kernel-slice.sh` compiled the draft DTS (no source change needed; one
+  expected `unique_unit_address` warning), compiled the new loader-match overlay,
+  wrapped the 3,205,200 B zImage in a legacy uImage (`Linux-6.18.60`, load/entry
+  `0x80608000`), generated a 9,278 B trailer with `fip-slice.py make-trailer`
+  (`--overlay-apply require`), assembled a **3,214,542 B** slice (5,436,210 B under the
+  slot budget) and validated it with `check` + `manifest` plus independent gate/
+  descriptor and system-dtc re-reads. Two clean runs are byte-identical
+  (`SOURCE_DATE_EPOCH=0`). Slice sha256 `3311a3e5...`; gate `0xd7b7ab1e` at
+  `0x310ba8`. **Never booted; not flashable through the current bench fire lane
+  (fixed 40,732-byte trailer preflight).** Details:
+  [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (fourth session).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host. dtc emits
   exactly one expected warning: `unique_unit_address: /clock-reset-controller@14880000
   duplicate unit-address (also used in node /watchdog@14880000)` - that is the
@@ -375,11 +399,13 @@ Checked on the author's host on 2026-11-18, nothing more:
   draft patch series compiles (above), but the target's own image recipe has never been
   built, imaged or booted, and the Kconfig stub/profile file are not used by main.
 
-**Not done, and not claimed:** no target image (no uImage/FIP slice and no rootfs), no
-trailer assembled into a slice, no boot, no device interaction, no UART, no bench tool
+**Not done, and not claimed:** no bootable image (no rootfs/UBI, no sysupgrade container,
+no install path), no appended DTB, no boot, no device interaction, no UART, no bench tool
 run, no driver/binding review, no `dtbs_check`. The zImage produced by the compile stage
-is an intermediate build product with the correct `TEXT_OFFSET`/load-address derivation;
-it is not a deliverable image and has never been loaded on hardware.
+and the uImage + FIP slice assembled by `tools/build-kernel-slice.sh` are host build
+products that satisfy the *decoded* loader structure; they are not deliverable images and
+have never been loaded on hardware. The bench fire lane still copies the fixed 40,732-byte
+trailer and does not accept the generated 9,278 B one yet.
 
 ---
 
@@ -388,10 +414,12 @@ it is not a deliverable image and has never been loaded on hardware.
 Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
 
 1. **Trailer regeneration** - decoded and implemented (`docs/TRAILER-FORMAT.md`,
-   `fip-slice.py make-trailer`, byte-exact against both vendor containers); what
-   remains is one attended boot of a novel generated trailer before the image recipe
-   relies on it, plus the unknowns listed in TRAILER-FORMAT.md (constant meanings,
-   628-byte slot region).
+   `fip-slice.py make-trailer`, byte-exact against both vendor containers), and the
+   first generated trailer has now been assembled into a complete slice by
+   `tools/build-kernel-slice.sh` (structurally validated, never booted). What remains:
+   one attended boot of a novel generated trailer before the image recipe relies on it,
+   wiring the host steps into `image/luofu.mk`, and the unknowns listed in
+   TRAILER-FORMAT.md (constant meanings, 628-byte slot region).
 2. **Boot arguments** - how the rootfs selector reaches the kernel, and whether the
    stock U-Boot overrides `/chosen/bootargs`.
 3. **Install path** - stock TFTP recovery vs a documented vendor-root install

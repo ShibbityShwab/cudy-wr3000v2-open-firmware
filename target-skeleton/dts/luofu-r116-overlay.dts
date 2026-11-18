@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * luofu-r116-overlay.dts - minimal loader-match overlay for the Cudy
+ * WR3000 v2.0 (HiSilicon luofu R116) FIP kernel slice.
+ *
+ * STATUS: SCHEMATIC / HOST-ONLY / NEVER BOOTED. This is a functional match
+ * stub for OUR OWN base DTB (dts/luofu-r116.dts), not a vendor DTBO.
+ *
+ * WHAT THIS IS
+ *   The stock vendor U-Boot's `bootfip` command boots the kernel slot only if
+ *   the trailer after the legacy uImage carries at least one board overlay that
+ *   passes its decoded match rule and applies to the base DTB with libfdt. Our
+ *   base DTB is already the complete board tree for our kernel, so this overlay
+ *   carries nothing but the three match properties and one fragment. It embeds
+ *   no vendor bytes and copies none of the vendor overlay's board fixups (the
+ *   vendor R116 overlay rebases LSW windows and adds keys/LEDs; those are its
+ *   board model, not ours).
+ *
+ * WHERE IT SITS (TARGET-DESIGN.md 3.2/5.2, docs/TRAILER-FORMAT.md)
+ *   kernel slot = legacy uImage + trailer
+ *   trailer     = base DTB + 96-byte overlay-container descriptor + overlays
+ *   this file   = the single overlay entry in that container.
+ *
+ * WHY EXACTLY THESE THREE ROOT PROPERTIES (decoded applier FUN_800743ec)
+ *   1. `vendor_id` (string): the loader does strcmp(overlay vendor_id, env
+ *      `vendorid`). The stock environment carries vendorid=hsan, so this must
+ *      be "hsan". The property name is fixed by the decoded code; it cannot be
+ *      renamed to something more upstream-looking.
+ *   2. `compatible` (string list): the match helper does
+ *      strstr(compatible, family_token) against an 11-row family/vendor table.
+ *      Our row is luofu/hsan and the vendor overlays carry "hsan-luofu"; any
+ *      first compatible containing the token "luofu" matches, and
+ *      "hsan-luofu" is used because it is the decoded vendor family string for
+ *      this row. It is NOT our board compatible (the base DTB root compatible
+ *      stays "hisilicon,luofu-r116", "hisilicon,luofu").
+ *   3. `board_id` (32-bit cell): matched against the environment `boardid`
+ *      when that is set, otherwise against the 4-bit hardware strap (four
+ *      pinctrl cfg registers at 0x14940000 + 4*{0x0a,0x0b,0x12,0x13}, bit 6).
+ *      The R116 strap reads 3 [I: inferred - the vendor board_id=3 overlay is
+ *      the one the stock loader applied to this unit, and the live DT carries
+ *      the R116 model; TRAILER-FORMAT.md section 6].
+ *
+ *   If no overlay matches, the applier returns non-zero, `bootfip` prints
+ *   "boot apply overlay fail" and never jumps to the kernel: a slice whose
+ *   overlay fails to match is not booted (it is not a brick, but the slot does
+ *   nothing and the box needs the other slot / recovery to come back).
+ *
+ * WHY A NO-OP __overlay__
+ *   The applier only requires that the first matching overlay's libfdt
+ *   fdt_overlay_apply() succeeds. A fragment that targets "/" and adds nothing
+ *   is the minimal valid case for our own complete base DTB. Board deltas
+ *   belong in the base DTB until an overlay has a real reason (and a binding)
+ *   to carry them.
+ *
+ * BUILD (tools/build-kernel-slice.sh does exactly this):
+ *   dtc -I dts -O dtb -o luofu-r116-overlay.dtbo dts/luofu-r116-overlay.dts
+ *   fip-slice.py make-trailer --base-dtb luofu-r116.dtb \
+ *       --overlay luofu-r116-overlay.dtbo --overlay-apply require ...
+ *
+ * HONEST LIMIT: this overlay makes the slice satisfy every check the DECODED
+ * loader performs; it is not hardware-proven. One attended boot on a recovered
+ * unit is still required (TARGET-DESIGN.md 5.2, 9; TRAILER-FORMAT.md 8).
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "hsan-luofu";
+	vendor_id = "hsan";
+	board_id = <3>;
+
+	fragment@0 {
+		/*
+		 * Target by path, not by phandle: `target = <&{/}>` resolves
+		 * to a local phandle in a plugin build and is not what the
+		 * loader's libfdt overlay apply would resolve to the base
+		 * root. `target-path = "/"` is unambiguous.
+		 */
+		target-path = "/";
+
+		__overlay__ {
+			/*
+			 * Intentionally empty - see the file header. This is
+			 * a loader-match stub for our own base DTB, which
+			 * already models the board.
+			 */
+		};
+	};
+};

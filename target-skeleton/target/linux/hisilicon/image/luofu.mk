@@ -7,7 +7,9 @@
 # Shape from TARGET-DESIGN.md sections 4.2 and 5. This is NOT the accepted
 # OpenWrt image idiom and it is not buildable as it stands:
 #   - the kernel platform patch and the drivers do not exist (4.1, 7);
-#   - the FIP trailer cannot be regenerated from source yet (5.2);
+#   - the FIP trailer is now generable (fip-slice.py make-trailer +
+#     tools/build-kernel-slice.sh, 2026-11-18) but this recipe still treats it
+#     as a fixed input; wiring + one attended boot are pending (5.2, 9);
 #   - the sysupgrade metadata schema and platform.sh are not written (5.4);
 #   - the factory/install image is an open question (5.5), so no image stanza
 #     for it exists here on purpose.
@@ -16,9 +18,11 @@
 #   kernel slot = legacy uImage (-C none) + FIP trailer
 #                 size <= 8650752 B (0x840000)
 #                 gate magic 0xd7b7ab1e at 0x40 + ih_size + base-DTB totalsize
-#   FIP trailer = base DTB + 96-byte descriptor + two overlays; 40732 B in the
-#                 verified bench lane; NOT reproducible from source yet, and
-#                 this recipe must never fabricate it
+#   FIP trailer = base DTB + 96-byte descriptor + overlays. The bench lane uses
+#                 a fixed 40,732 B artifact; the own-generated lane uses a
+#                 DTB+overlay trailer (9,278 B in the first host build,
+#                 2026-11-18). Generation is implemented; fabrication is never
+#                 allowed (5.2).
 #   rootfs slot = squashfs in a static UBI volume named "squashfs"
 #                 size <= 24313856 B (0x1740000)
 #   overlay     = JFFS2 on rootfs_data (kept; TARGET-DESIGN.md 5.3)
@@ -52,9 +56,12 @@ KERNEL_LOADADDR := 0x80608000
 # Path to the checked-in skeleton tool. Mapping: copy
 # target-skeleton/tools/fip-slice.py to <openwrt>/scripts/fip-slice.py.
 FIP_SLICE_TOOL ?= $(TOPDIR)/scripts/fip-slice.py
-# The trailer is an INPUT. Generating it from our board DTB + two overlay DTS +
-# the 96-byte descriptor is TARGET-DESIGN.md 5.2 and is not implemented;
-# fip-slice.py make-trailer refuses rather than fabricating descriptor bytes.
+# The trailer is still an INPUT in this schematic recipe, but generation IS
+# implemented (TARGET-DESIGN.md 5.2): fip-slice.py make-trailer derives the
+# descriptor from user-supplied base DTB + overlays, and
+# tools/build-kernel-slice.sh builds a complete own-artifact slice
+# (uImage + base DTB + match overlay). Wiring it into this file and one
+# attended boot remain (SKELETON-SMOKE.md, 2026-11-18 slice section).
 FIP_TRAILER ?= $(KDIR)/fip-trailer-$(FIP_TRAILER_SIZE).bin
 
 # ---- kernel image assembly ----------------------------------------------
@@ -72,10 +79,10 @@ define Build/luofu-uimage
 	mv $@.uimage $@
 endef
 
-# Assemble the kernel slot. fip-slice.py checks the uImage header, the fixed
-# trailer size, the FDT chain, the descriptor size fields, the gate magic and
-# the slot budget, and it fails the build on any mismatch. It cannot create a
-# trailer, by design.
+# Assemble the kernel slot. fip-slice.py checks the uImage header, the trailer
+# structure (FDT chain, descriptor constants/count/offsets, gate magic at the
+# computed offset) and the slot budget, and fails the build on any mismatch.
+# Trailer generation is done by make-trailer / build-kernel-slice.sh, not here.
 define Build/fip-slice
 	$(FIP_SLICE_TOOL) assemble \
 		--uimage $@ \
@@ -147,10 +154,11 @@ define Device/cudy_wr3000-v2
 	# questions).
 	SUPPORTED_DEVICES += cudy,wr3000-v2
 	IMAGES := sysupgrade.bin
-	# SCHEMATIC: in the real recipe the left-hand stages are
-	# append-dtb -> luofu-uimage -> fip-slice -> fip-manifest ->
-	# luofu-sysupgrade-tar -> append-metadata. Only the last two stock stages
-	# are named here because the target-specific ones are not implemented.
+	# SCHEMATIC: in the real recipe the stages are
+	# append-dtb -> luofu-uimage -> (make-trailer + fip-slice) -> fip-manifest ->
+	# luofu-sysupgrade-tar -> append-metadata. The host slice path exists
+	# (tools/build-kernel-slice.sh) but the image recipe and rootfs/sysupgrade
+	# wiring are not implemented.
 	IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
 	# TODO(packages): final DEVICE_PACKAGES list (TARGET-DESIGN.md 4.2).
 	# DEVICE_PACKAGES :=

@@ -4,15 +4,18 @@
 2026-11-18 early-boot `TEXT_OFFSET` fix, patch `003`) applies; the config re-derives
 with the tree's own OpenWrt GCC 14.4 toolchain; and `make target/linux/compile` now
 completes RC=0, producing `arch/arm/boot/zImage` with the correct `0x80608000`
-load/entry address. Nothing imaged or booted: no FIP trailer, no rootfs, no boot, no
-driver series.**
+load/entry address. A first FIP kernel slice was then assembled from our own DTB +
+overlay + uImage and structurally validated (fourth session below); nothing has been
+booted: no rootfs, no sysupgrade container, no install path, no boot, no driver
+series.**
 
 This page records the host-side validation of [`target-skeleton/`](../target-skeleton/README.md)
-against a real OpenWrt tree (three sessions on 2026-11-18: the target-layout smoke test
-below, the kernel patch/config session, and the `TEXT_OFFSET` + full-kernel-compile
-session appended at the end). It is not a target build result and must not be cited as
-one: the only build it records is the kernel compile product itself, with no image,
-trailer, rootfs or boot.
+against a real OpenWrt tree (four sessions on 2026-11-18: the target-layout smoke test
+below, the kernel patch/config session, the `TEXT_OFFSET` + full-kernel-compile
+session, and the first own-artifact FIP kernel slice appended at the end). It is not a
+target build result and must not be cited as one: the only build products it records
+are the kernel compile product and a structurally validated kernel slice - no rootfs,
+no sysupgrade container, no install image and no boot.
 
 ## Environment
 
@@ -581,4 +584,204 @@ on hardware. Publication remains NOT READY; patch `003` has not been reviewed up
 Evidence: local-only `build/linux-kbuild/waves/upstream-6.18-textoffset-20261118/`
 (`00-README.md` indexes the baseline/fix logs, disassembly, hashes and the derivation);
 it is gitignored and none of it is in this repository.
+
+---
+
+## 2026-11-18 (fourth session): first own-artifact FIP kernel slice (host-only)
+
+**Status: for the first time a complete FIP kernel slice exists as a host artifact, built
+from our own sources: the 6.18.60 zImage wrapped in the legacy uImage, followed by a trailer
+generated from our draft board DTB and a minimal loader-match overlay. It satisfies every
+structural check the decoded stock `bootfip` performs and it is byte-reproducible. It has
+NEVER been booted; one attended boot on a recovered unit is still required before the image
+recipe may rely on a novel trailer. No rootfs, no sysupgrade container, no install path, no
+appended DTB, no driver series. Publication NOT READY.**
+
+No router, UART, TFTP, flash or bench tool was used. No vendor dump, trailer, DTB, DTBO,
+U-Boot image or vendor byte is an input; every input is either a repository DTS source
+(`target-skeleton/dts/luofu-r116.dts`, `.../luofu-r116-overlay.dts`), the kernel build
+product (`arch/arm/boot/zImage`) or a host tool from the OpenWrt build tree. The repeated
+strings and numbers below (`hsan`, `luofu`, `board_id 3`, `0xd7b7ab1e`, the load
+address) are decoded structural facts documented in
+[`../target-skeleton/docs/TRAILER-FORMAT.md`](../target-skeleton/docs/TRAILER-FORMAT.md)
+and TARGET-DESIGN.md 3.2/5.2, not copied vendor payload.
+
+### What was built
+
+Produced in one scripted run (the script is `target-skeleton/tools/build-kernel-slice.sh`,
+section "Exact commands" below). Hashes are the run-1 values; a second clean run in a
+different directory reproduced every byte (section "Reproducibility").
+
+| artifact | size | sha256 | role |
+| --- | --- | --- | --- |
+| `luofu-r116.dtb` | 8,984 B | `2f97313a03a73ad64d40314f6fb1484a2d6db967aaa7cb5a50c96a531c883bb7` | our draft base DTB; first member of the trailer |
+| `luofu-r116-overlay.dtbo` | 230 B | `8e4ab83b575dc14d9f3131dc01d1cbdccc63b38f8f8c4fa774da0d1f200b23b6` | minimal loader-match overlay (`vendor_id=hsan`, compatible `hsan-luofu`, `board_id=3`, one no-op fragment targeting `/`) |
+| `uImage` | 3,205,264 B | `77406f1de3e11379942aaaf8d056d9c0aa70c0ac857f179266b8c5a32ec0124e` | legacy uImage: 0x40 header + 3,205,200 B zImage; `-A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000 -n "Linux-6.18.60"` |
+| `fip-trailer.bin` | 9,278 B | `aaf45c10a138bfb83c72b5234d6365781e6dcd56143cbadc491190de5c328c2f` | base DTB 8,984 B + 64 B descriptor (32-byte header + one 32-byte entry) + 230 B overlay; container total 294 B |
+| `luofu-kernel-slice.bin` | 3,214,542 B | `3311a3e560c0b3c3af8b68c206a0e3b2e943ed0f754185afc1e82993b120d143` | uImage + trailer; gate `0xd7b7ab1e` at slice `0x310ba8`; 5,436,210 B under the 8,650,752 B slot budget |
+| `fip-manifest.txt` | 901 B | `b244088c13eb8fed606d8955d7892d05632b0993025b471d2f67388314980fb7` | `fip-slice.py manifest` output (schema not frozen) |
+
+The generated trailer is **not** the fixed 40,732-byte bench-lane artifact: 8,984 + 64 + 230 =
+9,278 B. The loader does not require the fixed length (TRAILER-FORMAT.md sections 7 and 9);
+40,732 is a fire-preflight convention, so this slice cannot go through the current bench fire
+lane unchanged (open question 4 below).
+
+### DTS compilation: no source change was required
+
+The draft base DTS compiled unchanged - no TODO placeholder had to be commented out or
+removed, no binding was invented. Exactly one dtc warning is emitted, the already-documented
+`unique_unit_address` collision between `/clock-reset-controller@14880000` and
+`/watchdog@14880000` (the vendor watchdog shares the CRG page; README section 6):
+
+```
+cpp -nostdinc -I<kernel>/include -I<kernel>/arch/arm/boot/dts -undef -D__DTS__ \
+    -x assembler-with-cpp -o luofu-r116.dts.preprocessed dts/luofu-r116.dts
+<kernel>/scripts/dtc/dtc -I dts -O dtb -o luofu-r116.dtb luofu-r116.dts.preprocessed
+opensource/target-skeleton/dts/luofu-r116.dts:248.39-260.4: Warning (unique_unit_address):
+    /clock-reset-controller@14880000: duplicate unit-address (also used in node /watchdog@14880000)
+```
+
+Tools: the build tree's own `scripts/dtc/dtc` (DTC 1.7.2-g52f07dcc) and the host
+`cpp` (GCC 16.2.1); `cpp`'s include paths are the clone's kernel tree. The script asserts
+the FDT header (magic, totalsize == file size), the root compatible
+(`["hisilicon,luofu-r116", "hisilicon,luofu"]`) and the root model. The same assertions pass
+under the independent system dtc 1.8.1/`fdtget` (evidence 03).
+
+### The overlay is a loader-match stub for our own base DTB
+
+`dts/luofu-r116-overlay.dts` is **not** a vendor DTBO and embeds no vendor bytes. It exists
+only because the decoded applier refuses to hand over to the kernel unless the first matching
+overlay applies successfully. The decoded rule (TRAILER-FORMAT.md section 6) is mirrored
+exactly:
+
+- root `vendor_id = "hsan"` - the applier does `strcmp` against the stock environment's
+  `vendorid` (stock: `hsan`);
+- root `compatible = "hsan-luofu"` - the match helper does
+  `strstr(compatible, family_token)` against its 11-row family table; this board's row is
+  `luofu`/`hsan`, and `hsan-luofu` is the decoded vendor family string for that row;
+- root `board_id = <3>` - matched against the environment `boardid` if set, otherwise
+  against the 4-bit board strap. **Evidence for 3:** the vendor trailer carries a
+  board_id=0 reference overlay and a board_id=3 R116 overlay, and the stock loader selected
+  the board_id=3 overlay on this unit (the live DT carries the R116 model; TRAILER-FORMAT.md
+  section 6). The physical strap-bit reading is an inference [I] from that selection; the
+  attended boot doubles as its confirmation, because if the strap were not 3 the applier would
+  find no match and `bootfip` would refuse to boot the slot;
+- one `fragment@0` with `target-path = "/"` and an intentionally empty `__overlay__`.
+  Our base DTB is already the complete board tree for our kernel; the empty fragment adds
+  nothing and therefore needs no growth of the base DTB, which is the least demanding case for
+  the applier's libfdt buffers. Host libfdt applies it and the applied tree is byte-identical
+  to the base (evidence 03).
+
+The overlay DTS is a draft for the same in-tree location as the base DTS
+(`target/linux/hisilicon/dts/`); it becomes a real overlay only when an overlay has a real
+board delta (and binding) to carry.
+
+### Exact commands
+
+Delivered script, run from a clean output directory (it refuses a non-empty directory without
+`--force`, refuses missing inputs and any vendor-derived input path, and defaults to the lab
+clone unless `--openwrt-dir`/`OPENWRT_DIR` is given):
+
+```
+cd /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2
+opensource/target-skeleton/tools/build-kernel-slice.sh \
+    --out build/linux-kbuild/waves/upstream-6.18-slice-20261118/run1
+```
+
+Internally (per-step logs in the output's `logs/`):
+
+```
+cpp ... luofu-r116.dts                       -> luofu-r116.dts.preprocessed
+<kernel>/scripts/dtc/dtc                     -> luofu-r116.dtb   (8,984 B)
+<kernel>/scripts/dtc/dtc                     -> luofu-r116-overlay.dtbo (230 B)
+<openwrt>/staging_dir/host/bin/mkimage -A arm -O linux -T kernel -C none \
+    -a 0x80608000 -e 0x80608000 -n "Linux-6.18.60" -d zImage uImage
+fip-slice.py make-trailer --base-dtb luofu-r116.dtb \
+    --overlay luofu-r116-overlay.dtbo --expect-board-id 3 \
+    --expect-vendor-id hsan --match-family luofu --overlay-apply require \
+    --output fip-trailer.bin
+fip-slice.py assemble --uimage uImage --trailer fip-trailer.bin \
+    --loader-stage 0x83200000 --text-offset 0x00608000 \
+    --max-size 8650752 --output luofu-kernel-slice.bin
+fip-slice.py check luofu-kernel-slice.bin --max-size 8650752
+fip-slice.py manifest --slice luofu-kernel-slice.bin --output fip-manifest.txt
+```
+
+`fip-slice.py check` output on the result:
+
+```
+FIP slice check: PASS (measurable constraints only)
+  slice size:      3214542 B (kernel slot limit 8650752 B)
+  uImage:          magic ok, name='Linux-6.18.60', ih_size=3205200 (0x30e850)
+  uImage load/ep:  0x80608000 / 0x80608000
+  trailer:         9278 B
+  base DTB:        totalsize 8984 B
+  descriptor:      64 B (32-byte header + 1 x 32-byte entries), container total 294 B
+    overlay 0      size 230 B, offset 64 B (trailer+0x2358)
+  gate:            magic 0xd7b7ab1e at 0x310ba8
+```
+
+Gate arithmetic, re-read independently of the tool's own validation:
+`0x40 + ih_size 0x30e850 + base-DTB totalsize 0x2318 = 0x310ba8`, and the 32-bit
+big-endian word there is byte-identically `d7 b7 ab 1e`. The descriptor totals
+`32 + 32*count + sum(overlay sizes) = 32 + 32 + 230 = 294` B equal its header word +4.
+A second, independent Python re-read (no `fip-slice` code) and the system dtc 1.8.1
+`fdtoverlay`/`fdtget` checks agree (evidence 02/03).
+
+### Reproducibility
+
+The two clean runs (different output directories) are byte-identical for every artifact:
+same SHA256SUMS, same slice `3311a3e5...`. This works because `mkimage` honours
+`SOURCE_DATE_EPOCH`, which the script pins to 0 by default (the decoded loader never reads
+`ih_time`; override with `--source-date-epoch` to embed a real build time). Full listing:
+evidence `01-reproducibility.txt`.
+
+### What this proves and what it does not
+
+Proven (host-only, structural): a trailer generated from our own base DTB + overlay satisfies
+every check the decoded stock applier performs (gate word at the computed offset, required
+descriptor constants, entry count/stride/totals, overlay FDT header/size, libfdt overlay
+apply); the uImage carries the correct ARM/Linux/kernel/none identity, the derived
+`ih_load == ih_ep == 0x80608000`, and the full slice fits the kernel slot by 5,436,210 B;
+the result is byte-reproducible from the same inputs and tools.
+
+Not proven: that the stock loader accepts a novel slice or that any of this boots. That needs
+one attended boot on a recovered unit (TARGET-DESIGN.md 5.2 and 9; TRAILER-FORMAT.md section
+8). Also absent: rootfs, UBI, sysupgrade container and manifest wiring into one image,
+`platform.sh`, the A/B selector path, appended DTB, install path, driver series,
+`dtbs_check`. Publication remains NOT READY.
+
+### Open questions
+
+1. **Does a no-op overlay suffice?** Structurally yes for the decoded applier: the entry
+   validates, the match properties pass, host libfdt applies an empty fragment, and no base-DTB
+   growth is needed. But the stock U-Boot 2022.07's own libfdt version and the applier's work
+   buffers are not fully decoded, and no novel trailer has ever been booted on the stock
+   loader. One attended boot is the only closure. If our base DTB ever depends on
+   overlay-provided properties, the stub must become a real overlay.
+2. **board_id 3** is inferred from the overlay the vendor loader applied and the live R116
+   model, not from a physical strap read (TRAILER-FORMAT.md section 6 [I]); the attended boot
+   confirms it (a wrong value means no match and no boot).
+3. **Boot arguments / rootfs**: this slice carries no rootfs and no `root=`/`UBI`
+   arguments; where the stock loader's bootargs come from is still [U] (TARGET-DESIGN.md 5.6).
+   The uImage also has no appended DTB; the decoded loader hands over the trailer's base DTB,
+   so the appended copy is hygiene for later recipes (TARGET-DESIGN.md 5.2), not required for
+   this structural step.
+4. **Delivery lane**: the slice is 3,214,542 B with a 9,278 B generated trailer, whereas the
+   existing bench lane copies the fixed 40,732-byte trailer and
+   `tools/fire-preflight.sh` fails closed unless the last 40,732 bytes match that artifact.
+   This slice is therefore not flashable through the current tools; adopting a generated
+   trailer needs the attended boot first, then the preflight/image-recipe update.
+5. **Image recipe wiring**: `target/linux/hisilicon/image/luofu.mk` still treats the trailer
+   as a fixed input and does not call `make-trailer`; this host script is not yet integrated
+   into the OpenWrt build.
+
+### Evidence
+
+Local-only, gitignored:
+`build/linux-kbuild/waves/upstream-6.18-slice-20261118/` - `00-README.md` indexes the two
+run directories (full script stdout, per-step logs, dtb/dtbo/uImage/trailer/slice/manifest,
+SHA256SUMS/SIZES), the reproducibility comparison, xxd byte structure, independent-tool
+checks, exact commands and git state. None of it is committed; the published tree contains
+only the sources and the script.
 

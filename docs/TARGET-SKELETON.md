@@ -1,7 +1,9 @@
 # Target skeleton (schematic, untested target) - index
 
 **Status 2026-11-18: SCHEMATIC, NOT A WORKING TARGET - but its structure was accepted by
-OpenWrt main's target metadata and kernel prepare (see [SKELETON-SMOKE.md](SKELETON-SMOKE.md)).**
+OpenWrt main's target metadata and kernel prepare, the target compiles a 6.18 kernel with the
+correct load address, and an own-artifact FIP kernel slice has been assembled and validated
+structurally (host-only; never booted). See [SKELETON-SMOKE.md](SKELETON-SMOKE.md).**
 The concrete files live in [`../target-skeleton/`](../target-skeleton/README.md); this page is
 only an index. The design source of truth remains [TARGET-DESIGN.md](TARGET-DESIGN.md) sections
 4-6; if this page and TARGET-DESIGN.md disagree, TARGET-DESIGN.md wins.
@@ -12,11 +14,13 @@ only an index. The design source of truth remains [TARGET-DESIGN.md](TARGET-DESI
 `image/Makefile` plus `image/luofu.mk` device stanza, board-level `base-files`), a draft
 upstreamable board DTS under the target `dts/` directory, and the fail-closed FIP-slice tool.
 
-**What it is not.** Not compiled, not imaged, not booted, not accepted upstream. The smoke test
-proved only that OpenWrt main's `make defconfig` accepts the target/device and that
-`make target/linux/prepare` returns 0 with this target present. The kernel platform patch,
-driver/binding series, image-chain wiring, `platform.sh`/sysupgrade metadata and install path
-do not exist.
+**What it is not.** Not imaged, not rootfs-packaged, not booted, not accepted upstream. The
+host sessions proved that OpenWrt main's `make defconfig`/`prepare` accept the target, that the
+kernel patch series compiles a 6.18 kernel with the real `TEXT_OFFSET`, and that an own-artifact
+kernel slice (our zImage + our base DTB + our loader-match overlay + a generated trailer)
+satisfies every check the decoded `bootfip` performs. Nothing has been flashed or booted; the
+driver/binding series, rootfs/UBI, sysupgrade `platform.sh` metadata and the install path do not
+exist, and a novel trailer still needs one attended boot.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;
