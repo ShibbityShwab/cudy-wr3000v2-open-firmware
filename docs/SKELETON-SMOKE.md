@@ -1912,3 +1912,50 @@ compiled) the patched crg-luofu.o compiles with the tree's OpenWrt GCC 14.4.0 (d
 0 error/warning lines in the compile log). Drive strength: the polarity fix is host-compiled
 only and has never run on hardware - the reset class is documented, not hardware-proven by this
 series.
+
+
+## 2026-11-18 (eleventh session): PIE packet-engine draft (patch 015)
+
+Patch 015-net-pie-luofu.patch (sha256
+fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2) adds
+drivers/net/ethernet/hisilicon/luofu-pie.c, its Kconfig/Makefile entry
+(CONFIG_LUOFU_PIE) and Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml. This is the
+first draft of the PIE half of the wired data path specified in PIE-DATAPATH.md; it is a refusing
+draft, not a working network driver.
+
+What the probe does, in order: matches the variant (hisilicon,luofu-pie -> v250 generation; an
+unknown generation fails closed), validates the 64 KiB register window (devm_ioremap only - no
+MMIO access), gets the unnamed CRG gate clock and one CRG reset line, looks up the four interrupts
+by name (ch0-7, ch1-6, ch2-5, ch3-4), requires dma-coherent and a 32-bit DMA mask, allocates the
+coherent ring bookkeeping (4 RX rings x 1024 x 32 B, 4 TX rings x 4096 x 32 B) with
+dma_alloc_attrs(..., 0), logs and frees the rings, then returns -EOPNOTSUPP with
+"data path not started: PIE register/channel inventory is not captured; refusing to arm the
+engine". It does not read/write any register, enable the clock, toggle the reset, request an IRQ
+or register NAPI; the DTS node is disabled. Compiled scaffolding: the recovered v250 ring/doorbell/
+completion/IRQ-mask/enable offsets, 32-byte descriptor accessors (only the recovered RX address+
+owner and TX length+address+owner fields; everything unrecovered stays zero and TODO) and a hard
+IRQ handler encoding the recorded schedule/mask/ack order and channel pairing. No poll callback:
+the RX completion decode is not recovered.
+
+Deliberate decisions: ring geometry is driver data (documented board constants) because the vendor
+rx_ring/tx_ring properties are not an ABI and their pair-word decoding is inferred; the inventory
+settles it by read-back. Clock/reset are acquired but not driven in probe (bring-up is a hardware
+step). No netdev, no WoC, no exported API until the data path exists. Coherent DMA only; the ACP
+attribute question stays open.
+
+Validated in the isolated clone /home/shibbityshwab/openwrt-lab-pie (series 001-015, clean
+re-extract): pristine dry-run/chained apply RC=0; prepare RC=0 (1,189 patching lines, no .rej);
+full compile RC=0 in 1m50s with 0 warnings under CONFIG_WERROR=y; zImage 3,262,336 B sha256
+5231214b...; luofu_pie_probe/driver/v250/irq_names linked; TEXT_OFFSET contract unchanged;
+CONFIG_LUOFU_PIE=y; dt_binding_check RC=0; board DTS zero warnings pre/post shared.patch (DTB
+10,193 B sha256 4e4a0304...); dt-validate RC=0; config re-derivation byte-identical (307 symbols);
+checkpatch 0/0/0 (driver 597 lines, YAML 96); static checks show no MMIO/DMA/IRQ/netdev/export in
+the probe path and no vendor-only DT properties.
+
+Not proven: any hardware behaviour. Every register offset is from the vendor module, not measured
+on this board; ring-pair decoding, descriptor decode, per-channel init, IRQ semantics and ACP
+coherency remain [U]; the driver has never been instantiated on ARM or mapped the real window; no
+boot/image/install/bench. The attended P3 read-only inventory is the next hardware step (bench is
+currently blocked); until then the node must stay disabled.
+
+Combined whole-series verification (in the scratch tree, patches 001-015 applied from the repo): make target/linux/prepare RC=0 and make target/linux/compile RC=0 with 0 warnings/errors; zImage 3,262,792 B sha256 c82d0ffe...; all CONFIG_LUOFU_* drivers built in (including the polarity-fixed CRG); combined DTS compiles with zero warnings (DTB 10,193 B).

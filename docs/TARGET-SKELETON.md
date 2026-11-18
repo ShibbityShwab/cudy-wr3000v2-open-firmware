@@ -30,8 +30,10 @@ SPI-NAND controller (`006`, a SPI-MEM controller with the mainline SPI-NAND stac
 it; it consumes the CRG `sfc_clk` gate and `sfc_rst` reset and adds `CONFIG_SPI` /
 `CONFIG_MTD_SPI_NAND`), the machine-restart driver (`010`: SYSCTRL boot-selector save, a
 PROVISIONAL CRG software-reset command and a CRG watchdog fallback), pinctrl (`011`), thermal
-(`012`) and the DWC PCIe host controller (`013`, RC nodes disabled - the Wi-Fi endpoint is `[X]`),
-with the CRG reset polarity corrected by `014`. None of them has run on hardware.
+(`012`), the DWC PCIe host controller (`013`, RC nodes disabled - the Wi-Fi endpoint is `[X]`)
+and the PIE packet-engine draft (`015`; resources + ring scaffolding, refuses to bring up the
+unverified data path), with the CRG reset polarity corrected by `014`. None of them has run on
+hardware.
 
 **What the smoke test did (2026-11-18).** OpenWrt `main` commit `27663a0`:
 `make defconfig` PASS and generated `CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y`;

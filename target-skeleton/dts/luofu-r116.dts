@@ -12,7 +12,7 @@
  * invented one. The board now has draft drivers and YAML bindings for the CRG
  * clock/reset controller, the watchdog, the FMC SPI-NAND controller, the
  * network trio (MDIO bus, Genius PHY, partial GEMAC) and machine restart
- * (patches-6.18/004-014); every other proposed binding still does not exist.
+ * (patches-6.18/004-015); every other proposed binding still does not exist.
  * The GEMAC driver is a resource/validation half only - it has no data path -
  * so its nodes stay disabled, and the restart driver's reset command is
  * PROVISIONAL (see its node). Do not submit this file as-is.
@@ -666,18 +666,31 @@
 	};
 
 	/*
-	 * TODO(binding/driver): packet-ingress engine (WoC ring consumer); it
-	 * only matters if WoC/PIE is in scope for v1 (TARGET-DESIGN.md 6.2,
-	 * 8.1). The vendor overlay sizes the rings; those values are driver
-	 * data, not DT until a binding exists.
+	 * PIE packet engine: binding
+	 * Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+	 * (patch 015). The in-tree driver is DRAFT scaffolding: it validates
+	 * these resources, builds the coherent ring bookkeeping and then
+	 * refuses to arm the engine (-EOPNOTSUPP) until a read-only register
+	 * inventory of the block has been captured on the running hardware.
+	 * The node therefore stays disabled. Do not enable it before that
+	 * inventory: an access to this window before the block is ready has
+	 * hung the SoC bus, and the board has no validated restart path.
+	 *
+	 * The four interrupts are the four recovered per-vector lines; each
+	 * vector serves the channel pair named by interrupt-names (channels
+	 * 4-7 are the Wi-Fi offload half and are not wired into this driver).
+	 * Ring geometry (descriptor count, buffer size, channel counts) is
+	 * driver data, not devicetree properties: the vendor rx_ring/tx_ring
+	 * pair encoding is inferred, not an ABI.
 	 */
 	pie: pie@10a70000 {
-		compatible = "hisilicon,luofu-pie";	/* TODO(binding) */
+		compatible = "hisilicon,luofu-pie";
 		reg = <0x10a70000 0x10000>;
-		dma-coherent;
 		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
+		interrupt-names = "ch0-7", "ch1-6", "ch2-5", "ch3-4";
 		clocks = <&crg LUOFU_CLK_PIE>;
-		/* TODO(reset-binding): vendor cell (0x30, 0x19) */
+		resets = <&crg 0x30 0x19>;
+		dma-coherent;
 		status = "disabled";
 	};
 

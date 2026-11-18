@@ -568,6 +568,12 @@ Ordering constraints that matter to a clean-room design: [V]/[I]
 
 ## 11. Minimal implementation plan: from patch 009 to a working netdev
 
+> **Status 2026-11-18:** a refusing draft of stages P1/P2 exists as patch `015`
+> (`drivers/net/ethernet/hisilicon/luofu-pie.c`): it validates resources and allocates the
+> coherent ring bookkeeping, then returns `-EOPNOTSUPP` without touching the engine, because the
+> read-only P3 inventory has not been captured. The offsets/descriptor accessors/IRQ schedule
+> below are compiled scaffolding where recovered; unrecovered fields stay zero and TODO.
+
 ### 11.1 Shape decision (recommended)
 
 **Keep the vendor split, with our own in-kernel interface: a PIE ring engine driver owns

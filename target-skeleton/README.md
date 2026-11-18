@@ -298,11 +298,12 @@ They are not a drop-in target. The mapping is:
     ├── target/linux/hisilicon/dts/luofu-r116.dts  <- dts/luofu-r116.dts
     └── scripts/fip-slice.py                    <- tools/fip-slice.py
 
-The blocks that still have no driver in this tree (internal LSW switch and the GEMAC data path)
-have an evidence-graded port plan in
-[../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md); the PIE packet-engine data path
-(the GEMAC netdev's missing half) has its own register/ring/descriptor specification in
-[../docs/PIE-DATAPATH.md](../docs/PIE-DATAPATH.md).
+The remaining data path and switch blocks have evidence-graded specifications: the PIE
+packet-engine data path in [../docs/PIE-DATAPATH.md](../docs/PIE-DATAPATH.md) (a refusing draft
+of the driver is patch `015`) and the internal switch (switchdev, register/table/port model,
+D0-D2 plan) in [../docs/LSW-SPEC.md](../docs/LSW-SPEC.md); the overall plan is
+[../docs/REMAINING-DRIVERS.md](../docs/REMAINING-DRIVERS.md). The internal switch driver remains
+unwritten.
 
 The **draft kernel patch series** (written 2026-11-18; TARGET-DESIGN.md sections 4.1, 7)
 is `patches-6.18/`:
@@ -401,6 +402,15 @@ is `patches-6.18/`:
   Patch `014` swaps the two operations and inverts `reset_control_status`; all reset
   consumers (FMC, MDIO/GEMAC, PCIe) now release their lines through the standard API
   correctly. Host-compiled only.
+- `015` adds the PIE packet-engine **draft**: `drivers/net/ethernet/hisilicon/luofu-pie.c`
+  (+ YAML) validates the 64 KiB window, the CRG clock/reset, the four named IRQs and
+  `dma-coherent`, allocates the coherent RX/TX ring bookkeeping (4 x 1024 x 32 B RX, 4 x 4096 x
+  32 B TX), and then **refuses to probe** (`-EOPNOTSUPP`) because the register/channel inventory
+  has not been captured on hardware: no register access, clock enable, reset toggle, IRQ request
+  or NAPI registration happens. The recovered v250 offsets/descriptor accessors/IRQ schedule are
+  compiled scaffolding with the unrecovered fields left zero and marked TODO. The DTS node is
+  disabled; the data path remains unverified. YAML
+  `Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml`.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).

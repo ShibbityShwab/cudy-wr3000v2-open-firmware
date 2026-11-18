@@ -50,7 +50,7 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
-#   [N]  new in the luofu driver series (patches-6.18/004-014):
+#   [N]  new in the luofu driver series (patches-6.18/004-015):
 #        the drivers and the dependencies they select. The 2026-11-18
 #        canonical derivation predates these Kconfig entries, so the lines
 #        were added by hand; for 004-005 a canonical re-derivation with the
@@ -297,6 +297,12 @@ CONFIG_LUOFU_WDT=y
 # [N] new driver in patches-6.18/006 (luofu FMC SPI-NAND controller, a
 #     SPI-MEM controller consumed by the mainline SPI-NAND stack)
 CONFIG_LUOFU_FMC=y
+# [N] new driver in patches-6.18/015 (luofu PIE packet engine, DRAFT:
+#     the probe validates the resources and the coherent ring bookkeeping,
+#     then refuses to arm the engine (-EOPNOTSUPP) until an attended
+#     read-only register/channel inventory has been captured on hardware;
+#     the devicetree node stays disabled)
+CONFIG_LUOFU_PIE=y
 # [L] from the lab 5.10.201 reference
 CONFIG_MDIO_BUS=y
 # CONFIG_MFD_HI655X_PMIC is not set

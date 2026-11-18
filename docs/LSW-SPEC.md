@@ -1,0 +1,1375 @@
+# LSW-SPEC: the internal LSW switch - an evidence-graded RE specification
+
+**Status 2026-11-18: research document only.** This file contains **no driver code**, it has
+**never run on hardware**, and it does not modify any shared file. It is the block-D deliverable
+promised by [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5 and it resolves the open
+question that [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7 deferred to "LSW block-D RE".
+
+The subject is the internal Ethernet switch of the Hi5671Y "luofu" SoC (Cudy WR3000 v2 board,
+`R116`): the vendor modules `hi_lsw_pub.ko`, `hi_lsw_dp.ko`, `hi_lsw_pfe.ko`, `hi_swa.ko`, the
+CFE layer `hi_kcfe_pub.ko` + `hi_kcfe_lrn*.ko`, the adapter `hi_kcara.ko`, and the small
+consumers (`hi_kport_mirror.ko`, `hi_netif.ko`, `hi_wse.ko`, `hi_khslink.ko`). The RE is done
+on the vendor modules as **local, read-only, never-published fixtures** (parent
+`rootfs-2.4.15/lib/hisilicon/ko/*.ko`; the same files exist in `rootfs-2.5.24` and are
+byte-identical, see section 2.2). None of this code, and no vendor blob, is committed or copied
+into the published half.
+
+What this document is **not**:
+
+- not a boot/flash/bench claim - no register was read or written on the router for it;
+- not an upstream submission review - the design target here is only "which clean-room driver
+  shape is defensible and what is the minimum path to it";
+- not a replacement for the GPL request. If the vendor source arrives it converts most of
+  sections 5-8 from RE to port ([GPL-REQUEST.md](GPL-REQUEST.md) items 2-4, [X]).
+
+---
+
+## 1. TL;DR: what the RE established
+
+1. **The LSW is not a tag switch; it is a queue/queue-map engine plus a classification/forwarding
+   engine.** There is no CPU-port tag format anywhere in the five-module symbol set, and the
+   vendor's own kernel integration is switchdev on top of per-port netdevs
+   (`hi_swa` imports `switchdev_handle_port_obj_add/del`), not DSA. This answers the DSA-vs-
+   switchdev question left open in [TARGET-DESIGN.md](TARGET-DESIGN.md) section 8.1 and
+   [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.3: **switchdev, not DSA** [V/I].
+2. **The vendor `hi_swa` switchdev object handlers are compiled stubs.** `swa_switchdev_event`,
+   `swa_handle_port_obj_add`, `swa_handle_port_obj_del` and `swa_netdevice_check` are each
+   `mov r0,#0; bx lr` in both rootfs fixtures. The shipped firmware registers the notifier and
+   then does nothing with bridge/VLAN objects; the real forwarding work is done by the CFE
+   learning stack through the PFE tables. A clean-room D2 offload layer therefore has to be
+   written, not copied [V; section 9.2].
+3. **The full module layering and the kernel<->LSW API surface are recovered**: register-access
+   layer (`hi_lsw_pub`), queue/EQM/EPS/IPS manager (`hi_lsw_dp`), classification/forwarding
+   tables (`hi_lsw_pfe`), CFE service (`hi_kcfe_pub`), learning libraries (`hi_kcfe_lrn*`), and
+   the PFE adapter (`hi_kcara`) [V; section 4].
+4. **The synthetic "module id" register map is decoded.** The shared register layer addresses
+   every LSW block as `addr = (module_id << 24) | offset` against a 256-entry table of
+   `{base, void __iomem *, size}` records. The DP driver registers ids `0x40..0x44` =
+   `dp/eps/eqm/fam/ips`; the PFE driver registers ids `0,1,3,5,6,7,8,9,0xa,0xb` =
+   `ifc/l2/napt/mcc/opp/pa/pe/pfe_glb/prbs/pub` (ids 2 and 4 are skipped) [V; section 5.2].
+5. **The PIE qid-map open question is resolved.** [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7.4
+   asked which physical window "module 6" is: it is PFE id 6 = the `opp` window
+   `0x12400000`, and the two qid tables live at `opp+0x42800` and `opp+0x43800` [V; section 7.3].
+6. **Port and queue model recovered at the code-shape level**: a 46-entry software port table
+   (56-byte entries: valid flag, port id, qid base, q_num with a default of **8**), a
+   96-entry queue bitmap walk, an 8-QIDs-per-port mapping loop, and two hardware qid-map tables
+   indexed by port-id classes (0-15, 40-47, >47) [V code shape; sections 6-7].
+7. **The physical switch port namespace is visible** in the DFX name tables (`port-pie`,
+   `port-prbs/loop`, `port8`..`port12`, `port0`, `port-xge`, `port13`, `port-woe`) and in the
+   EPS counter labels (`port3(prbs)`, `port4(pie0)`..`port7(pie3)`) [V; section 6.2].
+8. **The DT `port_bitmap = <0xf01 0x1ff0>` is read as a u64** by the DP probe and handed to the
+   queue manager; what the words mean is still **[U]** and must be answered by bench reads, not
+   guessed from bit positions (the values do not decode as a naive 0-12 port bitmap) [V read,
+   U semantics; section 6.3].
+9. **The CFE/rootif contract is a vendor-userspace compatibility layer, not a hardware API.** A
+   rootif is a *named Linux netdev* registered into a 32-entry CFE table by
+   `hi_cfe_add_rootif`, driven from netdevice events (NETDEV_UP/DOWN/UNREGISTER), and used to
+   attach VLAN filters, sub-interfaces, stats rules, tag actions and FDB entries to a bridge or
+   VLAN device created by OpenWrt. The shipped firmware deliberately sets
+   `hi_kcfe_pub.g_intf_bypass=1` and *then* loads `hi_swa` ("switch adaptor for openwrt")
+   [V; section 9].
+10. **No 6.18 validation route exists today**: there is no bootable OpenWrt 6.18 target/image on
+    the bench (parent `STATUS.md`, [TARGET-DESIGN.md](TARGET-DESIGN.md) section 9), so every
+    hardware statement below is [U] until a target exists. The clean-room path is therefore
+    staged: D0 spec, D1 minimal forwarding (bridge in software, no offload), D2 switchdev
+    offload (section 11).
+
+---
+
+## 2. Evidence base and method
+
+### 2.1 Markers and citation convention
+
+Same markers as [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 0.1:
+**[V]** verified by a named artifact/reproducible host-side check, **[I]** inferred/planned,
+**[U]** unknown/unmeasured, **[X]** blocked on an external dependency.
+
+Citations: a plain path is in this repository; `parent:` prefixes a path in the private research
+repository (never published); "ledger" is the parent `mem-entries.md`. All disassembly offsets
+below are **module-relative `.text` offsets** for the exact fixture files named in section 2.2;
+they are not hardware addresses and they change if the vendor rebuilds the module.
+
+### 2.2 The fixtures (local-only, not published)
+
+All LSW/CFE fixtures are ARM32 relocatable ELF modules built for
+`5.10.201 SMP mod_unload ARMv7`, GPL-declared, "Hisilicon Inc.". They live only in the parent
+rootfs trees and must never be committed to the published `opensource/` half (parent
+`AGENTS.md` publish boundary; [HAZARDS.md](HAZARDS.md)).
+
+| fixture | size (B) | `depends=` | one-line role |
+| --- | --- | --- | --- |
+| `hi_lsw_pub.ko` | 26,052 | `ksecurec,hi_basic` | register window plumbing + generic table manager |
+| `hi_lsw_dp.ko` | 67,164 | `hi_lsw_pub,hi_basic,hi_kpie,ksecurec` | queues, EQM/EPS/IPS, PIE channel map, mem info |
+| `hi_lsw_pfe.ko` | 52,412 | `hi_lsw_pub,hi_lsw_dp,hi_basic,ksecurec` | packet/flow forwarding tables (IFC/NAPT/OPP/...) |
+| `hi_kcara.ko` | 32,092 | `hi_kcfe_pub,hi_lsw_pub,hi_lsw_dp,ksecurec` | CFE<->PFE adapter (flow/CAR/stat/MC/VLAN) |
+| `hi_kcfe_pub.ko` | 64,928 | `hi_kpie,hi_basic,ksecurec` | CFE service: rootif/subif, FDB mirror, hooks, tags |
+| `hi_kcfe_lrn.ko` | 72,152 | `hi_kpie,hi_kcfe_pub,ksecurec,hi_basic` | learning core (hooks, flow handling, aging) |
+| `hi_kcfe_lrn_l2.ko` | 9,572 | `hi_kcfe_pub,hi_kcfe_lrn,hi_basic,ksecurec` | L2 MAC learning library (add/del/check/age/dump) |
+| `hi_kcfe_lrn_mc.ko` | 14,220 | `hi_kpie,hi_kcfe_lrn,hi_kcfe_pub,...` | multicast learning library |
+| `hi_swa.ko` | 11,340 | `hi_kcfe_pub,hi_basic,ksecurec,hi_kpie,hi_kcfe_lrn` | switchdev + rootif glue ("Switch Adaptor") |
+| `hi_kport_mirror.ko` | 11,428 | `hi_lsw_pfe,hi_kpie,hi_kcfe_pub,kcfe_lrn,hi_basic` | port mirroring proc/DFX consumer |
+| `hi_netif.ko` | 4,616 | `hi_kcfe_pub` | CPU-rate / DDOS proc consumer |
+| `hi_wse.ko` | 12,028 | `ksecurec` | per-packet stats helper (no LSW dependency) |
+
+Dependencies/sizes from `modinfo` and `ls -la` on the fixtures. Symbol sets were extracted with
+the vendor-toolchain binutils from parent `build/linux-kbuild/toolchain/`
+(`arm-none-linux-gnueabihf-nm`, `-objdump -dr --no-show-raw-insn`, `-readelf -s/-S/-r`); the two
+rootfs trees carry identical copies (`sha256sum` equal for the LSW modules plus `hi_kcfe_pub`
+and `hi_kpie`), so the 2.5.24 stock firmware is the same LSW generation as 2.4.15.
+
+### 2.3 Reproducing the RE (read-only, host only)
+
+From the parent repo root (tool paths relative to the parent checkout):
+
+~~~sh
+TB=build/linux-kbuild/toolchain/bin
+
+# 1. module metadata and symbol surface
+modinfo rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_dp.ko      # description/depends/vermagic
+$TB/arm-none-linux-gnueabihf-nm -n  rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_dp.ko
+$TB/arm-none-linux-gnueabihf-readelf -s rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_dp.ko
+
+# 2. disassembly with relocations (call targets and symbol references)
+$TB/arm-none-linux-gnueabihf-objdump -dr --no-show-raw-insn \
+    rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_dp.ko > /tmp/hi_lsw_dp.dis
+
+# 3. string tables: property names, proc/DFX names, table field names
+strings -a rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_pfe.ko | head -200
+~~~
+
+To turn `.LC` symbol references into strings and to decode the pointer tables, a small pyelftools
+helper was used (kept as gitignored local evidence under parent
+`build/linux-kbuild/waves/2026-11-18-lsw/annotate.py`; it only reads the fixtures). The analysis
+artifacts (`.nm`, `.dis`) are in the same local lane directory and are not committed.
+
+**Limit of this evidence:** disassembly of an `-O2` ARM module recovers call graphs, table
+layouts, address arithmetic, string names and register offsets; it does **not** recover field
+semantics, bitfield meanings, hardware behaviour or ordering requirements. Everything in this
+document that is a semantic claim is marked [I] or [U], deliberately.
+
+---
+
+## 3. The wired data path in one picture
+
+The vendor shape, confirmed by symbols and the module graph (cross-checked with
+[PIE-DATAPATH.md](PIE-DATAPATH.md) section 2):
+
+~~~
+   +-------------------------- Linux ----------------------------+
+   |  br-lan (OpenWrt bridge)                                    |
+   |     |  switchdev/netdev events (hi_swa: rootif table)       |
+   |     v                                                       |
+   |  eth0..eth3 per-port netdevs  (created by hi_kmac/patch 009) |
+   |     |  ndo_start_xmit -> hi_net_dev_xmit                     |
+   |     v                                                       |
+   |  hi_kpie: PIE host queues, DMA rings, NAPI, per-port ctx     |
+   +-----|-------------------------------------------------------+
+         |  queue handle + 8-byte port descriptor {port, vport, 0,0}
+         v
+   +-----|------------- internal LSW (this document) --------------+
+   |  hi_lsw_dp: queue manager (EQM tables, EPS/IPS, PIE map)      |
+   |  hi_lsw_pfe: classification/forwarding (IFC/L2/NAPT/OPP/...)  |
+   |  hi_lsw_pub: register windows + generic table manager         |
+   +-----|-------------------------------------------------------+
+         v
+   GEMAC 0-4 (port 8..12; ports 9-12 wired on this board) -> MDIO PHYs -> RJ45
+   CFE control plane (hi_kcfe_pub + hi_kcfe_lrn* + hi_kcara) sits above,
+   programming the same PFE tables through the hi_adp_* / hi_cfe_acc_* API.
+~~~
+
+The important structural finding for a clean-room port (already stated in
+[REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 1 and [PIE-DATAPATH.md](PIE-DATAPATH.md)
+section 2.1): **the MAC is a phylink front end only; PIE owns the rings/DMA; the LSW owns the
+egress decision and the queue maps; CFE is an optional software forwarding layer on top.** None
+of the vendor modules may be loaded for a clean-room port, so all four roles must be covered by
+our own drivers (patch 009 + patch 015 + LSW driver D1/D2).
+
+---
+
+## 4. Module layering and responsibilities
+
+### 4.1 `hi_lsw_pub` - register windows + generic table manager [V]
+
+Exported symbols (`__ksymtab_strings`):
+
+- register access: `hi_lsw_reg_module`, `hi_lsw_unreg_module`, `hi_lsw_read`, `hi_lsw_write`,
+  `hi_lsw_read64`, `hi_lsw_write64`, `hi_lsw_read_bits`, `hi_lsw_write_bits`,
+  `hi_lsw_read_tab128`, `hi_lsw_write_tab128`, `hi_lsw_wait_set`, `hi_lsw_wait_clr`;
+- table manager (exported): `hi_tab_mgr_create`, `hi_tab_mgr_delete`,
+  `hi_tab_mgr_alloc_hash(_unlock)`, `hi_tab_mgr_alloc_direct(_unlock)`, `hi_tab_mgr_free(_unlock)`,
+  `hi_tab_mgr_hold`, `hi_tab_mgr_get_data(_unlock)`, `hi_tab_mgr_set_data(_unlock)`,
+  `hi_tab_mgr_get_id(_unlock)`, `hi_tab_mgr_get_next_data`, `hi_tab_mgr_get_tab_ref`,
+  `hi_tab_mgr_get_age`, `hi_tab_mgr_get_max` (internal, not exported: `hi_tab_mgr_init/exit`,
+  `tab_mgr_kthread`, `hi_tab_mgr_clr_by_id`, `hi_tab_mgr_dump`).
+
+The register convention is the single most useful RE result (section 5.1). The table manager is
+a *software* framework (per-table control objects, hash or direct-indexed data arrays, an aging
+kthread controlled by the `mgr_thread_time` module parameter, and DFX registration via
+`hi_tab_mgr_dump`). It is what ties hardware tables (`read_tab128`/`write_tab128` through the
+same synthetic address space) to software iteration/aging. [V symbols; the cfg struct layout is
+partially recovered in section 5.1 and marked [I] where inferred.]
+
+### 4.2 `hi_lsw_dp` - queues, EQM/EPS/IPS and the PIE handoff [V]
+
+Probe `hi_dp_probe@0x8b0`; init order inside the probe is readable end-to-end:
+
+1. read DT u64 property `port_bitmap` (string at `.rodata.str1.4+0x150`); missing property is a
+   hard error (`get dts port_bitmap err`, `+0x15c`);
+2. read `hwver` (default `0x10` stored first at the `.LANCHOR0` bss cell; the board DT supplies
+   `0x250`) and `cell-size` (selector 0..3 for 0x100/0x200/0x400/0x800 cells, stored at
+   `.data+0x50`);
+3. `devm_clk_bulk_get_all()` + `clk_bulk_prepare/enable` on `lsw_dp_clk` (DT fixed-clock
+   166,000,000 Hz = `0x9e4f580`); error path `[LSW]dp clk err`;
+4. `devm_reset_control_array_get(dev, shared=1)` for the DT reset pair, then
+   deassert/assert/deassert (a reset pulse), error path `[LSW]dp logic reset err`;
+   later two named resets `dp_logic` (`.rodata.str1.4+0x1e8`) and `dpu_srst` (`+0x210`) are
+   fetched with `__devm_reset_control_get` and pulsed in the same way. Note the DT reset-names
+   are `"dp_logic"`/`"dp_srst"` while the code asks for `"dpu_srst"` - a vendor DT/driver
+   mismatch to keep in mind ([U] whether that reset is actually obtained on this board);
+5. five optional u32 DT properties `wifi_vport`, `plc_vport`, `chba_vport`, `voe_vport`,
+   `fttr_vport` (names in a `.data` table at `.data+0x00`, 16-byte stride; default 256 each and
+   cumulative offsets are computed into the next entry). The board DT has none of them, so all
+   five are "absent"; the resulting configuration is [U];
+6. five windows registered into `hi_lsw_pub` (table at `.rodata+0x0c`, 5 x `{module_id, name}`,
+   terminator `.rodata+0x34`): id `0x40` -> `dp`, `0x41` -> `eps`, `0x42` -> `eqm`,
+   `0x43` -> `fam`, `0x44` -> `ips`. Each window name is looked up with
+   `platform_get_resource_byname()` and mapped with `devm_ioremap_resource()`;
+7. initial IPS/DP writes: `ips+0x10 |= 0x10000`, `ips+0x08 = 42`,
+   `dp+0x68 = 0, dp+0x64 = 1, dp+0x64 = <cell-size selector>,`
+   `dp+0x1c = (<u16 field from the probe state> | 0x10000)`; `fam+0x504` read/modify/written against a cell-count
+   comparison, `eqm+0xa4` read/modify/written with `(value-0x40)` in bits 0..13;
+8. `hi_mem_info_init(dev, hwver)` (`@0x58e0`): walks a list of memory windows resolved by
+   compatible string or resource name. Strings present in the fixture: `hsan,queue_reserved`,
+   `hsan,flow_reserved`, and resource names `queue`, `flow`, `voip`, `woe`; the {start,size}
+   pairs are recorded and later printed by the `memory` DFX dump. The iteration itself is only
+   partially recovered - treat the exact per-window mapping as [U], but the *class* of window
+   (DDR memory, not register MMIO) is [V] (see section 5.4);
+9. `hi_queue_init(hwver)` (`@0x507c`): calls `hi_eqm_hw_init()`, initialises the 46-entry port
+   table (section 6.4), reads EQM registers `+0xa4`/`+0x18`, writes `eqm+0x18`, `eqm+0x38`,
+   `eqm+0x40` (bit31 set = enable), writes an EQM table entry (table id 19 via
+   `hi_eqm_write_tab`) with 1000 in bits 0..13, walks a 96-bit queue bitmap
+   (`r7:r6` passed from the probe: the low/high words of the u64 `port_bitmap` - see the caveat
+   in 6.3), creates table id `0` with EQM set/dump callbacks, registers DFX nodes and a
+   netdevice notifier, and finally installs `hi_dev_queue_enable` through the PIE
+   `hi_net_queue_hook` export;
+10. `hi_dp_tab_init()` (creates table ids 0x703/0x704), `hi_pie_map_init(hwver)`
+    (section 7.4), `hi_dp_dfx_init()`.
+
+Imports that define its place in the system: `hi_net_queue_hook`,
+`hi_pie_get_gro_ch_start/num`, `hi_pie_get_woc_ch_start/num` (PIE API). Its ksymtab export
+surface (33 entries) is the queue/DFX API that `hi_kcara`/`hi_swa`/`hi_kport_mirror` consume:
+`hi_queue_get_qid/get_q_num`, `hi_queue_set/get_{sch,buf,shaping,egr_shaping}`,
+`hi_queue_opp_map_hook`, `hi_dev_queue_{set,get}_*`, `hi_eqm_write_tab/read_tab/get_que_port`,
+`hi_dev_queue_enable`, `hi_lsw_get_vport`, `hi_flow_hook_{set,get,del}`, `hi_port_set_igr_car`,
+`hi_system_mem_info_get`, `hi_dp_get_hwver`, `hi_tpid_get_idx`, `hi_xoe_set_{tx,rx}_cell_th`
+(the probe/init functions `hi_dp_probe`, `hi_queue_init/exit`, `hi_pie_map_init`,
+`hi_mem_info_init`, `hi_eqm_hw_init` are module-local).
+
+### 4.3 `hi_lsw_pfe` - classification/forwarding tables [V]
+
+Probe `hi_pfe_probe@0x23a4`: registers ten windows (section 5.2), gets `lsw_pfe_clk`
+(fixed-clock 333,000,000 Hz = `0x13d92d40`) and the reset pair `pfe_logic`/`pfe_srst`
+(assert-then-deassert), reads `hwver` (board `0x250`; the probe's log string hard-codes swver
+`v100`), then runs the sub-blocks in this order:
+`hi_pfe_init()` -> `hi_pfe_pub_init()` -> `hi_pfe_opp_init()` -> `hi_pfe_mcc_init()` ->
+`hi_pfe_napt_init()` -> `hi_pfe_ifc_init()` -> `hi_pfe_dfx_init()`.
+
+Table/flow operation functions defined in the module (all module-local and used as
+table-manager callbacks; the **only** ksymtab export of `hi_lsw_pfe` is
+`hi_port_set_mirror`): `hi_pfe_ifc_init`, `ifc_write`, `ifc_del`, `ifc_dump`, `nhp_write`,
+`nhp_dump`, `tag_write`, `tag_dump`, `l3intf_write`, `l3intf_dump`, `car_write`, `car_del`,
+`car_profile_write`, `car_profile_dump`, `hi_pfe_flow_napt_clr_all`,
+`pfe_napt_v4/v6_write_flow`, `pfe_napt_v4/v6_del_flow`, `pfe_napt_v4/v6_get_age`,
+`pfe_napt_v4/v6_dump_flow`, `hi_pfe_mcc_init`, `hi_pfe_opp_init`, `hi_pfe_pub_init`,
+`hi_pfe_init`, `hi_pfe_drop_cnt`, `hi_pfe_tocpu_cnt`, plus `port_qid_map_set`/`qid_map_set`
+(section 7.3). Table ids created here are in the `0x700..0x712` range (section 8.1). This is
+why the CFE adapter `hi_kcara` reaches the PFE tables through the `hi_tab_mgr_*` API instead
+of calling these functions directly: the callbacks are wired into each table at creation.
+
+### 4.4 `hi_kcara` - the CFE<->PFE adapter [V]
+
+Description literally "CFE Adapter for RT Achitecture". It imports `hi_cfe_adp_*_register` from
+`hi_kcfe_pub` (lsw/port/mc/ddos registration), the `hi_lsw_pub` table manager
+(`hi_tab_mgr_alloc_hash/direct`, `get_data`, `set_data`, `get_age`, `get_id`, `get_max`,
+`free`) and the `hi_lsw_dp` queue/shaper API (`hi_queue_set_egr_shaping`,
+`hi_queue_get_egr_shaping`, `hi_dev_queue_set_shaping/sch/egr_shaping`,
+`hi_port_set_igr_car`). Its own symbols are the flow/ACL/CAR/stat writers:
+`hi_cara_flow_add/del/get_age`, `hi_cara_stat_*`, `hi_cara_intf_set_stat`,
+`hi_cara_mc_ip_group_add/del`, `hi_cara_cid_*`, `hi_cara_vlan_filter_item_add/del`,
+`hi_cara_set_ddos*`, `hi_ca_set_q_sch/egr_rate/pq_rate`, and
+`hi_cara_flow_set_act_l3intf/tag/nhp` (strings). The table names it touches appear in its
+strings: `TAB_L3INF_STAT_IDX`, `TAB_TAG_ACT`, `TAB_L3INF`, `TAB_NHP_STAT_IDX`, `TAB_NHP`,
+`TAB_FLOW_STAT_IDX`, `TAB_FLOW_V4`, `TAB_FLOW_V6`, `TAB_GLB_ATTR_ENABLE_FLOW_AGE`, `TAB_CNT`.
+This is the layer that maps a flow/ACL object to PFE table entries; it is **not needed by our
+D1**, but it is exactly the reference for D2's offload write path [I].
+
+### 4.5 `hi_kcfe_pub` - CFE service layer [V]
+
+Description "Hisilicon CFE PUB Service". Owns the software model used by the vendor control
+plane: interface objects (rootif + subif + attributes), a hash/direct table framework
+(`hi_cfe_tab_*`, `hi_cfe_list_*`, same shape as the LSW one), packet hooks
+(`hi_cfe_add_hook/del_hook` with hook point names `igr_pre_lrn_done`, `igr_post_lrn_done`,
+`egr_pre_vdev_done`, `egr_pre_lrn_done`, `egr_post_lrn_done`, `igr_pre_vdev_done`,
+`igr_post_vdev_done`, `egr_post_vdev_done`), VLAN/tag manipulation
+(`hi_cfe_tag_add_by_attr`, `hi_cfe_tag_del`, `hi_cfe_tag_filter_add/del`,
+`hi_cfe_add_rootif_vlan`/`del_rootif_vlan`), FDB mirroring (`hi_cfe_intf_set_br_fdb`,
+`hi_cfe_intf_get_br_fdb`, `hi_cfe_get_intf_by_mac`; dump formats with fields
+`mac/dst/updated/used/flag/vid`), netdev vif creation (`alloc_netdev_mqs`, `ether_setup`,
+`register_netdevice`, `hi_cfe_netdev_*` ops), and the `hi_adp_*` adaptation API consumed by the
+learning libraries. It imports `hi_br_fdb_check_addr()` from the **vendor-patched Linux bridge**
+(no vendor `.ko` defines it; it is one of the missing bridge patches listed in
+[DOCUMENTATION-HUNT.md](DOCUMENTATION-HUNT.md) section 4.2 and [GPL-REQUEST.md](GPL-REQUEST.md)
+item 3) [V symbol, U bridge semantics].
+
+Module parameter `g_intf_bypass` (uint, default 0) is checked in `hi_cfe_intf_set_dev`,
+`hi_cfe_add_rootif`, `hi_cfe_del_rootif`, `hi_cfe_add_subif`, `hi_cfe_del_subif`; the shipped
+firmware sets it to 1 (see 4.7). [V]
+
+### 4.6 `hi_kcfe_lrn*` - the software learning/forwarding engine [V]
+
+`hi_kcfe_lrn` is the core ("CFE LRN Service", 72 KB): packet RX/TX hooks (`hi_cfe_lrn_rx`,
+`hi_cfe_lrn_tx`, `hi_cfe_flow_handle`), per-protocol learn-library registration
+(`hi_cfe_lrn_lib_reg/unreg`), flow tables, aging timers and DFX. The per-protocol libraries are
+separate modules (`hi_kcfe_lrn_l2/mc/l3/l4/l2tp/pptp/dslite/vxlan/gro/ddos/ucmac_mc` +
+`hi_kcfe_mc_list`), each with the same shape: `_add`, `_del`, `_check`, `_get_age`, `_dump`,
+`_get_cnt`. The L2 one imports the PFE-facing API
+`hi_cfe_acc_set_dir/set_mac/set_qos/set_stat/set_tagact`, `hi_adp_flow_add/del/get_age`,
+`hi_cfe_lrn_check_flow_exist`, `hi_cfe_lrn_set_net_port` and `hi_cfe_is_br_forward` - i.e.
+learning is implemented in software and programmed into the hardware as flows/IFC entries, with
+the hardware L2 block used as a search/age cache (its counters are in `hi_lsw_pfe`'s DFX:
+`port_move`, `age_drop`, `sport_clash`, `search_ok_mc`, `search_fail_mc`). [V symbols/counters,
+table format U]
+
+This layer is **not needed for D1** (a software-bridged D1 does not program flows), and **not
+copied for D2** (we use the Linux FDB/switchdev objects as the source of truth). It is the main
+thing the GPL source would make a port instead of an RE, and the reason "flow offload" is a D2+
+item, not a D1 requirement.
+
+### 4.7 `hi_swa` - switchdev/rootif glue ("Switch Adaptor Driver") [V]
+
+Symbols: `swa_switchdev_event`, `swa_switchdev_blocking_event`,
+`swa_handle_port_obj_add`, `swa_handle_port_obj_del`, `swa_netdevice_event`,
+`swa_netdevice_check`, `is_swa_root_dev`, rootif management
+(`hi_swa_add_rootif/down_rootif/get_rootif/unregister_rootif/dump_rootif`), and DFX hooks
+(`swa_dfx_update_wanif/update_vlan_filter`). Imports: `hi_cfe_add_rootif`, `hi_cfe_del_rootif`,
+`hi_cfe_add_subif`, `hi_cfe_del_subif`, `hi_cfe_flush_by_mac`, `hi_net_get_port`,
+`switchdev_handle_port_obj_add/del`, `register_switchdev_(blocking_)notifier`,
+`ppp_get_relate_dev`, `vlan_dev_real_dev`, `dev_get_by_name`.
+
+Behaviour recovered from disassembly:
+
+- `swa_rootif_init()` walks the net-namespace netdev lists and calls `hi_net_get_port()` on
+  each non-loopback device (a PIE per-port lookup; the return value is not used on this path, so
+  the net effect is an observation/probe of the port mapping, not a registration).
+  `swa_rootif_exit()` walks the same lists and calls `hi_cfe_del_rootif(name)` for each valid
+  non-loopback MAC netdev, using a local name helper (it substitutes a fallback for an empty
+  name or a name containing `%` - the exact fallback string and the transformation are [U]),
+  cleaning up CFE roots at unload;
+- `hi_swa_add_rootif(name, a, b)` finds/allocates a 32-entry rootif record
+  (`{char *name; void *a; void *b; u32 enable}`), calls `hi_cfe_add_rootif(record)` and sets
+  `enable=1` on success. `hi_swa_down_rootif(name)` calls `hi_cfe_del_rootif()` and clears
+  `enable`. `hi_swa_get_rootif(name)` is a 32-slot `strcmp` lookup; `hi_swa_unregister_rootif`
+  blanks a slot. `hi_swa_dump_rootif` prints one DFX line per live slot;
+- `swa_netdevice_event()` filters `is_swa_root_dev()`, then handles NETDEV_UP (add rootif; if
+  an entry exists with `enable==0`, re-add using its saved args), NETDEV_DOWN (down rootif) and
+  NETDEV_UNREGISTER;
+- `swa_switchdev_blocking_event()` dispatches `switchdev_handle_port_obj_add/del` for
+  VLAN/MDB-type objects and calls `hi_cfe_flush_by_mac()` when a per-port MAC object is removed;
+- **the four switchdev/port-object handlers are stubs**: `swa_switchdev_event@0x47c`,
+  `swa_handle_port_obj_add@0x484`, `swa_handle_port_obj_del@0x48c`, `swa_netdevice_check@0x474`
+  all `mov r0,#0; bx lr`. The `switchdev_handle_port_obj_add/del()` calls therefore always
+  reach a zero-returning handler: no bridge/VLAN offload happens in this build.
+
+Loader context: `hi_swa` is **not** in `etc/rc.d/luofu`. It is insmodded by
+`etc/init.d/hsan_prepare` START=09, *after* `/etc/rc.d/luofu` (all vendor modules) and after
+`echo 1 > /sys/module/hi_kcfe_pub/parameters/g_intf_bypass`, with the comment "switch adaptor for
+openwrt" (parent `rootfs-2.4.15/etc/init.d/hsan_prepare`, lines ~55-71; [V] local fixture). That
+ordering is the single most important control-plane fact for a clean-room design: the shipped
+firmware uses the CFE in bypass mode and adds switchdev plumbing on top of real OpenWrt netdevs.
+
+### 4.8 Small consumers and what they prove [V]
+
+- `hi_kport_mirror.ko` imports `hi_net_dev_xmit/xmit_lock`, `hi_net_get_port`,
+  `hi_cfe_add_hook/del_hook`, `hi_cfe_flush_by_devname`, and depends on `hi_lsw_pfe`; it
+  implements proc-driven mirroring by re-injecting skbs through the PIE xmit path and by calling
+  the PFE `hi_port_set_mirror()` (symbol in `hi_lsw_pfe`). This is evidence that mirroring is
+  a PFE (hardware) feature plus a software re-inject path, not an LSW queue feature.
+- `hi_netif.ko` only wraps `hi_cfe_set_cpu_rate`/`hi_cfe_set_ddos` (proc consumers).
+- `hi_wse.ko` is a standalone per-packet statistics helper; no LSW dependency.
+- `hi_khslink.ko` is HSLINK (ARP/neighbour bookkeeping and skb-header manipulation); it consumes
+  CFE hooks and FDB API but owns no switch registers. It is the module whose teardown interacts
+  badly with the vendor bridge in the v17 bench line ([VENDOR-SKB-BRIDGE-PORT.md](VENDOR-SKB-BRIDGE-PORT.md)
+  section 2.2), which is further evidence that the vendor's control plane is deeply coupled to
+  its patched kernel and must not be reproduced.
+
+---
+
+## 5. Register window map
+
+### 5.1 Access convention: synthetic 32-bit addresses, 256 module slots [V]
+
+All LSW register access goes through `hi_lsw_pub`, which owns a 256-entry table (`g_modules`,
+3072 B = 256 x 12 B, `.bss`) of records:
+
+~~~
+struct { u32 base; void __iomem *iomem; u32 size; };   /* 12-byte stride */
+~~~
+
+Registration is `hi_lsw_reg_module(base = module_id << 24, iomem, size)`. It stores
+`{base, iomem, size}` in slot `module_id` and fails with `0x8fff_ff7d` for invalid arguments or
+`0x8fff_fff1` when the slot is already registered ("reg module not exist reg(%08x)" and
+"reg %08x outrange(%08x, %u)" are the shared error strings).
+
+Every accessor decodes the address the same way (`hi_lsw_read@0x2d4`, `hi_lsw_write@0x354`,
+`hi_lsw_read64@0x4dc`, `hi_lsw_write64@0x3d0`, `hi_lsw_read_bits@0x44c`,
+`hi_lsw_write_bits@0x564`):
+
+~~~
+id     = addr >> 24;
+offset = addr - (id << 24);
+if (!g_modules[id].iomem)         -> printk, return 0 / drop
+if (offset >= g_modules[id].size) -> printk, return 0 / drop
+return *(u32 *)(g_modules[id].iomem + offset);
+~~~
+
+`hi_lsw_read_tab128@0x1fc` / `hi_lsw_write_tab128@0x268` address **16-byte table entries**
+(4 consecutive u32 words) as `addr = table_base + index*16`; each word is bounds-checked
+individually. This is the primitive for "one 128-bit table row per call", used by the table
+manager's hardware callbacks. `hi_lsw_wait_set/clr` poll a register bit with `arm_delay_ops`
+(timeouts return `0x8fffffd8`); the two wait helpers work on a raw resolved pointer and a
+bitmask (shift of the bit index), i.e. they are a poll-until-set/clear convenience with a
+caller-supplied retry count.
+
+Consequences for a clean-room driver (design rules, [I]):
+
+- The synthetic-address layer is a vendor abstraction with no upstream equivalent. Our drivers
+  should use `regmap`/`readl`+`writel` on named DT windows directly; do not reproduce the
+  256-slot indirection.
+- The synthetic addresses in the disassembly (`0x40000068`, `0x42000048`, `0x44000010`,
+  `0x06042800`, ...) are **not** physical addresses. They decode as
+  `{block id, offset}` and only section 5.2 ties block ids to DT windows.
+- The table manager's cfg struct is 44 bytes: name pointer at `+0`, sizing fields at
+  `+8/+12/+16` (total/key/data sizes; key <= data is enforced and data must be > 15), a
+  flags/type byte at `+26` (bit0 = direct vs hash; bits 1..6 carry the type/aging class), and
+  hardware callbacks from `+28` onwards (set/read/get-age/dump/clr; the exact per-field offsets
+  beyond the name, sizes and the type byte are [I]).
+
+### 5.2 Module-id -> DT window map [V]
+
+Decoded from the two probe registration tables (pointer tables in `.rodata`, with
+`platform_get_resource_byname()` names next to each id; exact locations in 4.2/4.3).
+
+**DP table** (`.rodata+0x0c`, 5 entries, end pointer `.rodata+0x34`):
+
+| module id | DT `reg-names` entry | DT window (board `luofu-r116-pinned.dts`) | size |
+| --- | --- | --- | --- |
+| `0x40` | `dp` | `0x11000000` | `0x80000` |
+| `0x41` | `eps` | `0x11280000` | `0x80000` |
+| `0x42` | `eqm` | `0x11200000` | `0x80000` |
+| `0x43` | `fam` | `0x11100000` | `0x80000` |
+| `0x44` | `ips` | `0x11080000` | `0x80000` |
+
+**PFE table** (`.rodata+0x48c`, 10 entries of `{u32 id, const char *name}`, end
+`.rodata+0x4dc`; ids are passed as `id << 24`):
+
+| module id | DT `reg-names` entry | DT window | size |
+| --- | --- | --- | --- |
+| `0` | `ifc` | `0x12100000` | `0x80000` |
+| `1` | `l2` | `0x12180000` | `0x80000` |
+| `3` | `napt` | `0x12280000` | `0x80000` |
+| `5` | `mcc` | `0x12380000` | `0x80000` |
+| `6` | `opp` | `0x12400000` | `0x80000` |
+| `7` | `pa` | `0x12080000` | `0x80000` |
+| `8` | `pe` | `0x11180000` | `0x80000` |
+| `9` | `pfe_glb` | `0x12000000` | `0x80000` |
+| `0xa` | `prbs` | `0x11380000` | `0x80000` |
+| `0xb` | `pub` | `0x12480000` | `0x80000` |
+
+Ids `2` and `4` are unused by PFE in this build; no module registers them [V - absence in the
+decoded table plus the single `hi_lsw_reg_module` call site in each module]. The id space is
+per-LSW-instance, not global: DP picks `0x40+` while PFE picks `0x0..0xb`, which is
+evidence that the ids are arbitrary private handles, not hardware numbers [I].
+
+A third registration source is ruled out: the only two `hi_lsw_reg_module` call sites in the
+fixtures are these two probe loops [V], so no other module registers windows into the shared
+layer. That is why the synthetic addresses carried by the qid-map code (`0x0604xxxx`) must map
+to one of the ten PFE windows and not to a hidden window.
+
+### 5.3 Registers observed in the fixtures [V addresses; semantics U unless stated]
+
+Only addresses that appear as literal constants feeding `hi_lsw_read/write/tab128` are listed.
+They are **call-site addresses**, i.e. `module window + offset`; "seen once" means the meaning
+was not recovered.
+
+| block (id) | offsets observed | context |
+| --- | --- | --- |
+| `dp` (`0x40`) | `0x1c`, `0x64`, `0x68` | probe: `+0x68` = memory number, `+0x64` = 1 then cell-size selector, `+0x1c` = halfword OR `0x10000` |
+| `eps` (`0x41`) | `0x1008`, `0x2084`-`0x20b4` (DFX counter block), `0x50000` (tab128) | queue/DFX; per-port counters incl. `port3..port7`; the channel-map words `+0xB00/+0xB80` (section 7.4) |
+| `eqm` (`0x42`) | `0x00`, `0x18`, `0x38`, `0x40`, `0x48`, `0x5c`, `0xa4`, `0x504`, `0x2004`-`0x203c`, `0x600c` | queue table command/status (`+0x48`), write data (`+0x5c`), enable (`+0x40` bit31), queue/cell counters |
+| `fam` (`0x43`) | `0x504` | queue-count/cell comparison in probe |
+| `ips` (`0x44`) | `0x00`, `0x08`, `0x10`, `0x1120`, `0x1344` | probe init (`+0x10` bit16, `+0x08` = 42), counter reads |
+| `ifc` (`0`) | `0x000000`, `0x01040000` (DFX counters) | classifier counters (`ifc_hit`, `ifc_unhit`, ...) |
+| `l2`, `napt`, `mcc`, `opp`, `pa`, `pe`, `pfe_glb`, `prbs`, `pub` | DFX counter blocks (`0x00`, `0x1004`, `0x1008`, ...) and the qid tables at `opp+0x42800`/`opp+0x43800` | statistics; qid maps (section 7.3) |
+
+No bit-level meaning is claimed for any of these; the list exists so the D1/D2 register work has
+a starting inventory and so a bench read plan can be written without guessing addresses. **Do
+not write any of these from a 6.18 kernel before the writes are individually justified and
+attended (section 12).** [I]
+
+### 5.4 The `queue` and `flow` windows are DDR memory, not MMIO [V/I]
+
+The DT gives `lsw_dp` seven windows, but the driver registers only five; the two unregistered
+ones are `queue` (`0x87b00000`, 4 MB) and `flow` (`0x87f00000`, 1 MB). Three independent
+observations say they are **memory the engine consumes**, not register pages:
+
+1. no `hi_lsw_reg_module()` call (and therefore no synthetic-address access) ever covers them;
+2. both fall inside the DDR aperture described by the vendor DT (`memory@0x80500000`, 128 MB at
+   `0x80500000`), and the U-Boot board overlay *rebases* `queue` from `0x87b00000` to
+   `0x80000000` ([soc/vendor-dt-notes.md](soc/vendor-dt-notes.md) section 8) - exactly the sort
+   of move done for a reserved DDR region, not for an SoC register page;
+3. `hi_mem_info_init()` in `hi_lsw_dp` resolves memory windows named `queue`/`flow` (plus
+   `voip`/`woe`) via `hsan,queue_reserved`/`hsan,flow_reserved` compatible strings or
+   `platform_get_resource_byname()` and records `{start, size}` for buffer accounting/DFX; the
+   `queue` window is also the one that the vendor DT overlay fixes up [V strings; exact
+   iteration partially [U]].
+
+Which base a clean-room driver must program (`0x87b00000` as in the base DT, or `0x80000000`
+after the U-Boot overlay) is **[U]** and is explicitly flagged "do not fix without measuring" in
+[../target-skeleton/dts/luofu-r116.dts](../target-skeleton/dts/luofu-r116.dts) and
+[REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.1. A bench read of the live vendor
+kernel's reserved-memory/DT (or of the queue engine's own window) is the only legitimate answer.
+
+### 5.5 Clocks, resets, IRQs [V from the vendor DT, semantics U]
+
+| item | value in the pinned vendor DT ([soc/luofu-r116-pinned.dts](soc/luofu-r116-pinned.dts) lines 1078-1123) |
+| --- | --- |
+| `lsw_dp` clocks | `lsw_dp_clk` fixed-clock `0x9e4f580` = 166,000,000 Hz |
+| `lsw_dp` resets | `reset-names = "dp_logic" "dp_srst"`, cells `<0xf 0x30 0x0>` / `<0xf 0x30 0x1>` (CRG id 0xf, reset word `0x30`, bits 0/1) |
+| `lsw_pfe` clocks | `lsw_pfe_clk` fixed-clock `0x13d92d40` = 333,000,000 Hz |
+| `lsw_pfe` resets | `reset-names = "pfe_logic" "pfe_srst"`, cells `<0xf 0x30 0x3>` / `<0xf 0x30 0x4>` |
+| `lsw_woe` | no `reg`; `interrupts = SPI 84,83,82,81,80`; `interrupt-names = "band0_comp_irq" "band1_comp_irq" "band2_comp_irq" "band0_txba" "band1_txba"`; `dma-coherent`; `hwver = 0x251` |
+| extra driver-side reset | `hi_lsw_dp` also looks up a reset named `dpu_srst` (mismatch with DT `dp_srst`) - whether it resolves is [U] |
+| `hwver` | both blocks: `0x250` in the board DT; DP default when absent `0x10`; PFE log generation string `v100` |
+
+The reset cells are exactly the vendor two-cell form `(CRG page register offset, bit)` that
+patch `004`/`014` re-express as generic resets
+([../target-skeleton/target/linux/hisilicon/patches-6.18/004-arm-clk-reset-luofu-crg.patch](../target-skeleton/target/linux/hisilicon/patches-6.18/004-arm-clk-reset-luofu-crg.patch)).
+The driver-side sequences are: DP = deassert/assert/deassert pulse on the array, then
+assert/deassert on `dp_logic` and on `dpu_srst`; PFE = assert/deassert on the array. Whether the
+order matters (and whether the vendor's `dp_logic`/`dpu_srst` mismatch means one reset is never
+pulsed) is **[U]** and is a D1 bench item. No `lsw_woe` driver exists in either rootfs (the
+module is absent), so the WoE interrupt path has **no software evidence at all** [V absence].
+`hi_lsw_*` request no IRQs itself [V: no `request_irq`/`devm_request_irq` import in any LSW
+module]; the only LSW-family interrupt consumers would be PIE (its own IRQs) and the absent WoE
+driver.
+
+### 5.6 Ownership overview
+
+~~~
+lsw_dp (7 DT windows, 5 registered)             lsw_pfe (10 DT windows, 10 registered)
+  queue 0x87b00000/0x80000000 (DDR)              ifc      0x12100000  id 0
+  flow  0x87f00000 (DDR)                         l2       0x12180000  id 1
+  dp    0x11000000  id 0x40                      napt     0x12280000  id 3
+  eps   0x11280000  id 0x41                      mcc      0x12380000  id 5
+  eqm   0x11200000  id 0x42                      opp      0x12400000  id 6
+  fam   0x11100000  id 0x43                      pa       0x12080000  id 7
+  ips   0x11080000  id 0x44                      pe       0x11180000  id 8
+                                                 pfe_glb  0x12000000  id 9
+                                                 prbs     0x11380000  id 0xa
+                                                 pub      0x12480000  id 0xb
+lsw_woe: no reg, SPI 80-84, no driver in rootfs
+~~~
+
+All ten PFE windows are `0x80000` bytes; DP's five register windows are `0x80000` bytes each.
+The skeleton draft DTS already carries these nodes with `status = "disabled"`
+([../target-skeleton/dts/luofu-r116.dts](../target-skeleton/dts/luofu-r116.dts) `lsw_dp`/`lsw_pfe`).
+
+---
+
+## 6. Port model
+
+### 6.1 Physical ports [V]
+
+The five `gemac` nodes carry `port = <8..12>`, one `reg` window each, a `phy-handle`, a
+`phy-mode`, and a reset pair (per the pinned vendor DT lines 885-955). The board U-Boot overlay
+for `board_id=3` disables `gemac0`/`gephy0` ([soc/vendor-dt-notes.md](soc/vendor-dt-notes.md)
+section 8), so the live set is ports 9-12 = four MACs. The *measured* mapping from the running
+vendor kernel (dmesg + `/sys/class/net/*/phydev`) is
+`14380000.gemac eth0 -> mdio0:02`, `14400000.gemac eth1 -> mdio0:03`,
+`14480000.gemac eth2 -> mdio0:04`, `14500000.gemac eth3 -> mdio0:05`, `14300000` absent
+([ETHERNET-BRINGUP-FRAMING.md](ETHERNET-BRINGUP-FRAMING.md) section 2, measured) - note this
+differs from the DT `phy-handle` order and was a real bench bug, so treat the MAC<->PHY mapping
+as verified only by that measurement, not by the DT.
+
+The board userspace mapping is `R116: WAN = eth3, LAN = eth0 eth1 eth2`
+(parent `rootfs-2.4.15/etc/board.d/02_network`, [V] local fixture), consistent with the live
+stack record in [VENDOR-SKB-BRIDGE-PORT.md](VENDOR-SKB-BRIDGE-PORT.md) section 2.4. The bench
+link is on router LAN `eth2` (parent `BENCH-FACTS.md`).
+
+For the PIE side, the same numbers appear as the 8-bit `port` field in the 8-byte descriptor that
+`hi_mac_probe()` passes to `hi_net_dev_probe()` ([PIE-DATAPATH.md](PIE-DATAPATH.md) section 2.2),
+so `desc8.port` values are 9..12 for the live ports. The mapping from these MAC port numbers to
+the LSW's internal port ids is **[U]** (see 6.2/6.3).
+
+### 6.2 LSW port namespace as visible in the vendor code [V names; mapping U]
+
+The DP DFX/dump tables name the ports (`.rodata.str1.4` strings at `+0x31c`-`+0x37c`):
+`port-pie`, `port-prbs/loop`, `port8`, `port9`, `port10`, `port11`, `port12`, `port0`,
+`port-xge`, `port13`, `port-woe`. The EPS counter dump (strings at `+0x788`-`+0x7a8`) labels
+its queue-port rows `port3(prbs)`, `port4(pie0)`, `port5(pie1)`, `port6(pie2)`, `port7(pie3)`.
+
+Two independent groupings follow from the names alone [I]: the EPS queue ports are a small
+numbering (3=PRBS/loopback, 4-7=PIE channels 0-3) while the LSW egress ports include the MAC
+ports 8-12 and special engines (`xge`, `woe`, PIE host path). The exact integer assignment of
+`port-pie`/`port0`/`port13` and whether `port8..12` are *identical* to the DT MAC `port` numbers
+is **[U]** - it is the first item of the D1 bench inventory (section 12.2).
+
+### 6.3 `port_bitmap` - what is verified, what is not [V read, U semantics]
+
+`hi_dp_probe` reads `port_bitmap` as a **u64** (`of_property_read_u64` to `sp+40`), and the
+board DT supplies two cells `<0xf01 0x1ff0>`. Later the two words are passed as the two 32-bit
+halves (`ldrd r2,[sp,#8]` at `+0xca8`) to `hi_queue_init()`. The 96-bit queue walk inside
+`hi_queue_init` tests bits of that pair with a 64-bit shift idiom, i.e. the driver treats the
+property as a **queue/port enable bitmap**, not a port count.
+
+The raw bit views are: low word `0xf01` = bits 0, 8, 9, 10, 11; high word `0x1ff0` = bits 4-12
+(as a u32). A naive reading as "ports 0-12" does not work (bits 0 and 8-11 + 36-44), and the
+values do not match the live-port set {9,10,11,12}. The semantic mapping is therefore **[U]**.
+Do not invent a decoding; the candidate explanations (two independent bitmaps for two hardware
+port groups; a bitmap of 8 queue-port groups; a per-block port mask) all remain open. The
+vendor's own U-Boot overlay does not modify `port_bitmap` [V], so the base-DT value is what the
+shipped kernel runs with.
+
+Another unresolved probe-level detail worth recording: while iterating the u64, the vendor code
+tests bit 16 of the low word (`ubfx r3, r7, #16, #1`) and stores the result into the queue-manager
+state, using it to select an initial value 15 (`.data+0x18c`/state[0]). The meaning is **[U]**;
+[I] it looks like an "is root/host port present" flag. Either way it shows the bitmap is
+interpreted by the queue manager, not by the port table.
+
+### 6.4 The 46-entry software port table [V layout, U semantics of some fields]
+
+`hi_lsw_dp` keeps a global array of 46 entries x 56 bytes in `.data` (reached through the
+`.LANCHOR0` anchor at section 28 offset `0xd0`; `hi_queue_init` initialises entries 1..45 by
+storing 8 at `+12`; `hi_queue_get_qid@0x3648` / `hi_queue_get_q_num@0x36b4` /
+`hi_eqm_get_que_port@0x1ffc` / `hi_queue_port_cnt_get@0x4f08` all walk it with
+`cmp index,#46`). Recovered fields:
+
+| offset | field | evidence |
+| --- | --- | --- |
+| `+0` | valid/enabled flag (must be `1`) | `hi_queue_get_qid`: `ldr r2,[entry]; cmp r2,#1; movne error` |
+| `+4` | port id (search key, compared to the API argument) | all four walkers compare `arg == [entry+4]` |
+| `+8` | qid base (queue handle; `0` = unassigned) | `hi_queue_get_qid` returns it; `0` -> error `0x8fff_ffee` |
+| `+12` | queue count per port; default **8**, set by `hi_queue_init`; `hi_queue_get_q_num` returns it | |
+| `+16`, `+20` | second base/group fields used by the queue-shaping helper: if `[+20] > 7` the qid is `arg + [+16]`, else `[+20] + [+16]`; the helper tail-calls `hi_eqm_set_sht` | [V code shape, U meaning] |
+| `+24`..`+55` | shaping/scheduling/buffer state (walkers and `hi_queue_set_*` read/write it) | [U] |
+
+The table holds port ids for *all* LSW ports, not only the four MACs (46 entries > 12), and
+`hi_queue_get_qid/get_q_num` are exported to PFE (`port_qid_map_set` uses them). This is the
+strongest evidence for the model "each LSW port owns a contiguous run of QIDs, default 8".
+The default 8 is also independently visible in `port_qid_map_set`'s loop count of 8
+(section 7.3).
+
+### 6.5 Virtual ports (wifi/plc/chba/voe/fttr) [V names + defaults, U purpose]
+
+The DP probe reads five optional u32 DT properties - `wifi_vport`, `plc_vport`, `chba_vport`,
+`voe_vport`, `fttr_vport` - into a 5 x 16-byte `.data` table. For each entry: `+0` = index
+(0..4), `+4` = property-name pointer, `+8` = accumulated offset (default 256 when the property
+is missing), `+12` = the value read from DT. The result is a partition/offset table that
+`hi_lsw_get_vport@0x7b8` searches by port id (returning the entry whose index field matches).
+The board DT has none of these properties [V], so every entry takes the default 256; what the
+consumer does with 5 x 256 is **[U]**. [I] This is the vendor's virtual-port (Wi-Fi SSID, PLC,
+FTTR, voice) queue-partition mechanism - relevant to Wi-Fi offload only ([X] for us). Our D1
+must work with the property absent, i.e. with whatever default the driver computes; the clean
+room choice is to *not* model virtual ports at all until they are needed.
+
+### 6.6 How our driver should represent ports [I]
+
+Reference shape for a clean-room switchdev driver (detailed in section 9.4):
+
+- one **netdev per live MAC port**, owned by the GEMAC driver (patch `009`; the vendor's
+  `hi_kmac` is the natural model: netdev + phylink, no rings). DTS: `gemac@...` nodes already
+  exist; add a phandle to the switch node or a `switch-port` property;
+- one **switch core device** (platform driver over the `lsw_dp`+`lsw_pfe` windows, `status =
+  "disabled"` until proven) that owns queues/qid maps and the switchdev notifier;
+- the **host queue path** (PIE, patch `015` draft) is not a netdev model - it is a hidden engine;
+  its "port" for the LSW is the queue-port id recovered in 6.2 [U exact value];
+- the **WAN/LAN distinction is a userspace policy**, not hardware (board `02_network`); do not
+  bake it into the driver.
+
+---
+
+## 7. Queue / QID model
+
+### 7.1 What a "queue" is in this ecosystem [V/I]
+
+- The hardware has a **QID space** (queue ids) and an **EQM** (egress queue manager) table that
+  maps a qid to queue state; `hi_lsw_dp` reads/writes the EQM through a command/data register
+  pair (7.5) and an indirect table interface.
+- Per port the driver allocates a base qid and a count (`hi_queue_get_qid`,
+  `hi_queue_get_q_num`; default count 8 from the port table).
+- Above that sit the PFE tables, which decide *which* qid/port a classified packet goes to
+  (PFE `[act] ... pq/pq_en/car_id/car_en/statis_idx`, section 8.2).
+- PIE then consumes the per-port queue handle through the `g_api_priv` context entry (PIE
+  sections 2.2 / 7.1) - the LSW side writes the queue handle; PIE uses it for TX.
+
+So the data path is "classification -> qid -> EQM -> EPS/channel -> PIE ring or MAC port".
+The **handoff to PIE is indirect**: it is the queue handle stored in the PIE per-port context,
+installed via `hi_net_queue_hook` (PIE export) which `hi_queue_init` calls with
+`hi_dev_queue_enable` (`+0x546c`). That is the only PIE<->LSW registration point visible in the
+fixtures; the per-port/vport binding timing is still **[U]** (same conclusion as
+[PIE-DATAPATH.md](PIE-DATAPATH.md) section 7.2).
+
+### 7.2 The 8-QIDs-per-port loop [V]
+
+`hi_lsw_pfe!port_qid_map_set@0x26b8`:
+
+~~~
+qid   = hi_queue_get_qid(port);        /* from hi_lsw_dp; 0 or missing -> return */
+q_num = hi_queue_get_q_num(port);      /* default 8 */
+if (!qid || !q_num) return;
+step  = 8 / q_num;                     /* integer division (__aeabi_idiv) */
+for (i = 0; i < 8; i++)
+        qid_map_set(port, 0, i, qid + i / step);   /* i/step = i*q_num/8, q_num<=8 */
+~~~
+
+For the default `q_num = 8` this is exactly `qid + i`: eight consecutive qids are mapped to the
+port's eight qid-map slots. For a port with fewer queues the same base qid is replicated across
+slots (`step > 1`); for `q_num > 8` the formula would divide by zero (`step = 0`) - the vendor
+never hits it, and any clean-room implementation must treat it as a design error to avoid [I].
+
+### 7.3 `qid_map_set` - the two hardware tables [V]
+
+`qid_map_set(id, unused, index, value)` writes through `hi_lsw_write()` into **module 6**
+(decoded in 5.2 as the `opp` window at `0x12400000`), with three id classes:
+
+| `id` class | target table | index arithmetic | entry written |
+| --- | --- | --- | --- |
+| `0..15` | `opp + 0x42800` | word index = `index + id*8` | one u32 `(0x100 bit set) plus (value & 0xff)` |
+| `40..47` | `opp + 0x43800` | byte offset = `(index + (id-40)*8) * 16` | **four** consecutive u32 words, each with the same `0x100 enable bit and low-byte value` |
+| `>47` | `opp + 0x42800` | word index = `index/2 + id*4 - 64` | one u32 per slot, written twice per pair of indices |
+| `16..39` | none | prints "invalid ..." (`.LC0`) and returns success | nothing |
+
+Evidence: literal constants `0x06043800`/`0x06042800` (synthetic `module 6` addresses) and the
+`bfi/orr` value construction with `0x100`, `qid_map_set@0x25dc`..`+0x98`.
+
+Reading this as a hardware model [I]:
+
+- **table A** (`opp+0x42800`): an array of 32-bit entries; the `0x100` bit is an "enable/valid"
+  flag and the low byte is the qid. Entries for ids 0-15 are 8 words per port
+  (`0x42800..0x429ff`, 512 B = 16 ports x 8 slots x 4 B), and the `>47` class continues the
+  same array after word 128 (`port*4 - 64 + index/2`), i.e. **a second, 4-word-per-port layout
+  for higher ports**;
+- **table B** (`opp+0x43800`): 16-byte entries (4 words with the same value), 8 entries per
+  port for 8 ports 40..47 -> `0x400` bytes. This is a different table shape for the
+  "special/high" port class (40..47). What makes 40..47 special - the virtual ports of 6.5 are
+  indexed 0..4, not 40.. - is **[U]**; [I] it is plausibly the Wi-Fi/DSL/voice port class.
+
+The PIE-DATAPATH statement "qid_map_set writes four consecutive 32-bit words built from
+`(id, value)`" is confirmed for the 40..47 class only; the other two classes write one word.
+Also confirmed now: **module 6 = opp window `0x12400000`**, offset `0x42800`/`0x43800`
+(~266 KB and ~276 KB into the window - within the `0x80000` size, so the bounds checks in
+`hi_lsw_write` pass). [V]
+
+### 7.4 EPS per-channel queue-port map (`hi_pie_map_init`) [V code shape]
+
+`hi_lsw_dp!hi_pie_map_init@0x56e8` is called with `hwver` and binds the PIE GRO/WOC channel
+ranges to LSW queue ports:
+
+1. `gro_start = hi_pie_get_gro_ch_start()`, `gro_num = hi_pie_get_gro_ch_num()`,
+   `woc_start = hi_pie_get_woc_ch_start()`, `woc_num = hi_pie_get_woc_ch_num()` (four PIE
+   exports; the PIE side is documented in [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7).
+2. two local helpers write a per-channel table in the **EPS** window at `eps+0xB00` (word
+   `ch*4`) and a companion word at `eps+0xB80` (`0x80` above it; the enable word is built from
+   `0x8000ffff` and a `0xf0000`-masked field). Helper A (`@0x5544`) writes `num` channels
+   starting at `ch_start`, with a packed nibble/bitfield per channel; helper B (`@0x5640`)
+   writes 4 channels and also env/en bit fields. The exact bitfield packing is recovered only at
+   the "nibble index / enable high bit" level [V shape, U field meaning].
+3. generation gating on `hwver`: `hwver < 0x200` with WoC channels present takes one branch,
+   `0x200 <= hwver < 0x300` another, `>= 0x300` a third; the board's `0x250` lands in the
+   middle branch [V branches; U why].
+4. the channel count returned is validated (`> 16` -> error `0x7000000c`).
+
+On the board, PIE wiring is DT-driven by the U-Boot overlay (`pie` fragment sets
+`rx_ring/tx_ring/woc_*_ring`, [soc/vendor-dt-notes.md](soc/vendor-dt-notes.md) section 8), and
+`hi_kpie` exposes the four `hi_pie_get_*_ch_*` getters; the LSW side then maps those channels
+to EPS queue ports 4..7 (`port4(pie0)`..`port7(pie3)` from the counter names). [V names,
+I mapping]
+
+### 7.5 EQM indirect table access [V]
+
+`hi_eqm_write_tab@0x1cdc` / `hi_eqm_read_tab@0x1e18` implement an indirect access engine:
+
+- a command word built from `{tab, index, data}` is written to `eqm+0x48`; data words go to
+  `eqm+0x5c` (plus a small register-address table anchored at `.LANCHOR1` for additional data
+  words);
+- then `hi_lsw_read(eqm+0x48)` is polled up to **1001** times (= the vendor's ~1 s timeout at
+  1 ms `arm_delay_ops`); bit31 = busy (continue), bit5 = error -> return `0x8fff_ffd3`; on
+  timeout print the register fields (bits 20..26, bits 0..15, bit 30) and return
+  `0x8fff_ffd8`;
+- table ids are 7-bit (`tab & 0x7f`), indices 16-bit, and up to 5 data words per operation
+  (`min(num,5)`); the highest table id used in DP is 19 (`hi_queue_init` writes a 1000-cell
+  entry at table 19).
+
+This is the mechanism a clean-room driver would have to re-implement for queue tables; because
+the register field layout inside the command word is only partially recovered (the
+`and r0,r0,#0x7f` and the `0xffffc000` base are visible; the exact bit positions are [I]),
+**the D1 driver must not write EQM tables until a bench trace or GPL source confirms the
+command word**. [I]
+
+### 7.6 Queue state visible to userspace (vendor) [V]
+
+The DP DFX dumps expose per-queue state with these strings: `port=%u,pri=%u,qid=%u`,
+`,cell=%u,priv=%u`, `,in=%llu,out=%llu,drop=%llu,tail=%u,low=%u`, `[in] qid=%u`,
+`[out] qid=%u,echid=%u`, `total_share_buffer_size=%u`, `pkt_share_usecnt:%u pkt_total_usecnt:%u
+cell_share_usecnt:%u cell_total_usecnt:%u`, `error vp used. qid:%u, sch_id:%u, input:%u,
+is_root:%u`, and the EQM drop counters `drop_total/in_q/to_eps/rx_q2_total/q2_drop/in_q2/
+over_share_drop/qtail_drop/gtail_drop/gchip_drop/cong_drop/qmc_drop/sch_drop`. This is where
+the *meaning* of the queue structure could be read on a live vendor kernel (read-only procfs
+dump) - it is the cheapest bench inventory item and is listed in section 12.2. [V strings]
+
+---
+
+## 8. Forwarding, MAC learning, VLAN and ACL tables
+
+### 8.1 The generic table manager: id space and shapes [V]
+
+`hi_lsw_pub!hi_tab_mgr_create(id, cfg)` (id < 8192, `id & 0xc0 == 0` check; control array
+`g_tab_ctrl` = 8192 B in `.bss`, one pointer per id) creates a table object whose cfg carries
+name, key/data sizes, total entries, a type/mode byte, and hardware callbacks. The manager has
+two allocation modes (`hi_tab_mgr_alloc_hash`, `hi_tab_mgr_alloc_direct`), aging
+(`hi_tab_mgr_get_age`, `tab_mgr_kthread`, module param `mgr_thread_time`), and DFX dump/clear
+hooks. Hardware callbacks are what actually write the silicon: e.g. the DP queue table
+(`id 0`) passes `hi_eqm_set_sht`/`hi_eqm_dump_sht`; the PFE tables pass their own
+write/read/dump/age functions (`hi_tab_write/read/dump_ifc_cnt`, `pfe_napt_v4/v6_*`,
+`hi_tab_write/read_l3_cnt`, `hi_tab_write/read_nhp_cnt`, `write/read/dump_glb_attr`, ...).
+
+Table ids observed in the fixtures (all [V]; the mapping id -> logical table is [I] except where
+the creating function/string says so):
+
+| id | created in | logical table |
+| --- | --- | --- |
+| `0` | `hi_lsw_dp!hi_queue_init` | EQM queue table (callbacks `hi_eqm_set_sht`/`hi_eqm_dump_sht`) |
+| `0x700` | `hi_lsw_pfe!hi_pfe_init` | global attributes (`read/write/dump_glb_attr`) |
+| `0x701` | `hi_pfe_ifc_init` | IFC-related |
+| `0x702` | `hi_pfe_napt_init` area | flow counters (`hi_tab_write/read/dump_flow_cnt`) |
+| `0x703` | `hi_lsw_dp!hi_dp_tab_init` | L3 counters (`hi_tab_write/read_l3_cnt`) |
+| `0x704` | `hi_lsw_dp!hi_dp_tab_init` | NHP counters (`hi_tab_write/read_nhp_cnt`) |
+| `0x705` | `hi_pfe_ifc_init` | IFC counters (`hi_tab_read/write_ifc_cnt`) |
+| `0x70d` | `hi_pfe_napt_init` | NAPT flow table (v4/v6 callbacks) |
+| `0x70f` | `hi_pfe_ifc_init` | IFC table (`hi_tab_dump_cnt` + count-name string) |
+| `0x712` | `hi_pfe_mcc_init` | MCC user link list |
+
+### 8.2 The IFC classifier: the ACL/forwarding key [V field list, U encoding]
+
+`ifc_write`/`ifc_dump`/`ifc_del` in `hi_lsw_pfe`, plus the ADP flow writers in `hi_kcara`,
+program the "IFC" table. The dump strings enumerate the key fields the vendor's debug output
+prints (`.rodata.str1.4` of `hi_lsw_pfe`): `dmac, smac, stpid, spbit, svlan, ctpid, cpbit,
+cvlan, etype, session_id, ppp_protocol, dipv4, sipv4, ip_protocol, sipv6_l, sipv6_h, dipv6_l,
+dipv6_h, next_hd, dport, sport, icmpv6_type, eth_encp, ppp_encp, frm_type, tag_sum_rf5,
+tag_type, ip_frame, pkt_tunnel, ip_frag, ptype, flength, ip_length, range0_match..range3_match,
+xdf_udf0..xdf_udf3, dos_type`. The action side is
+`[act]: id, igr_bitmap, label, map_pri, eof, pq, pq_en, car_id, car_en, statis_idx`
+(+ `mask` per key field). This is a full **L2-L4 classifier with VLAN/PPP/tunnel awareness,
+4 match ranges, 4 user-defined fields and a DoS type** - i.e. the ACL/datapath offload engine.
+
+The field *encodings* (bit offsets, widths, table row layout) are **[U]**: the dump prints them
+by name, but the write functions encode them through register writes whose bit arithmetic is
+only partially recovered. A clean-room ACL/flow offload (D3+, out of scope for this document's
+D1/D2) needs either GPL source or a bench campaign with `ifc_dump` on a known flow.
+
+### 8.3 L2 / MAC learning [V counters and software table, U hardware format]
+
+The hardware L2 block (`l2` window, id 1, `0x12180000`) exists (DT + `hi_lsw_pfe` DFX counters
+`port_move`, `age_drop`, `sport_clash`, `search_ok_mc`, `search_fail_mc`), but **no L2 table
+write function exists in `hi_lsw_pfe`'s exported surface**; the vendor's L2 learning is the
+software library `hi_kcfe_lrn_l2` (`hi_cfe_lrn_l2_add/del/check/get_age/dump/cnt`), which calls
+the CFE acceleration API (`hi_cfe_acc_set_mac/set_dir/set_qos/set_stat/set_tagact`) and
+`hi_adp_flow_add/del` - i.e. learning produces **flow/IFC entries**, not raw L2 table rows.
+The generic CFE table framework (`hi_cfe_tab_*`) holds the software FDB (dump format
+`dst updated used flag vid`, MAC bytes, per-interface counters), and `hi_cfe_intf_set_br_fdb`/
+`get_br_fdb` mirror to the bridge FDB (with the vendor-patched `hi_br_fdb_check_addr`).
+
+Implications [I]:
+
+- D1 (no offload) needs **no L2 table**: the Linux bridge learns in software; the LSW must be
+  in a "forward everything to the host / port-to-port default" mode. The minimal requirement is
+  to find the default-forwarding configuration, which is one of the D1 bench questions.
+- D2 switchdev offload should map **Linux FDB entries** to the hardware L2/flows. Whether the
+  hardware L2 table is writable directly (a table shape we have not recovered) or only through
+  the IFC/flow path is **[U]**; the vendor's own choice (flow path) is the safer model.
+- The `age_drop`/`port_move` counters prove the hardware does *something* on MAC move/aging,
+  so a D1 caveat: leaving the L2 engine enabled with an empty table may drop or misforward
+  unknown unicast. The D1 bring-up must start from a documented all-ports-forward state. [I]
+
+### 8.4 VLAN [V API surface, U table format]
+
+Three mechanisms exist in the vendor stack:
+
+1. **tag action table** in PFE: `tag_write`/`tag_dump` (PFE) and the ADP
+   `hi_cara_flow_set_act_tag` string; the CFE side has
+   `hi_cfe_tag_add_by_attr`/`hi_cfe_tag_del`/`hi_cfe_tag_del_by_cb`/`hi_cfe_tag_get_svlan`,
+   with an attribute list including `tag_type`, `stpid`, `ctpid`, `svlan`, `cvlan`.
+2. **VLAN filter items**: `hi_adp_vlan_filter_item_add/del`,
+   `hi_cfe_add_rootif_vlan/del_rootif_vlan`, `hi_cfe_tag_filter_add/del/enable`, and the
+   `hi_swa` proc interface `vlan_filter` (`swa_dfx_update_vlan_filter`,
+   `dev=%s,intf_type=%d,vlan_filter=%u,enable=%u`). This is the vendor's per-interface VLAN
+   enable/filter model, driven from userspace (`/proc/hsan/net/swa/...`).
+3. **sub-interfaces**: `hi_cfe_add_subif/del_subif/set_subif_attr`, with the string
+   "Do not support second layer untag subif yet" - i.e. the vendor model is a VLAN-tag
+   sub-interface on top of a rootif.
+
+Which hardware table stores the per-port PVID/VLAN membership is **[U]**; the candidates are the
+`l2` window, the tag-action table and the IFC key fields (`stpid/spbit/svlan/ctpid/...`).
+Given the D2 scope ("bridge/VLAN object offload"), this is the first D2 RE item. For D1, VLANs
+are software-only (Linux 8021q/bridge) and the hardware must not filter; whether the LSW can be
+put in that mode is **[U]** and is a D1 bench question.
+
+### 8.5 CAR, mirroring, NAPT, multicast (D2/D3, evidence for scope only)
+
+- CAR/shaper: `car_write/car_del/car_profile_write/dump` (PFE), `hi_port_set_igr_car`,
+  `hi_queue_set_shaping/egr_shaping/sch/buf`, `hi_dev_queue_*` (DP), and the ADP
+  `hi_cara_cid_*`/`hi_ca_set_*` wrappers. The thermal net-cooling device `hsan,net-cdev` uses
+  the CAR API ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) block B), which is why "CAR" is
+  called out as a cross-block dependency there [V symbols].
+- Mirroring: `hi_port_set_mirror` (PFE) + `hi_kport_mirror` proc logic, using the PIE xmit path
+  to re-inject mirrored frames [V].
+- NAPT: `pfe_napt_v4/v6_*` and the `TAB_FLOW_V4/V6` strings in `hi_kcara`; this is stateful
+  flow offload, D3 [V].
+- Multicast: `hi_cfe_lrn_mc` + `hi_kcfe_mc_list` + `TAB_MCC`/`hi_pfe_mcc_init`; group tables and
+  per-user link lists [V symbols].
+- `lsw_woe` (WoE offload engine, SPI 80-84) has no driver module and no consumer symbols; its
+  DT node with 5 IRQs is all the evidence [V absence]. Out of scope for D1/D2 [I].
+
+### 8.6 What the vendor does *not* do [V]
+
+- No tag-based CPU port, no DSA switch tag, no `dsa_*` symbols anywhere in either rootfs.
+- No `switchdev_ops` on any netdev (only the notifier blocks registered by `hi_swa`, whose
+  handlers are stubs, section 4.7).
+- No per-port netdev creation in the LSW modules: netdevs are created by `hi_kmac` and the CFE
+  vif code; the LSW only consumes them by name/index (`hi_net_get_port`, `hi_cfe_*intf*`).
+- No devlink, no ethtool per-port ops, no `ndo_bridge_*` in the LSW modules.
+
+---
+
+## 9. The CFE/rootif contract and the switchdev design
+
+### 9.1 Why the vendor has a rootif write at all [V + I]
+
+The vendor kernel stack is not a hardware-forwarding switch driver; it is a **software flow
+engine grafted onto the Linux stack**, and it needs a device identity to hang policy on:
+
+- the CFE keeps a name-indexed interface list (rootif + subif). A rootif is a *Linux netdev*
+  (bridge, VLAN device or plain port device) that has been bound into the CFE model by
+  `hi_cfe_add_rootif()`. The record carries the name, a device pointer pair and the enable
+  flag; `hi_cfe_del_rootif()` releases it.
+- the CFE uses that binding to attach **VLAN filters** (`add_rootif_vlan`/`del_rootif_vlan`),
+  **sub-interfaces** (VLAN tag vifs: `hi_cfe_add_subif`), **stats rules**
+  (`hi_cfe_intf_set_stat`), **tag actions** and **FDB entries** to the interface. The interface
+  attribute dump format is `father interface / dev / attr type / vid / vlan_filter_en / mc_vid /
+  mc_en / pri / pq / [stat info] rx_en rx_idx tx_en tx_idx rx_ruleid tx_ruleid` and the FDB
+  format is `dst updated used flag vid` - all [V] strings.
+- the CFE packet path (`hi_cfe_intf_rx/tx`) maps an ingress (port, skb) to an interface, applies
+  the learned flow/tag/forward decision and either forwards in hardware or passes to Linux.
+- the userspace contract (`/proc/hsan/cfe/*`, `/proc/hsan/net/swa/*`, `hi_cfm`) and the OpenWrt
+  hotplug scripts (`08-wan-detect` reads `/proc/hsan/cfe/intf/dump_intf`) depend on those names
+  existing [V: parent `rootfs-2.4.15/etc/hotplug.d/gmac/08-wan-detect`].
+
+`hi_swa` exists to bridge the *OpenWrt* world into that model when the CFE is in bypass mode:
+it watches netdevice events and adds/removes rootifs for real netdevs (bridges, VLANs, PPPoE
+related devices via `ppp_get_relate_dev`), and it registers switchdev notifier blocks so that
+the kernel's switchdev events can be routed to `hi_cfe_flush_by_mac()` (MAC/port object
+deletion). The actual `port_obj_add/del` handlers are stubs [V 4.7].
+
+**So the rootif write is not a hardware operation and is not required for forwarding in
+hardware - it is the vendor's control-plane bookkeeping for its own userspace.** A clean-room
+driver must not reproduce it; our userspace contract is the standard Linux one (bridge/VLAN
+netlink, switchdev, ethtool, devlink if needed). [I]
+
+### 9.2 Reference table: vendor object -> our object [I]
+
+| vendor concept (evidence) | hardware reality | clean-room home |
+| --- | --- | --- |
+| rootif (`hi_cfe_add_rootif`, 32-entry table in `hi_swa`) | none (software identity) | Linux bridge / VLAN upper device; no driver object |
+| subif (`hi_cfe_add_subif`, VLAN vif) | none (Linux netdev) | `8021q`/bridge VLAN; switchdev `BR_VLAN` object in D2 |
+| intf attr (vid, vlan_filter_en, pri, pq, rx/tx rule ids) | IFC/L2/tag tables [U] | switchdev VLAN/port attrs in D2 |
+| CFE FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb`) | L2/flow table [U] | Linux bridge FDB (+ offload flags) |
+| CFE hooks (8 hook points) | none | not modelled; use TC/switchdev hooks |
+| ADP flow (`TAB_FLOW_V4/V6`) | NAPT/IFC | D3 flow offload (out of scope) |
+| port id / vport (`hi_lsw_get_vport`) | LSW port | switch port object / port netdev |
+| queue handle per port (`hi_queue_get_qid`) | EQM qid | internal to switch core driver |
+| qid map (`port_qid_map_set`) | opp+0x42800/0x43800 | internal to switch core driver |
+| EPS channel map (`hi_pie_map_init`) | eps+0xB00/0xB80 | internal to switch core driver |
+| mirror (`hi_port_set_mirror`) | PFE mirror | D3 (devlink/TC mirror) |
+| CAR (`car_write`) | PFE CAR | D3 (devlink rate) |
+
+### 9.3 switchdev, not DSA [V/I]
+
+Evidence for the decision (same conclusion as [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md)
+section 5.3, now with module-level proof):
+
+- no tag protocol / CPU-port framing anywhere: no `dsa_*` symbols, no tag-driver-shaped code,
+  no `ndo_start_xmit` tag push in the LSW modules; the MAC netdevs are ordinary netdevs whose
+  xmit goes to PIE (`hi_net_dev_xmit`);
+- per-port netdevs exist by construction (MAC-owned), which is the switchdev model
+  (switchdev notifier on each port netdev);
+- the actual vendor integration registers the switchdev notifier blocks (`hi_swa` imports
+  `register_switchdev_notifier`/`register_switchdev_blocking_notifier` and the two
+  `switchdev_handle_port_obj_*` helpers), even though its handlers are stubs;
+- the switch is a flow/queue engine fronted by per-port MACs; DSA would force a tag/CPU-port
+  model that has no hardware counterpart (and no evidence in five modules).
+
+Design consequence: **one switch core platform device with N port netdevs**, a switchdev
+notifier on those ports, and (later) a standard `swdev` attribute set. DSA can only be revisited
+if a future GPL source or bench trace reveals a tag format - none exists today [U].
+
+### 9.4 Clean-room driver shape [I]
+
+~~~
+ethernet-switch@... {                          /* lsw_dp windows + queues/qid maps */
+    compatible = "hisilicon,luofu-lsw";        /* name TBD */
+    reg = <queue ...>, <dp ...>, <eps ...>, <eqm ...>, <fam ...>, <ips ...>;
+    reg-names = "queue", "dp", "eps", "eqm", "fam", "ips";
+    clocks = <&crg LUOFU_CLK_LSW_DP>;
+    resets = <&crg CRG_RESET(LUOFU_LSW_DP_LOGIC)>, ...;
+    status = "disabled";                       /* until D1 is proven on the bench */
+    ports {
+        #address-cells = <1>; #size-cells = <0>;
+        port@0 { reg = <0>; label = "lan0"; ethernet = <&gemac1>; };
+        ...
+    };
+};
+switch-parser@... {                            /* lsw_pfe windows */
+    compatible = "hisilicon,luofu-lsw-pfe";    /* or one node with 17 ranges */
+    reg = <ifc ...> ...; status = "disabled";
+};
+~~~
+
+- The port netdev stays owned by the GEMAC driver (patch `009`): that matches the hardware
+  split (MAC/phylink vs queue engine) and avoids two drivers fighting over one netdev.
+- The switch driver validates its resources and registers the switchdev notifier; it must
+  **not** change any register in probe until the D1 campaign has verified the write set
+  (section 10.4). Until then the node stays `"disabled"` - a probe that writes unverified LSW
+  registers is a bench hazard, not a milestone.
+- The PIE driver (patch `015`, draft) keeps rings/DMA/NAPI and the per-port queue handle;
+  switch <-> PIE coupling is a small in-kernel API (exported from PIE: channel start/num,
+  queue hook, netdev xmit), not DT phandles for every queue.
+- The upstream `switchdev` API is stable; the vendor's shape is a guide to *which objects exist*,
+  not an ABI. We implement our own `switchdev_ops` callbacks with the Linux objects as truth.
+
+### 9.5 What D1 means concretely [I]
+
+D1 is "our kernel forwards between two wired ports with no vendor module bound"
+([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.3). Given the RE, the minimal D1
+configuration is:
+
+1. PIE up on all four wired channels (patch `015` + PIE-DATAPATH plan);
+2. LSW core up with the four MAC ports enabled and **default forwarding** configured: the LSW
+   must deliver frames received on one MAC port to the host queues (destination port = host
+   queue port) and accept host-queue frames destined for each MAC port. This is the
+   queue/port default-map problem: the D1 driver programs the qid map for the MAC ports and
+   the host path, with the mapping constants measured on the bench (section 12);
+3. no learning, no VLAN filtering, no ACL/flow offload in hardware;
+4. Linux bridge in software between eth0..eth3 (or a subset), WAN as a separate netdev (policy).
+
+D1 explicitly does **not** require: rootif/CFE, the `pfe` classifier tables (IFC), NAPT, CAR,
+mirror, WoE, virtual ports, the qid-map high port classes (40..47, >47) unless the MAC/host
+ports surprise us, and the `queue`/`flow` DDR layout (it is required only if the engine's
+descriptors live there - [U], see section 5.4).
+
+---
+
+## 10. Init/order requirements and dependencies
+
+### 10.1 Vendor load order [V]
+
+`/etc/init.d/hsan_prepare` (START=09) calls `/etc/rc.d/luofu` then sets
+`hi_kcfe_pub.g_intf_bypass=1` and loads `hi_swa`. `/etc/rc.d/luofu` order (parent
+`rootfs-2.4.15/etc/rc.d/luofu`; [V] local fixture):
+
+1. `hi_kpinctrl`, gpio-generic/dwapb, RNG (`hi_kjent_rng`), cpufreq chain (`hi_efuse`,
+   `hi_kpmupwm`, pwm-regulator, `hi_clk_corrector`, `hi_cpufreq`);
+2. `hi_sysctrl`, `hi_acp` (ACP/coherency);
+3. **`hi_kpie`**, then four PIE IRQ SMP-affinity pins (`pie-ch0..3`);
+4. **`hi_lsw_pub` -> `hi_lsw_dp` -> `hi_lsw_pfe`**;
+5. `hi_kmdio`, `hi_kphy`, `hi_kmac` (MAC netdevs appear here; phylink starts);
+6. `hi_kteam`, `hi_woc_wifi_rtx`;
+7. `hi_kcfe_pub`, `hi_kcfe_lrn`, `hi_kcfe_lrn_l3`, `_l4`, `_mc`, `hi_kcfe_mc_list`,
+   `_vxlan`, `hi_kcara`, `hi_khslink`;
+8. temperature (`hi_knet_cdev`, `hi_tvsensor`), then (S09) the bypass flag + **`hi_swa`**.
+
+Hard ordering constraints visible in the code: PIE exports are imported by `hi_lsw_dp` (so PIE
+must be up before the LSW queue manager initialises), the LSW pub layer must exist before dp/pfe,
+`hi_kcfe_pub` needs `hi_kpie` (`hi_net_*`), the learning libs need `hi_kcfe_pub` + `hi_cfe_lrn`,
+`hi_kcara` needs pub+dp, and `hi_swa` needs CFE+learning+pie. [V `depends=` chains + imports]
+
+### 10.2 Our dependency DAG (patch numbers) [V files; I ordering]
+
+| driver step | depends on | why |
+| --- | --- | --- |
+| platform/DT (`001`, `002`, `003`) | - | mach descriptor, TEXT_OFFSET; the LSW nodes are already in the draft DTS, disabled |
+| CRG clocks/resets (`004`, `014`) | - | `lsw_dp_clk`/`lsw_pfe_clk` are fixed-clock nodes today (166/333 MHz); the resets are CRG word `0x30` bits 0/1/3/4; **no new driver may ioremap `0x14880000`** - consume generic resets per the shared-page contract in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 0.3 |
+| MDIO (`007`) + PHY (`008`) + GEMAC (`009`) | `004` | the four port netdevs and PHYs |
+| PIE (`015`, draft) | `004` | rings/DMA/NAPI and the per-port queue handle; `hi_pie_get_*_ch_*` equivalents |
+| LSW D1 core | `004` + `015` + `009` | qid map needs the queue manager (ours, in the LSW driver) and PIE channel map; ports need MAC netdevs; reset/clock needs CRG |
+| LSW D2 switchdev | D1 + `009` | bridge/VLAN objects attach to the port netdevs |
+| Wi-Fi port / WoE / flow offload | [X] | Wi-Fi is [X] ([TARGET-DESIGN.md](TARGET-DESIGN.md) section 8.3) and additionally needs the PCIe host (patch `013`) plus the endpoint driver; the internal LSW serves the wired MAC ports only, so `013` is **not** a dependency of LSW D1/D2; WoE has no driver; NAPT is optional |
+
+The two links that are *not* optional and often forgotten: **(a)** PIE exports are the LSW's only
+host-side registration point ([PIE-DATAPATH.md](PIE-DATAPATH.md) sections 2.1/7), so D1 cannot be
+built before the PIE driver has at least the channel-map and queue-hook API in place; **(b)** the
+vendor's probe order inside `hi_lsw_dp` shows PIE channel info is read at LSW probe time
+(`hi_pie_map_init`), so a real DT order/`-EPROBE_DEFER` rule is needed between PIE and LSW, not
+just link order.
+
+### 10.3 Reset/clock order inside the LSW probe [V code, U necessity]
+
+DP: clocks prepared/enabled before reset pulse; reset pulse = deassert/assert/deassert of the
+DT array, then `dp_logic` and `dpu_srst` reset controls are respectively asserted then
+deasserted; then the five windows are registered and the first register writes happen. PFE:
+clock get/prepare/enable, then assert/deassert of the array, then windows and sub-block init.
+Whether the resets must be asserted at all (as opposed to just deasserted once) and whether the
+extra `dpu_srst` is real cannot be answered without a bench trace of the vendor probe [U].
+
+### 10.4 The "no unverified register writes" rule for our probe [I]
+
+Mandated by this project's fire rules (parent `LESSONS.md`): the D0/D1 driver's `.probe()` must
+
+1. bind and validate DT resources (windows, sizes, reg-names, clock/reset counts);
+2. map windows with `devm_ioremap_resource()` (mapping is safe; it does not touch the block);
+3. optionally enable clocks/deassert resets **only** if a bench vetting session has signed off
+   the exact CRG writes (this is a separate gate from the LSW register writes);
+4. never issue `hi_lsw_*`-equivalent register writes until the D1 write set has been validated
+   by the attended campaign (section 12) - the first version must exit probe with a clear
+   "register programming not verified" message and leave the hardware untouched;
+5. keep the DT node `disabled` in the shipped board DTS until D1 passes, so an unproven probe
+   is never run by a user.
+
+This rule makes D0 (this document) and "probe skeleton" safe host-only work while the hardware
+campaign is still blocked ([X] no 6.18 bootable target today).
+
+---
+
+## 11. Staged plan: D0 -> D1 -> D2
+
+Estimates are engineering effort, not measurements; "host" = host-only session, "bench" =
+attended hardware session with the recovery door armed (parent `BENCH-FACTS.md`).
+[REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.3 gives the coarse estimate (D1 15-25
+host + 4-8 bench sessions; D2 +10-15 host); the staging below refines it.
+
+### D0 - RE and specification (this document) and the bench inventory
+
+| item | deliverable | gate / exit criterion |
+| --- | --- | --- |
+| module layering, register map, port/queue model | this file | reviewed by the target/RE leads |
+| reproduce the disassembly evidence | local lane `build/linux-kbuild/waves/2026-11-18-lsw/` | commands in 2.3 reproduce every table |
+| read-only bench inventory plan | section 12.2 | plan reviewed; no writes |
+| GPL asks updated if new artifacts are needed | [GPL-REQUEST.md](GPL-REQUEST.md) follow-up | items 2-4 cover hi_lsw/hi_kcfe sources |
+
+Effort: 2-4 host sessions (this lane) + 1-2 attended bench sessions for the read-only inventory
+(only possible once a 6.18 target exists; the same inventory can be taken on the *stock* vendor
+kernel where the same vendor modules run - the current bench line - because it is read-only).
+
+### D1 - minimal forwarding, one bridge, no offload
+
+Split into four gates so each has a measurable exit:
+
+| gate | work | exit criterion | bench? |
+| --- | --- | --- | --- |
+| D1a: LSW probe skeleton | platform driver, DT binding, window validation, no writes; Kconfig `LUOFU_LSW` (=n in the image until proven), YAML, DTS node disabled; compile + dt_binding_check | full compile RC=0, binding check PASS, probe not run | host |
+| D1b: clock/reset/queue-map write set | define the minimal write set: clock enable, reset deassert, qid-map table programming for host + 4 MAC ports, EQM queue table for 4+1 ports | a written, reviewed "write set" table with every write justified by RE or bench measurement; host compile | host + 1-2 bench (vendor register traces on stock kernel, read-only + vendor-side proc dumps) |
+| D1c: host queue path | PIE <-> LSW queue handle binding, TX path from port netdev to a MAC port, RX path from a MAC port to the host queue; default-forwarding only | one ping between two wired ports with our drivers bound (attended) | bench (2-3 sessions) |
+| D1d: bridge | Linux bridge over eth0..eth3, no hardware offload; WAN/UCI policy; M2 measurement ("no vendor modules bound") | L2 forwarding between LAN ports and to WAN, one variable per session; M2-equivalent recorded | bench (2-3 sessions) |
+
+Effort: 15-25 host sessions for the RE/implementation (dominated by D1b's write-set derivation)
++ 4-8 attended bench sessions. If GPL source arrives, D1 collapses to ~5-8 host sessions (port
+instead of RE) - the single biggest schedule change ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md)
+section 5.3).
+
+### D2 - switchdev offload
+
+| item | content | gate |
+| --- | --- | --- |
+| VLAN offload | map bridge VLAN objects (vid, pvid, tagged/untagged) to the LSW VLAN mechanism (8.4); requires the D2 RE item "where is the per-port VLAN/PVID table" solved | `bridge vlan` offloaded, no data-path regression |
+| FDB offload | map bridge FDB entries to the hardware L2/flow path (8.3); start with static entries, then learning+aging | `bridge fdb` offload count > 0 and traffic still correct |
+| port attrs | learning/state/flood flags via switchdev attrs; STP states | mdb/fdb/attr matrix |
+| D3 (optional, not v1) | NAPT/flow offload, CAR, mirror, WoE | separate plan |
+
+Effort: 10-15 host sessions + 3-5 attended bench sessions; must not gate the target's first
+submission ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 7).
+
+### Alternative path if the GPL source arrives ([X] today)
+
+Source for `hi_lsw_*`/`hi_kcfe_*`/`hi_kcara` converts sections 5-8 into a port of known code
+(licensing: GPL-2.0, see [GPL-REQUEST.md](GPL-REQUEST.md)), and D1 drops from 15-25 to 5-8 host
+sessions. The plan above is written so that either path lands the same clean-room interface;
+the vendor source would be used to *check* the RE, not copied into the driver (clean-room
+constraint, [DRIVER-BLACKBOX.md](DRIVER-BLACKBOX.md)).
+
+---
+
+## 12. Bench-only steps and risks
+
+### 12.1 Hard constraints
+
+No UART writes, no fastboot/TFTP/fire by this document, no `/dev/mem` pokes from userspace
+into LSW registers; every hardware step is attended with the recovery door armed, one variable
+at a time, recovery plan current (parent `BENCH-FACTS.md`, `LESSONS.md`). Nothing here changes
+those rules.
+
+### 12.2 Read-only inventory (D0/D1b, stock vendor kernel is acceptable)
+
+These are read-only and can be taken on the current bench line without touching our drivers:
+
+1. `/proc/hsan/...` dumps: the DP/PFE/queue DFX dumps listed in 7.6,
+   `/proc/hsan/cfe/intf/dump_intf`, `/proc/hsan/net/swa/*`, `/proc/hsan/cfe/*` - they name the
+   live ports, queue counts and interface mapping (strings already recovered from the modules).
+2. `/sys/class/net/*` and `dmesg`: MAC<->PHY mapping (already measured, section 6.1), netdev
+   list, phylink state.
+3. DT readback: `/proc/device-tree` (or a decompiled live DTB) of `lsw_dp`/`lsw_pfe`/`pie`
+   after U-Boot's overlay - this answers the **queue window base** question (5.4) definitively
+   without any register access.
+4. `/proc/meminfo`/reserved-memory and `dmesg` early lines for the `queue`/`flow` reserved
+   regions - cross-check of 5.4.
+5. `hi_cfm` (userspace) read commands: board/port info; read-only.
+6. vendor module parameter state: `/sys/module/hi_kcfe_pub/parameters/g_intf_bypass` (=1 in the
+   stock boot, 4.5).
+
+Each item must be captured to an absolute path under `build/uart-logs/` or
+`build/linux-kbuild/waves/<date>-lsw/` as evidence with the command line. **No register writes.**
+
+### 12.3 Register-write campaign (D1b, attended, one variable at a time)
+
+Only after a bootable 6.18 target exists (or with a dedicated safe test image):
+
+| step | read/write | question answered | rollback |
+| --- | --- | --- | --- |
+| W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes | power cycle |
+| W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete | n/a |
+| W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling | power cycle |
+| W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right | power cycle |
+| W5 | add remaining MAC ports; default-forwarding test | D1c exit | power cycle |
+| W6 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
+
+The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
+
+### 12.4 Risks
+
+| risk | severity | mitigation |
+| --- | --- | --- |
+| wrong queue/flow DDR base (`0x87b00000` vs `0x80000000`) corrupts DDR used by Linux | high | answer from live DT readback first (12.2 item 3); DT node disabled until then |
+| LSW register writes hang the CPU/console path | high | write set only after W1/W2; attended; recovery armed; one write per power cycle if needed |
+| wrong reset pulse kills the switch and needs power cycle | med | reset deassert last; test on stock first |
+| unknown EQM command-word encoding | med | do not write EQM tables until traced; D1c may route around it if the defaults are usable |
+| hardware L2 defaults (unknown unicast) misforward in D1 | med | measure from W6; possibly keep bridge promisc until D2 |
+| port-id mapping between MAC `port` and LSW ids unknown | med | read the vendor port/queue dumps (12.2) |
+| vendor userspace expectations (`hi_cfm`, `/proc/hsan`) not met | low for D1 | our userspace is standard OpenWrt; document the divergence |
+| GPL source not arriving | medium | D1 plan does not depend on it ([X] only for the fast path) |
+| no bootable 6.18 target | high (schedule) | D0/D1a are host-only; bench gates wait for the target ([TARGET-DESIGN.md](TARGET-DESIGN.md)) |
+
+---
+
+## 13. Summary table and the [U] list
+
+### 13.1 Summary (the format used in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 9)
+
+| block | evidence | missing | plan | depends on | can do offline |
+| --- | --- | --- | --- | --- | --- |
+| **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 DT windows | [U] meaning of most offsets/fields; why ids 2/4 skipped; DDR `queue`/`flow` base | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
+| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>`; 5 virtual-port DT props (absent) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
+| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values; module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) | [U] EQM command-word bit layout; queue/flow DDR layout; PIE<->LSW binding timing; virtual-port defaults consumer | D1b write set; D1c host path | PIE 015; eqm traced values | **Partly** (code); writes bench-only |
+| **MAC learning / FDB** | [V] hardware L2 window + counters (`port_move/age_drop/sport_clash/search_ok_mc/search_fail_mc`); CFE software FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_br_fdb_check_addr` patched bridge); learning libs `hi_kcfe_lrn_l2` etc. call `hi_cfe_acc_*`/`hi_adp_flow_*`; no L2 table writer symbol | [U] L2 table format/access; whether FDB offload must go through flows; aging/port-move semantics | D2 | D1 | **Partly** (D2 design only) |
+| **VLAN / ACL** | [V] tag action table (`tag_write/dump`, `hi_cfe_tag_*`), VLAN filter API + `vlan_filter` proc, subif model (with its "no second-layer untag subif" limitation); IFC classifier field list (~40 L2-L4 fields), action fields pq/pq_en/car/statis; CAR/mirror/NAPT/MCC symbols | [U] per-port VLAN/PVID table location and encoding; IFC row encoding; ACL semantics | D2 (VLAN/FDB), D3 (flow) | D1, GPL src optional | **No** (bench/RE needed) |
+| **CFE/rootif contract** | [V] rootif = named netdev in 32-slot CFE table; NETDEV_UP/DOWN/UNREGISTER driven; interface attrs/FDB/hooks/tags/netdev vif; `g_intf_bypass=1` then `hi_swa` loaded ("switch adaptor for openwrt"); `hi_swa` switchdev handlers are stubs | [U] full CFE hook semantics; why bypass mode exists beyond the 5 bypass branches seen | **not reproduced**; standard Linux switchdev contract | - | **Yes** (design) |
+| **switchdev design** | [V] no tag/CPU-port; per-port netdevs; vendor switchdev notifier registration; stubs prove no offload in this build; DSA rejected | [U] exact switchdev object mapping to tables (VLAN/FDB) | D2 | D1 | **Yes** (host) |
+
+### 13.2 Unknowns that block or shape the plan
+
+1. `port_bitmap` words' semantics and the "root bit" interpretation (6.3).
+2. LSW internal port numbering vs MAC `port` numbers and the special port classes 40..47 and >47
+   (6.2, 7.3).
+3. Whether the `queue`/`flow` windows are the DDR regions and their live base after the U-Boot
+   overlay (5.4).
+4. EQM indirect table command-word encoding (which bits select table/index/data) (7.5).
+5. Meaning of the DP probe's five virtual-port properties (absent on this board) and the
+   cumulative/default-256 computation (6.5).
+6. The exact reset sequence requirement (`dp_logic` vs `dpu_srst` mismatch; assert-vs-pulse) (5.5).
+7. The EQM queue-table entry layout (the 1000-cell write in `hi_queue_init`, table 19) (7.5).
+8. Where per-port VLAN membership/PVID is stored and its encoding (8.4).
+9. The L2 hardware table access/format, and whether D2 FDB offload must go through IFC/flows (8.3).
+10. The 96-bit queue walk vs 64-bit DT property discrepancy in `hi_queue_init` (6.4/7.2).
+11. IFC classifier row encoding and action semantics (8.2).
+12. Wi-Fi/WoE/NAPT virtual-port and offload semantics (out of scope, [X] for Wi-Fi).
+
+### 13.3 External blockers ([X])
+
+- **No bootable OpenWrt 6.18 target/image** on this bench: all hardware validation waits on
+  [TARGET-DESIGN.md](TARGET-DESIGN.md)/[TARGET-SKELETON.md](TARGET-SKELETON.md) landing.
+- **Wi-Fi port** ([TARGET-DESIGN.md](TARGET-DESIGN.md) section 8.3): not part of the wired
+  switch scope; its virtual-port/queue shapes are only referenced here.
+- **GPL source** ([GPL-REQUEST.md](GPL-REQUEST.md) items 2-4): optional fast path, not a gate for
+  the clean-room plan.
+- **Vendor userspace compatibility**: we deliberately do not provide `hi_cfm`/`/proc/hsan`; that
+  is a recorded design decision, not a missing feature ([I],
+  [DEPLOYMENT-DECISION.md](DEPLOYMENT-DECISION.md)).
+
+---
+
+## 14. Evidence map and reproduction
+
+| claim | artifact / command |
+| --- | --- |
+| module sizes, `depends=`, descriptions | `modinfo parent:rootfs-2.4.15/lib/hisilicon/ko/<mod>.ko`; `ls -la` |
+| module symbol sets (defined/undefined) | `arm-none-linux-gnueabihf-nm [-u] <mod>.ko` |
+| synthetic-address convention and bounds check | `hi_lsw_pub` `hi_lsw_reg_module@0x0`, `hi_lsw_read@0x2d4`, `hi_lsw_write@0x354`, `read_tab128@0x1fc`, `write_tab128@0x268` (disassembly) |
+| DP module-id table (`0x40..0x44`) | `hi_lsw_dp` `.rodata+0x0c` (5 x `{id,str}` pairs, end `.rodata+0x34`), strings `dp/eps/eqm/fam/ips` |
+| PFE module-id table (0,1,3,5,6,7,8,9,0xa,0xb) | `hi_lsw_pfe` `.rodata+0x48c` (10 x `{id,str}`, end `.rodata+0x4dc`), strings `ifc/l2/napt/mcc/opp/pa/pe/pfe_glb/prbs/pub` |
+| DP probe order and properties | `hi_dp_probe@0x8b0` (strings `port_bitmap`, `hwver`, `cell-size`, `dp_logic`, `dpu_srst`, vport names) |
+| 46-entry port table and qid API | `hi_lsw_dp` `.LANCHOR0` (section 28 `.data`, offset `0xd0`), `hi_queue_init@0x507c`, `hi_queue_get_qid@0x3648`, `hi_queue_get_q_num@0x36b4`, `hi_eqm_get_que_port@0x1ffc` |
+| 8-QID loop and qid-map tables | `hi_lsw_pfe` `port_qid_map_set@0x26b8`, `qid_map_set@0x25dc` (constants `0x06042800`, `0x06043800`, `0x100`) |
+| EPS channel map | `hi_lsw_dp` `hi_pie_map_init@0x56e8`, helpers `@0x5544`/`@0x5640` (base `(ch + 0x104002c0)*4` = `eps+0xB00+ch*4`, companion `+0x80`) |
+| EQM indirect engine | `hi_lsw_dp` `hi_eqm_write_tab@0x1cdc`, `hi_eqm_read_tab@0x1e18`, `hi_eqm_tab_ready@0x1f5c` (`eqm+0x48`, `+0x5c`, 1001 retries, errors `0x8fffffd3`/`0x8fffffd8`) |
+| table manager ids and shapes | `hi_lsw_pub` `hi_tab_mgr_create@0x1b58`, `g_tab_ctrl` (8192 B `.bss`), `read_tab128`; PFE `hi_pfe_ifc_init` (`hi_tab_mgr_create(0x700/0x701/0x705/0x70f)`), `hi_dp_tab_init` (`0x703`,`0x704`), `hi_pfe_napt_init` (`0x702`,`0x70d`), `hi_pfe_mcc_init` (`0x712`) |
+| IFC key/action field names | `hi_lsw_pfe` `.rodata.str1.4` dump strings (`[key]:id=%u`, `[act]:id=%u`, `,igr_bitmap=0x%x`, `,pq=%u`, ... plus the field-name list in 8.2) |
+| CFE interface/FDB/hook model | `hi_kcfe_pub` symbols `hi_cfe_add_rootif/del_rootif/add_subif/del_subif/set_subif_attr`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_cfe_add_hook`, `hi_cfe_tag_*`; dump-format strings in 9.1 |
+| learning stack | `hi_kcfe_lrn` exports/imports; `hi_kcfe_lrn_l2` imports `hi_cfe_acc_set_*`, `hi_adp_flow_*`; `hi_lsw_pfe` L2 counters |
+| switchdev stubs | `hi_swa` `@0x474/0x47c/0x484/0x48c` = `mov r0,#0; bx lr`; notifier registration in `swa_register_notifier_blocks@0x598` |
+| CFE bypass + load order | `parent:rootfs-2.4.15/etc/init.d/hsan_prepare` lines ~55-71; `parent:rootfs-2.4.15/etc/rc.d/luofu` |
+| board port mapping | `parent:rootfs-2.4.15/etc/board.d/02_network`; [ETHERNET-BRINGUP-FRAMING.md](ETHERNET-BRINGUP-FRAMING.md) section 2 (measured vendor dmesg) |
+| DT windows/clocks/resets/IRQs | [soc/luofu-r116-pinned.dts](soc/luofu-r116-pinned.dts) lines 1078-1123, 885-955, 122-127; overlay note [soc/vendor-dt-notes.md](soc/vendor-dt-notes.md) section 8 |
+| skeleton placeholders | [../target-skeleton/dts/luofu-r116.dts](../target-skeleton/dts/luofu-r116.dts) (`lsw_dp`/`lsw_pfe` disabled nodes) |
+| PIE contract (cross-ref) | [PIE-DATAPATH.md](PIE-DATAPATH.md) sections 2, 7 |
+
+Local RE artifacts (gitignored, regenerable with 2.3): parent
+`build/linux-kbuild/waves/2026-11-18-lsw/{*.nm,*.dis,annotate.py,consts.py}`.
+
+---
+
+## 15. Open questions, corrections, and what would change this document
+
+**Corrections/answers to earlier documents:**
+
+1. [PIE-DATAPATH.md](PIE-DATAPATH.md) section 7.4 asked which DT window "module 6" is:
+   **`opp` (`0x12400000`)**, with the qid tables at `+0x42800`/`+0x43800` (7.3). Also the
+   exact `qid_map_set` formulas replace the earlier "port, 0, n, qid + q_num/8 * n" sketch: the
+   code computes `8/q_num` and divides the slot index by it, which for `q_num=8` is `qid + i`.
+2. [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 5.1 lists "8 QIDs/port" as speculation
+   in the PIE doc; here it is [V] from three places (port table default `+12 = 8`, the loop
+   count 8, and `qid_map_set`'s slot arithmetic).
+3. The vendor switchdev path is **plumbing only** in this build (stub handlers, 4.7); the
+   "vendor uses switchdev, not DSA" claim in [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md)
+   section 5.1 stands, but should not be read as "vendor offloads bridge objects today".
+4. [TARGET-DESIGN.md](TARGET-DESIGN.md) section 8.1's DSA-vs-switchdev question: **switchdev**
+   (9.3), with the qualification that DSA remains theoretically possible only if a tag format
+   is ever found (none today).
+
+**Open questions** (each maps to an item in 13.2 and a bench step in 12.3): the queue/flow DDR
+base; the EQM command word; `port_bitmap` decoding; the internal port id mapping; where
+VLAN/PVID lives; L2 table access; the virtual-port defaults; the `dpu_srst` mismatch; EQM
+table-19 layout; IFC row encoding.
+
+**What would change this document:** (a) the GPL source arriving - sections 5-8 become a port
+check, and 13.2 shrinks; (b) a bootable 6.18 target - the bench campaign becomes possible and
+several [U] items will be answered in days; (c) a bench trace showing a tag protocol or a
+different CPU-port model - would reopen 9.3. Absent any of these, this document is the
+strongest evidence-graded statement the repository can make about the internal LSW.
+

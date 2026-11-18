@@ -522,6 +522,15 @@ There is **no driver source in either tree** — the lab tree has neither Kconfi
 (`HWRNG`, `EFUSE`, `LSW`) have no source in the lab tree, and no Kconfig entry in the build tree").
 [V]
 
+The evidence-graded LSW specification - module layering, the synthetic module-id register map, the
+port/queue/qid model, the switchdev design, the rootif correction and the D0-D2 plan - is
+[LSW-SPEC.md](LSW-SPEC.md) (2026-11-18, 1,375 lines). It records two findings that change this
+section's assumptions: (a) `hi_swa`'s switchdev/port-object handlers are compiled **stubs** in the
+shipped build, and the vendor sets `hi_kcfe_pub.g_intf_bypass=1` before loading it, so the vendor
+does not offload bridge/VLAN objects; (b) the rootif write is a vendor-userspace compatibility
+layer (a 32-slot name-indexed CFE table driven by NETDEV_UP/DOWN/UNREGISTER), not a hardware API,
+so our driver must not reproduce it.
+
 ### 5.1 What the repo already knows
 
 **[V] Register description (vendor DT):**
@@ -586,6 +595,11 @@ rows "Ethernet / LSW", "Platform driver set"). [V]
 | WoC/offload features (NAPT, CAR, mirror, WoE) scope for v1 | [I] | decision: out of v1; only minimal port forwarding + bridge/VLAN offload |
 
 ### 5.3 Port plan
+
+The full register model, table formats, port model, switchdev object mapping and the D0/D1/D2
+staging plan are in [LSW-SPEC.md](LSW-SPEC.md); this section keeps the summary view and the
+dependency/effort framing. The recommended driver shape is switchdev over per-port netdevs (not
+DSA: no tag/CPU-port evidence, per-port MAC netdevs exist).
 
 **Framework decision - recommendation: switchdev, not DSA.** [I] Derivation from the evidence:
 
@@ -910,8 +924,8 @@ subject to review; its [V] rows are the only ones that may be quoted without the
 | **pinctrl** | [V] DT windows `0x14900100/0x14940000`; 37 pins/24 groups/24 functions/per-pin mux data transcribed (`../lab/luofu-pinctrl/`); 8 vendor state nodes; `hi_kpinctrl.ko` 17,636 B; load-bearing (ledger 2026-11-15 01:30); `mdio1_grp`/`rgmii0_grp` in the table | [U] pinconf field semantics; probe/default pin state; MDIO state-switch question; reset (none in vendor node); binding | mainline pinctrl driver + YAML; reproduce vendor initial state; consumer states (MDIO/GEMAC); 2-3 host + 1-2 bench | CRG only indirectly (no reset cell today); consumers MDIO `007` / GEMAC `009` | **Yes** except validation |
 | **thermal** | [V] sensor node `0x14900500` (hwver 3), conversion formula verified; trips 115000 passive / 125000 critical (hysteresis 3000), poll 1000 ms, sustainable-power 2000; `hi_tvsensor` 60 syms (v1/v4); net-cooling device `hsan,net-cdev` (CAR on eth0-4) | [U] threshold/int/enable/trim registers; trip policy vs our cooling; window size; IRQ use | mainline thermal sensor + of-thermal zone; v1 no cooling map; 1-2 host + 1 bench | none hard; optional cooling device -> LSW CAR (block D) | **Yes** except validation |
 | **PCIe host** | [V] two DWC RCs, window table dbi/misc/cfg/mem/io CAs, `iatu_rc` 3 viewports/RC, 4 CRG resets + gate clocks, radm/linkdown IRQs; measured DBI/cfg values incl. both endpoints `59e7:0005`; misc write-only/never read, aligned-dword rule; vendor `hi_pcie` uses `devm_pci_alloc_host_bridge`/`pci_scan_root_bus_bridge`; endpoint power GPIOs from overlay; endpoint driver `hi5622v100_plat`+wifi [X] | [U] enumeration/write-path validation, ACP/coherency, L1SS pinmux, endpoint binding shape; Wi-Fi [X]. **Draft host driver written 2026-11-18 as patch `013`** (resets/RC mode/`ranges`/iATU/link handling/`pci_host_probe`, hard rules encoded; endpoint nodes disabled); **reset polarity fixed by patch `014`** | DWC host driver (`pcie-luofu`), `ranges` from `iatu_rc`, binding; enumeration milestone; 6-10 host + 2-3 bench | CRG `004`+`014`; restart contract; ACP question; no FMC/MDIO dependency | **Yes** for code/compile; enumeration bench-only |
-| **LSW switch** | [V] DT windows dp(7)+pfe(10)+woe(5 IRQs), `port_bitmap`, resets/clocks; modules `hi_lsw_pub/dp/pfe`, `hi_swa` (switchdev events + rootif), `hi_kcfe_*`, `hi_khslink`; load order; board map WAN=eth3, LAN=eth0-2; **no source in either tree**, BSP is blobs | [U] every register/table semantic; port model; queue window base; qid/port map; rootif/CFE contract; switchdev object details | **switchdev** (recommended) two-phase: D1 minimal forwarding, D2 offload; 15-25 host + 4-8 bench (D2 +10-15) | PIE/GEMAC block E; CRG `004`; MDIO/PHY/GEMAC `007`-`009`; optional Wi-Fi [X] | **Yes** for RE/design/code; **no** for any hardware validation |
-| **GEMAC data path (PIE)** | [V] patch `009` refuses probe (no ring code); MAC phylink/config facts + PORT_MODE `0x010c0008`; **data path is PIE** (`hi_kpie` owns netdev/NAPI/DMA; `hi_mac_net_xmit` tail-calls `hi_net_dev_xmit`; 4 channels/IRQs, pie DT rings, `dma-coherent`, ACP words); 403-symbol module is the RE source | [U] PIE descriptor/ring register model; qid/port egress mapping; DMA coherency/ACP; ring-size semantics; netdev ownership design | write the PIE spec from `hi_kpie` RE, then ring+NAPI driver, then GEMAC netdev wiring + minimal LSW; 8-15 host + 3-5 bench | patch `009` + `007` + `008` + `004`; LSW D1 for egress; ACP; restart | **Yes** for RE/code; traffic bench-only |
+| **LSW switch** | [V] DT windows dp(7)+pfe(10)+woe(5 IRQs), `port_bitmap`, resets/clocks; modules `hi_lsw_pub/dp/pfe`, `hi_swa`, `hi_kcfe_*`, `hi_khslink`; load order; board map WAN=eth3, LAN=eth0-2; **no source in either tree**, BSP is blobs; **spec written 2026-11-18 as [LSW-SPEC.md](LSW-SPEC.md)** (synthetic module-id register map, port/queue/qid model, table formats, switchdev stubs + rootif correction) | [U] EQM command word, `port_bitmap` semantics, queue/flow DDR base, L2/VLAN table formats, ACL bits; D1/D2 implementation | **switchdev** over per-port netdevs (not DSA) two-phase: D1 minimal forwarding, D2 offload; 15-25 host + 4-8 bench (D2 +10-15) | PIE/GEMAC block E; CRG `004`; MDIO/PHY/GEMAC `007`-`009`; optional Wi-Fi [X] | **Yes** for RE/design/code; **no** for any hardware validation |
+| **GEMAC data path (PIE)** | [V] patch `009` refuses probe (no ring code); MAC phylink/config facts + PORT_MODE `0x010c0008`; **data path is PIE** (`hi_kpie` owns netdev/NAPI/DMA; `hi_mac_net_xmit` tail-calls `hi_net_dev_xmit`; 4 channels/IRQs, pie DT rings, `dma-coherent`, ACP words); 403-symbol module is the RE source; **spec committed 2026-11-18 as [PIE-DATAPATH.md](PIE-DATAPATH.md) and a refusing draft driver as patch `015`** (resources + ring scaffolding, no MMIO/clock/reset/IRQ/NAPI in probe) | [U] PIE descriptor/ring register model; qid/port egress mapping; DMA coherency/ACP; ring-size semantics; netdev ownership design; attended P3 inventory | spec written; next is P3 read-only inventory, then ring+NAPI bring-up, then GEMAC netdev wiring + minimal LSW; 8-15 host + 3-5 bench | patch `009` + `015` + `007` + `008` + `004`; LSW D1 for egress; ACP; restart | **Yes** for RE/code; traffic bench-only |
 
 **Bottom line:** after the landed `001`-`009`, the five blocks are roughly **32-55 focused host
 sessions + 11-19 attended bench sessions** (thermal+pinctrl ~4-5 host, PCIe ~6-10, PIE/GEMAC ~8-15,
