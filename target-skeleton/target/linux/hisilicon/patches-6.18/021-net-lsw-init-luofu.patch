@@ -1,0 +1,1484 @@
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -182,16 +182,17 @@
+ 	  If you are unsure, say N.
+ 
+ config LUOFU_SWITCH
+-	tristate "HiSilicon Luofu internal LSW switch (draft, probe refuses)"
++	tristate "HiSilicon Luofu internal LSW switch (draft, read-only probe)"
+ 	depends on OF
+ 	help
+ 	  Platform driver for the internal Ethernet switch of the Hi5671Y
+ 	  "luofu" SoC, the switch core between the GEMAC ports and the PHY side
+ 	  of the wired data path.  This is a draft port: it validates the
+-	  register windows, the clocks, the resets and the devicetree switch port
+-	  model, then refuses to program the switch until the register, queue and
+-	  port-id model has been verified against the running hardware.  The
+-	  board devicetree keeps the node disabled.  Say N unless you are
++	  register windows, the clocks, the resets, the devicetree switch port
++	  model and the measured register/qid-map baseline, then refuses to
++	  program the switch until the register, queue and port-id model has
++	  been verified on the running hardware.  It never writes a register.
++	  The board devicetree keeps the node disabled.  Say N unless you are
+ 	  working on that port.
+ 
+ endif # NET_VENDOR_HISILICON
+--- /dev/null
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -0,0 +1,214 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * HiSilicon Hi5671Y "luofu" internal LAN switch - measured register map.
++ *
++ * Every offset and value in this file is either recovered from the vendor
++ * hi_lsw_pub/hi_lsw_dp/hi_lsw_pfe modules (call-site register addresses; the
++ * block reverse engineering is documented in LSW-SPEC.md) or measured on the
++ * stock vendor boot with the 2026-11-18 read-only bench inventory (600/600
++ * reads; the switch group was 476 of them, all stable in two passes).  The
++ * evidence grade is marked per item:
++ *
++ *   [V] measured on the running stock vendor system with the read-only
++ *       inventory: the vendor driver's post-boot state on this board
++ *       generation (hwver 0x250).  A value is only [V] for that one boot;
++ *       it is a baseline to validate against, not a promise about writes.
++ *   [I] inferred from the vendor disassembly: the code shape is [V], the
++ *       field/register meaning is an interpretation and has never been
++ *       confirmed by a write experiment.
++ *   [U] unknown: listed only so the model's gap is stated.  Nothing [U]
++ *       may be programmed from this file.
++ *
++ * The driver built from this header is READ-ONLY.  It maps the MMIO windows
++ * and, only after the block has been checked to be clocked and out of reset,
++ * reads the baseline registers and the two qid maps and validates them.
++ * It never writes a register, never enables a clock, never drives a reset and
++ * never registers a netdev; probe() always fails closed.
++ *
++ * The qid-map write recipes recovered from the vendor code are documented
++ * here (offsets, slot arithmetic, the 0x100 enable flag) because they are the
++ * D1b W2 write set, but no code in the driver issues them until the attended
++ * W4 experiment signs the model off (LSW-SPEC.md section 12.3).  This patch
++ * deliberately does not model or program the EQM indirect command word, the
++ * queue-table entry layout, the classifier/L2/VLAN table formats or the
++ * queue/flow DDR layout: all of those are [U] and must not be written as
++ * fact.
++ *
++ * Safety rule for the read set: the driver only reads offsets that the
++ * 2026-11-18 inventory read on the running block, plus the two qid maps it
++ * read completely.  An access outside that set is not "probably fine", it is
++ * unreviewed, and this driver does not make it.
++ */
++
++#ifndef __LUOFU_SWITCH_REGS_H
++#define __LUOFU_SWITCH_REGS_H
++
++#include <linux/bits.h>
++#include <linux/sizes.h>
++#include <linux/types.h>
++
++/*
++ * The register/DDR windows of one switch, in the devicetree address order
++ * used by the binding.  The first two are DDR regions the engine consumes,
++ * not register pages: the driver validates their base/size from the
++ * devicetree and never ioremaps them.  The other fifteen are 512 KiB MMIO
++ * pages, all [V] from the vendor devicetree and confirmed on the live
++ * post-overlay node ("lsw_dp" five + "lsw_pfe" ten windows).
++ */
++enum luofu_switch_window {
++	LUOFU_SWITCH_WIN_QUEUE,		/* DDR: engine queue memory */
++	LUOFU_SWITCH_WIN_FLOW,		/* DDR: engine flow memory */
++	LUOFU_SWITCH_WIN_DP,		/* lsw_dp register page */
++	LUOFU_SWITCH_WIN_IPS,
++	LUOFU_SWITCH_WIN_FAM,
++	LUOFU_SWITCH_WIN_PE,		/* lsw_pfe windows below */
++	LUOFU_SWITCH_WIN_EQM,
++	LUOFU_SWITCH_WIN_EPS,
++	LUOFU_SWITCH_WIN_PRBS,
++	LUOFU_SWITCH_WIN_PFE_GLB,
++	LUOFU_SWITCH_WIN_PA,
++	LUOFU_SWITCH_WIN_IFC,
++	LUOFU_SWITCH_WIN_L2,
++	LUOFU_SWITCH_WIN_NAPT,
++	LUOFU_SWITCH_WIN_MCC,
++	LUOFU_SWITCH_WIN_OPP,
++	LUOFU_SWITCH_WIN_PUB,
++	LUOFU_SWITCH_WIN_NUM,
++};
++
++#define LUOFU_SWITCH_NUM_DDR_WINDOWS	2
++#define LUOFU_SWITCH_NUM_MMIO_WINDOWS	\
++	(LUOFU_SWITCH_WIN_NUM - LUOFU_SWITCH_NUM_DDR_WINDOWS)
++
++/* Every MMIO window of the block is 512 KiB. [V] */
++#define LUOFU_SWITCH_WINDOW_SIZE	SZ_512K
++
++/*
++ * The two DDR windows.  The vendor base devicetree says 0x87b00000/4 MiB and
++ * 0x87f00000/1 MiB, but the board U-Boot overlay rebases them to the bottom
++ * of DDR; the live post-overlay node was read back byte-for-byte on
++ * 2026-11-18 and is [V]:
++ *
++ *   queue  0x80000000  4 MiB
++ *   flow   0x80400000  1 MiB
++ *
++ * The regions sit below the kernel's memory node (0x80500000), so Linux never
++ * maps them as RAM.  Their *layout* inside the regions is [U]; nothing in
++ * this driver touches them.
++ */
++/*
++ * CRG gate word and the two switch gate bits [V] (MISC-SOC-BLOCKS.md 5.2,
++ * measured live value 0x02f8300b on the stock boot): bit 0 = lsw_dp_clk0,
++ * bit 1 = lsw_pfe_clk0, 1 = enabled.  The clock consumer API in 6.18 has no
++ * "is this gate enabled" query (clk_is_enabled() was removed), so the driver
++ * reads this word through the CRG syscon regmap - a read-only use of the
++ * shared page - before its first register access.  It never writes it.
++ */
++#define LUOFU_SWITCH_CRG_GATE_WORD	0x20
++#define LUOFU_SWITCH_CRG_DP_GATE	BIT(0)
++#define LUOFU_SWITCH_CRG_PFE_GATE	BIT(1)
++
++#define LUOFU_SWITCH_QUEUE_BASE		((phys_addr_t)0x80000000)
++#define LUOFU_SWITCH_QUEUE_SIZE		SZ_4M
++#define LUOFU_SWITCH_FLOW_BASE		((phys_addr_t)0x80400000)
++#define LUOFU_SWITCH_FLOW_SIZE		SZ_1M
++
++/*
++ * dp window: the probe-time configuration words.  The vendor hi_dp_probe
++ * writes these after the reset pulse [V code shape, [I] field meaning]:
++ *
++ *   dp+0x1c  = (u16 probe state | 0x10000)
++ *   dp+0x64  = 1, then the "cell-size" selector 0..3
++ *   dp+0x68  = 0 (memory number)
++ *
++ * The measured post-boot baseline is [V]:
++ *   dp+0x1c = 0x00018000, dp+0x64 = 1, dp+0x68 = 0
++ */
++#define LUOFU_SWITCH_DP_PROBE_CFG	0x1c	/* [V] 0x00018000 */
++#define LUOFU_SWITCH_DP_CELL_SELECT	0x64	/* [V] 1 */
++#define LUOFU_SWITCH_DP_MEM_NUMBER	0x68	/* [V] 0 */
++
++/*
++ * eps window: queue/DFX state and the PIE channel map.  hi_pie_map_init
++ * writes the per-channel map words at eps+0xB00 and a companion word 0x80
++ * above them, for the PIE channel range; the measured live words are [V] raw
++ * values with [U] field meaning (LSW-SPEC.md section 7.4).
++ */
++#define LUOFU_SWITCH_EPS_QUEUE_DFX	0x1008	/* [V] 0 */
++#define LUOFU_SWITCH_EPS_CH_MAP(ch)	(0xb00 + (ch) * 4)	/* [V] */
++#define LUOFU_SWITCH_EPS_CH_COMPANION(ch)	(0xb80 + (ch) * 4)	/* [V] */
++
++/*
++ * eqm window: egress queue manager.  hi_queue_init reads +0xa4/+0x18 and
++ * writes +0x18, +0x38 and +0x40 (bit31 = enable), then uses the indirect
++ * table interface at +0x48 (command/status) and +0x5c (write data) [V code
++ * shape].  The indirect command-word bit layout is [U] and deliberately not
++ * modelled.  Measured baseline [V]:
++ *
++ *   eqm+0x00 = 0x00000001   eqm+0x18 = 0x80001cc0
++ *   eqm+0x38 = 0x000007f0   eqm+0x40 = 0x80000000
++ *   eqm+0x48 = 0x41100012   (bit31 busy = 0, bit5 error = 0: idle)
++ *   eqm+0xa4 = 0x00001fc0
++ */
++#define LUOFU_SWITCH_EQM_TAB_CMD	0x00	/* [V] 1 */
++#define LUOFU_SWITCH_EQM_CELL_CFG	0x18	/* [V] 0x80001cc0 */
++#define LUOFU_SWITCH_EQM_CELL_CFG1	0x38	/* [V] 0x000007f0 */
++#define LUOFU_SWITCH_EQM_ENABLE		0x40	/* [V] 0x80000000 */
++#define LUOFU_SWITCH_EQM_IND_CMD	0x48	/* [V] 0x41100012 */
++#define LUOFU_SWITCH_EQM_IND_DATA	0x5c	/* [V] 0x00000bb8 */
++#define LUOFU_SWITCH_EQM_TAB_CFG	0xa4	/* [V] 0x00001fc0 */
++
++/* eqm indirect command/status idle bits. [V] */
++#define LUOFU_SWITCH_EQM_IND_BUSY	BIT(31)
++#define LUOFU_SWITCH_EQM_IND_ERROR	BIT(5)
++
++/* fam window: queue-count/cell comparison in the probe. [V] 0x00002000 */
++#define LUOFU_SWITCH_FAM_QUEUE_CFG	0x504
++
++/*
++ * ips window: the probe init writes +0x10 |= 0x10000 and +0x08 = 42
++ * [V code shape]; measured baseline [V]:
++ *
++ *   ips+0x00 = 0x00000000   ips+0x08 = 0x0000002a
++ *   ips+0x10 = 0x00790011   (bit16 set)
++ */
++#define LUOFU_SWITCH_IPS_PROBE_CFG0	0x00	/* [V] 0 */
++#define LUOFU_SWITCH_IPS_PROBE_CFG1	0x08	/* [V] 0x2a = 42 */
++#define LUOFU_SWITCH_IPS_PROBE_CFG2	0x10	/* [V] 0x00790011 */
++#define LUOFU_SWITCH_IPS_INIT_BIT	BIT(16)	/* [V] set */
++
++/*
++ * opp window: the two qid maps.  qid_map_set(a port, slot) writes
++ * (0x100 | qid) with these two index shapes [V code shape]:
++ *
++ *   port 0..15:  table A at opp+0x42800, word index port*8 + slot
++ *   port 40..47: table B at opp+0x43800, byte offset
++ *                ((port - 40)*8 + slot) * 16, and the *same* word is
++ *                written to the four consecutive u32 words of the 16-byte
++ *                entry (a 128-bit table row)
++ *   port >47:    a third, different shape (word index slot/2 + port*4 - 64
++ *                of table A); its write shape is recovered only partially
++ *                and is [U], so ports above 47 are not modelled here
++ *   port 16..39: no entry; the vendor function prints "invalid" and returns
++ *
++ * The measured table contents (both fully read, identical in two passes)
++ * are [V]: table A has ports 4..12 populated with qids 1..72, table B has
++ * ports 40..43 populated with qids 73..104, every non-zero word carries the
++ * 0x100 enable flag, and all other rows are zero.  That is exactly the
++ * model "one contiguous qid space from 1, 8 qids per port, allocated to the
++ * populated port rows" - which the driver's read-only check re-derives and
++ * compares (D1b W2: validate the write model without writing).
++ */
++#define LUOFU_SWITCH_OPP_QID_TABLE_A	0x42800
++#define LUOFU_SWITCH_OPP_QID_TABLE_B	0x43800
++
++#define LUOFU_SWITCH_QID_SLOTS		8
++#define LUOFU_SWITCH_QID_TABLE_A_PORTS	16
++#define LUOFU_SWITCH_QID_TABLE_B_PORTS	8
++#define LUOFU_SWITCH_QID_TABLE_B_FIRST	40
++#define LUOFU_SWITCH_QID_ENABLE		BIT(8)	/* 0x100 flag */
++#define LUOFU_SWITCH_QID_MASK		GENMASK(7, 0)
++#define LUOFU_SWITCH_QID_FIRST		1
++#define LUOFU_SWITCH_QID_LAST		104
++
++#endif /* __LUOFU_SWITCH_REGS_H */
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -1,95 +1,95 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * HiSilicon Hi5671Y "luofu" internal LAN switch - D1a resource/binding draft.
++ * HiSilicon Hi5671Y "luofu" internal LAN switch - D1b read-only baseline probe.
+  *
+- * STATUS: HOST-ONLY PROBE SKELETON.  NO REGISTER IS READ OR WRITTEN, NO CLOCK
+- * IS ENABLED, NO RESET IS DRIVEN, NO INTERRUPT IS REQUESTED AND NO NETWORK
+- * PORT IS REGISTERED.  probe() validates the documented resources and the
+- * switch port model, then fails closed with -EOPNOTSUPP.
++ * STATUS: HOST-ONLY, READ-ONLY.  The driver maps the switch windows and, only
++ * after checking the CRG gate word (read-only, through the CRG syscon) and the
++ * reset-line states that the block is in the measured powered state, reads the
++ * measured baseline registers and the
++ * two qid maps and validates them against the 2026-11-18 read-only bench
++ * inventory.  It NEVER writes a register, never enables a clock, never drives
++ * a reset, never registers a netdev and never installs a switchdev notifier.
++ * probe() always fails closed with -EOPNOTSUPP; the board devicetree keeps the
++ * node disabled, so a normal boot never reaches this point.
+  *
+- * Why probe must not program the switch yet
+- * -----------------------------------------
+- * The switch (the vendor's hi_lsw_pub/hi_lsw_dp/hi_lsw_pfe module family) has
+- * no source in any tree and no datasheet. Its register map, queue maps and
+- * classifier table formats were recovered offline from the vendor modules,
+- * but none of that model has been measured on this board: several items are
+- * explicitly unknown (the devicetree port_bitmap decoding, the mapping from
+- * the MAC port numbers to the switch's internal port ids, the EQM indirect
+- * command word, the high port classes of the qid maps, the VLAN/L2 table
+- * formats). An access to an unknown part of this block can cut the
+- * CPU/console path, and the board has no validated in-kernel restart path, so
+- * a probe that programmed the switch from inferred semantics would trade the
+- * only working configuration for no evidence. The D1a shape implemented here
+- * is therefore: bind and validate, map the windows without touching the
+- * block, and refuse.
++ * Why the block must stay read-only in this patch
++ * ----------------------------------------------
++ * The switch has no source and no datasheet.  Its register map, port/queue
++ * model and table formats were recovered offline from the vendor modules, and
++ * the first attended read-only inventory (2026-11-18) measured the vendor
++ * driver's post-boot state and both qid maps.  That is the D1b "W1" baseline.
++ * What is still missing is the part that matters before any write: the meaning
++ * of most fields, the EQM indirect command word, the queue-table entry layout,
++ * the classifier/L2/VLAN table formats and the layout of the queue/flow DDR
++ * regions are all unknown.  A write built from inferred semantics could cut
++ * the CPU/console path on a board with no validated in-kernel restart path, so
++ * the D1b write set has to be reviewed and then validated by the attended
++ * W3-W6 experiments first (LSW-SPEC.md section 12.3).  This patch is the
++ * read-only half of that work: it turns the measured baseline into a checkable
++ * model and it fails closed on anything that does not match it.
+  *
+- * What the switch is
+- * ------------------
+- * The wired path is GEMAC -> internal switch -> PHY -> RJ45; the SoC owns the
+- * queue/egress decision and the classification/forwarding tables, while the
+- * host side of the data path is the separate PIE packet engine. There is no
+- * DSA-style CPU-port tag anywhere in the recovered model and every wired port
+- * already has its own netdev (created by the GEMAC driver), so the switch is
+- * modelled as a switchdev switch core with per-port netdevs, not as a DSA
+- * switch. The vendor's own switchdev handlers are compiled stubs in the
+- * shipped build, so the offload layer is ours to write, not to copy.
+- *
+- * What this draft validates
+- * -------------------------
+- * - 15 MMIO windows of 512 KiB each: the five queue-manager windows
+- *   ("dp", "ips", "fam", "eqm", "eps") and the ten
+- *   classification/forwarding windows ("prbs", "pfe_glb", "pa", "ifc", "l2",
+- *   "napt", "mcc", "opp", "pub", "pe"). The vendor devicetree describes the
+- *   same block as two nodes (a queue-manager node and a parser node); they
+- *   are one switch, and this driver owns both window sets so the binding is
+- *   complete before any part of the block is ever programmed.
+- * - two CRG gate clocks (lsw_dp_clk, lsw_pfe_clk) and the four CRG reset
+- *   lines of the block (dp_logic, dp_srst, pfe_logic, pfe_srst). They are
+- *   acquired and named, not acted on: enabling the gates or pulsing the
+- *   resets is a bring-up operation, not a probe-time fact.
+- * - the switch port model: one child per port under "ethernet-ports", each
+- *   carrying a port index (reg) and an "ethernet" phandle to the node that
+- *   provides that port's netdev. The index is a devicetree ordering index,
+- *   not the recovered hardware port id: the mapping between the MAC port
+- *   numbers and the switch's internal port ids is one of the unknowns above.
+- * - the SoC variant through the OF match data (v250; the vendor devicetree
+- *   carries hwver = <0x250> on both switch nodes and the recovered probes
+- *   branch on that generation).
++ * What the probe validates
++ * ------------------------
++ * - the 17 devicetree switch windows: 15 MMIO pages of 512 KiB that are
++ *   validated and mapped (mapping alone does not touch the block) and the two
++ *   DDR regions the engine consumes, whose measured live base/size after the
++ *   board loader's devicetree fixup are 0x80000000/4 MiB (queue) and
++ *   0x80400000/1 MiB (flow).  The DDR regions are validated and then left
++ *   alone: they are not register pages and this driver never ioremaps them.
++ * - the SoC variant: match data carries the vendor devicetree's hwver 0x250
++ *   ("v250") and the measured DDR bases/sizes; an unknown generation fails
++ *   closed.  The vendor hwver is a devicetree property, not a register: no
++ *   hardware ID register was found in the read-only inventory, so this driver
++ *   does not invent one.
++ * - the two CRG gate clocks and four CRG reset lines: acquired by name, never
++ *   enabled or driven.  Before the first register read the probe checks that
++ *   both gate bits read back enabled (gate word 0x20 bits 0/1, read-only
++ *   through the CRG syscon: the 6.18 clock consumer API has no "is enabled"
++ *   query) and that all four reset lines read back deasserted.  The CRG reset
++ *   class is active-low (patch 014), so a released line reads back as status 0;
++ *   if the state is not the measured one the probe refuses WITHOUT touching the
++ *   block.  This is the checked form of the D1b ordering rule "clock gates
++ *   first, then deassert the resets" - the write sequence itself stays a
++ *   reviewed bench step.
++ * - the switch port model: the "ethernet-ports" children carry an ordering
++ *   index and an "ethernet" phandle, and the probe records the owning platform
++ *   device of each port when that device is enabled.  The per-port netdev
++ *   belongs to that device (the GEMAC driver), not to the switch driver; a
++ *   switchdev notifier cannot be registered until a real port netdev exists,
++ *   so no notifier is installed.  This is the switchdev-over-per-port-netdevs
++ *   model, not DSA.
++ * - the CRG "port_bitmap" devicetree cells: the vendor model is <0xf01 0x1ff0>
++ *   as two cells and the live node was measured unchanged.  Its semantics
++ *   (which bit means which port/queue) are still unknown, so the driver only
++ *   validates that the board declares the measured value and does not use it
++ *   to enable anything.
++ * - the measured register baseline: 30 stable words covering the dp/eps/eqm/
++ *   fam/ips probe-time configuration and the PIE channel map.  The measured
++ *   values and their evidence grades are in luofu-switch-regs.h.
++ * - the two qid maps: the probe read all 128 table-A words and 256 table-B
++ *   words on the stock boot.  The decode says "one contiguous qid space from
++ *   1, 8 qids per port, allocated to the populated port rows".  The driver
++ *   re-derives that model and compares it word for word with the hardware, so
++ *   the D1b W2 write model is validated without writing anything.
+  *
+  * What it deliberately does not do
+  * --------------------------------
+- * - no register access at all: there is no readl()/writel() in this file,
+- *   no table access, no doorbell;
+- * - no clock enable and no reset assert/deassert;
+- * - no netdev registration and no switchdev notifier: the per-port netdevs
+- *   are owned by the GEMAC driver and are disabled today, so there is no
+- *   port to attach a notifier to. A notifier that ignored every object would
+- *   reproduce exactly the vendor's stub behaviour and freeze an empty ABI;
+- * - no queue/qid-map/EQM programming and no classifier table writes: those
+- *   need the attended register inventory and a reviewed write set first;
+- * - no modelling of the vendor "queue"/"flow" DDR windows: they are memory
+- *   the engine consumes rather than MMIO, and which base is live after the
+- *   U-Boot overlay has not been measured;
+- * - no WoE node: that block has no driver and no software evidence.
+- *
+- * Next steps
+- * ----------
+- * D1a is this resource/binding gate. D1b needs an attended, read-only
+- * inventory of the switch windows on the stock vendor kernel and then a
+- * reviewed write set (clock/reset, qid maps for the host and the four MAC
+- * ports, EQM queue entries). D1c binds the PIE host queues and attempts the
+- * first forwarding; D1d adds the Linux bridge. Do not enable the devicetree
+- * node before those gates pass.
++ * - no register write of any kind: there is no writel() in this file.  The
++ *   qid-table write recipes are documented in luofu-switch-regs.h because they
++ *   are the reviewed write set candidate; they are not executed.
++ * - no clock enable and no reset assert/deassert: the probe only checks the
++ *   state.  The first own-kernel write (W3) needs an attended session.
++ * - no EQM, classifier, L2, VLAN or DDR programming: those formats are
++ *   unknown; the queue/flow regions are only validated from the devicetree.
++ * - no netdev and no switchdev notifier: the GEMAC data path does not exist
++ *   yet (patch 009 is a resource/binding half and registers no netdev), and a
++ *   notifier that ignored every object would reproduce exactly the vendor's
++ *   stub behaviour that LSW-SPEC.md section 4.7 criticises.
+  *
+- * Recorded resource facts this file relies on:
+- * - the five queue-manager windows above are 0x80000 bytes each, as are all
+- *   ten parser/forwarding windows (vendor devicetree; recovered window
+- *   registration tables agree);
+- * - the two clocks are gate clocks of the CRG, and the four resets are CRG
+- *   reset lines in the 0x30 reset word;
+- * - the switch requests no interrupt of its own: the vendor modules contain
+- *   no request_irq()/devm_request_irq() at all. The WoE block is the only
+- *   interrupt consumer in that family and has no driver.
++ * The next hardware steps are listed in LSW-SPEC.md section 12.3: W2 (this
++ * model plus the reviewed write set), W3 (clock/reset only), W4 (one qid-map
++ * write for one host queue and one MAC port), W5 (remaining ports, forwarding)
++ * and W6 (learning-off/forward-all behaviour).
+  */
+ 
+ #include <linux/bitops.h>
+@@ -98,97 +98,148 @@
+ #include <linux/err.h>
+ #include <linux/errno.h>
+ #include <linux/io.h>
++#include <linux/mfd/syscon.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_platform.h>
+ #include <linux/platform_device.h>
++#include <linux/regmap.h>
+ #include <linux/reset.h>
+ #include <linux/sizes.h>
+ 
+-/* The two window groups of the switch. */
+-#define LUOFU_LSW_DP_WINDOWS		5
+-#define LUOFU_LSW_PFE_WINDOWS		10
+-#define LUOFU_LSW_NUM_WINDOWS		\
+-	(LUOFU_LSW_DP_WINDOWS + LUOFU_LSW_PFE_WINDOWS)
++#include "luofu-switch-regs.h"
+ 
+-/* Every register window of the block is 512 KiB. */
+-#define LUOFU_LSW_WINDOW_SIZE		SZ_512K
++#define LUOFU_SWITCH_NUM_CLOCKS		2
++#define LUOFU_SWITCH_NUM_RESETS		4
+ 
+ /*
+- * Two CRG gate clocks and four CRG reset lines are described by the vendor
+- * devicetree for the two switch sub-blocks.
++ * Upper bound for the devicetree port count.  The recovered queue-manager port
++ * table has 46 entries, so a port index that does not fit it could not have a
++ * queue-manager entry in the recovered model.  This is a sanity bound on the
++ * software model, not a claim about the hardware port namespace.
+  */
+-#define LUOFU_LSW_NUM_CLOCKS		2
+-#define LUOFU_LSW_NUM_RESETS		4
++#define LUOFU_SWITCH_MAX_PORTS		46
+ 
+-/*
+- * Upper bound for the devicetree port count. The recovered queue-manager
+- * port table has 46 entries, so a port index that does not fit it could not
+- * have a queue-manager entry in the recovered model. This is a sanity bound
+- * on the software model, not a claim about the hardware port namespace.
++/**
++ * struct luofu_switch_baseline_entry - one measured baseline register word
++ * @name: printable field name for the mismatch message
++ * @window: register window index (luofu_switch_window)
++ * @offset: register offset inside the window
++ * @mask: bits compared (0xffffffff for an exact match)
++ * @value: measured value after masking
++ *
++ * The exact-match entries are a conformance check against the single measured
++ * boot, not a semantic claim: the values are the vendor driver's post-boot
++ * state (see luofu-switch-regs.h) and a mismatch means this model cannot be
++ * replayed from the evidence base, so the probe refuses.
+  */
+-#define LUOFU_LSW_MAX_PORTS		46
++struct luofu_switch_baseline_entry {
++	const char *name;
++	enum luofu_switch_window window;
++	u32 offset;
++	u32 mask;
++	u32 value;
++};
+ 
+ /**
+- * struct luofu_lsw_variant - match data of one supported SoC generation
+- * @hwver: register generation word the vendor devicetree carries
++ * struct luofu_switch_variant - match data of one supported SoC generation
+  * @name: printable variant name
++ * @hwver: devicetree hwver the vendor tree carries on the switch nodes
++ * @queue_base: measured live DDR queue base after the loader fixup
++ * @queue_size: measured live DDR queue size
++ * @flow_base: measured live DDR flow base after the loader fixup
++ * @flow_size: measured live DDR flow size
++ * @port_bitmap: measured devicetree port bitmap cells, vendor cell order
++ * @qid_first: first qid of the derived allocation model
++ * @qid_last: last qid of the derived allocation model
++ * @baseline: measured baseline words, see luofu-switch-regs.h
++ * @num_baseline: number of baseline words
++ * @qid_ports: populated qid-map port ids in allocation order
++ * @num_qid_ports: number of populated qid-map ports
+  */
+-struct luofu_lsw_variant {
+-	u32 hwver;
++struct luofu_switch_variant {
+ 	const char *name;
++	u32 hwver;
++	phys_addr_t queue_base;
++	resource_size_t queue_size;
++	phys_addr_t flow_base;
++	resource_size_t flow_size;
++	u32 port_bitmap[2];
++	u16 qid_first;
++	u16 qid_last;
++	const struct luofu_switch_baseline_entry *baseline;
++	unsigned int num_baseline;
++	const u8 *qid_ports;
++	unsigned int num_qid_ports;
+ };
+ 
+ /**
+- * struct luofu_lsw_port - one switch port from the devicetree port model
++ * struct luofu_switch_port - one switch port from the devicetree port model
+  * @index: devicetree port index (reg), ordering only
+  * @ethernet: node that provides the netdev for this port
++ * @pdev: platform device owning that node; NULL while the port device is
++ *        disabled (the GEMAC data path does not exist yet)
+  */
+-struct luofu_lsw_port {
++struct luofu_switch_port {
+ 	u32 index;
+ 	struct device_node *ethernet;
++	struct platform_device *pdev;
+ };
+ 
+ /**
+- * struct luofu_lsw - driver state
++ * struct luofu_switch - driver state
+  * @dev: device
+  * @variant: matched SoC generation
+- * @window: mapped register windows, indexed like luofu_lsw_window_names[]
+- * @clk: CRG gate clocks, indexed like luofu_lsw_clock_names[]
+- * @reset: CRG reset lines, indexed like luofu_lsw_reset_names[]
++ * @window: mapped MMIO windows; the two DDR window slots stay NULL
++ * @clk: CRG gate clocks, indexed like luofu_switch_clock_names[]
++ * @reset: CRG reset lines, indexed like luofu_switch_reset_names[]
++ * @crg: CRG syscon regmap, for the read-only gate-state check
+  * @ports: parsed devicetree port model
+  * @num_ports: number of parsed ports
++ * @port_bitmap: port bitmap cells read from the devicetree
+  */
+-struct luofu_lsw {
++struct luofu_switch {
+ 	struct device *dev;
+-	const struct luofu_lsw_variant *variant;
+-	void __iomem *window[LUOFU_LSW_NUM_WINDOWS];
+-	struct clk *clk[LUOFU_LSW_NUM_CLOCKS];
+-	struct reset_control *reset[LUOFU_LSW_NUM_RESETS];
+-	struct luofu_lsw_port ports[LUOFU_LSW_MAX_PORTS];
++	const struct luofu_switch_variant *variant;
++	void __iomem *window[LUOFU_SWITCH_WIN_NUM];
++	struct clk *clk[LUOFU_SWITCH_NUM_CLOCKS];
++	struct reset_control *reset[LUOFU_SWITCH_NUM_RESETS];
++	struct regmap *crg;
++	struct luofu_switch_port ports[LUOFU_SWITCH_MAX_PORTS];
+ 	unsigned int num_ports;
+-};
+-
+-static const struct luofu_lsw_variant luofu_lsw_v250 = {
+-	.hwver = 0x250,
+-	.name = "v250",
++	u32 port_bitmap[2];
+ };
+ 
+ /*
+- * The register windows in devicetree order (sorted by address). The names are
+- * the recorded register-block names of the vendor devicetree; the driver
+- * looks them up by name so the binding, not the ordering, is the ABI.
++ * The window names in devicetree order.  The driver looks every window up by
++ * name, so the binding order is documentation and not an ABI.
+  */
+-static const char * const luofu_lsw_window_names[LUOFU_LSW_NUM_WINDOWS] = {
+-	"dp", "ips", "fam", "pe", "eqm", "eps", "prbs", "pfe_glb",
+-	"pa", "ifc", "l2", "napt", "mcc", "opp", "pub",
++static const char * const luofu_switch_window_names[LUOFU_SWITCH_WIN_NUM] = {
++	[LUOFU_SWITCH_WIN_QUEUE] = "queue",
++	[LUOFU_SWITCH_WIN_FLOW] = "flow",
++	[LUOFU_SWITCH_WIN_DP] = "dp",
++	[LUOFU_SWITCH_WIN_IPS] = "ips",
++	[LUOFU_SWITCH_WIN_FAM] = "fam",
++	[LUOFU_SWITCH_WIN_PE] = "pe",
++	[LUOFU_SWITCH_WIN_EQM] = "eqm",
++	[LUOFU_SWITCH_WIN_EPS] = "eps",
++	[LUOFU_SWITCH_WIN_PRBS] = "prbs",
++	[LUOFU_SWITCH_WIN_PFE_GLB] = "pfe_glb",
++	[LUOFU_SWITCH_WIN_PA] = "pa",
++	[LUOFU_SWITCH_WIN_IFC] = "ifc",
++	[LUOFU_SWITCH_WIN_L2] = "l2",
++	[LUOFU_SWITCH_WIN_NAPT] = "napt",
++	[LUOFU_SWITCH_WIN_MCC] = "mcc",
++	[LUOFU_SWITCH_WIN_OPP] = "opp",
++	[LUOFU_SWITCH_WIN_PUB] = "pub",
+ };
+ 
+-static const char * const luofu_lsw_clock_names[LUOFU_LSW_NUM_CLOCKS] = {
++static const char * const luofu_switch_clock_names[LUOFU_SWITCH_NUM_CLOCKS] = {
+ 	"lsw_dp_clk",
+ 	"lsw_pfe_clk",
+ };
+ 
+-static const char * const luofu_lsw_reset_names[LUOFU_LSW_NUM_RESETS] = {
++static const char * const luofu_switch_reset_names[LUOFU_SWITCH_NUM_RESETS] = {
+ 	"dp_logic",
+ 	"dp_srst",
+ 	"pfe_logic",
+@@ -196,33 +247,157 @@
+ };
+ 
+ /*
+- * Resource validation. Everything here is a device-model lookup, a resource
+- * claim or an ioremap(); no register is read or written, the clocks are not
+- * enabled and the reset lines are not driven.
++ * The measured baseline: the vendor driver's post-boot state on the stock
++ * system, read-only inventory of 2026-11-18.  Evidence grades and the full
++ * measured table are in luofu-switch-regs.h; the mask says which bits the
++ * inventory actually established.
+  */
+-static int luofu_lsw_check_windows(struct luofu_lsw *lsw)
++static const struct luofu_switch_baseline_entry luofu_switch_v250_baseline[] = {
++	/* dp: the probe-time configuration words. [V] */
++	{ "dp+0x1c probe config", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_PROBE_CFG, 0xffffffff, 0x00018000 },
++	{ "dp+0x64 cell select", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_CELL_SELECT, 0xffffffff, 0x00000001 },
++	{ "dp+0x68 memory number", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_MEM_NUMBER, 0xffffffff, 0x00000000 },
++	/* eps: queue/DFX word and the PIE channel map. [V] */
++	{ "eps+0x1008 queue/DFX", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_QUEUE_DFX, 0xffffffff, 0x00000000 },
++	{ "eps channel map ch0", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(0), 0xffffffff, 0x00000880 },
++	{ "eps channel map ch1", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(1), 0xffffffff, 0x00000980 },
++	{ "eps channel map ch2", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(2), 0xffffffff, 0x00000a80 },
++	{ "eps channel map ch3", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(3), 0xffffffff, 0x00000b80 },
++	{ "eps channel map ch4", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(4), 0xffffffff, 0x00000090 },
++	{ "eps channel map ch5", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(5), 0xffffffff, 0x00081090 },
++	{ "eps channel map ch6", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(6), 0xffffffff, 0x00082090 },
++	{ "eps channel map ch7", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_MAP(7), 0xffffffff, 0x00083090 },
++	{ "eps channel companion ch0", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(0), 0xffffffff, 0x8000ffff },
++	{ "eps channel companion ch1", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(1), 0xffffffff, 0x8001ffff },
++	{ "eps channel companion ch2", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(2), 0xffffffff, 0x8000ffff },
++	{ "eps channel companion ch3", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(3), 0xffffffff, 0x8001ffff },
++	{ "eps channel companion ch4", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(4), 0xffffffff, 0x8004ffff },
++	{ "eps channel companion ch5", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(5), 0xffffffff, 0x8105ffff },
++	{ "eps channel companion ch6", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(6), 0xffffffff, 0x8106ffff },
++	{ "eps channel companion ch7", LUOFU_SWITCH_WIN_EPS,
++	  LUOFU_SWITCH_EPS_CH_COMPANION(7), 0xffffffff, 0x8107ffff },
++	/* eqm: queue-manager configuration and indirect-interface idle state. */
++	{ "eqm+0x00 table command", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_TAB_CMD, 0xffffffff, 0x00000001 },
++	{ "eqm+0x18 cell config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_CELL_CFG, 0xffffffff, 0x80001cc0 },
++	{ "eqm+0x38 cell config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_CELL_CFG1, 0xffffffff, 0x000007f0 },
++	{ "eqm+0x40 enable", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_ENABLE, 0x80000000, 0x80000000 },
++	{ "eqm+0x48 indirect idle", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_IND_CMD,
++	  LUOFU_SWITCH_EQM_IND_BUSY | LUOFU_SWITCH_EQM_IND_ERROR, 0 },
++	{ "eqm+0xa4 table config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_TAB_CFG, 0xffffffff, 0x00001fc0 },
++	/* fam: the queue-count/cell comparison word. [V] */
++	{ "fam+0x504 queue config", LUOFU_SWITCH_WIN_FAM,
++	  LUOFU_SWITCH_FAM_QUEUE_CFG, 0xffffffff, 0x00002000 },
++	/* ips: the probe init words. [V] */
++	{ "ips+0x00 probe config", LUOFU_SWITCH_WIN_IPS,
++	  LUOFU_SWITCH_IPS_PROBE_CFG0, 0xffffffff, 0x00000000 },
++	{ "ips+0x08 queue init", LUOFU_SWITCH_WIN_IPS,
++	  LUOFU_SWITCH_IPS_PROBE_CFG1, 0xffffffff, 0x0000002a },
++	{ "ips+0x10 probe init", LUOFU_SWITCH_WIN_IPS,
++	  LUOFU_SWITCH_IPS_PROBE_CFG2, LUOFU_SWITCH_IPS_INIT_BIT,
++	  LUOFU_SWITCH_IPS_INIT_BIT },
++};
++
++/*
++ * The populated qid-map port rows in allocation order.  The derived model is
++ * "one contiguous qid space from qid 1, eight qids per port, in this order":
++ * table-A ports 4..12 own qids 1..72 and table-B ports 40..43 own qids 73..104,
++ * with qid 0 unused.  This is the model the probe verifies against the
++ * measured tables (the vendor allocator's exact policy is [I]; only the
++ * measured contents are [V]).
++ */
++static const u8 luofu_switch_v250_qid_ports[] = {
++	4, 5, 6, 7, 8, 9, 10, 11, 12, 40, 41, 42, 43,
++};
++
++static const struct luofu_switch_variant luofu_switch_v250 = {
++	.name = "v250",
++	.hwver = 0x250,
++	.queue_base = LUOFU_SWITCH_QUEUE_BASE,
++	.queue_size = LUOFU_SWITCH_QUEUE_SIZE,
++	.flow_base = LUOFU_SWITCH_FLOW_BASE,
++	.flow_size = LUOFU_SWITCH_FLOW_SIZE,
++	.port_bitmap = { 0x00000f01, 0x00001ff0 },
++	.qid_first = LUOFU_SWITCH_QID_FIRST,
++	.qid_last = LUOFU_SWITCH_QID_LAST,
++	.baseline = luofu_switch_v250_baseline,
++	.num_baseline = ARRAY_SIZE(luofu_switch_v250_baseline),
++	.qid_ports = luofu_switch_v250_qid_ports,
++	.num_qid_ports = ARRAY_SIZE(luofu_switch_v250_qid_ports),
++};
++
++/*
++ * Resource validation.  Everything here is a device-model lookup, a resource
++ * claim or an ioremap(): no register is read or written, no clock is enabled
++ * and no reset line is driven.
++ */
++static int luofu_switch_check_windows(struct luofu_switch *lsw)
+ {
++	const struct luofu_switch_variant *variant = lsw->variant;
+ 	struct platform_device *pdev = to_platform_device(lsw->dev);
+ 	unsigned int i;
+ 
+-	for (i = 0; i < LUOFU_LSW_NUM_WINDOWS; i++) {
+-		const char *name = luofu_lsw_window_names[i];
++	for (i = 0; i < LUOFU_SWITCH_WIN_NUM; i++) {
++		const char *name = luofu_switch_window_names[i];
+ 		struct resource *res;
+ 
+ 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, name);
+ 		if (!res)
+ 			return dev_err_probe(lsw->dev, -ENODEV,
+-					     "missing %s register window\n",
+-					     name);
+-		if (resource_size(res) != LUOFU_LSW_WINDOW_SIZE)
++					     "missing %s window\n", name);
++
++		if (i == LUOFU_SWITCH_WIN_QUEUE ||
++		    i == LUOFU_SWITCH_WIN_FLOW) {
++			phys_addr_t base = i == LUOFU_SWITCH_WIN_QUEUE ?
++					   variant->queue_base :
++					   variant->flow_base;
++			resource_size_t size = i == LUOFU_SWITCH_WIN_QUEUE ?
++					       variant->queue_size :
++					       variant->flow_size;
++
++			if (res->start != base || resource_size(res) != size)
++				return dev_err_probe(lsw->dev, -EINVAL,
++						     "DDR window %s is %#llx+%#llx, measured live value is %#llx+%#llx\n",
++						     name,
++						     (unsigned long long)res->start,
++						     (unsigned long long)resource_size(res),
++						     (unsigned long long)base,
++						     (unsigned long long)size);
++			continue;
++		}
++
++		if (resource_size(res) != LUOFU_SWITCH_WINDOW_SIZE)
+ 			return dev_err_probe(lsw->dev, -EINVAL,
+ 					     "window %s is %#llx bytes, expected %#x\n",
+ 					     name,
+ 					     (unsigned long long)resource_size(res),
+-					     LUOFU_LSW_WINDOW_SIZE);
++					     LUOFU_SWITCH_WINDOW_SIZE);
+ 
+-		lsw->window[i] = devm_platform_ioremap_resource_byname(pdev,
+-								      name);
++		lsw->window[i] = devm_platform_ioremap_resource_byname(pdev, name);
+ 		if (IS_ERR(lsw->window[i]))
+ 			return dev_err_probe(lsw->dev,
+ 					     PTR_ERR(lsw->window[i]),
+@@ -233,56 +408,82 @@
+ 	return 0;
+ }
+ 
+-static int luofu_lsw_check_clocks(struct luofu_lsw *lsw)
++/*
++ * The two gate clocks are acquired (and their devicetree wiring validated) for
++ * the future bring-up path; this driver never enables them.  Whether the gate
++ * bits are currently set is checked separately in the powered-state gate.
++ */
++static int luofu_switch_check_clocks(struct luofu_switch *lsw)
+ {
+ 	unsigned int i;
+ 
+-	for (i = 0; i < LUOFU_LSW_NUM_CLOCKS; i++) {
+-		lsw->clk[i] = devm_clk_get(lsw->dev, luofu_lsw_clock_names[i]);
++	for (i = 0; i < LUOFU_SWITCH_NUM_CLOCKS; i++) {
++		lsw->clk[i] = devm_clk_get(lsw->dev,
++					   luofu_switch_clock_names[i]);
+ 		if (IS_ERR(lsw->clk[i]))
+ 			return dev_err_probe(lsw->dev, PTR_ERR(lsw->clk[i]),
+ 					     "missing %s clock\n",
+-					     luofu_lsw_clock_names[i]);
++					     luofu_switch_clock_names[i]);
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-static int luofu_lsw_check_resets(struct luofu_lsw *lsw)
++static int luofu_switch_check_resets(struct luofu_switch *lsw)
+ {
+ 	unsigned int i;
+ 
+-	for (i = 0; i < LUOFU_LSW_NUM_RESETS; i++) {
+-		lsw->reset[i] = devm_reset_control_get_exclusive(lsw->dev,
+-							 luofu_lsw_reset_names[i]);
++	for (i = 0; i < LUOFU_SWITCH_NUM_RESETS; i++) {
++		const char *name = luofu_switch_reset_names[i];
++
++		lsw->reset[i] = devm_reset_control_get_exclusive(lsw->dev, name);
+ 		if (IS_ERR(lsw->reset[i]))
+ 			return dev_err_probe(lsw->dev,
+ 					     PTR_ERR(lsw->reset[i]),
+-					     "missing %s reset line\n",
+-					     luofu_lsw_reset_names[i]);
++					     "missing %s reset line\n", name);
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-static void luofu_lsw_ports_release(struct luofu_lsw *lsw)
++static int luofu_switch_get_crg(struct luofu_switch *lsw)
+ {
++	lsw->crg = syscon_regmap_lookup_by_phandle(lsw->dev->of_node, "hisilicon,crg");
++	if (IS_ERR(lsw->crg))
++		return dev_err_probe(lsw->dev, PTR_ERR(lsw->crg),
++				     "missing CRG syscon phandle\n");
++
++	return 0;
++}
++
++static void luofu_switch_ports_release(void *data)
++{
++	struct luofu_switch *lsw = data;
++
+ 	while (lsw->num_ports) {
+-		struct luofu_lsw_port *port = &lsw->ports[--lsw->num_ports];
++		struct luofu_switch_port *port = &lsw->ports[--lsw->num_ports];
+ 
++		if (port->pdev)
++			put_device(&port->pdev->dev);
+ 		of_node_put(port->ethernet);
++		port->pdev = NULL;
+ 		port->ethernet = NULL;
+ 	}
+ }
+ 
+ /*
+- * Parse the devicetree port model. The model is design-level: it describes
+- * which netdev each switch port will be attached to, but nothing here may be
+- * used to program the switch until the hardware port id mapping has been
+- * measured. A duplicate index or phandle is rejected because it would make
+- * the later port-to-netdev binding ambiguous.
++ * Parse the devicetree port model.  A port is an ordering index (reg), which
++ * is explicitly NOT the recovered hardware port id, plus an "ethernet" phandle
++ * to the node that owns the port's netdev.  The owning platform device is
++ * recorded here so that the switch-to-port netdev relationship is expressed by
++ * a device reference rather than by name; the netdev itself belongs to that
++ * driver (the GEMAC data path), so no netdev is looked up or created here.
++ * The port device may still be disabled at probe time (the GEMAC data path is
++ * not implemented), in which case @pdev stays NULL and the port is only
++ * described, never registered.  Duplicate indices/phandles are rejected
++ * because they would make that relationship ambiguous.
+  */
+-static int luofu_lsw_parse_ports(struct luofu_lsw *lsw)
++static int luofu_switch_parse_ports(struct luofu_switch *lsw)
+ {
+ 	struct device_node *ports __free(device_node) =
+ 		of_get_child_by_name(lsw->dev->of_node, "ethernet-ports");
+@@ -295,6 +496,7 @@
+ 
+ 	for_each_child_of_node_scoped(ports, child) {
+ 		struct device_node *ethernet;
++		struct luofu_switch_port *port;
+ 		unsigned int i;
+ 		u32 index;
+ 
+@@ -306,11 +508,11 @@
+ 			goto out;
+ 		}
+ 
+-		if (index >= LUOFU_LSW_MAX_PORTS) {
++		if (index >= LUOFU_SWITCH_MAX_PORTS) {
+ 			ret = -EINVAL;
+ 			dev_err_probe(lsw->dev, ret,
+ 				      "%pOF: port index %u is outside the recovered 0..%u port table\n",
+-				      child, index, LUOFU_LSW_MAX_PORTS - 1);
++				      child, index, LUOFU_SWITCH_MAX_PORTS - 1);
+ 			goto out;
+ 		}
+ 
+@@ -322,10 +524,9 @@
+ 			goto out;
+ 		}
+ 
+-		if (lsw->num_ports >= LUOFU_LSW_MAX_PORTS) {
++		if (lsw->num_ports >= LUOFU_SWITCH_MAX_PORTS) {
+ 			ret = -E2BIG;
+-			dev_err_probe(lsw->dev, ret,
+-				      "too many switch ports\n");
++			dev_err_probe(lsw->dev, ret, "too many switch ports\n");
+ 			goto out;
+ 		}
+ 
+@@ -339,11 +540,11 @@
+ 		}
+ 
+ 		if (ethernet == lsw->dev->of_node) {
+-			dev_err_probe(lsw->dev, -EINVAL,
+-				      "%pOF: ethernet phandle points at the switch itself\n",
+-				      child);
+ 			of_node_put(ethernet);
+ 			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: ethernet phandle points at the switch itself\n",
++				      child);
+ 			goto out;
+ 		}
+ 
+@@ -351,16 +552,22 @@
+ 			if (lsw->ports[i].ethernet == ethernet)
+ 				break;
+ 		if (i < lsw->num_ports) {
+-			dev_err_probe(lsw->dev, -EINVAL,
+-				      "%pOF: duplicate ethernet phandle %pOF\n",
+-				      child, ethernet);
+ 			of_node_put(ethernet);
+ 			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: duplicate ethernet phandle\n",
++				      child);
+ 			goto out;
+ 		}
+ 
+-		lsw->ports[lsw->num_ports].index = index;
+-		lsw->ports[lsw->num_ports].ethernet = ethernet;
++		port = &lsw->ports[lsw->num_ports];
++		port->index = index;
++		port->ethernet = ethernet;
++		port->pdev = of_find_device_by_node(ethernet);
++		if (!port->pdev)
++			dev_info(lsw->dev,
++				 "%pOF: port owner device is not enabled; no port netdev yet\n",
++				 ethernet);
+ 		lsw->num_ports++;
+ 		seen |= BIT_ULL(index);
+ 	}
+@@ -373,14 +580,243 @@
+ 
+ out:
+ 	if (ret)
+-		luofu_lsw_ports_release(lsw);
++		luofu_switch_ports_release(lsw);
+ 	return ret;
+ }
+ 
+-static int luofu_lsw_probe(struct platform_device *pdev)
++/*
++ * The vendor devicetree carries the port/queue bitmap as one 64-bit property
++ * rendered <0xf01 0x1ff0>; the live node was measured unchanged.  Its
++ * semantics are unknown, so it is a board-baseline check, not a port mask.
++ */
++static int luofu_switch_read_port_bitmap(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	int ret;
++
++	ret = of_property_read_u32_array(lsw->dev->of_node,
++					 "hisilicon,port-bitmap",
++					 lsw->port_bitmap,
++					 ARRAY_SIZE(lsw->port_bitmap));
++	if (ret)
++		return dev_err_probe(lsw->dev, ret,
++				     "missing hisilicon,port-bitmap property\n");
++
++	if (lsw->port_bitmap[0] != variant->port_bitmap[0] ||
++	    lsw->port_bitmap[1] != variant->port_bitmap[1])
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "port bitmap <%#x %#x> does not match the measured <%#x %#x>\n",
++				     lsw->port_bitmap[0], lsw->port_bitmap[1],
++				     variant->port_bitmap[0],
++				     variant->port_bitmap[1]);
++
++	return 0;
++}
++
++/*
++ * The powered-state gate.  Nothing in the block is read before this passes:
++ * the vendor inventory that this model is based on was taken on a block whose
++ * CRG gate bits were set and whose reset lines were deasserted, and the
++ * recovered probe order is "gates first, then release the resets".  The gate
++ * bits are checked read-only through the CRG syscon (the clock consumer API
++ * has no "is enabled" query); the reset class is active-low (patch 014), so a
++ * released line reads back as status 0.  The write sequence to get from an
++ * unpowered block to this state is part of the attended W3 experiment and is
++ * deliberately not implemented here.
++ */
++static int luofu_switch_check_block_ready(struct luofu_switch *lsw)
++{
++	const u32 gate_mask = LUOFU_SWITCH_CRG_DP_GATE |
++			      LUOFU_SWITCH_CRG_PFE_GATE;
++	unsigned int i;
++	u32 gates;
++	bool ready = true;
++	int status;
++	int ret;
++
++	ret = regmap_read(lsw->crg, LUOFU_SWITCH_CRG_GATE_WORD, &gates);
++	if (ret)
++		return dev_err_probe(lsw->dev, ret,
++				     "cannot read the CRG gate word\n");
++
++	if ((gates & gate_mask) != gate_mask) {
++		dev_err(lsw->dev,
++			"CRG gate word %#x: the two switch gate bits (0x3) are not both enabled\n",
++			gates);
++		return dev_err_probe(lsw->dev, -EOPNOTSUPP,
++				     "block is not clocked; refusing to touch an unclocked block before the attended W3 step\n");
++	}
++
++	for (i = 0; i < LUOFU_SWITCH_NUM_RESETS; i++) {
++		status = reset_control_status(lsw->reset[i]);
++		if (status < 0)
++			return dev_err_probe(lsw->dev, status,
++					     "cannot read the %s reset state\n",
++					     luofu_switch_reset_names[i]);
++		if (status) {
++			dev_err(lsw->dev,
++				"%s reset line is asserted (active-low CRG bit clear)\n",
++				luofu_switch_reset_names[i]);
++			ready = false;
++		}
++	}
++
++	if (!ready)
++		return dev_err_probe(lsw->dev, -EOPNOTSUPP,
++				     "block is held in reset; refusing to touch it before the attended W3 step\n");
++
++	dev_info(lsw->dev,
++		 "powered state: CRG gates enabled (gate word %#x), all four reset lines released\n",
++		 gates);
++	return 0;
++}
++
++static int luofu_switch_validate_baseline(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	unsigned int i;
++	unsigned int bad = 0;
++
++	for (i = 0; i < variant->num_baseline; i++) {
++		const struct luofu_switch_baseline_entry *entry =
++			&variant->baseline[i];
++		u32 value;
++
++		value = readl(lsw->window[entry->window] + entry->offset);
++		if ((value & entry->mask) != entry->value) {
++			dev_err(lsw->dev,
++				"baseline mismatch at %s: read %#x, expected %#x (mask %#x)\n",
++				entry->name, value, entry->value, entry->mask);
++			bad++;
++		}
++	}
++
++	if (bad)
++		return dev_err_probe(lsw->dev, -EIO,
++				     "%u of %u measured baseline words do not match the 2026-11-18 read-only inventory; refusing to continue\n",
++				     bad, variant->num_baseline);
++
++	dev_info(lsw->dev, "baseline: %u measured register words match\n",
++		 variant->num_baseline);
++	return 0;
++}
++
++/*
++ * The derived qid-map word for one port slot: the enable flag plus the qid the
++ * contiguous-allocation model assigns, or 0 for an unpopulated row.
++ */
++static u32 luofu_switch_qid_word(const struct luofu_switch_variant *variant,
++				 unsigned int port, unsigned int slot)
++{
++	unsigned int i;
++
++	for (i = 0; i < variant->num_qid_ports; i++)
++		if (variant->qid_ports[i] == port)
++			return LUOFU_SWITCH_QID_ENABLE |
++			       (variant->qid_first + i * LUOFU_SWITCH_QID_SLOTS +
++				slot);
++
++	return 0;
++}
++
++static u32 luofu_switch_qid_table_a(struct luofu_switch *lsw,
++				    unsigned int port, unsigned int slot)
++{
++	void __iomem *table = lsw->window[LUOFU_SWITCH_WIN_OPP] +
++			      LUOFU_SWITCH_OPP_QID_TABLE_A;
++
++	return readl(table + (port * LUOFU_SWITCH_QID_SLOTS + slot) * 4);
++}
++
++static u32 luofu_switch_qid_table_b(struct luofu_switch *lsw,
++				    unsigned int port, unsigned int slot,
++				    unsigned int word)
++{
++	unsigned int index = (port - LUOFU_SWITCH_QID_TABLE_B_FIRST) *
++			     LUOFU_SWITCH_QID_SLOTS + slot;
++	void __iomem *table = lsw->window[LUOFU_SWITCH_WIN_OPP] +
++			      LUOFU_SWITCH_OPP_QID_TABLE_B;
++
++	return readl(table + index * 16 + word * 4);
++}
++
++/*
++ * Read-only check of the D1b W2 write model: derive the two tables from the
++ * port model and compare every word with the measured vendor state.  A match
++ * means the model reproduces the measured allocation exactly; a mismatch is a
++ * refusal, not a hardware fault - it means the write set cannot be derived
++ * from this evidence base yet.
++ */
++static int luofu_switch_validate_qid_tables(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	unsigned int port, slot, word;
++	unsigned int bad = 0;
++	unsigned int checked = 0;
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_A_PORTS; port++) {
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			u32 expected = luofu_switch_qid_word(variant, port,
++							    slot);
++			u32 value = luofu_switch_qid_table_a(lsw, port, slot);
++
++			checked++;
++			if (value != expected) {
++				dev_err(lsw->dev,
++					"qid table A port %u slot %u: read %#x, model says %#x\n",
++					port, slot, value, expected);
++				bad++;
++			}
++		}
++	}
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_B_PORTS; port++) {
++		unsigned int id = LUOFU_SWITCH_QID_TABLE_B_FIRST + port;
++
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			u32 expected = luofu_switch_qid_word(variant, id, slot);
++			u32 first = luofu_switch_qid_table_b(lsw, id, slot, 0);
++
++			for (word = 1; word < 4; word++) {
++				u32 value =
++					luofu_switch_qid_table_b(lsw, id, slot,
++								 word);
++
++				checked++;
++				if (value != first) {
++					dev_err(lsw->dev,
++						"qid table B port %u slot %u word %u: read %#x, expected the four-word entry value %#x\n",
++						id, slot, word, value, first);
++					bad++;
++				}
++			}
++
++			checked++;
++			if (first != expected) {
++				dev_err(lsw->dev,
++					"qid table B port %u slot %u: read %#x, model says %#x\n",
++					id, slot, first, expected);
++				bad++;
++			}
++		}
++	}
++
++	if (bad)
++		return dev_err_probe(lsw->dev, -EIO,
++				     "%u of %u measured qid-map words do not match the derived allocation model; refusing to continue\n",
++				     bad, checked);
++
++	dev_info(lsw->dev,
++		 "qid map: derived model reproduces %u measured words (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104)\n",
++		 checked);
++	return 0;
++}
++
++static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+-	struct luofu_lsw *lsw;
++	struct luofu_switch *lsw;
++	unsigned int i;
+ 	int ret;
+ 
+ 	lsw = devm_kzalloc(dev, sizeof(*lsw), GFP_KERNEL);
+@@ -396,52 +832,100 @@
+ 				     "variant v%x has no recovered switch model\n",
+ 				     lsw->variant->hwver);
+ 
+-	ret = luofu_lsw_check_windows(lsw);
++	ret = luofu_switch_check_windows(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_check_clocks(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_check_resets(lsw);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = luofu_lsw_check_clocks(lsw);
++	ret = luofu_switch_get_crg(lsw);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = luofu_lsw_check_resets(lsw);
++	ret = luofu_switch_parse_ports(lsw);
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = luofu_lsw_parse_ports(lsw);
++	ret = devm_add_action_or_reset(dev, luofu_switch_ports_release, lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_read_port_bitmap(lsw);
+ 	if (ret)
+ 		return ret;
+ 
+ 	dev_info(dev,
+-		 "LSW %s: %u windows mapped, %u clocks, %u resets and %u ports validated; no register was accessed\n",
+-		 lsw->variant->name, LUOFU_LSW_NUM_WINDOWS,
+-		 LUOFU_LSW_NUM_CLOCKS, LUOFU_LSW_NUM_RESETS, lsw->num_ports);
++		 "LSW %s: %u MMIO windows, 2 DDR windows (queue %#llx, flow %#llx), %u clocks, %u resets and %u ports validated\n",
++		 lsw->variant->name,
++		 (unsigned int)LUOFU_SWITCH_NUM_MMIO_WINDOWS,
++		 (unsigned long long)lsw->variant->queue_base,
++		 (unsigned long long)lsw->variant->flow_base,
++		 LUOFU_SWITCH_NUM_CLOCKS, LUOFU_SWITCH_NUM_RESETS,
++		 lsw->num_ports);
++
++	for (i = 0; i < lsw->num_ports; i++) {
++		struct luofu_switch_port *port = &lsw->ports[i];
++
++		if (port->pdev)
++			dev_info(dev, "port %u: owner %s\n", port->index,
++				 dev_name(&port->pdev->dev));
++		else
++			dev_info(dev, "port %u: owner %pOF is not an enabled device\n",
++				 port->index, port->ethernet);
++	}
+ 
+-	luofu_lsw_ports_release(lsw);
++	/*
++	 * A switchdev notifier needs real per-port netdevs; the GEMAC data path
++	 * does not exist yet, so no notifier is registered and no netdev is
++	 * created here (the port netdev belongs to the GEMAC driver).
++	 */
++	dev_info(dev, "port netdevs: none available; switchdev registration deferred\n");
++
++	/*
++	 * From here on the block is read.  The state gate comes first so that a
++	 * block that is unclocked or held in reset is never accessed.
++	 */
++	ret = luofu_switch_check_block_ready(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_validate_baseline(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_validate_qid_tables(lsw);
++	if (ret)
++		return ret;
+ 
+ 	/*
+-	 * Refuse to bring the switch up. The node is disabled, so a normal boot
+-	 * never reaches this point; the error is loud exactly for the person
+-	 * who enables the node before the D1 bring-up campaign is done.
++	 * Read-only validation passed.  Programming is still refused: the
++	 * write set has never been executed on this block, the EQM/classifier/
++	 * VLAN formats are unknown and the port-id mapping is unmeasured.
+ 	 */
+ 	return dev_err_probe(dev, -EOPNOTSUPP,
+-			     "switch programming not verified: LSW register/queue/port-id model has never been measured; refusing to program the switch\n");
++			     "read-only baseline validated; register/queue/port-id programming is not verified and no write has ever been made on this block; refusing to program the switch\n");
+ }
+ 
+-static const struct of_device_id luofu_lsw_of_match[] = {
+-	{ .compatible = "hisilicon,luofu-switch", .data = &luofu_lsw_v250 },
++static const struct of_device_id luofu_switch_of_match[] = {
++	{ .compatible = "hisilicon,luofu-switch", .data = &luofu_switch_v250 },
+ 	{ }
+ };
+-MODULE_DEVICE_TABLE(of, luofu_lsw_of_match);
++MODULE_DEVICE_TABLE(of, luofu_switch_of_match);
+ 
+-static struct platform_driver luofu_lsw_driver = {
+-	.probe = luofu_lsw_probe,
++static struct platform_driver luofu_switch_driver = {
++	.probe = luofu_switch_probe,
+ 	.driver = {
+ 		.name = "luofu-switch",
+-		.of_match_table = luofu_lsw_of_match,
++		.of_match_table = luofu_switch_of_match,
+ 	},
+ };
+-module_platform_driver(luofu_lsw_driver);
++module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (draft: probe refuses)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (read-only baseline probe)");
+ MODULE_LICENSE("GPL");
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+@@ -22,32 +22,40 @@
+   Each port child names the node that provides its netdev through the
+   "ethernet" phandle.
+ 
+-  The switch register space is described by 15 windows of 512 KiB each: five
+-  queue-manager windows ("dp", "ips", "fam", "eqm", "eps") and ten
+-  classification/forwarding windows ("prbs", "pfe_glb", "pa", "ifc", "l2",
+-  "napt", "mcc", "opp", "pub", "pe"). The vendor devicetree describes the same
+-  block as two separate nodes; they are one switch and are combined here. The
+-  vendor "queue" (4 MiB) and "flow" (1 MiB) regions are DDR memory consumed by
+-  the engine, not MMIO windows, and which base is live after the bootloader
+-  devicetree fixups is not established, so they are deliberately not modelled.
+-
+-  The Linux driver is a draft: it validates these resources and the port
+-  model, then refuses to probe until the register, queue and port-id model has
+-  been verified on the hardware. The node must stay disabled until then.
++  The switch is described by 17 windows: 15 register windows of 512 KiB each
++  (five queue-manager windows "dp", "ips", "fam", "eqm", "eps" and ten
++  classification/forwarding windows "prbs", "pfe_glb", "pa", "ifc", "l2",
++  "napt", "mcc", "opp", "pub", "pe"), plus the two DDR regions the engine
++  consumes, "queue" (4 MiB) and "flow" (1 MiB). The DDR regions are not
++  register pages: the board bootloader's devicetree fixup rebases them to
++  0x80000000 and 0x80400000 on this board generation, the live post-fixup
++  values were measured on the running system, and the driver validates them
++  against the devicetree but never maps them as MMIO. The layout inside the
++  regions is not known.
++
++  The Linux driver is a read-only draft: it validates these resources, the
++  switch port model and the measured register/qid-map baseline, then refuses
++  to program the switch. It never writes a register, never enables the CRG
++  clocks, never drives the CRG resets and registers no netdev or switchdev
++  notifier. The node must stay disabled until the attended switch bring-up
++  experiments have validated the write set.
+ 
+ properties:
+   compatible:
+     const: hisilicon,luofu-switch
+ 
+   reg:
+-    minItems: 15
+-    maxItems: 15
++    minItems: 17
++    maxItems: 17
+     description:
+-      The 15 switch register windows, 512 KiB each; the names are given by
+-      reg-names.
++      The 17 switch windows; the names are given by reg-names. The first two
++      are DDR regions the engine consumes and the remaining 15 are 512 KiB
++      register windows.
+ 
+   reg-names:
+     items:
++      - const: queue
++      - const: flow
+       - const: dp
+       - const: ips
+       - const: fam
+@@ -75,7 +83,7 @@
+ 
+   resets:
+     maxItems: 4
+-    description: Reset lines of the two sub-blocks from the CRG.
++    description: Reset lines of the two sub-blocks from the CRG (active-low).
+ 
+   reset-names:
+     items:
+@@ -84,6 +92,26 @@
+       - const: pfe_logic
+       - const: pfe_srst
+ 
++  hisilicon,crg:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: |
++      Phandle to the CRG system-controller node (the "hisilicon,luofu-crg"
++      syscon) that provides the gate clocks and reset lines of the switch. The
++      driver reads the gate word through this regmap to verify the block is
++      clocked before its first register access; it never writes the page.
++
++  hisilicon,port-bitmap:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 2
++    maxItems: 2
++    description: |
++      The two 32-bit cells of the switch port/queue enable bitmap, in the cell
++      order the vendor tree uses: the vendor devicetree carries
++      port_bitmap = <0xf01 0x1ff0> and the running system was measured with
++      exactly those bytes. Which bit means which port/queue is not decoded, so
++      the driver only checks that the board declares the measured value; it
++      does not use the bitmap to enable or map anything.
++
+   ethernet-ports:
+     type: object
+     description: The ports of the internal switch.
+@@ -125,6 +153,8 @@
+   - clock-names
+   - resets
+   - reset-names
++  - hisilicon,crg
++  - hisilicon,port-bitmap
+   - ethernet-ports
+ 
+ allOf:
+@@ -143,9 +173,18 @@
+         #reset-cells = <2>;
+     };
+ 
++    gmac1: ethernet@14380000 {
++        reg = <0x14380000 0x10000>;
++    };
++
++    gmac2: ethernet@14400000 {
++        reg = <0x14400000 0x10000>;
++    };
++
+     ethernet-switch@11000000 {
+         compatible = "hisilicon,luofu-switch";
+-        reg = <0x11000000 0x80000>, <0x11080000 0x80000>,
++        reg = <0x80000000 0x400000>, <0x80400000 0x100000>,
++              <0x11000000 0x80000>, <0x11080000 0x80000>,
+               <0x11100000 0x80000>, <0x11180000 0x80000>,
+               <0x11200000 0x80000>, <0x11280000 0x80000>,
+               <0x11380000 0x80000>, <0x12000000 0x80000>,
+@@ -153,13 +192,16 @@
+               <0x12180000 0x80000>, <0x12280000 0x80000>,
+               <0x12380000 0x80000>, <0x12400000 0x80000>,
+               <0x12480000 0x80000>;
+-        reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
+-                    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp", "pub";
++        reg-names = "queue", "flow", "dp", "ips", "fam", "pe", "eqm",
++                    "eps", "prbs", "pfe_glb", "pa", "ifc", "l2", "napt",
++                    "mcc", "opp", "pub";
+         clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
+         clock-names = "lsw_dp_clk", "lsw_pfe_clk";
+         resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
+                  <&crg 0x30 0x3>, <&crg 0x30 0x4>;
+         reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
++        hisilicon,crg = <&crg>;
++        hisilicon,port-bitmap = <0xf01 0x1ff0>;
+         status = "disabled";
+ 
+         ethernet-ports {
+@@ -177,3 +219,5 @@
+             };
+         };
+     };
++
++...
