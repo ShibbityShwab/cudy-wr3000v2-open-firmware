@@ -1,0 +1,23 @@
+--- a/drivers/clk/hisilicon/crg-luofu.c
++++ b/drivers/clk/hisilicon/crg-luofu.c
+@@ -505,14 +505,14 @@
+  *    the mux driver's locking) - do not turn this into a generic writable mux
+  *    without that consumer.
+  */
+-static int luofu_crg_mux_set_parent(struct clk_hw *hw, u8 index)
+-{
+-	return -EOPNOTSUPP;
+-}
+-
++/*
++ * The muxes are read-only: 6.18's clk core rejects a .set_parent without
++ * .determine_rate ("must implement .set_parent & .determine_rate"), and the
++ * CPU mux must never be written.  Registering get_parent only keeps the
++ * provider loadable and makes any set_parent attempt fail in the core.
++ */
+ static const struct clk_ops luofu_crg_mux_ops = {
+ 	.get_parent	= luofu_crg_mux_get_parent,
+-	.set_parent	= luofu_crg_mux_set_parent,
+ };
+ 
+ /*

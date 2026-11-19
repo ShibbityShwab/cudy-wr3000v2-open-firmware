@@ -1,0 +1,14 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -157,6 +157,11 @@
+ 	val = readl_relaxed(luofu_smp_resume);
+ 	writel_relaxed(val & ~(BIT(bit0) | BIT(bit1)), luofu_smp_resume);
+ 
++	pr_info("luofu-smp: boot cpu=%u logical=%u pen=%08x resume %08x -> %08x\n",
++		cpu, cpu_logical_map(cpu),
++		readl_relaxed(luofu_smp_pen),
++		val, readl_relaxed(luofu_smp_resume));
++
+ 	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
+ 
+ 	return 0;

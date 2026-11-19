@@ -1,0 +1,21 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -141,10 +141,17 @@
+ 	if (cpu_logical_map(cpu) != 0)
+ 		writel_relaxed(__pa_symbol(secondary_startup), luofu_smp_pen);
+ 
++	/*
++	 * Release all four resume bits (0x16/0x18 and 0x17/0x19): the vendor
++	 * pairs them to cores, but the boot capture cannot tell which pair a
++	 * given logical CPU needs and leaving one set has kept CPU1 offline.
++	 * Clear both pairs with one RMW; the rest of the word is preserved.
++	 */
+ 	bit0 = luofu_resume_bits[cpu][0];
+ 	bit1 = luofu_resume_bits[cpu][1];
+ 	val = readl_relaxed(luofu_smp_resume);
+-	writel_relaxed(val & ~(BIT(bit0) | BIT(bit1)), luofu_smp_resume);
++	writel_relaxed(val & ~(BIT(0x16) | BIT(0x17) | BIT(0x18) | BIT(0x19)),
++		       luofu_smp_resume);
+ 
+ 	pr_info("luofu-smp: boot cpu=%u logical=%u pen=%08x resume %08x -> %08x\n",
+ 		cpu, cpu_logical_map(cpu),
