@@ -1,7 +1,7 @@
 From dd314bf1f1de507654d29d7230bff76dbc5e3503 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 20/21] net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 20/23] net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
 
 Complete the HiSilicon Hi5671Y "luofu" wired data path as a paired GEMAC
 netdev front end and PIE packet-engine ring backend, built from the

@@ -1,7 +1,7 @@
 From 36ac7edcbb61f6ca582225837f3778ba79512e55 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 05/21] watchdog: luofu: add Hi5671Y watchdog support
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 05/23] watchdog: luofu: add Hi5671Y watchdog support
 
 Add a watchdog driver for the watchdog function of the luofu CRG page.
 The watchdog has no reg of its own: it is a child of the CRG syscon node

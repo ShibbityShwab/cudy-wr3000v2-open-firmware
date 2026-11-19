@@ -1,0 +1,52 @@
+net: ethernet: hisilicon: add the gated Luofu LSW write path
+
+Extend the D1b read-only internal-switch baseline probe into the first
+reviewed write step of the connectivity path: the D1b W3 power-up and the
+W4/W5 qid-map programming, both behind explicit module parameters
+(LSW-SPEC.md section 12.3, port-notes/net/SUMMARY.md).
+
+The default path is unchanged from the read-only probe.  With no parameter
+the driver validates the measured powered state, the 30 baseline words and
+the 384 qid-map words, never writes a register, never enables a clock and
+never drives a reset, and still exits probe with -EOPNOTSUPP.
+
+luofu_lsw.arm=1 enables the attended W3 step: enable the two CRG gate
+clocks, release the four CRG reset lines in the recovered vendor order,
+re-check the powered state through the CRG syscon and the reset API, and
+snapshot the measured read set plus the two qid maps read-only.  This path
+writes only the CRG, never a switch register, and still refuses to arm the
+data path because no egress map is programmed.
+
+luofu_lsw.arm=1 luofu_lsw.qidmap=1 adds the W4/W5 step: program the D1b W2
+write set, which is exactly the two recovered qid-map tables - table A
+ports 4..12 x 8 slots (72 words) and table B ports 40..43 x 8 slots x 4
+words (128 words), value 0x100 | qid of the contiguous qid 1..104 model
+derived by patch 0021.  A pre-write conformance gate refuses before the
+first write if any unpopulated qid-map word is non-zero, because that
+would mean the block is not in the state the W2 model was derived against.
+Every programmed word is read back after a write barrier; on the first
+mismatch the pre-write values are restored and probe fails closed.  Only a
+fully verified map sets the readiness flag exported by the new
+luofu-switch.h, and the error path and remove() restore the table and
+power the block down again.
+
+The switch binding grows the measured hardware port number
+(hisilicon,port: the vendor devicetree declares switch ports 8..12 for the
+five MACs and the live board uses 9..12), and the driver refuses a port
+whose row the measured qid allocation model does not populate instead of
+guessing a qid range.  The new luofu-switch.h is the minimal hidden-engine
+readiness contract between the switch and the GEMAC front end.
+
+This is an RFC and not mergeable.  The write path has never executed on
+hardware: no clock, reset or switch register has been written by this
+code, and the gates exist so that the first execution is a single attended,
+recovery-armed bench event.  The W3 power-up safety on our own boot, the
+W4/W5 effect, the EQM/classifier/VLAN formats and the mapping from a TX
+descriptor to an egress queue are still [U], and a second read-only
+inventory is owed before the measured baseline can be called stable.
+
+Host-compiled against linux-6.18.60 in the net lane (0 warnings, 0 errors
+under CONFIG_WERROR=y); the extended binding passes dt_binding_check and
+the board DTS compiles with zero warnings.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

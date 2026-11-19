@@ -1,0 +1,46 @@
+net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+
+Make the GEMAC netdev/phylink front end register an interface only when
+the whole deterministic egress path is ready: the PIE packet engine has
+armed its rings (luofu_pie_armed()) and the internal switch has programmed
+and verified its egress qid map (luofu_switch_ready(), patch 0022).  A boot
+that cannot carry a frame therefore never exposes a network interface that
+looks functional to userspace; a normal boot logs the refusal and registers
+nothing.
+
+Two smaller fixes fall out of the same readiness work:
+
+- PHYLINK_NETDEV, not PHYLINK_DEV.  With PHYLINK_DEV phylink resolved the
+  link in its own bookkeeping but the netdev carrier stayed off, so
+  userspace never saw a usable link.  The netdev flavour drives the carrier
+  from the phylink resolve work; the driver also logs the resolved link
+  (mode, speed, duplex) on link-up.
+- The netdev address is taken from the standard devicetree MAC properties
+  through of_get_mac_address(), with a random locally-administered fallback
+  and a warning when the board declares none.  The factory address lives
+  in the bdinfo flash partition, whose nvmem representation is not part
+  of this draft, so a DHCP test that needs a stable address sets it from
+  userspace in the attended step.
+
+Kconfig now makes LUOFU_GMAC depend on LUOFU_SWITCH (both symbols stay y
+in the target config, so the resolved symbol set is unchanged); the Kconfig
+help text and the GEMAC binding describe the two-backend readiness
+contract.
+
+The only MAC register writes remain the measured 1 Gbps link-up/link-down
+words; mac_config() is still a no-op.  The RX completion decode and the
+mapping from a TX descriptor to an LSW egress queue/port are still [U], so
+even with the interface registered no received frame is delivered and a
+transmitted frame is not proven to reach a wire.
+
+This is an RFC and not mergeable.  The netdev has never registered on
+hardware: the PIE arm gate (luofu_pie.arm=1) and both LSW gates
+(luofu_lsw.arm=1, luofu_lsw.qidmap=1) must all be passed on one attended,
+recovery-armed boot, and that combination has never run.  The measured
+1 Gbps words were executed earlier by the lab driver, not by this code.
+
+Host-compiled against linux-6.18.60 in the net lane (0 warnings, 0 errors
+under CONFIG_WERROR=y); the extended binding passes dt_binding_check and
+the board DTS compiles with zero warnings.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

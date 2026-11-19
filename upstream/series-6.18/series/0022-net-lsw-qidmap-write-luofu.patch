@@ -1,0 +1,1153 @@
+From 3dcead9089c239c7eff7503fdbe756c067f726b8 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 22/23] net: ethernet: hisilicon: add the gated Luofu LSW write path
+
+Extend the D1b read-only internal-switch baseline probe into the first
+reviewed write step of the connectivity path: the D1b W3 power-up and the
+W4/W5 qid-map programming, both behind explicit module parameters
+(LSW-SPEC.md section 12.3, port-notes/net/SUMMARY.md).
+
+The default path is unchanged from the read-only probe.  With no parameter
+the driver validates the measured powered state, the 30 baseline words and
+the 384 qid-map words, never writes a register, never enables a clock and
+never drives a reset, and still exits probe with -EOPNOTSUPP.
+
+luofu_lsw.arm=1 enables the attended W3 step: enable the two CRG gate
+clocks, release the four CRG reset lines in the recovered vendor order,
+re-check the powered state through the CRG syscon and the reset API, and
+snapshot the measured read set plus the two qid maps read-only.  This path
+writes only the CRG, never a switch register, and still refuses to arm the
+data path because no egress map is programmed.
+
+luofu_lsw.arm=1 luofu_lsw.qidmap=1 adds the W4/W5 step: program the D1b W2
+write set, which is exactly the two recovered qid-map tables - table A
+ports 4..12 x 8 slots (72 words) and table B ports 40..43 x 8 slots x 4
+words (128 words), value 0x100 | qid of the contiguous qid 1..104 model
+derived by patch 0021.  A pre-write conformance gate refuses before the
+first write if any unpopulated qid-map word is non-zero, because that
+would mean the block is not in the state the W2 model was derived against.
+Every programmed word is read back after a write barrier; on the first
+mismatch the pre-write values are restored and probe fails closed.  Only a
+fully verified map sets the readiness flag exported by the new
+luofu-switch.h, and the error path and remove() restore the table and
+power the block down again.
+
+The switch binding grows the measured hardware port number
+(hisilicon,port: the vendor devicetree declares switch ports 8..12 for the
+five MACs and the live board uses 9..12), and the driver refuses a port
+whose row the measured qid allocation model does not populate instead of
+guessing a qid range.  The new luofu-switch.h is the minimal hidden-engine
+readiness contract between the switch and the GEMAC front end.
+
+This is an RFC and not mergeable.  The write path has never executed on
+hardware: no clock, reset or switch register has been written by this
+code, and the gates exist so that the first execution is a single attended,
+recovery-armed bench event.  The W3 power-up safety on our own boot, the
+W4/W5 effect, the EQM/classifier/VLAN formats and the mapping from a TX
+descriptor to an egress queue are still [U], and a second read-only
+inventory is owed before the measured baseline can be called stable.
+
+Host-compiled against linux-6.18.60 in the net lane (0 warnings, 0 errors
+under CONFIG_WERROR=y); the extended binding passes dt_binding_check and
+the board DTS compiles with zero warnings.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ drivers/net/ethernet/hisilicon/Kconfig             |   21 -
+ drivers/net/ethernet/hisilicon/luofu-switch-regs.h |   29 -
+ drivers/net/ethernet/hisilicon/luofu-switch.h      |   23 +
+ drivers/net/ethernet/hisilicon/luofu-switch.c      |  749 ++++++++++++++++++--
+ .../bindings/net/hisilicon,luofu-switch.yaml       |   34 +
+ 5 files changed, 737 insertions(+), 119 deletions(-)
+
+diff --git a/drivers/net/ethernet/hisilicon/Kconfig b/drivers/net/ethernet/hisilicon/Kconfig
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -188,17 +193,22 @@
+ 	  If you are unsure, say N.
+ 
+ config LUOFU_SWITCH
+-	tristate "HiSilicon Luofu internal LSW switch (draft, read-only probe)"
++	tristate "HiSilicon Luofu internal LSW switch (D1b probe + gated write path)"
+ 	depends on OF
+ 	help
+ 	  Platform driver for the internal Ethernet switch of the Hi5671Y
+ 	  "luofu" SoC, the switch core between the GEMAC ports and the PHY side
+-	  of the wired data path.  This is a draft port: it validates the
+-	  register windows, the clocks, the resets, the devicetree switch port
+-	  model and the measured register/qid-map baseline, then refuses to
+-	  program the switch until the register, queue and port-id model has
+-	  been verified on the running hardware.  It never writes a register.
+-	  The board devicetree keeps the node disabled.  Say N unless you are
+-	  working on that port.
++	  of the wired data path.  This is a draft port.  By default it
++	  validates the register windows, the clocks, the resets, the
++	  devicetree switch port model and the measured register/qid-map
++	  baseline, then refuses to program the switch.  The first reviewed
++	  write step - CRG gate/reset power-up and the two qid maps of the D1b
++	  W2 write set - is implemented but only runs with the explicit
++	  luofu_lsw.arm=1 (power/read) and luofu_lsw.qidmap=1 (qid-map write)
++	  module parameters on an attended, recovery-armed boot.  Nothing in
++	  this driver has ever executed on hardware, the EQM/classifier/VLAN
++	  formats are unknown, and the GEMAC front end only registers a netdev
++	  once the egress map is ready.  Say N unless you are working on that
++	  port.
+ 
+ endif # NET_VENDOR_HISILICON
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -19,20 +19,27 @@
+  *   [U] unknown: listed only so the model's gap is stated.  Nothing [U]
+  *       may be programmed from this file.
+  *
+- * The driver built from this header is READ-ONLY.  It maps the MMIO windows
+- * and, only after the block has been checked to be clocked and out of reset,
+- * reads the baseline registers and the two qid maps and validates them.
++ * The default driver built from this header is READ-ONLY.  It maps the MMIO
++ * windows and, only after the block has been checked to be clocked and out of
++ * reset, reads the baseline registers and the two qid maps and validates them.
+  * It never writes a register, never enables a clock, never drives a reset and
+  * never registers a netdev; probe() always fails closed.
+  *
+- * The qid-map write recipes recovered from the vendor code are documented
+- * here (offsets, slot arithmetic, the 0x100 enable flag) because they are the
+- * D1b W2 write set, but no code in the driver issues them until the attended
+- * W4 experiment signs the model off (LSW-SPEC.md section 12.3).  This patch
+- * deliberately does not model or program the EQM indirect command word, the
+- * queue-table entry layout, the classifier/L2/VLAN table formats or the
+- * queue/flow DDR layout: all of those are [U] and must not be written as
+- * fact.
++ * The qid-map write recipes recovered from the vendor code are documented here
++ * (offsets, slot arithmetic, the 0x100 enable flag) because they are the D1b
++ * W2 write set.  The driver implements exactly this write set - nothing else -
++ * behind the explicit attended luofu_lsw.arm=1 / luofu_lsw.qidmap=1 gates:
++ * tables A and B are programmed for the populated rows only and every
++ * programmed word is read back (LSW-SPEC.md section 12.3, W3-W5).  The write
++ * set has never been executed on hardware.  The EQM indirect command word,
++ * the queue-table entry layout, the classifier/L2/VLAN table formats and the
++ * queue/flow DDR layout are still [U] and are deliberately not modelled or
++ * programmed.
++ *
++ * The gated path also uses this header's CRG gate word and the two reset
++ * classes: W3 enables the two gate clocks and releases the four reset lines
++ * before the first switch register access, then re-reads that state through
++ * the CRG syscon.
+  *
+  * Safety rule for the read set: the driver only reads offsets that the
+  * 2026-11-18 inventory read on the running block, plus the two qid maps it
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch.h b/drivers/net/ethernet/hisilicon/luofu-switch.h
+new file mode 100644
+--- /dev/null
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Internal wired-data-path interface of the Hi5671Y "luofu" internal LSW
++ * switch driver (luofu-switch.c).
++ *
++ * The switch driver owns the egress qid map; the GEMAC front end owns the port
++ * net_devices and may only register them after the switch has programmed and
++ * verified that map.  This is the minimal readiness contract between the two
++ * drivers - the switch itself stays a hidden engine, exactly like the PIE
++ * packet engine (luofu-pie.h).
++ *
++ * This interface is a draft and not a stable ABI.  It has never been executed
++ * on hardware; the map is only programmed in an explicit attended boot.
++ */
++#ifndef _LUOFU_SWITCH_H
++#define _LUOFU_SWITCH_H
++
++#include <linux/types.h>
++
++bool luofu_switch_probed(void);
++bool luofu_switch_ready(void);
++
++#endif /* _LUOFU_SWITCH_H */
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch.c b/drivers/net/ethernet/hisilicon/luofu-switch.c
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -1,32 +1,54 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * HiSilicon Hi5671Y "luofu" internal LAN switch - D1b read-only baseline probe.
++ * HiSilicon Hi5671Y "luofu" internal LAN switch - D1b baseline probe and the
++ * staged connectivity write path.
+  *
+- * STATUS: HOST-ONLY, READ-ONLY.  The driver maps the switch windows and, only
+- * after checking the CRG gate word (read-only, through the CRG syscon) and the
+- * reset-line states that the block is in the measured powered state, reads the
+- * measured baseline registers and the
+- * two qid maps and validates them against the 2026-11-18 read-only bench
+- * inventory.  It NEVER writes a register, never enables a clock, never drives
+- * a reset, never registers a netdev and never installs a switchdev notifier.
+- * probe() always fails closed with -EOPNOTSUPP; the board devicetree keeps the
+- * node disabled, so a normal boot never reaches this point.
++ * STATUS: DRAFT.  The read-only baseline path validates the measured
++ * 2026-11-18 state of the stock vendor boot and always fails closed.  A second,
++ * explicitly gated path implements the first reviewed write step (D1b W3 and
++ * W4/W5): power the block, then program the two qid maps derived from the
++ * measured allocation model.  Neither path has ever run on hardware; the board
++ * devicetree enables the node so an attended boot can reach the gates, and a
++ * normal boot stops in the read-only path.
+  *
+- * Why the block must stay read-only in this patch
+- * ----------------------------------------------
++ * Gate model (every step is fail closed)
++ * --------------------------------------
++ *   - default (no module parameter): probe maps the windows and validates the
++ *     devicetree port model, then refuses.  If the block happens to be already
++ *     clocked and out of reset (the stock vendor boot) it also re-reads the
++ *     measured register baseline and both qid maps and validates them against
++ *     the derived model.  It never writes anything in this path.
++ *   - "luofu_lsw.arm=1": the attended W3 step.  Enable the two CRG gate
++ *     clocks, release the four CRG reset lines, verify the powered state and
++ *     snapshot the measured baseline words and both qid maps read-only.  No
++ *     LSW register is written.  Probe still refuses with -EOPNOTSUPP because
++ *     no egress map is programmed.
++ *   - "luofu_lsw.arm=1 luofu_lsw.qidmap=1": the attended W4/W5 step.  After
++ *     the W3 sequence, program the D1b W2 write set: the table-A rows for
++ *     ports 4..12 and the table-B rows for ports 40..43 (all 13 populated
++ *     rows x 8 slots, value 0x100 | qid of the contiguous qid 1..104 model).
++ *     Every programmed word is then read back; on the first mismatch the
++ *     pre-write values are restored and the probe fails closed.  On success
++ *     the driver publishes the egress map as ready and the GEMAC driver is
++ *     allowed to register its netdevs (luofu-switch.h).
++ *
++ * Why the write path is gated and staged
++ * --------------------------------------
+  * The switch has no source and no datasheet.  Its register map, port/queue
+  * model and table formats were recovered offline from the vendor modules, and
+  * the first attended read-only inventory (2026-11-18) measured the vendor
+- * driver's post-boot state and both qid maps.  That is the D1b "W1" baseline.
+- * What is still missing is the part that matters before any write: the meaning
+- * of most fields, the EQM indirect command word, the queue-table entry layout,
+- * the classifier/L2/VLAN table formats and the layout of the queue/flow DDR
+- * regions are all unknown.  A write built from inferred semantics could cut
++ * driver's post-boot state and both qid maps.  That is the D1b "W1" baseline
++ * and patch 021 validated the derived model against it read-only.  What is
++ * still missing is evidence for the part that matters before a write: the
++ * meaning of most fields, the EQM indirect command word, the queue-table entry
++ * layout, the classifier/L2/VLAN table formats and the layout of the
++ * queue/flow DDR regions are all unknown, and nothing in this driver has ever
++ * been executed on the block.  A write built from inferred semantics could cut
+  * the CPU/console path on a board with no validated in-kernel restart path, so
+- * the D1b write set has to be reviewed and then validated by the attended
+- * W3-W6 experiments first (LSW-SPEC.md section 12.3).  This patch is the
+- * read-only half of that work: it turns the measured baseline into a checkable
+- * model and it fails closed on anything that does not match it.
++ * every step above needs an attended, recovery-armed boot (LSW-SPEC.md section
++ * 12.3).  The gates make the first hardware step a parameter, not a boot
++ * default: with no parameter this driver is still the read-only probe of patch
++ * 021.
+  *
+  * What the probe validates
+  * ------------------------
+@@ -52,12 +74,15 @@
+  *   first, then deassert the resets" - the write sequence itself stays a
+  *   reviewed bench step.
+  * - the switch port model: the "ethernet-ports" children carry an ordering
+- *   index and an "ethernet" phandle, and the probe records the owning platform
+- *   device of each port when that device is enabled.  The per-port netdev
+- *   belongs to that device (the GEMAC driver), not to the switch driver; a
+- *   switchdev notifier cannot be registered until a real port netdev exists,
+- *   so no notifier is installed.  This is the switchdev-over-per-port-netdevs
+- *   model, not DSA.
++ *   index, an "ethernet" phandle and - new in the connectivity patch - the
++ *   measured hardware port number declared by the board ("hisilicon,port",
++ *   9..12 for the four live MAC ports).  The probe resolves the owning
++ *   platform device of each port and validates that the declared hardware port
++ *   has a populated qid row in the measured allocation model.  The per-port
++ *   netdev belongs to that device (the GEMAC driver), not to the switch
++ *   driver; a switchdev notifier cannot be registered until a real port netdev
++ *   exists, so no notifier is installed.  This is the
++ *   switchdev-over-per-port-netdevs model, not DSA.
+  * - the CRG "port_bitmap" devicetree cells: the vendor model is <0xf01 0x1ff0>
+  *   as two cells and the live node was measured unchanged.  Its semantics
+  *   (which bit means which port/queue) are still unknown, so the driver only
+@@ -70,26 +95,33 @@
+  *   words on the stock boot.  The decode says "one contiguous qid space from
+  *   1, 8 qids per port, allocated to the populated port rows".  The driver
+  *   re-derives that model and compares it word for word with the hardware, so
+- *   the D1b W2 write model is validated without writing anything.
++ *   the D1b W2 write model is validated without writing anything; the gated
++ *   W4/W5 path programs exactly this model and verifies the readback.
+  *
+- * What it deliberately does not do
+- * --------------------------------
+- * - no register write of any kind: there is no writel() in this file.  The
+- *   qid-table write recipes are documented in luofu-switch-regs.h because they
+- *   are the reviewed write set candidate; they are not executed.
+- * - no clock enable and no reset assert/deassert: the probe only checks the
+- *   state.  The first own-kernel write (W3) needs an attended session.
+- * - no EQM, classifier, L2, VLAN or DDR programming: those formats are
+- *   unknown; the queue/flow regions are only validated from the devicetree.
+- * - no netdev and no switchdev notifier: the GEMAC data path does not exist
+- *   yet (patch 009 is a resource/binding half and registers no netdev), and a
+- *   notifier that ignored every object would reproduce exactly the vendor's
+- *   stub behaviour that LSW-SPEC.md section 4.7 criticises.
++ * What the gated path deliberately does not do
++ * -------------------------------------------
++ * - no dp/eps/eqm/ips/fam probe initialization (write-set rows R1/R3/R5 in
++ *   LSW-SPEC.md section 7.7): those words are not in the reviewed W2 write set
++ *   and their register semantics are [U];
++ * - no EQM indirect table, classifier/L2/VLAN or queue/flow DDR programming:
++ *   those formats are unknown; the queue/flow regions are only validated from
++ *   the devicetree and never mapped;
++ * - no power-up of an unmeasured block beyond the two gate clocks and the four
++ *   reset lines: the W3 step deliberately stops there and logs the resulting
++ *   register state instead of asserting the vendor baseline;
++ * - no port-id re-mapping: the devicetree declares the measured MAC port
++ *   numbers and the probe validates them against the populated qid rows, but
++ *   the mapping from a MAC port number to the PIE TX descriptor/egress path is
++ *   still [U];
++ * - no netdev and no switchdev notifier: the port netdev belongs to the GEMAC
++ *   driver, which only registers when this driver reports the egress map ready
++ *   (luofu-switch.h).
+  *
+- * The next hardware steps are listed in LSW-SPEC.md section 12.3: W2 (this
+- * model plus the reviewed write set), W3 (clock/reset only), W4 (one qid-map
+- * write for one host queue and one MAC port), W5 (remaining ports, forwarding)
+- * and W6 (learning-off/forward-all behaviour).
++ * The remaining hardware steps are listed in LSW-SPEC.md section 12.3: W3
++ * (clock/reset only; implemented behind luofu_lsw.arm=1), W4/W5 (the qid-map
++ * write for the populated rows; implemented behind luofu_lsw.qidmap=1), and W6
++ * (learning-off/forward-all behaviour, not modelled).  None of them has been
++ * executed on hardware; the first execution is an attended bench event.
+  */
+ 
+ #include <linux/bitops.h>
+@@ -108,11 +140,52 @@
+ #include <linux/sizes.h>
+ 
+ #include "luofu-switch-regs.h"
++#include "luofu-switch.h"
+ 
+ #define LUOFU_SWITCH_NUM_CLOCKS		2
+ #define LUOFU_SWITCH_NUM_RESETS		4
+ 
+ /*
++ * Driver state published to the rest of the wired data path.  The GEMAC netdev
++ * front end may only register a net_device once this driver has programmed and
++ * verified the egress qid map (the readiness contract in luofu-switch.h), so a
++ * boot that cannot program the map does not expose an interface that would
++ * silently drop every frame.
++ */
++enum luofu_switch_state {
++	LUOFU_SWITCH_ABSENT,	/* probe has not run yet */
++	LUOFU_SWITCH_REFUSED,	/* probe ran and failed closed */
++	LUOFU_SWITCH_READY,	/* W2 qid map programmed and verified */
++};
++
++static enum luofu_switch_state luofu_switch_state = LUOFU_SWITCH_ABSENT;
++
++/*
++ * The two attended arm gates.  Both default to off, so a normal boot keeps the
++ * read-only behaviour of patch 021.  See the file header for the exact step
++ * each one enables; the first execution of either is a bench event.
++ */
++static bool luofu_switch_arm_gate;
++module_param_named(arm, luofu_switch_arm_gate, bool, 0444);
++MODULE_PARM_DESC(arm, "Attended W3 step: enable the switch gate clocks and release the resets, then read the block (default off)");
++
++static bool luofu_switch_qidmap_gate;
++module_param_named(qidmap, luofu_switch_qidmap_gate, bool, 0444);
++MODULE_PARM_DESC(qidmap, "Attended W4/W5 step: also program and verify the W2 qid-map write set (requires arm=1; default off)");
++
++bool luofu_switch_probed(void)
++{
++	return READ_ONCE(luofu_switch_state) != LUOFU_SWITCH_ABSENT;
++}
++EXPORT_SYMBOL_GPL(luofu_switch_probed);
++
++bool luofu_switch_ready(void)
++{
++	return READ_ONCE(luofu_switch_state) == LUOFU_SWITCH_READY;
++}
++EXPORT_SYMBOL_GPL(luofu_switch_ready);
++
++/*
+  * Upper bound for the devicetree port count.  The recovered queue-manager port
+  * table has 46 entries, so a port index that does not fit it could not have a
+  * queue-manager entry in the recovered model.  This is a sanity bound on the
+@@ -176,12 +249,14 @@
+ /**
+  * struct luofu_switch_port - one switch port from the devicetree port model
+  * @index: devicetree port index (reg), ordering only
++ * @hw_port: measured hardware port number declared by "hisilicon,port"
+  * @ethernet: node that provides the netdev for this port
+  * @pdev: platform device owning that node; NULL while the port device is
+- *        disabled (the GEMAC data path does not exist yet)
++ *        disabled
+  */
+ struct luofu_switch_port {
+ 	u32 index;
++	u32 hw_port;
+ 	struct device_node *ethernet;
+ 	struct platform_device *pdev;
+ };
+@@ -197,6 +272,10 @@
+  * @ports: parsed devicetree port model
+  * @num_ports: number of parsed ports
+  * @port_bitmap: port bitmap cells read from the devicetree
++ * @qid_pre_a: pre-write table-A words, saved for the readback rollback
++ * @qid_pre_b: pre-write table-B words, saved for the readback rollback
++ * @powered: the gated W3 step enabled the clocks and released the resets
++ * @qid_maps_ready: the W2 qid-map write set was programmed and verified
+  */
+ struct luofu_switch {
+ 	struct device *dev;
+@@ -208,6 +287,10 @@
+ 	struct luofu_switch_port ports[LUOFU_SWITCH_MAX_PORTS];
+ 	unsigned int num_ports;
+ 	u32 port_bitmap[2];
++	u32 *qid_pre_a;
++	u32 *qid_pre_b;
++	bool powered;
++	bool qid_maps_ready;
+ };
+ 
+ /*
+@@ -472,16 +555,26 @@
+ }
+ 
+ /*
+- * Parse the devicetree port model.  A port is an ordering index (reg), which
+- * is explicitly NOT the recovered hardware port id, plus an "ethernet" phandle
+- * to the node that owns the port's netdev.  The owning platform device is
+- * recorded here so that the switch-to-port netdev relationship is expressed by
+- * a device reference rather than by name; the netdev itself belongs to that
+- * driver (the GEMAC data path), so no netdev is looked up or created here.
+- * The port device may still be disabled at probe time (the GEMAC data path is
+- * not implemented), in which case @pdev stays NULL and the port is only
+- * described, never registered.  Duplicate indices/phandles are rejected
+- * because they would make that relationship ambiguous.
++ * Forward declaration: the qid model helper is used by the port-model parser to
++ * reject a hardware port number that has no populated row.
++ */
++static u32 luofu_switch_qid_word(const struct luofu_switch_variant *variant,
++				 unsigned int port, unsigned int slot);
++
++/*
++ * Parse the devicetree port model.  A port child carries an ordering index
++ * (reg), the measured hardware port number ("hisilicon,port", 9..12 on this
++ * board) and an "ethernet" phandle to the node that owns the port's netdev.
++ * The hardware port number is validated against the measured qid allocation
++ * model: a port whose row the model does not populate cannot be wired, so the
++ * probe fails closed instead of assigning it a guessed qid range.  The owning
++ * platform device is recorded here so that the switch-to-port netdev
++ * relationship is expressed by a device reference rather than by name; the
++ * netdev itself belongs to that driver (the GEMAC front end), so no netdev is
++ * looked up or created here.  The port device may still be disabled at probe
++ * time, in which case @pdev stays NULL and the port is only described, never
++ * registered.  Duplicate indices/port numbers/phandles are rejected because
++ * they would make that relationship ambiguous.
+  */
+ static int luofu_switch_parse_ports(struct luofu_switch *lsw)
+ {
+@@ -498,6 +591,7 @@
+ 		struct device_node *ethernet;
+ 		struct luofu_switch_port *port;
+ 		unsigned int i;
++		u32 hw_port;
+ 		u32 index;
+ 
+ 		ret = of_property_read_u32(child, "reg", &index);
+@@ -560,8 +654,47 @@
+ 			goto out;
+ 		}
+ 
++		/*
++		 * The measured hardware port number of the MAC behind this
++		 * switch port.  It is board data, not the devicetree ordering
++		 * index: the four live MACs are switch ports 9..12.  A port
++		 * whose row the measured allocation model does not populate
++		 * cannot be wired, so it fails closed instead of being given a
++		 * guessed qid range.
++		 */
++		ret = of_property_read_u32(child, "hisilicon,port", &hw_port);
++		if (ret) {
++			of_node_put(ethernet);
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: missing measured hardware port number (hisilicon,port)\n",
++				      child);
++			goto out;
++		}
++
++		if (!luofu_switch_qid_word(lsw->variant, hw_port, 0)) {
++			of_node_put(ethernet);
++			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: hardware port %u has no populated qid row in the measured allocation model\n",
++				      child, hw_port);
++			goto out;
++		}
++
++		for (i = 0; i < lsw->num_ports; i++)
++			if (lsw->ports[i].hw_port == hw_port)
++				break;
++		if (i < lsw->num_ports) {
++			of_node_put(ethernet);
++			ret = -EINVAL;
++			dev_err_probe(lsw->dev, ret,
++				      "%pOF: duplicate hardware port number %u\n",
++				      child, hw_port);
++			goto out;
++		}
++
+ 		port = &lsw->ports[lsw->num_ports];
+ 		port->index = index;
++		port->hw_port = hw_port;
+ 		port->ethernet = ethernet;
+ 		port->pdev = of_find_device_by_node(ethernet);
+ 		if (!port->pdev)
+@@ -812,6 +945,381 @@
+ 	return 0;
+ }
+ 
++/*
++ * Write one table-A word by its flat 32-bit word index: the vendor
++ * qid_map_set() shape for ports 0..15, word index port*8 + slot, value
++ * 0x100 | qid.  Every write in this file is the W2 write set; there is no
++ * other LSW register write path.
++ */
++static void luofu_switch_qid_write_a(struct luofu_switch *lsw,
++				     unsigned int index, u32 value)
++{
++	void __iomem *table = lsw->window[LUOFU_SWITCH_WIN_OPP] +
++			      LUOFU_SWITCH_OPP_QID_TABLE_A;
++
++	writel(value, table + index * 4);
++}
++
++/*
++ * Write one word of a table-B 16-byte entry: the vendor qid_map_set() shape for
++ * ports 40..47 writes the same value to all four u32 of the entry at byte
++ * offset ((port - 40) * 8 + slot) * 16.  @index is the flat 32-bit word index
++ * (entry * 4 + word).
++ */
++static void luofu_switch_qid_write_b(struct luofu_switch *lsw,
++				     unsigned int index, u32 value)
++{
++	void __iomem *table = lsw->window[LUOFU_SWITCH_WIN_OPP] +
++			      LUOFU_SWITCH_OPP_QID_TABLE_B;
++
++	writel(value, table + index * 4);
++}
++
++/*
++ * The gated W3 power sequence: enable the two CRG gate clocks, then release the
++ * four CRG reset lines (the recovered vendor order).  This is the first write
++ * the driver ever makes; it is only reachable with luofu_lsw.arm=1 and has
++ * never run on hardware.  The resulting state is re-checked read-only through
++ * the CRG syscon and the reset API in luofu_switch_check_block_ready() before
++ * any switch register is touched.
++ */
++static int luofu_switch_power_up(struct luofu_switch *lsw)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < LUOFU_SWITCH_NUM_CLOCKS; i++) {
++		ret = clk_prepare_enable(lsw->clk[i]);
++		if (ret) {
++			dev_err_probe(lsw->dev, ret, "cannot enable %s\n",
++				      luofu_switch_clock_names[i]);
++			goto err_clk;
++		}
++	}
++
++	for (i = 0; i < LUOFU_SWITCH_NUM_RESETS; i++) {
++		ret = reset_control_deassert(lsw->reset[i]);
++		if (ret) {
++			dev_err_probe(lsw->dev, ret, "cannot release %s\n",
++				      luofu_switch_reset_names[i]);
++			goto err_reset;
++		}
++	}
++
++	return 0;
++
++err_reset:
++	while (i--)
++		reset_control_assert(lsw->reset[i]);
++	for (i = LUOFU_SWITCH_NUM_CLOCKS; i-- > 0;)
++		clk_disable_unprepare(lsw->clk[i]);
++	return ret;
++
++err_clk:
++	while (i--)
++		clk_disable_unprepare(lsw->clk[i]);
++	return ret;
++}
++
++/* Undo luofu_switch_power_up(); safe to call only when it succeeded. */
++static void luofu_switch_power_down(struct luofu_switch *lsw)
++{
++	unsigned int i;
++
++	for (i = LUOFU_SWITCH_NUM_RESETS; i-- > 0;)
++		reset_control_assert(lsw->reset[i]);
++	for (i = LUOFU_SWITCH_NUM_CLOCKS; i-- > 0;)
++		clk_disable_unprepare(lsw->clk[i]);
++	lsw->powered = false;
++}
++
++/*
++ * Read-only snapshot of the inventory's read set after the W3 power-up.  This
++ * is deliberately NOT a conformance check: the 2026-11-18 baseline is the
++ * vendor driver's post-boot state and our own boot has not run that
++ * initialization, so a mismatch is expected - it is the evidence the attended
++ * session needs.  Only offsets the 2026-11-18 inventory read are touched.
++ */
++static void luofu_switch_snapshot_block(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	unsigned int nonzero_a = 0;
++	unsigned int nonzero_b = 0;
++	unsigned int port, slot, word;
++	unsigned int i;
++
++	for (i = 0; i < variant->num_baseline; i++) {
++		const struct luofu_switch_baseline_entry *entry =
++			&variant->baseline[i];
++
++		dev_info(lsw->dev,
++			 "W3 snapshot: %s = %#x (vendor baseline %#x mask %#x)\n",
++			 entry->name,
++			 readl(lsw->window[entry->window] + entry->offset),
++			 entry->value, entry->mask);
++	}
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_A_PORTS; port++)
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++)
++			if (luofu_switch_qid_table_a(lsw, port, slot))
++				nonzero_a++;
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_B_PORTS; port++) {
++		unsigned int id = LUOFU_SWITCH_QID_TABLE_B_FIRST + port;
++
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++)
++			for (word = 0; word < 4; word++)
++				if (luofu_switch_qid_table_b(lsw, id, slot,
++							     word))
++					nonzero_b++;
++	}
++
++	dev_info(lsw->dev,
++		 "W3 snapshot: qid table A has %u non-zero words, table B has %u (vendor baseline 72 and 128)\n",
++		 nonzero_a, nonzero_b);
++}
++
++/*
++ * Restore the found value of every word the W2 write set programs.  Only used
++ * when the readback verification fails, so a failed attended step leaves the
++ * block in the state it was found in instead of half programmed.
++ */
++static void luofu_switch_qid_maps_restore(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	unsigned int i, slot, word;
++
++	if (!lsw->qid_pre_a || !lsw->qid_pre_b)
++		return;
++
++	for (i = 0; i < variant->num_qid_ports; i++) {
++		unsigned int port = variant->qid_ports[i];
++
++		if (port < LUOFU_SWITCH_QID_TABLE_B_FIRST) {
++			for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++				unsigned int index =
++					port * LUOFU_SWITCH_QID_SLOTS + slot;
++
++				luofu_switch_qid_write_a(lsw, index,
++							 lsw->qid_pre_a[index]);
++			}
++			continue;
++		}
++
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			unsigned int entry =
++				((port - LUOFU_SWITCH_QID_TABLE_B_FIRST) *
++				 LUOFU_SWITCH_QID_SLOTS + slot) * 4;
++
++			for (word = 0; word < 4; word++) {
++				u32 value = lsw->qid_pre_b[entry + word];
++
++				luofu_switch_qid_write_b(lsw, entry + word,
++							 value);
++			}
++		}
++	}
++
++	/* Flush the posted restore writes before the rollback path returns. */
++	wmb();
++}
++
++/*
++ * The attended W4/W5 step: program the D1b W2 write set (LSW-SPEC.md section
++ * 7.7, rows Q1/Q2) and verify every programmed word.  The found state of all
++ * table words is saved first, both for the rollback and for the pre-write
++ * conformance gate: every word outside the derived allocation model must read
++ * zero, because that is the measured vendor state the write set was derived
++ * against.  A non-zero unpopulated word means our boot's block state is not the
++ * state the model describes, so the function refuses before the first write.
++ */
++static int luofu_switch_qid_maps_program(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	unsigned int bad = 0;
++	unsigned int i, port, slot, word;
++	u32 expected;
++
++	lsw->qid_pre_a = devm_kcalloc(lsw->dev,
++				      LUOFU_SWITCH_QID_TABLE_A_PORTS *
++				      LUOFU_SWITCH_QID_SLOTS,
++				      sizeof(*lsw->qid_pre_a), GFP_KERNEL);
++	lsw->qid_pre_b = devm_kcalloc(lsw->dev,
++				      LUOFU_SWITCH_QID_TABLE_B_PORTS *
++				      LUOFU_SWITCH_QID_SLOTS * 4,
++				      sizeof(*lsw->qid_pre_b), GFP_KERNEL);
++	if (!lsw->qid_pre_a || !lsw->qid_pre_b)
++		return -ENOMEM;
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_A_PORTS; port++)
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++)
++			lsw->qid_pre_a[port * LUOFU_SWITCH_QID_SLOTS + slot] =
++				luofu_switch_qid_table_a(lsw, port, slot);
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_B_PORTS; port++) {
++		unsigned int id = LUOFU_SWITCH_QID_TABLE_B_FIRST + port;
++
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++)
++			for (word = 0; word < 4; word++)
++				lsw->qid_pre_b[((port *
++						 LUOFU_SWITCH_QID_SLOTS + slot) *
++						4) + word] =
++					luofu_switch_qid_table_b(lsw, id, slot,
++								 word);
++	}
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_A_PORTS; port++) {
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			u32 value;
++
++			if (luofu_switch_qid_word(variant, port, slot))
++				continue;
++			value = lsw->qid_pre_a[port *
++					       LUOFU_SWITCH_QID_SLOTS + slot];
++			if (!value)
++				continue;
++			if (bad < 10)
++				dev_err(lsw->dev,
++					"pre-write qid table A port %u slot %u reads %#x; an unpopulated row must be zero\n",
++					port, slot, value);
++			bad++;
++		}
++	}
++
++	for (port = 0; port < LUOFU_SWITCH_QID_TABLE_B_PORTS; port++) {
++		unsigned int id = LUOFU_SWITCH_QID_TABLE_B_FIRST + port;
++
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			for (word = 0; word < 4; word++) {
++				u32 value =
++					lsw->qid_pre_b[((port *
++							 LUOFU_SWITCH_QID_SLOTS +
++							 slot) * 4) + word];
++
++				if (luofu_switch_qid_word(variant, id, slot) ||
++				    !value)
++					continue;
++				if (bad < 10)
++					dev_err(lsw->dev,
++						"pre-write qid table B port %u slot %u word %u reads %#x; an unpopulated row must be zero\n",
++						id, slot, word, value);
++				bad++;
++			}
++		}
++	}
++
++	if (bad)
++		return dev_err_probe(lsw->dev, -EIO,
++				     "%u unpopulated qid-map words are non-zero before the write set; this block state is not the state the W2 model was derived against, refusing to program it\n",
++				     bad);
++
++	/* Q1: table A, one word per slot of every populated port row. */
++	for (i = 0; i < variant->num_qid_ports; i++) {
++		port = variant->qid_ports[i];
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			expected = luofu_switch_qid_word(variant, port, slot);
++
++			if (port < LUOFU_SWITCH_QID_TABLE_B_FIRST) {
++				unsigned int index;
++
++				index = port * LUOFU_SWITCH_QID_SLOTS + slot;
++				luofu_switch_qid_write_a(lsw, index, expected);
++			} else {
++				unsigned int base;
++
++				/* Q2: table B, four words of the 16-byte row. */
++				base = ((port -
++					 LUOFU_SWITCH_QID_TABLE_B_FIRST) *
++					LUOFU_SWITCH_QID_SLOTS + slot) * 4;
++				for (word = 0; word < 4; word++)
++					luofu_switch_qid_write_b(lsw,
++								 base + word,
++								 expected);
++			}
++		}
++	}
++
++	/*
++	 * Flush the posted qid-map writes before the readback so the read
++	 * returns the programmed values, not the write-buffer state.
++	 */
++	wmb();
++
++	/* Read back every programmed word; restore the found state on error. */
++	for (i = 0; i < variant->num_qid_ports; i++) {
++		port = variant->qid_ports[i];
++		for (slot = 0; slot < LUOFU_SWITCH_QID_SLOTS; slot++) {
++			expected = luofu_switch_qid_word(variant, port, slot);
++
++			if (port < LUOFU_SWITCH_QID_TABLE_B_FIRST) {
++				u32 value =
++					luofu_switch_qid_table_a(lsw, port,
++								 slot);
++
++				if (value == expected)
++					continue;
++				if (bad < 10)
++					dev_err(lsw->dev,
++						"qid table A port %u slot %u read back %#x, wrote %#x\n",
++						port, slot, value, expected);
++				bad++;
++			} else {
++				for (word = 0; word < 4; word++) {
++					u32 value;
++
++					value = luofu_switch_qid_table_b(lsw,
++									 port, slot,
++									 word);
++					if (value == expected)
++						continue;
++					if (bad < 10)
++						dev_err(lsw->dev,
++							"qid table B port %u slot %u word %u read back %#x, wrote %#x\n",
++							port, slot, word,
++							value, expected);
++					bad++;
++				}
++			}
++		}
++	}
++
++	if (bad) {
++		luofu_switch_qid_maps_restore(lsw);
++		return dev_err_probe(lsw->dev, -EIO,
++				     "%u qid-map words did not read back; the found table state was restored and the switch is not ready\n",
++				     bad);
++	}
++
++	dev_info(lsw->dev,
++		 "W2 qid map programmed and verified: 72 table-A words (ports 4-12, qids 1-72) + 128 table-B words (ports 40-43, qids 73-104)\n");
++	return 0;
++}
++
++/*
++ * The default path: the read-only baseline probe of patch 021.  It only
++ * reaches the block when it is already clocked and out of reset (the stock
++ * vendor boot); otherwise it refuses before the first switch register access.
++ */
++static int luofu_switch_readonly_probe(struct luofu_switch *lsw)
++{
++	int ret;
++
++	ret = luofu_switch_check_block_ready(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_validate_baseline(lsw);
++	if (ret)
++		return ret;
++
++	ret = luofu_switch_validate_qid_tables(lsw);
++	if (ret)
++		return ret;
++
++	return dev_err_probe(lsw->dev, -EOPNOTSUPP,
++			     "read-only baseline validated; the W3/W4 write set has never been executed on this block (set luofu_lsw.arm=1 for the attended power step, add luofu_lsw.qidmap=1 for the qid-map write step)\n");
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -820,45 +1328,52 @@
+ 	int ret;
+ 
+ 	lsw = devm_kzalloc(dev, sizeof(*lsw), GFP_KERNEL);
+-	if (!lsw)
++	if (!lsw) {
++		luofu_switch_state = LUOFU_SWITCH_REFUSED;
+ 		return -ENOMEM;
++	}
+ 	lsw->dev = dev;
++	platform_set_drvdata(pdev, lsw);
+ 
+ 	lsw->variant = of_device_get_match_data(dev);
+-	if (!lsw->variant)
+-		return dev_err_probe(dev, -EINVAL, "missing SoC variant data\n");
+-	if (lsw->variant->hwver < 0x200 || lsw->variant->hwver >= 0x300)
+-		return dev_err_probe(dev, -EINVAL,
+-				     "variant v%x has no recovered switch model\n",
+-				     lsw->variant->hwver);
++	if (!lsw->variant) {
++		ret = dev_err_probe(dev, -EINVAL, "missing SoC variant data\n");
++		goto out;
++	}
++	if (lsw->variant->hwver < 0x200 || lsw->variant->hwver >= 0x300) {
++		ret = dev_err_probe(dev, -EINVAL,
++				    "variant v%x has no recovered switch model\n",
++				    lsw->variant->hwver);
++		goto out;
++	}
+ 
+ 	ret = luofu_switch_check_windows(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = luofu_switch_check_clocks(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = luofu_switch_check_resets(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = luofu_switch_get_crg(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = luofu_switch_parse_ports(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = devm_add_action_or_reset(dev, luofu_switch_ports_release, lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	ret = luofu_switch_read_port_bitmap(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	dev_info(dev,
+ 		 "LSW %s: %u MMIO windows, 2 DDR windows (queue %#llx, flow %#llx), %u clocks, %u resets and %u ports validated\n",
+@@ -873,43 +1388,90 @@
+ 		struct luofu_switch_port *port = &lsw->ports[i];
+ 
+ 		if (port->pdev)
+-			dev_info(dev, "port %u: owner %s\n", port->index,
++			dev_info(dev,
++				 "port %u: hw port %u, owner %s\n",
++				 port->index, port->hw_port,
+ 				 dev_name(&port->pdev->dev));
+ 		else
+-			dev_info(dev, "port %u: owner %pOF is not an enabled device\n",
+-				 port->index, port->ethernet);
++			dev_info(dev,
++				 "port %u: hw port %u, owner %pOF is not an enabled device\n",
++				 port->index, port->hw_port, port->ethernet);
+ 	}
+ 
+ 	/*
+-	 * A switchdev notifier needs real per-port netdevs; the GEMAC data path
+-	 * does not exist yet, so no notifier is registered and no netdev is
+-	 * created here (the port netdev belongs to the GEMAC driver).
++	 * A switchdev notifier needs real per-port netdevs; the port netdev
++	 * belongs to the GEMAC front end and is only registered after this
++	 * driver reports the egress map ready, so no notifier is installed
++	 * here.
+ 	 */
+-	dev_info(dev, "port netdevs: none available; switchdev registration deferred\n");
++	dev_info(dev, "port netdevs: owned by the GEMAC front end; switchdev registration deferred\n");
+ 
+ 	/*
+-	 * From here on the block is read.  The state gate comes first so that a
+-	 * block that is unclocked or held in reset is never accessed.
++	 * The default path: read-only.  The state gate inside the helper comes
++	 * first, so a block that is unclocked or held in reset is never
++	 * accessed.
+ 	 */
+-	ret = luofu_switch_check_block_ready(lsw);
++	if (!luofu_switch_arm_gate) {
++		ret = luofu_switch_readonly_probe(lsw);
++		goto out;
++	}
++
++	/*
++	 * Attended W3/W4/W5 path.  Everything below this line writes the CRG
++	 * or the switch; it has never run on hardware and only runs with the
++	 * explicit luofu_lsw.arm=1 opt-in.
++	 */
++	dev_warn(dev,
++		 "luofu_lsw.arm=1: ATTENDED WRITE PATH, never executed on hardware - powering the switch block (W3)\n");
++
++	ret = luofu_switch_power_up(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
++	lsw->powered = true;
+ 
+-	ret = luofu_switch_validate_baseline(lsw);
++	ret = luofu_switch_check_block_ready(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+-	ret = luofu_switch_validate_qid_tables(lsw);
++	luofu_switch_snapshot_block(lsw);
++
++	if (!luofu_switch_qidmap_gate) {
++		dev_warn(dev,
++			 "W3 power/read step done; luofu_lsw.qidmap is not set, so no LSW register was written - refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_lsw.qidmap=1: programming the D1b W2 qid-map write set (W4/W5) with readback verification\n");
++
++	ret = luofu_switch_qid_maps_program(lsw);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+-	/*
+-	 * Read-only validation passed.  Programming is still refused: the
+-	 * write set has never been executed on this block, the EQM/classifier/
+-	 * VLAN formats are unknown and the port-id mapping is unmeasured.
+-	 */
+-	return dev_err_probe(dev, -EOPNOTSUPP,
+-			     "read-only baseline validated; register/queue/port-id programming is not verified and no write has ever been made on this block; refusing to program the switch\n");
++	lsw->qid_maps_ready = true;
++	dev_info(dev,
++		 "connectivity path armed: LSW egress qid maps programmed and verified; the GEMAC netdev front end may register\n");
++out:
++	if (ret && lsw->powered)
++		luofu_switch_power_down(lsw);
++	if (ret == -EPROBE_DEFER)
++		luofu_switch_state = LUOFU_SWITCH_ABSENT;
++	else
++		luofu_switch_state = ret ? LUOFU_SWITCH_REFUSED :
++					   LUOFU_SWITCH_READY;
++	return ret;
++}
++
++static void luofu_switch_remove(struct platform_device *pdev)
++{
++	struct luofu_switch *lsw = platform_get_drvdata(pdev);
++
++	if (lsw->qid_maps_ready)
++		luofu_switch_qid_maps_restore(lsw);
++	luofu_switch_state = LUOFU_SWITCH_REFUSED;
++	if (lsw->powered)
++		luofu_switch_power_down(lsw);
+ }
+ 
+ static const struct of_device_id luofu_switch_of_match[] = {
+@@ -920,6 +1482,7 @@
+ 
+ static struct platform_driver luofu_switch_driver = {
+ 	.probe = luofu_switch_probe,
++	.remove = luofu_switch_remove,
+ 	.driver = {
+ 		.name = "luofu-switch",
+ 		.of_match_table = luofu_switch_of_match,
+@@ -927,5 +1490,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (read-only baseline probe)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated W2 qid-map write path)");
+ MODULE_LICENSE("GPL");
+diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+@@ -33,12 +33,22 @@
+   against the devicetree but never maps them as MMIO. The layout inside the
+   regions is not known.
+ 
+-  The Linux driver is a read-only draft: it validates these resources, the
++  The port children carry the measured hardware port number of the MAC behind
++  them ("hisilicon,port"): the vendor devicetree declares the five MACs as
++  switch ports 8..12 and the live board uses 9..12. The driver validates each
++  port number against the measured qid allocation model and refuses a port
++  that has no populated qid row.
++
++  The Linux driver is a draft. By default it validates these resources, the
+   switch port model and the measured register/qid-map baseline, then refuses
+-  to program the switch. It never writes a register, never enables the CRG
+-  clocks, never drives the CRG resets and registers no netdev or switchdev
+-  notifier. The node must stay disabled until the attended switch bring-up
+-  experiments have validated the write set.
++  to program the switch. The first reviewed write step - the CRG gate/reset
++  power-up and the two qid maps of the D1b W2 write set - is implemented but
++  only runs with the explicit "luofu_lsw.arm=1" / "luofu_lsw.qidmap=1"
++  module parameters on an attended boot. It never registers a netdev or a
++  switchdev notifier; the port netdevs belong to the GEMAC front end, which
++  only registers them after this driver reports the egress map ready. Nothing
++  in this driver has run on hardware and the remaining table formats are
++  unknown, so the node is enabled only for that attended bring-up.
+ 
+ properties:
+   compatible:
+@@ -129,8 +139,15 @@
+             maxItems: 1
+             description: |
+               Devicetree port index used to order the switch ports. It is not
+-              the recovered hardware port id: the mapping between the MAC port
+-              numbers and the switch's internal port ids is not established.
++              the hardware port number; that is given by "hisilicon,port".
++          hisilicon,port:
++            $ref: /schemas/types.yaml#/definitions/uint32
++            description: |
++              Measured hardware port number of the switch port behind this
++              netdev, as the vendor devicetree's GEMAC "port" cells declare it
++              (8..12 for the five MACs; the live board uses 9..12). The driver
++              validates it against the measured qid allocation model and
++              refuses a port that has no populated qid row.
+           ethernet:
+             $ref: /schemas/types.yaml#/definitions/phandle
+             description: |
+@@ -138,6 +155,7 @@
+               port's netdev (a GEMAC node on this board).
+         required:
+           - reg
++          - hisilicon,port
+           - ethernet
+         unevaluatedProperties: false
+     required:
+@@ -210,11 +228,13 @@
+ 
+             ethernet-port@0 {
+                 reg = <0>;
++                hisilicon,port = <9>;
+                 ethernet = <&gmac1>;
+             };
+ 
+             ethernet-port@1 {
+                 reg = <1>;
++                hisilicon,port = <10>;
+                 ethernet = <&gmac2>;
+             };
+         };

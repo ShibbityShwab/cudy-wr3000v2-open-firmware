@@ -43,7 +43,8 @@
 > built host-side.** `image/luofu.mk` now carries real `Build/` stages for the
 > whole recipe (zImage -> legacy uImage with the derived load/entry -> generated
 > FIP trailer -> validated kernel slice -> manifest -> squashfs in a static UBI
-> volume -> sysupgrade container), `base-files/lib/upgrade/platform.sh`
+> volume + the empty dynamic `rootfs_data` overlay volume -> sysupgrade container),
+> `base-files/lib/upgrade/platform.sh`
 > implements a structural `platform_check_image` and a host-side A/B
 > `platform_do_upgrade` (writes only the inactive pair, selector last;
 > still never run on hardware), and `tools/luofu-image.py`
@@ -175,6 +176,33 @@
 > applies/prepares/compiles host-side with WERROR and no warnings; config symbol-identical and
 > idempotent; bindings and board DTS validate.
 >
+> **2026-11-19 (attended hardware bring-up): the image chain BOOTED to userspace on the
+> WR3000 v2.** U-Boot's failover path booted the written pair: kernel 6.18.60 banner (UP,
+> **1 CPU** - the image was built from patches `001`-`017`, so patch `018`'s SMP release was
+> not part of it), UBI attached the rootfs slot, `ubiblock0_0` mounted the static squashfs,
+> and `/sbin/init` -> preinit -> procd -> console ran on our own build. The boot fixes this
+> needed are in the target tree (`CONFIG_CMDLINE_FORCE`, 4 KiB squashfs padding before
+> ubinize, `CONFIG_XZ_DEC_ARM`). No network, no persistent overlay and a `board_detect`
+> warning were observed; see the afternoon entry below.
+>
+> **2026-11-19 (afternoon, host-only, NOT FLASHED): persistent overlay + board_detect fix +
+> production image rebuild from the FULL series `001`-`023`.** The rootfs slot now carries
+> the standard OpenWrt two-volume UBI - static `squashfs` **plus an EMPTY dynamic
+> `rootfs_data` overlay volume** (`vol_size=1MiB`, `vol_flags=autoresize`); fstools
+> `mount_root` finds it by name and the kernel's first read-write UBIFS mount formats it, so
+> the next boot has a persistent overlay instead of the tmpfs fallback (source-verified in
+> the tree's kernel/fstools sources; never booted). The stale `board.d/02_network` line
+> that sourced the nonexistent `/lib/functions/board.sh` is gone (the image ships the
+> corrected board.d + `luofu-mac.sh`), a build guard now fails the image if any installed
+> board.d sources a missing helper, and the container marker is
+> `BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED`. A clean production image was
+> rebuilt in the isolated clone from patches `001`-`023` (SMP, clock tree, PIE, LSW W1
+> probe, LSW gated qid-map write path, GEMAC netdev readiness) with the boot fixes intact:
+> sha256/size and every validation result are in SKELETON-SMOKE.md (2026-11-19 afternoon
+> session). **The booted image was `001`-`017`; THIS rebuild has not been flashed or
+> booted, and the next attended boot is the first test of the full series (SMP + the new
+> LSW/PIE/GEMAC drivers).**
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).
@@ -218,17 +246,17 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
 | `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig. It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC now a draft netdev/phylink front end over PIE), the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`) and the boot selector (`CONFIG_LUOFU_SELECTOR`); patch `020` makes GEMAC select `CONFIG_PHYLINK`, so the delta resolves it to `y`; patch `021` adds no symbol (help text only), and patches `022`/`023` add no symbol either (both `CONFIG_LUOFU_SWITCH` and `CONFIG_LUOFU_GMAC` stay `y`; the new `LUOFU_GMAC depends on LUOFU_SWITCH` resolves identically), so the delta's symbol set is unchanged by them; with patches `001`-`023` the **full kernel compiles** (RC=0, `CONFIG_WERROR=y`, 0 warnings) and only the 2026-11-19 userspace boot was ever run | same |
-| `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` + `image/luofu-ubinize.cfg` | board image Makefile (main idiom: `image.mk`, includes the subtarget file, `BuildImage`) plus the **real** target image chain: `kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest`, then `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata`. Every target-specific stage validates its own output and fails closed. **host-built 2026-11-18** (never booted) | `target/linux/hisilicon/image/` |
+| `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` + `image/luofu-ubinize.cfg` | board image Makefile (main idiom: `image.mk`, includes the subtarget file, `BuildImage`) plus the **real** target image chain: `kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest`, then `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata`. Every target-specific stage validates its own output and fails closed; the rootfs UBI stage emits the static `squashfs` volume **plus the empty dynamic `rootfs_data` overlay volume (autoresize)**, and a base-files guard fails the build if an installed board.d sources a missing helper. **host-built 2026-11-18; rebuilt 2026-11-19 with the overlay volume and series `001`-`023` (image sha256 see the build session below; never flashed/booted)** | `target/linux/hisilicon/image/` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` implements the A/B install path host-side (two in-boot witnesses must agree on the active pair, the inactive kernel+rootfs slots are located by `/proc/mtd` label, written with `mtd`/`ubiformat`, read back, and only then the selector moves; it never touches the active pair, `rootfs_data` or the env blocks). **`sh -n` clean; host-checked against the real built container and corrupted/foreign variants; install path mocked-tested by `tools/test-platform-abinstall.sh`; never run on hardware**. The two-witness active-pair check is only valid because the image re-records the running pair on every boot (recorder row below); the handover is the loader's env-mismatch path, not an env write (corrected 2026-11-18, [`SELECTOR-0x21.md`](../docs/SELECTOR-0x21.md)) | same path (board-level base-files) |
 | `target/linux/hisilicon/base-files/etc/init.d/luofu_record_pair` | boot-time running-pair recorder (2026-11-18 selector-fix session): `START=96`, after `/etc/init.d/done`; derives the booted rootfs pair from `/sys/class/ubi/ubi0/mtd_num` plus that mtd's `/proc/mtd` label (with an optional `/proc/cmdline` `ubi.mtd=` cross-check), waits a bounded time for the luofu-selector interface, logs through syslog, and writes the running pair to `next_pair` only when the recorded value is one of the two established pairs and differs (idempotent; a matching record means no write). It never writes manual/unknown values, never blocks the boot indefinitely and never touches the env blocks. `sh -n` clean; mocked-tested in `tools/test-platform-abinstall.sh`; enabled automatically by the image (`prepare_rootfs` creates `S96luofu_record_pair`); **never run on hardware** | same path (board-level base-files) |
 | `target/linux/hisilicon/base-files/etc/board.d/02_network` | board detection / network-defaults sketch at board level (main idiom); deliberately configures no interface because the switch has no driver (**SCHEMATIC** for the interface map) and calls the factory-MAC provisioning helper below, recording LAN/WAN addresses through the standard `ucidef_set_interface_macaddr` board.json path (**host-validated**, never booted) | same path (mode 0755) |
 | `target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh` | factory-MAC provisioning helper (2026-11-18): reads the plaintext 6-byte `bdinfo` copy at `0xde00` with `mtd_get_mac_binary` (direct `/dev/mtdN` fallback), validates it (unicast, universally administered, not erased/zero, OUI/NIC sanity incl. the `...:ff:ff:ff` WAN-wrap case), derives LAN = base MAC and WAN = base+1 exactly like the vendor scripts, records both with `ucidef_set_interface_macaddr`, and falls back to a logged locally-administered random pair when bdinfo is missing/corrupt; the bdinfo partition is never written. `sh -n` clean; mocked-tested by `tools/test-mac-provisioning.sh`; **never run on hardware** | same path (board-level base-files) |
 | `tools/test-mac-provisioning.sh` | host-side mocked test for the factory-MAC provisioning: sources the real `luofu-mac.sh` with `LUOFU_MAC_TEST_ROOT` pointing at a fake `/proc/mtd`, fake mtd devices and mocked `mtd_get_mac_binary`/`/dev/urandom`/`ucidef_set_interface_macaddr` seams. Covers both read paths, label-not-index lookup, the exact `0xde00` offset (with decoys elsewhere), normalization, every validation rejection, the vendor `macaddr_add` increment (incl. the NIC-field wrap) against the system.sh implementation, random-fallback bit handling/failure, the apply order and that the factory bytes are never modified: **103/103 assertions pass** (2026-11-18) | repo tool (host-only; no device) |
-| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added), the GEMAC nodes match patches `009`/`020` and the PIE node carries the measured two-RX/two-TX ring tables (patch `020`), but both stay `status = "disabled"` because the PIE engine is only armed behind the attended opt-in and the switch egress map is missing; the SYSCTRL syscon also carries the machine-restart (`010`) and boot-selector (`017`) nodes, the latter enabled because its probe performs no register access; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
+| `target/linux/hisilicon/dts/luofu-r116.dts` | draft upstreamable DTS derived from the lab DTS; TODO-heavy. The CRG, watchdog and FMC nodes match their written bindings (CRG = one syscon system-controller node + watchdog child with clock IDs from the header; FMC = a SPI bus with one `spi-nand` child carrying the 17 fixed partitions and consuming the CRG `sfc_clk` gate and `sfc_rst` reset), the MDIO node matches patch `007` (seven CRG resets added), the GEMAC nodes match patches `009`/`020`/`023` and the PIE node carries the measured two-RX/two-TX ring tables (patch `020`); the net-lane DTS now enables the LSW/PIE/GEMAC nodes, but the drivers still fail closed on a default boot (PIE only arms behind `luofu_pie.arm=1`, the LSW probe refuses without `luofu_lsw.arm=1`, and GEMAC refuses/defer until both are ready); the SYSCTRL syscon also carries the machine-restart (`010`) and boot-selector (`017`) nodes, the latter enabled because its probe performs no register access; every other node is still a proposal (**UNTESTED**). The target `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism is the chosen delivery, a kernel-patch copy is an alternative not to be hand-maintained in parallel | `target/linux/hisilicon/dts/luofu-r116.dts` |
 | `dts/luofu-r116-overlay.dts` | minimal **loader-match stub** for our own base DTB: root `vendor_id="hsan"`, compatible `hsan-luofu`, `board_id=<3>`, one no-op fragment targeting `/`; mirrors the decoded overlay matcher and applies with libfdt. Not a vendor DTBO, no vendor bytes; it becomes a real board overlay only when there is a real board delta (and binding) to carry (**UNTESTED**, never booted) | `target/linux/hisilicon/dts/luofu-r116-overlay.dts` |
 | `tools/fip-slice.py` | decoded trailer parser + fail-closed check/assemble/manifest + **`make-trailer`** (generates a structurally valid trailer from user-supplied base DTB + overlays; refuses to skip the gate/match/overlay checks; no vendor bytes embedded; one attended boot of a novel trailer still required) | `scripts/fip-slice.py` (or a target-local tools path) in the OpenWrt tree |
-| `tools/luofu-image.py` | host assembly/validation helper for the image recipe: `rootfs-ubi` (squashfs -> one static UBI volume named `squashfs` with the measured geometry; re-parses EC/VID headers, their CRCs, the layout volume table, every static-LEB data CRC and the rootfs slot budget), `sysupgrade` (deterministic tar with `CONTROL`, `kernel`, `root`, `fip-manifest.txt`, `INSTALL-STATUS.txt`; cross-checks the slice against a manifest re-derived from the bytes) and `check-container` (independent read-back of a built container). Refuses vendor-derived input paths and unknown ubinize-cfg keys; never touches a device | `scripts/luofu-image.py` |
+| `tools/luofu-image.py` | host assembly/validation helper for the image recipe: `rootfs-ubi` (squashfs -> the standard two-volume UBI: static `squashfs` at vol_id 0 plus the **empty dynamic `rootfs_data` overlay volume** at vol_id 1, `vol_size=1MiB`, `vol_flags=autoresize`; re-parses EC/VID headers and CRCs, the layout volume table, both volumes' name/type/flags/reserved PEBs, the cfg-vol_size-vs-reserved cross-check, every static-LEB data CRC, the reserve-vs-slot budget and the rootfs slot budget), `sysupgrade` (deterministic tar with `CONTROL`, `kernel`, `root`, `fip-manifest.txt` and the honest `BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED` `INSTALL-STATUS.txt` marker; cross-checks the slice against a manifest re-derived from the bytes) and `check-container` (independent read-back of a built container). Refuses vendor-derived input paths, unknown ubinize-cfg keys, a pre-filled/non-autoresize `rootfs_data` volume and a non-static squashfs volume; never touches a device | `scripts/luofu-image.py` |
 | `tools/build-kernel-slice.sh` | reproducible, fail-closed **host** script for the first own-artifact FIP kernel slice: cpp+dtc the base DTS and the match overlay, `mkimage` the 6.18 zImage, generate the trailer with `make-trailer`, assemble the slice, run `check`/`manifest`, and re-read the gate/descriptor/load address independently. Refuses missing inputs and any vendor-derived input path; never touches a device. It outputs a structurally validated slice that has **never been booted** | the standalone host reproduction that produced the first own-artifact slice (never booted); its steps are now also wired into `image/luofu.mk` |
 | `tools/test-platform-abinstall.sh` | host-side mocked test for the A/B install path: sources the real `base-files/lib/upgrade/platform.sh`, exports the script's `LUOFU_TEST_ROOT` hook to a fixture tree and runs `platform_do_upgrade` against fake `/proc/mtd`, fake `/sys/class/ubi/ubi0/mtd_num`, fake selector sysfs and `mtd`/`ubiformat`/`sync`/`reboot` shims. Covers A->B and B->A slot selection, the kernel-then-rootfs-then-sync write order, the last-step selector move, and refusals for an unmeasured selector, a selector/rootfs pair mismatch, a missing selector, slot-budget overflows, a foreign image, a failing kernel/rootfs write, a failing selector store and a failed container re-check; and the boot-time recorder (16 additional scenarios: A/B boot recording, idempotence, manual/unknown/absent-interface/absent-UBI fail-safe paths, a failing store, a failed read-back and a cmdline cross-check disagreement); with `--container` it also runs the real built image through the real `platform_check_image`. 94/94 fixture assertions and 100/100 with the real 6,185,262 B container pass (2026-11-18 selector-fix session) | repo tool (host-only; no device) |
 | `../docs/TARGET-SKELETON.md` | one-page index/status of this skeleton, pointing back at TARGET-DESIGN.md | nowhere (repo documentation) |
@@ -258,8 +286,8 @@ the parent repository; they are **not** evidence that any target builds or boots
 | Load/entry address follows from the loader staging base and the kernel's `TEXT_OFFSET`: `(0x83200000 & 0xf8000000) + 0x00608000 = 0x80608000`; the lab hit this as a link-address defect | TARGET-DESIGN.md section 3.2; ledger PHASE 93-100 |
 | NAND partition map (17 fixed partitions, total 0x8000000) and slot sizes: `kernela`/`kernelb` 8,650,752 B, `rootfsa`/`rootfsb` 24,313,856 B | TARGET-DESIGN.md section 3.3; `docs/soc/vendor-dt-notes.md` section 6; parent `BENCH-FACTS.md` section 5 |
 | The lab DTS is wrong for upstream: it truncates `upgrade` to 0x1500000 and adds a bench `lab` partition; the stock size is 0x1d80000 | TARGET-DESIGN.md section 3.3; `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts` (parent) |
-| rootfs slots hold squashfs in a static UBI volume named `squashfs`; geometry p=131072 m=2048 s=2048 O=2048, 117 LEBs of 126,976 B in the lab build | TARGET-DESIGN.md section 5.1; `docs/FLASH-PLAN.md` 0.1 |
-| `rootfs_data` (mtd15, 22 MB) is the shared persistent overlay, vendor-format JFFS2; the design keeps JFFS2 for the first submission | TARGET-DESIGN.md section 5.3; `docs/HAZARDS.md` section 6 |
+| rootfs slots hold squashfs in a static UBI volume named `squashfs` **plus the empty dynamic `rootfs_data` overlay volume** (vol_id 1, `vol_size=1MiB`, `vol_flags=autoresize`); geometry p=131072 m=2048 s=2048 O=2048, 117 LEBs of 126,976 B in the lab build | TARGET-DESIGN.md sections 5.1/5.3; `docs/FLASH-PLAN.md` 0.1 |
+| the persistent overlay is an **in-slot empty dynamic UBI volume `rootfs_data`** (autoresize; the kernel UBIFS autocreate formats it on the first read-write mount - source-verified, never booted); the vendor shared mtd15 `rootfs_data` JFFS2 partition is **not** used and is left untouched | TARGET-DESIGN.md sections 5.1/5.3; `docs/HAZARDS.md` section 6; 2026-11-19 afternoon rebuild |
 | A/B pair is selected by the loader's env `bootflag` (`bootcmd` reads `kernel${bootflag}`); the SYSCTRL cell `0x10100C08` is its record: bootfip stores the opposite pair's low byte before Linux starts (0x11 for an A boot, 0x10 for a B boot) and the loader re-stamps the env on a mismatch. 0x00 = power-on cleared; `0x21` = the project's bench marker (vendor userspace writes only 0x10/0x11; normalised on the same boot, never persists). A boot that reaches userspace must re-record the running pair, which the target image's recorder does. Environment blocks enva (mtd3)/envb (mtd4), format `crc32-LE(4) \| flags(1) \| data(131067)`, loader-owned | `docs/SELECTOR-0x21.md` (local-evidence reconstruction); TARGET-DESIGN.md section 3.4; parent `BENCH-FACTS.md` section 5 |
 | Stock U-Boot checksum verifiers are off the boot path; the uImage hcrc/dcrc checks are not what refuses a slice | TARGET-DESIGN.md section 3.1; `docs/phase42-decode/report.md` section 2 |
 | DTS node values (addresses, interrupts, clock/reset geometry, partitions, PHY mapping, thermal trips) | `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts` (parent tracked mirror); `docs/soc/vendor-dt-notes.md`; TARGET-DESIGN.md section 6 |
@@ -383,13 +411,16 @@ gate does not verify.
 
 - Kernel slots `kernela` (mtd11) / `kernelb` (mtd12): **8,650,752 B** each.
 - Rootfs slots `rootfsa` (mtd13) / `rootfsb` (mtd14): **24,313,856 B** each; each
-  holds a squashfs image inside a static UBI volume named `squashfs`.
-- `rootfs_data` (mtd15, 22 MB) is the **shared** persistent overlay; keep it as
-  **JFFS2** for the first submission (it matches the vendor layout and OpenWrt
-  `mount_root` supports JFFS2; degraded-NAND risk is recorded in `docs/HAZARDS.md`
-  section 6). It survives an upgrade unless `-n`/explicit wipe is chosen. Because the
-  two slots share one overlay, an upgrade is not atomic across the overlay - document
-  that.
+  holds a squashfs image inside a static UBI volume named `squashfs` **plus the
+  persistent overlay as an empty dynamic UBI volume `rootfs_data`** (vol_id 1,
+  `vol_size=1MiB`, `vol_flags=autoresize`; TARGET-DESIGN.md section 5.3). The kernel
+  formats the empty volume on the first read-write mount, so the image build needs no
+  `mkfs.ubifs` step; UBI autoresize grows it to the free PEBs of the slot (2026-11-19
+  afternoon, host-only - never booted).
+- The vendor shared `rootfs_data` partition (mtd15, 22 MB, JFFS2) is **not** the
+  overlay in this design and is left untouched; the overlay is per-slot, so an upgrade
+  writes the inactive slot's empty overlay and the running pair keeps its own. There is
+  no shared overlay to keep in sync across versions.
 - Proposed sysupgrade container (schema **not frozen**, TARGET-DESIGN.md section 5.4):
 
       CONTROL            board=/target=/version=
@@ -875,6 +906,34 @@ Checked on the author's host on 2026-11-18, nothing more:
   `platform_do_upgrade` still refuses to write.** Details, commands and exact
   sizes/hashes: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md)
   (image-recipe session).
+- **Persistent overlay + board_detect fix + full-series rebuild (2026-11-19 afternoon,
+  host-only, not flashed)**: the image chain was rebuilt from the FULL series `001`-`023` in
+  the isolated clone (patches `018` SMP / `019` clock tree / `020` PIE datapath / `021` LSW
+  read-only probe / `022` LSW gated qid-map write path / `023` GEMAC netdev readiness) with
+  the 2026-11-19 boot fixes intact (`CONFIG_CMDLINE_FORCE`, `CONFIG_XZ_DEC_ARM`, 4 KiB
+  padding). `image/luofu-ubinize.cfg` now emits the standard OpenWrt two-volume rootfs UBI
+  (static `squashfs` + **empty dynamic `rootfs_data`** with `vol_flags=autoresize`),
+  `tools/luofu-image.py` re-parses and validates both volumes plus the reserve-vs-slot
+  budget, and a build-time guard rejects any installed board.d that sources a missing helper
+  (`board_detect`'s `/lib/functions/board.sh` failure class; the image ships the corrected
+  board.d + `luofu-mac.sh`). The DTS supplied by the net lane enables the LSW/PIE/GEMAC nodes
+  (12 enabled nodes; PIE is still behind its `luofu_pie.arm=1` gate and the LSW probe is
+  fail-closed). Result: `openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin`
+  (6,205,742 B, sha256 `15dae772984669545f175806cff70216039684e494f6196e0a94b71530026b99`);
+  kernel slice 3,305,732 B (`Linux-6.18.60`, ih_size 3,293,803, load/ep `0x80608000`, gate
+  `0xd7b7ab1e` at `0x326fde`; base DTB 11,571 B); rootfs UBI 2,883,584 B,
+  volume 0 `squashfs` static 20 PEBs, volume 1 `rootfs_data` dynamic/empty/autoresize
+  reserved 9 PEBs (31 reserved of the 185-PEB slot); container marker
+  `BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED`. Checks: `check-container` PASS;
+  negative tests refuse the old/single-volume/pre-filled variants; installed board.d, MAC
+  helper, pair recorder and platform.sh `sh -n` clean; `test-platform-abinstall.sh
+  --container` 100/100; `first-install.test.sh --real-container` 144/144;
+  `test-mac-provisioning.sh` 103/103; `config-6.18` unchanged (`2982d663...`); 23/23
+  series patches applied with 0 rejects. **The image booted on 2026-11-19 was built from
+  patches `001`-`017` only (UP, 1 CPU): this rebuild is the first image carrying the full
+  series, the SMP release and the enabled LSW/PIE/GEMAC nodes, and it has NOT been flashed or
+  booted - the next attended boot is its first hardware test.** Evidence (local-only):
+  `build/linux-kbuild/waves/2026-11-19-overlay-image/`.
 - **A/B install path (2026-11-18, A/B install host-only session)**: patch `017`
   adds the `luofu-selector` sysfs interface and `017`+shared edits add its board
   DTS node and `CONFIG_LUOFU_SELECTOR=y`; `platform.sh` now implements

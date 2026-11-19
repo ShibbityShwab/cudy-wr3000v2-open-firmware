@@ -1,7 +1,7 @@
 From 7f4d6ee0347564693d07add1a1cb8b0a818e2db2 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 14/21] clk: hisilicon: fix Luofu CRG reset polarity
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 14/23] clk: hisilicon: fix Luofu CRG reset polarity
 
 The reset class of the luofu CRG page is active-low: a reset line is
 released by SETTING its bit and driven into reset by CLEARING it.  The

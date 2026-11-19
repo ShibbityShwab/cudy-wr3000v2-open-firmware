@@ -36,7 +36,7 @@ MESSAGES = SERIES_DIR / "commit-messages"
 OUT = SERIES_DIR / "series"
 
 IDENT = "ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>"
-DATE = "Wed, 18 Nov 2026 08:20:00 +0700"
+DATE = "Thu, 19 Nov 2026 08:20:00 +0700"
 
 # The commit order of the series, and the status used by the mapping table.
 SERIES = [
@@ -64,6 +64,10 @@ SERIES = [
      "draft (do not merge; arm-gated data path)"),
     ("0021-net-lsw-init-luofu",
      "draft (do not merge; read-only baseline probe)"),
+    ("0022-net-lsw-qidmap-write-luofu",
+     "draft (do not merge; gated W3/W4/W5 write path)"),
+    ("0023-net-gmac-netdev-connect-luofu",
+     "draft (do not merge; netdev readiness only)"),
 ]
 
 
@@ -95,6 +99,8 @@ GROUPS = [
         "0016-net-lsw-luofu",
         "0020-net-pie-datapath-luofu",
         "0021-net-lsw-init-luofu",
+        "0022-net-lsw-qidmap-write-luofu",
+        "0023-net-gmac-netdev-connect-luofu",
     ]),
     ("Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)", [
         "0018-arm-mach-hisilicon-smp",
@@ -225,6 +231,22 @@ def mapping_doc(series: list, hashes: dict) -> str:
     add("  register, enables no clock and drives no reset; it validates the")
     add("  measured LSW baseline and the derived qid maps read-only and always")
     add("  refuses probe.  The attended W2-W6 write campaign is still owed.")
+    add("- draft (do not merge; gated W3/W4/W5 write path): 0022 keeps the 0021")
+    add("  default read-only.  With the module parameter luofu_lsw.arm=1 it")
+    add("  enables the two LSW gate clocks and releases the four resets (W3) and")
+    add("  snapshots the measured state read-only; luofu_lsw.arm=1 with")
+    add("  luofu_lsw.qidmap=1 also programs the reviewed W2 qid-map write set for")
+    add("  the populated rows, with a pre-write conformance gate, a readback of")
+    add("  every programmed word and a restore on mismatch.  Neither gate has")
+    add("  ever been passed on hardware; the W3 power-up, the W4/W5 effect and")
+    add("  the EQM/classifier/VLAN formats are [U].")
+    add("- draft (do not merge; netdev readiness only): 0023 registers a GEMAC")
+    add("  netdev only when the PIE backend is armed and the LSW egress map is")
+    add("  ready, fixes the phylink type so the carrier follows the netdev, and")
+    add("  takes the MAC address from the devicetree or a random fallback.  The")
+    add("  only MAC writes are the measured 1 Gbps link-up/link-down words; the")
+    add("  RX completion decode and the TX-to-egress mapping are still [U] and")
+    add("  the registration has never run on hardware.")
     add("- RFC (attended): host-validated platform code whose acceptance requires")
     add("  a single-variable, recovery-armed bench session; not part of the")
     add("  UP-first mergeable set.")

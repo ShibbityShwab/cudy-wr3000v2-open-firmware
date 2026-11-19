@@ -184,9 +184,9 @@ From the vendor base DTB (`soc/vendor-dt-notes.md` §6; the same table is in the
   submitted DTS. [V] `tools/lab-src/arch/arm/boot/dts/luofu-r116.dts:638-646`; the second copy
   `soc/luofu-r116.dts:652` already carries the stock `upgrade` size.
 - The vendor system formats `rootfs_data` as JFFS2 and uses it as the persistent overlay; the lab
-  init mounts it as JFFS2 (`/vendor`), and OpenWrt can consume it as the overlay partition. [V]
-  `HAZARDS.md` §6; `FLASH-PLAN.md` 0.3; [U] whether upstream should keep JFFS2 or reformat as
-  UBI (design decision in §5.3).
+  init mounts it as JFFS2 (`/vendor`). [V] `HAZARDS.md` §6; `FLASH-PLAN.md` 0.3. The target
+  design does **not** reuse that partition: the overlay is an in-slot `rootfs_data` UBI volume
+  (§5.3), and mtd15 is left untouched.
 - The lab lane also used **mtd16 `upgrade`** as a scratch UBI volume (`owrt`, `ubiblock0_0`)
   while leaving the vendor slots untouched. That was a bench convenience, **not** the upstream
   layout. [V] ledger PHASE 124 (2026-10-12); [V] `FLASH-PLAN.md`. Upstream should use the slot
@@ -370,7 +370,7 @@ against 5.10.201 and include bench-only symbols. [V] `lab/luofu-kernel/luofu.fra
 | product | requirement | source of truth |
 | --- | --- | --- |
 | kernel slice | uImage (legacy, uncompressed) + FIP trailer; <= 8,650,752 B; gate magic at `0x40+ih_size+dtb_totalsize` | §3.2 |
-| rootfs UBI | squashfs image in a static UBI volume named `squashfs`; <= 24,313,856 B (rootfs slot) | `FLASH-PLAN.md` 0.1 (geometry `p=131072, m=2048, s=2048, O=2048`; 117 LEBs of 126,976 B in the lab build); §3.3 |
+| rootfs UBI | squashfs image in a static UBI volume named `squashfs`, **plus the empty dynamic volume `rootfs_data` (vol_id 1, `vol_size=1MiB`, `vol_flags=autoresize`) that becomes the persistent overlay**; <= 24,313,856 B (rootfs slot) | `FLASH-PLAN.md` 0.1 (geometry `p=131072, m=2048, s=2048, O=2048`; 117 LEBs of 126,976 B in the lab build); §3.3, §5.3 |
 | sysupgrade container | OpenWrt `sysupgrade.tar` with `CONTROL`, the full kernel slice, the rootfs UBI, plus a FIP manifest (below) | [I] |
 | factory/install image | **open question** (§5.5) | [U] |
 
@@ -414,12 +414,25 @@ uImage + trailer.bin = kernel slice
 - `rootfsa`/`rootfsb` hold the static squashfs UBI volume `squashfs`; the stock vendor rootfs
   already uses that shape, so the installer/upgrade can reuse the partition map without resizing. [V]
   `FLASH-PLAN.md` 0.1; `soc/vendor-dt-notes.md` §6.
-- `rootfs_data` (mtd15, 22 MB) is the shared persistent overlay. Vendor format: JFFS2. Design
-  choice: **keep JFFS2** for the first submission (it matches the vendor layout and lets the
-  stock system and the new one share the partition; OpenWrt `mount_root` supports JFFS2), and
-  note the degraded-NAND risk measured on this unit. [V] `HAZARDS.md` §6; parent
-  `BENCH-FACTS.md` §5. Alternative: reformat as UBI at install time - [U], costs erase/program
-  cycles on degraded NAND and is not needed for a first port.
+- The persistent overlay is a **second UBI volume inside each rootfs slot**: `rootfs_data`,
+  dynamic, `vol_size=1MiB`, `vol_flags=autoresize`, and intentionally **EMPTY in the image**.
+  This is the standard OpenWrt squashfs+UBI shape (`scripts/ubinize-image.sh` emits exactly a
+  static squashfs rootfs volume plus an empty dynamic `rootfs_data`). On the first boot
+  fstools `mount_root` looks the volume up by name (fstools `libfstools/ubi.c`), the kernel's
+  UBIFS mount **formats an empty UBI volume on its first read-write mount** (`fs/ubifs/sb.c`
+  `create_default_filesystem()`; `fs/ubifs/super.c` refuses that only for a read-only mount),
+  and UBI autoresize grows the volume to all free PEBs of the slot at attach
+  (`drivers/mtd/ubi/build.c:autoresize()`, flag read in `drivers/mtd/ubi/vtbl.c`, one
+  autoresize volume allowed). So the overlay is per-slot, needs no separate partition and no
+  `mkfs.ubifs` step in the image build. **The booted 2026-11-19 image predates this volume**
+  (mount_root fell back to tmpfs); the afternoon rebuild carries it host-validated, and it has
+  not been flashed or booted. [V] the sources above; [U] on hardware.
+- The vendor shared `rootfs_data` partition (mtd15, 22 MB, JFFS2) is **not the overlay in this
+  design** and is left untouched: fstools' UBI driver has higher priority than the mtd driver,
+  so the in-slot volume wins when present and mtd15 keeps its vendor state. Reusing mtd15 as a
+  shared overlay was considered and rejected - it would reintroduce the "two slots share one
+  overlay" coupling and keep the JFFS2 degraded-NAND risk measured on this unit. [V] fstools
+  driver priorities; [I] decision; the install path never writes mtd15 (§5.5).
 - Keep one slot bootable at all times. `sysupgrade` writes only the inactive slot pair (§5.4).
 - The lab's mtd16 `upgrade` scratch volume is **not** used; leave the vendor `upgrade` partition
   untouched. [V] §3.3.
@@ -456,9 +469,12 @@ lesson is in parent `LESSONS.md` 21):
 4. Update the environment block(s) and the boot selector for the target pair - **only** via the
    measured recipe, both env copies, format `crc32-LE | flags | data` (§3.4).
 5. Reboot; the previous pair stays bootable for rollback.
-6. Keep `rootfs_data` (overlay) unless `-n`; the two slots share one overlay partition, so the
-   overlay format must be identical between versions (it is the same filesystem, but package/kernel
-   changes in it are not atomic - document this).
+6. The overlay lives inside each rootfs slot (`rootfs_data` UBI volume, §5.3). A sysupgrade
+   writes the inactive pair's rootfs with `ubiformat`, so the inactive slot's overlay starts
+   empty; the running pair keeps its own overlay and switching to the new slot does not migrate
+   the old overlay unless the sysupgrade backup is restored. There is no shared overlay
+   partition (the deliberate change from the vendor layout), so an upgrade is atomic with
+   respect to the overlay, but a plain slot switch is not a configuration migration.
 7. Never use U-Boot's TFTP `fipupdate_eth`/`rootfsupdate_eth` commands for `sysupgrade`
    (they overwrite both slots) [V] env dump; they remain a recovery/install option only.
 
@@ -501,8 +517,10 @@ parent (private) repository carries a fail-closed, read-only-by-default installe
 plus a mocked test harness. It writes only the inactive pair (kernel by mtd label,
 rootfs by ubiformat), verifies both regions with full-region sha256 read-backs, and
 performs the handover by writing the written pair's measured record value into the
-SYSCTRL cell; it never writes the env blocks, the active pair, rootfs_data or the vendor
-data partitions. **Executed on hardware on 2026-11-19**: the attended run wrote the
+SYSCTRL cell; it never writes the env blocks, the active pair, the mtd15 `rootfs_data` partition or the
+vendor data partitions (the inactive rootfs slot it now writes also creates the empty
+per-slot `rootfs_data` UBI volume of §5.3; the kernel formats it on the written slot's first
+boot, so the installer needs no separate overlay step - never observed on hardware, [U]). **Executed on hardware on 2026-11-19**: the attended run wrote the
 inactive pair, verified both regions (the rootfs raw-hash check was replaced by a semantic
 UBI volume check because `ubiformat` rewrites EC image sequence numbers), moved the selector,
 and the loader failover booted the written pair; a failed boot falls back to the active
@@ -912,7 +930,10 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
    `tools/test-mac-provisioning.sh` passes its mocked assertions and the files are installed by the
    image build. The addresses only reach a netdev once the switch port map exists (open question 7),
    and nothing has run on hardware. [I]
-6. **Overlay filesystem** - keep JFFS2 `rootfs_data` or convert to UBI at install. (§5.3)
+6. **Overlay filesystem** - resolved in the image recipe: an empty dynamic `rootfs_data` UBI
+   volume inside each rootfs slot (§5.3), formatted by the kernel on the first read-write
+   mount. Open on hardware: does `mount_root` find, mount and format it on a real first boot?
+   [U]
 7. **Switch driver model** - DSA vs switchdev; port numbering; whether PIE/WoC is in v1 scope. (§8.1)
 8. **SMP - decoded and drafted; attended bring-up open.** The vendor `hisilicon,hsan_smp`
    method is a SYSCTRL pen + CRG resume-bit + IPI_WAKEUP release (no SMC/PSCI), decoded from

@@ -6,34 +6,36 @@ series that currently lives as plain patches in
 not replace or modify those files: it is a review artefact that adds
 commit messages, a cover letter, a MAINTAINERS proposal, a tree/order
 rationale, and a repeatable host-only validation, plus a commit-ready
-(format-patch style) copy of the same 21 patches.
+(format-patch style) copy of the same 23 patches.
 
 Status: **host-only submission form; no hardware validation of any kind.**
 Sequential application to pristine linux-6.18.60 and checkpatch pass
 (see 04-validation.md); the series compiles and its bindings validate
 (recorded elsewhere); nothing has booted, CPU1 has never been released and
 no clock rate or PLL/mux parent has been read back, the PIE engine has
-never been armed and the LSW write campaign has never run.  The form was
-regenerated on 2026-11-18 four times: after patch 0017 (A/B boot selector)
-was corrected against the local evidence reconstruction
-`../../docs/SELECTOR-0x21.md`, after patch 0018 (SMP bring-up) was added from
-the SMP lane, after patch 0019 (CRG clock tree) was added from the
-clock-tree lane, and finally after patches 0020 (PIE datapath + GEMAC
-front end) and 0021 (LSW read-only baseline probe) were added from the
-2026-11-18 measured-inventory lanes.  The series, commit messages,
-validation logs and hashes were all regenerated in the final 21-patch
-pass.
+never been armed, the LSW write campaign has never run and no GEMAC
+netdev has ever registered.  The form was regenerated on 2026-11-18 four
+times: after patch 0017 (A/B boot selector) was corrected against the
+local evidence reconstruction `../../docs/SELECTOR-0x21.md`, after patch
+0018 (SMP bring-up) was added from the SMP lane, after patch 0019 (CRG
+clock tree) was added from the clock-tree lane, and after patches 0020
+(PIE datapath + GEMAC front end) and 0021 (LSW read-only baseline probe)
+were added from the 2026-11-18 measured-inventory lanes.  On 2026-11-19 it
+was regenerated a fifth time after patches 0022 (gated LSW W3/W4/W5 write
+path) and 0023 (GEMAC netdev readiness gate) were added from the net lane.
+The series, commit messages, validation logs and hashes were all
+regenerated in the final 23-patch pass.
 
 ## What is in here
 
 | file | purpose |
 | --- | --- |
-| `00-cover-letter.md` | the [PATCH 00/21] cover letter: scope, hardware, dependencies, test evidence, explicit no-hardware statement, ready-vs-RFC split, recommended submission sequence |
+| `00-cover-letter.md` | the [PATCH 00/23] cover letter: scope, hardware, dependencies, test evidence, explicit no-hardware statement, ready-vs-RFC split, recommended submission sequence |
 | `01-commit-messages.md` | per-patch commit-message drafts grouped by readiness (core platform, ready drivers and clock tree, RFC drivers, do-not-merge drafts including the PIE/LSW follow-ups, SMP bring-up), plus the series-file -> source-patch -> status mapping table and sha256 provenance table |
 | `02-maintainers-proposal.md` | MAINTAINERS entry snippet (developer identity from the repo git config, file patterns, S: status, S/RFC mapping) |
-| `03-rationale-tree-placement.md` | why the files live where they do (mach-hisilicon vs mach-hisi, ARM core changes, DTS delivery, Kconfig symbol placement/naming including 0018/0019/0021 adding no symbol and 0020 changing only CONFIG_PHYLINK, series order and bisectability, merge-order conflicts, SMP staging S1/S2, PIE/LSW staging and their measured-inventory dependency) |
+| `03-rationale-tree-placement.md` | why the files live where they do (mach-hisilicon vs mach-hisi, ARM core changes, DTS delivery, Kconfig symbol placement/naming including 0018/0019/0021/0022 adding no symbol, 0020 changing only CONFIG_PHYLINK and 0023 adding only a Kconfig dependency, series order and bisectability, merge-order conflicts, SMP staging S1/S2, PIE/LSW staging and the gated W3/W4/W5 write path, netdev readiness, and their measured-inventory dependency) |
 | `04-validation.md` | the validation record: inputs, commands, apply results (RC, offsets), checkpatch table, earlier recorded compile/binding/DTS/config results, limitations |
-| `series/0001-0021`.patch | commit-ready, format-patch style series (same diffs + commit messages); `git am` clean |
+| `series/0001-0023`.patch | commit-ready, format-patch style series (same diffs + commit messages); `git am` clean |
 | `commit-messages/` | source of truth for the per-patch messages; edit these, not 01 or series/ |
 | `tools/gen-series.py` | regenerates `series/` and `01-commit-messages.md` from `commit-messages/` + the source patches; `--check` verifies no drift |
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
@@ -53,15 +55,18 @@ or without git:
     cd linux-6.18.60
     for p in /path/to/series-6.18/series/*.patch; do patch -p1 -i "$p" || break; done
 
-The series applies in numerical order (0001 -> 0021); 0019 extends the
+The series applies in numerical order (0001 -> 0023); 0019 extends the
 CRG provider added by 0004 (and the 0014 polarity fix): its binding makes
 seven input clocks required, and the board DTS that supplies them is not
 part of this series.  0018 adds no binding and is inert unless the board
-DTS names the `hisilicon,luofu-smp` CPU method.  0020 and 0021 are last:
-0020 rewrites the GEMAC/PIE drivers from 0009/0015, and 0021 extends the
+DTS names the `hisilicon,luofu-smp` CPU method.  0020-0023 are last:
+0020 rewrites the GEMAC/PIE drivers from 0009/0015, 0021 extends the
 switch driver from 0016 and applies with a small ethernet-Kconfig offset
-because 0020 edits the same file first.  Both are drafts, fail-closed and
-have never run; see 03-rationale-tree-placement.md sections 6, 9 and 10.
+because 0020 edits the same file first, 0022 extends the switch driver and
+binding from 0021 (its default path is still the 0021 read-only probe) and
+0023 extends the GEMAC driver from 0020 and adds its Kconfig dependency on
+LUOFU_SWITCH.  All four are drafts, fail-closed and have never run on
+hardware; see 03-rationale-tree-placement.md sections 6, 9 and 10.
 
 For the OpenWrt target build, keep using
 `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/` directly:
@@ -86,34 +91,38 @@ To regenerate the series after editing a message:
 
 ## What is validated (host-only)
 
-- 21/21 series files apply in order to pristine linux-6.18.60 with
+- 23/23 series files apply in order to pristine linux-6.18.60 with
   patch(1) and with `git am`; the two resulting trees are identical.  [V]
   0 fuzz, 0 rejects; patch 0008 (PHY) has two apply offsets because the
   source patch was generated against an OpenWrt-patched kernel tree, and
   patch 0021 has a 6-line offset in the ethernet Kconfig because 0020
-  edits the same file first.  Patch 0020 and patch 0021 are last and apply
-  cleanly.
-- checkpatch.pl --no-tree: 0 errors, 53 warnings (default and strict; plus
-  6 strict CHECKs), all enumerated in 04-validation.md.  The 4 new
-  warnings are the expected per-patch review items for 0020/0021 (one
+  edits the same file first.  Patches 0020-0023 are last and apply
+  cleanly; 0022 and 0023 add no offset.
+- checkpatch.pl --no-tree: 0 errors, 56 warnings (default and strict; plus
+  6 strict CHECKs), all enumerated in 04-validation.md.  The 7 added
+  warnings are the expected per-patch review items for 0020-0023 (one
   MAINTAINERS warning for each new header and one binding-split warning
-  each); all are review work, not behavioural defects.  [V]
+  each; 0023 adds no file and only the binding-split warning); all are
+  review work, not behavioural defects.  [V]
 - series diff bodies are byte-identical to the source patches apart from
   the inserted git extended headers; hashes recorded.  [V]
-- kernel build of the final 21-patch series was not re-run here (no rebuild
-  needed): the PIE-datapath lane's recorded 001-0020 build and the
-  LSW-init lane's recorded 001-0021 build are both prepare RC=0 (no
-  rej/orig) and compile RC=0 with **0 warnings and 0 errors** under
-  CONFIG_WERROR=y; zImages 3,276,656 B sha256 `dfc7b753...` and
-  3,279,096 B sha256 `96b927d3...`; luofu-pie.o/luofu-gmac.o and
-  luofu-switch.o built, the PIE/GEMAC/phylink and switch symbols are in
-  System.map, CONFIG_PHYLINK resolves `y` (was `m`), the config deltas
-  are symbol-identical and byte-idempotent, and TEXT_OFFSET is unchanged.
-  The earlier 001-0019 clock-tree build (zImage 3,264,560 B sha256
-  `4456b0ec...`) and the SMP records remain current; the extended
-  PIE/GMAC/switch bindings pass dt_binding_check and the lanes' board DTS
-  (not part of this series) compiles with zero warnings.  Details and
-  citations: 04-validation.md sections 9 and 13-16.  [V]
+- kernel build of the final 23-patch series was not re-run here (no rebuild
+  needed): the PIE-datapath lane's recorded 001-0020 build, the LSW-init
+  lane's recorded 001-0021 build and the net lane's recorded 001-0023
+  build are prepare RC=0 (no rej/orig) and compile RC=0 with **0 warnings
+  and 0 errors** under CONFIG_WERROR=y; zImages 3,276,656 B sha256
+  `dfc7b753...`, 3,279,096 B sha256 `96b927d3...` and 3,281,376 B
+  sha256 `5903db04...`; luofu-pie.o/luofu-gmac.o and luofu-switch.o
+  built, the PIE/GEMAC/phylink/switch symbols are in System.map,
+  CONFIG_PHYLINK resolves `y` (was `m`), the config deltas are
+  symbol-identical and byte-idempotent (the 001-0023 config is
+  symbol-identical to the committed one at `d1af1b2a...`), and
+  TEXT_OFFSET is unchanged.  The earlier 001-0019 clock-tree build (zImage
+  3,264,560 B sha256 `4456b0ec...`) and the SMP records remain current;
+  the extended PIE/GMAC/switch bindings pass dt_binding_check and the
+  lanes' board DTS (not part of this series) compiles with zero warnings
+  (the net lane's DTS is 11,571 B sha256 `7fd33522...`).  Details and
+  citations: 04-validation.md sections 9 and 13-17.  [V]
 
 ## What a reviewer should NOT expect
 
@@ -140,19 +149,25 @@ To regenerate the series after editing a message:
 - **Not a working network port.**  GEMAC (0009) is a binding/resource half
   that refuses to probe; PIE (0015) and the internal switch (0016) are
   scaffolding that refuse to probe.  The follow-ups 0020 (PIE ring engine
-  + GEMAC netdev/phylink front end) and 0021 (LSW read-only baseline
-  probe) implement the measured models, but 0020's data path is behind the
-  `luofu_pie.arm=1` command-line opt-in and has never been armed, the RX
-  completion decode and the switch egress map are still [U], and 0021
-  never writes a register.  No frame reaches a wire.
-- **No measured PIE/LSW write behaviour.**  Patches 0020/0021 encode the
-  2026-11-18 read-only inventory of the stock vendor system.  No PIE
-  register has been written by our code, the engine has never been armed,
-  no LSW write or qid-map program has run, and the measured baseline is
-  one boot (no second-unit stability measurement yet).  The attended PIE
-  arm session and the LSW W2-W6 campaign are owed; see
-  `../../target-skeleton/docs/port-notes/pie/SUMMARY.md` and
-  `../../target-skeleton/docs/port-notes/lsw/SUMMARY.md`, and
+  + GEMAC netdev/phylink front end), 0021 (LSW read-only baseline probe),
+  0022 (gated LSW W3/W4/W5 write path) and 0023 (GEMAC netdev readiness
+  gate) implement the measured models, but 0020's data path is behind the
+  `luofu_pie.arm=1` command-line opt-in and has never been armed, 0021
+  never writes a register, 0022's write gates have never been set, and
+  0023 registers nothing unless the PIE arm gate and both LSW gates pass
+  in one attended boot.  The RX completion decode and the TX-to-egress
+  mapping are still [U].  No frame reaches a wire.
+- **No measured PIE/LSW write behaviour and no GEMAC netdev.**  Patches
+  0020-0022 encode the 2026-11-18 read-only inventory of the stock vendor
+  system.  No PIE register has been written by our code, the engine has
+  never been armed, no LSW clock/reset or qid-map write has run (0022's
+  W3/W4/W5 gates have never been passed), no readback/restore path has
+  ever executed, and the measured baseline is one boot (no second-unit
+  stability measurement yet).  The attended PIE arm session and the LSW
+  W2-W6 campaign are owed, and 0023's combined PIE+LSW gate boot has never
+  happened; see `../../target-skeleton/docs/port-notes/pie/SUMMARY.md`,
+  `../../target-skeleton/docs/port-notes/lsw/SUMMARY.md` and
+  `../../target-skeleton/docs/port-notes/net/SUMMARY.md`, and
   `../../docs/PIE-DATAPATH.md` / `../../docs/LSW-SPEC.md`.
 - **Not a working storage/PCIe/restart/selector claim.**  The FMC
   (0006), PCIe host (0013), restart (0010) and A/B selector (0017) are RFC
@@ -189,6 +204,7 @@ To regenerate the series after editing a message:
 | drivers RFC (FMC, pinctrl, PCIe, selector) | 0006, 0011, 0013, 0017 | RFC |
 | partial/refusing drafts (GEMAC, restart, PIE, LSW) | 0009, 0010, 0015, 0016 | do not merge; RFC/design review only |
 | PIE datapath + GEMAC front end, LSW read-only baseline probe (follow-ups to those drafts) | 0020, 0021 | do not merge; 0020 is an arm-gated draft that has never run and still cannot decode RX completions; 0021 is read-only and its baseline is one measured boot |
+| gated LSW write path and GEMAC netdev readiness (follow-ups to 0020/0021) | 0022, 0023 | do not merge; 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters with readback/restore; 0023 registers nothing until the PIE arm gate and both LSW gates pass in one attended boot |
 | SMP bring-up | 0018 | RFC/attended; host-validated only, never run on our kernel; not in the UP-first set |
 
 The recommended real submission splits this into per-subsystem series and
@@ -223,15 +239,26 @@ sequence".
    waits for the attended arm session.  Also decide the long-term shape of
    the PIE/GEMAC split (private `luofu-pie.h` backend today) before the
    netdev reviewers see it.
+9. Approve the connectivity gates (0022/0023): the default-off
+   `luofu_lsw.arm=1` / `luofu_lsw.qidmap=1` staging of the W3/W4/W5
+   write path, the W2 qid-map rows as the first reviewed write set, the
+   pre-write conformance gate plus readback/restore policy, the
+   `luofu-switch.h` readiness contract, the measured `hisilicon,port`
+   binding property (board-DTS content), and the 0023 netdev registration
+   gate with the PHYLINK_NETDEV carrier fix.  Decide whether 0022/0023 are
+   posted at all before the W3-W5 campaign and the combined gate boot have
+   run (they are drafts like 0020), and re-check the checkpatch
+   binding-split/MAINTAINERS items when they are touched.
 
 ## Provenance and policy
 
-- Source-tree patches (unchanged): `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/001-021`.
+- Source-tree patches (unchanged): `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/001-023`.
 - This directory was created for task-29 and extended for task-34 (patch
-  0018), task-37 (patch 0019) and task-48 (patches 0020/0021); it modifies
-  no existing patch, target-skeleton document or shared doc.  `series/` is
-  generated, never hand-edited; the mapping table in 01-commit-messages.md
-  ties every file back to its source patch.
+  0018), task-37 (patch 0019), task-48 (patches 0020/0021) and task-54
+  (patches 0022/0023); it modifies no existing patch, target-skeleton
+  document or shared doc.  `series/` is generated, never hand-edited; the
+  mapping table in 01-commit-messages.md ties every file back to its
+  source patch.
 - Evidence grading used across the project: [V] verified from an artifact
   or measurement, [I] inferred/implementation, [U] unmeasured,
   [X] blocked.  All hardware behaviour in this directory is [U] except the

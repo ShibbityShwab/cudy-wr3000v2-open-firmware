@@ -24,7 +24,7 @@ drivers/pinctrl/hisilicon directory).
 | FMC SPI-NAND | 0006 | drivers/spi/spi-luofu-fmc.c | it is a SPI-MEM controller, not a raw-NAND controller; binding under mtd/ (6.18 has no mtd/nand binding dir) |
 | MDIO | 0007 | drivers/net/mdio/mdio-luofu.c | existing mdio-hisi-femac.c precedent |
 | PHY | 0008 | drivers/net/phy/luofu-phy.c | PHYLIB driver matched by PHY ID; no binding on purpose |
-| GEMAC | 0009, 0020 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory; 0020 adds the phylink/netdev front end |
+| GEMAC | 0009, 0020, 0023 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory; 0020 adds the phylink/netdev front end, 0023 the readiness-gated registration, carrier fix and MAC source |
 | restart | 0010 | drivers/power/reset/luofu-reboot.c | machine restart policy as a platform driver, next to hisi-reboot.c |
 | sysctrl binding | 0010 | Documentation/devicetree/bindings/soc/hisilicon/ | syscon page binding |
 | pinctrl | 0011 | new drivers/pinctrl/hisilicon/ | no hisilicon pinctrl directory exists in 6.18; new dir needs Kconfig source + obj-y entries |
@@ -32,8 +32,9 @@ drivers/pinctrl/hisilicon directory).
 | PCIe host | 0013 | drivers/pci/controller/dwc/pcie-luofu.c | DWC host glue belongs with the other DWC host drivers |
 | PIE | 0015, 0020 | drivers/net/ethernet/hisilicon/luofu-pie.c | Ethernet data path, next to GEMAC; 0020 is the arm-gated ring engine |
 | PIE/GEMAC interface | 0020 | drivers/net/ethernet/hisilicon/luofu-pie.h | private front-end/engine interface shared by luofu-gmac.c and luofu-pie.c; not a stable ABI |
-| LSW switch | 0016, 0021 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists; 0021 is the read-only D1b baseline probe |
-| LSW register map | 0021 | drivers/net/ethernet/hisilicon/luofu-switch-regs.h | measured register/qid-map map with per-item evidence grade |
+| LSW switch | 0016, 0021, 0022 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists; 0021 is the read-only D1b baseline probe and 0022 the gated W3/W4/W5 write path |
+| LSW register map | 0021, 0022 | drivers/net/ethernet/hisilicon/luofu-switch-regs.h | measured register/qid-map map with per-item evidence grade; 0022 adds the write-set documentation |
+| LSW/GEMAC readiness interface | 0022 | drivers/net/ethernet/hisilicon/luofu-switch.h | private hidden-engine readiness contract (probed/ready) consumed by the GEMAC front end; not a stable ABI |
 | boot selector | 0017 | drivers/soc/hisilicon/luofu-selector.c | SoC sysfs interface, next to kunpeng_hccs.c |
 | board DTS | not in series | future arch/arm/boot/dts/hisilicon/luofu-r116.dts + Makefile | section 4 |
 

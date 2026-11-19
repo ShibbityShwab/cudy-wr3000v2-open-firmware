@@ -1,7 +1,7 @@
 From 67bd217a084453b4903192cb0a234f4ae1ebaa96 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 08:20:00 +0700
-Subject: [PATCH 13/21] PCI: dwc: add Luofu PCIe host controller
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 13/23] PCI: dwc: add Luofu PCIe host controller
 
 Add the DWC-based PCIe host controller for the two root complexes of the
 HiSilicon Hi5671Y "luofu" SoC (RC0 at 0x10160000, RC1 at 0x10164000).
