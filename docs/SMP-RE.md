@@ -679,3 +679,171 @@ session without another guess:
   any vendor-specific address encoding is missing [V negative: the value is a plain
   __pa_symbol()].
 
+
+---
+
+## 15. W7 run (2026-11-19): the probe was never enabled; SCU status decoded; patch 034
+
+Status: second hardware run of this lane. Image 14791958 (series 001-033, bench
+command line). **The run did not execute patch 033's probe stub**: the knobs were on
+the command line under the wrong names. This section corrects the record, decodes the
+one new measurement (SCU CPU status 0x00), lists the stock reference state, and
+delivers the next attended variant (patch 034).
+
+### 15.1 The probe stub was not enabled [V]
+
+The boot log of image 14791958 contains:
+
+    Kernel command line: ... luofu_smp_diag=1 luofu_smp_probe=1
+    Unknown kernel command line parameters "... luofu_smp_diag=1 luofu_smp_probe=1",
+    will be passed to user space.
+
+    [    0.140670] luofu-smp: boot cpu=1 logical=1 pen=0x8070a000 resume 02a00000 (mask 02800000) scu_status=00
+    [    1.190448] CPU1: failed to come online
+    [    1.194319] smp: Brought up 1 node, 1 CPU
+
+Patch 033 registered its knobs with module_param(). For an object that is linked into
+the kernel image (not a module) include/linux/moduleparam.h sets
+MODULE_PARAM_PREFIX = KBUILD_MODNAME "."; the built vmlinux therefore carries the
+strings "platsmp.luofu_smp_diag" / "platsmp.luofu_smp_probe", and the bare names on
+the W7 command line were reported unknown. Consequences:
+
+* the extra diagnostics were off (no prepare-time register dump, no +1ms/+21ms lines);
+* the pen was the plain secondary_startup address (0x8070a000), **not** the probe
+  stub. The W7 run therefore says nothing about whether CPU1 consumes the pen; the
+  probe experiment is still unrun [V].
+
+The correction for future 033 command lines is
+"platsmp.luofu_smp_diag=1 platsmp.luofu_smp_probe=1". Patch 034 removes the trap by
+parsing the bare documented names with __setup() and by enabling the probe by default.
+
+### 15.2 What the W7 run did establish [V]
+
+* the default 033 release (vendor per-core resume bits + write barriers) still fails:
+  pen 0x8070a000, resume word 0x02a00000 before the RMW, mask 0x02800000, IPI sent,
+  CPU1 offline after the full 1 s timeout;
+* the A9 SCU CPU-status byte of CPU1 reads 0x00.
+
+### 15.3 SCU CPU status 0x00 means NORMAL (powered) [V]
+
+The Cortex-A9 SCU CPU Status Register is at SCU + 0x08 with one byte per core; each
+byte's bits [1:0] are the power mode: 0b00 normal, 0b10 dormant, 0b11 powered off
+(0b01 reserved). Mainline ARM has the same encoding and access shape:
+
+    arch/arm/include/asm/smp_scu.h: SCU_PM_NORMAL 0, SCU_PM_DORMANT 2, SCU_PM_POWEROFF 3
+    arch/arm/kernel/smp_scu.c:      readb_relaxed(scu_base + SCU_CPU_STATUS + cpu) & GENMASK(1, 0)
+
+So CPU1 is **powered and not dormant/power-down** at release time [V].
+"luofu_smp_power=1" (set the SCU CPU power status to NORMAL) is a no-op in this state
+and is only useful as a control. Caveat: the SCU status field describes power mode,
+not reset state or execution; a powered core held in reset still reads 0b00 [I].
+
+### 15.4 Stock 2-CPU reference state (read-only, 2026-11-18) [V]
+
+The stock vendor boot with both CPUs online was measured read-only on 2026-11-18
+(build/bench-inventory/20261118T130512Z-inv1-run/, .merged.tsv, repeats identical):
+
+| address | word | note |
+| --- | --- | --- |
+| SYSCTRL 0x10100c00 | 0x80609680 | vendor pen value (leaves the word set) |
+| SYSCTRL 0x10100c08 | 0x00000010 | boot selector pair |
+| SYSCTRL 0x10100c10 | 0x82000000 | reset record |
+| CRG 0x14880014 | 0x01360ef1 | gate word |
+| CRG 0x14880020 | 0x02f8300b | gate word |
+| CRG 0x1488002c | 0x0d300e01 | reset word |
+| CRG 0x14880030 | 0xfe7fe05b | reset word |
+| CRG 0x14880034 | 0x000ff309 | reset word |
+| CRG **0x14880038** | **0x00200000** | resume word after the vendor release |
+| CRG 0x14880090 | 0x6a010008 | PLL status |
+| CRG 0x14880100 | 0x00000000 | watchdog status |
+| CRG 0x14880138 | 0x00018042 | clock mux (bit3 CPU source) |
+
+Key point: the vendor's release leaves CRG + 0x38 = 0x00200000, which is exactly the
+value **our** read-modify-write produces (the 029 run and the 033 default both end at
+0x00200000). The CRG release operation therefore matches the vendor's effect on this
+board and cannot by itself explain the different boot outcome [V]. The W7 boot also
+saw 0x02a00000 again before its RMW, i.e. the resume word is re-initialised by each
+reset [V: two boots].
+
+### 15.5 Boot context: every SMP test so far is a warm reset [V]
+
+The W7 boot was a warm reset from the running image ("Reset Info: Linux reboot cmd to
+reset", no "Hard Power-on reset" line). A log survey of build/uart-logs/ shows that
+**no our-kernel boot in this repository has ever been a cold power-on**, and that warm
+resets do not prevent a working CPU1 release for the stock kernel: e.g. a 1-CPU 6.18
+boot followed by a panic/watchdog warm reset, then U-Boot, then stock 5.10 with
+2 CPUs (20261119T044150Z-uart-boot2.log, 20261119T091941Z-uart-finalboot.log). The
+loader path can therefore still make CPU1 releasable after a warm reset; what differs
+is the state inside our boot or at the moment of our pen write [I].
+
+### 15.6 Patch 034: the next attended variant
+
+Patch 034 (arch/arm/mach-hisilicon/platsmp.c only, no config/DTS change) makes the
+evidence immune to command-line mistakes and enables the decisive probe:
+
+* __setup() parsing: bare "luofu_smp_probe=0|1", "luofu_smp_power=0|1",
+  "luofu_smp_allbits=0|1", "luofu_smp_clear_mask=<hex>",
+  "luofu_smp_force_pen=<pa>", "luofu_smp_retries=<n>"; the old
+  "luofu_smp_diag=" name is accepted as a compatibility no-op;
+* unconditional register snapshots at prepare time (including the pen word as left
+  by the loader), before the release, and at +1 ms and +21 ms: SYSCTRL 0xc00..0xc1c,
+  CRG 0x04..0x3c, SCU ctrl/config/status with both CPU status bytes;
+* probe stub on by default: the pen points at a stub that first stores the core's
+  MPIDR in a page-aligned scratch page (read back through an uncached ioremap alias,
+  so it survives a UART failure), prints the low MPIDR nibble and "P" on the console
+  UART, and then branches to the real secondary_startup. "1P" on the console or a
+  non-zero marker in the +1ms/+21ms lines proves the pen was consumed;
+  "luofu_smp_probe=0" restores the plain entry for the control run;
+* the release order and the resume mask are unchanged from 033 (vendor pair by
+  default; clear_mask/allbits for experiments).
+
+The CRG dump intentionally stops at 0x3c and skips the reboot command word (0x00) and
+the watchdog words (0x50/0x64/0x70/0x100).
+
+### 15.7 What to read on the stock system (read-only, root telnet) [U to close]
+
+The stock already has the read path: /sbin/devmem is present (health check
+devmem-capability PASS on 2026-11-18) and /dev/mem is readable. Read-only only, no
+writes. Run this on the stock boot, twice, and record boot_id/uptime for each sample:
+
+    for a in 0x10180000 0x10180004 0x10180008 \
+             0x10100c00 0x10100c04 0x10100c08 0x10100c0c 0x10100c10 0x10100c14 \
+             0x14880004 0x14880008 0x1488000c 0x14880010 0x14880018 0x1488001c \
+             0x14880038 0x1488003c ; do
+        printf '%s ' "$a"; /sbin/devmem "$a" 32; done
+
+Fallback without devmem: dd if=/dev/mem bs=4 skip=$((0xADDR/4)) count=1 2>/dev/null |
+od -An -tx4. Values already known from the 2026-11-18 inventory (15.4) do not need to
+be re-read; the missing ones are the three SCU words and the SYSCTRL/CRG neighbours
+listed above. Purpose: complete a like-for-like comparison with the 034 dump (SCU
+config/status of both CPUs and the words around the resume register). This is the
+first stock sample that is directly comparable to our boot-side dump.
+
+Note the limitation: /dev/mem only shows the post-boot state; it cannot capture the
+loader-time CPU1/power state, which is why the in-kernel dump is the primary probe.
+
+### 15.8 Next single-variable boot plan
+
+1. Build an 001-034 image from the bench clone (no command-line change required:
+   dumps are unconditional and the probe is on by default; leaving
+   "luofu_smp_probe=1" is fine, dropping "luofu_smp_diag=1" avoids the unknown-param
+   line). Warm boot, capture the UART read-only.
+2. Read the single decision from that boot:
+   * **"1P" and/or marker != 0**: the loader's pen consumer is alive and CPU1
+     consumed the pen.
+     - CPU1 online: the stub path works; the next variable is the direct entry
+       (luofu_smp_probe=0) to see whether the direct jump still fails.
+     - CPU1 still offline: CPU1 dies in the 6.18 secondary entry after the stub;
+       the next patch instruments __secondary_switched.
+   * **no marker, +21ms pen still equals the written value**: CPU1 did not consume
+     the pen. Then, one variable per boot, in this order:
+     a. cold power-on of the same image (reset-type variable) - tests whether the
+        loader only parks CPU1 on a cold boot;
+     b. luofu_smp_power=1 (control; expected no-op because SCU status is normal);
+     c. luofu_smp_clear_mask=0x02a00000 then 0x03c00000 (CRG bit experiments; this
+        is the point where the stock CRG read in 15.7 should be in hand).
+3. If the cold boot also shows no consumption, compare the 034 pre/post dumps with
+   the stock reference and then move the pen write earlier in our boot (an
+   early_initcall probe that writes a spin-only stub and a marker) to test whether
+   anything in the kernel's own early init stops CPU1 before the normal release
+   point. That is patch 035 work, not part of this variant.
