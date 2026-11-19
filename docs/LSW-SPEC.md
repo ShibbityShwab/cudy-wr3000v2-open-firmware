@@ -16,6 +16,15 @@ read-only half: a W1 baseline probe (windows, powered-state gate, 30-word regist
 qid maps re-derived and compared word for word) that contains no register write and always fails
 closed; the derived W2 write set is tabulated in section 7.7. It has never run on hardware.
 
+**Decode update 2026-11-19 (task-57, host-only):** the switch egress path needed for TX frames
+has been decoded further and the R1/R3/R5 probe-configuration stage is now implemented behind a
+third gate, `luofu_lsw.egress=1` (patch `025`, never executed). The additions are: the R1/R3/R5
+write sequences and derivations (section 7.7, rows R1/R3/R5; R4 is read-only conformance), the
+EQM indirect command-word layout (section 7.5), a decode of the `port_bitmap` u64 cell order and
+its allocator walk (section 6.3), and a new section 7.8 that separates what is proven about a TX
+frame's egress selection from what is still [U]. No register was written for this update; the
+validation is source/compile host-side only.
+
 The subject is the internal Ethernet switch of the Hi5671Y "luofu" SoC (Cudy WR3000 v2 board,
 `R116`): the vendor modules `hi_lsw_pub.ko`, `hi_lsw_dp.ko`, `hi_lsw_pfe.ko`, `hi_swa.ko`, the
 CFE layer `hi_kcfe_pub.ko` + `hi_kcfe_lrn*.ko`, the adapter `hi_kcara.ko`, and the small
@@ -83,8 +92,9 @@ What this document is **not**:
     userspace (2026-11-19 attended bring-up), so the LSW/PIE/GEMAC drivers can now be reached by
     an attended boot, but **no LSW register write and no PIE/GEMAC data-path execution has
     happened yet**: every hardware statement below stays [U] until the W3-W5 campaign in section
-    12.3 is run. Patches `021`/`022` implement the read-only baseline and the gated W3-W5 write
-    path (never executed; see 7.7). The clean-room path stays staged: D0 spec, D1 minimal
+    12.3 is run. Patches `021`/`022` implement the read-only baseline and the gated W3/W5 qid-map
+    write path; patch `025` adds the R1/R3/R5 probe-configuration stage behind
+    `luofu_lsw.egress=1` (never executed; see 7.7 and 7.8). The clean-room path stays staged: D0 spec, D1 minimal
     forwarding (bridge in software, no offload), D2 switchdev offload (section 11).
 
 ---
@@ -660,7 +670,7 @@ ports 8-12 and special engines (`xge`, `woe`, PIE host path). The exact integer 
 `port-pie`/`port0`/`port13` and whether `port8..12` are *identical* to the DT MAC `port` numbers
 is **[U]** - it is the first item of the D1 bench inventory (section 12.2).
 
-### 6.3 `port_bitmap` - what is verified, what is not [V read, U semantics]
+### 6.3 `port_bitmap` - the queue allocation port bitmap [V read; decode 2026-11-19]
 
 `hi_dp_probe` reads `port_bitmap` as a **u64** (`of_property_read_u64` to `sp+40`), and the
 board DT supplies two cells `<0xf01 0x1ff0>`. Later the two words are passed as the two 32-bit
@@ -668,15 +678,21 @@ halves (`ldrd r2,[sp,#8]` at `+0xca8`) to `hi_queue_init()`. The 96-bit queue wa
 `hi_queue_init` tests bits of that pair with a 64-bit shift idiom, i.e. the driver treats the
 property as a **queue/port enable bitmap**, not a port count.
 
-The raw bit views are: low word `0xf01` = bits 0, 8, 9, 10, 11; high word `0x1ff0` = bits 4-12
-(as a u32). A naive reading as "ports 0-12" does not work (bits 0 and 8-11 + 36-44), and the
-values do not match the live-port set {9,10,11,12}. The semantic mapping is therefore **[U]**.
-Do not invent a decoding; the candidate explanations (two independent bitmaps for two hardware
-port groups; a bitmap of 8 queue-port groups; a per-block port mask) all remain open. The
-vendor's own U-Boot overlay does not modify `port_bitmap` [V], so the base-DT value is what the
-shipped kernel runs with. **Measured 2026-11-18 [V]:** the live post-overlay
-`/proc/device-tree/lsw_dp/port_bitmap` bytes are `00 00 0f 01 00 00 1f f0` -> `<0xf01 0x1ff0>`,
-identical to the base DT; the bitmap semantics remain [U] (the live read does not decode it).
+The cell order is the key. `of_property_read_u64()` assembles the value as
+`cell[0] << 32 | cell[1]` (**big-endian assembly**, kernel API contract), so on the little-endian
+target the two in-memory 32-bit words are the *second* DT cell first: word 0 = `0x1ff0`
+(bits 4..12) and word 1 = `0xf01` (bits 0, 8, 9, 10, 11 of that word -> overall bits 32, 40, 41,
+42, 43). The `hi_queue_init` walk visits exactly the port ids **{4..12} and {32, 40..43}** and
+calls the qid allocator for each. That reading is **[V]**: it is the only one under which the
+allocator output reproduces the measured qid map, and it reproduces it word for word (7.3) -
+ports 4..12 take qids 1..72 in order, port 32 has `q_num = 0` (it is allocated a base qid but
+consumes no qid run), and ports 40..43 take qids 73..104. The property is therefore the
+**queue-allocation port bitmap**: a set bit means "this LSW port owns a contiguous qid run
+at init". What remains [U] is why the board's bootloader/DT writes that particular port set, not
+what the bits select. The vendor's own U-Boot overlay does not modify `port_bitmap` [V], so the
+base-DT value is what the shipped kernel runs with. **Measured 2026-11-18 [V]:** the live
+post-overlay `/proc/device-tree/lsw_dp/port_bitmap` bytes are
+`00 00 0f 01 00 00 1f f0` -> `<0xf01 0x1ff0>`, identical to the base DT.
 
 Another unresolved probe-level detail worth recording: while iterating the u64, the vendor code
 tests bit 16 of the low word (`ubfx r3, r7, #16, #1`) and stores the result into the queue-manager
@@ -860,18 +876,33 @@ I mapping]
   `eqm+0x5c` (plus a small register-address table anchored at `.LANCHOR1` for additional data
   words);
 - then `hi_lsw_read(eqm+0x48)` is polled up to **1001** times (= the vendor's ~1 s timeout at
-  1 ms `arm_delay_ops`); bit31 = busy (continue), bit5 = error -> return `0x8fff_ffd3`; on
-  timeout print the register fields (bits 20..26, bits 0..15, bit 30) and return
-  `0x8fff_ffd8`;
+  1 ms `arm_delay_ops`); the top bits of the returned word are: **bit31 = start/busy**
+  (still set -> keep polling), **bit29 = error** (return `0x8fff_ffd3`), and on timeout the
+  fields printed are bits 20..26, bits 0..15 and bit 30; timeout return `0x8fff_ffd8`;
 - table ids are 7-bit (`tab & 0x7f`), indices 16-bit, and up to 5 data words per operation
   (`min(num,5)`); the highest table id used in DP is 19 (`hi_queue_init` writes a 1000-cell
   entry at table 19).
 
-This is the mechanism a clean-room driver would have to re-implement for queue tables; because
-the register field layout inside the command word is only partially recovered (the
-`and r0,r0,#0x7f` and the `0xffffc000` base are visible; the exact bit positions are [I]),
-**the D1 driver must not write EQM tables until a bench trace or GPL source confirms the
-command word**. [I]
+**Command-word decode (2026-11-19, host-only) [V code shape; field semantics I/U].** The
+disassembly of `hi_eqm_write_tab`/`hi_eqm_read_tab` is more complete than the earlier note:
+the word written to `eqm+0x48` is
+
+~~~
+bits [15:0]  index (16-bit)
+bits 20..26  table id (7-bit, from tab & 0x7f, placed at bit 20)
+bit  [29]    error (status read-back only)
+bit  [30]    1 = write, 0 = read
+bit  [31]    1 = start/busy (write: set in the command; read: polled until clear)
+~~~
+
+The remaining upper bits are constant (`0xc000` for a write, `0x8000` for a read, before the
+table id is OR-ed into bit 20).  Data words go to `eqm+0x5c` (word 0), then to the register
+addresses in `g_eqm_tab_ba` at `.rodata+0x220`: write addresses `eqm+0x60/0x64/0x68/0x70` and
+read addresses `eqm+0x50/0x54/0x58` (word 0 of a read uses `eqm+0x4c`).  That is the bit layout
+a clean-room driver would need; what is **not** recovered is the *contents* of most of the
+tables (entry field layouts) and the engine's use of them.  **The D1 driver still must not
+write EQM tables**: the command word is decoded, but the write set for a working queue table is
+not (section 7.7 row E1). [V/I]
 
 ### 7.6 Queue state visible to userspace (vendor) [V]
 
@@ -887,10 +918,11 @@ dump) - it is the cheapest bench inventory item and is listed in section 12.2. [
 ### 7.7 D1b W2: the derived write set (paper only, 2026-11-18) [I]
 
 Patch `021` in the target skeleton turns the W1 measurement into a checkable
-model and validates it **read-only**; patch `022` implements the first write
-step (the table rows below marked implemented) behind two explicit attended
-gates.  The table is what the attended W3-W6 campaign would execute, with the
-evidence grade of every row.  The driver's register-map header
+model and validates it **read-only**; patch `022` implements the qid-map write
+step (the table rows below marked implemented) and patch `025` (2026-11-19) adds
+the R1/R3/R5 probe-configuration step, each behind explicit attended gates.  The
+table is what the attended W3-W6 campaign would execute, with the evidence grade
+of every row.  The driver's register-map header
 (`luofu-switch-regs.h`) is the single source of truth for the offsets; this
 table is the review view.  **No write in this table has been executed on
 hardware.**
@@ -899,18 +931,18 @@ hardware.**
 | --- | --- | --- | --- | --- |
 | C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
 | C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
-| R1 | `dp` probe config | `dp+0x1c = (u16 \| 0x10000)`, `dp+0x64 = 1` then cell selector, `dp+0x68 = 0` | code shape [V]; measured final values [V]; field meaning [U] | not written |
+| R1 | `dp` probe config | `dp+0x68 = 0`, `dp+0x64 = 1` then the cell-size selector (`1` = 0x200-byte cells), `dp+0x1c = (u16 queue DDR base \| BIT(16)) = 0x00018000` | code shape [V]; the u16 is the low half of the live `queue` window base, so the value is derived from the checked DT window [V]; measured final values [V]; field meaning [U] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
 | R2 | `eps` queue/DFX | `eps+0x1008` | measured 0 [V]; writer/meaning [U] | not in write set |
-| R3 | `eqm` probe init | `eqm+0x18 = 0x80001cc0`, `+0x38 = 0x7f0`, `+0x40` bit31 enable, `+0xa4` RMW with `(value-0x40)` in bits 0..13 | code shape [V]; measured final values [V]; register semantics [U] | not written |
-| R4 | `fam` queue/cell comparison | `fam+0x504` RMW (measured `0x2000`) | code shape [V]; write semantic [U] | not in write set |
-| R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | not written |
-| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W4, patch `022`); never executed |
+| R3 | `eqm` probe init | `eqm+0xa4 = (found & ~0x3fff) \| ((fam_low14 - 0x40) & 0x3fff)`; `eqm+0x18 = (found & ~0x80003fff) \| ((eqm+0xa4 + 0x3d00) & 0x3fff) \| bit31`; `eqm+0x38 = (found & ~0x3fff) \| ((eqm+0xa4 & 0x3fff) >> 2)`; `eqm+0x40 \|= bit31` | code shape [V] (exact vendor derivation); measured final values `0x1fc0 / 0x80001cc0 / 0x7f0 / 0x80000000` [V]; register semantics [U] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
+| R4 | `fam` queue/cell comparison | read-only conformance: `(fam+0x504 & 0x3fff)` must equal `(queue_size / cell_size) & ~7 = 0x2000`; the vendor only *lowers* the found word (clamp case [U]) | code shape [V]; measured value [V]; the write is deliberately not replayed [U] | **read-only check in the W4 stage** (patch `025`); not written |
+| R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
+| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W5, patch `022`); never executed |
 | Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W5, patch `022`); never executed |
 | Q3 | qid allocation | one contiguous qid space from **1**, 8 qids per port, qid 0 unused; populated rows are table-A ports 4..12 (qids 1..72) and table-B ports 40..43 (qids 73..104) | measured contents [V]; allocator policy [I] | model only |
 | Q4 | qid map, port > 47 class | word index `slot/2 + port*4 - 64` of table A, one word per slot written twice per pair of slots | code shape only partially recovered [V]/[U] | deliberately not modelled |
-| P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` | value [V] in the base DT and on the live node; semantics [U] | baseline check only, never used to enable anything |
+| P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` -> u64 `0xf01_0000_1ff0`; the allocator walk visits ports {4..12, 32, 40..43} | value [V] in the base DT and on the live node; decode [V] (6.3, reproduces the measured qid map) | baseline check only, never used to enable anything |
 | D1 | queue/flow DDR | `queue = 0x80000000/4 MiB`, `flow = 0x80400000/1 MiB` | base/size measured live after the loader fixup [V]; layout inside [U]; how the engine is told the base [U] | validated from DT, never ioremapped or written |
-| E1 | EQM indirect table (queue table 19 / 1000-cell entry), IFC/L2/VLAN tables | command word, entry layouts | [U] | excluded from the write set by design |
+| E1 | EQM indirect table (queue table 19 / 1000-cell entry, tables 16/32/34/35/37/38), IFC/L2/VLAN tables | command word (decoded 2026-11-19, 7.5) and entry shapes partially decoded (7.8); the table *contents* for a working queue map are [U] | command word [V]; table content/use [U] | excluded from the write set by design |
 
 **What patch `021` verified without writing (W2 exit, read-only).**  The
 derived allocation model (Q1-Q3) reproduces all 384 measured qid-map words
@@ -919,11 +951,11 @@ gate and matches the 30-word W1 register baseline.  That is the evidence the
 write set rests on: the *write shape* (Q1/Q2) is decoded from the vendor code,
 the *values* are measured, and the model is checked against the silicon before
 any write.  What it still does not prove is that writing them has the intended
-effect (W4/W5), the correct values for our own (non-vendor-initialised) block
-state (W3 readback), or the meaning of the port ids the rows belong to
+effect (W5), the correct values for our own (non-vendor-initialised) block
+state (W3/W4 readback), or the meaning of the port ids the rows belong to
 (13.2 item 2).
 
-**What patch `022` adds (W3-W5 staged, implemented, never executed).**
+**What patch `022` adds (W3/W5 staged, implemented, never executed).**
 `luofu-switch.c` now has two explicit opt-in gates on top of the read-only
 default: `luofu_lsw.arm=1` performs C1+C2 (enable the two gate clocks, release
 the four reset lines), re-checks the powered state through the CRG syscon and
@@ -937,11 +969,76 @@ block is not in the measured state the model was derived against.  The default
 boot keeps the patch-`021` read-only behaviour: no parameter, no write.  The
 attended sequence, the exact expected console lines and the rollback plan are
 in [SKELETON-SMOKE.md](SKELETON-SMOKE.md) ("connectivity session" section).
-What is still open after patch `022`: the port ids the rows belong to are the
+What was still open after patch `022`: the port ids the rows belong to are the
 measured MAC port numbers (declared in the devicetree as `hisilicon,port` and
-validated against the populated rows) but how a PIE TX descriptor selects an
+validated against the populated rows), but how a PIE TX descriptor selects an
 egress queue/port remains [U], and the dp/eqm/ips probe initialization
-(R1/R3/R5) is still not in any write set.
+(R1/R3/R5) was not in any write set.
+
+**What patch `025` adds (W4 staged, implemented, never executed; 2026-11-19).**
+`luofu-switch.c` gains a third opt-in gate, `luofu_lsw.egress=1`, placed after
+the W3 power step and before the qid-map write: it snapshots the R1/R3/R5 target
+words, runs the pre-write conformance gate (EQM indirect interface idle, every
+target word stable across two reads, `fam+0x504` low14 equal to the computed
+cell count `(queue_size / cell_size) & ~7` - the measured state the R3 formulas
+are derived against), programs the nine words of R1/R3/R5 in the vendor order,
+reads every one of them back against the value computed from the pre-write
+snapshot, and restores the found state on the first mismatch (also in
+`remove()`).  R4 is read-only.  The step refuses without `luofu_lsw.arm=1`;
+a run with `egress=1` but without `qidmap=1`, and a run with `qidmap=1` but
+without `egress=1`, both end in a refused probe with the found block state
+restored and the block powered back down.  Only `arm=1 egress=1 qidmap=1` with
+both write sets verified publishes `luofu_switch_ready()`.  The R1/R3/R5
+sequences and derivations are in 7.7 rows R1/R3/R5, the words in
+`luofu-switch-regs.h`, and the attended sequence/expected console lines are in
+[SKELETON-SMOKE.md](SKELETON-SMOKE.md) ("LSW egress session").  What this does
+**not** prove: that the written configuration enables a data path (no EQM queue
+table is programmed - row E1 - and no frame has been transmitted), and that the
+per-frame egress selection works (7.8).
+
+
+### 7.8 TX frame egress: what the vendor writes init-time, per frame, and what is still [U] (2026-11-19)
+
+This is the decode the D1 TX path needed: which writes a TX frame depends on, and which of them
+are in the reviewed write set.  It separates three layers.
+
+**Per frame: the LSW is written zero times.** No vendor path issues a hi_lsw_write() per
+transmitted frame (the only hi_lsw_* write call sites in hi_lsw_dp are the probe/queue-init
+paths and the qid-map hook; hi_kpie's TX path only writes PIE ring doorbells and DMA
+descriptors).  A frame reaches the LSW as a 32-byte hardware TX descriptor produced by
+hi_pie_tx_set_desc (v250, PIE-DATAPATH.md section 5.2).  The source fields come from the
+vendor's 32-byte TX request built in hi_pie_drv_xmit@0x42ac: descriptor bytes 0-3 (the
+desc8 {port, vport, ...} from the MAC netdev) land at request +8..+11; the per-port
+"queue handle" from the PIE per-port context lands in request +14 bits 4..; the rest are skb
+type/length/address fields.  **The queue handle is zero in this build**: hi_net_dev_probe
+initialises the context word +0 to the previous value (0), hi_net_dev_open only sets the up
+flag at +4, and no vendor module writes it ([V] all call sites).  So the only egress identity
+a vendor MAC TX descriptor carries is the port/vport word pair; whether the engine uses that
+word directly as the egress port or selects through a per-queue EQM entry is **still [U]** -
+software cannot answer it, a bench trace or GPL source can.
+
+**Init-time: the vendor does write the queue/egress tables, but not in our write set.** While a
+MAC netdev probes, hi_dev_queue_enable (the PIE netdev hook installed by hi_lsw_dp) allocates
+the port's contiguous qid run and calls the registered qid_map_set hook for all 8 slots; this is
+the port->qid direction that the measured opp+0x42800/0x43800 tables contain (7.3).  The reverse
+qid->egress-path state is programmed earlier, in hi_queue_init@0x507c, through the EQM indirect
+interface: table 19 entry 0 (a 2-word cell-count record, {0xffffffff, 0xffffc3e8}), table 16
+(16 qids per row; each byte has a 5-bit selector plus a valid bit), table 32 (per queue-port byte
+0 = port id plus 3-bit per-slot priorities), table 34 (per qid: 6-bit queue-port field, 4-bit
+slot field, valid bit), tables 35/37/38 (per-qid scheduling/shaping state), and the three direct
+words eqm+0x18/+0x38/+0x40 (row R3).  Entry shapes are [V] code shape (the writers were
+disassembled); the *meaning* of every field and the contents needed for our own block are [U].
+Row E1 therefore stays excluded: programming that state is the next RE/bench item, not part of
+patch 025.
+
+**The reviewed TX-adjacent write set as of patch 025:** W3 (CRG gates + resets, patch 022), W4
+(R1/R3/R5 probe configuration, patch 025), W5 (qid maps, patch 022).  That is the minimum set
+whose *values* are pinned by the 2026-11-18 measurement and whose readback is computable; it is
+not yet proven to be sufficient for forwarding, because the EQM queue tables (E1) and the
+per-frame egress selection are outside it.  The attended W4 run is still worth doing: it verifies
+that the three probe-configuration derivations are correct against the real block and that the
+block survives them, one gate at a time, with restore-on-mismatch.
+
 
 ---
 
@@ -1366,11 +1463,12 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | step | read/write | question answered | rollback |
 | --- | --- | --- | --- |
 | W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes - **DONE 2026-11-18 (read-only inv1):** the post-vendor-boot baseline is measured (values in [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3, incl. the qid table A/B contents). W2 can be derived from it; no write was made | power cycle |
-| W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete - **DONE 2026-11-18 (read-only, host-only):** derived write set tabulated in section 7.7; patch `021` re-derives the qid-map model and validates it against all 384 measured table words without writing, and gates the read on the measured powered state; every write itself is still unimplemented | n/a |
+| W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete - **DONE 2026-11-18 (read-only, host-only):** derived write set tabulated in section 7.7; patch `021` re-derives the qid-map model and validates it against all 384 measured table words without writing, and gates the read on the measured powered state; write implementation was patches `022`/`025` | n/a |
 | W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling - **implemented behind `luofu_lsw.arm=1` (patch `022`); never executed**; the first attended run should use this gate alone and record the snapshot | power cycle |
-| W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` (patch `022`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3 and add the qid-map gate in a second boot | power cycle |
-| W5 | add remaining MAC ports; default-forwarding test | D1c exit - **implemented in the same gated write set (all populated rows); the forwarding/TX test is still open because the PIE TX egress selection is [U]** | power cycle |
-| W6 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
+| W4 | R1/R3/R5 probe configuration only (`luofu_lsw.arm=1 luofu_lsw.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_lsw.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
+| W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
+| W6 | default-forwarding/TX test | D1c exit - **the forwarding/TX test is still open because the EQM queue tables (E1) and the PIE TX egress selection are [U]** | power cycle |
+| W7 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
 
@@ -1381,7 +1479,8 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | wrong queue/flow DDR base (`0x87b00000` vs `0x80000000`) corrupts DDR used by Linux | high | answer from live DT readback first (12.2 item 3); DT node disabled until then |
 | LSW register writes hang the CPU/console path | high | write set only after W1/W2; attended; recovery armed; one write per power cycle if needed |
 | wrong reset pulse kills the switch and needs power cycle | med | reset deassert last; test on stock first |
-| unknown EQM command-word encoding | med | do not write EQM tables until traced; D1c may route around it if the defaults are usable |
+| unknown EQM command-word encoding | med | command word decoded 2026-11-19 (7.5); table *contents* and the queue->egress use remain [U], so do not write EQM tables until traced |
+| probe configuration written but no EQM queue tables -> no forwarding, misleading "ready" | med | `luofu_switch_ready()` only means the reviewed write set is verified, not that a frame flows; the attended note must check counters/traffic before treating a link as working (7.8) |
 | hardware L2 defaults (unknown unicast) misforward in D1 | med | measure from W6; possibly keep bridge promisc until D2 |
 | port-id mapping between MAC `port` and LSW ids unknown | med | read the vendor port/queue dumps (12.2) |
 | vendor userspace expectations (`hi_cfm`, `/proc/hsan`) not met | low for D1 | our userspace is standard OpenWrt; document the divergence |
@@ -1397,8 +1496,8 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | block | evidence | missing | plan | depends on | can do offline |
 | --- | --- | --- | --- | --- | --- |
 | **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 live DT windows with names, and the **live DDR `queue`/`flow` base** measured 2026-11-18 (5.4) | [U] meaning of most offsets/fields; why ids 2/4 skipped; queue/flow *layout* inside the DDR regions | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
-| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18); 5 virtual-port DT props (absent); patch `021` models the two DDR windows, the port_bitmap value check and per-port owner-device resolution (port netdevs stay with the GEMAC side) | [U] `port_bitmap` semantics; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
-| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits); **W2 model derived and validated read-only 2026-11-18** (patch `021`: the contiguous qid 1..104 allocation reproduces all 384 measured qid-map words; 7.7) | [U] EQM command-word bit layout; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer; whether the writes have the intended effect (W4/W5) | D1b write set; D1c host path | PIE 015; eqm traced values | **Yes** (code); writes bench-only |
+| **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18), **decoded 2026-11-19 as the queue-allocation port bitmap {4..12, 32, 40..43}** (6.3); 5 virtual-port DT props (absent); patch `021` models the two DDR windows, the port_bitmap value check and per-port owner-device resolution (port netdevs stay with the GEMAC side) | [U] why the loader picks that port set; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
+| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) **command word decoded 2026-11-19** (7.5); **W2 model derived and validated read-only 2026-11-18** (patch `021`: the contiguous qid 1..104 allocation reproduces all 384 measured qid-map words; 7.7); R1/R3/R5 probe-configuration stage implemented behind `luofu_lsw.egress=1` (patch `025`, 7.7/7.8) | [U] EQM queue-table contents/use for qid->egress; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer; whether the writes have the intended effect (W4/W5); per-frame TX egress selection (7.8) | D1b write set; D1c host path | PIE 015; eqm traced values | **Yes** (code); writes bench-only |
 | **MAC learning / FDB** | [V] hardware L2 window + counters (`port_move/age_drop/sport_clash/search_ok_mc/search_fail_mc`); CFE software FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_br_fdb_check_addr` patched bridge); learning libs `hi_kcfe_lrn_l2` etc. call `hi_cfe_acc_*`/`hi_adp_flow_*`; no L2 table writer symbol | [U] L2 table format/access; whether FDB offload must go through flows; aging/port-move semantics | D2 | D1 | **Partly** (D2 design only) |
 | **VLAN / ACL** | [V] tag action table (`tag_write/dump`, `hi_cfe_tag_*`), VLAN filter API + `vlan_filter` proc, subif model (with its "no second-layer untag subif" limitation); IFC classifier field list (~40 L2-L4 fields), action fields pq/pq_en/car/statis; CAR/mirror/NAPT/MCC symbols | [U] per-port VLAN/PVID table location and encoding; IFC row encoding; ACL semantics | D2 (VLAN/FDB), D3 (flow) | D1, GPL src optional | **No** (bench/RE needed) |
 | **CFE/rootif contract** | [V] rootif = named netdev in 32-slot CFE table; NETDEV_UP/DOWN/UNREGISTER driven; interface attrs/FDB/hooks/tags/netdev vif; `g_intf_bypass=1` then `hi_swa` loaded ("switch adaptor for openwrt"); `hi_swa` switchdev handlers are stubs | [U] full CFE hook semantics; why bypass mode exists beyond the 5 bypass branches seen | **not reproduced**; standard Linux switchdev contract | - | **Yes** (design) |
@@ -1406,21 +1505,28 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 
 ### 13.2 Unknowns that block or shape the plan
 
-1. `port_bitmap` words' semantics and the "root bit" interpretation (6.3).
+1. ~~`port_bitmap` words' semantics~~ **RESOLVED 2026-11-19 (host-only):** the u64 cell order decodes to
+   the queue-allocation port bitmap {4..12, 32, 40..43}, which reproduces the measured qid map
+   (6.3). The "root bit" (bit 16) interpretation remains [U]; the bit is clear on this board.
 2. LSW internal port numbering vs MAC `port` numbers and the special port classes 40..47 and >47
    (6.2, 7.3).
 3. ~~Whether the `queue`/`flow` windows are the DDR regions and their live base after the U-Boot
    overlay (5.4).~~ **RESOLVED 2026-11-18:** live base `queue = 0x80000000/4 MiB`,
    `flow = 0x80400000/1 MiB` after the overlay ([INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)
    section 3.1). The layout inside the regions remains [U].
-4. EQM indirect table command-word encoding (which bits select table/index/data) (7.5).
+4. ~~EQM indirect table command-word encoding~~ **RESOLVED 2026-11-19 (host-only, code shape):**
+   index bits 15..0, table id bits 26..20, bit30 write/read, bit31 start/busy, bit29 error (7.5).
+   The EQM table *contents* needed for a working queue map remain [U].
 5. Meaning of the DP probe's five virtual-port properties (absent on this board) and the
    cumulative/default-256 computation (6.5).
 6. The exact reset sequence requirement (`dp_logic` vs `dpu_srst` mismatch; assert-vs-pulse) (5.5).
-7. The EQM queue-table entry layout (the 1000-cell write in `hi_queue_init`, table 19) (7.5).
+7. The EQM queue-table entry layout/contents (the 1000-cell write in `hi_queue_init`, table 19;
+   tables 16/32/34/35/37/38) and their use for qid->egress selection (7.5, 7.8).
 8. Where per-port VLAN membership/PVID is stored and its encoding (8.4).
 9. The L2 hardware table access/format, and whether D2 FDB offload must go through IFC/flows (8.3).
-10. The 96-bit queue walk vs 64-bit DT property discrepancy in `hi_queue_init` (6.4/7.2).
+10. ~~The 96-bit queue walk vs 64-bit DT property discrepancy~~ **RESOLVED 2026-11-19:** the walk
+    only visits the low 64 bits and the u64 cell order makes the visited ids {4..12, 32, 40..43}
+    (6.3); bits 64..95 of the walk are dead code for this DT value.
 11. IFC classifier row encoding and action semantics (8.2).
 12. Wi-Fi/WoE/NAPT virtual-port and offload semantics (out of scope, [X] for Wi-Fi).
 

@@ -3203,3 +3203,97 @@ Not proven / unattended-untested:
 `09-pristine-apply.log` + patch hashes, `10-static-checks.log`, `11-checkpatch-final.log`,
 `base-shared/` + `base-kernel/` snapshots (sha256), `patches-new/` and `shared-work/`.
 
+
+---
+
+## 2026-11-19 (LSW egress session): R1/R3/R5 probe-configuration write stage (patch 025)
+
+Host-only session (no SSH/telnet/TFTP/UART/flash; the router was not touched). It decodes the
+switch egress path needed for TX frames one level further and implements the R1/R3/R5
+probe-configuration write set as a third attended gate. **Nothing in this section has executed on
+the board; the image has not been rebuilt from 025 and no register has been written.**
+
+### What was added
+
+- `luofu-switch.c` / `luofu-switch-regs.h` (patch 025): the attended W4 stage,
+  `luofu_lsw.egress=1` (requires `luofu_lsw.arm=1`). It snapshots the R1/R3/R5 target words,
+  refuses before the first write unless the EQM indirect interface is idle, every target word
+  reads stable across two samples, and `fam+0x504` low14 equals the computed cell count
+  `(queue_size / cell_size) & ~7` (= 0x2000 on this board); it then programs the nine dp/ips/eqm
+  words in the vendor order, reads every one back against a value computed from the pre-write
+  snapshot, restores the found state on the first mismatch (also in `remove()`), and leaves
+  `luofu_switch_ready()` false until **both** this stage and the qid map are verified. R4/`fam`
+  is read-only; the EQM queue tables remain excluded (contents [U]).
+- The decoding added to `LSW-SPEC.md`: the R1/R3/R5 derivations (7.7), the EQM indirect
+  command word (7.5), the `port_bitmap` u64 cell-order decode (6.3; the queue-allocation port
+  bitmap {4..12, 32, 40..43}, which reproduces the measured qid map) and the TX-frame egress
+  split (7.8): per frame the vendor writes no LSW register; the 32-byte PIE descriptor carries
+  the port/vport word pair plus a per-port queue handle that is zero in this build; the
+  qid-to-egress EQM tables are programmed at init and their contents are still [U].
+
+### Gate matrix after patch 025 (all paths fail closed)
+
+| boot parameters | LSW driver (021/022/025) | GEMAC netdevs (023) |
+| --- | --- | --- |
+| none (normal boot) | read-only baseline validate + refuse, no write | no netdev |
+| `luofu_lsw.arm=1` | W3: power, verify powered state, snapshot, refuse; no LSW register write | no netdev |
+| `luofu_lsw.arm=1 luofu_lsw.egress=1` | W3 + W4: conformance, R1/R3/R5 write + readback; then qid map absent -> restore found state, power down, refuse | no netdev |
+| `luofu_lsw.arm=1 luofu_lsw.qidmap=1` | W3 + W5 qid map; then the probe config is missing -> restore, power down, refuse (new in 025) | no netdev |
+| `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` | W3 + W4 + W5, both verified -> `luofu_switch_ready()` true | requires `luofu_pie.arm=1` too |
+| `luofu_lsw.egress=1` or `qidmap=1` without `arm=1` | explicit `-EINVAL` refusal (new in 025) | no netdev |
+
+### Attended test sequence (recovery card armed; one variable per boot)
+
+1. **W3 only (unchanged from the connectivity session):** boot with `luofu_lsw.arm=1`.
+   Expect the ATTENDED WRITE PATH warning, the powered-state line, 30 `W3 snapshot:` lines,
+   the qid-table non-zero counts, then the refusal line. No LSW register is written.
+2. **W4 only:** boot with `luofu_lsw.arm=1 luofu_lsw.egress=1` (PIE and qidmap gates off).
+   Expect first the W3 output, then
+   `luofu_lsw.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write
+   conformance and readback verification`, then either
+   `W4 probe configuration programmed and verified: dp+0x1c=0x18000 dp+0x64=0x1 eqm+0x18=0x80001cc0
+   eqm+0x38=0x7f0 eqm+0x40=0x80000000 eqm+0xa4=0x1fc0 ips+0x08=0x2a ips+0x10=0x... (fam+0x504=0x2000
+   read-only)` followed by the qid-map-absent refusal and the power-down, **or** a
+   `fam+0x504 low14 reads ... but ... derived against the computed cell count 0x2000` refusal.
+   The second case means the loader did not leave the block in the measured state: that is the
+   useful evidence of the boot - stop there, record the value, do not force the gate.
+   Also capture: `dmesg | grep luofu-switch`, the W3 snapshot lines, and that the console/CPU
+   survived the write. Power-cycle between W4 variants.
+3. **W4 + W5:** boot with `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1`. Expect the
+   W4 success line, then `luofu_lsw.qidmap=1: ...`, the qid-map conformance pass, the
+   `W2 qid map programmed and verified ...` line and
+   `connectivity path armed: R1/R3/R5 probe configuration and the W2 qid maps are programmed and
+   verified; the GEMAC netdev front end may register`. Only this combination reaches READY.
+4. **Data path attempt:** add `luofu_pie.arm=1`. Expect the PIE arm logs and four GEMAC netdev
+   registrations (eth0..eth3 in DT order; the bench cable is eth2 by the measured MAC<->PHY
+   mapping). Bring the link up, then test `/sys/class/net/eth2/carrier`, `ethtool eth2`, static
+   address + ARP/ping between two wired ports. **Expected open failure:** no frame forwards until
+   the EQM queue tables (row E1) and the per-frame TX egress selection are solved; the test
+   records where it stops (netdev up? carrier? TX doorbell? no RX?). Do not treat a registered
+   netdev as proof of forwarding.
+5. Rollback is the physical RESET+TFTP card; the driver also restores the found words and powers
+   the block down on every refusal path, but that is not a substitute for the recovery card.
+
+### What this proves and what it does not
+
+Proven (host-side): the 001-025 chain (25 patches; `024` from the PIE lane, sha256 recorded at
+validation time) applies to pristine 6.18.60 (25/25, 0 rejects), the full kernel compiles with
+WERROR and no warnings from the changed files, `W=1` is clean for them, and patch 025 passes
+checkpatch with 0 errors (one commit-message style note, as every pure-diff patch in this
+series). Patch 025 is file-disjoint from 024. The pre-write conformance/readback/restore logic and the gate composition are code
+and can be reviewed; the R1/R3/R5 expectations are the measured 2026-11-18 values.
+
+Not proven: that the write set does what the vendor expects (no hardware run), that the block
+survives it, that a TX frame reaches a MAC port, and what the per-frame egress selection is.
+The EQM queue tables that the vendor programs at init (tables 16/32/34/35/37/38, table 19) are
+still [U] and are not written by any patch; a registered netdev after the attended run must not
+be read as a working link.
+
+### Evidence (local-only, gitignored)
+
+`build/linux-kbuild/waves/2026-11-19-lsw-egress/`: `work/` (patch sources and base snapshots),
+`validation/series-tree-final` (pristine 6.18.60 + 001-025), `validation/compile-tree` (isolated
+copy of the compiled OpenWrt kernel build dir + patch 025), and `validation/logs/` with the
+series apply log, `40-checkpatch-025.log` and `61-compile-vmlinux-final.log`. The annotated
+vendor disassembly and the decode notes are in `hi_lsw_dp.annotated.dis`, `hi_kpie.annotated.dis`
+and `notes/`.
