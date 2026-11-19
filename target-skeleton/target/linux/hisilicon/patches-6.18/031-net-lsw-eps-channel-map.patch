@@ -1,0 +1,143 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -203,6 +203,10 @@
+ module_param_named(qidmap, luofu_switch_qidmap_gate, bool, 0444);
+ MODULE_PARM_DESC(qidmap, "Attended W5 step: also program and verify the W2 qid-map write set (requires arm=1 and egress=1 for a ready data path; default off)");
+ 
++static bool luofu_switch_eps_gate;
++module_param_named(eps, luofu_switch_eps_gate, bool, 0444);
++MODULE_PARM_DESC(eps, "Attended W6 step: program the measured EPS channel-map and companion words (requires arm/egress/qidmap; default off)");
++
+ bool luofu_switch_probed(void)
+ {
+ 	return READ_ONCE(luofu_switch_state) != LUOFU_SWITCH_ABSENT;
+@@ -329,6 +333,7 @@
+ 	bool powered;
+ 	bool egress_ready;
+ 	bool qid_maps_ready;
++	bool eps_ready;
+ };
+ 
+ /*
+@@ -1588,6 +1593,71 @@
+ 			     "read-only baseline validated; the W3/W4/W5 write set has never been executed on this block (set luofu_lsw.arm=1 for the attended power step, add luofu_lsw.egress=1 for the probe configuration and luofu_lsw.qidmap=1 for the qid-map write step)\n");
+ }
+ 
++/*
++ * W6: program the EPS channel-map and companion words with the values measured
++ * on the stock boot.  Without them the switch has no channel mapping between
++ * the MAC/PIE channels and the switch ports: the PIE engine consumes TX
++ * descriptors but nothing appears on the wire, and ingress frames never reach
++ * the PIE RX rings.  Every word is written, read back and restored on mismatch.
++ */
++static int luofu_switch_eps_program(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	u32 pre[32];
++	void __iomem *base;
++	unsigned int i, n = 0;
++
++	base = lsw->window[LUOFU_SWITCH_WIN_EPS];
++	if (!base)
++		return -EINVAL;
++
++	for (i = 0; i < variant->num_baseline; i++) {
++		const struct luofu_switch_baseline_entry *entry =
++			&variant->baseline[i];
++
++		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
++		    strncmp(entry->name, "eps channel", 11))
++			continue;
++		if (n >= ARRAY_SIZE(pre))
++			return -E2BIG;
++		pre[n++] = readl(base + entry->offset);
++	}
++
++	for (i = 0; i < variant->num_baseline; i++) {
++		const struct luofu_switch_baseline_entry *entry =
++			&variant->baseline[i];
++
++		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
++		    strncmp(entry->name, "eps channel", 11))
++			continue;
++
++		writel(entry->value, base + entry->offset);
++		if (readl(base + entry->offset) != entry->value) {
++			unsigned int m = 0, r = 0;
++
++			for (m = 0; m < variant->num_baseline; m++) {
++				const struct luofu_switch_baseline_entry *e2 =
++					&variant->baseline[m];
++
++				if (e2->window != LUOFU_SWITCH_WIN_EPS ||
++				    strncmp(e2->name, "eps channel", 11))
++					continue;
++				if (r < n)
++					writel(pre[r], base + e2->offset);
++				r++;
++			}
++			return dev_err_probe(lsw->dev, -EIO,
++					     "EPS channel map readback mismatch at %s\n",
++					     entry->name);
++		}
++	}
++
++	dev_info(lsw->dev,
++		 "W6: %u EPS channel-map/companion words programmed and verified (stock baselines)\n",
++		 n);
++	return 0;
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1680,8 +1750,8 @@
+ 	 * write (qidmap).  A write gate without the power step is a
+ 	 * configuration error, not a silent no-op: refuse it explicitly.
+ 	 */
+-	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate) &&
+-	    !luofu_switch_arm_gate) {
++	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
++	     luofu_switch_eps_gate) && !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+ 				    "luofu_lsw.egress/luofu_lsw.qidmap require luofu_lsw.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+@@ -1743,6 +1813,20 @@
+ 
+ 	lsw->qid_maps_ready = true;
+ 
++	if (!luofu_switch_eps_gate) {
++		dev_warn(dev,
++			 "EPS channel map is not programmed (set luofu_switch.eps=1): the MAC/PIE channel mapping would stay absent, refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_switch.eps=1: programming the measured EPS channel-map/companion words (W6)\n");
++	ret = luofu_switch_eps_program(lsw);
++	if (ret)
++		goto out;
++	lsw->eps_ready = true;
++
+ 	if (!lsw->egress_ready) {
+ 		dev_warn(dev,
+ 			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_lsw.egress=1); refusing to arm the data path\n");
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -1082,6 +1082,15 @@
+ 	delta = (hw_rptr - (ring->rptr & ring_mask)) & ring_mask;
+ 	if (delta > ring->entries)
+ 		delta = ring->entries;
++	{
++		static atomic_t trace_poll = ATOMIC_INIT(0);
++
++		if (atomic_inc_return(&trace_poll) <= 12)
++			pr_info("pie-trace RXpoll ch=%u hw_rptr=%u sw_rptr=%u delta=%u mask=%08x sts=%08x\n",
++				ch, hw_rptr, ring->rptr & ring_mask, delta,
++				readl(pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch)),
++				readl(pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch)));
++	}
+ 
+ 	while (done < budget && done < delta) {
+ 		struct luofu_pie_rx_buf fresh;
