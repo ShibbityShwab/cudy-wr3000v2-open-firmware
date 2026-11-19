@@ -499,19 +499,33 @@ plus a mocked test harness. It writes only the inactive pair (kernel by mtd labe
 rootfs by ubiformat), verifies both regions with full-region sha256 read-backs, and
 performs the handover by writing the written pair's measured record value into the
 SYSCTRL cell; it never writes the env blocks, the active pair, rootfs_data or the vendor
-data partitions. It has **never run on hardware**: the first attended execution, the
-loader env re-stamp, the first boot of the written pair and the recovery cost of a
-successful-but-unwanted boot are all still [U] (FIRST-INSTALL.md sections 8-11).
+data partitions. **Executed on hardware on 2026-11-19**: the attended run wrote the
+inactive pair, verified both regions (the rootfs raw-hash check was replaced by a semantic
+UBI volume check because `ubiformat` rewrites EC image sequence numbers), moved the selector,
+and the loader failover booted the written pair; a failed boot falls back to the active
+(volatile) pair on later boots, so a successful-but-unwanted boot costs a wait for the
+fallback, not necessarily a physical recovery (if the box becomes unreachable, physical
+RESET+TFTP remains the last resort). See `INVENTORY-2026-11-18.md` and the
+`build/evidence-firstboot/` logs/SUCCESS.md for the measured run.
 
-### 5.6 Boot arguments
+### 5.6 Boot arguments - CLOSED on hardware (2026-11-19)
 
-The stock loader passes the DT `/chosen/bootargs` from its own tree:
-`noinitrd cma=0 console=ttyS0,115200 earlycon maxcpus=2 nr_cpus=2 additional_cpus=1` (vendor
-base DTB, `soc/vendor-dt-notes.md` §2). Where the root filesystem selector (`root=`, `ubi.mtd=`,
-`ubi.block=`) comes from is **not established**: the lab boots used a built-in cmdline/extend;
-the vendor chosen bootargs carry no UBI argument. If the trailer's base DTB is ours (as designed in
-§5.2), the cmdline can be carried there - [U] whether the stock U-Boot overrides `/chosen/bootargs`
-from its environment. Close it with one attended boot before the recipe depends on it.
+Measured on the first attended boot of our uImage: the stock loader supplies **no kernel
+command line at all** for our image (`Kernel command line:` empty -> `VFS: Cannot open root
+device` -> panic). Adding a `/chosen/bootargs` property to our DTB did **not** work either:
+U-Boot crashed with a data abort when handing off (before the kernel). The working solution is
+a kernel built with `CONFIG_CMDLINE_BOOL/CONFIG_CMDLINE_FORCE` carrying:
+
+```
+ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait
+console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1
+```
+
+The rootfs volume must also be a multiple of 512 bytes (ubiblock rounds down) and the
+squashfs needs the same XZ filters the kernel enables (`Filters selected: arm` ->
+`CONFIG_XZ_DEC_ARM=y`); both were found by the same hardware bring-up. The hard-coded
+`ubi.mtd=rootfsb` is a first-install-only TODO: a real A/B image needs a per-slot DTB or a
+loader-supplied cmdline (TARGET-DESIGN 5.5).
 
 ---
 

@@ -141,14 +141,14 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 		/*
-		 * TODO(bootargs): the stock loader supplies /chosen/bootargs
-		 * from ITS tree: "noinitrd cma=0 console=ttyS0,115200 earlycon
-		 * maxcpus=2 nr_cpus=2 additional_cpus=1" (vendor-dt-notes.md 2).
-		 * Where the root filesystem selector (root=/ubi.mtd=/ubi.block=)
-		 * comes from is NOT established, and it is unknown whether the
-		 * stock U-Boot overrides bootargs from its environment
-		 * (TARGET-DESIGN.md 5.6). Do not add a bootargs property here
-		 * until that is closed with one attended boot.
+		 * Kernel command line: the stock loader supplies NO bootargs for our
+		 * uImage (first hardware boot, 2026-11-19: empty cmdline -> VFS root
+		 * panic), and adding a DTB bootargs property crashed U-Boot itself
+		 * (data abort before kernel hand-off). The root= string is therefore
+		 * built into the kernel with CONFIG_CMDLINE_FORCE in
+		 * target/linux/hisilicon/luofu/config-6.18; keep the two in sync.
+		 * TODO(A/B): the hard-coded ubi.mtd=rootfsb must become per-slot
+		 * (per-slot DTB or loader-supplied cmdline) before installing to A.
 		 */
 	};
 

@@ -182,6 +182,7 @@ define Build/luofu-rootfs-ubi
 	}; \
 	$(LUOFU_PYTHON) "$(LUOFU_IMAGE_TOOL)" rootfs-ubi \
 		--rootfs "$(IMAGE_ROOTFS)" \
+		--pad-align 4096 \
 		--ubinize-cfg "$(LUOFU_UBINIZE_CFG)" \
 		--output "$@.ubi" \
 		--ubinize "$(STAGING_DIR_HOST)/bin/ubinize" \

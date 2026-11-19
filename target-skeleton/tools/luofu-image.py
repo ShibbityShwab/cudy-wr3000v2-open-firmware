@@ -626,6 +626,15 @@ def cmd_rootfs_ubi(args):
     if len(rootfs) > ROOTFS_SLOT_LIMIT:
         raise ImageError("%s: squashfs is %d B, over the %d B rootfs slot"
                          % (rootfs_path, len(rootfs), ROOTFS_SLOT_LIMIT))
+    pad_align = getattr(args, "pad_align", 1) or 1
+    if pad_align < 1:
+        raise ImageError("--pad-align must be >= 1")
+    pad = (-len(rootfs)) % pad_align
+    if pad:
+        # ubiblock rounds a static volume down to 512 B, so an unpadded
+        # squashfs loses its last <512 bytes and cannot mount (measured,
+        # first attended boot 2026-11-19). Pad the squashfs payload itself.
+        rootfs = rootfs + b"\x00" * pad
     cfg_text, cfg_path = _read_file(args.ubinize_cfg, "ubinize cfg")
     try:
         cfg_text = cfg_text.decode("utf-8")
@@ -651,6 +660,10 @@ def cmd_rootfs_ubi(args):
             # content instead of ubinize's random default.
             image_seq = int(_sha256(rootfs)[:8], 16)
     with tempfile.TemporaryDirectory(prefix="luofu-ubi-") as tmpdir:
+        if pad:
+            padded = Path(tmpdir) / "rootfs-padded.squashfs"
+            padded.write_bytes(rootfs)
+            resolved = resolved.replace(str(rootfs_path.resolve()), str(padded))
         cfg_file = Path(tmpdir) / "luofu-ubinize.cfg"
         cfg_file.write_text(resolved + "\n", encoding="utf-8")
         out = Path(tmpdir) / "rootfs.ubi"
@@ -901,6 +914,9 @@ def build_parser():
     p_ubi = sub.add_parser(
         "rootfs-ubi",
         help="squashfs -> static UBI volume %r, validated" % UBI_VOLUME_NAME)
+    p_ubi.add_argument("--pad-align", type=lambda x: int(x, 0), default=1,
+                       help="pad the squashfs payload to a multiple of N bytes "
+                            "(512 for ubiblock; default 1 = no padding)")
     p_ubi.add_argument("--rootfs", required=True,
                        help="squashfs rootfs (the normal OpenWrt rootfs build)")
     p_ubi.add_argument("--ubinize-cfg", required=True,

@@ -537,3 +537,10 @@ CONFIG_ZSTD_DECOMPRESS=y
 #   1. add explicit "# CONFIG_COMMON_CLK_HI... is not set" lines here, or
 #   2. tighten those Kconfig defaults upstream when luofu is added.
 # Neither is done in this derivation: the file records what oldconfig did.
+
+# first-boot root: stock U-Boot passes no cmdline for our uImage (2026-11-19)
+CONFIG_CMDLINE="ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1"
+CONFIG_CMDLINE_FORCE=y
+
+# squashfs on this target uses XZ with the ARM BCJ filter (unsquashfs: "Filters selected: arm"); without this the kernel cannot decompress file blocks (2026-11-19 bring-up).
+CONFIG_XZ_DEC_ARM=y
