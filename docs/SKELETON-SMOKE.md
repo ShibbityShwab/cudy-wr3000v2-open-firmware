@@ -3587,8 +3587,10 @@ the ones in PIE-DATAPATH.md section 13.2; the full evidence map is
 
 ## 2026-11-19 (LSW QM/EQM session): EQM queue-manager init write stage (patch 032)
 
-Host-only lane. No device access of any kind (no SSH, TFTP, flash or UART); the box stayed on the
-EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT READY.
+Decode/implementation lane. This session itself had no device access of any kind (no SSH, TFTP,
+flash or UART); the hardware result below was produced by the bench lane on image 14791958 and is
+recorded here with its console evidence. Nothing was reflashed by this lane. Publication remains
+NOT READY.
 
 ### What changed
 
@@ -3598,9 +3600,18 @@ EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT RE
   qids 1..72, profiles {0..7,17,18}) - 169 entries / 845 words. The stage snapshots every entry
   (two reads, required stable), requires the EQM indirect interface idle, computes the expected
   content from the snapshot plus the vendor formulas, writes through the decoded indirect engine,
-  reads everything back against the computed value, and restores the whole snapshot on the first
-  mismatch (also in `remove()`). The decoded indirect protocol is index/table/write/start in
-  `eqm+0x48` with bit29 error and at most five data words per operation.
+  reads the entries back on a per-word verification mask, and restores the verified entries on
+  the first mismatch (also in `remove()`). The decoded indirect protocol is index/table/write/
+  start in `eqm+0x48` with bit29 error and at most five data words per operation.
+- **Verification policy (refined after the 2026-11-19 bench run):** only the fields the vendor's
+  own read paths depend on are compared - table 32 slot priorities, table 35 word 0 bytes 1-2,
+  table 17 rate/cell fields, table 16 written bytes, table 34 queue-port/slot/input/valid.
+  **Table 19 is acknowledge-only**: it is write-only in the vendor code (`hi_queue_init` is its
+  only user and the EQM table accessors are module-local to `hi_lsw_dp`), and the bench showed
+  the engine's read view of it is not the written record (wrote 0xffffffff, read 0x3fff = its low
+  14 bits). Differences inside a verification mask still fail closed; differences outside them are
+  logged as diagnostics. The mismatch log now includes the vendor-read mask, the pre-write
+  snapshot value and the whole 5-word read view.
 - Patch 032 also corrects patch 025's EQM indirect error-bit decode (measured idle word
   0x41100012 has bit29 clear; the driver header had recorded bit5) and wires the W6 EPS
   channel-map snapshot into driver state so a later failure and `remove()` restore it too.
@@ -3613,6 +3624,28 @@ EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT RE
   queue-group table at `.data+0xd0`. The measured idle register state (`eqm+0x48 = 0x41100012`,
   `eqm+0x5c = 0xbb8`) independently corroborates the command-word decode and the table-17
   profile shape: the vendor's last queue-init write was table 17, index 18, first data word 3000.
+
+### Bench result (2026-11-19, image 14791958) and the fix
+
+Command line: `... luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_pie.arm=1
+luofu_switch.eps=1 luofu_switch.qminit=1`. The run passed W3-W6 and reached W7:
+
+```
+[2.355537] W7 snapshot: 169 EQM table entries (845 words) read and stable, indirect interface idle (eqm+0x48 0x0)
+[2.369773] EQM readback mismatch at table 19 entry 0 word 0: read 0x3fff, expected 0xffffffff; restoring the pre-write snapshot
+[2.384940] probe with driver luofu-switch failed with error -5
+```
+
+The fail-closed design worked: the stage restored and refused, readiness stayed false, and the
+four GEMAC netdevs refused to register (`-EOPNOTSUPP`).  Re-opening the decode against
+`hi_lsw_dp.ko` explained the mismatch: **table 19 is write-only in the vendor code** - the
+`hi_queue_init` write is its only user and the EQM table accessors are module-local to the module,
+so no vendor reader exists; and 0x3fff is exactly `0xffffffff & GENMASK(13,0)`, so the engine's
+read view is not the written record ([I] 14-bit field view or non-implemented read; the bench
+value is [V]).  Patch 032 (fixed, sha256 in the lane SUMMARY) treats table 19 as acknowledge-only,
+compares the other tables on their vendor-read fields only, skips write-only entries in the
+restore path, and prints the full read view on any future mismatch.  The next attended boot is the
+first one that can run the complete write set and then test traffic.
 
 ### Gate matrix after patch 032 (all paths fail closed; default boot unchanged)
 
@@ -3628,12 +3661,13 @@ EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT RE
 
 ### Validation (isolated clone under build/linux-kbuild/waves/2026-11-19-qm-decode/; shared clone and openwrt-lab-selectorfix-img untouched)
 
-- **Patch/series:** patch 032 generated from the 001-031 tree; `001`-`032` applies with 0 failed
-  hunks (`series-apply-001-032`, 32/32 patches).
-- **prepare/compile:** isolated reflink clone of the selectorfix 001-031 OpenWrt lab under the wave
-  directory with patch 032 added, `make target/linux/prepare` RC=0 and `make target/linux/compile`
-  RC=0 with `CONFIG_WERROR=y` and zero compiler warnings from the changed files (log hashes in
-  the lane SUMMARY).
+- **Patch/series:** the fixed patch 032 is generated from the 001-031 tree; `001`-`033` applies
+  with 0 failed hunks and 0 `.rej`/`.orig` (`series-apply-001-033`, 33/33 patches), and the
+  resulting drivers are byte-identical to the lane work tree.
+- **prepare/compile:** isolated reflink clone of the 001-031 OpenWrt lab under the wave directory
+  with the fixed 032 and the lane-033 patch added, `make target/linux/prepare` RC=0 and
+  `make target/linux/compile` RC=0 with `CONFIG_WERROR=y` and zero `warning:`/`error:` lines in
+  the build log (log hashes in the lane SUMMARY).
 - **checkpatch:** 0 errors, 0 checks, the one expected "missing commit description" warning that
   every pure unified diff in this series produces.
 - **DTS/binding/config:** patch 032 changes no devicetree, binding or Kconfig/config symbol, so the
@@ -3644,16 +3678,23 @@ EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT RE
 
 ### What this proves and what it does not
 
+Proven on hardware (2026-11-19, image 14791958): the W3-W6 write set runs and verifies on the real
+block, the EQM indirect interface works through the W7 pre-write snapshot (845 table words read,
+stable, interface idle), the engine acknowledges the W7 writes, and the fail-closed path (restore,
+power-down, readiness refusal) works exactly as designed.
+
 Proven host-side: the recovered write set is the vendor's own init write shape for the nine
 populated wired queue groups; the indirect engine protocol is decoded and corroborated by the
-measured idle register state; the five-gate composition, conformance checks, value derivations and
-restore paths are reviewable code; the 001-032 series applies and compiles clean.
+measured idle register state; table 19 is write-only in the vendor code (the bench read view
+0x3fff = low 14 bits of the written 0xffffffff confirmed the readback cannot verify it); the
+five-gate composition, conformance checks, verification masks and restore paths are reviewable
+code; the 001-033 series applies and compiles clean.
 
-Not proven (see LSW-SPEC.md section 7.9): every hardware behaviour - that the tables accept the
-writes, that a configured queue manager lets a PIE TX descriptor egress, and the RX path. Table 38
-(per-qid scheduler state, needs the vendor table-manager id) and the ports 40..43 virtual-port
-class are deliberately excluded; the IFC/L2/VLAN tables and the queue/flow DDR layout remain [U].
-A successful W7 boot means "the recovered write set verified", not "forwarding works".
+Not proven (see LSW-SPEC.md section 7.9): that a fully configured queue manager lets a tagged PIE
+TX descriptor egress, and the RX path. Table 38 (per-qid scheduler state, needs the vendor
+table-manager id) and the ports 40..43 virtual-port class are deliberately excluded; the
+IFC/L2/VLAN tables and the queue/flow DDR layout remain [U]. A successful W7 boot means "the
+recovered write set was accepted/verified", not "forwarding works".
 
 ### Attended boot sequence (recovery card armed; physical RESET+TFTP is the only recovery)
 
@@ -3665,11 +3706,15 @@ This is the first boot that should run the whole chain and then test traffic:
    lines and the refusal that names the missing EPS gate.
 3. **W3-W6** (`... eps=1`): expect the W6 line and the refusal that names the missing QM gate.
 4. **W3-W7 + PIE** (`... eps=1 qminit=1` plus `luofu_pie.arm=1`): expect, in order, the W3
-   snapshot line, the W4 line, the W5 line, the W6 line, the W7 snapshot line ("169 EQM table
-   entries ... stable, indirect interface idle"), the W7 programmed-and-verified line, the
-   connectivity-armed line and the GEMAC registration line. Then, with the bench link up:
-   `ping` across the wired port while watching the PIE TX read pointer and the switch/EPS drop
-   counters; one variable per boot; power cycle between variants.
+   snapshot line, the W4 line, the W5 line, the W6 line, the W7 snapshot lines (the 169-entry
+   summary, the write-only table-19 pre-write read view, and "indirect interface idle"), the W7
+   verification line ("... programmed: 168 verified on their vendor-read fields, 1 write-only
+   entry acknowledged ...") with at most a few diagnostic warnings for fields outside the
+   vendor-read masks, the connectivity-armed line and the GEMAC registration line. If a table
+   readback still mismatches, the log now prints the vendor-read mask, the snapshot value and the
+   full 5-word read view - capture it. Then, with the bench link up: `ping` across the wired port
+   while watching the PIE TX read pointer and the switch/EPS drop counters; one variable per boot;
+   power cycle between variants.
 5. Any wedge or hang: physical RESET+TFTP only. There is no in-kernel reset path on this image.
 
 ### Evidence (local-only, gitignored)

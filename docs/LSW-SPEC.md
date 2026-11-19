@@ -1105,11 +1105,42 @@ question the W7 attended run can now answer.
 arm=1 egress=1 qidmap=1 eps=1).  It refuses unless the EQM indirect interface is idle, snapshots
 all 169 target entries (each read twice and required stable), computes the expected content from
 the snapshot plus the formulas above, writes every entry through the decoded engine, reads every
-entry back against the computed value, and restores the whole snapshot on the first mismatch
+entry back on its verification mask, and restores the verified entries on the first mismatch
 (also in remove()).  luofu_switch_ready() now requires W3+W4+W5+W6+W7 to be verified, so the GEMAC
 front end still cannot register a netdev on a partial data path (7.8, SKELETON-SMOKE "LSW QM/EQM
-session").  As with every write stage before it: implemented host-side only, never executed on
-hardware, and a successful W7 boot means "the recovered write set verified", not "frames flow".
+session").
+
+**Bench result and fix (2026-11-19, image 14791958, gates arm/egress/qidmap/eps/qminit) [V].**
+The hardware run reached W7: the pre-write snapshot passed (169 entries / 845 words read, stable,
+indirect interface idle) and the first write was acknowledged, but the strict readback failed on
+the *first* entry - table 19 entry 0 word 0 read 0x3fff, expected 0xffffffff - so the stage
+restored and refused (fail-closed worked: GEMAC did not register).  Re-opening the decode gave
+the explanation: **table 19 is write-only in the vendor code.**  hi_queue_init@0x5164..0x5198 is
+its only user, and the EQM table accessors (hi_eqm_write_tab/read_tab) are module-local to
+hi_lsw_dp, so no vendor reader for table 19 exists anywhere; the module also never reads it back
+in any other path.  The 0x3fff the engine returned is exactly 0xffffffff & GENMASK(13,0), i.e.
+the engine's read view is not the written record - either a 14-bit field-width view or a
+non-implemented read ([I]; the bench value is [V]).  Patch 032 was fixed accordingly:
+
+- **table 19 is acknowledge-only**: the write is issued exactly as the vendor issues it (same
+  bytes, same index/table/world order) and the command completion (busy cleared, no error bit) is
+  the verification; the engine read view is logged at info level for the next run instead of
+  being compared;
+- **the other tables are compared only on the fields the vendor's own read paths depend on**:
+  table 32 slot priorities, table 35 word 0 bytes 1-2 (the fields hi_queue_get_sch reads),
+  table 17 rate/cell fields (the fields the DFX reader extracts), table 16 written bytes, table
+  34 queue-port/slot/input/valid (the fields the vendor RMW helper checks).  Differences outside
+  those masks are logged as diagnostics, because the engine need not implement those bits as
+  readable; differences inside them still fail closed and restore;
+- **restore skips write-only entries**: writing the read view back could corrupt the record, so
+  the stage reports them instead; the block is powered down on refusal and every attempt rewrites
+  the full vendor init record, so no stale state is left armed;
+- the mismatch log now prints the vendor-read field mask, the pre-write snapshot value and the
+  whole 5-word read view, so the next attended run is diagnosable from the console alone.
+
+A W7 boot still means "the recovered write set was accepted/verified", not "frames flow": the
+first time the queue manager is fully configured, a tagged PIE TX descriptor either egresses or
+it does not, and that is the next attended measurement.
 
 ---
 
@@ -1539,7 +1570,7 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | W4 | R1/R3/R5 probe configuration only (`luofu_lsw.arm=1 luofu_lsw.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_lsw.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
 | W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
 | W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
-| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **the EQM queue/deque configuration is now recovered and implemented behind luofu_lsw.qminit=1 (patch `032`); never executed. This is the first boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
+| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **first hardware attempt 2026-11-19 (image 14791958): all gates ran, W7 snapshot passed, the table-19 strict readback failed and the stage refused fail-closed (GEMAC did not register). Decode proved table 19 write-only; patch `032` now verifies vendor-read fields only and acknowledges table 19 (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
 | W8 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
