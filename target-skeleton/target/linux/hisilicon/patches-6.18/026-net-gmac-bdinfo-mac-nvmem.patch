@@ -1,0 +1,97 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -52,12 +52,17 @@
+  *     so even with the map programmed the link can only be validated, not
+  *     used as a proven traffic path.
+  *
+- * The netdev address is taken from the devicetree (standard mac-address /
+- * local-mac-address / nvmem cells through of_get_mac_address()); when the
+- * board has none, a random locally-administered address is used and logged.
+- * The factory address lives in the bdinfo flash partition, whose nvmem
+- * representation is not part of this draft; setting it from userspace for a
+- * DHCP test is an attended step (target README and port-notes/net).
++ * The netdev address comes from the devicetree: the standard mac-address /
++ * local-mac-address properties or the nvmem cell named "mac-address".  The
++ * board DTS points that cell at the plaintext factory MAC at bdinfo+0xde00
++ * through the mainline fixed-layout/mac-base nvmem layout, with the per-port
++ * offset as the cell argument (LAN = base, WAN = base+1 - the vendor rule),
++ * so the netdevs get the factory identity without invoking the closed vendor
++ * bdinfo decoder and without mixing in the loader's random env ethaddr.  A
++ * missing board address falls back to a logged random locally-administered
++ * one; a deferred nvmem provider defers probe instead of randomising.
++ * Nothing here has read bdinfo on a booted target yet: the MTD nvmem read
++ * path is [U].
+  *
+  * Every write in mac_link_up() is therefore [V] (measured values on this
+  * board, executed by the lab driver); everything else is a draft.
+@@ -243,6 +248,16 @@
+ 	.ndo_stop		= luofu_gmac_stop,
+ 	.ndo_start_xmit		= luofu_gmac_xmit,
+ 	.ndo_get_stats64	= luofu_gmac_get_stats64,
++	/*
++	 * Accept the standard userspace MAC assignment (netifd's device
++	 * "macaddr" option goes through ndo_set_mac_address).  The board
++	 * provisioner applies the same factory LAN/WAN addresses from
++	 * userspace as the kernel nvmem path does, so this keeps that
++	 * existing provisioning path functional; no MAC register is written
++	 * by either operation (see the file header).
++	 */
++	.ndo_set_mac_address	= eth_mac_addr,
++	.ndo_validate_addr	= eth_validate_addr,
+ };
+ 
+ static void luofu_gmac_get_drvinfo(struct net_device *ndev,
+@@ -285,19 +300,29 @@
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+ 				     "LSW egress qid map is not programmed; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 luofu_lsw.qidmap=1)\n");
+ 
++	/*
++	 * Address source: the standard devicetree mac-address/local-mac-address
++	 * properties or the nvmem cell named "mac-address".  The board DTS
++	 * wires that cell to the plaintext factory MAC at bdinfo+0xde00 through
++	 * a fixed-layout/mac-base nvmem layout, with the per-port offset as the
++	 * cell argument (LAN = offset 0, WAN = offset 1 - the vendor rule).
++	 * A deferred nvmem provider means the MTD partition is not registered
++	 * yet: defer probe rather than invent an identity that would differ
++	 * from the factory one.  Any other error falls back to a random
++	 * locally-administered address (old/missing DTB, erased or invalid
++	 * bytes; the nvmem helper already rejects zero and multicast values).
++	 */
++	ret = of_get_mac_address(dev->of_node, mac);
++	if (ret == -EPROBE_DEFER)
++		return dev_err_probe(dev, ret,
++				     "MAC-address nvmem provider is not ready (bdinfo partition not registered yet)\n");
++
+ 	ndev = alloc_etherdev(sizeof(*g));
+ 	if (!ndev)
+ 		return -ENOMEM;
+ 
+ 	SET_NETDEV_DEV(ndev, dev);
+ 
+-	/*
+-	 * Address source: standard devicetree MAC properties, else a random
+-	 * locally-administered address.  The factory address in the bdinfo
+-	 * partition has no nvmem representation yet, so a DHCP test that needs
+-	 * a stable address sets it from userspace (documented attended step).
+-	 */
+-	ret = of_get_mac_address(dev->of_node, mac);
+ 	if (ret) {
+ 		eth_hw_addr_random(ndev);
+ 		dev_warn(dev,
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+@@ -31,8 +31,12 @@
+   attended bring-up; the MAC nodes are enabled on the board so that boot can
+   reach them and a normal boot logs the refusal.  The only MAC register writes
+   it performs are the measured 1 Gbps link-up/link-down words, and the netdev
+-  address comes from the standard MAC-address properties (or a random
+-  locally-administered address when the board declares none).
++  address comes from the standard MAC-address properties or the nvmem cell
++  named "mac-address".  The board wires that cell to the plaintext factory-MAC
++  copy at bdinfo+0xde00 through a fixed-layout/mac-base nvmem layout, with the
++  per-port offset as the cell argument (LAN = base, WAN = base+1, the vendor
++  userspace rule); when the board declares none, a random locally-administered
++  address is used and logged.
+ 
+ allOf:
+   - $ref: ethernet-controller.yaml#

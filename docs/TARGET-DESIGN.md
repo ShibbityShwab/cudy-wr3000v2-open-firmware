@@ -929,7 +929,12 @@ Ledger entry dates used above are the parent `mem-entries.md` headings; the newe
    logged, locally-administered random pair and the factory partition is never written.
    `tools/test-mac-provisioning.sh` passes its mocked assertions and the files are installed by the
    image build. The addresses only reach a netdev once the switch port map exists (open question 7),
-   and nothing has run on hardware. [I]
+   and nothing has run on hardware. [I] The **kernel-side half is now implemented too**
+   (2026-11-19, host-validated only): the board DTS exposes the plaintext `bdinfo+0xde00` copy
+   through the mainline MTD nvmem provider (`fixed-layout`/`mac-base` cell) and wires the GEMAC
+   nodes with LAN = offset 0 / WAN = offset 1, and patch `026` makes the GEMAC driver honour
+   `-EPROBE_DEFER` and accept a userspace `ndo_set_mac_address`; the MTD nvmem read is still
+   [U] on hardware ([MISC-SOC-BLOCKS.md](MISC-SOC-BLOCKS.md) section 1.4a).
 6. **Overlay filesystem** - resolved in the image recipe: an empty dynamic `rootfs_data` UBI
    volume inside each rootfs slot (§5.3), formatted by the kernel on the first read-write
    mount. Open on hardware: does `mount_root` find, mount and format it on a real first boot?

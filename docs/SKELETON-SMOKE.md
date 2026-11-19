@@ -3089,7 +3089,9 @@ set, plus the GEMAC/PIE netdev readiness contract, so an attended boot can reach
     link would have looked dead to userspace (ETHERNET-BRINGUP-FRAMING.md section 2 species B);
   - netdev address from `of_get_mac_address()` (standard `mac-address`/`local-mac-address`/nvmem
     properties) with a logged random locally-administered fallback; the bdinfo factory MAC has no
-    nvmem representation yet, so a DHCP test sets it from userspace (attended step);
+    nvmem representation yet at this point - **superseded later the same day by the
+    bdinfo-MAC-nvmem session, which wires it as an nvmem cell; see the last session record** - so
+    a DHCP test sets it from userspace (attended step);
   - link-up log line with interface/speed/duplex; the only MAC register writes remain the measured
     1 Gbps link-up/link-down words.
 - **shared.patch** (this directory): board DTS enables the `lsw`, `pie` and `gmac1`-`gmac4` nodes
@@ -3297,3 +3299,161 @@ copy of the compiled OpenWrt kernel build dir + patch 025), and `validation/logs
 series apply log, `40-checkpatch-025.log` and `61-compile-vmlinux-final.log`. The annotated
 vendor disassembly and the decode notes are in `hi_lsw_dp.annotated.dis`, `hi_kpie.annotated.dis`
 and `notes/`.
+## 2026-11-19 (bdinfo-MAC-nvmem session): factory MAC exposed to the kernel netdev layer
+
+**Status: HOST-ONLY. The board DTS now exposes the plaintext `bdinfo+0xde00` factory MAC as an
+MTD nvmem cell and the GEMAC driver consumes it; the LAN/WAN interface map is implemented behind
+a netdev-presence guard. NOTHING HAS BOOTED and no MTD nvmem read has run on hardware.**
+
+### What changed
+
+- **Board DTS** (`target-skeleton/dts/luofu-r116.dts`, a direct lane write; it is not in
+  `shared.patch`): the `bdinfo` partition gains `read-only;` and a `nvmem-layout` child
+  (`compatible = "fixed-layout"`) holding one `mac-base` cell `mac@de00 { reg = <0xde00 0x6>;
+  #nvmem-cell-cells = <1>; }` - the plaintext factory MAC from MISC-SOC-BLOCKS.md section 1.1.
+  The four live GEMAC nodes consume it with `nvmem-cells = <&bdinfo_mac N>` +
+  `nvmem-cell-names = "mac-address"`: gmac1..gmac3 (LAN) use N=0, gmac4 (WAN) uses N=1 - the
+  vendor userspace rule LAN = base, WAN = base+1 (rootfs-2.4.15/etc/board.d/02_network:25-29).
+  A long comment in the DTS records the per-port-offset plan and the LSW port correlation
+  (gmac1..4 = switch MAC ports 9..12; LSW-SPEC.md 6.1).
+- **Patch 026** (`026-net-gmac-bdinfo-mac-nvmem.patch`, new): the MAC source is read before the
+  netdev is allocated; `-EPROBE_DEFER` from a not-yet-registered nvmem provider now defers the
+  GEMAC probe (fail-closed, no random identity invented), every other error keeps the logged
+  random locally-administered fallback, and the driver installs the standard
+  `ndo_set_mac_address = eth_mac_addr` / `ndo_validate_addr = eth_validate_addr` callbacks so
+  the existing userspace provisioner can still apply addresses through netifd. No register
+  write, no MTD write, no new write path.
+- **Base-files**: new `lib/functions/luofu-netdev.sh` records the vendor LAN/WAN interface map
+  (WAN = eth3, LAN = eth2 eth1 eth0) **only when the four expected GEMAC netdevs exist**, with a
+  tested placeholder path that logs the missing devices and invents no netifd config; it carries
+  the `TODO(netdevs)` for making the map unconditional once the netdevs stop being
+  attended-gated. `etc/board.d/02_network` calls it before the unchanged factory-MAC
+  provisioning (`luofu-mac.sh` still sourced, still called).
+- **Host test** `tools/test-mac-nvmem.sh` (new, 96 assertions): board.d/helper/patch wiring
+  statics, a synthetic `bdinfo` image read exactly like `mtd_nvmem_reg_read()` (decoys outside
+  `+0xde00`, erased/all-zero fail-safe cases, kernel 48-bit vs userspace 24-bit add wrap,
+  per-node offsets parsed from the DTS), cpp+dtc compile + decompiled-DTB phandle checks
+  (`--kernel <tree>`), and mocked `/sys/class/net` interface-map scenarios; it also re-runs the
+  pre-existing 103-assertion provisioner test.
+
+### Why no target-local nvmem driver
+
+- Vanilla 6.18.60 already registers an nvmem provider for **every** MTD device/partition
+  (`mtd_nvmem_add()` in `drivers/mtd/mtdcore.c`: `config.reg_read = mtd_nvmem_reg_read` ->
+  `mtd_read()`, `config.read_only = true`, `config.root_only = true`), parses the
+  `nvmem-layout` container and resolves `#nvmem-cell-cells` arguments
+  (`of_nvmem_cell_get()` in `drivers/nvmem/core.c`). The MTD partition gets its OF node from
+  the partition parser (`mtdpart.c: child->dev.of_node = part->of_node`); `read-only` on the
+  partition clears `MTD_WRITEABLE` (`partitions/ofpart_core.c`).
+- The `mac-base` cell post-processing (`nvmem_layout_parse_mac_base()`, raw read ->
+  `eth_addr_add()`) is **not** in vanilla 6.18.60: it arrives through OpenWrt's generic carried
+  backports of upstream commits, `target/linux/generic/pending-6.18/
+  804-nvmem-core-support-mac-base-fixed-layout-cells.patch` and
+  `809-01-nvmem-core-generalize-mac-base-cells-handling.patch`. Without them the cell would
+  read raw bytes and the WAN +1 offset would not be applied - a stated dependency.
+- Consumer path: `of_get_mac_address()` (`net/core/of_net.c`) -> `of_get_mac_address_nvmem()`
+  -> `of_nvmem_cell_get(np, "mac-address")`; `nvmem_get_mac_address()`
+  (`net/ethernet/eth.c`) requires exactly 6 bytes and `is_valid_ether_addr()`. Kernel
+  `eth_addr_add()` is a 48-bit add; the userspace `macaddr_add()` masks to the low 24 bits.
+  The two agree for every base the provisioner accepts (it rejects `...:ff:ff:ff`, the only
+  divergent case). If the nvmem provider is not registered yet, nvmem core returns
+  `-EPROBE_DEFER` (`drivers/nvmem/core.c`), which patch 026 now honours.
+- Read-only is therefore enforced twice (mtdcore's nvmem `read_only`/`root_only` config plus the
+  partition flag) and the failure modes are fail-safe: DTB without the partition -> phandle
+  unresolved -> `-ENOENT` -> GEMAC random fallback; provider late -> `-EPROBE_DEFER` -> probe
+  deferred (no invented identity); erased/zero/invalid bytes -> `is_valid_ether_addr()` rejects
+  -> random fallback; userspace bdinfo read failure -> the existing logged random pair.
+
+### Validation (isolated clone `/home/shibbityshwab/openwrt-lab-macnvmem`; no device)
+
+- **Pristine apply order:** the **final series 001-026** (024/025 landed from their lanes
+  during this session) applies in numeric order to pristine `linux-6.18.60` with
+  `patch -p1 -N`: **26 patches, 100 files patched, 0 failed hunks, 0 `.rej`/`.orig`,
+  RC=0**. (An earlier run of 001-023+026 and one of 001-023+025+026 were also clean; 026's
+  context survives 024's edits to `luofu-gmac.c`/its YAML.)
+- **OpenWrt pipeline (this lane's series, 001-023+026):** `make target/linux/prepare`
+  **RC=0** (1,225 `patching file` lines, patch 026 applied; the one `Kconfig.orig` is GNU
+  patch's default backup for patch 021's known 6-line-offset hunk, not a reject);
+  `make target/linux/compile V=s -j16` **RC=0, 0 errors, 0 compiler warnings under
+  `CONFIG_WERROR=y`** (1,418 s wall, full rebuild from the pristine tarball); zImage
+  **3,281,744 B**, sha256
+  `8443c8c0c41a31a335188e1e547d6f82f5d33b61d945b4bd770d315eeac83f81`; the built `.config`
+  has `CONFIG_WERROR=y`, `CONFIG_MTD=y`, `CONFIG_NVMEM=y`, `CONFIG_NVMEM_LAYOUTS=y`.
+- **Full final series 001-026:** `make target/linux/prepare` **RC=0** (1,233 `patching file`
+  lines, 0 rejected hunks, 0 `.rej`); the compile then **fails in patch 024** at
+  `drivers/net/ethernet/hisilicon/luofu-pie.c:1060`: `error: 'GRO_DROP' undeclared` (that
+  identifier does not exist in 6.18) - a pie-decode-lane defect, not this lane's. Everything
+  else up to that point compiled cleanly, including `luofu-gmac.o` (024+026 combined) and
+  `luofu-switch.o` (025); a targeted rebuild of `luofu-gmac.o` in the final prepared tree is
+  RC=0. **The 001-026 image build must wait for the pie-decode lane to fix `luofu-pie.c`.**
+- **Patch 026 context refresh:** after 024 landed, 026's original hunks applied with offsets and
+  one fuzz-2 hunk. 026 was therefore re-diffed against the post-024 tree: applying 001-025 then
+  the refreshed 026 is a **clean apply with no fuzz/offset**, and the resulting
+  `luofu-gmac.c`/`hisilicon,luofu-gmac.yaml` are **byte-identical** to the content the
+  001-023+026 full build compiled (`cmp`).
+- **Binding:** `dt_binding_check` RC=0 for the changed
+  `hisilicon,luofu-gmac.yaml` (example compiled; optional `yamllint` unavailable - same
+  limitation as every previous session; one pre-existing unrelated realtek YAML warning).
+- **Board DTS:** the patched kernel's own dtc compiles it with **zero warnings**
+  (**11,996 B**, sha256 `e9c1649f...`; baseline before this session was 11,571 B /
+  `7fd33522...`); `dt-validate` returns RC=0 with the same **5 pre-existing diagnostics**
+  (two SP804 timer properties, two UART clock-names) and **no diagnostic** for the bdinfo,
+  nvmem-layout, mac-base or GEMAC nodes.
+- **checkpatch:** `--no-tree -f` **0 errors / 0 warnings / 0 checks** on the modified GEMAC
+  driver and its YAML.
+- **Host tests:** `tools/test-mac-nvmem.sh` **96/96 pass** (with the compiled-DTS checks);
+  the pre-existing `tools/test-mac-provisioning.sh` still **103/103 pass**.
+- **Config:** no `config-6.18` change and no new symbol; `CONFIG_NVMEM=y` /
+  `CONFIG_NVMEM_LAYOUTS=y` were already present (the MTD nvmem provider and the fixed-layout
+  container are stock), and the mac-base post-processing is a generic Makefile-carried
+  backport, not a symbol.
+- **Write-set audit:** patch 026 adds no writable nvmem provider, no `mtd_write`/`mtd_erase`
+  path and no MAC register write; the nvmem read path is mainline `mtd_read()` through
+  `mtd_nvmem_reg_read()`.
+
+### What is proven / what is not
+
+**Proven host-only:** the series applies and the full kernel compiles warning-free with the new
+code; the binding and the board DTS validate; the wiring is exactly the documented one
+(read-only bdinfo partition, one 6-byte mac-base cell at +0xde00, LAN offsets 0 and WAN offset
+1), checked statically, on the raw DTS, on the compiled DTB and through a read-path mock; the
+userspace map is guarded and backward compatible; every failure mode of the new path is either
+a logged random fallback or a deferral, never an invented identity.
+
+**Not proven / needs the board [U]:** the MTD nvmem read itself (no boot has ever reached this
+code); whether the FMC/MTD partition appears with the expected `bdinfo` label and size under our
+kernel; the provider-vs-GEMAC probe ordering and therefore whether the `-EPROBE_DEFER` branch is
+taken; that the read bytes are the unit's factory MAC (the 0xde00 layout is from the local dump,
+not from this boot path); the netdev naming order (eth0..eth3); the userspace `macaddr`
+application through `ndo_set_mac_address`; and whether the guarded interface map activates on an
+attended boot - `board.d` runs once per board.json, so a first boot without the gated netdevs
+needs `/etc/board.json` regenerated (and the gated netdevs present) for the map to be recorded.
+
+### Attended boot must test (recovery door armed; physical RESET+TFTP is the only recovery)
+
+1. **Kernel nvmem read:** boot with `luofu_pie.arm=1 luofu_lsw.arm=1 luofu_lsw.qidmap=1` (the
+   four GEMAC netdevs then register). Expect no `no usable MAC address in the devicetree`
+   warning for eth0..eth3; if the warning appears, record its `%pe` reason - `EINVAL` means the
+   cell read 6 bytes but `is_valid_ether_addr()` rejected them (erased/corrupt bdinfo or the
+   mac-base backport missing), `ENOENT` means the phandle/wiring is absent, `EPROBE_DEFER`
+   would have deferred probe instead. Compare `ip link` MACs with the userspace `lan_mac` /
+   `wan_mac` from board.json: LAN must equal the base copy, WAN = base+1.
+2. **Provider ordering:** check dmesg for the deferral message
+   `MAC-address nvmem provider is not ready`; its presence (and later netdev registration)
+   proves the deferred path, its absence proves the provider won the probe race.
+3. **Interface map:** if the board.json from a previous boot is kept, the guarded map is absent;
+   with the gated netdevs present, remove `/etc/board.json` (or force board_detect) and reboot
+   to re-run board.d, then check `/etc/config/network` has the vendor `wan` device `eth3` and
+   the `lan` device list `eth2 eth1 eth0`, and that the lan/wan `macaddr` values are the
+   factory base / base+1.
+4. **Fail-safe:** if any step misbehaves, do not "repair" factory bytes; the driver falls back
+   to a logged random MAC and the userspace helper to a random pair. Record the logs; the
+   bdinfo partition must never be written.
+
+### Evidence (local-only, gitignored)
+
+`build/linux-kbuild/waves/2026-11-19-mac-nvmem/`: `01-dt-binding-check.log`,
+`02-board-dts-baseline.dtb` + `02-board-dts-new.dtb` + dtc stderr, `03-dt-validate-*.out`,
+`04-pristine-apply.log`, `05-checkpatch.log`, `06-test-mac-nvmem.log`,
+`07-test-mac-provisioning.log`, the patch 026 copy, the OpenWrt prepare/compile logs, and
+`EVIDENCE-SHA256SUMS.txt`.

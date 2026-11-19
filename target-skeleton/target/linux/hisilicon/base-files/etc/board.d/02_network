@@ -3,24 +3,41 @@
 #
 # target/linux/hisilicon/luofu/base-files/etc/board.d/02_network
 #
-# STATUS: SCHEMATIC TARGET / UNTESTED ON HARDWARE. The one part of this file
-# that is host-validated is the factory-MAC provisioning below (it is exercised
-# by tools/test-mac-provisioning.sh against mocked /proc/mtd, mtd devices and
-# ucidef helpers); the interface assignment is still a placeholder.
+# STATUS: SCHEMATIC TARGET / UNTESTED ON HARDWARE. The two host-validated parts
+# are the factory-MAC provisioning (lib/functions/luofu-mac.sh, mocked by
+# tools/test-mac-provisioning.sh: 103/103) and the guarded LAN/WAN interface
+# map (lib/functions/luofu-netdev.sh, mocked by tools/test-mac-nvmem.sh). They
+# have never run on a router.
 #
 # Mapping: <openwrt>/target/linux/hisilicon/base-files/etc/board.d/02_network
 # (mode 0755). In this OpenWrt release board.d scripts are sourced by
 # /bin/board_detect and share /etc/board.json through board_config_update /
 # board_config_flush, both defined in /lib/functions/uci-defaults.sh.
 #
-# WHY THE INTERFACE ASSIGNMENT IS NOT FINAL, IN ONE FACT:
-#   the wired path is gmac -> internal LSW switch -> PHY -> RJ45, and the LSW
-#   switch has NO driver in any tree (TARGET-DESIGN.md 8.1). Until the switch
-#   driver and its port model exist there is no correct LAN/WAN interface
-#   assignment to write here. Do not hardcode the bench unit's cable port as a
-#   board-wide fact: the only measured fact is that on the bench unit the
-#   carrier-carrying GMII port is 0x14480000, behind the vendor switch
-#   (TARGET-DESIGN.md 6.2; ETHERNET-BRINGUP-FRAMING.md 2).
+# WHY THE INTERFACE MAP IS A GUARDED PLACEHOLDER, IN ONE FACT:
+#   the wired path is gmac -> internal LSW switch -> PHY -> RJ45. The switch
+#   driver and its port model now exist (patches 016/021/022: switchdev over
+#   per-port GEMAC netdevs, LSW-SPEC.md 9.3), but the GEMAC netdevs only
+#   register on an explicit attended boot with luofu_pie.arm=1 and both
+#   luofu_lsw gates (patch 023). On a normal boot there is no eth0..eth3, so a
+#   netifd config for them would name devices that do not exist.
+#   lib/functions/luofu-netdev.sh therefore applies the vendor map
+#   (WAN = eth3, LAN = eth2 eth1 eth0; parent:rootfs-2.4.15/etc/board.d/
+#   02_network:25-29) only when all four netdevs exist, and logs the intended
+#   placeholder map otherwise. The LSW MAC ports behind those netdevs are
+#   9/10/11/12 for gmac1..4 (LSW-SPEC.md 6.1) and the internal qid-table rows
+#   cover switch ports 4-12, of which 4-7 are the internal PIE host ports, not
+#   user jacks (LSW-SPEC.md 6.2, 7.7).
+#
+# TODO(netdevs, LSW-SPEC.md 9.4): when the GEMAC netdevs stop being
+#   attended-gated, make the map unconditional (drop the readiness guard in
+#   luofu-netdev.sh) and delete this TODO. Keep the vendor LAN/WAN grouping and
+#   the LAN = base MAC / WAN = base+1 address rule; no per-jack address rule
+#   exists in the vendor scripts (MISC-SOC-BLOCKS.md 1.4).
+# TODO(board name): the root compatible of the draft DTS is
+# "hisilicon,luofu-r116"; the image recipe sketch uses "cudy,wr3000-v2".
+# sysupgrade's board match and this case statement must agree. The final
+# compatible order is an open question (see README "Open questions").
 #
 # FACTORY MAC PROVISIONING (implemented host-side; see lib/functions/luofu-mac.sh)
 #   The factory MAC is the plaintext 6-byte copy at bdinfo+0xde00 [V]
@@ -39,37 +56,44 @@
 #   luofu_mac_apply() records both in the lan/wan board.json entries with the
 #   standard ucidef_set_interface_macaddr. No valid factory MAC -> a clearly
 #   logged, locally-administered random fallback (never invented factory data).
-#   The entries take effect through /bin/config_generate once the switch port
-#   map gives the interfaces their device/ports (TODO(switch) below); while the
-#   placeholder configures no netdev, the MACs are recorded in board.json only.
+#   The entries take effect through /bin/config_generate once an interface map
+#   gives the interfaces their device/ports; while the guard above keeps the
+#   placeholder (no netdevs), the MACs are recorded in board.json only.
 #
-# TODO(switch, TARGET-DESIGN.md 8.1):
-#   - decide DSA vs switchdev and model the internal switch's ports;
-#   - then replace the placeholder below with the real port map, e.g.
-#       ucidef_set_interfaces_lan_wan "<lan ifaces>" "<wan iface>"
-#     plus any ucidef_set_interface_* for the model;
-#   - confirm every port role from the board schematic, not from the vendor
-#     overlay.
-# TODO(board name): the root compatible of the draft DTS is
-# "hisilicon,luofu-r116"; the image recipe sketch uses "cudy,wr3000-v2".
-# sysupgrade's board match and this case statement must agree. The final
-# compatible order is an open question (see README "Open questions").
+# KERNEL-SIDE MAC (patch 026 + the board DTS nvmem wiring)
+#   The same six bytes are exposed to the kernel through the bdinfo partition's
+#   fixed-layout/mac-base nvmem cell, and the GEMAC netdevs take LAN = base
+#   (offset 0) / WAN = base+1 (offset 1). Both paths read the same copy and
+#   derive the same addresses, so userspace re-applying them through netifd is
+#   idempotent (the GEMAC driver accepts ndo_set_mac_address since patch 026).
+#   Keeping the userspace path is deliberate: it still works when the kernel
+#   nvmem cell is absent (older DTB), and it is the documented vendor
+#   behaviour.
+#
+#   `. /lib/functions/system.sh` is required for macaddr_canonicalize /
+#   macaddr_add / mtd_get_mac_binary; this release has no separate board.sh
+#   helper file (board_config_update/board_config_flush live in uci-defaults.sh,
+#   which is sourced above).
 
 . /lib/functions/uci-defaults.sh
 . /lib/functions/system.sh
 . /lib/functions/luofu-mac.sh
+. /lib/functions/luofu-netdev.sh
 
 board_config_update
 
 case "$(board_name)" in
 hisilicon,luofu-r116|cudy,wr3000-v2)
-	# PLACEHOLDER. No interface is configured on purpose: inventing one here
-	# would produce a netifd config for a device that does not exist.
-	:
-	# Factory MAC provisioning is independent of the interface placeholder:
-	# the addresses are recorded for the lan/wan entries that the switch port
-	# map will define. Failure to obtain any address is logged by the helper
-	# and must not abort board configuration.
+	# LAN/WAN interface map: guarded placeholder until the GEMAC netdevs
+	# exist (see the header). Applied before the MACs so board.json carries
+	# the device/ports the addresses belong to; ucidef_set_interface_* also
+	# creates the lan/wan entries, which ucidef_set_interface_macaddr then
+	# extends.
+	luofu_netdev_setup
+	# Factory MAC provisioning is independent of the interface map: on a
+	# placeholder boot the addresses are recorded in board.json only.
+	# Failure to obtain any address is logged by the helper and must not
+	# abort board configuration.
 	if luofu_mac_setup; then
 		luofu_mac_apply
 	fi
