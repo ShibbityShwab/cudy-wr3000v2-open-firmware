@@ -1,0 +1,195 @@
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -29,6 +29,7 @@
+ 	tristate "HiSilicon Luofu GEMAC support"
+ 	depends on OF
+ 	depends on LUOFU_PIE
++	depends on LUOFU_SWITCH
+ 	select PHYLINK
+ 	help
+ 	  Platform driver for the HiSilicon Hi5671Y "luofu" GEMAC. This is
+@@ -36,9 +37,13 @@
+ 	  and forwards its transmit path to the PIE packet engine
+ 	  (CONFIG_LUOFU_PIE), which owns the DMA rings. The driver refuses
+ 	  to register a network device unless the PIE backend has armed its
+-	  data path, and the board devicetree keeps the MAC nodes disabled.
+-	  Frames cannot reach a wire until the internal switch egress map
+-	  exists. Say N unless you are working on that port.
++	  data path and the internal switch (CONFIG_LUOFU_SWITCH) has
++	  programmed and verified its egress qid map, so a boot that cannot
++	  carry a frame never exposes an interface. Both backends only run
++	  in an explicit attended bring-up; the board devicetree enables the
++	  nodes so that boot can reach them. How a transmitted frame selects
++	  its egress port and how received frames are decoded are still open.
++	  Say N unless you are working on that port.
+ 
+ config HISI_FEMAC
+ 	tristate "Hisilicon Fast Ethernet MAC device support"
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -2,12 +2,17 @@
+ /*
+  * HiSilicon Hi5671Y "luofu" GEMAC - netdev/phylink front end over PIE.
+  *
+- * STATUS: DRAFT.  The MAC is a phylink front end; it owns the net_device and
+- * hands frames to the PIE ring engine (luofu-pie.c), which owns the DMA rings.
+- * The driver registers a net_device only when the PIE backend has armed its
+- * data path; otherwise it refuses, so a node that is enabled early can never
+- * produce an interface that silently drops every frame.  The board devicetree
+- * keeps the MAC nodes disabled.
++ * STATUS: DRAFT, READY-GATED.  The MAC is a phylink front end; it owns the
++ * net_device and hands frames to the PIE ring engine (luofu-pie.c), which owns
++ * the DMA rings.  The driver registers a net_device only when both backend
++ * conditions hold:
++ *   - the PIE packet engine has armed its data path (luofu_pie_armed()), and
++ *   - the internal LSW switch has programmed and verified its egress qid map
++ *     (luofu_switch_ready()).
++ * Otherwise it refuses, so a boot that cannot carry a frame never produces an
++ * interface that looks functional to userspace.  The board devicetree enables
++ * the MAC nodes so an attended boot can reach that state; a normal boot logs
++ * the refusal and registers nothing.
+  *
+  * What is established (and cited):
+  *   - the vendor driver (hi_kmac.ko) is a phylink MAC driver: it allocates the
+@@ -38,9 +43,19 @@
+  *   - it does not deliver received frames: the PIE RX completion decode is
+  *     [U], so the PIE poll recycles RX buffers and this netdev has no RX path
+  *     yet (PIE-DATAPATH section 5.2);
+- *   - no switch egress: with the internal switch unprogrammed a transmitted
+- *     descriptor is not guaranteed to reach a MAC port (PIE-DATAPATH section
+- *     7), so the link can only be validated, not used to carry traffic.
++ *   - no switch egress mapping of its own: the internal switch driver owns
++ *     the qid map (patch 022, behind the attended luofu_lsw gates) and this
++ *     driver only checks that it is ready.  How a TX descriptor selects the
++ *     egress queue/port is still [U] (PIE-DATAPATH section 7), so even with
++ *     the map programmed the link can only be validated, not used as a proven
++ *     traffic path.
++ *
++ * The netdev address is taken from the devicetree (standard mac-address /
++ * local-mac-address / nvmem cells through of_get_mac_address()); when the
++ * board has none, a random locally-administered address is used and logged.
++ * The factory address lives in the bdinfo flash partition, whose nvmem
++ * representation is not part of this draft; setting it from userspace for a
++ * DHCP test is an attended step (target README and port-notes/net).
+  *
+  * Every write in mac_link_up() is therefore [V] (measured values on this
+  * board, executed by the lab driver); everything else is a draft.
+@@ -61,6 +76,7 @@
+ #include <linux/rtnetlink.h>
+ 
+ #include "luofu-pie.h"
++#include "luofu-switch.h"
+ 
+ /* MAC port registers (dword-aligned window; see the file header). */
+ #define LUOFU_GMAC_CTRL		0x0000
+@@ -147,6 +163,9 @@
+ 		return;
+ 	}
+ 
++	netdev_info(g->ndev, "link up: %s %dMbps %s-duplex\n",
++		    phy_modes(interface), speed, duplex ? "full" : "half");
++
+ 	/*
+ 	 * Order follows the measured sequence: enable the mode change, write
+ 	 * the port mode, close the mode change, then enable the MAC. [V]
+@@ -225,13 +244,17 @@
+ 	struct net_device *ndev;
+ 	struct luofu_gmac *g;
+ 	phy_interface_t iface;
++	u8 mac[ETH_ALEN];
+ 	int ret;
+ 
+ 	/*
+ 	 * Fail closed: a netdev may only exist when the packet engine backend
+-	 * has armed its rings.  If the PIE driver has probed and refused the
+-	 * arm gate, registering a netdev would hide that; return loudly.  If
+-	 * it has not probed yet, defer and retry after it does.
++	 * has armed its rings and the internal switch has programmed its egress
++	 * qid map.  If either driver has probed and refused, registering a
++	 * netdev would hide that; return loudly.  If the PIE driver has not
++	 * probed yet, defer and retry after it does.  The switch node is
++	 * devicetree-ordered before the MAC nodes, so once PIE is probed the
++	 * switch verdict is final too.
+ 	 */
+ 	if (!luofu_pie_armed()) {
+ 		if (luofu_pie_probed())
+@@ -240,11 +263,31 @@
+ 		return -EPROBE_DEFER;
+ 	}
+ 
++	if (!luofu_switch_ready())
++		return dev_err_probe(dev, -EOPNOTSUPP,
++				     "LSW egress qid map is not programmed; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 luofu_lsw.qidmap=1)\n");
++
+ 	ndev = alloc_etherdev(sizeof(*g));
+ 	if (!ndev)
+ 		return -ENOMEM;
+ 
+ 	SET_NETDEV_DEV(ndev, dev);
++
++	/*
++	 * Address source: standard devicetree MAC properties, else a random
++	 * locally-administered address.  The factory address in the bdinfo
++	 * partition has no nvmem representation yet, so a DHCP test that needs
++	 * a stable address sets it from userspace (documented attended step).
++	 */
++	ret = of_get_mac_address(dev->of_node, mac);
++	if (ret) {
++		eth_hw_addr_random(ndev);
++		dev_warn(dev,
++			 "no usable MAC address in the devicetree (%pe); using a random locally-administered address\n",
++			 ERR_PTR(ret));
++	} else {
++		eth_hw_addr_set(ndev, mac);
++	}
+ 	g = netdev_priv(ndev);
+ 	g->dev = dev;
+ 	g->ndev = ndev;
+@@ -301,8 +344,16 @@
+ 		goto err_clk;
+ 	}
+ 
+-	g->pl_config.dev = dev;
+-	g->pl_config.type = PHYLINK_DEV;
++	/*
++	 * PHYLINK_NETDEV, not PHYLINK_DEV: this MAC is backed by a net_device,
++	 * and only the netdev flavour drives the carrier state from the phylink
++	 * resolve work.  With PHYLINK_DEV the link came up in phylink's books
++	 * but the carrier stayed off, so userspace never saw a usable link
++	 * (that is the "healthy-looking but nothing happens" failure mode of
++	 * ETHERNET-BRINGUP-FRAMING.md section 2).
++	 */
++	g->pl_config.dev = &ndev->dev;
++	g->pl_config.type = PHYLINK_NETDEV;
+ 	g->pl_config.mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
+ 					MAC_10 | MAC_100 | MAC_1000FD;
+ 	__set_bit(iface, g->pl_config.supported_interfaces);
+@@ -322,7 +373,7 @@
+ 		goto err_phylink;
+ 
+ 	dev_info(dev,
+-		 "luofu-gmac: %s registered (PIE TX backend armed; RX delivery is a draft TODO)\n",
++		 "luofu-gmac: %s registered (PIE TX armed, LSW egress map ready; RX delivery and TX egress mapping are draft TODOs)\n",
+ 		 ndev->name);
+ 
+ 	return 0;
+--- a/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
++++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+@@ -24,9 +24,14 @@
+   delivered until the PIE RX completion decode is recovered.
+ 
+   The Linux driver is a draft: it only registers a network device when the
+-  PIE backend has armed its data path, and the nodes stay disabled until that
+-  data path is validated.  The only MAC register writes it performs are the
+-  measured 1 Gbps link-up/link-down words.
++  PIE packet engine has armed its data path and the internal switch driver has
++  programmed and verified its egress qid map, so a boot that cannot carry a
++  frame never exposes an interface.  Both backends only run in an explicit
++  attended bring-up; the MAC nodes are enabled on the board so that boot can
++  reach them and a normal boot logs the refusal.  The only MAC register writes
++  it performs are the measured 1 Gbps link-up/link-down words, and the netdev
++  address comes from the standard MAC-address properties (or a random
++  locally-administered address when the board declares none).
+ 
+ allOf:
+   - $ref: ethernet-controller.yaml#
