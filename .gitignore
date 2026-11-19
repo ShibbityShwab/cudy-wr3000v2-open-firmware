@@ -8,3 +8,7 @@ lab/**/*.mod.c
 lab/**/*.cmd
 lab/**/Module.symvers
 lab/**/modules.order
+
+# Python build artifacts
+__pycache__/
+*.pyc

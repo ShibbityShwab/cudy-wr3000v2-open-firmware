@@ -3,19 +3,30 @@
 # -*- coding: utf-8 -*-
 """luofu-image.py - host-side image assembly for the HiSilicon luofu R116 target.
 
-STATUS: SCHEMATIC / HOST-ONLY / NEVER BOOTED. This tool builds and validates
-host-side artifacts; it touches no device and proves nothing about booting.
+STATUS: HOST-ONLY / NEVER BOOTED. This tool builds and validates host-side
+artifacts; it touches no device and proves nothing about booting. The
+rootfs_data overlay layout it now requires has NOT been booted: the previous
+booted image had no rootfs_data volume (fstools mount_root fell back to tmpfs).
+The empty-volume/autoresize behaviour is read from the kernel and fstools
+sources (fs/ubifs/sb.c, drivers/mtd/ubi/build.c, fstools libfstools/ubi.c),
+not measured on this board.
 
 WHAT IT IS
   The target-side helper that image/luofu.mk calls after the kernel slice has
   been assembled. It covers the two image products the decoded boot layout
   needs and the pipeline that used to be a sketch:
 
-  1. rootfs UBI: squashfs (from the normal OpenWrt rootfs build) -> a static
-     UBI volume named "squashfs" with the measured geometry (p=131072,
-     m=2048, s=2048, O=2048), validated by re-parsing the ubinize output:
-     EC/VID headers, CRCs, image_seq, layout volume table, volume name and
-     type, and the per-LEB data CRCs of the static volume.
+  1. rootfs UBI: squashfs (from the normal OpenWrt rootfs build) -> the
+     standard OpenWrt two-volume shape with the measured geometry (p=131072,
+     m=2048, s=2048, O=2048):
+       - "squashfs"    static, vol_id 0: the read-only rootfs payload;
+       - "rootfs_data" dynamic, vol_id 1, vol_size=1MiB, autoresize: the
+         persistent overlay, intentionally EMPTY in the image (the kernel's
+         first read-write UBIFS mount formats it; fstools mount_root finds it
+         by name and grows it to all free PEBs at attach).
+     Validated by re-parsing the ubinize output: EC/VID headers, CRCs,
+     image_seq, layout volume table, both volume names/types/flags/reserved
+     PEBs, the per-LEB data CRCs of the static volume and the slot budget.
   2. sysupgrade container: kernel slice (legacy uImage + FIP trailer) + rootfs
      UBI + fip-manifest.txt + CONTROL + INSTALL-STATUS.txt in one deterministic
      tar, with every field re-derived from the bytes.
@@ -26,10 +37,15 @@ WHAT IT REFUSES (fail-closed)
   - A kernel slice that fip-slice.py does not validate, that exceeds the
     8,650,752-byte kernel slot, or whose fip-manifest.txt does not match the
     bytes that carry it.
-  - A rootfs UBI whose volume is not a single static volume named "squashfs"
-    with the expected geometry, whose header/data CRCs do not verify, or that
-    exceeds the 24,313,856-byte rootfs slot.
-  - Unknown ubinize-cfg keys and a cfg whose volume is not the measured shape.
+  - A rootfs UBI that does not carry exactly the two expected volumes
+    ("squashfs" static + "rootfs_data" dynamic/autoresize/empty), whose
+    header/data CRCs do not verify, or that exceeds the 24,313,856-byte
+    rootfs slot. The rootfs_data volume must be EMPTY in the image: the
+    kernel's first read-write UBIFS mount formats it (fs/ubifs/sb.c
+    create_default_filesystem); a pre-filled rootfs_data volume would be a
+    different, unverified design.
+  - Unknown ubinize-cfg keys and a cfg whose volumes are not the measured
+    shape.
   - Vendor-derived input paths (dumps/, firmware/, stock/, vendor rootfs dumps).
 
 WHAT IT DOES NOT CLAIM
@@ -58,7 +74,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-VERSION = "0.1-schematic"
+VERSION = "0.2-overlay"
 
 # ---- measured geometry / limits (TARGET-DESIGN.md 3.2, 3.3, 5.1) -----------
 KERNEL_SLOT_LIMIT = 8650752        # 0x840000, kernela/kernelb
@@ -68,6 +84,7 @@ DEFAULT_PEB_SIZE = 131072
 DEFAULT_SUBPAGE_SIZE = 2048
 DEFAULT_VID_HDR_OFFSET = 2048
 UBI_VOLUME_NAME = "squashfs"
+ROOTFS_DATA_VOLUME_NAME = "rootfs_data"
 EXPECTED_TARGET = "hisilicon/luofu"
 EXPECTED_BOARD = "cudy_wr3000-v2"
 FIP_MANIFEST_NAME = "fip-manifest.txt"
@@ -81,6 +98,8 @@ UBI_VID_DYNAMIC = 1
 UBI_VID_STATIC = 2
 UBI_VTBL_DYNAMIC = 1
 UBI_VTBL_STATIC = 2
+UBI_VTBL_AUTORESIZE_FLG = 0x01
+UBI_VTBL_SKIP_CRC_CHECK_FLG = 0x02
 UBI_EC_HDR_LEN = 64
 UBI_VID_HDR_LEN = 64
 UBI_VTBL_RECORD_LEN = 172
@@ -175,8 +194,83 @@ CFG_KEYS = ("mode", "image", "vol_id", "vol_type", "vol_name", "vol_size",
             "vol_flags", "alignment")
 
 
+SIZE_SUFFIXES = (("KiB", 1024), ("MiB", 1024 * 1024),
+                 ("GiB", 1024 * 1024 * 1024))
+
+
+def parse_size_bytes(value, source, what):
+    """Parse a ubinize vol_size value (plain bytes or KiB/MiB/GiB suffix)."""
+    text = (value or "").strip()
+    mult = 1
+    for suffix, factor in SIZE_SUFFIXES:
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            mult = factor
+            break
+    try:
+        number = int(text, 0)
+    except ValueError:
+        raise ImageError("%s: %s %r is not a byte size" % (source, what, value))
+    if number <= 0:
+        raise ImageError("%s: %s %r must be positive" % (source, what, value))
+    return number * mult
+
+
+def _cfg_section_checks(name, keys, source):
+    if keys.get("mode") != "ubi":
+        raise ImageError("%s: section %r mode is %r, want ubi"
+                         % (source, name, keys.get("mode")))
+    if "alignment" in keys:
+        raise Refusal("%s: section %r sets \"alignment\"; the rootfs layout "
+                      "uses ubinize's default alignment 1 (the measured shape)"
+                      % (source, name))
+    if name == UBI_VOLUME_NAME:
+        if keys.get("vol_type") != "static":
+            raise Refusal("%s: volume %r type is %r; the measured layout "
+                          "requires a static squashfs volume (TARGET-DESIGN.md "
+                          "5.3)" % (source, name, keys.get("vol_type")))
+        if "vol_size" in keys:
+            raise Refusal("%s: volume %r must not set vol_size; a static "
+                          "volume is sized by its image and ubinize rejects an "
+                          "image larger than vol_size" % (source, name))
+        if "vol_flags" in keys:
+            raise Refusal("%s: volume %r must not set vol_flags (autoresize is "
+                          "reserved for the empty rootfs_data volume)"
+                          % (source, name))
+        if not keys.get("image"):
+            raise ImageError("%s: volume %r has no image= line" % (source, name))
+    elif name == ROOTFS_DATA_VOLUME_NAME:
+        if keys.get("vol_type") != "dynamic":
+            raise Refusal("%s: volume %r type is %r; the overlay volume must "
+                          "be dynamic (a static volume is read-only and cannot "
+                          "carry the overlay)" % (source, name,
+                                                  keys.get("vol_type")))
+        if keys.get("image"):
+            raise Refusal("%s: volume %r must not carry an image=; it is "
+                          "intentionally EMPTY in the image and the kernel's "
+                          "first read-write UBIFS mount formats it (fs/ubifs/"
+                          "sb.c create_default_filesystem)" % (source, name))
+        if "vol_size" not in keys:
+            raise Refusal("%s: volume %r needs an explicit vol_size (the "
+                          "OpenWrt shape reserves 1MiB and autoresizes)"
+                          % (source, name))
+        if keys.get("vol_flags") != "autoresize":
+            raise Refusal("%s: volume %r vol_flags is %r; the overlay volume "
+                          "must have exactly vol_flags=autoresize so the "
+                          "kernel grows it to all free PEBs at attach"
+                          % (source, name, keys.get("vol_flags")))
+
+
 def parse_ubinize_cfg(text, source):
-    """Parse the checked-in ubinize cfg and require the measured volume shape."""
+    """Parse the checked-in ubinize cfg and require the two-volume rootfs shape.
+
+    The shape is the standard OpenWrt squashfs+UBI layout and is the contract
+    between this tool, image/luofu.mk and fstools mount_root on the target:
+      [squashfs]     static,  vol_id 0, image=@ROOTFS@   read-only rootfs
+      [rootfs_data]  dynamic, vol_id 1, vol_size=1MiB, vol_flags=autoresize
+                     (empty; the kernel creates the UBIFS on the first
+                     read-write mount, mount_root finds it by name)
+    """
     sections = []
     current = None
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -207,36 +301,54 @@ def parse_ubinize_cfg(text, source):
         if key in current["keys"]:
             raise ImageError("%s:%d: duplicate key %r" % (source, lineno, key))
         current["keys"][key] = value
-    if len(sections) != 1:
+    if len(sections) != 2:
         raise Refusal(
-            "%s: expected exactly one UBI volume section, found %d; the "
-            "rootfs slot carries one static volume named %r "
-            "(TARGET-DESIGN.md 5.1/5.3)" % (source, len(sections),
-                                            UBI_VOLUME_NAME))
-    keys = sections[0]["keys"]
-    if keys.get("mode") != "ubi":
-        raise ImageError("%s: section %r mode is %r, want ubi"
-                         % (source, sections[0]["name"], keys.get("mode")))
-    if keys.get("vol_type") != "static":
-        raise Refusal("%s: volume type is %r, the measured layout requires a "
-                      "static squashfs volume (TARGET-DESIGN.md 5.3)"
-                      % (source, keys.get("vol_type")))
-    if keys.get("vol_name") != UBI_VOLUME_NAME:
-        raise ImageError("%s: volume name %r, want %r"
-                         % (source, keys.get("vol_name"), UBI_VOLUME_NAME))
-    try:
-        vol_id = int(keys.get("vol_id", ""), 0)
-    except ValueError:
-        raise ImageError("%s: vol_id %r is not an integer"
-                         % (source, keys.get("vol_id")))
-    if vol_id != 0:
-        raise ImageError("%s: vol_id %d, want 0 (first volume in the slot)"
-                         % (source, vol_id))
-    image = keys.get("image")
-    if not image:
-        raise ImageError("%s: no image= line" % source)
-    return {"section": sections[0]["name"], "keys": keys, "image": image,
-            "vol_id": vol_id}
+            "%s: expected exactly two UBI volume sections (%r, %r), found %d; "
+            "the rootfs slot carries the squashfs rootfs plus the empty "
+            "rootfs_data overlay volume (TARGET-DESIGN.md 5.1/5.3)"
+            % (source, UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME,
+               len(sections)))
+    by_name = {}
+    for section in sections:
+        name = section["name"]
+        if name in by_name:
+            raise ImageError("%s: duplicate volume section %r" % (source, name))
+        by_name[name] = section
+    expected_names = {UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME}
+    if set(by_name) != expected_names:
+        raise Refusal(
+            "%s: volume sections are %s, want exactly %s (names are part of "
+            "the fstools mount_root contract)"
+            % (source, ", ".join(sorted(by_name)),
+               ", ".join(sorted(expected_names))))
+    parsed = {}
+    for index, name in enumerate((UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME)):
+        section = by_name[name]
+        keys = section["keys"]
+        _cfg_section_checks(name, keys, source)
+        try:
+            vol_id = int(keys.get("vol_id", ""), 0)
+        except ValueError:
+            raise ImageError("%s: volume %r vol_id %r is not an integer"
+                             % (source, name, keys.get("vol_id")))
+        if vol_id != index:
+            raise ImageError("%s: volume %r vol_id is %d, want %d (squashfs "
+                             "first, rootfs_data second)"
+                             % (source, name, vol_id, index))
+        if keys.get("vol_name") != name:
+            raise ImageError("%s: volume section %r vol_name is %r; the name "
+                             "must be %r (mount_root looks the overlay volume "
+                             "up by this name)"
+                             % (source, name, keys.get("vol_name"), name))
+        parsed[name] = {"section": name, "keys": keys, "vol_id": vol_id}
+        if name == UBI_VOLUME_NAME:
+            parsed[name]["image"] = keys.get("image")
+        else:
+            parsed[name]["vol_size"] = parse_size_bytes(
+                keys.get("vol_size"), source, "volume %r vol_size" % name)
+    return {"sections": sections,
+            "squashfs": parsed[UBI_VOLUME_NAME],
+            "rootfs_data": parsed[ROOTFS_DATA_VOLUME_NAME]}
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +363,20 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
                  subpage_size=DEFAULT_SUBPAGE_SIZE,
                  vid_hdr_offset=DEFAULT_VID_HDR_OFFSET,
                  max_size=ROOTFS_SLOT_LIMIT,
-                 verify_crcs=True):
-    """Re-parse a ubinize image and require the measured rootfs volume shape."""
+                 verify_crcs=True,
+                 rootfs_data_bytes=None):
+    """Re-parse a ubinize image and require the two-volume rootfs shape.
+
+    Required shape (standard OpenWrt squashfs+UBI):
+      vol 0  "squashfs"     static, PEBs present in the image, data CRCs valid
+      vol 1  "rootfs_data"  dynamic, AUTORESIZE flag, reserved_pebs >= 1,
+                            ZERO PEBs in the image (the kernel formats the
+                            empty volume and autoresize sizes it at attach)
+    rootfs_data_bytes, when given, is the cfg's vol_size; it must match the
+    volume table's reserved_pebs (ceil(vol_size / LEB size)) - this ties the
+    checked-in cfg to the bytes ubinize produced. The two reserved regions plus
+    the two layout PEBs must fit the rootfs slot (budget check).
+    """
     if peb_size <= 0 or page_size <= 0 or subpage_size <= 0:
         raise ImageError("%s: invalid geometry (peb %d, page %d, subpage %d)"
                          % (source, peb_size, page_size, subpage_size))
@@ -277,6 +401,7 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
 
     peb_info = []
     image_seq = None
+    data_offset_seen = None
     layout = {}
     volumes = {}
     for index in range(pebs):
@@ -293,6 +418,12 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
         if data_offset < vid_hdr_offset + UBI_VID_HDR_LEN or data_offset >= peb_size:
             raise ImageError("%s: PEB %d data_offset %d is out of range"
                              % (source, index, data_offset))
+        if data_offset_seen is None:
+            data_offset_seen = data_offset
+        elif data_offset != data_offset_seen:
+            raise ImageError("%s: PEB %d data_offset %d differs from %d; the "
+                             "LEB size must be uniform across the UBI image"
+                             % (source, index, data_offset, data_offset_seen))
         seq = _be32(peb, 24)
         if image_seq is None:
             image_seq = seq
@@ -358,16 +489,15 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
     if set(layout) != {0, 1}:
         raise ImageError("%s: layout volume copies missing (found LNUMs %s)"
                          % (source, sorted(layout)))
-    if len(volumes) != 1:
-        raise ImageError("%s: found %d UBI volumes (%s); the rootfs slot "
-                         "carries exactly one" % (source, len(volumes),
-                                                  ", ".join("0x%x" % v
-                                                            for v in volumes)))
-    vol_id = next(iter(volumes))
-    if vol_id != 0:
-        raise ImageError("%s: firmware volume id is 0x%x, want 0 (the ubinize "
-                         "cfg puts squashfs at vol_id 0)" % (source, vol_id))
-    data_pebs = volumes[vol_id]
+    if set(volumes) != {0}:
+        raise ImageError(
+            "%s: data volumes found for vol_id(s) %s; only the squashfs "
+            "volume (vol_id 0) may have PEBs in the image. The rootfs_data "
+            "volume is intentionally EMPTY and gets its PEBs from the "
+            "kernel's autoresize at attach (a PEB with vol_id 1 means the "
+            "volume was pre-filled: a different, unverified design)"
+            % (source, ", ".join("0x%x" % v for v in sorted(volumes))))
+    data_pebs = volumes[0]
     lnums = sorted(item["lnum"] for item in data_pebs)
     if lnums != list(range(len(lnums))):
         raise ImageError("%s: volume LEB numbers are not contiguous from 0: %s"
@@ -401,11 +531,14 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
         records[vol] = {
             "reserved_pebs": _be32(rec, 0),
             "vol_type": rec[12],
+            "flags": rec[144],
             "name": name,
         }
-    if 0 not in records:
-        raise ImageError("%s: volume table has no record for vol_id 0"
-                         % source)
+    if set(records) != {0, 1}:
+        raise ImageError("%s: volume table must define exactly volumes 0 "
+                         "(squashfs) and 1 (rootfs_data); found %s"
+                         % (source, ", ".join(str(v)
+                                              for v in sorted(records))))
     rec = records[0]
     if rec["name"] != UBI_VOLUME_NAME:
         raise ImageError("%s: volume 0 name is %r, want %r (the loader/mount "
@@ -414,11 +547,28 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
     if rec["vol_type"] != UBI_VTBL_STATIC:
         raise ImageError("%s: volume 0 vtbl type is %d, want static (%d)"
                          % (source, rec["vol_type"], UBI_VTBL_STATIC))
-    if len(records) != 1:
-        raise ImageError("%s: volume table defines %d volumes (%s); the rootfs "
-                         "slot must contain exactly the one squashfs volume"
-                         % (source, len(records),
-                            ", ".join(str(v) for v in sorted(records))))
+    if rec["flags"] & (UBI_VTBL_AUTORESIZE_FLG | UBI_VTBL_SKIP_CRC_CHECK_FLG):
+        raise ImageError("%s: static squashfs volume 0 carries volume-table "
+                         "flags 0x%02x; a static rootfs volume must have none"
+                         % (source, rec["flags"]))
+    rd_rec = records[1]
+    if rd_rec["name"] != ROOTFS_DATA_VOLUME_NAME:
+        raise ImageError("%s: volume 1 name is %r, want %r (fstools "
+                         "mount_root looks the overlay volume up by this name)"
+                         % (source, rd_rec["name"], ROOTFS_DATA_VOLUME_NAME))
+    if rd_rec["vol_type"] != UBI_VTBL_DYNAMIC:
+        raise ImageError("%s: volume 1 vtbl type is %d, want dynamic (%d)"
+                         % (source, rd_rec["vol_type"], UBI_VTBL_DYNAMIC))
+    if not rd_rec["flags"] & UBI_VTBL_AUTORESIZE_FLG:
+        raise ImageError("%s: volume 1 (rootfs_data) lacks the autoresize "
+                         "flag; the kernel would not grow the overlay to the "
+                         "free PEBs of the slot" % source)
+    if rd_rec["flags"] & UBI_VTBL_SKIP_CRC_CHECK_FLG:
+        raise ImageError("%s: volume 1 (rootfs_data) carries skip-check; that "
+                         "is only valid for static volumes" % source)
+    if rd_rec["reserved_pebs"] < 1:
+        raise ImageError("%s: volume 1 (rootfs_data) reserved_pebs is 0"
+                         % source)
     used_ebs = max(item["used_ebs"] for item in data_pebs)
     if used_ebs == 0:
         raise ImageError("%s: static volume has used_ebs 0" % source)
@@ -436,10 +586,34 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
             raise ImageError("%s: volume 0 PEB %d used_ebs %d != %d"
                              % (source, item["peb"], item["used_ebs"],
                                 used_ebs))
+    leb_size = data_pebs[0]["leb_size"]
+    if lnums and data_pebs[0]["leb_size"] != leb_size:
+        raise ImageError("%s: inconsistent LEB size across volume 0 PEBs"
+                         % source)
+    if rootfs_data_bytes is not None:
+        wanted_pebs = (rootfs_data_bytes + leb_size - 1) // leb_size
+        if rd_rec["reserved_pebs"] != wanted_pebs:
+            raise ImageError(
+                "%s: rootfs_data reserved_pebs is %d, but the cfg vol_size %d "
+                "B needs %d PEBs at LEB size %d (ubinize computes "
+                "ceil(vol_size/LEB))"
+                % (source, rd_rec["reserved_pebs"], rootfs_data_bytes,
+                   wanted_pebs, leb_size))
     expected_pebs = 2 + used_ebs
     if pebs != expected_pebs:
-        raise ImageError("%s: image has %d PEBs, expected 2 layout + %d volume "
-                         "= %d" % (source, pebs, used_ebs, expected_pebs))
+        raise ImageError(
+            "%s: image has %d PEBs, expected 2 layout + %d squashfs volume "
+            "PEBs = %d (the rootfs_data volume has no image PEBs: it must be "
+            "empty in the image and is sized by the kernel autoresize)"
+            % (source, pebs, used_ebs, expected_pebs))
+    slot_pebs = max_size // peb_size
+    reserved_pebs_total = 2 + used_ebs + rd_rec["reserved_pebs"]
+    if reserved_pebs_total > slot_pebs:
+        raise ImageError(
+            "%s: the volume table reserves %d PEBs (2 layout + %d squashfs + "
+            "%d rootfs_data), but the %d B rootfs slot holds only %d PEBs of "
+            "%d B" % (source, reserved_pebs_total, used_ebs,
+                      rd_rec["reserved_pebs"], max_size, slot_pebs, peb_size))
     total = {
         "source": source,
         "size": len(data),
@@ -452,10 +626,19 @@ def validate_ubi(data, source, page_size=DEFAULT_PAGE_SIZE,
         "pebs": pebs,
         "layout_pebs": 2,
         "volume_pebs": len(data_pebs),
-        "leb_size": data_pebs[0]["leb_size"] if data_pebs else None,
+        "leb_size": leb_size,
         "used_ebs": used_ebs,
         "volume_name": rec["name"],
         "volume_type": "static",
+        "rootfs_data_volume_name": rd_rec["name"],
+        "rootfs_data_vol_id": 1,
+        "rootfs_data_reserved_pebs": rd_rec["reserved_pebs"],
+        "rootfs_data_flags": rd_rec["flags"],
+        "rootfs_data_autoresize": bool(
+            rd_rec["flags"] & UBI_VTBL_AUTORESIZE_FLG),
+        "rootfs_data_image_pebs": 0,
+        "reserved_pebs_total": reserved_pebs_total,
+        "slot_pebs": slot_pebs,
         "image_seq": image_seq,
         "max_size": max_size,
         "headroom": max_size - len(data),
@@ -568,7 +751,10 @@ def install_status_text(board, target):
         "\n"
         "This container was assembled from our own build products and is\n"
         "structurally validated (kernel slice: uImage + FIP trailer + gate;\n"
-        "rootfs: static UBI volume %r with the measured geometry).\n"
+        "rootfs: static UBI volume %r plus the empty dynamic volume\n"
+        "%r with the autoresize flag - fstools mount_root finds the overlay\n"
+        "volume by name and the kernel formats it as UBIFS on the first\n"
+        "read-write mount, giving a persistent overlay).\n"
         "It is NOT an installable upgrade:\n"
         "\n"
         "  [U] the A/B boot-selector protocol (sysenv 0x10100C08) is not\n"
@@ -581,7 +767,7 @@ def install_status_text(board, target):
         "\n"
         "platform_do_upgrade on the target refuses to write it. Do not flash\n"
         "this file and do not add a factory/install stanza for it.\n"
-        % (board, target, VERSION, UBI_VOLUME_NAME))
+        % (board, target, VERSION, UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME))
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +830,7 @@ def cmd_rootfs_ubi(args):
         raise Refusal("%s: ubinize cfg has no @ROOTFS@ placeholder; the recipe "
                       "must not hardcode a build path" % cfg_path)
     resolved = cfg_text.replace("@ROOTFS@", str(rootfs_path.resolve()))
-    parse_ubinize_cfg(resolved, str(cfg_path))
+    cfg = parse_ubinize_cfg(resolved, str(cfg_path))
     ubinize = resolve_executable(args.ubinize, "ubinize (build the OpenWrt "
                                  "host tools first)")
     image_seq = args.image_seq
@@ -682,24 +868,37 @@ def cmd_rootfs_ubi(args):
         page_size=args.page_size, peb_size=args.peb_size,
         subpage_size=args.subpage_size,
         vid_hdr_offset=args.vid_hdr_offset,
-        max_size=args.rootfs_slot_size, verify_crcs=not args.no_crc_check)
+        max_size=args.rootfs_slot_size, verify_crcs=not args.no_crc_check,
+        rootfs_data_bytes=cfg["rootfs_data"]["vol_size"])
     out_path = Path(args.output)
     write_output(out_path, data, args.force)
-    print("rootfs-ubi: PASS (static UBI volume %r, re-parsed from the bytes)"
-          % info["volume_name"])
+    print("rootfs-ubi: PASS (squashfs static volume + empty rootfs_data "
+          "dynamic volume, re-parsed from the bytes)")
     print("  rootfs:          %s (%d B, squashfs)" % (rootfs_path, len(rootfs)))
     print("  geometry:        p=%d m=%d s=%d O=%d image_seq=%d"
           % (info["peb_size"], info["page_size"], info["subpage_size"],
              info["vid_hdr_offset"], info["image_seq"]))
-    print("  ubi:             %d B, %d PEBs = 2 layout + %d volume; LEB %d B"
+    print("  ubi:             %d B, %d PEBs = 2 layout + %d squashfs volume; "
+          "LEB %d B"
           % (info["size"], info["pebs"], info["volume_pebs"],
              info["leb_size"]))
-    print("  volume:          name=%r type=%s used_ebs=%d"
+    print("  volume 0:        %r vol_id 0 type=%s used_ebs=%d (static)"
           % (info["volume_name"], info["volume_type"], info["used_ebs"]))
-    print("  crc:             %d data LEB CRC(s) and all UBI header CRCs "
-          "verified" % info["volume_pebs"])
-    print("  slot:            %d B <= %d B (headroom %d B)"
+    print("  volume 1:        %r vol_id 1 type=dynamic autoresize=%s "
+          "reserved_pebs=%d image_pebs=%d (empty; UBIFS created by the "
+          "kernel on the first read-write mount)"
+          % (info["rootfs_data_volume_name"],
+             "yes" if info["rootfs_data_autoresize"] else "no",
+             info["rootfs_data_reserved_pebs"],
+             info["rootfs_data_image_pebs"]))
+    print("  crc:             %d data LEB CRC(s) and all UBI header/volume-"
+          "table CRCs verified" % info["volume_pebs"])
+    print("  slot:            image %d B <= %d B (headroom %d B)"
           % (info["size"], info["max_size"], info["headroom"]))
+    print("  reserve budget:  %d PEBs reserved = 2 layout + %d squashfs + %d "
+          "rootfs_data, slot holds %d PEBs"
+          % (info["reserved_pebs_total"], info["used_ebs"],
+             info["rootfs_data_reserved_pebs"], info["slot_pebs"]))
     print("  ubi-sha256:      %s" % info["sha256"])
     print("  wrote:           %s" % out_path)
     return EXIT_OK
@@ -749,8 +948,10 @@ def cmd_sysupgrade(args):
     print("  kernel slice:    %d B (sha256 %s), gate 0x%08x at 0x%x"
           % (slice_info["size"], _sha256(slice_data), slice_info["gate_value"],
              slice_info["gate_offset"]))
-    print("  rootfs UBI:      %d B (sha256 %s), volume %r"
-          % (ubi_info["size"], ubi_info["sha256"], ubi_info["volume_name"]))
+    print("  rootfs UBI:      %d B (sha256 %s), volumes %r (static) + %r "
+          "(dynamic, empty, autoresize)"
+          % (ubi_info["size"], ubi_info["sha256"], ubi_info["volume_name"],
+             ubi_info["rootfs_data_volume_name"]))
     print("  container:       %d B, sha256 %s" % (len(container),
                                                   _sha256(container)))
     print("  wrote:           %s" % out_path)
@@ -826,9 +1027,12 @@ def cmd_check_container(args):
           % (slice_info["size"], slice_info["uimage"]["ih_load"],
              slice_info["uimage"]["ih_ep"], slice_info["gate_value"],
              slice_info["gate_offset"]))
-    print("  rootfs UBI:      %d B, volume %r (%s), used_ebs %d"
+    print("  rootfs UBI:      %d B, volume %r (%s) used_ebs %d; volume %r "
+          "(dynamic, empty, autoresize) reserved_pebs %d"
           % (ubi_info["size"], ubi_info["volume_name"],
-             ubi_info["volume_type"], ubi_info["used_ebs"]))
+             ubi_info["volume_type"], ubi_info["used_ebs"],
+             ubi_info["rootfs_data_volume_name"],
+             ubi_info["rootfs_data_reserved_pebs"]))
     print("  slot budgets:    kernel <= %d, rootfs <= %d"
           % (args.kernel_slot_size, args.rootfs_slot_size))
     print("  install status:  NOT FLASHABLE marker present")
@@ -913,7 +1117,9 @@ def build_parser():
 
     p_ubi = sub.add_parser(
         "rootfs-ubi",
-        help="squashfs -> static UBI volume %r, validated" % UBI_VOLUME_NAME)
+        help="squashfs -> static UBI volume %r + empty dynamic %r "
+             "(autoresize), validated" % (UBI_VOLUME_NAME,
+                                          ROOTFS_DATA_VOLUME_NAME))
     p_ubi.add_argument("--pad-align", type=lambda x: int(x, 0), default=1,
                        help="pad the squashfs payload to a multiple of N bytes "
                             "(512 for ubiblock; default 1 = no padding)")

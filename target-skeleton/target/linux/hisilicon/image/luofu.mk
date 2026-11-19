@@ -40,8 +40,17 @@
 #   load/entry  = (loader staging base & 0xf8000000) + TEXT_OFFSET, derived
 #                 below and asserted twice: against the built kernel _text
 #                 symbol and again against the assembled uImage bytes.
-#   rootfs slot = squashfs in a static UBI volume named "squashfs",
-#                 p=131072 m=2048 s=2048 O=2048, <= 24,313,856 B
+#   rootfs slot = squashfs in a static UBI volume named "squashfs" PLUS the
+#                 persistent overlay as an EMPTY dynamic UBI volume named
+#                 "rootfs_data" (vol_id 1, vol_size=1MiB, vol_flags=autoresize),
+#                 p=131072 m=2048 s=2048 O=2048, <= 24,313,856 B.
+#                 The overlay volume is intentionally empty in the image: the
+#                 kernel's first read-write UBIFS mount formats it
+#                 (fs/ubifs/sb.c create_default_filesystem), fstools mount_root
+#                 finds it by name (libfstools/ubi.c) and the kernel autoresize
+#                 grows it to all free PEBs of the slot (drivers/mtd/ubi/
+#                 build.c autoresize()). The three facts are read from the
+#                 sources named here; the layout itself has NEVER BOOTED.
 #   sysupgrade  = tar with CONTROL, kernel (FIP slice), root (rootfs UBI),
 #                 fip-manifest.txt and INSTALL-STATUS.txt. The schema is NOT
 #                 frozen (TARGET-DESIGN.md 5.4).
@@ -59,6 +68,11 @@ LUOFU_UBI_PEB_SIZE := 131072
 LUOFU_UBI_SUBPAGE_SIZE := 2048
 LUOFU_UBI_VID_HDR_OFFSET := 2048
 LUOFU_UBI_VOLUME_NAME := squashfs
+# The persistent overlay volume. Empty in the image; the kernel formats it on
+# the first read-write mount and autoresize sizes it to the free slot PEBs.
+# The authoritative sizes/flags live in the checked-in ubinize cfg; the tool
+# validates the cfg against the bytes ubinize produced.
+LUOFU_ROOTFS_DATA_VOLUME_NAME := rootfs_data
 LUOFU_UBINIZE_CFG := $(TOPDIR)/target/linux/hisilicon/image/luofu-ubinize.cfg
 
 # ---- load/entry address: DERIVED, then asserted ---------------------------
@@ -170,14 +184,38 @@ define Build/luofu-fip-manifest
 		--force
 endef
 
-# ---- 2. rootfs: squashfs -> static UBI volume -----------------------------
-# Uses the checked-in ubinize cfg (volume squashfs, static, vol_id 0) and the
+# ---- 2. rootfs: squashfs -> static UBI volume + empty overlay volume -------
+# Uses the checked-in ubinize cfg (volume squashfs static vol_id 0 AND volume
+# rootfs_data dynamic vol_id 1, empty with vol_flags=autoresize) and the
 # measured geometry. tools/luofu-image.py re-parses the result: EC/VID header
-# CRCs, layout volume table, volume type/name, every static-LEB data CRC and
-# the rootfs slot budget. A UBI image that does not match fails the build.
+# CRCs, layout volume table, both volumes' name/type/flags/reserved PEBs,
+# every static-LEB data CRC, the reserve-vs-slot budget and (from the cfg) the
+# rootfs_data reserved_pebs. A UBI image that does not match fails the build.
+#
+# The first shell block is a base-files guard for the 2026-11-19 board_detect
+# failure: /bin/board_detect sources every /etc/board.d/* in a subshell and a
+# stale skeleton file sourced /lib/functions/board.sh, which does not exist in
+# OpenWrt main. A missing sourced helper must fail the BUILD, not a boot: every
+# ". /lib/..." source in the installed board.d must resolve inside the image
+# (this is also what keeps base-files/lib/functions/luofu-mac.sh wired to
+# board.d/02_network).
 define Build/luofu-rootfs-ubi
 	[ -f "$(LUOFU_IMAGE_TOOL)" ] || { \
 		echo "luofu: $(LUOFU_IMAGE_TOOL) missing; install target-skeleton/tools/luofu-image.py as scripts/luofu-image.py"; \
+		exit 1; \
+	}; \
+	missing=""; \
+	for f in $(TARGET_DIR)/etc/board.d/*; do \
+		[ -f "$$f" ] || continue; \
+		for src in $$(sed -n 's/^[[:space:]]*\.[[:space:]]*\([^[:space:];]*\).*/\1/p' "$$f"); do \
+			case "$$src" in \
+			/lib/*) [ -e "$(TARGET_DIR)$$src" ] || missing="$$missing $$f->$$src" ;; \
+			esac; \
+		done; \
+	done; \
+	[ -z "$$missing" ] || { \
+		echo "luofu: installed board.d sources helper(s) that are not in the image:$$missing"; \
+		echo "luofu: /bin/board_detect sources every /etc/board.d/*; a missing source is a boot warning (2026-11-19: /lib/functions/board.sh)"; \
 		exit 1; \
 	}; \
 	$(LUOFU_PYTHON) "$(LUOFU_IMAGE_TOOL)" rootfs-ubi \

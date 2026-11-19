@@ -2447,7 +2447,7 @@ the addresses cannot reach a netdev until the LSW switch port map exists
 ## 2026-11-19 (attended hardware bring-up): our kernel + our rootfs reached userspace on the WR3000 v2
 
 **Result: SUCCESS.** U-Boot's failover path booted the written pair: `Image Name: Linux-6.18.60`
-and our kernel banner on real hardware (2 CPUs via the SMP release), UBI attached `mtd14`
+and our kernel banner on real hardware (**1 CPU**: this image was built from patches 001-017; the SMP release patch 018 was not part of the build, so CPU1 bring-up caught by that build is untested), UBI attached `mtd14`
 (`rootfsb`), `ubiblock0_0` was created from the static squashfs volume, the kernel mounted the
 squashfs root read-only, and `/sbin/init` -> preinit -> procd (early/watchdog/ubus/init) ->
 kmodloader -> urngd -> overlayfs (tmpfs fallback) completed; the console reached
