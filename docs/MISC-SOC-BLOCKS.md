@@ -241,11 +241,68 @@ Do **not** copy this node from the vendor DTB: the vendor has no such node; it i
 The encrypted text region (and the closed `libbdinfo.so`) stays out of the kernel in both
 options.
 
+### 1.4a Kernel-side exposure implemented in the 6.18 target (2026-11-19) [I]
+
+The *target* kernel does not have the missing piece that option 2 above records for the bench
+5.10.201 tree. The 6.18 target kernel registers an nvmem provider for **every** MTD device and
+partition (`mtd_nvmem_add()` in `drivers/mtd/mtdcore.c`: `config.reg_read = mtd_nvmem_reg_read`
+-> `mtd_read()`, `config.read_only = true`, `config.root_only = true`; vanilla 6.18.60), and the
+`mac-base` cell type is available through OpenWrt's generic carried backports of the upstream
+nvmem commits (`target/linux/generic/pending-6.18/804-nvmem-core-support-mac-base-fixed-layout-cells.patch`
+and `809-01-nvmem-core-generalize-mac-base-cells-handling.patch`: `nvmem_layout_parse_mac_base()`,
+`nvmem_mac_base_raw_read()` -> `eth_addr_add()`). Without those two backports the cell would read
+raw bytes and the per-port offset would not be applied, so they are a **stated dependency** of the
+wiring. The plaintext `bdinfo+0xde00` copy is therefore exposed **without a target-local driver
+or binding**: the board DTS only declares the cell, and the four live GEMAC nodes consume it.
+
+```dts
+partition@4c0000 {
+        label = "bdinfo";
+        reg = <0x4c0000 0x40000>;
+        read-only;
+        nvmem-layout {
+                compatible = "fixed-layout";
+                #address-cells = <1>;
+                #size-cells = <1>;
+                bdinfo_mac: mac@de00 {
+                        compatible = "mac-base";
+                        reg = <0xde00 0x6>;
+                        #nvmem-cell-cells = <1>;
+                };
+        };
+};
+```
+
+The four live GEMAC nodes use the standard consumer form with the vendor per-port rule:
+`nvmem-cells = <&bdinfo_mac N>` + `nvmem-cell-names = "mac-address"`, N = 0 on LAN
+(`gmac1`..`gmac3`, the vendor applies the same LAN base MAC to every LAN device) and N = 1 on
+WAN (`gmac4`). `of_get_mac_address()` picks the cell named `mac-address` and
+`nvmem_get_mac_address()` (`net/ethernet/eth.c`) reads it, requiring exactly 6 bytes and
+`is_valid_ether_addr()`. The kernel's mac-base arithmetic is the 48-bit `eth_addr_add()`, while
+the vendor/userspace `macaddr_add()` masks to the low 24 bits; the two agree for every base the
+provisioner accepts (it rejects `...:ff:ff:ff`, the only divergent case).
+
+Read-only is enforced twice: mtdcore's `read_only`/`root_only` nvmem config and the partition
+`read-only` flag. The failure modes are fail-safe: a DTB without the partition leaves the cell
+phandle unresolved, the nvmem lookup returns `-ENOENT` and the GEMAC driver uses its logged
+random fallback; an nvmem provider that is not registered yet returns `-EPROBE_DEFER`, which
+the GEMAC driver honours (patch `026`) instead of inventing an address. Patch `026` also adds
+the standard netdev MAC callbacks (`ndo_set_mac_address = eth_mac_addr`,
+`ndo_validate_addr = eth_validate_addr`) so the userspace provisioner of option 1 can still
+apply the same addresses through netifd.
+
+**Host-validated only** (kernel compile, `dt_binding_check`, board-DTS dtc + `dt-validate`,
+and a host read-path mock; see the target-skeleton README). The MTD nvmem read has never run on
+hardware and the partition-offset read remains **[U]**. The earlier "~100-line provider plus
+binding" estimate does not apply to the 6.18 target; the provider is stock MTD core.
+
 ### 1.5 Dependencies, risk, effort
 
-- Depends on: patch `009` (GEMAC, for `.ndo_set_mac_address`/MAC consumption), the target's
-  `base-files` board.d (now written host-side: `lib/functions/luofu-mac.sh` +
-  `etc/board.d/02_network`), and - for option 2 only - a new nvmem provider.
+- Depends on: patch `009`/`020`/`023` (GEMAC; patch `026` adds the MAC-source hardening and
+  the standard `.ndo_set_mac_address` callback), the target's `base-files` board.d (now
+  written host-side: `lib/functions/luofu-mac.sh`, `luofu-netdev.sh` +
+  `etc/board.d/02_network`), and - for option 2 - no new driver: the provider is MTD core's own
+  nvmem registration in the 6.18 target (section 1.4a).
 - Risk [I]: the vendor's increment rule is "last 3 bytes +1, wrap modulo 2^24" with **no**
   multicast/local-bit handling; a factory MAC that ends `...ff:ff:ff` would wrap the WAN MAC
   into the base's prefix. The base MAC's vendor OUI makes the risk small, but a target should

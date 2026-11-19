@@ -157,9 +157,11 @@
 > line; every programmed value is read back and a mismatch tears the engine down.
 > Patch `009`'s GEMAC becomes a phylink front end that registers a netdev only
 > after the PIE backend is armed and forwards transmit to it; the nodes stay
-> `disabled`. The RX completion decode is still [U] (the poll recycles buffers and
-> counts drops), the internal-switch egress map remains the long pole for any
-> traffic claim, and **nothing has been booted or written on hardware**.
+> `disabled`. At that point the RX completion decode was still [U] (the poll recycled
+> buffers and counted drops) and the internal-switch egress map remained the long pole
+> for any traffic claim; **nothing had been booted or written on hardware**. Patch
+> `024` later recovers and implements the RX completion decode and the normal TX
+> descriptor (see the 2026-11-19 completion-decode paragraph below).
 >
 > **2026-11-18 (LSW init session): the internal-switch probe is now a READ-ONLY baseline
 > probe (patch `021`).** It extends patch `016` with the measured 2026-11-18 W1 baseline:
@@ -215,6 +217,27 @@
 > patch in this series). Attended sequence and proof/unverified
 > split: [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) ("LSW egress session") and
 > `docs/incoming/lsw-egress/SUMMARY.md`. **No hardware access, no register written.**
+> **2026-11-19 (PIE completion-decode session): the RX completion and normal TX descriptor are
+> decoded and implemented (patch `024`, host-only, never executed).** The vendor `hi_kpie.ko`
+> v250 functions were disassembled (`hi_pie_rx_get_desc`, `hi_pie_drv_rx_recv`,
+> `hi_net_rx_proc`, `hi_pie_tx_send`, `hi_pie_tx_set_desc` + its type-0 helper) and the
+> descriptor layouts are tabulated in [../docs/PIE-DATAPATH.md](../docs/PIE-DATAPATH.md)
+> section 5.2. The PIE poll decodes length/status/port from each completion, drops
+> error/oversize/unknown-port frames and delivers valid ones to the net_device that registered
+> the completed internal-switch port; it re-arms slots with fresh buffers and writes the
+> recovered RX write/"sf" pointers. TX builds the full recovered normal non-TSO descriptor from
+> the MAC's `hisilicon,port` value (8..12, the vendor `port` cells) and rings the doorbell with
+> the masked ring index; TX completion is reclaimed from the ring-index read pointer. The GEMAC
+> binding now requires `hisilicon,port` and the board DTS carries it on all five MAC nodes.
+> **No driver code has executed on hardware**; the arm gate `luofu_pie.arm=1` and every
+> fail-closed path are unchanged, checksum offload/VLAN acceleration are not claimed
+> (`CHECKSUM_NONE`, in-frame tag kept), and the switch-side egress queue handle is still [U].
+> Full series `001`-`024` applies/prepares/compiles host-side with WERROR and no warnings;
+> bindings and board DTS validate; config symbol-identical and idempotent; checkpatch 0/0;
+> the 001-026 chain (with the parallel `025`/`026` lanes) applies in order and compiles
+> warning-free. Attended tests and the proven/unverified split are in
+> [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) ("PIE completion-decode session") and
+> `docs/incoming/pie-decode/SUMMARY.md`.
 >
 > **2026-11-19 (attended hardware bring-up): the image chain BOOTED to userspace on the
 > WR3000 v2.** U-Boot's failover path booted the written pair: kernel 6.18.60 banner (UP,
@@ -283,6 +306,7 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/021-net-lsw-init-luofu.patch` | internal-switch read-only D1b baseline probe (2026-11-18, LSW-init session): extends patch `016` with the 17-window model (two measured DDR windows validated but never ioremapped), the CRG syscon powered-state gate, the 30-word measured register baseline and the word-for-word read-only validation of both qid maps (384 measured words, derived contiguous qid 1..104 model); no `writel()`, no clock/reset write, no netdev/switchdev registration, probe always fails closed. **Host compile/binding/DTS/config/checkpatch clean; never run on hardware.** | same |
 | `target/linux/hisilicon/patches-6.18/022-net-lsw-qidmap-write-luofu.patch` | **connectivity 1/2** (2026-11-19): LSW staged write path behind explicit attended gates - `luofu_lsw.arm=1` does W3 (enable the two gate clocks, release the four resets, re-check the powered state, snapshot the measured words/qid maps read-only; no LSW register write) and `luofu_lsw.arm=1 luofu_lsw.qidmap=1` does W4/W5 (pre-write conformance gate, program the W2 qid-map set for the 13 populated rows, full readback verification, restore-on-mismatch). New `luofu-switch.h` publishes `luofu_switch_probed()`/`luofu_switch_ready()`; the devicetree port model gains the measured hardware port number (`hisilicon,port` 9-12) validated against the populated qid rows. Kconfig help only, no symbol. **Host compile (WERROR, 0 warnings), `dt_binding_check`, board DTS zero warnings, checkpatch 0/0; never executed on hardware.** | same |
 | `target/linux/hisilicon/patches-6.18/023-net-gmac-netdev-connect-luofu.patch` | **connectivity 2/2** (2026-11-19): GEMAC netdev readiness - registration requires `luofu_pie_armed()` **and** `luofu_switch_ready()` (`LUOFU_GMAC` now `depends on LUOFU_SWITCH`); phylink type fixed to `PHYLINK_NETDEV` with `config.dev = &ndev->dev` so the resolve work drives the carrier; netdev address from `of_get_mac_address()` with a logged random locally-administered fallback; link-up log line. The only MAC register writes stay the measured 1 Gbps link-up/down words. **Host compile (WERROR, 0 warnings), `dt_binding_check`, checkpatch 0/0; never executed on hardware; RX delivery and TX egress selection remain open.** | same |
+| `target/linux/hisilicon/patches-6.18/024-net-pie-completion-decode-luofu.patch` | **PIE completion decode 1/1** (2026-11-19, host-only, never executed): decodes the recovered v250 RX completion descriptor (u16 frame length at +0, 7-bit status/error at +8, port/vport at +16 or the packed +23/+24 fields, tag class at +10 bits 5:4) and feeds it into the NAPI poll - validated length, error frames and unknown ports are dropped and counted, good frames are handed to the net_device that registered the completion port (`luofu_pie_rx_register()`/`unregister()`, called by the GEMAC front end around open/stop with the DT `hisilicon,port` 8..12), and the slot is re-armed with a fresh coherent buffer plus the recovered write/"sf" pointer update. TX now writes the full recovered normal non-TSO descriptor (valid/class/offload byte, DMA address, `port` number plus its `1 << port` bitmap tag, type-0 control words) and rings the doorbell with the masked ring index; completion reclaim uses the ring-index read pointer. Keeps `luofu_pie.arm=1` and the fail-closed probe; no S/W checksum or VLAN offload is claimed (`CHECKSUM_NONE`, in-frame tag preserved); TSO and multi-fragment TX descriptors are decoded at branch level only and not written. Binding: the GEMAC binding adds the required `hisilicon,port`, the PIE binding describes the decode. **Host compile (WERROR, 0 warnings), `dt_binding_check`, board DTS zero warnings, checkpatch 0/0; never executed on hardware; descriptor acceptance and the LSW egress queue handle remain open.** | same |
 | `target/linux/hisilicon/patches-6.18/025-net-lsw-egress-luofu.patch` | **LSW egress 1/1** (2026-11-19, host-only, never executed): third attended gate `luofu_lsw.egress=1` (requires `arm=1`) implementing the vendor R1/R3/R5 probe-configuration write set in `luofu-switch.c`/`luofu-switch-regs.h` - pre-write conformance (EQM indirect interface idle, stable target words, `fam+0x504` equal to the computed cell count), the nine dp/ips/eqm writes in the recovered order, readback against values derived from the pre-write snapshot, restore-on-mismatch (also in `remove()`), and a ready state that requires both this stage and the qid map. R4/`fam` is read-only; the EQM queue tables stay excluded (contents [U]). Records the `port_bitmap` queue-allocation decode and the EQM indirect command-word decode. **Host compile (WERROR, 0 warnings from the changed files), 001-025 chain apply RC=0 (25/25), checkpatch 0 errors; never executed on hardware.** | same |
 | `target/linux/hisilicon/patches-6.18/026-net-gmac-bdinfo-mac-nvmem.patch` | **bdinfo MAC nvmem 1/1** (2026-11-19): GEMAC MAC-source hardening for the board-DTS nvmem wiring - `of_get_mac_address()` now runs before netdev allocation, `-EPROBE_DEFER` from a not-yet-registered MTD nvmem provider defers probe (instead of randomly inventing an identity), every other error keeps the logged random fallback, and the driver installs the standard `ndo_set_mac_address = eth_mac_addr` / `ndo_validate_addr = eth_validate_addr` callbacks so the existing userspace provisioner can apply the same factory addresses through netifd. No new write path, no register access. **Host compile (WERROR, 0 warnings), `dt_binding_check`, board DTS zero warnings, dt-validate no new diagnostic, checkpatch 0/0; never executed on hardware; the MTD nvmem read is [U].** | same |
 | `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |

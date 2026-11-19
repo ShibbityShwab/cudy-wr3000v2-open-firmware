@@ -940,6 +940,7 @@
 	gmac0: ethernet@14300000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;
+		hisilicon,port = <0x8>;
 		phy-mode = "rgmii";
 		phy-handle = <&phy2>;
 		clocks = <&crg LUOFU_CLK_GMAC0>;
@@ -951,6 +952,7 @@
 	gmac1: ethernet@14380000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14380000 0x10000>;
+		hisilicon,port = <0x9>;
 		phy-mode = "gmii";
 		phy-handle = <&phy2>;
 		/* factory MAC: LAN 0 (see the address plan above) */
@@ -965,6 +967,7 @@
 	gmac2: ethernet@14400000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14400000 0x10000>;
+		hisilicon,port = <0xa>;
 		phy-mode = "gmii";
 		phy-handle = <&phy3>;
 		/* factory MAC: LAN 0 (see the address plan above) */
@@ -979,6 +982,7 @@
 	gmac3: ethernet@14480000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14480000 0x10000>;
+		hisilicon,port = <0xb>;
 		phy-mode = "gmii";
 		phy-handle = <&phy4>;	/* bench-measured cable port (gmac3) */
 		/* factory MAC: LAN 0 (see the address plan above) */
@@ -993,6 +997,7 @@
 	gmac4: ethernet@14500000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14500000 0x10000>;
+		hisilicon,port = <0xc>;
 		phy-mode = "gmii";
 		phy-handle = <&phy5>;
 		/* factory MAC: WAN = base+1 (see the address plan above) */

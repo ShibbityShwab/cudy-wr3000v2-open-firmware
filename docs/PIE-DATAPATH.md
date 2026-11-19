@@ -15,6 +15,17 @@ post-overlay `rx_ring`/`tx_ring` values; where the measurements differ from the 
 model the text below is corrected and the delta is called out. PIE still has no booted driver and
 no write to the block has ever been made from our side. [V] measured, single boot, no writes.
 
+**Decode update 2026-11-19 (task-56, lane `pie-decode`): the RX completion descriptor and the
+normal non-TSO TX descriptor are decoded, and patch `024` implements them.** The v250 descriptor
+layout in section 5.2 was recovered by disassembling the vendor `hi_kpie.ko` functions
+`hi_pie_rx_get_desc`, `hi_pie_drv_rx_recv`, `hi_net_rx_proc`, `hi_pie_tx_send`,
+`hi_pie_tx_set_desc` and its type-0 descriptor helper, plus the consumer arithmetic of the ring
+pointers. The driver now decodes length/status/port from an RX completion, delivers the frame to
+the net_device that registered the port and re-arms with a fresh buffer; its TX path writes the
+full recovered normal-descriptor shape and rings the doorbell with the masked ring index. None of
+this has run on hardware: every write is still behind `luofu_pie.arm=1`, and section 10 lists
+what the decode does not settle.
+
 Read [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 1 and section 6 first: they establish
 *that* the wired data path is PIE and *what* was missing. This document supplies the missing
 register/descriptor/channel model and the implementation plan, and corrects one factual claim in
@@ -87,6 +98,14 @@ raw dumps are kept (gitignored) under
    The read-only inventory has since been taken (P3 above) and patch `020` implements the ring
    engine, but its arm path is gated behind an explicit `luofu_pie.arm=1` command-line opt-in so
    a normal boot still never touches the block. Section 12.2. [V]
+9. **Both descriptors are decoded and patch `024` implements them.** RX completion: u16 frame
+   length at +0, status/error code at +8 bits 6:0 (0 = no error), port/vport at +16 (or the packed
+   +23/+24 fields), tag class at +10 bits 5:4, second flag class at +13 bits 6:5 [U]. TX normal
+   non-TSO: u16 length at +0, valid/class/offload byte at +3, DMA address at +4, port tag
+   (`port | 1<<port`) at +8, type-0 control words at +11..+19. The ring pointer words are ring
+   indices: the TX doorbell is the masked next-free index and completion is poll-only; the RX
+   pointer word packs the last-produced and "sf" indices. Full tables in section 5.2. [V] code,
+   [U] hardware acceptance. Section 11 status block.
 
 ---
 
@@ -346,46 +365,90 @@ I hardware behaviour]
 
 Both rings use a **32-byte descriptor** (the ops-table unit; section 3). The recovered fields:
 
-**RX descriptor (device-written; driver pre-fills address/owner).**
+**RX completion descriptor (v250).** Device-written after completion; the driver pre-fills
+only the buffer address and the owner bit.
 
-| offset | field | evidence |
-| --- | --- | --- |
-| +0..1 | u16 device-written status/ring word | `rx_get_desc@0xf14` copies `ldrh [hw]` to software summary +4 |
-| +3 bit 2 | **owner** - the driver sets 1 when handing the buffer to the device; the device clears it on completion [I direction] | `rx_set_owner@0xefc`: `ldrb [desc+3]; bfi #2,#1` |
-| +4..7 | u32 buffer DMA address (driver-written) | `rx_set_addr@0xf0c`: `str r1,[desc+4]`; `rx_addbuf` calls it with the mapped skb address |
-| +8 | byte flags (bits 0-6 copied) | `rx_get_desc` `ubfx … #0,#7` |
-| +10 | byte, bits 4-5 -> summary | `rx_get_desc` |
-| +13 | byte, bits 5-6 -> summary | `rx_get_desc` |
-| +16 and +18 | status/length words for the normal path | `rx_get_desc` takes the `[hw+16] != 0` branch: byte +16 and u16 +18 into the summary |
-| +20, +23, +24 | port/length fields for the "no status" path | `rx_get_desc` `[hw+16] == 0` branch: u8 +23 bits 4-7, u8 +24 bits 0-4, and +20 |
+| offset | width | field | evidence / consumer |
+| --- | --- | --- | --- |
+| +0 | u16 | **frame length** | `rx_get_desc@0xf14` copies this word to software summary +4; `hi_pie_drv_rx_recv@0x3870` calls `skb_put(skb, u16 summary+4)` |
+| +2 | u16 | device-written; not read by the v250 decoder | no reader in `rx_get_desc`; leave unknown |
+| +3 bit 2 | 1 | **owner** - driver sets 1 when arming; the engine clears it on completion [I direction] | `rx_set_owner@0xefc` `bfi #2,#1`; `rx_get_desc` does not test it (completions are consumed by the read pointer) |
+| +4 | u32 | buffer DMA address (driver-written) | `rx_set_addr@0xf0c`; `hi_pie_drv_rx_addbuf` maps the skb data and calls it |
+| +8 bits 6:0 | 7 | **status/error code**, 0 = no error | `rx_get_desc` `ubfx #0,#7` -> summary +6; bit 0 of summary +7 is set to 1 iff this field is zero; `hi_net_rx_proc@0x6568` drops the frame and bumps an error counter when bit 0 is clear |
+| +8 bit 7 | 1 | not copied by the v250 decoder | - |
+| +9 bits 7:4 | 4 | port, used on the error path | `rx_get_desc` error branch |
+| +10 bits 5:4 | 2 | **tag class flag** | `rx_get_desc` -> summary +7 bits 4:3; `hi_net_rx_proc` lifts the u16 words at frame +12/+14 into vendor-private skb fields when set. Exact enum [U]; the tag stays in the frame |
+| +13 bits 6:5 | 2 | **status flag class 2** | `rx_get_desc` -> summary +7 bits 2:1; no consumer in `hi_kpie.ko`; [U], possibly checksum-related |
+| +16 | u32 | normal path: **port = byte 0, vport = byte 1** | `rx_get_desc` `[hw+16] != 0` branch; `hi_net_rx_proc` keys `g_api_priv[(port<<8) + vport]` (the two bytes are disjoint) |
+| +18 | u16 | normal path: second summary word | copied to summary +2 |
+| +20 bits 3:0 | 4 | no-status path: low nibble of summary +2 | `rx_get_desc` `[hw+16] == 0` branch |
+| +23 bits 7:4 | 4 | no-status path: **port** | same branch |
+| +24 bits 4:0 | 5 | no-status path: **vport** | same branch |
+| +24 bits 6:1 | 6 | no-status path: upper bits of summary +2 | packed with the +20 nibble |
 
-The software summary the hardware decoder produces is 12 bytes: `+0` port, `+1` vport, `+2..3` u16,
-`+4..5` u16, `+6` length/status, `+7` flags (bit 0 = "no error", bits 1-2/3-4 = checksum/type
-indicators). `hi_net_rx_proc` then uses bytes 0-1 as `(port, vport)` for the `g_api_priv` lookup.
-[V] offsets and copies, [I] the per-bit names; the exact meaning of the +8/+10/+13 status bits and
-of the two +16/+18 paths remains [U].
+The 12-byte software summary is therefore fixed [V]: `+0` port, `+1` vport, `+2..3` u16,
+`+4..5` **frame length**, `+6` status code, `+7` flags (bit 0 = "no error", bits 2:1 and
+bits 4:3 = the two flag classes above). `hi_pie_drv_rx_recv` unmaps the buffer and applies
+`skb_put(length)`; `hi_net_rx_proc` then checks bit 0, looks up `(port, vport)` in
+`g_api_priv`, reads the tag class, runs `eth_type_trans()` and delivers with `netif_rx()`.
+The vendor does **not** report a Linux checksum verdict from bits 2:1 in this module, so the
+clean driver keeps `CHECKSUM_NONE` and reports no checksum offload. [V] decode, two flag
+classes still [U] semantically.
 
-**TX descriptor (driver-written).**
+**TX descriptor (v250, driver-written).** The table is the complete byte image the vendor
+builds for one **normal non-TSO** frame descriptor, recovered from `hi_pie_tx_set_desc@0x11ac`
+plus its type-0 helper at `0xfe8`; the TX request buffer is zeroed first, so every byte not
+listed is 0. The vendor builds one descriptor per skb fragment; a clean driver that linearizes
+the frame builds exactly this one descriptor.
 
-| offset | field | evidence |
-| --- | --- | --- |
-| +0..1 | u16 packet length; `tx_get_len` returns this word, and `tx_set_desc` fills it from its input structure's u16 at +4 | `tx_set_desc@0x11ac` `ldrh [info+4]; strh [hw]`; `tx_get_len@0xfd8` `ldrh [desc]` |
-| +2 | byte, L3/L4 header-offset encoding | `tx_set_desc` writes it from `info[10]/info[11]` in the TSO branch |
-| +3 bit 2 | **owner/valid** - set to 1 for the normal (non-TSO) descriptor; the TSO branch sets a type field instead | `tx_set_desc@0x11ac` `ldrb [hw+3]; orr #4` |
-| +3 bits 0-1 | descriptor type/kind [U] | `tx_set_desc` (bfi in the TSO branch) |
-| +3 bits 5-6 | checksum offload selection | `tx_set_desc` |
-| +4..7 | u32 buffer DMA address (from `tx_get_addr` = software descriptor +4) | `tx_set_desc` `ldr [info+20]; str [hw+4]` |
-| +8..+19 | type-specific control words (VLAN tag, L2/L3/L4 offsets/lengths, checksum insertion) | the unnamed helper at `0xfe8` is the only path that writes these; a 4-entry jump table on `info[9] & 3` dispatches descriptor types 0/1/2/3, and bits of `info[8]/info[10]/info[11]/info[12]/info[16]` classify the frame |
-| +19 | flags (bit 7 set for some classification) | `tx_set_desc` after the helper returns |
+| offset | width | value / field | evidence |
+| --- | --- | --- | --- |
+| +0 | u16 | **frame length** | `tx_set_desc` `ldrh [req+4]; strh [hw]` |
+| +2 | u16 | 0 in the normal branch (the TSO branch packs header offsets here) | normal branch does not write it |
+| +3 bit 2 | 1 | **owner/valid** = 1 | `orr r2,r2,#4` |
+| +3 bit 4 | 1 | **normal-descriptor class** = 1 | `orr r2,r2,#0x10` |
+| +3 bits 6:5 | 2 | class selector, 3 for a single linear buffer (2 when fragments follow) | `((req[7] & 2) + (req[7] & 1)) << 5`; the request byte is 2 plus `clz(nr_frags)>>5` (0 or 1) |
+| +4 | u32 | buffer DMA address | `ldr [req+20]; str [hw+4]` |
+| +8 bits 3:0 | 4 | **egress port number** | type-0 helper `bfi r3, req[0], #0, #4` |
+| +8 bits 26:11 | 16 | **egress port bitmap**: `1 << port` | type-0 helper `bfi r3, (1 << (req[0] & 0xf)), #11, #16` |
+| +11 bits 4:3 | 2 | 2 | `tx_set_desc` `bfi ... #3,#2 = 2` |
+| +11 bits 6:5 | 2 | 1 | type-0 helper `bfi 1, #5,#2` |
+| +12 bits 6:3 | 4 | 4 (type-0 control word selector) | type-0 helper `bfi 4, #3,#4` |
+| +12 bit 2 | 1 | 0 for a frame without offload (from request byte) | helper |
+| +12 bits 7:0 / +13 bits 4:0 | - | 0 (L2/L3/L4 offset words from the request; the normal request leaves them zero) | helper |
+| +14 bit 0 | 1 | 1 (control word bits 16:15 = 2) | helper `bfi 2, #15,#2` of the +12 dword |
+| +14 bits 6:1 | 6 | 0 (request byte) | helper |
+| +15 bits 3:0 | 4 | 0 (fragment-count byte; only written when the request is non-zero) | helper |
+| +15 bits 6:4 | 3 | 0 (from the request's queue/flags byte) | helper |
+| +16 bits 3:0 | 4 | 0 (reserved descriptor byte 2) | helper |
+| +17 | u8 | **vport** (bits 4:0) and reserved bits from descriptor byte 2 | helper |
+| +19 bits 4:3 | 2 | copy of +3 bits 4:3 (= 2 for the normal descriptor) | `tx_set_desc` tail |
+| +20..+31 | 12 | 0 | zeroed request buffer |
 
-The minimal-path plan (section 11) uses only the fields the normal non-TSO branch writes: length,
-address, owner/type; the offload words stay zero until bench evidence exists. [I]
+The descriptor type is selected by the **request byte at +9** (`& 3`): the type-0 helper path
+above is the L2/normal one; type 1/2/3 write 8/9/6 into +12 bits 6:3 and shared the rest of the
+same control block (not implemented here). A descriptor whose request byte at +7 has bits 6:4 =
+0b010 takes the separate TSO branch, which writes +2 and a different +8..+19 control block; that
+branch is decoded only at the branch level and is **not** implemented. The TX egress *queue*
+handle the vendor carries through its per-port `g_api_priv[]` context is not visible in this
+descriptor shape beyond the port tag; section 7 and section 10 keep that open. [V] fields,
+[U] request metadata semantics.
 
-Additional recovered TX-path facts: the TX descriptor producer is called from the TX send-path
-helper after the driver has selected a free 20-byte software TX node and mapped the skb; the
-hardware sees the descriptor only when the ring write pointer is written. There is **no TX
-completion interrupt**: the driver polls the TX read pointer (`tx_get_rptr@0xee4`) and reclaims
-descriptors below it. [V]
+**Ring producer/consumer semantics (v250).** [V] code shape, [I] the ring-index reading:
+
+- **TX.** The driver owns the write pointer; it is a ring index. After writing a descriptor the
+  vendor rings the doorbell at `0x2008 + ch*0x10` with `(last produced index + 1) & ring mask`,
+  i.e. the index of the next free descriptor, and the engine transmits up to it. Completion is
+  poll-only: the 16-bit read pointer at `0x200c + ch*0x10` is the ring index of the next
+  descriptor to complete; the vendor masks it with the ring mask and reclaims/frees every
+  descriptor before it. There is **no TX completion interrupt**.
+- **RX.** The pointer word at `0x3008 + ch*0x10` has two 16-bit halves: bits 15:0 are the index
+  of the **last descriptor the driver handed to the engine** (the vendor writes the last
+  *produced* index, not the next one, when it arms a ring), bits 31:16 are the "sf" pointer, the
+  index of the **first buffer still outstanding**, which the vendor updates after every
+  completion. The engine's read pointer at `0x300c + ch*0x10` is the ring index of the next
+  descriptor to complete; the driver consumes completions in ring order from its own consumer
+  index and re-arms each slot.
 
 ### 5.3 Channel model
 
@@ -431,6 +494,13 @@ The measured programmed state matches that live node and settles the active-chan
 | RX config `0x3004 + ch*0x10` | `0x8` | `0x8` | `0` | `0` |
 | pointers `+0x08/+0x0c` | `0x639 / 0x06390639` (TX), `0xe600e5 / 0xe7` (RX) | analogues, nonzero | `0` | `0` |
 
+The pointer values fit the ring sizes (TX 0x639 < 4096, RX read/write halves < 256) and are
+consistent with the **ring-index** reading of section 5.2: the TX word is the write pointer, the
+TX read word carries the read pointer in bits 15:0; the RX word packs the write pointer (bits
+15:0) and the "sf" pointer (bits 31:16), and the RX read word is the 16-bit read pointer. They
+moved between the two inventory passes, so they are live counters, not static configuration. [V]
+raw values, [I] the ring-index reading.
+
 Consequences for the model in 5.1/5.3:
 
 - **The ring-pair first word is the programmed channel config** (TX `0xc` = live `tx_ring[0]`;
@@ -470,10 +540,17 @@ Consequences for the model in 5.1/5.3:
    vport, queue handle) and calls `hi_pie_tx_send(skb, request, g_ctrl)`. [V]
 4. `hi_pie_tx_send@0x3250` selects the per-CPU channel, reads the TX read pointer
    (`tx_get_rptr`), reclaims completed descriptors below it, maps the skb/data pages coherently,
-   fills one or more 32-byte TX descriptors (one per fragment), bumps the software write index,
-   and finally writes the TX write pointer register (`tx_set_wptr` = doorbell at
-   `0x2008 + ch*0x10`). [V]
-5. Completion is poll-only through the same read pointer (no TX IRQ). [V]
+   fills one or more 32-byte TX descriptors (one per fragment, section 5.2), bumps the software
+   write index, and finally writes the TX write pointer register (`tx_set_wptr` = doorbell at
+   `0x2008 + ch*0x10`) with `(last produced index + 1) & ring mask`. The reclaim walk stops at
+   the used-list node whose software ring index equals the masked read pointer, i.e. everything
+   before the read pointer is complete. [V]
+5. The 32-byte request passed to the descriptor builder is a different structure from the
+   hardware descriptor: `hi_pie_drv_xmit@0x42ac` fills its first bytes with the 8-byte port
+   descriptor (port, vport, reserved word), the mapped DMA address and a per-frame flags byte,
+   and `hi_pie_tx_send` appends the channel index and length before the builder consumes it
+   (section 5.2's table is the resulting hardware bytes). [V]
+6. Completion is poll-only through the same read pointer (no TX IRQ). [V]
 
 ### 6.2 RX
 
@@ -481,19 +558,29 @@ Consequences for the model in 5.1/5.3:
    the vector's device data: check the mask register (skip when masked), check the status bit;
    if set: `napi_schedule_prep`, mask the channel (`rx_close_irq`), write-1-to-clear
    (`rx_clr_irq`), `__napi_schedule`. [V]
-2. `hi_pie_rx_poll@0x4058` maps the NAPI instance back to its channel, calls
-   `hi_pie_drv_rx_recv` per completion, refills with `hi_pie_drv_rx_addbuf`, passes the 12-byte
-   summary to `hi_net_rx_proc`, then kicks the RX write pointer (`hi_pie_drv_rx_kick` ->
-   `rx_set_wptr@0x3008`) and re-opens the channel mask when the poll completes. [V]
-3. `hi_pie_drv_rx_recv@0x3870` takes the next used software node, compares the hardware-provided
-   descriptor index against the software ring position, translates the hardware descriptor with
-   `rx_get_desc`, unmaps the buffer, `skb_put()`s the returned length, and recycles the node. [V]
-4. `hi_pie_drv_rx_addbuf@0x3a24` allocates a new skb, reserves headroom, maps the data page
-   (`dma_map_page_attrs`, direction 2 = FROM_DEVICE), writes the DMA address and owner bit into a
-   free hardware RX descriptor, and links the node back onto the ring. [V]
-5. `hi_net_rx_proc@0x6568` resolves `(port, vport)` to the netdev via `g_api_priv`, sets
-   `skb->dev`/protocol (via `eth_type_trans`), runs the optional per-port RX hook (the LSW's
-   learning/CFE hook), and delivers with `netif_rx()`. [V]
+2. `hi_pie_rx_poll@0x4058` maps the NAPI instance back to its channel and loops: one
+   `hi_pie_drv_rx_recv` per completed descriptor, one `hi_pie_drv_rx_addbuf` to re-arm it, then
+   `hi_net_rx_proc` with the 12-byte summary. After the batch it kicks the RX pointer word
+   (`hi_pie_drv_rx_kick` -> `rx_set_wptr@0x3008`) and re-opens the channel mask when the poll
+   completes. [V]
+3. `hi_pie_drv_rx_recv@0x3870` takes the software node at the head of the used list (the
+   outstanding descriptor with the lowest ring index), reads the hardware read pointer and
+   compares it with the node's ring index: equal means "next descriptor still to complete", so
+   the poll stops. Otherwise it decodes the descriptor with `rx_get_desc` into the summary,
+   unmaps the buffer, `skb_put()`s the u16 length from summary +4, records the new used-list head
+   (next outstanding index) into the RX pointer word's "sf" half, zeroes the 32-byte descriptor,
+   and moves the node to the free list. [V]
+4. `hi_pie_drv_rx_addbuf@0x3a24` allocates a new skb with
+   `__netdev_alloc_skb_ip_align()` for (RX buffer size + 128) bytes, reserves a further 128
+   bytes of headroom, maps the data page (`dma_map_page_attrs`, direction 2 = FROM_DEVICE),
+   writes the DMA address at +4 and the owner bit, and links the node back onto the used list;
+   the pointer word's write half is then advanced to the last re-armed descriptor
+   (`hi_pie_drv_rx_kick`). [V]
+5. `hi_net_rx_proc@0x6568` checks the error flag (summary +7 bit 0); on error it bumps an error
+   counter and frees the skb. Otherwise it resolves `(port, vport)` to the netdev via
+   `g_api_priv`, applies the tag class (summary +7 bits 4:3) by copying the in-frame tag words into
+   vendor-private skb fields, runs the optional per-port RX hook (the LSW's learning/CFE hook),
+   calls `eth_type_trans()` and delivers with `netif_rx()`. [V]
 
 ---
 
@@ -639,8 +726,8 @@ Ordering constraints that matter to a clean-room design: [V]/[I]
 
 | item | status | how it is closed |
 | --- | --- | --- |
-| Full TX descriptor bit map, especially the type-specific words at +8..+19 and the checksum/VLAN classification bits | [U] | read the v250 `tx_set_desc`/helper against a minimal TX that leaves the words zero; bench traffic with offloads off |
-| Exact RX status bit meanings (+8/+10/+13, the two +16/+18 descriptor paths) and error/checksum reporting | [U] | bench: capture descriptors of known frames (ping/ARP/ICMP) |
+| Full TX descriptor bit map, especially the type-specific words at +8..+19 and the checksum/VLAN classification bits | **decoded 2026-11-19:** the normal non-TSO byte image is section 5.2 [V]; the type-1/2/3 and TSO branches are decoded only at branch level [I] | minimal TX with the section-5.2 image, then compare the hardware result/descriptor state on the bench with offloads off; parse the TSO branch only if offload is ever needed |
+| Exact RX status bit meanings (+8/+10/+13, the two +16/+18 descriptor paths) and error/checksum reporting | **decode recovered 2026-11-19 [V]:** length +0, status/error +8 bits 6:0, port/vport +16 or +23/+24, tag class +10 bits 5:4; the semantic meaning of the two flag classes (+13 bits 6:5, +10 bits 5:4 beyond "tag") and any checksum verdict is still [U] | bench: capture descriptors of known frames (ping/ARP/ICMP) and correlate the flag bits; do not set CHECKSUM_UNNECESSARY until then |
 | Ring pair-word semantics (`0xa`/`0xc` as log2 descriptor count, second RX word as buffer size) | [I] | bench readback of the register the driver programmed (`0x3004`/`0x2004`/`0x3504`) vs the DT values; a read-only inventory settles it |
 | Per-channel words `0x180/0x200/0x3210/0x3290/0x3310/0x3204/0x3208/0x0380` | [U] | same inventory: read them back after the vendor boot vs after our init |
 | `0x3404` 2-bit per-channel field, `0x3408` large-ring bitmap, `0x3700` GRO size | [I] writes recovered, semantics unknown | bench with/without the corresponding config |
@@ -649,6 +736,9 @@ Ordering constraints that matter to a clean-room design: [V]/[I]
 | qid/port map: DT `port` (8..12) vs LSW id space vs PIE queue handle | [U] | LSW block-D RE + bench register reads; do not guess |
 | Whether a netdev can pass traffic without the LSW map | [I] no | stage 4 bench (section 11) |
 | TX completion without TX IRQ (poll-only) | [V] code, [U] silicon behaviour under load | bench under sustained TX |
+| RX/TX pointer words are ring indices, not free-running counters | [I] from the vendor consumer arithmetic (vendor masks read pointers with the ring mask and compares a node ring index to a raw read pointer) | bench: watch the pointer words while sending a known number of frames; a 16-bit counter that grows past the ring size disproves the model |
+| TX egress queue handle (the vendor's per-port `g_api_priv[].queue` word): it is not part of the descriptor byte image beyond the port tag | [U] | LSW block-D RE + bench; patch 024 leaves the field zero |
+| Hardware acceptance of the section-5.2 descriptor image (does a linear frame with these control words leave the port?) | [U] | attended bench: arm, per-port counters, one ping while watching the TX read pointer and the switch counters |
 | Restart/recovery after a PIE wedge on the AHB | [U]/bench-only | no driver may add reset semantics; recovery is the physical RESET+TFTP card ([REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) section 7.3) |
 
 **Measured status 2026-11-18 (inv1 read-only run, [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md)).**
@@ -657,9 +747,11 @@ pair-word semantics" is [V] for the first word (programmed config == live DT fir
 per-channel words, `0x3404/0x3408/0x3700` and the RX IRQ status/mask are [V] raw values (their
 bit meanings remain [U]); the bootloader/firmware pre-initialization row is partially closed
 (post-boot state only); the channel-pairing row is partially closed (the live active set is
-ch0/ch1 of 8 slots; the `pie-chN,M` pairing digit is still [U]). The descriptor bit maps, the RX
-status semantics, traffic behavior, the ACP question and any pre-Linux state are **not** closed by
-this run - it read registers, it did not exercise the engine or write anything.
+ch0/ch1 of 8 slots; the `pie-chN,M` pairing digit is still [U]). The descriptor bit maps and the
+RX status semantics were then closed **from the vendor module disassembly** on 2026-11-19 (this
+document's section 5.2) - that is a static-code result, not a measurement. Traffic behavior, the
+ACP question, the TX queue handle and any pre-Linux state are **not** closed - nothing has
+exercised the engine or written a register.
 
 ---
 
@@ -692,6 +784,18 @@ this run - it read registers, it did not exercise the engine or write anything.
 > unchanged (the PIE RX completion decode is [U], so no frame is delivered to the stack) and the
 > TX egress selection from a descriptor is still [U]; the attended boot sequence is
 > `luofu_lsw.arm=1 luofu_lsw.qidmap=1 luofu_pie.arm=1`.
+>
+> **Status 2026-11-19 (completion-decode session, patch `024`):** the v250 RX completion
+> descriptor and the normal non-TSO TX descriptor are now decoded (section 5.2) and implemented in
+> `luofu-pie.c`/`luofu-gmac.c`: the NAPI poll decodes length/status/port, delivers the skb to
+> the net_device that registered the completed internal-switch port and re-arms the slot with a
+> fresh coherent buffer; the TX producer writes the full recovered normal-descriptor byte image
+> (including the port tag) and rings the doorbell with the masked ring index. The GEMAC front end
+> now reads the vendor `port` value from the board devicetree (`hisilicon,port`, 8..12) and
+> registers/unregisters its port around open/stop, replacing the vendor `g_api_priv[]` lookup.
+> The arm gate `luofu_pie.arm=1` and the fail-closed probe are unchanged. None of this has run on
+> hardware; the attended checks are in the port-notes lane summary. P5's remaining half is the
+> switch-side egress queue binding (section 7) and the [U] rows of section 10.
 
 ### 11.1 Shape decision (recommended)
 
@@ -728,10 +832,10 @@ if a binding property is wanted, use documented `hisilicon,rx-ring`-style proper
 | --- | --- | --- |
 | **P0 - spec** (this document) | register/descriptor/channel/qid/ACP model; fixture hashes; commands | document review; links resolve; no invented values (every numeric cited) |
 | **P1 - PIE binding + probe skeleton** | new `hisilicon,luofu-pie.yaml` (reg 64 KiB, 4 interrupts, clocks/resets, `dma-coherent`, SoC-variant data instead of the vendor `hwver` property); `CONFIG_LUOFU_PIE` (tristate, `depends on OF`) with a `[N]` provenance entry in the config; driver probe does clock/reset/ioremap/IRQ acquisition + `reg_init` ordering, then stops before enabling anything | `make target/linux/prepare` and `make target/linux/compile` RC=0 with `CONFIG_WERROR=y`; `dt_binding_check` PASS; board DTS zero dtc warnings; config re-derivation idempotent (only the new `[N]` line changes). No hardware. |
-| **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | **DONE 2026-11-18 as patch `020`** (host-compiled only, arm-gated): rings, recovered init/mask sequencing, NAPI RX poll (completion/refill only - no decode), TX producer, exported backend; compile/checkpatch/bindings/DTS clean. No hardware. |
+| **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | **DONE 2026-11-18 as patch `020`, extended 2026-11-19 by patch `024`** (host-compiled only, arm-gated): rings, recovered init/mask sequencing, NAPI RX poll with the decoded completion path and stack delivery, full normal TX descriptor, exported backend + port registration; compile/checkpatch/bindings/DTS clean. No hardware. |
 | **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | **DONE 2026-11-18** on the stock vendor boot (read-only, no writes): every allowlisted offset returned a plausible value, static words were stable, the dynamic pointers moved, and the programmed TX/RX channel configs equal the live overlay `tx_ring[0]/rx_ring[0]` (section 5.4; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` + `followup/`). Acceptance met for the register-readable [I]/[U] rows; see section 10 for what the run does **not** settle. |
 | **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), checks that the PIE backend is armed **and the LSW egress map is ready**, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> phylink; enable the pie/lsw nodes and gmac1-4 in the DTS via `shared.patch` | **DONE as host-compiled code in patches `020`+`023`** (never executed): netdev/phylink glue + TX forwarding + the two readiness gates + `PHYLINK_NETDEV` carrier fix + MAC address source; DTS nodes enabled. Bench gate unchanged: netdev appears, carrier up, TX doorbell advances the TX read pointer, no lockup; **no traffic claim** |
-| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the populated rows, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | **HALF DONE as host-compiled code (patch `022`, never executed):** the W2 qid-map write set (table A ports 4-12, table B ports 40-43) is programmed behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` with readback verification, and the device-tree port model now carries the measured hardware port number (`hisilicon,port` 9-12). **Still open:** the PIE TX descriptor -> egress queue/port binding [U], the PIE<->LSW host-queue hook [U], and RX delivery (completion decode [U]). M2-equivalent (ping host<->LAN port) is not reachable from the code yet |
+| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the populated rows, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | **PARTLY DONE as host-compiled code (patches `022`, `024`; never executed):** the W2 qid-map write set (table A ports 4-12, table B ports 40-43) is programmed behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` with readback verification; the device-tree port model carries the measured hardware port number (`hisilicon,port` 9-12); the PIE RX completion decode is implemented and delivers to the net_device registered for the completed port; the TX descriptor is tagged with the port. **Still open:** the switch-side egress queue handle the vendor carries in `g_api_priv[]` [U], the PIE<->LSW host-queue hook [U], and hardware acceptance of the descriptor. M2-equivalent (ping host<->LAN port) is not reachable from the code yet |
 | **P6 - upstream series** | split patches (PIE engine, GEMAC netdev, LSW minimal), bindings, config, DTS; document hardware-unverified behaviour honestly | review/checkpatch; bench evidence recorded separately |
 
 Patch numbering: the landed platform series is `001`-`012`; take the next free number in the
@@ -825,6 +929,10 @@ P6: 2-3 sessions. These refine [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md) sect
 | DMA coherency/ACP facts | pie DT properties ([soc/luofu-r116-pinned.dts](soc/luofu-r116-pinned.dts) lines 1253-1269); `hi_kpie` `dma-coherent`/`dma_*` call sites and `__symbol_get` at `+0x2420` (v300 reg-init), strings `"hi_acp_notifier_call_chain"` etc.; `hi_acp.ko` (6,756 B) notifier and RMW writer |
 | init order | `hi_pie_probe` / `hi_pie_drv_init` call order; vendor `rc.d/luofu`; target DTS and patches `004`/`007`/`008`/`009` |
 | patch 009 is the partial GEMAC and its refusal is deliberate | [../target-skeleton/target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch](../target-skeleton/target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch) (refusal at line 150); [../target-skeleton/docs/port-notes/net/SUMMARY.md](../target-skeleton/docs/port-notes/net/SUMMARY.md); [SKELETON-SMOKE.md](SKELETON-SMOKE.md) sixth session |
+| RX completion decode (length +0, status/error +8 bits 6:0, port/vport +16 or +23/+24, tag class +10 bits 5:4, summary layout) | `hi_kpie.ko` v250 `hi_pie_rx_get_desc@0xf14` (196 B), `hi_pie_drv_rx_recv@0x3870` (summary +4 -> `skb_put`), `hi_net_rx_proc@0x6568` (error flag, port lookup, tag class); commands in section 13.2 [V] |
+| TX normal non-TSO descriptor byte image (length, flags/class, DMA address, port tag, type-0 control words) | `hi_pie_tx_set_desc@0x11ac` (380 B), type-0 descriptor helper at `0xfe8` (452 B), `hi_pie_tx_send@0x3250`, `hi_pie_drv_xmit@0x42ac`, `hi_pie_drv_tx_init@0x3614` (ring sizing/reclaim), section 5.2 [V] |
+| ring pointer semantics (TX doorbell = masked next index, TX read pointer = completion index, RX write/sf halves, poll-only TX completion) | `hi_pie_tx_send@0x3250` (reclaim walk + `(index+1)&mask` doorbell), `hi_pie_rx_poll@0x4058`, `hi_pie_drv_rx_kick@0x3c5c`, `hi_pie_drv_rx_recv@0x3870` [V] code, [I] ring-index reading |
+| patch 024 implements the decode + delivery behind the arm gate | [../target-skeleton/target/linux/hisilicon/patches-6.18/024-net-pie-completion-decode-luofu.patch](../target-skeleton/target/linux/hisilicon/patches-6.18/024-net-pie-completion-decode-luofu.patch); port notes `pie-decode/SUMMARY.md`; [SKELETON-SMOKE.md](SKELETON-SMOKE.md) PIE completion-decode session |
 | MAC register facts (PORT_MODE) that the port half keeps using | [../lab/luofu-gmac/luofu-gmac.c](../lab/luofu-gmac/luofu-gmac.c) lines 120-146; [ETHERNET-BRINGUP-FRAMING.md](ETHERNET-BRINGUP-FRAMING.md) sections 1-3 |
 
 ### 13.2 Reproduction commands (read-only, local fixtures)
@@ -861,16 +969,25 @@ blob, or extracted artifact is committed to this repository.
    already correct? (section 8) [U]/bench.
 5. Does the board firmware pre-initialize PIE (rings, channel config) before Linux? (section 10)
    [U]/bench.
-6. Is a TX descriptor with zeroed offload words accepted and transmitted (the minimal-path
-   assumption in 11.2)? [I]/bench.
+6. Is the section-5.2 normal non-TSO descriptor (including the port tag and the type-0 control
+   words) accepted by the engine and does the frame leave the intended switch port? [V] bytes
+   from disassembly, [U] hardware acceptance; bench-only.
+7. Do the two flag classes in the RX summary (+7 bits 2:1 and 4:3) have a checksum meaning, or is
+   the only consumer in this vendor build the tag class? [U] - the descriptor positions are [V],
+   the semantics are not; keep `CHECKSUM_NONE` until a known-frame capture settles it.
+8. Is the LSW egress queue handle (not part of the descriptor byte image beyond the port tag)
+   required for a frame to reach a switch port, and where does the vendor's per-port queue hook
+   put it? [U] - section 7 and the LSW lane.
 
 ---
 
 **Bottom line.** The vendor PIE is now specified far enough to write the ring engine without
-guessing its register block, descriptor size, doorbell/ownership model or IRQ/NAPI shape. What it
-cannot do by itself is deliver frames: the egress port/qid decision crosses into the internal LSW,
-so the honest milestone ordering is PIE rings -> one GEMAC netdev -> minimal LSW map -> traffic.
-The first device contact has now happened - a read-only, attended inventory on 2026-11-18 plus its
-DT follow-up, which closed P3 and corrected the live channel model. Nothing in the *driver* plan
-is hardware-verified: no PIE register write has been made, and the descriptor/status/traffic and
-ACP questions remain open.
+guessing its register block, descriptor size, doorbell/ownership model, RX completion decode or
+normal TX descriptor shape. What it cannot do by itself is deliver frames: the egress queue
+decision crosses into the internal LSW, so the honest milestone ordering is PIE rings -> one
+GEMAC netdev -> minimal LSW map -> traffic. The first device contact has now happened - a
+read-only, attended inventory on 2026-11-18 plus its DT follow-up, which closed P3 and corrected
+the live channel model - and the descriptor decode closed the remaining static unknowns on
+2026-11-19. Nothing in the *driver* plan is hardware-verified: no PIE register write has been
+made, the descriptor bytes have never been accepted by the engine, and the LSW queue-handle,
+flag-semantics and ACP questions remain open.

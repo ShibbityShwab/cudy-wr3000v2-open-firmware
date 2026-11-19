@@ -3457,3 +3457,130 @@ needs `/etc/board.json` regenerated (and the gated netdevs present) for the map 
 `04-pristine-apply.log`, `05-checkpatch.log`, `06-test-mac-nvmem.log`,
 `07-test-mac-provisioning.log`, the patch 026 copy, the OpenWrt prepare/compile logs, and
 `EVIDENCE-SHA256SUMS.txt`.
+## 2026-11-19 (PIE completion-decode session): RX completion + normal TX descriptor (patch 024)
+
+**Lane:** task-56, agent `pie-decode`. Host-only: no device, UART, TFTP, flash or bench tool was
+used and nothing was booted. The vendor `hi_kpie.ko` v250 functions were disassembled read-only
+(`hi_pie_rx_get_desc`, `hi_pie_drv_rx_recv`, `hi_net_rx_proc`, `hi_pie_tx_send`,
+`hi_pie_tx_set_desc` + its type-0 helper); no vendor binary is copied. The decode is documented
+in [PIE-DATAPATH.md](PIE-DATAPATH.md) sections 5.2 and 6 and in
+[../target-skeleton/docs/incoming/pie-decode/SUMMARY.md](../target-skeleton/docs/incoming/pie-decode/SUMMARY.md).
+
+### What the patch implements
+
+- **RX**: `luofu_pie_rx_poll` decodes each v250 completion - u16 frame length at +0, 7-bit
+  status/error at +8 (0 = no error), port/vport from the u32 at +16 (or the packed +23/+24 fields
+  for the no-status path), tag class at +10 bits 5:4. Error frames, implausible lengths and
+  unknown ports are dropped and counted; valid frames are unmapped, `skb_put()` to the decoded
+  length, given their protocol via `eth_type_trans()` and delivered with `napi_gro_receive()` to
+  the net_device that registered the completed internal-switch port
+  (`luofu_pie_rx_register()`, called by the GEMAC front end around open/stop with the DT
+  `hisilicon,port` 8..12). The slot is re-armed with a fresh coherent buffer
+  (`size + 128`, then `skb_reserve(128)`, the vendor addbuf shape) and the recovered RX
+  write/"sf" pointer values are written. No checksum or VLAN offload is claimed
+  (`CHECKSUM_NONE`; the in-frame 802.1Q tag is preserved) because the two summary flag classes
+  are recovered as bit positions only.
+- **TX**: the full recovered v250 normal non-TSO descriptor is written (u16 length; valid/normal
+  flags + class selector byte 0x74; DMA address; `port` + `1<<port` tag; type-0 control words
+  0x30/0x20/0x01/0x10) and the doorbell is the masked ring index of the next free descriptor,
+  matching the vendor `(last produced index + 1) & ring mask`. TX completion reclaim uses the
+  ring-index read pointer (poll-only, no TX IRQ). The producer stays one linear descriptor per
+  frame; the vendor fragment/TSO descriptor variants are decoded at branch level only and are not
+  written.
+- **GEMAC**: reads the required `hisilicon,port` (the vendor `port` cell, 8..12), refuses probe
+  without it, forwards transmit tagged with it and registers/unregisters the RX port around
+  `ndo_open/stop`. `luofu_pie.arm=1`, the fail-closed probe, the read-back verification and the
+  halt path are unchanged; nothing outside the existing arm path writes a PIE register.
+
+### Validation (isolated clones, host-only)
+
+- **Pristine apply order:** all **24 patches apply in order** to pristine `linux-6.18.60` with
+  `patch -p1 -N`: **0 failed hunks, 0 `.rej`**; the only `.orig` files are the same three
+  pre-existing fuzzy-offset backups (patches 008/021) that a 001-023 baseline produces.
+- **OpenWrt prepare:** `make target/linux/prepare V=s` **RC=0**, **1,228 `patching file`
+  lines**, patch `024` applied in order after `023`; 0 `.rej` in the extracted tree and the five
+  patched files are byte-identical to the generated sources.
+- **Full kernel compile (001-024):** `make target/linux/compile V=s -j16` **RC=0**, **0 errors /
+  0 compiler warnings** in the whole log under `CONFIG_WERROR=y` (the only "warning" line is the
+  pre-existing OpenWrt "configuration is out of sync" notice, present in every lane log; the 37
+  `WARNING: modpost: missing MODULE_DESCRIPTION()` lines are the pre-existing baseline). zImage
+  **3,281,400 B**, sha256
+  `f4a736cf2e0ed220c7e99fca1590913504395a2001947b66ccc8f1986e788583`; `luofu-pie.o`,
+  `luofu-gmac.o` and both YAMLs are byte-identical to the generated sources.
+- **TEXT_OFFSET contract:** unchanged - `arch/arm/boot/compressed/.head.o.cmd` carries
+  `-DTEXT_OFFSET=0x00608000`; `System.map` has `_text = stext = 0xc0608000`,
+  `swapper_pg_dir = 0xc0604000`; `luofu_pie_rx_register`, `luofu_pie_rx_unregister`,
+  `luofu_pie_xmit`, `luofu_gmac_probe` and `phylink_create` are in `System.map`.
+- **Config:** two consecutive `make kernel_oldconfig` runs are RC=0 and the kernel `.config` is
+  **byte-identical** (sha256 `4a17f17ad6a4e19a06027992c2c3442ec88d2ee2557f739c403f4bb02b4a17b6`);
+  the regenerated target fragment `config-6.18` is sha256
+  `d1af1b2a9411b5529ddef6d5ab1852059aca594eacb5de7f24adb0e35e87665b`, **byte-identical to the
+  001-023 lane's regenerated artifact** - patch 024 adds no Kconfig symbol; the committed
+  hand-maintained `config-6.18` (hash `2982d663...`) is untouched by the patch.
+- **Bindings:** `dt_binding_check` **RC=0** for `hisilicon,luofu-gmac.yaml` (new required
+  `hisilicon,port`) and `hisilicon,luofu-pie.yaml` (description only); the processed schema
+  contains both. The known `yamllint`-missing step is skipped (every previous session has the
+  same limitation).
+- **Board DTS:** the final post-shared.patch board DTS (committed DTS including the parallel 026
+  nvmem nodes + `hisilicon,port` on the five MAC nodes) compiles with the patched kernel's
+  headers/cpp and its own dtc to **12,076 B**, sha256
+  `5386badebc26754e01d5e585bb2632d44583797afc49bcd947f4acb0a35c085b`, **zero cpp and dtc stderr
+  bytes**; `fdtget` reads `hisilicon,port` = 8/9/10/11/12 from the five MAC nodes. `dt-validate`
+  of the final 001-026 tree's processed schema is **RC=0** with only the five pre-existing
+  baseline diagnostics (SP804 timer `compatible` length, two UART `clock-names` on each of two
+  UARTs); **no diagnostic names the PIE or GEMAC nodes**.
+- **Cross-lane 001-026 chain** (patches `024` + the parallel lanes' `025` LSW egress and `026`
+  bdinfo MAC nvmem): all **26 patches apply to pristine 6.18.60 in order with 0 rejected hunks**
+  (`026` still applies on top of the `024` GEMAC edits because the shared header context line was
+  preserved), and the combined prepared tree compiles **RC=0, 0 errors / 0 compiler warnings**
+  with zImage 3,282,656 B sha256
+  `346fb1f629dbd5b59308fb267d090afcf046d3ea26fba81713b2dbc9d1de77bc`. The separate fully-clean
+  `001-026` run in `/home/shibbityshwab/openwrt-lab-pie-decode-full` confirms it from a fresh
+  kernel extraction: `make target/linux/prepare` RC=0 (1,233 `patching file` lines, 0 `.rej`)
+  and `make target/linux/compile` RC=0 with 0 errors / 0 compiler warnings (37 pre-existing
+  modpost warnings), zImage 3,282,528 B sha256
+  `08b7674749a0c155285a89fd35fa2433c2c97ce48ee5a1773cb3541365544c67`, `_text = stext = 0xc0608000`.
+- **`checkpatch.pl --no-tree -f`:** **0 errors / 0 warnings / 0 checks** on the 1,644-line PIE
+  driver, the 35-line PIE header, the 463-line GEMAC driver and both YAMLs (119/130 lines).
+- **Static safety checks:** no forbidden addresses (RC misc `0x10161000`, CA `0x400392f0`, ACP
+  cells), no `devmem`/`/dev/mem`/raw MMIO helpers; every PIE register write is inside the
+  arm-only functions reached after the `luofu_pie_arm_gate` check; the GEMAC writes remain the
+  measured link-up/link-down words.
+
+### What this proves and what it does not
+
+Proven (host-only): the decode is a transcription of the vendor v250 code paths (every cited
+value is read or written by the named function); the series applies/prepares/compiles with
+WERROR and no warnings; the load contract and config are unchanged; bindings and board DTS
+validate; checkpatch is clean; nothing new is reachable without `luofu_pie.arm=1`.
+
+Not proven - **any hardware behaviour**: no PIE register has ever been written from our side; the
+engine has never accepted one of these RX completions or TX descriptors; the completion length,
+status, port fields and the two flag classes have never been observed on a live frame; the
+descriptor port tag and type-0 control words have never been accepted by the engine; the LSW-side
+egress queue handle is still [U]; the RX/TX pointer words are assumed ring indices ([I]); the
+checksum bits remain semantically unknown (`CHECKSUM_NONE` stays); ACP coherency is still
+unsettled. No packet can be claimed to reach a wire. The previous session's statement that the
+attended ping test should "fail until the RX decode is implemented" is now superseded by this
+patch, but the test still has to be run.
+
+### Attended checks needed (recovery armed, UART read-only)
+
+1. Arm `luofu_pie.arm=1` (+ the LSW gates) and confirm the arm log, ring readbacks and no AHB
+   hang.
+2. Send one known frame and capture the RX completion words: length must match, the port must
+   equal the MAC's `hisilicon,port`, and the tag-class bit must track a tagged vs untagged frame.
+   Do not adopt `CHECKSUM_UNNECESSARY` before a known-good/known-bad checksum capture.
+3. Send one frame out and confirm the TX read pointer advances and the switch counters show it on
+   the intended port; then send more than one ring of frames to validate the ring-index wrap and
+   reclaim arithmetic.
+4. Confirm `hisilicon,port` 8..12 maps to the switch port that receives the TX frame and that RX
+   completions report the same port number.
+5. Any wedge: physical RESET+TFTP only; patch 024 adds no reset path.
+
+### Evidence (local-only, gitignored)
+
+The isolated clones `/home/shibbityshwab/openwrt-lab-pie-decode/` and `...-full/`; the shared
+clone and `openwrt-lab-selectorfix-img` were not modified. Disassembly regeneration commands are
+the ones in PIE-DATAPATH.md section 13.2; the full evidence map is
+`target-skeleton/docs/incoming/pie-decode/SUMMARY.md`.
