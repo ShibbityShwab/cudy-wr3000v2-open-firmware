@@ -79,11 +79,13 @@ What this document is **not**:
    VLAN device created by OpenWrt. The shipped firmware deliberately sets
    `hi_kcfe_pub.g_intf_bypass=1` and *then* loads `hi_swa` ("switch adaptor for openwrt")
    [V; section 9].
-10. **No 6.18 validation route exists today**: there is no bootable OpenWrt 6.18 target/image on
-    the bench (parent `STATUS.md`, [TARGET-DESIGN.md](TARGET-DESIGN.md) section 9), so every
-    hardware statement below is [U] until a target exists. The clean-room path is therefore
-    staged: D0 spec, D1 minimal forwarding (bridge in software, no offload), D2 switchdev
-    offload (section 11).
+10. **Bootable image exists, no network driver has run on hardware.** The bench image boots to
+    userspace (2026-11-19 attended bring-up), so the LSW/PIE/GEMAC drivers can now be reached by
+    an attended boot, but **no LSW register write and no PIE/GEMAC data-path execution has
+    happened yet**: every hardware statement below stays [U] until the W3-W5 campaign in section
+    12.3 is run. Patches `021`/`022` implement the read-only baseline and the gated W3-W5 write
+    path (never executed; see 7.7). The clean-room path stays staged: D0 spec, D1 minimal
+    forwarding (bridge in software, no offload), D2 switchdev offload (section 11).
 
 ---
 
@@ -885,23 +887,25 @@ dump) - it is the cheapest bench inventory item and is listed in section 12.2. [
 ### 7.7 D1b W2: the derived write set (paper only, 2026-11-18) [I]
 
 Patch `021` in the target skeleton turns the W1 measurement into a checkable
-model and validates it **read-only** (it contains no `writel()`); it does not
-write the switch.  The table below is what the attended W3-W6 campaign would
-execute, with the evidence grade of every row.  The driver's register-map
-header (`luofu-switch-regs.h`) is the single source of truth for the offsets;
-this table is the review view.
+model and validates it **read-only**; patch `022` implements the first write
+step (the table rows below marked implemented) behind two explicit attended
+gates.  The table is what the attended W3-W6 campaign would execute, with the
+evidence grade of every row.  The driver's register-map header
+(`luofu-switch-regs.h`) is the single source of truth for the offsets; this
+table is the review view.  **No write in this table has been executed on
+hardware.**
 
 | # | write | value / shape | evidence | status |
 | --- | --- | --- | --- | --- |
-| C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | not implemented - W3, attended |
-| C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | not implemented - W3, attended |
+| C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
+| C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
 | R1 | `dp` probe config | `dp+0x1c = (u16 \| 0x10000)`, `dp+0x64 = 1` then cell selector, `dp+0x68 = 0` | code shape [V]; measured final values [V]; field meaning [U] | not written |
 | R2 | `eps` queue/DFX | `eps+0x1008` | measured 0 [V]; writer/meaning [U] | not in write set |
 | R3 | `eqm` probe init | `eqm+0x18 = 0x80001cc0`, `+0x38 = 0x7f0`, `+0x40` bit31 enable, `+0xa4` RMW with `(value-0x40)` in bits 0..13 | code shape [V]; measured final values [V]; register semantics [U] | not written |
 | R4 | `fam` queue/cell comparison | `fam+0x504` RMW (measured `0x2000`) | code shape [V]; write semantic [U] | not in write set |
 | R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | not written |
-| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | not written - W4 target |
-| Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | not written - W5 target |
+| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W4, patch `022`); never executed |
+| Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W5, patch `022`); never executed |
 | Q3 | qid allocation | one contiguous qid space from **1**, 8 qids per port, qid 0 unused; populated rows are table-A ports 4..12 (qids 1..72) and table-B ports 40..43 (qids 73..104) | measured contents [V]; allocator policy [I] | model only |
 | Q4 | qid map, port > 47 class | word index `slot/2 + port*4 - 64` of table A, one word per slot written twice per pair of slots | code shape only partially recovered [V]/[U] | deliberately not modelled |
 | P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` | value [V] in the base DT and on the live node; semantics [U] | baseline check only, never used to enable anything |
@@ -918,6 +922,26 @@ any write.  What it still does not prove is that writing them has the intended
 effect (W4/W5), the correct values for our own (non-vendor-initialised) block
 state (W3 readback), or the meaning of the port ids the rows belong to
 (13.2 item 2).
+
+**What patch `022` adds (W3-W5 staged, implemented, never executed).**
+`luofu-switch.c` now has two explicit opt-in gates on top of the read-only
+default: `luofu_lsw.arm=1` performs C1+C2 (enable the two gate clocks, release
+the four reset lines), re-checks the powered state through the CRG syscon and
+the reset API, then snapshots the 30 measured baseline words and the two qid
+tables *read-only* and refuses (no switch register is written in this step);
+`luofu_lsw.arm=1 luofu_lsw.qidmap=1` additionally programs Q1+Q2 for the 13
+populated rows, reads every programmed word back and restores the found values
+on the first mismatch.  The pre-write conformance gate refuses before the first
+write if any *unpopulated* qid-map word is non-zero, because that means the
+block is not in the measured state the model was derived against.  The default
+boot keeps the patch-`021` read-only behaviour: no parameter, no write.  The
+attended sequence, the exact expected console lines and the rollback plan are
+in [SKELETON-SMOKE.md](SKELETON-SMOKE.md) ("connectivity session" section).
+What is still open after patch `022`: the port ids the rows belong to are the
+measured MAC port numbers (declared in the devicetree as `hisilicon,port` and
+validated against the populated rows) but how a PIE TX descriptor selects an
+egress queue/port remains [U], and the dp/eqm/ips probe initialization
+(R1/R3/R5) is still not in any write set.
 
 ---
 
@@ -1337,15 +1361,15 @@ register inventory captured the W1 baseline (7.3) plus the window-name order (5.
 
 ### 12.3 Register-write campaign (D1b, attended, one variable at a time)
 
-Only after a bootable 6.18 target exists (or with a dedicated safe test image):
+Only after a bootable 6.18 target exists (or with a dedicated safe test image) - the bench image now boots to userspace (2026-11-19), so W3 is the first step that needs an attended boot with the recovery door armed:
 
 | step | read/write | question answered | rollback |
 | --- | --- | --- | --- |
 | W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes - **DONE 2026-11-18 (read-only inv1):** the post-vendor-boot baseline is measured (values in [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3, incl. the qid table A/B contents). W2 can be derived from it; no write was made | power cycle |
 | W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete - **DONE 2026-11-18 (read-only, host-only):** derived write set tabulated in section 7.7; patch `021` re-derives the qid-map model and validates it against all 384 measured table words without writing, and gates the read on the measured powered state; every write itself is still unimplemented | n/a |
-| W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling | power cycle |
-| W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right | power cycle |
-| W5 | add remaining MAC ports; default-forwarding test | D1c exit | power cycle |
+| W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling - **implemented behind `luofu_lsw.arm=1` (patch `022`); never executed**; the first attended run should use this gate alone and record the snapshot | power cycle |
+| W4 | qid-map write for **one** host queue + **one** MAC port; TX one frame | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` (patch `022`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3 and add the qid-map gate in a second boot | power cycle |
+| W5 | add remaining MAC ports; default-forwarding test | D1c exit - **implemented in the same gated write set (all populated rows); the forwarding/TX test is still open because the PIE TX egress selection is [U]** | power cycle |
 | W6 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.

@@ -49,10 +49,14 @@ WHAT IT REFUSES (fail-closed)
   - Vendor-derived input paths (dumps/, firmware/, stock/, vendor rootfs dumps).
 
 WHAT IT DOES NOT CLAIM
-  The A/B slot selector protocol (sysenv 0x10100C08) and the install path are
-  [U] (TARGET-DESIGN.md 3.4, 5.4, 5.5). The container is a documented build
-  artifact, not a flashable upgrade: INSTALL-STATUS.txt says so and the target
-  platform_do_upgrade refuses to write. Nothing here has run on a router.
+  The A/B slot selector protocol (sysenv 0x10100C08), the SMP second-CPU
+  bring-up and the install path are [U] on hardware (TARGET-DESIGN.md 3.4,
+  5.2, 5.4, 5.5). The 2026-11-19 attended bring-up booted an earlier build of
+  this image recipe to userspace (UP, 1 CPU; no rootfs_data volume), but THIS
+  EXACT REBUILD has not been flashed or booted. INSTALL-STATUS.txt says so:
+  "BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED" (the string
+  "NOT FLASHABLE" is kept because first-install-stock.sh and the target
+  platform_check_image grep for it).
 
 EXIT CODES
   0 pass / artifact written
@@ -742,31 +746,49 @@ def check_kernel_against_manifest(slice_data, slice_label, manifest_text,
 # ---------------------------------------------------------------------------
 def install_status_text(board, target):
     return (
-        "hisilicon/luofu image container - STATUS: NOT FLASHABLE\n"
-        "======================================================\n"
+        "hisilicon/luofu image container - STATUS: BOOT-VERIFIED RECIPE / "
+        "NOT FLASHABLE-UNTIL-INSTALLED\n"
+        "================================================================="
+        "===================\n"
         "\n"
         "board:  %s\n"
         "target: %s\n"
-        "built:  by luofu-image.py %s (host-only, never booted)\n"
+        "built:  by luofu-image.py %s (host-only)\n"
         "\n"
-        "This container was assembled from our own build products and is\n"
-        "structurally validated (kernel slice: uImage + FIP trailer + gate;\n"
-        "rootfs: static UBI volume %r plus the empty dynamic volume\n"
-        "%r with the autoresize flag - fstools mount_root finds the overlay\n"
-        "volume by name and the kernel formats it as UBIFS on the first\n"
-        "read-write mount, giving a persistent overlay).\n"
-        "It is NOT an installable upgrade:\n"
+        "BOOT EVIDENCE (2026-11-19 attended bring-up, this board)\n"
+        "  An earlier build of this image recipe booted to userspace on a\n"
+        "  WR3000 v2: U-Boot -> our kernel 6.18.60 -> rootfs UBI slot ->\n"
+        "  ubiblock0_0 (squashfs) -> /sbin/init -> preinit -> procd ->\n"
+        "  console. That build carried the same image chain and the same\n"
+        "  boot fixes as this one (CONFIG_CMDLINE_FORCE, 4 KiB squashfs\n"
+        "  padding before ubinize, CONFIG_XZ_DEC_ARM), but:\n"
+        "    - it was built from kernel patches 001-017 only (UP, 1 CPU);\n"
+        "      the SMP patch 018 and patches 019-021 were not part of that\n"
+        "      build and have never run on hardware;\n"
+        "    - it had no rootfs_data volume: mount_root fell back to a tmpfs\n"
+        "      overlay, i.e. the persistent overlay this container carries\n"
+        "      has NOT been observed on hardware;\n"
+        "    - its board.d/02_network sourced a missing\n"
+        "      /lib/functions/board.sh (the board_detect warning of that\n"
+        "      boot); this container ships the corrected board.d.\n"
+        "  THIS EXACT REBUILD (patches 001-021, rootfs_data overlay volume,\n"
+        "  corrected board.d) has NOT been flashed and NOT been booted.\n"
         "\n"
-        "  [U] the A/B boot-selector protocol (sysenv 0x10100C08) is not\n"
-        "      validated; the Linux read path and the A-side handover value\n"
-        "      are unknown (TARGET-DESIGN.md 3.4);\n"
-        "  [U] the install/factory path is an open question\n"
-        "      (TARGET-DESIGN.md 5.5);\n"
-        "  [U] neither this container nor a generated FIP trailer has had one\n"
-        "      attended boot (TARGET-DESIGN.md 5.2, 9).\n"
+        "Structural validation of THIS file (host-side, from its own bytes):\n"
+        "  kernel slice: legacy uImage + generated FIP trailer + gate magic;\n"
+        "  rootfs: static UBI volume %r plus the empty dynamic volume\n"
+        "  %r with vol_flags=autoresize. fstools mount_root finds the\n"
+        "  overlay volume by name and the kernel's first read-write UBIFS\n"
+        "  mount formats it (fs/ubifs/sb.c create_default_filesystem); the\n"
+        "  kernel autoresize grows it to the free PEBs of the slot. That\n"
+        "  path is read from the sources, not measured on this board.\n"
         "\n"
-        "platform_do_upgrade on the target refuses to write it. Do not flash\n"
-        "this file and do not add a factory/install stanza for it.\n"
+        "NOT FLASHABLE-UNTIL-INSTALLED: do not flash this file as a stock\n"
+        "sysupgrade and do not add a factory/install stanza for it. The A/B\n"
+        "boot-selector handover, the SMP second-CPU bring-up and the\n"
+        "rootfs_data overlay are all host-validated but not yet observed on\n"
+        "hardware in this combination (TARGET-DESIGN.md 3.4, 5.2, 5.3, 9;\n"
+        "TARGET-SKELETON README). Use the attended first-install procedure.\n"
         % (board, target, VERSION, UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME))
 
 
@@ -955,8 +977,9 @@ def cmd_sysupgrade(args):
     print("  container:       %d B, sha256 %s" % (len(container),
                                                   _sha256(container)))
     print("  wrote:           %s" % out_path)
-    print("  install status:  INSTALL-STATUS.txt marks this NOT flashable "
-          "(A/B selector [U], install path [U])")
+    print("  install status:  INSTALL-STATUS.txt carries the "
+          "\"NOT FLASHABLE-UNTIL-INSTALLED\" marker (boot-verified recipe, "
+          "this exact rebuild not flashed/booted)")
     return EXIT_OK
 
 
@@ -1015,7 +1038,8 @@ def cmd_check_container(args):
         max_size=args.rootfs_slot_size, verify_crcs=not args.no_crc_check)
     status = members[INSTALL_STATUS_NAME].decode("utf-8", "replace")
     if "NOT FLASHABLE" not in status:
-        raise ImageError("%s: %s does not carry the NOT FLASHABLE status"
+        raise ImageError("%s: %s does not carry the NOT FLASHABLE-Until-"
+                         "installed provenance marker"
                          % (path, INSTALL_STATUS_NAME))
     print("check-container: PASS (independent read-back of the built bytes)")
     print("  file:            %s (%d B)" % (path, len(data)))
@@ -1035,7 +1059,7 @@ def cmd_check_container(args):
              ubi_info["rootfs_data_reserved_pebs"]))
     print("  slot budgets:    kernel <= %d, rootfs <= %d"
           % (args.kernel_slot_size, args.rootfs_slot_size))
-    print("  install status:  NOT FLASHABLE marker present")
+    print("  install status:  NOT FLASHABLE-UNTIL-INSTALLED marker present")
     return EXIT_OK
 
 

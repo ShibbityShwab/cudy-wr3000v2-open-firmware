@@ -10,12 +10,16 @@
 #     validated from their own bytes at build time (tools/fip-slice.py checks
 #     the decoded loader structure, tools/luofu-image.py re-parses the UBI and
 #     cross-checks the container against fip-manifest.txt);
-#   - NOTHING here has booted. One attended boot of a generated FIP trailer is
-#     still required (TARGET-DESIGN.md 5.2, 9);
-#   - the A/B boot selector (sysenv 0x10100C08) and the install path are [U]
-#     (TARGET-DESIGN.md 3.4, 5.4, 5.5). The container is a documented build
-#     artifact, NOT a flashable upgrade: base-files/lib/upgrade/platform.sh
-#     refuses to write it and the factory/install stanza is deliberately
+#   - the 2026-11-19 attended bring-up booted an EARLIER build of this recipe
+#     to userspace (UP, 1 CPU; no rootfs_data volume). THIS EXACT REBUILD has
+#     not been flashed or booted; one attended boot of the current layout is
+#     still required (TARGET-DESIGN.md 5.2, 5.3, 9);
+#   - the A/B boot selector (sysenv 0x10100C08), the SMP second-CPU bring-up
+#     and the install path are [U] on hardware (TARGET-DESIGN.md 3.4, 5.2,
+#     5.4, 5.5). The container carries the provenance marker
+#     "BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED" (the string
+#     "NOT FLASHABLE" is grepped by first-install-stock.sh and the target
+#     platform_check_image) and the factory/install stanza is deliberately
 #     absent (section 5.5).
 #
 # WHAT THE TREE MUST CONTAIN (skeleton mapping, README section 4)
@@ -238,10 +242,13 @@ endef
 # ---- 3. sysupgrade container ---------------------------------------------
 # Deterministic tar: CONTROL, INSTALL-STATUS.txt, fip-manifest.txt, kernel
 # (FIP slice), root (rootfs UBI). The helper re-validates the slice against a
-# manifest re-derived from the same bytes, validates the UBI again, and marks
-# the artifact NOT FLASHABLE: the A/B selector protocol and the install path
-# are [U] (TARGET-DESIGN.md 3.4, 5.4, 5.5). append-metadata then adds the
-# standard OpenWrt image metadata. No factory/install stanza exists.
+# manifest re-derived from the same bytes, validates the UBI again, and writes
+# an honest provenance marker: BOOT-VERIFIED RECIPE (an earlier build of this
+# recipe booted to userspace on 2026-11-19) / NOT FLASHABLE-UNTIL-INSTALLED
+# (this exact rebuild is not re-flashed, and the A/B selector, SMP bring-up
+# and install path are [U] on hardware; TARGET-DESIGN.md 3.4, 5.2, 5.4, 5.5).
+# append-metadata then adds the standard OpenWrt image metadata. No
+# factory/install stanza exists.
 define Build/luofu-sysupgrade-container
 	[ -f "$(LUOFU_IMAGE_TOOL)" ] || { echo "luofu: $(LUOFU_IMAGE_TOOL) missing"; exit 1; }; \
 	[ -f "$(LUOFU_FIP_SLICE)" ] || { echo "luofu: $(LUOFU_FIP_SLICE) missing"; exit 1; }; \

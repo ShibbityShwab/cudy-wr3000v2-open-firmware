@@ -156,6 +156,25 @@
 > still always fails closed. Patch `021` applies after `020`; the series applies/prepares/
 > compiles host-side; **nothing has booted**.
 >
+> **2026-11-19 (connectivity session): the minimum network path is implemented host-side and
+> gate-wired (patches `022`/`023`).** Patch `022` turns the read-only LSW probe into a two-gate
+> staged write path: `luofu_lsw.arm=1` is the attended W3 step (enable the two gate clocks,
+> release the four resets, verify the powered state, snapshot the block read-only - no LSW
+> register write) and `luofu_lsw.arm=1 luofu_lsw.qidmap=1` is W4/W5 (pre-write conformance gate,
+> program the D1b W2 qid-map set for the 13 populated rows, read every word back and restore on
+> mismatch). The default boot stays read-only. The devicetree port model now carries the measured
+> hardware port number (`hisilicon,port` 9-12). Patch `023` makes the GEMAC netdev register only
+> when the PIE engine is armed **and** `luofu_switch_ready()` reports the egress map verified,
+> switches phylink to `PHYLINK_NETDEV` (the draft's `PHYLINK_DEV` never drove the carrier) and
+> gives the netdev a DT MAC source with random fallback; `LUOFU_GMAC` now depends on
+> `LUOFU_SWITCH`. The board DTS enables the `lsw`, `pie` and `gmac1`-`gmac4` nodes (gmac0 stays
+> disabled); a normal boot logs the refusals and registers nothing. **No driver code has executed
+> on hardware**: no LSW register written, no PIE ring armed, no netdev. Attended sequence and the
+> proven/unverified split are in [SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) ("connectivity
+> session") and this directory's `docs/incoming/net-lane/SUMMARY.md`. Full series `001`-`023`
+> applies/prepares/compiles host-side with WERROR and no warnings; config symbol-identical and
+> idempotent; bindings and board DTS validate.
+>
 > **PUBLICATION: NOT READY.** The published `opensource/` half must not be cited as a
 > submission-ready repository: ten vendor `.o` files remain in its history and the
 > publish checklist is open ([PUBLISH-READINESS.md](../docs/PUBLISH-READINESS.md)).
@@ -193,9 +212,12 @@ Everything here is marked one of:
 | `target/linux/hisilicon/patches-6.18/008-net-phy-luofu.patch` | network trio 2/3: new `drivers/net/phy/luofu-phy.c` (PHYLIB driver for the Hisilicon "Genius" PHY, PHY ID `0x20669a00` / mask `0xffffff00`; generic clause 22 ops; the vendor per-PHY firmware patch is **not** loaded - documented TODO), Kconfig/Makefile (`CONFIG_LUOFU_PHY`). No YAML by design: PHY drivers match by PHY ID and the PHY children stay standard `ethernet-phy-ieee802.3-c22` nodes. **Host kernel compile RC=0, no warnings**; `checkpatch` clean; **never booted**. | same |
 | `target/linux/hisilicon/patches-6.18/009-net-gmac-luofu.patch` | network trio 3/3, **PARTIAL**: new `drivers/net/ethernet/hisilicon/luofu-gmac.c` (platform driver; claims the binding and validates reg/clocks/resets/phy-mode/phy-handle, then **refuses to probe** - the TX/RX ring DMA model is not implemented and has never been decoded, so no netdev is registered), Kconfig/Makefile (`CONFIG_LUOFU_GMAC`), YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml`. **Host kernel compile RC=0, no warnings**; `dt_binding_check` pass; the GEMAC DTS nodes stay `disabled`. **Not a data-path driver at `009`; extended by `020`; never booted.** | same |
 | `target/linux/hisilicon/patches-6.18/020-net-pie-datapath-luofu.patch` | PIE datapath + GEMAC glue (2026-11-18, PIE-datapath session): extends patch `015`'s `drivers/net/ethernet/hisilicon/luofu-pie.c` into a **draft ring engine** - coherent 32-byte descriptor rings for the measured two active RX/TX channels, the recovered v250 global/per-channel register init, mask/unmask + NAPI RX path with the global RX enable via `0x3200` bit 0, a TX producer with poll-only completion, an internal header + exported backend for the MAC, and a read-back verification that tears the engine down on any mismatch; the engine is only armed by the `luofu_pie.arm=1` command-line opt-in (otherwise probe writes no register, enables no clock/reset and requests no IRQ). Also extends patch `009`'s `luofu-gmac.c` into a draft phylink/netdev front end that registers a netdev only when the PIE backend is armed, forwards `ndo_start_xmit` to PIE and writes only the measured 1 Gbps link-up/link-down MAC words; the binding gains the `hisilicon,rx-ring`/`hisilicon,tx-ring` ring tables and both YAMLs are updated. **Host kernel compile RC=0 (0 warnings from the new/changed files), `dt_binding_check` pass, board DTS zero warnings, config re-derivation idempotent, checkpatch 0/0**; RX completion decode and the switch egress map are still open, **never booted, and no PIE register has ever been written**. | same |
+| `target/linux/hisilicon/patches-6.18/021-net-lsw-init-luofu.patch` | internal-switch read-only D1b baseline probe (2026-11-18, LSW-init session): extends patch `016` with the 17-window model (two measured DDR windows validated but never ioremapped), the CRG syscon powered-state gate, the 30-word measured register baseline and the word-for-word read-only validation of both qid maps (384 measured words, derived contiguous qid 1..104 model); no `writel()`, no clock/reset write, no netdev/switchdev registration, probe always fails closed. **Host compile/binding/DTS/config/checkpatch clean; never run on hardware.** | same |
+| `target/linux/hisilicon/patches-6.18/022-net-lsw-qidmap-write-luofu.patch` | **connectivity 1/2** (2026-11-19): LSW staged write path behind explicit attended gates - `luofu_lsw.arm=1` does W3 (enable the two gate clocks, release the four resets, re-check the powered state, snapshot the measured words/qid maps read-only; no LSW register write) and `luofu_lsw.arm=1 luofu_lsw.qidmap=1` does W4/W5 (pre-write conformance gate, program the W2 qid-map set for the 13 populated rows, full readback verification, restore-on-mismatch). New `luofu-switch.h` publishes `luofu_switch_probed()`/`luofu_switch_ready()`; the devicetree port model gains the measured hardware port number (`hisilicon,port` 9-12) validated against the populated qid rows. Kconfig help only, no symbol. **Host compile (WERROR, 0 warnings), `dt_binding_check`, board DTS zero warnings, checkpatch 0/0; never executed on hardware.** | same |
+| `target/linux/hisilicon/patches-6.18/023-net-gmac-netdev-connect-luofu.patch` | **connectivity 2/2** (2026-11-19): GEMAC netdev readiness - registration requires `luofu_pie_armed()` **and** `luofu_switch_ready()` (`LUOFU_GMAC` now `depends on LUOFU_SWITCH`); phylink type fixed to `PHYLINK_NETDEV` with `config.dev = &ndev->dev` so the resolve work drives the carrier; netdev address from `of_get_mac_address()` with a logged random locally-administered fallback; link-up log line. The only MAC register writes stay the measured 1 Gbps link-up/down words. **Host compile (WERROR, 0 warnings), `dt_binding_check`, checkpatch 0/0; never executed on hardware; RX delivery and TX egress selection remain open.** | same |
 | `target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch` | machine restart (2026-11-18, seventh session): new `drivers/power/reset/luofu-reboot.c` (restart handler over two syscon regmaps: saves the SYSCTRL A/B boot selector with a read-back write-same, issues the CRG software-reset command from the vendor `reboot-offset`/`softrst_val0/1` values and falls back to the CRG watchdog; probe touches no register), YAMLs `power/reset/hisilicon,luofu-reboot.yaml` and `soc/hisilicon/hisilicon,luofu-sysctrl.yaml`, Kconfig/Makefile (`CONFIG_LUOFU_REBOOT`). Applies cleanly to pristine 6.18.60; **host kernel compile RC=0, no warnings**; `dt_binding_check` pass; **the CRG reset command sequence is PROVISIONAL and has never run on hardware; never booted**. | `target/linux/hisilicon/patches-<ver>/` |
 | `target/linux/hisilicon/luofu/config-5.10` | kernel-config skeleton derived from the only kernel the lab has evidence for (5.10.201) - **NOT the final upstream config**; lab symbol names marked. Superseded for 6.18 by the re-derived file below; kept as the 5.10 reference | `target/linux/hisilicon/luofu/config-<release>` after re-derivation |
-| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig. It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC now a draft netdev/phylink front end over PIE), the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`) and the boot selector (`CONFIG_LUOFU_SELECTOR`); patch `020` makes GEMAC select `CONFIG_PHYLINK`, so the delta resolves it to `y`; patch `021` adds no symbol (help text only), so the delta is unchanged by it; with patches `001`-`021` the **full kernel compiles** (RC=0) and nothing boots | same |
+| `target/linux/hisilicon/luofu/config-6.18` | **re-derived** 6.18 kernel-config delta (2026-11-18) emitted by the tree's canonical top-level `make kernel_oldconfig` with its own OpenWrt GCC 14.4.0 toolchain; provenance-marked (**[L]** lab value / **[P]** platform selection / **[N]** new driver symbols + their selects / unmarked oldconfig resolution); idempotent under a second run, and symbol-identical to a canonical re-derivation with the new driver Kconfig. It enables `ARCH_HISI`+`ARCH_LUOFU`+`CONFIG_LUOFU_CRG/WDT/FMC`, the SPI/SPI-NAND stack (`CONFIG_SPI`, `CONFIG_SPI_MEM`, `CONFIG_MTD_SPI_NAND`), the network symbols `CONFIG_LUOFU_MDIO/PHY/GMAC` (GEMAC now a draft netdev/phylink front end over PIE), the pinctrl/thermal/PCIe/PIE/switch drafts (`CONFIG_LUOFU_PINCTRL`, `CONFIG_LUOFU_TVSENSOR`, `CONFIG_LUOFU_PCIE`, `CONFIG_LUOFU_PIE`, `CONFIG_LUOFU_SWITCH`) and the boot selector (`CONFIG_LUOFU_SELECTOR`); patch `020` makes GEMAC select `CONFIG_PHYLINK`, so the delta resolves it to `y`; patch `021` adds no symbol (help text only), and patches `022`/`023` add no symbol either (both `CONFIG_LUOFU_SWITCH` and `CONFIG_LUOFU_GMAC` stay `y`; the new `LUOFU_GMAC depends on LUOFU_SWITCH` resolves identically), so the delta's symbol set is unchanged by them; with patches `001`-`023` the **full kernel compiles** (RC=0, `CONFIG_WERROR=y`, 0 warnings) and only the 2026-11-19 userspace boot was ever run | same |
 | `target/linux/hisilicon/image/Makefile` + `image/luofu.mk` + `image/luofu-ubinize.cfg` | board image Makefile (main idiom: `image.mk`, includes the subtarget file, `BuildImage`) plus the **real** target image chain: `kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest`, then `luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata`. Every target-specific stage validates its own output and fails closed. **host-built 2026-11-18** (never booted) | `target/linux/hisilicon/image/` |
 | `target/linux/hisilicon/luofu/profiles/cudy_wr3000-v2.mk.unused` | legacy profile sketch, kept only as history; main derives the device symbol from the image stanza | not copied (only if a targeted release uses profiles) |
 | `target/linux/hisilicon/base-files/lib/upgrade/platform.sh` | sysupgrade hooks: `platform_check_image` re-derives the container structure from the received bytes (tar layout, `CONTROL`, uImage load/entry, FIP trailer/gate/descriptor constants, rootfs UBI volume shape, `fip-manifest.txt` cross-check, slot budgets) and returns 74 for a foreign/vendor image; `platform_do_upgrade` implements the A/B install path host-side (two in-boot witnesses must agree on the active pair, the inactive kernel+rootfs slots are located by `/proc/mtd` label, written with `mtd`/`ubiformat`, read back, and only then the selector moves; it never touches the active pair, `rootfs_data` or the env blocks). **`sh -n` clean; host-checked against the real built container and corrupted/foreign variants; install path mocked-tested by `tools/test-platform-abinstall.sh`; never run on hardware**. The two-witness active-pair check is only valid because the image re-records the running pair on every boot (recorder row below); the handover is the loader's env-mismatch path, not an env write (corrected 2026-11-18, [`SELECTOR-0x21.md`](../docs/SELECTOR-0x21.md)) | same path (board-level base-files) |
@@ -585,6 +607,23 @@ is `patches-6.18/`:
   fails closed; the D1b W2 write set is documented but unimplemented (LSW-SPEC.md 7.7).
   YAML `Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml`, new header
   `drivers/net/ethernet/hisilicon/luofu-switch-regs.h`.
+- `022` adds the first **connectivity write step** to the switch driver, behind two explicit
+  attended gates: `luofu_lsw.arm=1` does the W3 power/snapshot step (enable the two CRG gate
+  clocks, release the four resets, re-check the powered state read-only, snapshot the measured
+  words and qid tables - **no LSW register write**) and `luofu_lsw.arm=1 luofu_lsw.qidmap=1`
+  does W4/W5 (pre-write conformance gate: unpopulated qid-map rows must read zero; program the
+  W2 table-A/table-B rows for ports 4-12 and 40-43; read every word back and restore the found
+  values on mismatch). The default boot is unchanged read-only. New `luofu-switch.h` publishes
+  `luofu_switch_probed()`/`luofu_switch_ready()`; the port children gain the measured hardware
+  port number (`hisilicon,port` 9-12) validated against the populated qid rows; the binding and
+  Kconfig help are updated (no new symbol). Never executed on hardware.
+- `023` makes the GEMAC netdev usable: registration requires the PIE backend armed **and**
+  `luofu_switch_ready()`; `LUOFU_GMAC` now `depends on LUOFU_SWITCH`; phylink is set to
+  `PHYLINK_NETDEV` with `config.dev = &ndev->dev` so the resolve work drives the carrier; the
+  netdev address comes from `of_get_mac_address()` with a logged random locally-administered
+  fallback; a link-up log line is added. The only MAC register writes remain the measured
+  1 Gbps link-up/down words. Never executed on hardware; RX delivery and PIE TX egress
+  selection remain open.
 - No separate arm-dts Makefile patch: the board DTS is delivered through the target's
   `dts/` + `DEVICE_DTS_DIR := ../dts` mechanism, so a second `arch/arm/boot/dts`
   copy would be a hand-maintained duplicate (TARGET-DESIGN.md section 6.1).
@@ -782,6 +821,27 @@ Checked on the author's host on 2026-11-18, nothing more:
   **Nothing was booted or bench-tested; no register is written by the driver; the
   switch data path, the write set and the port-id mapping remain open.** Exact
   commands/results: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (LSW-init
+  session).
+- **Connectivity path: LSW W2 qid-map write gate + GEMAC netdev readiness (2026-11-19,
+  connectivity host-only session)**: patches `022`/`023` (see the table above) plus the
+  shared.patch DTS/config updates. Results: the full series **001-023** applies to pristine
+  `linux-6.18.60` in order (**23 patches, 90 files patched, 0 failed hunks, 0 `.rej`/`.orig`,
+  RC=0**; patch `021`'s Kconfig hunk applies at a 6-line offset, which is why the OpenWrt
+  pipeline leaves one GNU-patch `Kconfig.orig` backup - not a failure); `make
+  target/linux/prepare` RC=0 (1,223 patching lines); `make target/linux/compile V=s -j16`
+  **RC=0 with 0 errors and 0 warnings under `CONFIG_WERROR=y`** (1,254 s; zImage 3,281,376 B
+  sha256 `5903db04928e58214a816a5809f186d579857c8e1c5c0e695cc9035bd68e91ca`); `_text =
+  0xc0608000`, `swapper_pg_dir = 0xc0604000` and `DTEXT_OFFSET=0x00608000` at both head
+  sites confirm `TEXT_OFFSET` unchanged; `luofu_switch_probed`/`luofu_switch_ready` exported
+  and both probe symbols in `System.map`; config symbol set identical to the committed one and
+  two consecutive `make kernel_oldconfig` runs byte-identical (`d1af1b2a...`); two changed
+  YAMLs `dt_binding_check` RC=0; board DTS zero warnings (11,571 B DTB, sha256
+  `7fd33522c89ee06369538fa40f8790d200c68d92fdf2e85995c3ec1fe37a9e05`) and `dt-validate` reports
+  no diagnostic for the switch/PIE/GEMAC nodes; `checkpatch` **0/0/0** on the Kconfig, the
+  switch driver/header/regs header, the GEMAC driver and both YAMLs. **Nothing was booted or
+  bench-tested with these patches**: no LSW register has been written by our kernel, no PIE
+  ring armed, no netdev registered; RX delivery and the PIE TX egress selection remain open.
+  Exact commands/results: [../docs/SKELETON-SMOKE.md](../docs/SKELETON-SMOKE.md) (connectivity
   session).
 - `dts/luofu-r116.dts`: parses after `cpp` + `dtc` to a DTB on the host with the patched
   kernel's own dtc (1.7.2) and **zero warnings** (the former deliberate

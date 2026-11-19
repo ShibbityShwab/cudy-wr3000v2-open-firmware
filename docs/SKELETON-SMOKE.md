@@ -2892,3 +2892,158 @@ Evidence (local-only, gitignored):
 `board-dts-final.dtb`, `dt-validate-final.out`, `apply-series.log`,
 `static-checks.log` and the delivered patch bytes.
 
+---
+
+## 2026-11-19 (connectivity session): LSW W2 qid-map write path + GEMAC netdev readiness (patches 022/023)
+
+**Task:** the image boots to userspace but has no network. This session implements the minimum
+connectivity path host-side: the internal-switch port model and the first (reviewed) switch write
+set, plus the GEMAC/PIE netdev readiness contract, so an attended boot can reach a LAN interface.
+**Host-only: no device access, no flash, no boot.** Publication remains NOT READY.
+
+### What changed
+
+- **Patch 022** (`022-net-lsw-qidmap-write-luofu.patch`) - turns the patch-021 read-only LSW probe
+  into a two-gate staged write path and wires the port model:
+  - default (no parameters) is unchanged read-only behaviour: validate the 17 windows, the CRG
+    clocks/resets, the port model, the 30-word measured baseline and the two qid maps, then refuse
+    with `-EOPNOTSUPP` without writing;
+  - `luofu_lsw.arm=1` = the attended **W3** step: enable the two CRG gate clocks, release the four
+    CRG reset lines (documented C1/C2 rows of LSW-SPEC 7.7), re-check the powered state read-only
+    through the CRG syscon and the reset API, then snapshot the 30 baseline words and both qid
+    tables *read-only* and refuse - **no LSW register is written in this step**;
+  - `luofu_lsw.arm=1 luofu_lsw.qidmap=1` = the attended **W4/W5** step: first a pre-write
+    conformance gate (every qid-map word outside the derived allocation model must read zero,
+    i.e. the block must be in the measured state the model was derived against), then program the
+    W2 write set Q1/Q2 - table A ports 4-12 and table B ports 40-43, 13 rows x 8 slots, value
+    `0x100 | qid` - then read back every programmed word and restore the found values and fail
+    closed on the first mismatch;
+  - new `luofu-switch.h` publishes `luofu_switch_probed()`/`luofu_switch_ready()`; the egress map
+    only reports ready after the full readback verification;
+  - the devicetree port model now carries the measured hardware port number
+    (`hisilicon,port` = 9..12 for gmac1..4, from the vendor DT's GEMAC `port` cells, live set
+    9-12); the driver validates each against the populated qid rows and rejects a port without a
+    row. Binding updated accordingly.
+- **Patch 023** (`023-net-gmac-netdev-connect-luofu.patch`) - makes the GEMAC netdev usable:
+  - netdev registration now requires **both** `luofu_pie_armed()` and `luofu_switch_ready()`
+    (Kconfig `LUOFU_GMAC` now `depends on LUOFU_SWITCH`); a boot that cannot carry a frame
+    registers nothing;
+  - `phylink_config.type = PHYLINK_NETDEV` with `config.dev = &ndev->dev` - the patch-020 draft
+    used `PHYLINK_DEV`, which does not drive the carrier from the phylink resolve work, so a real
+    link would have looked dead to userspace (ETHERNET-BRINGUP-FRAMING.md section 2 species B);
+  - netdev address from `of_get_mac_address()` (standard `mac-address`/`local-mac-address`/nvmem
+    properties) with a logged random locally-administered fallback; the bdinfo factory MAC has no
+    nvmem representation yet, so a DHCP test sets it from userspace (attended step);
+  - link-up log line with interface/speed/duplex; the only MAC register writes remain the measured
+    1 Gbps link-up/link-down words.
+- **shared.patch** (this directory): board DTS enables the `lsw`, `pie` and `gmac1`-`gmac4` nodes
+  and adds `hisilicon,port` to the four switch ports; `config-6.18` provenance annotations updated
+  (no symbol changes); `README`, `TARGET-DESIGN`, `LSW-SPEC` and `PIE-DATAPATH` status updated.
+
+### Gate model (fail closed, unchanged PIE gate)
+
+| boot parameter | LSW driver | PIE driver | GEMAC netdevs |
+| --- | --- | --- | --- |
+| none (normal boot) | read-only validate + refuse | gate closed, validate + refuse, no register write | PIE refused -> no netdev |
+| `luofu_lsw.arm=1` | W3 power/snapshot, no LSW register write, still refuses | unchanged | no netdev (no egress map) |
+| `luofu_lsw.arm=1 luofu_lsw.qidmap=1` | W3 + W4/W5 qid-map write + readback, READY | unchanged | still refuses until PIE is armed |
+| `luofu_pie.arm=1 luofu_lsw.arm=1 luofu_lsw.qidmap=1` | READY | arms rings/interrupts | netdevs register (eth0..eth3 in DT order); carrier driven by phylink |
+
+The existing `luofu_pie.arm=1` semantics are untouched.
+
+### Validation (isolated clone `/home/shibbityshwab/openwrt-lab-net`; shared tree untouched)
+
+- **Series apply, pristine tree:** all **23 patches apply in order** to pristine `linux-6.18.60`
+  with `patch -p1 -N`: **23 patches, 90 files patched, 0 failed hunks, 0 `.rej`/`.orig`, RC=0**
+  (`09-pristine-apply.log`); the series is also applied by the OpenWrt pipeline.
+- **Prepare** (`make target/linux/prepare V=s`): **RC=0**, 1,223 `patching file` lines, no failed
+  hunks. One `Kconfig.orig` file is GNU patch's default `--backup-if-mismatch` backup created when
+  patch 021 applies its Kconfig hunk at offset 6 (a pre-existing series behaviour, not a failure;
+  no `.rej`).
+- **Full kernel compile** (`make target/linux/compile V=s -j16`): **RC=0**, **0 errors, 0
+  compiler warnings** in 1,254 s. `CONFIG_WERROR=y` is resolved in the build tree from the
+  OpenWrt `CONFIG_KERNEL_WERROR=y`; the three new/changed driver objects compile under `W=1`
+  with no warnings. zImage **3,281,376 B**, sha256
+  `5903db04928e58214a816a5809f186d579857c8e1c5c0e695cc9035bd68e91ca`.
+- **Load contract unchanged:** `_text = 0xc0608000`, `swapper_pg_dir = 0xc0604000`,
+  `DTEXT_OFFSET=0x00608000` in both `arch/arm/kernel/.head.o.cmd` and
+  `arch/arm/boot/compressed/.head.o.cmd`; `System.map` carries
+  `luofu_switch_probed`/`luofu_switch_ready` (exported) and the switch/gmac probe symbols.
+- **`dt_binding_check` RC=0** for both changed bindings (dtschema 2026.9; the optional
+  `yamllint` step is skipped because the package is not installed - same limitation as every
+  previous session).
+- **Board DTS** (with the shared.patch node statuses and `hisilicon,port` cells) compiles with the
+  patched kernel's own dtc to **11,571 B**, sha256
+  `7fd33522c89ee06369538fa40f8790d200c68d92fdf2e85995c3ec1fe37a9e05`, **zero warnings** (empty
+  dtc stderr); `dt-validate` against the generated processed schema produces **no diagnostic for
+  the switch/PIE/GEMAC nodes** (5 pre-existing diagnostics remain on the SP804 timer and the two
+  UART nodes).
+- **Config:** two consecutive canonical `make kernel_oldconfig` runs are **byte-identical**
+  (sha256 `d1af1b2a9411b5529ddef6d5ab1852059aca594eacb5de7f24adb0e35e87665b`, RC=0 both);
+  the delivered `config-6.18` symbol set is **identical to the committed one** (patches 022/023
+  add no Kconfig symbol; `CONFIG_LUOFU_GMAC`/`CONFIG_LUOFU_SWITCH` stay `y`, and the new
+  `depends on LUOFU_SWITCH` resolves identically). The canonical regeneration differs from the
+  hand-maintained file only in two pre-existing boot-fix artifacts
+  (`# CONFIG_INITRAMFS_FORCE is not set`, `CONFIG_XZ_DEC_BCJ=y`), not caused by this series.
+- **`checkpatch.pl --no-tree -f`: 0 errors / 0 warnings / 0 checks** on the Kconfig hunk, the
+  1,494-line switch driver, the 23-line header, the 221-line register header, the 423-line GEMAC
+  driver and both YAMLs.
+- **Static write-site checks:** the only LSW register writes in the driver are the two W2 qid-map
+  helpers; the only CRG writes are `clk_prepare_enable`/`reset_control_deassert` (and their
+  rollbacks) inside the gated power sequence; the GEMAC writes are the measured link-up/down words
+  only; the default probe path contains no write.
+
+### What this proves and what it does not
+
+Proven (host-only): the series applies in order on a pristine tree and in the OpenWrt pipeline;
+the full kernel compiles with WERROR and no warnings; the load contract/TEXT_OFFSET are unchanged;
+the bindings validate; the board DTS is warning-free; the config is idempotent and unchanged in
+symbols; checkpatch is clean; every write is behind an explicit parameter and limited to the
+reviewed W2 set. **No driver code in this session has executed on the board**: no LSW register has
+been written, no CRG gate/reset has been driven by our kernel, no PIE ring has been armed on this
+image, no netdev has appeared.
+
+Not proven / unattended-untested:
+- that powering the LSW block (C1/C2) is safe and that the block can be read in a state other than
+  the measured vendor one (the W3 snapshot is the first observation);
+- that the qid-map write has the intended effect (W4/W5), that the pre-write conformance gate
+  passes on our boot's block state (it may refuse if the tables are not zero - by design);
+- that the GEMAC/PHY link comes up on our kernel (MDIO/PHY/GEMAC probes have never run; the
+  pinctrl consumer states for MDIO/GEMAC are still TODO);
+- **RX delivery** (PIE completion decode [U]) and **TX egress selection** (PIE TX descriptor ->
+  LSW queue/port [U]): a registered netdev with carrier is *not* yet a reachable LAN interface;
+- that the DTS node-enable + module params survive the boot (the image's cmdline is
+  `CONFIG_CMDLINE_FORCE`; the attended boot must pass the parameters through the loader or a
+  temporary cmdline change).
+
+### Attended boot sequence (first hardware execution; recovery door armed)
+
+1. **W3 only:** boot with `luofu_lsw.arm=1` (PIE gate left off). Expect:
+   `luofu-switch: luofu_lsw.arm=1: ATTENDED WRITE PATH ...`, powered-state line, 30
+   `W3 snapshot:` lines, the two qid-table non-zero counts, then
+   `W3 power/read step done; ... refusing to arm the data path`. Record the snapshot; the block is
+   powered down on the failure path. This is the first own-kernel CRG write on the switch block.
+2. **W4/W5:** boot with `luofu_lsw.arm=1 luofu_lsw.qidmap=1`. Expect the conformance gate to pass
+   (all unpopulated words zero), then
+   `W2 qid map programmed and verified: 72 table-A words ... + 128 table-B words ...` and
+   `connectivity path armed ...`. If it refuses, the pre-write mismatch is the evidence and no
+   write was made.
+3. **Data path:** add `luofu_pie.arm=1` to the same boot. Expect PIE arm logs, then four
+   `luofu-gmac: <ethN> registered ...` lines (eth0..eth3 in DT order; the bench cable is on
+   **eth2**/gmac3 by the measured MAC<->PHY mapping). Then `ip link set eth2 up` and check
+   `/sys/class/net/eth2/carrier`, `ethtool eth2` (PHY/link/speed) and the MAC address.
+4. **DHCP test:** set the MAC from the bdinfo factory bytes (or accept the random fallback), assign
+   a static address on the host side of the bench link, then `udhcpc -i eth2` (or a static
+   `ip addr add`) and ping/ARP. Expected to fail at the ping step until the RX decode and the PIE
+   TX egress binding are implemented; the test records where it fails (netdev up? carrier? PHY?
+   TX doorbell? RX IRQ? no packets?).
+5. After any step, the only recovery is the physical RESET+TFTP card; no driver adds a reset path.
+
+### Evidence (local-only, gitignored)
+
+`build/linux-kbuild/waves/2026-11-19-net-connect/`: `02-compile-baseline.log`,
+`03-prepare-final.log`, `04-compile-final.log`, `05-dt-binding-check.log`, `06-board-dts.dtb`,
+`07-dt-validate.out`, `08-config-idempotence.log` + regenerated configs/symbol lists,
+`09-pristine-apply.log` + patch hashes, `10-static-checks.log`, `11-checkpatch-final.log`,
+`base-shared/` + `base-kernel/` snapshots (sha256), `patches-new/` and `shared-work/`.
+

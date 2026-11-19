@@ -50,7 +50,7 @@
 #        "default ARCH_HISI" in their Kconfig entries (Hisilicon clock/reset/
 #        thermal drivers for other SoCs). Harmless for a build but they should
 #        be pruned before submission (see the note below the entries).
-#   [N]  new in the luofu driver series (patches-6.18/004-020):
+#   [N]  new in the luofu driver series (patches-6.18/004-023):
 #        the drivers and the dependencies they select. The 2026-11-18
 #        canonical derivation predates these Kconfig entries, so the lines
 #        were added by hand; for 004-005 a canonical re-derivation with the
@@ -61,7 +61,9 @@
 #        CONFIG_PHYLIB), so they add no resolved dependency line. Patch 020
 #        makes GEMAC depend on PIE and select CONFIG_PHYLINK, so the PHYLINK
 #        entry below resolves to y instead of the 6.18 m (see the note under
-#        REMOVED/DOWNGRADED). The 010 restart driver is a bool that selects
+#        REMOVED/DOWNGRADED). Patch 023 additionally makes GEMAC depend on
+#        CONFIG_LUOFU_SWITCH (readiness contract); both symbols are already y
+#        in this delta, so no resolved line changes. The 010 restart driver is a bool that selects
 #        CONFIG_MFD_SYSCON, which is already in this delta, so it adds no
 #        resolved dependency line either.
 #
@@ -283,11 +285,16 @@ CONFIG_LZO_COMPRESS=y
 CONFIG_LZO_DECOMPRESS=y
 # [N] new driver in patches-6.18/004 (luofu CRG clock + reset controller)
 CONFIG_LUOFU_CRG=y
-# [N] new driver in patches-6.18/009, extended by 020 (luofu GEMAC, DRAFT:
-#     netdev + phylink front end that forwards transmit to the PIE backend;
-#     it only registers a netdev after the PIE engine has armed its data path,
-#     writes only the measured 1 Gbps link-up/link-down MAC words, and the DTS
-#     nodes stay disabled; see TARGET-DESIGN.md 7.1)
+# [N] new driver in patches-6.18/009, extended by 020 and 023 (luofu GEMAC,
+#     DRAFT: netdev + phylink front end that forwards transmit to the PIE
+#     backend; it only registers a netdev after BOTH the PIE engine has armed
+#     its data path and the internal switch has programmed and verified its
+#     egress qid map (patch 022), it is PHYLINK_NETDEV so the phylink resolve
+#     work drives the carrier, it writes only the measured 1 Gbps
+#     link-up/link-down MAC words, and the netdev address is the DT MAC
+#     property or a random fallback. Patch 023 makes this depend on
+#     LUOFU_SWITCH; the DTS nodes are enabled for the attended boot and a
+#     normal boot logs the refusal; see TARGET-DESIGN.md 7.1)
 CONFIG_LUOFU_GMAC=y
 # [N] new driver in patches-6.18/007 (luofu MDIO bus controller)
 CONFIG_LUOFU_MDIO=y
@@ -312,15 +319,20 @@ CONFIG_LUOFU_FMC=y
 #     engine, DRAFT ring engine: coherent descriptor rings for the two
 #     measured RX/TX channels, recovered channel/IRQ initialization, NAPI
 #     receive path and TX producer; the engine is only armed when
-#     "luofu_pie.arm=1" is on the kernel command line, the RX completion
-#     decode and the switch egress map remain open, and the devicetree node
-#     stays disabled)
+#     "luofu_pie.arm=1" is on the kernel command line - that gate is unchanged
+#     and still off by default - the RX completion decode and the TX egress
+#     mapping remain open, and the devicetree node is enabled for the
+#     attended boot and refuses read-only on a normal boot)
 CONFIG_LUOFU_PIE=y
-# [N] new driver in patches-6.18/016 (luofu internal LSW switch, D1a DRAFT:
-#     the probe validates the register windows, the CRG clocks/resets and the
-#     devicetree port model, then refuses to program the switch (-EOPNOTSUPP)
-#     until the register/queue/port-id model has been measured; the devicetree
-#     node stays disabled)
+# [N] new driver in patches-6.18/016, extended by 021 and 022 (luofu internal
+#     LSW switch, D1b DRAFT: by default the probe validates the 17 register/DDR
+#     windows, the CRG clocks/resets, the devicetree port model - now with the
+#     measured hardware port numbers - and the measured qid-map baseline, then
+#     refuses (-EOPNOTSUPP) without writing. The reviewed W3/W4 write path
+#     (enable the two gate clocks, release the four resets, program and verify
+#     the W2 qid-map write set) only runs with luofu_lsw.arm=1 and
+#     luofu_lsw.qidmap=1 on an attended boot and has never executed on
+#     hardware; the devicetree node is enabled so that boot can reach it)
 CONFIG_LUOFU_SWITCH=y
 # [L] from the lab 5.10.201 reference
 CONFIG_MDIO_BUS=y

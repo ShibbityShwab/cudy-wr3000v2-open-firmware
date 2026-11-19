@@ -703,25 +703,32 @@
 	 * base/size and never ioremaps them.  The layout inside the regions is
 	 * unknown.
 	 *
-	 * The in-tree driver is a READ-ONLY baseline probe (patch 021): it
-	 * validates these resources, the port model, the two CRG port_bitmap
-	 * cells and - only when the block is already clocked and out of reset -
-	 * the measured register baseline and the two qid maps.  It never writes a
-	 * register, never enables a clock, never drives a reset, registers no
-	 * netdev/switchdev notifier and always refuses to program the switch
-	 * (-EOPNOTSUPP).  The node therefore stays disabled; do not enable it
-	 * before the attended write campaign and write-set review: an access to an
-	 * unknown register in this block can cut the CPU/console path on a board
-	 * with no validated restart.
+	 * The in-tree driver (patches 021/022) has two paths.  By default it is
+	 * the READ-ONLY baseline probe: it validates these resources, the port
+	 * model, the two CRG port_bitmap cells and - only when the block is
+	 * already clocked and out of reset - the measured register baseline and
+	 * the two qid maps, then refuses (-EOPNOTSUPP) without writing anything.
+	 * With the explicit attended luofu_lsw.arm=1 (W3: enable the two gate
+	 * clocks and release the four resets, then read) and
+	 * luofu_lsw.qidmap=1 (W4/W5: program and verify the D1b W2 qid-map write
+	 * set) module parameters it programs the egress map that the GEMAC
+	 * front end requires before it registers a netdev.  Neither write has
+	 * ever run on hardware; the node is enabled so an attended boot can
+	 * reach the gates, and a normal boot stops in the read-only path.  An
+	 * access to an unknown register in this block can cut the CPU/console
+	 * path on a board with no validated restart, which is why every write is
+	 * gated and limited to the reviewed W2 write set.
 	 *
 	 * The port children are the switchdev model (not DSA): each wired port is
 	 * a netdev owned by its GEMAC node and the switch port names it with the
-	 * "ethernet" phandle. The port index (reg) is a devicetree ordering index
-	 * only - the mapping to the recovered LSW hardware port ids is still
-	 * unknown - and the GEMAC<->PHY mapping is the measured one (14380000 ->
-	 * phy2/eth0, 14400000 -> phy3/eth1, 14480000 -> phy4/eth2 (the bench
-	 * cable port), 14500000 -> phy5/eth3). gmac0 is unused by the vendor and
-	 * is not a switch port here.
+	 * "ethernet" phandle.  The port index (reg) is a devicetree ordering index
+	 * only; the measured hardware port number is given by "hisilicon,port"
+	 * (the vendor devicetree's GEMAC port cells: 9..12 for the four live
+	 * MACs) and the driver validates it against the populated qid rows.  The
+	 * GEMAC<->PHY mapping is the measured one (14380000 -> phy2/eth0,
+	 * 14400000 -> phy3/eth1, 14480000 -> phy4/eth2 (the bench cable port),
+	 * 14500000 -> phy5/eth3).  gmac0 is unused by the vendor and is not a
+	 * switch port here.
 	 */
 	lsw: ethernet-switch@11000000 {
 		compatible = "hisilicon,luofu-switch";
@@ -753,7 +760,7 @@
 		hisilicon,crg = <&crg>;
 		/* measured live value, vendor cell order; semantics unknown */
 		hisilicon,port-bitmap = <0xf01 0x1ff0>;
-		status = "disabled";
+		status = "okay";
 
 		ethernet-ports {
 			#address-cells = <1>;
@@ -761,21 +768,25 @@
 
 			ethernet-port@0 {
 				reg = <0>;		/* ordering index, not a hw id */
+				hisilicon,port = <9>;	/* measured MAC port */
 				ethernet = <&gmac1>;	/* eth0 */
 			};
 
 			ethernet-port@1 {
 				reg = <1>;
+				hisilicon,port = <10>;
 				ethernet = <&gmac2>;	/* eth1 */
 			};
 
 			ethernet-port@2 {
 				reg = <2>;
+				hisilicon,port = <11>;
 				ethernet = <&gmac3>;	/* eth2, the bench cable port */
 			};
 
 			ethernet-port@3 {
 				reg = <3>;
+				hisilicon,port = <12>;
 				ethernet = <&gmac4>;	/* eth3 */
 			};
 		};
@@ -801,12 +812,14 @@
 	 * ring engine: the register/channel model was measured by the
 	 * 2026-11-18 read-only inventory and the coherent rings, channel
 	 * initialization, interrupt/NAPI receive path and TX producer are
-	 * implemented, but the RX completion decode is still unknown, the
-	 * switch egress map does not exist and the engine is only started by
-	 * an explicit "luofu_pie.arm=1" opt-in. The node therefore stays
-	 * disabled. Do not enable it without the attended bring-up: the first
-	 * write to this block is a bench event, and the board has no validated
-	 * restart path.
+	 * implemented, but the RX completion decode is still unknown and the
+	 * engine is only started by an explicit "luofu_pie.arm=1" opt-in.  The
+	 * node is enabled so the attended boot can reach that gate; a normal
+	 * boot validates the resources and refuses without touching the block.
+	 * The first write to this block is a bench event, and the board has no
+	 * validated restart path.  The GEMAC netdev front end (patch 023) only
+	 * registers when this engine is armed and the switch egress map is
+	 * ready.
 	 *
 	 * The four interrupts are the four recovered per-vector lines; each
 	 * vector serves the channel pair named by interrupt-names (channels
@@ -826,7 +839,7 @@
 		dma-coherent;
 		hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
 		hisilicon,tx-ring = <0xc 0x2>;
-		status = "disabled";
+		status = "okay";
 	};
 
 	/* ---- Ethernet: five gigabit MACs + MDIO + internal switch -------- */
@@ -834,13 +847,17 @@
 	/*
 	 * GEMAC: binding
 	 * Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
-	 * (patch 009, netdev/phylink glue added by patch 020). The in-tree
-	 * driver is a DRAFT: the MAC owns the net_device and phylink front
-	 * end and forwards its transmit path to the PIE packet engine; it only
-	 * registers a netdev after the PIE backend has armed its data path,
-	 * and only the measured 1 Gbps link-up/link-down MAC words are written
-	 * (TARGET-DESIGN.md 7.1). The nodes are disabled - enabling one would
-	 * only log a probe error until the PIE engine is armed.
+	 * (patch 009, netdev/phylink glue added by patch 020, connectivity
+	 * readiness added by patch 023). The in-tree driver is a DRAFT: the
+	 * MAC owns the net_device and phylink front end (PHYLINK_NETDEV, so
+	 * the phylink resolve work drives the carrier) and forwards its
+	 * transmit path to the PIE packet engine.  It only registers a netdev
+	 * after the PIE backend has armed its data path AND the internal switch
+	 * has programmed and verified its egress qid map (patch 022); a debug
+	 * boot without those parameters logs the refusal and registers
+	 * nothing.  Only the measured 1 Gbps link-up/link-down MAC words are
+	 * written (TARGET-DESIGN.md 7.1) and the netdev address comes from the
+	 * standard MAC-address properties or a random fallback.
 	 * The bind keeps the lab shape plus the two CRG reset lines.
 	 * NEEDS-VERIFICATION: the gmac0..4 -> mdio phy mapping below is the
 	 * vendor runtime mapping (14380000 -> mdio addr 2, 14400000 -> 3,
@@ -867,7 +884,7 @@
 		clocks = <&crg LUOFU_CLK_GMAC1>;
 		resets = <&crg 0x30 0xf>, <&crg 0x30 0x10>;
 		reset-names = "mac-logic", "mac";
-		status = "disabled";
+		status = "okay";
 	};
 
 	gmac2: ethernet@14400000 {
@@ -878,7 +895,7 @@
 		clocks = <&crg LUOFU_CLK_GMAC2>;
 		resets = <&crg 0x30 0x11>, <&crg 0x30 0x12>;
 		reset-names = "mac-logic", "mac";
-		status = "disabled";
+		status = "okay";
 	};
 
 	gmac3: ethernet@14480000 {
@@ -889,7 +906,7 @@
 		clocks = <&crg LUOFU_CLK_GMAC3>;
 		resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
 		reset-names = "mac-logic", "mac";
-		status = "disabled";
+		status = "okay";
 	};
 
 	gmac4: ethernet@14500000 {
@@ -900,7 +917,7 @@
 		clocks = <&crg LUOFU_CLK_GMAC4>;
 		resets = <&crg 0x30 0x15>, <&crg 0x30 0x16>;
 		reset-names = "mac-logic", "mac";
-		status = "disabled";
+		status = "okay";
 	};
 
 	/*

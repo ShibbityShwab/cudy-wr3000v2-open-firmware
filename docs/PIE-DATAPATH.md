@@ -534,6 +534,11 @@ frames only if the switch delivers them to a host queue. The wired milestone the
 LSW's minimal port/qid map, not just PIE. This matches [REMAINING-DRIVERS.md](REMAINING-DRIVERS.md)
 sections 5.3 and 6.3. [I]
 
+Patch `022` now implements the W2 qid-map write (the populated table-A/table-B rows) behind
+`luofu_lsw.arm=1 luofu_lsw.qidmap=1`, which is the first concrete form of that egress map, but
+*which* queue/port a PIE TX descriptor selects remains [U]: the draft TX descriptor carries only
+length/address/owner, so the map is programmed but the TX->egress binding is unproven.
+
 **What is explicitly not invented here:** the numeric mapping between DT `port = <8..12>`, the
 LSW's internal port/vport ids (the `qid_map_set` code branches on ids 0-15, 40-47 and >47), and
 the PIE queue handle value. All three are [U]; section 11 gates them behind bench reads.
@@ -673,6 +678,20 @@ this run - it read registers, it did not exercise the engine or write anything.
 > GEMAC is now a draft phylink/netdev front end that only registers when this backend is armed
 > (P4 partial). Traffic delivery (P5) still needs the LSW egress map; the remaining [U] rows are
 > listed in section 10.
+>
+> **Status 2026-11-19 (connectivity session):** P4 is now readiness-gated end to end and the LSW
+> half of P5 is implemented - none of it executed on hardware. Patch `023` makes the GEMAC netdev
+> register only when *both* `luofu_pie_armed()` and the switch egress map
+> (`luofu_switch_ready()`, patch `022`) hold; it also fixes the phylink type to
+> `PHYLINK_NETDEV` - the draft used `PHYLINK_DEV`, which never drives the carrier from the
+> resolve work, so a real link would have looked dead to userspace - and adds the netdev address
+> source (standard devicetree MAC properties, else a random locally-administered fallback). Patch
+> `022` programs the LSW qid map behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` and only reports the
+> map ready after a full readback verification. The board DTS enables the pie, lsw and gmac1-4
+> nodes; a normal boot refuses in every driver without touching the hardware. P5's RX half is
+> unchanged (the PIE RX completion decode is [U], so no frame is delivered to the stack) and the
+> TX egress selection from a descriptor is still [U]; the attended boot sequence is
+> `luofu_lsw.arm=1 luofu_lsw.qidmap=1 luofu_pie.arm=1`.
 
 ### 11.1 Shape decision (recommended)
 
@@ -711,8 +730,8 @@ if a binding property is wanted, use documented `hisilicon,rx-ring`-style proper
 | **P1 - PIE binding + probe skeleton** | new `hisilicon,luofu-pie.yaml` (reg 64 KiB, 4 interrupts, clocks/resets, `dma-coherent`, SoC-variant data instead of the vendor `hwver` property); `CONFIG_LUOFU_PIE` (tristate, `depends on OF`) with a `[N]` provenance entry in the config; driver probe does clock/reset/ioremap/IRQ acquisition + `reg_init` ordering, then stops before enabling anything | `make target/linux/prepare` and `make target/linux/compile` RC=0 with `CONFIG_WERROR=y`; `dt_binding_check` PASS; board DTS zero dtc warnings; config re-derivation idempotent (only the new `[N]` line changes). No hardware. |
 | **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | **DONE 2026-11-18 as patch `020`** (host-compiled only, arm-gated): rings, recovered init/mask sequencing, NAPI RX poll (completion/refill only - no decode), TX producer, exported backend; compile/checkpatch/bindings/DTS clean. No hardware. |
 | **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | **DONE 2026-11-18** on the stock vendor boot (read-only, no writes): every allowlisted offset returned a plausible value, static words were stable, the dynamic pointers moved, and the programmed TX/RX channel configs equal the live overlay `tx_ring[0]/rx_ring[0]` (section 5.4; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` + `followup/`). Acceptance met for the register-readable [I]/[U] rows; see section 10 for what the run does **not** settle. |
-| **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), checks that the PIE backend is armed, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> phylink; enable only gmac3 (the bench-measured cable port) and the pie node in the DTS via `shared.patch` | **HALF DONE 2026-11-18 as patch `020`** (host-compiled only): the netdev/phylink glue + TX forwarding exist and are gated on the armed backend; the DTS nodes are still `disabled` and nothing has run. Bench gate unchanged: netdev appears, carrier up, TX doorbell advances the TX read pointer, no lockup; **no traffic claim** |
-| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the four live ports, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | M2-equivalent: ping between the host and a LAN port through our netdev with no vendor network module bound |
+| **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), checks that the PIE backend is armed **and the LSW egress map is ready**, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> phylink; enable the pie/lsw nodes and gmac1-4 in the DTS via `shared.patch` | **DONE as host-compiled code in patches `020`+`023`** (never executed): netdev/phylink glue + TX forwarding + the two readiness gates + `PHYLINK_NETDEV` carrier fix + MAC address source; DTS nodes enabled. Bench gate unchanged: netdev appears, carrier up, TX doorbell advances the TX read pointer, no lockup; **no traffic claim** |
+| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the populated rows, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | **HALF DONE as host-compiled code (patch `022`, never executed):** the W2 qid-map write set (table A ports 4-12, table B ports 40-43) is programmed behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` with readback verification, and the device-tree port model now carries the measured hardware port number (`hisilicon,port` 9-12). **Still open:** the PIE TX descriptor -> egress queue/port binding [U], the PIE<->LSW host-queue hook [U], and RX delivery (completion decode [U]). M2-equivalent (ping host<->LAN port) is not reachable from the code yet |
 | **P6 - upstream series** | split patches (PIE engine, GEMAC netdev, LSW minimal), bindings, config, DTS; document hardware-unverified behaviour honestly | review/checkpatch; bench evidence recorded separately |
 
 Patch numbering: the landed platform series is `001`-`012`; take the next free number in the
