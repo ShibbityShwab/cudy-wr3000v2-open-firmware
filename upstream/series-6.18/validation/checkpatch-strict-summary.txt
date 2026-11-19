@@ -19,3 +19,5 @@
 0019-arm-clk-luofu-clock-tree.patch :: total: 0 errors, 2 warnings, 2 checks, 931 lines checked
 0020-net-pie-datapath-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 2111 lines checked
 0021-net-lsw-init-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 1456 lines checked
+0022-net-lsw-qidmap-write-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 1051 lines checked
+0023-net-gmac-netdev-connect-luofu.patch :: total: 0 errors, 1 warnings, 0 checks, 178 lines checked

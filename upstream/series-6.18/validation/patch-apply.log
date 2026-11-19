@@ -125,3 +125,15 @@ patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
 patching file drivers/net/ethernet/hisilicon/luofu-switch.c
 patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
 PATCH_RC[0021-net-lsw-init-luofu.patch]=0
+### [22] 0022-net-lsw-qidmap-write-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+PATCH_RC[0022-net-lsw-qidmap-write-luofu.patch]=0
+### [23] 0023-net-gmac-netdev-connect-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+PATCH_RC[0023-net-gmac-netdev-connect-luofu.patch]=0

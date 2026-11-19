@@ -40,3 +40,7 @@ Applying: net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front e
 AM_RC[0020-net-pie-datapath-luofu.patch]=0
 Applying: net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
 AM_RC[0021-net-lsw-init-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add the gated Luofu LSW write path
+AM_RC[0022-net-lsw-qidmap-write-luofu.patch]=0
+Applying: net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+AM_RC[0023-net-gmac-netdev-connect-luofu.patch]=0

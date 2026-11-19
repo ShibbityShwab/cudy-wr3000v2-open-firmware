@@ -1,20 +1,20 @@
-d7d5b3e net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
-6aa68f9 net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
-03a96d4 clk: hisilicon: add the Luofu CRG clock tree
-aeb900d ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
-f18088c soc: hisilicon: add Luofu A/B boot selector
-2d85fa2 net: ethernet: hisilicon: add Luofu switch probe skeleton
-c597630 net: ethernet: hisilicon: add Luofu PIE packet engine draft
-c28d4bf clk: hisilicon: fix Luofu CRG reset polarity
-f7e0c09 PCI: dwc: add Luofu PCIe host controller
-0dc09c3 thermal: add Luofu thermal sensor driver
-2e965fc pinctrl: hisilicon: add Luofu peripheral pin controller
-483e131 power: reset: add Luofu machine restart driver
-2d26bdf net: ethernet: hisilicon: add partial Luofu GEMAC driver
-84f19f5 net: phy: add driver for HiSilicon Luofu "Genius" PHYs
-d2cc31e net: mdio: luofu: add MDIO bus controller
-350e804 spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
-dafd1d9 watchdog: luofu: add Hi5671Y watchdog support
-1b36b6e clk: hisilicon: add Luofu CRG clock and reset controller
-5308a1b ARM: head: materialize TEXT_OFFSET with mov_l
-fc92590 ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+dfd8e78 net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+d49c382 net: ethernet: hisilicon: add the gated Luofu LSW write path
+b249862 net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+cbd9ca5 net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+2e13faa clk: hisilicon: add the Luofu CRG clock tree
+4466553 ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+a521e3c soc: hisilicon: add Luofu A/B boot selector
+fca514a net: ethernet: hisilicon: add Luofu switch probe skeleton
+6f9a650 net: ethernet: hisilicon: add Luofu PIE packet engine draft
+cf0304c clk: hisilicon: fix Luofu CRG reset polarity
+cef996e PCI: dwc: add Luofu PCIe host controller
+75c8639 thermal: add Luofu thermal sensor driver
+2268373 pinctrl: hisilicon: add Luofu peripheral pin controller
+420c154 power: reset: add Luofu machine restart driver
+2ba4b10 net: ethernet: hisilicon: add partial Luofu GEMAC driver
+5ae303f net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+f597bc8 net: mdio: luofu: add MDIO bus controller
+674cf8a spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+d20ceb4 watchdog: luofu: add Hi5671Y watchdog support
+f339bb7 clk: hisilicon: add Luofu CRG clock and reset controller

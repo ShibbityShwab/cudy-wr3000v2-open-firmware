@@ -2,7 +2,7 @@
 
 Status: proposal for the luofu 6.18 series.  A real submission needs this
 as its own small patch, either as the last patch of the platform series
-(now 21/21) or as the first patch of the first driver series (MAINTAINERS
+(now 23/23) or as the first patch of the first driver series (MAINTAINERS
 get_maintainer lookups must find the new files).
 
 ## Maintainer identity
@@ -57,6 +57,7 @@ a later merge of those drivers does not need a second MAINTAINERS patch:
     F:	drivers/net/ethernet/hisilicon/luofu-pie.h
     F:	drivers/net/ethernet/hisilicon/luofu-switch.c
     F:	drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+    F:	drivers/net/ethernet/hisilicon/luofu-switch.h
     F:	drivers/pinctrl/hisilicon/
     F:	drivers/thermal/luofu_tvsensor.c
     F:	drivers/pci/controller/dwc/pcie-luofu.c
@@ -93,6 +94,14 @@ Notes on the variant:
   `drivers/net/ethernet/hisilicon/luofu-switch-regs.h` (0021).  Both
   headers are listed explicitly above, so the entry needs no further
   patterns for them.  [V]
+- Patches 0022 (gated LSW W3/W4/W5 write path) and 0023 (GEMAC netdev
+  readiness gate) add no devicetree binding file, YAML, directory or
+  Kconfig symbol either: 0022 extends the switch driver, its register
+  header, its binding and the LUOFU_SWITCH Kconfig help, and adds one
+  internal header `drivers/net/ethernet/hisilicon/luofu-switch.h`
+  (listed above); 0023 extends the GEMAC driver, its binding and the
+  LUOFU_GMAC Kconfig entry and adds no file.  The entry needs no further
+  patterns.  [V]
 - `F: arch/arm/boot/dts/hisilicon/luofu-*` covers the future board DTS
   patch; it does not exist in this series.  Do not use
   `F: arch/arm/boot/dts/hisilicon/` without the prefix: it would claim the
@@ -129,11 +138,11 @@ maintainers that the subsystem trees will route by their own entries.
 | RFC patches (0001-0003, 0006, 0011, 0013, 0017) | same entry when posted; the RFC marker goes in the subject, not in MAINTAINERS |
 | SMP patch 0018 (RFC, attended) | same entry when posted; its file is already covered by `F: arch/arm/mach-hisilicon/`; post only after the attended S2 bring-up and not as part of the UP-first set |
 | draft/refusing patches (0009, 0010, 0015, 0016) | do not post as merge candidates; if they are posted at all, use `[RFC PATCH]` and still reference the same entry (files are already covered) |
-| draft/refusing follow-ups (0020, 0021) | same entry when posted; 0020 is an arm-gated draft whose only PIE write path is opt-in and never executed, and 0021 is a read-only probe.  Do not post either as a merge candidate (see 04-validation.md section 16 and the PIE/LSW port-notes) |
+| draft/refusing follow-ups (0020-0023) | same entry when posted; 0020 is an arm-gated draft whose only PIE write path is opt-in and never executed, 0021 is a read-only probe, 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters, and 0023 registers nothing until the PIE arm and LSW gates all pass.  Do not post any of them as merge candidates (see 04-validation.md section 17 and the PIE/LSW/net port-notes) |
 
 The identity must be updated in all 13 YAML files at the same time as this
 entry; see `grep -rl 18537102+ShibbityShwab@users.noreply.github.com
 Documentation/devicetree/bindings/`.  Patch 0018 (SMP), patch 0019 (CRG
-clock tree), patch 0020 and patch 0021 add no YAML file, so they do not
-change that list (0019/0020/0021 extend existing YAML in place; their
-maintainers: fields are the same placeholder).
+clock tree) and patches 0020-0023 add no YAML file, so they do not change
+that list (0019-0023 extend existing YAML in place; their maintainers:
+fields are the same placeholder).
