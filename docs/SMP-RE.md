@@ -561,3 +561,121 @@ build/linux-kbuild/waves/upstream-6.18-smp-20261118/.
 * MISC-SOC-BLOCKS.md section 6.3 - the SYSCTRL page cell census (0x10100c00 SMP release
   word was recorded there as [U]; this document closes the decode and leaves the
   physical semantics open).
+
+---
+
+## 14. Bench update (2026-11-19): the release runs, CPU1 still fails; patch 033
+
+Status: **the decoded release has now run on the hardware** in the 2026-11-19 bench
+sessions (gate images built from the series with patches 018/028/029). CPU1 does not
+come online. This section records what the console proved, what that rules out, and
+the discriminating experiment that patch 033 adds. Host-only work: no device action in
+this session either; the measurements are quoted from the saved console captures in
+build/evidence-bench-gates/2026-11-19/ (local, gitignored).
+
+### 14.1 What the console measured [V]
+
+    [    0.135401] smp: Bringing up secondary CPUs ...
+    [    0.140325] luofu-smp: boot cpu=1 logical=1 pen=8070a000 resume 02a00000 -> 00200000
+    [    1.190342] CPU1: failed to come online
+    [    1.194237] smp: Brought up 1 node, 1 CPU
+
+(the one-second gap is __cpu_up()'s wait_for_completion_timeout(); the UART bytes
+between 0.14 s and 1.19 s belong to the boot CPU's own init, so the "failed to come
+online" line is the only SMP result). Patch 028's diagnostic therefore proves:
+
+* smp_prepare_cpus() ran: the SYSCTRL and CRG pages were mapped and the SCU path was
+  taken (scu_a9_has_base() is true for a Cortex-A9 and the CBAR-based mapping did not
+  fail; a failure prints "failed to map the SCU"); the fail-safe -ENODEV path was not
+  taken [V];
+* smp_boot_secondary() ran for cpu 1, logical 1 [V];
+* the pen word reads back 0x8070a000 and the CRG resume word reads 0x02a00000 before
+  and 0x00200000 after the read-modify-write [V];
+* the wakeup IPI call was reached (the release path does not branch around it) [V];
+* clearing all four resume bits instead of the vendor's per-core pair (patch 029) did
+  not change the result [V].
+
+### 14.2 The pen value is correct for our image layout [V]
+
+The value is __pa_symbol(secondary_startup) using the *runtime* phys-virt offset
+(CONFIG_ARM_PATCH_PHYS_VIRT). Two independent facts pin the decompressed image base:
+
+* the kernel prints "Setting up static identity map for 0x80700000 - 0x8070003c" for
+  __idmap_text_start (0xc0700000 virtual), i.e. __pa() = virtual - 0x40000000, so
+  PHYS_OFFSET = 0x80000000 and __pa(_text) = 0x80608000 (the runtime PHYS_OFFSET is
+  recomputed by head.S from the actual load PC and must be 16 MiB aligned; 0x80000000
+  is the only value consistent with the boot);
+* System.map: _text = stext = 0xc0608000, secondary_startup = 0xc070a000, i.e. the
+  symbol sits at _text + 0x102000. In the decompressed binary the image base is
+  0x80608000 and secondary_startup is therefore at 0x8070a000 - exactly the pen value.
+
+The 0x102000 offset is not a relocation bug: the 6.18 link places .head.text (0x290
+bytes) first and then aligns .text to a 1 MiB section boundary because
+CONFIG_STRICT_KERNEL_RWX is on; the vendor 5.10 kernel has .text immediately after
+.head.text, which is why its secondary_startup is at _text + 0x1680 (pen 0x80609680 on
+a vendor PHYS_OFFSET of 0x80600000). The pen value is the physical address of the
+entry in both kernels; the difference is layout, not semantics [V].
+
+### 14.3 What the stock loader side contributes [V]
+
+A host-side disassembly of the stock U-Boot (mtd1-uboota.bin, offsets behind the
+TRAILER-FORMAT decode) shows the secondary-core contract directly:
+
+* the early start code reads MPIDR; the non-boot core invalidates its caches and then
+  polls SYSCTRL + 0xc00 in a tight ldr/cmp/beq loop and, on a non-zero value, branches
+  to it with MMU and caches off ("mov pc, r7", with the literal 0x10100c00 at
+  file offset 0x5e0) [V];
+* the boot core's path writes 0 to the same word (a stale pen cannot survive boot),
+  writes 0x30003c00 to CRG + 0x50 (the watchdog "set" word, per the vendor DT) and
+  disables/invalidates/re-enables the SCU at 0x10180000 with the SCU control bit and
+  the invalidate-all register [V].
+
+That changes the discrimination: the pen consumer we must satisfy is that poll loop,
+which runs with the MMU and caches off, so the target address only has to be valid
+memory (it is) and the write only has to be visible (a device write followed by dsb
+is; patch 033 adds the explicit barrier the vendor's writel() already had) [I]. The
+wakeup IPI cannot be what releases a core that is already polling memory, so a silent
+CPU1 means one of: the core was not in that loop at release time (reset/power state,
+or a loader path that did not reach it), the write did not reach the register the core
+polls, or the core branched into the kernel entry and died before its first print [U].
+
+### 14.4 Patch 033: the discriminating experiment
+
+Patch 033 keeps the decoded release as the default (per-core resume-bit pair - the
+patch-029 all-four-bits variant becomes opt-in - and writel()/dsb ordering) and adds
+attended-only instrumentation, all off by default:
+
+| parameter | effect |
+| --- | --- |
+| luofu_smp_diag=1 | prints the SCU CBAR/CBCTRL/CBCONFIG/CPU-status bytes at prepare time, the physical pen/resume addresses and the entry address, then re-reads pen/resume/SCU 1 ms and 21 ms after the IPI |
+| luofu_smp_probe=1 | writes the pen as the address of a boot-built position-independent stub that polls the console UART, prints the low MPIDR nibble and "P", then branches to __pa_symbol(secondary_startup); "1P" on the console means CPU1 consumed the pen and reached the stub |
+| luofu_smp_power=1 | sets the target core's SCU power status to NORMAL before the release (tests the A9 power-mode path) |
+| luofu_smp_allbits=1 | the pre-033 behaviour: clear all four resume bits |
+| luofu_smp_force_pen=<pa> | bench-only pen override, no rebuild needed for an address experiment |
+| luofu_smp_retries=N | repeats pen + resume + IPI up to N times |
+
+The probe stub is the decisive measurement: it separates "CPU1 never consumed the
+pen" (no console output) from "CPU1 consumes the pen but the kernel entry fails"
+("1P" printed, CPU1 still offline). Both outcomes are actionable in the next attended
+session without another guess:
+
+| observation | interpretation | next attended step |
+| --- | --- | --- |
+| "1P" printed, CPU1 online | the entry works through the stub; the direct entry needs a closer look (cache-cleaned stub vs decompressed text; instruction-fetch/coherency) | keep the stub, diff its state against the direct jump (SCTLR/cache state), fold a minimal cache clean into the release path if it reproduces |
+| "1P" printed, CPU1 still offline | CPU1 consumes the pen and dies in the 6.18 secondary entry (page tables/idmap/secondary_data) | instrument __secondary_switched (a second stub that prints before/after __enable_mmu), compare against the vendor 5.10 entry; the layout difference at 0x102000 makes this the next suspect |
+| no output, SCU CPU status changes after the release | the core left its old power state but did not run the stub (or the UART write failed) | inspect the CRG resume-bit semantics (which bits are reset vs clock/power), try power=1 and retries |
+| no output, SCU CPU status unchanged (2 = dormant, 3 = power-down) | the core is not powered/released by the decoded pair of bits at all | measure the CRG page around 0x38 on the stock boot, look for a per-core power/clock gate the loader touches, and gated-write the exact vendor sequence only after that measurement |
+| no output, status NORMAL | the core is powered but not polling the pen (loader did not park it there on this boot path) | check the loader path for this boot (cold vs warm reset) and whether the U-Boot secondary stub is entered at all; this is the case where the IPI/SEV and the CRG bits are the only remaining levers |
+
+### 14.5 What patch 033 does NOT establish
+
+* Nothing in this section ran on hardware: 033 is compiled and series-validated only.
+* The SCU CPU-status and CBAR readings have never been taken on this board; the
+  SCU-enable path is believed to be a no-op because the decoded U-Boot enables the SCU
+  first, but that is an inference from the U-Boot disassembly [I].
+* The physical function of CRG + 0x38 bits 0x16..0x19 is still [U]; the vendor
+  property name "resume" is still the only description.
+* The vendor's pen write is the same physical-address value; there is no evidence that
+  any vendor-specific address encoding is missing [V negative: the value is a plain
+  __pa_symbol()].
+

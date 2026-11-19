@@ -1,0 +1,410 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -20,13 +20,7 @@
+  *
+  * The vendor smp_operations table has no smp_prepare_cpus() at all, so this
+  * port enables the Cortex-A9 SCU explicitly and maps the two pages before
+- * the release. The register values are the vendor's, but this exact sequence
+- * has never been run on this kernel: SMP-RE.md has the attended bring-up
+- * plan. If either page is missing from the devicetree the method stays inert
+- * (the boot remains UP) and smp_boot_secondary() fails with -ENODEV instead
+- * of writing a guessed address.
+- *
+- * The devicetree method name is deliberately NOT the vendor's
++ * the release. The devicetree method name is deliberately NOT the vendor's
+  * "hisilicon,hsan_smp": that string names the vendor's internal platform
+  * ("hsan" is their board family), while the documented method name for this
+  * SoC family is "hisilicon,luofu-smp". The board DTS must use:
+@@ -38,14 +32,58 @@
+  *
+  * The core-resume bit numbers are SoC facts, so they are driver data here
+  * (like the CRG gate table in the clock driver), not new DT properties.
++ *
++ * BENCH STATUS (2026-11-19, patch 033): the decoded release runs but CPU1
++ * still reports "failed to come online".  Everything that can be checked
++ * offline has been: the pen value is __pa_symbol(secondary_startup) and the
++ * decompressed image really is at the physical base the value assumes
++ * (__pa(__idmap_text_start) is printed by the kernel as 0x80700000, i.e.
++ * PHYS_OFFSET 0x80000000 + TEXT_OFFSET 0x00608000 = 0x80608000, and the
++ * System.map places secondary_startup at _text + 0x102000 because the
++ * 1 MiB-aligned .text section follows the 0x290-byte .head.text; the vendor
++ * 5.10 layout has secondary_startup at _text + 0x1680 instead).  The CRG
++ * resume word and the SCU read back exactly as expected.  The remaining
++ * question is therefore where CPU1 stops: before consuming the pen (core not
++ * in the bootloader pen loop / held in reset or power-down / wake-up not
++ * delivered) or after jumping into the kernel entry.  Patch 033 adds:
++ *
++ *   luofu_smp_diag=1	read SCU control/config/CPU status around the
++ *			release, re-read the SCU after 1 ms and 20 ms, and
++ *			print the pen/resume values before and after;
++ *   luofu_smp_probe=1	write the pen as the address of a tiny position
++ *			independent stub that prints the CPU id and "P" on
++ *			the console and then branches to the real
++ *			secondary_startup; "1P" on the console proves that CPU1
++ *			consumed the pen, no output proves it did not;
++ *   luofu_smp_power=1	set the target core's SCU power status to NORMAL
++ *			before the release (tests the A9 power-mode case);
++ *   luofu_smp_allbits=1	clear all four resume bits (the pre-033 029
++ *			behaviour; the default is now the vendor's per-core
++ *			pair, which is what the decoded method does);
++ *   luofu_smp_force_pen=<pa>	use an arbitrary physical pen value
++ *			(bench only; lets the attended session test a pen
++ *			override without a rebuild);
++ *   luofu_smp_retries=N	repeat pen + resume-bit + IPI up to N times
++ *			(bench only; 1 ms apart) if the first release did not
++ *			move the SCU CPU status of the target core.
++ *
++ * None of these change the default release; without parameters the patch
++ * behaves like the decoded vendor method plus barriers.  Compile-validated
++ * only: nothing in this file has been run on hardware yet.
+  */
++#include <linux/delay.h>
+ #include <linux/io.h>
++#include <linux/moduleparam.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+ #include <linux/printk.h>
+ #include <linux/sizes.h>
+ #include <linux/smp.h>
++#include <linux/string.h>
+ 
++#include <asm/barrier.h>
++#include <asm/cacheflush.h>
++#include <asm/memory.h>
+ #include <asm/page.h>
+ #include <asm/smp_plat.h>
+ #include <asm/smp_scu.h>
+@@ -67,29 +105,172 @@
+ 	{ 0x17, 0x19 },	/* CPU1 */
+ };
+ 
++/* Cortex-A9 SCU registers; diagnostics only, mainline owns 0x00-0x10. */
++#define LUOFU_SCU_CTRL		0x00
++#define LUOFU_SCU_CONFIG	0x04
++#define LUOFU_SCU_CPU_STATUS	0x08
++
++/* Console UART: used by the optional pen probe stub only. */
++#define LUOFU_UART0_PA		0x1010f000UL
++#define LUOFU_UART_LSR		0x14
++#define LUOFU_UART_LSR_THRE	0x20
++
+ static void __iomem *luofu_smp_pen;
+ static void __iomem *luofu_smp_resume;
++static void __iomem *luofu_scu_base;
++static phys_addr_t luofu_smp_pen_pa;	/* physical SYSCTRL + 0xc00 */
++static phys_addr_t luofu_smp_resume_pa;	/* physical CRG + 0x38 */
++
++/*
++ * Bench controls (patch 033).  platsmp.c is linked into the kernel image, so
++ * for a built-in object these parameters are unprefixed on the command line:
++ *
++ *	luofu_smp_diag=1 luofu_smp_probe=1
++ *
++ * (the module parameter name is the variable name; there is no "platsmp."
++ * prefix for built-in objects).
++ */
++static bool luofu_smp_diag;
++module_param(luofu_smp_diag, bool, 0);
++MODULE_PARM_DESC(luofu_smp_diag,
++		 "print SCU/pen/resume diagnostics around the CPU1 release");
++
++static bool luofu_smp_probe;
++module_param(luofu_smp_probe, bool, 0);
++MODULE_PARM_DESC(luofu_smp_probe,
++		 "release CPU1 through a UART-marker stub instead of the real entry");
++
++static bool luofu_smp_power;
++module_param(luofu_smp_power, bool, 0);
++MODULE_PARM_DESC(luofu_smp_power,
++		 "set the target core's SCU power status to normal before release");
++
++static bool luofu_smp_allbits;
++module_param(luofu_smp_allbits, bool, 0);
++MODULE_PARM_DESC(luofu_smp_allbits,
++		 "clear all four CRG resume bits instead of the target core pair");
++
++static unsigned long luofu_smp_force_pen;
++module_param(luofu_smp_force_pen, ulong, 0);
++MODULE_PARM_DESC(luofu_smp_force_pen,
++		 "bench override: use this physical address as the pen value");
++
++static unsigned int luofu_smp_retries;
++module_param(luofu_smp_retries, uint, 0);
++MODULE_PARM_DESC(luofu_smp_retries,
++		 "bench: repeat the release sequence this many times if needed");
++
++/*
++ * Optional pen probe stub.
++ *
++ * CPU1 starts at the pen address with the MMU and the caches off (the stock
++ * loader's secondary stub polls SYSCTRL+0xc00 and branches there), so a flat
++ * position independent instruction sequence is enough.  It polls the console
++ * UART's LSR.THRE, prints the low MPIDR nibble as an ASCII digit and a 'P',
++ * then branches to __pa_symbol(secondary_startup):
++ *
++ *	movw	r0, #0xf000		@ UART0 low half
++ *	movt	r0, #0x1010		@ r0 = 0x1010f000
++ *	ldrb	r1, [r0, #0x14]		@ LSR
++ *	tst	r1, #0x20		@ THR empty?
++ *	beq	-4 * 4
++ *	mrc	p15, 0, r3, c0, c0, 5	@ MPIDR
++ *	and	r3, r3, #0xf
++ *	add	r3, r3, #'0'
++ *	strb	r3, [r0]		@ CPU id digit
++ *	mov	r1, #'P'
++ *	strb	r1, [r0]		@ 'P' = pen consumed
++ *	ldr	r2, [pc]
++ *	bx	r2
++ *	.word	__pa_symbol(secondary_startup)
++ *
++ * The sequence is built at boot and its cache lines are cleaned to the point
++ * of coherency; CPU1 fetches it with the caches off.  The stub clobbers only
++ * r0-r3, which the real entry does not consume.  It writes the console
++ * UART, hence the parameter gate.
++ */
++static u32 luofu_smp_probe_stub[16] __aligned(64);
++
++static void __init luofu_smp_build_probe_stub(void)
++{
++	u32 *s = luofu_smp_probe_stub;
++
++	s[0] = 0xe30f0000;	/* movw	r0, #0xf000 */
++	s[1] = 0xe3410010;	/* movt	r0, #0x1010 */
++	s[2] = 0xe5d01014;	/* ldrb	r1, [r0, #0x14] */
++	s[3] = 0xe3110020;	/* tst	r1, #0x20 */
++	s[4] = 0x0afffffc;	/* beq	2b */
++	s[5] = 0xee103fb0;	/* mrc	p15, 0, r3, c0, c0, 5 */
++	s[6] = 0xe203300f;	/* and	r3, r3, #0xf */
++	s[7] = 0xe2833030;	/* add	r3, r3, #'0' */
++	s[8] = 0xe5c03000;	/* strb	r3, [r0] */
++	s[9] = 0xe3a01050;	/* mov	r1, #'P' */
++	s[10] = 0xe5c01000;	/* strb	r1, [r0] */
++	s[11] = 0xe59f2000;	/* ldr	r2, [pc] */
++	s[12] = 0xe12fff12;	/* bx	r2 */
++	s[13] = (u32)__pa_symbol(secondary_startup);
++
++	/*
++	 * Make the instructions visible to a core that starts with the caches
++	 * off.  The array is 64-byte aligned and 64 bytes long, so no other
++	 * variable shares its cache lines.
++	 */
++	sync_cache_w(luofu_smp_probe_stub);
++}
++
++static u32 luofu_scu_read(unsigned int off)
++{
++	if (!luofu_scu_base)
++		return 0;
++	return readl_relaxed(luofu_scu_base + off);
++}
++
++/*
++ * The A9 SCU exposes the two power-status bits of each core in one byte per
++ * core at 0x08 (same access width as mainline scu_set_power_mode_internal():
++ * readb(scu_base + 0x08 + cpu) & 3).
++ */
++static unsigned int luofu_scu_cpu_status(unsigned int cpu)
++{
++	if (!luofu_scu_base)
++		return 0xff;
++	return readb_relaxed(luofu_scu_base + LUOFU_SCU_CPU_STATUS + cpu) & 0x3;
++}
+ 
+-static void __init luofu_enable_scu(void)
++static void __init luofu_scu_setup(void)
+ {
+-	void __iomem *scu_base;
++	unsigned long pa;
+ 
+ 	if (!scu_a9_has_base())
+ 		return;
+ 
+-	scu_base = ioremap(scu_a9_get_base(), SZ_4K);
+-	if (!scu_base) {
+-		pr_err("luofu: failed to map the SCU\n");
++	pa = scu_a9_get_base();
++	if (!pa) {
++		pr_warn("luofu-smp: CBAR reported no SCU base, SCU left alone\n");
++		return;
++	}
++
++	luofu_scu_base = ioremap(pa, SZ_4K);
++	if (!luofu_scu_base) {
++		pr_err("luofu-smp: cannot map the SCU at %08lx\n", pa);
+ 		return;
+ 	}
+ 
+-	scu_enable(scu_base);
+-	iounmap(scu_base);
++	/* Idempotent: scu_enable() returns early when the SCU is already on. */
++	scu_enable(luofu_scu_base);
++
++	if (luofu_smp_diag)
++		pr_info("luofu-smp: CBAR %08lx scu_ctrl %08x scu_config %08x scu_cpu_status %02x\n",
++			pa, luofu_scu_read(LUOFU_SCU_CTRL),
++			luofu_scu_read(LUOFU_SCU_CONFIG),
++			luofu_scu_read(LUOFU_SCU_CPU_STATUS));
+ }
+ 
+-static void __iomem *__init luofu_iomap_compat(const char *compat)
++static void __iomem *__init luofu_iomap_compat(const char *compat,
++					       phys_addr_t *pa)
+ {
+ 	struct device_node *np;
++	struct resource res;
+ 	void __iomem *base;
+ 
+ 	np = of_find_compatible_node(NULL, NULL, compat);
+@@ -98,6 +279,12 @@
+ 		return NULL;
+ 	}
+ 
++	*pa = 0;
++	if (of_address_to_resource(np, 0, &res))
++		pr_warn("luofu: %s has no usable reg property\n", compat);
++	else
++		*pa = res.start;
++
+ 	base = of_iomap(np, 0);
+ 	of_node_put(np);
+ 	if (!base)
+@@ -108,23 +295,57 @@
+ 
+ static void __init luofu_smp_prepare_cpus(unsigned int max_cpus)
+ {
++	phys_addr_t sysctrl_pa, crg_pa;
+ 	void __iomem *sysctrl, *crg;
+ 
+-	luofu_enable_scu();
++	luofu_scu_setup();
+ 
+-	sysctrl = luofu_iomap_compat(LUOFU_SYSCTRL_COMPAT);
+-	crg = luofu_iomap_compat(LUOFU_CRG_COMPAT);
++	sysctrl = luofu_iomap_compat(LUOFU_SYSCTRL_COMPAT, &sysctrl_pa);
++	crg = luofu_iomap_compat(LUOFU_CRG_COMPAT, &crg_pa);
+ 	if (!sysctrl || !crg)
+ 		return;
+ 
+ 	luofu_smp_pen = sysctrl + LUOFU_SMP_PEN_OFFSET;
+ 	luofu_smp_resume = crg + LUOFU_CRG_RESUME_OFFSET;
++	luofu_smp_pen_pa = sysctrl_pa + LUOFU_SMP_PEN_OFFSET;
++	luofu_smp_resume_pa = crg_pa + LUOFU_CRG_RESUME_OFFSET;
++
++	if (luofu_smp_probe)
++		luofu_smp_build_probe_stub();
++
++	if (luofu_smp_diag)
++		pr_info("luofu-smp: pen %08llx resume %08llx resume=%08x entry %08lx probe %d stub %08lx\n",
++			(unsigned long long)luofu_smp_pen_pa,
++			(unsigned long long)luofu_smp_resume_pa,
++			readl_relaxed(luofu_smp_resume),
++			(unsigned long)__pa_symbol(secondary_startup),
++			luofu_smp_probe,
++			(unsigned long)__pa(luofu_smp_probe_stub));
++}
++
++static void luofu_smp_release(unsigned int cpu, u32 resume_mask,
++			      u32 pen_value)
++{
++	/* 1. pen word: publish the secondary entry address before the IPI. */
++	if (cpu_logical_map(cpu) != 0)
++		writel(pen_value, luofu_smp_pen);
++	dsb(sy);
++
++	/* 2. CRG resume bits of the target core (read-modify-write). */
++	writel(readl_relaxed(luofu_smp_resume) & ~resume_mask,
++	       luofu_smp_resume);
++	dsb(sy);
++
++	/* 3. ARM wakeup IPI, then an event in case the core is in WFE. */
++	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
++	sev();
+ }
+ 
+ static int luofu_smp_boot_secondary(unsigned int cpu, struct task_struct *idle)
+ {
+-	unsigned int bit0, bit1;
+-	u32 val;
++	unsigned int bit0, bit1, retries;
++	phys_addr_t pen_pa;
++	u32 val, resume_mask;
+ 
+ 	if (!luofu_smp_pen || !luofu_smp_resume)
+ 		return -ENODEV;
+@@ -134,31 +355,55 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	/*
+-	 * The vendor code skips the pen write for a logical CPU 0 and handles
+-	 * only the two cores of this SoC; the logical map for CPU1 is 1.
+-	 */
+-	if (cpu_logical_map(cpu) != 0)
+-		writel_relaxed(__pa_symbol(secondary_startup), luofu_smp_pen);
+-
+-	/*
+-	 * Release all four resume bits (0x16/0x18 and 0x17/0x19): the vendor
+-	 * pairs them to cores, but the boot capture cannot tell which pair a
+-	 * given logical CPU needs and leaving one set has kept CPU1 offline.
+-	 * Clear both pairs with one RMW; the rest of the word is preserved.
+-	 */
+ 	bit0 = luofu_resume_bits[cpu][0];
+ 	bit1 = luofu_resume_bits[cpu][1];
+-	val = readl_relaxed(luofu_smp_resume);
+-	writel_relaxed(val & ~(BIT(0x16) | BIT(0x17) | BIT(0x18) | BIT(0x19)),
+-		       luofu_smp_resume);
++	resume_mask = BIT(bit0) | BIT(bit1);
++	if (luofu_smp_allbits)
++		resume_mask = BIT(0x16) | BIT(0x17) | BIT(0x18) | BIT(0x19);
++
++	pen_pa = (phys_addr_t)__pa_symbol(secondary_startup);
++	if (luofu_smp_force_pen) {
++		pen_pa = (phys_addr_t)luofu_smp_force_pen;
++		pr_warn("luofu-smp: BENCH pen override %pa\n", &pen_pa);
++	} else if (luofu_smp_probe) {
++		pen_pa = (phys_addr_t)__pa(luofu_smp_probe_stub);
++	}
+ 
+-	pr_info("luofu-smp: boot cpu=%u logical=%u pen=%08x resume %08x -> %08x\n",
+-		cpu, cpu_logical_map(cpu),
+-		readl_relaxed(luofu_smp_pen),
+-		val, readl_relaxed(luofu_smp_resume));
++	if (luofu_smp_power && luofu_scu_base) {
++		int ret = scu_cpu_power_enable(luofu_scu_base, cpu);
+ 
+-	arch_send_wakeup_ipi_mask(cpumask_of(cpu));
++		pr_info("luofu-smp: scu power enable cpu=%u ret=%d cpu_status=%02x\n",
++			cpu, ret, luofu_scu_cpu_status(cpu));
++	}
++
++	val = readl_relaxed(luofu_smp_resume);
++	pr_info("luofu-smp: boot cpu=%u logical=%u pen=%pa resume %08x (mask %08x) scu_status=%02x\n",
++		cpu, cpu_logical_map(cpu), &pen_pa, val, resume_mask,
++		luofu_scu_cpu_status(cpu));
++
++	luofu_smp_release(cpu, resume_mask, (u32)pen_pa);
++
++	if (luofu_smp_diag) {
++		udelay(1000);
++		pr_info("luofu-smp: +1ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x\n",
++			readl_relaxed(luofu_smp_pen),
++			readl_relaxed(luofu_smp_resume),
++			luofu_scu_read(LUOFU_SCU_CTRL),
++			luofu_scu_cpu_status(cpu));
++		mdelay(20);
++		pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x\n",
++			readl_relaxed(luofu_smp_pen),
++			readl_relaxed(luofu_smp_resume),
++			luofu_scu_read(LUOFU_SCU_CTRL),
++			luofu_scu_cpu_status(cpu));
++	}
++
++	for (retries = luofu_smp_retries; retries > 0; retries--) {
++		mdelay(1);
++		pr_info("luofu-smp: retry %u cpu_status=%02x\n", retries,
++			luofu_scu_cpu_status(cpu));
++		luofu_smp_release(cpu, resume_mask, (u32)pen_pa);
++	}
+ 
+ 	return 0;
+ }
