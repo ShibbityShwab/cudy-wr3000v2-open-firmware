@@ -942,7 +942,7 @@ hardware.**
 | Q4 | qid map, port > 47 class | word index `slot/2 + port*4 - 64` of table A, one word per slot written twice per pair of slots | code shape only partially recovered [V]/[U] | deliberately not modelled |
 | P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` -> u64 `0xf01_0000_1ff0`; the allocator walk visits ports {4..12, 32, 40..43} | value [V] in the base DT and on the live node; decode [V] (6.3, reproduces the measured qid map) | baseline check only, never used to enable anything |
 | D1 | queue/flow DDR | `queue = 0x80000000/4 MiB`, `flow = 0x80400000/1 MiB` | base/size measured live after the loader fixup [V]; layout inside [U]; how the engine is told the base [U] | validated from DT, never ioremapped or written |
-| E1 | EQM indirect table (queue table 19 / 1000-cell entry, tables 16/32/34/35/37/38), IFC/L2/VLAN tables | command word (decoded 2026-11-19, 7.5) and entry shapes partially decoded (7.8); the table *contents* for a working queue map are [U] | command word [V]; table content/use [U] | excluded from the write set by design |
+| E1 | EQM indirect table (queue table 19 / 1000-cell entry, tables 16/32/34/35/37/38), IFC/L2/VLAN tables | command word (decoded 2026-11-19, 7.5); tables **19/32/35/17/16/34** entry shapes and per-entry values fully decoded 2026-11-19 (7.9) and implemented behind a gate; table 38 (vendor table-manager id) and the ports 40..43 VP class remain [U], and so do the IFC/L2/VLAN tables | command word [V]; decoded entry shapes/values [V]; field semantics [U]; table 38 / VP class / IFC-L2-VLAN [U] | **tables 19/32/35/17/16/34 implemented behind luofu_lsw.qminit=1** (W7, patch 032); table 38 + VP class excluded by design; IFC/L2/VLAN untouched |
 
 **What patch `021` verified without writing (W2 exit, read-only).**  The
 derived allocation model (Q1-Q3) reproduces all 384 measured qid-map words
@@ -1031,14 +1031,85 @@ disassembled); the *meaning* of every field and the contents needed for our own 
 Row E1 therefore stays excluded: programming that state is the next RE/bench item, not part of
 patch 025.
 
-**The reviewed TX-adjacent write set as of patch 025:** W3 (CRG gates + resets, patch 022), W4
-(R1/R3/R5 probe configuration, patch 025), W5 (qid maps, patch 022).  That is the minimum set
-whose *values* are pinned by the 2026-11-18 measurement and whose readback is computable; it is
-not yet proven to be sufficient for forwarding, because the EQM queue tables (E1) and the
-per-frame egress selection are outside it.  The attended W4 run is still worth doing: it verifies
-that the three probe-configuration derivations are correct against the real block and that the
-block survives them, one gate at a time, with restore-on-mismatch.
+**The reviewed TX-adjacent write set as of patch 032:** W3 (CRG gates + resets, patch 022), W4
+(R1/R3/R5 probe configuration, patch 025), W5 (qid maps, patch 022), W6 (EPS channel map, patch
+031) and, since 2026-11-19, W7 (the EQM queue-manager init tables 19/32/35/17/16/34, patch 032 -
+section 7.9).  That is the set whose *values* are pinned by the 2026-11-18 measurement (W3-W6) or
+derived from the vendor boot code plus build-time tables (W7), and whose readback is computable;
+it is still not proven to be sufficient for forwarding, because table 38 (per-qid scheduler
+state) and the virtual-port class are excluded, and because no frame has ever been transmitted
+through the block.  The attended W7 run is the first one that can answer the per-frame egress
+question: with the queue/deque configuration in place, a single ping either reaches the wire or
+the descriptor port tag is provably not enough.
 
+### 7.9 W7: the EQM queue-manager init write set (2026-11-19, patch 032)
+
+This is the decode that closes the "queue-manager/EQM init" half of row E1: what the vendor
+writes into the EQM indirect tables at boot, with which values, and how the per-port MAC/queue
+group maps onto the EPS dequeues.  Source: the pinned vendor fixture
+rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_dp.ko (sha256 in the lane SUMMARY), functions
+hi_queue_init@0x507c, hi_dp_probe@0x8b0, hi_eqm_write_tab@0x1cdc, hi_eqm_read_tab@0x1e18, the
+helpers at 0x20f8, 0x2184, 0x22ec, 0x223c, 0x24d0, 0x2b40 and 0x31d4, and the module's build-time
+queue-group table in .data+0xd0 (46 entries x 56 B).  Host-only read-only disassembly; no vendor
+binary is in this tree and no register was touched.
+
+**The indirect engine (both directions) [V code shape, corroborated by a measurement].**  The
+command word written to eqm+0x48 is index[15:0] | table[26:20] | bit30 write | bit31 start;
+eqm+0x48 is polled until bit31 clears; bit29 is the operation-error status.  Write data goes to
+eqm+0x5c/+0x60/+0x64/+0x68/+0x70, read data comes from eqm+0x4c/+0x50/+0x54/+0x58/+0x6c, and one
+operation moves **at most five words** (the vendor clamps its 8-word buffer to 5).  The 2026-11-18
+measured idle word eqm+0x48 = 0x41100012 decodes as a completed *write* of table 17, index 18, and
+eqm+0x5c = 0xbb8 = 3000 is exactly the rate of that profile write - the vendor's last queue-init
+operation, i.e. independent measured corroboration of the command-word decode and of the table-17
+profile shape.  (Section 7.5's statement that bit29 is the error bit is right; patch 025's driver
+header had recorded bit5 and patch 032 corrects it.)
+
+**The write set (value derivation per row).**
+
+| # | table, index | vendor write shape | value source |
+| --- | --- | --- | --- |
+| EQM-1 | 19, 0 | 0xff-filled 8-word buffer with word 1 low14 = 1000, then 5 words written: {0xffffffff, 0xffffc3e8, 0xffffffff, 0xffffffff, 0xffffffff} | vendor constant [V] |
+| EQM-2 | 32, P (P = port 4..12) | read 5 words, write byte0 = P*8, then 3-bit slot priorities in word 1 bits 0..23 = 7..0 for slots 0..7, other bits preserved | vendor formula [V]; P*8 is the group's build-time table field (+36) [V] |
+| EQM-3 | 35, qid | 5 words: {0x00070000, 0, 0, 0, 0} (byte 2 = 7) | vendor constant [V] |
+| EQM-4 | 17, profile | 5 words: (rate & 0x1fff), 0x10000000, (0xffff0000 \| rate), ((sch & 0x1ff) << 20) \| cells, 0x07f03fff; cells = rate if (eqm+0x38 & 0x3fff) < rate else rate / 2 (divider = the vendor's build-time 2) | vendor formula [V] |
+| EQM-5 | 16, qid>>4 | read 5 words, byte (qid & 15) = 0x80 \| (profile & 0x1f), bits 6:5 preserved (16 qids per row) | vendor formula [V] |
+| EQM-6 | 34, qid | read 5 words, word 0 = queue-port in bits 5:0 (= the LSW hardware port P), slot in bits 17:14, bit 13 = 1, bit 18 = 1; bits 6..12 and 19..31 preserved | vendor formula [V] |
+
+The per-group constants are the vendor's build-time queue-group table rows for ports 4..12:
+{profile base, profile selector, scheduler id, rate} = {0x10, 1, 0x20, 3000} for port 4,
+{0x10, 2, 0x20, 3000} for ports 5..7 and {0x00, 8, 0x20, 2500} for ports 8..12;
+profile(port, slot) = base + (selector <= 7 ? selector : slot) and
+qid(port, slot) = 1 + port_index*8 + slot, with port_index the position in the populated-port
+allocation model (7.2/7.3, the same model patch 022 programs and validates).  Per group that is
+one table-32 record, and per qid three records (35/16/34) plus one shared profile record (17):
+nine wired groups -> **169 entries / 845 words** for qids 1..72 and profiles {0..7, 17, 18}.
+
+**What this says about the MAC TX egress selection.**  The per-frame path stays [U] but is now
+bounded: a PIE TX descriptor carries the egress port tag (+8 bits 3:0) and its 1 << port bitmap,
+and no queue id or queue handle (the vendor's per-port queue handle in the PIE context is zero in
+this build, 7.8).  The vendor programs tables 32 and 34 before any frame flows, i.e. the engine has
+a queue-port/deque map for every populated port; whether a tagged descriptor then selects the
+queue directly or needs one of the excluded records (table 38, the VP class) is the silicon
+question the W7 attended run can now answer.
+
+**Deliberately excluded from W7 (documented, not forgotten):**
+- **table 38** (per-qid scheduler/buffer state): the vendor writes a table-manager id obtained
+  from its own software table manager (hi_tab_mgr_alloc_hash) into byte 0; no clean driver can
+  reproduce that id space, and the validity semantics are [U];
+- **the ports 40..43 virtual-port class** (table 32 indices 35..38 and table 34 indices 227..230
+  in the vendor code): the wired GEMAC egress path does not use the Wi-Fi/VP class on this board
+  and its index space is [U];
+- the queue/flow DDR contents (never mapped or written) and the IFC/L2/VLAN tables (D2 scope).
+
+**Gate and safety model.**  Patch 032 adds the fifth attended gate luofu_lsw.qminit=1 (requires
+arm=1 egress=1 qidmap=1 eps=1).  It refuses unless the EQM indirect interface is idle, snapshots
+all 169 target entries (each read twice and required stable), computes the expected content from
+the snapshot plus the formulas above, writes every entry through the decoded engine, reads every
+entry back against the computed value, and restores the whole snapshot on the first mismatch
+(also in remove()).  luofu_switch_ready() now requires W3+W4+W5+W6+W7 to be verified, so the GEMAC
+front end still cannot register a netdev on a partial data path (7.8, SKELETON-SMOKE "LSW QM/EQM
+session").  As with every write stage before it: implemented host-side only, never executed on
+hardware, and a successful W7 boot means "the recovered write set verified", not "frames flow".
 
 ---
 
@@ -1467,8 +1538,9 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling - **implemented behind `luofu_lsw.arm=1` (patch `022`); never executed**; the first attended run should use this gate alone and record the snapshot | power cycle |
 | W4 | R1/R3/R5 probe configuration only (`luofu_lsw.arm=1 luofu_lsw.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_lsw.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
 | W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
-| W6 | default-forwarding/TX test | D1c exit - **the forwarding/TX test is still open because the EQM queue tables (E1) and the PIE TX egress selection are [U]** | power cycle |
-| W7 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
+| W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
+| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **the EQM queue/deque configuration is now recovered and implemented behind luofu_lsw.qminit=1 (patch `032`); never executed. This is the first boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
+| W8 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
 
@@ -1480,7 +1552,8 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | LSW register writes hang the CPU/console path | high | write set only after W1/W2; attended; recovery armed; one write per power cycle if needed |
 | wrong reset pulse kills the switch and needs power cycle | med | reset deassert last; test on stock first |
 | unknown EQM command-word encoding | med | command word decoded 2026-11-19 (7.5); table *contents* and the queue->egress use remain [U], so do not write EQM tables until traced |
-| probe configuration written but no EQM queue tables -> no forwarding, misleading "ready" | med | `luofu_switch_ready()` only means the reviewed write set is verified, not that a frame flows; the attended note must check counters/traffic before treating a link as working (7.8) |
+| probe configuration written but no EQM queue tables -> no forwarding, misleading "ready" | med | `luofu_switch_ready()` only means the reviewed write set (now including the W7 EQM tables) is verified, not that a frame flows; the attended note must check counters/traffic before treating a link as working (7.8/7.9) |
+| W7 writes EQM tables whose field semantics are [U]; a wrong but self-consistent write passes readback | med | values are the vendor's own init writes (code shape + build-time tables), the snapshot restores on any readback mismatch, the indirect interface must be idle and every entry stable before the first write, and the block is powered down on refusal; table 38/VP class are excluded rather than guessed |
 | hardware L2 defaults (unknown unicast) misforward in D1 | med | measure from W6; possibly keep bridge promisc until D2 |
 | port-id mapping between MAC `port` and LSW ids unknown | med | read the vendor port/queue dumps (12.2) |
 | vendor userspace expectations (`hi_cfm`, `/proc/hsan`) not met | low for D1 | our userspace is standard OpenWrt; document the divergence |

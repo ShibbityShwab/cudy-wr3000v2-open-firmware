@@ -3584,3 +3584,98 @@ The isolated clones `/home/shibbityshwab/openwrt-lab-pie-decode/` and `...-full/
 clone and `openwrt-lab-selectorfix-img` were not modified. Disassembly regeneration commands are
 the ones in PIE-DATAPATH.md section 13.2; the full evidence map is
 `target-skeleton/docs/incoming/pie-decode/SUMMARY.md`.
+
+## 2026-11-19 (LSW QM/EQM session): EQM queue-manager init write stage (patch 032)
+
+Host-only lane. No device access of any kind (no SSH, TFTP, flash or UART); the box stayed on the
+EPS-gate image (patch 031) and nothing was reflashed. Publication remains NOT READY.
+
+### What changed
+
+- `luofu-switch.c` / `luofu-switch-regs.h` (patch 032): a fifth attended write gate,
+  `luofu_lsw.qminit=1` (requires `arm=1 egress=1 qidmap=1 eps=1`), implementing the recovered
+  EQM queue-manager init tables 19/32/35/17/16/34 for the nine wired queue groups (ports 4..12,
+  qids 1..72, profiles {0..7,17,18}) - 169 entries / 845 words. The stage snapshots every entry
+  (two reads, required stable), requires the EQM indirect interface idle, computes the expected
+  content from the snapshot plus the vendor formulas, writes through the decoded indirect engine,
+  reads everything back against the computed value, and restores the whole snapshot on the first
+  mismatch (also in `remove()`). The decoded indirect protocol is index/table/write/start in
+  `eqm+0x48` with bit29 error and at most five data words per operation.
+- Patch 032 also corrects patch 025's EQM indirect error-bit decode (measured idle word
+  0x41100012 has bit29 clear; the driver header had recorded bit5) and wires the W6 EPS
+  channel-map snapshot into driver state so a later failure and `remove()` restore it too.
+- Readiness is now complete-write-set based: `luofu_switch_ready()` is only true when W3+W4+W5+W6+W7
+  are all programmed and verified. The GEMAC front end therefore cannot register a netdev on a
+  partial data path; its refusal message names the whole gate chain.
+- Recovery/decoding evidence for the write values: the pinned `hi_lsw_dp.ko` fixture (no vendor
+  binary added to the tree): `hi_queue_init@0x507c`, the helpers at 0x20f8/0x2184/0x22ec/0x223c/
+  0x24d0/0x2b40/0x31d4, `hi_eqm_write_tab@0x1cdc`, `hi_eqm_read_tab@0x1e18` and the build-time
+  queue-group table at `.data+0xd0`. The measured idle register state (`eqm+0x48 = 0x41100012`,
+  `eqm+0x5c = 0xbb8`) independently corroborates the command-word decode and the table-17
+  profile shape: the vendor's last queue-init write was table 17, index 18, first data word 3000.
+
+### Gate matrix after patch 032 (all paths fail closed; default boot unchanged)
+
+| boot parameters | switch driver | GEMAC netdevs |
+| --- | --- | --- |
+| none | read-only baseline/probe/refusal; no write | none |
+| `arm=1` | W3 power + snapshot; refuse; no LSW register write | none |
+| `arm=1 egress=1` | W3+W4 verified; then qid map absent -> restore, power down, refuse | none |
+| `arm=1 egress=1 qidmap=1` | W3+W4+W5 verified; then eps absent -> restore, refuse | none |
+| `arm=1 egress=1 qidmap=1 eps=1` | W3-W6 verified; then qminit absent -> restore, refuse | none |
+| `arm=1 egress=1 qidmap=1 eps=1 qminit=1` | W3-W7 all verified -> `luofu_switch_ready()` true | requires `luofu_pie.arm=1` too |
+| any write gate without `arm=1` | explicit -EINVAL refusal | none |
+
+### Validation (isolated clone under build/linux-kbuild/waves/2026-11-19-qm-decode/; shared clone and openwrt-lab-selectorfix-img untouched)
+
+- **Patch/series:** patch 032 generated from the 001-031 tree; `001`-`032` applies with 0 failed
+  hunks (`series-apply-001-032`, 32/32 patches).
+- **prepare/compile:** isolated reflink clone of the selectorfix 001-031 OpenWrt lab under the wave
+  directory with patch 032 added, `make target/linux/prepare` RC=0 and `make target/linux/compile`
+  RC=0 with `CONFIG_WERROR=y` and zero compiler warnings from the changed files (log hashes in
+  the lane SUMMARY).
+- **checkpatch:** 0 errors, 0 checks, the one expected "missing commit description" warning that
+  every pure unified diff in this series produces.
+- **DTS/binding/config:** patch 032 changes no devicetree, binding or Kconfig/config symbol, so the
+  001-031 `dt_binding_check`/board-DTS/config-idempotence results stand unchanged; they were
+  re-run in the clone and recorded (see SUMMARY).
+- **Never executed:** no stage of this driver has run on hardware; the first W7 boot is an
+  attended bench event.
+
+### What this proves and what it does not
+
+Proven host-side: the recovered write set is the vendor's own init write shape for the nine
+populated wired queue groups; the indirect engine protocol is decoded and corroborated by the
+measured idle register state; the five-gate composition, conformance checks, value derivations and
+restore paths are reviewable code; the 001-032 series applies and compiles clean.
+
+Not proven (see LSW-SPEC.md section 7.9): every hardware behaviour - that the tables accept the
+writes, that a configured queue manager lets a PIE TX descriptor egress, and the RX path. Table 38
+(per-qid scheduler state, needs the vendor table-manager id) and the ports 40..43 virtual-port
+class are deliberately excluded; the IFC/L2/VLAN tables and the queue/flow DDR layout remain [U].
+A successful W7 boot means "the recovered write set verified", not "forwarding works".
+
+### Attended boot sequence (recovery card armed; physical RESET+TFTP is the only recovery)
+
+This is the first boot that should run the whole chain and then test traffic:
+
+1. **W3 only** (`luofu_lsw.arm=1`): expect the W3 snapshot log and the refusal. Confirms the block
+   is still in the measured power state after the previous sessions.
+2. **W3+W4+W5** (`... egress=1 qidmap=1`): expect the R1/R3/R5 and qid-map programmed-and-verified
+   lines and the refusal that names the missing EPS gate.
+3. **W3-W6** (`... eps=1`): expect the W6 line and the refusal that names the missing QM gate.
+4. **W3-W7 + PIE** (`... eps=1 qminit=1` plus `luofu_pie.arm=1`): expect, in order, the W3
+   snapshot line, the W4 line, the W5 line, the W6 line, the W7 snapshot line ("169 EQM table
+   entries ... stable, indirect interface idle"), the W7 programmed-and-verified line, the
+   connectivity-armed line and the GEMAC registration line. Then, with the bench link up:
+   `ping` across the wired port while watching the PIE TX read pointer and the switch/EPS drop
+   counters; one variable per boot; power cycle between variants.
+5. Any wedge or hang: physical RESET+TFTP only. There is no in-kernel reset path on this image.
+
+### Evidence (local-only, gitignored)
+
+`build/linux-kbuild/waves/2026-11-19-qm-decode/` holds the disassembly helper, the decoded
+queue-group table dump, the patch/series validation and the isolated clone logs; the full decode
+map, the exact values and the fixture hash are in
+`target-skeleton/docs/incoming/qm-decode/SUMMARY.md`.
+

@@ -1,0 +1,1165 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -39,9 +39,21 @@
+  *     40..43 (all 13 populated rows x 8 slots, value 0x100 | qid of the
+  *     contiguous qid 1..104 model).  Every programmed word is then read back;
+  *     on the first mismatch the pre-write values are restored and the probe
+- *     fails closed.  Only when both the probe configuration and the qid map
+- *     are verified does the driver publish the data path as ready and allow
+- *     the GEMAC driver to register its netdevs (luofu-switch.h).
++ *     fails closed.
++ *   - "... luofu_lsw.eps=1": the attended W6 step.  Program the measured EPS
++ *     channel-map and companion words (the PIE/GRO/WoC channel to EPS queue
++ *     port map) with the same readback/restore discipline.
++ *   - "... luofu_lsw.qminit=1": the attended W7 step.  Program the recovered
++ *     EQM queue-manager init tables (19, 32, 35, 17, 16, 34) for the nine
++ *     wired queue groups (ports 4..12, qids 1..72): the per-queue-port deque
++ *     record, the per-qid deque map (qid -> queue port + slot + valid) and the
++ *     queue/scheduler records.  Every entry is snapshotted, written and read
++ *     back; a mismatch restores the snapshot and fails the probe closed.
++ *     Table 38 and the ports 40..43 virtual-port class stay out of the set
++ *     (luofu-switch-regs.h, W7 section).  Only when the whole W3-W7 write set
++ *     is programmed and verified does the driver publish the data path as
++ *     ready and allow the GEMAC driver to register its netdevs
++ *     (luofu-switch.h).
+  *
+  * Why the write path is gated and staged
+  * --------------------------------------
+@@ -131,17 +143,21 @@
+  *   driver, which only registers when this driver reports the egress map ready
+  *   (luofu-switch.h).
+  *
+- * The remaining hardware steps are listed in LSW-SPEC.md section 12.3: W3
+- * (clock/reset only; implemented behind luofu_lsw.arm=1), W4 (the R1/R3/R5
+- * probe configuration; implemented behind luofu_lsw.egress=1), W5 (the
+- * qid-map write for the populated rows; implemented behind luofu_lsw.qidmap=1)
+- * and W7 (learning-off/forward-all behaviour, not modelled).  None of them has
+- * been executed on hardware; the first execution is an attended bench event.
+- * The per-frame egress selection on the LSW side is not software-visible: a TX
+- * frame is described only by the PIE 32-byte descriptor (recovered port/vport
+- * words plus the per-port queue handle) and no LSW register is written per
+- * frame, so whether the engine uses the descriptor port directly or needs the
+- * excluded EQM queue tables is still [U] (LSW-SPEC.md section 7.8).
++ * The hardware steps are listed in LSW-SPEC.md section 12.3: W3 (clock/reset
++ * only; implemented behind luofu_lsw.arm=1), W4 (the R1/R3/R5 probe
++ * configuration; implemented behind luofu_lsw.egress=1), W5 (the qid-map write
++ * for the populated rows; implemented behind luofu_lsw.qidmap=1), W6 (the EPS
++ * channel map; implemented behind luofu_lsw.eps=1) and W7 (the EQM
++ * queue-manager init tables; implemented behind luofu_lsw.qminit=1).  None of
++ * them has been executed on hardware; the first execution is an attended bench
++ * event.  The per-frame egress selection on the LSW side is not
++ * software-visible: a TX frame is described only by the PIE 32-byte descriptor
++ * (the recovered egress-port tag plus the port bitmap, and the per-port queue
++ * handle which this build leaves zero) and no LSW register is written per
++ * frame.  The W7 tables are the init-time state the vendor programs for that
++ * path, so a successful W7 boot is the first experiment that can show whether
++ * the engine uses the descriptor port directly or selects through the
++ * queue-manager tables (LSW-SPEC.md section 7.8).
+  */
+ 
+ #include <linux/bitops.h>
+@@ -155,9 +171,12 @@
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
++#include <linux/processor.h>
+ #include <linux/regmap.h>
+ #include <linux/reset.h>
+ #include <linux/sizes.h>
++#include <linux/slab.h>
++#include <linux/string.h>
+ 
+ #include "luofu-switch-regs.h"
+ #include "luofu-switch.h"
+@@ -181,7 +200,7 @@
+ enum luofu_switch_state {
+ 	LUOFU_SWITCH_ABSENT,	/* probe has not run yet */
+ 	LUOFU_SWITCH_REFUSED,	/* probe ran and failed closed */
+-	LUOFU_SWITCH_READY,	/* R1/R3/R5 probe config and W2 qid map verified */
++	LUOFU_SWITCH_READY,	/* W3-W7 write set programmed and verified */
+ };
+ 
+ static enum luofu_switch_state luofu_switch_state = LUOFU_SWITCH_ABSENT;
+@@ -207,6 +226,10 @@
+ module_param_named(eps, luofu_switch_eps_gate, bool, 0444);
+ MODULE_PARM_DESC(eps, "Attended W6 step: program the measured EPS channel-map and companion words (requires arm/egress/qidmap; default off)");
+ 
++static bool luofu_switch_qminit_gate;
++module_param_named(qminit, luofu_switch_qminit_gate, bool, 0444);
++MODULE_PARM_DESC(qminit, "Attended W7 step: program the recovered EQM queue-manager init tables (requires arm/egress/qidmap/eps; default off)");
++
+ bool luofu_switch_probed(void)
+ {
+ 	return READ_ONCE(luofu_switch_state) != LUOFU_SWITCH_ABSENT;
+@@ -265,6 +288,8 @@
+  * @num_baseline: number of baseline words
+  * @qid_ports: populated qid-map port ids in allocation order
+  * @num_qid_ports: number of populated qid-map ports
++ * @qm_ports: queue-group constants for the W7 EQM init write set
++ * @num_qm_ports: number of queue groups the W7 write set programs
+  */
+ struct luofu_switch_variant {
+ 	const char *name;
+@@ -282,6 +307,70 @@
+ 	unsigned int num_baseline;
+ 	const u8 *qid_ports;
+ 	unsigned int num_qid_ports;
++	const struct luofu_switch_qm_port *qm_ports;
++	unsigned int num_qm_ports;
++};
++
++/**
++ * struct luofu_switch_qm_port - one queue group of the W7 EQM init write set
++ * @port: LSW hardware port id (also the table 32 index and the table 34
++ *        queue-port field)
++ * @profile_base: vendor queue-group table field, shaping profile base
++ * @profile_sel: vendor queue-group table field; a value <= 7 selects a fixed
++ *               profile (base + sel), a value > 7 selects a per-slot profile
++ *               (base + slot)
++ * @sch_id: vendor queue-group table field, scheduler id for table 17
++ * @rate: vendor queue-group table field, table 17 rate word
++ *
++ * The values are the build-time initialisers of the vendor's 46-entry queue
++ * group table (.data+0xd0, 56 B per entry) for the nine populated rows.  The
++ * field names are descriptive only: the vendor semantics are [U].
++ */
++struct luofu_switch_qm_port {
++	u8 port;
++	u8 profile_base;
++	u8 profile_sel;
++	u8 sch_id;
++	u32 rate;
++};
++
++/* The EQM table classes of the W7 write set; order matches qm_tables[]. */
++enum luofu_switch_qm_kind {
++	LUOFU_SWITCH_QM_QUEUE_INFO,	/* table 19: cell-count record */
++	LUOFU_SWITCH_QM_QPORT,		/* table 32: per-queue-port deque record */
++	LUOFU_SWITCH_QM_QBUF,		/* table 35: per-qid buffer record */
++	LUOFU_SWITCH_QM_QSCH,		/* table 17: scheduler profile */
++	LUOFU_SWITCH_QM_QTAG,		/* table 16: per-qid tag row */
++	LUOFU_SWITCH_QM_QDEQUE,		/* table 34: per-qid deque map */
++};
++
++/**
++ * struct luofu_switch_qm_item - one EQM indirect-table entry in the W7 set
++ * @kind: table class (see luofu_switch_qm_program())
++ * @index: table index
++ */
++struct luofu_switch_qm_item {
++	u8 kind;
++	u16 index;
++};
++
++#define LUOFU_SWITCH_QM_ITEM_MAX	176
++
++/**
++ * struct luofu_switch_qm - the W7 write set with its pre-write snapshot
++ * @count: number of entries
++ * @item: entries in the order they are written (vendor-init order)
++ * @pre: pre-write snapshot, LUOFU_SWITCH_EQM_IND_WORDS words per entry
++ * @want: computed post-write expectation, same layout
++ *
++ * The snapshot is kept for the whole driver lifetime: it is the restore target
++ * for a readback mismatch inside the stage and for remove().
++ */
++struct luofu_switch_qm {
++	unsigned int count;
++	struct luofu_switch_qm_item item[LUOFU_SWITCH_QM_ITEM_MAX];
++	u32 pre[LUOFU_SWITCH_QM_ITEM_MAX][LUOFU_SWITCH_EQM_IND_WORDS];
++	u32 want[LUOFU_SWITCH_QM_ITEM_MAX][LUOFU_SWITCH_EQM_IND_WORDS];
+ };
+ 
+ /**
+@@ -313,9 +402,13 @@
+  * @qid_pre_a: pre-write table-A words, saved for the readback rollback
+  * @qid_pre_b: pre-write table-B words, saved for the readback rollback
+  * @egress_pre: pre-write R1/R3/R5 and fam words, saved for the rollback
++ * @eps_pre: pre-write EPS channel-map/companion words, saved for the rollback
++ * @qm: the W7 EQM init write set and its pre-write snapshot
+  * @powered: the gated W3 step enabled the clocks and released the resets
+  * @egress_ready: the R1/R3/R5 probe configuration was written and verified
+  * @qid_maps_ready: the W2 qid-map write set was programmed and verified
++ * @eps_ready: the EPS channel map was programmed and verified
++ * @qminit_ready: the EQM queue-manager init tables were programmed and verified
+  */
+ struct luofu_switch {
+ 	struct device *dev;
+@@ -330,10 +423,13 @@
+ 	u32 *qid_pre_a;
+ 	u32 *qid_pre_b;
+ 	u32 egress_pre[LUOFU_SWITCH_EGRESS_REGS];
++	u32 eps_pre[LUOFU_SWITCH_EPS_WORDS];
++	struct luofu_switch_qm *qm;
+ 	bool powered;
+ 	bool egress_ready;
+ 	bool qid_maps_ready;
+ 	bool eps_ready;
++	bool qminit_ready;
+ };
+ 
+ /*
+@@ -460,6 +556,26 @@
+ 	4, 5, 6, 7, 8, 9, 10, 11, 12, 40, 41, 42, 43,
+ };
+ 
++/*
++ * The queue-group constants of the W7 EQM init write set for the nine
++ * populated wired queue groups (ports 4..12).  These are the vendor's
++ * build-time queue-group table initialisers (.data+0xd0 entries 2..10, 56 B
++ * per entry: +16 profile base, +20 profile selector, +24 scheduler id, +28
++ * rate).  Ports 40..43 are the virtual-port class and are deliberately not in
++ * this set (see luofu-switch-regs.h, W7 section).  [V] values, [U] semantics.
++ */
++static const struct luofu_switch_qm_port luofu_switch_v250_qm_ports[] = {
++	{ 4,  0x10, 1, 0x20, 3000 },
++	{ 5,  0x10, 2, 0x20, 3000 },
++	{ 6,  0x10, 2, 0x20, 3000 },
++	{ 7,  0x10, 2, 0x20, 3000 },
++	{ 8,  0x00, 8, 0x20, 2500 },
++	{ 9,  0x00, 8, 0x20, 2500 },
++	{ 10, 0x00, 8, 0x20, 2500 },
++	{ 11, 0x00, 8, 0x20, 2500 },
++	{ 12, 0x00, 8, 0x20, 2500 },
++};
++
+ static const struct luofu_switch_variant luofu_switch_v250 = {
+ 	.name = "v250",
+ 	.hwver = 0x250,
+@@ -476,6 +592,8 @@
+ 	.num_baseline = ARRAY_SIZE(luofu_switch_v250_baseline),
+ 	.qid_ports = luofu_switch_v250_qid_ports,
+ 	.num_qid_ports = ARRAY_SIZE(luofu_switch_v250_qid_ports),
++	.qm_ports = luofu_switch_v250_qm_ports,
++	.num_qm_ports = ARRAY_SIZE(luofu_switch_v250_qm_ports),
+ };
+ 
+ /*
+@@ -1600,10 +1718,17 @@
+  * descriptors but nothing appears on the wire, and ingress frames never reach
+  * the PIE RX rings.  Every word is written, read back and restored on mismatch.
+  */
++/*
++ * Snapshot the W6 target words and program them.  The W6 stage writes the
++ * measured stock-boot channel-map/companion words; the snapshot is kept in
++ * driver state so a later failure in the W7 stage (or remove()) can restore
++ * them.
++ */
+ static int luofu_switch_eps_program(struct luofu_switch *lsw)
+ {
+ 	const struct luofu_switch_variant *variant = lsw->variant;
+-	u32 pre[32];
++	u32 offset[LUOFU_SWITCH_EPS_WORDS];
++	u32 pre[LUOFU_SWITCH_EPS_WORDS];
+ 	void __iomem *base;
+ 	unsigned int i, n = 0;
+ 
+@@ -1618,38 +1743,32 @@
+ 		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
+ 		    strncmp(entry->name, "eps channel", 11))
+ 			continue;
+-		if (n >= ARRAY_SIZE(pre))
++		if (n >= LUOFU_SWITCH_EPS_WORDS)
+ 			return -E2BIG;
+-		pre[n++] = readl(base + entry->offset);
++		offset[n] = entry->offset;
++		pre[n] = readl(base + entry->offset);
++		lsw->eps_pre[n] = pre[n];
++		n++;
+ 	}
+ 
+ 	for (i = 0; i < variant->num_baseline; i++) {
+ 		const struct luofu_switch_baseline_entry *entry =
+ 			&variant->baseline[i];
++		unsigned int m;
+ 
+ 		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
+ 		    strncmp(entry->name, "eps channel", 11))
+ 			continue;
+ 
+ 		writel(entry->value, base + entry->offset);
+-		if (readl(base + entry->offset) != entry->value) {
+-			unsigned int m = 0, r = 0;
+-
+-			for (m = 0; m < variant->num_baseline; m++) {
+-				const struct luofu_switch_baseline_entry *e2 =
+-					&variant->baseline[m];
++		if (readl(base + entry->offset) == entry->value)
++			continue;
+ 
+-				if (e2->window != LUOFU_SWITCH_WIN_EPS ||
+-				    strncmp(e2->name, "eps channel", 11))
+-					continue;
+-				if (r < n)
+-					writel(pre[r], base + e2->offset);
+-				r++;
+-			}
+-			return dev_err_probe(lsw->dev, -EIO,
+-					     "EPS channel map readback mismatch at %s\n",
+-					     entry->name);
+-		}
++		for (m = 0; m < n; m++)
++			writel(pre[m], base + offset[m]);
++		return dev_err_probe(lsw->dev, -EIO,
++				     "EPS channel map readback mismatch at %s\n",
++				     entry->name);
+ 	}
+ 
+ 	dev_info(lsw->dev,
+@@ -1658,6 +1777,566 @@
+ 	return 0;
+ }
+ 
++/* Undo the W6 write set from the snapshot kept by luofu_switch_eps_program(). */
++static void luofu_switch_eps_restore(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	void __iomem *base = lsw->window[LUOFU_SWITCH_WIN_EPS];
++	unsigned int i, n = 0;
++
++	if (!base)
++		return;
++
++	for (i = 0; i < variant->num_baseline; i++) {
++		const struct luofu_switch_baseline_entry *entry =
++			&variant->baseline[i];
++
++		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
++		    strncmp(entry->name, "eps channel", 11))
++			continue;
++		if (n >= LUOFU_SWITCH_EPS_WORDS)
++			return;
++		writel(lsw->eps_pre[n], base + entry->offset);
++		n++;
++	}
++}
++
++/*
++ * W7: the EQM queue-manager init write set.
++ *
++ * The vendor switch initialises the queue manager in hi_queue_init@0x507c and
++ * its per-group/per-qid helpers: the EQM indirect tables 19 (cell-count
++ * record), 32 (per-queue-port deque record), 35 (per-qid buffer record), 17
++ * (scheduler profile), 16 (per-qid tag row) and 34 (per-qid deque map), plus
++ * table 38 (per-qid scheduler state) and the virtual-port class, which stay
++ * out of this write set (see luofu-switch-regs.h, W7 section, and SUMMARY.md).
++ *
++ * The write set is built from the same contiguous qid allocation model patch
++ * 022 validates against the measured qid maps: the nine wired queue groups are
++ * ports 4..12, they own qids 1..72, eight per port in variant->qid_ports order.
++ * Every entry is snapshotted before the first write, the expected post-write
++ * content is computed from the snapshot plus the vendor formulas (never from an
++ * invented value), every entry is written through the decoded indirect engine
++ * and then read back; the first mismatch restores the whole snapshot and fails
++ * the probe closed.  The snapshot lives in driver state so remove() restores it
++ * as well.
++ */
++
++/* [V] table id per item kind; order matches enum luofu_switch_qm_kind. */
++static const u8 luofu_switch_qm_tables[] = {
++	LUOFU_SWITCH_EQM_TAB_QUEUE_INFO,
++	LUOFU_SWITCH_EQM_TAB_QPORT,
++	LUOFU_SWITCH_EQM_TAB_QBUF,
++	LUOFU_SWITCH_EQM_TAB_QSCH,
++	LUOFU_SWITCH_EQM_TAB_QTAG,
++	LUOFU_SWITCH_EQM_TAB_QDEQUE,
++};
++
++/* [V] EQM indirect data registers: write words 0..4, read words 0..4. */
++static const u16 luofu_switch_eqm_wdata[LUOFU_SWITCH_EQM_IND_WORDS] = {
++	LUOFU_SWITCH_EQM_WDATA0,
++	LUOFU_SWITCH_EQM_WDATA0 + LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_WDATA0 + 2 * LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_WDATA0 + 3 * LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_WDATA0 + 4 * LUOFU_SWITCH_EQM_WDATA_STRIDE,
++};
++
++static const u16 luofu_switch_eqm_rdata[LUOFU_SWITCH_EQM_IND_WORDS] = {
++	LUOFU_SWITCH_EQM_RDATA0,
++	LUOFU_SWITCH_EQM_RDATA0 + LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_RDATA0 + 2 * LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_RDATA0 + 3 * LUOFU_SWITCH_EQM_WDATA_STRIDE,
++	LUOFU_SWITCH_EQM_RDATA4,
++};
++
++static int luofu_switch_eqm_access(struct luofu_switch *lsw, bool write,
++				   u8 table, u16 index, u32 *words)
++{
++	void __iomem *eqm = lsw->window[LUOFU_SWITCH_WIN_EQM];
++	unsigned int i;
++	u32 status;
++	u32 cmd;
++
++	if (!eqm)
++		return -EINVAL;
++
++	cmd = (index & LUOFU_SWITCH_EQM_IND_INDEX_MASK) |
++	      ((u32)(table & (LUOFU_SWITCH_EQM_IND_TABLES - 1)) <<
++	       LUOFU_SWITCH_EQM_IND_TABLE_SHIFT) |
++	      LUOFU_SWITCH_EQM_IND_START |
++	      (write ? LUOFU_SWITCH_EQM_IND_WRITE : 0);
++
++	for (i = 0; write && i < LUOFU_SWITCH_EQM_IND_WORDS; i++)
++		writel(words[i], eqm + luofu_switch_eqm_wdata[i]);
++
++	writel(cmd, eqm + LUOFU_SWITCH_EQM_IND_CMD);
++
++	for (i = 0; i < LUOFU_SWITCH_EQM_IND_POLL; i++) {
++		status = readl(eqm + LUOFU_SWITCH_EQM_IND_CMD);
++		if (!(status & LUOFU_SWITCH_EQM_IND_BUSY))
++			break;
++		cpu_relax();
++	}
++	if (i == LUOFU_SWITCH_EQM_IND_POLL)
++		return -ETIMEDOUT;
++	if (status & LUOFU_SWITCH_EQM_IND_ERROR)
++		return -EIO;
++
++	if (!write)
++		for (i = 0; i < LUOFU_SWITCH_EQM_IND_WORDS; i++)
++			words[i] = readl(eqm + luofu_switch_eqm_rdata[i]);
++
++	return 0;
++}
++
++/* The qid of one slot of a queue group in the measured allocation model. */
++static int luofu_switch_qm_qid(const struct luofu_switch_variant *variant,
++			       const struct luofu_switch_qm_port *port,
++			       unsigned int slot)
++{
++	unsigned int i;
++
++	for (i = 0; i < variant->num_qid_ports; i++)
++		if (variant->qid_ports[i] == port->port)
++			return variant->qid_first + i * LUOFU_SWITCH_QID_SLOTS +
++			       slot;
++
++	return -EINVAL;
++}
++
++/* The table 17 scheduler profile of one slot of a queue group. [V] formula. */
++static unsigned int
++luofu_switch_qm_profile(const struct luofu_switch_qm_port *port,
++			unsigned int slot)
++{
++	if (port->profile_sel <= 7)
++		return port->profile_base + port->profile_sel;
++
++	return port->profile_base + slot;
++}
++
++static int luofu_switch_qm_add(struct luofu_switch_qm *qm,
++			       enum luofu_switch_qm_kind kind, u16 index)
++{
++	if (qm->count >= LUOFU_SWITCH_QM_ITEM_MAX)
++		return -E2BIG;
++	qm->item[qm->count].kind = kind;
++	qm->item[qm->count].index = index;
++	qm->count++;
++	return 0;
++}
++
++static bool luofu_switch_qm_has(const struct luofu_switch_qm *qm,
++				enum luofu_switch_qm_kind kind, u16 index)
++{
++	unsigned int i;
++
++	for (i = 0; i < qm->count; i++)
++		if (qm->item[i].kind == kind && qm->item[i].index == index)
++			return true;
++
++	return false;
++}
++
++/* Build the W7 item list in the vendor init order (shared entries once). */
++static int luofu_switch_qm_build(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	struct luofu_switch_qm *qm;
++	unsigned int i, slot, row;
++	int qid, ret;
++
++	qm = devm_kzalloc(lsw->dev, sizeof(*qm), GFP_KERNEL);
++	if (!qm)
++		return -ENOMEM;
++	lsw->qm = qm;
++
++	ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QUEUE_INFO, 0);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < variant->num_qm_ports; i++) {
++		ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QPORT,
++					  variant->qm_ports[i].port);
++		if (ret)
++			return ret;
++	}
++
++	for (i = 0; i < variant->num_qm_ports; i++) {
++		for (slot = 0; slot < LUOFU_SWITCH_EQM_QPORT_SLOTS; slot++) {
++			qid = luofu_switch_qm_qid(variant, &variant->qm_ports[i],
++						  slot);
++			if (qid < 0)
++				return qid;
++			ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QBUF,
++						  qid);
++			if (ret)
++				return ret;
++		}
++	}
++
++	for (i = 0; i < variant->num_qm_ports; i++) {
++		for (slot = 0; slot < LUOFU_SWITCH_EQM_QPORT_SLOTS; slot++) {
++			u16 profile;
++
++			profile = luofu_switch_qm_profile(&variant->qm_ports[i], slot);
++			if (luofu_switch_qm_has(qm, LUOFU_SWITCH_QM_QSCH,
++						profile))
++				continue;
++			ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QSCH,
++						  profile);
++			if (ret)
++				return ret;
++		}
++	}
++
++	for (i = 0; i < variant->num_qm_ports; i++) {
++		for (slot = 0; slot < LUOFU_SWITCH_EQM_QPORT_SLOTS; slot++) {
++			qid = luofu_switch_qm_qid(variant, &variant->qm_ports[i],
++						  slot);
++			if (qid < 0)
++				return qid;
++			row = (unsigned int)qid / 16;
++			if (luofu_switch_qm_has(qm, LUOFU_SWITCH_QM_QTAG, row))
++				continue;
++			ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QTAG,
++						  row);
++			if (ret)
++				return ret;
++		}
++	}
++
++	for (i = 0; i < variant->num_qm_ports; i++) {
++		for (slot = 0; slot < LUOFU_SWITCH_EQM_QPORT_SLOTS; slot++) {
++			qid = luofu_switch_qm_qid(variant, &variant->qm_ports[i],
++						  slot);
++			if (qid < 0)
++				return qid;
++			ret = luofu_switch_qm_add(qm, LUOFU_SWITCH_QM_QDEQUE,
++						  qid);
++			if (ret)
++				return ret;
++		}
++	}
++
++	return 0;
++}
++
++/*
++ * Pre-write snapshot and conformance: every target entry is read twice and must
++ * be stable, and the indirect interface must be idle.  A live, changing entry
++ * means the queue manager is not quiescent: refuse instead of overwriting a
++ * moving target.
++ */
++static int luofu_switch_qm_snapshot(struct luofu_switch *lsw)
++{
++	struct luofu_switch_qm *qm = lsw->qm;
++	void __iomem *eqm = lsw->window[LUOFU_SWITCH_WIN_EQM];
++	u32 again[LUOFU_SWITCH_EQM_IND_WORDS];
++	unsigned int i, w;
++	u32 status;
++	int ret;
++
++	status = readl(eqm + LUOFU_SWITCH_EQM_IND_CMD);
++	if (status & (LUOFU_SWITCH_EQM_IND_BUSY | LUOFU_SWITCH_EQM_IND_ERROR))
++		return dev_err_probe(lsw->dev, -EIO,
++				     "eqm+0x48 reads %#x: the indirect interface is busy or in error; refusing to write the queue-manager tables\n",
++				     status);
++
++	for (i = 0; i < qm->count; i++) {
++		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++		u16 index = qm->item[i].index;
++
++		ret = luofu_switch_eqm_access(lsw, false, table, index,
++					      qm->pre[i]);
++		if (ret)
++			return dev_err_probe(lsw->dev, ret,
++					     "EQM table %u entry %u read failed during the pre-write snapshot\n",
++					     table, index);
++		ret = luofu_switch_eqm_access(lsw, false, table, index, again);
++		if (ret)
++			return dev_err_probe(lsw->dev, ret,
++					     "EQM table %u entry %u re-read failed during the pre-write snapshot\n",
++					     table, index);
++		for (w = 0; w < LUOFU_SWITCH_EQM_IND_WORDS; w++)
++			if (qm->pre[i][w] != again[w])
++				return dev_err_probe(lsw->dev, -EIO,
++						     "EQM table %u entry %u word %u changed between two reads (%#x -> %#x); the queue manager is not quiescent, refusing to write\n",
++						     table, index, w,
++						     qm->pre[i][w], again[w]);
++	}
++
++	dev_info(lsw->dev,
++		 "W7 snapshot: %u EQM table entries (%u words) read and stable, indirect interface idle (eqm+0x48 %#x)\n",
++		 qm->count, qm->count * LUOFU_SWITCH_EQM_IND_WORDS, status);
++	return 0;
++}
++
++/*
++ * Compute the expected post-write content of every entry.  Read-modify-write
++ * entries start from the snapshot and set only the fields the vendor sets; the
++ * three full-write entries are the vendor's constants.
++ */
++static void luofu_switch_qm_compute(struct luofu_switch *lsw, u32 cell_cfg)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	struct luofu_switch_qm *qm = lsw->qm;
++	unsigned int i, j, slot;
++	u32 cells = cell_cfg & LUOFU_SWITCH_EQM_QSCH_CELLS_MASK;
++
++	for (i = 0; i < qm->count; i++) {
++		struct luofu_switch_qm_item *item = &qm->item[i];
++		u32 *pre = qm->pre[i];
++		u32 *want = qm->want[i];
++
++		memcpy(want, pre, sizeof(qm->pre[i]));
++
++		switch (item->kind) {
++		case LUOFU_SWITCH_QM_QUEUE_INFO:
++			want[0] = LUOFU_SWITCH_EQM_CELL_REC0;
++			want[1] = LUOFU_SWITCH_EQM_CELL_REC1;
++			for (j = 2; j < LUOFU_SWITCH_EQM_IND_WORDS; j++)
++				want[j] = 0xffffffff;
++			break;
++		case LUOFU_SWITCH_QM_QPORT: {
++			u32 pri = 0;
++
++			for (slot = 0; slot < LUOFU_SWITCH_EQM_QPORT_SLOTS;
++			     slot++)
++				pri |= (LUOFU_SWITCH_EQM_QPORT_SLOTS - 1 - slot) <<
++				       (slot * LUOFU_SWITCH_EQM_QPORT_PRI_BITS);
++			want[0] = (pre[0] & ~GENMASK(7, 0)) |
++				  ((item->index *
++				    LUOFU_SWITCH_EQM_QPORT_SLOT_BASE) &
++				   GENMASK(7, 0));
++			want[1] = (pre[1] & ~LUOFU_SWITCH_EQM_QPORT_PRI_MASK) |
++				  pri;
++			break;
++		}
++		case LUOFU_SWITCH_QM_QBUF:
++			want[0] = LUOFU_SWITCH_EQM_QBUF_WORD0;
++			for (j = 1; j < LUOFU_SWITCH_EQM_IND_WORDS; j++)
++				want[j] = 0;
++			break;
++		case LUOFU_SWITCH_QM_QSCH: {
++			const struct luofu_switch_qm_port *port;
++			u32 rate = 0;
++			u32 sch = 0;
++			u32 value;
++
++			for (j = 0; j < variant->num_qm_ports; j++) {
++				port = &variant->qm_ports[j];
++				for (slot = 0;
++				     slot < LUOFU_SWITCH_EQM_QPORT_SLOTS;
++				     slot++) {
++					if (luofu_switch_qm_profile(port, slot) !=
++					    item->index)
++						continue;
++					rate = port->rate;
++					sch = port->sch_id;
++					break;
++				}
++				if (rate)
++					break;
++			}
++			if (!rate)
++				continue;
++			value = cells < rate ? rate :
++				rate / LUOFU_SWITCH_EQM_QSCH_DIV_MIN;
++			want[0] = rate & LUOFU_SWITCH_EQM_QSCH_RATE_MASK;
++			want[1] = LUOFU_SWITCH_EQM_QSCH_WORD1;
++			want[2] = LUOFU_SWITCH_EQM_QSCH_RATE_HI |
++				  (rate & GENMASK(15, 0));
++			want[3] = ((sch & LUOFU_SWITCH_EQM_QSCH_SCH_MASK) <<
++				   LUOFU_SWITCH_EQM_QSCH_SCH_SHIFT) |
++				  (value & LUOFU_SWITCH_EQM_QSCH_CELLS_MASK);
++			want[4] = LUOFU_SWITCH_EQM_QSCH_WORD4;
++			break;
++		}
++		case LUOFU_SWITCH_QM_QTAG:
++			for (j = 0; j < variant->num_qm_ports; j++) {
++				const struct luofu_switch_qm_port *port =
++					&variant->qm_ports[j];
++				int qid;
++
++				for (slot = 0;
++				     slot < LUOFU_SWITCH_EQM_QPORT_SLOTS;
++				     slot++) {
++					unsigned int byte, shift, word;
++					u32 cur, val;
++
++					qid = luofu_switch_qm_qid(variant, port,
++								  slot);
++					if (qid < 0 || qid / 16 != item->index)
++						continue;
++					byte = qid & 15;
++					word = byte >> 2;
++					shift = (byte & 3) * 8;
++					cur = (want[word] >> shift) & 0xff;
++					val = LUOFU_SWITCH_EQM_QTAG_VALID |
++					      (luofu_switch_qm_profile(port,
++								       slot) &
++					       LUOFU_SWITCH_EQM_QTAG_VALUE_MASK) |
++					      (cur & LUOFU_SWITCH_EQM_QTAG_KEEP);
++					want[word] = (want[word] &
++						      ~(0xffu << shift)) |
++						     (val << shift);
++				}
++			}
++			break;
++		case LUOFU_SWITCH_QM_QDEQUE:
++			for (j = 0; j < variant->num_qm_ports; j++) {
++				const struct luofu_switch_qm_port *port =
++					&variant->qm_ports[j];
++				int qid;
++
++				for (slot = 0;
++				     slot < LUOFU_SWITCH_EQM_QPORT_SLOTS;
++				     slot++) {
++					qid = luofu_switch_qm_qid(variant, port,
++								  slot);
++					if (qid != item->index)
++						continue;
++					want[0] = (pre[0] &
++						   ~(LUOFU_SWITCH_EQM_QDEQUE_QP_MASK |
++						     LUOFU_SWITCH_EQM_QDEQUE_INPUT |
++						     LUOFU_SWITCH_EQM_QDEQUE_SLOT_MASK |
++						     LUOFU_SWITCH_EQM_QDEQUE_VALID)) |
++						  (port->port &
++						   LUOFU_SWITCH_EQM_QDEQUE_QP_MASK) |
++						  LUOFU_SWITCH_EQM_QDEQUE_INPUT |
++						  ((slot <<
++						    LUOFU_SWITCH_EQM_QDEQUE_SLOT_SHIFT) &
++						   LUOFU_SWITCH_EQM_QDEQUE_SLOT_MASK) |
++						  LUOFU_SWITCH_EQM_QDEQUE_VALID;
++				}
++			}
++			break;
++		}
++	}
++}
++
++static int luofu_switch_qm_write(struct luofu_switch *lsw)
++{
++	struct luofu_switch_qm *qm = lsw->qm;
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < qm->count; i++) {
++		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++
++		ret = luofu_switch_eqm_access(lsw, true, table,
++					      qm->item[i].index, qm->want[i]);
++		if (ret)
++			return dev_err_probe(lsw->dev, ret,
++					     "EQM write failed at table %u entry %u\n",
++					     table, qm->item[i].index);
++	}
++
++	return 0;
++}
++
++/* Restore every entry of the W7 write set from the pre-write snapshot. */
++static void luofu_switch_qm_restore(struct luofu_switch *lsw)
++{
++	struct luofu_switch_qm *qm = lsw->qm;
++	unsigned int i;
++	int ret;
++
++	if (!qm)
++		return;
++
++	for (i = 0; i < qm->count; i++) {
++		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++
++		ret = luofu_switch_eqm_access(lsw, true, table,
++					      qm->item[i].index, qm->pre[i]);
++		if (ret)
++			dev_err(lsw->dev,
++				"EQM restore failed at table %u entry %u: %d\n",
++				table, qm->item[i].index, ret);
++	}
++}
++
++static int luofu_switch_qm_verify(struct luofu_switch *lsw)
++{
++	struct luofu_switch_qm *qm = lsw->qm;
++	u32 got[LUOFU_SWITCH_EQM_IND_WORDS] = { 0 };
++	unsigned int i, w = 0;
++	int ret;
++
++	for (i = 0; i < qm->count; i++) {
++		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++		u16 index = qm->item[i].index;
++
++		ret = luofu_switch_eqm_access(lsw, false, table, index, got);
++		if (ret)
++			goto mismatch;
++		for (w = 0; w < LUOFU_SWITCH_EQM_IND_WORDS; w++)
++			if (got[w] != qm->want[i][w])
++				goto mismatch;
++	}
++
++	{
++		unsigned int qids = lsw->variant->num_qm_ports *
++				    LUOFU_SWITCH_EQM_QPORT_SLOTS;
++		unsigned int profiles = 0;
++
++		for (i = 0; i < qm->count; i++)
++			if (qm->item[i].kind == LUOFU_SWITCH_QM_QSCH)
++				profiles++;
++		dev_info(lsw->dev,
++			 "W7: %u EQM table entries (%u words) programmed and verified: table 19 cell record, table 32 x %u queue ports, table 35/16/34 x %u qids, table 17 x %u scheduler profiles\n",
++			 qm->count, qm->count * LUOFU_SWITCH_EQM_IND_WORDS,
++			 lsw->variant->num_qm_ports, qids, profiles);
++	}
++	return 0;
++
++mismatch:
++	if (ret)
++		dev_err(lsw->dev,
++			"EQM readback failed at table %u entry %u: %d\n",
++			luofu_switch_qm_tables[qm->item[i].kind],
++			qm->item[i].index, ret);
++	else
++		dev_err(lsw->dev,
++			"EQM readback mismatch at table %u entry %u word %u: read %#x, expected %#x; restoring the pre-write snapshot\n",
++			luofu_switch_qm_tables[qm->item[i].kind],
++			qm->item[i].index, w, got[w], qm->want[i][w]);
++	luofu_switch_qm_restore(lsw);
++	return -EIO;
++}
++
++static int luofu_switch_qm_program(struct luofu_switch *lsw)
++{
++	void __iomem *eqm = lsw->window[LUOFU_SWITCH_WIN_EQM];
++	u32 cell_cfg;
++	int ret;
++
++	if (!eqm)
++		return -EINVAL;
++
++	ret = luofu_switch_qm_build(lsw);
++	if (ret)
++		return dev_err_probe(lsw->dev, ret,
++				     "cannot build the W7 EQM init write set\n");
++
++	ret = luofu_switch_qm_snapshot(lsw);
++	if (ret)
++		return ret;
++
++	cell_cfg = readl(eqm + LUOFU_SWITCH_EQM_CELL_CFG1);
++	luofu_switch_qm_compute(lsw, cell_cfg);
++
++	ret = luofu_switch_qm_write(lsw);
++	if (ret) {
++		luofu_switch_qm_restore(lsw);
++		return ret;
++	}
++
++	return luofu_switch_qm_verify(lsw);
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -1751,9 +2430,10 @@
+ 	 * configuration error, not a silent no-op: refuse it explicitly.
+ 	 */
+ 	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
+-	     luofu_switch_eps_gate) && !luofu_switch_arm_gate) {
++	     luofu_switch_eps_gate || luofu_switch_qminit_gate) &&
++	    !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+-				    "luofu_lsw.egress/luofu_lsw.qidmap require luofu_lsw.arm=1 (the attended W3 power step)\n");
++				    "luofu_lsw.egress/luofu_lsw.qidmap/luofu_lsw.eps/luofu_lsw.qminit require luofu_lsw.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+ 	}
+ 
+@@ -1827,6 +2507,20 @@
+ 		goto out;
+ 	lsw->eps_ready = true;
+ 
++	if (!luofu_switch_qminit_gate) {
++		dev_warn(dev,
++			 "the EQM queue-manager init tables are not programmed (set luofu_lsw.qminit=1): without them the queue manager has no queue/deque configuration and TX frames cannot reach an egress port; refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_lsw.qminit=1: programming the recovered EQM queue-manager init tables (W7) with pre-write snapshot, readback verification and restore-on-mismatch\n");
++	ret = luofu_switch_qm_program(lsw);
++	if (ret)
++		goto out;
++	lsw->qminit_ready = true;
++
+ 	if (!lsw->egress_ready) {
+ 		dev_warn(dev,
+ 			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_lsw.egress=1); refusing to arm the data path\n");
+@@ -1835,16 +2529,24 @@
+ 	}
+ 
+ 	dev_info(dev,
+-		 "connectivity path armed: R1/R3/R5 probe configuration and the W2 qid maps are programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map and the EQM queue-manager init tables are programmed and verified; the GEMAC netdev front end may register\n");
+ out:
+-	if (ret && lsw->egress_ready) {
+-		luofu_switch_egress_restore(lsw, lsw->egress_pre);
+-		lsw->egress_ready = false;
++	if (ret && lsw->qminit_ready) {
++		luofu_switch_qm_restore(lsw);
++		lsw->qminit_ready = false;
++	}
++	if (ret && lsw->eps_ready) {
++		luofu_switch_eps_restore(lsw);
++		lsw->eps_ready = false;
+ 	}
+ 	if (ret && lsw->qid_maps_ready) {
+ 		luofu_switch_qid_maps_restore(lsw);
+ 		lsw->qid_maps_ready = false;
+ 	}
++	if (ret && lsw->egress_ready) {
++		luofu_switch_egress_restore(lsw, lsw->egress_pre);
++		lsw->egress_ready = false;
++	}
+ 	if (ret && lsw->powered)
+ 		luofu_switch_power_down(lsw);
+ 	if (ret == -EPROBE_DEFER)
+@@ -1859,6 +2561,10 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	if (lsw->qminit_ready)
++		luofu_switch_qm_restore(lsw);
++	if (lsw->eps_ready)
++		luofu_switch_eps_restore(lsw);
+ 	if (lsw->qid_maps_ready)
+ 		luofu_switch_qid_maps_restore(lsw);
+ 	if (lsw->egress_ready)
+@@ -1884,5 +2590,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5 and qid-map write path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS and EQM write path)");
+ MODULE_LICENSE("GPL");
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -158,6 +158,9 @@
+ #define LUOFU_SWITCH_EPS_QUEUE_DFX	0x1008	/* [V] 0 */
+ #define LUOFU_SWITCH_EPS_CH_MAP(ch)	(0xb00 + (ch) * 4)	/* [V] */
+ #define LUOFU_SWITCH_EPS_CH_COMPANION(ch)	(0xb80 + (ch) * 4)	/* [V] */
++#define LUOFU_SWITCH_EPS_CHANNELS	8	/* [V] 8 measured channel words */
++/* 8 channel-map words + 8 companion words. */
++#define LUOFU_SWITCH_EPS_WORDS		(2 * LUOFU_SWITCH_EPS_CHANNELS)
+ 
+ /*
+  * eqm window: egress queue manager.  hi_queue_init reads +0xa4/+0x18 and
+@@ -168,7 +171,11 @@
+  *
+  *   eqm+0x00 = 0x00000001   eqm+0x18 = 0x80001cc0
+  *   eqm+0x38 = 0x000007f0   eqm+0x40 = 0x80000000
+- *   eqm+0x48 = 0x41100012   (bit31 busy = 0, bit5 error = 0: idle)
++ *   eqm+0x48 = 0x41100012   (bit31 busy = 0, bit29 error = 0: idle; the word
++ *                            is the last completed write command: table
++ *                            (0x41100012 >> 20) & 0x7f = 17, index 0x12 = 18,
++ *                            and eqm+0x5c holds that command's first data word
++ *                            0xbb8 = 3000 - the vendor's last queue-init write)
+  *   eqm+0xa4 = 0x00001fc0
+  */
+ #define LUOFU_SWITCH_EQM_TAB_CMD	0x00	/* [V] 1 */
+@@ -179,9 +186,16 @@
+ #define LUOFU_SWITCH_EQM_IND_DATA	0x5c	/* [V] 0x00000bb8 */
+ #define LUOFU_SWITCH_EQM_TAB_CFG	0xa4	/* [V] 0x00001fc0 */
+ 
+-/* eqm indirect command/status idle bits. [V] */
++/*
++ * eqm indirect command/status idle bits. [V]  The busy/start and write/read
++ * bits were decoded on 2026-11-19 from hi_eqm_write_tab@0x1cdc and
++ * hi_eqm_read_tab@0x1e18 (see the W7 section below).  The error bit is
++ * status bit 29: the vendor tests (status >> 24) & 0x20.  Patch 025 recorded
++ * bit 5; the measured idle word 0x41100012 has both bits clear, so the
++ * conformance check accepted the wrong bit and never noticed.
++ */
+ #define LUOFU_SWITCH_EQM_IND_BUSY	BIT(31)
+-#define LUOFU_SWITCH_EQM_IND_ERROR	BIT(5)
++#define LUOFU_SWITCH_EQM_IND_ERROR	BIT(29)
+ 
+ /* fam window: queue-count/cell comparison in the probe. [V] 0x00002000 */
+ #define LUOFU_SWITCH_FAM_QUEUE_CFG	0x504
+@@ -288,4 +302,153 @@
+ #define LUOFU_SWITCH_EQM_CELL_BIAS	0x40	/* [V] subtracted from fam low14 */
+ #define LUOFU_SWITCH_EPS_QUEUE_INIT	42	/* [V] ips+0x08 = 0x2a */
+ 
++/*
++ * W7: the EQM queue-manager init write set ("luofu_lsw.qminit=1" stage).
++ *
++ * Recovered 2026-11-19, host-only, from the pinned vendor hi_lsw_dp.ko fixture
++ * (67,164 B, sha256 f0010305caf15c6da71981b7c4b51c7f9c0ce55c1911b0ca031a44892fdcd535):
++ * the probe loop hi_queue_init@0x507c, the 46-entry queue-group table in .data+0xd0
++ * (46 * 56 B, initialised at build time), the per-group helper at 0x31d4 and
++ * the per-qid helper at 0x2b40, plus the indirect table engine
++ * hi_eqm_write_tab@0x1cdc / hi_eqm_read_tab@0x1e18.  Every write below is a
++ * write the vendor driver also makes at boot; the *meaning* of most fields is
++ * still [U] and is marked as such.
++ *
++ * The indirect interface (both directions) [V code shape; corroborated by the
++ * measured idle register state]:
++ *
++ *   command word -> eqm+0x48:
++ *     bits 15..0   table index (16-bit)
++ *     bits 26..20  table id (7-bit, from tab & 0x7f)
++ *     bit  30      1 = write, 0 = read
++ *     bit  31      1 = start (busy while the engine works; poll until clear)
++ *     bit  29      status: operation error (read back only)
++ *   write data -> eqm+0x5c, +0x60, +0x64, +0x68, +0x70 (words 0..4)
++ *   read  data <- eqm+0x4c, +0x50, +0x54, +0x58, +0x6c (words 0..4)
++ *   one operation moves at most 5 data words (the vendor clamps num to 5).
++ *
++ * Measured evidence that this engine ran on the stock boot [V]: eqm+0x48 =
++ * 0x41100012 == a completed write of table 17, index 18, and eqm+0x5c =
++ * 0xbb8 = 3000 == that write's first data word, which is exactly the rate
++ * the vendor's last profile write for ports 5..7 carries.
++ *
++ * The write set (all tables are EQM indirect tables; the field/record shapes
++ * below are the vendor write shape [V], the semantics are [I]/[U]):
++ *
++ *   table 19, index 0   8-word cell-count record, 5 words actually written:
++ *                       { 0xffffffff, 0xffffc3e8, 0xffffffff, 0xffffffff,
++ *                         0xffffffff }  (0xff-filled buffer, word 1 low 14
++ *                       bits = 1000).  hi_queue_init@0x5164..0x5198.
++ *   table 32, index P   8-word per-queue-port record, 5 words written; the
++ *                       vendor writes byte 0 = P * 8 and then 3-bit slot
++ *                       priorities 7..0 for slots 0..7 (bits 0..23 of word 1).
++ *                       Helper at 0x20f8 (header) and 0x2184 (priorities).
++ *   table 35, index qid per-qid buffer record, 5 words written: word 0 =
++ *                       0x00070000 (byte 2 = 7), rest zero.  Helper 0x2b40.
++ *   table 17, profile   5-word scheduler profile (helper 0x24d0): word 0 =
++ *                       rate & 0x1fff; word 1 = 0x10000000; word 2 =
++ *                       0xffff0000 | rate; word 3 = ((sch & 0x1ff) << 20) |
++ *                       cells; word 4 = 0x07f03fff, where cells = rate if
++ *                       (eqm+0x38 & 0x3fff) < rate, else rate / 2 (the
++ *                       vendor's min divider comes from .data..read_mostly+4
++ *                       = 2).
++ *   table 16, index row per-qid 5-bit tag row (16 qids/row, helper 0x223c):
++ *                       byte (qid & 15) = 0x80 | (profile & 0x1f), preserving
++ *                       bits 6:5.
++ *   table 34, index qid  per-qid deque map (helper 0x22ec): word 0 =
++ *                       queue-port in bits 5:0 (the LSW hardware port P),
++ *                       slot in bits 17:14, bit 13 = 1 ("input"/root), bit 18
++ *                       = 1 (valid); bits 6..12 and 19..31 preserved.
++ *
++ * The per-port queue-group constants (profile base/selector, scheduler id and
++ * rate) are the vendor's build-time .data+0xd0 table entries for ports 4..12,
++ * i.e. the nine populated rows of the measured qid-map allocation model:
++ *
++ *   port  base  sel  sch   rate
++ *     4   0x10    1  0x20  3000
++ *     5   0x10    2  0x20  3000
++ *     6   0x10    2  0x20  3000
++ *     7   0x10    2  0x20  3000
++ *   8-12  0x00    8  0x20  2500
++ *
++ * profile(port, slot) = base + (sel <= 7 ? sel : slot); qid(port, slot) =
++ * qid_first + port_index * 8 + slot with port_index the position of the port
++ * in variant->qid_ports (the same allocation model patch 022 programs and
++ * validates).
++ *
++ * Deliberately not in the W7 write set (documented in SUMMARY.md):
++ *   - table 38 (per-qid scheduler/buffer state): the vendor writes a
++ *     table-manager id into it (hi_tab_mgr_alloc_hash) that only exists
++ *     inside the vendor software table manager and cannot be reproduced
++ *     from this evidence base; its validity semantics are [U].
++ *   - the ports 40..43 virtual-port class (table 32 indices 35..38 and table
++ *     34 indices 227..230 in the vendor code): the GEMAC wired egress path
++ *     does not use the Wi-Fi/VP class on this board and its index space is
++ *     [U]; excluded by design, not forgotten.
++ *   - the queue/flow DDR region contents: not mapped, not written.
++ */
++#define LUOFU_SWITCH_EQM_IND_WORDS	5	/* [V] one op moves <= 5 words */
++#define LUOFU_SWITCH_EQM_IND_POLL	1001	/* [V] vendor poll count */
++#define LUOFU_SWITCH_EQM_IND_START	BIT(31)	/* [V] start/busy */
++#define LUOFU_SWITCH_EQM_IND_WRITE	BIT(30)	/* [V] 1 = write, 0 = read */
++#define LUOFU_SWITCH_EQM_IND_TABLE_SHIFT 20	/* [V] table id field */
++#define LUOFU_SWITCH_EQM_IND_TABLE_MASK	GENMASK(26, 20)
++#define LUOFU_SWITCH_EQM_IND_INDEX_MASK	GENMASK(15, 0)
++#define LUOFU_SWITCH_EQM_IND_TABLES	128	/* [V] 7-bit table id space */
++
++/* [V] The indirect tables the W7 write set uses (id space is the vendor's). */
++#define LUOFU_SWITCH_EQM_TAB_QTAG	16	/* per-qid 5-bit tag row */
++#define LUOFU_SWITCH_EQM_TAB_QSCH	17	/* scheduler profile */
++#define LUOFU_SWITCH_EQM_TAB_QUEUE_INFO	19	/* cell-count record */
++#define LUOFU_SWITCH_EQM_TAB_QPORT	32	/* per-queue-port deque record */
++#define LUOFU_SWITCH_EQM_TAB_QDEQUE	34	/* per-qid deque map */
++#define LUOFU_SWITCH_EQM_TAB_QBUF	35	/* per-qid buffer record */
++
++/*
++ * [V] data register offsets, words 0..4.  Write data goes to +0x5c/+0x60/
++ * +0x64/+0x68/+0x70, read data comes from +0x4c/+0x50/+0x54/+0x58/+0x6c
++ * (the vendor's g_eqm_tab_ba pairs decoded from the fixture's .rodata).
++ */
++#define LUOFU_SWITCH_EQM_WDATA0		0x5c
++#define LUOFU_SWITCH_EQM_WDATA_STRIDE	4
++#define LUOFU_SWITCH_EQM_RDATA0		0x4c
++#define LUOFU_SWITCH_EQM_RDATA4		0x6c
++
++/* [V] table 19 cell-count record (5 words actually written). */
++#define LUOFU_SWITCH_EQM_CELL_WORDS	1000
++#define LUOFU_SWITCH_EQM_CELL_REC0	0xffffffff
++#define LUOFU_SWITCH_EQM_CELL_REC1	\
++	(0xffff0000 | (LUOFU_SWITCH_EQM_CELL_WORDS & GENMASK(13, 0)))
++
++/* [V] table 35 per-qid buffer record: byte 2 = 7, 5-word buffer. */
++#define LUOFU_SWITCH_EQM_QBUF_WORD0	0x00070000
++
++/* [V] table 32 per-queue-port record. */
++#define LUOFU_SWITCH_EQM_QPORT_SLOT_BASE	8	/* byte 0 = port * 8 */
++#define LUOFU_SWITCH_EQM_QPORT_PRI_MASK		GENMASK(23, 0)
++#define LUOFU_SWITCH_EQM_QPORT_PRI_BITS		3
++#define LUOFU_SWITCH_EQM_QPORT_SLOTS		8
++
++/* [V] table 34 per-qid deque map word 0 fields. */
++#define LUOFU_SWITCH_EQM_QDEQUE_QP_MASK		GENMASK(5, 0)
++#define LUOFU_SWITCH_EQM_QDEQUE_INPUT		BIT(13)
++#define LUOFU_SWITCH_EQM_QDEQUE_SLOT_MASK	GENMASK(17, 14)
++#define LUOFU_SWITCH_EQM_QDEQUE_SLOT_SHIFT	14
++#define LUOFU_SWITCH_EQM_QDEQUE_VALID		BIT(18)
++
++/* [V] table 16 per-qid tag byte fields. */
++#define LUOFU_SWITCH_EQM_QTAG_VALID		BIT(7)
++#define LUOFU_SWITCH_EQM_QTAG_KEEP		GENMASK(6, 5)
++#define LUOFU_SWITCH_EQM_QTAG_VALUE_MASK	GENMASK(4, 0)
++
++/* [V] table 17 scheduler profile fields and the vendor's build-time constants. */
++#define LUOFU_SWITCH_EQM_QSCH_RATE_MASK		GENMASK(12, 0)
++#define LUOFU_SWITCH_EQM_QSCH_RATE_HI		0xffff0000
++#define LUOFU_SWITCH_EQM_QSCH_WORD1		0x10000000
++#define LUOFU_SWITCH_EQM_QSCH_WORD4		0x07f03fff
++#define LUOFU_SWITCH_EQM_QSCH_SCH_MASK		GENMASK(8, 0)
++#define LUOFU_SWITCH_EQM_QSCH_SCH_SHIFT		20
++#define LUOFU_SWITCH_EQM_QSCH_CELLS_MASK	GENMASK(13, 0)
++#define LUOFU_SWITCH_EQM_QSCH_DIV_MIN		2	/* [V] read_mostly+4 */
++
+ #endif /* __LUOFU_SWITCH_REGS_H */
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -303,7 +303,7 @@
+ 
+ 	if (!luofu_switch_ready())
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "LSW egress qid map is not programmed; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 luofu_lsw.qidmap=1)\n");
++				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1 luofu_lsw.qminit=1, and every stage must verify)\n");
+ 
+ 	/*
+ 	 * Address source: the standard devicetree mac-address/local-mac-address
