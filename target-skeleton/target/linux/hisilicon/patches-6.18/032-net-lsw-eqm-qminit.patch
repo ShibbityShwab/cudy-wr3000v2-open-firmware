@@ -100,7 +100,7 @@
   */
  struct luofu_switch_variant {
  	const char *name;
-@@ -282,6 +307,76 @@
+@@ -282,6 +307,79 @@
  	unsigned int num_baseline;
  	const u8 *qid_ports;
  	unsigned int num_qid_ports;
@@ -162,8 +162,11 @@
 + * @mask: per-word readback-verification mask: only the fields the vendor's own
 + *        read paths depend on are compared, so a field the engine does not
 + *        implement as readable cannot cause a false refusal (bench evidence:
-+ *        table 19 reads back a masked view, and it is write-only in the vendor
-+ *        code).  A zero mask means "write-only table, acknowledge only".
++ *        table 19 reads back per-word field-width masks, and table 17 words
++ *        0/4 read 0 although written).  A zero mask means "write-only table,
++ *        acknowledge only".  Fail-closed comparison is further limited to
++ *        tables whose readable fields the bench has proven (see
++ *        luofu_switch_qm_class.strict).
 + *
 + * The snapshot is kept for the whole driver lifetime: it is the restore target
 + * for a readback mismatch inside the stage and for remove().
@@ -177,7 +180,7 @@
  };
  
  /**
-@@ -313,9 +408,13 @@
+@@ -313,9 +411,13 @@
   * @qid_pre_a: pre-write table-A words, saved for the readback rollback
   * @qid_pre_b: pre-write table-B words, saved for the readback rollback
   * @egress_pre: pre-write R1/R3/R5 and fam words, saved for the rollback
@@ -191,7 +194,7 @@
   */
  struct luofu_switch {
  	struct device *dev;
-@@ -330,10 +429,13 @@
+@@ -330,10 +432,13 @@
  	u32 *qid_pre_a;
  	u32 *qid_pre_b;
  	u32 egress_pre[LUOFU_SWITCH_EGRESS_REGS];
@@ -205,7 +208,7 @@
  };
  
  /*
-@@ -460,6 +562,26 @@
+@@ -460,6 +565,26 @@
  	4, 5, 6, 7, 8, 9, 10, 11, 12, 40, 41, 42, 43,
  };
  
@@ -232,7 +235,7 @@
  static const struct luofu_switch_variant luofu_switch_v250 = {
  	.name = "v250",
  	.hwver = 0x250,
-@@ -476,6 +598,8 @@
+@@ -476,6 +601,8 @@
  	.num_baseline = ARRAY_SIZE(luofu_switch_v250_baseline),
  	.qid_ports = luofu_switch_v250_qid_ports,
  	.num_qid_ports = ARRAY_SIZE(luofu_switch_v250_qid_ports),
@@ -241,7 +244,7 @@
  };
  
  /*
-@@ -1600,10 +1724,17 @@
+@@ -1600,10 +1727,17 @@
   * descriptors but nothing appears on the wire, and ingress frames never reach
   * the PIE RX rings.  Every word is written, read back and restored on mismatch.
   */
@@ -260,7 +263,7 @@
  	void __iomem *base;
  	unsigned int i, n = 0;
  
-@@ -1618,38 +1749,32 @@
+@@ -1618,38 +1752,32 @@
  		if (entry->window != LUOFU_SWITCH_WIN_EPS ||
  		    strncmp(entry->name, "eps channel", 11))
  			continue;
@@ -312,7 +315,7 @@
  	}
  
  	dev_info(lsw->dev,
-@@ -1658,6 +1783,676 @@
+@@ -1658,6 +1786,738 @@
  	return 0;
  }
  
@@ -358,32 +361,74 @@
 + * invented value), every entry is written through the decoded indirect engine
 + * and then read back.
 + *
-+ * Verification policy (refined after the first hardware run, 2026-11-19):
-+ * the engine's read view is compared only on the fields the vendor's *own*
-+ * read paths depend on.  Two facts forced that: table 19 is write-only in the
-+ * vendor code (hi_queue_init is its only user, and the EQM table accessors are
-+ * module-local to hi_lsw_dp), and the bench run wrote 0xffffffff into it and
-+ * read back 0x3fff - the low 14 bits - i.e. the read view is not the written
-+ * record.  So table 19 is acknowledge-only, and the other tables are compared
-+ * on their vendor-read fields only (slot priorities for table 32, bytes 1-2 of
-+ * table 35, the rate/cell fields of table 17, the written bytes of table 16,
-+ * the queue-port/slot/input/valid fields of table 34).  Any difference inside
-+ * those masks fails closed and restores the verified entries; differences
-+ * outside them are logged as diagnostics because the engine need not implement
-+ * those bits as readable.  The snapshot lives in driver state so remove() also
-+ * restores the verified entries; the write-only table cannot be restored from
-+ * its read view and is reported instead (the block is powered down on refusal
-+ * and every attempt rewrites the full vendor init record).
++ * Verification policy (refined by two hardware rounds, 2026-11-19):
++ * the engine implements only part of each record as readable, while it accepts
++ * every write.  Round 1 (image 14791958): table 19 is write-only in the vendor
++ * code (hi_queue_init its only user; the EQM table accessors are module-local
++ * to hi_lsw_dp) and the engine read back 0x3fff for a written 0xffffffff.
++ * Round 2 (image 5d2c5476): the table-19 read view after the write was
++ * 0x3fff 0x3e8 0x3fff 0x1ffffff 0x0 (per-word field-width masks of the written
++ * words - the write did take effect), and table 17 read its words 1..3 back
++ * exactly while words 0 and 4 read 0 even though they were written.  The same
++ * run verified tables 32 and 35 before that refusal, which proves their
++ * vendor-read fields are readable and our write/read register mapping is not
++ * shifted (words 1..3 of table 17 came back at their own indices).
++ *
++ * Therefore verification is tiered, and only bench-proven fields fail closed:
++ *  - STRICT (fail closed): table 32 slot priorities, table 35 word 0 bytes 1-2,
++ *    table 17 words 1..3 - all read back exactly on hardware;
++ *  - DIAG (acknowledged with diagnostics): tables 16 and 34 were not reached on
++ *    the bench yet; their writes are command-acknowledged and their read view
++ *    is logged against the vendor-read mask, to be promoted to STRICT once a
++ *    run shows which words are readable;
++ *  - ACK: write-only table 19, command acknowledgment only.
++ *
++ * A STRICT mismatch restores the bench-proven entries and fails the probe
++ * closed.  The restore deliberately leaves table 19 and tables 16/34 as
++ * written: their read views cannot be trusted to restore a record, so writing
++ * them back could corrupt it; the failure path powers the switch block down and
++ * refuses readiness, so nothing stays armed, and every W7 attempt rewrites the
++ * full vendor init record.  The snapshot lives in driver state so remove() also
++ * restores the bench-proven entries.
 + */
 +
-+/* [V] table id per item kind; order matches enum luofu_switch_qm_kind. */
-+static const u8 luofu_switch_qm_tables[] = {
-+	LUOFU_SWITCH_EQM_TAB_QUEUE_INFO,
-+	LUOFU_SWITCH_EQM_TAB_QPORT,
-+	LUOFU_SWITCH_EQM_TAB_QBUF,
-+	LUOFU_SWITCH_EQM_TAB_QSCH,
-+	LUOFU_SWITCH_EQM_TAB_QTAG,
-+	LUOFU_SWITCH_EQM_TAB_QDEQUE,
++/**
++ * struct luofu_switch_qm_class - per-table class of the W7 write/verify set
++ * @table: EQM indirect table id [V]
++ * @strict: fail the stage on a vendor-read-mask mismatch
++ *
++ * Refined after the second hardware run (2026-11-19, image 5d2c5476):
++ *
++ *  - STRICT: the marked fields were read back exactly on the bench and are the
++ *    fields a vendor read path uses.  Table 32 slot priorities and table 35
++ *    word 0 bytes 1-2 passed verification on hardware; table 17 words 1..3 read
++ *    back exactly.  Only these fail the stage.
++ *  - DIAG (not yet proven readable): tables 16 and 34 were not reached on the
++ *    bench before the table-17 refusal; their writes are issued and
++ *    command-acknowledged, and the read view is logged against the vendor-read
++ *    mask, but a difference is a diagnostic until a bench run shows which
++ *    words the engine implements as readable.
++ *  - Write-only table (19): acknowledge-only, no comparison at all.
++ *
++ * This is the direct lesson of two hardware rounds: the engine implements only
++ * part of each record as readable (table 17 wrote 0xbb8 to word 0 and read 0;
++ * table 19 read back per-word field-width masks 0x3fff/0x3e8/0x3fff/0x1ffffff/0
++ * after writing 0xffffffff words), while the write itself is accepted.  The
++ * write set is unchanged: the vendor's exact init values.
++ */
++struct luofu_switch_qm_class {
++	u8 table;
++	bool strict;
++};
++
++/* [V] table id and verification class per item kind; order matches the enum. */
++static const struct luofu_switch_qm_class luofu_switch_qm_kinds[] = {
++	[LUOFU_SWITCH_QM_QUEUE_INFO] = { LUOFU_SWITCH_EQM_TAB_QUEUE_INFO, false },
++	[LUOFU_SWITCH_QM_QPORT] = { LUOFU_SWITCH_EQM_TAB_QPORT, true },
++	[LUOFU_SWITCH_QM_QBUF] = { LUOFU_SWITCH_EQM_TAB_QBUF, true },
++	[LUOFU_SWITCH_QM_QSCH] = { LUOFU_SWITCH_EQM_TAB_QSCH, true },
++	[LUOFU_SWITCH_QM_QTAG] = { LUOFU_SWITCH_EQM_TAB_QTAG, false },
++	[LUOFU_SWITCH_QM_QDEQUE] = { LUOFU_SWITCH_EQM_TAB_QDEQUE, false },
 +};
 +
 +/* [V] EQM indirect data registers: write words 0..4, read words 0..4. */
@@ -598,7 +643,7 @@
 +				     status);
 +
 +	for (i = 0; i < qm->count; i++) {
-+		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++		u8 table = luofu_switch_qm_kinds[qm->item[i].kind].table;
 +		u16 index = qm->item[i].index;
 +
 +		ret = luofu_switch_eqm_access(lsw, false, table, index,
@@ -733,14 +778,15 @@
 +				  (value & LUOFU_SWITCH_EQM_QSCH_CELLS_MASK);
 +			want[4] = LUOFU_SWITCH_EQM_QSCH_WORD4;
 +			/*
-+			 * The vendor's DFX reader extracts the rate from word 2
-+			 * (low 14 bits) and the cell value from word 3 (low 14
-+			 * bits); word 0 carries the same rate.  The reserved
-+			 * all-ones words are not compared.
++			 * Bench round 2 (2026-11-19, image 5d2c5476) read this
++			 * record back exactly on words 1..3 while words 0 and 4
++			 * read 0 even though they were written: the engine does
++			 * not implement those two words as readable.  Verify
++			 * only the fields the bench proved.
 +			 */
-+			mask[0] = LUOFU_SWITCH_EQM_QSCH_RATE_MASK;
-+			mask[2] = LUOFU_SWITCH_EQM_QSCH_CELLS_MASK;
-+			mask[3] = LUOFU_SWITCH_EQM_QSCH_CELLS_MASK;
++			mask[1] = GENMASK(31, 0);
++			mask[2] = GENMASK(31, 0);
++			mask[3] = GENMASK(31, 0);
 +			break;
 +		}
 +		case LUOFU_SWITCH_QM_QTAG:
@@ -818,7 +864,7 @@
 +	int ret;
 +
 +	for (i = 0; i < qm->count; i++) {
-+		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++		u8 table = luofu_switch_qm_kinds[qm->item[i].kind].table;
 +
 +		ret = luofu_switch_eqm_access(lsw, true, table,
 +					      qm->item[i].index, qm->want[i]);
@@ -832,45 +878,50 @@
 +}
 +
 +/*
-+ * Restore every verified entry of the W7 write set from the pre-write
-+ * snapshot.  Entries whose verification mask is all-zero are write-only tables
-+ * (only table 19 in this set): their read view is not the record, so writing it
-+ * back could corrupt the record.  They are reported instead of restored; the
-+ * probe powers the block down on refusal, and every W7 attempt rewrites the
-+ * full vendor init record.
++ * Restore the W7 entries whose readback is trusted.  Only entries of STRICT
++ * tables are restored: their fields were proven readable on the bench, so the
++ * pre-write snapshot is the record.  The write-only table 19 and the
++ * not-yet-bench-proven tables 16/34 are left as written and reported in one
++ * line: writing a read view back could corrupt a record, and the failure path
++ * powers the switch block down and refuses readiness anyway, so nothing stays
++ * armed; every W7 attempt rewrites the full vendor init record.
 + */
-+static void luofu_switch_qm_restore(struct luofu_switch *lsw)
++static unsigned int luofu_switch_qm_restore(struct luofu_switch *lsw)
 +{
 +	struct luofu_switch_qm *qm = lsw->qm;
-+	unsigned int i, w;
++	unsigned int i, restored = 0, skipped = 0;
 +	int ret;
 +
 +	if (!qm)
-+		return;
++		return 0;
 +
 +	for (i = 0; i < qm->count; i++) {
-+		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
-+		bool write_only = true;
++		u8 table = luofu_switch_qm_kinds[qm->item[i].kind].table;
 +
-+		for (w = 0; w < LUOFU_SWITCH_EQM_IND_WORDS; w++)
-+			if (qm->mask[i][w]) {
-+				write_only = false;
-+				break;
-+			}
-+		if (write_only) {
-+			dev_warn(lsw->dev,
-+				 "EQM table %u entry %u is a write-only table; its read view cannot restore the found state, leaving the written vendor init record in place\n",
-+				 table, qm->item[i].index);
++		if (!luofu_switch_qm_kinds[qm->item[i].kind].strict) {
++			skipped++;
 +			continue;
 +		}
-+
 +		ret = luofu_switch_eqm_access(lsw, true, table,
 +					      qm->item[i].index, qm->pre[i]);
 +		if (ret)
 +			dev_err(lsw->dev,
 +				"EQM restore failed at table %u entry %u: %d\n",
 +				table, qm->item[i].index, ret);
++		else
++			restored++;
 +	}
++
++	if (skipped)
++		dev_warn(lsw->dev,
++			 "EQM restore: %u bench-proven entries restored; %u entries left as written (write-only table 19 and the not-yet-bench-proven tables 16/34 cannot be restored from their read views); the probe powers the block down and refuses readiness\n",
++			 restored, skipped);
++	else if (restored)
++		dev_warn(lsw->dev,
++			 "EQM restore: %u bench-proven entries restored from the pre-write snapshot\n",
++			 restored);
++
++	return restored;
 +}
 +
 +static int luofu_switch_qm_verify(struct luofu_switch *lsw)
@@ -878,16 +929,19 @@
 +	struct luofu_switch_qm *qm = lsw->qm;
 +	u32 got[LUOFU_SWITCH_EQM_IND_WORDS] = { 0 };
 +	unsigned int i, w = 0;
-+	unsigned int ack_only = 0, unmasked = 0;
++	unsigned int ack_only = 0, diag = 0, diag_diff = 0;
 +	int ret;
 +
 +	for (i = 0; i < qm->count; i++) {
-+		u8 table = luofu_switch_qm_tables[qm->item[i].kind];
++		const struct luofu_switch_qm_class *kind =
++			&luofu_switch_qm_kinds[qm->item[i].kind];
 +		u16 index = qm->item[i].index;
 +		bool masked = false;
++		bool in_mask = false;
 +		bool differs = false;
 +
-+		ret = luofu_switch_eqm_access(lsw, false, table, index, got);
++		ret = luofu_switch_eqm_access(lsw, false, kind->table, index,
++					      got);
 +		if (ret)
 +			goto mismatch;
 +
@@ -895,7 +949,7 @@
 +			if (qm->mask[i][w])
 +				masked = true;
 +			if ((got[w] ^ qm->want[i][w]) & qm->mask[i][w])
-+				goto mismatch;
++				in_mask = true;
 +			if (got[w] != qm->want[i][w])
 +				differs = true;
 +		}
@@ -904,22 +958,33 @@
 +			ack_only++;
 +			dev_info(lsw->dev,
 +				 "W7: table %u entry %u is write-only in the vendor code: command acknowledged, read view %#x %#x %#x %#x %#x (not compared)\n",
-+				 table, index, got[0], got[1], got[2], got[3],
-+				 got[4]);
-+		} else if (differs) {
-+			/*
-+			 * Fields outside the vendor-read mask are diagnostic:
-+			 * the engine need not implement them as readable, and
-+			 * no vendor path depends on them.
-+			 */
-+			unmasked++;
-+			if (unmasked <= 4)
-+				dev_warn(lsw->dev,
-+					 "W7: table %u entry %u differs outside the vendor-read fields (read %#x %#x %#x %#x %#x, wrote %#x %#x %#x %#x %#x); those bits are not part of the verified contract\n",
-+					 table, index, got[0], got[1], got[2],
-+					 got[3], got[4], qm->want[i][0],
-+					 qm->want[i][1], qm->want[i][2],
-+					 qm->want[i][3], qm->want[i][4]);
++				 kind->table, index, got[0], got[1], got[2],
++				 got[3], got[4]);
++			continue;
++		}
++
++		if (in_mask && kind->strict)
++			goto mismatch;
++
++		diag++;
++		if (!in_mask && !differs)
++			continue;
++		if (in_mask)
++			diag_diff++;
++		if (diag <= 6) {
++			const char *where = in_mask ?
++				"differs on a vendor-read field" :
++				"differs outside the vendor-read fields";
++			const char *then = kind->strict ?
++				"failing closed" :
++				"not bench-proven yet, acknowledged with diagnostics";
++
++			dev_warn(lsw->dev,
++				 "W7: table %u entry %u %s (read %#x %#x %#x %#x %#x, wrote %#x %#x %#x %#x %#x); %s\n",
++				 kind->table, index, where, got[0], got[1],
++				 got[2], got[3], got[4], qm->want[i][0],
++				 qm->want[i][1], qm->want[i][2],
++				 qm->want[i][3], qm->want[i][4], then);
 +		}
 +	}
 +
@@ -932,9 +997,9 @@
 +			if (qm->item[i].kind == LUOFU_SWITCH_QM_QSCH)
 +				profiles++;
 +		dev_info(lsw->dev,
-+			 "W7: %u EQM table entries (%u words) programmed: %u verified on their vendor-read fields, %u write-only entries acknowledged (%u with diagnostic-only differences): table 19 cell record, table 32 x %u queue ports, table 35/16/34 x %u qids, table 17 x %u scheduler profiles\n",
++			 "W7: %u EQM table entries (%u words) programmed: %u verified on bench-proven vendor-read fields (tables 32/35/17), %u acknowledged with diagnostics (tables 16/34; %u differed on a vendor-read field), %u write-only acknowledged (table 19); queue ports %u, qids %u, scheduler profiles %u\n",
 +			 qm->count, qm->count * LUOFU_SWITCH_EQM_IND_WORDS,
-+			 qm->count - ack_only, ack_only, unmasked,
++			 qm->count - ack_only - diag, diag, diag_diff, ack_only,
 +			 lsw->variant->num_qm_ports, qids, profiles);
 +	}
 +	return 0;
@@ -943,12 +1008,12 @@
 +	if (ret)
 +		dev_err(lsw->dev,
 +			"EQM readback failed at table %u entry %u: %d\n",
-+			luofu_switch_qm_tables[qm->item[i].kind],
++			luofu_switch_qm_kinds[qm->item[i].kind].table,
 +			qm->item[i].index, ret);
 +	else
 +		dev_err(lsw->dev,
-+			"EQM readback mismatch at table %u entry %u word %u: read %#x, expected %#x (vendor-read field mask %#x), snapshot %#x, read view %#x %#x %#x %#x %#x; restoring the verified entries\n",
-+			luofu_switch_qm_tables[qm->item[i].kind],
++			"EQM readback mismatch at table %u entry %u word %u: read %#x, expected %#x (bench-proven vendor-read field mask %#x), snapshot %#x, read view %#x %#x %#x %#x %#x; restoring the bench-proven entries and refusing readiness\n",
++			luofu_switch_qm_kinds[qm->item[i].kind].table,
 +			qm->item[i].index, w, got[w], qm->want[i][w],
 +			qm->mask[i][w], qm->pre[i][w], got[0], got[1], got[2],
 +			got[3], got[4]);
@@ -989,7 +1054,7 @@
  static int luofu_switch_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
-@@ -1751,9 +2546,10 @@
+@@ -1751,9 +2611,10 @@
  	 * configuration error, not a silent no-op: refuse it explicitly.
  	 */
  	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
@@ -1002,7 +1067,7 @@
  		goto out;
  	}
  
-@@ -1827,6 +2623,20 @@
+@@ -1827,6 +2688,20 @@
  		goto out;
  	lsw->eps_ready = true;
  
@@ -1023,7 +1088,7 @@
  	if (!lsw->egress_ready) {
  		dev_warn(dev,
  			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_lsw.egress=1); refusing to arm the data path\n");
-@@ -1835,16 +2645,24 @@
+@@ -1835,16 +2710,24 @@
  	}
  
  	dev_info(dev,
@@ -1052,7 +1117,7 @@
  	if (ret && lsw->powered)
  		luofu_switch_power_down(lsw);
  	if (ret == -EPROBE_DEFER)
-@@ -1859,6 +2677,10 @@
+@@ -1859,6 +2742,10 @@
  {
  	struct luofu_switch *lsw = platform_get_drvdata(pdev);
  
@@ -1063,7 +1128,7 @@
  	if (lsw->qid_maps_ready)
  		luofu_switch_qid_maps_restore(lsw);
  	if (lsw->egress_ready)
-@@ -1884,5 +2706,5 @@
+@@ -1884,5 +2771,5 @@
  };
  module_platform_driver(luofu_switch_driver);
  
@@ -1114,7 +1179,7 @@
  
  /* fam window: queue-count/cell comparison in the probe. [V] 0x00002000 */
  #define LUOFU_SWITCH_FAM_QUEUE_CFG	0x504
-@@ -288,4 +302,168 @@
+@@ -288,4 +302,173 @@
  #define LUOFU_SWITCH_EQM_CELL_BIAS	0x40	/* [V] subtracted from fam low14 */
  #define LUOFU_SWITCH_EPS_QUEUE_INIT	42	/* [V] ips+0x08 = 0x2a */
  
@@ -1158,11 +1223,16 @@
 + *                       This table is WRITE-ONLY in the vendor code: that
 + *                       call site is its only user, and the EQM table
 + *                       accessors are module-local to hi_lsw_dp, so no vendor
-+ *                       reader exists anywhere.  The 2026-11-19 bench run
-+ *                       confirmed the engine's read view is not the record:
-+ *                       after writing 0xffffffff it read back 0x3fff (low 14
-+ *                       bits).  W7 therefore acknowledges this write instead
-+ *                       of comparing it (see the QBUF mask note below).
++ *                       reader exists anywhere.  Two bench rounds established
++ *                       the engine's read view is not the record: with the
++ *                       fresh block reading 0x0 0x0 0x0 0x0 0x0, writing
++ *                       {0xffffffff, 0xffffc3e8, 0xffffffff, 0xffffffff,
++ *                       0xffffffff} read back 0x3fff 0x3e8 0x3fff 0x1ffffff
++ *                       0x0 - per-word field-width masks of the written words
++ *                       (so the write took effect, the readback does not
++ *                       expose the record).  W7 therefore acknowledges this
++ *                       write instead of comparing it, and cannot restore it
++ *                       from the read view.
 + *   table 32, index P   8-word per-queue-port record, 5 words written; the
 + *                       vendor writes byte 0 = P * 8 and then 3-bit slot
 + *                       priorities 7..0 for slots 0..7 (bits 0..23 of word 1).

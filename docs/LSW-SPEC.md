@@ -1104,43 +1104,50 @@ question the W7 attended run can now answer.
 **Gate and safety model.**  Patch 032 adds the fifth attended gate luofu_lsw.qminit=1 (requires
 arm=1 egress=1 qidmap=1 eps=1).  It refuses unless the EQM indirect interface is idle, snapshots
 all 169 target entries (each read twice and required stable), computes the expected content from
-the snapshot plus the formulas above, writes every entry through the decoded engine, reads every
-entry back on its verification mask, and restores the verified entries on the first mismatch
-(also in remove()).  luofu_switch_ready() now requires W3+W4+W5+W6+W7 to be verified, so the GEMAC
-front end still cannot register a netdev on a partial data path (7.8, SKELETON-SMOKE "LSW QM/EQM
-session").
+the snapshot plus the formulas above, writes every entry through the decoded engine, verifies the
+entries whose readable fields the bench has proven, and restores those entries on the first
+mismatch (also in remove()).  luofu_switch_ready() requires W3+W4+W5+W6+W7, so the GEMAC front end
+still cannot register a netdev on a partial data path (7.8, SKELETON-SMOKE "LSW QM/EQM session").
 
-**Bench result and fix (2026-11-19, image 14791958, gates arm/egress/qidmap/eps/qminit) [V].**
-The hardware run reached W7: the pre-write snapshot passed (169 entries / 845 words read, stable,
-indirect interface idle) and the first write was acknowledged, but the strict readback failed on
-the *first* entry - table 19 entry 0 word 0 read 0x3fff, expected 0xffffffff - so the stage
-restored and refused (fail-closed worked: GEMAC did not register).  Re-opening the decode gave
-the explanation: **table 19 is write-only in the vendor code.**  hi_queue_init@0x5164..0x5198 is
-its only user, and the EQM table accessors (hi_eqm_write_tab/read_tab) are module-local to
-hi_lsw_dp, so no vendor reader for table 19 exists anywhere; the module also never reads it back
-in any other path.  The 0x3fff the engine returned is exactly 0xffffffff & GENMASK(13,0), i.e.
-the engine's read view is not the written record - either a 14-bit field-width view or a
-non-implemented read ([I]; the bench value is [V]).  Patch 032 was fixed accordingly:
+**Bench results and the verification fix (2026-11-19, three hardware rounds) [V].**  The decisive
+finding across rounds is that **the engine accepts every write but implements only part of each
+record as readable**, so a readback contract may only claim what the bench has proven.
 
-- **table 19 is acknowledge-only**: the write is issued exactly as the vendor issues it (same
-  bytes, same index/table/world order) and the command completion (busy cleared, no error bit) is
-  the verification; the engine read view is logged at info level for the next run instead of
-  being compared;
-- **the other tables are compared only on the fields the vendor's own read paths depend on**:
-  table 32 slot priorities, table 35 word 0 bytes 1-2 (the fields hi_queue_get_sch reads),
-  table 17 rate/cell fields (the fields the DFX reader extracts), table 16 written bytes, table
-  34 queue-port/slot/input/valid (the fields the vendor RMW helper checks).  Differences outside
-  those masks are logged as diagnostics, because the engine need not implement those bits as
-  readable; differences inside them still fail closed and restore;
-- **restore skips write-only entries**: writing the read view back could corrupt the record, so
-  the stage reports them instead; the block is powered down on refusal and every attempt rewrites
-  the full vendor init record, so no stale state is left armed;
-- the mismatch log now prints the vendor-read field mask, the pre-write snapshot value and the
-  whole 5-word read view, so the next attended run is diagnosable from the console alone.
+- *Round 1 (image 14791958, all five gates).*  W7 snapshot passed (169 entries / 845 words read,
+  stable, indirect interface idle); the first write was acknowledged, but strict readback failed
+  on the first entry: table 19 entry 0 word 0 read 0x3fff, expected 0xffffffff.  The stage
+  restored and refused fail-closed (GEMAC did not register).  Decode showed table 19 is
+  **write-only in the vendor code**: hi_queue_init@0x5164..0x5198 is its only user and the EQM
+  table accessors are module-local to hi_lsw_dp, so no vendor reader exists.
+- *Round 2 (image 5d2c5476, table-19 acknowledge fix).*  The table-19 write was acknowledged and
+  its read view went from 0x0 0x0 0x0 0x0 0x0 (fresh block snapshot) to
+  **0x3fff 0x3e8 0x3fff 0x1ffffff 0x0** - per-word field-width masks of the written
+  {0xffffffff, 0xffffc3e8, 0xffffffff, 0xffffffff, 0xffffffff}: the write took effect, the read
+  view does not expose the record.  Verification then passed **every table-32 and table-35 entry**
+  and failed on table 17 entry 17: read 0x0 0x10000000 0xffff0bb8 0x2000bb8 0x0 against written
+  0xbb8 0x10000000 0xffff0bb8 0x2000bb8 0x07f03fff.  Words 1..3 came back **exactly at their own
+  indices** (so the write/read data-register mapping is not shifted or off by one), while words 0
+  and 4 read 0 although written: the engine does not implement those two words of a table-17
+  record as readable.  The stage restored and refused again; GEMAC stayed unregistered.
+- *Fix (patch 032 revision 3).*  Verification is now tiered and only bench-proven fields fail
+  closed: **STRICT** = table 32 slot priorities, table 35 word 0 bytes 1-2 and table 17 words 1..3
+  (all read back exactly on hardware); **DIAG** = tables 16 and 34 (not reached on the bench yet:
+  writes command-acknowledged, read views logged against the vendor-read mask, to be promoted to
+  STRICT once a run shows which words are readable); **ACK** = write-only table 19 (command
+  acknowledgement only).  Differences outside the proven fields are diagnostics.
+- *Restore.*  On a STRICT mismatch the **bench-proven** entries are restored from the pre-write
+  snapshot.  Table 19 and tables 16/34 are deliberately left as written: their read views cannot
+  be trusted to restore a record, so writing them back could corrupt it.  The failure path powers
+  the switch block down and refuses readiness, so nothing stays armed, and every W7 attempt
+  rewrites the full vendor init record; the restore log states the restored/skipped counts.
+- *Diagnosability.*  The mismatch log prints the bench-proven field mask, the pre-write snapshot
+  value and the whole 5-word read view, so the next attended run is diagnosable from the console
+  alone; the success log separates bench-proven verified entries, diagnostic entries and the
+  write-only acknowledgement.
 
-A W7 boot still means "the recovered write set was accepted/verified", not "frames flow": the
-first time the queue manager is fully configured, a tagged PIE TX descriptor either egresses or
-it does not, and that is the next attended measurement.
+A W7 boot still means "the recovered write set was accepted/verified on the bench-proven fields",
+not "frames flow": the next attended measurement is whether a tagged PIE TX descriptor egresses
+once the queue manager is configured.
 
 ---
 
@@ -1570,7 +1577,7 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | W4 | R1/R3/R5 probe configuration only (`luofu_lsw.arm=1 luofu_lsw.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_lsw.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
 | W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
 | W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
-| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **first hardware attempt 2026-11-19 (image 14791958): all gates ran, W7 snapshot passed, the table-19 strict readback failed and the stage refused fail-closed (GEMAC did not register). Decode proved table 19 write-only; patch `032` now verifies vendor-read fields only and acknowledges table 19 (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
+| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **two hardware attempts 2026-11-19, both refused fail-closed with GEMAC unregistered. Round 1 (image 14791958): table-19 strict readback failed; decode proved table 19 write-only. Round 2 (image 5d2c5476): tables 32 and 35 verified on silicon, table 17 failed on its unreadable words 0/4 (words 1-3 read back exactly, so the data-register mapping is correct); patch `032` now uses tiered verification (STRICT only on bench-proven fields, DIAG for tables 16/34, ACK for table 19) and restores only bench-proven entries (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
 | W8 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.

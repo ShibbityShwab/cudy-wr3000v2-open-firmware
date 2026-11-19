@@ -3603,15 +3603,18 @@ NOT READY.
   reads the entries back on a per-word verification mask, and restores the verified entries on
   the first mismatch (also in `remove()`). The decoded indirect protocol is index/table/write/
   start in `eqm+0x48` with bit29 error and at most five data words per operation.
-- **Verification policy (refined after the 2026-11-19 bench run):** only the fields the vendor's
-  own read paths depend on are compared - table 32 slot priorities, table 35 word 0 bytes 1-2,
-  table 17 rate/cell fields, table 16 written bytes, table 34 queue-port/slot/input/valid.
-  **Table 19 is acknowledge-only**: it is write-only in the vendor code (`hi_queue_init` is its
-  only user and the EQM table accessors are module-local to `hi_lsw_dp`), and the bench showed
-  the engine's read view of it is not the written record (wrote 0xffffffff, read 0x3fff = its low
-  14 bits). Differences inside a verification mask still fail closed; differences outside them are
-  logged as diagnostics. The mismatch log now includes the vendor-read mask, the pre-write
-  snapshot value and the whole 5-word read view.
+- **Tiered verification policy (two bench rounds, 2026-11-19):** the engine accepts every write
+  but implements only part of each record as readable, so verification only claims what the bench
+  has proven. **STRICT (fail closed):** table 32 slot priorities, table 35 word 0 bytes 1-2 and
+  table 17 words 1..3 - all read back exactly on hardware. **DIAG (acknowledged + logged):**
+  tables 16 and 34 (not reached on the bench yet). **ACK:** write-only table 19 (`hi_queue_init`
+  is its only user; the EQM table accessors are module-local, so no vendor reader exists).
+  Bench evidence: table 19 wrote 0xffffffff and read 0x3fff 0x3e8 0x3fff 0x1ffffff 0x0 (per-word
+  field-width masks, write did take effect); table 17 wrote 0xbb8 to word 0 and read 0, while
+  words 1..3 read back exactly (register mapping correct). Restore restores only bench-proven
+  entries; table 19 and tables 16/34 are left as written and reported (a read view cannot restore
+  a record), with the block powered down on refusal. The mismatch log prints the bench-proven
+  mask, the snapshot value and the whole 5-word read view.
 - Patch 032 also corrects patch 025's EQM indirect error-bit decode (measured idle word
   0x41100012 has bit29 clear; the driver header had recorded bit5) and wires the W6 EPS
   channel-map snapshot into driver state so a later failure and `remove()` restore it too.
@@ -3625,27 +3628,45 @@ NOT READY.
   `eqm+0x5c = 0xbb8`) independently corroborates the command-word decode and the table-17
   profile shape: the vendor's last queue-init write was table 17, index 18, first data word 3000.
 
-### Bench result (2026-11-19, image 14791958) and the fix
+### Bench results (2026-11-19, three hardware rounds) and the fix
 
-Command line: `... luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_pie.arm=1
-luofu_switch.eps=1 luofu_switch.qminit=1`. The run passed W3-W6 and reached W7:
+Command line (all rounds): `... luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1
+luofu_pie.arm=1 luofu_switch.eps=1 luofu_switch.qminit=1`. Every run passed W3-W6 and reached W7.
 
-```
-[2.355537] W7 snapshot: 169 EQM table entries (845 words) read and stable, indirect interface idle (eqm+0x48 0x0)
-[2.369773] EQM readback mismatch at table 19 entry 0 word 0: read 0x3fff, expected 0xffffffff; restoring the pre-write snapshot
-[2.384940] probe with driver luofu-switch failed with error -5
-```
-
-The fail-closed design worked: the stage restored and refused, readiness stayed false, and the
-four GEMAC netdevs refused to register (`-EOPNOTSUPP`).  Re-opening the decode against
-`hi_lsw_dp.ko` explained the mismatch: **table 19 is write-only in the vendor code** - the
-`hi_queue_init` write is its only user and the EQM table accessors are module-local to the module,
-so no vendor reader exists; and 0x3fff is exactly `0xffffffff & GENMASK(13,0)`, so the engine's
-read view is not the written record ([I] 14-bit field view or non-implemented read; the bench
-value is [V]).  Patch 032 (fixed, sha256 in the lane SUMMARY) treats table 19 as acknowledge-only,
-compares the other tables on their vendor-read fields only, skips write-only entries in the
-restore path, and prints the full read view on any future mismatch.  The next attended boot is the
-first one that can run the complete write set and then test traffic.
+- *Round 1 (image 14791958):* W7 snapshot passed, then the strict table-19 readback failed and the
+  stage refused fail-closed:
+  ```
+  [2.355537] W7 snapshot: 169 EQM table entries (845 words) read and stable, indirect interface idle (eqm+0x48 0x0)
+  [2.369773] EQM readback mismatch at table 19 entry 0 word 0: read 0x3fff, expected 0xffffffff; restoring the pre-write snapshot
+  [2.384940] probe with driver luofu-switch failed with error -5
+  ```
+  Decode proved **table 19 is write-only in the vendor code** (the `hi_queue_init` write is its
+  only user; the EQM table accessors are module-local to `hi_lsw_dp`), so its readback can never
+  verify the record.  Fixed by acknowledging table 19 and comparing the other tables on their
+  vendor-read fields.
+- *Round 2 (image 5d2c5476):* the table-19 acknowledge path worked, and its read view - all-zero
+  in the fresh-block snapshot - became `0x3fff 0x3e8 0x3fff 0x1ffffff 0x0` after writing
+  `0xffffffff 0xffffc3e8 0xffffffff 0xffffffff 0xffffffff`: the write took effect and the read
+  view is per-word field-width masked.  Verification then **passed every table-32 and table-35
+  entry** and failed on table 17:
+  ```
+  [2.730787] W7: table 19 entry 0 is write-only in the vendor code: command acknowledged, read view 0x3fff 0x3e8 0x3fff 0x1ffffff 0x0 (not compared)
+  [2.747459] EQM readback mismatch at table 17 entry 17 word 0: read 0x0, expected 0xbb8 (vendor-read field mask 0x1fff), snapshot 0x0, read view 0x0 0x10000000 0xffff0bb8 0x2000bb8 0x0; restoring the verified entries
+  [2.786938] probe with driver luofu-switch failed with error -5
+  ```
+  Words 1..3 of that record read back **exactly at their own indices** (the data-register mapping is
+  not shifted), while words 0 and 4 read 0 although written: the engine does not implement those
+  two words as readable.  The GEMAC netdevs again refused to register.
+- *Fix (patch 032 revision 3, sha256 in the lane SUMMARY):* verification is tiered and only
+  bench-proven fields fail closed - **STRICT** = table 32 slot priorities, table 35 word 0 bytes
+  1-2, table 17 words 1..3 (all read back exactly on hardware); **DIAG** = tables 16 and 34 (not
+  reached on the bench yet: writes command-acknowledged, read views logged, to be promoted once a
+  run shows which words are readable); **ACK** = write-only table 19.  Restore now restores only
+  the bench-proven entries; table 19 and tables 16/34 are deliberately left as written (their read
+  views cannot be trusted to restore a record), the probe powers the block down and refuses
+  readiness, and the restore log states the restored/skipped counts.  The mismatch log prints the
+  bench-proven mask, the snapshot value and the whole 5-word read view.  The next attended boot is
+  the first one that can run the complete write set and then test traffic.
 
 ### Gate matrix after patch 032 (all paths fail closed; default boot unchanged)
 
@@ -3661,27 +3682,31 @@ first one that can run the complete write set and then test traffic.
 
 ### Validation (isolated clone under build/linux-kbuild/waves/2026-11-19-qm-decode/; shared clone and openwrt-lab-selectorfix-img untouched)
 
-- **Patch/series:** the fixed patch 032 is generated from the 001-031 tree; `001`-`033` applies
-  with 0 failed hunks and 0 `.rej`/`.orig` (`series-apply-001-033`, 33/33 patches), and the
+- **Patch/series:** patch 032 revision 3 is generated from the 001-031 tree; `001`-`034` applies
+  with 0 failed hunks and 0 `.rej`/`.orig` (`series-apply-001-034`, 34/34 patches), and the
   resulting drivers are byte-identical to the lane work tree.
-- **prepare/compile:** isolated reflink clone of the 001-031 OpenWrt lab under the wave directory
-  with the fixed 032 and the lane-033 patch added, `make target/linux/prepare` RC=0 and
+- **prepare/compile:** isolated reflink clone of the OpenWrt lab under the wave directory with the
+  fixed 032 and the lane-033/034 patches added, `make target/linux/prepare` RC=0 and
   `make target/linux/compile` RC=0 with `CONFIG_WERROR=y` and zero `warning:`/`error:` lines in
   the build log (log hashes in the lane SUMMARY).
 - **checkpatch:** 0 errors, 0 checks, the one expected "missing commit description" warning that
   every pure unified diff in this series produces.
 - **DTS/binding/config:** patch 032 changes no devicetree, binding or Kconfig/config symbol, so the
-  001-031 `dt_binding_check`/board-DTS/config-idempotence results stand unchanged; they were
-  re-run in the clone and recorded (see SUMMARY).
-- **Never executed:** no stage of this driver has run on hardware; the first W7 boot is an
-  attended bench event.
+  earlier `dt_binding_check`/board-DTS/config-idempotence results stand unchanged.
+- **Executed on hardware:** three attended boots on 2026-11-19 (images 14791958 and 5d2c5476 for
+  W7), each refused fail-closed as designed; see the bench results above.
 
 ### What this proves and what it does not
 
-Proven on hardware (2026-11-19, image 14791958): the W3-W6 write set runs and verifies on the real
-block, the EQM indirect interface works through the W7 pre-write snapshot (845 table words read,
-stable, interface idle), the engine acknowledges the W7 writes, and the fail-closed path (restore,
-power-down, readiness refusal) works exactly as designed.
+Proven on hardware (2026-11-19, images 14791958 / 5d2c5476): the W3-W6 write set runs and
+verifies on the real block; the EQM indirect interface performs the W7 845-word pre-write
+snapshot (stable, idle) and the engine acknowledges every W7 write; the table-32 and table-35
+vendor-read fields verify on silicon; table 17 words 1..3 read back exactly (the write/read data
+register mapping is correct, not shifted) while words 0/4 are not readable; the table-19 read
+view is a per-word field-width mask of the written record (fresh block 0x0 -> 0x3fff/0x3e8/...);
+and the fail-closed path (restore of bench-proven entries, power-down, readiness refusal, GEMAC
+refusal) works exactly as designed, including the documented decision to leave the write-only
+table 19 record as written.
 
 Proven host-side: the recovered write set is the vendor's own init write shape for the nine
 populated wired queue groups; the indirect engine protocol is decoded and corroborated by the
@@ -3708,13 +3733,16 @@ This is the first boot that should run the whole chain and then test traffic:
 4. **W3-W7 + PIE** (`... eps=1 qminit=1` plus `luofu_pie.arm=1`): expect, in order, the W3
    snapshot line, the W4 line, the W5 line, the W6 line, the W7 snapshot lines (the 169-entry
    summary, the write-only table-19 pre-write read view, and "indirect interface idle"), the W7
-   verification line ("... programmed: 168 verified on their vendor-read fields, 1 write-only
-   entry acknowledged ...") with at most a few diagnostic warnings for fields outside the
-   vendor-read masks, the connectivity-armed line and the GEMAC registration line. If a table
-   readback still mismatches, the log now prints the vendor-read mask, the snapshot value and the
-   full 5-word read view - capture it. Then, with the bench link up: `ping` across the wired port
-   while watching the PIE TX read pointer and the switch/EPS drop counters; one variable per boot;
-   power cycle between variants.
+   verification line ("... programmed: 91 verified on bench-proven vendor-read fields (tables
+   32/35/17), 77 acknowledged with diagnostics (tables 16/34; N differed on a vendor-read field),
+   1 write-only acknowledged (table 19) ...") with up to six diagnostic warnings for tables 16/34,
+   the connectivity-armed line and the GEMAC registration line. The diagnostic read views are the
+   data needed to promote tables 16/34 to fail-closed verification in a follow-up patch - capture
+   the console either way. If a STRICT table still mismatches, the stage restores the bench-proven
+   entries, leaves table 19 and tables 16/34 as written, powers the block down and refuses
+   readiness; the log prints the bench-proven mask, the snapshot value and the full 5-word read
+   view. Then, with the bench link up: `ping` across the wired port while watching the PIE TX read
+   pointer and the switch/EPS drop counters; one variable per boot; power cycle between variants.
 5. Any wedge or hang: physical RESET+TFTP only. There is no in-kernel reset path on this image.
 
 ### Evidence (local-only, gitignored)
