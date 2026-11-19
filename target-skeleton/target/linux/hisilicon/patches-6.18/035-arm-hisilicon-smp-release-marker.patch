@@ -1,0 +1,248 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -59,13 +59,17 @@
+  *     loader) is printed unconditionally at prepare time, before and after
+  *     the release, and again 1 ms and 21 ms later;
+  *   - the pen probe is enabled by default: the pen is the address of a small
+- *     stub built at boot that first stores its MPIDR in a page-aligned
+- *     scratch page (read back by the boot CPU through an uncached mapping,
+- *     so the result is visible even if the UART write fails), prints the low
+- *     MPIDR nibble and 'P' on the console UART, then branches to the real
+- *     secondary_startup.  "1P" on the console or a non-zero marker in the
+- *     "+1ms"/"+21ms" lines proves CPU1 consumed the pen; no marker means it
+- *     did not.  "luofu_smp_probe=0" selects the plain entry address again.
++ *     stub built at boot.  The stub first stores its MPIDR in marker word 0
++ *     of a page-aligned scratch page, then prints 'P' on the console UART
++ *     (with a bounded LSR poll so a dead UART cannot park the core), then
++ *     stores marker word 1 = "PEN!" and branches to the real entry.  The
++ *     boot CPU reads the marker page through its linear mapping after
++ *     invalidating the local cache lines, so no ioremap() of System RAM is
++ *     needed: patch 034's ioremap() of the scratch page failed on hardware
++ *     ("cannot map the probe marker"), which made its probe inconclusive.
++ *     Non-zero marker word 0 or marker word 1 == "PEN!" proves CPU1 consumed
++ *     the pen; both zero at +21 ms and at late_initcall() means it did not.
++ *     "luofu_smp_probe=0" selects the plain entry address again.
+  *
+  * Bench knobs (bare names, parsed before smp_init):
+  *
+@@ -78,9 +82,19 @@
+  *	luofu_smp_force_pen=<pa>    use an arbitrary physical pen value
+  *	luofu_smp_retries=<n>	repeat pen + resume + IPI up to n times
+  *
+- * Nothing here has been run on hardware yet: it is a bench variant and is
+- * compile-validated only.  No config or devicetree change is needed.
++ * HARDWARE RESULT OF 034 (2026-11-19, image 5d2c5476): the register dumps
++ * worked and measured the loader-left pen as 0, the resume word as
++ * 0x02a00000, SCU ctrl=3, config=0x511 and status=0x03030000 (CPU0/CPU1
++ * normal, CPU2/CPU3 powered off), and after the release pen stayed
++ * 0x81195000, resume became 0x00200000 and the SCU status did not change.
++ * No 'P' appeared on the console.  The probe marker ioremap() of the System
++ * RAM page failed, so the marker was never read and that probe result is
++ * inconclusive; 035 fixes the marker channel and bounds the UART poll.
++ *
++ * 035 is a bench variant and is compile-validated only.  No config or
++ * devicetree change is needed.
+  */
++#include <linux/compiler.h>
+ #include <linux/delay.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
+@@ -218,7 +232,7 @@
+ __setup("luofu_smp_diag=", luofu_smp_setup_diag_compat);
+ 
+ /*
+- * Pen probe stub and result marker.
++ * Pen probe stub and result marker (patch 035).
+  *
+  * CPU1 starts at the pen address with the MMU and the caches off (the stock
+  * loader's secondary stub polls SYSCTRL + 0xc00 and branches there), so a
+@@ -227,31 +241,39 @@
+  *	movw	r4, #marker low		@ page-aligned scratch page
+  *	movt	r4, #marker high
+  *	mrc	p15, 0, r3, c0, c0, 5	@ MPIDR
+- *	str	r3, [r4]		@ probe-seen marker
++ *	str	r3, [r4]		@ marker[0] = MPIDR: stub started
+  *	movw	r0, #0xf000		@ UART0 low half
+  *	movt	r0, #0x1010		@ r0 = 0x1010f000
+- *	ldrb	r1, [r0, #0x14]		@ LSR
++ *	movw	r5, #0x0000		@ bounded LSR poll: 1 << 20 tries
++ *	movt	r5, #0x0010
++ *	poll:	ldrb	r1, [r0, #0x14]		@ LSR
+  *	tst	r1, #0x20		@ THR empty?
+- *	beq	-4 * 4
+- *	and	r3, r3, #0xf
+- *	add	r3, r3, #'0'
+- *	strb	r3, [r0]		@ CPU id digit
+- *	mov	r1, #'P'
++ *	bne	print
++ *	subs	r5, r5, #1
++ *	bne	poll
++ *	b	done
++ *	print:	mov	r1, #'P'
+  *	strb	r1, [r0]		@ 'P' = pen consumed
++ *	done:	movw	r1, #0x4e21
++ *	movt	r1, #0x5045		@ marker[1] = "PEN!"
++ *	str	r1, [r4, #4]
+  *	ldr	r2, [pc]
+  *	bx	r2
+  *	.word	entry
+  *
+- * The marker is written before the UART access, so a data abort on the UART
+- * would still leave the proof that the pen was consumed.  The boot CPU reads
+- * the marker through an uncached ioremap() alias of the same page, so no
+- * cache maintenance is needed between the two cores.  The stub is built at
+- * boot and cleaned to the point of coherency; it clobbers r0-r5, which the
+- * real entry does not consume.
++ * The stub is built at boot and cleaned to the point of coherency; it
++ * clobbers r0-r5, which the real entry does not consume.  CPU1 runs with the
++ * MMU and caches off, so its marker stores go straight to DRAM; the boot CPU
++ * reads them through the linear mapping after invalidating its own cache
++ * lines (__sync_cache_range_r + READ_ONCE), which is the part patch 034 tried
++ * to get with ioremap() on System RAM - that is not allowed on 6.18 and failed
++ * on hardware.
+  */
++#define LUOFU_PROBE_MAGIC	0x50454e21u	/* "PEN!" */
++#define LUOFU_PROBE_UART_LOOPS	0x00100000u	/* bounded LSR poll */
++
+ static u32 luofu_smp_probe_stub[32] __aligned(64);
+ static u32 luofu_smp_probe_marker[1024] __aligned(PAGE_SIZE);
+-static void __iomem *luofu_smp_probe_marker_uc;
+ static phys_addr_t luofu_smp_probe_marker_pa;
+ 
+ static u32 luofu_arm_movw(unsigned int rd, u32 imm)
+@@ -277,27 +299,43 @@
+ 	s[3] = 0xe5843000;			/* str	r3, [r4] */
+ 	s[4] = 0xe30f0000;			/* movw	r0, #0xf000 */
+ 	s[5] = 0xe3410010;			/* movt	r0, #0x1010 */
+-	s[6] = 0xe5d01014;			/* ldrb	r1, [r0, #0x14] */
+-	s[7] = 0xe3110020;			/* tst	r1, #0x20 */
+-	s[8] = 0x0afffffc;			/* beq	6b */
+-	s[9] = 0xe203300f;			/* and	r3, r3, #0xf */
+-	s[10] = 0xe2833030;			/* add	r3, r3, #'0' */
+-	s[11] = 0xe5c03000;			/* strb	r3, [r0] */
+-	s[12] = 0xe3a01050;			/* mov	r1, #'P' */
+-	s[13] = 0xe5c01000;			/* strb	r1, [r0] */
+-	s[14] = 0xe59f2000;			/* ldr	r2, [pc] */
+-	s[15] = 0xe12fff12;			/* bx	r2 */
+-	s[16] = (u32)luofu_smp_entry_pa;	/* .word entry */
++	s[6] = 0xe3005000;			/* movw	r5, #0x0000 */
++	s[7] = 0xe3405010;			/* movt	r5, #0x0010 */
++	s[8] = 0xe5d01014;			/* ldrb	r1, [r0, #0x14] */
++	s[9] = 0xe3110020;			/* tst	r1, #0x20 */
++	s[10] = 0x1a000002;			/* bne	+2 (print) */
++	s[11] = 0xe2555001;			/* subs	r5, r5, #1 */
++	s[12] = 0x1afffffa;			/* bne	poll */
++	s[13] = 0xea000001;			/* b	+1 (done) */
++	s[14] = 0xe3a01050;			/* mov	r1, #'P' */
++	s[15] = 0xe5c01000;			/* strb	r1, [r0] */
++	s[16] = 0xe3041e21;			/* movw	r1, #0x4e21 */
++	s[17] = 0xe3451045;			/* movt	r1, #0x5045 */
++	s[18] = 0xe5841004;			/* str	r1, [r4, #4] */
++	s[19] = 0xe59f2000;			/* ldr	r2, [pc] */
++	s[20] = 0xe12fff12;			/* bx	r2 */
++	s[21] = (u32)luofu_smp_entry_pa;	/* .word entry */
+ 
+ 	__sync_cache_range_w(luofu_smp_probe_stub,
+ 			     sizeof(luofu_smp_probe_stub));
+ }
+ 
+-static u32 luofu_smp_probe_seen(void)
++/*
++ * CPU1 wrote the markers with the caches off; drop our own stale lines before
++ * looking at DRAM.  __sync_cache_range_r() cleans (to preserve anything a
++ * concurrent writer might have) and invalidates, and the outer flush takes
++ * care of the PL310 line if it holds a stale copy.
++ */
++static u32 luofu_smp_marker_read(unsigned int idx)
++{
++	__sync_cache_range_r(&luofu_smp_probe_marker[idx], sizeof(u32));
++	return READ_ONCE(luofu_smp_probe_marker[idx]);
++}
++
++static bool luofu_smp_pen_consumed(void)
+ {
+-	if (!luofu_smp_probe_marker_uc)
+-		return 0;
+-	return readl_relaxed(luofu_smp_probe_marker_uc);
++	return luofu_smp_marker_read(0) != 0 ||
++	       luofu_smp_marker_read(1) == LUOFU_PROBE_MAGIC;
+ }
+ 
+ static u32 luofu_scu_read(unsigned int off)
+@@ -427,10 +465,6 @@
+ 	if (luofu_smp_probe) {
+ 		luofu_smp_probe_marker_pa =
+ 			(phys_addr_t)virt_to_phys(luofu_smp_probe_marker);
+-		luofu_smp_probe_marker_uc =
+-			ioremap(luofu_smp_probe_marker_pa, PAGE_SIZE);
+-		if (!luofu_smp_probe_marker_uc)
+-			pr_err("luofu-smp: cannot map the probe marker\n");
+ 		luofu_smp_build_probe_stub();
+ 	}
+ 
+@@ -443,6 +477,9 @@
+ 	pr_info("luofu-smp: prep pen value %08x (loader state) resume %08x\n",
+ 		readl_relaxed(luofu_smp_pen), readl_relaxed(luofu_smp_resume));
+ 	luofu_smp_dump("prep");
++	if (luofu_smp_probe)
++		pr_info("luofu-smp: prep markers %08x %08x (must be zero)\n",
++			luofu_smp_marker_read(0), luofu_smp_marker_read(1));
+ }
+ 
+ /*
+@@ -513,30 +550,48 @@
+ 	luofu_smp_release(cpu, resume_mask, pen_value);
+ 
+ 	mdelay(1);
+-	pr_info("luofu-smp: +1ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker=%08x\n",
++	pr_info("luofu-smp: +1ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x\n",
+ 		readl_relaxed(luofu_smp_pen), readl_relaxed(luofu_smp_resume),
+ 		luofu_scu_read(LUOFU_SCU_CTRL), luofu_scu_cpu_status(cpu),
+-		luofu_smp_probe_seen());
++		luofu_smp_marker_read(0), luofu_smp_marker_read(1));
+ 	luofu_smp_dump("+1ms");
+ 
+ 	mdelay(20);
+-	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker=%08x consumed=%s\n",
++	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x consumed=%s\n",
+ 		readl_relaxed(luofu_smp_pen), readl_relaxed(luofu_smp_resume),
+ 		luofu_scu_read(LUOFU_SCU_CTRL), luofu_scu_cpu_status(cpu),
+-		luofu_smp_probe_seen(),
+-		luofu_smp_probe_seen() ? "yes" : "no");
++		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
++		luofu_smp_pen_consumed() ? "yes" : "no");
+ 	luofu_smp_dump("+21ms");
+ 
+ 	for (retries = luofu_smp_retries; retries > 0; retries--) {
+ 		mdelay(1);
+-		pr_info("luofu-smp: retry %u pen=%08x marker=%08x\n", retries,
+-			readl_relaxed(luofu_smp_pen), luofu_smp_probe_seen());
++		pr_info("luofu-smp: retry %u pen=%08x marker0=%08x marker1=%08x\n",
++			retries, readl_relaxed(luofu_smp_pen),
++			luofu_smp_marker_read(0), luofu_smp_marker_read(1));
+ 		luofu_smp_release(cpu, resume_mask, pen_value);
+ 	}
+ 
+ 	return 0;
+ }
+ 
++/*
++ * Read-only second look at the marker page once initcalls have run: if CPU1
++ * consumed the pen only later (or the boot CPU's first look raced the store),
++ * the marker shows up here.  With ".probe=0" the marker page is unused.
++ */
++static int __init luofu_smp_late_marker_check(void)
++{
++	if (!luofu_smp_probe)
++		return 0;
++
++	pr_info("luofu-smp: late marker0=%08x marker1=%08x consumed=%s\n",
++		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
++		luofu_smp_pen_consumed() ? "yes" : "no");
++	return 0;
++}
++late_initcall(luofu_smp_late_marker_check);
++
+ static const struct smp_operations luofu_smp_ops __initconst = {
+ 	.smp_prepare_cpus	= luofu_smp_prepare_cpus,
+ 	.smp_boot_secondary	= luofu_smp_boot_secondary,

@@ -847,3 +847,117 @@ loader-time CPU1/power state, which is why the in-kernel dump is the primary pro
    early_initcall probe that writes a spin-only stub and a marker) to test whether
    anything in the kernel's own early init stops CPU1 before the normal release
    point. That is patch 035 work, not part of this variant.
+
+---
+
+## 16. 034 hardware result (2026-11-19, image 5d2c5476) and patch 035
+
+Status: third hardware run of this lane. Patch 034's diagnostics and probe ran (the
+__setup() names worked), but the probe marker page could not be read, so the probe
+result is inconclusive. This section records the first boot-side register state of
+our kernel, answers the "pen read 0 before our write" question, and delivers the
+marker-fixed variant (035). The early-write probe idea from section 15.8 is not part
+of 035; it moves to a later patch if it is still needed.
+
+### 16.1 First in-kernel register snapshot [V]
+
+Boot context: warm reset from the previous image ("Reset Info: Linux reboot cmd to
+reset"; no "Hard Power-on reset" line). Values measured at prepare (~0.25 s) and
+again after the release (~0.37 s):
+
+| word | prepare value | after release | note |
+| --- | --- | --- | --- |
+| SYSCTRL 0x10100c00 (pen) | 0x00000000 | 0x81195000 | loader left 0; after our write it holds the probe stub address and is never cleared |
+| SYSCTRL 0x10100c08 | 0x00000010 | same | boot selector pair |
+| SYSCTRL 0x10100c10 (rstinfo) | 0x42000000 | same | differs from the stock sample (0x82000000); likely reset provenance, [U] |
+| SYSCTRL 0x10100c14 | 0xdfdf0781 | same | unknown, [U] |
+| CRG 0x14880014 | 0x01360ef1 | same | same as the stock inventory |
+| CRG 0x14880020 | 0x02f8000b | same | stock inventory 0x02f8300b (bit 12 differs; our gated clock writes) [I] |
+| CRG 0x1488002c | 0x0d300e01 | same | same as stock |
+| CRG 0x14880030 | 0xfe7fe040 | same | stock 0xfe7fe05b (low bits; our reset writes) [I] |
+| CRG 0x14880034 | 0x00000309 | same | stock 0x000ff309 (our PCIe/reset writes) [I] |
+| CRG 0x14880038 (resume) | 0x02a00000 | 0x00200000 | exactly the stock reference value after the vendor release |
+| SCU ctrl | 0x00000003 | same | bit0 SCU enabled (loader); our scu_enable() early-returned [I] |
+| SCU config | 0x00000511 | same | bits [1:0] = 1 -> 2 cores [V, mainline formula]; other bits raw [U] |
+| SCU status | 0x03030000 | same | byte per core: CPU0 = 0x00, CPU1 = 0x00 -> NORMAL; CPU2 = 0x03, CPU3 = 0x03 -> powered off. Validates the byte-wise power-mode decode [V] |
+
+Release attempt: pen = 0x81195000 (probe stub PA), resume 0x02a00000 -> 0x00200000
+with mask 0x02800000; at +1 ms and +21 ms the pen still reads 0x81195000, the SCU
+status is unchanged (CPU1 still normal), no 'P' appeared and CPU1 stayed offline
+after the 1 s timeout.
+
+### 16.2 The probe marker channel failed [V]
+
+The boot log shows "luofu-smp: cannot map the probe marker" at 0.239 s. Patch 034
+read the marker page through ioremap() of System RAM; on 6.18 ioremap() of
+pfn_valid() RAM returns NULL, the read helper then returned 0 and the marker was
+never observed. **The 034 probe result is inconclusive: "pen unchanged, no 'P'" is
+consistent with both "CPU1 never consumed the pen" and "CPU1 consumed it and parked
+in the stub" (for example on the unbounded UART LSR poll).**
+
+### 16.3 The loader-left pen 0 is expected; the stock 0x80609680 is not comparable [V]/[I]
+
+The only stock pen reading in the repository (0x80609680) was taken at runtime with
+the vendor kernel running, i.e. it is the *vendor kernel's own write*, not the
+loader state. The loader-left state was never measured on the stock system. On our
+side, the previous image had left pen = 0x8070a000; 034 then read pen = 0 before its
+own write, which proves that the decoded U-Boot boot-core path (clear pen, program
+CRG + 0x50, re-init the SCU) ran on this warm boot [V]. The loader-left pen value
+therefore carries no information about CPU1 by itself: it is 0 for every boot where
+the loader's boot-core path runs, including boots where CPU1 does come up under the
+stock kernel. What it does say is that the bootloader half of the hand-off is
+healthy [I].
+
+The rstinfo record at SYSCTRL + 0xc10 differs between the two samples
+(0x42000000 here versus 0x82000000 on the stock inventory); the top bit is the
+likely cold/warm or reset-source marker and is [U]. A stock read after a known cold
+power-on and after a known warm reboot (same command set as 15.7 extended with
+0x10100c10) would settle it.
+
+### 16.4 Patch 035: marker-fixed probe
+
+Patch 035 keeps 034's unconditional dumps and release knobs and replaces the probe
+marker channel:
+
+* the marker page is no longer ioremap()ed. The boot CPU reads it through the
+  normal linear mapping after __sync_cache_range_r() has cleaned and invalidated
+  its own cache lines (inner + PL310 outer flush); CPU1 writes with the caches off,
+  so its stores are already in DRAM;
+* the stub records two markers: word 0 = MPIDR as soon as it starts, word 1 =
+  0x50454e21 ("PEN!") just before it branches to the real entry. It prints 'P' on
+  the console UART with a bounded LSR poll (1 << 20 reads), so a dead UART cannot
+  park the core forever;
+* the +1 ms, +21 ms and retry lines print marker0/marker1 and a "consumed=" verdict;
+  a read-only late_initcall() looks at the marker page once more in case the store
+  arrives late;
+* everything else (probe default on, probe=0 control, power, allbits, clear_mask,
+  force_pen, retries, unconditional SYSCTRL/CRG/SCU snapshots) is unchanged.
+
+Expected lines on the next boot: "prep markers 00000000 00000000 (must be zero)",
+then either "P" from CPU1 and non-zero marker0/marker1 with "consumed=yes", or zeros
+with "consumed=no" at +21 ms and at late_initcall().
+
+### 16.5 Updated next single-variable boot plan
+
+1. Build an 001-035 image from the bench clone (no command-line change needed) and
+   warm-boot it. The marker decides:
+   * consumed=yes -> CPU1 does consume the pen. Then the next variable is the plain
+     entry (luofu_smp_probe=0): if the direct entry still fails, CPU1 dies in the
+     6.18 secondary entry and the next patch instruments __secondary_switched.
+   * consumed=no -> CPU1 never consumed the pen on this warm boot. Next, one
+     variable per boot: (a) cold power-on of the same image (reset-type variable);
+     (b) luofu_smp_probe=0 control; (c) luofu_smp_power=1 control (SCU says
+     NORMAL, expected no-op); (d) clear_mask experiments only after the stock
+     CRG/rstinfo reads are in hand.
+2. Also read the stock SCU words and rstinfo (section 15.7 command set plus
+   0x10100c10) after a known cold power-on and after a known warm reboot, to
+   correlate 0x42000000/0x82000000 with the reset type [U].
+
+### 16.6 Validation of 035 (host-only, isolated clone)
+
+| check | result |
+| --- | --- |
+| pristine 6.18.60 series apply 001-035 | patch -p1 -F0: RC=0, 113 files, no .rej/.orig; only the four pre-existing offset hunks (008 x2, 021, 028); resulting platsmp.c sha256 cc3edadc... identical to the delivered file |
+| OpenWrt prepare + compile 001-035 | make target/linux/prepare V=s: RC=0; make target/linux/compile V=s -j16: RC=0 (see the lane summary for the artifact hashes) |
+| probe stub encoding | generated instruction words compared with the project ARM assembler for a sample marker address: all 22 instructions + literal match (the bne back into the poll loop was corrected from 0x1afffff9 to 0x1afffffa during this lane) |
+| checkpatch | patch-mode: only the expected missing commit-description/Signed-off-by metadata; file-mode 0 errors / 0 warnings |
