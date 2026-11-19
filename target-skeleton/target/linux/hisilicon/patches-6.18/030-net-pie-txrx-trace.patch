@@ -1,0 +1,57 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -562,6 +562,9 @@
+  * classes at +13 bits 6:5 and +10 bits 5:4 are recorded but their meaning is
+  * [U], so they are not acted on (no checksum/VLAN offload reporting).
+  */
++static atomic_t luofu_pie_trace_tx = ATOMIC_INIT(0);
++static atomic_t luofu_pie_trace_rx = ATOMIC_INIT(0);
++
+ struct luofu_pie_rx_compl {
+ 	u16 len;
+ 	u8 status;
+@@ -1056,6 +1059,9 @@
+ 	skb->protocol = eth_type_trans(skb, ndev);
+ 	ndev->stats.rx_packets++;
+ 	ndev->stats.rx_bytes += compl->len;
++	if (atomic_inc_return(&luofu_pie_trace_rx) <= 12)
++		pr_info("pie-trace RX port=%u len=%u status=%u vlan=%u\n",
++			compl->port, compl->len, compl->status, compl->vlan);
+ 	napi_gro_receive(&np->napi, skb);
+ 
+ 	dev_put(ndev);
+@@ -1254,6 +1260,16 @@
+ 	 * vendor writes (last produced index + 1) masked to the ring, i.e. the
+ 	 * index of the next free descriptor. [V] code shape.
+ 	 */
++	if (atomic_inc_return(&luofu_pie_trace_tx) <= 12) {
++		u32 *dw = (u32 *)desc;
++
++		pr_info("pie-trace TX cpu=%u port=%u len=%u dma=%pad wptr=%u rptr=%u hwrptr=%08x desc=%08x %08x %08x %08x\n",
++			raw_smp_processor_id(), port, len, &dma, ring->wptr,
++			ring->rptr,
++			readl(pie->base + LUOFU_PIE_TX_RPTR_OFF(ch)),
++			dw[0], dw[1], dw[2], dw[3]);
++		pr_info("pie-trace TX doorbell=%u\n", ring->wptr & ring_mask);
++	}
+ 	dma_wmb();
+ 	writel(ring->wptr & ring_mask, pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
+ 
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -230,10 +230,15 @@
+ 	return 0;
+ }
+ 
++static atomic_t luofu_gmac_trace_tx = ATOMIC_INIT(0);
++
+ static netdev_tx_t luofu_gmac_xmit(struct sk_buff *skb, struct net_device *ndev)
+ {
+ 	struct luofu_gmac *g = netdev_priv(ndev);
+ 
++	if (atomic_inc_return(&luofu_gmac_trace_tx) <= 12)
++		pr_info("pie-trace GMAC %s xmit port=%u len=%u\n",
++			ndev->name, g->port, skb->len);
+ 	return luofu_pie_xmit(skb, ndev, g->port);
+ }
+ 
