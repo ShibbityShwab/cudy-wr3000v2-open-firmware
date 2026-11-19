@@ -68,6 +68,12 @@ SERIES = [
      "draft (do not merge; gated W3/W4/W5 write path)"),
     ("0023-net-gmac-netdev-connect-luofu",
      "draft (do not merge; netdev readiness only)"),
+    ("0024-net-pie-completion-decode-luofu",
+     "draft (do not merge; arm-gated completion decode)"),
+    ("0025-net-lsw-egress-luofu",
+     "draft (do not merge; gated W4 egress write stage)"),
+    ("0026-net-gmac-bdinfo-mac-nvmem",
+     "draft (do not merge; MAC nvmem source, readiness-gated)"),
 ]
 
 
@@ -101,6 +107,9 @@ GROUPS = [
         "0021-net-lsw-init-luofu",
         "0022-net-lsw-qidmap-write-luofu",
         "0023-net-gmac-netdev-connect-luofu",
+        "0024-net-pie-completion-decode-luofu",
+        "0025-net-lsw-egress-luofu",
+        "0026-net-gmac-bdinfo-mac-nvmem",
     ]),
     ("Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)", [
         "0018-arm-mach-hisilicon-smp",
@@ -247,6 +256,34 @@ def mapping_doc(series: list, hashes: dict) -> str:
     add("  only MAC writes are the measured 1 Gbps link-up/link-down words; the")
     add("  RX completion decode and the TX-to-egress mapping are still [U] and")
     add("  the registration has never run on hardware.")
+    add("- draft (do not merge; arm-gated completion decode): 0024 decodes the")
+    add("  recovered v250 RX completion descriptor and builds the full normal")
+    add("  non-TSO TX descriptor, and delivers received frames to the GEMAC")
+    add("  net_device that registered the switch port.  Every PIE register write")
+    add("  stays inside the existing luofu_pie.arm=1 arm path, the GEMAC")
+    add("  hisilicon,port property and the port registration add no register")
+    add("  write, and the arm path has never run.  The decode has never been")
+    add("  observed on hardware: the field positions are [V] from the vendor")
+    add("  disassembly but live values are unobserved, the two RX flag classes")
+    add("  are [U] and the ring-index reading is [I].")
+    add("- draft (do not merge; gated W4 egress write stage): 0025 adds the")
+    add("  luofu_lsw.egress=1 stage between 0022's W3 power step and its W5")
+    add("  qid-map write: the R1/R3/R5 probe-configuration words with a")
+    add("  pre-write conformance gate, expectations derived from the pre-write")
+    add("  snapshot, readback of every word and restore on mismatch.  It")
+    add("  requires luofu_lsw.arm=1 and tightens readiness so both the probe")
+    add("  configuration and the qid map must verify; the gate has never been")
+    add("  set, no switch register has been written by this code, and the")
+    add("  per-frame egress selection and the EQM/classifier/VLAN formats are")
+    add("  still [U].")
+    add("- draft (do not merge; MAC nvmem source, readiness-gated): 0026 makes")
+    add("  the GEMAC netdev take its address from the read-only bdinfo MTD")
+    add("  nvmem cell (fixed-layout/mac-base, LAN = base, WAN = base+1),")
+    add("  defers probe when the provider is not registered yet and keeps the")
+    add("  logged random fallback otherwise; userspace MAC assignment stays")
+    add("  functional.  It registers nothing unless the 0023 readiness gate")
+    add("  passes, writes no register or flash, and the nvmem read path has")
+    add("  never run on a booted target.")
     add("- RFC (attended): host-validated platform code whose acceptance requires")
     add("  a single-variable, recovery-armed bench session; not part of the")
     add("  UP-first mergeable set.")

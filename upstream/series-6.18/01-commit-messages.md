@@ -17,7 +17,7 @@ subsystem as described in 00-cover-letter.md.
 
 ## Group 1 - core platform (RFC)
 
-### 0001/23  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+### 0001/26  ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
 
 Status: RFC
 
@@ -50,7 +50,7 @@ and has never booted.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0002/23  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+### 0002/26  ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
 
 Status: RFC
 
@@ -74,7 +74,7 @@ builds together with the following early-boot change.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0003/23  ARM: head: materialize TEXT_OFFSET with mov_l
+### 0003/26  ARM: head: materialize TEXT_OFFSET with mov_l
 
 Status: RFC
 
@@ -101,7 +101,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 2 - peripheral drivers and clock tree, ready for review
 
-### 0004/23  clk: hisilicon: add Luofu CRG clock and reset controller
+### 0004/26  clk: hisilicon: add Luofu CRG clock and reset controller
 
 Status: ready-for-review
 
@@ -137,7 +137,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0005/23  watchdog: luofu: add Hi5671Y watchdog support
+### 0005/26  watchdog: luofu: add Hi5671Y watchdog support
 
 Status: ready-for-review
 
@@ -168,7 +168,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0007/23  net: mdio: luofu: add MDIO bus controller
+### 0007/26  net: mdio: luofu: add MDIO bus controller
 
 Status: ready-for-review
 
@@ -197,7 +197,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0008/23  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+### 0008/26  net: phy: add driver for HiSilicon Luofu "Genius" PHYs
 
 Status: ready-for-review
 
@@ -222,7 +222,7 @@ Host-compiled against linux-6.18.60; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0012/23  thermal: add Luofu thermal sensor driver
+### 0012/26  thermal: add Luofu thermal sensor driver
 
 Status: ready-for-review
 
@@ -252,7 +252,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0014/23  clk: hisilicon: fix Luofu CRG reset polarity
+### 0014/26  clk: hisilicon: fix Luofu CRG reset polarity
 
 Status: ready-for-review
 
@@ -278,7 +278,7 @@ the vendor kernel, but this driver has never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0019/23  clk: hisilicon: add the Luofu CRG clock tree
+### 0019/26  clk: hisilicon: add the Luofu CRG clock tree
 
 Status: ready-for-review (read-only clock tree)
 
@@ -347,7 +347,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 3 - peripheral drivers, RFC
 
-### 0006/23  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+### 0006/26  spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
 
 Status: RFC
 
@@ -387,7 +387,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0011/23  pinctrl: hisilicon: add Luofu peripheral pin controller
+### 0011/26  pinctrl: hisilicon: add Luofu peripheral pin controller
 
 Status: RFC
 
@@ -422,7 +422,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0013/23  PCI: dwc: add Luofu PCIe host controller
+### 0013/26  PCI: dwc: add Luofu PCIe host controller
 
 Status: RFC
 
@@ -455,7 +455,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0017/23  soc: hisilicon: add Luofu A/B boot selector
+### 0017/26  soc: hisilicon: add Luofu A/B boot selector
 
 Status: RFC
 
@@ -498,7 +498,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ## Group 4 - RFC / partial drafts, do not merge
 
-### 0009/23  net: ethernet: hisilicon: add partial Luofu GEMAC driver
+### 0009/26  net: ethernet: hisilicon: add partial Luofu GEMAC driver
 
 Status: RFC (partial, refuses probe)
 
@@ -529,7 +529,7 @@ dt_binding_check; never run on hardware.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0010/23  power: reset: add Luofu machine restart driver
+### 0010/26  power: reset: add Luofu machine restart driver
 
 Status: RFC (provisional reset)
 
@@ -563,7 +563,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0015/23  net: ethernet: hisilicon: add Luofu PIE packet engine draft
+### 0015/26  net: ethernet: hisilicon: add Luofu PIE packet engine draft
 
 Status: draft (do not merge)
 
@@ -594,7 +594,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0016/23  net: ethernet: hisilicon: add Luofu switch probe skeleton
+### 0016/26  net: ethernet: hisilicon: add Luofu switch probe skeleton
 
 Status: draft (do not merge)
 
@@ -627,7 +627,7 @@ dt_binding_check.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0020/23  net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+### 0020/26  net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
 
 Status: draft (do not merge; arm-gated data path)
 
@@ -687,7 +687,7 @@ Host-compiled against linux-6.18.60 in the target lane (0 warnings,
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0021/23  net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+### 0021/26  net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
 
 Status: draft (do not merge; read-only baseline probe)
 
@@ -740,7 +740,7 @@ dt_binding_check and the board DTS compiles with zero warnings.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0022/23  net: ethernet: hisilicon: add the gated Luofu LSW write path
+### 0022/26  net: ethernet: hisilicon: add the gated Luofu LSW write path
 
 Status: draft (do not merge; gated W3/W4/W5 write path)
 
@@ -799,7 +799,7 @@ the board DTS compiles with zero warnings.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
-### 0023/23  net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+### 0023/26  net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
 
 Status: draft (do not merge; netdev readiness only)
 
@@ -852,9 +852,190 @@ the board DTS compiles with zero warnings.
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
 
+### 0024/26  net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+
+Status: draft (do not merge; arm-gated completion decode)
+
+~~~
+net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+
+Complete the HiSilicon Hi5671Y "luofu" PIE data path from the vendor
+v250 descriptor model: the RX completion descriptor is decoded and
+delivered to the network stack, the normal non-TSO TX descriptor is
+built in full, and the GEMAC front end registers its internal switch
+port with the engine.  The decode is a direct transcription of the
+vendor hi_kpie.ko code paths (hi_pie_rx_get_desc, hi_pie_drv_rx_recv,
+hi_pie_rx_set_owner/set_addr, hi_pie_tx_set_desc and hi_pie_tx_send),
+as recorded in PIE-DATAPATH.md sections 5.2 and 6.
+
+RX: luofu_pie_rx_poll() now decodes each completed descriptor - frame
+length at +0, the status/error code at +8 bits 6:0 (zero = no error),
+the port/vport pair at +16 on the normal path and the alternate
+port/vport bytes at +23/+24 on the no-status path - drops error,
+implausible and unknown-port frames with counters, unmaps the buffer,
+and delivers a good frame with napi_gro_receive() (CHECKSUM_NONE, the
+in-frame 802.1Q tag preserved) to the net_device that registered the
+completed port.  The slot is then re-armed with a freshly allocated
+coherent buffer and the recovered RX write/"sf" pointer values are
+written.  A port with no registered receiver, or whose receiver is
+down, drops the frame (fail closed).  The vendor g_api_priv[] context
+lookup is replaced by a port table under a spinlock and a new
+luofu_pie_rx_register()/unregister() API.
+
+TX: the producer builds the recovered v250 normal non-TSO descriptor
+for one linear frame - length at +0, the 0x74 valid/normal/class word
+at +3, the DMA address at +4, the port tag at +8, the type-0 control
+words at +11/+12/+14/+19 - and rings the doorbell with the masked
+ring index of the next free descriptor.  TX reclaim masks the read
+pointer to the ring index and reclaims everything before it; the RX
+read/write pointers are handled the same way.  The request TSO and
+type 1/2/3 control variants are decoded only at branch level and are
+not written.
+
+The GEMAC front end reads the required "hisilicon,port" property
+(the vendor switch port: 8 for the unpopulated RGMII instance, 9..12
+for the four GMII ports), refuses probe without it, and
+registers/unregisters its port around ndo_open/stop so the engine can
+deliver to its net_device.  The GEMAC and PIE bindings describe the
+implemented decode and the new required property.  No Kconfig symbol
+is added, no devicetree node is added, and every PIE register write
+stays inside the existing luofu_pie.arm=1 arm path with its
+fail-closed probe, read-back verification and halt.
+
+This is still a draft and not mergeable.  The decode has never been
+observed on hardware: no PIE register has been written by this code,
+the arm gate has never been passed, and no completion or TX
+descriptor has been accepted by the engine.  The field positions are
+[V] from the vendor disassembly but the values on a live frame are
+unobserved, the two RX flag classes are semantically [U], the
+ring-index reading of the pointer words is [I], and the LSW-side
+egress queue selection is still [U], so no packet can be claimed to
+reach a wire.  The attended RX/TX decode checks are listed in
+port-notes/pie-decode/SUMMARY.md section 6.
+
+An earlier form of this patch compared napi_gro_receive() against
+GRO_DROP, which does not exist in 6.18; the call is now made without
+a comparison (the return value is not needed here).  Host-compiled in
+the pie-decode lane against linux-6.18.60: the 001-024 series applies
+with 0 rejected hunks and compiles RC=0 with 0 errors and 0 compiler
+warnings under CONFIG_WERROR=y; the extended bindings pass
+dt_binding_check and the full 001-026 series compiles clean.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+~~~
+
+### 0025/26  net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+
+Status: draft (do not merge; gated W4 egress write stage)
+
+~~~
+net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+
+Add the missing initialization stage between the W3 clock/reset power
+step of patch 0022 and its W5 qid-map write: the R1/R3/R5
+probe-configuration words that the vendor hi_dp_probe and
+hi_queue_init program after the reset pulse (LSW-SPEC.md section 7.7,
+port-notes/lsw-egress/SUMMARY.md section 2).  The new module
+parameter luofu_lsw.egress=1 requires luofu_lsw.arm=1, so the default
+boot is still the patch 0021/0022 read-only path and every write
+stays behind an attended, recovery-armed gate.
+
+The stage writes only the nine recovered probe-configuration words,
+in the vendor's order: dp+0x68 = 0, the two-write dp+0x64 cell
+selector, dp+0x1c (u16 queue DDR base | BIT(16)), the ips+0x10
+BIT(16) and ips+0x08 = 42 words and the four derived eqm words at
++0xa4, +0x18, +0x38 and +0x40.  Every readback expectation is
+computed from the pre-write snapshot with the vendor formulas, so the
+check tests the write path rather than an invented value.  R4,
+fam+0x504, is a read-only conformance input, not a write: the stage
+refuses before the first write unless the found low-14 cell count
+equals the computed (queue_size / cell_size) & ~7, because the R3
+derivations assume that measured state.  A pre-write conformance gate
+also requires the EQM indirect interface idle and the target words
+stable; on any mismatch all found values are restored and the probe
+fails closed.  The field semantics of every word remain [U].
+
+Readiness is tightened: luofu_switch_ready() now requires the
+verified probe configuration as well as the verified W2 qid map.  A
+boot with luofu_lsw.arm=1 luofu_lsw.qidmap=1 therefore programs and
+verifies the qid maps and then refuses, because the probe
+configuration is missing; only arm=1 egress=1 qidmap=1 makes the
+switch ready for the GEMAC front end.  luofu_lsw.egress/qidmap
+without luofu_lsw.arm=1 are an explicit -EINVAL configuration error
+instead of a silent no-op, and the error path and remove() restore
+the R1/R3/R5 words before powering the block down.  The EQM indirect
+queue tables, the classifier/L2/VLAN formats and the queue/flow DDR
+regions are deliberately not modelled or written; the per-frame
+egress selection is not software-visible and is still [U].  The
+LUOFU_SWITCH Kconfig help text and the switch register header
+document the new stage and per-word evidence grades.
+
+This is still a draft and not mergeable.  No clock, reset or switch
+register has been written by this code, the egress gate has never
+been set, no readback or restore path has run, and the W4 effect of
+the probe configuration and the EQM/classifier/VLAN formats are [U].
+A refusal because the found block state is not the measured vendor
+state is the designed fail-closed outcome, not a bug.  The attended
+sequence is in port-notes/lsw-egress/SUMMARY.md section 7.
+Host-compiled in the lsw-egress lane: the 001-025 series applies
+with 0 rejected hunks, the kernel compiles RC=0 (W=1 clean for the
+changed driver), and the final 001-026 series compiles with 0 errors
+and 0 compiler warnings under CONFIG_WERROR=y.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+~~~
+
+### 0026/26  net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
+
+Status: draft (do not merge; MAC nvmem source, readiness-gated)
+
+~~~
+net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
+
+Make the GEMAC netdev take its address from the plaintext factory MAC
+the board stores at bdinfo+0xde00 without a new driver: the stock MTD
+partition is already exposed read-only through the mainline mtd-nvmem
+provider, and the board DTS (delivered through the OpenWrt target,
+not this kernel series) declares a fixed-layout / mac-base nvmem cell
+at that offset.  of_get_mac_address() then resolves the cell argument
+to the vendor rule: LAN ports = base MAC, WAN = base+1.
+
+The probe reads the address before allocating the net_device and
+honours -EPROBE_DEFER from a not-yet-registered nvmem provider: a
+deferred bdinfo partition defers the probe instead of inventing a
+random identity that could appear one probe later.  Every other error
+(missing wiring, erased/invalid bytes, older DTB) keeps the logged
+random locally-administered fallback.  ndo_set_mac_address =
+eth_mac_addr and ndo_validate_addr = eth_validate_addr are installed
+so the existing userspace provisioning path (netifd "macaddr") still
+applies on the netdev; no MAC register is written by either path.
+The GEMAC binding description documents the nvmem source and the
+per-port offset rule.
+
+The mac-base cell post-processing is an OpenWrt-carried backport, not
+part of vanilla 6.18.60 - the dependency is documented on the target
+side; without it the cell reads raw bytes and the WAN +1 arithmetic
+stops being applied.  The DTS wiring and the guarded board.d LAN/WAN
+interface map are target content and are not part of this kernel
+patch.
+
+This is still a draft and not mergeable.  Nothing here has read
+bdinfo on a booted target: the MTD nvmem read path, the probe-ordering
+defer branch and the userspace MAC application are [U], the hardcoded
++0xde00 offset is from the local flash dump and not from this read
+path, and the nvmem provider is read-only (no write callback) and the
+partition is marked read-only, so this code never writes factory
+data.  Host-compiled in the mac-nvmem lane: the 001-026 series
+applies with 0 rejected hunks, the kernel compiles RC=0 with
+0 errors and 0 compiler warnings under CONFIG_WERROR=y, and the
+binding passes dt_binding_check; nothing booted.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+~~~
+
 ## Group 5 - SMP bring-up (RFC, attended; not in the UP-first set)
 
-### 0018/23  ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+### 0018/26  ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
 
 Status: RFC (attended)
 
@@ -944,6 +1125,9 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 21 | series/0021-net-lsw-init-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/021-net-lsw-init-luofu.patch | net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe | draft (do not merge; read-only baseline probe) |
 | 22 | series/0022-net-lsw-qidmap-write-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/022-net-lsw-qidmap-write-luofu.patch | net: ethernet: hisilicon: add the gated Luofu LSW write path | draft (do not merge; gated W3/W4/W5 write path) |
 | 23 | series/0023-net-gmac-netdev-connect-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/023-net-gmac-netdev-connect-luofu.patch | net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map | draft (do not merge; netdev readiness only) |
+| 24 | series/0024-net-pie-completion-decode-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/024-net-pie-completion-decode-luofu.patch | net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors | draft (do not merge; arm-gated completion decode) |
+| 25 | series/0025-net-lsw-egress-luofu.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/025-net-lsw-egress-luofu.patch | net: ethernet: hisilicon: add the gated Luofu LSW egress write stage | draft (do not merge; gated W4 egress write stage) |
+| 26 | series/0026-net-gmac-bdinfo-mac-nvmem.patch | opensource/target-skeleton/target/linux/hisilicon/patches-6.18/026-net-gmac-bdinfo-mac-nvmem.patch | net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev | draft (do not merge; MAC nvmem source, readiness-gated) |
 
 ## Status legend
 
@@ -980,6 +1164,34 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
   only MAC writes are the measured 1 Gbps link-up/link-down words; the
   RX completion decode and the TX-to-egress mapping are still [U] and
   the registration has never run on hardware.
+- draft (do not merge; arm-gated completion decode): 0024 decodes the
+  recovered v250 RX completion descriptor and builds the full normal
+  non-TSO TX descriptor, and delivers received frames to the GEMAC
+  net_device that registered the switch port.  Every PIE register write
+  stays inside the existing luofu_pie.arm=1 arm path, the GEMAC
+  hisilicon,port property and the port registration add no register
+  write, and the arm path has never run.  The decode has never been
+  observed on hardware: the field positions are [V] from the vendor
+  disassembly but live values are unobserved, the two RX flag classes
+  are [U] and the ring-index reading is [I].
+- draft (do not merge; gated W4 egress write stage): 0025 adds the
+  luofu_lsw.egress=1 stage between 0022's W3 power step and its W5
+  qid-map write: the R1/R3/R5 probe-configuration words with a
+  pre-write conformance gate, expectations derived from the pre-write
+  snapshot, readback of every word and restore on mismatch.  It
+  requires luofu_lsw.arm=1 and tightens readiness so both the probe
+  configuration and the qid map must verify; the gate has never been
+  set, no switch register has been written by this code, and the
+  per-frame egress selection and the EQM/classifier/VLAN formats are
+  still [U].
+- draft (do not merge; MAC nvmem source, readiness-gated): 0026 makes
+  the GEMAC netdev take its address from the read-only bdinfo MTD
+  nvmem cell (fixed-layout/mac-base, LAN = base, WAN = base+1),
+  defers probe when the provider is not registered yet and keeps the
+  logged random fallback otherwise; userspace MAC assignment stays
+  functional.  It registers nothing unless the 0023 readiness gate
+  passes, writes no register or flash, and the nvmem read path has
+  never run on a booted target.
 - RFC (attended): host-validated platform code whose acceptance requires
   a single-variable, recovery-armed bench session; not part of the
   UP-first mergeable set.
@@ -996,29 +1208,32 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 | # | series sha256 | source patch sha256 |
 | --- | --- | --- |
-| 01 | 2a9464c2439be54c2757807e3e8c5d35ee022f6ec5589ce4ef650a5cd83e4160 | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
-| 02 | bb99978479fe27ad60dc5dfd49984727abebd753c5292f59abac5dcf1e0fe38b | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
-| 03 | 1bede7547ef6ecc1e38de6730ef4937b422cdd35488b2ebf2f71938f4c61d539 | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
-| 04 | 23c255f5947b2d94325a1f96fc07f29bfe53b6d4e7a6d40bd0a18db68da19508 | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
-| 05 | 367f36f4893e696f7754a9d4c92cea95d93f6dd01bd0e68b747eaae847305f77 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
-| 06 | 19b75a6ec459e2a0ab288a0152d5e4ef55c7fc5396baf4065502bf97b868c8c4 | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
-| 07 | 24686dea4e198576f528ca75e0293668a3091e16f6cd52e37f38d73a7d423ddb | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
-| 08 | d8c44ea5da337d741aa74dc909952ed3c5a465a37afb96807b3c1eb381b9096b | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
-| 09 | c689f951055f482719fafa76bf9a4a37ca3337125a7e08f786cafecaa99b7051 | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
-| 10 | 5b4e19e70cb451a6e86325384db0d0967f609a680f5749b05b798bd1ad384e07 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
-| 11 | aa288fe81478810b19f7d07c392520fe4693cf4f4d807ae62524efdcce34f23e | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
-| 12 | 9bd8656db5a3d6d1113e605f285ce3a5ee99ce161dd3f05580292ebeadf83260 | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
-| 13 | 3d18908b59c8885fb32ed834e4fc3db184387612977e0b269f226a5aa907a310 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
-| 14 | 9a404a44d4e2d6559122a0ab76ea496a126fc16dec5d52ae7b219a8063b7ff2f | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
-| 15 | 5763b0ba32e0ed870d6fd6efd40df952664f594b623f589a255b60d59a08caf8 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
-| 16 | b8ef510f6fbc12b70248fcf9c0ee781f2f31e72fd09db138e97bd0264a2f0f5b | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
-| 17 | 27505d4b425b960bc0d3996779c1c0e9d89269ddb38ca5ee61d013f232a94d06 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
-| 18 | e7c1312806f140cf698317c617d590976890add6eb98bea50a329d8f0d0d87e3 | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
-| 19 | b436248276c71247cb65c96e4d848244971cd7f147fb5e875b83234585d1eeb6 | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
-| 20 | 8783b171451e1571df067f1bf3bdaa2f611572671633d6c6e98630bc811c1de3 | 806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8 |
-| 21 | 6452c62231ef1b99274e6897750c34b6b6863ff11331ae72bab4b53752b9120e | de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e |
-| 22 | 955f85edb4289737fc28f9081ec3d130317c11506af8f6dc1e454b47e88e8602 | 33ab13647791b1a0dab5edf151d8eb5a50304f1d8f2690f9f799862ad04fde3e |
-| 23 | 5da6e5fa1fab8d2bd9d1fe161a00b29a4e8baba744799af1e0cd54904fdccb49 | bf5fb54b663d72b62f92c873c640aaee21eb2496efeee0d06d13153dcc35d0f1 |
+| 01 | c5eef73ce928b2e9f1bd0f397c3164d6b7a108fc930ccf7e537b184c81eee08b | 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d |
+| 02 | bbb0266e2230d1c7e11ea616cd2f5591e1e3e043f042a62bc0c871f802597ad5 | 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796 |
+| 03 | 3bdcf2bcee6c8a6ceece7ca1ec357702230b979eae79578d0d67cc479c05befe | 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c |
+| 04 | 80f1e1887dd4e0068d2ac2b9c6362d89ad604bad62a00bd7271549318dbe2eae | bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0 |
+| 05 | 3e1a13f5ecbe075876e382187cb3c50073f030d3cd113e1883445df425060129 | b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be |
+| 06 | 115efee56fe3a8e693d379f9fd4c427130fec33657305dd66a7c584ea9a0fda2 | 1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e |
+| 07 | 6c9ddfb551d3160908632aea9d0cf866467d6c14830cd8e39cadc9f4443beda4 | dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb |
+| 08 | 7d655b2f8a4e87c721ede45c3c6706f6f3fc2d3b587737821f592940efaddee7 | 676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912 |
+| 09 | 45a037f7b8e5861cebba16ab20aff66be0b2db929f749fbcc88db6a86cf0cf13 | 96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee |
+| 10 | bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
+| 11 | 872cc563004e20c18266f5f34979cb6e6880e6a2da84fcf436bfc5ffa3179a39 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
+| 12 | 131ed955ee95e7e513e701337b99a890e57b1bf27f1c9e15db6f9c22622075ea | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
+| 13 | 8a8454f73c0c33f1c36e434ed463ac38e3155f79e4f082f2a679c2f53458fe88 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
+| 14 | 8a8fba5b9f04e61c759d77a160caf31c32206ed882b97bf51c8882865f93e7eb | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
+| 15 | 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
+| 16 | f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
+| 17 | 471a21225db7925d1e0b70f32f1637ee8e07842774ea6a6a22996988472c4da3 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
+| 18 | 03b50ae7af2afe6eeba51d82345a2b4946b80c9dee18027b48d8a30589e22eba | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
+| 19 | d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9 | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
+| 20 | 624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212 | 806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8 |
+| 21 | d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497 | de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e |
+| 22 | 8c2b139a4f0b2bff8732363ba5962328bd09fad5e88ff4edeadb48696d157b53 | 33ab13647791b1a0dab5edf151d8eb5a50304f1d8f2690f9f799862ad04fde3e |
+| 23 | 9119bb372977cc1d37e1328f8f110719959841148e8803c67882beb2262343f8 | bf5fb54b663d72b62f92c873c640aaee21eb2496efeee0d06d13153dcc35d0f1 |
+| 24 | 5e93d7200543407841c201a4f6bc8decc664dce5680041f384b31ad44d6271b8 | d81a44fb7c004e66d9c686d0d38ee5cccdf52e8ba6f9e454a92f091352ae36f1 |
+| 25 | 507ce72495c09d104b0ad63ebac44ecf20a94a36e25f81b7739802f8fa005a00 | 0fd8b1eafd701703c785d087f864d27142335ee335c60517e390a21773e39ce7 |
+| 26 | 099d7253f50c50ad18bce642a2d52fca7af37c9b1c7ac356038eafe3c7aa26df | f979ea9ba4ab0a6789514a3b373e66c909fc316993ec340e6d90a94d2db033b3 |
 
 The series diff bodies are byte-identical to the source patches apart from
 the git extended headers inserted by the generator (diff --git and

@@ -1,7 +1,7 @@
 From 57e6452b82d4206470065f826964882b99b17595 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 08:20:00 +0700
-Subject: [PATCH 16/23] net: ethernet: hisilicon: add Luofu switch probe skeleton
+Subject: [PATCH 16/26] net: ethernet: hisilicon: add Luofu switch probe skeleton
 
 Add the D1a resource/binding skeleton for the internal LSW switch of the
 HiSilicon Hi5671Y "luofu" SoC.  The vendor tree describes the switch as

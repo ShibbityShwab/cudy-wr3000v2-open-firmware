@@ -1,7 +1,7 @@
 From 32f29a89349399f5c592f986b294984acc4e11cc Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 08:20:00 +0700
-Subject: [PATCH 02/23] ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+Subject: [PATCH 02/26] ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
 
 Wire the new arch/arm/mach-hisilicon directory into the ARM build: source
 its Kconfig, add the machine directory and set

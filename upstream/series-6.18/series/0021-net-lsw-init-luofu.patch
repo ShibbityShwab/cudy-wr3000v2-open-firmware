@@ -1,7 +1,7 @@
 From a1a5a4f8f434a15712dd57da8307b91304076ec6 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 08:20:00 +0700
-Subject: [PATCH 21/23] net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+Subject: [PATCH 21/26] net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
 
 Extend the D1a internal-switch skeleton to the D1b read-only baseline
 probe, built from the register and qid-map facts measured on the stock

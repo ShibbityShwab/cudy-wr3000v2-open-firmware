@@ -1,0 +1,54 @@
+net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+
+Add the missing initialization stage between the W3 clock/reset power
+step of patch 0022 and its W5 qid-map write: the R1/R3/R5
+probe-configuration words that the vendor hi_dp_probe and
+hi_queue_init program after the reset pulse (LSW-SPEC.md section 7.7,
+port-notes/lsw-egress/SUMMARY.md section 2).  The new module
+parameter luofu_lsw.egress=1 requires luofu_lsw.arm=1, so the default
+boot is still the patch 0021/0022 read-only path and every write
+stays behind an attended, recovery-armed gate.
+
+The stage writes only the nine recovered probe-configuration words,
+in the vendor's order: dp+0x68 = 0, the two-write dp+0x64 cell
+selector, dp+0x1c (u16 queue DDR base | BIT(16)), the ips+0x10
+BIT(16) and ips+0x08 = 42 words and the four derived eqm words at
++0xa4, +0x18, +0x38 and +0x40.  Every readback expectation is
+computed from the pre-write snapshot with the vendor formulas, so the
+check tests the write path rather than an invented value.  R4,
+fam+0x504, is a read-only conformance input, not a write: the stage
+refuses before the first write unless the found low-14 cell count
+equals the computed (queue_size / cell_size) & ~7, because the R3
+derivations assume that measured state.  A pre-write conformance gate
+also requires the EQM indirect interface idle and the target words
+stable; on any mismatch all found values are restored and the probe
+fails closed.  The field semantics of every word remain [U].
+
+Readiness is tightened: luofu_switch_ready() now requires the
+verified probe configuration as well as the verified W2 qid map.  A
+boot with luofu_lsw.arm=1 luofu_lsw.qidmap=1 therefore programs and
+verifies the qid maps and then refuses, because the probe
+configuration is missing; only arm=1 egress=1 qidmap=1 makes the
+switch ready for the GEMAC front end.  luofu_lsw.egress/qidmap
+without luofu_lsw.arm=1 are an explicit -EINVAL configuration error
+instead of a silent no-op, and the error path and remove() restore
+the R1/R3/R5 words before powering the block down.  The EQM indirect
+queue tables, the classifier/L2/VLAN formats and the queue/flow DDR
+regions are deliberately not modelled or written; the per-frame
+egress selection is not software-visible and is still [U].  The
+LUOFU_SWITCH Kconfig help text and the switch register header
+document the new stage and per-word evidence grades.
+
+This is still a draft and not mergeable.  No clock, reset or switch
+register has been written by this code, the egress gate has never
+been set, no readback or restore path has run, and the W4 effect of
+the probe configuration and the EQM/classifier/VLAN formats are [U].
+A refusal because the found block state is not the measured vendor
+state is the designed fail-closed outcome, not a bug.  The attended
+sequence is in port-notes/lsw-egress/SUMMARY.md section 7.
+Host-compiled in the lsw-egress lane: the 001-025 series applies
+with 0 rejected hunks, the kernel compiles RC=0 (W=1 clean for the
+changed driver), and the final 001-026 series compiles with 0 errors
+and 0 compiler warnings under CONFIG_WERROR=y.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

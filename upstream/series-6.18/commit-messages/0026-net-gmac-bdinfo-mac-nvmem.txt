@@ -1,0 +1,41 @@
+net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
+
+Make the GEMAC netdev take its address from the plaintext factory MAC
+the board stores at bdinfo+0xde00 without a new driver: the stock MTD
+partition is already exposed read-only through the mainline mtd-nvmem
+provider, and the board DTS (delivered through the OpenWrt target,
+not this kernel series) declares a fixed-layout / mac-base nvmem cell
+at that offset.  of_get_mac_address() then resolves the cell argument
+to the vendor rule: LAN ports = base MAC, WAN = base+1.
+
+The probe reads the address before allocating the net_device and
+honours -EPROBE_DEFER from a not-yet-registered nvmem provider: a
+deferred bdinfo partition defers the probe instead of inventing a
+random identity that could appear one probe later.  Every other error
+(missing wiring, erased/invalid bytes, older DTB) keeps the logged
+random locally-administered fallback.  ndo_set_mac_address =
+eth_mac_addr and ndo_validate_addr = eth_validate_addr are installed
+so the existing userspace provisioning path (netifd "macaddr") still
+applies on the netdev; no MAC register is written by either path.
+The GEMAC binding description documents the nvmem source and the
+per-port offset rule.
+
+The mac-base cell post-processing is an OpenWrt-carried backport, not
+part of vanilla 6.18.60 - the dependency is documented on the target
+side; without it the cell reads raw bytes and the WAN +1 arithmetic
+stops being applied.  The DTS wiring and the guarded board.d LAN/WAN
+interface map are target content and are not part of this kernel
+patch.
+
+This is still a draft and not mergeable.  Nothing here has read
+bdinfo on a booted target: the MTD nvmem read path, the probe-ordering
+defer branch and the userspace MAC application are [U], the hardcoded
++0xde00 offset is from the local flash dump and not from this read
+path, and the nvmem provider is read-only (no write callback) and the
+partition is marked read-only, so this code never writes factory
+data.  Host-compiled in the mac-nvmem lane: the 001-026 series
+applies with 0 rejected hunks, the kernel compiles RC=0 with
+0 errors and 0 compiler warnings under CONFIG_WERROR=y, and the
+binding passes dt_binding_check; nothing booted.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

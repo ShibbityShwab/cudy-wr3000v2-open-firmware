@@ -1,0 +1,717 @@
+From 38b805c412f9f675a21d3cb0dbb493cb446c91d7 Mon Sep 17 00:00:00 2001
+From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 08:20:00 +0700
+Subject: [PATCH 25/26] net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+
+Add the missing initialization stage between the W3 clock/reset power
+step of patch 0022 and its W5 qid-map write: the R1/R3/R5
+probe-configuration words that the vendor hi_dp_probe and
+hi_queue_init program after the reset pulse (LSW-SPEC.md section 7.7,
+port-notes/lsw-egress/SUMMARY.md section 2).  The new module
+parameter luofu_lsw.egress=1 requires luofu_lsw.arm=1, so the default
+boot is still the patch 0021/0022 read-only path and every write
+stays behind an attended, recovery-armed gate.
+
+The stage writes only the nine recovered probe-configuration words,
+in the vendor's order: dp+0x68 = 0, the two-write dp+0x64 cell
+selector, dp+0x1c (u16 queue DDR base | BIT(16)), the ips+0x10
+BIT(16) and ips+0x08 = 42 words and the four derived eqm words at
++0xa4, +0x18, +0x38 and +0x40.  Every readback expectation is
+computed from the pre-write snapshot with the vendor formulas, so the
+check tests the write path rather than an invented value.  R4,
+fam+0x504, is a read-only conformance input, not a write: the stage
+refuses before the first write unless the found low-14 cell count
+equals the computed (queue_size / cell_size) & ~7, because the R3
+derivations assume that measured state.  A pre-write conformance gate
+also requires the EQM indirect interface idle and the target words
+stable; on any mismatch all found values are restored and the probe
+fails closed.  The field semantics of every word remain [U].
+
+Readiness is tightened: luofu_switch_ready() now requires the
+verified probe configuration as well as the verified W2 qid map.  A
+boot with luofu_lsw.arm=1 luofu_lsw.qidmap=1 therefore programs and
+verifies the qid maps and then refuses, because the probe
+configuration is missing; only arm=1 egress=1 qidmap=1 makes the
+switch ready for the GEMAC front end.  luofu_lsw.egress/qidmap
+without luofu_lsw.arm=1 are an explicit -EINVAL configuration error
+instead of a silent no-op, and the error path and remove() restore
+the R1/R3/R5 words before powering the block down.  The EQM indirect
+queue tables, the classifier/L2/VLAN formats and the queue/flow DDR
+regions are deliberately not modelled or written; the per-frame
+egress selection is not software-visible and is still [U].  The
+LUOFU_SWITCH Kconfig help text and the switch register header
+document the new stage and per-word evidence grades.
+
+This is still a draft and not mergeable.  No clock, reset or switch
+register has been written by this code, the egress gate has never
+been set, no readback or restore path has run, and the W4 effect of
+the probe configuration and the EQM/classifier/VLAN formats are [U].
+A refusal because the found block state is not the measured vendor
+state is the designed fail-closed outcome, not a bug.  The attended
+sequence is in port-notes/lsw-egress/SUMMARY.md section 7.
+Host-compiled in the lsw-egress lane: the 001-025 series applies
+with 0 rejected hunks, the kernel compiles RC=0 (W=1 clean for the
+changed driver), and the final 001-026 series compiles with 0 errors
+and 0 compiler warnings under CONFIG_WERROR=y.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+---
+ drivers/net/ethernet/hisilicon/Kconfig             |   21 +
+ drivers/net/ethernet/hisilicon/luofu-switch-regs.h |   72 ++++
+ drivers/net/ethernet/hisilicon/luofu-switch.c      |  374 ++++++++++++++++++--
+ 3 files changed, 425 insertions(+), 42 deletions(-)
+
+diff --git a/drivers/net/ethernet/hisilicon/Kconfig b/drivers/net/ethernet/hisilicon/Kconfig
+--- a/drivers/net/ethernet/hisilicon/Kconfig
++++ b/drivers/net/ethernet/hisilicon/Kconfig
+@@ -201,14 +201,17 @@
+ 	  of the wired data path.  This is a draft port.  By default it
+ 	  validates the register windows, the clocks, the resets, the
+ 	  devicetree switch port model and the measured register/qid-map
+-	  baseline, then refuses to program the switch.  The first reviewed
+-	  write step - CRG gate/reset power-up and the two qid maps of the D1b
+-	  W2 write set - is implemented but only runs with the explicit
+-	  luofu_lsw.arm=1 (power/read) and luofu_lsw.qidmap=1 (qid-map write)
+-	  module parameters on an attended, recovery-armed boot.  Nothing in
+-	  this driver has ever executed on hardware, the EQM/classifier/VLAN
+-	  formats are unknown, and the GEMAC front end only registers a netdev
+-	  once the egress map is ready.  Say N unless you are working on that
+-	  port.
++	  baseline, then refuses to program the switch.  Two reviewed write
++	  stages are implemented but only run with the explicit
++	  luofu_lsw.arm=1 (CRG gate/reset power-up), luofu_lsw.egress=1 (the
++	  R1/R3/R5 probe configuration derived from the vendor probe) and
++	  luofu_lsw.qidmap=1 (the two qid maps of the D1b W2 write set) module
++	  parameters on an attended, recovery-armed boot; the driver reaches
++	  its ready state only when both the probe configuration and the qid
++	  maps are verified.  Nothing in this driver has ever executed on
++	  hardware, the EQM/classifier/VLAN formats and the per-frame egress
++	  selection are unknown, and the GEMAC front end only registers a
++	  netdev once the switch reports ready.  Say N unless you are working
++	  on that port.
+ 
+ endif # NET_VENDOR_HISILICON
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -41,10 +41,24 @@
+  * before the first switch register access, then re-reads that state through
+  * the CRG syscon.
+  *
++ * Patch 025 adds the second reviewed write set: the R1 (dp), R3 (eqm) and R5
++ * (ips) probe-configuration words that the vendor hi_dp_probe and
++ * hi_queue_init program after the reset pulse.  The words are not free
++ * values: the eqm words are derived from the queue DDR window and from the
++ * found eqm/fam values exactly as the vendor code derives them, so the
++ * readback expectation is computable from the pre-write snapshot.  R4
++ * (fam+0x504) stays read-only: the vendor only lowers it (its write triggers
++ * when the found value is larger than the computed cell count), and the
++ * 2026-11-18 measured boot it was derived against has it already equal to the
++ * computed value, so the stage refuses unless that is true.  Nothing in the
++ * EQM indirect-table interface, the queue table or the classifier/L2/VLAN
++ * formats is modelled or written here.
++ *
+  * Safety rule for the read set: the driver only reads offsets that the
+  * 2026-11-18 inventory read on the running block, plus the two qid maps it
+  * read completely.  An access outside that set is not "probably fine", it is
+- * unreviewed, and this driver does not make it.
++ * unreviewed, and this driver does not make it.  The R1/R3/R5 stage writes
++ * only the six offsets listed in the "probe-config write set" section below.
+  */
+ 
+ #ifndef __LUOFU_SWITCH_REGS_H
+@@ -218,4 +232,60 @@
+ #define LUOFU_SWITCH_QID_FIRST		1
+ #define LUOFU_SWITCH_QID_LAST		104
+ 
++/*
++ * R1/R3/R5 probe-config write set ("luofu_lsw.egress=1" stage, W4).
++ *
++ * Recovered from hi_lsw_dp!hi_dp_probe@0xa0c..0xd1c and
++ * hi_lsw_dp!hi_queue_init@0x507c, which run after the clock/reset pulse and
++ * before the qid-map programming.  Evidence grade per word:
++ *
++ *   dp+0x68 = 0                                  [V] code shape; [V] measured 0
++ *   dp+0x64 = 1, then the cell-size selector     [V] code shape; [V] measured 1
++ *   dp+0x1c = (u16 queue DDR base | BIT(16))     [V] code shape; the [u16] is the
++ *                                                    cpmputed low half of the
++ *                                                    "queue" DDR window base,
++ *                                                    [V] measured 0x00018000
++ *                                                    (= 0x8000 | 0x10000)
++ *   ips+0x10 |= BIT(16)                          [V] code shape; [V] measured
++ *                                                    bit16 set (0x00790011)
++ *   ips+0x08 = 42                                [V] code shape; [V] measured
++ *                                                    0x2a
++ *   eqm+0xa4 = (found & ~CELL_MASK) |            [V] code shape; [V] measured
++ *                ((fam_low14 - 0x40) & CELL_MASK)    0x00001fc0
++ *   eqm+0x18 = (found & ~(0x3fc0|BIT(31)|0x3f))  [V] code shape; [V] measured
++ *                | ((eqm+0xa4 + 0x3d00) & CELL_MASK) 0x80001cc0
++ *                | BIT(31)
++ *   eqm+0x38 = (found & ~CELL_MASK) |            [V] code shape; [V] measured
++ *                ((eqm+0xa4 & CELL_MASK) >> 2)        0x000007f0
++ *   eqm+0x40 |= BIT(31)                          [V] code shape; [V] measured
++ *                                                    0x80000000
++ *
++ * What is still unknown [U] and deliberately not programmed: the field
++ * semantics of every one of these words, why dp+0x64 is written twice (a
++ * latch sequence is [I]), whether the bootloader already set fam+0x504 before
++ * the vendor probe (the measured state says the found value was already the
++ * computed cell count), and the EQM indirect-table programming that follows
++ * (hi_queue_init's tables 16/19/32/34/35/37/38, LSW-SPEC.md section 7.7 row
++ * E1).  A word the driver writes here is a configuration word the vendor
++ * driver also writes; this is not a claim that the data path works.
++ *
++ * R4/fam+0x504 is a read-only conformance input, not a write: the vendor code
++ * computes fam_expected = (queue_size / cell_size) & ~7 and only *lowers* the
++ * found word when it is larger than that; the measured boot has
++ * fam+0x504 low14 == 0x2000 == the computed value, and the R3 derivation above
++ * assumes exactly that.
++ */
++#define LUOFU_SWITCH_DP_MEM_BIT		BIT(16)	/* [V] set in dp+0x1c */
++#define LUOFU_SWITCH_DP_CELL_LATCH	1	/* [V] first dp+0x64 write */
++#define LUOFU_SWITCH_CELL_SELECT	1	/* [V] measured selector (0x200 cells) */
++#define LUOFU_SWITCH_CELL_SIZE		0x200	/* [V] derived from the selector */
++#define LUOFU_SWITCH_CELL_MASK		GENMASK(13, 0)	/* [V] low-14 fields */
++#define LUOFU_SWITCH_CELL_ALIGN		8	/* [V] & ~7 on the cell count */
++/* [V] 0x80003fff: the eqm+0x18 bits the probe-config write replaces. */
++#define LUOFU_SWITCH_EQM_CELL_CLR	\
++	(GENMASK(13, 6) | BIT(31) | GENMASK(5, 0))
++#define LUOFU_SWITCH_EQM_A4_BIAS	0x3d00	/* [V] added before masking */
++#define LUOFU_SWITCH_EQM_CELL_BIAS	0x40	/* [V] subtracted from fam low14 */
++#define LUOFU_SWITCH_EPS_QUEUE_INIT	42	/* [V] ips+0x08 = 0x2a */
++
+ #endif /* __LUOFU_SWITCH_REGS_H */
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch.c b/drivers/net/ethernet/hisilicon/luofu-switch.c
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -5,11 +5,12 @@
+  *
+  * STATUS: DRAFT.  The read-only baseline path validates the measured
+  * 2026-11-18 state of the stock vendor boot and always fails closed.  A second,
+- * explicitly gated path implements the first reviewed write step (D1b W3 and
+- * W4/W5): power the block, then program the two qid maps derived from the
+- * measured allocation model.  Neither path has ever run on hardware; the board
+- * devicetree enables the node so an attended boot can reach the gates, and a
+- * normal boot stops in the read-only path.
++ * explicitly gated path implements the reviewed write steps (D1b W3, W4 and
++ * W5): power the block, program the R1/R3/R5 probe configuration derived
++ * from the vendor probe, then program the two qid maps derived from the
++ * measured allocation model.  Neither write path has ever run on hardware; the
++ * board devicetree enables the node so an attended boot can reach the gates,
++ * and a normal boot stops in the read-only path.
+  *
+  * Gate model (every step is fail closed)
+  * --------------------------------------
+@@ -23,14 +24,24 @@
+  *     snapshot the measured baseline words and both qid maps read-only.  No
+  *     LSW register is written.  Probe still refuses with -EOPNOTSUPP because
+  *     no egress map is programmed.
+- *   - "luofu_lsw.arm=1 luofu_lsw.qidmap=1": the attended W4/W5 step.  After
+- *     the W3 sequence, program the D1b W2 write set: the table-A rows for
+- *     ports 4..12 and the table-B rows for ports 40..43 (all 13 populated
+- *     rows x 8 slots, value 0x100 | qid of the contiguous qid 1..104 model).
+- *     Every programmed word is then read back; on the first mismatch the
+- *     pre-write values are restored and the probe fails closed.  On success
+- *     the driver publishes the egress map as ready and the GEMAC driver is
+- *     allowed to register its netdevs (luofu-switch.h).
++ *   - "luofu_lsw.arm=1 luofu_lsw.egress=1": the attended W4 step.  After the
++ *     W3 sequence, run the pre-write conformance gate (EQM indirect interface
++ *     idle, target words stable, fam+0x504 equal to the computed cell count
++ *     the R3 formulas are derived against), then program the R1/R3/R5
++ *     probe-configuration words (dp/ips/eqm, luofu-switch-regs.h) in the
++ *     recovered order.  Every written word is read back against the value
++ *     computed from the pre-write snapshot; on any mismatch all found values
++ *     are restored and the probe fails closed.  No qid map is programmed yet,
++ *     so probe still refuses.
++ *   - "luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1": the attended
++ *     W5 step.  Program the R1/R3/R5 configuration, then the D1b W2 write
++ *     set: the table-A rows for ports 4..12 and the table-B rows for ports
++ *     40..43 (all 13 populated rows x 8 slots, value 0x100 | qid of the
++ *     contiguous qid 1..104 model).  Every programmed word is then read back;
++ *     on the first mismatch the pre-write values are restored and the probe
++ *     fails closed.  Only when both the probe configuration and the qid map
++ *     are verified does the driver publish the data path as ready and allow
++ *     the GEMAC driver to register its netdevs (luofu-switch.h).
+  *
+  * Why the write path is gated and staged
+  * --------------------------------------
+@@ -96,13 +107,16 @@
+  *   1, 8 qids per port, allocated to the populated port rows".  The driver
+  *   re-derives that model and compares it word for word with the hardware, so
+  *   the D1b W2 write model is validated without writing anything; the gated
+- *   W4/W5 path programs exactly this model and verifies the readback.
++ *   W5 path programs exactly this model and verifies the readback.
+  *
+  * What the gated path deliberately does not do
+  * -------------------------------------------
+- * - no dp/eps/eqm/ips/fam probe initialization (write-set rows R1/R3/R5 in
+- *   LSW-SPEC.md section 7.7): those words are not in the reviewed W2 write set
+- *   and their register semantics are [U];
++ * - no R4/fam+0x504 write: the vendor stage computes the cell count from the
++ *   queue DDR window and only lowers fam when the found value is larger, so
++ *   fam is a read-only conformance input here and the stage refuses unless it
++ *   already equals the computed value (the measured boot's state).  R1/R3/R5
++ *   are written exactly as the vendor writes them, but their field semantics
++ *   remain [U];
+  * - no EQM indirect table, classifier/L2/VLAN or queue/flow DDR programming:
+  *   those formats are unknown; the queue/flow regions are only validated from
+  *   the devicetree and never mapped;
+@@ -118,10 +132,16 @@
+  *   (luofu-switch.h).
+  *
+  * The remaining hardware steps are listed in LSW-SPEC.md section 12.3: W3
+- * (clock/reset only; implemented behind luofu_lsw.arm=1), W4/W5 (the qid-map
+- * write for the populated rows; implemented behind luofu_lsw.qidmap=1), and W6
+- * (learning-off/forward-all behaviour, not modelled).  None of them has been
+- * executed on hardware; the first execution is an attended bench event.
++ * (clock/reset only; implemented behind luofu_lsw.arm=1), W4 (the R1/R3/R5
++ * probe configuration; implemented behind luofu_lsw.egress=1), W5 (the
++ * qid-map write for the populated rows; implemented behind luofu_lsw.qidmap=1)
++ * and W7 (learning-off/forward-all behaviour, not modelled).  None of them has
++ * been executed on hardware; the first execution is an attended bench event.
++ * The per-frame egress selection on the LSW side is not software-visible: a TX
++ * frame is described only by the PIE 32-byte descriptor (recovered port/vport
++ * words plus the per-port queue handle) and no LSW register is written per
++ * frame, so whether the engine uses the descriptor port directly or needs the
++ * excluded EQM queue tables is still [U] (LSW-SPEC.md section 7.8).
+  */
+ 
+ #include <linux/bitops.h>
+@@ -146,6 +166,12 @@
+ #define LUOFU_SWITCH_NUM_RESETS		4
+ 
+ /*
++ * The R1/R3/R5 write-stage register list: the nine words the producer writes
++ * plus the read-only fam cell-count conformance input, all in luofu_switch_egress_regs[].
++ */
++#define LUOFU_SWITCH_EGRESS_REGS	10
++
++/*
+  * Driver state published to the rest of the wired data path.  The GEMAC netdev
+  * front end may only register a net_device once this driver has programmed and
+  * verified the egress qid map (the readiness contract in luofu-switch.h), so a
+@@ -155,23 +181,27 @@
+ enum luofu_switch_state {
+ 	LUOFU_SWITCH_ABSENT,	/* probe has not run yet */
+ 	LUOFU_SWITCH_REFUSED,	/* probe ran and failed closed */
+-	LUOFU_SWITCH_READY,	/* W2 qid map programmed and verified */
++	LUOFU_SWITCH_READY,	/* R1/R3/R5 probe config and W2 qid map verified */
+ };
+ 
+ static enum luofu_switch_state luofu_switch_state = LUOFU_SWITCH_ABSENT;
+ 
+ /*
+- * The two attended arm gates.  Both default to off, so a normal boot keeps the
+- * read-only behaviour of patch 021.  See the file header for the exact step
+- * each one enables; the first execution of either is a bench event.
++ * The three attended write gates.  All default to off, so a normal boot keeps
++ * the read-only behaviour of patch 021.  See the file header for the exact step
++ * each one enables; the first execution of any of them is a bench event.
+  */
+ static bool luofu_switch_arm_gate;
+ module_param_named(arm, luofu_switch_arm_gate, bool, 0444);
+ MODULE_PARM_DESC(arm, "Attended W3 step: enable the switch gate clocks and release the resets, then read the block (default off)");
+ 
++static bool luofu_switch_egress_gate;
++module_param_named(egress, luofu_switch_egress_gate, bool, 0444);
++MODULE_PARM_DESC(egress, "Attended W4 step: also program and verify the R1/R3/R5 probe-configuration write set (requires arm=1; default off)");
++
+ static bool luofu_switch_qidmap_gate;
+ module_param_named(qidmap, luofu_switch_qidmap_gate, bool, 0444);
+-MODULE_PARM_DESC(qidmap, "Attended W4/W5 step: also program and verify the W2 qid-map write set (requires arm=1; default off)");
++MODULE_PARM_DESC(qidmap, "Attended W5 step: also program and verify the W2 qid-map write set (requires arm=1 and egress=1 for a ready data path; default off)");
+ 
+ bool luofu_switch_probed(void)
+ {
+@@ -218,6 +248,8 @@
+  * struct luofu_switch_variant - match data of one supported SoC generation
+  * @name: printable variant name
+  * @hwver: devicetree hwver the vendor tree carries on the switch nodes
++ * @cell_selector: measured cell-size selector (dp+0x64 post-boot value)
++ * @cell_size: cell size in bytes the selector encodes (0x200 << selector)
+  * @queue_base: measured live DDR queue base after the loader fixup
+  * @queue_size: measured live DDR queue size
+  * @flow_base: measured live DDR flow base after the loader fixup
+@@ -233,6 +265,8 @@
+ struct luofu_switch_variant {
+ 	const char *name;
+ 	u32 hwver;
++	u32 cell_selector;
++	u32 cell_size;
+ 	phys_addr_t queue_base;
+ 	resource_size_t queue_size;
+ 	phys_addr_t flow_base;
+@@ -274,7 +308,9 @@
+  * @port_bitmap: port bitmap cells read from the devicetree
+  * @qid_pre_a: pre-write table-A words, saved for the readback rollback
+  * @qid_pre_b: pre-write table-B words, saved for the readback rollback
++ * @egress_pre: pre-write R1/R3/R5 and fam words, saved for the rollback
+  * @powered: the gated W3 step enabled the clocks and released the resets
++ * @egress_ready: the R1/R3/R5 probe configuration was written and verified
+  * @qid_maps_ready: the W2 qid-map write set was programmed and verified
+  */
+ struct luofu_switch {
+@@ -289,7 +325,9 @@
+ 	u32 port_bitmap[2];
+ 	u32 *qid_pre_a;
+ 	u32 *qid_pre_b;
++	u32 egress_pre[LUOFU_SWITCH_EGRESS_REGS];
+ 	bool powered;
++	bool egress_ready;
+ 	bool qid_maps_ready;
+ };
+ 
+@@ -425,6 +463,8 @@
+ 	.flow_base = LUOFU_SWITCH_FLOW_BASE,
+ 	.flow_size = LUOFU_SWITCH_FLOW_SIZE,
+ 	.port_bitmap = { 0x00000f01, 0x00001ff0 },
++	.cell_selector = LUOFU_SWITCH_CELL_SELECT,
++	.cell_size = LUOFU_SWITCH_CELL_SIZE,
+ 	.qid_first = LUOFU_SWITCH_QID_FIRST,
+ 	.qid_last = LUOFU_SWITCH_QID_LAST,
+ 	.baseline = luofu_switch_v250_baseline,
+@@ -1125,7 +1165,7 @@
+ }
+ 
+ /*
+- * The attended W4/W5 step: program the D1b W2 write set (LSW-SPEC.md section
++ * The attended W5 step: program the D1b W2 write set (LSW-SPEC.md section
+  * 7.7, rows Q1/Q2) and verify every programmed word.  The found state of all
+  * table words is saved first, both for the rollback and for the pre-write
+  * conformance gate: every word outside the derived allocation model must read
+@@ -1296,6 +1336,234 @@
+ }
+ 
+ /*
++ * The R1/R3/R5 write-stage register list.  The array order is the snapshot
++ * order; the write order is the explicit sequence in
++ * luofu_switch_egress_program().  Index LUOFU_SWITCH_EGRESS_FAM is the
++ * read-only fam conformance input (restore skips it because it is never
++ * written).  Only these offsets are touched by the egress stage.
++ */
++static const struct {
++	const char *name;
++	enum luofu_switch_window window;
++	u32 offset;
++} luofu_switch_egress_regs[LUOFU_SWITCH_EGRESS_REGS] = {
++	{ "dp+0x1c probe config", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_PROBE_CFG },
++	{ "dp+0x64 cell select", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_CELL_SELECT },
++	{ "dp+0x68 memory number", LUOFU_SWITCH_WIN_DP,
++	  LUOFU_SWITCH_DP_MEM_NUMBER },
++	{ "eqm+0x18 cell config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_CELL_CFG },
++	{ "eqm+0x38 cell config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_CELL_CFG1 },
++	{ "eqm+0x40 enable", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_ENABLE },
++	{ "eqm+0xa4 table config", LUOFU_SWITCH_WIN_EQM,
++	  LUOFU_SWITCH_EQM_TAB_CFG },
++	{ "ips+0x08 queue init", LUOFU_SWITCH_WIN_IPS,
++	  LUOFU_SWITCH_IPS_PROBE_CFG1 },
++	{ "ips+0x10 probe init", LUOFU_SWITCH_WIN_IPS,
++	  LUOFU_SWITCH_IPS_PROBE_CFG2 },
++	{ "fam+0x504 queue config (read-only)", LUOFU_SWITCH_WIN_FAM,
++	  LUOFU_SWITCH_FAM_QUEUE_CFG },
++};
++
++/* Indices into luofu_switch_egress_regs[]; the FAM entry is read-only. */
++enum luofu_switch_egress_idx {
++	LUOFU_SWITCH_EGRESS_DP_PROBE_CFG,
++	LUOFU_SWITCH_EGRESS_DP_CELL_SELECT,
++	LUOFU_SWITCH_EGRESS_DP_MEM_NUMBER,
++	LUOFU_SWITCH_EGRESS_EQM_CELL_CFG,
++	LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1,
++	LUOFU_SWITCH_EGRESS_EQM_ENABLE,
++	LUOFU_SWITCH_EGRESS_EQM_TAB_CFG,
++	LUOFU_SWITCH_EGRESS_IPS_CFG1,
++	LUOFU_SWITCH_EGRESS_IPS_CFG2,
++	LUOFU_SWITCH_EGRESS_FAM,
++};
++
++static u32 luofu_switch_egress_read(struct luofu_switch *lsw, unsigned int i)
++{
++	return readl(lsw->window[luofu_switch_egress_regs[i].window] +
++		     luofu_switch_egress_regs[i].offset);
++}
++
++static void luofu_switch_egress_write(struct luofu_switch *lsw, unsigned int i,
++				      u32 value)
++{
++	writel(value, lsw->window[luofu_switch_egress_regs[i].window] +
++		      luofu_switch_egress_regs[i].offset);
++}
++
++/*
++ * Restore every word the R1/R3/R5 stage writes from the supplied snapshot.
++ * Only used when the readback verification fails (so a failed attended step
++ * leaves the block in the state it was found in) and from remove().  The
++ * read-only fam conformance word is not written back.
++ */
++static void luofu_switch_egress_restore(struct luofu_switch *lsw,
++					const u32 *pre)
++{
++	unsigned int i;
++
++	for (i = LUOFU_SWITCH_EGRESS_FAM; i-- > 0;)
++		luofu_switch_egress_write(lsw, i, pre[i]);
++	/* Flush the posted restore writes before the rollback path returns. */
++	wmb();
++}
++
++/*
++ * The attended W4 step: program the R1/R3/R5 probe configuration (dp, eqm and
++ * ips words; LSW-SPEC.md section 7.7) and verify every written word.  The
++ * vendor hi_dp_probe/hi_queue_init order is used, and every expectation is
++ * computed from the pre-write snapshot exactly like the vendor code computes
++ * it, so the readback check tests the write path and not an invented value.
++ *
++ * The pre-write conformance gate refuses, before the first write, unless:
++ *  - the EQM indirect interface is idle [V], i.e. the block is quiescent;
++ *  - every target word reads stable across two samples;
++ *  - fam+0x504 already holds the computed cell count (queue DDR size / cell
++ *    size, rounded down to 8).  The R3 formulas are derived against that
++ *    measured state; the vendor only lowers fam, and that clamp case is [U]
++ *    and deliberately not replayed (R4 stays read-only).
++ *
++ * This function has never run on hardware.  The only writes it can issue are
++ * the nine words in luofu_switch_egress_regs[]; there is no other LSW register
++ * write in the egress path.
++ */
++static int luofu_switch_egress_program(struct luofu_switch *lsw)
++{
++	const struct luofu_switch_variant *variant = lsw->variant;
++	u32 expected[LUOFU_SWITCH_EGRESS_REGS] = { };
++	u32 pre[LUOFU_SWITCH_EGRESS_REGS];
++	u32 fam_expected, a4, value;
++	unsigned int i;
++	unsigned int bad = 0;
++
++	value = readl(lsw->window[LUOFU_SWITCH_WIN_EQM] +
++		      LUOFU_SWITCH_EQM_IND_CMD);
++	if (value & (LUOFU_SWITCH_EQM_IND_BUSY | LUOFU_SWITCH_EQM_IND_ERROR))
++		return dev_err_probe(lsw->dev, -EOPNOTSUPP,
++				     "eqm+0x48 reads %#x: the indirect interface is busy or in error; the block is not quiescent, refusing to write the probe configuration\n",
++				     value);
++
++	for (i = 0; i < LUOFU_SWITCH_EGRESS_REGS; i++)
++		pre[i] = luofu_switch_egress_read(lsw, i);
++
++	for (i = 0; i < LUOFU_SWITCH_EGRESS_REGS; i++) {
++		value = luofu_switch_egress_read(lsw, i);
++		if (value != pre[i])
++			return dev_err_probe(lsw->dev, -EBUSY,
++					     "%s changed while sampling (%#x then %#x); refusing to write\n",
++					     luofu_switch_egress_regs[i].name,
++					     pre[i], value);
++	}
++
++	fam_expected = ((u32)variant->queue_size / variant->cell_size) &
++		       ~((u32)LUOFU_SWITCH_CELL_ALIGN - 1);
++	if ((pre[LUOFU_SWITCH_EGRESS_FAM] & LUOFU_SWITCH_CELL_MASK) !=
++	    fam_expected)
++		return dev_err_probe(lsw->dev, -EOPNOTSUPP,
++				     "fam+0x504 low14 reads %#x, but the R1/R3/R5 formulas are derived against the computed cell count %#x; refusing to write\n",
++				     (u32)(pre[LUOFU_SWITCH_EGRESS_FAM] &
++					   LUOFU_SWITCH_CELL_MASK),
++				     (u32)fam_expected);
++
++	/* R5: ips probe init (setup word first, then the queue word). */
++	expected[LUOFU_SWITCH_EGRESS_IPS_CFG2] =
++		pre[LUOFU_SWITCH_EGRESS_IPS_CFG2] | LUOFU_SWITCH_IPS_INIT_BIT;
++	expected[LUOFU_SWITCH_EGRESS_IPS_CFG1] = LUOFU_SWITCH_EPS_QUEUE_INIT;
++
++	/* R1: dp probe config. */
++	expected[LUOFU_SWITCH_EGRESS_DP_MEM_NUMBER] = 0;
++	expected[LUOFU_SWITCH_EGRESS_DP_CELL_SELECT] = variant->cell_selector;
++	expected[LUOFU_SWITCH_EGRESS_DP_PROBE_CFG] =
++		((u32)variant->queue_base & 0xffff) | LUOFU_SWITCH_DP_MEM_BIT;
++
++	/* R3: eqm, the vendor derivation from the found words. */
++	a4 = (pre[LUOFU_SWITCH_EGRESS_EQM_TAB_CFG] &
++	      ~LUOFU_SWITCH_CELL_MASK) |
++	     ((fam_expected - LUOFU_SWITCH_EQM_CELL_BIAS) &
++	      LUOFU_SWITCH_CELL_MASK);
++	expected[LUOFU_SWITCH_EGRESS_EQM_TAB_CFG] = a4;
++	expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG] =
++		((pre[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG] &
++		  ~LUOFU_SWITCH_EQM_CELL_CLR) |
++		 (((a4 & LUOFU_SWITCH_CELL_MASK) + LUOFU_SWITCH_EQM_A4_BIAS) &
++		  LUOFU_SWITCH_CELL_MASK)) | BIT(31);
++	expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1] =
++		(pre[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1] &
++		 ~LUOFU_SWITCH_CELL_MASK) |
++		(((a4 & LUOFU_SWITCH_CELL_MASK) >> 2) &
++		 LUOFU_SWITCH_CELL_MASK);
++	expected[LUOFU_SWITCH_EGRESS_EQM_ENABLE] =
++		pre[LUOFU_SWITCH_EGRESS_EQM_ENABLE] | BIT(31);
++
++	/*
++	 * Write in the recovered order: ips, dp (with the two-write cell-size
++	 * latch), the eqm cell-config word, then the queue-manager cell
++	 * configuration and its enable bit.
++	 */
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_IPS_CFG2,
++				  expected[LUOFU_SWITCH_EGRESS_IPS_CFG2]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_IPS_CFG1,
++				  expected[LUOFU_SWITCH_EGRESS_IPS_CFG1]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_DP_MEM_NUMBER, 0);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_DP_CELL_SELECT,
++				  LUOFU_SWITCH_DP_CELL_LATCH);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_DP_CELL_SELECT,
++				  expected[LUOFU_SWITCH_EGRESS_DP_CELL_SELECT]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_DP_PROBE_CFG,
++				  expected[LUOFU_SWITCH_EGRESS_DP_PROBE_CFG]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_EQM_TAB_CFG, a4);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_EQM_CELL_CFG,
++				  expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1,
++				  expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1]);
++	luofu_switch_egress_write(lsw, LUOFU_SWITCH_EGRESS_EQM_ENABLE,
++				  expected[LUOFU_SWITCH_EGRESS_EQM_ENABLE]);
++	/* Flush the posted writes before the readback checks them. */
++	wmb();
++
++	for (i = 0; i < LUOFU_SWITCH_EGRESS_FAM; i++) {
++		value = luofu_switch_egress_read(lsw, i);
++		if (value == expected[i])
++			continue;
++		if (bad < 10)
++			dev_err(lsw->dev,
++				"%s read back %#x, wrote %#x\n",
++				luofu_switch_egress_regs[i].name, value,
++				expected[i]);
++		bad++;
++	}
++
++	if (bad) {
++		luofu_switch_egress_restore(lsw, pre);
++		return dev_err_probe(lsw->dev, -EIO,
++				     "%u probe-configuration words did not read back; the found block state was restored and the switch is not ready\n",
++				     bad);
++	}
++
++	for (i = 0; i < LUOFU_SWITCH_EGRESS_REGS; i++)
++		lsw->egress_pre[i] = pre[i];
++	lsw->egress_ready = true;
++
++	dev_info(lsw->dev,
++		 "W4 probe configuration programmed and verified: dp+0x1c=%#x dp+0x64=%#x eqm+0x18=%#x eqm+0x38=%#x eqm+0x40=%#x eqm+0xa4=%#x ips+0x08=%#x ips+0x10=%#x (fam+0x504=%#x read-only)\n",
++		 expected[LUOFU_SWITCH_EGRESS_DP_PROBE_CFG],
++		 expected[LUOFU_SWITCH_EGRESS_DP_CELL_SELECT],
++		 expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG],
++		 expected[LUOFU_SWITCH_EGRESS_EQM_CELL_CFG1],
++		 expected[LUOFU_SWITCH_EGRESS_EQM_ENABLE],
++		 expected[LUOFU_SWITCH_EGRESS_EQM_TAB_CFG],
++		 expected[LUOFU_SWITCH_EGRESS_IPS_CFG1],
++		 expected[LUOFU_SWITCH_EGRESS_IPS_CFG2],
++		 pre[LUOFU_SWITCH_EGRESS_FAM]);
++	return 0;
++}
++
++/*
+  * The default path: the read-only baseline probe of patch 021.  It only
+  * reaches the block when it is already clocked and out of reset (the stock
+  * vendor boot); otherwise it refuses before the first switch register access.
+@@ -1317,7 +1585,7 @@
+ 		return ret;
+ 
+ 	return dev_err_probe(lsw->dev, -EOPNOTSUPP,
+-			     "read-only baseline validated; the W3/W4 write set has never been executed on this block (set luofu_lsw.arm=1 for the attended power step, add luofu_lsw.qidmap=1 for the qid-map write step)\n");
++			     "read-only baseline validated; the W3/W4/W5 write set has never been executed on this block (set luofu_lsw.arm=1 for the attended power step, add luofu_lsw.egress=1 for the probe configuration and luofu_lsw.qidmap=1 for the qid-map write step)\n");
+ }
+ 
+ static int luofu_switch_probe(struct platform_device *pdev)
+@@ -1407,6 +1675,19 @@
+ 	dev_info(dev, "port netdevs: owned by the GEMAC front end; switchdev registration deferred\n");
+ 
+ 	/*
++	 * The explicit write gates are one attended sequence: the power step
++	 * (arm), the R1/R3/R5 probe configuration (egress) and the qid-map
++	 * write (qidmap).  A write gate without the power step is a
++	 * configuration error, not a silent no-op: refuse it explicitly.
++	 */
++	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate) &&
++	    !luofu_switch_arm_gate) {
++		ret = dev_err_probe(dev, -EINVAL,
++				    "luofu_lsw.egress/luofu_lsw.qidmap require luofu_lsw.arm=1 (the attended W3 power step)\n");
++		goto out;
++	}
++
++	/*
+ 	 * The default path: read-only.  The state gate inside the helper comes
+ 	 * first, so a block that is unclocked or held in reset is never
+ 	 * accessed.
+@@ -1435,24 +1716,51 @@
+ 
+ 	luofu_switch_snapshot_block(lsw);
+ 
++	if (!luofu_switch_egress_gate) {
++		dev_warn(dev,
++			 "luofu_lsw.egress is not set: the R1/R3/R5 probe configuration is not written (set luofu_lsw.egress=1 for the attended W4 step)\n");
++	} else {
++		dev_warn(dev,
++			 "luofu_lsw.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write conformance and readback verification\n");
++		ret = luofu_switch_egress_program(lsw);
++		if (ret)
++			goto out;
++	}
++
+ 	if (!luofu_switch_qidmap_gate) {
+ 		dev_warn(dev,
+-			 "W3 power/read step done; luofu_lsw.qidmap is not set, so no LSW register was written - refusing to arm the data path\n");
++			 "the write stage(s) run so far are done and verified; luofu_lsw.qidmap is not set, so the data path stays refused and the found block state is restored\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	dev_warn(dev,
+-		 "luofu_lsw.qidmap=1: programming the D1b W2 qid-map write set (W4/W5) with readback verification\n");
++		 "luofu_lsw.qidmap=1: programming the D1b W2 qid-map write set (W5) with readback verification\n");
+ 
+ 	ret = luofu_switch_qid_maps_program(lsw);
+ 	if (ret)
+ 		goto out;
+ 
+ 	lsw->qid_maps_ready = true;
++
++	if (!lsw->egress_ready) {
++		dev_warn(dev,
++			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_lsw.egress=1); refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
+ 	dev_info(dev,
+-		 "connectivity path armed: LSW egress qid maps programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration and the W2 qid maps are programmed and verified; the GEMAC netdev front end may register\n");
+ out:
++	if (ret && lsw->egress_ready) {
++		luofu_switch_egress_restore(lsw, lsw->egress_pre);
++		lsw->egress_ready = false;
++	}
++	if (ret && lsw->qid_maps_ready) {
++		luofu_switch_qid_maps_restore(lsw);
++		lsw->qid_maps_ready = false;
++	}
+ 	if (ret && lsw->powered)
+ 		luofu_switch_power_down(lsw);
+ 	if (ret == -EPROBE_DEFER)
+@@ -1469,6 +1777,8 @@
+ 
+ 	if (lsw->qid_maps_ready)
+ 		luofu_switch_qid_maps_restore(lsw);
++	if (lsw->egress_ready)
++		luofu_switch_egress_restore(lsw, lsw->egress_pre);
+ 	luofu_switch_state = LUOFU_SWITCH_REFUSED;
+ 	if (lsw->powered)
+ 		luofu_switch_power_down(lsw);
+@@ -1490,5 +1800,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated W2 qid-map write path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5 and qid-map write path)");
+ MODULE_LICENSE("GPL");

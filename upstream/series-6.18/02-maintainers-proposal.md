@@ -2,7 +2,7 @@
 
 Status: proposal for the luofu 6.18 series.  A real submission needs this
 as its own small patch, either as the last patch of the platform series
-(now 23/23) or as the first patch of the first driver series (MAINTAINERS
+(now 26/26) or as the first patch of the first driver series (MAINTAINERS
 get_maintainer lookups must find the new files).
 
 ## Maintainer identity
@@ -102,6 +102,16 @@ Notes on the variant:
   (listed above); 0023 extends the GEMAC driver, its binding and the
   LUOFU_GMAC Kconfig entry and adds no file.  The entry needs no further
   patterns.  [V]
+- Patches 0024 (PIE RX completion decode + TX descriptor), 0025 (gated
+  LSW W4 egress/init write stage) and 0026 (bdinfo-MAC nvmem source)
+  add no devicetree binding file, YAML file, directory or Kconfig
+  symbol either: 0024 extends `luofu-pie.c`, `luofu-pie.h`,
+  `luofu-gmac.c` and the existing GEMAC/PIE YAML bindings; 0025
+  extends `luofu-switch.c`, `luofu-switch-regs.h` and the
+  LUOFU_SWITCH Kconfig help text; 0026 extends `luofu-gmac.c` and the
+  existing GEMAC YAML binding.  All of those files (and the two
+  headers) are already covered by the patterns above, so the entry
+  needs no further patterns.  [V]
 - `F: arch/arm/boot/dts/hisilicon/luofu-*` covers the future board DTS
   patch; it does not exist in this series.  Do not use
   `F: arch/arm/boot/dts/hisilicon/` without the prefix: it would claim the
@@ -138,11 +148,11 @@ maintainers that the subsystem trees will route by their own entries.
 | RFC patches (0001-0003, 0006, 0011, 0013, 0017) | same entry when posted; the RFC marker goes in the subject, not in MAINTAINERS |
 | SMP patch 0018 (RFC, attended) | same entry when posted; its file is already covered by `F: arch/arm/mach-hisilicon/`; post only after the attended S2 bring-up and not as part of the UP-first set |
 | draft/refusing patches (0009, 0010, 0015, 0016) | do not post as merge candidates; if they are posted at all, use `[RFC PATCH]` and still reference the same entry (files are already covered) |
-| draft/refusing follow-ups (0020-0023) | same entry when posted; 0020 is an arm-gated draft whose only PIE write path is opt-in and never executed, 0021 is a read-only probe, 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters, and 0023 registers nothing until the PIE arm and LSW gates all pass.  Do not post any of them as merge candidates (see 04-validation.md section 17 and the PIE/LSW/net port-notes) |
+| draft/refusing follow-ups (0020-0026) | same entry when posted; 0020 is an arm-gated draft whose only PIE write path is opt-in and never executed, 0021 is a read-only probe, 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters, and 0023 registers nothing until the PIE arm and LSW gates all pass.  0024 decodes the RX completion and builds the full TX descriptor but stays behind the same arm gate and has never been observed on hardware; 0025 adds the dependent luofu_lsw.egress=1 W4 stage and tightens readiness so both the probe configuration and the qid map must verify; 0026 reads the MAC from bdinfo nvmem but registers nothing until the 0023 gate passes and the nvmem read has never run.  Do not post any of them as merge candidates (see 04-validation.md section 18 and the PIE/LSW/net/pie-decode/lsw-egress/mac-nvmem port-notes) |
 
 The identity must be updated in all 13 YAML files at the same time as this
 entry; see `grep -rl 18537102+ShibbityShwab@users.noreply.github.com
-Documentation/devicetree/bindings/`.  Patch 0018 (SMP), patch 0019 (CRG
-clock tree) and patches 0020-0023 add no YAML file, so they do not change
-that list (0019-0023 extend existing YAML in place; their maintainers:
-fields are the same placeholder).
+Documentation/devicetree/bindings/`.  Patch 0018 (SMP) adds no YAML
+file and patches 0019-0026 add no new YAML file either (they extend the
+existing CRG/PIE/GMAC/switch YAMLs in place), so they do not change that
+list; their maintainers: fields are the same placeholder.

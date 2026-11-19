@@ -137,3 +137,19 @@ patching file drivers/net/ethernet/hisilicon/Kconfig
 patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
 patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
 PATCH_RC[0023-net-gmac-netdev-connect-luofu.patch]=0
+### [24] 0024-net-pie-completion-decode-luofu.patch
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+PATCH_RC[0024-net-pie-completion-decode-luofu.patch]=0
+### [25] 0025-net-lsw-egress-luofu.patch
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+PATCH_RC[0025-net-lsw-egress-luofu.patch]=0
+### [26] 0026-net-gmac-bdinfo-mac-nvmem.patch
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+PATCH_RC[0026-net-gmac-bdinfo-mac-nvmem.patch]=0

@@ -1,0 +1,65 @@
+net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+
+Complete the HiSilicon Hi5671Y "luofu" PIE data path from the vendor
+v250 descriptor model: the RX completion descriptor is decoded and
+delivered to the network stack, the normal non-TSO TX descriptor is
+built in full, and the GEMAC front end registers its internal switch
+port with the engine.  The decode is a direct transcription of the
+vendor hi_kpie.ko code paths (hi_pie_rx_get_desc, hi_pie_drv_rx_recv,
+hi_pie_rx_set_owner/set_addr, hi_pie_tx_set_desc and hi_pie_tx_send),
+as recorded in PIE-DATAPATH.md sections 5.2 and 6.
+
+RX: luofu_pie_rx_poll() now decodes each completed descriptor - frame
+length at +0, the status/error code at +8 bits 6:0 (zero = no error),
+the port/vport pair at +16 on the normal path and the alternate
+port/vport bytes at +23/+24 on the no-status path - drops error,
+implausible and unknown-port frames with counters, unmaps the buffer,
+and delivers a good frame with napi_gro_receive() (CHECKSUM_NONE, the
+in-frame 802.1Q tag preserved) to the net_device that registered the
+completed port.  The slot is then re-armed with a freshly allocated
+coherent buffer and the recovered RX write/"sf" pointer values are
+written.  A port with no registered receiver, or whose receiver is
+down, drops the frame (fail closed).  The vendor g_api_priv[] context
+lookup is replaced by a port table under a spinlock and a new
+luofu_pie_rx_register()/unregister() API.
+
+TX: the producer builds the recovered v250 normal non-TSO descriptor
+for one linear frame - length at +0, the 0x74 valid/normal/class word
+at +3, the DMA address at +4, the port tag at +8, the type-0 control
+words at +11/+12/+14/+19 - and rings the doorbell with the masked
+ring index of the next free descriptor.  TX reclaim masks the read
+pointer to the ring index and reclaims everything before it; the RX
+read/write pointers are handled the same way.  The request TSO and
+type 1/2/3 control variants are decoded only at branch level and are
+not written.
+
+The GEMAC front end reads the required "hisilicon,port" property
+(the vendor switch port: 8 for the unpopulated RGMII instance, 9..12
+for the four GMII ports), refuses probe without it, and
+registers/unregisters its port around ndo_open/stop so the engine can
+deliver to its net_device.  The GEMAC and PIE bindings describe the
+implemented decode and the new required property.  No Kconfig symbol
+is added, no devicetree node is added, and every PIE register write
+stays inside the existing luofu_pie.arm=1 arm path with its
+fail-closed probe, read-back verification and halt.
+
+This is still a draft and not mergeable.  The decode has never been
+observed on hardware: no PIE register has been written by this code,
+the arm gate has never been passed, and no completion or TX
+descriptor has been accepted by the engine.  The field positions are
+[V] from the vendor disassembly but the values on a live frame are
+unobserved, the two RX flag classes are semantically [U], the
+ring-index reading of the pointer words is [I], and the LSW-side
+egress queue selection is still [U], so no packet can be claimed to
+reach a wire.  The attended RX/TX decode checks are listed in
+port-notes/pie-decode/SUMMARY.md section 6.
+
+An earlier form of this patch compared napi_gro_receive() against
+GRO_DROP, which does not exist in 6.18; the call is now made without
+a comparison (the return value is not needed here).  Host-compiled in
+the pie-decode lane against linux-6.18.60: the 001-024 series applies
+with 0 rejected hunks and compiles RC=0 with 0 errors and 0 compiler
+warnings under CONFIG_WERROR=y; the extended bindings pass
+dt_binding_check and the full 001-026 series compiles clean.
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

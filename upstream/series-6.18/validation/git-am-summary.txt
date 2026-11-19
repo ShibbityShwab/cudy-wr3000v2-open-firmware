@@ -1,1 +1,1 @@
-git am: 23/23 patches applied, RC=0
+git am: 26/26 patches applied, RC=0

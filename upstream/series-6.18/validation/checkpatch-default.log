@@ -423,3 +423,31 @@ NOTE: For some of the reported defects, checkpatch may be able to
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0024-net-pie-completion-decode-luofu.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 951 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+<series>/series/0024-net-pie-completion-decode-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0025-net-lsw-egress-luofu.patch
+total: 0 errors, 0 warnings, 0 checks, 623 lines checked
+
+<series>/series/0025-net-lsw-egress-luofu.patch has no obvious style problems and is ready for submission.
+########## 0026-net-gmac-bdinfo-mac-nvmem.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 89 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+<series>/series/0026-net-gmac-bdinfo-mac-nvmem.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.

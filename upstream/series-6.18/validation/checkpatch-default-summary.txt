@@ -21,3 +21,6 @@
 0021-net-lsw-init-luofu.patch :: total: 0 errors, 2 warnings, 1456 lines checked
 0022-net-lsw-qidmap-write-luofu.patch :: total: 0 errors, 2 warnings, 1051 lines checked
 0023-net-gmac-netdev-connect-luofu.patch :: total: 0 errors, 1 warnings, 178 lines checked
+0024-net-pie-completion-decode-luofu.patch :: total: 0 errors, 1 warnings, 951 lines checked
+0025-net-lsw-egress-luofu.patch :: total: 0 errors, 0 warnings, 0 checks, 623 lines checked
+0026-net-gmac-bdinfo-mac-nvmem.patch :: total: 0 errors, 1 warnings, 89 lines checked

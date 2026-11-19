@@ -24,16 +24,16 @@ drivers/pinctrl/hisilicon directory).
 | FMC SPI-NAND | 0006 | drivers/spi/spi-luofu-fmc.c | it is a SPI-MEM controller, not a raw-NAND controller; binding under mtd/ (6.18 has no mtd/nand binding dir) |
 | MDIO | 0007 | drivers/net/mdio/mdio-luofu.c | existing mdio-hisi-femac.c precedent |
 | PHY | 0008 | drivers/net/phy/luofu-phy.c | PHYLIB driver matched by PHY ID; no binding on purpose |
-| GEMAC | 0009, 0020, 0023 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory; 0020 adds the phylink/netdev front end, 0023 the readiness-gated registration, carrier fix and MAC source |
+| GEMAC | 0009, 0020, 0023, 0024, 0026 | drivers/net/ethernet/hisilicon/luofu-gmac.c | existing hisilicon net directory; 0020 adds the phylink/netdev front end, 0023 the readiness-gated registration and carrier fix, 0024 the switch-port property and RX-port registration/TX port tag, 0026 the bdinfo-MAC nvmem source |
 | restart | 0010 | drivers/power/reset/luofu-reboot.c | machine restart policy as a platform driver, next to hisi-reboot.c |
 | sysctrl binding | 0010 | Documentation/devicetree/bindings/soc/hisilicon/ | syscon page binding |
 | pinctrl | 0011 | new drivers/pinctrl/hisilicon/ | no hisilicon pinctrl directory exists in 6.18; new dir needs Kconfig source + obj-y entries |
 | thermal | 0012 | drivers/thermal/luofu_tvsensor.c | existing hisi_thermal.c precedent (underscore naming matches that file) |
 | PCIe host | 0013 | drivers/pci/controller/dwc/pcie-luofu.c | DWC host glue belongs with the other DWC host drivers |
-| PIE | 0015, 0020 | drivers/net/ethernet/hisilicon/luofu-pie.c | Ethernet data path, next to GEMAC; 0020 is the arm-gated ring engine |
-| PIE/GEMAC interface | 0020 | drivers/net/ethernet/hisilicon/luofu-pie.h | private front-end/engine interface shared by luofu-gmac.c and luofu-pie.c; not a stable ABI |
-| LSW switch | 0016, 0021, 0022 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists; 0021 is the read-only D1b baseline probe and 0022 the gated W3/W4/W5 write path |
-| LSW register map | 0021, 0022 | drivers/net/ethernet/hisilicon/luofu-switch-regs.h | measured register/qid-map map with per-item evidence grade; 0022 adds the write-set documentation |
+| PIE | 0015, 0020, 0024 | drivers/net/ethernet/hisilicon/luofu-pie.c | Ethernet data path, next to GEMAC; 0020 is the arm-gated ring engine, 0024 the decoded RX completion/TX descriptor path |
+| PIE/GEMAC interface | 0020, 0024 | drivers/net/ethernet/hisilicon/luofu-pie.h | private front-end/engine interface shared by luofu-gmac.c and luofu-pie.c; not a stable ABI (0024 adds the RX-port registration and the TX port argument) |
+| LSW switch | 0016, 0021, 0022, 0025 | drivers/net/ethernet/hisilicon/luofu-switch.c | switchdev over per-port netdevs; no DSA tag exists; 0021 is the read-only D1b baseline probe, 0022 the gated W3/W4/W5 write path and 0025 the gated W4 R1/R3/R5 probe-configuration stage |
+| LSW register map | 0021, 0022, 0025 | drivers/net/ethernet/hisilicon/luofu-switch-regs.h | measured register/qid-map map with per-item evidence grade; 0022 adds the qid-map write-set documentation, 0025 the R1/R3/R5 egress-stage write set |
 | LSW/GEMAC readiness interface | 0022 | drivers/net/ethernet/hisilicon/luofu-switch.h | private hidden-engine readiness contract (probed/ready) consumed by the GEMAC front end; not a stable ABI |
 | boot selector | 0017 | drivers/soc/hisilicon/luofu-selector.c | SoC sysfs interface, next to kunpeng_hccs.c |
 | board DTS | not in series | future arch/arm/boot/dts/hisilicon/luofu-r116.dts + Makefile | section 4 |
@@ -192,11 +192,21 @@ Review points:
    the target config, so the resolved symbol set is unchanged and the net
    lane verified it symbol-identical/byte-idempotent).  0020-0023 add
    only private headers, which the MAINTAINERS entry lists explicitly
-   (see 02-maintainers-proposal.md).
+   (see 02-maintainers-proposal.md); 0024-0026 add no file at all, only
+   existing headers/drivers/bindings.
+10. 0024/0025/0026 add no Kconfig symbol and no config line: 0024
+    extends the PIE/GEMAC drivers and their two existing YAML bindings
+    (it makes the measured `hisilicon,port` property required, which is
+    board-DTS content), 0025 extends the LSW driver and its register
+    header and edits only the LUOFU_SWITCH help text (no symbol), and
+    0026 extends the GEMAC driver and its existing YAML binding.  The
+    001-026 config re-derivation stays symbol-identical and
+    byte-idempotent at the 001-023 hash (0026 does not touch the
+    already-enabled CONFIG_MTD/CONFIG_NVMEM/CONFIG_NVMEM_LAYOUTS).
 
 ## 6. Series order, dependency matrix and bisectability
 
-Consolidated order is 0001 -> 0023.  Compile-time and DT-time
+Consolidated order is 0001 -> 0026.  Compile-time and DT-time
 dependencies:
 
 | patch | needs (compile) | needs (DT behaviour) |
@@ -224,6 +234,9 @@ dependencies:
 | 0021 | 0016 (it rewrites the switch driver and binding 0016 adds), 0020 (same ethernet Kconfig file, applied before it), 0004 (CRG state) | 0004, 0014 (CRG gate/reset state, read-only); the 17-window DTS model, CRG phandle and port bitmap are board-DTS content, and the measured inventory is outside the series |
 | 0022 | 0021 (it extends the switch driver, register header and binding 0021 rewrites, and its default path is the 0021 probe); 0004/0014 (CRG clock/reset ABI for the W3 step) | 0004, 0014 (gated W3 clock/reset power-up); the `hisilicon,port` cells and the enabled switch/PIE/GMAC nodes are board-DTS content, and the measured W2 write model is outside the series |
 | 0023 | 0020 (it extends luofu-gmac.c, its Kconfig and binding, and calls luofu_pie_armed()), 0022 (luofu_switch_ready() and luofu-switch.h) | 0020/0022 readiness state at run time; the MAC address may come from the board DTS, and the enabled nodes plus the three boot parameters are board-DTS/command-line content, not patches |
+| 0024 | 0020 (it extends luofu-pie.c/luofu-pie.h and the PIE binding), 0023 (it extends luofu-gmac.c and the GEMAC binding, and only an armed, ready backend reaches its port registration), 0004/0014 headers at compile time | 0004/0014 CRG clock/reset ABI; the measured `hisilicon,port` cells on the MAC nodes (now required), the enabled PIE/GMAC nodes and the `luofu_pie.arm=1` command line are board-DTS/command-line content, and the vendor descriptor decode is outside the series |
+| 0025 | 0022 (it extends the switch driver, register header and Kconfig help, and its default/refusal path is the 0022 code), 0004/0014 (CRG clock/reset ABI for the W4 stage) | 0004/0014 gated CRG clock/reset state; the enabled switch node and `hisilicon,port` cells are board-DTS content, and the measured R1/R3/R5 write shape and 2026-11-18 pre-write snapshot are outside the series |
+| 0026 | 0023 (it extends luofu-gmac.c and its binding, and its new code runs only after the 0023 registration gate), 0024 (same GEMAC file; the consolidated order applies 0026 after 0024 and the patch was refreshed against the post-0024 context) | the bdinfo MTD nvmem wiring is board-DTS content (out of series) and the `mac-base` cell post-processing is an OpenWrt-carried backport, not vanilla 6.18.60; the board.d LAN/WAN map is target content |
 
 **Bisectability problem: 0014 is too late.**  0014 fixes the CRG reset
 polarity (active-low), and it is placed after 0006, 0007 and 0013, which
@@ -269,15 +282,35 @@ Other ordering constraints:
   probe) and builds on 0004/0014 for the gated W3 clock/reset power-up.
   It applies after 0021 with no offset and is a follow-up in the same
   subsystem; it is not independent of the table format questions.
-- 0023 is the last patch: it must follow 0020 (same GEMAC driver, Kconfig
-  entry and binding, plus the PIE readiness API) and 0022 (the switch
-  readiness API and luofu-switch.h), and it edits the same ethernet
-  Kconfig file after 0022.  Its registration gate consumes both backends'
-  state at run time, so it cannot precede either.
-- Patches 0020, 0021 and 0022 depend on the 2026-11-18 measured inventory
-  (`../../docs/INVENTORY-2026-11-18.md`), which is a bench artifact and not
-  a patch; section 10 records the staging.  0023 adds no measured values
-  but depends on the 0020/0022 backends being ready.
+- 0023 must follow 0020 (same GEMAC driver, Kconfig entry and binding,
+  plus the PIE readiness API) and 0022 (the switch readiness API and
+  luofu-switch.h), and it edits the same ethernet Kconfig file after
+  0022.  Its registration gate consumes both backends' state at run time,
+  so it cannot precede either.
+- 0024 is the first follow-up after 0023: it extends luofu-pie.c,
+  luofu-pie.h and the PIE binding from 0020 and luofu-gmac.c and the
+  GEMAC binding from 0023, and it makes the measured `hisilicon,port`
+  property required.  It must follow both; the consolidated order keeps
+  it after 0023 so the GEMAC edits apply to the final file.
+- 0025 is the third LSW stage and must follow 0022 (it extends the same
+  switch driver, its register header and its Kconfig help, and its
+  default path is the 0022 read-only/refusal path).  It is file-disjoint
+  from 0024 (switch vs PIE/GMAC), so their relative order does not
+  matter, but it must stay after 0022 because the W4 stage consumes the
+  W3 power step and feeds the W5 readiness.
+- 0026 extends luofu-gmac.c and the GEMAC binding after 0023 and 0024
+  (it runs behind the 0023 registration gate; 0024 edits the same file
+  first and 0026 was refreshed against that post-0024 context, so the
+  consolidated order applies it cleanly with no offset).  Its board DTS
+  nvmem wiring and the OpenWrt `mac-base` backport are outside the
+  series.
+- Patches 0020, 0021, 0022 and 0025 depend on the 2026-11-18 measured
+  inventory (`../../docs/INVENTORY-2026-11-18.md`), which is a bench
+  artifact and not a patch; section 10 records the staging.  0024's
+  descriptor decode is read-only vendor-disassembly evidence
+  (PIE-DATAPATH.md sections 5.2/6) plus the same inventory's ring-pointer
+  values.  0023 and 0026 add no measured values but depend on the
+  0020/0022/0023 backends being in place.
 
 ## 7. Conflicts and merge-order hazards
 
@@ -290,9 +323,9 @@ series is split across subsystem trees):
 | arch/arm/mach-hisilicon/{Kconfig,Makefile,luofu.c} | 0001, 0018 | 0018 edits files introduced by 0001 and is last in the series; no in-series conflict, but a split submission must rebase it on the platform series |
 | arch/arm/kernel/head.S, arch/arm/boot/compressed/head.S | 0003 | ARM core tree; conflicts with any early-boot change |
 | drivers/clk/hisilicon/crg-luofu.c, binding yaml, clock-ID header | 0004, 0014, 0019 | fold 0014 and 0019 into 0004, or post 0019 as the follow-up clock-tree patch after the CRG provider series |
-| drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016, 0020, 0021, 0022, 0023 | seven insertions in the same two files; order is 0009 -> 0015 -> 0016 -> 0020 -> 0021 -> 0022 -> 0023 in the consolidated tree.  0020 makes LUOFU_GMAC depend on LUOFU_PIE, 0021's Kconfig hunk applies with a 6-line offset because 0020 edits the same file first, 0022 extends the LUOFU_SWITCH entry and 0023 adds LUOFU_GMAC's dependency on LUOFU_SWITCH.  If 0009 lands alone, 0015/0016/0020-0023 need a rebase (they are drafts, so this should not matter soon) |
-| drivers/net/ethernet/hisilicon/Kconfig | 0009/0015/0020 inside `if ARM || ARM64 || COMPILE_TEST`, 0016/0021 outside it | move both outside entries inside (see section 5) |
-| drivers/net/ethernet/hisilicon/luofu-{gmac,pie,switch}.c and their bindings | 0009, 0015, 0016, 0020, 0021, 0022, 0023 | 0020-0023 rewrite files and bindings created by the earlier draft patches (0022 adds luofu-switch.h, 0023 gates the GEMAC netdev); keep the draft block together when rebasing |
+| drivers/net/ethernet/hisilicon/{Kconfig,Makefile} | 0009, 0015, 0016, 0020, 0021, 0022, 0023, 0025 | seven insertions in the same two files; order is 0009 -> 0015 -> 0016 -> 0020 -> 0021 -> 0022 -> 0023 in the consolidated tree.  0020 makes LUOFU_GMAC depend on LUOFU_PIE, 0021's Kconfig hunk applies with a 6-line offset because 0020 edits the same file first, 0022 extends the LUOFU_SWITCH entry, 0023 adds LUOFU_GMAC's dependency on LUOFU_SWITCH and 0025 rewrites the LUOFU_SWITCH help text.  If 0009 lands alone, 0015/0016/0020-0026 need a rebase (they are drafts, so this should not matter soon) |
+| drivers/net/ethernet/hisilicon/Kconfig | 0009/0015/0020 inside `if ARM || ARM64 || COMPILE_TEST`, 0016/0021 outside it, 0025 edits the LUOFU_SWITCH help | move both outside entries inside (see section 5) |
+| drivers/net/ethernet/hisilicon/luofu-{gmac,pie,switch}.c and their bindings | 0009, 0015, 0016, 0020, 0021, 0022, 0023, 0024, 0025, 0026 | 0020-0026 rewrite files and bindings created by the earlier draft patches (0022 adds luofu-switch.h, 0023 gates the GEMAC netdev, 0024 decodes the RX completion and tags TX with the port, 0025 adds the W4 egress stage, 0026 reads the MAC from bdinfo nvmem); keep the draft block together when rebasing |
 | Documentation/devicetree/bindings/soc/hisilicon/ | 0010 (sysctrl yaml), 0017 (boot-selector yaml) | different files, no textual conflict; both reference the same syscon node in the DTS, so the DTS patch must wait for both |
 | drivers/soc/hisilicon/{Kconfig,Makefile} | 0017 | no conflict, but the Kconfig file is small; rebase against kunpeng changes |
 | drivers/pinctrl/{Kconfig,Makefile} | 0011 | new directory + 2 top-level insertion lines; low risk |
@@ -303,9 +336,9 @@ The consolidated series applies cleanly in order to pristine 6.18.60
 does not remove the split-submission conflict risk: rebase each subsystem
 series on the receiving tree before posting, especially 0002/0003 (ARM
 core) and the net/ethernet/hisilicon net series, whose draft block
-(0009/0015/0016/0020-0023) is rewritten in place by its own follow-ups.
+(0009/0015/0016/0020-0026) is rewritten in place by its own follow-ups.
 
-## 8. Why the series files are numbered 0001-0023
+## 8. Why the series files are numbered 0001-0026
 
 The four-digit filenames under `series/` are a consolidated review form and
 are not the numbering a maintainer will see.  A real submission renumbers
@@ -316,7 +349,7 @@ per subsystem series and always puts bindings before drivers:
     ...
 
 The `series/NNNN-*.patch` files are format-patch style with
-`[PATCH NN/23]` subjects so that `git am` reproduces the commit subjects
+`[PATCH NN/26]` subjects so that `git am` reproduces the commit subjects
 and messages exactly; the mapping table in 01-commit-messages.md maps each
 file back to its source patch in
 `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/`.
@@ -391,14 +424,15 @@ clock/reset ABI they consume (0021 read-only).
 `luofu_pie.arm=1` gate: probe validates the resources and ring tables and
 then refuses with -EOPNOTSUPP before the first register write, both
 devicetree nodes stay disabled, and the armed path (the only PIE MMIO
-write path in the series) has never run.  The RX completion decode and the
-internal-switch egress map are still [U], so no frame is delivered even
-when armed.  0021 contains no `writel()`, enables no clock, drives no
+write path in the series) has never run.  The RX completion decode is not
+part of 0020 (0024 adds it, unobserved) and the internal-switch egress map
+is still [U], so no frame is delivered even when armed.  0021 contains no
+`writel()`, enables no clock, drives no
 reset and always refuses probe; it validates the measured powered state,
 the baseline words and the qid maps read-only and never programs a table.
 The write campaigns that gate them are one attended, recovery-armed PIE
 arm session (`target-skeleton/docs/port-notes/pie/SUMMARY.md` section 6)
-and the LSW W2-W6 sequence (`target-skeleton/docs/port-notes/lsw/SUMMARY.md`
+and the LSW W3-W5 sequence (`target-skeleton/docs/port-notes/lsw/SUMMARY.md`
 section 5, LSW-SPEC.md section 12.3).  Until those run, both patches are
 `[RFC PATCH]` design-review material only; 0021's read-only property means
 it can be reviewed without any write risk.
@@ -425,9 +459,9 @@ phylink instance from PHYLINK_DEV to PHYLINK_NETDEV (with PHYLINK_DEV the
 carrier stayed off in phylink's own bookkeeping), logs the resolved link,
 and takes the netdev address from the standard devicetree MAC properties
 with a random locally-administered fallback.  Its only MAC writes remain
-the measured 1 Gbps link-up/link-down words; the RX completion decode and
-the TX-to-egress queue/port mapping are [U], so no frame is delivered and
-TX egress is unproven.
+the measured 1 Gbps link-up/link-down words; the TX-to-egress queue/port
+mapping is [U] (the RX completion decode arrives in 0024 and is still
+unobserved), so no frame is delivered and TX egress is unproven.
 
 The staging gates are: 0022's W3 (the clock/reset power step) and W4/W5
 (the qid-map write set), plus the PIE arm gate for 0023's registration -
@@ -436,3 +470,85 @@ all in one attended, recovery-armed boot with the board DTS nodes enabled
 0022 and 0023 are `[RFC PATCH]` design-review material only: 0022's
 default path and 0023's no-gate refusal both write nothing, so a reviewer
 can inspect them without any write or boot risk.
+
+## 11. Completion decode, LSW egress and MAC-source staging (patches 0024-0026)
+
+The last three patches are follow-ups to 0020/0022/0023 and are staged the
+same way: the default behaviour is unchanged, every write is behind an
+explicit attended gate, and none of them has executed on hardware.
+
+**Ordering.**  0024 must follow 0020 (it extends `luofu-pie.c`,
+`luofu-pie.h` and the PIE binding) and 0023 (it extends `luofu-gmac.c`
+and the GEMAC binding, and only an armed, ready backend reaches its RX-port
+registration); it also makes the measured `hisilicon,port` property
+required, so the board DTS (out of series) must supply it.  0025 must
+follow 0022 (same switch driver, register header and Kconfig help, and the
+0022 default/refusal path) and builds on the W3 power stage that 0022
+gates; it is file-disjoint from 0024, so their relative order does not
+matter.  0026 must follow 0023 (its new code runs only after the
+registration gate passes) and 0024 (same GEMAC file; the patch was
+refreshed against the post-0024 context and applies cleanly after it).  The
+consolidated order is 0022 -> 0023 -> 0024 -> 0025 -> 0026.
+
+**PIE completion decode and TX descriptor (0024).**  The decode is a direct
+transcription of the vendor v250 functions named in 04-validation.md
+section 18 (read-only disassembly of `hi_kpie.ko`): the RX summary
+contract (length at +0, status/error at +8 bits 6:0, port/vport at +16 or
+the no-status bytes at +23/+24), the normal non-TSO TX descriptor byte
+image and the masked ring-index pointer arithmetic.  Received frames are
+delivered to the net_device that registered the completed switch port
+through the new port table and `luofu_pie_rx_register()`, and the GEMAC
+front end tags its TX with the now-required `hisilicon,port`.  Every PIE
+register write remains inside the existing `luofu_pie.arm=1` path; the
+armed path has never run, the live completion/TX values have never been
+observed, the two RX flag classes are [U], the ring-index reading is [I]
+and the LSW-side egress selection is [U], so no packet can be claimed to
+reach a wire.  The attended checks are in
+`target-skeleton/docs/port-notes/pie-decode/SUMMARY.md` section 6.
+
+**LSW W4 egress stage (0025).**  The new `luofu_lsw.egress=1` parameter
+requires `luofu_lsw.arm=1`; after the W3 power sequence the driver runs a
+read-only pre-write conformance gate (EQM indirect interface idle, target
+words stable, `fam+0x504` equal to the computed cell count) and then
+writes the nine recovered R1/R3/R5 probe-configuration words in the vendor
+order, deriving every readback expectation from the pre-write snapshot and
+restoring all found values on any mismatch.  Readiness is tightened from
+"qid map verified" to "probe configuration and qid map both verified", so
+`arm=1 qidmap=1` writes and verifies the map and then refuses, and
+`egress`/`qidmap` without `arm=1` is an explicit -EINVAL.  The write
+shape and the measured post-boot words come from the 2026-11-18 inventory
+and the vendor disassembly, but the field semantics, the EQM indirect
+tables, the classifier/L2/VLAN formats and the per-frame egress selection
+are [U] and deliberately not written; the attended sequence is in
+`target-skeleton/docs/port-notes/lsw-egress/SUMMARY.md` section 7.
+
+**MAC source (0026).**  The GEMAC probe now reads `of_get_mac_address()`
+before allocating the net_device, so the board DTS can point the standard
+"mac-address" nvmem cell at the plaintext factory MAC at `bdinfo+0xde00`
+through a fixed-layout/mac-base layout (LAN = base, WAN = base+1, the
+vendor userspace rule).  A not-yet-registered MTD nvmem provider returns
+`-EPROBE_DEFER` and the probe defers rather than randomising; every other
+error keeps the logged random locally-administered fallback.
+`ndo_set_mac_address`/`ndo_validate_addr` keep the userspace provisioning
+path working.  The MTD nvmem provider and the read-only partition are
+vanilla 6.18.60/MTD-core behaviour, the mac-base cell parsing is an
+OpenWrt-carried backport (stated dependency), and the DTS wiring plus the
+guarded board.d LAN/WAN map are OpenWrt-target content, not this kernel
+patch.  Nothing writes factory data, and the read path itself (provider
+ordering, partition contents, userspace application) has never run.
+
+**Evidence and gaps.**  The lanes' recorded results are: 001-024 applies
+24/24 with 0 rejected hunks and compiles RC=0 with 0 warnings under
+`CONFIG_WERROR=y` (zImage 3,281,400 B sha256 `f4a736cf...`, config
+re-derivation byte-identical at `d1af1b2a...`); 001-025 applies 25/25 and
+the isolated `024+025` tree compiles RC=0 with the changed drivers W=1
+clean (vmlinux 133,286,956 B sha256 `63648e75...`); 001-023+026 compiles
+RC=0 with 0 warnings (zImage 3,281,744 B sha256 `8443c8c0...`); and the
+final fully-clean 001-026 build is prepare RC=0 (1,233 patching-file
+lines, 0 `.rej`) and compile RC=0 with 0 errors / 0 compiler warnings
+under WERROR (zImage 3,282,528 B sha256 `08b76747...`).  This submission
+form adds no build of its own: 04-validation.md section 18 re-runs only the
+host apply/checkpatch validation of all 26 patches.  Until the attended
+decode, egress and nvmem-read checks run, 0024/0025/0026 are
+`[RFC PATCH]` design-review material only.
+

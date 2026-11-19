@@ -1,7 +1,7 @@
 From 2b5d59df0cd9192e333a95e5307a92f9457a5d37 Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 08:20:00 +0700
-Subject: [PATCH 04/23] clk: hisilicon: add Luofu CRG clock and reset controller
+Subject: [PATCH 04/26] clk: hisilicon: add Luofu CRG clock and reset controller
 
 Add a driver for the CRG (Clock Reset Generator) of the HiSilicon
 Hi5671Y "luofu" SoC.  The CRG is a 4 KiB system-controller page whose

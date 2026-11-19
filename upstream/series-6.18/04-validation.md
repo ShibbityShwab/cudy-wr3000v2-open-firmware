@@ -1,18 +1,19 @@
 # Validation record - luofu 6.18 series
 
 Result summary: **PASS** for the host-only checks requested for this
-submission form.  The 23 commit-ready series files apply in order to a
+submission form.  The 26 commit-ready series files apply in order to a
 pristine linux-6.18.60 tree with both patch(1) and git am, the resulting
 trees are identical, and checkpatch reports 0 errors.  The series was
-regenerated and every check re-run on 2026-11-19 when the gated LSW write
-path (0022) and GEMAC netdev readiness gate (0023) were added to the
-review form; section 17 records that final 23-patch re-run.  Section 16
-records the 21-patch (PIE datapath + LSW baseline probe) re-run, section
-15 the 19-patch (CRG clock tree) run, section 14 the 18-patch (SMP 0018)
-run and section 13 the 17-patch A/B-selector (0017) re-validation,
-including the kernel compile, binding, DTS and config checks, which are
-otherwise summarised in sections 9 and 17.  There is no hardware
-validation of any kind.
+regenerated and every check re-run on 2026-11-19 when patches 0024 (PIE RX
+completion decode + TX descriptor), 0025 (gated LSW W4 egress/init write
+stage) and 0026 (bdinfo-MAC nvmem GEMAC source) were added to the review
+form; section 18 records that final 26-patch re-run.  Section 17 records
+the 23-patch (0022/0023) re-run, section 16 the 21-patch (PIE datapath +
+LSW baseline probe) re-run, section 15 the 19-patch (CRG clock tree) run,
+section 14 the 18-patch (SMP 0018) run and section 13 the 17-patch
+A/B-selector (0017) re-validation, including the kernel compile, binding,
+DTS and config checks, which are otherwise summarised in sections 9 and
+17-18.  There is no hardware validation of any kind.
 
 Evidence tags: [V] verified by the command/run cited, [I] inferred,
 [U] unmeasured, [X] blocked.
@@ -27,16 +28,19 @@ Evidence tags: [V] verified by the command/run cited, [I] inferred,
   `3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e`
   (re-verified against the local download cache at the start of the final
   run).  The extracted tree reports VERSION=6, PATCHLEVEL=18, SUBLEVEL=60.  [V]
-- Series input: `series/0001-...0023` generated from
+- Series input: `series/0001-...0026` generated from
   `opensource/target-skeleton/target/linux/hisilicon/patches-6.18/` by
-  `tools/gen-series.py`.  Patches 0022 (gated LSW W3/W4/W5 write path)
-  and 0023 (GEMAC netdev readiness gate) were added to the review form on
-  2026-11-19 from the net lane; patches 0020 (PIE datapath + GEMAC front
-  end) and 0021 (LSW read-only baseline probe) were added on 2026-11-18
-  from the two measured-inventory lanes; patch 0019 (CRG clock-tree
-  extension: gate parents, read-only PLLs/muxes, extended CRG YAML and
-  four appended clock IDs) was added the same day from the clock-tree
-  lane; patch 0018 (SMP bring-up: new
+  `tools/gen-series.py`.  Patches 0024 (PIE RX completion decode + TX
+  descriptor), 0025 (gated LSW W4 egress/init write stage) and 0026
+  (bdinfo-MAC nvmem GEMAC source) were added to the review form on
+  2026-11-19 from the pie-decode, lsw-egress and mac-nvmem lanes; patches
+  0022 (gated LSW W3/W4/W5 write path) and 0023 (GEMAC netdev readiness
+  gate) were added earlier that day from the net lane; patches 0020 (PIE
+  datapath + GEMAC front end) and 0021 (LSW read-only baseline probe) were
+  added on 2026-11-18 from the two measured-inventory lanes; patch 0019
+  (CRG clock-tree extension: gate parents, read-only PLLs/muxes, extended
+  CRG YAML and four appended clock IDs) was added the same day from the
+  clock-tree lane; patch 0018 (SMP bring-up: new
   `arch/arm/mach-hisilicon/platsmp.c` plus the machine
   Kconfig/Makefile/comment refactor) had been added earlier the same day,
   and patch 0017 (and its commit message) had been corrected earlier that
@@ -53,8 +57,9 @@ Evidence tags: [V] verified by the command/run cited, [I] inferred,
 - Tool versions: git 2.56.0, GNU patch 2.8.1, GNU tar 1.35, xz 5.8.4,
   checkpatch.pl 0.32 (from the 6.18.60 tree), perl 5.44.  [V]
 - Scratch directory (not committed, local-only):
-  `build/linux-kbuild/waves/2026-11-19-0023review2/upstream-validation/`
-  for the final 23-patch run; the 21-patch run used
+  `build/linux-kbuild/waves/2026-11-19-0026review/upstream-validation/`
+  for the final 26-patch run; the 23-patch run used
+  `.../2026-11-19-0023review2/upstream-validation/`, the 21-patch run used
   `.../2026-11-18-0021review/upstream-validation/`, the 19-patch run
   `.../2026-11-18-clkreview/upstream-validation/`, the 18-patch run
   `.../2026-11-18-smpreview/upstream-validation/` and the 17-patch run
@@ -70,7 +75,7 @@ unified diff to format-patch style by inserting only the git extended
 headers (`diff --git`, `new file mode`), and prepends the per-patch
 commit message from `commit-messages/`.  [V]
 
-- diff-body identity: for all 23 patches, removing the inserted
+- diff-body identity: for all 26 patches, removing the inserted
   `diff --git`/`new file mode` lines from the generated diff yields the
   source patch byte-for-byte.  Checked for every file by the generator;
   independently re-checked for 0018 (body identical to
@@ -78,13 +83,16 @@ commit message from `commit-messages/`.  [V]
   `019-arm-clk-luofu-clock-tree.patch`), 0020 (body identical to
   `020-net-pie-datapath-luofu.patch`), 0021 (body identical to
   `021-net-lsw-init-luofu.patch`), 0022 (body identical to
-  `022-net-lsw-qidmap-write-luofu.patch`) and 0023 (body identical to
-  `023-net-gmac-netdev-connect-luofu.patch`).  [V]
-- the generated series carries `[PATCH NN/23]` subjects, the commit
+  `022-net-lsw-qidmap-write-luofu.patch`), 0023 (body identical to
+  `023-net-gmac-netdev-connect-luofu.patch`), 0024 (body identical to
+  `024-net-pie-completion-decode-luofu.patch`), 0025 (body identical to
+  `025-net-lsw-egress-luofu.patch`) and 0026 (body identical to
+  `026-net-gmac-bdinfo-mac-nvmem.patch`).  [V]
+- the generated series carries `[PATCH NN/26]` subjects, the commit
   messages and the `Signed-off-by` placeholder; `git am` reproduces the
   subjects exactly (section 4).  [V]
-- hashes of all 23 series files and all 23 source patches are recorded in
-  `validation/sha256sums.txt`; `sha256sum -c` passes for all 46 entries
+- hashes of all 26 series files and all 26 source patches are recorded in
+  `validation/sha256sums.txt`; `sha256sum -c` passes for all 52 entries
   in the final run.  [V]
 
 ## 3. Sequential apply with patch(1)
@@ -93,7 +101,7 @@ Command: for each series file in order,
 `( cd patch-tree && patch -p1 -i <series file> )` on a copy of the
 pristine tree.  [V]
 
-- 23/23 patches: RC=0; no failed/reversed hunk; no `.rej` file.  [V]
+- 26/26 patches: RC=0; no failed/reversed hunk; no `.rej` file.  [V]
 - 3 hunks applied with an offset, 0 with fuzz.  Two are in patch 0008
   (PHY) and are unchanged from the earlier runs:
   - `drivers/net/phy/Kconfig`: `Hunk #1 succeeded at 253 (offset -75 lines).`
@@ -110,11 +118,11 @@ pristine tree.  [V]
   patch 0021's Kconfig hunk, `Hunk #1 succeeded at 188 (offset 6 lines).`
   in `drivers/net/ethernet/hisilicon/Kconfig`.  Patch 0020 edits the same
   file earlier in the series, so the insertion point has moved by six
-  lines; the hunk content still applies cleanly.  Patches 0022 and 0023
-  apply with no offset.  [V]
+  lines; the hunk content still applies cleanly.  Patches 0022-0026 apply
+  with no offset.  [V]
 - GNU patch created `.orig` backups for exactly those three offset files
   (they were removed before the tree comparison).  [V]
-- 90 "patching file" events across the series; no other diagnostics.
+- 100 "patching file" events across the series; no other diagnostics.
   Patch 0018 applies four files at its position (three modified machine
   files plus the new platsmp.c), all RC=0.  Patch 0019 applies its three
   files (the CRG YAML binding, crg-luofu.c and the clock-ID header), all
@@ -127,15 +135,20 @@ pristine tree.  [V]
   luofu-switch.h, luofu-switch.c, luofu-switch-regs.h and the switch
   YAML) RC=0 and with no offset.  Patch 0023 applies its three files (the
   same Kconfig, luofu-gmac.c and the GEMAC YAML) RC=0 and with no
-  offset.  [V]
+  offset.  Patch 0024 applies its five files (luofu-pie.c, luofu-pie.h,
+  luofu-gmac.c and the GEMAC/PIE YAML bindings) RC=0 and with no offset;
+  patch 0025 applies its three files (the same Kconfig help, the extended
+  luofu-switch-regs.h and luofu-switch.c) RC=0 and with no offset; patch
+  0026 applies its two files (luofu-gmac.c and the GEMAC YAML) RC=0 and
+  with no offset.  [V]
 
 ## 4. Sequential apply with git am
 
 Command: `git init` + baseline commit on a second copy of the pristine
 tree, then `git am <series file>` in order.  [V]
 
-- 23/23 patches: RC=0; clean work tree afterwards.  [V]
-- the 23 commits have the expected subjects (oldest first):
+- 26/26 patches: RC=0; clean work tree afterwards.  [V]
+- the 26 commits have the expected subjects (oldest first):
 
       0001 ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
       0002 ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
@@ -160,8 +173,11 @@ tree, then `git am <series file>` in order.  [V]
       0021 net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
       0022 net: ethernet: hisilicon: add the gated Luofu LSW write path
       0023 net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+      0024 net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+      0025 net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+      0026 net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
 
-- combined diff of the 23 commits: `63 files changed, 9497 insertions(+),
+- combined diff of the 26 commits: `63 files changed, 10276 insertions(+),
   4 deletions(-)` (37 files added, 26 modified; no binary, object,
   firmware or DTB file added - checked by extension).  Patch 0018 itself is
   4 files / 169 insertions(+) / 8 deletions(-): the 159-line platsmp.c plus
@@ -185,10 +201,20 @@ tree, then `git am <series file>` in order.  [V]
   Kconfig entry and its binding, and adds no file.  Because both rewrite
   lines that earlier series patches added, the combined file count grows
   by exactly the one new header (62 -> 63) while the combined insertion
-  count grows by 679 (8818 -> 9497), not by 819 (737 + 82).  [V]
+  count grows by 679 (8818 -> 9497), not by 819 (737 + 82).  Patch 0024
+  itself is 5 files / 503 insertions(+) / 136 deletions(-): it rewrites
+  luofu-pie.c, luofu-pie.h, luofu-gmac.c and the two net YAML bindings and
+  adds no file.  Patch 0025 itself is 3 files / 425 insertions(+) /
+  42 deletions(-): it rewrites luofu-switch.c, luofu-switch-regs.h and the
+  ethernet Kconfig help and adds no file.  Patch 0026 itself is 2 files /
+  44 insertions(+) / 15 deletions(-): it rewrites luofu-gmac.c and the
+  GEMAC YAML and adds no file.  Because none of the three adds a file, the
+  combined file count stays 63; because 0024/0025 rewrite lines that
+  earlier series patches added, the combined insertion count grows by 779
+  (9497 -> 10276), not by 972 (503 + 425 + 44).  [V]
 - commit messages and `Signed-off-by` lines survive `git am` unchanged;
   see `validation/git-log.txt` (the script keeps the last 20 oneline log
-  lines by design).  [V]
+  lines by design, so the 26-patch file starts at commit 7).  [V]
 - no author/committer configuration other than the local scratch identity
   was used; this does not test list delivery.  [V]
 
@@ -229,7 +255,10 @@ checks, i.e. the warnings a maintainer would see on the mailing list.  [V]
 | 21 | 0021-net-lsw-init-luofu | 0 | 2 | 0 |
 | 22 | 0022-net-lsw-qidmap-write-luofu | 0 | 2 | 0 |
 | 23 | 0023-net-gmac-netdev-connect-luofu | 0 | 1 | 0 |
-| **total** | | **0** | **56** | **6** |
+| 24 | 0024-net-pie-completion-decode-luofu | 0 | 1 | 0 |
+| 25 | 0025-net-lsw-egress-luofu | 0 | 0 | 0 |
+| 26 | 0026-net-gmac-bdinfo-mac-nvmem | 0 | 1 | 0 |
+| **total** | | **0** | **58** | **6** |
 
 Warning breakdown (all expected, all fixable without touching driver
 logic; this series was not edited because the task forbids changing the
@@ -238,7 +267,7 @@ existing patches):
 | warning | count | where | disposition |
 | --- | --- | --- | --- |
 | added/moved/deleted file(s), does MAINTAINERS need updating? | 18 | every patch that adds files (all but 0002, 0003, 0014, 0019, 0023); 0020 adds luofu-pie.h, 0021 adds luofu-switch-regs.h and 0022 adds luofu-switch.h | add the MAINTAINERS entry from 02-maintainers-proposal.md |
-| DT binding docs and includes should be a separate patch | 20 | 18 patches that mix binding (Documentation/devicetree or include/dt-bindings) and driver files; 0017 and 0019 cross the boundary twice each; 0020, 0021, 0022 and 0023 edit existing bindings | split binding+header into their own patches before sending |
+| DT binding docs and includes should be a separate patch | 22 | 20 patches that mix binding (Documentation/devicetree or include/dt-bindings) and driver files; 0017 and 0019 cross the boundary twice each; 0020, 0021, 0022 and 0023 edit existing bindings, and 0024 and 0026 extend the existing PIE/GMAC YAMLs (0025 has no binding hunk) | split binding+header into their own patches before sending |
 | line length of 112 exceeds 100 columns | 16 | 0004, drivers/clk/hisilicon/crg-luofu.c clock table | wrap the table |
 | Kconfig help paragraph shorter than 4 lines | 2 | 0007 (LUOFU_MDIO), 0008 (LUOFU_PHY) | expand the help text |
 | spinlock_t definition without comment | 2 + 2 (strict CHECK) | 0004 and 0019, crg-luofu.c structs | add a one-line comment |
@@ -272,9 +301,19 @@ MAINTAINERS (new header) and binding-split warnings, and no strict
 CHECKs.  Patch 0023 is 178 checked lines (the GEMAC readiness gate,
 PHYLINK_NETDEV change, MAC-address plumbing, Kconfig dependency and the
 GEMAC binding text) with 0 errors and the single expected binding-split
-warning (it adds no file), and no strict CHECKs.  The 23-patch totals are
-therefore the 21-patch totals plus 3 warnings (2 in 0022, 1 in 0023) and
-no new CHECKs.  [V]
+warning (it adds no file), and no strict CHECKs.  Patch 0024 is 951
+checked lines (the PIE RX completion decode, RX delivery/port table, full
+TX descriptor, GEMAC port sourcing and the two YAML extensions) with
+0 errors, the single expected binding-split warning and no strict CHECKs
+(it adds no file, so no MAINTAINERS warning).  Patch 0025 is 623 checked
+lines (the W4 R1/R3/R5 stage, conformance gate, readback/restore, the
+register-header write set, the Kconfig help and the readiness tightening)
+with 0 errors, 0 warnings and 0 CHECKs.  Patch 0026 is 89 checked lines
+(the MAC-source read/defer/fallback, the two ndo handlers and the GEMAC
+binding text) with 0 errors, the single expected binding-split warning and
+no strict CHECKs.  The 26-patch totals are therefore the 23-patch totals
+plus 2 warnings (1 in 0024, 1 in 0026; 0025 adds none) and no new CHECKs.
+[V]
 
 ## 7. What was not run in the checkpatch/apply validation
 
@@ -283,8 +322,9 @@ compile and config re-derivation are not part of `tools/run-validation.sh`;
 they were re-run separately in the isolated clones per lane and are
 recorded in section 13 (selector correction), section 14 (SMP addition),
 section 15 (clock-tree addition), section 16 (PIE datapath + LSW
-baseline probe addition) and section 17 (gated LSW write path + GEMAC
-netdev readiness addition); the earlier per-lane records are in
+baseline probe addition), section 17 (gated LSW write path + GEMAC
+netdev readiness addition) and section 18 (completion decode + LSW
+egress stage + MAC-source addition); the earlier per-lane records are in
 section 9.  [V]
 
 The `--use-tree` run of the validation script reuses an already-extracted
@@ -294,11 +334,11 @@ scratch and verified its sha256.  [V]
 ## 8. Results of this validation, graded
 
 [V] - series generated from the source patches with byte-identical hunk
-content; 23/23 patch(1) RC=0; 23/23 git am RC=0; identical resulting
-trees; 0 checkpatch errors; the six strict CHECKs and 56 warnings are
+content; 26/26 patch(1) RC=0; 26/26 git am RC=0; identical resulting
+trees; 0 checkpatch errors; the six strict CHECKs and 58 warnings are
 enumerated above.
 [V] - three apply offsets (two in 0008, one in 0021); no fuzz; no
-rejects; 0022 and 0023 apply with no offset.
+rejects; 0022-0026 apply with no offset.
 [I] - the offset cause is the OpenWrt-patched source tree (see section 3).
 [U] - every hardware behaviour, including the decoded clock-tree PLL
 rates, status bits and mux/gate parents (never read back).  No boot, no
@@ -324,23 +364,28 @@ OpenWrt GCC 14.4.0), not on this validation's pristine tarball.  [V]
 | whole series 0001-0020: prepare and full kernel compile (PIE-datapath lane, 2026-11-18) | 001-020 chain apply RC=0 (0 rejects; the only .orig files are patch 0008's two pre-existing offset files); prepare RC=0 (1,211 patching-file lines); compile RC=0, **0 warnings and 0 errors** under CONFIG_WERROR=y; zImage 3,276,656 B sha256 `dfc7b753d34ad443a76ed3ffe60e77d7e63a28b771546ba0dccc4a40a9515a5a` (build-time dependent); `luofu-pie.o` 76,740 B and `luofu-gmac.o` 45,492 B built; PIE/GEMAC/phylink symbols in System.map; CONFIG_LUOFU_PIE=y, CONFIG_LUOFU_GMAC=y, CONFIG_PHYLINK=y (resolved m -> y), CONFIG_WERROR=y; config delta symbol-identical and byte-idempotent; TEXT_OFFSET contract unchanged | target-skeleton/docs/port-notes/pie/SUMMARY.md sections 4 and 5 |
 | whole series 0001-0021: prepare and full kernel compile (LSW-init lane, 2026-11-18) | the 21-patch series applied to pristine 6.18.60 (0 failed hunks, 0 rejects; 0021 has the 6-line Kconfig offset only); prepare RC=0 (1,215 patching lines, 0 rejects); compile RC=0 with CONFIG_WERROR=y, **0 errors and 0 warnings**; zImage 3,279,096 B sha256 `96b927d35e2e6c6be9980c7683de20c20a288a5df58ddf08ed7fbbe9bb1e92d3` (build-time dependent); `luofu-switch.o` built; CONFIG_LUOFU_SWITCH=y; config delta symbol-identical and byte-idempotent (`76aaafc8...`); TEXT_OFFSET contract unchanged | target-skeleton/docs/port-notes/lsw/SUMMARY.md sections 4.1 and 6 |
 | whole series 0001-0023: prepare and full kernel compile (net lane, 2026-11-19) | the 23-patch series applied to pristine 6.18.60 with `patch -p1 -N`: 23/23 patches, 90 files patched, 0 failed hunks, 0 .rej/.orig, RC=0; prepare RC=0 (1,223 patching-file lines, no failed hunk); compile RC=0 with CONFIG_WERROR=y, **0 errors and 0 compiler warnings**; zImage 3,281,376 B sha256 `5903db04928e58214a816a5809f186d579857c8e1c5c0e695cc9035bd68e91ca` (build-time dependent); `luofu-switch.o`, `luofu-gmac.o` and `luofu-pie.o` compile under W=1, `luofu_switch_probed`/`luofu_switch_ready` exported and in System.map; `_text = stext = 0xc0608000`, DTEXT_OFFSET=0x00608000; config symbol set identical to the committed one and byte-idempotent (`d1af1b2a9411b5529ddef6d5ab1852059aca594eacb5de7f24adb0e35e87665b`); board DTS (not part of the series) cpp + patched-kernel dtc RC=0, zero warnings, 11,571 B sha256 `7fd33522c89ee06369538fa40f8790d200c68d92fdf2e85995c3ec1fe37a9e05`, dt-validate no diagnostic for the switch/PIE/GEMAC nodes | target-skeleton/docs/port-notes/net/SUMMARY.md sections 2-3 |
-| dt_binding_check for every new YAML | RC=0 for CRG, watchdog, FMC, MDIO, GMAC, restart, sysctrl, pinctrl, thermal, PCIe, PIE, switch, boot-selector (dtschema 2026.9; yamllint unavailable - that one step skipped in every lane); 0018 adds no binding and 0019 no new YAML file (its CRG YAML extension re-checked RC=0 in the clock-tree lane); the patch-020 (PIE/GMAC), patch-021 (switch), patch-022 (switch) and patch-023 (GEMAC) binding extensions were re-checked RC=0 in their lanes, with both examples `DTEX`/`DTC [C]` clean | SKELETON-SMOKE.md sessions 5-12, A/B, SMP, clock-tree, PIE-datapath, LSW-init and net sessions |
-| board DTS (not part of this series) | cpp + patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 `5726f7cd...` without the SMP line, 10,710 B sha256 `bc599a4e...` with the enable-method line (SMP lane), 11,346 B sha256 `a31ab53f...` with the seven CRG fixed clocks and the SMP line (clock-tree lane), 11,430 B sha256 `d3a9dd86...` with the PIE ring tables (PIE-datapath lane), 11,516 B sha256 `43c1e94b...` with the switch windows and port bitmap (LSW-init lane), 11,571 B sha256 `7fd33522...` with the enabled switch/PIE/GMAC nodes and the measured `hisilicon,port` cells (net lane); dt-validate has no diagnostic for the new nodes, rings, clocks or switch node (pre-existing draft-DTS uart/sp804 TODOs remain) | SKELETON-SMOKE.md, A/B, SMP, clock-tree, PIE-datapath, LSW-init and net sessions |
-| kernel config re-derivation | `make kernel_oldconfig` twice: RC=0, byte-identical (sha256 `4106877f...`), 309 symbols identical to the delivered annotated config; the 001-0019 re-derivation is byte-idempotent at the same hash with no new symbol; the 001-0020 delta changes only CONFIG_PHYLINK m -> y; patch 0021 adds no Kconfig symbol and the 001-0021 re-derivation stayed symbol-identical and byte-idempotent (`76aaafc8...`); patches 0022/0023 add no symbol and the 001-0023 symbol set is identical to the committed config with two byte-identical re-runs (`d1af1b2a...`), the only difference from the hand-maintained file being two pre-existing boot-fix artifacts | SKELETON-SMOKE.md, A/B install, clock-tree, PIE-datapath, LSW-init and net sessions |
+| whole series 0001-0024: prepare and full kernel compile (pie-decode lane, 2026-11-19) | the 001-024 chain applies to pristine 6.18.60 with RC=0 (24 patches, 0 failed hunks, 0 `.rej`; the only `.orig` files are the same three pre-existing fuzzy-offset backups of patches 008/021); `make target/linux/prepare` RC=0 (1,228 patching-file lines, patch 024 applied after 023; the five patched files byte-identical to the generated sources); `make target/linux/compile` RC=0 with **0 errors / 0 compiler warnings** under CONFIG_WERROR=y (37 pre-existing modpost MODULE_DESCRIPTION warnings); zImage 3,281,400 B sha256 `f4a736cf2e0ed220c7e99fca1590913504395a2001947b66ccc8f1986e788583`; luofu-pie.o/luofu-gmac.o built, `luofu_pie_rx_register`/`luofu_pie_rx_unregister`/`luofu_pie_armed`/`luofu_pie_probed`/`luofu_pie_xmit`/`luofu_gmac_probe`/`phylink_create` in System.map; TEXT_OFFSET contract unchanged (-DTEXT_OFFSET=0x00608000, `_text = stext = 0xc0608000`); config re-derivation byte-idempotent (kernel .config `4a17f17a...`, target config-6.18 `d1af1b2a...` byte-identical to the 001-023 lane - 024 adds no symbol); the extended GMAC/PIE bindings pass dt_binding_check (repeated RC=0 in the final 001-026 tree; yamllint unavailable, step skipped); checkpatch `-f` 0 errors / 0 warnings / 0 checks on the four files and both YAMLs.  The first delivery of 024 used `== GRO_DROP` and did not compile on 6.18; the results above are from the corrected sha256 `d81a44fb...` | target-skeleton/docs/port-notes/pie-decode/SUMMARY.md sections 3-4 |
+| whole series 0001-0025: isolated kernel compile (lsw-egress lane, 2026-11-19) | pristine 6.18.60 copy + patches 001-025 (25 patches; 024 at sha256 `d81a44fb...`, 025 new) applied with **25/25, 0 failed hunks, 0 `.rej`, 0 `.orig`, RC=0`; resulting luofu-switch.c byte-identical to the lane's source; an isolated reflink copy of the compiled OpenWrt luofu kernel tree with 024+025 applied built `make ARCH=arm CROSS_COMPILE=... W=1 -j16 vmlinux` **RC=0**, vmlinux 133,286,956 B sha256 `63648e754d95ac289f43c7954036ec0ab1cc0e18fb91a65efb08503f616a0371`, all three changed drivers rebuilt and W=1 clean; the only warnings are six pre-existing `-Wmissing-include-dirs` notices from the copied build environment's absent `staging_dir/usr/include` shim (none from the changed drivers); checkpatch: 0 errors, one COMMIT_MESSAGE style warning because the source patch is a bare unified diff like every other series patch | target-skeleton/docs/port-notes/lsw-egress/SUMMARY.md section 4 |
+| whole series 0001-0023+026: prepare and full kernel compile (mac-nvmem lane, 2026-11-19) | full prepare+rebuild from the pristine tarball: `make target/linux/prepare` RC=0 (1,225 patching-file lines, patch 026 applied through the OpenWrt pipeline) and `make target/linux/compile V=s -j16` **RC=0, 0 errors / 0 compiler warnings** under CONFIG_WERROR=y (1,418 s wall); zImage 3,281,744 B sha256 `8443c8c0c41a31a335188e1e547d6f82f5d33b61d945b4bd770d315eeac83f81`; config contains CONFIG_WERROR=y, CONFIG_MTD=y, CONFIG_NVMEM=y, CONFIG_NVMEM_LAYOUTS=y (026 adds no symbol); luofu-gmac.o rebuilt from the freshly prepared tree; the changed GEMAC binding passes dt_binding_check RC=0; board DTS compiles with zero warnings, 11,996 B sha256 `e9c1649f...`, and dt-validate RC=0 with only the five pre-existing diagnostics (none naming the bdinfo/nvmem wiring); host tests 96/96 and the pre-existing provisioner test 103/103; write-set audit finds no register/MTD write and a read-only partition.  The lane's first 001-026 attempt failed at `luofu-pie.c: 'GRO_DROP' undeclared` in the then-defective 024 (outside this lane); after the pie-decode lane fixed 024 the final fully-clean 001-026 run below supersedes it | target-skeleton/docs/port-notes/mac-nvmem/SUMMARY.md section 4 |
+| whole series 0001-0026: fully-clean prepare and full kernel compile (pie-decode lane, 2026-11-19) | a separate **fresh-extraction** 001-026 build: `make target/linux/prepare` **RC=0** (1,233 patching-file lines, 0 `.rej`), `make target/linux/compile` **RC=0 with 0 errors and 0 compiler warnings** under CONFIG_WERROR=y (37 pre-existing modpost MODULE_DESCRIPTION warnings are the whole warning set); zImage **3,282,528 B sha256 `08b7674749a0c155285a89fd35fa2433c2c97ce48ee5a1773cb3541365544c67`**; `_text = stext = 0xc0608000`; the combined 024+025+026 tree also compiled RC=0 with 0 warnings (zImage 3,282,656 B sha256 `346fb1f6...`).  This is the cross-lane build the 26-patch review form asserts; it was made in the pie-decode lane, not re-run by this validation | target-skeleton/docs/port-notes/pie-decode/SUMMARY.md section 3.1 (cross-lane note) |
+| dt_binding_check for every new YAML | RC=0 for CRG, watchdog, FMC, MDIO, GMAC, restart, sysctrl, pinctrl, thermal, PCIe, PIE, switch, boot-selector (dtschema 2026.9; yamllint unavailable - that one step skipped in every lane); 0018 adds no binding and 0019 no new YAML file (its CRG YAML extension re-checked RC=0 in the clock-tree lane); the patch-020 (PIE/GMAC), patch-021 (switch), patch-022 (switch), patch-023 (GEMAC), patch-024 (GEMAC/PIE - new required `hisilicon,port`) and patch-026 (GEMAC - nvmem source) binding extensions were re-checked RC=0 in their lanes, with both examples `DTEX`/`DTC [C]` clean (0025 touches no binding) | SKELETON-SMOKE.md sessions 5-12, A/B, SMP, clock-tree, PIE-datapath, LSW-init, net, PIE-decode and MAC-nvmem sessions |
+| board DTS (not part of this series) | cpp + patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 `5726f7cd...` without the SMP line, 10,710 B sha256 `bc599a4e...` with the enable-method line (SMP lane), 11,346 B sha256 `a31ab53f...` with the seven CRG fixed clocks and the SMP line (clock-tree lane), 11,430 B sha256 `d3a9dd86...` with the PIE ring tables (PIE-datapath lane), 11,516 B sha256 `43c1e94b...` with the switch windows and port bitmap (LSW-init lane), 11,571 B sha256 `7fd33522...` with the enabled switch/PIE/GMAC nodes and the measured `hisilicon,port` cells (net lane), 11,996 B sha256 `e9c1649f...` with the bdinfo nvmem cell/wiring (mac-nvmem lane); the final integrated 001-026 DTS is 12,076 B sha256 `5386badebc26754e01d5e585bb2632d44583797afc49bcd947f4acb0a35c085b`, cpp+dtc RC=0 with 0 stderr bytes, `fdtget` reads `hisilicon,port` = 8/9/10/11/12 on the five MAC nodes, and dt-validate of the final tree's processed schema is RC=0 with only the five pre-existing baseline diagnostics (SP804 timer, two UARTs), none naming PIE/GEMAC/nvmem | SKELETON-SMOKE.md, A/B, SMP, clock-tree, PIE-datapath, LSW-init, net, PIE-decode and MAC-nvmem sessions |
+| kernel config re-derivation | `make kernel_oldconfig` twice: RC=0, byte-identical (sha256 `4106877f...`), 309 symbols identical to the delivered annotated config; the 001-0019 re-derivation is byte-idempotent at the same hash with no new symbol; the 001-0020 delta changes only CONFIG_PHYLINK m -> y; patch 0021 adds no Kconfig symbol and the 001-0021 re-derivation stayed symbol-identical and byte-idempotent (`76aaafc8...`); patches 0022/0023 add no symbol and the 001-0023 symbol set is identical to the committed config with two byte-identical re-runs (`d1af1b2a...`), the only difference from the hand-maintained file being two pre-existing boot-fix artifacts; 0024-0026 add no symbol either: the pie-decode lane's 001-024 re-derivation gives kernel .config `4a17f17a...` and target config-6.18 `d1af1b2a...` byte-identical to the 001-023 lane, the 001-026 fully-clean run repeats it, and the mac-nvmem lane confirms CONFIG_MTD/CONFIG_NVMEM/CONFIG_NVMEM_LAYOUTS were already `y` | SKELETON-SMOKE.md, A/B install, clock-tree, PIE-datapath, LSW-init, net, PIE-decode and MAC-nvmem sessions |
 | image recipe (OpenWrt target, not kernel submission scope) | `make world` RC=0; reproducible 6,175,022 B sysupgrade container from our DTB/overlay/kernel; later A/B-session container 6,185,262 B; mocked install tests 58/58 | SKELETON-SMOKE.md image-recipe and A/B sessions |
 | any hardware run | none.  No boot, no flash, no UART, no TFTP, no bench tool | all sessions; TARGET-DESIGN.md section 9 "explicitly not met" |
 
-No kernel rebuild was performed for the 0020/0021 or the 0022/0023
-review-form update; the 001-0020/001-0021 and 001-0023 build evidence is
-the lanes' recorded results (rows added above; the review form adds commit
-messages and commit-ready copies, not source changes).  The earlier
-001-0019 result is the clock-tree lane's record, 001-0018 the SMP lane's.
-Consequence for reviewers: the series compiles into a real 6.18.60 kernel
-for this target and its bindings pass dt_binding_check, but no driver has
-probed on silicon, CPU1 has never been released, no clock rate or PLL or
-mux parent has been read back, the PIE engine has never been armed and the
-LSW write campaign has never run.  The compile evidence above is the only
-build evidence; nothing here claims the image boots.
+No kernel rebuild was performed for the 0020/0021, 0022/0023 or the
+0024/0025/0026 review-form update; the recorded build evidence is the
+lanes' results (rows added above; the review form adds commit messages and
+commit-ready copies, not source changes).  The earlier 001-0018/001-0019
+results are the SMP and clock-tree lanes' records.  Consequence for
+reviewers: the series compiles into a real 6.18.60 kernel for this target
+and its bindings pass dt_binding_check, but no driver has probed on
+silicon, CPU1 has never been released, no clock rate or PLL or mux parent
+has been read back, the PIE engine has never been armed, no RX completion
+or TX descriptor has been observed, the LSW write campaign has never run
+and the bdinfo MAC nvmem read has never executed.  The compile evidence
+above is the only build evidence; nothing here claims the image boots.
 
 ## 10. Limitations of this validation
 
@@ -407,9 +452,38 @@ build evidence; nothing here claims the image boots.
     netdev.**  Registration requires the PIE arm gate and both LSW gates
     in one attended boot; that combination has never run.  The
     `PHYLINK_NETDEV` carrier fix, the devicetree MAC-address source and
-    the random fallback are host-compiled only, the RX completion decode
-    and the TX-to-egress mapping are still [U], and no frame has been
-    delivered or proven to leave a port.
+    the random fallback are host-compiled only, the TX-to-egress mapping is
+    still [U], and no frame has been delivered or proven to leave a port.
+13. **The PIE completion/TX decode (0024) has never been observed.**  The
+    RX completion field positions, the summary contract and the normal
+    non-TSO TX descriptor byte image are a direct transcription of the
+    vendor v250 disassembly, and they are [V] as code shapes - but no
+    completion or descriptor has been accepted by the engine, the live
+    length/status/port values and the tag-class effects are unobserved,
+    the two RX flag classes are semantically [U], the ring-index reading of
+    the pointer words is [I], and the LSW-side egress queue selection is
+    still [U].  The attended RX/TX checks are in
+    `target-skeleton/docs/port-notes/pie-decode/SUMMARY.md` section 6.
+14. **The LSW W4 egress stage (0025) has never executed.**  The
+    `luofu_lsw.egress=1` gate (which requires `luofu_lsw.arm=1`) has never
+    been set, so the pre-write conformance gate, the nine R1/R3/R5 writes,
+    the derived readback expectations and the restore path are reviewed
+    code only; the R1/R3/R5 field semantics, the EQM indirect tables, the
+    classifier/L2/VLAN formats and the per-frame egress selection remain
+    [U], and the readiness tightening means a boot with only
+    `arm=1 qidmap=1` now refuses after verifying the qid maps.  The
+    attended sequence is in
+    `target-skeleton/docs/port-notes/lsw-egress/SUMMARY.md` section 7.
+15. **The bdinfo MAC nvmem source (0026) has never read factory data.**
+    The MTD nvmem provider is mainline read-only/root-only and the
+    partition is marked read-only, but no boot has reached the read path;
+    whether the provider registers before the GEMAC probe (the
+    `-EPROBE_DEFER` branch), whether our FMC/MTD stack creates the
+    `bdinfo` partition with the expected label/size, whether the hardcoded
+    `+0xde00` offset is the live copy and whether the userspace `macaddr`
+    application still lands are all [U].  The `mac-base` cell parsing is
+    an OpenWrt-carried backport, not vanilla 6.18.60; if those backports
+    ever change, the WAN +1 offset silently stops being applied.
 
 ## 11. Reproduction
 
@@ -435,12 +509,12 @@ the series itself (after editing a commit message) is:
 
 `validation/` contains the raw logs of the final run:
 
-- `patch-apply.log` - 23 patch(1) applications with RC lines and the
+- `patch-apply.log` - 26 patch(1) applications with RC lines and the
   three offsets;
 - `git-am.log`, `git-am-summary.txt`, `git-log.txt`, `git-status.txt`,
-  `git-diffstat.txt` - git am application and resulting 23 commits
+  `git-diffstat.txt` - git am application and resulting 26 commits
   (`git-log.txt` keeps the script's last 20 oneline entries, so the final
-  run's file starts at commit 4; the full subject list is in section 4);
+  run's file starts at commit 7; the full subject list is in section 4);
 - `tarball.txt` - the kernel tarball sha256 checked at the start of the
   run (the host download path is scrubbed to `<local-download-cache>`);
 - `tree-equivalence.txt`, `tree-diff.log` - equality of the two trees;
@@ -448,7 +522,7 @@ the series itself (after editing a commit message) is:
   `checkpatch-strict.log`, `checkpatch-strict-summary.txt`,
   `checkpatch-summary.txt`, `checkpatch-version.txt` - checkpatch runs;
 - `offsets.txt`, `version.txt`, `sha256sums.txt` - offsets, kernel version
-  and all hashes (series, source patches, tarball);
+  and all hashes (26 series files + 26 source patches + the tarball);
 - `validation/` also records the kernel tarball sha256 in
   `sha256sums.txt`; the tarball itself is not copied into the repository.
 
@@ -735,3 +809,66 @@ new header (`luofu-switch.h`, the MAINTAINERS warning) and edits the
 switch binding (the binding-split warning); 0023 edits the GEMAC binding
 (binding split) and adds no file, so it has that one warning.  The six
 strict CHECKs are unchanged.
+
+This run is superseded by section 18: when 0024/0025/0026 were added,
+every 0001-0023 series file changed again only in the subject denominator
+(`NN/23` -> `NN/26`), with unchanged diff bodies, source patches and Date
+header; the hashes quoted above are the 23-patch form.
+
+## 18. Final 26-patch re-validation (2026-11-19, shared task-59)
+
+Patches 0024 (PIE RX completion decode + TX descriptor), 0025 (gated LSW
+W4 egress/init write stage) and 0026 (bdinfo-MAC nvmem GEMAC source) were
+added to the review form: their source patches
+`opensource/target-skeleton/target/linux/hisilicon/patches-6.18/024-net-pie-completion-decode-luofu.patch`
+(sha256 `d81a44fb7c004e66d9c686d0d38ee5cccdf52e8ba6f9e454a92f091352ae36f1`),
+`.../025-net-lsw-egress-luofu.patch` (sha256
+`0fd8b1eafd701703c785d087f864d27142335ee335c60517e390a21773e39ce7`) and
+`.../026-net-gmac-bdinfo-mac-nvmem.patch` (sha256
+`f979ea9ba4ab0a6789514a3b373e66c909fc316993ec340e6d90a94d2db033b3`)
+are included **unchanged**, `commit-messages/0024-net-pie-completion-decode-luofu.txt`,
+`commit-messages/0025-net-lsw-egress-luofu.txt` and
+`commit-messages/0026-net-gmac-bdinfo-mac-nvmem.txt` were written,
+`tools/gen-series.py` learned the three series entries, their statuses
+(all in the "RFC / partial drafts, do not merge" group) and three
+status-legend entries, and the series/ files plus 01-commit-messages.md
+were regenerated.  Every 0001-0023 series file changed again only in the
+subject denominator (`[PATCH NN/23]` -> `[PATCH NN/26]`); their diff
+bodies, source patches and the generator Date header are unchanged.  No
+source patch, target-skeleton file or shared doc was edited.  [V]
+
+Commands (run from `opensource/upstream/series-6.18`; host paths
+scrubbed):
+
+    python3 tools/gen-series.py
+    python3 tools/gen-series.py --check        # series up to date (26 patches), RC=0
+    tools/run-validation.sh /path/to/linux-6.18.60.tar.xz <scratch>/upstream-validation
+
+The tarball was hash-checked at the start of the run
+(`3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e`)
+and the extracted tree reports 6.18.60.  The script exited 0
+("PASS: all validation steps completed"), and the committed logs,
+`validation/sha256sums.txt` and `validation/tarball.txt` were refreshed
+from that run (host paths scrubbed to `<scratch>`/`<series>`/
+`<local-download-cache>`).  [V]
+
+| check | result |
+| --- | --- |
+| sequential patch(1) | **26/26 RC=0**, 100 "patching file" events, 0 failed/reversed hunks, 0 `.rej`; patch 0024 is the 24th and applies its five files cleanly (luofu-pie.c, luofu-pie.h, luofu-gmac.c and the GEMAC/PIE YAMLs); patch 0025 is the 25th and applies its three files cleanly (the ethernet Kconfig help, luofu-switch-regs.h and luofu-switch.c); patch 0026 is the 26th and applies its two files cleanly (luofu-gmac.c and the GEMAC YAML) |
+| offsets/fuzz | 3 hunks with offset, 0 with fuzz: patch 0008 `drivers/net/phy/Kconfig` -75 and `drivers/net/phy/Makefile` -12 (pre-existing, unchanged), patch 0021 `drivers/net/ethernet/hisilicon/Kconfig` +6 (from the 21-patch run); patches 0022-0026 have no offset.  GNU patch created the same three `.orig` backups (removed before the tree comparison) and no `.rej` |
+| sequential git am | **26/26 RC=0**, clean work tree; 26 commits with the expected subjects including `0024 net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors`, `0025 net: ethernet: hisilicon: add the gated Luofu LSW egress write stage` and `0026 net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev` |
+| combined diff | `63 files changed, 10276 insertions(+), 4 deletions(-)`; 37 files added, 26 modified (0024/0025/0026 add no file); patch 0024 alone is 5 files / +503 / -136, patch 0025 is 3 files / +425 / -42, patch 0026 is 2 files / +44 / -15 |
+| tree equivalence | `diff -r --brief --exclude=.git` RC=0, no output: the patch(1) and git am trees are identical |
+| checkpatch default and strict | 0 errors, **58 warnings** (56 previous + 1 in 0024 + 1 in 0026; 0025 adds none), 6 strict CHECKs (0004 x2, 0016 x2, 0019 x2; 0024-0026 add none); patch 0024 alone: 0 errors, 1 warning (binding split; it adds no file), 0 CHECKs, 951 lines; patch 0025 alone: 0 errors, 0 warnings, 0 CHECKs, 623 lines; patch 0026 alone: 0 errors, 1 warning (binding split), 0 CHECKs, 89 lines |
+| hashes | `sha256sum -c validation/sha256sums.txt`: **52/52 OK** (26 series + 26 source patches); series 0024 `5e93d7200543407841c201a4f6bc8decc664dce5680041f384b31ad44d6271b8`, series 0025 `507ce72495c09d104b0ad63ebac44ecf20a94a36e25f81b7739802f8fa005a00`, series 0026 `099d7253f50c50ad18bce642a2d52fca7af37c9b1c7ac356038eafe3c7aa26df`; source 0024 `d81a44fb...`, source 0025 `0fd8b1ea...`, source 0026 `f979ea9b...`; tarball hash recorded in the same file and in `validation/tarball.txt` |
+| kernel build evidence | not re-run here (no rebuild needed): the pie-decode lane's recorded fully-clean 001-026 build on a fresh kernel extraction is prepare RC=0 (1,233 patching-file lines, 0 `.rej`) and compile RC=0 with **0 errors and 0 compiler warnings** under CONFIG_WERROR=y (37 pre-existing modpost MODULE_DESCRIPTION warnings), zImage **3,282,528 B sha256 `08b7674749a0c155285a89fd35fa2433c2c97ce48ee5a1773cb3541365544c67`**, `_text = stext = 0xc0608000`; its 001-024 build is RC=0/0 warnings (zImage 3,281,400 B sha256 `f4a736cf...`) and the 001-026 config re-derivation stays byte-identical to the committed target config-6.18 at `d1af1b2a...` (0024-0026 add no Kconfig symbol).  The lsw-egress lane compiled 024+025 (vmlinux 133,286,956 B sha256 `63648e75...`, W=1 clean changed drivers) and the mac-nvmem lane compiled 001-023+026 (zImage 3,281,744 B sha256 `8443c8c0...`, 0 warnings, binding/DTS/host-test clean); see section 9 and the three port-notes summaries [V] |
+| hardware | **none**.  No boot, no PIE arm, no RX completion or TX descriptor observed by the engine, no LSW W3 power step or W4/W5 write (no gate has ever been set), no readback/restore execution, no netdev registration, no bdinfo nvmem read, no UART/TFTP/flash, no device.  Every PIE/LSW write effect, the W4 effect and the MAC-source read path remain [U]. |
+
+The 2 new warnings are the expected per-patch review items: 0024 extends
+the existing GEMAC/PIE YAML bindings (binding split) and adds no file, and
+0026 extends the existing GEMAC YAML (binding split) and adds no file;
+0025 has no binding hunk and adds no file, so it is 0/0/0.  The six strict
+CHECKs are unchanged from the 23-patch run.  The apply, git-am and
+checkpatch numbers above are the committed record; sections 2-6 were
+updated to the same 26-patch form and section 17 keeps the dated 23-patch
+record.

@@ -1,7 +1,7 @@
 From 7cf1d38315bbfefbea7b7dfdaf1c12836e91e41d Mon Sep 17 00:00:00 2001
 From: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 08:20:00 +0700
-Subject: [PATCH 19/23] clk: hisilicon: add the Luofu CRG clock tree
+Subject: [PATCH 19/26] clk: hisilicon: add the Luofu CRG clock tree
 
 Extend the CRG clock provider of the HiSilicon Hi5671Y "luofu" SoC with
 the clock tree that the initial CRG clock/reset controller deliberately
