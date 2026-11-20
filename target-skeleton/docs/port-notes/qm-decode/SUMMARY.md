@@ -107,9 +107,14 @@ needs its own attended verification like every other table.
   0 failed hunks, 0 .rej/.orig**, drivers byte-identical to the lane work tree
   (`logs/10-series-apply-001-036.log`).
 - **Isolated clone prepare/compile:** reflink clone with patches 035+036 added (shared clone and
-  `openwrt-lab-selectorfix-img` untouched): `make target/linux/prepare` **RC=0** and
-  `make target/linux/compile` **RC=0** with `CONFIG_WERROR=y` and **zero `warning:`/`error:` lines**
-  (`logs/20-…`, `logs/21-…`); log hashes in `EVIDENCE-SHA256SUMS.txt`.
+  `openwrt-lab-selectorfix-img` untouched): `make target/linux/prepare` **RC=0** (log sha256
+  `f8f1ae67aff496994ce2fddea2280797900ae6dfe5a43f7af8de9b96cf31cefc`) and
+  `make target/linux/compile` **RC=0** in 738.8 s (log sha256
+  `2b30e83663b84fff4bcc743498553a66abc7bfce6532f2e8a13e8779d9778355`) with `CONFIG_WERROR=y`
+  and **zero `warning:`/`error:` lines in the whole log**; both changed drivers rebuilt
+  (`luofu-switch.o` 108,520 B with W8, `luofu-gmac.o` 51,732 B); `vmlinux` 57,117,036 B, sha256
+  `4af847d4cfc9eb02b92d0696769dbb7651bc29f592d9543558c6a6f4fc20d79b`; the prepared tree is
+  byte-identical to the lane work tree (W8 and the counter fix included).
 - **checkpatch:** 0 errors, 0 checks, only the expected "missing commit description" warning
   (`logs/11-checkpatch-036.log`, sha256
   `8632cd2b45ea77883aec8d6c63882b29d0426ff26cf3c44c75a4fcd8697a2d6e`).
@@ -150,7 +155,11 @@ sha256sum rootfs-2.4.15/lib/hisilicon/ko/hi_lsw_pfe.ko
 ## 10. Integration notes
 
 - The kernel patch is in the skeleton's `patches-6.18/` (036); it applies after 035 and is
-  file-disjoint from the 033-035 SMP lane.
+  file-disjoint from the 033-035 SMP lane.  **Integrated as commit `1796754`** ("net/smp: PFE base
+  init W8 (036) + SMP loader-window early probe (037)") together with the round-4 LSW-SPEC 7.10,
+  SKELETON-SMOKE session and README rows; this port note is the durable lane record and the
+  validation figures above were filled in after that integration from the finished 001-036
+  host-side run.
 - `shared.patch` is diffed against the current `opensource/` HEAD (which contains the revision-3
   W7 integration, commit 18186f0) and applies cleanly.
 - Bench console evidence: `build/evidence-bench-gates/2026-11-19/uart-r3-armed.log`.

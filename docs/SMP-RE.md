@@ -1105,3 +1105,93 @@ Run on the stock 5.10 boot (2 CPUs) after recovery:
   (18 instructions, including the bounded UART poll and the WFE spin);
 * checkpatch: only the expected missing commit-description/Signed-off-by metadata
   plus compact-dump pr_cont style notes.
+
+---
+
+## 18. 037 reserve_low1m run (2026-11-20, image 6cb3d908): window hypothesis refuted
+
+Status: fifth hardware run of this lane. The first 037 single-variable boot enabled
+luofu_smp_reserve_low1m=1. The reservation worked, but CPU1 still does not consume
+the pen, and the diagnostics show what is actually in the low memory window.
+
+### 18.1 Result [V]
+
+Boot context: warm reset ("Reset Info: Linux reboot cmd to reset"), token present in
+the baked command line. Console:
+
+    luofu-smp: reserved 0x80500000-0x805fffff before allocation
+    prep pen value 00000000 (loader state) resume 02a00000
+    prep markers 00000000 00000000 (must be zero)
+    mem 80500000: 66cc66cc 66c466cc 66cc66cc ...
+    mem 805ff000: 66cc66cc ...
+    mem 80600000: 00030003 00000000 c0600008 c0600008 00000000 66cc668c ...
+    mem 80604000: 00000000 ...
+    loader park-loop scan 0x80500000-0x80607fff hits=0
+    memblock memory ranges (available): mem [80600000-87ffffff]
+    memblock reserved ranges: rsv [80500000-805fffff] ...
+    release ... pen=0x81195000 ... +1ms/+21ms marker0=0 marker1=0 consumed=no
+    early=00000000 (early probe not enabled)
+    late marker0=0 marker1=0 consumed=no
+    CPU1: failed to come online
+
+The reservation is effective: the available-memory dump starts at 0x80600000, i.e.
+exactly the vendor kernel's effective map, while the low 1 MiB is reserved. CPU1 is
+still not released, so **the "loader parked CPU1 in the low 1 MiB window and our
+kernel overwrote it" hypothesis is refuted [V]**.
+
+### 18.2 What the windows contain [V]/[U]
+
+* 0x80500000 and 0x805ff000 are filled with the DDR test pattern 0x66cc66cc (with
+  occasional 0x66c4/0x66ec/0x67cc/0x668c bit variations): a memory-test fill, not
+  code; no park-loop signature anywhere in 0x80500000-0x80607fff (scan hits=0).
+* 0x80600000 (the vendor "flashinfo" window, not reserved by our DTB) holds a few
+  non-pattern words (00030003, 00000000, c0600008, c0600008, 0) followed by the same
+  test pattern. With the low 1 MiB reserved, 0x80600000 becomes the first available
+  RAM for our kernel, so these words may already be our own early-allocation
+  leftovers; what the loader leaves there is [U] until the stock read in section 17.6
+  is taken.
+* 0x80604000 (swapper_pg_dir area) read as zero at prepare time; recorded raw.
+* The reserved ranges near the top of RAM (87ffe...-87ffffff) are the kernel's own
+  early reservations and are expected.
+
+### 18.3 Next single variable: early probe, not reserve_flashinfo
+
+Reserving the remaining 16 KiB flashinfo window is now low value: the window content
+is boot-data/test-pattern shaped, the park-loop signature is absent from both
+windows, and - decisively - the early probe runs *before any allocation*, so a
+positive early probe would tell us the loader does park CPU1 and the later
+reservations/timing matter, while a negative one rules out the whole window class.
+The next boot should therefore be **luofu_smp_early_probe=1** (mode 1: pen only, no
+CRG clear, no GIC access - the safest mode). If silent, repeat with mode 2 (adds the
+CRG resume-bit clear) and mode 3 (adds the GIC wakeup IPI; mode 3 writes the GIC
+distributor before the kernel's GIC driver initialises it, so it is the only mode
+with a small hang risk - the recovery door covers it).
+
+Special considerations for the early probe:
+
+* it runs from an early_param handler inside setup_arch(), before memblock/paging
+  init, and uses early_ioremap() and fixed SoC physical addresses (no DT needed);
+* it prints "luofu-smp: EARLY probe mode 1 ... stub <pa> marker <pa>" (expected
+  around 0x81193440/0x81193400 for this build) and "EARLY pen ... resume ...";
+* the stub prints a single raw 'E' to the UART THR (bounded LSR poll; the bootloader
+  already configured the UART), records its MPIDR in a marker page and WFE-spins.
+  The 'E' may interleave with earlycon output - scan the raw log for a stray 'E'
+  rather than a whole line;
+* if CPU1 consumes the pen it is parked in our early stub, so it will NOT come online
+  and the normal +1ms/+21ms markers stay 0 - the evidence is 'E' and/or
+  "EARLY mode 1 marker0=<MPIDR> consumed=yes" in the prep line;
+* if mode 1 is silent, mode 2 tells whether the core needs its CRG resume bits
+  cleared, and mode 3 whether it additionally needs the wakeup IPI;
+* if all three modes are silent, CPU1 does not execute the loader's pen-poll loop
+  even before our kernel does anything; the next step is then the stock read plan
+  (17.6) plus loader-side decode of how CPU1 is started.
+
+### 18.4 Follow-up if the early probe is positive
+
+If 'E' appears at mode 1, the remaining question is what between setup_arch
+(~0.02 s) and smp_prepare_cpus (~0.12 s) makes the pen consumer disappear (candidate
+phases: paging_init's page-table/cache setup, L2C init, console/timer init, the
+arch memblock reserve work). The follow-up patch (038) would repeat the same
+marker-stub pen write from a late_time_init hook and from a couple of later
+early-boot points to bisect the phase; only then would the fix direction become
+clear.
