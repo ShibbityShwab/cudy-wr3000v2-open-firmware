@@ -1,0 +1,333 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -242,6 +242,10 @@
+ 
+ static bool luofu_switch_ifc_gate;
+ module_param_named(ifc, luofu_switch_ifc_gate, bool, 0444);
++static bool luofu_switch_ext_gate;
++module_param_named(ext, luofu_switch_ext_gate, bool, 0444);
++MODULE_PARM_DESC(ext, "Attended W12 step: program the stock-observed extended EPS words and the DP runtime value (requires arm/egress/qidmap/eps/qminit/pfe/ifc; default off)");
++
+ static bool luofu_switch_dump_gate;
+ module_param_named(dump, luofu_switch_dump_gate, bool, 0444);
+ MODULE_PARM_DESC(dump, "Attended W11 diagnostic: after the armed path prints a read-only LSW state dump for the stock-vs-ours comparison (no hardware writes; default off)");
+@@ -438,6 +442,8 @@
+  * @qminit_ready: the EQM queue-manager init tables were programmed and verified
+  * @pfe_ready: the PFE forwarding-engine base init was programmed and verified
+  * @ifc_ready: the IFC default-classification table was programmed and verified
++ * @ext_ready: the extended EPS words and the DP runtime word were programmed
++ *             and verified
+  */
+ struct luofu_switch {
+ 	struct device *dev;
+@@ -456,6 +462,8 @@
+ 	u32 pfe_pre[LUOFU_SWITCH_PFE_WRITES];
+ 	struct luofu_switch_qm *qm;
+ 	u32 ifc_tab_pre[LUOFU_SWITCH_IFC_ENTRIES][LUOFU_SWITCH_IFC_TAB_WORDS];
++	u32 eps_ext_pre[LUOFU_SWITCH_EPS_EXT_WORDS];
++	u32 dp_runtime_pre;
+ 	bool powered;
+ 	bool egress_ready;
+ 	bool qid_maps_ready;
+@@ -463,6 +471,7 @@
+ 	bool qminit_ready;
+ 	bool pfe_ready;
+ 	bool ifc_ready;
++	bool ext_ready;
+ };
+ 
+ /*
+@@ -2755,7 +2764,8 @@
+ 		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++)
+ 			writel(lsw->ifc_tab_pre[i][w],
+ 			       base + LUOFU_SWITCH_IFC_TAB128 +
+-			       i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
++			       luofu_switch_v250_ifc_entries[i].index *
++			       LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
+ }
+ 
+ static int luofu_switch_ifc_engine_write(struct luofu_switch *lsw,
+@@ -2822,7 +2832,8 @@
+ 	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++) {
+ 		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++) {
+ 			u32 off = LUOFU_SWITCH_IFC_TAB128 +
+-				  i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
++				  luofu_switch_v250_ifc_entries[i].index *
++				  LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
+ 
+ 			lsw->ifc_tab_pre[i][w] = readl(base + off);
+ 			if (readl(base + off) != lsw->ifc_tab_pre[i][w])
+@@ -2845,7 +2856,7 @@
+ 		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++)
+ 			writel(e->tab[w],
+ 			       base + LUOFU_SWITCH_IFC_TAB128 +
+-			       i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
++			       e->index * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
+ 	}
+ 
+ 	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++) {
+@@ -2854,7 +2865,8 @@
+ 
+ 		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++) {
+ 			u32 off = LUOFU_SWITCH_IFC_TAB128 +
+-				  i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
++				  luofu_switch_v250_ifc_entries[i].index *
++				  LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
+ 			u32 got = readl(base + off);
+ 
+ 			if (got == e->tab[w])
+@@ -2904,7 +2916,7 @@
+ 	{ LUOFU_SWITCH_WIN_L2,		0x20000, 0x20 },
+ 	/* classifier defaults (W10) and the general ifc config area */
+ 	{ LUOFU_SWITCH_WIN_IFC,		0x0000, 0x80 },
+-	{ LUOFU_SWITCH_WIN_IFC,		0x50000, 0x20 },
++	{ LUOFU_SWITCH_WIN_IFC,		0x50000, 0x24 },
+ 	/* DP probe/config and any per-port state at 0x1000 */
+ 	{ LUOFU_SWITCH_WIN_DP,		0x0000, 0x80 },
+ 	{ LUOFU_SWITCH_WIN_DP,		0x1000, 0x20 },
+@@ -2954,6 +2966,136 @@
+ 		 "W11: state dump complete; compare these lines with the same ranges read from a stock boot\n");
+ }
+ 
++/*
++ * W12: the remaining persistent stock-vs-ours differences (patch 046).
++ *
++ * The 2026-11-20 read-only W11 dump diff (evidence
++ * build/evidence-bench-gates/2026-11-20-lsw-diff.txt) left exactly two classes
++ * of persistent configuration that the vendor stack sets and our W3-W10 write
++ * set does not:
++ *
++ *  1. sixteen extended EPS channel/companion words at eps+0xb20..0xb3c and
++ *     eps+0xba0..0xbbc (values below) - the second bank that W6's 16 baseline
++ *     words do not cover;
++ *  2. the DP runtime word dp+0x1c: the vendor probe writes
++ *     BIT(16) | a field it obtains from hi_system_mem_info_get (that field read
++ *     0 on our boot, hence W4's 0x10000), while the stock runtime word is
++ *     0x18000, i.e. the same plus BIT(15) [V measured].  Bit 15's meaning is
++ *     [U]; it is a vendor-supplied memory/runtime field, not a forwarding
++ *     enable - the observed value is replayed as the stock state.
++ *
++ * The EQM words in the same diff are the indirect command/data registers
++ * (eqm+0x48 command, +0x4c/+0x50..0x70 data), each side holding the residue of
++ * its own last queue-init command (stock: 0x41100012 = table 17 index 18 write;
++ * ours: our last W7 write).  They are not persistent configuration and are
++ * deliberately not replayed.
++ *
++ * All W12 words are snapshotted, required stable across two reads, written,
++ * read back exactly, and restored on any mismatch; the stage fails closed.
++ */
++struct luofu_switch_ext_word {
++	u16 offset;
++	u32 value;
++};
++
++static const struct luofu_switch_ext_word luofu_switch_v250_eps_ext[] = {
++	{ 0x0b20, 0x000000a0 }, { 0x0b24, 0x000810a0 },
++	{ 0x0b28, 0x000820a0 }, { 0x0b2c, 0x000830a0 },
++	{ 0x0b30, 0x000000b0 }, { 0x0b34, 0x000810b0 },
++	{ 0x0b38, 0x000820b0 }, { 0x0b3c, 0x000830b0 },
++	{ 0x0ba0, 0x8004ffff }, { 0x0ba4, 0x8105ffff },
++	{ 0x0ba8, 0x8106ffff }, { 0x0bac, 0x8107ffff },
++	{ 0x0bb0, 0x8004ffff }, { 0x0bb4, 0x8105ffff },
++	{ 0x0bb8, 0x8106ffff }, { 0x0bbc, 0x8107ffff },
++};
++
++static void luofu_switch_ext_restore(struct luofu_switch *lsw)
++{
++	unsigned int i;
++
++	for (i = 0; i < LUOFU_SWITCH_EPS_EXT_WORDS; i++)
++		writel(lsw->eps_ext_pre[i],
++		       lsw->window[LUOFU_SWITCH_WIN_EPS] +
++		       luofu_switch_v250_eps_ext[i].offset);
++	writel(lsw->dp_runtime_pre,
++	       lsw->window[LUOFU_SWITCH_WIN_DP] +
++	       LUOFU_SWITCH_DP_RUNTIME_OFF);
++}
++
++static int luofu_switch_ext_program(struct luofu_switch *lsw)
++{
++	void __iomem *eps = lsw->window[LUOFU_SWITCH_WIN_EPS];
++	void __iomem *dp = lsw->window[LUOFU_SWITCH_WIN_DP];
++	unsigned int i;
++	int ret = 0;
++
++	if (!eps || !dp)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "missing eps/dp window for the W12 stage\n");
++
++	dev_info(lsw->dev,
++		 "W12: extended EPS/DP runtime words: %u EPS words + dp+%#x, snapshotting the current state first\n",
++		 LUOFU_SWITCH_EPS_EXT_WORDS, LUOFU_SWITCH_DP_RUNTIME_OFF);
++
++	for (i = 0; i < LUOFU_SWITCH_EPS_EXT_WORDS; i++) {
++		u32 off = luofu_switch_v250_eps_ext[i].offset;
++		u32 a = readl(eps + off);
++
++		if (readl(eps + off) != a)
++			return dev_err_probe(lsw->dev, -EIO,
++					     "W12: eps+%#x is not stable across two reads; refusing to write it\n",
++					     off);
++		lsw->eps_ext_pre[i] = a;
++	}
++	lsw->dp_runtime_pre = readl(dp + LUOFU_SWITCH_DP_RUNTIME_OFF);
++	if (readl(dp + LUOFU_SWITCH_DP_RUNTIME_OFF) != lsw->dp_runtime_pre)
++		return dev_err_probe(lsw->dev, -EIO,
++				     "W12: dp+%#x is not stable across two reads; refusing to write it\n",
++				     LUOFU_SWITCH_DP_RUNTIME_OFF);
++
++	for (i = 0; i < LUOFU_SWITCH_EPS_EXT_WORDS; i++)
++		writel(luofu_switch_v250_eps_ext[i].value,
++		       eps + luofu_switch_v250_eps_ext[i].offset);
++	writel(LUOFU_SWITCH_DP_RUNTIME_VAL, dp + LUOFU_SWITCH_DP_RUNTIME_OFF);
++
++	for (i = 0; i < LUOFU_SWITCH_EPS_EXT_WORDS; i++) {
++		u32 off = luofu_switch_v250_eps_ext[i].offset;
++		u32 got = readl(eps + off);
++
++		if (got == luofu_switch_v250_eps_ext[i].value)
++			continue;
++		dev_err(lsw->dev,
++			"W12: eps+%#x readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++			off, got, luofu_switch_v250_eps_ext[i].value,
++			lsw->eps_ext_pre[i]);
++		ret = -EIO;
++		goto restore;
++	}
++	{
++		u32 got = readl(dp + LUOFU_SWITCH_DP_RUNTIME_OFF);
++
++		if (got != LUOFU_SWITCH_DP_RUNTIME_VAL) {
++			dev_err(lsw->dev,
++				"W12: dp+%#x readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++				LUOFU_SWITCH_DP_RUNTIME_OFF, got,
++				LUOFU_SWITCH_DP_RUNTIME_VAL,
++				lsw->dp_runtime_pre);
++			ret = -EIO;
++			goto restore;
++		}
++	}
++
++	dev_info(lsw->dev,
++		 "W12: extended EPS/DP runtime words programmed and verified: %u EPS words + dp+%#x=%#x\n",
++		 LUOFU_SWITCH_EPS_EXT_WORDS, LUOFU_SWITCH_DP_RUNTIME_OFF,
++		 LUOFU_SWITCH_DP_RUNTIME_VAL);
++	return 0;
++
++restore:
++	luofu_switch_ext_restore(lsw);
++	return ret;
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3048,10 +3190,11 @@
+ 	 */
+ 	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
+ 	     luofu_switch_eps_gate || luofu_switch_qminit_gate ||
+-	     luofu_switch_pfe_gate || luofu_switch_ifc_gate) &&
++	     luofu_switch_pfe_gate || luofu_switch_ifc_gate ||
++	     luofu_switch_ext_gate) &&
+ 	    !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+-				    "luofu_switch.egress/qidmap/eps/qminit/pfe gates require luofu_switch.arm=1 (the attended W3 power step)\n");
++				    "luofu_switch.egress/qidmap/eps/qminit/pfe/ifc/ext gates require luofu_switch.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+ 	}
+ 
+@@ -3174,12 +3317,30 @@
+ 		goto out;
+ 	lsw->ifc_ready = true;
+ 
++	if (!luofu_switch_ext_gate) {
++		dev_warn(dev,
++			 "the extended EPS words / DP runtime value are not programmed (set luofu_switch.ext=1): the 2026-11-20 stock-vs-ours dump shows 17 persistent words that the vendor stack sets and our W3-W10 do not; refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_switch.ext=1: programming the stock-observed extended EPS words and the DP runtime value (W12)\n");
++	ret = luofu_switch_ext_program(lsw);
++	if (ret)
++		goto out;
++	lsw->ext_ready = true;
++
+ 	dev_info(dev,
+-		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init and the IFC default-classification table are programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init, the IFC default-classification table and the W12 extended EPS/DP runtime words are programmed and verified; the GEMAC netdev front end may register\n");
+ 	if (luofu_switch_dump_gate)
+ 		luofu_switch_dump(lsw);
+ 
+ out:
++	if (ret && lsw->ext_ready) {
++		luofu_switch_ext_restore(lsw);
++		lsw->ext_ready = false;
++	}
+ 	if (ret && lsw->ifc_ready) {
+ 		luofu_switch_ifc_restore(lsw);
+ 		lsw->ifc_ready = false;
+@@ -3218,6 +3379,8 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	if (lsw->ext_ready)
++		luofu_switch_ext_restore(lsw);
+ 	if (lsw->ifc_ready)
+ 		luofu_switch_ifc_restore(lsw);
+ 	if (lsw->pfe_ready)
+@@ -3251,5 +3414,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS, EQM, PFE and IFC write path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS, EQM, PFE, IFC and EPS-ext write path)");
+ MODULE_LICENSE("GPL");
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -553,7 +553,31 @@
+ #define LUOFU_SWITCH_IFC_ENTRIES	8
+ #define LUOFU_SWITCH_IFC_ENTRY_WORDS	5
+ #define LUOFU_SWITCH_IFC_TAB_WORDS	4
+-/* tab128 word0 of entries 3..7: (alloc-id & 0x3f) | 0x1d00; fresh manager id 0 */
+-#define LUOFU_SWITCH_IFC_ID_TAB_WORD	0x00001d00
++/*
++ * tab128 word0 of entries 3..7: (vendor table-manager allocation id & 0x3f) |
++ * 0x1d00.  Our first bench attempt assumed a fresh manager returns id 0 and
++ * programmed 0x1d00; the 2026-11-20 stock-vs-ours dump (evidence
++ * build/evidence-bench-gates/2026-11-20-lsw-diff.txt) shows the stock hardware
++ * holding 0x1d01, i.e. the first hash id the vendor stack gets is 1 [V].
++ * Patch 046 uses that stock-observed value.
++ */
++#define LUOFU_SWITCH_IFC_ID_TAB_WORD	0x00001d01
++
++/*
++ * W12 (patch 046): the remaining stock-vs-ours differences that are persistent
++ * configuration, from the same dump:
++ *  - 16 extended EPS words at eps+0xb20..0xb3c and eps+0xba0..0xbbc (the
++ *    channel-map/companion second bank our W6 write set did not cover);
++ *  - the DP runtime word dp+0x1c: our W4 probe write is BIT(16) | a field the
++ *    vendor derives from hi_system_mem_info_get (which read 0 on our boot), the
++ *    stock runtime value adds BIT(15), i.e. 0x18000.
++ * The EQM words in the same diff (eqm+0x48..0x70) are the indirect command/
++ * data registers holding each side's last queue-init op - not persistent
++ * configuration (see the W11 dump comment).
++ */
++#define LUOFU_SWITCH_EPS_EXT_WORDS	16
++#define LUOFU_SWITCH_EPS_EXT_FIRST_OFF	0x0b20
++#define LUOFU_SWITCH_DP_RUNTIME_OFF	0x001c
++#define LUOFU_SWITCH_DP_RUNTIME_VAL	0x00018000
+ 
+ #endif /* __LUOFU_SWITCH_REGS_H */
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -594,7 +594,7 @@
+ 
+ 	if (!luofu_switch_ready())
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_switch.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1, and every stage must verify)\n");
++				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_switch.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1 ext=1, and every stage must verify)\n");
+ 
+ 	/*
+ 	 * Address source: the standard devicetree mac-address/local-mac-address

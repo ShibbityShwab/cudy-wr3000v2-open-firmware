@@ -1,74 +1,77 @@
-# incoming/qm-decode - round 4g: read-only LSW state dump (patch 045)
+# incoming/qm-decode - round 4h: W10 correction + W12 extended EPS/DP stage (patch 046)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 12).  Prior record: `032`, `036`,
-`038`, `040`, `041`, `042`, `043` (W10 IFC), `044` (gate-token fix).  This package
-delivers **patch 045 (W11)**: a read-only LSW state-dump stage for the stock-vs-ours diff, plus the
-round-4g decode finding.  No device access in this lane.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 13).  Prior record: `032`, `036`,
+`038`, `040`, `041`, `042`, `043` (W10), `044` (token fix), `045` (W11 dump).
+This package delivers **patch 046**: the W10 tab128 correction from the stock-vs-ours dump plus the
+W12 stage for the remaining persistent differences.  No device access in this lane.
 
-Apply `shared.patch` from the `opensource` root (it carries the W10 docs, the token fix and the
-W11 section), then move this SUMMARY to `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
+Apply `shared.patch` from the `opensource` root (carries W10 + token fix + W11 + W12 docs), then move
+this SUMMARY to `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
 
-## 1. Round-4g hardware result (image 24794d64, corrected W10 token)
+## 1. The dump diff (evidence build/evidence-bench-gates/2026-11-20-lsw-diff.txt)
 
-The W10 gate ran: "IFC default-classification table: 8 entries, command-engine pre-state 0x0 (busy 0,
-error 0), tab128 base 0x50000" -> "programmed and verified: 8 entries (5-word command-engine
-descriptors acknowledged, 4-word tab128 entries read back exactly)" -> armed line including the IFC
-table -> GEMAC netdevs registered, eth2 1 Gbps/Full, br-lan forwarding, heartbeat HB 48..103 stable
-through the traffic test, no Oops.  **Traffic is still dead**: host sniff sees only its own ARP
-requests, ping fails, no PIE RX traces, no box frames.  All ten stages W3-W10 are now programmed and
-verified on silicon.
+| class | ours | stock | action |
+| --- | --- | --- | --- |
+| IFC tab128 entries | written one slot too low; word0 0x1d00 | entry1 0x0 at 0x50010, entry2 0x100800 at 0x50020, entries3..7 **0x1d01** | **W10 corrected** |
+| EPS extended words | 0 | eps+0xb20..0xb3c / 0xba0..0xbbc values | **W12 writes them** |
+| dp+0x1c | 0x10000 | 0x18000 | **W12 writes 0x18000** |
+| eqm+0x48..0x70 | last W7 op residue | last stock queue-init op residue | documented non-config |
 
-## 2. Decode finding: the missing state is the vendor runtime forwarding layer
+## 2. W10 correction (in patch 046)
 
-- The vendor's L2/VLAN/port-forwarding configuration is installed at load time and on bridge/netdev
-  events by the `hi_kcfe_lrn_*@BT@ / `hi_kcfe_pub@BT@ / `hi_kcara@BT@ module family (kernel modules
-  built for the vendor 5.10 kernel).  These modules **cannot load on our 6.18 kernel**, so on our
-  image that state is simply absent - and that is exactly the class of state a stock boot has and
-  our armed boot does not.
-- The PIE per-port "queue handle" the lead asked about (`g_api_priv@BT@) is a **software** structure in
-  the vendor PIE driver (kmalloc(64) keyed by (port<<8)|vport), not a hardware register pair; the
-  hardware TX descriptor carries only the port tag, and the LSW-side queue/port configuration is
-  what our W5-W7 already program.  So it is not a missing hardware write.
-- The remaining candidate hardware areas are the L2 table/config, VLAN membership, and per-port
-  forwarding state - all owned by the CFE family above.
+- **Offset bug:** the vendor primitive writes entry `idx` at `ifc+0x50000 + idx*16`; our revision wrote
+  the 0-based array index, so every entry landed one slot too low (entry1 at 0x50000, entry2 at
+  0x50010, ...).  Patch 046 uses the entry index: entry1..8 at 0x50010..0x50080.
+- **Allocator id:** our first attempt assumed the vendor table-manager allocation id was 0 (0x1d00);
+  the stock hardware holds **0x1d01** (first hash id = 1).  Word0 values now: entry1 0x0, entry2
+  0x00100800, entries3..7 0x1d01, entry8 0x00100800 (entry1..7 [V] from the diff; entry8 [I] from
+  the emulated init - the W11 dump range now covers 0x50080 so the next run confirms it).
 
-## 3. Patch 045 (W11): read-only state dump
+## 3. W12 stage (new gate `luofu_switch.ext=1`)
 
-- New gate `luofu_switch.dump=1@BT@ (read-only, no hardware writes).  After the normal armed path the
-  driver prints a bounded register snapshot (4 words per line):
-  `l2+0x0000/0x10000/0x20000@BT@, `ifc+0x0000/0x50000@BT@, `dp+0x0000/0x1000@BT@,
-  `eps+0x0000/0x1000/0x0b00@BT@, `pe+0x0000/0x0400@BT@, `eqm+0x0000@BT@, `opp+0x0000@BT@,
-  `fam+0x0500@BT@, `ips+0x0000@BT@ (~100 lines).
-- The dump is taken **after** W3-W10 so it captures our armed state; nothing is written and the
-  heartbeat path is unaffected.
+Requires arm/egress/qidmap/eps/qminit/pfe/ifc.  Writes with snapshot / stable-two-reads / exact
+readback / restore-on-mismatch, fail-closed (readiness is now W3-W12):
 
-## 4. Attended procedure (stock-vs-ours diff = the next write set)
+- **16 extended EPS words** (stock values): eps+0xb20..0xb3c = 0xa0, 0x810a0, 0x820a0, 0x830a0,
+  0xb0, 0x810b0, 0x820b0, 0x830b0; eps+0xba0..0xbbc = 0x8004ffff, 0x8105ffff, 0x8106ffff,
+  0x8107ffff, then the same four repeated.
+- **dp+0x1c = 0x18000.**  Decode: the vendor DP probe writes `BIT(16) | field16` where field16 is
+  the upper half of a value from `hi_system_mem_info_get` (that field read 0 on our boot, which is
+  why W4 programmed 0x10000); stock runtime additionally carries BIT(15).  Bit15's meaning is [U]
+  (a vendor memory/runtime field, not a forwarding enable); the stock-observed value is replayed.
+- The eqm+0x48..0x70 differences are the indirect command/data registers holding each side's last
+  queue-init op (stock 0x41100012 = table 17 index 18 write); documented, not replayed.
 
-1. Boot the current series with the full chain **plus `luofu_switch.dump=1@BT@**; capture the
-   `lsw-dump ...@BT@ lines.
-2. On a stock boot (vendor kernel), read the same window+offset addresses with the existing stock
-   readout; window bases: l2 0x12180000, ifc 0x12100000, dp 0x11000000, eps 0x11280000,
-   pe 0x11180000, eqm 0x11200000, opp 0x12400000, fam 0x11100000, ips 0x11080000.
-3. Diff the two captures: every range where stock is non-zero and ours is zero is a missing init.
-   That list becomes the next patch's write set, decoded against the vendor module that owns it
-   (kcfe_lrn_l2 for L2/VLAN entries, kcara for port state).
-4. Optional second boot of the same image: `luofu_gmac.w9=1 hwinitwrite=1@BT@ (cmdline only) to
-   exercise the corrected 1518 frame limit with the heartbeat detector.
+## 4. Expected bench log lines (attended run)
+
+```
+luofu_switch.ifc=1: programming the recovered IFC default-classification table (W10)
+W10: IFC default-classification table: 8 entries, command-engine pre-state 0x0 (busy 0, error 0), tab128 base 0x50000
+W10: IFC default-classification table programmed and verified: 8 entries (5-word command-engine descriptors acknowledged, 4-word tab128 entries read back exactly)
+luofu_switch.ext=1: programming the stock-observed extended EPS words and the DP runtime value (W12)
+W12: extended EPS/DP runtime words: 16 EPS words + dp+0x1c, snapshotting the current state first
+W12: extended EPS/DP runtime words programmed and verified: 16 EPS words + dp+0x1c=0x18000
+connectivity path armed: ... the IFC default-classification table and the W12 extended EPS/DP runtime words are programmed and verified; ...
+```
+Failure signatures (box stays up, path refused): `W12: eps+0xNNN readback mismatch ... restoring the
+snapshot` or `W12: dp+0x1c readback mismatch ...` or a stability refusal; the pre/post snapshot values are in the
+line.  With `luofu_switch.dump=1` as well, the W11 dump now shows ifc+0x50010..0x50080 so the tab128
+correction can be verified against the stock capture.
 
 ## 5. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/045-net-lsw-state-dump.patch` | W11 read-only LSW state dump (opt-in, no writes) | `f722ca3db2adbef0c07fccdd50101fbe2e63090aea29880390d7c2fb12dd39e0` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | W10 + token-fix + W11 docs (LSW-SPEC, SKELETON-SMOKE, PIE-DATAPATH, TARGET-DESIGN, README) | see handover |
+| `target-skeleton/target/linux/hisilicon/patches-6.18/046-net-lsw-ifc-fix-eps-ext.patch` | W10 offset/id correction + W12 extended EPS/DP stage | `6b434e43597946d14a97978caf0c1290bca4088cf4de228c91977e4334d1cb07` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | W10 + token fix + W11 + W12 docs (5 files) | `ff128df37004a4697be8020bd5da87f771d4cfdeaac24be4b708229a76920508` |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
 | `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
 ## 6. Validation
 
-- **Series apply (current full series + 045 = 46 patches):** 46/46, 0 failed hunks, 0 .rej/.orig;
-  `luofu-switch.c` byte-identical to the lane tree (`logs/10-series-apply-046b.log`).
-- **WERROR compile:** `luofu-switch.o` rebuilt clean under `W=1 -Werror`.
+- **Series apply (current full series + 046 = 47 patches):** 47/47, 0 failed hunks, 0 .rej/.orig;
+  all changed drivers byte-identical to the lane tree (`logs/10-series-apply-047b.log`).
+- **WERROR compile:** both drivers rebuilt clean under `W=1 -Werror`.
 - **checkpatch:** 0 errors, 0 checks, only the expected commit-description warning
-  (`logs/11-checkpatch-045.log`).
-- No devicetree/binding/Kconfig change; no vendor binary or per-unit value added.
+  (`logs/11-checkpatch-046.log`).
+- Shared docs patch verified against the current `opensource` tree; no devicetree/binding/Kconfig change.
