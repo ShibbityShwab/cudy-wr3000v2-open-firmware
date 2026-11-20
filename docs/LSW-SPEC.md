@@ -18,7 +18,7 @@ closed; the derived W2 write set is tabulated in section 7.7. It has never run o
 
 **Decode update 2026-11-19 (task-57, host-only):** the switch egress path needed for TX frames
 has been decoded further and the R1/R3/R5 probe-configuration stage is now implemented behind a
-third gate, `luofu_lsw.egress=1` (patch `025`, never executed). The additions are: the R1/R3/R5
+third gate, `luofu_switch.egress=1` (patch `025`, never executed). The additions are: the R1/R3/R5
 write sequences and derivations (section 7.7, rows R1/R3/R5; R4 is read-only conformance), the
 EQM indirect command-word layout (section 7.5), a decode of the `port_bitmap` u64 cell order and
 its allocator walk (section 6.3), and a new section 7.8 that separates what is proven about a TX
@@ -94,7 +94,7 @@ What this document is **not**:
     happened yet**: every hardware statement below stays [U] until the W3-W5 campaign in section
     12.3 is run. Patches `021`/`022` implement the read-only baseline and the gated W3/W5 qid-map
     write path; patch `025` adds the R1/R3/R5 probe-configuration stage behind
-    `luofu_lsw.egress=1` (never executed; see 7.7 and 7.8). The clean-room path stays staged: D0 spec, D1 minimal
+    `luofu_switch.egress=1` (never executed; see 7.7 and 7.8). The clean-room path stays staged: D0 spec, D1 minimal
     forwarding (bridge in software, no offload), D2 switchdev offload (section 11).
 
 ---
@@ -929,20 +929,20 @@ hardware.**
 
 | # | write | value / shape | evidence | status |
 | --- | --- | --- | --- | --- |
-| C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
-| C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | **implemented behind `luofu_lsw.arm=1`** (W3, patch `022`); never executed |
-| R1 | `dp` probe config | `dp+0x68 = 0`, `dp+0x64 = 1` then the cell-size selector (`1` = 0x200-byte cells), `dp+0x1c = (u16 queue DDR base \| BIT(16)) = 0x00018000` | code shape [V]; the u16 is the low half of the live `queue` window base, so the value is derived from the checked DT window [V]; measured final values [V]; field meaning [U] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
+| C1 | CRG gate enable (`lsw_dp_clk`, `lsw_pfe_clk`) | set gate bits: word `0x20` bits 0/1, through the clock API | final state measured enabled [V]; 1 = on [V]; "clocks before reset" order [I] (vendor probe shape) | **implemented behind `luofu_switch.arm=1`** (W3, patch `022`); never executed |
+| C2 | CRG reset deassert (`dp_logic`/`dp_srst`/`pfe_logic`/`pfe_srst`) | active-low: **set** reset word `0x30` bits 0/1/3/4 (patch `014` polarity) | released state measured [V]; polarity [V] from the measured words + patch 014; array pulse vs one deassert [U] | **implemented behind `luofu_switch.arm=1`** (W3, patch `022`); never executed |
+| R1 | `dp` probe config | `dp+0x68 = 0`, `dp+0x64 = 1` then the cell-size selector (`1` = 0x200-byte cells), `dp+0x1c = (u16 queue DDR base \| BIT(16)) = 0x00018000` | code shape [V]; the u16 is the low half of the live `queue` window base, so the value is derived from the checked DT window [V]; measured final values [V]; field meaning [U] | **implemented behind `luofu_switch.arm=1 luofu_switch.egress=1`** (W4, patch `025`); never executed |
 | R2 | `eps` queue/DFX | `eps+0x1008` | measured 0 [V]; writer/meaning [U] | not in write set |
-| R3 | `eqm` probe init | `eqm+0xa4 = (found & ~0x3fff) \| ((fam_low14 - 0x40) & 0x3fff)`; `eqm+0x18 = (found & ~0x80003fff) \| ((eqm+0xa4 + 0x3d00) & 0x3fff) \| bit31`; `eqm+0x38 = (found & ~0x3fff) \| ((eqm+0xa4 & 0x3fff) >> 2)`; `eqm+0x40 \|= bit31` | code shape [V] (exact vendor derivation); measured final values `0x1fc0 / 0x80001cc0 / 0x7f0 / 0x80000000` [V]; register semantics [U] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
+| R3 | `eqm` probe init | `eqm+0xa4 = (found & ~0x3fff) \| ((fam_low14 - 0x40) & 0x3fff)`; `eqm+0x18 = (found & ~0x80003fff) \| ((eqm+0xa4 + 0x3d00) & 0x3fff) \| bit31`; `eqm+0x38 = (found & ~0x3fff) \| ((eqm+0xa4 & 0x3fff) >> 2)`; `eqm+0x40 \|= bit31` | code shape [V] (exact vendor derivation); measured final values `0x1fc0 / 0x80001cc0 / 0x7f0 / 0x80000000` [V]; register semantics [U] | **implemented behind `luofu_switch.arm=1 luofu_switch.egress=1`** (W4, patch `025`); never executed |
 | R4 | `fam` queue/cell comparison | read-only conformance: `(fam+0x504 & 0x3fff)` must equal `(queue_size / cell_size) & ~7 = 0x2000`; the vendor only *lowers* the found word (clamp case [U]) | code shape [V]; measured value [V]; the write is deliberately not replayed [U] | **read-only check in the W4 stage** (patch `025`); not written |
-| R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1`** (W4, patch `025`); never executed |
-| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W5, patch `022`); never executed |
-| Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | **implemented behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1`** (W5, patch `022`); never executed |
+| R5 | `ips` probe init | `ips+0x10 \|= 0x10000`, `ips+0x08 = 42` | code shape [V]; measured final values [V] | **implemented behind `luofu_switch.arm=1 luofu_switch.egress=1`** (W4, patch `025`); never executed |
+| Q1 | qid table A | one u32 `0x100 \| qid` at `opp+0x42800`, word index `port*8 + slot`, ports 0..15 | code shape [V]; measured contents [V]; derived model reproduced read-only [V for this boot] | **implemented behind `luofu_switch.arm=1 luofu_switch.qidmap=1`** (W5, patch `022`); never executed |
+| Q2 | qid table B | `0x100 \| qid` written to all four u32 of the 16-byte entry at `opp+0x43800`, byte offset `((port-40)*8 + slot)*16`, ports 40..47 | code shape [V]; measured contents [V] (four identical words per entry) | **implemented behind `luofu_switch.arm=1 luofu_switch.qidmap=1`** (W5, patch `022`); never executed |
 | Q3 | qid allocation | one contiguous qid space from **1**, 8 qids per port, qid 0 unused; populated rows are table-A ports 4..12 (qids 1..72) and table-B ports 40..43 (qids 73..104) | measured contents [V]; allocator policy [I] | model only |
 | Q4 | qid map, port > 47 class | word index `slot/2 + port*4 - 64` of table A, one word per slot written twice per pair of slots | code shape only partially recovered [V]/[U] | deliberately not modelled |
 | P1 | `port_bitmap` | devicetree `<0xf01 0x1ff0>` -> u64 `0xf01_0000_1ff0`; the allocator walk visits ports {4..12, 32, 40..43} | value [V] in the base DT and on the live node; decode [V] (6.3, reproduces the measured qid map) | baseline check only, never used to enable anything |
 | D1 | queue/flow DDR | `queue = 0x80000000/4 MiB`, `flow = 0x80400000/1 MiB` | base/size measured live after the loader fixup [V]; layout inside [U]; how the engine is told the base [U] | validated from DT, never ioremapped or written |
-| E1 | EQM indirect table (queue table 19 / 1000-cell entry, tables 16/32/34/35/37/38), IFC/L2/VLAN tables | command word (decoded 2026-11-19, 7.5); tables **19/32/35/17/16/34** entry shapes and per-entry values fully decoded 2026-11-19 (7.9) and implemented behind a gate; table 38 (vendor table-manager id) and the ports 40..43 VP class remain [U], and so do the IFC/L2/VLAN tables | command word [V]; decoded entry shapes/values [V]; field semantics [U]; table 38 / VP class / IFC-L2-VLAN [U] | **tables 19/32/35/17/16/34 implemented behind luofu_lsw.qminit=1** (W7, patch 032); table 38 + VP class excluded by design; IFC/L2/VLAN untouched |
+| E1 | EQM indirect table (queue table 19 / 1000-cell entry, tables 16/32/34/35/37/38), IFC/L2/VLAN tables | command word (decoded 2026-11-19, 7.5); tables **19/32/35/17/16/34** entry shapes and per-entry values fully decoded 2026-11-19 (7.9) and implemented behind a gate; table 38 (vendor table-manager id) and the ports 40..43 VP class remain [U], and so do the IFC/L2/VLAN tables | command word [V]; decoded entry shapes/values [V]; field semantics [U]; table 38 / VP class / IFC-L2-VLAN [U] | **tables 19/32/35/17/16/34 implemented behind luofu_switch.qminit=1** (W7, patch 032); table 38 + VP class excluded by design; IFC/L2/VLAN untouched |
 
 **What patch `021` verified without writing (W2 exit, read-only).**  The
 derived allocation model (Q1-Q3) reproduces all 384 measured qid-map words
@@ -957,11 +957,11 @@ state (W3/W4 readback), or the meaning of the port ids the rows belong to
 
 **What patch `022` adds (W3/W5 staged, implemented, never executed).**
 `luofu-switch.c` now has two explicit opt-in gates on top of the read-only
-default: `luofu_lsw.arm=1` performs C1+C2 (enable the two gate clocks, release
+default: `luofu_switch.arm=1` performs C1+C2 (enable the two gate clocks, release
 the four reset lines), re-checks the powered state through the CRG syscon and
 the reset API, then snapshots the 30 measured baseline words and the two qid
 tables *read-only* and refuses (no switch register is written in this step);
-`luofu_lsw.arm=1 luofu_lsw.qidmap=1` additionally programs Q1+Q2 for the 13
+`luofu_switch.arm=1 luofu_switch.qidmap=1` additionally programs Q1+Q2 for the 13
 populated rows, reads every programmed word back and restores the found values
 on the first mismatch.  The pre-write conformance gate refuses before the first
 write if any *unpopulated* qid-map word is non-zero, because that means the
@@ -976,7 +976,7 @@ egress queue/port remains [U], and the dp/eqm/ips probe initialization
 (R1/R3/R5) was not in any write set.
 
 **What patch `025` adds (W4 staged, implemented, never executed; 2026-11-19).**
-`luofu-switch.c` gains a third opt-in gate, `luofu_lsw.egress=1`, placed after
+`luofu-switch.c` gains a third opt-in gate, `luofu_switch.egress=1`, placed after
 the W3 power step and before the qid-map write: it snapshots the R1/R3/R5 target
 words, runs the pre-write conformance gate (EQM indirect interface idle, every
 target word stable across two reads, `fam+0x504` low14 equal to the computed
@@ -984,7 +984,7 @@ cell count `(queue_size / cell_size) & ~7` - the measured state the R3 formulas
 are derived against), programs the nine words of R1/R3/R5 in the vendor order,
 reads every one of them back against the value computed from the pre-write
 snapshot, and restores the found state on the first mismatch (also in
-`remove()`).  R4 is read-only.  The step refuses without `luofu_lsw.arm=1`;
+`remove()`).  R4 is read-only.  The step refuses without `luofu_switch.arm=1`;
 a run with `egress=1` but without `qidmap=1`, and a run with `qidmap=1` but
 without `egress=1`, both end in a refused probe with the found block state
 restored and the block powered back down.  Only `arm=1 egress=1 qidmap=1` with
@@ -1101,7 +1101,7 @@ question the W7 attended run can now answer.
   and its index space is [U];
 - the queue/flow DDR contents (never mapped or written) and the IFC/L2/VLAN tables (D2 scope).
 
-**Gate and safety model.**  Patch 032 adds the fifth attended gate luofu_lsw.qminit=1 (requires
+**Gate and safety model.**  Patch 032 adds the fifth attended gate luofu_switch.qminit=1 (requires
 arm=1 egress=1 qidmap=1 eps=1).  It refuses unless the EQM indirect interface is idle, snapshots
 all 169 target entries (each read twice and required stable), computes the expected content from
 the snapshot plus the formulas above, writes every entry through the decoded engine, verifies the
@@ -1183,7 +1183,7 @@ built from 12-byte descriptors plus a table-manager allocation.  That table is d
 call-shape level but its entry fields are [U]; it is deliberately **not** in the W8 write set yet -
 it needs its own attended verification like every other table.
 
-**Patch 036 (W8) implementation.**  A sixth attended gate, `luofu_lsw.pfe=1` (requires
+**Patch 036 (W8) implementation.**  A sixth attended gate, `luofu_switch.pfe=1` (requires
 `arm=1 egress=1 qidmap=1 eps=1 qminit=1`), programs exactly those four words: each target is
 snapshotted, required stable across two reads, the expected value is computed (two vendor
 constants, one vendor read-modify-write keeping bits 15..0, one zero), every word is read back and
@@ -1339,7 +1339,49 @@ The eight payload pairs were extracted by emulating `hi_pfe_ifc_init` from the p
 entries 1-5.  The only runtime-dependent field is tab128 word0 of entries 3..7, built from the
 vendor table-manager allocation id (0 on a fresh manager -> `0x1d00`).
 
-**Patch 043 (W10) implementation.**  New gate `luofu_lsw.ifc=1` (requires
+**Patch 043 (W10) implementation.**  New gate `luofu_switch.ifc=1` (requires
+`arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1`) programs the eight entries: the command engine must
+be idle before the first write, every tab128 word is snapshotted and required stable across two
+reads, each entry is written engine-first then tab128, and the stage verifies all tab128 words by
+readback; on an engine error or a readback mismatch the tab128 snapshot is restored and the stage
+fails closed (the engine entries cannot be restored - stated in the log and here).  Readiness now
+requires W3-W10, so the GEMAC netdevs only register with the classifier programmed.
+
+**Bench verification for the next run.**  Expect the block of W10 start/idle lines, then
+`W10: IFC default-classification table programmed and verified: 8 entries ...`, then the usual
+connectivity-armed line, GEMAC registration and the heartbeat.  After the traffic test look for: a
+host ARP request reaching the box followed by a box ARP reply on the wire (or PIE RX trace lines),
+and no watchdog hang.  Failure signatures: `W10: IFC entry N command failed (bit29)` or a poll
+timeout (engine protocol mismatch), or `tab128 readback mismatch ... restoring the snapshot`
+(wrong payload/word order) - in both cases the box stays up (fail-closed, no data path).
+
+If W10 alone still does not move traffic, the next ordered layers remain L2/VLAN tables and the
+CFE/rootif contract, then the remaining MAC config words and table 38/VP.
+
+**Round-4e macconf run and the next layer: the IFC default-classification table (patch 043).**
+Image f58c516e (six gates + PFE, W9 inert, heartbeat, macconf=1) stayed stable through the traffic
+test and logged both eth2 link-ups with the vendor MAC sequence: before
+`0x14=0x6 0x18=0x0 0x1c=0x0 0x40=0x10c0008 0x0=0x0`, after `0x1c=0x1`, 0x40 already correct,
+0x0 still 0 - so the MAC config sequence is complete but **traffic is still dead**: the MAC is not
+the missing layer, the classifier is.
+
+**W10 decode.**  `hi_pfe_ifc_init@0x794` writes eight default entries through two interfaces,
+both now decoded and replayed by the driver:
+
+- **command/data engine** (ifc window): data `0x138/0x13c/0x140/0x144/0x148` (5 words), command
+  `0x120 = 0xc0000000 | (index & 0x7f)`, then poll until bit31 clears (<=1001 tries), bit29 =
+  error - the same protocol as the EQM indirect engine.  There is no read path in the recovered
+  code, so these writes are acknowledged, not read back (like write-only table 19).
+- **tab128 default entry**: four words at `ifc+0x50000 + index*16` (the shared
+  `hi_lsw_write_tab128` primitive).  This region is directly readable and is verified STRICTLY.
+
+The eight payload pairs were extracted by emulating `hi_pfe_ifc_init` from the pinned
+`hi_lsw_pfe.ko` (52,412 B, sha256
+`12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a`) and cross-checked by hand for
+entries 1-5.  The only runtime-dependent field is tab128 word0 of entries 3..7, built from the
+vendor table-manager allocation id (0 on a fresh manager -> `0x1d00`).
+
+**Patch 043 (W10) implementation.**  New gate `luofu_switch.ifc=1` (requires
 `arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1`) programs the eight entries: the command engine must
 be idle before the first write, every tab128 word is snapshotted and required stable across two
 reads, each entry is written engine-first then tab128, and the stage verifies all tab128 words by
@@ -1789,12 +1831,12 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | --- | --- | --- | --- |
 | W1 | read `dp+0x68/0x64/0x1c`, `eps+0x1008`, `eqm+0x48`, `opp+0x42800` before/after vendor init (stock kernel, via vendor proc dumps or a read-only debug module) | baseline values and which fields the probe writes - **DONE 2026-11-18 (read-only inv1):** the post-vendor-boot baseline is measured (values in [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md) section 3, incl. the qid table A/B contents). W2 can be derived from it; no write was made | power cycle |
 | W2 | write nothing; finalise the D1b write set on paper and compare to W1 | does the write set exist / is it complete - **DONE 2026-11-18 (read-only, host-only):** derived write set tabulated in section 7.7; patch `021` re-derives the qid-map model and validates it against all 384 measured table words without writing, and gates the read on the measured powered state; write implementation was patches `022`/`025` | n/a |
-| W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling - **implemented behind `luofu_lsw.arm=1` (patch `022`); never executed**; the first attended run should use this gate alone and record the snapshot | power cycle |
-| W4 | R1/R3/R5 probe configuration only (`luofu_lsw.arm=1 luofu_lsw.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_lsw.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
-| W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
-| W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
-| W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **two hardware attempts 2026-11-19, both refused fail-closed with GEMAC unregistered. Round 1 (image 14791958): table-19 strict readback failed; decode proved table 19 write-only. Round 2 (image 5d2c5476): tables 32 and 35 verified on silicon, table 17 failed on its unreadable words 0/4 (words 1-3 read back exactly, so the data-register mapping is correct); patch `032` now uses tiered verification (STRICT only on bench-proven fields, DIAG for tables 16/34, ACK for table 19) and restores only bench-proven entries (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
-| W8 | PFE forwarding-engine base init (`... luofu_lsw.pfe=1`) | is the missing forwarding-engine init the reason no frame crosses the switch - **implemented behind luofu_lsw.pfe=1 (patch `036`); never executed. Round-3 evidence (image 75868fe0): W3-W7 armed, GEMAC registered, eth2 up 1 Gbps, br-lan forwarding, but no PIE RX and no wire egress; patch `036` adds the vendor PFE base init (pe/pfe_glb/opp direct words) and fixes the W7 tier-count report (7.10)** | power cycle |
+| W3 | first own-kernel write: clock enable + reset deassert only, no LSW register writes; observe link state | does the block survive reset/clock handling - **implemented behind `luofu_switch.arm=1` (patch `022`); never executed**; the first attended run should use this gate alone and record the snapshot | power cycle |
+| W4 | R1/R3/R5 probe configuration only (`luofu_switch.arm=1 luofu_switch.egress=1`); no qid-map write | are the three probe-configuration derivations right and does the block survive them - **implemented behind `luofu_switch.egress=1` (patch `025`); never executed.** The probe refuses after the step when the qid-map gate is absent, restores the found words and powers the block down; the stage's success evidence is its readback log | power cycle |
+| W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
+| W6 | EPS channel-map/companion programming (`luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_switch.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_switch.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
+| W7 | EQM queue-manager init tables (`... luofu_switch.qminit=1`) then the default-forwarding/TX test | D1c exit - **two hardware attempts 2026-11-19, both refused fail-closed with GEMAC unregistered. Round 1 (image 14791958): table-19 strict readback failed; decode proved table 19 write-only. Round 2 (image 5d2c5476): tables 32 and 35 verified on silicon, table 17 failed on its unreadable words 0/4 (words 1-3 read back exactly, so the data-register mapping is correct); patch `032` now uses tiered verification (STRICT only on bench-proven fields, DIAG for tables 16/34, ACK for table 19) and restores only bench-proven entries (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
+| W8 | PFE forwarding-engine base init (`... luofu_switch.pfe=1`) | is the missing forwarding-engine init the reason no frame crosses the switch - **implemented behind luofu_switch.pfe=1 (patch `036`); never executed. Round-3 evidence (image 75868fe0): W3-W7 armed, GEMAC registered, eth2 up 1 Gbps, br-lan forwarding, but no PIE RX and no wire egress; patch `036` adds the vendor PFE base init (pe/pfe_glb/opp direct words) and fixes the W7 tier-count report (7.10)** | power cycle |
 | W9 | MAC maximum-frame register (`luofu_gmac.hwinit=1`) | is the MAC dropping both directions as over-max - **implemented behind `luofu_gmac.hwinit=1` (patch `038`); never executed. Round-4 evidence (image 6cb3d908): W8 verified but zero PIE RX and no wire egress; the vendor `hi_mac_hw_mtu@0x38c` writes reg 0x100 low14 = MTU+4 and the MAC counts rx/tx_overmax_pkt (7.11)** | power cycle |
 | W10 | IFC default-classification table + L2/VLAN + CFE/rootif | D1c exit - IFC entries at ifc+0x50000 embed a software table-manager id (needs the allocator sequence decoded); then L2/VLAN tables, the CFE/rootif contract, the remaining MAC config words, NAPT/MCC, table 38/VP class, PIE queue handle (7.11) | power cycle |
 
@@ -1826,7 +1868,7 @@ The campaign must be re-planned after W1; the order above is a hypothesis, not a
 | --- | --- | --- | --- | --- | --- |
 | **LSW register windows / ids** | [V] 256-slot `{base,iomem,size}` table (`g_modules`, 3072 B), accessors + bounds checks decoded; DP ids `0x40..0x44` and PFE ids `0,1,3,5,6,7,8,9,0xa,0xb` decoded from probe pointer tables; 7+10 live DT windows with names, and the **live DDR `queue`/`flow` base** measured 2026-11-18 (5.4) | [U] meaning of most offsets/fields; why ids 2/4 skipped; queue/flow *layout* inside the DDR regions | D1a binding + validate-only probe; D1b write set | 004 (CRG), PIE 015 | **Yes** (code/compile) |
 | **Port model** | [V] MAC ports 8-12, live 9-12; board WAN=eth3/LAN=eth0-2; EPS port labels 3=prbs, 4-7=pie0-3; DFX names port0/8-13/xge/woe; 46x56 B port table with qid base + q_num=8; `port_bitmap` read as u64 from DT `<0xf01 0x1ff0>` and confirmed identical on the live node (2026-11-18), **decoded 2026-11-19 as the queue-allocation port bitmap {4..12, 32, 40..43}** (6.3); 5 virtual-port DT props (absent); patch `021` models the two DDR windows, the port_bitmap value check and per-port owner-device resolution (port netdevs stay with the GEMAC side) | [U] why the loader picks that port set; LSW internal port ids vs MAC port numbers; 40..47 class meaning (ports 40-43 observed populated in table B, 2026-11-18) | inventory 12.2; D1 bench W4/W5 | 007/008/009 | **Yes** (code); mapping bench-only |
-| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) **command word decoded 2026-11-19** (7.5); **W2 model derived and validated read-only 2026-11-18** (patch `021`: the contiguous qid 1..104 allocation reproduces all 384 measured qid-map words; 7.7); R1/R3/R5 probe-configuration stage implemented behind `luofu_lsw.egress=1` (patch `025`, 7.7/7.8) | [U] EQM queue-table contents/use for qid->egress; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer; whether the writes have the intended effect (W4/W5); per-frame TX egress selection (7.8) | D1b write set; D1c host path | PIE 015; eqm traced values | **Yes** (code); writes bench-only |
+| **Queue/qid model** | [V] per-port qid/q_num API and 8-QID loop; two qid tables `opp+0x42800`/`0x43800` with id-class index arithmetic and `0x100`-flag values, **runtime contents measured 2026-11-18** (table A ports 4-12 qids 1-72, table B ports 40-43 qids 73-104, 7.3); module 6 = opp; EPS channel map `eps+0xB00`/`0xB80` from `hi_pie_map_init`, PIE GRO/WOC getters, hwver branches; EQM command/data indirect engine (`eqm+0x48`/`+0x5c`, timeout/error bits) **command word decoded 2026-11-19** (7.5); **W2 model derived and validated read-only 2026-11-18** (patch `021`: the contiguous qid 1..104 allocation reproduces all 384 measured qid-map words; 7.7); R1/R3/R5 probe-configuration stage implemented behind `luofu_switch.egress=1` (patch `025`, 7.7/7.8) | [U] EQM queue-table contents/use for qid->egress; queue/flow DDR *layout*; PIE<->LSW binding timing; virtual-port defaults consumer; whether the writes have the intended effect (W4/W5); per-frame TX egress selection (7.8) | D1b write set; D1c host path | PIE 015; eqm traced values | **Yes** (code); writes bench-only |
 | **MAC learning / FDB** | [V] hardware L2 window + counters (`port_move/age_drop/sport_clash/search_ok_mc/search_fail_mc`); CFE software FDB (`hi_cfe_tab_*`, `hi_cfe_intf_set_br_fdb/get_br_fdb`, `hi_br_fdb_check_addr` patched bridge); learning libs `hi_kcfe_lrn_l2` etc. call `hi_cfe_acc_*`/`hi_adp_flow_*`; no L2 table writer symbol | [U] L2 table format/access; whether FDB offload must go through flows; aging/port-move semantics | D2 | D1 | **Partly** (D2 design only) |
 | **VLAN / ACL** | [V] tag action table (`tag_write/dump`, `hi_cfe_tag_*`), VLAN filter API + `vlan_filter` proc, subif model (with its "no second-layer untag subif" limitation); IFC classifier field list (~40 L2-L4 fields), action fields pq/pq_en/car/statis; CAR/mirror/NAPT/MCC symbols | [U] per-port VLAN/PVID table location and encoding; IFC row encoding; ACL semantics | D2 (VLAN/FDB), D3 (flow) | D1, GPL src optional | **No** (bench/RE needed) |
 | **CFE/rootif contract** | [V] rootif = named netdev in 32-slot CFE table; NETDEV_UP/DOWN/UNREGISTER driven; interface attrs/FDB/hooks/tags/netdev vif; `g_intf_bypass=1` then `hi_swa` loaded ("switch adaptor for openwrt"); `hi_swa` switchdev handlers are stubs | [U] full CFE hook semantics; why bypass mode exists beyond the 5 bypass branches seen | **not reproduced**; standard Linux switchdev contract | - | **Yes** (design) |

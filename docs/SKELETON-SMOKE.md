@@ -2563,8 +2563,8 @@ hardware test.**
   in 018-023 has ever executed on hardware.**
 - Boot safety of the newly enabled nodes: the DTS now enables the LSW/PIE/GEMAC nodes
   (12 `status = "okay"` nodes in the board DTS), but the drivers still fail closed on a
-  default boot - LSW probe refuses (`-EOPNOTSUPP`) unless `luofu_lsw.arm=1` (and writes the
-  W2 qid maps only with `luofu_lsw.qidmap=1`), PIE stays unarmed without `luofu_pie.arm=1`,
+  default boot - LSW probe refuses (`-EOPNOTSUPP`) unless `luofu_switch.arm=1` (and writes the
+  W2 qid maps only with `luofu_switch.qidmap=1`), PIE stays unarmed without `luofu_pie.arm=1`,
   and GEMAC refuses/defer until PIE is armed and the LSW qid map is ready, before any
   ioremap/clk/reset. The default `CONFIG_CMDLINE` carries none of those parameters, so the
   next boot should only log refusals - [U] until it is booted.
@@ -3064,11 +3064,11 @@ set, plus the GEMAC/PIE netdev readiness contract, so an attended boot can reach
   - default (no parameters) is unchanged read-only behaviour: validate the 17 windows, the CRG
     clocks/resets, the port model, the 30-word measured baseline and the two qid maps, then refuse
     with `-EOPNOTSUPP` without writing;
-  - `luofu_lsw.arm=1` = the attended **W3** step: enable the two CRG gate clocks, release the four
+  - `luofu_switch.arm=1` = the attended **W3** step: enable the two CRG gate clocks, release the four
     CRG reset lines (documented C1/C2 rows of LSW-SPEC 7.7), re-check the powered state read-only
     through the CRG syscon and the reset API, then snapshot the 30 baseline words and both qid
     tables *read-only* and refuse - **no LSW register is written in this step**;
-  - `luofu_lsw.arm=1 luofu_lsw.qidmap=1` = the attended **W4/W5** step: first a pre-write
+  - `luofu_switch.arm=1 luofu_switch.qidmap=1` = the attended **W4/W5** step: first a pre-write
     conformance gate (every qid-map word outside the derived allocation model must read zero,
     i.e. the block must be in the measured state the model was derived against), then program the
     W2 write set Q1/Q2 - table A ports 4-12 and table B ports 40-43, 13 rows x 8 slots, value
@@ -3103,9 +3103,9 @@ set, plus the GEMAC/PIE netdev readiness contract, so an attended boot can reach
 | boot parameter | LSW driver | PIE driver | GEMAC netdevs |
 | --- | --- | --- | --- |
 | none (normal boot) | read-only validate + refuse | gate closed, validate + refuse, no register write | PIE refused -> no netdev |
-| `luofu_lsw.arm=1` | W3 power/snapshot, no LSW register write, still refuses | unchanged | no netdev (no egress map) |
-| `luofu_lsw.arm=1 luofu_lsw.qidmap=1` | W3 + W4/W5 qid-map write + readback, READY | unchanged | still refuses until PIE is armed |
-| `luofu_pie.arm=1 luofu_lsw.arm=1 luofu_lsw.qidmap=1` | READY | arms rings/interrupts | netdevs register (eth0..eth3 in DT order); carrier driven by phylink |
+| `luofu_switch.arm=1` | W3 power/snapshot, no LSW register write, still refuses | unchanged | no netdev (no egress map) |
+| `luofu_switch.arm=1 luofu_switch.qidmap=1` | W3 + W4/W5 qid-map write + readback, READY | unchanged | still refuses until PIE is armed |
+| `luofu_pie.arm=1 luofu_switch.arm=1 luofu_switch.qidmap=1` | READY | arms rings/interrupts | netdevs register (eth0..eth3 in DT order); carrier driven by phylink |
 
 The existing `luofu_pie.arm=1` semantics are untouched.
 
@@ -3176,12 +3176,12 @@ Not proven / unattended-untested:
 
 ### Attended boot sequence (first hardware execution; recovery door armed)
 
-1. **W3 only:** boot with `luofu_lsw.arm=1` (PIE gate left off). Expect:
-   `luofu-switch: luofu_lsw.arm=1: ATTENDED WRITE PATH ...`, powered-state line, 30
+1. **W3 only:** boot with `luofu_switch.arm=1` (PIE gate left off). Expect:
+   `luofu-switch: luofu_switch.arm=1: ATTENDED WRITE PATH ...`, powered-state line, 30
    `W3 snapshot:` lines, the two qid-table non-zero counts, then
    `W3 power/read step done; ... refusing to arm the data path`. Record the snapshot; the block is
    powered down on the failure path. This is the first own-kernel CRG write on the switch block.
-2. **W4/W5:** boot with `luofu_lsw.arm=1 luofu_lsw.qidmap=1`. Expect the conformance gate to pass
+2. **W4/W5:** boot with `luofu_switch.arm=1 luofu_switch.qidmap=1`. Expect the conformance gate to pass
    (all unpopulated words zero), then
    `W2 qid map programmed and verified: 72 table-A words ... + 128 table-B words ...` and
    `connectivity path armed ...`. If it refuses, the pre-write mismatch is the evidence and no
@@ -3218,7 +3218,7 @@ the board; the image has not been rebuilt from 025 and no register has been writ
 ### What was added
 
 - `luofu-switch.c` / `luofu-switch-regs.h` (patch 025): the attended W4 stage,
-  `luofu_lsw.egress=1` (requires `luofu_lsw.arm=1`). It snapshots the R1/R3/R5 target words,
+  `luofu_switch.egress=1` (requires `luofu_switch.arm=1`). It snapshots the R1/R3/R5 target words,
   refuses before the first write unless the EQM indirect interface is idle, every target word
   reads stable across two samples, and `fam+0x504` low14 equals the computed cell count
   `(queue_size / cell_size) & ~7` (= 0x2000 on this board); it then programs the nine dp/ips/eqm
@@ -3238,20 +3238,20 @@ the board; the image has not been rebuilt from 025 and no register has been writ
 | boot parameters | LSW driver (021/022/025) | GEMAC netdevs (023) |
 | --- | --- | --- |
 | none (normal boot) | read-only baseline validate + refuse, no write | no netdev |
-| `luofu_lsw.arm=1` | W3: power, verify powered state, snapshot, refuse; no LSW register write | no netdev |
-| `luofu_lsw.arm=1 luofu_lsw.egress=1` | W3 + W4: conformance, R1/R3/R5 write + readback; then qid map absent -> restore found state, power down, refuse | no netdev |
-| `luofu_lsw.arm=1 luofu_lsw.qidmap=1` | W3 + W5 qid map; then the probe config is missing -> restore, power down, refuse (new in 025) | no netdev |
-| `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` | W3 + W4 + W5, both verified -> `luofu_switch_ready()` true | requires `luofu_pie.arm=1` too |
-| `luofu_lsw.egress=1` or `qidmap=1` without `arm=1` | explicit `-EINVAL` refusal (new in 025) | no netdev |
+| `luofu_switch.arm=1` | W3: power, verify powered state, snapshot, refuse; no LSW register write | no netdev |
+| `luofu_switch.arm=1 luofu_switch.egress=1` | W3 + W4: conformance, R1/R3/R5 write + readback; then qid map absent -> restore found state, power down, refuse | no netdev |
+| `luofu_switch.arm=1 luofu_switch.qidmap=1` | W3 + W5 qid map; then the probe config is missing -> restore, power down, refuse (new in 025) | no netdev |
+| `luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1` | W3 + W4 + W5, both verified -> `luofu_switch_ready()` true | requires `luofu_pie.arm=1` too |
+| `luofu_switch.egress=1` or `qidmap=1` without `arm=1` | explicit `-EINVAL` refusal (new in 025) | no netdev |
 
 ### Attended test sequence (recovery card armed; one variable per boot)
 
-1. **W3 only (unchanged from the connectivity session):** boot with `luofu_lsw.arm=1`.
+1. **W3 only (unchanged from the connectivity session):** boot with `luofu_switch.arm=1`.
    Expect the ATTENDED WRITE PATH warning, the powered-state line, 30 `W3 snapshot:` lines,
    the qid-table non-zero counts, then the refusal line. No LSW register is written.
-2. **W4 only:** boot with `luofu_lsw.arm=1 luofu_lsw.egress=1` (PIE and qidmap gates off).
+2. **W4 only:** boot with `luofu_switch.arm=1 luofu_switch.egress=1` (PIE and qidmap gates off).
    Expect first the W3 output, then
-   `luofu_lsw.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write
+   `luofu_switch.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write
    conformance and readback verification`, then either
    `W4 probe configuration programmed and verified: dp+0x1c=0x18000 dp+0x64=0x1 eqm+0x18=0x80001cc0
    eqm+0x38=0x7f0 eqm+0x40=0x80000000 eqm+0xa4=0x1fc0 ips+0x08=0x2a ips+0x10=0x... (fam+0x504=0x2000
@@ -3261,8 +3261,8 @@ the board; the image has not been rebuilt from 025 and no register has been writ
    useful evidence of the boot - stop there, record the value, do not force the gate.
    Also capture: `dmesg | grep luofu-switch`, the W3 snapshot lines, and that the console/CPU
    survived the write. Power-cycle between W4 variants.
-3. **W4 + W5:** boot with `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1`. Expect the
-   W4 success line, then `luofu_lsw.qidmap=1: ...`, the qid-map conformance pass, the
+3. **W4 + W5:** boot with `luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1`. Expect the
+   W4 success line, then `luofu_switch.qidmap=1: ...`, the qid-map conformance pass, the
    `W2 qid map programmed and verified ...` line and
    `connectivity path armed: R1/R3/R5 probe configuration and the W2 qid maps are programmed and
    verified; the GEMAC netdev front end may register`. Only this combination reaches READY.
@@ -3431,7 +3431,7 @@ needs `/etc/board.json` regenerated (and the gated netdevs present) for the map 
 
 ### Attended boot must test (recovery door armed; physical RESET+TFTP is the only recovery)
 
-1. **Kernel nvmem read:** boot with `luofu_pie.arm=1 luofu_lsw.arm=1 luofu_lsw.qidmap=1` (the
+1. **Kernel nvmem read:** boot with `luofu_pie.arm=1 luofu_switch.arm=1 luofu_switch.qidmap=1` (the
    four GEMAC netdevs then register). Expect no `no usable MAC address in the devicetree`
    warning for eth0..eth3; if the warning appears, record its `%pe` reason - `EINVAL` means the
    cell read 6 bytes but `is_valid_ether_addr()` rejected them (erased/corrupt bdinfo or the
@@ -3595,7 +3595,7 @@ NOT READY.
 ### What changed
 
 - `luofu-switch.c` / `luofu-switch-regs.h` (patch 032): a fifth attended write gate,
-  `luofu_lsw.qminit=1` (requires `arm=1 egress=1 qidmap=1 eps=1`), implementing the recovered
+  `luofu_switch.qminit=1` (requires `arm=1 egress=1 qidmap=1 eps=1`), implementing the recovered
   EQM queue-manager init tables 19/32/35/17/16/34 for the nine wired queue groups (ports 4..12,
   qids 1..72, profiles {0..7,17,18}) - 169 entries / 845 words. The stage snapshots every entry
   (two reads, required stable), requires the EQM indirect interface idle, computes the expected
@@ -3725,7 +3725,7 @@ recovered write set was accepted/verified", not "forwarding works".
 
 This is the first boot that should run the whole chain and then test traffic:
 
-1. **W3 only** (`luofu_lsw.arm=1`): expect the W3 snapshot log and the refusal. Confirms the block
+1. **W3 only** (`luofu_switch.arm=1`): expect the W3 snapshot log and the refusal. Confirms the block
    is still in the measured power state after the previous sessions.
 2. **W3+W4+W5** (`... egress=1 qidmap=1`): expect the R1/R3/R5 and qid-map programmed-and-verified
    lines and the refusal that names the missing EPS gate.
@@ -3796,7 +3796,7 @@ whole direct-register part of that base init is four words:
 | `pfe_glb+0x204` | 1 |
 | `opp+0x110` | 0 (after the port qid-map walk) |
 
-Patch 036 (sixth attended gate `luofu_lsw.pfe=1`, requires
+Patch 036 (sixth attended gate `luofu_switch.pfe=1`, requires
 `arm=1 egress=1 qidmap=1 eps=1 qminit=1`) snapshots each word, requires it stable across two
 reads, writes the computed value (two vendor constants, one vendor read-modify-write, one zero),
 reads every word back and restores the snapshot on a mismatch (also in `remove()`).
@@ -3830,7 +3830,7 @@ verification.
 
 ### Attended sequence for the next run (recovery card armed; physical RESET+TFTP is the only recovery)
 
-Same as the round-3 chain **plus** `luofu_lsw.pfe=1`: expect W3 -> W4 -> W5 -> W6 -> W7 (with the
+Same as the round-3 chain **plus** `luofu_switch.pfe=1`: expect W3 -> W4 -> W5 -> W6 -> W7 (with the
 corrected counters: "91 verified ... 77 acknowledged with diagnostics ... 1 write-only
 acknowledged") -> W8 "PFE forwarding-engine base init programmed and verified" -> connectivity
 armed -> GEMAC registration -> eth2 link up -> br-lan forwarding. Then ping from the host while
@@ -3968,7 +3968,23 @@ Decoded `hi_pfe_ifc_init@0x794` from the pinned hi_lsw_pfe.ko: eight default cla
 each written through the IFC command/data engine (data 0x138..0x148, command
 `0x120 = 0xc0000000 | (index & 0x7f)`, poll bit31, bit29 error) and a 4-word tab128 entry at
 `ifc+0x50000 + index*16`.  Payloads extracted by emulating the function and hand-checked for
-entries 1-5.  Patch 043 adds the W10 stage (`luofu_lsw.ifc=1`, requires arm/egress/qidmap/eps/
+entries 1-5.  Patch 043 adds the W10 stage (`luofu_switch.ifc=1`, requires arm/egress/qidmap/eps/
+qminit/pfe): idle pre-check, tab128 snapshot/stability/exact-readback/restore, engine descriptors
+acknowledged, fail-closed, readiness W3-W10.  Bench verification: look for the W10 line, then a
+host ARP request followed by a box reply (or PIE RX traces); failure signatures are engine bit29 /
+poll timeout / tab128 readback mismatch, all of which leave the box up but refuse to arm.
+
+## 2026-11-20 round 4e: MAC sequence confirmed, IFC default table decoded (patch 043)
+
+Image f58c516e (heartbeat liveness detector, macconf=1) ran stable through the traffic test; both
+eth2 link-ups logged the vendor MAC config sequence (0x14=0x6, 0x18 reset, 0x1c 0->1, 0x40 RMW result
+0x10c0008) and 0x0 stayed 0, yet traffic was still dead - the MAC is not the missing layer.
+
+Decoded `hi_pfe_ifc_init@0x794` from the pinned hi_lsw_pfe.ko: eight default classifier entries,
+each written through the IFC command/data engine (data 0x138..0x148, command
+`0x120 = 0xc0000000 | (index & 0x7f)`, poll bit31, bit29 error) and a 4-word tab128 entry at
+`ifc+0x50000 + index*16`.  Payloads extracted by emulating the function and hand-checked for
+entries 1-5.  Patch 043 adds the W10 stage (`luofu_switch.ifc=1`, requires arm/egress/qidmap/eps/
 qminit/pfe): idle pre-check, tab128 snapshot/stability/exact-readback/restore, engine descriptors
 acknowledged, fail-closed, readiness W3-W10.  Bench verification: look for the W10 line, then a
 host ARP request followed by a box reply (or PIE RX traces); failure signatures are engine bit29 /

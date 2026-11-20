@@ -622,7 +622,7 @@ LSW's minimal port/qid map, not just PIE. This matches [REMAINING-DRIVERS.md](RE
 sections 5.3 and 6.3. [I]
 
 Patch `022` now implements the W2 qid-map write (the populated table-A/table-B rows) behind
-`luofu_lsw.arm=1 luofu_lsw.qidmap=1`, which is the first concrete form of that egress map, but
+`luofu_switch.arm=1 luofu_switch.qidmap=1`, which is the first concrete form of that egress map, but
 *which* queue/port a PIE TX descriptor selects remains [U]: the draft TX descriptor carries only
 length/address/owner, so the map is programmed but the TX->egress binding is unproven.
 
@@ -778,12 +778,12 @@ exercised the engine or written a register.
 > `PHYLINK_NETDEV` - the draft used `PHYLINK_DEV`, which never drives the carrier from the
 > resolve work, so a real link would have looked dead to userspace - and adds the netdev address
 > source (standard devicetree MAC properties, else a random locally-administered fallback). Patch
-> `022` programs the LSW qid map behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` and only reports the
+> `022` programs the LSW qid map behind `luofu_switch.arm=1 luofu_switch.qidmap=1` and only reports the
 > map ready after a full readback verification. The board DTS enables the pie, lsw and gmac1-4
 > nodes; a normal boot refuses in every driver without touching the hardware. P5's RX half is
 > unchanged (the PIE RX completion decode is [U], so no frame is delivered to the stack) and the
 > TX egress selection from a descriptor is still [U]; the attended boot sequence is
-> `luofu_lsw.arm=1 luofu_lsw.qidmap=1 luofu_pie.arm=1`.
+> `luofu_switch.arm=1 luofu_switch.qidmap=1 luofu_pie.arm=1`.
 >
 > **Status 2026-11-19 (completion-decode session, patch `024`):** the v250 RX completion
 > descriptor and the normal non-TSO TX descriptor are now decoded (section 5.2) and implemented in
@@ -835,7 +835,7 @@ if a binding property is wanted, use documented `hisilicon,rx-ring`-style proper
 | **P2 - ring engine** | coherent ring allocation (32-byte descriptors, board ring sizes), RX refill path, TX producer, IRQ handler + NAPI, doorbell writes, the internal API of 11.1; RX/TX channel tables from the v250 ops table; all WoC paths omitted | **DONE 2026-11-18 as patch `020`, extended 2026-11-19 by patch `024`** (host-compiled only, arm-gated): rings, recovered init/mask sequencing, NAPI RX poll with the decoded completion path and stack delivery, full normal TX descriptor, exported backend + port registration; compile/checkpatch/bindings/DTS clean. No hardware. |
 | **P3 - bench read-only inventory** (attended, recovery armed) | boot the vendor system or the lab kernel and read - with read-only access such as a write-protected probe module - the PIE window: `0x1000`, `0x2000`/`0x3000` ring blocks for ch 0-3, `0x0300/0x0400` status/mask, `0x3200/0x3404/0x3408/0x3504`, and the IRQ status words. Compare against this model; record in the wave evidence dir | **DONE 2026-11-18** on the stock vendor boot (read-only, no writes): every allowlisted offset returned a plausible value, static words were stable, the dynamic pointers moved, and the programmed TX/RX channel configs equal the live overlay `tx_ring[0]/rx_ring[0]` (section 5.4; evidence `parent:build/bench-inventory/20261118T130512Z-inv1-run/` + `followup/`). Acceptance met for the register-readable [I]/[U] rows; see section 10 for what the run does **not** settle. |
 | **P4 - netdev wiring** | extend patch `009`: probe builds the netdev (phylink + `alloc_etherdev_mqs`), checks that the PIE backend is armed **and the LSW egress map is ready**, registers the netdev; `ndo_start_xmit` -> PIE; `ndo_open/stop` -> phylink; enable the pie/lsw nodes and gmac1-4 in the DTS via `shared.patch` | **DONE as host-compiled code in patches `020`+`023`** (never executed): netdev/phylink glue + TX forwarding + the two readiness gates + `PHYLINK_NETDEV` carrier fix + MAC address source; DTS nodes enabled. Bench gate unchanged: netdev appears, carrier up, TX doorbell advances the TX read pointer, no lockup; **no traffic claim** |
-| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the populated rows, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | **PARTLY DONE as host-compiled code (patches `022`, `024`; never executed):** the W2 qid-map write set (table A ports 4-12, table B ports 40-43) is programmed behind `luofu_lsw.arm=1 luofu_lsw.qidmap=1` with readback verification; the device-tree port model carries the measured hardware port number (`hisilicon,port` 9-12); the PIE RX completion decode is implemented and delivers to the net_device registered for the completed port; the TX descriptor is tagged with the port. **Still open:** the switch-side egress queue handle the vendor carries in `g_api_priv[]` [U], the PIE<->LSW host-queue hook [U], and hardware acceptance of the descriptor. M2-equivalent (ping host<->LAN port) is not reachable from the code yet |
+| **P5 - minimal LSW egress + RX delivery** | block-D1 subset: LSW probe, port/qid map for the populated rows, host-queue binding to PIE's per-port context, RX hook delivery. This is the hard dependency for traffic (section 7) | **PARTLY DONE as host-compiled code (patches `022`, `024`; never executed):** the W2 qid-map write set (table A ports 4-12, table B ports 40-43) is programmed behind `luofu_switch.arm=1 luofu_switch.qidmap=1` with readback verification; the device-tree port model carries the measured hardware port number (`hisilicon,port` 9-12); the PIE RX completion decode is implemented and delivers to the net_device registered for the completed port; the TX descriptor is tagged with the port. **Still open:** the switch-side egress queue handle the vendor carries in `g_api_priv[]` [U], the PIE<->LSW host-queue hook [U], and hardware acceptance of the descriptor. M2-equivalent (ping host<->LAN port) is not reachable from the code yet |
 | **P6 - upstream series** | split patches (PIE engine, GEMAC netdev, LSW minimal), bindings, config, DTS; document hardware-unverified behaviour honestly | review/checkpatch; bench evidence recorded separately |
 
 Patch numbering: the landed platform series is `001`-`012`; take the next free number in the

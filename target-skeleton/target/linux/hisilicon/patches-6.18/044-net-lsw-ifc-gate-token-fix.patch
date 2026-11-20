@@ -1,0 +1,254 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -19,12 +19,12 @@
+  *     clocked and out of reset (the stock vendor boot) it also re-reads the
+  *     measured register baseline and both qid maps and validates them against
+  *     the derived model.  It never writes anything in this path.
+- *   - "luofu_lsw.arm=1": the attended W3 step.  Enable the two CRG gate
++ *   - "luofu_switch.arm=1": the attended W3 step.  Enable the two CRG gate
+  *     clocks, release the four CRG reset lines, verify the powered state and
+  *     snapshot the measured baseline words and both qid maps read-only.  No
+  *     LSW register is written.  Probe still refuses with -EOPNOTSUPP because
+  *     no egress map is programmed.
+- *   - "luofu_lsw.arm=1 luofu_lsw.egress=1": the attended W4 step.  After the
++ *   - "luofu_switch.arm=1 luofu_switch.egress=1": the attended W4 step.  After the
+  *     W3 sequence, run the pre-write conformance gate (EQM indirect interface
+  *     idle, target words stable, fam+0x504 equal to the computed cell count
+  *     the R3 formulas are derived against), then program the R1/R3/R5
+@@ -33,23 +33,23 @@
+  *     computed from the pre-write snapshot; on any mismatch all found values
+  *     are restored and the probe fails closed.  No qid map is programmed yet,
+  *     so probe still refuses.
+- *   - "luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1": the attended
++ *   - "luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1": the attended
+  *     W5 step.  Program the R1/R3/R5 configuration, then the D1b W2 write
+  *     set: the table-A rows for ports 4..12 and the table-B rows for ports
+  *     40..43 (all 13 populated rows x 8 slots, value 0x100 | qid of the
+  *     contiguous qid 1..104 model).  Every programmed word is then read back;
+  *     on the first mismatch the pre-write values are restored and the probe
+  *     fails closed.
+- *   - "... luofu_lsw.eps=1": the attended W6 step.  Program the measured EPS
++ *   - "... luofu_switch.eps=1": the attended W6 step.  Program the measured EPS
+  *     channel-map and companion words (the PIE/GRO/WoC channel to EPS queue
+  *     port map) with the same readback/restore discipline.
+- *   - "... luofu_lsw.pfe=1": the attended W8 step.  Program the PFE
++ *   - "... luofu_switch.pfe=1": the attended W8 step.  Program the PFE
+  *     forwarding-engine base init (pe/pfe_glb/opp direct words, recovered from
+  *     the vendor hi_lsw_pfe probe/init) that the round-3 hardware run showed is
+  *     missing before the switch can forward a frame; readback-verified with
+  *     restore-on-mismatch.  (The IFC default-classification table writes are
+  *     decoded but deliberately not in this stage yet - see the W8 block.)
+- *   - "... luofu_lsw.qminit=1": the attended W7 step.  Program the recovered
++ *   - "... luofu_switch.qminit=1": the attended W7 step.  Program the recovered
+  *     EQM queue-manager init tables (19, 32, 35, 17, 16, 34) for the nine
+  *     wired queue groups (ports 4..12, qids 1..72): the per-queue-port deque
+  *     record, the per-qid deque map (qid -> queue port + slot + valid) and the
+@@ -150,11 +150,11 @@
+  *   (luofu-switch.h).
+  *
+  * The hardware steps are listed in LSW-SPEC.md section 12.3: W3 (clock/reset
+- * only; implemented behind luofu_lsw.arm=1), W4 (the R1/R3/R5 probe
+- * configuration; implemented behind luofu_lsw.egress=1), W5 (the qid-map write
+- * for the populated rows; implemented behind luofu_lsw.qidmap=1), W6 (the EPS
+- * channel map; implemented behind luofu_lsw.eps=1) and W7 (the EQM
+- * queue-manager init tables; implemented behind luofu_lsw.qminit=1).  None of
++ * only; implemented behind luofu_switch.arm=1), W4 (the R1/R3/R5 probe
++ * configuration; implemented behind luofu_switch.egress=1), W5 (the qid-map write
++ * for the populated rows; implemented behind luofu_switch.qidmap=1), W6 (the EPS
++ * channel map; implemented behind luofu_switch.eps=1) and W7 (the EQM
++ * queue-manager init tables; implemented behind luofu_switch.qminit=1).  None of
+  * them has been executed on hardware; the first execution is an attended bench
+  * event.  The per-frame egress selection on the LSW side is not
+  * software-visible: a TX frame is described only by the PIE 32-byte descriptor
+@@ -1170,7 +1170,7 @@
+ /*
+  * The gated W3 power sequence: enable the two CRG gate clocks, then release the
+  * four CRG reset lines (the recovered vendor order).  This is the first write
+- * the driver ever makes; it is only reachable with luofu_lsw.arm=1 and has
++ * the driver ever makes; it is only reachable with luofu_switch.arm=1 and has
+  * never run on hardware.  The resulting state is re-checked read-only through
+  * the CRG syscon and the reset API in luofu_switch_check_block_ready() before
+  * any switch register is touched.
+@@ -1737,7 +1737,7 @@
+ 		return ret;
+ 
+ 	return dev_err_probe(lsw->dev, -EOPNOTSUPP,
+-			     "read-only baseline validated; the W3/W4/W5 write set has never been executed on this block (set luofu_lsw.arm=1 for the attended power step, add luofu_lsw.egress=1 for the probe configuration and luofu_lsw.qidmap=1 for the qid-map write step)\n");
++			     "read-only baseline validated; the W3/W4/W5 write set has never been executed on this block (set luofu_switch.arm=1 for the attended power step, add luofu_switch.egress=1 for the probe configuration and luofu_switch.qidmap=1 for the qid-map write step)\n");
+ }
+ 
+ /*
+@@ -2967,7 +2967,7 @@
+ 	     luofu_switch_pfe_gate || luofu_switch_ifc_gate) &&
+ 	    !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+-				    "luofu_lsw.egress/qidmap/eps/qminit/pfe gates require luofu_lsw.arm=1 (the attended W3 power step)\n");
++				    "luofu_switch.egress/qidmap/eps/qminit/pfe gates require luofu_switch.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+ 	}
+ 
+@@ -2984,10 +2984,10 @@
+ 	/*
+ 	 * Attended W3/W4/W5 path.  Everything below this line writes the CRG
+ 	 * or the switch; it has never run on hardware and only runs with the
+-	 * explicit luofu_lsw.arm=1 opt-in.
++	 * explicit luofu_switch.arm=1 opt-in.
+ 	 */
+ 	dev_warn(dev,
+-		 "luofu_lsw.arm=1: ATTENDED WRITE PATH, never executed on hardware - powering the switch block (W3)\n");
++		 "luofu_switch.arm=1: ATTENDED WRITE PATH, never executed on hardware - powering the switch block (W3)\n");
+ 
+ 	ret = luofu_switch_power_up(lsw);
+ 	if (ret)
+@@ -3002,10 +3002,10 @@
+ 
+ 	if (!luofu_switch_egress_gate) {
+ 		dev_warn(dev,
+-			 "luofu_lsw.egress is not set: the R1/R3/R5 probe configuration is not written (set luofu_lsw.egress=1 for the attended W4 step)\n");
++			 "luofu_switch.egress is not set: the R1/R3/R5 probe configuration is not written (set luofu_switch.egress=1 for the attended W4 step)\n");
+ 	} else {
+ 		dev_warn(dev,
+-			 "luofu_lsw.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write conformance and readback verification\n");
++			 "luofu_switch.egress=1: programming the R1/R3/R5 probe configuration (W4) with pre-write conformance and readback verification\n");
+ 		ret = luofu_switch_egress_program(lsw);
+ 		if (ret)
+ 			goto out;
+@@ -3013,13 +3013,13 @@
+ 
+ 	if (!luofu_switch_qidmap_gate) {
+ 		dev_warn(dev,
+-			 "the write stage(s) run so far are done and verified; luofu_lsw.qidmap is not set, so the data path stays refused and the found block state is restored\n");
++			 "the write stage(s) run so far are done and verified; luofu_switch.qidmap is not set, so the data path stays refused and the found block state is restored\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	dev_warn(dev,
+-		 "luofu_lsw.qidmap=1: programming the D1b W2 qid-map write set (W5) with readback verification\n");
++		 "luofu_switch.qidmap=1: programming the D1b W2 qid-map write set (W5) with readback verification\n");
+ 
+ 	ret = luofu_switch_qid_maps_program(lsw);
+ 	if (ret)
+@@ -3043,13 +3043,13 @@
+ 
+ 	if (!luofu_switch_qminit_gate) {
+ 		dev_warn(dev,
+-			 "the EQM queue-manager init tables are not programmed (set luofu_lsw.qminit=1): without them the queue manager has no queue/deque configuration and TX frames cannot reach an egress port; refusing to arm the data path\n");
++			 "the EQM queue-manager init tables are not programmed (set luofu_switch.qminit=1): without them the queue manager has no queue/deque configuration and TX frames cannot reach an egress port; refusing to arm the data path\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	dev_warn(dev,
+-		 "luofu_lsw.qminit=1: programming the recovered EQM queue-manager init tables (W7) with pre-write snapshot, readback verification and restore-on-mismatch\n");
++		 "luofu_switch.qminit=1: programming the recovered EQM queue-manager init tables (W7) with pre-write snapshot, readback verification and restore-on-mismatch\n");
+ 	ret = luofu_switch_qm_program(lsw);
+ 	if (ret)
+ 		goto out;
+@@ -3057,20 +3057,20 @@
+ 
+ 	if (!lsw->egress_ready) {
+ 		dev_warn(dev,
+-			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_lsw.egress=1); refusing to arm the data path\n");
++			 "qid map programmed and verified, but the R1/R3/R5 probe configuration is missing (set luofu_switch.egress=1); refusing to arm the data path\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	if (!luofu_switch_pfe_gate) {
+ 		dev_warn(dev,
+-			 "the PFE forwarding-engine base init is not programmed (set luofu_lsw.pfe=1): the vendor stack runs the PFE probe after the DP init before traffic can be forwarded, and the round-3 hardware run showed the data path stays dead without it; refusing to arm the data path\n");
++			 "the PFE forwarding-engine base init is not programmed (set luofu_switch.pfe=1): the vendor stack runs the PFE probe after the DP init before traffic can be forwarded, and the round-3 hardware run showed the data path stays dead without it; refusing to arm the data path\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	dev_warn(dev,
+-		 "luofu_lsw.pfe=1: programming the recovered PFE forwarding-engine base init (W8)\n");
++		 "luofu_switch.pfe=1: programming the recovered PFE forwarding-engine base init (W8)\n");
+ 	ret = luofu_switch_pfe_program(lsw);
+ 	if (ret)
+ 		goto out;
+@@ -3078,13 +3078,13 @@
+ 
+ 	if (!luofu_switch_ifc_gate) {
+ 		dev_warn(dev,
+-			 "the IFC default-classification table is not programmed (set luofu_lsw.ifc=1): the vendor programs the classifier defaults after the PFE base init and no frame can be classified without them; refusing to arm the data path\n");
++			 "the IFC default-classification table is not programmed (set luofu_switch.ifc=1): the vendor programs the classifier defaults after the PFE base init and no frame can be classified without them; refusing to arm the data path\n");
+ 		ret = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+ 
+ 	dev_warn(dev,
+-		 "luofu_lsw.ifc=1: programming the recovered IFC default-classification table (W10)\n");
++		 "luofu_switch.ifc=1: programming the recovered IFC default-classification table (W10)\n");
+ 	ret = luofu_switch_ifc_program(lsw);
+ 	if (ret)
+ 		goto out;
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -28,7 +28,7 @@
+  * The qid-map write recipes recovered from the vendor code are documented here
+  * (offsets, slot arithmetic, the 0x100 enable flag) because they are the D1b
+  * W2 write set.  The driver implements exactly this write set - nothing else -
+- * behind the explicit attended luofu_lsw.arm=1 / luofu_lsw.qidmap=1 gates:
++ * behind the explicit attended luofu_switch.arm=1 / luofu_switch.qidmap=1 gates:
+  * tables A and B are programmed for the populated rows only and every
+  * programmed word is read back (LSW-SPEC.md section 12.3, W3-W5).  The write
+  * set has never been executed on hardware.  The EQM indirect command word,
+@@ -247,7 +247,7 @@
+ #define LUOFU_SWITCH_QID_LAST		104
+ 
+ /*
+- * R1/R3/R5 probe-config write set ("luofu_lsw.egress=1" stage, W4).
++ * R1/R3/R5 probe-config write set ("luofu_switch.egress=1" stage, W4).
+  *
+  * Recovered from hi_lsw_dp!hi_dp_probe@0xa0c..0xd1c and
+  * hi_lsw_dp!hi_queue_init@0x507c, which run after the clock/reset pulse and
+@@ -303,7 +303,7 @@
+ #define LUOFU_SWITCH_EPS_QUEUE_INIT	42	/* [V] ips+0x08 = 0x2a */
+ 
+ /*
+- * W7: the EQM queue-manager init write set ("luofu_lsw.qminit=1" stage).
++ * W7: the EQM queue-manager init write set ("luofu_switch.qminit=1" stage).
+  *
+  * Recovered 2026-11-19, host-only, from the pinned vendor hi_lsw_dp.ko fixture
+  * (67,164 B, sha256 f0010305caf15c6da71981b7c4b51c7f9c0ce55c1911b0ca031a44892fdcd535):
+@@ -472,7 +472,7 @@
+ #define LUOFU_SWITCH_EQM_QSCH_DIV_MIN		2	/* [V] read_mostly+4 */
+ 
+ /*
+- * W8: PFE (packet forwarding engine) base init ("luofu_lsw.pfe=1" stage).
++ * W8: PFE (packet forwarding engine) base init ("luofu_switch.pfe=1" stage).
+  *
+  * Round-3 hardware evidence (image 75868fe0) showed that arming W3-W7 makes the
+  * driver believable to software - GEMAC netdevs register, eth2 links at 1 Gbps,
+@@ -535,7 +535,7 @@
+  * [U].  The one runtime-dependent field is tab128 word0 of entries 3..7, which
+  * the vendor builds from the id returned by hi_tab_mgr_alloc_hash: on a fresh
+  * manager the first allocation is expected to be 0, so the default is
+- * 0x1d00; luofu_lsw.ifc_id overrides the low six bits for the attended run.
++ * 0x1d00; luofu_switch.ifc_id overrides the low six bits for the attended run.
+  */
+ #define LUOFU_SWITCH_IFC_CMD		0x0120
+ #define LUOFU_SWITCH_IFC_DATA0		0x0138
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -45,7 +45,7 @@
+  *     completion and delivers each frame to this net_device (patch 024).  The
+  *     port comes from the vendor devicetree "port" value, "hisilicon,port";
+  *   - no switch egress mapping of its own: the internal switch driver owns
+- *     the qid map (patch 022, behind the attended luofu_lsw gates) and this
++ *     the qid map (patch 022, behind the attended luofu_switch gates) and this
+  *     driver only checks that it is ready.  The PIE TX descriptor is tagged
+  *     with the port (patch 024), but the switch-side queue handle the vendor
+  *     derives from its per-port context is still [U] (PIE-DATAPATH section 7),
+@@ -594,7 +594,7 @@
+ 
+ 	if (!luofu_switch_ready())
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1, and every stage must verify)\n");
++				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_switch.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1, and every stage must verify)\n");
+ 
+ 	/*
+ 	 * Address source: the standard devicetree mac-address/local-mac-address
