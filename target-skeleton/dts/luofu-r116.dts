@@ -134,11 +134,9 @@
 		/* physical console is uart1@1010f000 = ttyS0 (vendor-dt-notes.md 2) */
 		serial0 = &uart1;
 		serial1 = &uart0;
-		/*
-		 * TODO: the vendor tree also has aliases { console = <&uart1>; }.
-		 * That property is not a standard alias; keep it out until the
-		 * binding question is settled.
-		 */
+		/* vendor base DTB provides this alias; the stock U-Boot fixup warns
+		 * and stops its hand-off staging when it is missing (measured). */
+		console = &uart1;
 	};
 
 	chosen {
@@ -199,15 +197,25 @@
 	};
 
 	/*
-	 * TODO(reserved-memory): the vendor base DTB reserves a 16 KiB
-	 * "flashinfo" window at 0x80600000 (the node name in the vendor tree
-	 * says 0x80800000 - a stale name; the address is 0x80600000;
-	 * phase42-decode/report.md section 2 and vendor-dt-notes.md 3).
-	 * Whether the upstream kernel needs this reservation, and why the
-	 * vendor U-Boot stages a bootram there, is [U]. Do not add a
-	 * reserved-memory node until it is measured; an unneeded reserved
-	 * region is a review finding, a missing one can corrupt firmware data.
+	 * Vendor loader hand-off window [V]: the stock base DTB reserves the
+	 * 16 KiB "flashinfo" window at 0x80600000 (the vendor node name says
+	 * 0x80800000 - a stale unit address; reg is 0x80600000) with the ATAG
+	 * staged at atag-offset 0x1000 (stock U-Boot prints
+	 * "atag_addr=0x80601000"). The stock U-Boot fixup also needs the
+	 * aliases/console property above; both are part of the pre-kernel
+	 * hand-off contract measured on the bench (vendor read 2026-11-20).
 	 */
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		flashinfo@80600000 {
+			compatible = "hsan,flashinfo_reserved";
+			reg = <0x80600000 0x4000>;
+			atag-offset = <0x1000>;
+		};
+	};
 
 	/* ---- fixed input clocks (free bindings) ------------------------- */
 
