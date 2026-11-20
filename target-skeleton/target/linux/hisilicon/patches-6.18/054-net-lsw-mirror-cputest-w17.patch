@@ -1,0 +1,162 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -473,6 +473,8 @@
+ 	bool pfe_ready;
+ 	bool ifc_ready;
+ 	bool ext_ready;
++	u32 mirror_snap[4];
++	bool mirror_valid;
+ };
+ 
+ /*
+@@ -3250,6 +3252,132 @@
+ 		 "W15_PAGE_DUMP: done; compare these contents with a stock devmem dump of the same pages\n");
+ }
+ 
++/*
++ * W17: the port-mirror / copy-to-CPU experiment (patch 054).
++ *
++ * With W16 the RX path works: the host's broadcast ARP request reaches the CPU
++ * as a switch exception, the kernel replies, and the reply leaves on the wire.
++ * Normal unicast to the box MAC is not punted to the CPU because the vendor's
++ * CFE L2/VLAN/CPU-port forwarding state is absent (those modules cannot load
++ * on 6.18).  The vendor's own mechanism for "get a copy to the CPU" is the PFE
++ * port mirror, exported as hi_port_set_mirror() and driven by
++ * hi_kport_mirror.ko.  Decoded writes for one mirror configuration:
++ *
++ *   hw[+0]  source-port list (count at +16) -> OPP+0xd8 bits 15:0 mask
++ *   hw[+20] second list (count at +36)      -> OPP+0xd8 bits 31:16 mask
++ *   hw[+40] destination port (<=31)         -> OPP+0xdc bits 31:16 =
++ *                                              (old & ~0x7f0) |
++ *                                              ((dst & 0xf) << 4) | 0x600
++ *   OPP+0xc0 |= BIT(6)                      enable
++ *   OPP+0xb4: write BIT(0), then clear it   latch pulse
++ *
++ * This stage programs the ingress mirror of port 11 (eth2) to a configurable
++ * destination, and can sweep candidate destinations (4,5,6,7,8,40..43) at ~2 s
++ * intervals so one attended boot identifies which port the PIE/CPU side
++ * receives mirrored copies on.  Mirror semantics are [I] (decoded shape, field
++ * meaning partly [U]), so the stage is attended, snapshots every register,
++ * read-back verifies what it is sure about, restores on mismatch and is off by
++ * default.
++ */
++static bool luofu_switch_mirror_gate;
++module_param_named(mirror, luofu_switch_mirror_gate, bool, 0444);
++MODULE_PARM_DESC(mirror, "Attended W17 experiment: mirror eth2/port 11 ingress to a destination port (default off)");
++
++static uint luofu_switch_mirror_dst = 4;
++module_param_named(mirror_dst, luofu_switch_mirror_dst, uint, 0444);
++MODULE_PARM_DESC(mirror_dst, "W17 mirror destination switch port (default 4; 40..43 is the virtual-port class)");
++
++static bool luofu_switch_mirror_sweep_gate;
++module_param_named(mirror_sweep, luofu_switch_mirror_sweep_gate, bool, 0444);
++MODULE_PARM_DESC(mirror_sweep, "W17 experiment: try mirror destinations 4,5,6,7,8,40,41,42,43 at ~2 s intervals during the host traffic test (default off)");
++
++static int luofu_switch_mirror_program(struct luofu_switch *lsw, u32 dst)
++{
++	void __iomem *opp = lsw->window[LUOFU_SWITCH_WIN_OPP];
++	u32 want_d8, want_dc, want_c0;
++
++	if (!opp || dst > 31)
++		return -EINVAL;
++
++	if (!lsw->mirror_valid) {
++		lsw->mirror_snap[0] = readl(opp + 0xb4);
++		lsw->mirror_snap[1] = readl(opp + 0xc0);
++		lsw->mirror_snap[2] = readl(opp + 0xd8);
++		lsw->mirror_snap[3] = readl(opp + 0xdc);
++		if (readl(opp + 0xb4) != lsw->mirror_snap[0] || readl(opp + 0xc0) != lsw->mirror_snap[1] ||
++		    readl(opp + 0xd8) != lsw->mirror_snap[2] || readl(opp + 0xdc) != lsw->mirror_snap[3])
++			return -EIO;
++		lsw->mirror_valid = true;
++	}
++
++	want_d8 = (lsw->mirror_snap[2] & ~0xffff) | BIT(11);
++	want_dc = (lsw->mirror_snap[3] & ~(0xffffu << 16)) |
++		  ((((dst & 0xf) << 4) | 0x600) << 16);
++	want_c0 = lsw->mirror_snap[1] | BIT(6);
++
++	writel(want_d8, opp + 0xd8);
++	writel(want_dc, opp + 0xdc);
++	writel(want_c0, opp + 0xc0);
++	writel(lsw->mirror_snap[0] | BIT(0), opp + 0xb4);
++	writel(lsw->mirror_snap[0] & ~BIT(0), opp + 0xb4);
++
++	if ((readl(opp + 0xd8) & 0xffff) != BIT(11) ||
++	    ((readl(opp + 0xdc) >> 16) & 0x7f0) !=
++	    ((((dst & 0xf) << 4) | 0x600) & 0x7f0) ||
++	    (readl(opp + 0xc0) & BIT(6)) != BIT(6)) {
++		writel(lsw->mirror_snap[2], opp + 0xd8);
++		writel(lsw->mirror_snap[3], opp + 0xdc);
++		writel(lsw->mirror_snap[1], opp + 0xc0);
++		writel(lsw->mirror_snap[0], opp + 0xb4);
++		dev_err(lsw->dev,
++			"W17_MIRROR: readback mismatch for dst %u; snapshot restored, mirror not active\n",
++			dst);
++		return -EIO;
++	}
++
++	dev_warn(lsw->dev,
++		 "W17_MIRROR: eth2/port 11 ingress mirror programmed to dst port %u (OPP 0xd8=%#x 0xdc=%#x 0xc0=%#x, latch pulsed); semantics [I]/[U]\n",
++		 dst, want_d8, want_dc, want_c0);
++	return 0;
++}
++
++static void luofu_switch_mirror_restore(struct luofu_switch *lsw)
++{
++	void __iomem *opp = lsw->window[LUOFU_SWITCH_WIN_OPP];
++
++	if (!opp || !lsw->mirror_valid)
++		return;
++	writel(lsw->mirror_snap[2], opp + 0xd8);
++	writel(lsw->mirror_snap[3], opp + 0xdc);
++	writel(lsw->mirror_snap[1], opp + 0xc0);
++	writel(lsw->mirror_snap[0], opp + 0xb4);
++	lsw->mirror_valid = false;
++	dev_warn(lsw->dev, "W17_MIRROR: snapshot restored, mirror off\n");
++}
++
++/* Run the attended mirror experiment (single destination or candidate sweep). */
++static void luofu_switch_mirror_run(struct luofu_switch *lsw)
++{
++	static const u32 sweep[] = { 4, 5, 6, 7, 8, 40, 41, 42, 43 };
++	unsigned int i;
++
++	if (!luofu_switch_mirror_sweep_gate) {
++		if (luofu_switch_mirror_program(lsw, luofu_switch_mirror_dst))
++			return;
++		return;
++	}
++
++	dev_warn(lsw->dev,
++		 "W17_MIRROR: sweep mode - trying candidate destinations 4,5,6,7,8,40..43 at 2 s intervals; run the host ping now and watch for PIE RX completions\n");
++	for (i = 0; i < ARRAY_SIZE(sweep); i++) {
++		if (luofu_switch_mirror_program(lsw, sweep[i]))
++			continue;
++		mdelay(2000);
++	}
++	dev_warn(lsw->dev,
++		 "W17_MIRROR: sweep complete (last destination left programmed until remove/driver restore)\n");
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3496,6 +3624,9 @@
+ 	if (luofu_switch_pagedump_gate)
+ 		luofu_switch_pagedump(lsw);
+ 
++	if (luofu_switch_mirror_gate)
++		luofu_switch_mirror_run(lsw);
++
+ out:
+ 	if (ret && lsw->ext_ready) {
+ 		luofu_switch_ext_restore(lsw);
+@@ -3539,6 +3670,7 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	luofu_switch_mirror_restore(lsw);
+ 	if (lsw->ext_ready)
+ 		luofu_switch_ext_restore(lsw);
+ 	if (lsw->ifc_ready)

@@ -1,74 +1,65 @@
-# incoming/qm-decode - round 4n: vendor-exact RX decode + accepterr (patch 053)
+# incoming/qm-decode - round 4o: mirror / copy-to-CPU experiment (patch 054)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 19).  Prior: `032`...`051`.
-This package delivers **patch 053**: the vendor-exact PIE RX completion decode (all three paths) and
-the opt-in accepterr experiment, after W16 opened the RX path on silicon.  No device access.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 20).  Prior: `032`...`053`.
+This package delivers **patch 054**: the W17 port-mirror / copy-to-CPU experiment for the last known
+layer after the first real traffic.  No device access.
 
-Apply `shared.patch` from the `opensource` root, then move this SUMMARY to
-`target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
+## 1. First real traffic (image e924f8a6)
 
-## 1. Breakthrough: RX works after W16
+With accepterr, the host's ARP request completed with `RXERR ACCEPTED status=37 port=11`, was
+delivered to eth2, the kernel replied, and **the host sniff saw the box's ARP reply on the wire**
+(src d4:0d:ab:64:1c:73) - the full wire->PIE RX->CPU->kernel->PIE TX->wire loop works for punted
+frames.  But the host's subsequent ICMP unicast to the box MAC produces **zero** RX completions:
+normal unicast is not punted/forwarded to the CPU, because the vendor's CFE L2/VLAN/CPU-port
+forwarding state is absent (those modules cannot load on 6.18).  That is the last known layer.
 
-Image 437a0766 (001-052, full W3-W16 + luofu_pie.rxtrace=1): W16 verified (gmac+0x1c=1,
-gmac+0x100=0x33400600), then PIE RX ch0 completed 60-byte frames every ~1 s:
-`pie-trace RXpoll ch=0 hw_rptr=1..6 sw_rptr=0..6 delta=1` and `RXCOMP ... len=60 status=37 port=0
-desc=6000003c 824600c2 0100b125 00000380 00000000`.  Our decoder dropped all of them (status!=0,
-port 0).
+## 2. Experiment: recovered port mirror
 
-## 2. Decode: these are the host's ingress frames as switch exceptions
+Decoded `hi_port_set_mirror@0xc10` (hi_lsw_pfe) - the vendor's own mechanism to get a copy of
+traffic to a port:
 
-Vendor `hi_pie_rx_get_desc@0xf14` exact semantics:
-- status = byte[+8] & 0x7f; **nonzero = the exception/error path**, which clears the no-error
-  summary bit and is dropped by `hi_net_rx_proc` in the vendor stack;
-- on the error path **port = byte[+9] bits 7:4**, vport = byte[+24] bits 4:0;
-- normal path (status 0): port = byte[+16] (vport byte[+17]); when +16 is zero:
-  port = byte[+23] bits 7:4, vport = byte[+24] bits 4:0;
-- tag class = byte[+10] bits 5:4, second flag class = byte[+13] bits 6:5 - neither decides error.
+| write | value |
+| --- | --- |
+| OPP+0xd8 bits15:0 | ingress source-port mask (we use BIT(11) = eth2) |
+| OPP+0xd8 bits31:16 | second source list (left as-is) |
+| OPP+0xdc bits31:16 | destination field = (old & ~0x7f0) | ((dst & 0xf) << 4) | 0x600 |
+| OPP+0xc0 | |= BIT(6) (enable) |
+| OPP+0xb4 | write BIT(0), then clear it (latch pulse) |
 
-For the observed completions: status 0x25 = 37 (exception code [U]), **error-path port = 0xb = 11 =
-eth2**, vport 0.  So the 60-byte 1/s frames are the host's ping ARP requests arriving at eth2 and
-punted to the CPU as exceptions because the switch has no CFE L2/VLAN forwarding state for them -
-they are not switch management frames and not CPU port 0.
+## 3. Patch 054 (W17) = `luofu_switch.mirror=1@BT@ (+ `mirror_dst@BT@ / `mirror_sweep@BT@)
 
-## 3. Patch 053 = vendor-exact decode + experiment
+- Programs the eth2/port-11 ingress mirror to `luofu_switch.mirror_dst@BT@ (default 4), or sweeps
+  `4,5,6,7,8,40,41,42,43@BT@ at ~2 s intervals with `luofu_switch.mirror_sweep=1@BT@ so one attended boot
+  identifies the port the PIE/CPU side receives mirrored copies on.
+- Snapshots OPP 0xb4/0xc0/0xd8/0xdc (two stable reads), programs, read-back verifies the mask/dest/
+  enable fields, restores the full snapshot on mismatch; off by default; restore also on remove.
+- Mirror semantics are [I] (decoded shape, field meaning partly [U]) - attended experiment only.
 
-- `luofu_pie.rxdiag=1@BT@: full 32-byte descriptor plus decoded fields for the first 24 completions.
-- `luofu_pie.accepterr=1@BT@: **experiment** - deliver exception completions to the net_device
-  registered for the decoded error-path port (11 = eth2) instead of dropping them (the vendor stack
-  drops them).  This tests whether the wire->CPU->wire loop can complete without the missing CFE
-  tables: if the kernel answers the ARP, the remaining gap is that L2/VLAN state; if not, the TX
-  direction is next.
-- Default behaviour stays vendor-faithful (exception frames dropped, counted in rx_errors).
+## 4. How to run the experiment
 
-## 4. Expected bench lines
-
+Boot the full W3-W16 chain plus:
 ```
-pie-trace RXDIAG ch=0 idx=0 len=60 status=37 err=1 port=11 vport=0 vlan=0 desc=...
-pie-trace RXERR ACCEPTED (accepterr=1, vendor would drop) status=37 port=11 vport=0 len=60 ch=0
+luofu_pie.accepterr=1 luofu_pie.rxdiag=1
+luofu_switch.mirror=1 luofu_switch.mirror_sweep=1
 ```
+then run the host ping during the ~18 s sweep.  Expected: `W17_MIRROR: eth2/port 11 ingress mirror ->
+dst N ...@BT@ every 2 s, and - if destination N is the CPU/PIE port - PIE RX completions for the host's
+ICMP unicast (RXDIAG lines) that stop appearing after the sweep moves on.  The successful N is the
+CPU port number; a follow-up can then program the static L2/VLAN/CPU-port forwarding state (or keep
+the mirror as the data-path workaround).  If no candidate produces completions, mirroring is not the
+punt path and the next target is the IFC/L2-to-CPU action (the FDB/rootif state).
 
-## 5. Recommended next tests (same image)
-
-1. `luofu_pie.accepterr=1 luofu_pie.rxdiag=1@BT@ + full chain: run the host ARP/ping.  Expect RXERR
-   ACCEPTED lines with port=11; check whether the host receives an ARP reply.
-2. Targeted ingress while watching RXDIAG: unicast frame to the box MAC, broadcast ARP, and a
-   VLAN-tagged frame - if any completes with a different error path port or normal status, that
-   tells us which classification state is missing.
-3. If ARP replies are generated but never leave, the TX direction is the next decode (W16 may already
-   have fixed it; the host sniff will tell).
-
-## 6. Deliverables
+## 5. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/053-net-pie-rxdecode-vendor-exact.patch` | vendor-exact RX decode + rxdiag + accepterr | `56d4ae6c2e97e93ab3076c9849c69c4da2456a657e36d86008706f3edbf881c6` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | all pending docs (W10..W17) | `d5d8d2e82e346d503499130ba4b4f9a284a6ffc78bfa2e385ec50246df6258b3` |
+| `target-skeleton/target/linux/hisilicon/patches-6.18/054-net-lsw-mirror-cputest-w17.patch` | W17 recovered port-mirror experiment | `e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | docs (pending stack) | see handover |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
 | `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
-## 7. Validation
+## 6. Validation
 
-- Series apply: all patches apply, 0 failed hunks, 0 .rej/.orig (`logs/10-series-apply-053.log`); the
-  final whitespace-only revision of the patch was recompiled and checkpatched.
-- WERROR compile clean; checkpatch 0 errors (`logs/11-checkpatch-053.log`).
+- All patches apply (series ~55/55, 0 rejects) and the driver compiles clean under WERROR; checkpatch
+  0 errors (2 cosmetic line-length warnings in the new MODULE_PARM_DESC strings, no checks).
 - No devicetree/binding/Kconfig change.
