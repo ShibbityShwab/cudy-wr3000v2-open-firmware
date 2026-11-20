@@ -1,50 +1,61 @@
-# incoming/qm-decode - round 4p: mirror sweep fix, static CPU-copy, RX-stroke (patch 055)
+# incoming/qm-decode - round 4q: post-link CPU-copy re-apply + dwell sweep (patch 056)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 21).  Prior: `032`...`054`.
-This package delivers **patch 055**: the corrected mirror sweep (all encodable destinations), the
-stable static CPU-copy gate (W18), and the RX-stroke instrumentation needed to explain why the
-mirror run got ICMP replies with zero RXDIAG/RXERR lines.  No device access.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 22).  Prior: `032`...`055`.
+This package delivers **patch 056/W19**: re-apply the CPU-copy mirror after every MAC link-up,
+re-latch it every 2 s, and add a dwelling destination sweep for one-shot identification.
+No device access.
 
-## 1. W17 mirror run (image e9de3f80)
+## 1. Static W18 result: the write timing is the bug
 
-- Sweep programmed dst 4 (3.2s), 5, 6, 7, 8 (11.3s) then completed at 13.3s; **40..43 were never
-  tried** - not only by the candidate list but because the decoded mirror destination field is only
-  4 bits ((dst & 0xf) << 4), so ports 40..43 cannot be encoded at all.  Patch 055 makes that
-  explicit and sweeps every encodable destination instead.
-- Host ping: 4/18 replies (seq4 1024 ms = ARP resolution, seq5-7 ~0.15 ms); the sniff shows the box
-  ARP and ICMP echo replies.  The mirror configuration active at reply time was dst 8 (left
-  programmed after the sweep), and eth2 only linked at 17.8s.
-- **Zero RXDIAG/RXERR console lines** in that run, although frames reached the kernel and replies
-  were produced - so the RX path that delivered them did not go through the logged PIE poll path
-  (or the interrupt was not taken / the completion logged elsewhere).  That is the open question
-  the RX-stroke stage targets.
+Image 851b3721 (static cpu_mirror dst=8, programmed at 3.245 s) gave 100% loss (50/50), while the
+earlier W17 sweep (writes at 5.2/7.2/9.3/11.3 s, around eth2 link-up at 7.7 s / 35.0 s) produced a
+burst of 4 ICMP replies.  RXSTROKE showed only the single accepted ARP exception completion
+(ch0 hw_rptr=1 = sw_rptr=1), mask/status 0, fsm=0x2001, ch1 idle.  Conclusion: the OPP mirror /
+CPU-copy registers are reset or ignored when the switch port comes up, so a boot-time write is lost;
+writes that land around link-up survive.
 
-## 2. Patch 055 = `luofu_switch.cpu_mirror=1@BT@ (W18) + `luofu_pie.rxstroke=1@BT@ + sweep fix
+## 2. Patch 056 (W19)
 
-- **Sweep fix**: candidates are now 0..15; destinations >15 are rejected with an explicit log line
-  explaining the 4-bit encoding (ports 40..43 are not valid mirror destinations).
-- **W18 static CPU-copy**: luofu_switch.cpu_mirror=1 keeps the eth2/port 11 ingress mirror to
-  luofu_switch.mirror_dst (default 8) for the whole run, with the same snapshot/readback/restore
-  discipline as W17.  This is the configuration to test for sustained traffic.
-- **W18_RXSTROKE** (luofu_pie.rxstroke=1): every 2 s for 60 s logs per RX channel the hardware read
-  pointer, software read pointer, IRQ mask/status and RX enable; also logs every RX interrupt entry
-  (first 64).  This tells whether completions happen without the interrupt, on another channel, or
-  whether the mirror path bypasses the PIE rings entirely.
+- **Post-link re-apply**: the GEMAC link-up path now calls
+  `luofu_switch_cpu_mirror_link_up()@BT@ (new export in luofu-switch.h), which re-snapshots the OPP
+  registers and schedules the mirror write 200 ms after carrier-up (logged as
+  `W19_CPU_MIRROR: MAC link-up seen -> scheduling CPU-copy reapply in 200 ms@BT@).
+- **Periodic re-latch**: in static mode the configuration is re-applied every 2 s (logged with pre
+  and post register values, so the reset hypothesis is visible in the console).
+- **Dwell sweep**: `luofu_switch.mirror_dwell=1@BT@ (with `mirror_dwell_ms@BT@, default 20000) programs
+  each encodable destination 0..15 for the dwell time in turn, driven by a workqueue that survives
+  link-up; one attended boot with the host pinging identifies the destination that sustains traffic.
+  Destinations >15 are rejected with an explicit log (the decoded field is 4 bits, so 40..43 are not
+  encodable mirror destinations).
+- Snapshot/readback/restore discipline kept; work cancelled and snapshot restored on remove.
 
-## 3. Next run matrix (attended)
+## 3. Expected console lines
 
-1. **Stable static**: full W3-W16 chain + `luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=8
-   luofu_pie.rxstroke=1 luofu_pie.rxdiag=1 luofu_pie.accepterr=1@BT@; host ping for ~60 s.  Expected:
-   RXSTROKE lines every 2 s; if hw_rptr advances during ping but no RXDIAG/poll lines appear, the
-   missing link is the IRQ/channel mapping; if hw_rptr does not advance, the frames are not reaching
-   the PIE rings through this mirror mode (look for a separate CPU-port queue).
-2. If dst 8 is wrong: repeat with `mirror_dst=6@BT@ and `=7@BT@ (the reply window coincided with those
-   sweep phases before 8 took over).
-3. If static dst 8 sustains traffic, make it the default data-path workaround and move on to
-   verifying ping/ssh stability; then the native L2/VLAN/rootif forwarding remains the clean fix.
+```
+W19_CPU_MIRROR: mirror machinery started (static mode, dst=8, re-latch every 2 s, post-link reapply enabled)
+W19_CPU_MIRROR: MAC link-up seen -> scheduling CPU-copy reapply in 200 ms (dst=8)
+W19_CPU_MIRROR: static CPU-copy applied dst=8 (pre d8=0x0 dc=0x0 c0=0x0; post 0xd8=0x800 0xdc=0x6800000 0xc0=0x40)
+W19_CPU_MIRROR: static CPU-copy applied dst=8 (pre d8=0x800 dc=0x6800000 c0=0x40; post ...)   [every 2 s]
+...
+W19_CPU_MIRROR: dwell step 7/16 dst=6 pre d8=... dc=... c0=... ret=0; now hold 20000 ms for the host ping
+```
+If the pre values change after link-up, the reset hypothesis is confirmed on the console.
 
-## 4. Deliverables / validation
+## 4. Run matrix
 
-- Patch `055-net-lsw-mirror-stable-rxstroke.patch` (`d4f816ff...@BT@): all patches apply (56/56, 0 rejects),
-  both drivers compile clean under WERROR; checkpatch 0 errors (2 cosmetic blank-line checks).
-- This SUMMARY is the lane record; the docs stack update is included in the next handover.
+1. **Static post-link test**: full W3-W16 + `luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=8
+   luofu_pie.rxdiag=1 luofu_pie.accepterr=1 luofu_pie.rxstroke=1@BT@; ping for 60 s.  Expect re-apply lines
+   right after both link-ups and, if dst 8 is the CPU port, sustained replies with RXDIAG normal-path
+   completions; RXSTROKE then shows whether hw_rptr advances during ping.
+2. **Dwell identification**: same image with `luofu_switch.mirror_dwell=1@BT@ (optionally
+   `luofu_switch.mirror=1@BT@); start the ping and note which step produces replies (each step logged
+   with its destination and 20 s dwell).  The dwell loop is driven by a workqueue and re-applies after
+   link-up, so it no longer races the port-up reset.
+3. Once the destination is known, keep the static `cpu_mirror=1@BT@ configuration for sustained runs.
+
+## 5. Deliverables / validation
+
+- Patch `056-net-lsw-mirror-postlink-w19.patch` (`547ea498...@BT@): all patches apply (57/57, 0 rejects);
+  luofu-switch/luofu-gmac compile clean under WERROR; checkpatch 0 errors (2 cosmetic blank-line
+  checks).
+- This SUMMARY is the lane record; docs stack update is batched for the next handover.

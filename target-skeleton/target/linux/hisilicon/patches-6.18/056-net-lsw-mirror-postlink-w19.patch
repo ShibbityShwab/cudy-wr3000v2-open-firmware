@@ -1,0 +1,236 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -184,6 +184,7 @@
+ #include <linux/sizes.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
++#include <linux/workqueue.h>
+ 
+ #include "luofu-switch-regs.h"
+ #include "luofu-switch.h"
+@@ -475,6 +476,9 @@
+ 	bool ext_ready;
+ 	u32 mirror_snap[4];
+ 	bool mirror_valid;
++	struct delayed_work mirror_work;
++	bool mirror_work_active;
++	unsigned int mirror_dwell_step;
+ };
+ 
+ /*
+@@ -3373,30 +3377,151 @@
+ 	dev_warn(lsw->dev, "W17_MIRROR: snapshot restored, mirror off\n");
+ }
+ 
+-/* Run the attended mirror experiment (single destination or candidate sweep). */
+-static void luofu_switch_mirror_run(struct luofu_switch *lsw)
++
++/*
++ * W19: post-link CPU-copy re-apply and periodic re-latch (patch 056).
++ *
++ * The static W18 run programmed the mirror once at 3.2 s (probe time) and got
++ * 100% loss: the OPP mirror/CPU-copy registers are apparently reset or ignored
++ * when the switch port comes up (eth2 linked at 7.7 s / 35.0 s).  The earlier
++ * W17 sweep wrote mirror destinations at 5.2..11.3 s, i.e. around link-up, and
++ * produced a burst of ICMP replies.  This stage therefore:
++ *
++ *  - re-applies the CPU-copy mirror shortly AFTER each MAC link-up (called from
++ *    the GEMAC link-up path through luofu_switch_cpu_mirror_link_up());
++ *  - re-latches the configuration every 2 s for robustness in the static mode;
++ *  - supports a dwell mode (luofu_switch.mirror_dwell=1) that programs each
++ *    encodable destination 0..15 for luofu_switch.mirror_dwell_ms (default
++ *    20 s) with the host pinging, so one attended boot identifies the
++ *    destination that sustains traffic;
++ *  - snapshots the registers before the first write, verifies every write by
++ *    read-back, restores the snapshot on mismatch and on remove, and logs the
++ *    pre-link vs post-link register values so the reset hypothesis is visible
++ *    in the console.
++ */
++static bool luofu_switch_mirror_dwell_gate;
++module_param_named(mirror_dwell, luofu_switch_mirror_dwell_gate, bool, 0444);
++MODULE_PARM_DESC(mirror_dwell, "Attended W19 experiment: dwell on each encodable mirror destination 0..15 in turn (20 s each) while the host pings (default off)");
++
++static uint luofu_switch_mirror_dwell_ms = 20000;
++module_param_named(mirror_dwell_ms, luofu_switch_mirror_dwell_ms, uint, 0444);
++MODULE_PARM_DESC(mirror_dwell_ms, "W19 dwell time per mirror destination in ms (default 20000)");
++
++static struct luofu_switch *luofu_switch_instance;
++
++static void luofu_switch_mirror_workfn(struct work_struct *work);
++
++static void luofu_switch_mirror_schedule(struct luofu_switch *lsw,
++					 unsigned int ms)
+ {
+-	static const u32 sweep[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+-				     13, 14, 15 };
+-	unsigned int i;
++	schedule_delayed_work(&lsw->mirror_work, msecs_to_jiffies(ms));
++}
+ 
+-	if (!luofu_switch_mirror_sweep_gate) {
+-		if (luofu_switch_mirror_program(lsw, luofu_switch_mirror_dst))
+-			return;
++/* Start the W17/W18/W19 mirror machinery (after the armed path). */
++static void luofu_switch_mirror_start(struct luofu_switch *lsw)
++{
++	if (!luofu_switch_mirror_gate && !luofu_switch_cpu_mirror_gate)
+ 		return;
+-	}
++	INIT_DELAYED_WORK(&lsw->mirror_work, luofu_switch_mirror_workfn);
++	lsw->mirror_work_active = true;
++	luofu_switch_instance = lsw;
++	dev_warn(lsw->dev,
++		 "W19_CPU_MIRROR: mirror machinery started (%s mode, dst=%u, re-latch every 2 s, post-link reapply enabled)\n",
++		 luofu_switch_mirror_dwell_gate || luofu_switch_mirror_sweep_gate ?
++		 "dwell/sweep" : "static",
++		 luofu_switch_mirror_dst);
++	luofu_switch_mirror_schedule(lsw, 1000);
++}
++
++static void luofu_switch_mirror_stop(struct luofu_switch *lsw)
++{
++	if (!lsw->mirror_work_active)
++		return;
++	cancel_delayed_work_sync(&lsw->mirror_work);
++	lsw->mirror_work_active = false;
++	luofu_switch_instance = NULL;
++}
++
++/* Re-apply after a MAC link-up (called by luofu-gmac.c). */
++void luofu_switch_cpu_mirror_link_up(void)
++{
++	struct luofu_switch *lsw = luofu_switch_instance;
+ 
++	if (!lsw || !lsw->mirror_work_active)
++		return;
++	/*
++	 * The port-up path appears to reset/ignore the OPP mirror registers, so
++	 * capture fresh pre-values and re-apply shortly after carrier-up.
++	 */
++	lsw->mirror_valid = false;
+ 	dev_warn(lsw->dev,
+-		 "W17_MIRROR: sweep mode - trying all encodable destinations 0..15 at 2 s intervals (40..43 are not encodable); run the host ping now and watch for PIE RX completions\n");
+-	for (i = 0; i < ARRAY_SIZE(sweep); i++) {
+-		if (luofu_switch_mirror_program(lsw, sweep[i]))
+-			continue;
+-		mdelay(2000);
++		 "W19_CPU_MIRROR: MAC link-up seen -> scheduling CPU-copy reapply in 200 ms (dst=%u)\n",
++		 luofu_switch_mirror_dst);
++	mod_delayed_work(system_wq, &lsw->mirror_work,
++			 msecs_to_jiffies(200));
++}
++EXPORT_SYMBOL_GPL(luofu_switch_cpu_mirror_link_up);
++
++static void luofu_switch_mirror_workfn(struct work_struct *work)
++{
++	struct luofu_switch *lsw = container_of(to_delayed_work(work),
++						struct luofu_switch,
++						mirror_work);
++	void __iomem *opp = lsw->window[LUOFU_SWITCH_WIN_OPP];
++	u32 pre_d8, pre_dc, pre_c0;
++	u32 dst;
++	int ret;
++
++	if (!opp || !lsw->mirror_work_active)
++		return;
++
++	if (luofu_switch_mirror_dwell_gate || luofu_switch_mirror_sweep_gate) {
++		static const u32 sweep[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
++					     11, 12, 13, 14, 15 };
++		unsigned int i = lsw->mirror_dwell_step;
++
++		if (i >= ARRAY_SIZE(sweep)) {
++			dev_warn(lsw->dev,
++				 "W19_CPU_MIRROR: dwell sweep complete (all 16 encodable destinations tried)\n");
++			lsw->mirror_work_active = false;
++			return;
++		}
++		dst = sweep[i];
++		lsw->mirror_dwell_step++;
++		pre_d8 = readl(opp + 0xd8);
++		pre_dc = readl(opp + 0xdc);
++		pre_c0 = readl(opp + 0xc0);
++		lsw->mirror_valid = false;	/* re-snapshot the current state */
++		ret = luofu_switch_mirror_program(lsw, dst);
++		dev_warn(lsw->dev,
++			 "W19_CPU_MIRROR: dwell step %u/%zu dst=%u pre d8=%#x dc=%#x c0=%#x ret=%d; now hold %u ms for the host ping\n",
++			 i + 1, ARRAY_SIZE(sweep), dst, pre_d8, pre_dc, pre_c0,
++			 ret, luofu_switch_mirror_dwell_ms);
++		luofu_switch_mirror_schedule(lsw, luofu_switch_mirror_dwell_ms);
++		return;
+ 	}
+-	dev_warn(lsw->dev,
+-		 "W17_MIRROR: sweep complete (last destination left programmed until remove/driver restore)\n");
++
++	dst = luofu_switch_mirror_dst;
++	pre_d8 = readl(opp + 0xd8);
++	pre_dc = readl(opp + 0xdc);
++	pre_c0 = readl(opp + 0xc0);
++	/* Re-snapshot once per apply so post-reset values are visible. */
++	lsw->mirror_valid = false;
++	ret = luofu_switch_mirror_program(lsw, dst);
++	if (ret)
++		dev_err(lsw->dev,
++			"W19_CPU_MIRROR: static apply dst=%u failed (%d); will retry in 2 s\n",
++			dst, ret);
++	else
++		dev_info(lsw->dev,
++			 "W19_CPU_MIRROR: static CPU-copy applied dst=%u (pre d8=%#x dc=%#x c0=%#x; post 0xd8=%#x 0xdc=%#x 0xc0=%#x)\n",
++			 dst, pre_d8, pre_dc, pre_c0,
++			 readl(opp + 0xd8), readl(opp + 0xdc),
++			 readl(opp + 0xc0));
++	luofu_switch_mirror_schedule(lsw, 2000);
+ }
+ 
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3643,15 +3768,7 @@
+ 	if (luofu_switch_pagedump_gate)
+ 		luofu_switch_pagedump(lsw);
+ 
+-	if (luofu_switch_mirror_gate)
+-		luofu_switch_mirror_run(lsw);
+-
+-	if (luofu_switch_cpu_mirror_gate) {
+-		dev_warn(lsw->dev,
+-			 "W18_CPU_MIRROR: static CPU-copy destination %u kept for the whole run\n",
+-			 luofu_switch_mirror_dst);
+-		luofu_switch_mirror_program(lsw, luofu_switch_mirror_dst);
+-	}
++	luofu_switch_mirror_start(lsw);
+ 
+ out:
+ 	if (ret && lsw->ext_ready) {
+@@ -3696,6 +3813,7 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	luofu_switch_mirror_stop(lsw);
+ 	luofu_switch_mirror_restore(lsw);
+ 	if (lsw->ext_ready)
+ 		luofu_switch_ext_restore(lsw);
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.h
+@@ -17,6 +17,8 @@
+ 
+ #include <linux/types.h>
+ 
++void luofu_switch_cpu_mirror_link_up(void);
++
+ bool luofu_switch_probed(void);
+ bool luofu_switch_ready(void);
+ 
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -396,6 +396,9 @@
+ 	writel(0, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
+ 	writel(LUOFU_GMAC_MAC_EN, g->base + LUOFU_GMAC_CTRL);
+ 
++	/* W19: re-apply the CPU-copy mirror after the switch port comes up. */
++	luofu_switch_cpu_mirror_link_up();
++
+ 	/*
+ 	 * Patch 048: the W13 MAC dump must run on every link-up, before the
+ 	 * macconf gate's early return (patch 047 placed it after the return, so
