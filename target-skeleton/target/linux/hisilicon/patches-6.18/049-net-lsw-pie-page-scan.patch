@@ -1,0 +1,112 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -3096,6 +3096,55 @@
+ 	return ret;
+ }
+ 
++/*
++ * W14: page-granularity read-only scan of every LSW MMIO window (patch 049).
++ *
++ * All decodable init state now matches stock (W3-W13) yet no frame ever
++ * crosses.  The remaining class is the runtime flow/port-forwarding state the
++ * vendor's CFE modules install on netdev/port events; those modules cannot load
++ * on this 6.18 kernel, so our image never writes those tables.  hi_kcfe_pub
++ * itself imports only netdev/netdevice-notifier APIs (no hardware access), and
++ * the hardware tables it ends up driving live in the larger LSW windows that
++ * the W11 dump only sampled at a few offsets.
++ *
++ * With luofu_switch.scan=1 (read-only, no writes) the driver reads one word per
++ * 4 KiB page of every MMIO window (15 windows x 128 pages) and prints only the
++ * non-zero pages.  The same page addresses can be read on a stock boot with
++ * devmem, and the diff lists exactly which table pages exist on stock and not
++ * on ours - the location of the CFE/rootif tables to replay next.
++ */
++static bool luofu_switch_scan_gate;
++module_param_named(scan, luofu_switch_scan_gate, bool, 0444);
++MODULE_PARM_DESC(scan, "Attended W14 diagnostic: after arming, print one word per 4 KiB page of every LSW MMIO window, non-zero pages only, for the stock-vs-ours table-location diff (no writes; default off)");
++
++static void luofu_switch_scan(struct luofu_switch *lsw)
++{
++	unsigned int w, off;
++	unsigned int pages = 0, nz = 0;
++
++	dev_warn(lsw->dev,
++		 "W14_LSW_SCAN: read-only page scan of all LSW windows (4 KiB stride, non-zero pages only), no hardware writes\n");
++	for (w = 0; w < LUOFU_SWITCH_WIN_NUM; w++) {
++		void __iomem *base = lsw->window[w];
++
++		if (!base || w == LUOFU_SWITCH_WIN_QUEUE ||
++		    w == LUOFU_SWITCH_WIN_FLOW)
++			continue;
++		for (off = 0; off < 0x80000; off += 0x1000) {
++			u32 v = readl(base + off);
++
++			pages++;
++			if (!v)
++				continue;
++			nz++;
++			dev_info(lsw->dev, "lsw-scan %s+%#07x = %#010x\n",
++				 luofu_switch_window_names[w], off, v);
++		}
++	}
++	dev_warn(lsw->dev,
++		 "W14_LSW_SCAN: done: %u pages read, %u non-zero\n", pages, nz);
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3336,6 +3385,9 @@
+ 	if (luofu_switch_dump_gate)
+ 		luofu_switch_dump(lsw);
+ 
++	if (luofu_switch_scan_gate)
++		luofu_switch_scan(lsw);
++
+ out:
+ 	if (ret && lsw->ext_ready) {
+ 		luofu_switch_ext_restore(lsw);
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -435,6 +435,31 @@
+ module_param_named(rxcfg, luofu_pie_rxcfg_gate, bool, 0444);
+ MODULE_PARM_DESC(rxcfg, "Attended W13_RXCFG step: program the recovered PIE RX-config word 0x3404 with the stock-observed 0x1b04 (requires luofu_pie.arm=1; default off)");
+ 
++/*
++ * Patch 049 (diagnostic): page-granularity read-only scan of the PIE window
++ * (64 KiB, 4 KiB stride, non-zero pages only) for the stock-vs-ours table
++ * comparison.  Writes nothing.
++ */
++static bool luofu_pie_scan_gate;
++module_param_named(scan, luofu_pie_scan_gate, bool, 0444);
++MODULE_PARM_DESC(scan, "Attended W14_PIE_SCAN diagnostic: after arming, print one word per 4 KiB page of the PIE window, non-zero pages only (no writes; default off)");
++
++static void luofu_pie_scan(struct luofu_pie *pie)
++{
++	unsigned int off, nz = 0;
++
++	pr_info("W14_PIE_SCAN: read-only page scan of the PIE window (4 KiB stride), no hardware writes\n");
++	for (off = 0; off < 0x10000; off += 0x1000) {
++		u32 v = readl(pie->base + off);
++
++		if (!v)
++			continue;
++		nz++;
++		pr_info("pie-scan %#07x = %#010x\n", off, v);
++	}
++	pr_info("W14_PIE_SCAN: done: 16 pages read, %u non-zero\n", nz);
++}
++
+ #define LUOFU_PIE_RXCFG_OFF		0x3404
+ #define LUOFU_PIE_RXCFG_STOCK		0x00001b04
+ #define LUOFU_PIE_RXSIZE_BITMAP_OFF	0x3408
+@@ -1702,6 +1727,9 @@
+ 	if (luofu_pie_dump_gate)
+ 		luofu_pie_dump(pie);
+ 
++	if (luofu_pie_scan_gate)
++		luofu_pie_scan(pie);
++
+ 	return 0;
+ 
+ err_halt:
