@@ -1316,6 +1316,48 @@ This allows a seven-gate image with **zero W9 code executed**.  Proposed isolati
 3. **001-037 only** (control): re-run the exact traffic test on the known-stable subset.
 4. **001-037 + SMP 039 + SMP 040-arm** (no 038/040-net/041): isolates the SMP delta directly.
 
+**Round-4e macconf run and the next layer: the IFC default-classification table (patch 043).**
+Image f58c516e (six gates + PFE, W9 inert, heartbeat, macconf=1) stayed stable through the traffic
+test and logged both eth2 link-ups with the vendor MAC sequence: before
+`0x14=0x6 0x18=0x0 0x1c=0x0 0x40=0x10c0008 0x0=0x0`, after `0x1c=0x1`, 0x40 already correct,
+0x0 still 0 - so the MAC config sequence is complete but **traffic is still dead**: the MAC is not
+the missing layer, the classifier is.
+
+**W10 decode.**  `hi_pfe_ifc_init@0x794` writes eight default entries through two interfaces,
+both now decoded and replayed by the driver:
+
+- **command/data engine** (ifc window): data `0x138/0x13c/0x140/0x144/0x148` (5 words), command
+  `0x120 = 0xc0000000 | (index & 0x7f)`, then poll until bit31 clears (<=1001 tries), bit29 =
+  error - the same protocol as the EQM indirect engine.  There is no read path in the recovered
+  code, so these writes are acknowledged, not read back (like write-only table 19).
+- **tab128 default entry**: four words at `ifc+0x50000 + index*16` (the shared
+  `hi_lsw_write_tab128` primitive).  This region is directly readable and is verified STRICTLY.
+
+The eight payload pairs were extracted by emulating `hi_pfe_ifc_init` from the pinned
+`hi_lsw_pfe.ko` (52,412 B, sha256
+`12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a`) and cross-checked by hand for
+entries 1-5.  The only runtime-dependent field is tab128 word0 of entries 3..7, built from the
+vendor table-manager allocation id (0 on a fresh manager -> `0x1d00`).
+
+**Patch 043 (W10) implementation.**  New gate `luofu_lsw.ifc=1` (requires
+`arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1`) programs the eight entries: the command engine must
+be idle before the first write, every tab128 word is snapshotted and required stable across two
+reads, each entry is written engine-first then tab128, and the stage verifies all tab128 words by
+readback; on an engine error or a readback mismatch the tab128 snapshot is restored and the stage
+fails closed (the engine entries cannot be restored - stated in the log and here).  Readiness now
+requires W3-W10, so the GEMAC netdevs only register with the classifier programmed.
+
+**Bench verification for the next run.**  Expect the block of W10 start/idle lines, then
+`W10: IFC default-classification table programmed and verified: 8 entries ...`, then the usual
+connectivity-armed line, GEMAC registration and the heartbeat.  After the traffic test look for: a
+host ARP request reaching the box followed by a box ARP reply on the wire (or PIE RX trace lines),
+and no watchdog hang.  Failure signatures: `W10: IFC entry N command failed (bit29)` or a poll
+timeout (engine protocol mismatch), or `tab128 readback mismatch ... restoring the snapshot`
+(wrong payload/word order) - in both cases the box stays up (fail-closed, no data path).
+
+If W10 alone still does not move traffic, the next ordered layers remain L2/VLAN tables and the
+CFE/rootif contract, then the remaining MAC config words and table 38/VP.
+
 **Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
 entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
 only: each entry embeds an id returned by the vendor's software table-manager allocation

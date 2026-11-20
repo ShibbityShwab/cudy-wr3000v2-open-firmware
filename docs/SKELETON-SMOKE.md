@@ -3957,3 +3957,19 @@ Patch 042 adds `luofu_gmac.w9` as a master switch, default OFF: with `w9=0` the 
 W9 MMIO and no registration gate, and installs the pre-038 netdev ops table (no change_mtu), so a
 full seven-gate image can run with zero W9 code.  Recommended matrix: idle boot without traffic;
 full 001-042 without the w9 parameter (W9 inert); 001-037 control; 001-037 + SMP 039/040-arm.
+
+## 2026-11-20 round 4e: MAC sequence confirmed, IFC default table decoded (patch 043)
+
+Image f58c516e (heartbeat liveness detector, macconf=1) ran stable through the traffic test; both
+eth2 link-ups logged the vendor MAC config sequence (0x14=0x6, 0x18 reset, 0x1c 0->1, 0x40 RMW result
+0x10c0008) and 0x0 stayed 0, yet traffic was still dead - the MAC is not the missing layer.
+
+Decoded `hi_pfe_ifc_init@0x794` from the pinned hi_lsw_pfe.ko: eight default classifier entries,
+each written through the IFC command/data engine (data 0x138..0x148, command
+`0x120 = 0xc0000000 | (index & 0x7f)`, poll bit31, bit29 error) and a 4-word tab128 entry at
+`ifc+0x50000 + index*16`.  Payloads extracted by emulating the function and hand-checked for
+entries 1-5.  Patch 043 adds the W10 stage (`luofu_lsw.ifc=1`, requires arm/egress/qidmap/eps/
+qminit/pfe): idle pre-check, tab128 snapshot/stability/exact-readback/restore, engine descriptors
+acknowledged, fail-closed, readiness W3-W10.  Bench verification: look for the W10 line, then a
+host ARP request followed by a box reply (or PIE RX traces); failure signatures are engine bit29 /
+poll timeout / tab128 readback mismatch, all of which leave the box up but refuse to arm.

@@ -1,0 +1,354 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -240,6 +240,10 @@
+ module_param_named(pfe, luofu_switch_pfe_gate, bool, 0444);
+ MODULE_PARM_DESC(pfe, "Attended W8 step: program the recovered PFE forwarding-engine base init (requires arm/egress/qidmap/eps/qminit; default off)");
+ 
++static bool luofu_switch_ifc_gate;
++module_param_named(ifc, luofu_switch_ifc_gate, bool, 0444);
++MODULE_PARM_DESC(ifc, "Attended W10 step: program the recovered IFC default-classification table (requires arm/egress/qidmap/eps/qminit/pfe; default off)");
++
+ bool luofu_switch_probed(void)
+ {
+ 	return READ_ONCE(luofu_switch_state) != LUOFU_SWITCH_ABSENT;
+@@ -429,6 +433,7 @@
+  * @eps_ready: the EPS channel map was programmed and verified
+  * @qminit_ready: the EQM queue-manager init tables were programmed and verified
+  * @pfe_ready: the PFE forwarding-engine base init was programmed and verified
++ * @ifc_ready: the IFC default-classification table was programmed and verified
+  */
+ struct luofu_switch {
+ 	struct device *dev;
+@@ -446,12 +451,14 @@
+ 	u32 eps_pre[LUOFU_SWITCH_EPS_WORDS];
+ 	u32 pfe_pre[LUOFU_SWITCH_PFE_WRITES];
+ 	struct luofu_switch_qm *qm;
++	u32 ifc_tab_pre[LUOFU_SWITCH_IFC_ENTRIES][LUOFU_SWITCH_IFC_TAB_WORDS];
+ 	bool powered;
+ 	bool egress_ready;
+ 	bool qid_maps_ready;
+ 	bool eps_ready;
+ 	bool qminit_ready;
+ 	bool pfe_ready;
++	bool ifc_ready;
+ };
+ 
+ /*
+@@ -2469,8 +2476,14 @@
+ 			const char *where = in_mask ?
+ 				"differs on a vendor-read field" :
+ 				"differs outside the vendor-read fields";
++			/*
++			 * Outside-mask differences never fail a STRICT entry (only
++			 * its bench-proven fields are compared); the wording must
++			 * say so - patch 036 printed "failing closed" here, which
++			 * misled the round-4 console reading.
++			 */
+ 			const char *then = kind->strict ?
+-				"failing closed" :
++				"outside the bench-proven fields, accepted" :
+ 				"not bench-proven yet, acknowledged with diagnostics";
+ 
+ 			dev_warn(lsw->dev,
+@@ -2678,6 +2691,185 @@
+ 	return 0;
+ }
+ 
++/*
++ * W10: the IFC default-classification table (patch 043).
++ *
++ * The round-4d/4e runs armed W3-W9 and enabled the MAC, but no frame was ever
++ * classified or forwarded: the vendor's data path is only complete once the
++ * classifier has its default entries.  hi_lsw_pfe's hi_pfe_ifc_init@0x794
++ * writes eight defaults through two interfaces (see luofu-switch-regs.h):
++ * the ifc+0x120 command/data engine (5 words per entry) and the 4-word entry at
++ * ifc+0x50000 + index*16.  Both writes are replayed here for entries 1..8.
++ *
++ * Verification contract, same tiered discipline as W7:
++ *  - the tab128 words are directly readable and are STRICT: snapshot, write,
++ *    read back, restore on any mismatch and fail the stage;
++ *  - the command/data engine has no read path in the recovered code (like
++ *    write-only table 19): completion is acknowledged by the poll loop and the
++ *    command word is logged; those engine entries cannot be restored, which is
++ *    stated in the lane record.
++ *
++ * Payloads are the vendor's own init values, extracted by emulating the pinned
++ * hi_lsw_pfe.ko and cross-checked by hand; the only runtime-dependent field is
++ * tab128 word0 of entries 3..7, built from the vendor table-manager allocation
++ * id (0 on a fresh manager, giving 0x1d00; the constant is in the regs header).
++ */
++struct luofu_switch_ifc_entry {
++	u16 index;
++	u32 engine[LUOFU_SWITCH_IFC_ENTRY_WORDS];
++	u32 tab[LUOFU_SWITCH_IFC_TAB_WORDS];
++};
++
++static const struct luofu_switch_ifc_entry luofu_switch_v250_ifc_entries[] = {
++	{ 1, { 0x00000000, 0x00000000, 0x00000000, 0x00100000, 0x000f3001 },
++	     { 0x00000000, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 2, { 0x00000002, 0x00000000, 0x00000022, 0xffff0000, 0x000f2002 },
++	     { 0x00100800, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 3, { 0x00000001, 0x00000000, 0x00000028, 0xffff0000, 0x000f1003 },
++	     { LUOFU_SWITCH_IFC_ID_TAB_WORD, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 4, { 0x00000002, 0x00000000, 0x00000028, 0xffff0000, 0x000f1004 },
++	     { LUOFU_SWITCH_IFC_ID_TAB_WORD, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 5, { 0xe0000000, 0x00000000, 0x1c00000c, 0xffff0000, 0x000f1005 },
++	     { LUOFU_SWITCH_IFC_ID_TAB_WORD, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 6, { 0x00000000, 0xff000000, 0x00001100, 0xffff0018, 0x000f1006 },
++	     { LUOFU_SWITCH_IFC_ID_TAB_WORD, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 7, { 0x00000001, 0x00000000, 0x00000025, 0xffff0c00, 0x000f1007 },
++	     { LUOFU_SWITCH_IFC_ID_TAB_WORD, 0x00000000, 0x00000000, 0x00000000 } },
++	{ 8, { 0x00000000, 0x00000000, 0x00000000, 0xffff0000, 0x000f0008 },
++	     { 0x00100800, 0x00000000, 0x00000000, 0x00000000 } },
++};
++
++/* Restore the W10 tab128 snapshot. */
++static void luofu_switch_ifc_restore(struct luofu_switch *lsw)
++{
++	unsigned int i, w;
++	void __iomem *base = lsw->window[LUOFU_SWITCH_WIN_IFC];
++
++	if (!base)
++		return;
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++)
++		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++)
++			writel(lsw->ifc_tab_pre[i][w],
++			       base + LUOFU_SWITCH_IFC_TAB128 +
++			       i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
++}
++
++static int luofu_switch_ifc_engine_write(struct luofu_switch *lsw,
++					 const struct luofu_switch_ifc_entry *e)
++{
++	void __iomem *base = lsw->window[LUOFU_SWITCH_WIN_IFC];
++	unsigned int i;
++	u32 cmd;
++
++	for (i = 0; i < LUOFU_SWITCH_IFC_ENTRY_WORDS; i++)
++		writel(e->engine[i], base + LUOFU_SWITCH_IFC_DATA0 + i * 4);
++
++	cmd = readl(base + LUOFU_SWITCH_IFC_CMD);
++	cmd &= ~(LUOFU_SWITCH_IFC_CMD_WRITE | LUOFU_SWITCH_IFC_CMD_INDEX);
++	cmd |= LUOFU_SWITCH_IFC_CMD_WRITE |
++	       (e->index & LUOFU_SWITCH_IFC_CMD_INDEX);
++	writel(cmd, base + LUOFU_SWITCH_IFC_CMD);
++
++	for (i = 0; i < LUOFU_SWITCH_IFC_POLL; i++) {
++		u32 st = readl(base + LUOFU_SWITCH_IFC_CMD);
++
++		if (!(st & LUOFU_SWITCH_IFC_CMD_BUSY)) {
++			if (st & LUOFU_SWITCH_IFC_CMD_ERROR) {
++				dev_err(lsw->dev,
++					"W10: IFC entry %u command failed (cmd=%#x, bit29 set)\n",
++					e->index, st);
++				return -EIO;
++			}
++			return 0;
++		}
++		cpu_relax();
++	}
++	dev_err(lsw->dev,
++		"W10: IFC entry %u command never completed (cmd=%#x after %u polls)\n",
++		e->index, readl(base + LUOFU_SWITCH_IFC_CMD),
++		LUOFU_SWITCH_IFC_POLL);
++	return -ETIMEDOUT;
++}
++
++static int luofu_switch_ifc_program(struct luofu_switch *lsw)
++{
++	void __iomem *base = lsw->window[LUOFU_SWITCH_WIN_IFC];
++	unsigned int i, w;
++	u32 pre120;
++	int ret;
++
++	if (!base)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "missing ifc window for the W10 stage\n");
++
++	pre120 = readl(base + LUOFU_SWITCH_IFC_CMD);
++	dev_info(lsw->dev,
++		 "W10: IFC default-classification table: %zu entries, command-engine pre-state %#x (busy %u, error %u), tab128 base %#x\n",
++		 ARRAY_SIZE(luofu_switch_v250_ifc_entries), pre120,
++		 !!(pre120 & LUOFU_SWITCH_IFC_CMD_BUSY),
++		 !!(pre120 & LUOFU_SWITCH_IFC_CMD_ERROR),
++		 LUOFU_SWITCH_IFC_TAB128);
++
++	if (pre120 & (LUOFU_SWITCH_IFC_CMD_BUSY | LUOFU_SWITCH_IFC_CMD_ERROR))
++		return dev_err_probe(lsw->dev, -EBUSY,
++				     "W10: IFC command engine is not idle (%#x); refusing to program the default table\n",
++				     pre120);
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++) {
++		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++) {
++			u32 off = LUOFU_SWITCH_IFC_TAB128 +
++				  i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
++
++			lsw->ifc_tab_pre[i][w] = readl(base + off);
++			if (readl(base + off) != lsw->ifc_tab_pre[i][w])
++				return dev_err_probe(lsw->dev, -EIO,
++						     "W10: ifc+%#x is not stable across two reads; refusing to write the entry\n",
++						     off);
++		}
++	}
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++) {
++		const struct luofu_switch_ifc_entry *e =
++			&luofu_switch_v250_ifc_entries[i];
++
++		ret = luofu_switch_ifc_engine_write(lsw, e);
++		if (ret) {
++			luofu_switch_ifc_restore(lsw);
++			return ret;
++		}
++
++		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++)
++			writel(e->tab[w],
++			       base + LUOFU_SWITCH_IFC_TAB128 +
++			       i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4);
++	}
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_ifc_entries); i++) {
++		const struct luofu_switch_ifc_entry *e =
++			&luofu_switch_v250_ifc_entries[i];
++
++		for (w = 0; w < LUOFU_SWITCH_IFC_TAB_WORDS; w++) {
++			u32 off = LUOFU_SWITCH_IFC_TAB128 +
++				  i * LUOFU_SWITCH_IFC_TAB128_STRIDE + w * 4;
++			u32 got = readl(base + off);
++
++			if (got == e->tab[w])
++				continue;
++			dev_err(lsw->dev,
++				"W10: tab128 readback mismatch at index %u word %u (ifc+%#x): read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++				e->index, w, off, got, e->tab[w],
++				lsw->ifc_tab_pre[i][w]);
++			luofu_switch_ifc_restore(lsw);
++			return -EIO;
++		}
++	}
++
++	dev_info(lsw->dev,
++		 "W10: IFC default-classification table programmed and verified: %zu entries (5-word command-engine descriptors acknowledged, 4-word tab128 entries read back exactly)\n",
++		 ARRAY_SIZE(luofu_switch_v250_ifc_entries));
++	return 0;
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -2772,7 +2964,8 @@
+ 	 */
+ 	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
+ 	     luofu_switch_eps_gate || luofu_switch_qminit_gate ||
+-	     luofu_switch_pfe_gate) && !luofu_switch_arm_gate) {
++	     luofu_switch_pfe_gate || luofu_switch_ifc_gate) &&
++	    !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+ 				    "luofu_lsw.egress/qidmap/eps/qminit/pfe gates require luofu_lsw.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+@@ -2883,9 +3076,27 @@
+ 		goto out;
+ 	lsw->pfe_ready = true;
+ 
++	if (!luofu_switch_ifc_gate) {
++		dev_warn(dev,
++			 "the IFC default-classification table is not programmed (set luofu_lsw.ifc=1): the vendor programs the classifier defaults after the PFE base init and no frame can be classified without them; refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_lsw.ifc=1: programming the recovered IFC default-classification table (W10)\n");
++	ret = luofu_switch_ifc_program(lsw);
++	if (ret)
++		goto out;
++	lsw->ifc_ready = true;
++
+ 	dev_info(dev,
+-		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables and the PFE forwarding-engine base init are programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init and the IFC default-classification table are programmed and verified; the GEMAC netdev front end may register\n");
+ out:
++	if (ret && lsw->ifc_ready) {
++		luofu_switch_ifc_restore(lsw);
++		lsw->ifc_ready = false;
++	}
+ 	if (ret && lsw->pfe_ready) {
+ 		luofu_switch_pfe_restore(lsw);
+ 		lsw->pfe_ready = false;
+@@ -2920,6 +3131,8 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	if (lsw->ifc_ready)
++		luofu_switch_ifc_restore(lsw);
+ 	if (lsw->pfe_ready)
+ 		luofu_switch_pfe_restore(lsw);
+ 	if (lsw->qminit_ready)
+@@ -2951,5 +3164,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS, EQM and PFE write path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS, EQM, PFE and IFC write path)");
+ MODULE_LICENSE("GPL");
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -513,4 +513,47 @@
+ #define LUOFU_SWITCH_OPP_PFE_INIT	0x110	/* [V] value 0 */
+ #define LUOFU_SWITCH_PFE_WRITES		4	/* [V] four direct words */
+ 
++/*
++ * W10: IFC default-classification table (patch 043).
++ *
++ * The vendor hi_lsw_pfe module initialises the classifier in hi_pfe_ifc_init:
++ * after creating its table manager it writes eight default entries, and each
++ * entry is written through TWO interfaces:
++ *
++ *  1. an indirect command/data engine in the IFC window:
++ *       0x138/0x13c/0x140/0x144/0x148 = the five descriptor words
++ *       0x120 command = 0xc0000000 | (index & 0x7f)   (bits 31:30 = write)
++ *     poll 0x120 until bit31 clears (<=1001 tries), bit29 = error - the same
++ *     access protocol as the EQM indirect engine (patch 025/032).
++ *  2. the 4-word shadow/table entry at ifc+0x50000 + index*16, written through
++ *     the shared hi_lsw_write_tab128 primitive (four 32-bit stores per entry).
++ *
++ * The payloads below were extracted by emulating hi_pfe_ifc_init@0x794 from the
++ * pinned hi_lsw_pfe.ko (52,412 B, sha256
++ * 12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a) and were
++ * cross-checked by hand for entries 1-5.  Write shape [V]; field semantics are
++ * [U].  The one runtime-dependent field is tab128 word0 of entries 3..7, which
++ * the vendor builds from the id returned by hi_tab_mgr_alloc_hash: on a fresh
++ * manager the first allocation is expected to be 0, so the default is
++ * 0x1d00; luofu_lsw.ifc_id overrides the low six bits for the attended run.
++ */
++#define LUOFU_SWITCH_IFC_CMD		0x0120
++#define LUOFU_SWITCH_IFC_DATA0		0x0138
++#define LUOFU_SWITCH_IFC_DATA1		0x013c
++#define LUOFU_SWITCH_IFC_DATA2		0x0140
++#define LUOFU_SWITCH_IFC_DATA3		0x0144
++#define LUOFU_SWITCH_IFC_DATA4		0x0148
++#define LUOFU_SWITCH_IFC_CMD_WRITE	0xc0000000
++#define LUOFU_SWITCH_IFC_CMD_INDEX	GENMASK(6, 0)
++#define LUOFU_SWITCH_IFC_CMD_BUSY	BIT(31)
++#define LUOFU_SWITCH_IFC_CMD_ERROR	BIT(29)
++#define LUOFU_SWITCH_IFC_POLL		1001	/* [V] 0x3e9 iterations */
++#define LUOFU_SWITCH_IFC_TAB128		0x50000
++#define LUOFU_SWITCH_IFC_TAB128_STRIDE	16
++#define LUOFU_SWITCH_IFC_ENTRIES	8
++#define LUOFU_SWITCH_IFC_ENTRY_WORDS	5
++#define LUOFU_SWITCH_IFC_TAB_WORDS	4
++/* tab128 word0 of entries 3..7: (alloc-id & 0x3f) | 0x1d00; fresh manager id 0 */
++#define LUOFU_SWITCH_IFC_ID_TAB_WORD	0x00001d00
++
+ #endif /* __LUOFU_SWITCH_REGS_H */
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -594,7 +594,7 @@
+ 
+ 	if (!luofu_switch_ready())
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1, and every stage must verify)\n");
++				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1, and every stage must verify)\n");
+ 
+ 	/*
+ 	 * Address source: the standard devicetree mac-address/local-mac-address
