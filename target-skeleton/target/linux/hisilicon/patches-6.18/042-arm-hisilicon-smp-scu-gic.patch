@@ -1,0 +1,87 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -81,6 +81,12 @@
+  *	luofu_smp_clear_mask=<hex>  override the CRG + 0x38 clear mask
+  *	luofu_smp_force_pen=<pa>    use an arbitrary physical pen value
+  *	luofu_smp_retries=<n>	repeat pen + resume + IPI up to n times
++ *	luofu_smp_scu_cfg=<hex>	OR this mask into the SCU Configuration Register
++ *				(0x10180004) at prepare time, before the release.
++ *				Stock 5.10 leaves 0x531 there; our kernel currently
++ *				leaves 0x511 (bit 5 not set).  Single-variable test
++ *				for whether the SCU standby/configuration bit matters:
++ *				"luofu_smp_scu_cfg=0x20" sets bit 5.
+  *
+  * HARDWARE RESULT OF 034 (2026-11-19, image 5d2c5476): the register dumps
+  * worked and measured the loader-left pen as 0, the resume word as
+@@ -185,6 +191,7 @@
+ static unsigned long luofu_smp_force_pen;
+ static unsigned long luofu_smp_clear_mask;
+ static unsigned int luofu_smp_retries;
++static unsigned int luofu_smp_scu_cfg;
+ 
+ static int __init luofu_smp_parse_bool(char *str, bool *out, const char *name)
+ {
+@@ -233,6 +240,19 @@
+ }
+ __setup("luofu_smp_clear_mask=", luofu_smp_setup_clear_mask);
+ 
++static int __init luofu_smp_setup_scu_cfg(char *str)
++{
++	unsigned int val;
++
++	if (kstrtouint(str, 0, &val)) {
++		pr_warn("luofu-smp: bad luofu_smp_scu_cfg value\n");
++		return 1;
++	}
++	luofu_smp_scu_cfg = val;
++	return 1;
++}
++__setup("luofu_smp_scu_cfg", luofu_smp_setup_scu_cfg);
++
+ static int __init luofu_smp_setup_retries(char *str)
+ {
+ 	if (kstrtouint(str, 0, &luofu_smp_retries))
+@@ -727,10 +747,23 @@
+ 	if (!dist || !cpu0 || !cpu1) {
+ 		pr_info("luofu-smp: %s gic: ioremap failed\n", tag);
+ 	} else {
+-		pr_info("luofu-smp: %s gic: dist_ctlr=%08x sgir=%08x cpu0_ctlr=%08x cpu1_ctlr=%08x\n",
++		/*
++		 * The GIC CPU interface is banked per CPU on the A9: a CPU can
++		 * only read its own bank.  cpu1_ctlr below is therefore the
++		 * CPU0 view of the CPU1 window (RAZ) and says nothing about
++		 * CPU1's interface state - it is printed only as a reference.
++		 */
++		pr_info("luofu-smp: %s gic: dist_ctlr=%08x isenabler0=%08x isenabler1=%08x ispendr0=%08x isactiver0=%08x\n",
+ 			tag, readl_relaxed(dist),
++			readl_relaxed(dist + 0x100), readl_relaxed(dist + 0x104),
++			readl_relaxed(dist + 0x200), readl_relaxed(dist + 0x300));
++		pr_info("luofu-smp: %s gic: itargetsr0=%08x icfgr0=%08x icfgr1=%08x ipriorityr0=%08x pmr=%08x bpr=%08x sgir=%08x cpu1_view=%08x\n",
++			tag, readl_relaxed(dist + 0x800),
++			readl_relaxed(dist + 0xc00), readl_relaxed(dist + 0xc04),
++			readl_relaxed(dist + 0x400),
++			readl_relaxed(cpu0 + 0x04), readl_relaxed(cpu0 + 0x08),
+ 			readl_relaxed(dist + LUOFU_GIC_SGIR),
+-			readl_relaxed(cpu0), readl_relaxed(cpu1));
++			readl_relaxed(cpu1));
+ 	}
+ 	if (dist)
+ 		iounmap(dist);
+@@ -747,6 +780,17 @@
+ 
+ 	luofu_scu_setup();
+ 
++	if (luofu_smp_scu_cfg && luofu_scu_base) {
++		u32 cfg = luofu_scu_read(LUOFU_SCU_CONFIG);
++
++		writel(cfg | luofu_smp_scu_cfg,
++		       luofu_scu_base + LUOFU_SCU_CONFIG);
++		dsb(sy);
++		pr_info("luofu-smp: scu_cfg %08x -> %08x (mask %08x, readback %08x)\n",
++			cfg, cfg | luofu_smp_scu_cfg, luofu_smp_scu_cfg,
++			luofu_scu_read(LUOFU_SCU_CONFIG));
++	}
++
+ 	sysctrl = luofu_iomap_compat(LUOFU_SYSCTRL_COMPAT, &sysctrl_pa);
+ 	crg = luofu_iomap_compat(LUOFU_CRG_COMPAT, &crg_pa);
+ 	if (!sysctrl || !crg)

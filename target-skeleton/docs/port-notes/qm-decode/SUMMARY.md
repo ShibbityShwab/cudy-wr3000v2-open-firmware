@@ -1,91 +1,81 @@
-# incoming/qm-decode - round 4c: MAC config decode + doorbell bisection (patch 041)
+# incoming/qm-decode - round 4d: zero-engine hang + W9 master switch (patch 042)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 8).  Prior record: `032` (tiered
-W7), `036` (W8 PFE), `038` (W9 MAC max-frame), `040` (W9 diag/write split + formula fix).
-This package delivers **patch 041**: the decoded vendor MAC config sequence, the doorbell-bisection
-gate, and TX-halt containment.  No device access in this lane.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 9).  Prior record: `032`, `036`,
+`038`, `040`, `041` (all delivered; 038/040 integrated).  This package delivers **patch 042**:
+a master switch that makes all W9 code inert at runtime, for the isolation matrix.  No device access.
 
 Apply `shared.patch` from the `opensource/` root, then move this SUMMARY to
 `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
 
-## 1. Diag-safe run result (image 6cf5de37 = 001-040, W9 read-only, trace=1, oops=panic)
+## 1. Round-4d result (image 2d904721 = 001-041, seven gates, W9 read-only, trace=0, nodoorbell=1)
 
-- Boot stable, seven gates armed, W9 diag logged on the GEMACs:
-  `max-frame 0x100 = 0x334005ee (limit 1518), ctrl 0x0 = 0x0, port_mode 0x40 = 0xc0408; no write`.
-- Traffic test: no frames, then the box **hung and the hardware watchdog reset it** (fell back to
-  stock; **no Oops/panic captured** - a bus hang, not a fault).
-- Trace: exactly one frame was handed down.  `gmac-trace ... pre: ctrl=0x0 maxframe=0x334005ee
-  port_mode=0x10c0008`, the pie-trace descriptor + `TX doorbell=1`, `gmac-trace ... post: ctrl=0x0
-  maxframe=0x334005ee port_mode=0x10c0008`, then silence until the reset.  So the transport
-  (descriptor build, DMA map, doorbell write) completed; the wedge is the engine processing the
-  descriptor afterwards (or a bus hang triggered by it).
+- Boot fine; four `TX doorbell SUPPRESSED@BT@ lines confirm descriptor build **without** doorbell writes
+  (the old `pie-trace TX doorbell=N@BT@ line is only the trace print; source confirmed).
+- Traffic test -> still hung.  Last lines: second eth2 link-up / br-lan forwarding at 40.4 s, two
+  more xmit attempts (len 110/130) and eth3 PHY init at 40.95 s, then silence; no Oops/panic, no
+  loader fallback (physical recovery needed).
+- The 001-037 six-gate image survived the same test.  Deltas left: 038/040 W9 code (probe-time diag
+  reads of 0x100/0x0/0x40 on all four GEMACs; extra `ndo_change_mtu@BT@ op) and the SMP patches
+  039/040-arm that the 001-037 image predates.
 
-## 2. Finding: reg 0x0 is not the MAC control/enable word
+## 2. Audit: what 038/040/041 actually do with gates off / read-only
 
-Decoded from the pinned hi_kmac.ko: the vendor link-up path calls `hi_mac_hw_config@0x258`
-(through the MAC ops chain), which writes:
+| code | when inert | when active (this run) |
+| --- | --- | --- |
+| 038/040 W9 | `w9/hwinit/hwinitwrite@BT@ gates | probe did **3 MMIO reads** on each of 4 GEMACs; registration still required hwinit=1; `ndo_change_mtu@BT@ op present |
+| 040 macconf | `macconf=0@BT@ (off) | nothing |
+| 040 trace | `trace=0@BT@ (off) | nothing in xmit |
+| 040 txhalt | `txhalt=0@BT@ (off) | nothing |
+| 041 nodoorbell | `nodoorbell=1@BT@ | skips the TX wptr doorbell write; logs first 4; no other MMIO |
 
-| write | value |
-| --- | --- |
-| 0x18 | 1 (reset/config assert) |
-| 0x14 | speed/duplex code: bits 1..0 = 2 (1000), 1 (100), 0 (other); bit 2 = full duplex |
-| 0x18 | 0 (release) |
-| 0x1c | 1 |
-| 0x40 | RMW: clear bits 8..15 and bit 24, then set bit 24 |
+So in image 2d904721 the only new runtime effects vs 6cb3d908 were the **probe-time W9 diag reads**
+and the extra MTU op - or the SMP delta.  Note the hang phase (second link-up / bridge bring-up at
+~40 s) is when userspace opens/closes the netdevs and traffic starts.
 
-There is **no write to reg 0x0** in that path, and the bench reads 0x0 back as 0 even after our
-measured link-up write - so 0x0 is not the readable control/enable.  The 0x40 RMW applied to the
-found baseline 0xc0408 yields exactly 0x10c0008 (what our driver writes), so the port-mode word is
-already vendor-consistent; the missing pieces were the 0x14/0x18/0x1c sequence.
+## 3. Patch 042: W9 master switch (default OFF)
 
-## 3. What patch 041 adds (three attended diagnostics)
+- New `luofu_gmac.w9=0|1@BT@ (default **0**).  With `w9=0@BT@:
+  - no W9 register is read or written in probe (the diag function is not called),
+  - no W9 registration gate is applied (the netdev registers exactly as on 001-037),
+  - the pre-038 netdev ops table is installed (no `ndo_change_mtu@BT@).
+- With `w9=1@BT@ the previous behaviour is restored: hwinit=1 required for the read-only diagnostic,
+  hwinitwrite/hwinit_port control the single-port write, and the MTU op is present.
+- The 041 instrumentation (`trace@BT@, `txhalt@BT@) and PIE `nodoorbell@BT@ stay independent of the master.
 
-- **`luofu_pie.nodoorbell=1`** - TX descriptors are built and published to the ring but the
-  channel doorbell (TX wptr write) is suppressed.  If the box survives, the descriptor build/DMA
-  mapping is proven safe and the hang is in the engine's post-doorbell processing; if it still
-  hangs, look before the doorbell.  Logs `pie-trace TX doorbell SUPPRESSED`.
-- **`luofu_gmac.macconf=1`** - at link-up, instead of relying on the unattested 0x0 write,
-  replays the vendor sequence above (speed/duplex code computed from phylink's speed/duplex) and
-  logs every pre/post register value (0x14/0x18/0x1c/0x40/0x0) for direct comparison with the
-  vendor's expected values.
-- **`luofu_gmac.txhalt=1`** - stops the TX queue after the first xmit, so at most one
-  descriptor can reach the engine per boot; contains the hang for diagnostics.
+## 4. Proposed isolation matrix (build from any patch subset)
 
-## 4. Recommended next run order (each from stock install, no recovery needed)
+1. **Idle boot of the current full series, no traffic test, 2+ min**: if it hangs at the same phase
+   the trigger is not traffic; if it survives, traffic/engine interaction is involved.
+2. **Full 001-042 image, cmdline WITHOUT `luofu_gmac.w9@BT@** (W9 inert) + `nodoorbell=1 trace=0@BT@:
+   survives => W9 probe reads / MTU op implicated; hangs => delta is elsewhere (next: SMP).
+3. **001-037 only** (control): re-run the exact traffic test on the known-stable subset.
+4. **001-037 + SMP 039 + SMP 040-arm** (no 038/040-net/041): isolates the SMP delta directly.
 
-1. `luofu_pie.nodoorbell=1 luofu_gmac.trace=1` + the full seven-gate chain: survive =>
-   descriptor build/DMA is safe and the engine's post-doorbell processing is the hazard; hang =>
-   bisect before the doorbell.
-2. `luofu_gmac.macconf=1 luofu_gmac.trace=1 luofu_gmac.txhalt=1`: does the missing vendor MAC
-   config sequence change the TX behaviour?  Compare the macconf pre/post lines with the expected
-   values (0x40 should become 0x10c0008 from 0xc0408).
-3. `luofu_gmac.txhalt=1` with the normal doorbell: confirm one descriptor alone still wedges.
-4. If the hang persists with the doorbell, capture it with `oops=panic panic=0` already in the
-   cmdline (no oops appeared because this is a bus hang, not a fault; the kernel printk may stop at
-   the hang, so the last line is the marker).
+Also worth adding to the next runs: keep `oops=panic panic=0@BT@ (a bus hang produces no dump, but a
+fault will), and note whether the 30 s luofu-wdt reset fires or the box needs physical recovery
+(2d904721 did not reset by itself).
 
 ## 5. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/041-net-gmac-macconf-nodoorbell.patch` | vendor MAC config replay + PIE nodoorbell bisection + TX-halt containment | `328cdcc1e26393246c3213e1911d2a8fcbd26bb34f550cdef7b5f24bb2aefebb` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | LSW-SPEC 7.11 round-4c note, SKELETON-SMOKE round-4c session, README 041 row | see handover |
+| `target-skeleton/target/linux/hisilicon/patches-6.18/042-net-gmac-w9-master-off.patch` | W9 master switch (default off): zero W9 MMIO/gate/MTU-op when off; restores 038-041 behavior when on | `2e49e3eb6d94fe47887f146781073b5eabde15f2db9c1c32d172a26683092dab` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | LSW-SPEC 7.11 round-4d note + isolation matrix, SKELETON-SMOKE round-4d session, README 042 row | see handover |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
 | `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
 ## 6. Validation
 
-- **Series apply (current 001-041):** 41/41 applied, 0 failed hunks, 0 .rej/.orig;
-  `luofu-gmac.c` and `luofu-pie.c` byte-identical to the lane tree
-  (`logs/10-series-apply-001-041.log`).
-- **WERROR compile:** both drivers rebuilt clean under `W=1 -Werror`.
-- **checkpatch:** 0 errors, 0 checks, only the expected "missing commit description" warning
-  (`logs/11-checkpatch-041.log`).
+- **Series apply over the current full series + 042 (43 patches):** 43/43, 0 failed hunks,
+  0 .rej/.orig; `luofu-gmac.c` byte-identical to the lane tree (`logs/10-series-apply-042.log`).
+- **WERROR compile:** `luofu-gmac.o` rebuilt clean under `W=1 -Werror`.
+- **checkpatch:** 0 errors, 0 checks, only the expected commit-description warning
+  (`logs/11-checkpatch-042.log`).
 - No devicetree/binding/Kconfig change; no vendor binary or per-unit value added.
 
-## 7. Status
+## 7. Numbering note
 
-The hang is now narrowed to: one accepted frame -> descriptor + doorbell completed -> engine
-processing wedges the SoC.  W9 is not written in the diag-safe image, so the regression is in the
-armed data path's TX-processing behaviour, not in the max-frame value.  Wait for the nodoorbell /
-macconf results before any next-layer decode.
+The skeleton currently holds committed `040-net-gmac-w9-diag.patch` plus untracked
+`040-arm-hisilicon-smp-scu-gic.patch` (SMP) and my `041@BT@/`042` patches.  Series application in sorted
+filename order works (43/43), but renumber the SMP 040 to a free number if a strictly monotonic
+series is wanted.

@@ -1,0 +1,110 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -201,9 +201,24 @@
+ 	writel(0, g->base + LUOFU_GMAC_CTRL);
+ }
+ 
++/*
++ * Patch 042: W9 master switch, default OFF, so a seven-gate image can run with
++ * zero W9 code in the GEMAC probe path.  The round-4c bisection (image
++ * 2d904721) still hung under traffic with nodoorbell=1 and trace=0, i.e. with
++ * no engine interaction and no xmit MMIO reads, while the 001-037 six-gate
++ * image survived the same test; the remaining W9-only runtime effects were the
++ * probe-time W9 diag reads (0x100/0x0/0x40 on all four GEMACs) and the extra
++ * ndo_change_mtu op.  This master switch removes both: with luofu_gmac.w9=0
++ * (the default) no W9 register is read or written, no registration gate is
++ * applied, and the netdev ops table is the pre-038 one (no change_mtu).
++ */
++static bool luofu_gmac_w9_gate;
++module_param_named(w9, luofu_gmac_w9_gate, bool, 0444);
++MODULE_PARM_DESC(w9, "Master switch for all W9 code (diagnostic reads, write step, MTU op and registration gate); default off = pre-038 GEMAC runtime behaviour");
++
+ static bool luofu_gmac_hwinit_gate;
+ module_param_named(hwinit, luofu_gmac_hwinit_gate, bool, 0444);
+-MODULE_PARM_DESC(hwinit, "Attended W9 diagnostic: read and log the MAC maximum-frame register on every GEMAC (no write; required for the GEMAC front end to register once the attended LSW/PIE chain is armed; default off)");
++MODULE_PARM_DESC(hwinit, "W9 diagnostic: read and log the MAC maximum-frame register on every GEMAC (no write; honoured only with luofu_gmac.w9=1; default off)");
+ 
+ static bool luofu_gmac_hwinitwrite_gate;
+ module_param_named(hwinitwrite, luofu_gmac_hwinitwrite_gate, bool, 0444);
+@@ -252,7 +267,8 @@
+ /* True when the explicit W9 write step is armed (hwinitwrite requires hwinit). */
+ static bool luofu_gmac_hwinit_write_allowed(void)
+ {
+-	return luofu_gmac_hwinit_gate && luofu_gmac_hwinitwrite_gate;
++	return luofu_gmac_w9_gate && luofu_gmac_hwinit_gate &&
++	       luofu_gmac_hwinitwrite_gate;
+ }
+ 
+ /*
+@@ -523,6 +539,20 @@
+ 	 */
+ 	.ndo_set_mac_address	= eth_mac_addr,
+ 	.ndo_validate_addr	= eth_validate_addr,
++};
++
++/*
++ * Patch 042: the MTU op only exists for the W9 configurations.  With
++ * luofu_gmac.w9=0 the pre-038 ops table is used, so userspace MTU changes take
++ * the generic path exactly as they did on the surviving 001-037 image.
++ */
++static const struct net_device_ops luofu_gmac_netdev_ops_w9 = {
++	.ndo_open		= luofu_gmac_open,
++	.ndo_stop		= luofu_gmac_stop,
++	.ndo_start_xmit		= luofu_gmac_xmit,
++	.ndo_get_stats64	= luofu_gmac_get_stats64,
++	.ndo_set_mac_address	= eth_mac_addr,
++	.ndo_validate_addr	= eth_validate_addr,
+ 	.ndo_change_mtu		= luofu_gmac_change_mtu,
+ };
+ 
+@@ -696,26 +726,27 @@
+ 		goto err_reset;
+ 	}
+ 
+-	ndev->netdev_ops = &luofu_gmac_netdev_ops;
++	ndev->netdev_ops = luofu_gmac_w9_gate ? &luofu_gmac_netdev_ops_w9 :
++						 &luofu_gmac_netdev_ops;
+ 	ndev->ethtool_ops = &luofu_gmac_ethtool_ops;
+ 
+ 	/*
+-	 * Fail closed like the switch stages: once the accepted attended path is
+-	 * reached (PIE armed, LSW data path complete), a netdev may only register
+-	 * with the W9 diagnostic armed, so the MAC maximum-frame register state is
+-	 * always on the console for the stock-vs-ours comparison.  The diagnostic
+-	 * is read-only; the write step is a separate explicit gate.
++	 * Patch 042: W9 code is fully optional now.  Only the luofu_gmac.w9=1
++	 * master switch enters this block (see the parameter comment: the
++	 * round-4c bisection left the probe-time diag reads and the extra MTU op
++	 * as the only W9 runtime effects in a no-engine-interaction run).
+ 	 */
+-	if (!luofu_gmac_hwinit_gate)
+-		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "MAC W9 diagnostic is not armed (set luofu_gmac.hwinit=1): refusing to register a netdev without the maximum-frame register readout\n");
+-
+-	luofu_gmac_hw_diag(ndev);
+-	if (luofu_gmac_hwinit_write_allowed() &&
+-	    g->port == luofu_gmac_hwinit_port) {
+-		ret = luofu_gmac_hw_init_write(ndev);
+-		if (ret)
+-			goto err_phylink;
++	if (luofu_gmac_w9_gate) {
++		if (!luofu_gmac_hwinit_gate)
++			return dev_err_probe(dev, -EOPNOTSUPP,
++					     "luofu_gmac.w9=1 requires hwinit=1 (the W9 diagnostic) so the maximum-frame readout is on the console\n");
++		luofu_gmac_hw_diag(ndev);
++		if (luofu_gmac_hwinit_write_allowed() &&
++		    g->port == luofu_gmac_hwinit_port) {
++			ret = luofu_gmac_hw_init_write(ndev);
++			if (ret)
++				goto err_phylink;
++		}
+ 	}
+ 
+ 	ret = register_netdev(ndev);
+@@ -769,5 +800,5 @@
+ };
+ module_platform_driver(luofu_gmac_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE; W9 MAC max-frame diag + gated single-port write)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE; W9 master-gated MAC init (patch 042 default-off))");
+ MODULE_LICENSE("GPL");

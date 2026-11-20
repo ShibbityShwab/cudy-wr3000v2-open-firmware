@@ -1313,3 +1313,143 @@ the SCU words.
   instructions, including the marker word 1 progress store);
 * clean make target/linux/prepare + make target/linux/compile in the isolated clone
   (artifact hashes in the lane summary).
+
+---
+
+## 20. Stock read-only reference (2026-11-20) and patch 042: SCU config bit and GIC reference
+
+Status: the lead took a clean read-only reference on a stock 5.10 boot
+(boot_id 72c87547-70e5-4882-8117-a128eac71ad5, two identical rounds,
+build/evidence-bench-gates/2026-11-20-stock-reads.txt). This section interprets it,
+records the new single-variable knob, and lists the additional stock reads that are
+worth taking while the stock image is still reachable.
+
+### 20.1 Stock reference values [V]
+
+| register | stock value | our 6.18 value | note |
+| --- | --- | --- | --- |
+| SCU 0x10180000 ctrl | 0x00000003 | 0x00000003 | same |
+| SCU 0x10180004 config | **0x00000531** | **0x00000511** | bit 5 set only on stock |
+| SCU 0x10180008 status | 0x03030000 | 0x03030000 | CPU0/1 NORMAL, CPU2/3 off |
+| GICD 0x10181000 CTLR | 0x00000001 | (039 dumps) | distributor enabled |
+| GICD 0x10181004 TYPER | 0x0000FC25 | - | 44 IRQ lines (vendor config) |
+| GICD 0x10181008 IIDR | 0x0102043B | - | ARM GIC v1 r2p4 |
+| GICD 0x10181f00 SGIR | 0x00000000 | - | no IPI pending/left in SGIR |
+| GICC 0x10180100 CTLR (CPU0) | 0x00000001 | (039 dumps) | CPU0 interface enabled |
+| GICC 0x10180200 CTLR (CPU1 view) | 0x00000000 | (039 dumps) | **not meaningful**: banked/RAZ from CPU0 |
+| SYSCTRL 0x10100c00 pen | 0x80609680 | loader-left 0, then our values | vendor runtime pen, not cleared |
+| SYSCTRL 0x10100c04/c0c | 0 | 0 | same |
+| SYSCTRL 0x10100c08 | 0x00000010 | 0x00000010 | same |
+| SYSCTRL 0x10100c10 rstinfo | 0x0A000000 | 0x42000000 warm / 0x02000000 cold | third sample, encoding [U] |
+| SYSCTRL 0x10100c14 | 0xDFDF0781 | 0xDFDF0781 | same |
+| CRG 0x14880038 resume | 0x00200000 | our post-release 0x00200000 | release value vendor-equivalent |
+| CRG 0x1488003c | 0 | 0 | same |
+
+### 20.2 Interpretation
+
+* **GICC CTLR CPU1 = 0 carries no information [V].** The A9 GIC CPU interface is
+  banked per CPU: a CPU can only read its own bank. CPU0 reading the CPU1 window
+  (0x10180200) returns zero on stock and on our kernel alike; it does not mean CPU1's
+  interface is disabled. CPU1 only enables its own interface when it starts running
+  its GIC init, so the vendor's release cannot depend on this bit. (Patch 039/042
+  dumps it only as a labelled reference value.)
+* **SCU config 0x531 vs 0x511 is a real state difference, semantics [U].** Bit 5
+  (0x20) is set on stock and not in our kernel. U-Boot is shared by both boot paths
+  and our first read of the register (prepare time, 0.13 s) already sees 0x511, so
+  [I] the vendor kernel sets bit 5 in its own early init; our port never writes the
+  SCU Configuration Register at all (scu_enable() returns early because ctrl bit 0 is
+  already set by the loader). With the A9 SCU Configuration Register's low bits
+  decoded (bits [1:0] = cores - 1), bit 5 is above the documented core-count field;
+  the lead's "standby enable" reading is plausible but unverified [U]. It cannot gate
+  a core that is already powered (SCU status NORMAL) and polling memory, but it is the
+  first non-vendor-equivalent SCU state we have found, so it deserves one
+  single-variable run.
+* GICD_CTLR = 1, SGIR = 0, GICC CPU0 CTLR = 1 show a normal enabled distributor and
+  CPU0 interface on stock; patch 042 prints the same fields from our kernel so the
+  comparison is direct.
+* The pen word 0x80609680 is the vendor kernel's runtime write and stays intact -
+  the consumer does not clear the pen - so the stock value says nothing about
+  consumption.
+* rstinfo 0x0A000000 is a third sample (ours 0x42000000 warm, 0x02000000 cold); the
+  field varies with the boot path and is not decoded [U].
+
+### 20.3 Patch 042: SCU config bit and GIC reference dumps
+
+Requested as part of the patch 040 window; renumbered to 042 because the parallel net
+lane filed 040-net-gmac-w9-diag.patch and 041-net-gmac-macconf-nodoorbell.patch at
+the same time (those two do not apply cleanly on a fresh 001-039 series as of this
+writing - flagged for the net lane, not part of this post's validation window).
+
+target-skeleton/target/linux/hisilicon/patches-6.18/042-arm-hisilicon-smp-scu-gic.patch
+(platsmp.c only; keeps all 039 behaviour):
+
+* new bare-name knob **luofu_smp_scu_cfg=<hex>**: ORs the mask into the SCU
+  Configuration Register (0x10180004) at prepare time, before the release, and prints
+  the value before, after and the readback. "luofu_smp_scu_cfg=0x20" is the
+  single-variable test for the stock bit 5. The standard prep/+1ms/+21ms SCU dumps
+  then show the configuration the release ran with.
+* the GIC dump now covers the same registers as the stock read: GICD_CTLR,
+  ISENABLER0/1, ISPENDR0, ISACTIVER0, ITARGETSR0, ICFGR0/1, IPRIORITYR0, plus GICC
+  PMR/BPR of the CPU0 bank and the labelled CPU1 banked view, at prepare and after
+  the release.
+
+### 20.4 Additional stock reads (while the stock image is reachable)
+
+Priority 1 (safe, clearly useful):
+
+    for a in 0x10181100 0x10181104 0x10181108 0x10181200 0x10181300 \
+             0x10181400 0x10181800 0x10181c00 0x10181c04 \
+             0x10180104 0x10180108 ; do
+        printf "%s " "$a"; /sbin/devmem "$a" 32; done
+
+  This covers SGI/PPI enables, pending/active SGIs, SGI targets, SGI config edges,
+  SGI priorities and the CPU0 interface PMR/BPR. It is the reference our kernel's GIC
+  driver must match for the wakeup IPI (SGI 0) to be deliverable to CPU1 on stock.
+
+    dd if=/dev/mem bs=4096 skip=$((0x80600000/4096)) count=4 2>/dev/null | od -Ax -v -tx4
+
+  The 16 KiB flashinfo window as the loader/vendor kernel left it (our kernel's view
+  of the same window is in the 037/039 dumps).
+
+    for a in $(seq $((0x80500000)) 4096 $((0x805ff000))); do
+        printf "%x " $a; /sbin/devmem $a 32; done
+
+  One word per page of the low 1 MiB window: on our side it is only the
+  0x66cc66cc DDR test pattern; the stock value tells whether the loader left anything
+  else there.
+
+    cat /proc/interrupts ; cat /proc/softirqs
+
+  Harmless, shows that SGI/IPI delivery to CPU1 works on stock (the reference for a
+  CPU1 that may be woken by IPI rather than polling).
+
+    for a in 0x10100c18 0x10100c1c 0x14880000 0x14880004 0x14880008 0x1488000c \
+             0x14880010 0x14880014 0x14880018 0x1488001c 0x14880020 0x14880024 \
+             0x14880028 0x1488002c 0x14880030 0x14880034 ; do
+        printf "%s " "$a"; /sbin/devmem "$a" 32; done
+
+  Remaining SYSCTRL words next to the reset record and the full CRG window for the
+  baseline comparison.
+
+Priority 2 (riskier, decisive if readable): the decoded U-Boot CPU1 poll-loop
+candidate in the loaders own region:
+
+    for a in 0x80040000 0x800405c0 0x800405d0 0x800405e0 0x800405f0 0x80040600 ; do
+        printf "%s " "$a"; /sbin/devmem "$a" 32; done
+
+  0x8004xxxx is outside the DT RAM window; if /dev/mem refuses it or the read faults the
+  stock kernel may oops, but the loader recovers. If it reads, it proves where the
+  loader park loop lives and whether the decoded instructions are really there at
+  runtime.
+
+Also useful: note how the stock boot was entered for this sample (fallback after our
+crash?) for the rstinfo 0x0A000000 entry, and if a known cold power-on stock boot is
+ever available, repeat the c10/SCU-config reads.
+
+### 20.5 Next single variables
+
+1. 001-039 image: luofu_smp_early_probe=2 (plan unchanged), then 3, then 4.
+2. 001-042 image (separate session or a later image): luofu_smp_scu_cfg=0x20 as a
+   single variable (do not combine with the early-probe modes in the same run).
+3. If all silent: the stock reads in 20.4 plus the loader decode of how CPU1 is
+   started.

@@ -1294,6 +1294,28 @@ descriptors, never ring the doorbell - proves whether the hang is before or afte
 register value logged, instead of the unattested 0x0 write), and `luofu_gmac.txhalt=1` (stops the TX
 queue after the first xmit so at most one descriptor can reach the engine).
 
+**Round-4d bisection: no-engine-interaction still hangs (patch 042).**  Image 2d904721 (001-041,
+seven gates, W9 read-only, gmac.trace=0, luofu_pie.nodoorbell=1, oops=panic) booted, showed four
+`TX doorbell SUPPRESSED` lines (no doorbell writes, no xmit MMIO reads) and still hung under the
+host traffic test: last lines are the second eth2 link-up / br-lan forwarding at 40.4 s, two more
+xmit attempts and eth3's PHY init at 40.95 s, then silence - no Oops, no fallback (physical recovery
+needed).  The 001-037 six-gate image survived the same test before, so the remaining suspects are
+the only W9 runtime effects present in a no-engine run (probe-time diag reads of 0x100/0x0/0x40 on
+all four GEMACs and the extra ndo_change_mtu op) or the SMP patch delta (039/040-arm), which the
+001-037 image predates.
+
+Patch 042 makes W9 fully removable at runtime: new master switch `luofu_gmac.w9` (default OFF).
+With `w9=0` the GEMAC probe does **no** W9 register read or write, applies no registration gate,
+and installs the pre-038 netdev ops table (no change_mtu); `w9=1` re-enables hwinit/hwinitwrite.
+This allows a seven-gate image with **zero W9 code executed**.  Proposed isolation matrix:
+
+1. **Idle boot of the current full series, no traffic test** - if it still hangs around the same
+   phase, the trigger is not traffic at all; if it survives, traffic/engine is involved.
+2. **001-042 full, cmdline WITHOUT luofu_gmac.w9** (W9 code inert) + nodoorbell=1, trace=0: survives
+   => W9 probe reads/MTU op implicated; hangs => delta is elsewhere (first test: SMP 039/040-arm).
+3. **001-037 only** (control): re-run the exact traffic test on the known-stable subset.
+4. **001-037 + SMP 039 + SMP 040-arm** (no 038/040-net/041): isolates the SMP delta directly.
+
 **Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
 entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
 only: each entry embeds an id returned by the vendor's software table-manager allocation

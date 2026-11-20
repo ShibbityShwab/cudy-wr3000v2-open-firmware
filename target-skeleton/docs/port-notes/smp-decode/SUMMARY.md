@@ -1,16 +1,14 @@
 # SMP release diagnosis lane - integration record (task-62, agent smp-decode)
 
-Revision 6, 2026-11-20. Supersedes revision 5. New: the W9 log reconciliation (the
-"2 CPUs" sighting is the vendor 5.10 fallback, not our 6.18 kernel; no 6.18 boot of
-this lane has ever brought up CPU1), the traffic-correlated crash evidence, and patch
-039 - the safe early-probe variant (modes 1-5, corrected wakeup-IPI target, early
-marker word 1, skip-release guard, GIC state dumps). **Host-only: no device access by
-this lane; hardware results are the lead's attended runs, cited from the saved
-console logs.**
+Revision 7, 2026-11-20. Supersedes revision 6. New: the stock read-only reference
+(SCU config 0x531 vs our 0x511, GIC reference values, rstinfo third sample) and patch
+042 - the SCU-config single-variable knob plus GIC reference dumps that match the
+stock read. **Host-only: no device access by this lane; hardware results are the
+lead's attended runs and stock telnet reads, cited from the saved logs.**
 
 Kernel side: target-skeleton/target/linux/hisilicon/patches-6.18/ (033, 034, 035,
-037, 039). Design/evidence doc: docs/SMP-RE.md sections 14-19 (this revision's
-shared.patch appends section 19). Local evidence bundle:
+037, 039, 042). Design/evidence doc: docs/SMP-RE.md sections 14-20 (this revision's
+shared.patch appends section 20). Local evidence bundle:
 build/linux-kbuild/waves/2026-11-19-smp-fix/ (gitignored).
 
 ## 1. Deliverables
@@ -21,138 +19,128 @@ build/linux-kbuild/waves/2026-11-19-smp-fix/ (gitignored).
 | patch 034 | .../034-arm-hisilicon-smp-release-probe.patch | cc27347f503b203c6f891373c589239e278dccd52b66551c9c291632f8953208 |
 | patch 035 | .../035-arm-hisilicon-smp-release-marker.patch | 8724e926a7d621d50a89590e4907aa4e5912a0c69e35f092607564b8aa9e0997 |
 | patch 037 | .../037-arm-hisilicon-smp-early-probe.patch | 2b073ec0905dcf48c56bc3e0fb6c16fe363ae030d67f6205e24fbda19391f237 |
-| **patch 039 (new)** | .../039-arm-hisilicon-smp-early-safe.patch | 37b7932b0c240d612582090ed17c5c91241f8bdfed074bdd0e7bafb13dd43a32 |
-| shared documentation patch (SMP-RE.md section 19) | docs/incoming/smp-decode/shared.patch | 3dd9bb0120f7b70a6a54c10c6a6fc2c8eccba707b50e93e844dd08077c4c9ae9 |
+| patch 039 | .../039-arm-hisilicon-smp-early-safe.patch | 37b7932b0c240d612582090ed17c5c91241f8bdfed074bdd0e7bafb13dd43a32 |
+| **patch 042 (new)** | .../042-arm-hisilicon-smp-scu-gic.patch | dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a |
+| shared documentation patch (SMP-RE.md section 20) | docs/incoming/smp-decode/shared.patch | 1979e04255b915f1184f5f561eb6cebfbc2c56ab29d308529078c91d19db0dc1 |
 | this record | docs/incoming/smp-decode/SUMMARY.md | - |
 | local evidence bundle | build/linux-kbuild/waves/2026-11-19-smp-fix/ | EVIDENCE-SHA256SUMS.txt there |
 
-## 2. W9 window reconciliation [V]
+Numbering note: the SMP patch was requested in the "040" window; the parallel net lane
+filed 040-net-gmac-w9-diag.patch and 041-net-gmac-macconf-nodoorbell.patch at the
+same time, so the SMP patch is 042. As of this writing those two net patches do not
+apply cleanly on a fresh 001-039 series (040 fails at hunks 1 and 3 of
+drivers/net/ethernet/hisilicon/luofu-gmac.c), so the validation window of this
+revision is 001-039 + 042 (net 040/041 skipped; net lane to fix).
 
-Two W9 images were booted: a6b57361 (001-038 + luofu_smp_early_probe=1) and 45d248ff
-(001-038, no early probe); both reset after traffic and the loader fell back to the
-stock 5.10 image.
+## 2. Stock read-only reference [V]
 
-* **No 6.18 boot of this lane has ever brought up CPU1.** The early-probe boot's own
-  lines in the raw capture are
-  "[1.530358] CPU1: failed to come online", "[1.534218] smp: Brought up 1 node, 1 CPU",
-  "[1.538264] SMP: Total of 1 processors activated (1993.93 BogoMIPS)".
-* Every "Brought up 1 node, 2 CPUs" / "CPU1: thread -1 ... mpidr 80000001" sighting in
-  the W9 captures belongs to a **stock 5.10.201** boot segment (vendor timeline:
-  CPU1 thread 0.1803-0.1805 s, brought-up 0.1912-0.1913 s, 3987.86 BogoMIPS; the
-  vendor segment also carries its own "Linux version 5.10.201 (jenkins@cudyrd1)").
-  Our kernel's SMP release starts at 0.36-0.37 s because the 037 dumps run first, so a
-  0.19 s CPU1 line cannot be ours.
-* Therefore consumed=no together with "2 CPUs" is not a contradiction - it was the
-  wrong boot segment. The earlier reading "the early probe enabled the normal release"
-  is withdrawn.
+Stock 5.10 boot, boot_id 72c87547-70e5-4882-8117-a128eac71ad5, two identical rounds
+(build/evidence-bench-gates/2026-11-20-stock-reads.txt):
 
-## 3. What early_probe=1 actually tested (and the next single variables)
+* SCU ctrl 3, config **0x531**, status 0x03030000;
+* GICD_CTLR 1, GICD_TYPER 0xFC25, GICD_IIDR 0x0102043B, SGIR 0, GICC CPU0 CTLR 1,
+  GICC CPU1 window read from CPU0 = 0 (banked/RAZ, no information);
+* SYSCTRL c00 0x80609680 (vendor runtime pen), c04 0, c08 0x10, c0c 0, c10
+  0x0A000000, c14 0xDFDF0781;
+* CRG 0x38 0x00200000, 0x3c 0.
 
-Mode 1 writes only the pen (early-stub address); it does not clear the CRG resume bits
-and does not send the wakeup IPI. If CPU1 is held in reset or dormant (not executing
-the loader's poll loop), a pen write alone cannot release it - so marker=0 is the
-expected result and does not prove the consumer is gone. The decoded order is
-pen -> resume bits -> wakeup IPI.
+Interpretation:
 
-Patch 039 therefore provides the complete single-variable ladder before the first
-allocation:
+* GICC CPU1 = 0 is **not meaningful**: the A9 GIC CPU interface is banked per CPU and
+  a CPU can only read its own bank; stock and our kernel both read zero there. CPU1
+  enables its own interface only when it starts, so the vendor release cannot depend
+  on it.
+* SCU config **0x531 vs our 0x511** is a real difference in bit 5. The semantics of
+  the bit above the core-count field are not decoded [U]; the lead's "standby enable"
+  reading is plausible but unverified. U-Boot is shared by both boot paths and our
+  earliest read (prepare, 0.13 s) already shows 0x511, so [I] the vendor kernel sets
+  bit 5 in its own early init; our port never writes the SCU Configuration Register
+  (scu_enable() returns early because ctrl bit 0 is already set). It cannot gate a
+  core that is already powered (SCU status NORMAL), but it is the first
+  non-vendor-equivalent SCU state found, so patch 042 exposes it as a single variable.
+* GICD_CTLR = 1 / SGIR = 0 / GICC CPU0 = 1 is a normal enabled distributor; patch 042
+  prints the same fields from our kernel for a direct diff.
+* The stock pen value is the vendor kernel's runtime write and stays intact - the
+  consumer does not clear the pen - so it says nothing about consumption.
+* rstinfo 0x0A000000 is a third sample (ours 0x42000000 warm, 0x02000000 cold); the
+  field varies with the boot path and is not decoded [U].
+* CRG resume 0x00200000 equals the value our release produces; the CRG side remains
+  vendor-equivalent.
 
-| mode | behaviour |
-| --- | --- |
-| 1 | pen only (same as 037) |
-| 2 | pen + CRG resume-bit clear (**next run: luofu_smp_early_probe=2**) |
-| 3 | pen + CRG clear + wakeup IPI; GICD_SGIR value fixed to 0x00020000 (target list CPU1, SGI 0). 037 wrote 0x02000000 = target-list-filter "only the requesting CPU" = CPU0 self-IPI |
-| 4 | pen + CRG clear, bounded window, then restore pen and resume words for the normal release (hand-back mode); if consumed, the normal release is skipped |
-| 5 | read-only early snapshot, no writes (safe control) |
+## 3. Patch 042
 
-Order to run: **2**, then 3, then 4; mode 5 as the control. If all are silent, the
-loader/ROM is not polling or not releasing CPU1 on this boot path; then the stock
-reads (SMP-RE 17.6 + 19.6) and a loader-side decode of how CPU1 is started are next.
+platsmp.c only, keeps all 039 behaviour:
 
-## 4. Crash evidence [V]
+* **luofu_smp_scu_cfg=<hex>**: OR the mask into the SCU Configuration Register
+  (0x10180004) at prepare time, before the release, with before/after/readback
+  logging. "luofu_smp_scu_cfg=0x20" is the single-variable test for the stock bit 5;
+  the standard SCU dumps then show the configuration the release ran with.
+* GIC reference dumps at prepare and after the release, covering the same registers
+  as the stock read: GICD_CTLR, ISENABLER0/1, ISPENDR0, ISACTIVER0, ITARGETSR0,
+  ICFGR0/1, IPRIORITYR0, GICC PMR/BPR (CPU0 bank) and the labelled CPU1 banked view.
 
-The two W9 resets correlate with traffic, not with the early probe: the clean 1-CPU
-image (no early probe) also reset after traffic. In the early-probe boot the kernel ran
-to userspace as 1 CPU and oopsed at 7.4336 s, immediately after two pie-trace GEMAC
-eth2 transmits (len=90, then len=1043):
+## 4. Additional stock reads requested (while stock is reachable)
 
-    Internal error: Oops: 17 [#2] SMP ARM
-    CPU: 0 UID: 0 PID: 497 Comm: netmsg Not tainted 6.18.60 #0 NONE
-    Unable to handle kernel NULL pointer dereference at virtual address 00000008 when read
+Priority 1 (safe): GICD 0x10181100 0x10181104 0x10181108 0x10181200 0x10181300
+0x10181400 0x10181800 0x10181c00 0x10181c04 and GICC CPU0 0x10180104 0x10180108
+(SGI/PPI enables, pending/active, SGI targets, SGI edge config, SGI priorities,
+CPU0 PMR/BPR - the reference our GIC driver must match for the wakeup SGI 0);
+the 16 KiB flashinfo window 0x80600000 via
+"dd if=/dev/mem bs=4096 skip=$((0x80600000/4096)) count=4 | od -Ax -v -tx4"; one word
+per 4 KiB page of 0x80500000-0x805fffff; /proc/interrupts and /proc/softirqs (SGI/IPI
+delivery reference); SYSCTRL 0x10100c18 0x10100c1c and the full CRG window
+0x14880000-0x1488003c.
 
-The capture cuts to the loader fallback right at the oops, so the register dump and
-call trace are missing; the faulting function is not captured. The oops is real
-(6.18.60) but the context is the W9 net TX path, not SMP (one CPU, no early-stub
-consumption, clean image resets the same way). Net lane should reproduce with the
-pie-trace lines and capture the full oops.
+Priority 2 (riskier, decisive if readable): the decoded U-Boot CPU1 poll-loop
+candidate in the loader region - 0x80040000 and 0x800405c0-0x80040600. This address is
+outside DT RAM; if /dev/mem refuses it or the read faults the stock kernel may oops,
+but the loader recovers. If it reads, it proves where the loader park loop lives and
+whether the decoded instructions are there at runtime.
 
-## 5. Patch 039 details
+Also: record how the stock boot was entered (fallback after our crash?) for the
+rstinfo 0x0A000000 sample, and if a known cold power-on stock boot is ever available,
+repeat the c10 / SCU-config reads.
 
-* modes 1-5 as in the table above, all from the same early_param handler inside
-  setup_arch(), before memblock/paging init, using early_ioremap() and fixed SoC
-  physical addresses (no DT dependency);
-* the early stub now writes marker word 1 = 0x4545 after the UART 'E' print, so
-  "never ran" and "ran past the UART poll" are distinguishable; the early markers are
-  printed at the end of the early handler, at prepare, at +1ms/+21ms and at
-  late_initcall;
-* if a mode 1-4 marker shows consumption, boot_secondary skips the normal release and
-  returns -EIO (no double release, no conflicting vendor sequence);
-* GIC distributor and CPU-interface words are dumped at prepare and after the release
-  (GICD_CTLR, GICD_SGIR, GICC_CTLR of CPU0 and CPU1): the wakeup IPI can only reach
-  CPU1 if the distributor and the target CPU interface are enabled;
-* everything from 037 is kept (loader-window dumps, park-loop scan, memblock dumps,
-  the 035 probe stubs and knobs).
+## 5. Next single variables
 
-## 6. Stock read-only measurement plan (root telnet, no writes)
+1. 001-039 image: luofu_smp_early_probe=2 (plan unchanged), then 3, then 4.
+2. 001-042 image, separate session/later image: luofu_smp_scu_cfg=0x20 as a single
+   variable (do not combine with the early-probe modes).
+3. If all silent: the stock reads in section 4 plus the loader decode of how CPU1 is
+   started.
 
-/devmem exists at /sbin/devmem; /dev/mem readable. On the stock 5.10 boot (2 CPUs):
-
-1. SCU + SYSCTRL + CRG reference:
-       for a in 0x10180000 0x10180004 0x10180008 0x10100c00 0x10100c04 \
-                0x10100c08 0x10100c0c 0x10100c10 0x10100c14 0x14880038 0x1488003c; do
-           printf '%s ' "$a"; /sbin/devmem "$a" 32; done
-2. GIC reference (new):
-       for a in 0x10181000 0x10181004 0x10181008 0x10181f00 0x10180100 0x10180200; do
-           printf '%s ' "$a"; /sbin/devmem "$a" 32; done
-   Expected: GICD_CTLR bit0 = 1, GICD_SGIR = 0, GICC_CTLR (CPU0 and CPU1) bit0 = 1.
-3. Loader windows (preserved on stock): 0x80500000-0x805fffff page sampling and the
-   0x80600000-0x80604000 dump as in SMP-RE 17.6; the 0x805xxxxx range is only a
-   memory-test pattern on our side, and the low 1 MiB reservation did not revive CPU1.
-4. Repeat (1) after a known cold power-on and a known warm reboot for the rstinfo
-   correlation (ours: 0x02000000 cold / 0x42000000 warm).
-
-## 7. Validation of 039 (host-only, isolated clone)
+## 6. Validation of 042 (host-only, isolated clone)
 
 | check | result |
 | --- | --- |
-| pristine 6.18.60 apply of the current series 001-039 | patch -p1 -F0: RC=0, 121 files, no .rej/.orig; only the four known offset hunks (008 x2, 021, 028); resulting platsmp.c sha256 99343778... identical to the delivered file |
-| kernel prepare 001-039 | RC=0 (1,254 patching-file lines) |
-| full kernel compile 001-039 | RC=0 (real 123.7 s); zImage 3,289,344 B sha256 fe1846ffcfe7bec5eeb961c508814eb090cfffdab72252b31be1aa405aeb5a4b; vmlinux sha256 4720ce13e0afac7bc6312615bf0ea224382b5ee3cd76bd839cdf96fdb5bfe1c7; 0 warnings |
-| built tree identity | platsmp.c sha256 99343778... = delivered patch content |
-| symbols | _text = stext = 0xc0608000, secondary_startup = 0xc070a000; early marker 0xc1293400, early stub 0xc1293440 (expected PAs 0x81293400/0x81293440, matching the W9 log lines), probe stub 0xc1295000 |
-| early stub encoding | all 20 instructions verified word-for-word against the project ARM assembler (marker 0 = MPIDR, marker 1 = 0x4545 progress store, bounded UART poll, WFE spin) |
+| pristine 6.18.60 apply of 001-039 + 042 (net 040/041 skipped, see numbering note) | patch -p1 -F0: RC=0, 120 files, no .rej/.orig; only the four known offset hunks (008 x2, 021, 028); resulting platsmp.c sha256 0c728162... identical to the delivered file |
+| kernel prepare | RC=0 (1,255 patching-file lines) |
+| full kernel compile | RC=0 (real 147.8 s); zImage 3,290,208 B sha256 d8abb8dc56b912d0972c1d94c7d6ab0ce0f423fb415d20173a35056c5cb98cb5; vmlinux sha256 c30554b78525d5f36a44e9ad30971897f852ee45ca370c9bc2a5d17fe64eb5ce; 0 warnings |
+| built tree identity | platsmp.c sha256 0c728162... = delivered patch content |
+| symbols | _text = 0xc0608000, secondary_startup = 0xc070a000; early marker 0xc1293400, early stub 0xc1293440, probe stub 0xc1295000 |
+| setup strings | luofu_smp_early_probe, luofu_smp_scu_cfg, luofu_smp_reserve_low1m present in vmlinux |
 | checkpatch | patch-mode: only the expected missing commit-description/Signed-off-by metadata plus compact-dump pr_cont notes |
-| shared.patch v7 | git apply --check RC=0 and patch -p1 --dry-run RC=0 from the opensource/ root (appends section 19 on top of the integrated sections 14-18) |
+| shared.patch v8 | git apply --check RC=0 and patch -p1 --dry-run RC=0 from the opensource/ root (appends section 20 on top of the integrated sections 14-19) |
 
-## 8. Remaining unknowns
+## 7. Remaining unknowns
 
-* Whether CPU1 is held in reset/dormant or not polling the pen at all (modes 2/3/4).
-* What the vendor kernel does differently before its release (GIC state is the next
-  measurable difference; the stock GIC reads are in section 6).
-* rstinfo cold/warm encoding (0x02000000 vs 0x42000000) [U]; SCU config bits above
-  [1:0] [U]; physical semantics of CRG + 0x38 bits [U].
+* Whether CPU1 is held in reset/dormant or not polling the pen at all (early modes
+  2/3/4).
+* Whether the SCU config bit 5 matters (luofu_smp_scu_cfg=0x20).
+* rstinfo encoding (0x02/0x42/0x0A samples) [U]; SCU config bit 5 semantics [U];
+  physical semantics of CRG + 0x38 bits [U].
 * Whether the 6.18 secondary entry works when CPU1 reaches it [U].
-* W9 net TX oops: faulting function not captured; net lane.
+* W9 net TX oops: faulting function not captured (net lane).
 
-## 9. Integration notes
+## 8. Integration notes
 
-1. Patch 039 is installed in patches-6.18/; 033/034/035/037 unchanged. No DTS/config
-   change needed for the diagnostic image.
+1. Patch 042 is installed in patches-6.18/; 033/034/035/037/039 unchanged. No
+   DTS/config change needed for the diagnostic image.
 2. Apply the shared documentation patch from the opensource/ root:
        cd opensource && git apply target-skeleton/docs/incoming/smp-decode/shared.patch
-   It appends section 19 to docs/SMP-RE.md and changes nothing else.
-3. Next bench token: replace luofu_smp_early_probe=1 with luofu_smp_early_probe=2 on
-   an 001-039 image; then 3 and 4 if silent; mode 5 as the read-only control.
+   It appends section 20 to docs/SMP-RE.md and changes nothing else.
+3. Next bench tokens: early runs unchanged (luofu_smp_early_probe=2 on 001-039);
+   the SCU-config test is luofu_smp_scu_cfg=0x20 on an 001-042 image, alone.
 4. Evidence: build/linux-kbuild/waves/2026-11-19-smp-fix/ (pristine apply, clean
    prepare/compile logs, patch sources, System.map excerpts, early-stub assembler
-   checks, W9 capture copies, EVIDENCE-SHA256SUMS.txt).
+   checks, W9 capture copies, stock reads copy, EVIDENCE-SHA256SUMS.txt).

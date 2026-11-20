@@ -3942,3 +3942,18 @@ link-up with pre/post logs), and `luofu_gmac.txhalt=1` (stop the TX queue after 
 The bisection order: (1) nodoorbell=1+trace=1 run - survives => hang is engine processing after the
 doorbell (not descriptor build/DMA); (2) macconf=1+trace=1+txhalt=1 run - tests whether the missing
 vendor sequence is what makes the engine hang; (3) normal doorbell run to confirm.
+
+## 2026-11-20 round 4d: no-engine-interaction hang, W9 master switch (patch 042)
+
+Image 2d904721 (001-041, seven gates, W9 read-only, trace=0, nodoorbell=1, oops=panic) booted and
+showed four suppressed-doorbell lines (descriptor builds only, no doorbell writes, no post-TX MMIO
+reads), yet the box still hung under the traffic test: last lines are the second eth2 link-up /
+br-lan forwarding at 40.4 s, two xmit attempts and eth3 PHY init at 40.95 s, then silence (no Oops,
+no fallback, physical recovery).  The 001-037 six-gate image survived the same test, so the open
+deltas are the W9 probe-time diag reads + extra ndo_change_mtu op (038/040) and the SMP 039/040-arm
+patches that the 001-037 image predates.
+
+Patch 042 adds `luofu_gmac.w9` as a master switch, default OFF: with `w9=0` the probe performs no
+W9 MMIO and no registration gate, and installs the pre-038 netdev ops table (no change_mtu), so a
+full seven-gate image can run with zero W9 code.  Recommended matrix: idle boot without traffic;
+full 001-042 without the w9 parameter (W9 inert); 001-037 control; 001-037 + SMP 039/040-arm.
