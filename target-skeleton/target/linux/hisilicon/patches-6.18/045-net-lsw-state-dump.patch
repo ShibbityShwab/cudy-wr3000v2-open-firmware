@@ -1,0 +1,110 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -242,6 +242,10 @@
+ 
+ static bool luofu_switch_ifc_gate;
+ module_param_named(ifc, luofu_switch_ifc_gate, bool, 0444);
++static bool luofu_switch_dump_gate;
++module_param_named(dump, luofu_switch_dump_gate, bool, 0444);
++MODULE_PARM_DESC(dump, "Attended W11 diagnostic: after the armed path prints a read-only LSW state dump for the stock-vs-ours comparison (no hardware writes; default off)");
++
+ MODULE_PARM_DESC(ifc, "Attended W10 step: program the recovered IFC default-classification table (requires arm/egress/qidmap/eps/qminit/pfe; default off)");
+ 
+ bool luofu_switch_probed(void)
+@@ -2870,6 +2874,86 @@
+ 	return 0;
+ }
+ 
++/*
++ * W11: read-only LSW state dump for the stock-vs-ours comparison (patch 045).
++ *
++ * Ten attended stages (W3-W10) are programmed and verified on silicon, yet no
++ * frame crosses the switch in either direction.  The vendor's per-flow and
++ * per-port forwarding state (L2/VLAN memberships, port forwarding state, CFE
++ * default flows) is installed at runtime by the vendor CFE/kcfe_lrn kernel
++ * modules, which cannot load on this 6.18 kernel - so the hardware state our
++ * image reaches is expected to differ from a stock boot.  Before guessing any
++ * further writes, capture both states and diff them.
++ *
++ * With luofu_switch.dump=1 (read-only, no writes) the armed driver prints a
++ * bounded register snapshot of the candidate forwarding-state areas.  The same
++ * address ranges can be read on a stock boot with the existing stock readout,
++ * and the diff names the missing configuration exactly.  Nothing here writes
++ * hardware; the stage runs after the normal armed path only.
++ */
++struct luofu_switch_dump_range {
++	enum luofu_switch_window window;
++	u32 offset;
++	u32 words;
++};
++
++static const struct luofu_switch_dump_range luofu_switch_v250_dump[] = {
++	/* L2 / forwarding table area and its config registers */
++	{ LUOFU_SWITCH_WIN_L2,		0x0000, 0x80 },
++	{ LUOFU_SWITCH_WIN_L2,		0x10000, 0x20 },
++	{ LUOFU_SWITCH_WIN_L2,		0x20000, 0x20 },
++	/* classifier defaults (W10) and the general ifc config area */
++	{ LUOFU_SWITCH_WIN_IFC,		0x0000, 0x80 },
++	{ LUOFU_SWITCH_WIN_IFC,		0x50000, 0x20 },
++	/* DP probe/config and any per-port state at 0x1000 */
++	{ LUOFU_SWITCH_WIN_DP,		0x0000, 0x80 },
++	{ LUOFU_SWITCH_WIN_DP,		0x1000, 0x20 },
++	/* EPS channel map (W6) and egress-port state area */
++	{ LUOFU_SWITCH_WIN_EPS,		0x0000, 0x80 },
++	{ LUOFU_SWITCH_WIN_EPS,		0x1000, 0x20 },
++	{ LUOFU_SWITCH_WIN_EPS,		0x0b00, 0x40 },
++	/* packet engine (W8 wrote pe+0x400) */
++	{ LUOFU_SWITCH_WIN_PE,		0x0000, 0x40 },
++	{ LUOFU_SWITCH_WIN_PE,		0x0400, 0x10 },
++	/* queue manager / opp queue-port map (W7/W8) */
++	{ LUOFU_SWITCH_WIN_EQM,		0x0000, 0x40 },
++	{ LUOFU_SWITCH_WIN_OPP,		0x0000, 0x40 },
++	/* remaining small windows we already touch */
++	{ LUOFU_SWITCH_WIN_FAM,		0x0500, 0x10 },
++	{ LUOFU_SWITCH_WIN_IPS,		0x0000, 0x20 },
++};
++
++static void luofu_switch_dump(struct luofu_switch *lsw)
++{
++	unsigned int r, i;
++
++	dev_warn(lsw->dev,
++		 "W11: read-only LSW state dump (luofu_switch.dump=1): no hardware write will happen; captures the state after W3-W10 for the stock-vs-ours diff\n");
++	for (r = 0; r < ARRAY_SIZE(luofu_switch_v250_dump); r++) {
++		const struct luofu_switch_dump_range *rg =
++			&luofu_switch_v250_dump[r];
++		void __iomem *base = lsw->window[rg->window];
++
++		if (!base) {
++			dev_warn(lsw->dev, "W11: window %s missing\n",
++				 luofu_switch_window_names[rg->window]);
++			continue;
++		}
++		for (i = 0; i < rg->words; i += 4) {
++			dev_info(lsw->dev,
++				 "lsw-dump %s+%#06x: %08x %08x %08x %08x\n",
++				 luofu_switch_window_names[rg->window],
++				 rg->offset + i * 4,
++				 readl(base + rg->offset + i * 4 + 0),
++				 readl(base + rg->offset + i * 4 + 4),
++				 readl(base + rg->offset + i * 4 + 8),
++				 readl(base + rg->offset + i * 4 + 12));
++		}
++	}
++	dev_warn(lsw->dev,
++		 "W11: state dump complete; compare these lines with the same ranges read from a stock boot\n");
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3092,6 +3176,9 @@
+ 
+ 	dev_info(dev,
+ 		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init and the IFC default-classification table are programmed and verified; the GEMAC netdev front end may register\n");
++	if (luofu_switch_dump_gate)
++		luofu_switch_dump(lsw);
++
+ out:
+ 	if (ret && lsw->ifc_ready) {
+ 		luofu_switch_ifc_restore(lsw);

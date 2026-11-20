@@ -3989,3 +3989,32 @@ qminit/pfe): idle pre-check, tab128 snapshot/stability/exact-readback/restore, e
 acknowledged, fail-closed, readiness W3-W10.  Bench verification: look for the W10 line, then a
 host ARP request followed by a box reply (or PIE RX traces); failure signatures are engine bit29 /
 poll timeout / tab128 readback mismatch, all of which leave the box up but refuse to arm.
+
+## 2026-11-20 round 4e: MAC sequence confirmed, IFC default table decoded (patch 043)
+
+Image f58c516e (heartbeat liveness detector, macconf=1) ran stable through the traffic test; both
+eth2 link-ups logged the vendor MAC config sequence (0x14=0x6, 0x18 reset, 0x1c 0->1, 0x40 RMW result
+0x10c0008) and 0x0 stayed 0, yet traffic was still dead - the MAC is not the missing layer.
+
+Decoded `hi_pfe_ifc_init@0x794` from the pinned hi_lsw_pfe.ko: eight default classifier entries,
+each written through the IFC command/data engine (data 0x138..0x148, command
+`0x120 = 0xc0000000 | (index & 0x7f)`, poll bit31, bit29 error) and a 4-word tab128 entry at
+`ifc+0x50000 + index*16`.  Payloads extracted by emulating the function and hand-checked for
+entries 1-5.  Patch 043 adds the W10 stage (`luofu_switch.ifc=1`, requires arm/egress/qidmap/eps/
+qminit/pfe): idle pre-check, tab128 snapshot/stability/exact-readback/restore, engine descriptors
+acknowledged, fail-closed, readiness W3-W10.  Bench verification: look for the W10 line, then a
+host ARP request followed by a box reply (or PIE RX traces); failure signatures are engine bit29 /
+poll timeout / tab128 readback mismatch, all of which leave the box up but refuse to arm.
+
+## 2026-11-20 round 4g: W10 on silicon, no traffic, read-only state dump (patch 045)
+
+The corrected W10 image (24794d64) programmed and verified the eight IFC default entries and the
+armed path ran with a stable heartbeat, yet no frame crosses in either direction.  All ten stages
+W3-W10 are verified, so the missing state is the vendor runtime forwarding layer
+(`hi_kcfe_lrn_*`, `hi_kcfe_pub`, `hi_kcara`), which cannot load on the 6.18 kernel; the PIE
+`g_api_priv` queue handle is software-only, not a hardware register.
+
+Patch 045 adds `luofu_switch.dump=1`, a read-only dump of the candidate forwarding-state regions
+after the armed path, for a stock-vs-ours diff: ranges where stock is non-zero and ours is zero are
+the next write set.  Attended procedure: capture the `lsw-dump` block on our image, read the same
+window+offset addresses on a stock boot, diff.
