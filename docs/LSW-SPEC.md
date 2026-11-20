@@ -1149,6 +1149,69 @@ A W7 boot still means "the recovered write set was accepted/verified on the benc
 not "frames flow": the next attended measurement is whether a tagged PIE TX descriptor egresses
 once the queue manager is configured.
 
+
+### 7.10 W8: the PFE forwarding-engine base init (2026-11-20, patch 036)
+
+Round 3 on hardware (image 75868fe0) finally **armed the data path**: W3-W7 verified, W7 programmed
+169 entries, the driver published readiness, GEMAC registered all four netdevs, eth2 linked at
+1 Gbps/Full and br-lan put eth2 into forwarding.  And yet **no frame crossed the switch**: the PIE
+RX poll/interrupt trace never fired (zero RX poll lines), the host sniffer saw no box-originated
+frames, and the PIE TX descriptors were consumed (doorbells accepted, TX read pointer advancing)
+without anything appearing on the wire.  So the DP/EQM/EPS/opp init is necessary but not
+sufficient: the vendor runs a **second engine's probe after the DP probe**, the PFE (packet
+forwarding engine) module hi_lsw_pfe, and it programs that engine's globals before its CFE/rootif
+layer is usable.
+
+**Decoded PFE bring-up [V code shape; field semantics U].**  `hi_pfe_probe@0x23a4` registers the ten
+PFE windows (id map 5.2: 0=ifc 1=l2 3=napt 5=mcc 6=opp 7=pa 8=pe 9=pfe_glb 0xa=prbs 0xb=pub),
+enables its clock, pulses its resets, then calls `hi_pfe_init@0x2278` -> `hi_pfe_pub_init@0x3400`
+-> `hi_pfe_opp_init@0x271c` -> `hi_pfe_mcc_init` -> `hi_pfe_napt_init` -> `hi_pfe_ifc_init@0x794`.
+The whole direct-register part of that base init is four words:
+
+| write | value | source |
+| --- | --- | --- |
+| pe+0x400 | 2 | hi_pfe_init@0x229c |
+| pfe_glb+0x2c | read, write back `value & 0xffff` (the upper 16 bits are the global-attr field) | hi_pfe_init@0x22a8..0x22bc; write_glb_attr@0x2210 sets bits 31:16 |
+| pfe_glb+0x204 | 1 | hi_pfe_init@0x22cc |
+| opp+0x110 | 0 | hi_pfe_opp_init@0x2750, after the port qid-map walk |
+
+The rest of `hi_pfe_init`/`hi_pfe_pub_init` creates software table managers; `hi_pfe_napt_init` and
+`hi_pfe_mcc_init` program the NAPT/MCC tables (not needed for plain L2 traffic); and
+`hi_pfe_ifc_init` writes the **IFC default-classification table** through the shared
+`hi_lsw_write_tab128` helper: 16-byte entries at `ifc+0x50000 + index*16` (index 1, 2, 3, ...),
+built from 12-byte descriptors plus a table-manager allocation.  That table is decoded at the
+call-shape level but its entry fields are [U]; it is deliberately **not** in the W8 write set yet -
+it needs its own attended verification like every other table.
+
+**Patch 036 (W8) implementation.**  A sixth attended gate, `luofu_lsw.pfe=1` (requires
+`arm=1 egress=1 qidmap=1 eps=1 qminit=1`), programs exactly those four words: each target is
+snapshotted, required stable across two reads, the expected value is computed (two vendor
+constants, one vendor read-modify-write keeping bits 15..0, one zero), every word is read back and
+the snapshot is restored on a mismatch.  `luofu_switch_ready()` now requires W3+W4+W5+W6+W7+W8, so
+the GEMAC front end only registers with the PFE base init in place.  Patch 036 also fixes the
+revision-3 **tier-count bug**: the success line printed "0 verified ... 168 acknowledged" because
+every masked entry incremented the diagnostic counter; revision 4 counts STRICT entries that pass
+their bench-proven mask as verified (91: 9 table-32 + 72 table-35 + 10 table-17) and only tables
+16/34 as diagnostic (77).
+
+**Still open after W8 (the next layers, in the order the vendor stack needs them).**
+
+- **IFC default-classification table** (`ifc+0x50000`, 16-byte entries from `hi_pfe_ifc_init`):
+  the likely reason a frame has no forwarding decision at all - decoded call shape, [U] fields;
+- **L2 / VLAN tables** (`l2`, id 1) and the CFE/rootif contract (`hi_kcfe_pub`, `hi_kcara`,
+  `hi_swa`): how the vendor's software bridge learns and what it programs per flow;
+- **NAPT/MCC init** (`hi_pfe_napt_init`/`hi_pfe_mcc_init` writes) - not needed for plain L2,
+  so out of scope until there is traffic;
+- **table 38 per-qid scheduler state and the ports 40..43 VP class** (7.9) - still excluded;
+- **per-port MAC configuration**: our GEMAC driver only writes the measured 1 Gbps link words;
+  the vendor MAC driver's full `hi_mac_hw_config` write set (MTU, pause, RX/TX enable bits) has
+  not been compared against it yet - a second candidate for the dead wire in either direction;
+- **PIE<->LSW per-port queue handle**: the PIE per-port context queue handle is zero in the vendor
+  build (7.8), and its hardware effect is still [U].
+
+The next attended run is the first one with W8 in place: it should tell us whether the PFE base
+init alone reopens the wire, or which of the layers above is the actual gate (the PIE RX poll
+trace and the switch/EPS drop counters are the readout).
 ---
 
 ## 8. Forwarding, MAC learning, VLAN and ACL tables
@@ -1578,7 +1641,8 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | W5 | qid-map write for **one** host queue + **one** MAC port; add the remaining populated rows | is the qid-map layout/model right - **all 13 populated rows are implemented behind `luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1` (patches `022`/`025`); never executed.** The "one port only" first run is not implemented; the attended plan should start at W3, add W4 in a second boot and add the qid-map gate in a third | power cycle |
 | W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
 | W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **two hardware attempts 2026-11-19, both refused fail-closed with GEMAC unregistered. Round 1 (image 14791958): table-19 strict readback failed; decode proved table 19 write-only. Round 2 (image 5d2c5476): tables 32 and 35 verified on silicon, table 17 failed on its unreadable words 0/4 (words 1-3 read back exactly, so the data-register mapping is correct); patch `032` now uses tiered verification (STRICT only on bench-proven fields, DIAG for tables 16/34, ACK for table 19) and restores only bench-proven entries (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
-| W8 | verify learning-off / forward-all behaviour | D1 caveat in 8.3 | power cycle |
+| W8 | PFE forwarding-engine base init (`... luofu_lsw.pfe=1`) | is the missing forwarding-engine init the reason no frame crosses the switch - **implemented behind luofu_lsw.pfe=1 (patch `036`); never executed. Round-3 evidence (image 75868fe0): W3-W7 armed, GEMAC registered, eth2 up 1 Gbps, br-lan forwarding, but no PIE RX and no wire egress; patch `036` adds the vendor PFE base init (pe/pfe_glb/opp direct words) and fixes the W7 tier-count report (7.10)** | power cycle |
+| W9 | IFC default-classification table + L2/VLAN + MAC config | D1c exit - the next candidate layers after W8 are decoded at call-shape level only: IFC table entries at ifc+0x50000 (hi_pfe_ifc_init), L2/VLAN tables, the CFE/rootif contract, and the full per-port MAC config; see 7.10 for the ordered gap list | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
 

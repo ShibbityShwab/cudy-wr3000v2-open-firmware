@@ -3752,3 +3752,96 @@ queue-group table dump, the patch/series validation and the isolated clone logs;
 map, the exact values and the fixture hash are in
 `target-skeleton/docs/incoming/qm-decode/SUMMARY.md`.
 
+
+## 2026-11-20 (LSW PFE session): PFE forwarding-engine base init + W7 tier count (patch 036)
+
+Decode/implementation lane; the hardware results below were produced by the bench lane on images
+75868fe0 (round 3) and are recorded here with their console evidence. Nothing in this lane touched
+the device.
+
+### Round 3 (image 75868fe0): the data path armed but no frame crossed the switch
+
+The revision-3 tiered W7 verification passed on silicon (the success line printed the counters of
+the pre-fix build, see below) and the driver published readiness for the first time:
+
+```
+[2.577673] W7: 169 EQM table entries (845 words) programmed: 0 verified on bench-proven vendor-read fields (tables 32/35/17), 168 acknowledged with diagnostics (tables 16/34; 0 differed on a vendor-read field), 1 write-only acknowledged (table 19); queue ports 9, qids 72, scheduler profiles 10
+[2.607002] connectivity path armed: ... the GEMAC netdev front end may register
+... luofu-gmac: eth0..eth3 registered (PIE TX armed, LSW egress map ready)
+... luofu-gmac eth2: link up: gmii 1000Mbps full-duplex
+... br-lan: port 1(eth2) entered forwarding state
+```
+
+But no frame moved: the host AF_PACKET sniffer saw only its own ARP requests, the PIE RX
+poll/interrupt trace never fired (zero RX poll lines), and the PIE TX descriptors were consumed
+(doorbells accepted, TX read pointer advancing) without a wire frame. The strict-count bug is
+visible in that line: revision 3 counted every masked entry as diagnostic, so it reported
+0 verified / 168 acknowledged although all 91 STRICT entries (9 table-32 + 72 table-35 + 10
+table-17) had passed their bench-proven masks (0 differed). Patch 036 fixes the counter.
+
+### What patch 036 adds: the PFE base init (W8)
+
+The data path is not complete with the DP/EQM/EPS init alone: the vendor probes **hi_lsw_pfe**
+after the DP module and programs the forwarding-engine globals before its CFE/rootif layer is
+usable. Re-decoded from the pinned `hi_lsw_pfe.ko` (52,412 B, sha256
+`12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a`): `hi_pfe_probe@0x23a4` registers
+the ten PFE windows, enables its clock, pulses resets, then runs `hi_pfe_init@0x2278` ->
+`hi_pfe_pub_init` -> `hi_pfe_opp_init@0x271c` -> mcc -> napt -> `hi_pfe_ifc_init@0x794`. The
+whole direct-register part of that base init is four words:
+
+| write | value |
+| --- | --- |
+| `pe+0x400` | 2 |
+| `pfe_glb+0x2c` | read, write back value & 0xffff (upper 16 bits are the glb-attr field) |
+| `pfe_glb+0x204` | 1 |
+| `opp+0x110` | 0 (after the port qid-map walk) |
+
+Patch 036 (sixth attended gate `luofu_lsw.pfe=1`, requires
+`arm=1 egress=1 qidmap=1 eps=1 qminit=1`) snapshots each word, requires it stable across two
+reads, writes the computed value (two vendor constants, one vendor read-modify-write, one zero),
+reads every word back and restores the snapshot on a mismatch (also in `remove()`).
+`luofu_switch_ready()` now requires W3+W4+W5+W6+W7+W8, so the GEMAC front end only registers with
+the PFE base init in place. The IFC default-classification table (`ifc+0x50000`, 16-byte
+entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at the call-shape
+level but deliberately **not** in this stage: its fields are [U] and it needs its own attended
+verification.
+
+### Remaining gap layers (ordered; the next patches' candidates)
+
+1. **IFC default-classification table** (`ifc+0x50000`, 16-byte entries) - the most likely
+   reason a frame has no forwarding decision at all;
+2. **L2/VLAN tables** (`l2`, id 1) and the CFE/rootif contract (`hi_kcfe_pub`, `hi_kcara`,
+   `hi_swa`) - how the vendor software bridge learns and what it programs per flow;
+3. **per-port MAC configuration** - our GEMAC driver writes only the measured 1 Gbps link words;
+   the vendor `hi_mac_hw_config` full write set (MTU, pause, RX/TX enable) has not been compared
+   against it yet, and either direction of the wire could still be disabled there;
+4. NAPT/MCC init words (not needed for plain L2), table 38 / VP class (7.9), and the PIE per-port
+   queue handle (zero in the vendor build; hardware effect [U]).
+
+### Validation (isolated clone under build/linux-kbuild/waves/2026-11-20-r4-armed/; shared clone and openwrt-lab-selectorfix-img untouched)
+
+- **Patch/series:** patch 036 generated from the 001-035 tree; `001`-`036` applies with 0
+  failed hunks and 0 `.rej`/`.orig` (36/36), drivers byte-identical to the lane work tree.
+- **prepare/compile:** isolated reflink clone with patches 035+036 added, `make target/linux/prepare`
+  RC=0 and `make target/linux/compile` RC=0 with `CONFIG_WERROR=y` and zero `warning:`/`error:`
+  lines in the build log (log hashes in the lane SUMMARY).
+- **checkpatch:** 0 errors, 0 checks, the one expected "missing commit description" warning.
+- **DTS/binding/config:** patch 036 changes no devicetree, binding or Kconfig/config symbol.
+
+### Attended sequence for the next run (recovery card armed; physical RESET+TFTP is the only recovery)
+
+Same as the round-3 chain **plus** `luofu_lsw.pfe=1`: expect W3 -> W4 -> W5 -> W6 -> W7 (with the
+corrected counters: "91 verified ... 77 acknowledged with diagnostics ... 1 write-only
+acknowledged") -> W8 "PFE forwarding-engine base init programmed and verified" -> connectivity
+armed -> GEMAC registration -> eth2 link up -> br-lan forwarding. Then ping from the host while
+watching the PIE RX poll trace and the switch/EPS drop counters: RX poll lines appearing would prove
+the wire->CPU direction opened; a wire frame (or non-zero egress counters) would prove the CPU->wire
+direction. If nothing moves, the remaining layers above are the ordered candidates.
+
+### Evidence (local-only, gitignored)
+
+`build/linux-kbuild/waves/2026-11-20-r4-armed/` holds the fixture disassemblies, the LSW access
+inventory and the validation logs; the bench console evidence is
+`build/evidence-bench-gates/2026-11-19/uart-r3-armed.log`; the full round-4 record is in
+`target-skeleton/docs/incoming/qm-decode/SUMMARY.md`.
+

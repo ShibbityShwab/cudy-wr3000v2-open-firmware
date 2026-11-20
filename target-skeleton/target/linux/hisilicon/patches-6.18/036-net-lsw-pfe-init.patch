@@ -1,0 +1,357 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -43,6 +43,12 @@
+  *   - "... luofu_lsw.eps=1": the attended W6 step.  Program the measured EPS
+  *     channel-map and companion words (the PIE/GRO/WoC channel to EPS queue
+  *     port map) with the same readback/restore discipline.
++ *   - "... luofu_lsw.pfe=1": the attended W8 step.  Program the PFE
++ *     forwarding-engine base init (pe/pfe_glb/opp direct words, recovered from
++ *     the vendor hi_lsw_pfe probe/init) that the round-3 hardware run showed is
++ *     missing before the switch can forward a frame; readback-verified with
++ *     restore-on-mismatch.  (The IFC default-classification table writes are
++ *     decoded but deliberately not in this stage yet - see the W8 block.)
+  *   - "... luofu_lsw.qminit=1": the attended W7 step.  Program the recovered
+  *     EQM queue-manager init tables (19, 32, 35, 17, 16, 34) for the nine
+  *     wired queue groups (ports 4..12, qids 1..72): the per-queue-port deque
+@@ -230,6 +236,10 @@
+ module_param_named(qminit, luofu_switch_qminit_gate, bool, 0444);
+ MODULE_PARM_DESC(qminit, "Attended W7 step: program the recovered EQM queue-manager init tables (requires arm/egress/qidmap/eps; default off)");
+ 
++static bool luofu_switch_pfe_gate;
++module_param_named(pfe, luofu_switch_pfe_gate, bool, 0444);
++MODULE_PARM_DESC(pfe, "Attended W8 step: program the recovered PFE forwarding-engine base init (requires arm/egress/qidmap/eps/qminit; default off)");
++
+ bool luofu_switch_probed(void)
+ {
+ 	return READ_ONCE(luofu_switch_state) != LUOFU_SWITCH_ABSENT;
+@@ -418,6 +428,7 @@
+  * @qid_maps_ready: the W2 qid-map write set was programmed and verified
+  * @eps_ready: the EPS channel map was programmed and verified
+  * @qminit_ready: the EQM queue-manager init tables were programmed and verified
++ * @pfe_ready: the PFE forwarding-engine base init was programmed and verified
+  */
+ struct luofu_switch {
+ 	struct device *dev;
+@@ -433,12 +444,14 @@
+ 	u32 *qid_pre_b;
+ 	u32 egress_pre[LUOFU_SWITCH_EGRESS_REGS];
+ 	u32 eps_pre[LUOFU_SWITCH_EPS_WORDS];
++	u32 pfe_pre[LUOFU_SWITCH_PFE_WRITES];
+ 	struct luofu_switch_qm *qm;
+ 	bool powered;
+ 	bool egress_ready;
+ 	bool qid_maps_ready;
+ 	bool eps_ready;
+ 	bool qminit_ready;
++	bool pfe_ready;
+ };
+ 
+ /*
+@@ -2396,7 +2409,7 @@
+ 	struct luofu_switch_qm *qm = lsw->qm;
+ 	u32 got[LUOFU_SWITCH_EQM_IND_WORDS] = { 0 };
+ 	unsigned int i, w = 0;
+-	unsigned int ack_only = 0, diag = 0, diag_diff = 0;
++	unsigned int verified = 0, ack_only = 0, diag = 0, diag_diff = 0;
+ 	int ret;
+ 
+ 	for (i = 0; i < qm->count; i++) {
+@@ -2433,11 +2446,25 @@
+ 		if (in_mask && kind->strict)
+ 			goto mismatch;
+ 
+-		diag++;
+-		if (!in_mask && !differs)
+-			continue;
+-		if (in_mask)
+-			diag_diff++;
++		/*
++		 * Counter bug fixed in revision 4: a STRICT entry that passes its
++		 * bench-proven mask is *verified*, and only DIAG entries are
++		 * "acknowledged with diagnostics".  Revision 3 counted every
++		 * masked entry as diagnostic, so the success line printed
++		 * "0 verified ... 168 acknowledged" when 91 entries had in fact
++		 * been verified on their bench-proven fields.
++		 */
++		if (kind->strict) {
++			verified++;
++			if (!differs)
++				continue;
++		} else {
++			diag++;
++			if (in_mask)
++				diag_diff++;
++			if (!in_mask && !differs)
++				continue;
++		}
+ 		if (diag <= 6) {
+ 			const char *where = in_mask ?
+ 				"differs on a vendor-read field" :
+@@ -2466,7 +2493,7 @@
+ 		dev_info(lsw->dev,
+ 			 "W7: %u EQM table entries (%u words) programmed: %u verified on bench-proven vendor-read fields (tables 32/35/17), %u acknowledged with diagnostics (tables 16/34; %u differed on a vendor-read field), %u write-only acknowledged (table 19); queue ports %u, qids %u, scheduler profiles %u\n",
+ 			 qm->count, qm->count * LUOFU_SWITCH_EQM_IND_WORDS,
+-			 qm->count - ack_only - diag, diag, diag_diff, ack_only,
++			 verified, diag, diag_diff, ack_only,
+ 			 lsw->variant->num_qm_ports, qids, profiles);
+ 	}
+ 	return 0;
+@@ -2518,6 +2545,139 @@
+ 	return luofu_switch_qm_verify(lsw);
+ }
+ 
++/*
++ * W8: the PFE forwarding-engine base init.
++ *
++ * The round-3 hardware run (image 75868fe0) armed W3-W7 and the GEMAC front end
++ * registered with a 1 Gbps link, but no frame crossed the switch: the PIE RX
++ * rings never fired and the consumed PIE TX descriptors never reached the wire.
++ * The vendor's data path is not complete with the DP/EQM/EPS init alone - the
++ * PFE module (hi_lsw_pfe) probes after the DP module and programs the
++ * forwarding-engine globals before its CFE/rootif layer is usable.  The four
++ * direct register writes below are the whole hardware write set of that base
++ * init (hi_pfe_probe -> hi_pfe_init / hi_pfe_opp_init); the rest builds software
++ * table managers, and the IFC default-classification table (ifc+0x50000, 16-byte
++ * entries via hi_lsw_write_tab128) is decoded but deliberately not in this
++ * write set yet - its field semantics are [U] and it needs its own attended
++ * verification.
++ *
++ * Every word is snapshotted, the pre-write value is required to be stable, the
++ * written value is computed (two words are the vendor constants, pfe_glb+0x2c
++ * is the vendor's read-modify-write keeping bits 15..0), and every word is read
++ * back; on a mismatch the snapshot is restored.  The write shape is [V] from the
++ * fixture, the field semantics are [U].
++ */
++enum luofu_switch_pfe_word {
++	LUOFU_SWITCH_PFE_PE_CFG,
++	LUOFU_SWITCH_PFE_GLB_CFG,
++	LUOFU_SWITCH_PFE_GLB_EN,
++	LUOFU_SWITCH_PFE_OPP_INIT,
++};
++
++struct luofu_switch_pfe_write {
++	enum luofu_switch_window window;
++	u32 offset;
++	u32 value;
++	u32 keep;	/* bits taken from the pre-write value */
++};
++
++static const struct luofu_switch_pfe_write luofu_switch_v250_pfe_writes[] = {
++	[LUOFU_SWITCH_PFE_PE_CFG] = {
++		.window = LUOFU_SWITCH_WIN_PE,
++		.offset = LUOFU_SWITCH_PE_PFE_CFG,
++		.value = 2,
++	},
++	[LUOFU_SWITCH_PFE_GLB_CFG] = {
++		.window = LUOFU_SWITCH_WIN_PFE_GLB,
++		.offset = LUOFU_SWITCH_PFE_GLB_TAB_CFG,
++		.value = 0,
++		.keep = LUOFU_SWITCH_PFE_GLB_TAB_MASK,
++	},
++	[LUOFU_SWITCH_PFE_GLB_EN] = {
++		.window = LUOFU_SWITCH_WIN_PFE_GLB,
++		.offset = LUOFU_SWITCH_PFE_GLB_ENABLE,
++		.value = 1,
++	},
++	[LUOFU_SWITCH_PFE_OPP_INIT] = {
++		.window = LUOFU_SWITCH_WIN_OPP,
++		.offset = LUOFU_SWITCH_OPP_PFE_INIT,
++		.value = 0,
++	},
++};
++
++/* Undo the W8 write set from the snapshot kept by luofu_switch_pfe_program(). */
++static void luofu_switch_pfe_restore(struct luofu_switch *lsw)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_pfe_writes); i++) {
++		const struct luofu_switch_pfe_write *w =
++			&luofu_switch_v250_pfe_writes[i];
++
++		writel(lsw->pfe_pre[i], lsw->window[w->window] + w->offset);
++	}
++}
++
++static int luofu_switch_pfe_program(struct luofu_switch *lsw)
++{
++	u32 want[LUOFU_SWITCH_PFE_WRITES];
++	unsigned int i;
++	u32 got;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_pfe_writes); i++) {
++		const struct luofu_switch_pfe_write *w =
++			&luofu_switch_v250_pfe_writes[i];
++		void __iomem *base = lsw->window[w->window];
++
++		if (!base)
++			return dev_err_probe(lsw->dev, -EINVAL,
++					     "missing %s window for the W8 PFE init\n",
++					     luofu_switch_window_names[w->window]);
++		lsw->pfe_pre[i] = readl(base + w->offset);
++		want[i] = (lsw->pfe_pre[i] & w->keep) | w->value;
++		if (readl(base + w->offset) != lsw->pfe_pre[i])
++			return dev_err_probe(lsw->dev, -EIO,
++					     "PFE register %s+%#x changed between two reads (%#x -> %#x); refusing to write it\n",
++					     luofu_switch_window_names[w->window],
++					     w->offset, lsw->pfe_pre[i],
++					     readl(base + w->offset));
++	}
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_pfe_writes); i++) {
++		const struct luofu_switch_pfe_write *w =
++			&luofu_switch_v250_pfe_writes[i];
++
++		writel(want[i], lsw->window[w->window] + w->offset);
++	}
++
++	for (i = 0; i < ARRAY_SIZE(luofu_switch_v250_pfe_writes); i++) {
++		const struct luofu_switch_pfe_write *w =
++			&luofu_switch_v250_pfe_writes[i];
++
++		got = readl(lsw->window[w->window] + w->offset);
++		if (got == want[i])
++			continue;
++		dev_err(lsw->dev,
++			"PFE init readback mismatch at %s+%#x: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++			luofu_switch_window_names[w->window], w->offset, got,
++			want[i], lsw->pfe_pre[i]);
++		luofu_switch_pfe_restore(lsw);
++		return -EIO;
++	}
++
++	dev_info(lsw->dev,
++		 "W8: PFE forwarding-engine base init programmed and verified (pe+%#x=%#x pfe_glb+%#x=%#x pfe_glb+%#x=%#x opp+%#x=%#x)\n",
++		 luofu_switch_v250_pfe_writes[LUOFU_SWITCH_PFE_PE_CFG].offset,
++		 want[LUOFU_SWITCH_PFE_PE_CFG],
++		 luofu_switch_v250_pfe_writes[LUOFU_SWITCH_PFE_GLB_CFG].offset,
++		 want[LUOFU_SWITCH_PFE_GLB_CFG],
++		 luofu_switch_v250_pfe_writes[LUOFU_SWITCH_PFE_GLB_EN].offset,
++		 want[LUOFU_SWITCH_PFE_GLB_EN],
++		 luofu_switch_v250_pfe_writes[LUOFU_SWITCH_PFE_OPP_INIT].offset,
++		 want[LUOFU_SWITCH_PFE_OPP_INIT]);
++	return 0;
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -2611,10 +2771,10 @@
+ 	 * configuration error, not a silent no-op: refuse it explicitly.
+ 	 */
+ 	if ((luofu_switch_egress_gate || luofu_switch_qidmap_gate ||
+-	     luofu_switch_eps_gate || luofu_switch_qminit_gate) &&
+-	    !luofu_switch_arm_gate) {
++	     luofu_switch_eps_gate || luofu_switch_qminit_gate ||
++	     luofu_switch_pfe_gate) && !luofu_switch_arm_gate) {
+ 		ret = dev_err_probe(dev, -EINVAL,
+-				    "luofu_lsw.egress/luofu_lsw.qidmap/luofu_lsw.eps/luofu_lsw.qminit require luofu_lsw.arm=1 (the attended W3 power step)\n");
++				    "luofu_lsw.egress/qidmap/eps/qminit/pfe gates require luofu_lsw.arm=1 (the attended W3 power step)\n");
+ 		goto out;
+ 	}
+ 
+@@ -2709,9 +2869,27 @@
+ 		goto out;
+ 	}
+ 
++	if (!luofu_switch_pfe_gate) {
++		dev_warn(dev,
++			 "the PFE forwarding-engine base init is not programmed (set luofu_lsw.pfe=1): the vendor stack runs the PFE probe after the DP init before traffic can be forwarded, and the round-3 hardware run showed the data path stays dead without it; refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_lsw.pfe=1: programming the recovered PFE forwarding-engine base init (W8)\n");
++	ret = luofu_switch_pfe_program(lsw);
++	if (ret)
++		goto out;
++	lsw->pfe_ready = true;
++
+ 	dev_info(dev,
+-		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map and the EQM queue-manager init tables are programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables and the PFE forwarding-engine base init are programmed and verified; the GEMAC netdev front end may register\n");
+ out:
++	if (ret && lsw->pfe_ready) {
++		luofu_switch_pfe_restore(lsw);
++		lsw->pfe_ready = false;
++	}
+ 	if (ret && lsw->qminit_ready) {
+ 		luofu_switch_qm_restore(lsw);
+ 		lsw->qminit_ready = false;
+@@ -2742,6 +2920,8 @@
+ {
+ 	struct luofu_switch *lsw = platform_get_drvdata(pdev);
+ 
++	if (lsw->pfe_ready)
++		luofu_switch_pfe_restore(lsw);
+ 	if (lsw->qminit_ready)
+ 		luofu_switch_qm_restore(lsw);
+ 	if (lsw->eps_ready)
+@@ -2771,5 +2951,5 @@
+ };
+ module_platform_driver(luofu_switch_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS and EQM write path)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu internal LSW switch (D1b probe + gated R1/R3/R5, qid-map, EPS, EQM and PFE write path)");
+ MODULE_LICENSE("GPL");
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -471,4 +471,46 @@
+ #define LUOFU_SWITCH_EQM_QSCH_CELLS_MASK	GENMASK(13, 0)
+ #define LUOFU_SWITCH_EQM_QSCH_DIV_MIN		2	/* [V] read_mostly+4 */
+ 
++/*
++ * W8: PFE (packet forwarding engine) base init ("luofu_lsw.pfe=1" stage).
++ *
++ * Round-3 hardware evidence (image 75868fe0) showed that arming W3-W7 makes the
++ * driver believable to software - GEMAC netdevs register, eth2 links at 1 Gbps,
++ * br-lan forwards - but no frame crosses the switch: the PIE RX rings never see
++ * a packet and the PIE TX descriptors are consumed without a wire frame.  The
++ * vendor's data path is not complete with the DP/EQM/EPS init alone: the PFE
++ * module (hi_lsw_pfe) runs its own probe after the DP probe and programs the
++ * forwarding-engine globals before the CFE/rootif layer is usable.
++ *
++ * Re-decoded 2026-11-20 from the pinned hi_lsw_pfe.ko (52,412 B, sha256
++ * 12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a):
++ *
++ *   hi_pfe_probe@0x23a4  registers the ten PFE windows (id map in LSW-SPEC
++ *                        5.2: 0=ifc 1=l2 3=napt 5=mcc 6=opp 7=pa 8=pe
++ *                        9=pfe_glb 0xa=prbs 0xb=pub), enables its clock,
++ *                        pulses its resets, then calls hi_pfe_init ->
++ *                        hi_pfe_pub_init -> hi_pfe_opp_init -> hi_pfe_mcc_init
++ *                        -> hi_pfe_napt_init -> hi_pfe_ifc_init.
++ *   hi_pfe_init@0x2278   pe+0x400 = 2
++ *                        pfe_glb+0x2c: read, write back (value & 0xffff)
++ *                        pfe_glb+0x204 = 1
++ *   hi_pfe_opp_init@0x271c  opp+0x110 = 0   (after port_qid_map_set for the
++ *                        populated ports and the queue-opp hook registration)
++ *
++ * Those four direct writes are the whole PFE base-init register write set; the
++ * rest of hi_pfe_probe/init builds software table managers, and
++ * hi_pfe_ifc_init's default-classification entries go through the shared
++ * hi_lsw_write_tab128 helper at ifc+0x50000 (16-byte entries; decoded, but not
++ * in this write set yet - field semantics are [U] and the table needs its own
++ * attended verification, see the version-4 lane SUMMARY "remaining gaps").
++ *
++ * The write shape is [V]; the field semantics of all four words are [U].
++ */
++#define LUOFU_SWITCH_PE_PFE_CFG		0x400	/* [V] value 2 */
++#define LUOFU_SWITCH_PFE_GLB_TAB_CFG	0x2c	/* [V] RMW: keep bits 15..0 */
++#define LUOFU_SWITCH_PFE_GLB_TAB_MASK	GENMASK(15, 0)	/* [V] */
++#define LUOFU_SWITCH_PFE_GLB_ENABLE	0x204	/* [V] value 1 */
++#define LUOFU_SWITCH_OPP_PFE_INIT	0x110	/* [V] value 0 */
++#define LUOFU_SWITCH_PFE_WRITES		4	/* [V] four direct words */
++
+ #endif /* __LUOFU_SWITCH_REGS_H */
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -303,7 +303,7 @@
+ 
+ 	if (!luofu_switch_ready())
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1 luofu_lsw.qminit=1, and every stage must verify)\n");
++				     "LSW data path is not complete; refusing to register a netdev that cannot egress (the attended boot needs luofu_lsw.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1, and every stage must verify)\n");
+ 
+ 	/*
+ 	 * Address source: the standard devicetree mac-address/local-mac-address

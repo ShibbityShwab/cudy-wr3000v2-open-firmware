@@ -961,3 +961,147 @@ with "consumed=no" at +21 ms and at late_initcall().
 | OpenWrt prepare + compile 001-035 | make target/linux/prepare V=s: RC=0; make target/linux/compile V=s -j16: RC=0 (see the lane summary for the artifact hashes) |
 | probe stub encoding | generated instruction words compared with the project ARM assembler for a sample marker address: all 22 instructions + literal match (the bne back into the poll loop was corrected from 0x1afffff9 to 0x1afffffa during this lane) |
 | checkpatch | patch-mode: only the expected missing commit-description/Signed-off-by metadata; file-mode 0 errors / 0 warnings |
+
+---
+
+## 17. Cold-boot result (2026-11-19, image 75868fe0) and patch 037
+
+Status: fourth hardware run of this lane. A normal power-cycle cold boot of the
+marker-fixed 035 image gives the same result as every warm boot: CPU1 never consumes
+the pen. This section records that result, explains which hypotheses it removes, and
+delivers the next diagnostic (patch 037 - requested as "036" but renumbered because
+the parallel PFE lane filed 036-net-lsw-pfe-init.patch at the same time).
+
+### 17.1 The cold-boot test [V]
+
+Normal power-cycle (no RESET button), image 75868fe0 (series 001-035 with the marker
+fix). Console result, identical to the warm runs except for the reset record:
+
+    prep markers 00000000 00000000 (must be zero)
+    prep pen value 00000000 (loader state) resume 02a00000
+    prep scu ctrl=00000003 config=00000511 status=03030000 cpu0=0 cpu1=0
+    release cpu=1 ... pen=0x81195000 ...
+    +1ms  marker0=00000000 marker1=00000000
+    +21ms marker0=00000000 marker1=00000000 consumed=no
+    late_initcall consumed=no
+    CPU1: failed to come online
+
+So CPU1 does not consume the pen on **warm or cold** boot. The SCU CPU status stays
+03030000 (CPU0/CPU1 normal, CPU2/CPU3 powered off) before and after the release, and
+the pen word stays 0x81195000. The only difference between the cold and warm runs is
+the reset record at SYSCTRL + 0xc10: 0x02000000 on the cold boot versus 0x42000000 on
+the warm one [V: reset-source encoding, exact bit meaning [U]].
+
+### 17.2 What the cold result removes [V]/[I]
+
+* reset type (warm vs cold) is not the differentiator: both fail identically;
+* CPU1 power state is not the differentiator: the SCU reports normal in both cases;
+* the pen write/register path is not the differentiator: the value is written and
+  read back, the CRG result matches the vendor's reference, and the marker channel is
+  proven working (the prep markers read as zero through the same path);
+* what remains is that CPU1 is **not executing the loader's pen-poll loop** at our
+  release time (or is held in reset / diverted), or that the consumer is not a CPU1
+  poll loop at all and expects a different condition.
+
+### 17.3 New lead: the loader may park CPU1 in RAM that our kernel treats as free [I]
+
+Two measured facts make this the leading hypothesis:
+
+1. The vendor 5.10 kernel's effective memory map starts at **0x80600000** ("Early
+   memory node ranges: node 0: [mem 0x80600000-0x87ffffff]" in the stock boot logs),
+   although its DTB memory node starts at 0x80500000. Our 6.18 kernel instead uses
+   **0x80500000** as the first RAM range. The 1 MiB window 0x80500000-0x805fffff is
+   therefore free RAM for our kernel and avoided by the vendor kernel [V].
+2. The vendor DTB reserves a 16 KiB "flashinfo" window at **0x80600000**
+   (reserved-memory/flashinfo, atag-offset 0x1000); our DTB has no reserved-memory
+   node at all. Our kernel's page tables sit just above it at 0x80604000 [V].
+
+If the loader leaves the CPU1 park loop/state in either window, our kernel's first
+memblock allocations (first-fit from the lowest RAM address: page tables, memmap)
+overwrite it before our release - while the vendor kernel never touches those bytes.
+That would explain every observation: CPU1 powered (SCU normal) but not polling, on
+both cold and warm boots, while stock works. It is an inference [I]; patch 037 tests
+it directly.
+
+### 17.4 Patch 037
+
+Requested as 036; delivered as
+target-skeleton/target/linux/hisilicon/patches-6.18/037-arm-hisilicon-smp-early-probe.patch
+because the parallel PFE lane created 036-net-lsw-pfe-init.patch in the same window.
+It keeps all 035 behaviour and adds:
+
+| knob | effect |
+| --- | --- |
+| luofu_smp_reserve_low1m=1 | memblock_reserve(0x80500000, 1 MiB) from an early_param handler, i.e. before arm_memblock_init()/paging_init() and therefore before the first allocation. Highest-value single variable: if the loader parked CPU1 there, preserving the window should make CPU1 consume the pen. |
+| luofu_smp_reserve_flashinfo=1 | memblock_reserve(0x80600000, 16 KiB), mirroring the vendor reserved-memory node. |
+| luofu_smp_early_probe=1 | run the release inside setup_arch(), before any allocation: pen = address of a stub that prints 'E', records its MPIDR in a marker and spins in WFE. Mode 1 = pen only, mode 2 = + CRG resume clear, mode 3 = + GIC wakeup IPI. 'E' on the console and/or the EARLY marker proves CPU1 consumed the pen before our kernel did anything. |
+| (always on) | read-only loader-window diagnostics at prepare: first words of 0x80500000, 0x805ff000, 0x80600000, 0x80604000; a scan of 0x80500000-0x80607fff for the decoded U-Boot park-loop instruction signature (e5967000/e3570000/0afffffc/e1a0f007); and the memblock memory/reserved range dump, which shows what our kernel allocated where. |
+
+The early probe uses early_ioremap(), which is available in setup_arch() before
+paging_init(); the stub is built at runtime and cleaned to the point of coherency.
+Nothing is reserved or written unless the corresponding command-line knob is present.
+
+### 17.5 Next single-variable boot plan
+
+1. **luofu_smp_reserve_low1m=1** on an 001-037 image (highest-value test). If CPU1
+   consumes the pen / comes online, the loader parked CPU1 in that window and the real
+   fix is a memory-map correction (reserve the window early, or correct the DTS memory
+   map to the vendor's effective map). The 037 diagnostics also print whether the
+   park-loop signature is visible there.
+2. If not: **luofu_smp_reserve_flashinfo=1**.
+3. If not: **luofu_smp_early_probe=1**, then 2, then 3. An 'E'/early marker at mode 1
+   means CPU1 was parked and polled the pen before our kernel allocated anything, so
+   something between setup_arch and the normal release destroys or diverts it; a hit
+   only at mode 3 means the CRG clear + wakeup IPI are required.
+4. If all silent: the loader does not park CPU1 on our boot path at all; then decode
+   the loader's CPU1 start (hboot/U-Boot) and use the stock measurements in 17.6.
+
+### 17.6 Stock read-only measurement plan (root telnet, no writes)
+
+/devmem exists at /sbin/devmem (health check 2026-11-18) and /dev/mem is readable.
+Run on the stock 5.10 boot (2 CPUs) after recovery:
+
+1. SCU and SYSCTRL/CRG reference (read twice, note boot_id/uptime):
+
+       for a in 0x10180000 0x10180004 0x10180008 \
+                0x10100c00 0x10100c04 0x10100c08 0x10100c0c 0x10100c10 0x10100c14 \
+                0x14880038 0x1488003c ; do
+           printf '%s ' "$a"; /sbin/devmem "$a" 32; done
+
+   Expected from earlier inventory: pen 0x80609680, resume 0x00200000, c08 0x10;
+   SCU status is expected to read 0x03030000 if the same decode holds.
+
+2. **The loader windows (the important new measurement).** On stock these bytes are
+   preserved because the vendor kernel does not use them:
+
+       for a in $(seq $((0x80500000)) 4096 $((0x805ff000))); do
+           printf '%x ' $a; /sbin/devmem $a 32; done
+       for a in $(seq $((0x80600000)) 4096 $((0x80603000))); do
+           printf '%x ' $a; /sbin/devmem $a 32; done
+
+   To look for the U-Boot park loop (busybox od):
+
+       dd if=/dev/mem bs=4096 skip=$((0x80500000/4096)) count=256 2>/dev/null \
+         | od -An -v -tx4 | grep -i -m1 'e5967000'
+       dd if=/dev/mem bs=4096 skip=$((0x80600000/4096)) count=4 2>/dev/null \
+         | od -Ax -v -tx4
+
+   If /dev/mem refuses 0x805xxxxx (STRICT_DEVMEM) or the read faults, stop there and
+   say so - the 037 in-kernel dump reads the same region from our side.
+
+3. Cold vs warm correlation for the reset record: repeat (1) after a known power-on
+   and after a known warm reboot; on our side the cold record was 0x02000000 and the
+   warm record 0x42000000.
+
+### 17.7 Validation of 037 (host-only, isolated clone)
+
+* pristine 6.18.60 apply of the current series 001-037 (including the parallel
+  036-net patch): RC=0, 117 files, no .rej/.orig; only the four pre-existing offset
+  hunks (008 x2, 021, 028); resulting platsmp.c sha256 528ac6f8... identical to the
+  delivered file;
+* clean make target/linux/prepare + make target/linux/compile in the isolated clone
+  (see the lane summary for the artifact hashes);
+* early stub encodings verified word-for-word against the project ARM assembler
+  (18 instructions, including the bounded UART poll and the WFE spin);
+* checkpatch: only the expected missing commit-description/Signed-off-by metadata
+  plus compact-dump pr_cont style notes.

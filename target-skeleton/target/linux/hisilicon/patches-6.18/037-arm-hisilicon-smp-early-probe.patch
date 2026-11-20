@@ -1,0 +1,276 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -99,6 +99,7 @@
+ #include <linux/init.h>
+ #include <linux/io.h>
+ #include <linux/kstrtox.h>
++#include <linux/memblock.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+ #include <linux/printk.h>
+@@ -108,6 +109,7 @@
+ 
+ #include <asm/barrier.h>
+ #include <asm/cacheflush.h>
++#include <asm/early_ioremap.h>
+ #include <asm/memory.h>
+ #include <asm/page.h>
+ #include <asm/smp_plat.h>
+@@ -139,6 +141,21 @@
+ #define LUOFU_UART0_PA		0x1010f000UL
+ #define LUOFU_UART_LSR		0x14
+ #define LUOFU_UART_LSR_THRE	0x20
++#define LUOFU_EARLY_UART_LOOPS	0x00100000u	/* bounded LSR poll in the early stub */
++
++/* Fixed SoC pages used by the early probe (available before DT is usable). */
++#define LUOFU_SYSCTRL_PA	0x10100000UL
++#define LUOFU_CRG_PA		0x14880000UL
++#define LUOFU_GIC_DIST_PA	0x10181000UL
++#define LUOFU_GIC_SGIR		0x0f00
++/* CPU1 resume-bit pair from core-info = <0x16 0x18 0x17 0x19>. */
++#define LUOFU_CPU1_RESUME_MASK	0x02800000u
++
++/* Loader CPU1 park-loop signature from the stock U-Boot start code. */
++#define LUOFU_PARK_SIG0		0xe5967000u	/* ldr	r7, [r6] */
++#define LUOFU_PARK_SIG1		0xe3570000u	/* cmp	r7, #0   */
++#define LUOFU_PARK_SIG2		0x0afffffcu	/* beq	back     */
++#define LUOFU_PARK_SIG3		0xe1a0f007u	/* mov	pc, r7   */
+ 
+ /* Register windows printed by the bench diagnostics. */
+ #define LUOFU_SYSCTRL_DUMP_OFF	0x0c00
+@@ -338,6 +355,206 @@
+ 	       luofu_smp_marker_read(1) == LUOFU_PROBE_MAGIC;
+ }
+ 
++/*
++ * Early probe (patch 036).
++ *
++ * parse_early_param() runs inside setup_arch() before arm_memblock_init() and
++ * paging_init(), i.e. before the kernel allocates a single page.  An early_param
++ * handler can therefore use early_ioremap() to program the decoded release with a
++ * pen that points at a small stub which prints 'E', records its MPIDR in a marker
++ * word and spins in WFE.  This answers "does CPU1 consume the pen before our own
++ * early init has done anything" with one boot:
++ *
++ *	luofu_smp_early_probe=1	pen write only
++ *	luofu_smp_early_probe=2	pen write + CRG resume-bit clear
++ *	luofu_smp_early_probe=3	pen write + CRG clear + wakeup IPI (GIC SGIR)
++ *
++ * The marker is read back (with cache maintenance) from smp_prepare_cpus() and
++ * from the normal +1ms/+21ms lines.  'E' on the console is independent proof
++ * that the stub ran even if the marker channel has a problem.
++ */
++static unsigned int luofu_smp_early_mode;
++static u32 luofu_smp_early_stub[32] __aligned(64);
++static u32 luofu_smp_early_marker[16] __aligned(64);
++static phys_addr_t luofu_smp_early_marker_pa;
++
++static void __init luofu_smp_build_early_stub(void)
++{
++	u32 *s = luofu_smp_early_stub;
++	u32 marker = (u32)luofu_smp_early_marker_pa;
++
++	s[0] = luofu_arm_movw(4, marker & 0xffff);	/* movw	r4, marker low */
++	s[1] = luofu_arm_movt(4, marker >> 16);	/* movt	r4, marker high */
++	s[2] = 0xee103fb0;			/* mrc	p15, 0, r3, c0, c0, 5 */
++	s[3] = 0xe5843000;			/* str	r3, [r4] */
++	s[4] = 0xe30f0000;			/* movw	r0, #0xf000 */
++	s[5] = 0xe3410010;			/* movt	r0, #0x1010 */
++	s[6] = 0xe3005000;			/* movw	r5, #0x0000 */
++	s[7] = 0xe3405010;			/* movt	r5, #0x0010 */
++	s[8] = 0xe5d01014;			/* ldrb	r1, [r0, #0x14] */
++	s[9] = 0xe3110020;			/* tst	r1, #0x20 */
++	s[10] = 0x1a000002;			/* bne	print */
++	s[11] = 0xe2555001;			/* subs	r5, r5, #1 */
++	s[12] = 0x1afffffa;			/* bne	poll */
++	s[13] = 0xea000001;			/* b	spin */
++	s[14] = 0xe3a01045;			/* mov	r1, #'E' */
++	s[15] = 0xe5c01000;			/* strb	r1, [r0] */
++	s[16] = 0xe320f002;			/* wfe */
++	s[17] = 0xeafffffd;			/* b	spin */
++
++	__sync_cache_range_w(luofu_smp_early_stub,
++			     sizeof(luofu_smp_early_stub));
++	flush_cache_all();
++}
++
++static u32 luofu_smp_early_marker_read(void)
++{
++	__sync_cache_range_r(&luofu_smp_early_marker[0], sizeof(u32));
++	return READ_ONCE(luofu_smp_early_marker[0]);
++}
++
++static int __init luofu_smp_setup_early_probe(char *val)
++{
++	unsigned int mode;
++	void __iomem *sysctrl, *crg;
++	phys_addr_t stub_pa;
++	u32 v;
++
++	if (!val || kstrtouint(val, 0, &mode) || mode < 1 || mode > 3) {
++		pr_warn("luofu-smp: ignoring bad luofu_smp_early_probe value\n");
++		return 0;
++	}
++
++	luofu_smp_early_marker_pa = (phys_addr_t)__pa(luofu_smp_early_marker);
++	luofu_smp_build_early_stub();
++	stub_pa = (phys_addr_t)__pa(luofu_smp_early_stub);
++
++	sysctrl = early_ioremap(LUOFU_SYSCTRL_PA, SZ_4K);
++	crg = early_ioremap(LUOFU_CRG_PA, SZ_4K);
++	if (!sysctrl || !crg) {
++		pr_err("luofu-smp: EARLY probe: cannot early_ioremap the SMP pages\n");
++		return 0;
++	}
++
++	pr_info("luofu-smp: EARLY probe mode %u in setup_arch: stub %08llx marker %08llx\n",
++		mode, (unsigned long long)stub_pa,
++		(unsigned long long)luofu_smp_early_marker_pa);
++	writel((u32)stub_pa, sysctrl + LUOFU_SMP_PEN_OFFSET);
++	dsb(sy);
++	pr_info("luofu-smp: EARLY pen %08x resume %08x\n",
++		readl_relaxed(sysctrl + LUOFU_SMP_PEN_OFFSET),
++		readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET));
++
++	if (mode >= 2) {
++		v = readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET);
++		writel(v & ~LUOFU_CPU1_RESUME_MASK,
++		       crg + LUOFU_CRG_RESUME_OFFSET);
++		dsb(sy);
++		pr_info("luofu-smp: EARLY resume %08x -> %08x\n", v,
++			readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET));
++	}
++
++	if (mode >= 3) {
++		void __iomem *gic = early_ioremap(LUOFU_GIC_DIST_PA, SZ_4K);
++
++		if (gic) {
++			writel(0x02000000, gic + LUOFU_GIC_SGIR);
++			dsb(sy);
++			early_iounmap(gic, SZ_4K);
++			pr_info("luofu-smp: EARLY wakeup IPI written\n");
++		}
++	}
++
++	early_iounmap(sysctrl, SZ_4K);
++	early_iounmap(crg, SZ_4K);
++	luofu_smp_early_mode = mode;
++	return 0;
++}
++early_param("luofu_smp_early_probe", luofu_smp_setup_early_probe);
++
++/*
++ * The stock kernel's effective memory map starts at 0x80600000 although the
++ * DTB memory node starts at 0x80500000, and the vendor DTB reserves a 16 KiB
++ * "flashinfo" window at 0x80600000.  Our kernel treats the whole 0x80500000
++ * window as free RAM, so early allocations (page tables, memmap) can land on
++ * whatever the loader left there.  These two knobs reserve the suspect windows
++ * before arm_memblock_init()/paging_init(), i.e. before the first allocation.
++ */
++static int __init luofu_smp_setup_reserve_low1m(char *val)
++{
++	if (memblock_reserve(0x80500000, 0x100000))
++		pr_warn("luofu-smp: cannot reserve 0x80500000+1M\n");
++	else
++		pr_info("luofu-smp: reserved 0x80500000-0x805fffff before allocation\n");
++	return 0;
++}
++early_param("luofu_smp_reserve_low1m", luofu_smp_setup_reserve_low1m);
++
++static int __init luofu_smp_setup_reserve_flashinfo(char *val)
++{
++	if (memblock_reserve(0x80600000, 0x4000))
++		pr_warn("luofu-smp: cannot reserve 0x80600000+16K\n");
++	else
++		pr_info("luofu-smp: reserved 0x80600000-0x80603fff before allocation\n");
++	return 0;
++}
++early_param("luofu_smp_reserve_flashinfo", luofu_smp_setup_reserve_flashinfo);
++
++/* Read-only loader-window diagnostics (safe RAM reads, no writes). */
++static void __init luofu_smp_dump_window(const char *tag, unsigned long base)
++{
++	unsigned int i;
++
++	pr_info("luofu-smp: %s %08lx:", tag, base);
++	for (i = 0; i < 8; i++)
++		pr_cont(" %08x", READ_ONCE(*(u32 *)__va(base + 4 * i)));
++	pr_cont("\n");
++}
++
++static void __init luofu_smp_dump_loader_windows(void)
++{
++	luofu_smp_dump_window("mem", 0x80500000UL);
++	luofu_smp_dump_window("mem", 0x805ff000UL);
++	luofu_smp_dump_window("mem", 0x80600000UL);
++	luofu_smp_dump_window("mem", 0x80604000UL);
++}
++
++static void __init luofu_smp_scan_park_loop(void)
++{
++	const u32 *p = (const u32 *)__va(0x80500000UL);
++	unsigned int n = (0x80608000UL - 0x80500000UL) / 4;
++	unsigned int i, hits = 0;
++
++	for (i = 0; i + 4 <= n; i++) {
++		if (p[i] == LUOFU_PARK_SIG0 && p[i + 1] == LUOFU_PARK_SIG1 &&
++		    p[i + 2] == LUOFU_PARK_SIG2 && p[i + 3] == LUOFU_PARK_SIG3) {
++			pr_info("luofu-smp: loader park-loop signature at %08lx\n",
++				0x80500000UL + 4 * i);
++			if (++hits >= 4)
++				break;
++		}
++	}
++	pr_info("luofu-smp: loader park-loop scan 0x80500000-0x80607fff hits=%u\n",
++		hits);
++}
++
++static void __init luofu_smp_dump_memblock(void)
++{
++	phys_addr_t start, end;
++	u64 i;
++
++	pr_info("luofu-smp: memblock memory ranges:\n");
++	for_each_mem_range(i, &start, &end)
++		pr_info("luofu-smp:  mem [%08llx-%08llx]\n",
++			(unsigned long long)start,
++			(unsigned long long)(end - 1));
++	pr_info("luofu-smp: memblock reserved ranges:\n");
++	for_each_reserved_mem_range(i, &start, &end)
++		pr_info("luofu-smp:  rsv [%08llx-%08llx]\n",
++			(unsigned long long)start,
++			(unsigned long long)(end - 1));
++}
++
+ static u32 luofu_scu_read(unsigned int off)
+ {
+ 	if (!luofu_scu_base)
+@@ -480,6 +697,13 @@
+ 	if (luofu_smp_probe)
+ 		pr_info("luofu-smp: prep markers %08x %08x (must be zero)\n",
+ 			luofu_smp_marker_read(0), luofu_smp_marker_read(1));
++	if (luofu_smp_early_mode)
++		pr_info("luofu-smp: EARLY mode %u marker0=%08x consumed=%s\n",
++			luofu_smp_early_mode, luofu_smp_early_marker_read(),
++			luofu_smp_early_marker_read() ? "yes" : "no");
++	luofu_smp_dump_loader_windows();
++	luofu_smp_scan_park_loop();
++	luofu_smp_dump_memblock();
+ }
+ 
+ /*
+@@ -557,11 +781,12 @@
+ 	luofu_smp_dump("+1ms");
+ 
+ 	mdelay(20);
+-	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x consumed=%s\n",
++	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x consumed=%s early=%08x\n",
+ 		readl_relaxed(luofu_smp_pen), readl_relaxed(luofu_smp_resume),
+ 		luofu_scu_read(LUOFU_SCU_CTRL), luofu_scu_cpu_status(cpu),
+ 		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
+-		luofu_smp_pen_consumed() ? "yes" : "no");
++		luofu_smp_pen_consumed() ? "yes" : "no",
++		luofu_smp_early_mode ? luofu_smp_early_marker_read() : 0);
+ 	luofu_smp_dump("+21ms");
+ 
+ 	for (retries = luofu_smp_retries; retries > 0; retries--) {
