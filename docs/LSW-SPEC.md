@@ -1212,6 +1212,46 @@ their bench-proven mask as verified (91: 9 table-32 + 72 table-35 + 10 table-17)
 The next attended run is the first one with W8 in place: it should tell us whether the PFE base
 init alone reopens the wire, or which of the layers above is the actual gate (the PIE RX poll
 trace and the switch/EPS drop counters are the readout).
+
+### 7.11 W9: the MAC maximum-frame register (2026-11-20, patch 038)
+
+Round 4 on hardware (image 6cb3d908) added the W8 PFE base init to the armed chain: W8
+programmed and verified (`pe+0x400=0x2`, `pfe_glb+0x2c=0x34`, `pfe_glb+0x204=0x1`,
+`opp+0x110=0x0`), the driver published readiness with six gates, GEMAC registered, eth2 linked at
+1 Gbps/Full and br-lan put eth2 into forwarding - and **still no frame moved**: zero PIE RX poll
+lines, no box-originated frames on the wire, PIE TX descriptors consumed.  W8 is necessary but not
+sufficient.
+
+The next decoded candidate is the **MAC device configuration** itself.  The vendor MAC driver
+(hi_kmac.ko) has a per-port hardware config path that our GEMAC front end never reproduced:
+
+- `hi_mac_hw_mtu@0x38c` reads register **0x100**, replaces its **low 14 bits with (MTU + 4)** and
+  writes the word back (the helpers are plain base+offset MMIO:
+  `hi_reg_hw_read@0x41b8` / `hi_reg_hw_write@0x41c4`).  The vendor's `hi_mac_change_mtu@0x428c`
+  calls it on every MTU change.
+- The MAC counts `rx_overmax_pkt` / `tx_overmax_pkt` (the hi_kmac statistics strings), i.e. frames
+  longer than this limit are dropped **in both directions**; a zero/reset max-frame value would
+  explain exactly the observed symptom - link up, PIE RX silent, TX descriptors consumed but no
+  wire frame.
+- The rest of `hi_mac_hw_config@0x258` (register 0x14 speed config, 0x18, 0x1c, and a read-modify
+  of 0x40 preserving bits 8..15 with bit 24 set) overlaps what our driver already writes from
+  measured link words (0x40 port mode, 0x1b4 mode-change latch, 0x0 MAC enable), so W9
+  deliberately touches **only** the maximum-frame register.
+
+**Patch 038 (W9) implementation.**  New gate `luofu_gmac.hwinit=1`: once the accepted attended
+path is reached (PIE armed, LSW data path complete), the GEMAC driver refuses to register a netdev
+unless W9 is armed and verified.  W9 snapshots register 0x100, requires it stable across two reads,
+computes `(pre & ~GENMASK(13,0)) | ((mtu + 4) & GENMASK(13,0))`, writes it, reads it back, restores
+the snapshot on a mismatch, and re-runs on `ndo_change_mtu`.  The write shape is [V] from the
+vendor; the field semantics beyond "low 14 bits = frame length limit" are [U].
+
+**Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
+entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
+only: each entry embeds an id returned by the vendor's software table-manager allocation
+(`hi_tab_mgr_alloc_hash`), so reproducing the exact payloads needs that allocator's id sequence
+decoded first; it stays out of W9.  Then: L2/VLAN tables and the CFE/rootif contract
+(`hi_kcfe_pub`, `hi_kcara`, `hi_swa`), the remaining MAC config words (0x14/0x18/0x1c and the 0x40
+read-modify), NAPT/MCC, table 38 / VP class, and the PIE per-port queue handle.
 ---
 
 ## 8. Forwarding, MAC learning, VLAN and ACL tables
@@ -1642,7 +1682,8 @@ Only after a bootable 6.18 target exists (or with a dedicated safe test image) -
 | W6 | EPS channel-map/companion programming (`luofu_lsw.arm=1 luofu_lsw.egress=1 luofu_lsw.qidmap=1 luofu_lsw.eps=1`) | does the MAC/PIE channel to EPS queue-port map take - **implemented behind luofu_lsw.eps=1 (patch `031`); never executed.** Bench run 2026-11-19 (patch 031): the stage programmed and verified, and the PIE TX descriptors were still consumed without a frame on the wire | power cycle |
 | W7 | EQM queue-manager init tables (`... luofu_lsw.qminit=1`) then the default-forwarding/TX test | D1c exit - **two hardware attempts 2026-11-19, both refused fail-closed with GEMAC unregistered. Round 1 (image 14791958): table-19 strict readback failed; decode proved table 19 write-only. Round 2 (image 5d2c5476): tables 32 and 35 verified on silicon, table 17 failed on its unreadable words 0/4 (words 1-3 read back exactly, so the data-register mapping is correct); patch `032` now uses tiered verification (STRICT only on bench-proven fields, DIAG for tables 16/34, ACK for table 19) and restores only bench-proven entries (7.9). This is the next boot that can answer whether a tagged PIE TX descriptor egresses once the queue manager is configured**; table 38 and the VP class remain excluded (7.9) | power cycle |
 | W8 | PFE forwarding-engine base init (`... luofu_lsw.pfe=1`) | is the missing forwarding-engine init the reason no frame crosses the switch - **implemented behind luofu_lsw.pfe=1 (patch `036`); never executed. Round-3 evidence (image 75868fe0): W3-W7 armed, GEMAC registered, eth2 up 1 Gbps, br-lan forwarding, but no PIE RX and no wire egress; patch `036` adds the vendor PFE base init (pe/pfe_glb/opp direct words) and fixes the W7 tier-count report (7.10)** | power cycle |
-| W9 | IFC default-classification table + L2/VLAN + MAC config | D1c exit - the next candidate layers after W8 are decoded at call-shape level only: IFC table entries at ifc+0x50000 (hi_pfe_ifc_init), L2/VLAN tables, the CFE/rootif contract, and the full per-port MAC config; see 7.10 for the ordered gap list | power cycle |
+| W9 | MAC maximum-frame register (`luofu_gmac.hwinit=1`) | is the MAC dropping both directions as over-max - **implemented behind `luofu_gmac.hwinit=1` (patch `038`); never executed. Round-4 evidence (image 6cb3d908): W8 verified but zero PIE RX and no wire egress; the vendor `hi_mac_hw_mtu@0x38c` writes reg 0x100 low14 = MTU+4 and the MAC counts rx/tx_overmax_pkt (7.11)** | power cycle |
+| W10 | IFC default-classification table + L2/VLAN + CFE/rootif | D1c exit - IFC entries at ifc+0x50000 embed a software table-manager id (needs the allocator sequence decoded); then L2/VLAN tables, the CFE/rootif contract, the remaining MAC config words, NAPT/MCC, table 38/VP class, PIE queue handle (7.11) | power cycle |
 
 The campaign must be re-planned after W1; the order above is a hypothesis, not a schedule.
 

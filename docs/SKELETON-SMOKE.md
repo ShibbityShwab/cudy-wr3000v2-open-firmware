@@ -3845,3 +3845,57 @@ inventory and the validation logs; the bench console evidence is
 `build/evidence-bench-gates/2026-11-19/uart-r3-armed.log`; the full round-4 record is in
 `target-skeleton/docs/incoming/qm-decode/SUMMARY.md`.
 
+
+## 2026-11-20 round 4 (continue): MAC maximum-frame init (W9, patch 038)
+
+Host-only decode/implementation lane; the hardware result below was produced by the bench lane on
+image 6cb3d908 and is recorded here with its console evidence.
+
+### What the round-4 run proved and what it left open
+
+The W8 PFE base init verified on silicon (W7 counters corrected: "91 verified on bench-proven
+vendor-read fields (tables 32/35/17), 77 acknowledged with diagnostics (tables 16/34; 0 differed),
+1 write-only acknowledged (table 19)"; W8 "PFE forwarding-engine base init programmed and verified
+(pe+0x400=0x2 pfe_glb+0x2c=0x34 pfe_glb+0x204=0x1 opp+0x110=0x0)"; connectivity armed).  GEMAC
+registered, eth2 linked 1 Gbps/Full, br-lan entered forwarding - and **still no frame moved**: zero
+PIE RX poll lines, no box-originated frames on the wire, PIE TX descriptors consumed.  W8 is
+necessary but not sufficient.
+
+### Patch 038 (W9): the MAC maximum-frame register
+
+The vendor MAC driver's per-port hardware config was never reproduced by our GEMAC front end.
+Decoded from the pinned `hi_kmac.ko`: `hi_mac_hw_mtu@0x38c` reads register **0x100**,
+replaces its **low 14 bits with (MTU + 4)** and writes the word back (plain base+offset MMIO via
+`hi_reg_hw_read@0x41b8`/`hi_reg_hw_write@0x41c4`); `hi_mac_change_mtu@0x428c` calls it on MTU
+changes.  The MAC counts `rx_overmax_pkt`/`tx_overmax_pkt`, so frames longer than this
+limit are dropped in **both** directions - a zero/reset max-frame value would explain the observed
+"link up, nothing moves" symptom exactly.
+
+Patch 038 adds the seventh gate `luofu_gmac.hwinit=1`: when the accepted attended path is
+reached (PIE armed, LSW data path complete) the GEMAC driver refuses to register a netdev unless
+W9 is armed, snapshots register 0x100, requires it stable across two reads, computes
+`(pre & ~GENMASK(13,0)) | ((mtu + 4) & GENMASK(13,0))`, writes it, reads it back, restores the
+snapshot on a mismatch, and re-runs it from `ndo_change_mtu`.  Only that one MAC register is
+touched; the rest of the vendor config (0x14/0x18/0x1c and the 0x40 read-modify) overlaps the
+measured link words our driver already writes.  The write shape is [V]; field semantics beyond
+"low 14 bits = frame limit" are [U].
+
+### Remaining gap layers (ordered)
+
+1. **IFC default-classification table** (`ifc+0x50000`, 16-byte entries from
+   `hi_pfe_ifc_init`) - decoded call shape only: each entry embeds an id from the vendor's
+   software table-manager allocation (`hi_tab_mgr_alloc_hash`), so the allocator's id sequence
+   must be decoded before the payloads can be reproduced;
+2. L2/VLAN tables + the CFE/rootif contract (`hi_kcfe_pub`, `hi_kcara`, `hi_swa`);
+3. remaining MAC config words (0x14/0x18/0x1c, 0x40 read-modify), NAPT/MCC init, table 38 / VP
+   class, and the PIE per-port queue handle.
+
+### Validation and next attended step
+
+The 001-038 series applies (38/38, 0 rej) and the isolated clone prepare/compile runs with
+`CONFIG_WERROR=y` and zero `warning:`/`error:` lines; checkpatch 0 errors (log hashes in the
+lane SUMMARY).  The next attended boot runs the full seven-gate chain including
+`luofu_gmac.hwinit=1` and then pings: the W9 line ("MAC maximum-frame register programmed and
+verified (0x100 = 0x5e0, mtu 1500 + 4, snapshot ...)") plus a wire frame or PIE RX poll lines would
+show the wire reopened in one or both directions; otherwise the ordered gap list above is the path.
+
