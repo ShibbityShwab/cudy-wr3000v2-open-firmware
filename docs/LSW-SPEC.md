@@ -2184,6 +2184,172 @@ Expected lines: W16_MACREG: gmac+0x1c pre=... -> 1; gmac+0x100 pre=... -> ... (s
 max-frame 1536, our W9 formula was 1518); counter words 0xa4/ac/b0/b8 are statistics, not replayed
 then W16_MACREG: static GEMAC config programmed and verified (0x1c=1, 0x100=...).
 
+**Round-4e macconf run and the next layer: the IFC default-classification table (patch 043).**
+Image f58c516e (six gates + PFE, W9 inert, heartbeat, macconf=1) stayed stable through the traffic
+test and logged both eth2 link-ups with the vendor MAC sequence: before
+`0x14=0x6 0x18=0x0 0x1c=0x0 0x40=0x10c0008 0x0=0x0`, after `0x1c=0x1`, 0x40 already correct,
+0x0 still 0 - so the MAC config sequence is complete but **traffic is still dead**: the MAC is not
+the missing layer, the classifier is.
+
+**W10 decode.**  `hi_pfe_ifc_init@0x794` writes eight default entries through two interfaces,
+both now decoded and replayed by the driver:
+
+- **command/data engine** (ifc window): data `0x138/0x13c/0x140/0x144/0x148` (5 words), command
+  `0x120 = 0xc0000000 | (index & 0x7f)`, then poll until bit31 clears (<=1001 tries), bit29 =
+  error - the same protocol as the EQM indirect engine.  There is no read path in the recovered
+  code, so these writes are acknowledged, not read back (like write-only table 19).
+- **tab128 default entry**: four words at `ifc+0x50000 + index*16` (the shared
+  `hi_lsw_write_tab128` primitive).  This region is directly readable and is verified STRICTLY.
+
+The eight payload pairs were extracted by emulating `hi_pfe_ifc_init` from the pinned
+`hi_lsw_pfe.ko` (52,412 B, sha256
+`12ea9fcb90bef0b77f8ba54b4781f72de4af91b2a24c31d68813878212c49d1a`) and cross-checked by hand for
+entries 1-5.  The only runtime-dependent field is tab128 word0 of entries 3..7, built from the
+vendor table-manager allocation id (0 on a fresh manager -> `0x1d00`).
+
+**Patch 043 (W10) implementation.**  New gate `luofu_switch.ifc=1` (requires
+`arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1`) programs the eight entries: the command engine must
+be idle before the first write, every tab128 word is snapshotted and required stable across two
+reads, each entry is written engine-first then tab128, and the stage verifies all tab128 words by
+readback; on an engine error or a readback mismatch the tab128 snapshot is restored and the stage
+fails closed (the engine entries cannot be restored - stated in the log and here).  Readiness now
+requires W3-W10, so the GEMAC netdevs only register with the classifier programmed.
+
+**Bench verification for the next run.**  Expect the block of W10 start/idle lines, then
+`W10: IFC default-classification table programmed and verified: 8 entries ...`, then the usual
+connectivity-armed line, GEMAC registration and the heartbeat.  After the traffic test look for: a
+host ARP request reaching the box followed by a box ARP reply on the wire (or PIE RX trace lines),
+and no watchdog hang.  Failure signatures: `W10: IFC entry N command failed (bit29)` or a poll
+timeout (engine protocol mismatch), or `tab128 readback mismatch ... restoring the snapshot`
+(wrong payload/word order) - in both cases the box stays up (fail-closed, no data path).
+
+If W10 alone still does not move traffic, the next ordered layers remain L2/VLAN tables and the
+CFE/rootif contract, then the remaining MAC config words and table 38/VP.
+
+**Round-4g: W10 verified on silicon, still no traffic - the read-only state dump (patch 045).**
+Image 24794d64 ran the corrected W10 gate: `luofu_switch.ifc=1` programmed and verified the eight
+IFC default entries (engine idle, tab128 read back exactly), the armed line included the IFC table,
+GEMACs registered, eth2 1 Gbps, br-lan forwarding, heartbeat stable - and every frame is still
+dropped (no PIE RX traces, no box frames on the wire).  All ten stages W3-W10 are verified, so the
+missing state is the runtime forwarding layer the vendor installs later: the L2/VLAN/port-forwarding
+configuration lives in the `hi_kcfe_lrn_*` / `hi_kcfe_pub` / `hi_kcara` module family, which is
+built for the vendor 5.10 kernel and cannot load on our 6.18 kernel.  The PIE `g_api_priv` per-port
+queue handle is a software structure in the vendor driver (not a hardware register pair), and the
+hardware TX descriptor carries only the port tag - so it is not a missing hardware write either.
+
+Patch 045 (W11) therefore adds a **read-only state dump** instead of another guessed write: with
+`luofu_switch.dump=1` the armed driver prints a bounded snapshot of the candidate forwarding
+areas (l2 config/table area, ifc defaults, dp/eps/pe/eqm/opp state, fam/ips) and writes nothing.
+
+**Attended procedure for the stock-vs-ours diff.**
+1. Boot the current series with the full chain plus `luofu_switch.dump=1` and capture the
+   `lsw-dump ...` lines (~100 lines).
+2. On a stock boot read the same window+offset addresses (window bases: l2 0x12180000, ifc
+   0x12100000, dp 0x11000000, eps 0x11280000, pe 0x11180000, eqm 0x11200000, opp 0x12400000,
+   fam 0x11100000, ips 0x11080000).
+3. Every range where stock is non-zero and ours is zero is a missing init; that list becomes the
+   next write set, decoded against the vendor module that owns it (kcfe_lrn_l2 for L2/VLAN, kcara
+   for port state).
+
+**Round-4h: the stock-vs-ours dump diff and W12 (patch 046).**  The W11 read-only dump was compared
+with a stock-boot devmem read (evidence build/evidence-bench-gates/2026-11-20-lsw-diff.txt).
+Three persistent differences and one non-configuration class were found:
+
+1. **W10 tab128 word0 values were wrong at runtime.**  The vendor primitive writes entry idx at
+   ifc+0x50000 + idx*16; our implementation wrote the 0-based array index i, i.e. every entry one
+   slot too low, and assumed the vendor table-manager allocation id was 0 (0x1d00) where the stock
+   hardware holds 0x1d01 (first hash id = 1).  Patch 046 writes entries 1..8 at their correct offsets
+   with stock-observed word0 values: entry1 0x0, entry2 0x00100800, entries3..7 0x1d01, entry8
+   0x00100800 [V for 1..7 from the diff; entry8 from the emulated init, marked [I]].  The W11 dump
+   range now covers entry8 so the next run verifies it.
+2. **16 extended EPS words were unprogrammed** (the second channel-map/companion bank that W6 does
+   not cover): eps+0xb20..0xb3c = {0xa0,0x810a0,0x820a0,0x830a0, 0xb0,0x810b0,0x820b0,0x830b0} and
+   eps+0xba0..0xbbc = {0x8004ffff,0x8105ffff,0x8106ffff,0x8107ffff} repeated twice [V measured].
+3. **dp+0x1c** is 0x10000 on our boot but 0x18000 on stock.  Decode: the vendor DP probe writes
+   BIT(16) | field16, where field16 is the upper half of a value from hi_system_mem_info_get (it read
+   0 on our boot, hence W4's 0x10000); stock runtime additionally carries BIT(15).  The bit15 meaning
+   is [U] (a vendor memory/runtime field, not a forwarding enable); W12 replays the stock-observed
+   value 0x18000 [V measured].
+4. **Not configuration:** the eqm+0x48..0x70 differences are the indirect command/data registers
+   holding each side's last queue-init op (stock: 0x41100012 = table 17 index 18 write; ours: our
+   last W7 write).  They are deliberate non-replays.
+
+Patch 046 adds the W12 stage `luofu_switch.ext=1` (requires arm/egress/qidmap/eps/qminit/pfe/ifc):
+snapshot / stable-two-reads / exact readback / restore-on-mismatch for all 16 EPS words and dp+0x1c,
+fail-closed, readiness now W3-W12.  Expected console lines: the W12 start line, then
+`W12: extended EPS/DP runtime words programmed and verified: 16 EPS words + dp+0x1c=0x18000`, then
+the armed line; on mismatch the offending word, its read/snapshot values and a restore notice.
+
+**Round-4k: all decodable init matches stock; the W14 page scan (patch 049).**  W13_RXCFG programmed
+pie+0x3404 = 0x1b04 and verified it; the gmac dump works; the full chain W3-W13 is armed with a
+stable heartbeat - and RX still never fires.  Every comparable programmable register now matches
+the stock inventory, so the remaining class is the runtime flow/port-forwarding state that the
+vendor CFE modules install on netdev/port events.  Decode note: hi_kcfe_pub itself imports only
+netdev/netdevice-notifier APIs (no hardware access), and the table-manager consumers are
+hi_kcara/hi_swa - none of which can load on this 6.18 kernel, so our image never writes those
+tables.  The W11 dump sampled only a few offsets per window; the CFE tables can live anywhere in
+the 15 MMIO windows.
+
+Patch 049 (W14) adds a page-granularity read-only scan: luofu_switch.scan=1 reads one word per
+4 KiB page of every LSW MMIO window (15 windows x 128 pages, non-zero pages printed) and
+luofu_pie.scan=1 does the same for the 16 PIE pages.  Nothing is written.  The same page addresses
+are read on a stock boot with devmem; the diff of non-zero pages lists exactly which table pages
+exist on stock and not on ours - the location of the CFE/rootif tables to replay in the next gated
+stage.  Stock scan command (one line per window base):
+
+  for w in 0x11000000 0x11080000 0x11100000 0x11180000 0x11200000 0x11280000 0x11380000 \
+           0x12000000 0x12080000 0x12100000 0x12180000 0x12280000 0x12380000 0x12400000 \
+           0x12480000; do for o in $(seq 0 4096 520192); do v=$(devmem $(printf 0x%x $((w+o)))); \
+           [ "$v" != "0x00000000" ] && echo "$w+0x$(printf %x $o) $v"; done; done
+
+and for the PIE window: base 0x10a70000, offsets 0x0..0xf000 in 0x1000 steps.
+
+**Round-4l: the W14 page map is runtime counter state, not missing configuration (patch 050).**
+The W14 page scan on our image was diffed against a stock devmem page map.  Fifteen pages are
+non-zero on stock and zero/different on ours, but the classification says they are **not**
+persistent configuration:
+
+- every differing offset (+0x1000/+0x2000/+0x6000/+0x40000/+0x41000/+0x42000/+0x46000 in the pe,
+  eqm, eps, pa, ifc, l2, napt, mcc, opp and fam windows) appears in the vendor fixtures **only as a
+  read inside hi_dp_dfx_dump_cnt / hi_pfe_dfx_dump_cnt** - the DFX counter-dump functions - and
+  never as an init write;
+- the same value 0x1b6 shows up in five engines (pe+0x1000, pe+0x41000, eqm+0x2000, eqm+0x42000,
+  eps+0x6000), the two fam pages read 0x2f9/0x2fa (one apart, sampled microseconds apart), and our
+  own values are small running counters (0x11) - all signatures of runtime counters/age registers
+  updated by the vendor table-manager kthread/CFE aging path, which cannot run on this kernel;
+- the persistent-looking pages already **match** on both sides (pe+0x2000/0x42000 0xffff0000,
+  eqm+0x0/0x40000, eps+0x0, pfe_glb 0x7af, mcc+0x0 0x201410, pub+0x57000 0x10001).
+
+Replaying counters would be wrong, so patch 050 (W15) delivers the content-level comparison instead
+of a write: luofu_switch.pagedump=1 prints the first 16 words of every differing page (plus the
+matched control pages), reads each page twice 10 ms apart and labels it STABLE (persistent
+candidate) or lists the words that CHANGED (runtime counter/status, do not replay).  A stock
+devmem dump of the same pages confirms the labels; only pages that are stable on both sides become
+the following gated write set.  This keeps the fail-closed, evidence-graded discipline.
+
+**Round-4m: the GEMAC window diff and W16 (patch 051).**  The captured GEMAC dump (eth2/port 11,
+offsets 0x0..0x2fc) was compared with a stock devmem read of window 0x14480000 (0x0..0x23c):
+144 common words, six differences.  Decode of hi_kmac.ko classifies them:
+
+- 0x1c: static config; hi_mac_hw_config writes it as 1 (the same word the macconf diagnostic
+  sequence writes); stock is 1, ours 0 because macconf was off in the dump image.  Replay 0x1c=1.
+- 0x100: max-frame + pause word.  hi_mac_hw_mtu sets the low 14 bits to (frame-length argument + 4);
+  hi_mac_hw_set_pause preserves everything and only rewrites the pause bits in the MSB byte
+  (word bits 28-29).  Stock holds 0x33400600, i.e. frame limit 0x600 = 1536 - 18 bytes above our
+  MTU+18 value 0x5ee = 1518, so the vendor frame-length convention adds 36, not 18 (formula still
+  [U]; measured value [V]).  W16 keeps the upper 18 bits and writes low 14 = 0x600.
+- 0xa4, 0xac, 0xb0, 0xb8: statistics/counter words.  They are read through the read-op in
+  himac_read_stats / himac_get_stats64 (32-bit counter pairs); there is no init write to them in
+  the recovered paths.  Their stock/ours differences are runtime counter values - deliberately NOT
+  replayed.
+
+Patch 051 adds the gated W16 stage luofu_gmac.macregs=1 (required for netdev registration,
+fail-closed): snapshot, stable-two-reads, exact readback and restore-on-mismatch for 0x1c=1 and the
+stock-observed max-frame 0x100 = (pre & ~0x3fff) | 0x600; the counter words are left alone.
+Expected lines: W16_MACREG: gmac+0x1c pre=... -> 1; gmac+0x100 pre=... -> ... (stock-observed
+max-frame 1536, our W9 formula was 1518); counter words 0xa4/ac/b0/b8 are statistics, not replayed
+then W16_MACREG: static GEMAC config programmed and verified (0x1c=1, 0x100=...).
+
 **Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
 entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
 only: each entry embeds an id returned by the vendor's software table-manager allocation

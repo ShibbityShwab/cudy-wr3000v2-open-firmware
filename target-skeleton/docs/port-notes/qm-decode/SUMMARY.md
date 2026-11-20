@@ -1,64 +1,74 @@
-# incoming/qm-decode - round 4m: static GEMAC config words (W16, patch 051)
+# incoming/qm-decode - round 4n: vendor-exact RX decode + accepterr (patch 053)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 18).  Prior: `032`...`050`.
-This package delivers **patch 051**: the W16 static GEMAC config stage from the MAC window diff.
-No device access in this lane.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 19).  Prior: `032`...`051`.
+This package delivers **patch 053**: the vendor-exact PIE RX completion decode (all three paths) and
+the opt-in accepterr experiment, after W16 opened the RX path on silicon.  No device access.
 
 Apply `shared.patch` from the `opensource` root, then move this SUMMARY to
 `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
 
-## 1. The GEMAC diff (144 common words, window 0x14480000)
+## 1. Breakthrough: RX works after W16
 
-Six differences (ours -> stock): 0x1c 0x0 -> 0x1, 0xa4 0x40000 -> 0x30000, 0xac 0x5800002 ->
-0x1c00002, 0xb0 0xc043006 -> 0x1608006, 0xb8 0x210021 -> 0x690069, 0x100 0x334005ee -> 0x33400600.
+Image 437a0766 (001-052, full W3-W16 + luofu_pie.rxtrace=1): W16 verified (gmac+0x1c=1,
+gmac+0x100=0x33400600), then PIE RX ch0 completed 60-byte frames every ~1 s:
+`pie-trace RXpoll ch=0 hw_rptr=1..6 sw_rptr=0..6 delta=1` and `RXCOMP ... len=60 status=37 port=0
+desc=6000003c 824600c2 0100b125 00000380 00000000`.  Our decoder dropped all of them (status!=0,
+port 0).
 
-## 2. Classification from hi_kmac.ko
+## 2. Decode: these are the host's ingress frames as switch exceptions
 
-- **0x1c = static config** [V]: hi_mac_hw_config writes it as 1 (the same word the macconf diagnostic
-  sequence writes).  Ours was 0 only because macconf was off in the dump image.
-- **0x100 = max-frame + pause word** [V measured, U formula]: hi_mac_hw_mtu sets the low 14 bits to
-  (frame-length argument + 4); hi_mac_hw_set_pause preserves the word and only rewrites the pause
-  bits in the MSB byte (word bits 28-29).  Stock 0x33400600 -> limit 0x600 = **1536**, i.e. 18
-  bytes above our MTU+18 value 0x5ee = 1518: the vendor frame-length convention adds 36, not 18.
-- **0xa4 / 0xac / 0xb0 / 0xb8 = statistics counters** [V read-only]: read through the read-op in
-  himac_read_stats / himac_get_stats64 (32-bit counter pairs); no init write exists in the recovered
-  paths.  Their differences are runtime counter values - **deliberately not replayed**.
+Vendor `hi_pie_rx_get_desc@0xf14` exact semantics:
+- status = byte[+8] & 0x7f; **nonzero = the exception/error path**, which clears the no-error
+  summary bit and is dropped by `hi_net_rx_proc` in the vendor stack;
+- on the error path **port = byte[+9] bits 7:4**, vport = byte[+24] bits 4:0;
+- normal path (status 0): port = byte[+16] (vport byte[+17]); when +16 is zero:
+  port = byte[+23] bits 7:4, vport = byte[+24] bits 4:0;
+- tag class = byte[+10] bits 5:4, second flag class = byte[+13] bits 6:5 - neither decides error.
 
-## 3. Patch 051 (W16) = `luofu_gmac.macregs=1@BT@
+For the observed completions: status 0x25 = 37 (exception code [U]), **error-path port = 0xb = 11 =
+eth2**, vport 0.  So the 60-byte 1/s frames are the host's ping ARP requests arriving at eth2 and
+punted to the CPU as exceptions because the switch has no CFE L2/VLAN forwarding state for them -
+they are not switch management frames and not CPU port 0.
 
-Required for netdev registration (fail-closed).  Snapshot / stable-two-reads / write / exact
-readback / restore-on-mismatch for:
-- gmac+0x1c = 1;
-- gmac+0x100 = (pre & ~GENMASK(13,0)) | 0x600 (keeps the vendor pause bits and upper 18 bits).
+## 3. Patch 053 = vendor-exact decode + experiment
 
-Counter words are left untouched.  Expected lines:
+- `luofu_pie.rxdiag=1@BT@: full 32-byte descriptor plus decoded fields for the first 24 completions.
+- `luofu_pie.accepterr=1@BT@: **experiment** - deliver exception completions to the net_device
+  registered for the decoded error-path port (11 = eth2) instead of dropping them (the vendor stack
+  drops them).  This tests whether the wire->CPU->wire loop can complete without the missing CFE
+  tables: if the kernel answers the ARP, the remaining gap is that L2/VLAN state; if not, the TX
+  direction is next.
+- Default behaviour stays vendor-faithful (exception frames dropped, counted in rx_errors).
+
+## 4. Expected bench lines
 
 ```
-luofu-gmac ...: W16_MACREG: gmac+0x1c pre=0x0 -> 1; gmac+0x100 pre=0x334005ee -> 0x33400600 (stock-observed max-frame 1536, our W9 formula was 1518); counter words 0xa4/ac/b0/b8 are statistics, not replayed
-luofu-gmac ...: W16_MACREG: static GEMAC config programmed and verified (0x1c=1, 0x100=0x33400600)
+pie-trace RXDIAG ch=0 idx=0 len=60 status=37 err=1 port=11 vport=0 vlan=0 desc=...
+pie-trace RXERR ACCEPTED (accepterr=1, vendor would drop) status=37 port=11 vport=0 len=60 ch=0
 ```
 
-Failure signature (box stays up, netdev refused): W16_MACREG stability refusal or readback mismatch
-with the snapshot restore notice.
+## 5. Recommended next tests (same image)
 
-## 4. Deliverables
+1. `luofu_pie.accepterr=1 luofu_pie.rxdiag=1@BT@ + full chain: run the host ARP/ping.  Expect RXERR
+   ACCEPTED lines with port=11; check whether the host receives an ARP reply.
+2. Targeted ingress while watching RXDIAG: unicast frame to the box MAC, broadcast ARP, and a
+   VLAN-tagged frame - if any completes with a different error path port or normal status, that
+   tells us which classification state is missing.
+3. If ARP replies are generated but never leave, the TX direction is the next decode (W16 may already
+   have fixed it; the host sniff will tell).
+
+## 6. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/051-net-gmac-macregs-w16.patch` | W16 static GEMAC config (0x1c=1, 0x100 limit 1536) | `45d4c6ec97c0f5b3d57d7a85368fa126c1e16852d6f2a31a615fbd0ff26e4311` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | all pending docs (W10..W16) | `5d237264961d8e628de8bfddc465b2b3e557ac1cce999cd7e0029b924f7331c6` |
+| `target-skeleton/target/linux/hisilicon/patches-6.18/053-net-pie-rxdecode-vendor-exact.patch` | vendor-exact RX decode + rxdiag + accepterr | `56d4ae6c2e97e93ab3076c9849c69c4da2456a657e36d86008706f3edbf881c6` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | all pending docs (W10..W17) | `d5d8d2e82e346d503499130ba4b4f9a284a6ffc78bfa2e385ec50246df6258b3` |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
 | `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
-## 5. Validation
+## 7. Validation
 
-- Series apply (current full series + 051 = 52 patches): 52/52, 0 failed hunks, 0 .rej/.orig
-  (`logs/10-series-apply-052b.log`).
-- WERROR compile clean; checkpatch 0 errors, 0 checks (`logs/11-checkpatch-051.log`).
-- Shared docs patch applies cleanly; no devicetree/binding/Kconfig change.
-
-## 6. Note
-
-Our dump covers 0x0..0x2fc and the stock read 0x0..0x23c; the remaining stock words 0x240..0x2fc
-can be read if a full-window diff is wanted - say the word and the next dump keeps the same range
-on both sides.
+- Series apply: all patches apply, 0 failed hunks, 0 .rej/.orig (`logs/10-series-apply-053.log`); the
+  final whitespace-only revision of the patch was recompiled and checkpatched.
+- WERROR compile clean; checkpatch 0 errors (`logs/11-checkpatch-053.log`).
+- No devicetree/binding/Kconfig change.

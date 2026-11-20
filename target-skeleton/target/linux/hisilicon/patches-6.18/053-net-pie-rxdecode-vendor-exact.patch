@@ -1,0 +1,125 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -515,6 +515,23 @@
+ MODULE_PARM_DESC(nodoorbell, "Attended hang bisection: build and publish TX descriptors but never ring the channel doorbell (default off)");
+ 
+ /*
++ * Patch 053 diagnostics: rxdiag prints the whole completion descriptor for the
++ * first completions of both classes; accepterr is the experimental step that
++ * delivers vendor-exception completions (status != 0) to the net_device
++ * registered for the decoded error-path port (observed: port 11 = eth2) - the
++ * vendor stack drops them, but on this bench they are the host's ingress
++ * frames, so accepting them tests whether the software path can complete the
++ * wire->CPU->wire loop without the missing CFE flow tables.
++ */
++static bool luofu_pie_rxdiag_gate;
++module_param_named(rxdiag, luofu_pie_rxdiag_gate, bool, 0444);
++MODULE_PARM_DESC(rxdiag, "Attended W17_RXDIAG diagnostic: print the full 32-byte RX completion descriptor and the vendor-exact decode for the first completions (default off)");
++
++static bool luofu_pie_accepterr_gate;
++module_param_named(accepterr, luofu_pie_accepterr_gate, bool, 0444);
++MODULE_PARM_DESC(accepterr, "Attended W17 experiment: deliver vendor-exception completions (status != 0) to the netdev registered for the decoded error-path port instead of dropping them (default off)");
++
++/*
+  * Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours
+  * RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the
+  * vendor state of the same registers; two stand out as candidates for the
+@@ -709,28 +726,57 @@
+ 	u16 len;
+ 	u8 status;
+ 	unsigned int port;
++	unsigned int vport;
+ 	bool vlan;
++	bool err;		/* status != 0: vendor exception path */
+ };
+ 
++/*
++ * Patch 053 (RXDECODE_VENDOR_EXACT): the completion decode now matches the
++ * vendor hi_pie_rx_get_desc@0xf14 exactly for all three paths:
++ *
++ *  - error path (status != 0): port = byte[+9] bits 7:4, vport = byte[+24]
++ *    bits 4:0, and the "no error" summary bit is clear -> hi_net_rx_proc drops
++ *    the frame.  The observed 0x25/37 completions decode to port 11 (eth2),
++ *    i.e. they are the host's ingress frames punted as exceptions.
++ *  - normal path (+16 != 0): port = byte[+16], vport = byte[+17].
++ *  - no-status path (+16 == 0): port = byte[+23] bits 7:4, vport = byte[+24]
++ *    bits 4:0.
++ *  - tag class = byte[+10] bits 5:4; second flag class = byte[+13] bits 6:5
++ *    (the two [U] classes; they do not decide error/normal).
++ */
++
+ static int luofu_pie_rx_decode(const struct luofu_pie_desc *desc, u32 buf_size,
+ 			       struct luofu_pie_rx_compl *compl)
+ {
+-	u32 port_vport;
++	u32 tag, port_vport;
+ 
+ 	compl->len = get_unaligned_le16(&desc->bytes[LUOFU_PIE_RX_DESC_LEN]);
+ 	compl->status = desc->bytes[LUOFU_PIE_RX_DESC_STATUS] &
+ 			LUOFU_PIE_RX_DESC_STATUS_MASK;
+ 	compl->vlan = !!(desc->bytes[LUOFU_PIE_RX_DESC_VLAN] & GENMASK(5, 4));
++	compl->err = compl->status != 0;
+ 
+-	if (compl->status || compl->len < ETH_HLEN || compl->len > buf_size)
++	if (compl->len < ETH_HLEN || compl->len > buf_size)
+ 		return -EIO;
+ 
+-	port_vport = get_unaligned_le32(&desc->bytes[LUOFU_PIE_RX_DESC_PORT]);
+-	if (port_vport)
+-		compl->port = port_vport & 0xff;
+-	else
+-		compl->port = (desc->bytes[LUOFU_PIE_RX_DESC_PS_PORT] >> 4) &
+-			      0xf;
++	if (compl->err) {
++		/* vendor error path: hi_pie_rx_get_desc@0xfc4 */
++		compl->port = (desc->bytes[9] >> 4) & 0xf;
++		compl->vport = desc->bytes[24] & 0x1f;
++	} else {
++		port_vport = get_unaligned_le32(&desc->bytes[LUOFU_PIE_RX_DESC_PORT]);
++		if (port_vport) {
++			compl->port = port_vport & 0xff;
++			compl->vport = (port_vport >> 8) & 0xff;
++		} else {
++			compl->port = (desc->bytes[LUOFU_PIE_RX_DESC_PS_PORT] >> 4) & 0xf;
++			compl->vport = desc->bytes[LUOFU_PIE_RX_DESC_PS_VPORT] & 0x1f;
++		}
++	}
++
++	tag = desc->bytes[LUOFU_PIE_RX_DESC_VLAN];
++	tag = (tag >> 4) & 3;
+ 
+ 	if (compl->port > LUOFU_PIE_RX_PORT_MAX)
+ 		return -EIO;
+@@ -1283,6 +1329,32 @@
+ 			continue;
+ 		}
+ 
++		{
++			static atomic_t trace_comp = ATOMIC_INIT(0);
++			u32 n = atomic_inc_return(&trace_comp);
++
++			if (luofu_pie_rxdiag_gate && n <= 24) {
++				const u32 *w = (const u32 *)desc;
++
++				pr_info("pie-trace RXDIAG ch=%u idx=%u len=%u status=%u err=%u port=%u vport=%u vlan=%u desc=%08x %08x %08x %08x %08x %08x %08x %08x\n",
++					ch, index, compl.len, compl.status,
++					compl.err, compl.port, compl.vport,
++					compl.vlan, w[0], w[1], w[2], w[3],
++					w[4], w[5], w[6], w[7]);
++			}
++			if (compl.err) {
++				if (!luofu_pie_accepterr_gate) {
++					dev_kfree_skb_any(skb);
++					pie->rx_errors++;
++					continue;
++				}
++				if (n <= 8)
++					pr_info("pie-trace RXERR ACCEPTED (accepterr=1, vendor would drop) status=%u port=%u vport=%u len=%u ch=%u\n",
++						compl.status, compl.port,
++						compl.vport, compl.len, ch);
++			}
++		}
++
+ 		luofu_pie_rx_deliver(pie, np, skb, &compl);
+ 	}
+ 
