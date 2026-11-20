@@ -1,0 +1,198 @@
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -223,6 +223,41 @@
+ 1:
+  ARM_BE8(	setend	be		)	@ go BE8 if compiled for BE8
+  AR_CLASS(	mrs	r9, cpsr	)
++
++#if defined(CONFIG_ARCH_LUOFU) && !defined(CONFIG_THUMB2_KERNEL)
++	/*
++	 * Luofu SMP handoff probe A (patch 060).
++	 *
++	 * Runs at the decompressor's entry, before any decompression write,
++	 * cache or MMU setup.  Install a marker-only stub at PA 0x80600040
++	 * (writes its MPIDR to PA 0x80600010, then spins; it never branches,
++	 * so a secondary core that takes this pen parks safely without
++	 * needing secondary_data) and point the SYSCTRL pen at it.
++	 */
++	movw	r4, #0x0040
++	movt	r4, #0x8060
++	movw	r5, #0x4010
++	movt	r5, #0xe300
++	str	r5, [r4]
++	movw	r5, #0x4060
++	movt	r5, #0xe348
++	str	r5, [r4, #4]
++	movw	r5, #0x3fb0
++	movt	r5, #0xee10
++	str	r5, [r4, #8]
++	movw	r5, #0x3000
++	movt	r5, #0xe584
++	str	r5, [r4, #12]
++	movw	r5, #0xfffe
++	movt	r5, #0xeaff
++	str	r5, [r4, #16]
++	movw	r4, #0x0c00
++	movt	r4, #0x1010
++	movw	r5, #0x0040
++	movt	r5, #0x8060
++	str	r5, [r4]
++	dsb	sy
++#endif
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		bl	__hyp_stub_install	@ get into SVC mode, reversibly
+ #endif
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -110,6 +110,40 @@
+ 	@ ensure svc mode and all interrupts masked
+ 	safe_svcmode_maskall r9
+ 
++#if defined(CONFIG_ARCH_LUOFU) && !defined(CONFIG_THUMB2_KERNEL)
++	/*
++	 * Luofu SMP handoff probe B (patch 060).
++	 *
++	 * Runs at stext with the MMU and caches still off, i.e. after the
++	 * decompressor has finished and before the kernel has touched a
++	 * single page.  Install a marker-only stub at PA 0x80600080
++	 * (marker at 0x80600020) and point the pen at it.
++	 */
++	movw	r4, #0x0080
++	movt	r4, #0x8060
++	movw	r5, #0x4020
++	movt	r5, #0xe300
++	str	r5, [r4]
++	movw	r5, #0x4060
++	movt	r5, #0xe348
++	str	r5, [r4, #4]
++	movw	r5, #0x3fb0
++	movt	r5, #0xee10
++	str	r5, [r4, #8]
++	movw	r5, #0x3000
++	movt	r5, #0xe584
++	str	r5, [r4, #12]
++	movw	r5, #0xfffe
++	movt	r5, #0xeaff
++	str	r5, [r4, #16]
++	movw	r4, #0x0c00
++	movt	r4, #0x1010
++	movw	r5, #0x0080
++	movt	r5, #0x8060
++	str	r5, [r4]
++	dsb	sy
++#endif
++
+ 	mrc	p15, 0, r9, c0, c0		@ get processor id
+ 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
+ 	movs	r10, r5				@ invalid processor (r5=0)?
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -548,6 +548,85 @@
+ early_param("luofu_smp_early_probe", luofu_smp_setup_early_probe);
+ 
+ /*
++ * SMP handoff probes (patch 060).
++ *
++ * The decompressor (arch/arm/boot/compressed/head.S) writes a marker-only
++ * stub at PA 0x80600040 and points the SYSCTRL pen at it from its very
++ * first instruction; the decompressed kernel's stext does the same with a
++ * second stub at PA 0x80600080.  Each stub writes its MPIDR into its marker
++ * word and spins, so a secondary core that takes the pen parks safely.
++ *
++ * Reading the markers at early_param time is the point: it happens before
++ * arm_memblock_init()/paging_init(), so no kernel allocation can have
++ * overwritten them, and the early_ioremap() window gives an uncached view
++ * of the RAM bytes the secondary core wrote with its caches off.
++ *
++ *   A != 0  the loader's consumer was alive at the decompressor's entry
++ *   B != 0  it was still alive at stext (after decompression)
++ *   A = B = 0  it was gone before our kernel ran at all
++ */
++#define LUOFU_HANDOFF_WINDOW_PA	0x80600000UL
++#define LUOFU_HANDOFF_MARK_A	0x10
++#define LUOFU_HANDOFF_MARK_B	0x20
++
++static u32 luofu_smp_handoff_marker_early(unsigned long pa)
++{
++	void __iomem *win;
++	u32 val = 0;
++
++	win = early_ioremap(LUOFU_HANDOFF_WINDOW_PA, SZ_4K);
++	if (win) {
++		val = readl_relaxed(win + (pa - LUOFU_HANDOFF_WINDOW_PA));
++		early_iounmap(win, SZ_4K);
++	}
++	return val;
++}
++
++/* At prepare the linear map is fine; the line may already be stale, so this
++ * print is informational only (the early_param read above is authoritative). */
++static u32 luofu_smp_handoff_marker_va(unsigned long pa)
++{
++	void *v = __va(pa);
++
++	__sync_cache_range_r(v, sizeof(u32));
++	return READ_ONCE(*(u32 *)v);
++}
++
++static int __init luofu_smp_setup_handoff_probe(char *val)
++{
++	void __iomem *sysctrl, *scu;
++	u32 a, b, pen = 0, scu_cfg = 0;
++
++	if (!val) {
++		pr_warn("luofu-smp: ignoring luofu_smp_handoff_probe without value\n");
++		return 0;
++	}
++
++	a = luofu_smp_handoff_marker_early(0x80600010);
++	b = luofu_smp_handoff_marker_early(0x80600020);
++	sysctrl = early_ioremap(LUOFU_SYSCTRL_PA, SZ_4K);
++	scu = early_ioremap(0x10180000, SZ_4K);
++	if (sysctrl)
++		pen = readl_relaxed(sysctrl + LUOFU_SMP_PEN_OFFSET);
++	if (scu)
++		scu_cfg = readl_relaxed(scu + 0x04);
++	if (sysctrl)
++		early_iounmap(sysctrl, SZ_4K);
++	if (scu)
++		early_iounmap(scu, SZ_4K);
++
++	pr_info("luofu-smp: handoff A=%08x B=%08x pen=%08x scu_cfg=%08x\n",
++		a, b, pen, scu_cfg);
++	pr_info("luofu-smp: handoff verdict decompressor-entry=%s kernel-stext=%s\n",
++		a ? "CONSUMED" : "no", b ? "CONSUMED" : "no");
++	pr_info("luofu-smp: handoff cpu1-ran monitor scu_cfg bit5=%s\n",
++		(scu_cfg & 0x20) ? "set" : "clear");
++	return 0;
++}
++early_param("luofu_smp_handoff_probe", luofu_smp_setup_handoff_probe);
++
++
++/*
+  * The stock kernel's effective memory map starts at 0x80600000 although the
+  * DTB memory node starts at 0x80500000, and the vendor DTB reserves a 16 KiB
+  * "flashinfo" window at 0x80600000.  Our kernel treats the whole 0x80500000
+@@ -835,6 +914,12 @@
+ 	luofu_smp_scan_park_loop();
+ 	luofu_smp_dump_memblock();
+ 	luofu_smp_dump_gic("prep");
++	pr_info("luofu-smp: handoff markers at prep A=%08x B=%08x\n",
++		luofu_smp_handoff_marker_va(0x80600010),
++		luofu_smp_handoff_marker_va(0x80600020));
++	pr_info("luofu-smp: handoff cpu1-ran monitor at prep scu_cfg=%08x bit5=%s\n",
++		luofu_scu_read(LUOFU_SCU_CONFIG),
++		(luofu_scu_read(LUOFU_SCU_CONFIG) & 0x20) ? "set" : "clear");
+ }
+ 
+ /*
+@@ -935,6 +1020,9 @@
+ 		luofu_smp_early_mode ? luofu_smp_early_marker_word(1) : 0);
+ 	luofu_smp_dump("+21ms");
+ 	luofu_smp_dump_gic("post-release");
++	pr_info("luofu-smp: handoff cpu1-ran monitor post-release scu_cfg=%08x bit5=%s\n",
++		luofu_scu_read(LUOFU_SCU_CONFIG),
++		(luofu_scu_read(LUOFU_SCU_CONFIG) & 0x20) ? "set" : "clear");
+ 
+ 	for (retries = luofu_smp_retries; retries > 0; retries--) {
+ 		mdelay(1);
