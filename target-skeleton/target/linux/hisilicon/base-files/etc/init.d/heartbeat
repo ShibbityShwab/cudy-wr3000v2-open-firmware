@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# Bench liveness probe (lab-only): prints HB <uptime-seconds> to the kernel log
+# every 5 s so a UART capture can distinguish a hung box from a quiet healthy one.
+START=99
+STOP=99
+start() {
+	while :; do
+		printf 'HB %s\n' "$(cut -d. -f1 /proc/uptime)" > /dev/kmsg
+		sleep 5
+	done
+}
+stop() {
+	:
+}
