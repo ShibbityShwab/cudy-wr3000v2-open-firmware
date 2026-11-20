@@ -1,111 +1,86 @@
 --- a/docs/SMP-RE.md
 +++ b/docs/SMP-RE.md
-@@ -1453,3 +1453,108 @@
+@@ -1453,3 +1453,83 @@
     single variable (do not combine with the early-probe modes in the same run).
  3. If all silent: the stock reads in 20.4 plus the loader decode of how CPU1 is
     started.
 +
 +---
 +
-+## 22. Handoff probes (patch 060) and the uncompressed-Image variant
++## 23. Patch 061: sentinel marker protocol and the re-polling handoff trampoline
 +
-+Status: the live late-time attempts (add_cpu(1), IPI storms, CRG/GIC stock deltas)
-+all stayed consumed=no, and the CRG/GIC differences are now explained as PCIe/WiFi
-+activity on stock (section 20): +0x20/+0x28 bits 12/13 are the PCIe0/PCIe1 clock
-+gates and +0x34 bits 12-19 are the PCIe0/PCIe1 reset lines, i.e. the stock kernel
-+has PCIe up and our image does not. The SCU CONFIG bit 5 is read-only (a live write
-+is ignored) and is used from now on as a CPU1-ran monitor, not a lever. That leaves
-+one untested window: between the loader handoff and our kernel's first allocations.
-+Patch 060 probes that window.
++Status: the 060 handoff run (image 202832a2, token luofu_smp_handoff_probe=1)
++reported A=00000000, B=66cc66cc. The B value is **not** consumption: 0x66cc66cc is
++the loader's DDR test pattern (our own dumps show 0x80500000-0x805fffff filled with
++it and 0x80600018/0x1c = 66cc66cc in the flashinfo window). A consumed probe must
++read the secondary MPIDR 0x80000001, so both probes were **never entered** - CPU1 is
++not polling the pen even at the decompressor entry. Patch 061 removes that ambiguity
++with an explicit sentinel protocol and turns stext stub B into a re-polling handoff
++trampoline.
 +
-+### 22.1 Patch 060: two marker-only handoff probes
++### 23.1 Protocol [V]
 +
-+target-skeleton/target/linux/hisilicon/patches-6.18/060-arm-hisilicon-smp-handoff-probe.patch
-+touches three files; both probe blocks are guarded by CONFIG_ARCH_LUOFU and
-+!CONFIG_THUMB2_KERNEL, and need no kernel config token:
++* marker A (0x80600010): initialised by the decompressor probe code to the sentinel
++  0x600D1A88; a marker-only spin stub at 0x80600040 overwrites it with 0x80000001
++  when entered.
++* marker words at 0x80600020/0x80600024/0x80600028: sentinel 0x600D1A88, 0x600D1A88,
++  0; the stext trampoline at 0x80600080 writes 0x80000001 to 0x80600020 when
++  entered, and on a pen change writes 0x600D2B61 to 0x80600024 and the new pen value
++  to 0x80600028 before branching there.
++* the trampoline page 0x80600000-0x80600fff is memblock_reserved from an early_param
++  handler (before arm_memblock_init/paging_init), so the kernel can never allocate or
++  reuse the stub/markers.
 +
-+1. arch/arm/boot/compressed/head.S, immediately after the decompressor's entry
-+   (the 1: label block, after AR_CLASS(mrs r9, cpsr)): install a 5-word
-+   marker-only stub at PA 0x80600040 and point the SYSCTRL pen at it. The stub
-+   writes its MPIDR to PA 0x80600010 and spins - it never branches, so a secondary
-+   core that takes the pen parks safely without secondary_data. This runs before
-+   any decompression write, cache or MMU setup.
-+2. arch/arm/kernel/head.S, at stext right after safe_svcmode_maskall (MMU and
-+   caches still off): the same with stub B at PA 0x80600080, marker PA 0x80600020,
-+   pen = 0x80600080. stext runs after the decompressor has finished and before the
-+   kernel has touched a page.
-+3. arch/arm/mach-hisilicon/platsmp.c: an early_param handler
-+   luofu_smp_handoff_probe (token value required) reads both markers through an
-+   early_ioremap() window of 0x80600000 - before arm_memblock_init()/paging_init(),
-+   so no allocation can have overwritten them and the uncached view sees what the
-+   secondary core wrote to RAM with its caches off. It prints A/B/pen/SCU config;
-+   the same marker monitor is printed at prepare and after the release, and the
-+   SCU CONFIG bit 5 is printed as the CPU1-ran monitor.
++Reading rules: sentinel = never entered; 0x80000001 = entered; 0x600D2B61 = the
++trampoline saw the pen change and jumped to the recorded target.
 +
-+### 22.2 Expected output format
++### 23.2 Trampoline mode (token luofu_smp_trampoline=1)
 +
-+At early_param time (before the paging-init banner lines):
++With the token, the release path writes **pen = __pa_symbol(secondary_startup)**
++instead of the 035 probe stub. The stext trampoline is already polling the pen, so
++when __cpu_up() has secondary_data prepared and the release runs, CPU1 sees the pen
++change, records the jump, and branches into the real secondary entry - the normal
++2-CPU path. Without the token, 061 behaves exactly like 060 (marker-only stubs).
 +
-+    luofu-smp: handoff A=00000000 B=00000000 pen=80600080 scu_cfg=00000511
-+    luofu-smp: handoff verdict decompressor-entry=no kernel-stext=no
++No relocation or cache maintenance is required for the trampoline:
++
++* the code is position independent (movw/movt immediates and PC-relative branches
++  only) and is entered with the MMU and caches off, at its physical address;
++* it is written once by stext code that also runs with caches off, so the bytes are
++  already in DRAM (point of coherency) - no clean/invalidate is needed for the code;
++* because the page is reserved, CPU0 never allocates, writes or re-reads the code
++  afterwards; marker reads from the kernel use __sync_cache_range_r() invalidation
++  first, so a stale clean line cannot hide an update.
++
++### 23.3 Expected output
++
++At early_param time:
++
++    luofu-smp: trampoline page 0x80600000-0x80600fff reserved; release pen = secondary_startup
++    luofu-smp: handoff A=600d1a88 B0=600d1a88 B1=600d1a88 B2=00000000 pen=80600080 scu_cfg=00000511
++    luofu-smp: handoff verdict A=not-entered B(trampoline)=not-entered jump=no target=00000000
 +    luofu-smp: handoff cpu1-ran monitor scu_cfg bit5=clear
 +
-+Later, at prepare and after the release:
++At prepare, after the release and in late_initcall:
 +
-+    luofu-smp: handoff markers at prep A=<hex> B=<hex>
-+    luofu-smp: handoff cpu1-ran monitor at prep scu_cfg=<hex> bit5=<set|clear>
-+    luofu-smp: handoff cpu1-ran monitor post-release scu_cfg=<hex> bit5=<set|clear>
++    luofu-smp: handoff prep A=600d1a88 B0=600d1a88 B1=600d1a88 B2=00000000 A=not-entered B=not-entered jump=no target=00000000
++    luofu-smp: handoff prep cpu1-ran monitor scu_cfg=00000511 bit5=clear
++    luofu-smp: release cpu=1 logical=1 pen=0x8070b000 entry=8070b000 probe=1 tramp=1 force=0
++    luofu-smp: handoff post-release A=... B0=... B1=... B2=... A=... B=... jump=yes/no target=...
 +
-+A consumed probe is nonzero and equals the secondary core's MPIDR
-+(0x80000001 for CPU1); "pen" at early_param is 0x80600080 because stext wrote probe
-+B last. Everything else in the boot log is the existing 039/042/059 instrumentation.
++(pen=0x8070b000 is whichever __pa_symbol(secondary_startup) is in the built
++System.map.)
 +
-+### 22.3 Interpretation tree
++### 23.4 Interpretation
 +
-+| A | B | meaning | next step |
-+| --- | --- | --- | --- |
-+| nonzero | zero | the consumer was alive at the decompressor's entry and was parked by probe A (B is zero because the core is already parked in stub A) | the loader does start/park CPU1, and something at/around our kernel's first instructions still lets it see the pen; the failure must be inside the decompressor/head.S window - bisect by moving probe B earlier and adding a probe after the decompressor's cache/MMU setup |
-+| zero | nonzero | consumer became active only during decompression (loader starts it late, or a decompressor side effect woke it) | bisect inside the decompressor: probe after cache_on, after decompress_kernel, before the branch to stext |
-+| zero | zero | the consumer never ran between loader handoff and stext | the loader does not start CPU1 on our image's boot path at all (or starts it only for the vendor image type); loader-side decode + stock comparison, and the uncompressed-Image variant below |
-+| nonzero | nonzero | consumer alive through the decompressor but parked by A; B is then redundant | as for A-only |
++| A | B0 | B1 | meaning | next step |
++| --- | --- | --- | --- | --- |
++| sentinel | sentinel | sentinel | CPU1 never entered either stub: it is not polling the pen before the release, on the loader path of our image | loader-side cause: the loader does not start CPU1 for our boot; decode the loader and test image-type sensitivity |
++| 0x80000001 | sentinel | sentinel | CPU1 entered probe A (decompressor entry): it was polling very early, then the decompressor/window killed it | bisect inside the decompressor |
++| sentinel | 0x80000001 | sentinel | CPU1 entered the stext trampoline and is still polling; no handoff yet (pen unchanged) | if an add_cpu(1) then writes the entry pen, the trampoline should jump and the jump marker proves it |
++| sentinel | 0x80000001 | 0x600D2B61 | the trampoline jumped to the recorded target: a real handoff happened | check /proc/cpuinfo and the online line; if target == secondary_startup and CPU1 is not online, the failure is inside the secondary entry |
 +
-+The SCU CONFIG bit 5 monitor adds a second, independent channel: if it reads 0x531
-+(set) at early_param or in the post-release line, a CPU1 core has executed
-+something (its U-Boot/ROM setup code); if it stays 0x511 with A/B zero, CPU1 never
-+executed any code on this boot.
-+
-+Safety: the probes are marker-only spin stubs (no branch, no secondary_data), so a
-+taken pen parks the secondary core harmlessly; the image is a diagnostic image (it
-+writes the pen at boot), so do not expect add_cpu(1) to bring CPU1 online on it -
-+read the handoff lines and reboot.
-+
-+### 22.4 Parallel variant: booting an uncompressed Image
-+
-+Stock boots an uncompressed ARM Image; our image is a zImage that decompresses 11.5
-+MB over the same area. The build recipe exists in build/linux-kbuild/build-3dl.sh:
-+build the kernel with the Image target, make the payload "arch/arm/boot/Image +
-+luofu-r116.dtb" instead of "zImage + dtb", wrap it with the same mkimage command
-+(-A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000 -n Linux-5.10.201)
-+and the same 40,732-byte trailer. Two caveats decide whether it is worth a build:
-+
-+1. The appended-DTB mechanism lives in the decompressor. An uncompressed Image gets
-+   the DTB the loader passes, which is the vendor base DTB plus its overlays with
-+   root compatible "hsan-luofu" - our machine descriptor matches only
-+   cudy,wr3000-v2 / hisilicon,luofu-r116 / hisilicon,luofu. Either add "hsan-luofu"
-+   to luofu_dt_compat for the experiment (one line, and the boot then uses the
-+   vendor DT; enough to reach the handoff print, though later drivers will not
-+   bind), or pass our DTB explicitly with a small head.S/build patch.
-+2. Kernel slot size: the loader reads a bounded kernel image (8650752 bytes = 8.25
-+   MiB in the failover log) while our uncompressed Image is of the order of 12 MiB.
-+   Check /proc/mtd on stock before building; if the kernel partition is smaller than
-+   the Image the variant is not bootable without a size-reduced config.
-+
-+Because an Image build has no decompressor, probe A does not exist there - only
-+probe B. So the useful comparison is zImage (A/B) versus Image (B): if B is
-+consumed on the Image but not on the zImage, either the decompressor killed the
-+consumer or the loader treats the two image types differently. That is exactly the
-+open question, so the variant is worth one build if the slot size allows it.
-+
-+### 22.5 Validation of 060 (host-only, isolated clone)
-+
-+(see the lane summary for the final numbers)
++The trampoline only helps if CPU1 actually reaches it; the 060 result says it does
++not on our current loader path. So 061 is both the clean re-probe (sentinel protocol
++removes the pattern ambiguity permanently) and the handoff channel for any future
++run in which CPU1 does start polling.

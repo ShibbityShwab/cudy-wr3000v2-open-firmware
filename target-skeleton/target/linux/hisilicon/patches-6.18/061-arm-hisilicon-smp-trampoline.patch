@@ -1,0 +1,282 @@
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -226,14 +226,20 @@
+ 
+ #if defined(CONFIG_ARCH_LUOFU) && !defined(CONFIG_THUMB2_KERNEL)
+ 	/*
+-	 * Luofu SMP handoff probe A (patch 060).
++	 * Luofu SMP handoff probe A (patch 061; sentinel protocol).
+ 	 *
+-	 * Runs at the decompressor's entry, before any decompression write,
+-	 * cache or MMU setup.  Install a marker-only stub at PA 0x80600040
+-	 * (writes its MPIDR to PA 0x80600010, then spins; it never branches,
+-	 * so a secondary core that takes this pen parks safely without
+-	 * needing secondary_data) and point the SYSCTRL pen at it.
++	 * Runs at the decompressor entry, before any decompression write, cache
++	 * or MMU setup.  Initialise marker A to the sentinel 0x600D1A88, install
++	 * a marker-only spin stub at PA 0x80600040 (it writes its MPIDR to PA
++	 * 0x80600010 and spins; it never branches) and point the SYSCTRL pen at
++	 * it.  Reading 0x80000001 at PA 0x80600010 proves CPU1 entered the stub;
++	 * the sentinel proves it did not.
+ 	 */
++	movw	r4, #0x0010
++	movt	r4, #0x8060
++	movw	r5, #0x1a88
++	movt	r5, #0x600d
++	str	r5, [r4]			@ marker A sentinel
+ 	movw	r4, #0x0040
+ 	movt	r4, #0x8060
+ 	movw	r5, #0x4010
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -112,18 +112,31 @@
+ 
+ #if defined(CONFIG_ARCH_LUOFU) && !defined(CONFIG_THUMB2_KERNEL)
+ 	/*
+-	 * Luofu SMP handoff probe B (patch 060).
++	 * Luofu SMP handoff trampoline (patch 061).
+ 	 *
+-	 * Runs at stext with the MMU and caches still off, i.e. after the
+-	 * decompressor has finished and before the kernel has touched a
+-	 * single page.  Install a marker-only stub at PA 0x80600080
+-	 * (marker at 0x80600020) and point the pen at it.
++	 * Runs at stext with MMU and caches off.  Initialise three marker
++	 * words to the sentinel 0x600D1A88, install a re-polling trampoline at
++	 * PA 0x80600080 and point the SYSCTRL pen at it.  The trampoline is
++	 * position independent (movw/movt and PC-relative branches only):
++	 * when entered it stores MPIDR (0x80000001) to marker0 at 0x80600020;
++	 * when the pen later changes from the trampoline address it stores
++	 * marker1 = 0x600D2B61 and marker2 = the new pen value at 0x80600028,
++	 * then branches to the new pen.  A release can therefore hand CPU1 to
++	 * secondary_startup simply by writing that address into the pen.
+ 	 */
++	movw	r4, #0x0020
++	movt	r4, #0x8060
++	movw	r5, #0x1a88
++	movt	r5, #0x600d
++	str	r5, [r4]			@ marker0 sentinel
++	str	r5, [r4, #4]			@ marker1 sentinel
++	movw	r5, #0x0000
++	str	r5, [r4, #8]			@ marker2 target = 0
+ 	movw	r4, #0x0080
+ 	movt	r4, #0x8060
+ 	movw	r5, #0x4020
+ 	movt	r5, #0xe300
+-	str	r5, [r4]
++	str	r5, [r4, #0]
+ 	movw	r5, #0x4060
+ 	movt	r5, #0xe348
+ 	str	r5, [r4, #4]
+@@ -133,9 +146,45 @@
+ 	movw	r5, #0x3000
+ 	movt	r5, #0xe584
+ 	str	r5, [r4, #12]
+-	movw	r5, #0xfffe
+-	movt	r5, #0xeaff
++	movw	r5, #0x5080
++	movt	r5, #0xe300
+ 	str	r5, [r4, #16]
++	movw	r5, #0x5060
++	movt	r5, #0xe348
++	str	r5, [r4, #20]
++	movw	r5, #0x6c00
++	movt	r5, #0xe300
++	str	r5, [r4, #24]
++	movw	r5, #0x6010
++	movt	r5, #0xe341
++	str	r5, [r4, #28]
++	movw	r5, #0x2000
++	movt	r5, #0xe596
++	str	r5, [r4, #32]
++	movw	r5, #0x0005
++	movt	r5, #0xe152
++	str	r5, [r4, #36]
++	movw	r5, #0xfffc
++	movt	r5, #0x0aff
++	str	r5, [r4, #40]
++	movw	r5, #0x2008
++	movt	r5, #0xe584
++	str	r5, [r4, #44]
++	movw	r5, #0x3b61
++	movt	r5, #0xe302
++	str	r5, [r4, #48]
++	movw	r5, #0x300d
++	movt	r5, #0xe346
++	str	r5, [r4, #52]
++	movw	r5, #0x3004
++	movt	r5, #0xe584
++	str	r5, [r4, #56]
++	movw	r5, #0xf04f
++	movt	r5, #0xf57f
++	str	r5, [r4, #60]
++	movw	r5, #0xff12
++	movt	r5, #0xe12f
++	str	r5, [r4, #64]
+ 	movw	r4, #0x0c00
+ 	movt	r4, #0x1010
+ 	movw	r5, #0x0080
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -195,6 +195,7 @@
+ static unsigned long luofu_smp_clear_mask;
+ static unsigned int luofu_smp_retries;
+ static unsigned int luofu_smp_scu_cfg;
++static bool luofu_smp_trampoline;
+ 
+ static int __init luofu_smp_parse_bool(char *str, bool *out, const char *name)
+ {
+@@ -568,6 +569,8 @@
+ #define LUOFU_HANDOFF_WINDOW_PA	0x80600000UL
+ #define LUOFU_HANDOFF_MARK_A	0x10
+ #define LUOFU_HANDOFF_MARK_B	0x20
++#define LUOFU_HANDOFF_SENTINEL	0x600D1A88u
++#define LUOFU_HANDOFF_JUMP_MAGIC	0x600D2B61u
+ 
+ static u32 luofu_smp_handoff_marker_early(unsigned long pa)
+ {
+@@ -592,10 +595,19 @@
+ 	return READ_ONCE(*(u32 *)v);
+ }
+ 
++static const char *luofu_smp_handoff_state(u32 v)
++{
++	if (v == LUOFU_HANDOFF_SENTINEL)
++		return "not-entered";
++	if (v == 0x80000001u)
++		return "ENTERED";
++	return "raw";
++}
++
+ static int __init luofu_smp_setup_handoff_probe(char *val)
+ {
+ 	void __iomem *sysctrl, *scu;
+-	u32 a, b, pen = 0, scu_cfg = 0;
++	u32 a, b0, b1, b2, pen = 0, scu_cfg = 0;
+ 
+ 	if (!val) {
+ 		pr_warn("luofu-smp: ignoring luofu_smp_handoff_probe without value\n");
+@@ -603,7 +615,9 @@
+ 	}
+ 
+ 	a = luofu_smp_handoff_marker_early(0x80600010);
+-	b = luofu_smp_handoff_marker_early(0x80600020);
++	b0 = luofu_smp_handoff_marker_early(0x80600020);
++	b1 = luofu_smp_handoff_marker_early(0x80600024);
++	b2 = luofu_smp_handoff_marker_early(0x80600028);
+ 	sysctrl = early_ioremap(LUOFU_SYSCTRL_PA, SZ_4K);
+ 	scu = early_ioremap(0x10180000, SZ_4K);
+ 	if (sysctrl)
+@@ -615,16 +629,58 @@
+ 	if (scu)
+ 		early_iounmap(scu, SZ_4K);
+ 
+-	pr_info("luofu-smp: handoff A=%08x B=%08x pen=%08x scu_cfg=%08x\n",
+-		a, b, pen, scu_cfg);
+-	pr_info("luofu-smp: handoff verdict decompressor-entry=%s kernel-stext=%s\n",
+-		a ? "CONSUMED" : "no", b ? "CONSUMED" : "no");
++	pr_info("luofu-smp: handoff A=%08x B0=%08x B1=%08x B2=%08x pen=%08x scu_cfg=%08x\n",
++		a, b0, b1, b2, pen, scu_cfg);
++	pr_info("luofu-smp: handoff verdict A=%s B(trampoline)=%s jump=%s target=%08x\n",
++		luofu_smp_handoff_state(a), luofu_smp_handoff_state(b0),
++		(b1 == LUOFU_HANDOFF_JUMP_MAGIC) ? "YES" : "no", b2);
+ 	pr_info("luofu-smp: handoff cpu1-ran monitor scu_cfg bit5=%s\n",
+ 		(scu_cfg & 0x20) ? "set" : "clear");
+ 	return 0;
+ }
+ early_param("luofu_smp_handoff_probe", luofu_smp_setup_handoff_probe);
+ 
++/*
++ * Trampoline handoff mode (patch 061).
++ *
++ * Reserves the stub/marker page before arm_memblock_init() so the kernel can
++ * never allocate or reuse it, and switches the release path from the 035 probe
++ * stub to __pa_symbol(secondary_startup): the stext trampoline then sees the
++ * pen change and branches to the real secondary entry with secondary_data
++ * already prepared by __cpu_up().
++ */
++static int __init luofu_smp_setup_trampoline(char *val)
++{
++	if (!val)
++		return 0;
++	luofu_smp_trampoline = true;
++	if (memblock_reserve(LUOFU_HANDOFF_WINDOW_PA, SZ_4K))
++		pr_warn("luofu-smp: cannot reserve the trampoline page 0x80600000\n");
++	else
++		pr_info("luofu-smp: trampoline page 0x80600000-0x80600fff reserved; release pen = secondary_startup\n");
++	return 0;
++}
++early_param("luofu_smp_trampoline", luofu_smp_setup_trampoline);
++
++/* Marker report used at prepare, after the release and in late_initcall. */
++static u32 luofu_scu_read(unsigned int off);
++
++static void luofu_smp_handoff_report(const char *tag)
++{
++	u32 a = luofu_smp_handoff_marker_va(0x80600010);
++	u32 b0 = luofu_smp_handoff_marker_va(0x80600020);
++	u32 b1 = luofu_smp_handoff_marker_va(0x80600024);
++	u32 b2 = luofu_smp_handoff_marker_va(0x80600028);
++
++	pr_info("luofu-smp: handoff %s A=%08x B0=%08x B1=%08x B2=%08x A=%s B=%s jump=%s target=%08x\n",
++		tag, a, b0, b1, b2, luofu_smp_handoff_state(a),
++		luofu_smp_handoff_state(b0),
++		(b1 == LUOFU_HANDOFF_JUMP_MAGIC) ? "YES" : "no", b2);
++	pr_info("luofu-smp: handoff %s cpu1-ran monitor scu_cfg=%08x bit5=%s\n",
++		tag, luofu_scu_read(LUOFU_SCU_CONFIG),
++		(luofu_scu_read(LUOFU_SCU_CONFIG) & 0x20) ? "set" : "clear");
++}
++
+ 
+ /*
+  * The stock kernel's effective memory map starts at 0x80600000 although the
+@@ -914,12 +970,7 @@
+ 	luofu_smp_scan_park_loop();
+ 	luofu_smp_dump_memblock();
+ 	luofu_smp_dump_gic("prep");
+-	pr_info("luofu-smp: handoff markers at prep A=%08x B=%08x\n",
+-		luofu_smp_handoff_marker_va(0x80600010),
+-		luofu_smp_handoff_marker_va(0x80600020));
+-	pr_info("luofu-smp: handoff cpu1-ran monitor at prep scu_cfg=%08x bit5=%s\n",
+-		luofu_scu_read(LUOFU_SCU_CONFIG),
+-		(luofu_scu_read(LUOFU_SCU_CONFIG) & 0x20) ? "set" : "clear");
++	luofu_smp_handoff_report("prep");
+ }
+ 
+ /*
+@@ -980,14 +1031,14 @@
+ 	pen_pa = luofu_smp_entry_pa;
+ 	if (luofu_smp_force_pen)
+ 		pen_pa = (phys_addr_t)luofu_smp_force_pen;
+-	else if (luofu_smp_probe)
++	else if (luofu_smp_probe && !luofu_smp_trampoline)
+ 		pen_pa = (phys_addr_t)virt_to_phys(luofu_smp_probe_stub);
+ 	pen_value = (u32)pen_pa;
+ 
+-	pr_info("luofu-smp: release cpu=%u logical=%u pen=%pa entry=%lx probe=%d force=%d\n",
++	pr_info("luofu-smp: release cpu=%u logical=%u pen=%pa entry=%lx probe=%d tramp=%d force=%d\n",
+ 		cpu, cpu_logical_map(cpu), &pen_pa,
+ 		(unsigned long)luofu_smp_entry_pa, luofu_smp_probe,
+-		!!luofu_smp_force_pen);
++		luofu_smp_trampoline, !!luofu_smp_force_pen);
+ 	luofu_smp_dump("pre");
+ 
+ 	if (luofu_smp_power && luofu_scu_base) {
+@@ -1020,9 +1071,7 @@
+ 		luofu_smp_early_mode ? luofu_smp_early_marker_word(1) : 0);
+ 	luofu_smp_dump("+21ms");
+ 	luofu_smp_dump_gic("post-release");
+-	pr_info("luofu-smp: handoff cpu1-ran monitor post-release scu_cfg=%08x bit5=%s\n",
+-		luofu_scu_read(LUOFU_SCU_CONFIG),
+-		(luofu_scu_read(LUOFU_SCU_CONFIG) & 0x20) ? "set" : "clear");
++	luofu_smp_handoff_report("post-release");
+ 
+ 	for (retries = luofu_smp_retries; retries > 0; retries--) {
+ 		mdelay(1);
+@@ -1045,6 +1094,7 @@
+ 	if (!luofu_smp_probe)
+ 		return 0;
+ 
++	luofu_smp_handoff_report("late");
+ 	pr_info("luofu-smp: late marker0=%08x marker1=%08x consumed=%s early_mode=%u early0=%08x early1=%08x\n",
+ 		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
+ 		luofu_smp_pen_consumed() ? "yes" : "no",
