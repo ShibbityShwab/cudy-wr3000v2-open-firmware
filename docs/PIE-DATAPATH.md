@@ -991,3 +991,25 @@ the live channel model - and the descriptor decode closed the remaining static u
 2026-11-19. Nothing in the *driver* plan is hardware-verified: no PIE register write has been
 made, the descriptor bytes have never been accepted by the engine, and the LSW queue-handle,
 flag-semantics and ACP questions remain open.
+
+## 11. 2026-11-20 RX completion decode: vendor-exact + accepterr experiment (patch 053)
+
+W16 opened the RX path: PIE RX ch0 completed 60-byte frames every ~1 s with status 0x25 (37).  The
+vendor hi_pie_rx_get_desc@0xf14 decode shows status = byte[+8] & 0x7f; nonzero is the exception/error
+path, where port = byte[+9] bits 7:4 (0xb = 11 = eth2), vport = byte[+24] bits 4:0.  The frames were
+the host's ingress frames punted to the CPU.  Patch 053 implements the decode for all three paths
+(error, normal +16, no-status +23/+24), adds luofu_pie.rxdiag=1 (full descriptor + decoded fields)
+and luofu_pie.accepterr=1 (deliver exception frames to the error-path port's netdev; the vendor
+drops them).
+
+## 12. 2026-11-20 W20: CPU-copy delivery - the data path works (patch 057/058)
+
+With the switch CPU-copy mirror at destination 4, normal-path completions arrive with port 0 and
+vport 0 (13 frames len=98 status=0 during the dst=4 dwell window, none outside it).  luofu_pie has no
+netdev for port 0, so they were dropped.  Patch 057 adds luofu_pie.cpucopy_deliver=1 (and
+cpucopy_port, default 11): port-0 completions are handed to the mirror source port's netdev instead,
+logged as RXCPUCOPY, while every other port and all exception completions keep the vendor behaviour
+(exceptions still follow luofu_pie.accepterr).  With patches 001-057 the host gets sustained ping
+replies (50/50, 0% loss) and SSH works on the OpenWrt 6.18 image - the full wire->PIE RX->CPU->kernel
+->PIE TX->wire loop is functional via the mirror workaround.
+

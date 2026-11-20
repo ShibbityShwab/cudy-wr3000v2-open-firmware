@@ -1,0 +1,68 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -562,12 +562,11 @@
+  */
+ static bool luofu_pie_cpucopy_deliver_gate;
+ module_param_named(cpucopy_deliver, luofu_pie_cpucopy_deliver_gate, bool, 0444);
+-MODULE_PARM_DESC(cpucopy_deliver, "Attended W20 delivery: hand port-0 normal-path completions (CPU/mirror copies) to the netdev of luofu_pie.cpucopy_port instead of dropping them (default off)");
++MODULE_PARM_DESC(cpucopy_deliver, "Attended W20 delivery: hand port-0 normal-path completions (CPU/mirror copies) to the netdev of luofu_pie.cpucopy_port instead of dropping them (canonical bench config sets this to 1; default off)");
+ 
+ static uint luofu_pie_cpucopy_port = 11;
+ module_param_named(cpucopy_port, luofu_pie_cpucopy_port, uint, 0444);
+-MODULE_PARM_DESC(cpucopy_port, "W20: mirror source switch port whose netdev receives CPU-copy completions (default 11 = eth2)");
+-
++MODULE_PARM_DESC(cpucopy_port, "W20: mirror source switch port whose netdev receives CPU-copy completions (canonical bench value 11 = eth2; default 11)");
+ 
+ struct luofu_pie_rxstroke {
+ 	struct delayed_work work;
+@@ -603,7 +602,6 @@
+ 	WRITE_ONCE(pie->rxstroke, NULL);
+ }
+ 
+-
+ /*
+  * Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours
+  * RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the
+@@ -1316,6 +1314,7 @@
+ 
+ 	if (luofu_pie_cpucopy_deliver_gate && compl->port == 0) {
+ 		u32 src = READ_ONCE(luofu_pie_cpucopy_port);
++
+ 		ndev = luofu_pie_rx_port_netdev(pie, src);
+ 		if (ndev && netif_running(ndev)) {
+ 			static atomic_t copy_trace = ATOMIC_INIT(0);
+@@ -1359,7 +1358,6 @@
+ 	dev_put(ndev);
+ }
+ 
+-
+ static void luofu_pie_rxstroke_work(struct work_struct *w)
+ {
+ 	struct luofu_pie_rxstroke *st = container_of(w, struct luofu_pie_rxstroke, work.work);
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -3305,7 +3305,7 @@
+  */
+ static bool luofu_switch_cpu_mirror_gate;
+ module_param_named(cpu_mirror, luofu_switch_cpu_mirror_gate, bool, 0444);
+-MODULE_PARM_DESC(cpu_mirror, "Attended W18 step: keep the static eth2/port 11 ingress mirror to luofu_switch.mirror_dst programmed for the whole run (default off)");
++MODULE_PARM_DESC(cpu_mirror, "Attended W18 step: keep the static eth2/port 11 ingress mirror to luofu_switch.mirror_dst programmed for the whole run - canonical bench config sets this to 1 with mirror_dst=4 (the W19-identified CPU port); default off");
+ 
+ static int luofu_switch_mirror_program(struct luofu_switch *lsw, u32 dst)
+ {
+@@ -3377,7 +3377,6 @@
+ 	dev_warn(lsw->dev, "W17_MIRROR: snapshot restored, mirror off\n");
+ }
+ 
+-
+ /*
+  * W19: post-link CPU-copy re-apply and periodic re-latch (patch 056).
+  *
+@@ -3524,7 +3523,6 @@
+ 	luofu_switch_mirror_schedule(lsw, 2000);
+ }
+ 
+-
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;

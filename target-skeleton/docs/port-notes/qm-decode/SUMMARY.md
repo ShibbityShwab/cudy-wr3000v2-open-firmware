@@ -1,49 +1,82 @@
-# incoming/qm-decode - round 4r: CPU-copy delivery + static dst 4 (patch 057/W20)
+# incoming/qm-decode - round 4s: WORKING DATA PATH + canonical bench config (patch 058)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 23).  Prior: `032`...`056`.
-This package delivers **patch 057/W20**, the last known gap: deliver the port-0 CPU-copy completions
-created by the static mirror destination 4.  No device access.
+**Lane:** qm-decode, shared task task-61, 2026-11-20 (round 24). Prior: 032...057.
+This package delivers **patch 058**: the canonical attended bench configuration for the now-working
+data path, the CPU-copy workaround documentation, cosmetic checkpatch cleanup, the verification
+matrix and the curated-repo resync plan. No device access in this lane.
 
-## 1. Decisive W19 dwell result
+## 1. SUCCESS: full data path on the OpenWrt 6.18 image (image 39424b94, patches 001-057)
 
-Image 4a38b497 (W19 dwell, 20 s per destination) identified the switch CPU port: inside the
-**dst=4** dwell window (67.7-88.2 s) the PIE RX ring completed 13 frames with
-`len=98 status=0 err=0 port=0 vport=0 vlan=0` (the host's ICMP requests arriving through the
-normal path), plus 7 ARP exception completions (len=60 status=37 err=1 port=11).  Steps dst=5..15
-produced no len=98 completions - destination 4 is the CPU port.  Ping was still 0/220 because our
-driver delivers only to netdevs registered for the completion's port (8..12), and these CPU copies
-carry port 0, which has no netdev -> dropped.
+- Host ping -c50: 50/50 received, 0% loss (avg 13.3 ms); second run -c25: 25/25, 0% loss (0.68 ms).
+- AF_PACKET sniff: bidirectional ICMP and ARP on the wire.
+- SSH works: "Linux OpenWrt 6.18.60 #0 SMP armv7l", br-lan 192.168.1.1/24 UP, 112 MB RAM.
+- Persistent overlay: /dev/ubi0_1 on /overlay ubifs rw (14 MB), overlayfs rw.
+- Console: W19_CPU_MIRROR static CPU-copy applied dst=4 after each MAC link-up and every ~2 s
+  (pre==post d8=0x800 dc=0x6400000 c0=0x40); RXCPUCOPY port=0 -> port 11 len=98 status=0 lines;
+  heartbeat continuous, no Oops.
+- /proc/cpuinfo: 1 CPU online - SMP / second-CPU bring-up is a separate open issue.
 
-## 2. Patch 057 (W20)
+## 2. Why it works (final chain)
 
-- **`luofu_pie.cpucopy_deliver=1`**: port-0 normal-path completions are handed to the net_device
-  registered for `luofu_pie.cpucopy_port` (default 11 = eth2, the mirror source port) instead of
-  being dropped; first 16 deliveries are logged as
-  `pie-trace RXCPUCOPY port=0 -> port 11 len=98 status=0 (cpucopy_deliver=1, mirror source port)`.
-  Vendor behaviour is preserved for every other port and for exception completions (those still
-  follow `luofu_pie.accepterr`).
-- **Static CPU-copy at dst 4**: the W19 machinery already re-applies the mirror after every MAC
-  link-up and re-latches it every 2 s; with `luofu_switch.cpu_mirror=1` (default mirror_dst=4) the
-  start line now notes `"= CPU port identified by the W19 dwell sweep"`, i.e. this is the sustained
-  configuration.
+1. W3-W16 arm the PIE/LSW/GEMAC path; W16 also fixed the MAC config words (0x1c=1, max-frame 1536).
+2. The switch CPU-copy mirror (decoded hi_port_set_mirror: OPP+0xd8 masks, OPP+0xdc destination,
+   OPP+0xc0 enable bit 6, OPP+0xb4 latch pulse) copies eth2/port-11 ingress to the CPU port.
+   W19 dwell identified the CPU port as **mirror destination 4** (13 normal-path len=98 status=0
+   port=0 completions inside the dst=4 window, none outside it).
+3. The mirror registers do not survive switch port-up: W19 re-applies 200 ms after every MAC
+   link-up and re-latches every 2 s (luofu_switch.cpu_mirror=1, mirror_dst=4).
+4. CPU-copy completions carry port 0 (no net_device): W20 hands them to the mirror source port's
+   netdev (luofu_pie.cpucopy_deliver=1, cpucopy_port=11), logged as RXCPUCOPY.
+5. With those four pieces the full wire->PIE RX->CPU->kernel->PIE TX->wire loop works.
 
-## 3. Sustained run command line
+The mirror is a **bench workaround**; the clean long-term fix is native CFE L2/VLAN/rootif
+forwarding (FDB + port VLAN membership + to-CPU action). That state is documented as D3/bench-only,
+not an upstream design.
 
-```
-luofu_switch.arm=1 egress=1 qidmap=1 eps=1 qminit=1 pfe=1 ifc=1 ext=1
-luofu_pie.arm=1 rxcfg=1 accepterr=1 cpucopy_deliver=1 cpucopy_port=11 rxdiag=1
-luofu_gmac.macregs=1 w9=1 hwinitwrite=1
-luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=4
-```
-(W9 hwinitwrite is optional; it restores the stock max-frame value and is already covered by W16.)
+## 3. Canonical attended command line (also in target-skeleton/README.md)
 
-Expected console: the W19 post-link re-apply lines, `RXCPUCOPY port=0 -> port 11` lines for the
-host's ICMP requests, and the host should finally get sustained ping replies.  The host ARP/ICMP
-traffic also exercises the TX direction that already worked for the ARP reply.
+    luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_switch.eps=1
+    luofu_switch.qminit=1 luofu_switch.pfe=1 luofu_switch.ifc=1 luofu_switch.ext=1
+    luofu_pie.arm=1 luofu_pie.rxcfg=1 luofu_pie.accepterr=1
+    luofu_pie.cpucopy_deliver=1 luofu_pie.cpucopy_port=11
+    luofu_gmac.macregs=1
+    luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=4
+    (optional diagnostics: luofu_pie.rxdiag=1 luofu_pie.rxstroke=1)
 
-## 4. Deliverables / validation
+## 4. Verification matrix (patch 058 proposes it; the first line is already proven)
 
-- Patch `057-net-pie-cpucopy-w20.patch` (`290d3b9c...`): all patches apply (58/58, 0 rejects);
-  luofu-pie/luofu-switch compile clean under WERROR; checkpatch 0 errors (2 cosmetic warnings:
-  missing commit description, one blank-line-after-declarations, and one multiple-blank-line check).
-- This SUMMARY is the lane record; docs stack update is batched for the next handover.
+1. ping -c50 192.168.1.1: 0% loss (proven); repeat -c25: 0% loss (proven).
+2. SSH login, reboot, SSH again.
+3. Overlay persistence: write a file under /overlay, reboot, file survives.
+4. /proc/cpuinfo remains 1 CPU online; SMP bring-up is separate and must not be conflated.
+5. Console: mirror apply lines after every link-up and every ~2 s (pre==post), RXCPUCOPY lines for
+   host traffic, continuous heartbeat, no Oops.
+
+## 5. What patch 058 changes
+
+- Canonical bench config documented in target-skeleton/README.md (command line + verification
+  matrix + resync plan) and in LSW-SPEC/PIE-DATAPATH.
+- CPU-copy workaround documented with the W19 dwell evidence and the native-CFE long-term note.
+- Cosmetic checkpatch cleanup: multiple blank lines / blank-line-after-declarations in the W20/W19
+  code paths, plus canonical-config notes in the module parameter descriptions.
+- Series numbering documental note: patches-6.18 currently has 001-058 = 59 files (duplicate 042
+  pair from the SMP lane).
+
+## 6. Curated-repo / upstream series resync plan
+
+(1) Freeze the series at 001-058 after review; (2) regenerate EVIDENCE-SHA256SUMS and the incoming
+shared docs patch; (3) copy series + docs to the curated repo staging branch and run the series-apply
+check on a pristine 6.18 tree there; (4) add the working-image note (image hash, canonical command
+line, verification matrix) but keep the mirror workaround marked bench-only; (5) publish only after
+the confidentiality/vendor-binary checks pass (no vendor .ko/.o or blobs in tracked text).
+
+## 7. Deliverables / validation
+
+- Patch: target/linux/hisilicon/patches-6.18/058-net-luofu-canonical-bench-config.patch
+  (sha256 44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35).
+- Series apply: 59/59 files, 0 failed hunks, 0 .rej/.orig; both drivers compile clean under WERROR;
+  checkpatch 0 errors, 0 checks (only the expected plain-diff "Missing commit description" warning).
+- Docs: target-skeleton/docs/incoming/qm-decode/shared.patch (sha256
+  64ab0ec07fed5ae782d8befe226c339d434c22366f8ac0d02073983e2c453068) applies cleanly to the current
+  opensource tree.
+- This SUMMARY is also copied to target-skeleton/docs/port-notes/qm-decode/SUMMARY.md.
