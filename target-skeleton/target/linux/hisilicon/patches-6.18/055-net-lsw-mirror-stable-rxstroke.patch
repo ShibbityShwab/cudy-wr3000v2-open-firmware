@@ -1,0 +1,247 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -3291,13 +3291,31 @@
+ module_param_named(mirror_sweep, luofu_switch_mirror_sweep_gate, bool, 0444);
+ MODULE_PARM_DESC(mirror_sweep, "W17 experiment: try mirror destinations 4,5,6,7,8,40,41,42,43 at ~2 s intervals during the host traffic test (default off)");
+ 
++/*
++ * W18: the stable CPU-copy configuration (patch 055).  The W17 sweep showed
++ * that with the mirror left on destination 8 the host got ICMP replies (4/18)
++ * during a short window; the destination field of the mirror register is only
++ * 4 bits wide (decoded: (dst & 0xf) << 4, so ports 40..43 cannot be encoded),
++ * so the stable experiment is a single static destination kept programmed:
++ * luofu_switch.cpu_mirror=1 with luofu_switch.mirror_dst=<n>.
++ */
++static bool luofu_switch_cpu_mirror_gate;
++module_param_named(cpu_mirror, luofu_switch_cpu_mirror_gate, bool, 0444);
++MODULE_PARM_DESC(cpu_mirror, "Attended W18 step: keep the static eth2/port 11 ingress mirror to luofu_switch.mirror_dst programmed for the whole run (default off)");
++
+ static int luofu_switch_mirror_program(struct luofu_switch *lsw, u32 dst)
+ {
+ 	void __iomem *opp = lsw->window[LUOFU_SWITCH_WIN_OPP];
+ 	u32 want_d8, want_dc, want_c0;
+ 
+-	if (!opp || dst > 31)
++	if (!opp)
++		return -EINVAL;
++	if (dst > 15) {
++		dev_warn(lsw->dev,
++			 "W17_MIRROR: destination %u not encodable (the decoded field is (dst & 0xf) << 4; ports 40..43 cannot be a mirror destination), skipped\n",
++			 dst);
+ 		return -EINVAL;
++	}
+ 
+ 	if (!lsw->mirror_valid) {
+ 		lsw->mirror_snap[0] = readl(opp + 0xb4);
+@@ -3358,7 +3376,8 @@
+ /* Run the attended mirror experiment (single destination or candidate sweep). */
+ static void luofu_switch_mirror_run(struct luofu_switch *lsw)
+ {
+-	static const u32 sweep[] = { 4, 5, 6, 7, 8, 40, 41, 42, 43 };
++	static const u32 sweep[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
++				     13, 14, 15 };
+ 	unsigned int i;
+ 
+ 	if (!luofu_switch_mirror_sweep_gate) {
+@@ -3368,7 +3387,7 @@
+ 	}
+ 
+ 	dev_warn(lsw->dev,
+-		 "W17_MIRROR: sweep mode - trying candidate destinations 4,5,6,7,8,40..43 at 2 s intervals; run the host ping now and watch for PIE RX completions\n");
++		 "W17_MIRROR: sweep mode - trying all encodable destinations 0..15 at 2 s intervals (40..43 are not encodable); run the host ping now and watch for PIE RX completions\n");
+ 	for (i = 0; i < ARRAY_SIZE(sweep); i++) {
+ 		if (luofu_switch_mirror_program(lsw, sweep[i]))
+ 			continue;
+@@ -3627,6 +3646,13 @@
+ 	if (luofu_switch_mirror_gate)
+ 		luofu_switch_mirror_run(lsw);
+ 
++	if (luofu_switch_cpu_mirror_gate) {
++		dev_warn(lsw->dev,
++			 "W18_CPU_MIRROR: static CPU-copy destination %u kept for the whole run\n",
++			 luofu_switch_mirror_dst);
++		luofu_switch_mirror_program(lsw, luofu_switch_mirror_dst);
++	}
++
+ out:
+ 	if (ret && lsw->ext_ready) {
+ 		luofu_switch_ext_restore(lsw);
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -119,6 +119,7 @@
+ #include <linux/smp.h>
+ #include <linux/string.h>
+ #include <linux/unaligned.h>
++#include <linux/workqueue.h>
+ 
+ #include "luofu-pie.h"
+ 
+@@ -366,6 +367,8 @@
+  * @clk_enabled: the gate clock is on and the reset line was released
+  * @armed: the engine is programmed and may be used by the MAC
+  */
++struct luofu_pie_rxstroke;
++
+ struct luofu_pie {
+ 	struct device *dev;
+ 	void __iomem *base;
+@@ -395,6 +398,7 @@
+ 	u64 tx_completed;
+ 	bool clk_enabled;
+ 	bool armed;
++	struct luofu_pie_rxstroke *rxstroke;
+ };
+ 
+ /* Backend gate shared with the GEMAC front end. */
+@@ -514,10 +518,6 @@
+ module_param_named(nodoorbell, luofu_pie_nodoorbell_gate, bool, 0444);
+ MODULE_PARM_DESC(nodoorbell, "Attended hang bisection: build and publish TX descriptors but never ring the channel doorbell (default off)");
+ 
+-static bool luofu_pie_rxtrace_gate;
+-module_param_named(rxtrace, luofu_pie_rxtrace_gate, bool, 0444);
+-MODULE_PARM_DESC(rxtrace, "Attended RX-path diagnosis: log the first 32 RX completions with raw descriptor words and decode/drop result");
+-
+ /*
+  * Patch 053 diagnostics: rxdiag prints the whole completion descriptor for the
+  * first completions of both classes; accepterr is the experimental step that
+@@ -536,6 +536,55 @@
+ MODULE_PARM_DESC(accepterr, "Attended W17 experiment: deliver vendor-exception completions (status != 0) to the netdev registered for the decoded error-path port instead of dropping them (default off)");
+ 
+ /*
++ * W18_RXSTROKE (patch 055): the W17 mirror run produced ICMP replies while the
++ * console showed no RXDIAG/RXERR lines at all, i.e. the RX interrupt/poll path
++ * did not log the completions that clearly reached the kernel.  This gate logs
++ * the RX ring/IRQ state every 2 s for one minute (ring rptr, hardware read
++ * pointer, IRQ mask/status, armed flags) plus every RX interrupt entry, so the
++ * next run can tell whether completions happen without the interrupt being
++ * taken, whether a different channel carries them, or whether the mirror path
++ * bypasses the PIE rings entirely.
++ */
++static bool luofu_pie_rxstroke_gate;
++module_param_named(rxstroke, luofu_pie_rxstroke_gate, bool, 0444);
++MODULE_PARM_DESC(rxstroke, "Attended W18_RXSTROKE diagnostic: log RX ring/IRQ state every 2 s for 60 s and every RX interrupt entry (no writes; default off)");
++
++struct luofu_pie_rxstroke {
++	struct delayed_work work;
++	struct luofu_pie *pie;
++	unsigned int left;
++};
++
++static void luofu_pie_rxstroke_work(struct work_struct *w);
++
++static void luofu_pie_rxstroke_schedule(struct luofu_pie *pie)
++{
++	struct luofu_pie_rxstroke *st;
++
++	if (!luofu_pie_rxstroke_gate)
++		return;
++	st = devm_kzalloc(pie->dev, sizeof(*st), GFP_KERNEL);
++	if (!st)
++		return;
++	st->pie = pie;
++	st->left = 30;
++	INIT_DELAYED_WORK(&st->work, luofu_pie_rxstroke_work);
++	WRITE_ONCE(pie->rxstroke, st);
++	schedule_delayed_work(&st->work, msecs_to_jiffies(2000));
++}
++
++static void luofu_pie_rxstroke_stop(struct luofu_pie *pie)
++{
++	struct luofu_pie_rxstroke *st = READ_ONCE(pie->rxstroke);
++
++	if (!st)
++		return;
++	cancel_delayed_work_sync(&st->work);
++	WRITE_ONCE(pie->rxstroke, NULL);
++}
++
++
++/*
+  * Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours
+  * RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the
+  * vendor state of the same registers; two stand out as candidates for the
+@@ -1181,6 +1230,16 @@
+ 
+ static irqreturn_t luofu_pie_rx_interrupt(int irq, void *data)
+ {
++	{
++		static atomic_t irq_trace = ATOMIC_INIT(0);
++
++		if (atomic_inc_return(&irq_trace) <= 64)
++			pr_info("pie-trace RXIRQ irq=%d mask=%08x sts=%08x\n", irq,
++				readl(((struct luofu_pie_irq *)data)->pie->base +
++				      LUOFU_PIE_RX_IRQ_MASK_OFF(0)),
++				readl(((struct luofu_pie_irq *)data)->pie->base +
++				      LUOFU_PIE_RX_IRQ_STS_OFF(0)));
++	}
+ 	struct luofu_pie_irq *priv = data;
+ 	struct luofu_pie *pie = priv->pie;
+ 	irqreturn_t ret = IRQ_NONE;
+@@ -1257,6 +1316,30 @@
+ 	dev_put(ndev);
+ }
+ 
++
++static void luofu_pie_rxstroke_work(struct work_struct *w)
++{
++	struct luofu_pie_rxstroke *st = container_of(w, struct luofu_pie_rxstroke, work.work);
++	struct luofu_pie *pie = st->pie;
++	unsigned int ch;
++
++	if (!pie || !READ_ONCE(pie->armed))
++		return;
++	for (ch = 0; ch < pie->rx_chans; ch++) {
++		struct luofu_pie_ring *ring = &pie->rx_ring[ch];
++
++		pr_info("pie-trace RXSTROKE ch=%u hw_rptr=%u sw_rptr=%u mask=%08x sts=%08x fsm=%08x\n",
++			ch,
++			readl(pie->base + LUOFU_PIE_RX_RPTR_OFF(ch)) & 0xffff,
++			ring->rptr & (ring->entries - 1),
++			readl(pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch)),
++			readl(pie->base + LUOFU_PIE_RX_IRQ_STS_OFF(ch)),
++			readl(pie->base + LUOFU_PIE_RX_EN_OFF));
++	}
++	if (--st->left)
++		schedule_delayed_work(&st->work, msecs_to_jiffies(2000));
++}
++
+ static int luofu_pie_rx_poll(struct napi_struct *napi, int budget)
+ {
+ 	struct luofu_pie_napi *np = container_of(napi, struct luofu_pie_napi,
+@@ -1320,19 +1403,6 @@
+ 
+ 		ret = luofu_pie_rx_decode(desc, pie->rx_buf_size[ch], &compl);
+ 
+-		if (luofu_pie_rxtrace_gate) {
+-			static atomic_t trace_n = ATOMIC_INIT(0);
+-
+-			if (atomic_inc_return(&trace_n) <= 32) {
+-				u32 *dw = (u32 *)desc;
+-
+-				pr_info("pie-trace RXCOMP ch=%u idx=%u hw_rptr=%u ret=%d len=%u status=%u port=%u vlan=%u desc=%08x %08x %08x %08x %08x\n",
+-					ch, index, hw_rptr, ret, compl.len,
+-					compl.status, compl.port, compl.vlan,
+-					dw[0], dw[1], dw[2], dw[3], dw[4]);
+-			}
+-		}
+-
+ 		/* Consume the completion and re-arm the slot with the new buffer. */
+ 		luofu_pie_rx_desc_arm(desc, fresh.dma);
+ 		pie->rx_buf[ch][index] = fresh;
+@@ -1819,6 +1889,8 @@
+ 	if (luofu_pie_scan_gate)
+ 		luofu_pie_scan(pie);
+ 
++	luofu_pie_rxstroke_schedule(pie);
++
+ 	return 0;
+ 
+ err_halt:
+@@ -1840,6 +1912,7 @@
+ 	spin_unlock_irqrestore(&pie->rx_port_lock, flags);
+ 
+ 	luofu_pie_halt(pie);
++	luofu_pie_rxstroke_stop(pie);
+ }
+ 
+ static int luofu_pie_probe(struct platform_device *pdev)

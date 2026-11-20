@@ -1,0 +1,33 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -514,6 +514,10 @@
+ module_param_named(nodoorbell, luofu_pie_nodoorbell_gate, bool, 0444);
+ MODULE_PARM_DESC(nodoorbell, "Attended hang bisection: build and publish TX descriptors but never ring the channel doorbell (default off)");
+ 
++static bool luofu_pie_rxtrace_gate;
++module_param_named(rxtrace, luofu_pie_rxtrace_gate, bool, 0444);
++MODULE_PARM_DESC(rxtrace, "Attended RX-path diagnosis: log the first 32 RX completions with raw descriptor words and decode/drop result");
++
+ /*
+  * Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours
+  * RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the
+@@ -1270,6 +1274,19 @@
+ 
+ 		ret = luofu_pie_rx_decode(desc, pie->rx_buf_size[ch], &compl);
+ 
++		if (luofu_pie_rxtrace_gate) {
++			static atomic_t trace_n = ATOMIC_INIT(0);
++
++			if (atomic_inc_return(&trace_n) <= 32) {
++				u32 *dw = (u32 *)desc;
++
++				pr_info("pie-trace RXCOMP ch=%u idx=%u hw_rptr=%u ret=%d len=%u status=%u port=%u vlan=%u desc=%08x %08x %08x %08x %08x\n",
++					ch, index, hw_rptr, ret, compl.len,
++					compl.status, compl.port, compl.vlan,
++					dw[0], dw[1], dw[2], dw[3], dw[4]);
++			}
++		}
++
+ 		/* Consume the completion and re-arm the slot with the new buffer. */
+ 		luofu_pie_rx_desc_arm(desc, fresh.dma);
+ 		pie->rx_buf[ch][index] = fresh;

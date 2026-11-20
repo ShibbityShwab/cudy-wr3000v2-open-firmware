@@ -1,65 +1,50 @@
-# incoming/qm-decode - round 4o: mirror / copy-to-CPU experiment (patch 054)
+# incoming/qm-decode - round 4p: mirror sweep fix, static CPU-copy, RX-stroke (patch 055)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 20).  Prior: `032`...`053`.
-This package delivers **patch 054**: the W17 port-mirror / copy-to-CPU experiment for the last known
-layer after the first real traffic.  No device access.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 21).  Prior: `032`...`054`.
+This package delivers **patch 055**: the corrected mirror sweep (all encodable destinations), the
+stable static CPU-copy gate (W18), and the RX-stroke instrumentation needed to explain why the
+mirror run got ICMP replies with zero RXDIAG/RXERR lines.  No device access.
 
-## 1. First real traffic (image e924f8a6)
+## 1. W17 mirror run (image e9de3f80)
 
-With accepterr, the host's ARP request completed with `RXERR ACCEPTED status=37 port=11`, was
-delivered to eth2, the kernel replied, and **the host sniff saw the box's ARP reply on the wire**
-(src d4:0d:ab:64:1c:73) - the full wire->PIE RX->CPU->kernel->PIE TX->wire loop works for punted
-frames.  But the host's subsequent ICMP unicast to the box MAC produces **zero** RX completions:
-normal unicast is not punted/forwarded to the CPU, because the vendor's CFE L2/VLAN/CPU-port
-forwarding state is absent (those modules cannot load on 6.18).  That is the last known layer.
+- Sweep programmed dst 4 (3.2s), 5, 6, 7, 8 (11.3s) then completed at 13.3s; **40..43 were never
+  tried** - not only by the candidate list but because the decoded mirror destination field is only
+  4 bits ((dst & 0xf) << 4), so ports 40..43 cannot be encoded at all.  Patch 055 makes that
+  explicit and sweeps every encodable destination instead.
+- Host ping: 4/18 replies (seq4 1024 ms = ARP resolution, seq5-7 ~0.15 ms); the sniff shows the box
+  ARP and ICMP echo replies.  The mirror configuration active at reply time was dst 8 (left
+  programmed after the sweep), and eth2 only linked at 17.8s.
+- **Zero RXDIAG/RXERR console lines** in that run, although frames reached the kernel and replies
+  were produced - so the RX path that delivered them did not go through the logged PIE poll path
+  (or the interrupt was not taken / the completion logged elsewhere).  That is the open question
+  the RX-stroke stage targets.
 
-## 2. Experiment: recovered port mirror
+## 2. Patch 055 = `luofu_switch.cpu_mirror=1@BT@ (W18) + `luofu_pie.rxstroke=1@BT@ + sweep fix
 
-Decoded `hi_port_set_mirror@0xc10` (hi_lsw_pfe) - the vendor's own mechanism to get a copy of
-traffic to a port:
+- **Sweep fix**: candidates are now 0..15; destinations >15 are rejected with an explicit log line
+  explaining the 4-bit encoding (ports 40..43 are not valid mirror destinations).
+- **W18 static CPU-copy**: luofu_switch.cpu_mirror=1 keeps the eth2/port 11 ingress mirror to
+  luofu_switch.mirror_dst (default 8) for the whole run, with the same snapshot/readback/restore
+  discipline as W17.  This is the configuration to test for sustained traffic.
+- **W18_RXSTROKE** (luofu_pie.rxstroke=1): every 2 s for 60 s logs per RX channel the hardware read
+  pointer, software read pointer, IRQ mask/status and RX enable; also logs every RX interrupt entry
+  (first 64).  This tells whether completions happen without the interrupt, on another channel, or
+  whether the mirror path bypasses the PIE rings entirely.
 
-| write | value |
-| --- | --- |
-| OPP+0xd8 bits15:0 | ingress source-port mask (we use BIT(11) = eth2) |
-| OPP+0xd8 bits31:16 | second source list (left as-is) |
-| OPP+0xdc bits31:16 | destination field = (old & ~0x7f0) | ((dst & 0xf) << 4) | 0x600 |
-| OPP+0xc0 | |= BIT(6) (enable) |
-| OPP+0xb4 | write BIT(0), then clear it (latch pulse) |
+## 3. Next run matrix (attended)
 
-## 3. Patch 054 (W17) = `luofu_switch.mirror=1@BT@ (+ `mirror_dst@BT@ / `mirror_sweep@BT@)
+1. **Stable static**: full W3-W16 chain + `luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=8
+   luofu_pie.rxstroke=1 luofu_pie.rxdiag=1 luofu_pie.accepterr=1@BT@; host ping for ~60 s.  Expected:
+   RXSTROKE lines every 2 s; if hw_rptr advances during ping but no RXDIAG/poll lines appear, the
+   missing link is the IRQ/channel mapping; if hw_rptr does not advance, the frames are not reaching
+   the PIE rings through this mirror mode (look for a separate CPU-port queue).
+2. If dst 8 is wrong: repeat with `mirror_dst=6@BT@ and `=7@BT@ (the reply window coincided with those
+   sweep phases before 8 took over).
+3. If static dst 8 sustains traffic, make it the default data-path workaround and move on to
+   verifying ping/ssh stability; then the native L2/VLAN/rootif forwarding remains the clean fix.
 
-- Programs the eth2/port-11 ingress mirror to `luofu_switch.mirror_dst@BT@ (default 4), or sweeps
-  `4,5,6,7,8,40,41,42,43@BT@ at ~2 s intervals with `luofu_switch.mirror_sweep=1@BT@ so one attended boot
-  identifies the port the PIE/CPU side receives mirrored copies on.
-- Snapshots OPP 0xb4/0xc0/0xd8/0xdc (two stable reads), programs, read-back verifies the mask/dest/
-  enable fields, restores the full snapshot on mismatch; off by default; restore also on remove.
-- Mirror semantics are [I] (decoded shape, field meaning partly [U]) - attended experiment only.
+## 4. Deliverables / validation
 
-## 4. How to run the experiment
-
-Boot the full W3-W16 chain plus:
-```
-luofu_pie.accepterr=1 luofu_pie.rxdiag=1
-luofu_switch.mirror=1 luofu_switch.mirror_sweep=1
-```
-then run the host ping during the ~18 s sweep.  Expected: `W17_MIRROR: eth2/port 11 ingress mirror ->
-dst N ...@BT@ every 2 s, and - if destination N is the CPU/PIE port - PIE RX completions for the host's
-ICMP unicast (RXDIAG lines) that stop appearing after the sweep moves on.  The successful N is the
-CPU port number; a follow-up can then program the static L2/VLAN/CPU-port forwarding state (or keep
-the mirror as the data-path workaround).  If no candidate produces completions, mirroring is not the
-punt path and the next target is the IFC/L2-to-CPU action (the FDB/rootif state).
-
-## 5. Deliverables
-
-| file | what it is | sha256 |
-| --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/054-net-lsw-mirror-cputest-w17.patch` | W17 recovered port-mirror experiment | `e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | docs (pending stack) | see handover |
-| `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
-| `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
-
-## 6. Validation
-
-- All patches apply (series ~55/55, 0 rejects) and the driver compiles clean under WERROR; checkpatch
-  0 errors (2 cosmetic line-length warnings in the new MODULE_PARM_DESC strings, no checks).
-- No devicetree/binding/Kconfig change.
+- Patch `055-net-lsw-mirror-stable-rxstroke.patch` (`d4f816ff...@BT@): all patches apply (56/56, 0 rejects),
+  both drivers compile clean under WERROR; checkpatch 0 errors (2 cosmetic blank-line checks).
+- This SUMMARY is the lane record; the docs stack update is included in the next handover.
