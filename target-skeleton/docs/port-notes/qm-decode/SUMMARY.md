@@ -1,66 +1,66 @@
-# incoming/qm-decode - round 4i: PIE/GEMAC RX-state dump (patch 047)
+# incoming/qm-decode - round 4j: W13_RXCFG PIE RX-config + gmac dump fix (patch 048)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 14).  Prior record: `032`...`046`.
-This package delivers **patch 047**: the read-only RX-state comparison (PIE + GEMAC) needed to find
-the missing RX-enable path after all LSW stages verified.  No device access in this lane.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 15).  Prior: `032`...`047`.
+This package delivers **patch 048**: the W13 gated write stage for the PIE RX-config word
+(pie+0x3404 = stock 0x1b04) plus the gmac.dump emission fix, with decode of the rx_init_chan
+formulas.  No device access in this lane.
 
-Apply `shared.patch` from the `opensource` root (carries W10 + token fix + W11 + W12 + W13 docs), then move
-this SUMMARY to `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
+Apply `shared.patch` from the `opensource` root, then move this SUMMARY to
+`target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
 
-## 1. Why this comparison
+## 1. W13 dump result (image a24ba64e, evidence build/evidence-bench-gates/2026-11-20-pie-dump-ours.txt)
 
-The W12 image (0a6849ed) verified W3-W12: corrected W10 tab128 entries read back exactly as stock,
-W12 EPS/DP words verified, heartbeat stable through traffic - yet **no PIE RX interrupt has ever
-fired** and no box frame has ever appeared.  The LSW stock-vs-ours dump windows are now exhausted
-(only non-config EQM indirect mirrors remain), so the comparison moves to the PIE RX/TX and GEMAC
-register windows.
+Everything matched the stored stock inventory (0x1000=0x000a01c8, 0x2200=0x0045e000, 0x3200=0x00002001,
+0x3700=0x0000ffff, 0x0180/0x0200/0x0380=1 per channel, 0x0300 RX IRQ status=0) **except pie+0x3404:
+ours 0x00000000 vs stock 0x00001b04**.  That is the most direct explanation for the never-firing RX
+interrupt.
 
-## 2. Patch 047 (read-only diagnostics, no writes)
+## 2. Decode of hi_pie_rx_init_chan (pinned hi_kpie.ko)
 
-- `luofu_pie.dump=1@BT@: after arming, prints the PIE RX/TX state at the addresses the stock
-  inventory (PIE-DATAPATH 4.5) already measured: per-channel blocks 0x0180/0x0200/0x0300/0x0380/
-  0x0400+ch*4, 0x1000, 0x2200, 0x3200/0x3204/0x3208, 0x3210/0x3290/0x3310+ch*4, 0x3400..0x340c,
-  0x3500..0x353c, 0x3700, TX rings 0x2000..0x201f, RX rings 0x3000..0x301f.
-- `luofu_gmac.dump=1@BT@: at every link-up, prints MAC window offsets 0x0000-0x023f (ctrl,
-  max-frame, port-mode, status blocks) for comparison with devmem reads of the stock gmac windows
-  0x14380000/0x14400000/0x14480000/0x14500000.
-- Nothing is written; both stages are opt-in and do not change the armed path.
+- `0x3404 |= ((cfg[16] & 3) << (ch * 2))` - 2 bits per initialised RX channel;
+- `0x3408 |= BIT(ch)` when that channel's ring size is > 9600 bytes (ours is 0, consistent);
+- `0x3504 + ch*0x10 = ring_size >> 7` - the RX ring-size unit our driver already programs;
+- **no writer** for 0x3400 / 0x340c exists in the recovered paths (loader/hardware words; ours read
+  0x103 / 0x00500858 and are deliberately left alone);
+- 0x3700 (GRO size) matches stock already.
 
-## 3. Leading RX-enable candidates (from the historic stock inventory)
+## 3. Patch 048 = W13_RXCFG + dump fix
 
-| address | stock | ours (driver) | note |
-| --- | --- | --- | --- |
-| PIE 0x3404 | 0x1b04 | 0 (reg_init) | per-channel RX config, [U] encoding; vendor rx_init_chan programs it per channel |
-| PIE 0x3700 | 0xffff | never written | GRO size word, [U]; written unconditionally by the vendor path |
-| PIE 0x3200 | 0x2001 (bit0 enable + bit13) | bit0 set by our rx_enable | bit13 meaning [U] |
-| PIE 0x0400 masks | ch0/ch1 = 0 unmasked | our active channels unmasked | matches |
+- New gate `luofu_pie.rxcfg=1@BT@: snapshot pie+0x3404, require stable across two reads, write the
+  stock-observed **0x1b04**, read back exactly, restore the snapshot on mismatch, fail-closed.  The
+  computed 0x3408 expectation is logged but not written (0 for our <=9600 rings, matches stock).
+- Fail-closed arming: with `luofu_pie.arm=1@BT@ the engine refuses to arm unless rxcfg is set, so the
+  next image cmdline must include `luofu_pie.rxcfg=1@BT@.
+- **gmac.dump fix:** patch 047 placed the dump call after the macconf gate's early return, so image
+  a24ba64e printed no gmac-dump lines unless macconf=1; the call now runs on every link-up.
 
-The dump decides whether our live values match; any difference becomes the gated **W13 write set**
-(snapshot / stable-two-reads / exact readback / restore, same discipline as W3-W12).
+## 4. Expected bench log lines
 
-## 4. Attended procedure
-
-1. Boot the current series with the full chain plus `luofu_pie.dump=1 luofu_gmac.dump=1@BT@ (no other
-   changes); capture the `pie-dump@BT@/ @BT@`gmac-dump@BT@ blocks.
-2. On a stock boot, devmem-read the same PIE offsets (base 0x10a70000) and the gmac window offsets
-   above.  The stock PIE values from the 2026-11-18 inventory are already in PIE-DATAPATH 4.5 for
-   the PIE side.
-3. Diff: a difference at 0x3404/0x3700 (or any other RX-path register) is the next write set; the
-   matching values confirm the RX enable is elsewhere (LSW flow/port state outside the dumped
-   windows) and the next target becomes the CFE/rootif table.
+```
+luofu-pie 10a70000.pie: W13_RXCFG: pie+0x3404 pre=0x0 -> stock 0x1b04 (decoded rx_init_chan 2-bit/channel field); ring-size>9600 bitmap would be 0x0 (0x3408 currently 0x0, not written)
+luofu-pie 10a70000.pie: W13_RXCFG: pie+0x3404 programmed and verified = 0x1b04 (was 0x0)
+luofu-pie 10a70000.pie: PIE v250 armed: 2 RX channels, 2 TX channels, 4 interrupts
+...
+luofu-gmac ... eth2: W13_MACSTATE_DUMP: read-only GEMAC state of eth2 port 11, no hardware writes
+luofu-gmac ... eth2: gmac-dump 0x0000: ...   (now printed with macconf off too)
+```
+Failure signatures (box stays up, engine refuses): W13_RXCFG stability refusal or readback mismatch
+with the snapshot restore notice.  After this stage the traffic test should show the first PIE RX
+interrupt / pie-trace RX/poll lines and a box ARP reply if 0x3404 was the missing enable; if not, the
+next targets are the LSW flow/port state outside the dumped windows and the CFE/rootif table.
 
 ## 5. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/047-net-pie-gmac-rxstate-dump.patch` | PIE + GEMAC read-only RX-state dumps | `587e0f851b55e30b350d76bbcd7b9fceb74cbe2c12692c310bd0dc7f0e889b0a` |
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | W10 + token fix + W11 + W12 + W13 docs (5 files) | `6d5c9746b4d563b8d7100a05d2fcd973e563799a83271af2baffb5c151848706` |
+| `target-skeleton/target/linux/hisilicon/patches-6.18/048-net-pie-rxcfg-w13.patch` | W13_RXCFG write stage + gmac.dump fix | `a642a997c79b2144bd533f35d84b2772f015019e74492043e85a324912470d5d` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | all pending docs (W10+token+W11+W12+W13+W13_RXCFG) | `eaed6c968500f3abd45e565e34f9f822d69bd23986eb1a2a20fe931d3747dc37` |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
 | `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
 ## 6. Validation
 
-- Series apply (current full series + 047 = 48 patches): 48/48, 0 failed hunks, 0 .rej/.orig.
-- WERROR compile clean for both changed drivers; checkpatch 0 errors, 0 checks
-  (`logs/11-checkpatch-047.log`).
+- Series apply (current full series + 048 = 49 patches): 49/49, 0 failed hunks, 0 .rej/.orig;
+  both changed drivers byte-identical to the lane tree (`logs/10-series-apply-049b.log`).
+- WERROR compile clean; checkpatch 0 errors, 0 checks (`logs/11-checkpatch-048.log`).
 - Shared docs patch applies cleanly to the current `opensource` tree; no devicetree/binding/Kconfig change.

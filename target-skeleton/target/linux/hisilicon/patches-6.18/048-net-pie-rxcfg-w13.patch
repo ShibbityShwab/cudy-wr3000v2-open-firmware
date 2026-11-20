@@ -1,0 +1,114 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -417,6 +417,67 @@
+ MODULE_PARM_DESC(arm, "Arm the PIE packet engine data path (default off; attended bench bring-up only)");
+ 
+ /*
++ * Patch 048 (W13_RXCFG): the PIE per-channel RX-config word.
++ *
++ * Decoded from the pinned hi_kpie.ko: hi_pie_rx_init_chan writes
++ *   0x3404 |= ((cfg[16] & 3) << (ch * 2))          for every channel
++ *   0x3408 |= BIT(ch)                              when the ring size > 9600
++ *   0x3504 + ch*0x10 = ring_size >> 7              (RX ring-size unit)
++ * and there is no writer for 0x3400/0x340c in the recovered paths (they are
++ * loader/hardware words; ours read 0x103 / 0x00500858 and are left alone).
++ * The stock boot inventory measured 0x3404 = 0x1b04 while our driver leaves it
++ * at reg_init's 0 - the most direct explanation for the never-firing RX
++ * interrupt.  This stage replays the stock value with the usual
++ * snapshot / stable-two-reads / exact-readback / restore-on-mismatch contract;
++ * the computed 0x3408 expectation (0 for our <=9600 rings) is logged only.
++ */
++static bool luofu_pie_rxcfg_gate;
++module_param_named(rxcfg, luofu_pie_rxcfg_gate, bool, 0444);
++MODULE_PARM_DESC(rxcfg, "Attended W13_RXCFG step: program the recovered PIE RX-config word 0x3404 with the stock-observed 0x1b04 (requires luofu_pie.arm=1; default off)");
++
++#define LUOFU_PIE_RXCFG_OFF		0x3404
++#define LUOFU_PIE_RXCFG_STOCK		0x00001b04
++#define LUOFU_PIE_RXSIZE_BITMAP_OFF	0x3408
++#define LUOFU_PIE_RX_RING_SIZE_OFF(ch)	(0x3500 + (ch) * 0x10 + 0x04)
++
++static int luofu_pie_rxcfg_program(struct luofu_pie *pie)
++{
++	u32 pre, want, got, bitmap = 0;
++	unsigned int ch;
++
++	pre = readl(pie->base + LUOFU_PIE_RXCFG_OFF);
++	if (readl(pie->base + LUOFU_PIE_RXCFG_OFF) != pre)
++		return dev_err_probe(pie->dev, -EIO,
++				     "W13_RXCFG: 0x%x is not stable across two reads; refusing to write it\n",
++				     LUOFU_PIE_RXCFG_OFF);
++
++	for (ch = 0; ch < pie->rx_chans; ch++)
++		if (pie->rx_buf_size[ch] > 9600)
++			bitmap |= BIT(ch);
++
++	dev_info(pie->dev,
++		 "W13_RXCFG: pie+0x%x pre=%#x -> stock %#x (decoded rx_init_chan 2-bit/channel field); ring-size>9600 bitmap would be %#x (0x%x currently %#x, not written)\n",
++		 LUOFU_PIE_RXCFG_OFF, pre, LUOFU_PIE_RXCFG_STOCK, bitmap,
++		 LUOFU_PIE_RXSIZE_BITMAP_OFF,
++		 readl(pie->base + LUOFU_PIE_RXSIZE_BITMAP_OFF));
++
++	want = LUOFU_PIE_RXCFG_STOCK;
++	writel(want, pie->base + LUOFU_PIE_RXCFG_OFF);
++	got = readl(pie->base + LUOFU_PIE_RXCFG_OFF);
++	if (got != want) {
++		dev_err(pie->dev,
++			"W13_RXCFG: readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++			got, want, pre);
++		writel(pre, pie->base + LUOFU_PIE_RXCFG_OFF);
++		return -EIO;
++	}
++	dev_info(pie->dev,
++		 "W13_RXCFG: pie+0x%x programmed and verified = %#x (was %#x)\n",
++		 LUOFU_PIE_RXCFG_OFF, want, pre);
++	return 0;
++}
++
++/*
+  * Patch 041: hang-bisection gate.  With nodoorbell=1 the TX descriptor is built
+  * and published to the ring but the channel doorbell write pointer is NOT
+  * updated, so the engine never processes the descriptor.  If the box survives
+@@ -1611,6 +1672,17 @@
+ 	 * vector (ch4-7) stays masked.  The measured vendor boot leaves the
+ 	 * inactive ch2/3 masked too, which this matches.
+ 	 */
++	if (!luofu_pie_rxcfg_gate) {
++		dev_err(pie->dev,
++			"the recovered PIE RX-config word is not programmed (set luofu_pie.rxcfg=1): without pie+0x3404 the RX interrupt path stays dead; refusing to arm the engine\n");
++		ret = -EOPNOTSUPP;
++		goto err_halt;
++	}
++
++	ret = luofu_pie_rxcfg_program(pie);
++	if (ret)
++		goto err_halt;
++
+ 	WRITE_ONCE(pie->armed, true);
+ 	for (ch = 0; ch < pie->rx_chans; ch++)
+ 		writel(0, pie->base + LUOFU_PIE_RX_IRQ_MASK_OFF(ch));
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -394,6 +394,14 @@
+ 	writel(0, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
+ 	writel(LUOFU_GMAC_MAC_EN, g->base + LUOFU_GMAC_CTRL);
+ 
++	/*
++	 * Patch 048: the W13 MAC dump must run on every link-up, before the
++	 * macconf gate's early return (patch 047 placed it after the return, so
++	 * image a24ba64e printed no gmac-dump lines unless macconf=1).
++	 */
++	if (luofu_gmac_dump_gate)
++		luofu_gmac_dump(g);
++
+ 	if (!luofu_gmac_macconf_gate)
+ 		return;
+ 
+@@ -438,8 +446,6 @@
+ 			    readl(g->base + LUOFU_GMAC_PORT_MODE),
+ 			    readl(g->base + LUOFU_GMAC_CTRL), code, cfg);
+ 	}
+-	if (luofu_gmac_dump_gate)
+-		luofu_gmac_dump(g);
+ }
+ 
+ static const struct phylink_mac_ops luofu_gmac_phylink_ops = {
