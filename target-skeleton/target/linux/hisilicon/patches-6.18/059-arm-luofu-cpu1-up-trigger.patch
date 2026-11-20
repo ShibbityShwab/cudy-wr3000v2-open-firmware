@@ -1,0 +1,52 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -101,6 +101,9 @@
+  * devicetree change is needed.
+  */
+ #include <linux/compiler.h>
++#include <linux/kobject.h>
++#include <linux/cpu.h>
++
+ #include <linux/delay.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
+@@ -969,3 +972,39 @@
+ };
+ 
+ CPU_METHOD_OF_DECLARE(luofu_smp, "hisilicon,luofu-smp", &luofu_smp_ops);
++
++/* Bench: repeatable late-time CPU1 bring-up attempt.
++ *
++ * The cpu1 sysfs "online" attribute is absent because smp_ops has no
++ * .cpu_die and platform_can_hotplug_cpu() gates on it; calling add_cpu(1)
++ * here runs the same __cpu_up() path at a late, fully-initialised time and
++ * can be retriggered from userspace over SSH (write anything to
++ * /sys/kernel/luofu_cpu1/up).  CONFIG_HOTPLUG_CPU and the exported add_cpu()
++ * are required.
++ */
++static ssize_t luofu_cpu1_up_store(struct kobject *kobj,
++				   struct kobj_attribute *attr,
++				   const char *buf, size_t count)
++{
++	int ret = add_cpu(1);
++
++	pr_info("luofu-cpu1-up: add_cpu(1) ret=%d online=%d possible=%d\n",
++		ret, cpu_online(1), cpu_possible(1));
++	return count;
++}
++
++static struct kobj_attribute luofu_cpu1_up_attr =
++	__ATTR_WO(luofu_cpu1_up);
++
++static struct kobject *luofu_cpu1_kobj;
++
++static int __init luofu_cpu1_sysfs_init(void)
++{
++	luofu_cpu1_kobj = kobject_create_and_add("luofu_cpu1", kernel_kobj);
++	if (!luofu_cpu1_kobj)
++		return -ENOMEM;
++	if (sysfs_create_file(luofu_cpu1_kobj, &luofu_cpu1_up_attr.attr))
++		pr_warn("luofu-cpu1-up: sysfs_create_file failed\n");
++	return 0;
++}
++late_initcall(luofu_cpu1_sysfs_init);

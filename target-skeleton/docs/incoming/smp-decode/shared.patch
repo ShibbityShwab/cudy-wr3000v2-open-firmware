@@ -1,0 +1,140 @@
+--- a/docs/SMP-RE.md
++++ b/docs/SMP-RE.md
+@@ -1453,3 +1453,137 @@
+    single variable (do not combine with the early-probe modes in the same run).
+ 3. If all silent: the stock reads in 20.4 plus the loader decode of how CPU1 is
+    started.
++
++---
++
++## 21. Live MMIO capability (2026-11-20): the CPU1 bring-up ladder without rebuilds
++
++Status: the bench now runs a DEVMEM diagnostic image (c6ede30c) of our 6.18 kernel
++with SSH and a static devmem tool, so MMIO can be read and written live. This section
++records the live state, the correct interpretation of it, and the experiment ladder -
++including the one thing that must not be tried and why.
++
++### 21.1 Live read-only state [V]
++
++    SCU 0x10180000 CTRL   = 0x00000003
++    SCU 0x10180004 CONFIG = 0x00000511
++    SCU 0x10180008 status = 0x03030000   (CPU0/1 NORMAL, CPU2/3 off)
++    GICD 0x10181000 CTLR  = 0x00000001
++    GICD 0x10181004 TYPER = 0x0000fc25
++    GICD 0x10181008 IIDR  = 0x0102043b
++    GICC 0x10180100 CTLR  = 0x00000001, PMR 0x000000f8
++    GICC 0x10180200/04    = 0 (CPU1 bank; RAZ from CPU0, no information)
++    SYSCTRL 0x10100c00 pen = 0x81295000   (kernel probe stub)
++    CRG 0x14880038 resume  = 0x00200000   (CPU1 bits already clear)
++    late marker0/1 = 0/0, consumed=no, early_mode=0
++    System.map: secondary_startup = 0xc070b000 (PA 0x8070b000)
++
++### 21.2 Two facts that shape the live plan [V]
++
++1. **The current pen value is the kernel's probe stub, not the entry.** The probe
++   stub prints 'P', writes its marker words and then branches to
++   secondary_startup. That stub is safe until the branch.
++2. **secondary_data is zeroed after the failed boot bring-up.** arch/arm/kernel/smp.c
++   ends __cpu_up() with memset of secondary_data after the "CPU1: failed to come
++   online" timeout, and secondary_startup reads pgdir/swapper_pg_dir/stack/task out of
++   that struct with MMU off. A userspace-initiated jump into secondary_startup
++   therefore cannot bring CPU1 online - it would enable the MMU with a zero
++   page-table pointer and wedge CPU1. **Do not write pen=0x8070b000**, and treat a
++   raw release into the current probe stub as "CPU1 will be wedged after printing
++   'P'". A live release can prove consumption; it cannot online CPU1.
++
++### 21.3 Primary ladder: the kernel's own hotplug path, live and repeatable
++
++The clean live experiment is not a raw devmem release at all - it is writing 1 to
++/sys/devices/system/cpu/cpu1/online. That runs the full kernel __cpu_up() path: it
++sets secondary_data correctly, calls our luofu_smp_boot_secondary() (pen = probe stub
++by default, CRG read-modify-write, wakeup IPI, all diagnostics), waits one second, and
++on failure zeroes secondary_data again. It is repeatable, it needs no writes from
++userspace, and it is exactly the path that failed at boot - but now at an arbitrary
++later time with a fully initialised system.
++
++Per attempt, dmesg shows the full 039/042 diagnostic set (release, pre, +1ms, +21ms,
++consumed) followed by "CPU1: failed to come online" on failure. Success signature:
++"CPU1: thread ... mpidr ..." from arch/arm/kernel/topology.c, /proc/cpuinfo with two
++processors, /sys/devices/system/cpu/cpu1/online = 1, and 'P' on the console from the
++probe stub. The probe markers also persist, so any later attempt's dmesg reprints a
++consumption from an earlier attempt.
++
++Live variables to interleave (one at a time):
++
++    # 1. plain attempts, three times
++    for i in 1 2 3; do echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; done
++    dmesg | tail -60
++
++    # 2. the stock SCU configuration bit (bit 5), then attempts
++    devmem 0x10180004 32 0x00000531; devmem 0x10180004 32
++    echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; dmesg | tail -40
++    devmem 0x10180004 32 0x00000511        # restore when done
++
++    # 3. wakeup-IPI storm during an attempt (tests IPI delivery/retry sensitivity)
++    ( while true; do devmem 0x10181f00 32 0x00020000; done ) &
++    echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; kill %1
++    # and the broadcast form: devmem 0x10181f00 32 0x01000000
++
++### 21.4 Secondary ladder: raw devmem release into a safe stub (only if needed)
++
++The raw sequence only makes sense with a pen target that neither branches nor
++requires secondary_data. The one safe stub we already know how to build in-kernel is
++the early-probe stub (patch 039/042): it writes marker word 0 = MPIDR, prints 'E',
++writes marker word 1 = 0x4545 and spins in WFE. It is only built at boot when the
++luofu_smp_early_probe token is present, so **rebuild the DEVMEM image once with
++luofu_smp_early_probe=5** (mode 5 is the read-only snapshot - it performs no MMIO
++writes but does build and cache-clean the stub). Then, with the stub PA S and marker
++PA M taken from System.map (VA - 0x40000000):
++
++    devmem 0x10100c00 32 S           # pen -> safe stub (must happen first)
++    cur=$(devmem 0x14880038 32); new=$(( cur & ~0x02800000 ))
++    devmem 0x14880038 32 $new        # CRG RMW: clear the CPU1 resume bits
++    devmem 0x10181f00 32 0x00020000  # wakeup IPI: SGI0, target list CPU1
++
++Expected on success: a single 'E' character on the UART (raw console write, not
++dmesg), the box stays up, CPU1 spins in WFE inside the kernel stub, /proc/cpuinfo
++stays at 1 (the kernel never onlined it). Read the early marker page with an
++uncached read only: the normal /dev/mem read/write path uses the cacheable linear map
++(__va, no cache maintenance), so a plain devmem read of RAM can return a stale cached
++line; the UART 'E' is the reliable signal. A devmem variant that mmaps /dev/mem with
++O_SYNC gets a write-combine (uncached) mapping and is suitable for the marker page.
++
++Do not run this ladder against the current probe stub: it branches into
++secondary_startup and wedges CPU1 (see 21.2).
++
++### 21.5 Rollback, and which writes can hurt the box
++
++Rollback after a failed raw attempt (self-cleaning, but explicit is better):
++
++    devmem 0x10100c00 32 0x81295000   # pen back to the kernel probe stub
++    devmem 0x14880038 32 0x00200000   # CRG resume back to the boot value
++    devmem 0x10180004 32 0x00000511   # only if the SCU config bit was changed
++
++If CPU1 consumed the pen ('E' seen, or markers set): reboot. The reset releases CPU1
++from its parked state and the next boot starts from the known 1-CPU baseline; no
++other cleanup is possible or needed.
++
++Hang-risk ranking:
++
++| write | risk | note |
++| --- | --- | --- |
++| pen = secondary_startup PA (0x8070b000), or raw release into the probe stub | medium | CPU1 branches into secondary_startup with a zeroed secondary_data: MMU enable with TTBR=0, almost certainly an abort loop/wedge for CPU1; small chance of a bus watchdog reset. UART capture armed, recovery door ready |
++| SCU CONFIG (0x10180004) write with unknown higher bits | low-medium | bit 5 semantics undecoded; values written are the stock-known 0x531 and our 0x511, low bits (core count) unchanged |
++| CRG 0x14880038 | low | only ever write the read-modify-write result of the known mask 0x02800000 |
++| GICD_SGIR (0x10181f00) | none | write-only, GIC ignores targets that are not present/enabled |
++| GICC CPU1 bank (0x10180200/04) | forbidden | banked per CPU; writes from CPU0 are undefined - never touch |
++
++The sysfs-hotplug ladder (21.3) carries none of these risks: on failure it is exactly
++the boot path that fails today, and on success CPU1 boots through the normal entry
++with a valid stack and page tables.
++
++### 21.6 Interpretation path
++
++* If any live attempt reports consumed=yes/'P': CPU1 does poll/consume the pen in
++  our 6.18 kernel context. Whatever single variable made the difference (timestamp,
++  SCU config bit, IPI storm) becomes the kernel-side fix (for example a retry loop in
++  __cpu_up with real delays, and/or the SCU configuration bit in the release path).
++* If every live attempt stays consumed=no: CPU1 is not executing the loader's
++  pen-poll loop on our boot path at all; the loader decode and the deeper stock reads
++  (section 20.4) are the next step, not more release variants.
