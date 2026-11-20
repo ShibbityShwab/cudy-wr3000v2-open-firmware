@@ -1,0 +1,138 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -168,6 +168,7 @@
+ 
+ #include <linux/bitops.h>
+ #include <linux/clk.h>
++#include <linux/delay.h>
+ #include <linux/device.h>
+ #include <linux/err.h>
+ #include <linux/errno.h>
+@@ -3117,6 +3118,10 @@
+ module_param_named(scan, luofu_switch_scan_gate, bool, 0444);
+ MODULE_PARM_DESC(scan, "Attended W14 diagnostic: after arming, print one word per 4 KiB page of every LSW MMIO window, non-zero pages only, for the stock-vs-ours table-location diff (no writes; default off)");
+ 
++static bool luofu_switch_pagedump_gate;
++module_param_named(pagedump, luofu_switch_pagedump_gate, bool, 0444);
++MODULE_PARM_DESC(pagedump, "Attended W15 diagnostic: dump 16 words of every W14 differing page twice 10 ms apart, labelling stable vs volatile (counter) pages, no writes (default off)");
++
+ static void luofu_switch_scan(struct luofu_switch *lsw)
+ {
+ 	unsigned int w, off;
+@@ -3145,6 +3150,106 @@
+ 		 "W14_LSW_SCAN: done: %u pages read, %u non-zero\n", pages, nz);
+ }
+ 
++/*
++ * W15: page-content dump of the stock-vs-ours differing pages (patch 050).
++ *
++ * The W14 page scan found non-zero stock pages in 15 places that are zero (or
++ * different) on our image.  Classification before any write is essential: most
++ * of the values look like *runtime counters*, not persistent configuration -
++ * the same value 0x1b6 appears in pe+0x1000, pe+0x41000, eqm+0x2000,
++ * eqm+0x42000 and eps+0x6000 (a mirrored/global age counter), the two fam
++ * pages differ by exactly one (0x2f9/0x2fa, sampled microseconds apart), and
++ * our own values are small non-zero counters (0x11).  The vendor table-manager
++ * kthread (hi_lsw_pub tab_mgr_kthread) and the CFE aging path update such
++ * registers at runtime; the vendor modules cannot load on 6.18, so our counters
++ * never advance the same way.
++ *
++ * With luofu_switch.pagedump=1 (read-only) the driver prints the first 16 words
++ * of every page that differed in the W14 comparison (plus the matched context
++ * pages), reads each page TWICE ~10 ms apart, and labels it "stable" or
++ * "volatile (counter-like)".  Volatile pages are runtime state and must not be
++ * replayed; stable pages are the candidates for the gated W15 write set.  The
++ * same pages can be dumped on a stock boot with devmem to confirm.
++ */
++struct luofu_switch_page_dump {
++	enum luofu_switch_window window;
++	u32 offset;
++};
++
++static const struct luofu_switch_page_dump luofu_switch_v250_pages[] = {
++	/* pages that differ */
++	{ LUOFU_SWITCH_WIN_PE,		0x01000 },
++	{ LUOFU_SWITCH_WIN_PE,		0x41000 },
++	{ LUOFU_SWITCH_WIN_EQM,		0x02000 },
++	{ LUOFU_SWITCH_WIN_EQM,		0x06000 },
++	{ LUOFU_SWITCH_WIN_EQM,		0x42000 },
++	{ LUOFU_SWITCH_WIN_EQM,		0x46000 },
++	{ LUOFU_SWITCH_WIN_EPS,		0x06000 },
++	{ LUOFU_SWITCH_WIN_PA,		0x01000 },
++	{ LUOFU_SWITCH_WIN_IFC,		0x01000 },
++	{ LUOFU_SWITCH_WIN_L2,		0x40000 },
++	{ LUOFU_SWITCH_WIN_NAPT,	0x01000 },
++	{ LUOFU_SWITCH_WIN_MCC,		0x01000 },
++	{ LUOFU_SWITCH_WIN_MCC,		0x06000 },
++	{ LUOFU_SWITCH_WIN_OPP,		0x01000 },
++	{ LUOFU_SWITCH_WIN_FAM,		0x01000 },
++	{ LUOFU_SWITCH_WIN_FAM,		0x41000 },
++	/* matched context pages (control) */
++	{ LUOFU_SWITCH_WIN_PE,		0x02000 },
++	{ LUOFU_SWITCH_WIN_EQM,		0x00000 },
++	{ LUOFU_SWITCH_WIN_EPS,		0x00000 },
++	{ LUOFU_SWITCH_WIN_PFE_GLB,	0x00000 },
++	{ LUOFU_SWITCH_WIN_MCC,		0x00000 },
++	{ LUOFU_SWITCH_WIN_PUB,		0x57000 },
++};
++
++static void luofu_switch_pagedump(struct luofu_switch *lsw)
++{
++	unsigned int p, i;
++
++	dev_warn(lsw->dev,
++		 "W15_PAGE_DUMP: read-only content dump of the W14 differing pages + matched controls (16 words, read twice 10 ms apart), no hardware writes\n");
++	for (p = 0; p < ARRAY_SIZE(luofu_switch_v250_pages); p++) {
++		const struct luofu_switch_page_dump *pg =
++			&luofu_switch_v250_pages[p];
++		void __iomem *base = lsw->window[pg->window];
++		u32 a[16], b[16];
++		bool volatile_page = false;
++
++		if (!base)
++			continue;
++		for (i = 0; i < 16; i++)
++			a[i] = readl(base + pg->offset + i * 4);
++		mdelay(10);
++		for (i = 0; i < 16; i++) {
++			b[i] = readl(base + pg->offset + i * 4);
++			if (b[i] != a[i])
++				volatile_page = true;
++		}
++		for (i = 0; i < 16; i += 4)
++			dev_info(lsw->dev,
++				 "page-dump %s+%#07x [%2u..%2u]: %08x %08x %08x %08x\n",
++				 luofu_switch_window_names[pg->window],
++				 pg->offset, i + 1, i + 4,
++				 a[i], a[i + 1], a[i + 2], a[i + 3]);
++		if (volatile_page) {
++			for (i = 0; i < 16; i++)
++				if (b[i] != a[i])
++					dev_warn(lsw->dev,
++						 "page-dump %s+%#07x word %u CHANGED %#x -> %#x (runtime counter/status, do not replay)\n",
++						 luofu_switch_window_names[pg->window],
++						 pg->offset, i, a[i], b[i]);
++		} else {
++			dev_info(lsw->dev,
++				 "page-dump %s+%#07x STABLE (persistent-candidate)\n",
++				 luofu_switch_window_names[pg->window],
++				 pg->offset);
++		}
++	}
++	dev_warn(lsw->dev,
++		 "W15_PAGE_DUMP: done; compare these contents with a stock devmem dump of the same pages\n");
++}
++
+ static int luofu_switch_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -3388,6 +3493,9 @@
+ 	if (luofu_switch_scan_gate)
+ 		luofu_switch_scan(lsw);
+ 
++	if (luofu_switch_pagedump_gate)
++		luofu_switch_pagedump(lsw);
++
+ out:
+ 	if (ret && lsw->ext_ready) {
+ 		luofu_switch_ext_restore(lsw);
