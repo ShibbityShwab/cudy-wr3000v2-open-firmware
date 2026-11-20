@@ -1245,6 +1245,30 @@ computes `(pre & ~GENMASK(13,0)) | ((mtu + 4) & GENMASK(13,0))`, writes it, read
 the snapshot on a mismatch, and re-runs on `ndo_change_mtu`.  The write shape is [V] from the
 vendor; the field semantics beyond "low 14 bits = frame length limit" are [U].
 
+**Correction and crash finding from the round-4b bench runs (patch 040).**  The seven-gate image
+a6b57361 programmed W9 on all four GEMACs (read back `0x334005e0`, i.e. 1504) against the found
+default `0x334005ee` (1518): the vendor `hi_mac_hw_mtu` adds 4 to a frame-length argument
+(MTU + 14), so the correct register value is **MTU + 18** = 1518 and patch 038's MTU + 4 would
+have marked every full-size frame over-max in both directions.  The stable 1-CPU image 45d248ff
+(001-038, seven gates, no early probe) then booted cleanly and reset/fell back to stock **during
+the traffic test**, while the six-gate image 6cb3d908 (no W9) survived that same test, so the
+reset correlates with W9 plus traffic, not with boot.  Patch 040 therefore turns W9 into a
+**read-only diagnostic** (logs the vendor maximum-frame value on every GEMAC, no write) and moves
+the write behind a separate `luofu_gmac.hwinitwrite=1` gate that touches **only** the port named by
+`luofu_gmac.hwinit_port` (default 11 = the bench eth2), with the corrected MTU + 18 formula that
+never lowers a found limit and with pre/post values logged around the write.  It also adds
+`luofu_gmac.trace=1` instrumentation that logs the MAC control/max-frame/port-mode words before
+and after every GMAC xmit (first 32 frames), so a watchdog reset can be attributed to the enqueue
+or to the engine processing the descriptor.
+
+**Vendor ordering of the 0x100 write [I].**  In hi_kmac.ko the only writer of MAC register 0x100 is
+`hi_mac_hw_mtu`, referenced solely from the GEMAC ops table (`.data+0x4`; `hi_gemac_probe` passes
+`.data` into `hi_mac_probe`), and the ops table is invoked from the MAC config/link callbacks
+(`hi_mac_config`/`hi_mac_link_up` path) - i.e. the vendor programs the maximum-frame value as part
+of link configuration, after the MAC is probed and reset, not from an earlier bare probe step.  It
+is therefore not a pre-link enable of anything: it only sets a length limit, and the MAC TX enable
+stays in the control word (0x0) that our link-up path already writes.
+
 **Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
 entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
 only: each entry embeds an id returned by the vendor's software table-manager allocation

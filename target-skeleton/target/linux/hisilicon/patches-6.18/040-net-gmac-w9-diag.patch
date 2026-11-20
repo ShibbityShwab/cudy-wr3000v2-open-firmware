@@ -1,0 +1,225 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -103,7 +103,19 @@
+  */
+ #define LUOFU_GMAC_MAX_FRAME	0x0100
+ #define LUOFU_GMAC_MAX_FRAME_MASK	GENMASK(13, 0)
+-#define LUOFU_GMAC_MAX_FRAME_SLACK	4	/* [V] hi_mac_hw_mtu: mtu + 4 */
++/*
++ * hi_mac_hw_mtu(ctx, arg) stores (arg + 4) in the low 14 bits.  The vendor's
++ * default on this board is 1518 = 1500 (MTU) + 14 (Ethernet header) + 4 (the
++ * helper's own +4): the argument is the frame length without FCS, i.e.
++ * MTU + 14, and the register value MTU + 18 [I, cross-checked against the
++ * 1518 found default].  Patch 038 used MTU + 4 and wrote 1504 over the 1518
++ * default, which would mark every full-size frame as over-max in both
++ * directions; patch 039 fixes the formula and, additionally, never lowers the
++ * found limit (only raises it when the MTU needs more), so a hardware default
++ * larger than our formula cannot be clipped by mistake.
++ */
++#define LUOFU_GMAC_FRAME_OVERHEAD	14	/* [I] Ethernet header without FCS */
++#define LUOFU_GMAC_MAX_FRAME_SLACK	18	/* [V] header + hi_mac_hw_mtu +4 */
+ 
+ #define LUOFU_GMAC_CTRL		0x0000
+ #define LUOFU_GMAC_PORT_MODE	0x0040
+@@ -165,16 +177,58 @@
+ 
+ static bool luofu_gmac_hwinit_gate;
+ module_param_named(hwinit, luofu_gmac_hwinit_gate, bool, 0444);
+-MODULE_PARM_DESC(hwinit, "Attended W9 step: program and verify the MAC maximum-frame register (requires the full attended LSW/PIE chain; default off)");
++MODULE_PARM_DESC(hwinit, "Attended W9 diagnostic: read and log the MAC maximum-frame register on every GEMAC (no write; required for the GEMAC front end to register once the attended LSW/PIE chain is armed; default off)");
++
++static bool luofu_gmac_hwinitwrite_gate;
++module_param_named(hwinitwrite, luofu_gmac_hwinitwrite_gate, bool, 0444);
++MODULE_PARM_DESC(hwinitwrite, "Attended W9 write step: program and verify the MAC maximum-frame register (requires hwinit=1; only the port selected by hwinit_port is written; default off)");
++
++static uint luofu_gmac_hwinit_port = 11;
++module_param_named(hwinit_port, luofu_gmac_hwinit_port, uint, 0444);
++MODULE_PARM_DESC(hwinit_port, "Switch port whose GEMAC maximum-frame register the W9 write step may change (default 11 = eth2, the bench port; 0xffffffff writes all four)");
++
++static bool luofu_gmac_trace_gate;
++module_param_named(trace, luofu_gmac_trace_gate, bool, 0444);
++MODULE_PARM_DESC(trace, "Attended hang instrumentation: log MAC control/max-frame/port-mode registers around every GMAC xmit (default off)");
++
++/*
++ * W9 is split into a read-only diagnostic and an explicit write step after the
++ * round-4b bench run (image 45d248ff, seven gates, stable 1-CPU): the box
++ * booted and linked, then reset/fell back to stock during the traffic test.
++ * The six-gate image (no W9) survived the same test, so the next runs must
++ * first compare the vendor value with ours read-only (this function), and
++ * only then test a write on a single port (luofu_gmac_hw_init_write()).
++ */
++static void luofu_gmac_hw_diag(struct net_device *ndev)
++{
++	struct luofu_gmac *g = netdev_priv(ndev);
++	u32 maxframe, ctrl, port_mode;
++
++	maxframe = readl(g->base + LUOFU_GMAC_MAX_FRAME);
++	ctrl = readl(g->base + LUOFU_GMAC_CTRL);
++	port_mode = readl(g->base + LUOFU_GMAC_PORT_MODE);
++	dev_info(g->dev,
++		 "W9 diag %s port %u: max-frame 0x%x = %#x (limit %u, upper %#x), ctrl 0x0 = %#x, port_mode 0x%x = %#x; no write\n",
++		 ndev->name, g->port, LUOFU_GMAC_MAX_FRAME, maxframe,
++		 (u32)(maxframe & LUOFU_GMAC_MAX_FRAME_MASK),
++		 (u32)(maxframe & ~LUOFU_GMAC_MAX_FRAME_MASK), ctrl,
++		 LUOFU_GMAC_PORT_MODE, port_mode);
++}
++
++/* True when the explicit W9 write step is armed (hwinitwrite requires hwinit). */
++static bool luofu_gmac_hwinit_write_allowed(void)
++{
++	return luofu_gmac_hwinit_gate && luofu_gmac_hwinitwrite_gate;
++}
+ 
+ /*
+- * W9: program the MAC maximum-frame register with the vendor formula
+- * (low 14 bits = mtu + 4, upper bits preserved).  The found value is
+- * snapshotted, the register is read twice and must be stable, the computed
+- * value is written and read back, and the snapshot is restored on a mismatch.
+- * No other MAC register is touched by this stage.
++ * W9 write step: vendor formula (low 14 bits = MTU + 18, upper bits
++ * preserved), never lowering a found limit, snapshot / stability / readback /
++ * restore preserved.  Only called for the single port selected by
++ * hwinit_port; every pre/post value is logged so a hang can be attributed to
++ * a specific write.
+  */
+-static int luofu_gmac_hw_init(struct net_device *ndev)
++static int luofu_gmac_hw_init_write(struct net_device *ndev)
+ {
+ 	struct luofu_gmac *g = netdev_priv(ndev);
+ 	u32 pre, want, got;
+@@ -188,10 +242,17 @@
+ 				     pre, check);
+ 
+ 	want = (pre & ~LUOFU_GMAC_MAX_FRAME_MASK) |
+-	       ((ndev->mtu + LUOFU_GMAC_MAX_FRAME_SLACK) &
+-		LUOFU_GMAC_MAX_FRAME_MASK);
++	       max_t(u32, pre & LUOFU_GMAC_MAX_FRAME_MASK,
++		     ((ndev->mtu + LUOFU_GMAC_MAX_FRAME_SLACK) &
++		      LUOFU_GMAC_MAX_FRAME_MASK));
++
++	dev_info(g->dev,
++		 "W9 write %s port %u: pre 0x%x = %#x, writing %#x and reading back\n",
++		 ndev->name, g->port, LUOFU_GMAC_MAX_FRAME, pre, want);
+ 	writel(want, g->base + LUOFU_GMAC_MAX_FRAME);
+ 	got = readl(g->base + LUOFU_GMAC_MAX_FRAME);
++	dev_info(g->dev, "W9 write %s port %u: post 0x%x = %#x\n",
++		 ndev->name, g->port, LUOFU_GMAC_MAX_FRAME, got);
+ 	if (got != want) {
+ 		dev_err(g->dev,
+ 			"MAC max-frame readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
+@@ -201,9 +262,8 @@
+ 	}
+ 
+ 	dev_info(g->dev,
+-		 "W9: MAC maximum-frame register programmed and verified (0x%x = %#x, mtu %u + %u, snapshot %#x)\n",
+-		 LUOFU_GMAC_MAX_FRAME, want, ndev->mtu,
+-		 LUOFU_GMAC_MAX_FRAME_SLACK, pre);
++		 "W9: MAC maximum-frame register programmed and verified (%s port %u, 0x%x = %#x, mtu %u)\n",
++		 ndev->name, g->port, LUOFU_GMAC_MAX_FRAME, want, ndev->mtu);
+ 	return 0;
+ }
+ 
+@@ -298,11 +358,36 @@
+ static netdev_tx_t luofu_gmac_xmit(struct sk_buff *skb, struct net_device *ndev)
+ {
+ 	struct luofu_gmac *g = netdev_priv(ndev);
++	netdev_tx_t ret;
++	unsigned int n;
+ 
+ 	if (atomic_inc_return(&luofu_gmac_trace_tx) <= 12)
+ 		pr_info("pie-trace GMAC %s xmit port=%u len=%u\n",
+ 			ndev->name, g->port, skb->len);
+-	return luofu_pie_xmit(skb, ndev, g->port);
++
++	/*
++	 * Attended hang instrumentation (luofu_gmac.trace=1): every TX is logged
++	 * around the PIE doorbell with the MAC words W9 touches, so a bus hang /
++	 * watchdog reset can be attributed to the enqueue itself or to the
++	 * engine processing the descriptor.  Rate-limited to the first frames.
++	 */
++	n = luofu_gmac_trace_gate ? atomic_inc_return(&luofu_gmac_trace_tx) : 0;
++	if (luofu_gmac_trace_gate && n <= 32)
++		pr_info("gmac-trace %s port=%u len=%u pre: ctrl=%#x maxframe=%#x port_mode=%#x\n",
++			ndev->name, g->port, skb->len,
++			readl(g->base + LUOFU_GMAC_CTRL),
++			readl(g->base + LUOFU_GMAC_MAX_FRAME),
++			readl(g->base + LUOFU_GMAC_PORT_MODE));
++
++	ret = luofu_pie_xmit(skb, ndev, g->port);
++
++	if (luofu_gmac_trace_gate && n <= 32)
++		pr_info("gmac-trace %s port=%u len=%u post: ctrl=%#x maxframe=%#x port_mode=%#x\n",
++			ndev->name, g->port, skb->len,
++			readl(g->base + LUOFU_GMAC_CTRL),
++			readl(g->base + LUOFU_GMAC_MAX_FRAME),
++			readl(g->base + LUOFU_GMAC_PORT_MODE));
++	return ret;
+ }
+ 
+ static void luofu_gmac_get_stats64(struct net_device *ndev,
+@@ -311,6 +396,13 @@
+ 	netdev_stats_to_stats64(stats, &ndev->stats);
+ }
+ 
++static u32 luofu_gmac_port(struct net_device *ndev)
++{
++	struct luofu_gmac *g = netdev_priv(ndev);
++
++	return g->port;
++}
++
+ static int luofu_gmac_change_mtu(struct net_device *ndev, int mtu)
+ {
+ 	int ret;
+@@ -320,9 +412,12 @@
+ 	ndev->mtu = mtu;
+ 	if (!luofu_gmac_hwinit_gate)
+ 		return 0;
+-	ret = luofu_gmac_hw_init(ndev);
+-	if (ret)
+-		return ret;
++	if (luofu_gmac_hwinit_write_allowed() &&
++	    luofu_gmac_port(ndev) == luofu_gmac_hwinit_port) {
++		ret = luofu_gmac_hw_init_write(ndev);
++		if (ret)
++			return ret;
++	}
+ 	netdev_update_features(ndev);
+ 	return 0;
+ }
+@@ -521,17 +616,21 @@
+ 	/*
+ 	 * Fail closed like the switch stages: once the accepted attended path is
+ 	 * reached (PIE armed, LSW data path complete), a netdev may only register
+-	 * with the MAC device init programmed and verified.  Without the
+-	 * maximum-frame register the MAC drops every frame as over-max in both
+-	 * directions (the round-4/5 symptom: link up, no traffic).
++	 * with the W9 diagnostic armed, so the MAC maximum-frame register state is
++	 * always on the console for the stock-vs-ours comparison.  The diagnostic
++	 * is read-only; the write step is a separate explicit gate.
+ 	 */
+ 	if (!luofu_gmac_hwinit_gate)
+ 		return dev_err_probe(dev, -EOPNOTSUPP,
+-				     "MAC device init is not armed (set luofu_gmac.hwinit=1): the maximum-frame register is unset, so the MAC would drop every frame; refusing to register a netdev\n");
++				     "MAC W9 diagnostic is not armed (set luofu_gmac.hwinit=1): refusing to register a netdev without the maximum-frame register readout\n");
+ 
+-	ret = luofu_gmac_hw_init(ndev);
+-	if (ret)
+-		goto err_phylink;
++	luofu_gmac_hw_diag(ndev);
++	if (luofu_gmac_hwinit_write_allowed() &&
++	    g->port == luofu_gmac_hwinit_port) {
++		ret = luofu_gmac_hw_init_write(ndev);
++		if (ret)
++			goto err_phylink;
++	}
+ 
+ 	ret = register_netdev(ndev);
+ 	if (ret)
+@@ -584,5 +683,5 @@
+ };
+ module_platform_driver(luofu_gmac_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE; gated W9 MAC max-frame init)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE; W9 MAC max-frame diag + gated single-port write)");
+ MODULE_LICENSE("GPL");

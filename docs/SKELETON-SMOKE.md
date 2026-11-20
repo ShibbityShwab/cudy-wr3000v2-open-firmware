@@ -3899,3 +3899,29 @@ lane SUMMARY).  The next attended boot runs the full seven-gate chain including
 verified (0x100 = 0x5e0, mtu 1500 + 4, snapshot ...)") plus a wire frame or PIE RX poll lines would
 show the wire reopened in one or both directions; otherwise the ordered gap list above is the path.
 
+
+## 2026-11-20 round 4b: W9 value bug, traffic-triggered reset, W9 diag/write split (patch 040)
+
+The round-4b runs produced two findings and one safety redesign:
+
+1. **W9 wrote 1504 instead of 1518.**  The bench read W9 back as `0x334005e0` against the found
+   default `0x334005ee`: the vendor helper stores (arg + 4) and the argument is the frame length
+   without FCS (MTU + 14), so the correct value is MTU + 18 = 1518.  Patch 038 wrote MTU + 4, 14
+   bytes short - every full-size frame would have been over-max in both directions.
+2. **The traffic test reset the box on the W9 images.**  Image a6b57361 (2 CPUs, early_probe) and
+   image 45d248ff (stable 1-CPU, no early_probe) both booted, armed all seven gates including W9,
+   linked eth2 and then reset/fell back to stock during/after the traffic test; the six-gate image
+   6cb3d908 (no W9) survived the same test.  So the reset correlates with W9 plus traffic, not with
+   boot.  The oops register dump was not captured (the loader fallback reset the box; the kernel has
+   no pstore/ramoops).  `oops=panic panic=0` on the cmdline would halt with a full dump instead.
+3. **Patch 040 makes W9 safe by construction:** read-only diagnostic by default (the 0x100 value is
+   logged on every GEMAC for the stock-vs-ours comparison), write behind a separate
+   `luofu_gmac.hwinitwrite=1` gate that touches only the port in `luofu_gmac.hwinit_port` (default
+   11 = bench eth2), corrected MTU + 18 formula that never lowers a found limit, pre/post value
+   logs, and optional `luofu_gmac.trace=1` xmit instrumentation logging the MAC words around the
+   PIE doorbell to attribute a hang to enqueue vs. engine processing.
+
+Vendor ordering [I]: the only writer of MAC 0x100 is `hi_mac_hw_mtu`, referenced solely from the
+GEMAC ops table and invoked from the MAC config/link callbacks - the vendor sets the length limit as
+part of link configuration, after probe/reset, and it does not enable a TX path (that stays in the
+control word 0x0 our link-up already writes).

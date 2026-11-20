@@ -1,109 +1,106 @@
-# incoming/qm-decode - MAC maximum-frame init (W9, patch 038)
+# incoming/qm-decode - round 4b: W9 diag/write split + formula fix (patch 040)
 
-**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 5).  Prior record: patch `032`
-revisions 1-3 (EQM queue-manager init + tiered verification) and patch `036` (W8 PFE base init),
-both integrated.  **Status:** round 4 on hardware (image 6cb3d908, six gates) verified W8 and armed
-the path, but traffic still did not move (zero PIE RX polls, no TX frame, port counters).  This
-package delivers patch `038`: the recovered **MAC maximum-frame register** init (W9) - the
-vendor MAC drops over-max frames in both directions and our GEMAC front end never wrote it.  No
-device access in this lane; publication remains NOT READY.
+**Lane:** `qm-decode`, shared task `task-61`, 2026-11-20 (round 7).  Prior record: `032` (tiered
+W7), `036` (W8 PFE), `038` (W9 MAC max-frame) - all integrated.  This package delivers
+**patch 040**: the W9 maximum-frame formula correction plus the safety split forced by the round-4b
+traffic-triggered reset, with hang instrumentation.  No device access in this lane.
 
 Apply `shared.patch` from the `opensource/` root, then move this SUMMARY to
 `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md`.
 
-## 1. Deliverables
+## 1. Bench results that drive this patch
+
+- Image a6b57361 (001-037 + 038, 2 CPUs, early_probe): seven gates armed including W9, eth2 linked,
+  then the box **reset/fell back to stock during/after the traffic test**.  W9 logged
+  `0x100 = 0x334005e0, mtu 1500 + 4, snapshot 0x334005ee`.
+- Image 45d248ff (001-038, seven gates, **stable 1-CPU, no early_probe**): booted cleanly, W7/W8/W9
+  all verified, GEMACs registered, eth2 1 Gbps, br-lan forwarding, then **the traffic test reset the
+  box again** (192.168.10.1 reachable = stock fallback).  So the reset correlates with **W9 plus
+  traffic**, not with boot.
+- Image 6cb3d908 (W8 PFE + reserve_low1m, **no W9**): survived the same traffic test (no frames, no
+  reset).
+- The oops register/backtrace dump is not in either capture (the loader fallback reset the box; the
+  kernel has no pstore/ramoops), so the faulting function is still unidentified.
+
+## 2. Finding: the W9 value was 14 bytes short (fixed here)
+
+Found default @BT@0x334005ee@BT@ = 1518 = **MTU + 18**; the vendor @BT@hi_mac_hw_mtu@BT@ stores
+(arg + 4) and the argument is the frame length without FCS (MTU + 14), so the correct register value
+is MTU + 18 - exactly the 1518 default.  Patch 038 wrote MTU + 4 (1504), which would mark every
+full-size frame over-max in both directions.  Patch 040 writes MTU + 18 and **never lowers a found
+limit** (raises only when the MTU needs more).
+
+## 3. Safety redesign (the safe next step requested by the lead)
+
+- **W9 is now read-only by default.**  `luofu_gmac.hwinit=1` logs `max-frame 0x100`,
+  `ctrl 0x0` and `port_mode 0x40` for every GEMAC and writes nothing - the stock-vs-ours
+  comparison without touching the vendor state.  As before, the GEMAC front end refuses to register
+  without it once the attended LSW/PIE chain is armed.
+- **The write is a separate explicit gate**: `luofu_gmac.hwinitwrite=1` (requires hwinit=1)
+  writes the corrected value **only on the port named by** `luofu_gmac.hwinit_port` (default
+  **11 = eth2, the bench port**; @BT@0xffffffff@BT@ = all four).  Pre-write and post-write values are
+  logged, and the snapshot / stable-two-reads / readback / restore-on-mismatch discipline is kept.
+- **Hang instrumentation**: `luofu_gmac.trace=1` logs the MAC control/max-frame/port-mode
+  words **before and after every GMAC xmit** (first 32 frames), on top of the existing PIE TX trace,
+  so a watchdog reset can be attributed to the enqueue or to the engine processing the descriptor.
+- Also fixes the misleading W7 STRICT wording: entries whose differences are outside the
+  bench-proven fields are accepted, but patch 036 printed "failing closed" for them.
+
+## 4. Answer: does the vendor write MAC 0x100 before the link?
+
+[I, decode-based] The only writer of MAC register 0x100 in hi_kmac.ko is `hi_mac_hw_mtu`, which
+is referenced **solely** from the GEMAC ops table (`.data+0x4@BT@; `hi_gemac_probe` passes
+`.data` into `hi_mac_probe`).  The ops table is invoked from the MAC config/link callbacks
+(`hi_mac_config`/`hi_mac_link_up` path), i.e. the vendor programs the maximum-frame limit
+**as part of link configuration, after the MAC is probed and reset** - not from an earlier bare
+probe and not as an enable.  It only sets a length limit; the MAC TX enable remains in the control
+word 0x0 that our link-up path already writes, so writing 0x100 cannot by itself arm a TX path.
+
+## 5. Crash hypotheses (for the lead's bisection)
+
+(a) *Write on all four GEMACs* - unlikely to be a NULL/bus hang by itself (single RMW of a mapped
+register, readback verified, executed ~4 s before the crash), but patch 040 still restricts writes
+to the bench port so the next runs can tell.
+(b) *Other MAC config words* - plausible: the vendor's `hi_mac_hw_config` writes
+0x14/0x18/0x1c and read-modifies 0x40 around the same config path; our link-up writes only
+0x40/0x1b4/0x0.  A wrong/incomplete sequence could leave the MAC in a state that faults on the
+first queued frame.  Not implemented blindly; decoded values are documented for the next patch.
+(c) *TX needs the PIE/LSW egress path we still lack* - plausible: with a frame now being accepted
+for TX, a descriptor may reach an engine path (queue handle / egress deque) that is not fully
+configured.  The `trace=1` instrumentation is designed exactly to catch where it dies.
+(d) *Other 036/037 changes* - 037 was off in 45d248ff (no early_probe) and the reset still happened,
+so 037 is not required for the crash; W8 alone did not reset (6cb3d908 survived), so the evidence
+points at W9's change of MAC state/value rather than 036/037.
+
+If the clean diagnostic image still resets, capture the dump with `oops=panic panic=0` on the
+cmdline (halts with a full register/backtrace instead of the loader fallback; recovery stays
+physical), and bisect W9-write off vs. write-on-bench-port.
+
+## 6. Deliverables
 
 | file | what it is | sha256 |
 | --- | --- | --- |
-| `target-skeleton/target/linux/hisilicon/patches-6.18/038-net-gmac-maxframe-init.patch` | seventh attended gate `luofu_gmac.hwinit=1`: MAC register 0x100 = (pre & ~GENMASK(13,0)) | ((mtu+4) & GENMASK(13,0)), snapshot / stable-two-reads / readback / restore-on-mismatch, re-run on `ndo_change_mtu`; GEMAC refuses to register a netdev unless W9 is armed once the accepted attended path is reached | `949d83fbc451b3ec12029ab47fbaef10bef007632fc2f81556cfe8ec194337b0` |",
-| `target-skeleton/docs/incoming/qm-decode/shared.patch` | `docs/LSW-SPEC.md` (new 7.11 W9 section, 12.3 W9/W10 rows), `docs/SKELETON-SMOKE.md` (round-4b session), `target-skeleton/README.md` (038 row) | `408c33b99de9cf81f4dedda270514249b08ccc0075bfc6afada5bf0158d3a880` |",
+| `target-skeleton/target/linux/hisilicon/patches-6.18/040-net-gmac-w9-diag.patch` | W9 read-only diagnostic + explicit single-port write (MTU+18, never-lower) + `trace=1` xmit instrumentation + W7 wording fix | `58f15ad0344cfa7bd3e0e6160a21bc63ebd14f3eb3f9ccfadcef5a3aee4ed4f4` |
+| `target-skeleton/docs/incoming/qm-decode/shared.patch` | LSW-SPEC 7.11 correction/crash/vendor-ordering note, SKELETON-SMOKE round-4b session, README 040 row | see handover |
 | `target-skeleton/docs/incoming/qm-decode/SUMMARY.md` | this file | - |
-| `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy of this record | - |
+| `target-skeleton/docs/port-notes/qm-decode/SUMMARY.md` | integrated copy | - |
 
-## 2. Round-4 hardware result and the next candidate
+## 7. Validation
 
-Image 6cb3d908 (six gates): W7 counters correct ("91 verified on bench-proven vendor-read fields
-(tables 32/35/17), 77 acknowledged with diagnostics (tables 16/34; 0 differed), 1 write-only
-acknowledged (table 19)"), W8 verified ("PFE forwarding-engine base init programmed and verified
-(pe+0x400=0x2 pfe_glb+0x2c=0x34 pfe_glb+0x204=0x1 opp+0x110=0x0)"), connectivity armed, GEMAC
-registered, eth2 1 Gbps/Full, br-lan forwarding - **still no frame**: zero PIE RX poll lines, no
-box frames on the wire, PIE TX descriptors consumed.  W8 is necessary but not sufficient.
-
-## 3. Decode: the MAC device config gap (pinned hi_kmac.ko)
-
-- `hi_mac_hw_mtu@0x38c` reads register **0x100**, replaces its **low 14 bits with (MTU + 4)** and
-  writes the word back; the access helpers are plain base+offset MMIO
-  (`hi_reg_hw_read@0x41b8` / `hi_reg_hw_write@0x41c4`).  The vendor's
-  `hi_mac_change_mtu@0x428c` calls it on MTU changes.
-- The MAC keeps `rx_overmax_pkt` / `tx_overmax_pkt` statistics: frames longer than this limit
-  are dropped **in both directions**.  A zero/reset max-frame value would explain the observed
-  "link up, nothing moves" symptom exactly - and our GEMAC driver never wrote register 0x100.
-- The rest of `hi_mac_hw_config@0x258` (reg 0x14 speed config, 0x18, 0x1c, and a read-modify of
-  0x40 preserving bits 8..15 with bit 24 set) overlaps the measured link words our driver already
-  writes (0x40 port mode, 0x1b4 mode-change latch, 0x0 MAC enable), so W9 touches only the
-  maximum-frame register.
-
-## 4. Patch 038 (W9) implementation
-
-- New gate `luofu_gmac.hwinit=1`: once the accepted attended path is reached (PIE armed, LSW
-  data path complete), the GEMAC driver refuses to register a netdev unless W9 is armed and
-  verified - the same fail-closed discipline as the switch stages.
-- W9 snapshots register 0x100, requires it stable across two reads, computes the vendor formula,
-  writes it, reads it back, restores the snapshot on a mismatch, and re-runs from
-  `ndo_change_mtu`.  Write shape [V]; field semantics beyond "low 14 bits = frame limit" [U].
-
-## 5. Remaining gap layers (ordered)
-
-1. **IFC default-classification table** (`ifc+0x50000`, 16-byte entries from
-   `hi_pfe_ifc_init`): decoded call shape only - each entry embeds an id from the vendor's
-   software table-manager allocation (`hi_tab_mgr_alloc_hash`), so that allocator's id sequence
-   must be decoded before the payloads can be reproduced;
-2. L2/VLAN tables + the CFE/rootif contract (`hi_kcfe_pub`, `hi_kcara`, `hi_swa`);
-3. remaining MAC config words (0x14/0x18/0x1c, 0x40 read-modify), NAPT/MCC init, table 38 / VP
-   class, and the PIE per-port queue handle.
-
-## 6. Validation (isolated clone under build/linux-kbuild/waves/2026-11-20-r5-mac/, no device)
-
-- **Series apply (001-038):** 38/38 applied, 0 failed hunks, 0 .rej/.orig; `luofu-gmac.c`
-  byte-identical to the lane tree (`logs/10-series-apply-001-038.log`, sha256
-  `528caad2592f3b2f6d7c04c91a44ef5fe61c224d8e068cbe446b7b8dff424f2a`).
-- **Isolated clone prepare/compile:** reflink clone with patches 037+038 added (shared clone and
-  `openwrt-lab-selectorfix-img` untouched): `make target/linux/prepare` **RC=0** (log sha256
-  `6fedc8442384bb29ee9001af084602a68ef86061a3ec77a7c29bfb1f9a99be27`) and
-  `make target/linux/compile` **RC=0** in 668.6 s (log sha256
-  `b741f72680e4081a67add27b113af5c6b829bc92e3a4dcbf0b95f9f501bdedd5`) with `CONFIG_WERROR=y`
-  and **zero `warning:`/`error:` lines in the whole log**; `luofu-gmac.o` 56,632 B with W9;
-  `vmlinux` 57,127,888 B, sha256
-  `1c62c96824f218d0ed527c96fada28f92fb09dcefea7d7e09cd002028c81eaca`; the prepared tree is
-  byte-identical to the lane work tree (W9 included).
+- **Series apply (001-040, current series):** 40/40 applied, 0 failed hunks, 0 .rej/.orig;
+  `luofu-gmac.c` byte-identical to the lane tree (`logs/10-series-apply-001-040b.log`).
+- **WERROR compile:** `luofu-gmac.o` rebuilt clean under `W=1 -Werror` in the validated tree.
 - **checkpatch:** 0 errors, 0 checks, only the expected "missing commit description" warning
-  (`logs/11-checkpatch-038.log`).
-- **DTS/binding/config:** patch 038 changes no devicetree, binding or Kconfig/config symbol.
+  (`logs/11-checkpatch-040.log`).
+- **Numbering note:** the SMP lane added `039-arm-hisilicon-smp-early-safe.patch`, so my
+  formula fix and diag split are folded into this single patch **040** against the current series.
+- No devicetree/binding/Kconfig change.
 
-## 7. Proof vs unverified
+## 8. Next step guidance
 
-**Proven on hardware (rounds 3-4):** the W3-W8 write set arms the software data path (readiness,
-GEMAC registration, 1 Gbps link, br-lan forwarding); the tiered W7 verification and the W8 PFE base
-init verify on silicon; the fail-closed design refuses without the full chain.
-**Unverified:** whether the MAC maximum-frame register reopens the wire (next run); every layer in
-section 5; RX delivery.  A W9 boot still means "the vendor MAC init write was accepted and
-verified", not "traffic flows".
-
-## 8. Next attended step
-
-Recovery-armed boot with the full seven-gate chain including `luofu_gmac.hwinit=1`: expect
-W3 -> W4 -> W5 -> W6 -> W7 (corrected counters) -> W8 PFE verified -> connectivity armed -> GEMAC
-registration -> **W9 "MAC maximum-frame register programmed and verified (0x100 = 0x5e0, mtu 1500 +
-4, snapshot ...)"** -> eth2 up -> br-lan forwarding.  Then ping from the host while watching the PIE
-RX poll trace and the wire: an RX poll line or a wire frame proves the corresponding direction
-reopened.  If nothing moves, work the section-5 gap list (IFC table requires its allocator sequence
-decoded first).
-
-## 9. Integration notes
-
-- The kernel patch is in the skeleton's `patches-6.18/` (038); it applies after 037 and only
-  touches `luofu-gmac.c`.
-- `shared.patch` is diffed against the current `opensource/` HEAD (which contains the W8/PFE
-  integration, commit 1796754) and applies cleanly.
-- Bench console evidence: `build/uart-logs/20261120T030815Z-uart-pfe-boot.log`.
-- No vendor binary, device artifact or per-unit value is in this package.
+Run the current series with **`luofu_gmac.hwinit=1` only** first (read-only diagnostic): boot,
+compare `max-frame/ctrl/port_mode` against stock expectations, no traffic write risk.  Then, if
+the diagnostic image survives, enable `luofu_gmac.hwinitwrite=1 luofu_gmac.trace=1` for the
+bench port and run the traffic test: the W9 pre/post lines localize the write, and the gmac-trace
+pre/post lines localize whether the hang happens at enqueue or when the engine processes the
+descriptor.  Do not resume next-layer decode until this regression is understood.
