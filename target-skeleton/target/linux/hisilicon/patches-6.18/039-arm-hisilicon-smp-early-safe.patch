@@ -1,0 +1,307 @@
+--- a/arch/arm/mach-hisilicon/platsmp.c
++++ b/arch/arm/mach-hisilicon/platsmp.c
+@@ -148,6 +148,8 @@
+ #define LUOFU_CRG_PA		0x14880000UL
+ #define LUOFU_GIC_DIST_PA	0x10181000UL
+ #define LUOFU_GIC_SGIR		0x0f00
++#define LUOFU_GIC_CPU0_PA	0x10180100UL
++#define LUOFU_GIC_CPU1_PA	0x10180200UL
+ /* CPU1 resume-bit pair from core-info = <0x16 0x18 0x17 0x19>. */
+ #define LUOFU_CPU1_RESUME_MASK	0x02800000u
+ 
+@@ -356,27 +358,41 @@
+ }
+ 
+ /*
+- * Early probe (patch 036).
++ * Early probe (patch 039; introduced in 037).
+  *
+  * parse_early_param() runs inside setup_arch() before arm_memblock_init() and
+  * paging_init(), i.e. before the kernel allocates a single page.  An early_param
+  * handler can therefore use early_ioremap() to program the decoded release with a
+- * pen that points at a small stub which prints 'E', records its MPIDR in a marker
+- * word and spins in WFE.  This answers "does CPU1 consume the pen before our own
+- * early init has done anything" with one boot:
++ * pen that points at a small stub which prints 'E', records its MPIDR (word 0)
++ * and a post-UART progress word (word 1), then spins in WFE:
+  *
+  *	luofu_smp_early_probe=1	pen write only
+  *	luofu_smp_early_probe=2	pen write + CRG resume-bit clear
+- *	luofu_smp_early_probe=3	pen write + CRG clear + wakeup IPI (GIC SGIR)
++ *	luofu_smp_early_probe=3	pen write + CRG clear + wakeup IPI
++ *	luofu_smp_early_probe=4	like 2 plus a short window, then restore the
++ *				pen and resume words for the normal release
++ *				(hand-back mode; the normal boot_secondary runs
++ *				unless the window already consumed the pen)
++ *	luofu_smp_early_probe=5	read-only early snapshot, no hardware writes
+  *
+- * The marker is read back (with cache maintenance) from smp_prepare_cpus() and
+- * from the normal +1ms/+21ms lines.  'E' on the console is independent proof
+- * that the stub ran even if the marker channel has a problem.
++ * Modes 1-4 are a single variable each and all precede the first allocation.
++ * Mode 3's IPI is best effort: the GIC driver has not run yet, so the raw
++ * GICD_SGIR write is only useful if the bootloader left the distributor
++ * enabled; the target value is fixed to target-list CPU1, SGI 0 (0x00020000).
++ * Mode 5 never writes anything and is the safe "look early" control.
++ *
++ * The marker is read back (with cache maintenance) at the end of the early
++ * handler, from smp_prepare_cpus() and from the normal +1ms/+21ms lines.
++ * 'E' on the console is independent proof that the stub ran even if the
++ * marker channel has a problem.  If a mode 1-4 marker shows consumption, the
++ * normal boot_secondary() skips the release entirely (no double release).
+  */
+ static unsigned int luofu_smp_early_mode;
+ static u32 luofu_smp_early_stub[32] __aligned(64);
+ static u32 luofu_smp_early_marker[16] __aligned(64);
+ static phys_addr_t luofu_smp_early_marker_pa;
++static u32 luofu_smp_early_prev_pen;
++static u32 luofu_smp_early_prev_resume;
+ 
+ static void __init luofu_smp_build_early_stub(void)
+ {
+@@ -396,31 +412,34 @@
+ 	s[10] = 0x1a000002;			/* bne	print */
+ 	s[11] = 0xe2555001;			/* subs	r5, r5, #1 */
+ 	s[12] = 0x1afffffa;			/* bne	poll */
+-	s[13] = 0xea000001;			/* b	spin */
++	s[13] = 0xea000003;			/* b	spin */
+ 	s[14] = 0xe3a01045;			/* mov	r1, #'E' */
+ 	s[15] = 0xe5c01000;			/* strb	r1, [r0] */
+-	s[16] = 0xe320f002;			/* wfe */
+-	s[17] = 0xeafffffd;			/* b	spin */
++	s[16] = luofu_arm_movw(3, 0x4545);	/* movw	r3, #0x4545 progress */
++	s[17] = 0xe5843004;			/* str	r3, [r4, #4] */
++	s[18] = 0xe320f002;			/* wfe */
++	s[19] = 0xeafffffd;			/* b	spin */
+ 
+ 	__sync_cache_range_w(luofu_smp_early_stub,
+ 			     sizeof(luofu_smp_early_stub));
+ 	flush_cache_all();
+ }
+ 
+-static u32 luofu_smp_early_marker_read(void)
++static u32 luofu_smp_early_marker_word(unsigned int idx)
+ {
+-	__sync_cache_range_r(&luofu_smp_early_marker[0], sizeof(u32));
+-	return READ_ONCE(luofu_smp_early_marker[0]);
++	__sync_cache_range_r(&luofu_smp_early_marker[idx], sizeof(u32));
++	return READ_ONCE(luofu_smp_early_marker[idx]);
+ }
+ 
++
+ static int __init luofu_smp_setup_early_probe(char *val)
+ {
+ 	unsigned int mode;
+ 	void __iomem *sysctrl, *crg;
+ 	phys_addr_t stub_pa;
+-	u32 v;
++	u32 pen, resume, marker0, marker1;
+ 
+-	if (!val || kstrtouint(val, 0, &mode) || mode < 1 || mode > 3) {
++	if (!val || kstrtouint(val, 0, &mode) || mode < 1 || mode > 5) {
+ 		pr_warn("luofu-smp: ignoring bad luofu_smp_early_probe value\n");
+ 		return 0;
+ 	}
+@@ -436,38 +455,71 @@
+ 		return 0;
+ 	}
+ 
+-	pr_info("luofu-smp: EARLY probe mode %u in setup_arch: stub %08llx marker %08llx\n",
++	pen = readl_relaxed(sysctrl + LUOFU_SMP_PEN_OFFSET);
++	resume = readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET);
++	luofu_smp_early_prev_pen = pen;
++	luofu_smp_early_prev_resume = resume;
++	luofu_smp_early_mode = mode;
++
++	pr_info("luofu-smp: EARLY mode %u in setup_arch: stub %08llx marker %08llx pen %08x resume %08x\n",
+ 		mode, (unsigned long long)stub_pa,
+-		(unsigned long long)luofu_smp_early_marker_pa);
+-	writel((u32)stub_pa, sysctrl + LUOFU_SMP_PEN_OFFSET);
+-	dsb(sy);
+-	pr_info("luofu-smp: EARLY pen %08x resume %08x\n",
+-		readl_relaxed(sysctrl + LUOFU_SMP_PEN_OFFSET),
+-		readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET));
++		(unsigned long long)luofu_smp_early_marker_pa, pen, resume);
+ 
+-	if (mode >= 2) {
+-		v = readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET);
+-		writel(v & ~LUOFU_CPU1_RESUME_MASK,
+-		       crg + LUOFU_CRG_RESUME_OFFSET);
++	if (mode == 5) {
++		/* read-only early snapshot: no hardware writes at all */
++		pr_info("luofu-smp: EARLY mode 5 snapshot only (read-only)\n");
++	} else {
++		writel((u32)stub_pa, sysctrl + LUOFU_SMP_PEN_OFFSET);
+ 		dsb(sy);
+-		pr_info("luofu-smp: EARLY resume %08x -> %08x\n", v,
+-			readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET));
+-	}
+-
+-	if (mode >= 3) {
+-		void __iomem *gic = early_ioremap(LUOFU_GIC_DIST_PA, SZ_4K);
+-
+-		if (gic) {
+-			writel(0x02000000, gic + LUOFU_GIC_SGIR);
++		if (mode >= 2) {
++			writel(resume & ~LUOFU_CPU1_RESUME_MASK,
++			       crg + LUOFU_CRG_RESUME_OFFSET);
+ 			dsb(sy);
+-			early_iounmap(gic, SZ_4K);
+-			pr_info("luofu-smp: EARLY wakeup IPI written\n");
++		}
++		if (mode == 3) {
++			void __iomem *gic = early_ioremap(LUOFU_GIC_DIST_PA, SZ_4K);
++
++			if (gic) {
++				/* GICD_SGIR: target-list filter 0, CPU1 = bit 1, SGI 0 */
++				writel(0x00020000, gic + LUOFU_GIC_SGIR);
++				dsb(sy);
++				early_iounmap(gic, SZ_4K);
++				pr_info("luofu-smp: EARLY mode 3 wakeup IPI written (GICD_SGIR=0x00020000)\n");
++			}
++		}
++		marker0 = luofu_smp_early_marker_word(0);
++		marker1 = luofu_smp_early_marker_word(1);
++		if (mode == 4) {
++			/* short window to catch a polling consumer, then hand the
++			 * release back to the normal boot_secondary path */
++			unsigned int i;
++
++			for (i = 0; i < 200000; i++)
++				cpu_relax();
++			marker0 = luofu_smp_early_marker_word(0);
++			marker1 = luofu_smp_early_marker_word(1);
++			if (!marker0 && !marker1) {
++				writel(luofu_smp_early_prev_pen,
++				       sysctrl + LUOFU_SMP_PEN_OFFSET);
++				writel(luofu_smp_early_prev_resume,
++				       crg + LUOFU_CRG_RESUME_OFFSET);
++				dsb(sy);
++				pr_info("luofu-smp: EARLY mode 4 window empty: pen and resume restored for the normal release\n");
++			} else {
++				pr_info("luofu-smp: EARLY mode 4 window consumed (marker0 %08x marker1 %08x): CPU1 is in the early stub, the normal release will be skipped\n",
++					marker0, marker1);
++			}
+ 		}
+ 	}
+ 
++	pr_info("luofu-smp: EARLY post: pen %08x resume %08x marker0 %08x marker1 %08x\n",
++		readl_relaxed(sysctrl + LUOFU_SMP_PEN_OFFSET),
++		readl_relaxed(crg + LUOFU_CRG_RESUME_OFFSET),
++		luofu_smp_early_marker_word(0),
++		luofu_smp_early_marker_word(1));
++
+ 	early_iounmap(sysctrl, SZ_4K);
+ 	early_iounmap(crg, SZ_4K);
+-	luofu_smp_early_mode = mode;
+ 	return 0;
+ }
+ early_param("luofu_smp_early_probe", luofu_smp_setup_early_probe);
+@@ -659,6 +711,35 @@
+ 	return base;
+ }
+ 
++/*
++ * GIC state is the other half of a WFI/dormant release: the wakeup IPI is only
++ * deliverable if the distributor and the target CPU interface are enabled.
++ * The GIC driver has run by the time the release happens, so these words say
++ * whether the normal release could reach CPU1 at all.
++ */
++static void luofu_smp_dump_gic(const char *tag)
++{
++	void __iomem *dist, *cpu0, *cpu1;
++
++	dist = ioremap(LUOFU_GIC_DIST_PA, SZ_4K);
++	cpu0 = ioremap(LUOFU_GIC_CPU0_PA, 0x100);
++	cpu1 = ioremap(LUOFU_GIC_CPU1_PA, 0x100);
++	if (!dist || !cpu0 || !cpu1) {
++		pr_info("luofu-smp: %s gic: ioremap failed\n", tag);
++	} else {
++		pr_info("luofu-smp: %s gic: dist_ctlr=%08x sgir=%08x cpu0_ctlr=%08x cpu1_ctlr=%08x\n",
++			tag, readl_relaxed(dist),
++			readl_relaxed(dist + LUOFU_GIC_SGIR),
++			readl_relaxed(cpu0), readl_relaxed(cpu1));
++	}
++	if (dist)
++		iounmap(dist);
++	if (cpu0)
++		iounmap(cpu0);
++	if (cpu1)
++		iounmap(cpu1);
++}
++
+ static void __init luofu_smp_prepare_cpus(unsigned int max_cpus)
+ {
+ 	phys_addr_t sysctrl_pa, crg_pa;
+@@ -698,12 +779,15 @@
+ 		pr_info("luofu-smp: prep markers %08x %08x (must be zero)\n",
+ 			luofu_smp_marker_read(0), luofu_smp_marker_read(1));
+ 	if (luofu_smp_early_mode)
+-		pr_info("luofu-smp: EARLY mode %u marker0=%08x consumed=%s\n",
+-			luofu_smp_early_mode, luofu_smp_early_marker_read(),
+-			luofu_smp_early_marker_read() ? "yes" : "no");
++		pr_info("luofu-smp: EARLY mode %u marker0=%08x marker1=%08x consumed=%s\n",
++			luofu_smp_early_mode, luofu_smp_early_marker_word(0),
++			luofu_smp_early_marker_word(1),
++			(luofu_smp_early_marker_word(0) ||
++			 luofu_smp_early_marker_word(1)) ? "yes" : "no");
+ 	luofu_smp_dump_loader_windows();
+ 	luofu_smp_scan_park_loop();
+ 	luofu_smp_dump_memblock();
++	luofu_smp_dump_gic("prep");
+ }
+ 
+ /*
+@@ -735,6 +819,20 @@
+ 	if (!luofu_smp_pen || !luofu_smp_resume)
+ 		return -ENODEV;
+ 
++	/*
++	 * Patch 039: if the early probe (modes 1-4) already fed CPU1, the core
++	 * is parked in the early stub.  Do not run the normal release again -
++	 * the vendor sequence must be programmed exactly once.
++	 */
++	if (luofu_smp_early_mode >= 1 && luofu_smp_early_mode <= 4 &&
++	    (luofu_smp_early_marker_word(0) ||
++	     luofu_smp_early_marker_word(1))) {
++		pr_warn("luofu-smp: early probe owns CPU1 (marker0=%08x marker1=%08x) - skipping the normal release\n",
++			luofu_smp_early_marker_word(0),
++			luofu_smp_early_marker_word(1));
++		return -EIO;
++	}
++
+ 	if (cpu >= ARRAY_SIZE(luofu_resume_bits)) {
+ 		pr_warn("luofu: no resume bits for CPU%u\n", cpu);
+ 		return -EINVAL;
+@@ -781,13 +879,15 @@
+ 	luofu_smp_dump("+1ms");
+ 
+ 	mdelay(20);
+-	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x consumed=%s early=%08x\n",
++	pr_info("luofu-smp: +21ms pen=%08x resume=%08x scu_ctrl=%08x scu_status=%02x marker0=%08x marker1=%08x consumed=%s early0=%08x early1=%08x\n",
+ 		readl_relaxed(luofu_smp_pen), readl_relaxed(luofu_smp_resume),
+ 		luofu_scu_read(LUOFU_SCU_CTRL), luofu_scu_cpu_status(cpu),
+ 		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
+ 		luofu_smp_pen_consumed() ? "yes" : "no",
+-		luofu_smp_early_mode ? luofu_smp_early_marker_read() : 0);
++		luofu_smp_early_mode ? luofu_smp_early_marker_word(0) : 0,
++		luofu_smp_early_mode ? luofu_smp_early_marker_word(1) : 0);
+ 	luofu_smp_dump("+21ms");
++	luofu_smp_dump_gic("post-release");
+ 
+ 	for (retries = luofu_smp_retries; retries > 0; retries--) {
+ 		mdelay(1);
+@@ -810,9 +910,11 @@
+ 	if (!luofu_smp_probe)
+ 		return 0;
+ 
+-	pr_info("luofu-smp: late marker0=%08x marker1=%08x consumed=%s\n",
++	pr_info("luofu-smp: late marker0=%08x marker1=%08x consumed=%s early_mode=%u early0=%08x early1=%08x\n",
+ 		luofu_smp_marker_read(0), luofu_smp_marker_read(1),
+-		luofu_smp_pen_consumed() ? "yes" : "no");
++		luofu_smp_pen_consumed() ? "yes" : "no",
++		luofu_smp_early_mode, luofu_smp_early_marker_word(0),
++		luofu_smp_early_marker_word(1));
+ 	return 0;
+ }
+ late_initcall(luofu_smp_late_marker_check);

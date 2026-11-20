@@ -1195,3 +1195,121 @@ arch memblock reserve work). The follow-up patch (038) would repeat the same
 marker-stub pen write from a late_time_init hook and from a couple of later
 early-boot points to bisect the phase; only then would the fix direction become
 clear.
+
+---
+
+## 19. W9 window (2026-11-20): the "2 CPUs" sighting is the stock fallback, the crash is traffic/W9, and patch 039 is the safe early probe
+
+Status: sixth hardware run window. Two W9 images were booted: a6b57361 (001-038
+with luofu_smp_early_probe=1) and 45d248ff (001-038, no early probe). Both eventually
+reset after traffic was sent, and the loader fell back to the stock 5.10 image. This
+section corrects the log reading, states what mode 1 did and did not test, records
+the crash evidence, and delivers patch 039.
+
+### 19.1 The "2 CPUs" lines are the vendor 5.10 fallback, not our kernel [V]
+
+Evidence from the raw capture build/uart-logs/20261120T033451Z-uart-w9-run.log:
+
+* the 6.18.60 boot with the early probe logs
+  "luofu-smp: EARLY probe mode 1 in setup_arch: stub 81293440 marker 81293400",
+  then "[1.530358] CPU1: failed to come online", "[1.534218] smp: Brought up 1 node,
+  1 CPU", "[1.538264] SMP: Total of 1 processors activated (1993.93 BogoMIPS)";
+* every "Brought up 1 node, 2 CPUs" / "CPU1: thread -1 ... mpidr 80000001" sighting in
+  the W9 captures carries the vendor timeline (CPU1 thread at 0.1803-0.1805 s,
+  brought-up at 0.1912-0.1913 s, 3987.86 BogoMIPS) and belongs to a stock 5.10.201
+  boot segment (the capture interleaves our 6.18 console with the previous/fallback
+  stock boot, which starts with its own "Linux version 5.10.201 (jenkins@cudyrd1)");
+* our kernel's SMP release itself only starts at 0.36-0.37 s because the 037 dumps
+  run first, so a 0.19 s CPU1 line cannot be ours;
+* the same signature appears in the older stock captures (0.180494/0.191330 ...).
+
+Therefore no 6.18 boot of this lane has ever brought up CPU1, and consumed=no with
+1 CPU is internally consistent. The earlier reading "the early probe enabled the
+normal release" is withdrawn.
+
+### 19.2 What mode 1 actually tested [V]/[I]
+
+Mode 1 writes only the pen (address of the early stub). It does not clear the CRG
+resume bits and does not send the wakeup IPI. If CPU1 is held in reset or dormant -
+i.e. not executing the loader's poll loop - a pen write alone cannot release it, so
+marker=0 is expected and does **not** prove the pen consumer is absent. The decoded
+order is pen -> resume bits -> wakeup IPI; only modes 2/3/4 program that order before
+the first allocation. Mode 1 result: the pen alone is not enough, nothing more.
+
+### 19.3 Crash evidence [V]
+
+Both W9 boots (early-probe and clean) reset after traffic; the clean image has no
+early probe, so the reset is not an early-probe effect. In the early-probe boot the
+kernel ran to userspace as 1 CPU and oopsed at 7.4336 s:
+
+    [7.403493] pie-trace GMAC eth2 xmit port=11 len=90
+    [7.428223] pie-trace GMAC eth2 xmit port=11 len=1043
+    ------------[ cut here ]------------
+    [7.433699] Internal error: Oops: 17 [#2] SMP ARM
+    [7.433709] CPU: 0 UID: 0 PID: 497 Comm: netmsg Not tainted 6.18.60 #0 NONE
+    [7.433729] Unable to handle kernel NULL pointer dereference at virtual address 00000008 when read
+
+The capture then cuts to the loader fallback ("enter esbc main"), so the register
+dump and call trace are not in the log. The oops is real (6.18.60 kernel) but the
+faulting function is not captured. The context - immediately after a 1043-byte GEMAC
+eth2 transmit from the vendor netmsg userspace process, with the same reset happening
+on the clean 1-CPU image - points at the W9 net TX path, not SMP. The net lane should
+reproduce with the pie-trace lines and capture the full oops (widen console coverage
+around the crash / delay the failover long enough).
+
+### 19.4 Patch 039: safe early-probe variant
+
+target-skeleton/target/linux/hisilicon/patches-6.18/039-arm-hisilicon-smp-early-safe.patch
+(platsmp.c only; keeps the 037 behaviour used by earlier runs):
+
+| mode | behaviour |
+| --- | --- |
+| 1 | pen only (same as 037) |
+| 2 | pen + CRG resume-bit clear |
+| 3 | pen + CRG clear + wakeup IPI; the raw GICD_SGIR value is now 0x00020000 (target list = CPU1, SGI 0). 037 wrote 0x02000000, which the GIC reads as target-list-filter "only the requesting CPU", i.e. a CPU0 self-IPI. The early IPI stays best effort because the GIC driver has not run yet |
+| 4 | pen + CRG clear, a bounded window (about 200k cpu_relax iterations), then restore the pen and resume words if nothing was consumed, so the normal boot_secondary hands over cleanly; if the window consumed the pen the normal release is skipped |
+| 5 | read-only early snapshot, no hardware writes at all (safe control) |
+
+Other changes: the early stub now writes a second marker word (0x4545) after the UART
+'E' print, so "never ran" and "ran past the UART poll" are distinguishable; the early
+markers are printed at the end of the early handler, at prepare, at +1ms/+21ms and at
+late_initcall; if a mode 1-4 marker shows consumption, boot_secondary skips the normal
+release (no double release) and returns -EIO; the GIC distributor and CPU-interface
+words (GICD_CTLR, GICD_SGIR, GICC_CTLR of CPU0 and CPU1) are dumped at prepare and
+after the release, because the wakeup IPI can only reach CPU1 if the distributor and
+the target CPU interface are enabled.
+
+### 19.5 Next single variables
+
+1. **luofu_smp_early_probe=2** on an 001-039 image: early pen + CRG clear, the first
+   mode that tests the decoded release order before any allocation (mode 1 only tested
+   the pen). If this consumes the pen, CPU1 was being held and the early release can
+   work; if not, continue with 3 (corrected IPI) and 4 (hand-back window).
+2. If all modes are silent, the loader/ROM is not polling or not releasing CPU1 on
+   this boot path at all; then the stock reads (17.6 plus the GIC words in 19.6) and a
+   loader-side decode of how CPU1 is started become the next step.
+3. Optional control: mode 5 (read-only snapshot) confirms the early handler itself
+   does not perturb anything.
+
+### 19.6 Stock read-only additions
+
+Add to 17.6 (stock 5.10 boot, 2 CPUs):
+
+    for a in 0x10181000 0x10181004 0x10181008 0x10181f00 0x10180100 0x10180200 \
+             0x10180000 0x10180004 0x10180008; do
+        printf '%s ' "$a"; /sbin/devmem "$a" 32; done
+
+Expected on a healthy stock boot: GICD_CTLR bit0 = 1 (enabled), GICD_SGIR reads 0,
+GICC_CTLR (CPU0 and CPU1) bit0 = 1. These are the values our kernel's GIC driver must
+reproduce for the wakeup IPI to be deliverable; they also give the stock reference for
+the SCU words.
+
+### 19.7 Validation of 039 (host-only, isolated clone)
+
+* pristine 6.18.60 apply of the current series 001-039: RC=0, 121 files, no
+  .rej/.orig; only the four known offset hunks (008 x2, 021, 028); resulting
+  arch/arm/mach-hisilicon/platsmp.c sha256 99343778... identical to the delivered file;
+* early stub re-verified word-for-word against the project ARM assembler (20
+  instructions, including the marker word 1 progress store);
+* clean make target/linux/prepare + make target/linux/compile in the isolated clone
+  (artifact hashes in the lane summary).
