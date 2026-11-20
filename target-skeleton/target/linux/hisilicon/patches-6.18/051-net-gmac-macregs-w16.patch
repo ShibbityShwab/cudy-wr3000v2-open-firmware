@@ -1,0 +1,137 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -164,6 +164,8 @@
+ 	struct phylink_config pl_config;
+ 	unsigned int port;	/* internal switch port ("hisilicon,port") */
+ 	bool clk_enabled;
++	u32 macreg_pre[2];
++	u32 macreg_want[2];
+ };
+ 
+ static struct luofu_gmac *pl_to_gmac(struct phylink_config *config)
+@@ -612,6 +614,107 @@
+ 	.get_link		= ethtool_op_get_link,
+ };
+ 
++/*
++ * W16: the static GEMAC configuration words found by the W15 MAC comparison
++ * (patch 051).
++ *
++ * The 2026-11-20 GEMAC window diff (ours vs stock, window 0x14480000,
++ * offsets 0x0..0x23c) differs in six words.  Decode of hi_kmac.ko classifies
++ * them:
++ *
++ *  - 0x1c: static config.  hi_mac_hw_config writes it as 1 (the same word the
++ *    macconf diagnostic sequence writes); stock is 1, ours 0 because the
++ *    macconf gate was off in the dump image.  Replay: 0x1c = 1. [V]
++ *  - 0x100: max-frame + pause word.  hi_mac_hw_mtu sets the low 14 bits to
++ *    (frame-length argument + 4); hi_mac_hw_set_pause preserves everything and
++ *    only rewrites the pause bits in the MSB byte (bits 28-29).  Stock holds
++ *    0x33400600 -> frame limit 0x600 = 1536, i.e. 18 bytes above our MTU+18
++ *    value 0x5ee = 1518 (the vendor's frame-length convention adds 36, not 18;
++ *    formula still [U], value [V measured]).  Replay: keep the upper 18 bits
++ *    and set the low 14 bits to 0x600. [V measured, U formula]
++ *  - 0xa4, 0xac, 0xb0, 0xb8: statistics/counter words.  They are read through
++ *    the read-op in himac_read_stats / himac_get_stats64 (32-bit counter
++ *    pairs); no init write exists in the recovered paths.  Their stock/ours
++ *    differences are runtime counter values and must NOT be replayed.
++ *
++ * The stage runs when luofu_gmac.macregs=1 (attended) with the standard
++ * snapshot / stable-two-reads / exact-readback / restore-on-mismatch contract.
++ */
++static bool luofu_gmac_macregs_gate;
++module_param_named(macregs, luofu_gmac_macregs_gate, bool, 0444);
++MODULE_PARM_DESC(macregs, "Attended W16 step: program the static GEMAC config words 0x1c=1 and the stock-observed max-frame 0x600 (counter words 0xa4/ac/b0/b8 are not touched; default off)");
++
++#define LUOFU_GMAC_MAC_CFG2_W16		0x001c
++#define LUOFU_GMAC_MAX_FRAME_STOCK	0x00000600
++#define LUOFU_GMAC_MACREG_COUNT		2
++
++struct luofu_gmac_macreg {
++	u32 offset;
++	u32 value;
++};
++
++static const struct luofu_gmac_macreg luofu_gmac_v250_macregs[] = {
++	{ LUOFU_GMAC_MAC_CFG2_W16, 1 },
++	{ LUOFU_GMAC_MAX_FRAME, LUOFU_GMAC_MAX_FRAME_STOCK },
++};
++
++static void luofu_gmac_macreg_restore(struct luofu_gmac *g)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_gmac_v250_macregs); i++)
++		writel(g->macreg_pre[i],
++		       g->base + luofu_gmac_v250_macregs[i].offset);
++}
++
++static int luofu_gmac_macreg_program(struct luofu_gmac *g)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(luofu_gmac_v250_macregs); i++) {
++		const struct luofu_gmac_macreg *r = &luofu_gmac_v250_macregs[i];
++		u32 a = readl(g->base + r->offset);
++
++		if (readl(g->base + r->offset) != a)
++			return dev_err_probe(g->dev, -EIO,
++					     "W16_MACREG: gmac+%#x is not stable across two reads; refusing to write it\n",
++					     r->offset);
++		g->macreg_pre[i] = a;
++		/* 0x100 keeps the vendor pause bits in the MSB byte and upper 18 bits */
++		if (r->offset == LUOFU_GMAC_MAX_FRAME)
++			g->macreg_want[i] = (a & ~LUOFU_GMAC_MAX_FRAME_MASK) |
++					    LUOFU_GMAC_MAX_FRAME_STOCK;
++		else
++			g->macreg_want[i] = r->value;
++	}
++
++	dev_info(g->dev,
++		 "W16_MACREG: gmac+0x1c pre=%#x -> 1; gmac+0x100 pre=%#x -> %#x (stock-observed max-frame 1536, our W9 formula was 1518); counter words 0xa4/ac/b0/b8 are statistics, not replayed\n",
++		 g->macreg_pre[0], g->macreg_pre[1], g->macreg_want[1]);
++
++	for (i = 0; i < ARRAY_SIZE(luofu_gmac_v250_macregs); i++)
++		writel(g->macreg_want[i],
++		       g->base + luofu_gmac_v250_macregs[i].offset);
++
++	for (i = 0; i < ARRAY_SIZE(luofu_gmac_v250_macregs); i++) {
++		u32 got = readl(g->base + luofu_gmac_v250_macregs[i].offset);
++
++		if (got == g->macreg_want[i])
++			continue;
++		dev_err(g->dev,
++			"W16_MACREG: gmac+%#x readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++			luofu_gmac_v250_macregs[i].offset, got,
++			g->macreg_want[i], g->macreg_pre[i]);
++		luofu_gmac_macreg_restore(g);
++		return -EIO;
++	}
++
++	dev_info(g->dev,
++		 "W16_MACREG: static GEMAC config programmed and verified (0x1c=1, 0x100=%#x)\n",
++		 g->macreg_want[1]);
++	return 0;
++}
++
+ static int luofu_gmac_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -794,6 +897,17 @@
+ 		}
+ 	}
+ 
++	if (!luofu_gmac_macregs_gate) {
++		dev_err(dev,
++			"the static GEMAC config words are not programmed (set luofu_gmac.macregs=1): 0x1c/0x100 would keep the dump-image values; refusing to register a netdev\n");
++		ret = -EOPNOTSUPP;
++		goto err_phylink;
++	}
++
++	ret = luofu_gmac_macreg_program(g);
++	if (ret)
++		goto err_phylink;
++
+ 	ret = register_netdev(ndev);
+ 	if (ret)
+ 		goto err_phylink;
