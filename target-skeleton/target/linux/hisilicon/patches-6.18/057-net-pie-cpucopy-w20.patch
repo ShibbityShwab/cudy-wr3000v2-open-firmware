@@ -1,0 +1,77 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -549,6 +549,26 @@
+ module_param_named(rxstroke, luofu_pie_rxstroke_gate, bool, 0444);
+ MODULE_PARM_DESC(rxstroke, "Attended W18_RXSTROKE diagnostic: log RX ring/IRQ state every 2 s for 60 s and every RX interrupt entry (no writes; default off)");
+ 
++/*
++ * W20_CPUCOPY (patch 057): the switch CPU-copy mirror delivers normal-path
++ * completions with port/vport 0 (W19 dwell: 13 normal completions len=98
++ * status=0 port=0 inside the dst=4 window, zero outside it).  The vendor stack
++ * has no net_device for port 0, so those copies are dropped there too, but for
++ * the bench they are the host frames arriving through the mirror.  This gate
++ * delivers them to the net_device registered for the mirror source port
++ * (luofu_pie.cpucopy_port, default 11 = eth2) instead of dropping them, and
++ * logs the first deliveries.  Vendor behaviour is kept for every other port
++ * and for all exception completions (those still follow luofu_pie.accepterr).
++ */
++static bool luofu_pie_cpucopy_deliver_gate;
++module_param_named(cpucopy_deliver, luofu_pie_cpucopy_deliver_gate, bool, 0444);
++MODULE_PARM_DESC(cpucopy_deliver, "Attended W20 delivery: hand port-0 normal-path completions (CPU/mirror copies) to the netdev of luofu_pie.cpucopy_port instead of dropping them (default off)");
++
++static uint luofu_pie_cpucopy_port = 11;
++module_param_named(cpucopy_port, luofu_pie_cpucopy_port, uint, 0444);
++MODULE_PARM_DESC(cpucopy_port, "W20: mirror source switch port whose netdev receives CPU-copy completions (default 11 = eth2)");
++
++
+ struct luofu_pie_rxstroke {
+ 	struct delayed_work work;
+ 	struct luofu_pie *pie;
+@@ -1294,6 +1314,29 @@
+ {
+ 	struct net_device *ndev;
+ 
++	if (luofu_pie_cpucopy_deliver_gate && compl->port == 0) {
++		u32 src = READ_ONCE(luofu_pie_cpucopy_port);
++		ndev = luofu_pie_rx_port_netdev(pie, src);
++		if (ndev && netif_running(ndev)) {
++			static atomic_t copy_trace = ATOMIC_INIT(0);
++			u32 n = atomic_inc_return(&copy_trace);
++
++			if (n <= 16)
++				pr_info("pie-trace RXCPUCOPY port=0 -> port %u len=%u status=%u (cpucopy_deliver=1, mirror source port)\n",
++					src, compl->len, compl->status);
++			skb_put(skb, compl->len);
++			skb->ip_summed = CHECKSUM_NONE;
++			skb->protocol = eth_type_trans(skb, ndev);
++			ndev->stats.rx_packets++;
++			ndev->stats.rx_bytes += compl->len;
++			napi_gro_receive(&np->napi, skb);
++			dev_put(ndev);
++			return;
++		}
++		if (ndev)
++			dev_put(ndev);
++	}
++
+ 	ndev = luofu_pie_rx_port_netdev(pie, compl->port);
+ 	if (!ndev || !netif_running(ndev)) {
+ 		dev_kfree_skb_any(skb);
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -3426,10 +3426,13 @@
+ 	lsw->mirror_work_active = true;
+ 	luofu_switch_instance = lsw;
+ 	dev_warn(lsw->dev,
+-		 "W19_CPU_MIRROR: mirror machinery started (%s mode, dst=%u, re-latch every 2 s, post-link reapply enabled)\n",
++		 "W19_CPU_MIRROR: mirror machinery started (%s mode, dst=%u%s, re-latch every 2 s, post-link reapply enabled)\n",
+ 		 luofu_switch_mirror_dwell_gate || luofu_switch_mirror_sweep_gate ?
+ 		 "dwell/sweep" : "static",
+-		 luofu_switch_mirror_dst);
++		 luofu_switch_mirror_dst,
++		 (!luofu_switch_mirror_dwell_gate && !luofu_switch_mirror_sweep_gate &&
++		  luofu_switch_mirror_dst == 4) ?
++		 " = CPU port identified by the W19 dwell sweep" : "");
+ 	luofu_switch_mirror_schedule(lsw, 1000);
+ }
+ 
