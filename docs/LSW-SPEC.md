@@ -1269,6 +1269,31 @@ of link configuration, after the MAC is probed and reset, not from an earlier ba
 is therefore not a pre-link enable of anything: it only sets a length limit, and the MAC TX enable
 stays in the control word (0x0) that our link-up path already writes.
 
+**Round-4c diag run: the MAC control word and the TX hang (patch 041).**  The diag-safe image
+(6cf5de37, W9 read-only, trace=1, oops=panic) booted, armed all gates and logged
+`max-frame 0x100 = 0x334005ee (limit 1518), ctrl 0x0 = 0x0, port_mode 0x40 = 0xc0408` at probe and
+`ctrl=0x0 maxframe=0x334005ee port_mode=0x10c0008` around the one TX, then the box hung and the
+hardware watchdog reset it after one queued descriptor/doorbell (no oops/panic - a bus hang, not a
+fault).  Two decoded facts follow from that:
+
+- **Reg 0x0 is not the MAC enable/control word.**  The vendor config path
+  (`hi_mac_hw_config`, called from the link-up ops chain) writes only 0x18=1 (reset assert),
+  0x14 = speed/duplex code (bits 1..0 = 2/1/0 for 1000/100/other, bit 2 = full duplex), 0x18=0
+  (release), 0x1c=1, and a read-modify of 0x40 that clears bits 8..15 + bit 24 and sets bit 24 -
+  there is **no write to 0x0**, and the bench reads 0x0 back as 0 even after our write.  The port-mode
+  RMW from the found baseline 0xc0408 gives exactly 0x10c0008, the value our driver writes.  So the
+  attested MAC enable/config is the 0x14/0x18/0x1c/0x40 sequence plus the port mode, not 0x0.
+- **The hang happens when the engine processes the descriptor after the doorbell.**  Exactly one
+  frame was handed down; gmac-trace pre and post both printed, the pie-trace descriptor/doorbell
+  printed, then silence until the watchdog reset - the transport (descriptor build, DMA map, doorbell
+  write) completed, so the next step is to bisect the doorbell itself.
+
+Patch 041 therefore adds three attended diagnostics: `luofu_pie.nodoorbell=1` (build and publish
+descriptors, never ring the doorbell - proves whether the hang is before or after engine processing),
+`luofu_gmac.macconf=1` (runs the recovered vendor config sequence at link-up with every pre/post
+register value logged, instead of the unattested 0x0 write), and `luofu_gmac.txhalt=1` (stops the TX
+queue after the first xmit so at most one descriptor can reach the engine).
+
 **Still open (next layers, ordered).**  The IFC default-classification table (`ifc+0x50000`, 16-byte
 entries written by `hi_pfe_ifc_init` through `hi_lsw_write_tab128`) is decoded at call-shape level
 only: each entry embeds an id returned by the vendor's software table-manager allocation

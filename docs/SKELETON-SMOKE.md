@@ -3925,3 +3925,20 @@ Vendor ordering [I]: the only writer of MAC 0x100 is `hi_mac_hw_mtu`, referenced
 GEMAC ops table and invoked from the MAC config/link callbacks - the vendor sets the length limit as
 part of link configuration, after probe/reset, and it does not enable a TX path (that stays in the
 control word 0x0 our link-up already writes).
+
+## 2026-11-20 round 4c: MAC control decode + doorbell bisection (patch 041)
+
+The diag-safe run (6cf5de37, W9 read-only, trace=1) confirmed the found max-frame 0x334005ee (1518),
+showed reg 0x0 reads back 0 at probe and at TX time, and hung after exactly one descriptor/doorbell
+(hardware-watchdog reset, no oops - a bus hang).  Decoded: the vendor MAC config path
+(`hi_mac_hw_config`) writes 0x18=1 (reset assert), 0x14=speed/duplex code, 0x18=0 (release),
+0x1c=1, and RMWs 0x40 (clear bits 8..15 + bit 24, set bit 24) - no write to 0x0.  The RMW from the
+found 0xc0408 baseline yields 0x10c0008, which is exactly what our link-up writes, so the port-mode
+word is already vendor-consistent; the missing pieces were 0x14/0x18/0x1c.
+
+Patch 041 adds three attended diagnostics: `luofu_pie.nodoorbell=1` (build/publish descriptors but
+never ring the doorbell), `luofu_gmac.macconf=1` (replay the vendor 0x14/0x18/0x1c/0x40 sequence at
+link-up with pre/post logs), and `luofu_gmac.txhalt=1` (stop the TX queue after the first xmit).
+The bisection order: (1) nodoorbell=1+trace=1 run - survives => hang is engine processing after the
+doorbell (not descriptor build/DMA); (2) macconf=1+trace=1+txhalt=1 run - tests whether the missing
+vendor sequence is what makes the engine hang; (3) normal doorbell run to confirm.

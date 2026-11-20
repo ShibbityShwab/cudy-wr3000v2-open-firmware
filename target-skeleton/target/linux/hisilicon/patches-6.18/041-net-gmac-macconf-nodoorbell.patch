@@ -1,0 +1,161 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -117,6 +117,32 @@
+ #define LUOFU_GMAC_FRAME_OVERHEAD	14	/* [I] Ethernet header without FCS */
+ #define LUOFU_GMAC_MAX_FRAME_SLACK	18	/* [V] header + hi_mac_hw_mtu +4 */
+ 
++/*
++ * Patch 041: the vendor MAC config sequence (hi_kmac.ko hi_mac_hw_config@0x258,
++ * called from the link-up path via the ops table).  Decoded writes:
++ *
++ *   reg 0x18 = 1           soft reset / config latch assert   [V]
++ *   reg 0x14 = speed/duplex code: bits 1..0 speed (1000->2, 100->1, 10->0),
++ *              bit 2 full duplex                             [V formula]
++ *   reg 0x18 = 0           release                             [V]
++ *   reg 0x1c = 1                                              [V]
++ *   reg 0x40 read-modify: clear bits 8..15 and bit 24, then set bit 24 [V]
++ *
++ * The vendor config path has NO write to reg 0x0.  The bench reads 0x0 back as
++ * 0 even after our measured link-up write of MAC_EN there, so 0x0 is not the
++ * readable enable/control word; the attested enable/config is this sequence
++ * plus the port-mode word (0x40) our driver already writes.  Patch 041 gates
++ * the sequence behind luofu_gmac.macconf=1 so it can be tested on one run.
++ */
++#define LUOFU_GMAC_MAC_CFG	0x0014
++#define LUOFU_GMAC_MAC_SOFT_RESET	0x0018
++#define LUOFU_GMAC_MAC_CFG2	0x001c
++#define LUOFU_GMAC_MAC_CFG2_VAL	1
++#define LUOFU_GMAC_MAC_CFG_SPEED_MASK	GENMASK(1, 0)
++#define LUOFU_GMAC_MAC_CFG_FULL_DUPLEX	BIT(2)
++#define LUOFU_GMAC_PORT_MODE_RMW_CLR	(GENMASK(15, 8) | BIT(24))
++#define LUOFU_GMAC_PORT_MODE_RMW_SET	BIT(24)
++
+ #define LUOFU_GMAC_CTRL		0x0000
+ #define LUOFU_GMAC_PORT_MODE	0x0040
+ #define LUOFU_GMAC_MODE_CHANGE_EN	0x01b4
+@@ -191,6 +217,14 @@
+ module_param_named(trace, luofu_gmac_trace_gate, bool, 0444);
+ MODULE_PARM_DESC(trace, "Attended hang instrumentation: log MAC control/max-frame/port-mode registers around every GMAC xmit (default off)");
+ 
++static bool luofu_gmac_macconf_gate;
++module_param_named(macconf, luofu_gmac_macconf_gate, bool, 0444);
++MODULE_PARM_DESC(macconf, "Attended diagnostic: run the recovered vendor MAC config sequence (0x18 reset, 0x14 speed/duplex, 0x1c=1, 0x40 read-modify) at link-up and log every pre/post value (default off)");
++
++static bool luofu_gmac_txhalt_gate;
++module_param_named(txhalt, luofu_gmac_txhalt_gate, bool, 0444);
++MODULE_PARM_DESC(txhalt, "Attended hang containment: stop the TX queue after the first xmit so one descriptor is the most that can reach the engine (default off)");
++
+ /*
+  * W9 is split into a read-only diagnostic and an explicit write step after the
+  * round-4b bench run (image 45d248ff, seven gates, stable 1-CPU): the box
+@@ -306,6 +340,51 @@
+ 	writel(LUOFU_GMAC_PORT_MODE_1000, g->base + LUOFU_GMAC_PORT_MODE);
+ 	writel(0, g->base + LUOFU_GMAC_MODE_CHANGE_EN);
+ 	writel(LUOFU_GMAC_MAC_EN, g->base + LUOFU_GMAC_CTRL);
++
++	if (!luofu_gmac_macconf_gate)
++		return;
++
++	/*
++	 * Diagnostic (luofu_gmac.macconf=1): replay the vendor hi_mac_hw_config
++	 * sequence with every pre/post value on the console.  The speed code is
++	 * the vendor formula (bits 1..0 = 2 for 1000, 1 for 100, 0 otherwise;
++	 * bit 2 = full duplex).  No reg 0x0 write is involved - the vendor config
++	 * path has none, and the bench reads it back as 0.
++	 */
++	{
++		u32 code = (speed == SPEED_1000) ? 2 :
++			   (speed == SPEED_100) ? 1 : 0;
++		u32 cfg, pre40, pre14, pre18, pre1c, pre0;
++
++		if (duplex == DUPLEX_FULL)
++			code |= LUOFU_GMAC_MAC_CFG_FULL_DUPLEX;
++
++		pre14 = readl(g->base + LUOFU_GMAC_MAC_CFG);
++		pre18 = readl(g->base + LUOFU_GMAC_MAC_SOFT_RESET);
++		pre1c = readl(g->base + LUOFU_GMAC_MAC_CFG2);
++		pre40 = readl(g->base + LUOFU_GMAC_PORT_MODE);
++		pre0 = readl(g->base + LUOFU_GMAC_CTRL);
++		netdev_info(g->ndev,
++			    "macconf: before 0x14=%#x 0x18=%#x 0x1c=%#x 0x40=%#x 0x0=%#x (speed %d duplex %d code %#x)\n",
++			    pre14, pre18, pre1c, pre40, pre0, speed, duplex,
++			    code);
++
++		writel(1, g->base + LUOFU_GMAC_MAC_SOFT_RESET);
++		writel(code, g->base + LUOFU_GMAC_MAC_CFG);
++		writel(0, g->base + LUOFU_GMAC_MAC_SOFT_RESET);
++		writel(LUOFU_GMAC_MAC_CFG2_VAL, g->base + LUOFU_GMAC_MAC_CFG2);
++		cfg = (pre40 & ~LUOFU_GMAC_PORT_MODE_RMW_CLR) |
++		      LUOFU_GMAC_PORT_MODE_RMW_SET;
++		writel(cfg, g->base + LUOFU_GMAC_PORT_MODE);
++
++		netdev_info(g->ndev,
++			    "macconf: after 0x14=%#x 0x18=%#x 0x1c=%#x 0x40=%#x 0x0=%#x (wrote 0x14=%#x 0x40=%#x)\n",
++			    readl(g->base + LUOFU_GMAC_MAC_CFG),
++			    readl(g->base + LUOFU_GMAC_MAC_SOFT_RESET),
++			    readl(g->base + LUOFU_GMAC_MAC_CFG2),
++			    readl(g->base + LUOFU_GMAC_PORT_MODE),
++			    readl(g->base + LUOFU_GMAC_CTRL), code, cfg);
++	}
+ }
+ 
+ static const struct phylink_mac_ops luofu_gmac_phylink_ops = {
+@@ -381,6 +460,13 @@
+ 
+ 	ret = luofu_pie_xmit(skb, ndev, g->port);
+ 
++	if (luofu_gmac_txhalt_gate && n == 1) {
++		netif_tx_stop_all_queues(ndev);
++		netdev_warn(ndev,
++			    "txhalt: TX queue stopped after the first xmit (port %u, len %u) to contain the hang\n",
++			    g->port, skb->len);
++	}
++
+ 	if (luofu_gmac_trace_gate && n <= 32)
+ 		pr_info("gmac-trace %s port=%u len=%u post: ctrl=%#x maxframe=%#x port_mode=%#x\n",
+ 			ndev->name, g->port, skb->len,
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -416,6 +416,18 @@
+ module_param_named(arm, luofu_pie_arm_gate, bool, 0444);
+ MODULE_PARM_DESC(arm, "Arm the PIE packet engine data path (default off; attended bench bring-up only)");
+ 
++/*
++ * Patch 041: hang-bisection gate.  With nodoorbell=1 the TX descriptor is built
++ * and published to the ring but the channel doorbell write pointer is NOT
++ * updated, so the engine never processes the descriptor.  If the box survives
++ * that run, the descriptor build/DMA mapping is proven safe and the hang is
++ * in the engine's processing of the descriptor after the doorbell; if it still
++ * hangs, look before the doorbell.
++ */
++static bool luofu_pie_nodoorbell_gate;
++module_param_named(nodoorbell, luofu_pie_nodoorbell_gate, bool, 0444);
++MODULE_PARM_DESC(nodoorbell, "Attended hang bisection: build and publish TX descriptors but never ring the channel doorbell (default off)");
++
+ static const struct luofu_pie_variant luofu_pie_v250 = {
+ 	.hwver = LUOFU_PIE_HWVER_V250,
+ 	.name = "v250",
+@@ -563,6 +575,7 @@
+  * [U], so they are not acted on (no checksum/VLAN offload reporting).
+  */
+ static atomic_t luofu_pie_trace_tx = ATOMIC_INIT(0);
++static atomic_t luofu_pie_trace_node = ATOMIC_INIT(0);
+ static atomic_t luofu_pie_trace_rx = ATOMIC_INIT(0);
+ 
+ struct luofu_pie_rx_compl {
+@@ -1280,7 +1293,14 @@
+ 		pr_info("pie-trace TX doorbell=%u\n", ring->wptr & ring_mask);
+ 	}
+ 	dma_wmb();
+-	writel(ring->wptr & ring_mask, pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
++	if (luofu_pie_nodoorbell_gate) {
++		if (atomic_inc_return(&luofu_pie_trace_node) <= 4)
++			pr_info("pie-trace TX doorbell SUPPRESSED (nodoorbell=1): wptr=%u rptr=%u ch=%u port=%u len=%u\n",
++				ring->wptr, ring->rptr, ch, port, len);
++	} else {
++		writel(ring->wptr & ring_mask,
++		       pie->base + LUOFU_PIE_TX_WPTR_OFF(ch));
++	}
+ 
+ 	ndev->stats.tx_packets++;
+ 	ndev->stats.tx_bytes += len;
