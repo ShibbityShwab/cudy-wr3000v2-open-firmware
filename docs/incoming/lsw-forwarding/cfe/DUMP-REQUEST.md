@@ -1,3 +1,12 @@
+# CFE runtime dump - status 2026-11-22: STOCK CAPTURED, next phases needed
+
+> **UPDATE 2026-11-22: the stock dump succeeded.** The vendor kernel blocks /dev/mem read() but
+> mmap() works, so the lead brokered a static ARM physdump and captured the real stock state
+> (build/evidence-bench-gates/cfe-stock/, hashes in STOCK.SHA256SUMS). Findings:
+> STOCK-DUMP-ANALYSIS.md. Still needed: one stock phase with real forwarding/offload so the vendor
+> populates l3intf/userll/NAPT flow entries - see STOCK-DUMP-ANALYSIS.md section 7 (routed/
+> LAN-to-LAN with a second host, bridge learning, multicast, or box-initiated traffic; same
+> read-only mmap/physdump path). The our-image phase requests below remain optional controls.
 # CFE runtime dump - status 2026-11-21: stock path BLOCKED, our-side reads used
 
 ## 0a. Stock kernel has no usable /dev/mem (real finding - do not retry)

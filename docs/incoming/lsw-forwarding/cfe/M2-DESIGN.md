@@ -105,3 +105,15 @@ When those exist, M2-A is a bounded, testable next step; M2-B/C stay documented 
   in the extracted rootfs) or a complete ADP/learning API decode.
 - Nothing in M2 blocks the release line: W22/M1b remain the path; the reversal lane now has the
   complete readable-map and table geometry record.
+
+## 6. Update after the real stock capture (2026-11-22)
+
+The stock CFE boot state is now known (STOCK-DUMP-ANALYSIS.md): in the plain-LAN configuration the
+vendor populates only the single tagact delete-tag row, the IFC defaults and the NAPT/queue config;
+the NAPT flow tables stay byte-identical/empty even after 200 ICMP pings (the pings take the CPU
+punt class). So the capture has not exercised any M2 mechanism yet: M2-A still needs a stock phase
+with routed/LAN-to-LAN forwarding to create flow entries and reveal the 32 B/88 B slot encoding;
+M2-B still needs a phase where l3intf/userll/userll_ext are actually populated (bridge learning/
+routing/multicast). Until then the verdict is unchanged: W22/M1b is the release path, M2 remains
+documentation, and the next decisive input is one routed/LAN-to-LAN stock phase (second host or
+WAN peer), not more static analysis.

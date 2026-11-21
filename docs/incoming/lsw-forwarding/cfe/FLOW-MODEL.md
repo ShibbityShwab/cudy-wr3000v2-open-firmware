@@ -1,10 +1,12 @@
 # CFE / switch full-reversal: static model (before the carveout dump)
 
-Status 2026-11-21. **Stock runtime tables are inaccessible**: the vendor 5.10 kernel has no usable
-/dev/mem (dd returns Bad address for carveout/windows/control page; no editable bootargs env; no
-vendor debug kernel). The static module decode below remains the source of truth for vendor
-geometry; our-side dumps validate the readable parts and solved the flow-table DDR partition (see
-OUR-SIDE-VALIDATION.md and section 4).
+Status 2026-11-22. **The stock runtime tables are CAPTURED**: the vendor 5.10 kernel blocks
+/dev/mem read() but mmap() works, so a static ARM physdump was brokered onto the stock boot and the
+real vendor state was dumped (STOCK-DUMP-ANALYSIS.md). The static module decode below remains the
+map/reference; the stock capture validates the boot state and shows which tables the vendor actually
+populates in the plain-LAN configuration (only tagact + IFC defaults + NAPT config; no l3intf/nhp/
+car/userll and no NAPT flow entries, even after ICMP traffic). The flow-table DDR partition is
+solved and stock==W22 byte-identical (section 4).
 
 This is the host-side static decode of the vendor CFE/switch tables from the pinned hi_* modules (hashes identical between /lib/hisilicon/ko, the recovery-extract tree and the
 older fixtures), the stock procfs dumps (hsan-stock/hsan2) and the known register maps. The
@@ -123,8 +125,11 @@ the block is powered; the stock dump request reads them with dd.
   slots) at napt+0x13c=0x80450000; 32K+256K+32K+704K = 1 MiB exactly. W22's two clear commands
   wrote the empty-bucket marker 0x017be000 into the two bucket arrays (8192 words each) and left
   the entry arenas at the DDR poison baseline (0x66cc66cc); the marker encoding is still [U]. v4
-  total 8224 = 8192+32 reserved, v6 8208 = 8192+16 reserved. The entry-arena byte layout is still
-  [I]: it was never exercised on hardware (our driver has no offload), and stock is inaccessible.
+  total 8224 = 8192+32 reserved, v6 8208 = 8192+16 reserved. **Stock p0/p2 and our W22 dump are
+  byte-identical over the whole flow window**, so W22 init reproduces the vendor state exactly; 200
+  ICMP pings on stock created no flow entry (p0->p2 flow diff = 0 bytes), so the entry-arena byte
+  layout is still [I]. It needs a stock phase with real forwarding/offload (STOCK-DUMP-ANALYSIS.md
+  section 7) or a controlled insert probe.
 - The same applies to the queue DDR window (4 MiB): W7 decoded the EQM table ids and formulas but
   the in-window layout is confirmed only by the dump.
 
@@ -145,9 +150,9 @@ PIE window and the counters so classes can be correlated with table hits.
 ## 6. Remaining open items (after the our-side dump; stock still inaccessible)
 
 1. Flow-entry arena byte layout/field offsets (v4 32B and v6 88B slots were measured; the field
-   packing inside a slot is still [I]). Needs a controlled single-flow insert probe on our image
-   (the only route now that stock /dev/mem is dead) or a complete static decode of the engine
-   insert registers. Geometry/bases are solved (see section 4).
+   packing inside a slot is still [I]). The stock capture works now; a stock phase with routed/
+   LAN-to-LAN forwarding should populate flow entries (STOCK-DUMP-ANALYSIS.md section 7).
+   Geometry/bases are solved (section 4).
 2. l3intf hardware field encoding (partially decoded; dump of pub+0x5b000/0x5c000 with known
    entries validates every bit).
 3. tagact_id references: which l3intf entry references tagact 1 and what action it describes.

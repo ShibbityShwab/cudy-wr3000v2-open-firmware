@@ -31,7 +31,7 @@ so multi-port LAN/WAN needs the switch's own forwarding / CPU-delivery path.
 | `m1a/napt-init/` | decoded NAPT/flow init replay: proposal, fail-closed on-box script, read-only observers and the proof record (proof-image/RESULT.md) - **M1a proven** | generated write script - on-box only with flags |
 | `w22/` | release integration: kernel-side W22 NAPT init and PIE exception-delivery patch drafts, design and release-line validation plan | patch drafts only; not yet in the release series |
 | `m1b/` | next hardware experiment: per-port native delivery and LAN-to-LAN test matrix, observations and rollback rules | none (plan) |
-| `cfe/` | full switch/CFE reversal lane: static CFE table model, our-image dump validation (flow-window geometry solved), stock-/dev/mem limitation, remaining read request, optional M2 design + verdict | read-only reads only |
+| `cfe/` | full switch/CFE reversal: static model, stock CFE capture (mmap workaround) + our-image validation, flow-window geometry solved, stock/W22 byte-identical state, next routed-phase request, optional M2 design + verdict | read-only reads only |
 | `MINIMAL-EXPERIMENT.md` | the first experiment to run when the bench is available - **command-line changes and read-only captures only, zero register writes** | none |
 | `UNKNOWNS-AND-READS.md` | the [U] list with the exact attended reads/commands that would answer each item | none (read-only) |
 | `capture-runtime-state.sh` | run **on the box** (stock or our image): read-only register/proc/devmem capture into a directory, with the exact address list | read-only |

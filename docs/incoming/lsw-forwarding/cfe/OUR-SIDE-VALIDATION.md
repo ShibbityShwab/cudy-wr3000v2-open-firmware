@@ -99,11 +99,12 @@ arena plus **stale data from the previous stock session**:
   (00:e0:4c:63:17:58 -> 58:17:63:4c:e0:00) at +0x54 of a 0x100-ish block in 1023 pages
   (2730 occurrences);
 - our traffic/counters are also present (ICMP-class native punt happened on this image).
-This is not a static CFE table dump; it is a mix of queue cells, our PIE/LSW writes and retained
-vendor data. Two useful facts: (a) the reserved carveout retains vendor-session residual data
-across boots (forensically interesting and a reason to zero it if that matters), (b) the queue
-window layout can only be decoded by differential snapshots (clean boot vs traffic phases), not
-from this single capture. The earlier hexdump probe values (0x80000000=0, 0x80400000=0x017be000,
+This is not a static CFE table dump; it is a mix of live queue cells and traffic payloads.
+**Correction 2026-11-22 (after the stock capture):** the retained-vendor-data reading was wrong.
+The stock dump shows the queue window is rewritten by traffic every boot (stock p0 vs p2: 3.62 MB
+of 4 MiB changed, 1024/1024 pages changed, about 7% equal words); our image queue window differs
+from stock p0 almost entirely (0/1024 identical pages). It is a live cell/ring arena, not boot
+residue, and can only be decoded by differential snapshots plus the cell-header format. The earlier hexdump probe values (0x80000000=0, 0x80400000=0x017be000,
 0x80408000=0x66cc66cc) are consistent with this map.
 
 ## 4. Counters under the class traffic matrix (traffic was live)
