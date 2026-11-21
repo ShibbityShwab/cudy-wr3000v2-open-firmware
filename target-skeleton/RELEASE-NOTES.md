@@ -114,3 +114,24 @@ lockdep (`18b3cb1d`) images built for the false hang are diagnostics only.
   and `validation/release-line/`;
 - target patch stack: [target/linux/hisilicon/patches-6.18/](target/linux/hisilicon/patches-6.18/)
   (L0, 62 files; the release classification manifest is in the upstream directory).
+
+## Next phase: board feature bring-up
+
+The 2-CPU baseline is the platform; the remaining work is feature bring-up and hardening:
+
+| feature | current state | next step |
+| --- | --- | --- |
+| 2 CPUs | [V] working, soak + reboot verified | keep as the baseline |
+| wired LAN (one port, bench workaround) | [V] CPU-copy mirror + port-0 delivery | native CFE-equivalent forwarding is a separate project; multi-port/WAN needs attended cable tests |
+| storage (FMC SPI-NAND + UBI) | [V] rootfs/overlay mounted, 17 partitions | exercise/verify NAND under load and the install path |
+| SSH / userspace / overlay | [V] working | install/upgrade path end-to-end (A/B) |
+| LEDs / buttons | [U] nodes/board wiring not modelled | extract vendor DT nodes, add, verify with the user at the box |
+| thermal / watchdog / RTC | [U] drivers exist, behaviour unverified | read sensors/watchdog info, add DT/board data if missing |
+| USB / PCIe / I2C / SPI | [U] drivers ported, devices unverified | inventory devices/buses, add board nodes, test per feature |
+| Wi-Fi (Hi5622) | [X] vendor driver only for 5.10 | feasibility/port plan first; do not promise support yet |
+| native switch forwarding | [I] documented workaround in use | independent LSW/PIE hardware-bridge project |
+| upstream review | not submitted | finish DTS bindings cleanup, rerun validator/checkpatch |
+
+Sequencing: (1) remote feature inventory and vendor-DT extraction, one feature at a time with
+build/install/verify; (2) attended multi-port/LED/button/install-path tests with the recovery card
+armed and UART captured; (3) Wi-Fi feasibility then optional port; (4) upstream consolidation.
