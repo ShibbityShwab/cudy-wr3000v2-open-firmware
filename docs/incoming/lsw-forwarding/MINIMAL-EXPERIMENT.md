@@ -108,6 +108,69 @@ No write has happened at this point.
   the ingress port.
 - Do not point the NAPT engine at 0x80400000 (see the qm-decode addendum).
 
+## Revision after the E0-a run (2026-11-21, host-side analysis)
+
+(The hardware run record itself is the final section of this file; this section is the host-side
+revision that follows from it.) Use `capture-runtime-state.sh --profile punt` for the revised
+E0-b ranges (IFC banks, tagact, OPP/PA, L2-with-traffic).
+
+The E0-a result was recorded on hardware and analysed on the host; the full correction is in
+[E0A-ANALYSIS.md](E0A-ANALYSIS.md). Summary of the revised reading:
+
+- The 60-byte status=37 frames are the host's ARP retries (Ethernet-minimum ARP), i.e. the
+  already-known exception/punt class. With accepterr=1 that class is deliverable and parsed fine
+  (proven on 2026-11-20 15:30: the box answered the ARP on the wire). status=37 / err=1 is a
+  class marker, not a frame-integrity error: the vendor decode sets summary bit 0 only when
+  status == 0, and our driver derives err from status != 0.
+- What is missing is not the exception classification: it is unicast-to-the-box-MAC delivery
+  (the 98-byte ICMP frames never appear in the ring) and, for multi-port, per-port punt of the
+  other jacks. The ARP exception class already carries the correct source port (11), so the
+  completion-port identity works for punts.
+- The link down/up at 12.9 s / 38.9 s is the normal bench link pattern, not a new fault.
+- The adopted hardware baseline is now image c3ef2a50 (supersedes f6685b80; 7421bb7a is the
+  original verified baseline). The unit needs a physical power cycle to return to stock/pair A
+  before the baseline image can be reinstalled.
+
+### Revised E0-b (read-only, run on the baseline image and on stock)
+
+The target is now the unicast-to-CPU / bridge-MAC state, not a generic classifier dump:
+
+1. Stock runtime CFE state (primary). Boot stock with the host pinging (so its FDB/flows are
+   live) and capture, read-only:
+   - the /proc/hsan tree and the interface/FDB/flow dumps (the capture script already tries the
+     known paths; extend with a directory listing and any dump files found under /proc/hsan/cfe
+     and /proc/hsan/net);
+   - dmesg;
+   - the register set below on stock.
+2. Readable switch tables on stock, with traffic:
+   - IFC tab128 banks 0/1, all 128 entries (0x12150000 and 0x12160000, 4 words each);
+   - tag action table, 64 entries (0x124D4000 + idx*16);
+   - L2 window with traffic: 0x12180000+0x0..0x400, +0x40000..0x40400 and the other candidate
+     pages (0x8000/0x10000/0x18000/0x20000/0x60000/0x70000), then search for the box MAC
+     (bdinfo) and host MAC (00:e0:4c:63:17:58) bytes;
+   - OPP 0x12400000+0x0..0x400 (foreground: CPU-copy/forward maps; capture the full first 1 KiB,
+     not only the mirror registers);
+   - PA 0x12080000+0x0..0x400 (the PA block's default/unknown-unicast and to-CPU settings);
+   - PFE_GLB 0x12000000+0x0..0x100 (attribute words).
+3. Our baseline image capture, same addresses, with the mirror ON and the host pinging; after the
+   ARP exchange, confirm the host's neighbour entry for the box exists (ip neigh on the host) so
+   the unicast phase is live during the capture.
+4. Diff and decide:
+   - if stock has readable persistent state that maps the bridge MAC / unknown unicast to CPU
+     port 4 (IFC entry, L2/FDB row, or OPP/PA word), the first W21 write set is a replay of those
+     exact words (snapshot, readback, restore-on-mismatch);
+   - if nothing unique is readable, go to the controlled probe: candidate IFC/tagact writes via
+     the write planner, with the mirror kept for management and rxdiag on, looking for 98-byte
+     native completions beyond the mirror copies (M1a signal).
+
+Acceptance: capture directories + diff report; a definite statement whether a readable
+unicast-to-CPU state exists on stock; if not, the first probe write set and the exact RXDIAG
+signature that would prove M1a.
+
+New exact reads that can run over SSH on the adopted baseline image (read-only; devmem is on the
+image) are listed in [UNKNOWNS-AND-READS.md](UNKNOWNS-AND-READS.md) section "Reads executable over
+SSH on the baseline image".
+
 ## E0-a result (run 2026-11-21 on hardware)
 
 Image 990c5cab (built from the adopted target DTS with cmdline

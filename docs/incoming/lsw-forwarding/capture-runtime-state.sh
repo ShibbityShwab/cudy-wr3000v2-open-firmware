@@ -6,11 +6,12 @@
 #   devmem <addr> 32
 # It has no write path. Output is a directory of text files plus a sha256 manifest.
 #
-# Usage: sh capture-runtime-state.sh [--profile core|full] [--out DIR]
+# Usage: sh capture-runtime-state.sh [--profile core|punt|full] [--out DIR]
 #   core (default): identity, key LSW windows first 0x100 words, IFC default entries,
 #                   tagact first 64 entries (the high-value tables), PIE RX config words
-#   full          : core + both IFC tab128 banks (128 entries each), L2 candidate pages
-#                   (first 0x400 words of each), PA/NAPT/MCC full first 0x400 words
+#   punt          : the focused unicast-to-CPU set - IFC banks 0/1 entries 0..31, tagact 64,
+#                   OPP/PA first 0x200/0x400 words, L2 config + candidate pages (with traffic)
+#   full          : all of the above plus every IFC entry and the remaining L2 candidate pages
 #
 # Safety: no register outside the LSW/PIE windows is touched. The queue/flow DDR windows
 # (0x80000000/0x80400000), the CRG page (0x14880000), the RC misc window (0x10161000) and
@@ -29,7 +30,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-case "$PROFILE" in core|full) ;; *) echo "bad profile: $PROFILE" >&2; exit 2 ;; esac
+case "$PROFILE" in core|punt|full) ;; *) echo "bad profile: $PROFILE" >&2; exit 2 ;; esac
 
 DEV=""
 for cand in /usr/bin/devmem /bin/devmem; do
@@ -105,8 +106,29 @@ dump 0x10a73400 0x10
 dump 0x10a73500 0x40
 dump 0x10a73700 0x20
 
-if [ "$PROFILE" = full ]; then
-	# both IFC tab128 banks, all 128 entries
+if [ "$PROFILE" = punt ] || [ "$PROFILE" = full ]; then
+	# focused unicast-to-CPU set (E0-b revised): IFC banks 0/1 entries 0..31
+	dump 0x12150000 $((32 * 4))
+	dump 0x12160000 $((32 * 4))
+	# full tag action table (64 entries x 4 words)
+	dump 0x124d4000 $((64 * 4))
+	# OPP first 0x200 words and PA first 0x400 words (CPU-copy/forward maps, PA defaults)
+	dump 0x12400000 0x200
+	dump 0x12080000 0x400
+	# L2 config and the candidate table pages (with traffic; MAC search on the host side)
+	dump 0x12180000 0x400
+	dump 0x121c0000 0x400
+	dump 0x12190000 0x100
+	dump 0x12198000 0x100
+	dump 0x121a0000 0x100
+	dump 0x121e0000 0x100
+	dump 0x121f0000 0x100
+	# W12 extended EPS words
+	dump 0x11280b20 0x20
+	dump 0x11280ba0 0x20
+fi
+
+if [ "$PROFILE" = full ]; then	# both IFC tab128 banks, all 128 entries
 	for idx in $(seq 0 127); do
 		dump $((0x12150000 + idx * 16)) 4
 		dump $((0x12160000 + idx * 16)) 4

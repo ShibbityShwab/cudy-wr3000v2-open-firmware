@@ -18,7 +18,9 @@
 #   6. prints the full plan with the rollback of every word before doing anything.
 #
 # Address allow-list: only the LSW MMIO windows 0x11000000..0x124fffff are permitted.
-# The queue/flow DDR windows, the CRG page, the RC misc window and the CA cell are refused.
+# Hard refusals: the NAPT window 0x12280000..0x122fffff (flow engine / DDR pointers must never
+# be written here), the L2 window 0x12180000..0x121fffff (format not decoded; no L2 writes in
+# this lane), the queue/flow DDR windows, the CRG page, the RC misc window and the CA cell.
 #
 # Usage: sh plan-writes.sh --plan diff.plan --out apply-native.sh
 
@@ -56,6 +58,14 @@ while read -r kw addr value rollback rest; do
 	r=$((rollback))
 	if [ "$a" -lt $((0x11000000)) ] || [ "$a" -ge $((0x12500000)) ]; then
 		echo "address 0x$(printf %x "$a") is outside the LSW MMIO write allow-list" >&2
+		exit 4
+	fi
+	if [ "$a" -ge $((0x12280000)) ] && [ "$a" -lt $((0x12300000)) ]; then
+		echo "refused: 0x$(printf %x "$a") is in the NAPT window - NAPT/DDR pointers are never written by this lane" >&2
+		exit 4
+	fi
+	if [ "$a" -ge $((0x12180000)) ] && [ "$a" -lt $((0x12200000)) ]; then
+		echo "refused: 0x$(printf %x "$a") is in the L2 window - the format is not decoded, no L2 writes in this lane" >&2
 		exit 4
 	fi
 	NWRITE=$((NWRITE + 1))

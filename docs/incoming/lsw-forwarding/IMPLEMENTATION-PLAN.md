@@ -2,6 +2,11 @@
 
 **Status 2026-11-21. Host-side plan only.** No register has been written for this plan; no
 hardware has been used; the release patch series and the curated upstream tree are untouched.
+
+> **Revision 2026-11-21 (after the E0-a hardware run):** read section 2.1 and 4.4 first. The
+> mirror-off run proved the exception path works natively (with source port) but only ARP-class
+> traffic is punted; the missing piece is the unicast-to-CPU/bridge-MAC state, so E0-b is re-aimed
+> and the milestone is split into M1a (unicast to eth2) and M1b (multi-port).
 This plan extends the release line's verified bench workaround
 ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md), [../../LSW-SPEC.md](../../LSW-SPEC.md),
 [../../PIE-DATAPATH.md](../../PIE-DATAPATH.md)) with the path to per-port native forwarding.
@@ -32,6 +37,7 @@ the pinned vendor fixtures (parent `rootfs-2.4.15/lib/hisilicon/ko/*.ko`, read-o
 | The CPU/mirror destination in the LSW is **switch port 4** (W19 dwell sweep) and the PIE RX path for a port-4 delivery currently reports completion port 0 | [V] patch 054-057, W19 log |
 | Per-port netdevs already exist: GEMAC creates one netdev per DT port (`hisilicon,port` 8..12), PIE registers the RX receiver for that port; the Linux bridge software-forwards br-lan | [V] patches 009/020/023/024/051, `luofu-gmac.c`/`luofu-pie.c` |
 | A per-port mirror source-mask parameter exists as a bench-only patch (066) in `../multi-port-probe/` | [V] `066-net-lsw-mirror-src-mask.patch` |
+| **E0-a run (2026-11-21, image 990c5cab):** with `cpu_mirror=0` the box boots (2 CPUs, LEDs, event0) and the PIE RX ring receives only ~60-byte exception-class completions (`status=37 err=1 port=11`, once per second - the host's ARP retries); no 98-byte unicast completions appear and IP is dead | [V] appended E0-a result, ledger 2026-11-21 18:10, `build/evidence-bench-gates/e0a-mirroroff/e0a-boot-excerpt.txt`; analysis `E0A-ANALYSIS.md` |
 
 **Consequence:** the missing capability is not "more of the same init" - every decodable init
 write matches stock. The missing capability is the **runtime forwarding/CPU-delivery
@@ -89,6 +95,11 @@ its ingress port:
 
 All three are testable **read-only** first (see section 2/MINIMAL-EXPERIMENT.md); only then does
 it make sense to write a tag action or an IFC entry.
+
+**Update after E0-a (section 2.1):** the completion-port route is now proven for the exception
+class (the mirror-off boot delivered ARP punts with port=11). What remains is making the
+**unicast** class CPU-bound in the first place; tag work is demoted until a tagged CPU delivery is
+observed.
 
 ---
 
@@ -172,6 +183,35 @@ has proved the CPU path and a stock capture has shown the L2 table with traffic.
 
 **Plan decision:** do Route A first (read-only), then Route B per-port punt for M1. Route C is a
 separate follow-on and must not gate M1.
+
+### 2.1 Revision after the E0-a run (2026-11-21) - read this first
+
+The E0-a hardware run refines this section (full analysis: `E0A-ANALYSIS.md`):
+
+- **The exception path works natively, without the mirror, with the correct source port.** The
+  `status=37` completions are the host's ARP retries (60-byte minimum frames); with
+  `luofu_pie.accepterr=1` the same class was already proven deliverable and parseable on
+  2026-11-20 15:30 (the box answered the ARP on the wire). `status=37 / err=1` is an
+  exception-class marker, not a frame error: the vendor decode sets the summary no-error bit only
+  when `status == 0`, and our driver derives `err` from `status != 0`. The completion `port` field
+  (11 = eth2) already provides identity for this class [V].
+- **What is missing is the unicast-to-CPU state.** In E0-a the only completions over 17 s were
+  60-byte ARP frames; the host's 98-byte IPv4/ICMP frames never appeared (the same was true on
+  2026-11-20 15:30/18:30). The switch never routes unicast-to-the-box-MAC frames to the CPU.
+  Multi-port needs the same class of state per port. This is most plausibly an L2/FDB or flow
+  entry mapping the bridge MAC (and/or unknown unicast) to CPU port 4, or an equivalent per-port
+  copy-to-CPU rule - not a missing tag on the ARP frames [I].
+- **Milestone split:** **M1a** = unicast-to-CPU on eth2 with the mirror off (ping works);
+  **M1b** = the same per port, so the software bridge sees all four ports. M1a is the smallest
+  decisive test and can be probed over SSH on the adopted baseline image (mirror kept for
+  management; duplicate deliveries while probing are visible in RXDIAG and are an accepted,
+  temporary observation state).
+- **Route ordering is otherwise unchanged**, but Route A's first target is now the stock
+  *unicast-to-CPU* state (stock CFE procfs + IFC banks + L2 with traffic + OPP/PA), and Route B's
+  first patch writes a single unicast-to-CPU rule, not a generic tag-action replay.
+- The E0-a image 990c5cab booted with **2 CPUs**; the link down/up at 12.9 s/38.9 s is the normal
+  bench link cycle, not a new fault. The adopted baseline is now image **c3ef2a50**.
+
 
 ---
 
@@ -312,6 +352,22 @@ actions), (b) exact read plans that decide whether the missing state is vendor-r
 (c) a first milestone (M1: native CPU delivery with per-port identity) that does not require the
 undecoded L2/VLAN rows at all.
 
+### 4.4 E0-a revision of the candidate write set
+
+The E0-a result moves the candidate priorities:
+
+| candidate | status after E0-a | action |
+| --- | --- | --- |
+| tag action table replay (A2) | **demoted**: the exception class (ARP) is delivered with no tag; a tag is not needed for M1a identity because the completion port field already carries it | keep as a secondary candidate only if the stock capture shows tagged CPU delivery for unicast |
+| IFC bank replay (A3) | **promoted to primary**: look for a stock entry that classifies unicast to the bridge MAC (or a catch-all) with a to-CPU action; if found, replay is the smallest W21 step | E0-b focus |
+| L2/FDB state | **new primary candidate**: capture L2/OPP/PA with unicast traffic; a static MAC-to-CPU entry (or unknown-unicast-to-CPU rule) is the most plausible missing state | E0-b focus; no L2 window writes until the format is identified |
+| `pfe_glb+0x2c` attr (A1) | secondary (flow-age style attribute, not a delivery enabler) | keep behind its own sub-gate |
+| NAPT / DDR pointers | **excluded, unchanged** | never write |
+
+No new writes are added by this revision; it re-ranks the candidates and makes the stock
+unicast-to-CPU capture the deciding input. The write planner remains fail-closed and the NAPT/DDR
+windows remain refused.
+
 ---
 
 ## 5. Netdev model and coexistence with the CPU-copy workaround
@@ -333,7 +389,10 @@ undecoded L2/VLAN rows at all.
 ### 5.2 Coexistence during bring-up (mirror = fallback, never two deliveries)
 
 Duplicate delivery is a correctness hazard: if a frame is delivered both as a native copy and as
-a mirror copy, the bridge sees it twice and routed protocols can break. Therefore:
+a mirror copy, the bridge sees it twice and routed protocols can break. During the M1a devmem
+probe (S2b) duplicates are deliberately accepted for observation only (the mirror stays on eth2 so
+management is never lost); any real deployment must exclude the port from the mirror mask as soon
+as native delivery is confirmed. Therefore:
 
 1. patch 066 (`luofu_switch.mirror_src_mask`) is promoted from the bench-only probe patch to the
    bring-up mechanism: the mirror source mask becomes a parameter, not a hardcoded `BIT(11)`.
@@ -379,9 +438,10 @@ door armed and a UART capture. The tools referenced are the repository's:
 | step | what | where | writes | exit criterion |
 | --- | --- | --- | --- | --- |
 | S0 | compile the current release line unchanged (baseline) | host | none | RC=0; image hash recorded |
-| S1 | **N0-a: no-mirror cmdline experiment** - boot the canonical image with the canonical gates, `luofu_pie.rxdiag=1 luofu_pie.accepterr=1 luofu_switch.cpu_mirror=0` (mirror off) and test host->box traffic | bench | none | answers whether a native/exception CPU path already exists on eth2; see `MINIMAL-EXPERIMENT.md` |
-| S2 | **N0-b: read-only runtime capture** on our image with traffic (eth2) and on the stock boot with traffic (any jack), using `capture-runtime-state.sh`; diff with `diff-captures.py` | bench + host | none | list of stock-persistent words absent on ours (expected: tagact/IFC banks/L2 area) |
-| S3 | **N1: replay the first candidate set** (tagact entries preferred, else IFC bank entries) - via `plan-writes.sh` (devmem) or a driver stage; mirror excludes only the experimented port | bench | candidate words | readback exact; traffic on the experimented port arrives natively (rxdiag port != 0, or tag decoded); rollback otherwise |
+| S1 | **N0-a: no-mirror cmdline experiment - DONE 2026-11-21 (image 990c5cab)** | bench | none | result: exception punts only (60-byte ARP, port 11), no unicast CPU delivery; see `E0A-ANALYSIS.md` |
+| S2 | **N0-b (revised after E0-a): read-only unicast-to-CPU capture** - stock CFE procfs dumps + IFC banks 0/1 + tagact + L2-with-traffic + OPP/PA registers on the stock boot, and the same registers on our baseline c3ef2a50 (mirror on; `capture-runtime-state.sh --profile punt` covers exactly these ranges); diff with `diff-captures.py` | bench + host | none | a definite answer whether a readable bridge-MAC/unknown-unicast-to-CPU state exists on stock; candidate word list if it does |
+| S2b | **M1a probe (SSH-safe, devmem)** - apply the first candidate unicast-to-CPU word set with the mirror kept on eth2; host pings; look for additional 98-byte native completions (port 11) beside the mirror's port-0 copies; revert immediately and re-check management if no signal | bench | candidate words | readback exact; 98-byte native completions observed and management unaffected; rollback otherwise |
+| S3 | **N1 (revised): replay the unicast-to-CPU candidate set** (stock-readable IFC/L2/OPP words preferred) - via `plan-writes.sh` (devmem) or the W21 driver stage; mirror excludes only the experimented port | bench | candidate words | readback exact; with `cpu_mirror=0` on the next boot, ICMP unicast is delivered natively to eth2 (M1a); rollback otherwise |
 | S4 | **N2: per-port punt classification** (Route B) if S3 shows nothing: build the W21 driver stage with the tag/punt entries, mirror off for the target port, one entry per attended run | host + bench | new driver stage | native delivery with correct ingress identity for the target port |
 | S5 | repeat S4 for each wired port; keep management port on mirror until last | bench | stage writes | all four ports native; bridge/router works |
 | S6 | switch off the mirror for all ports, run the 15-minute soak (canonical soak script if present), then remove the request for the CPU-copy workaround from the bench command line | bench | driver stage only | multi-port LAN and WAN routing with no mirror; M1 met |
@@ -419,6 +479,10 @@ design; it is not a compiled patch and must be reviewed before it is cut into th
 | bindings/docs | no DT change for the devmem prototype; the W21 stage uses no new DT property. If tags become the permanent design, the switch binding documents the tag mode (not this patch) |
 
 ### 7.2 Write order inside the stage (fail-closed)
+
+**Priority after E0-a:** the first stage target is a single unicast-to-CPU rule (or the replay of
+the stock-readable equivalent), not a tag action. The tag-action paths are only worth enabling
+after M1a has been observed, and only if the stock capture shows tagged CPU delivery.
 
 1. refuse unless `luofu_switch_ready()` (W3-W12) and PIE `arm/rxcfg` are ready;
 2. snapshot all target IFC tab128 words and tagact words, reading each target twice and
@@ -489,6 +553,7 @@ read-only phase.
 | N0-a no-mirror cmdline experiment (S1) | command line only, no build | bench window | no |
 | N0-b stock-vs-ours runtime capture + diff (S2) | run the two scripts | bench + stock boot | diff tooling yes, data no |
 | N1 replay candidate words (S3) | devmem or early W21 mode 0 | S2 result | code/tooling yes |
+| M1a unicast-to-CPU on eth2 (S2b/S3) | one rule or one stock-word replay; mirror-off boot to confirm | S2 result | host-side prep yes; signal needs bench |
 | N2 per-port punt entries (S4/S5) | W21 driver patch, probe matrix | S3 result + bench | most of it yes |
 | N3 M2 L2/learning offload study | new RE/capture | M1 proven | partially |
 | M1 exit | all four ports native, mirror off, soak | N2 + bench | no |
@@ -517,3 +582,6 @@ this document.
 | NAPT DDR pointers unsafe | qm-decode addendum `LIVE-DEVMEM-EXPERIMENTS.md` |
 | stock-vs-ours persistent state matches | `2026-11-20-lsw-diff.txt`, `2026-11-20-pha-diff.txt`, W11/W14/W15 sections of `LSW-SPEC.md` |
 | per-port mirror mask patch | `../multi-port-probe/066-net-lsw-mirror-src-mask.patch` |
+| E0-a mirror-off result (exception punts only, no unicast CPU delivery) | `MINIMAL-EXPERIMENT.md` appended result; ledger 2026-11-21 18:10; `build/evidence-bench-gates/e0a-mirroroff/e0a-boot-excerpt.txt`; analysis `E0A-ANALYSIS.md` |
+| status=37 semantics (class marker, not frame error; valid ARP delivered) | `E0A-ANALYSIS.md`; vendor `hi_pie_rx_get_desc@0xf14`; ledger 2026-11-20 15:30 (ARP reply on the wire) |
+| exception path carries source port | E0-a RXDIAG `port=11`; ledger 2026-11-20 15:30 |

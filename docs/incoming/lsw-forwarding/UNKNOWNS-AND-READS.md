@@ -153,6 +153,100 @@ readback + restore; the engine descriptors are write-only so they are acknowledg
 by writing the previous descriptor back (the only revert possible); any ping/SSH loss on eth2
 ends the session and restores the image.
 
+---
+
+## Status update 2026-11-21 (after the E0-a run)
+
+E0-a (mirror off, image 990c5cab) was run on hardware. Results and analysis: `MINIMAL-EXPERIMENT.md`
+(appended result) and `E0A-ANALYSIS.md`. What it settles for this list:
+
+- **U5 (does a native CPU path exist without the mirror?) - ANSWERED: yes, for the exception
+  class only.** The ring receives the host's 60-byte ARP retries with `status=37 err=1 port=11`
+  and no 98-byte unicast completions. With `accepterr=1` the exception class is deliverable
+  (proven on 2026-11-20 15:30: the box answered the ARP on the wire). The mirror remains
+  mandatory for IP.
+- **U6 (completion port identity) - ANSWERED for exception-class frames: `port=11` is correct.**
+  No tag parser is needed for that class. Normal mirror copies still report `port=0`.
+- **U7 (CPU tag format) - PARTIAL:** the exception-class frame carries `vlan=0` and no in-frame
+  tag is needed to parse it; tag work is demoted until/unless the stock capture shows tagged CPU
+  delivery for unicast.
+- **New U13/U14/U15/U16 below** replace the old "generic classifier" target.
+
+### New unknowns
+
+| # | unknown | why it matters | read/experiment |
+| --- | --- | --- | --- |
+| U13 | which of the eight W10 default-classification entries classifies ARP/broadcast as the exception class, and what action routes it to the CPU | tells us which IFC entry shape to copy for a unicast punt; the engine descriptors are write-only so behavior is the only probe | P-matrix P3/P4 (rewrite one W10 entry at a time via tab128+engine, restore after; observe ARP/ICMP RXDIAG classes) |
+| U14 | where the stock boot keeps the unicast-to-CPU state (bridge MAC / unknown-unicast): L2, IFC, OPP or PA | the missing state for M1a; decides the first W21 write set | E0-b revised capture: stock CFE procfs + IFC banks + L2-with-traffic + OPP/PA; see "Reads executable over SSH" below |
+| U15 | what status value a unicast punt carries, and whether our driver must accept classes other than 0x25 | if the value is a packed class the driver must not filter on 0x25 specifically | after a candidate punt: RXDIAG status values for 98-byte frames; extend the accepterr policy if needed |
+| U16 | does the hardware learn/drop unknown unicast, and is a separate flood-to-CPU rule needed for LAN-to-LAN (M1b) | M1b: two LAN ports must exchange frames; without hardware learning the CPU needs a copy of both directions | bench with a second host (or a UART-observed cable swap): ping from LAN jack A to a host on LAN jack B with the mirror off; needs hardware not currently at the bench |
+
+
+## Reads executable over SSH on the adopted baseline image (c3ef2a50)
+
+All read-only, safe while the host pings. The image has a static devmem. These establish the
+**ours** side of the E0-b diff and verify the canonical state; they write nothing.
+
+~~~
+# identity + gates (confirm the running image's built-in command line)
+cat /proc/cmdline
+dmesg | grep -E 'W3|W4|W5|W6|W7|W8|W9|W10|W12|W13|W16|W17_MIRROR|RXCPUCOPY' | tail -40
+DEV=/usr/bin/devmem; [ -x "$DEV" ] || DEV=$(command -v devmem)
+
+# mirror state (fallback path): expect d8=0x800 dc=0x6400000 c0=0x40 after link-up
+$DEV 0x124000d8 32; $DEV 0x124000dc 32; $DEV 0x124000c0 32; $DEV 0x124000b4 32
+
+# PFE global attribute words (stock-difference candidate; read-only here)
+$DEV 0x1200002c 32
+
+# IFC default entries 1..8 in bank0, and bank1 entries 0..7 (four words each)
+i=1; while [ $i -le 8 ]; do for w in 0 4 8 12; do $DEV $((0x12150000 + i*16 + w)) 32; done; i=$((i+1)); done
+i=0; while [ $i -le 7 ]; do for w in 0 4 8 12; do $DEV $((0x12160000 + i*16 + w)) 32; done; i=$((i+1)); done
+
+# count non-zero entries per IFC bank (bank0 expect 8, bank1 expect 0 on ours)
+for base in 0x12150000 0x12160000; do
+  i=0; nz=0; while [ $i -lt 128 ]; do
+    s=0; for w in 0 4 8 12; do v=$($DEV $((base + i*16 + w)) 32); [ "$((v))" -ne 0 ] && s=1; done
+    [ "$s" -ne 0 ] && nz=$((nz+1)); i=$((i+1)); done
+  echo "$base nonzero-entries=$nz"; done
+
+# tag action table: count non-zero entries (expect 0 on ours)
+i=0; nz=0; while [ $i -lt 64 ]; do
+  s=0; for w in 0 4 8 12; do v=$($DEV $((0x124d4000 + i*16 + w)) 32); [ "$((v))" -ne 0 ] && s=1; done
+  [ "$s" -ne 0 ] && nz=$((nz+1)); i=$((i+1)); done
+echo "tagact nonzero-entries=$nz"
+
+# OPP / PA / L2 config non-zero summary (first 0x100 words of each window)
+for win in 0x12400000 0x12080000 0x12180000; do
+  for off in $(seq 0 4 0xfc); do v=$($DEV $((win + off)) 32);
+    [ "$((v))" -ne 0 ] && echo "$(printf 0x%x $win)+$off=$v"; done; done
+~~~
+
+How to use the results:
+
+- IFC bank0 non-zero entries should be exactly the 8 W10 defaults; bank1 should be empty. Any
+  extra non-zero entry is a surprise that must be explained before any write.
+- tagact should be empty on ours. On stock, every non-zero entry is a candidate; the host-side
+  `diff-captures.py` decodes the fields (`vid~`, `0x40000`, `mode~`).
+- OPP/PA/glb non-zero words: compare with the stock capture. A stock-only OPP/PA word that looks
+  like a port map or CPU destination is the highest-value candidate for the missing
+  unicast-to-CPU state.
+- Run all of it with the host pinging, then repeat on stock with the same traffic (E0-b); the
+  stock side additionally captures the CFE procfs dumps.
+
+### Revised E0-b priority (replaces the earlier generic target)
+
+1. Stock CFE procfs (interface/FDB/flow dumps) with traffic - it may state the bridge-MAC/CPU
+   entries directly.
+2. IFC banks 0/1 on stock with traffic (entries beyond the eight defaults).
+3. L2 window on stock with traffic: search for the box MAC (bdinfo) and host MAC
+   (00:e0:4c:63:17:58), both byte orders; record offsets/values.
+4. OPP/PA with traffic: compare the full first 1 KiB, not only the mirror words.
+5. Only then design a write set. Tag-action replay is demoted until a tagged CPU delivery is
+   actually observed.
+
+~~~
+
 ## U12 - completion of the identity path (success criterion)
 
 M1 is met when, for all four wired ports, a frame from the bench host (cable on that jack)
