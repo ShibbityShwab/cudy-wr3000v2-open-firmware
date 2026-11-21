@@ -117,3 +117,14 @@ M2-B still needs a phase where l3intf/userll/userll_ext are actually populated (
 routing/multicast). Until then the verdict is unchanged: W22/M1b is the release path, M2 remains
 documentation, and the next decisive input is one routed/LAN-to-LAN stock phase (second host or
 WAN peer), not more static analysis.
+
+## 7. Routed-phase update (2026-11-22): still no M2 mechanism exercised
+
+The routed/WAN stock phase was box-terminated traffic (pings to the box WAN IP, box-originated HTTP
+GETs), so the flow arenas/buckets/userll tables stayed byte-identical to p0 and dn_match/up_match
+stayed zero (ROUTED-PHASE-ANALYSIS.md). This is a negative but clean result: the vendor CFE only
+installs flows for *forwarded* traffic. The next decisive input is real LAN->WAN/LAN->LAN
+forwarding through the box (netns recipe in ROUTED-PHASE-ANALYSIS.md section 3). If that also
+produces no changes, the stock OpenWrt userspace likely runs hardware offload disabled and M2-A
+entry encoding would require our own controlled insert probe (W23); M2-B would be software-only
+bridge by default, supporting the D1 release path.

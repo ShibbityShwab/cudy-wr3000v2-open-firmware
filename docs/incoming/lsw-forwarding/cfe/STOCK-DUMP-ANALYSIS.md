@@ -128,3 +128,14 @@ delete-tag row + NAPT config/empty tables + queues/counters; everything else sta
   python3 cfe/decode-stock-dump.py --dir build/evidence-bench-gates/cfe-stock
 writes cfe-stock-analysis.md next to the dumps (the ad-hoc probes used for this document are
 build/linux-kbuild/waves/2026-11-21-lsw-fwd/stock_probe*.py, gitignored).
+
+## 8. Update: routed stock phase (2026-11-22) still produced no flow entries
+
+A routed/NAT stock phase was captured (WAN jack with a second adapter, host DHCP, host<->box
+pings, box->host HTTP). Result: the flow arenas stayed **byte-identical to p0** (zero changes in
+buckets/arenas/flow counters; dn_match/up_match = 0; routed-win15-pub identical so no tagact/
+l3intf/userll writes either). The traffic was box-terminated/box-originated, not forwarded, so
+the CFE had no forwarding decision to offload. The decisive next phase is real forwarded traffic
+through the box (LAN host -> box -> WAN peer via network namespaces), with the exact recipe and
+expected observables in ROUTED-PHASE-ANALYSIS.md section 3. M2-A entry encoding remains unobserved
+until that phase (or a controlled insert probe) exists.

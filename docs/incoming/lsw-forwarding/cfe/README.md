@@ -11,6 +11,7 @@ proven. It contains:
 | FLOW-MODEL.md | the static decode: module/call graph, complete table-manager map with hardware locations, l3intf/tagact/userll field layouts, flow path, status classes, and what remains open |
 | OUR-SIDE-VALIDATION.md | the our-image dump validation: IFC/NAPT/L2 bit-exact checks, solved flow-table DDR geometry (exact 1 MiB partition), counters/classes, remaining reads |
 | STOCK-DUMP-ANALYSIS.md | the real vendor dump (mmap physdump workaround): stock boot state decoded, tagact row, empty tables, stock==W22 flow window byte-identical, queue-window behaviour, counters, next stock phases needed |
+| ROUTED-PHASE-ANALYSIS.md | the routed/WAN stock phase: negative result (box-terminated traffic => zero flow/table writes), deltas decoded, and the exact next forwarded-through-the-box phase recipe/expected observables |
 | decode-stock-dump.py | regenerates the stock analysis markdown from the cfe-stock dump directory |
 | M2-DESIGN.md | optional hardware L2/VLAN/flow offload design (documentation only; not needed for the release line) |
 

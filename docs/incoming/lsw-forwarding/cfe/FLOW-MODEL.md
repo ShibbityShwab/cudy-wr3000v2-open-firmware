@@ -150,8 +150,8 @@ PIE window and the counters so classes can be correlated with table hits.
 ## 6. Remaining open items (after the our-side dump; stock still inaccessible)
 
 1. Flow-entry arena byte layout/field offsets (v4 32B and v6 88B slots were measured; the field
-   packing inside a slot is still [I]). The stock capture works now; a stock phase with routed/
-   LAN-to-LAN forwarding should populate flow entries (STOCK-DUMP-ANALYSIS.md section 7).
+   packing inside a slot is still [I]). The routed box-terminated phase did not populate them; a
+   true forwarded-through-the-box phase is the next read (ROUTED-PHASE-ANALYSIS.md section 3).
    Geometry/bases are solved (section 4).
 2. l3intf hardware field encoding (partially decoded; dump of pub+0x5b000/0x5c000 with known
    entries validates every bit).

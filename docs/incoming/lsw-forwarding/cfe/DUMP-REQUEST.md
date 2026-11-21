@@ -1,4 +1,9 @@
-# CFE runtime dump - status 2026-11-22: STOCK CAPTURED, next phases needed
+# CFE runtime dump - status 2026-11-22: stock captured; forwarded (through-box) phase needed
+
+> **UPDATE 2:** a routed/WAN stock phase was captured (box-terminated traffic) and still produced
+> zero flow-entry/table changes - see ROUTED-PHASE-ANALYSIS.md. The next read is a true
+> forwarded-through-the-box phase (LAN host -> box -> WAN/LAN peer, netns recipe in that file
+> section 3); that is the decisive one for the NAPT entry encoding and M2.
 
 > **UPDATE 2026-11-22: the stock dump succeeded.** The vendor kernel blocks /dev/mem read() but
 > mmap() works, so the lead brokered a static ARM physdump and captured the real stock state
