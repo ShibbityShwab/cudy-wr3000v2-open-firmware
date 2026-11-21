@@ -52,3 +52,13 @@ rerun proves both directions).
 - Optional: WAN L3 path validation with a host DHCP server on the leftmost jack.
 - Optional: repeat the L2 test through eth1 (expected identical; bridge membership verified).
 - No multi-port limitation remains for LAN forwarding over the tested ports.
+
+## LAN-to-LAN second port pair (eth2 <-> eth1) - PASS
+
+The same marker-filtered AF_PACKET test was repeated with the second adapter moved to the jack
+second from the right (eth1/port 10):
+- broadcast eth1->eth2 PASS, unicast eth1->eth2 PASS,
+- unicast eth2->eth1 PASS, broadcast eth2->eth1 PASS.
+Bridge FDB: bench adapter MAC 00:e0:4c:63:17:58 on port 1 (eth2), second adapter MAC
+00:e0:4c:68:02:14 on port 2 (eth1); counters advanced both ways (eth2 rx 421/tx 359,
+eth1 rx 265/tx 228). Evidence: lan2lan-eth1.txt, lan2lan-eth1-fdb.txt.
