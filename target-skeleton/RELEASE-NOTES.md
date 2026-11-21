@@ -182,3 +182,13 @@ readback) or provisioning a working SSH server on stock are the two ways to clos
 install gate. Also: writing next_pair a from OUR image is effective (cell reads 0x10) but the
 boot-pair recorder re-records the running pair on the next boot, so a warm reboot can return to
 pair B; the reliable stock switch is the stock-side cell write + stock reboot.
+
+## Hardware validation status of the cleaned DTS (2026-11-21)
+
+The upstream-bindings cleanup that turned the board DTS into its cleaned 712-line form (commit
+538377c) is HOST-VALIDATED ONLY and HARDWARE-REGRESSED: an image built from it (6f19c6d6) boots
+the kernel but stalls in MTD partition registration and is reset by the U-Boot watchdog, then
+falls back to stock. The known-good hardware baseline remains image **7421bb7a** with the
+pre-clean DTS. Any active-DTS change must be boot-tested on the unit; host-side patch/dtc/
+contract checks are necessary but not sufficient. A conservative cleanup (prose/comment removal
+without active-node renames or removals) is being prepared and will be re-tested.
