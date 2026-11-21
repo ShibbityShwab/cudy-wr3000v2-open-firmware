@@ -1,0 +1,67 @@
+# luofu 6.18 release line - patch classification manifest
+# status: include = release patch stack; exclude = bench-only SMP diagnostic (not in the release series)
+# class: A core/functional (upstream review form content), B functional gated bench path,
+#        C included default-off diagnostic gate, D excluded bench diagnostic
+status	class	patch	sha256	purpose
+include	A	001-arm-mach-hisilicon-luofu.patch	996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d	ARM machine descriptor (ARCH_LUOFU, PL310 AUX)
+include	A	002-arm-kconfig-textofs.patch	278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796	ARCH_LUOFU Kconfig/Makefile + TEXT_OFFSET 0x00608000
+include	A	003-arm-textofs-nonimmediate.patch	407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c	ARM early-boot: materialize non-immediate TEXT_OFFSET
+include	A	004-arm-clk-reset-luofu-crg.patch	bb92a7cbd8f54addff628fb6ea409c8cf70b096c301669676bd21a03d4c050b0	CRG clock/reset provider + binding + clock-ID header
+include	A	005-arm-watchdog-luofu-wdt.patch	b8a780f5e65ed092247e1a693252c0033a9e7cf376a02c988890fd518963e2be	watchdog driver + binding
+include	A	006-arm-mtd-nand-luofu-fmc.patch	1f8809e98be649fb915c33d0ceaadb0c7e98509068347e72557839d3c7f5865e	FMC SPI-NAND (SPI-MEM) controller + binding
+include	A	007-net-mdio-luofu.patch	dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb	MDIO bus controller + binding
+include	A	008-net-phy-luofu.patch	676e332e5072608b7193a57213605d5af5cda26e11586d7a9c26fe6b14365912	Genius PHY driver (PHY-ID matched)
+include	A	009-net-gmac-luofu.patch	96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1bbc3df7ae5e0a2aecee	GEMAC resource/binding half (refuses probe)
+include	A	010-arm-luofu-restart.patch	3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095	machine restart driver + sysctrl/reboot bindings
+include	A	011-pinctrl-luofu.patch	700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442	pinctrl driver + binding
+include	A	012-arm-thermal-luofu-tvsensor.patch	3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f	thermal sensor driver + binding
+include	A	013-arm-pci-luofu-host.patch	73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202	DWC PCIe host controller + binding
+include	A	014-arm-crg-reset-polarity.patch	739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227	CRG reset-polarity fix (active-low release)
+include	A	015-net-pie-luofu.patch	fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2	PIE packet-engine draft (refuses to arm)
+include	A	016-net-lsw-luofu.patch	c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a	LSW switch D1a probe skeleton + binding
+include	A	017-soc-luofu-boot-selector.patch	c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d	A/B boot-selector sysfs interface + binding + ABI doc
+include	A	018-arm-mach-hisilicon-smp.patch	5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b	SMP release driver (vendor-faithful pen/resume/IPI CPU method)
+include	A	019-arm-clk-luofu-clock-tree.patch	9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c	CRG clock tree (read-only PLLs/muxes, gate parents)
+include	A	020-net-pie-datapath-luofu.patch	806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8	PIE ring engine + GEMAC front end (gated)
+include	A	021-net-lsw-init-luofu.patch	de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e	LSW read-only baseline probe (W1)
+include	A	022-net-lsw-qidmap-write-luofu.patch	33ab13647791b1a0dab5edf151d8eb5a50304f1d8f2690f9f799862ad04fde3e	LSW gated W3/W4/W5 power + qid-map write path
+include	A	023-net-gmac-netdev-connect-luofu.patch	bf5fb54b663d72b62f92c873c640aaee21eb2496efeee0d06d13153dcc35d0f1	GEMAC netdev readiness gate (phylink, PIE-armed + switch-ready)
+include	A	024-net-pie-completion-decode-luofu.patch	d81a44fb7c004e66d9c686d0d38ee5cccdf52e8ba6f9e454a92f091352ae36f1	PIE RX completion decode + normal TX descriptor
+include	A	025-net-lsw-egress-luofu.patch	0fd8b1eafd701703c785d087f864d27142335ee335c60517e390a21773e39ce7	LSW gated W4 egress/probe-configuration stage
+include	A	026-net-gmac-bdinfo-mac-nvmem.patch	f979ea9ba4ab0a6789514a3b373e66c909fc316993ec340e6d90a94d2db033b3	GEMAC bdinfo-MAC nvmem source
+include	A	027-arm-clk-luofu-readonly-mux-fix.patch	06ee237353fd52a0d735e6cb5b52129fe4b8c0a5ca11b9d85804ba8e9c82be37	CRG read-only mux fix (6.18 clk core compatibility)
+exclude	D	028-arm-hisilicon-smp-diagnostics.patch	64cfc4874cafcb8992958092812f53b361681163c1bb194a7988dc8995c7849a	SMP bench diagnostic: pr_info release trace only
+exclude	D	029-arm-hisilicon-smp-release-bits.patch	d5031f71eb83eff4b49bfa7ec7723c8fb97f29e0355f014d7e23e617cdd24275	SMP bench hypothesis: clear all four resume bits; not needed after the DTS handoff fix
+include	C	030-net-pie-txrx-trace.patch	052ff9a3df88a830d160802c9d931be3838f57ce04c85b9790d2ef60e62dac56	PIE TX/RX trace gate (default off, bench diagnostics)
+include	B	031-net-lsw-eps-channel-map.patch	4ecc08c569b66e5686dff482fcf6390b8357f9b2c0cf8a1fa0aad5f59e290b70	LSW EPS channel-map gate (W6)
+include	B	032-net-lsw-eqm-qminit.patch	719c824c1f173b8c98b1c48181cf8177a9f1aad70c71ca2a216b1f35e7d50ffd	LSW QM/EQM queue-manager init gate
+exclude	D	033-arm-hisilicon-smp-release-diagnostics.patch	cf0df0ee29af01edd13b89935eba5326dc3a07ecead2efcf1390e8c3fe5725cc	SMP bench diagnostic: release-path dumps and status prose
+exclude	D	034-arm-hisilicon-smp-release-probe.patch	cc27347f503b203c6f891373c589239e278dccd52b66551c9c291632f8953208	SMP bench probe: pen stub/marker experiment
+exclude	D	035-arm-hisilicon-smp-release-marker.patch	8724e926a7d621d50a89590e4907aa4e5912a0c69e35f092607564b8aa9e0997	SMP bench probe: marker protocol iteration
+include	B	036-net-lsw-pfe-init.patch	274f09ae45c73955bd44ef6a8c7beb1a42f6621dbd5647a5575336162f1daff9	LSW PFE forwarding-engine init gate (W7)
+exclude	D	037-arm-hisilicon-smp-early-probe.patch	2b073ec0905dcf48c56bc3e0fb6c16fe363ae030d67f6205e24fbda19391f237	SMP bench probe: early setup_arch release experiment
+include	B	038-net-gmac-maxframe-init.patch	949d83fbc451b3ec12029ab47fbaef10bef007632fc2f81556cfe8ec194337b0	GEMAC max-frame init gate (W9)
+exclude	D	039-arm-hisilicon-smp-early-safe.patch	37b7932b0c240d612582090ed17c5c91241f8bdfed074bdd0e7bafb13dd43a32	SMP bench probe: safe early-probe variant
+include	B	040-net-gmac-w9-diag.patch	58f15ad0344cfa7bd3e0e6160a21bc63ebd14f3eb3f9ccfadcef5a3aee4ed4f4	GEMAC W9 diagnostic split + max-frame formula fix
+include	B	041-net-gmac-macconf-nodoorbell.patch	328cdcc1e26393246c3213e1911d2a8fcbd26bb34f550cdef7b5f24bb2aefebb	GEMAC MAC config replay + doorbell bisection gates
+exclude	D	042-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps
+include	B	042-net-gmac-w9-master-off.patch	2e49e3eb6d94fe47887f146781073b5eabde15f2db9c1c32d172a26683092dab	GEMAC W9 master switch (default off)
+include	B	043-net-lsw-ifc-default-table.patch	655ae1f4b50821bb75e7c145b7516f5728e734c02dfef6d1400bf2ec9e4d186e	LSW IFC default-classification table (W10)
+include	B	044-net-lsw-ifc-gate-token-fix.patch	a89ec91abdd6849c7ed159b5c4d14d4fc2418ab19095f20fe485b0545b123905	LSW gate-token rename fix (luofu_switch.*)
+include	C	045-net-lsw-state-dump.patch	f722ca3db2adbef0c07fccdd50101fbe2e63090aea29880390d7c2fb12dd39e0	LSW read-only state dump (W11 diagnostic)
+include	B	046-net-lsw-ifc-fix-eps-ext.patch	6b434e43597946d14a97978caf0c1290bca4088cf4de228c91977e4334d1cb07	LSW W10 correction + W12 extended EPS/DP stage
+include	C	047-net-pie-gmac-rxstate-dump.patch	587e0f851b55e30b350d76bbcd7b9fceb74cbe2c12692c310bd0dc7f0e889b0a	PIE/GEMAC RX-state read-only dump (W13 diagnostic)
+include	B	048-net-pie-rxcfg-w13.patch	a642a997c79b2144bd533f35d84b2772f015019e74492043e85a324912470d5d	PIE RXCFG word write gate (W13)
+include	C	049-net-lsw-pie-page-scan.patch	87d79556ad6611b81f1f2306918e41ebe751ad6dac878ba54239f5e5dd4b7d1e	LSW/PIE page scan (W14 diagnostic)
+include	C	050-net-lsw-pagedump-w15.patch	ae2972c2dc2082ea1cc3b659a34ca1059ae24a3c46cf01b3f37531c79fa5b833	LSW page-content dump (W15 diagnostic)
+include	B	051-net-gmac-macregs-w16.patch	45d4c6ec97c0f5b3d57d7a85368fa126c1e16852d6f2a31a615fbd0ff26e4311	GEMAC static config words (W16)
+include	C	052-net-pie-rxcompletion-trace.patch	800eb6e4df03e70411947d9274b9adb7dd105fe0175563c585374fbcb55a21a4	PIE RX-completion trace gate (diagnostic)
+include	B	053-net-pie-rxdecode-vendor-exact.patch	a35e9f4992ef9c8f0263468ab00d9a3fde5c273b1c9acb4b5bcc60d1da7b7cdc	PIE RX decode vendor-exact + accepterr delivery gate
+include	B	054-net-lsw-mirror-cputest-w17.patch	e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1	LSW port-mirror CPU-copy experiment base (W17)
+include	B	055-net-lsw-mirror-stable-rxstroke.patch	d4f816ffedb117cbade0949910774f8f07ed6bf6c6a2ed82a7b731fa6db3f0e0	LSW stable CPU mirror + RX stroke (W18)
+include	B	056-net-lsw-mirror-postlink-w19.patch	547ea4983f5c5de0db323ecd05c958f849ce7d9e2c93afab1fa508de50f7d80d	LSW post-link CPU mirror re-latch (W19)
+include	B	057-net-pie-cpucopy-w20.patch	290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77	PIE port-0 CPU-copy delivery (W20)
+include	B	058-net-luofu-canonical-bench-config.patch	44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35	canonical bench configuration + docs cleanup
+exclude	D	059-arm-luofu-cpu1-up-trigger.patch	e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52	SMP bench diagnostic: late add_cpu(1) retrigger via sysfs
+exclude	D	060-arm-hisilicon-smp-handoff-probe.patch	e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938	SMP bench probe: decompressor/stext handoff markers
+exclude	D	061-arm-hisilicon-smp-trampoline.patch	5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8	SMP bench probe: sentinel protocol + re-poll trampoline

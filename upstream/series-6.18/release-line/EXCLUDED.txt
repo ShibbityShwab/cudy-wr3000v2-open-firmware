@@ -1,0 +1,11 @@
+028-arm-hisilicon-smp-diagnostics.patch
+029-arm-hisilicon-smp-release-bits.patch
+033-arm-hisilicon-smp-release-diagnostics.patch
+034-arm-hisilicon-smp-release-probe.patch
+035-arm-hisilicon-smp-release-marker.patch
+037-arm-hisilicon-smp-early-probe.patch
+039-arm-hisilicon-smp-early-safe.patch
+042-arm-hisilicon-smp-scu-gic.patch
+059-arm-luofu-cpu1-up-trigger.patch
+060-arm-hisilicon-smp-handoff-probe.patch
+061-arm-hisilicon-smp-trampoline.patch

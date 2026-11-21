@@ -38,19 +38,35 @@ match and boots UP.  Without a matching method, or when either syscon
 node is missing, the code stays inert: smp_boot_secondary() returns
 -ENODEV and never writes a guessed pen address.
 
-This support is RFC and attended.  The release has never run on our
-kernel, no CPU1 has ever been brought up by this code, and the physical
-semantics of the CRG resume bits, the pen-word consumer and the SCU
-pre-state are unmeasured.  The acceptance gate is the two-stage plan in
-SMP-RE.md section 8: S1 ships the platform UP-first (drop the one-line
-devicetree enable-method hunk and, upstream, keep a single cpu@0 node -
-two DT CPUs without a matching method is the known 5.10 bench failure
-mode); S2 is a single-variable attended bring-up with the recovery door
-armed and the UART capture read-only, followed by a soak and a repeat
-cold boot.
+The release implementation is complete and was verified on hardware on
+2026-11-21.  With the loader hand-off devicetree contract in place, the
+stock U-Boot bootfip staging completes and CPU1 consumes the real
+secondary_startup pen, giving "smp: Brought up 1 node, 2 CPUs", CPU1
+mpidr 80000001, /proc/cpuinfo = 2 and a 2-CPU userspace (15-minute soak,
+reboot persistent).  The kernel release code was correct all along; the
+earlier "CPU1 failed to come online" results were caused by the loader
+hand-off staging being aborted by two missing devicetree nodes in the
+board DTS (aliases/console and reserved-memory/flashinfo@80600000 with
+atag-offset = <0x1000>), measured on 2026-11-21 and recorded in
+opensource/docs/SMP-RE.md section 24.
 
-Host-compiled against linux-6.18.60 in the target lane (platsmp.o
-built, no warning attributable to the new or changed files); never run
-on hardware, no Tested-by.
+Important dependency: this patch is necessary but not sufficient.  The
+enable-method, the console alias and the flashinfo reserved-memory node
+are all board-DTS content and are not part of this kernel series; an
+upstream submission must carry them in its DTS series.  Without the
+enable-method the boot stays UP; without the two hand-off nodes CPU1 is
+never brought into the loader's pen-poll loop and the release has no
+consumer.
+
+The patch remains an RFC for upstream review.  The target image that
+carries it is bench-verified (2 CPUs, wired LAN through the documented
+CPU-copy mirror workaround, SSH, persistent overlay, 15-minute soak,
+reboot persistence), but that is target-image evidence, not an upstream
+Tested-by, and the release-line diagnostics around this driver are
+bench-only and excluded from the release series (see
+opensource/upstream/series-6.18/05-release-line.md).
+
+Host-compiled against linux-6.18.60; the 2026-11-21 hardware evidence is
+target-image evidence from the project's own bench.
 
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

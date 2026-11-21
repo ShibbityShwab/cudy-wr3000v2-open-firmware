@@ -872,3 +872,46 @@ CHECKs are unchanged from the 23-patch run.  The apply, git-am and
 checkpatch numbers above are the committed record; sections 2-6 were
 updated to the same 26-patch form and section 17 keeps the dated 23-patch
 record.
+
+## 19. 2026-11-21: review-form re-validation and release-line validation
+
+Two validations were run on 2026-11-21 after the release-line consolidation.
+No hardware was touched and no kernel build was re-run.
+
+**A. Upstream review form (this directory, 26 patches).**  The only content
+change is the 0018 commit message (it now records that the loader hand-off DTS
+contract is required and that the target image is bench-verified).  The series
+was regenerated and re-validated against pristine linux-6.18.60:
+
+- patch(1) 26/26 RC=0, 3 offset hunks, 0 fuzz, 0 rejects;
+- git am 26/26 RC=0; the two resulting trees are identical;
+- checkpatch.pl --no-tree default and --strict: 0 errors, 58 warnings
+  (all previously enumerated; unchanged).
+
+Logs in this directory (patch-apply.log, git-am.log, checkpatch-*.log, etc.).
+
+**B. Release line (see 05-release-line.md).**  The target patch stack minus the
+11 bench-only SMP diagnostics, 51 patches, was applied in manifest order to
+pristine 6.18.60 by tools/check-release-line.sh:
+
+- 51/51 patch(1) RC=0, 146 file events, 6 hunks with offset, 1 hunk with
+  fuzz (patch 053 against the 052 anchor; documented release-line cleanup
+  item), 0 rejects;
+- strict git apply diverges at 053 for the same ordering reason;
+- the release-critical loader hand-off DTS contract: cpp+dtc RC=0, 0 stderr
+  bytes, DTB 12,296 B sha256
+  50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb;
+  fdtget confirms /aliases/console, the flashinfo node with
+  compatible = "hsan,flashinfo_reserved", reg = <0x80600000 0x4000>,
+  atag-offset = <0x1000>, and /cpus/enable-method = "hisilicon,luofu-smp".
+
+Logs in validation/release-line/.  Reproduction:
+
+    tools/check-release-line.sh --use-tree <linux-6.18.60> /tmp/release-line
+
+**C. Hardware evidence (not produced by this validation).**  The canonical
+target image 974e6ca6 was verified on the bench on 2026-11-21 (2 CPUs, LAN via
+the documented mirror workaround, SSH, ubifs overlay, 15-minute soak, reboot
+persistence).  That evidence lives in the parent repository's gitignored
+build/evidence-bench-gates/ and is summarised in 05-release-line.md section 3.
+It is target-image evidence, not an upstream Tested-by.

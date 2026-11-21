@@ -1,0 +1,9 @@
+release line: <series>/release-line/manifest.tsv
+workdir: <scratch>
+pristine version: 6.18.60
+manifest: 51 included, 11 excluded
+patch(1): 51/51 patches RC=0, 146 file events, 6 hunks with offset, 1 hunks with fuzz, 0 rejects
+NOTE: strict git apply diverges at 053-net-pie-rxdecode-vendor-exact.patch; patch(1) is the target-build interface (see 05-release-line.md section 7)
+board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12296 B sha256 50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb
+DTS contract: console=/serial@1010f000 flashinfo-compatible=hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+PASS: release line applies and the loader hand-off DTS contract is present. No hardware and no kernel build was involved.

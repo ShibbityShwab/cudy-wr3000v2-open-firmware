@@ -337,7 +337,7 @@ NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0018-arm-mach-hisilicon-smp.patch
 WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
-#111: 
+#127: 
 new file mode 100644
 
 total: 0 errors, 1 warnings, 189 lines checked

@@ -1,8 +1,11 @@
 # [PATCH 00/26] ARM: hisilicon: add Hi5671Y "luofu" (Cudy WR3000 v2) platform and driver support
 
-> Submission form for review, not a release. **Nothing in this series has
-> ever run on hardware.** Read "Test evidence" and "No hardware validation"
-> before reading any driver as working silicon support.
+> Submission form for review, not a release.  The target image built from
+> this patch stack is now bench-verified (2 CPUs, network through the
+> documented mirror workaround, SSH, persistent overlay; 2026-11-21), but
+> the series itself has had no upstream review and most drivers remain
+> RFC/draft.  Read "Test evidence" and "Hardware validation status" before
+> reading any driver as working silicon support.
 
 ## What this series is
 
@@ -26,9 +29,11 @@ The series adds:
   path.  The PLL rate equation and the mux/gate parents are decoded from
   the vendor hi_clk.ko and the vendor devicetree and have never been
   measured on the board;
-- an RFC, attended SMP bring-up (0018) whose CPU1 release is decoded from
-  the stock vendor kernel and has never run on our kernel.  It is staged
-  separately and is not part of the UP-first mergeable set;
+- an RFC SMP bring-up (0018) whose CPU1 release is decoded from the stock
+  vendor kernel and now verified on the target image: with the board DTS
+  carrying the two loader hand-off nodes the release boots 2 CPUs
+  (2026-11-21).  The kernel patch alone is not sufficient and remains
+  staged separately;
 - RFC or partial drivers for the blocks where the hardware model is not
   complete (0006, 0009-0011, 0013, 0015-0017, 0020-0026).  These are
   explicitly marked and several refuse to probe;
@@ -214,20 +219,22 @@ submission candidates until the hardware experiments (one attended PIE
 arm-gate session; the LSW W3-W5 campaign; the decode/TX/egress validation
 sequence; and one combined PIE+LSW gate boot for 0023) have run.
 
-**5. SMP bring-up (RFC, attended; not in the UP-first set)** - 0018
+**5. SMP bring-up (RFC; kernel patch necessary but not sufficient)** - 0018
 The CPU1 release (pen word, CRG resume bits, wakeup IPI) is decoded from
 the stock vendor kernel's private `hisilicon,hsan_smp` method
 (opensource/docs/SMP-RE.md) and registered as the documented devicetree
 method `hisilicon,luofu-smp` in a new
 arch/arm/mach-hisilicon/platsmp.c.  The method is fail-safe: it stays
 inert when the enable-method or either syscon node is absent, and without
-the enable-method the platform boots UP.  This patch is RFC and attended:
-it has never released a CPU on our kernel, and its acceptance gate is the
-two-stage plan in SMP-RE.md section 8 (S1 UP-first, S2 attended bring-up
-with recovery armed).  The devicetree enable-method is deliberately not
-in this kernel series - the board DTS is delivered through the OpenWrt
-target for now; an S1 submission drops it and the DTS ships a single
-cpu@0 node.
+the enable-method the platform boots UP.  The target image is
+bench-verified with 2 CPUs on 2026-11-21, but the release code was correct
+all along: the actual release fix is the board-DTS loader hand-off
+contract (a console alias and a flashinfo reserved-memory node, see
+SMP-RE.md section 24).  This patch is therefore an RFC for upstream
+review, and the DTS series must carry the enable-method plus the two
+hand-off nodes; posting 0018 alone would be inert.  The release-line SMP
+investigation diagnostics (060/061 etc.) are bench-only and excluded from
+the release series (05-release-line.md section 6).
 
 **6. Not-for-submission items (not in this series)**
 - the board DTS and loader-match overlay: draft, TODO-heavy, delivered
@@ -352,6 +359,32 @@ cpu@0 node.
   no reply is held.  Reviewers must be told this explicitly; "clean-room"
   would be inaccurate.
 
+## 2026-11-21 release-line update (release-critical)
+
+- **SMP fix = DTS-only loader hand-off contract, and it is release-critical.**
+  The stock U-Boot `bootfip` staging aborts without `/aliases/console` and
+  `/reserved-memory/flashinfo@80600000` (`compatible = "hsan,flashinfo_reserved"`,
+  `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>`); with them the
+  target image boots 2 CPUs.  This kernel series is necessary but not
+  sufficient.  Full record: `05-release-line.md` section 2 and
+  `../../docs/SMP-RE.md` section 24.
+- **The release line is not this 26-patch review form.**  It is the target
+  patch stack (62 files, 001-061 plus the duplicate 042 pair) minus 11
+  bench-only SMP diagnostic patches: 51 patches, classified in
+  `release-line/manifest.tsv` and validated host-side by
+  `tools/check-release-line.sh` (51/51 apply; loader hand-off DTS contract
+  compiles and the two nodes are present).  This review form remains the
+  kernel-submission artefact.
+- **Bench diagnostics excluded from the release series:** 028, 029, 033,
+  034, 035, 037, 039, 042-arm, 059, 060, 061.  They are not the SMP fix; the
+  release fix is the DTS contract above.
+- **Canonical configuration:** no `luofu_smp_*` tokens; built-in cmdline and
+  the canonical attended gates are recorded in `05-release-line.md` section 4
+  and `../../target-skeleton/README.md`.
+- **The earlier "2-CPU hang" is retracted** (host USB-Ethernet outage, not a
+  kernel hang; no Oops/panic/BUG/WARNING; the same image passed the soak
+  after the link was restored).
+
 ## Test evidence (host-only; already recorded)
 
 | # | check | result | evidence |
@@ -364,20 +397,26 @@ cpu@0 node.
 | 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane); 11,346 B sha256 a31ab53f... with the seven CRG fixed clocks and the SMP line (clock-tree lane); 11,430 B sha256 d3a9dd86... with the PIE ring tables (PIE-datapath lane); 11,516 B sha256 43c1e94b... with the switch windows and port bitmap (LSW-init lane); 11,571 B sha256 7fd33522... with the enabled switch/PIE/GMAC nodes and the hisilicon,port cells (net lane); 11,996 B sha256 e9c1649f... with the bdinfo nvmem cell/wiring (mac-nvmem lane); the final integrated 001-026 DTS is 12,076 B sha256 5386bade..., cpp+dtc RC=0 with 0 stderr bytes, fdtget reads hisilicon,port=8/9/10/11/12 and dt-validate reports only the five pre-existing baseline diagnostics (none naming PIE/GEMAC/nvmem) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init + net + PIE-decode + MAC-nvmem sessions), port-notes/{smp,clk,pie,lsw,net,pie-decode,mac-nvmem}/SUMMARY.md |
 | 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18); 0019 adds no symbol and the 001-0019 re-derivation is byte-idempotent at the same hash; the 001-0020 delta changes only CONFIG_PHYLINK m -> y; 0021 adds no symbol (001-0021 re-derivation symbol-identical/byte-idempotent 76aaafc8...), the 001-0023 config is symbol-identical to the committed one and byte-idempotent (d1af1b2a...) in the net lane, and 0022-0026 add no symbol: the 001-024 re-derivation in the pie-decode lane (kernel .config 4a17f17a..., target config-6.18 d1af1b2a...) and the 001-026 fully-clean run are byte-identical to the committed 001-023 artifact (the mac-nvmem lane independently observed CONFIG_MTD=y, CONFIG_NVMEM=y, CONFIG_NVMEM_LAYOUTS=y already present) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init + net + PIE-decode + MAC-nvmem sessions) |
 | 8 | OpenWrt image chain (not kernel submission scope) | make world RC=0 in an isolated clone, reproducible container | SKELETON-SMOKE.md (image-recipe session) |
-| 9 | hardware | none. no boot, no probe-on-silicon, no register I/O, no CPU1 release, no UART/TFTP/flash, no device | - |
+| 9 | release-line host validation (2026-11-21) | target stack minus the 11 bench-only SMP diagnostics (51 patches) applies in order to pristine 6.18.60: 51/51 patch(1) RC=0, 0 rejects, 6 offset hunks, 1 fuzz hunk (053 vs 052 anchor); the loader hand-off DTS contract compiles (DTB 12,296 B sha256 50daf3d0...) and contains `/aliases/console` + `/reserved-memory/flashinfo@80600000` (reg/atag-offset/enable-method checked) | 05-release-line.md section 9, validation/release-line/ |
+| 10 | hardware (target image, not upstream) | canonical image `974e6ca6` (6,226,222 B) verified on the unit: 2 CPUs (mpidr 80000001, BogoMIPS 3987.86), LAN via the documented mirror workaround, SSH, ubifs overlay, 15-min soak 0 failures, reboot persistent. No Oops/panic/BUG/WARNING. **This is target-image evidence, not an upstream Tested-by** | 05-release-line.md section 3, parent-repo bench logs named there |
+| 11 | per-driver hardware validation | partial: platform/storage/SMP/gated-network exercised through the target image; most drivers not individually exercised; no upstream Tested-by | 05-release-line.md section 10 |
 
 Evidence tags used in the project: [V] verified from an artifact/measurement,
 [I] implementation inference, [U] unmeasured, [X] blocked.  The only [V]
 claims above are host-side build/patch/binding results and recorded vendor
 register values; every "works on the board" claim remains [U].
 
-## No hardware validation
+## Hardware validation status (updated 2026-11-21)
 
-There is no boot, no hardware validation and no `Tested-by` from this
-series.  The platform has never booted a mainline kernel; none of these
-drivers has ever probed on this board, and the SMP release (0018) has
-never brought up CPU1 on our kernel.  The kernel built from this series
-therefore proves compilation and interface conformance only.  Known open
+The target image built from the extended patch stack (this series + the
+board-DTS loader hand-off fix + the bench-gated network patches) is
+bench-verified: 2 CPUs, network through the documented CPU-copy mirror
+workaround, SSH, persistent overlay, a 15-minute soak with 0 failures and
+reboot persistence (canonical image `974e6ca6`, see 05-release-line.md).
+That is **target-image evidence, not an upstream Tested-by**, and it does
+not validate every driver in this review form.  There is no Tested-by in
+this series; most drivers have not been individually exercised on silicon,
+and the per-driver open hardware questions below all remain.  Known open
 hardware questions include: whether the CRG gate geometry is correct, the
 decoded CRG PLL rate equation and control-word values, the mux and
 gate parents (none of the clock rates or parents has ever been read back
@@ -418,7 +457,7 @@ hardware step in TARGET-DESIGN.md section 10 is done.
 | 0017 selector | **RFC**: new sysfs ABI. The recorded-pair contract is reconstructed from local evidence (docs/SELECTOR-0x21.md: env bootflag selects, the cell records, 0x21 is the project's bench value and never persists) and the store now does the loader-style low-byte read-modify-write; post-boot stability depends on a boot-time recorder in the target image (not this series), and the env re-stamp and the cell's upper 24 bits remain unmeasured. ABI must be reviewed before freezing. |
 | 0006 FMC | **RFC**: storage path is critical and its ECC/OOB/quad-enable semantics are unverified. |
 | 0011 pinctrl | **RFC**: probe writes nothing and consumer states are unmeasured; applying guessed muxes could break console/NAND. |
-| 0018 SMP | **RFC / ATTENDED**: decoded vendor pen/resume/IPI CPU1 release in a new platsmp.c; has never released a CPU on our kernel. Not in the UP-first set; S1 drops the DTS enable-method hunk (UP boot), S2 is a single-variable attended bring-up with recovery armed. Register values are driver data, no new binding. |
+| 0018 SMP | **RFC / NEEDS THE DTS CONTRACT**: decoded vendor pen/resume/IPI CPU1 release in a new platsmp.c. The target image is bench-verified with 2 CPUs (2026-11-21), but 0018 alone is not sufficient: the board DTS must also carry `/aliases/console` and `/reserved-memory/flashinfo@80600000` (release-critical; SMP-RE.md section 24). Register values are driver data, no new binding; the SMP investigation diagnostics are bench-only and excluded from the release line. |
 | 0019 clock tree | **READ-ONLY / DECODED**: registers the CRG PLLs and muxes with read-only ops (no set_rate, set_parent refused) and parents the gates on the decoded vendor-DT input clocks. The PLL rate equation, field layout and mux/gate parents are decoded from the vendor hi_clk.ko and devicetree; the on-board control words, rates and parents have never been measured. No new Kconfig symbol; the binding extension requires seven input clocks from the (out-of-series) board DTS. |
 
 ## Recommended submission sequence
@@ -458,12 +497,14 @@ splits by subsystem and by readiness:
    inspect it without any write risk; 0022's default path and 0025's
    default path are the same read-only probe, and 0023/0024/0026 register
    nothing until every gate is set.
-5. **SMP only after the attended bring-up (0018):** do not include it in
-   the UP-first set.  The S1 submission is 0001-0003 without the
-   devicetree enable-method (and, upstream, with a single cpu@0 node); the
-   patch is RFC until S2 has run on hardware with recovery armed and a
-   soak, then post it with the SMP-RE evidence summary.  The DT
-   enable-method belongs to the DTS series, not this kernel series.
+5. **SMP (0018) as RFC, together with the DTS contract:** the target
+   image is bench-verified with 2 CPUs (2026-11-21), so the attended gate
+   is closed, but the patch alone is inert.  Post 0018 as RFC with the
+   dependency stated, and make the board DTS series carry the
+   enable-method plus the two loader hand-off nodes (`/aliases/console` and
+   `/reserved-memory/flashinfo@80600000` with `atag-offset = <0x1000>`).
+   Do not post the bench diagnostics (060/061 etc.) as the SMP fix.
+   The DTS content belongs to the DTS series, not this kernel series.
 6. **After the bindings are accepted:** the board DTS to
    arch/arm/boot/dts/hisilicon/ (with the stock partition map and the
    identity warning; the SMP enable-method only after S2), then the
@@ -566,8 +607,10 @@ carried as an OpenWrt target patch stack.
 
 - This directory: 00-cover-letter.md (this file), 01-commit-messages.md
   (per-patch messages + mapping table), 02-maintainers-proposal.md,
-  03-rationale-tree-placement.md, 04-validation.md, README.md,
-  commit-messages/, series/, tools/, validation/.
+  03-rationale-tree-placement.md, 04-validation.md, 05-release-line.md,
+  README.md, commit-messages/, series/, release-line/, tools/, validation/.
+- Release status for the target: `../../target-skeleton/RELEASE-NOTES.md`
+  (canonical 2-CPU baseline, working-LAN workaround, retraction).
 - Recorded validation sessions: opensource/docs/SKELETON-SMOKE.md
   (third to twelfth sessions, image-recipe, A/B, selector-fix, SMP,
   clock-tree, PIE-datapath, LSW-init and net sessions),

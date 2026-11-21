@@ -1,20 +1,20 @@
-7c496f6 net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
-3e2a919 net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
-c3d893f net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
-48e96f3 net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
-9decba0 net: ethernet: hisilicon: add the gated Luofu LSW write path
-943fa9d net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
-49469d3 net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
-1ac52ab clk: hisilicon: add the Luofu CRG clock tree
-9e550d3 ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
-cd978d2 soc: hisilicon: add Luofu A/B boot selector
-7a424fc net: ethernet: hisilicon: add Luofu switch probe skeleton
-345dd30 net: ethernet: hisilicon: add Luofu PIE packet engine draft
-55e123c clk: hisilicon: fix Luofu CRG reset polarity
-c3a83fc PCI: dwc: add Luofu PCIe host controller
-1c8d286 thermal: add Luofu thermal sensor driver
-3b1b9e8 pinctrl: hisilicon: add Luofu peripheral pin controller
-492160c power: reset: add Luofu machine restart driver
-4f74003 net: ethernet: hisilicon: add partial Luofu GEMAC driver
-56eac76 net: phy: add driver for HiSilicon Luofu "Genius" PHYs
-574a9de net: mdio: luofu: add MDIO bus controller
+00a998d net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
+d4530e7 net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+ad0cbb3 net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+c0c70b9 net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+6fee962 net: ethernet: hisilicon: add the gated Luofu LSW write path
+5e22f23 net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+0fa0f91 net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+3eb235d9 clk: hisilicon: add the Luofu CRG clock tree
+9d7a89c ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+a3da393 soc: hisilicon: add Luofu A/B boot selector
+ea68236 net: ethernet: hisilicon: add Luofu switch probe skeleton
+02f96fa net: ethernet: hisilicon: add Luofu PIE packet engine draft
+3a58e74 clk: hisilicon: fix Luofu CRG reset polarity
+4d9cabf PCI: dwc: add Luofu PCIe host controller
+dca2d6e thermal: add Luofu thermal sensor driver
+f7da9f8 pinctrl: hisilicon: add Luofu peripheral pin controller
+c4dbeca power: reset: add Luofu machine restart driver
+9d5608a net: ethernet: hisilicon: add partial Luofu GEMAC driver
+2bc7b43 net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+12984f9 net: mdio: luofu: add MDIO bus controller

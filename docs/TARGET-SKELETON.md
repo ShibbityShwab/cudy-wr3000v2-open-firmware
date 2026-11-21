@@ -1,9 +1,17 @@
 # Target skeleton (schematic, untested target) - index
 
-**Status 2026-11-18: SCHEMATIC, NOT A WORKING TARGET - but its structure was accepted by
-OpenWrt main's target metadata and kernel prepare, the target compiles a 6.18 kernel with the
-correct load address, and an own-artifact FIP kernel slice has been assembled and validated
-structurally (host-only; never booted). See [SKELETON-SMOKE.md](SKELETON-SMOKE.md).**
+**Status 2026-11-21: BENCH-VERIFIED 2-CPU BRING-UP - NOT A PUBLIC/FLASHABLE RELEASE.**
+The target builds a 6.18 kernel image that boots on the unit and was verified on
+2026-11-21: 2 CPUs (the fix is the DTS-only loader hand-off contract), wired LAN through
+the documented CPU-copy mirror workaround, SSH, persistent ubifs overlay, 15-minute soak
+and reboot persistence (canonical image `974e6ca6`).  See
+[`../target-skeleton/RELEASE-NOTES.md`](../target-skeleton/RELEASE-NOTES.md) and the release
+line in [`../upstream/series-6.18/05-release-line.md`](../upstream/series-6.18/05-release-line.md).
+It is still not a flashable/public release (install path never run on a device, Wi-Fi
+vendor-only, native forwarding separate, nothing upstream-reviewed).  Earlier structural
+status: the layout was accepted by OpenWrt main's target metadata and kernel prepare, and an
+own-artifact FIP kernel slice was assembled and validated structurally.  See
+[SKELETON-SMOKE.md](SKELETON-SMOKE.md).**
 The concrete files live in [`../target-skeleton/`](../target-skeleton/README.md); this page is
 only an index. The design source of truth remains [TARGET-DESIGN.md](TARGET-DESIGN.md) sections
 4-6; if this page and TARGET-DESIGN.md disagree, TARGET-DESIGN.md wins.
@@ -20,9 +28,10 @@ a 6.18 kernel with the real `TEXT_OFFSET`, and that the image recipe builds end-
 isolated `make world` produced a reproducible squashfs sysupgrade image with our own FIP kernel
 slice, rootfs UBI and manifest (all structurally re-validated from the finished image; never
 flashed or booted). The
-**rest** of the driver/binding series (switch, PCIe, GEMAC data path), rootfs/UBI, sysupgrade
-`platform.sh` metadata and the install path do not exist, and a novel trailer still needs one
-attended boot. The drivers written so far exist as host-compiled
+target image now boots with 2 CPUs, storage and the documented LAN workaround (2026-11-21),
+but the **rest** of the driver/binding series (native switch forwarding, PCIe enumeration,
+a native GEMAC data path), the fail-closed install path and a novel-trailer A/B boot remain
+open, as listed under "What is still [U]/TODO" below. The drivers written so far exist as host-compiled
 drafts only: CRG clock/reset (patch `004`) and watchdog (patch `005`) with their YAML
 bindings (2026-11-18, fifth session), plus the network trio - MDIO bus controller (`007`),
 Genius PHY (`008`) and a **partial** GEMAC binding/resource driver (`009`, no data path;
@@ -83,9 +92,12 @@ hardware; the stock-to-image first-install path is designed and tooled host-side
 [FIRST-INSTALL.md](FIRST-INSTALL.md), also never executed) and the selector protocol (recorded A/B values measured; the env re-stamp, the cell's
 upper 24 bits and one attended A/B validation still owed; the boot-time recorder now exists
 host-side but has never run); a bench-verified reset path (the
-patch-`010` CRG command pair is PROVISIONAL); MAC/efuse source; switch DSA-vs-switchdev; the
-GEMAC TX/RX ring/DMA data path (the driver is a resource/binding half only); SMP; Wi-Fi scope;
-board compatible vs OpenWrt device name.
+patch-`010` CRG command pair is PROVISIONAL); MAC/efuse source; native CFE switch
+forwarding (the DSA-vs-switchdev model); the PIE/switch gated path as a native data path;
+Wi-Fi scope; board compatible vs OpenWrt device name.  SMP is no longer in this list: it is
+resolved on the target (DTS-only loader hand-off fix, verified 2 CPUs, 2026-11-21 - see
+[`../target-skeleton/RELEASE-NOTES.md`](../target-skeleton/RELEASE-NOTES.md)); upstream
+review of 0018 and the DTS series remain open.
 
 **Publication.** Part of the `opensource/` half whose publication is **NOT READY** (history
 purge pending, [PUBLISH-READINESS.md](PUBLISH-READINESS.md)). The skeleton contains no vendor

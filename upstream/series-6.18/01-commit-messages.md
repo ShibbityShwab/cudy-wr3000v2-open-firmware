@@ -1080,20 +1080,36 @@ match and boots UP.  Without a matching method, or when either syscon
 node is missing, the code stays inert: smp_boot_secondary() returns
 -ENODEV and never writes a guessed pen address.
 
-This support is RFC and attended.  The release has never run on our
-kernel, no CPU1 has ever been brought up by this code, and the physical
-semantics of the CRG resume bits, the pen-word consumer and the SCU
-pre-state are unmeasured.  The acceptance gate is the two-stage plan in
-SMP-RE.md section 8: S1 ships the platform UP-first (drop the one-line
-devicetree enable-method hunk and, upstream, keep a single cpu@0 node -
-two DT CPUs without a matching method is the known 5.10 bench failure
-mode); S2 is a single-variable attended bring-up with the recovery door
-armed and the UART capture read-only, followed by a soak and a repeat
-cold boot.
+The release implementation is complete and was verified on hardware on
+2026-11-21.  With the loader hand-off devicetree contract in place, the
+stock U-Boot bootfip staging completes and CPU1 consumes the real
+secondary_startup pen, giving "smp: Brought up 1 node, 2 CPUs", CPU1
+mpidr 80000001, /proc/cpuinfo = 2 and a 2-CPU userspace (15-minute soak,
+reboot persistent).  The kernel release code was correct all along; the
+earlier "CPU1 failed to come online" results were caused by the loader
+hand-off staging being aborted by two missing devicetree nodes in the
+board DTS (aliases/console and reserved-memory/flashinfo@80600000 with
+atag-offset = <0x1000>), measured on 2026-11-21 and recorded in
+opensource/docs/SMP-RE.md section 24.
 
-Host-compiled against linux-6.18.60 in the target lane (platsmp.o
-built, no warning attributable to the new or changed files); never run
-on hardware, no Tested-by.
+Important dependency: this patch is necessary but not sufficient.  The
+enable-method, the console alias and the flashinfo reserved-memory node
+are all board-DTS content and are not part of this kernel series; an
+upstream submission must carry them in its DTS series.  Without the
+enable-method the boot stays UP; without the two hand-off nodes CPU1 is
+never brought into the loader's pen-poll loop and the release has no
+consumer.
+
+The patch remains an RFC for upstream review.  The target image that
+carries it is bench-verified (2 CPUs, wired LAN through the documented
+CPU-copy mirror workaround, SSH, persistent overlay, 15-minute soak,
+reboot persistence), but that is target-image evidence, not an upstream
+Tested-by, and the release-line diagnostics around this driver are
+bench-only and excluded from the release series (see
+opensource/upstream/series-6.18/05-release-line.md).
+
+Host-compiled against linux-6.18.60; the 2026-11-21 hardware evidence is
+target-image evidence from the project's own bench.
 
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
@@ -1225,7 +1241,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 15 | 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
 | 16 | f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
 | 17 | 471a21225db7925d1e0b70f32f1637ee8e07842774ea6a6a22996988472c4da3 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
-| 18 | 03b50ae7af2afe6eeba51d82345a2b4946b80c9dee18027b48d8a30589e22eba | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
+| 18 | 7bbc270c15af7e9a00b9d23f26a6881f9638ab37d655e8db5b73786c0294df1a | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
 | 19 | d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9 | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
 | 20 | 624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212 | 806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8 |
 | 21 | d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497 | de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e |

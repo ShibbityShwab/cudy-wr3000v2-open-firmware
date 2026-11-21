@@ -3464,7 +3464,7 @@ used and nothing was booted. The vendor `hi_kpie.ko` v250 functions were disasse
 (`hi_pie_rx_get_desc`, `hi_pie_drv_rx_recv`, `hi_net_rx_proc`, `hi_pie_tx_send`,
 `hi_pie_tx_set_desc` + its type-0 helper); no vendor binary is copied. The decode is documented
 in [PIE-DATAPATH.md](PIE-DATAPATH.md) sections 5.2 and 6 and in
-[../target-skeleton/docs/incoming/pie-decode/SUMMARY.md](../target-skeleton/docs/incoming/pie-decode/SUMMARY.md).
+[../target-skeleton/docs/port-notes/pie-decode/SUMMARY.md](../target-skeleton/docs/port-notes/pie-decode/SUMMARY.md).
 
 ### What the patch implements
 
@@ -3583,7 +3583,7 @@ patch, but the test still has to be run.
 The isolated clones `/home/shibbityshwab/openwrt-lab-pie-decode/` and `...-full/`; the shared
 clone and `openwrt-lab-selectorfix-img` were not modified. Disassembly regeneration commands are
 the ones in PIE-DATAPATH.md section 13.2; the full evidence map is
-`target-skeleton/docs/incoming/pie-decode/SUMMARY.md`.
+`target-skeleton/docs/port-notes/pie-decode/SUMMARY.md`.
 
 ## 2026-11-19 (LSW QM/EQM session): EQM queue-manager init write stage (patch 032)
 
@@ -4681,6 +4681,71 @@ stable-two-reads, write 0x1c=1 and 0x100=low14 0x600, exact readback, restore on
 Host ping 50/50 and 25/25 with 0% loss, bidirectional ICMP/ARP on the wire, SSH to OpenWrt 6.18.60,
 br-lan 192.168.1.1/24 up, ubifs overlay rw.  The switch CPU-copy mirror at destination 4 (W19 dwell)
 plus port-0 delivery to eth2 (W20) complete the wire->PIE RX->CPU->kernel->PIE TX->wire loop.  The
-canonical command line and verification matrix are in target-skeleton/README.md; SMP/CPU1 is a
-separate open issue.
+canonical command line and verification matrix are in target-skeleton/README.md.  (2026-11-21
+update: SMP is resolved and the 2-CPU release baseline is verified - see the final section of
+this document and target-skeleton/RELEASE-NOTES.md.)
 
+
+
+## 2026-11-21 FINAL: SMP resolved by the DTS loader hand-off contract; 2-CPU release baseline verified; false hang retracted
+
+This closes the SMP investigation and defines the release baseline.  Nothing in
+this section is a new driver claim: it is the hardware verification of the target
+image and the release-line consolidation.
+
+**Root cause [V].**  The kernel SMP release (patch 018) was correct.  The stock
+U-Boot `bootfip` hand-off staging silently aborted because the board devicetree
+lacked two nodes the stock vendor base DTB carries:
+
+1. `/aliases/console` (resolved to the console UART);
+2. `/reserved-memory/flashinfo@80600000` (`compatible = "hsan,flashinfo_reserved"`,
+   `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>`; bootfip computes
+   `atag_addr = 0x80601000`).
+
+Without them our UART showed the vendor warning `alias console not found` and the
+staging lines (`alias console=...`, `serialnr->high/low`, `atag_addr`) never
+appeared, so CPU1 never entered the U-Boot pen-poll loop and every kernel release
+had no consumer.  The 060/061 sentinel probes had proved CPU1 never entered our
+stubs; with the DT nodes present U-Boot completes staging, CPU1 consumes the real
+`secondary_startup` pen, and the sentinels stay untouched.  The fix is **DTS-only**
+(committed in `target-skeleton/dts/luofu-r116.dts`, submodule `5a1b5b3`; details
+in `docs/SMP-RE.md` sections 21-24).
+
+**Verified 2-CPU baseline image 974e6ca6 [V].**  `6,226,222 B`, sha256
+`974e6ca63f6e86418761bc0f135e438f07d0e6ef909c61bb0339f00c5596c508` (patches
+001-061 + the DTS hand-off fix + canonical cmdline + DEVMEM/devmem/pair recorder;
+no probe tokens).  Verified: `smp: Brought up 1 node, 2 CPUs`, CPU1 mpidr
+`80000001`, 3987.86 BogoMIPS, `/proc/cpuinfo` = 2, online 0-1; `br-lan`
+192.168.1.1/24, ping 20/20 0% loss; SSH; `/dev/ubi0_1 on /overlay type ubifs (rw)`;
+15-minute continuous-ping soak 0 failures; reboot persistent with pair b recorded.
+Evidence (parent repo, local/gitignored):
+`build/evidence-bench-gates/2026-11-20-{smp-2cpu.log,smp-reboot.log}`,
+`2026-11-21-{soak-2cpu.log,final-reboot-2cpu.log}` and the UART captures.
+
+**Working LAN is the documented bench workaround [V bench]/[I].**  The wire path
+is the switch CPU-copy mirror (eth2/port 11 -> CPU port dst 4) plus PIE port-0
+completion delivery to eth2 (`cpu_mirror=1 mirror_dst=4`, `cpucopy_deliver=1
+cpucopy_port=11`, `accepterr=1`).  The canonical gates are up to patch 058;
+native CFE L2/VLAN forwarding remains a separate project, not a release claim.
+
+**Retraction [V].**  The reported "2-CPU image hung silently after ~23 minutes"
+(2026-11-20) was a **host bench-link outage**: the USB-Ethernet adapter lost
+carrier/IPs overnight, both management IPs failed and the UART capture had ended,
+so the box looked dead.  The UART showed it alive with no Oops/panic/BUG/WARNING
+(the only panic-text hit is the literal `panic=0` cmdline), and after
+`tools/bench-link.sh --apply` the same image completed the verification matrix and
+the soak.  There is no SMP stability bug; the maxcpus=1 (`d101f96b`) and lockdep
+(`18b3cb1d`) images are diagnostics only.
+
+**Release-line classification.**  The release line is L0 (62 patch files) minus the
+11 bench-only SMP diagnostics (028, 029, 033, 034, 035, 037, 039, 042-arm, 059,
+060, 061) = **51 patches**; it is defined in
+`../upstream/series-6.18/05-release-line.md` with the per-patch manifest in
+`../upstream/series-6.18/release-line/manifest.tsv`.  The upstream review form
+(26 patches) is unchanged in content.  Host validation (2026-11-21): review form
+26/26 patch(1)+git am RC=0; release line 51/51 patch(1) RC=0, 0 rejects, 1 fuzz
+hunk (053 vs 052 anchor, documented cleanup); loader hand-off DTS contract
+compiles (12,296 B DTB sha256
+`50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb`) and the two
+nodes are present.  The short release status is
+`../target-skeleton/RELEASE-NOTES.md`.

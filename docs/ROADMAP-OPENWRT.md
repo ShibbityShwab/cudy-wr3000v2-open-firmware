@@ -27,6 +27,17 @@
 > [VENDOR-STACK-ON-MAINLINE.md](VENDOR-STACK-ON-MAINLINE.md) (the working vendor-stack
 > recipe, bench instrument only).
 
+## Where the plan stands on 2026-11-21
+
+**2026-11-21 update.**  SMP is solved on hardware (DTS-only loader hand-off fix; the kernel
+release patch 018 was correct) and the canonical target image 974e6ca6 is a verified 2-CPU
+baseline with wired LAN through the documented CPU-copy mirror workaround, SSH and a
+persistent overlay.  The release line, canonical configuration and excluded bench
+diagnostics are in [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md);
+the short status is [../target-skeleton/RELEASE-NOTES.md](../target-skeleton/RELEASE-NOTES.md).
+This does not change the phase-plan caveat: bench-verified target work is still not upstream
+progress, and no target PR / accepted DTS series / native forwarding / Wi-Fi answer exists.
+
 ## Where the plan stands on 2026-11-18
 
 **Bench line (reversal track, not upstream).** The 2026-11-14 hybrid - a vanilla 5.10.201

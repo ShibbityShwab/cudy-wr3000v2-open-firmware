@@ -8,14 +8,21 @@ commit messages, a cover letter, a MAINTAINERS proposal, a tree/order
 rationale, and a repeatable host-only validation, plus a commit-ready
 (format-patch style) copy of the same 26 patches.
 
-Status: **host-only submission form; no hardware validation of any kind.**
-Sequential application to pristine linux-6.18.60 and checkpatch pass
-(see 04-validation.md); the series compiles and its bindings validate
-(recorded elsewhere); nothing has booted, CPU1 has never been released and
-no clock rate or PLL/mux parent has been read back, the PIE engine has
-never been armed, no RX completion or TX descriptor has ever been observed,
-the LSW write campaign has never run, no GEMAC netdev has ever registered
-and the bdinfo MAC has never been read from the MTD nvmem path.  The form
+Status: **upstream review form; the target image built from this patch
+stack is bench-verified, but the series itself has had no upstream review
+and most drivers remain draft/RFC.**  Sequential application to pristine
+linux-6.18.60 and checkpatch pass (see 04-validation.md); the series
+compiles and its bindings validate (recorded elsewhere).  The target image
+built from the extended patch stack (0018 + the loader hand-off DTS fix)
+booted on hardware on 2026-11-21 with 2 CPUs, network (the documented
+mirror workaround), SSH and a persistent overlay (canonical image
+`974e6ca6`; see 05-release-line.md).  It has still not been
+upstream-reviewed; per-driver hardware verification is partial and these
+behaviours remain unmeasured: no clock rate or PLL/mux parent read back,
+the PIE engine and RX/TX descriptors only exercised through the gated
+bench path, the full LSW W3-W16 write campaign not run as an upstream
+feature, no independent GEMAC netdev registration outside the bench gates,
+and the bdinfo MAC never read from a real unit.  The form
 was regenerated on 2026-11-18 four times: after patch 0017 (A/B boot
 selector) was corrected against the local evidence reconstruction
 `../../docs/SELECTOR-0x21.md`, after patch 0018 (SMP bring-up) was added
@@ -31,6 +38,43 @@ added from the pie-decode, lsw-egress and mac-nvmem lanes.  The series,
 commit messages, validation logs and hashes were all regenerated in the
 final 26-patch pass.
 
+## 2026-11-21 release-line update (read this first)
+
+- **SMP is solved on hardware and the fix is DTS-only (release-critical).**
+  The kernel release (0018) was correct; the stock U-Boot `bootfip` hand-off
+  staging silently aborted because the board devicetree lacked the stock
+  base DTB's `/aliases/console` and `/reserved-memory/flashinfo@80600000`
+  (`compatible = "hsan,flashinfo_reserved"`, `reg = <0x80600000 0x4000>`,
+  `atag-offset = <0x1000>`).  With those nodes in the board DTS the target
+  image boots 2 CPUs (mpidr 80000001, 15-minute soak, reboot persistent).
+  0018 is necessary but not sufficient; a future upstream DTS series must
+  carry the two nodes.  Evidence: `../../docs/SMP-RE.md` section 24 and
+  `05-release-line.md` section 2.
+- **The release line is defined in `05-release-line.md`.**  It is the
+  target patch stack (62 files, 001-061 plus the duplicate 042 pair) minus
+  11 bench-only SMP diagnostic patches: `release-line/manifest.tsv` has one
+  row per patch (include/exclude, class A/B/C/D, sha256, purpose), 51
+  included.  The upstream review form in `series/` stays at 26 patches:
+  the release line is the target/publication classification, the review
+  form is the kernel-submission artefact.
+- **Bench-only diagnostics are excluded** from the release line: 028, 029,
+  033, 034, 035, 037, 039, 042-arm, 059, 060, 061 (section 6 of
+  `05-release-line.md`).  They remain in the lab stack so the canonical
+  image `974e6ca6` stays reproducible, but a release/publish snapshot must
+  not carry them as the SMP fix.
+- **Canonical configuration, no probe tokens:** the built-in cmdline is
+  `ubi.mtd=rootfsb ... maxcpus=2 nr_cpus=2 additional_cpus=1` (see
+  `config-6.18` / `05-release-line.md` section 4); `luofu_smp_*` tokens
+  are investigation-only and are not part of the canonical or release
+  command line.
+- **The earlier "2-CPU hang" is retracted** - it was a host USB-Ethernet
+  bench-link outage, not a kernel hang; no Oops/panic/BUG/WARNING was in
+  the log and the same image passed the soak after the link was restored.
+
+The 0018 commit message was regenerated in this pass to record the DTS
+dependency; the series files, 01-commit-messages.md and the validation logs
+were refreshed (2026-11-21).  Content diffs are unchanged.
+
 ## What is in here
 
 | file | purpose |
@@ -44,7 +88,10 @@ final 26-patch pass.
 | `commit-messages/` | source of truth for the per-patch messages; edit these, not 01 or series/ |
 | `tools/gen-series.py` | regenerates `series/` and `01-commit-messages.md` from `commit-messages/` + the source patches; `--check` verifies no drift |
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
-| `validation/` | raw logs and hashes from the final validation run |
+| `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
+| `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |
+| `tools/check-release-line.sh` | host-only validation of the release line (patch application order/offsets/fuzz + loader hand-off DTS contract) |
+| `validation/` | raw logs and hashes from the final validation runs (review form + `validation/release-line/`) |
 
 ## How to apply
 
@@ -110,7 +157,23 @@ To regenerate the series after editing a message:
   source patch was generated against an OpenWrt-patched kernel tree, and
   patch 0021 has a 6-line offset in the ethernet Kconfig because 0020
   edits the same file first.  Patches 0022-0026 are last and apply
-  cleanly with no offset.
+  cleanly with no offset.  Re-run on 2026-11-21 after the 0018 message
+  update: 26/26 patch(1) and 26/26 `git am` RC=0, identical trees, 3 offset
+  hunks, 0 fuzz, 0 rejects, 0 errors / 58 checkpatch warnings.  [V]
+- the release line (51 target patches, `05-release-line.md`) applies in
+  order to pristine 6.18.60: 51/51 patch(1) RC=0, 146 file events, 6 offset
+  hunks, 1 fuzz hunk (patch 053, a known 052/053 ordering artefact), 0
+  rejects; strict `git apply` diverges at 053 for the same reason.  The
+  release-critical loader hand-off DTS contract compiles (`cpp`+`dtc` RC=0,
+  0 stderr, DTB 12,296 B sha256 `50daf3d0...`) and contains
+  `/aliases/console` and the `flashinfo@80600000` node with the measured
+  `reg`/`atag-offset`.  Logs: `validation/release-line/`.  [V]
+- the target image built from the extended stack is hardware-verified for
+  the release baseline: 2 CPUs (mpidr 80000001, BogoMIPS 3987.86), LAN via
+  the documented mirror workaround, SSH, ubifs overlay, 15-minute soak
+  0 failures and reboot persistence (image `974e6ca6`).  This is
+  target-image evidence, not an upstream Tested-by.  [V for the recorded
+  bench evidence, [I]/[U] for the per-driver claims it does not cover]
 - checkpatch.pl --no-tree: 0 errors, 58 warnings (default and strict; plus
   6 strict CHECKs), all enumerated in 04-validation.md.  The 2 added
   warnings are the expected per-patch review items for 0024 and 0026 (one
@@ -144,16 +207,20 @@ To regenerate the series after editing a message:
 
 ## What a reviewer should NOT expect
 
-- **No boot, no hardware validation, no Tested-by.**  Nothing here has run
-  on the router; no driver has probed on silicon; the platform has never
-  booted a mainline kernel, and the SMP release has never brought up CPU1.
-  The compile evidence proves buildability and interface conformance only.
-- **No SMP.**  Patch 0018 decodes the vendor CPU1 release but is
-  RFC/attended: the SCU pre-state, the pen-word consumer and the CRG
-  resume-bit semantics are unmeasured, and the devicetree enable-method is
-  not in this kernel series (board DTS), so 0018 is inert in this form.
-  It is not part of the UP-first mergeable set and its posting gate is the
-  attended S2 bring-up in `../../docs/SMP-RE.md`.
+- **No upstream Tested-by and no per-driver hardware validation.**  The
+  target image is bench-verified (2 CPUs, network through the documented
+  mirror workaround, SSH, overlay, soak, reboot), but the series itself has
+  not been upstream-reviewed and most drivers have not been individually
+  exercised on silicon.  The compile/binding evidence proves buildability
+  and interface conformance; it does not prove every driver works.  Do not
+  add a Tested-by you did not run.
+- **SMP is no longer an open question on the release image, but 0018 is
+  still an RFC for upstream.**  0018 implements the decoded release and is
+  necessary but not sufficient: the target images get 2 CPUs only when the
+  board DTS also carries the two loader hand-off nodes (console alias +
+  flashinfo reserved-memory).  Both are board-DTS content, not part of this
+  kernel series, so in this form 0018 is inert until the DTS series lands.
+  See `../../docs/SMP-RE.md` section 24 and `05-release-line.md` section 2.
 - **No measured clock rates or PLL/mux parents.**  Patch 0019 registers
   the CRG's two PLLs and two muxes as read-only clocks (no set_rate, no
   enable/disable, set_parent returns -EOPNOTSUPP) and parents the gates on
@@ -237,7 +304,7 @@ To regenerate the series after editing a message:
 | PIE datapath + GEMAC front end, LSW read-only baseline probe (follow-ups to those drafts) | 0020, 0021 | do not merge; 0020 is an arm-gated draft that has never run and still cannot decode RX completions; 0021 is read-only and its baseline is one measured boot |
 | gated LSW write path and GEMAC netdev readiness (follow-ups to 0020/0021) | 0022, 0023 | do not merge; 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters with readback/restore; 0023 registers nothing until the PIE arm gate and both LSW gates pass in one attended boot |
 | PIE completion/TX decode, gated LSW W4 egress stage and MAC-source nvmem (follow-ups to 0020/0022/0023) | 0024, 0025, 0026 | do not merge; 0024 stays behind the PIE arm gate and its decode has never been observed by the engine; 0025 gates the R1/R3/R5 probe-configuration write set behind never-set module parameters (requiring the W3 power step) and tightens readiness so both that configuration and the qid map must verify; 0026 reads the MAC from a read-only bdinfo nvmem cell but registers nothing until the 0023 gate passes and the read has never run.  None has run on hardware |
-| SMP bring-up | 0018 | RFC/attended; host-validated only, never run on our kernel; not in the UP-first set |
+| SMP bring-up | 0018 | RFC for upstream review; the target image is hardware-verified with 2 CPUs (2026-11-21) once the board DTS carries the loader hand-off nodes; 0018 alone is necessary but not sufficient. The release-line diagnostics around it are excluded from the release series |
 
 The recommended real submission splits this into per-subsystem series and
 folds 0014 into 0004; see 00-cover-letter.md "Recommended submission
@@ -257,9 +324,14 @@ sequence".
    help text, spinlock/alignment comments) when the patches are touched
    for the split; they are deliberately not changed here because this task
    must not edit the existing patches.
-6. Approve the SMP plan (0018): the `hisilicon,luofu-smp` method name,
-   the driver-data (not DT property) decisions, and the attended S2
-   bring-up before posting; keep 0018 out of the UP-first submission.
+6. Approve the SMP posting (0018) as RFC: the `hisilicon,luofu-smp`
+   method name and driver-data decisions are settled and the target image
+   is bench-verified (2 CPUs, 2026-11-21).  0018 alone is not sufficient:
+   the board DTS series must carry the enable-method plus the two loader
+   hand-off nodes (`/aliases/console` and `/reserved-memory/flashinfo@80600000`
+   with `atag-offset = <0x1000>`).  Decide whether to post 0018 now with
+   that dependency stated, or together with the DTS series; do not post the
+   SMP investigation diagnostics (060/061 etc.) as the fix.
 7. Approve the clock-tree staging (0019): read-only PLL/mux model, decoded
    rates/parents pending one attended read-only readback, no set_rate, and
    the binding change that makes seven input clocks (board-DTS content)

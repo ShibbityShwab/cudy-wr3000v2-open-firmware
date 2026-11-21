@@ -105,6 +105,16 @@ Three options, one source of truth rule.
 3. Both hand-maintained: rejected (TARGET-DESIGN.md 6.1).  Two copies of a
    1,000-line DTS will diverge.
 
+**2026-11-21 update - the loader hand-off nodes are mandatory.**  The board
+DTS must carry the stock base DTB's `/aliases/console` property and the
+`/reserved-memory/flashinfo@80600000` node (`compatible =
+"hsan,flashinfo_reserved"`, `reg = <0x80600000 0x4000>`,
+`atag-offset = <0x1000>`).  Without them the stock U-Boot `bootfip` staging
+aborts and CPU1 never starts polling the kernel pen, so SMP never comes up
+even though the kernel release is correct.  This is measured on hardware
+(`../../docs/SMP-RE.md` section 24) and is release-critical: a future
+upstream DTS series that omits the nodes reintroduces the original bug.
+
 Recommendation: the DTS is deliberately **not** in this series.  The draft
 DTS is TODO-heavy (only the nodes with bindings above are real; the rest
 are proposal nodes) and a full-draft `dtbs_check` is not clean, so it
@@ -228,7 +238,7 @@ dependencies:
 | 0015 | 0004 | 0004, 0014 |
 | 0016 | 0004 | 0004, 0014 |
 | 0017 | - | 0010 (sysctrl binding, shared node) |
-| 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series |
+| 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series.  2026-11-21: the board DTS must also carry the loader hand-off nodes (`/aliases/console` + `/reserved-memory/flashinfo@80600000`); those are the actual release fix and 0018 alone is not sufficient |
 | 0019 | 0004 (it edits the CRG driver, clock-ID header and YAML binding 0004 adds) | 0004 (CRG syscon node); the seven input clocks, the gate-parent clocks and the two mux parents are board-DTS content, not in this series |
 | 0020 | 0009, 0015 (it rewrites the GEMAC and PIE drivers and bindings they add); 0004/0014 headers at compile time | 0004, 0014 (CRG clock/reset ABI); the ring tables and node enablement are board-DTS content, and the measured inventory is outside the series |
 | 0021 | 0016 (it rewrites the switch driver and binding 0016 adds), 0020 (same ethernet Kconfig file, applied before it), 0004 (CRG state) | 0004, 0014 (CRG gate/reset state, read-only); the 17-window DTS model, CRG phandle and port bitmap are board-DTS content, and the measured inventory is outside the series |
@@ -396,6 +406,17 @@ existing SYSCTRL/CRG syscon nodes already provide the two pages
 `CONFIG_HOTPLUG_CPU` stays off, matching the vendor operations table
 (SMP-RE.md sections 3.2 and 7.5).
 
+**2026-11-21 update - S2 passed; the release fix is DTS.**  The 2026-11-20
+attended run reached 2 CPUs after adding the loader hand-off nodes to the
+board DTS (`../../docs/SMP-RE.md` section 24), and the 2026-11-21 canonical
+image `974e6ca6` passed the soak and the reboot test.  The two-stage S1/S2
+plan text above is kept as the staging rationale: S1 (UP-only) is still the
+right merge posture for the kernel patch for as long as the DTS series is
+not accepted, because 0018 without the enable-method and the two hand-off
+nodes is inert.  The SMP investigation diagnostics (028/029/033-035/037/039/
+042-arm/059/060/061) are excluded from the release line (05-release-line.md
+section 6); the kernel release patch stays 0018.
+
 ## 10. PIE and LSW staging (patches 0020 and 0021)
 
 Both patches are follow-ups to drafts already in the series and both
@@ -552,3 +573,46 @@ host apply/checkpatch validation of all 26 patches.  Until the attended
 decode, egress and nvmem-read checks run, 0024/0025/0026 are
 `[RFC PATCH]` design-review material only.
 
+
+## 12. Release line (2026-11-21) - L0/L1/L2, DTS fix and exclusions
+
+The 2026-11-20/21 SMP work turned the target from a host-only skeleton into a
+bench-verified bring-up.  The release classification that follows from it is
+recorded in 05-release-line.md; the placement/order consequences are:
+
+1. **Three layers, not one.**  L0 = the whole target patch stack
+   (62 files, 001-061 plus the duplicate 042 pair) as applied by the
+   OpenWrt build; L1 = L0 minus the 11 bench-only SMP diagnostics
+   (the release line, 51 patches; release-line/manifest.tsv); L2 = this
+   26-patch upstream review form.  The review form is not extended by the
+   release-line work: the L1 network patches (027-058) are do-not-merge
+   gated bench code, not upstream submission candidates.
+2. **The SMP fix is not a kernel patch.**  The release-critical change is
+   the board DTS loader hand-off contract (/aliases/console and
+   /reserved-memory/flashinfo@80600000), so the DTS delivery decision in
+   section 4 becomes harder: the upstream DTS series must carry those two
+   nodes, and 0018 must be posted together with (or after) it.  In the
+   target tree the DTS stays the OpenWrt target/.../dts/ delivery for now;
+   the kernel DTS series remains the only upstream form.
+3. **Ordering artefacts of L0 that must not survive publication.**  The
+   stack has two 042 patches (SMP SCU/GIC dumps and the GEMAC W9 master
+   switch; different files, filename order applies ARM first) and patches
+   052/053 insert at the same MODULE_PARM_DESC(nodoorbell...) anchor;
+   on pristine 6.18.60 patch 053 applies with one fuzz hunk and strict
+   git apply diverges at it.  Regenerate 052/053 as one clean pair and
+   renumber the duplicate 042 before a clean release/publish snapshot.
+4. **Excluded diagnostics do not break the chain.**  The 51-patch L1 was
+   applied in order on pristine 6.18.60: 51/51 patch(1) RC=0, 0 rejects
+   (6 offset hunks, 1 fuzz hunk from item 3).  No later release patch
+   depends on the excluded SMP diagnostic files (platsmp.c,
+   compressed/head.S, kernel/head.S are touched only by the excluded set);
+   this is why the exclusion is safe without regenerating the rest.
+5. **Canonical configuration belongs to the target, not this series.**  The
+   built-in cmdline (config-6.18, CONFIG_CMDLINE_FORCE) carries
+   maxcpus=2 nr_cpus=2 additional_cpus=1 and no luofu_smp_* tokens; the
+   attended module gates are the 058 canonical set.  The review form does
+   not carry either; the DTS/config boot contract is target content.
+
+Evidence: 05-release-line.md, release-line/manifest.tsv,
+validation/release-line/, ../../docs/SMP-RE.md sections 21-24, and the
+parent-repo evidence logs named in 05-release-line.md section 12.

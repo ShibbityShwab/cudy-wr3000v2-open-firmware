@@ -1,9 +1,26 @@
 # Luofu / Cudy WR3000 v2.0 - OpenWrt target skeleton
 
-> **STATUS: UNTESTED - SCHEMATIC - NOT A WORKING TARGET.**
+> **STATUS (2026-11-21): BENCH-VERIFIED 2-CPU BRING-UP - NOT A PUBLIC/FLASHABLE RELEASE.**
 >
-> This directory contains a first-pass, reviewable **shape** of the OpenWrt target
-> files described in [TARGET-DESIGN.md](../docs/TARGET-DESIGN.md) sections 4-6.
+> The target now builds a 6.18 kernel image that boots on the unit and was
+> bench-verified on 2026-11-21: **2 CPUs** (the fix is the board-DTS loader
+> hand-off contract described in [RELEASE-NOTES.md](RELEASE-NOTES.md)), wired LAN
+> through the documented CPU-copy mirror workaround, SSH, persistent ubifs
+> overlay, 15-minute soak with 0 failures and reboot persistence (canonical
+> image `974e6ca6`).  The **release line** (51 target patches plus the DTS
+> hand-off fix; the bench-only SMP diagnostics are excluded) and the exact
+> verified configuration are in
+> [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md).
+> It is still **not** a flashable or public release: the fail-closed install
+> path has never run on a device, Wi-Fi is vendor-only, native CFE forwarding
+> is a separate project, and nothing here is upstream-reviewed.
+>
+> Historical status block follows; read it as the pre-bench record.  The dated
+> session bullets below are the chronological record: where they say "nothing
+> has booted" or "never run on hardware", they describe the state at that date,
+> not the 2026-11-21 baseline above.  This directory contains a first-pass,
+> reviewable **shape** of the OpenWrt target files described in
+> [TARGET-DESIGN.md](../docs/TARGET-DESIGN.md) sections 4-6.
 > It has been exercised against `openwrt main` (`27663a0`) at the target-metadata,
 > kernel-prepare, kernel-config and kernel-compile stages: the draft patch series,
 > including the 2026-11-18 early-boot `TEXT_OFFSET` fix (`003`), builds the full
@@ -242,7 +259,8 @@
 > **2026-11-19 (attended hardware bring-up): the image chain BOOTED to userspace on the
 > WR3000 v2.** U-Boot's failover path booted the written pair: kernel 6.18.60 banner (UP,
 > **1 CPU** - the image was built from patches `001`-`017`, so patch `018`'s SMP release was
-> not part of it), UBI attached the rootfs slot, `ubiblock0_0` mounted the static squashfs,
+> not part of it; historical - the 2026-11-21 release baseline boots 2 CPUs, see
+> [RELEASE-NOTES.md](RELEASE-NOTES.md)), UBI attached the rootfs slot, `ubiblock0_0` mounted the static squashfs,
 > and `/sbin/init` -> preinit -> procd -> console ran on our own build. The boot fixes this
 > needed are in the target tree (`CONFIG_CMDLINE_FORCE`, 4 KiB squashfs padding before
 > ubinize, `CONFIG_XZ_DEC_ARM`). No network, no persistent overlay and a `board_detect`
@@ -290,6 +308,7 @@ Everything here is marked one of:
 | path | what it is | real OpenWrt tree location |
 | --- | --- | --- |
 | `README.md` | this file: status, facts, mapping, TODOs | nowhere (repo documentation) |
+| `RELEASE-NOTES.md` | short release status (2026-11-21): verified 2-CPU baseline, the DTS-only SMP fix, the working-LAN workaround, the false-hang retraction | nowhere (repo documentation) |
 | `target/linux/hisilicon/Makefile` | target definition: `ARCH:=arm`, `BOARD:=hisilicon`, `SUBTARGETS:=luofu`, feature flags, kernel-version placeholder, default package sketch (**SCHEMATIC**) | `target/linux/hisilicon/Makefile` |
 | `target/linux/hisilicon/Kconfig` | review stub: the kernel platform Kconfig bits the target needs (documented, not applied) plus two target build options (**SCHEMATIC**; OpenWrt targets normally have no such file - see the header) | `target/linux/hisilicon/` only after upstream review; the platform symbols belong in the kernel patch `arch/arm/mach-hisilicon/Kconfig` |
 | `target/linux/hisilicon/luofu/target.mk` | subtarget: board name, `CPU_TYPE:=cortex-a9`, NAND feature, package sketch (**SCHEMATIC**) | `target/linux/hisilicon/luofu/target.mk` |
@@ -587,9 +606,10 @@ is `patches-6.18/`:
   `arch/arm/mach-hisi/Kconfig`; it must not be redefined), the machine Makefile
   (`obj-y += luofu.o`) and the cleaned `luofu.c` machine descriptor. The descriptor
   sets only `dt_compat` and the L2 AUX replay; `map_io`/`init_early`/`init_time`/
-  `init_machine` are deliberately left at their DT-platform defaults, `.smp` is TODO
-  (UP-only first submission, no mainline `smp_ops` for the vendor enable-method) and
-  `.restart` is TODO (no reboot driver yet). No bench breadcrumbs, no vendor symbol
+  `init_machine` are deliberately left at their DT-platform defaults; SMP is provided by
+  the patch-`018` `platsmp.c` enable-method (the machine descriptor keeps no `.smp` hook)
+  and restart by the patch-`010` driver.  The 2026-11-21 release baseline boots 2 CPUs;
+  see [RELEASE-NOTES.md](RELEASE-NOTES.md). No bench breadcrumbs, no vendor symbol
   stubs, no vendor-facing `dt_compat`.
 - `002` wires it into core ARM: `source "arch/arm/mach-hisilicon/Kconfig"` in
   `arch/arm/Kconfig`, `machine-$(CONFIG_ARCH_LUOFU) += hisilicon` and
@@ -1023,9 +1043,11 @@ Checked on the author's host on 2026-11-18, nothing more:
   --container` 100/100; `first-install.test.sh --real-container` 144/144;
   `test-mac-provisioning.sh` 103/103; `config-6.18` unchanged (`2982d663...`); 23/23
   series patches applied with 0 rejects. **The image booted on 2026-11-19 was built from
-  patches `001`-`017` only (UP, 1 CPU): this rebuild is the first image carrying the full
-  series, the SMP release and the enabled LSW/PIE/GEMAC nodes, and it has NOT been flashed or
-  booted - the next attended boot is its first hardware test.** Evidence (local-only):
+  patches `001`-`017` only (UP, 1 CPU): this rebuild was the first image carrying the full
+  series, the SMP release and the enabled LSW/PIE/GEMAC nodes, and it had not been flashed or
+  booted at that time.  Historical note: the follow-up bench work (2026-11-20/21) booted the
+  full stack and verified 2 CPUs + working LAN on 2026-11-21 - see
+  [RELEASE-NOTES.md](RELEASE-NOTES.md).** Evidence (local-only):
   `build/linux-kbuild/waves/2026-11-19-overlay-image/`.
 - **A/B install path (2026-11-18, A/B install host-only session)**: patch `017`
   adds the `luofu-selector` sysfs interface and `017`+shared edits add its board
@@ -1109,7 +1131,12 @@ Cross-cutting (all [U]/[I], TARGET-DESIGN.md section 12):
    Still open: the switch data path itself (D1b-D1d need the attended write set and
    W3-W6 experiments, LSW-SPEC.md 7.7/12.3), the port-id mapping and the board
    `02_network` port map.
-8. **SMP** - no `platsmp` port; the draft DTS is UP-only.
+8. **SMP - RESOLVED on the target (2026-11-21).** Patch `018` provides `platsmp.c`; the
+   release-critical piece is the board-DTS loader hand-off contract (`/aliases/console` +
+   `/reserved-memory/flashinfo@80600000`), verified with 2 CPUs on the canonical image
+   `974e6ca6`.  Upstream review of 0018 and an upstream DTS series remain open - see
+   [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+   [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md).
 9. **Wi-Fi scope statement** - out of the first submission; the vendor stack is not
    mac80211 and the firmware is closed (TARGET-DESIGN.md section 8.3).
 10. **Publication sequence** - history purge before any of this can point at a public
@@ -1285,43 +1312,72 @@ Skeleton-specific findings recorded while writing the files:
 | target/linux/hisilicon/patches-6.18/050-net-lsw-pagedump-w15.patch | **W15 page-content dump + counter classification** (2026-11-20, host-only, never executed): the W14 page-map diff (15 non-zero stock pages) classifies as **runtime counter/status**, not config - every differing offset appears in the vendor fixtures only as a read in hi_dp_dfx_dump_cnt/hi_pfe_dfx_dump_cnt, never as an init write; the same 0x1b6 occurs in five engines, the fam pair reads 0x2f9/0x2fa, ours are small running counters, and the persistent-looking pages already match. Patch 050 adds luofu_switch.pagedump=1: 16 words of every differing page + matched controls, read twice 10 ms apart, labelled STABLE (persistent candidate) or CHANGED (do not replay), for a stock content diff before any write. **Host compile (WERROR, 0 warnings), 001-051 series apply RC=0 (51/51), checkpatch 0 errors; never executed on hardware.** | same |
 | target/linux/hisilicon/patches-6.18/051-net-gmac-macregs-w16.patch | **W16 static GEMAC config words** (2026-11-20, host-only, never executed): the GEMAC window diff (144 common words, window 0x14480000) has six differences. Decode: 0x1c is static config (hi_mac_hw_config writes 1; ours 0 because macconf was off); 0x100 is max-frame+pause (stock 0x33400600 -> limit 1536, ours MTU+18=1518; vendor frame-length convention +36, formula [U] value [V]); 0xa4/0xac/0xb0/0xb8 are statistics counters read by himac_read_stats (no init write - not replayed). Patch 051 adds gated luofu_gmac.macregs=1 (required for registration, fail-closed): snapshot/stable/readback/restore, writes 0x1c=1 and 0x100=(pre and not 0x3fff) or 0x600. **Host compile (WERROR, 0 warnings), 001-052 series apply RC=0 (52/52), checkpatch 0 errors; never executed on hardware.** | same |
 
-## Canonical attended bench command line (working data path, image 39424b94 = patches 001-057)
+## Canonical attended bench command line (verified 2-CPU baseline, image 974e6ca6)
 
-Extra kernel arguments (all gates attended; hardware recovery armed for every fire):
+Built-in kernel command line (the stock loader supplies none; forced by
+`CONFIG_CMDLINE_FORCE` in `target/linux/hisilicon/luofu/config-6.18`):
+
+    ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs
+    rootwait console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2
+    additional_cpus=1
+
+Extra kernel arguments for the working LAN (all gates attended; hardware
+recovery armed for every fire; defaults are off).  **No `luofu_smp_*` tokens
+are used** - those belong to the closed SMP investigation only:
 
     luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_switch.eps=1
     luofu_switch.qminit=1 luofu_switch.pfe=1 luofu_switch.ifc=1 luofu_switch.ext=1
     luofu_pie.arm=1 luofu_pie.rxcfg=1 luofu_pie.accepterr=1
     luofu_pie.cpucopy_deliver=1 luofu_pie.cpucopy_port=11
-    luofu_pie.rxdiag=1 luofu_pie.rxstroke=1          (diagnostics; optional on a quiet boot)
     luofu_gmac.macregs=1
     luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=4
 
-cpu_mirror dst 4 is the CPU port identified by the W19 dwell sweep; it is re-applied 200 ms after
-every MAC link-up and re-latched every 2 s because the OPP mirror registers do not survive switch
-port-up.  cpucopy_deliver hands the resulting port-0 completions to eth2 (port 11).  This is the
-bench workaround; the clean long-term fix is native CFE L2/VLAN forwarding.
+`luofu_pie.rxdiag=1` / `luofu_pie.rxstroke=1` / `luofu_pie.rxtrace=1` and the
+`dump`/`scan`/`pagedump` gates are optional diagnostics, not canonical.
+cpu_mirror dst 4 is the CPU port identified by the W19 dwell sweep; it is
+re-applied 200 ms after every MAC link-up and re-latched every 2 s because the
+OPP mirror registers do not survive switch port-up.  cpucopy_deliver hands the
+resulting port-0 completions to eth2 (port 11).  **This is the documented bench
+workaround; native CFE L2/VLAN forwarding remains a separate project.**
+DEVMEM is compiled in and the static devmem tool is on the canonical image as an
+optional debugging aid.  The exact verified configuration and image hash are in
+[../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md)
+section 4; the short release status is [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
-## Verification matrix for the working image
+## Verification matrix for the verified 2-CPU image 974e6ca6
 
+- boot: U-Boot completes the stock hand-off staging (`alias console`/
+  `serialnr->`/`atag_addr=0x80601000`), then `smp: Brought up 1 node, 2 CPUs`,
+  CPU1 `mpidr 80000001`, 3987.86 BogoMIPS, `/proc/cpuinfo` = 2, online 0-1,
+  SCU CONFIG bit 5 set.
 - ping -c50 192.168.1.1 -> 0% loss; repeat -c25 -> 0% loss (fast path).
 - SSH login to 192.168.1.1 over br-lan, reboot, SSH again.
 - overlay persistence: write under /overlay (ubifs rw), reboot, file survives.
-- /proc/cpuinfo: 1 CPU online - SMP/second-CPU bring-up is a separate open issue, not a data-path
-  regression.
-- console: W19_CPU_MIRROR apply lines after each link-up and every ~2 s (pre==post), RXCPUCOPY lines
-  for host traffic, heartbeat continuous, no Oops.
+- console: W19_CPU_MIRROR apply lines after each link-up and every ~2 s
+  (pre==post), RXCPUCOPY lines for host traffic, heartbeat continuous, no Oops;
+  15-minute continuous-ping soak with 0 failures; reboot returns with 2 CPUs.
+- native forwarding, Wi-Fi and the install path are **not** in this matrix (see
+  RELEASE-NOTES.md "Not included / not claimed").
 
-## Patch-series resync plan (curated repos + upstream series)
+## Patch-series / release-line sync (2026-11-21)
 
-The curated public repos and the upstream series have not been resynced with patches 001-058 or the
-working-image notes.  Plan: (1) finish the 058 review and freeze the series at patches-6.18/001-058
-(59 files incl. the duplicate-042 pair); (2) regenerate EVIDENCE-SHA256SUMS and the incoming shared
-docs patch; (3) copy the series + docs to the curated repo staging branch, run the series-apply check
-on a pristine 6.18 tree there; (4) add the working-image note (image hash, canonical command line,
-verification matrix) to the bench docs but keep the mirror workaround marked bench-only; (5) publish
-only after the confidentiality/vendor-binary checks pass - no vendor .ko/.o or blobs in tracked
-text.
+The release line is defined in
+[../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md)
+with a one-row-per-patch manifest in
+[../upstream/series-6.18/release-line/manifest.tsv](../upstream/series-6.18/release-line/manifest.tsv):
 
-| target/linux/hisilicon/patches-6.18/058-net-luofu-canonical-bench-config.patch | **Canonical bench config + docs cleanup** (2026-11-20, host-only): documents the working CPU-copy configuration (cpu_mirror=1 mirror_dst=4 + cpucopy_deliver=1 cpucopy_port=11), the W19 dwell CPU-port evidence and the native-CFE long-term note; adds the canonical attended command line and verification matrix; cleans the remaining cosmetic checkpatch warnings. **Host compile (WERROR, 0 warnings), 001-058 series apply RC=0 (59/59), checkpatch 0 errors + 0 checks; never executed on hardware.** | same |
+- L0 lab stack: 62 patch files (`patches-6.18/001-061` plus the duplicate `042`
+  pair), the stack the canonical image was built from;
+- L1 release line: 51 patches = L0 minus the 11 bench-only SMP diagnostics
+  (028, 029, 033, 034, 035, 037, 039, 042-arm, 059, 060, 061); host validation
+  is `../upstream/series-6.18/tools/check-release-line.sh` (51/51 apply, loader
+  hand-off DTS contract compiles and the two nodes are present);
+- L2 upstream review form: the 26-patch `../upstream/series-6.18/series/` plus
+  docs (unchanged in content apart from the 0018 message update).
 
+Publication/cleanup still owed before a clean release snapshot: regenerate
+patches 052/053 as one pair (they share an anchor; 053 currently applies with
+one fuzz hunk on pristine 6.18.60), renumber the duplicate `042` pair, and sync
+L1 + docs to the curated public repos (separate repositories, not touched from
+this notebook).  Publishing must still pass the confidentiality/vendor-binary
+checks - no vendor .ko/.o or blobs in tracked text.
