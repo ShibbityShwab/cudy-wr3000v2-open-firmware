@@ -699,10 +699,14 @@ probe, built from the register and qid-map facts measured on the stock
 vendor boot of 2026-11-18 (INVENTORY-2026-11-18.md section 3,
 LSW-SPEC.md sections 7.3 and 12.3).
 
-The binding grows to the measured shape: 17 MMIO windows (the 15
-512 KiB register pages plus the 4 MiB queue and 1 MiB flow DDR
-regions), the CRG syscon phandle used for the gate and reset state, and
-the measured hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
+The binding grows to the measured shape: 17 windows, with the 15
+512 KiB MMIO register pages first in reg/reg-names order and the two
+DDR regions the engine consumes (4 MiB queue, 1 MiB flow) last, so
+the node unit address is the first MMIO window.  The driver looks the
+resources up by name, so the window order is binding/DTS data only and
+no driver change is needed.  The binding also gains the CRG syscon
+phandle used for the gate and reset state, and the measured
+hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
 luofu-switch-regs.h holds the measured register map with an evidence
 grade on every offset and value, plus the derived qid-table write
 geometry documented as the paper W2 write set.
@@ -1247,7 +1251,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 18 | b83933ee6b1aff92910ce5472ff428f261140f2a98fa8eed1f42cf2e6264479c | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
 | 19 | d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9 | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
 | 20 | 624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212 | 806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8 |
-| 21 | d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497 | de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e |
+| 21 | d249a83a6da6c945cc7f8f588af1f2f2805467b84be7648aba469ed8f68f233e | 86f6f020eb0ee6bb6fe665a11e87542dfe3df4e34864c23d855d28c14269c2e3 |
 | 22 | 8c2b139a4f0b2bff8732363ba5962328bd09fad5e88ff4edeadb48696d157b53 | 33ab13647791b1a0dab5edf151d8eb5a50304f1d8f2690f9f799862ad04fde3e |
 | 23 | 9119bb372977cc1d37e1328f8f110719959841148e8803c67882beb2262343f8 | bf5fb54b663d72b62f92c873c640aaee21eb2496efeee0d06d13153dcc35d0f1 |
 | 24 | 5e93d7200543407841c201a4f6bc8decc664dce5680041f384b31ad44d6271b8 | d81a44fb7c004e66d9c686d0d38ee5cccdf52e8ba6f9e454a92f091352ae36f1 |

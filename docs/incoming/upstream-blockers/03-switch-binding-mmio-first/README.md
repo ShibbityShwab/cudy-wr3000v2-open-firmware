@@ -1,6 +1,6 @@
 # Blocker 4 - switch binding: MMIO-first reg-names
 
-**STATUS: DTS SIDE ADOPTED after hardware boot-test image c3ef2a50 (2026-11-21).**  The target DTS now uses MMIO-first reg/reg-names and the switch data path was verified (br-lan up, ping 15/15).  The in-series binding YAML reorder is still pending as part of blocker 1 (draft YAML work); draft retained.
+**STATUS: FULLY ADOPTED (2026-11-21).**  The target DTS now uses MMIO-first reg/reg-names and the switch data path was verified on image c3ef2a50 (br-lan up, ping 15/15).  The in-series binding YAML was also reordered to MMIO-first and the review form re-ran clean (26/26 patch(1)+git am, checkpatch 0 errors/58 warnings; release-line validator PASS).  Driver unchanged (by-name lookups).  Draft retained for provenance.
 
 ## Current state
 

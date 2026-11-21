@@ -33,15 +33,15 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | artifact | sha256 | role |
 | --- | --- | --- |
 | `../../../target-skeleton/dts/luofu-r116.dts` | `9d96ac31b49cecebd8e99fec7b53ba0ef5ee52132383bd46cf1c0eda0b17f342` | single-source board DTS (outside the package tree) |
-| `../00-cover-letter.md` | `4ea2a3e1337abd47991eb16203e4aed5b84ca51f16afab4f3467135b3bfb086c` | submission document |
-| `../01-commit-messages.md` | `d9fbfa51823d771ec1150358c716a53ea98a03d615529d60f5e0a2e3e4069ecd` | submission document |
+| `../00-cover-letter.md` | `a0accbd4cfd815a0f51c8800cfd8adbddff775749f707a0fa84c3c289e3b66d6` | submission document |
+| `../01-commit-messages.md` | `46eb1afc4584b078bdfc85fe1df67daf7b96a7c2c44b8d7eab9339d46eb70d47` | submission document |
 | `../02-maintainers-proposal.md` | `30ae8a95b2786b3d60153f26fc4b8bf7b0c4b38b78e06e82e60b4a7f26d05c31` | submission document |
 | `../03-rationale-tree-placement.md` | `7fdf3c34343a6004d69fc8cd55a055db02b0e471f363c91270e54889179350fa` | submission document |
-| `../04-validation.md` | `208e7ae622d081f309a04501e6f0a9f46bae93460a3a3d7710375149b7ab35c7` | submission document |
-| `../05-release-line.md` | `e5f989e0299e6e4d772dd532257e9e765d0cab63423be2a293d3b39af47bf82e` | submission document |
-| `../06-dts-series-dependency.md` | `f985972feebb9b25cd3a4348a778c20eb0ecb4a9ae8a2740e6313e061f8fa76e` | submission document |
-| `../07-dts-upstream-bindings.md` | `1c58884abaf1cb7b06d704d6fd153e6996de1e708e6fe813891f903179a04360` | submission document |
-| `../README.md` | `ea0bebdc51b50c400794a1bd3544bf5c10a4ba9bbf3f0872942bec486c00e8c8` | submission document |
+| `../04-validation.md` | `ccfd0521dc3f64a852824060d766c8ab6b15b521b1cc42ff09ff308db11177f3` | submission document |
+| `../05-release-line.md` | `ef142cee46bdfd7cf28df9abef24536120d47e418c66142f622ec5b207be9b3c` | submission document |
+| `../06-dts-series-dependency.md` | `57116dfedbf1d3275bdfc6b35797d1e0dd9922ed9cf83ae142c399cd2a3890c0` | submission document |
+| `../07-dts-upstream-bindings.md` | `9e7089b4a6962f246d498c9760583ea4c28c004844db1ae6b2d37e616b2a2879` | submission document |
+| `../README.md` | `6741ed2a0af324eecf266ac7dbbd390692e08053983b290ab1602f7516c02f01` | submission document |
 | `../commit-messages/0001-arm-mach-hisilicon-luofu.txt` | `766990284609fe095e6d971fc1414972899aa2d5f8d0ff6048a9e1a4415b2ad5` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0002-arm-kconfig-textofs.txt` | `5f188ce552a4d5bd54cd98f031396c0f910d40f8ac9e566712711300a098ca5a` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0003-arm-textofs-nonimmediate.txt` | `76d40be5e780a9a2510fbbf50b0ed16294883881105dc22cea42e389e66e7dbe` | per-patch commit-message draft (provenance) |
@@ -62,7 +62,7 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../commit-messages/0018-arm-mach-hisilicon-smp.txt` | `3c6d80645d45417b3a1c817b97dc5c6b481585d82dc94aa7d4dba9fa0dbcdcba` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0019-arm-clk-luofu-clock-tree.txt` | `957ebc55793bd4ee4b04343fbb408cf0330f67441af5177b3eab7c8dbcbd7372` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0020-net-pie-datapath-luofu.txt` | `5b5491cc011a0507991e0adb17b3ba4e109da11f028ee3cfb8091a549a5d821b` | per-patch commit-message draft (provenance) |
-| `../commit-messages/0021-net-lsw-init-luofu.txt` | `f783373b43c94012737f3632cae784a92acf6a6207f83af1c43847be5e1ebf05` | per-patch commit-message draft (provenance) |
+| `../commit-messages/0021-net-lsw-init-luofu.txt` | `e5c7050afb38d4bb9f95f3f4489324e1b000d33cf4ff1efbaf979691fc820079` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0022-net-lsw-qidmap-write-luofu.txt` | `f0e486a5064482686dc9df1fb8ce1d7661436d77f2c3912cf800b9521ab31d2a` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0023-net-gmac-netdev-connect-luofu.txt` | `a4f982aff5e990243344996ff1b923912caa0a72f0bd739a8fac2075cbfec8be` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0024-net-pie-completion-decode-luofu.txt` | `4f0ed10cb5849f9ecc27eb523714f4a04c833f668a6773fd8b91fd88e5938814` | per-patch commit-message draft (provenance) |
@@ -71,7 +71,7 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8` | DTS-series entry DTS-0001 (companion of 0018) |
 | `../release-line/EXCLUDED.txt` | `35501a8366bb3404faaf6a3c3b0bb5bce684ebd6e36a2cee03a95a31b1b6895e` | release-line manifest/classification |
 | `../release-line/INCLUDED.txt` | `af5f32e40fd6bb7995205f90e4f5e2c796398c3fd8f15ba86d5f62c1305e9120` | release-line manifest/classification |
-| `../release-line/manifest.tsv` | `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0` | release-line manifest/classification |
+| `../release-line/manifest.tsv` | `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a` | release-line manifest/classification |
 | `../series/0001-arm-mach-hisilicon-luofu.patch` | `c5eef73ce928b2e9f1bd0f397c3164d6b7a108fc930ccf7e537b184c81eee08b` | kernel review-form patch |
 | `../series/0002-arm-kconfig-textofs.patch` | `bbb0266e2230d1c7e11ea616cd2f5591e1e3e043f042a62bc0c871f802597ad5` | kernel review-form patch |
 | `../series/0003-arm-textofs-nonimmediate.patch` | `3bdcf2bcee6c8a6ceece7ca1ec357702230b979eae79578d0d67cc479c05befe` | kernel review-form patch |
@@ -92,7 +92,7 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../series/0018-arm-mach-hisilicon-smp.patch` | `b83933ee6b1aff92910ce5472ff428f261140f2a98fa8eed1f42cf2e6264479c` | kernel review-form patch |
 | `../series/0019-arm-clk-luofu-clock-tree.patch` | `d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9` | kernel review-form patch |
 | `../series/0020-net-pie-datapath-luofu.patch` | `624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212` | kernel review-form patch |
-| `../series/0021-net-lsw-init-luofu.patch` | `d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497` | kernel review-form patch |
+| `../series/0021-net-lsw-init-luofu.patch` | `d249a83a6da6c945cc7f8f588af1f2f2805467b84be7648aba469ed8f68f233e` | kernel review-form patch |
 | `../series/0022-net-lsw-qidmap-write-luofu.patch` | `8c2b139a4f0b2bff8732363ba5962328bd09fad5e88ff4edeadb48696d157b53` | kernel review-form patch |
 | `../series/0023-net-gmac-netdev-connect-luofu.patch` | `9119bb372977cc1d37e1328f8f110719959841148e8803c67882beb2262343f8` | kernel review-form patch |
 | `../series/0024-net-pie-completion-decode-luofu.patch` | `5e93d7200543407841c201a4f6bc8decc664dce5680041f384b31ad44d6271b8` | kernel review-form patch |
@@ -103,15 +103,15 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../tools/gen-series.py` | `833efd29a9c8a6700cbbb4ba483a2195a5c19d5be1fca74d0aecda4c76e24f6f` | validation/regeneration tool |
 | `../tools/run-validation.sh` | `460de5bc233b965140c4145de590074c0d2014b9a0dbb6747543bb1ca6046a25` | validation/regeneration tool |
 | `../validation/checkpatch-default-summary.txt` | `30809589945efcc293a2d59130aeb3fc3a2d3b924ea91251557d04ea30d7d44e` | validation log |
-| `../validation/checkpatch-default.log` | `c297d476734d9d90ffc406db19567d4fd54535b95fb8384526576b4c9218dd83` | validation log |
+| `../validation/checkpatch-default.log` | `69748a2e6379b4a9fe3e7928c700b21258fa8f47c49158a9df0c873430e8e448` | validation log |
 | `../validation/checkpatch-strict-summary.txt` | `a2732ceb427e9d7103524f1c7439e77103d7f4b290f06df03bac77e1c1e07f6d` | validation log |
-| `../validation/checkpatch-strict.log` | `a44116402b26951171652687b2a0d23e7c05eebff7fcddf2f8cf7c51490bb085` | validation log |
+| `../validation/checkpatch-strict.log` | `745a97eee0ebe82fbcfa6b5b8762a717557725f7fc48ea5c7066e8549a292899` | validation log |
 | `../validation/checkpatch-summary.txt` | `f54741bf38811a5ab3a18d6c2a2d4af2ff88144a382469ffa8a5d7c56b2ed4b3` | validation log |
 | `../validation/checkpatch-version.txt` | `92e929bf6fdae4a35e44eef54cf2dbcf4d465b241139574b3f57de488fd5818c` | validation log |
 | `../validation/git-am-summary.txt` | `19da267e633c7ebe507b101ca05a4ba1ba55272f9b47a92002989046d23683fc` | validation log |
 | `../validation/git-am.log` | `2672c0d1eabda0987b677df383c49674745345abb06b73bac1183cd603056de9` | validation log |
 | `../validation/git-diffstat.txt` | `28e2c642cd3ff30b131350dd6a3bb2fb0ea331a1921c5bd7804ea4d56ba7df92` | validation log |
-| `../validation/git-log.txt` | `221ad19073995773d101e1b3dec8aee0b915f5f4ba63af32dc8a49c57ec904ce` | validation log |
+| `../validation/git-log.txt` | `3cf37a50a4e88023836637553602d07f0ef5296c16350fd58da3bd62173dad1f` | validation log |
 | `../validation/git-status.txt` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | validation log |
 | `../validation/offsets.txt` | `8140eb24235ed434a8db162121fd90e72c5fa9d5bc97c5b220c9704f26647423` | validation log |
 | `../validation/patch-apply.log` | `48db9433a6cb504760c24af893c2d56b93cc3d34ab798dc953520c0b0ba31d09` | validation log |
@@ -127,7 +127,7 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../validation/release-line/pad-dtb.log` | `15d73e87fd98ed5514188700f0558d15ab8dab8548456be9367dd89252cb63bf` | validation log |
 | `../validation/release-line/patch-apply.log` | `29c2b56b31433342b568973e8bd73c8c65bcb611b5aacdf8dab58820ceec06a1` | validation log |
 | `../validation/release-line/summary.txt` | `fdfb774cc73dadc824b8ed26acb0c8791e8f5120bbabe3ecc726592fb5d92b9b` | validation log |
-| `../validation/sha256sums.txt` | `e6fafb83322f3084b78ec1f3cdd8480301af4ae77266487163e8ff5743cdd34c` | validation log |
+| `../validation/sha256sums.txt` | `ae569024741a6d430b45097f70e1cf18bb94fcb61d003234bed71f0129e40d8d` | validation log |
 | `../validation/tree-diff.log` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | validation log |
 | `../validation/tree-equivalence.txt` | `7a399c88d8c6aad4e39f3553c6c4b56986823f6c666bc87c35be41d74845b2a2` | validation log |
 | `../validation/version.txt` | `fca6872c788884dd9df279d37e972d76924f2426be56259c9c451a47ae93f95e` | validation log |
@@ -161,24 +161,26 @@ checks (patch apply, dtc, contract, pad, checkpatch) are necessary but not
 sufficient - the rebuilt image must be boot-tested on the unit after any
 active-DTS change.
 
-## Two remaining blockers before this could be merge-intent (status 2026-11-21); all active-DTS deltas boot-tested
+## One remaining blocker before this could be merge-intent (status 2026-11-21)
 
-Blocker-reduction drafts (documentation + patch drafts only for the remaining
-work) live under `../../../docs/incoming/upstream-blockers/`.
+Blocker-reduction drafts (documentation + patch drafts) live under
+`../../../docs/incoming/upstream-blockers/`.
 
 | # | blocker | status | draft |
 | --- | --- | --- | --- |
-| 1 | drivers + YAMLs are still drafts | open - prioritized top-issue review; the in-series switch binding YAML still needs the MMIO-first reorder (DTS side boot-tested) | `05-driver-yaml-review.md`, `03-switch-binding-mmio-first/binding.diff` |
-| 2 | `hsan,flashinfo_reserved` has no upstream binding | drafted reserved-memory child binding; maintainer direction needed; boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
+| 1 | `hsan,flashinfo_reserved` / loader hand-off binding | **final host-side option chosen; ONE loader boot-test required** - documented `hisilicon,luofu-flashinfo` compatible first with the vendor string as fallback; maintainer questions ready; not hardware-tested | `01-flashinfo-reserved-memory/` |
 
-**Closed by hardware boot-tests:** TWD level-high (image f6685b80, 2 CPUs,
-`GIC-0 29 Level twd`, counts ~100 Hz, ping 20/20); MAC-nvmem removal,
-switch MMIO-first order and cudy-compatible ordering (image c3ef2a50:
-board_name=cudy,wr3000-v2, userspace MACs ...:73/...:74, br-lan up, ping 15/15).
+**Closed by hardware boot-tests / adopted without hardware:** TWD level-high
+(image f6685b80); MAC-nvmem removal, switch MMIO-first order and cudy-compatible
+ordering (image c3ef2a50); the in-series switch binding YAML was reordered to
+MMIO-first (driver unchanged, by-name lookups) and the review form re-ran clean
+(26/26 patch(1)+git am, 0 errors / 58 warnings; release-line validator PASS).
+The remaining draft-driver/YAML review items are normal RFC content, not a DTS
+blocker task.
 
-**What remains hardware-dependent:** only a possible one-loader boot-test for
-the flashinfo binding if the vendor compatible moves; the driver/YAML cleanups
-are code review.  Full record: `../07-dts-upstream-bindings.md` section 6.
+**What remains hardware-dependent:** only the flashinfo compatible-order loader
+boot-test (exact procedure: `01-flashinfo-reserved-memory/README.md`).  Full
+record: `../07-dts-upstream-bindings.md` section 6.
 
 **Not claimed / out of scope (not counted as blockers above):** pinctrl consumer
 states, consumer clocks, the A/B boot-selector protocol beyond the measured

@@ -54,14 +54,17 @@ board_name=cudy,wr3000-v2, userspace MACs ...:73/...:74, ping 15/15; previous
 DTS-purpose baseline f6685b80 and earlier baseline 7421bb7a).  Host checks are
 necessary but not sufficient.
 
-**Two remaining blockers before merge intent:** (1) the drivers/bindings are
-still drafts (including the in-series switch binding reorder); (2)
-`hsan,flashinfo_reserved` has no upstream binding.  The TWD flags, 6.18 MAC
-provisioning, switch MMIO-first order and cudy-compatible ordering blockers were
-closed by individual hardware boot-tests (images f6685b80 and c3ef2a50).
-Pinctrl consumer states, consumer clocks, the A/B selector protocol beyond the
-measured cell, LED description, Wi-Fi and thermal support are out of scope for
-this wired-first RFC.
+**One remaining blocker before merge intent:** `hsan,flashinfo_reserved` /
+the loader hand-off binding.  The final host-side option is a documented
+`hisilicon,luofu-flashinfo` compatible first with the vendor string as
+fallback plus the drafted reserved-memory binding; it needs one loader
+boot-test (exact procedure in the blocker-reduction README), not yet run and
+not claimed.  The TWD flags, 6.18 MAC provisioning, switch MMIO-first order
+(DTS + in-series binding) and cudy-compatible ordering blockers are closed by
+individual hardware boot-tests (images f6685b80 and c3ef2a50).  Pinctrl
+consumer states, consumer clocks, the A/B selector protocol beyond the measured
+cell, LED description, Wi-Fi and thermal support are out of scope for this
+wired-first RFC.
 
 I would welcome comments on the split and on the RFC group; I am not asking for
 a merge in this round and I will not add a Tested-by that no independent party

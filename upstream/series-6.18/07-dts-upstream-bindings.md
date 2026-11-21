@@ -122,15 +122,18 @@ present in the hardware-verified DTB and are not prose:
 
 1. `flashinfo@80600000` uses the vendor compatible
    `"hsan,flashinfo_reserved"`; it is the stock loader contract and has no
-   upstream binding.
+   upstream binding yet.  The final host-side option is a documented
+   `hisilicon,luofu-flashinfo` compatible first with the vendor string kept as
+   fallback, plus the drafted reserved-memory binding; adopting it needs ONE
+   loader boot-test (see section 6).
 2. The bdinfo MAC nvmem cells are **removed** in the adopted 6.18 DTS (commit
    6c2cc2f): MACs are provisioned by userspace/the vendor path, boot-tested on
    image c3ef2a50 (eth0-eth2 = MAC ...:73, eth3 = ...:74).
-3. The switch `reg`/`reg-names` now put the 15 MMIO windows first and the
-   two DDR regions last (boot-tested data path, image c3ef2a50), matching the
-   MMIO-first binding draft.  The in-series binding YAML still has the old
-   queue-first order and must be updated when the draft YAML work lands
-   (blocker 1); the node stays `ethernet-switch@11000000`.
+3. The switch `reg`/`reg-names` put the 15 MMIO windows first and the
+   two DDR regions last (boot-tested data path, image c3ef2a50).  The in-series
+   binding YAML was reordered to match and the review form re-ran clean (26/26
+   patch(1)+git am, checkpatch 0 errors/58 warnings); the node stays
+   `ethernet-switch@11000000` and the driver is unchanged (by-name lookups).
 4. `gpio-keys-polled` child names (`reset`/`wps`) and the
    gpio-leds child names (`led-status`...) do not use the preferred
    standard names; kept until the rename is boot-tested (optional deltas 2/3).
@@ -141,8 +144,10 @@ present in the hardware-verified DTB and are not prose:
    the hardware fact.
 6. The root compatible now starts with `cudy,wr3000-v2` (boot-tested
    `board_name`, image c3ef2a50).
-7. The draft in-series bindings/drivers are not upstream, so the board DTS
-   cannot be submitted before they are accepted.
+7. The in-series drivers/bindings are still RFC/draft content for upstream
+   review; that is the normal submission state, not a remaining DTS blocker
+   task.  The prioritized review is in
+   `../../docs/incoming/upstream-blockers/05-driver-yaml-review.md`.
 
 There is **no dtschema/dt-validate/yamllint tooling** available in this
 checkout (no module, binary, pip or yamllint), so a real `make dtbs_check` /
@@ -184,18 +189,35 @@ review against the in-series YAMLs and the standard 6.18 bindings.
   Oops/BUG/panic/RCU-stall).  Any future active-DTS change must repeat the
   boot-test; host checks cannot substitute for it.
 
-## 6. Remaining upstream blockers (two) - after the 2026-11-21 final boot-tests
+## 6. Remaining upstream blocker (one) - after the 2026-11-21 final adoptions
 
-Four active-devicetree deltas were adopted after individual hardware
-boot-tests: TWD level-high (image f6685b80) and the MAC-nvmem removal +
-switch MMIO-first order + cudy compatible order (image c3ef2a50).  **Two
-blockers remain**, both documented with blocker-reduction drafts under
-`../../docs/incoming/upstream-blockers/`:
+Four active-devicetree deltas were adopted after individual hardware boot-tests
+(TWD level-high, image f6685b80; MAC-nvmem removal, switch MMIO-first order and
+cudy-compatible ordering, image c3ef2a50).  The in-series switch binding YAML
+was then reordered to MMIO-first as well (review form re-ran 26/26
+patch(1)+git am, checkpatch 0 errors / 58 warnings; release-line validator
+PASS).  **One blocker remains:**
 
-| # | blocker | status | draft |
+| # | blocker | status | artifact |
 | --- | --- | --- | --- |
-| 1 | Drivers + YAMLs are still drafts | **open** - prioritized top-issue review; the in-series switch binding YAML still needs the MMIO-first reorder (DTS side boot-tested; binding-side change is part of this draft YAML work); no code rewrite attempted | `05-driver-yaml-review.md`, `03-switch-binding-mmio-first/binding.diff` |
-| 2 | `hsan,flashinfo_reserved` has no upstream binding | **drafted** - reserved-memory child binding + compatible/loader-compatibility options; needs maintainer direction; one hardware loader boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
+| 1 | `hsan,flashinfo_reserved` / loader hand-off binding | **final host-side option chosen; ONE loader boot-test required** - documented `hisilicon,luofu-flashinfo` compatible first, vendor string kept as fallback; draft reserved-memory binding + maintainer questions ready; no hardware claim | `../../docs/incoming/upstream-blockers/01-flashinfo-reserved-memory/` |
+
+The remaining draft-driver/YAML review items (prioritized in
+`../../docs/incoming/upstream-blockers/05-driver-yaml-review.md`) are normal
+RFC submission content, not a DTS blocker task.
+
+**Exact hardware test still needed (not run, not claimed):** start from the
+current final DTS (681 lines sha256 `9d96ac31...`, image c3ef2a50 lineage),
+change ONLY the flashinfo `compatible` list to
+`"hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"`, build the normal
+target image (with `Build/luofu-pad-dtb`), install it with the verified
+path (pair b, selector 0x11), capture UART read-only and verify: the stock
+`bootfip` prints its staging lines (`alias console=...`,
+`serialnr->...`, `atag_addr=0x80601000`), the kernel boots with 2 CPUs
+(CPU1 online), no data abort, no fallback to stock pair A.  If staging bails,
+revert to the vendor-first/only compatible and pursue the vendor-prefix
+fallback plan rather than guessing.  This tests the loader's compatible match
+behavior, not the kernel.
 
 **Closed by hardware boot-tests (2026-11-21):**
 
@@ -205,18 +227,12 @@ blockers remain**, both documented with blocker-reduction drafts under
 - **6.18 MAC provisioning** (was blocker 3): nvmem cells removed; userspace/
   vendor MAC path boot-tested on image **c3ef2a50** (eth0-eth2 ...:73, eth3
   ...:74).
-- **Switch MMIO-first order** (was blocker 4): DTS only, image **c3ef2a50**
-  (switch data path works: br-lan up, ping 15/15 0% loss); the matching
-  binding YAML reorder remains part of blocker 1.
+- **Switch MMIO-first order** (was blocker 4): DTS boot-tested on c3ef2a50
+  (switch data path: br-lan up, ping 15/15); in-series binding YAML reordered
+  to match, driver unchanged (by-name lookups), review form rerun clean.
 - **cudy compatible ordering + OpenWrt metadata** (was blocker 5): image
-  **c3ef2a50** (`/tmp/sysinfo/board_name = cudy,wr3000-v2`,
-  /proc/device-tree/compatible starts with cudy,wr3000-v2, SUPPORTED_DEVICES
-  updated).
-
-**What is hardware-dependent now:** none among the two remaining blockers except
-a possible one-loader boot-test for the flashinfo binding if the vendor
-compatible is moved from first position.  The driver/YAML cleanups are code
-review, not hardware.
+  **c3ef2a50** (`/tmp/sysinfo/board_name = cudy,wr3000-v2`, compatible
+  order, SUPPORTED_DEVICES updated).
 
 ### 6.1 TWD timer interrupt flags - CLOSED (boot-tested, image f6685b80)
 
@@ -266,11 +282,11 @@ installed with the verified telnet installer (PASS; pair b, selector 0x11):
 Adopted in commit `6c2cc2f` (target DTS + OpenWrt SUPPORTED_DEVICES).
 Current DTS 681 lines sha256 `9d96ac31...`; DTB 12,650 B sha256
 `a0af2899...` (pad 12,656 B sha256 `01b74561...`); DTS-0001 sha256
-`c029fd44...` (694 lines).  The in-series switch binding YAML still has
-the old queue-first `reg-names` order; updating it is part of blocker 1
-(draft YAML work) and must be applied with the series before posting.
+`c029fd44...` (694 lines).  The in-series switch binding YAML was
+reordered to MMIO-first (review form rerun: 26/26 patch(1)+git am, checkpatch
+0 errors / 58 warnings; release-line validator PASS).
 
-**Not claimed / out of scope (not counted among the two blockers):** pinctrl
+**Not claimed / out of scope (not counted as the remaining blocker):** pinctrl
 consumer states, consumer clocks, the A/B boot-selector protocol beyond the
 measured `0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi
 and thermal support, and the unused vendor blocks (wired-first target).

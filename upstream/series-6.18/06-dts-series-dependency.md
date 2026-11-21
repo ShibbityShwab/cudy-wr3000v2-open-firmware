@@ -158,7 +158,7 @@ feature refresh):
 - source-patch hashes refreshed in the release-line manifest for
   `056` (`dev_info` -> `dev_dbg` for the periodic W19 relatch line;
   `054` content is unchanged); manifest sha256
-  `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0`.
+  `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a`.
 
 Logs: `validation/release-line/` (including `dts-series-apply.log` and the two
 `dts-series-*.err` files).  No hardware was touched and no kernel build was

@@ -1310,3 +1310,44 @@ submodule commit **6c2cc2f** (target DTS + OpenWrt `SUPPORTED_DEVICES`).
 earlier (f6685b80); **two blockers remain** (07 section 6): draft
 drivers/YAMLs (including the in-series binding reorder) and the flashinfo
 binding.  Logs: `validation/release-line/` refreshed.
+
+
+## 27. 2026-11-21 switch binding MMIO-first adoption into the series (review-form rerun)
+
+The boot-tested DTS already used MMIO-first switch `reg`/`reg-names`;
+the in-series binding YAML (source patch
+`021-net-lsw-init-luofu.patch`, and the generated review-form file
+`series/0021-net-lsw-init-luofu.patch`) was reordered to match, so the DTS
+and the binding now agree.  The driver needs no change: it looks the switch
+resources up by name (`platform_get_resource_byname` /
+`devm_platform_ioremap_resource_byname`); the enum order is internal.
+
+The patch commit message was updated to state the new order and that the window
+order is binding/DTS data only.
+
+**Rerun results (2026-11-21, host-only):**
+
+- **source patch** `021-net-lsw-init-luofu.patch`: sha256
+  `86f6f020eb0ee6bb6fe665a11e87542dfe3df4e34864c23d855d28c14269c2e3`;
+  generated review-form file
+  `series/0021-net-lsw-init-luofu.patch`: sha256
+  `d249a83a6da6c945cc7f8f588af1f2f2805467b84be7648aba469ed8f68f233e`;
+- **upstream review form:** patch(1) 26/26 RC=0 (3 offset hunks, 0 fuzz, 0
+  rejects), `git am` 26/26 RC=0, resulting trees identical; checkpatch
+  default and `--strict`: **0 errors, 58 warnings**;
+  `gen-series.py --check` clean;
+- **release-line validator PASS:** 51/51 patch(1) RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**, strict `git apply` 51/51; target
+  DTS contract and DTS-0001 identity PASS (DTS unchanged: 681 lines sha256
+  `9d96ac31...`; DTB 12,650 B sha256 `a0af2899...`, pad 12,656 B
+  sha256 `01b74561...`);
+- release-line manifest refreshed: 51 include / 11 exclude / 62 patches;
+  manifest sha256
+  `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a`;
+  `validation/sha256sums.txt` 89 entries, `sha256sum -c` passes 89/89;
+- **flashinfo binding** is the only remaining blocker.  The final host-side
+  option (documented `hisilicon,luofu-flashinfo` compatible first with the
+  vendor string as fallback, plus the drafted reserved-memory binding) and the
+  exact one-variable loader boot-test are specified in
+  `../../docs/incoming/upstream-blockers/01-flashinfo-reserved-memory/README.md`;
+  it has **not** been run and no hardware claim is made.

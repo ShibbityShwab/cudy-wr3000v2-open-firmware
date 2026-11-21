@@ -5,10 +5,14 @@ probe, built from the register and qid-map facts measured on the stock
 vendor boot of 2026-11-18 (INVENTORY-2026-11-18.md section 3,
 LSW-SPEC.md sections 7.3 and 12.3).
 
-The binding grows to the measured shape: 17 MMIO windows (the 15
-512 KiB register pages plus the 4 MiB queue and 1 MiB flow DDR
-regions), the CRG syscon phandle used for the gate and reset state, and
-the measured hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
+The binding grows to the measured shape: 17 windows, with the 15
+512 KiB MMIO register pages first in reg/reg-names order and the two
+DDR regions the engine consumes (4 MiB queue, 1 MiB flow) last, so
+the node unit address is the first MMIO window.  The driver looks the
+resources up by name, so the window order is binding/DTS data only and
+no driver change is needed.  The binding also gains the CRG syscon
+phandle used for the gate and reset state, and the measured
+hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
 luofu-switch-regs.h holds the measured register map with an evidence
 grade on every offset and value, plus the derived qid-table write
 geometry documented as the paper W2 write set.

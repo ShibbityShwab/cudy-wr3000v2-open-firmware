@@ -24,7 +24,7 @@ include	A	017-soc-luofu-boot-selector.patch	c991aaa50419f4b6ba0c9a37018a682c0a7a
 include	A	018-arm-mach-hisilicon-smp.patch	5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b	SMP release driver (vendor-faithful pen/resume/IPI CPU method)
 include	A	019-arm-clk-luofu-clock-tree.patch	9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c	CRG clock tree (read-only PLLs/muxes, gate parents)
 include	A	020-net-pie-datapath-luofu.patch	806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8	PIE ring engine + GEMAC front end (gated)
-include	A	021-net-lsw-init-luofu.patch	de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e	LSW read-only baseline probe (W1)
+include	A	021-net-lsw-init-luofu.patch	86f6f020eb0ee6bb6fe665a11e87542dfe3df4e34864c23d855d28c14269c2e3	LSW read-only baseline probe (W1)
 include	A	022-net-lsw-qidmap-write-luofu.patch	33ab13647791b1a0dab5edf151d8eb5a50304f1d8f2690f9f799862ad04fde3e	LSW gated W3/W4/W5 power + qid-map write path
 include	A	023-net-gmac-netdev-connect-luofu.patch	bf5fb54b663d72b62f92c873c640aaee21eb2496efeee0d06d13153dcc35d0f1	GEMAC netdev readiness gate (phylink, PIE-armed + switch-ready)
 include	A	024-net-pie-completion-decode-luofu.patch	d81a44fb7c004e66d9c686d0d38ee5cccdf52e8ba6f9e454a92f091352ae36f1	PIE RX completion decode + normal TX descriptor

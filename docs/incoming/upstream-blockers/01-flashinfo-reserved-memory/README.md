@@ -1,6 +1,9 @@
-# Blocker 2 - upstream binding for the loader hand-off window
+# Blocker 2 (last remaining) - upstream binding for the loader hand-off window
 
-## Measured contract (from SMP-RE.md section 24)
+**STATUS: draft binding + final host-side option; ONE loader boot-test still
+required before adoption.**  No hardware claim is made here.
+
+## Measured contract (SMP-RE.md section 24)
 
 The stock Cudy/Hisilicon U-Boot `bootfip` refuses to stage the kernel unless
 the base DTB carries:
@@ -12,54 +15,62 @@ the base DTB carries:
    `atag_addr = 0x80601000`.
 
 Without them staging bails ("alias console not found") and CPU1 never enters the
-loader pen-poll loop; with them the target image boots 2 CPUs.  This is the
-measured release-critical contract.
+loader pen-poll loop.  This is measured and release-critical.
 
-## Why a binding is needed
+## Final recommended option (host-side decision, not hardware-tested)
 
-An unreviewed vendor compatible/property set inside `reserved-memory` cannot be
-merged.  Upstream already has reserved-memory child bindings (ramoops,
-shared-dma-pool, vendor SRAM windows), so a SoC-specific child binding that
-documents a loader hand-off window is a normal shape.
+Use a documented `hisilicon` compatible first and keep the vendor string as a
+fallback:
 
-## Options (recommended order)
+    flashinfo@80600000 {
+        compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved";
+        reg = <0x80600000 0x4000>;
+        atag-offset = <0x1000>;
+    };
 
-- **A (recommended, needs loader check):** add the documented
-  `"hisilicon,luofu-flashinfo"` string first and keep the vendor string as a
-  fallback: `compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved";`.
-  The binding (`hisilicon,luofu-flashinfo.yaml`) documents both forms.  This is
-  only safe if the loader's node match still succeeds with the vendor string in
-  second position - the decoded loader path is not instruction-level proven, so
-  **one boot-test is required** before adopting the DTS delta.
-- **B (no DTS change, weakest):** keep the vendor compatible as-is and register
-  `hsan` in `Documentation/devicetree/bindings/vendor-prefixes.yaml` with a
-  rationale ("HiSilicon luofu vendor loader prefix").  Upstream may reject an
-  undocumented vendor prefix or require the vendor to document it.
-- **C (DTS change with new compatible only):** drop the vendor string entirely -
-  not recommended: the loader contract is measured with the vendor string and
-  would need a full hardware re-qualification.
+The proposed binding is `hisilicon,luofu-flashinfo.yaml` (draft under
+`Documentation/devicetree/bindings/reserved-memory/`); its `compatible`
+schema accepts the new string, the vendor string, and the pair in that order.
+The vendor string stays in the DTS as the loader-compatibility fallback; it is
+retained only because the stock loader's match path has not been re-tested with
+the new string first.
+
+Fallback plan if the loader test fails: keep the vendor compatible first/only
+and register `hsan` in `Documentation/devicetree/bindings/vendor-prefixes.yaml`
+(or ask the maintainers whether the vendor-only reserved-memory child can be
+documented as the loader contract); do not rename the vendor string in the DTS.
+
+## Exact hardware test required (one variable, not yet run)
+
+1. Start from the current final board DTS (681 lines, sha256 `9d96ac31...`;
+   image baseline c3ef2a50 lineage).  Change ONLY the flashinfo `compatible`
+   list to the recommended pair; no other active DTS delta.
+2. Build the same target image (the normal image recipe, including
+   `Build/luofu-pad-dtb`), record its sha256 and the DTB size/sha.
+3. Install on the unit with the verified path (pair b, selector 0x11 is the
+   current known-good state) and capture UART read-only (no typing).
+4. **PASS criteria:** the stock `bootfip` prints its staging lines
+   (`alias console=...`, `serialnr->high/low=...`,
+   `atag_addr=0x80601000`), the kernel boots, CPU1 comes up (2 CPUs), no
+   data abort, no fallback to stock pair A.
+5. **FAIL criterion:** staging bails/falls back to stock; then revert to the
+   vendor-first/only compatible and pursue the fallback plan rather than
+   guessing.
+
+This tests the loader's compatible match behavior, not the kernel.  It is the
+only hardware item left for the blocker list.
 
 ## Draft artifacts
 
-- `hisilicon,luofu-flashinfo.yaml` - proposed
-  `Documentation/devicetree/bindings/reserved-memory/` schema.
-- `dts-flashinfo-compatible.diff` - option-A DTS delta (compatible list
-  change only; `reg`/`atag-offset` unchanged).
+- `hisilicon,luofu-flashinfo.yaml` - proposed reserved-memory child binding.
+- `dts-flashinfo-compatible.diff` - the compatible-list delta (the only
+  change in the hardware test).
 
-## Questions for maintainers
+## Maintainer questions
 
 1. Is a SoC-specific reserved-memory child binding acceptable for a
-   bootloader-consumed hand-off window, or should this be modelled as a
-   `memory-region` consumed by a small "loader hand-off" driver?
-2. Is `hsan` acceptable as a registered vendor prefix, or must the documented
-   `hisilicon` string be first?
-3. Should the binding live under `bindings/reserved-memory/` or under
-   `bindings/arm/hisilicon/`?
-
-## Remaining work
-
-- Maintainer direction on shape/prefix.
-- If option A is chosen: one hardware boot-test (loader staging must still
-  complete); otherwise no DTS change.
-- Add the chosen compatible to `07-dts-upstream-bindings.md` and the submission
-  package once confirmed.
+   bootloader-consumed hand-off window?
+2. Is the `hisilicon` compatible first acceptable with the vendor string kept
+   as fallback, or should the vendor-only form be documented instead?
+3. Where should the binding live (`bindings/reserved-memory/` or
+   `bindings/arm/hisilicon/`)?

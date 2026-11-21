@@ -381,7 +381,7 @@ NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0021-net-lsw-init-luofu.patch
 WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
-#85: 
+#89: 
 new file mode 100644
 
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst

@@ -294,7 +294,7 @@ Ordering notes (both items fixed 2026-11-21):
   to `dev_dbg`: patch **054** (`dev_warn` -> `dev_dbg`) and patch
   **056** (`dev_info` -> `dev_dbg`).  Manifest hashes were refreshed
   (054 `9e3c01c3...`, 056 `eae38ae3...`; manifest sha256
-  `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0`).
+  `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a`).
   The base-files heartbeat interval also changed 5 s -> 60 s (target content,
   not a kernel patch).
 
@@ -346,9 +346,11 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   lines); applies to the L1 tree RC=0; its added board DTS is byte-identical to
   the single-source target DTS; the compiled DTB and the contract checks are
   identical to the target-DTS ones [V];
-- upstream review form: not rerun - no series file changed by these DTS-only
-  deltas; last recorded run remains 26/26 patch(1)+`git am`, identical
-  trees, 0 errors / 58 warnings [V];
+- upstream review form: re-ran after adopting the MMIO-first switch binding
+  YAML into patch 021: 26/26 patch(1)+`git am`, identical trees, 3 offset
+  hunks, 0 fuzz, 0 errors / 58 checkpatch warnings; source patch sha256
+  `86f6f020...`, series file sha256 `d249a83a...` (driver unchanged,
+  by-name lookups) [V];
 - current final DTS: conservative cleanup (comments only; commit `7ae18f2`)
   + boot-tested TWD level-high (commit `5b401c1`, image f6685b80) +
   boot-tested MAC-nvmem removal, switch MMIO-first order and cudy-compatible

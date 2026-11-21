@@ -69,7 +69,7 @@ final 26-patch pass.
   patch 0018 and is documented in `06-dts-series-dependency.md`.  The
   validator applies/compiles it and checks the loader hand-off contract.  The
   cleanup record, the **hardware regression of the superseded active cleanup**,
-  the boot-test adoptions and the **two remaining upstream blockers** are in
+  the boot-test adoptions, the in-series switch binding reorder and the **one remaining upstream blocker** are in
   `07-dts-upstream-bindings.md`.
 
   **Hardware regression (2026-11-21):** the first active-DTS cleanup (commit
@@ -146,7 +146,7 @@ overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
 | `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
-| `07-dts-upstream-bindings.md` | the board-DTS record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup, the four individually boot-tested active deltas, the manual binding review (no dtschema available), compile/pad facts and the two remaining upstream blockers |
+| `07-dts-upstream-bindings.md` | the board-DTS record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup, the four individually boot-tested active deltas, the manual binding review (no dtschema available), compile/pad facts and the one remaining upstream blocker (flashinfo loader binding) |
 | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | commit-ready DTS-series entry (DTS-0001): board DTS + hisilicon DTS Makefile line; companion to 0018 |
 | `tools/gen-dts-series-patch.py` | deterministic generator for DTS-0001 from the single-source target DTS |
 | `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |

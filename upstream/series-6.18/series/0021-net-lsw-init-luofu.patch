@@ -8,10 +8,14 @@ probe, built from the register and qid-map facts measured on the stock
 vendor boot of 2026-11-18 (INVENTORY-2026-11-18.md section 3,
 LSW-SPEC.md sections 7.3 and 12.3).
 
-The binding grows to the measured shape: 17 MMIO windows (the 15
-512 KiB register pages plus the 4 MiB queue and 1 MiB flow DDR
-regions), the CRG syscon phandle used for the gate and reset state, and
-the measured hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
+The binding grows to the measured shape: 17 windows, with the 15
+512 KiB MMIO register pages first in reg/reg-names order and the two
+DDR regions the engine consumes (4 MiB queue, 1 MiB flow) last, so
+the node unit address is the first MMIO window.  The driver looks the
+resources up by name, so the window order is binding/DTS data only and
+no driver change is needed.  The binding also gains the CRG syscon
+phandle used for the gate and reset state, and the measured
+hisilicon,port-bitmap = <0xf01 0x1ff0>.  The new
 luofu-switch-regs.h holds the measured register map with an evidence
 grade on every offset and value, plus the derived qid-table write
 geometry documented as the paper W2 write set.
@@ -52,8 +56,8 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
  drivers/net/ethernet/hisilicon/Kconfig             |   11 
  drivers/net/ethernet/hisilicon/luofu-switch-regs.h |  214 +++++
  drivers/net/ethernet/hisilicon/luofu-switch.c      |  874 ++++++++++++++++----
- .../bindings/net/hisilicon,luofu-switch.yaml       |   84 +-
- 4 files changed, 963 insertions(+), 220 deletions(-)
+ .../bindings/net/hisilicon,luofu-switch.yaml       |   82 +-
+ 4 files changed, 962 insertions(+), 219 deletions(-)
 
 diff --git a/drivers/net/ethernet/hisilicon/Kconfig b/drivers/net/ethernet/hisilicon/Kconfig
 --- a/drivers/net/ethernet/hisilicon/Kconfig
@@ -136,12 +140,12 @@ new file mode 100644
 +#include <linux/types.h>
 +
 +/*
-+ * The register/DDR windows of one switch, in the devicetree address order
-+ * used by the binding.  The first two are DDR regions the engine consumes,
-+ * not register pages: the driver validates their base/size from the
-+ * devicetree and never ioremaps them.  The other fifteen are 512 KiB MMIO
-+ * pages, all [V] from the vendor devicetree and confirmed on the live
-+ * post-overlay node ("lsw_dp" five + "lsw_pfe" ten windows).
++ * The register/DDR windows of one switch.  The binding/DTS order puts the 15
++ * register windows first and the two DDR regions last (the enum order below
++ * is internal: resources are looked up by name).  The register pages are five
++ * lsw_dp and ten lsw_pfe windows, all [V] from the vendor devicetree and
++ * confirmed on the live post-overlay node ("lsw_dp" five + "lsw_pfe" ten
++ * windows).  The DDR regions are validated by base/size and never ioremapped.
 + */
 +enum luofu_switch_window {
 +	LUOFU_SWITCH_WIN_QUEUE,		/* DDR: engine queue memory */
@@ -1397,7 +1401,7 @@ diff --git a/drivers/net/ethernet/hisilicon/luofu-switch.c b/drivers/net/etherne
 diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
 --- a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
 +++ b/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
-@@ -22,32 +22,40 @@
+@@ -22,29 +22,35 @@
    Each port child names the node that provides its netdev through the
    "ethernet" phandle.
  
@@ -1443,17 +1447,21 @@ diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml b
      description:
 -      The 15 switch register windows, 512 KiB each; the names are given by
 -      reg-names.
-+      The 17 switch windows; the names are given by reg-names. The first two
-+      are DDR regions the engine consumes and the remaining 15 are 512 KiB
-+      register windows.
++      The 17 switch windows; the names are given by reg-names. The first 15
++      are 512 KiB register windows; the last two are the DDR regions the
++      engine consumes.
  
    reg-names:
      items:
+@@ -63,6 +69,8 @@
+       - const: mcc
+       - const: opp
+       - const: pub
 +      - const: queue
 +      - const: flow
-       - const: dp
-       - const: ips
-       - const: fam
+ 
+   clocks:
+     maxItems: 2
 @@ -75,7 +83,7 @@
  
    resets:
@@ -1499,7 +1507,7 @@ diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml b
    - ethernet-ports
  
  allOf:
-@@ -143,9 +173,18 @@
+@@ -143,6 +173,14 @@
          #reset-cells = <2>;
      };
  
@@ -1513,21 +1521,18 @@ diff --git a/Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml b
 +
      ethernet-switch@11000000 {
          compatible = "hisilicon,luofu-switch";
--        reg = <0x11000000 0x80000>, <0x11080000 0x80000>,
-+        reg = <0x80000000 0x400000>, <0x80400000 0x100000>,
-+              <0x11000000 0x80000>, <0x11080000 0x80000>,
-               <0x11100000 0x80000>, <0x11180000 0x80000>,
-               <0x11200000 0x80000>, <0x11280000 0x80000>,
-               <0x11380000 0x80000>, <0x12000000 0x80000>,
-@@ -153,13 +192,16 @@
+         reg = <0x11000000 0x80000>, <0x11080000 0x80000>,
+@@ -152,14 +190,18 @@
+               <0x12080000 0x80000>, <0x12100000 0x80000>,
                <0x12180000 0x80000>, <0x12280000 0x80000>,
                <0x12380000 0x80000>, <0x12400000 0x80000>,
-               <0x12480000 0x80000>;
--        reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
+-              <0x12480000 0x80000>;
++              <0x12480000 0x80000>,
++              <0x80000000 0x400000>, <0x80400000 0x100000>;
+         reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
 -                    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp", "pub";
-+        reg-names = "queue", "flow", "dp", "ips", "fam", "pe", "eqm",
-+                    "eps", "prbs", "pfe_glb", "pa", "ifc", "l2", "napt",
-+                    "mcc", "opp", "pub";
++                    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp",
++                    "pub", "queue", "flow";
          clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
          clock-names = "lsw_dp_clk", "lsw_pfe_clk";
          resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
