@@ -300,6 +300,87 @@ These decoded texts should state the tagact reference and the vendor's CPU-deliv
 directly; they are the natural input to designing our own IFC/L3 entry (the host-side decode of
 ifc_write/l3intf_write is the companion task).
 
+## Status update 2026-11-21 (after the M1a nulls and the stock decoded procfs capture)
+
+The two M1a probes were run on hardware and both were NULL: the tagact word write was ignored
+(wrote 0xc000 at 0x124d4014, read 0x0), and pfe_glb+0x2c was accepted/read back but eth2 rx delta
+stayed 531 = mirror copies only. Words reverted, box healthy; the write experiments are closed.
+A consistent-stock read-only procfs capture (hsan-stock/hsan2/, 137 files) followed. It resolves
+the CPU-punt mechanism:
+
+- **U14 (where the unicast-to-CPU state is) - ANSWERED: it is the NAPT/flow engine path.**
+  Stock counters: ifc rx_total/hit=992/992, ifc_tocpu=104 (broadcast class ~ 103), ifc_napt=170;
+  napt tx_total=170, up_tocpu=129 (unicast class ~ 130); dp port4 queue 274/274 = all CPU frames
+  (uc130+mc41+bc103); pie ch0/ch1 rx = 191/83. So IFC defaults punt broadcast to CPU and route
+  unicast to NAPT, whose up-direction punt sends it to CPU. Our image has the same IFC defaults
+  but NAPT uninitialized (config words zero), which is exactly why the unicast class disappears
+  before PIE (no completion) while ARP arrives.
+- **U15 (completion status classes) - deferred:** the NAPT punt class is not observed yet; once
+  the init replay works, RXDIAG/accepterr handling will show the class.
+- **U13/U11 (IFC action encoding) - deferred:** not needed if the IFC defaults already route
+  unicast to NAPT; the read-only counter test below confirms/refutes that first.
+- **U17 (tagact reference) - no longer on the M1a critical path:** the entry is a tag-delete
+  action referenced by the CFE rootif/L3 program (l3intf/ multicast entries in vendor code); it
+  does not gate unicast CPU delivery. It remains a D2 (VLAN/offload) question.
+- **New U20:** does the vendor NAPT init (register-only replay with the reserved switch flow
+  window bases) alone make the up_tocpu punt work, or is more of hi_pfe_pub_init/flow-table setup
+  needed? The m1a/napt-init prototype answers this.
+- **New U21:** the two napt+0x60 clear commands are engine-managed table initializations; after
+  the replay, do the flow tables stay valid across link events (like the mirror registers did
+  not), or must the sequence be re-applied? Check after M1a proof.
+
+### Exact read-only stock procfs invocations (and what they can/cannot reveal)
+
+All of these are plain reads (cat) or, where marked, a proc command write that only triggers a
+diagnostic dump (no register/config change). The captured hsan2 tree already contains the
+decoded outputs of the first list; the command-based ones are the only way to get live traces.
+
+Read-only cat list (the values that mattered here):
+    cat /proc/hsan/lsw/pfe/cnt        # the pa/ifc/l2/napt/mcc/opp/pe counter decomposition
+    cat /proc/hsan/lsw/pfe/tocpu_cnt  # ifc_point0/tocpu sub-counters
+    cat /proc/hsan/lsw/pfe/drop_cnt
+    cat /proc/hsan/lsw/dp/cnt         # dp rx/tx per port/queue and pie channel split
+    cat /proc/hsan/lsw/table/ifc /l3intf /tagact /flow_cnt /ipv4_flow /ipv6_flow /glb_attr /cnt
+    cat /proc/hsan/lsw/dp/vport /proc/hsan/lsw/queue/cnt /queue/dev_port
+    cat /proc/hsan/net/eth2/cnt /proc/hsan/net/pie_cnt /proc/hsan/net/pie_chl_cnt
+    cat /proc/hsan/net/pie_config /proc/hsan/net/swa/rootif_dump /proc/hsan/net/eth2/attr1
+    cat /proc/hsan/cfe/hook/cnt /proc/hsan/cfe/intf/dump_intf /proc/hsan/cfe/table/mac_stats
+    cat /proc/hsan/cfe/lrn/dump_lib
+
+Command-based dumps (write a command line to the same node, then cat it; these are diagnostic
+commands, not register writes):
+    echo "0xffff 0xffff" > /proc/hsan/lsw/dp/diag ; cat /proc/hsan/lsw/dp/diag
+        # usage decoded from hi_lsw_dp: "echo igr_bitmap egr_bitmap > diag" (hex masks)
+        # prints the per-stage ingress/egress counters (ips/eqm/eps classes)
+    hdb cnt get                        # vendor helper: cats all counter nodes (read-only)
+    hdb info dump <tftp-ip>            # vendor helper: cats all /proc/hsan files into a log
+    hdb flow trace -igr eth2 -dip <host-ip> -detail
+        # writes "flow trace ..." to /proc/hsan/diagnose/flow/flow_trace; diagnostic only,
+        # prints where the packet is seen (cfe/IFC/NAPT/LSW positions); note the helper also
+        # runs "hdb cnt clr" and clears dmesg first - capture counters before using it
+    hdb flow learn -igr eth2 -dmac <mac>   # learning-path diagnostic only
+    hdb flow cnt -igr eth0 -egr eth2       # flow-counter diagnostic only
+
+Important negative result: **there is no proc node that dumps the hardware IFC/L3/flow entries.**
+The table files (ifc/l3intf/ipv4_flow/...) print only the software table-manager shadow, and on
+stock that shadow is empty (alloc=0) while the counters prove the hardware classified 992 frames;
+the classifier entries are direct hardware defaults (the eight W10 defaults) plus CFE flow state
+in the DDR carveout, neither of which is exposed by these dumps. The decoded counter groups above
+are the correct read-only way to see which class goes where; chasing table-dump command syntax is
+not useful.
+
+### Read-only diagnosis on our image (do this first, no writes)
+
+m1a/napt-init/check-napt-path.sh prints the eth2 counters, the IFC counter block, the NAPT
+counters and the NAPT config words. Run it, ping the box from the host, run it again:
+    ROUTER_HOST=root@192.168.1.1 tools/rsh.sh 'sh /tmp/m1a/napt-init/check-napt-path.sh'
+    ping -i 0.02 -c 200 192.168.1.1
+    ROUTER_HOST=root@192.168.1.1 tools/rsh.sh 'sh /tmp/m1a/napt-init/check-napt-path.sh'
+Expected if the NAPT diagnosis is right: the IFC block's ifc_napt-class word increments by about
+200, napt rx_napt/up_tocpu stay 0 (engine uninitialized), eth2 rx_packets rises only by the mirror
+copies, and no new native delivery appears. That confirms the frames reach NAPT and die there,
+which is what the m1a/napt-init replay is designed to fix.
+
 ## U12 - completion of the identity path (success criterion)
 
 M1 is met when, for all four wired ports, a frame from the bench host (cable on that jack)

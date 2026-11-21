@@ -88,6 +88,34 @@ counters. Record the same evidence set. Revert.
 - Every rollback word was captured by the generated script before the first write; the files are
   /tmp/m1a/apply-probe-a-tagact.sh.rollback.TIMESTAMP on the box.
 
+## Closeout 2026-11-21: both probes were NULL - the write experiments are closed
+
+The session above was run on hardware:
+
+- probe A (tagact entry 1): the write at 0x124d4014 was **silently ignored** - wrote 0xc000,
+  read back 0x0; the script restored the other words.
+- probe B (pfe_glb+0x2c): the write was accepted and read back, but eth2 rx delta stayed 531 =
+  mirror copies only (baseline 531).
+- Box healthy, all words reverted, selector 0x11.
+
+Conclusion: the tagact table has no usable CPU write path through the mapped window, and up_port
+is not a delivery enabler. The CPU-punt mechanism was resolved instead by the consistent-stock
+decoded procfs capture: IFC defaults punt broadcast to the CPU (ifc_tocpu=104) and route unicast
+to the NAPT/flow engine (ifc_napt=170 -> napt up_tocpu=129). Our image has the same IFC defaults
+but NAPT uninitialized, so unicast dies in the engine.
+
+The next hardware step is therefore **not** another IFC/tagact replay: it is the NAPT init replay
+prepared in [napt-init/](napt-init/) (read the proposal first):
+
+- read-only confirmation on the current image: napt-init/check-napt-path.sh before/after a ping
+  (the IFC napt-class counter should rise while up_tocpu stays 0);
+- then, if approved: napt-init/apply-napt-init.sh (12 register writes + 2 polled clear commands,
+  fail-closed with rollback and revert), mirror kept on, pre-armed auto-revert;
+- expected: eth2 rx_packets delta about 2x the ping count and napt up_tocpu incrementing, then the
+  cpu_mirror=0 proof boot.
+
+Do not re-run the m1a/ probe scripts - they are kept only as the record of the NULL result.
+
 ## 7. What remains untested after this session
 
 - Whether the tag action entry is referenced at all by the engine on our image (no readable

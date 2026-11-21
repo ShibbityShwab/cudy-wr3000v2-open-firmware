@@ -3,13 +3,16 @@
 **Status 2026-11-21. Host-side plan only.** No register has been written for this plan; no
 hardware has been used; the release patch series and the curated upstream tree are untouched.
 
-> **Revision 2026-11-21 (after the E0-a and E0-b hardware runs):** read sections 2.1, 2.2 and 4.4
-> first. E0-a proved the exception path works natively (with source port) but only ARP-class
-> traffic is punted. E0-b captured stock-vs-ours and its decode (E0B-ANALYSIS.md) shows the only
-> readable stock-only config words are tag action entry 1 and pfe_glb+0x2c (up_port); L2 page =
-> DFX counters, EQM = engine residue, PIE = our ring config, IFC identical. The milestone is split
-> into M1a (unicast to eth2; first hardware step is the reviewed two-probe devmem session in
-> m1a/) and M1b (multi-port).
+> **Revision 2026-11-21 (after the E0-a, E0-b, M1a and stock-procfs rounds):** read sections 2.1,
+> 2.2, 2.3 and 4.4 first. E0-a proved the exception path works natively but only ARP-class traffic
+> is punted. E0-b decoded the stock-vs-ours deltas (tagact = tag delete, pfe_glb = up_port, L2 page
+> = DFX counters, IFC identical). The two M1a replay probes were then run on hardware and were
+> both NULL (tagact write ignored; up_port no effect), so the write experiments closed. The
+> consistent-stock decoded procfs capture then resolved the mechanism: IFC punts broadcast to CPU
+> (ifc_tocpu=104) and routes unicast to the NAPT/flow engine (ifc_napt=170 -> up_tocpu=129); our
+> image has the IFC defaults but NAPT uninitialized. The next step is the NAPT init replay in
+> m1a/napt-init/ (register-only, reserved switch flow window). Milestones: M1a (unicast to eth2),
+> M1b (multi-port).
 This plan extends the release line's verified bench workaround
 ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md), [../../LSW-SPEC.md](../../LSW-SPEC.md),
 [../../PIE-DATAPATH.md](../../PIE-DATAPATH.md)) with the path to per-port native forwarding.
@@ -248,6 +251,37 @@ outcome; if null, no further register writes are attempted until the stock procf
 tables (tagact, l3intf, ifc, glb_attr, tocpu_cnt, br_dump, flow/mac) are captured and the
 IFC/L3 action encoding is decoded host-side. L2, NAPT, EQM, PIE and DDR are never in the set.
 
+### 2.3 After M1a (both NULL) and the stock decoded procfs: the CPU-punt path is NAPT
+
+The M1a probes were run (2026-11-21) and both were NULL:
+
+- tagact entry 1 write at 0x124d4014 was silently ignored (wrote 0xc000, read 0x0);
+- pfe_glb+0x2c=0x10000034 was accepted/read back, but eth2 rx delta stayed 531 = mirror copies
+  only. All words reverted; the write experiments are closed.
+
+The consistent-stock read-only procfs capture (hsan-stock/hsan2/, 137 files) then gave the
+decisive counter decomposition: ifc rx_total/hit = 992/992, **ifc_tocpu = 104** (the broadcast
+class, ~103), **ifc_napt = 170**; napt tx_total = 170, **up_tocpu = 129** (the unicast class,
+~130); dp port4 queue 274/274 (all CPU frames = uc130+mc41+bc103); pie ch0/ch1 rx = 191/83.
+Therefore: the IFC default rules (the same eight W10 entries our image has) punt broadcast to
+the CPU and route unicast to the **NAPT/flow engine**, whose up-direction punt sends unicast to
+the CPU. Our image leaves NAPT uninitialized (all config words zero), so the unicast class is
+dropped inside the engine before PIE - exactly the E0-a/E0-b symptom (ARP arrives, 98-byte
+unicast never does). The tagact entry is a CFE rootif/L3 tag action, not part of this path.
+
+**Next hardware step (prepared, not run):** replay the vendor NAPT/flow init
+(hi_pfe_napt_init@0x4314) - 12 register writes with the stock-captured final values, two
+engine table-clear commands polled through napt+0x60, table bases inside the reserved switch
+flow carveout 0x80400000/1 MiB (the Linux memory node starts at 0x80500000, so no Linux page is
+reachable). Artifacts: m1a/napt-init/ (NAPT-INIT-PROPOSAL.md, apply-napt-init.sh,
+observe-napt-init.sh, check-napt-path.sh). The planner keeps its default NAPT refusal; the
+prototype uses its own explicit 13-address allow-list with the same fail-closed rules.
+
+Expected observable (mirror still on): eth2 rx_packets delta about 2x the controlled ping count
+(mirror copy + native NAPT-punt copy), napt+0x1010 up_tocpu and the ifc_napt counter increment;
+then the cpu_mirror=0 proof boot. A read-only confirmation first: m1a/napt-init/check-napt-path.sh
+before/after a ping must show the IFC napt-class counter rising while up_tocpu stays 0.
+
 ---
 
 ## 3. Current netdev + driver model (what the first patch builds on)
@@ -482,8 +516,10 @@ door armed and a UART capture. The tools referenced are the repository's:
 | S0 | compile the current release line unchanged (baseline) | host | none | RC=0; image hash recorded |
 | S1 | **N0-a: no-mirror cmdline experiment - DONE 2026-11-21 (image 990c5cab)** | bench | none | result: exception punts only (60-byte ARP, port 11), no unicast CPU delivery; see `E0A-ANALYSIS.md` |
 | S2 | **N0-b read-only stock-vs-ours capture - DONE 2026-11-21** (ours image 6e9c54d0 vs stock; 9,488 words each, 0 failures); decode in `E0B-ANALYSIS.md`: no readable unicast-to-CPU enabler; only tagact entry 1 and pfe_glb+0x2c are stock-only config words, L2 page = DFX counters | bench + host | none | done; candidate list = m1a/ proposal |
-| S2b | **M1a replay probe session (SSH-safe, devmem) - prepared, not yet run**: m1a/ probe A (tagact entry 1) then probe B (pfe_glb up_port), mirror kept on eth2; host pings 500 requests per probe; look for an eth2 rx_packets delta about 2x the sent count (= extra native 98-byte delivery); revert immediately; a null result ends the write experiments | bench | 5 words total (m1a/ plans) | readback exact; native duplicate delivery observed -> go to S2c; null -> no more register writes until the stock decoded procfs tables are captured (section 2.2) |
-| S2c | **M1a proof boot** - only if S2b shows the duplicate signal: boot the release-line image with `luofu_switch.cpu_mirror=0` (the E0-a build recipe), attended with UART; ICMP unicast must work without the mirror | bench | cmdline only | M1a proven (unicast-to-CPU on eth2 without the mirror) |
+| S2b | **M1a replay probes - RUN 2026-11-21: BOTH NULL**. A (tagact entry 1): write ignored (wrote 0xc000, read 0x0). B (pfe_glb+0x2c): accepted/read back, eth2 rx delta stayed 531 = mirror only. All words reverted; write experiments closed | bench | none left | negative result recorded in E0B-RESULTS/ANALYSIS; mechanism resolved by S2d |
+| S2c | **Decoded procfs capture on consistent stock - DONE 2026-11-21** (hsan-stock/hsan2/, 137 files): ifc_tocpu=104 broadcast vs ifc_napt=170 -> napt up_tocpu=129 unicast; dp port4 274/274. Conclusion: the CPU-punt rule for unicast is the NAPT/flow engine path, not an IFC table entry | bench + host | none | mechanism resolved; next step S2d |
+| S2d | **NAPT init replay prototype (next hardware step)** - m1a/napt-init/apply-napt-init.sh (12 register writes + 2 polled clear commands; stock values; flow table bases in the reserved switch carveout). Read-only confirmation first: check-napt-path.sh before/after a ping (IFC napt-class counter rises, up_tocpu stays 0) | host + bench | 12 words, NAPT window, explicit allow-list | readback exact and commands complete; eth2 rx delta about 2x the ping count + napt up_tocpu increments -> go to S2e; null -> decode hi_pfe_pub_init flow setup next, no further writes |
+| S2e | **M1a proof boot** - only if S2d shows the native signal: boot the release-line image with `luofu_switch.cpu_mirror=0` (the E0-a build recipe), attended with UART; ICMP unicast must work without the mirror | bench | cmdline only | M1a proven (unicast-to-CPU on eth2 without the mirror) |
 | S3 | **N1 (revised): replay the unicast-to-CPU candidate set** (stock-readable IFC/L2/OPP words preferred) - via `plan-writes.sh` (devmem) or the W21 driver stage; mirror excludes only the experimented port | bench | candidate words | readback exact; with `cpu_mirror=0` on the next boot, ICMP unicast is delivered natively to eth2 (M1a); rollback otherwise |
 | S4 | **N2: per-port punt classification** (Route B) if S3 shows nothing: build the W21 driver stage with the tag/punt entries, mirror off for the target port, one entry per attended run | host + bench | new driver stage | native delivery with correct ingress identity for the target port |
 | S5 | repeat S4 for each wired port; keep management port on mirror until last | bench | stage writes | all four ports native; bridge/router works |
@@ -505,11 +541,15 @@ of the experiment.
 
 ## 7. First patch design (release-line W21 stage) - not compiled here
 
-**Ordering after E0-b:** the first hardware step is NOT this driver patch. It is the m1a/ devmem
-replay probe (section 2.2 / 6 S2b). The W21 driver stage is only cut if that probe shows the
-native duplicate-delivery signal (or after the host-side decode finds and justifies a different
-enabler). Until then the missing decode is the IFC/L3 action encoding and the tagact_id reference,
-not a driver scaffold.
+**Ordering after E0-b and M1a (both NULL):** the first hardware step is still not this driver
+patch. It is the NAPT init replay prototype (m1a/napt-init/, section 2.3 / 6 S2d). If that
+prototype produces the native duplicate signal, the driver work becomes a **W22 NAPT/flow init
+stage**: the same register sequence behind a gate (luofu_switch.naptinit=1), with the flow table
+bases derived from the DT flow window, the two clear commands polled with the vendor timeout, and
+the stage re-applied from the link worker like the mirror. The W21 IFC/tag stage is deferred: the
+IFC defaults are already installed and the tag action is not on the CPU-punt path. The remaining
+decode for W22 is the hi_pfe_pub_init flow-table/manager setup, only if the register-only replay
+is insufficient.
 
 The first patch is intentionally **data-driven and fail-closed**, in the same style as W10/W12.
 It is designed against the current release-line driver
@@ -639,3 +679,7 @@ this document.
 | pfe_glb+0x2c = up_port + flow_age_en | `E0B-ANALYSIS.md` section 3; hi_lsw_pfe!write_glb_attr@0x2210 / dump_glb_attr@0x218c |
 | L2 l2+0x40000 = DFX counters | `E0B-ANALYSIS.md` section 4; hi_pfe_dfx_dump_cnt string map |
 | M1a probe scripts, plans, runbook | `m1a/` (SESSION.md, probe-*.plan, apply-*.sh, observe-m1a.sh) |
+| M1a probes both NULL (tagact ignored; up_port no effect) | `E0B-ANALYSIS.md` section 11; `E0B-RESULTS.md` M1a results; m1a/SESSION.md closeout |
+| CPU-punt mechanism = IFC broadcast->CPU + IFC unicast->NAPT->CPU | `E0B-ANALYSIS.md` section 11; stock procfs counters build/evidence-bench-gates/hsan-stock/hsan2/ |
+| NAPT init write path decoded (hi_pfe_napt_init) + reserved flow carveout safety | `m1a/napt-init/NAPT-INIT-PROPOSAL.md`; fixture hi_pfe_napt_init@0x4314; DT memory@80500000 + switch reg flow window 0x80400000/1MiB |
+| NAPT init prototype scripts (fail-closed, host-tested) | `m1a/napt-init/` (apply-napt-init.sh, observe-napt-init.sh, check-napt-path.sh) |

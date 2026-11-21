@@ -64,3 +64,23 @@ The follow-up decode changes the reading of three deltas above:
 The EQM words are indirect command/data residue, the PIE words are our own driver's ring config,
 and IFC shows no stock-only entries. The reviewed minimal probe set (m1a/) is therefore tagact
 entry 1 + pfe_glb+0x2c only, with fail-closed scripts and a null-result expectation.
+
+### M1a probe results (both NULL) and the next step
+
+Probe A (tagact entry 1): the write at 0x124d4014 was **ignored** (wrote 0xc000, read 0x0) - the
+pub tag action table has no usable CPU write path. Probe B (pfe_glb+0x2c): accepted/read back but
+eth2 rx delta stayed 531 (mirror only). All words reverted, box healthy; the write experiments
+are closed.
+
+The consistent-stock decoded procfs capture (hsan-stock/hsan2/) resolves the mechanism: stock
+counters show ifc_hit=992, **ifc_tocpu=104** (broadcast/ARP class, ~the 103 broadcasts), and
+**ifc_napt=170 -> napt up_tocpu=129** (unicast class ~the 130 unicasts); dp port4 gets all 274
+frames (uc130+mc41+bc103). So the CPU-punt rule is: IFC defaults punt broadcast to CPU; IFC
+routes unicast to the NAPT engine, whose up-direction punt sends it to CPU. Our image has the
+same IFC defaults but an **uninitialized NAPT engine**, so unicast is dropped there.
+
+Next reviewable step: replay hi_pfe_napt_init (register-only, stock final values, flow tables in
+the reserved 0x80400000/1 MiB switch carveout which is outside Linux memory) - see
+m1a/napt-init/NAPT-INIT-PROPOSAL.md, apply-napt-init.sh, observe-napt-init.sh and
+check-napt-path.sh. Expected observable with the mirror on: eth2 rx_packets delta about 2x the
+ping count and napt up_tocpu / ifc_napt counters incrementing; then the cpu_mirror=0 proof boot.

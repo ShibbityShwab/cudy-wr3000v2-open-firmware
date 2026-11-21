@@ -242,7 +242,42 @@ capture did not cover - /proc/hsan/lsw/table/tagact, l3intf, ifc, glb_attr, flow
 tables. Those decoded dumps should name the tagact reference and the CPU-delivery configuration
 directly, avoiding further blind writes.
 
-## 11. Evidence map
+## 11. M1a probe results (both NULL) and the decoded CPU-punt path
+
+The reviewed probes from section 6 were run on hardware (2026-11-21, adopted baseline image,
+mirror on, attended):
+
+- probe A (tagact entry 1, 4 words): the write at 0x124d4014 was **silently ignored** - wrote
+  0xc000, read back 0x0. The script reverted the other three words. This confirms that the pub
+  tag action table has no usable CPU write path through the mapped window (contrast: the IFC
+  tab128 writes were readback-verified in W10 through their own path).
+- probe B (pfe_glb+0x2c = 0x10000034): write accepted and read back, but eth2 rx delta stayed 531
+  = mirror copies only. As decoded, up_port is a flow-engine attribute and not a delivery enabler.
+- Box healthy, all words reverted.
+
+The write experiments are closed. The subsequent consistent-stock read-only procfs capture
+(hsan-stock/hsan2/, 137 files) provides the decisive counter decomposition:
+
+- ifc rx_total=992, ifc_hit=992, **ifc_tocpu=104**, **ifc_napt=170**;
+- napt tx_total=170, **up_tocpu=129**, sip_chk_tocpu=4, mc_fail_tocpu=37; pa cpu_spec_send=718;
+- dp port4 queue in/out=274/274; pie ch0 rx=191, ch1 rx=83 (sum 274 = eth2 rx 274 = uc130/mc41/bc103).
+
+Reading: **broadcast/ARP-class frames are punted to CPU by the IFC default rules** (104 ~ the 103
+broadcasts), and **unicast frames are routed by IFC to the NAPT/flow engine, whose "up" direction
+punts them to CPU** (129 ~ the 130 unicasts). Our image has the same IFC defaults (W10, verified)
+but the NAPT engine is uninitialized (all config words zero), so the unicast class is dropped
+inside the flow engine - exactly the E0-a/E0-b observation of "ARP arrives, 98-byte unicast never
+does". The tag action entry is not on the critical path (it belongs to the CFE rootif/L3 program).
+
+The missing initialization is therefore **hi_pfe_napt_init@0x4314** (vendor PFE module): a
+register-only sequence that programs the flow table bases inside the switch's reserved DDR
+carveout (0x80400000/1 MiB; the Linux memory node starts at 0x80500000, so no Linux page is
+reachable) and issues two table-clear commands through napt+0x60. This is decoded and proposed as
+the next reviewable step in m1a/napt-init/ (NAPT-INIT-PROPOSAL.md, apply-napt-init.sh,
+observe-napt-init.sh, check-napt-path.sh). The write planner's default NAPT refusal is kept; the
+prototype uses its own explicit 13-address allow-list with the same fail-closed rules.
+
+## 12. Evidence map
 
 | claim | artifact |
 | --- | --- |
