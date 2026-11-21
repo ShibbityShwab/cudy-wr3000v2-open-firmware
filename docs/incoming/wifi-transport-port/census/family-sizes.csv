@@ -1,0 +1,22 @@
+# Per-family function inventory and byte sizes, extracted from the two vendor .ko
+# modules with pyelftools (STT_FUNC st_size sums), for the next-slice size
+# estimates.  Function NAMES are not reproduced here (they are in
+# wifi-framework-port/census/census-ko-only-hi5622-delta.csv); this file holds
+# only counts/bytes.  Regeneration (local only, needs the vendor artifacts):
+#   .provision-venv/bin/python /tmp/famsize.py   (all-family variant)
+# ko_only = functions not name-covered by the three open trees
+# (census-shared3.txt intersection).
+#
+# family,ko_funcs,ko_bytes,ko_only_funcs,ko_only_bytes,stubs_le_16B,avg_bytes
+pcie_,101,25028,101,25028,21,247
+bal_,26,1096,26,1096,9,42
+hcc_,87,12060,86,11884,14,138
+shuangta_,173,36476,173,36476,39,210
+hal_,99,6320,91,4832,11,63
+hdpp_,238,52428,238,52428,14,220
+alg_,239,103476,222,97700,0,432
+hmac_,2029,751916,1503,511364,143,370
+wal_,1014,251204,684,163476,361,247
+oal_,213,32712,171,29088,35,153
+oam_,109,18436,99,15644,10,169
+mac_,367,83848,149,33688,55,228

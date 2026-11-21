@@ -1,0 +1,43 @@
+From: cudy-wr3000v2 wifi-transport-port lane
+Subject: [NOT FOR BUILD YET] luofu DTS: add dma-ranges so the DWC framework
+ programs the RC inbound iATU window (device -> host DRAM)
+
+The Hi5622 endpoints DMA the ETE ring node arrays and message buffers in host
+DRAM through the RC inbound window.  Device-side evidence (phase42 E.3,
+phase43 [V*]): the ETE channel base registers point into PCI address space
+0x80000000..0xffffffff, and the vendor's live DR0 base 0x8490b000 resolves to
+host DRAM.  On this board DRAM phys starts at 0x80000000 (DTS memory node
+0x80500000), so the window is identity: PCI 0x80000000 -> CPU phys 0x80000000,
+size 2 GiB.  The DWC host framework programs one inbound viewport per
+dma-ranges entry (dw_pcie_iatu_setup -> dw_pcie_prog_inbound_atu,
+pcie-designware-host.c:945 in the 6.18.60 tree).
+
+The 6.18 skeleton module then obtains the device-side buffer addresses from
+dma_alloc_coherent() dma handles - exactly the 0x8xxxxxxx values the ETE
+engine expects - and must NOT copy the vendor's host-VA == device-address
+identity (that was an accident of the vendor's 2 GiB userspace/kernel split;
+our 6.18 config is VMSPLIT_3G).
+
+Status: patch kept here as the mapping deliverable; it is NOT applied to
+target-skeleton and NOT built yet.  It is a bench prerequisite for stage B2
+(ETE rings) only - stage B1 (upload + mailbox + ready checkpoints) needs no
+inbound window.  The wifi@0,0 children stay disabled until bring-up.
+
+--- a/target-skeleton/dts/luofu-r116.dts
++++ b/target-skeleton/dts/luofu-r116.dts
+@@ -640,6 +640,7 @@
+ 		reg-names = "dbi", "misc", "config";
+ 		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>,
+ 			 <0x01000000 0x0 0x48000000 0x48000000 0x0 0x800000>;
++		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x80000000>;
+ 		bus-range = <0 0xa>;
+ 		interrupts = <0 0x3b 4>,
+ 			     <0 0x45 4>;
+@@ -672,6 +672,7 @@
+ 		reg-names = "dbi", "misc", "config";
+ 		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>,
+ 			 <0x01000000 0x0 0x60000000 0x60000000 0x0 0x800000>;
++		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x80000000>;
+ 		bus-range = <0 0xa>;
+ 		interrupts = <0 0x3f 4>,
+ 			     <0 0x46 4>;
