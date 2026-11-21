@@ -77,6 +77,29 @@ LED-PWM node with no driver/consumer. No further missed hardware blocks were fou
 6. Thermal register window must cover `+0x00..+0x10` **and `+0x400`**, not just `+0x24`.
 7. There is no EFS in this image; the per-unit store is the `fac` partition + `ZZZZ` blobs + INI.
 
+
+## W23 implementation draft (follow-up, 2026-11-21, host-only)
+
+The thermal correction is drafted as release-line **W23** under
+[w23/](w23/): `0001-thermal-luofu-tvsensor-w23.patch`
+(sha256 `c2a46975…53253cc`; replaces the wrong v4/+0x24/"/100" path with the vendor v1/hwver-3
+`+0x04[9:0]` path and the gated enable/trim sequence), `0002-dt-bindings-thermal-luofu-tvsensor-w23.patch`
+(`197bb74a…7f7ee9c`; 0x408 window + vendor properties), and
+`0003-dts-luofu-r116-tvsensor-w23.patch` (`3e78b67a…3132a38`; release DTS node properties/window —
+the release DTS was already `status = "okay"`; the disabled node is the lab tree). Design:
+[w23/W23-DESIGN.md](w23/W23-DESIGN.md); staging and the exact attended bench test:
+[w23/RELEASE-INTEGRATION.md](w23/RELEASE-INTEGRATION.md).
+
+Host validation only: drafts apply after release patch 012 on pristine 6.18.60; driver compiles
+`W=1` with **0 warnings** (host x86_64 COMPILE_TEST), checkpatch **0 errors** (one expected
+missing-description warning per bare patch), DTS compiles with 0 warnings, and `dt_binding_check` on
+the updated binding **PASSES** (dtschema 2026.9). **No ARM target build, no release-line validator, no
+boot, no hardware validation** is claimed. The driver keeps a default-off `enable` gate
+(`/sys/module/luofu_tvsensor/parameters/enable`), exposes read-only `raw`/`regs` sysfs attributes for
+the bench, leaves the threshold IRQ masked (no IRQ handler in W23), and returns ENODATA while gated so
+an undriven raw 0 is never published as −65 °C. The bench test in RELEASE-INTEGRATION §5 is the gate
+for changing any release thermal claim.
+
 ## Next evidence needed
 
 1. **Thermal (highest value):** one attended 6.18 boot with the corrected read-only conversion

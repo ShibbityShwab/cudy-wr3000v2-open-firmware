@@ -1,0 +1,24 @@
+--- a/target-skeleton/dts/luofu-r116.dts
++++ b/target-skeleton/dts/luofu-r116.dts
+@@ -589,8 +589,20 @@
+ 
+ 	tvsensor: thermal-sensor@14900500 {
+ 		compatible = "hisilicon,luofu-tvsensor";
+-		reg = <0x14900500 0x100>;
++		/*
++		 * The sensor block plus the +0x400 addition-enable word; the
++		 * vendor DT's 0x14 is far too short.  If the PMU-PWM node at
++		 * 0x14900800 is ever enabled, split this into two resources.
++		 */
++		reg = <0x14900500 0x408>;
+ 		#thermal-sensor-cells = <0>;
++		hwver = <3>;
++		trim = <0 0>;
++		int-base-offset = <0xc>;
++		addition-en;
++		efuse-trim-en;
++		/* vendor critical trip, bench-verification helper only */
++		hisilicon,threshold-mc = <125000>;
+ 		status = "okay";
+ 	};
+ 

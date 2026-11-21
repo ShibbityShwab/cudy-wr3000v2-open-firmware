@@ -701,3 +701,80 @@ result.
 * **Other blocks:** USB, RTC and NFC are absent by design; I2C exists but is unused; PWM splits into
   a used-but-optional PMU regulator and a dead LED-PWM block. No further missed hardware blocks were
   found in the vendor DT/rootfs scan.
+
+---
+
+## 9. W23 implementation draft (follow-up, 2026-11-21, host-only)
+
+The follow-up lane implemented the thermal correction as release-line **W23** patch drafts. Nothing
+here is hardware-validated; the drafts live only under
+`docs/incoming/wifi-thermal-re/w23/` and are designed to be staged by the lead.
+
+### 9.1 What the drafts are
+
+| draft | sha256 | content |
+| --- | --- | --- |
+| `w23/0001-thermal-luofu-tvsensor-w23.patch` (549 lines) | `c2a4697559a22fe3c3867b58b85382f95c3dd2b04a987a1c698174696c3253cc` | release patch 012's Kconfig help update + full rewrite of `drivers/thermal/luofu_tvsensor.c`; applies **after** 012 |
+| `w23/0002-dt-bindings-thermal-luofu-tvsensor-w23.patch` (114 lines) | `197bb74aad60a4d8caacc22dacc91399a8dc967c28d6b8a5ef98a4727ef7ee9c` | binding extension: 0x408 window and vendor properties; applies after 012 |
+| `w23/0003-dts-luofu-r116-tvsensor-w23.patch` (24 lines) | `3e78b67a4f3dbac7bfcd9ceb7393da89b7339b0379a5d04c06b4c93a93132a38` | release-staging DTS diff (`target-skeleton/dts/luofu-r116.dts`): `reg = <0x14900500 0x408>` plus `hwver/trim/int-base-offset/addition-en/efuse-trim-en/hisilicon,threshold-mc`; keeps `status = "okay"` |
+
+Design and integration details: [w23/W23-DESIGN.md](w23/W23-DESIGN.md),
+[w23/RELEASE-INTEGRATION.md](w23/RELEASE-INTEGRATION.md). Patched-content hashes: driver
+`8de7df6c…06917d`, binding `095ad395…1243d3`, patched DTS `3b8727f5…6e98f04`.
+
+### 9.2 Driver behaviour (summary)
+
+* Variant selection per §3.2: `hwver 3` → v1 table, `raw = readl(base+0x04) & 0x3ff`,
+  `mC = ((165*raw − 20625)/797)*1000 − 40000`; all five decoded conversions are implemented
+  (v1 hwver 1/2/3 plus v4 normal) with the v4 alternate documented as unreachable/U.
+* Enable/trim sequence under the gate: `+0x00` bit24=1, `+0x04` bit27=0 + trim source
+  (efuse-trim-en → bit20=0; else sign/magnitude in bits 19/10..18), `+0x400` bit0=1 when
+  addition-en, `+0x10` bit0=1 (mask the threshold IRQ; W23 claims no IRQ), optional
+  `hisilicon,threshold-mc` → `+0x08[9:0]` via the derived inverse
+  `raw = (797·(T_mC/1000)+52505)/165`, and `+0x0c=1` clear. The vendor's 10-loop delay is replaced
+  by `usleep_range(1000, 2000)` (units [U]).
+* Gate: `module_param_cb(enable, …)` default 0, writable at
+  `/sys/module/luofu_tvsensor/parameters/enable`; while off, `get_temp()` returns `-ENODATA` so an
+  undriven raw 0 cannot be published as a legal −65 °C. Two read-only sysfs attrs (`raw`, `regs`)
+  on the platform device give the bench the raw word and register dump.
+* Window: DT `reg` widened to `0x14900500..0x14900908` (length 0x408) so `+0x400` is mapped.
+
+### 9.3 Host validation already done (no device, no ARM build)
+
+* Applied current release patch 012 then W23 0001+0002 to a freshly extracted pristine
+  `linux-6.18.60`: clean apply, no fuzz/rejects.
+* `make defconfig` + `COMPILE_TEST/THERMAL/THERMAL_OF/OF/LUOFU_TVSENSOR=y` +
+  `make -j16 W=1 drivers/thermal/luofu_tvsensor.o`: **RC=0, zero warnings**.
+* checkpatch: **0 errors**, one "missing commit description" warning per draft (expected for bare
+  release-line patches).
+* DTS draft compiled with `cpp`+`dtc` (tree headers, 0 warnings); base DTB 12,846 B (was 12,678 B).
+* `dt_binding_check` on the updated binding: **PASS** (dtschema 2026.9).
+* NOT done: release-line validator, full OpenWrt/ARM target build, any boot/runtime test.
+
+### 9.4 Staging and bench test
+
+The exact staging commands, manifest lines (suggested `066`/`067`), L0/L1 count updates (64→66,
+53→55), truth-update list, and the complete attended bench procedure (gate-off baseline, gate-on
+register readback, devmem cross-check, temp sanity vs room thermometer, load test, no-IRQ-storm
+criteria, reboot check, abort/rollback) are in [w23/RELEASE-INTEGRATION.md](w23/RELEASE-INTEGRATION.md)
+§2-§6. Do not run it unattended; the recovery card, UART capture and stock pair A are required.
+
+### 9.5 Corrections found while writing the driver (in addition to §6)
+
+8. **The release DTS was already enabled.** The brief said "the DTS node status that we currently
+   have disabled", but `target-skeleton/dts/luofu-r116.dts` (the release staging DTS, and the
+   2026-11-21 canonical image DTB) has `status = "okay"`. The disabled node is in the lab tree
+   (`docs/soc/luofu-r116.dts`, `lab/luofu-kernel/dts/luofu-r116.dts`). The W23 DTS draft therefore
+   keeps the node enabled and only adds the properties/window; if a staging base really has it
+   disabled, set it okay in the same hunk.
+9. **The threshold-mask polarity is inferred, not proven.** The vendor masks (+0x10 bit0=1) before
+   programming and unmasks after installing its IRQ handler; W23 leaves it masked because it does not
+   claim the IRQ. This is a bench abort criterion, not a fact.
+10. **The 0x408 window overlaps the PMU-PWM word at 0x14900800.** That is harmless today (no PMU-PWM
+    node in the release target) but must be split into two resources if PMU-PWM is ever enabled.
+11. **The old "report the math as-is" comment is unsafe:** with the corrected formula, undriven
+    raw 0 maps to −65 °C (a legal thermal value), hence the gate returns ENODATA instead.
+12. **Module parameter name:** the runtime path is `/sys/module/luofu_tvsensor/parameters/enable`;
+    the brief's `luofu_thermal=1` becomes `luofu_tvsensor.enable=1` as a boot token or the sysfs
+    write above.
+
