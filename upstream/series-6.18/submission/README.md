@@ -4,7 +4,7 @@
 anywhere.**  This directory is a dry-run hand-off bundle for the owner to review
 and, if they choose, send manually; it contains no accounts, no email transport
 and no list subscription.  Package form: **v3 submission-form revision**,
-generated 2026-11-21 from submodule tree at parent commit 0983229.
+regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 
 ## Current state (2026-11-21)
 
@@ -40,7 +40,7 @@ generated 2026-11-21 from submodule tree at parent commit 0983229.
 | `../04-validation.md` | `ec2f5a86ed04e25300ddc3bef6fdd841f8f1b96c3b4b4b1a14659d78c218839f` | submission document |
 | `../05-release-line.md` | `95920da55074aca880d98356b176e7142067ef1b4654986133cd8f18a9eff9b1` | submission document |
 | `../06-dts-series-dependency.md` | `116255b44c3eb70563107cc34b91905e8a65ffe181ab9aa1bcae28187af87d84` | submission document |
-| `../07-dts-upstream-bindings.md` | `dbb4d1b9d6e8fad4124477cfd73e2f20ab379662de1226d229285c32ea33b539` | submission document |
+| `../07-dts-upstream-bindings.md` | `906a644f582db064f57a5f94176d47908c496be8b19a879c02dafb7a46c34269` | submission document |
 | `../README.md` | `ca85115f14c53b7bbb82c65c74149f6affe637bc410fe18374e54bd7254f03bf` | submission document |
 | `../commit-messages/0001-arm-mach-hisilicon-luofu.txt` | `766990284609fe095e6d971fc1414972899aa2d5f8d0ff6048a9e1a4415b2ad5` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0002-arm-kconfig-textofs.txt` | `5f188ce552a4d5bd54cd98f031396c0f910d40f8ac9e566712711300a098ca5a` | per-patch commit-message draft (provenance) |
@@ -161,20 +161,32 @@ checks (patch apply, dtc, contract, pad, checkpatch) are necessary but not
 sufficient - the rebuilt image must be boot-tested on the unit after any
 active-DTS change.
 
-## Six remaining blockers before this could be merge-intent
+## Six remaining blockers before this could be merge-intent (status 2026-11-21)
 
-1. The drivers + YAML bindings are still drafts, not an accepted upstream submission.
-2. `hsan,flashinfo_reserved` has no upstream binding (stock loader contract).
-3. `fixed-layout`/`mac-base` nvmem cells are v6.19 content on a 6.18 baseline.
-4. The switch binding's queue-first `reg-names` order / node name needs rework.
-5. `cudy,wr3000-v2` compatible ordering + OpenWrt board metadata/sysupgrade sync.
-6. TWD timer interrupt flags need a hardware re-check.
+Blocker-reduction drafts (documentation + patch drafts only, not applied and not
+part of this package) live under
+`../../../docs/incoming/upstream-blockers/`; the table below points at them.
+
+| # | blocker | status | draft |
+| --- | --- | --- | --- |
+| 1 | drivers + YAMLs are still drafts | open - prioritized top-issue review only | `05-driver-yaml-review.md` |
+| 2 | `hsan,flashinfo_reserved` has no upstream binding | drafted reserved-memory child binding; maintainer direction needed; boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
+| 3 | `fixed-layout`/`mac-base` v6.19 on 6.18 | path defined: 6.18 uses the implemented userspace/vendor MAC provisioning; DTS nvmem removal drafted; boot-test | `02-mac-provisioning-6.18/` |
+| 4 | switch queue-first `reg-names` / node name | drafted MMIO-first binding+DTS reorder; driver uses by-name so no code change; boot-test | `03-switch-binding-mmio-first/` |
+| 5 | `cudy,wr3000-v2` compatible ordering + OpenWrt metadata | drafted DTS order + OpenWrt SUPPORTED_DEVICES/board_name diffs; boot-test + sysupgrade check | `04-compatible-order-openwrt/` |
+| 6 | TWD timer interrupt flags | hardware-measured (GICD_ICFGR1 ID29 bits 27:26 = 0b11, PPI config read-only/fixed); standard level-high DTS flag drafted; active DTS delta needs boot-test | `06-twd-irq-flags/` |
+
+**What remains hardware-dependent:** TWD flags (one boot-test; the PPI
+configuration is read-only), MAC nvmem removal, switch reorder, and the
+compatible ordering (boot-test + sysupgrade metadata check).  The flashinfo
+binding is documentation-only unless the vendor compatible is no longer first;
+the driver/YAML cleanups are code review.  Full record:
+`../07-dts-upstream-bindings.md` section 6.
 
 **Not claimed / out of scope (not counted as blockers above):** pinctrl consumer
 states, consumer clocks, the A/B boot-selector protocol beyond the measured
 0x10/0x11 cell, LED function/color descriptions, Wi-Fi and thermal support, and
-the unused vendor blocks (wired-first target).  Full record:
-`../07-dts-upstream-bindings.md`.
+the unused vendor blocks (wired-first target).
 
 ## Do not submit from this notebook
 

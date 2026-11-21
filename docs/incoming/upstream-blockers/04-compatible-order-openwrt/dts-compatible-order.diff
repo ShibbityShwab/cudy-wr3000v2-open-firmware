@@ -1,0 +1,11 @@
+--- a/arch/arm/boot/dts/hisilicon/luofu-r116.dts
++++ b/arch/arm/boot/dts/hisilicon/luofu-r116.dts
+@@ -20,7 +20,7 @@
+ 
+ 	model = "Cudy WR3000 v2.0 (HiSilicon luofu R116)";
+ 
+-	compatible = "hisilicon,luofu-r116", "hisilicon,luofu";
++	compatible = "cudy,wr3000-v2", "hisilicon,luofu-r116", "hisilicon,luofu";
+ 	interrupt-parent = <&gic>;
+ 
+ 	aliases {

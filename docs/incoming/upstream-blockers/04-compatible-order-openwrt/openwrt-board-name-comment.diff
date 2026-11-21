@@ -1,0 +1,17 @@
+--- a/target/linux/hisilicon/base-files/etc/board.d/02_network
++++ b/target/linux/hisilicon/base-files/etc/board.d/02_network
+@@ -34,10 +34,10 @@
+ #   luofu-netdev.sh) and delete this TODO. Keep the vendor LAN/WAN grouping and
+ #   the LAN = base MAC / WAN = base+1 address rule; no per-jack address rule
+ #   exists in the vendor scripts (MISC-SOC-BLOCKS.md 1.4).
+-# TODO(board name): the root compatible of the draft DTS is
+-# "hisilicon,luofu-r116"; the image recipe sketch uses "cudy,wr3000-v2".
+-# sysupgrade's board match and this case statement must agree. The final
+-# compatible order is an open question (see README "Open questions").
++# Board name: the upstream DTS carries "cudy,wr3000-v2" first, followed by
++# "hisilicon,luofu-r116", "hisilicon,luofu".  The image recipe's
++# SUPPORTED_DEVICES lists all three (see luofu.mk) and sysupgrade's board
++# match and this case statement agree.
+ #
+ # FACTORY MAC PROVISIONING (implemented host-side; see lib/functions/luofu-mac.sh)
+ #   The factory MAC is the plaintext 6-byte copy at bdinfo+0xde00 [V]

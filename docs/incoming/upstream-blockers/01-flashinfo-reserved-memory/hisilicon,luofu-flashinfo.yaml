@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/reserved-memory/hisilicon,luofu-flashinfo.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Hi5671Y "luofu" bootloader hand-off window
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The stock Cudy/Hisilicon loader (U-Boot bootfip) stages the kernel with a
+  16 KiB hand-off window at 0x80600000.  It reads this reserved-memory child,
+  takes atag-offset, and computes atag_addr = reg_base + atag-offset; the
+  window is loader-owned and must stay reserved from the kernel.  The window
+  and offset are measured facts (the stock base devicetree carries the vendor
+  compatible "hsan,flashinfo_reserved"); this binding documents the contract
+  for upstream review.
+
+  Compatibility with the stock loader: the vendor devicetree uses
+  "hsan,flashinfo_reserved".  A submission DTS may add the documented
+  "hisilicon,luofu-flashinfo" string first, but the exact loader match
+  behaviour must be confirmed by one hardware boot-test before the vendor
+  string is dropped from the compatible list.
+
+properties:
+  compatible:
+    oneOf:
+      - const: hisilicon,luofu-flashinfo
+      - const: hsan,flashinfo_reserved
+      - items:
+          - const: hisilicon,luofu-flashinfo
+          - const: hsan,flashinfo_reserved
+
+  reg:
+    maxItems: 1
+    description: The loader hand-off window (measured 0x80600000/0x4000).
+
+  atag-offset:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: |
+      Offset inside the hand-off window where the loader places the ATAG
+      (measured 0x1000, i.e. atag_addr 0x80601000).
+
+required:
+  - compatible
+  - reg
+  - atag-offset
+
+additionalProperties: false

@@ -151,19 +151,56 @@ review against the in-series YAMLs and the standard 6.18 bindings.
 - **hardware boot-test of the rebuilt image is still required** after this
   change; host checks cannot substitute for it.
 
-## 6. Remaining upstream blockers (six)
+## 6. Remaining upstream blockers (six) - status after the 2026-11-21 blocker-reduction package
 
-1. In-series drivers + YAML bindings are still drafts (26 review-form patches +
-   the DTS companion), not an accepted upstream submission.
-2. `hsan,flashinfo_reserved` has no upstream binding.
-3. `fixed-layout`/`mac-base` nvmem cells are v6.19 content on a 6.18
-   baseline.
-4. Switch binding/node-name rework (the binding's queue-first `reg-names`
-   order; upstream wants the MMIO windows first, which also renames the node).
-5. `cudy,wr3000-v2` compatible ordering + OpenWrt board metadata/sysupgrade
-   sync.
-6. TWD timer interrupt flags need a hardware re-check (measured `0x301` is
-   kept as-is).
+The six blockers are unchanged in identity, but **blocker-reduction drafts now
+exist** under `../../docs/incoming/upstream-blockers/` (documentation + patch
+drafts only: not the release series, not applied, not hardware-tested).  Nothing
+in that directory changes the current conservative DTS.
+
+| # | blocker | status | draft |
+| --- | --- | --- | --- |
+| 1 | drivers + YAMLs are still drafts | **open** - prioritized top-issue review only; no code rewrite in this pass | `05-driver-yaml-review.md` |
+| 2 | `hsan,flashinfo_reserved` has no upstream binding | **drafted** - reserved-memory child binding + three compatible/loader options; maintainer direction needed; one hardware boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
+| 3 | `fixed-layout`/`mac-base` v6.19 on 6.18 | **path defined** - 6.18 uses the already-implemented userspace/vendor MAC provisioning; DTS nvmem removal drafted; maintainer confirmation + boot-test | `02-mac-provisioning-6.18/` |
+| 4 | switch queue-first `reg-names` / node name | **drafted** - binding + DTS MMIO-first reorder; driver uses by-name lookups so no driver code change; no in-tree users; boot-test required | `03-switch-binding-mmio-first/` |
+| 5 | `cudy,wr3000-v2` compatible ordering + OpenWrt metadata | **drafted** - upstream compatible order + OpenWrt SUPPORTED_DEVICES/board_name diffs; boot-test + sysupgrade metadata check required | `04-compatible-order-openwrt/` |
+| 6 | TWD timer interrupt flags | **hardware-measured, draft ready** - PPI configuration is read-only/fixed; standard level-high DTS flag drafted; active DTS delta needs a boot-test (section 6.1) | `06-twd-irq-flags/` |
+
+**What remains hardware-dependent:** TWD flags (one boot-test; the PPI
+configuration itself is read-only), MAC nvmem removal, switch reorder and the
+compatible ordering (boot-test plus a sysupgrade metadata check).  The flashinfo
+binding is documentation-only unless the vendor compatible is no longer the
+first/only match; the driver/YAML cleanups are code review, not hardware.
+
+### 6.1 TWD timer interrupt flags - measured hardware data (2026-11-21)
+
+Lead measured on the unit (known-good image 7421bb7a, GICD base `0x10181000`):
+
+| register | value |
+| --- | --- |
+| GICD_CTLR | `0x00000001` |
+| GICD_TYPER | `0x0000fc25` |
+| GICD_ICFGR0 | `0xaaaaaaaa` |
+| GICD_ICFGR1 | `0x7dc00000` |
+| GICD_ICFGR2 | `0x55555555` |
+
+Our kernel reports `GIC-0 29 Edge twd` in `/proc/interrupts`; ID 29 is TWD
+PPI 13 (16 + 13).  The GICD_ICFGR1 field for ID 29 (bits 27:26) reads `0b11`,
+a nonstandard/reserved encoding, but **GIC-400 PPI configuration is
+read-only/fixed by the SoC integration**, so the devicetree flag does not
+reprogram hardware.  Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) use
+`IRQ_TYPE_LEVEL_HIGH` for the TWD timer (0xf04 flags for 4 CPUs; the equivalent
+here is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
+
+**Recommendation:** draft the DTS as
+`interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;`
+(standard convention, likely acceptable upstream) and document the measured
+read-only register value as the hardware fact.  This is an **active DTS delta**
+and must be boot-tested before adoption - it is a separate delta from the
+conservative cleanup and is not bundled with it (the lead has offered the
+install/boot test).  Draft diff:
+`../../docs/incoming/upstream-blockers/06-twd-irq-flags/dts-twd-level-high.diff`.
 
 **Not claimed / out of scope (not counted as blockers above):** pinctrl consumer
 states, consumer clocks, the A/B boot-selector protocol beyond the measured
