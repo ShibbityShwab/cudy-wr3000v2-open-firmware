@@ -60,7 +60,7 @@ matters.
 | Data partitions mounted at boot | `fac` → `/usr/local/factory`, `cfga` → `/config/work`, `cfgb` → `/config/workb`, `log` → `/log`, `upgrade` → `/upgrade` |
 | Base packages | stock OpenWrt 22.03.6 + `dnsmasq-full`, `firewall4`, `wpad`, `mosquitto`, `openvpn`, `strongswan`, `chilli`, `cwmp`; vendor packages listed in §2 |
 | Vendor encryption helper | `/usr/bin/crypt` (AES-128/192/256 CBC wrapper over OpenSSL; `-a` standard, `-g` "global" key derived from bdinfo, `-n` explicit hex key; `-e/-d`, `-i/-o`, `-eo`/`-gd` shorthands used throughout the vendor scripts) |
-| Cryptographic literals | `libbdinfo.so` DES key literal `88T3j05dtFu8=`; mosquitto JWT plugin HS256 with bdinfo `secret`; cmagent AES key (see §4.4); cloud request-sign salt (see §5.1). All are firmware-wide constants shipped in every unit, not per-device credentials — reproduced here because they are required to understand/reproduce the protocols; per-unit values (`secret`, `hmac`, `fuuid`, MACs) are **not** included. |
+| Cryptographic literals | `libbdinfo.so` DES key literal `88T3j05dtFu8=`; mosquitto JWT plugin HS256 with bdinfo `secret`; cmagent AES key (see §4.4); cloud request-sign salt (see §5.1). All are firmware-wide constants shipped in every unit, not per-device credentials — reproduced here because they are required to understand/reproduce the protocols; per-unit values (`hmac`, `fuuid`, MACs) are **not** included. (Reconciled 2026-11-22: `secret` is a fleet-wide shared value, not per-unit - `crypt -gd` decrypts firmware-wide mosquitto certs at every boot with no per-unit re-encryption, and the mesh JWT model requires all peers to share the signing key; see docs/incoming/opaque-binaries/REPORT.md section 3.) |
 
 Key artifact hashes (this image):
 
