@@ -223,3 +223,11 @@ RAs, while host-to-box frames were not delivered). The agreed next step is the a
 source-port experiment in opensource/docs/MULTI-PORT-PLAN.md: if the RX completion has a
 source-port field, extend mirror mask + per-port delivery; if not, multi-port LAN/WAN
 forwarding is the native L2/VLAN hardware bridge project (LSW-SPEC), not a CPU-copy hack.
+
+## Multi-port source-port experiment: negative (2026-11-21)
+
+The CPU-copy path was tested with the extended mirror mask (ports 9-12) and full RX descriptor
+capture on the unit. Frames from the far-right jack are delivered exactly like eth2: completion
+port=0, vport=0, only descriptor words 0/1 populated, no source-port field. The mirror mask does
+cover the other jacks, but the CPU cannot tell jacks apart. Multi-port LAN/WAN therefore requires
+the native L2/VLAN bridge (LSW-SPEC, separate project); the single-port bench workaround stands.

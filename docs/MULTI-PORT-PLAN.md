@@ -90,3 +90,34 @@ br-lan 192.168.1.1/24, mirror eth2/port 11 -> CPU dst 4, cpucopy delivery to eth
 - The probe changes are bench-only (patch lives under docs/incoming, not in the
   release series; the build clone was restored to the canonical config and patch
   set after producing the image).
+
+## Measured result of the source-port experiment (2026-11-21)
+
+The probe image a91ebcf0 was installed on the unit (active stock pair untouched, selector 0x11
+verified) and the experiment was run: cable on the far-right LAN jack, host ping loop running,
+router power-cycled so the probe image booted with only that jack connected, descriptors captured
+from the fresh dmesg (boot_id 45df3d10-72ad-43a4-bc2a-88df40710639; UART capture missed the boot
+window but dmesg retained the 24 capped RXDIAG lines).
+
+Result: the far-right-jack descriptors are FIELD-FOR-FIELD IDENTICAL to the eth2 baseline:
+
+  baseline unique fields:  (ch,len,status,err,port,vport,vlan) =
+      (1,74,0,0,0,0,0), (1,66,0,0,0,0,0), (1,88,0,0,0,0,0),
+      (0,60,0,0,0,0,0), (0,60,37,1,11,0,0)
+  far-right-jack unique fields: the same five tuples
+  descriptor words: only word0 (0x04000000) and word1 (DMA address | 0xc2) populated;
+  words 2..7 are zero in every mirrored completion. There is no source-port field.
+
+Conclusions [V]:
+1. The extended mirror mask (ports 9-12 -> CPU dst 4) DOES mirror the other jacks: frames were
+   mirrored and delivered while only the far-right jack was connected.
+2. The CPU-copy completion carries no source-port/vport identifier and no spare descriptor field
+   that varies by jack. Delivering all copies to one netdev (the current cpucopy_port=11) is the
+   only possible CPU-copy behaviour.
+3. Therefore multi-port LAN/WAN over the CPU-copy workaround is NOT feasible. The decision gate
+   resolves to the native path: the L2/VLAN hardware bridge in opensource/docs/LSW-SPEC.md
+   (separate project). Do not extend mirror mask + cpucopy delivery as a multi-port solution, and
+   do not fake port identity by MAC heuristics.
+
+The probe image and patch 066 are retained as bench artifacts only; the board was restored to the
+known-good image 7421bb7a afterwards.
