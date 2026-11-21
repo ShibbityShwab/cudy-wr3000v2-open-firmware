@@ -3,8 +3,15 @@
 **Status: NOT READY (release quality). Blocker B0 stands: the legacy open-firmware repository is
 public and its ten vendor TR6560 BSP object files are downloadable from it right now.**
 
-**Updated:** 2026-11-18, after the owner decision recorded in section 2 (review window 2026-11-18
-19:05-19:20 +07 / 12:05-12:20 UTC).
+**Updated:** 2026-11-18 (original review); 2026-11-21 (purge runbook + hygiene re-audit; see the update block below).
+
+**Update 2026-11-21 - history-purge runbook prepared and dry-run validated; the purge is still OPEN and owner-only.**
+
+- Live legacy refs re-audited 2026-11-21: `master` = `6e35c2988973e58a14e84927a18a2eaf9b01630a` (tree clean, 0 vendor objects) and `omo/phase22-hccaccept` = `15703f5ee222b898191ccd90ae1fcb0e24c179b5` (tree still serves all ten `.o` files; raw URL HTTP 200 `[V]`). Full history (final 2026-11-21 snapshot): 794 commits; eleven binary blobs - the ten vendor `.o` plus one accidental Python-bytecode blob (`target-skeleton/tools/__pycache__/fip-slice.cpython-314.pyc`, found in the re-audit and now included in the recommended purge set). `PUBLISH-READINESS.md` item 1 remains unchecked, correctly.
+- Execution procedure: [PUBLISH-PURGE-RUNBOOK.md](PUBLISH-PURGE-RUNBOOK.md) - copy-paste phases P0-P9 with explicit HOLD/ABORT points, verification gates V1-V8, branch delete-or-rewrite options, force-with-lease push, fresh-clone verification, GitHub Support cache purge, rollback and evidence checklist. It was **dry-run validated on 2026-11-21** in throwaway `/tmp` clones only (the final pass used the eleven-path set against the current refs; the master tip advanced from `0c82cb8...` to `6e35c29...` during the audit, so P0 re-audits live refs and updates the expected values if they move again): the rewrite preserved all 794 commits and all non-vendor content, all eleven old blob ids became unreachable and absent after reflog expire + gc, both branch options were exercised against local bare remotes, and fresh clones verified clean. **No push, remote change, branch operation, cache purge or commit occurred.**
+- Still owner-only and still blocking B0/B1: force-push `master`, branch delete-or-rewrite, GitHub Support cache purge. B0/B1 close only after that runs and a fresh clone of the public remote verifies clean.
+- Publication-hygiene re-audit (2026-11-21): root notebook HEAD `c6a75be447c481363b800cc3561f7e7e72edcff9` has 0 tracked binary files and 0 private-key/token/literal-password patterns `[V]`, but carries 12 host-path lines (username paths) and 12 real-MAC occurrences in ledger/evidence pages - a policy regression against PUBLISH.md's "HEAD sanitized" claim; redaction is the notebook lane's action, not this page's. Curated `cudy-wr3000v2-openwrt` `4e2f256` (41 commits, 0 binary blobs anywhere, no `/home/` paths, 110 parent-relative `build/linux-kbuild` evidence references, `LICENSE-MIT` + `LICENSE-GPL-2.0` + `NOTICE.md`; `PROVENANCE.md`/`CONTRIBUTING.md` not yet present) and `cudy-wr3000v2-cve` `9b1e7d1` (1 commit, 13 files, 0 binaries, no secrets or host paths, MIT) are clean for their purpose `[V]`.
+
 **Companions:** `PUBLISH-READINESS.md` (the legacy checklist), `GPL-REQUEST.md`,
 `../tools/publish-prep-check.sh` (read-only checker). This page is about public
 releases; it proposes **no device step** - the router, UART, TFTP and the fire lane are not
@@ -68,8 +75,8 @@ git -C /tmp/pub-audit.git rev-list --count --all              # 694
 git -C /tmp/pub-audit.git rev-list --objects --all | grep -E '\.(o|ko)( |$)'    # 10
 git -C /tmp/pub-audit.git for-each-ref --format='%(refname) %(objectname:short)'
 
-git -C /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2 remote -v
-git -C /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2 ls-files patched tools/vendor-mods
+git -C ~/Documents/GitHub/cudy-wr3000v2 remote -v
+git -C ~/Documents/GitHub/cudy-wr3000v2 ls-files patched tools/vendor-mods
 ```
 
 ### 1.1 Public surface at audit time [V]
@@ -734,7 +741,7 @@ path (section 2).
 | # | requirement | curated-repo gate (G1) | legacy state (G2) | verify |
 | --- | --- | --- | --- | --- |
 | 0 | vendor objects not on a release surface | curated repos contain no vendor object/bytecode/firmware blob; fresh history has none | legacy history still has 10 blobs + root history 11; legacy archived/superseded (or appendix-A purge) | fresh-clone scan + checker [E] |
-| 1 | history purge on the legacy repo | not required for curated repos (new histories) | optional appendix A; if executed, ten blob ids absent from all history, both branches, remote verified | appendix A.1 |
+| 1 | history purge on the legacy repo | not required for curated repos (new histories) | owner-only runbook prepared and dry-run validated (see PUBLISH-PURGE-RUNBOOK.md); if executed, ten blob ids absent from all history, both branches, remote verified | runbook phases P5-P7 |
 | 2 | no other vendor binaries/blobs/calibration | curated content manifest excludes them; no patched Lua, no dumps unless decided | root HEAD: remove 4 Lua bytecode files; dumps decision recorded | checker [E]; manifest review |
 | 3 | GPL request sent/reply evidence | copy docs/GPL-REQUEST.md into curated openwrt repo; either add sent copy/receipt or record dated acceptance | same record stays | checker [D] |
 | 4 | license split + DCO | curated repos born with LICENSE + COPYING + CONTRIBUTING + SPDX/copyright headers; all commits signed off | legacy: record as historical limitation (0/694 sign-offs); not retroactively fixed unless appendix A | checker [A] [B] |
@@ -752,6 +759,8 @@ explicitly deferred by the owner.
 ---
 
 ## 8. `publish-prep-check.sh` - usage and recorded output
+
+**Recorded-output note:** the block below is verbatim except the single `repo:` line, where the local absolute path is replaced by `<repo-root>` for publication hygiene.
 
 ```sh
 tools/publish-prep-check.sh [--strict] [--no-history] [--no-links]
@@ -772,7 +781,7 @@ block.
 
 ```
 publish-prep-check - read-only publish-readiness check (dry run)
-repo: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource
+repo: <repo-root>/opensource  # local absolute path redacted in this copy
 HEAD: f10ffec  branch: master
 origin: https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware.git
 time: 2026-11-18T12:21:41Z
@@ -949,9 +958,9 @@ git -C /tmp/pub-audit.git rev-list --objects --all | grep -E '\.(o|ko)$'
 git -C /tmp/pub-audit.git for-each-ref --format='%(refname) %(objectname:short)'
 
 # root notebook history/HEAD
-git -C /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2 rev-list --count --all
-git -C /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2 ls-files patched tools/vendor-mods
-git -C /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2 rev-list --objects --all \
+git -C ~/Documents/GitHub/cudy-wr3000v2 rev-list --count --all
+git -C ~/Documents/GitHub/cudy-wr3000v2 ls-files patched tools/vendor-mods
+git -C ~/Documents/GitHub/cudy-wr3000v2 rev-list --objects --all \
   | grep -Ei '\.(o|ko|bin|img|elf|a|so|dtb|ubi|squashfs)$'
 
 # CVE records (public JSON)
@@ -998,6 +1007,8 @@ prose.
 ---
 
 ## Appendix A - history purge / containment plan for the legacy repositories (not executed)
+
+**Execution procedure:** [PUBLISH-PURGE-RUNBOOK.md](PUBLISH-PURGE-RUNBOOK.md) is the authoritative owner-run procedure (prepared and dry-run validated 2026-11-21). This appendix remains the strategy-level plan and has not been executed.
 
 This is the procedure if the owner later decides the legacy repositories must be *cleaned*, not
 just archived/superseded. It is destructive; it requires an explicit owner go and a verified

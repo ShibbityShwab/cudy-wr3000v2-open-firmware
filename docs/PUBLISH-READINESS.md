@@ -5,6 +5,22 @@
 the basis of an upstream submission. The live bench state is the parent repo's `STATUS.md`;
 this file is about publication, not about the router.
 
+## Update 2026-11-21 (legacy purge runbook prepared; item 1 still open)
+
+The legacy open-firmware repository is still public and unarchived. Re-audited 2026-11-21:
+`master` = `6e35c2988973e58a14e84927a18a2eaf9b01630a` (705 files, 0 vendor objects in the
+tree), second branch `omo/phase22-hccaccept` = `15703f5ee222b898191ccd90ae1fcb0e24c179b5`
+(434 files, all ten vendor `.o` files still in the tree and served over HTTP; `[V]`), and
+794 commits of history containing eleven binary blobs reachable from every ref (the ten vendor
+`.o` files plus one accidental Python-bytecode file, all included in the prepared purge set). Checklist
+item 1 is therefore **still unchecked and must stay unchecked** until the purge has actually run
+and a fresh clone of the public remote verifies clean.
+
+The execution procedure is prepared and dry-run validated (throwaway local clones only; no remote
+change): [PUBLISH-PURGE-RUNBOOK.md](PUBLISH-PURGE-RUNBOOK.md). It is owner-only. The strategy,
+blockers and curated-repo path stay in [PUBLISH-PREP.md](PUBLISH-PREP.md). No history rewrite,
+push, branch deletion or cache purge has been performed.
+
 ## Update 2026-11-18 (design layer added; nothing in the checklist below is closed)
 
 The upstream design layer was added on 2026-11-18: `TARGET-DESIGN.md` (target/subtarget layout,

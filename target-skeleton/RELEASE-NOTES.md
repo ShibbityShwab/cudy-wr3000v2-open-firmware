@@ -239,3 +239,15 @@ the native L2/VLAN bridge (LSW-SPEC, separate project); the single-port bench wo
   all six LEDs lit (active-low GPIO map 24/25/3/2/0/1); set back to off afterwards.
 - Buttons [V]: RESET and WPS presses both captured on /dev/input/event0 as EV_KEY press+release pairs
   (RESET = KEY_RESTART 0x198, WPS = KEY_WPS_BUTTON 0x211).
+
+
+## TWD timer interrupt flags: measured and boot-tested (2026-11-21)
+
+Upstream blocker #6 is closed. The target DTS now uses the standard Cortex-A9 TWD encoding
+<GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)> (0x304). Hardware facts: the GIC-400
+PPI configuration is read-only/SoC-fixed and the measured GICD_ICFGR1 field for PPI13/ID29 is 0b11,
+so the DT flag cannot reprogram hardware; the standard LEVEL_HIGH form is what upstream platforms
+use. Boot test PASS on image f6685b80 (sha256 f6685b80...): /proc/interrupts reports
+"GIC-0 29 Level twd", both CPUs tick at ~100 Hz, ping 0% loss, no Oops/RCU stalls. DTS-0001 and the
+release validation will be refreshed from the new single-source DTS; the previously verified
+baseline was 7421bb7a (same userspace).
