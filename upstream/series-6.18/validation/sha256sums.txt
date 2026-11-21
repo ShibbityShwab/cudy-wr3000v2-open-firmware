@@ -98,7 +98,7 @@ e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938  ../../target-s
 5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8  ../../target-skeleton/target/linux/hisilicon/patches-6.18/065-arm-hisilicon-smp-trampoline.patch
 
 ## upstream DTS series entry (DTS-0001; companion to the kernel patch 0018)
-072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
+e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
 
 ## kernel tarball used for validation (not stored in this repo)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

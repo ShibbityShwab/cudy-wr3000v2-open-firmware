@@ -11,13 +11,13 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | item | value |
 | --- | --- |
 | kernel review form | 26 patches in `../series/` (RFC / do-not-merge split; see `../00-cover-letter.md`) |
-| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9` |
-| single-source board DTS | 1,329-line pre-clean source -> **691 lines** after conservative comment-only cleanup; sha256 `9d2d39db8fe5d28aaf7ede5f6350cbdf496b53148d44a8f3a22603d43c9406bc` |
-| compiled board DTB | **13,041 B** sha256 `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`; unaligned totalsize, `pad-dtb.py` pads to **13,048 B** sha256 `402e4f71d12fca46e1d940c7b60a123e3ce1a734acec17b67bbf7ae338d91e03` |
-| known-good hardware image | **7421bb7a** (byte-identical rebuilt image; pre-clean DTS) |
+| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1` (713 lines) |
+| single-source board DTS | pre-clean 1,329 lines -> conservative cleanup **691 lines** (7ae18f2) -> **700 lines** after the boot-tested TWD level-high delta (5b401c1); sha256 `13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4` |
+| compiled board DTB | **13,041 B** sha256 `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`; unaligned totalsize, `pad-dtb.py` pads to **13,048 B** sha256 `4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890` |
+| current DTS-purpose hardware image | **f6685b80** (boot-tested with the TWD level-high delta; 2 CPUs, `GIC-0 29 Level twd`, ping 20/20).  Previous verified baseline: **7421bb7a** |
 | release-line validator | PASS: 51 include / 11 exclude, 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, strict git apply 51/51; DTS contract and DTS-0001 byte-identity OK |
 | review form checks | 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, 0 fuzz; checkpatch **0 errors / 58 warnings** |
-| current conservative DTS final | submodule commit **7ae18f2**; the superseded active cleanup **538377c** is regressed and NOT current (`../04-validation.md` sections 22-23, `../07-dts-upstream-bindings.md` section 1) |
+| current devicetree final | submodule commit **5b401c1** (conservative cleanup 7ae18f2 + boot-tested TWD level-high delta); the superseded active cleanup **538377c** is regressed and NOT current (`../04-validation.md` sections 22-25, `../07-dts-upstream-bindings.md` section 6) |
 
 ## What is in this package
 
@@ -32,16 +32,16 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 
 | artifact | sha256 | role |
 | --- | --- | --- |
-| `../../../target-skeleton/dts/luofu-r116.dts` | `9d2d39db8fe5d28aaf7ede5f6350cbdf496b53148d44a8f3a22603d43c9406bc` | single-source board DTS (outside the package tree) |
-| `../00-cover-letter.md` | `4e458f8fe2ae0b992c7bfbd55f257eea6e244b8fc900e38ccea8a680b99e1961` | submission document |
+| `../../../target-skeleton/dts/luofu-r116.dts` | `13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4` | single-source board DTS (outside the package tree) |
+| `../00-cover-letter.md` | `a9dd327957db4f577955435e61a900fb7d2c477a7cc086530177422067c7ea59` | submission document |
 | `../01-commit-messages.md` | `d9fbfa51823d771ec1150358c716a53ea98a03d615529d60f5e0a2e3e4069ecd` | submission document |
 | `../02-maintainers-proposal.md` | `30ae8a95b2786b3d60153f26fc4b8bf7b0c4b38b78e06e82e60b4a7f26d05c31` | submission document |
 | `../03-rationale-tree-placement.md` | `7fdf3c34343a6004d69fc8cd55a055db02b0e471f363c91270e54889179350fa` | submission document |
-| `../04-validation.md` | `ec2f5a86ed04e25300ddc3bef6fdd841f8f1b96c3b4b4b1a14659d78c218839f` | submission document |
-| `../05-release-line.md` | `95920da55074aca880d98356b176e7142067ef1b4654986133cd8f18a9eff9b1` | submission document |
-| `../06-dts-series-dependency.md` | `116255b44c3eb70563107cc34b91905e8a65ffe181ab9aa1bcae28187af87d84` | submission document |
-| `../07-dts-upstream-bindings.md` | `906a644f582db064f57a5f94176d47908c496be8b19a879c02dafb7a46c34269` | submission document |
-| `../README.md` | `ca85115f14c53b7bbb82c65c74149f6affe637bc410fe18374e54bd7254f03bf` | submission document |
+| `../04-validation.md` | `8cf588add10a0ba46aa354d10284a793b899f211c876a14bebc79d9f3e57ff95` | submission document |
+| `../05-release-line.md` | `1de59312259a712d29d1e9e780e8b44e41cae91b81c186992da3e2188815f2a9` | submission document |
+| `../06-dts-series-dependency.md` | `cc0279e813087418fb8aea200c97ce33e18bde9dc979472db686736f3ebf8508` | submission document |
+| `../07-dts-upstream-bindings.md` | `26ecc9487b270d25b79da25af776c762cd8ad78754ff98949d48771fb18fca88` | submission document |
+| `../README.md` | `d463cee91023dfe4043ed4a9920b7bc81c03e8d23857671872504f92b6ecb842` | submission document |
 | `../commit-messages/0001-arm-mach-hisilicon-luofu.txt` | `766990284609fe095e6d971fc1414972899aa2d5f8d0ff6048a9e1a4415b2ad5` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0002-arm-kconfig-textofs.txt` | `5f188ce552a4d5bd54cd98f031396c0f910d40f8ac9e566712711300a098ca5a` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0003-arm-textofs-nonimmediate.txt` | `76d40be5e780a9a2510fbbf50b0ed16294883881105dc22cea42e389e66e7dbe` | per-patch commit-message draft (provenance) |
@@ -68,7 +68,7 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../commit-messages/0024-net-pie-completion-decode-luofu.txt` | `4f0ed10cb5849f9ecc27eb523714f4a04c833f668a6773fd8b91fd88e5938814` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0025-net-lsw-egress-luofu.txt` | `18f99bae18c640b3b7c2e6248469f9e16c4de2eba8f20f2b75354c0249c74204` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0026-net-gmac-bdinfo-mac-nvmem.txt` | `bc31ff38703abd5e0c9e1d835943dfd41f5a3209448d4232beb07c1d915a6db8` | per-patch commit-message draft (provenance) |
-| `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | `072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9` | DTS-series entry DTS-0001 (companion of 0018) |
+| `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1` | DTS-series entry DTS-0001 (companion of 0018) |
 | `../release-line/EXCLUDED.txt` | `35501a8366bb3404faaf6a3c3b0bb5bce684ebd6e36a2cee03a95a31b1b6895e` | release-line manifest/classification |
 | `../release-line/INCLUDED.txt` | `af5f32e40fd6bb7995205f90e4f5e2c796398c3fd8f15ba86d5f62c1305e9120` | release-line manifest/classification |
 | `../release-line/manifest.tsv` | `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0` | release-line manifest/classification |
@@ -126,8 +126,8 @@ regenerated 2026-11-21 from the current tree (see git log for the exact commit).
 | `../validation/release-line/offsets.txt` | `75528687d76d4c88332abdb72d57e16488051387eab5c7992e37c4a3afb7b97c` | validation log |
 | `../validation/release-line/pad-dtb.log` | `b3d4e1d4ff93502db610be7cd6856fb65c93ffd8b356a446cda69d34ae4b070a` | validation log |
 | `../validation/release-line/patch-apply.log` | `29c2b56b31433342b568973e8bd73c8c65bcb611b5aacdf8dab58820ceec06a1` | validation log |
-| `../validation/release-line/summary.txt` | `01aac3f116907d9e9a66a4cda0a134db8e3e6567732c01942213e4d7a5311bd9` | validation log |
-| `../validation/sha256sums.txt` | `0cf00e9d55fb9b05a09b03f13bad4a99ac5e896799b5081efd52c894ea525f46` | validation log |
+| `../validation/release-line/summary.txt` | `d35ae39f1cfc794881c3860e852659587daf48d1fd50eb0fb4265e63a4e91aa5` | validation log |
+| `../validation/sha256sums.txt` | `118c9e5065a73e64d0456677b04a1f286cef1cc9e37a8b5b2efc32f2b2a1fad8` | validation log |
 | `../validation/tree-diff.log` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | validation log |
 | `../validation/tree-equivalence.txt` | `7a399c88d8c6aad4e39f3553c6c4b56986823f6c666bc87c35be41d74845b2a2` | validation log |
 | `../validation/version.txt` | `fca6872c788884dd9df279d37e972d76924f2426be56259c9c451a47ae93f95e` | validation log |
@@ -161,7 +161,7 @@ checks (patch apply, dtc, contract, pad, checkpatch) are necessary but not
 sufficient - the rebuilt image must be boot-tested on the unit after any
 active-DTS change.
 
-## Six remaining blockers before this could be merge-intent (status 2026-11-21)
+## Five remaining blockers before this could be merge-intent (status 2026-11-21); TWD closed
 
 Blocker-reduction drafts (documentation + patch drafts only, not applied and not
 part of this package) live under
@@ -174,10 +174,9 @@ part of this package) live under
 | 3 | `fixed-layout`/`mac-base` v6.19 on 6.18 | path defined: 6.18 uses the implemented userspace/vendor MAC provisioning; DTS nvmem removal drafted; boot-test | `02-mac-provisioning-6.18/` |
 | 4 | switch queue-first `reg-names` / node name | drafted MMIO-first binding+DTS reorder; driver uses by-name so no code change; boot-test | `03-switch-binding-mmio-first/` |
 | 5 | `cudy,wr3000-v2` compatible ordering + OpenWrt metadata | drafted DTS order + OpenWrt SUPPORTED_DEVICES/board_name diffs; boot-test + sysupgrade check | `04-compatible-order-openwrt/` |
-| 6 | TWD timer interrupt flags | hardware-measured (GICD_ICFGR1 ID29 bits 27:26 = 0b11, PPI config read-only/fixed); standard level-high DTS flag drafted; active DTS delta needs boot-test | `06-twd-irq-flags/` |
+| 6 | ~~TWD timer interrupt flags~~ | **CLOSED** - measured read-only PPI data + level-high delta boot-tested PASS on image f6685b80 (`/proc/interrupts`: `GIC-0 29 Level twd`, 2 CPUs, counts ~100 Hz, ping 20/20, no errors); adopted in commit 5b401c1 | `06-twd-irq-flags/` |
 
-**What remains hardware-dependent:** TWD flags (one boot-test; the PPI
-configuration is read-only), MAC nvmem removal, switch reorder, and the
+**What remains hardware-dependent:** MAC nvmem removal, switch reorder, and the
 compatible ordering (boot-test + sysupgrade metadata check).  The flashinfo
 binding is documentation-only unless the vendor compatible is no longer first;
 the driver/YAML cleanups are code review.  Full record:

@@ -44,11 +44,13 @@ the regression.  Host-side checks (patch application, dtc compile, contract
 values, DTS-0001 identity, pad-dtb) are necessary but **not sufficient**.  The
 active DTS was therefore reverted to the known-good content; the earlier
 aggressive cleanup is not hardware-validated and must not be used as-is.  The
-current conservative final is commit `7ae18f2` (section 2).
+conservative cleanup is commit `7ae18f2` (section 2); afterwards the
+boot-tested TWD level-high delta was adopted in commit `5b401c1` (section
+6.1), which is the current devicetree final.
 
-## 2. Conservative cleanup (this commit)
+## 2. Conservative cleanup and the adopted TWD delta
 
-Only comments were touched.  Starting from the pre-clean, hardware-verified DTS
+Only comments were touched in the conservative cleanup.  Starting from the pre-clean, hardware-verified DTS
 (1,329 lines at submodule `ddeaa63`):
 
 - every active node name, unit address, property order/value, `reg` order,
@@ -70,8 +72,21 @@ Only comments were touched.  Starting from the pre-clean, hardware-verified DTS
 
 Because the compiled DTB is byte-identical, the conservative DTS restores the
 exact hardware-verified devicetree semantics of image 7421bb7a; the remaining
-visible change is prose only.  A boot-test of the rebuilt image is still
-required to close the loop on the image itself (new build, same DT).
+visible change is prose only.
+
+After that boot-test, the only active devicetree change adopted so far is the
+TWD timer interrupt encoding in commit `5b401c1` (section 6.1):
+`interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;`.
+Current final DTS: **700 lines**, sha256
+`13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4`; current
+DTB: **13,041 B** sha256
+`4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`, padded
+to **13,048 B** sha256
+`4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`;
+DTS-0001 regenerated: sha256
+`e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1`, 713
+lines.  Image **f6685b80** (boot-tested) is the new DTS-purpose hardware
+baseline; 7421bb7a remains the previous verified baseline.
 
 ## 3. Optional deltas (NOT applied; each needs its own hardware-tested patch)
 
@@ -114,9 +129,11 @@ present in the hardware-verified DTB and are not prose:
 4. `gpio-keys-polled` child names (`reset`/`wps`) and the
    gpio-leds child names (`led-status`...) do not use the preferred
    standard names; kept until the rename is boot-tested (optional deltas 2/3).
-5. The TWD timer interrupt keeps the measured vendor encoding (PPI 13,
-   `0x301` = CPU mask 2 + edge rising); standard TWD wiring is usually
-   level-high.  Verify on hardware before changing it.
+5. The TWD timer interrupt was changed to the standard
+   `GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)` encoding after
+   the measured read-only PPI data and a boot-test PASS (image f6685b80;
+   section 6.1).  The measured GICD_ICFGR1 `0b11` value remains documented as
+   the hardware fact.
 6. The root compatible does not carry `cudy,wr3000-v2` yet (delta 1).
 7. The draft in-series bindings/drivers are not upstream, so the board DTS
    cannot be submitted before they are accepted.
@@ -132,31 +149,40 @@ review against the in-series YAMLs and the standard 6.18 bindings.
 
 ## 5. Compile/pad facts and validation
 
-- conservative DTS compile: cpp+dtc RC=0, 0 stderr; DTB **13,041 B** sha256
+- conservative-step DTS compile (7ae18f2): cpp+dtc RC=0, 0 stderr; DTB
+  **13,041 B** sha256
   `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
-  byte-identical to the known-good DTB;
-- totalsize 13,041 is **not** 8-byte aligned; `Build/luofu-pad-dtb` pads
-  to **13,048 B** (sha256
-  `402e4f71d12fca46e1d940c7b60a123e3ce1a734acec17b67bbf7ae338d91e03`) and keeps the
-  loader hand-off contract (same measured failure mode as
+  byte-identical to the known-good DTB (proves the prose-only step);
+- current final DTS (after the adopted TWD delta): cpp+dtc RC=0, 0 stderr; DTB
+  **13,041 B** sha256
+  `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`;
+  totalsize unaligned, pad step **13,048 B** sha256
+  `4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`, loader
+  hand-off contract preserved (same pad requirement as
   `../../docs/TRAILER-FORMAT.md` section 11);
-- release-line validator: L1 51/51 patch(1) RC=0, 0 rejects, 3 offset hunks,
-  **0 fuzz**, strict `git apply` 51/51; target DTS contract and DTS-0001
-  identity PASS; pad step exercised;
+- release-line validator (current): L1 51/51 patch(1) RC=0, 0 rejects, 3 offset
+  hunks, **0 fuzz**, strict `git apply` 51/51; target DTS contract and
+  DTS-0001 identity PASS; pad step exercised; DTS-0001 sha256
+  `e9c9ed58...` (713 lines);
 - upstream review form: 26/26 patch(1)+`git am`, identical trees,
-  checkpatch 0 errors / 58 warnings;
+  checkpatch 0 errors / 58 warnings (series patches unchanged by the DTS-only
+  TWD delta; last recorded run still applies);
 - `gen-series.py --check` clean; `validation/sha256sums.txt` 89
   entries, `sha256sum -c` passes; manifest 51 include / 11 exclude / 62
   patches, sha256 `4da8b960...`;
-- **hardware boot-test of the rebuilt image is still required** after this
-  change; host checks cannot substitute for it.
+- **hardware boot-test:** the TWD delta PASSed (image f6685b80, 2 CPUs,
+  `/proc/interrupts` `GIC-0 29 Level twd`, counts ~100 Hz on both CPUs,
+  ping 20/20, no Oops/BUG/panic/RCU stall).  Any future active-DTS change must
+  repeat the boot-test; host checks cannot substitute for it.
 
-## 6. Remaining upstream blockers (six) - status after the 2026-11-21 blocker-reduction package
+## 6. Remaining upstream blockers (five) - status after the 2026-11-21 blocker-reduction package
 
-The six blockers are unchanged in identity, but **blocker-reduction drafts now
-exist** under `../../docs/incoming/upstream-blockers/` (documentation + patch
-drafts only: not the release series, not applied, not hardware-tested).  Nothing
-in that directory changes the current conservative DTS.
+**Blocker 6 (TWD timer interrupt flags) is CLOSED** - measured on hardware, the
+level-high delta was boot-tested PASS (image f6685b80) and adopted in commit
+`5b401c1` (section 6.1).  Five blockers remain; blocker-reduction drafts for
+them exist under `../../docs/incoming/upstream-blockers/` (documentation +
+patch drafts only: not the release series, not applied).  Nothing there changes
+the current final DTS except as noted.
 
 | # | blocker | status | draft |
 | --- | --- | --- | --- |
@@ -165,17 +191,17 @@ in that directory changes the current conservative DTS.
 | 3 | `fixed-layout`/`mac-base` v6.19 on 6.18 | **path defined** - 6.18 uses the already-implemented userspace/vendor MAC provisioning; DTS nvmem removal drafted; maintainer confirmation + boot-test | `02-mac-provisioning-6.18/` |
 | 4 | switch queue-first `reg-names` / node name | **drafted** - binding + DTS MMIO-first reorder; driver uses by-name lookups so no driver code change; no in-tree users; boot-test required | `03-switch-binding-mmio-first/` |
 | 5 | `cudy,wr3000-v2` compatible ordering + OpenWrt metadata | **drafted** - upstream compatible order + OpenWrt SUPPORTED_DEVICES/board_name diffs; boot-test + sysupgrade metadata check required | `04-compatible-order-openwrt/` |
-| 6 | TWD timer interrupt flags | **hardware-measured, draft ready** - PPI configuration is read-only/fixed; standard level-high DTS flag drafted; active DTS delta needs a boot-test (section 6.1) | `06-twd-irq-flags/` |
 
-**What remains hardware-dependent:** TWD flags (one boot-test; the PPI
-configuration itself is read-only), MAC nvmem removal, switch reorder and the
-compatible ordering (boot-test plus a sysupgrade metadata check).  The flashinfo
-binding is documentation-only unless the vendor compatible is no longer the
-first/only match; the driver/YAML cleanups are code review, not hardware.
+**What remains hardware-dependent:** MAC nvmem removal, switch reorder and the
+compatible ordering (boot-tests, plus a sysupgrade metadata check for the
+compatible ordering).  The flashinfo binding is documentation-only unless the
+vendor compatible is no longer the first/only match; the driver/YAML cleanups
+are code review, not hardware.
 
-### 6.1 TWD timer interrupt flags - measured hardware data (2026-11-21)
+### 6.1 TWD timer interrupt flags - CLOSED (boot-tested, image f6685b80)
 
-Lead measured on the unit (known-good image 7421bb7a, GICD base `0x10181000`):
+Measured on hardware on the previous baseline 7421bb7a (GICD base
+`0x10181000`):
 
 | register | value |
 | --- | --- |
@@ -185,31 +211,33 @@ Lead measured on the unit (known-good image 7421bb7a, GICD base `0x10181000`):
 | GICD_ICFGR1 | `0x7dc00000` |
 | GICD_ICFGR2 | `0x55555555` |
 
-Our kernel reports `GIC-0 29 Edge twd` in `/proc/interrupts`; ID 29 is TWD
-PPI 13 (16 + 13).  The GICD_ICFGR1 field for ID 29 (bits 27:26) reads `0b11`,
-a nonstandard/reserved encoding, but **GIC-400 PPI configuration is
-read-only/fixed by the SoC integration**, so the devicetree flag does not
-reprogram hardware.  Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) use
-`IRQ_TYPE_LEVEL_HIGH` for the TWD timer (0xf04 flags for 4 CPUs; the equivalent
-here is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
+On 7421bb7a the kernel reported `GIC-0 29 Edge twd`; ID 29 is TWD PPI 13
+(16 + 13).  The GICD_ICFGR1 field for ID 29 (bits 27:26) reads `0b11`, a
+nonstandard/reserved encoding, but **GIC-400 PPI configuration is read-only/
+fixed by the SoC integration**, so the devicetree flag does not reprogram
+hardware.  Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) use
+`IRQ_TYPE_LEVEL_HIGH` for the TWD timer (0xf04 flags for 4 CPUs; the
+equivalent here is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
 
-**Recommendation:** draft the DTS as
-`interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;`
-(standard convention, likely acceptable upstream) and document the measured
-read-only register value as the hardware fact.  This is an **active DTS delta**
-and must be boot-tested before adoption - it is a separate delta from the
-conservative cleanup and is not bundled with it (the lead has offered the
-install/boot test).  Draft diff:
-`../../docs/incoming/upstream-blockers/06-twd-irq-flags/dts-twd-level-high.diff`.
+The level-high draft was applied and boot-tested: image **f6685b80**, installed
+with the verified telnet installer (PASS; pair b, selector 0x11), boots
+6.18.60 with 2 CPUs, `/proc/interrupts` now reports
+`GIC-0 29 Level twd` (was `Edge`), TWD counts increment ~100 Hz on both
+CPUs, host ping 20/20 0% loss, no Oops/BUG/Kernel panic/RCU stall, uptime
+stable.  Adopted in commit `5b401c1`; current final DTS 700 lines sha256
+`13427d8e...`; DTB 13,041 B sha256 `4fde76df...` (pad 13,048 B
+sha256 `4b50de73...`); DTS-0001 sha256 `e9c9ed58...` (713 lines).
+Image f6685b80 supersedes 7421bb7a for DTS purposes; 7421bb7a remains the
+previous verified baseline.
 
-**Not claimed / out of scope (not counted as blockers above):** pinctrl consumer
-states, consumer clocks, the A/B boot-selector protocol beyond the measured
-`0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi and thermal
-support, and the unused vendor blocks (wired-first target).
+**Not claimed / out of scope (not counted among the five blockers):** pinctrl
+consumer states, consumer clocks, the A/B boot-selector protocol beyond the
+measured `0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi and
+thermal support, and the unused vendor blocks (wired-first target).
 
-**Current conservative devicetree final:** commit `7ae18f2` (active content
-byte-identical to the known-good DTB); the superseded active cleanup `538377c`
-is recorded in section 1 and is **not** current.
+**Current devicetree final:** commit `5b401c1` (conservative cleanup
+`7ae18f2` plus the boot-tested TWD level-high delta); the superseded active
+cleanup `538377c` is recorded in section 1 and is **not** current.
 
 ## 7. Single-source and regeneration
 

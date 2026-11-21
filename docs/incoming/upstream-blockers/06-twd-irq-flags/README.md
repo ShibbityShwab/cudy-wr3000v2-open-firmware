@@ -1,8 +1,19 @@
-# Blocker 6 - TWD timer interrupt flags: measured hardware data and draft
+# Blocker 6 - TWD timer interrupt flags: measured, boot-tested, CLOSED
 
-## Measured on hardware (2026-11-21, known-good image 7421bb7a)
+**Status: CLOSED (2026-11-21).**  Adopted as a boot-tested active DTS change in
+submodule commit `5b401c1` (the level-high draft below was applied to the
+single-source DTS).  Current final DTS: 700 lines, sha256
+`13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4`; DTB
+13,041 B sha256
+`4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9` (pad
+13,048 B sha256
+`4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`);
+new DTS-purpose hardware baseline image **f6685b80** (previous verified baseline
+`7421bb7a` remains recorded).
 
-GICD base `0x10181000`, read by the lead on the unit:
+## Measured hardware data (2026-11-21, on previous baseline image 7421bb7a)
+
+GICD base `0x10181000`, read on the unit:
 
 | register | value |
 | --- | --- |
@@ -12,37 +23,38 @@ GICD base `0x10181000`, read by the lead on the unit:
 | GICD_ICFGR1 | `0x7dc00000` |
 | GICD_ICFGR2 | `0x55555555` |
 
-Our kernel reports `GIC-0 29 Edge twd` in `/proc/interrupts`.  ID 29 is
-TWD PPI 13 (hwirq 29 = 16 + 13).  The ICFGR1 field for ID 29 is bits 27:26 =
-`0b11` - a nonstandard/reserved encoding - but **GIC-400 PPI configuration is
-read-only/fixed by the SoC integration**, so the DTS flag does not reprogram
-hardware.  The observed "Edge" description comes from the fixed read-only value,
-not from the devicetree.
+On the previous baseline the kernel reported `GIC-0 29 Edge twd`; ID 29 is
+TWD PPI 13 (hwirq 29 = 16 + 13).  The GICD_ICFGR1 field for ID 29 (bits 27:26)
+reads `0b11`, a nonstandard/reserved encoding, but **GIC-400 PPI
+configuration is read-only/fixed by the SoC integration**, so the devicetree
+flag does not reprogram hardware.
 
-Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) describe the TWD timer with
-`IRQ_TYPE_LEVEL_HIGH` (their 0xf04 flags; for this 2-CPU board the equivalent
-is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
+## Boot-test PASS (image f6685b80)
 
-## Recommendation
+The level-high delta was built from the current target DTS with this draft
+applied and installed with the verified telnet installer (PASS; pair b,
+selector 0x11):
 
-Draft the board DTS as:
+- boot: linux-6.18.60, 2 CPUs;
+- `/proc/interrupts` now reports **`GIC-0 29 Level twd`** (previously
+  `Edge`);
+- TWD counts increment at ~100 Hz on both CPUs;
+- host ping 20/20, 0% loss;
+- no Oops/BUG/Kernel panic/RCU stall; uptime stable.
 
-    interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;
+**Conclusion:** the standard `IRQ_TYPE_LEVEL_HIGH` encoding is correct for
+this board.  The delta is adopted (commit `5b401c1`), DTS-0001 was
+regenerated (sha256
+`e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1`, 713
+lines) and the release-line validator passed with the new DTB.
 
-This follows the standard binding convention and is likely acceptable upstream.
-It is an **active DTS delta** and must be boot-tested before adoption (lead has
-offered to run the install/boot test).  It is a separate delta from the
-conservative cleanup and is not bundled with it.  The measured ICFGR value is
-documented here as the hardware fact.
-
-## Draft artifact
+## Retained draft artifact (already applied)
 
 - `dts-twd-level-high.diff` - adds the GIC/irq includes and changes only the
-  TWD `interrupts` property; no other active change.
+  TWD `interrupts` property; applied in commit `5b401c1`, retained for
+  audit.
 
 ## Remaining hardware dependency
 
-One boot-test with the level-high draft: the PPI configuration does not change
-(hardware read-only), but the active DTS delta rule still requires a boot-test
-before adoption.  After that, blocker 6 is closed as far as the devicetree goes
-(the measured read-only encoding remains documented).
+None for blocker 6.  The measured read-only encoding stays documented here as a
+hardware fact; no further DTS change is planned.

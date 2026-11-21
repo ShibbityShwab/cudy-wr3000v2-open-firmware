@@ -1119,8 +1119,9 @@ The known-good image 7421bb7a (pre-clean DTS) shows partition scan
 3.01 s.  Host checks (apply, dtc, contract, pad, DTS-0001 identity) are
 therefore necessary but **not sufficient**.
 
-**Conservative cleanup (commit `7ae18f2`, current final):** starting from
-the pre-clean, hardware-verified DTS
+**Conservative cleanup (commit `7ae18f2`; the TWD level-high delta was
+adopted later in commit `5b401c1`, section 25):** starting from the
+pre-clean, hardware-verified DTS
 (1,329 lines), only comments were removed (the long file header and all
 per-node prose); every active node name, unit address, property order/value,
 reg order, status, label, phandle, child name and alias is unchanged.  New
@@ -1192,11 +1193,63 @@ was involved.
   verified with `sha256sum -c` inside the package).  The manifest sha256
   itself is recorded in the submission commit and the hand-off report; nothing
   was submitted to any mailing list, account or web service.
-- **current conservative devicetree final:** commit `7ae18f2` (DTS 691
-  lines sha256 `9d2d39db...`; DTS-0001 sha256 `072d0b8b...`;
-  compiled DTB byte-identical to the known-good DTB).  The superseded active
-  cleanup `538377c` is recorded as regressed in section 22 and is not
-  current.
+- **conservative devicetree final at the time of that run:** commit `7ae18f2`
+  (DTS 691 lines sha256 `9d2d39db...`; DTS-0001 sha256 `072d0b8b...`;
+  compiled DTB byte-identical to the known-good DTB).  The TWD delta was
+  adopted afterwards (section 25); the superseded active cleanup `538377c`
+  is recorded as regressed in section 22 and is not current.
 - Host checks are necessary but **not sufficient**: the rebuilt image must be
   boot-tested on the unit after any active-DTS change before it is treated as
   hardware-validated.
+
+
+## 25. 2026-11-21 TWD level-high adoption (hardware boot-test) and re-validation
+
+Blocker 6 (TWD timer interrupt flags) is now **closed**.  The measured GICD data
+on the previous baseline 7421bb7a (GICD_CTLR=0x1, TYPER=0x0fc25,
+ICFGR0=0xaaaaaaaa, ICFGR1=0x7dc00000, ICFGR2=0x55555555; ID29 = TWD PPI 13;
+ICFGR1 bits 27:26 = 0b11; PPI configuration read-only/fixed) and the standard
+level-high encoding were recorded in
+`../../docs/incoming/upstream-blockers/06-twd-irq-flags/`.
+
+**Hardware boot-test PASS:** image **f6685b80**, built from the current target
+DTS with the level-high delta applied and installed with the verified telnet
+installer (PASS; pair b, selector 0x11).  Boot: linux-6.18.60, 2 CPUs;
+`/proc/interrupts` now reports **`GIC-0 29 Level twd`** (previously
+`Edge`); TWD counts increment ~100 Hz on both CPUs; host ping 20/20 0%
+loss; no Oops/BUG/Kernel panic/RCU stall; uptime stable.  Conclusion: the
+standard `IRQ_TYPE_LEVEL_HIGH` encoding is correct for this board.  Adopted
+in submodule commit **5b401c1** as a boot-tested active DTS delta (separate
+from the conservative prose-only cleanup `7ae18f2`).
+
+**Artifacts after adoption:**
+
+- DTS: **700 lines**, sha256
+  `13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4`;
+- DTS-0001: sha256
+  `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1` (713
+  lines), regenerated from the single source;
+- DTB: **13,041 B** sha256
+  `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`;
+  totalsize unaligned, `pad-dtb.py` pads to **13,048 B** sha256
+  `4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`, loader
+  hand-off contract preserved.
+- New DTS-purpose hardware baseline: image **f6685b80** (supersedes 7421bb7a
+  for DTS purposes; 7421bb7a remains the previous verified baseline).
+
+**Validation (host-only, pristine 6.18.60):**
+
+- release-line validator **PASS**: 51/51 patch(1) RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**, strict `git apply` 51/51; target
+  DTS contract and DTS-0001 identity PASS; pad step exercised (new DTB/hash
+  above);
+- upstream review form: not rerun - no series file changed by the DTS-only TWD
+  delta; the last recorded run remains **26/26 patch(1)+`git am`,
+  identical trees, 0 errors / 58 checkpatch warnings**;
+- `gen-series.py --check` clean; `validation/sha256sums.txt`
+  refreshed and `sha256sum -c` passes 89/89; release-line manifest
+  unchanged (51 include / 11 exclude / 62 patches, sha256 `4da8b960...`).
+
+**Blocker status:** TWD closed; **five blockers remain** (07 section 6:
+drivers/YAML drafts, flashinfo binding, 6.18 MAC provisioning, switch reorder,
+compatible ordering).  Logs: `validation/release-line/` refreshed.

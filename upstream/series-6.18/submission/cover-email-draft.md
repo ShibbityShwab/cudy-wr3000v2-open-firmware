@@ -37,7 +37,7 @@ bootloader consumes before Linux runs (`/aliases/console` and
 `/reserved-memory/flashinfo@80600000`).  The kernel form is kernel-only, so
 the board devicetree ships as the separate DTS-series entry **DTS-0001**
 (`../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`,
-sha256 `072d0b8b...`); it must be posted together with kernel patch 0018.
+sha256 `e9c9ed58...`, 713 lines); it must be posted together with kernel patch 0018.
 0018 without the DTS contract is inert.  The base DTB totalsize needs 8-byte
 alignment for the stock bootfip gate-word load; the target build pads it with
 `pad-dtb.py` (13,041 -> 13,048 B; see `../06-dts-series-dependency.md`).
@@ -49,17 +49,19 @@ release-line validator (51 patches) applies with 0 fuzz and strict
 `git apply` is clean; the board DTB compiles with the loader contract present
 and DTS-0001 is byte-identical to the single source.  There is **no** upstream
 Tested-by: the only hardware evidence is target-image bench evidence for the
-target's own build (image 7421bb7a, 2 CPUs, known-good DTB).  Host checks are
-necessary but not sufficient.
+target's own build (DTS-purpose image f6685b80: 2 CPUs, `GIC-0 29 Level twd`,
+boot-tested TWD level-high delta; previous verified baseline 7421bb7a).  Host
+checks are necessary but not sufficient.
 
-**Six known blockers before merge intent:** (1) the drivers/bindings are still
-drafts; (2) `hsan,flashinfo_reserved` has no upstream binding; (3)
+**Five remaining blockers before merge intent:** (1) the drivers/bindings are
+still drafts; (2) `hsan,flashinfo_reserved` has no upstream binding; (3)
 `fixed-layout`/`mac-base` nvmem cells are v6.19 content on a 6.18 base;
 (4) the switch binding/node-name needs rework; (5) `cudy,wr3000-v2`
-compatible ordering + OpenWrt board metadata are not synced; (6) the TWD timer
-interrupt flags need a hardware re-check.  Pinctrl consumer states, consumer
-clocks, the A/B selector protocol beyond the measured cell, LED description,
-Wi-Fi and thermal support are out of scope for this wired-first RFC.
+compatible ordering + OpenWrt board metadata are not synced.  The TWD timer
+interrupt flags blocker was closed by measurement plus a boot-tested level-high
+delta (image f6685b80).  Pinctrl consumer states, consumer clocks, the A/B
+selector protocol beyond the measured cell, LED description, Wi-Fi and thermal
+support are out of scope for this wired-first RFC.
 
 I would welcome comments on the split and on the RFC group; I am not asking for
 a merge in this round and I will not add a Tested-by that no independent party

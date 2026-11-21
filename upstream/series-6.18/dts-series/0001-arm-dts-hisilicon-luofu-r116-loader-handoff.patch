@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/arch/arm/boot/dts/hisilicon/luofu-r116.dts
-@@ -0,0 +1,691 @@
+@@ -0,0 +1,700 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
@@ -16,6 +16,8 @@
 +/dts-v1/;
 +
 +#include <dt-bindings/clock/hisilicon,luofu-crg.h>
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++#include <dt-bindings/interrupt-controller/irq.h>
 +
 +/ {
 +	#address-cells = <1>;
@@ -198,7 +200,14 @@
 +	local_timer: local-timer@10180600 {
 +		compatible = "arm,cortex-a9-twd-timer";
 +		reg = <0x10180600 0x20>;
-+		interrupts = <1 13 0x301>;
++		/*
++		 * Standard Cortex-A9 TWD timer encoding (level-high).  The measured
++		 * GICD_ICFGR1 read-only value for PPI 13 is 0b11, but GIC-400 PPI
++		 * configuration is fixed by the SoC integration, so the DTS flag
++		 * does not reprogram hardware.
++		 */
++		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) |
++					  IRQ_TYPE_LEVEL_HIGH)>;
 +		clocks = <&twd_clk>;
 +	};
 +
