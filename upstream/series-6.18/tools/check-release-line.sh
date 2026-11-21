@@ -42,6 +42,32 @@ EXPECTED_TARBALL_SHA256="3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a608
 die() { echo "FAIL: $*" >&2; exit 1; }
 note() { echo "NOTE: $*" | tee -a "$LOGS/summary.txt"; }
 
+# Check the base-DTB totalsize alignment requirement documented in
+# TRAILER-FORMAT.md section 11 and exercise the pad-dtb build step on a copy
+# when the compiled blob is unaligned.  A copy is used so the original
+# compiled DTB and its hash stay untouched.
+check_unaligned_dtb() {
+    dtb="$1"
+    label="$2"
+    logs="$3"
+    size=$(stat -c%s "$dtb")
+    if [ $((size % 8)) -eq 0 ]; then
+        echo "$label: DTB totalsize $size B is 8-byte aligned" | tee -a "$logs/summary.txt"
+        return 0
+    fi
+    padder="$REPO_ROOT/opensource/target-skeleton/tools/pad-dtb.py"
+    [ -f "$padder" ] || die "$label: DTB is unaligned but pad-dtb.py is missing"
+    padded="$dtb.padded"
+    cp "$dtb" "$padded"
+    python3 "$padder" "$padded" >> "$logs/pad-dtb.log" 2>&1         || die "$label: pad-dtb.py failed"
+    psize=$(stat -c%s "$padded")
+    [ $((psize % 8)) -eq 0 ] || die "$label: padded DTB is still unaligned"
+    compat2=$("$FDTGET" -t s "$padded" /reserved-memory/flashinfo@80600000 compatible 2>&1)         || die "$label: padded DTB lost the flashinfo node"
+    [ "$compat2" = "hsan,flashinfo_reserved" ] || die "$label: padded DTB contract changed"
+    echo "$label: DTB totalsize $size B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to $psize B and keeps the hand-off contract" | tee -a "$logs/summary.txt"
+    rm -f "$padded"
+}
+
 [ -f "$MANIFEST" ] || die "missing manifest: $MANIFEST"
 [ -d "$TARGET_PATCHES" ] || die "missing target patches: $TARGET_PATCHES"
 
@@ -183,6 +209,13 @@ else
     echo "board DTS: cpp RC=0, dtc RC=0, stderr $cpp_err/$dtc_err bytes, DTB $dtb_size B sha256 $(sha256sum "$DTB" | awk '{print $1}')" | tee -a "$LOGS/summary.txt"
     [ "$cpp_err" -eq 0 ] || note "cpp wrote diagnostics (see logs/dts-cpp.err)"
     [ "$dtc_err" -eq 0 ] || note "dtc wrote warnings (see logs/dts-dtc.err)"
+
+    # The stock U-Boot bootfip reads the overlay-container gate word as a
+    # 32-bit load at base_dtb + FDT-totalsize.  An unaligned totalsize makes
+    # that load unaligned; on this ARMv7 it data-aborted and the loader fell
+    # back to stock.  The target build must run Build/luofu-pad-dtb; verify the
+    # requirement here (TRAILER-FORMAT.md section 11).
+    check_unaligned_dtb "$DTB" "target DTS" "$LOGS"
     console=$("$FDTGET" -t s "$DTB" /aliases console 2>&1) || die "/aliases/console missing"
     compat=$("$FDTGET" -t s "$DTB" /reserved-memory/flashinfo@80600000 compatible 2>&1) || die "flashinfo node missing"
     reg=$("$FDTGET" -t x "$DTB" /reserved-memory/flashinfo@80600000 reg 2>&1) || die "flashinfo reg missing"
@@ -216,6 +249,7 @@ else
         "$DTC" -I dts -O dtb -o "$DTB2" "$PRE2" 2> "$LOGS/dts-series-dtc.err"             || die "dtc failed for the DTS series board DTS"
         size2=$(stat -c%s "$DTB2")
         echo "DTS series: patch apply RC=0, cpp+dtc RC=0, stderr $(stat -c%s "$LOGS/dts-series-cpp.err")/$(stat -c%s "$LOGS/dts-series-dtc.err") bytes, DTB $size2 B sha256 $(sha256sum "$DTB2" | awk '{print $1}')" | tee -a "$LOGS/summary.txt"
+        check_unaligned_dtb "$DTB2" "DTS series" "$LOGS"
         c2=$("$FDTGET" -t s "$DTB2" /aliases console 2>&1) || die "DTS series: /aliases/console missing"
         f2=$("$FDTGET" -t s "$DTB2" /reserved-memory/flashinfo@80600000 compatible 2>&1) || die "DTS series: flashinfo node missing"
         r2=$("$FDTGET" -t x "$DTB2" /reserved-memory/flashinfo@80600000 reg 2>&1) || die "DTS series: flashinfo reg missing"

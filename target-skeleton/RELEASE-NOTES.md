@@ -5,9 +5,19 @@ flashable release.**  This page is the short release status for the target; the
 full record is [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md)
 and [../docs/SMP-RE.md](../docs/SMP-RE.md) section 24.
 
-## Verified baseline
+## Verified baselines
 
-Image **974e6ca6** (6,226,222 B,
+**Board-feature baseline 7f270b8c (2026-11-21):** same 2-CPU/network/SSH/overlay
+line plus the stock board_id=3 overlay features - six `oem:green:*` LEDs
+writable (status/wan/lan/internet/wifi/wifi5g), `event0` =
+gpio-keys-polled (reset GPIO22 / WPS GPIO23, active-low), `watchdog0`
+exposed through sysfs (CONFIG_WATCHDOG_SYSFS).  **Thermal remains unsupported:**
+the temperature register reads 0 and the vendor DT disables the sensor - no
+thermal claim.  This image required the base-DTB pad step (below), because the
+new DTS compiles to a 13,041-byte DTB with an unaligned totalsize and the stock
+U-Boot bootfip gate-word load data-aborted on it.  [V]
+
+**2-CPU/SMP baseline 974e6ca6** (6,226,222 B,
 sha256 `974e6ca63f6e86418761bc0f135e438f07d0e6ef909c61bb0339f00c5596c508`):
 patches 001-061 + the loader hand-off DTS fix + canonical command line + DEVMEM/
 devmem/pair-recorder, no probe tokens.  Installed manually from the stock system
@@ -43,7 +53,12 @@ stock base DTB carries.  They are now in the board DTS
 Without them U-Boot printed `alias console not found`, skipped staging, and CPU1
 never polled the kernel pen; every kernel release had no consumer.  The kernel
 release implementation (patch 018) was correct all along - no SMP kernel code
-change is needed for the fix.  The DTS contract ships as the explicit
+change is needed for the fix.  **Base-DTB padding is also required:** the LED/
+keys DTS compiles to a 13,041-byte DTB whose totalsize is not 8-byte aligned;
+the image build runs `Build/luofu-pad-dtb` (`tools/pad-dtb.py`) to fold
+in the padding (13,048 B) before `append-dtb`, otherwise the stock U-Boot
+bootfip gate-word load is unaligned and the loader falls back to stock
+(top-level `docs/TRAILER-FORMAT.md` section 11).  The DTS contract ships as the explicit
 DTS-series entry **DTS-0001**
 (`../upstream/series-6.18/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`;
 documented in `../upstream/series-6.18/06-dts-series-dependency.md`) and must
@@ -60,6 +75,9 @@ patch series** (see `release-line/manifest.tsv` in the upstream directory).
 | SSH / userspace | working (`OpenWrt 6.18.60`, procd) [V] |
 | persistent overlay | ubifs `/overlay`, survives reboot [V] |
 | DEVMEM / devmem diagnostic image | optional debugging aid; the canonical image carries it, it is not required for normal operation [V] |
+| board buttons/LEDs | six `oem:green:*` LEDs writable from userspace; `event0` = gpio-keys-polled (reset/WPS), active-low, 20 ms poll [V] |
+| watchdog | `watchdog0` exposed through sysfs (CONFIG_WATCHDOG_SYSFS); driver bind already verified [V] |
+| thermal | **unsupported on this board**: temperature register reads 0, vendor DT disables the sensor - not a release claim [U]/[X] |
 | storage | FMC SPI-NAND + UBI rootfs mounted, 17 partitions [V] |
 | everything else | drivers compile/bind; behaviour not necessarily exercised on hardware - see TARGET-DESIGN.md [U] |
 

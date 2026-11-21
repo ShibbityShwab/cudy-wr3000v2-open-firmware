@@ -96,7 +96,7 @@
 +		return -EIO;
 +	}
 +
-+	dev_warn(lsw->dev,
++	dev_dbg(lsw->dev,
 +		 "W17_MIRROR: eth2/port 11 ingress mirror programmed to dst port %u (OPP 0xd8=%#x 0xdc=%#x 0xc0=%#x, latch pulsed); semantics [I]/[U]\n",
 +		 dst, want_d8, want_dc, want_c0);
 +	return 0;

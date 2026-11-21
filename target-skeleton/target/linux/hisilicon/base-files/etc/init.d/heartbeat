@@ -6,7 +6,7 @@ STOP=99
 start() {
 	while :; do
 		printf 'HB %s\n' "$(cut -d. -f1 /proc/uptime)" > /dev/kmsg
-		sleep 5
+		sleep 60
 	done
 }
 stop() {

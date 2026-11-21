@@ -174,7 +174,7 @@
 +			"W19_CPU_MIRROR: static apply dst=%u failed (%d); will retry in 2 s\n",
 +			dst, ret);
 +	else
-+		dev_info(lsw->dev,
++		dev_dbg(lsw->dev,
 +			 "W19_CPU_MIRROR: static CPU-copy applied dst=%u (pre d8=%#x dc=%#x c0=%#x; post 0xd8=%#x 0xdc=%#x 0xc0=%#x)\n",
 +			 dst, pre_d8, pre_dc, pre_c0,
 +			 readl(opp + 0xd8), readl(opp + 0xdc),

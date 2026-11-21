@@ -974,3 +974,58 @@ Logs: `validation/release-line/` (release line, L0, target DTS and
 DTS-0001) and `validation/` (review form).  Manifest: 51 include / 11
 exclude, 62 source patches, hashes regenerated in
 `validation/sha256sums.txt` (89 entries, `sha256sum -c` passes).
+
+
+## 21. 2026-11-21 board-feature refresh re-validation
+
+The stock board_id=3 LED/keys overlay, the base-DTB pad step and the W17/W19
+dmesg quieting landed after section 20; this re-runs the host-side validation.
+No hardware was touched and no kernel build was run.
+
+**Changes covered:**
+
+- **DTS-0001 regenerated** from the refreshed single-source target DTS
+  (1,329 lines): new sha256
+  `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115`
+  (previous `73d93769...`).  The new DTS adds the stock board feature nodes:
+  gpio-keys-polled (reset GPIO22 / WPS GPIO23, active-low, 20 ms, KEY_RESTART /
+  KEY_WPS_BUTTON) and six gpio-leds (`oem:green:*` on GPIO24/25/3/2/0/1).
+- **Release-line hashes refreshed**: patch 054 (`dev_warn` ->
+  `dev_dbg`) and patch 056 (`dev_info` -> `dev_dbg`) now hash to
+  `9e3c01c3564eb654d6d69e939041ded58ae96ac33c376e18c6dcd5e620242b10` and
+  `eae38ae30942a252cdc6c3dd25f02b9908c43bd8c864163877cee8581d172721`.
+  Manifest sha256:
+  `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0`.
+  `validation/sha256sums.txt` regenerated (89 entries, `sha256sum -c`
+  passes).
+- **Base-DTB padding requirement**: the refreshed DTS compiles to a 13,041-byte
+  DTB whose totalsize is not 8-byte aligned.  The stock U-Boot bootfip loads the
+  overlay-container gate word as a 32-bit word at `base_dtb + totalsize`; the
+  unaligned load data-aborted and fell back to the stock pair (measured
+  2026-11-21).  The image recipe now runs `Build/luofu-pad-dtb`
+  (`target-skeleton/tools/pad-dtb.py`) before `append-dtb` (pads to
+  13,048 B and folds the padding into the FDT totalsize; guards
+  `len(dtb) == totalsize` and `% 8 == 0`).  Documentation: top-level
+  `docs/TRAILER-FORMAT.md` section 11.  The validator now exercises the pad
+  step on a copy when the compiled DTB is unaligned and verifies that the loader
+  hand-off contract is unchanged.
+
+**Results (2026-11-21, pristine 6.18.60 sha256 `3c2f44ef...`):**
+
+- **L1 release line (51 patches):** patch(1) 51/51 RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches
+  apply without fuzz**;
+- **L0 lab stack (62 files, 001-058 + 062-065):** 62/62 patch(1) RC=0, 0 fuzz;
+  strict `git apply` 62/62;
+- **target DTS contract:** cpp+dtc RC=0, 0 stderr, DTB **13,041 B** sha256
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`;
+  contract nodes/enable-method present; **totalsize unaligned**, pad-dtb
+  exercised on a copy -> **13,048 B**, contract preserved;
+- **DTS-0001:** applies to the L1 tree RC=0; added board DTS byte-identical to
+  the target DTS; same 13,041 B DTB/hash and contract, same pad-step result;
+- **upstream review form (26 patches):** patch(1) 26/26 RC=0 (3 offset hunks,
+  0 fuzz), `git am` 26/26 RC=0, identical trees; checkpatch default and
+  `--strict`: **0 errors, 58 warnings**.
+
+Logs: `validation/release-line/` (release line, L0, target DTS, DTS-0001,
+pad-dtb) and `validation/` (review form).

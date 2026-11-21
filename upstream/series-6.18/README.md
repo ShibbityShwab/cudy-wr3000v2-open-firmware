@@ -53,11 +53,24 @@ final 26-patch pass.
 
 - **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `73d93769...`) adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts`
-  (byte-identical to the single-source target DTS) and the
-  `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
-  patch 0018 and is documented in `06-dts-series-dependency.md`.  The
-  validator applies/compiles it and checks the loader hand-off contract.
+  (sha256 `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115`,
+  refreshed 2026-11-21 with the stock board_id=3 LED/keys nodes) adds
+  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (byte-identical to the
+  single-source target DTS) and the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile
+  entry; it is the companion of kernel patch 0018 and is documented in
+  `06-dts-series-dependency.md`.  The validator applies/compiles it and
+  checks the loader hand-off contract.
+- **Board-feature refresh (2026-11-21).**  The stock board_id=3 overlay landed
+  in the single-source DTS: gpio-keys-polled (reset/WPS) and six
+  `oem:green:*` gpio-leds, with the matching target config additions;
+  verified image **`7f270b8c`** (2 CPUs, 6 LEDs writable, `event0`,
+  `watchdog0` sysfs; **thermal remains unsupported** - temp reads 0, vendor
+  DT disables the sensor).  The compiled DTB became 13,041 B with an unaligned
+  totalsize, which made the stock U-Boot bootfip gate-word load data-abort, so
+  the image build now runs `Build/luofu-pad-dtb` (13,048 B) before
+  `append-dtb` - see top-level `docs/TRAILER-FORMAT.md` section 11 and
+  `06-dts-series-dependency.md` section 3.1.  Release-line patch hashes
+  were refreshed for 054/056 (`dev_dbg` quieting).
 - **The release line is defined in `05-release-line.md`.**  It is the
   target patch stack (**62 files: 001-058 + 062-065**, no duplicate
   numbers) minus 11 bench-only SMP diagnostic patches:
@@ -87,7 +100,9 @@ The 0018 commit message records the DTS-0001 dependency; the series files,
 01-commit-messages.md, the release-line manifest/hashes and the validation
 logs were refreshed on 2026-11-21.  Kernel-series content diffs are unchanged;
 the release-line cleanup regenerated 053, renumbered 042/059/060/061 and added
-DTS-0001.
+DTS-0001.  A second 2026-11-21 pass refreshed DTS-0001 for the board LED/keys
+overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
+`4da8b960...`) and added the base-DTB pad-dtb requirement.
 
 ## What is in here
 
@@ -182,9 +197,12 @@ To regenerate the series after editing a message:
   hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches apply
   without fuzz**.  The L0 stack (62 files, 001-058 + 062-065) also applies
   62/62 with 0 fuzz and strict-clean.  The loader hand-off DTS contract
-  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB 12,296 B sha256
-  `50daf3d0...`) and contains `/aliases/console` and the
-  `flashinfo@80600000` node with the measured `reg`/`atag-offset`.
+  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **13,041 B** sha256
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`) and contains
+  `/aliases/console` and the `flashinfo@80600000` node with the measured
+  `reg`/`atag-offset`.  The totalsize is unaligned, so the validator
+  exercises `pad-dtb.py` on a copy (**13,048 B**, contract preserved) and
+  records the required `Build/luofu-pad-dtb` image step.
   **DTS-0001** applies, compiles to the same DTB and its board DTS is
   byte-identical to the target DTS.  Logs: `validation/release-line/`.  [V]
 - the target image built from the extended stack is hardware-verified for

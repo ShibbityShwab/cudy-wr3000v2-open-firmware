@@ -80,21 +80,42 @@ Where it is committed: `opensource` submodule `5a1b5b3` (DTS nodes) and `9e17d5c
 Upstream action: the DTS contract must ship with kernel patch 0018.  The
 dependency is an explicit, commit-ready upstream artefact: **DTS-0001**,
 `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-(sha256 `73d93769c0cf5e63c17932c2a0f7285cd5fda59e4c93164c94a96e9cf24be788`).
-It adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (byte-identical to the
-single-source target DTS) plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry;
-post it together with 0018.  The dependency record, ordering and regeneration
-procedure is `06-dts-series-dependency.md`, and `tools/check-release-line.sh`
-applies/compiles DTS-0001 and checks the contract on every validation run.  [V]
+(sha256 `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115`,
+refreshed 2026-11-21 after the stock board_id=3 LED/keys overlay landed).
+It adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (1,329 lines,
+byte-identical to the single-source target DTS including the gpio-keys-polled
+and six gpio-leds nodes) plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry;
+post it together with 0018.  The DTS series must also state the base-DTB
+padding requirement: the compiled LED/keys DTB is 13,041 B with an unaligned
+totalsize and the image build MUST run `Build/luofu-pad-dtb` before
+`append-dtb` (TRAILER-FORMAT.md section 11; details in
+`06-dts-series-dependency.md` section 3.1).  The dependency record,
+ordering and regeneration procedure is `06-dts-series-dependency.md`, and
+`tools/check-release-line.sh` applies/compiles DTS-0001, checks the contract
+and exercises the pad step on a copy on every validation run.  [V]
 
 Patch `018` alone is necessary but **not sufficient** for SMP; the review-form
 documentation now says so.  Do not present 064/065 (or 033-039/062/063) as the
 SMP fix in a release or upstream submission - they are diagnostics (section 6).
 
-## 3. Verified 2-CPU baseline image 974e6ca6
+## 3. Verified baselines
 
-- image: `<local-staging-dir>/img-canonical.bin`, **6,226,222 B**,
-  sha256 `974e6ca63f6e86418761bc0f135e438f07d0e6ef909c61bb0339f00c5596c508`.
+Two verified images are recorded (same kernel/target line; the second adds the
+stock board-feature overlay content):
+
+- **2-CPU/SMP baseline `974e6ca6`** - 6,226,222 B,
+  sha256 `974e6ca63f6e86418761bc0f135e438f07d0e6ef909c61bb0339f00c5596c508`;
+- **board-feature baseline `7f270b8c` (2026-11-21)** - same 2-CPU +
+  network + SSH + overlay behaviour, plus the stock board_id=3 overlay features:
+  six `oem:green:*` LEDs writable, `event0` = gpio-keys-polled
+  (reset/WPS), `watchdog0` exposed via sysfs (CONFIG_WATCHDOG_SYSFS).
+  **Thermal remains unsupported:** the temperature register reads 0 and the
+  vendor DT disables the sensor (reported as-is; no thermal claim).  The
+  feature image also needed the base-DTB padding fix (section 3.1).
+  [V] (see also `target-skeleton/RELEASE-NOTES.md` and the parent ledger
+  entry for 2026-11-21.)
+
+The `974e6ca6` details:
 - built from: L0 patch stack (62 files: 001-058 + 062-065), the DTS hand-off
   fix, canonical command line, DEVMEM + static devmem tool + boot-pair recorder;
   **no `luofu_smp_*` probe tokens**.
@@ -237,6 +258,14 @@ Ordering notes (both items fixed 2026-11-21):
   resulting `luofu-pie.c` is byte-identical to the old stack's final file) and
   now applies with **0 fuzz**; strict `git apply` passes for all 51 L1
   patches.
+- **Release-line patch content refreshed (2026-11-21, board-feature pass).**
+  Periodic W17/W19 relatch logs were quieted from `dev_warn~/`dev_info`
+  to `dev_dbg`: patch **054** (`dev_warn` -> `dev_dbg`) and patch
+  **056** (`dev_info` -> `dev_dbg`).  Manifest hashes were refreshed
+  (054 `9e3c01c3...`, 056 `eae38ae3...`; manifest sha256
+  `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0`).
+  The base-files heartbeat interval also changed 5 s -> 60 s (target content,
+  not a kernel patch).
 
 ## 8. Retraction: the "2-CPU hang" was a host bench-link outage
 
@@ -270,17 +299,22 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62 [V];
 - release-critical DTS contract (target DTS and DTS-0001): both `cpp` + `dtc`
-  RC=0, **0 stderr bytes**, DTB **12,296 B**, sha256
-  `50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb`;
+  RC=0, **0 stderr bytes**, DTB **13,041 B**, sha256
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`;
   `fdtget` confirms `/aliases/console`, `compatible = "hsan,flashinfo_reserved"`,
   `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>` and
   `/cpus/enable-method = "hisilicon,luofu-smp"`;
+- **totalsize alignment:** the 13,041 B DTB totalsize is **not** 8-byte
+  aligned; the validator runs `target-skeleton/tools/pad-dtb.py` on a copy,
+  which pads it to **13,048 B** and keeps the hand-off contract.  The image
+  build MUST run `Build/luofu-pad-dtb` (TRAILER-FORMAT.md section 11; the
+  unaligned load made stock U-Boot data-abort and fall back to stock on
+  2026-11-21) [V];
 - **DTS-0001**: applies to the L1 tree RC=0; its added board DTS is
   byte-identical to the single-source target DTS; the compiled DTB and the
   contract checks are identical to the target-DTS ones [V];
-- upstream review form: 26/26 apply with patch(1) and `git am` (2026-11-21
-  re-run after the 0018 message update; checkpatch 0 errors / 58 warnings;
-  section 04-validation.md section 20) [V];
+- upstream review form: 26/26 apply with patch(1) and `git am` (3 offset
+  hunks, 0 fuzz, identical trees; checkpatch 0 errors / 58 warnings) [V];
 - no kernel build in this pass: the last full-series build records (compile
   RC=0, CONFIG_WERROR, zImage/hash, TEXT_OFFSET unchanged) are in
   `04-validation.md` and SKELETON-SMOKE.md; the release image itself was built
@@ -303,14 +337,19 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   other driver behaviours (pinctrl consumer states, PCIe enumeration, FMC
   ECC/OOB details, restart sequence, selector env re-stamp, A/B install) remain
   [U] as recorded in TARGET-DESIGN.md, SMP-RE.md and the lane summaries.
+- **No thermal support on this board:** the temperature register reads 0 and the
+  vendor DT disables the sensor; the thermal driver/zone remains host-only and
+  is not a release claim [U]/[X].
 - **No performance/soak beyond the recorded 15 minutes**; no long-term thermal or
   NAND-degradation campaign.
 
 ## 11. Next actions after this consolidation
 
 1. **Post DTS-0001 with kernel patch 0018** (same window, DTS entry first or
-   together), referencing SMP-RE.md section 24 in its cover letter.  Regenerate
-   DTS-0001 only from the target DTS via `tools/gen-dts-series-patch.py`.
+   together), referencing SMP-RE.md section 24 and the base-DTB 8-byte
+   alignment/pad-dtb requirement (TRAILER-FORMAT.md section 11) in its cover
+   letter.  Regenerate DTS-0001 only from the target DTS via
+   `tools/gen-dts-series-patch.py` (2026-11-21 refresh: board LEDs/keys).
 2. Sync L1 + L3 + the updated docs to the curated publication repo staging
    branch (separate repositories; not touched from the notebook).
 3. Native CFE forwarding, Wi-Fi and the install path remain the separate follow-
@@ -328,10 +367,16 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
 - `validation/release-line/` - 2026-11-21 harness logs: L1/L0 patch
   application, offsets, strict git-apply, target DTS contract, DTS-0001
   apply/compile/contract, summary.
+- Board-feature refresh: submodule `aff7e27` (gpio-keys-polled + six
+  gpio-leds DTS nodes from the stock board_id=3 overlay, pad-dtb, watchdog
+  sysfs config), verified image `7f270b8c`; measurement in
+  `../../docs/TRAILER-FORMAT.md` section 11 and
+  `target-skeleton/tools/pad-dtb.py`.
 - Canonical image evidence (parent repo, gitignored/local):
   `build/evidence-bench-gates/2026-11-20-{smp-2cpu.log,smp-reboot.log}`,
   `.../2026-11-21-{soak-2cpu.log,final-reboot-2cpu.log}`, UART captures, images
-  in `<local-staging-dir>/` (img-canonical.bin 974e6ca6).
+  in `<local-staging-dir>/` (img-canonical.bin 974e6ca6, feature image
+  7f270b8c).
 - Root-cause record: `docs/SMP-RE.md` sections 21-24;
   `target-skeleton/docs/port-notes/smp-decode/SUMMARY.md`.
 - Parent live state: `STATUS.md` (2026-11-21 FINAL SMP entry) and

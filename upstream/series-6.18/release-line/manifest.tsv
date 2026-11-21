@@ -57,9 +57,9 @@ include	C	050-net-lsw-pagedump-w15.patch	ae2972c2dc2082ea1cc3b659a34ca1059ae24a3
 include	B	051-net-gmac-macregs-w16.patch	45d4c6ec97c0f5b3d57d7a85368fa126c1e16852d6f2a31a615fbd0ff26e4311	GEMAC static config words (W16)
 include	C	052-net-pie-rxcompletion-trace.patch	800eb6e4df03e70411947d9274b9adb7dd105fe0175563c585374fbcb55a21a4	PIE RX-completion trace gate (diagnostic)
 include	B	053-net-pie-rxdecode-vendor-exact.patch	dc746b4629064f37d2a03f220aacbf5dd37830020ace21857ba490ff5ad94c74	PIE RX decode vendor-exact + accepterr delivery gate (regenerated against its post-052 context, 2026-11-21)
-include	B	054-net-lsw-mirror-cputest-w17.patch	e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1	LSW port-mirror CPU-copy experiment base (W17)
+include	B	054-net-lsw-mirror-cputest-w17.patch	9e3c01c3564eb654d6d69e939041ded58ae96ac33c376e18c6dcd5e620242b10	LSW port-mirror CPU-copy experiment base (W17)
 include	B	055-net-lsw-mirror-stable-rxstroke.patch	d4f816ffedb117cbade0949910774f8f07ed6bf6c6a2ed82a7b731fa6db3f0e0	LSW stable CPU mirror + RX stroke (W18)
-include	B	056-net-lsw-mirror-postlink-w19.patch	547ea4983f5c5de0db323ecd05c958f849ce7d9e2c93afab1fa508de50f7d80d	LSW post-link CPU mirror re-latch (W19)
+include	B	056-net-lsw-mirror-postlink-w19.patch	eae38ae30942a252cdc6c3dd25f02b9908c43bd8c864163877cee8581d172721	LSW post-link CPU mirror re-latch (W19)
 include	B	057-net-pie-cpucopy-w20.patch	290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77	PIE port-0 CPU-copy delivery (W20)
 include	B	058-net-luofu-canonical-bench-config.patch	44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35	canonical bench configuration + docs cleanup
 exclude	D	062-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps (renumbered from the duplicate 042)

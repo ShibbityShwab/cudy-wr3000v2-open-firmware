@@ -4,9 +4,11 @@ pristine version: 6.18.60
 manifest: 51 included, 11 excluded
 patch(1): 51/51 patches RC=0, 146 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects
 strict git apply: all 51 patches apply without fuzz
-board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12296 B sha256 50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb
+board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 13041 B sha256 49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536
+target DTS: DTB totalsize 13041 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 13048 B and keeps the hand-off contract
 DTS contract: console=/serial@1010f000 flashinfo-compatible=hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
 DTS series: board DTS byte-identical to the target DTS
-DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 12296 B sha256 50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb
+DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 13041 B sha256 49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536
+DTS series: DTB totalsize 13041 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 13048 B and keeps the hand-off contract
 DTS series contract: console=/serial@1010f000 flashinfo=hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
 PASS: release line applies and the loader hand-off DTS contract is present. No hardware and no kernel build was involved.
