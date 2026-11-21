@@ -61,23 +61,24 @@ GitHub API on 2026-11-21 ~15:00 +07 (08:00Z). Re-check in P0; if the live values
 | item | value |
 | --- | --- |
 | repo URL | `https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware.git` (public, not archived, 0 forks) |
-| `refs/heads/master` | `6e35c2988973e58a14e84927a18a2eaf9b01630a` (2026-11-21 ~15:05 +07, "docs: blocker-reduction package for the six upstream blockers") |
+| `refs/heads/master` | `5b401c1230d416ccd0bfe21b102963b60798cc2a` (2026-11-21 15:07 +07, "dts: adopt boot-tested TWD level-high interrupt encoding (upstream blocker #6 closed)") |
 | `refs/heads/omo/phase22-hccaccept` | `15703f5ee222b898191ccd90ae1fcb0e24c179b5` (2026-10-12, ancestor of master: 162 commits behind) |
 | default branch | `master`; both branches unprotected |
-| total commits reachable | 794 |
-| object lines in `git rev-list --objects --all` | 6,289 |
+| total commits reachable | 795 |
+| object lines in `git rev-list --objects --all` | 6,299 |
 | vendor `.o` blobs reachable anywhere | **10** (Appendix A rows 1-10) |
 | all binary blobs in history | **11**: the ten vendor `.o` plus one accidental Python bytecode file (Appendix A row 11) |
-| master tree | 705 files, **0 vendor objects** (the HEAD cleanup already landed) |
+| master tree | 706 files, **0 vendor objects** (the HEAD cleanup already landed) |
 | second-branch tree | 434 files, **10 vendor objects** (the branch still publishes them) |
 | branch serving a vendor object | `raw.githubusercontent.com/.../omo/phase22-hccaccept/lab/luofu-kernel/nand/triductor/tri_fmc.o` returns HTTP 200, 30,592 B `[V]` |
 | master serving the same path | HTTP 404 (path absent from master tree) `[V]` |
 | old blob ids served by GitHub API | `GET /repos/.../git/blobs/<sha>` returns 200 for the old ids before purge `[V]` |
-| local submodule clone | `opensource/` is **shallow** (2 boundaries, 102 visible commits of 794) - never use it as the purge source `[V]` |
+| local submodule clone | `opensource/` is **shallow** (2 boundaries, 102 visible commits of 795) - never use it as the purge source `[V]` |
 | PUBLISH-READINESS item 1 | unchecked, open (correct: the purge has not run) |
 
-**Refs move.** During this re-audit the master tip advanced from `0c82cb8...` to `6e35c29...` (a
-concurrent lane pushed one commit). Phase P0 is a mandatory re-audit: if the live SHAs differ from
+**Refs move.** During this re-audit the master tip advanced from `0c82cb8...` to `6e35c29...` and
+then to `5b401c12...` (concurrent lanes pushed new commits every few minutes). Phase P0 is a mandatory
+re-audit: if the live SHAs differ from
 the environment block below, update them and re-run the dry-run gates (Appendix B) before P4.
 
 The ten vendor objects are the TR6560 BSP vendor build outputs (DWARF path
@@ -97,7 +98,7 @@ Owner completes this block in writing (date + initials) in the private release l
 | P-03 | No other lane is pushing to the legacy repo during the window | `git ls-remote "$REPO"` twice, minutes apart; announce freeze-request to collaborators | H1: reschedule |
 | P-04 | Offline/private backup medium available (not a public host, not a repo) | mount/locate it; it must hold at least 10 MB + evidence | H1: stop |
 | P-05 | `git-filter-repo` available or installable (distro package, pipx, or project venv`--target`) | `git filter-repo --version`; see P3 install block | H2: install first |
-| P-06 | Live refs equal this snapshot (master/branch SHAs, 794 commits, 11 binary blobs: 10 vendor + 1 accidental) | P0 audit commands | H1: update runbook values + re-dry-run |
+| P-06 | Live refs equal this snapshot (master/branch SHAs, 795 commits, 11 binary blobs: 10 vendor + 1 accidental) | P0 audit commands | H1: update runbook values + re-dry-run |
 | P-07 | Backup created and `git bundle verify` passes; refs/object inventory + sha256 recorded | P1 | H1: no rewrite |
 | P-08 | Fresh full clone made, not shallow, both branches present | P2 | H1: stop |
 | P-09 | Dry-run gates (Appendix B) reproduced on the same refs if refs changed since 2026-11-21 | P2/P3 local run | H2: stop |
@@ -119,9 +120,9 @@ set -euo pipefail
 export REPO="https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware.git"
 export WORK="/offline/publish-purge-20261121"     # OWNER: an offline/private absolute path
 export EVID="$WORK/evidence"
-export EXPECTED_MASTER="6e35c2988973e58a14e84927a18a2eaf9b01630a"
+export EXPECTED_MASTER="5b401c1230d416ccd0bfe21b102963b60798cc2a"
 export EXPECTED_BRANCH="15703f5ee222b898191ccd90ae1fcb0e24c179b5"
-export EXPECTED_COMMITS="794"
+export EXPECTED_COMMITS="795"
 export EXPECTED_BLOBS="10"
 export EXTRA_PATH="target-skeleton/tools/__pycache__/fip-slice.cpython-314.pyc"
 export EXTRA_SHA="87332fdce8e4d0708437fb2d558895ea068d46bb"
@@ -205,6 +206,23 @@ sha256sum "$EVID/objects-before.txt" "$EVID/vendor-objects-before.txt" \
 HOLD "P1: backup bundle verifies; vendor-objects-before (10), purged-objects-before (11) and purged-shas-before are captured; the backup is on the offline/private medium"
 ```
 
+### Phase P1c - binary inventory must match the audited set (run in the P2 clone, before P4)
+
+Because the legacy tree is still receiving commits, re-check that no new binary blob has appeared
+since the 2026-11-21 audit. In the fresh P2 clone:
+
+```sh
+cd "$WORK/rewrite"
+if [ -f tools/publish-prep-check.sh ]; then
+  bash tools/publish-prep-check.sh > "$EVID/checker-before-rewrite.log" 2>&1 || true
+  sed -n '/== E\. git history/,/== F\./p' "$EVID/checker-before-rewrite.log" \
+    | tee "$EVID/binary-inventory-before.txt"
+  HOLD "P1c: the non-vendor binary list above must contain ONLY target-skeleton/tools/__pycache__/fip-slice.cpython-314.pyc, and the all-history binary count must be 11. If a new binary appeared, add it to the EXTRA path/sha list and re-run the local dry run before P4"
+else
+  ABORT "P1c: checker missing from the fresh clone; cannot verify the binary inventory"
+fi
+```
+
 If the bundle does not verify, or the vendor list is not exactly ten, **ABORT**: no rewrite is
 allowed without a verified backup.
 
@@ -227,7 +245,7 @@ echo "branch_tree_vendor=$(git ls-tree -r --name-only omo/phase22-hccaccept | gr
   | tee -a "$EVID/tree-vendor-before.txt"
 EXPECT_EQ "master tree vendor objects" "$(sed -n 's/^master_tree_vendor=//p' "$EVID/tree-vendor-before.txt")" "0"
 EXPECT_EQ "branch tree vendor objects" "$(sed -n 's/^branch_tree_vendor=//p' "$EVID/tree-vendor-before.txt")" "10"
-HOLD "P2: fresh full clone has both branches, 794 commits and exactly ten reachable vendor paths; baseline captured"
+HOLD "P2: fresh full clone has both branches, 795 commits and exactly ten reachable vendor paths; baseline captured"
 ```
 
 Any failure here means the clone or the assumptions are wrong. Do not "fix" a mismatch by
@@ -547,7 +565,7 @@ Hello,
 I am the owner of the repository ShibbityShwab/cudy-wr3000v2-open-firmware. On <DATE> I
 force-pushed a rewritten history to remove ten third-party vendor GPL object files that had been
 accidentally committed in <YYYY-MM> and were reachable on both public branches. The rewrite kept
-all 794 commits and all other content; the repository has no forks, no pull requests and no tags.
+all 795 commits and all other content; the repository has no forks, no pull requests and no tags.
 The rewritten refs are: master <NEW_MASTER_SHA>, omo/phase22-hccaccept <deleted or NEW_BRANCH_SHA>.
 The ten old blob ids are: <list from vendor-shas-before.txt>. The old commit ids were:
 <old master and old branch SHA, plus the old refs listed in refs-before.txt>.
@@ -658,7 +676,7 @@ third-party clones. Record it as accepted residual risk; do not repeat the rewri
 | `refs-before.txt`, `objects-before.txt`, `baseline.sha256` | P1 | all old refs/objects/hashes | object list reproducible |
 | `vendor-objects-before.txt`, `vendor-shas-before.txt` | P1 | the ten vendor blobs | exactly 10 |
 | `purged-objects-before.txt`, `purged-shas-before.txt` (built from vendor + the extra binary) | P1 | the 11-blob purge set | exactly 11 |
-| `commit-count-before.txt`, `per-ref-before.txt`, `tree-vendor-before.txt` | P2 | baseline shape | 794 commits; 10 vendor paths reachable on each ref; tree counts 0/10 |
+| `commit-count-before.txt`, `per-ref-before.txt`, `tree-vendor-before.txt` | P2 | baseline shape | 795 commits; 10 vendor paths reachable on each ref; tree counts 0/10 |
 | `filter-repo-version.txt`, `filter-repo-rewrite.log` | P3/P4 | tool version + rewrite log | version recorded; exit 0 |
 | `commit-map.txt` + `commit-map.sha256` + `gate-V8b.txt` | P4/V8 | old-to-new mapping | 794 lines; both audited refs mapped |
 | `gate-V1.txt` ... `gate-V7.diff` | P5 | verification evidence | every gate PASS; V7 diff reviewed |
@@ -685,7 +703,7 @@ Date/time (local + UTC):
 Repository: https://github.com/ShibbityShwab/cudy-wr3000v2-open-firmware.git
 Owner account:
 Authorisation reference (ledger entry / message):
-Expected master before:       6e35c2988973e58a14e84927a18a2eaf9b01630a
+Expected master before:       5b401c1230d416ccd0bfe21b102963b60798cc2a
 Expected second branch before: 15703f5ee222b898191ccd90ae1fcb0e24c179b5
 Backup bundle sha256:
 Bundle verify result:          PASS / FAIL
@@ -756,20 +774,20 @@ First pass (2026-11-21 ~14:57 +07, then-current refs, ten paths; superseded by t
 | fresh-clone simulation (first pass) | 0 vendor paths, 793 commits, old blob ids absent; ref shapes as expected for both branch options |
 | checker on rewritten clone | section E (history) clean on every ref; remaining FAILs were the known legacy content/license items, not history |
 
-**Final pass (2026-11-21 ~15:05 +07, current refs, eleven-path set).** Baseline: master
-`6e35c2988973e58a14e84927a18a2eaf9b01630a`, branch `15703f5ee222b898191ccd90ae1fcb0e24c179b5`,
-794 commits, 6,289 object lines, 11 binary blobs (ten vendor .o + one .pyc); master tree 705 files /
-0 vendor, branch tree 434 files / 10 vendor, branch 163 commits behind and an ancestor. Rewrite with
+**Final pass (2026-11-21 ~15:09 +07, current refs, eleven-path set).** Baseline: master
+`5b401c1230d416ccd0bfe21b102963b60798cc2a`, branch `15703f5ee222b898191ccd90ae1fcb0e24c179b5`,
+795 commits, 6,299 object lines, 11 binary blobs (ten vendor .o + one .pyc); master tree 706 files /
+0 vendor, branch tree 434 files / 10 vendor, branch 164 commits behind and an ancestor. Rewrite with
 the eleven paths exited 0. New refs (reference only): master
-`df9511772d590672fda4c4fcc4d53a846df39c1c`, branch `1cd28946d8b7abef10aa1ff80f4c331269111a9d`.
-794 commits preserved; V1 vendor paths 0; all eleven old blob ids unreachable and absent from the
-object database after reflog expire + gc; master tree id unchanged (`5b21fbca...`); branch ancestor
+`603414df68fcce2cb831ae093ee5c7fb7857bc29`, branch `1cd28946d8b7abef10aa1ff80f4c331269111a9d`.
+795 commits preserved; V1 vendor paths 0; all eleven old blob ids unreachable and absent from the
+object database after reflog expire + gc; master tree id unchanged (`4b0c803f...`); branch ancestor
 preserved; V6 listings identical after removing exactly the eleven paths; V7 diff still exactly the
-single short-hash remap; V8 commit-map 795 lines, sha256
-`593bcc940594864b0a28f13bd3ab61aa0e249675f3539f36dfd1df596e3b50be`; checker section E reports
-"no binary blob in any reachable history" PASS. The earlier first pass (793-commit snapshot)
+single short-hash remap; V8 commit-map 796 lines, sha256
+`cf7b365dd45e0f9acbe492ba7f97c908584321f9891c6b7a50203741f45ae504`; checker section E reports
+"no binary blob in any reachable history" PASS. Earlier passes (793- and 794-commit snapshots)
 additionally validated push/lease/delete/rewrite mechanics and fresh-clone verification against
-local bare remotes; those mechanics are unchanged by the extra path.
+local bare remotes; those mechanics are unchanged by the tip movement or the extra path.
 
 These results are the evidence that the procedure is mechanically sound. They do **not** prove the
 GitHub-specific steps (push permissions, cached views, support response); those remain owner-run.
@@ -783,7 +801,7 @@ GitHub-specific steps (push permissions, cached views, support response); those 
 | filter-repo says "expected freshly packed repo" / dirty | clone has local changes | work on the fresh P2 clone only; do not rewrite the working notebook/submodule |
 | lease rejected / stale info | remote moved after P0 | HOLD; re-audit and restart P0; nothing was changed |
 | push denied (403/401) | credentials/2FA | fix owner credentials; never put a token on the command line |
-| commit count changed | unexpected pruning/extra refs | ABORT: the expected count is 794; investigate before push |
+| commit count changed | unexpected pruning/extra refs | ABORT: the expected count is 795; investigate before push |
 | V6 diff non-empty outside the ten paths | wrong path list/tool behavior | ABORT: do not push; re-run dry run and compare with Appendix B |
 | old blob URL 200 after push | cached/unreachable object | not a rewrite failure; proceed to P8 support purge |
 | old blob URL 200 after support reply | cache purge incomplete | follow up once with ticket id; record residual; do not rewrite/delete |
