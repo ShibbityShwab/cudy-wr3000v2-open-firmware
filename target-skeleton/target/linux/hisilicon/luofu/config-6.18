@@ -551,8 +551,17 @@ CONFIG_ZSTD_DECOMPRESS=y
 # Neither is done in this derivation: the file records what oldconfig did.
 
 # first-boot root: stock U-Boot passes no cmdline for our uImage (2026-11-19)
-CONFIG_CMDLINE="ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1"
+CONFIG_CMDLINE="ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1 luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_switch.eps=1 luofu_switch.qminit=1 luofu_switch.pfe=1 luofu_switch.ifc=1 luofu_switch.ext=1 luofu_switch.cpu_mirror=1 luofu_switch.mirror_dst=4 luofu_pie.arm=1 luofu_pie.rxcfg=1 luofu_pie.accepterr=1 luofu_pie.cpucopy_deliver=1 luofu_pie.cpucopy_port=11 luofu_gmac.macregs=1 oops=panic panic=0"
 CONFIG_CMDLINE_FORCE=y
 
 # squashfs on this target uses XZ with the ARM BCJ filter (unsquashfs: "Filters selected: arm"); without this the kernel cannot decompress file blocks (2026-11-19 bring-up).
 CONFIG_XZ_DEC_ARM=y
+CONFIG_DEVMEM=y
+CONFIG_STRICT_DEVMEM=n
+CONFIG_LEDS_GPIO=y
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_KEYBOARD_GPIO_POLLED=y
+# CONFIG_INPUT_HISI_POWERKEY is not set
+CONFIG_WATCHDOG_SYSFS=y

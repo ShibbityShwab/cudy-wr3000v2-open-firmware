@@ -146,6 +146,11 @@ endef
 # libfdt overlay apply the stock loader performs (fdtoverlay from the kernel
 # build tree); assemble re-derives the load/entry address and enforces the
 # slot budget, failing the build on any mismatch.
+# Align the compiled base DTB for the bootfip gate load (see scripts/pad-dtb.py).
+define Build/luofu-pad-dtb
+	$(LUOFU_PYTHON) $(TOPDIR)/scripts/pad-dtb.py "$(LUOFU_BASE_DTB)"
+endef
+
 define Build/luofu-fip-slice
 	[ -f "$(LUOFU_FIP_SLICE)" ] || { \
 		echo "luofu: $(LUOFU_FIP_SLICE) missing; install target-skeleton/tools/fip-slice.py as scripts/fip-slice.py"; \
@@ -298,7 +303,7 @@ define Device/cudy_wr3000-v2
 	KERNEL_ENTRY := $(LUOFU_LOADADDR)
 	KERNEL_SIZE := $(LUOFU_KERNEL_SLOT_SIZE)
 	UIMAGE_NAME := Linux-$(LINUX_VERSION)
-	KERNEL := kernel-bin | luofu-check-textofs | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest
+	KERNEL := kernel-bin | luofu-check-textofs | luofu-pad-dtb | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest
 	FILESYSTEMS := squashfs
 	IMAGES := sysupgrade.bin
 	SUPPORTED_DEVICES += hisilicon,luofu-r116 hisilicon,luofu

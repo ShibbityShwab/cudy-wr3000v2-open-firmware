@@ -559,6 +559,69 @@
 		};
 	};
 
+
+	/*
+	 * Board buttons and LEDs. Source: the stock U-Boot board_id=3 overlay
+	 * (kernela_overlay_board3.dtbo, 4920 B, sha256 17fd44ed...; decompiled from
+	 * the vendor kernel slot 2026-11-21). All lines are <&porta> active-low.
+	 *   gpio-keys-polled: reset=GPIO22, wps=GPIO23, 20 ms poll,
+	 *                     linux,code 0x198 (KEY_RESTART) / 0x211 (KEY_WPS_BUTTON)
+	 *   gpio-leds:        status=GPIO24, wan=GPIO25, lan=GPIO3, internet=GPIO2,
+	 *                     wifi2=GPIO0, wifi5=GPIO1 (oem:green:* labels)
+	 * The vendor overlay also sets pcie0 capability=3/gpio-delay/pcie-gpios
+	 * (GPIO20/21/28) and disables gemac0; those are handled separately.
+	 */
+	gpio-keys-polled {
+		compatible = "gpio-keys-polled";
+		poll-interval = <20>;
+
+		reset {
+			label = "reset";
+			gpios = <&porta 22 1>;	/* GPIO_ACTIVE_LOW */
+			linux,code = <0x198>;	/* KEY_RESTART */
+		};
+
+		wps {
+			label = "wps";
+			gpios = <&porta 23 1>;	/* GPIO_ACTIVE_LOW */
+			linux,code = <0x211>;	/* KEY_WPS_BUTTON */
+		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+
+		led-status {
+			label = "oem:green:status";
+			gpios = <&porta 24 1>;	/* GPIO_ACTIVE_LOW */
+		};
+
+		led-wan {
+			label = "oem:green:wan";
+			gpios = <&porta 25 1>;	/* GPIO_ACTIVE_LOW */
+		};
+
+		led-lan {
+			label = "oem:green:lan";
+			gpios = <&porta 3 1>;	/* GPIO_ACTIVE_LOW */
+		};
+
+		led-internet {
+			label = "oem:green:internet";
+			gpios = <&porta 2 1>;	/* GPIO_ACTIVE_LOW */
+		};
+
+		led-wifi2 {
+			label = "oem:green:wifi";
+			gpios = <&porta 0 1>;	/* GPIO_ACTIVE_LOW */
+		};
+
+		led-wifi5 {
+			label = "oem:green:wifi5g";
+			gpios = <&porta 1 1>;	/* GPIO_ACTIVE_LOW */
+		};
+	};
+
 	i2c0: i2c@10111000 {
 		compatible = "snps,designware-i2c";
 		reg = <0x10111000 0x1000>;

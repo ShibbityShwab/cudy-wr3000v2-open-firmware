@@ -125,8 +125,8 @@ The 2-CPU baseline is the platform; the remaining work is feature bring-up and h
 | wired LAN (one port, bench workaround) | [V] CPU-copy mirror + port-0 delivery | native CFE-equivalent forwarding is a separate project; multi-port/WAN needs attended cable tests |
 | storage (FMC SPI-NAND + UBI) | [V] rootfs/overlay mounted, 17 partitions | exercise/verify NAND under load and the install path |
 | SSH / userspace / overlay | [V] working | install/upgrade path end-to-end (A/B) |
-| LEDs / buttons | [U] nodes/board wiring not modelled | extract vendor DT nodes, add, verify with the user at the box |
-| thermal / watchdog / RTC | [U] drivers exist, behaviour unverified | read sensors/watchdog info, add DT/board data if missing |
+| LEDs / buttons | [V] 6 oem:green:* LEDs + gpio-keys-polled (reset/WPS) exposed; brightness writable; physical light/button press pending user confirmation | stock overlay board_id=3 map (GPIO 24/25/3/2/0/1 LEDs, 22/23 keys, active-low) |
+| thermal / watchdog / RTC | thermal ENODATA [X]; watchdog [V] sysfs timeout/identity/state visible (untested arm); RTC absent | debug the tvsensor read; one attended watchdog test with recovery armed |
 | USB / PCIe / I2C / SPI | [U] drivers ported, devices unverified | inventory devices/buses, add board nodes, test per feature |
 | Wi-Fi (Hi5622) | [X] vendor driver only for 5.10 | feasibility/port plan first; do not promise support yet |
 | native switch forwarding | [I] documented workaround in use | independent LSW/PIE hardware-bridge project |
@@ -135,3 +135,19 @@ The 2-CPU baseline is the platform; the remaining work is feature bring-up and h
 Sequencing: (1) remote feature inventory and vendor-DT extraction, one feature at a time with
 build/install/verify; (2) attended multi-port/LED/button/install-path tests with the recovery card
 armed and UART captured; (3) Wi-Fi feasibility then optional port; (4) upstream consolidation.
+
+
+## Verified 2026-11-21 (image 7f270b8c)
+
+- LEDs: six oem:green:{status,wan,lan,internet,wifi,wifi5g} class devices exist;
+  /sys/class/leds/*/brightness writes and reads back (active-low GPIO map from the
+  stock board_id=3 overlay: 24/25/3/2/0/1).  Physical light state still needs one
+  human confirmation.
+- Buttons: gpio-keys-polled registered as /dev/input/event0 (reset GPIO 22
+  KEY_RESTART, WPS GPIO 23 KEY_WPS_BUTTON, 20 ms poll); one press test pending.
+- Watchdog: watchdog0 with identity HiSilicon luofu watchdog, timeout 30 s,
+  state active (not armed by us); CONFIG_WATCHDOG_SYSFS enabled.
+- DTB alignment fix [V]: the new DTS pushed the base DTB to an unaligned totalsize
+  (13,041 B); U-Boot bootfip data-aborted on the unaligned gate-word load and fell
+  back to stock.  scripts/pad-dtb.py now pads the DTB to 13,048 B / 8-byte
+  totalsize, and the image boots (2 CPUs, ping 0% loss).
