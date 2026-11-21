@@ -306,7 +306,7 @@ define Device/cudy_wr3000-v2
 	KERNEL := kernel-bin | luofu-check-textofs | luofu-pad-dtb | append-dtb | uImage none | luofu-fip-slice | luofu-fip-manifest
 	FILESYSTEMS := squashfs
 	IMAGES := sysupgrade.bin
-	SUPPORTED_DEVICES += hisilicon,luofu-r116 hisilicon,luofu
+	SUPPORTED_DEVICES += cudy,wr3000-v2 hisilicon,luofu-r116 hisilicon,luofu
 	IMAGE/sysupgrade.bin := luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata
 	# TODO(packages): final DEVICE_PACKAGES list (TARGET-DESIGN.md 4.2).
 	# DEVICE_PACKAGES :=
