@@ -55,4 +55,4 @@ analysis/struct-layout-drift.md, analysis/vtable-order-drift.md,
 analysis/member-audit-summary.md (+ per-module CSVs), analysis/vermagic.md,
 shim/ (wifi_shim.c, Makefile, README.md), tools/ (regeneration scripts).
 
-Commit: <FILLED-IN-AFTER-COMMIT>
+Commit: 47f80e5
