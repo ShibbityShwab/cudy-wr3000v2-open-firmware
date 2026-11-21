@@ -62,3 +62,18 @@ second from the right (eth1/port 10):
 Bridge FDB: bench adapter MAC 00:e0:4c:63:17:58 on port 1 (eth2), second adapter MAC
 00:e0:4c:68:02:14 on port 2 (eth1); counters advanced both ways (eth2 rx 421/tx 359,
 eth1 rx 265/tx 228). Evidence: lan2lan-eth1.txt, lan2lan-eth1-fdb.txt.
+
+## WAN L3 validation (eth3 / leftmost jack) - PASS
+
+With the bench adapter on eth2 (management) and the second adapter on the leftmost jack (eth3/WAN),
+a host DHCP server (dnsmasq on 192.168.50.1/24) served the WAN interface:
+
+- box udhcpc: "broadcasting select for 192.168.50.115, server 192.168.50.1",
+  "lease of 192.168.50.115 obtained from 192.168.50.1, lease time 3600";
+- box eth3: inet 192.168.50.115/24 brd 192.168.50.255, UP, default via 192.168.50.1 dev eth3;
+- box -> host gateway 192.168.50.1: 5/5 ping 0% loss; host -> box WAN IP: 4/4 ping 0% loss.
+
+So the WAN port has a complete native L2/L3 path (delivery to CPU, DHCP client, routing, ICMP in
+both directions). Note: the host firewall (ufw INPUT DROP) silently dropped the DHCP broadcasts
+until UDP 67/68 was allowed on the test interface - worth remembering for any repeat.
+Evidence: build/evidence-bench-gates/wan-l3/ (box-wan4.txt, box-ping-gw.txt, host-ping-boxwan.txt).
