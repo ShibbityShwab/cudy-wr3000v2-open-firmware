@@ -1,0 +1,112 @@
+# Kbuild draft -- hi3881-derived WLAN framework skeleton for the Hi5622V100 6.18 port
+# Lane: wifi-framework-port (host-only research)
+# Upstream reference trees (kept OUT of the repo, in /home workdirs):
+#   - OpenHarmony device_soc_hisilicon common/platform/wifi/hi3881v100/driver  (GPL-2.0-or-later per repo LICENSE + file headers)
+#   - themactep/wifi-hi3881 driver/                                            (no declared license; files "All rights reserved")
+#
+# Usage (skeleton subset; see bottom for the full-object mapping):
+#   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+#   export TC=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin
+#   make ARCH=arm CROSS_COMPILE=$(TC)/arm-openwrt-linux-muslgnueabi- CFG_BUILTIN=y \
+#        WIFI_DRIVER_DIR=$(pwd) -C $(KDIR) M=$(pwd) modules
+#
+# Layer split follows the vendor Makefile's ROM/RAM grouping:
+#   skeleton (this build): libsec + frw + oal_mem + oam_log + mac/common
+#   upper layers (listed for reference): oal full, hcc, hmac, wal -- blocked on
+#   6.18 cfg80211/netdev/skb API drift, see REPORT.md.
+
+MODULE_NAME := hi3881_fw_skel
+
+ccflags-y += -std=gnu99 -Wno-declaration-after-statement -fsigned-char -freg-struct-return
+# OpenWrt-patched kernel Makefile drops the stock '-isystem $(CC -print-file-name=include)';
+# third-party code (securec) needs bare <stddef.h> from the toolchain.
+ccflags-y += -isystem $(shell $(CC) -print-file-name=include)
+# The upstream trees rely on SDK-level -I flags; add them here.
+ccflags-y += -I$(src)/include -I$(src)/oal -I$(src)/oam -I$(src)/frw
+ccflags-y += -I$(src)/mac/common -I$(src)/mac/hmac -I$(src)/hcc -I$(src)/wal
+ccflags-y += -I$(src)/libsec
+# 6.18 port: forced-include linuxkpi shim (version macros + struct timeval).
+ccflags-y += -include $(src)/linuxkpi_compat.h
+ccflags-y += -Wno-unused-variable -Wno-unused-function -Wno-missing-prototypes
+ccflags-y += -Wno-implicit-function-declaration -Wno-unused-label -Wno-unused-value
+ccflags-y += -Wno-sign-compare -Wno-pointer-sign -Wno-format -Wno-format-security
+ccflags-y += -Wno-int-conversion -Wno-discarded-qualifiers -Wno-unused-parameter
+ccflags-y += -Wno-strict-prototypes -Wno-old-style-definition -Wno-address
+ccflags-y += -D_FORTIFY_SOURCE=0 -fno-strict-aliasing
+# OS selection (values from the upstream env_config.mk/BUILD.gn; the Linux port
+# defines _PRE_OS_VERSION = _PRE_OS_VERSION_LINUX).
+ccflags-y += -D_PRE_OS_VERSION_LINUX=1 -D_PRE_OS_VERSION_LITEOS=2 -D_PRE_OS_VERSION=_PRE_OS_VERSION_LINUX
+ccflags-y += -D_PRE_MULTI_CORE_MODE_SMP=1 -D_PRE_MULTI_CORE_MODE_OFFLOAD_HMAC=2 -D_PRE_MULTI_CORE_MODE_OFFLOAD_DMAC=3
+ccflags-y += -D_PRE_MULTI_CORE_MODE=_PRE_MULTI_CORE_MODE_OFFLOAD_DMAC
+ccflags-y += -D_PRE_BIG_CPU_ENDIAN=0 -D_PRE_LITTLE_CPU_ENDIAN=1 -D_PRE_CPU_ENDIAN=_PRE_LITTLE_CPU_ENDIAN
+ccflags-y += -D_PRE_FRW_FEATURE_PROCESS_ENTITY_THREAD=0 -D_PRE_FRW_FEATURE_PROCESS_ENTITY_TASKLET=1
+ccflags-y += -D_PRE_FRW_FEATURE_PROCESS_ENTITY_TYPE=_PRE_FRW_FEATURE_PROCESS_ENTITY_THREAD
+# feature flags (mirrors OH env_config.mk; gated entries follow the ta env_config.mk)
+ccflags-y += -D_PRE_WLAN_CHIP_VERSION=_HI_BOARD_FPGA -D_HI_BOARD_FPGA=1 -D_HI_BOARD_ASIC=2
+ccflags-y += -D_PRE_WLAN_FEATURE_PMF -D_PRE_WLAN_FEATURE_AUTORATE -D_PRE_WLAN_FEATURE_SCHEDULE
+ccflags-y += -D_PRE_WLAN_PERFORM_TPC -D_PRE_WLAN_FEATURE_TPC -D_PRE_WLAN_FEATURE_DBAC
+ccflags-y += -D_PRE_DBAC_DYNAMIC_POLICY -D_PRE_WLAN_FEATURE_AGGR_OPTIMIZE
+ccflags-y += -D_PRE_WLAN_FEATURE_CCA_OPT -D_PRE_WLAN_FEATURE_EDCA_OPT -D_PRE_WLAN_FEATURE_EDCA_OPT_AP
+ccflags-y += -D_PRE_WLAN_FEATURE_ANTI_INTERF -D_PRE_WLAN_FEATURE_ALG_CFG_ROM -D_PRE_WLAN_FEATURE_FLOWCTRL
+ccflags-y += -D_PRE_WLAN_FEATURE_CLASSIFY -D_PRE_WLAN_FEATURE_ALWAYS_TX
+ccflags-y += -D_PRE_WLAN_FEATURE_WPA -D_PRE_WLAN_FEATURE_WPA2 -D_PRE_WLAN_FEATURE_AMPDU
+ccflags-y += -D_PRE_WLAN_FEATURE_DHCP_OFFLOAD_ROM -D_PRE_WLAN_FEATURE_PKT_MEM_OPT
+ccflags-y += -D_PRE_WLAN_PM_FEATURE_FORCESLP_RESUME -D__BITS_PER_OAL_LONG=32 -D_PRE_WLAN_FEATURE_11D
+ccflags-y += -D_PRE_WLAN_FEATURE_ANY_ROM -D_PRE_WLAN_FEATURE_CSI -D_PRE_WLAN_FEATURE_STA_UAPSD
+ccflags-y += -D_PRE_WLAN_FEATURE_MESH_ROM -D_PRE_WLAN_FEATURE_BW_HIEX -D_PRE_WLAN_FEATURE_STA_PM
+ccflags-y += -D_PRE_WLAN_FEATURE_UAPSD -D_PRE_WLAN_FEATURE_WOW
+ccflags-y += -D_PRE_XTAL_FREQUENCY_COMPESATION_ENABLE -DCONFIG_MMC -DCONFIG_PRINTK
+ccflags-y += -D_PRE_WLAN_FEATURE_WOW_ROM
+ccflags-y += -Wno-implicit-fallthrough -Wno-unused-const-variable -Wno-missing-field-initializers
+ccflags-y += -Wno-missing-declarations -Wno-redundant-decls -Wno-cast-function-type
+ccflags-y += -Wno-unused-const-variable
+
+# --- securec (the vendor also ships ksecurec.ko separately; keep libsec self-contained here)
+SEC_OBJS := libsec/memcpy_s.o libsec/memmove_s.o libsec/memset_s.o libsec/strcat_s.o \
+            libsec/strcpy_s.o libsec/strncat_s.o libsec/strncpy_s.o libsec/strtok_s.o \
+            libsec/snprintf_s.o libsec/vsnprintf_s.o libsec/secureprintoutput_a.o
+
+# --- frw: framework event/task/timer layer (frw_event.c frw_event_sched.c frw_main.c frw_task.c frw_timer.c)
+FRW_OBJS := frw/frw_event.o frw/frw_event_sched.o frw/frw_main.o frw/frw_task.o frw/frw_timer.o
+
+# --- oal ROM: memory layer only for the skeleton (full oal list below)
+OAL_ROM_OBJS := oal/oal_mem.o
+
+# --- oam ROM: logging
+OAM_ROM_OBJS := oam/oam_log.o
+
+# --- mac/common: shared MAC structures/helpers (full list)
+MAC_OBJS := mac/common/mac_data.o mac/common/mac_device.o mac/common/mac_frame.o \
+            mac/common/mac_ie.o mac/common/mac_user.o mac/common/mac_vap.o \
+            mac/common/mac_mib.o mac/common/mac_pm_driver.o mac/common/mac_resource.o \
+            mac/common/mac_regdomain.o
+
+# additional objects needed to close the skeleton's internal symbol references
+# (oal_util: bit ops; exception_rst: oal_frw_exception_report; oam_main: g_level_log)
+EXTRA_OBJS := oal/oal_util.o oam/oam_main.o skel_mod.o
+# oal/exception_rst.o excluded: HDF-bound (hi_wifi_api.h -> hdf_ibus_intf.h);
+# oal_frw_exception_report is stubbed in skel_mod.c.
+
+$(MODULE_NAME)-y := $(SEC_OBJS) $(FRW_OBJS) $(OAL_ROM_OBJS) $(OAM_ROM_OBJS) $(MAC_OBJS) $(EXTRA_OBJS)
+obj-m := $(MODULE_NAME).o
+
+# ---------------------------------------------------------------------------
+# FULL OBJECT MAP (for the next stage; not built by default)
+# ---------------------------------------------------------------------------
+# OAL_FULL := oal/oal_netbuf.o oal/oal_util.o oal/oal_net.o oal/oal_cfg80211.o
+#             oal/oal_sdio_host.o oal/oal_kernel_file.o oal/exception_rst.o
+#             oal/plat_board_common_sdio.o oal/plat_firmware.o oal/plat_pm.o
+#             oal/plat_pm_wlan.o oal/plat_sdio.o oal/oal_chr.o oal/oal_main.o
+#             (hi5622 replaces the sdio/plat_* objects with PCIe equivalents:
+#              pcie_msg.c, bal_msg.c, plat_firmware.c + ETE/mailbox - reverse-derived)
+# HCC_OBJS := hcc/hcc_comm.o hcc/hcc_task.o hcc/hcc_host.o hcc/hcc_hmac.o hcc/hmac_hcc_adapt.o
+# HMAC_OBJS := mac/hmac/hmac_11i.o hmac_blockack.o hmac_chan_mgmt.o hmac_config.o
+#              hmac_crypto_tkip.o hmac_device.o hmac_encap_frame.o hmac_encap_frame_ap.o
+#              hmac_encap_frame_sta.o hmac_frag.o hmac_fsm.o hmac_main.o hmac_mgmt_ap.o
+#              hmac_mgmt_bss_comm.o hmac_mgmt_classifier.o hmac_mgmt_sta.o hmac_protection.o
+#              hmac_user.o hmac_rx_data.o hmac_tx_data.o hmac_rx_filter.o hmac_scan.o
+#              hmac_sme_sta.o hmac_tx_amsdu.o hmac_vap.o hmac_event.o
+# WAL_OBJS := wal/wal_customize.o wal/wal_cfg80211.o wal/wal_11d.o wal/wal_hipriv.o
+#             wal/wal_event_msg.o wal/hi_wifi_driver_api.o wal/wal_linux_flowctl.o
+#             wal/wal_ioctl.o wal/wal_event.o wal/wal_scan.o wal/wal_main.o
+#             wal/wal_regdb.o wal/wal_net.o
