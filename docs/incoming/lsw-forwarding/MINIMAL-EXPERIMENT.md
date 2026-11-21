@@ -107,3 +107,27 @@ No write has happened at this point.
 - Do not extend the mirror source mask as a multi-port solution - it is proven not to identify
   the ingress port.
 - Do not point the NAPT engine at 0x80400000 (see the qm-decode addendum).
+
+## E0-a result (run 2026-11-21 on hardware)
+
+Image 990c5cab (built from the adopted target DTS with cmdline
+luofu_switch.cpu_mirror=0 i.e. mirror machinery disabled, plus
+luofu_pie.rxdiag=1 luofu_pie.accepterr=1) was installed on the unit (pair b, selector
+0x11) and booted.
+
+Result: the unit boots fine (SMP, 2 CPUs, 6 LEDs, event0), but there is NO usable IP path:
+both 192.168.1.1 and the stock LAN IP are unreachable from the host; the host link stays up
+(1 Gbps). The UART shows:
+- luofu-gmac 14480000.ethernet eth2: Link is Down at 12.9 s then Link is Up - 1Gbps/Full
+  at 38.9 s (the host side comes up late, as before);
+- repeated pie-trace RXDIAG ch=0 idx=0..7+ len=60 status=37 err=1 port=11 vport=0 vlan=0
+  desc=04000000 0x8238..c2 00000000 ... - i.e. native-path completions DO arrive on
+  port 11 (eth2) without the mirror, but every frame is marked status=37 err=1 and IP is dead.
+
+Interpretation: native CPU delivery exists for the eth2 port, but the switch punts those frames
+with an error flag (wrong destination/tag classification - the stock CPU-port/IFC/tagact
+configuration is missing in our init), so they are dropped. The mirror workaround remains required
+for the verified baseline. Next steps per IMPLEMENTATION-PLAN: E0-b read-only stock-vs-ours runtime
+capture (tagact/IFC/classifier) to derive the missing CPU-punt classification, then W21 design.
+The unit needs a physical power cycle to clear the selector cell and return to stock (per the
+documented power-on semantics) before reinstalling the baseline image.
