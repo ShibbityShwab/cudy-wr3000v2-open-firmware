@@ -69,7 +69,7 @@
 		ranges;
 
 		flashinfo@80600000 {
-			compatible = "hsan,flashinfo_reserved";
+			compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved";
 			reg = <0x80600000 0x4000>;
 			atag-offset = <0x1000>;
 		};
