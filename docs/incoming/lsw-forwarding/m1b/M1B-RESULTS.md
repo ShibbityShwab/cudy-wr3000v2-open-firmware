@@ -1,7 +1,7 @@
-# M1b results: per-port native delivery (2026-11-22)
+# M1b results: per-port native delivery and LAN-to-LAN (2026-11-22)
 
-Bench test of the W22 image with the CPU-copy mirror OFF, moving the single bench cable to each
-LAN/WAN jack in turn. Evidence: build/evidence-bench-gates/m1b/ (gitignored).
+Bench test of the W22 image with the CPU-copy mirror OFF. Evidence:
+build/evidence-bench-gates/m1b/ (gitignored).
 
 ## Jack map (physical order -> netdev/port)
 
@@ -15,20 +15,40 @@ LAN/WAN jack in turn. Evidence: build/evidence-bench-gates/m1b/ (gitignored).
 After moving the cable back to eth2: 20/20 ping 0% loss. All four netdevs show non-zero rx/tx
 counters from their respective sessions (eth0 261/224, eth1 262/225, eth2 228/112, eth3 77/44).
 
+## LAN-to-LAN forwarding (M1b-3) - PASS
+
+With a second USB-Ethernet adapter on eth0 and the bench adapter on eth2, raw AF_PACKET frames
+(ethertype 0x88b5) were exchanged through the box's software bridge:
+
+| test | direction | result |
+| --- | --- | --- |
+| broadcast | eth0 -> eth2 | PASS |
+| unicast (learned) | eth0 -> eth2 | PASS |
+| unicast (learned) | eth2 -> eth0 | PASS |
+| broadcast | eth2 -> eth0 | PASS |
+
+Bridge FDB after the run (brctl showmacs br-lan):
+- 00:e0:4c:63:17:58 (bench adapter) on port 1 (eth2)
+- 00:e0:4c:68:02:14 (second adapter) on port 3 (eth0)
+- br-lan local MAC on port 1
+Counters advanced both ways (eth0 rx 588/tx 367, eth2 rx 378/tx 319 at capture).
+Evidence: lan2lan-l2b.txt, lan2lan-fdb2.txt (the first run lan2lan-l2.txt showed the reverse
+direction FAIL because the test socket read stale PACKET_OUTGOING copies; the marker-filtered
+rerun proves both directions).
+
 ## Conclusions
 
-- Native per-port CPU delivery works on all four switch ports with the W22 NAPT init and no CPU
-  copy mirror (M1a generalises).
-- Nothing in the W22 path needs port-specific work for delivery; the remaining multi-port work is
-  the LAN-to-LAN forwarding behaviour (M1b-3), which requires a second host/NIC on another jack
-  (not available at the bench) - the software bridge path is expected to work because each port
-  already reaches the CPU bridge, but it is NOT claimed yet.
-- WAN-port validation at L3 can be done by running a DHCP server on the bench host while the cable
-  is on the leftmost jack; that would prove the eth3 DHCP client path end to end.
+- Native per-port CPU delivery works on all four switch ports with W22 and no CPU copy mirror
+  (M1a generalises).
+- The software bridge forwards LAN-to-LAN in both directions on the tested port pair
+  (eth2 <-> eth0). A hardware L2/VLAN offload (M2) is therefore NOT required for multi-port LAN
+  forwarding on this platform through the tested pair; additional port pairs follow the same
+  bridge path (eth1 is another LAN member and was already proven to deliver to the CPU).
+- The WAN port (eth3) is a separate zone and not bridged to br-lan; its L3 path is optional to
+  validate with a host DHCP server.
 
 ## Remaining
 
-- M1b-3 true LAN-to-LAN: needs a second device; open.
-- WAN L3 path: optional host-DHCP validation; open.
-- Persistence: the earlier reboot determinism + link-flap test already passed on eth2; the jack
-  moves themselves exercised link events on every port without issues.
+- Optional: WAN L3 path validation with a host DHCP server on the leftmost jack.
+- Optional: repeat the L2 test through eth1 (expected identical; bridge membership verified).
+- No multi-port limitation remains for LAN forwarding over the tested ports.

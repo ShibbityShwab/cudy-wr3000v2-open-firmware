@@ -71,7 +71,7 @@ patch series** (see `release-line/manifest.tsv` in the upstream directory).
 | capability | state |
 | --- | --- |
 | 2 CPUs (SMP) | working on the canonical image [V] |
-| wired LAN | working **natively on all four jacks** via the W22 kernel NAPT/flow-engine init: bench-verified per-port CPU delivery on eth0/port9, eth1/port10, eth2/port11 and eth3/port12 (WAN; link+DHCP-class frames) with no CPU-copy mirror. M1b-1 passed 2026-11-22; true LAN-to-LAN forwarding needs a second host and is not yet claimed [V bench M1a/M1b-1] / [I] |
+| wired LAN | working **natively on all four jacks** via the W22 kernel NAPT/flow-engine init: bench-verified per-port CPU delivery on eth0/port9, eth1/port10, eth2/port11 and eth3/port12 (WAN; link+DHCP-class frames), and LAN-to-LAN forwarding through the software bridge proven in both directions on eth2<->eth0 with a second host adapter (broadcast + learned unicast) - no CPU-copy mirror, no hardware L2 offload required. WAN eth3 remains a separate zone [V bench M1a/M1b] |
 | SSH / userspace | working (`OpenWrt 6.18.60`, procd) [V] |
 | persistent overlay | ubifs `/overlay`, survives reboot [V] |
 | DEVMEM / devmem diagnostic image | optional debugging aid; the canonical image carries it, it is not required for normal operation [V] |
