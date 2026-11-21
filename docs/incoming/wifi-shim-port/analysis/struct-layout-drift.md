@@ -1,0 +1,122 @@
+# M3a struct-layout drift (vendor 5.10.201 vs our 6.18.60, ARM)
+
+Probe = tools/layout-probe.c compiled against both trees; offsets in bytes.
+
+## sizeofs (5.10 vendor tree)
+
+- cfg80211_bss: 60
+- cfg80211_chan_def: 28
+- cfg80211_connect_params: 268
+- cfg80211_scan_request: 120
+- device: 448
+- genl_info: 36
+- ieee80211_channel: 56
+- ieee80211_conf: 56
+- ieee80211_key_conf: 24
+- ieee80211_supported_band: 92
+- net_device: 1344
+- sk_buff: 176
+- wiphy: 800
+- wireless_dev: 280
+
+## Drifted members: 97   same: 56
+
+- cfg80211_bss.beacon_interval               5.10=0x028  6.18=0x030  delta=+8
+- cfg80211_bss.bssid                         5.10=0x02c  6.18=0x034  delta=+8
+- cfg80211_bss.capability                    5.10=0x02a  6.18=0x032  delta=+8
+- cfg80211_connect_params.key                5.10=0x074  6.18=0x090  delta=+28
+- cfg80211_connect_params.key_idx            5.10=0x079  6.18=0x095  delta=+28
+- cfg80211_connect_params.key_len            5.10=0x078  6.18=0x094  delta=+28
+- cfg80211_scan_request.flags                5.10=0x01c  6.18=0x018  delta=-4
+- cfg80211_scan_request.ie                   5.10=0x010  6.18=0x00c  delta=-4
+- cfg80211_scan_request.ie_len               5.10=0x014  6.18=0x010  delta=-4
+- cfg80211_scan_request.rates                5.10=0x020  6.18=0x01c  delta=-4
+- device.coherent_dma_mask                   5.10=0x160  6.18=0x0b8  delta=-168
+- device.dma_mask                            5.10=0x15c  6.18=0x0b4  delta=-168
+- device.of_node                             5.10=0x18c  6.18=0x0e0  delta=-172
+- genl_info.extack                           5.10=0x020  6.18=0x04c  delta=+44
+- genl_info.genlhdr                          5.10=0x00c  6.18=0x010  delta=+4
+- genl_info.nlhdr                            5.10=0x008  6.18=0x00c  delta=+4
+- net_device.addr_assign_type                5.10=0x17e  6.18=0x21b  delta=+157
+- net_device.addr_len                        5.10=0x17f  6.18=0x21c  delta=+157
+- net_device.broadcast                       5.10=0x204  6.18=0x29c  delta=+152
+- net_device.dev                             5.10=0x2b0  6.18=0x368  delta=+184
+- net_device.dev_addr                        5.10=0x1d8  6.18=0x288  delta=+176
+- net_device.dev_port                        5.10=0x186  6.18=0x224  delta=+158
+- net_device.ethtool_ops                     5.10=0x12c  6.18=0x1e8  delta=+188
+- net_device.features                        5.10=0x070  6.18=0x098  delta=+40
+- net_device.flags                           5.10=0x138  6.18=0x08c  delta=-172
+- net_device.gro_flush_timeout               5.10=0x1ec  6.18=0x554  delta=+872
+- net_device.hard_header_len                 5.10=0x156  6.18=0x090  delta=-198
+- net_device.header_ops                      5.10=0x134  6.18=0x00c  delta=-296
+- net_device.hw_features                     5.10=0x078  6.18=0x140  delta=+200
+- net_device.ieee80211_ptr                   5.10=0x1d0  6.18=0x284  delta=+180
+- net_device.ifindex                         5.10=0x0a8  6.18=0x0b0  delta=+8
+- net_device.ip6_ptr                         5.10=0x1cc  6.18=0x0a0  delta=-300
+- net_device.ip_ptr                          5.10=0x1c8  6.18=0x274  delta=+172
+- net_device.max_mtu                         5.10=0x150  6.18=0x174  delta=+36
+- net_device.min_mtu                         5.10=0x14c  6.18=0x170  delta=+36
+- net_device.mtu                             5.10=0x148  6.18=0x030  delta=-280
+- net_device.name                            5.10=0x000  6.18=0x0d4  delta=+212
+- net_device.napi_defer_hard_irqs            5.10=0x1f0  6.18=0x550  delta=+864
+- net_device.nd_net                          5.10=0x2a0  6.18=0x0cc  delta=-468
+- net_device.needed_headroom                 5.10=0x15a  6.18=0x034  delta=-294
+- net_device.needs_free_netdev               5.10=0x298  6.18=0x358  delta=+192
+- net_device.neigh_priv_len                  5.10=0x182  6.18=0x220  delta=+158
+- net_device.netdev_ops                      5.10=0x128  6.18=0x008  delta=-288
+- net_device.num_tx_queues                   5.10=0x244  6.18=0x2c8  delta=+132
+- net_device.real_num_tx_queues              5.10=0x248  6.18=0x020  delta=-552
+- net_device.rx_handler                      5.10=0x1f4  6.18=0x0c4  delta=-304
+- net_device.rx_handler_data                 5.10=0x1f8  6.18=0x0c8  delta=-304
+- net_device.state                           5.10=0x028  6.18=0x088  delta=+96
+- net_device.type                            5.10=0x154  6.18=0x178  delta=+36
+- net_device.vlan_features                   5.10=0x088  6.18=0x150  delta=+200
+- net_device.watchdog_timeo                  5.10=0x278  6.18=0x330  delta=+184
+- sk_buff.data                               5.10=0x0a0  6.18=0x0a8  delta=+8
+- sk_buff.end                                5.10=0x098  6.18=0x0a0  delta=+8
+- sk_buff.hash                               5.10=0x074  6.18=0x07c  delta=+8
+- sk_buff.head                               5.10=0x09c  6.18=0x0a4  delta=+8
+- sk_buff.mac_header                         5.10=0x092  6.18=0x09a  delta=+8
+- sk_buff.mark                               5.10=0x080  6.18=0x088  delta=+8
+- sk_buff.network_header                     5.10=0x090  6.18=0x098  delta=+8
+- sk_buff.priority                           5.10=0x06c  6.18=0x074  delta=+8
+- sk_buff.protocol                           5.10=0x08c  6.18=0x094  delta=+8
+- sk_buff.skb_iif                            5.10=0x070  6.18=0x078  delta=+8
+- sk_buff.tail                               5.10=0x094  6.18=0x09c  delta=+8
+- sk_buff.transport_header                   5.10=0x08e  6.18=0x096  delta=+8
+- sk_buff.truesize                           5.10=0x0a4  6.18=0x0ac  delta=+8
+- sk_buff.users                              5.10=0x0a8  6.18=0x0b0  delta=+8
+- sk_buff.vlan_proto                         5.10=0x078  6.18=0x080  delta=+8
+- sk_buff.vlan_tci                           5.10=0x07a  6.18=0x082  delta=+8
+- wiphy.bands                                5.10=0x0d4  6.18=0x0e4  delta=+16
+- wiphy.cipher_suites                        5.10=0x05c  6.18=0x074  delta=+24
+- wiphy.coverage_class                       5.10=0x07c  6.18=0x094  delta=+24
+- wiphy.dev                                  5.10=0x0f0  6.18=0x108  delta=+24
+- wiphy.flags                                5.10=0x024  6.18=0x038  delta=+20
+- wiphy.frag_threshold                       5.10=0x074  6.18=0x08c  delta=+24
+- wiphy.iface_combinations                   5.10=0x014  6.18=0x028  delta=+20
+- wiphy.interface_modes                      5.10=0x020  6.18=0x034  delta=+20
+- wiphy.max_acl_mac_addrs                    5.10=0x022  6.18=0x036  delta=+20
+- wiphy.max_match_sets                       5.10=0x047  6.18=0x05f  delta=+24
+- wiphy.max_num_csa_counters                 5.10=0x2de  6.18=0x25a  delta=-132
+- wiphy.max_num_pmkids                       5.10=0x0ae  6.18=0x0be  delta=+16
+- wiphy.max_scan_ie_len                      5.10=0x048  6.18=0x060  delta=+24
+- wiphy.max_scan_ssids                       5.10=0x044  6.18=0x05c  delta=+24
+- wiphy.max_sched_scan_ie_len                5.10=0x04a  6.18=0x062  delta=+24
+- wiphy.max_sched_scan_ssids                 5.10=0x046  6.18=0x05e  delta=+24
+- wiphy.n_addresses                          5.10=0x01e  6.18=0x032  delta=+20
+- wiphy.n_cipher_suites                      5.10=0x058  6.18=0x070  delta=+24
+- wiphy.n_iface_combinations                 5.10=0x018  6.18=0x02c  delta=+20
+- wiphy.priv                                 5.10=0x320  6.18=0x2e0  delta=-64
+- wiphy.privid                               5.10=0x0d0  6.18=0x0e0  delta=+16
+- wiphy.registered                           5.10=0x2b0  6.18=0x228  delta=-136
+- wiphy.regulatory_flags                     5.10=0x028  6.18=0x03c  delta=+20
+- wiphy.retry_long                           5.10=0x071  6.18=0x089  delta=+24
+- wiphy.retry_short                          5.10=0x070  6.18=0x088  delta=+24
+- wiphy.rts_threshold                        5.10=0x078  6.18=0x090  delta=+24
+- wiphy.signal_type                          5.10=0x03c  6.18=0x054  delta=+24
+- wiphy.software_iftypes                     5.10=0x01c  6.18=0x030  delta=+20
+- wireless_dev.conn                          5.10=0x064  6.18=0x02c  delta=-56
+- wireless_dev.ps                            5.10=0x0d6  6.18=0x05d  delta=-121
+
+## Unchanged members: 56

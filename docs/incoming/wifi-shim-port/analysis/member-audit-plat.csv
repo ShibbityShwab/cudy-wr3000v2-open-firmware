@@ -1,0 +1,16 @@
+struct,member,off_5_10,off_6_18,drift,owner,hit_funcs,hit_count,examples
+device,bus,0x34,0x34,same,KERNEL,1,pcie_ete_rcv_buff_check
+device,driver,0x38,0x38,same,KERNEL,2,pcie_ete_sending_trigger,pcie_ete_tx_queue_handle
+device,parent,0x24,0x24,same,KERNEL,2,pcie_ete_rcv_buff_check,pcie_ete_tx_queue_handle
+sk_buff,data,0xa0,0xa8,DRIFT,KERNEL,1,hwifi_config_init
+sk_buff,data_len,0x58,0x58,same,KERNEL,1,hwifi_config_init
+sk_buff,destructor,0x4c,0x4c,same,KERNEL,1,hwifi_config_init
+sk_buff,dev,0x8,0x8,same,KERNEL,13,hcc_msg_is_post_msg,hcc_msg_module_init,hcc_xfer_done,oal_bitmap_clear,oal_bitmap_get,oal_bitmap_get_last_bit1,oal_bitmap_is_empty,oal_bitmap_is_full
+sk_buff,head,0x9c,0xa4,DRIFT,KERNEL,1,hwifi_config_init
+sk_buff,len,0x54,0x54,same,KERNEL,1,hwifi_config_init
+sk_buff,mac_len,0x5c,0x5c,same,KERNEL,1,hwifi_config_init
+sk_buff,prev,0x4,0x4,same,KERNEL,29,hcc_init,hcc_msg_alloc,hcc_msg_module_init,hcc_msg_process,hcc_msg_register_tab,hcc_msg_register_tab_customise,hcc_queue_msg_process,hcc_queue_post_msg
+sk_buff,queue_mapping,0x60,0x60,same,KERNEL,1,hwifi_config_init
+sk_buff,sk,0xc,0xc,same,KERNEL,6,hcc_process_all_event,hcc_timer_timeout_proc,oal_hash_bucket_node_num_inc,oal_mem_info,oal_mem_print_normal_pool_info,wlan_power_on
+sk_buff,truesize,0xa4,0xac,DRIFT,KERNEL,1,hwifi_config_init
+sk_buff,vlan_tci,0x7a,0x82,DRIFT,KERNEL,1,oal_mem_sdt_netbuf_alloc
