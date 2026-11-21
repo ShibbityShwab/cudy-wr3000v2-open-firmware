@@ -128,3 +128,19 @@ forwarding through the box (netns recipe in ROUTED-PHASE-ANALYSIS.md section 3).
 produces no changes, the stock OpenWrt userspace likely runs hardware offload disabled and M2-A
 entry encoding would require our own controlled insert probe (W23); M2-B would be software-only
 bridge by default, supporting the D1 release path.
+
+## 8. FINAL VERDICT after the forwarded-traffic stock phase (2026-11-22)
+
+True forwarded LAN->WAN NAT traffic populated the L3 interface (2 rows), neighbour/NHP (2 rows) and
+tag action (1 new row) tables, but left every NAPT DDR flow arena and the flow-counter bank
+byte-identical/empty, with only engine match/punt counters moving (FWD-PHASE-ANALYSIS.md).
+
+- **M2-A (NAPT hardware flow cache): CLOSED / do not implement.** No stock phase ever produced a
+  flow entry; the 32B/88B slot and engine-write contract cannot be validated, and the vendor userspace
+  in this configuration does not drive the DDR flow cache. A controlled insert probe (W23) is the
+  only theoretical route and is not justified for the release.
+- **M2-B (L3/neighbour/tag tables): data-backed, still not a release feature.** The real l3intf/nhp/
+  tagact values validate the static layouts and give a documented mechanism, but there is no
+  demonstrated performance benefit, the IFC action engine is write-only/undecoded, and forwarding
+  still uses the software path + NAPT punt. Keep as reversal documentation only.
+- Release path unchanged: W22/M1b. Nothing in M2 blocks it.

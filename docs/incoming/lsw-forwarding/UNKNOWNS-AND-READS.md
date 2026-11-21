@@ -451,12 +451,11 @@ New items:
   a brokered static ARM physdump captured the real stock tables (cfe/STOCK-DUMP-ANALYSIS.md). The
   plain-LAN stock config populates only tagact + IFC defaults + NAPT/queue config, with no l3intf/
   userll/flow entries; a routed/LAN-to-LAN stock phase is needed for the vendor write paths.
-- **U34 (M2 verdict)**: still deferred; the routed/WAN phase (box-terminated traffic) produced zero
-  flow/table writes - only forwarded traffic through the box can populate them
-  (ROUTED-PHASE-ANALYSIS.md). Decisive next input: one through-box forwarded phase (LAN host ->
-  box -> WAN/LAN peer, netns recipe) with a carveout+napt+ifc+pie+procfs dump; then M2-A entry
-  layout and M2-B table semantics can be judged, or M2-A falls back to a controlled insert probe
-  (W23). M2-C needs the GPL CFE userspace. Nothing blocks release.
+- **U34 (M2 verdict) - FINAL**: true forwarded LAN->WAN NAT traffic populated l3intf (2 rows),
+  nhp (2 rows) and tagact (1 new row) - decoded in FWD-PHASE-ANALYSIS.md - but left all NAPT DDR
+  flow arenas and flow counters empty. M2-A (hardware flow cache) is CLOSED (stock does not drive
+  the DDR cache; slot/engine contract unvalidatable); M2-B is data-backed documentation only (no
+  demonstrated benefit, IFC action engine write-only). W22/M1b remains the release path.
 
 ## U12 - completion of the identity path (success criterion)
 

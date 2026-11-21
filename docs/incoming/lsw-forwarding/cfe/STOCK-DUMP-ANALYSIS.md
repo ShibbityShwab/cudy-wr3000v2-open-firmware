@@ -139,3 +139,10 @@ the CFE had no forwarding decision to offload. The decisive next phase is real f
 through the box (LAN host -> box -> WAN peer via network namespaces), with the exact recipe and
 expected observables in ROUTED-PHASE-ANALYSIS.md section 3. M2-A entry encoding remains unobserved
 until that phase (or a controlled insert probe) exists.
+
+## 9. Forwarded-traffic phase (2026-11-22): tables populated, flow arenas still empty
+
+See FWD-PHASE-ANALYSIS.md. The first real vendor table writes appeared (tagact row 2, l3intf rows
+1-2, nhp rows 1-2, all decoded), validating the static layouts; but every NAPT DDR flow arena and
+the flow-counter bank stayed byte-identical/empty, so the stock CFE does not use the DDR flow cache
+in this configuration. M2-A closed; M2-B data-backed documentation only.

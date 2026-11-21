@@ -85,3 +85,10 @@ The original design asked for, on a consistent stock 5.10 boot, read-only dd dum
 This is retained as the design record. It cannot run: the vendor kernel's /dev/mem returns "Bad
 address" for all these ranges (section 0a), so the stock runtime tables stay unavailable until a
 vendor debug kernel or another privileged read path exists.
+
+## Update 3 (2026-11-22): forwarded phase captured - negative for M2-A, positive for M2-B tables
+
+The true forwarded LAN->WAN NAT phase changed the PUB window for the first time (tagact/l3intf/nhp)
+but left all NAPT flow arenas empty (FWD-PHASE-ANALYSIS.md). Only cheap remaining reads are in
+FWD-PHASE-ANALYSIS.md section 4 (procfs table text state at the forwarded phase, a longer iperf
+flow, offload-enabled checks); if those stay empty M2-A is closed and M2-B remains documentation.

@@ -12,6 +12,7 @@ proven. It contains:
 | OUR-SIDE-VALIDATION.md | the our-image dump validation: IFC/NAPT/L2 bit-exact checks, solved flow-table DDR geometry (exact 1 MiB partition), counters/classes, remaining reads |
 | STOCK-DUMP-ANALYSIS.md | the real vendor dump (mmap physdump workaround): stock boot state decoded, tagact row, empty tables, stock==W22 flow window byte-identical, queue-window behaviour, counters, next stock phases needed |
 | ROUTED-PHASE-ANALYSIS.md | the routed/WAN stock phase: negative result (box-terminated traffic => zero flow/table writes), deltas decoded, and the exact next forwarded-through-the-box phase recipe/expected observables |
+| FWD-PHASE-ANALYSIS.md | the true forwarded LAN->WAN NAT stock phase: first real vendor writes decoded (tagact/l3intf/nhp layouts), NAPT DDR arenas still empty, M2-A closed / M2-B documentation, minimal remaining reads |
 | decode-stock-dump.py | regenerates the stock analysis markdown from the cfe-stock dump directory |
 | M2-DESIGN.md | optional hardware L2/VLAN/flow offload design (documentation only; not needed for the release line) |
 

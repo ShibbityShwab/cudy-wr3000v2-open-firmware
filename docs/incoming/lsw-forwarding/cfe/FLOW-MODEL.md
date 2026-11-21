@@ -108,6 +108,15 @@ the block is powered; the stock dump request reads them with dd.
 - flow counters: napt+0x40000 (16B per flow id, tab128, writer hi_tab_write_flow_cnt@0x37d8).
 - l3 counters: eps+0x50000; nhp counters: eps+0x4d000 (16B entries).
 
+## 3b. Real vendor write set (forwarded LAN->WAN NAT stock phase)
+
+The first populated hardware tables from stock are now decoded (FWD-PHASE-ANALYSIS.md):
+- l3intf key/data entries 1,2: sip 0 and 192.168.50.115, MACs d4:0d:ab:64:1c:73/:74, tagact_id 2,
+  mtu 1500, data word 0x000c0ddc;
+- nhp entries 1,2: next-hop IP/MAC pairs for the LAN host and the WAN peer/gateway;
+- tagact entry 2 (w0=0, w1=0x0000b000, selector 3), referenced by both l3intf rows.
+These validate the static key/data layouts of the readable tables. The flow arenas remained empty.
+
 ## 4. Flow table path (v4/v6): what is already known and what the dump must settle
 
 - The flow entries are not written through a CPU-readable tab128. The NAPT engine inserts/deletes
@@ -150,9 +159,9 @@ PIE window and the counters so classes can be correlated with table hits.
 ## 6. Remaining open items (after the our-side dump; stock still inaccessible)
 
 1. Flow-entry arena byte layout/field offsets (v4 32B and v6 88B slots were measured; the field
-   packing inside a slot is still [I]). The routed box-terminated phase did not populate them; a
-   true forwarded-through-the-box phase is the next read (ROUTED-PHASE-ANALYSIS.md section 3).
-   Geometry/bases are solved (section 4).
+   packing inside a slot is still [I]). The forwarded LAN->WAN NAT phase still left the arenas empty
+   (FWD-PHASE-ANALYSIS.md); the stock CFE appears not to use the DDR flow cache, so M2-A is not
+   pursued. Geometry/bases are solved (section 4).
 2. l3intf hardware field encoding (partially decoded; dump of pub+0x5b000/0x5c000 with known
    entries validates every bit).
 3. tagact_id references: which l3intf entry references tagact 1 and what action it describes.
