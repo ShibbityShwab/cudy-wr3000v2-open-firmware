@@ -192,10 +192,12 @@ static_checks() {
 	[ -n "$bdinfo" ] && pass "board DTS has the bdinfo partition block" || fail "board DTS has the bdinfo partition block"
 	printf '%s\n' "$bdinfo" | grep -q 'label = "bdinfo";' && pass "bdinfo partition keeps its label" || fail "bdinfo partition keeps its label"
 	printf '%s\n' "$bdinfo" | grep -q 'read-only;' && pass "bdinfo partition is read-only" || fail "bdinfo partition is read-only"
-	printf '%s\n' "$bdinfo" | grep -q 'compatible = "fixed-layout";' && pass "bdinfo has a fixed-layout nvmem layout" || fail "bdinfo has a fixed-layout nvmem layout"
-	printf '%s\n' "$bdinfo" | grep -q 'compatible = "mac-base";' && pass "bdinfo exposes a mac-base cell" || fail "bdinfo exposes a mac-base cell"
-	printf '%s\n' "$bdinfo" | grep -q 'reg = <0xde00 0x6>;' && pass "mac-base cell is at +0xde00, 6 bytes" || fail "mac-base cell is at +0xde00, 6 bytes"
-	printf '%s\n' "$bdinfo" | grep -q '#nvmem-cell-cells = <1>;' && pass "mac-base cell has a one-argument offset" || fail "mac-base cell has a one-argument offset"
+	# 6.18 adopted path: the kernel keeps no nvmem layout/cells; the factory
+	# MAC is provisioned by userspace (board.d/luofu-mac.sh) like the vendor
+	# scripts (boot-tested on image c3ef2a50).
+	printf '%s\n' "$bdinfo" | grep -q 'fixed-layout' && fail "adopted path: no fixed-layout nvmem layout in bdinfo" || pass "adopted path: no fixed-layout nvmem layout in bdinfo"
+	printf '%s\n' "$bdinfo" | grep -q 'mac-base' && fail "adopted path: no mac-base cell in bdinfo" || pass "adopted path: no mac-base cell in bdinfo"
+	printf '%s\n' "$bdinfo" | grep -q 'nvmem' && fail "adopted path: no nvmem children in bdinfo" || pass "adopted path: no nvmem children in bdinfo"
 	printf '%s\n' "$bdinfo" | grep -q 'reg = <0x4c0000 0x40000>;' && pass "bdinfo keeps the stock 0x4c0000/0x40000 geometry" || fail "bdinfo keeps the stock 0x4c0000/0x40000 geometry"
 	check_no_match "board DTS does not invent a custom bdinfo nvmem driver" 'hisilicon,luofu-bdinfo|luofu-bdinfo-nvmem' "$DTS"
 
@@ -206,10 +208,8 @@ static_checks() {
 			continue
 		fi
 		pass "gmac$n node found"
-		arg=$(cell_arg "$block")
-		if [ "$n" = 4 ]; then expect=1; else expect=0; fi
-		check_eq "gmac$n uses factory-MAC cell offset $expect" "$expect" "$arg"
-		printf '%s\n' "$block" | grep -q 'nvmem-cell-names = "mac-address";' && pass "gmac$n cell is named mac-address" || fail "gmac$n cell is named mac-address"
+		printf '%s\n' "$block" | grep -q 'nvmem-cells' && fail "gmac$n carries no kernel nvmem MAC cell (adopted path)" || pass "gmac$n carries no kernel nvmem MAC cell (adopted path)"
+		printf '%s\n' "$block" | grep -q 'nvmem-cell-names' && fail "gmac$n carries no nvmem-cell-names (adopted path)" || pass "gmac$n carries no nvmem-cell-names (adopted path)"
 	done
 }
 
@@ -259,29 +259,11 @@ dts_checks() {
 
 	bdinfo=$(block_between "$out" 'partition@4c0000' 'partition@500000')
 	printf '%s\n' "$bdinfo" | grep -q 'read-only;' && pass "compiled: bdinfo partition is read-only" || fail "compiled: bdinfo partition is read-only"
-	printf '%s\n' "$bdinfo" | grep -q 'compatible = "fixed-layout";' && pass "compiled: fixed-layout container present" || fail "compiled: fixed-layout container present"
-	printf '%s\n' "$bdinfo" | grep -q 'compatible = "mac-base";' && pass "compiled: mac-base cell present" || fail "compiled: mac-base cell present"
-	printf '%s\n' "$bdinfo" | grep -Eq 'reg = <0xde00 0x0?6>;' && pass "compiled: cell at +0xde00 len 6" || fail "compiled: cell at +0xde00 len 6"
-	printf '%s\n' "$bdinfo" | grep -Eq '#nvmem-cell-cells = <0x0*1>;' && pass "compiled: cell offset argument declared" || fail "compiled: cell offset argument declared"
-
-	# The DTB keeps no labels, so resolve the cell phandle from the decompiled
-	# tree and require every GEMAC node to reference exactly that phandle with
-	# the documented offset argument.
-	local mac_ph
-	mac_ph=$(block_between "$out" 'mac@de00' '^[[:space:]]*};' | grep -o 'phandle = <0x[0-9a-f]*>' | grep -o '0x[0-9a-f]*')
-	if [ -n "$mac_ph" ]; then
-		pass "compiled: mac-base cell phandle is <$mac_ph>"
-	else
-		fail "compiled: mac-base cell phandle is <$mac_ph>"
-	fi
+	printf '%s\n' "$bdinfo" | grep -q 'fixed-layout' && fail "compiled: no fixed-layout container (adopted path)" || pass "compiled: no fixed-layout container (adopted path)"
+	printf '%s\n' "$bdinfo" | grep -q 'mac-base' && fail "compiled: no mac-base cell (adopted path)" || pass "compiled: no mac-base cell (adopted path)"
 	for n in 1 2 3 4; do
 		block=$(dts_gmac_compiled "$out" "$n")
-		if [ "$n" = 4 ]; then expect=1; else expect=0; fi
-		if printf '%s\n' "$block" | grep -Fq -- "nvmem-cells = <$mac_ph 0x0$expect>;"; then
-			pass "compiled: gmac$n references the mac-base cell with offset $expect"
-		else
-			fail "compiled: gmac$n references the mac-base cell with offset $expect"
-		fi
+		printf '%s\n' "$block" | grep -q 'nvmem-cells' && fail "compiled: gmac$n carries no nvmem-cells (adopted path)" || pass "compiled: gmac$n carries no nvmem-cells (adopted path)"
 	done
 }
 
@@ -348,23 +330,17 @@ nvmem_checks() {
 	make_bdinfo "$img" "$base" ff || { fail "nvmem: synthetic image built"; return; }
 	pass "nvmem: synthetic bdinfo image built (0x40000 bytes)"
 
-	cell_off=$(printf '%s\n' "$(dts_bdinfo "$DTS")" | grep -o 'reg = <0xde00' | head -1)
-	check_eq "nvmem: DTS cell offset is 0xde00" 'reg = <0xde00' "$cell_off"
+	check_match "userspace: provisioner reads the bdinfo factory copy at 0xde00" '^LUOFU_MAC_BDINFO_OFFSET="0xde00"$' "$MAC"
 
 	got=$(read_cell "$img" $((0xde00)) 6)
 	check_eq "nvmem: 6-byte read at +0xde00 returns the factory copy" "$(printf '%s' "$base" | tr -d ':')" "$got"
 	check_eq "nvmem: decoy bytes after the copy are outside the cell" "deadbeef0002" "$(hex6 "$img" $((0xde06)))"
 	check_eq "nvmem: decoy bytes before the copy are outside the cell" "deadbeef0001" "$(hex6 "$img" 256)"
 
-	check_eq "nvmem: gmac1 cell argument 0 (LAN base)" 0 "$(cell_arg "$(dts_gmac "$DTS" 1)")"
-	check_eq "nvmem: gmac2 cell argument 0 (LAN base)" 0 "$(cell_arg "$(dts_gmac "$DTS" 2)")"
-	check_eq "nvmem: gmac3 cell argument 0 (LAN base)" 0 "$(cell_arg "$(dts_gmac "$DTS" 3)")"
-	check_eq "nvmem: gmac4 cell argument 1 (WAN base+1)" 1 "$(cell_arg "$(dts_gmac "$DTS" 4)")"
-
-	lan=$(mac_add48 "$base" "$(cell_arg "$(dts_gmac "$DTS" 1)")")
-	wan=$(mac_add48 "$base" "$(cell_arg "$(dts_gmac "$DTS" 4)")")
-	check_eq "nvmem: LAN address = factory base (kernel mac-base +0)" "$base" "$lan"
-	check_eq "nvmem: WAN address = factory base+1 (kernel mac-base +1)" "10:20:30:40:50:61" "$wan"
+	lan=$base
+	wan=$( . "$MAC"; luofu_mac_add "$base" 1 )
+	check_eq "nvmem: LAN address = factory base (vendor/userspace rule)" "$base" "$lan"
+	check_eq "nvmem: WAN address = factory base+1 (vendor/userspace rule)" "10:20:30:40:50:61" "$wan"
 	check_eq "nvmem: base+1 does not touch the OUI" "10:20:30:40:51:00" "$(mac_add48 '10:20:30:40:50:ff' 1)"
 
 	# Wrap case: kernel 48-bit add carries into the OUI; the vendor/userspace
