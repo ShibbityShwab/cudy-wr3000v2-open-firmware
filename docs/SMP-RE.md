@@ -1453,3 +1453,437 @@ ever available, repeat the c10/SCU-config reads.
    single variable (do not combine with the early-probe modes in the same run).
 3. If all silent: the stock reads in 20.4 plus the loader decode of how CPU1 is
    started.
+
+---
+
+## 21. Live MMIO capability (2026-11-20): the CPU1 bring-up ladder without rebuilds
+
+Status: the bench now runs a DEVMEM diagnostic image (c6ede30c) of our 6.18 kernel
+with SSH and a static devmem tool, so MMIO can be read and written live. This section
+records the live state, the correct interpretation of it, and the experiment ladder -
+including the one thing that must not be tried and why.
+
+### 21.1 Live read-only state [V]
+
+    SCU 0x10180000 CTRL   = 0x00000003
+    SCU 0x10180004 CONFIG = 0x00000511
+    SCU 0x10180008 status = 0x03030000   (CPU0/1 NORMAL, CPU2/3 off)
+    GICD 0x10181000 CTLR  = 0x00000001
+    GICD 0x10181004 TYPER = 0x0000fc25
+    GICD 0x10181008 IIDR  = 0x0102043b
+    GICC 0x10180100 CTLR  = 0x00000001, PMR 0x000000f8
+    GICC 0x10180200/04    = 0 (CPU1 bank; RAZ from CPU0, no information)
+    SYSCTRL 0x10100c00 pen = 0x81295000   (kernel probe stub)
+    CRG 0x14880038 resume  = 0x00200000   (CPU1 bits already clear)
+    late marker0/1 = 0/0, consumed=no, early_mode=0
+    System.map: secondary_startup = 0xc070b000 (PA 0x8070b000)
+
+### 21.2 Two facts that shape the live plan [V]
+
+1. **The current pen value is the kernel's probe stub, not the entry.** The probe
+   stub prints 'P', writes its marker words and then branches to
+   secondary_startup. That stub is safe until the branch.
+2. **secondary_data is zeroed after the failed boot bring-up.** arch/arm/kernel/smp.c
+   ends __cpu_up() with memset of secondary_data after the "CPU1: failed to come
+   online" timeout, and secondary_startup reads pgdir/swapper_pg_dir/stack/task out of
+   that struct with MMU off. A userspace-initiated jump into secondary_startup
+   therefore cannot bring CPU1 online - it would enable the MMU with a zero
+   page-table pointer and wedge CPU1. **Do not write pen=0x8070b000**, and treat a
+   raw release into the current probe stub as "CPU1 will be wedged after printing
+   'P'". A live release can prove consumption; it cannot online CPU1.
+
+### 21.3 Primary ladder: the kernel's own hotplug path, live and repeatable
+
+The clean live experiment is not a raw devmem release at all - it is writing 1 to
+/sys/devices/system/cpu/cpu1/online. That runs the full kernel __cpu_up() path: it
+sets secondary_data correctly, calls our luofu_smp_boot_secondary() (pen = probe stub
+by default, CRG read-modify-write, wakeup IPI, all diagnostics), waits one second, and
+on failure zeroes secondary_data again. It is repeatable, it needs no writes from
+userspace, and it is exactly the path that failed at boot - but now at an arbitrary
+later time with a fully initialised system.
+
+Per attempt, dmesg shows the full 039/042 diagnostic set (release, pre, +1ms, +21ms,
+consumed) followed by "CPU1: failed to come online" on failure. Success signature:
+"CPU1: thread ... mpidr ..." from arch/arm/kernel/topology.c, /proc/cpuinfo with two
+processors, /sys/devices/system/cpu/cpu1/online = 1, and 'P' on the console from the
+probe stub. The probe markers also persist, so any later attempt's dmesg reprints a
+consumption from an earlier attempt.
+
+Live variables to interleave (one at a time):
+
+    # 1. plain attempts, three times
+    for i in 1 2 3; do echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; done
+    dmesg | tail -60
+
+    # 2. the stock SCU configuration bit (bit 5), then attempts
+    devmem 0x10180004 32 0x00000531; devmem 0x10180004 32
+    echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; dmesg | tail -40
+    devmem 0x10180004 32 0x00000511        # restore when done
+
+    # 3. wakeup-IPI storm during an attempt (tests IPI delivery/retry sensitivity)
+    ( while true; do devmem 0x10181f00 32 0x00020000; done ) &
+    echo 1 > /sys/devices/system/cpu/cpu1/online; sleep 2; kill %1
+    # and the broadcast form: devmem 0x10181f00 32 0x01000000
+
+### 21.4 Secondary ladder: raw devmem release into a safe stub (only if needed)
+
+The raw sequence only makes sense with a pen target that neither branches nor
+requires secondary_data. The one safe stub we already know how to build in-kernel is
+the early-probe stub (patch 039/042): it writes marker word 0 = MPIDR, prints 'E',
+writes marker word 1 = 0x4545 and spins in WFE. It is only built at boot when the
+luofu_smp_early_probe token is present, so **rebuild the DEVMEM image once with
+luofu_smp_early_probe=5** (mode 5 is the read-only snapshot - it performs no MMIO
+writes but does build and cache-clean the stub). Then, with the stub PA S and marker
+PA M taken from System.map (VA - 0x40000000):
+
+    devmem 0x10100c00 32 S           # pen -> safe stub (must happen first)
+    cur=$(devmem 0x14880038 32); new=$(( cur & ~0x02800000 ))
+    devmem 0x14880038 32 $new        # CRG RMW: clear the CPU1 resume bits
+    devmem 0x10181f00 32 0x00020000  # wakeup IPI: SGI0, target list CPU1
+
+Expected on success: a single 'E' character on the UART (raw console write, not
+dmesg), the box stays up, CPU1 spins in WFE inside the kernel stub, /proc/cpuinfo
+stays at 1 (the kernel never onlined it). Read the early marker page with an
+uncached read only: the normal /dev/mem read/write path uses the cacheable linear map
+(__va, no cache maintenance), so a plain devmem read of RAM can return a stale cached
+line; the UART 'E' is the reliable signal. A devmem variant that mmaps /dev/mem with
+O_SYNC gets a write-combine (uncached) mapping and is suitable for the marker page.
+
+Do not run this ladder against the current probe stub: it branches into
+secondary_startup and wedges CPU1 (see 21.2).
+
+### 21.5 Rollback, and which writes can hurt the box
+
+Rollback after a failed raw attempt (self-cleaning, but explicit is better):
+
+    devmem 0x10100c00 32 0x81295000   # pen back to the kernel probe stub
+    devmem 0x14880038 32 0x00200000   # CRG resume back to the boot value
+    devmem 0x10180004 32 0x00000511   # only if the SCU config bit was changed
+
+If CPU1 consumed the pen ('E' seen, or markers set): reboot. The reset releases CPU1
+from its parked state and the next boot starts from the known 1-CPU baseline; no
+other cleanup is possible or needed.
+
+Hang-risk ranking:
+
+| write | risk | note |
+| --- | --- | --- |
+| pen = secondary_startup PA (0x8070b000), or raw release into the probe stub | medium | CPU1 branches into secondary_startup with a zeroed secondary_data: MMU enable with TTBR=0, almost certainly an abort loop/wedge for CPU1; small chance of a bus watchdog reset. UART capture armed, recovery door ready |
+| SCU CONFIG (0x10180004) write with unknown higher bits | low-medium | bit 5 semantics undecoded; values written are the stock-known 0x531 and our 0x511, low bits (core count) unchanged |
+| CRG 0x14880038 | low | only ever write the read-modify-write result of the known mask 0x02800000 |
+| GICD_SGIR (0x10181f00) | none | write-only, GIC ignores targets that are not present/enabled |
+| GICC CPU1 bank (0x10180200/04) | forbidden | banked per CPU; writes from CPU0 are undefined - never touch |
+
+The sysfs-hotplug ladder (21.3) carries none of these risks: on failure it is exactly
+the boot path that fails today, and on success CPU1 boots through the normal entry
+with a valid stack and page tables.
+
+### 21.6 Interpretation path
+
+* If any live attempt reports consumed=yes/'P': CPU1 does poll/consume the pen in
+  our 6.18 kernel context. Whatever single variable made the difference (timestamp,
+  SCU config bit, IPI storm) becomes the kernel-side fix (for example a retry loop in
+  __cpu_up with real delays, and/or the SCU configuration bit in the release path).
+* If every live attempt stays consumed=no: CPU1 is not executing the loader's
+  pen-poll loop on our boot path at all; the loader decode and the deeper stock reads
+  (section 20.4) are the next step, not more release variants.
+
+---
+
+## 22. Handoff probes (patch 060) and the uncompressed-Image variant
+
+Status: the live late-time attempts (add_cpu(1), IPI storms, CRG/GIC stock deltas)
+all stayed consumed=no, and the CRG/GIC differences are now explained as PCIe/WiFi
+activity on stock (section 20): +0x20/+0x28 bits 12/13 are the PCIe0/PCIe1 clock
+gates and +0x34 bits 12-19 are the PCIe0/PCIe1 reset lines, i.e. the stock kernel
+has PCIe up and our image does not. The SCU CONFIG bit 5 is read-only (a live write
+is ignored) and is used from now on as a CPU1-ran monitor, not a lever. That leaves
+one untested window: between the loader handoff and our kernel's first allocations.
+Patch 060 probes that window.
+
+### 22.1 Patch 060: two marker-only handoff probes
+
+target-skeleton/target/linux/hisilicon/patches-6.18/060-arm-hisilicon-smp-handoff-probe.patch
+touches three files; both probe blocks are guarded by CONFIG_ARCH_LUOFU and
+!CONFIG_THUMB2_KERNEL, and need no kernel config token:
+
+1. arch/arm/boot/compressed/head.S, immediately after the decompressor's entry
+   (the 1: label block, after AR_CLASS(mrs r9, cpsr)): install a 5-word
+   marker-only stub at PA 0x80600040 and point the SYSCTRL pen at it. The stub
+   writes its MPIDR to PA 0x80600010 and spins - it never branches, so a secondary
+   core that takes the pen parks safely without secondary_data. This runs before
+   any decompression write, cache or MMU setup.
+2. arch/arm/kernel/head.S, at stext right after safe_svcmode_maskall (MMU and
+   caches still off): the same with stub B at PA 0x80600080, marker PA 0x80600020,
+   pen = 0x80600080. stext runs after the decompressor has finished and before the
+   kernel has touched a page.
+3. arch/arm/mach-hisilicon/platsmp.c: an early_param handler
+   luofu_smp_handoff_probe (token value required) reads both markers through an
+   early_ioremap() window of 0x80600000 - before arm_memblock_init()/paging_init(),
+   so no allocation can have overwritten them and the uncached view sees what the
+   secondary core wrote to RAM with its caches off. It prints A/B/pen/SCU config;
+   the same marker monitor is printed at prepare and after the release, and the
+   SCU CONFIG bit 5 is printed as the CPU1-ran monitor.
+
+### 22.2 Expected output format
+
+At early_param time (before the paging-init banner lines):
+
+    luofu-smp: handoff A=00000000 B=00000000 pen=80600080 scu_cfg=00000511
+    luofu-smp: handoff verdict decompressor-entry=no kernel-stext=no
+    luofu-smp: handoff cpu1-ran monitor scu_cfg bit5=clear
+
+Later, at prepare and after the release:
+
+    luofu-smp: handoff markers at prep A=<hex> B=<hex>
+    luofu-smp: handoff cpu1-ran monitor at prep scu_cfg=<hex> bit5=<set|clear>
+    luofu-smp: handoff cpu1-ran monitor post-release scu_cfg=<hex> bit5=<set|clear>
+
+A consumed probe is nonzero and equals the secondary core's MPIDR
+(0x80000001 for CPU1); "pen" at early_param is 0x80600080 because stext wrote probe
+B last. Everything else in the boot log is the existing 039/042/059 instrumentation.
+
+### 22.3 Interpretation tree
+
+| A | B | meaning | next step |
+| --- | --- | --- | --- |
+| nonzero | zero | the consumer was alive at the decompressor's entry and was parked by probe A (B is zero because the core is already parked in stub A) | the loader does start/park CPU1, and something at/around our kernel's first instructions still lets it see the pen; the failure must be inside the decompressor/head.S window - bisect by moving probe B earlier and adding a probe after the decompressor's cache/MMU setup |
+| zero | nonzero | consumer became active only during decompression (loader starts it late, or a decompressor side effect woke it) | bisect inside the decompressor: probe after cache_on, after decompress_kernel, before the branch to stext |
+| zero | zero | the consumer never ran between loader handoff and stext | the loader does not start CPU1 on our image's boot path at all (or starts it only for the vendor image type); loader-side decode + stock comparison, and the uncompressed-Image variant below |
+| nonzero | nonzero | consumer alive through the decompressor but parked by A; B is then redundant | as for A-only |
+
+The SCU CONFIG bit 5 monitor adds a second, independent channel: if it reads 0x531
+(set) at early_param or in the post-release line, a CPU1 core has executed
+something (its U-Boot/ROM setup code); if it stays 0x511 with A/B zero, CPU1 never
+executed any code on this boot.
+
+Safety: the probes are marker-only spin stubs (no branch, no secondary_data), so a
+taken pen parks the secondary core harmlessly; the image is a diagnostic image (it
+writes the pen at boot), so do not expect add_cpu(1) to bring CPU1 online on it -
+read the handoff lines and reboot.
+
+### 22.4 Parallel variant: booting an uncompressed Image
+
+Stock boots an uncompressed ARM Image; our image is a zImage that decompresses 11.5
+MB over the same area. The build recipe exists in build/linux-kbuild/build-3dl.sh:
+build the kernel with the Image target, make the payload "arch/arm/boot/Image +
+luofu-r116.dtb" instead of "zImage + dtb", wrap it with the same mkimage command
+(-A arm -O linux -T kernel -C none -a 0x80608000 -e 0x80608000 -n Linux-5.10.201)
+and the same 40,732-byte trailer. Two caveats decide whether it is worth a build:
+
+1. The appended-DTB mechanism lives in the decompressor. An uncompressed Image gets
+   the DTB the loader passes, which is the vendor base DTB plus its overlays with
+   root compatible "hsan-luofu" - our machine descriptor matches only
+   cudy,wr3000-v2 / hisilicon,luofu-r116 / hisilicon,luofu. Either add "hsan-luofu"
+   to luofu_dt_compat for the experiment (one line, and the boot then uses the
+   vendor DT; enough to reach the handoff print, though later drivers will not
+   bind), or pass our DTB explicitly with a small head.S/build patch.
+2. Kernel slot size: the loader reads a bounded kernel image (8650752 bytes = 8.25
+   MiB in the failover log) while our uncompressed Image is of the order of 12 MiB.
+   Check /proc/mtd on stock before building; if the kernel partition is smaller than
+   the Image the variant is not bootable without a size-reduced config.
+
+Because an Image build has no decompressor, probe A does not exist there - only
+probe B. So the useful comparison is zImage (A/B) versus Image (B): if B is
+consumed on the Image but not on the zImage, either the decompressor killed the
+consumer or the loader treats the two image types differently. That is exactly the
+open question, so the variant is worth one build if the slot size allows it.
+
+### 22.5 Validation of 060 (host-only, isolated clone)
+
+(see the lane summary for the final numbers)
+
+---
+
+## 23. Patch 061: sentinel marker protocol and the re-polling handoff trampoline
+
+Status: the 060 handoff run (image 202832a2, token luofu_smp_handoff_probe=1)
+reported A=00000000, B=66cc66cc. The B value is **not** consumption: 0x66cc66cc is
+the loader's DDR test pattern (our own dumps show 0x80500000-0x805fffff filled with
+it and 0x80600018/0x1c = 66cc66cc in the flashinfo window). A consumed probe must
+read the secondary MPIDR 0x80000001, so both probes were **never entered** - CPU1 is
+not polling the pen even at the decompressor entry. Patch 061 removes that ambiguity
+with an explicit sentinel protocol and turns stext stub B into a re-polling handoff
+trampoline.
+
+### 23.1 Protocol [V]
+
+* marker A (0x80600010): initialised by the decompressor probe code to the sentinel
+  0x600D1A88; a marker-only spin stub at 0x80600040 overwrites it with 0x80000001
+  when entered.
+* marker words at 0x80600020/0x80600024/0x80600028: sentinel 0x600D1A88, 0x600D1A88,
+  0; the stext trampoline at 0x80600080 writes 0x80000001 to 0x80600020 when
+  entered, and on a pen change writes 0x600D2B61 to 0x80600024 and the new pen value
+  to 0x80600028 before branching there.
+* the trampoline page 0x80600000-0x80600fff is memblock_reserved from an early_param
+  handler (before arm_memblock_init/paging_init), so the kernel can never allocate or
+  reuse the stub/markers.
+
+Reading rules: sentinel = never entered; 0x80000001 = entered; 0x600D2B61 = the
+trampoline saw the pen change and jumped to the recorded target.
+
+### 23.2 Trampoline mode (token luofu_smp_trampoline=1)
+
+With the token, the release path writes **pen = __pa_symbol(secondary_startup)**
+instead of the 035 probe stub. The stext trampoline is already polling the pen, so
+when __cpu_up() has secondary_data prepared and the release runs, CPU1 sees the pen
+change, records the jump, and branches into the real secondary entry - the normal
+2-CPU path. Without the token, 061 behaves exactly like 060 (marker-only stubs).
+
+No relocation or cache maintenance is required for the trampoline:
+
+* the code is position independent (movw/movt immediates and PC-relative branches
+  only) and is entered with the MMU and caches off, at its physical address;
+* it is written once by stext code that also runs with caches off, so the bytes are
+  already in DRAM (point of coherency) - no clean/invalidate is needed for the code;
+* because the page is reserved, CPU0 never allocates, writes or re-reads the code
+  afterwards; marker reads from the kernel use __sync_cache_range_r() invalidation
+  first, so a stale clean line cannot hide an update.
+
+### 23.3 Expected output
+
+At early_param time:
+
+    luofu-smp: trampoline page 0x80600000-0x80600fff reserved; release pen = secondary_startup
+    luofu-smp: handoff A=600d1a88 B0=600d1a88 B1=600d1a88 B2=00000000 pen=80600080 scu_cfg=00000511
+    luofu-smp: handoff verdict A=not-entered B(trampoline)=not-entered jump=no target=00000000
+    luofu-smp: handoff cpu1-ran monitor scu_cfg bit5=clear
+
+At prepare, after the release and in late_initcall:
+
+    luofu-smp: handoff prep A=600d1a88 B0=600d1a88 B1=600d1a88 B2=00000000 A=not-entered B=not-entered jump=no target=00000000
+    luofu-smp: handoff prep cpu1-ran monitor scu_cfg=00000511 bit5=clear
+    luofu-smp: release cpu=1 logical=1 pen=0x8070b000 entry=8070b000 probe=1 tramp=1 force=0
+    luofu-smp: handoff post-release A=... B0=... B1=... B2=... A=... B=... jump=yes/no target=...
+
+(pen=0x8070b000 is whichever __pa_symbol(secondary_startup) is in the built
+System.map.)
+
+### 23.4 Interpretation
+
+| A | B0 | B1 | meaning | next step |
+| --- | --- | --- | --- | --- |
+| sentinel | sentinel | sentinel | CPU1 never entered either stub: it is not polling the pen before the release, on the loader path of our image | loader-side cause: the loader does not start CPU1 for our boot; decode the loader and test image-type sensitivity |
+| 0x80000001 | sentinel | sentinel | CPU1 entered probe A (decompressor entry): it was polling very early, then the decompressor/window killed it | bisect inside the decompressor |
+| sentinel | 0x80000001 | sentinel | CPU1 entered the stext trampoline and is still polling; no handoff yet (pen unchanged) | if an add_cpu(1) then writes the entry pen, the trampoline should jump and the jump marker proves it |
+| sentinel | 0x80000001 | 0x600D2B61 | the trampoline jumped to the recorded target: a real handoff happened | check /proc/cpuinfo and the online line; if target == secondary_startup and CPU1 is not online, the failure is inside the secondary entry |
+
+The trampoline only helps if CPU1 actually reaches it; the 060 result says it does
+not on our current loader path. So 061 is both the clean re-probe (sentinel protocol
+removes the pattern ambiguity permanently) and the handoff channel for any future
+run in which CPU1 does start polling.
+
+---
+
+## 24. FINAL: SMP resolved - the root cause was the loader handoff DT contract (2026-11-21)
+
+Status: closed. CPU1 comes up on the 6.18 kernel; the failure was in the
+bootloader handoff staging, not in any kernel SMP code. This section consolidates
+the measured root cause, the fix, the disposition of the diagnostic patches, and the
+corrections to earlier conclusions.
+
+### 24.1 Root cause [V]
+
+U-Boot's bootfip handoff staging aborts when the board/kernel devicetree lacks two
+nodes that the stock vendor base devicetree carries:
+
+1. /aliases/console - resolved to the console UART node. The stock base DTB has
+   aliases { console = "/uart1@0x1010f000"; serial0 = ...; serial1 = ...; }.
+2. /reserved-memory/flashinfo@80600000 - compatible "hsan,flashinfo_reserved",
+   reg = <0x80600000 0x4000>, atag-offset = <0x1000>. bootfip reads the node, reads
+   atag-offset and computes atag_addr = 0x80601000.
+
+Without them the staging path bails early: our UART showed the vendor warning
+"alias console not found" and the staging lines (alias console=..., serialnr->high=
+0x8250, serialnr->low=0x1010f000, atag_addr=0x80601000) never appeared. CPU1 was
+therefore never running the U-Boot start.S pen-poll loop when the kernel ran, so
+every correctly-decoded kernel release (pen write -> CRG resume clear -> wakeup IPI)
+had no consumer - which is exactly what patches 033..042 measured repeatedly, and
+what the 060/061 sentinel probes proved (CPU1 did not enter the stubs at the
+decompressor entry, at stext, or at late time).
+
+With the two DT nodes added to our board DTS the staging completes (the stock
+staging lines printed), CPU1 is released into its poll loop, consumes the real
+secondary_startup pen at the kernel release and boots:
+
+    smp: Brought up 1 node, 2 CPUs
+    CPU1: thread -1, cpu 1, socket 0, mpidr 80000001
+    /proc/cpuinfo = 2, online = 0-1, CPU0/CPU1 interrupts present,
+    SCU CONFIG bit 5 = set (the CPU1-ran monitor from section 20),
+
+and the 060/061 sentinels remained untouched because CPU1 consumed the real
+secondary_startup pen instead of a diagnostic stub. That contrast is the clean proof
+that the loader handoff staging, not the kernel release, was the missing piece.
+
+[I] The internal mechanism inside bootfip (FIP staging / warm-reset / firmware BL2/
+BL31 path) is consistent with the strings and code decoded during the loader work but
+is not instruction-level proven; it is no longer needed for the fix.
+
+### 24.2 The fix: DTS-only
+
+target-skeleton/dts/luofu-r116.dts (and the same nodes in the upstream submission
+DTS):
+
+    aliases {
+        serial0 = &uart1;
+        serial1 = &uart0;
+        console = &uart1;      /* vendor base DTB contract; U-Boot bootfip staging */
+    };
+
+    reserved-memory {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        flashinfo@80600000 {
+            compatible = "hsan,flashinfo_reserved";
+            reg = <0x80600000 0x4000>;
+            atag-offset = <0x1000>;
+        };
+    };
+
+No kernel code change is required for SMP functionality: the vendor-faithful release
+and the hisilicon,luofu-smp enable-method implementation already in the series are
+correct. The missing piece was the loader handoff devicetree contract that the stock
+base devicetree provides.
+
+### 24.3 Disposition of the diagnostic patches [V]/[I]
+
+* patches 060 (handoff probes) and 061 (sentinel protocol + re-poll trampoline) are
+  bench-only diagnostics. They should not be part of a release/upstream series; keep
+  them in the bench set or drop them. They were designed to answer whether CPU1 ever
+  entered the loader poll loop, and they did exactly that.
+* patches 033/034/035/037/039/042/059 are likewise bench instrumentation (dumps,
+  probe stubs, late add_cpu trigger, bookkeeping). A release series should carry the
+  minimal functional SMP patch set plus the DTS fix; the diagnostics can stay compiled
+  in default-off on bench images but are not needed for the fix.
+* The canonical bench image 974e6ca6 (documented by the lead) verifies the fix: 2
+  CPUs, CPU1 thread mpidr 80000001, ping 20/20 0% loss, SSH, rw overlay, soak
+  running.
+
+### 24.4 Corrections to earlier conclusions
+
+* The "2-CPU image hung after 23 minutes" was a HOST bench-link outage (USB Ethernet
+  lost carrier/IPs overnight). UART showed the box alive with no Oops/panic/BUG/
+  WARNING (only the literal panic=0 command line), and after power-cycle/link restore
+  the same image is stable. There is no SMP stability bug. Bench lesson: check host
+  link carrier before attributing a hang to the kernel; the UART is the authority.
+* The W9 traffic crash (section 19) remains a net-lane item; it was not SMP.
+* The loader-side open items from sections 22/23 - U-Boot staging copy content at
+  0x80000000, hboot being overwritten in DRAM, the unreadable 0x1017 block - are
+  normal handoff artifacts and are not needed for SMP.
+* The "2 CPUs" sighting in the W9 log was correctly re-attributed to the stock 5.10
+  fallback (section 19); the sentinel protocol then proved definitively that our
+  kernel never had CPU1 in the poll loop before the DT fix.
+
+### 24.5 Upstream / repository actions
+
+1. Commit the two DT nodes into the target DTS (and mirror in the upstream submission
+   DTS); reference this section as the measured loader handoff contract.
+2. Keep the DTS nodes minimal and documented: console alias + flashinfo
+   reserved-memory (reg/atag-offset); nothing else was needed for CPU1.
+3. Release series: functional SMP driver + DTS fix; bench diagnostics out (or gated,
+   default off). Verify a clean image with no luofu_smp_* command-line tokens and no
+   probe stubs boots to 2 CPUs (canonical 974e6ca6 evidence).
+4. Ledger/bench notes: record the host bench-link outage that caused the false hang
+   attribution.
