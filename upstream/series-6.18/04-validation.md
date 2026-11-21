@@ -1253,3 +1253,60 @@ from the conservative prose-only cleanup `7ae18f2`).
 **Blocker status:** TWD closed; **five blockers remain** (07 section 6:
 drivers/YAML drafts, flashinfo binding, 6.18 MAC provisioning, switch reorder,
 compatible ordering).  Logs: `validation/release-line/` refreshed.
+
+
+## 26. 2026-11-21 final board deltas adopted (hardware boot-test c3ef2a50) and re-validation
+
+The three remaining active-DTS blockers were boot-tested together and are now
+**closed**: MAC-nvmem removal (6.18 userspace/vendor provisioning), switch
+MMIO-first `reg`/`reg-names` order, and root compatible
+`cudy,wr3000-v2` first + OpenWrt `SUPPORTED_DEVICES`.
+
+**Hardware boot-test PASS:** image **c3ef2a50** (sha256
+`c3ef2a507e6e0fc3d8991139b9668eeccae8f59995db4d17eaa5e71f68ea5879`), built
+from the TWD-adopted DTS with the three draft deltas applied and installed with
+the verified telnet installer (PASS; pair b, selector 0x11).  Boot:
+linux-6.18.60, 2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`;
+`/tmp/sysinfo/board_name = cudy,wr3000-v2`;
+/proc/device-tree/compatible starts with cudy,wr3000-v2, then
+hisilicon,luofu-r116 and hisilicon,luofu; eth0/eth1/eth2 MAC ...:73 and eth3
+...:74 (userspace/vendor MAC provisioning works with kernel nvmem cells
+removed); br-lan 192.168.1.1/24 up and ping 15/15 0% loss (switch data path
+works after the reg/reg-names reorder); no Oops/BUG/panic/RCU stall.  Adopted in
+submodule commit **6c2cc2f** (target DTS + OpenWrt `SUPPORTED_DEVICES`).
+
+**Artifacts after adoption:**
+
+- DTS: **681 lines**, sha256
+  `9d96ac31b49cecebd8e99fec7b53ba0ef5ee52132383bd46cf1c0eda0b17f342`;
+- DTS-0001: sha256
+  `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8` (694
+  lines), regenerated from the single source, byte-identical;
+- DTB: **12,650 B** sha256
+  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`;
+  totalsize unaligned, `pad-dtb.py` pads to **12,656 B** sha256
+  `01b74561869cf3d959c1a64defff6fcc70da81ef21f1370adb492eb8fe6a7df4`, loader
+  hand-off contract preserved.
+- New DTS-purpose hardware baseline: image **c3ef2a50** (supersedes f6685b80
+  for DTS purposes; f6685b80 was the previous DTS-purpose baseline and
+  7421bb7a the earlier verified baseline).
+
+**Validation (host-only, pristine 6.18.60):**
+
+- release-line validator **PASS**: 51/51 patch(1) RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**, strict `git apply` 51/51; target
+  DTS contract and DTS-0001 identity PASS (byte-identical); pad step exercised
+  with the new DTB/hashes above;
+- upstream review form: not rerun - no series file changed.  The in-series
+  switch binding YAML still has the old queue-first order; adopting the drafted
+  MMIO-first binding into the series is part of remaining blocker 1 and must be
+  accompanied by a review-form rerun.  Last recorded run remains 26/26
+  patch(1)+`git am`, identical trees, 0 errors / 58 warnings;
+- `gen-series.py --check` clean; `validation/sha256sums.txt`
+  refreshed and `sha256sum -c` passes 89/89; release-line manifest
+  unchanged (51 include / 11 exclude / 62 patches, sha256 `4da8b960...`).
+
+**Blocker status:** 3, 4 and 5 closed by the c3ef2a50 boot-test; TWD closed
+earlier (f6685b80); **two blockers remain** (07 section 6): draft
+drivers/YAMLs (including the in-series binding reorder) and the flashinfo
+binding.  Logs: `validation/release-line/` refreshed.

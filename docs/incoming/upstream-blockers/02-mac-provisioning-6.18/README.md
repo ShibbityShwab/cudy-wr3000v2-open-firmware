@@ -1,5 +1,7 @@
 # Blocker 3 - MAC addresses without v6.19 nvmem cells
 
+**STATUS: ADOPTED after hardware boot-test image c3ef2a50 (2026-11-21).**  The nvmem cells are removed in the adopted target DTS; userspace/vendor MAC provisioning was verified on hardware (eth0-eth2 ...:73, eth3 ...:74).  Draft retained for provenance.
+
 ## Problem
 
 The current draft DTS uses `fixed-layout`/`mac-base` nvmem cells

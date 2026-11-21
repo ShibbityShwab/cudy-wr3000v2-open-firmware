@@ -43,10 +43,11 @@ final 26-patch pass.
 - **Submission package (documentation only):** `submission/README.md` is the
   dry-run artifact checklist + one-page cover-email draft + file manifest for
   the kernel review form and DTS-0001.  Nothing has been submitted anywhere.
-  Current devicetree final: commit **5b401c1** (conservative cleanup `7ae18f2`
-  plus the boot-tested TWD level-high delta); new DTS-purpose hardware
-  baseline image **f6685b80** (7421bb7a remains the previous verified
-  baseline).
+  Current devicetree final: commit **6c2cc2f** (conservative cleanup
+  `7ae18f2` + boot-tested TWD level-high + the three final boot-tested
+  board deltas); current DTS-purpose hardware baseline image **c3ef2a50**
+  (f6685b80 was the previous DTS-purpose baseline, 7421bb7a the earlier
+  verified baseline).
 - **SMP is solved on hardware and the fix is DTS-only (release-critical).**
   The kernel release (0018) was correct; the stock U-Boot `bootfip` hand-off
   staging silently aborted because the board devicetree lacked the stock
@@ -60,16 +61,16 @@ final 26-patch pass.
 
 - **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1`,
-  current final 2026-11-21: conservative comment-only cleanup + boot-tested
-  TWD level-high delta) adds
-  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**700 lines**) and the
+  (sha256 `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`,
+  current final 2026-11-21: conservative comment-only cleanup + four
+  individually boot-tested active deltas) adds
+  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**681 lines**) and the
   `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
   patch 0018 and is documented in `06-dts-series-dependency.md`.  The
   validator applies/compiles it and checks the loader hand-off contract.  The
   cleanup record, the **hardware regression of the superseded active cleanup**,
-  the TWD boot-test adoption and the **five remaining upstream blockers** are
-  in `07-dts-upstream-bindings.md`.
+  the boot-test adoptions and the **two remaining upstream blockers** are in
+  `07-dts-upstream-bindings.md`.
 
   **Hardware regression (2026-11-21):** the first active-DTS cleanup (commit
   538377c, image 6f19c6d6) did not boot - the kernel came up with SMP but MTD
@@ -78,12 +79,14 @@ final 26-patch pass.
   `build/evidence-bench-gates/2026-11-21-cleaned-dts-regression.log`,
   sha256 15dc3188...).  The known-good image 7421bb7a (pre-clean DTS) boots
   with partition scan 0.93-1.16 s.  The conservative cleanup restored the
-  known-good active content (compiled DTB byte-identical); the only active
-  change adopted after it is the boot-tested TWD level-high delta (commit
-  `5b401c1`, image **f6685b80**: 2 CPUs, `/proc/interrupts` `GIC-0 29
-  Level twd`, counts ~100 Hz, ping 20/20, no errors).  **Host checks are
-  necessary but not sufficient - the image must be boot-tested after any
-  active-DTS change.**
+  known-good active content (compiled DTB byte-identical); four active deltas
+  were then adopted, each individually boot-tested: TWD level-high (commit
+  `5b401c1`, image f6685b80) and MAC-nvmem removal + switch MMIO-first
+  order + cudy-compatible ordering (commit `6c2cc2f`, image **c3ef2a50**:
+  2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`,
+  `/tmp/sysinfo/board_name = cudy,wr3000-v2`, userspace MACs ...:73/...:74,
+  br-lan up, ping 15/15, no errors).  **Host checks are necessary but not
+  sufficient - the image must be boot-tested after any active-DTS change.**
 - **Board-feature refresh (2026-11-21).**  The stock board_id=3 overlay landed
   in the single-source DTS: gpio-keys-polled (reset/WPS) and six
   `oem:green:*` gpio-leds, with the matching target config additions;
@@ -143,7 +146,7 @@ overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
 | `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
-| `07-dts-upstream-bindings.md` | the board-DTS record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup, the boot-tested TWD level-high adoption, the optional hardware-tested deltas, the manual binding review (no dtschema available), compile/pad facts and the five remaining upstream blockers |
+| `07-dts-upstream-bindings.md` | the board-DTS record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup, the four individually boot-tested active deltas, the manual binding review (no dtschema available), compile/pad facts and the two remaining upstream blockers |
 | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | commit-ready DTS-series entry (DTS-0001): board DTS + hisilicon DTS Makefile line; companion to 0018 |
 | `tools/gen-dts-series-patch.py` | deterministic generator for DTS-0001 from the single-source target DTS |
 | `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |
@@ -222,15 +225,15 @@ To regenerate the series after editing a message:
   hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches apply
   without fuzz**.  The L0 stack (62 files, 001-058 + 062-065) also applies
   62/62 with 0 fuzz and strict-clean.  The loader hand-off DTS contract
-  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **13,041 B** sha256
-  `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`,
-  current final incl. the TWD level-high delta) and contains
+  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **12,650 B** sha256
+  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`,
+  current final incl. all four boot-tested active deltas) and contains
   `/aliases/console` and the `flashinfo@80600000` node with the measured
   `reg`/`atag-offset`.  The totalsize is unaligned, so the validator
-  exercises `pad-dtb.py` on a copy (**13,048 B** sha256 `4b50de73...`,
+  exercises `pad-dtb.py` on a copy (**12,656 B** sha256 `01b74561...`,
   contract preserved) and records the required `Build/luofu-pad-dtb`
-  image step; the current DTB was boot-tested as image **f6685b80**.
-  **DTS-0001** (sha256 `e9c9ed58...`, 713 lines) applies, compiles to the
+  image step; the current DTB was boot-tested as image **c3ef2a50**.
+  **DTS-0001** (sha256 `c029fd44...`, 694 lines) applies, compiles to the
   same DTB and its board DTS is byte-identical to the target DTS.  Logs:
   `validation/release-line/`.  [V]
 - the target image built from the extended stack is hardware-verified for

@@ -14,10 +14,10 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1` (current final 2026-11-21: conservative comment-only cleanup + boot-tested TWD level-high delta; previous conservative sha `072d0b8b...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
+| sha256 | `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8` (current final 2026-11-21: conservative comment-only cleanup + four individually boot-tested active deltas: TWD level-high, MAC-nvmem removal, switch MMIO-first order, cudy-compatible ordering; previous sha `e9c9ed58...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**700 lines**, byte-identical to the current single-source target DTS: conservative cleanup + boot-tested TWD level-high delta; includes the board buttons/LEDs and the loader hand-off contract) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
-| status | **DRAFT DTS SERIES ENTRY** - the board DTS is hardware-verified: the conservative prose-only step compiled byte-identically to the known-good DTB and the only active change is the boot-tested TWD level-high delta (image f6685b80); it is not merge-intent until the bindings/driver cleanup and the optional deltas in `07-dts-upstream-bindings.md` are accepted.  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**681 lines**, byte-identical to the current single-source target DTS: conservative cleanup + four boot-tested active deltas; includes the board buttons/LEDs, the loader hand-off contract and the final board deltas) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
+| status | **DRAFT DTS SERIES ENTRY** - the board DTS is hardware-verified: the conservative prose-only step compiled byte-identically to the known-good DTB, and all active deltas (TWD level-high, MAC-nvmem removal, switch MMIO-first order, cudy-compatible ordering) were individually boot-tested (images f6685b80 and c3ef2a50).  It is not merge-intent until the remaining draft drivers/YAMLs and the flashinfo binding work are accepted; the in-series switch binding YAML still needs its MMIO-first reorder (part of blocker 1).  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
 
 The two nodes that make this entry release-critical for SMP:
 
@@ -105,13 +105,13 @@ pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
 `append-dtb`: it pads to an 8-byte boundary, folds the padding into the
 FDT totalsize, and asserts `len(dtb) == totalsize` and
 `totalsize % 8 == 0`, so an unaligned blob cannot reach a trailer again.
-For the current DTS the measured sizes are **13,041 B -> 13,048 B** (compiled
-DTB sha256 `4fde76df...`, pad sha256 `4b50de73...`; the conservative
-step was byte-identical to the pre-clean DTB `49fe5c47...` and the only
-active change is the boot-tested TWD level-high delta, image f6685b80); the
-cleanup record, the hardware regression of the superseded active cleanup, the
-TWD boot-test and the optional deltas are in
-`07-dts-upstream-bindings.md`.
+For the current DTS the measured sizes are **12,650 B -> 12,656 B** (compiled
+DTB sha256 `a0af2899...`, pad sha256 `01b74561...`; the conservative
+step was byte-identical to the pre-clean DTB `49fe5c47...`, and the four
+active deltas were boot-tested as images f6685b80 (TWD) and c3ef2a50 (MAC
+provisioning, switch order, compatible order)); the cleanup record, the
+hardware regression of the superseded active cleanup, the boot-tests and the
+remaining blockers are in `07-dts-upstream-bindings.md`.
 
 The full measurement and rationale are in
 `../../docs/TRAILER-FORMAT.md` **section 11** ("Base-DTB totalsize must be
@@ -139,20 +139,20 @@ feature refresh):
 
 - L1 release line: 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, 0
   rejects; strict `git apply`: **all 51 patches apply without fuzz**;
-- board DTS / DTS-0001 (current final): both compile to the same **13,041 B**
+- board DTS / DTS-0001 (current final): both compile to the same **12,650 B**
   DTB, sha256
-  `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`,
+  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`,
   with the contract present; DTS-0001's DTS is byte-identical to the target
   DTS; the totalsize is **unaligned**, so the pad-dtb build step is required
-  and the validator exercises it on a copy (**13,048 B** sha256
-  `4b50de73...`, contract preserved);
-- TWD level-high delta boot-tested PASS (image f6685b80: 2 CPUs,
-  `/proc/interrupts` `GIC-0 29 Level twd`, counts ~100 Hz, ping 20/20,
-  no errors); the conservative step had compiled byte-identically to the
-  pre-clean DTB (sha256 `49fe5c47...`), so the TWD IRQ property is the only
-  active difference;
+  and the validator exercises it on a copy (**12,656 B** sha256
+  `01b74561...`, contract preserved);
+- boot-tests: TWD level-high (image f6685b80) and the three final deltas
+  (image c3ef2a50: MAC-nvmem removal, switch MMIO-first order, cudy compatible
+  ordering; 2 CPUs, `GIC-0 29 Level twd`, `board_name=cudy,wr3000-v2`,
+  MACs ...:73/...:74, br-lan ping 15/15, no errors); the conservative step had
+  compiled byte-identically to the pre-clean DTB (sha256 `49fe5c47...`);
 - DTS-0001 sha256 for the current source:
-  `e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1`;
+  `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`;
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62;
 - source-patch hashes refreshed in the release-line manifest for

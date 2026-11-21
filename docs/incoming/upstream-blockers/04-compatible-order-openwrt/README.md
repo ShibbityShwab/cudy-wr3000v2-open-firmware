@@ -1,5 +1,7 @@
 # Blocker 5 - cudy compatible ordering + OpenWrt metadata
 
+**STATUS: ADOPTED after hardware boot-test image c3ef2a50 (2026-11-21).**  The target DTS starts with cudy,wr3000-v2 and SUPPORTED_DEVICES includes it; boot test shows board_name=cudy,wr3000-v2 and the compatible order.  Draft retained for provenance.
+
 ## Proposal (upstream)
 
 Root compatible, most-specific first:

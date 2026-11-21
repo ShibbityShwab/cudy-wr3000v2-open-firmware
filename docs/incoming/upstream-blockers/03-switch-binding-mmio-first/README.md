@@ -1,5 +1,7 @@
 # Blocker 4 - switch binding: MMIO-first reg-names
 
+**STATUS: DTS SIDE ADOPTED after hardware boot-test image c3ef2a50 (2026-11-21).**  The target DTS now uses MMIO-first reg/reg-names and the switch data path was verified (br-lan up, ping 15/15).  The in-series binding YAML reorder is still pending as part of blocker 1 (draft YAML work); draft retained.
+
 ## Current state
 
 The in-series binding (`Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml`,

@@ -74,19 +74,21 @@ Because the compiled DTB is byte-identical, the conservative DTS restores the
 exact hardware-verified devicetree semantics of image 7421bb7a; the remaining
 visible change is prose only.
 
-After that boot-test, the only active devicetree change adopted so far is the
-TWD timer interrupt encoding in commit `5b401c1` (section 6.1):
-`interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;`.
-Current final DTS: **700 lines**, sha256
-`13427d8e2bf7624b77fc6735932f79b9b25bf40dff1a0c859fc5cc3515b54de4`; current
-DTB: **13,041 B** sha256
-`4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`, padded
-to **13,048 B** sha256
-`4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`;
+After that boot-test, four active devicetree deltas were adopted, each on its
+own hardware boot-test: the TWD timer interrupt encoding (commit `5b401c1`,
+image f6685b80; section 6.1), then the MAC-nvmem removal, switch MMIO-first
+register order and cudy-compatible ordering plus the OpenWrt
+`SUPPORTED_DEVICES` update (commit `6c2cc2f`, image **c3ef2a50**; section
+6.2).  Current final DTS: **681 lines**, sha256
+`9d96ac31b49cecebd8e99fec7b53ba0ef5ee52132383bd46cf1c0eda0b17f342`; current
+DTB: **12,650 B** sha256
+`a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`, padded
+to **12,656 B** sha256
+`01b74561869cf3d959c1a64defff6fcc70da81ef21f1370adb492eb8fe6a7df4`;
 DTS-0001 regenerated: sha256
-`e9c9ed58b1a198bad16283d048a0498ee02297a8e1645f194df3f713c5d236b1`, 713
-lines.  Image **f6685b80** (boot-tested) is the new DTS-purpose hardware
-baseline; 7421bb7a remains the previous verified baseline.
+`c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`, 694
+lines.  Image **c3ef2a50** is the current DTS-purpose hardware baseline; it
+supersedes f6685b80, and 7421bb7a remains the earlier verified baseline.
 
 ## 3. Optional deltas (NOT applied; each needs its own hardware-tested patch)
 
@@ -121,11 +123,14 @@ present in the hardware-verified DTB and are not prose:
 1. `flashinfo@80600000` uses the vendor compatible
    `"hsan,flashinfo_reserved"`; it is the stock loader contract and has no
    upstream binding.
-2. The bdinfo MAC source uses `fixed-layout`/`mac-base` nvmem cells,
-   which are v6.19 bindings on a 6.18 baseline.
-3. The switch node's unit address (`@11000000`) does not match its first
-   `reg` entry, because the in-series binding puts the two DDR regions
-   first; the node name is kept until the binding is reworked and hardware-tested.
+2. The bdinfo MAC nvmem cells are **removed** in the adopted 6.18 DTS (commit
+   6c2cc2f): MACs are provisioned by userspace/the vendor path, boot-tested on
+   image c3ef2a50 (eth0-eth2 = MAC ...:73, eth3 = ...:74).
+3. The switch `reg`/`reg-names` now put the 15 MMIO windows first and the
+   two DDR regions last (boot-tested data path, image c3ef2a50), matching the
+   MMIO-first binding draft.  The in-series binding YAML still has the old
+   queue-first order and must be updated when the draft YAML work lands
+   (blocker 1); the node stays `ethernet-switch@11000000`.
 4. `gpio-keys-polled` child names (`reset`/`wps`) and the
    gpio-leds child names (`led-status`...) do not use the preferred
    standard names; kept until the rename is boot-tested (optional deltas 2/3).
@@ -134,7 +139,8 @@ present in the hardware-verified DTB and are not prose:
    the measured read-only PPI data and a boot-test PASS (image f6685b80;
    section 6.1).  The measured GICD_ICFGR1 `0b11` value remains documented as
    the hardware fact.
-6. The root compatible does not carry `cudy,wr3000-v2` yet (delta 1).
+6. The root compatible now starts with `cudy,wr3000-v2` (boot-tested
+   `board_name`, image c3ef2a50).
 7. The draft in-series bindings/drivers are not upstream, so the board DTS
    cannot be submitted before they are accepted.
 
@@ -153,54 +159,68 @@ review against the in-series YAMLs and the standard 6.18 bindings.
   **13,041 B** sha256
   `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
   byte-identical to the known-good DTB (proves the prose-only step);
-- current final DTS (after the adopted TWD delta): cpp+dtc RC=0, 0 stderr; DTB
-  **13,041 B** sha256
-  `4fde76df165689cdb859a6f79223300edc8fb27d1d239abea131d25726cbc1a9`;
-  totalsize unaligned, pad step **13,048 B** sha256
-  `4b50de73bebf6241ccb1ac62907c1de9b49a7ec7bcc6f18286f638541456e890`, loader
+- current final DTS (after the adopted MAC/switch/compatible deltas): cpp+dtc
+  RC=0, 0 stderr; DTB **12,650 B** sha256
+  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`;
+  totalsize unaligned, pad step **12,656 B** sha256
+  `01b74561869cf3d959c1a64defff6fcc70da81ef21f1370adb492eb8fe6a7df4`, loader
   hand-off contract preserved (same pad requirement as
   `../../docs/TRAILER-FORMAT.md` section 11);
 - release-line validator (current): L1 51/51 patch(1) RC=0, 0 rejects, 3 offset
   hunks, **0 fuzz**, strict `git apply` 51/51; target DTS contract and
   DTS-0001 identity PASS; pad step exercised; DTS-0001 sha256
-  `e9c9ed58...` (713 lines);
-- upstream review form: 26/26 patch(1)+`git am`, identical trees,
-  checkpatch 0 errors / 58 warnings (series patches unchanged by the DTS-only
-  TWD delta; last recorded run still applies);
+  `c029fd44...` (694 lines);
+- upstream review form: not rerun - no series file changed by these DTS-only
+  deltas; the last recorded run remains **26/26 patch(1)+`git am`,
+  identical trees, 0 errors / 58 warnings**;
 - `gen-series.py --check` clean; `validation/sha256sums.txt` 89
   entries, `sha256sum -c` passes; manifest 51 include / 11 exclude / 62
   patches, sha256 `4da8b960...`;
-- **hardware boot-test:** the TWD delta PASSed (image f6685b80, 2 CPUs,
-  `/proc/interrupts` `GIC-0 29 Level twd`, counts ~100 Hz on both CPUs,
-  ping 20/20, no Oops/BUG/panic/RCU stall).  Any future active-DTS change must
-  repeat the boot-test; host checks cannot substitute for it.
+- **hardware boot-tests:** TWD delta PASSed (image f6685b80); then MAC-nvmem
+  removal + switch MMIO-first order + cudy compatible order PASSed as image
+  **c3ef2a50** (2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`,
+  `/tmp/sysinfo/board_name = cudy,wr3000-v2`, /proc/device-tree/compatible
+  starts with cudy,wr3000-v2, MACs ...:73/...:74, br-lan up, ping 15/15, no
+  Oops/BUG/panic/RCU-stall).  Any future active-DTS change must repeat the
+  boot-test; host checks cannot substitute for it.
 
-## 6. Remaining upstream blockers (five) - status after the 2026-11-21 blocker-reduction package
+## 6. Remaining upstream blockers (two) - after the 2026-11-21 final boot-tests
 
-**Blocker 6 (TWD timer interrupt flags) is CLOSED** - measured on hardware, the
-level-high delta was boot-tested PASS (image f6685b80) and adopted in commit
-`5b401c1` (section 6.1).  Five blockers remain; blocker-reduction drafts for
-them exist under `../../docs/incoming/upstream-blockers/` (documentation +
-patch drafts only: not the release series, not applied).  Nothing there changes
-the current final DTS except as noted.
+Four active-devicetree deltas were adopted after individual hardware
+boot-tests: TWD level-high (image f6685b80) and the MAC-nvmem removal +
+switch MMIO-first order + cudy compatible order (image c3ef2a50).  **Two
+blockers remain**, both documented with blocker-reduction drafts under
+`../../docs/incoming/upstream-blockers/`:
 
 | # | blocker | status | draft |
 | --- | --- | --- | --- |
-| 1 | drivers + YAMLs are still drafts | **open** - prioritized top-issue review only; no code rewrite in this pass | `05-driver-yaml-review.md` |
-| 2 | `hsan,flashinfo_reserved` has no upstream binding | **drafted** - reserved-memory child binding + three compatible/loader options; maintainer direction needed; one hardware boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
-| 3 | `fixed-layout`/`mac-base` v6.19 on 6.18 | **path defined** - 6.18 uses the already-implemented userspace/vendor MAC provisioning; DTS nvmem removal drafted; maintainer confirmation + boot-test | `02-mac-provisioning-6.18/` |
-| 4 | switch queue-first `reg-names` / node name | **drafted** - binding + DTS MMIO-first reorder; driver uses by-name lookups so no driver code change; no in-tree users; boot-test required | `03-switch-binding-mmio-first/` |
-| 5 | `cudy,wr3000-v2` compatible ordering + OpenWrt metadata | **drafted** - upstream compatible order + OpenWrt SUPPORTED_DEVICES/board_name diffs; boot-test + sysupgrade metadata check required | `04-compatible-order-openwrt/` |
+| 1 | Drivers + YAMLs are still drafts | **open** - prioritized top-issue review; the in-series switch binding YAML still needs the MMIO-first reorder (DTS side boot-tested; binding-side change is part of this draft YAML work); no code rewrite attempted | `05-driver-yaml-review.md`, `03-switch-binding-mmio-first/binding.diff` |
+| 2 | `hsan,flashinfo_reserved` has no upstream binding | **drafted** - reserved-memory child binding + compatible/loader-compatibility options; needs maintainer direction; one hardware loader boot-test only if the vendor string is not first | `01-flashinfo-reserved-memory/` |
 
-**What remains hardware-dependent:** MAC nvmem removal, switch reorder and the
-compatible ordering (boot-tests, plus a sysupgrade metadata check for the
-compatible ordering).  The flashinfo binding is documentation-only unless the
-vendor compatible is no longer the first/only match; the driver/YAML cleanups
-are code review, not hardware.
+**Closed by hardware boot-tests (2026-11-21):**
+
+- **TWD timer interrupt flags** (was blocker 6): measured read-only PPI data +
+  level-high delta, image **f6685b80** (2 CPUs, `/proc/interrupts`
+  `GIC-0 29 Level twd`, counts ~100 Hz, ping 20/20, no errors).
+- **6.18 MAC provisioning** (was blocker 3): nvmem cells removed; userspace/
+  vendor MAC path boot-tested on image **c3ef2a50** (eth0-eth2 ...:73, eth3
+  ...:74).
+- **Switch MMIO-first order** (was blocker 4): DTS only, image **c3ef2a50**
+  (switch data path works: br-lan up, ping 15/15 0% loss); the matching
+  binding YAML reorder remains part of blocker 1.
+- **cudy compatible ordering + OpenWrt metadata** (was blocker 5): image
+  **c3ef2a50** (`/tmp/sysinfo/board_name = cudy,wr3000-v2`,
+  /proc/device-tree/compatible starts with cudy,wr3000-v2, SUPPORTED_DEVICES
+  updated).
+
+**What is hardware-dependent now:** none among the two remaining blockers except
+a possible one-loader boot-test for the flashinfo binding if the vendor
+compatible is moved from first position.  The driver/YAML cleanups are code
+review, not hardware.
 
 ### 6.1 TWD timer interrupt flags - CLOSED (boot-tested, image f6685b80)
 
-Measured on hardware on the previous baseline 7421bb7a (GICD base
+Measured on hardware on the earlier baseline 7421bb7a (GICD base
 `0x10181000`):
 
 | register | value |
@@ -219,25 +239,46 @@ hardware.  Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) use
 `IRQ_TYPE_LEVEL_HIGH` for the TWD timer (0xf04 flags for 4 CPUs; the
 equivalent here is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
 
-The level-high draft was applied and boot-tested: image **f6685b80**, installed
-with the verified telnet installer (PASS; pair b, selector 0x11), boots
-6.18.60 with 2 CPUs, `/proc/interrupts` now reports
-`GIC-0 29 Level twd` (was `Edge`), TWD counts increment ~100 Hz on both
-CPUs, host ping 20/20 0% loss, no Oops/BUG/Kernel panic/RCU stall, uptime
-stable.  Adopted in commit `5b401c1`; current final DTS 700 lines sha256
-`13427d8e...`; DTB 13,041 B sha256 `4fde76df...` (pad 13,048 B
-sha256 `4b50de73...`); DTS-0001 sha256 `e9c9ed58...` (713 lines).
-Image f6685b80 supersedes 7421bb7a for DTS purposes; 7421bb7a remains the
-previous verified baseline.
+The level-high delta was adopted in commit `5b401c1` and boot-tested as
+image **f6685b80**: 6.18.60, 2 CPUs, `/proc/interrupts` reports
+`GIC-0 29 Level twd` (was `Edge`), TWD counts increment ~100 Hz on
+both CPUs, ping 20/20 0% loss, no Oops/BUG/Kernel panic/RCU stall, uptime
+stable.  f6685b80 was subsequently superseded for DTS purposes by **c3ef2a50**
+(the final board deltas); 7421bb7a remains the earliest verified baseline.
 
-**Not claimed / out of scope (not counted among the five blockers):** pinctrl
+### 6.2 Final board deltas - CLOSED (boot-tested, image c3ef2a50)
+
+Image **c3ef2a50** (sha256
+`c3ef2a507e6e0fc3d8991139b9668eeccae8f59995db4d17eaa5e71f68ea5879`) was
+built from the TWD-adopted DTS with the three active drafts applied and
+installed with the verified telnet installer (PASS; pair b, selector 0x11):
+
+- boot: linux-6.18.60, 2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`;
+- `/tmp/sysinfo/board_name = cudy,wr3000-v2` and
+  /proc/device-tree/compatible starts with `cudy,wr3000-v2`, then
+  `hisilicon,luofu-r116`, `hisilicon,luofu`;
+- eth0/eth1/eth2 MAC ...:73 and eth3 ...:74: userspace/vendor MAC
+  provisioning works with the kernel nvmem cells removed (the 6.18 path);
+- br-lan 192.168.1.1/24 up, ping 15/15 0% loss: the switch data path works
+  after the `reg`/`reg-names` MMIO-first reorder;
+- no Oops/BUG/panic/RCU stall; selector 0x11.
+
+Adopted in commit `6c2cc2f` (target DTS + OpenWrt SUPPORTED_DEVICES).
+Current DTS 681 lines sha256 `9d96ac31...`; DTB 12,650 B sha256
+`a0af2899...` (pad 12,656 B sha256 `01b74561...`); DTS-0001 sha256
+`c029fd44...` (694 lines).  The in-series switch binding YAML still has
+the old queue-first `reg-names` order; updating it is part of blocker 1
+(draft YAML work) and must be applied with the series before posting.
+
+**Not claimed / out of scope (not counted among the two blockers):** pinctrl
 consumer states, consumer clocks, the A/B boot-selector protocol beyond the
-measured `0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi and
-thermal support, and the unused vendor blocks (wired-first target).
+measured `0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi
+and thermal support, and the unused vendor blocks (wired-first target).
 
-**Current devicetree final:** commit `5b401c1` (conservative cleanup
-`7ae18f2` plus the boot-tested TWD level-high delta); the superseded active
-cleanup `538377c` is recorded in section 1 and is **not** current.
+**Current devicetree final:** commit `6c2cc2f` (conservative cleanup
+`7ae18f2` + boot-tested TWD level-high + MAC-nvmem removal + switch
+MMIO-first + cudy compatible order); the superseded active cleanup `538377c`
+is recorded in section 1 and is **not** current.
 
 ## 7. Single-source and regeneration
 

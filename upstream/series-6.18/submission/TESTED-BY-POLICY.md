@@ -6,11 +6,12 @@
   package must not be sent with any Tested-by/Reviewed-by/Acked-by that was not
   given by an independent party for the exact posted objects.
 - The only hardware evidence is **target-image bench evidence**: DTS-purpose
-  image **f6685b80** (boot-tested TWD level-high delta; 2 CPUs, working LAN via
-  the documented CPU-copy bench workaround, SSH, persistent ubifs overlay;
-  DTB 13,041 B sha256 `4fde76df...`, padded 13,048 B sha256
-  `4b50de73...`); previous verified baseline image 7421bb7a.  That is
-  notebook evidence [V], not an upstream Test-by, and the series is an RFC.
+  images **c3ef2a50** (final deltas; 2 CPUs, board_name=cudy,wr3000-v2,
+  userspace MACs ...:73/...:74, ping 15/15; DTB 12,650 B sha256
+  `a0af2899...`, padded 12,656 B sha256 `01b74561...`) and
+  **f6685b80** (TWD delta; previous DTS-purpose baseline; earlier baseline
+  7421bb7a).  That is notebook evidence [V], not an upstream Test-by, and the
+  series is an RFC.
 - Host-side checks (sequential patch apply, dtc compile, loader-contract check,
   pad-dtb, checkpatch) are necessary but **not sufficient**: the rebuilt image
   must be boot-tested on the unit after any active-DTS change before it can be
