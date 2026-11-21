@@ -196,7 +196,17 @@ the kernel but stalls in MTD partition registration and is reset by the U-Boot w
 falls back to stock. The known-good hardware baseline remains image **7421bb7a** with the
 pre-clean DTS. Any active-DTS change must be boot-tested on the unit; host-side patch/dtc/
 contract checks are necessary but not sufficient. A conservative cleanup (prose/comment removal
-without active-node renames or removals) is in place (submodule commit `d434ee9`):
+without active-node renames or removals) is in place (submodule commit `7ae18f2`):
 only comments were removed, the compiled DTB is byte-identical to the known-good
 7421bb7a DTB (13,041 B sha256 `49fe5c47...`), and a boot-test of the rebuilt
 image is still required before treating it as hardware-validated.
+
+Verified 2026-11-21 (lead): the conservative comment-only cleanup (submodule 7ae18f2) compiles to
+a DTB byte-identical to the known-good DTB (13041 B sha256 49fe5c47..., padded 13048 B sha256
+402e4f71...) and the rebuilt image reproduces the verified image 7421bb7a byte-for-byte
+(sha256 7421bb7ace41e2e03613a0314874fabfcd16aeef60dbdd713ebc6c2b735cd4b3); release-line validator
+PASS with DTS-0001 072d0b8b... byte-identical and the loader contract intact. No new boot
+behaviour is introduced. The 14 deferred active deltas (switch unit address/reg order, node
+renames, status removals, thermal/WiFi/sp804/WOE removals, model/compatible change, macro
+rendering) are documented in upstream/series-6.18/07-dts-upstream-bindings.md section 3 and each
+needs its own hardware boot-test; driver-facing deltas must never ride along with prose cleanup.
