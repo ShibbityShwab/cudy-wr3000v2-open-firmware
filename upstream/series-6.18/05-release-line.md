@@ -80,19 +80,21 @@ Where it is committed: `opensource` submodule `5a1b5b3` (DTS nodes) and `9e17d5c
 Upstream action: the DTS contract must ship with kernel patch 0018.  The
 dependency is an explicit, commit-ready upstream artefact: **DTS-0001**,
 `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-(sha256 `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115`,
-refreshed 2026-11-21 after the stock board_id=3 LED/keys overlay landed).
-It adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (1,329 lines,
-byte-identical to the single-source target DTS including the gpio-keys-polled
-and six gpio-leds nodes) plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry;
-post it together with 0018.  The DTS series must also state the base-DTB
-padding requirement: the compiled LED/keys DTB is 13,041 B with an unaligned
-totalsize and the image build MUST run `Build/luofu-pad-dtb` before
-`append-dtb` (TRAILER-FORMAT.md section 11; details in
-`06-dts-series-dependency.md` section 3.1).  The dependency record,
-ordering and regeneration procedure is `06-dts-series-dependency.md`, and
-`tools/check-release-line.sh` applies/compiles DTS-0001, checks the contract
-and exercises the pad step on a copy on every validation run.  [V]
+(sha256 `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`,
+cleaned/refreshed 2026-11-21).  It adds
+`arch/arm/boot/dts/hisilicon/luofu-r116.dts` (712 lines, byte-identical to
+the cleaned single-source target DTS: loader hand-off contract, buttons/LEDs,
+and the measured board nodes) plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile
+entry; post it together with 0018.  The DTS series must also state the base-DTB
+padding requirement: the compiled DTB is 11,702 B with an unaligned totalsize
+and the image build MUST run `Build/luofu-pad-dtb` before `append-dtb`
+(TRAILER-FORMAT.md section 11; details in
+`06-dts-series-dependency.md` section 3.1).  The bindings cleanup and the
+remaining upstream blockers are in `07-dts-upstream-bindings.md`.  The
+dependency record, ordering and regeneration procedure is
+`06-dts-series-dependency.md`, and `tools/check-release-line.sh` applies/
+compiles DTS-0001, checks the contract and exercises the pad step on a copy on
+every validation run.  [V]
 
 Patch `018` alone is necessary but **not sufficient** for SMP; the review-form
 documentation now says so.  Do not present 064/065 (or 033-039/062/063) as the
@@ -298,23 +300,30 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   apply without fuzz** [V];
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62 [V];
-- release-critical DTS contract (target DTS and DTS-0001): both `cpp` + `dtc`
-  RC=0, **0 stderr bytes**, DTB **13,041 B**, sha256
-  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`;
+- release-critical DTS contract (cleaned target DTS and DTS-0001): both `cpp` + `dtc`
+  RC=0, **0 stderr bytes**, DTB **11,702 B**, sha256
+  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`;
   `fdtget` confirms `/aliases/console`, `compatible = "hsan,flashinfo_reserved"`,
   `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>` and
   `/cpus/enable-method = "hisilicon,luofu-smp"`;
-- **totalsize alignment:** the 13,041 B DTB totalsize is **not** 8-byte
+- **totalsize alignment:** the 11,702 B DTB totalsize is **not** 8-byte
   aligned; the validator runs `target-skeleton/tools/pad-dtb.py` on a copy,
-  which pads it to **13,048 B** and keeps the hand-off contract.  The image
-  build MUST run `Build/luofu-pad-dtb` (TRAILER-FORMAT.md section 11; the
-  unaligned load made stock U-Boot data-abort and fall back to stock on
-  2026-11-21) [V];
-- **DTS-0001**: applies to the L1 tree RC=0; its added board DTS is
-  byte-identical to the single-source target DTS; the compiled DTB and the
-  contract checks are identical to the target-DTS ones [V];
+  which pads it to **11,704 B** (sha256 `de2ccd5f...`) and keeps the
+  hand-off contract.  The image build MUST run `Build/luofu-pad-dtb`
+  (TRAILER-FORMAT.md section 11; an unaligned load made stock U-Boot
+  data-abort and fall back to stock on 2026-11-21) [V];
+- **DTS-0001**: regenerated from the cleaned source (sha256
+  `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`);
+  applies to the L1 tree RC=0; its added board DTS is byte-identical to the
+  single-source target DTS; the compiled DTB and the contract checks are
+  identical to the target-DTS ones [V];
 - upstream review form: 26/26 apply with patch(1) and `git am` (3 offset
   hunks, 0 fuzz, identical trees; checkpatch 0 errors / 58 warnings) [V];
+- DTS bindings cleanup: no measured value changed; dtc warning sets report 0
+  warnings; no dtschema/dt-validate tooling was available, so the manual
+  binding review in `07-dts-upstream-bindings.md` section 4 stands in for
+  `dtbs_check` [V]/[I].  The remaining upstream blockers are in that note
+  section 6.
 - no kernel build in this pass: the last full-series build records (compile
   RC=0, CONFIG_WERROR, zImage/hash, TEXT_OFFSET unchanged) are in
   `04-validation.md` and SKELETON-SMOKE.md; the release image itself was built
@@ -364,6 +373,9 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   purpose (51 include / 11 exclude, no duplicate numbers).
 - `06-dts-series-dependency.md` + `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
   - the upstream DTS-series entry (DTS-0001) and its regeneration/ordering rules.
+- `07-dts-upstream-bindings.md` - the board-DTS bindings cleanup: every
+  removal/rename, the retained measured facts, the manual binding review, the
+  compile/pad facts and the remaining upstream blockers.
 - `validation/release-line/` - 2026-11-21 harness logs: L1/L0 patch
   application, offsets, strict git-apply, target DTS contract, DTS-0001
   apply/compile/contract, summary.

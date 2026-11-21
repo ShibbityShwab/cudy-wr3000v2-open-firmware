@@ -1,182 +1,58 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * luofu-r116.dts - DRAFT device tree for the Cudy WR3000 v2.0
- * (HiSilicon Hi5671Y "luofu", board R116).
+ * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
  *
- * STATUS: UNTESTED / SCHEMATIC / NOT A WORKING TARGET.
- *
- * This file is a DRAFT derived from the tracked lab DTS
- * (tools/lab-src/arch/arm/boot/dts/luofu-r116.dts in the parent repository).
- * Every register base, interrupt number, clock/reset cell and partition below
- * is a lab-measured value (or an explicitly marked vendor-DT fact), not an
- * invented one. The board now has draft drivers and YAML bindings for the CRG
- * clock/reset controller, the watchdog, the FMC SPI-NAND controller, the
- * network trio (MDIO bus, Genius PHY, partial GEMAC) and machine restart
- * (patches-6.18/004-015); every other proposed binding still does not exist.
- * The GEMAC driver is a resource/validation half only - it has no data path -
- * so its nodes stay disabled, and the restart driver's reset command is
- * PROVISIONAL (see its node). Do not submit this file as-is.
- *
- * HOW TO READ THE MARKERS:
- *   TODO(binding)        a devicetree binding that must be written/agreed
- *                        before this node is submittable.
- *   TODO(driver)         code that must exist for the node to be meaningful.
- *   NEEDS-VERIFICATION   a value taken from the lab tree whose meaning is not
- *                        confirmed against the board/upstream binding.
- *   [U]                  "unverified/open" per TARGET-DESIGN.md reading legend.
- *
- * WHAT WAS DELIBERATELY CHANGED FROM THE LAB DTS:
- *   - the bench-only "lab" partition is gone; the stock 0x1d80000 "upgrade"
- *     size is restored (TARGET-DESIGN.md 3.3; vendor-dt-notes.md section 6);
- *   - bench breadcrumb/instrumentation comments and sysctrl writes are gone
- *     (TARGET-DESIGN.md 7.2);
- *   - vendor "hsan,*" compatibles are replaced with "hisilicon,luofu-*";
- *     the CRG and watchdog bindings are now written, the rest are still
- *     proposals with a binding TODO (TARGET-DESIGN.md 6.2);
- *   - the vendor iATU tables, acp-gate cells and other binary-derived props
- *     are not carried: they become driver init data (TARGET-DESIGN.md 6.2);
- *   - the vendor enable-method "hisilicon,hsan_smp" is removed: there is no
- *     mainline smp_ops yet, so this is an UP-only draft (TARGET-DESIGN.md 7.1);
- *   - clock/reset specifiers keep the lab shape (1-cell clock id, 2-cell
- *     (offset, bit) reset); the clock IDs now come from the dt-bindings
- *     header and the 2-cell reset form is documented in the CRG binding, with
- *     the named-reset-id table still a TODO (TARGET-DESIGN.md 6.2);
- *   - the 0x14880000 page is one syscon + simple-mfd system-controller node:
- *     the CRG driver owns the clock/reset providers and the watchdog is a
- *     child using the shared regmap, instead of two nodes claiming the same
- *     MMIO window (the old drift produced the duplicate-unit-address dtc
- *     warning and an -EBUSY probe in the lab tree).
- *
- * WHAT IS NOT HERE ON PURPOSE:
- *   - Wi-Fi (Hi5622V100): vendor-only, no open driver, out of the first
- *     submission scope (TARGET-DESIGN.md 8.3);
- *   - LEDs / keys: only overlay evidence exists; they need the standard
- *     gpio-leds/gpio-keys-polled bindings plus confirmed GPIO polarity
- *     (see the comment near the end of the root node);
- *   - sysctrl/sysenv boot-selector provider: the SYSCTRL syscon node from
- *     patch 010 plus the boot-selector driver/node from patch 017, which
- *     exposes the measured 0x10 (A) / 0x11 (B) cell through current_pair /
- *     next_pair sysfs and keeps probe free of register access. The rest of
- *     the protocol is still [U] (TARGET-DESIGN.md 3.4, 6.2, 7.1) and the
- *     vendor sysenv/nvmem interface is not modelled.  The only nvmem provider
- *     is the stock MTD partition provider over the bdinfo factory MAC
- *     (fixed-layout/mac-base cell; see the partition table and the GEMAC
- *     address plan below).
- *
- * Expected to parse after the C preprocessor + dtc, but it does NOT build in a
- * kernel tree (no headers, no machine match, no dtbs_check clean run) and it
- * has never been booted. Provenance of the facts: TARGET-DESIGN.md sections
- * 3 and 6, opensource/docs/soc/vendor-dt-notes.md, and the lab DTS itself.
+ * All register bases, interrupt numbers, clock/reset IDs, GPIOs and the NAND
+ * partition map below are measured board facts or decoded vendor-devicetree
+ * values.  See upstream/series-6.18/07-dts-upstream-bindings.md for the
+ * provenance of every value, the cleanup record (removed/renamed nodes), and
+ * the items that still block an upstream submission.
  */
 
 /dts-v1/;
 
-/*
- * CRG clock IDs: the one-cell clock index ABI between this DTS and the CRG
- * clock provider (patches-6.18/004; binding
- * Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml). The
- * numbering is fixed by the dt-bindings header and the driver's gate table is
- * indexed by it; an index may never be renumbered or reused.
- *
- * The (register offset, bit) geometry that each ID names is driver data, not
- * DT data. It is listed here only as a review reference; the driver's table in
- * drivers/clk/hisilicon/crg-luofu.c is authoritative. The 0x14-group offsets
- * are verbatim from the pinned vendor tree; the 0x20-group offsets are
- * reconstructed from the vendor unit-address encoding and stay PROVISIONAL
- * until bench-confirmed (lab DTS header; clocks2.md caveat) - that is a driver
- * TODO, not a DT fact:
- *
- *   id  name         gate offset  bit
- *    0  sfc_clk      0x14         0x00
- *    1  gpio0_clk    0x14         0x14
- *    2  gpio1_clk    0x14         0x15
- *    3  i2c0_clk     0x14         0x18
- *    4  pcie0_clk    0x20         0x0c
- *    5  pcie1_clk    0x20         0x0d
- *    6  gemac_clk0   0x20         0x13
- *    7  led_pwm      0x14         0x0e
- *    8  lsw_dp_clk0  0x20         0x00
- *    9  lsw_pfe_clk0 0x20         0x01
- *   10  mdio_clk0    0x20         0x03
- *   11  gemac_clk1   0x20         0x14
- *   12  gemac_clk2   0x20         0x15
- *   13  gemac_clk3   0x20         0x16
- *   14  gemac_clk4   0x20         0x17
- *   15  pie_clk0     0x20         0x19
- *
- * Indices 16-19 are the CRG's own read-only PLL and mux outputs added by patch
- * 019 (LUOFU_CLK_PLL_CPU 16, LUOFU_CLK_PLL_LSW 17, LUOFU_CLK_CPU_MUX 18,
- * LUOFU_CLK_EFUSE_MUX 19). No node consumes them yet; they exist so a future
- * cpufreq or efuse-programming driver can reference the decoded clocks without
- * a second provider. This tree never writes a PLL or switches a mux.
- */
 #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
 
-	model = "Cudy WR3000 v2.0 (HiSilicon luofu R116)";
+	model = "Cudy WR3000 v2.0";
 
 	/*
-	 * TODO(compat): an upstream board compatible should carry a
-	 * vendor,model string first (e.g. "cudy,wr3000-v2"). This draft keeps
-	 * the lab strings because the final order interacts with OpenWrt's
-	 * board_name/sysupgrade match (README "Open questions"). The stock
-	 * loader passes its OWN DT to the kernel, so this string does not
-	 * decide the stock-loader boot on this unit (TARGET-DESIGN.md 3.1);
-	 * it does decide whether a future mainline kernel/machine matches.
+	 * The OpenWrt target's board_name/sysupgrade metadata still keys off the
+	 * hisilicon compatibles; the board compatible is expected first upstream.
+	 * Reorder to "cudy,wr3000-v2" first when the target metadata is synced
+	 * (documented in 07-dts-upstream-bindings.md).
 	 */
-	compatible = "hisilicon,luofu-r116", "hisilicon,luofu";
+	compatible = "hisilicon,luofu-r116", "hisilicon,luofu", "cudy,wr3000-v2";
+
 	interrupt-parent = <&gic>;
 
 	aliases {
-		/* physical console is uart1@1010f000 = ttyS0 (vendor-dt-notes.md 2) */
 		serial0 = &uart1;
-		serial1 = &uart0;
-		/* vendor base DTB provides this alias; the stock U-Boot fixup warns
-		 * and stops its hand-off staging when it is missing (measured). */
+		/* the stock U-Boot hand-off fixup requires this alias */
 		console = &uart1;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
-		/*
-		 * Kernel command line: the stock loader supplies NO bootargs for our
-		 * uImage (first hardware boot, 2026-11-19: empty cmdline -> VFS root
-		 * panic), and adding a DTB bootargs property crashed U-Boot itself
-		 * (data abort before kernel hand-off). The root= string is therefore
-		 * built into the kernel with CONFIG_CMDLINE_FORCE in
-		 * target/linux/hisilicon/luofu/config-6.18; keep the two in sync.
-		 * TODO(A/B): the hard-coded ubi.mtd=rootfsb must become per-slot
-		 * (per-slot DTB or loader-supplied cmdline) before installing to A.
-		 */
 	};
 
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		/*
-		 * SMP release path, decoded from the vendor's private
-		 * "hisilicon,hsan_smp" method (SYSCTRL pen word at 0xc00, CRG
-		 * resume word at 0x38, then the wakeup IPI). TARGET-DESIGN.md
-		 * 6.2 and 7.1; driver patches-6.18/018, evidence SMP-RE.md.
-		 * A devicetree without this property boots UP.
-		 */
 		enable-method = "hisilicon,luofu-smp";
 
 		cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a9";
 			reg = <0>;
-			/*
-			 * TODO(driver): the vendor cpu@0 also carries clocks /
-			 * cpu-supply / operating-points-v2 / nvmem-cells. Those
-			 * need the CRG + efuse + pwm-regulator drivers/bindings;
-			 * a fixed-rate CPU is acceptable for a first submission if
-			 * documented (TARGET-DESIGN.md 6.2).
-			 */
 		};
 
 		cpu@1 {
@@ -186,24 +62,16 @@
 		};
 	};
 
-	/*
-	 * 128 MB DDR3 at 0x80500000 (vendor DT: reg = <0x80500000 0x7b00000>;
-	 * 123 MB above the SoC window). NEEDS-VERIFICATION: the low 5 MB below
-	 * 0x80500000 are the SoC/ACP view, not system DRAM (vendor-dt-notes.md 3).
-	 */
+	/* 128 MiB DDR3; the low 5 MiB below 0x80500000 are not system DRAM */
 	memory@80500000 {
 		device_type = "memory";
 		reg = <0x80500000 0x7b00000>;
 	};
 
 	/*
-	 * Vendor loader hand-off window [V]: the stock base DTB reserves the
-	 * 16 KiB "flashinfo" window at 0x80600000 (the vendor node name says
-	 * 0x80800000 - a stale unit address; reg is 0x80600000) with the ATAG
-	 * staged at atag-offset 0x1000 (stock U-Boot prints
-	 * "atag_addr=0x80601000"). The stock U-Boot fixup also needs the
-	 * aliases/console property above; both are part of the pre-kernel
-	 * hand-off contract measured on the bench (vendor read 2026-11-20).
+	 * Stock loader hand-off window: the ATAG is staged at
+	 * 0x80600000 + atag-offset.  The loader requires this node and the
+	 * console alias above to complete its pre-kernel staging.
 	 */
 	reserved-memory {
 		#address-cells = <1>;
@@ -217,232 +85,117 @@
 		};
 	};
 
-	/* ---- fixed input clocks (free bindings) ------------------------- */
-
-	osc_clk: fixed-clock-osc {
+	/* measured fixed input clocks of the CRG tree */
+	osc: oscillator {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <20000000>;	/* 20 MHz */
+		clock-frequency = <20000000>;
 		clock-output-names = "osc";
 	};
 
-	ahb_clk: fixed-clock-ahb {
+	ahb_clk: clock-ahb {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <200000000>;	/* 200 MHz */
+		clock-frequency = <200000000>;
 		clock-output-names = "ahb_clk";
 	};
 
-	apb_clk: fixed-clock-apb {
+	apb_clk: clock-apb {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <100000000>;	/* 100 MHz */
+		clock-frequency = <100000000>;
 		clock-output-names = "apb_clk";
 	};
 
-	/*
-	 * The four remaining fixed input clocks of the CRG tree, verbatim from
-	 * the vendor devicetree fixed-clock nodes (pinned lines 955-961,
-	 * 1090-1097 and 1108-1115). They are not programmable: gemacN_clk is
-	 * the parent of the five GEMAC gate clocks and the MDIO gate,
-	 * lsw_dp_clk/lsw_pfe_clk parent the internal-switch gate clocks, and
-	 * efuse_ring_clk is one input of the efuse mux (the other is osc).
-	 */
-	gemacn_clk: fixed-clock-gemacn {
+	gemacn_clk: clock-gemacn {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <125000000>;	/* 125 MHz */
+		clock-frequency = <125000000>;
 		clock-output-names = "gemacN_clk";
 	};
 
-	lsw_dp_clk: fixed-clock-lsw-dp {
+	lsw_dp_clk: clock-lsw-dp {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <166000000>;	/* 166 MHz */
+		clock-frequency = <166000000>;
 		clock-output-names = "lsw_dp_clk";
 	};
 
-	lsw_pfe_clk: fixed-clock-lsw-pfe {
+	lsw_pfe_clk: clock-lsw-pfe {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <333000000>;	/* 333 MHz */
+		clock-frequency = <333000000>;
 		clock-output-names = "lsw_pfe_clk";
 	};
 
-	efuse_ring_clk: fixed-clock-efuse-ring {
+	efuse_ring_clk: clock-efuse-ring {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <20000000>;	/* 20 MHz */
+		clock-frequency = <20000000>;
 		clock-output-names = "efuse_ring_clk";
 	};
 
-	corrector_clk: fixed-clock-corrector {
+	corrector_clk: clock-corrector {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <1000000000>;	/* 1 GHz */
+		clock-frequency = <1000000000>;
 		clock-output-names = "corrector_clk";
 	};
 
-	twd_clk: twd-clock {
+	twd_clk: clock-twd {
 		compatible = "fixed-factor-clock";
 		#clock-cells = <0>;
 		clocks = <&corrector_clk>;
-		clock-div = <4>;	/* 1 GHz / 4 = 250 MHz */
+		clock-div = <4>;
 		clock-mult = <1>;
 		clock-output-names = "twd_clk";
 	};
 
-	/* ---- SYSCTRL: boot selector + reset info (shared page) ---------- */
-
-	/*
-	 * The SYSCTRL page at 0x10100000 carries SoC-level control registers
-	 * shared between functions. Only the minimum the written drivers need is
-	 * modelled: the A/B boot-selector cell at 0xc08 that the stock loader
-	 * reads on the next boot (the reboot driver saves it before a reset) and
-	 * the reset-info record at 0xc10. The page must be a syscon so the reboot
-	 * and boot-selector drivers share one mapping (TARGET-DESIGN.md 3.4,
-	 * 6.2).
-	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
-	 *          hisilicon,luofu-sysctrl.yaml
-	 * TODO(nvmem): the reset-info record has no reader yet; the boot-selector
-	 * cell is exposed by the separate luofu-boot-selector node below.
-	 */
 	sysctrl: system-controller@10100000 {
 		compatible = "hisilicon,luofu-sysctrl", "syscon";
 		reg = <0x10100000 0x1000>;
 	};
 
-	/*
-	 * Machine restart: saves the SYSCTRL A/B boot selector, issues the CRG
-	 * software-reset command and falls back to the CRG watchdog if the reset
-	 * does not take. Both target pages are shared, so the node only
-	 * references the syscon nodes and has no reg.
-	 * Binding: Documentation/devicetree/bindings/power/reset/
-	 *          hisilicon,luofu-reboot.yaml
-	 * PROVISIONAL: the CRG reset command pair (vendor softrst_val0/val1 at
-	 * reboot-offset 0x00) is derived from the vendor devicetree and has never
-	 * been run on hardware; the boot-selector encoding is measured. See
-	 * patches-6.18/010 and docs/incoming/restart/SUMMARY.md.
-	 */
 	reboot {
 		compatible = "hisilicon,luofu-reboot";
 		hisilicon,sysctrl = <&sysctrl>;
 		hisilicon,crg = <&crg>;
 	};
 
-	/*
-	 * A/B boot selector: the SYSCTRL cell at 0xc08 that records the firmware
-	 * pair. The bootloader selects the pair from its env bootflag (bootcmd
-	 * reads kernel${bootflag}); its bootfip stores the opposite pair's low byte
-	 * before Linux starts and userspace re-records the running pair after a
-	 * successful boot. 0x10 = A pair recorded (kernela + rootfsa), 0x11 = B
-	 * pair recorded (kernelb + rootfsb); 0x21 is the project's bench handover
-	 * value (never written by vendor userspace) and is only reported, never
-	 * written by the automated install path.
-	 * Binding: Documentation/devicetree/bindings/soc/hisilicon/
-	 *          hisilicon,luofu-boot-selector.yaml
-	 * Probe performs no register access; the driver writes the cell only when
-	 * userspace stores into next_pair, as a low-byte read-modify-write that
-	 * preserves the upper 24 bits and verifies the read-back.
-	 * Enabled because the A/B sysupgrade path (base-files/lib/upgrade/platform.sh)
-	 * requires it; harmless on a boot
-	 * that never touches the selector.
-	 */
+	/* A/B boot selector cell: 0x10 = A pair, 0x11 = B pair (measured) */
 	boot-selector {
 		compatible = "hisilicon,luofu-boot-selector";
 		hisilicon,sysctrl = <&sysctrl>;
 		hisilicon,selector-offset = <0x0c08>;
 	};
 
-	/* ---- CRG: clock gates + reset controller (shared page) --------- */
-
 	/*
-	 * The CRG (Clock Reset Generator) page at 0x14880000 carries the clock
-	 * gate bits (0x14/0x20), the reset bits (0x2c/0x30/0x34) AND the
-	 * watchdog registers (0x50/0x64/0x70/0x100) interleaved in ONE 4 KiB
-	 * window, so no single driver can claim the window exclusively. The
-	 * page is therefore modelled as a syscon + simple-mfd system
-	 * controller:
-	 *
-	 *   - the CRG driver (patches-6.18/004; binding
-	 *     Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml)
-	 *     owns the clock-gate and reset providers;
-	 *   - the watchdog child below (patches-6.18/005; binding
-	 *     Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml)
-	 *     uses the same syscon regmap, so neither driver maps or claims the
-	 *     page a second time. This is the upstream shape for interleaved
-	 *     functions; the old two-node draft produced a duplicate-unit-
-	 *     address dtc warning and, on the lab kernel, an -EBUSY probe that
-	 *     was worked around with a bare devm_ioremap().
-	 *
-	 * Clock cells: one cell, the LUOFU_CLK_* index from the dt-bindings
-	 * header (included above); the gate geometry is driver data.
-	 *
-	 * Clock tree (patch 019): the node's clocks/clock-names below describe the
-	 * real parents the CRG driver wires, decoded from the vendor devicetree
-	 * (MISC-SOC-BLOCKS.md 5.2): the 16 gates fan out from apb_clk, ahb_clk,
-	 * gemacN_clk, lsw_dp_clk and lsw_pfe_clk; the two PLLs (control words at
-	 * 0x198 and 0x1e0, status word 0x90) run from osc; the two muxes in
-	 * 0x138 select the CPU PLL/lsw PLL (bit 3) and efuse_ring/osc (bit 1).
-	 * The driver resolves these by name, it does not guess global clock names.
-	 * The PLLs and muxes are READ-ONLY clocks in patch 019: recalc_rate plus
-	 * the 0x90 status bit for the PLLs, get_parent for the muxes; there is no
-	 * set_rate/set_parent. 0x138 bit 3 selects the CPU clock source and must
-	 * never become writable; 0x138 bit 1 is only ever flipped by an efuse
-	 * programming path, which this tree does not have.
-	 *
-	 * Reset cells: two cells, (CRG page register offset, bit). The driver
-	 * restricts the offset to the three reset words so a specifier can never
-	 * write the watchdog, soft-reset, mux or PLL words.
-	 * TODO(reset-ids): replacing the raw (offset, bit) cells with a named
-	 * reset-ID table is the next submission cleanup (TARGET-DESIGN.md 6.2);
-	 * the cell form is documented in the binding, not invented.
-	 * TODO(restart): the reset command is the CRG reboot register at 0x00
-	 * (vendor reboot-offset; softrst_val0/1), not the 0x84 soft-reset word.
-	 * Patch 010 implements it PROVISIONALLY in the hisilicon,luofu-reboot
-	 * driver together with the SYSCTRL boot-selector save; the exact write
-	 * order and whether the pair belongs in one register or two adjacent
-	 * ones are unverified (TARGET-DESIGN.md 3.4, 6.2).
+	 * CRG clock/reset controller.  The 4 KiB page also carries the
+	 * watchdog registers, so it is a shared syscon/simple-mfd and the
+	 * watchdog is a child using the parent regmap.
 	 */
 	crg: system-controller@14880000 {
 		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
 		reg = <0x14880000 0x1000>;
 		#clock-cells = <1>;
 		#reset-cells = <2>;
-		clocks = <&osc_clk>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
+		clocks = <&osc>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
 			 <&lsw_dp_clk>, <&lsw_pfe_clk>, <&efuse_ring_clk>;
 		clock-names = "osc", "ahb", "apb", "gemacN", "lsw_dp",
 			      "lsw_pfe", "efuse_ring";
 
-		/*
-		 * Watchdog: no reg and no interrupt. Its registers are
-		 * interleaved into the parent page, so it uses the parent syscon
-		 * regmap (the binding requires this parent-child relationship).
-		 * timeout-sec is the vendor's 30 s; the 1..512 s limits are
-		 * driver data. The block does have an interrupt output at SPI 2
-		 * in the vendor tree, but its status semantics are unverified,
-		 * so the driver is polled and the node claims no interrupt - do
-		 * not add one "because the vendor DT has it".
-		 * TODO(hardware): whether the bootloader leaves the watchdog
-		 * running is not established (the enable state is a magic value
-		 * pair, not a status bit), so the driver cannot set
-		 * WDOG_HW_RUNNING at probe; measure before relying on it.
-		 */
 		watchdog {
 			compatible = "hisilicon,luofu-wdt";
 			timeout-sec = <30>;
-			status = "okay";
 		};
 	};
-
-	/* ---- standard ARM peripherals (free bindings) ------------------ */
 
 	gic: interrupt-controller@10181000 {
 		compatible = "arm,cortex-a9-gic";
 		#interrupt-cells = <3>;
 		interrupt-controller;
-		reg = <0x10181000 0x1000>,	/* distributor */
-		      <0x10180100 0x100>;	/* CPU interface */
+		reg = <0x10181000 0x1000>,
+		      <0x10180100 0x100>;
 	};
 
 	scu@10180000 {
@@ -450,55 +203,26 @@
 		reg = <0x10180000 0x1000>;
 	};
 
-	/*
-	 * NEEDS-VERIFICATION: the lab DTS carries vendor l2c_aux_val = 0x430001,
-	 * l2c_aux_mask = 0xffb0fffe and cache-way-size-sel = 1 as vendor DT
-	 * props. In mainline these become the machine descriptor's
-	 * l2c_aux_val/l2c_aux_mask (arch/arm/kernel/irq.c only calls
-	 * l2x0_of_init() when one is non-zero) and the AUX fields are derived
-	 * from arm,tag-latency / arm,data-latency - translate before adding any
-	 * latency property here.
-	 */
-	L2: l2-cache@7f000000 {
+	l2_cache: l2-cache@7f000000 {
 		compatible = "arm,pl310-cache";
 		reg = <0x7f000000 0x1000>;
 		cache-level = <2>;
 		cache-unified;
 	};
 
-	local_timer: local-timer@10180600 {
+	local_timer: timer@10180600 {
 		compatible = "arm,cortex-a9-twd-timer";
 		reg = <0x10180600 0x20>;
-		interrupts = <1 13 0x301>;	/* PPI 13 (mainline encoding) */
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) |
+					 IRQ_TYPE_EDGE_RISING)>;
 		clocks = <&twd_clk>;
 	};
-
-	/*
-	 * Cortex-A9 has no ARM architected timer; the TWD above is the per-CPU
-	 * timer source. There is no arm,armv7-timer node on this SoC.
-	 */
-
-	/*
-	 * NEEDS-VERIFICATION: the vendor value is <1 0x2f 4> (cell 0x2f = 47),
-	 * but mainline GIC PPI cells are 0..15 (Linux maps them to INTIDs
-	 * 16+n). Do not trust this as a PPI 47; re-derive it from the vendor
-	 * driver or the schematic before the node is used. It only matters if
-	 * the SP804 is kept as a timer source; the board uses the TWD.
-	 */
-	timer@10104000 {
-		compatible = "arm,sp804";
-		reg = <0x10104000 0x1000>;
-		interrupts = <1 0x2f 4>;
-		clocks = <&apb_clk>;
-	};
-
-	/* ---- DesignWare peripherals (free bindings) -------------------- */
 
 	uart0: serial@1010e000 {
 		compatible = "snps,dw-apb-uart";
 		reg = <0x1010e000 0x1000>;
 		reg-shift = <2>;
-		interrupts = <0 0x2d 4>;	/* SPI 45 in the vendor numbering */
+		interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&apb_clk>;
 		clock-names = "apb_pclk";
 		status = "disabled";
@@ -508,10 +232,9 @@
 		compatible = "snps,dw-apb-uart";
 		reg = <0x1010f000 0x1000>;
 		reg-shift = <2>;
-		interrupts = <0 0x2e 4>;	/* SPI 46 */
+		interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&apb_clk>;
 		clock-names = "apb_pclk";
-		status = "okay";		/* physical console ttyS0 */
 	};
 
 	gpio0: gpio@10106000 {
@@ -520,10 +243,6 @@
 		#size-cells = <0>;
 		reg = <0x10106000 0x1000>;
 		clocks = <&crg LUOFU_CLK_GPIO0>;
-		/*
-		 * TODO(reset-binding): vendor cells (0x2c, 0x14); the reset
-		 * provider shape is not agreed yet.
-		 */
 
 		porta: gpio-port@0 {
 			compatible = "snps,dw-apb-gpio-port";
@@ -532,7 +251,7 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 			interrupt-parent = <&gic>;
-			interrupts = <0 0x31 4>;	/* SPI 49 */
+			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
 			reg = <0>;
 			snps,nr-gpios = <32>;
 		};
@@ -544,7 +263,6 @@
 		#size-cells = <0>;
 		reg = <0x10107000 0x1000>;
 		clocks = <&crg LUOFU_CLK_GPIO1>;
-		/* TODO(reset-binding): vendor cells (0x2c, 0x15) */
 
 		portb: gpio-port@0 {
 			compatible = "snps,dw-apb-gpio-port";
@@ -553,225 +271,130 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 			interrupt-parent = <&gic>;
-			interrupts = <0 0x32 4>;	/* SPI 50 */
+			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
 			reg = <0>;
 			snps,nr-gpios = <5>;
 		};
 	};
 
-
-	/*
-	 * Board buttons and LEDs. Source: the stock U-Boot board_id=3 overlay
-	 * (kernela_overlay_board3.dtbo, 4920 B, sha256 17fd44ed...; decompiled from
-	 * the vendor kernel slot 2026-11-21). All lines are <&porta> active-low.
-	 *   gpio-keys-polled: reset=GPIO22, wps=GPIO23, 20 ms poll,
-	 *                     linux,code 0x198 (KEY_RESTART) / 0x211 (KEY_WPS_BUTTON)
-	 *   gpio-leds:        status=GPIO24, wan=GPIO25, lan=GPIO3, internet=GPIO2,
-	 *                     wifi2=GPIO0, wifi5=GPIO1 (oem:green:* labels)
-	 * The vendor overlay also sets pcie0 capability=3/gpio-delay/pcie-gpios
-	 * (GPIO20/21/28) and disables gemac0; those are handled separately.
-	 */
-	gpio-keys-polled {
+	/* stock board_id=3 overlay: reset and WPS keys, active-low, 20 ms poll */
+	gpio-keys {
 		compatible = "gpio-keys-polled";
 		poll-interval = <20>;
 
-		reset {
+		key-reset {
 			label = "reset";
-			gpios = <&porta 22 1>;	/* GPIO_ACTIVE_LOW */
-			linux,code = <0x198>;	/* KEY_RESTART */
+			gpios = <&porta 22 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
 		};
 
-		wps {
+		key-wps {
 			label = "wps";
-			gpios = <&porta 23 1>;	/* GPIO_ACTIVE_LOW */
-			linux,code = <0x211>;	/* KEY_WPS_BUTTON */
+			gpios = <&porta 23 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
 		};
 	};
 
+	/* stock board_id=3 overlay: six green LEDs, active-low */
 	gpio-leds {
 		compatible = "gpio-leds";
 
-		led-status {
+		led-0 {
 			label = "oem:green:status";
-			gpios = <&porta 24 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 24 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wan {
+		led-1 {
 			label = "oem:green:wan";
-			gpios = <&porta 25 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 25 GPIO_ACTIVE_LOW>;
 		};
 
-		led-lan {
+		led-2 {
 			label = "oem:green:lan";
-			gpios = <&porta 3 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 3 GPIO_ACTIVE_LOW>;
 		};
 
-		led-internet {
+		led-3 {
 			label = "oem:green:internet";
-			gpios = <&porta 2 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 2 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wifi2 {
+		led-4 {
 			label = "oem:green:wifi";
-			gpios = <&porta 0 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 0 GPIO_ACTIVE_LOW>;
 		};
 
-		led-wifi5 {
+		led-5 {
 			label = "oem:green:wifi5g";
-			gpios = <&porta 1 1>;	/* GPIO_ACTIVE_LOW */
+			gpios = <&porta 1 GPIO_ACTIVE_LOW>;
 		};
 	};
 
 	i2c0: i2c@10111000 {
 		compatible = "snps,designware-i2c";
 		reg = <0x10111000 0x1000>;
-		interrupts = <0 0x2c 4>;	/* SPI 44 */
+		interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&crg LUOFU_CLK_I2C0>;
 		clock-frequency = <100000>;
-		/* TODO(reset-binding): vendor cells (0x2c, 0x18) */
 		status = "disabled";
 	};
 
-	/* ---- vendor-specific blocks: placeholders, no binding ---------- */
-
-	/*
-	 * Peripheral pinctrl + IOMUX. Binding:
-	 * Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml
-	 * and driver drivers/pinctrl/hisilicon/pinctrl-luofu.c (patch 011).
-	 * The block owns the mux window (the function-select bits of all pins)
-	 * and the per-pin configuration window. The tables (37 pins / 24 groups
-	 * / 24 functions) are the ones the vendor pin controller uses; enabling
-	 * this block was required for the wired path to behave, and a disabled
-	 * node here does NOT mean the hardware does not need it.
-	 *
-	 * Probe performs no register access: the vendor's probe-time pin state
-	 * is not known and the bootloader has already configured the pins, so a
-	 * pin state is only programmed when a consumer requests one through the
-	 * standard pinctrl interface.
-	 * TODO(consumers): no pinctrl state is attached to any device node yet.
-	 * The vendor devicetree attaches none to its device nodes either (its
-	 * state nodes are looked up by name from its modules), and which groups
-	 * the MDIO/GEMAC/FMC/UART nodes must select is unverified; do not add
-	 * consumer states before that is established. The transcribed mux table
-	 * does contain the mdio1 (pins 10/11) and rgmii0 (pins 12-23) functions
-	 * that the wired path needs.
-	 * TODO(pinconf): the six pin configuration parameters the block
-	 * implements are supported by the driver, but no state uses the generic
-	 * pin configuration properties yet and the drive-strength field has no
-	 * known mA mapping.
-	 */
 	pinctrl_peri: pinctrl@14900100 {
 		compatible = "hisilicon,luofu-pinctrl";
-		reg = <0x14900100 0x3c>,	/* mux window */
-		      <0x14940000 0x100>;	/* cfg window */
+		reg = <0x14900100 0x3c>,
+		      <0x14940000 0x100>;
 		reg-names = "mux", "cfg";
-		status = "okay";
 	};
 
-	/*
-	 * FMC / SPI-NAND controller. The controller is a SPI-MEM controller
-	 * (TARGET-DESIGN.md 6.2; opensource/docs/phase50/nand-fmc-port-spec.md
-	 * section (f)), so this node is a SPI bus and the flash die is its
-	 * spi-nand child. The mainline SPI-NAND stack then owns chip detection,
-	 * on-die ECC, OOB layout, bad-block handling and the partition table;
-	 * the controller driver is patches-6.18/006 (drivers/spi/spi-luofu-fmc.c).
-	 * The binding replaces the lab driver's vendor props:
-	 *   - bus_id = "fmc"      -> nothing (the node and its binding);
-	 *   - spi_cs = <1>        -> the child's reg = <1>;
-	 *   - enable-quad-mode    -> spi-tx/rx-bus-width = <4>. The die's quad
-	 *                           enable bit is set by the bootloader, which
-	 *                           reads this flash in quad mode; the mainline
-	 *                           ESMT entry has no QE quirk, so a die reset
-	 *                           performed by Linux is a bring-up question.
-	 * Facts kept: register file at 0x10a20000 + 1 MiB data window at
-	 * 0x1c000000, chip-select 1, quad mode, 2048-byte pages / 64-byte OOB /
-	 * 128 KiB erase blocks (TARGET-DESIGN.md 2). The sfc_clk gate is the
-	 * LUOFU_CLK_SFC ID from patch 004; sfc_rst is the CRG two-cell reset
-	 * specifier (offset 0x2c, bit 0), which the CRG binding and driver
-	 * range-check to the reset words.
-	 * TODO(hw): spi-max-frequency is informational only - the driver does not
-	 * program the SPI clock and the bootloader leaves the FMC timing
-	 * registers configured; the value is a conservative placeholder.
-	 * TODO(hw): the FMC ECC engine semantics (host ECC vs on-die
-	 * pass-through), the OOB bytes the DMA engine returns, and whether a
-	 * Linux die reset clears the die's quad-enable bit are unverified; see
-	 * docs/port-notes/fmc/SUMMARY.md.
-	 */
 	fmc: spi@10a20000 {
 		compatible = "hisilicon,luofu-fmc";
-		reg = <0x10a20000 0x1000>,	/* register file */
-		      <0x1c000000 0x100000>;	/* memory-mapped data window */
+		reg = <0x10a20000 0x1000>,
+		      <0x1c000000 0x100000>;
 		reg-names = "regs", "window";
 		clocks = <&crg LUOFU_CLK_SFC>;
 		clock-names = "sfc_clk";
-		resets = <&crg 0x2c 0x0>;	/* sfc_rst: CRG 0x2c bit 0 */
+		resets = <&crg 0x2c 0x0>;
 		reset-names = "sfc_rst";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		status = "okay";
 
 		flash@1 {
 			compatible = "spi-nand";
-			reg = <1>;			/* chip-select 1 */
-			spi-max-frequency = <50000000>;	/* TODO(hw): informational */
+			reg = <1>;
+			spi-max-frequency = <50000000>;
 			spi-tx-bus-width = <4>;
 			spi-rx-bus-width = <4>;
 
-			/*
-			 * Stock 17-partition A/B table, verbatim from the vendor base
-			 * DTB (vendor-dt-notes.md 6). Total NAND 0x8000000 = 128 MB.
-			 * The lab "lab" partition is deliberately NOT here; the vendor
-			 * upgrade partition keeps its stock 0x1d80000 size
-			 * (TARGET-DESIGN.md 3.3).
-			 * TODO(binding): review "read-only" flags for partitions OpenWrt
-			 * must never write; the env partitions are written by the
-			 * measured slot switch, so they are not read-only in this draft.
-			 * TODO(binding): enva/envb are the U-Boot environment blocks; the
-			 * u-boot,env representation and its format compatibility are [U]
-			 * (TARGET-DESIGN.md 6.2).
-			 */
+			/* stock 128 MiB A/B partition map, verbatim from the vendor base DTB */
 			partitions {
 				compatible = "fixed-partitions";
 				#address-cells = <1>;
 				#size-cells = <1>;
 
-				partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
-				partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
-				partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
-				partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
-				partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
-				partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
-				/*
-				 * bdinfo: encrypted vendor key/value text (container header at
-				 * +0, encrypted text from +4) plus the one plaintext factory-MAC
-				 * copy at +0xde00, last non-0xff byte +0xde05
-				 * (MISC-SOC-BLOCKS.md 1.1; values withheld).  The partition is
-				 * read-only in this target: nothing writes factory data, and both
-				 * readers are read-only (userspace luofu-mac.sh and the kernel
-				 * nvmem cell below).
-				 *
-				 * The nvmem layout is the fixed-layout/mac-base pair, so no
-				 * target-local driver is needed:
-				 *   - vanilla 6.18.60 already registers an nvmem provider for
-				 *     every MTD device (mtd_nvmem_add() in
-				 *     drivers/mtd/mtdcore.c: read-only and root-only by
-				 *     construction, reg_read -> mtd_read) and parses the
-				 *     nvmem-layout container (#nvmem-cell-cells via
-				 *     of_nvmem_cell_get);
-				 *   - the mac-base cell arithmetic (index -> eth_addr_add())
-				 *     reaches this 6.18 tree through OpenWrt's generic
-				 *     carried backports of upstream commits
-				 *     (target/linux/generic/pending-6.18/
-				 *     804-nvmem-core-support-mac-base-fixed-layout-cells.patch
-				 *     and 809-01-nvmem-core-generalize-mac-base-cells-handling
-				 *     .patch).  Without them the cell would read raw bytes and
-				 *     the per-port offset would not be applied.
-				 * A consumer writes nvmem-cells = <&bdinfo_mac N> and gets
-				 * base+N.  If this partition node is absent from a DTB, the
-				 * phandle does not resolve: of_get_mac_address() then reports
-				 * -ENOENT and the GEMAC driver falls back to a logged random
-				 * address, so no consumer ever invents factory data.
-				 */
+				partition@0 {
+					label = "esbc";
+					reg = <0x0 0x40000>;
+				};
+				partition@40000 {
+					label = "uboota";
+					reg = <0x40000 0x100000>;
+				};
+				partition@140000 {
+					label = "ubootb";
+					reg = <0x140000 0x100000>;
+				};
+				partition@240000 {
+					label = "enva";
+					reg = <0x240000 0x40000>;
+				};
+				partition@280000 {
+					label = "envb";
+					reg = <0x280000 0x40000>;
+				};
+				partition@2c0000 {
+					label = "fac";
+					reg = <0x2c0000 0x200000>;
+				};
 				partition@4c0000 {
 					label = "bdinfo";
 					reg = <0x4c0000 0x40000>;
@@ -789,87 +412,75 @@
 						};
 					};
 				};
-				partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
-				partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
-				partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
-				partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
-				partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
-				partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
-				partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
-				partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
-				partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
-				partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
+				partition@500000 {
+					label = "cfga";
+					reg = <0x500000 0x200000>;
+				};
+				partition@700000 {
+					label = "cfgb";
+					reg = <0x700000 0x200000>;
+				};
+				partition@900000 {
+					label = "log";
+					reg = <0x900000 0x440000>;
+				};
+				partition@d40000 {
+					label = "pstore";
+					reg = <0xd40000 0x40000>;
+				};
+				partition@d80000 {
+					label = "kernela";
+					reg = <0xd80000 0x840000>;
+				};
+				partition@15c0000 {
+					label = "kernelb";
+					reg = <0x15c0000 0x840000>;
+				};
+				partition@1e00000 {
+					label = "rootfsa";
+					reg = <0x1e00000 0x1740000>;
+				};
+				partition@3540000 {
+					label = "rootfsb";
+					reg = <0x3540000 0x1740000>;
+				};
+				partition@4c80000 {
+					label = "rootfs_data";
+					reg = <0x4c80000 0x1600000>;
+				};
+				partition@6280000 {
+					label = "upgrade";
+					reg = <0x6280000 0x1d80000>;
+				};
 			};
 		};
 	};
 
 	/*
-	 * Internal LSW switch: binding
-	 * Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
-	 * (patches 016/021). One switch with 15 MMIO windows - the five
-	 * queue-manager windows (dp/ips/fam/eqm/eps) and the ten
-	 * classifier/forwarding windows (prbs/pfe_glb/pa/ifc/l2/napt/mcc/opp/
-	 * pub/pe) that the vendor tree describes as two separate nodes - plus the
-	 * two DDR regions the engine consumes:
-	 *
-	 *   queue  0x80000000  4 MiB
-	 *   flow   0x80400000  1 MiB
-	 *
-	 * Those two bases are the measured live post-loader-fixup values
-	 * (read-only inventory 2026-11-18, LSW-SPEC.md 5.4); the vendor base DT
-	 * says 0x87b00000/0x87f00000 and its U-Boot overlay rebases them.  Our
-	 * loader-match overlay is a no-op, so this base DTB has to carry the final
-	 * values itself.  The regions lie below the kernel memory node
-	 * (0x80500000), so Linux never maps them as RAM; the driver validates the
-	 * base/size and never ioremaps them.  The layout inside the regions is
-	 * unknown.
-	 *
-	 * The in-tree driver (patches 021/022) has two paths.  By default it is
-	 * the READ-ONLY baseline probe: it validates these resources, the port
-	 * model, the two CRG port_bitmap cells and - only when the block is
-	 * already clocked and out of reset - the measured register baseline and
-	 * the two qid maps, then refuses (-EOPNOTSUPP) without writing anything.
-	 * With the explicit attended luofu_lsw.arm=1 (W3: enable the two gate
-	 * clocks and release the four resets, then read) and
-	 * luofu_lsw.qidmap=1 (W4/W5: program and verify the D1b W2 qid-map write
-	 * set) module parameters it programs the egress map that the GEMAC
-	 * front end requires before it registers a netdev.  Neither write has
-	 * ever run on hardware; the node is enabled so an attended boot can
-	 * reach the gates, and a normal boot stops in the read-only path.  An
-	 * access to an unknown register in this block can cut the CPU/console
-	 * path on a board with no validated restart, which is why every write is
-	 * gated and limited to the reviewed W2 write set.
-	 *
-	 * The port children are the switchdev model (not DSA): each wired port is
-	 * a netdev owned by its GEMAC node and the switch port names it with the
-	 * "ethernet" phandle.  The port index (reg) is a devicetree ordering index
-	 * only; the measured hardware port number is given by "hisilicon,port"
-	 * (the vendor devicetree's GEMAC port cells: 9..12 for the four live
-	 * MACs) and the driver validates it against the populated qid rows.  The
-	 * GEMAC<->PHY mapping is the measured one (14380000 -> phy2/eth0,
-	 * 14400000 -> phy3/eth1, 14480000 -> phy4/eth2 (the bench cable port),
-	 * 14500000 -> phy5/eth3).  gmac0 is unused by the vendor and is not a
-	 * switch port here.
+	 * Internal LSW switch.  The binding's reg-names order puts the two
+	 * engine DDR regions first, so the node's unit address is the queue
+	 * region; the 15 MMIO windows follow.  The DDR regions are validated but
+	 * never mapped by Linux.
 	 */
-	lsw: ethernet-switch@11000000 {
+	lsw: ethernet-switch@80000000 {
 		compatible = "hisilicon,luofu-switch";
-		reg = <0x80000000 0x400000>,	/* queue: DDR, validated not mapped */
-		      <0x80400000 0x100000>,	/* flow: DDR, validated not mapped */
-		      <0x11000000 0x80000>,	/* dp */
-		      <0x11080000 0x80000>,	/* ips */
-		      <0x11100000 0x80000>,	/* fam */
-		      <0x11180000 0x80000>,	/* pe */
-		      <0x11200000 0x80000>,	/* eqm */
-		      <0x11280000 0x80000>,	/* eps */
-		      <0x11380000 0x80000>,	/* prbs */
-		      <0x12000000 0x80000>,	/* pfe_glb */
-		      <0x12080000 0x80000>,	/* pa */
-		      <0x12100000 0x80000>,	/* ifc */
-		      <0x12180000 0x80000>,	/* l2 */
-		      <0x12280000 0x80000>,	/* napt */
-		      <0x12380000 0x80000>,	/* mcc */
-		      <0x12400000 0x80000>,	/* opp */
-		      <0x12480000 0x80000>;	/* pub */
+		reg = <0x80000000 0x400000>,
+		      <0x80400000 0x100000>,
+		      <0x11000000 0x80000>,
+		      <0x11080000 0x80000>,
+		      <0x11100000 0x80000>,
+		      <0x11180000 0x80000>,
+		      <0x11200000 0x80000>,
+		      <0x11280000 0x80000>,
+		      <0x11380000 0x80000>,
+		      <0x12000000 0x80000>,
+		      <0x12080000 0x80000>,
+		      <0x12100000 0x80000>,
+		      <0x12180000 0x80000>,
+		      <0x12280000 0x80000>,
+		      <0x12380000 0x80000>,
+		      <0x12400000 0x80000>,
+		      <0x12480000 0x80000>;
 		reg-names = "queue", "flow", "dp", "ips", "fam", "pe", "eqm",
 			    "eps", "prbs", "pfe_glb", "pa", "ifc", "l2", "napt",
 			    "mcc", "opp", "pub";
@@ -879,135 +490,54 @@
 			 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
 		reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
 		hisilicon,crg = <&crg>;
-		/* measured live value, vendor cell order; semantics unknown */
 		hisilicon,port-bitmap = <0xf01 0x1ff0>;
-		status = "okay";
 
 		ethernet-ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
 
 			ethernet-port@0 {
-				reg = <0>;		/* ordering index, not a hw id */
-				hisilicon,port = <9>;	/* measured MAC port */
-				ethernet = <&gmac1>;	/* eth0 */
+				reg = <0>;
+				hisilicon,port = <9>;
+				ethernet = <&gmac1>;
 			};
 
 			ethernet-port@1 {
 				reg = <1>;
 				hisilicon,port = <10>;
-				ethernet = <&gmac2>;	/* eth1 */
+				ethernet = <&gmac2>;
 			};
 
 			ethernet-port@2 {
 				reg = <2>;
 				hisilicon,port = <11>;
-				ethernet = <&gmac3>;	/* eth2, the bench cable port */
+				ethernet = <&gmac3>;
 			};
 
 			ethernet-port@3 {
 				reg = <3>;
 				hisilicon,port = <12>;
-				ethernet = <&gmac4>;	/* eth3 */
+				ethernet = <&gmac4>;
 			};
 		};
 	};
 
-	lsw_woe: woe {
-		compatible = "hisilicon,luofu-lsw-woe";	/* TODO(binding) */
-		dma-coherent;
-		interrupts = <0 0x54 4>,	/* SPI 84 (vendor numbering) */
-			     <0 0x53 4>,	/* SPI 83 */
-			     <0 0x52 4>,	/* SPI 82 */
-			     <0 0x51 4>,	/* SPI 81 */
-			     <0 0x50 4>;	/* SPI 80 */
-		interrupt-names = "band0_comp_irq", "band1_comp_irq",
-				  "band2_comp_irq", "band0_txba", "band1_txba";
-		status = "disabled";
-	};
-
-	/*
-	 * PIE packet engine: binding
-	 * Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
-	 * (patch 015, extended by patch 020). The in-tree driver is a DRAFT
-	 * ring engine: the register/channel model was measured by the
-	 * 2026-11-18 read-only inventory and the coherent rings, channel
-	 * initialization, interrupt/NAPI receive path and TX producer are
-	 * implemented, but the RX completion decode is still unknown and the
-	 * engine is only started by an explicit "luofu_pie.arm=1" opt-in.  The
-	 * node is enabled so the attended boot can reach that gate; a normal
-	 * boot validates the resources and refuses without touching the block.
-	 * The first write to this block is a bench event, and the board has no
-	 * validated restart path.  The GEMAC netdev front end (patch 023) only
-	 * registers when this engine is armed and the switch egress map is
-	 * ready.
-	 *
-	 * The four interrupts are the four recovered per-vector lines; each
-	 * vector serves the channel pair named by interrupt-names (channels
-	 * 4-7 are the Wi-Fi offload half and are not wired into this driver).
-	 * The ring tables are the measured live board configuration: two RX
-	 * channels of log2(256) descriptors with 1536-byte buffers and two TX
-	 * channels of log2(4096) descriptors (2026-11-18 follow-up readback of
-	 * the vendor's post-overlay node).
-	 */
-	pie: pie@10a70000 {
+	packet-engine@10a70000 {
 		compatible = "hisilicon,luofu-pie";
 		reg = <0x10a70000 0x10000>;
-		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
+		interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 90 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 91 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "ch0-7", "ch1-6", "ch2-5", "ch3-4";
 		clocks = <&crg LUOFU_CLK_PIE>;
 		resets = <&crg 0x30 0x19>;
 		dma-coherent;
+		/* measured live board ring configuration */
 		hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
 		hisilicon,tx-ring = <0xc 0x2>;
-		status = "okay";
 	};
 
-	/* ---- Ethernet: five gigabit MACs + MDIO + internal switch -------- */
-
-	/*
-	 * GEMAC: binding
-	 * Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
-	 * (patch 009, netdev/phylink glue added by patch 020, connectivity
-	 * readiness added by patch 023). The in-tree driver is a DRAFT: the
-	 * MAC owns the net_device and phylink front end (PHYLINK_NETDEV, so
-	 * the phylink resolve work drives the carrier) and forwards its
-	 * transmit path to the PIE packet engine.  It only registers a netdev
-	 * after the PIE backend has armed its data path AND the internal switch
-	 * has programmed and verified its egress qid map (patch 022); a debug
-	 * boot without those parameters logs the refusal and registers
-	 * nothing.  Only the measured 1 Gbps link-up/link-down MAC words are
-	 * written (TARGET-DESIGN.md 7.1) and the netdev address comes from the
-	 * standard MAC-address properties or a random fallback.
-	 * The bind keeps the lab shape plus the two CRG reset lines.
-	 * NEEDS-VERIFICATION: the gmac0..4 -> mdio phy mapping below is the
-	 * vendor runtime mapping (14380000 -> mdio addr 2, 14400000 -> 3,
-	 * 14480000 -> 4 (the wired jack on the bench unit), 14500000 -> 5;
-	 * TARGET-DESIGN.md 6.2). The vendor does not use gmac0 at all; do not
-	 * enable it (a second MAC on phy2 would be wrong).
-	 *
-	 * MAC address plan (per-port offsets).  The factory base MAC is the
-	 * plaintext 6-byte copy at bdinfo+0xde00, exposed by the mac-base nvmem
-	 * cell in the bdinfo partition as base+<cell argument>.  The vendor rule
-	 * is LAN = base MAC and WAN = base+1 (rootfs-2.4.15/etc/board.d/
-	 * 02_network:25-29; uci-defaults/99_fixwan:17-52), and the vendor applies
-	 * the SAME LAN base address to every LAN device (eth0/eth1/eth2), so
-	 * gmac1..gmac3 (LAN) use offset 0 and gmac4 (eth3, WAN) uses offset 1.
-	 * There is no per-jack offset rule in any vendor script: do not invent
-	 * one.  The GEMAC ports are internal-switch MAC ports 9..12
-	 * (LSW-SPEC.md 6.1), i.e. the userspace LAN/WAN map is eth0/eth1/eth2
-	 * (switch ports 9/10/11) plus eth3 (port 12), matching the vendor
-	 * board.d and base-files/etc/board.d/02_network.
-	 *
-	 * Arithmetic note: the kernel mac-base post-processing uses the 48-bit
-	 * eth_addr_add(), while the userspace macaddr_add() preserves the OUI
-	 * and increments only the low 24 bits.  They agree for every base the
-	 * provisioner accepts (it rejects ...:ff:ff:ff, the only case where the
-	 * two differ); the userspace validator stays the stricter authority.
-	 * Unmeasured [U]: whether the MTD partition/nvmem provider is registered
-	 * before the GEMAC probes on real hardware - if it is not, the driver
-	 * defers probe (patch 026) rather than randomising.
-	 */
 	gmac0: ethernet@14300000 {
 		compatible = "hisilicon,luofu-gmac";
 		reg = <0x14300000 0x10000>;
@@ -1026,13 +556,11 @@
 		hisilicon,port = <0x9>;
 		phy-mode = "gmii";
 		phy-handle = <&phy2>;
-		/* factory MAC: LAN 0 (see the address plan above) */
 		nvmem-cells = <&bdinfo_mac 0>;
 		nvmem-cell-names = "mac-address";
 		clocks = <&crg LUOFU_CLK_GMAC1>;
 		resets = <&crg 0x30 0xf>, <&crg 0x30 0x10>;
 		reset-names = "mac-logic", "mac";
-		status = "okay";
 	};
 
 	gmac2: ethernet@14400000 {
@@ -1041,13 +569,11 @@
 		hisilicon,port = <0xa>;
 		phy-mode = "gmii";
 		phy-handle = <&phy3>;
-		/* factory MAC: LAN 0 (see the address plan above) */
 		nvmem-cells = <&bdinfo_mac 0>;
 		nvmem-cell-names = "mac-address";
 		clocks = <&crg LUOFU_CLK_GMAC2>;
 		resets = <&crg 0x30 0x11>, <&crg 0x30 0x12>;
 		reset-names = "mac-logic", "mac";
-		status = "okay";
 	};
 
 	gmac3: ethernet@14480000 {
@@ -1055,14 +581,12 @@
 		reg = <0x14480000 0x10000>;
 		hisilicon,port = <0xb>;
 		phy-mode = "gmii";
-		phy-handle = <&phy4>;	/* bench-measured cable port (gmac3) */
-		/* factory MAC: LAN 0 (see the address plan above) */
+		phy-handle = <&phy4>;
 		nvmem-cells = <&bdinfo_mac 0>;
 		nvmem-cell-names = "mac-address";
 		clocks = <&crg LUOFU_CLK_GMAC3>;
 		resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
 		reset-names = "mac-logic", "mac";
-		status = "okay";
 	};
 
 	gmac4: ethernet@14500000 {
@@ -1071,61 +595,47 @@
 		hisilicon,port = <0xc>;
 		phy-mode = "gmii";
 		phy-handle = <&phy5>;
-		/* factory MAC: WAN = base+1 (see the address plan above) */
 		nvmem-cells = <&bdinfo_mac 1>;
 		nvmem-cell-names = "mac-address";
 		clocks = <&crg LUOFU_CLK_GMAC4>;
 		resets = <&crg 0x30 0x15>, <&crg 0x30 0x16>;
 		reset-names = "mac-logic", "mac";
-		status = "okay";
 	};
 
-	/*
-	 * MDIO bus controller: binding
-	 * Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml
-	 * (patch 007), driver drivers/net/mdio/mdio-luofu.c. The PHY children
-	 * stay standard ethernet-phy-ieee802.3-c22 nodes: the Genius PHY (ID
-	 * 0x20669a00, mask 0xffffff00) binds through its PHY ID (patch 008),
-	 * not through a devicetree compatible, and the vendor per-PHY firmware
-	 * patch load is a driver TODO (TARGET-DESIGN.md 6.2, 7.1).
-	 * The seven resets are the MDIO bus reset, the global PHY reset and the
-	 * five per-PHY resets; the driver releases them after enabling the bus
-	 * clock and before the bus is scanned.
-	 * NEEDS-VERIFICATION: the PHY addresses 2..5 are the vendor runtime
-	 * mapping; PHY address 1 is not used by the vendor and is not modelled.
-	 */
 	mdio0: mdio@14000000 {
 		compatible = "hisilicon,luofu-mdio";
 		reg = <0x14000000 0x1000>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		clocks = <&crg LUOFU_CLK_MDIO>;
-		resets = <&crg 0x30 0x6>,	/* mdio */
-			 <&crg 0x30 0x1a>,	/* gephyall */
-			 <&crg 0x30 0x1b>,	/* gephy0 */
-			 <&crg 0x30 0x1c>,	/* gephy1 */
-			 <&crg 0x30 0x1d>,	/* gephy2 */
-			 <&crg 0x30 0x1e>,	/* gephy3 */
-			 <&crg 0x30 0x1f>;	/* gephy4 */
+		resets = <&crg 0x30 0x6>,
+			 <&crg 0x30 0x1a>,
+			 <&crg 0x30 0x1b>,
+			 <&crg 0x30 0x1c>,
+			 <&crg 0x30 0x1d>,
+			 <&crg 0x30 0x1e>,
+			 <&crg 0x30 0x1f>;
 		reset-names = "mdio", "gephyall", "gephy0", "gephy1",
 			      "gephy2", "gephy3", "gephy4";
-		status = "okay";
 
 		phy2: ethernet-phy@2 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <2>;
 			max-speed = <1000>;
 		};
+
 		phy3: ethernet-phy@3 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <3>;
 			max-speed = <1000>;
 		};
+
 		phy4: ethernet-phy@4 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <4>;
 			max-speed = <1000>;
 		};
+
 		phy5: ethernet-phy@5 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <5>;
@@ -1133,105 +643,10 @@
 		};
 	};
 
-	/* ---- thermal: sensor + zone (patch 012) ------------------------ */
-
 	/*
-	 * Temperature sensor. The die temperature is the low 16 bits of the
-	 * word at offset 0x24, converted by the driver with the vendor v4
-	 * formula (decoded and numerically verified). The vendor devicetree
-	 * declares a 0x14-byte reg for a driver that reads +0x24, so the
-	 * window is widened here to the containing 0x100-byte register block:
-	 * a reg shorter than 0x28 would not cover the register the driver
-	 * uses.
-	 * Binding: Documentation/devicetree/bindings/thermal/
-	 *          hisilicon,luofu-tvsensor.yaml
-	 * The node is enabled: the vendor kernel registers and polls this
-	 * exact block, so the read path is not unknown hardware - but no
-	 * threshold, interrupt, enable or trim register has been decoded,
-	 * and the driver writes no register at all. The vendor interrupt
-	 * (SPI 0) is deliberately not claimed: without a threshold model
-	 * there is nothing to service, and the zone polls instead.
-	 * TODO(hw): whether the block needs a clock gate or a reset from
-	 * Linux is unverified; the vendor devicetree has neither.
-	 */
-	tvsensor: thermal-sensor@14900500 {
-		compatible = "hisilicon,luofu-tvsensor";
-		reg = <0x14900500 0x100>;
-		#thermal-sensor-cells = <0>;
-		status = "okay";
-	};
-
-	thermal-zones {
-		/*
-		 * One zone for the single on-die sensor. The vendor tree calls
-		 * it "cls0"; the node name adds the binding-required "-thermal"
-		 * suffix. The trips are the vendor values (115 C passive, 125 C
-		 * critical, 3 C hysteresis); they are vendor policy data, not a
-		 * measurement made on this board, and no cooling device is mapped
-		 * yet. The vendor cooling map points at its network rate-limiting
-		 * cooling device, whose LSW/CAR model does not exist in this tree,
-		 * so v1 keeps the zone and trips without cooling-maps. The vendor
-		 * sustainable-power value is likewise omitted: its units are
-		 * unverified and it is only consumed by the power_allocator
-		 * governor, which no cooling device here could use. The vendor
-		 * trip-point@0/@2 numbering becomes trip-point0/1: node names
-		 * have no meaning beyond uniqueness and trip-point@1 was absent.
-		 */
-		cls0: cls0-thermal {
-			polling-delay = <1000>;
-			thermal-sensors = <&tvsensor>;
-
-			trips {
-				trip-point0 {
-					temperature = <115000>;
-					hysteresis = <3000>;
-					type = "passive";
-				};
-
-				trip-point1 {
-					temperature = <125000>;
-					hysteresis = <3000>;
-					type = "critical";
-				};
-			};
-		};
-	};
-
-	/* ---- PCIe: two DWC root complexes (patch 013) ------------------ */
-
-	/*
-	 * Two DesignWare-based root complexes. Binding:
-	 * Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
-	 * and driver drivers/pci/controller/dwc/pcie-luofu.c (patch 013).
-	 *
-	 * HARD RULE: the "misc" window (RC0 0x10161000, RC1 0x10165000) is
-	 * write-only and MUST NEVER BE READ at runtime - a read-only devmem
-	 * there panicked the box. The driver writes the recorded root-complex
-	 * mode and LTSSM-enable words there and observes link state through
-	 * the DBI (DEBUG0/DEBUG1, Link Status) instead.
-	 *
-	 * HARD RULE: the DBI and configuration windows answer only
-	 * 4-byte-aligned 32-bit accesses; the driver's accessors comply.
-	 *
-	 * The dbi/misc/config windows are declared here. The memory and I/O
-	 * outbound windows are expressed by "ranges" (the driver derives the
-	 * iATU viewports from it); the measured vendor iATU plan - viewport 0
-	 * CFG0 config window to bus 0, viewport 1 MEM 0x40000000 to
-	 * 0x40000000, viewport 2 IO 0x48000000 to 0x48000000 (RC1:
-	 * 0x68000000/0x58000000/0x60000000) - matches these ranges. The vendor
-	 * iatu_rc/iatu_ep tables and the acp-gate bits (0x10100174 bit 25/26)
-	 * are driver/SoC init data, not devicetree ABI.
-	 *
-	 * The nodes stay DISABLED: the device write path (misc mode/LTSSM, DBI
-	 * setup, iATU writes) has never been measured on this board. The reset
-	 * polarity is settled (active-low 0x34 bits; the first CRG driver
-	 * revision was inverted and patch 014 fixes it), so once the write path
-	 * is validated in an attended hardware run these nodes can be enabled.
-	 *
-	 * The Wi-Fi endpoints are the vendor 59e7:0005 functions; their driver
-	 * is vendor-only and out of scope ([X]). They are documented as
-	 * disabled child nodes (the PCI core enumerates them from config
-	 * space; no mainline driver binds them).
+	 * Two DesignWare PCIe root complexes; disabled until the device write
+	 * path (misc/LTSSM, DBI, iATU) is validated on hardware.  The vendor
+	 * Wi-Fi endpoints are PCIe functions with no mainline driver.
 	 */
 	pcie0: pcie@10160000 {
 		compatible = "hisilicon,luofu-pcie";
@@ -1239,29 +654,23 @@
 		#address-cells = <3>;
 		#size-cells = <2>;
 		linux,pci-domain = <0>;
-		reg = <0x10160000 0x1000>,	/* dbi */
-		      <0x10161000 0x3000>,	/* misc - NEVER READ */
-		      <0x50000000 0x1000>;	/* config window */
+		reg = <0x10160000 0x1000>,
+		      <0x10161000 0x3000>,
+		      <0x50000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
 		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>,
 			 <0x01000000 0x0 0x48000000 0x48000000 0x0 0x800000>;
 		bus-range = <0 0xa>;
-		interrupts = <0 0x3b 4>,	/* radm, SPI 59 */
-			     <0 0x45 4>;	/* linkdown, SPI 69 */
+		interrupts = <GIC_SPI 59 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "radm", "linkdown";
 		clocks = <&crg LUOFU_CLK_PCIE0>;
 		clock-names = "pcie";
 		resets = <&crg 0x34 0xc>, <&crg 0x34 0xd>,
 			 <&crg 0x34 0xe>, <&crg 0x34 0xf>;
 		reset-names = "apb", "pcs", "phy", "ctrl";
-		num-lanes = <1>;		/* measured Link Cap: x1 */
+		num-lanes = <1>;
 		status = "disabled";
-
-		wifi@0,0 {
-			compatible = "pci59e7,0005";
-			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "disabled";
-		};
 	};
 
 	pcie1: pcie@10164000 {
@@ -1270,60 +679,34 @@
 		#address-cells = <3>;
 		#size-cells = <2>;
 		linux,pci-domain = <1>;
-		reg = <0x10164000 0x1000>,	/* dbi */
-		      <0x10165000 0x3000>,	/* misc - NEVER READ */
-		      <0x68000000 0x1000>;	/* config window */
+		reg = <0x10164000 0x1000>,
+		      <0x10165000 0x3000>,
+		      <0x68000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
 		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>,
 			 <0x01000000 0x0 0x60000000 0x60000000 0x0 0x800000>;
 		bus-range = <0 0xa>;
-		interrupts = <0 0x3f 4>,	/* radm, SPI 63 */
-			     <0 0x46 4>;	/* linkdown, SPI 70 */
+		interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "radm", "linkdown";
 		clocks = <&crg LUOFU_CLK_PCIE1>;
 		clock-names = "pcie";
 		resets = <&crg 0x34 0x10>, <&crg 0x34 0x11>,
 			 <&crg 0x34 0x12>, <&crg 0x34 0x13>;
 		reset-names = "apb", "pcs", "phy", "ctrl";
-		num-lanes = <1>;		/* measured Link Cap: x1 */
+		num-lanes = <1>;
 		status = "disabled";
-
-		wifi@0,0 {
-			compatible = "pci59e7,0005";
-			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "disabled";
-		};
 	};
 
-	/* ---- absent nodes, on purpose ---------------------------------- */
-
 	/*
-	 * LEDs / keys: NOT in the lab DTS; the vendor board overlay (board_id=3)
-	 * adds gpio-keys-polled (reset gpio 0x16, wps gpio 0x17, poll 20 ms) and
-	 * gpio-leds (oem:green:{status,wan,lan,internet,wifi,wifi5g});
-	 * gpio 0x1c appears in the overlay's pcie-gpios (vendor-dt-notes.md 8).
-	 * Those are overlay evidence, not board schematics: add standard
-	 * gpio-keys-polled / gpio-leds nodes only once the GPIO numbering,
-	 * polarity and board names are confirmed; TARGET-DESIGN.md 6.2 lists
-	 * both as free bindings.
-	 *
-	 * sysctrl / sysenv: the minimum SYSCTRL syscon node the restart driver
-	 * uses is modelled above (0x10100000, boot selector at 0xc08, patch 010).
-	 * The vendor "hsan,sysenv"/"hsan,rstinfo" interface is NOT modelled: the
-	 * A/B selector protocol is still [U] (values 0x10 = A pair, 0x11 = B pair
-	 * per the loader's own print; a manual B write used 0x21; the A-side
-	 * handover value is NOT established), and a sysupgrade read path needs an
-	 * nvmem provider plus one attended A/B validation (TARGET-DESIGN.md 3.4,
-	 * 6.2, 7.1). Do not invent the rest here.
-	 *
-	 * efuse / RNG / LED PWM / PMU PWM / clk-corrector / net-cdev / woe_*:
-	 * vendor "hsan,*" blocks in the pinned tree; not needed for a
-	 * wired-first first submission, and unused blocks must not get invented
-	 * bindings (TARGET-DESIGN.md 6.2). The MAC address source is [U] - the
-	 * efuse/nvmem question depends on it (TARGET-DESIGN.md 12 item 5).
-	 *
-	 * Wi-Fi (Hi5622V100): PCIe endpoints with a vendor-binary, non-mac80211
-	 * driver over a closed firmware blob. Out of the first submission scope
-	 * (TARGET-DESIGN.md 8.3). No node.
+	 * Deliberately absent from this submission:
+	 * - thermal: the on-die temperature register reads 0 on this board and
+	 *   the vendor DT disables the sensor, so there is no usable zone;
+	 * - Wi-Fi (Hi5622V100): vendor-only PCIe endpoints with closed firmware;
+	 * - unused vendor blocks (efuse, RNG, LED PWM, PMU PWM, WOE engine,
+	 *   SP804 timer): no bindings/drivers and not needed for the wired-first
+	 *   target.
+	 * See 07-dts-upstream-bindings.md for the measured facts retained for
+	 * these blocks.
 	 */
 };

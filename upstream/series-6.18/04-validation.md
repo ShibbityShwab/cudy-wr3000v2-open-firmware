@@ -1029,3 +1029,70 @@ No hardware was touched and no kernel build was run.
 
 Logs: `validation/release-line/` (release line, L0, target DTS, DTS-0001,
 pad-dtb) and `validation/` (review form).
+
+
+## 22. 2026-11-21 DTS bindings cleanup re-validation
+
+The board DTS was cleaned for merge-readiness (submission-oriented comments,
+standard node names/unit addresses/aliases, removed experiment prose and
+unused vendor blocks).  The single source of truth is
+`target-skeleton/dts/luofu-r116.dts` (was 1,329 lines, now 712); no
+measured register/interrupt/clock/partition value changed (property-multiset
+comparison of the old and new DTBs shows only the intentional removals).  Every
+removal and rename is recorded in `07-dts-upstream-bindings.md`.
+
+**Changes covered:**
+
+- removed: SP804 timer (unused; TWD is the timer), LSW WOE node (no
+  binding/driver), thermal sensor + zones (hardware temp reads 0, vendor DT
+  disables the sensor), Wi-Fi PCIe child nodes (vendor-only), `serial1`
+  alias, redundant `status = "okay"` properties, the old file header/TODO/
+  bench prose;
+- renamed: gpio-keys container/children (`gpio-keys`, `key-reset`,
+  `key-wps`), gpio-leds children (`led-0`..`led-5`, labels
+  unchanged), fixed clocks (`clock-*`), TWD node (`timer@...`), PIE
+  node (`packet-engine@...`), switch node unit address
+  (`ethernet-switch@80000000`, matching the binding's queue-first
+  `reg-names` order), model shortened, `cudy,wr3000-v2` appended to
+  the compatible (kept last so the target's board_name/sysupgrade metadata is
+  unchanged; upstream ordering remains a documented blocker);
+- normalised: IRQ specifiers to GIC macros, GPIO flags/keys to standard macros;
+  the measured TWD PPI encoding is preserved;
+- binding review: required properties/reg-names/clock/reset/interrupt names
+  were checked manually against the YAMLs added by the series and the standard
+  6.18 bindings.  No dtschema/dt-validate/yamllint tooling is available in this
+  checkout, so `make dtbs_check` / `dt_binding_check` could not be
+  run; dtc with the `unit_address_vs_reg`, `simple_bus_reg`,
+  `avoid_unnecessary_addr_size` and
+  `unique_unit_address_if_enabled` warning sets produced **0 warnings**.
+
+**Results (2026-11-21, pristine 6.18.60 sha256 `3c2f44ef...`):**
+
+- **L1 release line (51 patches):** patch(1) 51/51 RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**; strict `git apply`: **all 51
+  patches apply without fuzz**;
+- **cleaned target DTS:** cpp+dtc RC=0, 0 stderr, DTB **11,702 B** sha256
+  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`;
+  totalsize unaligned, pad-dtb exercised on a copy -> **11,704 B** sha256
+  `de2ccd5f678a69e1b925567cbd5c44900c567b679bef965f53faa3e00c2aa84f`,
+  loader hand-off contract preserved; `fdtget` confirms
+  `/aliases/console = /serial@1010f000`,
+  `compatible = "hsan,flashinfo_reserved"`,
+  `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>` and
+  `/cpus/enable-method = "hisilicon,luofu-smp"`;
+- **DTS-0001:** regenerated from the cleaned single source, sha256
+  `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`;
+  applies to the L1 tree RC=0; added board DTS byte-identical to the target
+  DTS; same 11,702 B DTB/hash, contract and pad-step result;
+- **upstream review form (26 patches):** patch(1) 26/26 RC=0 (3 offset hunks,
+  0 fuzz), `git am` 26/26 RC=0, identical trees; checkpatch default and
+  `--strict`: **0 errors, 58 warnings**;
+- release-line manifest/checksums unchanged for the source patches
+  (51 include / 11 exclude; manifest sha256 `4da8b960...`); the
+  DTS-series entry in `validation/sha256sums.txt` was refreshed to the new
+  DTS-0001 hash (89 entries, `sha256sum -c` passes).
+
+The remaining submission blockers (flashinfo compatible binding, v6.19 nvmem
+cells on a 6.18 baseline, switch binding reg order, TWD IRQ flags, cudy
+compatible ordering/target metadata, draft in-series drivers) are listed in
+`07-dts-upstream-bindings.md` section 6.

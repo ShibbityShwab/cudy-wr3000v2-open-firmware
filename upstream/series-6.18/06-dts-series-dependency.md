@@ -14,9 +14,9 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115` (refreshed 2026-11-21 after the stock board_id=3 LED/keys overlay landed; previous was `73d93769...`) |
+| sha256 | `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6` (cleaned/refreshed 2026-11-21: bindings cleanup; previous was `8ee4b8e7...`) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**1,329 lines**, byte-identical to the single-source target DTS, including the board buttons/LEDs) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**712 lines**, byte-identical to the cleaned single-source target DTS, including the board buttons/LEDs and the loader hand-off contract) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
 | status | **DRAFT DTS SERIES ENTRY** - the board DTS is TODO-heavy and not merge-intent until the bindings/cleanup in `03-rationale-tree-placement.md` section 4 are done; the two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
 
 The two nodes that make this entry release-critical for SMP:
@@ -97,15 +97,17 @@ byte-identical to the target DTS.
 ### 3.1 Base-DTB padding is part of the DTS/image contract (pad-dtb)
 
 The stock U-Boot bootfip reads the overlay-container gate word as a 32-bit
-load at `base_dtb + FDT-totalsize`.  When the new LED/keys nodes were added
-(2026-11-21), the compiled base DTB became **13,041 B with an unaligned
-totalsize**; U-Boot data-aborted on that load, reset, and fell back to the
-stock pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
+load at `base_dtb + FDT-totalsize`.  When the LED/keys nodes were added
+(2026-11-21), the compiled base DTB became unaligned (13,041 B at that time);
+U-Boot data-aborted on the unaligned load, reset, and fell back to the stock
+pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
 (`target-skeleton/tools/pad-dtb.py`) on the base DTB before
 `append-dtb`: it pads to an 8-byte boundary, folds the padding into the
 FDT totalsize, and asserts `len(dtb) == totalsize` and
 `totalsize % 8 == 0`, so an unaligned blob cannot reach a trailer again.
-Measured: 13,041 B -> **13,048 B**.
+For the cleaned DTS the measured sizes are **11,702 B -> 11,704 B**; the
+cleaned board DTS and its cleanup record are in
+`07-dts-upstream-bindings.md`.
 
 The full measurement and rationale are in
 `../../docs/TRAILER-FORMAT.md` **section 11** ("Base-DTB totalsize must be
@@ -133,12 +135,14 @@ feature refresh):
 
 - L1 release line: 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, 0
   rejects; strict `git apply`: **all 51 patches apply without fuzz**;
-- board DTS / DTS-0001 (refreshed): both compile to the same **13,041 B**
+- board DTS / DTS-0001 (cleaned): both compile to the same **11,702 B**
   DTB, sha256
-  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
+  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`,
   with the contract present; DTS-0001's DTS is byte-identical to the target
   DTS; the totalsize is **unaligned**, so the pad-dtb build step is required
-  and the validator exercises it on a copy (13,048 B, contract preserved);
+  and the validator exercises it on a copy (**11,704 B**, contract preserved);
+- DTS-0001 sha256 for the cleaned source:
+  `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`;
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62;
 - source-patch hashes refreshed in the release-line manifest for

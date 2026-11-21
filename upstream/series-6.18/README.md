@@ -53,21 +53,24 @@ final 26-patch pass.
 
 - **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `8ee4b8e71be21f5fc61dd7c48546ce84bfb77550a08b021bdf4804707f4ce115`,
-  refreshed 2026-11-21 with the stock board_id=3 LED/keys nodes) adds
-  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (byte-identical to the
-  single-source target DTS) and the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile
-  entry; it is the companion of kernel patch 0018 and is documented in
-  `06-dts-series-dependency.md`.  The validator applies/compiles it and
-  checks the loader hand-off contract.
+  (sha256 `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`,
+  cleaned/refreshed 2026-11-21: bindings cleanup, stock board_id=3 LED/keys
+  nodes) adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**712 lines**,
+  byte-identical to the cleaned single-source target DTS) and the
+  `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
+  patch 0018 and is documented in `06-dts-series-dependency.md`.  The
+  validator applies/compiles it and checks the loader hand-off contract.  The
+  bindings cleanup (removals/renames, retained measured facts, manual binding
+  review and the remaining upstream blockers) is
+  `07-dts-upstream-bindings.md`.
 - **Board-feature refresh (2026-11-21).**  The stock board_id=3 overlay landed
   in the single-source DTS: gpio-keys-polled (reset/WPS) and six
   `oem:green:*` gpio-leds, with the matching target config additions;
   verified image **`7f270b8c`** (2 CPUs, 6 LEDs writable, `event0`,
   `watchdog0` sysfs; **thermal remains unsupported** - temp reads 0, vendor
-  DT disables the sensor).  The compiled DTB became 13,041 B with an unaligned
+  DT disables the sensor).  The compiled DTB became 11,702 B with an unaligned
   totalsize, which made the stock U-Boot bootfip gate-word load data-abort, so
-  the image build now runs `Build/luofu-pad-dtb` (13,048 B) before
+  the image build now runs `Build/luofu-pad-dtb` (11,704 B) before
   `append-dtb` - see top-level `docs/TRAILER-FORMAT.md` section 11 and
   `06-dts-series-dependency.md` section 3.1.  Release-line patch hashes
   were refreshed for 054/056 (`dev_dbg` quieting).
@@ -119,6 +122,7 @@ overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
 | `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
+| `07-dts-upstream-bindings.md` | the board-DTS bindings cleanup for submission: every removal/rename, retained measured facts, manual binding review (no dtschema available), compile/pad facts and the remaining upstream blockers |
 | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | commit-ready DTS-series entry (DTS-0001): board DTS + hisilicon DTS Makefile line; companion to 0018 |
 | `tools/gen-dts-series-patch.py` | deterministic generator for DTS-0001 from the single-source target DTS |
 | `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |
@@ -197,11 +201,11 @@ To regenerate the series after editing a message:
   hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches apply
   without fuzz**.  The L0 stack (62 files, 001-058 + 062-065) also applies
   62/62 with 0 fuzz and strict-clean.  The loader hand-off DTS contract
-  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **13,041 B** sha256
-  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`) and contains
+  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **11,702 B** sha256
+  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`) and contains
   `/aliases/console` and the `flashinfo@80600000` node with the measured
   `reg`/`atag-offset`.  The totalsize is unaligned, so the validator
-  exercises `pad-dtb.py` on a copy (**13,048 B**, contract preserved) and
+  exercises `pad-dtb.py` on a copy (**11,704 B**, contract preserved) and
   records the required `Build/luofu-pad-dtb` image step.
   **DTS-0001** applies, compiles to the same DTB and its board DTS is
   byte-identical to the target DTS.  Logs: `validation/release-line/`.  [V]
@@ -342,7 +346,7 @@ To regenerate the series after editing a message:
 | gated LSW write path and GEMAC netdev readiness (follow-ups to 0020/0021) | 0022, 0023 | do not merge; 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters with readback/restore; 0023 registers nothing until the PIE arm gate and both LSW gates pass in one attended boot |
 | PIE completion/TX decode, gated LSW W4 egress stage and MAC-source nvmem (follow-ups to 0020/0022/0023) | 0024, 0025, 0026 | do not merge; 0024 stays behind the PIE arm gate and its decode has never been observed by the engine; 0025 gates the R1/R3/R5 probe-configuration write set behind never-set module parameters (requiring the W3 power step) and tightens readiness so both that configuration and the qid map must verify; 0026 reads the MAC from a read-only bdinfo nvmem cell but registers nothing until the 0023 gate passes and the read has never run.  None has run on hardware |
 | SMP bring-up | 0018 | RFC for upstream review; the target image is hardware-verified with 2 CPUs (2026-11-21) once the board DTS carries the loader hand-off nodes; 0018 alone is necessary but not sufficient. The release-line diagnostics around it are excluded from the release series |
-| DTS series entry | DTS-0001 (not a kernel patch) | draft board DTS required by 0018; carries the two loader hand-off nodes; post with 0018; not merge-intent until the bindings cleanup (see `06-dts-series-dependency.md`) |
+| DTS series entry | DTS-0001 (not a kernel patch) | cleaned board DTS required by 0018; carries the two loader hand-off nodes and the board features; post with 0018; remaining upstream blockers are listed in `07-dts-upstream-bindings.md` |
 
 The recommended real submission splits this into per-subsystem series and
 folds 0014 into 0004; see 00-cover-letter.md "Recommended submission

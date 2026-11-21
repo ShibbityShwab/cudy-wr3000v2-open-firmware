@@ -13,8 +13,8 @@
  *   base DTB is already the complete board tree for our kernel, so this overlay
  *   carries nothing but the three match properties and one fragment. It embeds
  *   no vendor bytes and copies none of the vendor overlay's board fixups (the
- *   vendor R116 overlay rebases LSW windows and adds keys/LEDs; those are its
- *   board model, not ours).
+ *   vendor R116 overlay rebases LSW windows; that is its board model, not
+ *   ours.  The stock overlay's keys/LEDs are now carried in the base DTS).
  *
  * WHERE IT SITS (TARGET-DESIGN.md 3.2/5.2, docs/TRAILER-FORMAT.md)
  *   kernel slot = legacy uImage + trailer
@@ -32,7 +32,8 @@
  *      first compatible containing the token "luofu" matches, and
  *      "hsan-luofu" is used because it is the decoded vendor family string for
  *      this row. It is NOT our board compatible (the base DTB root compatible
- *      stays "hisilicon,luofu-r116", "hisilicon,luofu").
+ *      still starts with "hisilicon,luofu-r116", "hisilicon,luofu";
+ *      "cudy,wr3000-v2" follows).
  *   3. `board_id` (32-bit cell): matched against the environment `boardid`
  *      when that is set, otherwise against the 4-bit hardware strap (four
  *      pinctrl cfg registers at 0x14940000 + 4*{0x0a,0x0b,0x12,0x13}, bit 6).
