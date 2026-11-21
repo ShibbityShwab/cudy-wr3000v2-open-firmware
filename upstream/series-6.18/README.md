@@ -40,6 +40,11 @@ final 26-patch pass.
 
 ## 2026-11-21 release-line update (read this first)
 
+- **Submission package (documentation only):** `submission/README.md` is the
+  dry-run artifact checklist + one-page cover-email draft + file manifest for
+  the kernel review form and DTS-0001.  Nothing has been submitted anywhere.
+  Current conservative devicetree final: commit `7ae18f2` (active content
+  byte-identical to the known-good DTB).
 - **SMP is solved on hardware and the fix is DTS-only (release-critical).**
   The kernel release (0018) was correct; the stock U-Boot `bootfip` hand-off
   staging silently aborted because the board devicetree lacked the stock

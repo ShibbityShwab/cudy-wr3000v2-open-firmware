@@ -43,7 +43,8 @@ removals, model/compatible/alias changes) were not hardware-tested and caused
 the regression.  Host-side checks (patch application, dtc compile, contract
 values, DTS-0001 identity, pad-dtb) are necessary but **not sufficient**.  The
 active DTS was therefore reverted to the known-good content; the earlier
-aggressive cleanup is not hardware-validated and must not be used as-is.
+aggressive cleanup is not hardware-validated and must not be used as-is.  The
+current conservative final is commit `7ae18f2` (section 2).
 
 ## 2. Conservative cleanup (this commit)
 
@@ -150,20 +151,28 @@ review against the in-series YAMLs and the standard 6.18 bindings.
 - **hardware boot-test of the rebuilt image is still required** after this
   change; host checks cannot substitute for it.
 
-## 6. Remaining upstream blockers
+## 6. Remaining upstream blockers (six)
 
 1. In-series drivers + YAML bindings are still drafts (26 review-form patches +
    the DTS companion), not an accepted upstream submission.
 2. `hsan,flashinfo_reserved` has no upstream binding.
 3. `fixed-layout`/`mac-base` nvmem cells are v6.19 content on a 6.18
    baseline.
-4. Switch binding/node-name rework (queue-first reg-names).
-5. cudy compatible ordering + OpenWrt board metadata sync.
-6. TWD timer interrupt flags need a hardware re-check.
-7. Missing upstream-required content: pinctrl consumer states, consumer clocks,
-   A/B boot-selector protocol beyond the measured 0x10/0x11 cell, LED
-   function/color descriptions.
-8. Wi-Fi/thermal/unused vendor blocks remain out of scope (wired-first target).
+4. Switch binding/node-name rework (the binding's queue-first `reg-names`
+   order; upstream wants the MMIO windows first, which also renames the node).
+5. `cudy,wr3000-v2` compatible ordering + OpenWrt board metadata/sysupgrade
+   sync.
+6. TWD timer interrupt flags need a hardware re-check (measured `0x301` is
+   kept as-is).
+
+**Not claimed / out of scope (not counted as blockers above):** pinctrl consumer
+states, consumer clocks, the A/B boot-selector protocol beyond the measured
+`0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi and thermal
+support, and the unused vendor blocks (wired-first target).
+
+**Current conservative devicetree final:** commit `7ae18f2` (active content
+byte-identical to the known-good DTB); the superseded active cleanup `538377c`
+is recorded in section 1 and is **not** current.
 
 ## 7. Single-source and regeneration
 

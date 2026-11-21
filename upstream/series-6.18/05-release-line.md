@@ -124,9 +124,9 @@ pre-clean-DTS image used as the hardware baseline for the DTS work):
   0.93-1.16 s, luofu-reboot 2.28 s, luofu-wdt 2.30 s, ubi attach 2.68 s,
   init 3.01 s.  The conservative comment-only DTS compiles to this exact
   DTB (sha256 `49fe5c47...`), so the devicetree semantics are the
-  hardware-verified ones; the superseded active cleanup (image
-  `6f19c6d6`) did NOT boot and is recorded in
-  `07-dts-upstream-bindings.md` section 1.  [V]
+  hardware-verified ones (conservative final: commit `7ae18f2`); the
+  superseded active cleanup (image `6f19c6d6`) did NOT boot and is recorded
+  in `07-dts-upstream-bindings.md` section 1.  [V]
 
 The `974e6ca6` details:
 - built from: L0 patch stack (62 files: 001-058 + 062-065), the DTS hand-off

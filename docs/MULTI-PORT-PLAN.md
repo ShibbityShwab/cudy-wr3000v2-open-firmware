@@ -64,3 +64,29 @@ Purpose: decide whether the CPU-copy path can carry a per-port source identifier
 
 Until the experiment runs, the verified bench topology is: host on the eth2 jack,
 br-lan 192.168.1.1/24, mirror eth2/port 11 -> CPU dst 4, cpucopy delivery to eth2.
+
+## Prepared experiment image (2026-11-21)
+
+- Image: **a91ebcf0** (save copy: staging-fi/img-mirrorprobe.bin, sha256
+  a91ebcf04892ac9d5128c6ae5144eb9d6e09674b98938aac0aa8af289b3bc653).
+- It is the verified 7421bb7a userspace/kernel plus two bench-only changes:
+  1. patch 066-net-lsw-mirror-src-mask.patch (saved in
+     opensource/docs/incoming/multi-port-probe/): adds the
+     luofu_switch.mirror_src_mask module parameter (default 0x800 = BIT(11))
+     and uses it in the mirror program/readback instead of the hardcoded BIT(11);
+  2. built-in cmdline probe tokens: luofu_pie.rxdiag=1 and
+     luofu_switch.mirror_src_mask=0x1e00 (mirror ports 9,10,11,12 ingress to
+     CPU dst 4; full RXDIAG descriptor dump for the first completions).
+- Run plan when the bench cable is back on the eth2 jack:
+  1. install this image with tools/stock-telnet-install.sh (verify PASS, 2 CPUs,
+     ping/SSH on eth2);
+  2. capture the RXDIAG descriptor lines for host traffic on eth2 (baseline);
+  3. move the cable to the candidate jack, ping from the host, capture the RXDIAG
+     lines again;
+  4. compare all descriptor bytes (port/vport/status/desc words) between the two
+     jacks; a differing source-identifying field decides the CPU-copy extension
+     vs native-bridge path (decision gate above);
+  5. restore the known-good image 7421bb7a afterwards.
+- The probe changes are bench-only (patch lives under docs/incoming, not in the
+  release series; the build clone was restored to the canonical config and patch
+  set after producing the image).

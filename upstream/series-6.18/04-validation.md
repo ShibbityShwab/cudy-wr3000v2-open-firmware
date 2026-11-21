@@ -1119,7 +1119,8 @@ The known-good image 7421bb7a (pre-clean DTS) shows partition scan
 3.01 s.  Host checks (apply, dtc, contract, pad, DTS-0001 identity) are
 therefore necessary but **not sufficient**.
 
-**Conservative cleanup:** starting from the pre-clean, hardware-verified DTS
+**Conservative cleanup (commit `7ae18f2`, current final):** starting from
+the pre-clean, hardware-verified DTS
 (1,329 lines), only comments were removed (the long file header and all
 per-node prose); every active node name, unit address, property order/value,
 reg order, status, label, phandle, child name and alias is unchanged.  New

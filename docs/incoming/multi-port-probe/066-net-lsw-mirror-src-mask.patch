@@ -1,0 +1,33 @@
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c	2026-11-21 14:33:16.623224961 +0700
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c	2026-11-21 14:33:16.630642462 +0700
+@@ -3186,6 +3186,11 @@
+ module_param_named(mirror_dst, luofu_switch_mirror_dst, uint, 0444);
+ MODULE_PARM_DESC(mirror_dst, "W17 mirror destination switch port (default 4; 40..43 is the virtual-port class)");
+ 
++static uint luofu_switch_mirror_src_mask = 0x800;
++module_param_named(mirror_src_mask, luofu_switch_mirror_src_mask, uint, 0444);
++MODULE_PARM_DESC(mirror_src_mask, "BENCH multi-port probe: 16-bit ingress mirror source-port mask (default 0x800 = BIT(11) eth2)");
++
++
+ static bool luofu_switch_mirror_sweep_gate;
+ module_param_named(mirror_sweep, luofu_switch_mirror_sweep_gate, bool, 0444);
+ MODULE_PARM_DESC(mirror_sweep, "W17 experiment: try mirror destinations 4,5,6,7,8,40,41,42,43 at ~2 s intervals during the host traffic test (default off)");
+@@ -3227,7 +3232,8 @@
+ 		lsw->mirror_valid = true;
+ 	}
+ 
+-	want_d8 = (lsw->mirror_snap[2] & ~0xffff) | BIT(11);
++	want_d8 = (lsw->mirror_snap[2] & ~0xffff) |
++		  (luofu_switch_mirror_src_mask & 0xffffu);
+ 	want_dc = (lsw->mirror_snap[3] & ~(0xffffu << 16)) |
+ 		  ((((dst & 0xf) << 4) | 0x600) << 16);
+ 	want_c0 = lsw->mirror_snap[1] | BIT(6);
+@@ -3238,7 +3244,7 @@
+ 	writel(lsw->mirror_snap[0] | BIT(0), opp + 0xb4);
+ 	writel(lsw->mirror_snap[0] & ~BIT(0), opp + 0xb4);
+ 
+-	if ((readl(opp + 0xd8) & 0xffff) != BIT(11) ||
++	if ((readl(opp + 0xd8) & 0xffff) != (luofu_switch_mirror_src_mask & 0xffffu) ||
+ 	    ((readl(opp + 0xdc) >> 16) & 0x7f0) !=
+ 	    ((((dst & 0xf) << 4) | 0x600) & 0x7f0) ||
+ 	    (readl(opp + 0xc0) & BIT(6)) != BIT(6)) {
