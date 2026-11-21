@@ -277,7 +277,32 @@ the next reviewable step in m1a/napt-init/ (NAPT-INIT-PROPOSAL.md, apply-napt-in
 observe-napt-init.sh, check-napt-path.sh). The write planner's default NAPT refusal is kept; the
 prototype uses its own explicit 13-address allow-list with the same fail-closed rules.
 
-## 12. Evidence map
+## 12. M1a PROVEN on hardware (2026-11-21): the NAPT init replay is the missing piece
+
+Proof image 5800c9ab (canonical adopted release tree + command-line change only:
+luofu_switch.cpu_mirror=0 luofu_napt_init=1 luofu_pie.rxdiag=1, plus the probe-only
+/etc/init.d/luofu-napt-init that replays the decoded hi_pfe_napt_init sequence) was
+broker-installed on pair b and booted:
+
+- 6.18.60, 2 CPUs, TWD Level; no Oops/BUG/panic; dmesg "luofu-napt-init: applied
+  (up_port=0x10000034 bases=0x80400000/0x80408000)";
+- with the CPU mirror OFF: host ping 200/200, 0% loss, working SSH to 192.168.1.1;
+- UART RXDIAG: native deliveries with port=11 (eth2) and the non-zero class **status=77**;
+  the E0-a status=37 "error" frames are gone;
+- NAPT init registers read back the stock values (pfe_glb+0x2c=0x10000034, napt+0x64=1,
+  napt+0x130=0x80400000, napt+0x50=0x00f00b69); eth2 rx 51648 at capture time.
+
+Evidence: m1a/napt-init/proof-image/RESULT.md, luofu-napt-init.sh, build/evidence-bench-gates/
+m1a-proof/ (gitignored), submodule 04c336b / parent 047b5b7.
+
+Why it matters: the configuration path is exactly the one decoded in section 11 - IFC defaults
+punt broadcast/ARP to the CPU and route unicast into the PFE NAPT/flow engine; with the engine
+initialized (flow table bases in the reserved switch carveout, v4/v6 tables cleared), the
+up-direction punt delivers unicast to the CPU. The CPU-copy mirror workaround is therefore no
+longer required for eth2 (M1a). The next steps are to move the sequence into the driver (W22,
+w22/), widen it to all ports and LAN-to-LAN (M1b, m1b/), and rebuild/validate the release image.
+
+## 13. Evidence map
 
 | claim | artifact |
 | --- | --- |

@@ -3,16 +3,15 @@
 **Status 2026-11-21. Host-side plan only.** No register has been written for this plan; no
 hardware has been used; the release patch series and the curated upstream tree are untouched.
 
-> **Revision 2026-11-21 (after the E0-a, E0-b, M1a and stock-procfs rounds):** read sections 2.1,
-> 2.2, 2.3 and 4.4 first. E0-a proved the exception path works natively but only ARP-class traffic
-> is punted. E0-b decoded the stock-vs-ours deltas (tagact = tag delete, pfe_glb = up_port, L2 page
-> = DFX counters, IFC identical). The two M1a replay probes were then run on hardware and were
-> both NULL (tagact write ignored; up_port no effect), so the write experiments closed. The
-> consistent-stock decoded procfs capture then resolved the mechanism: IFC punts broadcast to CPU
-> (ifc_tocpu=104) and routes unicast to the NAPT/flow engine (ifc_napt=170 -> up_tocpu=129); our
-> image has the IFC defaults but NAPT uninitialized. The next step is the NAPT init replay in
-> m1a/napt-init/ (register-only, reserved switch flow window). Milestones: M1a (unicast to eth2),
-> M1b (multi-port).
+> **Revision 2026-11-21 (after E0-a, E0-b, M1a and the stock-procfs round):** read sections 2.1,
+> 2.2, 2.3 and 4.4 first. E0-a showed the exception path works natively but only ARP-class traffic
+> is punted; E0-b decoded the stock-vs-ours deltas. The M1a replay probes were both NULL (tagact
+> write ignored; up_port no effect), but the stock counter decomposition showed the real mechanism:
+> IFC punts broadcast to CPU (ifc_tocpu=104) and routes unicast into the NAPT/flow engine
+> (ifc_napt=170 -> up_tocpu=129). **M1a is now PROVEN**: proof image 5800c9ab (mirror off + the
+> decoded hi_pfe_napt_init replay) gives native port=11 status=77 deliveries, ping 200/200 and
+> SSH. The next steps are W22 (move the sequence into the driver; drafts + release integration in
+> w22/) and M1b (per-port and LAN-to-LAN; m1b/). Milestones: M1a met, M1b next.
 This plan extends the release line's verified bench workaround
 ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md), [../../LSW-SPEC.md](../../LSW-SPEC.md),
 [../../PIE-DATAPATH.md](../../PIE-DATAPATH.md)) with the path to per-port native forwarding.
@@ -282,6 +281,15 @@ Expected observable (mirror still on): eth2 rx_packets delta about 2x the contro
 then the cpu_mirror=0 proof boot. A read-only confirmation first: m1a/napt-init/check-napt-path.sh
 before/after a ping must show the IFC napt-class counter rising while up_tocpu stays 0.
 
+**Outcome (2026-11-21): M1a PROVEN.** Proof image 5800c9ab booted with the mirror off and the
+userspace NAPT replay: native port=11 status=77 deliveries, host ping 200/200, SSH working; the
+E0-a status=37 error class is gone. The sequence is now being moved into the driver as W22:
+drafts and release-integration plan in w22/ (0001-net-lsw-napt-init, 0002-net-pie-exception-
+delivery; both compile/checkpatch clean host-side, not yet in the release series). M1b plan in
+m1b/M1B-PLAN.md. The mirror patches 054-057 stay as a documented fallback (default off) until a
+W22-only soak; the canonical command line drops the mirror/accepterr/cpucopy tokens (exact diff
+in w22/RELEASE-INTEGRATION.md).
+
 ---
 
 ## 3. Current netdev + driver model (what the first patch builds on)
@@ -518,8 +526,9 @@ door armed and a UART capture. The tools referenced are the repository's:
 | S2 | **N0-b read-only stock-vs-ours capture - DONE 2026-11-21** (ours image 6e9c54d0 vs stock; 9,488 words each, 0 failures); decode in `E0B-ANALYSIS.md`: no readable unicast-to-CPU enabler; only tagact entry 1 and pfe_glb+0x2c are stock-only config words, L2 page = DFX counters | bench + host | none | done; candidate list = m1a/ proposal |
 | S2b | **M1a replay probes - RUN 2026-11-21: BOTH NULL**. A (tagact entry 1): write ignored (wrote 0xc000, read 0x0). B (pfe_glb+0x2c): accepted/read back, eth2 rx delta stayed 531 = mirror only. All words reverted; write experiments closed | bench | none left | negative result recorded in E0B-RESULTS/ANALYSIS; mechanism resolved by S2d |
 | S2c | **Decoded procfs capture on consistent stock - DONE 2026-11-21** (hsan-stock/hsan2/, 137 files): ifc_tocpu=104 broadcast vs ifc_napt=170 -> napt up_tocpu=129 unicast; dp port4 274/274. Conclusion: the CPU-punt rule for unicast is the NAPT/flow engine path, not an IFC table entry | bench + host | none | mechanism resolved; next step S2d |
-| S2d | **NAPT init replay prototype (next hardware step)** - m1a/napt-init/apply-napt-init.sh (12 register writes + 2 polled clear commands; stock values; flow table bases in the reserved switch carveout). Read-only confirmation first: check-napt-path.sh before/after a ping (IFC napt-class counter rises, up_tocpu stays 0) | host + bench | 12 words, NAPT window, explicit allow-list | readback exact and commands complete; eth2 rx delta about 2x the ping count + napt up_tocpu increments -> go to S2e; null -> decode hi_pfe_pub_init flow setup next, no further writes |
-| S2e | **M1a proof boot** - only if S2d shows the native signal: boot the release-line image with `luofu_switch.cpu_mirror=0` (the E0-a build recipe), attended with UART; ICMP unicast must work without the mirror | bench | cmdline only | M1a proven (unicast-to-CPU on eth2 without the mirror) |
+| S2d | **NAPT init replay - DONE 2026-11-21**: the decoded hi_pfe_napt_init sequence was replayed by the probe-only init script and **M1a was proven**. Proof image 5800c9ab: mirror off, native port=11 status=77 deliveries, ping 200/200, SSH working; stock NAPT registers read back. Evidence m1a/napt-init/proof-image/ | bench | userspace probe script | M1a proven |
+| S2e | **M1a proof boot - DONE** with the proof image above; the E0-a mirror-off failure is explained and superseded | bench | cmdline + probe script | done |
+| S2f | **W22 driver adoption (next)** - stage patches 059/060 into the release line, rebuild the canonical image with the new command line, and bench-test the kernel implementation (not the userspace script). Drafts + exact integration/validation steps in `w22/` | host + bench | new release patches | W22 image boots, native ping/SSH with no mirror, reboot/soak pass, fallback image still works |
 | S3 | **N1 (revised): replay the unicast-to-CPU candidate set** (stock-readable IFC/L2/OPP words preferred) - via `plan-writes.sh` (devmem) or the W21 driver stage; mirror excludes only the experimented port | bench | candidate words | readback exact; with `cpu_mirror=0` on the next boot, ICMP unicast is delivered natively to eth2 (M1a); rollback otherwise |
 | S4 | **N2: per-port punt classification** (Route B) if S3 shows nothing: build the W21 driver stage with the tag/punt entries, mirror off for the target port, one entry per attended run | host + bench | new driver stage | native delivery with correct ingress identity for the target port |
 | S5 | repeat S4 for each wired port; keep management port on mirror until last | bench | stage writes | all four ports native; bridge/router works |
@@ -541,15 +550,16 @@ of the experiment.
 
 ## 7. First patch design (release-line W21 stage) - not compiled here
 
-**Ordering after E0-b and M1a (both NULL):** the first hardware step is still not this driver
-patch. It is the NAPT init replay prototype (m1a/napt-init/, section 2.3 / 6 S2d). If that
-prototype produces the native duplicate signal, the driver work becomes a **W22 NAPT/flow init
-stage**: the same register sequence behind a gate (luofu_switch.naptinit=1), with the flow table
-bases derived from the DT flow window, the two clear commands polled with the vendor timeout, and
-the stage re-applied from the link worker like the mirror. The W21 IFC/tag stage is deferred: the
-IFC defaults are already installed and the tag action is not on the CPU-punt path. The remaining
-decode for W22 is the hi_pfe_pub_init flow-table/manager setup, only if the register-only replay
-is insufficient.
+**Status: M1a proven, W22 drafts prepared.** The devmem prototype is done; the driver change is
+now drafted as two release-line patches in `w22/`: 0001-net-lsw-napt-init (W22 stage
+in luofu-switch.c/regs.h; vendor-faithful order after W8 and before W10, always-on gate with
+naptinit default 1, carveout validation, idempotent guard, polled clear commands, snapshot
+restore) and 0002-net-pie-exception-delivery (W22b: deliver the native exception/CPU-delivery
+class by default, retire luofu_pie.accepterr). Host validation: applies to the release tree, both
+objects compile in a configured 6.18 tree, checkpatch clean; not yet in the release series and
+not yet run on hardware as driver code. The W21 IFC/tag stage stays deferred: the IFC defaults are
+already installed and the tag action is not on the CPU-punt path. Release integration/validation
+steps are in w22/RELEASE-INTEGRATION.md; M1b in m1b/M1B-PLAN.md.
 
 The first patch is intentionally **data-driven and fail-closed**, in the same style as W10/W12.
 It is designed against the current release-line driver
@@ -680,6 +690,9 @@ this document.
 | L2 l2+0x40000 = DFX counters | `E0B-ANALYSIS.md` section 4; hi_pfe_dfx_dump_cnt string map |
 | M1a probe scripts, plans, runbook | `m1a/` (SESSION.md, probe-*.plan, apply-*.sh, observe-m1a.sh) |
 | M1a probes both NULL (tagact ignored; up_port no effect) | `E0B-ANALYSIS.md` section 11; `E0B-RESULTS.md` M1a results; m1a/SESSION.md closeout |
+| **M1a PROVEN** (NAPT init replay; native port=11 status=77, mirror off) | `E0B-ANALYSIS.md` section 12; `m1a/napt-init/proof-image/RESULT.md` (image 5800c9ab; evidence build/evidence-bench-gates/m1a-proof/) |
+| W22 driver patches + release integration | `w22/` (0001/0002 patches, W22-DESIGN.md, RELEASE-INTEGRATION.md) |
+| M1b experiment plan | `m1b/M1B-PLAN.md` |
 | CPU-punt mechanism = IFC broadcast->CPU + IFC unicast->NAPT->CPU | `E0B-ANALYSIS.md` section 11; stock procfs counters build/evidence-bench-gates/hsan-stock/hsan2/ |
 | NAPT init write path decoded (hi_pfe_napt_init) + reserved flow carveout safety | `m1a/napt-init/NAPT-INIT-PROPOSAL.md`; fixture hi_pfe_napt_init@0x4314; DT memory@80500000 + switch reg flow window 0x80400000/1MiB |
 | NAPT init prototype scripts (fail-closed, host-tested) | `m1a/napt-init/` (apply-napt-init.sh, observe-napt-init.sh, check-napt-path.sh) |

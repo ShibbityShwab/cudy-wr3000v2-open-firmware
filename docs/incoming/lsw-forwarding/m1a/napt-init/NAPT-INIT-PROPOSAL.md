@@ -3,6 +3,11 @@
 Status 2026-11-21, host-only proposal after the two M1a nulls and the stock decoded procfs
 capture (build/evidence-bench-gates/hsan-stock/hsan2/). No device write is made by this file.
 
+> **UPDATE 2026-11-21: M1a PROVEN.** The sequence below was replayed by the lead from a probe-only
+> init script on proof image 5800c9ab (mirror off): host ping 200/200, SSH working, native UART
+> RXDIAG port=11 status=77 deliveries. The kernel-side implementation is now drafted in
+> ../w22/ (patch 0001) with the release integration plan in ../w22/RELEASE-INTEGRATION.md.
+
 ## 1. What the M1a nulls told us
 
 - Probe A (tagact entry 1 at 0x124d4014=0xc000): write **ignored**, readback 0. The pub-window tag

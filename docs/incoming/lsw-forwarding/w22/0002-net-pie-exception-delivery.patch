@@ -1,0 +1,70 @@
+diff --git a/drivers/net/ethernet/hisilicon/luofu-pie.c b/drivers/net/ethernet/hisilicon/luofu-pie.c
+--- a/drivers/net/ethernet/hisilicon/luofu-pie.c
++++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
+@@ -520,21 +520,22 @@
+ 
+ /*
+  * Patch 053 diagnostics: rxdiag prints the whole completion descriptor for the
+- * first completions of both classes; accepterr is the experimental step that
+- * delivers vendor-exception completions (status != 0) to the net_device
+- * registered for the decoded error-path port (observed: port 11 = eth2) - the
+- * vendor stack drops them, but on this bench they are the host's ingress
+- * frames, so accepting them tests whether the software path can complete the
+- * wire->CPU->wire loop without the missing CFE flow tables.
++ * first completions of both classes.
++ *
++ * W22 (patch 060): the PFE flow-engine NAPT init (W22) makes the native CPU
++ * delivery path real, and those deliveries arrive in the completion status
++ * class that was previously treated as an error (the 2026-11-21 proof image
++ * saw status 77 on native port=11 frames; the earlier mirror-era experiments
++ * saw the same non-zero class as status 37 for IFC-punted ARP frames).  This
++ * class is the intended exception/CPU-delivery class, not a corrupt frame, so
++ * it is delivered to the net_device registered for the decoded port by default.
++ * The old attended luofu_pie.accepterr gate and its command-line token are
++ * gone: dropping the class was a mirror-era workaround, not a requirement.
+  */
+ static bool luofu_pie_rxdiag_gate;
+ module_param_named(rxdiag, luofu_pie_rxdiag_gate, bool, 0444);
+ MODULE_PARM_DESC(rxdiag, "Attended W17_RXDIAG diagnostic: print the full 32-byte RX completion descriptor and the vendor-exact decode for the first completions (default off)");
+ 
+-static bool luofu_pie_accepterr_gate;
+-module_param_named(accepterr, luofu_pie_accepterr_gate, bool, 0444);
+-MODULE_PARM_DESC(accepterr, "Attended W17 experiment: deliver vendor-exception completions (status != 0) to the netdev registered for the decoded error-path port instead of dropping them (default off)");
+-
+ /*
+  * W18_RXSTROKE (patch 055): the W17 mirror run produced ICMP replies while the
+  * console showed no RXDIAG/RXERR lines at all, i.e. the RX interrupt/poll path
+@@ -557,8 +558,9 @@
+  * the bench they are the host frames arriving through the mirror.  This gate
+  * delivers them to the net_device registered for the mirror source port
+  * (luofu_pie.cpucopy_port, default 11 = eth2) instead of dropping them, and
+- * logs the first deliveries.  Vendor behaviour is kept for every other port
+- * and for all exception completions (those still follow luofu_pie.accepterr).
++ * logs the first deliveries.  Vendor behaviour is kept for every other port;
++ * exception-class completions are delivered by the W22 rule above (the old
++ * attended accepterr gate is gone).
+  */
+ static bool luofu_pie_cpucopy_deliver_gate;
+ module_param_named(cpucopy_deliver, luofu_pie_cpucopy_deliver_gate, bool, 0444);
+@@ -1470,17 +1472,10 @@
+ 					compl.vlan, w[0], w[1], w[2], w[3],
+ 					w[4], w[5], w[6], w[7]);
+ 			}
+-			if (compl.err) {
+-				if (!luofu_pie_accepterr_gate) {
+-					dev_kfree_skb_any(skb);
+-					pie->rx_errors++;
+-					continue;
+-				}
+-				if (n <= 8)
+-					pr_info("pie-trace RXERR ACCEPTED (accepterr=1, vendor would drop) status=%u port=%u vport=%u len=%u ch=%u\n",
+-						compl.status, compl.port,
+-						compl.vport, compl.len, ch);
+-			}
++			if (compl.err && n <= 8)
++				pr_info("pie-trace RXEXC delivered (W22 native CPU-delivery class) status=%u port=%u vport=%u len=%u ch=%u\n",
++					compl.status, compl.port,
++					compl.vport, compl.len, ch);
+ 		}
+ 
+ 		luofu_pie_rx_deliver(pie, np, skb, &compl);

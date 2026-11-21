@@ -84,3 +84,11 @@ the reserved 0x80400000/1 MiB switch carveout which is outside Linux memory) - s
 m1a/napt-init/NAPT-INIT-PROPOSAL.md, apply-napt-init.sh, observe-napt-init.sh and
 check-napt-path.sh. Expected observable with the mirror on: eth2 rx_packets delta about 2x the
 ping count and napt up_tocpu / ifc_napt counters incrementing; then the cpu_mirror=0 proof boot.
+
+### M1a PROVEN (2026-11-21)
+
+The decoded NAPT-init replay worked on hardware: proof image 5800c9ab (canonical tree + cmdline
+change only, userspace replay script) booted with cpu_mirror=0 and gave host ping 200/200, working
+SSH, UART RXDIAG native port=11 status=77 deliveries, and stock NAPT register readback. The
+status=37 error class of E0-a is gone. Next: W22 (move the sequence into the driver, see w22/),
+M1b (per-port and LAN-to-LAN, see m1b/), release rebuild/validation.

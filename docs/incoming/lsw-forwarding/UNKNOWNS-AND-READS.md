@@ -381,6 +381,42 @@ Expected if the NAPT diagnosis is right: the IFC block's ifc_napt-class word inc
 copies, and no new native delivery appears. That confirms the frames reach NAPT and die there,
 which is what the m1a/napt-init replay is designed to fix.
 
+## Status update 2026-11-21 (M1a PROVEN - the NAPT init replay delivered native CPU delivery)
+
+The reviewed NAPT replay was run from a probe-only boot script on proof image 5800c9ab (canonical
+adopted tree + command-line change only: cpu_mirror=0 luofu_napt_init=1 luofu_pie.rxdiag=1):
+
+- boot 6.18.60, 2 CPUs, no Oops/BUG/panic; dmesg "luofu-napt-init: applied
+  (up_port=0x10000034 bases=0x80400000/0x80408000)";
+- with the mirror OFF: host ping 200/200 0% loss AND working SSH; UART RXDIAG native port=11
+  deliveries with status=77 (the E0-a status=37 class is gone);
+- NAPT registers read back the stock values.
+
+So **U20 is answered: yes, the decoded hi_pfe_napt_init replay alone is sufficient** for the
+eth2 unicast CPU delivery; the earlier "NAPT init alone will not produce native forwarding"
+caution is superseded by the measured result (the replay includes the flow-table bases and the
+v4/v6 clear commands, which is what the engine needed).
+
+Implications for the remaining list:
+- **U21 (persistence/re-apply)**: the proof image kept working through its boot (link came up
+  after the replay). Whether the NAPT config survives link flap/reboot must be checked in M1b
+  (m1b/M1B-PLAN.md, M1b-4). The mirror's post-link reset is the precedent; W22 has an idempotent
+  guard so a re-apply can be added cheaply if needed.
+- **U22 (completion status classes)**: the native punt class is status 77 on the proof boot
+  (status 37 was the older IFC/ARP exception class under the mirror-era configuration). W22b
+  delivers every non-zero status class with a valid decoded port by default (no accepterr token);
+  the first deliveries are logged as RXEXC. If M1b sees other status values, the same rule covers
+  them and the log records them - open only as a catalogue to collect.
+- **U23 (LAN-to-LAN class coverage)**: does the punt deliver unknown-unicast/broadcast/LAN-to-LAN
+  frames to the CPU, or only traffic to the box? This decides software-bridge sufficiency vs the
+  hardware bridge; M1b-2/M1b-3 answer it.
+- **U24 (W22 as kernel code)**: the proof used a userspace init script; the driver implementation
+  (w22/ patches) compiles/checkpatch-clean host-side but has not run on hardware yet. The first
+  W22 image boot is the remaining validation.
+- **U25 (mirror retirement)**: mirror patches 054-057 stay in the release line default-off as a
+  fallback. Retire the code only after a W22-only soak; the fallback command line is in
+  w22/RELEASE-INTEGRATION.md.
+
 ## U12 - completion of the identity path (success criterion)
 
 M1 is met when, for all four wired ports, a frame from the bench host (cable on that jack)

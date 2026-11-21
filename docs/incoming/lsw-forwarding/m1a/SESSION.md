@@ -116,6 +116,15 @@ prepared in [napt-init/](napt-init/) (read the proposal first):
 
 Do not re-run the m1a/ probe scripts - they are kept only as the record of the NULL result.
 
+## Update 2026-11-21: M1a PROVEN - this runbook is now historical
+
+The NAPT replay proposed here was executed successfully by the lead: proof image 5800c9ab (the
+decoded sequence replayed from a probe-only /etc/init.d hook) booted with the CPU mirror off,
+ping 200/200 0% loss, working SSH, native UART RXDIAG port=11 status=77 deliveries. The proof
+record is in napt-init/proof-image/RESULT.md; the sequence is now being moved into the driver
+(w22/ patches 0001/0002). The m1a probe scripts in the parent directory are kept only as the
+record of the NULL experiments; do not re-run them.
+
 ## 7. What remains untested after this session
 
 - Whether the tag action entry is referenced at all by the engine on our image (no readable
