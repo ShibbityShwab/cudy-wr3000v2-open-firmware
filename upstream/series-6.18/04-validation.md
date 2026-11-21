@@ -1156,3 +1156,47 @@ hardware-tested before use (`07-dts-upstream-bindings.md` section 3).
 **Hardware boot-test of the rebuilt image is still required** after this
 change; the byte-identical DTB is strong evidence, not a substitute for one
 attended boot.
+
+
+## 24. 2026-11-21 submission-package validation run (final)
+
+Fresh host-only run on the current tree for the submission package
+(`submission/`).  Commands: `tools/check-release-line.sh --use-tree
+<pristine> <workdir>`, `tools/run-validation.sh --use-tree <pristine>
+<workdir>`, `python3 tools/gen-series.py --check` and
+`sha256sum -c validation/sha256sums.txt`.  No hardware and no kernel build
+was involved.
+
+**Results:**
+
+- **release line (final run):** 51/51 patch(1) RC=0, 146 file events,
+  3 offset hunks, **0 fuzz, 0 rejects**; strict `git apply`: all 51 apply
+  without fuzz; board DTS compile cpp+dtc RC=0, 0 stderr; target DTB
+  **13,041 B** sha256
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`;
+  totalsize unaligned, `pad-dtb.py` pads to **13,048 B** sha256
+  `402e4f71d12fca46e1d940c7b60a123e3ce1a734acec17b67bbf7ae338d91e03` and
+  the loader hand-off contract is preserved; DTS-0001 applies, is
+  byte-identical to the single source and compiles to the same DTB; **PASS**.
+- **upstream review form (final run):** 26/26 patch(1) RC=0 (3 offset hunks,
+  0 fuzz), `git am` 26/26 RC=0, resulting trees identical; checkpatch
+  default and `--strict`: **0 errors, 58 warnings**.
+- `gen-series.py --check`: clean (26 patches up to date);
+  `validation/sha256sums.txt`: 89 entries, `sha256sum -c` passes
+  89/89.
+- **submission package:** `submission/README.md` (artifact checklist,
+  status, commands, blockers), `submission/cover-email-draft.md` (one-page
+  v3 RFC draft, not sent), `submission/TESTED-BY-POLICY.md` (no upstream
+  Tested-by; target-image evidence only) and `submission/MANIFEST.sha256`
+  (sha256 of every package artifact, paths relative to `submission/`,
+  verified with `sha256sum -c` inside the package).  The manifest sha256
+  itself is recorded in the submission commit and the hand-off report; nothing
+  was submitted to any mailing list, account or web service.
+- **current conservative devicetree final:** commit `7ae18f2` (DTS 691
+  lines sha256 `9d2d39db...`; DTS-0001 sha256 `072d0b8b...`;
+  compiled DTB byte-identical to the known-good DTB).  The superseded active
+  cleanup `538377c` is recorded as regressed in section 22 and is not
+  current.
+- Host checks are necessary but **not sufficient**: the rebuilt image must be
+  boot-tested on the unit after any active-DTS change before it is treated as
+  hardware-validated.
