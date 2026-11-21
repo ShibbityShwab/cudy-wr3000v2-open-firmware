@@ -1,7 +1,7 @@
 --- a/drivers/net/ethernet/hisilicon/luofu-pie.c
 +++ b/drivers/net/ethernet/hisilicon/luofu-pie.c
-@@ -515,6 +515,23 @@
- MODULE_PARM_DESC(nodoorbell, "Attended hang bisection: build and publish TX descriptors but never ring the channel doorbell (default off)");
+@@ -519,6 +519,23 @@
+ MODULE_PARM_DESC(rxtrace, "Attended RX-path diagnosis: log the first 32 RX completions with raw descriptor words and decode/drop result");
  
  /*
 + * Patch 053 diagnostics: rxdiag prints the whole completion descriptor for the
@@ -24,7 +24,7 @@
   * Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours
   * RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the
   * vendor state of the same registers; two stand out as candidates for the
-@@ -709,28 +726,57 @@
+@@ -713,28 +730,57 @@
  	u16 len;
  	u8 status;
  	unsigned int port;
@@ -90,7 +90,7 @@
  
  	if (compl->port > LUOFU_PIE_RX_PORT_MAX)
  		return -EIO;
-@@ -1283,6 +1329,32 @@
+@@ -1300,6 +1346,32 @@
  			continue;
  		}
  

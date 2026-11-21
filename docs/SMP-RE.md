@@ -1380,8 +1380,8 @@ lane filed 040-net-gmac-w9-diag.patch and 041-net-gmac-macconf-nodoorbell.patch 
 the same time (those two do not apply cleanly on a fresh 001-039 series as of this
 writing - flagged for the net lane, not part of this post's validation window).
 
-target-skeleton/target/linux/hisilicon/patches-6.18/042-arm-hisilicon-smp-scu-gic.patch
-(platsmp.c only; keeps all 039 behaviour):
+target-skeleton/target/linux/hisilicon/patches-6.18/062-arm-hisilicon-smp-scu-gic.patch
+(renumbered from 042-arm on 2026-11-21; platsmp.c only; keeps all 039 behaviour):
 
 * new bare-name knob **luofu_smp_scu_cfg=<hex>**: ORs the mask into the SCU
   Configuration Register (0x10180004) at prepare time, before the release, and prints
@@ -1603,7 +1603,8 @@ Patch 060 probes that window.
 
 ### 22.1 Patch 060: two marker-only handoff probes
 
-target-skeleton/target/linux/hisilicon/patches-6.18/060-arm-hisilicon-smp-handoff-probe.patch
+target-skeleton/target/linux/hisilicon/patches-6.18/064-arm-hisilicon-smp-handoff-probe.patch
+(renumbered from 060 on 2026-11-21)
 touches three files; both probe blocks are guarded by CONFIG_ARCH_LUOFU and
 !CONFIG_THUMB2_KERNEL, and need no kernel config token:
 

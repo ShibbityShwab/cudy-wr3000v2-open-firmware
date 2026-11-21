@@ -4737,15 +4737,22 @@ so the box looked dead.  The UART showed it alive with no Oops/panic/BUG/WARNING
 the soak.  There is no SMP stability bug; the maxcpus=1 (`d101f96b`) and lockdep
 (`18b3cb1d`) images are diagnostics only.
 
-**Release-line classification.**  The release line is L0 (62 patch files) minus the
-11 bench-only SMP diagnostics (028, 029, 033, 034, 035, 037, 039, 042-arm, 059,
-060, 061) = **51 patches**; it is defined in
-`../upstream/series-6.18/05-release-line.md` with the per-patch manifest in
+**Release-line classification.**  The release line is L0 (62 patch files:
+001-058 + 062-065, no duplicate numbers) minus the 11 bench-only SMP
+diagnostics (028, 029, 033, 034, 035, 037, 039, 062, 063, 064, 065) =
+**51 patches**; it is defined in `../upstream/series-6.18/05-release-line.md`
+with the per-patch manifest in
 `../upstream/series-6.18/release-line/manifest.tsv`.  The upstream review form
-(26 patches) is unchanged in content.  Host validation (2026-11-21): review form
-26/26 patch(1)+git am RC=0; release line 51/51 patch(1) RC=0, 0 rejects, 1 fuzz
-hunk (053 vs 052 anchor, documented cleanup); loader hand-off DTS contract
-compiles (12,296 B DTB sha256
-`50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb`) and the two
-nodes are present.  The short release status is
+(26 kernel patches) is unchanged in content, and the loader hand-off DTS
+contract ships as the separate DTS-series entry **DTS-0001**
+(`../upstream/series-6.18/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`,
+companion to kernel patch 0018; see
+`../upstream/series-6.18/06-dts-series-dependency.md`).  Host validation
+(2026-11-21, after the 052/053 and numbering cleanup): review form 26/26
+patch(1)+git am RC=0, 0 errors / 58 checkpatch warnings; release line 51/51
+patch(1) RC=0, 0 rejects, 3 offset hunks, **0 fuzz**, strict git apply 51/51;
+L0 62/62 with 0 fuzz and strict-clean; target DTS and DTS-0001 both compile to
+the same 12,296 B DTB sha256
+`50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb` and the two
+hand-off nodes plus the enable-method are present.  The short release status is
 `../target-skeleton/RELEASE-NOTES.md`.

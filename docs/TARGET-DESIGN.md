@@ -7,7 +7,9 @@ section 24) and the canonical target image 974e6ca6 is a verified 2-CPU baseline
 working LAN (documented CPU-copy mirror workaround; native forwarding remains separate),
 SSH and a persistent overlay.  Release line, canonical configuration and the excluded
 bench diagnostics: [`../upstream/series-6.18/05-release-line.md`](../upstream/series-6.18/05-release-line.md);
-short status: [`../target-skeleton/RELEASE-NOTES.md`](../target-skeleton/RELEASE-NOTES.md).
+short status: [`../target-skeleton/RELEASE-NOTES.md`](../target-skeleton/RELEASE-NOTES.md).  The DTS contract is delivered as the explicit DTS-series entry **DTS-0001**
+  ([`../upstream/series-6.18/06-dts-series-dependency.md`](../upstream/series-6.18/06-dts-series-dependency.md)),
+  companion to kernel patch 0018.
 No OpenWrt submission exists today. A read-only stock-boot inventory (2026-11-18) closed three
 **[U]** rows used below - the live `queue`/`flow` DDR base, the PLL rate/control-word readback and
 the SMP pen-word readback - see [INVENTORY-2026-11-18.md](INVENTORY-2026-11-18.md). On

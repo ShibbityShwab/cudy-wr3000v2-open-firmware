@@ -55,11 +55,14 @@ opensource/docs/SMP-RE.md section 24.
 
 Important dependency: this patch is necessary but not sufficient.  The
 enable-method, the console alias and the flashinfo reserved-memory node
-are all board-DTS content and are not part of this kernel series; an
-upstream submission must carry them in its DTS series.  Without the
-enable-method the boot stays UP; without the two hand-off nodes CPU1 is
-never brought into the loader's pen-poll loop and the release has no
-consumer.
+are all board-DTS content and are not part of this kernel series.  The
+dependent upstream DTS-series entry is
+`dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+(DTS-0001: adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` with the two
+hand-off nodes; documented in `06-dts-series-dependency.md`).  Post the
+DTS entry together with, or before, this patch; without the enable-method
+the boot stays UP, and without the two hand-off nodes CPU1 is never
+brought into the loader's pen-poll loop and the release has no consumer.
 
 The patch remains an RFC for upstream review.  The target image that
 carries it is bench-verified (2 CPUs, wired LAN through the documented

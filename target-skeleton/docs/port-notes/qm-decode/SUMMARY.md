@@ -59,8 +59,9 @@ not an upstream design.
 - CPU-copy workaround documented with the W19 dwell evidence and the native-CFE long-term note.
 - Cosmetic checkpatch cleanup: multiple blank lines / blank-line-after-declarations in the W20/W19
   code paths, plus canonical-config notes in the module parameter descriptions.
-- Series numbering documental note: patches-6.18 currently has 001-058 = 59 files (duplicate 042
-  pair from the SMP lane).
+- Series numbering note (updated 2026-11-21): the duplicate 042 was resolved - the SMP diagnostics
+  are 062-065 - and the release line is 51 patches of the L0 stack (001-058 + 062-065); see
+  `opensource/upstream/series-6.18/05-release-line.md`.
 
 ## 6. Curated-repo / upstream series resync plan
 

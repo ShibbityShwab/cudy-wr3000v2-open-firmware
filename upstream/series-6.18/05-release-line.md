@@ -18,15 +18,18 @@ release line is the target patch stack that built and booted the verified image.
 
 | layer | what it is | size |
 | --- | --- | --- |
-| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 62 patch files (001-061 plus the duplicate `042` pair) |
+| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 62 patch files (001-058 + 062-065; no duplicate numbers) |
 | **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **51 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
 | **L2 upstream review form** | the kernel-only submission form in `series/` plus `00-06` docs | 26 patches (001-026), grouped merge-intent / RFC / do-not-merge |
+| **L3 DTS series entry (DTS-0001)** | the companion DTS patch the kernel-only form cannot carry: the board DTS with the two loader hand-off nodes required by 0018 | 1 patch, `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` (section 2, `06-dts-series-dependency.md`) |
 
 L1 is new here.  L0 is what the canonical image was built from; L2 is unchanged
 except for the documentation corrections in this update.  The loader hand-off DTS
 fix (section 2) is part of the board devicetree supplied by the **target tree**
-(`target-skeleton/dts/luofu-r116.dts`), not of any kernel patch, so it is
-release-critical but not a member of L0/L1/L2 patches.
+(`target-skeleton/dts/luofu-r116.dts`), not of any kernel patch: it is carried
+for review as the separate DTS series entry **DTS-0001** (L3), which is a
+release-critical dependency of kernel patch 0018.  L0/L1 are unchanged by that
+entry (the target's own `patches-6.18/` stack remains the build source).
 
 ## 2. THE SMP fix (release-critical): loader hand-off devicetree contract
 
@@ -63,8 +66,8 @@ Measured evidence [V]:
 - without the nodes, our UART showed the vendor warning `alias console not found`
   and the stock staging lines (`alias console=...`, `serialnr->high/low`,
   `atag_addr=0x80601000`) never appeared; with them, they print exactly like stock;
-- the fix makes CPU1 consume the real `secondary_startup` pen; the 060/061
-  sentinel stubs stayed untouched, which is the clean contrast to "diagnostic
+- the fix makes CPU1 consume the real `secondary_startup` pen; the 064/065
+  sentinel stubs (formerly 060/061) stayed untouched, which is the clean contrast to "diagnostic
   stub consumed";
 - resulting boot: `smp: Brought up 1 node, 2 CPUs`, `CPU1: thread -1, cpu 1,
   socket 0, mpidr 80000001`, 3987.86 BogoMIPS, `/proc/cpuinfo` = 2, online 0-1,
@@ -74,19 +77,27 @@ Measured evidence [V]:
 Where it is committed: `opensource` submodule `5a1b5b3` (DTS nodes) and `9e17d5c`
 (SMP-RE.md sections 21-24 with the root-cause record).
 
-Upstream action: a future kernel DTS series must carry these two nodes verbatim
-(or their accepted equivalents).  Patch `018` alone is necessary but **not
-sufficient** for SMP; the review-form documentation now says so.  Do not present
-060/061 (or 033-042) as the SMP fix in a release or upstream submission - they are
-diagnostics (section 6).
+Upstream action: the DTS contract must ship with kernel patch 0018.  The
+dependency is an explicit, commit-ready upstream artefact: **DTS-0001**,
+`dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+(sha256 `73d93769c0cf5e63c17932c2a0f7285cd5fda59e4c93164c94a96e9cf24be788`).
+It adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (byte-identical to the
+single-source target DTS) plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry;
+post it together with 0018.  The dependency record, ordering and regeneration
+procedure is `06-dts-series-dependency.md`, and `tools/check-release-line.sh`
+applies/compiles DTS-0001 and checks the contract on every validation run.  [V]
+
+Patch `018` alone is necessary but **not sufficient** for SMP; the review-form
+documentation now says so.  Do not present 064/065 (or 033-039/062/063) as the
+SMP fix in a release or upstream submission - they are diagnostics (section 6).
 
 ## 3. Verified 2-CPU baseline image 974e6ca6
 
 - image: `<local-staging-dir>/img-canonical.bin`, **6,226,222 B**,
   sha256 `974e6ca63f6e86418761bc0f135e438f07d0e6ef909c61bb0339f00c5596c508`.
-- built from: L0 patch stack (001-061, 62 files incl. duplicate 042), the DTS
-  hand-off fix, canonical command line, DEVMEM + static devmem tool + boot-pair
-  recorder; **no `luofu_smp_*` probe tokens**.
+- built from: L0 patch stack (62 files: 001-058 + 062-065), the DTS hand-off
+  fix, canonical command line, DEVMEM + static devmem tool + boot-pair recorder;
+  **no `luofu_smp_*` probe tokens**.
 - verified on hardware (2026-11-21) [V]:
 
 | check | result | evidence |
@@ -176,15 +187,18 @@ snapshot as features: [V]/[I]
 | `035-arm-hisilicon-smp-release-marker.patch` | `8724e926` | marker protocol iteration |
 | `037-arm-hisilicon-smp-early-probe.patch` | `2b073ec0` | early `setup_arch()` release experiment |
 | `039-arm-hisilicon-smp-early-safe.patch` | `37b7932b` | safe early-probe variant |
-| `042-arm-hisilicon-smp-scu-gic.patch` | `dc8511ed` | SCU/GIC reference dumps |
-| `059-arm-luofu-cpu1-up-trigger.patch` | `e8528316` | late `add_cpu(1)` sysfs retrigger |
-| `060-arm-hisilicon-smp-handoff-probe.patch` | `e1d9dc5f` | decompressor/stext hand-off markers |
-| `061-arm-hisilicon-smp-trampoline.patch` | `5e254fe4` | sentinel protocol + re-poll hand-off trampoline |
+| `062-arm-hisilicon-smp-scu-gic.patch` | `dc8511ed` | SCU/GIC reference dumps (renumbered from the duplicate 042) |
+| `063-arm-luofu-cpu1-up-trigger.patch` | `e8528316` | late `add_cpu(1)` sysfs retrigger (renumbered from 059 to keep dependency order) |
+| `064-arm-hisilicon-smp-handoff-probe.patch` | `e1d9dc5f` | decompressor/stext hand-off markers (renumbered from 060) |
+| `065-arm-hisilicon-smp-trampoline.patch` | `5e254fe4` | sentinel protocol + re-poll hand-off trampoline (renumbered from 061) |
 
 Why exactly these: after the DTS fix nothing in the SMP path needs them; no later
 release patch depends on them (verified: the 51-patch L1 applies in order,
 section 9); they were designed to answer "does CPU1 ever poll the pen", and the
-060/061 sentinels did exactly that.  Full hashes and one-line purposes are in
+064/065 sentinels did exactly that.  The numbering was cleaned on 2026-11-21:
+the duplicate 042 is gone (042-net stays; the former 042-arm is now 062) and its
+dependent diagnostics moved to 063/064/065 so that filename order stays
+dependency order.  Full hashes and one-line purposes are in
 `release-line/manifest.tsv`.
 
 The L0 lab stack still contains them so that the exact canonical image 974e6ca6
@@ -210,18 +224,19 @@ remains reproducible; L1 is the publication/release classification.
 
 Counts: 27 + 18 + 6 = 51, plus 11 excluded = 62 L0 files.
 
-Ordering notes:
+Ordering notes (both items fixed 2026-11-21):
 
-- L0 contains **two patches numbered 042** (`042-arm-hisilicon-smp-scu-gic` and
-  `042-net-gmac-w9-master-off`).  Filename order applies the ARM one first; they
-  touch different files.  This duplicate number is a lab artefact and should not
-  survive a clean re-publication (renumber).
-- The target stack was authored against the OpenWrt-prepared 6.18 tree.  On
-  pristine kernel.org 6.18.60 it applies with 6 offset hunks and **1 fuzz hunk**
-  (patch 053 hunk 1), because 052 and 053 both insert at the same
-  `MODULE_PARM_DESC(nodoorbell...)` anchor and 053 was generated before 052 was
-  merged.  patch(1) RC=0, no rejects; strict `git apply` diverges at 053.
-  Regenerate/merge 052+053 before publishing a clean release series (section 11).
+- **No duplicate numbers.**  042-net stays; the former 042-arm is 062 and its
+  dependent SMP diagnostics are 063/064/065.  Filename order is now dependency
+  order for the whole L0 stack (verified 62/62 patch(1) RC=0, 0 fuzz, and strict
+  `git apply` 62/62).
+- **Patch 053 was regenerated against its post-052 context.**  The old patch was
+  authored before 052 merged into the same `MODULE_PARM_DESC(nodoorbell...)`
+  anchor, which caused the one fuzz hunk and the strict `git apply` divergence.
+  The regenerated patch keeps exactly the same functional content/gates (the
+  resulting `luofu-pie.c` is byte-identical to the old stack's final file) and
+  now applies with **0 fuzz**; strict `git apply` passes for all 51 L1
+  patches.
 
 ## 8. Retraction: the "2-CPU hang" was a host bench-link outage
 
@@ -250,18 +265,22 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
 (sha256 `3c2f44ef...`); logs in `validation/release-line/`:
 
 - L1 release line: **51/51 patches apply with patch(1), RC=0**, 146 file events,
-  6 hunks with offset, **1 hunk with fuzz** (patch 053, see section 7),
-  **0 rejects** [V];
-- strict `git apply` (no fuzz): diverges at 053 for the same ordering reason;
-  recorded as a release-line cleanup item, not a build failure [V];
-- release-critical DTS contract: `cpp` + `dtc` RC=0, **0 stderr bytes**, DTB
-  **12,296 B**, sha256 `50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb`;
+  **3 offset hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches
+  apply without fuzz** [V];
+- L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
+  strict `git apply` 62/62 [V];
+- release-critical DTS contract (target DTS and DTS-0001): both `cpp` + `dtc`
+  RC=0, **0 stderr bytes**, DTB **12,296 B**, sha256
+  `50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb`;
   `fdtget` confirms `/aliases/console`, `compatible = "hsan,flashinfo_reserved"`,
   `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>` and
-  `/cpus/enable-method = "hisilicon,luofu-smp"` [V];
-- upstream review form unchanged in content: 26/26 apply with patch(1) and
-  `git am` (section 04-validation.md records the latest run); the only update is
-  the 0018 commit-message text recording that the DTS contract is required [V];
+  `/cpus/enable-method = "hisilicon,luofu-smp"`;
+- **DTS-0001**: applies to the L1 tree RC=0; its added board DTS is
+  byte-identical to the single-source target DTS; the compiled DTB and the
+  contract checks are identical to the target-DTS ones [V];
+- upstream review form: 26/26 apply with patch(1) and `git am` (2026-11-21
+  re-run after the 0018 message update; checkpatch 0 errors / 58 warnings;
+  section 04-validation.md section 20) [V];
 - no kernel build in this pass: the last full-series build records (compile
   RC=0, CONFIG_WERROR, zImage/hash, TEXT_OFFSET unchanged) are in
   `04-validation.md` and SKELETON-SMOKE.md; the release image itself was built
@@ -289,25 +308,26 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
 
 ## 11. Next actions after this consolidation
 
-1. Sync L1 + the updated docs to the curated publication repo staging branch
-   (separate repositories; not touched from the notebook).
-2. Regenerate patches 052/053 as one clean pair (remove the fuzz); renumber the
-   duplicate 042 pair; then re-run `tools/check-release-line.sh` for a strict
-   `git apply`-clean release line.
-3. Add the two loader hand-off nodes to the future kernel DTS series (they are
-   already in the target DTS), and reference SMP-RE.md section 24 in its cover
-   letter.
-4. Native CFE forwarding, Wi-Fi and the install path remain the separate follow-
+1. **Post DTS-0001 with kernel patch 0018** (same window, DTS entry first or
+   together), referencing SMP-RE.md section 24 in its cover letter.  Regenerate
+   DTS-0001 only from the target DTS via `tools/gen-dts-series-patch.py`.
+2. Sync L1 + L3 + the updated docs to the curated publication repo staging
+   branch (separate repositories; not touched from the notebook).
+3. Native CFE forwarding, Wi-Fi and the install path remain the separate follow-
    ups; do not fold them into this release line.
-5. Parent repo: record the release-line consolidation in EVIDENCE-INDEX.md and
-   the ledger (newest entry wins; STATUS.md is the live page).
+4. Parent repo: record the release-line cleanup (052/053 regeneration,
+   062-065 renumbering, DTS-0001) in EVIDENCE-INDEX.md and the ledger (newest
+   entry wins; STATUS.md is the live page).
 
 ## 12. Evidence map
 
 - `release-line/manifest.tsv` - one row per L0 patch: status, class, sha256,
-  purpose.
-- `validation/release-line/` - 2026-11-21 harness logs: patch application,
-  offsets, strict git-apply divergence, DTS contract, summary.
+  purpose (51 include / 11 exclude, no duplicate numbers).
+- `06-dts-series-dependency.md` + `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+  - the upstream DTS-series entry (DTS-0001) and its regeneration/ordering rules.
+- `validation/release-line/` - 2026-11-21 harness logs: L1/L0 patch
+  application, offsets, strict git-apply, target DTS contract, DTS-0001
+  apply/compile/contract, summary.
 - Canonical image evidence (parent repo, gitignored/local):
   `build/evidence-bench-gates/2026-11-20-{smp-2cpu.log,smp-reboot.log}`,
   `.../2026-11-21-{soak-2cpu.log,final-reboot-2cpu.log}`, UART captures, images

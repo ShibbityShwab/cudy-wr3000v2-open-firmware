@@ -43,6 +43,9 @@ GIT_APPLY_RC[049-net-lsw-pie-page-scan.patch]=0
 GIT_APPLY_RC[050-net-lsw-pagedump-w15.patch]=0
 GIT_APPLY_RC[051-net-gmac-macregs-w16.patch]=0
 GIT_APPLY_RC[052-net-pie-rxcompletion-trace.patch]=0
-error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:515
-error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply
-GIT_APPLY_RC[053-net-pie-rxdecode-vendor-exact.patch]=1
+GIT_APPLY_RC[053-net-pie-rxdecode-vendor-exact.patch]=0
+GIT_APPLY_RC[054-net-lsw-mirror-cputest-w17.patch]=0
+GIT_APPLY_RC[055-net-lsw-mirror-stable-rxstroke.patch]=0
+GIT_APPLY_RC[056-net-lsw-mirror-postlink-w19.patch]=0
+GIT_APPLY_RC[057-net-pie-cpucopy-w20.patch]=0
+GIT_APPLY_RC[058-net-luofu-canonical-bench-config.patch]=0

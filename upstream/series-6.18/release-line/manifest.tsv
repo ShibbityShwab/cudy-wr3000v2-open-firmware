@@ -2,6 +2,7 @@
 # status: include = release patch stack; exclude = bench-only SMP diagnostic (not in the release series)
 # class: A core/functional (upstream review form content), B functional gated bench path,
 #        C included default-off diagnostic gate, D excluded bench diagnostic
+# Note: the former duplicate 042 pair is resolved; 042-net stays and the SMP diagnostics are 062-065.
 status	class	patch	sha256	purpose
 include	A	001-arm-mach-hisilicon-luofu.patch	996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d	ARM machine descriptor (ARCH_LUOFU, PL310 AUX)
 include	A	002-arm-kconfig-textofs.patch	278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796	ARCH_LUOFU Kconfig/Makefile + TEXT_OFFSET 0x00608000
@@ -31,7 +32,7 @@ include	A	025-net-lsw-egress-luofu.patch	0fd8b1eafd701703c785d087f864d27142335ee
 include	A	026-net-gmac-bdinfo-mac-nvmem.patch	f979ea9ba4ab0a6789514a3b373e66c909fc316993ec340e6d90a94d2db033b3	GEMAC bdinfo-MAC nvmem source
 include	A	027-arm-clk-luofu-readonly-mux-fix.patch	06ee237353fd52a0d735e6cb5b52129fe4b8c0a5ca11b9d85804ba8e9c82be37	CRG read-only mux fix (6.18 clk core compatibility)
 exclude	D	028-arm-hisilicon-smp-diagnostics.patch	64cfc4874cafcb8992958092812f53b361681163c1bb194a7988dc8995c7849a	SMP bench diagnostic: pr_info release trace only
-exclude	D	029-arm-hisilicon-smp-release-bits.patch	d5031f71eb83eff4b49bfa7ec7723c8fb97f29e0355f014d7e23e617cdd24275	SMP bench hypothesis: clear all four resume bits; not needed after the DTS handoff fix
+exclude	D	029-arm-hisilicon-smp-release-bits.patch	d5031f71eb83eff4b49bfa7ec7723c8fb97f29e0355f014d7e23e617cdd24275	SMP bench hypothesis: clear all four resume bits; not needed after the DTS hand-off fix
 include	C	030-net-pie-txrx-trace.patch	052ff9a3df88a830d160802c9d931be3838f57ce04c85b9790d2ef60e62dac56	PIE TX/RX trace gate (default off, bench diagnostics)
 include	B	031-net-lsw-eps-channel-map.patch	4ecc08c569b66e5686dff482fcf6390b8357f9b2c0cf8a1fa0aad5f59e290b70	LSW EPS channel-map gate (W6)
 include	B	032-net-lsw-eqm-qminit.patch	719c824c1f173b8c98b1c48181cf8177a9f1aad70c71ca2a216b1f35e7d50ffd	LSW QM/EQM queue-manager init gate
@@ -44,7 +45,6 @@ include	B	038-net-gmac-maxframe-init.patch	949d83fbc451b3ec12029ab47fbaef10bef00
 exclude	D	039-arm-hisilicon-smp-early-safe.patch	37b7932b0c240d612582090ed17c5c91241f8bdfed074bdd0e7bafb13dd43a32	SMP bench probe: safe early-probe variant
 include	B	040-net-gmac-w9-diag.patch	58f15ad0344cfa7bd3e0e6160a21bc63ebd14f3eb3f9ccfadcef5a3aee4ed4f4	GEMAC W9 diagnostic split + max-frame formula fix
 include	B	041-net-gmac-macconf-nodoorbell.patch	328cdcc1e26393246c3213e1911d2a8fcbd26bb34f550cdef7b5f24bb2aefebb	GEMAC MAC config replay + doorbell bisection gates
-exclude	D	042-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps
 include	B	042-net-gmac-w9-master-off.patch	2e49e3eb6d94fe47887f146781073b5eabde15f2db9c1c32d172a26683092dab	GEMAC W9 master switch (default off)
 include	B	043-net-lsw-ifc-default-table.patch	655ae1f4b50821bb75e7c145b7516f5728e734c02dfef6d1400bf2ec9e4d186e	LSW IFC default-classification table (W10)
 include	B	044-net-lsw-ifc-gate-token-fix.patch	a89ec91abdd6849c7ed159b5c4d14d4fc2418ab19095f20fe485b0545b123905	LSW gate-token rename fix (luofu_switch.*)
@@ -56,12 +56,13 @@ include	C	049-net-lsw-pie-page-scan.patch	87d79556ad6611b81f1f2306918e41ebe751ad
 include	C	050-net-lsw-pagedump-w15.patch	ae2972c2dc2082ea1cc3b659a34ca1059ae24a3c46cf01b3f37531c79fa5b833	LSW page-content dump (W15 diagnostic)
 include	B	051-net-gmac-macregs-w16.patch	45d4c6ec97c0f5b3d57d7a85368fa126c1e16852d6f2a31a615fbd0ff26e4311	GEMAC static config words (W16)
 include	C	052-net-pie-rxcompletion-trace.patch	800eb6e4df03e70411947d9274b9adb7dd105fe0175563c585374fbcb55a21a4	PIE RX-completion trace gate (diagnostic)
-include	B	053-net-pie-rxdecode-vendor-exact.patch	a35e9f4992ef9c8f0263468ab00d9a3fde5c273b1c9acb4b5bcc60d1da7b7cdc	PIE RX decode vendor-exact + accepterr delivery gate
+include	B	053-net-pie-rxdecode-vendor-exact.patch	dc746b4629064f37d2a03f220aacbf5dd37830020ace21857ba490ff5ad94c74	PIE RX decode vendor-exact + accepterr delivery gate (regenerated against its post-052 context, 2026-11-21)
 include	B	054-net-lsw-mirror-cputest-w17.patch	e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1	LSW port-mirror CPU-copy experiment base (W17)
 include	B	055-net-lsw-mirror-stable-rxstroke.patch	d4f816ffedb117cbade0949910774f8f07ed6bf6c6a2ed82a7b731fa6db3f0e0	LSW stable CPU mirror + RX stroke (W18)
 include	B	056-net-lsw-mirror-postlink-w19.patch	547ea4983f5c5de0db323ecd05c958f849ce7d9e2c93afab1fa508de50f7d80d	LSW post-link CPU mirror re-latch (W19)
 include	B	057-net-pie-cpucopy-w20.patch	290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77	PIE port-0 CPU-copy delivery (W20)
 include	B	058-net-luofu-canonical-bench-config.patch	44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35	canonical bench configuration + docs cleanup
-exclude	D	059-arm-luofu-cpu1-up-trigger.patch	e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52	SMP bench diagnostic: late add_cpu(1) retrigger via sysfs
-exclude	D	060-arm-hisilicon-smp-handoff-probe.patch	e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938	SMP bench probe: decompressor/stext handoff markers
-exclude	D	061-arm-hisilicon-smp-trampoline.patch	5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8	SMP bench probe: sentinel protocol + re-poll trampoline
+exclude	D	062-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps (renumbered from the duplicate 042)
+exclude	D	063-arm-luofu-cpu1-up-trigger.patch	e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52	SMP bench diagnostic: late add_cpu(1) retrigger via sysfs (renumbered from 059 for monotonic order)
+exclude	D	064-arm-hisilicon-smp-handoff-probe.patch	e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938	SMP bench probe: decompressor/stext hand-off markers (renumbered from 060)
+exclude	D	065-arm-hisilicon-smp-trampoline.patch	5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8	SMP bench probe: sentinel protocol + re-poll trampoline (renumbered from 061)

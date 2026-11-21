@@ -368,16 +368,25 @@ the release series (05-release-line.md section 6).
   target image boots 2 CPUs.  This kernel series is necessary but not
   sufficient.  Full record: `05-release-line.md` section 2 and
   `../../docs/SMP-RE.md` section 24.
+- **The DTS dependency is an explicit upstream artefact: DTS-0001.**  The
+  kernel form is kernel-only, so the board DTS with the two loader hand-off
+  nodes ships as
+  `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+  (adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts`, byte-identical to
+  the single-source target DTS, plus the DTS Makefile line).  Post it
+  together with 0018; see `06-dts-series-dependency.md`.
 - **The release line is not this 26-patch review form.**  It is the target
-  patch stack (62 files, 001-061 plus the duplicate 042 pair) minus 11
+  patch stack (**62 files: 001-058 + 062-065**, no duplicate numbers) minus 11
   bench-only SMP diagnostic patches: 51 patches, classified in
   `release-line/manifest.tsv` and validated host-side by
-  `tools/check-release-line.sh` (51/51 apply; loader hand-off DTS contract
-  compiles and the two nodes are present).  This review form remains the
+  `tools/check-release-line.sh` (51/51 apply with **0 fuzz** and
+  strict-clean; loader hand-off DTS contract compiles and DTS-0001
+  applies/compiles with the same contract).  This review form remains the
   kernel-submission artefact.
 - **Bench diagnostics excluded from the release series:** 028, 029, 033,
-  034, 035, 037, 039, 042-arm, 059, 060, 061.  They are not the SMP fix; the
-  release fix is the DTS contract above.
+  034, 035, 037, 039, 062, 063, 064, 065 (the former duplicate 042 became 062
+  and its dependent diagnostics moved to 063/064/065).  They are not the SMP
+  fix; the release fix is the DTS contract above.
 - **Canonical configuration:** no `luofu_smp_*` tokens; built-in cmdline and
   the canonical attended gates are recorded in `05-release-line.md` section 4
   and `../../target-skeleton/README.md`.
@@ -397,7 +406,7 @@ the release series (05-release-line.md section 6).
 | 6 | board DTS compile (not part of this series) | patched-kernel dtc RC=0, zero warnings; 10,664 B sha256 5726f7cd... without the SMP line, 10,710 B sha256 bc599a4e... with the enable-method line (SMP lane); 11,346 B sha256 a31ab53f... with the seven CRG fixed clocks and the SMP line (clock-tree lane); 11,430 B sha256 d3a9dd86... with the PIE ring tables (PIE-datapath lane); 11,516 B sha256 43c1e94b... with the switch windows and port bitmap (LSW-init lane); 11,571 B sha256 7fd33522... with the enabled switch/PIE/GMAC nodes and the hisilicon,port cells (net lane); 11,996 B sha256 e9c1649f... with the bdinfo nvmem cell/wiring (mac-nvmem lane); the final integrated 001-026 DTS is 12,076 B sha256 5386bade..., cpp+dtc RC=0 with 0 stderr bytes, fdtget reads hisilicon,port=8/9/10/11/12 and dt-validate reports only the five pre-existing baseline diagnostics (none naming PIE/GEMAC/nvmem) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init + net + PIE-decode + MAC-nvmem sessions), port-notes/{smp,clk,pie,lsw,net,pie-decode,mac-nvmem}/SUMMARY.md |
 | 7 | kernel config re-derivation | two kernel_oldconfig runs byte-identical (4106877f...), 309 symbols identical to the delivered delta, idempotent (re-run 2026-11-18); 0019 adds no symbol and the 001-0019 re-derivation is byte-idempotent at the same hash; the 001-0020 delta changes only CONFIG_PHYLINK m -> y; 0021 adds no symbol (001-0021 re-derivation symbol-identical/byte-idempotent 76aaafc8...), the 001-0023 config is symbol-identical to the committed one and byte-idempotent (d1af1b2a...) in the net lane, and 0022-0026 add no symbol: the 001-024 re-derivation in the pie-decode lane (kernel .config 4a17f17a..., target config-6.18 d1af1b2a...) and the 001-026 fully-clean run are byte-identical to the committed 001-023 artifact (the mac-nvmem lane independently observed CONFIG_MTD=y, CONFIG_NVMEM=y, CONFIG_NVMEM_LAYOUTS=y already present) | SKELETON-SMOKE.md (A/B install + selector-fix + clock-tree + PIE-datapath + LSW-init + net + PIE-decode + MAC-nvmem sessions) |
 | 8 | OpenWrt image chain (not kernel submission scope) | make world RC=0 in an isolated clone, reproducible container | SKELETON-SMOKE.md (image-recipe session) |
-| 9 | release-line host validation (2026-11-21) | target stack minus the 11 bench-only SMP diagnostics (51 patches) applies in order to pristine 6.18.60: 51/51 patch(1) RC=0, 0 rejects, 6 offset hunks, 1 fuzz hunk (053 vs 052 anchor); the loader hand-off DTS contract compiles (DTB 12,296 B sha256 50daf3d0...) and contains `/aliases/console` + `/reserved-memory/flashinfo@80600000` (reg/atag-offset/enable-method checked) | 05-release-line.md section 9, validation/release-line/ |
+| 9 | release-line + DTS-0001 host validation (2026-11-21) | target stack minus the 11 bench-only SMP diagnostics (51 patches) applies in order: 51/51 patch(1) RC=0, 0 rejects, 3 offset hunks, **0 fuzz**, strict git apply 51/51; L0 (62 files) also 62/62 with 0 fuzz/strict-clean. The loader hand-off DTS contract compiles (DTB 12,296 B sha256 50daf3d0...) and contains `/aliases/console` + `/reserved-memory/flashinfo@80600000` (reg/atag-offset/enable-method checked). **DTS-0001** applies, compiles to the same DTB and is byte-identical to the target DTS | 05-release-line.md section 9, 06-dts-series-dependency.md, validation/release-line/ |
 | 10 | hardware (target image, not upstream) | canonical image `974e6ca6` (6,226,222 B) verified on the unit: 2 CPUs (mpidr 80000001, BogoMIPS 3987.86), LAN via the documented mirror workaround, SSH, ubifs overlay, 15-min soak 0 failures, reboot persistent. No Oops/panic/BUG/WARNING. **This is target-image evidence, not an upstream Tested-by** | 05-release-line.md section 3, parent-repo bench logs named there |
 | 11 | per-driver hardware validation | partial: platform/storage/SMP/gated-network exercised through the target image; most drivers not individually exercised; no upstream Tested-by | 05-release-line.md section 10 |
 
@@ -497,14 +506,15 @@ splits by subsystem and by readiness:
    inspect it without any write risk; 0022's default path and 0025's
    default path are the same read-only probe, and 0023/0024/0026 register
    nothing until every gate is set.
-5. **SMP (0018) as RFC, together with the DTS contract:** the target
-   image is bench-verified with 2 CPUs (2026-11-21), so the attended gate
-   is closed, but the patch alone is inert.  Post 0018 as RFC with the
-   dependency stated, and make the board DTS series carry the
-   enable-method plus the two loader hand-off nodes (`/aliases/console` and
-   `/reserved-memory/flashinfo@80600000` with `atag-offset = <0x1000>`).
-   Do not post the bench diagnostics (060/061 etc.) as the SMP fix.
-   The DTS content belongs to the DTS series, not this kernel series.
+5. **SMP (0018) as RFC, together with DTS-0001:** the target image is
+   bench-verified with 2 CPUs (2026-11-21), so the attended gate is closed,
+   but the patch alone is inert.  Post 0018 as RFC together with the
+   commit-ready DTS-series entry
+   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+   (DTS-0001), which carries the enable-method and the two loader hand-off
+   nodes (`/aliases/console` and `/reserved-memory/flashinfo@80600000`
+   with `atag-offset = <0x1000>`).  Do not post the bench diagnostics
+   (064/065 etc.) as the SMP fix.  See `06-dts-series-dependency.md`.
 6. **After the bindings are accepted:** the board DTS to
    arch/arm/boot/dts/hisilicon/ (with the stock partition map and the
    identity warning; the SMP enable-method only after S2), then the
@@ -608,7 +618,8 @@ carried as an OpenWrt target patch stack.
 - This directory: 00-cover-letter.md (this file), 01-commit-messages.md
   (per-patch messages + mapping table), 02-maintainers-proposal.md,
   03-rationale-tree-placement.md, 04-validation.md, 05-release-line.md,
-  README.md, commit-messages/, series/, release-line/, tools/, validation/.
+  06-dts-series-dependency.md, README.md, commit-messages/, series/,
+  release-line/, dts-series/, tools/, validation/.
 - Release status for the target: `../../target-skeleton/RELEASE-NOTES.md`
   (canonical 2-CPU baseline, working-LAN workaround, retraction).
 - Recorded validation sessions: opensource/docs/SKELETON-SMOKE.md

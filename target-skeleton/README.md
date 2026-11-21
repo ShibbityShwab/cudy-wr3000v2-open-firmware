@@ -1366,18 +1366,25 @@ The release line is defined in
 with a one-row-per-patch manifest in
 [../upstream/series-6.18/release-line/manifest.tsv](../upstream/series-6.18/release-line/manifest.tsv):
 
-- L0 lab stack: 62 patch files (`patches-6.18/001-061` plus the duplicate `042`
-  pair), the stack the canonical image was built from;
+- L0 lab stack: 62 patch files (001-058 + 062-065; the former duplicate-042 and
+  its dependent diagnostics were renumbered, so filename order is dependency
+  order), the stack the canonical image was built from;
 - L1 release line: 51 patches = L0 minus the 11 bench-only SMP diagnostics
-  (028, 029, 033, 034, 035, 037, 039, 042-arm, 059, 060, 061); host validation
-  is `../upstream/series-6.18/tools/check-release-line.sh` (51/51 apply, loader
-  hand-off DTS contract compiles and the two nodes are present);
-- L2 upstream review form: the 26-patch `../upstream/series-6.18/series/` plus
-  docs (unchanged in content apart from the 0018 message update).
+  (028, 029, 033, 034, 035, 037, 039, 062, 063, 064, 065); host validation is
+  [../upstream/series-6.18/tools/check-release-line.sh](../upstream/series-6.18/tools/check-release-line.sh)
+  (51/51 patch(1) with **0 fuzz**, strict git apply 51/51; L0 62/62 0 fuzz;
+  loader hand-off DTS contract compiles and the two nodes are present);
+- L2 upstream review form: the 26-patch
+  [../upstream/series-6.18/series/](../upstream/series-6.18/series/) plus docs
+  (content unchanged apart from the 0018 message update);
+- L3 upstream DTS-series entry **DTS-0001**:
+  [../upstream/series-6.18/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch](../upstream/series-6.18/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch)
+  (board DTS + loader hand-off nodes, byte-identical to this target's DTS;
+  companion to 0018, documented in
+  [../upstream/series-6.18/06-dts-series-dependency.md](../upstream/series-6.18/06-dts-series-dependency.md)).
+  The validator applies/compiles it and checks the contract.
 
-Publication/cleanup still owed before a clean release snapshot: regenerate
-patches 052/053 as one pair (they share an anchor; 053 currently applies with
-one fuzz hunk on pristine 6.18.60), renumber the duplicate `042` pair, and sync
-L1 + docs to the curated public repos (separate repositories, not touched from
-this notebook).  Publishing must still pass the confidentiality/vendor-binary
-checks - no vendor .ko/.o or blobs in tracked text.
+Publication/cleanup still owed before a clean release snapshot: sync L1 + L3 +
+the updated docs to the curated public repos (separate repositories, not touched
+from this notebook).  Publishing must still pass the confidentiality/vendor-
+binary checks - no vendor .ko/.o or blobs in tracked text.

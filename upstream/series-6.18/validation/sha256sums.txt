@@ -1,5 +1,6 @@
 # sha256 of the commit-ready series files and of the source target-skeleton patches.
-# Generated on the author host on 2026-11-21 for series-6.18.
+# Regenerated on the author host on 2026-11-21 after the release-line cleanup
+# (052/053 regeneration, 042/059/060/061 renumbering to 062-065, DTS-0001).
 # Paths are relative to the series-6.18 directory.  Verify with:
 #   cd opensource/upstream/series-6.18 && sha256sum -c validation/sha256sums.txt
 
@@ -21,7 +22,7 @@ bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8  series/0010-ar
 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663  series/0015-net-pie-luofu.patch
 f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28  series/0016-net-lsw-luofu.patch
 471a21225db7925d1e0b70f32f1637ee8e07842774ea6a6a22996988472c4da3  series/0017-soc-luofu-boot-selector.patch
-7bbc270c15af7e9a00b9d23f26a6881f9638ab37d655e8db5b73786c0294df1a  series/0018-arm-mach-hisilicon-smp.patch
+b83933ee6b1aff92910ce5472ff428f261140f2a98fa8eed1f42cf2e6264479c  series/0018-arm-mach-hisilicon-smp.patch
 d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9  series/0019-arm-clk-luofu-clock-tree.patch
 624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212  series/0020-net-pie-datapath-luofu.patch
 d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497  series/0021-net-lsw-init-luofu.patch
@@ -32,6 +33,7 @@ d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497  series/0021-ne
 099d7253f50c50ad18bce642a2d52fca7af37c9b1c7ac356038eafe3c7aa26df  series/0026-net-gmac-bdinfo-mac-nvmem.patch
 
 ## source tree patches (opensource/target-skeleton/target/linux/hisilicon/patches-6.18/)
+#  001-058 plus the renumbered diagnostics 062-065 (62 files; no duplicate numbers)
 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch
 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796  ../../target-skeleton/target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch
 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/003-arm-textofs-nonimmediate.patch
@@ -73,7 +75,6 @@ cc27347f503b203c6f891373c589239e278dccd52b66551c9c291632f8953208  ../../target-s
 37b7932b0c240d612582090ed17c5c91241f8bdfed074bdd0e7bafb13dd43a32  ../../target-skeleton/target/linux/hisilicon/patches-6.18/039-arm-hisilicon-smp-early-safe.patch
 58f15ad0344cfa7bd3e0e6160a21bc63ebd14f3eb3f9ccfadcef5a3aee4ed4f4  ../../target-skeleton/target/linux/hisilicon/patches-6.18/040-net-gmac-w9-diag.patch
 328cdcc1e26393246c3213e1911d2a8fcbd26bb34f550cdef7b5f24bb2aefebb  ../../target-skeleton/target/linux/hisilicon/patches-6.18/041-net-gmac-macconf-nodoorbell.patch
-dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/042-arm-hisilicon-smp-scu-gic.patch
 2e49e3eb6d94fe47887f146781073b5eabde15f2db9c1c32d172a26683092dab  ../../target-skeleton/target/linux/hisilicon/patches-6.18/042-net-gmac-w9-master-off.patch
 655ae1f4b50821bb75e7c145b7516f5728e734c02dfef6d1400bf2ec9e4d186e  ../../target-skeleton/target/linux/hisilicon/patches-6.18/043-net-lsw-ifc-default-table.patch
 a89ec91abdd6849c7ed159b5c4d14d4fc2418ab19095f20fe485b0545b123905  ../../target-skeleton/target/linux/hisilicon/patches-6.18/044-net-lsw-ifc-gate-token-fix.patch
@@ -85,15 +86,19 @@ a642a997c79b2144bd533f35d84b2772f015019e74492043e85a324912470d5d  ../../target-s
 ae2972c2dc2082ea1cc3b659a34ca1059ae24a3c46cf01b3f37531c79fa5b833  ../../target-skeleton/target/linux/hisilicon/patches-6.18/050-net-lsw-pagedump-w15.patch
 45d4c6ec97c0f5b3d57d7a85368fa126c1e16852d6f2a31a615fbd0ff26e4311  ../../target-skeleton/target/linux/hisilicon/patches-6.18/051-net-gmac-macregs-w16.patch
 800eb6e4df03e70411947d9274b9adb7dd105fe0175563c585374fbcb55a21a4  ../../target-skeleton/target/linux/hisilicon/patches-6.18/052-net-pie-rxcompletion-trace.patch
-a35e9f4992ef9c8f0263468ab00d9a3fde5c273b1c9acb4b5bcc60d1da7b7cdc  ../../target-skeleton/target/linux/hisilicon/patches-6.18/053-net-pie-rxdecode-vendor-exact.patch
+dc746b4629064f37d2a03f220aacbf5dd37830020ace21857ba490ff5ad94c74  ../../target-skeleton/target/linux/hisilicon/patches-6.18/053-net-pie-rxdecode-vendor-exact.patch
 e306a155c0fcc2eb6d4ef35ff619cee18d72bb44217dcffe749bb287d201b5d1  ../../target-skeleton/target/linux/hisilicon/patches-6.18/054-net-lsw-mirror-cputest-w17.patch
 d4f816ffedb117cbade0949910774f8f07ed6bf6c6a2ed82a7b731fa6db3f0e0  ../../target-skeleton/target/linux/hisilicon/patches-6.18/055-net-lsw-mirror-stable-rxstroke.patch
 547ea4983f5c5de0db323ecd05c958f849ce7d9e2c93afab1fa508de50f7d80d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/056-net-lsw-mirror-postlink-w19.patch
 290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77  ../../target-skeleton/target/linux/hisilicon/patches-6.18/057-net-pie-cpucopy-w20.patch
 44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35  ../../target-skeleton/target/linux/hisilicon/patches-6.18/058-net-luofu-canonical-bench-config.patch
-e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52  ../../target-skeleton/target/linux/hisilicon/patches-6.18/059-arm-luofu-cpu1-up-trigger.patch
-e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938  ../../target-skeleton/target/linux/hisilicon/patches-6.18/060-arm-hisilicon-smp-handoff-probe.patch
-5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8  ../../target-skeleton/target/linux/hisilicon/patches-6.18/061-arm-hisilicon-smp-trampoline.patch
+dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/062-arm-hisilicon-smp-scu-gic.patch
+e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52  ../../target-skeleton/target/linux/hisilicon/patches-6.18/063-arm-luofu-cpu1-up-trigger.patch
+e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938  ../../target-skeleton/target/linux/hisilicon/patches-6.18/064-arm-hisilicon-smp-handoff-probe.patch
+5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8  ../../target-skeleton/target/linux/hisilicon/patches-6.18/065-arm-hisilicon-smp-trampoline.patch
+
+## upstream DTS series entry (DTS-0001; companion to the kernel patch 0018)
+73d93769c0cf5e63c17932c2a0f7285cd5fda59e4c93164c94a96e9cf24be788  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
 
 ## kernel tarball used for validation (not stored in this repo)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

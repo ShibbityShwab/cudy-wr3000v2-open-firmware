@@ -43,9 +43,13 @@ stock base DTB carries.  They are now in the board DTS
 Without them U-Boot printed `alias console not found`, skipped staging, and CPU1
 never polled the kernel pen; every kernel release had no consumer.  The kernel
 release implementation (patch 018) was correct all along - no SMP kernel code
-change is needed for the fix.  The 060/061 sentinel/trampoline probes and
-033-042/059 are bench diagnostics only and are **excluded from the release patch
-series** (see `release-line/manifest.tsv` in the upstream directory).
+change is needed for the fix.  The DTS contract ships as the explicit
+DTS-series entry **DTS-0001**
+(`../upstream/series-6.18/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`;
+documented in `../upstream/series-6.18/06-dts-series-dependency.md`) and must
+be posted with kernel patch 0018.  The 064/065 sentinel/trampoline probes and
+033-039/062/063 are bench diagnostics only and are **excluded from the release
+patch series** (see `release-line/manifest.tsv` in the upstream directory).
 
 ## What works (bench baseline)
 

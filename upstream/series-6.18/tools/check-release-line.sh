@@ -36,6 +36,7 @@ REPO_ROOT="$(cd "$SERIES_DIR/../../.." && pwd)"
 TARGET_PATCHES="$REPO_ROOT/opensource/target-skeleton/target/linux/hisilicon/patches-6.18"
 MANIFEST="$SERIES_DIR/release-line/manifest.tsv"
 DTS="$REPO_ROOT/opensource/target-skeleton/dts/luofu-r116.dts"
+DTS_SERIES_PATCH="$SERIES_DIR/dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch"
 EXPECTED_TARBALL_SHA256="3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e"
 
 die() { echo "FAIL: $*" >&2; exit 1; }
@@ -192,6 +193,43 @@ else
     [ "$reg" = "80600000 4000" ] || die "unexpected flashinfo reg: $reg"
     [ "$atag" = "1000" ] || die "unexpected atag-offset: $atag"
     [ "$method" = "hisilicon,luofu-smp" ] || die "unexpected enable-method: $method"
+
+    # ------------------------------------------------ upstream DTS series entry
+    # DTS-0001 is the DTS-series companion the kernel review form cannot carry:
+    # it adds the board DTS with the loader hand-off nodes required by SMP
+    # patch 0018.  It must apply to the same tree and its DTS must be the
+    # byte-identical copy of the target DTS (single source of truth).
+    if [ -f "$DTS_SERIES_PATCH" ]; then
+        DTREE="$WORKDIR/tree-dts-series"
+        rm -rf "$DTREE"; cp -a --reflink=auto "$TREE" "$DTREE" || die "DTS-series tree copy failed"
+        ( cd "$DTREE" && patch -p1 -i "$DTS_SERIES_PATCH" ) > "$LOGS/dts-series-apply.log" 2>&1             || die "DTS series patch does not apply"
+        IN_TREE="$DTREE/arch/arm/boot/dts/hisilicon/luofu-r116.dts"
+        [ -f "$IN_TREE" ] || die "DTS series patch did not add the board DTS"
+        if cmp -s "$IN_TREE" "$DTS"; then
+            echo "DTS series: board DTS byte-identical to the target DTS" | tee -a "$LOGS/summary.txt"
+        else
+            note "DTS series board DTS differs from the target DTS (regenerate DTS-0001 from the single source)"
+        fi
+        PRE2="$LOGS/luofu-r116.series.pre.dts"
+        DTB2="$LOGS/luofu-r116.series.dtb"
+        ( cd "$DTREE" && cpp -nostdinc -I include -I arch/arm/boot/dts -undef -D__DTS__             -x assembler-with-cpp -o "$PRE2" "$IN_TREE" ) 2> "$LOGS/dts-series-cpp.err"             || die "cpp failed for the DTS series board DTS"
+        "$DTC" -I dts -O dtb -o "$DTB2" "$PRE2" 2> "$LOGS/dts-series-dtc.err"             || die "dtc failed for the DTS series board DTS"
+        size2=$(stat -c%s "$DTB2")
+        echo "DTS series: patch apply RC=0, cpp+dtc RC=0, stderr $(stat -c%s "$LOGS/dts-series-cpp.err")/$(stat -c%s "$LOGS/dts-series-dtc.err") bytes, DTB $size2 B sha256 $(sha256sum "$DTB2" | awk '{print $1}')" | tee -a "$LOGS/summary.txt"
+        c2=$("$FDTGET" -t s "$DTB2" /aliases console 2>&1) || die "DTS series: /aliases/console missing"
+        f2=$("$FDTGET" -t s "$DTB2" /reserved-memory/flashinfo@80600000 compatible 2>&1) || die "DTS series: flashinfo node missing"
+        r2=$("$FDTGET" -t x "$DTB2" /reserved-memory/flashinfo@80600000 reg 2>&1) || die "DTS series: flashinfo reg missing"
+        a2=$("$FDTGET" -t x "$DTB2" /reserved-memory/flashinfo@80600000 atag-offset 2>&1) || die "DTS series: atag-offset missing"
+        m2=$("$FDTGET" -t s "$DTB2" /cpus enable-method 2>&1) || die "DTS series: enable-method missing"
+        [ "$f2" = "hsan,flashinfo_reserved" ] || die "DTS series: unexpected flashinfo compatible"
+        [ "$r2" = "80600000 4000" ] || die "DTS series: unexpected flashinfo reg"
+        [ "$a2" = "1000" ] || die "DTS series: unexpected atag-offset"
+        [ "$m2" = "hisilicon,luofu-smp" ] || die "DTS series: unexpected enable-method"
+        echo "DTS series contract: console=$c2 flashinfo=$f2 reg=$r2 atag-offset=$a2 enable-method=$m2" | tee -a "$LOGS/summary.txt"
+        [ -z "$KEEP" ] && rm -rf "$DTREE"
+    else
+        note "no dts-series/0001 patch found - the upstream DTS dependency was not checked"
+    fi
 fi
 
 if [ -z "$KEEP" ]; then

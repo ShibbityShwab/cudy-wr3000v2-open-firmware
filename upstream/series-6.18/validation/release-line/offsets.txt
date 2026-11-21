@@ -1,6 +1,3 @@
 Hunk #1 succeeded at 253 (offset -75 lines).
 Hunk #1 succeeded at 63 (offset -12 lines).
 Hunk #1 succeeded at 188 (offset 6 lines).
-Hunk #1 succeeded at 519 with fuzz 1 (offset 4 lines).
-Hunk #2 succeeded at 730 (offset 4 lines).
-Hunk #3 succeeded at 1346 (offset 17 lines).

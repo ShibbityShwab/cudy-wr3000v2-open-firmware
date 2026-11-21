@@ -182,9 +182,6 @@ RC[051-net-gmac-macregs-w16.patch]=0
 patching file drivers/net/ethernet/hisilicon/luofu-pie.c
 RC[052-net-pie-rxcompletion-trace.patch]=0
 patching file drivers/net/ethernet/hisilicon/luofu-pie.c
-Hunk #1 succeeded at 519 with fuzz 1 (offset 4 lines).
-Hunk #2 succeeded at 730 (offset 4 lines).
-Hunk #3 succeeded at 1346 (offset 17 lines).
 RC[053-net-pie-rxdecode-vendor-exact.patch]=0
 patching file drivers/net/ethernet/hisilicon/luofu-switch.c
 RC[054-net-lsw-mirror-cputest-w17.patch]=0

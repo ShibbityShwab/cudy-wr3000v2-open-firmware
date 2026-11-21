@@ -50,18 +50,30 @@ final 26-patch pass.
   0018 is necessary but not sufficient; a future upstream DTS series must
   carry the two nodes.  Evidence: `../../docs/SMP-RE.md` section 24 and
   `05-release-line.md` section 2.
+
+- **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
+  `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+  (sha256 `73d93769...`) adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts`
+  (byte-identical to the single-source target DTS) and the
+  `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
+  patch 0018 and is documented in `06-dts-series-dependency.md`.  The
+  validator applies/compiles it and checks the loader hand-off contract.
 - **The release line is defined in `05-release-line.md`.**  It is the
-  target patch stack (62 files, 001-061 plus the duplicate 042 pair) minus
-  11 bench-only SMP diagnostic patches: `release-line/manifest.tsv` has one
-  row per patch (include/exclude, class A/B/C/D, sha256, purpose), 51
-  included.  The upstream review form in `series/` stays at 26 patches:
-  the release line is the target/publication classification, the review
-  form is the kernel-submission artefact.
+  target patch stack (**62 files: 001-058 + 062-065**, no duplicate
+  numbers) minus 11 bench-only SMP diagnostic patches:
+  `release-line/manifest.tsv` has one row per patch (include/exclude,
+  class A/B/C/D, sha256, purpose), 51 included.  The upstream review form in
+  `series/` stays at 26 kernel patches; the release line is the
+  target/publication classification.  Patch 053 was regenerated against its
+  post-052 context, so the release line now applies with **0 fuzz** and is
+  strict `git apply`-clean (51/51).
 - **Bench-only diagnostics are excluded** from the release line: 028, 029,
-  033, 034, 035, 037, 039, 042-arm, 059, 060, 061 (section 6 of
-  `05-release-line.md`).  They remain in the lab stack so the canonical
-  image `974e6ca6` stays reproducible, but a release/publish snapshot must
-  not carry them as the SMP fix.
+  033, 034, 035, 037, 039, 062, 063, 064, 065 (section 6 of
+  `05-release-line.md`; the former duplicate 042 became 062 and its
+  dependent diagnostics moved to 063/064/065 to keep filename order equal to
+  dependency order).  They remain in the lab stack so the canonical image
+  `974e6ca6` stays reproducible, but a release/publish snapshot must not
+  carry them as the SMP fix.
 - **Canonical configuration, no probe tokens:** the built-in cmdline is
   `ubi.mtd=rootfsb ... maxcpus=2 nr_cpus=2 additional_cpus=1` (see
   `config-6.18` / `05-release-line.md` section 4); `luofu_smp_*` tokens
@@ -71,9 +83,11 @@ final 26-patch pass.
   bench-link outage, not a kernel hang; no Oops/panic/BUG/WARNING was in
   the log and the same image passed the soak after the link was restored.
 
-The 0018 commit message was regenerated in this pass to record the DTS
-dependency; the series files, 01-commit-messages.md and the validation logs
-were refreshed (2026-11-21).  Content diffs are unchanged.
+The 0018 commit message records the DTS-0001 dependency; the series files,
+01-commit-messages.md, the release-line manifest/hashes and the validation
+logs were refreshed on 2026-11-21.  Kernel-series content diffs are unchanged;
+the release-line cleanup regenerated 053, renumbered 042/059/060/061 and added
+DTS-0001.
 
 ## What is in here
 
@@ -89,6 +103,9 @@ were refreshed (2026-11-21).  Content diffs are unchanged.
 | `tools/gen-series.py` | regenerates `series/` and `01-commit-messages.md` from `commit-messages/` + the source patches; `--check` verifies no drift |
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
+| `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
+| `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | commit-ready DTS-series entry (DTS-0001): board DTS + hisilicon DTS Makefile line; companion to 0018 |
+| `tools/gen-dts-series-patch.py` | deterministic generator for DTS-0001 from the single-source target DTS |
 | `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |
 | `tools/check-release-line.sh` | host-only validation of the release line (patch application order/offsets/fuzz + loader hand-off DTS contract) |
 | `validation/` | raw logs and hashes from the final validation runs (review form + `validation/release-line/`) |
@@ -161,13 +178,15 @@ To regenerate the series after editing a message:
   update: 26/26 patch(1) and 26/26 `git am` RC=0, identical trees, 3 offset
   hunks, 0 fuzz, 0 rejects, 0 errors / 58 checkpatch warnings.  [V]
 - the release line (51 target patches, `05-release-line.md`) applies in
-  order to pristine 6.18.60: 51/51 patch(1) RC=0, 146 file events, 6 offset
-  hunks, 1 fuzz hunk (patch 053, a known 052/053 ordering artefact), 0
-  rejects; strict `git apply` diverges at 053 for the same reason.  The
-  release-critical loader hand-off DTS contract compiles (`cpp`+`dtc` RC=0,
-  0 stderr, DTB 12,296 B sha256 `50daf3d0...`) and contains
-  `/aliases/console` and the `flashinfo@80600000` node with the measured
-  `reg`/`atag-offset`.  Logs: `validation/release-line/`.  [V]
+  order to pristine 6.18.60: 51/51 patch(1) RC=0, 146 file events, **3 offset
+  hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches apply
+  without fuzz**.  The L0 stack (62 files, 001-058 + 062-065) also applies
+  62/62 with 0 fuzz and strict-clean.  The loader hand-off DTS contract
+  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB 12,296 B sha256
+  `50daf3d0...`) and contains `/aliases/console` and the
+  `flashinfo@80600000` node with the measured `reg`/`atag-offset`.
+  **DTS-0001** applies, compiles to the same DTB and its board DTS is
+  byte-identical to the target DTS.  Logs: `validation/release-line/`.  [V]
 - the target image built from the extended stack is hardware-verified for
   the release baseline: 2 CPUs (mpidr 80000001, BogoMIPS 3987.86), LAN via
   the documented mirror workaround, SSH, ubifs overlay, 15-minute soak
@@ -305,6 +324,7 @@ To regenerate the series after editing a message:
 | gated LSW write path and GEMAC netdev readiness (follow-ups to 0020/0021) | 0022, 0023 | do not merge; 0022 keeps the read-only default and gates every clock/reset/table write behind never-set module parameters with readback/restore; 0023 registers nothing until the PIE arm gate and both LSW gates pass in one attended boot |
 | PIE completion/TX decode, gated LSW W4 egress stage and MAC-source nvmem (follow-ups to 0020/0022/0023) | 0024, 0025, 0026 | do not merge; 0024 stays behind the PIE arm gate and its decode has never been observed by the engine; 0025 gates the R1/R3/R5 probe-configuration write set behind never-set module parameters (requiring the W3 power step) and tightens readiness so both that configuration and the qid map must verify; 0026 reads the MAC from a read-only bdinfo nvmem cell but registers nothing until the 0023 gate passes and the read has never run.  None has run on hardware |
 | SMP bring-up | 0018 | RFC for upstream review; the target image is hardware-verified with 2 CPUs (2026-11-21) once the board DTS carries the loader hand-off nodes; 0018 alone is necessary but not sufficient. The release-line diagnostics around it are excluded from the release series |
+| DTS series entry | DTS-0001 (not a kernel patch) | draft board DTS required by 0018; carries the two loader hand-off nodes; post with 0018; not merge-intent until the bindings cleanup (see `06-dts-series-dependency.md`) |
 
 The recommended real submission splits this into per-subsystem series and
 folds 0014 into 0004; see 00-cover-letter.md "Recommended submission
@@ -330,8 +350,10 @@ sequence".
    the board DTS series must carry the enable-method plus the two loader
    hand-off nodes (`/aliases/console` and `/reserved-memory/flashinfo@80600000`
    with `atag-offset = <0x1000>`).  Decide whether to post 0018 now with
-   that dependency stated, or together with the DTS series; do not post the
-   SMP investigation diagnostics (060/061 etc.) as the fix.
+   that dependency stated, or together with the DTS series; the dependency is
+   the commit-ready DTS-0001 entry (see `06-dts-series-dependency.md` and
+   the `dts-series/` directory).  Do not post the SMP investigation
+   diagnostics (064/065 etc.) as the fix.
 7. Approve the clock-tree staging (0019): read-only PLL/mux model, decoded
    rates/parents pending one attended read-only readback, no set_rate, and
    the binding change that makes seven input clocks (board-DTS content)

@@ -115,6 +115,19 @@ even though the kernel release is correct.  This is measured on hardware
 (`../../docs/SMP-RE.md` section 24) and is release-critical: a future
 upstream DTS series that omits the nodes reintroduces the original bug.
 
+**The dependency is now an explicit upstream artefact: DTS-0001**
+(`dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`,
+sha256 `73d93769...`).  It adds the board DTS to the kernel tree
+(`arch/arm/boot/dts/hisilicon/luofu-r116.dts`, byte-identical to the
+single-source target DTS) plus the DTS Makefile line, so the kernel-only
+review form can be posted together with a commit-ready DTS companion.  It is
+**not** part of `series/` and not applied by the kernel review form's
+sequential-apply check; `tools/check-release-line.sh` applies/compiles it
+and verifies the contract and the byte-identity to the target DTS.  Post it
+with 0018 (see `06-dts-series-dependency.md`).  The board DTS content is
+still draft/TODO-heavy and not merge-intent until the bindings cleanup below
+is complete; the two loader hand-off nodes themselves are final and measured.
+
 Recommendation: the DTS is deliberately **not** in this series.  The draft
 DTS is TODO-heavy (only the nodes with bindings above are real; the rest
 are proposal nodes) and a full-draft `dtbs_check` is not clean, so it
@@ -238,7 +251,7 @@ dependencies:
 | 0015 | 0004 | 0004, 0014 |
 | 0016 | 0004 | 0004, 0014 |
 | 0017 | - | 0010 (sysctrl binding, shared node) |
-| 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series.  2026-11-21: the board DTS must also carry the loader hand-off nodes (`/aliases/console` + `/reserved-memory/flashinfo@80600000`); those are the actual release fix and 0018 alone is not sufficient |
+| 0018 | 0001 (it edits files 0001 creates), 0002 (ARCH_LUOFU/SMP posture) | 0004 (CRG syscon node), 0010 (SYSCTRL node); the DT enable-method is board-DTS content, not in this series.  2026-11-21: the board DTS must also carry the loader hand-off nodes (`/aliases/console` + `/reserved-memory/flashinfo@80600000`); those are the actual release fix and 0018 alone is not sufficient.  The commit-ready companion is **DTS-0001** (`dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, see `06-dts-series-dependency.md`) |
 | 0019 | 0004 (it edits the CRG driver, clock-ID header and YAML binding 0004 adds) | 0004 (CRG syscon node); the seven input clocks, the gate-parent clocks and the two mux parents are board-DTS content, not in this series |
 | 0020 | 0009, 0015 (it rewrites the GEMAC and PIE drivers and bindings they add); 0004/0014 headers at compile time | 0004, 0014 (CRG clock/reset ABI); the ring tables and node enablement are board-DTS content, and the measured inventory is outside the series |
 | 0021 | 0016 (it rewrites the switch driver and binding 0016 adds), 0020 (same ethernet Kconfig file, applied before it), 0004 (CRG state) | 0004, 0014 (CRG gate/reset state, read-only); the 17-window DTS model, CRG phandle and port bitmap are board-DTS content, and the measured inventory is outside the series |
@@ -414,8 +427,8 @@ plan text above is kept as the staging rationale: S1 (UP-only) is still the
 right merge posture for the kernel patch for as long as the DTS series is
 not accepted, because 0018 without the enable-method and the two hand-off
 nodes is inert.  The SMP investigation diagnostics (028/029/033-035/037/039/
-042-arm/059/060/061) are excluded from the release line (05-release-line.md
-section 6); the kernel release patch stays 0018.
+062/063/064/065, formerly 042-arm/059/060/061) are excluded from the release
+line (05-release-line.md section 6); the kernel release patch stays 0018.
 
 ## 10. PIE and LSW staging (patches 0020 and 0021)
 
@@ -580,30 +593,34 @@ The 2026-11-20/21 SMP work turned the target from a host-only skeleton into a
 bench-verified bring-up.  The release classification that follows from it is
 recorded in 05-release-line.md; the placement/order consequences are:
 
-1. **Three layers, not one.**  L0 = the whole target patch stack
-   (62 files, 001-061 plus the duplicate 042 pair) as applied by the
-   OpenWrt build; L1 = L0 minus the 11 bench-only SMP diagnostics
-   (the release line, 51 patches; release-line/manifest.tsv); L2 = this
-   26-patch upstream review form.  The review form is not extended by the
-   release-line work: the L1 network patches (027-058) are do-not-merge
-   gated bench code, not upstream submission candidates.
+1. **Four artefacts, not one.**  L0 = the whole target patch stack
+   (62 files, 001-058 + 062-065; no duplicate numbers) as applied by the
+   OpenWrt build; L1 = L0 minus the 11 bench-only SMP diagnostics (the
+   release line, 51 patches; release-line/manifest.tsv); L2 = this 26-patch
+   upstream review form; L3 = the DTS-series entry **DTS-0001**
+   (dts-series/0001-...patch), the board-DTS companion required by 0018.
+   The review form (L2) is not extended by the release-line work: the L1
+   network patches (027-058) are do-not-merge gated bench code, not upstream
+   submission candidates.  L3 is explicit precisely because the kernel form
+   is kernel-only.
 2. **The SMP fix is not a kernel patch.**  The release-critical change is
    the board DTS loader hand-off contract (/aliases/console and
-   /reserved-memory/flashinfo@80600000), so the DTS delivery decision in
-   section 4 becomes harder: the upstream DTS series must carry those two
-   nodes, and 0018 must be posted together with (or after) it.  In the
-   target tree the DTS stays the OpenWrt target/.../dts/ delivery for now;
-   the kernel DTS series remains the only upstream form.
-3. **Ordering artefacts of L0 that must not survive publication.**  The
-   stack has two 042 patches (SMP SCU/GIC dumps and the GEMAC W9 master
-   switch; different files, filename order applies ARM first) and patches
-   052/053 insert at the same MODULE_PARM_DESC(nodoorbell...) anchor;
-   on pristine 6.18.60 patch 053 applies with one fuzz hunk and strict
-   git apply diverges at it.  Regenerate 052/053 as one clean pair and
-   renumber the duplicate 042 before a clean release/publish snapshot.
+   /reserved-memory/flashinfo@80600000).  The kernel-only form cannot carry
+   it, so it is delivered as the explicit DTS-series entry **DTS-0001**
+   (dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch;
+   section 4) that must be posted with 0018.  In the target tree the DTS
+   stays the OpenWrt target/.../dts/ delivery; DTS-0001 is generated
+   byte-identically from it (single source) and the validator checks both.
+3. **Ordering artefacts of L0 are fixed (2026-11-21).**  The duplicate 042
+   is gone: 042-net stays, the former 042-arm is 062, and its dependent SMP
+   diagnostics moved to 063/064/065 so that filename order remains
+   dependency order.  Patch 053 was regenerated against its post-052 context
+   (same functional content/gates: the resulting luofu-pie.c is
+   byte-identical to the old stack's final file), so the stack now applies
+   with 0 fuzz and strict git apply passes for L1 51/51 and L0 62/62.
 4. **Excluded diagnostics do not break the chain.**  The 51-patch L1 was
-   applied in order on pristine 6.18.60: 51/51 patch(1) RC=0, 0 rejects
-   (6 offset hunks, 1 fuzz hunk from item 3).  No later release patch
+   applied in order on pristine 6.18.60: 51/51 patch(1) RC=0, 0 rejects,
+   3 offset hunks, 0 fuzz; strict git apply 51/51.  No later release patch
    depends on the excluded SMP diagnostic files (platsmp.c,
    compressed/head.S, kernel/head.S are touched only by the excluded set);
    this is why the exclusion is safe without regenerating the rest.
@@ -613,6 +630,7 @@ recorded in 05-release-line.md; the placement/order consequences are:
    attended module gates are the 058 canonical set.  The review form does
    not carry either; the DTS/config boot contract is target content.
 
-Evidence: 05-release-line.md, release-line/manifest.tsv,
+Evidence: 05-release-line.md, 06-dts-series-dependency.md,
+release-line/manifest.tsv, dts-series/0001-...patch,
 validation/release-line/, ../../docs/SMP-RE.md sections 21-24, and the
 parent-repo evidence logs named in 05-release-line.md section 12.

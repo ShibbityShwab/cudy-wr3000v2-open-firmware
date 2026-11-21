@@ -1094,11 +1094,14 @@ opensource/docs/SMP-RE.md section 24.
 
 Important dependency: this patch is necessary but not sufficient.  The
 enable-method, the console alias and the flashinfo reserved-memory node
-are all board-DTS content and are not part of this kernel series; an
-upstream submission must carry them in its DTS series.  Without the
-enable-method the boot stays UP; without the two hand-off nodes CPU1 is
-never brought into the loader's pen-poll loop and the release has no
-consumer.
+are all board-DTS content and are not part of this kernel series.  The
+dependent upstream DTS-series entry is
+`dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
+(DTS-0001: adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` with the two
+hand-off nodes; documented in `06-dts-series-dependency.md`).  Post the
+DTS entry together with, or before, this patch; without the enable-method
+the boot stays UP, and without the two hand-off nodes CPU1 is never
+brought into the loader's pen-poll loop and the release has no consumer.
 
 The patch remains an RFC for upstream review.  The target image that
 carries it is bench-verified (2 CPUs, wired LAN through the documented
@@ -1241,7 +1244,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 15 | 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
 | 16 | f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |
 | 17 | 471a21225db7925d1e0b70f32f1637ee8e07842774ea6a6a22996988472c4da3 | c991aaa50419f4b6ba0c9a37018a682c0a7a5afc66d43c611c947af25cce0f1d |
-| 18 | 7bbc270c15af7e9a00b9d23f26a6881f9638ab37d655e8db5b73786c0294df1a | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
+| 18 | b83933ee6b1aff92910ce5472ff428f261140f2a98fa8eed1f42cf2e6264479c | 5509ca597852143a22040d8421cd794397f8f85fee841d611de68e53cca5e00b |
 | 19 | d97fd9aa2c2bc6a1110b4e88aaa851094647ce4b5084e2612e771d91e27f99e9 | 9d86498b405e43cc05b77b46b5ce74d4dfa5256a3dd6f444690d85e0cbc0513c |
 | 20 | 624fa7cc19fcaa79d4d668c758d0216814863e99c561d775edba145ee3059212 | 806a113c9dc581ccb3d9248f1298f4cf8a48e1645228b525b1a4853f70bfa6e8 |
 | 21 | d20a2e676ce148396d7d71267fce120c06e983884aca7ff84b20b1f5e3815497 | de69296d80f2419b574d3af4ec4a8b83c877a711d278fc71350d14a231fe307e |
