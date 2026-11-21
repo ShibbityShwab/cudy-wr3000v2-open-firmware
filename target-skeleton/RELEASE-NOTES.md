@@ -210,3 +210,16 @@ behaviour is introduced. The 14 deferred active deltas (switch unit address/reg 
 renames, status removals, thermal/WiFi/sp804/WOE removals, model/compatible change, macro
 rendering) are documented in upstream/series-6.18/07-dts-upstream-bindings.md section 3 and each
 needs its own hardware boot-test; driver-facing deltas must never ride along with prose cleanup.
+
+## Multi-port Ethernet status (2026-11-21)
+
+The verified baseline serves one jack (eth2) through the CPU-copy workaround: switch
+ingress mirror of eth2/port 11 to CPU destination port 4, and PIE delivers the copies
+to the eth2 netdev. The other jacks do not work through this path because the CPU-copy
+completion reports port 0 and carries no confirmed source-port identifier; delivering
+all mirrored frames to one netdev would be incorrect bridge behaviour. The far-right
+bench jack was verified to be a LAN port (box stayed alive and its LAN bridge sent IPv6
+RAs, while host-to-box frames were not delivered). The agreed next step is the attended
+source-port experiment in opensource/docs/MULTI-PORT-PLAN.md: if the RX completion has a
+source-port field, extend mirror mask + per-port delivery; if not, multi-port LAN/WAN
+forwarding is the native L2/VLAN hardware bridge project (LSW-SPEC), not a CPU-copy hack.
