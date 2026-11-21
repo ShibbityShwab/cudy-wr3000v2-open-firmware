@@ -175,18 +175,29 @@ armed and UART captured; (3) Wi-Fi feasibility then optional port; (4) upstream 
   byte-identical to the 7421bb7a baseline); after any active-DTS change the
   rebuilt image must be boot-tested before it is trusted.
 
-## Install path status (2026-11-21)
+## Install path status (2026-11-21, corrected after the mixed-pair diagnosis)
 
-Manual stock-mediated install is verified repeatedly on the bench (write kernelb from the stock
-telnet shell, ubiformat rootfsb, selector cell 0x11, reboot): latest run wrote image 7421bb7a
-(kernelb sha 5632ccdb..., rootfs part sha 52977160...) and booted with 2 CPUs/6 LEDs/event0.
-The automated first-install tool is host-side untested on the unit because it needs an SSH
-transport and the vendor image has no dropbear and no opkg; a target dropbear pushed to /tmp also
-failed host-key generation (Bad buf_getptr). Adding a telnet+base64 transport (binary-safe
-readback) or provisioning a working SSH server on stock are the two ways to close the automated
-install gate. Also: writing next_pair a from OUR image is effective (cell reads 0x10) but the
-boot-pair recorder re-records the running pair on the next boot, so a warm reboot can return to
-pair B; the reliable stock switch is the stock-side cell write + stock reboot.
+The verified install transport is the **stock telnet root shell** (`tools/stock-telnet-install.sh`
++ `tools/telnet-exec.py`; fixed in commit `6e69aa3`): read-only inspect by default; `--apply
+--attended --recovery-armed` writes only pair **b** (kernelb mtd12 + rootfsb mtd14), verifies
+uploads/read-backs/active-pair-unchanged, sets and reads back the U-Boot env `bootflag`, moves
+the selector cell, reboots, and requires the booted cmdline to contain `ubi.mtd=rootfsb` and
+the project marker.  Verified end-to-end 2026-11-21 (flashinfo-test image 6e9c54d0 PASS).
+
+Install/recovery rules learned on the unit:
+- **Set the U-Boot env `bootflag` together with the selector cell.** The loader reads the
+  kernel slot named by the env bootflag; a cell-only handover after a RESET-hold recovery can pair
+  our kernel with the stock rootfs.  The installer refuses when env and cell disagree.
+- **Our image can only be written to pair b.** Its baked cmdline uses `ubi.mtd=rootfsb`, so
+  writing pair a after a recovery produces the mixed our-kernel/stock-rootfs state.
+- **The broker channel (CVE-2026-71961) only works on a consistent vendor pair.** The vendor
+  bdinfo checkuuid reads `/proc/sys/dev/flash_uuid`; in the mixed state neither the vendor web
+  wizard nor cmagent works.  Recovery is physical RESET-hold + TFTP stock image to restore a
+  consistent pair, then the env-bootflag/selector handover above.
+- The older first-install design (`first-install-stock.sh` + `FIRST-INSTALL.md`) needs SSH
+  and was never hardware-run; the vendor image has no dropbear/opkg.  The telnet installer is the
+  bench path.
+
 
 ## Hardware validation status of the cleaned DTS (2026-11-21)
 

@@ -63,7 +63,7 @@ check_unaligned_dtb() {
     psize=$(stat -c%s "$padded")
     [ $((psize % 8)) -eq 0 ] || die "$label: padded DTB is still unaligned"
     compat2=$("$FDTGET" -t s "$padded" /reserved-memory/flashinfo@80600000 compatible 2>&1)         || die "$label: padded DTB lost the flashinfo node"
-    [ "$compat2" = "hsan,flashinfo_reserved" ] || die "$label: padded DTB contract changed"
+    [ "$compat2" = "hisilicon,luofu-flashinfo hsan,flashinfo_reserved" ] || die "$label: padded DTB contract changed"
     echo "$label: DTB totalsize $size B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to $psize B and keeps the hand-off contract" | tee -a "$logs/summary.txt"
     rm -f "$padded"
 }
@@ -222,7 +222,7 @@ else
     atag=$("$FDTGET" -t x "$DTB" /reserved-memory/flashinfo@80600000 atag-offset 2>&1) || die "flashinfo atag-offset missing"
     method=$("$FDTGET" -t s "$DTB" /cpus enable-method 2>&1) || die "enable-method missing"
     echo "DTS contract: console=$console flashinfo-compatible=$compat reg=$reg atag-offset=$atag enable-method=$method" | tee -a "$LOGS/summary.txt"
-    [ "$compat" = "hsan,flashinfo_reserved" ] || die "unexpected flashinfo compatible: $compat"
+    [ "$compat" = "hisilicon,luofu-flashinfo hsan,flashinfo_reserved" ] || die "unexpected flashinfo compatible: $compat"
     [ "$reg" = "80600000 4000" ] || die "unexpected flashinfo reg: $reg"
     [ "$atag" = "1000" ] || die "unexpected atag-offset: $atag"
     [ "$method" = "hisilicon,luofu-smp" ] || die "unexpected enable-method: $method"
@@ -255,7 +255,7 @@ else
         r2=$("$FDTGET" -t x "$DTB2" /reserved-memory/flashinfo@80600000 reg 2>&1) || die "DTS series: flashinfo reg missing"
         a2=$("$FDTGET" -t x "$DTB2" /reserved-memory/flashinfo@80600000 atag-offset 2>&1) || die "DTS series: atag-offset missing"
         m2=$("$FDTGET" -t s "$DTB2" /cpus enable-method 2>&1) || die "DTS series: enable-method missing"
-        [ "$f2" = "hsan,flashinfo_reserved" ] || die "DTS series: unexpected flashinfo compatible"
+        [ "$f2" = "hisilicon,luofu-flashinfo hsan,flashinfo_reserved" ] || die "DTS series: unexpected flashinfo compatible"
         [ "$r2" = "80600000 4000" ] || die "DTS series: unexpected flashinfo reg"
         [ "$a2" = "1000" ] || die "DTS series: unexpected atag-offset"
         [ "$m2" = "hisilicon,luofu-smp" ] || die "DTS series: unexpected enable-method"

@@ -1,76 +1,57 @@
-# Blocker 2 (last remaining) - upstream binding for the loader hand-off window
+# Blocker 2 - upstream binding for the loader hand-off window (CLOSED)
 
-**STATUS: draft binding + final host-side option; ONE loader boot-test still
-required before adoption.**  No hardware claim is made here.
+**STATUS: ADOPTED after hardware boot-test image 6e9c54d0 (2026-11-21).  No
+upstream blockers remain.**  The target DTS now uses
+`compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"` and the
+stock loader accepted the documented first compatible in the boot-test;
+the drafted reserved-memory child binding stays as the maintainer-facing
+documentation.
 
 ## Measured contract (SMP-RE.md section 24)
 
-The stock Cudy/Hisilicon U-Boot `bootfip` refuses to stage the kernel unless
-the base DTB carries:
+The stock `bootfip` refuses to stage the kernel unless the base DTB carries:
 
 1. `/aliases/console` - resolved to the console UART node;
-2. `/reserved-memory/flashinfo@80600000` - compatible
-   `"hsan,flashinfo_reserved"`, `reg = <0x80600000 0x4000>`,
-   `atag-offset = <0x1000>`.  The loader reads `atag-offset` and computes
+2. `/reserved-memory/flashinfo@80600000` - measured vendor form
+   `compatible = "hsan,flashinfo_reserved"`, `reg = <0x80600000 0x4000>`,
+   `atag-offset = <0x1000>`; the loader computes
    `atag_addr = 0x80601000`.
 
-Without them staging bails ("alias console not found") and CPU1 never enters the
-loader pen-poll loop.  This is measured and release-critical.
+## Boot-test PASS (image 6e9c54d0)
 
-## Final recommended option (host-side decision, not hardware-tested)
+The image was built from the current adopted DTS with only the compatible list
+changed, flashed over the broker channel to pair b (mtd write kernelb,
+ubiformat mtd14, `fw_setenv bootflag=b` verified, selector boot_reg 0x11
+verified, FIRE_OK) and booted:
 
-Use a documented `hisilicon` compatible first and keep the vendor string as a
-fallback:
+- U-Boot logged `bootflag b bootreg 11` and `Image Name: Linux-6.18.60`;
+- `bootfip` staging lines appear for the new first compatible:
+  `alias console=/serial@1010f000`, `serialnr->high=0x8250`,
+  `serialnr->low=0x1010f000`, `atag_addr=0x80601000` (stock/vendor boot
+  prints `alias console=/uart1@...` - the same device);
+- booted 6.18.60, 2 CPUs, `GIC-0 29 Level twd`, cmdline
+  `ubi.mtd=rootfsb` + full `luofu_switch` marker;
+  `/proc/device-tree/reserved-memory/flashinfo@80600000/compatible` =
+  `hisilicon,luofu-flashinfo hsan,flashinfo_reserved`; selector 0x11, no
+  Oops/BUG/panic/RCU stall.  Evidence:
+  `build/evidence-bench-gates/flashinfo-loader/`.  Adopted in commit
+  `71b2167`.
 
-    flashinfo@80600000 {
-        compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved";
-        reg = <0x80600000 0x4000>;
-        atag-offset = <0x1000>;
-    };
+## Final artefacts
 
-The proposed binding is `hisilicon,luofu-flashinfo.yaml` (draft under
-`Documentation/devicetree/bindings/reserved-memory/`); its `compatible`
-schema accepts the new string, the vendor string, and the pair in that order.
-The vendor string stays in the DTS as the loader-compatibility fallback; it is
-retained only because the stock loader's match path has not been re-tested with
-the new string first.
+- proposed binding: `hisilicon,luofu-flashinfo.yaml` (reserved-memory child;
+  accepts the documented string, the vendor string, and the pair in the adopted
+  order);
+- DTS compatible-list delta: `dts-flashinfo-compatible.diff` (adopted);
+- current DTS 681 lines sha256 `381b2e8c...`; DTB 12,678 B sha256
+  `62574b11...` (pad 12,680 B sha256 `8d79794e...`); DTS-0001 sha256
+  `886f3ad0...` (694 lines); release-line validator expects the new
+  compatible pair and PASSes.
 
-Fallback plan if the loader test fails: keep the vendor compatible first/only
-and register `hsan` in `Documentation/devicetree/bindings/vendor-prefixes.yaml`
-(or ask the maintainers whether the vendor-only reserved-memory child can be
-documented as the loader contract); do not rename the vendor string in the DTS.
+## Remaining work (none for the blocker)
 
-## Exact hardware test required (one variable, not yet run)
-
-1. Start from the current final board DTS (681 lines, sha256 `9d96ac31...`;
-   image baseline c3ef2a50 lineage).  Change ONLY the flashinfo `compatible`
-   list to the recommended pair; no other active DTS delta.
-2. Build the same target image (the normal image recipe, including
-   `Build/luofu-pad-dtb`), record its sha256 and the DTB size/sha.
-3. Install on the unit with the verified path (pair b, selector 0x11 is the
-   current known-good state) and capture UART read-only (no typing).
-4. **PASS criteria:** the stock `bootfip` prints its staging lines
-   (`alias console=...`, `serialnr->high/low=...`,
-   `atag_addr=0x80601000`), the kernel boots, CPU1 comes up (2 CPUs), no
-   data abort, no fallback to stock pair A.
-5. **FAIL criterion:** staging bails/falls back to stock; then revert to the
-   vendor-first/only compatible and pursue the fallback plan rather than
-   guessing.
-
-This tests the loader's compatible match behavior, not the kernel.  It is the
-only hardware item left for the blocker list.
-
-## Draft artifacts
-
-- `hisilicon,luofu-flashinfo.yaml` - proposed reserved-memory child binding.
-- `dts-flashinfo-compatible.diff` - the compatible-list delta (the only
-  change in the hardware test).
-
-## Maintainer questions
-
-1. Is a SoC-specific reserved-memory child binding acceptable for a
-   bootloader-consumed hand-off window?
-2. Is the `hisilicon` compatible first acceptable with the vendor string kept
-   as fallback, or should the vendor-only form be documented instead?
-3. Where should the binding live (`bindings/reserved-memory/` or
-   `bindings/arm/hisilicon/`)?
+- The binding still needs upstream maintainer review before posting; that is
+  the normal RFC path, not a blocker item.
+- Fallback if a maintainer requires vendor-only: keep the vendor string
+  first/only and register `hsan` in vendor-prefixes.yaml (no hardware
+  change; the loader already accepted both strings).

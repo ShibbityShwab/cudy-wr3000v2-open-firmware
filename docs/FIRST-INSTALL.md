@@ -5,7 +5,20 @@ No device, UART, TFTP, flash or bench tool was touched for this document or for 
 tool it describes; no write, boot, selector move or recovery claim is made. Every
 hardware statement is re-read from artifacts already in the repository or the parent
 (private) repository and carries an evidence marker. The install path itself is
-**[I] implemented host-side, [U] unexecuted**.
+**[I] implemented host-side, [U] unexecuted** by `first-install-stock.sh`.
+
+**2026-11-21 bench update:** the SSH-based first-install design below is still unexecuted
+and the vendor image has no dropbear/opkg.  The install that actually ran is the stock
+telnet installer (`tools/stock-telnet-install.sh`, fixed in `6e69aa3`): pair-b-only,
+refuses env-bootflag/cell disagreement, sets and reads back the env `bootflag`, moves the
+selector, and requires the booted cmdline to contain `ubi.mtd=rootfsb` and the project
+marker.  Lesson: after a RESET-hold recovery the env `bootflag` must be set together with
+the selector (the loader reads the kernel slot named by the env); our image's baked
+`ubi.mtd=rootfsb` means only pair b is a consistent target; the broker channel
+(CVE-2026-71961) only works on a consistent vendor kernel+rootfs pair (vendor
+`/proc/sys/dev/flash_uuid`), and the mixed our-kernel/stock-rootfs state disables the
+vendor wizard and cmagent.  Recovery is physical RESET-hold + TFTP stock image, then a
+consistent env-bootflag + selector handover.
 
 - **Task:** shared task-38, 2026-11-18. Deliverable: this design document, the
   fail-closed host tool (parent `tools/first-install-stock.sh`) and its mocked test

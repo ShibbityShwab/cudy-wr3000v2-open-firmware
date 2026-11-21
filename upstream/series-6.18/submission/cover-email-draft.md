@@ -37,10 +37,10 @@ bootloader consumes before Linux runs (`/aliases/console` and
 `/reserved-memory/flashinfo@80600000`).  The kernel form is kernel-only, so
 the board devicetree ships as the separate DTS-series entry **DTS-0001**
 (`../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`,
-sha256 `c029fd44...`, 694 lines); it must be posted together with kernel patch 0018.
+sha256 `886f3ad0...`, 694 lines); it must be posted together with kernel patch 0018.
 0018 without the DTS contract is inert.  The base DTB totalsize needs 8-byte
 alignment for the stock bootfip gate-word load; the target build pads it with
-`pad-dtb.py` (12,650 -> 12,656 B; see `../06-dts-series-dependency.md`).
+`pad-dtb.py` (12,678 -> 12,680 B; see `../06-dts-series-dependency.md`).
 
 **What has been validated (host-only):** sequential application of the 26
 patches to pristine 6.18.60 with `patch(1)` and `git am` (identical trees,
@@ -49,22 +49,21 @@ release-line validator (51 patches) applies with 0 fuzz and strict
 `git apply` is clean; the board DTB compiles with the loader contract present
 and DTS-0001 is byte-identical to the single source.  There is **no** upstream
 Tested-by: the only hardware evidence is target-image bench evidence for the
-target's own build (DTS-purpose image c3ef2a50: 2 CPUs, `GIC-0 29 Level twd`,
-board_name=cudy,wr3000-v2, userspace MACs ...:73/...:74, ping 15/15; previous
-DTS-purpose baseline f6685b80 and earlier baseline 7421bb7a).  Host checks are
+target's own build (DTS-purpose image 6e9c54d0: stock loader staging PASS,
+2 CPUs, `GIC-0 29 Level twd`, cmdline ubi.mtd=rootfsb + project marker;
+previous DTS-purpose baselines c3ef2a50, f6685b80, 7421bb7a).  Host checks are
 necessary but not sufficient.
 
-**One remaining blocker before merge intent:** `hsan,flashinfo_reserved` /
-the loader hand-off binding.  The final host-side option is a documented
+**ZERO remaining blockers before merge intent:** all documented blockers are
+closed by individual hardware boot-tests (TWD f6685b80; MAC/switch/compatible
+c3ef2a50; flashinfo 6e9c54d0).  The last one was the
+`hsan,flashinfo_reserved` loader binding: the adopted DTS uses a documented
 `hisilicon,luofu-flashinfo` compatible first with the vendor string as
-fallback plus the drafted reserved-memory binding; it needs one loader
-boot-test (exact procedure in the blocker-reduction README), not yet run and
-not claimed.  The TWD flags, 6.18 MAC provisioning, switch MMIO-first order
-(DTS + in-series binding) and cudy-compatible ordering blockers are closed by
-individual hardware boot-tests (images f6685b80 and c3ef2a50).  Pinctrl
-consumer states, consumer clocks, the A/B selector protocol beyond the measured
-cell, LED description, Wi-Fi and thermal support are out of scope for this
-wired-first RFC.
+fallback, and the stock loader accepted it.  The drafted reserved-memory
+binding remains maintainer-facing documentation.  Pinctrl consumer states,
+consumer clocks, the A/B selector protocol beyond the measured cell, LED
+description, Wi-Fi and thermal support are out of scope for this wired-first
+RFC.
 
 I would welcome comments on the split and on the RFC group; I am not asking for
 a merge in this round and I will not add a Tested-by that no independent party

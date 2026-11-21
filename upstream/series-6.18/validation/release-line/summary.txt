@@ -4,11 +4,11 @@ pristine version: 6.18.60
 manifest: 51 included, 11 excluded
 patch(1): 51/51 patches RC=0, 146 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects
 strict git apply: all 51 patches apply without fuzz
-board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12650 B sha256 a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94
-target DTS: DTB totalsize 12650 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12656 B and keeps the hand-off contract
-DTS contract: console=/serial@1010f000 flashinfo-compatible=hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12678 B sha256 62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899
+target DTS: DTB totalsize 12678 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12680 B and keeps the hand-off contract
+DTS contract: console=/serial@1010f000 flashinfo-compatible=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
 DTS series: board DTS byte-identical to the target DTS
-DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 12650 B sha256 a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94
-DTS series: DTB totalsize 12650 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12656 B and keeps the hand-off contract
-DTS series contract: console=/serial@1010f000 flashinfo=hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 12678 B sha256 62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899
+DTS series: DTB totalsize 12678 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12680 B and keeps the hand-off contract
+DTS series contract: console=/serial@1010f000 flashinfo=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
 PASS: release line applies and the loader hand-off DTS contract is present. No hardware and no kernel build was involved.

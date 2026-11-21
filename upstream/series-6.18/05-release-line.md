@@ -80,23 +80,23 @@ Where it is committed: `opensource` submodule `5a1b5b3` (DTS nodes) and `9e17d5c
 Upstream action: the DTS contract must ship with kernel patch 0018.  The
 dependency is an explicit, commit-ready upstream artefact: **DTS-0001**,
 `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-(sha256 `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`,
-current final 2026-11-21: conservative cleanup + four individually boot-tested
+(sha256 `886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c`,
+current final 2026-11-21: conservative cleanup + five individually boot-tested
 active deltas: TWD level-high, MAC-nvmem removal, switch MMIO-first order,
-cudy-compatible ordering).  It adds
+cudy-compatible ordering, flashinfo compatible-first).  It adds
 `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (681 lines, current final)
 plus the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; post it together with
 0018.  The DTS series must also state the base-DTB padding requirement: the
-compiled DTB is 12,650 B with an unaligned totalsize and the image build MUST
+compiled DTB is 12,678 B with an unaligned totalsize and the image build MUST
 run `Build/luofu-pad-dtb` before `append-dtb` (TRAILER-FORMAT.md
 section 11; details in `06-dts-series-dependency.md` section 3.1).  The
 cleanup record, the boot-test adoptions, the hardware regression of the
-superseded active cleanup and the two remaining upstream blockers are in
+superseded active cleanup and the closed blocker list (zero remain) are in
 `07-dts-upstream-bindings.md`; **host checks are necessary but not
 sufficient - every active-DTS change must be boot-tested on the unit** (TWD:
-image f6685b80; final deltas: image `c3ef2a50`).  The dependency record,
-ordering and regeneration procedure is
-`06-dts-series-dependency.md`, and `tools/check-release-line.sh`
+image f6685b80; final deltas: image c3ef2a50; flashinfo: image
+`6e9c54d0`).  The dependency record, ordering and regeneration procedure
+is `06-dts-series-dependency.md`, and `tools/check-release-line.sh`
 applies/compiles DTS-0001, checks the contract and exercises the pad step on a
 copy on every validation run.  [V]
 
@@ -121,23 +121,27 @@ pre-clean-DTS image used as the hardware baseline for the DTS work):
   feature image also needed the base-DTB padding fix (section 3.1).
   [V] (see also `target-skeleton/RELEASE-NOTES.md` and the parent ledger
   entry for 2026-11-21.)
-- **current DTS-purpose baseline `c3ef2a50` (2026-11-21)** - built from
-  the TWD-adopted DTS with the three final active deltas applied (MAC-nvmem
-  removal, switch MMIO-first order, cudy-compatible ordering + OpenWrt
-  SUPPORTED_DEVICES), installed via the verified telnet installer (PASS; pair
-  b, selector 0x11): 6.18.60, 2 CPUs, `/proc/interrupts`
-  `GIC-0 29 Level twd`, `/tmp/sysinfo/board_name = cudy,wr3000-v2`,
-  /proc/device-tree/compatible starts with cudy,wr3000-v2, userspace MACs
-  ...:73/...:74, br-lan up, ping 15/15 0% loss, no Oops/BUG/panic/RCU stall.
-  DTB 12,650 B sha256 `a0af2899...` (pad 12,656 B sha256
-  `01b74561...`).  This supersedes f6685b80 **for DTS purposes**;
-  f6685b80 was the previous DTS-purpose baseline and 7421bb7a remains the
-  earlier verified baseline.  Adopted in commit `6c2cc2f`; DTS-0001
-  sha256 `c029fd44...`.  [V]
-- **previous DTS-purpose baseline `f6685b80` (2026-11-21)** - the
-  TWD-adoption image: 2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`,
-  TWD counts ~100 Hz, ping 20/20; TWD delta adopted in commit `5b401c1`.
-  Superseded by c3ef2a50 for DTS purposes.  [V]
+- **current DTS-purpose baseline `6e9c54d0` (2026-11-21)** - built from
+  the current adopted DTS with only the flashinfo compatible list changed
+  (documented `hisilicon,luofu-flashinfo` first, vendor string fallback),
+  flashed over the broker channel to pair b (env bootflag=b, selector 0x11
+  verified) and booted: 6.18.60, 2 CPUs, `GIC-0 29 Level twd`,
+  bootfip staging lines with the new first compatible (`atag_addr=0x80601000`),
+  `/proc/device-tree/reserved-memory/flashinfo@80600000/compatible` =
+  `hisilicon,luofu-flashinfo hsan,flashinfo_reserved`, cmdline
+  `ubi.mtd=rootfsb` + full `luofu_switch` marker, no Oops/BUG/panic/RCU
+  stall.  DTB 12,678 B sha256 `62574b11...` (pad 12,680 B sha256
+  `8d79794e...`).  This supersedes c3ef2a50 **for DTS purposes**;
+  c3ef2a50 was the previous DTS-purpose baseline, f6685b80 the one before, and
+  7421bb7a the earlier verified baseline.  Adopted in commit `71b2167`;
+  DTS-0001 sha256 `886f3ad0...`; zero blockers remain.  [V]
+- **previous DTS-purpose baseline `c3ef2a50` (2026-11-21)** - MAC-nvmem
+  removal, switch MMIO-first order and cudy-compatible ordering; 2 CPUs,
+  `GIC-0 29 Level twd`, board_name=cudy,wr3000-v2, MACs ...:73/...:74,
+  ping 15/15; adopted in commit `6c2cc2f`.  Superseded by 6e9c54d0.
+- **earlier DTS-purpose baseline `f6685b80`** - TWD level-high delta
+  (commit `5b401c1`); TWD counts ~100 Hz, ping 20/20.  Superseded by
+  c3ef2a50.  [V]
 - **previous known-good pre-clean-DTS baseline `7421bb7a`** - same kernel
   config and userspace, DTB 13,041 B padded to 13,048 B, boot observed at
   partition scan 0.93-1.16 s, luofu-reboot 2.28 s, luofu-wdt 2.30 s, ubi
@@ -330,19 +334,20 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62 [V];
 - release-critical DTS contract (current target DTS and DTS-0001): both
-  `cpp` + `dtc` RC=0, **0 stderr bytes**, DTB **12,650 B**, sha256
-  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`;
-  `fdtget` confirms `/aliases/console`, `compatible = "hsan,flashinfo_reserved"`,
+  `cpp` + `dtc` RC=0, **0 stderr bytes**, DTB **12,678 B**, sha256
+  `62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899`;
+  `fdtget` confirms `/aliases/console`,
+  `compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"`,
   `reg = <0x80600000 0x4000>`, `atag-offset = <0x1000>` and
   `/cpus/enable-method = "hisilicon,luofu-smp"`;
-- **totalsize alignment:** the 12,650 B DTB totalsize is **not** 8-byte
+- **totalsize alignment:** the 12,678 B DTB totalsize is **not** 8-byte
   aligned; the validator runs `target-skeleton/tools/pad-dtb.py` on a copy,
-  which pads it to **12,656 B** (sha256 `01b74561...`) and keeps the
+  which pads it to **12,680 B** (sha256 `8d79794e...`) and keeps the
   hand-off contract.  The image build MUST run `Build/luofu-pad-dtb`
   (TRAILER-FORMAT.md section 11; an unaligned load made stock U-Boot
   data-abort and fall back to stock on 2026-11-21) [V];
 - **DTS-0001**: regenerated from the current source (sha256
-  `c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`, 694
+  `886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c`, 694
   lines); applies to the L1 tree RC=0; its added board DTS is byte-identical to
   the single-source target DTS; the compiled DTB and the contract checks are
   identical to the target-DTS ones [V];
@@ -350,18 +355,20 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   YAML into patch 021: 26/26 patch(1)+`git am`, identical trees, 3 offset
   hunks, 0 fuzz, 0 errors / 58 checkpatch warnings; source patch sha256
   `86f6f020...`, series file sha256 `d249a83a...` (driver unchanged,
-  by-name lookups) [V];
+  by-name lookups).  Not re-run for the DTS-only flashinfo compatible update
+  (no series file changed) [V];
 - current final DTS: conservative cleanup (comments only; commit `7ae18f2`)
   + boot-tested TWD level-high (commit `5b401c1`, image f6685b80) +
   boot-tested MAC-nvmem removal, switch MMIO-first order and cudy-compatible
-  ordering (commit `6c2cc2f`, image `c3ef2a50`).  The conservative
-  step's DTB was byte-identical to the pre-clean DTB (`49fe5c47...`); the
-  current 12,650 B DTB was boot-tested as image c3ef2a50.  No
-  dtschema/dt-validate tooling was available, so the manual binding review in
-  `07-dts-upstream-bindings.md` section 4 stands in for `dtbs_check`
-  [V]/[I].  **Any future active-DTS change must be boot-tested**; host checks
-  alone are not sufficient (the superseded active-DTS cleanup regression in
-  section 3 / 07 section 1 proves it).
+  ordering (commit `6c2cc2f`, image c3ef2a50) + boot-tested flashinfo
+  compatible-first (commit `71b2167`, image `6e9c54d0`).  The
+  conservative step's DTB was byte-identical to the pre-clean DTB
+  (`49fe5c47...`); the current 12,678 B DTB was boot-tested as image
+  6e9c54d0.  No dtschema/dt-validate tooling was available, so the manual
+  binding review in `07-dts-upstream-bindings.md` section 4 stands in for
+  `dtbs_check` [V]/[I].  **Any future active-DTS change must be
+  boot-tested**; host checks alone are not sufficient (the superseded
+  active-DTS cleanup regression in section 3 / 07 section 1 proves it).
 - no kernel build in this pass: the last full-series build records (compile
   RC=0, CONFIG_WERROR, zImage/hash, TEXT_OFFSET unchanged) are in
   `04-validation.md` and SKELETON-SMOKE.md; the release image itself was built

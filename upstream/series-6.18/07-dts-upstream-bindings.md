@@ -74,21 +74,24 @@ Because the compiled DTB is byte-identical, the conservative DTS restores the
 exact hardware-verified devicetree semantics of image 7421bb7a; the remaining
 visible change is prose only.
 
-After that boot-test, four active devicetree deltas were adopted, each on its
+After that boot-test, the active devicetree deltas were adopted, each on its
 own hardware boot-test: the TWD timer interrupt encoding (commit `5b401c1`,
-image f6685b80; section 6.1), then the MAC-nvmem removal, switch MMIO-first
-register order and cudy-compatible ordering plus the OpenWrt
-`SUPPORTED_DEVICES` update (commit `6c2cc2f`, image **c3ef2a50**; section
-6.2).  Current final DTS: **681 lines**, sha256
-`9d96ac31b49cecebd8e99fec7b53ba0ef5ee52132383bd46cf1c0eda0b17f342`; current
-DTB: **12,650 B** sha256
-`a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`, padded
-to **12,656 B** sha256
-`01b74561869cf3d959c1a64defff6fcc70da81ef21f1370adb492eb8fe6a7df4`;
+image f6685b80; section 6.1), the MAC-nvmem removal, switch MMIO-first order and
+cudy-compatible ordering plus the OpenWrt `SUPPORTED_DEVICES` update (commit
+`6c2cc2f`, image c3ef2a50; section 6.2), and finally the flashinfo
+`hisilicon,luofu-flashinfo` first compatible with the vendor string fallback
+(commit `71b2167`, image **6e9c54d0**; section 6.3).  Current final DTS:
+**681 lines**, sha256
+`381b2e8ca54d88f91b23370717bc3f635b979ecb1f8e841a2b5af05f960809b2`; current
+DTB: **12,678 B** sha256
+`62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899`, padded
+to **12,680 B** sha256
+`8d79794effef4d29523908618ebbdb1b0a47469dffcfdbea78a239191860b055`;
 DTS-0001 regenerated: sha256
-`c029fd44e686e4366d238056582d4bd6c7dcc1a280cadda3792b76991c4ff5b8`, 694
-lines.  Image **c3ef2a50** is the current DTS-purpose hardware baseline; it
-supersedes f6685b80, and 7421bb7a remains the earlier verified baseline.
+`886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c`, 694
+lines.  Image **6e9c54d0** is the current DTS-purpose hardware baseline; it
+supersedes c3ef2a50; f6685b80 was the previous DTS-purpose baseline and
+7421bb7a the earlier verified baseline.
 
 ## 3. Optional deltas (NOT applied; each needs its own hardware-tested patch)
 
@@ -120,12 +123,14 @@ not "prose cleanup".
 The conservative DTS keeps several known binding deviations because they were
 present in the hardware-verified DTB and are not prose:
 
-1. `flashinfo@80600000` uses the vendor compatible
-   `"hsan,flashinfo_reserved"`; it is the stock loader contract and has no
-   upstream binding yet.  The final host-side option is a documented
-   `hisilicon,luofu-flashinfo` compatible first with the vendor string kept as
-   fallback, plus the drafted reserved-memory binding; adopting it needs ONE
-   loader boot-test (see section 6).
+1. `flashinfo@80600000` uses
+   `compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"`: the
+   documented upstream string first with the stock-loader vendor string retained
+   as fallback.  The drafted reserved-memory binding documents the pair.  The
+   loader accepted the new first compatible in the 6e9c54d0 boot-test (section
+   6.3); the stock/vendor boot prints the alias as `alias console=/uart1@...`
+   while our loader staging prints `alias console=/serial@1010f000` - both
+   are the same device.
 2. The bdinfo MAC nvmem cells are **removed** in the adopted 6.18 DTS (commit
    6c2cc2f): MACs are provisioned by userspace/the vendor path, boot-tested on
    image c3ef2a50 (eth0-eth2 = MAC ...:73, eth3 = ...:74).
@@ -164,75 +169,47 @@ review against the in-series YAMLs and the standard 6.18 bindings.
   **13,041 B** sha256
   `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
   byte-identical to the known-good DTB (proves the prose-only step);
-- current final DTS (after the adopted MAC/switch/compatible deltas): cpp+dtc
-  RC=0, 0 stderr; DTB **12,650 B** sha256
-  `a0af289969ff7a458448a8171eaf56b8332e18c771c362880af88a1998721b94`;
-  totalsize unaligned, pad step **12,656 B** sha256
-  `01b74561869cf3d959c1a64defff6fcc70da81ef21f1370adb492eb8fe6a7df4`, loader
+- current final DTS (after the flashinfo adoption): cpp+dtc RC=0, 0 stderr;
+  DTB **12,678 B** sha256
+  `62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899`;
+  totalsize unaligned, pad step **12,680 B** sha256
+  `8d79794effef4d29523908618ebbdb1b0a47469dffcfdbea78a239191860b055`, loader
   hand-off contract preserved (same pad requirement as
   `../../docs/TRAILER-FORMAT.md` section 11);
 - release-line validator (current): L1 51/51 patch(1) RC=0, 0 rejects, 3 offset
-  hunks, **0 fuzz**, strict `git apply` 51/51; target DTS contract and
-  DTS-0001 identity PASS; pad step exercised; DTS-0001 sha256
-  `c029fd44...` (694 lines);
+  hunks, **0 fuzz**, strict `git apply` 51/51; target DTS contract
+  (`hisilicon,luofu-flashinfo hsan,flashinfo_reserved`) and DTS-0001
+  identity PASS; pad step exercised; DTS-0001 sha256
+  `886f3ad0...` (694 lines);
 - upstream review form: not rerun - no series file changed by these DTS-only
   deltas; the last recorded run remains **26/26 patch(1)+`git am`,
   identical trees, 0 errors / 58 warnings**;
 - `gen-series.py --check` clean; `validation/sha256sums.txt` 89
   entries, `sha256sum -c` passes; manifest 51 include / 11 exclude / 62
   patches, sha256 `4da8b960...`;
-- **hardware boot-tests:** TWD delta PASSed (image f6685b80); then MAC-nvmem
+- **hardware boot-tests:** TWD delta PASSed (image f6685b80); MAC-nvmem
   removal + switch MMIO-first order + cudy compatible order PASSed as image
   **c3ef2a50** (2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`,
   `/tmp/sysinfo/board_name = cudy,wr3000-v2`, /proc/device-tree/compatible
   starts with cudy,wr3000-v2, MACs ...:73/...:74, br-lan up, ping 15/15, no
-  Oops/BUG/panic/RCU-stall).  Any future active-DTS change must repeat the
-  boot-test; host checks cannot substitute for it.
+  Oops/BUG/panic/RCU-stall); and the flashinfo compatible-first DTS PASSed as
+  image **6e9c54d0** (stock loader accepted the new first compatible; 2 CPUs,
+  `GIC-0 29 Level twd`, cmdline ubi.mtd=rootfsb + project marker, TWD
+  Level, selector 0x11, no errors).  Any future active-DTS change must repeat
+  the boot-test; host checks cannot substitute for it.
 
-## 6. Remaining upstream blocker (one) - after the 2026-11-21 final adoptions
+## 6. Remaining upstream blockers: NONE (zero) - last blocker closed 2026-11-21
 
-Four active-devicetree deltas were adopted after individual hardware boot-tests
-(TWD level-high, image f6685b80; MAC-nvmem removal, switch MMIO-first order and
-cudy-compatible ordering, image c3ef2a50).  The in-series switch binding YAML
-was then reordered to MMIO-first as well (review form re-ran 26/26
-patch(1)+git am, checkpatch 0 errors / 58 warnings; release-line validator
-PASS).  **One blocker remains:**
+All documented blockers are closed.  The last one - the
+`hsan,flashinfo_reserved` / loader hand-off binding - was closed by a
+hardware boot-test of image **6e9c54d0** (section 6.3): the stock loader
+accepted the documented `hisilicon,luofu-flashinfo` compatible as the first
+entry, with the vendor string retained as fallback.  No reserved-memory
+vendor-only binding workaround is needed for the loader contract.
 
-| # | blocker | status | artifact |
-| --- | --- | --- | --- |
-| 1 | `hsan,flashinfo_reserved` / loader hand-off binding | **final host-side option chosen; ONE loader boot-test required** - documented `hisilicon,luofu-flashinfo` compatible first, vendor string kept as fallback; draft reserved-memory binding + maintainer questions ready; no hardware claim | `../../docs/incoming/upstream-blockers/01-flashinfo-reserved-memory/` |
-
-The remaining draft-driver/YAML review items (prioritized in
+The remaining in-series driver/YAML review items (prioritized in
 `../../docs/incoming/upstream-blockers/05-driver-yaml-review.md`) are normal
-RFC submission content, not a DTS blocker task.
-
-**Exact hardware test still needed (not run, not claimed):** start from the
-current final DTS (681 lines sha256 `9d96ac31...`, image c3ef2a50 lineage),
-change ONLY the flashinfo `compatible` list to
-`"hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"`, build the normal
-target image (with `Build/luofu-pad-dtb`), install it with the verified
-path (pair b, selector 0x11), capture UART read-only and verify: the stock
-`bootfip` prints its staging lines (`alias console=...`,
-`serialnr->...`, `atag_addr=0x80601000`), the kernel boots with 2 CPUs
-(CPU1 online), no data abort, no fallback to stock pair A.  If staging bails,
-revert to the vendor-first/only compatible and pursue the vendor-prefix
-fallback plan rather than guessing.  This tests the loader's compatible match
-behavior, not the kernel.
-
-**Closed by hardware boot-tests (2026-11-21):**
-
-- **TWD timer interrupt flags** (was blocker 6): measured read-only PPI data +
-  level-high delta, image **f6685b80** (2 CPUs, `/proc/interrupts`
-  `GIC-0 29 Level twd`, counts ~100 Hz, ping 20/20, no errors).
-- **6.18 MAC provisioning** (was blocker 3): nvmem cells removed; userspace/
-  vendor MAC path boot-tested on image **c3ef2a50** (eth0-eth2 ...:73, eth3
-  ...:74).
-- **Switch MMIO-first order** (was blocker 4): DTS boot-tested on c3ef2a50
-  (switch data path: br-lan up, ping 15/15); in-series binding YAML reordered
-  to match, driver unchanged (by-name lookups), review form rerun clean.
-- **cudy compatible ordering + OpenWrt metadata** (was blocker 5): image
-  **c3ef2a50** (`/tmp/sysinfo/board_name = cudy,wr3000-v2`, compatible
-  order, SUPPORTED_DEVICES updated).
+RFC submission content, not a blocker task.
 
 ### 6.1 TWD timer interrupt flags - CLOSED (boot-tested, image f6685b80)
 
@@ -251,50 +228,66 @@ On 7421bb7a the kernel reported `GIC-0 29 Edge twd`; ID 29 is TWD PPI 13
 (16 + 13).  The GICD_ICFGR1 field for ID 29 (bits 27:26) reads `0b11`, a
 nonstandard/reserved encoding, but **GIC-400 PPI configuration is read-only/
 fixed by the SoC integration**, so the devicetree flag does not reprogram
-hardware.  Standard Cortex-A9 platforms (e.g. vexpress-v2p-ca9) use
-`IRQ_TYPE_LEVEL_HIGH` for the TWD timer (0xf04 flags for 4 CPUs; the
-equivalent here is `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH` = `0x304`).
+hardware.  Standard Cortex-A9 platforms use `IRQ_TYPE_LEVEL_HIGH` (f04
+flags for 4 CPUs; equivalent here `GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH`
+= `0x304`).  The level-high delta was adopted in commit `5b401c1` and
+boot-tested as image **f6685b80**: 2 CPUs, `/proc/interrupts`
+`GIC-0 29 Level twd`, TWD counts ~100 Hz on both CPUs, ping 20/20, no
+Oops/BUG/panic/RCU stall.
 
-The level-high delta was adopted in commit `5b401c1` and boot-tested as
-image **f6685b80**: 6.18.60, 2 CPUs, `/proc/interrupts` reports
-`GIC-0 29 Level twd` (was `Edge`), TWD counts increment ~100 Hz on
-both CPUs, ping 20/20 0% loss, no Oops/BUG/Kernel panic/RCU stall, uptime
-stable.  f6685b80 was subsequently superseded for DTS purposes by **c3ef2a50**
-(the final board deltas); 7421bb7a remains the earliest verified baseline.
-
-### 6.2 Final board deltas - CLOSED (boot-tested, image c3ef2a50)
+### 6.2 MAC provisioning, switch order, cudy compatible - CLOSED (boot-tested, image c3ef2a50)
 
 Image **c3ef2a50** (sha256
 `c3ef2a507e6e0fc3d8991139b9668eeccae8f59995db4d17eaa5e71f68ea5879`) was
 built from the TWD-adopted DTS with the three active drafts applied and
-installed with the verified telnet installer (PASS; pair b, selector 0x11):
+installed via the verified telnet installer (PASS; pair b, selector 0x11):
+6.18.60, 2 CPUs, `GIC-0 29 Level twd`, `board_name=cudy,wr3000-v2`,
+compatible order verified, userspace MACs ...:73/...:74 (nvmem cells removed),
+br-lan up, ping 15/15, no errors.  Adopted in commit `6c2cc2f`.  The
+in-series switch binding YAML was reordered to MMIO-first as well and the
+review form re-ran clean (26/26 patch(1)+git am, checkpatch 0 errors / 58
+warnings; release-line validator PASS).
 
-- boot: linux-6.18.60, 2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`;
-- `/tmp/sysinfo/board_name = cudy,wr3000-v2` and
-  /proc/device-tree/compatible starts with `cudy,wr3000-v2`, then
-  `hisilicon,luofu-r116`, `hisilicon,luofu`;
-- eth0/eth1/eth2 MAC ...:73 and eth3 ...:74: userspace/vendor MAC
-  provisioning works with the kernel nvmem cells removed (the 6.18 path);
-- br-lan 192.168.1.1/24 up, ping 15/15 0% loss: the switch data path works
-  after the `reg`/`reg-names` MMIO-first reorder;
-- no Oops/BUG/panic/RCU stall; selector 0x11.
+### 6.3 flashinfo loader hand-off binding - CLOSED (boot-tested, image 6e9c54d0)
 
-Adopted in commit `6c2cc2f` (target DTS + OpenWrt SUPPORTED_DEVICES).
-Current DTS 681 lines sha256 `9d96ac31...`; DTB 12,650 B sha256
-`a0af2899...` (pad 12,656 B sha256 `01b74561...`); DTS-0001 sha256
-`c029fd44...` (694 lines).  The in-series switch binding YAML was
-reordered to MMIO-first (review form rerun: 26/26 patch(1)+git am, checkpatch
-0 errors / 58 warnings; release-line validator PASS).
+Image **6e9c54d0** was built from the current adopted DTS with only the
+flashinfo `compatible` list changed to
+`"hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved"`, flashed over the
+broker channel to pair b (mtd write kernelb, ubiformat mtd14, `fw_setenv
+bootflag=b` verified, selector boot_reg 0x11 verified, FIRE_OK) and booted:
 
-**Not claimed / out of scope (not counted as the remaining blocker):** pinctrl
-consumer states, consumer clocks, the A/B boot-selector protocol beyond the
-measured `0x10`/`0x11` cell, LED function/color descriptions, Wi-Fi
-and thermal support, and the unused vendor blocks (wired-first target).
+- U-Boot logged `bootflag b bootreg 11` and `Image Name: Linux-6.18.60`;
+- `bootfip` staging lines appear with the new first compatible:
+  `alias console=/serial@1010f000`, `serialnr->high=0x8250`,
+  `serialnr->low=0x1010f000`, `atag_addr=0x80601000` (the
+  stock/vendor boot prints `alias console=/uart1@...` - same device, different
+  DT-format print);
+- booted 6.18.60, 2 CPUs, `/proc/interrupts` `GIC-0 29 Level twd`;
+  `/proc/cmdline` contains `ubi.mtd=rootfsb` and the full
+  `luofu_switch` marker;
+  `/proc/device-tree/reserved-memory/flashinfo@80600000/compatible` =
+  `hisilicon,luofu-flashinfo hsan,flashinfo_reserved`;
+- selector 0x11, no Oops/BUG/panic/RCU stall.
+- Evidence: `build/evidence-bench-gates/flashinfo-loader/`.
 
-**Current devicetree final:** commit `6c2cc2f` (conservative cleanup
+Adopted in commit `71b2167` (target DTS compatible list; the drafted
+reserved-memory binding remains the maintainer-facing documentation).
+Current DTS 681 lines sha256 `381b2e8c...`; DTB 12,678 B sha256
+`62574b11...` (pad 12,680 B sha256 `8d79794e...`); DTS-0001 sha256
+`886f3ad0...` (694 lines).  The release-line validator now expects the
+new compatible pair and PASSes; image **6e9c54d0** is the current DTS-purpose
+baseline (supersedes c3ef2a50; f6685b80 and 7421bb7a earlier).
+
+**Not claimed / out of scope:** pinctrl consumer states, consumer clocks, the
+A/B boot-selector protocol beyond the measured `0x10`/`0x11` cell, LED
+function/color descriptions, Wi-Fi and thermal support, and the unused vendor
+blocks (wired-first target).
+
+**Current devicetree final:** commit `71b2167` (conservative cleanup
 `7ae18f2` + boot-tested TWD level-high + MAC-nvmem removal + switch
-MMIO-first + cudy compatible order); the superseded active cleanup `538377c`
-is recorded in section 1 and is **not** current.
+MMIO-first + cudy compatible order + flashinfo compatible-first); the
+superseded active cleanup `538377c` is recorded in section 1 and is
+**not** current.
 
 ## 7. Single-source and regeneration
 
