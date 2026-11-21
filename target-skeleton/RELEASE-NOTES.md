@@ -143,7 +143,7 @@ The 2-CPU baseline is the platform; the remaining work is feature bring-up and h
 | wired LAN (one port, bench workaround) | [V] CPU-copy mirror + port-0 delivery | native CFE-equivalent forwarding is a separate project; multi-port/WAN needs attended cable tests |
 | storage (FMC SPI-NAND + UBI) | [V] rootfs/overlay mounted, 17 partitions | exercise/verify NAND under load and the install path |
 | SSH / userspace / overlay | [V] working | install/upgrade path end-to-end (A/B): manual stock-mediated path verified repeatedly; the automated first-install tool is blocked because stock has no SSH/dropbear/opkg |
-| LEDs / buttons | [V] 6 oem:green:* LEDs + gpio-keys-polled (reset/WPS) exposed; brightness writable; physical light/button press pending user confirmation | stock overlay board_id=3 map (GPIO 24/25/3/2/0/1 LEDs, 22/23 keys, active-low) |
+| LEDs / buttons | [V] 6 oem:green:* LEDs visually confirmed lit; gpio-keys-polled RESET (KEY_RESTART) and WPS (KEY_WPS_BUTTON) presses captured; brightness writable | stock overlay board_id=3 map (GPIO 24/25/3/2/0/1 LEDs, 22/23 keys, active-low) |
 | thermal / watchdog / RTC | thermal ENODATA [X]; watchdog [V] sysfs timeout/identity/state visible (untested arm); RTC absent | debug the tvsensor read; one attended watchdog test with recovery armed |
 | USB / PCIe / I2C / SPI | [U] drivers ported, devices unverified | inventory devices/buses, add board nodes, test per feature |
 | Wi-Fi (Hi5622) | [X] vendor driver only for 5.10 | feasibility/port plan first; do not promise support yet |
@@ -162,7 +162,7 @@ armed and UART captured; (3) Wi-Fi feasibility then optional port; (4) upstream 
   stock board_id=3 overlay: 24/25/3/2/0/1).  Physical light state still needs one
   human confirmation.
 - Buttons: gpio-keys-polled registered as /dev/input/event0 (reset GPIO 22
-  KEY_RESTART, WPS GPIO 23 KEY_WPS_BUTTON, 20 ms poll); one press test pending.
+  KEY_RESTART, WPS GPIO 23 KEY_WPS_BUTTON, 20 ms poll); both presses captured on hardware.
 - Watchdog: watchdog0 with identity HiSilicon luofu watchdog, timeout 30 s,
   state active (not armed by us); CONFIG_WATCHDOG_SYSFS enabled.
 - DTB alignment fix [V]: the new DTS pushed the base DTB to an unaligned totalsize
@@ -237,5 +237,5 @@ the native L2/VLAN bridge (LSW-SPEC, separate project); the single-port bench wo
 
 - LEDs [V]: with all six oem:green:* devices driven to brightness=1 the user visually confirmed
   all six LEDs lit (active-low GPIO map 24/25/3/2/0/1); set back to off afterwards.
-- Buttons [V partial]: RESET press captured on /dev/input/event0 as EV_KEY KEY_RESTART (0x198)
-  press+release; WPS (KEY_WPS_BUTTON 0x211) press still to be captured.
+- Buttons [V]: RESET and WPS presses both captured on /dev/input/event0 as EV_KEY press+release pairs
+  (RESET = KEY_RESTART 0x198, WPS = KEY_WPS_BUTTON 0x211).
