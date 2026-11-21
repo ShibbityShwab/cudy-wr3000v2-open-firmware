@@ -1,0 +1,114 @@
+--- a/Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml
++++ b/Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml
+@@ -11,21 +11,23 @@
+ 
+ description: |
+   The Hi5671Y "luofu" SoC has a temperature sensor with a single on-die
+-  sensor. The die temperature is the low 16 bits of the register at offset
+-  0x24 of the node's reg window.
+-
+-  The reg window must therefore cover offset 0x24, i.e. be at least 0x28
+-  bytes long. The vendor devicetree declares only 0x14 bytes, which is
+-  shorter than the register its own driver reads, so do not copy that size.
+-
+-  The vendor devicetree also describes an interrupt (the threshold/critical
+-  event output) and threshold/trim properties. Their register model is not
+-  established, so this binding does not describe them and the driver polls
+-  the sensor through the thermal zone instead of claiming an interrupt.
+-
+-  The block has no clock or reset input in the vendor devicetree, so neither
+-  is modelled here; whether Linux must manage a gate or a reset for it is
+-  unverified.
++  sensor.  On this board the vendor hi_tvsensor.ko selects the v1 hardware-op
++  table (the devicetree hwver property is 3, and the vendor selects the v4
++  table only for hwver 4).  In the v1 table the die temperature is the low
++  10 bits of the word at offset 0x04, not the low 16 bits at 0x24.
++
++  The vendor probe enables and trims the sensor with writes to the same
++  block (offset 0x00 bit 24, offset 0x04 mode/trim bits, and, when
++  addition-en is present, offset 0x400 bit 0).  The reg window therefore has
++  to cover the sensor block plus offset 0x400; the vendor devicetree's
++  0x14-byte reg is much too short for its own driver.  The W23 driver in this
++  tree requires a window of at least 0x404 bytes when addition-en is present.
++
++  The threshold/interrupt path is decoded but intentionally not used: W23
++  does not claim the interrupt and leaves the threshold interrupt masked.
++  The optional hisilicon,threshold-mc property programs the threshold register
++  from the thermal-zone policy while keeping the interrupt masked; it is a
++  bench-validation helper, not an upstream ABI.
+ 
+ $ref: thermal-sensor.yaml#
+ 
+@@ -35,22 +37,63 @@
+ 
+   reg:
+     maxItems: 1
++    description: |
++      The sensor register block.  It must cover offsets 0x00 (enable),
++      0x04 (temperature/mode/trim), 0x08 (threshold), 0x0c (interrupt
++      clear), 0x10 (interrupt mask) and, when addition-en is present,
++      0x400 (addition enable).  Use at least a 0x404-byte window.
+ 
+   '#thermal-sensor-cells':
+     const: 0
+ 
++  hwver:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    enum: [1, 2, 3, 4]
++    default: 3
++    description: |
++      Sensor hardware version from the vendor devicetree.  This board is 3;
++      the vendor driver selects the v4 register table only for hwver 4.
++
++  trim:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 2
++    maxItems: 2
++    description: |
++      Vendor trim pair <sign_selector value>.  When the first cell is zero
++      the second cell is the trim value; otherwise the negated second cell is
++      used.  Only applied when efuse-trim-en is absent.
++
++  addition-en:
++    type: boolean
++    description: |
++      Vendor property: the sensor has the separate addition-enable word at
++      offset 0x400 and the vendor probe writes bit 0 of it.
++
++  efuse-trim-en:
++    type: boolean
++    description: |
++      Vendor property: use the hardware efuse trim (offset 0x04 bit 20 is
++      cleared) and add the devicetree trim value to the converted
++      temperature, matching the vendor driver.
++
++  int-base-offset:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    default: 12
++    description: |
++      Vendor property: interrupt block base offset inside the sensor window.
++      The interrupt mask is at int-base-offset + 4 and the clear register at
++      int-base-offset.
++
++  hisilicon,threshold-mc:
++    $ref: /schemas/types.yaml#/definitions/int32
++    description: |
++      Optional bench-validation helper: threshold temperature in millidegrees
++      Celsius.  When present the driver programs the v1 hwver-3 threshold
++      register but keeps the threshold interrupt masked.
++
+ required:
+   - compatible
+   - reg
+   - '#thermal-sensor-cells'
+ 
+ unevaluatedProperties: false
+-
+-examples:
+-  - |
+-    temperature-sensor@14900500 {
+-        compatible = "hisilicon,luofu-tvsensor";
+-        reg = <0x14900500 0x100>;
+-        #thermal-sensor-cells = <0>;
+-    };
+-...

@@ -682,7 +682,11 @@ is `patches-6.18/`:
 - `012` adds the thermal sensor: `drivers/thermal/luofu_tvsensor.c` (read-only, vendor v4
   conversion on `+0x24`, 6.18 of-thermal API) + YAML, with the DTS `cls0-thermal` zone using
   the vendor trips (115 C passive / 125 C critical, 3 C hysteresis, 1 s polling) and no
-  cooling map; threshold/IRQ/enable/trim registers are undecoded and unwritten. YAML
+  cooling map. **W23 (patches 066/067) supersedes the read path**: it turns out the vendor
+  DT enables the sensor and the real chip is the hwver-3/v1 variant - raw = `base+0x04[9:0]`,
+  mC = ((165*raw-20625)/797)*1000-40000, with the vendor gated enable/trim sequence, a 0x408
+  register window and a module gate (default off). Bench-proven 2026-11-22: gate off ->
+  ENODATA; enable -> 59 C idle / 63 C under 2-CPU load, registers match, no IRQ. YAML
   `Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml`.
 - `013` adds the DWC PCIe host controller draft: `drivers/pci/controller/dwc/pcie-luofu.c`
   (+ YAML) programs the two root complexes from the DT `ranges`/iATU data, with clocks,

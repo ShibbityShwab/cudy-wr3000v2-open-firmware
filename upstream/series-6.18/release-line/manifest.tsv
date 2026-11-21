@@ -64,6 +64,8 @@ include	B	057-net-pie-cpucopy-w20.patch	290d3b9cd0139a22d3ca1b6c138ca7f2279bd6ee
 include	B	058-net-luofu-canonical-bench-config.patch	44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35	canonical bench configuration + docs cleanup
 include	B	059-net-lsw-napt-init.patch	cfd7debc3908e0b52785afd5ffac979c8c5e03538b3f98dccbf54738fa98152f	LSW NAPT/flow engine init (W22, native CPU delivery)
 include	B	060-net-pie-exception-delivery.patch	8c748061fe0577cea471534f209e68258bc707d45746c25d4f40409f6eeb1bd3	PIE native exception-class delivery (W22, retire accepterr)
+include	B	066-thermal-luofu-tvsensor-w23.patch	c2a4697559a22fe3c3867b58b85382f95c3dd2b04a987a1c698174696c3253cc	thermal: correct v1/hwver-3 read path + gated enable/trim sequence (W23)
+include	B	067-dt-bindings-thermal-luofu-tvsensor-w23.patch	197bb74aad60a4d8caacc22dacc91399a8dc967c28d6b8a5ef98a4727ef7ee9c	dt-bindings: luofu tvsensor window and vendor properties (W23)
 exclude	D	062-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps (renumbered from the duplicate 042)
 exclude	D	063-arm-luofu-cpu1-up-trigger.patch	e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52	SMP bench diagnostic: late add_cpu(1) retrigger via sysfs (renumbered from 059 for monotonic order)
 exclude	D	064-arm-hisilicon-smp-handoff-probe.patch	e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938	SMP bench probe: decompressor/stext hand-off markers (renumbered from 060)

@@ -77,7 +77,7 @@ patch series** (see `release-line/manifest.tsv` in the upstream directory).
 | DEVMEM / devmem diagnostic image | optional debugging aid; the canonical image carries it, it is not required for normal operation [V] |
 | board buttons/LEDs | six `oem:green:*` LEDs writable from userspace; `event0` = gpio-keys-polled (reset/WPS), active-low, 20 ms poll [V] |
 | watchdog | `watchdog0` exposed through sysfs (CONFIG_WATCHDOG_SYSFS); driver bind already verified [V] |
-| thermal | **unsupported on this board**: temperature register reads 0, vendor DT disables the sensor - not a release claim [U]/[X] |
+| thermal | **working via W23** (bench-proven): hwver-3/v1 path, gated enable; gate off ENODATA, enable -> 59 C idle / 63 C under load, registers verified, no IRQ [V bench] |
 | storage | FMC SPI-NAND + UBI rootfs mounted, 17 partitions [V] |
 | everything else | drivers compile/bind; behaviour not necessarily exercised on hardware - see TARGET-DESIGN.md [U] |
 
@@ -144,7 +144,7 @@ The 2-CPU baseline is the platform; the remaining work is feature bring-up and h
 | storage (FMC SPI-NAND + UBI) | [V] rootfs/overlay mounted, 17 partitions | exercise/verify NAND under load and the install path |
 | SSH / userspace / overlay | [V] working | install/upgrade path end-to-end (A/B): manual stock-mediated path verified repeatedly; the automated first-install tool is blocked because stock has no SSH/dropbear/opkg |
 | LEDs / buttons | [V] 6 oem:green:* LEDs visually confirmed lit; gpio-keys-polled RESET (KEY_RESTART) and WPS (KEY_WPS_BUTTON) presses captured; brightness writable | stock overlay board_id=3 map (GPIO 24/25/3/2/0/1 LEDs, 22/23 keys, active-low) |
-| thermal / watchdog / RTC | thermal ENODATA [X]; watchdog [V] sysfs timeout/identity/state visible (untested arm); RTC absent | debug the tvsensor read; one attended watchdog test with recovery armed |
+| thermal / watchdog / RTC | thermal [V] W23 bench-proven 59 C idle / 63 C load; watchdog [V] sysfs timeout/identity/state visible (untested arm); RTC absent | debug the tvsensor read; one attended watchdog test with recovery armed |
 | USB / PCIe / I2C / SPI | [U] drivers ported, devices unverified | inventory devices/buses, add board nodes, test per feature |
 | Wi-Fi (Hi5622) | [X] vendor driver only for 5.10 | feasibility/port plan first; do not promise support yet |
 | native switch forwarding | [I] documented workaround in use | independent LSW/PIE hardware-bridge project |
@@ -274,3 +274,7 @@ reboot reproduces it.  The CPU-copy mirror workaround is no longer needed for
 eth2; its patches (054-057) stay in the line as the documented fallback
 (naptinit=0 + mirror tokens).  Multi-port (per-port delivery, LAN-to-LAN) is the
 next experiment (M1b); it is not claimed here.
+
+## W23: thermal sensor fix (2026-11-22)
+
+The old driver read the wrong register/variant and never enabled the sensor, so the temperature always looked invalid.  W23 (patches 066/067) implements the vendor hwver-3/v1 path: raw = base+0x04[9:0], mC = ((165*raw-20625)/797)*1000-40000, the vendor enable/trim sequence, a 0x408 register window and a module gate (default off).  Bench: gate off -> ENODATA; enable -> raw 0x25e = 59000 mC, registers match, no IRQ, no warnings; CPU load moves it to 63 C with cooling afterwards.  The canonical image ships it with the gate default off.

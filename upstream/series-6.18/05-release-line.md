@@ -18,8 +18,8 @@ release line is the target patch stack that built and booted the verified image.
 
 | layer | what it is | size |
 | --- | --- | --- |
-| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 64 patch files (001-060 + 062-065; no duplicate numbers) |
-| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **53 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
+| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 66 patch files (001-060 + 062-067; no duplicate numbers) |
+| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **55 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
 | **L2 upstream review form** | the kernel-only submission form in `series/` plus `00-06` docs | 26 patches (001-026), grouped merge-intent / RFC / do-not-merge |
 | **L3 DTS series entry (DTS-0001)** | the companion DTS patch the kernel-only form cannot carry: the board DTS with the two loader hand-off nodes required by 0018 | 1 patch, `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` (section 2, `06-dts-series-dependency.md`) |
 
@@ -151,7 +151,7 @@ pre-clean-DTS image used as the hardware baseline for the DTS work):
   NOT boot and is recorded in `07-dts-upstream-bindings.md` section 1.  [V]
 
 The `974e6ca6` details:
-- built from: L0 patch stack (64 files: 001-060 + 062-065), the DTS hand-off
+- built from: L0 patch stack (66 files: 001-060 + 062-067), the DTS hand-off
   fix, canonical command line, DEVMEM + static devmem tool + boot-pair recorder;
   **no `luofu_smp_*` probe tokens**.
 - verified on hardware (2026-11-21) [V]:
@@ -249,7 +249,7 @@ snapshot as features: [V]/[I]
 | `065-arm-hisilicon-smp-trampoline.patch` | `5e254fe4` | sentinel protocol + re-poll hand-off trampoline (renumbered from 061) |
 
 Why exactly these: after the DTS fix nothing in the SMP path needs them; no later
-release patch depends on them (verified: the 53-patch L1 applies in order,
+release patch depends on them (verified: the 55-patch L1 applies in order,
 section 9); they were designed to answer "does CPU1 ever poll the pen", and the
 064/065 sentinels did exactly that.  The numbering was cleaned on 2026-11-21:
 the duplicate 042 is gone (042-net stays; the former 042-arm is now 062) and its
@@ -269,29 +269,30 @@ remains reproducible; L1 is the publication/release classification.
   read-only clock tree 019, PIE/LSW/GEMAC drafts 020-026, CRG mux fix 027.  The
   A group up to 026 is what the upstream review form covers; the review form is
   not extended by this release-line change.
-- **B - functional gated bench path (18):** 031, 032, 036, 038, 040, 041,
+- **B - functional gated bench path (22):** 031, 032, 036, 038, 040, 041,
   042-net, 043, 044, 046, 048, 051, 053, 054, 055, 056, 057, 058 - the staged
   switch/PIE/GEMAC power/write/readiness gates and the canonical-config docs
-  patch.  Default-off, fail-closed; required for the working LAN workaround.
+  patch, the W22 native-forwarding patches and the W23 gated thermal driver/binding.
+  Default-off (W22 NAPT init is the exception: default on), fail-closed where gated.
 - **C - included default-off diagnostics (6):** 030, 045, 047, 049, 050, 052 -
   trace/dump gates compiled into the release image for bench parity but never
   enabled by the canonical command line.
 - **D - excluded bench diagnostics (11):** section 6.
 
-Counts: 27 + 18 + 6 = 51, plus 11 excluded = 62 L0 files.
+Counts: 27 + 22 + 6 = 55, plus 11 excluded = 66 L0 files.
 
 Ordering notes (both items fixed 2026-11-21):
 
 - **No duplicate numbers.**  042-net stays; the former 042-arm is 062 and its
   dependent SMP diagnostics are 063/064/065.  Filename order is now dependency
-  order for the whole L0 stack (verified 62/62 patch(1) RC=0, 0 fuzz, and strict
-  `git apply` 62/62).
+  order for the whole L0 stack (verified 66/66 patch(1) RC=0, 0 fuzz, and strict
+  `git apply` 66/66).
 - **Patch 053 was regenerated against its post-052 context.**  The old patch was
   authored before 052 merged into the same `MODULE_PARM_DESC(nodoorbell...)`
   anchor, which caused the one fuzz hunk and the strict `git apply` divergence.
   The regenerated patch keeps exactly the same functional content/gates (the
   resulting `luofu-pie.c` is byte-identical to the old stack's final file) and
-  now applies with **0 fuzz**; strict `git apply` passes for all 51 L1
+  now applies with **0 fuzz**; strict `git apply` passes for all 55 L1
   patches.
 - **Release-line patch content refreshed (2026-11-21, board-feature pass).**
   Periodic W17/W19 relatch logs were quieted from `dev_warn~/`dev_info`
@@ -303,6 +304,8 @@ Ordering notes (both items fixed 2026-11-21):
   not a kernel patch).
 
 - **Native forwarding W22 (release-line, 2026-11-21).**  Patches **059** (luofu_switch.naptinit, PFE NAPT/flow-engine init) and **060** (PIE native exception-class delivery, retires the accepterr gate) were added to L0/L1: L0 64 files (001-060 + 062-065), L1 53 files, manifest sha256 619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7. Bench-proven: the NAPT init restores native CPU delivery (M1a) and the canonical command line drops the CPU-copy mirror tokens (mirror patches 054-057 stay in the line as documented fallback).  Validator PASS (53/53), target build PASS, cold boot + reboot determinism + 200/200 ping with no mirror tokens.
+
+- **Thermal W23 (release-line, 2026-11-22).**  Patches **066** (luofu_tvsensor driver: correct hwver-3/v1 read path, variant formulas, gated enable/trim sequence) and **067** (binding update: 0x408 window, vendor properties) added to L0/L1: L0 66 files (001-060 + 062-067), L1 55 files, manifest sha256 2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70. Bench-proven: gate off -> raw 0x0 and thermal zone ENODATA; enable -> raw 0x25e -> 59000 mC (formula exact), registers match the decoded sequence, no IRQ registered, 0 warnings; CPU load 59 -> 63 C, cooling observed.  The release DTS gains the thermal node properties (release-line-only delta; the L2 upstream review form and DTS-0001 are intentionally not regenerated). Validator PASS (55/55), target build PASS, cold boot PASS.
 
 ## 8. Retraction: the "2-CPU hang" was a host bench-link outage
 
@@ -393,9 +396,7 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   other driver behaviours (pinctrl consumer states, PCIe enumeration, FMC
   ECC/OOB details, restart sequence, selector env re-stamp, A/B install) remain
   [U] as recorded in TARGET-DESIGN.md, SMP-RE.md and the lane summaries.
-- **No thermal support on this board:** the temperature register reads 0 and the
-  vendor DT disables the sensor; the thermal driver/zone remains host-only and
-  is not a release claim [U]/[X].
+- **Thermal (W23, bench-proven):** the temperature register read 0 with the old driver because it used the wrong variant/register/formula and never enabled the sensor; W23 implements the vendor hwver-3/v1 path and a gated enable sequence. Bench: gate off -> ENODATA; enable -> 59 C idle, 63 C under 2-CPU load, registers match, no IRQ, no warnings. The canonical image ships the driver with the gate default off; the value is a bench-validated measurement, not a thermal policy.
 - **No performance/soak beyond the recorded 15 minutes**; no long-term thermal or
   NAND-degradation campaign.
 

@@ -1343,7 +1343,7 @@ order is binding/DTS data only.
   sha256 `01b74561...`);
 - release-line manifest refreshed: 51 include / 11 exclude / 62 patches;
   manifest sha256
-  `619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7`;
+  `2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70`;
   `validation/sha256sums.txt` 89 entries, `sha256sum -c` passes 89/89;
 - **flashinfo binding** is the only remaining blocker.  The final host-side
   option (documented `hisilicon,luofu-flashinfo` compatible first with the
@@ -1406,7 +1406,7 @@ Oops/BUG/panic/RCU stall.  Evidence:
   compatible update; the last recorded run remains 26/26 patch(1)+`git am`,
   identical trees, 0 errors / 58 checkpatch warnings;
 - `gen-series.py --check` clean; release-line manifest unchanged
-  (51 include / 11 exclude, sha256 `619eb15a...`);
+  (51 include / 11 exclude, sha256 `2bb7413e...`);
   `validation/sha256sums.txt` refreshed (89 entries) and
   `sha256sum -c` passes 89/89.
 
@@ -1418,4 +1418,8 @@ install/recovery docs and the installer tool.  Logs:
 
 ## Section 29 - W22 native forwarding release-line change (2026-11-21)
 
-Release line extended with the two W22 patches (058 -> 059/060; L0 64 files, L1 53; manifest sha256 619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7).  Host validation: release-line validator PASS - 53/53 include patches apply with patch(1) RC=0, 0 fuzz, 0 rejects, strict git apply 53/53; DTS contract and DTS-0001 identity unchanged (DTB 12,678 B 62574b11..., pad 12,680 B 8d79794e...).  Hardware validation: canonical image 500234462bdc2e62d963067f00ba580e639a82c10b05323533684f8536ca8c9f booted 6.18.60, 2 CPUs, TWD Level, no Oops/BUG/panic; dmesg "W22: NAPT/flow engine initialized and verified" and "connectivity path armed"; command line carries no cpu_mirror/accepterr/cpucopy tokens; host ping 200/200 0% loss and SSH work; reboot determinism re-verified (W22 init runs on every boot, ping 200/200, no errors).  M1a was first proven with the userspace replay on image 5800c9ab; W22 is the kernel implementation.  M1b (per-port delivery, LAN-to-LAN) remains the next bench step.
+Release line extended with the two W22 patches (058 -> 059/060; L0 64 files, L1 53; manifest sha256 2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70).  Host validation: release-line validator PASS - 53/53 include patches apply with patch(1) RC=0, 0 fuzz, 0 rejects, strict git apply 53/53; DTS contract and DTS-0001 identity unchanged (DTB 12,678 B 62574b11..., pad 12,680 B 8d79794e...).  Hardware validation: canonical image 500234462bdc2e62d963067f00ba580e639a82c10b05323533684f8536ca8c9f booted 6.18.60, 2 CPUs, TWD Level, no Oops/BUG/panic; dmesg "W22: NAPT/flow engine initialized and verified" and "connectivity path armed"; command line carries no cpu_mirror/accepterr/cpucopy tokens; host ping 200/200 0% loss and SSH work; reboot determinism re-verified (W22 init runs on every boot, ping 200/200, no errors).  M1a was first proven with the userspace replay on image 5800c9ab; W22 is the kernel implementation.  M1b (per-port delivery, LAN-to-LAN) remains the next bench step.
+
+## Section 30 - W23 thermal fix release-line change (2026-11-22)
+
+Release line extended with W23: patches 066 (luofu_tvsensor driver rewrite: hwver-3/v1 table, base+0x04[9:0], formula ((165*raw-20625)/797)*1000-40000 mC, vendor-order gated enable/trim sequence, module param gate default 0) and 067 (binding: 0x408 window + vendor properties).  L0 66 files, L1 55 files, manifest sha256 2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70.  The release DTS gains the thermal node properties; this is a release-line-only DTS delta and DTS-0001 was intentionally not regenerated (the L2 upstream review form stays W22/W23-free; the validator reports the expected DTS-series difference).  Host validation: validator PASS - 55/55 include patches apply, 0 fuzz/0 rejects, strict git apply 55/55; DTS contract unchanged; target build PASS.  Hardware validation (image 5aeca54801f69715a7dca7c3046f783f0745c1aeb47f9cb55c73d04577743e0f): boot 6.18.60, 2 CPUs, no Oops/BUG; dmesg "luofu-tvsensor ... registered: hwver=3 enable=0"; gate off raw=0, zone ENODATA; enable -> raw=0x25e, temp 59000 mC, regs 0x00=0x01000000 0x04=0x25e 0x08=0x3ff0039a 0x400=0xffff0001, devmem cross-check matches, no IRQ registered, 0 warning lines; load 59000->63000 mC, cool-down observed.  Evidence build/evidence-bench-gates/w23/ (gitignored).
