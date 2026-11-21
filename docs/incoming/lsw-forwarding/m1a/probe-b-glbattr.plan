@@ -1,0 +1,6 @@
+# M1a control probe B: replay stock pfe_glb attribute word pfe_glb+0x2c.
+# Stock 0x10000034, ours 0x00000034. Decoded writer hi_lsw_pfe!write_glb_attr(attr=0):
+#   high16 = up_port (flow/uplink port bitmap); stock 0x1000 = bit12 = WAN port 12.
+#   (attr=1 writes NAPT+0x54 bit8 flow_age_en; the NAPT window is refused by the planner.)
+# This is NOT expected to enable CPU delivery; it removes a decoded flow-engine delta as a control.
+write 0x1200002c 0x10000034 0x00000034  # pfe_glb+0x2c up_port high16

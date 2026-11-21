@@ -3,10 +3,13 @@
 **Status 2026-11-21. Host-side plan only.** No register has been written for this plan; no
 hardware has been used; the release patch series and the curated upstream tree are untouched.
 
-> **Revision 2026-11-21 (after the E0-a hardware run):** read section 2.1 and 4.4 first. The
-> mirror-off run proved the exception path works natively (with source port) but only ARP-class
-> traffic is punted; the missing piece is the unicast-to-CPU/bridge-MAC state, so E0-b is re-aimed
-> and the milestone is split into M1a (unicast to eth2) and M1b (multi-port).
+> **Revision 2026-11-21 (after the E0-a and E0-b hardware runs):** read sections 2.1, 2.2 and 4.4
+> first. E0-a proved the exception path works natively (with source port) but only ARP-class
+> traffic is punted. E0-b captured stock-vs-ours and its decode (E0B-ANALYSIS.md) shows the only
+> readable stock-only config words are tag action entry 1 and pfe_glb+0x2c (up_port); L2 page =
+> DFX counters, EQM = engine residue, PIE = our ring config, IFC identical. The milestone is split
+> into M1a (unicast to eth2; first hardware step is the reviewed two-probe devmem session in
+> m1a/) and M1b (multi-port).
 This plan extends the release line's verified bench workaround
 ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md), [../../LSW-SPEC.md](../../LSW-SPEC.md),
 [../../PIE-DATAPATH.md](../../PIE-DATAPATH.md)) with the path to per-port native forwarding.
@@ -213,6 +216,38 @@ The E0-a hardware run refines this section (full analysis: `E0A-ANALYSIS.md`):
   bench link cycle, not a new fault. The adopted baseline is now image **c3ef2a50**.
 
 
+### 2.2 After E0-b (2026-11-21): decode results and the first hardware step
+
+The E0-b read-only capture (ours image 6e9c54d0 vs vendor stock) and its host-side decode
+(E0B-ANALYSIS.md) settle the candidate list:
+
+- **tag action entry 1** (0x124d4010): stock w1=0x0000c000. Decoded writer tag_write@0x2eb0:
+  descriptor desc[8]=0x08 -> add_type 0, del_type 2 -> selector 4 -> a **tag DELETE action of
+  type 2** with no VLAN/TPID. It is not a CPU-punt classifier action by itself; tagact_id is
+  referenced by L3-interface and multicast entries in the vendor code, none present/readable on
+  our image. Replay = hypothesis test, expected null.
+- **pfe_glb+0x2c**: vendor dump_glb_attr prints up_port=high16 (stock 0x1000 = WAN port 12) and
+  flow_age_en=napt+0x54 bit8 (stock 1). It is a flow-engine uplink attribute, not an L2/CPU
+  delivery control; the flow_age_en half is in the refused NAPT window.
+- **L2 l2+0x40000 page**: the vendor hi_pfe_dfx_dump_cnt string map decodes the differing words
+  as L2 DFX counters (rx_total/tx_total/rx_drop/tx_drop/port_move/age_drop/sport_clash/
+  search_ok_mc/search_fail_mc) - runtime statistics, never a table to replay.
+- **EQM** differences are indirect command/data residue; **PIE** differences are our own driver's
+  ring config; the **IFC table is identical** to ours (no stock-only classifier entries).
+
+Decision: the minimal justified M1a write set is two independent replay probes, prepared
+fail-closed in m1a/ under this directory:
+
+1. probe A - tag action entry 1, four words at 0x124d4010..0x124d401c (stock content
+   0x00000000, 0x0000c000, 0x00000000, 0x00000000);
+2. probe B (control) - pfe_glb+0x2c = 0x10000034 (up_port high16 0x1000).
+
+The positive M1a signal is an **extra native 98-byte RX delivery on eth2 while the mirror is
+still on** (eth2 rx_packets delta about 2x the controlled ping count). Null is the expected
+outcome; if null, no further register writes are attempted until the stock procfs decoded
+tables (tagact, l3intf, ifc, glb_attr, tocpu_cnt, br_dump, flow/mac) are captured and the
+IFC/L3 action encoding is decoded host-side. L2, NAPT, EQM, PIE and DDR are never in the set.
+
 ---
 
 ## 3. Current netdev + driver model (what the first patch builds on)
@@ -368,6 +403,13 @@ No new writes are added by this revision; it re-ranks the candidates and makes t
 unicast-to-CPU capture the deciding input. The write planner remains fail-closed and the NAPT/DDR
 windows remain refused.
 
+**E0-b outcome (2026-11-21, final for this revision):** the capture was done. The decode
+(E0B-ANALYSIS.md) demotes all three original candidates: the tagact word is a tag-delete action
+(not a punt classifier), pfe_glb+0x2c is the flow-engine up_port attribute (not an L2/CPU
+control), the L2 page is DFX counters, IFC is identical, and EQM/PIE are residue/our-own config.
+The section 2.2 two-probe replay (tagact entry 1 + up_port) is the reviewed minimal set; its
+expected observable is null and it is exercised only to validate/refute the last readable deltas.
+
 ---
 
 ## 5. Netdev model and coexistence with the CPU-copy workaround
@@ -439,8 +481,9 @@ door armed and a UART capture. The tools referenced are the repository's:
 | --- | --- | --- | --- | --- |
 | S0 | compile the current release line unchanged (baseline) | host | none | RC=0; image hash recorded |
 | S1 | **N0-a: no-mirror cmdline experiment - DONE 2026-11-21 (image 990c5cab)** | bench | none | result: exception punts only (60-byte ARP, port 11), no unicast CPU delivery; see `E0A-ANALYSIS.md` |
-| S2 | **N0-b (revised after E0-a): read-only unicast-to-CPU capture** - stock CFE procfs dumps + IFC banks 0/1 + tagact + L2-with-traffic + OPP/PA registers on the stock boot, and the same registers on our baseline c3ef2a50 (mirror on; `capture-runtime-state.sh --profile punt` covers exactly these ranges); diff with `diff-captures.py` | bench + host | none | a definite answer whether a readable bridge-MAC/unknown-unicast-to-CPU state exists on stock; candidate word list if it does |
-| S2b | **M1a probe (SSH-safe, devmem)** - apply the first candidate unicast-to-CPU word set with the mirror kept on eth2; host pings; look for additional 98-byte native completions (port 11) beside the mirror's port-0 copies; revert immediately and re-check management if no signal | bench | candidate words | readback exact; 98-byte native completions observed and management unaffected; rollback otherwise |
+| S2 | **N0-b read-only stock-vs-ours capture - DONE 2026-11-21** (ours image 6e9c54d0 vs stock; 9,488 words each, 0 failures); decode in `E0B-ANALYSIS.md`: no readable unicast-to-CPU enabler; only tagact entry 1 and pfe_glb+0x2c are stock-only config words, L2 page = DFX counters | bench + host | none | done; candidate list = m1a/ proposal |
+| S2b | **M1a replay probe session (SSH-safe, devmem) - prepared, not yet run**: m1a/ probe A (tagact entry 1) then probe B (pfe_glb up_port), mirror kept on eth2; host pings 500 requests per probe; look for an eth2 rx_packets delta about 2x the sent count (= extra native 98-byte delivery); revert immediately; a null result ends the write experiments | bench | 5 words total (m1a/ plans) | readback exact; native duplicate delivery observed -> go to S2c; null -> no more register writes until the stock decoded procfs tables are captured (section 2.2) |
+| S2c | **M1a proof boot** - only if S2b shows the duplicate signal: boot the release-line image with `luofu_switch.cpu_mirror=0` (the E0-a build recipe), attended with UART; ICMP unicast must work without the mirror | bench | cmdline only | M1a proven (unicast-to-CPU on eth2 without the mirror) |
 | S3 | **N1 (revised): replay the unicast-to-CPU candidate set** (stock-readable IFC/L2/OPP words preferred) - via `plan-writes.sh` (devmem) or the W21 driver stage; mirror excludes only the experimented port | bench | candidate words | readback exact; with `cpu_mirror=0` on the next boot, ICMP unicast is delivered natively to eth2 (M1a); rollback otherwise |
 | S4 | **N2: per-port punt classification** (Route B) if S3 shows nothing: build the W21 driver stage with the tag/punt entries, mirror off for the target port, one entry per attended run | host + bench | new driver stage | native delivery with correct ingress identity for the target port |
 | S5 | repeat S4 for each wired port; keep management port on mirror until last | bench | stage writes | all four ports native; bridge/router works |
@@ -461,6 +504,12 @@ of the experiment.
 ---
 
 ## 7. First patch design (release-line W21 stage) - not compiled here
+
+**Ordering after E0-b:** the first hardware step is NOT this driver patch. It is the m1a/ devmem
+replay probe (section 2.2 / 6 S2b). The W21 driver stage is only cut if that probe shows the
+native duplicate-delivery signal (or after the host-side decode finds and justifies a different
+enabler). Until then the missing decode is the IFC/L3 action encoding and the tagact_id reference,
+not a driver scaffold.
 
 The first patch is intentionally **data-driven and fail-closed**, in the same style as W10/W12.
 It is designed against the current release-line driver
@@ -585,3 +634,8 @@ this document.
 | E0-a mirror-off result (exception punts only, no unicast CPU delivery) | `MINIMAL-EXPERIMENT.md` appended result; ledger 2026-11-21 18:10; `build/evidence-bench-gates/e0a-mirroroff/e0a-boot-excerpt.txt`; analysis `E0A-ANALYSIS.md` |
 | status=37 semantics (class marker, not frame error; valid ARP delivered) | `E0A-ANALYSIS.md`; vendor `hi_pie_rx_get_desc@0xf14`; ledger 2026-11-20 15:30 (ARP reply on the wire) |
 | exception path carries source port | E0-a RXDIAG `port=11`; ledger 2026-11-20 15:30 |
+| E0-b stock-vs-ours capture (30 candidates / 72 counters) | `E0B-ANALYSIS.md` sections 1-5; `E0B-RESULTS.md` decode review; capture dirs build/evidence-bench-gates/e0b-* |
+| tagact entry 1 is a tag-delete action (writer decoded) | `E0B-ANALYSIS.md` section 2; hi_lsw_pfe!tag_write@0x2eb0 / tag_dump@0x300c |
+| pfe_glb+0x2c = up_port + flow_age_en | `E0B-ANALYSIS.md` section 3; hi_lsw_pfe!write_glb_attr@0x2210 / dump_glb_attr@0x218c |
+| L2 l2+0x40000 = DFX counters | `E0B-ANALYSIS.md` section 4; hi_pfe_dfx_dump_cnt string map |
+| M1a probe scripts, plans, runbook | `m1a/` (SESSION.md, probe-*.plan, apply-*.sh, observe-m1a.sh) |

@@ -247,6 +247,59 @@ How to use the results:
 
 ~~~
 
+## Status update 2026-11-21 (after E0-b: stock-vs-ours captured and decoded)
+
+E0-b is done (ours image 6e9c54d0 vs vendor stock; 9,488 words each, 0 failures). Decode and the
+reviewed M1a probe: E0B-ANALYSIS.md and m1a/. What it settles for this list:
+
+- **U4 (L2 table / MAC learning state) - ANSWERED for the readable block:** the differing
+  l2+0x40000 page words are L2 DFX counters, not a table. The vendor hi_pfe_dfx_dump_cnt string
+  map decodes them as rx_total (+0), tx_total (+4), rx_drop (+8), tx_drop (+0x3c), port_move
+  (+0xc), age_drop (+0x10), sport_clash (+0x14), search_ok_mc (+0x18), search_fail_mc (+0x1c).
+  Stock 0x414/0x415 vs ours 0x148 are counter values, not port maps or MAC entries. The readable
+  L2 config words (l2+0x100..0x18c) are identical on both sides; no L2 writes are proposed.
+- **U14 (where the stock unicast-to-CPU state lives) - PARTIAL:** it is not in the captured
+  readable set. The IFC table is identical to ours (no stock-only entries), the L2 page is
+  counters, OPP/PA/EPS/DP/FAM/MCC config match, and the only stock-only config words are tag
+  action entry 1 and pfe_glb+0x2c. The remaining candidate is the vendor CFE flow/L2 program in
+  the DDR carveout (0x80400000 area), which cannot be read or replayed safely on our image.
+- **U13/U11 (which action/Cpu-punt encoding to use) - PARTIAL:** tag action entry 1 is decoded as
+  a tag DELETE action (add_type 0, del_type 2, no VLAN); tagact_id is referenced by L3-interface
+  and multicast entries in the vendor code, not by readable IFC entries. The IFC/L3 action
+  encoding needed for our own catch-all punt is still [U] (host-side decode still to do).
+- **New U17-U19 below** cover the tagact reference, the stock procfs decoded dumps that should
+  name it, and the DDR flow table as the remaining possible enabler.
+
+### New unknowns after E0-b
+
+| # | unknown | why it matters | read/experiment |
+| --- | --- | --- | --- |
+| U17 | what references tag action index 1 (L3-interface entry, multicast user-link, or a hardware default) | decides whether replaying entry 1 can have any effect at all | stock procfs decoded dumps: /proc/hsan/lsw/table/l3intf, /proc/hsan/lsw/table/tagact, /proc/hsan/lsw/table/ifc; host-side decode of l3intf_write/l3intf_dump field extraction |
+| U18 | the decoded stock procfs tables (tagact, l3intf, ifc, glb_attr, flow_cnt, tocpu_cnt, drop_cnt, br_dump, cfe flow/mac) | cheapest way to see the vendor's CPU-delivery configuration with the vendor's own field decoders | stock boot, read-only, exact commands below; no register writes |
+| U19 | the CFE flow/L2 program in the DDR carveout | the last remaining candidate for the real unicast-to-CPU state; cannot be replayed on our kernel (DDR is live Linux memory) | do not read/write DDR from our image; treat as out of scope unless a safe read-only method is agreed (e.g. stock-side capture only) |
+
+### Next read-only stock capture (decoded procfs, no register writes)
+
+The E0-b register capture did not include the vendor's decoded procfs dumps. On the stock boot,
+with the host pinging (so the state is live), capture these (read-only, via the stock telnet
+shell; add to capture-runtime-state.sh or paste manually):
+
+    /proc/hsan/lsw/table/tagact          # decoded tag action entries (add/del fields, types)
+    /proc/hsan/lsw/table/l3intf          # L3 interface entries incl. tagact_id (the reference!)
+    /proc/hsan/lsw/table/ifc             # decoded IFC classifier rows (key + action fields)
+    /proc/hsan/lsw/table/glb_attr        # up_port / flow_age_en decoded
+    /proc/hsan/lsw/table/flow_cnt        # flow table counters
+    /proc/hsan/lsw/pfe/tocpu_cnt         # "to CPU" counters
+    /proc/hsan/lsw/pfe/drop_cnt          # drop counters
+    /proc/hsan/cfe/intf/br_dump          # bridge/rootif state
+    /proc/hsan/cfe/table/flow            # software flow entries
+    /proc/hsan/cfe/table/mac_stats       # software FDB/MAC stats
+    /proc/hsan/net/swa/                  # rootif/vlan filter views (already partly captured)
+
+These decoded texts should state the tagact reference and the vendor's CPU-delivery configuration
+directly; they are the natural input to designing our own IFC/L3 entry (the host-side decode of
+ifc_write/l3intf_write is the companion task).
+
 ## U12 - completion of the identity path (success criterion)
 
 M1 is met when, for all four wired ports, a frame from the bench host (cable on that jack)

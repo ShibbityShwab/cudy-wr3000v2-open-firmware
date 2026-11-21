@@ -44,3 +44,23 @@ host ping with the CPU mirror kept for management, looking for an additional nat
 completion on port 11. Everything in the EQM/NAPT/L2 windows needs a decoded contract before any
 replay; the planner already refuses NAPT and L2 by name. The E0-a result (native completions
 carry status=37 = exception/punt class) still applies.
+
+### Decode review (2026-11-21, host-side - see E0B-ANALYSIS.md and m1a/)
+
+The follow-up decode changes the reading of three deltas above:
+
+1. tagact entry 1 is a verified tag_write entry (desc[8]=0x08): a tag DELETE action of type 2 with
+   no VLAN/TPID (word1 0x0000c000 = selector 4 + the writer's 0x80 bit). It is not a CPU-punt
+   classifier action by itself; the tagact_id reference lives in L3-interface/multicast entries
+   in the vendor code, none of which are readable/present on our image - so a replay is a
+   hypothesis test with an expected null result.
+2. pfe_glb+0x2c is decoded by the vendor's own dump_glb_attr as up_port (high16, stock 0x1000 =
+   WAN port 12) plus flow_age_en (napt+0x54 bit 8, stock 1). It is a flow-engine attribute, not an
+   L2/CPU-delivery control; the flow_age_en half is in the refused NAPT window.
+3. The L2 0x414/0x415 words are L2 DFX COUNTERS (rx_total/tx_total and friends at l2+0x40000,
+   vendor hi_pfe_dfx_dump_cnt string resolution), not port maps or MAC entries. The L2 page stays
+   read-only; the readable L2 config words are identical on both images.
+
+The EQM words are indirect command/data residue, the PIE words are our own driver's ring config,
+and IFC shows no stock-only entries. The reviewed minimal probe set (m1a/) is therefore tagact
+entry 1 + pfe_glb+0x2c only, with fail-closed scripts and a null-result expectation.

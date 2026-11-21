@@ -117,7 +117,8 @@ if [ "$MODE" = revert ]; then
 	[ -n "$DEV" ] || { echo "no devmem tool" >&2; exit 3; }
 	[ "${LSW_WRITE_ATTENDED:-0}" = 1 ] && [ "${LSW_RECOVERY_ARMED:-0}" = 1 ] || {
 		echo "refusing: LSW_WRITE_ATTENDED=1 and LSW_RECOVERY_ARMED=1 are required" >&2; exit 5; }
-	[ -f "$RB" ] || { echo "no rollback file $RB" >&2; exit 6; }
+	[ -f "$RB" ] || RB=$(ls -t "$0".rollback.* 2>/dev/null | head -n 1)
+	[ -f "$RB" ] || { echo "no rollback file for $0 (expected $RB)" >&2; exit 6; }
 	echo "reverting from $RB"
 	while read -r a v; do
 		[ -n "$a" ] || continue

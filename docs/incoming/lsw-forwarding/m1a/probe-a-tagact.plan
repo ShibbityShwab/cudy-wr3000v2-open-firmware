@@ -1,0 +1,9 @@
+# M1a probe A: replay stock tag action entry 1 (pub+0x54000, physical 0x124d4010)
+# Stock content (E0-b, 2026-11-21 image capture): w0=0 w1=0x0000c000 w2=0 w3=0
+# Writer decoded: hi_lsw_pfe!tag_write@0x2eb0 with descriptor type desc[8]=0x08
+#   (add-type 0, del-type 2, no VID/TPID) -> HW selector value 4; entry valid bit 0x80.
+# Ours is empty (all four words 0), so all four words are written for a fully defined entry.
+write 0x124d4010 0x00000000 0x00000000  # tagact[1].w0
+write 0x124d4014 0x0000c000 0x00000000  # tagact[1].w1 (del-tag action payload)
+write 0x124d4018 0x00000000 0x00000000  # tagact[1].w2
+write 0x124d401c 0x00000000 0x00000000  # tagact[1].w3

@@ -2,11 +2,12 @@
 
 Status: **planning + prototype artifacts only.** No register write is performed by anything here
 unless a human runs the write tool explicitly with the documented flags and an attended bench.
-One experiment from this lane HAS run on hardware: the read-only/command-line-only E0-a mirror-off
-test (2026-11-21, image 990c5cab) - see [E0A-ANALYSIS.md](E0A-ANALYSIS.md) and the appended result in
-[MINIMAL-EXPERIMENT.md](MINIMAL-EXPERIMENT.md). It proved the exception path works natively but only
-ARP-class traffic is punted; the missing piece is unicast-to-CPU delivery. The current hardware
-baseline is image c3ef2a50.
+Two experiments from this lane have run on hardware, both read-only/command-line-only: the E0-a
+mirror-off test (2026-11-21, image 990c5cab; exception path works natively but only ARP-class
+traffic is punted) and the E0-b stock-vs-ours read-only capture (image 6e9c54d0 vs vendor stock).
+See [E0A-ANALYSIS.md](E0A-ANALYSIS.md), [E0B-ANALYSIS.md](E0B-ANALYSIS.md), [E0B-RESULTS.md](E0B-RESULTS.md)
+and the m1a/ probe proposal. The missing piece is unicast-to-CPU delivery; the current hardware
+baseline is image c3ef2a50 (E0-b ran on the 6e9c54d0 family).
 
 This directory is the "native L2/VLAN forwarding" lane requested after the 2026-11-21
 multi-port decision gate ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md)): the CPU-copy
@@ -19,6 +20,8 @@ so multi-port LAN/WAN needs the switch's own forwarding / CPU-delivery path.
 | --- | --- | --- |
 | `IMPLEMENTATION-PLAN.md` | the engineering plan: architecture, three ordered implementation routes, exact writes we can justify, netdev/coexistence model, bring-up sequence, risks, patch design (revision after E0-a: sections 2.1, 4.4) | none |
 | `E0A-ANALYSIS.md` | host-side analysis of the mirror-off run: what status=37/err=1 means (class marker, not frame error), what is actually missing (unicast-to-CPU), milestone split M1a/M1b, revised E0-b target | none |
+| `E0B-ANALYSIS.md` | host-side decode of the E0-b captures and the reviewed M1a write proposal: tagact entry 1 decode, pfe_glb up_port decode, L2 counter decode, exclusions, expected observable, risks | none |
+| `m1a/` | the reviewed M1a probe: plan files, fail-closed on-box scripts (tagact entry 1; pfe_glb up_port), read-only observer, attended session runbook | generated write scripts - on-box only with flags |
 | `MINIMAL-EXPERIMENT.md` | the first experiment to run when the bench is available - **command-line changes and read-only captures only, zero register writes** | none |
 | `UNKNOWNS-AND-READS.md` | the [U] list with the exact attended reads/commands that would answer each item | none (read-only) |
 | `capture-runtime-state.sh` | run **on the box** (stock or our image): read-only register/proc/devmem capture into a directory, with the exact address list | read-only |
