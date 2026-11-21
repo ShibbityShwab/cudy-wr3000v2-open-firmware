@@ -1,0 +1,18 @@
+twin,reference_shape,bin_addr,bin_size_bytes,verdict,divergence_notes
+alg_cfg_get_cmd_one_arg,"(cmd,arg,arg_size,offset)->u32",0x14a73c,0x104,MATCH,skip spaces; cap 50/arg_size->101; empty->1009 off=0; NULL->100; offset=cmd_copy-cmd (verified: off=14 for txmode_mode_sw)
+alg_cfg_search_process_info_by_cfg_name_normal,"(args,arg_size,target)->void",0x14a840,0x94,MATCH,"stride 12 verified; strncmp(args,entry[0],arg_size); entry->name loaded via ldr [r4]"
+alg_cfg_search_process_info_by_cfg_name,(name)->entry*,0x14a8d4,0xb8,MATCH,wrapper: get_cmd_one_arg + _normal
+alg_cfg_search_process_info_by_cfg_id_normal,"(id,type,target)->void",0x14a98c,0x84,MATCH,"u16 id @+4, u8 type @+6 (offsets verified)"
+alg_cfg_search_process_info_by_cfg_id,"(id,type)->entry*",0x14aa10,0xbc,MATCH,wrapper
+alg_cfg_get_pkt_type,(cmd)->u8,0x14aacc,0xe4,MATCH,miss/NULL -> 13 (IRRELEVANT enum value verified); value loaded as u8 from entry+4
+alg_cfg_analysis_args_head,"(args,info,offset,pkt)->u32",0x14abb0,0x88,MATCH,pkt-type prefix skips one arg; not-found->1014; NULL->100
+alg_cfg_analysis_args,"(args,n,param,hdr,pi)->u32",0x14ac38,0xec,MATCH,hdr fields id/type/pkt/dev_ret/need_w4d; uc_param_num = args_num - offset
+alg_cfg_get_match_value,"(tbl,size,str,out)->u32",0x149908,0x88,MATCH,"strncmp(str,name,strlen(name)+1); miss/NULL->0x8b2d (35629 verified)"
+alg_cfg_param_get_tbl_size,(type)->u8,0x149d14,0x64,MATCH+EXT,"guard type>46->0 (ref: >=BUTT->0); 40-entry table vs ref 3; same {u8 type,u8 size} shape"
+alg_cfg_args_analysis_txmode_user_fix_mode,"(param,mem,len)->u32",0x155230,0x3ac,MATCH,"SET: 2 args, mac len 17, mode via 13-entry tx_mode tbl; GET: 1 arg; error strings identical"
+alg_cfg_args_analysis_txmode_all_user_fix_mode,"(param,mem,len)->u32",0x1555dc,0x1f4,MATCH,SET: 1 arg mode; GET: 1 arg; same strings
+alg_cfg_args_analysis_waterfilling_mode,"(param,mem,len)->u32",0x155ad4,0x218,MATCH,oal_atoi 0/1 range check (not bool tbl); same strings
+alg_cfg_args_analysis_waterfilling_enable,"(param,mem,len)->u32",0x155cec,0x218,MATCH,oal_atoi 0/1; same strings
+alg_cfg_args_analysis_hardamard_mode,"(param,mem,len)->u32",0x155f04,0x218,MATCH,oal_atoi 0/1; same strings
+alg_cfg_args_analysis_hardamard_enable,"(param,mem,len)->u32",0x15611c,0x218,MATCH,oal_atoi 0/1; same strings
+alg_cfg_args_analysis_waterfilling_limit,"(param,mem,len)->u32",0x156334,0x1bc,MATCH,int8 wrap quirk preserved: (int8_t)128 == -128 passes the >127 check in BOTH oracle and port (harness T17 documents it)

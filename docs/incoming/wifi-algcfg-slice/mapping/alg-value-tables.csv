@@ -1,0 +1,29 @@
+table,idx,name,value,binary_evidence
+pkt_type,0,ucast_data,0,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,1,mcast_data,1,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,2,bcast_data,2,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,3,mumimo_data,3,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,4,ofdma_data,4,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,5,ucast_mgmt,5,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,6,mcast_mgmt,6,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,7,bcast_mgmt,7,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,8,prot_ctrl,8,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,9,ndp,9,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,10,ndpa,10,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,11,resp_ctrl,11,table @.data+0x2e4c 13x8B; values dumped
+pkt_type,12,other_ctrl,12,table @.data+0x2e4c 13x8B; values dumped
+tx_mode,0,auto,0,names in .rodata cluster @file 0x23a680
+tx_mode,1,chain0_fix,1,names in .rodata cluster @file 0x23a680
+tx_mode,2,chain1_fix,2,names in .rodata cluster @file 0x23a680
+tx_mode,3,chain2_fix,3,names in .rodata cluster @file 0x23a680
+tx_mode,4,chain3_fix,4,names in .rodata cluster @file 0x23a680
+tx_mode,5,csd_fix,5,names in .rodata cluster @file 0x23a680
+tx_mode,6,csd3_fix,6,names in .rodata cluster @file 0x23a680
+tx_mode,7,csd4_fix,7,names in .rodata cluster @file 0x23a680
+tx_mode,8,stbc_fix,8,names in .rodata cluster @file 0x23a680
+tx_mode,9,stbc3_fix,9,names in .rodata cluster @file 0x23a680
+tx_mode,10,stbc4_fix,10,names in .rodata cluster @file 0x23a680
+tx_mode,11,txbf_fix,11,names in .rodata cluster @file 0x23a680
+tx_mode,12,stbc_2nss_fix,12,names in .rodata cluster @file 0x23a680
+bool,0,enable,1,table @.data+0x2e3c 2x8B
+bool,1,disable,0,table @.data+0x2e3c 2x8B
