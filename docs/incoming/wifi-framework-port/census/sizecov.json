@@ -1,0 +1,17 @@
+{
+  "total_func_bytes": 1418440,
+  "covered_bytes": 403920,
+  "pct": 28.48,
+  "per_ko": {
+    "hi5622v100_wifi": {
+      "func_bytes": 1299788,
+      "covered_bytes": 391832,
+      "n_funcs": 4245
+    },
+    "hi5622v100_plat": {
+      "func_bytes": 118652,
+      "covered_bytes": 12088,
+      "n_funcs": 703
+    }
+  }
+}
