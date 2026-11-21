@@ -231,3 +231,11 @@ capture on the unit. Frames from the far-right jack are delivered exactly like e
 port=0, vport=0, only descriptor words 0/1 populated, no source-port field. The mirror mask does
 cover the other jacks, but the CPU cannot tell jacks apart. Multi-port LAN/WAN therefore requires
 the native L2/VLAN bridge (LSW-SPEC, separate project); the single-port bench workaround stands.
+
+
+## Physical feature checks (2026-11-21)
+
+- LEDs [V]: with all six oem:green:* devices driven to brightness=1 the user visually confirmed
+  all six LEDs lit (active-low GPIO map 24/25/3/2/0/1); set back to off afterwards.
+- Buttons [V partial]: RESET press captured on /dev/input/event0 as EV_KEY KEY_RESTART (0x198)
+  press+release; WPS (KEY_WPS_BUTTON 0x211) press still to be captured.
