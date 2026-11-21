@@ -1,0 +1,5 @@
+ko_symbol,size_bytes,exported,twin_symbol,score,shared_callers,shared_callees,twin_file,twin_ret_kind,twin_n_params,twin_param_kinds
+hdpp_main_exit,100,,dpe_main_exit,1000,,,dpe/main/dpe_main.c,void,0,
+hdpp_main_init,152,,dpe_main_init,1000,,,dpe/main/dpe_main.c,agg,2,p:buf;v:buf_len
+hdpp_vap_find_user_by_macaddr,280,,dpe_vap_find_user_by_macaddr,1000,,,dpe/resource/dpe_wlan_user.c,int,3,v:vap_id;p:sta_mac_addr;p:user_idx
+hdpp_user_sync_write,340,,dpe_get_tid_ba_info,20,hmac_ba_reset_rx_handle,,dpe/resource/dpe_wlan_tid.c,agg,2,v:user_idx;v:tid

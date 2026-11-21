@@ -1,0 +1,4 @@
+# Kbuild - wifi-datapath-slice scaffolding (original build metadata)
+obj-m += hi5622_hdpp_alg_skel.o
+hi5622_hdpp_alg_skel-objs := hdpp_skel.o alg_skel.o
+ccflags-y += -I$(src)
