@@ -290,6 +290,23 @@ m1b/M1B-PLAN.md. The mirror patches 054-057 stay as a documented fallback (defau
 W22-only soak; the canonical command line drops the mirror/accepterr/cpucopy tokens (exact diff
 in w22/RELEASE-INTEGRATION.md).
 
+### 2.4 Full switch/CFE reversal lane (opened 2026-11-21, read-only dump pending)
+
+The release path (W22/M1b) does not depend on this lane. It exists because the carveout is now
+readable via /dev/mem and the vendor rootfs is extracted, so the complete CFE runtime model can
+be reversed: flow/L3/tagact/MCC/queue tables and the CPU-punt classes. See cfe/README.md.
+
+- cfe/DUMP-REQUEST.md: exact read-only stock dump (dd ranges for the 5 MiB carveout and the MMIO
+  table banks incl. pub tagact/l3intf/nhp/car, mcc userll, ifc tab128, napt flow counters, PIE;
+  traffic phases p0 idle..p5 outbound; procfs text state; second snapshots for counters; exfil
+  and minimal-subset guidance).
+- cfe/collect-stock-dump.sh: on-box read-only collector (dd/cat only, output in /tmp/cfe).
+- cfe/analyze-cfe-dump.py: host decoder (MMIO tables, carveout MAC/IP/pointer scan, phase diffs).
+- cfe/FLOW-MODEL.md: static decode so far (module/call graph, full table-manager map with
+  hardware locations, l3intf/tagact/userll field layouts, flow path, status classes).
+- cfe/M2-DESIGN.md: optional hardware L2/VLAN/flow offload design, explicitly documentation-only
+  (M2-A flow offload, M2-B bridge/VLAN, M2-C full hardware bridge).
+
 ---
 
 ## 3. Current netdev + driver model (what the first patch builds on)
@@ -693,6 +710,7 @@ this document.
 | **M1a PROVEN** (NAPT init replay; native port=11 status=77, mirror off) | `E0B-ANALYSIS.md` section 12; `m1a/napt-init/proof-image/RESULT.md` (image 5800c9ab; evidence build/evidence-bench-gates/m1a-proof/) |
 | W22 driver patches + release integration | `w22/` (0001/0002 patches, W22-DESIGN.md, RELEASE-INTEGRATION.md) |
 | M1b experiment plan | `m1b/M1B-PLAN.md` |
+| full CFE reversal: dump request + static table model + M2 design | `cfe/` (DUMP-REQUEST.md, collect-stock-dump.sh, analyze-cfe-dump.py, FLOW-MODEL.md, M2-DESIGN.md) |
 | CPU-punt mechanism = IFC broadcast->CPU + IFC unicast->NAPT->CPU | `E0B-ANALYSIS.md` section 11; stock procfs counters build/evidence-bench-gates/hsan-stock/hsan2/ |
 | NAPT init write path decoded (hi_pfe_napt_init) + reserved flow carveout safety | `m1a/napt-init/NAPT-INIT-PROPOSAL.md`; fixture hi_pfe_napt_init@0x4314; DT memory@80500000 + switch reg flow window 0x80400000/1MiB |
 | NAPT init prototype scripts (fail-closed, host-tested) | `m1a/napt-init/` (apply-napt-init.sh, observe-napt-init.sh, check-napt-path.sh) |

@@ -417,6 +417,44 @@ Implications for the remaining list:
   fallback. Retire the code only after a W22-only soak; the fallback command line is in
   w22/RELEASE-INTEGRATION.md.
 
+## Status update 2026-11-21 (full switch/CFE reversal phase opened)
+
+A new read-only reversal phase started with two new enablers: (a) the switch DDR carveout is
+readable via /dev/mem on both kernels, (b) the vendor rootfs is extracted at
+/home/shibbityshwab/recovery-extract (the hi_* modules there are byte-identical to the pinned
+fixtures, so all earlier disassembly lanes apply), plus U-Boot dumps, recovery.bin and the hsan2
+procfs capture. The goal is the full CFE flow/L3/tag/MCC/queue model and an optional M2 offload
+design (not needed for the release line).
+
+New items:
+- **U26 (flow table DDR layout) - GEOMETRY ANSWERED, entry layout open**: the our-image W22 dump
+  (OUR-SIDE-VALIDATION.md) proves the exact 1 MiB partition: v4 buckets 32 KiB (8192x4B) at
+  napt+0x130, v4 entry arena 256 KiB (8192x32B) at +0x138, v6 buckets 32 KiB at +0x134, v6 entry
+  arena 704 KiB (8192x88B) at +0x13c; W22 clear writes 0x017be000 into the bucket arrays only.
+  The field layout inside an entry slot is still open - it needs a controlled single-flow insert
+  probe (stock is inaccessible: vendor /dev/mem returns Bad address, no bootargs env, no debug
+  kernel). v4/v6 manager sizes 8224/8208 = 8192 + reserved.
+- **U27 (l3intf hardware encoding)**: the pub+0x5b000/0x5c000 banks are readable; the dump
+  validates the static field map and the tagact_id reference in stock entries.
+- **U28 (tagact references)**: which l3intf entry references tagact id 1 (the stock tagact table
+  has exactly one entry) and what action it describes.
+- **U29 (MCC/userll/ext + multicast CPU-copy wiring)**: mcc+0x44000 userll words and the
+  userll_ext table location; multicast class coverage for M1b/M2.
+- **U30 (queue window layout)**: W7 decoded the EQM table ids/formulas; the dump gives the
+  in-window layout and the CPU port-4 queue under punt traffic.
+- **U31 (status-class catalogue)**: status 0 / 0x25 / 0x4d observed; whether other classes exist
+  for multicast/IPv6/WoC is a traffic-matrix question for the same dump.
+- **U32 (CFE userspace side)**: recovery-extract has the vendor rootfs but no obvious CFE
+  userspace binary with the flow/tag strings; the kernel modules remain the primary source. If
+  the lead locates the CFE daemon binary, its netlink attribute names would confirm the ADP API.
+- **U33 (stock read access)**: the vendor 5.10 kernel has no usable /dev/mem (Bad address for
+  carveout/windows/control page) and no editable boot environment; the stock runtime CFE tables
+  are inaccessible unless a vendor debug kernel or another privileged read path appears.
+- **U34 (M2 verdict)**: after the our-side dump M2 is deferred: M2-A flow offload needs a
+  controlled insert probe to close the 32B/88B entry-slot layout; M2-B bridge/VLAN needs a bench
+  probe matrix for the write-only IFC action engine; M2-C needs the GPL CFE userspace. Nothing in
+  M2 blocks the release line.
+
 ## U12 - completion of the identity path (success criterion)
 
 M1 is met when, for all four wired ports, a frame from the bench host (cable on that jack)

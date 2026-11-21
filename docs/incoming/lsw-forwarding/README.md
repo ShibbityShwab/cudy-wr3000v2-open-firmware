@@ -11,7 +11,9 @@ ping 200/200 and working SSH. Next: W22 (kernel-side NAPT init + PIE delivery, d
 integration in [w22/](w22/W22-DESIGN.md)) and M1b (per-port / LAN-to-LAN, [m1b/](m1b/M1B-PLAN.md)).
 See [E0A-ANALYSIS.md](E0A-ANALYSIS.md), [E0B-ANALYSIS.md](E0B-ANALYSIS.md), [E0B-RESULTS.md](E0B-RESULTS.md).
 The current hardware baseline is image c3ef2a50 (E0-b ran on the 6e9c54d0 family; the M1a proof
-image is 5800c9ab).
+image is 5800c9ab). A new full switch/CFE reversal phase is in [cfe/](cfe/README.md): a read-only
+stock carveout + MMIO table dump (dump request and collector ready) plus the static decode of the
+vendor CFE tables and an optional M2 offload design (not needed for the release line).
 
 This directory is the "native L2/VLAN forwarding" lane requested after the 2026-11-21
 multi-port decision gate ([../../MULTI-PORT-PLAN.md](../../MULTI-PORT-PLAN.md)): the CPU-copy
@@ -29,6 +31,7 @@ so multi-port LAN/WAN needs the switch's own forwarding / CPU-delivery path.
 | `m1a/napt-init/` | decoded NAPT/flow init replay: proposal, fail-closed on-box script, read-only observers and the proof record (proof-image/RESULT.md) - **M1a proven** | generated write script - on-box only with flags |
 | `w22/` | release integration: kernel-side W22 NAPT init and PIE exception-delivery patch drafts, design and release-line validation plan | patch drafts only; not yet in the release series |
 | `m1b/` | next hardware experiment: per-port native delivery and LAN-to-LAN test matrix, observations and rollback rules | none (plan) |
+| `cfe/` | full switch/CFE reversal lane: static CFE table model, our-image dump validation (flow-window geometry solved), stock-/dev/mem limitation, remaining read request, optional M2 design + verdict | read-only reads only |
 | `MINIMAL-EXPERIMENT.md` | the first experiment to run when the bench is available - **command-line changes and read-only captures only, zero register writes** | none |
 | `UNKNOWNS-AND-READS.md` | the [U] list with the exact attended reads/commands that would answer each item | none (read-only) |
 | `capture-runtime-state.sh` | run **on the box** (stock or our image): read-only register/proc/devmem capture into a directory, with the exact address list | read-only |
