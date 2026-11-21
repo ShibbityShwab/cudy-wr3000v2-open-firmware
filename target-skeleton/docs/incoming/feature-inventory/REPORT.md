@@ -708,3 +708,12 @@ classes are the authoritative evidence used in the table above.
   writes, no vendor binary/secret reads, no UART input.
 - One read was attempted but is intentionally not relied on: /dev/kmsg is a blocking stream and
   was not used for the boot-log analysis (the ring buffer is already captured by dmesg).
+
+## W22 native forwarding update (2026-11-21)
+
+The wired-LAN item is no longer limited to the CPU-copy mirror workaround: the
+driver now initializes the PFE NAPT/flow engine (patch 059) and PIE delivers the
+native exception class by default (patch 060).  M1a (native CPU delivery with no
+mirror) is hardware-proven; the canonical command line no longer carries
+mirror/accepterr/cpucopy tokens, and the mirror patches remain as the documented
+fallback.  Per-port delivery and LAN-to-LAN (M1b) are the next bench tests.

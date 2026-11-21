@@ -62,6 +62,8 @@ include	B	055-net-lsw-mirror-stable-rxstroke.patch	d4f816ffedb117cbade0949910774
 include	B	056-net-lsw-mirror-postlink-w19.patch	eae38ae30942a252cdc6c3dd25f02b9908c43bd8c864163877cee8581d172721	LSW post-link CPU mirror re-latch (W19)
 include	B	057-net-pie-cpucopy-w20.patch	290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77	PIE port-0 CPU-copy delivery (W20)
 include	B	058-net-luofu-canonical-bench-config.patch	44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35	canonical bench configuration + docs cleanup
+include	B	059-net-lsw-napt-init.patch	cfd7debc3908e0b52785afd5ffac979c8c5e03538b3f98dccbf54738fa98152f	LSW NAPT/flow engine init (W22, native CPU delivery)
+include	B	060-net-pie-exception-delivery.patch	8c748061fe0577cea471534f209e68258bc707d45746c25d4f40409f6eeb1bd3	PIE native exception-class delivery (W22, retire accepterr)
 exclude	D	062-arm-hisilicon-smp-scu-gic.patch	dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a	SMP bench diagnostic: SCU/GIC reference dumps (renumbered from the duplicate 042)
 exclude	D	063-arm-luofu-cpu1-up-trigger.patch	e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52	SMP bench diagnostic: late add_cpu(1) retrigger via sysfs (renumbered from 059 for monotonic order)
 exclude	D	064-arm-hisilicon-smp-handoff-probe.patch	e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938	SMP bench probe: decompressor/stext hand-off markers (renumbered from 060)

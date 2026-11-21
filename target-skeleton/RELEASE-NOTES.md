@@ -71,7 +71,7 @@ patch series** (see `release-line/manifest.tsv` in the upstream directory).
 | capability | state |
 | --- | --- |
 | 2 CPUs (SMP) | working on the canonical image [V] |
-| wired LAN | working via the **documented bench workaround**: switch CPU-copy mirror `cpu_mirror=1 mirror_dst=4` + PIE port-0 copy delivery `cpucopy_deliver=1 cpucopy_port=11` (+ `accepterr=1`).  Native CFE-equivalent L2/VLAN forwarding is a **separate project**, not part of this release [V bench] / [I] |
+| wired LAN | working **natively** on eth2 via the W22 kernel NAPT/flow-engine init (M1a proven: ping/SSH with no CPU-copy mirror). The mirror tokens remain only in the documented fallback image. Multi-port LAN/WAN (per-port native delivery, LAN-to-LAN) is the next bench step (M1b) and is not yet claimed [V bench M1a] / [I] |
 | SSH / userspace | working (`OpenWrt 6.18.60`, procd) [V] |
 | persistent overlay | ubifs `/overlay`, survives reboot [V] |
 | DEVMEM / devmem diagnostic image | optional debugging aid; the canonical image carries it, it is not required for normal operation [V] |
@@ -262,3 +262,15 @@ use. Boot test PASS on image f6685b80 (sha256 f6685b80...): /proc/interrupts rep
 "GIC-0 29 Level twd", both CPUs tick at ~100 Hz, ping 0% loss, no Oops/RCU stalls. DTS-0001 and the
 release validation will be refreshed from the new single-source DTS; the previously verified
 baseline was 7421bb7a (same userspace).
+
+## W22: native CPU delivery (2026-11-21)
+
+The PFE NAPT/flow engine is now initialized by the driver (patch 059, gate
+luofu_switch.naptinit, default on, vendor hi_pfe_napt_init sequence) and PIE
+delivers the native exception/CPU-delivery class by default (patch 060, retires
+luofu_pie.accepterr).  Bench result: canonical image 50023446 boots with no
+mirror tokens, the NAPT init verifies itself in dmesg, host ping/SSH work, and a
+reboot reproduces it.  The CPU-copy mirror workaround is no longer needed for
+eth2; its patches (054-057) stay in the line as the documented fallback
+(naptinit=0 + mirror tokens).  Multi-port (per-port delivery, LAN-to-LAN) is the
+next experiment (M1b); it is not claimed here.

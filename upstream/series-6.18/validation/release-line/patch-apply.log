@@ -198,3 +198,8 @@ RC[057-net-pie-cpucopy-w20.patch]=0
 patching file drivers/net/ethernet/hisilicon/luofu-pie.c
 patching file drivers/net/ethernet/hisilicon/luofu-switch.c
 RC[058-net-luofu-canonical-bench-config.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[059-net-lsw-napt-init.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[060-net-pie-exception-delivery.patch]=0

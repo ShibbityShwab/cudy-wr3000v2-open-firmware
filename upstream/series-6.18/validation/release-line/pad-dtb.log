@@ -1,2 +1,2 @@
-pad-dtb: <scratch>/logs/luofu-r116.dtb.padded -> 12680 bytes (8-byte aligned totalsize)
-pad-dtb: <scratch>/logs/luofu-r116.series.dtb.padded -> 12680 bytes (8-byte aligned totalsize)
+pad-dtb: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/waves/2026-11-21-w22-validate/logs/luofu-r116.dtb.padded -> 12680 bytes (8-byte aligned totalsize)
+pad-dtb: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/waves/2026-11-21-w22-validate/logs/luofu-r116.series.dtb.padded -> 12680 bytes (8-byte aligned totalsize)

@@ -1,0 +1,431 @@
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+--- a/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
++++ b/drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+@@ -132,6 +132,13 @@
+ #define LUOFU_SWITCH_QUEUE_BASE		((phys_addr_t)0x80000000)
+ #define LUOFU_SWITCH_QUEUE_SIZE		SZ_4M
+ #define LUOFU_SWITCH_FLOW_BASE		((phys_addr_t)0x80400000)
++/*
++ * Measured Linux RAM start: the loader-handoff devicetree memory node is
++ * memory@80500000, and the switch DDR carveout (queue 0x80000000/4 MiB +
++ * flow 0x80400000/1 MiB) ends exactly below it.  A flow table base inside the
++ * carveout therefore can never point the engine at a Linux page.  [V]
++ */
++#define LUOFU_SWITCH_RAM_BASE		((phys_addr_t)0x80500000)
+ #define LUOFU_SWITCH_FLOW_SIZE		SZ_1M
+ 
+ /*
+@@ -514,6 +521,50 @@
+ #define LUOFU_SWITCH_PFE_WRITES		4	/* [V] four direct words */
+ 
+ /*
++ * W22: PFE NAPT/flow engine initialization (patch 059).
++ *
++ * Vendor reference: hi_lsw_pfe!hi_pfe_napt_init@0x4314, called from
++ * hi_pfe_probe after hi_pfe_init/hi_pfe_pub_init/hi_pfe_opp_init/
++ * hi_pfe_mcc_init and before hi_pfe_ifc_init.  It is a register-only sequence:
++ * the flow tables live in the switch's reserved DDR flow window and the engine
++ * clears them itself through the napt+0x60 command register, so the CPU never
++ * writes into the carveout.  The sequence below is the vendor order; the values
++ * are the stock-observed final words (E0-b capture + the 2026-11-21 probe).
++ *
++ * The one runtime-dependent word is the flow uplink port bitmap in
++ * pfe_glb+0x2c bits 31..16 (decoded binder: hi_pfe!write_glb_attr attr 0;
++ * vendor reader hi_pfe!dump_glb_attr prints it as "up_port").  It comes from
++ * the variant data, not from a hardcoded point.  [V writer/reader shape, I
++ * meaning]
++ */
++#define LUOFU_SWITCH_NAPT_CTRL_A	0x70	/* RMW: (pre & keep) | value */
++#define LUOFU_SWITCH_NAPT_CTRL_A_KEEP	0xffccfcc0u
++#define LUOFU_SWITCH_NAPT_CTRL_A_VALUE	0x00110138u
++#define LUOFU_SWITCH_NAPT_ENABLE	0x64	/* [V] value 1 */
++#define LUOFU_SWITCH_NAPT_ENABLE_VALUE	0x00000001u
++#define LUOFU_SWITCH_NAPT_AGE_EN	0x54	/* [V] bit 8 = flow_age_en */
++#define LUOFU_SWITCH_NAPT_AGE_EN_VALUE	0x00000100u
++#define LUOFU_SWITCH_NAPT_CLEAR		0x60	/* [V] write cmd; bit0 busy, self-clearing */
++#define LUOFU_SWITCH_NAPT_CLEAR_BUSY	BIT(0)
++#define LUOFU_SWITCH_NAPT_CLEAR_V6	0x000a0001u
++#define LUOFU_SWITCH_NAPT_CLEAR_V4	0x00080001u
++#define LUOFU_SWITCH_NAPT_CLEAR_POLL	0x3d40u	/* [V] vendor hi_lsw_wait_clr bound */
++#define LUOFU_SWITCH_NAPT_HASH_CFG	0x68	/* [V] value 0x00020303 */
++#define LUOFU_SWITCH_NAPT_HASH_CFG_VALUE	0x00020303u
++#define LUOFU_SWITCH_NAPT_HASH_PARAM	0x50	/* [V] value 0x00f00b69 */
++#define LUOFU_SWITCH_NAPT_HASH_PARAM_VALUE	0x00f00b69u
++#define LUOFU_SWITCH_NAPT_BASE_A	0x130	/* [V] flow_base + 0 */
++#define LUOFU_SWITCH_NAPT_BASE_B	0x138	/* [V] flow_base + 0x8000 */
++#define LUOFU_SWITCH_NAPT_BASE_C	0x134	/* [V] flow_base + 0x48000 */
++#define LUOFU_SWITCH_NAPT_BASE_D	0x13c	/* [V] flow_base + 0x50000 */
++#define LUOFU_SWITCH_NAPT_BASE_B_OFF	0x8000u
++#define LUOFU_SWITCH_NAPT_BASE_C_OFF	0x48000u
++#define LUOFU_SWITCH_NAPT_BASE_D_OFF	0x50000u
++#define LUOFU_SWITCH_NAPT_BASE_TAIL	0x1000u	/* smallest table extent checked at base D */
++#define LUOFU_SWITCH_PFE_GLB_UP_PORT_SHIFT	16
++#define LUOFU_SWITCH_NAPT_WORDS		10	/* snapshot slots: glb + 9 napt words */
++
++/*
+  * W10: IFC default-classification table (patch 043).
+  *
+  * The vendor hi_lsw_pfe module initialises the classifier in hi_pfe_ifc_init:
+diff --git a/drivers/net/ethernet/hisilicon/luofu-switch.c b/drivers/net/ethernet/hisilicon/luofu-switch.c
+--- a/drivers/net/ethernet/hisilicon/luofu-switch.c
++++ b/drivers/net/ethernet/hisilicon/luofu-switch.c
+@@ -242,6 +242,10 @@
+ module_param_named(pfe, luofu_switch_pfe_gate, bool, 0444);
+ MODULE_PARM_DESC(pfe, "Attended W8 step: program the recovered PFE forwarding-engine base init (requires arm/egress/qidmap/eps/qminit; default off)");
+ 
++static bool luofu_switch_naptinit_gate = true;
++module_param_named(naptinit, luofu_switch_naptinit_gate, bool, 0444);
++MODULE_PARM_DESC(naptinit, "W22: initialize the PFE NAPT/flow engine (flow uplink port, flow table bases inside the reserved switch DDR carveout, v4/v6 table clear) as part of the armed path; bench-proven 2026-11-21, default on");
++
+ static bool luofu_switch_ifc_gate;
+ module_param_named(ifc, luofu_switch_ifc_gate, bool, 0444);
+ static bool luofu_switch_ext_gate;
+@@ -305,6 +309,7 @@
+  * @queue_size: measured live DDR queue size
+  * @flow_base: measured live DDR flow base after the loader fixup
+  * @flow_size: measured live DDR flow size
++ * @napt_up_port: flow-engine uplink port bitmap (stock pfe_glb+0x2c high16)
+  * @port_bitmap: measured devicetree port bitmap cells, vendor cell order
+  * @qid_first: first qid of the derived allocation model
+  * @qid_last: last qid of the derived allocation model
+@@ -324,6 +329,7 @@
+ 	resource_size_t queue_size;
+ 	phys_addr_t flow_base;
+ 	resource_size_t flow_size;
++	u32 napt_up_port;
+ 	u32 port_bitmap[2];
+ 	u16 qid_first;
+ 	u16 qid_last;
+@@ -474,6 +480,8 @@
+ 	bool pfe_ready;
+ 	bool ifc_ready;
+ 	bool ext_ready;
++	bool napt_ready;
++	u32 napt_pre[LUOFU_SWITCH_NAPT_WORDS];
+ 	u32 mirror_snap[4];
+ 	bool mirror_valid;
+ 	struct delayed_work mirror_work;
+@@ -635,6 +643,7 @@
+ 	.port_bitmap = { 0x00000f01, 0x00001ff0 },
+ 	.cell_selector = LUOFU_SWITCH_CELL_SELECT,
+ 	.cell_size = LUOFU_SWITCH_CELL_SIZE,
++	.napt_up_port = BIT(12),
+ 	.qid_first = LUOFU_SWITCH_QID_FIRST,
+ 	.qid_last = LUOFU_SWITCH_QID_LAST,
+ 	.baseline = luofu_switch_v250_baseline,
+@@ -2712,6 +2721,265 @@
+ }
+ 
+ /*
++ * W22: PFE NAPT/flow engine initialization (patch 059).
++ *
++ * The E0-a/E0-b experiments showed where the native CPU-delivery path breaks in
++ * our bring-up: the W10 IFC defaults punt broadcast/ARP to the CPU and route
++ * unicast into the PFE NAPT/flow engine.  The vendor initializes that engine in
++ * hi_pfe_napt_init@0x4314 (called from hi_pfe_probe after the PFE base init and
++ * before hi_pfe_ifc_init); this driver never did, so the unicast class died
++ * inside an unconfigured engine and never produced a PIE completion.
++ *
++ * Replaying the decoded sequence got M1a proven on hardware on 2026-11-21
++ * (release tree + only the command-line change, no mirror): host ping 200/200,
++ * SSH working, UART RXDIAG showing native port=11 deliveries.
++ *
++ * Safety contract:
++ *  - register-only; the CPU never writes into the flow DDR window.  The flow
++ *    table bases are derived from the validated variant flow window (checked
++ *    against the devicetree resource in luofu_switch_check_windows), and the
++ *    function refuses unless the whole base range stays inside that window,
++ *    does not overlap the queue window, and ends below the measured Linux RAM
++ *    start (LUOFU_SWITCH_RAM_BASE).  The engine's DMA can therefore not reach
++ *    a Linux page;
++ *  - the vendor order is preserved and the two table-clear commands are polled
++ *    with the vendor bound; a timeout or any readback mismatch restores the
++ *    complete pre-write snapshot (which also re-clears the enable word);
++ *  - the idempotent guard re-runs nothing when the stage already applied (the
++ *    probe can be retried / the driver re-bound);
++ *  - stage ordering mirrors the vendor: after W8 (hi_pfe_init) and before W10
++ *    (hi_pfe_ifc_init).
++ */
++
++static void luofu_switch_napt_restore(struct luofu_switch *lsw)
++{
++	void __iomem *napt = lsw->window[LUOFU_SWITCH_WIN_NAPT];
++	void __iomem *glb = lsw->window[LUOFU_SWITCH_WIN_PFE_GLB];
++
++	if (!napt || !glb)
++		return;
++
++	writel(lsw->napt_pre[9], napt + LUOFU_SWITCH_NAPT_HASH_PARAM);
++	writel(lsw->napt_pre[8], napt + LUOFU_SWITCH_NAPT_HASH_CFG);
++	writel(lsw->napt_pre[7], napt + LUOFU_SWITCH_NAPT_BASE_D);
++	writel(lsw->napt_pre[6], napt + LUOFU_SWITCH_NAPT_BASE_C);
++	writel(lsw->napt_pre[5], napt + LUOFU_SWITCH_NAPT_BASE_B);
++	writel(lsw->napt_pre[4], napt + LUOFU_SWITCH_NAPT_BASE_A);
++	writel(lsw->napt_pre[3], napt + LUOFU_SWITCH_NAPT_AGE_EN);
++	writel(lsw->napt_pre[2], napt + LUOFU_SWITCH_NAPT_ENABLE);
++	writel(lsw->napt_pre[1], napt + LUOFU_SWITCH_NAPT_CTRL_A);
++	writel(lsw->napt_pre[0], glb + LUOFU_SWITCH_PFE_GLB_TAB_CFG);
++}
++
++static int luofu_switch_napt_write_verify(struct luofu_switch *lsw,
++					  void __iomem *base, u32 offset,
++					  u32 want, const char *name)
++{
++	u32 got;
++
++	writel(want, base + offset);
++	got = readl(base + offset);
++	if (got != want) {
++		dev_err(lsw->dev,
++			"W22: %s readback mismatch at %s+%#x: wrote %#x, read %#x\n",
++			name, base == lsw->window[LUOFU_SWITCH_WIN_NAPT] ? "napt" : "pfe_glb",
++			offset, want, got);
++		return -EIO;
++	}
++	return 0;
++}
++
++static int luofu_switch_napt_clear(struct luofu_switch *lsw, u32 command)
++{
++	void __iomem *napt = lsw->window[LUOFU_SWITCH_WIN_NAPT];
++	unsigned int i;
++	u32 value;
++
++	writel(command, napt + LUOFU_SWITCH_NAPT_CLEAR);
++	for (i = 0; i < LUOFU_SWITCH_NAPT_CLEAR_POLL; i++) {
++		value = readl(napt + LUOFU_SWITCH_NAPT_CLEAR);
++		if (!(value & LUOFU_SWITCH_NAPT_CLEAR_BUSY))
++			return 0;
++		cpu_relax();
++	}
++
++	dev_err(lsw->dev,
++		"W22: NAPT table clear command %#x did not complete (%#x still has bit0 set after %u polls)\n",
++		command, value, LUOFU_SWITCH_NAPT_CLEAR_POLL);
++	return -ETIMEDOUT;
++}
++
++static int luofu_switch_napt_program(struct luofu_switch *lsw)
++{
++	void __iomem *napt = lsw->window[LUOFU_SWITCH_WIN_NAPT];
++	void __iomem *glb = lsw->window[LUOFU_SWITCH_WIN_PFE_GLB];
++	const struct luofu_switch_variant *variant = lsw->variant;
++	phys_addr_t base_a, base_b, base_c, base_d, flow_end;
++	u32 want_glb, want_ctrl;
++	int ret;
++
++	if (!napt || !glb)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "missing napt/pfe_glb window for the W22 stage\n");
++
++	base_a = variant->flow_base;
++	base_b = base_a + LUOFU_SWITCH_NAPT_BASE_B_OFF;
++	base_c = base_a + LUOFU_SWITCH_NAPT_BASE_C_OFF;
++	base_d = base_a + LUOFU_SWITCH_NAPT_BASE_D_OFF;
++	flow_end = base_a + variant->flow_size;
++
++	if (base_a != LUOFU_SWITCH_FLOW_BASE)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "W22: flow window base is %#llx, expected %#llx from the loader-handoff contract; refusing to point the flow engine at it\n",
++				     (unsigned long long)base_a,
++				     (unsigned long long)LUOFU_SWITCH_FLOW_BASE);
++	if (base_d + LUOFU_SWITCH_NAPT_BASE_TAIL > flow_end)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "W22: flow window %#llx+%#llx is too small for the decoded NAPT table layout (needs %#x bytes)\n",
++				     (unsigned long long)base_a,
++				     (unsigned long long)variant->flow_size,
++				     LUOFU_SWITCH_NAPT_BASE_D_OFF +
++				     LUOFU_SWITCH_NAPT_BASE_TAIL);
++	if (base_a < variant->queue_base + variant->queue_size)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "W22: flow window overlaps the queue window; refusing\n");
++	if (flow_end > LUOFU_SWITCH_RAM_BASE)
++		return dev_err_probe(lsw->dev, -EINVAL,
++				     "W22: flow window ends at %#llx, above the measured Linux RAM start %#llx; refusing to let the flow engine DMA there\n",
++				     (unsigned long long)flow_end,
++				     (unsigned long long)LUOFU_SWITCH_RAM_BASE);
++
++	/* Idempotent guard: a previous run (or an initrd replay) already did it. */
++	if (readl(napt + LUOFU_SWITCH_NAPT_CTRL_A) ==
++		    LUOFU_SWITCH_NAPT_CTRL_A_VALUE &&
++	    readl(napt + LUOFU_SWITCH_NAPT_ENABLE) ==
++		    LUOFU_SWITCH_NAPT_ENABLE_VALUE &&
++	    readl(napt + LUOFU_SWITCH_NAPT_BASE_A) == (u32)base_a &&
++	    readl(napt + LUOFU_SWITCH_NAPT_BASE_B) == (u32)base_b &&
++	    readl(napt + LUOFU_SWITCH_NAPT_BASE_C) == (u32)base_c &&
++	    readl(napt + LUOFU_SWITCH_NAPT_BASE_D) == (u32)base_d) {
++		dev_info(lsw->dev,
++			 "W22: NAPT/flow engine already initialized (bases %#llx/%#llx); skipping the replay\n",
++			 (unsigned long long)base_a,
++			 (unsigned long long)base_b);
++		return 0;
++	}
++
++	dev_info(lsw->dev,
++		 "W22: NAPT/flow engine init: flow carveout %#llx+%#llx, bases %#llx/%#llx/%#llx/%#llx, up_port %#x\n",
++		 (unsigned long long)base_a, (unsigned long long)variant->flow_size,
++		 (unsigned long long)base_a, (unsigned long long)base_b,
++		 (unsigned long long)base_c, (unsigned long long)base_d,
++		 variant->napt_up_port);
++
++	/* Snapshot the complete pre-write state; every word must be stable. */
++	lsw->napt_pre[0] = readl(glb + LUOFU_SWITCH_PFE_GLB_TAB_CFG);
++	lsw->napt_pre[1] = readl(napt + LUOFU_SWITCH_NAPT_CTRL_A);
++	lsw->napt_pre[2] = readl(napt + LUOFU_SWITCH_NAPT_ENABLE);
++	lsw->napt_pre[3] = readl(napt + LUOFU_SWITCH_NAPT_AGE_EN);
++	lsw->napt_pre[4] = readl(napt + LUOFU_SWITCH_NAPT_BASE_A);
++	lsw->napt_pre[5] = readl(napt + LUOFU_SWITCH_NAPT_BASE_B);
++	lsw->napt_pre[6] = readl(napt + LUOFU_SWITCH_NAPT_BASE_C);
++	lsw->napt_pre[7] = readl(napt + LUOFU_SWITCH_NAPT_BASE_D);
++	lsw->napt_pre[8] = readl(napt + LUOFU_SWITCH_NAPT_HASH_CFG);
++	lsw->napt_pre[9] = readl(napt + LUOFU_SWITCH_NAPT_HASH_PARAM);
++
++	if (readl(glb + LUOFU_SWITCH_PFE_GLB_TAB_CFG) != lsw->napt_pre[0] ||
++	    readl(napt + LUOFU_SWITCH_NAPT_CTRL_A) != lsw->napt_pre[1] ||
++	    readl(napt + LUOFU_SWITCH_NAPT_ENABLE) != lsw->napt_pre[2] ||
++	    readl(napt + LUOFU_SWITCH_NAPT_AGE_EN) != lsw->napt_pre[3] ||
++	    readl(napt + LUOFU_SWITCH_NAPT_BASE_A) != lsw->napt_pre[4] ||
++	    readl(napt + LUOFU_SWITCH_NAPT_HASH_PARAM) != lsw->napt_pre[9])
++		return dev_err_probe(lsw->dev, -EIO,
++				     "W22: NAPT/flow register changed between two reads; refusing to write the sequence\n");
++
++	want_glb = (lsw->napt_pre[0] & LUOFU_SWITCH_PFE_GLB_TAB_MASK) |
++		   ((u32)variant->napt_up_port << LUOFU_SWITCH_PFE_GLB_UP_PORT_SHIFT);
++	want_ctrl = (lsw->napt_pre[1] & LUOFU_SWITCH_NAPT_CTRL_A_KEEP) |
++		    LUOFU_SWITCH_NAPT_CTRL_A_VALUE;
++
++	/*
++	 * Vendor order: hi_pfe_init attr, napt ctrl/enable/age, table bases,
++	 * hash config, v6 clear, v4 clear, hash params.
++	 */
++	ret = luofu_switch_napt_write_verify(lsw, glb,
++					     LUOFU_SWITCH_PFE_GLB_TAB_CFG,
++					     want_glb, "up_port");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_CTRL_A, want_ctrl,
++					     "ctrl A");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_ENABLE,
++					     LUOFU_SWITCH_NAPT_ENABLE_VALUE,
++					     "engine enable");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_AGE_EN,
++					     LUOFU_SWITCH_NAPT_AGE_EN_VALUE,
++					     "flow age enable");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_BASE_A,
++					     (u32)base_a, "flow base A");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_BASE_B,
++					     (u32)base_b, "flow base B");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_BASE_C,
++					     (u32)base_c, "flow base C");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_BASE_D,
++					     (u32)base_d, "flow base D");
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_HASH_CFG,
++					     LUOFU_SWITCH_NAPT_HASH_CFG_VALUE,
++					     "hash config");
++	if (ret)
++		goto restore;
++
++	ret = luofu_switch_napt_clear(lsw, LUOFU_SWITCH_NAPT_CLEAR_V6);
++	if (ret)
++		goto restore;
++	ret = luofu_switch_napt_clear(lsw, LUOFU_SWITCH_NAPT_CLEAR_V4);
++	if (ret)
++		goto restore;
++
++	ret = luofu_switch_napt_write_verify(lsw, napt,
++					     LUOFU_SWITCH_NAPT_HASH_PARAM,
++					     LUOFU_SWITCH_NAPT_HASH_PARAM_VALUE,
++					     "hash params");
++	if (ret)
++		goto restore;
++
++	dev_info(lsw->dev,
++		 "W22: NAPT/flow engine initialized and verified: up_port %#x, bases %#llx/%#llx/%#llx/%#llx, v4+v6 tables cleared (vendor hi_pfe_napt_init sequence)\n",
++		 variant->napt_up_port, (unsigned long long)base_a,
++		 (unsigned long long)base_b, (unsigned long long)base_c,
++		 (unsigned long long)base_d);
++	return 0;
++
++restore:
++	luofu_switch_napt_restore(lsw);
++	dev_err(lsw->dev,
++		"W22: NAPT/flow init failed; pre-write snapshot restored (engine disabled again)\n");
++	return ret;
++}
++
++/*
+  * W10: the IFC default-classification table (patch 043).
+  *
+  * The round-4d/4e runs armed W3-W9 and enabled the MAC, but no frame was ever
+@@ -3730,6 +3998,20 @@
+ 		goto out;
+ 	lsw->pfe_ready = true;
+ 
++	if (!luofu_switch_naptinit_gate) {
++		dev_warn(dev,
++			 "the PFE NAPT/flow engine is not initialized (luofu_switch.naptinit=0): the IFC defaults route unicast into it, so unicast would be dropped inside an unconfigured engine; refusing to arm the data path\n");
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
++
++	dev_warn(dev,
++		 "luofu_switch.naptinit=1: initializing the PFE NAPT/flow engine (W22) with the bench-proven vendor sequence\n");
++	ret = luofu_switch_napt_program(lsw);
++	if (ret)
++		goto out;
++	lsw->napt_ready = true;
++
+ 	if (!luofu_switch_ifc_gate) {
+ 		dev_warn(dev,
+ 			 "the IFC default-classification table is not programmed (set luofu_switch.ifc=1): the vendor programs the classifier defaults after the PFE base init and no frame can be classified without them; refusing to arm the data path\n");
+@@ -3759,7 +4041,7 @@
+ 	lsw->ext_ready = true;
+ 
+ 	dev_info(dev,
+-		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init, the IFC default-classification table and the W12 extended EPS/DP runtime words are programmed and verified; the GEMAC netdev front end may register\n");
++		 "connectivity path armed: R1/R3/R5 probe configuration, the W2 qid maps, the EPS channel map, the EQM queue-manager init tables, the PFE forwarding-engine base init, the NAPT/flow engine init, the IFC default-classification table and the W12 extended EPS/DP runtime words are programmed and verified; the GEMAC netdev front end may register\n");
+ 	if (luofu_switch_dump_gate)
+ 		luofu_switch_dump(lsw);
+ 
+@@ -3780,6 +4062,10 @@
+ 		luofu_switch_ifc_restore(lsw);
+ 		lsw->ifc_ready = false;
+ 	}
++	if (ret && lsw->napt_ready) {
++		luofu_switch_napt_restore(lsw);
++		lsw->napt_ready = false;
++	}
+ 	if (ret && lsw->pfe_ready) {
+ 		luofu_switch_pfe_restore(lsw);
+ 		lsw->pfe_ready = false;
+@@ -3820,6 +4106,8 @@
+ 		luofu_switch_ext_restore(lsw);
+ 	if (lsw->ifc_ready)
+ 		luofu_switch_ifc_restore(lsw);
++	if (lsw->napt_ready)
++		luofu_switch_napt_restore(lsw);
+ 	if (lsw->pfe_ready)
+ 		luofu_switch_pfe_restore(lsw);
+ 	if (lsw->qminit_ready)

@@ -18,8 +18,8 @@ release line is the target patch stack that built and booted the verified image.
 
 | layer | what it is | size |
 | --- | --- | --- |
-| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 62 patch files (001-058 + 062-065; no duplicate numbers) |
-| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **51 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
+| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 64 patch files (001-060 + 062-065; no duplicate numbers) |
+| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **53 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
 | **L2 upstream review form** | the kernel-only submission form in `series/` plus `00-06` docs | 26 patches (001-026), grouped merge-intent / RFC / do-not-merge |
 | **L3 DTS series entry (DTS-0001)** | the companion DTS patch the kernel-only form cannot carry: the board DTS with the two loader hand-off nodes required by 0018 | 1 patch, `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` (section 2, `06-dts-series-dependency.md`) |
 
@@ -151,7 +151,7 @@ pre-clean-DTS image used as the hardware baseline for the DTS work):
   NOT boot and is recorded in `07-dts-upstream-bindings.md` section 1.  [V]
 
 The `974e6ca6` details:
-- built from: L0 patch stack (62 files: 001-058 + 062-065), the DTS hand-off
+- built from: L0 patch stack (64 files: 001-060 + 062-065), the DTS hand-off
   fix, canonical command line, DEVMEM + static devmem tool + boot-pair recorder;
   **no `luofu_smp_*` probe tokens**.
 - verified on hardware (2026-11-21) [V]:
@@ -249,7 +249,7 @@ snapshot as features: [V]/[I]
 | `065-arm-hisilicon-smp-trampoline.patch` | `5e254fe4` | sentinel protocol + re-poll hand-off trampoline (renumbered from 061) |
 
 Why exactly these: after the DTS fix nothing in the SMP path needs them; no later
-release patch depends on them (verified: the 51-patch L1 applies in order,
+release patch depends on them (verified: the 53-patch L1 applies in order,
 section 9); they were designed to answer "does CPU1 ever poll the pen", and the
 064/065 sentinels did exactly that.  The numbering was cleaned on 2026-11-21:
 the duplicate 042 is gone (042-net stays; the former 042-arm is now 062) and its
@@ -298,9 +298,11 @@ Ordering notes (both items fixed 2026-11-21):
   to `dev_dbg`: patch **054** (`dev_warn` -> `dev_dbg`) and patch
   **056** (`dev_info` -> `dev_dbg`).  Manifest hashes were refreshed
   (054 `9e3c01c3...`, 056 `eae38ae3...`; manifest sha256
-  `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a`).
+  `619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7`).
   The base-files heartbeat interval also changed 5 s -> 60 s (target content,
   not a kernel patch).
+
+- **Native forwarding W22 (release-line, 2026-11-21).**  Patches **059** (luofu_switch.naptinit, PFE NAPT/flow-engine init) and **060** (PIE native exception-class delivery, retires the accepterr gate) were added to L0/L1: L0 64 files (001-060 + 062-065), L1 53 files, manifest sha256 619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7. Bench-proven: the NAPT init restores native CPU delivery (M1a) and the canonical command line drops the CPU-copy mirror tokens (mirror patches 054-057 stay in the line as documented fallback).  Validator PASS (53/53), target build PASS, cold boot + reboot determinism + 200/200 ping with no mirror tokens.
 
 ## 8. Retraction: the "2-CPU hang" was a host bench-link outage
 

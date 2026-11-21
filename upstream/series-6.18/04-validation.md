@@ -1343,7 +1343,7 @@ order is binding/DTS data only.
   sha256 `01b74561...`);
 - release-line manifest refreshed: 51 include / 11 exclude / 62 patches;
   manifest sha256
-  `1e00b568819af505ba258682bbec314e590d4488de1acff2f35f98a1ea7ef63a`;
+  `619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7`;
   `validation/sha256sums.txt` 89 entries, `sha256sum -c` passes 89/89;
 - **flashinfo binding** is the only remaining blocker.  The final host-side
   option (documented `hisilicon,luofu-flashinfo` compatible first with the
@@ -1406,7 +1406,7 @@ Oops/BUG/panic/RCU stall.  Evidence:
   compatible update; the last recorded run remains 26/26 patch(1)+`git am`,
   identical trees, 0 errors / 58 checkpatch warnings;
 - `gen-series.py --check` clean; release-line manifest unchanged
-  (51 include / 11 exclude, sha256 `1e00b568...`);
+  (51 include / 11 exclude, sha256 `619eb15a...`);
   `validation/sha256sums.txt` refreshed (89 entries) and
   `sha256sum -c` passes 89/89.
 
@@ -1415,3 +1415,7 @@ Oops/BUG/panic/RCU stall.  Evidence:
 requires a consistent vendor pair, mixed-pair state) are documented in the
 install/recovery docs and the installer tool.  Logs:
 `validation/release-line/` refreshed.
+
+## Section 29 - W22 native forwarding release-line change (2026-11-21)
+
+Release line extended with the two W22 patches (058 -> 059/060; L0 64 files, L1 53; manifest sha256 619eb15a8561deb6cd7ccc67709930cffa454b82c49d5305491e1d4ca5c128c7).  Host validation: release-line validator PASS - 53/53 include patches apply with patch(1) RC=0, 0 fuzz, 0 rejects, strict git apply 53/53; DTS contract and DTS-0001 identity unchanged (DTB 12,678 B 62574b11..., pad 12,680 B 8d79794e...).  Hardware validation: canonical image 500234462bdc2e62d963067f00ba580e639a82c10b05323533684f8536ca8c9f booted 6.18.60, 2 CPUs, TWD Level, no Oops/BUG/panic; dmesg "W22: NAPT/flow engine initialized and verified" and "connectivity path armed"; command line carries no cpu_mirror/accepterr/cpucopy tokens; host ping 200/200 0% loss and SSH work; reboot determinism re-verified (W22 init runs on every boot, ping 200/200, no errors).  M1a was first proven with the userspace replay on image 5800c9ab; W22 is the kernel implementation.  M1b (per-port delivery, LAN-to-LAN) remains the next bench step.

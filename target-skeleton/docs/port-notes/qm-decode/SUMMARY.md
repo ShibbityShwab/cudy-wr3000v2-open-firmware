@@ -1,3 +1,9 @@
+> **Update 2026-11-21 (native forwarding, W22):** the CPU-copy mirror described below
+> is superseded as the canonical path by the W22 driver NAPT/flow-engine init (patch
+> 059, gate luofu_switch.naptinit) plus PIE native exception-class delivery (patch
+> 060).  The mirror patches 054-057 and their tokens remain only in the documented
+> fallback image.  This page is retained as the historical decode record.
+
 # incoming/qm-decode - round 4s: WORKING DATA PATH + canonical bench config (patch 058)
 
 **Lane:** qm-decode, shared task task-61, 2026-11-20 (round 24). Prior: 032...057.

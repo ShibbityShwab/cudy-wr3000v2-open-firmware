@@ -1,9 +1,10 @@
-release line: <series>/release-line/manifest.tsv
-workdir: <scratch>
+release line: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/release-line/manifest.tsv
+workdir: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/waves/2026-11-21-w22-validate
+tarball sha256: 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e
 pristine version: 6.18.60
-manifest: 51 included, 11 excluded
-patch(1): 51/51 patches RC=0, 146 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects
-strict git apply: all 51 patches apply without fuzz
+manifest: 53 included, 11 excluded
+patch(1): 53/53 patches RC=0, 149 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects
+strict git apply: all 53 patches apply without fuzz
 board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12678 B sha256 62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899
 target DTS: DTB totalsize 12678 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12680 B and keeps the hand-off contract
 DTS contract: console=/serial@1010f000 flashinfo-compatible=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
