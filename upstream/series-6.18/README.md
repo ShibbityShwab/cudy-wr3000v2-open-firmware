@@ -53,24 +53,34 @@ final 26-patch pass.
 
 - **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`,
-  cleaned/refreshed 2026-11-21: bindings cleanup, stock board_id=3 LED/keys
-  nodes) adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**712 lines**,
-  byte-identical to the cleaned single-source target DTS) and the
-  `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
-  patch 0018 and is documented in `06-dts-series-dependency.md`.  The
-  validator applies/compiles it and checks the loader hand-off contract.  The
-  bindings cleanup (removals/renames, retained measured facts, manual binding
-  review and the remaining upstream blockers) is
-  `07-dts-upstream-bindings.md`.
+  (sha256 `072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9`,
+  conservative cleanup 2026-11-21: comment-only; active content
+  hardware-verified) adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts`
+  (**691 lines**, active content byte-identical to the known-good
+  hardware-verified DTS) and the `dtb-$(CONFIG_ARCH_LUOFU)` Makefile
+  entry; it is the companion of kernel patch 0018 and is documented in
+  `06-dts-series-dependency.md`.  The validator applies/compiles it and
+  checks the loader hand-off contract.  The cleanup record, the **hardware
+  regression of the superseded active cleanup** and the remaining upstream
+  blockers are in `07-dts-upstream-bindings.md`.
+
+  **Hardware regression (2026-11-21):** the first active-DTS cleanup (commit
+  538377c, image 6f19c6d6) did not boot - the kernel came up with SMP but MTD
+  partition registration stalled and the unit reset on the U-Boot watchdog and
+  fell back to stock pair A (UART log
+  `build/evidence-bench-gates/2026-11-21-cleaned-dts-regression.log`,
+  sha256 15dc3188...).  The known-good image 7421bb7a (pre-clean DTS) boots
+  with partition scan 0.93-1.16 s.  The DTS is back to the known-good active
+  content (compiled DTB byte-identical); **host checks are necessary but not
+  sufficient - the image must be boot-tested after any active-DTS change.**
 - **Board-feature refresh (2026-11-21).**  The stock board_id=3 overlay landed
   in the single-source DTS: gpio-keys-polled (reset/WPS) and six
   `oem:green:*` gpio-leds, with the matching target config additions;
   verified image **`7f270b8c`** (2 CPUs, 6 LEDs writable, `event0`,
   `watchdog0` sysfs; **thermal remains unsupported** - temp reads 0, vendor
-  DT disables the sensor).  The compiled DTB became 11,702 B with an unaligned
+  DT disables the sensor).  The compiled DTB became 13,041 B with an unaligned
   totalsize, which made the stock U-Boot bootfip gate-word load data-abort, so
-  the image build now runs `Build/luofu-pad-dtb` (11,704 B) before
+  the image build now runs `Build/luofu-pad-dtb` (13,048 B) before
   `append-dtb` - see top-level `docs/TRAILER-FORMAT.md` section 11 and
   `06-dts-series-dependency.md` section 3.1.  Release-line patch hashes
   were refreshed for 054/056 (`dev_dbg` quieting).
@@ -122,7 +132,7 @@ overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
 | `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
-| `07-dts-upstream-bindings.md` | the board-DTS bindings cleanup for submission: every removal/rename, retained measured facts, manual binding review (no dtschema available), compile/pad facts and the remaining upstream blockers |
+| `07-dts-upstream-bindings.md` | the board-DTS cleanup record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup (active content byte-identical to the known-good DTB), the optional hardware-tested deltas, the manual binding review (no dtschema available), compile/pad facts and the remaining upstream blockers |
 | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | commit-ready DTS-series entry (DTS-0001): board DTS + hisilicon DTS Makefile line; companion to 0018 |
 | `tools/gen-dts-series-patch.py` | deterministic generator for DTS-0001 from the single-source target DTS |
 | `release-line/manifest.tsv` | one row per target patch: include/exclude, class A/B/C/D, sha256, purpose (51 included, 11 excluded) |
@@ -201,12 +211,14 @@ To regenerate the series after editing a message:
   hunks, 0 fuzz, 0 rejects**; strict `git apply`: **all 51 patches apply
   without fuzz**.  The L0 stack (62 files, 001-058 + 062-065) also applies
   62/62 with 0 fuzz and strict-clean.  The loader hand-off DTS contract
-  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **11,702 B** sha256
-  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`) and contains
-  `/aliases/console` and the `flashinfo@80600000` node with the measured
-  `reg`/`atag-offset`.  The totalsize is unaligned, so the validator
-  exercises `pad-dtb.py` on a copy (**11,704 B**, contract preserved) and
-  records the required `Build/luofu-pad-dtb` image step.
+  compiles (`cpp`+`dtc` RC=0, 0 stderr, DTB **13,041 B** sha256
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
+  byte-identical to the known-good DTB) and contains `/aliases/console`
+  and the `flashinfo@80600000` node with the measured `reg`/
+  `atag-offset`.  The totalsize is unaligned, so the validator exercises
+  `pad-dtb.py` on a copy (**13,048 B**, contract preserved) and records
+  the required `Build/luofu-pad-dtb` image step; a hardware boot-test is
+  still required for the rebuilt image.
   **DTS-0001** applies, compiles to the same DTB and its board DTS is
   byte-identical to the target DTS.  Logs: `validation/release-line/`.  [V]
 - the target image built from the extended stack is hardware-verified for

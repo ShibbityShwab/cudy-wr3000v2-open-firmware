@@ -14,7 +14,7 @@ gpio-keys-polled (reset GPIO22 / WPS GPIO23, active-low), `watchdog0`
 exposed through sysfs (CONFIG_WATCHDOG_SYSFS).  **Thermal remains unsupported:**
 the temperature register reads 0 and the vendor DT disables the sensor - no
 thermal claim.  This image required the base-DTB pad step (below), because the
-new DTS compiles to an 11,702-byte DTB with an unaligned totalsize and the stock
+new DTS compiles to a 13,041-byte DTB with an unaligned totalsize and the stock
 U-Boot bootfip gate-word load data-aborted on it.  [V]
 
 **2-CPU/SMP baseline 974e6ca6** (6,226,222 B,
@@ -54,9 +54,9 @@ Without them U-Boot printed `alias console not found`, skipped staging, and CPU1
 never polled the kernel pen; every kernel release had no consumer.  The kernel
 release implementation (patch 018) was correct all along - no SMP kernel code
 change is needed for the fix.  **Base-DTB padding is also required:** the LED/
-DTS compiles to an 11,702-byte DTB whose totalsize is not 8-byte aligned;
+DTS compiles to a 13,041-byte DTB whose totalsize is not 8-byte aligned;
 the image build runs `Build/luofu-pad-dtb` (`tools/pad-dtb.py`) to fold
-in the padding (11,704 B) before `append-dtb`, otherwise the stock U-Boot
+in the padding (13,048 B) before `append-dtb`, otherwise the stock U-Boot
 bootfip gate-word load is unaligned and the loader falls back to stock
 (top-level `docs/TRAILER-FORMAT.md` section 11).  The DTS contract ships as the explicit
 DTS-series entry **DTS-0001**
@@ -166,9 +166,14 @@ armed and UART captured; (3) Wi-Fi feasibility then optional port; (4) upstream 
 - Watchdog: watchdog0 with identity HiSilicon luofu watchdog, timeout 30 s,
   state active (not armed by us); CONFIG_WATCHDOG_SYSFS enabled.
 - DTB alignment fix [V]: the new DTS pushed the base DTB to an unaligned totalsize
-  (11,702 B); U-Boot bootfip data-aborted on the unaligned gate-word load and fell
-  back to stock.  scripts/pad-dtb.py now pads the DTB to 11,704 B / 8-byte
+  (13,041 B); U-Boot bootfip data-aborted on the unaligned gate-word load and fell
+  back to stock.  scripts/pad-dtb.py now pads the DTB to 13,048 B / 8-byte
   totalsize, and the image boots (2 CPUs, ping 0% loss).
+  **Active-DTS warning [V]:** the first active-DTS cleanup (image 6f19c6d6)
+  did not boot - MTD scan stalled and the U-Boot watchdog reset the unit.
+  The DTS is back to the known-good active content (compiled DTB
+  byte-identical to the 7421bb7a baseline); after any active-DTS change the
+  rebuilt image must be boot-tested before it is trusted.
 
 ## Install path status (2026-11-21)
 
@@ -191,4 +196,7 @@ the kernel but stalls in MTD partition registration and is reset by the U-Boot w
 falls back to stock. The known-good hardware baseline remains image **7421bb7a** with the
 pre-clean DTS. Any active-DTS change must be boot-tested on the unit; host-side patch/dtc/
 contract checks are necessary but not sufficient. A conservative cleanup (prose/comment removal
-without active-node renames or removals) is being prepared and will be re-tested.
+without active-node renames or removals) is in place (submodule commit `d434ee9`):
+only comments were removed, the compiled DTB is byte-identical to the known-good
+7421bb7a DTB (13,041 B sha256 `49fe5c47...`), and a boot-test of the rebuilt
+image is still required before treating it as hardware-validated.

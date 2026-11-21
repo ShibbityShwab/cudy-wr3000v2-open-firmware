@@ -14,10 +14,10 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6` (cleaned/refreshed 2026-11-21: bindings cleanup; previous was `8ee4b8e7...`) |
+| sha256 | `072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9` (conservative cleanup 2026-11-21: comment-only; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**712 lines**, byte-identical to the cleaned single-source target DTS, including the board buttons/LEDs and the loader hand-off contract) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
-| status | **DRAFT DTS SERIES ENTRY** - the board DTS is TODO-heavy and not merge-intent until the bindings/cleanup in `03-rationale-tree-placement.md` section 4 are done; the two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**691 lines**, byte-identical to the conservative single-source target DTS whose compiled DTB is byte-identical to the hardware-verified pre-clean DTB; includes the board buttons/LEDs and the loader hand-off contract) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
+| status | **DRAFT DTS SERIES ENTRY** - the board DTS is a prose-cleaned but otherwise hardware-verified board file (active content byte-identical to the known-good DTB); it is not merge-intent until the bindings/driver cleanup and the optional deltas in `07-dts-upstream-bindings.md` are accepted.  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
 
 The two nodes that make this entry release-critical for SMP:
 
@@ -105,9 +105,10 @@ pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
 `append-dtb`: it pads to an 8-byte boundary, folds the padding into the
 FDT totalsize, and asserts `len(dtb) == totalsize` and
 `totalsize % 8 == 0`, so an unaligned blob cannot reach a trailer again.
-For the cleaned DTS the measured sizes are **11,702 B -> 11,704 B**; the
-cleaned board DTS and its cleanup record are in
-`07-dts-upstream-bindings.md`.
+For the conservative DTS the measured sizes are **13,041 B -> 13,048 B** (the
+compiled DTB is byte-identical to the known-good pre-clean DTB); the cleanup
+record, the hardware regression of the superseded active cleanup and the
+optional deltas are in `07-dts-upstream-bindings.md`.
 
 The full measurement and rationale are in
 `../../docs/TRAILER-FORMAT.md` **section 11** ("Base-DTB totalsize must be
@@ -135,20 +136,21 @@ feature refresh):
 
 - L1 release line: 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, 0
   rejects; strict `git apply`: **all 51 patches apply without fuzz**;
-- board DTS / DTS-0001 (cleaned): both compile to the same **11,702 B**
+- board DTS / DTS-0001 (conservative): both compile to the same **13,041 B**
   DTB, sha256
-  `160fad93e0d0556b8959a87efa8b5f05623e7488b632341f871d4e7a520c21b8`,
-  with the contract present; DTS-0001's DTS is byte-identical to the target
-  DTS; the totalsize is **unaligned**, so the pad-dtb build step is required
-  and the validator exercises it on a copy (**11,704 B**, contract preserved);
-- DTS-0001 sha256 for the cleaned source:
-  `d8afee63447d6205566e935fd8ec1beeb103e1eada43a67f9f5a129558df59f6`;
+  `49fe5c471786862e1057409ab920f866312e5f93e77585179dc20cdaebfcf536`,
+  byte-identical to the known-good pre-clean DTB, with the contract present;
+  DTS-0001's DTS is byte-identical to the target DTS; the totalsize is
+  **unaligned**, so the pad-dtb build step is required and the validator
+  exercises it on a copy (**13,048 B**, contract preserved);
+- DTS-0001 sha256 for the conservative source:
+  `072d0b8b63d096939d17caca5f5f24c88b58d47f0768aa593f692c1dcdd78bf9`;
 - L0 lab stack (62 files, 001-058 + 062-065): 62/62 patch(1) RC=0, 0 fuzz;
   strict `git apply` 62/62;
 - source-patch hashes refreshed in the release-line manifest for
   `056` (`dev_info` -> `dev_dbg` for the periodic W19 relatch line;
   `054` content is unchanged); manifest sha256
-  `4da8b9609209a4f08e41e638d4e44add7baf1ed9c7168cb2ee7c487e5c73115b`.
+  `4da8b960c3ad83939e0766a86969e8de2737a5b6eb79c91e80d28905f7030fd0`.
 
 Logs: `validation/release-line/` (including `dts-series-apply.log` and the two
 `dts-series-*.err` files).  No hardware was touched and no kernel build was

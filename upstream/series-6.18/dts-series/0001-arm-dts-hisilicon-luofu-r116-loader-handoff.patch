@@ -1,49 +1,42 @@
 --- /dev/null
 +++ b/arch/arm/boot/dts/hisilicon/luofu-r116.dts
-@@ -0,0 +1,712 @@
+@@ -0,0 +1,691 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
 + *
-+ * All register bases, interrupt numbers, clock/reset IDs, GPIOs and the NAND
-+ * partition map below are measured board facts or decoded vendor-devicetree
-+ * values.  See upstream/series-6.18/07-dts-upstream-bindings.md for the
-+ * provenance of every value, the cleanup record (removed/renamed nodes), and
-+ * the items that still block an upstream submission.
++ * The active content is byte-identical (same compiled DTB) to the
++ * hardware-verified baseline image 7421bb7a; only the historical prose
++ * comments were removed for submission review.  Provenance of the measured
++ * values, the binding-review status and the 2026-11-21 hardware regression
++ * that invalidated the first active-DTS cleanup are recorded in
++ * upstream/series-6.18/07-dts-upstream-bindings.md.
 + */
 +
 +/dts-v1/;
 +
 +#include <dt-bindings/clock/hisilicon,luofu-crg.h>
-+#include <dt-bindings/gpio/gpio.h>
-+#include <dt-bindings/input/linux-event-codes.h>
-+#include <dt-bindings/interrupt-controller/arm-gic.h>
-+#include <dt-bindings/interrupt-controller/irq.h>
 +
 +/ {
 +	#address-cells = <1>;
 +	#size-cells = <1>;
 +
-+	model = "Cudy WR3000 v2.0";
++	model = "Cudy WR3000 v2.0 (HiSilicon luofu R116)";
 +
-+	/*
-+	 * The OpenWrt target's board_name/sysupgrade metadata still keys off the
-+	 * hisilicon compatibles; the board compatible is expected first upstream.
-+	 * Reorder to "cudy,wr3000-v2" first when the target metadata is synced
-+	 * (documented in 07-dts-upstream-bindings.md).
-+	 */
-+	compatible = "hisilicon,luofu-r116", "hisilicon,luofu", "cudy,wr3000-v2";
-+
++	compatible = "hisilicon,luofu-r116", "hisilicon,luofu";
 +	interrupt-parent = <&gic>;
 +
 +	aliases {
++
 +		serial0 = &uart1;
-+		/* the stock U-Boot hand-off fixup requires this alias */
++		serial1 = &uart0;
++
 +		console = &uart1;
 +	};
 +
 +	chosen {
 +		stdout-path = "serial0:115200n8";
++
 +	};
 +
 +	cpus {
@@ -56,6 +49,7 @@
 +			device_type = "cpu";
 +			compatible = "arm,cortex-a9";
 +			reg = <0>;
++
 +		};
 +
 +		cpu@1 {
@@ -65,17 +59,11 @@
 +		};
 +	};
 +
-+	/* 128 MiB DDR3; the low 5 MiB below 0x80500000 are not system DRAM */
 +	memory@80500000 {
 +		device_type = "memory";
 +		reg = <0x80500000 0x7b00000>;
 +	};
 +
-+	/*
-+	 * Stock loader hand-off window: the ATAG is staged at
-+	 * 0x80600000 + atag-offset.  The loader requires this node and the
-+	 * console alias above to complete its pre-kernel staging.
-+	 */
 +	reserved-memory {
 +		#address-cells = <1>;
 +		#size-cells = <1>;
@@ -88,64 +76,63 @@
 +		};
 +	};
 +
-+	/* measured fixed input clocks of the CRG tree */
-+	osc: oscillator {
++	osc_clk: fixed-clock-osc {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <20000000>;
 +		clock-output-names = "osc";
 +	};
 +
-+	ahb_clk: clock-ahb {
++	ahb_clk: fixed-clock-ahb {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <200000000>;
 +		clock-output-names = "ahb_clk";
 +	};
 +
-+	apb_clk: clock-apb {
++	apb_clk: fixed-clock-apb {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <100000000>;
 +		clock-output-names = "apb_clk";
 +	};
 +
-+	gemacn_clk: clock-gemacn {
++	gemacn_clk: fixed-clock-gemacn {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <125000000>;
 +		clock-output-names = "gemacN_clk";
 +	};
 +
-+	lsw_dp_clk: clock-lsw-dp {
++	lsw_dp_clk: fixed-clock-lsw-dp {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <166000000>;
 +		clock-output-names = "lsw_dp_clk";
 +	};
 +
-+	lsw_pfe_clk: clock-lsw-pfe {
++	lsw_pfe_clk: fixed-clock-lsw-pfe {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <333000000>;
 +		clock-output-names = "lsw_pfe_clk";
 +	};
 +
-+	efuse_ring_clk: clock-efuse-ring {
++	efuse_ring_clk: fixed-clock-efuse-ring {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <20000000>;
 +		clock-output-names = "efuse_ring_clk";
 +	};
 +
-+	corrector_clk: clock-corrector {
++	corrector_clk: fixed-clock-corrector {
 +		compatible = "fixed-clock";
 +		#clock-cells = <0>;
 +		clock-frequency = <1000000000>;
 +		clock-output-names = "corrector_clk";
 +	};
 +
-+	twd_clk: clock-twd {
++	twd_clk: twd-clock {
 +		compatible = "fixed-factor-clock";
 +		#clock-cells = <0>;
 +		clocks = <&corrector_clk>;
@@ -165,24 +152,18 @@
 +		hisilicon,crg = <&crg>;
 +	};
 +
-+	/* A/B boot selector cell: 0x10 = A pair, 0x11 = B pair (measured) */
 +	boot-selector {
 +		compatible = "hisilicon,luofu-boot-selector";
 +		hisilicon,sysctrl = <&sysctrl>;
 +		hisilicon,selector-offset = <0x0c08>;
 +	};
 +
-+	/*
-+	 * CRG clock/reset controller.  The 4 KiB page also carries the
-+	 * watchdog registers, so it is a shared syscon/simple-mfd and the
-+	 * watchdog is a child using the parent regmap.
-+	 */
 +	crg: system-controller@14880000 {
 +		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
 +		reg = <0x14880000 0x1000>;
 +		#clock-cells = <1>;
 +		#reset-cells = <2>;
-+		clocks = <&osc>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
++		clocks = <&osc_clk>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
 +			 <&lsw_dp_clk>, <&lsw_pfe_clk>, <&efuse_ring_clk>;
 +		clock-names = "osc", "ahb", "apb", "gemacN", "lsw_dp",
 +			      "lsw_pfe", "efuse_ring";
@@ -190,6 +171,7 @@
 +		watchdog {
 +			compatible = "hisilicon,luofu-wdt";
 +			timeout-sec = <30>;
++			status = "okay";
 +		};
 +	};
 +
@@ -206,26 +188,32 @@
 +		reg = <0x10180000 0x1000>;
 +	};
 +
-+	l2_cache: l2-cache@7f000000 {
++	L2: l2-cache@7f000000 {
 +		compatible = "arm,pl310-cache";
 +		reg = <0x7f000000 0x1000>;
 +		cache-level = <2>;
 +		cache-unified;
 +	};
 +
-+	local_timer: timer@10180600 {
++	local_timer: local-timer@10180600 {
 +		compatible = "arm,cortex-a9-twd-timer";
 +		reg = <0x10180600 0x20>;
-+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) |
-+					 IRQ_TYPE_EDGE_RISING)>;
++		interrupts = <1 13 0x301>;
 +		clocks = <&twd_clk>;
++	};
++
++	timer@10104000 {
++		compatible = "arm,sp804";
++		reg = <0x10104000 0x1000>;
++		interrupts = <1 0x2f 4>;
++		clocks = <&apb_clk>;
 +	};
 +
 +	uart0: serial@1010e000 {
 +		compatible = "snps,dw-apb-uart";
 +		reg = <0x1010e000 0x1000>;
 +		reg-shift = <2>;
-+		interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x2d 4>;
 +		clocks = <&apb_clk>;
 +		clock-names = "apb_pclk";
 +		status = "disabled";
@@ -235,9 +223,10 @@
 +		compatible = "snps,dw-apb-uart";
 +		reg = <0x1010f000 0x1000>;
 +		reg-shift = <2>;
-+		interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x2e 4>;
 +		clocks = <&apb_clk>;
 +		clock-names = "apb_pclk";
++		status = "okay";
 +	};
 +
 +	gpio0: gpio@10106000 {
@@ -254,7 +243,7 @@
 +			interrupt-controller;
 +			#interrupt-cells = <2>;
 +			interrupt-parent = <&gic>;
-+			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
++			interrupts = <0 0x31 4>;
 +			reg = <0>;
 +			snps,nr-gpios = <32>;
 +		};
@@ -274,71 +263,70 @@
 +			interrupt-controller;
 +			#interrupt-cells = <2>;
 +			interrupt-parent = <&gic>;
-+			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_HIGH>;
++			interrupts = <0 0x32 4>;
 +			reg = <0>;
 +			snps,nr-gpios = <5>;
 +		};
 +	};
 +
-+	/* stock board_id=3 overlay: reset and WPS keys, active-low, 20 ms poll */
-+	gpio-keys {
++	gpio-keys-polled {
 +		compatible = "gpio-keys-polled";
 +		poll-interval = <20>;
 +
-+		key-reset {
++		reset {
 +			label = "reset";
-+			gpios = <&porta 22 GPIO_ACTIVE_LOW>;
-+			linux,code = <KEY_RESTART>;
++			gpios = <&porta 22 1>;
++			linux,code = <0x198>;
 +		};
 +
-+		key-wps {
++		wps {
 +			label = "wps";
-+			gpios = <&porta 23 GPIO_ACTIVE_LOW>;
-+			linux,code = <KEY_WPS_BUTTON>;
++			gpios = <&porta 23 1>;
++			linux,code = <0x211>;
 +		};
 +	};
 +
-+	/* stock board_id=3 overlay: six green LEDs, active-low */
 +	gpio-leds {
 +		compatible = "gpio-leds";
 +
-+		led-0 {
++		led-status {
 +			label = "oem:green:status";
-+			gpios = <&porta 24 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 24 1>;
 +		};
 +
-+		led-1 {
++		led-wan {
 +			label = "oem:green:wan";
-+			gpios = <&porta 25 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 25 1>;
 +		};
 +
-+		led-2 {
++		led-lan {
 +			label = "oem:green:lan";
-+			gpios = <&porta 3 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 3 1>;
 +		};
 +
-+		led-3 {
++		led-internet {
 +			label = "oem:green:internet";
-+			gpios = <&porta 2 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 2 1>;
 +		};
 +
-+		led-4 {
++		led-wifi2 {
 +			label = "oem:green:wifi";
-+			gpios = <&porta 0 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 0 1>;
 +		};
 +
-+		led-5 {
++		led-wifi5 {
 +			label = "oem:green:wifi5g";
-+			gpios = <&porta 1 GPIO_ACTIVE_LOW>;
++			gpios = <&porta 1 1>;
 +		};
 +	};
 +
 +	i2c0: i2c@10111000 {
 +		compatible = "snps,designware-i2c";
 +		reg = <0x10111000 0x1000>;
-+		interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x2c 4>;
 +		clocks = <&crg LUOFU_CLK_I2C0>;
 +		clock-frequency = <100000>;
++
 +		status = "disabled";
 +	};
 +
@@ -347,6 +335,7 @@
 +		reg = <0x14900100 0x3c>,
 +		      <0x14940000 0x100>;
 +		reg-names = "mux", "cfg";
++		status = "okay";
 +	};
 +
 +	fmc: spi@10a20000 {
@@ -360,6 +349,7 @@
 +		reset-names = "sfc_rst";
 +		#address-cells = <1>;
 +		#size-cells = <0>;
++		status = "okay";
 +
 +		flash@1 {
 +			compatible = "spi-nand";
@@ -368,36 +358,18 @@
 +			spi-tx-bus-width = <4>;
 +			spi-rx-bus-width = <4>;
 +
-+			/* stock 128 MiB A/B partition map, verbatim from the vendor base DTB */
 +			partitions {
 +				compatible = "fixed-partitions";
 +				#address-cells = <1>;
 +				#size-cells = <1>;
 +
-+				partition@0 {
-+					label = "esbc";
-+					reg = <0x0 0x40000>;
-+				};
-+				partition@40000 {
-+					label = "uboota";
-+					reg = <0x40000 0x100000>;
-+				};
-+				partition@140000 {
-+					label = "ubootb";
-+					reg = <0x140000 0x100000>;
-+				};
-+				partition@240000 {
-+					label = "enva";
-+					reg = <0x240000 0x40000>;
-+				};
-+				partition@280000 {
-+					label = "envb";
-+					reg = <0x280000 0x40000>;
-+				};
-+				partition@2c0000 {
-+					label = "fac";
-+					reg = <0x2c0000 0x200000>;
-+				};
++				partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
++				partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
++				partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
++				partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
++				partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
++				partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
++
 +				partition@4c0000 {
 +					label = "bdinfo";
 +					reg = <0x4c0000 0x40000>;
@@ -415,57 +387,21 @@
 +						};
 +					};
 +				};
-+				partition@500000 {
-+					label = "cfga";
-+					reg = <0x500000 0x200000>;
-+				};
-+				partition@700000 {
-+					label = "cfgb";
-+					reg = <0x700000 0x200000>;
-+				};
-+				partition@900000 {
-+					label = "log";
-+					reg = <0x900000 0x440000>;
-+				};
-+				partition@d40000 {
-+					label = "pstore";
-+					reg = <0xd40000 0x40000>;
-+				};
-+				partition@d80000 {
-+					label = "kernela";
-+					reg = <0xd80000 0x840000>;
-+				};
-+				partition@15c0000 {
-+					label = "kernelb";
-+					reg = <0x15c0000 0x840000>;
-+				};
-+				partition@1e00000 {
-+					label = "rootfsa";
-+					reg = <0x1e00000 0x1740000>;
-+				};
-+				partition@3540000 {
-+					label = "rootfsb";
-+					reg = <0x3540000 0x1740000>;
-+				};
-+				partition@4c80000 {
-+					label = "rootfs_data";
-+					reg = <0x4c80000 0x1600000>;
-+				};
-+				partition@6280000 {
-+					label = "upgrade";
-+					reg = <0x6280000 0x1d80000>;
-+				};
++				partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
++				partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
++				partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
++				partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
++				partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
++				partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
++				partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
++				partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
++				partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
++				partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
 +			};
 +		};
 +	};
 +
-+	/*
-+	 * Internal LSW switch.  The binding's reg-names order puts the two
-+	 * engine DDR regions first, so the node's unit address is the queue
-+	 * region; the 15 MMIO windows follow.  The DDR regions are validated but
-+	 * never mapped by Linux.
-+	 */
-+	lsw: ethernet-switch@80000000 {
++	lsw: ethernet-switch@11000000 {
 +		compatible = "hisilicon,luofu-switch";
 +		reg = <0x80000000 0x400000>,
 +		      <0x80400000 0x100000>,
@@ -493,7 +429,9 @@
 +			 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
 +		reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
 +		hisilicon,crg = <&crg>;
++
 +		hisilicon,port-bitmap = <0xf01 0x1ff0>;
++		status = "okay";
 +
 +		ethernet-ports {
 +			#address-cells = <1>;
@@ -525,20 +463,30 @@
 +		};
 +	};
 +
-+	packet-engine@10a70000 {
++	lsw_woe: woe {
++		compatible = "hisilicon,luofu-lsw-woe";
++		dma-coherent;
++		interrupts = <0 0x54 4>,
++			     <0 0x53 4>,
++			     <0 0x52 4>,
++			     <0 0x51 4>,
++			     <0 0x50 4>;
++		interrupt-names = "band0_comp_irq", "band1_comp_irq",
++				  "band2_comp_irq", "band0_txba", "band1_txba";
++		status = "disabled";
++	};
++
++	pie: pie@10a70000 {
 +		compatible = "hisilicon,luofu-pie";
 +		reg = <0x10a70000 0x10000>;
-+		interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_HIGH>,
-+			     <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>,
-+			     <GIC_SPI 90 IRQ_TYPE_LEVEL_HIGH>,
-+			     <GIC_SPI 91 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
 +		interrupt-names = "ch0-7", "ch1-6", "ch2-5", "ch3-4";
 +		clocks = <&crg LUOFU_CLK_PIE>;
 +		resets = <&crg 0x30 0x19>;
 +		dma-coherent;
-+		/* measured live board ring configuration */
 +		hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
 +		hisilicon,tx-ring = <0xc 0x2>;
++		status = "okay";
 +	};
 +
 +	gmac0: ethernet@14300000 {
@@ -559,11 +507,13 @@
 +		hisilicon,port = <0x9>;
 +		phy-mode = "gmii";
 +		phy-handle = <&phy2>;
++
 +		nvmem-cells = <&bdinfo_mac 0>;
 +		nvmem-cell-names = "mac-address";
 +		clocks = <&crg LUOFU_CLK_GMAC1>;
 +		resets = <&crg 0x30 0xf>, <&crg 0x30 0x10>;
 +		reset-names = "mac-logic", "mac";
++		status = "okay";
 +	};
 +
 +	gmac2: ethernet@14400000 {
@@ -572,11 +522,13 @@
 +		hisilicon,port = <0xa>;
 +		phy-mode = "gmii";
 +		phy-handle = <&phy3>;
++
 +		nvmem-cells = <&bdinfo_mac 0>;
 +		nvmem-cell-names = "mac-address";
 +		clocks = <&crg LUOFU_CLK_GMAC2>;
 +		resets = <&crg 0x30 0x11>, <&crg 0x30 0x12>;
 +		reset-names = "mac-logic", "mac";
++		status = "okay";
 +	};
 +
 +	gmac3: ethernet@14480000 {
@@ -585,11 +537,13 @@
 +		hisilicon,port = <0xb>;
 +		phy-mode = "gmii";
 +		phy-handle = <&phy4>;
++
 +		nvmem-cells = <&bdinfo_mac 0>;
 +		nvmem-cell-names = "mac-address";
 +		clocks = <&crg LUOFU_CLK_GMAC3>;
 +		resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
 +		reset-names = "mac-logic", "mac";
++		status = "okay";
 +	};
 +
 +	gmac4: ethernet@14500000 {
@@ -598,11 +552,13 @@
 +		hisilicon,port = <0xc>;
 +		phy-mode = "gmii";
 +		phy-handle = <&phy5>;
++
 +		nvmem-cells = <&bdinfo_mac 1>;
 +		nvmem-cell-names = "mac-address";
 +		clocks = <&crg LUOFU_CLK_GMAC4>;
 +		resets = <&crg 0x30 0x15>, <&crg 0x30 0x16>;
 +		reset-names = "mac-logic", "mac";
++		status = "okay";
 +	};
 +
 +	mdio0: mdio@14000000 {
@@ -620,25 +576,23 @@
 +			 <&crg 0x30 0x1f>;
 +		reset-names = "mdio", "gephyall", "gephy0", "gephy1",
 +			      "gephy2", "gephy3", "gephy4";
++		status = "okay";
 +
 +		phy2: ethernet-phy@2 {
 +			compatible = "ethernet-phy-ieee802.3-c22";
 +			reg = <2>;
 +			max-speed = <1000>;
 +		};
-+
 +		phy3: ethernet-phy@3 {
 +			compatible = "ethernet-phy-ieee802.3-c22";
 +			reg = <3>;
 +			max-speed = <1000>;
 +		};
-+
 +		phy4: ethernet-phy@4 {
 +			compatible = "ethernet-phy-ieee802.3-c22";
 +			reg = <4>;
 +			max-speed = <1000>;
 +		};
-+
 +		phy5: ethernet-phy@5 {
 +			compatible = "ethernet-phy-ieee802.3-c22";
 +			reg = <5>;
@@ -646,11 +600,35 @@
 +		};
 +	};
 +
-+	/*
-+	 * Two DesignWare PCIe root complexes; disabled until the device write
-+	 * path (misc/LTSSM, DBI, iATU) is validated on hardware.  The vendor
-+	 * Wi-Fi endpoints are PCIe functions with no mainline driver.
-+	 */
++	tvsensor: thermal-sensor@14900500 {
++		compatible = "hisilicon,luofu-tvsensor";
++		reg = <0x14900500 0x100>;
++		#thermal-sensor-cells = <0>;
++		status = "okay";
++	};
++
++	thermal-zones {
++
++		cls0: cls0-thermal {
++			polling-delay = <1000>;
++			thermal-sensors = <&tvsensor>;
++
++			trips {
++				trip-point0 {
++					temperature = <115000>;
++					hysteresis = <3000>;
++					type = "passive";
++				};
++
++				trip-point1 {
++					temperature = <125000>;
++					hysteresis = <3000>;
++					type = "critical";
++				};
++			};
++		};
++	};
++
 +	pcie0: pcie@10160000 {
 +		compatible = "hisilicon,luofu-pcie";
 +		device_type = "pci";
@@ -664,8 +642,8 @@
 +		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>,
 +			 <0x01000000 0x0 0x48000000 0x48000000 0x0 0x800000>;
 +		bus-range = <0 0xa>;
-+		interrupts = <GIC_SPI 59 IRQ_TYPE_LEVEL_HIGH>,
-+			     <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x3b 4>,
++			     <0 0x45 4>;
 +		interrupt-names = "radm", "linkdown";
 +		clocks = <&crg LUOFU_CLK_PCIE0>;
 +		clock-names = "pcie";
@@ -674,6 +652,12 @@
 +		reset-names = "apb", "pcs", "phy", "ctrl";
 +		num-lanes = <1>;
 +		status = "disabled";
++
++		wifi@0,0 {
++			compatible = "pci59e7,0005";
++			reg = <0x00000000 0x0 0x0 0x0 0x0>;
++			status = "disabled";
++		};
 +	};
 +
 +	pcie1: pcie@10164000 {
@@ -689,8 +673,8 @@
 +		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>,
 +			 <0x01000000 0x0 0x60000000 0x60000000 0x0 0x800000>;
 +		bus-range = <0 0xa>;
-+		interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>,
-+			     <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>;
++		interrupts = <0 0x3f 4>,
++			     <0 0x46 4>;
 +		interrupt-names = "radm", "linkdown";
 +		clocks = <&crg LUOFU_CLK_PCIE1>;
 +		clock-names = "pcie";
@@ -699,19 +683,14 @@
 +		reset-names = "apb", "pcs", "phy", "ctrl";
 +		num-lanes = <1>;
 +		status = "disabled";
++
++		wifi@0,0 {
++			compatible = "pci59e7,0005";
++			reg = <0x00000000 0x0 0x0 0x0 0x0>;
++			status = "disabled";
++		};
 +	};
 +
-+	/*
-+	 * Deliberately absent from this submission:
-+	 * - thermal: the on-die temperature register reads 0 on this board and
-+	 *   the vendor DT disables the sensor, so there is no usable zone;
-+	 * - Wi-Fi (Hi5622V100): vendor-only PCIe endpoints with closed firmware;
-+	 * - unused vendor blocks (efuse, RNG, LED PWM, PMU PWM, WOE engine,
-+	 *   SP804 timer): no bindings/drivers and not needed for the wired-first
-+	 *   target.
-+	 * See 07-dts-upstream-bindings.md for the measured facts retained for
-+	 * these blocks.
-+	 */
 +};
 --- a/arch/arm/boot/dts/hisilicon/Makefile
 +++ b/arch/arm/boot/dts/hisilicon/Makefile

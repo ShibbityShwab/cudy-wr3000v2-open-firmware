@@ -1,2 +1,2 @@
-pad-dtb: <scratch>/logs/luofu-r116.dtb.padded -> 11704 bytes (8-byte aligned totalsize)
-pad-dtb: <scratch>/logs/luofu-r116.series.dtb.padded -> 11704 bytes (8-byte aligned totalsize)
+pad-dtb: <scratch>/logs/luofu-r116.dtb.padded -> 13048 bytes (8-byte aligned totalsize)
+pad-dtb: <scratch>/logs/luofu-r116.series.dtb.padded -> 13048 bytes (8-byte aligned totalsize)
