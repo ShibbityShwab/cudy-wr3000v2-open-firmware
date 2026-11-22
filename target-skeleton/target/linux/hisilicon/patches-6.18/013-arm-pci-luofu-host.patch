@@ -33,8 +33,8 @@
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 17:22:21.008194655 +0700
-@@ -0,0 +1,676 @@
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 18:29:01.244016785 +0700
+@@ -0,0 +1,642 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -47,11 +47,9 @@
 + * therefore does not apply: configuration accesses go through the DWC
 + * outbound iATU (CFG0 type) into that window, as the vendor driver does.
 + *
-+ * This driver is reconstructed from the recorded vendor evidence and has
-+ * been brought up on the board: with the board GPIO state described below the
-+ * link trains and both Wi-Fi endpoints enumerate (2026-11-22 bench).  The
-+ * board devicetree enables both root complexes and carries a GPIO hog for the
-+ * board control pins.
++ * This driver is host-side reconstruction from recorded evidence only.  It
++ * has never run on this board and the devicetree nodes are disabled until the
++ * bring-up has been validated on hardware.
 + *
 + * Recorded facts this driver relies on:
 + *
@@ -83,9 +81,7 @@
 + *   - writes the SoC wrapper RC-mode and LTSSM-enable words (full-word stores
 + *     only, because the window must never be read);
 + *   - programs the memory and I/O outbound iATU viewports from the device
-+ *     tree "ranges" through the DWC host framework, and the inbound iATU
-+ *     window from "dma-ranges" when the board supplies one (needed by the
-+ *     Wi-Fi endpoint's device DMA);
++ *     tree "ranges" through the DWC host framework;
 + *   - keeps the CFG0 viewport on the measured vendor configuration window
 + *     (one endpoint function per root complex, bus 0 / device 0 / function 0)
 + *     and serves configuration transactions with the generic 32-bit
@@ -96,26 +92,18 @@
 + *
 + * What it deliberately does NOT do (each is a TODO with its reason):
 + *
-+ *   - DT-driven endpoint power/reset GPIO sequencing: the board requires
-+ *     GPIO0 pins 20/21/28 to be outputs driven high before the link can train
-+ *     (hardware-verified 2026-11-22; the board DTS carries a gpio-hog for
-+ *     them).  host_init still carries a hardcoded bring-up workaround for
-+ *     those pins; that is not the submission form and is removed once the DTS
-+ *     hog has been bench-tested;
++ *   - endpoint power/reset GPIO sequencing: the vendor's pcie-gpios live in
++ *     the board overlay, polarity and delays are not established, so no GPIO
++ *     is claimed;
 + *   - the radm/linkdown interrupts: their status/clear registers are in the
 + *     read-forbidden misc window (misc+0x28/+0x2c), so no safe handler can
 + *     be written yet and link state is polled through the DBI instead;
 + *   - MSI/INTx: neither the host MSI controller line nor the endpoint
 + *     interrupt route is described in the vendor devicetree, so no MSI
 + *     controller is registered (the Wi-Fi endpoint has no mainline driver);
-+ *   - dma-ranges / inbound iATU windows: with no dma-ranges the framework
-+ *     programs no inbound window; the board DTS and the Wi-Fi transport bench
-+ *     add an identity dma-ranges for the endpoint's device DMA.  The
-+ *     endpoint's own inbound iATU is a compact 7-word layout, not the DWC
-+ *     8-word one: ctrl2 at +0x00, base_lo/hi at +0x04/+0x08, limit_lo at
-+ *     +0x0c, target_lo/hi at +0x10/+0x14 (no limit_hi), with absolute PCI bus
-+ *     base/limit values.  It is programmed by the Wi-Fi driver, never by this
-+ *     root-complex driver (recorded in docs/phase18/inbound-map.md);
++ *   - dma-ranges / inbound iATU windows: the endpoint firmware inbound map
++ *     belongs to the Wi-Fi port; with no dma-ranges the framework programs
++ *     no inbound window;
 + *   - ASPM/L1SS, ACP cache-attribute programming and link-speed changes:
 + *     not modelled, and the measured link already runs at its 5 GT/s x1
 + *     maximum;
@@ -128,9 +116,8 @@
 + * are SET while the lines are released.  The first revision of the CRG driver
 + * (patches-6.18/004) had that polarity inverted; patch 014 corrects it (assert
 + * clears the bit, deassert sets it).  This driver uses only the reset API and
-+ * relies on the corrected provider.  The board devicetree enables both root
-+ * complexes; training additionally depends on the board GPIO state described
-+ * above.
++ * relies on the corrected provider.  The board devicetree keeps the nodes
++ * disabled until the hardware bring-up is validated.
 + */
 +
 +#include <linux/build_bug.h>
@@ -338,38 +325,15 @@
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
 +	struct luofu_pcie *lpc = to_luofu_pcie(pci);
 +
-+	/* BOARD GPIO FIX (hardware-verified 2026-11-22): the Wi-Fi
-+	 * endpoint's power/reset controls sit on GPIO0 pins 20, 21 and 28.  The
-+	 * stock vendor kernel leaves GPIO0 at DDR=0x1330000f / DATA=0x12300004,
-+	 * i.e. all three are outputs driven high, and the endpoint only trains
-+	 * when all three are outputs and high.  Without this, LTSSM never leaves
-+	 * detect and config reads return 0xffffffff - no amount of PCIe register
-+	 * programming helps.  The upstream form is the gpio-hog on &porta in
-+	 * dts/luofu-r116.dts; this hardcoded workaround is bring-up only and must
-+	 * be deleted once the hog has been bench-tested. */
-+	{
-+		void __iomem *gpio = ioremap(0x10106000, 0x1000);
-+
-+		if (gpio) {
-+			u32 ddr = readl(gpio + 0x04);
-+			u32 data = readl(gpio + 0x00);
-+
-+			/* All three must be outputs and driven HIGH (hardware-verified
-+			 * 2026-11-22: with any of 20/21/28 low the endpoint never
-+			 * trains; the vendor kernel drives 20,21,28 = 1,1,1). */
-+			ddr |= BIT(20) | BIT(21) | BIT(28);
-+			data |= BIT(20) | BIT(21) | BIT(28);
-+			writel(data, gpio + 0x00);
-+			writel(ddr, gpio + 0x04);
-+			dev_info(pci->dev, "board gpio fix: ddr=%08x data=%08x\n",
-+				 readl(gpio + 0x04), readl(gpio + 0x00));
-+			iounmap(gpio);
-+		}
-+	}
++	/* The Wi-Fi endpoint power/reset controls (GPIO0 pins 20/21/28,
++	 * driven as outputs HIGH) are owned by the board DTS via a gpio-hog
++	 * (wifi-pcie-hog on &porta).  Hardware-verified 2026-11-22 (W27b):
++	 * with the hog alone the link trains on both root complexes, so no
++	 * board GPIO poking belongs in this driver. */
 +
 +	/* Let the endpoint finish its power-on/reset sequence before the RC
-+	 * starts training (the vendor driver runs as a module ~11 s after boot;
-+	 * this early probe needs an explicit settle time). */
++	 * starts training (the vendor driver runs as a module ~11 s after
++	 * boot; this early probe needs an explicit settle time). */
 +	msleep(1000);
 +
 +	/* Configuration accesses use the configuration window, not DBI. */
@@ -421,13 +385,13 @@
 +}
 +
 +/*
-+ * The wrapper starts link training through misc+0x1c.  The measured vendor
-+ * order programs the iATU viewports while the transient DBI-write gate
-+ * (misc+0x1c bit 13) is asserted and then leaves the steady state with LTSSM
-+ * enabled and the gate clear (0x02200800); the values this function writes
-+ * were read back byte-identical on the live vendor system.  The register
-+ * program alone does not train the link - the board GPIO state in host_init
-+ * is the other required half.
++ * The wrapper starts link training through misc+0x1c.  The recorded vendor
++ * order asserts the iATU-enable bit, programs the iATU windows and then
++ * enables the LTSSM with the iATU-enable bit "cleared".  This port keeps both
++ * enable bits asserted because the configuration viewport is re-programmed
++ * lazily for every configuration access (see luofu_pcie_map_bus()) and the
++ * exact semantics of the two bits are not fully known ([U]); this is an open
++ * hardware question, not a measured fact.
 + */
 +static int luofu_pcie_start_link(struct dw_pcie *pci)
 +{
@@ -503,6 +467,8 @@
 +}
 +
 +/*
++
++
 + * The vendor devicetree describes the DWC MSI controller line nowhere and the
 + * endpoint interrupt route is likewise absent, so the framework must not fall
 + * back to claiming the radm interrupt as its MSI line.  Returning 0 from this
@@ -605,9 +571,9 @@
 +		return dev_err_probe(dev, PTR_ERR(lpc->clk),
 +				     "failed to get the PCIe clock\n");
 +
-+	/* Optional ACP gate: the vendor hi_acp.ko uses inverted-value semantics
-+	 * (SET the mask bits) so the PCIe subsystem is powered.  This is a
-+	 * bring-up workaround, not a modelled ACP power domain. */
++
++	/* Optional ACP gate (vendor hi_acp.ko inverted-value semantics: SET the mask bits)
++ * link training so the PCIe subsystem is powered. */
 +	{
 +		u32 gate[3];
 +
@@ -713,7 +679,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
 +++ b/Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml	2026-11-22 10:39:27.169302708 +0700
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,126 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +%YAML 1.2
 +---
@@ -788,20 +754,6 @@
 +      - const: pcs
 +      - const: phy
 +      - const: ctrl
-+
-+  acp-gate:
-+    description: |
-+      Optional ACP (cache-coherent port) gate override for the PCIe
-+      subsystem, as a three-cell tuple <register-address mask value>: the
-+      32-bit register at register-address is updated with
-+      (register & ~mask) | (~value & mask).  The measured vendor state sets
-+      the ACP bits in this word; this is a bring-up workaround and is expected
-+      to be replaced by a proper ACP power-domain binding.
-+    $ref: /schemas/types.yaml#/definitions/uint32-array
-+    items:
-+      - description: Physical address of the ACP register
-+      - description: Bit mask to change
-+      - description: Value mask, applied inverted (the vendor code sets bits)
 +
 +  interrupts:
 +    description: |
