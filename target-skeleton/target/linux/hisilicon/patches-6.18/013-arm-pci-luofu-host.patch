@@ -33,8 +33,8 @@
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 13:14:13.613749092 +0700
-@@ -0,0 +1,594 @@
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 13:33:41.661229838 +0700
+@@ -0,0 +1,620 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -402,18 +402,37 @@
 +			writel(iatu[lpc->channel][i][j],
 +			       pci->dbi_base + 0x900 + 0x200 * i + 4 * j);
 +
-+	/* The framework's dw_pcie_setup_rc() ran before us and set
-+	 * PORT_LOGIC_SPEED_CHANGE pre-link; the vendor keeps this bit CLEAR
-+	 * during stage-1 training (measured live: 0x80c = 0x12c) and only sets
-+	 * it after stage-1 link-up (our post_init).  Clear it now so the
-+	 * training window matches stock byte-for-byte. */
++	/* The framework's dw_pcie_setup_rc() ran before us and wrote words the
++	 * vendor never writes pre-link: SPEED_CHANGE, the RC class/bus/interrupt
++	 * header words.  Restore the vendor's pre-link state: SPEED_CHANGE
++	 * clear (vendor keeps it clear during stage-1 training; measured live
++	 * 0x80c = 0x12c) and the header words zeroed. */
 +	dw_pcie_writel_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL,
 +			   dw_pcie_readl_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL) &
 +			   ~PORT_LOGIC_SPEED_CHANGE);
-+	dw_pcie_dbi_ro_wr_dis(pci);
++	dw_pcie_writel_dbi(pci, PCI_CLASS_DEVICE, 0);
++	dw_pcie_writel_dbi(pci, PCI_INTERRUPT_LINE, 0);
++	dw_pcie_writel_dbi(pci, PCI_PRIMARY_BUS, 0);
++	/* Educated-guess variant: leave the DBI write-enable bit (0x8bc bit 0)
++	 * SET during training instead of clearing it. */
++
++	/* Re-assert RC mode right before the LTSSM enable (the mode word is the
++	 * one wrapper register we cannot read back; re-writing it is free). */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_MODE,
++			      LUOFU_PCIE_MISC_MODE_RC);
++
++	/* Educated-guess variant: re-assert the pre-init wrapper words after
++	 * the resets have fully settled. */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_REG_INT,
++			      LUOFU_PCIE_MISC_REG_INT_PRE);
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_PHYCFG,
++			      LUOFU_PCIE_MISC_PHYCFG_VAL);
 +
 +	/* All DBI writes are done: enable LTSSM last (vendor order), then the
-+	 * steady state (LTSSM + IRQ mask, gate clear). */
++	 * steady state (LTSSM + IRQ mask, gate clear).  Educated-guess variant:
++	 * re-kick the LTSSM enable once after a short delay. */
++	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
++	usleep_range(2000, 3000);
 +	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
 +	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN |
 +					   LUOFU_PCIE_MISC_APP_IRQ_MASK);
@@ -571,6 +590,12 @@
 +	 * 014 polarity fix) releases them on deassert.  The inter-step delay is
 +	 * not recorded ([U]); a short sleep keeps the sequence conservative.
 +	 */
++	/* Educated-guess variant: assert all four resets first (the HiSTB
++	 * sibling does; a warm reboot may leave the lines in an odd state),
++	 * settle, then deassert in the vendor order with longer settles. */
++	for (i = 0; i < LUOFU_PCIE_NUM_RESETS; i++)
++		reset_control_assert(lpc->resets[i]);
++	usleep_range(50000, 60000);
 +	for (i = 0; i < LUOFU_PCIE_NUM_RESETS; i++) {
 +		ret = reset_control_deassert(lpc->resets[i]);
 +		if (ret) {
@@ -582,6 +607,7 @@
 +		usleep_range(LUOFU_PCIE_RESET_DELAY_US,
 +			     LUOFU_PCIE_RESET_DELAY_US + 100);
 +	}
++	usleep_range(50000, 60000);
 +
 +	/* Vendor waits after the last deassert as well. */
 +	usleep_range(500, 1500);
