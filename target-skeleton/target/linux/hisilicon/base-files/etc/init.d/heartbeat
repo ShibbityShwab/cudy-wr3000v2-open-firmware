@@ -1,4 +1,6 @@
 #!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0-only
+#
 # Bench liveness probe (lab-only): prints HB <uptime-seconds> to the kernel log
 # every 5 s so a UART capture can distinguish a hung box from a quiet healthy one.
 START=99

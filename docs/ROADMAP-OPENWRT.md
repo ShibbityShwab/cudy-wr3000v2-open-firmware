@@ -38,6 +38,33 @@ the short status is [../target-skeleton/RELEASE-NOTES.md](../target-skeleton/REL
 This does not change the phase-plan caveat: bench-verified target work is still not upstream
 progress, and no target PR / accepted DTS series / native forwarding / Wi-Fi answer exists.
 
+## Where the plan stands on 2026-11-22
+
+**2026-11-22 update - two hardware proof points and a stale submission package.**  Nothing
+below is upstream acceptance; the phase-plan caveat still stands.  The definitive per-item
+checklist and the proposed submission split are in
+[UPSTREAM-SUBMISSION-STATUS](upstream/SUBMISSION-STATUS.md).
+
+- **PCIe is solved on the 6.18 kernel** [V].  The link never trained because the board leaves
+  the Wi-Fi endpoint's power/reset controls (GPIO0 pins 20/21/28) unconfigured: they must be
+  outputs driven HIGH before training.  With that fix the link reaches L0 and both Hi5622
+  endpoints (59e7:0005) enumerate on our kernel.  Patch 013 keeps the hardcoded workaround;
+  the submission form is the DTS gpio-hog added today and one boot test is required before
+  the workaround is removed.
+- **The Wi-Fi transport bring-up works** [V].  The clean-room `hi5622_pciet` module boots the
+  chip: firmware upload 928,920 B with verify diffs=0, CPU release 0x5a5a, D2H announce
+  0xcece, DEVICE READY (D2H id 2, bitmap 0x4).  This is readiness evidence for a driver
+  series, not a Wi-Fi driver: the vendor-only radio stack, the unanswered GPL source request
+  and the missing mac80211/data path remain the critical path for "complete support".
+- **Endpoint iATU layout corrected** [V]: the endpoint uses compact 7-word inbound viewports
+  (no limit_hi, target_lo at +0x10, absolute PCI base/limit), recorded in
+  `docs/phase18/inbound-map.md` and in patch 013's driver header.
+- **Submission package status:** `opensource/docs/upstream/SUBMISSION-STATUS.md` is now the
+  definitive checklist (2 DONE / 20 PARTIAL / 5 BLOCKED at 2026-11-22) with the proposed
+  `openwrt/openwrt` split (target+DTS first, drivers second).  The generated review-form
+  artefacts (`series/0013`, MANIFEST, validation logs, DTS-0001) are stale after today's
+  patch-013/DTS edits and must be regenerated before anything is posted.
+
 ## Where the plan stands on 2026-11-18
 
 **Bench line (reversal track, not upstream).** The 2026-11-14 hybrid - a vanilla 5.10.201

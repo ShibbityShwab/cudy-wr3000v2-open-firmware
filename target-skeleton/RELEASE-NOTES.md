@@ -5,6 +5,32 @@ flashable release.**  This page is the short release status for the target; the
 full record is [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md)
 and [../docs/SMP-RE.md](../docs/SMP-RE.md) section 24.
 
+## 2026-11-22 addendum: PCIe and Wi-Fi transport proof points
+
+Two bench results from 2026-11-22 supersede the stale rows below.  They are proof
+points, not a release change (no new image is claimed here):
+
+- **PCIe works on the 6.18 kernel [V].**  The link never trained because GPIO0
+  pins 20/21/28 - the Wi-Fi endpoint's board power/reset controls - were left as
+  inputs.  They must be outputs driven HIGH before training; with that fix in the
+  `pcie-luofu` `host_init` the link reaches L0 and both Hi5622 endpoints
+  (59e7:0005) enumerate.  The submission form is the `wifi-pcie-hog` now in
+  [dts/luofu-r116.dts](dts/luofu-r116.dts); the hardcoded driver workaround must be
+  removed after one boot test proves the hog alone.
+- **Wi-Fi transport bring-up works [V]; there is still no Wi-Fi driver.**  The
+  clean-room `hi5622_pciet` module boots the chip (firmware upload verify
+  diffs=0, CPU released, D2H DEVICE READY id 2).  The vendor-only radio stack and
+  the missing mac80211/data path are why the "Wi-Fi: vendor driver only [X]" row is
+  unchanged for *support* purposes - the transport is readiness evidence, not a
+  driver.
+
+The definitive per-item upstream checklist (2 DONE / 20 PARTIAL / 5 BLOCKED) and the
+proposed target+DTS-first submission split are in
+[../docs/upstream/SUBMISSION-STATUS.md](../docs/upstream/SUBMISSION-STATUS.md).
+The generated review-form artefacts (`series/0013`, MANIFEST, validation logs,
+DTS-0001) are stale after the 2026-11-22 patch-013/DTS edits and must be regenerated
+before anything is posted.
+
 ## Verified baselines
 
 **Board-feature baseline 7f270b8c (2026-11-21):** same 2-CPU/network/SSH/overlay
