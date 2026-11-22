@@ -242,6 +242,11 @@ program stays exactly the bench-proven one.
   macro renderings, sp804/WOE/Wi-Fi/thermal removals, model/compatible changes,
   switch unit address/reg order etc.  Each needs its own boot-tested patch; do not
   ride them along with prose cleanups.
+- **Tooling note:** `checkpatch.pl` must be run on a copied patch file (or an
+  absolute path from outside this repo).  Pointing it at the in-repo relative
+  path in this checkout mis-detects the patch as a source file and prints one
+  spurious trailing-whitespace error.  On a copy, patch 013 is **0 errors / 19
+  warnings** (was 21 warnings before this pass).
 - **Single-source caveat for the DTS submission:** the skeleton DTS is also the
   release-line DTS, and it carries release-line-only content (W23 thermal
   properties incl. the bench helper `hisilicon,threshold-mc`).  DTS-0001 is
