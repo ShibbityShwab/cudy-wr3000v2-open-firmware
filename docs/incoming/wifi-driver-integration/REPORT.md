@@ -606,7 +606,52 @@ service routine + dispatch to the iface once the driver is attached.
 | bit-2 meaning / real ready handshake over the DR ring | `wifi-hcc-re/REPORT.md` 0/2.4/5.3 + B1/B2 bench logs | [V]/[V*] |
 | DR free-buffer index +0x38 vs device +0x3c, phase-bit index encoding, arm-all-rings | `wifi-hcc-re/REPORT.md` 4.2/4.4/9 | [V] |
 
-## 12. Reproduce
+## 12. Short version: what compiles, what is stubbed, exact next steps
+
+**What compiles (verified 2026-11-22, module build only, no `make world`):**
+* `hi5622_pciet.ko` = transport skeleton + the 6-hunk marked integration delta
+  (`interface/pciet_iface.c`) - 142,268 B, exports
+  `hi5622_transport_{register,unregister}_client`.
+* `hi5622_hdpp_drv.ko` = the hdpp-style driver skeleton - 202,068 B, exactly
+  two unresolved `hi5622_*` symbols (the two transport exports, linked via
+  `KBUILD_EXTRA_SYMBOLS`).
+* `hi5622_hdpp_mock.ko` = driver + simulated transport - 236,508 B,
+  self-contained, hardware-free smoke test.
+All three: `vermagic=6.18.60 SMP mod_unload ARMv7 p2v8`, GPL, zero cc
+warnings under the tree's `-Werror` (only the known
+`CONFIG_MODULE_STRIPPED` MODULE_DESCRIPTION modpost note).  Exported symbol
+set, unresolved-symbol set and mock self-containment are asserted by
+`tools/build-modules.sh`.  Details/hashes: `BUILD-NOTES.md`.
+
+**What is real vs stubbed**
+* Real: the whole transport<->driver binding (client ops table, D2H register
+  chain, atomicity/lifetime, `driver_mode` gate); the 12-byte HCC header +
+  tx queue + 3-space/5-group dispatch with the pinned hdpp ids; mailbox ids
+  0..10 + chip-group-4 ready completes; ETE SR0/DR0 service wrapper; netdev
+  lifecycle; module state machine; the B3 one-frame trigger.
+* Stubs / not yet: hdpp handler bodies (real hmac/hdpp code), hdpp MSDU data
+  path (netdev TX rides the HCC control path with a placeholder id), alg
+  config protocol (disabled; carrier is chip group 1 id 3), wiphy/cfg80211
+  (`CONFIG_CFG80211` is not set on this tree), MAC provisioning.
+
+**Exact next steps (B3; needs the transport lane first):**
+1. Transport lane applies T1-T4 from section 7.2 (DR free-buffer index +0x38,
+   index phase bits, arm **SR0-2 + DR0-3** with pre-posted DR free buffers, SR
+   ctrl=0) and rebuilds the patched transport.
+2. Attended session: B1/B2 steps -> arm all rings (P0) -> insmod
+   `hi5622_hdpp_drv.ko allow_device_writes=1` -> `echo 1 >` the transport's
+   `driver_mode` -> poll ~30 s for **HCC chip group 4 id 1 then id 2** payloads
+   on the DR ring (they complete the driver's ready state; **nothing must be
+   sent**).  If only bitmap `0x4` appears: P4/P5 dumps, stop.
+3. Then fire one candidate H2D config event at a time with
+   `echo 1 > /sys/module/hi5622_hdpp_drv/parameters/bench_hcc_probe`
+   (defaults chip group 0 id 1; then id 2; rgroup variants), capturing
+   `out[0]/out[1]/out[2]/out[3]/out[4]`, dmesg/UART, status words.  Never
+   post H2D id 5, never write CA 0x400392f0, UART read-only.
+4. Close U1/U2/U5/U7 from that capture, then port the hmac/wal tables + config
+   sync decoder (chip group 1 id 3) and the hdpp MSDU data path.
+
+## 13. Reproduce
 
 ```sh
 # in the repository root (the opensource/ submodule):

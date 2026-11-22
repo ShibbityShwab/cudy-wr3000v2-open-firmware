@@ -9,9 +9,19 @@ workdir `/home/shibbityshwab/wifi-driver-port-work`); only text is committed.
 
 | module | sources | size | sha256 | vermagic | notes |
 | --- | --- | ---: | --- | --- | --- |
-| `hi5622_pciet.ko` | transport skeleton + **integration delta** + `pciet_iface.c` | 142,268 B | `74f1379cbe3e86b8301e60c0587cbe601ace6dfcc52ac2b844a201bd519349d2` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 72 text funcs, 24 global defined; exports `hi5622_transport_{register,unregister}_client` (+ non-exported `hi5622_tr_state_str`) |
-| `hi5622_hdpp_drv.ko` | the hdpp-style driver skeleton (7 objects) | 202,068 B | `68a5bad84e4304199ce5fa07df4ecee049f20b3c55e0b1c9f27efed61f943ae4` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 84 text funcs, 47 global defined; exactly **2** undefined `hi5622_*` symbols (the transport exports), resolved via `KBUILD_EXTRA_SYMBOLS` |
-| `hi5622_hdpp_mock.ko` | driver skeleton + simulated transport | 236,508 B | `c65a31eadf311e96a5c55eead15358e0454fa040d5109e8cb842918f491447dc` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 101 text funcs, 49 global defined; **self-contained** (0 undefined `hi5622_*` symbols); insmod-able on any 6.18 test kernel, NO device/BAR access |
+| `hi5622_pciet.ko` | transport skeleton + **integration delta** + `pciet_iface.c` | 142,268 B | `d6fda0db53db1f028c650473b8744f0307e72390bc76b3092b63edc2a127f455` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 72 text funcs, 24 global defined; exports `hi5622_transport_{register,unregister}_client` (+ non-exported `hi5622_tr_state_str`) |
+| `hi5622_hdpp_drv.ko` | the hdpp-style driver skeleton (7 objects) | 202,068 B | `d38be1990389561cfc1b441824d682213d78c0e9f0e58ccbfe0932bc5bc73190` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 84 text funcs, 47 global defined; exactly **2** undefined `hi5622_*` symbols (the transport exports), resolved via `KBUILD_EXTRA_SYMBOLS` |
+| `hi5622_hdpp_mock.ko` | driver skeleton + simulated transport | 236,508 B | `39aa2b611f1ed09da8dbffa602644f82e788c7e417ee753b528102d6f0c6da05` | 6.18.60 SMP mod_unload ARMv7 p2v8 | 101 text funcs, 49 global defined; **self-contained** (0 undefined `hi5622_*` symbols); insmod-able on any 6.18 test kernel, NO device/BAR access |
+
+**Hash-stability note:** the sha256s above are from the verified rebuild of
+2026-11-22 against the tree state of that moment (submodule `aedbc30`,
+`CONFIG_MODULE_STRIPPED=y`).  Kernel-module bytes also embed the kernel
+tree's symbol/versioning state, so a **kernel tree rebuild can change a module
+hash even with identical sources** (the lead's earlier build of the same
+patched transport gave `416d1db0...`, this rebuild `d6fda0db...` with the same
+sizes and same symbol sets).  The reproducible evidence is the source text +
+`tools/build-modules.sh`, not a fixed sha; treat a hash mismatch across tree
+rebuilds as expected and re-verify the *symbol/export checks* instead.
 
 License of all three: `GPL`; built with `arm-openwrt-linux-muslgnueabi-gcc`
 (GCC 14.4.0) against
