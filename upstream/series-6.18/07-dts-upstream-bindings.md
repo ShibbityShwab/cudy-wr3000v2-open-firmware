@@ -154,16 +154,46 @@ present in the hardware-verified DTB and are not prose:
    task.  The prioritized review is in
    `../../docs/incoming/upstream-blockers/05-driver-yaml-review.md`.
 
-There is **no dtschema/dt-validate/yamllint tooling** available in this
-checkout (no module, binary, pip or yamllint), so a real `make dtbs_check` /
-`dt_binding_check` run could not be made.  The check performed is:
-cpp+dtc compile (RC=0, 0 diagnostics), the extra dtc warning sets
-`unit_address_vs_reg simple_bus_reg avoid_unnecessary_addr_size
+At the time of this review there was **no dtschema/dt-validate/yamllint tooling**
+available in the checkout (no module, binary, pip or yamllint), so a real
+`make dtbs_check` / `dt_binding_check` run could not be made for the board DTS.
+The check performed is: cpp+dtc compile (RC=0, 0 diagnostics), the extra dtc
+warning sets `unit_address_vs_reg simple_bus_reg avoid_unnecessary_addr_size
 unique_unit_address_if_enabled` (0 warnings), a byte-identity comparison of
 the compiled DTB against the known-good DTB, and a manual required-property/name
 review against the in-series YAMLs and the standard 6.18 bindings.
 
+**Update 2026-11-22:** a dtschema 2026.9 venv is available and
+`make ARCH=arm dt_binding_check DT_SCHEMA_FILES=.../hisilicon,luofu-pcie.yaml`
+now passes **RC=0** for the PCIe binding (patch 0013, which gained the optional
+`acp-gate` documentation in commit 4e959f2; `num-lanes` was already covered by
+dtschema's `pci-bus-common.yaml`).  Log:
+`validation/dt-binding-check.log`; the yamllint step is still skipped (module not
+installed).  The board DTS itself is not run through `dtbs_check` here: its
+2026-11-22 additions include the `wifi-pcie-hog` child, whose form is allowed by
+current mainline `snps,dw-apb-gpio.yaml` but not by the v6.18 tag's binding (see
+section 8).
+
 ## 5. Compile/pad facts and validation
+
+**Current (2026-11-22):** the board DTS has 711 lines, sha256
+`f24451ca5dd6b79724af05df8c4f978fc670bfe230b8931adaedd941cfb543c7`; cpp+dtc RC=0
+with 0 diagnostics; DTB **12,865 B** sha256 `d8b41ac3...`, unaligned totalsize,
+pad-dtb **12,872 B**.  The release-line validator passes (55/55 include patches,
+0 fuzz, 0 rejects, strict git apply 55/55) and the loader hand-off contract is
+unchanged.  DTS-0001 is regenerated from the release-line-filtered source:
+sha256 `33956380...`, 712 lines (699-line filtered payload), byte-identical to
+the filtered target DTS, DTB **12,697 B** sha256 `288a5c3f...`, pad **12,704 B**.
+The review form re-ran 26/26 patch(1)+git am with identical trees, 0 errors /
+**74** warnings (the +16 vs 2026-11-21 are patch 0013's own comment-style
+warnings from the bench-proven GPIO block plus the known binding-split warning);
+`gen-series.py --check` clean; `validation/sha256sums.txt` 93 entries
+(`sha256sum -c` 93/93); release-line manifest 55 include / 11 exclude, sha256
+`925442e0...`; PCIe `dt_binding_check` RC=0.  The 2026-11-22 DTS additions are
+hardware-derived but the DTB carrying them has not yet been boot-tested as a
+unit (section 8).  Detail: `04-validation.md` section 31.
+
+The 2026-11-21 record follows (kept as history):
 
 - conservative-step DTS compile (7ae18f2): cpp+dtc RC=0, 0 stderr; DTB
   **13,041 B** sha256
@@ -272,11 +302,18 @@ bootflag=b` verified, selector boot_reg 0x11 verified, FIRE_OK) and booted:
 
 Adopted in commit `71b2167` (target DTS compatible list; the drafted
 reserved-memory binding remains the maintainer-facing documentation).
-Current DTS 681 lines sha256 `381b2e8c...`; DTB 12,678 B sha256
-`62574b11...` (pad 12,680 B sha256 `8d79794e...`); DTS-0001 sha256
-`886f3ad0...` (694 lines).  The release-line validator now expects the
-new compatible pair and PASSes; image **6e9c54d0** is the current DTS-purpose
-baseline (supersedes c3ef2a50; f6685b80 and 7421bb7a earlier).
+At the time of that adoption the DTS was 681 lines sha256 `381b2e8c...`, DTB
+12,678 B sha256 `62574b11...` (pad 12,680 B sha256 `8d79794e...`), DTS-0001
+sha256 `886f3ad0...` (694 lines); image **6e9c54d0** is the DTS-purpose
+baseline for that content (supersedes c3ef2a50; f6685b80 and 7421bb7a earlier).
+
+**2026-11-22 superseding state:** the DTS grew the 2026-11-22 additions
+(PCIe nodes enabled, `wifi-pcie-hog`, identity `dma-ranges`) and is now
+711 lines sha256 `f24451ca...`; DTB 12,865 B sha256 `d8b41ac3...` (pad
+12,872 B); DTS-0001 was regenerated from the **release-line-filtered** source
+(sha256 `33956380...`, 712 lines, 699-line payload).  Those additions are
+hardware-derived from the 2026-11-22 bench, but **the DTB carrying them has not
+yet been boot-tested as a unit** - see section 8.
 
 **Not claimed / out of scope:** pinctrl consumer states, consumer clocks, the
 A/B boot-selector protocol beyond the measured `0x10`/`0x11` cell, LED
@@ -299,6 +336,52 @@ regenerate DTS-0001 and the recorded hashes:
         --target-dts ../../target-skeleton/dts/luofu-r116.dts \
         --out dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
 
-then run `tools/check-release-line.sh --use-tree <pristine> <workdir>`,
-refresh `validation/sha256sums.txt`, and **boot-test the rebuilt image**
-before treating any active-DTS state as hardware-validated.
+The generator applies `tools/dts-upstream-filter.py`, the single definition of
+the release-line -> upstream DTS delta; the filter currently strips the W23
+thermal block (target patches 066/067) because the in-series thermal binding
+(0012) has `unevaluatedProperties: false` and documents only the 0x100 window
+(decision recorded in section 8).  Then run
+`tools/check-release-line.sh --use-tree <pristine> <workdir>` (it compares
+DTS-0001 with the filtered target and fails if W23 properties leak in), refresh
+`validation/sha256sums.txt`, and **boot-test the rebuilt image** before treating
+any active-DTS state as hardware-validated.
+
+## 8. 2026-11-22 additions: PCIe enablement, Wi-Fi control-pin GPIO hog, dma-ranges
+
+After the 2026-11-22 bench bring-up (PCIe link trains once GPIO0 pins 20/21/28 are
+outputs driven HIGH; both Hi5622 endpoints enumerate; the Wi-Fi transport reaches
+D2H DEVICE READY and passes the ETE/H2D smoke) the board DTS gained three active
+additions.  They are recorded here as hardware-derived but **not yet boot-tested as
+a unit** (the bench images carried the equivalent state; the exact single-source DTB
+has not been re-flashed).
+
+1. **PCIe root complexes enabled** (`status = "okay"` on `pcie0`/`pcie1`, commit
+   6ae7ad6; hardware-proven by patch 013's 2026-11-22 bring-up).  For the standalone
+   DTS-series posting this is only useful once the PCIe driver series is accepted; a
+   reviewer may prefer the nodes disabled until then - decided at posting time, the
+   target tree needs them enabled.
+2. **`wifi-pcie-hog` on `&porta`** (commit 32d44e6): GPIO0 pins 20/21/28 as
+   outputs driven HIGH, the upstream form of the board quirk.  The individual pin
+   roles were not decoded, so the hog records the proven required state only.  It
+   matches current mainline `snps,dw-apb-gpio.yaml` (`^.+-hog(-[0-9]+)?$` child
+   pattern, added after the v6.18 tag), so validation must use submission-time
+   mainline bindings; a `dtbs_check` against v6.18 bindings would flag the child
+   (the v6.18 binding keeps `additionalProperties: false` on port nodes).  The
+   pcie-luofu driver keeps a marked hardcoded workaround until a boot test proves
+   the hog alone.
+3. **Identity PCIe `dma-ranges`** (commit 5a6a500, content from the lead): the
+   Wi-Fi transport stage-B2 prerequisite; hardware-validated on bench image W26a
+   (the DWC framework programmed RC inbound vp0 0x80000000..0x8fffffff and the
+   ETE/H2D smoke passed).  Kept as a separately revertable commit because the final
+   DMA window sizing may be refined by the Wi-Fi driver.  The upstream DTS entry
+   needs it only once the Wi-Fi driver posts.
+
+**Release-line filter decision (W23 thermal delta):** keep the single-source DTS as
+the release-line source and strip the release-line-only W23 thermal block in
+`tools/dts-upstream-filter.py` when generating DTS-0001.  Rationale: the in-series
+thermal binding (0012) has `unevaluatedProperties: false` and documents only the
+0x100-byte window / no hwver/trim/threshold properties, so the W23 content cannot be
+validated in the L2 form and would be superseded by the upstream-clean thermal
+series anyway.  The alternative (regenerating DTS-0001 verbatim and justifying the
+W23 properties to the thermal maintainers) was rejected as it would drag a
+release-line-only target delta into the upstream post.

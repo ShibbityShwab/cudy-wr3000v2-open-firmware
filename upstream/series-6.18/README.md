@@ -38,6 +38,44 @@ added from the pie-decode, lsw-egress and mac-nvmem lanes.  The series,
 commit messages, validation logs and hashes were all regenerated in the
 final 26-patch pass.
 
+## 2026-11-22 update (read this first)
+
+The 2026-11-22 bench bring-up fixed the PCIe link (the failure was board GPIO state:
+GPIO0 pins 20/21/28 must be outputs driven HIGH before training; patch 013 is now
+hardware-verified) and the Wi-Fi transport reached D2H DEVICE READY plus the
+ETE/H2D smoke.  Consequence for this directory: patch 0013 changed, the board DTS
+changed (enabled PCIe nodes, `wifi-pcie-hog`, identity `dma-ranges`), and the
+generated artefacts were stale.  They are regenerated:
+
+- `series/0013` + `01-commit-messages.md` regenerated from the new
+  hardware-verified 0013 message (the old "never run on hardware" text is gone;
+  the message now records the 2026-11-22 link/endpoint result, the GPIO quirk and
+  the remaining RFC items).  `gen-series.py --check` clean (26 patches);
+- `dts-series/0001` regenerated from the **release-line-filtered** single-source
+  DTS: `tools/dts-upstream-filter.py` strips the release-line-only W23 thermal
+  delta (decision in `07-dts-upstream-bindings.md` section 8; the in-series
+  thermal binding 0012 has `unevaluatedProperties: false` and documents only the
+  0x100 window).  New sha256
+  `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa`, 712 lines
+  (699-line filtered payload);
+- release-line `manifest.tsv` row 013 refreshed (`2a43c953...`; manifest sha256
+  `925442e0...`); `validation/` and `validation/release-line/` refreshed from a
+  full re-run; `validation/sha256sums.txt` regenerated (93 entries: 26 series +
+  66 L0 source patches + DTS-0001; `sha256sum -c` 93/93 OK);
+- re-validation: review form 26/26 patch(1)+git am, identical trees, **0 errors /
+  74 warnings** (the +16 vs 2026-11-21 are patch 0013's own block-comment-style
+  warnings from the bench-proven GPIO block + the known binding-split warning);
+  release line 55/55, 0 fuzz/0 rejects, strict `git apply` 55/55; target DTS DTB
+  12,865 B sha256 `d8b41ac3...` (pad 12,872 B); DTS-0001 DTB 12,697 B sha256
+  `288a5c3f...` (pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema 2026.9).
+  Detail: `04-validation.md` section 31.
+
+**Hardware caveat:** patch 013 is hardware-proven (link trains, both endpoints
+enumerate), but the 2026-11-22 DTS additions still need one regression boot as a
+unit, and the hog-only path has not been boot-tested without the driver workaround.
+
+The 2026-11-21 release-line record below is kept as history.
+
 ## 2026-11-21 release-line update (read this first)
 
 - **Submission package (documentation only):** `submission/README.md` is the
@@ -62,10 +100,10 @@ final 26-patch pass.
 
 - **The DTS dependency is now an explicit upstream artefact: DTS-0001.**
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c`,
-  current final 2026-11-21: conservative comment-only cleanup + five
-  individually boot-tested active deltas) adds
-  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**681 lines**) and the
+  (2026-11-22 current: sha256 `33956380...`, 712 lines / 699-line filtered
+  payload - superseding the 2026-11-21 `886f3ad0...` 694-line entry with the
+  conservative comment-only cleanup + five boot-tested active deltas) adds
+  `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**699 lines**) and the
   `dtb-$(CONFIG_ARCH_LUOFU)` Makefile entry; it is the companion of kernel
   patch 0018 and is documented in `06-dts-series-dependency.md`.  The
   validator applies/compiles it and checks the loader hand-off contract.  The
@@ -145,7 +183,10 @@ overlay, hashed 054/056 after the `dev_dbg` quieting (manifest sha256
 | `series/0001-0026`.patch | commit-ready, format-patch style series (same diffs + commit messages); `git am` clean |
 | `commit-messages/` | source of truth for the per-patch messages; edit these, not 01 or series/ |
 | `tools/gen-series.py` | regenerates `series/` and `01-commit-messages.md` from `commit-messages/` + the source patches; `--check` verifies no drift |
+| `tools/gen-dts-series-patch.py` | regenerates DTS-0001 from the single-source board DTS (applies the release-line filter below); deterministic |
+| `tools/dts-upstream-filter.py` | single definition of the release-line -> upstream DTS delta: strips the W23 thermal release-line block from the board DTS before DTS-0001 is generated/validated (decision in `07-dts-upstream-bindings.md` section 8) |
 | `tools/run-validation.sh` | reproduces section 04 on any host with git/patch/tar/xz (no network); extracts a pristine 6.18.60 tree if given the tarball |
+| `tools/check-release-line.sh` | validates L1 patch application + the loader hand-off DTS contract + DTS-0001 (against the filtered target DTS) on a pristine 6.18.60 tree |
 | `05-release-line.md` | the 2026-11-21 release line: verified 2-CPU baseline, the DTS-only SMP fix, canonical configuration, working-LAN workaround, excluded bench diagnostics and the false-hang retraction |
 | `06-dts-series-dependency.md` | the upstream DTS series dependency (DTS-0001): board DTS + loader hand-off nodes required by kernel patch 0018, ordering, single-source/regeneration rule and validation |
 | `07-dts-upstream-bindings.md` | the board-DTS record: the hardware regression of the superseded active cleanup, the conservative comment-only cleanup, the five individually boot-tested active deltas, the manual binding review (no dtschema available), compile/pad facts and the closed blocker list (zero remain) |
@@ -206,12 +247,33 @@ To re-run the whole validation:
     tools/run-validation.sh /path/to/linux-6.18.60.tar.xz /tmp/luofu-val
     # or: tools/run-validation.sh --use-tree /path/to/extracted-6.18.60 /tmp/luofu-val
 
+To re-check the PCIe binding (patch 0013) on the patched tree, with dtschema
+available (the author used a 2026.9 venv):
+
+    make ARCH=arm dt_binding_check \
+        DT_SCHEMA_FILES=Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+
 To regenerate the series after editing a message:
 
     python3 tools/gen-series.py
     python3 tools/gen-series.py --check
 
 ## What is validated (host-only)
+
+**Current (2026-11-22 re-run):** review form 26/26 patch(1) and `git am`, identical
+trees, 3 offset hunks, 0 fuzz, 0 rejects, **0 errors / 74 warnings** (patch 0013
+accounts for 18: 17 block-comment-style warnings from the bench-proven GPIO block
+plus the known binding-split warning); release line 55/55, 0 fuzz, 0 rejects, strict
+`git apply` 55/55; target board DTS compiles to a **12,865 B** DTB sha256
+`d8b41ac3...` (pad 12,872 B); DTS-0001 (sha256 `33956380...`, 712 lines) applies,
+its DTS is byte-identical to the **filtered** target DTS and compiles to a 12,697 B
+DTB sha256 `288a5c3f...` (pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema
+2026.9); `gen-series.py --check` clean; `validation/sha256sums.txt` 93 entries
+(`sha256sum -c` 93/93); release-line manifest sha256 `925442e0...`.  Detail:
+`04-validation.md` section 31.  **Hardware caveat:** patch 013 is hardware-proven,
+but the 2026-11-22 DTS additions still need one regression boot as a unit.
+
+The 2026-11-21 record follows (kept as history):
 
 - 26/26 series files apply in order to pristine linux-6.18.60 with
   patch(1) and with `git am`; the two resulting trees are identical.  [V]

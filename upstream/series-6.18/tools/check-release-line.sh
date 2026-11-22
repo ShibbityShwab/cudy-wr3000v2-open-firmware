@@ -238,10 +238,20 @@ else
         ( cd "$DTREE" && patch -p1 -i "$DTS_SERIES_PATCH" ) > "$LOGS/dts-series-apply.log" 2>&1             || die "DTS series patch does not apply"
         IN_TREE="$DTREE/arch/arm/boot/dts/hisilicon/luofu-r116.dts"
         [ -f "$IN_TREE" ] || die "DTS series patch did not add the board DTS"
-        if cmp -s "$IN_TREE" "$DTS"; then
-            echo "DTS series: board DTS byte-identical to the target DTS" | tee -a "$LOGS/summary.txt"
+        # The single-source DTS also carries the release-line-only W23 thermal
+        # delta (target patches 066/067), which the upstream review form's
+        # thermal binding (0012) cannot describe.  DTS-0001 therefore carries
+        # the target DTS as produced by tools/dts-upstream-filter.py, the
+        # single definition of the release-line -> upstream DTS delta.
+        FILTERED="$LOGS/dts-series-expected.dts"
+        python3 "$SERIES_DIR/tools/dts-upstream-filter.py" "$DTS" "$FILTERED"             > "$LOGS/dts-series-filter.log" 2>&1             || die "DTS series: release-line filter failed (see $LOGS/dts-series-filter.log)"
+        if cmp -s "$IN_TREE" "$FILTERED"; then
+            echo "DTS series: board DTS byte-identical to the filtered target DTS (release-line-only W23 thermal delta stripped)" | tee -a "$LOGS/summary.txt"
         else
-            note "DTS series board DTS differs from the target DTS (regenerate DTS-0001 from the single source)"
+            note "DTS series board DTS differs from the filtered target DTS (regenerate DTS-0001 from the single source)"
+        fi
+        if grep -q -e 'hisilicon,threshold-mc' -e 'hwver = <3>' "$IN_TREE"; then
+            die "DTS series: release-line-only W23 properties leaked into DTS-0001"
         fi
         PRE2="$LOGS/luofu-r116.series.pre.dts"
         DTB2="$LOGS/luofu-r116.series.dtb"

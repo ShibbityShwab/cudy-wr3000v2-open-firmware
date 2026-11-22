@@ -1423,3 +1423,76 @@ Release line extended with the two W22 patches (058 -> 059/060; L0 64 files, L1 
 ## Section 30 - W23 thermal fix release-line change (2026-11-22)
 
 Release line extended with W23: patches 066 (luofu_tvsensor driver rewrite: hwver-3/v1 table, base+0x04[9:0], formula ((165*raw-20625)/797)*1000-40000 mC, vendor-order gated enable/trim sequence, module param gate default 0) and 067 (binding: 0x408 window + vendor properties).  L0 66 files, L1 55 files, manifest sha256 2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70.  The release DTS gains the thermal node properties; this is a release-line-only DTS delta and DTS-0001 was intentionally not regenerated (the L2 upstream review form stays W22/W23-free; the validator reports the expected DTS-series difference).  Host validation: validator PASS - 55/55 include patches apply, 0 fuzz/0 rejects, strict git apply 55/55; DTS contract unchanged; target build PASS.  Hardware validation (image 5aeca54801f69715a7dca7c3046f783f0745c1aeb47f9cb55c73d04577743e0f): boot 6.18.60, 2 CPUs, no Oops/BUG; dmesg "luofu-tvsensor ... registered: hwver=3 enable=0"; gate off raw=0, zone ENODATA; enable -> raw=0x25e, temp 59000 mC, regs 0x00=0x01000000 0x04=0x25e 0x08=0x3ff0039a 0x400=0xffff0001, devmem cross-check matches, no IRQ registered, 0 warning lines; load 59000->63000 mC, cool-down observed.  Evidence build/evidence-bench-gates/w23/ (gitignored).
+
+## Section 31 - 2026-11-22 re-validation: hardware PCIe GPIO fix, review-form and DTS-0001 regeneration
+
+Trigger: the 2026-11-22 bench bring-up fixed the PCIe link (the failure was board
+GPIO state, not the PCIe register program: GPIO0 pins 20/21/28 must be outputs driven
+HIGH before training), patch 013 was updated with the hardware-verified GPIO note and
+the compact endpoint-iATU note, and the board DTS gained the `wifi-pcie-hog`, the
+enabled PCIe nodes and the identity `dma-ranges`.  The 0013 commit message, the
+review-form copy of 0013 and DTS-0001 were stale against those commits and are
+regenerated here.  Trigger commits: 5a6a500 (DTS dma-ranges), 4e959f2 (patch 013),
+32d44e6 (DTS GPIO hog / cleanup).  Host-only run: no kernel/OpenWrt build, no device.
+
+**L2 review form (pristine linux-6.18.60, patch(1) + git am + checkpatch):**
+
+- 26/26 patches apply with patch(1) (3 offset hunks: 0008 x2, 0021 x1; **0 fuzz,
+  0 rejects**) and with `git am`; the two resulting trees are identical;
+- `checkpatch.pl --no-tree` default and `--strict`: **0 errors, 74 warnings** (was
+  0/58 on 2026-11-21).  The +16 are all patch 0013, which now contributes 18 warnings:
+  17 "Block comments use a trailing */ on a separate line" (the bench-proven GPIO and
+  hardware-evidence comments) plus the known binding-split warning.  The other 25
+  patches' totals are unchanged.  These are mechanical review items to fix when the
+  binding is split, not errors;
+- `series/0013-arm-pci-luofu-host.patch` sha256
+  `667907d6e290c4824eeb5c7b20427923b2ae212024272868253392fd85725561` (new 0013
+  commit message: hardware-verified on 2026-11-22, link trains and both endpoints
+  enumerate, GPIO quirk, remaining RFC items; the old "never run on hardware" text is
+  gone).  `01-commit-messages.md` regenerated, `gen-series.py --check` clean
+  (26 patches);
+- `dt_binding_check` (dtschema 2026.9, patch-0013 PCIe YAML only, full series applied):
+  **RC=0**, no schema errors; only the known yamllint-unavailable warning.  Log:
+  `validation/dt-binding-check.log`.
+
+**L3 DTS-0001 regeneration (release-line filter introduced):**
+
+- new tool `tools/dts-upstream-filter.py` is the single definition of the
+  release-line -> upstream DTS delta: it strips the release-line-only W23 thermal block
+  (target patches 066/067) from the single-source board DTS, restoring
+  `reg = <0x14900500 0x100>` and removing hwver/trim/int-base-offset/addition-en/
+  efuse-trim-en/`hisilicon,threshold-mc`.  The in-series thermal binding (0012) has
+  `unevaluatedProperties: false` and documents only the 0x100 window, so the W23
+  properties are not reviewable in the L2 form;
+- `tools/gen-dts-series-patch.py` now applies that filter (fails closed if the
+  release-line block is not found exactly once) and `tools/check-release-line.sh`
+  compares the DTS-0001 payload against the **filtered** target DTS and fails if W23
+  properties leak into the patch;
+- DTS-0001 regenerated from the current 711-line release-line DTS: 712-line patch
+  (699-line filtered payload), sha256
+  `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa`; the previous
+  694-line / `886f3ad0...` entry is superseded.
+
+**L1 release line (pristine linux-6.18.60):**
+
+- 55/55 include patches apply, 152 file events, 3 offset hunks, **0 fuzz, 0 rejects**;
+  strict `git apply` 55/55;
+- target board DTS compiles (cpp+dtc RC=0, 0 stderr): DTB **12,865 B** sha256
+  `d8b41ac37ec68a10ccaf2e68db0675dd6f28a83c1bb603603bbd97cc68af3ce3`, unaligned totalsize
+  -> `pad-dtb.py` pads to **12,872 B**; loader hand-off contract present
+  (`/aliases/console`, flashinfo compatible pair/reg/atag-offset, enable-method);
+- DTS-0001 applies and its board DTS is **byte-identical to the filtered target DTS**
+  (W23 delta absent by design); compiled DTB **12,697 B** sha256
+  `288a5c3f3841572ecede2dc1aa223c06772c8bb2459cde31a95203cc1761763f`, pad **12,704 B**,
+  same hand-off contract;
+- release-line `manifest.tsv` row 013 sha refreshed to
+  `2a43c9533aadb45117abe5eebb0d49248b9ac349b47cdc1c808208b22b40559c`; manifest sha256
+  now `925442e00b0b212d9080b57a5ef7f01bfc51a14722a661cd4403c5927c71000c`.
+
+**Post-regeneration state:** `validation/` refreshed from the two runs above;
+`validation/sha256sums.txt` regenerated with **93 entries** (26 series + 66 L0 source
+patches + DTS-0001, sha256 `041a27f45aeb3ade958e3d91d2567d8b4634bd17ecf9f5044c82459f944e0b07`)
+and `sha256sum -c` passes 93/93.  Hardware note: patch 013 is now hardware-proven
+(link trains, both endpoints enumerate); the 2026-11-22 DTS additions still need one
+regression boot as a unit, and the hog-only path (without the hardcoded driver block)
+has not been boot-tested yet.

@@ -1,0 +1,92 @@
+# ORIGINAL text by the wifi-driver-integration lane (task-64).
+# Transport-module integration delta for the hdpp-style driver interface.
+#
+# Baseline (verified 2026-11-22 18:2x, submodule commit 9700250):
+#   pciet_main.c sha256 bf036931710fb8489b00353b21c765dbfe989ad31dde09e1c5e5ef93023f43fa
+#   Kbuild       sha256 2c2b4815cb361de66610ebf209e54cea3260dccfbfb331a765bf486dabb41379
+# (hi5622_pciet.h / pciet_ete.c are NOT modified by this patch; the iface
+#  implementation only needs the existing struct hi5622_pci fields.)
+#
+# The delta is 6 marked hunks, all tagged [driver-port integration delta]:
+#   1 include hi5622_transport_iface.h
+#   2 pciet_d2h_payload(): offer DR payloads to the iface client first
+#   3 pciet_d2h_scan():     iface D2H service routine when a client is attached
+#   4 pciet_probe():       publish the transport instance to the iface
+#   5 pciet_remove():      withdraw it before teardown
+#   6 Kbuild:              compile pciet_iface.o into hi5622_pciet.ko
+#
+# pciet_iface.c + hi5622_transport_iface.h are copied into the transport
+# build directory from ../interface/ by tools/build-modules.sh (they are
+# not vendored into the transport lane).  Apply from the transport build
+# directory:
+#   cd docs/incoming/wifi-transport-port/build && git apply -p1 <this-file>
+#
+--- a/pciet_main.c
++++ b/pciet_main.c
+@@ -54,6 +54,9 @@
+ #include <linux/byteorder/generic.h>
+ 
+ #include "hi5622_pciet.h"
++/* [driver-port integration delta] transport<->driver client/ops interface; see
++ * docs/incoming/wifi-driver-integration/interface/hi5622_transport_iface.h */
++#include "hi5622_transport_iface.h"
+ 
+ #define DRV_NAME		"hi5622_pciet"
+ 
+@@ -171,6 +174,11 @@
+ 	u8 *p = va;
+ 	u32 n;
+ 
++	/* [driver-port integration delta] hand DR payloads to an attached hdpp-style driver first;
++ * the driver owns the HCC demux and the legacy logging is skipped. */
++	if (pciet_iface_deliver_rx(ctx, va, len))
++		return;
++
+ 	if (len >= HI5622_D2H_WIRE_PAYLOAD_OFF + 2) {
+ 		u16 wlen = p[4] | ((u16)p[5] << 8);
+ 		u8 core = p[9];
+@@ -230,6 +238,12 @@
+  */
+ void pciet_d2h_scan(struct hi5622_pci *ctx)
+ {
++	/* [driver-port integration delta] with a hdpp-style driver attached, the driver-facing iface
++	 * owns the phase37 1.2 D2H service routine (ack/clear/re-arm) and the
++	 * dispatch; the legacy boot-path scan below is skipped. */
++	if (pciet_iface_d2h_client_scan(ctx))
++		return;
++
+ 	u32 bitmap = readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP);
+ 	u32 id;
+ 
+@@ -744,6 +758,9 @@
+ 	if (ret)
+ 		dev_warn(dev, "device_add_groups: %d\n", ret);
+ 
++	/* [driver-port integration delta] publish this endpoint to a hdpp-style driver */
++	pciet_iface_transport_added(ctx);
++
+ 	dev_info(dev,
+ 		 "%s: endpoint %s BAR0 0x%pap BAR2 0x%pap; "
+ 		 "no device writes performed - attended steps via sysfs\n",
+@@ -761,6 +778,10 @@
+ {
+ 	struct hi5622_pci *ctx = pci_get_drvdata(pdev);
+ 
++	/* [driver-port integration delta] withdraw the endpoint first: this detaches a driver and
++	 * waits for its in-flight callbacks before the transport is torn down. */
++	pciet_iface_transport_removed(ctx);
++
+ 	device_remove_groups(&pdev->dev, pciet_groups);
+ 	pciet_poll_stop(ctx);
+ 	pciet_ete_ring_free(ctx, &ctx->dr0);
+--- a/Kbuild
++++ b/Kbuild
+@@ -9,5 +9,8 @@
+ 
+ obj-m := hi5622_pciet.o
+ hi5622_pciet-y := pciet_main.o pciet_ete.o
++# [driver-port integration delta] transport<->driver client/ops implementation (added by the
++# driver-port lane; see docs/incoming/wifi-driver-integration/)
++hi5622_pciet-y += pciet_iface.o
+ 
+ ccflags-y += -I$(src)

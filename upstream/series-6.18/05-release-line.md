@@ -307,6 +307,27 @@ Ordering notes (both items fixed 2026-11-21):
 
 - **Thermal W23 (release-line, 2026-11-22).**  Patches **066** (luofu_tvsensor driver: correct hwver-3/v1 read path, variant formulas, gated enable/trim sequence) and **067** (binding update: 0x408 window, vendor properties) added to L0/L1: L0 66 files (001-060 + 062-067), L1 55 files, manifest sha256 2bb7413e8291214fe09ccd84920166fc668ae72007dcbcc91727bb29e30eea70. Bench-proven: gate off -> raw 0x0 and thermal zone ENODATA; enable -> raw 0x25e -> 59000 mC (formula exact), registers match the decoded sequence, no IRQ registered, 0 warnings; CPU load 59 -> 63 C, cooling observed.  The release DTS gains the thermal node properties (release-line-only delta; the L2 upstream review form and DTS-0001 are intentionally not regenerated). Validator PASS (55/55), target build PASS, cold boot PASS.
 
+- **PCIe hardware GPIO fix (release-line, 2026-11-22).** The bench bring-up
+  proved the PCIe link failure was board GPIO state, not the RC register program:
+  GPIO0 pins 20/21/28 must be outputs driven HIGH before training (stock vendor
+  GPIO0 DDR=0x1330000f / DATA=0x12300004).  Patch **013** is updated in L0/L1
+  (hardware-verified GPIO note + compact 7-word/absolute endpoint-iATU note; the
+  hardcoded workaround remains until the DTS hog alone is boot-tested) and the
+  release DTS carries the equivalent `wifi-pcie-hog` plus the enabled PCIe nodes
+  (commits 32d44e6 / 5a6a500 / 4e959f2).  Host re-validation: release-line validator
+  PASS (55/55 include patches, 0 fuzz, 0 rejects, strict git apply 55/55); target
+  DTS DTB **12,865 B** sha256 `d8b41ac3...`, pad **12,872 B**; DTS-0001
+  regenerated with the new release-line W23 filter (sha256 `33956380...`,
+  712 lines, 699-line filtered payload) and byte-identical to the filtered target
+  DTS (DTB 12,697 B sha256 `288a5c3f...`, pad 12,704 B).  Release-line manifest
+  refreshed (row 013 `2a43c953...`; manifest sha256 `925442e0...`).  L2 review
+  form re-ran 26/26 patch(1)+git am, identical trees, 0 errors / **74**
+  checkpatch warnings (the +16 are patch 0013's own comment-style warnings from the
+  hardware-proven GPIO block, plus the known binding-split warning).  Detail:
+  `04-validation.md` section 31.  Hardware caveat: the 2026-11-22 DTS additions
+  still need one regression boot as a unit, and the DTS-hog-only path has not been
+  boot-tested without the hardcoded driver block.
+
 ## 8. Retraction: the "2-CPU hang" was a host bench-link outage
 
 On 2026-11-20 the box ran ~23 minutes with 2 CPUs, 0% loss and SSH, then went
@@ -378,6 +399,30 @@ Run by `tools/check-release-line.sh` against pristine linux-6.18.60
   RC=0, CONFIG_WERROR, zImage/hash, TEXT_OFFSET unchanged) are in
   `04-validation.md` and SKELETON-SMOKE.md; the release image itself was built
   and booted by the bench sessions (section 3).
+
+### 2026-11-22 re-run (patch 013 hardware update + DTS-0001 regeneration)
+
+The 2026-11-21 numbers above are kept as history.  After the hardware PCIe GPIO fix
+(patch 013) and the board-DTS 2026-11-22 additions, `tools/check-release-line.sh`
+was re-run against pristine linux-6.18.60 (sha256 `3c2f44ef...`):
+
+- L1 release line: **55/55** include patches apply (152 file events, 3 offset hunks,
+  0 fuzz, 0 rejects); strict `git apply` 55/55 [V];
+- target board DTS: cpp+dtc RC=0, 0 stderr, DTB **12,865 B** sha256
+  `d8b41ac37ec68a10ccaf2e68db0675dd6f28a83c1bb603603bbd97cc68af3ce3`, unaligned ->
+  `pad-dtb.py` pads to **12,872 B**; the loader hand-off contract is unchanged
+  (`/aliases/console`, flashinfo compatible pair/reg/atag-offset, enable-method) [V];
+- **DTS-0001** regenerated from the release-line-filtered single source:
+  sha256 `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa`,
+  712 lines (699-line filtered payload).  Applies RC=0 and its board DTS is
+  byte-identical to the filtered target DTS (the W23 thermal delta is documented in
+  `06-dts-series-dependency.md` / produced by `tools/dts-upstream-filter.py`);
+  compiled DTB **12,697 B** sha256 `288a5c3f...`, pad **12,704 B**, contract intact [V];
+- release-line `manifest.tsv` row 013 refreshed to `2a43c953...`; manifest sha256
+  `925442e00b0b212d9080b57a5ef7f01bfc51a14722a661cd4403c5927c71000c`;
+- logs: `validation/release-line/` refreshed; `validation/sha256sums.txt`
+  regenerated (93 entries, `sha256sum -c` 93/93 OK).  The L2 review-form re-run and
+  the PCIe `dt_binding_check` (RC=0) are recorded in `04-validation.md` section 31.
 
 ## 10. What is NOT in the release line / not claimed
 

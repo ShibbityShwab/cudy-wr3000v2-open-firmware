@@ -49,3 +49,7 @@
 056-net-lsw-mirror-postlink-w19.patch
 057-net-pie-cpucopy-w20.patch
 058-net-luofu-canonical-bench-config.patch
+059-net-lsw-napt-init.patch
+060-net-pie-exception-delivery.patch
+066-thermal-luofu-tvsensor-w23.patch
+067-dt-bindings-thermal-luofu-tvsensor-w23.patch

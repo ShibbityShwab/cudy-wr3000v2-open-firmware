@@ -90,9 +90,9 @@ static const struct hi5622_inbound_region hi5622_regions[6] = {
 #define IATU_VP_BASE_LO		0x04	/* BAR0-relative base [V] */
 #define IATU_VP_BASE_HI		0x08	/* [V] (zero) */
 #define IATU_VP_LIMIT_LO	0x0c	/* base + size - 1 [V] */
-#define IATU_VP_LIMIT_HI	0x10	/* [V] (zero) */
-#define IATU_VP_TARGET_LO	0x14	/* device CA [V] */
-#define IATU_VP_TARGET_HI	0x18	/* [V] (zero) */
+/* phase18 A.5: this endpoint has NO limit_hi register; target_lo sits at +0x10. */
+#define IATU_VP_TARGET_LO	0x10	/* device CA [V] (compact layout) */
+#define IATU_VP_TARGET_HI	0x14	/* [V] (zero, compact layout) */
 
 #define IATU_VP_CTRL2_ENA	0x80000000u	/* enable bit [V] */
 #define IATU_VP_CTRL2_BAR(bar)	(((bar) & 7) << 8)	/* [V] */

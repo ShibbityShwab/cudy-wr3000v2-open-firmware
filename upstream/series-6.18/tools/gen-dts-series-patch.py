@@ -5,8 +5,14 @@ board DTS.
 
 The kernel review form (series/0001-0026.patch) is kernel-only.  SMP needs the
 loader hand-off devicetree contract, so the DTS series entry is generated here
-from target-skeleton/dts/luofu-r116.dts.  The generated patch adds the board
-DTS verbatim plus the hisilicon DTS Makefile entry.
+from target-skeleton/dts/luofu-r116.dts.
+
+The single-source DTS is also the release-line DTS, so it carries the
+release-line-only W23 thermal delta (target patches 066/067; not in the
+upstream review form).  The board DTS placed in the patch is therefore the
+output of tools/dts-upstream-filter.py, the single definition of the
+release-line -> upstream DTS delta.  The generated patch adds that filtered
+board DTS plus the hisilicon DTS Makefile entry.
 
 Usage:
   tools/gen-dts-series-patch.py \
@@ -21,11 +27,24 @@ byte-identical to the target DTS.
 
 import argparse
 import difflib
+import subprocess
+import sys
 from pathlib import Path
+
+FILTER = Path(__file__).resolve().with_name("dts-upstream-filter.py")
+
+
+def filtered_dts(target_dts: Path) -> str:
+    """Return the upstream board DTS (release-line-only delta stripped)."""
+    if not FILTER.is_file():
+        raise SystemExit("missing release-line filter: %s" % FILTER)
+    out = subprocess.run([sys.executable, str(FILTER), str(target_dts)],
+                         check=True, capture_output=True, text=True)
+    return out.stdout
 
 
 def build(pristine: Path, target_dts: Path) -> str:
-    new = target_dts.read_text().splitlines()
+    new = filtered_dts(target_dts).splitlines()
     mf_path = pristine / "arch/arm/boot/dts/hisilicon/Makefile"
     mf = mf_path.read_text().splitlines()
 

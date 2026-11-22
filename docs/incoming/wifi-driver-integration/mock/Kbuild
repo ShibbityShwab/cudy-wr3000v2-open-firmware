@@ -1,0 +1,13 @@
+# Kbuild - self-contained MOCK build of the hi5622 hdpp-style driver
+# skeleton (task-64): driver sources + a simulated transport implementation.
+# No device, no BAR access, no real transport module needed; safe to insmod on
+# any 6.18 test kernel for a logic/link smoke test.
+#
+# The build script copies the driver sources and ../interface/hi5622_transport_iface.h
+# into this directory, then:
+#   make -C $KDIR M=$PWD modules
+obj-m := hi5622_hdpp_mock.o
+hi5622_hdpp_mock-y := hi5622_drv_main.o hi5622_hcc.o hi5622_d2h.o \
+		      hi5622_ete.o hi5622_hdpp_core.o hi5622_alg.o \
+		      hi5622_netdev.o hi5622_transport_mock.o
+ccflags-y += -I$(src)

@@ -112,3 +112,29 @@ path (out of scope for the transport slice).  Endpoint INTx delivery is still
 unwired in the luofu host driver (status registers live in the never-read
 misc window) — the polled bitmap is the bench's D2H "ISR"; the optional
 use_irq=1 path is compiled in for when that lands.
+
+---
+
+## Post-B1 contract corrections (wifi-hcc-re, 2026-11-22)
+
+These supersede parts of the stage text above (evidence: wifi-hcc-re/REPORT.md, submodule 07b9201):
+
+1. **out[1]=0x4 is the platform-up announce, not the ready gate.** The firmware writes
+   out[1]=4, rings the D2H doorbell, then spins on CA 0x4000010c == 0xcece. The real ready gate
+   is **HCC chip-group-4 ids 1/2 delivered over an ETE DR ring**; the mailbox layer registers only
+   D2H ids {1,3,6,7} and id 2 has no handler (drain+ack only). Therefore ready1/ready2 as read
+   from the bitmap are a mailbox-level observation, and B1 success is proving the transport can
+   drain/ack and dispatch - the hdpp-level gate needs stage B3 rings.
+2. **No H2D reply is required** to any D2H id. B1.5's announce (0xcece) is required; keep it - no
+   vendor module contains that write (verified negative over all ko).
+3. **D2H drain/ack sequence** to keep the device's mailbox healthy:
+   out[3]=1 ack, out[1]=0 drain, out[4]=1 rearm; dispatch by ctz(bitmap) <= 10.
+4. **B3 probes P0-P5** are specified in hcc-re REPORT section 9: arm SR0-2 + DR0-3 (depth 32,
+   8-byte nodes, packed producer "(idx & 0x3ff) | phase << 10", dma_alloc_coherent), pre-post DR
+   free buffers, watch out[1] bit6/bit3 after draining 0x4, snapshot DR +0x3c per channel, decode
+   group-4 id1/2 payloads, check DR +0x00 enables (firmware-owned - never host-write).
+5. **H2D message format (for the driver lanes):** 12-byte HCC header {group low nibble @0,
+   resource-group hi nibble @1, len = payload+12 @4, id @6, dst @9, 0x5a5a tag @0xa, payload @0xc,
+   max payload 0x674} inside an 8-byte SR node {devVA, (len << 16) | 0x6d2b}, announced by
+   pcie_msg_send(chip,3) = out[0] (0x40039010) |= 1<<3 then out[2] (0x400392d4) |= 1.
+   Never post H2D id 5 (firmware handler is BUG()).

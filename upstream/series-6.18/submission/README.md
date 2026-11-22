@@ -4,21 +4,24 @@
 anywhere.**  This directory is a dry-run hand-off bundle for the owner to review
 and, if they choose, send manually; it contains no accounts, no email transport
 and no list subscription.  Package form: **v3 submission-form revision**,
-regenerated 2026-11-21 from the current tree (see git log for the exact commit).
+regenerated 2026-11-22 from the current tree after the hardware PCIe GPIO fix
+(patch 0013) and the board-DTS 2026-11-22 additions (see git log for the exact
+commit).
 
-## Current state (2026-11-21)
+## Current state (2026-11-22)
 
 | item | value |
 | --- | --- |
 | kernel review form | 26 patches in `../series/` (RFC / do-not-merge split; see `../00-cover-letter.md`) |
-| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c` (694 lines) |
-| single-source board DTS | pre-clean 1,329 lines -> conservative cleanup **691 lines** (7ae18f2) -> TWD delta **700 lines** (5b401c1) -> MAC/switch/compatible deltas **681 lines** (6c2cc2f) -> flashinfo compatible-first **681 lines** (71b2167); sha256 `381b2e8ca54d88f91b23370717bc3f635b979ecb1f8e841a2b5af05f960809b2` |
-| compiled board DTB | **12,678 B** sha256 `62574b118afd0aaf445b03d7ed49c9e021be78d39049dcb0626b9130f94ca899`; unaligned totalsize, `pad-dtb.py` pads to **12,680 B** sha256 `8d79794effef4d29523908618ebbdb1b0a47469dffcfdbea78a239191860b055` |
-| current DTS-purpose hardware image | **6e9c54d0** (boot-tested flashinfo compatible-first: stock loader staging PASS, 2 CPUs, `GIC-0 29 Level twd`, cmdline ubi.mtd=rootfsb + project marker).  Previous DTS-purpose baseline: c3ef2a50; earlier: f6685b80/7421bb7a |
-| release-line validator | PASS: 51 include / 11 exclude, 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, strict git apply 51/51; DTS contract and DTS-0001 byte-identity OK |
-| review form checks | 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, 0 fuzz; checkpatch **0 errors / 58 warnings** |
-| current devicetree final | submodule commit **71b2167** (conservative cleanup 7ae18f2 + boot-tested TWD level-high + MAC/switch/compatible deltas + boot-tested flashinfo compatible-first); the superseded active cleanup **538377c** is regressed and NOT current (`../04-validation.md` sections 22-28, `../07-dts-upstream-bindings.md` section 6) |
-| remaining upstream blockers | **ZERO** - all active-DTS/code blockers closed; the drafted flashinfo binding remains maintainer-facing documentation only |
+| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa` (712 lines, 699-line payload = the single-source DTS after the release-line W23 filter; `tools/dts-upstream-filter.py`) |
+| single-source board DTS | **711 lines** sha256 `f24451ca5dd6b79724af05df8c4f978fc670bfe230b8931adaedd941cfb543c7` (2026-11-21 history: 691 lines 7ae18f2 -> 700 lines 5b401c1 -> 681 lines 6c2cc2f -> 681 lines 71b2167, sha 381b2e8c...; the 2026-11-22 additions are the enabled PCIe nodes, the `wifi-pcie-hog` and the identity `dma-ranges`) |
+| compiled board DTB | **12,865 B** sha256 `d8b41ac37ec68a10ccaf2e68db0675dd6f28a83c1bb603603bbd97cc68af3ce3`; unaligned totalsize, `pad-dtb.py` pads to **12,872 B**.  DTS-0001 compiled from the filtered copy: **12,697 B** sha256 `288a5c3f3841572ecede2dc1aa223c06772c8bb2459cde31a95203cc1761763f`, pad **12,704 B** (2026-11-21 history: 12,678 B 62574b11... -> 12,680 B 8d79794e...) |
+| current DTS-purpose hardware image | The latest boot-tested DTS-purpose image is still **6e9c54d0** (2026-11-21: stock loader staging PASS, 2 CPUs, `GIC-0 29 Level twd`, cmdline ubi.mtd=rootfsb + project marker).  The 2026-11-22 additions are hardware-derived from the bench bring-up (patch 013 link/endpoints; B2 dma-ranges window) but the DTB carrying them has **not yet been boot-tested as a unit** - one regression boot is owed |
+| release-line validator | PASS (2026-11-22): 55 include / 11 exclude, 55/55 patch(1) RC=0, 3 offset hunks, **0 fuzz**, strict git apply 55/55; DTS contract and DTS-0001-vs-filtered-target identity OK; logs `../validation/release-line/` |
+| review form checks | 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, 0 fuzz; checkpatch **0 errors / 74 warnings** (patch 0013 accounts for 18: 17 block-comment-style warnings from the bench-proven GPIO block + the known binding-split warning); PCIe `dt_binding_check` RC=0 (dtschema 2026.9) |
+| current devicetree final | 2026-11-21 content: submodule commit **71b2167** (conservative cleanup 7ae18f2 + boot-tested TWD level-high + MAC/switch/compatible deltas + boot-tested flashinfo compatible-first; the superseded active cleanup **538377c** is regressed and NOT current).  2026-11-22 additions: **32d44e6** (wifi-pcie-hog + PCIe-stub cleanup), **5a6a500** (dma-ranges), **4e959f2** (patch 0013 hardware notes) |
+| patch 0013 | **hardware-verified 2026-11-22** - link trains (LTSSM L0) and both endpoints 59e7:0005 enumerate; still RFC: no MSI/INTx, single-function CFG0 topology, ACP gate is a bring-up workaround, DTS hog still to be boot-tested alone, binding split owed |
+| remaining upstream blockers | **ZERO** for the 2026-11-21 documented blocker list - all active-DTS/code blockers closed; the drafted flashinfo binding remains maintainer-facing documentation only.  The 2026-11-22 DTS additions are hardware-derived pending one unit regression boot (not a new external blocker) |
 
 ## What is in this package
 

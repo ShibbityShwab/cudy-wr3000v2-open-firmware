@@ -443,14 +443,28 @@ read (a userspace read of 0x10161000 panicked the board), and sub-word
 or misaligned accesses fault.  The gate clock and the four active-low
 resets per root complex come from the CRG.
 
-This is an RFC: the wrapper store semantics, the iATU-enable/LTSSM bit
-interaction, the DWC version word, endpoint power, MSI/INTx and real
-enumeration have never been validated.  The Wi-Fi endpoint behind RC0
-has no mainline driver and is out of scope; the devicetree nodes stay
-disabled.  Never run on hardware.
+Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22:
+with the complete recorded register program the link trains (LTSSM L0,
+the measured vendor steady-state and link-capability values read back
+byte-identically), and both Wi-Fi endpoints behind the root complexes
+enumerate (vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).
 
-Host-compiled against linux-6.18.60, binding checked with
-dt_binding_check.
+The remaining hardware dependency is board GPIO state, not a PCIe
+register: the Wi-Fi endpoint only trains once GPIO0 pins 20, 21 and 28
+are outputs driven high before training (the stock vendor kernel leaves
+them that way).  The board devicetree is expected to describe this as a
+gpio hog on the GPIO controller; until that hog has been boot-tested on
+its own the driver keeps a clearly marked bring-up workaround, to be
+removed afterwards.
+
+This remains an RFC: the driver has no MSI/INTx support (the endpoint
+interrupt route is not documented), the configuration window serves only
+the measured single-function topology, and the ACP power-gate value is a
+bring-up workaround rather than a modelled power domain.  The Wi-Fi
+endpoint has no mainline driver and is out of scope for this patch.
+
+Host-side: the patch applies to linux-6.18.60 and passes checkpatch with
+no errors; the binding passes dt_binding_check (dtschema 2026.9).
 
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
@@ -1243,7 +1257,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 10 | bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
 | 11 | 872cc563004e20c18266f5f34979cb6e6880e6a2da84fcf436bfc5ffa3179a39 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
 | 12 | 131ed955ee95e7e513e701337b99a890e57b1bf27f1c9e15db6f9c22622075ea | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
-| 13 | 8a8454f73c0c33f1c36e434ed463ac38e3155f79e4f082f2a679c2f53458fe88 | 73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202 |
+| 13 | 667907d6e290c4824eeb5c7b20427923b2ae212024272868253392fd85725561 | 2a43c9533aadb45117abe5eebb0d49248b9ac349b47cdc1c808208b22b40559c |
 | 14 | 8a8fba5b9f04e61c759d77a160caf31c32206ed882b97bf51c8882865f93e7eb | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
 | 15 | 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
 | 16 | f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |

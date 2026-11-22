@@ -1,0 +1,18 @@
+# Kbuild - hi5622 hdpp-style Wi-Fi driver skeleton (clean-room, task-64)
+#
+# Split build (the real integration): the transport module must be built first
+# with the marked integration patch applied (../transport-delta/), then this
+# module links against its exports through KBUILD_EXTRA_SYMBOLS:
+#
+#   make -C $KDIR M=$TRANSPORT_DIR modules
+#   make -C $KDIR M=$PWD KBUILD_EXTRA_SYMBOLS=$TRANSPORT_DIR/Module.symvers modules
+#
+# The exact, tested build line is tools/build-modules.sh, which also produces
+# the mock variant (single self-contained module, no device required).
+#
+# Requires the interface header next to this module: ../interface/.
+obj-m := hi5622_hdpp_drv.o
+hi5622_hdpp_drv-y := hi5622_drv_main.o hi5622_hcc.o hi5622_d2h.o \
+		     hi5622_ete.o hi5622_hdpp_core.o hi5622_alg.o \
+		     hi5622_netdev.o
+ccflags-y += -I$(src) -I$(src)/../interface

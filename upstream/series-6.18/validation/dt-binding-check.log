@@ -1,0 +1,30 @@
+# Host-only dt_binding_check for the PCIe binding (patch 0013), run on the
+# linux-6.18.60 tree with the full series 0001-0026 applied (2026-11-22).
+# Tooling: dtschema 2026.9 (author's venv, the same tool used by the
+# 2026-11-18 driver lanes); yamllint unavailable, so the YAML-lint step is
+# skipped with a warning (as in the earlier runs).
+# Command: make ARCH=arm dt_binding_check DT_SCHEMA_FILES=Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+# Result: RC=0 (0 schema errors; only the yamllint-unavailable warning).
+#
+  SCHEMA  Documentation/devicetree/bindings/processed-schema.json
+  HOSTCC  scripts/basic/fixdep
+  HOSTCC  scripts/dtc/dtc.o
+  HOSTCC  scripts/dtc/flattree.o
+  HOSTCC  scripts/dtc/fstree.o
+  HOSTCC  scripts/dtc/data.o
+  HOSTCC  scripts/dtc/livetree.o
+  HOSTCC  scripts/dtc/treesource.o
+  HOSTCC  scripts/dtc/srcpos.o
+  HOSTCC  scripts/dtc/checks.o
+  HOSTCC  scripts/dtc/util.o
+  LEX     scripts/dtc/dtc-lexer.lex.c
+  YACC    scripts/dtc/dtc-parser.tab.[ch]
+  HOSTCC  scripts/dtc/dtc-lexer.lex.o
+  HOSTCC  scripts/dtc/dtc-parser.tab.o
+  HOSTLD  scripts/dtc/dtc
+  CHKDT   ./Documentation/devicetree/bindings
+which: no yamllint in (/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/waves/2026-11-18-pcie/dtschema-venv/bin:/home/shibbityshwab/.opencode/bin:/home/shibbityshwab/.bun/bin:/home/shibbityshwab/.ante/bin:/home/shibbityshwab/.local/bin:/opt/rocm/bin:/usr/lib/jvm/java-25-openjdk/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/var/lib/flatpak/exports/bin:/usr/lib/jvm/default/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl)
+warning: python package 'yamllint' not installed, skipping
+  DTEX    Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.example.dts
+  DTC [C] Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.example.dtb
+RC=0

@@ -8,18 +8,18 @@ total: 0 errors, 1 warnings, 0 checks, 95 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0001-arm-mach-hisilicon-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0001-arm-mach-hisilicon-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0002-arm-kconfig-textofs.patch
 total: 0 errors, 0 warnings, 0 checks, 25 lines checked
 
-<series>/series/0002-arm-kconfig-textofs.patch has no obvious style problems and is ready for submission.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0002-arm-kconfig-textofs.patch has no obvious style problems and is ready for submission.
 ########## 0003-arm-textofs-nonimmediate.patch
 total: 0 errors, 0 warnings, 0 checks, 42 lines checked
 
-<series>/series/0003-arm-textofs-nonimmediate.patch has no obvious style problems and is ready for submission.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0003-arm-textofs-nonimmediate.patch has no obvious style problems and is ready for submission.
 ########## 0004-arm-clk-reset-luofu-crg.patch
 WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
 #76: 
@@ -104,7 +104,7 @@ total: 0 errors, 18 warnings, 2 checks, 492 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0004-arm-clk-reset-luofu-crg.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0004-arm-clk-reset-luofu-crg.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -120,7 +120,7 @@ total: 0 errors, 2 warnings, 0 checks, 328 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0005-arm-watchdog-luofu-wdt.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0005-arm-watchdog-luofu-wdt.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -136,7 +136,7 @@ total: 0 errors, 2 warnings, 0 checks, 767 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0006-arm-mtd-nand-luofu-fmc.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0006-arm-mtd-nand-luofu-fmc.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -163,7 +163,7 @@ total: 0 errors, 3 warnings, 0 checks, 325 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0007-net-mdio-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0007-net-mdio-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -187,7 +187,7 @@ total: 0 errors, 2 warnings, 0 checks, 72 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0008-net-phy-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0008-net-phy-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -203,7 +203,7 @@ total: 0 errors, 2 warnings, 0 checks, 255 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0009-net-gmac-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0009-net-gmac-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -219,7 +219,7 @@ total: 0 errors, 2 warnings, 0 checks, 394 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0010-arm-luofu-restart.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0010-arm-luofu-restart.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -235,7 +235,7 @@ total: 0 errors, 2 warnings, 0 checks, 1003 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0011-pinctrl-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0011-pinctrl-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -251,23 +251,87 @@ total: 0 errors, 2 warnings, 0 checks, 217 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0012-arm-thermal-luofu-tvsensor.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0012-arm-thermal-luofu-tvsensor.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0013-arm-pci-luofu-host.patch
-WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
-#75: 
-new file mode 100644
+WARNING: Block comments use a trailing */ on a separate line
+#211: FILE: drivers/pci/controller/dwc/pcie-luofu.c:121:
++ * is written (pcie-seq-re 2026-11-22). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#337: FILE: drivers/pci/controller/dwc/pcie-luofu.c:247:
++	 * configuration request without a link may SError this SoC. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#402: FILE: drivers/pci/controller/dwc/pcie-luofu.c:312:
++	 * be deleted once the hog has been bench-tested. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#412: FILE: drivers/pci/controller/dwc/pcie-luofu.c:322:
++			 * trains; the vendor kernel drives 20,21,28 = 1,1,1). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#425: FILE: drivers/pci/controller/dwc/pcie-luofu.c:335:
++	 * this early probe needs an explicit settle time). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#439: FILE: drivers/pci/controller/dwc/pcie-luofu.c:349:
++	 * mode value is 4<<28 = 0x40000000, matching this write). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#452: FILE: drivers/pci/controller/dwc/pcie-luofu.c:362:
++	 * DBI writes. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#470: FILE: drivers/pci/controller/dwc/pcie-luofu.c:380:
++	 * request hit the live link machine. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#505: FILE: drivers/pci/controller/dwc/pcie-luofu.c:415:
++	 * mask, gate clear). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#516: FILE: drivers/pci/controller/dwc/pcie-luofu.c:426:
++	 * 0x80c = 0x12c) and the header words zeroed. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#524: FILE: drivers/pci/controller/dwc/pcie-luofu.c:434:
++	 * SET during training instead of clearing it. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#527: FILE: drivers/pci/controller/dwc/pcie-luofu.c:437:
++	 * one wrapper register we cannot read back; re-writing it is free). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#532: FILE: drivers/pci/controller/dwc/pcie-luofu.c:442:
++	 * the resets have fully settled. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#540: FILE: drivers/pci/controller/dwc/pcie-luofu.c:450:
++	 * re-kick the LTSSM enable once after a short delay. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#589: FILE: drivers/pci/controller/dwc/pcie-luofu.c:499:
++	 * Gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#663: FILE: drivers/pci/controller/dwc/pcie-luofu.c:573:
++	 * bring-up workaround, not a modelled ACP power domain. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#704: FILE: drivers/pci/controller/dwc/pcie-luofu.c:614:
++	 * settle, then deassert in the vendor order with longer settles. */
 
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
 
-total: 0 errors, 2 warnings, 0 checks, 621 lines checked
+total: 0 errors, 18 warnings, 0 checks, 844 lines checked
 
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0013-arm-pci-luofu-host.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0013-arm-pci-luofu-host.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -279,7 +343,7 @@ total: 0 errors, 1 warnings, 0 checks, 45 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0014-arm-crg-reset-polarity.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0014-arm-crg-reset-polarity.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -295,7 +359,7 @@ total: 0 errors, 2 warnings, 0 checks, 715 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0015-net-pie-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0015-net-pie-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -321,7 +385,7 @@ total: 0 errors, 2 warnings, 2 checks, 646 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0016-net-lsw-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0016-net-lsw-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -339,7 +403,7 @@ total: 0 errors, 3 warnings, 0 checks, 436 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0017-soc-luofu-boot-selector.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0017-soc-luofu-boot-selector.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -353,7 +417,7 @@ total: 0 errors, 1 warnings, 0 checks, 189 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0018-arm-mach-hisilicon-smp.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0018-arm-mach-hisilicon-smp.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -375,7 +439,7 @@ total: 0 errors, 2 warnings, 2 checks, 931 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0019-arm-clk-luofu-clock-tree.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0019-arm-clk-luofu-clock-tree.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -391,7 +455,7 @@ total: 0 errors, 2 warnings, 0 checks, 2111 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0020-net-pie-datapath-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0020-net-pie-datapath-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -407,7 +471,7 @@ total: 0 errors, 2 warnings, 0 checks, 1456 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0021-net-lsw-init-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0021-net-lsw-init-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -423,7 +487,7 @@ total: 0 errors, 2 warnings, 0 checks, 1051 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0022-net-lsw-qidmap-write-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0022-net-lsw-qidmap-write-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -435,7 +499,7 @@ total: 0 errors, 1 warnings, 0 checks, 178 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0023-net-gmac-netdev-connect-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0023-net-gmac-netdev-connect-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
@@ -447,14 +511,14 @@ total: 0 errors, 1 warnings, 0 checks, 951 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0024-net-pie-completion-decode-luofu.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0024-net-pie-completion-decode-luofu.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0025-net-lsw-egress-luofu.patch
 total: 0 errors, 0 warnings, 0 checks, 623 lines checked
 
-<series>/series/0025-net-lsw-egress-luofu.patch has no obvious style problems and is ready for submission.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0025-net-lsw-egress-luofu.patch has no obvious style problems and is ready for submission.
 ########## 0026-net-gmac-bdinfo-mac-nvmem.patch
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
 
@@ -463,7 +527,7 @@ total: 0 errors, 1 warnings, 0 checks, 89 lines checked
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.
 
-<series>/series/0026-net-gmac-bdinfo-mac-nvmem.patch has style problems, please review.
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0026-net-gmac-bdinfo-mac-nvmem.patch has style problems, please review.
 
 NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.

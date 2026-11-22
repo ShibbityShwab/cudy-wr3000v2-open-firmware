@@ -359,6 +359,48 @@ the release series (05-release-line.md section 6).
   no reply is held.  Reviewers must be told this explicitly; "clean-room"
   would be inaccurate.
 
+## 2026-11-22 update (supersedes the 2026-11-21 numbers below)
+
+- **PCIe host controller (0013) is hardware-verified [V].**  The 2026-11-22 bench
+  bring-up proved the link failure was board GPIO state, not the PCIe register
+  program: the Hi5622 endpoint only trains when GPIO0 pins 20/21/28 are outputs
+  driven HIGH before training.  With that, the link reaches L0 and both endpoints
+  (59e7:0005) enumerate; the driver's measured register program reads back
+  byte-identically on the stock vendor system.  The upstream form of the board fix
+  is the DTS `wifi-pcie-hog` (the driver keeps a marked hardcoded workaround until
+  the hog alone is boot-tested).  The patch also documents the endpoint's compact
+  7-word iATU layout (no limit_hi, target_lo at +0x10, absolute PCI base/limit) and
+  the optional `acp-gate` binding property.  The patch remains RFC: no MSI/INTx,
+  single-function CFG0 topology only, ACP power-gate is a bring-up workaround, and
+  the binding still needs the mechanical split.
+- **Wi-Fi transport bring-up (evidence, not a driver) [V].**  A separate clean-room
+  PCIe/ETE transport module boots the Wi-Fi chip on the open 6.18 stack (firmware
+  upload 928,920 B with verify diffs=0, CPU released, D2H DEVICE READY, ETE rings
+  and H2D smoke).  This is not part of this kernel series and does not make Wi-Fi
+  supported: there is no mac80211/cfg80211 driver in the series and the vendor
+  radio stack stays closed ([X]).
+- **DTS-0001 numbers updated:** the board DTS gained the enabled PCIe root
+  complexes, the `wifi-pcie-hog` and the identity PCIe `dma-ranges`; DTS-0001 was
+  regenerated from the **release-line-filtered** single source (the release-line-only
+  W23 thermal delta is stripped by tools/dts-upstream-filter.py - decision in
+  `07-dts-upstream-bindings.md` section 8).  Current DTS-0001 sha256
+  `33956380...`, 712 lines (699-line filtered payload); it applies, compiles and
+  is byte-identical to the filtered target DTS.  The compiled target DTB is
+  **12,865 B** sha256 `d8b41ac3...` (pad-dtb 12,872 B); the DTS-0001 DTB is
+  **12,697 B** sha256 `288a5c3f...` (pad 12,704 B).  These supersede the
+  2026-11-21 `886f3ad0...` / 681-line / 12,678-B values below.
+- **Re-validation (host-only, pristine 6.18.60):** 26/26 patch(1)+git am, identical
+  trees, 3 offset hunks, 0 fuzz/0 rejects, **0 errors / 74 checkpatch warnings**
+  (patch 0013 accounts for 18: 17 block-comment-style warnings from the
+  hardware-proven GPIO block + the known binding-split warning); release line 55/55
+  strict-clean; PCIe `dt_binding_check` RC=0 (dtschema 2026.9);
+  `validation/sha256sums.txt` 93 entries (93/93 OK); release-line manifest sha256
+  `925442e0...`.  Detail: `04-validation.md` section 31.  **Hardware caveat:**
+  the 2026-11-22 DTS additions still need one regression boot as a unit.
+
+The 2026-11-21 update below is kept as history apart from the DTS-0001 numbers
+called out above.
+
 ## 2026-11-21 release-line update (release-critical)
 
 - **SMP fix = DTS-only loader hand-off contract, and it is release-critical.**
@@ -372,16 +414,17 @@ the release series (05-release-line.md section 6).
   kernel form is kernel-only, so the board DTS with the two loader hand-off
   nodes ships as
   `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`
-  (sha256 `886f3ad0...`, current final; adds
-  `arch/arm/boot/dts/hisilicon/luofu-r116.dts`, 681 lines).  The DTS is the
+  (2026-11-22 current: sha256 `33956380...`, 712 lines / 699-line filtered
+  payload; adds `arch/arm/boot/dts/hisilicon/luofu-r116.dts`).  The DTS is the
   conservative comment-only cleanup plus five individually boot-tested active
   deltas: TWD level-high, MAC-nvmem removal, switch MMIO-first order,
   cudy-compatible ordering and the flashinfo `hisilicon,luofu-flashinfo` first
   compatible with vendor fallback.  It also carries the stock board_id=3
   LED/keys nodes and the loader hand-off contract.  The DTS series must state
-  the base-DTB 8-byte alignment / `pad-dtb` build requirement (compiled DTB
-  is 12,678 B unaligned sha256 `62574b11...`; `Build/luofu-pad-dtb`
-  pads it to 12,680 B sha256 `8d79794e...` - top-level
+  the base-DTB 8-byte alignment / `pad-dtb` build requirement (current
+  compiled DTB is 12,865 B unaligned sha256 `d8b41ac3...`; `Build/luofu-pad-dtb`
+  pads it to 12,872 B; the 2026-11-21 values were 12,678 B `62574b11...` ->
+  12,680 B `8d79794e...` - top-level
   `docs/TRAILER-FORMAT.md` section 11).  The superseded active cleanup
   caused a hardware regression (image 6f19c6d6; UART log sha256 15dc3188...);
   every later active delta is boot-tested separately (TWD: f6685b80; final

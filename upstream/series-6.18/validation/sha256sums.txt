@@ -1,6 +1,7 @@
 # sha256 of the commit-ready series files and of the source target-skeleton patches.
-# Regenerated on the author host on 2026-11-21 after the release-line cleanup
-# (052/053 regeneration, 042/059/060/061 renumbering to 062-065, DTS-0001).
+# Regenerated on the author host on 2026-11-22 after the hardware GPIO patch-013
+# update, the review-form regeneration (new 0013 message) and the DTS-0001
+# regeneration from the release-line-filtered single-source board DTS.
 # Paths are relative to the series-6.18 directory.  Verify with:
 #   cd opensource/upstream/series-6.18 && sha256sum -c validation/sha256sums.txt
 
@@ -17,7 +18,7 @@ bbb0266e2230d1c7e11ea616cd2f5591e1e3e043f042a62bc0c871f802597ad5  series/0002-ar
 bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8  series/0010-arm-luofu-restart.patch
 872cc563004e20c18266f5f34979cb6e6880e6a2da84fcf436bfc5ffa3179a39  series/0011-pinctrl-luofu.patch
 131ed955ee95e7e513e701337b99a890e57b1bf27f1c9e15db6f9c22622075ea  series/0012-arm-thermal-luofu-tvsensor.patch
-8a8454f73c0c33f1c36e434ed463ac38e3155f79e4f082f2a679c2f53458fe88  series/0013-arm-pci-luofu-host.patch
+667907d6e290c4824eeb5c7b20427923b2ae212024272868253392fd85725561  series/0013-arm-pci-luofu-host.patch
 8a8fba5b9f04e61c759d77a160caf31c32206ed882b97bf51c8882865f93e7eb  series/0014-arm-crg-reset-polarity.patch
 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663  series/0015-net-pie-luofu.patch
 f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28  series/0016-net-lsw-luofu.patch
@@ -33,7 +34,7 @@ d249a83a6da6c945cc7f8f588af1f2f2805467b84be7648aba469ed8f68f233e  series/0021-ne
 099d7253f50c50ad18bce642a2d52fca7af37c9b1c7ac356038eafe3c7aa26df  series/0026-net-gmac-bdinfo-mac-nvmem.patch
 
 ## source tree patches (opensource/target-skeleton/target/linux/hisilicon/patches-6.18/)
-#  001-058 plus the renumbered diagnostics 062-065 (62 files; no duplicate numbers)
+# 66 patches: the full lab patch stack (L0)
 996bf896e6191d24e6b1e8e4456112e7ce985963e1d40cf37cb5ff8f10688d1d  ../../target-skeleton/target/linux/hisilicon/patches-6.18/001-arm-mach-hisilicon-luofu.patch
 278bb1a01427b31dc79d02b534e4cc4fae9e418698dad16afeea26a40af95796  ../../target-skeleton/target/linux/hisilicon/patches-6.18/002-arm-kconfig-textofs.patch
 407352b8aced76da6c6f1fcef53c77bca0221473515c144126cbe3358e707f5c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/003-arm-textofs-nonimmediate.patch
@@ -46,7 +47,7 @@ dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb  ../../target-s
 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095  ../../target-skeleton/target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch
 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442  ../../target-skeleton/target/linux/hisilicon/patches-6.18/011-pinctrl-luofu.patch
 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f  ../../target-skeleton/target/linux/hisilicon/patches-6.18/012-arm-thermal-luofu-tvsensor.patch
-73c413dda1463842aa4bfda63879147894930c64ef6e6909b7914110c9d01202  ../../target-skeleton/target/linux/hisilicon/patches-6.18/013-arm-pci-luofu-host.patch
+2a43c9533aadb45117abe5eebb0d49248b9ac349b47cdc1c808208b22b40559c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/013-arm-pci-luofu-host.patch
 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227  ../../target-skeleton/target/linux/hisilicon/patches-6.18/014-arm-crg-reset-polarity.patch
 fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2  ../../target-skeleton/target/linux/hisilicon/patches-6.18/015-net-pie-luofu.patch
 c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch
@@ -92,13 +93,17 @@ d4f816ffedb117cbade0949910774f8f07ed6bf6c6a2ed82a7b731fa6db3f0e0  ../../target-s
 eae38ae30942a252cdc6c3dd25f02b9908c43bd8c864163877cee8581d172721  ../../target-skeleton/target/linux/hisilicon/patches-6.18/056-net-lsw-mirror-postlink-w19.patch
 290d3b9cd0139a22d3ca1b6c138ca7f2279bd6eec779a9b51837fbfebe916b77  ../../target-skeleton/target/linux/hisilicon/patches-6.18/057-net-pie-cpucopy-w20.patch
 44b52458628b54f9ef86fd0ff1d3b5bd70c936e3d48801d6f47d21d099ac0e35  ../../target-skeleton/target/linux/hisilicon/patches-6.18/058-net-luofu-canonical-bench-config.patch
+cfd7debc3908e0b52785afd5ffac979c8c5e03538b3f98dccbf54738fa98152f  ../../target-skeleton/target/linux/hisilicon/patches-6.18/059-net-lsw-napt-init.patch
+8c748061fe0577cea471534f209e68258bc707d45746c25d4f40409f6eeb1bd3  ../../target-skeleton/target/linux/hisilicon/patches-6.18/060-net-pie-exception-delivery.patch
 dc8511edb95e4b788fc1c7d7934a23c6eb9e9160d4b538ef40333db550fa673a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/062-arm-hisilicon-smp-scu-gic.patch
 e85283166521d11bcf0ffbb3c7a163b734fe46b2bc3a1593911040fcc593bf52  ../../target-skeleton/target/linux/hisilicon/patches-6.18/063-arm-luofu-cpu1-up-trigger.patch
 e1d9dc5f6c1e64dcd473c26b6824e7c60822e18e424781388a03b82bcfa53938  ../../target-skeleton/target/linux/hisilicon/patches-6.18/064-arm-hisilicon-smp-handoff-probe.patch
 5e254fe4cea0b64d47aa0fc3c4ddf7c82f935b76d92fd8f311ba9b219b52ddd8  ../../target-skeleton/target/linux/hisilicon/patches-6.18/065-arm-hisilicon-smp-trampoline.patch
+c2a4697559a22fe3c3867b58b85382f95c3dd2b04a987a1c698174696c3253cc  ../../target-skeleton/target/linux/hisilicon/patches-6.18/066-thermal-luofu-tvsensor-w23.patch
+197bb74aad60a4d8caacc22dacc91399a8dc967c28d6b8a5ef98a4727ef7ee9c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/067-dt-bindings-thermal-luofu-tvsensor-w23.patch
 
 ## upstream DTS series entry (DTS-0001; companion to the kernel patch 0018)
-886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
+33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
 
 ## kernel tarball used for validation (not stored in this repo)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

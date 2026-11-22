@@ -14,9 +14,9 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `886f3ad095fc075cdf746cb0372eaf28c912fef91592f2885a739a7211bdf74c` (current final 2026-11-21: conservative comment-only cleanup + five individually boot-tested active deltas: TWD level-high, MAC-nvmem removal, switch MMIO-first order, cudy-compatible ordering, flashinfo compatible-first; previous sha `c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
+| sha256 | `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa` (current final 2026-11-22: the 2026-11-21 board DTS content above **plus** the 2026-11-22 additions - enabled PCIe root complexes, the `wifi-pcie-hog` for GPIO0 20/21/28, the identity PCIe `dma-ranges` - with the release-line-only W23 thermal delta removed by `tools/dts-upstream-filter.py`; previous sha `886f3ad0...`, and before that `c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**681 lines**, byte-identical to the current single-source target DTS: conservative cleanup + four boot-tested active deltas; includes the board buttons/LEDs, the loader hand-off contract and the final board deltas) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**699 lines**, byte-identical to the current single-source target DTS after the release-line W23 filter: 2026-11-21 board features + buttons/LEDs + loader hand-off contract + the 2026-11-22 PCIe/GPIO-hog/dma-ranges additions) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
 | status | **DRAFT DTS SERIES ENTRY** - the board DTS is hardware-verified: the conservative prose-only step compiled byte-identically to the known-good DTB, and all five active deltas were individually boot-tested (images f6685b80, c3ef2a50 and 6e9c54d0; the 6e9c54d0 boot-test closed the flashinfo loader binding).  **Zero upstream blockers remain**; the remaining in-series driver/YAML review items are normal RFC submission content.  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
 
 The two nodes that make this entry release-critical for SMP:
@@ -94,6 +94,19 @@ supported way to refresh DTS-0001 after a board-DTS change.  The validator
 enforces the single-source rule: the DTS added by DTS-0001 must compare
 byte-identical to the target DTS.
 
+**Release-line filter (2026-11-22).**  The single-source DTS is also the
+release-line DTS, so it carries release-line-only content.  The current case is
+the W23 thermal delta (target patches 066/067: `reg = <0x14900500 0x408>` plus
+hwver/trim/int-base-offset/addition-en/efuse-trim-en/`hisilicon,threshold-mc`).
+The in-series thermal binding (patch 0012) documents only a 0x100-byte window
+with `unevaluatedProperties: false`, so the W23 properties are not reviewable
+in the L2 form.  `tools/dts-upstream-filter.py` is the single definition of
+that release-line -> upstream DTS delta; `gen-dts-series-patch.py` applies it
+(fails closed if the expected block is not found exactly once) and
+`check-release-line.sh` compares DTS-0001 against the filtered target and fails
+if W23 properties leak in.  Decision recorded in `07-dts-upstream-bindings.md`
+section 8.
+
 ### 3.1 Base-DTB padding is part of the DTS/image contract (pad-dtb)
 
 The stock U-Boot bootfip reads the overlay-container gate word as a 32-bit
@@ -105,14 +118,18 @@ pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
 `append-dtb`: it pads to an 8-byte boundary, folds the padding into the
 FDT totalsize, and asserts `len(dtb) == totalsize` and
 `totalsize % 8 == 0`, so an unaligned blob cannot reach a trailer again.
-For the current DTS the measured sizes are **12,678 B -> 12,680 B** (compiled
-DTB sha256 `62574b11...`, pad sha256 `8d79794e...`; the conservative
-step was byte-identical to the pre-clean DTB `49fe5c47...`, and the five
-active deltas were boot-tested as images f6685b80 (TWD), c3ef2a50 (MAC
-provisioning, switch order, compatible order) and 6e9c54d0 (flashinfo
-compatible-first)); the cleanup record, the hardware regression of the
-superseded active cleanup, the boot-tests and the zero-blocker status are in
-`07-dts-upstream-bindings.md`.
+For the current (2026-11-22) DTS the measured sizes are **12,865 B -> 12,872 B**
+(target DTB sha256 `d8b41ac3...`) and **12,697 B -> 12,704 B** for the filtered
+DTS-0001 payload (sha256 `288a5c3f...`).  The 2026-11-21 values were
+**12,678 B -> 12,680 B** (DTB sha256 `62574b11...`, pad sha256 `8d79794e...`);
+the conservative step was byte-identical to the pre-clean DTB `49fe5c47...`,
+and the five 2026-11-21 active deltas were boot-tested as images f6685b80 (TWD),
+c3ef2a50 (MAC provisioning, switch order, compatible order) and 6e9c54d0
+(flashinfo compatible-first).  The 2026-11-22 DTS additions (PCIe enablement,
+GPIO hog, dma-ranges) are hardware-derived but the DTB carrying them has not yet
+been re-flashed and boot-tested as a unit.  The cleanup record, the hardware
+regression of the superseded active cleanup, the boot-tests and the zero-blocker
+status are in `07-dts-upstream-bindings.md`.
 
 The full measurement and rationale are in
 `../../docs/TRAILER-FORMAT.md` **section 11** ("Base-DTB totalsize must be
@@ -128,15 +145,30 @@ The validator now performs the DTS-0001 checks after the release-line and
 target-DTS checks:
 
 1. apply DTS-0001 to the L1-patched pristine tree: RC=0;
-2. `cmp` the added board DTS against the target DTS: byte-identical;
+2. `cmp` the added board DTS against the **release-line-filtered** target DTS
+   (`tools/dts-upstream-filter.py`): byte-identical, and fail if any W23
+   release-line marker leaked into the entry;
 3. `cpp` + `dtc` the added DTS: RC=0, stderr 0/0 bytes;
 4. `fdtget` the two hand-off nodes and the CPU enable-method:
    `console = /serial@1010f000`, `compatible = "hsan,flashinfo_reserved"`,
    `reg = 80600000 4000`, `atag-offset = 1000`,
    `enable-method = "hisilicon,luofu-smp"`.
 
-2026-11-21 result (after the 052/053 + numbering cleanup and the board
-feature refresh):
+**2026-11-22 result (current):** L1 release line 55/55 patch(1) RC=0, 3 offset
+hunks, 0 fuzz, 0 rejects, strict `git apply` 55/55; target board DTS compiles
+(cpp+dtc RC=0, 0 stderr, DTB **12,865 B** sha256 `d8b41ac3...`, unaligned ->
+pad **12,872 B**); **DTS-0001** (sha256 `33956380...`, 712 lines, 699-line
+filtered payload) applies RC=0, is byte-identical to the filtered target DTS
+(W23 delta stripped by the filter), compiles (DTB **12,697 B** sha256
+`288a5c3f...`, pad **12,704 B**) and passes the same hand-off contract checks;
+release-line manifest sha256 `925442e0...` (row 013 refreshed); logs
+`validation/release-line/` refreshed, `validation/sha256sums.txt` 93/93 OK.
+The L2 review form re-ran 26/26, identical trees, 0 errors / 74 checkpatch
+warnings, and the PCIe binding `dt_binding_check` is RC=0 (see
+`04-validation.md` section 31).
+
+2026-11-21 result (kept as history; after the 052/053 + numbering cleanup and
+the board feature refresh):
 
 - L1 release line: 51/51 patch(1) RC=0, 3 offset hunks, **0 fuzz**, 0
   rejects; strict `git apply`: **all 51 patches apply without fuzz**;
@@ -174,6 +206,8 @@ run for this validation.
 - release line: `05-release-line.md`, `release-line/manifest.tsv`;
 - validation: `validation/release-line/summary.txt` and
   `tools/check-release-line.sh`;
+- release-line -> upstream DTS filter: `tools/dts-upstream-filter.py`
+  (single definition; W23 thermal delta) and `tools/gen-dts-series-patch.py`;
 - base-DTB padding measurement and image-build requirement:
   `../../docs/TRAILER-FORMAT.md` section 11, `target-skeleton/tools/pad-dtb.py`,
   `Build/luofu-pad-dtb` in `target-skeleton/target/linux/hisilicon/image/luofu.mk`;
