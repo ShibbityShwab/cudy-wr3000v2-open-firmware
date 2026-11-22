@@ -368,18 +368,24 @@ int pciet_prepare_windows(struct hi5622_pci *ctx)
 	u32 i, blk, val, exp;
 	int all_ok = 1;
 
+	/* iATU base/limit are ABSOLUTE PCI bus addresses (phase18-verified):
+	 * the endpoint translates the incoming BAR0 address range, so the
+	 * window values must include the BAR0 resource start. */
+	u64 bar0 = pci_resource_start(ctx->pdev, HI5622_BAR_MEM_WIN);
+
 	for (i = 0; i < ARRAY_SIZE(hi5622_regions); i++) {
 		const struct hi5622_inbound_region *r = &hi5622_regions[i];
+		u64 lo = bar0 + r->bar_base;
+		u64 lim = bar0 + r->bar_limit;
 
 		blk = HI5622_IATU_VP0_OFF + HI5622_IATU_VP_STRIDE * i;
 
 		writel(0, iatu + blk + IATU_VP_CTRL2);
 		writel(IATU_VP_CTRL2_ENA | IATU_VP_CTRL2_BAR(HI5622_BAR_MEM_WIN),
 		       iatu + blk + IATU_VP_CTRL2);
-		writel(r->bar_base, iatu + blk + IATU_VP_BASE_LO);
-		writel(0, iatu + blk + IATU_VP_BASE_HI);
-		writel(r->bar_limit, iatu + blk + IATU_VP_LIMIT_LO);
-		writel(0, iatu + blk + IATU_VP_LIMIT_HI);
+		writel((u32)lo, iatu + blk + IATU_VP_BASE_LO);
+		writel((u32)(lo >> 32), iatu + blk + IATU_VP_BASE_HI);
+		writel((u32)lim, iatu + blk + IATU_VP_LIMIT_LO);
 		writel(r->ca_target, iatu + blk + IATU_VP_TARGET_LO);
 		writel(0, iatu + blk + IATU_VP_TARGET_HI);
 	}
@@ -393,8 +399,10 @@ int pciet_prepare_windows(struct hi5622_pci *ctx)
 		val = readl(iatu + blk + IATU_VP_CTRL2);
 		exp = IATU_VP_CTRL2_ENA | IATU_VP_CTRL2_BAR(HI5622_BAR_MEM_WIN);
 		ok &= (val == exp);
-		ok &= (readl(iatu + blk + IATU_VP_BASE_LO) == r->bar_base);
-		ok &= (readl(iatu + blk + IATU_VP_LIMIT_LO) == r->bar_limit);
+		ok &= (readl(iatu + blk + IATU_VP_BASE_LO) ==
+		       (u32)(bar0 + r->bar_base));
+		ok &= (readl(iatu + blk + IATU_VP_LIMIT_LO) ==
+		       (u32)(bar0 + r->bar_limit));
 		ok &= (readl(iatu + blk + IATU_VP_TARGET_LO) == r->ca_target);
 
 		dev_info(&ctx->pdev->dev,
@@ -439,9 +447,15 @@ static int pciet_poll_thread(void *data)
 {
 	struct hi5622_pci *ctx = data;
 
+	/* Bench-verified 2026-11-22: the device posts DEVICE READY about 3 s
+	 * after the CPU release, and hammering the mailbox/drain registers
+	 * while the chip is still booting can disturb the boot.  Latch the
+	 * first scan 2 s late - messages persist in the bitmap until drained,
+	 * so nothing is lost. */
+	msleep_interruptible(2000);
 	while (!kthread_should_stop()) {
 		pciet_d2h_scan(ctx);
-		msleep_interruptible(poll_ms ?: 1);
+		msleep_interruptible(poll_ms ?: 50);
 	}
 	return 0;
 }
@@ -549,16 +563,17 @@ static ssize_t announce_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_WO(announce);
 
-/* Read back the first 256 B at the BAR0+0x40000 firmware alias and compare
- * against the blob (phase17/18 verification discipline, [V*]). */
+/* Verify the uploaded firmware at the TARGET window (BAR0+0x6f8000),
+ * word-by-word over the whole blob - the phase18-verified readback point
+ * (their log: "verify target BAR0+0x6f8000: diffs=0").  The BAR0+0x40000
+ * alias is a separate map and is only useful once the device is running. */
 static ssize_t verify_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
 	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
 	const struct firmware *fw;
-	u32 rd[64], ex[64];
-	int ret, i, n;
-	bool match;
+	size_t off, diffs = 0;
+	int ret;
 
 	if (!ctx->fw_loaded) {
 		dev_err(dev, "verify: upload first\n");
@@ -568,15 +583,18 @@ static ssize_t verify_store(struct device *dev, struct device_attribute *attr,
 	if (ret)
 		return ret;
 
-	n = min_t(size_t, fw->size, sizeof(rd));
-	memcpy(ex, fw->data, n);
-	for (i = 0; i < (int)ARRAY_SIZE(rd) && i * 4 < n; i++)
-		rd[i] = readl(ctx->bar0 + HI5622_BAR0_FW_ALIAS + i * 4);
-	match = memcmp(ex, rd, n) == 0;
-	dev_info(dev, "firmware alias verify (%d B at BAR0+0x%x): %s\n",
-		 n, HI5622_BAR0_FW_ALIAS, match ? "MATCH" : "MISMATCH");
+	for (off = 0; off + 4 <= fw->size; off += 4) {
+		u32 exp = le32_to_cpup((const __le32 *)(fw->data + off));
+		u32 got = readl(ctx->bar0 + HI5622_BAR0_FW_TARGET + off);
+
+		if (exp != got)
+			diffs++;
+	}
+	dev_info(dev, "firmware verify target BAR0+0x%x: file=%zu bytes diffs=%zu match=%s\n",
+		 HI5622_BAR0_FW_TARGET, fw->size, diffs,
+		 diffs ? "NO" : "YES");
 	release_firmware(fw);
-	return match ? count : -EIO;
+	return diffs ? -EIO : count;
 }
 static DEVICE_ATTR_WO(verify);
 
@@ -671,6 +689,7 @@ static int pciet_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ret = pcim_enable_device(pdev);
 	if (ret)
 		return dev_err_probe(dev, ret, "pcim_enable_device\n");
+	pci_set_master(pdev);
 
 	/* BAR0 = 16 MiB six-region window; BAR2 = 16 KiB endpoint iATU.
 	 * BAR4 (8 MiB) is not mapped: its role is [U]. */
@@ -725,6 +744,12 @@ static int pciet_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (poll_ms)
 		pciet_poll_start(ctx);
 
+	/* Driver-core dev_groups did not materialise on this kernel; create
+	 * the attribute groups explicitly so the attended sysfs steps exist. */
+	ret = device_add_groups(dev, pciet_groups);
+	if (ret)
+		dev_warn(dev, "device_add_groups: %d\n", ret);
+
 	dev_info(dev,
 		 "%s: endpoint %s BAR0 0x%pap BAR2 0x%pap; "
 		 "no device writes performed - attended steps via sysfs\n",
@@ -742,6 +767,7 @@ static void pciet_remove(struct pci_dev *pdev)
 {
 	struct hi5622_pci *ctx = pci_get_drvdata(pdev);
 
+	device_remove_groups(&pdev->dev, pciet_groups);
 	pciet_poll_stop(ctx);
 	pciet_ete_ring_free(ctx, &ctx->dr0);
 	pciet_ete_ring_free(ctx, &ctx->sr0);
