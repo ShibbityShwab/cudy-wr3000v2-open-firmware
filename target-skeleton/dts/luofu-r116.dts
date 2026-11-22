@@ -639,6 +639,10 @@
 		      <0x50000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
 		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>;
+		/* Device-to-host DMA: the RC inbound iATU viewport is programmed by
+		 * the DWC framework from this (device DMA addresses 0x8xxxxxxx map
+		 * to host DRAM 0x80000000..0x8fffffff).  Required by the ETE rings. */
+		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x10000000>;
 		bus-range = <0 0xa>;
 		interrupts = <0 0x3b 4>,
 			     <0 0x45 4>;
@@ -670,6 +674,7 @@
 		      <0x68000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
 		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>;
+		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x10000000>;
 		bus-range = <0 0xa>;
 		interrupts = <0 0x3f 4>,
 			     <0 0x46 4>;
