@@ -12,11 +12,13 @@ points, not a release change (no new image is claimed here):
 
 - **PCIe works on the 6.18 kernel [V].**  The link never trained because GPIO0
   pins 20/21/28 - the Wi-Fi endpoint's board power/reset controls - were left as
-  inputs.  They must be outputs driven HIGH before training; with that fix in the
-  `pcie-luofu` `host_init` the link reaches L0 and both Hi5622 endpoints
-  (59e7:0005) enumerate.  The submission form is the `wifi-pcie-hog` now in
-  [dts/luofu-r116.dts](dts/luofu-r116.dts); the hardcoded driver workaround must be
-  removed after one boot test proves the hog alone.
+  inputs.  They must be outputs driven HIGH before training; with that fix the link
+  reaches L0 and both Hi5622 endpoints (59e7:0005) enumerate.  The pins are board
+  data, described by the `wifi-pcie-hog` now in
+  [dts/luofu-r116.dts](dts/luofu-r116.dts).  **W27b proved the hog alone suffices**
+  (image sha256 `4af1d1fa...`: both RC links trained, both endpoints enumerated,
+  GPIO0 DDR/DATA = 0x1330000f with no board-GPIO code in patch 013), so the
+  hardcoded driver workaround was removed.
 - **Wi-Fi transport bring-up works [V]; there is still no Wi-Fi driver.**  The
   clean-room `hi5622_pciet` module boots the chip (firmware upload verify
   diffs=0, CPU released, D2H DEVICE READY id 2) and stage B2 passed on image
@@ -26,12 +28,13 @@ points, not a release change (no new image is claimed here):
   vendor driver only [X]" row is unchanged for *support* purposes - the transport
   is readiness evidence, not a driver.
 
-The definitive per-item upstream checklist (2 DONE / 20 PARTIAL / 5 BLOCKED) and the
+The definitive per-item upstream checklist (5 DONE / 17 PARTIAL / 5 BLOCKED) and the
 proposed target+DTS-first submission split are in
 [../docs/upstream/SUBMISSION-STATUS.md](../docs/upstream/SUBMISSION-STATUS.md).
 The generated review-form artefacts (`series/0013`, MANIFEST, validation logs,
-DTS-0001) are stale after the 2026-11-22 patch-013/DTS edits and must be regenerated
-before anything is posted.
+DTS-0001) were **regenerated and re-validated** against the final patch 013 and PASS
+(`gen-series.py --check` clean; release line 55/55 strict; review form 0 errors /
+73 warnings; `dt_binding_check` RC=0).
 
 ## Verified baselines
 

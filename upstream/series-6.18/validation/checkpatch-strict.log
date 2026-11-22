@@ -257,76 +257,72 @@ NOTE: If any of the errors are false positives, please report
       them to the maintainer, see CHECKPATCH in MAINTAINERS.
 ########## 0013-arm-pci-luofu-host.patch
 WARNING: Block comments use a trailing */ on a separate line
-#211: FILE: drivers/pci/controller/dwc/pcie-luofu.c:121:
+#209: FILE: drivers/pci/controller/dwc/pcie-luofu.c:121:
 + * is written (pcie-seq-re 2026-11-22). */
 
 WARNING: Block comments use a trailing */ on a separate line
-#337: FILE: drivers/pci/controller/dwc/pcie-luofu.c:247:
+#335: FILE: drivers/pci/controller/dwc/pcie-luofu.c:247:
 +	 * configuration request without a link may SError this SoC. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#402: FILE: drivers/pci/controller/dwc/pcie-luofu.c:312:
-+	 * be deleted once the hog has been bench-tested. */
+#396: FILE: drivers/pci/controller/dwc/pcie-luofu.c:308:
++	 * board GPIO poking belongs in this driver. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#412: FILE: drivers/pci/controller/dwc/pcie-luofu.c:322:
-+			 * trains; the vendor kernel drives 20,21,28 = 1,1,1). */
+#400: FILE: drivers/pci/controller/dwc/pcie-luofu.c:312:
++	 * boot; this early probe needs an explicit settle time). */
 
 WARNING: Block comments use a trailing */ on a separate line
-#425: FILE: drivers/pci/controller/dwc/pcie-luofu.c:335:
-+	 * this early probe needs an explicit settle time). */
-
-WARNING: Block comments use a trailing */ on a separate line
-#439: FILE: drivers/pci/controller/dwc/pcie-luofu.c:349:
+#414: FILE: drivers/pci/controller/dwc/pcie-luofu.c:326:
 +	 * mode value is 4<<28 = 0x40000000, matching this write). */
 
 WARNING: Block comments use a trailing */ on a separate line
-#452: FILE: drivers/pci/controller/dwc/pcie-luofu.c:362:
+#427: FILE: drivers/pci/controller/dwc/pcie-luofu.c:339:
 +	 * DBI writes. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#470: FILE: drivers/pci/controller/dwc/pcie-luofu.c:380:
+#445: FILE: drivers/pci/controller/dwc/pcie-luofu.c:357:
 +	 * request hit the live link machine. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#505: FILE: drivers/pci/controller/dwc/pcie-luofu.c:415:
+#480: FILE: drivers/pci/controller/dwc/pcie-luofu.c:392:
 +	 * mask, gate clear). */
 
 WARNING: Block comments use a trailing */ on a separate line
-#516: FILE: drivers/pci/controller/dwc/pcie-luofu.c:426:
+#491: FILE: drivers/pci/controller/dwc/pcie-luofu.c:403:
 +	 * 0x80c = 0x12c) and the header words zeroed. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#524: FILE: drivers/pci/controller/dwc/pcie-luofu.c:434:
+#499: FILE: drivers/pci/controller/dwc/pcie-luofu.c:411:
 +	 * SET during training instead of clearing it. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#527: FILE: drivers/pci/controller/dwc/pcie-luofu.c:437:
+#502: FILE: drivers/pci/controller/dwc/pcie-luofu.c:414:
 +	 * one wrapper register we cannot read back; re-writing it is free). */
 
 WARNING: Block comments use a trailing */ on a separate line
-#532: FILE: drivers/pci/controller/dwc/pcie-luofu.c:442:
+#507: FILE: drivers/pci/controller/dwc/pcie-luofu.c:419:
 +	 * the resets have fully settled. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#540: FILE: drivers/pci/controller/dwc/pcie-luofu.c:450:
+#515: FILE: drivers/pci/controller/dwc/pcie-luofu.c:427:
 +	 * re-kick the LTSSM enable once after a short delay. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#589: FILE: drivers/pci/controller/dwc/pcie-luofu.c:499:
+#564: FILE: drivers/pci/controller/dwc/pcie-luofu.c:476:
 +	 * Gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#663: FILE: drivers/pci/controller/dwc/pcie-luofu.c:573:
+#638: FILE: drivers/pci/controller/dwc/pcie-luofu.c:550:
 +	 * bring-up workaround, not a modelled ACP power domain. */
 
 WARNING: Block comments use a trailing */ on a separate line
-#704: FILE: drivers/pci/controller/dwc/pcie-luofu.c:614:
+#679: FILE: drivers/pci/controller/dwc/pcie-luofu.c:591:
 +	 * settle, then deassert in the vendor order with longer settles. */
 
 WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
 
-total: 0 errors, 18 warnings, 0 checks, 844 lines checked
+total: 0 errors, 17 warnings, 0 checks, 821 lines checked
 
 NOTE: For some of the reported defects, checkpatch may be able to
       mechanically convert to the typical style using --fix or --fix-inplace.

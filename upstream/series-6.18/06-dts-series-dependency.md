@@ -161,11 +161,12 @@ pad **12,872 B**); **DTS-0001** (sha256 `33956380...`, 712 lines, 699-line
 filtered payload) applies RC=0, is byte-identical to the filtered target DTS
 (W23 delta stripped by the filter), compiles (DTB **12,697 B** sha256
 `288a5c3f...`, pad **12,704 B**) and passes the same hand-off contract checks;
-release-line manifest sha256 `925442e0...` (row 013 refreshed); logs
-`validation/release-line/` refreshed, `validation/sha256sums.txt` 93/93 OK.
-The L2 review form re-ran 26/26, identical trees, 0 errors / 74 checkpatch
-warnings, and the PCIe binding `dt_binding_check` is RC=0 (see
-`04-validation.md` section 31).
+release-line manifest sha256 `98931166...` (row 013 refreshed for the final
+patch 013); logs `validation/release-line/` refreshed, `validation/sha256sums.txt`
+93/93 OK.  The L2 review form re-ran 26/26, identical trees, 0 errors / **73**
+checkpatch warnings (patch 0013 alone: 0/17), and the PCIe binding
+`dt_binding_check` is RC=0 (see `04-validation.md` section 32).  The board DTS did
+not change in the final pass, so DTS-0001 is unchanged.
 
 2026-11-21 result (kept as history; after the 052/053 + numbering cleanup and
 the board feature refresh):

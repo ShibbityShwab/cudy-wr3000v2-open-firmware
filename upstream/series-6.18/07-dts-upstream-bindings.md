@@ -185,13 +185,15 @@ unchanged.  DTS-0001 is regenerated from the release-line-filtered source:
 sha256 `33956380...`, 712 lines (699-line filtered payload), byte-identical to
 the filtered target DTS, DTB **12,697 B** sha256 `288a5c3f...`, pad **12,704 B**.
 The review form re-ran 26/26 patch(1)+git am with identical trees, 0 errors /
-**74** warnings (the +16 vs 2026-11-21 are patch 0013's own comment-style
-warnings from the bench-proven GPIO block plus the known binding-split warning);
-`gen-series.py --check` clean; `validation/sha256sums.txt` 93 entries
-(`sha256sum -c` 93/93); release-line manifest 55 include / 11 exclude, sha256
-`925442e0...`; PCIe `dt_binding_check` RC=0.  The 2026-11-22 DTS additions are
-hardware-derived but the DTB carrying them has not yet been boot-tested as a
-unit (section 8).  Detail: `04-validation.md` section 31.
+**73** warnings (patch 0013 alone: 0/17 - the block-comment-style warnings of the
+hardware evidence plus the known binding-split warning); `gen-series.py --check`
+clean; `validation/sha256sums.txt` 93 entries (`sha256sum -c` 93/93);
+release-line manifest 55 include / 11 exclude, sha256 `98931166...`; PCIe
+`dt_binding_check` RC=0 (dtschema 2026.9).  **The 2026-11-22 DTS additions are now
+boot-tested as a unit:** image W27b (sha256 `4af1d1fa...`), built from this DTS
+with patch 013 containing no board-GPIO code, boots with both RC links up and both
+endpoints enumerated (GPIO0 DDR/DATA = 0x1330000f), so the `wifi-pcie-hog` alone
+is the board fix.  Detail: `04-validation.md` section 32.
 
 The 2026-11-21 record follows (kept as history):
 
@@ -366,9 +368,11 @@ has not been re-flashed).
    matches current mainline `snps,dw-apb-gpio.yaml` (`^.+-hog(-[0-9]+)?$` child
    pattern, added after the v6.18 tag), so validation must use submission-time
    mainline bindings; a `dtbs_check` against v6.18 bindings would flag the child
-   (the v6.18 binding keeps `additionalProperties: false` on port nodes).  The
-   pcie-luofu driver keeps a marked hardcoded workaround until a boot test proves
-   the hog alone.
+   (the v6.18 binding keeps `additionalProperties: false` on port nodes).
+   **Hardware-proven alone:** image W27b (sha256 `4af1d1fa...`) built from this DTS
+   with patch 013 carrying no board-GPIO code trains both RC links and enumerates
+   both endpoints, so the hardcoded driver workaround was removed (commit
+   `ad711d1`).
 3. **Identity PCIe `dma-ranges`** (commit 5a6a500, content from the lead): the
    Wi-Fi transport stage-B2 prerequisite; hardware-validated on bench image W26a
    (the DWC framework programmed RC inbound vp0 0x80000000..0x8fffffff and the

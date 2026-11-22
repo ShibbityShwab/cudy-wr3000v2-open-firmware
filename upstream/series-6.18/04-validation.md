@@ -1496,3 +1496,50 @@ and `sha256sum -c` passes 93/93.  Hardware note: patch 013 is now hardware-prove
 (link trains, both endpoints enumerate); the 2026-11-22 DTS additions still need one
 regression boot as a unit, and the hog-only path (without the hardcoded driver block)
 has not been boot-tested yet.
+
+## Section 32 - 2026-11-22 final re-validation: patch 013 workaround removal (W27b) and submission-notes restore
+
+After Section 31, the bench produced the **W27b hog-only proof** (image sha256
+`4af1d1fa...`): an image built from the board DTS (`wifi-pcie-hog` on `&porta`) and
+patch 013 containing **no board-GPIO code at all** boots with both RC links trained
+(LTSSM 0x11), both endpoints enumerated and GPIO0 DDR/DATA = 0x1330000f - the devicetree
+hog alone drives pins 20/21/28.  The hardcoded driver workaround was therefore removed
+(commit `ad711d1`) and the submission-facing documentation of patch 013 was restored on
+top of that: hardware-verified header, compact 7-word / absolute-address endpoint-iATU
+note, dma-ranges inbound note, corrected `start_link` comment and the documented optional
+`acp-gate` binding property.  The restoration changes comments + binding text only: after
+stripping C comments the driver code is identical to `ad711d1`; the board-GPIO block is
+gone, not re-added.  The 0013 commit message was rewritten to record the W25d/W26a/W27b
+hardware bring-up and that the board pins are DTS data.
+
+Final re-validation (host-only, pristine linux-6.18.60, no kernel/OpenWrt build):
+
+- review form: 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, **0 fuzz,
+  0 rejects**; `checkpatch.pl --no-tree` default and `--strict`: **0 errors / 73
+  warnings**; patch 0013 alone: 0 errors, **17 warnings**, 821 lines checked;
+- `series/0013-arm-pci-luofu-host.patch` sha256
+  `45c47afd6fd83e5d8b5c5861f0715ec82a135c46c5058907668fb33ab53ada34`;
+  `commit-messages/0013-arm-pci-luofu-host.txt` sha256
+  `0d42436d37c7797712c292ef52437b5bb41dc240bd2fe96aa3c068564bdd72dc`;
+  `gen-series.py --check` clean (26 patches);
+- release line: 55/55 include patches, 152 file events, 3 offset hunks, **0 fuzz, 0
+  rejects**, strict `git apply` 55/55; target board DTS compiles (cpp+dtc RC=0, 0 stderr)
+  to DTB **12,865 B** sha256 `d8b41ac3...` (pad **12,872 B**), loader hand-off contract
+  present;
+- **DTS-0001** (unchanged by this pass: the board DTS did not change) sha256
+  `33956380...` applies, its DTS is byte-identical to the release-line-filtered target
+  DTS, compiles to DTB **12,697 B** sha256 `288a5c3f...` (pad **12,704 B**), contract
+  present;
+- `dt_binding_check` for the final PCIe binding (patch 0013 YAML, dtschema 2026.9):
+  **RC=0**, 0 schema errors (yamllint step skipped); log
+  `validation/dt-binding-check.log`;
+- release-line `manifest.tsv` sha256
+  `9893116668b68d7f8bd3b52b9f3b9e7b2e2ac9e4e2a9be56e9b5e6cff45821fe`;
+  `validation/sha256sums.txt` regenerated (93 entries; `sha256sum -c` 93/93 OK);
+  `submission/MANIFEST.sha256` regenerated (105 entries; verifies inside
+  `submission/`); `validation/` and `validation/release-line/` logs refreshed from this
+  run.
+
+Hardware status after this pass: patch 013 is hardware-proven **without** any board-GPIO
+driver code, and the 2026-11-22 board-DTS additions are boot-tested as a unit (W27b,
+image sha256 `4af1d1fa...`).

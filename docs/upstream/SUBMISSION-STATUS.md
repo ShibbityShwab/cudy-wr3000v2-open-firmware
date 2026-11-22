@@ -28,13 +28,17 @@ named artefact, **[I]** inferred, **[U]** unmeasured, **[X]** blocked/excluded.
   `target/linux/hisilicon` tree itself has **never been built/booted as an OpenWrt
   target image from this copy** - bench images were assembled by the slice toolchain.
 - **Kernel review form:** 26 patches + the DTS series entry (DTS-0001) are a
-  reviewable draft: last full host validation 2026-11-21 (26/26 apply, 0 errors /
-  58 checkpatch warnings).  **Never posted upstream; no subsystem maintainer has
+  reviewable draft: final host validation 2026-11-22 (26/26 apply, identical trees,
+  0 errors / **73** checkpatch warnings; patch 0013 alone 0/17; PCIe binding
+  `dt_binding_check` RC=0).  **Never posted upstream; no subsystem maintainer has
   seen it.**
 - **NEW 2026-11-22 - PCIe bring-up is solved on the 6.18 kernel [V].**  The link
   failure was board GPIO state, not a missing PCIe register program: GPIO0 pins
-  20/21/28 must be outputs driven HIGH before training.  With that fix the link
-  trains (LTSSM L0) and **both Hi5622 endpoints enumerate** on our kernel.
+  20/21/28 must be outputs driven HIGH before training.  Bench images W25d/W26a
+  train the link (LTSSM L0) and **both Hi5622 endpoints enumerate**; **W27b**
+  (image sha256 `4af1d1fa...`) then proved the DTS `wifi-pcie-hog` alone drives
+  the pins - patch 013 contains **no board-GPIO code** (workaround removed, commit
+  `ad711d1`).
 - **NEW 2026-11-22 - Wi-Fi transport bring-up works [V].**  The clean-room
   `hi5622_pciet` transport module passes the stage-B1 gate: firmware upload
   928,920 B with **verify diffs=0**, CPU released (0x5a5a), D2H announce (0xcece),
@@ -49,9 +53,11 @@ named artefact, **[I]** inferred, **[U]** unmeasured, **[X]** blocked/excluded.
   driver or data path.  A "complete OpenWrt submission" cannot be claimed without
   it.
 - **Runner-up blockers:** the target image recipe/install path has never run an
-  end-to-end OpenWrt image on hardware, and the generated submission artefacts
-  (`series/`, `MANIFEST.sha256`, validation logs, DTS-0001) are **stale** after the
-  2026-11-22 patch-013/DTS edits and must be regenerated before anything is posted.
+  end-to-end OpenWrt image on hardware.  The generated submission artefacts are no
+  longer stale: `series/`, `MANIFEST.sha256`, the DTS series entry and all
+  validation logs were regenerated against the final patch 013 and **PASS**
+  (`gen-series.py --check` clean, release-line validator PASS, 0 errors).
+  Remaining pre-post work is in section 7.
 
 ---
 
@@ -77,13 +83,13 @@ or hardware campaign required, not an editing task.
 | --- | --- | --- | --- | --- |
 | 1 | Board DTS content up to 2026-11-21 | **DONE** | boot-tested images 7421bb7a / f6685b80 / c3ef2a50 / 6e9c54d0, `07-dts-upstream-bindings.md` sections 6.1-6.3; last blocker list: zero | keep frozen; no further active change without a boot test |
 | 2 | Board DTS 2026-11-22 additions (PCIe nodes enabled, GPIO hog, dma-ranges) | **PARTIAL** | host `cpp+dtc` RC=0, 0 diagnostics; hardware facts [V] (section 4); dma-ranges now hardware-validated by the B2 pass on image W26a (section 4.2); DTB 12,865 B, pad step 12,872 B | **hog-only regression boot DONE 2026-11-22 [V]**: image W27b (sha256 4af1d1fa..., rebuilt from this DTS + patch 013 WITHOUT the driver workaround) booted with link up on both RCs, both endpoints enumerated, GPIO0 DDR/DATA = 0x1330000f (the hog alone drove pins 20/21/28); window sizing may still be refined by the Wi-Fi driver |
-| 3 | Loader hand-off DTS entry DTS-0001 | **PARTIAL** | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `886f3ad0...`, 681-line payload; dependency record `06-dts-series-dependency.md` | regenerate from the 711-line DTS (payload and hashes stale), re-run the DTS contract check, boot-test with 0018 |
+| 3 | Loader hand-off DTS entry DTS-0001 | **DONE** | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `33956380...`, 712 lines (699-line payload = single-source DTS after the release-line W23 filter); applies + compiles (DTB 12,697 B `288a5c3f...`) and is byte-identical to the filtered target; the DTS content is boot-tested (2026-11-21 baselines + W27b for the 2026-11-22 additions) | post with kernel patch 0018; no further regeneration needed unless the board DTS changes |
 | 4 | Target skeleton tree (`target/linux/hisilicon`) | **PARTIAL** | files complete (Makefile, Kconfig stub, `luofu/{target.mk,config-6.18,config-5.10,profiles}`, `image/*`, `base-files/*`, patch stack); image/Makefile + luofu.mk host stages implemented | copy into an OpenWrt tree and build/boot the target image; decide the target-level Kconfig stub (delete vs move); remove bench-only files from the upstream target PR |
 | 5 | Image recipe (uImage + FIP trailer + UBI rootfs + sysupgrade container) | **PARTIAL** | host stages implemented and byte-validated by `fip-slice.py`/`luofu-image.py`; an earlier build of this recipe booted to userspace 2026-11-19 (UP, 1 CPU); current layout never booted (`image/luofu.mk` header) | build current layout, attended boot, verify pad/gate/UBI/overlay; no factory/install stanza until an install path runs |
 | 6 | Install / sysupgrade path | **BLOCKED** | only verified install is the manual stock-telnet broker path (`tools/stock-telnet-install.sh`); `platform_do_upgrade` never executed; A/B selector protocol beyond 0x10/0x11 [U] | run one end-to-end `platform_do_upgrade` with recovery armed; settle the selector protocol |
 | 7 | Target kernel config `luofu/config-6.18` | **PARTIAL** | used by the bench images; `config-5.10` is a reference only | re-derive against the chosen OpenWrt release; drop bench diagnostics; document every non-default symbol |
 | 8 | base-files / board.d / MAC provisioning | **PARTIAL** | bench images run board.d + luofu-netdev/mac; MACs from bdinfo nvmem is draft patch 0026; `heartbeat` and `luofu-pair-record` are bench-only | exclude bench-only scripts + service from the upstream target PR; settle the MAC source (nvmem vs userspace) |
-| 9 | L2 review-form mechanics | **PARTIAL** | 2026-11-21 validation: 26/26 patch(1) + `git apply`, 0 errors / 58 warnings (`04-validation.md`); stale after the 2026-11-22 patch-013 edit | regenerate `series/`, messages, MANIFEST, logs; re-run checkpatch and tree-equivalence (section 7) |
+| 9 | L2 review-form mechanics | **DONE** | final 2026-11-22 re-run: 26/26 patch(1)+git am, identical trees, 3 offset hunks, 0 fuzz/0 rejects, **0 errors / 73 warnings** (patch 0013: 0/17), `gen-series.py --check` clean (`04-validation.md` section 32) | keep the form in sync whenever a source patch/message changes (documented commands) |
 | 10 | Core platform 0001-0003 (mach-hisilicon, TEXT_OFFSET) | **PARTIAL** | RFC group; 0002/0003 textofs patches | post first for arm-soc direction; decide whether the TEXT_OFFSET change should be a generic ARM improvement |
 | 11 | CRG reset/clock 0004 + 0014 + 0019 | **PARTIAL** | ready-for-review class; resets/clocks exercised by bench images (PCIe/GPIO/LSW); 0019 read-only, decoded rates unmeasured | fold 0014 into 0004; post CRG first, 0019 as clock-tree follow-up after one read-only readback |
 | 12 | Watchdog 0005 | **PARTIAL** | ready-for-review; bench: watchdog0 identity/timeout/sysfs verified (2026-11-21) | split binding; post |
@@ -94,16 +100,19 @@ or hardware campaign required, not an editing task.
 | 17 | Thermal 0012 (+ release-line 0066/0067) | **PARTIAL** | 0012 ready-for-review; W23 rewrite 0066/0067 bench-proven [V] but release-line-only | upstream-clean the W23 content into 0012 (or a follow-up) and split the binding |
 | 18 | SMP 0018 | **PARTIAL** | RFC; 2-CPU operation hardware-verified via DTS loader hand-off (DTS-only fix) | post as RFC together with DTS-0001; settle `hisilicon,luofu-smp` method naming |
 | 19 | Boot selector 0017 | **PARTIAL** | RFC; 0x10/0x11 cells measured; 0x21 manual value is a bench handover; full sysupgrade protocol [U] | settle the sysupgrade/A-B story before posting |
-| 20 | **PCIe host 013** | **PARTIAL** | **2026-11-22 [V]**: link trains, both endpoints enumerate; patch cleaned in commit 4e959f2; checkpatch 0 errors / 19 warnings | **hardcoded GPIO workaround REMOVED 2026-11-22** after the W27b hog-only boot (commit ad711d1; re-run checkpatch on the regenerated patch); replace/justify `acp-gate`; MSI/INTx still absent; static CFG0 single-function only; split binding; no endpoint driver upstream |
+| 20 | **PCIe host 013** | **PARTIAL** | **2026-11-22 [V]**: link trains, both endpoints enumerate (W25d/W26a); **W27b (image sha256 `4af1d1fa...`) proves the DTS `wifi-pcie-hog` alone drives GPIO0 20/21/28, so the board-GPIO workaround was removed (commit `ad711d1`)**; final patch `beedd07b...` restored the submission notes (comments/binding only, code identical to ad711d1 after comment strip); checkpatch 0 errors / 17 warnings | replace/justify `acp-gate` (review item); MSI/INTx still absent; static CFG0 single-function only; split binding; no endpoint driver upstream |
 | 21 | PIE/GEMAC/LSW data path 0015/0016/0020-0026 | **BLOCKED** | drafts flagged "do not merge"; wired LAN works only through release-line gated patches (NAPT + CPU delivery); native L2/VLAN forwarding is the separate LSW project | attended arm/egress/decode campaigns; redesign the PIE/GEMAC split before netdev review |
 | 22 | **Wi-Fi driver** | **BLOCKED** | vendor 5.10 binary only (no mac80211); GPL request unanswered; clean-room transport **B1+B2** works [V] (section 4.2) but there is no in-tree mac80211/cfg80211 driver or data path | GPL follow-up (source); framework port + datapath slices; until then mark Wi-Fi "[X] not supported" in any submission |
-| 23 | DT bindings (all in-series YAMLs) | **PARTIAL** | in-series bindings exist; PCIe `acp-gate` now documented (commit 4e959f2), `num-lanes` covered by the dtschema pci-bus-common schema | split bindings out of driver patches; run `dt_binding_check`/dtbs_check (no dtschema in this checkout); add MAINTAINERS entries |
+| 23 | DT bindings (all in-series YAMLs) | **PARTIAL** | in-series bindings exist; PCIe `acp-gate` documented and `num-lanes` covered by dtschema pci-bus-common; **PCIe `dt_binding_check` RC=0** (dtschema 2026.9, `validation/dt-binding-check.log`); board-DTS `dtbs_check` still not run | split bindings out of driver patches; run full `dtbs_check` against submission-time mainline (the `wifi-pcie-hog` needs the post-v6.18 `snps,dw-apb-gpio` hog pattern); add MAINTAINERS entries |
 | 24 | MAINTAINERS + DCO sign-off | **BLOCKED** | all messages use a placeholder identity | owner must supply a real legal name for `Signed-off-by`, add the MAINTAINERS entry as its own patch |
-| 25 | Generated submission artefacts | **PARTIAL** (stale) | `gen-series.py --check` fails on `series/0013`; manifest/sha sums/validation pre-date the 2026-11-22 edits | regenerate everything listed in section 7 before posting |
+| 25 | Generated submission artefacts | **DONE** | regenerated against final patch 013 (2026-11-22): `series/0013` `45c47afd...`, release-line manifest `98931166...`, `validation/sha256sums.txt` 93/93 OK, `submission/MANIFEST.sha256` 105 entries OK, DTS-0001 unchanged `33956380...`; `gen-series.py --check` clean | re-run the documented commands if a source patch/message/DTS changes |
 | 26 | SPDX / licensing / provenance | **DONE** | 37 new kernel files: 36 carry GPL-2.0 SPDX; the one exception is the ABI sysfs doc (patch 017), where kernel practice omits SPDX (checkpatch's SPDX rule does not apply to that file type); all target-tree sources now carry SPDX (this pass added it to the two bench init scripts); no vendor binary/object/DTB/calibration data in the stack | keep it that way; publication history purge is tracked separately (item 27) |
 | 27 | Publish-readiness / history purge | **BLOCKED** | `opensource/docs/PUBLISH-READINESS.md` open: pre-policy vendor `.o` objects in history, GPL reply, DCO/licence files | separate track; do not present the notebook as a submission-ready public repo |
 
-**Checklist counts (27 items): 2 DONE, 20 PARTIAL, 5 BLOCKED.**
+**Checklist counts (27 items): 5 DONE, 17 PARTIAL, 5 BLOCKED.**  (Items 3, 9 and 25
+were completed by the final 2026-11-22 regeneration/validation pass; item 2 is left
+PARTIAL only because the lead's edit requires the Wi-Fi-side DMA-window sizing
+refinement, although its hog-only hardware boot is DONE.)
 
 ---
 
@@ -125,11 +134,14 @@ artefacts; the bench work itself was done by the hardware lanes (see parent
   DEBUG0=0x03d15111, config read cfg[0]=0x000559e7); any of the three low drops the
   link; restoring recovers it.  Stock live target: DEBUG0 dbi+0x728 = 0x03f4a611
   (L0), cfg window 0x50000000 = 0x59e7, ACP 0x10100174 = 0x06210321.
-- **Fix:** `host_init` in patch 013 (committed f835732) drives the three pins; the
-  submission form is the DTS gpio-hog added in commit 32d44e6
-  (`wifi-pcie-hog` on `&porta`, output-high).  The hardcoded driver workaround is
-  explicitly labelled bring-up-only and must be deleted after one regression boot
-  proves the hog alone.
+- **Fix:** the board pins are board data, described by the DTS gpio-hog added in
+  commit 32d44e6 (`wifi-pcie-hog` on `&porta`, output-high).  The intermediate
+  bench images carried a hardcoded `host_init` workaround; **W27b (image sha256
+  `4af1d1fa...`) then proved the hog alone suffices** - built from the board DTS
+  with patch 013 containing no board-GPIO code it boots with both RC links trained
+  (LTSSM 0x11), both endpoints enumerated and GPIO0 DDR/DATA = 0x1330000f.  The
+  workaround was therefore removed (commit `ad711d1`), and the submission-facing
+  patch comments were restored without re-adding any board-GPIO code.
 - **Endpoint enumeration [V]:** both Hi5622 endpoints are visible/probed on the 6.18
   link: `0000:00:00.0` BAR0 0x40000000 / BAR2 0x41800000 and `0001:00:00.0` BAR0
   0x58000000 / BAR2 0x59800000, vendor/device 59e7:0005, class 0x02800000, rev 0xe5
@@ -140,12 +152,12 @@ artefacts; the bench work itself was done by the hardware lanes (see parent
   **superseded** by the GPIO0 20/21/28 result above.  The rest of the fix list
   (misc write discipline, gate/steady values, iATU, CFG0 accessor, delays) matches
   the bench-proven program.
-- **PCIe submission caveats still open:** the hardcoded GPIO workaround (until the
-  hog boots), the `acp-gate` register poke (review item: should become an ACP
-  power/clock domain, not a pcie driver property), no MSI/INTx, static CFG0
-  viewport for the single-function topology, and no mainline endpoint driver (the
-  Wi-Fi driver series is the consumer; the DT nodes being enabled is fine once the
-  driver exists, see section 8).
+- **PCIe submission caveats still open:** the `acp-gate` register poke (review
+  item: should become an ACP power/clock domain, not a pcie driver property), no
+  MSI/INTx, static CFG0 viewport for the single-function topology, and no mainline
+  endpoint driver (the Wi-Fi driver series is the consumer; the DT nodes being
+  enabled is fine once the driver exists, see section 8).  The board-GPIO item is
+  **closed** (W27b + commit `ad711d1`).
 
 ### 4.2 Wi-Fi transport brings the chip up [V] - readiness, not a driver
 
@@ -203,7 +215,9 @@ the RC driver does not own this register file - the Wi-Fi driver does.
 | commit | content |
 | --- | --- |
 | `5a6a500` | board DTS: identity `dma-ranges` on both PCIe nodes (content from the lead, wifi-transport stage-B2 prerequisite). **B2 has now passed** on image W26a with this window (RC inbound vp0 0x80000000..0x8fffffff verified); the hunk stays a separate revertable commit because the final DMA window sizing may still be refined by the Wi-Fi driver. |
-| `4e959f2` | patch 013: hardware-verified GPIO notes + stock GPIO0 values, hardware-verified status replacing "never run", compact 7-word/absolute endpoint-iATU note, dma-ranges inbound note, corrected start_link comment, documented `acp-gate` binding property, minor checkpatch cleanups. 0 errors / 19 warnings. |
+| `4e959f2` | patch 013 (first packaging pass): hardware-verified GPIO notes + stock GPIO0 values, hardware-verified status replacing "never run", compact 7-word/absolute endpoint-iATU note, dma-ranges inbound note, corrected start_link comment, documented `acp-gate` binding property, minor checkpatch cleanups. |
+| `ad711d1` | patch 013: hardcoded board-GPIO workaround removed after the W27b hog-only boot proof (commit by the lead; pristine dry-run rc=0). |
+| final doc pass | patch 013 submission notes restored on top of `ad711d1` (comments + binding text only; code identical after comment strip), final patch sha256 `beedd07b...`, 833 lines; 0013 message rewritten for W25d/W26a/W27b; review form + all generated artefacts regenerated and validated. |
 | `32d44e6` | board DTS: `wifi-pcie-hog` on `&porta` pins 20/21/28 output-high; remove the two obsolete `wifi@0,0` stub children; refresh the stale header; add `dt-bindings/gpio/gpio.h`. |
 | (this file) | checklist + series split; ROADMAP proof-point update; SPDX headers on the two bench-only init scripts. |
 
@@ -220,10 +234,14 @@ program stays exactly the bench-proven one.
   `unique_unit_address_if_enabled`).  Compiled DTB **12,865 B**; the stock bootfip
   gate needs an 8-byte-aligned totalsize, so `Build/luofu-pad-dtb` folds it to
   **12,872 B** (verified with the checked-in `tools/pad-dtb.py`).
-- **No dt-schema tooling in this checkout** (no `dtschema`, `jsonschema`,
-  `yamllint`), so `make dtbs_check`/`dt_binding_check` could not be run - only
-  manual review against the submission-time mainline bindings (fetched from
-  `torvalds/linux`) and the dtschema-bundled PCI schemas:
+- **dt-schema tooling:** a dtschema 2026.9 venv is available in the lab build
+  artefacts, so `make ARCH=arm dt_binding_check DT_SCHEMA_FILES=.../hisilicon,luofu-pcie.yaml`
+  was run on the fully-patched tree: **RC=0, 0 schema errors** (yamllint step
+  skipped; log `upstream/series-6.18/validation/dt-binding-check.log`).  The board
+  DTS is still **not** run through `dtbs_check` (the `wifi-pcie-hog` child requires
+  the post-v6.18 `snps,dw-apb-gpio` hog pattern).  Manual review against the
+  submission-time mainline bindings (fetched from `torvalds/linux`) and the
+  dtschema-bundled PCI schemas:
   - `pci-host-bridge.yaml` lives in the **dtschema package**, not the kernel tree;
     the patch-013 `$ref` is valid.
   - `num-lanes` was already covered by `pci-bus-common.yaml` (dtschema) - no
@@ -245,16 +263,15 @@ program stays exactly the bench-proven one.
 - **Tooling note:** `checkpatch.pl` must be run on a copied patch file (or an
   absolute path from outside this repo).  Pointing it at the in-repo relative
   path in this checkout mis-detects the patch as a source file and prints one
-  spurious trailing-whitespace error.  On a copy, patch 013 is **0 errors / 19
-  warnings** (was 21 warnings before this pass).
-- **Single-source caveat for the DTS submission:** the skeleton DTS is also the
-  release-line DTS, and it carries release-line-only content (W23 thermal
-  properties incl. the bench helper `hisilicon,threshold-mc`).  DTS-0001 is
-  generated verbatim from this file, so the regeneration in section 7 will drag the
-  thermal delta into the upstream DTS unless the generator grows a release-line
-  filter.  Decide before posting: either (a) strip release-line-only properties
-  when generating DTS-0001, or (b) keep them and justify them to the thermal
-  maintainers.  Recommendation: (a).
+  spurious trailing-whitespace error.  On a copy, the final patch 013 is **0 errors
+  / 17 warnings** (block-comment style + the known binding-split warning).
+- **Single-source caveat - resolved:** the skeleton DTS is also the release-line
+  DTS and carries release-line-only content (W23 thermal properties incl. the bench
+  helper `hisilicon,threshold-mc`).  Decision (a) was implemented:
+  `upstream/series-6.18/tools/dts-upstream-filter.py` is the single definition of
+  the release-line -> upstream DTS delta, `gen-dts-series-patch.py` applies it and
+  `check-release-line.sh` fails if the W23 properties leak into DTS-0001 (decision
+  recorded in `07-dts-upstream-bindings.md` section 8).
 
 ---
 
@@ -282,42 +299,44 @@ program stays exactly the bench-proven one.
 
 ---
 
-## 7. Stale generated artefacts - must regenerate before posting
+## 7. Generated submission artefacts - regenerated and validated (final, 2026-11-22)
 
-`python3 upstream/series-6.18/tools/gen-series.py --check` currently fails on
-**only** `series/0013-arm-pci-luofu-host.patch`; everything else in the review form
-is byte-current.  The DTS-side entry is stale because the board DTS changed.
+`python3 upstream/series-6.18/tools/gen-series.py --check` is **clean** (26
+patches), the release-line validator **PASSes**, and all hashes/validation logs were
+regenerated against the **final patch 013** (board-GPIO workaround removed, submission
+notes restored) and the current board DTS.  The table records the final state; the
+commands below reproduce it.
 
-| artefact | recorded state | current state |
-| --- | --- | --- |
-| `series/0013-arm-pci-luofu-host.patch` | sha256 `8a8454f7...` (also in `submission/MANIFEST.sha256` and `validation/sha256sums.txt`) | source patch sha256 `2a43c953...` (856 lines), 2026-11-22 |
-| `release-line/manifest.tsv` row 013 | sha256 `73c413dd...` (manifest sha256 `2bb7413e...`) | source patch sha256 `2a43c953...` |
-| `commit-messages/0013-arm-pci-luofu-host.txt` / `01-commit-messages.md` | still says "never run on hardware", "Wi-Fi nodes stay disabled", "iATU-enable/LTSSM ... never validated" | now false: link trains, endpoints enumerate, nodes enabled; needs a rewritten message before `gen-series.py` |
-| `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | sha256 `886f3ad0...`, 681-line DTS payload | source DTS 711 lines, sha256 `f24451ca...` (includes PCIe/hog/dma-ranges + thermal delta) |
-| `validation/*` (checkpatch, apply, git-am, sha256sums, release-line logs) | 2026-11-21 runs | pre-date commits 5a6a500/4e959f2/32d44e6 |
-| `06-dts-series-dependency.md`, `07-dts-upstream-bindings.md` | hashes/line counts for the old DTS | must be refreshed after DTS-0001 regen |
-| `04-validation.md` checkpatch table | 0 errors / 58 warnings, `git apply` 26/26 | must be re-run for the new patch 013 (0/19 on the patch alone) |
+| artefact | final state |
+| --- | --- |
+| patch 013 source (`patches-6.18/013-arm-pci-luofu-host.patch`) | sha256 `beedd07b4f63346c451554ff99a62eac2d029b9c41835a99831ecb1c5c83ccd7`, 833 lines; C payload 653 lines + 140-line binding; code identical to `ad711d1` after comment-strip (only comments/binding text restored, board-GPIO block absent) |
+| `series/0013-arm-pci-luofu-host.patch` | sha256 `45c47afd6fd83e5d8b5c5861f0715ec82a135c46c5058907668fb33ab53ada34`; regenerated from the rewritten message |
+| `commit-messages/0013-arm-pci-luofu-host.txt` / `01-commit-messages.md` | sha256 `0d42436d37c7797712c292ef52437b5bb41dc240bd2fe96aa3c068564bdd72dc`; records the W25d/W26a/W27b hardware bring-up and that the board GPIO pins are DTS data (no driver workaround) |
+| `release-line/manifest.tsv` row 013 / manifest | row sha256 `beedd07b...`; manifest sha256 `9893116668b68d7f8bd3b52b9f3b9e7b2e2ac9e4e2a9be56e9b5e6cff45821fe` |
+| `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | sha256 `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa`, 712 lines (699-line payload = single-source DTS after the release-line W23 filter; unchanged in the final pass) |
+| `validation/*` (checkpatch, apply, git-am, release-line, dt-binding) | refreshed from the final run: 26/26 + 0/73, 55/55 strict, `dt_binding_check` RC=0; `validation/sha256sums.txt` 93 entries, sha256 `35c465bcad05a6d121eb21c8e58c71991617448bb4714c751f069ddd774a3849`, `sha256sum -c` 93/93 OK |
+| `submission/MANIFEST.sha256` | regenerated, **105 entries**; `sha256sum -c MANIFEST.sha256` passes inside `submission/` |
+| `04/05/06/07` docs, series README, cover letter, submission README | updated with the final digests; `04-validation.md` sections 31-32 record the re-validation runs |
 
-**Regeneration commands** (from `upstream/series-6.18/README.md` / `07-dts-upstream-bindings.md`; run in a host workspace with an extracted linux-6.18.60 tree):
+**Reproduction commands** (from `upstream/series-6.18/README.md`; run in a host workspace with an extracted linux-6.18.60 tree; all steps currently PASS):
 
 ```sh
-# 1. rewrite commit-messages/0013-arm-pci-luofu-host.txt for the hardware-proven state
-# 2. regenerate the review form + index + run the validation harness
-python3 tools/gen-series.py
-python3 tools/gen-series.py --check
-tools/run-validation.sh            # checkpatch + apply + tree equivalence, refreshes validation/
-# 3. regenerate the DTS series entry from the single-source DTS, then re-run the
-#    release-line validator (applies/compiles DTS-0001, checks the loader contract
-#    and exercises the pad step) and refresh validation/sha256sums.txt
+python3 tools/gen-series.py           # regenerate series/ + 01-commit-messages.md
+python3 tools/gen-series.py --check   # must print "series up to date (26 patches)"
+tools/run-validation.sh --use-tree <extracted-6.18.60> <workdir>
+tools/check-release-line.sh --use-tree <extracted-6.18.60> <workdir>
 python3 tools/gen-dts-series-patch.py \
-    --pristine <extracted linux-6.18.60> \
+    --pristine <extracted-6.18.60> \
     --target-dts ../../target-skeleton/dts/luofu-r116.dts \
     --out dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
-tools/check-release-line.sh --use-tree <extracted linux-6.18.60> <workdir>
+# PCIe binding check on the patched tree (dtschema in PATH; 2026.9 used)
+make -C <patched-tree> ARCH=arm dt_binding_check \
+    DT_SCHEMA_FILES=Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
 ```
 
-Until these run, the submission is **not postable** even though the underlying
-content is now hardware-backed.
+Remaining pre-post work is the non-packaging work in section 10 (Wi-Fi driver,
+target image/install path); the packaging artefacts themselves are postable once the
+owner decisions in section 9 are settled.
 
 ---
 
@@ -417,29 +436,30 @@ Wi-Fi:
    readback).
 8. Approve or defer PIE/LSW staging (0020/0021, 0022/0023, 0024/0025/0026) - all
    currently "do not send".
-9. **New (2026-11-22):** approve the PCIe submission plan - keep `acp-gate` as a
-   documented bring-up property vs. move it to an ACP driver; and the DTS hog
-   regression boot before deleting the hardcoded driver workaround.
-10. **New:** decide the DTS single-source handling of release-line-only thermal
-    properties (section 5) before DTS-0001 is regenerated.
-11. **New:** decide how the provisional identity `dma-ranges` (commit 5a6a500) is
-    carried if the stage-B2 verdict changes it.
+9. **New (2026-11-22, partly resolved):** the DTS hog regression boot is DONE
+   (W27b) and the hardcoded workaround is deleted (`ad711d1`); still decide the
+   long-term `acp-gate` model (documented bring-up property vs. ACP driver).
+10. **Resolved:** the DTS single-source handling of release-line-only thermal
+    properties (section 5) - `tools/dts-upstream-filter.py` is the single filter
+    definition, enforced by the generator and the validator.
+11. **Resolved/keep-separate:** `dma-ranges` passed the stage-B2 bench (W26a) and is
+    committed as its own revertable commit `5a6a500`; keep it separable until the
+    Wi-Fi driver finalises the window sizing.
 
 ---
 
 ## 10. Next actions, in dependency order
 
-1. **Boot-test the 2026-11-22 DTS** (rebuilt target image): link trains, both
-   endpoints enumerate, hog alone drives 20/21/28, no regression in MTD/LED/keys.
-   Then delete the hardcoded GPIO block from patch 013 (bug/cleanup), rerun the
-   checks.  *(hardware lane, attended)*
-2. **Regenerate the submission artefacts** (section 7), including the 0013 commit
-   message rewrite; re-run checkpatch/apply/tree-equivalence.
-3. **Regenerate DTS-0001** from the single-source DTS (with the thermal-delta
-   decision) and re-run the release-line validator.
-4. **Rewrite the L2 0013 commit message / cover-letter paragraph** to the
-   hardware-proven state (link trains, endpoints enumerate, GPIO quirk, compact
-   endpoint iATU).
+1. ~~Boot-test the 2026-11-22 DTS and delete the hardcoded GPIO block~~ **DONE
+   2026-11-22**: W27b (image sha256 `4af1d1fa...`) booted from the board DTS with
+   patch 013 carrying no board-GPIO code; both RC links trained, both endpoints
+   enumerated, GPIO0 DDR/DATA = 0x1330000f; workaround removed (`ad711d1`).
+2. ~~Regenerate the submission artefacts~~ **DONE 2026-11-22**: section 7.
+3. ~~Regenerate DTS-0001 / re-run the release-line validator~~ **DONE 2026-11-22**:
+   DTS-0001 `33956380...` unchanged in the final pass, validator PASS.
+4. ~~Rewrite the L2 0013 commit message / cover-letter paragraph~~ **DONE
+   2026-11-22**: final message records W25d/W26a/W27b and the DTS-owned GPIO pins;
+   cover letter and validation docs updated.
 5. **Build the target image from the skeleton tree inside OpenWrt** (item 4/5) and
    boot it attended; record the recipe result.
 6. **Run the install/sysupgrade path once** with recovery armed (item 6).
@@ -455,7 +475,9 @@ Wi-Fi:
 
 | topic | pointer |
 | --- | --- |
-| PCIe GPIO root cause, bisect, W25 images | parent `mem-entries.md` 2026-11-22 17:05 / 17:20; parent `STATUS.md`; build/ evidence (gitignored) |
+| PCIe GPIO root cause, bisect, W25d/W26a images | parent `mem-entries.md` 2026-11-22 17:05 / 17:20 / 18:20; parent `STATUS.md`; build/ evidence (gitignored) |
+| **PCIe hog-only proof (W27b), workaround removal** | parent ledger 2026-11-22 (W27b entry); image sha256 `4af1d1fa...`; commit `ad711d1` |
+| final regeneration + validation (review form, release line, DTS-0001, binding check) | `upstream/series-6.18/04-validation.md` sections 31-32; `validation/`, `submission/MANIFEST.sha256` |
 | PCIe register state vs vendor live | parent `mem-entries.md` 2026-11-22 12:45 / 13:20; `docs/incoming/pcie-seq/*` |
 | endpoint iATU map (compact/absolute) | `docs/phase18/inbound-map.md` Part A; `docs/incoming/wifi-transport-port/REPORT.md`; ledger 2026-11-22 17:45 / 18:20 |
 | Wi-Fi transport B1 gate | parent `mem-entries.md` 2026-11-22 18:20; `docs/incoming/wifi-transport-port/{REPORT,SUMMARY,BENCH-PLAN}.md`, `build/` |
@@ -481,6 +503,9 @@ Wi-Fi:
 | same pass | `docs/upstream/SUBMISSION-STATUS.md` (this file) | definitive checklist + series split |
 | same pass | `docs/ROADMAP-OPENWRT.md`, `target-skeleton/RELEASE-NOTES.md` | 2026-11-22 proof-point updates |
 | follow-up, same pass | this file | record the stage-B2 pass (image W26a) and the dma-ranges validation |
+| `ad711d1` (lead) | patch 013 | board-GPIO workaround removed after the W27b hog-only boot proof |
+| final doc pass | patch 013 source, 0013 message, series/, dts-series/, release-line/, validation/, submission/, all docs above | workaround-free patch with submission notes restored; 0013 message rewritten for W25d/W26a/W27b; review form + DTS-0001 + manifest + sha sums + validation logs regenerated; final re-validation PASS (26/26 + 0/73, 55/55 strict, dt_binding_check RC=0) |
+| final doc pass | `docs/incoming/wifi-transport-port/{REPORT,SUMMARY}.md`, `build/BUILD-NOTES.md` | transport lane docs brought current with the A/B1/B2 bench results (module sha 416d1db0..., stale BUILD-NOTES hash noted) |
 
 Everything above is host-only: **no build was run, no device was touched, and no
 vendor artefact/secret was added.**

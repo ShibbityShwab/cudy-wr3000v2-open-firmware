@@ -49,26 +49,29 @@ generated artefacts were stale.  They are regenerated:
 
 - `series/0013` + `01-commit-messages.md` regenerated from the new
   hardware-verified 0013 message (the old "never run on hardware" text is gone;
-  the message now records the 2026-11-22 link/endpoint result, the GPIO quirk and
-  the remaining RFC items).  `gen-series.py --check` clean (26 patches);
+  the message now records the W25d/W26a/W27b link/endpoint result, that the board
+  GPIO pins are DTS data (the driver carries **no** board-GPIO code after commit
+  `ad711d1`), and the remaining RFC items).  `series/0013` sha256
+  `45c47afd...`; `gen-series.py --check` clean (26 patches);
 - `dts-series/0001` regenerated from the **release-line-filtered** single-source
   DTS: `tools/dts-upstream-filter.py` strips the release-line-only W23 thermal
   delta (decision in `07-dts-upstream-bindings.md` section 8; the in-series
   thermal binding 0012 has `unevaluatedProperties: false` and documents only the
   0x100 window).  New sha256
   `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa`, 712 lines
-  (699-line filtered payload);
-- release-line `manifest.tsv` row 013 refreshed (`2a43c953...`; manifest sha256
-  `925442e0...`); `validation/` and `validation/release-line/` refreshed from a
-  full re-run; `validation/sha256sums.txt` regenerated (93 entries: 26 series +
-  66 L0 source patches + DTS-0001; `sha256sum -c` 93/93 OK);
+  (699-line filtered payload; unchanged in the final pass - the board DTS did not
+  change);
+- release-line `manifest.tsv` row 013 refreshed for the final patch 013
+  (`beedd07b...`; manifest sha256 `98931166...`); `validation/` and
+  `validation/release-line/` refreshed from a full re-run;
+  `validation/sha256sums.txt` regenerated (93 entries: 26 series + 66 L0 source
+  patches + DTS-0001; sha256 `35c465bc...`; `sha256sum -c` 93/93 OK);
 - re-validation: review form 26/26 patch(1)+git am, identical trees, **0 errors /
-  74 warnings** (the +16 vs 2026-11-21 are patch 0013's own block-comment-style
-  warnings from the bench-proven GPIO block + the known binding-split warning);
-  release line 55/55, 0 fuzz/0 rejects, strict `git apply` 55/55; target DTS DTB
-  12,865 B sha256 `d8b41ac3...` (pad 12,872 B); DTS-0001 DTB 12,697 B sha256
-  `288a5c3f...` (pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema 2026.9).
-  Detail: `04-validation.md` section 31.
+  73 warnings** (patch 0013 alone: 0/17); release line 55/55, 0 fuzz/0 rejects,
+  strict `git apply` 55/55; target DTS DTB 12,865 B sha256 `d8b41ac3...`
+  (pad 12,872 B); DTS-0001 DTB 12,697 B sha256 `288a5c3f...` (pad 12,704 B); PCIe
+  `dt_binding_check` RC=0 (dtschema 2026.9); `submission/MANIFEST.sha256`
+  regenerated (105 entries).  Detail: `04-validation.md` section 32.
 
 **Hardware caveat:** patch 013 is hardware-proven (link trains, both endpoints
 enumerate), but the 2026-11-22 DTS additions still need one regression boot as a
@@ -260,18 +263,21 @@ To regenerate the series after editing a message:
 
 ## What is validated (host-only)
 
-**Current (2026-11-22 re-run):** review form 26/26 patch(1) and `git am`, identical
-trees, 3 offset hunks, 0 fuzz, 0 rejects, **0 errors / 74 warnings** (patch 0013
-accounts for 18: 17 block-comment-style warnings from the bench-proven GPIO block
-plus the known binding-split warning); release line 55/55, 0 fuzz, 0 rejects, strict
-`git apply` 55/55; target board DTS compiles to a **12,865 B** DTB sha256
-`d8b41ac3...` (pad 12,872 B); DTS-0001 (sha256 `33956380...`, 712 lines) applies,
-its DTS is byte-identical to the **filtered** target DTS and compiles to a 12,697 B
-DTB sha256 `288a5c3f...` (pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema
-2026.9); `gen-series.py --check` clean; `validation/sha256sums.txt` 93 entries
-(`sha256sum -c` 93/93); release-line manifest sha256 `925442e0...`.  Detail:
-`04-validation.md` section 31.  **Hardware caveat:** patch 013 is hardware-proven,
-but the 2026-11-22 DTS additions still need one regression boot as a unit.
+**Current (2026-11-22 final re-run):** review form 26/26 patch(1) and `git am`,
+identical trees, 3 offset hunks, 0 fuzz, 0 rejects, **0 errors / 73 warnings** (patch
+0013 alone: 0 errors / 17 warnings - block-comment style + the known binding-split
+warning); release line 55/55, 0 fuzz, 0 rejects, strict `git apply` 55/55; target
+board DTS compiles to a **12,865 B** DTB sha256 `d8b41ac3...` (pad 12,872 B);
+DTS-0001 (sha256 `33956380...`, 712 lines) applies, its DTS is byte-identical to
+the **filtered** target DTS and compiles to a 12,697 B DTB sha256 `288a5c3f...`
+(pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema 2026.9);
+`gen-series.py --check` clean; `validation/sha256sums.txt` 93 entries
+(`sha256sum -c` 93/93); release-line manifest sha256 `98931166...`;
+`submission/MANIFEST.sha256` 105 entries.  Detail: `04-validation.md` section 32.
+**Hardware status:** patch 013 is hardware-proven **without board-GPIO driver code**
+(image W27b sha256 `4af1d1fa...`: both RC links trained, both endpoints enumerated,
+GPIO0 DDR/DATA = 0x1330000f with the DTS hog alone), and the 2026-11-22 DTS additions
+are boot-tested as a unit.
 
 The 2026-11-21 record follows (kept as history):
 

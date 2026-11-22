@@ -21,8 +21,10 @@ firmware blob or calibration data is committed.
 ## 0. Bench status (2026-11-22): the transport contract is device-verified [V]
 
 Host link context: the two Hi5622 endpoints (59e7:0005, class 0x028000) only enumerate on
-6.18 after the board GPIO0 20/21/28 fix in the pcie-luofu host driver (patch 013); with it
-both endpoints probe and every transport access below uses the RC outbound MEM window.
+6.18 after the board GPIO0 pins 20/21/28 are outputs driven high before training.  That is
+board data owned by the devicetree `wifi-pcie-hog`; a hog-only boot (image W27b, patch 013
+without any board-GPIO code) brings both RC links up and enumerates both endpoints.  Every
+transport access below then uses the RC outbound MEM window.
 
 | stage | result | evidence |
 | --- | --- | --- |

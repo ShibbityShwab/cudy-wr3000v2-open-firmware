@@ -17,24 +17,22 @@ read (a userspace read of 0x10161000 panicked the board), and sub-word
 or misaligned accesses fault.  The gate clock and the four active-low
 resets per root complex come from the CRG.
 
-Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22:
-with the complete recorded register program the link trains (LTSSM L0,
-the measured vendor steady-state and link-capability values read back
-byte-identically), and both Wi-Fi endpoints behind the root complexes
-enumerate (vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).
-
-The remaining hardware dependency is board GPIO state, not a PCIe
-register: the Wi-Fi endpoint only trains once GPIO0 pins 20, 21 and 28
-are outputs driven high before training (the stock vendor kernel leaves
-them that way).  The board devicetree is expected to describe this as a
-gpio hog on the GPIO controller; until that hog has been boot-tested on
-its own the driver keeps a clearly marked bring-up workaround, to be
-removed afterwards.
+Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22
+(bench images W25d, W26a and W27b): with the complete recorded register
+program the link trains on both root complexes (LTSSM L0, the measured
+vendor steady-state and link-capability values read back byte-identically),
+and both Wi-Fi endpoints behind the root complexes enumerate
+(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  W27b
+additionally proves the patch with no board-GPIO code at all: the
+devicetree gpio hog alone brings both links up, because the board wires
+the Wi-Fi endpoint's power/reset controls to GPIO0 pins 20, 21 and 28,
+which must be outputs driven high before training.  The pins are board
+data, so this driver does not touch them.
 
 This remains an RFC: the driver has no MSI/INTx support (the endpoint
 interrupt route is not documented), the configuration window serves only
-the measured single-function topology, and the ACP power-gate value is a
-bring-up workaround rather than a modelled power domain.  The Wi-Fi
+the measured single-function topology, and the optional acp-gate word is
+a bring-up workaround rather than a modelled power domain.  The Wi-Fi
 endpoint has no mainline driver and is out of scope for this patch.
 
 Host-side: the patch applies to linux-6.18.60 and passes checkpatch with
@@ -45,9 +43,9 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ---
  drivers/pci/controller/dwc/Kconfig                 |   15 
  drivers/pci/controller/dwc/Makefile                |    1 
- drivers/pci/controller/dwc/pcie-luofu.c            |  676 ++++++++++++++++++++
+ drivers/pci/controller/dwc/pcie-luofu.c            |  653 ++++++++++++++++++++
  .../bindings/pci/hisilicon,luofu-pcie.yaml         |  140 ++++
- 4 files changed, 832 insertions(+)
+ 4 files changed, 809 insertions(+)
 
 diff --git a/drivers/pci/controller/dwc/Kconfig	2026-11-22 10:39:27.168990308 +0700 b/drivers/pci/controller/dwc/Kconfig	2026-11-22 10:39:27.168990308 +0700
 --- a/drivers/pci/controller/dwc/Kconfig	2026-10-30 19:06:41.000000000 +0700
@@ -86,8 +84,8 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 17:22:21.008194655 +0700
-@@ -0,0 +1,676 @@
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 18:29:01.244016785 +0700
+@@ -0,0 +1,653 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -101,10 +99,11 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * outbound iATU (CFG0 type) into that window, as the vendor driver does.
 + *
 + * This driver is reconstructed from the recorded vendor evidence and has
-+ * been brought up on the board: with the board GPIO state described below the
-+ * link trains and both Wi-Fi endpoints enumerate (2026-11-22 bench).  The
-+ * board devicetree enables both root complexes and carries a GPIO hog for the
-+ * board control pins.
++ * been brought up on the board: the required board GPIO state is described by
++ * the devicetree gpio hog (GPIO0 pins 20/21/28 are outputs driven high before
++ * training), after which the link trains and both Wi-Fi endpoints enumerate
++ * (hardware-verified 2026-11-22).  The board devicetree enables both root
++ * complexes.
 + *
 + * Recorded facts this driver relies on:
 + *
@@ -151,10 +150,9 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + *
 + *   - DT-driven endpoint power/reset GPIO sequencing: the board requires
 + *     GPIO0 pins 20/21/28 to be outputs driven high before the link can train
-+ *     (hardware-verified 2026-11-22; the board DTS carries a gpio-hog for
-+ *     them).  host_init still carries a hardcoded bring-up workaround for
-+ *     those pins; that is not the submission form and is removed once the DTS
-+ *     hog has been bench-tested;
++ *     (hardware-verified 2026-11-22: with the devicetree gpio hog alone the
++ *     link trains on both root complexes).  The pins are owned by the board
++ *     DTS (wifi-pcie-hog on &porta); this driver does not touch them;
 + *   - the radm/linkdown interrupts: their status/clear registers are in the
 + *     read-forbidden misc window (misc+0x28/+0x2c), so no safe handler can
 + *     be written yet and link state is polled through the DBI instead;
@@ -182,8 +180,8 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * (patches-6.18/004) had that polarity inverted; patch 014 corrects it (assert
 + * clears the bit, deassert sets it).  This driver uses only the reset API and
 + * relies on the corrected provider.  The board devicetree enables both root
-+ * complexes; training additionally depends on the board GPIO state described
-+ * above.
++ * complexes; training additionally depends on the board GPIO state provided by
++ * the devicetree gpio hog described above.
 + */
 +
 +#include <linux/build_bug.h>
@@ -391,38 +389,15 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
 +	struct luofu_pcie *lpc = to_luofu_pcie(pci);
 +
-+	/* BOARD GPIO FIX (hardware-verified 2026-11-22): the Wi-Fi
-+	 * endpoint's power/reset controls sit on GPIO0 pins 20, 21 and 28.  The
-+	 * stock vendor kernel leaves GPIO0 at DDR=0x1330000f / DATA=0x12300004,
-+	 * i.e. all three are outputs driven high, and the endpoint only trains
-+	 * when all three are outputs and high.  Without this, LTSSM never leaves
-+	 * detect and config reads return 0xffffffff - no amount of PCIe register
-+	 * programming helps.  The upstream form is the gpio-hog on &porta in
-+	 * dts/luofu-r116.dts; this hardcoded workaround is bring-up only and must
-+	 * be deleted once the hog has been bench-tested. */
-+	{
-+		void __iomem *gpio = ioremap(0x10106000, 0x1000);
-+
-+		if (gpio) {
-+			u32 ddr = readl(gpio + 0x04);
-+			u32 data = readl(gpio + 0x00);
-+
-+			/* All three must be outputs and driven HIGH (hardware-verified
-+			 * 2026-11-22: with any of 20/21/28 low the endpoint never
-+			 * trains; the vendor kernel drives 20,21,28 = 1,1,1). */
-+			ddr |= BIT(20) | BIT(21) | BIT(28);
-+			data |= BIT(20) | BIT(21) | BIT(28);
-+			writel(data, gpio + 0x00);
-+			writel(ddr, gpio + 0x04);
-+			dev_info(pci->dev, "board gpio fix: ddr=%08x data=%08x\n",
-+				 readl(gpio + 0x04), readl(gpio + 0x00));
-+			iounmap(gpio);
-+		}
-+	}
++	/* The Wi-Fi endpoint power/reset controls (GPIO0 pins 20/21/28,
++	 * driven as outputs HIGH) are owned by the board DTS via a gpio-hog
++	 * (wifi-pcie-hog on &porta).  Hardware-verified 2026-11-22 (W27b):
++	 * with the hog alone the link trains on both root complexes, so no
++	 * board GPIO poking belongs in this driver. */
 +
 +	/* Let the endpoint finish its power-on/reset sequence before the RC
-+	 * starts training (the vendor driver runs as a module ~11 s after boot;
-+	 * this early probe needs an explicit settle time). */
++	 * starts training (the vendor driver runs as a module ~11 s after
++	 * boot; this early probe needs an explicit settle time). */
 +	msleep(1000);
 +
 +	/* Configuration accesses use the configuration window, not DBI. */
@@ -479,8 +454,8 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * (misc+0x1c bit 13) is asserted and then leaves the steady state with LTSSM
 + * enabled and the gate clear (0x02200800); the values this function writes
 + * were read back byte-identical on the live vendor system.  The register
-+ * program alone does not train the link - the board GPIO state in host_init
-+ * is the other required half.
++ * program alone does not train the link - the required board GPIO state is
++ * provided by the devicetree gpio hog (see host_init).
 + */
 +static int luofu_pcie_start_link(struct dw_pcie *pci)
 +{

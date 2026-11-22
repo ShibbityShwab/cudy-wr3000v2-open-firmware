@@ -424,6 +424,16 @@ was re-run against pristine linux-6.18.60 (sha256 `3c2f44ef...`):
   regenerated (93 entries, `sha256sum -c` 93/93 OK).  The L2 review-form re-run and
   the PCIe `dt_binding_check` (RC=0) are recorded in `04-validation.md` section 31.
 
+**Final (2026-11-22, after the W27b hog-only boot):** patch 013's hardcoded GPIO
+workaround was removed (commit `ad711d1`): W27b (image sha256 `4af1d1fa...`), built from
+the board DTS `wifi-pcie-hog` with no board-GPIO driver code, trains both RC links and
+enumerates both endpoints, so the devicetree hog alone is the board fix.  Re-validation:
+release line 55/55 strict-clean; target DTB 12,865 B `d8b41ac3...`; DTS-0001 unchanged
+(`33956380...`, 12,697 B `288a5c3f...`); review form 26/26, **0 errors / 73 warnings**
+(patch 0013: 0/17); PCIe `dt_binding_check` RC=0; release-line manifest sha256
+`98931166...`; `validation/sha256sums.txt` 93/93 OK.  Detail: `04-validation.md`
+section 32.
+
 ## 10. What is NOT in the release line / not claimed
 
 - **Not a flashable or distributable image.** The image was installed manually

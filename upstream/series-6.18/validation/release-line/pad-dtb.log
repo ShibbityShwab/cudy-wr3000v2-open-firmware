@@ -1,2 +1,2 @@
-pad-dtb: /home/shibbityshwab/luofu-reval-20261122/val-release/logs/luofu-r116.dtb.padded -> 12872 bytes (8-byte aligned totalsize)
-pad-dtb: /home/shibbityshwab/luofu-reval-20261122/val-release/logs/luofu-r116.series.dtb.padded -> 12704 bytes (8-byte aligned totalsize)
+pad-dtb: /home/shibbityshwab/luofu-reval-20261122/val-release2/logs/luofu-r116.dtb.padded -> 12872 bytes (8-byte aligned totalsize)
+pad-dtb: /home/shibbityshwab/luofu-reval-20261122/val-release2/logs/luofu-r116.series.dtb.padded -> 12704 bytes (8-byte aligned totalsize)

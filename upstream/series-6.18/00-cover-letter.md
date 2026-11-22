@@ -364,15 +364,18 @@ the release series (05-release-line.md section 6).
 - **PCIe host controller (0013) is hardware-verified [V].**  The 2026-11-22 bench
   bring-up proved the link failure was board GPIO state, not the PCIe register
   program: the Hi5622 endpoint only trains when GPIO0 pins 20/21/28 are outputs
-  driven HIGH before training.  With that, the link reaches L0 and both endpoints
-  (59e7:0005) enumerate; the driver's measured register program reads back
-  byte-identically on the stock vendor system.  The upstream form of the board fix
-  is the DTS `wifi-pcie-hog` (the driver keeps a marked hardcoded workaround until
-  the hog alone is boot-tested).  The patch also documents the endpoint's compact
-  7-word iATU layout (no limit_hi, target_lo at +0x10, absolute PCI base/limit) and
-  the optional `acp-gate` binding property.  The patch remains RFC: no MSI/INTx,
-  single-function CFG0 topology only, ACP power-gate is a bring-up workaround, and
-  the binding still needs the mechanical split.
+  driven HIGH before training.  Bench images W25d and W26a brought the link up and
+  enumerated both endpoints (59e7:0005); the driver's measured register program
+  reads back byte-identically on the stock vendor system.  The board pins are
+  described by the DTS `wifi-pcie-hog`, and **W27b proves the hog alone suffices**:
+  an image built from that DTS with patch 0013 containing no board-GPIO code boots
+  with both RC links trained, both endpoints enumerated and GPIO0 DDR/DATA =
+  0x1330000f.  The driver therefore contains no board-GPIO workaround.  The patch
+  also documents the endpoint's compact 7-word iATU layout (no limit_hi, target_lo
+  at +0x10, absolute PCI base/limit) and the optional `acp-gate` binding property.
+  The patch remains RFC: no MSI/INTx, single-function CFG0 topology only, ACP
+  power-gate is a bring-up workaround, and the binding still needs the mechanical
+  split.
 - **Wi-Fi transport bring-up (evidence, not a driver) [V].**  A separate clean-room
   PCIe/ETE transport module boots the Wi-Fi chip on the open 6.18 stack (firmware
   upload 928,920 B with verify diffs=0, CPU released, D2H DEVICE READY, ETE rings
@@ -390,13 +393,15 @@ the release series (05-release-line.md section 6).
   **12,697 B** sha256 `288a5c3f...` (pad 12,704 B).  These supersede the
   2026-11-21 `886f3ad0...` / 681-line / 12,678-B values below.
 - **Re-validation (host-only, pristine 6.18.60):** 26/26 patch(1)+git am, identical
-  trees, 3 offset hunks, 0 fuzz/0 rejects, **0 errors / 74 checkpatch warnings**
-  (patch 0013 accounts for 18: 17 block-comment-style warnings from the
-  hardware-proven GPIO block + the known binding-split warning); release line 55/55
-  strict-clean; PCIe `dt_binding_check` RC=0 (dtschema 2026.9);
+  trees, 3 offset hunks, 0 fuzz/0 rejects, **0 errors / 73 checkpatch warnings**
+  (patch 0013 alone: 0 errors / 17 warnings - block-comment style + the known
+  binding-split warning); release line 55/55 strict-clean; target DTB 12,865 B
+  sha256 `d8b41ac3...` (pad 12,872 B); DTS-0001 DTB 12,697 B sha256 `288a5c3f...`
+  (pad 12,704 B); PCIe `dt_binding_check` RC=0 (dtschema 2026.9);
   `validation/sha256sums.txt` 93 entries (93/93 OK); release-line manifest sha256
-  `925442e0...`.  Detail: `04-validation.md` section 31.  **Hardware caveat:**
-  the 2026-11-22 DTS additions still need one regression boot as a unit.
+  `98931166...`; `submission/MANIFEST.sha256` 105 entries.  Detail:
+  `04-validation.md` section 32.  The 2026-11-22 DTS additions are boot-tested as a
+  unit (W27b) and patch 0013 is hardware-proven without board-GPIO code.
 
 The 2026-11-21 update below is kept as history apart from the DTS-0001 numbers
 called out above.

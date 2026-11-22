@@ -1,5 +1,5 @@
 release line: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/release-line/manifest.tsv
-workdir: /home/shibbityshwab/luofu-reval-20261122/val-release
+workdir: /home/shibbityshwab/luofu-reval-20261122/val-release2
 pristine version: 6.18.60
 manifest: 55 included, 11 excluded
 patch(1): 55/55 patches RC=0, 152 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects

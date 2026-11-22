@@ -1,2 +1,2 @@
-checkpatch (default): errors=0 warnings=74
-checkpatch (strict): errors=0 warnings=74
+checkpatch (default): errors=0 warnings=73
+checkpatch (strict): errors=0 warnings=73

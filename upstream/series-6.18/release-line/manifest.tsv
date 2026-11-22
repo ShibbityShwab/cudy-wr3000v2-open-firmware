@@ -16,7 +16,7 @@ include	A	009-net-gmac-luofu.patch	96022d6a61c7ef878397dbe2a28b56c00fbf68b6b3ea1
 include	A	010-arm-luofu-restart.patch	3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095	machine restart driver + sysctrl/reboot bindings
 include	A	011-pinctrl-luofu.patch	700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442	pinctrl driver + binding
 include	A	012-arm-thermal-luofu-tvsensor.patch	3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f	thermal sensor driver + binding
-include	A	013-arm-pci-luofu-host.patch	2a43c9533aadb45117abe5eebb0d49248b9ac349b47cdc1c808208b22b40559c	DWC PCIe host controller + binding
+include	A	013-arm-pci-luofu-host.patch	beedd07b4f63346c451554ff99a62eac2d029b9c41835a99831ecb1c5c83ccd7	DWC PCIe host controller + binding
 include	A	014-arm-crg-reset-polarity.patch	739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227	CRG reset-polarity fix (active-low release)
 include	A	015-net-pie-luofu.patch	fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2	PIE packet-engine draft (refuses to arm)
 include	A	016-net-lsw-luofu.patch	c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a	LSW switch D1a probe skeleton + binding

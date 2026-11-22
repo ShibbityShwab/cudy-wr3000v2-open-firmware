@@ -10,7 +10,7 @@
 0010-arm-luofu-restart.patch :: total: 0 errors, 2 warnings, 0 checks, 394 lines checked
 0011-pinctrl-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 1003 lines checked
 0012-arm-thermal-luofu-tvsensor.patch :: total: 0 errors, 2 warnings, 0 checks, 217 lines checked
-0013-arm-pci-luofu-host.patch :: total: 0 errors, 18 warnings, 0 checks, 844 lines checked
+0013-arm-pci-luofu-host.patch :: total: 0 errors, 17 warnings, 0 checks, 821 lines checked
 0014-arm-crg-reset-polarity.patch :: total: 0 errors, 1 warnings, 0 checks, 45 lines checked
 0015-net-pie-luofu.patch :: total: 0 errors, 2 warnings, 0 checks, 715 lines checked
 0016-net-lsw-luofu.patch :: total: 0 errors, 2 warnings, 2 checks, 646 lines checked

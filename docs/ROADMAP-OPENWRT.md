@@ -48,9 +48,10 @@ checklist and the proposed submission split are in
 - **PCIe is solved on the 6.18 kernel** [V].  The link never trained because the board leaves
   the Wi-Fi endpoint's power/reset controls (GPIO0 pins 20/21/28) unconfigured: they must be
   outputs driven HIGH before training.  With that fix the link reaches L0 and both Hi5622
-  endpoints (59e7:0005) enumerate on our kernel.  Patch 013 keeps the hardcoded workaround;
-  the submission form is the DTS gpio-hog added today and one boot test is required before
-  the workaround is removed.
+  endpoints (59e7:0005) enumerate on our kernel.  The pins are board data described by the
+  DTS `wifi-pcie-hog`; the W27b hog-only boot (image sha256 `4af1d1fa...`) proved the
+  hog alone suffices, so the intermediate hardcoded driver workaround was removed and
+  patch 013 now contains no board-GPIO code.
 - **The Wi-Fi transport bring-up works** [V].  The clean-room `hi5622_pciet` module boots the
   chip: firmware upload 928,920 B with verify diffs=0, CPU release 0x5a5a, D2H announce
   0xcece, DEVICE READY (D2H id 2, bitmap 0x4); stage B2 also passed on image W26a
@@ -64,8 +65,10 @@ checklist and the proposed submission split are in
 - **Submission package status:** `opensource/docs/upstream/SUBMISSION-STATUS.md` is now the
   definitive checklist (2 DONE / 20 PARTIAL / 5 BLOCKED at 2026-11-22) with the proposed
   `openwrt/openwrt` split (target+DTS first, drivers second).  The generated review-form
-  artefacts (`series/0013`, MANIFEST, validation logs, DTS-0001) are stale after today's
-  patch-013/DTS edits and must be regenerated before anything is posted.
+  artefacts (`series/0013`, MANIFEST, validation logs, DTS-0001) were regenerated against
+  the final patch 013 and re-validated: `gen-series.py --check` clean, release-line
+  validator PASS (55/55 strict), review form 26/26 with 0 errors / 73 warnings, PCIe
+  `dt_binding_check` RC=0.
 
 ## Where the plan stands on 2026-11-18
 

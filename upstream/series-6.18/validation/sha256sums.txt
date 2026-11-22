@@ -1,7 +1,8 @@
 # sha256 of the commit-ready series files and of the source target-skeleton patches.
-# Regenerated on the author host on 2026-11-22 after the hardware GPIO patch-013
-# update, the review-form regeneration (new 0013 message) and the DTS-0001
-# regeneration from the release-line-filtered single-source board DTS.
+# Regenerated on the author host on 2026-11-22 after the hardware PCIe GPIO fix
+# (patch 013 final: workaround removed after the W27b hog-only boot), the
+# review-form regeneration (new 0013 message) and the DTS-0001 regeneration from
+# the release-line-filtered single-source board DTS.
 # Paths are relative to the series-6.18 directory.  Verify with:
 #   cd opensource/upstream/series-6.18 && sha256sum -c validation/sha256sums.txt
 
@@ -18,7 +19,7 @@ bbb0266e2230d1c7e11ea616cd2f5591e1e3e043f042a62bc0c871f802597ad5  series/0002-ar
 bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8  series/0010-arm-luofu-restart.patch
 872cc563004e20c18266f5f34979cb6e6880e6a2da84fcf436bfc5ffa3179a39  series/0011-pinctrl-luofu.patch
 131ed955ee95e7e513e701337b99a890e57b1bf27f1c9e15db6f9c22622075ea  series/0012-arm-thermal-luofu-tvsensor.patch
-667907d6e290c4824eeb5c7b20427923b2ae212024272868253392fd85725561  series/0013-arm-pci-luofu-host.patch
+45c47afd6fd83e5d8b5c5861f0715ec82a135c46c5058907668fb33ab53ada34  series/0013-arm-pci-luofu-host.patch
 8a8fba5b9f04e61c759d77a160caf31c32206ed882b97bf51c8882865f93e7eb  series/0014-arm-crg-reset-polarity.patch
 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663  series/0015-net-pie-luofu.patch
 f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28  series/0016-net-lsw-luofu.patch
@@ -47,7 +48,7 @@ dcbb2821b99f2f5b265596999b0d88fc8605561c4b2453d8857ca54d0d512ccb  ../../target-s
 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095  ../../target-skeleton/target/linux/hisilicon/patches-6.18/010-arm-luofu-restart.patch
 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442  ../../target-skeleton/target/linux/hisilicon/patches-6.18/011-pinctrl-luofu.patch
 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f  ../../target-skeleton/target/linux/hisilicon/patches-6.18/012-arm-thermal-luofu-tvsensor.patch
-2a43c9533aadb45117abe5eebb0d49248b9ac349b47cdc1c808208b22b40559c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/013-arm-pci-luofu-host.patch
+beedd07b4f63346c451554ff99a62eac2d029b9c41835a99831ecb1c5c83ccd7  ../../target-skeleton/target/linux/hisilicon/patches-6.18/013-arm-pci-luofu-host.patch
 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227  ../../target-skeleton/target/linux/hisilicon/patches-6.18/014-arm-crg-reset-polarity.patch
 fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2  ../../target-skeleton/target/linux/hisilicon/patches-6.18/015-net-pie-luofu.patch
 c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a  ../../target-skeleton/target/linux/hisilicon/patches-6.18/016-net-lsw-luofu.patch

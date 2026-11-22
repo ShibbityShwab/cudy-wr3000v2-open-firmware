@@ -14,24 +14,22 @@ read (a userspace read of 0x10161000 panicked the board), and sub-word
 or misaligned accesses fault.  The gate clock and the four active-low
 resets per root complex come from the CRG.
 
-Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22:
-with the complete recorded register program the link trains (LTSSM L0,
-the measured vendor steady-state and link-capability values read back
-byte-identically), and both Wi-Fi endpoints behind the root complexes
-enumerate (vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).
-
-The remaining hardware dependency is board GPIO state, not a PCIe
-register: the Wi-Fi endpoint only trains once GPIO0 pins 20, 21 and 28
-are outputs driven high before training (the stock vendor kernel leaves
-them that way).  The board devicetree is expected to describe this as a
-gpio hog on the GPIO controller; until that hog has been boot-tested on
-its own the driver keeps a clearly marked bring-up workaround, to be
-removed afterwards.
+Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22
+(bench images W25d, W26a and W27b): with the complete recorded register
+program the link trains on both root complexes (LTSSM L0, the measured
+vendor steady-state and link-capability values read back byte-identically),
+and both Wi-Fi endpoints behind the root complexes enumerate
+(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  W27b
+additionally proves the patch with no board-GPIO code at all: the
+devicetree gpio hog alone brings both links up, because the board wires
+the Wi-Fi endpoint's power/reset controls to GPIO0 pins 20, 21 and 28,
+which must be outputs driven high before training.  The pins are board
+data, so this driver does not touch them.
 
 This remains an RFC: the driver has no MSI/INTx support (the endpoint
 interrupt route is not documented), the configuration window serves only
-the measured single-function topology, and the ACP power-gate value is a
-bring-up workaround rather than a modelled power domain.  The Wi-Fi
+the measured single-function topology, and the optional acp-gate word is
+a bring-up workaround rather than a modelled power domain.  The Wi-Fi
 endpoint has no mainline driver and is out of scope for this patch.
 
 Host-side: the patch applies to linux-6.18.60 and passes checkpatch with
