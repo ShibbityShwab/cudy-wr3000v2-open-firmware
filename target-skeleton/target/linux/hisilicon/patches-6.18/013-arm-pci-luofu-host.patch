@@ -33,8 +33,8 @@
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 12:08:47.261158022 +0700
-@@ -0,0 +1,566 @@
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 13:14:13.613749092 +0700
+@@ -0,0 +1,594 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -338,27 +338,29 @@
 +			      LUOFU_PCIE_MISC_MODE_RC);
 +
 +	/* Gated DBI batch: RC command IO|MEM|BME (dbi+0x04 |= 0x7) and the
-+	 * target link speed 2 (5 GT/s) in both vendor fields. */
++	 * target link speed 2 (5 GT/s) in both vendor fields.  The DWC DBI
++	 * write-enable (0x8bc bit 0) is also asserted: the framework toggles it
++	 * off after its own setup_rc(), and without it the wrapper ignores the
++	 * later DBI writes (measured: the start_link speed-change clear did not
++	 * stick). */
 +	luofu_pcie_dbi_gate(lpc, true);
++	dw_pcie_dbi_ro_wr_en(pci);
 +	dw_pcie_writel_dbi(pci, PCI_COMMAND,
 +			   dw_pcie_readl_dbi(pci, PCI_COMMAND) | 0x7);
 +	dw_pcie_writel_dbi(pci, 0x7c,
 +			   (dw_pcie_readl_dbi(pci, 0x7c) & ~0xf) | 0x2);
 +	dw_pcie_writel_dbi(pci, 0xa0,
 +			   (dw_pcie_readl_dbi(pci, 0xa0) & ~0xf) | 0x2);
-+	/* Neutralize the framework's pre-link speed-change request: the vendor
-+	 * sets PORT_LOGIC_SPEED_CHANGE only after stage-1 link-up (this port
-+	 * does it in post_init); keep the training window vendor-clean. */
-+	dw_pcie_writel_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL,
-+			   dw_pcie_readl_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL) &
-+			   ~PORT_LOGIC_SPEED_CHANGE);
++	dw_pcie_dbi_ro_wr_dis(pci);
 +	luofu_pcie_dbi_gate(lpc, false);
 +
-+	/* LTSSM enable FIRST (vendor order; the gate bit must be clear for it
-+	 * to take effect), then leave the gate SET so the framework's own iATU
-+	 * writes land while gated; start_link overwrites the viewports with the
-+	 * vendor layout anyway. */
-+	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
++	/* Leave the DBI gate SET so the framework's own iATU writes land while
++	 * gated; start_link overwrites the viewports with the vendor layout.
++	 * The LTSSM enable is deliberately deferred to the END of start_link:
++	 * the vendor enables it only after ALL DBI writes are done, and the
++	 * framework's setup_rc() DBI batch (which asserts SPEED_CHANGE) runs
++	 * after host_init - enabling LTSSM here would let a speed-change
++	 * request hit the live link machine. */
 +	luofu_pcie_dbi_gate(lpc, true);
 +
 +	return 0;
@@ -394,12 +396,31 @@
 +	/* The gate is already set (host_init).  Program the three viewports in
 +	 * the vendor 8-word layout, then go to the steady state (LTSSM + IRQ
 +	 * mask, gate clear). */
++	dw_pcie_dbi_ro_wr_en(pci);
 +	for (i = 0; i < 3; i++)
 +		for (j = 0; j < 8; j++)
 +			writel(iatu[lpc->channel][i][j],
 +			       pci->dbi_base + 0x900 + 0x200 * i + 4 * j);
++
++	/* The framework's dw_pcie_setup_rc() ran before us and set
++	 * PORT_LOGIC_SPEED_CHANGE pre-link; the vendor keeps this bit CLEAR
++	 * during stage-1 training (measured live: 0x80c = 0x12c) and only sets
++	 * it after stage-1 link-up (our post_init).  Clear it now so the
++	 * training window matches stock byte-for-byte. */
++	dw_pcie_writel_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL,
++			   dw_pcie_readl_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL) &
++			   ~PORT_LOGIC_SPEED_CHANGE);
++	dw_pcie_dbi_ro_wr_dis(pci);
++
++	/* All DBI writes are done: enable LTSSM last (vendor order), then the
++	 * steady state (LTSSM + IRQ mask, gate clear). */
++	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
 +	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN |
 +					   LUOFU_PCIE_MISC_APP_IRQ_MASK);
++
++	dev_info(pci->dev, "link training armed: DEBUG0=0x%08x DEBUG1=0x%08x\n",
++		 dw_pcie_readl_dbi(pci, 0x728),
++		 dw_pcie_readl_dbi(pci, 0x72c));
 +
 +	return 0;
 +}
@@ -432,13 +453,20 @@
 +	/* Vendor clears the pre-init reg_int word after the link poll. */
 +	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_REG_INT, 0);
 +
-+	/* Stage-2 retrain (vendor check_link_status runs only after stage-1
-+	 * link-up): gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off
-+	 * back to the steady state. */
-+	luofu_pcie_dbi_gate(lpc, true);
-+	dw_pcie_writel_dbi(pci, 0x80c,
-+			   dw_pcie_readl_dbi(pci, 0x80c) | 0x20000);
-+	luofu_pcie_dbi_gate(lpc, false);
++	dev_info(pci->dev, "post-link check: DEBUG0=0x%08x DEBUG1=0x%08x\n",
++		 dw_pcie_readl_dbi(pci, 0x728),
++		 dw_pcie_readl_dbi(pci, 0x72c));
++
++	/* Stage-2 retrain only after stage-1 link-up (vendor check_link_status).
++	 * Gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off. */
++	if (dw_pcie_link_up(pci)) {
++		luofu_pcie_dbi_gate(lpc, true);
++		dw_pcie_dbi_ro_wr_en(pci);
++		dw_pcie_writel_dbi(pci, 0x80c,
++				   dw_pcie_readl_dbi(pci, 0x80c) | 0x20000);
++		dw_pcie_dbi_ro_wr_dis(pci);
++		luofu_pcie_dbi_gate(lpc, false);
++	}
 +	u32 dbg0 = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG0);
 +	u32 dbg1 = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG1);
 +	u8 cap = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
