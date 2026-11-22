@@ -38,8 +38,10 @@ named artefact, **[I]** inferred, **[U]** unmeasured, **[X]** blocked/excluded.
 - **NEW 2026-11-22 - Wi-Fi transport bring-up works [V].**  The clean-room
   `hi5622_pciet` transport module passes the stage-B1 gate: firmware upload
   928,920 B with **verify diffs=0**, CPU released (0x5a5a), D2H announce (0xcece),
-  and **DEVICE READY (D2H message id 2, bitmap 0x4)**.  This is readiness evidence
-  for a Wi-Fi driver series, **not** an upstream Wi-Fi driver.
+  and **DEVICE READY (D2H message id 2, bitmap 0x4)**.  **Stage B2 also passed**
+  (image W26a): the RC inbound window is programmed from `dma-ranges`, the ETE
+  rings are set up and the H2D smoke doorbell completes cleanly.  This is strong
+  readiness evidence for a Wi-Fi driver series, **not** an upstream Wi-Fi driver.
 - **Single biggest remaining blocker:** **no mainline Wi-Fi driver.**  The only
   working radio stack is the vendor 5.10 binary (closed firmware + vendor MAC); the
   GPLv2 source request is unanswered, and the clean-room work is a framework/
@@ -74,7 +76,7 @@ or hardware campaign required, not an editing task.
 | # | item | status | evidence | remaining work |
 | --- | --- | --- | --- | --- |
 | 1 | Board DTS content up to 2026-11-21 | **DONE** | boot-tested images 7421bb7a / f6685b80 / c3ef2a50 / 6e9c54d0, `07-dts-upstream-bindings.md` sections 6.1-6.3; last blocker list: zero | keep frozen; no further active change without a boot test |
-| 2 | Board DTS 2026-11-22 additions (PCIe nodes enabled, GPIO hog, dma-ranges) | **PARTIAL** | host `cpp+dtc` RC=0, 0 diagnostics; hardware facts [V] (section 4); DTB 12,865 B, pad step 12,872 B | one regression boot of the rebuilt image; dma-ranges pending the stage-B2 bench verdict (section 4.4) |
+| 2 | Board DTS 2026-11-22 additions (PCIe nodes enabled, GPIO hog, dma-ranges) | **PARTIAL** | host `cpp+dtc` RC=0, 0 diagnostics; hardware facts [V] (section 4); dma-ranges now hardware-validated by the B2 pass on image W26a (section 4.2); DTB 12,865 B, pad step 12,872 B | one regression boot of the rebuilt image with the hog (the B2 pass used the pre-hog bench DTS; window sizing may be refined by the Wi-Fi driver) |
 | 3 | Loader hand-off DTS entry DTS-0001 | **PARTIAL** | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `886f3ad0...`, 681-line payload; dependency record `06-dts-series-dependency.md` | regenerate from the 711-line DTS (payload and hashes stale), re-run the DTS contract check, boot-test with 0018 |
 | 4 | Target skeleton tree (`target/linux/hisilicon`) | **PARTIAL** | files complete (Makefile, Kconfig stub, `luofu/{target.mk,config-6.18,config-5.10,profiles}`, `image/*`, `base-files/*`, patch stack); image/Makefile + luofu.mk host stages implemented | copy into an OpenWrt tree and build/boot the target image; decide the target-level Kconfig stub (delete vs move); remove bench-only files from the upstream target PR |
 | 5 | Image recipe (uImage + FIP trailer + UBI rootfs + sysupgrade container) | **PARTIAL** | host stages implemented and byte-validated by `fip-slice.py`/`luofu-image.py`; an earlier build of this recipe booted to userspace 2026-11-19 (UP, 1 CPU); current layout never booted (`image/luofu.mk` header) | build current layout, attended boot, verify pad/gate/UBI/overlay; no factory/install stanza until an install path runs |
@@ -94,7 +96,7 @@ or hardware campaign required, not an editing task.
 | 19 | Boot selector 0017 | **PARTIAL** | RFC; 0x10/0x11 cells measured; 0x21 manual value is a bench handover; full sysupgrade protocol [U] | settle the sysupgrade/A-B story before posting |
 | 20 | **PCIe host 013** | **PARTIAL** | **2026-11-22 [V]**: link trains, both endpoints enumerate; patch cleaned in commit 4e959f2; checkpatch 0 errors / 19 warnings | remove the hardcoded GPIO workaround once the DTS hog is boot-tested (section 4.1); replace/justify `acp-gate`; MSI/INTx still absent; static CFG0 single-function only; split binding; no endpoint driver upstream |
 | 21 | PIE/GEMAC/LSW data path 0015/0016/0020-0026 | **BLOCKED** | drafts flagged "do not merge"; wired LAN works only through release-line gated patches (NAPT + CPU delivery); native L2/VLAN forwarding is the separate LSW project | attended arm/egress/decode campaigns; redesign the PIE/GEMAC split before netdev review |
-| 22 | **Wi-Fi driver** | **BLOCKED** | vendor 5.10 binary only (no mac80211); GPL request unanswered; clean-room transport B1 works [V] (section 4.2) but there is no in-tree mac80211/cfg80211 driver or data path | GPL follow-up (source); framework port + datapath slices; until then mark Wi-Fi "[X] not supported" in any submission |
+| 22 | **Wi-Fi driver** | **BLOCKED** | vendor 5.10 binary only (no mac80211); GPL request unanswered; clean-room transport **B1+B2** works [V] (section 4.2) but there is no in-tree mac80211/cfg80211 driver or data path | GPL follow-up (source); framework port + datapath slices; until then mark Wi-Fi "[X] not supported" in any submission |
 | 23 | DT bindings (all in-series YAMLs) | **PARTIAL** | in-series bindings exist; PCIe `acp-gate` now documented (commit 4e959f2), `num-lanes` covered by the dtschema pci-bus-common schema | split bindings out of driver patches; run `dt_binding_check`/dtbs_check (no dtschema in this checkout); add MAINTAINERS entries |
 | 24 | MAINTAINERS + DCO sign-off | **BLOCKED** | all messages use a placeholder identity | owner must supply a real legal name for `Signed-off-by`, add the MAINTAINERS entry as its own patch |
 | 25 | Generated submission artefacts | **PARTIAL** (stale) | `gen-series.py --check` fails on `series/0013`; manifest/sha sums/validation pre-date the 2026-11-22 edits | regenerate everything listed in section 7 before posting |
@@ -163,6 +165,19 @@ passes the **stage-B1 gate** on the working 6.18 link (parent ledger 2026-11-22
    Observation: ready1 (D2H id 1 / plat-ready) was not seen in the poll window;
    record as an observation, not a failed checkpoint.
 
+**Stage-B2 also passed [V]** (parent ledger 2026-11-22 18:35, image **W26a** sha
+`d03a62e5`): the 6.18 DWC framework programs the RC **inbound iATU** from the new
+`dma-ranges` (verified readback: vp0 ctrl2=0x80000000 base=0x80000000
+limit=0x8fffffff target=0x80000000); B1 reran clean after a power-cycle; the ETE
+channels were programmed (SR0 ch 0x400 base 0x8360c000, DR0 ch 0x590 base
+0x83634000, depth-1 0x1f - inside the expected 0x8xxxxxxx device window) and the
+H2D smoke test (64 B on SR0, doorbell mask 8 / id 3) completed with no abort and
+the device status live.  Verdict: the transport contract (BAR/iATU map, upload,
+release, gate, D2H mailbox, ETE ring programming, H2D doorbell) is reproduced
+end-to-end by clean-room code on Linux 6.18.  Timing lesson for the driver: the
+device posts DEVICE READY about **3 s** after the release, so a one-shot poll must
+wait.
+
 **What this means for the submission:** it proves the transport contract is
 implemented by original GPL-2.0 code on the 6.18 tree and that the hardware hand-off
 (firmware -> CPU release -> D2H ready) works.  It does **not** make a Wi-Fi driver:
@@ -187,7 +202,7 @@ the RC driver does not own this register file - the Wi-Fi driver does.
 
 | commit | content |
 | --- | --- |
-| `5a6a500` | board DTS: identity `dma-ranges` on both PCIe nodes (content from the lead, wifi-transport stage-B2 prerequisite). **Provisional:** the B2 bench A/B verdict is open; this hunk is a separate revertable commit and the window may need adjustment. |
+| `5a6a500` | board DTS: identity `dma-ranges` on both PCIe nodes (content from the lead, wifi-transport stage-B2 prerequisite). **B2 has now passed** on image W26a with this window (RC inbound vp0 0x80000000..0x8fffffff verified); the hunk stays a separate revertable commit because the final DMA window sizing may still be refined by the Wi-Fi driver. |
 | `4e959f2` | patch 013: hardware-verified GPIO notes + stock GPIO0 values, hardware-verified status replacing "never run", compact 7-word/absolute endpoint-iATU note, dma-ranges inbound note, corrected start_link comment, documented `acp-gate` binding property, minor checkpatch cleanups. 0 errors / 19 warnings. |
 | `32d44e6` | board DTS: `wifi-pcie-hog` on `&porta` pins 20/21/28 output-high; remove the two obsolete `wifi@0,0` stub children; refresh the stale header; add `dt-bindings/gpio/gpio.h`. |
 | (this file) | checklist + series split; ROADMAP proof-point update; SPDX headers on the two bench-only init scripts. |
@@ -439,6 +454,7 @@ Wi-Fi:
 | PCIe register state vs vendor live | parent `mem-entries.md` 2026-11-22 12:45 / 13:20; `docs/incoming/pcie-seq/*` |
 | endpoint iATU map (compact/absolute) | `docs/phase18/inbound-map.md` Part A; `docs/incoming/wifi-transport-port/REPORT.md`; ledger 2026-11-22 17:45 / 18:20 |
 | Wi-Fi transport B1 gate | parent `mem-entries.md` 2026-11-22 18:20; `docs/incoming/wifi-transport-port/{REPORT,SUMMARY,BENCH-PLAN}.md`, `build/` |
+| Wi-Fi transport B2 (ETE rings + H2D smoke, dma-ranges inbound window) | parent `mem-entries.md` 2026-11-22 18:35; image W26a sha `d03a62e5`; `docs/incoming/wifi-transport-port/build/pciet_main.c` (commit 9700250) |
 | Wi-Fi framework census/port | `docs/incoming/wifi-framework-port/`, `docs/incoming/wifi-*/REPORT.md`, ledger 2026-11-22 07:20-14:45 |
 | board DTS history, bindings review, boot tests | `upstream/series-6.18/07-dts-upstream-bindings.md`; images 7421bb7a / f6685b80 / c3ef2a50 / 6e9c54d0 |
 | release line, L0/L1 classification | `upstream/series-6.18/05-release-line.md`, `release-line/manifest.tsv` |
@@ -459,6 +475,7 @@ Wi-Fi:
 | same pass | `target-skeleton/target/linux/hisilicon/base-files/etc/init.d/{heartbeat,luofu-pair-record}` | GPL-2.0 SPDX headers |
 | same pass | `docs/upstream/SUBMISSION-STATUS.md` (this file) | definitive checklist + series split |
 | same pass | `docs/ROADMAP-OPENWRT.md`, `target-skeleton/RELEASE-NOTES.md` | 2026-11-22 proof-point updates |
+| follow-up, same pass | this file | record the stage-B2 pass (image W26a) and the dma-ranges validation |
 
 Everything above is host-only: **no build was run, no device was touched, and no
 vendor artefact/secret was added.**

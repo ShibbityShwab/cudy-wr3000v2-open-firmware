@@ -53,9 +53,11 @@ checklist and the proposed submission split are in
   the workaround is removed.
 - **The Wi-Fi transport bring-up works** [V].  The clean-room `hi5622_pciet` module boots the
   chip: firmware upload 928,920 B with verify diffs=0, CPU release 0x5a5a, D2H announce
-  0xcece, DEVICE READY (D2H id 2, bitmap 0x4).  This is readiness evidence for a driver
-  series, not a Wi-Fi driver: the vendor-only radio stack, the unanswered GPL source request
-  and the missing mac80211/data path remain the critical path for "complete support".
+  0xcece, DEVICE READY (D2H id 2, bitmap 0x4); stage B2 also passed on image W26a
+  (RC inbound window programmed from `dma-ranges`, ETE rings, H2D smoke doorbell).  This is
+  readiness evidence for a driver series, not a Wi-Fi driver: the vendor-only radio stack,
+  the unanswered GPL source request and the missing mac80211/data path remain the critical
+  path for "complete support".
 - **Endpoint iATU layout corrected** [V]: the endpoint uses compact 7-word inbound viewports
   (no limit_hi, target_lo at +0x10, absolute PCI base/limit), recorded in
   `docs/phase18/inbound-map.md` and in patch 013's driver header.

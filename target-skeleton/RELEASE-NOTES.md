@@ -19,10 +19,12 @@ points, not a release change (no new image is claimed here):
   removed after one boot test proves the hog alone.
 - **Wi-Fi transport bring-up works [V]; there is still no Wi-Fi driver.**  The
   clean-room `hi5622_pciet` module boots the chip (firmware upload verify
-  diffs=0, CPU released, D2H DEVICE READY id 2).  The vendor-only radio stack and
-  the missing mac80211/data path are why the "Wi-Fi: vendor driver only [X]" row is
-  unchanged for *support* purposes - the transport is readiness evidence, not a
-  driver.
+  diffs=0, CPU released, D2H DEVICE READY id 2) and stage B2 passed on image
+  **W26a**: the RC inbound window is programmed from the DTS `dma-ranges`, the
+  ETE rings are programmed and the H2D smoke doorbell completes cleanly.  The
+  vendor-only radio stack and the missing mac80211/data path are why the "Wi-Fi:
+  vendor driver only [X]" row is unchanged for *support* purposes - the transport
+  is readiness evidence, not a driver.
 
 The definitive per-item upstream checklist (2 DONE / 20 PARTIAL / 5 BLOCKED) and the
 proposed target+DTS-first submission split are in
