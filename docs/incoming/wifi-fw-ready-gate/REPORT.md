@@ -968,3 +968,69 @@ population path, so **there is no host register action from the blob that can ma
    expected; watch out[1] (BAR0 0x3F1014) and DR0-3 +0x3C. Absent a boot-task re-entry, a fresh power
    release is the only way to give the boot task another first pass once the destination is known to exist.
 
+
+---
+
+## 13. Cold-boot verification: expected destination registry, who initializes it, readable before/after markers
+
+### 13.1 Expected registry state after a correct boot (from the blob populate block)
+
+Registry base CA 0x171B6C; records (24 B) at registry + 0x448 + 24*core; group-entry arrays live INSIDE the
+same 0x490-byte block, so all populated pointers are CPU addresses 0x171B6C+x. The populate block (file
+0x7ADC-0x7F1E, inside the boot state machine) fills per core:
+* rec+0x00 = core index
+* rec+0x04 = CPU 0x103FB8 + 0x2C*core (image data pointer; core0 0x00103FB8, core1 0x00103FE4,
+  core2 0x00104010, core3 0x0010403C). The lookup reads [rec+4]+0x10 as max group id; for core0 that
+  word is file 0xC3FC8 = 0x00000007, so group 4 passes.
+* rec+0x08 = 0x00171B70 + 0xE4*N8; rec+0x0C = 0x00171E1C + 0x68*N9;
+  rec+0x10 = 0x00171F54 + 0xC*N10 (the 12-byte group-entry array); rec+0x14 = 0x0017..4*(0x10F+N11);
+  rec+0x18/+0x1C = 0.
+Group-4 entry = (rec+0x10)+0x30: +0/+4 queue/object pointers, +8 send counter (0 before any send).
+Example (all counts 0): rec+0x10 = 0x00171F54, group4 entry at 0x00171F84 with +8 = 0.
+Config-table entry 0 (file 0xC3FB8 = CPU 0x103FB8, image data, always readable):
+0x00000000, 0x00000001, 0x00000003, 0x00000003, 0x00000007, 0x00000003, 0x001040C0, 0x0010CFC8,
+0x00000007, 0x0010CF74, 0x001040A8 (it is the HCC thread table; 0x10CFC8 = HCC TX Thread) [V].
+Healthy core0 record CA 0x171FB4: {0, 0x00103FB8, 0x00171B7x/..E4 region, 0x00171E1C+.., 0x00171F54+..,
+0x00174xxx}. Your warm chip (rec+0x10 = 0, mixed garbage) is not booted.
+
+### 13.2 ROM vs blob
+
+The registry memset+fill is blob code (file 0x7ADC-0x7F1E) [V]; the message object g is written by the
+blob pcie_msg_init (file 0x9700 stores the object pointer at CA 0x172130; H2D dispatcher and D2H-flush
+callbacks registered at 0x9800/0x980C) [V]. The ROM's job is only to invoke the boot chain: pcie_msg_init's
+address is in the static module table at file 0xCF254 (0x00049335 = file 0x9334) and the boot state machine
+at CPU 0x47628 has no in-image caller - both must be dispatched from outside the image. So a true cold
+boot (ROM run) is expected to enter pcie_msg_init and the boot task; g=0 on our warm chip means that did
+not happen [I, matches your read].
+ROM-stage signals: internal 0x0 (host BAR0 0x6B8000) = 0xE59FF018 (ROM reset vector); internal 0x50 (host
+BAR0 0x6B8050) = 0x00103140/0x00103114/0x001030E8/0x001030BC/0x00103090; the config-table words (host
+BAR0 0x7C3FB8) prove the blob image is intact.
+
+### 13.3 Cold vs warm comparison list (region-5 window; BAR0 = 0x6B8000 + CPU)
+
+| # | object | CPU | BAR0 | cold-boot expectation |
+| --- | --- | --- | --- | --- |
+| 1 | ROM vector | 0x0 | 0x6B8000 | 0xE59FF018 (0xFFFFFFFF = ROM window not decoding) |
+| 2 | header vector table | 0x50 | 0x6B8050 | 0x00103140, 0x00103114, 0x001030E8, 0x001030BC, 0x00103090 |
+| 3 | config table entry 0 | 0x103FB8 | 0x7C3FB8 | 0x00000000 0x00000001 0x00000003 0x00000003 0x00000007 ... |
+| 4 | g pointer | 0x172130 | 0x82B130 | nonzero RAM pointer 0x0017xxxx - pcie_msg_init ran |
+| 5 | core-0 record | 0x171FB4 | 0x831FB4 | +4 = 0x00103FB8, +0x10 = 0x00171F54-region nonzero |
+| 6 | core-0 array ptr | 0x171FC4 | 0x831FC4 | 0x00171F54 + 0xC*N (inside 0x171B6C..0x171FFC) |
+| 7 | state byte | 0x118B60 | 0x7D0B60 | 0 before task / 1-2 after (warm: 1) |
+| 8 | late prelude marker | 0x118AEC | 0x7D0AEC | 0x000C19D7 (warm: same) |
+| 9 | head markers | 0x118B58/0x118B5C | 0x7D0B58/0x7D0B5C | 0x00118B58 (warm: same) |
+| 10 | vector mask | 0x40008 | 0x6F8008 | 0 before entries; 0x08 after entry 3; 0x1E if all ran |
+Rows 4-6 are the decisive cold-boot proof. Rows 7-9 may be 0 before release.
+
+### 13.4 If registry is still empty after a true cold boot
+
+The populate block is on a later path of the boot task; the first pass takes the 0x8160 setup branch, sends
+id1, and exits 0x782E on failure. Header entries 1/2/4 are call entry points with no in-image caller (only
+references are the header data itself) [V], so only the ROM/dispatcher can invoke them; the blob has no
+host-writable trigger. Next hypothesis: the ROM did not run our firmware full init table (pcie_msg_init +
+boot task), so no part of the message layer is ready. Probe: after cold boot read rows 1-6 and 10:
+* g != 0 and record populated -> cold boot fixed it (re-arm rings; expect id1 then id2).
+* g != 0, record empty -> pcie_msg_init ran but boot task not entered (or exited early): read state/head
+  markers; missing piece is external boot-task invocation.
+* g == 0 and mask only bit 3 -> ROM init table never ran on this power path; no blob-side workaround.
+
