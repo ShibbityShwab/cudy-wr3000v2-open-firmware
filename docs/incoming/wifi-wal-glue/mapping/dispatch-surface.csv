@@ -1,0 +1,45 @@
+name,family,evidence,glue_symbol,kind,status,notes
+wal_wlan_cfg_module_process_entry,wal_,census-shared-by-name.csv (hk.funcs.txt -> hi1105 wal_config_alg_cfg.c; no license grant),wal_wlan_cfg_module_process_entry,entry,implemented,module dispatch; hi5622 flattened (args,args_num,msg_type,mem,mem_len,process_info) form
+wal_wlan_cfg_module_host_process_entry,wal_,census-ko-only-hi5622-delta.csv,wal_wlan_cfg_module_host_process_entry,entry,stub,host leg; records last cmd; GET formatters bench-gated
+wal_wlan_cfg_module_device_process_entry,wal_,census-ko-only-hi5622-delta.csv,wal_wlan_cfg_module_device_process_entry,entry,stub,device leg; never transmits (host-only slice)
+wal_wlan_cfg_alg_process_entry,wal_,vendor ko 0x14ae44 + codec oracle,wal_wlan_cfg_alg_process_entry,codec,linked,oracle-verified 17-twin core from wifi-algcfg-slice/codec
+wal_hipriv_alg_cfg,wal_,hi3881 wal_hipriv.c (GPL-2.0 vendored),wal_hipriv_alg_cfg,entry,implemented,hipriv-style entry on the codec
+wal_hipriv_alg_cfg_get_cfg_id,wal_,census-ko-only-hi5622-delta.csv,g_wal_hipriv_alg_cfg_get_cfg_id,export,implemented,name->id lookup; exported fn-pointer slot
+wal_hipriv_alg_cfg_get_cfg_id_normal,wal_,census-ko-only-hi5622-delta.csv,wal_hipriv_alg_cfg_get_cfg_id_normal,lookup,implemented,normal variant; exact semantics bench P6
+wal_config_process_entry,wal_,census-ko-only-hi5622-delta.csv,wal_config_process_entry,stub,stub,event-path hook; logs only
+wal_config_process_pkt,wal_,census-shared-by-name.csv,wal_config_process_pkt,stub,stub,event-path hook; logs only
+wal_config_process_pkt_memcpy_proc,wal_,census-ko-only-hi5622-delta.csv,wal_config_process_pkt_memcpy_proc,stub,stub,bounds-checked memcpy
+wal_config_process_recently_cfg_event,wal_,census-ko-only-hi5622-delta.csv,wal_config_process_recently_cfg_event,stub,stub,replay hook; logs only
+wal_msg_request_add_queue,wal_,census-shared-by-name.csv,wal_msg_request_add_queue,stub,implemented,request ring (driver-re s3.7 semantics)
+wal_msg_request_remove_queue,wal_,census-shared-by-name.csv,wal_msg_request_remove_queue,stub,implemented,request ring
+wal_set_dev_msg_response_by_addr,wal_,census-ko-only-hi5622-delta.csv,wal_set_dev_msg_response_by_addr,stub,implemented,response completion by req id (0x0d01xxxx family)
+wal_check_and_release_msg_resp,wal_,census-shared-by-name.csv,wal_check_and_release_msg_resp,stub,implemented,pairing release
+wal_sync_query_dmac_sta_info,wal_,census-ko-only-hi5622-delta.csv,wal_sync_query_dmac_sta_info,stub,stub,no device; returns fail
+hmac_event_config_syn,hmac_,census-shared-by-name.csv,wifi-driver-re s3.6,hmac_event_config_syn,stub,stub,D2H config-sync dispatcher; hcc_msg_process-shaped
+hmac_config_sync_cmd_common,hmac_,census-shared-by-name.csv + vendor ksymtab,hmac_config_sync_cmd_common,export,stub,vendor-exported name; PROVISIONAL signature
+hmac_config_sync_ssid,hmac_,census-ko-only-hi5622-delta.csv,hmac_config_sync_ssid,stub,stub,PROVISIONAL signature
+hmac_sync_dmac_alg_cfg_rsp_entry,hmac_,census-ko-only-hi5622-delta.csv + driver-re s3.6,hmac_sync_dmac_alg_cfg_rsp_entry,stub,stub,decodes rsp req id word; completes pending req
+hmac_sync_dmac_alg_cfg_rsp_get_entry_normal,hmac_,census-ko-only-hi5622-delta.csv,hmac_sync_dmac_alg_cfg_rsp_get_entry_normal,stub,stub,GET variant
+hmac_sync_dmac_cali_cfg_rsp_entry,hmac_,census-ko-only-hi5622-delta.csv,hmac_sync_dmac_cali_cfg_rsp_entry,stub,stub,cali rsp variant
+hmac_chan_tx_cali_sync,hmac_,census-ko-only-hi5622-delta.csv + driver-re s3.4,hmac_chan_tx_cali_sync,stub,stub,TX-failure fallthrough; logs only
+hcc_msg_register_tab_chip,hcc_,plat.ko ksymtab + driver-re s3.3,hcc_msg_register_tab_chip,stub,implemented,12->16-B record merge into stub dispatch
+hcc_msg_register_tab_core,hcc_,plat.ko ksymtab + driver-re s3.3,hcc_msg_register_tab_core,stub,implemented,registers into both core groups
+hcc_msg_register_tab,hcc_,plat.ko ksymtab,hcc_msg_register_tab,stub,implemented,stub table
+hcc_msg_register_tab_customise,hcc_,plat.ko ksymtab,hcc_msg_register_tab_customise,stub,implemented,stub table
+g_alg_cfg_process_find_by_cfg_id,alg_,vendor ksymtab,g_alg_cfg_process_find_by_cfg_id,export,implemented,= alg_cfg_search_process_info_by_cfg_id (codec)
+g_alg_cfg_process_find_by_name,alg_,vendor ksymtab,g_alg_cfg_process_find_by_name,export,implemented,= alg_cfg_search_process_info_by_cfg_name (codec)
+g_alg_cfg_search_alg_debug_lut,alg_,vendor ksymtab,g_alg_cfg_search_alg_debug_lut,export,implemented,-> LUT (wal_cfg_lut.c)
+g_alg_cfg_search_dbg_cfg_name_by_cfg_id,alg_,vendor ksymtab,g_alg_cfg_search_dbg_cfg_name_by_cfg_id,export,implemented,LUT-backed name lookup
+g_alg_cfg_bool_tbl_size,alg_,vendor ksymtab,g_alg_cfg_bool_tbl_size,export,implemented,2
+g_alg_cfg_snd_fback_type_tbl_size,alg_,vendor ksymtab,g_alg_cfg_snd_fback_type_tbl_size,export,implemented,2 (binary 40-row type 16)
+g_alg_cfg_snd_user_mat_type_tbl_size,alg_,vendor ksymtab,g_alg_cfg_snd_user_mat_type_tbl_size,export,implemented,4 (type 19)
+g_alg_cfg_su_aggr_mode_tbl_size,alg_,vendor ksymtab,g_alg_cfg_su_aggr_mode_tbl_size,export,implemented,3 (type 27)
+g_alg_cfg_tx_mode_tbl_size,alg_,codec-slice continuity (not vendor-exported),g_alg_cfg_tx_mode_tbl_size,export,implemented,13; continuity extra vs the codec module
+g_wal_hipriv_alg_cfg_get_cfg_id,alg_,codec-slice slot (not vendor-exported),g_wal_hipriv_alg_cfg_get_cfg_id,export,implemented,now a real fn ptr
+alg_cfg_get_match_value,alg_,vendor ksymtab + codec twin,alg_cfg_get_match_value,export,implemented,codec twin
+alg_cfg_param_get_tbl_size,alg_,vendor ksymtab + codec twin,alg_cfg_param_get_tbl_size,export,implemented,codec twin
+alg_cfg_get_match_string,alg_,vendor ksymtab,alg_cfg_get_match_string,stub,stub,120-list (trigger formatters); PROVISIONAL shape
+alg_cfg_get_tail_num,alg_,vendor ksymtab,alg_cfg_get_tail_num,stub,stub,120-list; PROVISIONAL shape
+alg_cfg_args_analysis_param,alg_,vendor ksymtab,alg_cfg_args_analysis_param,stub,stub,120-list; returns 1017
+alg_cfg_args_param_analyse_equipment_param,alg_,vendor ksymtab,alg_cfg_args_param_analyse_equipment_param,stub,stub,120-list; returns 1017
+wal_cfg_register_vendor_commands,wal_,ours (research API),wal_cfg_register_vendor_commands,entry,implemented,cfg80211 vendor-cmd registration helper (OUI placeholder; provider = cfg80211.ko)
