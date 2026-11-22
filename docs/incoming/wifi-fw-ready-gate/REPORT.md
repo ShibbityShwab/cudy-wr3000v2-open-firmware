@@ -560,3 +560,153 @@ Reproduce (local blob, no repo files needed):
 
 *No vendor binary, blob, calibration value, MAC or secret is included; this document contains only
 offsets and analysis. Lane wrote only this file. Device untouched.*
+
+---
+
+## 10. Follow-up (2026-11-22, bench results in): the 0x4 announce is an exception/startup-vector handshake - decision tree and corrected reads
+
+Bench facts supplied by the Lead (host reads only; no device contact in this lane):
+(A) CA 0x4000010C read 0x0000BAAD before release, 0x00000000 2 s after release;
+(B) one late 0xcece write read back 0xcece, then read 0x00000000 one second later and out[1] re-announced 0x4
+    (a second announce event) - the device re-enters the announce path;
+(C) 400 hammered 0xcece writes make CA 0x4000010C persist, but still no out[1] bit 6 (0x40), no DR fills advance
+    (all four DR +0x3C stuck at init, node word1 = 0), no group-4 frames;
+(D) device status live, ETE intr 0x3F201818, outbound iATU window programmed, DR channels armed with plain
+    publish (+0x38 = 0x1F).
+
+### 10.1 New verified finding: 0x86E14 is the chip's non-reset exception/startup vector handler
+
+The four ready thunks are not called by any firmware code; they are the **targets of the ARM vector stubs**:
+
+| vector table word (file 0x50+) | stub (file) | branches to (ARM veneer) | veneer target (runtime) | ready thunk (file, r1) |
+| --- | --- | --- | --- | --- |
+| 0x54 = 0x00103114 | 0xC3114 | 0xC3B68: ldr pc,[pc,#-4]; 0x000C6FC9 | 0xC6FC8 | 0x86FC8, r1=4 |
+| 0x58 = 0x001030E8 | 0xC30E8 | 0xC3B70: ...; 0x000C6FD7 | 0xC6FD6 | 0x86FD6, r1=3 |
+| 0x5C = 0x001030BC | 0xC30BC | 0xC3B40: ...; 0x000C6FE1 | 0xC6FE0 | 0x86FE0, r1=2 |
+| 0x60 = 0x00103090 | 0xC3090 | 0xC3B48: ...; 0x000C6FEB | 0xC6FEA | 0x86FEA, r1=1 |
+| 0x50 = 0x00103140 (reset) | 0xC3140 | calls runtime 0x82EEC after saving the context frame | - | - |
+
+Each non-reset stub pops the exception PC, saves a **17-word context frame** at sp and passes **r0 = frame
+pointer**, then branches to the veneer (ldr pc,[pc,#-4] at file 0xC3B40/0xC3B48/0xC3B68/0xC3B70) which jumps
+to the ready thunk [V]. The thunks then adjust the saved exception return address at frame+0x3C
+(subs r3,#4, or #8 for the r1=4 variant) and enter 0x86E14 with r1 = 1..4 [V].
+
+Consequences (this supersedes the "core id" language in sections 1.1 and 1.2):
+
+1. **The routine stages the exception/startup context, not host boot parameters.** The 17 words it copies to the
+   firmware image header (CA 0x4000C..0x4004C; runtime = BAR0+0x4000C..0x4004C via the region-0 alias) are
+   r0-r12, sp, lr, lr_exc, spsr of the entering vector [V layout]. The halfword it ORs at CA 0x40008 is
+   **1<<vector** - a vector-seen bitmask [V].
+2. **The re-entry the bench saw is exactly this: every entry zeroes CA 0x4000010C (0x86E7E), writes
+   out[1]=4 + doorbell (0x86F5A/0x86F66), and spins for 0xcece (0x86F78)** [V]. A single host 0xcece write can
+   only release the one entry that happens to be spinning; the next entry zeroes it again. Hammering works
+   because every spin test then sees 0xcece. Persistence after hammering means no further vector entries were
+   pending (all four vectors already released).
+3. **The boot flow waits on the four vector entries before the normal firmware task can progress** [I]. The
+   vendor host does not fight this race because its platform layer writes 0xcece at the right time (the peer
+   write site is still [U] in the host objects); our single-shot write loses it.
+
+### 10.2 Answers to the five questions
+
+**Q1 - what advances the state byte at rt 0x118B60?** Only file 0x8174 in the boot/handshake state machine
+0x7628 (strb.w r3,[r4,#0xF60] with r3 = r6+1, under the lock at rt 0x118B24) [V]. The function that contains it
+has **no static caller and no pointer literal anywhere in the blob**: a raw BL/BLX decode over every even file
+offset (whole image, both regions) finds no branch to 0x7628 and a word scan finds no 0x00047628/0x00047629 [V
+negative]. So it is not invoked by a static firmware call tree: it is entered from **outside the image** (ROM
+fixed-address entry/task poll) or through a runtime pointer that is not in the image [U]. Therefore we cannot
+prove "boot timer" vs "interrupt" from the blob; what we can prove is that it is not driven by any code in the
+blob. Host-visible side effect: read the state byte itself (10.4 read list) - 0 or 1 = the setup branch has not
+completed twice; >= 2 = id1 is queued on the next entry, so a missing bit 6 is then a publish/send problem, not
+a state problem.
+
+**Q2 - what is CA 0x4003022C?** It is a **live region-3 IO word, not RAM**. The boot state machine writes 1 to it
+at file 0x7640 (str r2,[r3] with the literal rt 0x4003022C at file 0x7938) and the ready routine writes 0 at
+0x86E7A [V]. The bench value 0x443CF249 proves neither write persists as a memory flag: writes to this address
+are consumed/overridden by hardware. The read itself is valid (region 3, BAR0+0x3E822C) but it is **not a
+progress indicator** - my earlier "expected 0" in section 6/C3 is corrected and must be dropped from the
+decision tree. The same caution applies to CA 0x40000558 (BAR0+0x3BD558): it is region-3 IO; treat its value as
+hardware state, not as a firmware progress latch.
+
+**Q3 - does the id1 build at 0x7D28 depend on host pre-release writes?** No. The id1 path reads no host-written
+memory: its only inputs are the state byte, the message allocator and the destination table [V]. The 17-word
+"boot parameter header" at CA 0x40008-0x4004C is **not host-owned**: it is the saved vector context written by
+the ready routine on every vector entry (10.1), so (a) a host must not write boot params there - any host word
+would be clobbered by the next entry, and (b) nothing in id1 depends on it. The only host values this path needs
+are the uploaded firmware image (already verified diffs=0), the one-shot release CA 0x40000108 = 0x5a5a, and
+**CA 0x4000010C holding 0xcece at each vector entry** (sustained, not one-shot).
+
+**Q4 - exact decision tree of reads after gate acceptance.** Two different mappings are needed:
+* region-3 **IO** CAs (0x40000000..0x4011FFFF): BAR0 = 0x3B8000 + (CA - 0x40000000);
+* region-0 **firmware RAM/image alias** CAs (0x00000000..0x001BFFFF): BAR0 = CA directly (no 0x3B8000 offset).
+  The firmware runtime address equals the CA in that window (runtime = file + 0x40000), e.g. ready-routine code
+  rt 0xC6E14 = file 0x86E14 -> BAR0+0xC6E14; the state byte rt 0x118B60 -> BAR0+0x118B60.
+
+Read list (all reads unless marked ATTENDED), in order:
+
+| # | what | CA / runtime | BAR0 offset | expected / decision |
+| --- | --- | --- | --- | --- |
+| 0 | image-alias sanity | CA 0x00040000 / 0x00040004 | 0x40000 / 0x40004 | 0x00046971 / 0x000C742D; if not, the region-0 alias is not what you think and all rt reads are invalid |
+| 0b | code sanity | rt 0xC6E14 (file 0x86E14) | 0xC6E14 | 0x43F8E92D (halfwords E92D 43F8); confirms the RAM alias reads code |
+| 1 | **vector mask** | CA 0x00040008 (halfword) | 0x40008 | bits 1..4 = which of the four vector entries have run; 0x001E = all four; changes across two reads mean a vector re-entered |
+| 2 | **last vector context** | CA 0x00040048 / 0x0004004C | 0x40048 / 0x4004C | word 15 = saved exception return address (runtime), word 16 = saved SPSR (mode bits: 0x13 SVC, 0x1F SYS, 0x12 IRQ, 0x11 FIQ, 0x17 ABT, 0x1B UND, 0x10 USR). Two reads differing = re-entry. This tells exactly which vector fired and where |
+| 3 | **state byte** | rt 0x118B60 | 0x118B60 | 0/1 = boot task did not complete setup (its invoker never ran enough); >=2 = id1 built/queued on the next entry |
+| 3b | per-state record | rt 0x118B64 + (state-1)*0x84 | 0x118B64 + ... | non-zero record = that state slot was processed |
+| 3c | state lock | rt 0x118B24 | 0x118B24 | 0 unlocked; non-zero = someone holds it |
+| 4 | global msg object | rt 0x117C00 | 0x117C00 | +0x9C should read 0x40039014 (out[1] pointer); +0xA4 = 0x40101434; +0xB4 armed; +0xB8 pending shadow; +0x270/0x274/0x278/0x27C list heads; +0xF60 = state byte again |
+| 5 | out[1] | CA 0x40039014 | 0x3F1014 | 0x00000004 before mailbox service; 0x00000040 (bit 6) or 0x8 (bit 3) after |
+| 6 | out[0] | CA 0x40039010 | 0x3F1010 | 0 |
+| 7 | gate | CA 0x4000010C | 0x3B810C | 0x0000CECE while served; 0x00000000/0xDEAF = an entry is/was waiting |
+| 8 | DR0..DR3 +0x00 enable | CA 0x4003A590/5E0/630/680 | 0x3F2590/5E0/630/680 | 1 (firmware-set); 0 = firmware DR init did not run/complete |
+| 9 | DR0..DR3 +0x34 depth-1 | same +0x34 | +0x34 | 0x1F (host-programmed) |
+| 10 | DR0..DR3 +0x38/+0x3C | same +0x38/+0x3C | +0x38/+0x3C | +0x38 = host publish; +0x3C must advance if a D2H deposit/notify happened; static = no publish (see 10.4) |
+| 11 | ETE intr | CA 0x40039508 | 0x3F1508 | currently 0x3F201818 (host-authored, see Q5) |
+| 12 | PCIe glue ids | CA 0x40039000 / 0x40039800 | 0x3F1000 / 0x3F1800 | 0x10B / 0x10C (block-id sanity) |
+| 13 | id2 payload source word | CA 0x01060850 (PKTRAM region 2) | 0x238850 (0x1D8000 + (CA - 0x1000000)) | host-readable; the id2 payload is the constant 0x01060850 itself, so this only cross-checks the constant |
+
+Decision logic: (a) if row 1 is 0 or rows 2 stop changing, the vector handshake is over; (b) if row 3 < 2 the
+boot task never advanced - no host-side fix exists (escalate the ROM entry/trigger question); (c) if row 3 >= 2,
+run the mailbox service of section 7 step 1 while keeping CA 0x4000010C = 0xcece, then re-read rows 5, 10, 11;
+(d) if row 4 shows +0xB8 pending shadow with bit 6 but row 5 does not, the publish is blocked on P2 (out[1] not
+drained) - the single most likely remaining cause (10.4); (e) if rows 8/9 show the DR init state missing, the
+firmware's own pcie_msg_init (file 0x9334) did not run - a different, earlier failure.
+
+**Q5 - does the firmware program ETE interrupt/mask registers we could have clobbered?** Yes, once, in
+pcie_msg_init (file 0x96B0-0x96FC) [V]:
+ldr r3,[r4,#0xc] (the mapped ETE intr pointer) -> read/modify bfi r2,r7,#0xc,#1 (bit 12),
+bfi r2,r7,#0x1d,#1 (bit 29), then ldr r3,lit @0x97C8 = 0xE0E0F8F8; ands r3,r1; str - i.e. the firmware
+ends with *0x40039508 &= 0xE0E0F8F8 (clears bits 0-2, 8-10, 16-20, 24-28; keeps 3-7, 11-15, 21-23, 29-31)
+[V]. It also registers two ETE callbacks (slots 0x2D/0x2E) there. There are **no reads** of CA 0x40039508
+anywhere in the image, so the host's write of 0x3F201818 cannot gate firmware progress - and note 0x3F201818 has
+bits 24-28 set, which the firmware's own AND would have cleared, so the current value is host-authored (that is
+the same style of write the vendor host performs: AND with 0xFFE0F8F8 on the same register). Conclusion: the ETE
+intr mask is not the missing trigger; the state-machine trigger is not an ETE interrupt (Q1). No other
+interrupt-mask register is written anywhere in the ready/send paths. The only interrupt-like setup near the
+state machine is the callback registration via 0x86DA2 -> 0x874B0 (slot 2 = the second 0xcece waiter 0x820F8;
+slots 0x4C/0x4E in pcie_msg_init for the H2D dispatcher and D2H flush) [V]; those are mailbox/HCC callbacks, not
+timer/IRQ masks.
+
+### 10.3 Corrected priority list after the bench data
+
+The earlier C2 (0xcece race) is now **[V*] confirmed** and is no longer a cause by itself; the announce
+re-entry is explained (10.1), and persistence after hammering proves the vector entries can be released. The
+state byte / vector-context reads above are the deciders. My earlier CA 0x4003022C indicator is withdrawn (Q2).
+
+### 10.4 Single most likely remaining cause (with the exact first experiment)
+
+**The D2H publish is blocked on P2: out[1] (CA 0x40039014) still holds 0x4 and has never been acked/drained/
+re-armed.** The bench never reported writing out[1]=0/0x40101438/0x40101414; the firmware's flush routine
+0x86108 spins on out[1]==0 (0x86120-0x86128) before it can publish any further D2H word, and the only id-6 D2H
+deposit block 0x861DC is reached through that same service. This explains every (C) observation without any new
+firmware fault: no bit 6, no DR +0x3C advance, no group-4 frames - the frames (if built) never leave the device.
+
+Experiment (ATTENDED; the four proven mailbox bytes):
+1. read CA 0x40039014 (BAR0 0x3F1014) and CA 0x4000010C (BAR0 0x3B810C);
+2. hold CA 0x4000010C = 0x0000CECE (re-write after each out[1] announce);
+3. write CA 0x40101438 = 1 (ack, BAR0 0x4B9438), read CA 0x40039014 then write 0 (drain, BAR0 0x3F1014),
+   write CA 0x40101414 = 1 (re-arm, BAR0 0x4B9414);
+4. poll CA 0x40039014 for 30 s; then re-read rows 3/4/10/11 of the read list.
+Success signature: out[1] transitions 0x4 -> 0x40 (bit 6) and/or 0x8 (bit 3), global-object +0xB8 shadow takes
+the new bit, DR0 +0x3C advances, and the node ring shows word1 = (len<<16)|0x6D2B with HCC header group 4,
+id 1/2. If the state byte (row 3) is < 2 at that moment, the block is earlier and the state-machine trigger
+(ROM entry) becomes the open question instead.
+
