@@ -1,0 +1,20 @@
+# Kbuild - B3 bench instrument (b3-instrument lane, task-66)
+#
+# Full copy of the wifi-transport-port clean-room transport skeleton plus the
+# B3 additions (hi5622_b3.h + pciet_b3.c).  Built as its OWN module
+# (hi5622_pciet_b3.ko) so it cannot collide with the main transport module
+# hi5622_pciet.ko: only one driver can bind the endpoint, therefore load ONLY
+# this module on the bench.
+#
+# Build line (module only - NEVER an image/world build):
+#   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+#   export STAGING_DIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir
+#   make ARCH=arm CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi- \
+#        -C $KDIR M=$(pwd) modules
+
+obj-m := hi5622_pciet_b3.o
+hi5622_pciet_b3-y := pciet_main.o pciet_ete.o pciet_b3.o
+
+# -DHI5622_B3_BUILD selects the B3 driver name + instrument hooks in
+# pciet_main.c and compiles the B3 probe P0-P5 surface.
+ccflags-y += -I$(src) -DHI5622_B3_BUILD

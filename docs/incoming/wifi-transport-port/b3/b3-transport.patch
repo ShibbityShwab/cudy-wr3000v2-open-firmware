@@ -1,0 +1,1905 @@
+# B3 bench instrument — patch vs the wifi-transport-port transport dir (../build)
+#
+# Reproduces the b3/ source tree from the main transport sources:
+#     cp -a build b3
+#     patch -p0 < b3-transport.patch
+# The main transport directory is NOT modified by this patch; every hunk targets
+# b3/.  Modified files carry the new content with context from build/; new files
+# are creations (/dev/null -> b3/<file>).  Documentation files (*.md) are not in
+# this patch: see b3/BUILD-NOTES.md and b3/B3-PLAN.md.
+--- build/hi5622_pciet.h	2026-11-22 18:05:26.346304761 +0700
++++ b3/hi5622_pciet.h	2026-11-22 18:38:44.657986072 +0700
+@@ -265,6 +265,11 @@
+ 
+ struct hi5622_pci;
+ 
++/* ==== B3 (b3-instrument lane, task-66) addition: instrument state pointer.
++ * The definition lives in pciet_b3.c; NULL in a build without
++ * -DHI5622_B3_BUILD.  See hi5622_b3.h for the probe contract. ==== */
++struct hi5622_b3;
++
+ struct hi5622_d2h_handler {
+ 	void	(*func)(struct hi5622_pci *ctx, u32 id);	/* slot func [V] */
+ 	u32	arg;						/* slot arg [V] */
+@@ -307,6 +312,12 @@
+ 	bool			twin_enabled;	/* [U] — off by default */
+ 	u8			read_msg[2][HI5622_D2H_WIRE_READ_MSG_LEN];
+ 	u32			d2h_count;	/* bench telemetry */
++
++	/* ==== B3 (b3-instrument lane, task-66) addition: bench-instrument
++	 * state (rings SR0-2/DR0-3, D2H event capture, DR snapshots, HCC decode).
++	 * Allocated in pciet_b3_probe(); NULL when the module is built without
++	 * -DHI5622_B3_BUILD. ==== */
++	struct hi5622_b3	*b3;
+ };
+ 
+ /* pciet_main.c */
+--- build/pciet_main.c	2026-11-22 18:06:02.305553635 +0700
++++ b3/pciet_main.c	2026-11-22 18:38:44.667986095 +0700
+@@ -55,7 +55,18 @@
+ 
+ #include "hi5622_pciet.h"
+ 
++/* ==== B3 (b3-instrument lane, task-66) additions BEGIN ====
++ * The B3 instrument is a full copy of this transport with the bench probes
++ * P0-P5 added (hi5622_b3.h + pciet_b3.c).  It is built as its own module so
++ * it can never collide with another lane's hi5622_pciet.ko: the driver name
++ * derives from the build flag, and probe/remove call the B3 hooks. */
++#ifdef HI5622_B3_BUILD
++#include "hi5622_b3.h"
++#define DRV_NAME		"hi5622_pciet_b3"
++#else
+ #define DRV_NAME		"hi5622_pciet"
++#endif
++/* ==== B3 additions END ==== */
+ 
+ static unsigned int poll_ms = 500;	/* D2H bitmap poll interval; 0 = off */
+ module_param(poll_ms, uint, 0644);
+@@ -750,6 +761,13 @@
+ 	if (ret)
+ 		dev_warn(dev, "device_add_groups: %d\n", ret);
+ 
++#ifdef HI5622_B3_BUILD
++	/* ==== B3 (b3-instrument lane) addition: instrument probe (host DRAM
++	 * allocations + the b3_* sysfs attrs; no device writes). ==== */
++	if (pciet_b3_probe(ctx))
++		dev_warn(dev, "B3 instrument probe failed; base B1/B2 attrs remain usable\n");
++#endif
++
+ 	dev_info(dev,
+ 		 "%s: endpoint %s BAR0 0x%pap BAR2 0x%pap; "
+ 		 "no device writes performed - attended steps via sysfs\n",
+@@ -769,6 +787,10 @@
+ 
+ 	device_remove_groups(&pdev->dev, pciet_groups);
+ 	pciet_poll_stop(ctx);
++#ifdef HI5622_B3_BUILD
++	/* ==== B3 (b3-instrument lane) addition ==== */
++	pciet_b3_remove(ctx);
++#endif
+ 	pciet_ete_ring_free(ctx, &ctx->dr0);
+ 	pciet_ete_ring_free(ctx, &ctx->sr0);
+ 	dev_info(&pdev->dev, "%s removed\n", DRV_NAME);
+--- build/Kbuild	2026-11-22 01:27:48.031423694 +0700
++++ b3/Kbuild	2026-11-22 18:38:49.347996808 +0700
+@@ -1,13 +1,20 @@
+-# Kbuild — out-of-tree build of the hi5622 PCIe/ETE transport skeleton
+-# against the luofu 6.18 kernel tree (see BUILD-NOTES.md for the build line).
++# Kbuild - B3 bench instrument (b3-instrument lane, task-66)
+ #
+-# Build line:
++# Full copy of the wifi-transport-port clean-room transport skeleton plus the
++# B3 additions (hi5622_b3.h + pciet_b3.c).  Built as its OWN module
++# (hi5622_pciet_b3.ko) so it cannot collide with the main transport module
++# hi5622_pciet.ko: only one driver can bind the endpoint, therefore load ONLY
++# this module on the bench.
++#
++# Build line (module only - NEVER an image/world build):
+ #   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+ #   export STAGING_DIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir
+ #   make ARCH=arm CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi- \
+ #        -C $KDIR M=$(pwd) modules
+ 
+-obj-m := hi5622_pciet.o
+-hi5622_pciet-y := pciet_main.o pciet_ete.o
++obj-m := hi5622_pciet_b3.o
++hi5622_pciet_b3-y := pciet_main.o pciet_ete.o pciet_b3.o
+ 
+-ccflags-y += -I$(src)
++# -DHI5622_B3_BUILD selects the B3 driver name + instrument hooks in
++# pciet_main.c and compiles the B3 probe P0-P5 surface.
++ccflags-y += -I$(src) -DHI5622_B3_BUILD
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b3/hi5622_b3.h	2026-11-22 18:37:24.588826249 +0700
+@@ -0,0 +1,112 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_b3.h - B3 bench-instrument additions to the Hi5622V100 clean-room
++ * PCIe/ETE transport skeleton.
++ *
++ * ORIGINAL code by the b3-instrument lane (task-66, 2026-11-22).  This file
++ * and pciet_b3.c extend the wifi-transport-port skeleton in ../build/ with the
++ * post-DEVICE-READY bench probes P0-P5 specified by the hcc-re contract:
++ *
++ *   opensource/docs/incoming/wifi-hcc-re/REPORT.md  sec 4 (ETE engine),
++ *       sec 5.1/5.2/5.4 (mailbox + required host write sequence),
++ *       sec 8 (driver-facing contract), sec 9 (B3 probes P0-P5)
++ *   opensource/docs/incoming/wifi-hcc-re/SUMMARY.md (the 10 contract points)
++ *
++ * No vendor source text, object code or blob is reproduced.  Evidence markers
++ * follow hi5622_pciet.h: [V] re-verified from a named local artifact or bench
++ * log, [V*] device-measured by an earlier attended lane, [I] inference,
++ * [U] unknown / not yet pinned.
++ *
++ * SAFETY CONTRACT (project hard rules, encoded here):
++ *   - CA 0x400392f0 (out[5], the H2D ack / "copy A" word) is NEVER written by
++ *     this code: build-time asserts plus the runtime gate in b3_writel();
++ *     probe P4 only READS it, which the rule permits.
++ *   - ETE channel registers the firmware owns are never written: +0x00
++ *     enable, +0x08 ctrl of DR channels, group-A consumer +0x1c, group-B fill
++ *     +0x3c.  P4 reads them back; P0 writes only the host-owned fields.
++ *   - The boot words 0x40000108 (0x5a5a release) and 0x4000010c (0xcece gate)
++ *     are written only by the base module's own attended steps; B3 adds none.
++ *   - The RC misc window 0x10161000 is never touched.
++ *   - B3 posts no H2D message: the contract requires no host reply and H2D id 5
++ *     is a device BUG() trap.
++ */
++#ifndef _HI5622_B3_H
++#define _HI5622_B3_H
++
++#include <linux/types.h>
++
++#include "hi5622_pciet.h"
++
++/* ---------------------------------------------------------------------
++ * 1. Mailbox registers used by the contract-correct D2H service [V]
++ *
++ * hcc-re REPORT sec 5.1/5.2/5.4 pins these as write-1 registers.  The base
++ * header carries 0x40101438 / 0x40101414 under the earlier "MAC message
++ * A/B (hdpp-slice hypothesis)" names; the contract re-assigns them to the
++ * D2H ack / re-arm sequence.  B3 uses its own names and asserts the values.
++ * ------------------------------------------------------------------- */
++#define HI5622_CA_B3_D2H_ACK		0x40101438u	/* out[3]: host writes 1 [V] */
++#define HI5622_CA_B3_D2H_REARM		0x40101414u	/* out[4]: host writes 1 [V] */
++#define HI5622_BAR0_B3_D2H_ACK		HI5622_BAR0_IO(HI5622_CA_B3_D2H_ACK)
++#define HI5622_BAR0_B3_D2H_REARM	HI5622_BAR0_IO(HI5622_CA_B3_D2H_REARM)
++/* read-only checkpoints (out[1], out[2], D2H doorbell, out[5]) */
++#define HI5622_BAR0_B3_NEVER_WRITE	HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE)
++#define HI5622_BAR0_B3_D2H_DOORBELL	HI5622_BAR0_IO(HI5622_CA_D2H_DOORBELL)
++
++/* ---------------------------------------------------------------------
++ * 2. HCC frame header (12 bytes) as pinned by hcc-re REPORT sec 3.1 [V]
++ *
++ *   +0x00 u8   group/type: low nibble = group index (&0xf at dispatch)
++ *   +0x01 u8   low nibble = alloc state (1 = allocated);
++ *              high nibble = resource-group / thread index (queue routing)
++ *   +0x02 u8   per-message field A
++ *   +0x03 u8   per-message field B (chip id / vap id)
++ *   +0x04 u16  total length = payload + 12   (little-endian)
++ *   +0x06 u16  message id - the dispatch key (little-endian)
++ *   +0x08 u8   per-message field C
++ *   +0x09 u8   dst = hdr[1] >> 4 (resource/thread selector)
++ *   +0x0a u16  transport tag 0x5a5a (little-endian)
++ *   +0x0c ...  payload
++ *
++ * The H2D SR node carries this frame: node word1 = (len << 16) | 0x6d2b with
++ * len = total frame length (payload + 12), node word0 = buffer device VA [V].
++ * The D2H DR node uses the same 8-byte node format [V].
++ * ------------------------------------------------------------------- */
++#define HI5622_B3_HCC_HDR_LEN	12
++#define HI5622_B3_HCC_TAG	0x5a5au		/* transport tag [V] */
++#define HI5622_B3_HCC_GROUP_PLAT 4u		/* boot/exception group [V] */
++#define HI5622_B3_HCC_ID_PLAT_READY 1u		/* device_plat_ready_msg_process [V] */
++#define HI5622_B3_HCC_ID_HOST_READY 2u		/* host_ready_msg_process, payload <= 0x63 B [V] */
++
++struct hi5622_b3_hcc_hdr {
++	u8	group;		/* +0x00 low nibble = group index [V] */
++	u8	rsrc;		/* +0x01 [7:4] = resource-group / thread [V] */
++	u8	field_a;	/* +0x02 [V] */
++	u8	field_b;	/* +0x03 [V] */
++	__le16	total_len;	/* +0x04 payload + 12 [V] */
++	__le16	id;		/* +0x06 dispatch key [V] */
++	u8	field_c;	/* +0x08 [V] */
++	u8	dst;		/* +0x09 [V] */
++	__le16	tag;		/* +0x0a 0x5a5a [V] */
++} __packed;
++
++/* ---------------------------------------------------------------------
++ * 3. ETE channel sets armed by probe P0 [V] (hcc-re REPORT sec 4.1)
++ *    SR0-2 = +0x400/+0x450/+0x4a0 (group A host ring)
++ *    DR0-3 = +0x590/+0x5e0/+0x630/+0x680 (group B host ring)
++ *    depth 32, 8-byte nodes, packed index (idx & 0x3ff) | phase << 10.
++ * ------------------------------------------------------------------- */
++#define HI5622_B3_SR_COUNT	3
++#define HI5622_B3_DR_COUNT	4
++#define HI5622_B3_MAX_NODE_CAP	8	/* P2: first 12 B of up to 8 nodes */
++
++/* ---------------------------------------------------------------------
++ * 4. B3 instrument entry points (called by pciet_main.c when built with
++ *    -DHI5622_B3_BUILD; the base module never references them)
++ * ------------------------------------------------------------------- */
++struct hi5622_b3;
++
++int  pciet_b3_probe(struct hi5622_pci *ctx);
++void pciet_b3_remove(struct hi5622_pci *ctx);
++
++#endif /* _HI5622_B3_H */
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b3/pciet_b3.c	2026-11-22 18:40:59.702348132 +0700
+@@ -0,0 +1,1517 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * pciet_b3.c - B3 bench instrument for the Hi5622V100 clean-room PCIe/ETE
++ * transport: ETE-ring arming (P0), contract-correct D2H drain/ack/re-arm with
++ * per-bit event capture (P1), DR completion snapshots (P2/P5), HCC group-4
++ * ready-message decode (P3) and the read-only post-release state (P4).
++ *
++ * ORIGINAL code by the b3-instrument lane (task-66, 2026-11-22), extending the
++ * wifi-transport-port clean-room skeleton (pciet_main.c / pciet_ete.c /
++ * hi5622_pciet.h) against the hcc-re contract:
++ *
++ *   opensource/docs/incoming/wifi-hcc-re/REPORT.md
++ *     sec 4   ETE block, channels, register groups, node format, consume protocol
++ *     sec 5.1 the six mailbox CAs (out[0]..out[5])
++ *     sec 5.2 host receive algorithm (ack -> read/drain -> re-arm -> dispatch)
++ *     sec 5.4 required host write sequence per received D2H word
++ *     sec 8   driver-facing contract in one page
++ *     sec 9   BE probes P0-P5, this instrument's sysfs surface
++ *   opensource/docs/incoming/wifi-hcc-re/SUMMARY.md
++ *
++ * Bench discipline encoded here (mirror of wifi-transport-port/BENCH-PLAN.md):
++ *   - probe() allocates host DRAM only; no device writes; every device write
++ *     is an explicit, logged, single-step sysfs store;
++ *   - CA 0x400392f0 (out[5]) is NEVER written: build-time asserts plus the
++ *     runtime gate in b3_writel(); P4 only READS it;
++ *   - firmware-owned ETE registers (+0x00 enable, DR +0x08 ctrl, group-A
++ *     consumer +0x1c, group-B fill +0x3c) are never written, only read back;
++ *   - no H2D message is posted (the contract requires no host reply; device
++ *     H2D id 5 is a BUG() trap);
++ *   - P0 is single-shot per module load: a second arm is refused (-EBUSY)
++ *     because the device may already have deposited nodes.
++ *
++ * Evidence markers as in hi5622_pciet.h: [V] re-verified from a named local
++ * artifact/bench log, [V*] device-measured by an earlier attended lane,
++ * [I] inference, [U] unknown / not yet pinned.
++ */
++#include <linux/completion.h>
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/io.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/kthread.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/pci.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/byteorder/generic.h>
++#include <asm/barrier.h>
++
++#include "hi5622_b3.h"
++
++/* ---------------------------------------------------------------------
++ * Tunables and constants
++ * ------------------------------------------------------------------- */
++#define B3_RESULT_LEN		4096	/* formatted P2/P5 result text per probe */
++#define B3_MAX_HIST		16	/* P1: last N nonzero out[1] words */
++#define B3_WATCH_MAX_S		120	/* P1 watch window cap */
++#define B3_WATCH_MS		25	/* P1 drain/dispatch poll interval */
++#define B3_DMA_WIN_LO		0x80000000u	/* RC inbound window [V*] */
++#define B3_DMA_WIN_HI		0x8fffffffu	/* 256 MiB identity map [V*] */
++#define B3_IDX_LOW_MASK		0x3ffu
++#define B3_DRV_NAME		"hi5622_pciet_b3"
++
++static unsigned int b3_prepost = HI5622_ETE_DEPTH;
++module_param_named(prepost, b3_prepost, uint, 0444);
++MODULE_PARM_DESC(prepost,
++		 "P0: DR free buffers pre-posted per channel (1..32, default 32)");
++
++/*
++ * This kernel config sets CONFIG_MODULE_STRIPPED=y, so MODULE_DESCRIPTION()
++ * (and MODULE_AUTHOR()) are compiled out of .modinfo and modpost emits a
++ * spurious "missing MODULE_DESCRIPTION()" notice for every module.  Keep the
++ * description in a non-stripping MODULE_INFO tag so the B3 module build is
++ * warning-clean; MODULE_LICENSE stays in pciet_main.c.
++ */
++MODULE_INFO(description,
++	    "Hi5622V100 PCIe/ETE transport B3 bench instrument (clean-room, Linux 6.18)");
++
++/* ---------------------------------------------------------------------
++ * Instrument state
++ * ------------------------------------------------------------------- */
++struct b3_node_cap {
++	u32	idx;		/* low 10 bits of the packed DR index [V] */
++	u32	word0;		/* node word0 = buffer device VA [V] */
++	u32	word1;		/* node word1 = (len << 16) | flags [V] */
++	u32	len;		/* word1 >> 16 [V] */
++	u32	flag;		/* word1 & 0x1fff [V] */
++	bool	va_ok;		/* word0 resolved against this ring's buffers */
++	bool	hdr_ok;		/* 12-byte HCC header present */
++	u8	hdr[HI5622_B3_HCC_HDR_LEN];
++	u8	group;		/* hdr[0] & 0xf [V] */
++	u8	rsrc;		/* hdr[1] >> 4 [V] */
++	u8	dst;		/* hdr[9] [V] */
++	u16	total_len;	/* hdr u16 @+4 = payload + 12 [V] */
++	u16	id;		/* hdr u16 @+6, dispatch key [V] */
++	u16	tag;		/* hdr u16 @+10, expected 0x5a5a [V] */
++};
++
++struct b3_ring_cap {
++	u32	base;		/* DR +0x30 host-programmed base [V] */
++	u32	depthm1;	/* DR +0x34 depth - 1 [V] */
++	u32	pub;		/* DR +0x38 host-published free idx [V] */
++	u32	fill;		/* DR +0x3c device fill/service idx [V] */
++	u32	enable;		/* channel +0x00 enable (firmware-owned) [V] */
++	u32	ctrl;		/* channel +0x08 ctrl [V] */
++	u32	from;		/* first inspected packed index */
++	u32	n_new;		/* completed nodes between from and fill */
++	u32	n_nodes;	/* nodes captured (<= B3_MAX_NODE_CAP) */
++	bool	truncated;	/* more completed nodes than captured */
++	struct b3_node_cap nodes[HI5622_B3_MAX_NODE_CAP];
++};
++
++struct hi5622_b3 {
++	struct hi5622_ete_ring	sr[HI5622_B3_SR_COUNT];
++	struct hi5622_ete_ring	dr[HI5622_B3_DR_COUNT];
++	bool			armed;
++	u32			preposted;
++	struct mutex		lock;		/* serializes the D2H service */
++	bool			watch_active;
++
++	/* P1: D2H mailbox telemetry */
++	u64			d2h_events;
++	u32			d2h_bitmap_last;
++	u32			d2h_id_seen;	/* OR of every bitmap word seen */
++	u32			d2h_bit_count[HI5622_D2H_MAX_ID + 1];
++	u32			d2h_hist[B3_MAX_HIST];
++	u32			d2h_hist_pos;
++	u32			watch_seconds_last;
++	unsigned long		watch_start;
++
++	/* P2/P5: DR consume state (packed indices, phase bit at 0x400) */
++	u32			dr_fill_last[HI5622_B3_DR_COUNT];
++	u32			dr_pub[HI5622_B3_DR_COUNT];
++	u32			dr_rx_nodes;
++	bool			has_cap[HI5622_B3_DR_COUNT];
++	struct b3_ring_cap	last_cap[HI5622_B3_DR_COUNT];
++
++	/* P3: HCC receive telemetry */
++	u32			hcc_rx_nodes;
++	u32			hcc_group_count[16];
++	u32			hcc_last_group;
++	u32			hcc_last_rsrc;
++	u32			hcc_last_len;
++	u32			hcc_last_total;
++	u32			hcc_last_id;
++	bool			hcc_last_ok;	/* tag == 0x5a5a */
++	bool			g4_id1_seen;	/* chip group4 id1: plat ready [V] */
++	bool			g4_id2_seen;	/* chip group4 id2: host ready [V] */
++	u16			g4_id1_len;
++	u16			g4_id1_total;
++	u8			g4_id1_first[16];
++	u16			g4_id2_len;
++	u16			g4_id2_total;
++	u16			g4_id2_plen;
++	u8			g4_id2_payload[0x63];	/* host_ready_msg_process cap [V] */
++
++	/* formatted result text for the read-back attrs */
++	char			p2_result[B3_RESULT_LEN];
++	char			p5_result[B3_RESULT_LEN];
++};
++
++/* ETE channel table (hcc-re REPORT sec 4.1 [V]) */
++static const u32 b3_sr_off[HI5622_B3_SR_COUNT] = {
++	HI5622_ETE_SR0_OFF, HI5622_ETE_SR1_OFF, HI5622_ETE_SR2_OFF,
++};
++
++static const u32 b3_dr_off[HI5622_B3_DR_COUNT] = {
++	HI5622_ETE_DR0_OFF, HI5622_ETE_DR1_OFF,
++	HI5622_ETE_DR2_OFF, HI5622_ETE_DR3_OFF,
++};
++
++/* ---------------------------------------------------------------------
++ * Contract asserts and gated device writes
++ * ------------------------------------------------------------------- */
++static void b3_assert_contract(void)
++{
++	/* no B3 write register may resolve onto the never-write CA */
++	BUILD_BUG_ON(HI5622_BAR0_B3_D2H_ACK == HI5622_BAR0_B3_NEVER_WRITE);
++	BUILD_BUG_ON(HI5622_BAR0_B3_D2H_REARM == HI5622_BAR0_B3_NEVER_WRITE);
++	BUILD_BUG_ON(HI5622_BAR0_B3_D2H_DOORBELL ==
++		     HI5622_BAR0_B3_NEVER_WRITE);
++	BUILD_BUG_ON(HI5622_BAR0_D2H_BITMAP == HI5622_BAR0_B3_NEVER_WRITE);
++	BUILD_BUG_ON(HI5622_BAR0_IO(HI5622_CA_MAC_MSG_A) !=
++		     HI5622_BAR0_B3_D2H_ACK);
++	BUILD_BUG_ON(HI5622_BAR0_IO(HI5622_CA_MAC_MSG_B) !=
++		     HI5622_BAR0_B3_D2H_REARM);
++	BUILD_BUG_ON(sizeof(struct hi5622_b3_hcc_hdr) !=
++		     HI5622_B3_HCC_HDR_LEN);
++	BUILD_BUG_ON(HI5622_B3_DR_COUNT != 4);
++	BUILD_BUG_ON(HI5622_B3_SR_COUNT != 3);
++	BUILD_BUG_ON(sizeof(struct hi5622_ete_node) != 8);
++	BUILD_BUG_ON(HI5622_ETE_DEPTH > (int)B3_IDX_LOW_MASK + 1);
++}
++
++/* The only BAR0 write helper; refuses the never-write CA (project hard rule). */
++static void b3_writel(struct hi5622_pci *ctx, u32 bar0_off, u32 val)
++{
++	if (WARN_ON_ONCE(bar0_off == HI5622_BAR0_B3_NEVER_WRITE))
++		return;
++	writel(val, ctx->bar0 + bar0_off);
++}
++
++/* ETE channel register write; same never-write gate on the final offset. */
++static void b3_ete_writel(struct hi5622_pci *ctx, u32 chan_off, u32 reg_off,
++			  u32 val)
++{
++	u32 off = HI5622_BAR0_ETE_BASE + chan_off + reg_off;
++
++	if (WARN_ON_ONCE(off == HI5622_BAR0_B3_NEVER_WRITE))
++		return;
++	writel(val, ctx->bar0 + off);
++}
++
++/* ---------------------------------------------------------------------
++ * Status/formatting helpers
++ * ------------------------------------------------------------------- */
++struct b3_out {
++	char	*buf;
++	size_t	size;
++	size_t	pos;
++	bool	trunc;
++};
++
++static void b3_out_init(struct b3_out *o, char *buf, size_t size)
++{
++	o->buf = buf;
++	o->size = size;
++	o->pos = 0;
++	o->trunc = false;
++	if (size)
++		buf[0] = '\0';
++}
++
++static void b3_out_printf(struct b3_out *o, const char *fmt, ...)
++{
++	va_list args;
++	int n;
++
++	if (o->trunc || o->pos + 1 >= o->size)
++		return;
++	va_start(args, fmt);
++	n = vsnprintf(o->buf + o->pos, o->size - o->pos, fmt, args);
++	va_end(args);
++	if (n < 0) {
++		o->trunc = true;
++		return;
++	}
++	if ((size_t)n >= o->size - o->pos) {
++		o->trunc = true;
++		o->pos = o->size - 1;
++		return;
++	}
++	o->pos += (size_t)n;
++}
++
++static void b3_out_finish(struct b3_out *o)
++{
++	static const char marker[] = "[trunc]\n";
++
++	if (!o->trunc || o->size < sizeof(marker) + 1)
++		return;
++	memcpy(o->buf + o->size - sizeof(marker) - 1, marker,
++	       sizeof(marker));	/* includes the trailing NUL */
++}
++
++static void b3_hex_bytes(char *dst, size_t dstsz, const u8 *src, u32 len)
++{
++	static const char hexchars[] = "0123456789abcdef";
++	size_t pos = 0;
++	u32 i;
++
++	if (!dstsz)
++		return;
++	dst[0] = '\0';
++	for (i = 0; i < len && pos + 4 < dstsz; i++) {
++		dst[pos++] = hexchars[src[i] >> 4];
++		dst[pos++] = hexchars[src[i] & 0xfu];
++		dst[pos++] = ' ';
++		dst[pos] = '\0';
++	}
++}
++
++/* Repeat a formatted, multi-line result into dmesg (bench evidence capture). */
++static void b3_log_text(struct hi5622_pci *ctx, const char *what,
++			const char *text)
++{
++	const char *p = text;
++
++	while (*p) {
++		const char *nl = strchr(p, '\n');
++		size_t n = nl ? (size_t)(nl - p) : strlen(p);
++		char line[200];
++
++		if (n >= sizeof(line))
++			n = sizeof(line) - 1;
++		memcpy(line, p, n);
++		line[n] = '\0';
++		dev_info(&ctx->pdev->dev, "B3 %s: %s\n", what, line);
++		if (!nl)
++			break;
++		p = nl + 1;
++	}
++}
++
++/* ---------------------------------------------------------------------
++ * Packed ring-index arithmetic [V] (pcie_ete_ring_ptr_plus / get_rls_num)
++ *
++ * idx = (idx & 0x3ff) | phase << 10.  Advance: idx + 1; when the low 10 bits
++ * reach depth, clear them and toggle the phase bit.  Newly completed nodes
++ * between two indices = depth * phase_delta + (low_to - low_from).
++ * ------------------------------------------------------------------- */
++static u32 b3_idx_plus(u32 idx, u32 depth)
++{
++	u32 next = idx + 1;
++
++	if ((next & B3_IDX_LOW_MASK) == depth) {
++		next &= ~B3_IDX_LOW_MASK;
++		next ^= HI5622_ETE_IDX_PHASE_BIT;
++	}
++	return next;
++}
++
++static u32 b3_idx_count(u32 from, u32 to, u32 depth)
++{
++	s32 phase = (s32)((to >> 10) & 1u) - (s32)((from >> 10) & 1u);
++	s32 delta = phase * (s32)depth +
++		    (s32)(to & B3_IDX_LOW_MASK) -
++		    (s32)(from & B3_IDX_LOW_MASK);
++
++	if (delta < 0)
++		delta += 2 * (s32)depth;
++	return (u32)delta;
++}
++
++static void *b3_node_va(struct hi5622_ete_ring *r, u32 devva)
++{
++	u32 i;
++
++	for (i = 0; i < r->depth; i++)
++		if ((u32)r->buf_dma[i] == devva)
++			return r->bufs[i];
++	return NULL;
++}
++
++static bool b3_dma_in_window(u32 dma)
++{
++	return dma >= B3_DMA_WIN_LO && dma <= B3_DMA_WIN_HI;
++}
++
++static struct hi5622_b3 *b3_of(struct device *dev)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++
++	return ctx ? ctx->b3 : NULL;
++}
++
++static struct hi5622_pci *b3_ctx(struct device *dev)
++{
++	return pci_get_drvdata(to_pci_dev(dev));
++}
++
++/* ---------------------------------------------------------------------
++ * P0 - arm SR0-2 (group A) and DR0-3 (group B), pre-post DR free buffers
++ *
++ * Host-owned writes only (hcc-re REPORT sec 4.2 [V]):
++ *   SR: +0x10 base, +0x14 depth-1, +0x18 producer, +0x08 ctrl = 0
++ *   DR: +0x30 base, +0x34 depth-1, +0x38 published free-buffer index
++ * The firmware-owned fields (+0x00 enable, +0x08 on DR, +0x1c, +0x3c) are
++ * read back for the log but never written.
++ * ------------------------------------------------------------------- */
++static void b3_arm_sr(struct hi5622_pci *ctx, int i)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct hi5622_ete_ring *r = &b3->sr[i];
++	u32 base = (u32)r->node_dma;
++
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_BASE, base);
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_DEPTH, r->depth - 1);
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_PRD, 0);
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_CTRL, 0);
++	wmb();
++	r->producer = 0;
++	r->consumer = 0;
++}
++
++static void b3_arm_dr(struct hi5622_pci *ctx, int i, u32 npre)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct hi5622_ete_ring *r = &b3->dr[i];
++	struct hi5622_ete_node *nodes = r->node_arr;
++	void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE + r->chan_off;
++	u32 base = (u32)r->node_dma;
++	u32 j, pub = 0;
++
++	/* Base/depth first, then the pre-posted free-buffer node words, then
++	 * the published index - so the device never sees a published buffer
++	 * whose node word0 is not yet valid. */
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_BASE, base);
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_DEPTH, r->depth - 1);
++	for (j = 0; j < r->depth; j++) {
++		nodes[j].devva = cpu_to_le32((u32)r->buf_dma[j]);
++		nodes[j].word1 = 0;
++	}
++	wmb();
++	for (j = 0; j < npre; j++)
++		pub = b3_idx_plus(pub, r->depth);
++	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_PRD, pub);
++	wmb();
++
++	b3->dr_pub[i] = pub;
++	b3->dr_fill_last[i] = readl(ch + HI5622_ETE_CH_B_CNS);
++}
++
++static int b3_arm_all(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct device *dev = &ctx->pdev->dev;
++	u32 npre = clamp_t(u32, b3_prepost, 1, HI5622_ETE_DEPTH);
++	u32 i;
++	int ret = 0;
++
++	/* Gate: the coherent node arrays must sit in the RC inbound window that
++	 * the DWC host driver programmed from the board DTS dma-ranges
++	 * (0x80000000..0x8fffffff, hcc-re REPORT sec 4.5 [V*]).  If not, the
++	 * ETE engine cannot reach them and any D2H payload would be lost. */
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		u32 base = (u32)b3->sr[i].node_dma;
++
++		if (!b3_dma_in_window(base)) {
++			dev_err(dev, "B3 P0: SR%u node array dma 0x%08x outside the RC inbound window 0x80000000..0x8fffffff; refusing to arm\n",
++				i, base);
++			return -EIO;
++		}
++	}
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		u32 base = (u32)b3->dr[i].node_dma;
++
++		if (!b3_dma_in_window(base)) {
++			dev_err(dev, "B3 P0: DR%u node array dma 0x%08x outside the RC inbound window 0x80000000..0x8fffffff; refusing to arm\n",
++				i, base);
++			return -EIO;
++		}
++	}
++
++	dev_info(dev, "B3 P0: arming SR0-2 (group A) + DR0-3 (group B), depth 32 (depth-1=0x1f), pre-post %u DR free buffer(s)/channel\n",
++		 npre);
++
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->sr[i];
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   r->chan_off;
++		u32 base, depth, prd, ctrl;
++
++		b3_arm_sr(ctx, i);
++		rmb();
++		base = readl(ch + HI5622_ETE_CH_A_BASE);
++		depth = readl(ch + HI5622_ETE_CH_A_DEPTH);
++		prd = readl(ch + HI5622_ETE_CH_A_PRD);
++		ctrl = readl(ch + HI5622_ETE_CH_CTRL);
++		dev_info(dev, "B3 P0: SR%u ch=0x%03x base=0x%08x depth-1=0x%02x prod=0x%08x ctrl=0x%08x readback=%s (enable=0x%08x consumer=0x%08x, read-only)\n",
++			 i, r->chan_off, base, depth, prd, ctrl,
++			 (base == (u32)r->node_dma && depth == r->depth - 1 &&
++			  prd == 0 && ctrl == 0) ? "OK" : "MISMATCH",
++			 readl(ch + HI5622_ETE_CH_ENABLE),
++			 readl(ch + HI5622_ETE_CH_A_CNS));
++		if (base != (u32)r->node_dma || depth != r->depth - 1 ||
++		    prd != 0 || ctrl != 0) {
++			dev_err(dev, "B3 P0: SR%u register readback mismatch - device state not trusted, stop\n",
++				i);
++			ret = -EIO;
++		}
++	}
++
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->dr[i];
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   r->chan_off;
++		u32 base, depth, pub, fill, enable;
++
++		b3_arm_dr(ctx, i, npre);
++		rmb();
++		base = readl(ch + HI5622_ETE_CH_B_BASE);
++		depth = readl(ch + HI5622_ETE_CH_B_DEPTH);
++		pub = readl(ch + HI5622_ETE_CH_B_PRD);
++		fill = readl(ch + HI5622_ETE_CH_B_CNS);
++		enable = readl(ch + HI5622_ETE_CH_ENABLE);
++		dev_info(dev, "B3 P0: DR%u ch=0x%03x base=0x%08x depth-1=0x%02x pub(free)=0x%08x fill(read-only)=0x%08x enable=0x%08x readback=%s\n",
++			 i, r->chan_off, base, depth, pub, fill, enable,
++			 (base == (u32)r->node_dma && depth == r->depth - 1 &&
++			  pub == b3->dr_pub[i]) ? "OK" : "MISMATCH");
++		if (base != (u32)r->node_dma || depth != r->depth - 1 ||
++		    pub != b3->dr_pub[i]) {
++			dev_err(dev, "B3 P0: DR%u register readback mismatch - device state not trusted, stop\n",
++				i);
++			ret = -EIO;
++		}
++	}
++
++	if (ret)
++		return ret;
++
++	b3->preposted = npre;
++	b3->armed = true;
++	dev_info(dev, "B3 P0: armed 7 channels; DR published index pre-post: packed (idx&0x3ff)|phase<<10 = 0x%08x for %u buffers; firmware-owned enable bits left untouched (P4 reads them)\n",
++		 b3->dr_pub[0], npre);
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * HCC decode (P3)
++ * ------------------------------------------------------------------- */
++static void b3_parse_hdr(const u8 *p, u32 len, struct b3_node_cap *nc)
++{
++	nc->hdr_ok = false;
++	if (len < HI5622_B3_HCC_HDR_LEN)
++		return;
++	memcpy(nc->hdr, p, HI5622_B3_HCC_HDR_LEN);
++	nc->group = p[0] & 0x0fu;
++	nc->rsrc = p[1] >> 4;
++	nc->total_len = (u16)(p[4] | ((u16)p[5] << 8));
++	nc->id = (u16)(p[6] | ((u16)p[7] << 8));
++	nc->dst = p[9];
++	nc->tag = (u16)(p[10] | ((u16)p[11] << 8));
++	nc->hdr_ok = true;
++}
++
++static void b3_hcc_rx(struct hi5622_pci *ctx, int ch, u32 idx, u32 len,
++		      const u8 *p)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct device *dev = &ctx->pdev->dev;
++	u16 total, id, tag;
++	u8 group, rsrc, dst;
++	u32 plen;
++
++	if (len < HI5622_B3_HCC_HDR_LEN) {
++		dev_warn(dev, "B3 RX dr%d[%u]: short frame (%u B), no HCC header\n",
++			 ch, idx, len);
++		b3->hcc_rx_nodes++;
++		return;
++	}
++
++	b3->hcc_rx_nodes++;
++	group = p[0] & 0x0fu;
++	rsrc = p[1] >> 4;
++	total = (u16)(p[4] | ((u16)p[5] << 8));
++	id = (u16)(p[6] | ((u16)p[7] << 8));
++	dst = p[9];
++	tag = (u16)(p[10] | ((u16)p[11] << 8));
++
++	if (group < ARRAY_SIZE(b3->hcc_group_count))
++		b3->hcc_group_count[group]++;
++	b3->hcc_last_group = group;
++	b3->hcc_last_rsrc = rsrc;
++	b3->hcc_last_len = len;
++	b3->hcc_last_total = total;
++	b3->hcc_last_id = id;
++	b3->hcc_last_ok = (tag == HI5622_B3_HCC_TAG);
++
++	dev_info(dev, "B3 RX dr%d[%u]: node len=%u hdr{g=%u rg=%u total=%u id=%u dst=%u tag=0x%04x} tag=%s\n",
++		 ch, idx, len, group, rsrc, total, id, dst, tag,
++		 b3->hcc_last_ok ? "OK" : "MISMATCH");
++	print_hex_dump(KERN_INFO, "B3 hcc: ", DUMP_PREFIX_OFFSET, 16, 1, p,
++		       min_t(u32, len, 64u), true);
++
++	if (group != HI5622_B3_HCC_GROUP_PLAT)
++		return;
++
++	switch (id) {
++	case HI5622_B3_HCC_ID_PLAT_READY:
++		b3->g4_id1_seen = true;
++		b3->g4_id1_len = (u16)min_t(u32, len, 0xffffu);
++		b3->g4_id1_total = total;
++		memcpy(b3->g4_id1_first, p,
++		       min_t(u32, len, sizeof(b3->g4_id1_first)));
++		dev_info(dev, "B3 P3: HCC chip-group4 id1 = device_plat_ready_msg_process (device_plat_ready); vendor wait #1 release [V]; src-core hdr[1]>>4=%u (%s); len=%u total=%u; NO H2D reply\n",
++			 rsrc, rsrc == 0 ? "core0 as expected" : "non-zero - check",
++			 len, total);
++		break;
++	case HI5622_B3_HCC_ID_HOST_READY:
++		plen = total >= HI5622_B3_HCC_HDR_LEN ?
++		       total - HI5622_B3_HCC_HDR_LEN : 0;
++		if (len >= HI5622_B3_HCC_HDR_LEN &&
++		    plen > len - HI5622_B3_HCC_HDR_LEN)
++			plen = len - HI5622_B3_HCC_HDR_LEN;
++		if (plen > sizeof(b3->g4_id2_payload))
++			plen = sizeof(b3->g4_id2_payload);
++		b3->g4_id2_seen = true;
++		b3->g4_id2_len = (u16)min_t(u32, len, 0xffffu);
++		b3->g4_id2_total = total;
++		b3->g4_id2_plen = (u16)plen;
++		memcpy(b3->g4_id2_payload, p + HI5622_B3_HCC_HDR_LEN, plen);
++		dev_info(dev, "B3 P3: HCC chip-group4 id2 = host_ready_msg_process (host_ready); vendor wait #2 release [V]; payload=%u B (contract <= 0x63: %s), total=%u, len=%u; NO H2D reply\n",
++			 plen, plen <= 0x63 ? "OK" : "VIOLATION", total, len);
++		print_hex_dump(KERN_INFO, "B3 g4id2 payload: ",
++			       DUMP_PREFIX_OFFSET, 16, 1,
++			       b3->g4_id2_payload, plen, true);
++		break;
++	default:
++		dev_info(dev, "B3 P3: HCC chip-group4 id%u not in the boot catalogue (0-4) - recorded only\n",
++			 id);
++		break;
++	}
++}
++
++/* ---------------------------------------------------------------------
++ * DR completion capture/consume (P2/P5 consumers, P1 auto-drain)
++ * ------------------------------------------------------------------- */
++static void b3_cap_regs(struct hi5622_pci *ctx, int ch,
++			struct b3_ring_cap *cap)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct hi5622_ete_ring *r = &b3->dr[ch];
++	void __iomem *regs = ctx->bar0 + HI5622_BAR0_ETE_BASE + r->chan_off;
++
++	memset(cap, 0, sizeof(*cap));
++	cap->base = readl(regs + HI5622_ETE_CH_B_BASE);
++	cap->depthm1 = readl(regs + HI5622_ETE_CH_B_DEPTH);
++	cap->pub = readl(regs + HI5622_ETE_CH_B_PRD);
++	cap->fill = readl(regs + HI5622_ETE_CH_B_CNS);
++	cap->enable = readl(regs + HI5622_ETE_CH_ENABLE);
++	cap->ctrl = readl(regs + HI5622_ETE_CH_CTRL);
++}
++
++static void b3_cap_node(struct b3_ring_cap *cap, u32 idx, u32 word0,
++			u32 word1, void *va)
++{
++	struct b3_node_cap *nc;
++
++	if (cap->n_nodes >= HI5622_B3_MAX_NODE_CAP) {
++		cap->truncated = true;
++		return;
++	}
++	nc = &cap->nodes[cap->n_nodes++];
++	memset(nc, 0, sizeof(*nc));
++	nc->idx = idx;
++	nc->word0 = word0;
++	nc->word1 = word1;
++	nc->len = word1 >> HI5622_ETE_NODE_LEN_SHIFT;
++	nc->flag = word1 & 0x1fffu;
++	nc->va_ok = va != NULL;
++	if (va)
++		b3_parse_hdr(va, nc->len, nc);
++}
++
++/* Walk the completed range [from, fill) of one DR channel.  consume=false is
++ * the read-only P2 snapshot; consume=true is the P1/P2 drain that returns the
++ * buffers by advancing DR+0x38.  Returns the number of completed nodes seen
++ * (0 also on an implausible fill index, which is left untouched - stop rule). */
++static u32 b3_walk_dr(struct hi5622_pci *ctx, int ch, bool consume)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct hi5622_ete_ring *r = &b3->dr[ch];
++	struct b3_ring_cap *cap = &b3->last_cap[ch];
++	struct hi5622_ete_node *nodes = r->node_arr;
++	u32 from = b3->dr_fill_last[ch];
++	u32 fill, n, pos, i;
++
++	b3_cap_regs(ctx, ch, cap);
++	fill = cap->fill;
++	n = b3_idx_count(from, fill, r->depth);
++	cap->from = from;
++	cap->n_new = n;
++	b3->has_cap[ch] = true;
++
++	if (n > r->depth) {
++		dev_warn(&ctx->pdev->dev, "B3 DR%d: implausible completion count %u (from=0x%08x fill=0x%08x, pub=0x%08x enable=0x%08x) - NOT consumed; device state unknown, stop\n",
++			 ch, n, from, fill, cap->pub, cap->enable);
++		return 0;
++	}
++	if (!n)
++		return 0;
++
++	if (consume)
++		dev_info(&ctx->pdev->dev, "B3 DR%d: fill=0x%08x last=0x%08x -> %u completed node(s) (pub=0x%08x enable=0x%02x)\n",
++			 ch, fill, from, n, cap->pub, cap->enable);
++
++	pos = from;
++	for (i = 0; i < n; i++) {
++		u32 low = pos & B3_IDX_LOW_MASK;
++		u32 word0, word1, len;
++		void *va;
++
++		rmb();
++		word0 = le32_to_cpu(nodes[low].devva);
++		word1 = le32_to_cpu(nodes[low].word1);
++		rmb();
++		len = word1 >> HI5622_ETE_NODE_LEN_SHIFT;
++		va = b3_node_va(r, word0);
++		b3_cap_node(cap, low, word0, word1, va);
++
++		if (!va) {
++			dev_warn(&ctx->pdev->dev, "B3 DR%d[%u]: node word0 0x%08x is not one of this ring's buffers (word1=0x%08x len=%u) - skipped\n",
++				 ch, low, word0, word1, len);
++		} else if (consume) {
++			if (len >= HI5622_B3_HCC_HDR_LEN &&
++			    len <= r->buf_len)
++				b3_hcc_rx(ctx, ch, low, len, va);
++			else
++				dev_warn(&ctx->pdev->dev, "B3 DR%d[%u]: node word1=0x%08x len=%u outside 12..%u - no HCC decode\n",
++					 ch, low, word1, len, r->buf_len);
++		}
++
++		if (consume) {
++			/* return this buffer: advance the host-published free idx */
++			b3->dr_pub[ch] = b3_idx_plus(b3->dr_pub[ch], r->depth);
++			pos = b3_idx_plus(pos, r->depth);
++		}
++	}
++
++	if (consume) {
++		b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_PRD,
++			      b3->dr_pub[ch]);
++		wmb();
++		b3->dr_fill_last[ch] = fill;
++		b3->dr_rx_nodes += n;
++		dev_info(&ctx->pdev->dev, "B3 DR%d: consumed %u node(s); host free idx (+0x38) now 0x%08x, new fill baseline 0x%08x\n",
++			 ch, n, b3->dr_pub[ch], fill);
++	}
++	return n;
++}
++
++/* ---------------------------------------------------------------------
++ * P2 - snapshot all four DR blocks (+0x3c/+0x38) and decode up to 8 nodes
++ * ------------------------------------------------------------------- */
++static void b3_build_p2(struct hi5622_pci *ctx, const char *reason)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct b3_out o;
++	int ch;
++
++	b3_out_init(&o, b3->p2_result, sizeof(b3->p2_result));
++	b3_out_printf(&o, "B3-P2 DR snapshot reason=%s armed=%d prepost=%u d2h_events=%llu hcc_rx=%u dr_rx=%u\n",
++		      reason, b3->armed, b3->preposted,
++		      (unsigned long long)b3->d2h_events, b3->hcc_rx_nodes,
++		      b3->dr_rx_nodes);
++	for (ch = 0; ch < HI5622_B3_DR_COUNT; ch++) {
++		struct b3_ring_cap *c = &b3->last_cap[ch];
++		u32 i;
++
++		if (!b3->has_cap[ch]) {
++			b3_out_printf(&o, "dr%d: no snapshot yet (P0 not run?)\n",
++				      ch);
++			continue;
++		}
++		b3_out_printf(&o, "dr%d base=0x%08x depth-1=0x%02x pub(+0x38)=0x%08x fill(+0x3c)=0x%08x enable=0x%08x ctrl=0x%02x from=0x%08x new=%u%s\n",
++			      ch, c->base, c->depthm1, c->pub, c->fill,
++			      c->enable, c->ctrl, c->from, c->n_new,
++			      c->truncated ? " (captured first 8)" : "");
++		for (i = 0; i < c->n_nodes; i++) {
++			struct b3_node_cap *nc = &c->nodes[i];
++
++			if (!nc->va_ok) {
++				b3_out_printf(&o, "  [%02u] w0=0x%08x w1=0x%08x len=%u flag=0x%04x va=UNKNOWN\n",
++					      nc->idx, nc->word0, nc->word1,
++					      nc->len, nc->flag);
++			} else if (!nc->hdr_ok) {
++				b3_out_printf(&o, "  [%02u] w0=0x%08x w1=0x%08x len=%u flag=0x%04x (no 12-B HCC header)\n",
++					      nc->idx, nc->word0, nc->word1,
++					      nc->len, nc->flag);
++			} else {
++				b3_out_printf(&o, "  [%02u] w0=0x%08x w1=0x%08x len=%u hdr g=%u rg=%u total=%u id=%u dst=%u tag=0x%04x\n",
++					      nc->idx, nc->word0, nc->word1,
++					      nc->len, nc->group, nc->rsrc,
++					      nc->total_len, nc->id, nc->dst,
++					      nc->tag);
++			}
++		}
++	}
++	b3_out_finish(&o);
++}
++
++/* ---------------------------------------------------------------------
++ * P5 - node word1 + first 16 B of each completed buffer (deposit puzzles)
++ * ------------------------------------------------------------------- */
++static void b3_build_p5(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct b3_out o;
++	int ch;
++
++	b3_out_init(&o, b3->p5_result, sizeof(b3->p5_result));
++	b3_out_printf(&o, "B3-P5 node dump armed=%d dr_rx=%u hcc_rx=%u\n",
++		      b3->armed, b3->dr_rx_nodes, b3->hcc_rx_nodes);
++	for (ch = 0; ch < HI5622_B3_DR_COUNT; ch++) {
++		struct hi5622_ete_ring *r = &b3->dr[ch];
++		struct hi5622_ete_node *nodes = r->node_arr;
++		void __iomem *regs = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				     r->chan_off;
++		u32 fill = readl(regs + HI5622_ETE_CH_B_CNS);
++		u32 pub = readl(regs + HI5622_ETE_CH_B_PRD);
++		u32 from = b3->dr_fill_last[ch];
++		u32 n = b3_idx_count(from, fill, r->depth);
++		u32 pos, i;
++
++		b3_out_printf(&o, "dr%d base=0x%08x fill(+0x3c)=0x%08x pub(+0x38)=0x%08x enable=0x%08x from=0x%08x new=%u\n",
++			      ch, readl(regs + HI5622_ETE_CH_B_BASE), fill, pub,
++			      readl(regs + HI5622_ETE_CH_ENABLE), from, n);
++		if (n > r->depth)
++			n = r->depth;
++		pos = from;
++		for (i = 0; i < n && i < HI5622_B3_MAX_NODE_CAP; i++) {
++			u32 low = pos & B3_IDX_LOW_MASK;
++			u32 word0, word1, len;
++			void *va;
++			char hexbuf[3 * 16 + 1];
++
++			rmb();
++			word0 = le32_to_cpu(nodes[low].devva);
++			word1 = le32_to_cpu(nodes[low].word1);
++			rmb();
++			len = word1 >> HI5622_ETE_NODE_LEN_SHIFT;
++			va = b3_node_va(r, word0);
++			if (va)
++				b3_hex_bytes(hexbuf, sizeof(hexbuf), va,
++					     min_t(u32, len, 16u));
++			else
++				strscpy(hexbuf, "<unknown devva>",
++					sizeof(hexbuf));
++			b3_out_printf(&o, "  [%02u] w0=0x%08x w1=0x%08x flag=0x%04x len=%u buf=%s\n",
++				      low, word0, word1, word1 & 0x1fffu,
++				      len, hexbuf);
++			pos = b3_idx_plus(pos, r->depth);
++		}
++	}
++	b3_out_finish(&o);
++}
++
++/* ---------------------------------------------------------------------
++ * D2H service - the contract write order of hcc-re REPORT sec 5.4 [V]
++ *
++ *   0. probe-read out[1] (0x40039014); if zero, perform NO writes at all
++ *   1. out[3] (0x40101438) = 1      ack the pending word
++ *   2. re-read out[1], then write 0 drain (device precondition P2)
++ *   3. out[4] (0x40101414) = 1      re-arm
++ *   4. dispatch the saved bitmap lowest bit first (ids 0..10)
++ *   5. on id 3/6/7 drain all DR channels, decode the HCC frames, return the
++ *      buffers by advancing DR+0x38
++ *
++ * No register outside the mailbox protocol and the host-owned ETE ring fields
++ * is written.  Never posts H2D.
++ * ------------------------------------------------------------------- */
++static int b3_d2h_service(struct hi5622_pci *ctx, const char *why)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct device *dev = &ctx->pdev->dev;
++	u32 bitmap, id;
++	bool need_dr = false;
++	int serviced = 0;
++	int ch;
++
++	mutex_lock(&b3->lock);
++
++	/* Bench discipline: a polled pass with nothing pending must perform NO
++	 * device writes.  Probe-read out[1] first; only a pending word triggers
++	 * the contract's ack -> read/drain -> re-arm sequence. */
++	bitmap = readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP);
++	if (!bitmap) {
++		mutex_unlock(&b3->lock);
++		return 0;
++	}
++
++	b3_writel(ctx, HI5622_BAR0_B3_D2H_ACK, 1);
++	bitmap |= readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP);
++	b3_writel(ctx, HI5622_BAR0_D2H_BITMAP, 0);
++	b3_writel(ctx, HI5622_BAR0_B3_D2H_REARM, 1);
++
++	b3->d2h_events++;
++	b3->d2h_bitmap_last = bitmap;
++	b3->d2h_id_seen |= bitmap;
++	b3->d2h_hist[b3->d2h_hist_pos % B3_MAX_HIST] = bitmap;
++	b3->d2h_hist_pos++;
++	for (id = 0; id <= HI5622_D2H_MAX_ID; id++)
++		if (bitmap & BIT(id))
++			b3->d2h_bit_count[id]++;
++
++	dev_info(dev, "B3 D2H[%s]: out[1]=0x%08x (ack out[3]=1, out[1]=0 drain, rearm out[4]=1)\n",
++		 why, bitmap);
++
++	for (id = 0; id <= HI5622_D2H_MAX_ID; id++) {
++		if (!(bitmap & BIT(id)))
++			continue;
++		serviced++;
++		switch (id) {
++		case 1:
++			dev_info(dev, "B3 D2H: id1 = pcie_dev_ready_msg_handle (empty vendor stub); no reply\n");
++			break;
++		case 2:
++			dev_info(dev, "B3 D2H: id2 = PLATFORM-UP ANNOUNCE (firmware out[1]=0x4, the B1 checkpoint); no vendor handler, drain only; NOT the ready gate (P3 owns that)\n");
++			break;
++		case 3:
++			dev_info(dev, "B3 D2H: id3 = ETE transfer done -> draining DR0-3 (P2)\n");
++			need_dr = true;
++			break;
++		case 6:
++			dev_info(dev, "B3 D2H: id6 = ETE sending trigger (d2h_notify 6) -> draining DR0-3 (P1 bit6)\n");
++			need_dr = true;
++			break;
++		case 7:
++			dev_info(dev, "B3 D2H: id7 = ETE sending trigger variant -> draining DR0-3\n");
++			need_dr = true;
++			break;
++		case 4:
++			dev_info(dev, "B3 D2H: id4 = dropped (no handler registered in the vendor mailbox table)\n");
++			break;
++		default:
++			dev_info(dev, "B3 D2H: id%u = dropped (no handler registered)\n",
++				 id);
++			break;
++		}
++	}
++
++	if (need_dr) {
++		int total = 0;
++
++		for (ch = 0; ch < HI5622_B3_DR_COUNT; ch++) {
++			u32 n = b3_walk_dr(ctx, ch, true);
++
++			total += (int)n;
++		}
++		b3_build_p2(ctx, "auto");
++		b3_log_text(ctx, "P2", b3->p2_result);
++		dev_info(dev, "B3 P2: auto snapshot after id3/6/7: %d node(s) consumed across DR0-3; b3_p2_result updated\n",
++			 total);
++	}
++
++	mutex_unlock(&b3->lock);
++	return serviced;
++}
++
++/*
++ * P1 side-channel: even when out[1] stays quiet, watch the device-owned DR
++ * fill index (+0x3c) of all four channels.  If it advances without a mailbox
++ * word, the device deposited payloads but the notify path did not reach us -
++ * that is itself a P2/P4 finding, and the nodes still have to be returned.
++ * Called from the watch thread only (never from probe).
++ */
++static int b3_watch_dr_check(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct device *dev = &ctx->pdev->dev;
++	int ch, found = 0;
++
++	for (ch = 0; ch < HI5622_B3_DR_COUNT; ch++) {
++		struct hi5622_ete_ring *r = &b3->dr[ch];
++		void __iomem *regs = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				     r->chan_off;
++		u32 fill = readl(regs + HI5622_ETE_CH_B_CNS);
++
++		if (fill == b3->dr_fill_last[ch])
++			continue;
++		dev_info(dev, "B3 P1: DR%d fill(+0x3c) advanced 0x%08x -> 0x%08x WITHOUT a mailbox word; draining (deposit-without-notify finding) and returning the buffers\n",
++			 ch, b3->dr_fill_last[ch], fill);
++		mutex_lock(&b3->lock);
++		b3_walk_dr(ctx, ch, true);
++		mutex_unlock(&b3->lock);
++		found++;
++	}
++	if (found) {
++		b3_build_p2(ctx, "auto-watch-dr");
++		b3_log_text(ctx, "P2", b3->p2_result);
++	}
++	return found;
++}
++
++/* ---------------------------------------------------------------------
++ * P1 - watch window: drain + dispatch every non-zero out[1] for N seconds
++ * ------------------------------------------------------------------- */
++struct b3_watch {
++	struct hi5622_pci	*ctx;
++	unsigned int		seconds;
++	struct completion	done;
++};
++
++static int b3_watch_thread(void *data)
++{
++	struct b3_watch *w = data;
++	struct hi5622_pci *ctx = w->ctx;
++	unsigned long end = jiffies + msecs_to_jiffies(w->seconds * 1000u);
++	u32 passes = 0;
++
++	dev_info(&ctx->pdev->dev, "B3 P1: watch window %u s started (out[1] drained every %u ms; bits 3 and 6 are the ETE events)\n",
++		 w->seconds, B3_WATCH_MS);
++	while (!kthread_should_stop() && time_before(jiffies, end)) {
++		b3_d2h_service(ctx, "P1-watch");
++		b3_watch_dr_check(ctx);
++		passes++;
++		msleep_interruptible(B3_WATCH_MS);
++	}
++	dev_info(&ctx->pdev->dev, "B3 P1: watch window finished after %u passes: events=%llu out[1]=0x%08x bit3=%u bit6=%u bit2=%u\n",
++		 passes, (unsigned long long)ctx->b3->d2h_events,
++		 readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP),
++		 ctx->b3->d2h_bit_count[3], ctx->b3->d2h_bit_count[6],
++		 ctx->b3->d2h_bit_count[2]);
++	complete(&w->done);
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * sysfs: P0-P5 surface (attended, single explicit writes - see B3-PLAN.md)
++ * ------------------------------------------------------------------- */
++static ssize_t b3_p0_ringinit_store(struct device *dev,
++				    struct device_attribute *attr,
++				    const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	int ret;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (b3->armed) {
++		dev_warn(dev, "B3 P0: rings already armed in this module load; refusing a second arm (reload the module for a fresh single-shot arm)\n");
++		return -EBUSY;
++	}
++	ret = b3_arm_all(ctx);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_WO(b3_p0_ringinit);
++
++static ssize_t b3_p1_watch_store(struct device *dev,
++				 struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	struct b3_watch *w;
++	struct task_struct *task;
++	unsigned int seconds;
++	int err;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	if (!b3->armed) {
++		dev_err(dev, "B3 P1: run P0 (b3_p0_ringinit) first - an unarmed DR ring cannot receive the ready payloads\n");
++		return -EBUSY;
++	}
++	if (ctx->poll_thread) {
++		dev_err(dev, "B3 P1: the base D2H poll thread is running (poll_ms != 0); reload the module with poll_ms=0 - B3 needs the full ack/drain/re-arm sequence\n");
++		return -EBUSY;
++	}
++	if (b3->watch_active) {
++		dev_err(dev, "B3 P1: a watch window is already active\n");
++		return -EBUSY;
++	}
++	err = kstrtouint(buf, 0, &seconds);
++	if (err)
++		return err;
++	if (!seconds)
++		return -EINVAL;
++	if (seconds > B3_WATCH_MAX_S)
++		seconds = B3_WATCH_MAX_S;
++
++	w = kzalloc(sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++	w->ctx = ctx;
++	w->seconds = seconds;
++	init_completion(&w->done);
++
++	b3->watch_active = true;
++	b3->watch_seconds_last = seconds;
++	b3->watch_start = jiffies;
++
++	task = kthread_run(b3_watch_thread, w, "%s-watch", B3_DRV_NAME);
++	if (IS_ERR(task)) {
++		b3->watch_active = false;
++		kfree(w);
++		return PTR_ERR(task);
++	}
++	if (!wait_for_completion_timeout(&w->done,
++					 msecs_to_jiffies((seconds + 10u) * 1000u)))
++		dev_warn(dev, "B3 P1: watch thread did not finish in %u s; stopping it\n",
++			 seconds + 10u);
++	kthread_stop(task);
++	b3->watch_active = false;
++	kfree(w);
++
++	dev_info(dev, "B3 P1: watch window closed; see b3_p1_events and dmesg for the per-bit event log\n");
++	return count;
++}
++static DEVICE_ATTR_WO(b3_p1_watch);
++
++static ssize_t b3_drain_store(struct device *dev, struct device_attribute *attr,
++			      const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	u32 bitmap;
++	int serviced;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	bitmap = readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP);
++	serviced = b3_d2h_service(ctx, "manual-drain");
++	dev_info(dev, "B3 drain: one-shot service done: raw out[1]=0x%08x, %d bit(s) dispatched, out[1] now=0x%08x\n",
++		 bitmap, serviced,
++		 readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP));
++	return count;
++}
++static DEVICE_ATTR_WO(b3_drain);
++
++static ssize_t b3_p2_drsnapshot_store(struct device *dev,
++				      struct device_attribute *attr,
++				      const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	int ch;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (!b3->armed) {
++		dev_err(dev, "B3 P2: run P0 (b3_p0_ringinit) first\n");
++		return -EBUSY;
++	}
++	mutex_lock(&b3->lock);
++	for (ch = 0; ch < HI5622_B3_DR_COUNT; ch++)
++		b3_walk_dr(ctx, ch, false);
++	b3_build_p2(ctx, "manual-readonly");
++	mutex_unlock(&b3->lock);
++	b3_log_text(ctx, "P2", b3->p2_result);
++	dev_info(dev, "B3 P2: read-only DR snapshot taken (no consume, no writes); decoded nodes are in b3_p2_result and dmesg\n");
++	return count;
++}
++static DEVICE_ATTR_WO(b3_p2_drsnapshot);
++
++static ssize_t b3_p5_nodedump_store(struct device *dev,
++				    struct device_attribute *attr,
++				    const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	mutex_lock(&b3->lock);
++	b3_build_p5(ctx);
++	mutex_unlock(&b3->lock);
++	b3_log_text(ctx, "P5", b3->p5_result);
++	dev_info(dev, "B3 P5: node dump taken (read-only): node word1 + first 16 B per buffer; see b3_p5_result and dmesg\n");
++	return count;
++}
++static DEVICE_ATTR_WO(b3_p5_nodedump);
++
++static ssize_t b3_clear_store(struct device *dev, struct device_attribute *attr,
++			      const char *buf, size_t count)
++{
++	struct hi5622_b3 *b3 = b3_of(dev);
++
++	if (!b3)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	memset(b3->d2h_bit_count, 0, sizeof(b3->d2h_bit_count));
++	memset(b3->d2h_hist, 0, sizeof(b3->d2h_hist));
++	b3->d2h_hist_pos = 0;
++	b3->d2h_events = 0;
++	b3->d2h_id_seen = 0;
++	b3->d2h_bitmap_last = 0;
++	memset(b3->hcc_group_count, 0, sizeof(b3->hcc_group_count));
++	b3->hcc_rx_nodes = 0;
++	b3->hcc_last_ok = false;
++	b3->hcc_last_len = 0;
++	b3->hcc_last_total = 0;
++	b3->hcc_last_id = 0;
++	b3->hcc_last_rsrc = 0;
++	b3->g4_id1_seen = false;
++	b3->g4_id2_seen = false;
++	b3->g4_id1_len = 0;
++	b3->g4_id1_total = 0;
++	b3->g4_id2_len = 0;
++	b3->g4_id2_total = 0;
++	b3->g4_id2_plen = 0;
++	b3->dr_rx_nodes = 0;
++	dev_info(dev, "B3: event counters cleared (rings kept armed; fill baselines unchanged)\n");
++	return count;
++}
++static DEVICE_ATTR_WO(b3_clear);
++
++static ssize_t b3_rings_show(struct device *dev, struct device_attribute *attr,
++			     char *buf)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	int pos = 0, i;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	pos += sysfs_emit_at(buf, pos,
++			     "armed=%d prepost=%u depth=%u depth-1=0x%x\n",
++			     b3->armed, b3->preposted, HI5622_ETE_DEPTH,
++			     HI5622_ETE_DEPTH - 1);
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->sr[i];
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   r->chan_off;
++
++		pos += sysfs_emit_at(buf, pos,
++				     "SR%d ch=0x%03x nodes=0x%08x base=0x%08x depth-1=0x%02x prod=0x%08x consumer=0x%08x enable=0x%08x ctrl=0x%08x\n",
++				     i, r->chan_off, (u32)r->node_dma,
++				     readl(ch + HI5622_ETE_CH_A_BASE),
++				     readl(ch + HI5622_ETE_CH_A_DEPTH),
++				     readl(ch + HI5622_ETE_CH_A_PRD),
++				     readl(ch + HI5622_ETE_CH_A_CNS),
++				     readl(ch + HI5622_ETE_CH_ENABLE),
++				     readl(ch + HI5622_ETE_CH_CTRL));
++	}
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->dr[i];
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   r->chan_off;
++
++		pos += sysfs_emit_at(buf, pos,
++				     "DR%d ch=0x%03x nodes=0x%08x base=0x%08x depth-1=0x%02x pub(+0x38)=0x%08x fill(+0x3c)=0x%08x enable=0x%08x\n",
++				     i, r->chan_off, (u32)r->node_dma,
++				     readl(ch + HI5622_ETE_CH_B_BASE),
++				     readl(ch + HI5622_ETE_CH_B_DEPTH),
++				     readl(ch + HI5622_ETE_CH_B_PRD),
++				     readl(ch + HI5622_ETE_CH_B_CNS),
++				     readl(ch + HI5622_ETE_CH_ENABLE));
++	}
++	return pos;
++}
++static DEVICE_ATTR_RO(b3_rings);
++
++static ssize_t b3_p1_events_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	int pos = 0, i;
++	u32 start;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	pos += sysfs_emit_at(buf, pos,
++			     "watch_active=%d last_watch_s=%u events=%llu bit_seen=0x%04x out[1]=0x%08x\n",
++			     b3->watch_active, b3->watch_seconds_last,
++			     (unsigned long long)b3->d2h_events,
++			     b3->d2h_id_seen,
++			     readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP));
++	pos += sysfs_emit_at(buf, pos, "counts:");
++	for (i = 0; i <= HI5622_D2H_MAX_ID; i++)
++		pos += sysfs_emit_at(buf, pos, " b%d=%u", i,
++				     b3->d2h_bit_count[i]);
++	pos += sysfs_emit_at(buf, pos, "\n");
++	pos += sysfs_emit_at(buf, pos,
++			     "watch bits: b3(ETE done)=%u b6(d2h_notify)=%u b2(platform-up 0x4)=%u\n",
++			     b3->d2h_bit_count[3], b3->d2h_bit_count[6],
++			     b3->d2h_bit_count[2]);
++	start = b3->d2h_hist_pos > B3_MAX_HIST ?
++		b3->d2h_hist_pos - B3_MAX_HIST : 0;
++	pos += sysfs_emit_at(buf, pos, "last[%u]:", b3->d2h_hist_pos - start);
++	for (i = 0; i < B3_MAX_HIST && start + i < b3->d2h_hist_pos; i++) {
++		u32 idx = (start + i) % B3_MAX_HIST;
++
++		pos += sysfs_emit_at(buf, pos, " 0x%08x", b3->d2h_hist[idx]);
++	}
++	pos += sysfs_emit_at(buf, pos, "\n");
++	return pos;
++}
++static DEVICE_ATTR_RO(b3_p1_events);
++
++static ssize_t b3_p2_result_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_b3 *b3 = b3_of(dev);
++
++	if (!b3)
++		return -ENODEV;
++	if (!b3->p2_result[0])
++		return sysfs_emit(buf, "not run yet (echo 1 > b3_p2_drsnapshot)\n");
++	return sysfs_emit(buf, "%s", b3->p2_result);
++}
++static DEVICE_ATTR_RO(b3_p2_result);
++
++static ssize_t b3_p3_hcc_show(struct device *dev, struct device_attribute *attr,
++			      char *buf)
++{
++	struct hi5622_b3 *b3 = b3_of(dev);
++	int pos = 0, i;
++	char hexbuf[3 * 32 + 1];
++
++	if (!b3)
++		return -ENODEV;
++	pos += sysfs_emit_at(buf, pos,
++			     "hcc_rx_nodes=%u last{g=%u rg=%u id=%u total=%u len=%u tag_ok=%d}\n",
++			     b3->hcc_rx_nodes, b3->hcc_last_group,
++			     b3->hcc_last_rsrc, b3->hcc_last_id,
++			     b3->hcc_last_total, b3->hcc_last_len,
++			     b3->hcc_last_ok);
++	pos += sysfs_emit_at(buf, pos, "group_counts:");
++	for (i = 0; i < 16; i++)
++		if (b3->hcc_group_count[i])
++			pos += sysfs_emit_at(buf, pos, " g%d=%u", i,
++					     b3->hcc_group_count[i]);
++	pos += sysfs_emit_at(buf, pos, "\n");
++	pos += sysfs_emit_at(buf, pos,
++			     "P3 ready gate: g4_id1_seen=%d g4_id2_seen=%d (the vendor's 200/2000-jiffy waits)\n",
++			     b3->g4_id1_seen, b3->g4_id2_seen);
++	if (b3->g4_id1_seen) {
++		b3_hex_bytes(hexbuf, sizeof(hexbuf), b3->g4_id1_first,
++			     min_t(u16, b3->g4_id1_len,
++				   sizeof(b3->g4_id1_first)));
++		pos += sysfs_emit_at(buf, pos,
++				     "g4_id1 device_plat_ready: len=%u total=%u first=%s\n",
++				     b3->g4_id1_len, b3->g4_id1_total,
++				     hexbuf);
++	}
++	if (b3->g4_id2_seen) {
++		b3_hex_bytes(hexbuf, sizeof(hexbuf), b3->g4_id2_payload,
++			     min_t(u16, b3->g4_id2_plen,
++				   sizeof(b3->g4_id2_payload)));
++		pos += sysfs_emit_at(buf, pos,
++				     "g4_id2 host_ready: payload=%u B (<=0x63: %s) total=%u len=%u payload_first=%s\n",
++				     b3->g4_id2_plen,
++				     b3->g4_id2_plen <= 0x63 ? "OK" : "VIOLATION",
++				     b3->g4_id2_total, b3->g4_id2_len,
++				     hexbuf);
++	}
++	pos += sysfs_emit_at(buf, pos,
++			     "no H2D reply is required or sent by B3\n");
++	return pos;
++}
++static DEVICE_ATTR_RO(b3_p3_hcc);
++
++static ssize_t b3_p4_state_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++	int pos = 0, i;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	pos += sysfs_emit_at(buf, pos,
++			     "P4 post-release state (all reads; nothing written)\n");
++	pos += sysfs_emit_at(buf, pos,
++			     "out[0] H2D pending=0x%08x  out[1] D2H bitmap=0x%08x  out[2] H2D doorbell=0x%08x\n",
++			     readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING),
++			     readl(ctx->bar0 + HI5622_BAR0_D2H_BITMAP),
++			     readl(ctx->bar0 + HI5622_BAR0_H2D_DOORBELL));
++	pos += sysfs_emit_at(buf, pos,
++			     "out[5] = 0x%08x (READ-ONLY; never written)  D2H doorbell=0x%08x  ETE intr=0x%08x\n",
++			     readl(ctx->bar0 + HI5622_BAR0_B3_NEVER_WRITE),
++			     readl(ctx->bar0 + HI5622_BAR0_B3_D2H_DOORBELL),
++			     readl(ctx->bar0 +
++				   HI5622_BAR0_IO(HI5622_CA_ETE_INTR)));
++	pos += sysfs_emit_at(buf, pos,
++			     "boot: fw_loaded=%d cpu_released=%d gate_announced=%d windows=%d base_poll_thread=%d\n",
++			     ctx->fw_loaded, ctx->cpu_released,
++			     ctx->gate_announced, ctx->windows_programmed,
++			     ctx->poll_thread != NULL);
++	pos += sysfs_emit_at(buf, pos, "rings armed=%d prepost=%u\n",
++			     b3->armed, b3->preposted);
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   b3->sr[i].chan_off;
++
++		pos += sysfs_emit_at(buf, pos,
++				     "SR%d enable(+0x00)=0x%08x (firmware-owned, read-only) prod=0x%08x consumer=0x%08x\n",
++				     i, readl(ch + HI5622_ETE_CH_ENABLE),
++				     readl(ch + HI5622_ETE_CH_A_PRD),
++				     readl(ch + HI5622_ETE_CH_A_CNS));
++	}
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		void __iomem *ch = ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				   b3->dr[i].chan_off;
++
++		pos += sysfs_emit_at(buf, pos,
++				     "DR%d enable(+0x00)=0x%08x (firmware-owned, read-only) pub(+0x38)=0x%08x fill(+0x3c)=0x%08x\n",
++				     i, readl(ch + HI5622_ETE_CH_ENABLE),
++				     readl(ch + HI5622_ETE_CH_B_PRD),
++				     readl(ch + HI5622_ETE_CH_B_CNS));
++	}
++	return pos;
++}
++static DEVICE_ATTR_RO(b3_p4_state);
++
++static ssize_t b3_p5_result_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_b3 *b3 = b3_of(dev);
++
++	if (!b3)
++		return -ENODEV;
++	if (!b3->p5_result[0])
++		return sysfs_emit(buf, "not run yet (echo 1 > b3_p5_nodedump)\n");
++	return sysfs_emit(buf, "%s", b3->p5_result);
++}
++static DEVICE_ATTR_RO(b3_p5_result);
++
++static struct attribute *pciet_b3_attrs[] = {
++	&dev_attr_b3_p0_ringinit.attr,
++	&dev_attr_b3_p1_watch.attr,
++	&dev_attr_b3_p1_events.attr,
++	&dev_attr_b3_drain.attr,
++	&dev_attr_b3_p2_drsnapshot.attr,
++	&dev_attr_b3_p2_result.attr,
++	&dev_attr_b3_p3_hcc.attr,
++	&dev_attr_b3_p4_state.attr,
++	&dev_attr_b3_p5_nodedump.attr,
++	&dev_attr_b3_p5_result.attr,
++	&dev_attr_b3_rings.attr,
++	&dev_attr_b3_clear.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(pciet_b3);
++
++/* ---------------------------------------------------------------------
++ * Probe / remove
++ * ------------------------------------------------------------------- */
++static void b3_rings_free(struct hi5622_pci *ctx, struct hi5622_b3 *b3)
++{
++	int i;
++
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++)
++		pciet_ete_ring_free(ctx, &b3->dr[i]);
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++)
++		pciet_ete_ring_free(ctx, &b3->sr[i]);
++}
++
++int pciet_b3_probe(struct hi5622_pci *ctx)
++{
++	struct device *dev = &ctx->pdev->dev;
++	struct hi5622_b3 *b3;
++	int i, ret;
++
++	b3_assert_contract();
++
++	b3 = devm_kzalloc(dev, sizeof(*b3), GFP_KERNEL);
++	if (!b3)
++		return -ENOMEM;
++	mutex_init(&b3->lock);
++	ctx->b3 = b3;
++
++	/* Host-DRAM ring allocations only - no device writes here.  Buffer
++	 * sizes: DR 2048 B covers the maximum HCC frame (0x674 payload + 12 B
++	 * header = 0x680, hcc-re REPORT sec 3.1 [V]); the B3 SR rings are armed
++	 * by P0 but not used for messaging (B3 posts no H2D), so 64 B each. */
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		ret = pciet_ete_ring_alloc(ctx, &b3->sr[i], b3_sr_off[i], 64);
++		if (ret)
++			goto err_free;
++	}
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		ret = pciet_ete_ring_alloc(ctx, &b3->dr[i], b3_dr_off[i],
++					   HI5622_ETE_BUF_LEN);
++		if (ret)
++			goto err_free;
++	}
++
++	ret = device_add_groups(dev, pciet_b3_groups);
++	if (ret) {
++		dev_err(dev, "B3: device_add_groups: %d\n", ret);
++		goto err_free;
++	}
++
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		u32 base = (u32)b3->dr[i].node_dma;
++
++		if (!b3_dma_in_window(base))
++			dev_warn(dev, "B3: DR%u node array dma 0x%08x is outside the RC inbound window 0x80000000..0x8fffffff; P0 will refuse to arm\n",
++				 i, base);
++	}
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		u32 base = (u32)b3->sr[i].node_dma;
++
++		if (!b3_dma_in_window(base))
++			dev_warn(dev, "B3: SR%u node array dma 0x%08x is outside the RC inbound window 0x80000000..0x8fffffff; P0 will refuse to arm\n",
++				 i, base);
++	}
++
++	if (ctx->poll_thread)
++		dev_warn(dev, "B3: the base module's D2H poll thread is RUNNING (poll_ms != 0). B3's P1/b3_drain need the full ack/drain/re-arm sequence - reload with poll_ms=0 before running the probes\n");
++
++	dev_info(dev, "B3 instrument ready: 3 SR + 4 DR rings allocated in host DRAM (no device writes); probes P0-P5 via b3_* sysfs attrs - see B3-PLAN.md\n");
++	return 0;
++
++err_free:
++	b3_rings_free(ctx, b3);
++	ctx->b3 = NULL;
++	return ret;
++}
++
++void pciet_b3_remove(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++
++	if (!b3)
++		return;
++	device_remove_groups(&ctx->pdev->dev, pciet_b3_groups);
++	b3_rings_free(ctx, b3);
++	ctx->b3 = NULL;
++	dev_info(&ctx->pdev->dev, "B3 instrument removed\n");
++}
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b3/Makefile	2026-11-22 18:38:49.358996833 +0700
+@@ -0,0 +1,23 @@
++# Makefile - convenience wrapper for the B3 bench-instrument module.
++# Kernel-module build only; this never builds an OpenWrt image ("make world" is
++# forbidden) and never touches the main transport directory.
++#
++#   make            -> builds hi5622_pciet_b3.ko against the luofu 6.18.60 tree
++#   make clean      -> removes the module build products (source untouched)
++#
++# Override KDIR / STAGING_DIR on the command line or through the environment.
++
++KDIR ?= /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
++STAGING_DIR ?= /home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir
++ARCH ?= arm
++CROSS_COMPILE ?= $(STAGING_DIR)/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-
++
++export STAGING_DIR
++
++all:
++	$(MAKE) -C $(KDIR) M=$(CURDIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) modules
++
++clean:
++	$(MAKE) -C $(KDIR) M=$(CURDIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) clean
++
++.PHONY: all clean
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b3/selftest-idx-arith.c	2026-11-22 18:43:52.469943344 +0700
+@@ -0,0 +1,130 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * selftest-idx-arith.c - host-side unit test for the B3 packed ring-index
++ * arithmetic used by pciet_b3.c.
++ *
++ * This file is ORIGINAL code by the b3-instrument lane (task-66, 2026-11-22).
++ * It is NOT part of the kernel module: it is a plain userspace C program that
++ * reproduces b3_idx_plus() and b3_idx_count() from pciet_b3.c and checks the
++ * properties the DR drain loop depends on:
++ *
++ *   1. producer/published/fill pointer advance and wrap:
++ *      low 10 bits = node index, bit 10 = phase; +1 each node, and when the low
++ *      bits reach depth they are cleared and the phase bit toggles
++ *      (hcc-re REPORT sec 4.2, pcie_ete_ring_ptr_plus [V]);
++ *   2. newly-completed count = depth * phase_delta + (idx - last)
++ *      (hcc-re REPORT sec 4.6, pcie_ete_get_rls_num [V]), and walking 'from'
++ *      by that count with the advance function always lands exactly on 'to'
++ *      for every reachable packed pair.
++ *
++ * Physical invariant checked implicitly: the device can never advance its DR
++ * fill index by more than depth before the host returns buffers via +0x38, so
++ * only deltas 0..depth are representable and the drain clamp
++ * (n > depth -> do not consume, device state unknown) is correct.
++ *
++ * Build/run (host gcc, no kernel tree needed):
++ *
++ *     gcc -O2 -Wall -Wextra -o /tmp/idx_test selftest-idx-arith.c
++ *     /tmp/idx_test
++ *     -> ... "count+walk consistency over 64 start positions x 33 deltas: OK"
++ *        "ALL OK"  (exit 0)
++ */
++#include <stdio.h>
++#include <stdint.h>
++
++/* Exact copies of pciet_b3.c's packed ring-pointer arithmetic (hcc-re
++ * REPORT sec 4.2/4.6 [V]: low 10 bits = node index, bit 10 = wrap phase;
++ * producer advance +1, wrap when low bits reach depth; newly completed =
++ * depth * phase_delta + (idx - last)).  Physical invariant: the device can
++ * never advance its fill index by more than depth before the host returns
++ * buffers via +0x38, so only deltas 0..depth are representable. */
++#define B3_IDX_LOW_MASK 0x3ffu
++#define HI5622_ETE_IDX_PHASE_BIT 0x400u
++
++static uint32_t b3_idx_plus(uint32_t idx, uint32_t depth)
++{
++	uint32_t next = idx + 1;
++
++	if ((next & B3_IDX_LOW_MASK) == depth) {
++		next &= ~B3_IDX_LOW_MASK;
++		next ^= HI5622_ETE_IDX_PHASE_BIT;
++	}
++	return next;
++}
++
++static uint32_t b3_idx_count(uint32_t from, uint32_t to, uint32_t depth)
++{
++	int32_t phase = (int32_t)((to >> 10) & 1u) - (int32_t)((from >> 10) & 1u);
++	int32_t delta = phase * (int32_t)depth +
++			(int32_t)(to & B3_IDX_LOW_MASK) -
++			(int32_t)(from & B3_IDX_LOW_MASK);
++
++	if (delta < 0)
++		delta += 2 * (int32_t)depth;
++	return (uint32_t)delta;
++}
++
++static unsigned int fails;
++#define CHECK(cond, label) do { \
++	if (!(cond)) { printf("FAIL %s\n", label); fails++; } \
++} while (0)
++
++int main(void)
++{
++	const uint32_t depth = 32, mod = 2 * depth;
++	uint32_t i, a, n;
++
++	/* P0 pre-post of a full ring: 32 publishes -> 0x400 */
++	{
++		uint32_t idx = 0;
++
++		for (i = 0; i < 32; i++)
++			idx = b3_idx_plus(idx, depth);
++		printf("prepost 32 publishes -> 0x%03x (expect 0x400)\n", idx);
++		CHECK(idx == 0x400, "prepost-32 publish");
++	}
++
++	/* known pairs */
++	printf("count(0x000,0x400)=%u (expect 32)\n", b3_idx_count(0, 0x400, depth));
++	CHECK(b3_idx_count(0, 0x400, depth) == 32, "full ring");
++	printf("count(0x400,0x000)=%u (expect 32)\n", b3_idx_count(0x400, 0, depth));
++	CHECK(b3_idx_count(0x400, 0, depth) == 32, "full ring phase1");
++	printf("count(0x01f,0x400)=%u (expect 1)\n", b3_idx_count(0x1f, 0x400, depth));
++	CHECK(b3_idx_count(0x1f, 0x400, depth) == 1, "single step across wrap");
++	printf("count(0x000,0x01f)=%u (expect 31)\n", b3_idx_count(0, 0x1f, depth));
++	CHECK(b3_idx_count(0, 0x1f, depth) == 31, "31 of 32");
++	printf("count(same,same)=0 (expect 0)\n");
++	CHECK(b3_idx_count(0, 0, depth) == 0 && b3_idx_count(0x400, 0x400, depth) == 0,
++	      "empty");
++
++	/* reachability + walk consistency: for every start position a (mod 2*depth)
++	 * and every delta n in 0..depth, the count must equal n and the walk must
++	 * land exactly on the target.  This is what the DR drain relies on. */
++	{
++		uint32_t bad = 0;
++
++		for (a = 0; a < mod; a++) {
++			uint32_t pa = (a < depth) ? a : (0x400u | (a - depth));
++
++			for (n = 0; n <= depth; n++) {
++				uint32_t b = (a + n) % mod;
++				uint32_t pb = (b < depth) ? b : (0x400u | (b - depth));
++				uint32_t got = b3_idx_count(pa, pb, depth);
++				uint32_t pos = pa, k;
++
++				if (got != n) { bad++; continue; }
++				for (k = 0; k < got; k++)
++					pos = b3_idx_plus(pos, depth);
++				if (pos != pb)
++					bad++;
++			}
++		}
++		printf("count+walk consistency over %u start positions x 33 deltas: %s\n",
++		       mod, bad ? "FAIL" : "OK");
++		if (bad)
++			fails++;
++	}
++
++	printf(fails ? "FAILURES: %u\n" : "ALL OK\n", fails);
++	return fails != 0;
++}
