@@ -2,17 +2,21 @@
 /*
  * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
  *
- * The active content is byte-identical (same compiled DTB) to the
- * hardware-verified baseline image 7421bb7a; only the historical prose
- * comments were removed for submission review.  Provenance of the measured
- * values, the binding-review status and the 2026-11-21 hardware regression
- * that invalidated the first active-DTS cleanup are recorded in
- * upstream/series-6.18/07-dts-upstream-bindings.md.
+ * Provenance of the measured values, the binding-review status and the
+ * 2026-11-21 hardware regression that invalidated the first active-DTS
+ * cleanup are recorded in upstream/series-6.18/07-dts-upstream-bindings.md.
+ * The base DTB built from this source is boot-tested up to the 2026-11-21
+ * baselines (loader hand-off contract: image 6e9c54d0).  The 2026-11-22
+ * additions below - the enabled PCIe root complexes and the Wi-Fi control-pin
+ * GPIO hog - are hardware-derived, but the compiled DTB that carries them has
+ * not yet been re-flashed and boot-tested as a unit.  Any active change to
+ * this file must be boot-tested before it is trusted.
  */
 
 /dts-v1/;
 
 #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+#include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 
@@ -252,6 +256,27 @@
 			interrupts = <0 0x31 4>;
 			reg = <0>;
 			snps,nr-gpios = <32>;
+
+			/*
+			 * Board power/reset controls of the Wi-Fi endpoint behind
+			 * the two PCIe root complexes.  Hardware-verified
+			 * 2026-11-22: the endpoint only trains when GPIO0 pins 20,
+			 * 21 and 28 are outputs driven high (the stock vendor
+			 * kernel leaves GPIO0 at DDR=0x1330000f /
+			 * DATA=0x12300004, i.e. all three high).  The individual
+			 * roles were not decoded, so this hog records only the
+			 * proven required state.  The pcie-luofu driver carries a
+			 * temporary hardcoded equivalent until this hog has been
+			 * boot-tested on its own (patch 013, host_init).
+			 */
+			wifi-pcie-hog {
+				gpio-hog;
+				gpios = <20 GPIO_ACTIVE_HIGH>,
+					<21 GPIO_ACTIVE_HIGH>,
+					<28 GPIO_ACTIVE_HIGH>;
+				output-high;
+				line-name = "wifi-pcie-ctl";
+			};
 		};
 	};
 
@@ -655,12 +680,6 @@
 		num-lanes = <1>;
 		acp-gate = <0x10100174 0x2000000 0x0>;
 		status = "okay";
-
-		wifi@0,0 {
-			compatible = "pci59e7,0005";
-			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "okay";
-		};
 	};
 
 	pcie1: pcie@10164000 {
@@ -687,12 +706,6 @@
 		num-lanes = <1>;
 		acp-gate = <0x10100174 0x4000000 0x0>;
 		status = "okay";
-
-		wifi@0,0 {
-			compatible = "pci59e7,0005";
-			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "okay";
-		};
 	};
 
 };
