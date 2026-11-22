@@ -710,3 +710,160 @@ the new bit, DR0 +0x3C advances, and the node ring shows word1 = (len<<16)|0x6D2
 id 1/2. If the state byte (row 3) is < 2 at that moment, the block is earlier and the state-machine trigger
 (ROM entry) becomes the open question instead.
 
+
+---
+
+## 11. Follow-up 2 (2026-11-22, bench says the read map is wrong): corrected link/run map, the boot-task entry chain, and a decode-ready probe list
+
+Bench facts supplied by the Lead (host-only; no device contact in this lane):
+(A) after release the vector handler DID run: CA 0x4000010C read 0x00000000 (after a pre-release 0x0000BAAD)
+    and out[1] = 0x4 appeared;
+(B) holding CA 0x4000010C = 0xCECE and holding out[1] at 0 (600-iteration loop with ack/drain/re-arm)
+    still produced no out[1] bit 6, no DR fill advance (DR0-3 +0x3C stuck at the pre-release 0x10), no
+    group-4 frame;
+(C) the section-10 read map does NOT match the device: BAR0+0x40000 = 0x00000020 (not 0x00046971),
+    BAR0+0xC6E14 = 0, BAR0+0x118B60 = 0, BAR0+0x117C9C = 0.
+
+### 11.1 Corrected link/run map (supersedes section 10.2/Q4 and the old record convention)
+
+**The image is loaded once, at CPU runtime base 0x40000, and the host reaches that RAM only through the
+region-5 window.** The host uploads file byte f to device CA 0x1240000 + f (region-5 window,
+BAR0 0x6F8000 + f). The CPU executes the same memory at CPU runtime R = 0x40000 + f. Therefore:
+
+* **CPU runtime R  <->  device CA (region-5 view) = R + 0x1200000**
+* **host BAR0 offset for a CPU runtime R: BAR0 = 0x6B8000 + R** (region-5 window starts at BAR0 0x6B8000
+  for CA 0x1200000), valid for R in [0, 0x217FFF] (window ends CA 0x1417FFF).
+* file offset f = R - 0x40000 (unchanged).
+* region-3 IO is separate and unchanged: **BAR0 = 0x3B8000 + (CA - 0x40000000)**.
+* region-2 PKTRAM: **BAR0 = 0x1D8000 + (CA - 0x1000000)**.
+* **The region-0 window (BAR0 0x0-0x1BFFFF) does NOT contain this RAM** - the bench disproves the old
+  "also aliased at BAR0+0x40000" claim (BAR0+0x40000 reads 0x20, not the image header). Do not read
+  firmware RAM through BAR0 offsets below 0x1C0000; use the 0x6B8000 formula.
+
+Sanity anchors for the formula: CPU 0x40000 (image header) -> BAR0 0x6F8000 should read 0x00046971
+(word 0) and 0x000C742D (word 1); CPU 0xC6E14 (ready routine) -> BAR0 0x77EE14 should read 0x43F8E92D;
+CPU 0x47628 (boot state machine) -> BAR0 0x6FF628 should read 0x4FF0E92D.
+
+Also corrected: the image header words are **CPU runtime pointers**, not file offsets -
++0x00 = 0x00046971 is Thumb CPU 0x46970 (file 0x6970, a real function prologue), +0x04 = 0x000C742D is
+CPU 0xC742C (file 0x8742C, a function), and the 5-word table at +0x50 is 0x103140/0x103114/0x1030E8/
+0x1030BC/0x103090 (CPU vector entries) [V].
+
+### 11.2 What the boot state machine (CPU 0x47628 / file 0x7628) is and what must happen before it advances
+
+**Entry evidence [V negative]:** an exhaustive scan of the whole blob finds **no reference to CPU
+0x47628 / 0x47629 anywhere** - no BL/BLX/B.W target (raw Thumb decode over every even offset), no
+literal word at any alignment, no movw/movt pair. So the state machine is **not called by any code in
+the image**; its entry comes from outside the blob (ROM/dispatcher/other boot stage) [I].
+
+**The only in-image reset dispatch chain [V]:**
+1. reset vector entry CPU 0x103140 (file 0xC3140) is an ARM stub that saves a context frame, then
+   calls CPU 0xC2EEC (file 0x82EEC) (ARM BX with interworking);
+2. CPU 0xC2EEC is a 6-instruction dispatcher: it loads CA 0x17D398 and tail-calls the function pointer
+   stored at **CA 0x17D42C** (0x17D398 + 0x94), or returns if it is 0;
+3. the boot state machine's **prelude** (file 0x7CE4-0x7D08, immediately before its state check)
+   *one-shot disables that slot*: it writes the BUG stub value **0x000C19D1** (file 0x819D0) to
+   **CA 0x17D42C** at file 0x7D06-0x7D08, writes BUG stubs 0x000C19E3 and 0x000C19D7 to CA 0x1808DC and
+   CA 0x118AEC, writes 0xDEAF to CA 0x4000010C, and registers H2D id 5 = BUG and callback slot 2 =
+   the second 0xcece waiter [V].
+
+That one-shot disarm strongly implies CA 0x17D42C is the boot/recovery entry slot the ROM seeds and
+the reset dispatcher calls; i.e. the boot state machine is reached at cold boot through that slot, and
+it disarms the slot once its prelude has run [I]. The seeding value itself is set off-image (ROM) [U].
+
+**The 0x8160 condition, exactly [V]:** 0x7D0A locks CA 0x118B24; 0x7D10 loads the state byte CA 0x118B60;
+0x7D16 compares it with 1; 0x7D18 branches to 0x8160 when state <= 1. The setup branch immediately
+advances it (0x816A-0x8174: state = state+1) and then, after per-state setup, branches to **0x7D28**
+(the group-4 id-1 build) at 0x828A/0x8290. The state>1 path at 0x7D1C-0x7D28 goes to the same id-1
+build. Consequence: **the state byte is not a wait flag; advancing it and attempting the id-1 send
+happen in the same pass.** Therefore:
+* state byte == 0 -> the boot state machine never reached 0x7D0A (never entered, or exited in its
+  prelude, or is stuck before the lock);
+* state byte >= 1 -> id-1 was attempted in that pass (if it is 1 the setup branch aimed for the send
+  but may have exited between 0x8174 and 0x828A/0x8290; if 2 the direct send path ran).
+
+**No timer/IRQ mask is involved in this path [V]:** the prelude and the state check contain no read of
+the ETE interrupt block (0x40039508) and no timer-enable write; the only host-visible register the
+state machine writes before the check is CA 0x4000010C = 0xDEAF (file 0x7CEC) plus the deliberately
+disarmed callback slots above. The prelude's hardware reads are chip ID/config/strap reads (0x3E8,
+0x858 and the config-table read at 0x76E2-0x76FC); none is host-writable.
+
+**Prelude early-exit points (why state can stay 0 even if the task runs) [V]:** at 0x76A6 it calls
+0x3E8(index) and exits at 0x9172 if the result is non-zero; at 0x76CE it exits if the pointer loaded
+from CA 0x172134 is NULL; at 0x76F0-0x76FC it reads a config table and exits if the value is >0xFDE8;
+at 0x7704 it exits if a count is >6; at 0x7756 it calls 0x858 and exits if the result is 0; and at
+0x7800-0x782A it calls function pointers from freshly built objects and exits on NULL/zero returns.
+These are firmware/ROM/hardware conditions; none is a host mailbox or ETE condition.
+
+### 11.3 Probe list - what to read and what each result proves (corrected mapping)
+
+Formula reminder: **CPU runtime R -> BAR0 = 0x6B8000 + R** (region-5 window); region-3 IO ->
+BAR0 = 0x3B8000 + (CA - 0x40000000).
+
+First verify the map (all reads):
+| # | what | CPU R / CA | BAR0 offset | expected |
+| --- | --- | --- | --- | --- |
+| 0 | alias check: image header w0 | R 0x40000 | 0x6F8000 | 0x00046971 |
+| 0b | image header w1 | R 0x40004 | 0x6F8004 | 0x000C742D |
+| 0c | ready-routine code | R 0xC6E14 | 0x77EE14 | 0x43F8E92D |
+| 0d | boot-task code | R 0x47628 | 0x6FF628 | 0x4FF0E92D |
+If row 0 is not 0x00046971 the window/offset is still wrong - stop and fix that first.
+
+Then the boot-task progress markers (this is the decisive test):
+| # | marker | CPU R | BAR0 | expected if prelude ran |
+| --- | --- | --- | --- | --- |
+| 1 | early head marker A | 0x18179C | 0x83979C | 0x004166B0 (written 0x762E) |
+| 2 | early head marker B (self-list) | 0x118B58 | 0x7D0B58 | 0x00118B58 (written 0x7646) |
+| 3 | early head marker C (self-list) | 0x118B5C | 0x7D0B5C | 0x00118B58 (written 0x764A) |
+| 4 | late prelude marker A | 0x1808DC | 0x8388DC | 0x000C19E3 (written 0x7CFA) |
+| 5 | late prelude marker B | 0x118AEC | 0x7D0AEC | 0x000C19D7 (written 0x7D02) |
+| 6 | late prelude BUG slot | 0x17D42C | 0x83542C | 0x000C19D1 (written 0x7D08) |
+| 7 | STATE BYTE | 0x118B60 | 0x7D0B60 | 0 = not reached 0x7D0A; 1 = setup branch ran; 2 = send path ran |
+| 8 | state lock | 0x118B24 | 0x7D0B24 | 0 unlocked; non-zero = held |
+| 9 | per-state record | 0x118B64 | 0x7D0B64 | non-zero record = state slot processed |
+| 10 | global msg object ptr | 0x117C00 | 0x7CFC00 | +0x9C (0x7CFC9C) = 0x40039014; +0xA4 (0x7CFCA4) = 0x40101434; +0xB4 armed; +0xB8 (0x7CFCB8) pending shadow |
+| 11 | vector-seen mask | 0x40008 | 0x6F8008 | halfword bits 1-4 set (0x001E if all four vectors ran) |
+| 12 | saved exception lr / spsr | 0x40048 / 0x4004C | 0x6F8048 / 0x6F804C | exception return address (CPU) / saved SPSR; changing between reads = re-entry |
+| 13 | gate | CA 0x4000010C | 0x3B810C | 0xCECE while served; 0/0xDEAF = an entry is waiting |
+| 14 | out[1] / out[0] | CA 0x40039014 / 0x40039010 | 0x3F1014 / 0x3F1010 | pending D2H bitmap |
+| 15 | D2H ack / re-arm | CA 0x40101438 / 0x40101414 | 0x4B9438 / 0x4B9414 | readable host-side mailbox bytes |
+| 16 | ETE intr | CA 0x40039508 | 0x3F1508 | 0x3F201818 (host-authored) |
+| 17 | DR0..DR3 enable / depth / fill | CA 0x4003A590/5E0/630/680 | 0x3F2590/5E0/630/680 at +0x00/+0x34/+0x3C | +0x00 = 1; +0x34 = 0x1F; +0x3C must advance after a deposit |
+| 18 | boot-task memset targets (PKTRAM) | CA 0x1048C48, 0x1042DE8, 0x103B048 | 0x224C48, 0x222DE8, 0x21B048 | zeroed (sizes 0x2A80 / 0x5E60 / 0x7DA0); weak evidence because they may already be zero |
+
+Decision tree:
+* rows 1-3 all zero -> the boot state machine **never entered** its prelude. Since nothing in the blob
+  calls it, its entry is the off-image reset-dispatch slot CA 0x17D42C (or an equivalent ROM task
+  bounce). This is a ROM/boot-stage problem, not a mailbox problem; the driver cannot fix it by any
+  register write seen in the blob. Candidate cause C-A.
+* rows 1-3 set, rows 4-6 zero -> the task entered but **exited inside the prelude** before 0x7D08
+  (checks at 0x76A6/0x76CE/0x76FC/0x7704/0x7756/0x7800). Candidate cause C-B; read row 18 and rows 4-6
+  again after a delay to confirm it is not still running.
+* rows 1-6 set but row 7 == 0 -> it reached 0x7D08 but never crossed 0x7D0A: check row 8 (lock) - if the
+  lock is held, the lock at CA 0x118B24 is the blocker; otherwise it died between 0x7D08 and 0x7D14
+  (should not happen on a live core). Candidate cause C-C.
+* row 7 >= 1 and no out[1] bit 6 -> id-1 build/send was attempted. Read row 10 (+0xB8 pending shadow):
+  if the shadow has 0x40 the publish is blocked on P2/drain (serve the mailbox); if the shadow is 0 the
+  frame was dropped inside send primitive 0xC2760 (group-4 destination record missing, 0xC27B6) -
+  candidate cause C-D. Row 17 +0x3C tells whether any deposit ever happened.
+
+### 11.4 Most likely remaining cause (and the first probe)
+
+Given (A)+(B), the vector handshake is working and the host can satisfy 0xcece and P2, yet nothing is
+queued. The single most likely remaining cause is therefore **C-A/C-B: the boot state machine never
+reached its state check** - it either was never entered (no in-image caller exists; its entry is the
+off-image reset-dispatch slot CA 0x17D42C / ROM task bounce) or it exited inside its prelude. In both
+cases the state byte stays 0 and no id-1 is ever built, which matches every (B) observation. The
+P2/mailbox theory is now demoted: with out[1] drained and 0xCECE held, a built id-1 would have produced
+bit 6.
+
+First probe (all reads, one script): BAR0 0x6F8000 (expect 0x00046971), 0x6F8004 (0x000C742D),
+0x77EE14 (0x43F8E92D), 0x83979C (0x004166B0), 0x7D0B58/0x7D0B5C (0x00118B58), 0x8388DC (0x000C19E3),
+0x7D0AEC (0x000C19D7), 0x83542C (0x000C19D1), 0x7D0B60 (state: 0/1/2), 0x7D0B24 (lock), 0x6F8008
+(vector mask), 0x7CFCB8 (pending shadow), 0x3F1014 (out[1]). That one snapshot decides C-A vs C-B vs
+C-C vs C-D without any write.
+
+Note on the pre-release 0xBAAD: CA 0x4000010C is written by the firmware prelude to 0xDEAF (0x7CEC)
+and zeroed by the vector handler (0x86E7E), so 0xBAAD was an earlier host/test value; it carries no
+meaning by itself.
+
