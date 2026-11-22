@@ -118,7 +118,8 @@ Exact chain, from the extracted rootfs:
 4. /sbin/sysupgrade (lines 302-310): tar -C / -x...zf "$CONF_RESTORE" - extracts
    **every archive member as root relative to /**, no keep-list, no path/member validation,
    overwriting existing files. Busybox v1.35.0 tar (ustar; -z supported; strips leading /).
-   Members with relative paths are all that is needed - no ../ traversal required.
+   Members with relative paths are all that is needed - no ../ traversal required, so
+   whether busybox accepts ../ members is irrelevant and was not tested on-device.
 5. /sbin/preset preset_uci_defaults() (lines 30-45): copies /rom/etc/uci-defaults/* into
    /etc/uci-defaults/ and **sources every file** there as root. This runs inside the restore,
    before reboot - immediate root command execution.
