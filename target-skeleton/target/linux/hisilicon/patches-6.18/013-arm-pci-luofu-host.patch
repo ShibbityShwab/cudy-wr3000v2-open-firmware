@@ -33,8 +33,8 @@
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 13:33:41.661229838 +0700
-@@ -0,0 +1,620 @@
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 14:15:02.466617823 +0700
+@@ -0,0 +1,628 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -333,9 +333,13 @@
 +	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_PHYCFG,
 +			      LUOFU_PCIE_MISC_PHYCFG_VAL);
 +
-+	/* misc+0x00 = 0x40000000: root-complex mode (vendor hi_pcie_set_mode). */
++	/* misc+0x00: root-complex mode.  The Triductor SDK driver for this
++	 * silicon (tri_pcie.ko reg_init) writes 0x40200000 here - bit 22 set -
++	 * and restores 0x40000000 after the LTSSM/IRQ setup.  The Cudy vendor
++	 * driver writes 0x40000000 only, but bit 22 is otherwise-unverifiable
++	 * (write-only register), so test the SDK ordering. */
 +	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_MODE,
-+			      LUOFU_PCIE_MISC_MODE_RC);
++			      LUOFU_PCIE_MISC_MODE_RC | 0x200000);
 +
 +	/* Gated DBI batch: RC command IO|MEM|BME (dbi+0x04 |= 0x7) and the
 +	 * target link speed 2 (5 GT/s) in both vendor fields.  The DWC DBI
@@ -436,6 +440,10 @@
 +	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
 +	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN |
 +					   LUOFU_PCIE_MISC_APP_IRQ_MASK);
++
++	/* SDK reg_init tail: restore mode 0x40000000 and clear reg_int. */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_MODE, LUOFU_PCIE_MISC_MODE_RC);
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_REG_INT, 0);
 +
 +	dev_info(pci->dev, "link training armed: DEBUG0=0x%08x DEBUG1=0x%08x\n",
 +		 dw_pcie_readl_dbi(pci, 0x728),
