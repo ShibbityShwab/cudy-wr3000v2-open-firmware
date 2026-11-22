@@ -1,0 +1,562 @@
+# The firmware-ready gate: what the device checks before it sends HCC chip-group-4 id1/id2 - static reversal
+
+**Lane:** fw-ready-gate (task-67), host-only RE. **Written:** 2026-11-22.
+**Scope:** the closed 928,920-byte Hi5622V100 firmware blob, static only. No device was touched, no
+vendor binary/blob is committed here, no OpenWrt image was built. Evidence markers: **[V]** verified
+from the named file offset / instruction in this lane's disassembly; **[V*]** measured on the device
+by an earlier attended lane and recorded in the named repo doc; **[I]** inference; **[U]** unknown /
+not resolvable from the blob.
+
+**Artifact** (local, not committed): /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin,
+928,920 B, sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b.
+Conventions (unchanged): firmware offsets are **file** offsets, Thumb; **runtime = file + 0x40000**;
+pointer literals in the blob are runtime addresses. Disassembly: capstone 5.0.7 (Thumb) cross-checked
+with arm-none-linux-gnueabihf-objdump -D -b binary -marm -Mforce-thumb. Host CA/BAR0 (region 3):
+**BAR0 = 0x3b8000 + (CA - 0x40000000)** [V].
+
+**Sources read first:** incoming/wifi-hcc-re/REPORT.md, phase19/fw-handshake.md,
+phase42/word-semantics.md, phase43/device-dr-side.md, phase37/fw-ring-message-table.md,
+phase37/d2h-message-catalog.md, incoming/wifi-firmware-re/REPORT.md, phase20/host-window.md,
+phase22/fw-hostmem.md.
+
+---
+
+## 0. TL;DR - the answer in one page
+
+1. **The 0xcece-gated routine at file 0x86E14 is not the ready-message sender.** It is the per-core
+   platform/ETE-up announce: it stages per-chip boot parameters into the firmware image header,
+   reprograms the two PCIe glue blocks, writes **out[1] = 0x4** + the D2H doorbell, and then spins on
+   **CA 0x4000010C == 0xcece**. After the spin it only unlocks and returns [V].
+2. **The two HCC group-4 ready frames are built by the firmware's boot/handshake state machine - one
+   large function at file 0x7628 (runtime 0x47628).** It is a re-entered state machine whose state
+   byte lives at device RAM **rt 0x118B60** (main-image BSS), with per-state records at rt 0x118B64
+   (stride 0x84):
+   * **id 1 "Device plat ready"** (hdr[0]=4, hdr[6]=1, payload len 0) is built and queued at
+     **file 0x7D28-0x7D54** - but only when ***(u8*)0x118B60 > 1** (file 0x7D10-0x7D18); states 0/1
+     take the setup branch at file 0x8160 which advances the counter and registers the H2D handler
+     table [V].
+   * **id 2 "DEVICE READY"** (hdr[0]=4, hdr[6]=2, 4-byte payload = 0x01060850) is built and queued at
+     **file 0x9000-0x9162**, gated by **[sp+0x24]==2** (file 0x8FD6) and
+     ***(u8*)(rt 0x1ADB80 + 0x110) == 0** (file 0x8FE4/0x8FF0) [V].
+3. **Both go out through one send primitive at file 0xC2760** - validate (0x9EA), set header +9 =
+   source-core, look up the per-(core,group) destination ([0xC281C] + 0x448 + 24*core, entity
+   [dest+0x10] + 12*group), then enqueue at file 0xC2662. Missing destination -> printk + return
+   0x8B2D, no mailbox write [V]. The downstream DR/HCC deposit path is file 0x861DC (build 8-B node,
+   commit via 0x8192A, d2h_notify(obj,6)) -> file 0x86170 (writes out[1] |= 0x40 and pulses
+   CA 0x40101434) [V].
+4. **No H2D message and no SR-ring state is required for the ready sends.** The whole image contains
+   no reference to the D2H ack (0x40101438) or re-arm (0x40101414) CAs - those are host-side-only
+   [V, full literal + movw/movt scan]. The firmware's only mailbox reads are out[1] (0x40039014),
+   [0x40039010] in the H2D dispatcher, and 0x4000010C [V].
+5. **The one firmware-side condition the host controls on the publish path is P2: out[1] must read 0**
+   before the next D2H word is published (file 0x86120-0x86128 in the flush routine 0x86108) [V]. The
+   0x4 announce the host has already seen is exactly the word it must now ack/drain/re-arm.
+6. **The helper pair writes a 22-step analog/PHY trim sequence to base+0x41C with a strobe at
+   base+0x428, status at base+0x424, and reads back 10 block registers - for both 0x40039000 (id 0x10b)
+   and 0x40039800 (id 0x10c).** It is not mailbox setup and not a gate; the values are in the blob at
+   file 0xC3BA0/0xC3B78 [V]. See section 6.
+
+The three most likely bench causes and the first probe are in section 7; the bench plan is section 8.
+
+---
+
+## 1. The 0xcece gate - file 0x86E14, re-verified
+
+### 1.1 Entry, argument and the four thunks
+
+The routine starts push.w {r3-r8,sb,lr} at 0x86E14. It is entered through **four tail-jump thunks**
+that each set r1 (core) to 4/3/2/1 and call the same body [V]:
+
+| thunk (file) | sequence |
+| --- | --- |
+| 0x86FC8 | ldr r3,[r0,#0x3c]; subs r3,#8; str r3,[r0,#0x3c]; clrex; movs r1,#4; b 0x86E14 |
+| 0x86FD6 | ldr r3,[r0,#0x3c]; movs r1,#3; subs r3,#4; str r3,[r0,#0x3c]; b 0x86E14 |
+| 0x86FE0 | same with movs r1,#2 |
+| 0x86FEA | same with movs r1,#1 |
+
+The thunks are referenced from the ARM veneer table at file 0xC3B38-0xC3B78 (e51ff004 + <runtime
+target>: file 0xC3B44 -> rt 0xC6FE1 (thunk 0x86FE0), 0xC3B4C -> 0xC6FEB, 0xC3B6C -> 0xC6FC9,
+0xC3B74 -> 0xC6FD7) [V]. The invoker of that veneer table is not statically named in the blob [U].
+
+### 1.2 What it checks / writes, in order (all [V], file offsets, objdump)
+
+1. **copy per-chip boot parameters into the firmware image header** (r0 = arg = 17-word block; r1 =
+   core): strh OR (1<<core) into the halfword at **CA 0x40008** (lit @0x86FA4 = 0x00040008,
+   0x86E90-0x86E96), i.e. the image-header core mask; then 17 words copied from [r0] to
+   **CA 0x4000C-0x40044** (0x86E9C-0x86EDE).
+2. **PCIe block bit**: CA 0x40101250 (lit 0x86F90) &= ~0x20 (0x86E36-0x86E3E); if cpu_id()==0 write
+   0x00010002 to CA 0x40161F00, else 0x00020002 (0x86E46-0x86E6E).
+3. **zero the handshake CAs**: CA 0x4003022C = 0 (0x86E7A); **halfword 0 to CA 0x4000010C** (0x86E7E)
+   and **halfword 0 to CA 0x40000108** (0x86E80). This is the line that can wipe a host-written 0xcece
+   if it lands too early.
+4. stage a device-RAM flag word (rt 0x17D398+0xBE0) with bits 1/2/4/8 through the routine
+   (0x86E42, 0x86E84-0x86E8C, 0x86F22-0x86F2C, 0x86F68-0x86F70) [V].
+5. cache clean/invalidate over [0x40000,0x1C0000) and [0x1000000,0x1060000) (blx 0xC2EE4,
+   0x86EE0-0x86EF4) - i.e. the firmware image and PKTRAM.
+6. copy a **3-entry table** (file 0xCF294 = rt 0x10F294) into device RAM at 0x010DB800 with end limit
+   rt 0x10DFFFF (0x86EF8-0x86F20); entries {src 0x001BD000 len 0x2000}, {src 0x4003A000 len 0xC28},
+   {src 0x40039000 len 0xD5C} [V].
+7. clear bit 0 of the halfword at **CA 0x40000558** (0x86F26-0x86F3C) [V].
+8. **helper pair on both PCIe blocks** (see section 6): 0x7C0(0x40039000); 0x78E(0x40039000);
+   0x7C0(0x40039800); 0x78E(0x40039800) (0x86F3E/0x86F44/0x86F4A/0x86F50) [V - corrects the
+   interleaved pairing in phase43 section 4.3].
+9. **announce**: *CA 0x40039014 = 4 (0x86F54-0x86F5A) and *CA 0x40101434 = 1 (0x86F5E-0x86F66:
+   out[1] + 0xC8000 + 0x420) [V].
+10. **the gate**: movw r3,#0xcece; loop { r2 = *[0x4000010C]; if r2!=r3 } (0x86F74-0x86F7C, literal
+    @0x86FA0 = 0x4000010C) [V].
+11. epilogue pop then tail-call 0xBDF72(rt 0x17DF44) = unlock + return 0x86F7E-0x86F86; ldr r0,
+    lit @0x86FC0 = 0x0017DF44) [V].
+
+### 1.3 A second 0xcece waiter, and who writes 0x4000010C
+
+* **file 0x820F8 (rt 0xC20F8)**: push {r3,lr}; mov r3,sp; cpsid i; bl cpu_id; movw r3,#0xcece;
+  ldr r1,lit=0x4000010C; spin until *r1==r3; pop (0x82102-0x8210E, literal 0x82110) [V].
+* The boot state machine (0x7628, section 2) **registers 0x820F8 as callback slot 2**:
+  0x7CDC ldr r2,lit @0x7DD4 = 0x000C20F9; movs r1,#0; movs r0,#2; bl 0x86DA2; the wrapper 0x86DA2
+  (cbz r2; cmp r0,#0x5f; b 0x874B0) calls 0x874B0, which stores the handler at [global+0x98+slot*4]
+  (0x874C4-0x874E8) [V]. Slot 2's invoker is [U].
+* The same boot state machine **writes 0xdeaf to CA 0x4000010C**: 0x7CE4 movw r2,#0xdeaf; ldr r3,lit
+  @0x7DD8 = 0x4000010C; ldr r1,lit @0x7DDC = 0x000C19DD; str r2,[r3] (0x7CE4-0x7CEC) [V]. (0x000C19DD
+  is the id-5 BUG() stub 0x819DC.)
+* 0x7CEE-0x7CF0 then registers **H2D id 5 = 0x819DC (BUG() trap)** via the firmware's own registrar
+  (0x7C1DC) [V]; phase37's "id 5 traps" observation is the firmware's own doing.
+
+**Consequence for the bench handshake** [I, strong]: CA 0x4000010C is written three different ways in
+this boot flow - the boot state machine writes 0xDEAF (0x7CEC), the ready routine writes 0 (0x86E7E)
+and then waits for 0xCECE (0x86F78), and the second waiter 0x820F8 waits for the same value. A host
+that writes 0xcece exactly once at release time can lose the write to the 0x86E7E store and leave the
+ready routine spinning forever.
+
+---
+
+## 2. Where the two group-4 ready messages are actually built and sent
+
+### 2.1 The boot/handshake state machine: file 0x7628 (rt 0x47628)
+
+One function: prologue 0x7628 stmdb sp!,{r4-r9,sb,sl,fp,lr}, single epilogue at 0x916A
+pop.w {r4,r5,r6,r7,r8,sb,sl,fp,pc}; body spans 0x7628-0x9168 [V]. Its globals come from literals at
+the head: **rt 0x117C00** = the firmware global message object (0x7934, also written into r4) [V].
+The handshake state is a **byte at rt 0x118B60** ([r4+0xF60]), with per-state records at rt 0x118B64
+(stride 0x84; lit @0x84B8 = rt 0x118B64) and a lock at rt 0x118B24 (lit @0x7DF4) [V]. The function has
+**no static caller and no pointer literal** in the blob [V scan]; it is re-entered by a runtime
+scheduler [I].
+
+### 2.2 id 1 - "Device plat ready" (HCC chip group 4, message id 1, no payload) [V]
+
+Site: **file 0x7D22-0x7D54**.
+
+0x7D0A ldr r0,lit @0x7DF4 = 0x00118B24 ; lock object
+0x7D0C bl  0xBDF8E                      ; lock
+0x7D10 ldrb.w r6,[r4,#0xF60]            ; r6 = state byte (rt 0x118B60)
+0x7D16 cmp  r6,#1
+0x7D18 bls.w 0x8160                     ; state <= 1 -> setup branch (advance + setup), NOT this send
+0x7D1C ldr r0,0x00118B24 ; bl 0xBDF50   ; unlock
+0x7D22 movs r3,#0 ; str r3,[r4,#0x270]  ; clear global pending pointer
+0x7D28 movs r1,#6 ; movs r0,#0 ; bl 0xC2822   ; msg_alloc(payload_len=0, pool/ch=6)
+0x7D38 bl  0x9EA                        ; validate pool membership/class
+0x7D3C movs r3,#4 ; strb r3,[r0,#0]     ; +0 = 4 (HCC group 4)
+0x7D40..0x7D48 ldrb r3,[r0,#1]; bfc r3,#4,#4; strb r3,[r0,#1]  ; +1 high nibble = core 0
+0x7D4A movs r3,#0 ; movs r2,#1
+0x7D4C strb r2,[r0,#6]                  ; +6 = 1  (HCC message id 1)
+0x7D4E strb r3,[r0,#3] ; strb r3,[r0,#7] ; +3 = +7 = 0
+0x7D52 mov r0,r4 ; bl 0xC2760           ; SEND (see section 3)
+0x7D58 cmp r0,#0
+0x7D5A beq.w 0x9188                     ; on queue success continue at 0x9188 (see 2.4)
+
+The **setup branch 0x8160** (taken while state <= 1) is what advances the counter: [r4+0xF60] = r6+1
+(0x816A-0x8174), then it builds the per-state objects and registers the H2D id-1 handler: 0x8224
+movs r0,#1; bl 0x7C1DC with r1 = lit @0x84D0 = 0x00040511 = file 0x510, the firmware's H2D id-1
+handler (phase37's "queue + wake worker") [V]. Therefore, on the vendor boot path: call 1 (state 0) ->
+state 1 + setup; call 2 (state 1) -> state 2 + setup; call 3 (state 2) -> **id 1 is queued** [V
+structure, [I] call count].
+
+### 2.3 id 2 - "DEVICE READY" (HCC chip group 4, message id 2, 4-byte payload) [V]
+
+Site: **file 0x8FD6-0x9168**.
+
+0x8FD6 ldr r3,[sp,#0x24] ; cmp r3,#2 ; bne ...   ; one internal state gate
+0x8FDC bl  0x1268
+0x8FE0 movs r6,#1
+0x8FE2 ldr r5,lit @0x914C = 0x001ADB80          ; per-core/per-chip context
+0x8FE4 ldrb.w r3,[r5,#0x110] ; strb r3,[sp,#0x54]
+0x8FEC ldrb.w r7,[sp,#0x54]                     ; r7 = core selector
+0x8FF0 cmp r7,#0 ; bne 0x9050                   ; non-zero core takes another branch
+0x8FF4..0x8FFC memset(sp+0x54, 4 bytes) = 0
+0x9000 ldr r3,lit @0x9150 = 0x01060850          ; <-- the payload word (PKTRAM device address)
+0x9002 movs r1,#6 ; movs r0,#4 ; str r3,[sp,#0x54]
+0x9008 bl  0xC2822                               ; msg_alloc(payload_len=4, pool 6)
+0x90E0 bl  0x9EA                                 ; validate
+0x90E4 ldrb r3,[r0,#1] ; movs r5,#4
+0x90E8 bfi  r3,r7,#4,#4 ; strb r3,[r0,#1]       ; +1 high nibble = core
+0x90EE movs r3,#2
+0x90F0 strb r5,[r0,#0]                          ; +0 = 4 (group 4)
+0x90F2 strb r3,[r0,#6]                          ; +6 = 2  (HCC message id 2)
+0x90F4 strb r7,[r0,#3] ; strb r7,[r0,#7]        ; core in +3 and +7
+0x90FA bl  0x9EA ; adds r0,#0xC
+0x9106 bl  0x81E44                              ; copy 4-byte payload to hdr+0xC
+0x9160 bl  0xC2760                              ; SEND
+0x9166 cmp r0,#0 ; bne ... ; 0x916A epilogue
+
+Notes: the payload is the **literal 0x01060850** (device CA in PKTRAM, region 2 = BAR0+0x238850), not a
+value read from it [V - the instruction is ldr r3,[pc,#0x14C]; str r3,[sp,#0x54], no load through r3];
+the host's id-2 handler receives it verbatim into its 0x64-byte per-core record
+(phase19/fw-handshake.md A.2) [V*]. The gate on [r5+0x110] (rt 0x1ADB80+0x110) selects core; a second
+branch at 0x9050 handles r7 != 0 [V].
+
+### 2.4 The other group-4 builders (for completeness, same send primitive)
+
+| group4 id | host handler (plat.ko) | firmware builder (file) | alloc | notes |
+| ---: | --- | --- | --- | --- |
+| 0 | oam_rx_post_action_function (device log blob) | 0xC48, caller 0xC70 | msg_alloc(len,7) | sets +0=4, +6=0, len=arg+0xC, copies payload; 0xC70 also calls the send [V] |
+| **1** | **device_plat_ready_msg_process** | **0x7D28** | msg_alloc(0,6) | see 2.2 [V] |
+| **2** | **host_ready_msg_process** | **0x9000** | msg_alloc(4,6) | see 2.3 [V] |
+| 3 | exception_info_msg_process | 0x91C8, payload table rt 0x1043A5 = file 0xC43A5 = "DEVICE EXCP_INFO" | msg_alloc(0x3D,6) | reached from 0x7D5A on id-1 queue success; seeds a 61-byte payload from 0x9304 = 0x001043A5 [V path; [U] why the exception slot is used on this branch] |
+| 4 | heartbeat_msg_process | not found in this pass | - | [U] |
+
+The group ids line up with the host-side table in incoming/wifi-hcc-re/REPORT.md section 2.4, which
+independently confirms that the group-4 builder catalogue is the ready/heartbeat/exception family [V].
+The 4-byte id-2 payload is the only field-carrying ready body; id 1 is header-only (len = 0xC) [V].
+
+---
+
+## 3. The shared send primitive and the path to the DR ring
+
+### 3.1 file 0xC2760 - hcc_msg_send(msg) [V]
+
+0xC2760 push {r4,r5,r6,lr}; mov r5,r0
+0xC2764 cbnz r0 -> 0xC2776 ; NULL -> printk(0x179) + return 0x8B2D
+0xC2776 bl 0x9EA                  ; validate the message buffer (pool + class <= 3)
+0xC2782 ldrb r3,[r0,#1] ; ubfx r3,r3,#4,#4 ; strb r3,[r0,#9]   ; hdr[9] = source core
+0xC278C bl 0x9EA ; mov r4,r0
+0xC279A movw r3,#0x448            ; per-core record base
+0xC27A0 ldrb r1,[r0,#9]           ; core
+0xC27A2 smlabb r2,r2,#24,r3       ; + 24*core
+0xC27A6 ldr r3,lit @0xC281C       ; destination table base
+0xC27AA ldrb r1,[r0,#0] ; and r1,#0xF   ; group
+0xC27AC add r2,r3(r2) ; bl 0xC2744      ; dest = [base+0x448+24*core+0x10] + 12*group
+0xC27B6 cbz r0 -> printk(0x189) + return 0x8B2D   ; **** group not registered -> no send ****
+0xC27BA ldrh r1,[r4,#6]           ; id
+0xC27BC ldr r3,[r0]               ; dest max id
+0xC27BE cmp r1,r3 ; if id < max: [dest+4]+id*16 -> .stats[8]++
+0xC27CE ldr r1,[r0,#8] ; bl 0xC24CE     ; take the destination lock
+0xC27EE bl 0xC2662               ; enqueue(msg, dest, lock handle)
+0xC2810 movs r0,#0               ; success
+
+So a ready frame can be **silently dropped inside the firmware** if the per-(core,group=4) destination
+record is not present: the function prints and returns 0x8B2D, no mailbox write, no visible host-side
+change [V]. That table is populated at runtime; its registration site was not mapped in this pass [U].
+
+### 3.2 From the enqueue to the DR ring and the D2H notify [V]
+
+* **file 0x861DC** is the D2H deposit block (first instruction movs r1,#0x30, then
+  push {r0,r1,r2,r4,r5,lr}; end pop {r4,r5,pc} at 0x86234): builds the 8-byte node in sp -
+  [sp] = buffer address, [sp+4] = (len<<16) | 0x6000 | 0xD2B (0x861E6-0x86216), calls **0x8192A** to
+  commit it (0x8621C), calls **d2h_notify(obj,6)** (0x86220 movs r1,#6; 0x86224 bl 0x86170), then
+  str [ctx+0x340]++ (0x8622E).
+* **file 0x81906** is the producer-index advance: idx=(idx+1)&0x3FF, on wrap clear low 10 bits and
+  toggle **bit 10** (phase bit), store (0x8190A-0x81926) [V]; **0x8192A** writes node word0 then word1
+  at ring[idx] with idx = [ctx+0xC]&0x3FF, then tails into 0x81906 [V].
+* **file 0x86170 d2h_notify(obj,id)**: id<=10, obj==0, global g=*rt 0x172130, pending shadow g+0xB8,
+  out[1] = g+0x9C, D2H doorbell = g+0xA4; writes out[1] = shadow | (1<<id) (0x861B0) and pulses
+  doorbell |= 1 (0x861C0) [V]. **The ready path uses id 6 => out[1] bit 6 (0x40)** [V].
+* **file 0x86108 (flush)**: ldr r3,[r0+0xB0]; *r3 = 1 re-asserts the channel enable (0x86110-0x86114),
+  then mov.w r3,#0x10000 and **spins until *[g+0x9C] (out[1]) == 0** (0x86120-0x86128) before publishing
+  the pending shadow and the doorbell (0x86156-0x86166) - the P2 "keep the mailbox drained" condition
+  [V]. It is registered as callback slot 0x4E in pcie_msg_init (0x9806-0x980C: r0=0x4E, r1=5,
+  r2=thunk@0x2A0 -> b.w 0x86108) [V].
+* **Static callers of 0x86170 found this pass** (contradicting the earlier "no static caller"
+  statement in phase37/fw-ring-message-table.md section 5): **file 0x86224** (inside the D2H fill
+  block, id 6), **file 0x86998** (id 5 after the ring advance at 0x869C6), and **file 0x62AC** (third
+  notify site, context not mapped here) [V].
+
+### 3.3 Which DR channel?
+
+Firmware's own ETE channel table is at **file 0xC4054** (rt 0x104054), 7 x 12 B [V]: {0x400,0x06800020,1}
+{0x450,...,1} {0x4A0,...,1} {0x590,...,1} {0x5E0,...,0} {0x630,...,0} {0x680,...,0} - i.e. SR0-2 and
+**DR0 are flagged 1 (control/HCC)**, DR1-3 flagged 0 (data), the same split
+incoming/wifi-hcc-re section 4.1 inferred from plat.ko. The ready frames are control messages =>
+**prediction: DR0 carries the group-4 id1/id2 frames** [I - firmware's flag + only DR0 enabled for
+control], while the host must be prepared to see them on any DR channel [U until B3].
+
+### 3.4 The DR-ring contract the host must satisfy for these frames (question 2)
+
+* Node = 8 B, **word0 = buffer device VA** (host-posted buffer in the 0x80000000..0xFFFFFFFF outbound
+  window), **word1 = (len<<16) | 0x6D2B** (bits 13/14 present, low 13 = 0xD2B) [V].
+* Producer index = **packed (idx & 0x3FF) | phase<<10**, advanced +1, phase toggled at idx == depth
+  (0x81906; host twin pcie_ete_ring_ptr_plus) [V].
+* Host-side DR registers: **+0x30 = node-array device VA, +0x34 = depth-1, +0x38 = free-buffer
+  producer (host publishes, device consumes), +0x3C = device fill index** (host reads to know deposit
+  progress) [V* phase-hcc/43].
+* The device **never writes DR channel registers**; it only writes the node array through the outbound
+  window [V phase43 negative]. Pre-posted DR free buffers are therefore a hard prerequisite [V* B2 did
+  this].
+* The ready frames are announced with **out[1] bit 6 (0x40)**, not bit 3; bit 3 (0x8) is the ETE
+  transfer-done notify [V firmware/0x86170 id6 + phase-hcc host table].
+
+---
+
+## 4. Host-visible mailbox/H2D/SR preconditions (question 3)
+
+Full scan of the blob for the six mailbox CAs and the handshake CAs, via literal-pool resolution and
+movw/movt operand scan over every decoded instruction [V]:
+
+| CA | firmware access | site |
+| --- | --- | --- |
+| 0x4000010C | **write 0xDEAF** | 0x7CEC (boot state machine) [V] |
+| 0x4000010C | **write 0 (halfword)** then **spin-read ==0xCECE** | 0x86E7E / 0x86F78 (ready routine) [V] |
+| 0x4000010C | spin-read ==0xCECE | 0x82108 (second waiter 0x820F8) [V] |
+| 0x40000108 | write 0 (halfword) | 0x86E80 (ready routine) [V] |
+| 0x40039014 (out[1]) | RMW write (announce 4; pending shadow) | 0x86F5A, 0x861B0 [V] |
+| 0x40039014 | read, spin while != 0 | 0x86124/0x86126 (flush) [V] |
+| 0x40101434 (D2H doorbell) | RMW |= 1 | 0x861C0, 0x86F66 (as +0xC8420 from out[1]) [V] |
+| 0x40039010 (out[0]) | read + write 0 | 0x818BC/0x818BE (H2D dispatcher) [V] |
+| 0x400392F0 | write 1 (H2D ack) | 0x818B8 [V] |
+| 0x400392D4 | write 8 (H2D done doorbell) | 0x818C4 [V] |
+| **0x40101438** (D2H ack) | **no reference anywhere** | [V negative] |
+| **0x40101414** (D2H re-arm) | **no reference anywhere** | [V negative] |
+
+Relevant literals: 0x86FBC = 0x40039014; 0x97D8 = 0x40101434; 0x97DC = 0x40039014; 0x97E0 =
+0x40039010; 0x86FA0 = 0x4000010C; 0x86FB0 = 0x40000558; 0x86FB4 = 0x40039000; 0x86FB8 = 0x40039800 [V].
+
+**What this means:**
+
+1. **No H2D message is required by the ready path.** The firmware is ready to send without any host
+   message; the vendor host's only acts in the ready handshake are IRQ enable and status reads
+   (phase19/fw-handshake.md A.3) [V*]. The firmware itself registers the H2D handlers it needs (ids
+   1/3/5/6; id 5 = BUG trap at 0x7CEE) [V].
+2. **No SR-ring state is consulted.** The only ring state used is the firmware's own DR device-local
+   producer (0x81906) [V].
+3. **The single firmware-side host-controlled condition on the D2H publish path is P2**: out[1] == 0
+   before the next publish (0x86120-0x86128), i.e. the host must ack 0x40101438=1, read out[1], write
+   out[1]=0, re-arm 0x40101414=1 - exactly the contract in incoming/wifi-hcc-re/REPORT.md section 5.4.
+4. **0x4000010C must hold 0xCECE at the moment the two waiters test it.** Because the ready routine
+   zeroes it first (0x86E7E) and the boot task writes 0xDEAF (0x7CEC), a single early host write can
+   be lost [V instructions, [I] race].
+
+---
+
+## 5. The helper pair - what it does to 0x40039000 / 0x40039800 (question 4) [V]
+
+### 5.1 The main-image helpers
+
+**file 0x7C0 (write_seq(base))**: ldr r1,lit @0x7FC = 0x00103BA0 (table inside the blob at file
+0xC3BA0), copy 0x58 B to stack, then for i=0..21:
+r3 = tab[i]; [base+0x41C] = r3; [base+0x428] = 1; [base+0x428] = 0; r3 = [base+0x424];
+0x244(r0=100) (the 0x244 helper is a busy-wait/nanosecond delay using the cp15 timer: umull;
+blx 0xC338C; loop until elapsed == 100) [V].
+
+The 22 values (file 0xC3BA0-0xC3BF4, runtime 0x103BA0):
+0x04, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1E, 0x30, 0x1008, 0x1009, 0x100A, 0x100B, 0x100C,
+0x100D, 0x1012, 0x1013, 0x101C, 0x101E, 0x101F, 0x1024, 0x1025 [V].
+
+**file 0x78E (readback(base))**: copies 10 offsets from file 0xC3B78 (rt 0x103B78) and executes
+ldr r2,[base + offset[i]] for each (values discarded - a status read-back/flush): offsets
+0x224, 0x23C, 0x414, 0x43C, 0x440, 0x460, 0x464, 0x468, 0x46C, 0x514 [V].
+
+Therefore, for the two call arguments in the ready routine:
+
+| base | writes (data/strobe/status) | read-back addresses (sample) |
+| --- | --- | --- |
+| 0x40039000 (block id 0x10B) | 0x4003941C <= 22 values; 0x40039428=1/0; 0x40039424 read | 0x40039224 (= pcie0_status in dev_status_check), 0x4003923C, 0x40039414, 0x4003943C, 0x40039440, 0x40039460/64/68/6C, 0x40039514 |
+| 0x40039800 (block id 0x10C) | same offsets +0x800: 0x40039C1C/0x40039C28/0x40039C24 | same +0x800 |
+
+Ready-routine call sequence: 0x7C0(0x40039000) at 0x86F3E; 0x78E(0x40039000) at 0x86F44;
+0x7C0(0x40039800) at 0x86F4A; 0x78E(0x40039800) at 0x86F50 [V].
+
+**Semantics** [I]: the pair is a per-PCIe-controller lane/PHY trim write sequence plus a block status
+read-back; it is not mailbox setup and it does not gate the ready messages (it completes before the
+out[1]=4 announce in the same routine). Block ids 0x10B/0x10C are the two PCIe/message glue blocks
+(reg_all: 0x4003A000=0x10A ETE, 0x40039000=0x10B, 0x40039800=0x10C) [V* phase43]. The written values do
+**not** include any mailbox CA and none of the three touched offsets is a documented mailbox register [V].
+
+### 5.2 The ITCM twins (same algorithm, tables in mask ROM)
+
+The blob's second executable region (file >= 0xD0000, runtime >= 0x110000, delivered as the INI
+firmware_itcm_src_addr=0x117BC4 len=0xA968 / firmware_dtcm_src_addr=0x12252C len=0x76C segments)
+contains the same pair [V]:
+
+* **file 0xD8450**: 0x58-byte table from **rt 0x100A0**, same 22-step write/strobe/status sequence, but
+  with a settle loop until the cp15 timer has advanced >= 39 (0xD83C8 used twice) [V].
+* **file 0xD8268**: 10-offset table from **rt 0x10078**, same read-back [V].
+
+Both tables live **below the firmware image base** (rt < 0x40000 = region-0 ROM/WRAM), so they are
+**not in the blob** [U values], but region 0 is host-visible: the tables would be readable at
+**BAR0+0x100A0 / BAR0+0x10078** if the chip's ROM/WRAM window is mapped (read-only probe idea).
+
+---
+
+## 6. Ranked candidate causes on our bench, with the exact host-side probe
+
+> Ordering is by how directly the firmware code proves the host condition, and by how cheap the probe
+> is. The first two are the same physical chain and should be tested together.
+
+### C1 (most likely) - the host never services the D2H mailbox, so the publish path stays blocked on out[1]
+
+* **Firmware fact** [V]: the flush routine 0x86108 spins on out[1] == 0 (0x86120-0x86128); d2h_notify
+  maintains out[1] as a pending bitmap; the ready routine already left out[1] = 0x4. Our transport arms
+  ETE and polls, but the described host state does not say it ever performs the ack/drain/re-arm sequence.
+* **Experiment** (writes are the already-proven D2H service sequence in
+  incoming/wifi-hcc-re/REPORT.md section 5.4 - **attended**):
+  1. read CA 0x40039014 (BAR0 0x3F1014); expect 0x4.
+  2. write CA 0x40101438 = 1 (ack; BAR0 0x4B9438).
+  3. read CA 0x40039014, then write 0 (drain; BAR0 0x3F1014).
+  4. write CA 0x40101414 = 1 (re-arm; BAR0 0x4B9414).
+  5. poll CA 0x40039014 for 30 s.
+* **Decision value**: a subsequent **0x40 (bit 6, a D2H message deposit with a ready frame)** and/or
+  **0x8 (bit 3, ETE transfer done)** -> C1 confirmed, the ready frames were only mailbox-blocked. Only
+  0x4 ever -> path never publishes; go to C2/C3.
+
+### C2 - the 0xCECE write was lost to the ready routine's own zeroing (or was written before the routine ran)
+
+* **Firmware fact** [V]: ready routine writes halfword 0 to CA 0x4000010C at 0x86E7E and then spins for
+  0xCECE at 0x86F78; the boot state machine writes 0xDEAF to the same CA at 0x7CEC; the second waiter
+  0x820F8 spins too. A single host write at release time can be erased.
+* **Experiment** (**attended write**): read CA 0x4000010C (BAR0 0x3B810C) after out[1]=0x4 has been
+  observed (so the routine has passed its zero store). If it reads 0x00000000 or 0x0000DEAF, write
+  0x0000CECE to CA 0x4000010C (halfword or word), then poll CA 0x40039014 for 0x40/0x8.
+* **Decision value**: firmware exits the spin and announces bits 3/6 -> C2 confirmed (race). If
+  0x4000010C already reads 0xCECE but nothing changes -> the gate passed; go to C1/C3.
+
+### C3 - the boot state machine never reaches state > 1 (or its group-4 destination lookup fails)
+
+* **Firmware fact** [V]: id 1 is only queued when *(u8*)0x118B60 > 1; the setup branch that increments
+  it also registers the H2D handler table and per-state objects; the send primitive silently returns
+  0x8B2D if the group-4 destination record is missing (0xC27B6).
+* **Read-only side-effect probe** (all reads; BAR0 windows):
+  * CA 0x4003022C (BAR0 0x3E822C): the ready routine zeroes it at 0x86E7A; if it reads non-zero the
+    routine has not reached that point.
+  * CA 0x4000010C: 0xDEAF proves the state machine reached 0x7CEC; 0 / 0xCECE proves it also passed the
+    ready routine's 0x86E7E.
+  * CA 0x40000558 (BAR0 0x3BD558) bit 0: cleared at 0x86F30 after the ready routine's parameter staging;
+    bit 0 still 1 => the ready routine has not run to that line.
+  * CA 0x40039014 = 0x4 proves 0x86F5A ran but **not** that the 0x86F7C spin exited.
+* **Decision value**: if 0x4003022C == 0 and 0x4000010C == 0xDEAF while out[1] still 0x4, the ready
+  routine was stuck at the 0x86F7C spin => C2. If 0x4000010C == 0xCECE and 0x40000558 bit0 clear => the
+  gate is passed but the state machine has not queued id1 => C1/C4.
+
+### C4 - the ready frame is dropped inside the firmware's send primitive (group-4 destination missing)
+
+* **Firmware fact** [V]: 0xC27B6 returns 0x8B2D and prints if [dest+0x10]+12*4 has no record for core 0;
+  no host-visible side effect.
+* **Probe**: only distinguishable after C1-C3 pass (mailbox clear, gate passed, DR enabled) and still no
+  out[1] bits: snapshot DR0 +0x00/+0x10/+0x14/+0x18 (enable must be 1) and the host ring
+  +0x30/+0x34/+0x38/+0x3C, and read the six CA 0x40039xxx/0x40039Axxx block-registers for any change.
+  If all clean -> firmware-internal failure; escalates to section 9 open items.
+
+### C5 - DR host-ring geometry / outbound-window address mismatch
+
+* **Firmware fact** [V]: the device only writes its own node array; the host ring side is host-posted. If
+  the host-posted node array or payload buffers sit outside the programmed outbound iATU window (devva
+  0x80000000..0xFFFFFFFF identity), the engine cannot deposit and the host sees no nodes.
+* **Probe**: read each DR channel's +0x30 (host ring base) and verify it lies in the outbound-window
+  range; verify +0x34 == 0x1F (depth 32) and +0x38 advanced from the host's initial publish. Then watch
+  +0x3C for advance.
+* **Decision value**: +0x3C advancing without out[1] bits => notify/mailbox side (C1/C2); +0x3C static
+  => deposit side (C5) or no send at all (C3/C4).
+
+### C6 (low) - ETE interrupt mask / engine control mismatch
+
+The host masked CA 0x40039508 to 0x3F201818 "as stock" while the firmware writes 0xE0E0F8F8
+(0x96B0-0x96FC) [V]. Read CA 0x40039508 (BAR0 0x3F1508): if it does not read 0x3F201818 after the
+firmware init ran, the masked value is being overwritten by the device - read-only evidence about init
+progress, unlikely to gate the ready sends.
+
+---
+
+## 7. "How to confirm" - bench plan (reads first; writes marked ATTENDED)
+
+Recovery door armed, UART read-only, one idea per session, never write CA 0x400392F0.
+
+**Step 0 - read-only snapshot (no writes):** dump and save 0x40039010, 0x40039014, 0x40101434,
+0x4000010C, 0x40000108, 0x4003022C, 0x40000558, 0x40101250, 0x40039508, 0x40039000, 0x40039800,
+0x4003941C, 0x40039424, 0x40039C1C, 0x40039C24 plus all four DR blocks 0x4003A590/5E0/630/680 at
++0x00/+0x08/+0x10/+0x14/+0x18/+0x30/+0x34/+0x38/+0x3C (BAR0 = CA - 0x40000000 + 0x3B8000). Also
+BAR0+0x238850 (CA 0x01060850, the id-2 payload word) and optionally BAR0+0x100A0/0x10078 (ROM helper
+tables). Decision: out[1]==0x4 and 0x4000010C in {0, 0xDEAF} => C1/C2; out[1]==0x4 and
+0x4000010C==0xCECE => gate passed, look at C1 first.
+
+**Step 1 - ATTENDED mailbox service (C1):** ack 0x40101438=1 -> read+clear 0x40039014 -> re-arm
+0x40101414=1; poll out[1] for 30 s for 0x40/0x8. This is the exact sequence already proven safe in B2.
+**Expected success signature:** out[1] transitions 0x4 -> 0x40 (bit 6 ready deposit) or 0x8 (bit 3 ETE
+done), and the DR block(s) +0x3C advance.
+
+**Step 2 - ATTENDED C2 re-write:** if Step 1 gives nothing and CA 0x4000010C was 0 or 0xDEAF, write
+0xCECE to CA 0x4000010C *after* out[1]=4 is confirmed, then repeat Step 1's poll.
+
+**Step 3 - on any out[1] bit 3/6: read-only DR drain inspection:** record DR +0x3C/+0x38 before/after,
+then dump the node ring and the first 12 B of up to 8 buffers: look for node word1 = (len<<16)|0x6D2B
+and HCC header byte0&0xF = 4, u16@+4 = len, u16@+6 = 1 or 2 (group 4, ids 1/2). This is the B3 P2/P3
+probe from incoming/wifi-hcc-re/REPORT.md section 9.
+
+**Step 4 - if all clean: firmware-internal candidate C3/C4.** Only then consider a *read-only* dump of
+the firmware global object (NOT mapped by our driver today; device RAM is not host-visible), or escalate
+the two remaining unknowns (the 0x118B60 state writer/invoker and the group-4 destination registration)
+to a source-request follow-up.
+
+**Write budget:** the only writes in this plan are the four proven mailbox bytes (0x40101438=1,
+0x40039014=0, 0x40101414=1, 0x4000010C=0xCECE). No ETE/SR/DR config is changed.
+
+---
+
+## 8. Verification and reproduction
+
+Every site above was checked twice (capstone 5.0.7 Thumb + GNU objdump) in this lane. Position ranges
+(file offsets, Thumb):
+
+    085CC0-086FF0  ready routine 0x86E14 (incl. literal pool 0x86F88-0x86FD0 and the four thunks)
+    07628-09168    boot/handshake state machine (id1 @0x7D28, id2 @0x9000, id3 @0x91C8)
+    0C2740-0C2830  send primitive 0xC2760 / dest lookup 0xC2744
+    086108  flush; 086170 d2h_notify; 0861DC-08622E D2H fill + node + commit + notify(6)
+    0818AC  H2D dispatcher; 081906/08192A ring commit
+    0078E/007C0     helper pair; tables file 0xC3B78 / 0xC3BA0
+    0D8450/0D8268   ITCM helper twins (ROM tables rt 0x100A0 / 0x10078)
+    0C4054  firmware ETE channel table (7 x 12 B)
+
+Reproduce (local blob, no repo files needed):
+
+    PY=.provision-venv/bin/python    # capstone 5.0.7
+    $PY - <<'EOF'
+    from capstone import *
+    d=open("/home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin","rb").read()
+    md=Cs(CS_ARCH_ARM,CS_MODE_THUMB); md.skipdata=True
+    for a,b in [(0x7C00,0x7D70),(0x8FD0,0x9170),(0x91A0,0x9210),(0xC2740,0xC2830),
+                (0x860F0,0x86240),(0x86E14,0x86FF8),(0x7C0,0x7D0),(0x78E,0x7BA)]:
+        print("== %05x =="%a)
+        for i in md.disasm(d[a:b],a): print("  %05x %-8s %s"%(i.address,i.mnemonic,i.op_str))
+    EOF
+    # helper tables
+    xxd -s 0xC3B78 -l 0x80 /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+    # ARM/Thumb cross-check: GNU objdump -D -b binary -marm -Mforce-thumb on a dd slice + --adjust-vma
+
+**Status of prior claims this lane corrects:**
+1. phase37/fw-ring-message-table.md section 5: "the firmware's only mailbox announce path is 0x86170 ...
+   no BL names 0xc6170" - **now three static BL sites** (0x86224, 0x86998, 0x62AC) [V].
+2. phase43/device-dr-side.md section 4.3: helper-call pairing was interleaved; the verified order is
+   0x7C0(0x40039000), 0x78E(0x40039000), 0x7C0(0x40039800), 0x78E(0x40039800) [V].
+3. phase37/d2h-message-catalog.md section 3 "the D2H notify call site is not in this image": the notify
+   site is (above), but the **ready-frame builders** (the actual HCC id1/id2 construction) are in the
+   main image at 0x7D28 / 0x9000 - previously unfound [V].
+
+## 9. Open items (honest limits)
+
+1. **Invoker of the boot state machine 0x7628** - no static caller, no data pointer literal; re-entered
+   from a runtime scheduler/other image [U].
+2. **The only writer of the state byte rt 0x118B60** that we found is 0x8174 (state setup branch); whether
+   another path resets it is [U].
+3. **Slot-2 callback invoker** (0x820F8 wait_cece, registered via 0x86DA2 -> 0x874B0 at 0x7CE0) - the
+   dispatcher that calls [global+0x98+slot*4] is not mapped [U].
+4. **Group-4 destination registration** (table [0xC281C]+0x448+24*core, entity +0x10+12*group) -
+   where/when it is populated is not mapped [U]; if it is never populated on our bench, C4 stands.
+5. **Purpose of the id-1 "success" continuation at 0x9188** (builds a group-4 id3 message whose payload is
+   seeded from the "DEVICE EXCP_INFO" string at rt 0x1043A5) - [V] instructions, [U] semantics.
+6. **ITCM helper ROM tables** rt 0x100A0 / 0x10078 are below the image base and not in the blob [U];
+   read-only host probe proposed in section 5.2.
+7. **Which DR channel** carries the ready frames - prediction DR0 (section 3.3) [I]; bench probe B3 P2.
+8. **Who stamps the 0x5A5A transport tag** on D2H buffers - no store of 0x5A5A exists anywhere in the
+   firmware image except the two compares at 0x8699E / 0x862A6, so it is set below the HCC layer (engine
+   or a table) [U].
+
+---
+
+*No vendor binary, blob, calibration value, MAC or secret is included; this document contains only
+offsets and analysis. Lane wrote only this file. Device untouched.*
