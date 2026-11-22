@@ -867,3 +867,104 @@ Note on the pre-release 0xBAAD: CA 0x4000010C is written by the firmware prelude
 and zeroed by the vector handler (0x86E7E), so 0xBAAD was an earlier host/test value; it carries no
 meaning by itself.
 
+
+---
+
+## 12. Follow-up 3 answers: vector/entry model, frame decode, RAM aperture, and the destination-record probe
+
+### 12.1 (a) Only vector bit 3 (mask 0x08) - what that means
+
+The staged halfword at CA 0x40008 is OR of (1 << r1) where r1 is the thunk index 1..4; 0x08 = index 3 only.
+The five header words at CA 0x40050 are *entry addresses used by boot code that calls the stubs*, and the
+saved frame (see 12.2) shows a normal call, not a hardware exception. So the other indices are not queued
+by hardware: each is taken when later boot code calls the corresponding entry (1/2/4). Because the boot
+flow stopped at the id-1 send drop in the same pass that advanced the state (12.5), no later entry was
+ever called. The extra out[1] = 4 events you saw while hammering 0xCECE are re-entries of the *same*
+handler (index 3) only - they do not run the boot state machine.
+
+### 12.2 (b) Frame decode (layout: {r0-r12, sp, lr, lr_exc, spsr} staged at CA 0x4000C..0x4004C)
+
+r0 = 0x0017DF44 (lock/callback object; the same pointer the handler unlocks at 0x86F82), r1 = 0, r2 =
+0x001BD000, r3 = 0x001BDC40, r4 = 0x0017E1B8, r5 = 0x42085EBF, r6 = 0x0017E1B8, r7 = 0x3577D5C2, r8 =
+0x000BF98F, r9 = 2, r10 = 0x0017E1B8, r11 = 0x0017E2AC, r12 = 0x1A, sp = 0x001BDE90, lr = 0x00088BBD,
+lr_exc = 0xFF33CA94, spsr = 0x20000193.
+
+* lr = 0x00088BBD is a valid CPU address inside the image (file 0x48BBD) - this is the return address of a
+  **normal call** to the entry stub. lr_exc = 0xFF33CA94 is not a valid code address, so the stub was not
+  entered as a hardware exception.
+* spsr = 0x20000193 decodes as mode 0x13 (SVC), ARM state, IRQ/FIQ masked, C flag set; because the entry
+  was a call, this is the **stale SPSR left by the last real exception (reset)**, not the type of this
+  entry [I]. Therefore the SVC-mode context does NOT identify an SVC exception.
+* sp = 0x001BDE90 proves the CPU RAM/stack extends to at least that address (so internal RAM covers roughly
+  the region-0 size, 0x0-0x1BFFFF).
+
+### 12.3 (c) Does the handler return into the boot task?
+
+No. The handler returns to its caller through lr = 0x00088BBD (a boot/init call site in the image), not
+into the boot state machine at CPU 0x47628. The handler and the boot task are different code paths.
+
+### 12.4 (d) The 0xFFFFFFFF markers: real writes, not readable through our host aperture
+
+CPU addresses 0x17D42C / 0x1808DC / 0x18179C are:
+* inside the CPU internal RAM extent (region-0 space 0x0-0x1BFFFF; stack evidence above), and
+* inside the vendor region-5 CA window (CA 0x1200000-0x1417FFF, size 0x218000), i.e. they map to CA
+  0x137D42C / 0x13808DC / 0x138179C and host BAR0 0x83542C / 0x8388DC / 0x83979C (your reads).
+But on our device host reads above roughly internal 0x140000 return 0xFFFFFFFF (here: everything >= 0x17D000
+failed, while 0x118AEC / 0x118B58 / 0x118B5C / 0x118B60 all worked). So the prelude writes did execute
+(proved independently: state byte = 1 means 0x7D0A was reached, which is after the 0x7D08 write), they are
+just outside the host-visible ACP aperture on our unit. First read: BAR2 iATU viewport 5 registers - ctrl2
+BAR2+0xB04, base_lo +0xB08, limit +0xB10, target_lo +0xB14 - expect base 0x406B8000, limit 0x408CFFFF,
+target 0x01200000. If limit is correct, the 0xFFFFFFFF ceiling is a device/ACP decode limit; if limit is
+smaller than 0x408CFFFF, our driver's region-5 viewport is undersized and can be corrected host-side.
+
+### 12.5 Destination records of send primitive 0xC2760 - what they are, who fills them, and why they are empty
+
+**Address/layout [V].** The registry base is CA **0x171B6C** (literal at file 0xC281C). For a message with
+source core c (header +9) the record is at **CA 0x171B6C + 0x448 + 24*c** (core 0 -> CA **0x171FB4**).
+Lookup 0xC2744(record, group):
+* fail #1: [record+4] == 0; fail #2: [record+0x10] == 0;
+* fail #3: [[record+4]+0x10] <= group (the object's max group id); group 4 needs max id > 4;
+* record+0x08 = a lock key (used by 0xC24CE), record+0x10 = pointer to an array of 12-byte group entries.
+* the chosen entry = array + 12*group; entry+8 is a per-group send counter; entry is what 0xC2662 enqueues.
+Any of the three failures -> 0xC27B6 printk and return 0x8B2D, no mailbox write: exactly your drop.
+
+**Who fills them [V].** The only in-image populator is a block inside the same boot-state-machine function,
+file **0x7ADC-0x7F1E**: at 0x7ADC-0x7AE6 it memsets 0x490 bytes at CA 0x171B6C (memset helper 0x81E0C,
+literal 0x7D6C = 0x00171B6C); then it walks a 0x2C-stride config table at CPU 0x103B78 (file 0xC3B78,
+literal 0x7D74; runtime base 0x103FB8 at 0x7D70) whose entries carry {start,end} counts at +0x440/+0x444,
+and for each id fills CA 0x171B6C+24*id fields +0x448/+0x44C/+0x450/+0x454/+0x458/+0x45C with object and
+array pointers into the hcc object set based at CA 0x117C00, with range checks (counts <=3, id <=7) and a
+callback at [object+0x28] that must return 0, else the function exits via 0x782E.
+
+**When it runs - and why it is empty on our device [I, from the observed state].** The id-1 send on the
+first pass takes the 0x8160 setup branch, which increments the state and jumps directly to the id-1 build
+at 0x7D28; the registry-populate block is a later block/pass. Our first send failed and the function took
+the 0x782E error exit, and the boot task cannot run a second pass (state = 1; the reset-dispatch slot
+CA 0x17D42C was one-shot overwritten with BUG 0x000C19D1 at 0x7D08; the only references to CA 0x17D42C and
+0x171B6C in the image are in this boot task, so nothing re-seeds/re-enters it; the extra handler re-entries
+do not touch it). In a vendor boot the registry must therefore be populated by an earlier stage before the
+first boot-task pass (candidate: the function at file 0x46C8C, which writes byte 2 at CA 0x171B6C at
+0x46CA8, and the off-image ROM init) [I]; no host-writable register or mailbox bit appears anywhere in the
+population path, so **there is no host register action from the blob that can make the records appear**.
+
+### 12.6 Next probe set (reads; aperture first)
+
+1. BAR2 iATU viewport 5 (BAR2+0xB04/+0xB08/+0xB10/+0xB14) - confirms whether region-5 is full-size. If it
+   is undersized, fix the driver and re-read (attended, iATU config only). This unblocks everything below.
+2. After the aperture works: registry dump at host BAR0 **0x82B16C** (CA 0x171B6C): read 0x490 bytes in
+   0x40-byte chunks and decode per 24-byte record. Core-0 record CA **0x171FB4** -> BAR0 0x831FB4; read
+   words at +0x00, +0x04 (object ptr), +0x08 (lock key), +0x10 (group-array ptr), +0x14.
+   Cores 1-3: CA 0x171FCC / 0x171FE4 / 0x171FFC.
+3. If record+4 = O (object): read O+0x10 (max group id) -> host BAR0 0x6B8000+O+0x10. If record+0x10 = A:
+   group entry for group 4 = A+48; read its 3 words (entry+0/4/8).
+4. Low-RAM markers still readable today (no aperture fix needed): CA 0x118AEC = 0x000C19D7 (late prelude
+   reached 0x7D02), CA 0x118B58 = CA 0x118B5C = 0x00118B58 (head ran), CA 0x118B60 = 1 (setup branch ran),
+   CA 0x118B24 = 0x00010001.
+5. Correction of my earlier row: the D2H pending shadow is NOT at CA 0x117C00+0xB8 (that is the firmware
+   message/queue object; your 0x01A301A3 belongs to it). It is at (g)+0xB8 with g = *(CA 0x172130), and
+   CA 0x172130/g are in the high RAM not readable through the current aperture, so that read must wait for
+   step 1. The earlier '+0x9C = 0x40039014' expectation applied to that g object, not to CA 0x117C00.
+6. Only after a record with max group id > 4 and a valid array exists should a second id-1 attempt be
+   expected; watch out[1] (BAR0 0x3F1014) and DR0-3 +0x3C. Absent a boot-task re-entry, a fresh power
+   release is the only way to give the boot task another first pass once the destination is known to exist.
+
