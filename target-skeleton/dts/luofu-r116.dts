@@ -638,8 +638,7 @@
 		      <0x10161000 0x3000>,
 		      <0x50000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
-		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>,
-			 <0x01000000 0x0 0x48000000 0x48000000 0x0 0x800000>;
+		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>;
 		bus-range = <0 0xa>;
 		interrupts = <0 0x3b 4>,
 			     <0 0x45 4>;
@@ -650,12 +649,13 @@
 			 <&crg 0x34 0xe>, <&crg 0x34 0xf>;
 		reset-names = "apb", "pcs", "phy", "ctrl";
 		num-lanes = <1>;
-		status = "disabled";
+		acp-gate = <0x10100174 0x2000000 0x0>;
+		status = "okay";
 
 		wifi@0,0 {
 			compatible = "pci59e7,0005";
 			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "disabled";
+			status = "okay";
 		};
 	};
 
@@ -669,8 +669,7 @@
 		      <0x10165000 0x3000>,
 		      <0x68000000 0x1000>;
 		reg-names = "dbi", "misc", "config";
-		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>,
-			 <0x01000000 0x0 0x60000000 0x60000000 0x0 0x800000>;
+		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>;
 		bus-range = <0 0xa>;
 		interrupts = <0 0x3f 4>,
 			     <0 0x46 4>;
@@ -681,12 +680,13 @@
 			 <&crg 0x34 0x12>, <&crg 0x34 0x13>;
 		reset-names = "apb", "pcs", "phy", "ctrl";
 		num-lanes = <1>;
-		status = "disabled";
+		acp-gate = <0x10100174 0x4000000 0x0>;
+		status = "okay";
 
 		wifi@0,0 {
 			compatible = "pci59e7,0005";
 			reg = <0x00000000 0x0 0x0 0x0 0x0>;
-			status = "disabled";
+			status = "okay";
 		};
 	};
 

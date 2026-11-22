@@ -1,5 +1,5 @@
---- a/drivers/pci/controller/dwc/Kconfig
-+++ b/drivers/pci/controller/dwc/Kconfig
+--- a/drivers/pci/controller/dwc/Kconfig	2026-10-30 19:06:41.000000000 +0700
++++ b/drivers/pci/controller/dwc/Kconfig	2026-11-22 10:39:27.168990308 +0700
 @@ -173,6 +173,21 @@
  	help
  	  Say Y here if you want PCIe controller support on HiSilicon STB SoCs
@@ -22,8 +22,8 @@
  config PCIE_INTEL_GW
  	bool "Intel Gateway PCIe controller "
  	depends on OF && (X86 || COMPILE_TEST)
---- a/drivers/pci/controller/dwc/Makefile
-+++ b/drivers/pci/controller/dwc/Makefile
+--- a/drivers/pci/controller/dwc/Makefile	2026-10-30 19:06:41.000000000 +0700
++++ b/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +0700
 @@ -25,6 +25,7 @@
  obj-$(CONFIG_PCIE_KEEMBAY) += pcie-keembay.o
  obj-$(CONFIG_PCIE_KIRIN) += pcie-kirin.o
@@ -32,9 +32,9 @@
  obj-$(CONFIG_PCI_MESON) += pci-meson.o
  obj-$(CONFIG_PCIE_TEGRA194) += pcie-tegra194.o
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
---- /dev/null
-+++ b/drivers/pci/controller/dwc/pcie-luofu.c
-@@ -0,0 +1,467 @@
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 12:08:47.261158022 +0700
+@@ -0,0 +1,566 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -138,16 +138,25 @@
 +#define LUOFU_PCIE_MISC_MODE		0x00
 +#define LUOFU_PCIE_MISC_APP_CTRL	0x1c
 +
-+/* Recorded vendor wrapper values (hi_pcie_set_mode/set_iatu/enable_ltssm). */
++/* Recorded vendor wrapper values (hi_pcie_set_mode/set_iatu/enable_ltssm).
++ * BIT(13) of the app-control word is a TRANSIENT DBI-write gate, not a
++ * persistent iATU enable: hi_pcie.ko asserts it around every batch of DBI
++ * writes and clears it afterwards, and it must be clear when the LTSSM bit
++ * is written (pcie-seq-re 2026-11-22). */
++#define LUOFU_PCIE_MISC_REG_INT		0x04
++#define LUOFU_PCIE_MISC_PHYCFG		0x18
 +#define LUOFU_PCIE_MISC_MODE_RC		(4u << 28)
-+#define LUOFU_PCIE_MISC_APP_IATU_EN	BIT(13)
++#define LUOFU_PCIE_MISC_REG_INT_PRE	(2u << 20)	/* 0x00200000 */
++#define LUOFU_PCIE_MISC_PHYCFG_VAL	(8u << 24)	/* 0x08000000 */
++#define LUOFU_PCIE_MISC_APP_DBI_GATE	BIT(13)
 +#define LUOFU_PCIE_MISC_APP_LTSSM_EN	BIT(11)
++#define LUOFU_PCIE_MISC_APP_IRQ_MASK	(0x22u << 20)	/* 0x02200000 */
 +
 +/* The four CRG reset lines of one root complex, in vendor order. */
 +#define LUOFU_PCIE_NUM_RESETS		4
 +
 +/* Inter-step delay of the reset deassert sequence: the vendor value is [U]. */
-+#define LUOFU_PCIE_RESET_DELAY_US	100
++#define LUOFU_PCIE_RESET_DELAY_US	1000
 +
 +/*
 + * The measured topology: exactly one endpoint function per root complex,
@@ -164,6 +173,8 @@
 +	struct clk *clk;
 +	struct reset_control *resets[LUOFU_PCIE_NUM_RESETS];
 +	void __iomem *misc;
++	u32 misc_ctrl;
++	int channel;	/* software mirror of the write-only app-control word */
 +};
 +
 +static inline struct luofu_pcie *to_luofu_pcie(struct dw_pcie *pci)
@@ -249,43 +260,22 @@
 +					unsigned int devfn, int where)
 +{
 +	struct dw_pcie_rp *pp = bus->sysdata;
++
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
-+	struct dw_pcie_ob_atu_cfg atu = { 0 };
-+	int ret;
 +
 +	if (!pci_is_root_bus(bus) || devfn != LUOFU_PCIE_EP_DEVFN)
 +		return NULL;
 +
-+	/*
-+	 * The configuration window is routed through the PCIe link; do not
-+	 * touch it while the link is down (a configuration request with no
-+	 * link may forward an error as an SError on this SoC).
-+	 */
++	/* Do not touch the configuration window while the link is down: a
++	 * configuration request without a link may SError this SoC. */
 +	if (!dw_pcie_link_up(pci))
 +		return NULL;
 +
 +	/*
-+	 * Point the CFG0 viewport at the function being addressed.  The
-+	 * measured vendor table has viewport 0 = type CFG0, base 0x50000000,
-+	 * target 0 bus 0 / device 0 / function 0; viewports 1 and 2 are the
-+	 * MEM/IO windows the framework programs from "ranges".  A CFG0 type
-+	 * generates a type 0 configuration request for the bus directly
-+	 * behind the root complex.
++	 * The static CFG0 viewport (programmed once in start_link with the
++	 * vendor layout) covers the configuration window at 0x50000000;
++	 * the vendor never re-programs it per access.
 +	 */
-+	atu.index = 0;
-+	atu.type = PCIE_ATU_TYPE_CFG0;
-+	atu.parent_bus_addr = pp->cfg0_base - pci->parent_bus_offset;
-+	atu.pci_addr = 0;
-+	atu.size = pp->cfg0_size;
-+
-+	ret = dw_pcie_prog_outbound_atu(pci, &atu);
-+	if (ret) {
-+		dev_err_ratelimited(pci->dev,
-+				    "failed to program the config window: %d\n",
-+				    ret);
-+		return NULL;
-+	}
-+
 +	return pp->va_cfg0_base + where;
 +}
 +
@@ -305,6 +295,30 @@
 + * from the vendor module and are the first thing a hardware bring-up must
 + * confirm.  The devicetree nodes stay disabled until then.
 + */
++/* Software mirror of the write-only misc+0x1c word. */
++static void luofu_pcie_misc_ctrl_write(struct luofu_pcie *lpc, u32 val)
++{
++	lpc->misc_ctrl = val;
++	writel(val, lpc->misc + LUOFU_PCIE_MISC_APP_CTRL);
++}
++
++static void luofu_pcie_write_misc(struct luofu_pcie *lpc, u32 reg, u32 val)
++{
++	writel(val, lpc->misc + reg);
++}
++
++/* Assert/clear the transient DBI-write gate around a DBI batch. */
++static void luofu_pcie_dbi_gate(struct luofu_pcie *lpc, bool on)
++{
++	u32 ctrl = lpc->misc_ctrl;
++
++	if (on)
++		ctrl |= LUOFU_PCIE_MISC_APP_DBI_GATE;
++	else
++		ctrl &= ~LUOFU_PCIE_MISC_APP_DBI_GATE;
++	luofu_pcie_misc_ctrl_write(lpc, ctrl);
++}
++
 +static int luofu_pcie_host_init(struct dw_pcie_rp *pp)
 +{
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
@@ -313,12 +327,39 @@
 +	/* Configuration accesses use the configuration window, not DBI. */
 +	pp->bridge->ops = &luofu_pcie_pci_ops;
 +
-+	/* misc+0x00 = 0x40000000: root-complex mode (vendor hi_pcie_set_mode). */
-+	writel(LUOFU_PCIE_MISC_MODE_RC, lpc->misc + LUOFU_PCIE_MISC_MODE);
++	/* Vendor pre-init wrapper words (hi_pcie.ko host_init). */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_REG_INT,
++			      LUOFU_PCIE_MISC_REG_INT_PRE);
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_PHYCFG,
++			      LUOFU_PCIE_MISC_PHYCFG_VAL);
 +
-+	/* misc+0x1c = BIT(13): iATU enable while the framework programs it. */
-+	writel(LUOFU_PCIE_MISC_APP_IATU_EN,
-+	       lpc->misc + LUOFU_PCIE_MISC_APP_CTRL);
++	/* misc+0x00 = 0x40000000: root-complex mode (vendor hi_pcie_set_mode). */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_MODE,
++			      LUOFU_PCIE_MISC_MODE_RC);
++
++	/* Gated DBI batch: RC command IO|MEM|BME (dbi+0x04 |= 0x7) and the
++	 * target link speed 2 (5 GT/s) in both vendor fields. */
++	luofu_pcie_dbi_gate(lpc, true);
++	dw_pcie_writel_dbi(pci, PCI_COMMAND,
++			   dw_pcie_readl_dbi(pci, PCI_COMMAND) | 0x7);
++	dw_pcie_writel_dbi(pci, 0x7c,
++			   (dw_pcie_readl_dbi(pci, 0x7c) & ~0xf) | 0x2);
++	dw_pcie_writel_dbi(pci, 0xa0,
++			   (dw_pcie_readl_dbi(pci, 0xa0) & ~0xf) | 0x2);
++	/* Neutralize the framework's pre-link speed-change request: the vendor
++	 * sets PORT_LOGIC_SPEED_CHANGE only after stage-1 link-up (this port
++	 * does it in post_init); keep the training window vendor-clean. */
++	dw_pcie_writel_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL,
++			   dw_pcie_readl_dbi(pci, PCIE_LINK_WIDTH_SPEED_CONTROL) &
++			   ~PORT_LOGIC_SPEED_CHANGE);
++	luofu_pcie_dbi_gate(lpc, false);
++
++	/* LTSSM enable FIRST (vendor order; the gate bit must be clear for it
++	 * to take effect), then leave the gate SET so the framework's own iATU
++	 * writes land while gated; start_link overwrites the viewports with the
++	 * vendor layout anyway. */
++	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN);
++	luofu_pcie_dbi_gate(lpc, true);
 +
 +	return 0;
 +}
@@ -335,21 +376,37 @@
 +static int luofu_pcie_start_link(struct dw_pcie *pci)
 +{
 +	struct luofu_pcie *lpc = to_luofu_pcie(pci);
++	/* Vendor outbound iATU tables (SoC constants, both RCs). */
++	static const u32 iatu[2][3][8] = {
++		[0] = {
++			{0x0, 0x4, 0x80000000, 0x50000000, 0x0, 0x57ffffff, 0x0, 0x0},
++			{0x1, 0x0, 0x80000000, 0x40000000, 0x0, 0x47ffffff, 0x40000000, 0x0},
++			{0x2, 0x2, 0x80000000, 0x48000000, 0x0, 0x4fffffff, 0x48000000, 0x0},
++		},
++		[1] = {
++			{0x0, 0x4, 0x80000000, 0x68000000, 0x0, 0x6fffffff, 0x0, 0x0},
++			{0x1, 0x0, 0x80000000, 0x58000000, 0x0, 0x5fffffff, 0x58000000, 0x0},
++			{0x2, 0x2, 0x80000000, 0x60000000, 0x0, 0x67ffffff, 0x60000000, 0x0},
++		},
++	};
++	int i, j;
 +
-+	writel(LUOFU_PCIE_MISC_APP_IATU_EN | LUOFU_PCIE_MISC_APP_LTSSM_EN,
-+	       lpc->misc + LUOFU_PCIE_MISC_APP_CTRL);
-+
-+	/*
-+	 * The framework's iATU setup has run by now.  Child-bus configuration
-+	 * accesses (there are none in the measured topology) must not fall
-+	 * back to the framework's sub-dword accessors on this window.
-+	 */
-+	pci->pp.bridge->child_ops = &luofu_pcie_pci_ops;
++	/* The gate is already set (host_init).  Program the three viewports in
++	 * the vendor 8-word layout, then go to the steady state (LTSSM + IRQ
++	 * mask, gate clear). */
++	for (i = 0; i < 3; i++)
++		for (j = 0; j < 8; j++)
++			writel(iatu[lpc->channel][i][j],
++			       pci->dbi_base + 0x900 + 0x200 * i + 4 * j);
++	luofu_pcie_misc_ctrl_write(lpc, LUOFU_PCIE_MISC_APP_LTSSM_EN |
++					   LUOFU_PCIE_MISC_APP_IRQ_MASK);
 +
 +	return 0;
 +}
 +
 +/*
++
++
 + * The vendor devicetree describes the DWC MSI controller line nowhere and the
 + * endpoint interrupt route is likewise absent, so the framework must not fall
 + * back to claiming the radm interrupt as its MSI line.  Returning 0 from this
@@ -370,6 +427,18 @@
 +static void luofu_pcie_post_init(struct dw_pcie_rp *pp)
 +{
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
++	struct luofu_pcie *lpc = to_luofu_pcie(pci);
++
++	/* Vendor clears the pre-init reg_int word after the link poll. */
++	luofu_pcie_write_misc(lpc, LUOFU_PCIE_MISC_REG_INT, 0);
++
++	/* Stage-2 retrain (vendor check_link_status runs only after stage-1
++	 * link-up): gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off
++	 * back to the steady state. */
++	luofu_pcie_dbi_gate(lpc, true);
++	dw_pcie_writel_dbi(pci, 0x80c,
++			   dw_pcie_readl_dbi(pci, 0x80c) | 0x20000);
++	luofu_pcie_dbi_gate(lpc, false);
 +	u32 dbg0 = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG0);
 +	u32 dbg1 = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG1);
 +	u8 cap = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
@@ -414,6 +483,14 @@
 +
 +	luofu_pcie_check_aligned();
 +
++	/* Record the RC channel from the DBI resource address. */
++	{
++		struct resource *dbi_res = platform_get_resource(pdev,
++							       IORESOURCE_MEM, 0);
++
++		lpc->channel = dbi_res && dbi_res->start == 0x10164000 ? 1 : 0;
++	}
++
 +	/* Map the write-only wrapper window.  Mapping performs no bus access. */
 +	lpc->misc = devm_platform_ioremap_resource_byname(pdev, "misc");
 +	if (IS_ERR(lpc->misc))
@@ -425,6 +502,25 @@
 +		return dev_err_probe(dev, PTR_ERR(lpc->clk),
 +				     "failed to get the PCIe clock\n");
 +
++
++	/* Optional ACP gate (vendor hi_acp.ko inverted-value semantics: SET the mask bits)
++ * link training so the PCIe subsystem is powered. */
++	{
++		u32 gate[3];
++
++		if (!of_property_read_u32_array(dev->of_node, "acp-gate",
++						gate, ARRAY_SIZE(gate))) {
++			void __iomem *base = ioremap(gate[0], 4);
++
++			if (base) {
++				u32 v = readl(base);
++
++				v = (v & ~gate[1]) | (~gate[2] & gate[1]);
++				writel(v, base);
++				iounmap(base);
++			}
++		}
++	}
 +	ret = clk_prepare_enable(lpc->clk);
 +	if (ret)
 +		return dev_err_probe(dev, ret, "failed to enable the PCIe clock\n");
@@ -458,6 +554,9 @@
 +		usleep_range(LUOFU_PCIE_RESET_DELAY_US,
 +			     LUOFU_PCIE_RESET_DELAY_US + 100);
 +	}
++
++	/* Vendor waits after the last deassert as well. */
++	usleep_range(500, 1500);
 +
 +	ret = dw_pcie_host_init(&pci->pp);
 +	if (ret) {
@@ -502,8 +601,8 @@
 +
 +MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu PCIe root complex driver");
 +MODULE_LICENSE("GPL");
---- /dev/null
-+++ b/Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+--- /dev/null	2026-11-15 18:31:59.320674763 +0700
++++ b/Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml	2026-11-22 10:39:27.169302708 +0700
 @@ -0,0 +1,126 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +%YAML 1.2
