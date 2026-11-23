@@ -154,10 +154,11 @@ mailbox announce primitive (H2D mailbox id 3) and the deferred variant.
 | `hcc_msg_post_msg`, `hcc_msg_post_vap_msg` | `hcc_queue_post_msg` | queue helpers |
 | `hcc_process_rx_thread`, `hcc_thread_process_all_msg` | `hcc_queue_msg_process` | receive-side dispatch (not posts) |
 
-2.5.24 has the same set minus three forwarding helpers
-(`hcc_msg_alloc_no_cross_pool`, `hcc_process_rx_thread` are merged/absent);
-**no version has a sender that looks like link create/register/event-register**,
-and none of these is reachable from any init root (sec 4).
+2.5.24 has the same set minus three *forwarding* helpers
+(`hcc_msg_alloc_no_cross_pool`, `hcc_msg_post_msg`, `hcc_msg_post_vap_msg` are
+absent in that build); **no version has a sender that looks like link
+create/register/event-register**, and none of these is reachable from any init
+root (sec 4).
 
 ### 2.2 wifi.ko - 72 (2.5.24) / 76 (2.4.15) send sites, all runtime config/data events
 
