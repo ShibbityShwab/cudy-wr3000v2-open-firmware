@@ -1,0 +1,1795 @@
+diff -ruN a/hi5622_pciet.h b/hi5622_pciet.h
+--- a/hi5622_pciet.h	2026-11-23 07:00:00.000000000 +0700
++++ b/hi5622_pciet.h	2026-11-23 07:00:00.000000000 +0700
+@@ -332,4 +332,15 @@
+ int  pciet_ete_dr_consume(struct hi5622_pci *ctx, struct hi5622_ete_ring *r,
+ 			  void (*cb)(struct hi5622_pci *ctx, void *va, u32 len));
+ 
++/* ---------------------------------------------------------------------
++ * 10. H2D frame injector (wifi-h2d-inject lane; ../wifi-h2d-inject/)
++ * ------------------------------------------------------------------- */
++/* pciet_main.c: the single gated device-write helper, exported so the
++ * injector's mailbox/ETE writes still pass the never-write out[5] gate. */
++void pciet_writel_checked(struct hi5622_pci *ctx, u32 bar0_off, u32 val);
++
++/* pciet_h2d.c: userspace-driven, validated H2D frame injector. */
++int  pciet_h2d_probe(struct hi5622_pci *ctx);
++void pciet_h2d_remove(struct hi5622_pci *ctx);
++
+ #endif /* _HI5622_PCIET_H */
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-23 07:00:00.000000000 +0700
++++ b/Kbuild	2026-11-23 07:00:00.000000000 +0700
+@@ -8,6 +8,6 @@
+ #        -C $KDIR M=$(pwd) modules
+ 
+ obj-m := hi5622_pciet.o
+-hi5622_pciet-y := pciet_main.o pciet_ete.o
++hi5622_pciet-y := pciet_main.o pciet_ete.o pciet_h2d.o
+ 
+ ccflags-y += -I$(src)
+diff -ruN a/pciet_h2d.c b/pciet_h2d.c
+--- a/pciet_h2d.c	1970-01-01 07:00:00.000000000 +0700
++++ b/pciet_h2d.c	2026-11-23 07:00:00.000000000 +0700
+@@ -0,0 +1,806 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * pciet_h2d.c - Hi5622V100 H2D message injector (clean-room, bench
++ * instrument).
++ *
++ * ORIGINAL code written by the wifi-h2d-inject lane (host-only, 2026-11-23)
++ * from the project's decoded contract; no vendor source text or object code
++ * is copied.  Evidence markers: [V] re-verified from a named local artifact,
++ * [V*] device-measured by an earlier attended lane, [I] inference, [U]
++ * unknown / not yet pinned.
++ *
++ * WHAT THIS FILE IS
++ *
++ *   A userspace-driven, hard-bounded H2D frame injector for the transport
++ *   skeleton (../wifi-transport-port/build, or the B3 instrument build).  A
++ *   single sysfs store builds one validated HCC frame, posts it on the SR0
++ *   ring and rings the H2D doorbell, exactly as the decoded vendor send path
++ *   does (wifi-hcc-re REPORT sec 3.1/3.3 and sec 8 item 5):
++ *
++ *     1. frame = 12-byte HCC header + payload (max payload 0x674, total
++ *        0x680) - built/validated by files/pciet_h2d_frame.h, the same pure-C
++ *        model the userspace selftest exercises;
++ *     2. SR node[producer] = {buffer device VA, (total_len << 16) | 0x6d2b},
++ *        packed producer advance (pcie_ete_ring_ptr_plus [V]); the base
++ *        skeleton's pciet_ete_sr_send() advances the producer linearly, which
++ *        is only correct for fewer than depth frames, so the injector does
++ *        its own post here (the base function is left untouched - it is the
++ *        bench-proven B2 smoke path);
++ *     3. mailbox announce (pcie_msg_send [V]): out[0] (CA 0x40039010) |=
++ *        1 << 3, then out[2] (CA 0x400392d4) |= 1;
++ *     4. bounded drain-poll of out[0] (the contract's "wait for out[0] back
++ *        to 0 before reusing the slot" [V]) and a read-only out[5] checkpoint
++ *        (the device writes its ack there; the host NEVER writes it).
++ *
++ * WHY A SYSFS ATTRIBUTE
++ *
++ *   Every device write stays a single explicit attended step (the transport
++ *   skeleton's safety model), on whichever endpoint's device directory the
++ *   operator targets, with no rebuild for each experiment.  The userspace
++ *   line is one of:
++ *
++ *     echo 'group=4 id=1 dst=0 payload=00000000' > <dev>/h2d_inject
++ *     echo '12-byte-header+payload hex'           > <dev>/h2d_raw
++ *
++ *   plus h2d_arm (program/verify SR0), h2d_check (parse/build/validate only,
++ *   no device write), h2d_clear (clear a stale host-set out[0] pending word),
++ *   h2d_stats (read-only state) and h2d_selftest (the shared self-test on the
++ *   target).  Bench procedure: ../REPORT.md sec 7.
++ *
++ * HARD SAFETY RULES ENCODED HERE
++ *
++ *   - mailbox id 5 is never posted: the announce is hard-wired to
++ *     HI5622_MSG_ETE_DONE (3) and there is no user field that can change it
++ *     (the device's id-5 handler is the firmware BUG() trap [V]);
++ *   - HCC message id 5 is refused by the frame model before any device
++ *     access (defence in depth, see pciet_h2d_frame.h);
++ *   - CA 0x400392f0 (out[5]) is never written: every host write goes through
++ *     pciet_writel_checked() (the skeleton's single gated writer, exported
++ *     for this file) and read-only reads of out[5] are checkpointed;
++ *   - payload/total sizes are bounded (0x674/0x680) and the frame is
++ *     re-validated immediately before delivery;
++ *   - a frame is only posted when out[0] reads 0 (nothing else in flight) and
++ *     the SR0 ring is armed and inside the RC inbound DMA window; announce
++ *     delivery is bounded (50 ms) and every refusal/timeout is logged and
++ *     counted;
++ *   - single-shot arming: the SR0 ring is programmed once per module load
++ *     (reloading the module is safe only before the CPU release).
++ *
++ * Contract sources: opensource/docs/incoming/wifi-hcc-re/REPORT.md
++ * (sec 3.1, 3.3, 3.5, 5.5, 8), SUMMARY.md; transport: ../wifi-transport-port/.
++ */
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/list.h>
++#include <linux/mutex.h>
++#include <linux/pci.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <asm/barrier.h>
++#include <asm/page.h>
++
++#include "hi5622_pciet.h"
++#include "pciet_h2d_frame.h"
++
++#define H2D_LOG_PREFIX		"hi5622_pciet h2d: "
++
++/* Bounded announce drain-poll: the device should take the mailbox word in
++ * microseconds; 500 x 100 us = 50 ms is a bench-safe ceiling. */
++#define H2D_DRAIN_POLL_US	100u
++#define H2D_DRAIN_POLLS		500u
++
++/* [I] Reuse guard: the firmware's id-3 handler is expected to consume the
++ * posted SR node when it consumes the announce; if announces are acknowledged
++ * (drain poll succeeds) but no node was consumed we would be wrong, so the
++ * guard only refuses when acknowledged frames reach the ring depth without a
++ * single drain success - a parked device hits the out[0] check first. */
++#define H2D_MAX_OUTSTANDING	((u32)HI5622_ETE_DEPTH)
++
++/* ETE index/phase arithmetic (phase42 E.3 / pcie_ete_ring_ptr_plus [V]). */
++#define H2D_ETE_IDX_MASK	0x3ffu
++
++struct hi5622_h2d {
++	struct list_head	node;
++	struct hi5622_pci	*ctx;
++	struct device		*dev;
++	struct mutex		lock;		/* serialises one injection at a time */
++	bool			armed;		/* SR0 programmed + verified */
++	u32			sr_reg;		/* tracked packed SR0 producer */
++	u32			sr_posted;	/* frames posted since arm */
++	u32			drains_ok;	/* announces the device cleared */
++	u32			drain_timeouts;
++	u32			refused;
++	u32			injected;	/* successful deliveries */
++	ssize_t			last_result;	/* 0 or -errno of the last attempt */
++	char			last_err[128];
++	/* last request / frame */
++	u8			last_group;
++	u16			last_id;
++	u8			last_dst;
++	u8			last_a, last_b, last_c;
++	u16			last_payload_len;
++	u16			last_total;
++	u8			last_frame[64];	/* head of the last posted frame */
++	u16			last_frame_keep;
++	/* last announce observables (all read-only) */
++	u32			out0_before, out0_write, out0_after;
++	u32			out2_before, out2_write;
++	u32			out5_read;	/* [V] read-only device ack word */
++	u32			cns_read;	/* SR0 consumer index (device-owned) */
++	u32			drain_polls;
++};
++
++static LIST_HEAD(h2d_list);
++static DEFINE_MUTEX(h2d_list_lock);
++
++/* ---------------------------------------------------------------------
++ * Instance lookup / error mapping
++ * ------------------------------------------------------------------- */
++static struct hi5622_h2d *h2d_find(struct hi5622_pci *ctx)
++{
++	struct hi5622_h2d *h;
++
++	mutex_lock(&h2d_list_lock);
++	list_for_each_entry(h, &h2d_list, node) {
++		if (h->ctx == ctx) {
++			mutex_unlock(&h2d_list_lock);
++			return h;
++		}
++	}
++	mutex_unlock(&h2d_list_lock);
++	return NULL;
++}
++
++static struct hi5622_h2d *h2d_from_dev(struct device *dev)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++
++	if (!ctx)
++		return NULL;
++	return h2d_find(ctx);
++}
++
++static int h2d_to_errno(int code)
++{
++	switch (code) {
++	case H2D_OK:		return 0;
++	case H2D_EARG:		return -EINVAL;
++	case H2D_EBOUNDS:	return -ERANGE;
++	case H2D_EREFUSED:	return -EACCES;
++	case H2D_EBUFFER:	return -ENOBUFS;
++	default:		return -EIO;
++	}
++}
++
++static void h2d_set_error(struct hi5622_h2d *h, int code, const char *what)
++{
++	h->last_result = h2d_to_errno(code);
++	h->refused++;
++	dev_warn(h->dev, H2D_LOG_PREFIX "%s refused: %s (%s)\n",
++		 what, h2d_strerror(code), h->last_err);
++}
++
++/* ---------------------------------------------------------------------
++ * Compile-time contract asserts (also validates the shared frame model).
++ * ------------------------------------------------------------------- */
++static void h2d_assert_contract(void)
++{
++	BUILD_BUG_ON(H2D_HCC_HDR_LEN != 12);
++	BUILD_BUG_ON(H2D_HCC_MAX_PAYLOAD != 0x674);
++	BUILD_BUG_ON(H2D_HCC_MAX_TOTAL != 0x680);
++	BUILD_BUG_ON(H2D_HCC_MAX_TOTAL > HI5622_ETE_BUF_LEN);
++	BUILD_BUG_ON(H2D_HCC_MAX_TOTAL > 0xffff);	/* SR node len is u16 */
++	BUILD_BUG_ON(H2D_HCC_REFUSED_ID != 5);
++	BUILD_BUG_ON(HI5622_MSG_ETE_DONE == 5);
++	BUILD_BUG_ON(HI5622_MSG_ETE_DONE > 31);
++	BUILD_BUG_ON(HI5622_ETE_DEPTH != 32);
++	BUILD_BUG_ON(H2D_HCC_TAG != 0x5a5a);
++	BUILD_BUG_ON(HI5622_ETE_NODE_FLAGS != 0x6d2b);
++	/* the only two mailbox registers this file writes must not be out[5] */
++	BUILD_BUG_ON(HI5622_BAR0_H2D_PENDING ==
++		     HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE));
++	BUILD_BUG_ON(HI5622_BAR0_H2D_DOORBELL ==
++		     HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE));
++}
++
++/* ---------------------------------------------------------------------
++ * SR0 frame post: copy the frame into the next ring buffer, write the
++ * 8-byte node, then commit with the packed producer index
++ * (pcie_ete_ring_ptr_plus semantics [V]).
++ * ------------------------------------------------------------------- */
++static int h2d_sr_post(struct hi5622_h2d *h, const u8 *frame, size_t len)
++{
++	struct hi5622_pci *ctx = h->ctx;
++	struct hi5622_ete_ring *r = &ctx->sr0;
++	struct hi5622_ete_node *nodes = r->node_arr;
++	u32 idx = h->sr_reg & H2D_ETE_IDX_MASK;
++	u32 next;
++
++	if (!r->node_arr || !r->bufs || !r->buf_dma)
++		return -ENODEV;
++	if (len > r->buf_len)
++		return -EINVAL;
++	if (idx >= r->depth)
++		return -EIO;
++
++	memcpy(r->bufs[idx], frame, len);
++	nodes[idx].devva = cpu_to_le32((u32)r->buf_dma[idx]);
++	WRITE_ONCE(nodes[idx].word1,
++		   cpu_to_le32(((u32)len << HI5622_ETE_NODE_LEN_SHIFT) |
++			       HI5622_ETE_NODE_FLAGS));
++	wmb();
++
++	next = h->sr_reg + 1;
++	if ((next & H2D_ETE_IDX_MASK) == r->depth) {
++		next &= ~H2D_ETE_IDX_MASK;
++		next ^= HI5622_ETE_IDX_PHASE_BIT;
++	}
++	pciet_writel_checked(ctx, HI5622_BAR0_ETE_BASE + HI5622_ETE_SR0_OFF +
++			     HI5622_ETE_CH_A_PRD, next);
++	h->sr_reg = next;
++	h->sr_posted++;
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Mailbox announce + bounded drain-poll + read-only out[5] checkpoint.
++ * pcie_msg_send [V]: out[0] |= 1<<3, then out[2] |= 1.
++ * ------------------------------------------------------------------- */
++static int h2d_announce(struct hi5622_h2d *h)
++{
++	struct hi5622_pci *ctx = h->ctx;
++	unsigned long flags;
++	u32 i;
++	bool drained = false;
++
++	spin_lock_irqsave(&ctx->doorbell_lock, flags);
++	h->out0_before = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	h->out2_before = readl(ctx->bar0 + HI5622_BAR0_H2D_DOORBELL);
++	pciet_writel_checked(ctx, HI5622_BAR0_H2D_PENDING,
++			     h->out0_before | BIT(HI5622_MSG_ETE_DONE));
++	h->out0_write = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	pciet_writel_checked(ctx, HI5622_BAR0_H2D_DOORBELL,
++			     h->out2_before | 1u);
++	h->out2_write = readl(ctx->bar0 + HI5622_BAR0_H2D_DOORBELL);
++	/* The injector owns the announce, so keep the base module's deferred
++	 * pending shadow clear; the base pciet_msg_send_irq() path stays
++	 * serialised against this by the same doorbell_lock. */
++	ctx->pending = 0;
++	spin_unlock_irqrestore(&ctx->doorbell_lock, flags);
++
++	for (i = 0; i < H2D_DRAIN_POLLS; i++) {
++		if (!(readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING) &
++		      BIT(HI5622_MSG_ETE_DONE))) {
++			drained = true;
++			break;
++		}
++		udelay(H2D_DRAIN_POLL_US);
++	}
++	h->drain_polls = i;
++	h->out0_after = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	/* Read-only checkpoint: the device writes its ack to out[5]; the host
++	 * NEVER writes this register (project hard rule). */
++	h->out5_read = readl(ctx->bar0 + HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE));
++
++	if (!drained)
++		return -ETIMEDOUT;
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Deliver one already-built-and-validated frame.
++ * ------------------------------------------------------------------- */
++static int h2d_deliver(struct hi5622_h2d *h, const u8 *frame, size_t len)
++{
++	struct hi5622_pci *ctx = h->ctx;
++	u32 pending, idx;
++	int ret;
++
++	if (!h->armed) {
++		dev_warn(h->dev, H2D_LOG_PREFIX "not armed: write 1 to h2d_arm first\n");
++		return -EBUSY;
++	}
++	if (h->sr_posted - h->drains_ok >= H2D_MAX_OUTSTANDING) {
++		dev_warn(h->dev,
++			 H2D_LOG_PREFIX "SR0 reuse guard: %u posted / %u acked (device not consuming?)\n",
++			 h->sr_posted, h->drains_ok);
++		return -EBUSY;
++	}
++	pending = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	if (pending) {
++		dev_warn(h->dev,
++			 H2D_LOG_PREFIX "out[0] pending bitmap 0x%08x not drained; refusing to post (use h2d_clear only for a stale host-set word, see REPORT sec 7)\n",
++			 pending);
++		return -EBUSY;
++	}
++	h->cns_read = readl(ctx->bar0 + HI5622_BAR0_ETE_BASE +
++			    HI5622_ETE_SR0_OFF + HI5622_ETE_CH_A_CNS);
++
++	/* Self-healing guard: if anything else advanced the SR0 producer
++	 * (e.g. the base module's B1/B2 send attr), resync to hardware before
++	 * adding this frame; do not mix the two send paths in one session. */
++	{
++		u32 live = readl(ctx->bar0 + HI5622_BAR0_ETE_BASE +
++				 HI5622_ETE_SR0_OFF + HI5622_ETE_CH_A_PRD);
++
++		if (live != h->sr_reg) {
++			dev_warn(h->dev,
++				 H2D_LOG_PREFIX "SR0 producer drift: tracked 0x%08x, hardware 0x%08x - resyncing\n",
++				 h->sr_reg, live);
++			h->sr_reg = live;
++		}
++	}
++	idx = h->sr_reg & H2D_ETE_IDX_MASK;
++	ret = h2d_sr_post(h, frame, len);
++	if (ret) {
++		dev_err(h->dev, H2D_LOG_PREFIX "SR0 post failed: %d\n", ret);
++		return ret;
++	}
++	ret = h2d_announce(h);
++	if (ret) {
++		h->drain_timeouts++;
++		dev_warn(h->dev,
++			 H2D_LOG_PREFIX "frame posted but announce NOT acked within %u us: out[0]=0x%08x doorbell=0x%08x out[5]=0x%08x (device parked/dead? ring slot state [I])\n",
++			 H2D_DRAIN_POLLS * H2D_DRAIN_POLL_US, h->out0_after,
++			 h->out2_write, h->out5_read);
++		return ret;
++	}
++	h->drains_ok++;
++	dev_info(h->dev,
++		 H2D_LOG_PREFIX "inject ok: frame %zu B posted on SR0 (node idx %u, producer -> 0x%08x), announce out[0] 0x%08x->0x%08x doorbell 0x%08x, drained after %u us, out[5]=0x%08x (read-only)\n",
++		 len, idx, h->sr_reg,
++		 h->out0_before, h->out0_write, h->out2_write,
++		 h->drain_polls * H2D_DRAIN_POLL_US, h->out5_read);
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Common store body: parse/build/validate/deliver.  builder != 0 selects
++ * the key=value syntax, otherwise the raw hex syntax.
++ * ------------------------------------------------------------------- */
++static ssize_t h2d_store(struct hi5622_h2d *h, const char *buf, size_t count,
++			 bool builder)
++{
++	struct h2d_request *req = NULL;
++	u8 *frame = NULL;
++	size_t flen = 0;
++	ssize_t err = 0;
++	int rc;
++
++	if (count > H2D_MAX_RAW_HEX + 64)
++		return -EINVAL;
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++	frame = kmalloc(H2D_HCC_MAX_TOTAL, GFP_KERNEL);
++	if (!req || !frame) {
++		err = -ENOMEM;
++		goto out;
++	}
++	mutex_lock(&h->lock);
++	if (!h->armed) {
++		dev_warn(h->dev, H2D_LOG_PREFIX "not armed: write 1 to h2d_arm first\n");
++		err = -EBUSY;
++		h->last_result = err;
++		goto unlock;
++	}
++	h->last_err[0] = '\0';
++	if (builder) {
++		rc = h2d_parse_request(buf, count, req, h->last_err,
++				       sizeof(h->last_err));
++		if (rc) {
++			h2d_set_error(h, rc, "h2d_inject");
++			err = h2d_to_errno(rc);
++			goto unlock;
++		}
++		rc = h2d_build_frame(req, frame, H2D_HCC_MAX_TOTAL, &flen,
++				     h->last_err, sizeof(h->last_err));
++		if (rc) {
++			h2d_set_error(h, rc, "h2d_inject build");
++			err = h2d_to_errno(rc);
++			goto unlock;
++		}
++		h->last_group = req->group;
++		h->last_id = req->id;
++		h->last_dst = req->dst;
++		h->last_a = req->field_a;
++		h->last_b = req->field_b;
++		h->last_c = req->field_c;
++		h->last_payload_len = req->payload_len;
++		dev_info(h->dev,
++			 H2D_LOG_PREFIX "request: group=%u id=%u dst=%u a=0x%02x b=0x%02x c=0x%02x payload=%u B\n",
++			 req->group, req->id, req->dst, req->field_a,
++			 req->field_b, req->field_c, req->payload_len);
++	} else {
++		rc = h2d_parse_raw_frame(buf, count, frame, H2D_HCC_MAX_TOTAL,
++					 &flen, h->last_err,
++					 sizeof(h->last_err));
++		if (rc) {
++			h2d_set_error(h, rc, "h2d_raw");
++			err = h2d_to_errno(rc);
++			goto unlock;
++		}
++		h->last_group = frame[0] & H2D_HCC_GROUP_MAX;
++		h->last_id = (u16)(frame[6] | ((u16)frame[7] << 8));
++		h->last_dst = frame[9];
++		h->last_a = frame[2];
++		h->last_b = frame[3];
++		h->last_c = frame[8];
++		h->last_payload_len = (u16)(flen - H2D_HCC_HDR_LEN);
++		dev_info(h->dev,
++			 H2D_LOG_PREFIX "raw request: %zu B frame from hex\n", flen);
++	}
++	rc = h2d_validate_frame(frame, flen, h->last_err,
++				sizeof(h->last_err));
++	if (rc) {
++		h2d_set_error(h, rc, "frame re-validation");
++		err = h2d_to_errno(rc);
++		goto unlock;
++	}
++	h->last_total = (u16)flen;
++	h->last_frame_keep = (u16)min_t(size_t, flen, sizeof(h->last_frame));
++	memset(h->last_frame, 0, sizeof(h->last_frame));
++	memcpy(h->last_frame, frame, h->last_frame_keep);
++	print_hex_dump(KERN_INFO, H2D_LOG_PREFIX "frame: ", DUMP_PREFIX_OFFSET,
++		       16, 1, frame, min_t(size_t, flen, 64), true);
++	rc = h2d_deliver(h, frame, flen);
++	if (rc) {
++		err = rc;
++		h->last_result = rc;
++		goto unlock;
++	}
++	h->injected++;
++	h->last_result = 0;
++	err = (ssize_t)count;
++unlock:
++	mutex_unlock(&h->lock);
++out:
++	kfree(req);
++	kfree(frame);
++	return err;
++}
++
++/* ---------------------------------------------------------------------
++ * sysfs attributes
++ * ------------------------------------------------------------------- */
++static ssize_t h2d_inject_store(struct device *dev, struct device_attribute *attr,
++				const char *buf, size_t count)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++
++	if (!h)
++		return -ENODEV;
++	if (count > H2D_MAX_REQUEST_TEXT) {
++		dev_warn(dev, H2D_LOG_PREFIX "request %zu B > %u B bound\n",
++			 count, H2D_MAX_REQUEST_TEXT);
++		return -E2BIG;
++	}
++	return h2d_store(h, buf, count, true);
++}
++static DEVICE_ATTR_WO(h2d_inject);
++
++static ssize_t h2d_raw_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++
++	if (!h)
++		return -ENODEV;
++	if (count > H2D_MAX_RAW_HEX + 64) {
++		dev_warn(dev, H2D_LOG_PREFIX "raw request %zu B > %u B bound\n",
++			 count, H2D_MAX_RAW_HEX);
++		return -E2BIG;
++	}
++	return h2d_store(h, buf, count, false);
++}
++static DEVICE_ATTR_WO(h2d_raw);
++
++/* h2d_check: parse/build/validate only - no arming, no device write.  Safe
++ * before the CPU release; lets the operator verify a frame line on target. */
++static ssize_t h2d_check_store(struct device *dev, struct device_attribute *attr,
++			       const char *buf, size_t count)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++	struct h2d_request *req;
++	u8 *frame;
++	size_t flen = 0;
++	char err[160];
++	int rc;
++
++	if (!h)
++		return -ENODEV;
++	if (count > H2D_MAX_RAW_HEX + 64)
++		return -E2BIG;
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++	frame = kmalloc(H2D_HCC_MAX_TOTAL, GFP_KERNEL);
++	if (!req || !frame) {
++		kfree(req);
++		kfree(frame);
++		return -ENOMEM;
++	}
++	err[0] = '\0';
++	if (memchr(buf, '=', count)) {
++		rc = h2d_parse_request(buf, count, req, err, sizeof(err));
++		if (!rc)
++			rc = h2d_build_frame(req, frame, H2D_HCC_MAX_TOTAL,
++					     &flen, err, sizeof(err));
++		if (!rc)
++			dev_info(dev,
++				 H2D_LOG_PREFIX "check OK: group=%u id=%u dst=%u a=0x%02x b=0x%02x c=0x%02x payload=%u B -> frame %zu B\n",
++				 req->group, req->id, req->dst, req->field_a,
++				 req->field_b, req->field_c, req->payload_len,
++				 flen);
++	} else {
++		rc = h2d_parse_raw_frame(buf, count, frame, H2D_HCC_MAX_TOTAL,
++					 &flen, err, sizeof(err));
++		if (!rc)
++			dev_info(dev,
++				 H2D_LOG_PREFIX "check OK: raw frame %zu B (group=%u id=%u dst=%u)\n",
++				 flen, frame[0] & H2D_HCC_GROUP_MAX,
++				 frame[6] | ((u16)frame[7] << 8), frame[9]);
++	}
++	if (rc) {
++		dev_warn(dev, H2D_LOG_PREFIX "check refused: %s (%s)\n",
++			 h2d_strerror(rc), err);
++		kfree(req);
++		kfree(frame);
++		return h2d_to_errno(rc);
++	}
++	if (!rc)
++		rc = h2d_validate_frame(frame, flen, err, sizeof(err));
++	kfree(req);
++	kfree(frame);
++	return rc ? h2d_to_errno(rc) : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(h2d_check);
++
++/* h2d_arm: single-shot SR0 programming (host-owned ETE fields only). */
++static ssize_t h2d_arm_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++	struct hi5622_pci *ctx;
++	void __iomem *ch;
++	u32 base, depth, prd, cns, ctrl;
++	int ret;
++
++	if (!h)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ctx = h->ctx;
++	mutex_lock(&h->lock);
++	if (h->armed) {
++		dev_warn(dev, H2D_LOG_PREFIX "already armed (single-shot per module load; reload only before the CPU release)\n");
++		ret = -EBUSY;
++		goto out;
++	}
++	if (!ctx->windows_programmed) {
++		dev_err(dev, H2D_LOG_PREFIX "refusing to arm SR0: endpoint iATU windows not programmed (write 1 to prepare first)\n");
++		ret = -EIO;
++		goto out;
++	}
++	if (!ctx->sr0.node_arr) {
++		dev_err(dev, H2D_LOG_PREFIX "refusing to arm SR0: ring not allocated\n");
++		ret = -ENODEV;
++		goto out;
++	}
++	if (ctx->cpu_released)
++		dev_warn(dev, H2D_LOG_PREFIX "warning: arming after the CPU release resets the SR0 indices; the bench procedure arms BEFORE release (see REPORT sec 7)\n");
++	ret = pciet_ete_ring_init(ctx, &ctx->sr0, true);
++	if (ret)
++		goto out;
++	ch = ctx->bar0 + HI5622_BAR0_ETE_BASE + HI5622_ETE_SR0_OFF;
++	base = readl(ch + HI5622_ETE_CH_A_BASE);
++	depth = readl(ch + HI5622_ETE_CH_A_DEPTH);
++	prd = readl(ch + HI5622_ETE_CH_A_PRD);
++	cns = readl(ch + HI5622_ETE_CH_A_CNS);
++	ctrl = readl(ch + HI5622_ETE_CH_CTRL);
++	if (base < 0x80000000u || base > 0x8fffffffu) {
++		dev_err(dev, H2D_LOG_PREFIX "refusing to arm: SR0 base 0x%08x outside the RC inbound DMA window 0x80000000..0x8fffffff\n",
++			base);
++		ret = -EIO;
++		goto out;
++	}
++	if (depth != (u32)(HI5622_ETE_DEPTH - 1)) {
++		dev_err(dev, H2D_LOG_PREFIX "refusing to arm: SR0 depth-1 readback 0x%x != 0x%x\n",
++			depth, HI5622_ETE_DEPTH - 1);
++		ret = -EIO;
++		goto out;
++	}
++	h->sr_reg = prd;
++	h->armed = true;
++	dev_info(dev,
++		 H2D_LOG_PREFIX "armed: SR0 ch 0x%x base=0x%08x depth-1=0x%x prd=0x%08x cns=0x%08x ctrl=0x%x (read-only, firmware-owned enable +0x00 left untouched)\n",
++		 HI5622_ETE_SR0_OFF, base, depth, prd, cns, ctrl);
++	ret = (int)count;
++out:
++	mutex_unlock(&h->lock);
++	return ret;
++}
++static DEVICE_ATTR_WO(h2d_arm);
++
++/* h2d_clear: clear a stale *host-set* out[0] pending bitmap (host-owned
++ * register, the device only reads+clears it).  Not a substitute for a real
++ * device ack - the bench procedure only uses it after a documented timeout. */
++static ssize_t h2d_clear_store(struct device *dev, struct device_attribute *attr,
++			       const char *buf, size_t count)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 before, after;
++
++	if (!h)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ctx = h->ctx;
++	mutex_lock(&h->lock);
++	before = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	pciet_writel_checked(ctx, HI5622_BAR0_H2D_PENDING, 0);
++	after = readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING);
++	dev_warn(dev,
++		 H2D_LOG_PREFIX "cleared out[0]: 0x%08x -> 0x%08x (stale host-set pending word; device ack state untouched)\n",
++		 before, after);
++	mutex_unlock(&h->lock);
++	return count;
++}
++static DEVICE_ATTR_WO(h2d_clear);
++
++/* h2d_selftest: run the shared frame-model self-test on the target. */
++static ssize_t h2d_selftest_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct h2d_selftest_buf *b;
++	char *log;
++	u32 passed = 0, failed = 0;
++	char *line, *nl;
++	int rc;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	b = kzalloc(sizeof(*b), GFP_KERNEL);
++	log = kzalloc(16 * 1024, GFP_KERNEL);
++	if (!b || !log) {
++		kfree(b);
++		kfree(log);
++		return -ENOMEM;
++	}
++	rc = h2d_run_selftest(b, log, 16 * 1024, &passed, &failed);
++	line = log;
++	while (line && *line) {
++		nl = strchr(line, '\n');
++		if (nl)
++			*nl = '\0';
++		if (*line)
++			dev_info(dev, H2D_LOG_PREFIX "selftest: %s\n", line);
++		if (!nl)
++			break;
++		line = nl + 1;
++	}
++	dev_info(dev, H2D_LOG_PREFIX "selftest result: %s (%u passed, %u failed)\n",
++		 rc == H2D_OK ? "OK" : "FAILED", passed, failed);
++	kfree(b);
++	kfree(log);
++	return rc ? -EIO : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(h2d_selftest);
++
++static ssize_t h2d_stats_show(struct device *dev, struct device_attribute *attr,
++			      char *buf)
++{
++	struct hi5622_h2d *h = h2d_from_dev(dev);
++	struct hi5622_pci *ctx;
++	char hex[2 * sizeof(h->last_frame) + 1];
++	int pos = 0;
++
++	if (!h)
++		return -ENODEV;
++	ctx = h->ctx;
++	h2d_frame_to_hex(h->last_frame, h->last_frame_keep, hex, sizeof(hex));
++
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "h2d_inject: armed=%d sr_reg=0x%08x posted=%u acked=%u drain_timeouts=%u refused=%u injected=%u last_result=%zd last_err=%s\n",
++			 h->armed, h->sr_reg, h->sr_posted, h->drains_ok,
++			 h->drain_timeouts, h->refused, h->injected,
++			 h->last_result, h->last_err[0] ? h->last_err : "-");
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "last request: group=%u id=%u dst=%u a=0x%02x b=0x%02x c=0x%02x payload=%u total=%u\n",
++			 h->last_group, h->last_id, h->last_dst, h->last_a,
++			 h->last_b, h->last_c, h->last_payload_len, h->last_total);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "last announce: out0 before=0x%08x write=0x%08x after=0x%08x out2 before=0x%08x write=0x%08x out5_read=0x%08x cns=0x%08x drain_polls=%u\n",
++			 h->out0_before, h->out0_write, h->out0_after,
++			 h->out2_before, h->out2_write, h->out5_read,
++			 h->cns_read, h->drain_polls);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "live: out0=0x%08x out2=0x%08x out5=0x%08x(READ-ONLY) sr0_prd=0x%08x sr0_cns=0x%08x\n",
++			 readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING),
++			 readl(ctx->bar0 + HI5622_BAR0_H2D_DOORBELL),
++			 readl(ctx->bar0 + HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE)),
++			 readl(ctx->bar0 + HI5622_BAR0_ETE_BASE +
++			       HI5622_ETE_SR0_OFF + HI5622_ETE_CH_A_PRD),
++			 readl(ctx->bar0 + HI5622_BAR0_ETE_BASE +
++			       HI5622_ETE_SR0_OFF + HI5622_ETE_CH_A_CNS));
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "boot: fw_loaded=%d cpu_released=%d gate_announced=%d windows=%d\n",
++			 ctx->fw_loaded, ctx->cpu_released,
++			 ctx->gate_announced, ctx->windows_programmed);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "contract: hdr=%u payload_max=0x%x total_max=0x%x tag=0x%04x mailbox_id=%u (out[0]|=1<<%u, out[2]|=1) refused_ids=%u never_write=0x%08x\n",
++			 H2D_HCC_HDR_LEN, H2D_HCC_MAX_PAYLOAD,
++			 H2D_HCC_MAX_TOTAL, H2D_HCC_TAG, HI5622_MSG_ETE_DONE,
++			 HI5622_MSG_ETE_DONE, H2D_HCC_REFUSED_ID,
++			 HI5622_CA_NEVER_WRITE);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "last_frame(%u B head): %s\n",
++			 h->last_frame_keep, hex);
++	return pos;
++}
++static DEVICE_ATTR_RO(h2d_stats);
++
++static struct attribute *pciet_h2d_attrs[] = {
++	&dev_attr_h2d_arm.attr,
++	&dev_attr_h2d_inject.attr,
++	&dev_attr_h2d_raw.attr,
++	&dev_attr_h2d_check.attr,
++	&dev_attr_h2d_clear.attr,
++	&dev_attr_h2d_selftest.attr,
++	&dev_attr_h2d_stats.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(pciet_h2d);
++
++/* ---------------------------------------------------------------------
++ * probe / remove hooks (called from pciet_probe/pciet_remove)
++ * ------------------------------------------------------------------- */
++int pciet_h2d_probe(struct hi5622_pci *ctx)
++{
++	struct device *dev = &ctx->pdev->dev;
++	struct hi5622_h2d *h;
++	int ret;
++
++	h2d_assert_contract();
++	h = kzalloc(sizeof(*h), GFP_KERNEL);
++	if (!h)
++		return -ENOMEM;
++	h->ctx = ctx;
++	h->dev = dev;
++	mutex_init(&h->lock);
++	INIT_LIST_HEAD(&h->node);
++	ret = device_add_groups(dev, pciet_h2d_groups);
++	if (ret) {
++		dev_warn(dev, H2D_LOG_PREFIX "device_add_groups failed: %d\n", ret);
++		mutex_destroy(&h->lock);
++		kfree(h);
++		return ret;
++	}
++	mutex_lock(&h2d_list_lock);
++	list_add_tail(&h->node, &h2d_list);
++	mutex_unlock(&h2d_list_lock);
++	dev_info(dev,
++		 H2D_LOG_PREFIX "injector ready (no device writes in probe): h2d_arm/inject/raw/check/clear/selftest/stats; contract payload max 0x%x, id 5 refused\n",
++		 H2D_HCC_MAX_PAYLOAD);
++	return 0;
++}
++
++void pciet_h2d_remove(struct hi5622_pci *ctx)
++{
++	struct device *dev = &ctx->pdev->dev;
++	struct hi5622_h2d *h = h2d_find(ctx);
++
++	if (!h)
++		return;
++	device_remove_groups(dev, pciet_h2d_groups);
++	mutex_lock(&h2d_list_lock);
++	list_del(&h->node);
++	mutex_unlock(&h2d_list_lock);
++	mutex_destroy(&h->lock);
++	kfree(h);
++	dev_info(dev, H2D_LOG_PREFIX "injector removed\n");
++}
+diff -ruN a/pciet_h2d_frame.h b/pciet_h2d_frame.h
+--- a/pciet_h2d_frame.h	1970-01-01 07:00:00.000000000 +0700
++++ b/pciet_h2d_frame.h	2026-11-23 07:00:00.000000000 +0700
+@@ -0,0 +1,919 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * pciet_h2d_frame.h - Hi5622V100 H2D HCC frame model: request parser, frame
++ * builder, frame validator, hex helpers and the shared self-test.
++ *
++ * ORIGINAL code written by the wifi-h2d-inject lane (host-only, 2026-11-23)
++ * from the project's decoded interface contract; no vendor source text or
++ * object code is copied.  Evidence markers: [V] re-verified from a named
++ * local artifact, [I] inference, [U] unknown / not yet pinned.
++ *
++ * CONTRACT SOURCE
++ *   opensource/docs/incoming/wifi-hcc-re/REPORT.md
++ *     sec 3.1  the 12-byte HCC header + the hcc_msg_alloc 0x674 bound
++ *     sec 3.3  the 8-byte ETE SR node and the out[0]/out[2] announce
++ *     sec 8    item 5, the driver-facing H2D send contract
++ *
++ * [V] 12-byte HCC header (little-endian), payload starts at +0x0c:
++ *   +0x00 u8   group/type       low nibble = group index (dispatch does &0xf)
++ *   +0x01 u8   low nibble = alloc state (1 = allocated);
++ *              high nibble = resource-group / thread index (= dst)
++ *   +0x02 u8   per-message field A
++ *   +0x03 u8   per-message field B (chip id / vap id)
++ *   +0x04 u16  total length = payload + 12
++ *   +0x06 u16  message id (the dispatch key inside the group)
++ *   +0x08 u8   per-message field C
++ *   +0x09 u8   dst = hdr[1] >> 4 (resource/thread selector)
++ *   +0x0a u16  transport tag 0x5a5a
++ *   +0x0c ...  payload, max 0x674 (hcc_msg_alloc bound), total max 0x680
++ *
++ * The frame is carried by one 8-byte ETE SR node {devVA, (len << 16) | 0x6d2b}
++ * where len is the TOTAL frame length [V], and the mailbox announce is
++ * written by pciet_h2d.c as out[0] |= 1 << 3 then out[2] |= 1 (hcc-re
++ * sec 3.3 / sec 8 item 5 [V]).
++ *
++ * WHY THIS HEADER IS PURE C
++ *   The same text compiles into the kernel module (pciet_h2d.c) and into the
++ *   userspace selftest/tool (h2d_selftest.c) with no kernel headers and no
++ *   device access on the host side.  The parser/builder/validator the module
++ *   runs at injection time are therefore the exact code the userspace
++ *   selftest exercises - that is what makes the injector testable without the
++ *   board.  Keep this file free of kernel-only calls.
++ *
++ * HARD REFUSALS (defence in depth; see ../REPORT.md sec 4):
++ *   - HCC message id 5 is refused by the parser, the builder and the frame
++ *     validator.  The device *mailbox* id 5 is the firmware BUG() trap
++ *     (hcc-re sec 3.5/5.5); the injector's announce is hard-wired to mailbox
++ *     id 3 and has no path that can post 5, and the frame id is refused too
++ *     so that a typo can never build a frame whose dispatch key is 5.
++ *   - payload > 0x674 / total > 0x680 is refused everywhere: hcc_msg_alloc
++ *     returns NULL beyond its movw 0x674 bound [V].
++ *   - group and dst are 4-bit header fields; values > 0x0f are refused
++ *     instead of being silently masked.
++ *   - the builder always sets the allocated bit (hdr[1] bit 0) and the
++ *     hdr[9] = hdr[1] >> 4 invariant; the validator re-checks that invariant
++ *     on raw frames.
++ */
++#ifndef _PCIET_H2D_FRAME_H
++#define _PCIET_H2D_FRAME_H
++
++#ifdef __KERNEL__
++#include <linux/kernel.h>	/* u8/u16/u32, vsnprintf, strlen, memset */
++#include <linux/string.h>
++#include <linux/types.h>
++#else
++#include <stdarg.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++
++/* ---------------------------------------------------------------------
++ * 1. Contract constants ([V] hcc-re sec 3.1 / sec 8)
++ * ------------------------------------------------------------------- */
++#define H2D_HCC_HDR_LEN		12u
++#define H2D_HCC_TAG		0x5a5au
++#define H2D_HCC_ALLOC_BIT	0x1u
++#define H2D_HCC_MAX_PAYLOAD	0x674u
++#define H2D_HCC_MAX_TOTAL	(H2D_HCC_HDR_LEN + H2D_HCC_MAX_PAYLOAD) /* 0x680 */
++#define H2D_HCC_REFUSED_ID	5u	/* mailbox id 5 = firmware BUG() trap */
++#define H2D_HCC_GROUP_MAX	0x0fu	/* 4-bit group index */
++#define H2D_HCC_DST_MAX		0x0fu	/* 4-bit resource/thread index */
++#define H2D_MAX_REQUEST_TEXT	4096u	/* sysfs store bound for builder text */
++#define H2D_MAX_RAW_HEX		(2u * H2D_HCC_MAX_TOTAL)
++
++/* Small status codes shared by the kernel wrapper and the userspace tool;
++ * the kernel side maps them onto -errno in pciet_h2d.c. */
++#define H2D_OK		0
++#define H2D_EARG	(-1)	/* malformed request / frame */
++#define H2D_EBOUNDS	(-2)	/* a contract bound is exceeded */
++#define H2D_EREFUSED	(-3)	/* hard-refused value (message id 5) */
++#define H2D_EBUFFER	(-4)	/* caller buffer too small */
++
++/* ---------------------------------------------------------------------
++ * 2. Request model + shared self-test workspace
++ *
++ * struct h2d_request is the userspace->kernel request: the parsed fields of
++ * one "group=.. id=.. dst=.. payload=.." line.  It is deliberately NOT
++ * packed (it never crosses a wire) and is always heap-allocated by the
++ * kernel caller (it is >1.6 KiB, far beyond the CONFIG_FRAME_WARN stack
++ * budget); userspace may keep it anywhere.
++ * ------------------------------------------------------------------- */
++struct h2d_request {
++	u8	group;		/* header +0x00 low nibble */
++	u16	id;		/* header +0x06 dispatch key */
++	u8	dst;		/* header +0x09 and header +0x01 high nibble */
++	u8	field_a;	/* header +0x02 */
++	u8	field_b;	/* header +0x03 */
++	u8	field_c;	/* header +0x08 */
++	u16	payload_len;	/* 0 .. H2D_HCC_MAX_PAYLOAD */
++	u8	payload[H2D_HCC_MAX_PAYLOAD];
++};
++
++struct h2d_selftest_buf {
++	struct h2d_request	req;	/* parser scratch */
++	u8			frame[H2D_HCC_MAX_TOTAL];	/* builder scratch */
++	u8			frame2[H2D_HCC_MAX_TOTAL];	/* validator scratch */
++	char			hex[H2D_MAX_RAW_HEX + 8];	/* hex scratch */
++};
++
++/* ---------------------------------------------------------------------
++ * 3. Small helpers (no kernel-only calls)
++ * ------------------------------------------------------------------- */
++static int h2d_is_space(char c)
++{
++	return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
++	       c == '\v' || c == '\f';
++}
++
++static int h2d_hexval(char c)
++{
++	if (c >= '0' && c <= '9')
++		return c - '0';
++	if (c >= 'a' && c <= 'f')
++		return c - 'a' + 10;
++	if (c >= 'A' && c <= 'F')
++		return c - 'A' + 10;
++	return -1;
++}
++
++/* Format a message into err (never fatal if err is NULL/empty). */
++static int h2d_fail(char *err, size_t errsz, int code, const char *fmt, ...)
++{
++	va_list ap;
++
++	if (err && errsz) {
++		va_start(ap, fmt);
++		vsnprintf(err, errsz, fmt, ap);
++		va_end(ap);
++	}
++	return code;
++}
++
++/* Append one formatted line to a NUL-terminated log buffer. */
++static void h2d_log(char *log, size_t logsz, const char *fmt, ...)
++{
++	va_list ap;
++	size_t used;
++
++	if (!log || !logsz)
++		return;
++	used = strlen(log);
++	if (used + 1 >= logsz)
++		return;
++	va_start(ap, fmt);
++	vsnprintf(log + used, logsz - used, fmt, ap);
++	va_end(ap);
++}
++
++static int h2d_key_eq(const char *s, size_t n, const char *key)
++{
++	size_t kl = strlen(key);
++
++	return n == kl && memcmp(s, key, kl) == 0;
++}
++
++/* Parse an unsigned decimal or 0x-prefixed hexadecimal number.
++ * Returns 0 on success, -1 for a malformed/overflowing number, -2 when the
++ * value is valid but greater than max. */
++static int h2d_parse_uint(const char *s, size_t n, u32 max, u32 *out)
++{
++	u32 base = 10, v = 0;
++	size_t i = 0;
++
++	if (!s || n == 0 || !out)
++		return -1;
++	if (n >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
++		base = 16;
++		i = 2;
++	}
++	if (i >= n)
++		return -1;
++	for (; i < n; i++) {
++		int d = h2d_hexval(s[i]);
++
++		if (d < 0 || (u32)d >= base)
++			return -1;
++		if (v > (0xffffffffu - (u32)d) / base)
++			return -1;
++		v = v * base + (u32)d;
++	}
++	if (v > max)
++		return -2;
++	*out = v;
++	return 0;
++}
++
++/* Parse an even-length hex string (optional 0x prefix) into bytes. */
++static int h2d_parse_hex(const char *s, size_t n, u8 *out, u32 out_sz,
++			 u32 *out_len, char *err, size_t errsz)
++{
++	size_t i = 0, o = 0;
++
++	if (!s || !out || !out_len)
++		return h2d_fail(err, errsz, H2D_EARG, "hex: null argument");
++	if (n >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
++		s += 2;
++		n -= 2;
++	}
++	if (n & 1)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"hex payload: odd number of digits (%zu)", n);
++	if (n / 2 > out_sz)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"hex payload: %zu bytes exceed the %u-byte bound",
++				n / 2, out_sz);
++	for (i = 0; i < n; i += 2) {
++		int hi = h2d_hexval(s[i]);
++		int lo = h2d_hexval(s[i + 1]);
++
++		if (hi < 0 || lo < 0)
++			return h2d_fail(err, errsz, H2D_EARG,
++					"hex payload: invalid digit at offset %zu",
++					i);
++		out[o++] = (u8)((hi << 4) | lo);
++	}
++	*out_len = (u32)o;
++	return H2D_OK;
++}
++
++static const char *h2d_strerror(int code)
++{
++	switch (code) {
++	case H2D_OK:		return "ok";
++	case H2D_EARG:		return "malformed request/frame";
++	case H2D_EBOUNDS:	return "contract bound exceeded";
++	case H2D_EREFUSED:	return "hard-refused value (message id 5)";
++	case H2D_EBUFFER:	return "caller buffer too small";
++	default:		return "unknown error";
++	}
++}
++
++/* ---------------------------------------------------------------------
++ * 4. Builder-syntax parser: "group=N id=N dst=N [a=N] [b=N] [c=N]
++ *    [payload=HEX]" - whitespace separated key=value tokens.
++ *
++ * Required: group (0..15), id (0..65535, never 5), dst (0..15).
++ * Optional: a/b/c (0..255, default 0) and payload (hex, default empty).
++ * Duplicate tokens, unknown keys and missing required keys are errors; the
++ * parser never modifies the input text.
++ * ------------------------------------------------------------------- */
++static int h2d_parse_request(const char *text, size_t text_len,
++			     struct h2d_request *req,
++			     char *err, size_t errsz)
++{
++	size_t i = 0;
++	int have_group = 0, have_id = 0, have_dst = 0;
++	int have_a = 0, have_b = 0, have_c = 0, have_payload = 0;
++	u32 v;
++	int rc;
++
++	if (!text || !req)
++		return h2d_fail(err, errsz, H2D_EARG, "request: null argument");
++	if (text_len > H2D_MAX_REQUEST_TEXT)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"request: %zu bytes exceed the %u-byte bound",
++				text_len, H2D_MAX_REQUEST_TEXT);
++	memset(req, 0, sizeof(*req));
++
++	while (i < text_len) {
++		size_t start, toklen, eq;
++		const char *tok;
++
++		while (i < text_len && h2d_is_space(text[i]))
++			i++;
++		if (i >= text_len)
++			break;
++		start = i;
++		while (i < text_len && !h2d_is_space(text[i]))
++			i++;
++		toklen = i - start;
++		tok = text + start;
++
++		eq = 0;
++		while (eq < toklen && tok[eq] != '=')
++			eq++;
++		if (eq == toklen)
++			return h2d_fail(err, errsz, H2D_EARG,
++					"token '%.*s': expected key=value",
++					(int)toklen, tok);
++		if (eq == 0)
++			return h2d_fail(err, errsz, H2D_EARG,
++					"token '%.*s': empty key",
++					(int)toklen, tok);
++		if (h2d_key_eq(tok, eq, "group")) {
++			if (have_group)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'group'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    H2D_HCC_GROUP_MAX, &v);
++			if (rc == -2)
++				return h2d_fail(err, errsz, H2D_EBOUNDS,
++						"group: %.*s > 0x0f",
++						(int)(toklen - eq - 1), tok + eq + 1);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"group: not a number");
++			req->group = (u8)v;
++			have_group = 1;
++		} else if (h2d_key_eq(tok, eq, "id")) {
++			if (have_id)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'id'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    0xffffu, &v);
++			if (rc == -2)
++				return h2d_fail(err, errsz, H2D_EBOUNDS,
++						"id: %.*s > 0xffff",
++						(int)(toklen - eq - 1), tok + eq + 1);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"id: not a number");
++			if (v == H2D_HCC_REFUSED_ID)
++				return h2d_fail(err, errsz, H2D_EREFUSED,
++						"id=5 is hard-refused (device mailbox id 5 is the firmware BUG() trap)");
++			req->id = (u16)v;
++			have_id = 1;
++		} else if (h2d_key_eq(tok, eq, "dst")) {
++			if (have_dst)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'dst'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    H2D_HCC_DST_MAX, &v);
++			if (rc == -2)
++				return h2d_fail(err, errsz, H2D_EBOUNDS,
++						"dst: %.*s > 0x0f",
++						(int)(toklen - eq - 1), tok + eq + 1);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"dst: not a number");
++			req->dst = (u8)v;
++			have_dst = 1;
++		} else if (h2d_key_eq(tok, eq, "a")) {
++			if (have_a)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'a'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    0xffu, &v);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"a: not a 0..255 number");
++			req->field_a = (u8)v;
++			have_a = 1;
++		} else if (h2d_key_eq(tok, eq, "b")) {
++			if (have_b)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'b'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    0xffu, &v);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"b: not a 0..255 number");
++			req->field_b = (u8)v;
++			have_b = 1;
++		} else if (h2d_key_eq(tok, eq, "c")) {
++			if (have_c)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'c'");
++			rc = h2d_parse_uint(tok + eq + 1, toklen - eq - 1,
++					    0xffu, &v);
++			if (rc)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"c: not a 0..255 number");
++			req->field_c = (u8)v;
++			have_c = 1;
++		} else if (h2d_key_eq(tok, eq, "payload")) {
++			if (have_payload)
++				return h2d_fail(err, errsz, H2D_EARG,
++						"duplicate key 'payload'");
++			u32 plen = 0;
++
++			rc = h2d_parse_hex(tok + eq + 1, toklen - eq - 1,
++					   req->payload, H2D_HCC_MAX_PAYLOAD,
++					   &plen, err, errsz);
++			if (rc)
++				return rc;
++			req->payload_len = (u16)plen;
++			have_payload = 1;
++		} else {
++			return h2d_fail(err, errsz, H2D_EARG,
++					"unknown key '%.*s'",
++					(int)eq, tok);
++		}
++	}
++
++	if (!have_group)
++		return h2d_fail(err, errsz, H2D_EARG, "missing required key 'group'");
++	if (!have_id)
++		return h2d_fail(err, errsz, H2D_EARG, "missing required key 'id'");
++	if (!have_dst)
++		return h2d_fail(err, errsz, H2D_EARG, "missing required key 'dst'");
++	return H2D_OK;
++}
++
++/* Re-check a parsed request against the contract (defence in depth: the
++ * builder must not trust its caller). */
++static int h2d_check_request(const struct h2d_request *req,
++			     char *err, size_t errsz)
++{
++	if (!req)
++		return h2d_fail(err, errsz, H2D_EARG, "request: null argument");
++	if (req->group > H2D_HCC_GROUP_MAX)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"group %u > 0x0f", req->group);
++	if (req->dst > H2D_HCC_DST_MAX)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"dst %u > 0x0f", req->dst);
++	if (req->id == H2D_HCC_REFUSED_ID)
++		return h2d_fail(err, errsz, H2D_EREFUSED,
++				"id=5 is hard-refused (firmware BUG() trap)");
++	if (req->payload_len > H2D_HCC_MAX_PAYLOAD)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"payload %u > 0x674", req->payload_len);
++	return H2D_OK;
++}
++
++/* ---------------------------------------------------------------------
++ * 5. Frame builder: request -> 12-byte header + payload.
++ *
++ * Little-endian byte assembly is done explicitly (u8 stores) so the built
++ * frame is identical on any host/target endianness.
++ * ------------------------------------------------------------------- */
++static int h2d_build_frame(const struct h2d_request *req, u8 *frame,
++			   size_t frame_sz, size_t *frame_len,
++			   char *err, size_t errsz)
++{
++	size_t total;
++	int rc;
++
++	if (!frame || !frame_len)
++		return h2d_fail(err, errsz, H2D_EARG, "build: null argument");
++	rc = h2d_check_request(req, err, errsz);
++	if (rc)
++		return rc;
++	total = H2D_HCC_HDR_LEN + req->payload_len;
++	if (frame_sz < total)
++		return h2d_fail(err, errsz, H2D_EBUFFER,
++				"build: frame %zu B does not fit the %zu-byte buffer",
++				total, frame_sz);
++
++	frame[0] = (u8)(req->group & H2D_HCC_GROUP_MAX);
++	frame[1] = (u8)(((req->dst << 4) & 0xf0) | H2D_HCC_ALLOC_BIT);
++	frame[2] = req->field_a;
++	frame[3] = req->field_b;
++	frame[4] = (u8)(total & 0xff);
++	frame[5] = (u8)((total >> 8) & 0xff);
++	frame[6] = (u8)(req->id & 0xff);
++	frame[7] = (u8)((req->id >> 8) & 0xff);
++	frame[8] = req->field_c;
++	frame[9] = (u8)(req->dst & H2D_HCC_DST_MAX);
++	frame[10] = (u8)(H2D_HCC_TAG & 0xff);
++	frame[11] = (u8)((H2D_HCC_TAG >> 8) & 0xff);
++	if (req->payload_len)
++		memcpy(frame + H2D_HCC_HDR_LEN, req->payload,
++		       req->payload_len);
++	*frame_len = total;
++	return H2D_OK;
++}
++
++/* ---------------------------------------------------------------------
++ * 6. Frame validator: re-checks every hard invariant of a ready-to-post
++ *    frame (used for the raw hex path and as a belt-and-braces check of the
++ *    builder path right before delivery).
++ * ------------------------------------------------------------------- */
++static int h2d_validate_frame(const u8 *frame, size_t frame_len,
++			      char *err, size_t errsz)
++{
++	u16 declared, tag, id;
++
++	if (!frame)
++		return h2d_fail(err, errsz, H2D_EARG, "frame: null argument");
++	if (frame_len < H2D_HCC_HDR_LEN)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"frame: %zu B shorter than the 12-byte HCC header",
++				frame_len);
++	if (frame_len > H2D_HCC_MAX_TOTAL)
++		return h2d_fail(err, errsz, H2D_EBOUNDS,
++				"frame: %zu B > 0x680 contract maximum",
++				frame_len);
++	declared = (u16)(frame[4] | ((u16)frame[5] << 8));
++	if ((size_t)declared != frame_len)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"frame: declared length %u != actual %zu",
++				declared, frame_len);
++	tag = (u16)(frame[10] | ((u16)frame[11] << 8));
++	if (tag != H2D_HCC_TAG)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"frame: transport tag 0x%04x != 0x5a5a", tag);
++	id = (u16)(frame[6] | ((u16)frame[7] << 8));
++	if (id == H2D_HCC_REFUSED_ID)
++		return h2d_fail(err, errsz, H2D_EREFUSED,
++				"frame: id=5 is hard-refused (firmware BUG() trap)");
++	if ((u8)(frame[1] >> 4) != frame[9])
++		return h2d_fail(err, errsz, H2D_EARG,
++				"frame: hdr[9] dst %u != hdr[1] high nibble %u",
++				frame[9], frame[1] >> 4);
++	return H2D_OK;
++}
++
++/* ---------------------------------------------------------------------
++ * 7. Raw-hex frame parser: arbitrary 12+ byte frame, whitespace tolerated,
++ *    then the full validator.  This is the escape hatch for injecting an
++ *    exact vendor-derived frame from a trace without a kernel rebuild.
++ * ------------------------------------------------------------------- */
++static int h2d_parse_raw_frame(const char *text, size_t text_len,
++			       u8 *out, size_t out_sz, size_t *out_len,
++			       char *err, size_t errsz)
++{
++	size_t i, n = 0;
++	int hi = -1;
++
++	if (!text || !out || !out_len)
++		return h2d_fail(err, errsz, H2D_EARG, "raw: null argument");
++	if (out_sz < H2D_HCC_HDR_LEN)
++		return h2d_fail(err, errsz, H2D_EBUFFER,
++				"raw: output buffer %zu B smaller than the header",
++				out_sz);
++	for (i = 0; i < text_len; i++) {
++		char c = text[i];
++		int d;
++
++		if (h2d_is_space(c))
++			continue;
++		d = h2d_hexval(c);
++		if (d < 0)
++			return h2d_fail(err, errsz, H2D_EARG,
++					"raw: invalid hex character '%c' at offset %zu",
++					c, i);
++		if (hi < 0) {
++			hi = d;
++		} else {
++			if (n >= out_sz)
++				return h2d_fail(err, errsz, H2D_EBOUNDS,
++						"raw: more than %zu bytes", out_sz);
++			out[n++] = (u8)((hi << 4) | d);
++			hi = -1;
++		}
++	}
++	if (hi >= 0)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"raw: odd number of hex digits");
++	if (n < H2D_HCC_HDR_LEN)
++		return h2d_fail(err, errsz, H2D_EARG,
++				"raw: %zu B shorter than the 12-byte HCC header", n);
++	*out_len = n;
++	return h2d_validate_frame(out, n, err, errsz);
++}
++
++/* Lowercase hex dump of up to (out_sz-1)/2 frame bytes, NUL terminated. */
++static void h2d_frame_to_hex(const u8 *frame, size_t frame_len,
++			     char *out, size_t out_sz)
++{
++	static const char digits[] = "0123456789abcdef";
++	size_t i, o = 0;
++
++	if (!out || !out_sz)
++		return;
++	for (i = 0; i < frame_len && o + 2 < out_sz; i++) {
++		out[o++] = digits[frame[i] >> 4];
++		out[o++] = digits[frame[i] & 0x0f];
++	}
++	out[o] = '\0';
++}
++
++/* ---------------------------------------------------------------------
++ * 8. Shared self-test.  Deterministic, no device, no kernel API: the same
++ *    function is run by the host tool (h2d_selftest.c) and by the module's
++ *    h2d_selftest sysfs attribute on the target.
++ *
++ *    Returns H2D_OK when every case passed; *passed / *failed report the
++ *    per-case counters.  log receives one "PASS <name>" / "FAIL <name>"
++ *    line per case plus a final summary (log may be NULL).
++ * ------------------------------------------------------------------- */
++static void h2d_selftest_result(char *log, size_t logsz, u32 *counter,
++				const char *name, const char *verdict)
++{
++	(*counter)++;
++	h2d_log(log, logsz, "%s %s\n", verdict, name);
++}
++
++#define H2D_TEST(cond, name)						\
++	do {								\
++		if (cond)						\
++			h2d_selftest_result(log, logsz, passed, (name), "PASS"); \
++		else							\
++			h2d_selftest_result(log, logsz, failed, (name), "FAIL"); \
++	} while (0)
++
++static int h2d_run_selftest(struct h2d_selftest_buf *b, char *log,
++			    size_t logsz, u32 *passed, u32 *failed)
++{
++	struct h2d_request *r;
++	char err[160];
++	size_t flen = 0, flen2 = 0, hlen, i;
++	int rc;
++
++	if (!b || !passed || !failed)
++		return H2D_EARG;
++	if (log && logsz)
++		log[0] = '\0';
++	*passed = 0;
++	*failed = 0;
++
++	/* ---- 8.1 builder: minimal frame, every header field ---- */
++	r = &b->req;
++	memset(r, 0, sizeof(*r));
++	r->group = 4;
++	r->id = 1;
++	r->dst = 0;
++	memset(err, 0, sizeof(err));
++	rc = h2d_build_frame(r, b->frame, sizeof(b->frame), &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_OK, "build: minimal frame returns OK");
++	H2D_TEST(flen == 12, "build: minimal frame total = 12 B");
++	H2D_TEST(err[0] == '\0', "build: success leaves err empty");
++	H2D_TEST(b->frame[0] == 0x04, "build: hdr[0] = group 4");
++	H2D_TEST(b->frame[1] == 0x01, "build: hdr[1] = alloc bit | dst 0");
++	H2D_TEST((b->frame[4] | (b->frame[5] << 8)) == 12,
++		 "build: hdr u16@4 = payload + 12");
++	H2D_TEST((b->frame[6] | (b->frame[7] << 8)) == 1,
++		 "build: hdr u16@6 = id 1 (LE)");
++	H2D_TEST(b->frame[8] == 0x00, "build: hdr[8] field c default 0");
++	H2D_TEST(b->frame[9] == 0x00, "build: hdr[9] dst 0");
++	H2D_TEST((b->frame[10] | (b->frame[11] << 8)) == 0x5a5a,
++		 "build: hdr u16@0xa = tag 0x5a5a");
++
++	/* ---- 8.2 builder: dst nibble duplication + a/b/c fields ---- */
++	memset(r, 0, sizeof(*r));
++	r->group = 0x0f;
++	r->id = 0x1234;
++	r->dst = 0x0f;
++	r->field_a = 0xaa;
++	r->field_b = 0xbb;
++	r->field_c = 0xcc;
++	r->payload_len = 4;
++	r->payload[0] = 0xde;
++	r->payload[1] = 0xad;
++	r->payload[2] = 0xbe;
++	r->payload[3] = 0xef;
++	rc = h2d_build_frame(r, b->frame, sizeof(b->frame), &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && flen == 16, "build: 4-byte payload total = 16 B");
++	H2D_TEST(b->frame[1] == 0xf1, "build: dst 0x0f -> hdr[1] = 0xf1");
++	H2D_TEST(b->frame[9] == 0x0f, "build: dst 0x0f -> hdr[9] = 0x0f");
++	H2D_TEST(b->frame[2] == 0xaa && b->frame[3] == 0xbb && b->frame[8] == 0xcc,
++		 "build: fields a/b/c at hdr[2]/[3]/[8]");
++	H2D_TEST(memcmp(b->frame + 12, r->payload, 4) == 0,
++		 "build: payload copied at hdr+0x0c");
++	H2D_TEST((b->frame[4] | (b->frame[5] << 8)) == 16,
++		 "build: hdr u16@4 = 16");
++	H2D_TEST((b->frame[6] | (b->frame[7] << 8)) == 0x1234,
++		 "build: hdr u16@6 = id 0x1234 (LE)");
++
++	/* ---- 8.3 builder: bounds and refusals ---- */
++	memset(r, 0, sizeof(*r));
++	r->group = 4;
++	r->id = 1;
++	r->dst = 0;
++	r->payload_len = H2D_HCC_MAX_PAYLOAD;
++	for (i = 0; i < H2D_HCC_MAX_PAYLOAD; i++)
++		r->payload[i] = (u8)(i & 0xff);
++	rc = h2d_build_frame(r, b->frame, sizeof(b->frame), &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && flen == H2D_HCC_MAX_TOTAL,
++		 "build: max payload 0x674 -> total 0x680");
++	H2D_TEST((b->frame[4] | (b->frame[5] << 8)) == 0x680,
++		 "build: max frame hdr u16@4 = 0x680");
++	H2D_TEST(b->frame[H2D_HCC_MAX_TOTAL - 1] ==
++		 (u8)((H2D_HCC_MAX_PAYLOAD - 1) & 0xff),
++		 "build: max payload last byte copied");
++
++	r->payload_len = H2D_HCC_MAX_PAYLOAD + 1;
++	rc = h2d_build_frame(r, b->frame2, sizeof(b->frame2), &flen2,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_EBOUNDS, "build: payload 0x675 refused (EBOUNDS)");
++
++	memset(r, 0, sizeof(*r));
++	r->group = 4;
++	r->id = H2D_HCC_REFUSED_ID;
++	r->dst = 0;
++	rc = h2d_build_frame(r, b->frame2, sizeof(b->frame2), &flen2,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_EREFUSED, "build: id 5 refused (EREFUSED)");
++
++	r->id = 1;
++	r->group = H2D_HCC_GROUP_MAX + 1;
++	rc = h2d_build_frame(r, b->frame2, sizeof(b->frame2), &flen2,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_EBOUNDS, "build: group 16 refused (EBOUNDS)");
++
++	r->group = 4;
++	r->dst = H2D_HCC_DST_MAX + 1;
++	rc = h2d_build_frame(r, b->frame2, sizeof(b->frame2), &flen2,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_EBOUNDS, "build: dst 16 refused (EBOUNDS)");
++
++	/* capacity check + no write past the frame */
++	memset(b->frame, 0xaa, sizeof(b->frame));
++	memset(r, 0, sizeof(*r));
++	r->group = 1;
++	r->id = 2;
++	r->dst = 3;
++	rc = h2d_build_frame(r, b->frame, H2D_HCC_HDR_LEN - 1, &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_EBUFFER, "build: buffer too small refused (EBUFFER)");
++	H2D_TEST(b->frame[0] == 0xaa, "build: buffer-too-small leaves output untouched");
++
++	memset(b->frame2, 0xaa, sizeof(b->frame2));
++	rc = h2d_build_frame(r, b->frame2, sizeof(b->frame2), &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && b->frame2[12] == 0xaa,
++		 "build: writes exactly total bytes (no padding)");
++
++	/* ---- 8.4 validator ---- */
++	H2D_TEST(h2d_validate_frame(b->frame2, flen, err, sizeof(err)) == H2D_OK,
++		 "validate: canonical frame accepted");
++	H2D_TEST(h2d_validate_frame(b->frame2, H2D_HCC_HDR_LEN - 1,
++				    err, sizeof(err)) == H2D_EARG,
++		 "validate: short frame refused");
++	H2D_TEST(h2d_validate_frame(b->frame2, H2D_HCC_MAX_TOTAL + 1,
++				    err, sizeof(err)) == H2D_EBOUNDS,
++		 "validate: total > 0x680 refused");
++
++	memcpy(b->frame, b->frame2, flen);
++	b->frame[4] = (u8)((flen + 1) & 0xff);
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) == H2D_EARG,
++		 "validate: declared length mismatch refused");
++
++	memcpy(b->frame, b->frame2, flen);
++	b->frame[10] ^= 0xff;
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) == H2D_EARG,
++		 "validate: bad transport tag refused");
++
++	memcpy(b->frame, b->frame2, flen);
++	b->frame[6] = H2D_HCC_REFUSED_ID;
++	b->frame[7] = 0;
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) ==
++		 H2D_EREFUSED, "validate: raw id 5 refused (EREFUSED)");
++
++	memcpy(b->frame, b->frame2, flen);
++	b->frame[9] = 0x0e;	/* hdr[1] high nibble is 3 for this frame */
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) == H2D_EARG,
++		 "validate: hdr[9] != hdr[1]>>4 refused");
++
++	memcpy(b->frame, b->frame2, flen);
++	b->frame[1] = 0x00;	/* alloc bit cleared: allowed (host bookkeeping) */
++	b->frame[9] = 0x00;
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) == H2D_OK,
++		 "validate: alloc bit not required on a raw frame");
++
++	/* ---- 8.5 builder-syntax parser ---- */
++	memset(err, 0, sizeof(err));
++	rc = h2d_parse_request("group=4 id=1 dst=0 payload=00\n",
++			       strlen("group=4 id=1 dst=0 payload=00\n"),
++			       r, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && r->group == 4 && r->id == 1 && r->dst == 0,
++		 "parse: group/id/dst");
++	H2D_TEST(rc == H2D_OK && r->payload_len == 1 && r->payload[0] == 0x00,
++		 "parse: payload hex");
++	H2D_TEST(rc == H2D_OK && r->field_a == 0 && r->field_b == 0 &&
++		 r->field_c == 0, "parse: fields a/b/c default 0");
++
++	rc = h2d_parse_request("  group=0x0f\tid=0x1234\ndst=0x0f "
++			      "a=170 b=0xbb c=204 payload=DEadBEEF \n",
++			      strlen("  group=0x0f\tid=0x1234\ndst=0x0f "
++				     "a=170 b=0xbb c=204 payload=DEadBEEF \n"),
++			      r, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && r->group == 0x0f && r->id == 0x1234 &&
++		 r->dst == 0x0f, "parse: whitespace + 0x-prefixed numbers");
++	H2D_TEST(r->field_a == 170 && r->field_b == 0xbb && r->field_c == 204,
++		 "parse: fields a/b/c overrides");
++	H2D_TEST(r->payload_len == 4 && r->payload[0] == 0xde &&
++		 r->payload[1] == 0xad && r->payload[2] == 0xbe &&
++		 r->payload[3] == 0xef, "parse: mixed-case hex payload");
++
++	H2D_TEST(h2d_parse_request("id=1 dst=0", strlen("id=1 dst=0"), r,
++				   err, sizeof(err)) !=
++		 H2D_OK, "parse: missing group refused");
++	H2D_TEST(h2d_parse_request("group=4 group=4 id=1 dst=0",
++				   strlen("group=4 group=4 id=1 dst=0"), r,
++				   err, sizeof(err)) != H2D_OK,
++		 "parse: duplicate key refused");
++	H2D_TEST(h2d_parse_request("group=4 id=1 dst=0 zz=1",
++				   strlen("group=4 id=1 dst=0 zz=1"), r,
++				   err, sizeof(err)) != H2D_OK,
++		 "parse: unknown key refused");
++	H2D_TEST(h2d_parse_request("group=4 id=5 dst=0",
++				   strlen("group=4 id=5 dst=0"), r, err,
++				   sizeof(err)) == H2D_EREFUSED,
++		 "parse: id 5 refused (EREFUSED)");
++	H2D_TEST(h2d_parse_request("group=4 id=1 dst=0 payload=abc",
++				   strlen("group=4 id=1 dst=0 payload=abc"), r,
++				   err, sizeof(err)) != H2D_OK,
++		 "parse: odd payload hex refused");
++	H2D_TEST(h2d_parse_request("group=4 id=1 dst=0 payload=zz",
++				   strlen("group=4 id=1 dst=0 payload=zz"), r,
++				   err, sizeof(err)) != H2D_OK,
++		 "parse: non-hex payload refused");
++	H2D_TEST(h2d_parse_request("group=16 id=1 dst=0",
++				   strlen("group=16 id=1 dst=0"), r, err,
++				   sizeof(err)) != H2D_OK,
++		 "parse: group 16 refused");
++	H2D_TEST(h2d_parse_request("", 0, r, err, sizeof(err)) != H2D_OK,
++		 "parse: empty request refused");
++
++	/* max payload accepted / 0x675 refused through the parser */
++	memset(b->hex, 0, sizeof(b->hex));
++	memcpy(b->hex, "group=4 id=1 dst=0 payload=",
++	       strlen("group=4 id=1 dst=0 payload="));
++	hlen = strlen(b->hex);
++	for (i = 0; i < H2D_HCC_MAX_PAYLOAD * 2; i++)
++		b->hex[hlen + i] = 'a';
++	b->hex[hlen + H2D_HCC_MAX_PAYLOAD * 2] = '\0';
++	rc = h2d_parse_request(b->hex, strlen(b->hex), r, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && r->payload_len == H2D_HCC_MAX_PAYLOAD,
++		 "parse: payload 0x674 hex accepted");
++	/* append two more digits -> 0x675 bytes */
++	b->hex[hlen + H2D_HCC_MAX_PAYLOAD * 2] = 'a';
++	b->hex[hlen + H2D_HCC_MAX_PAYLOAD * 2 + 1] = 'a';
++	b->hex[hlen + H2D_HCC_MAX_PAYLOAD * 2 + 2] = '\0';
++	rc = h2d_parse_request(b->hex, strlen(b->hex), r, err, sizeof(err));
++	H2D_TEST(rc == H2D_EBOUNDS, "parse: payload 0x675 refused (EBOUNDS)");
++
++	/* ---- 8.6 parse -> build -> validate round trip ---- */
++	rc = h2d_parse_request("group=0x03 id=0x1f dst=0x02 a=1 b=2 c=3 "
++			      "payload=00112233445566778899aabbccddeeff",
++			      strlen("group=0x03 id=0x1f dst=0x02 a=1 b=2 c=3 "
++				     "payload=00112233445566778899aabbccddeeff"),
++			      r, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK, "roundtrip: request parsed");
++	rc = h2d_build_frame(r, b->frame, sizeof(b->frame), &flen,
++			     err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && flen == 28, "roundtrip: 16-B payload -> 28 B frame");
++	H2D_TEST(h2d_validate_frame(b->frame, flen, err, sizeof(err)) == H2D_OK,
++		 "roundtrip: built frame validates");
++	H2D_TEST(b->frame[0] == 3 && b->frame[2] == 1 && b->frame[3] == 2 &&
++		 b->frame[8] == 3 && b->frame[9] == 2,
++		 "roundtrip: fields land in the header");
++
++	/* ---- 8.7 raw-hex path ---- */
++	h2d_frame_to_hex(b->frame, flen, b->hex, sizeof(b->hex));
++	H2D_TEST(strlen(b->hex) == flen * 2, "raw: frame-to-hex length");
++	memset(b->frame2, 0, sizeof(b->frame2));
++	rc = h2d_parse_raw_frame(b->hex, strlen(b->hex), b->frame2,
++				 sizeof(b->frame2), &flen2, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && flen2 == flen &&
++		 memcmp(b->frame2, b->frame, flen) == 0,
++		 "raw: canonical hex round trips");
++
++	hlen = strlen(b->hex);
++	memmove(b->hex + 2, b->hex, hlen + 1);
++	b->hex[0] = ' ';
++	b->hex[1] = '\t';
++	b->hex[hlen + 2] = '\n';
++	b->hex[hlen + 3] = '\0';
++	rc = h2d_parse_raw_frame(b->hex, hlen + 3, b->frame2,
++				 sizeof(b->frame2), &flen2, err, sizeof(err));
++	H2D_TEST(rc == H2D_OK && flen2 == flen,
++		 "raw: whitespace tolerated");
++
++	H2D_TEST(h2d_parse_raw_frame("zz", 2, b->frame2, sizeof(b->frame2),
++				     &flen2, err, sizeof(err)) != H2D_OK,
++		 "raw: non-hex refused");
++	H2D_TEST(h2d_parse_raw_frame("abc", 3, b->frame2, sizeof(b->frame2),
++				     &flen2, err, sizeof(err)) != H2D_OK,
++		 "raw: odd digit count refused");
++	H2D_TEST(h2d_parse_raw_frame("00112233", 8, b->frame2,
++				     sizeof(b->frame2), &flen2, err,
++				     sizeof(err)) != H2D_OK,
++		 "raw: shorter than 12 B refused");
++
++	/* raw frame with a wrong declared length and with id 5 */
++	memcpy(b->frame2, b->frame, flen);
++	b->frame2[4] = (u8)((flen + 1) & 0xff);
++	memset(b->hex, 0, sizeof(b->hex));
++	h2d_frame_to_hex(b->frame2, flen, b->hex, sizeof(b->hex));
++	H2D_TEST(h2d_parse_raw_frame(b->hex, strlen(b->hex), b->frame2,
++				     sizeof(b->frame2), &flen2, err,
++				     sizeof(err)) == H2D_EARG,
++		 "raw: declared length mismatch refused");
++	memcpy(b->frame2, b->frame, flen);
++	b->frame2[6] = H2D_HCC_REFUSED_ID;
++	b->frame2[7] = 0;
++	h2d_frame_to_hex(b->frame2, flen, b->hex, sizeof(b->hex));
++	H2D_TEST(h2d_parse_raw_frame(b->hex, strlen(b->hex), b->frame2,
++				     sizeof(b->frame2), &flen2, err,
++				     sizeof(err)) == H2D_EREFUSED,
++		 "raw: id 5 refused");
++
++	/* ---- 8.8 summary ---- */
++	h2d_log(log, logsz, "SUMMARY: %u passed, %u failed\n", *passed, *failed);
++	return *failed ? H2D_EARG : H2D_OK;
++}
++
++#endif /* _PCIET_H2D_FRAME_H */
+diff -ruN a/pciet_main.c b/pciet_main.c
+--- a/pciet_main.c	2026-11-23 07:00:00.000000000 +0700
++++ b/pciet_main.c	2026-11-23 07:00:00.000000000 +0700
+@@ -93,7 +93,7 @@
+ }
+ 
+ /* The single write helper every device write goes through. */
+-static void pciet_writel_checked(struct hi5622_pci *ctx, u32 bar0_off, u32 val)
++void pciet_writel_checked(struct hi5622_pci *ctx, u32 bar0_off, u32 val)
+ {
+ 	if (WARN_ON(bar0_off == HI5622_BAR0_IO(HI5622_CA_NEVER_WRITE)))
+ 		return;
+@@ -756,6 +756,11 @@
+ 		 DRV_NAME, pci_name(pdev),
+ 		 &pdev->resource[HI5622_BAR_MEM_WIN].start,
+ 		 &pdev->resource[HI5622_BAR_IATU].start);
++	/* wifi-h2d-inject lane: userspace H2D frame injector (h2d_* sysfs
++	 * attrs; host-side allocations only, no device writes in probe). */
++	if (pciet_h2d_probe(ctx))
++		dev_warn(dev, "H2D injector probe failed; h2d_* attrs unavailable\n");
++
+ 	return 0;
+ 
+ err_sr0:
+@@ -768,6 +773,7 @@
+ 	struct hi5622_pci *ctx = pci_get_drvdata(pdev);
+ 
+ 	device_remove_groups(&pdev->dev, pciet_groups);
++	pciet_h2d_remove(ctx);
+ 	pciet_poll_stop(ctx);
+ 	pciet_ete_ring_free(ctx, &ctx->dr0);
+ 	pciet_ete_ring_free(ctx, &ctx->sr0);
