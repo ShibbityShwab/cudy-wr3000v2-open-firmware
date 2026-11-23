@@ -260,3 +260,23 @@ Reproduce:
     $REPO/.provision-venv/bin/python craft_backup.py selftest \
         --sample /tmp/cudy-backup/backup_sample.bin \
         --bdinfo ../../../../dumps/router-20261108/full/mtd6-bdinfo.bin
+
+## 6. Hardware validation (2026-11-23)
+
+Hardware-proven on the bench WR3000 v2.0 (stock 2.5.24, recovered via the official TFTP image):
+
+* built the container with emit (this unit bdinfo), uploaded through LuCI
+  (/cgi-bin/luci/admin/system/backup: multipart cbid.backup.1.restore + .upload=true + token),
+  the page re-rendered with MD5/Size/Generate time (crypt -d accepted the container);
+* posted cbid.backup.1.proceed=1 -> 302 /admin/system/reboot?backup=;
+* the restore chain only runs on GET /admin/system/reboot/apply?backup=true (the page JS posts
+  backup=true; plain /reboot/apply just reboots) - telnetd appeared on port 23 during preset
+  defaults and survived the reboot via /etc/rc.local (root shell confirmed, uid=0);
+* from that shell the box was reinstalled: stock to pair A, our OpenWrt image to pair B,
+  selector cell 0x11 + env bootflag=b -> our image booted (pair B, 192.168.1.1) and survived a
+  reboot (luofu-pair-record kept current_pair=b).
+* gotchas for operators: the running pair's rootfs is ubi0 (never ubiformat it); the sysenv
+  boot_reg node exists only under the stock 5.10 kernel (our 6.18 kernel uses
+  /sys/devices/platform/boot-selector); the uploaded tar lives in tmpfs so upload+proceed+apply
+  must happen in one stock boot; the restore/reboot can hang in shutdown - a plain power cycle
+  is safe because the payload was already extracted. RUNBOOK section 6a carries the procedure.
