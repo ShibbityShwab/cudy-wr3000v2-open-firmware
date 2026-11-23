@@ -389,3 +389,172 @@ $TOOL-objdump -D -b binary -m arm -M force-thumb --adjust-vma=0xc6e14 \
 
 `tools/c1-gate-hold.sh` is the next-session driver for candidate C1; it reads module paths and
 the B3 sysfs prefix from environment variables and writes its log to an absolute host path.
+
+---
+
+## 9. C1 hardware result (2026-11-23 12:10) — NEGATIVE, and a corrected park model
+
+Attended session (Lead): fresh host boot, B3 `poll_ms=0`, region-5 read 0xffff pre-iATU, prepare 6/6,
+upload 928,920 B, verify diffs=0, P0 arm 7/7, release, then **sustained gate service**:
+~2,000,000 writes of 0x0000cece to CA 0x4000010C over ~2 min (~1 per 100 us); gate register read back
+0x0000cece for the whole window. Observables stayed identical to the single-write park: out[1]=0x4,
+mask 0x08, g=0, state=1, out[0]=out[2]=out[5]=0. **C1 is negative.** A useful by-product: the release
+word CA 0x40000108 reads 0 **after** release, i.e. the CPU consumed the kick and boot started [V\*].
+
+### 9.1 Correction of the session's key inference (important)
+
+The session inferred *"the CPU never reached the gate spin because out[1] bit3 (0x8) never sets, and
+code at file 0x86F68-0x86F70 does out[1] |= 8"*. **That is not what the code does.**
+
+- 0xC6F68-0xC6F70 is `ldr.w r3,[r5,#0xBE0]; orr r3,r3,#8; str.w r3,[r5,#0xBE0]` with
+  r5 = literal 0x0017D398, i.e. it ORs bit3 into the routine's **private flag word at CPU 0x17DF78**
+  (firmware RAM), **not** out[1] (CA 0x40039014) [V, file 0x86F68-0x86F70 + literal map §1.5].
+- out[1] is written exactly twice in the image: **0x4** by this routine at file 0x86F5A [V], and
+  **cleared to 0** by the firmware's `pcie_msg_init` at CPU 0x4978C (literal 0x40039014 at file
+  0x97DC) [V]. Nothing writes 0x8/0xC into out[1] on this path. So "out[1] must reach 0xC if the gate
+  spin is reached" is **not a valid expectation** and must not be used as a stop/success rule.
+
+What *is* true: the routine's own progress flags are readable (see §9.2), and the observed mask 0x08
+only proves the routine passed file 0x86E96 (the 1<<vector OR into CPU 0x40008); observed out[1]=0x4
+proves it passed file 0x86F5A (after both trim-helper calls). **The park is at or after 0xC6F5A.**
+
+### 9.2 Host-readable park markers (exact)
+
+Formula: region-3 CA -> BAR0 = 0x3B8000 + (CA - 0x40000000), phys = 0x40000000 + BAR0;
+CPU runtime R -> BAR0 = 0x6B8000 + R (region-5 window).
+
+| # | marker | CA / CPU | BAR0 | phys | value tells |
+| --- | --- | --- | --- | --- | --- |
+| 1 | routine private flag | CPU 0x17DF78 | **0x835F78** | 0x40835F78 | 0x1 after entry (0xC6E42); \|2 at 0xC6E8C -> 0x3; \|4 at 0xC6F2C -> 0x7; \|8 at 0xC6F70 -> **0xF**. 0x7 = parked at the doorbell store or in the spin; 0xF = passed 0xC6F70 |
+| 2 | D2H doorbell | CA 0x40101434 | **0x4B9434** | 0x404B9434 | 1 iff the store at 0xC6F66 executed |
+| 3 | mask halfword | CPU 0x40008 | 0x6F8008 | 0x406F8008 | bit(1<<entry) set at 0xC6E96 (now 0x08) |
+| 4 | halfword clear | CA 0x40000558 | 0x3B8558 | 0x403B8558 | bit0 cleared at 0xC6F30-0xC6F3C |
+| 5 | trim steps / status (block A) | CA 0x4003941C / 0x40039424 / 0x40039428 | 0x3F141C / 0x3F1424 / 0x3F1428 | 0x403F141C / 0x403F1424 / 0x403F1428 | fn_407C0 (file 0x7C0) writes 22 steps: `str step -> base+0x41C`, strobe 1/0 -> base+0x428, reads base+0x424; fn_4078E (file 0x78E) reads 10 regs. Last step value persists |
+| 6 | trim block B | CA 0x40039800+0x41C... | 0x3F1800... | 0x403F1800... | same for the second block |
+| 7 | out[1] | CA 0x40039014 | 0x3F1014 | 0x403F1014 | 0x4 while parked; later 0 when pcie_msg_init runs |
+| 8 | g pointer | CPU 0x172130 | **0x82A130** | 0x4082A130 | nonzero = pcie_msg_init ran |
+| 9 | state byte | CPU 0x118B60 | 0x7D0B60 | 0x407D0B60 | boot-task progress (now 1) |
+
+**Arithmetic correction:** the correct BAR0 for CPU 0x172130 is **0x82A130**, not 0x82B130 as in
+`wifi-fw-ready-gate` §13.3/§14 (0x6B8000 + 0x172130; cross-check 0x6B8000 + 0x40008 = 0x6F8008
+matches the proven mask read). The cold-boot "g=0" probe may therefore have read 0x82B130 (0x1000
+high); re-read both 0x82A130 and 0x82B130 in the next session before relying on "g==0".
+
+### 9.3 Where the CPU can be parked, ranked
+
+- **P1 (rank 1): the doorbell store at file 0xC6F66** — `str r2,[r3]`, CA 0x40101434, in the
+  0x4010_xxxx IO sub-block. A clock/pad-gated or decode-stalled IO write there wedges the CPU with no
+  exception: out[1]=4 is visible, nothing after it appears. This matches every observable.
+- **P2 (rank 2): the gate spin at 0xC6F74** — the CPU's load of 0x4000010C does not observe the host
+  PCIe writes even though host reads do (IO ordering / aperture vs CPU-side path). C1's sustained
+  service would then have been invisible to the CPU. (The routine itself stores a halfword 0 to the
+  gate at 0xC6E7E first, so the CPU does touch it.)
+- **P3 (rank 3): the routine returned** and the block is downstream (entries 1/2/4 are dispatched by a
+  later stage; mask only grows when they are called). Then the missing action is not a gate.
+
+**P1 vs P2 vs P3 discriminator (read-only, zero risk):** markers 1+2 above.
+flag==0x7 and doorbell==0 -> P1; flag==0xF and doorbell==1 -> P2 or P3 (then compare mask/g/state over
+time; if they stay constant, P3 with an off-image dispatcher is the remaining possibility and the
+next step is the dispatcher path `wifi-fw-ready-gate` §11.2, not more host writes).
+
+### 9.4 Note on the vendor path (question 3 of the follow-up)
+
+The host-side write site for 0xcece remains absent from every vendor module [V, §2.4], so the vendor
+peer is some other host/boot component [U]. But the C1 result means the gate was **not** the blocker
+on our image anyway: the CPU never showed evidence of reaching the compare. The vendor boot proceeds
+because the *earlier* steps of the routine complete; on our image the missing vendor-attested write is
+the probe-time L1SS/pinmux pair (§9.5), which is the only device-side init vendor plat.ko performs
+that our transport does not.
+
+---
+
+## 10. NEXT single candidate (C2): L1SS/pinmux parity at prepare time
+
+Vendor evidence [V]: `shuangta_pcie_pm_init` (file 0x1b57c) runs from `pcie_main_init` at probe and
+calls `pcie_l1ss_dev_pinmux_set` (0x1b440), which performs two device writes:
+
+| write | CA | BAR0 | phys | value | offset |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0x40000554 | 0x3B8554 | 0x403B8554 | **(readl(CA) \| 0x220)**, 32-bit RMW after dsb+arm_heavy_mb | 0x1b468-0x1b490 |
+| 2 | 0x400005BC | 0x3B85BC | 0x403B85BC | **6**, 32-bit | 0x1b4A4-0x1b4C0 |
+
+Our transport does neither. This is the single new write idea for the session; the park-marker reads
+above are free instrumentation in the same run.
+
+### 10.1 Procedure
+1. Attended, recovery armed, UART read-only, calibration snapshot ok.
+2. `insmod hi5622_pciet_b3.ko poll_ms=0`.
+3. `prepare` (6/6 readback OK needed).
+4. **C2 writes:** read-modify-write CA 0x40000554 |= 0x220 (log old/new), then write 6 to CA 0x400005BC.
+   Read both back; expected 0x...|0x220 and 0x6.
+5. `upload` (928,920 B), `verify` (diffs=0 required), P0 arm (7/7).
+6. Pre-release **park-marker baseline**: markers 1-9 of §9.2 (flag 0x835F78, doorbell 0x4B9434,
+   mask 0x6F8008, 0x3B8558, 0x3F141C/24/28, out[1] 0x3F1014, g 0x82A130, state 0x7D0B60).
+7. `release` (0x5a5a) then **sustained gate service** exactly as C1 (1 ms cadence, 45-60 s),
+   logging markers 1+2 every ~500 iterations.
+8. Post snapshot: markers 1-9 + dmesg + B3 P1/P3/P4 attrs.
+
+### 10.2 Expected observables (success)
+- Immediately after step 4: CA 0x40000554 == old|0x220; CA 0x400005BC == 6.
+- During/after the run: **flag CPU 0x17DF78 advances to 0xF**, **doorbell CA 0x40101434 == 1**,
+  halfword CA 0x40000558 bit0 == 0, trim-step registers stop advancing at the last step (0x16-ish
+  loop counter / last value in 0x4003941C and 0x4003981C).
+- Then: **mask 0x6F8008 gains bits beyond 0x08 (target 0x1E)**, **g 0x82A130 != 0**, **state
+  0x7D0B60 >= 2**, out[1] leaves 0x4 (0 via pcie_msg_init, later 0x40), dmesg shows
+  "Device plat ready"/"DEVICE READY", DR fill indices advance.
+- **Do not use out[1]==0xC as an expectation** (§9.1).
+
+### 10.3 Stop conditions / decision rule
+1. flag reaches 0xF and doorbell becomes 1, but mask/g/state unchanged after 60 s -> the CPU passed
+   the routine and the blocker is downstream (P3): stop; next session reads the dispatcher path and
+   the global-object/registry state, not another IO write.
+2. flag stays 0x7 and doorbell stays 0 with C2 applied -> the doorbell store still stalls (P1): the
+   0x4010_xxxx sub-block is still gated. Rank-3 candidate C3 (firmware-tail IO writes, below) moves
+   to rank 1 for the session after this one.
+3. flag reaches 0xF and doorbell 1, mask/g move but no ready message within 60 s -> message-layer
+   precondition problem: switch to the destination-registry path
+   (`wifi-fw-ready-gate` §12.5/§13), not more host writes.
+4. Any kernel oops/device-status anomaly -> power-cycle, keep log, no retry in-session.
+
+### 10.4 Revised candidate ranking (after C1)
+| rank | candidate | status |
+| --- | --- | --- |
+| 1 | **C2** L1SS/pinmux writes CA 0x40000554 \|= 0x220, CA 0x400005BC <- 6 (before release) + park-marker readout | **NEXT session** |
+| 2 | C3 firmware-tail IO gate writes before release: CA 0x40034000/0x40034014/0x40034028/0x4003403C <- 0x3a; 0x40035000/0x40035014/0x40035028/0x4003503C <- 0x3b; 0x40107000 <- 0x3a (all 32-bit). Evidence against: vendor host never writes them [V]; but CA 0x40107000 is in the same 0x4010_xxxx sub-block as the doorbell store (P1) | conditional on 10.3 rule 2 |
+| 3 | C4 ACP gate / host-write visibility for the device CPU (SoC side; pcie-seq addendum-2 polarity finding) | only if P2 confirmed (flag 0xF + doorbell 1 + gate serviced but no progress) |
+| 4 | C5 endpoint iATU 16-viewport parity + PCI_COMMAND re-write | low |
+| — | C1 sustained gate service | TESTED 2026-11-23, NEGATIVE (§9) |
+
+### 10.5 Tooling note
+The B3 module needs one small addition for this session: a WO attribute doing the two C2 writes and
+a RO attribute printing the park markers (all original code, no vendor bytes). Add to
+`pciet_b3.c` before rebuilding:
+```c
+static ssize_t b3_l1ss_prep_store(struct device *dev, struct device_attribute *a,
+                                  const char *buf, size_t n)
+{
+        struct hi5622_pci *ctx = ...; u32 v;
+        v = readl(ctx->bar0 + 0x3B8554);            /* CA 0x40000554 */
+        writel(v | 0x220, ctx->bar0 + 0x3B8554);
+        writel(6,        ctx->bar0 + 0x3B85BC);     /* CA 0x400005BC */
+        dev_info(dev, "C2 l1ss: 0x40000554 old=0x%08x new=0x%08x; 0x400005BC=6\n",
+                 v, readl(ctx->bar0 + 0x3B8554));
+        return n;
+}
+static DEVICE_ATTR_WO(b3_l1ss_prep);
+/* park markers: 0x835F78 flag, 0x4B9434 doorbell, 0x3F141C/24/28 trim,
+ * 0x6F8008 mask, 0x3F1014 out1, 0x82A130 g, 0x7D0B60 state */
+```
+`tools/c2-park.sh` drives the session using these attributes and writes an absolute-path log.
+
+---
+
+## 11. Corrections carried into this revision
+
+- §9.1: the `orr #8` at 0xC6F70 targets the private flag word CPU 0x17DF78, not out[1]; out[1] is 0x4
+  by this routine and cleared by pcie_msg_init. (Supersedes any reading that expected out[1] bit3.)
+- §9.2: correct BAR0 for g (CPU 0x172130) is 0x82A130; 0x82B130 in earlier docs is off by 0x1000.
+- C1 expected mask 0x1E *and* g != 0 remains correct as a success signature, but it is not reachable
+  through gate service alone (C1 negative); it depends on the CPU getting past file 0xC6F66.
+- The firmware-tail table is confirmed again as not host-written; see §2.1 (unchanged).
+
