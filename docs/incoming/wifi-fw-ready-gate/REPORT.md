@@ -1034,3 +1034,90 @@ boot task), so no part of the message layer is ready. Probe: after cold boot rea
   markers; missing piece is external boot-task invocation.
 * g == 0 and mask only bit 3 -> ROM init table never ran on this power path; no blob-side workaround.
 
+
+## 14. Cold-boot test executed 2026-11-23 (RESULT: NEGATIVE - hypothesis disproven)
+
+Attended B3 session on the recovered W27b image (6.18.60, pair B), Wi-Fi chip cold after the
+morning's board power cycles; UART capture read-only during the run.
+
+**Sequence (B3-PLAN.md):** insmod hi5622_pciet_b3.ko poll_ms=0 (no device writes) -> prepare
+(6/6 iATU viewport readbacks OK) -> upload (928,920 B, 2 chunks) -> verify (diffs=0) ->
+P0 arm (7/7 channels readback=OK, depth-1=0x1f, pub=0x400, DR fill reads 0x10 pre-release) ->
+release 0x5a5a -> announce 0xcece. Firmware came up: out[1]=0x4 platform-up, efuse_chip_id
+0x186, dcoldo_vset 0x260d4184, all seven channel enables re-asserted by the firmware
+(+0x00=1), ETE intr 0x3f3f1f1f.
+
+**Decisive cold-boot reads (region-5 window, phys 0x40000000 + BAR0 offset, physdump):**
+
+| # | object | CPU | value read | verdict |
+| --- | --- | --- | --- | --- |
+| 1 | ROM vector | 0x0 | 0xe59ff018 | ROM window decodes (matches) |
+| 3 | config table entry 0 | 0x103FB8 | 0x0024143c 0x01281450 0x022c1464 0x03301478 0x0434148c | does NOT match the 13.3 expectation (treated as stale/incorrect row; mapping proven by rows 1/8/9) |
+| 4 | g pointer | 0x172130 | **0x00000000** | pcie_msg_init did NOT run |
+| 5 | core-0 record | 0x171FB4 | 0x00179cf8 0x7fb9b41c 0x473f92ae ... | registry NOT populated (not 0x00103FB8/0x00171F54 shape) |
+| 6 | core-0 array ptr | 0x171FC4 | 0x00000000 | not populated |
+| 7 | state byte | 0x118B60 | 0x00000001 | boot task exited at state 1 (as before) |
+| 8 | late prelude | 0x118AEC | 0x000C19D7 | matches |
+| 9 | head markers | 0x118B58/5C | 0x00118B58 0x00118B58 | matches |
+| 10 | vector mask | 0x40008 | **0x00000008** | only entry 3 ran (0x1E expected if all ran) |
+
+This is exactly branch 3 of section 13.4: **g == 0 and the init-table mask has only bit 3 ->
+the ROM/init-table path never runs pcie_msg_init or the boot task on this power path (true
+power-on included). The "cold boot will populate the destination registry" hypothesis is
+DISPROVEN.** (A boot on the vendor stock 5.10 kernel would be the only remaining way to see a
+vendor-booted chip; on our image the ROM/dispatcher path is evidently not being entered.)
+
+**B3 probes after release (same session):**
+* P1 watch 30 s: events=1 (bit2 platform-up only) - **no bit3 (ETE done), no bit6 (d2h_notify)**.
+* P2: all four DR fill indices moved 0x0 -> 0x10 at watch start with **empty nodes**
+  (w0=host buffer, w1=0, len=0, no 12-byte HCC header); hcc_rx=0. Reads like an arm-time
+  baseline artifact (all four channels simultaneously, no mailbox word), not real deposits.
+* P3: g4_id1_seen=0, g4_id2_seen=0 - the real ready gate never arrives, consistent with the
+  message layer never initializing.
+
+**What is still missing and the next experiment:** the vendor's own startup path must invoke
+the init table / boot task from outside the image (pcie_msg_init's address is in the static
+module table at file 0xCF254; the boot task at CPU 0x47628 has no in-image caller). Next lane:
+re-read the vendor host driver's release path (pcie-seq-re / wifi-firmware-re artifacts) for
+any post-release H2D message or CA write that kicks that dispatcher, then test exactly one
+candidate per attended session. No write attempts were made against the dispatcher in this run.
+
+## 15. CORRECTION (2026-11-23 12:45) - the section 13/14 address arithmetic was off; the message layer IS initialized
+
+The boot-kick-re lane re-derived the BAR0 mapping and found that several section-13.3 rows were
+computed with an arithmetic slip (+0x1000 and +0x8000 errors). The authoritative mapping is
+**BAR0 offset = 0x6B8000 + CA**, so the decisive objects are:
+
+| object | CA | CORRECT BAR0 | section 13.3 had |
+| --- | --- | --- | --- |
+| g (message object pointer) | 0x172130 | **0x82A130** | 0x82B130 (wrong) |
+| destination registry base | 0x171B6C | **0x829B6C** | 0x82B16C (wrong) |
+| core-0 record | 0x171FB4 | **0x829FB4** | 0x831FB4 (wrong) |
+
+Re-read on the parked chip (after the C1 sustained-gate run):
+* g (BAR0 0x82A130) = 0x0010C0F4 (nonzero); object sanity g+0x9C (BAR0 0x7C4190) = 0x40039014
+  (the out[1] address) -> **pcie_msg_init ran**;
+* core-0 record (BAR0 0x829FB4) = 0x00000000, **0x00103FB8**, 0x00171B70, 0x00171E1C,
+  **0x00171F54**, 0x00171FA8, 0, 0 -> **the destination registry is POPULATED** (exactly the
+  documented shape) - the "message layer never initializes / registry never populated" premise
+  of sections 12-14 is WITHDRAWN;
+* mask (BAR0 0x6F8008) = 0x08 (only vector entry 3 marked), state byte (BAR0 0x7D0B60) = 1,
+  out[1] = 0x4 (platform-up announce), DR0-3 fill = 0.
+
+So the real state after C1: boot started, entry 3 completed (private flag CPU 0x17DF78 = 0x0F,
+doorbell store executed - it is write-only), pcie_msg_init ran, the registry is populated, and
+the blocker is the **downstream dispatcher/boot-task re-entry**, not the message-layer memory.
+
+C1c (full D2H contract service - gate 0xcece every 1 ms + ack/drain/re-arm every ~10 ms for
+80 s) was run on this parked chip: out[1] went to 0 (service correct) but mask, g, registry,
+state and DR fills never moved -> **D2H service is NOT the blocker** (decision rule of the
+boot-kick-re lane). ROM probes: the lane's proposed ROM dump window (BAR0 0x6EF000 =
+CA 0x1237000) reads 0xFFFFFFFF (no decode); BAR0 0x6B7000, region-0 alias 0x77000 and
+0x6EF172 also read 0/FFFFFFFF -> the ROM code is not readable through the region-5 window as
+assumed; a different mapping/protection must be found before the ROM post-0x37172 flow can be
+inspected.
+
+NEXT: ROM post-0x37172 dispatcher flow + boot-task re-trigger lane (the boot task at CPU
+0x47628 has no in-image caller and the ROM dispatcher slot at CA 0x17D42C was previously found
+BUGged). All numeric readings in sections 13.3 and 14 above must be re-interpreted with the
+corrected addresses.

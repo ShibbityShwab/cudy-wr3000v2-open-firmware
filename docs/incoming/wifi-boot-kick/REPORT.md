@@ -822,3 +822,34 @@ be attempted against an already-populated registry.
 | 3 | C3 firmware-tail IO writes (incl. CA 0x40107000 <- 0x3a) | negative vendor evidence; demoted further |
 | — | C1/C1c gate and D2H service | proven mechanisms, not the blocker |
 
+
+## 17. Hardware free-read results on the parked chip (2026-11-23 13:00, read-only)
+
+Taken after C1/C1c/C1d on the same parked chip (no reset between). All via physdump/region
+windows; BAR0 phys base 0x40000000.
+
+Identity window (BAR0 offset = CPU address):
+* CPU 0x0 -> 0xE59FF018 (ROM reset vector) and CPU 0x50 -> 0xE59F018C 0xE5900000 0xE12FFF10
+  0xE52D0004 - **the identity window decodes and reproduces the ROM vector table** (so the
+  sector-13 "header vector table" expectation was wrong, not the window).
+* CPU 0x37160 (64 B) -> all zero: the dispatcher code at CPU 0x37172 is **not readable through
+  the identity window** (reads 0, while the region-5 ACP window reads 0xFFFFFFFF for the same
+  CPU because region-5 CA = CPU+0x1200000). The ROM is therefore **not host-readable** through
+  either window - the post-0x37172 flow must be inferred from the image, not disassembled from
+  the chip.
+
+Object/state reads (BAR0):
+* slot CA 0x17D42C (0x83542C) = **0x000C19D1** (same value the boot task writes over the
+  dispatcher slot), next word 0x000C2081 - no dispatch retry target.
+* private flag CA 0x17DF78 (0x835F78) = **0x0000000F** (entry-3 routine completed).
+* lock area CA 0x17DF44 (0x835F44) = 0x000B0009, 0, 0xDEAD4EAD, 0x0017DF44.
+* boot object CA 0x117C00 (0x7CFC00) first words = 0x01A80000, 0, 0x000001A8, 0, ...
+* g object CA 0x10C0F4 (0x7C40F4) first words = 0x00118D50, 0, ...
+* staged SVC frame CA 0x40008 (BAR0 0x6F800C): 0x0017DF44, 0, 0x001BD000, 0x001BDC40,
+  0x0017E1B8, 0x42085EBF, 0x000BF98F, ... CPSR 0x60000192.
+
+C1d (re-kick CPU release 0x5a5a -> CA 0x40000108 while the gate+contract service loop ran):
+the write landed (release word reads 0x00005A5A afterwards) but **nothing moved for 60 s**
+(out[1]=0, mask 0x08, state 1, g/registry unchanged, DR fills 0) - a running CPU ignores the
+re-kick, matching the stop rule. Next lane: a **true cold power-cycle** re-run of the cold-state
+read set with the corrected addresses before any further writes.
