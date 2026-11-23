@@ -1150,3 +1150,43 @@ Procedure (attended; recovery armed; UART read-only; no rmmod after release):
    change after 90 s -> **honest conclusion: firmware-internal sequencing**; the remaining lanes are
    the full vendor plat/HCC driver replica (threads/scheduler + H2D protocol frame) or continued
    ROM/first-stage reconstruction, not more host pokes.
+
+## 21. CORRECTION (2026-11-23 14:20): the PHY table was fully applied; C1g premise withdrawn
+
+Verified on the live chip by comparing every host-readable table register with the FINAL value of
+the {CA,value} table at CPU 0x1059C0 (the table contains repeated CAs; the last write to a CA is
+the final state):
+
+| CA | table final | host read |
+| --- | --- | --- |
+| 0x4011454C | 0x2101 | 0x00002101 MATCH |
+| 0x4011455C | 0x0101 | 0x00000101 MATCH |
+| 0x40114560 | 0x0101 | 0x00000101 MATCH |
+| 0x401145AC | 0x22 | 0x00000022 MATCH |
+| 0x40114554 | 0x00 | 0x00000000 MATCH |
+| 0x40114550 | 0x03 | 0x00000003 MATCH |
+| 0x40114564 | 0x03 | 0x00000003 MATCH |
+| 0x40114568 | 0x00 (pair 26; pair 7's 3 is superseded) | 0x00000000 MATCH |
+| 0x40114588 | 0x22 | 0x00000022 MATCH |
+| 0x40114548 | 0x2101 | 0x00002101 MATCH |
+| 0x40114594 | 0x22 | 0x00000022 MATCH |
+| 0x401145BC | 0x01 | 0x00000001 MATCH |
+
+So the firmware DID apply the whole 0x1059C0 table (the earlier "0x40114568 reads 0 although the
+table says 3" observation compared against pair 7 and missed pair 26, which rewrites the same
+register to 0). C1g's premise - an unapplied table entry causing the abort - is **withdrawn**;
+C1g was not run and is not the next step. (The host write path was proven anyway: a host write of
+3 to CA 0x40114568 stuck and was restored to 0 afterwards; the table's CAs are host-writable.)
+
+Remaining evidence points to a firmware-internal fault: the abort context is the ETE/DR
+descriptor-fill path (0x88AFC builds a descriptor buffer; 0x87D64 is a pure-RAM descriptor/ring
+writer with no device IO), and the exception stubs save lr twice, so the frame does not carry the
+faulting PC. A data abort inside a pure-RAM writer implies an invalid pointer/address in the
+firmware's own descriptor state - i.e. a missing earlier init stage, not a host-programmable gate.
+
+**Honest conclusion for this approach:** host-side transport, firmware upload, message layer,
+registry and exception handling are all proven; the remaining blocking fault is firmware-internal.
+Further progress requires either (a) the full vendor plat/HCC driver replica (threads/scheduler +
+H2D protocol frames per wifi-hcc-re section 3.1) so the firmware's expected host-side counterpart
+exists, or (b) continued ROM/first-stage firmware reconstruction to find the missing init stage.
+No further RAM/IO pokes are justified by the evidence.

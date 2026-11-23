@@ -1121,3 +1121,33 @@ NEXT: ROM post-0x37172 dispatcher flow + boot-task re-trigger lane (the boot tas
 0x47628 has no in-image caller and the ROM dispatcher slot at CA 0x17D42C was previously found
 BUGged). All numeric readings in sections 13.3 and 14 above must be re-interpreted with the
 corrected addresses.
+
+## 16. Corrected cold-boot verification, true POR (2026-11-23 13:20)
+
+A genuine power-cycle (unplug >=10 s, no buttons) then: no driver loaded -> all chip windows read
+0xFFFFFFFF (endpoint iATU unprogrammed); insmod B3 (no device writes) + prepare (6 iATU
+viewports) -> the cold chip now decodes: identity window CPU 0x0 = 0xE59FF018, CPU 0x50 =
+0xE59F018C...; but all runtime RAM objects read RANDOM GARBAGE (mask 0x6F8008 = 0x4E28733E,
+g 0x82A130 = 0xA0DCB24A, registry/state/slot/flag garbage); gate CA 0x4000010C = 0x0000BAAD
+(reset value); out1 = 0; DR fills 0.
+
+Then the standard sequence: upload 928920 B -> verify diffs=0 -> P0 arm 7/7 -> release 0x5a5a
+-> announce 0xcece (3 s later): out[1] = 0x4; mask 0x6F8008 = 0x08; **g = 0x0010C0F4** (valid;
+was garbage before release); **registry 0x829B6C = 00000001 00171E70 001040C0 00000001 and
+core-0 record 0x829FB4 = 0,0x00103FB8,0x00171B70,0x00171E1C,0x00171F54,0x00171FA8,0,0**
+(populated); **boot-task slot 0x83542C = 0x000C19D1** (the task ran and stamped it); state
+0x7D0B60 = 1; flag 0x835F78 = 0xF; release word 0 (consumed); gate 0 (entry routine wiped it,
+so entry 3 is parked at the 0xcece spin); DR fills 0.
+
+**Verdict: the firmware boot chain DOES run on a true cold power-on** - pcie_msg_init, the
+destination registry and the boot-task prelude all complete. The previous "cold boot does not
+initialize" verdict was an artifact of the off-by-0x1000/+0x8000 read addresses (section 15)
+and is now fully corrected. The remaining blocker is downstream: the boot task's ready id-1
+frame is built and handed to the send primitive (CPU 0x102760) but never produces a DR deposit
+or an out[1] bit, so the send fails/parks inside the primitive or its not-yet-running HCC
+thread objects. Fresh-object evidence: g object (CA 0x10C0F4 = BAR0 0x7C40F4) carries the
+mailbox CAs at +0x9C..+0xA8 (0x40039014/0x40039010/0x40101434/0x400392F0), counters 0x40/0x40
+at +0xB4/+0xB8 and list pointers into the 0x117xxx boot-object region; the boot object
+(CA 0x117C00 = BAR0 0x7CFC00) has its HCC objects/list heads initialized (0x117E14,
+0x117E78...) and the prelude marker 0xC19D7 at +0xEEC; the send primitive code is host-readable
+at BAR0 0x7BA760 (ARM instructions).
