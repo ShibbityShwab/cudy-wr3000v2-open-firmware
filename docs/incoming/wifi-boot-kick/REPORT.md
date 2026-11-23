@@ -1031,3 +1031,122 @@ message/protocol layer (construct the vendor 12-byte HCC H2D frame from wifi-hcc
 image's H2D handler table) or a full driver/thread replica, not more RAM pokes; (c) repeated data
 aborts at the same PC (frame lr_exc constant) -> the firmware needs a resource we are not providing;
 identify it from the decoded faulting instruction and schedule that as the following lane.
+
+## 20. Abort frame decoded (2026-11-23 14:05) - the firmware takes a data abort in its own IO block
+
+Staged 17-word exception frame at CA 0x40008..0x4004C (BAR0 0x6F8008), read on the live chip
+after the C1e fallback run (mask 0x0A):
+
+    0: 0000000A  1: 00000000  2: 00000000  3: 001BC000  4: 001BCC48
+    5: 00000003  6: 40114564  7: 00000003  8: 40114568  9: 00000003
+   10: 40114588 11: 00000033 12: 40114588 13: 00000000 14: 001BCE54
+   15: 00088BBD 16: 00088BB9
+
+Interpretation: word0 = the exception bitmap (0x0A = data-abort bit + svc bit). Words 5-12 hold
+(address, value) pairs for the device IO block: write 3 to CA 0x40114564, 3 to CA 0x40114568,
+3 to CA 0x40114588, 0x33 to CA 0x40114588; lr_exc (word15) = 0x00088BBD -> code file offset
+0x48BBD (CPU = file + 0x40000), i.e. the exception returned into the function around file
+0x48BB8 (a call at 0x48BB8 is the most likely fault site).
+
+Host-side reads of the same IO registers via BAR0 (0x3B8000 + (CA-0x40000000)):
+* CA 0x40114564 -> 0x00000003 (the firmware's write of 3 DID land)
+* CA 0x40114568 -> 0x00000000
+* CA 0x40114588 -> 0x00000022
+* CA 0x40114580 -> 0x00001000
+So the block is accessible and at least part of the write sequence landed; the data abort is
+specific to the firmware's access, not a dead block.
+
+ACP-gate lead CLOSED: live SoC register 0x10100174 = 0x06210321 - bits 25 and 26 SET, bit 24
+clear, exactly the vendor hi_acp.ko state (addendum-2). Patch 013's polarity is correct; the ACP
+gate is not the abort cause.
+
+Next: decode the faulting instruction at file 0x48BB8-0x48BC0 properly (the earlier force-thumb
+dump straddles 32-bit instructions; re-dump a wider window and locate the PC), identify what the
+firmware is doing in that function (which IO writes and which one may abort - possibly a
+clock/gate the vendor plat/CRG driver enables but our host setup does not), and compare with the
+vendor plat.ko/CRG init. If no host-visible enable remains, the next lane is a full driver/thread
+replica or an H2D protocol-frame lane (wifi-hcc-re section 3.1).
+
+
+---
+
+## 20. C1f abort decode (2026-11-23) — descriptor path vs PCIe/PHY table; next candidate C1g
+
+### 20.1 Frame layout, decoded from the stubs [V]
+The r1=1 vector stub (file 0xC3090, ARM) builds a 17-word frame:
+`pop {r0}` (popped return/exception PC -> frame word0), then `stm sp,{r0..ip}` (words 0-12),
+`str sp,[frame+0x34]` (word13), `str lr,[frame+0x38]` (word14), `str lr,[frame+0x3c]` (word15,
+which the thunk at 0x86FEA decrements by 4), `str spsr,[frame+0x40]` (word16). The routine stages
+words 0-16 at CA 0x4000C..0x4004C, mask halfword at CA 0x40008.
+Consequence: **word14 = lr and word15 = lr-4 are the same return address pair** (0x88BBD / 0x88BB9
+differ by exactly the thunk's -4). 0x88BBD is therefore the **return address of the caller of
+CPU 0x87D64** (call site 0x88BB8), not the faulting PC. The fault happened inside 0x87D64 (or its
+call chain), while the caller context had sp=0x001BCE54, r2=0x001BC000, r3=0x001BCC48 - RAM pointers.
+
+### 20.2 The two functions involved [V]
+- **CPU 0x88AFC (file 0x48AFC)**: builds a 0x200-byte stack descriptor (memset via ROM 0x1031A4),
+  fills it through 0x88828, then calls `0x87D64(obj, buf, idx, 0, 0x40)`.
+- **CPU 0x87D64 (file 0x47D64)**: pure **RAM descriptor/ring writer** - it writes words from the
+  buffer into the object's ETE/DR descriptor arrays at `[obj+0x2B8+4i]` and `[obj+0x3CC+4i]`
+  (`ldr r5,[r0,0x2CC]`, `bfi`/`str` on those offsets). It performs **no device-IO access at all**.
+So the abort context is the D2H/DR **descriptor-fill path**, not an IO table writer. (A descriptor
+fill writing device IO could still be where a *node address* is later used, but the abort itself
+must be in a callee of 0x88AFC/0x87D64 - the frame alone does not contain the faulting PC because
+these stubs save lr twice, not lr_exc.)
+
+### 20.3 The 0x4011_45xx accesses are a separate image data table [V]
+The addresses in question appear in an **image {CA,value} init table** at CPU 0x1059C0
+(file 0xC59C0), in order: 0x4011454C<-0x3000, 0x4011455C<-0x1000, 0x40114560<-0x1000,
+0x401145AC<-0x22, 0x40114554<-3, 0x40114550<-3, **0x40114564<-3, 0x40114568<-3, 0x40114588<-0x33,
+0x40114588<-0x22**, 0x40114548<-0x2000, 0x40114548<-0x2001, 0x40114554<-2, 0x40114548<-0x2101,
+0x4011455C<-0, 0x4011455C<-1, 0x40114568<-2, 0x4011455C<-0x101, 0x40114594<-0x33, 0x40114594<-0x22,
+... plus a second variant table at 0x105A20 [V, hexdump].
+Host reads match the table: 0x40114564=3 and 0x40114588=0x22 are written; **0x40114568 reads 0
+although the table says 3** - the first unwritten pair in table order. The prime abort suspect is
+therefore the device-CPU store of 3 to **CA 0x40114568** (or the pair immediately preceding it in
+the variant table).
+These registers are in the **Wi-Fi chip's own 0x4011_xxxx PCIe/PHY block** (region-3 device IO),
+readable from the host but their write path from the device CPU aborts: a device-internal clock/
+write-protect/unlock precondition is missing at the moment the firmware applies this table.
+
+### 20.4 Vendor SoC CRG/clock question (question 2) [V]
+Vendor `hi5622v100_plat.ko` and `wifi.ko` import **no clk/reset/regmap/pinctrl APIs** (readelf)
+and contain **no SoC CRG address constructions except**:
+- `movt 0x1012` at 0x1AEEC / 0x1AF94 -> inside `shuangta_pcie_l1ss_set/clear` (SoC L1SS PCIe
+  registers 0x1012_xxxx; runtime PM only, not boot, and not the 0x4011 block) [V];
+- `movt 0x1016` at 0x1418 / 0x1420 -> the PCIe misc-window read path already covered by pcie-seq [V].
+So the vendor does **not** enable a host SoC clock for the Wi-Fi chip's 0x4011 block from plat.ko;
+the ACP gate is already correct (live 0x06210321 = bits25/26 set, matching hi_acp; patch-013
+polarity correct [V\*]). The 0x4011_45xx abort is device-internal, consistent with a table that the
+vendor's earlier boot stage (ROM/first-stage firmware) applies under a gate we have not reproduced.
+
+### 20.5 NEXT candidate C1g: host pre-apply of the firmware's PCIe/PHY init tables
+
+Idea: the host can read *and write* region-3 device IO. Two facts make a host-side pre-apply the
+single testable host action left: (a) the table is in the image and its CAs are host-visible;
+(b) the failing pair's value never lands on the device path, while two earlier table values are
+present. If a host write to the same registers sticks (different bus master/permission), applying
+the table before release removes the table's later device-CPU writes from the critical path (the
+firmware's own applier then only writes already-correct values) and may avoid the data abort.
+
+Procedure (attended; recovery armed; UART read-only; no rmmod after release):
+1. Fresh power-cycle; `insmod hi5622_pciet_b3.ko poll_ms=0`; prepare (6/6); **do not upload yet**.
+2. **Dry-run write (decisive sub-step):** from host write 0x00000003 to CA 0x40114568
+   (region-3: BAR0 = 0x3B8000 + 0x114568 = **0x4CC568**, phys 0x404CC568) and read it back.
+   - Read back 3 -> host write path works: continue.
+   - Read back 0 / host oops -> the register is write-protected for the host too: stop; the
+     conclusion becomes firmware-internal (vendor boot-stage sequencing), do not continue.
+3. Snapshot all table CAs (read-only; expected vs actual) to record exactly which pairs the device
+   path had applied.
+4. Apply the whole table at CPU 0x1059C0 (and its 0x105A20 variant) in order as 32-bit host writes
+   to BAR0 0x3B8000+(CA-0x40000000); log every readback.
+5. Upload (928,920 B), verify (diffs=0), P0 arm 7/7, then the C1e-style service loop
+   (out[1] drain/ack/re-arm at <100 us + 0xcece gate), release 0x5a5a.
+6. Observe 90 s: **mask must not gain bit1** (no data abort) or, if it does, note whether new bits
+   appear; g+0xB4/B4 (0x7C41A8/0x7C41AC) transitions; out[1] must reach 0x40 (published bit6);
+   doorbell CA 0x40101434; state 0x7D0B60; registry 0x829FB4; DR fills 0x3F25CC/61C/66C/6BC;
+   dmesg/B3 ready messages.
+7. Success = no new abort + out[1] 0x40 + ready messages. Stop = host write blocked (step 2), or no
+   change after 90 s -> **honest conclusion: firmware-internal sequencing**; the remaining lanes are
+   the full vendor plat/HCC driver replica (threads/scheduler + H2D protocol frame) or continued
+   ROM/first-stage reconstruction, not more host pokes.
