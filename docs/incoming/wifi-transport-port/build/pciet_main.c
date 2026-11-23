@@ -109,12 +109,16 @@ static int pciet_msg_wait_for_clr(struct hi5622_pci *ctx)
 {
 	unsigned int i;
 
-	for (i = 0; i < 1000; i++) {
-		if (!readl(ctx->bar0 + HI5622_BAR0_H2D_DOORBELL))
+	/* Vendor pcie_msg_wait_for_clr(&chip->out[0]) [V]: spin (no delay,
+	 * max 0xFFFE reads) until the device has consumed the previous pending
+	 * mask out[0] (CA 0x40039010).  Waiting on out[2] (the host doorbell
+	 * strobe) is wrong - the doorbell write is the host's last step. */
+	for (i = 0; i < 0xfffe; i++) {
+		if (!readl(ctx->bar0 + HI5622_BAR0_H2D_PENDING))
 			return 0;
-		udelay(10);
+		cpu_relax();
 	}
-	dev_warn(&ctx->pdev->dev, "doorbell drain timeout (CA 0x400392d4 stuck)\n");
+	dev_warn(&ctx->pdev->dev, "H2D pending drain timeout (CA 0x40039010 stuck, rc 0x8b2d)\n");
 	return -ETIMEDOUT;
 }
 
@@ -126,15 +130,19 @@ static int pciet_msg_wait_for_clr(struct hi5622_pci *ctx)
  */
 void pciet_msg_send_irq(struct hi5622_pci *ctx, u32 pending_mask)
 {
+	(void)pending_mask; /* vendor sends chip->pending (already ORed by send) */
 	unsigned long flags;
 
-	pciet_writel_checked(ctx, HI5622_BAR0_H2D_PENDING, pending_mask);
+	/* Vendor order [V]: wait for out[0]==0, then publish the pending mask
+	 * in out[0] (CA 0x40039010) and kick the doorbell bit0 in out[2]
+	 * (CA 0x400392d4).  out[5] (CA 0x400392f0) is NEVER written. */
 	pciet_msg_wait_for_clr(ctx);
 
 	spin_lock_irqsave(&ctx->doorbell_lock, flags);
 	if (ctx->pending) {
-		pciet_writel_checked(ctx, HI5622_BAR0_H2D_DOORBELL, ctx->pending);
+		pciet_writel_checked(ctx, HI5622_BAR0_H2D_PENDING, ctx->pending);
 		ctx->pending = 0;
+		pciet_writel_checked(ctx, HI5622_BAR0_H2D_DOORBELL, 1);
 		if (ctx->twin_enabled) {
 			u32 twin = readl(ctx->bar0 + HI5622_BAR0_TWIN_WORD);
 

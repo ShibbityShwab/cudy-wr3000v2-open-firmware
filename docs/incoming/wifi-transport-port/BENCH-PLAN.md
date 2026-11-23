@@ -138,3 +138,14 @@ These supersede parts of the stage text above (evidence: wifi-hcc-re/REPORT.md, 
    max payload 0x674} inside an 8-byte SR node {devVA, (len << 16) | 0x6d2b}, announced by
    pcie_msg_send(chip,3) = out[0] (0x40039010) |= 1<<3 then out[2] (0x400392d4) |= 1.
    Never post H2D id 5 (firmware handler is BUG()).
+
+## Post-swarm correction (2026-11-23, wifi-host-replica lane)
+
+pciet_msg_wait_for_clr must wait on **out[0]** (CA 0x40039010, the pending mask the device
+clears when it consumes it), not on out[2] (the host doorbell strobe). Vendor sequence
+[V, plat.ko pcie_msg_send_irq 0x174a8]: wait out[0]==0 (<=0xFFFE reads, no delay), then
+*out[0] = pending, then *out[2] |= 1. The committed build/pciet_main.c was fixed 2026-11-23
+(wait polls HI5622_BAR0_H2D_PENDING, 0xFFFE iterations; send publishes the mask in out[0] and
+writes 1 to out[2]); the fix compiles clean against the 6.18.60 tree. out[5] (CA 0x400392f0)
+remains NEVER written (the vendor writes 8 there in its send_irq - we do not copy that; hard
+rule).
