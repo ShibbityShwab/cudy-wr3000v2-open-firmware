@@ -1,0 +1,385 @@
+--- a/b3/hi5622_b3.h
++++ b/b3/hi5622_b3.h
+@@ -101,6 +101,32 @@
+ #define HI5622_B3_MAX_NODE_CAP	8	/* P2: first 12 B of up to 8 nodes */
+ 
+ /* ---------------------------------------------------------------------
++ * 3a. ETE init-time register set recovered from the vendor platform module
++ *     hi5622v100_plat.ko (pcie_ete_*; byte-identical in 2.5.24 and 2.4.15) [V]
++ *
++ * The vendor host driver's complete ETE init writes are (in order):
++ *   1. CA 0x40039508: read-modify-write AND 0xffe0f8f8 in pcie_ete_intr_init
++ *      (the host-facing ETE interrupt word; one shot, before any ring arm);
++ *   2. SR0-2 group A: +0x10 base store, +0x14 depth-1 (bfi 0..9), +0x18
++ *      producer store, +0x08 ctrl bits 0..2 (bfi) — upper bits preserved;
++ *      the SR send word hi16 is READ first and only logged when non-zero;
++ *   3. DR0-3 group B: +0x30 base store, +0x34 depth-1 (bfi 0..9), +0x38
++ *      published index store.
++ *
++ * The per-channel send/flag words live at ETE + 0xC00 + 4i (DR0..DR3) and
++ * ETE + 0xC18 + 4i (SR0..SR2).  The host driver ONLY READS them: high16 =
++ * target send index, low16 = device progress index, both packed ring indices
++ * (low 10 bits idx, bit 10 wrap phase).  They are device/hardware-authored
++ * state — the golden 0x04050405 / 0x040E040E capture is boot traffic
++ * (1029 / 1038 nodes), NOT an init value, and the host must not write them.
++ * ------------------------------------------------------------------- */
++#define HI5622_CA_ETE_STATUS	0x4003a874u	/* ETE status word [V] */
++#define HI5622_ETE_INTR_KEEP	0xffe0f8f8u	/* vendor pcie_ete_intr_init mask [V] */
++#define HI5622_ETE_SEND_DR0	0xc00u		/* DR send/flag word, +4i [V] */
++#define HI5622_ETE_SEND_SR0	0xc18u		/* SR send/flag word, +4i [V] */
++#define HI5622_ETE_SEND_STRIDE	4u
++
++/* ---------------------------------------------------------------------
+  * 4. B3 instrument entry points (called by pciet_main.c when built with
+  *    -DHI5622_B3_BUILD; the base module never references them)
+  * ------------------------------------------------------------------- */
+--- a/b3/pciet_b3.c
++++ b/b3/pciet_b3.c
+@@ -119,6 +119,9 @@
+ 	struct hi5622_ete_ring	dr[HI5622_B3_DR_COUNT];
+ 	bool			armed;
+ 	u32			preposted;
++	bool			ete_intr_masked;	/* vendor ETE intr RMW applied */
++	u32			send_at_arm[HI5622_B3_DR_COUNT + HI5622_B3_SR_COUNT];
++	u32			fill_at_arm[HI5622_B3_DR_COUNT];
+ 	struct mutex		lock;		/* serializes the D2H service */
+ 	bool			watch_active;
+ 
+@@ -161,6 +164,7 @@
+ 	/* formatted result text for the read-back attrs */
+ 	char			p2_result[B3_RESULT_LEN];
+ 	char			p5_result[B3_RESULT_LEN];
++	char			ete_send_result[B3_RESULT_LEN];
+ };
+ 
+ /* ETE channel table (hcc-re REPORT sec 4.1 [V]) */
+@@ -336,6 +340,172 @@
+ 	return (u32)delta;
+ }
+ 
++/* ---------------------------------------------------------------------
++ * Vendor ETE init-time host writes and the device-authored send words [V]
++ *
++ * Recovered from hi5622v100_plat.ko (2.5.24; the pcie_ete_* init functions are
++ * byte-identical in 2.4.15).  The vendor ETE init order is:
++ *   pcie_ete_init -> pcie_ete_intr_init    CA 0x40039508 &= 0xffe0f8f8
++ *                 -> pcie_ete_rings_init   SR0-2 group A, DR0-3 group B
++ *                 -> pcie_ete_chn_res      vendor pcie-channel LRES, not ETE
++ * The +0xC00+4i (DR) / +0xC18+4i (SR) send/flag words are NEVER written by
++ * the host: the init paths only store their KVA in the ring context and every
++ * access is a read (debug logs, the SR "already sending" check, the TX-done
++ * progress read).  They are device/hardware-authored state: hi16 = target
++ * send index, low16 = device progress index, both packed ring indices (low 10
++ * bits idx, bit 10 wrap phase).  The golden 0x04050405/0x040E040E capture is
++ * boot traffic (1029/1038 nodes), not an init value; nothing may be seeded
++ * there from the host.
++ * ------------------------------------------------------------------- */
++static u32 b3_ete_read(struct hi5622_pci *ctx, u32 chan_off, u32 reg_off)
++{
++	return readl(ctx->bar0 + HI5622_BAR0_ETE_BASE + chan_off + reg_off);
++}
++
++/* Vendor pcie_ete_init_dst_ring/src_ring: +0xC00 / +0xC18 send word, +4i. */
++static u32 b3_ete_send_word(struct hi5622_pci *ctx, bool dr, u32 i)
++{
++	u32 ca = HI5622_CA_ETE_BASE +
++		 (dr ? HI5622_ETE_SEND_DR0 : HI5622_ETE_SEND_SR0) +
++		 i * HI5622_ETE_SEND_STRIDE;
++
++	return readl(ctx->bar0 + HI5622_BAR0_IO(ca));
++}
++
++/* Vendor pcie_ete_intr_init: a single read-modify-write of the ETE
++ * interrupt word.  It is the host-facing receive mask (the firmware never
++ * reads it), applied before any ring is armed in the vendor boot. */
++static void b3_ete_intr_init(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct device *dev = &ctx->pdev->dev;
++	u32 off = HI5622_BAR0_IO(HI5622_CA_ETE_INTR);
++	u32 before, after, rb;
++
++	before = readl(ctx->bar0 + off);
++	after = before & HI5622_ETE_INTR_KEEP;
++	b3_writel(ctx, off, after);
++	wmb();
++	rb = readl(ctx->bar0 + off);
++	b3->ete_intr_masked = (rb == after);
++	dev_info(dev, "B3 P0: ETE intr CA 0x%08x 0x%08x -> 0x%08x (vendor pcie_ete_intr_init AND 0x%08x) readback=0x%08x %s\n",
++		 HI5622_CA_ETE_INTR, before, after, HI5622_ETE_INTR_KEEP, rb,
++		 b3->ete_intr_masked ? "OK" : "MISMATCH");
++}
++
++/* Vendor writes depth-1 as a bfi(0,10) bitfield: preserve the upper bits. */
++static void b3_ete_depth_init(struct hi5622_pci *ctx, u32 chan_off, u32 reg_off,
++			      u32 depth)
++{
++	void __iomem *reg = ctx->bar0 + HI5622_BAR0_ETE_BASE + chan_off + reg_off;
++	u32 v = readl(reg);
++
++	v = (v & ~B3_IDX_LOW_MASK) | ((depth - 1) & B3_IDX_LOW_MASK);
++	writel(v, reg);
++}
++
++/* Vendor writes SR ctrl as a bfi(0,3) bitfield: preserve the upper bits. */
++static void b3_ete_ctrl_init(struct hi5622_pci *ctx, u32 chan_off, u32 val)
++{
++	void __iomem *reg = ctx->bar0 + HI5622_BAR0_ETE_BASE + chan_off +
++			    HI5622_ETE_CH_CTRL;
++	u32 v = readl(reg);
++
++	v = (v & ~0x7u) | (val & 0x7u);
++	writel(v, reg);
++}
++
++/* P0 baseline for the read-only b3_ete_send watch. */
++static void b3_ete_send_baseline(struct hi5622_pci *ctx)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	u32 i;
++
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		b3->send_at_arm[i] = b3_ete_send_word(ctx, true, i);
++		b3->fill_at_arm[i] = b3_ete_read(ctx, b3->dr[i].chan_off,
++						HI5622_ETE_CH_B_CNS);
++	}
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++)
++		b3->send_at_arm[HI5622_B3_DR_COUNT + i] =
++			b3_ete_send_word(ctx, false, i);
++}
++
++/* Format the ETE send/flag words plus the firmware-owned DR source-ring state
++ * (read-only bench observable).  This function performs no device writes. */
++static void b3_build_ete_send(struct hi5622_pci *ctx, char *buf, size_t size)
++{
++	struct hi5622_b3 *b3 = ctx->b3;
++	struct b3_out o;
++	bool any_nonzero = false;
++	bool fw_dr_ready = false;
++	u32 i;
++
++	b3_out_init(&o, buf, size);
++	b3_out_printf(&o, "ETE send/flag watch (host-write-free block: DR CA 0x4003AC00+4i, SR CA 0x4003AC18+4i)\n");
++	b3_out_printf(&o, "intr CA 0x%08x=0x%08x vendor-mask 0x%08x %s | status CA 0x%08x=0x%08x\n",
++		      HI5622_CA_ETE_INTR,
++		      readl(ctx->bar0 + HI5622_BAR0_IO(HI5622_CA_ETE_INTR)),
++		      HI5622_ETE_INTR_KEEP,
++		      b3->ete_intr_masked ? "applied" : "NOT-applied",
++		      HI5622_CA_ETE_STATUS,
++		      readl(ctx->bar0 + HI5622_BAR0_IO(HI5622_CA_ETE_STATUS)));
++
++	for (i = 0; i < HI5622_B3_DR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->dr[i];
++		u32 send = b3_ete_send_word(ctx, true, i);
++		u32 fill = b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_B_CNS);
++		u32 en = b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_ENABLE);
++		u32 ga = b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_BASE);
++		u32 adv = b3_idx_count(b3->fill_at_arm[i], fill, r->depth);
++
++		if (send)
++			any_nonzero = true;
++		if (ga && (en & 0x1u))
++			fw_dr_ready = true;
++		b3_out_printf(&o,
++			      "DR%u ch=0x%03x send=0x%08x hi16(target)=0x%04x lo16(progress)=0x%04x sync=%d | fw groupA base=0x%08x depth-1=0x%02x prod=0x%08x cons=0x%08x enable=0x%08x | host groupB base=0x%08x depth-1=0x%02x pub=0x%08x fill=0x%04x advance=%u\n",
++			      i, r->chan_off, send, send >> 16, send & 0xffffu,
++			      (send >> 16) == (send & 0xffffu) ? 1 : 0,
++			      ga,
++			      b3_ete_read(ctx, r->chan_off,
++					  HI5622_ETE_CH_A_DEPTH) & B3_IDX_LOW_MASK,
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_PRD),
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_CNS),
++			      en,
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_B_BASE),
++			      b3_ete_read(ctx, r->chan_off,
++					  HI5622_ETE_CH_B_DEPTH) & B3_IDX_LOW_MASK,
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_B_PRD),
++			      fill & 0xffffu, adv);
++	}
++	for (i = 0; i < HI5622_B3_SR_COUNT; i++) {
++		struct hi5622_ete_ring *r = &b3->sr[i];
++		u32 send = b3_ete_send_word(ctx, false, i);
++
++		if (send)
++			any_nonzero = true;
++		b3_out_printf(&o,
++			      "SR%u ch=0x%03x send=0x%08x hi16=0x%04x lo16=0x%04x sync=%d | groupA base=0x%08x depth-1=0x%02x prod=0x%08x cons=0x%08x enable=0x%08x\n",
++			      i, r->chan_off, send, send >> 16, send & 0xffffu,
++			      (send >> 16) == (send & 0xffffu) ? 1 : 0,
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_BASE),
++			      b3_ete_read(ctx, r->chan_off,
++					  HI5622_ETE_CH_A_DEPTH) & B3_IDX_LOW_MASK,
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_PRD),
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_A_CNS),
++			      b3_ete_read(ctx, r->chan_off, HI5622_ETE_CH_ENABLE));
++	}
++	b3_out_printf(&o, "host send-index writes performed: 0 (device-authored block; the vendor host never writes it)\n");
++	if (any_nonzero)
++		b3_out_printf(&o, "verdict: at least one send word is NON-ZERO -> the device firmware/engine has pumped nodes on an ETE ring\n");
++	else
++		b3_out_printf(&o, "verdict: all send words ZERO -> the device engine has not transferred anything (upstream of any host ETE register write)\n");
++	if (!fw_dr_ready)
++		b3_out_printf(&o, "fallback: firmware DR source rings unconfigured (groupA base==0 or enable bit0==0 on every DR channel) -> firmware pcie_msg_init / DR bring-up has not run; no host-side ETE init write can substitute (see REPORT.md sec 6)\n");
++	b3_out_finish(&o);
++}
++
+ static void *b3_node_va(struct hi5622_ete_ring *r, u32 devva)
+ {
+ 	u32 i;
+@@ -366,11 +536,13 @@
+ /* ---------------------------------------------------------------------
+  * P0 - arm SR0-2 (group A) and DR0-3 (group B), pre-post DR free buffers
+  *
+- * Host-owned writes only (hcc-re REPORT sec 4.2 [V]):
+- *   SR: +0x10 base, +0x14 depth-1, +0x18 producer, +0x08 ctrl = 0
+- *   DR: +0x30 base, +0x34 depth-1, +0x38 published free-buffer index
++ * Host-owned writes only (hcc-re REPORT sec 4.2 [V], vendor pcie_ete_* [V]):
++ *   ETE intr CA 0x40039508: RMW AND 0xffe0f8f8 (pcie_ete_intr_init, first)
++ *   SR: +0x10 base, +0x14 depth-1 (bfi 0..9), +0x18 producer, +0x08 ctrl (bfi 0..2)
++ *   DR: +0x30 base, +0x34 depth-1 (bfi 0..9), +0x38 published free-buffer index
+  * The firmware-owned fields (+0x00 enable, +0x08 on DR, +0x1c, +0x3c) are
+- * read back for the log but never written.
++ * read back for the log but never written.  The +0xC00/+0xC18 send/flag words
++ * are device-authored and only read (b3_ete_send watch, REPORT.md sec 3).
+  * ------------------------------------------------------------------- */
+ static void b3_arm_sr(struct hi5622_pci *ctx, int i)
+ {
+@@ -378,13 +550,24 @@
+ 	struct hi5622_ete_ring *r = &b3->sr[i];
+ 	u32 base = (u32)r->node_dma;
+ 
++	struct device *dev = &ctx->pdev->dev;
++	u32 send = b3_ete_send_word(ctx, false, i);
++
++	/* Vendor pcie_ete_sr_reg_init: base store, depth-1 bfi(0,10), producer
++	 * store, ctrl bfi(0,3) = cfg[5]&7 (cfg[5] = 0 for all three channels). */
+ 	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_BASE, base);
+-	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_DEPTH, r->depth - 1);
++	b3_ete_depth_init(ctx, r->chan_off, HI5622_ETE_CH_A_DEPTH, r->depth);
+ 	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_A_PRD, 0);
+-	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_CTRL, 0);
++	b3_ete_ctrl_init(ctx, r->chan_off, 0);
+ 	wmb();
+ 	r->producer = 0;
+ 	r->consumer = 0;
++
++	/* The vendor reads hi16 of the SR send word first and logs an "already
++	 * sending" warning (then continues); port that as a read-only check. */
++	if (send >> 16)
++		dev_warn(dev, "B3 P0: SR%u send word 0x%08x hi16=0x%04x non-zero - channel already sending before arm (vendor warning path, continues)\n",
++			 i, send, send >> 16);
+ }
+ 
+ static void b3_arm_dr(struct hi5622_pci *ctx, int i, u32 npre)
+@@ -400,7 +583,7 @@
+ 	 * the published index - so the device never sees a published buffer
+ 	 * whose node word0 is not yet valid. */
+ 	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_BASE, base);
+-	b3_ete_writel(ctx, r->chan_off, HI5622_ETE_CH_B_DEPTH, r->depth - 1);
++	b3_ete_depth_init(ctx, r->chan_off, HI5622_ETE_CH_B_DEPTH, r->depth);
+ 	for (j = 0; j < r->depth; j++) {
+ 		nodes[j].devva = cpu_to_le32((u32)r->buf_dma[j]);
+ 		nodes[j].word1 = 0;
+@@ -446,6 +629,11 @@
+ 		}
+ 	}
+ 
++	/* Vendor order (pcie_ete_init): the ETE interrupt word is programmed
++	 * before the rings are armed.  This is the one host-owned ETE init write
++	 * the original P0 was missing (pcie_ete_intr_init, plat 0x7528). */
++	b3_ete_intr_init(ctx);
++
+ 	dev_info(dev, "B3 P0: arming SR0-2 (group A) + DR0-3 (group B), depth 32 (depth-1=0x1f), pre-post %u DR free buffer(s)/channel\n",
+ 		 npre);
+ 
+@@ -461,14 +649,17 @@
+ 		depth = readl(ch + HI5622_ETE_CH_A_DEPTH);
+ 		prd = readl(ch + HI5622_ETE_CH_A_PRD);
+ 		ctrl = readl(ch + HI5622_ETE_CH_CTRL);
+-		dev_info(dev, "B3 P0: SR%u ch=0x%03x base=0x%08x depth-1=0x%02x prod=0x%08x ctrl=0x%08x readback=%s (enable=0x%08x consumer=0x%08x, read-only)\n",
+-			 i, r->chan_off, base, depth, prd, ctrl,
+-			 (base == (u32)r->node_dma && depth == r->depth - 1 &&
+-			  prd == 0 && ctrl == 0) ? "OK" : "MISMATCH",
++		dev_info(dev, "B3 P0: SR%u ch=0x%03x base=0x%08x depth-1=0x%02x (raw 0x%08x) prod=0x%08x ctrl=0x%08x readback=%s (enable=0x%08x consumer=0x%08x, read-only)\n",
++			 i, r->chan_off, base, depth & B3_IDX_LOW_MASK, depth, prd,
++			 ctrl,
++			 (base == (u32)r->node_dma &&
++			  (depth & B3_IDX_LOW_MASK) == r->depth - 1 &&
++			  prd == 0 && (ctrl & 0x7u) == 0) ? "OK" : "MISMATCH",
+ 			 readl(ch + HI5622_ETE_CH_ENABLE),
+ 			 readl(ch + HI5622_ETE_CH_A_CNS));
+-		if (base != (u32)r->node_dma || depth != r->depth - 1 ||
+-		    prd != 0 || ctrl != 0) {
++		if (base != (u32)r->node_dma ||
++		    (depth & B3_IDX_LOW_MASK) != r->depth - 1 ||
++		    prd != 0 || (ctrl & 0x7u) != 0) {
+ 			dev_err(dev, "B3 P0: SR%u register readback mismatch - device state not trusted, stop\n",
+ 				i);
+ 			ret = -EIO;
+@@ -488,11 +679,14 @@
+ 		pub = readl(ch + HI5622_ETE_CH_B_PRD);
+ 		fill = readl(ch + HI5622_ETE_CH_B_CNS);
+ 		enable = readl(ch + HI5622_ETE_CH_ENABLE);
+-		dev_info(dev, "B3 P0: DR%u ch=0x%03x base=0x%08x depth-1=0x%02x pub(free)=0x%08x fill(read-only)=0x%08x enable=0x%08x readback=%s\n",
+-			 i, r->chan_off, base, depth, pub, fill, enable,
+-			 (base == (u32)r->node_dma && depth == r->depth - 1 &&
++		dev_info(dev, "B3 P0: DR%u ch=0x%03x base=0x%08x depth-1=0x%02x (raw 0x%08x) pub(free)=0x%08x fill(read-only)=0x%08x enable=0x%08x readback=%s\n",
++			 i, r->chan_off, base, depth & B3_IDX_LOW_MASK, depth, pub,
++			 fill, enable,
++			 (base == (u32)r->node_dma &&
++			  (depth & B3_IDX_LOW_MASK) == r->depth - 1 &&
+ 			  pub == b3->dr_pub[i]) ? "OK" : "MISMATCH");
+-		if (base != (u32)r->node_dma || depth != r->depth - 1 ||
++		if (base != (u32)r->node_dma ||
++		    (depth & B3_IDX_LOW_MASK) != r->depth - 1 ||
+ 		    pub != b3->dr_pub[i]) {
+ 			dev_err(dev, "B3 P0: DR%u register readback mismatch - device state not trusted, stop\n",
+ 				i);
+@@ -507,6 +701,13 @@
+ 	b3->armed = true;
+ 	dev_info(dev, "B3 P0: armed 7 channels; DR published index pre-post: packed (idx&0x3ff)|phase<<10 = 0x%08x for %u buffers; firmware-owned enable bits left untouched (P4 reads them)\n",
+ 		 b3->dr_pub[0], npre);
++
++	/* Read-only baseline + first inventory of the device-authored send
++	 * words and the firmware-owned DR source-ring state.  This is the
++	 * P0-time observation for the ETE-init question (REPORT.md sec 5). */
++	b3_ete_send_baseline(ctx);
++	b3_build_ete_send(ctx, b3->ete_send_result, sizeof(b3->ete_send_result));
++	b3_log_text(ctx, "P0-ETE", b3->ete_send_result);
+ 	return 0;
+ }
+ 
+@@ -1242,6 +1443,25 @@
+ }
+ static DEVICE_ATTR_RO(b3_rings);
+ 
++/* Read-only: the device-authored ETE send/flag words (+0xC00/+0xC18) and the
++ * firmware-owned DR source-ring state.  Added by the wifi-ete-init lane
++ * (task-81) to answer "does the vendor ETE init run / does the engine pump"
++ * without writing a single device-owned register (see REPORT.md sec 5/7). */
++static ssize_t b3_ete_send_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = b3_ctx(dev);
++	struct hi5622_b3 *b3;
++
++	if (!ctx || !ctx->b3)
++		return -ENODEV;
++	b3 = ctx->b3;
++	b3_build_ete_send(ctx, b3->ete_send_result,
++			  sizeof(b3->ete_send_result));
++	return sysfs_emit(buf, "%s", b3->ete_send_result);
++}
++static DEVICE_ATTR_RO(b3_ete_send);
++
+ static ssize_t b3_p1_events_show(struct device *dev,
+ 				 struct device_attribute *attr, char *buf)
+ {
+@@ -1423,6 +1643,7 @@
+ 	&dev_attr_b3_p5_nodedump.attr,
+ 	&dev_attr_b3_p5_result.attr,
+ 	&dev_attr_b3_rings.attr,
++	&dev_attr_b3_ete_send.attr,
+ 	&dev_attr_b3_clear.attr,
+ 	NULL,
+ };
