@@ -558,3 +558,137 @@ static DEVICE_ATTR_WO(b3_l1ss_prep);
   through gate service alone (C1 negative); it depends on the CPU getting past file 0xC6F66.
 - The firmware-tail table is confirmed again as not host-written; see §2.1 (unchanged).
 
+---
+
+## 12. Second hardware discriminator (2026-11-23, same parked chip) — the routine COMPLETED; g is SET
+
+The Lead read the §9.2 markers on the still-parked chip from the C1 run (module loaded, CPU released,
+no power-cycle). Results:
+
+| marker | value | meaning under the code model |
+| --- | --- | --- |
+| flag CPU 0x17DF78 | **0x0000000F** | bits 1\|2\|4\|8 all set; instruction 0xC6F70 executed, i.e. the CPU passed the doorbell store AND reached the gate spin (0xC6F74) — and the sustained 0xcece service released it. **C1's mechanism worked.** |
+| doorbell CA 0x40101434 | 0x00000000 | expected: the store at 0xC6F66 is the **only** writer of this CA in the image (literal 0x40101434 exists only in pcie_msg_init at CPU 0x49760-0x49764, which merely saves the address into the object); nothing clears it and no host read is required to consume it. It reads 0 as a write-only/pulse register. Not evidence of a missing store. |
+| mask CPU 0x40008 | 0x08 | as expected; entries 1/2/4 still not dispatched |
+| out[1] CA 0x40039014 | 0x4 | announce pending, never drained (module had poll_ms=0) |
+| state CPU 0x118B60 | 1 | boot task ran its setup branch |
+| trim block A CA 0x4003941C / 0x40039424 / 0x40039428 | 0x00001025 / 0 / 0 | last trim step latched (0x1025 = last table value), strobe/status idle |
+| CA 0x40000558 | 0x0050 | halfword bit0 already clear, consistent with 0xC6F30-0xC6F3C having run |
+| g CPU 0x172130, BAR0 0x82A130 | **0x0010C0F4** | nonzero pointer — see §12.1: pcie_msg_init RAN |
+
+### 12.1 The g-pointer address is settled: CA 0x172130, i.e. BAR0 0x82A130
+
+- pcie_msg_init stores the object pointer at **CPU 0x49706**: `ldr r3,[pc,#0xC8]` -> literal at CPU
+  0x497CC = **0x00172130**; `str r2,[r3]` (r2 = [sp,#4], the new object pointer) [V, firmware disasm].
+- The literal 0x00172130 occurs at file 0x97CC only (plus the three *reader* sites at CPU 0xC18A8 /
+  0xC61DC / 0xC669C) [V]; the only writer is that store.
+- Therefore the authoritative host read is **BAR0 = 0x6B8000 + 0x172130 = 0x82A130**.
+  `wifi-fw-ready-gate` §13.3/§14 used **0x82B130**, which is off by 0x1000 (arithmetic slip; the mask
+  check 0x6B8000+0x40008 = 0x6F8008 confirms the formula). **The stored nonzero value 0x0010C0F4 means
+  pcie_msg_init ran.** The earlier cold-boot conclusion "g=0 -> message layer never initializes" is
+  **withdrawn** — it was a wrong-address probe.
+- The same arithmetic slip affects the registry reads in earlier docs (all off, corrected here):
+  registry base CA 0x171B6C -> BAR0 **0x829B6C**; core-0 record CA 0x171FB4 -> BAR0 **0x829FB4**;
+  cores 1-3 CA 0x171FCC/0x171FE4/0x171FFC -> BAR0 0x829FCC/0x829FE4/0x829FFC.
+  Re-read these in the next session before re-deriving message-layer state.
+- Sanity cross-check for the object: g+0x9C should hold out[1]'s CA (0x40039014) per the object layout;
+  CA 0x10C0F4+0x9C = CPU 0x10C190 -> BAR0 **0x7C4190** (phys 0x407C4190) [I, from the layout doc].
+
+### 12.2 What 0x37172 is, and how entries 1/2/4 are dispatched
+
+0x37172 is **< 0x40000**, i.e. below the image load base: it is **ROM code**, not image code
+(image occupies CPU 0x40000..0x122C98; the routine's own file 0x86E14 maps to CPU 0xC6E14) [V,
+arithmetic]. So the call chain is: **ROM calls the header entry stub (CPU 0x1030E8, r1=3) -> the
+routine runs -> returns to ROM at 0x37172**. The ROM is the dispatcher that calls the five header
+entries (CPU 0x40050..0x40060) [I, consistent with mask bit semantics and the ROM return address].
+
+Consequence: dispatch of entries 1/2/4 is **ROM-driven**, not gate-driven. The ROM did not call them
+in the 2-minute window, so it is blocked between the entry-3 return and the next call — the most
+plausible block being a firmware-side D2H publish that spins on **out[1] == 0** (the P2 flush gate
+file 0x86108) before the ROM/boot flow can advance. Our C1 run left out[1]=0x4 pending for 2 minutes
+(poll_ms=0, nobody serviced it); the vendor host driver services D2H continuously via
+`bal_irq_enable` + the pcie_msg handlers [V\*, pcie-seq §6].
+
+### 12.3 Revised state model (supersedes §9.3 P1/P2)
+
+1. Boot started; release word consumed [V\*].
+2. **pcie_msg_init ran** (g set to 0x0010C0F4) [V via correct probe].
+3. **Entry 3 ran to completion** (mask 0x08, flag 0xF, out[1]=0x4, doorbell stored, trim blocks
+   final) and returned to ROM 0x37172 [V\*].
+4. The boot flow did not advance to entries 1/2/4 in 2 min with out[1] left pending [V\*].
+5. Remaining missing host action: **service the D2H announce** (ack out[3] CA 0x40101438 = 1, drain
+   out[1] CA 0x40039014 = 0, re-arm out[4] CA 0x40101414 = 1) **while keeping the 0xcece gate
+   served** — i.e. behave like the vendor host, which does exactly this continuously.
+
+---
+
+## 13. NEXT candidate (C1c): sustained gate service + full D2H contract service
+
+### 13.1 Why this ranks first (evidence)
+- C1 (gate only) proved the gate mechanism works and the routine completes [V\*].
+- pcie_msg_init ran; g is set [V\*].
+- out[1]=0x4 was left undrained for the whole C1 window [V\*]; the firmware's own publish path
+  (file 0x86108) spins while out[1] != 0 [V, wifi-fw-ready-gate §1.2/TL;DR item 5].
+- The vendor host driver services D2H from the IRQ handler continuously [V\*, pcie-seq §6];
+  our C1 run did not (poll_ms=0).
+- C2 (L1SS pinmux) was not needed for the routine to complete (§12), so it is demoted.
+- C3 (tail-table IO writes) has negative vendor evidence (§2.1) and no new support; demoted to 3.
+
+### 13.2 Exact procedure (attended; recovery armed; UART read-only; no rmmod after release)
+1. `insmod hi5622_pciet_b3.ko poll_ms=0` (keep the base poll thread OFF; we drive the contract
+   explicitly so the ack/drain/re-arm order is exactly right).
+2. `prepare` (6/6 readback), `upload`, `verify` (diffs=0), `b3_p0_ringinit` 7/7.
+3. **Corrected baseline reads** (before release, all host reads):
+   - g CA 0x172130 -> BAR0 **0x82A130** (expect nonzero 0x0010C0F4; if 0 here, pcie_msg_init has
+     not run yet at this point of the boot)
+   - registry core-0 record CA 0x171FB4 -> BAR0 **0x829FB4** (expect +4 = 0x00103FB8, +0x10 =
+     0x00171F5x if populated)
+   - registry base CA 0x171B6C -> BAR0 0x829B6C; object sanity g+0x9C -> BAR0 0x7C4190
+   - out[1] 0x3F1014, out[0] 0x3F1010, mask 0x6F8008, state 0x7D0B60, DR0-3 +0x3C
+4. `release` (0x5a5a).
+5. **Hold loop, 60 s:** every 1 ms write 0x0000cece -> CA 0x4000010C (BAR0 0x3B810C); every 10 ms
+   run the full contract service if out[1] != 0: write 1 -> CA 0x40101438 (ack, BAR0 0x4B9438),
+   re-read out[1] then write 0 -> CA 0x40039014 (drain, BAR0 0x3F1014), write 1 -> CA 0x40101414
+   (re-arm, BAR0 0x4B9414). The B3 `b3_drain` attribute does exactly this sequence (ack -> drain ->
+   re-arm -> dispatch) [V, pciet_b3.c 0x837-0x841]; or run `b3_p1_watch` for the window.
+6. Every 5 s: re-read g 0x82A130, registry 0x829FB4/0x829B6C, mask 0x6F8008, out[1] 0x3F1014,
+   state 0x7D0B60, DR0-3 +0x3C.
+7. **Free read-only ROM dump** (decisive for question 1): CPU 0x37000..0x37300 -> BAR0
+   0x6EF000..0x6EF300 (phys 0x406EF000..0x406EF300), 0x300 bytes. This shows the ROM call site at
+   0x37172 and what it does after the entry-3 return (wait loop? next entry call?). Nothing is
+   written; the region-5 window already decodes CPU 0 (ROM vector read 0xE59FF018 [V\*]).
+
+### 13.3 Expected observables (success signature)
+- out[1] 0x4 -> 0 on the first drain, then either **0x40 (bit6, d2h_notify)** or a further bit
+  appears (the firmware's publish path unblocks).
+- **mask 0x6F8008 gains bits towards 0x1E** as the ROM dispatches entries 1/2/4.
+- **registry core-0 record BAR0 0x829FB4 becomes {0, 0x00103FB8, 0x00171B7x, 0x00171E1C+, 0x00171F54+, ...}**
+  (the populate block of the boot task) — the decisive message-layer check.
+- **state 0x7D0B60 >= 2**; **DR0-3 +0x3C advance**; dmesg/B3 shows group-4 id1 "device plat ready"
+  and id2 "DEVICE READY"; B3 P3 g4_id1/g4_id2 become 1.
+- g stays 0x0010C0F4 (object pointer stable).
+
+### 13.4 Stop conditions / next decision
+1. **Success** (mask grows / registry populated / ready message): snapshot everything, power-cycle;
+   hand the Lead the ready-gate/post-ready lane.
+2. out[1] reposts 0x4 on every drain (i.e. the firmware re-announces in a loop) but mask/g/state do
+   not move after 60 s of correct ack/drain/re-arm: the D2H service is not the blocker -> next session
+   is ROM-dump analysis (post-0x37172 flow) and the boot-task registry path, **not** C2/C3.
+3. mask reaches 0x1E but no ready message: message-layer destination/send problem — switch to
+   `wifi-fw-ready-gate` §12.5/§13 with the corrected registry offsets.
+4. Anomaly/oops: power-cycle, keep log, no retry in-session.
+
+### 13.5 Ranking after this revision
+| rank | candidate | verdict |
+| --- | --- | --- |
+| 1 | **C1c** sustained 0xcece + full D2H ack/drain/re-arm contract service (+ ROM dump reads) | **NEXT session** |
+| 2 | C2 L1SS/pinmux writes (CA 0x40000554 \|= 0x220, CA 0x400005BC <- 6) | demoted: routine completed without it |
+| 3 | C3 firmware-tail IO gate writes (incl. CA 0x40107000 <- 0x3a) | demoted: negative vendor evidence, no new support |
+| — | C1 gate-only service | TESTED NEGATIVE for progress, but proved the gate mechanism (§12) |
+
+### 13.6 Answer to the doorbell question
+No firmware code clears CA 0x40101434. The only writer is the routine's store at file 0xC6F66; the
+only other reference is pcie_msg_init saving the address into its object (CPU 0x49760-0x49764), and it
+does not store to it. Host reads of 0 are therefore expected (write-only/pulse register) and do not
+contradict flag=0xF: the store executed.
+
