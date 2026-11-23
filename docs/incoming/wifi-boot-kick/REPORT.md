@@ -162,7 +162,11 @@ serving the gate until the mask reads 0x001E.
 - Who applies the table: ROM/firmware-side code, or a host component outside these modules [U].
   The image contains no in-image reference to the table's CPU address (no 0x00102528/0x0010252C/
   0x00102530 literal) [V negative]; the table's values are region-3 IO words that the firmware's
-  own IO init touches at boot [I].
+  own IO init touches at boot [I]. Supporting detail: the image itself contains several other
+  tables of the same `{CA, value, 0}` shape in its data region (e.g. file 0xCE700:
+  `{0x40119028,0x42,0}`, `{0x4011903C,0x42,0}`, `{0x40107000,0x40,0}`) [V], so the format is the
+  device's own register-init convention, not a host downloader descriptor list — which is why the
+  host driver has no code for it.
 
 ### 2.2 Does it release more than one core/chip (multi_chip_loading)?
 
