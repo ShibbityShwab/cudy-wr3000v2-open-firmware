@@ -61,6 +61,20 @@ def main():
         print('  -> the descriptor-state pointer of this block used by the chain is block+0x2cc:')
         for off in (0x2B8,0x2CC,0x3CC):
             print(f'    block+{off:#05x} CPU {b+off:08x} BAR0 {ram(b+off):08x}')
+
+    print('-- 6. follow-up session reads (2026-11-23): HCC instance context = g+0x9c --')
+    print('   wrapper CPU 0x40294 does: ldr r0,=0x10c190 ; b 0xc18ac (mailbox dispatcher)')
+    for off, note in [(0x0,'out[1] CA slot'),(0x4,'out[0] CA slot'),(0x190,'per-core block'),
+                      (0x2b8,'first array'),(0x2cc,'descriptor-block candidate'),(0x4b0,'per-link sub-context candidate')]:
+        show(f'instance+{off:#05x} {note}', 0x10C190+off, 'HCC instance (g+0x9c)')
+    print('-- 7. per-link +0x4b0 of the four registry-record targets --')
+    for base, tag in [(0x171B70,'reg rec0'),(0x171E1C,'reg rec1'),(0x171F54,'reg rec2'),(0x171FA8,'reg rec3')]:
+        show(f'{tag}+0x4b0', base+0x4B0, 'per-link sub-context candidate')
+        show(f'{tag}+0x2cc', base+0x2CC, 're-read: expect self/list head or 0')
+    print('-- 8. static registration table (no live read needed) --')
+    print('   tag-dispatch table CPU 0x104cb8 (8-byte {u32 tag,u32 fn}), tags 0xdad..0xdc9;')
+    print('   dispatcher CPU 0x7243c calls fn(ctx=r0,msg=r1); registration descriptor CPU 0x106e40.')
+    print('-- 9. do not write [ctx+0x4b0]: handlers dereference sub-fields on first use --')
     print('-- 5. IO CAs of interest (region-3 rule) --')
     for ca, note in [(0x40000108,'CPU release word'),(0x4000010c,'D2H gate (expect 0 when parked)'),
                      (0x40039014,'out[1] D2H bitmap'),(0x40101434,'D2H doorbell'),

@@ -288,7 +288,11 @@ pointer (do not conflate them).
 | 7 | `0x171b70+0x2cc`, `0x171e1c+0x2cc`, `0x171f54+0x2cc`, `0x171fa8+0x2cc` | `0x829e3c`,`0x82a0e8`,`0x82a220`,`0x82a274` | registry destination objects; 0 in the right one would mark the missing per-core stage |
 | 8 | `[ctx+0x4b0]` of the readable contexts then `+0x2cc` of the result | via g/boot `+0x4b0` (`0x7c45a4`/`0x7d00b0`) | identifies the actual per-link `obj` and its `dr` |
 
-Pass 1 and 2 first (they cost one read each and decide O1); then the `+0x2cc` sweep. If a
+Pass 1 and 2 first (they cost one read each and decide O1); then the `+0x2cc` sweep.
+**Result of this sweep on a fresh POR (2026-11-23):** rows 3 and 5 were invalid/static for g
+and the boot object (`g+0x2cc` = image template `0x0008558d`, `g+0x4b0` = image template
+`0x000001cf`); see section 10 - g is neither the obj nor the parent. The updated, still
+read-only follow-up list is in section 10.4. If a
 `dr` value is read, also read its two arrays at `BAR0 = 0x6b8000 + dr + 0x2b8` and `+0x3cc`:
 those addresses must be inside the CPU RAM extent `0x00000..0x1bffff`; anything else (e.g.
 `0x2b8`/`0x3cc` themselves, or a code address) is the invalid-pointer signature.
@@ -347,3 +351,110 @@ $V opensource/docs/incoming/wifi-abort-rca/tools/abort_readplan.py --block <read
 
 Inputs are local evidence only (`HI5622_FW` may override the blob path). Nothing in this
 directory is built from or contains vendor binaries; the two tools are plain text scanners.
+
+---
+
+## 10. Follow-up session (fresh POR, 2026-11-23) - reads, parent-context trace, next step
+
+Session [V\*]: fresh POR -> combined B3+injector, prepare/upload/verify/b3_p0_ringinit/h2d_arm all rc 0 ->
+release `0x5a5a` -> service loop 8 s (gate `0xcece` held + `b3_drain` + `g+0xb4` kept 0).
+Result: mask `0x0A`, state 1, g `0x0010C0F4`, `out[1]=0`, `g+0xb4` kept 0. Same abort signature as the
+cold boot; the announce contract was served, so the remaining anomalies are not the 0xcece race.
+
+### 10.1 What the new reads settle
+
+1. **SPSR = `0x000000B3`** at BAR0 `0x6f804c` [V\*]. Decode: `I=1`, `T=1`, mode bits `0x13` = **SVC**.
+   So the staged exception context is firmware SVC code -> the "later IRQ/PHY-applier overwrite"
+   reading (R2 of section 2) is excluded. The frame is the in-band data-abort context (R1).
+   (`0x0A` mask still says both id 1 and id 3 ran; an SVC-from-SVC frame would also show `0x13`,
+   so open item O1 - the r4..r11 PHY-table anomaly - remains open but is not an IRQ-mode event.)
+2. **g is not the obj** [V\*]: `g+0x2cc` live = `0x0008558D`, exactly the image template value at
+   CPU `0x10c3c0` (file `0xcc3c0`) [V]. Predicted in section 4.2; confirmed.
+3. **g is not the parent of the +0x4B0 deref either** [V/U]: `g+0x4b0` live = `0x000001CF` and the
+   *unmodified image template* at CPU `0x10c5a4` (file `0xcc5a4`) is also `0x000001CF` [V].
+   So `g+0x4b0` is a static data word (0x1cf = 463), not a runtime pointer; the lead's
+   "invalid pointer" reading is really "g is not the object this code reads".
+4. **boot object is not the parent** [V/I]: `[boot+0x4b0]` live = 0, but the live boot-object area
+   (CPU `0x117c00`+) is *runtime-initialised memory*: the image file at CPU `0x117c00` (file
+   `0xd7c00`) is Thumb code, while the live reads there are runtime list heads/pointers [V].
+   Consequence: **for objects in the image tail (CPU >=~0x110000) the file cannot be used as a
+   template**; only live reads are meaningful, and a null there simply means "not the link object".
+5. **Registry record `+0x2cc` is not a descriptor-block pointer** [V\*/I]: record 0's value is the
+   field's own address (`0x171b70+0x2cc = 0x171e3c`, value `0x171e3c` = self list head);
+   record 2's value is self/near-self (`0x17221c` vs field `0x172220`; exact self if the field is
+   `+0x2c8`); record 1 = 0, record 3 = `0x30003`. The records are heterogeneous routing objects
+   with a list head at that offset - not `dr` candidates. Do not read further there for `dr`.
+
+### 10.2 Which object supplies +0x4B0 (follow-up Q1) [V]
+
+The two chain entry points are **tag-dispatched firmware callbacks**, not ordinary callees:
+
+* the callback table at CPU **`0x104cb8`** has 8-byte records `{u32 tag, u32 fn}` with tags
+  `0xdad..0xdc9`; entries `0xdbc -> 0x7469d` and `0xdbd -> 0x745e1` [V];
+* the dispatcher at CPU **`0x7243c`** (`push {r0,r1,r2,r4..lr}; mov r4,r1; mov r5,r0; ...
+  ldrh r2,[r1]; subw r3,r2,#0xdad; cmp r3,#0x1c; ... bx r3`) calls the handler as
+  **`fn(ctx = r0, msg = r1)`** [V].
+
+So in the three traced sites the parent is supplied by that callback context, not by a global:
+
+| site | function | parent used for `*(+0x4B0)` |
+| --- | --- | --- |
+| `0x745e4` | `0x745e0` (tag `0xdbd`) | r0 = dispatcher ctx |
+| `0x746a0` | `0x7469c` (tag `0xdbc`) | r0 = dispatcher ctx |
+| `0x846c2` | `0x84664` | `r0 = 0x961ae(byte[arg0])` (object lookup via `0xfe578` pool), then `*(r0+0x4b0)` |
+
+The per-link/channel object is created/initialised by the early-init region: `0x48840`
+(`o = 0x961ae(byte[r5]); o+0x4b0 = [sb+8]`, `sb = 0x9438c(...)`) and `0x44bbc` (same family,
+also `+0x4b4/+0x4b8` and `+0x190`). Entry A (`0x46970`) is just before this region, and entry A is
+proven to have run, so the per-link `+0x4b0` bind is part of the observed early boot; but the object
+that the chain actually reads `+0x4b0` from is the *event/link callback context*, which is created
+later by the HCC link/event layer. That is the missing stage: **HCC link/event context bring-up**
+(host-facing), and the H2D probe result (`out[0]` stays `0x8`, `ack=0`, `last_result=-110`) agrees:
+the firmware message/event core is not consuming yet.
+
+### 10.3 Writers of +0x4B0 in the image (follow-up Q2) [V]
+
+Exactly five direct `str ... [#0x4b0]` sites exist:
+
+1. `0x48840` - link/channel create: `obj+0x4b0 = [sb+8]`, `obj+0x4b8 = 0xa4fc8(...)`; `sb = 0x9438c(...)`.
+   Early-init region (right after entry A `0x46970`); this is the per-link sub-context bind.
+2. `0x44bbc` - same object family create/init: writes `+0x4b0/+0x4b4/+0x4b8`, then touches `+0x190`.
+3. `0x4490e` - teardown/reset: zeroes `+0x4ac/+0x4b0/+0x4b4` before releasing the object.
+4. `0x59f50`, `0x5cff0` - **different object family**: ops/vtable initialisers that store a literal
+   Thumb code pointer into `+0x4b0` (and into `+0x80/+0x114/+0x14/...`). Do not mix these with the
+   per-link pointer family.
+
+So `[parent+0x4b0]` is written by the early per-link bind (`0x48840`/`0x44bbc`) and cleared by the
+teardown (`0x4490e`); the chain's parent is the event-layer context, so a zero/invalid value there
+means "the event-layer context was never bound", not "a random field is corrupted".
+
+### 10.4 Is a targeted write justified? (follow-up Q3) - **NO**
+
+* The two +0x4B0 words read so far belong to objects the chain never uses (g proven by exact
+  template match, boot object by runtime-init argument); there is no evidence of a corrupted
+  parent field yet, so a write would be treating an unproven hypothesis.
+* A fabricated `[ctx+0x4b0]` is not a passive pointer: the callback handlers dereference many
+  sub-fields of it (`+0xde0/+0xcde/+0xd70/+0x4b8/+0x190` in `0x7469c`/`0x745e0`/`0x84664`), so a
+  plausible-looking but non-object address produces a precise external abort on a parked chip; and
+  the value must be a live kernel object (with locks/lists), not an address that merely looks sane.
+* Correct next step is read-only, then the link/event lane:
+  * HCC instance context = `g+0x9c` = CPU **`0x10c190`** (BAR0 `0x7c4190`): proven by the image
+    wrapper CPU `0x40294` (`ldr r0,=0x10c190; b 0xc18ac`) = mailbox dispatcher entry [V].
+    Read instance`+0x4b0` -> CPU `0x10c640` (BAR0 **`0x7c4640`**), instance`+0x2cc` ->
+    `0x10c45c` (`0x7c445c`), instance`+0x190` -> `0x10c320` (`0x7c4320`),
+    instance`+0x2b8` -> `0x10c448` (`0x7c4448`).
+  * per-link `+0x4b0` of the four registry-record targets: CPU `0x172020` (`0x82a020`),
+    `0x1722cc` (`0x82a2cc`), `0x172404` (`0x82a404`), `0x172458` (`0x82a458`).
+  * registry record `+0x2cc` re-reads with exact field addresses to confirm list heads:
+    `0x171e3c` (`0x829e3c`), `0x1720e8` (`0x82a0e8`), `0x172220` (`0x82a220`),
+    `0x172274` (`0x82a274`).
+  * the tag-dispatcher registration table at CPU `0x106e40` (`{u32 count, u32 fn, u16 lo, u16 hi}`;
+    row at `0x106e70` = `{0xF, 0x7243d, 0x0ed8, 0x0edb}`) is static and has no literal/movw/movt
+    reference in the image [V] - a static registration descriptor; no live read needed.
+  * `tools/abort_readplan.py` is updated with this session's list.
+* If those reads stay null, the next lane is not another firmware poke: it is the **HCC
+  link/event-layer bring-up** (host counterpart) - the vendor host performs the link/instance
+  handshake that makes the firmware event layer build these contexts (see `wifi-host-replica` and
+  `wifi-h2d-catalog`). The H2D probe failing to be consumed (`out[0]` stuck at 0x8, last_result
+  -110) says the firmware is stalled before that layer, so the host-side handshake is the missing
+  input, not a missing RAM word.
