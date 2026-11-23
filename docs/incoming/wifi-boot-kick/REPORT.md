@@ -711,6 +711,250 @@ The registry populate block is a **prelude step of the boot task's first pass**,
   `beq.w #0x47ADC` (0x4782A) into the populate block [V].
 - populate block 0x47ADC-0x47B2A: `memset(CA 0x171B6C, 0, 0x490)` at 0x47ADC-0x47AE6 [V], then
   walks the 0x2C-stride config table and fills the 24-byte records [V, matches the live record].
+- then the flow reaches the state check 0x47D0A-0x47D18 with the registry already populated [V].
+So on our chip the callback succeeded and populate ran **before** the state check in the same pass.
+
+### 14.2 What the boot task's one pass did, and where it stopped
+
+- state check: `ldrb r6,[r4+0xF60]` (state; r4 = CA 0x117C00 global object) -> 0; `cmp #1; bls 0x48160`
+  (setup branch).
+- setup branch 0x48160: **state = state+1 (0 -> 1)** at 0x48174 [V]; builds the HCC callback/thread
+  objects at [r4+0x214..0x250], list heads at [r4+0x270..0x27C]; then `b #0x47D28` (0x4828A) [V].
+- 0x47D28: builds the **id-1 message** (header byte0=4, byte6=1) and calls the send primitive
+  CPU 0x102760 (file 0xC2760) at 0x47D54 [V]. If it returns 0 it takes the 0x49188 path (which builds
+  another frame and calls msg-alloc 0x102822 with id 0x3d); return value is not stored anywhere.
+- the task disarms the reset-dispatch slot **CA 0x17D42C <- 0x000C19D1 (BUG stub)** at 0x47D06-0x47D08
+  [V] (the slot the reset dispatcher CPU 0xC2EEC loads from CA 0x17D398+0x94 and blx's; the dispatcher
+  is reachable only from the reset stub CPU 0x103140 — no in-image caller [V negative BL scan]).
+Observed signature (no out[1] bit6, DR fill 0, state 1) is consistent with the id-1 send failing or
+blocking **inside** the send primitive, or with the task never getting past the enqueue because the
+HCC thread objects built just before are not running yet. It is NOT a destination-registry problem.
+
+### 14.3 How entries 1/2/4 are dispatched (and why mask 0x08 is not the blocker)
+
+The five header words at CA 0x40050 (file 0x50) are **exception-vector stubs** (reset 0x103140,
+undef 0x103114, svc 0x1030E8, prefetch 0x1030BC, abort 0x103090); the routine ORs `1<<index` into the
+halfword at CPU 0x40008 per entry. Mask 0x08 therefore means **only the SVC entry has run** — it is an
+exception-seen bitmap, not an init-stage dispatch table [V, code at 0xC6E96; confirmed by flag 0x0F
+and the routine's return]. The other entries are taken only if those exceptions occur; their absence
+is expected and does not by itself block the boot flow.
+
+---
+
+## 15. ROM readability: the right window is the region-0 identity window (read-only test)
+
+- The failed read CPU 0x37172 -> BAR0 0x6EF172 (region-5 / **ACP** window: CA = CPU + 0x1200000)
+  returns 0xFFFFFFFF. That is consistent with the ROM not being exposed through ACP.
+- The endpoint's region table has a second, **identity** window: region 0 "ROM_WRAM",
+  host BAR0 0x000000-0x1BFFFF -> device CA 0x000000-0x001BFFFF (our transport programs this viewport;
+  `hi5622_regions[0] = {bar 0x0, limit 0x1BFFFF, target 0x0}`). This is the direct ROM/WRAM view.
+- Therefore the ROM read path to test is **BAR0 offset = CPU address** (phys 0x40000000 + CPU),
+  i.e. CPU 0x37172 -> BAR0 **0x37172** (phys 0x40037172), *not* 0x6EF172.
+- Free read sweep to settle the map (all reads; compare against three known values:
+  mask CPU 0x40008 = 0x08, state CPU 0x118B60 = 1, g CPU 0x172130 = 0x0010C0F4):
+  region-0 identity: 0x0, 0x4, 0x50, 0x100, 0x1000, 0x10000, 0x20000, 0x30000, 0x37000,
+  **0x37160..0x371C0**, 0x3FFF0, 0x40000, 0x40008, 0x40050, 0x118B60, 0x172130, 0x17D42C;
+  region-5 ACP: the same CPU addresses at BAR0 0x6B8000+R for the three known words only
+  (0x6F8008/0x7D0B60/0x82A130) — whichever window reproduces all three is the CPU-RAM alias.
+- If the identity window reproduces the known values, disassemble ROM at 0x37172 and follow the call
+  chain that returns from the SVC handler (this answers "what does the ROM do next" directly).
+  If **both** windows fail for 0x37172 while the three known words read correctly, the ROM body is
+  read-protected and the dispatcher cannot be recovered from the host: infer from image evidence only.
+
+---
+
+## 16. NEXT candidate: C1d — re-run the boot chain (CPU re-kick) with gate + D2H service held
+
+There is no host-RAM poke that can re-enter the boot task: the only caller is the reset dispatcher
+0xC2EEC, reachable only from the reset stub, and the task disarms its own slot with a BUG stub [V].
+The only host-visible control that starts/restarts the CPU image boot is the **release trigger
+CA 0x40000108** (the firmware zeroes it at file 0x86E80 after boot; it reads 0 now) [V]. Candidate:
+re-issue the release word on the warm, fully-booted chip so the ROM/image boot chain runs again; with
+internal RAM preserved the boot task's second pass should run (state 1 -> 2) and the id-1 send should
+be attempted against an already-populated registry.
+
+### 16.1 Free reads to take first (same session, no writes)
+1. Region-0/region-5 mapping sweep of §15 (settles where the ROM lives).
+2. Boot-task global object CA 0x117C00 (BAR0 0x7CFC00 via region-5): +0x214/+0x218/+0x21C/+0x220/
+   +0x224/+0x228/+0x230/+0x234/+0x238/+0x23C/+0x240/+0x244/+0x248/+0x24C/+0x250 (HCC thread/callback
+   objects built in the setup branch), +0x270/+0x274/+0x278/+0x27C (queue list heads), +0xEEC
+   (=0x118AEC late-prelude marker), +0xF60 state.
+3. Reset-dispatch slot CA 0x17D42C (BAR0 0x83542C): expect **0x000C19D1** (disarmed BUG stub). If it
+   still reads 0x00047629 the prelude's disarm was skipped and a dispatch retry has a target.
+4. Dispatcher base+0xBE0 flag CA 0x17DF78 = 0xF (known), lock object CA 0x17DF44 (BAR0 0x835F44) w0
+   (expect 0 = unlocked), staged SVC frame CA 0x4000C..0x4004C (BAR0 0x6F800C..0x6F804C; lr/lr_exc/
+   spsr words at +0x3C/+0x40/+0x44) to confirm the SVC context and return target.
+5. MessageBox object g CA 0x10C0F4 (BAR0 **0x7C40F4**): +0x00..+0x20, +0x98..+0xC0 (out pointers and
+   the +0xB4/+0xB8 armed/pending shadow), +0xD0..+0xE8 (the six mapped message CAs: out[1]=0x40039014,
+   doorbell 0x40101434, out[0]=0x40039010), +0xF8, +0x128.
+6. Message registers: out[0] 0x3F1010, out[1] 0x3F1014, out[2] 0x3F22D4 (CA 0x400392D4), out[3]
+   0x4B9438 (CA 0x40101438), out[4] 0x4B9414 (CA 0x40101414); ETE intr 0x3F1508; SR/DR enables
+   CA 0x4003A400/450/4A0 (SR), 0x4003A590/5E0/630/680 (DR) +0x00.
+7. DR0-3 fill CA 0x4003A5CC/61C/66C/6BC (BAR0 0x3F25CC/61C/66C/6BC).
+
+### 16.2 Write step (single idea)
+1. Keep the module loaded (poll_ms=0), chip parked, UART read-only, recovery armed.
+2. **Start the service loop first** (as C1c): 0xcece -> CA 0x4000010C every 1 ms; ack/drain/re-arm the
+   D2H contract whenever out[1] != 0 (b3_drain every 10 ms).
+3. **Re-kick the boot chain:** write 0x00005a5a (32-bit) to CA 0x40000108 (BAR0 0x3B8108).
+4. If the dispatcher slot CA 0x17D42C still reads 0x00047629 after step 3's boot activity settles and
+   state has not advanced, optionally re-arm it (write 0x00047629) — only as a follow-up, not first.
+5. Watch for 60 s: state byte 0x7D0B60 (expect 2 if the boot task re-enters), out[1] (expect bit6
+   0x40 / bit3 0x08 when the id-1/id-2 sends publish), DR fill +0x3C advance, g 0x82A130 change,
+   mask 0x6F8008 change (a re-run may set other exception bits or reset the mask), dmesg, and the
+   staged frame. Then re-read the full free-read set of §16.1.
+
+### 16.3 Expected outcomes / stop conditions
+- state >= 2 and/or out[1] gains bits and DR fill advances -> boot chain re-entered, id-1 path live:
+  snapshot, power-cycle, hand to ready-gate lane.
+- mask/state/g unchanged after 60 s -> the re-kick is ignored on a running CPU. Then the next lane is
+  (a) ROM-window result analysis and (b) a **true cold power-cycle with the corrected read set**
+  (previous cold-boot verdict used the wrong g/registry offsets and must be re-run), not another poke.
+- mask/frame change but no id-1 -> the boot chain re-ran but the send primitive still fails; then the
+  next lane is the send primitive itself (file 0xC2760) with the live g-object fields from §16.1(5).
+- device anomaly -> power-cycle; do not retry in-session.
+
+### 16.4 Ranked candidates after C1c
+| rank | candidate | evidence |
+| --- | --- | --- |
+| 1 | **C1d** re-kick CA 0x40000108 <- 0x5a5a with gate+D2H service held (boot-chain re-run) | only host lever that starts the CPU image boot; boot task has no other caller; task disarms its slot |
+| 2 | C2 L1SS/pinmux writes (CA 0x40000554 |= 0x220, CA 0x400005BC = 6) | vendor-attested, still absent; demoted (boot task already ran through populate+state+send without it) |
+| 3 | C3 firmware-tail IO writes (incl. CA 0x40107000 <- 0x3a) | negative vendor evidence; demoted further |
+| — | C1/C1c gate and D2H service | proven mechanisms, not the blocker |
+
+
+## 17. Hardware free-read results on the parked chip (2026-11-23 13:00, read-only)
+
+Taken after C1/C1c/C1d on the same parked chip (no reset between). All via physdump/region
+windows; BAR0 phys base 0x40000000.
+
+Identity window (BAR0 offset = CPU address):
+* CPU 0x0 -> 0xE59FF018 (ROM reset vector) and CPU 0x50 -> 0xE59F018C 0xE5900000 0xE12FFF10
+  0xE52D0004 - **the identity window decodes and reproduces the ROM vector table** (so the
+  sector-13 "header vector table" expectation was wrong, not the window).
+* CPU 0x37160 (64 B) -> all zero: the dispatcher code at CPU 0x37172 is **not readable through
+  the identity window** (reads 0, while the region-5 ACP window reads 0xFFFFFFFF for the same
+  CPU because region-5 CA = CPU+0x1200000). The ROM is therefore **not host-readable** through
+  either window - the post-0x37172 flow must be inferred from the image, not disassembled from
+  the chip.
+
+Object/state reads (BAR0):
+* slot CA 0x17D42C (0x83542C) = **0x000C19D1** (same value the boot task writes over the
+  dispatcher slot), next word 0x000C2081 - no dispatch retry target.
+* private flag CA 0x17DF78 (0x835F78) = **0x0000000F** (entry-3 routine completed).
+* lock area CA 0x17DF44 (0x835F44) = 0x000B0009, 0, 0xDEAD4EAD, 0x0017DF44.
+* boot object CA 0x117C00 (0x7CFC00) first words = 0x01A80000, 0, 0x000001A8, 0, ...
+* g object CA 0x10C0F4 (0x7C40F4) first words = 0x00118D50, 0, ...
+* staged SVC frame CA 0x40008 (BAR0 0x6F800C): 0x0017DF44, 0, 0x001BD000, 0x001BDC40,
+  0x0017E1B8, 0x42085EBF, 0x000BF98F, ... CPSR 0x60000192.
+
+C1d (re-kick CPU release 0x5a5a -> CA 0x40000108 while the gate+contract service loop ran):
+the write landed (release word reads 0x00005A5A afterwards) but **nothing moved for 60 s**
+(out[1]=0, mask 0x08, state 1, g/registry unchanged, DR fills 0) - a running CPU ignores the
+re-kick, matching the stop rule. Next lane: a **true cold power-cycle** re-run of the cold-state
+read set with the corrected addresses before any further writes.
+
+---
+
+## 18. TRUE cold-boot verdict (2026-11-23) + send-path analysis
+
+### 18.1 Cold-boot verdict: the boot chain RUNS on a true cold boot
+
+Power-cycle (no buttons), corrected read set, identity ROM window works (CPU 0x0 = 0xE59FF018,
+CPU 0x50 = 0xE59F018C) [V\*]. Pre-upload runtime RAM reads are random garbage (cold RAM); after
+upload+release: g = 0x0010C0F4 (valid), registry base 0x829B6C and core-0 record 0x829FB4 populated,
+boot-task slot CA 0x17D42C = 0x000C19D1 (task ran its prelude), state = 1, flag = 0x0F, release word
+read back 0, out[1] = 0x4 (announce), mask = 0x08, **gate = 0** (the single 0xcece write was wiped by
+the entry-3 handler's own zeroing, so that handler is parked at the 0x86F78 spin), DR fills 0 [V\*].
+**Conclusion: the earlier "cold boot does not initialize the message layer" was purely the
+0x82B130/0x831FB4 address-arithmetic artifact. pcie_msg_init + registry populate + boot-task prelude
+all run on a genuine cold boot.**
+
+### 18.2 The send primitive (CPU 0x102760 / file 0xC2760, host-readable at BAR0 0x7BA760) [V]
+
+Flow, disassembled: validate msg (0x102764); hdr = get-msg (0x102776); hdr[9] = (hdr[1]>>4)&0xF =
+source core (0x102782); destination lookup = `lookup(registry + 0x448 + 24*core, group=hdr[0]&0xF)`
+(0x10279A-0x1027B2); node alloc 0x1024CE (0x1027D2); lock node+0xC (0x1027E0); commit/enqueue
+0x102662 (0x1027EC); unlock (0x1027F2); then `r4=[node+0xC0]`; if nonzero => trigger 0x1024BC and
+notify 0xC2A54 (0x102800-0x10280C); return 0 = success.
+**The primitive itself has no long wait**: only the two short locks and allocs; on failure it returns
+0x8B2D. It does not publish D2H. So the id-1/id-2 sends were accepted (or failed fast), and the stall
+is in the **D2H publish path**, not here.
+
+### 18.3 The D2H publish path (this is where it parks) [V]
+
+- **d2h_notify (file 0x86170, CPU 0xC6170)**: g = *(CA 0x172130) (0x8617A-0x8617E); lock g+0xC0;
+  `pending |= 1<<bit` at **g+0xB8** (0x8619A-0x861A2); if **armed (g+0xB4) != 0** -> only set pending
+  and return (0x861A6-0x861C4, deferred); else `armed = pending` (0x861AC), **write out[1] = pending**
+  (0x861B0, via g+0x9C), clear pending (0x861B6), **write doorbell 0x40101434 |= 1** (0x861B2-0x861C0),
+  unlock, return.
+- **flush (file 0x86108, CPU 0xC6108)**: first `write 1 to CA 0x40101418` via g+0xB0 (0x86110-0x86114)
+  [CA 0x40101418 = out[4] 0x40101414 + 4, an unmodelled D2H-control register], then a **bounded spin of
+  0x10000 iterations waiting for out[1] == 0** (0x86116-0x86128); if it times out it returns with state
+  untouched; otherwise it publishes pending -> out[1], clears pending, sets armed=pending, pulses the
+  doorbell, and tail-calls 0x85128 (thread-loop continuation) (0x8612A-0x8616C).
+- Callers of the thread-loop tail 0x85128 (CPU 0xC630A / 0xC63B4 / 0xC68FE / 0xC71F4 / 0xBF102) show
+  the publish path is exercised from the **firmware task/tick loop**, not from the send call site [V].
+
+### 18.4 Interpretation of the live cold-booted state
+
+Observed on the cold-booted chip: **g+0xB4 (armed) = 0x40, g+0xB8 (pending) = 0x40**, out[1] = 0x4,
+DR fill 0. That is exactly a **deferred bit-6 D2H word**: an id-1/id-2 deposit queued bit6 into pending,
+but a publish could not complete because **out[1] was 0x4 (the entry-3 announce) during the flush's
+bounded wait** (the flush's 0x10000-iteration window expired; it left armed set), so later notifications
+only accumulate in pending. The host's single 0xcece write was lost, the entry-3 handler is parked at the
+0x86F78 spin still holding lock CA 0x17DF44, and the announce 0x4 is never drained -> the D2H word can
+never become visible. This is a **host-timing-caused firmware deadlock**, not a missing init sequence.
+
+### 18.5 Who schedules the HCC thread objects (question 2) [V/I]
+
+The boot task's setup branch (0x48160-0x48286, before the id-1 send at 0x47D28) initialises the HCC
+callback/thread objects at [CA 0x117C00+0x214..0x250] and the queue list heads at
+[CA 0x117C00+0x270..0x27C]; live values (0x00117E14/0x00117E78/0x00117E88/0x0004188D/0x00118B64)
+show they were initialised [V\*]. They are *runnable objects*, but the code that drains/publishes D2H
+runs from the firmware task loop (17.3), which in turn depends on the boot flow resuming after the
+entry-3 handshake. While entry 3 is parked at the 0xcece spin (current chip: gate=0), that loop cannot
+advance; this is consistent with the boot task having run on another core/task while the SVC handler
+parked.
+
+### 18.6 Is there a host action left? (question 3) — yes: fix the announce/publish race
+
+Ranked:
+1. **C1e: never leave out[1] != 0** — start the ack/drain/re-arm service *before* release and keep it
+   at sub-ms cadence while serving 0xcece, so the flush's out[1]==0 window is always open and the
+   deferred bit-6 word publishes. On a fresh cold boot this prevents the deadlock that is present on
+   the current chip.
+2. On the **current parked chip**, a staged recovery: (a) integrated service at ~100 us cadence;
+   (b) if pending/armed stay 0x40 and out[1] stays 0, one targeted device-RAM write: **g+0xB4 = 0
+   (CA 0x10C1A8, BAR0 0x7C41A8, 32-bit)** to clear the stale armed word while keeping pending 0x40,
+   so the next notify/flush can publish; wait 30 s.
+3. C2 L1SS pinmux and C3 tail-table writes: **demoted to non-candidates** — nothing in this analysis
+   implicates them; the send/publish path is fully mapped and the blocker is a timing race.
+4. Free ROM read now possible: identity window CPU **0x37172** (BAR0 0x37172) — read 0x37100-0x37300
+   to disassemble the ROM return path from the entry-3 handler (settles what ROM does next).
+
+### 18.7 Next bench procedure (C1e), exact
+
+Attended, recovery armed, UART read-only, no rmmod after release.
+1. Fresh power-cycle (do not reuse the parked chip for the main test; keep it for 17.6(2) if desired).
+2. `insmod hi5622_pciet_b3.ko poll_ms=0`; prepare (6/6); upload; verify (diffs=0); P0 arm 7/7.
+3. **Start the integrated service loop BEFORE release**, target <100 us cadence:
+   - read out[1] (BAR0 0x3F1014); if nonzero: write 1 -> CA 0x40101438 (BAR0 0x4B9438) ack;
+     re-read out[1], write 0 -> out[1] drain; write 1 -> CA 0x40101414 (BAR0 0x4B9414) re-arm;
+   - write 0x0000cece -> CA 0x4000010C (BAR0 0x3B810C).
+4. Release: write 0x00005a5a -> CA 0x40000108 (BAR0 0x3B8108).
+5. Run 90 s. Observe every 5 s: out[1], g+0xB4 (BAR0 0x7C41A8), g+0xB8 (BAR0 0x7C41AC),
+   g+0x9C..0xA8, mask 0x6F8008, state 0x7D0B60, DR0-3 fill 0x3F25CC/61C/66C/6BC,
+   g 0x82A130, registry 0x829B64/0x829FB4, doorbell CA 0x40101434 (BAR0 0x4B9434), ETE intr 0x3F1508.
+6. Success signature: **g+0xB8 (pending) clears to 0 and out[1] takes the published bit (0x40, later
+   other bits)**, DR fill +0x3C advances, mask/state move, ready messages in dmesg/B3 g4 counters.
+7. If after 30 s armed/pending still 0x40 and out[1] 0: do the **single targeted RAM write**
+   g+0xB4 = 0 (BAR0 0x7C41A8) and continue watching 30 s (this is the only write beyond the service
+   loop in the session).
+8. Stop rules: success -> snapshot + power-cycle; no change after the poke -> **firmware-internal
+   sequencing**; escalate to the ROM lane (identity-window ROM disassembly at 0x37172 plus the HCC
+   thread-loop entry points 0xC630A/0xC63B4/0xC68FE/0xC71F4/0xBF102) and do not spend further host
+   writes; anomaly -> power-cycle.
 
 ---
 
@@ -787,4 +1031,3 @@ message/protocol layer (construct the vendor 12-byte HCC H2D frame from wifi-hcc
 image's H2D handler table) or a full driver/thread replica, not more RAM pokes; (c) repeated data
 aborts at the same PC (frame lr_exc constant) -> the firmware needs a resource we are not providing;
 identify it from the decoded faulting instruction and schedule that as the following lane.
-
