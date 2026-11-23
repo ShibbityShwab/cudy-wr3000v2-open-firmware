@@ -1,0 +1,12 @@
+# Kbuild.snippet - integration of the host-replica skeleton into the existing
+# wifi-transport-port build (../wifi-transport-port/build).
+#
+# Replace the two object lines of that directory's Kbuild with:
+
+obj-m := hi5622_pciet.o
+hi5622_pciet-y := pciet_main.o pciet_ete.o pciet_host_replica.o
+
+ccflags-y += -I$(src)
+
+# The skeleton needs no extra config: it uses the transport header and the
+# in-tree HIPRI/HCC contract only.
