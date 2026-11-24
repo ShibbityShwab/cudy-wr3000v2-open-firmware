@@ -178,7 +178,8 @@ frame; the budget is the only thing that changes for multi-message runs).
 Command sequence, exactly as run on the bench host (D0-D12):
 
     insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin h2d_send_budget=3
-    BDF=$(basename $(readlink -f /sys/bus/pci/devices/*/driver | head -1))
+    BDF=$(basename $(dirname $(ls -d /sys/bus/pci/devices/*/h2d_status | head -1)))
+    # expected BDF for this board: 0000:00:00.0
     D=/sys/bus/pci/devices/$BDF
     echo 1 > $D/prepare ; echo 1 > $D/upload ; echo 1 > $D/verify ; echo 1 > $D/seed
     echo 1 > $D/hcc_arm ; echo 1 > $D/hcc_loop ; echo 1 > $D/release
