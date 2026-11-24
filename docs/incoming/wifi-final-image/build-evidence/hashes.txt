@@ -1,0 +1,59 @@
+# HASHES - FINAL bench image (wifi-final-image, task-147)
+# host-only build; nothing flashed/booted by this lane
+# generated: 2026-11-24T14:44:03Z
+build_start_utc = 2026-11-24T14:43:46Z
+build_end_utc   = 2026-11-24T14:44:02Z
+build_duration_s = 16
+tree            = /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_head       = 27663a0
+target_kconfig_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
+kernel_config_sha256  = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
+
+== image container ==
+container_path   = /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+container_size   = 6922559
+container_sha256 = 0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada
+previous_container_sha256 = ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994  (ae5e28bf, wifi-image-integration)
+
+== kernel slice (UNCHANGED requirement) ==
+kernel_size      = 3372638
+kernel_sha256    = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_expected  = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+slot_hash_expected = 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e
+kernel_unchanged = 1
+
+== rootfs ==
+rootfs_ubi_size   = 3538944
+rootfs_ubi_sha256 = 6196232d878e141ad1833a5dbed4ef4e339dd41d5c450151842c285a328ba30e
+squashfs_build_size = 3108256
+squashfs_build_sha256 = c6f5e779e8769c0379c6f69a6f5f40cb2a2ec2dbcda2d8133ea623c02c617f5f
+squashfs_volume_size = 3108864
+squashfs_volume_sha256 = f51a2e0d9bb9a7a9ecafbbe0186adad317108863241ccb3908cd94f8d5bbb263
+
+== driver module ==
+module_artifact_path = /tmp/wifi-allpatch-artifact/hi5622_wifi.ko
+module_artifact_size = 308080
+module_artifact_sha256 = 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+module_artifact_params = 47
+module_artifact_vermagic = 6.18.60 SMP mod_unload ARMv7 p2v8 
+module_artifact_depends = cfg80211
+module_tree_package_path = /home/shibbityshwab/openwrt-lab-selectorfix-img/package/hi5622-wifi/prebuilt/hi5622_wifi.ko
+module_tree_package_size = 308080
+module_tree_package_sha256 = 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+module_installed_path = /lib/modules/6.18.60/hi5622_wifi.ko
+module_installed_size = 291292
+module_installed_sha256 = f07dd505f1d7ac5dd62a826c440414bf2bc1662fe2fecb504dc4cec5b5e0d412
+module_apk_path = /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/packages/kmod-hi5622-wifi-6.18.60-r1.apk
+module_apk_size = 126774
+module_apk_sha256 = aa6bdaed4fc2704129bbdbadb5827ae7ad5d458e3ee8161bee19fea915380793
+
+== other ==
+cfg80211_tree_size = 2328548
+cfg80211_tree_sha256 = 949393f9676cc7bab18def92f1f96a07c45bd0ff599ee418c16ba7d54715170c
+manifest_packages = 83
+previous_tree_container_before_build = 0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada
+
+== build/verify rc ==
+build_rc = 0
+verify_rc = 0
+kernel_ok = 1

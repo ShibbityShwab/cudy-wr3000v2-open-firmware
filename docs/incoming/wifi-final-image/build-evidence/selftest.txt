@@ -1,0 +1,101 @@
+== wifi-final-image selftest (host-only) ==
+lane: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image
+
+-- payload inventory --
+PASS  payload present: etc/config/hi5622
+PASS  payload present: etc/init.d/hi5622-wifi
+PASS  payload present: etc/modprobe.d/hi5622-wifi.conf
+PASS  payload present: etc/hi5622/FIRMWARE-POLICY.txt
+PASS  payload present: etc/hi5622/hostapd-open.conf
+PASS  payload present: etc/hi5622/hostapd-open.proven.conf
+PASS  payload present: etc/hi5622/hostapd-wpa2.conf
+PASS  payload present: etc/hi5622/hostapd-wpa2-wpa3.conf
+PASS  payload present: usr/sbin/hi5622-load
+PASS  payload inventory exactly 9 files (no strays)
+
+-- executable scripts --
+PASS  exec bit: usr/sbin/hi5622-load
+PASS  sh -n clean: usr/sbin/hi5622-load
+PASS  exec bit: etc/init.d/hi5622-wifi
+PASS  sh -n clean: etc/init.d/hi5622-wifi
+PASS  payload script modes are 755
+
+-- policy guards --
+PASS  no ELF/.ko/.bin/.fw file in the lane (build artefacts stay local)
+PASS  no private key material in the lane
+PASS  only documented throwaway/test passphrases in fixtures
+PASS  WPA2 fixture uses the project test credential (cudy-ap-test / test-passphrase-121)
+
+-- loader dry-run --
+PASS  loader dry-run passes the full final-module parameter set (29 explicit args)
+PASS  loader never unloads the module (no rmmod)
+PASS  loader runs the C2 ladder (ctx_create -> txq_sync72)
+
+-- uci <-> loader <-> modprobe consistency --
+PASS  uci main.fw_path=hi_wifi/FIRMWARE.PD4.bin matches loader default 'hi_wifi/FIRMWARE.PD4.bin'
+PASS  uci main.wifi_block_path=hi_wifi/wifi_block.bin matches loader default 'hi_wifi/wifi_block.bin'
+PASS  uci main.allow_frames=32 matches loader default '32'
+PASS  uci main.frame_gap_ms=100 matches loader default '100'
+PASS  uci main.h2d_send_budget=10 matches loader default '10'
+PASS  uci main.vap_start_first=1 matches loader default '1'
+PASS  uci main.vap_start_mode=1 matches loader default '1'
+PASS  uci main.vap_start_module=0 matches loader default '0'
+PASS  uci main.scan_dwell_ms=60 matches loader default '60'
+PASS  uci main.hcc_poll_ms=5 matches loader default '5'
+PASS  uci main.rx_enable=1 matches loader default '1'
+PASS  uci main.beacon_static=1 matches loader default '1'
+PASS  uci main.beacon_vap_start=1 matches loader default '1'
+PASS  uci main.wpa_keys=1 matches loader default '1'
+PASS  uci main.wpa_key_module=0 matches loader default '0'
+PASS  uci main.sta_join=0 matches loader default '0'
+PASS  uci main.ht_mode=0 matches loader default '0'
+PASS  uci main.vht_cap=0 matches loader default '0'
+PASS  uci main.band_vendor=0 matches loader default '0'
+PASS  uci main.scan_band_cfg=0 matches loader default '0'
+PASS  uci main.hcc_trace=0 matches loader default '0'
+PASS  uci main.stop_ap_mode=0 matches loader default '0'
+PASS  uci main.mgmt_diag=0 matches loader default '0'
+PASS  uci main.txq_publish=1 matches loader default '1'
+PASS  uci main.c2_ladder=1 matches loader default '1'
+PASS  uci main.strict=1 matches loader default '1'
+PASS  uci main.wiphy_timeout=30 matches loader default '30'
+PASS  uci ap.enabled=0 matches loader default '0'
+PASS  uci ap.ifname=wlan0 matches loader default 'wlan0'
+PASS  uci ap.phy=auto matches loader default 'auto'
+PASS  uci ap.type=__ap matches loader default '__ap'
+PASS  uci ap.country= matches loader default ''
+PASS  uci ap.config=/etc/hi5622/hostapd-open.conf matches loader default '/etc/hi5622/hostapd-open.conf'
+PASS  uci: final-module feature policy = validated single-boot recipe
+PASS  modprobe mirror carries the feature-gate parameters
+PASS  modprobe mirror allow_frames mirrors uci loader policy
+PASS  uci/loader/modprobe consistency checks passed
+
+-- hostapd config-parse gate --
+PASS  hostapd parsed hostapd-open.proven.conf cleanly before driver init
+PASS  hostapd parsed hostapd-open.conf cleanly before driver init
+PASS  hostapd parsed hostapd-wpa2.conf cleanly before driver init
+PASS  hostapd parsed hostapd-wpa2-wpa3.conf cleanly before driver init
+PASS  hostapd negative control refused (bogus option)
+
+-- driver artifact identity --
+PASS  artifact size 308,080 B
+PASS  artifact sha256 5b587949... (pinned all-patch build)
+PASS  artifact has 47 parameters
+PASS  artifact vermagic is 6.18.60
+PASS  artifact depends=cfg80211
+
+-- docs / evidence --
+PASS  doc present: README.md
+PASS  doc present: REPORT.md
+PASS  doc present: BUILD-NOTES.md
+PASS  doc present: HASHES.txt
+PASS  doc present: VERIFY.txt
+PASS  doc present: FLASH-FEASIBILITY.md
+PASS  HASHES.txt records container_sha256=0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada
+PASS  HASHES.txt records rootfs_ubi_sha256=6196232d878e141ad1833a5dbed4ef4e339dd41d5c450151842c285a328ba30e
+PASS  HASHES.txt records kernel_sha256=13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+PASS  HASHES.txt records module_installed_sha256=f07dd505f1d7ac5dd62a826c440414bf2bc1662fe2fecb504dc4cec5b5e0d412
+PASS  REPORT records the unchanged kernel slice hash
+PASS  REPORT records the final all-patch module hash
+
+RESULT: PASS (45 checks, 0 skipped)

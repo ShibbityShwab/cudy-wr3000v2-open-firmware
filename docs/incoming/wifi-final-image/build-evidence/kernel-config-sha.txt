@@ -1,0 +1,4 @@
+kernel config sha256 before/after: 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c / 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
+target config sha256: ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f (unchanged)
+container before: /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin (0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada)
+container after : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin (0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada)

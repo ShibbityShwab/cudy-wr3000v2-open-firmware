@@ -1,0 +1,93 @@
+# HASHES - wifi-final-image (task-147): FINAL bench image with the all-patch module
+#
+# Host-only bake. Nothing was flashed or booted by this lane.
+# Generated from the built bytes by tools/bake-final-image.sh and
+# tools/verify-final-image.sh; full machine dump: build-evidence/hashes.txt.
+#
+# Two independent host builds of this image produced BYTE-IDENTICAL artifacts
+# (container, kernel slice, rootfs UBI, squashfs): see BUILD-NOTES.md section 4.
+#
+# ===========================================================================
+# IMAGE CONTAINER (sysupgrade .bin, the flash unit)
+# ===========================================================================
+container_size       = 6,922,559 B
+container_sha256     = 0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada
+previous image       = ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994
+                       (wifi-image-integration; superseded by this rootfs-only successor)
+
+# ===========================================================================
+# KERNEL SLICE - UNCHANGED (the requirement; hardware-validated)
+# ===========================================================================
+kernel_slice_size    = 3,372,638 B
+kernel_slice_sha256  = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_slot_hash     = 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e
+                       (full-slot 8,650,752 B hash verifies in kernelb / mtd12; NOT written by a rootfs-only flash)
+kernel_slot_verified = YES (full 8,650,752 B slot hash re-derived from the container kernel member)
+kernel_unchanged     = YES (build reused the validated kernel; built kernel .config sha 08b6e595... before == after)
+
+# ===========================================================================
+# ROOTFS (rebuilt)
+# ===========================================================================
+rootfs_ubi_size      = 3,538,944 B
+rootfs_ubi_sha256    = 6196232d878e141ad1833a5dbed4ef4e339dd41d5c450151842c285a328ba30e
+rootfs_squashfs_size = 3,108,256 B          (build_dir/.../root.squashfs)
+rootfs_squashfs_sha256 = c6f5e779e8769c0379c6f69a6f5f40cb2a2ec2dbcda2d8133ea623c02c617f5f
+rootfs_volume_size   = 3,108,864 B          (squashfs volume inside the UBI; +608 B ubinize padding)
+rootfs_volume_sha256 = f51a2e0d9bb9a7a9ecafbbe0186adad317108863241ccb3908cd94f8d5bbb263
+image_manifest       = 83 packages (same package set as ae5e28bf)
+
+# ===========================================================================
+# DRIVER MODULE - FINAL ALL-PATCH clean-room build (packaged as kmod-hi5622-wifi)
+# ===========================================================================
+module_artifact_size = 308,080 B            (the staged prebuilt bytes)
+module_artifact_sha256 = 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+module_artifact_params = 47
+module_artifact_vermagic = 6.18.60 SMP mod_unload ARMv7 p2v8
+module_artifact_depends  = cfg80211
+module_artifact_license  = GPL
+module_installed_size = 291,292 B           (/lib/modules/6.18.60/hi5622_wifi.ko, OpenWrt-stripped form)
+module_installed_sha256 = f07dd505f1d7ac5dd62a826c440414bf2bc1662fe2fecb504dc4cec5b5e0d412
+module_apk_size      = 126,774 B
+module_apk_sha256    = aa6bdaed4fc2704129bbdbadb5827ae7ad5d458e3ee8161bee19fea915380793
+# tree package / build artefact (must be the validated bytes; asserted by the verifier):
+module_tree_package  = 308,080 B sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41 (IDENTICAL)
+
+# ===========================================================================
+# OTHER IMAGE MODULES / BASELINE IDENTITIES (unchanged from ae5e28bf)
+# ===========================================================================
+cfg80211_tree_size   = 2,328,548 B  sha256 949393f9676cc7bab18def92f1f96a07c45bd0ff599ee418c16ba7d54715170c
+cfg80211_installed   = 406,028 B    sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a
+iw                   = 116,855 B    sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23
+hostapd (2.12)       = 504,333 B    sha256 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919
+ucode nl80211.so     = 61,442 B     sha256 54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f
+ucode rtnl.so        = 73,731 B     sha256 fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d
+regulatory.db        = 6,332 B      sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d
+
+# ===========================================================================
+# PAYLOAD STAGED INTO THE ROOTFS (byte-identical to payload/)
+# ===========================================================================
+etc/config/hi5622                     sha256 dd99fffb1662cc3378ee4ae817a15ab5b24abbb85543ec4df9a1f9bb796fd560
+etc/hi5622/FIRMWARE-POLICY.txt        sha256 503913c87d49507b4f958f361108fd269ab6625e821bd03b6b48374e0bbe0dfe
+etc/hi5622/hostapd-open.conf          sha256 f776437e6162b59cc63e47769f7a8e51c6991e2b210cc377669c7dbbe72f67d3
+etc/hi5622/hostapd-open.proven.conf   sha256 bfc7faaf645e1afa08fe362d1023d0d476e06b8435a606be521ea37be108d935
+etc/hi5622/hostapd-wpa2.conf          sha256 7107052c8225c47c35de773345154bc46656c312c078ebbbb20851cb347ca672
+etc/hi5622/hostapd-wpa2-wpa3.conf     sha256 04892d34ff84db242f717d5017ec1515cc2a0b4b141527dcceafbdf13a696321
+etc/init.d/hi5622-wifi                sha256 8a97bad0b7873c28ada766ba1cc0db1cbd5870bfcf7d5745c5744e9787a05bed
+etc/modprobe.d/hi5622-wifi.conf       sha256 2f6eff0c1c73c5e13a15fb0e63c644bdec877fa4e7b9808fac39068b6d3e7942
+usr/sbin/hi5622-load                  sha256 0c518bdc15206344a97457dc65adeec4c327b7aa9b53580be5a59ed32c2daa8f
+etc/rc.d/S96hi5622-wifi               -> ../init.d/hi5622-wifi   (autoload=0: service is a no-op at boot)
+
+# ===========================================================================
+# BUILD ENVIRONMENT PINS
+# ===========================================================================
+openwrt_tree         = /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_git_head        = 27663a0
+target_kconfig_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
+built_kernel_config_sha256 = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (before == after)
+previous_container_sha256 = ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994
+build_start_utc      = 2026-11-24T14:43:46Z
+build_end_utc        = 2026-11-24T14:44:02Z
+build_duration       = 16 s (rootfs/container only; kernel compile skipped)
+build_rc             = 0
+verify_rc            = 0 (PASS; 33/33 checks after the full-slot-hash check was added)
+kernel_ok            = 1

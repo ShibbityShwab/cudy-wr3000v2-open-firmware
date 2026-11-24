@@ -1,0 +1,117 @@
+--- /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image/build-evidence/work/.config.pre-build	2026-11-24 10:56:54.557769878 +0700
++++ /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image/build-evidence/work/.config.resolved	2026-11-24 21:43:50.708241916 +0700
+@@ -298,7 +298,7 @@
+ CONFIG_KERNEL_JFS_POSIX_ACL=y
+ # end of Filesystem ACL and attr support options
+ 
+-# CONFIG_KERNEL_DEVMEM is not set
++CONFIG_KERNEL_DEVMEM=y
+ CONFIG_KERNEL_SQUASHFS_FRAGMENT_CACHE_SIZE=3
+ # CONFIG_KERNEL_SQUASHFS_XATTR is not set
+ CONFIG_KERNEL_CC_OPTIMIZE_FOR_PERFORMANCE=y
+@@ -1742,7 +1742,7 @@
+ CONFIG_PACKAGE_urngd=y
+ CONFIG_PACKAGE_usign=y
+ # CONFIG_PACKAGE_uxc is not set
+-# CONFIG_PACKAGE_wifi-scripts is not set
++CONFIG_PACKAGE_wifi-scripts=y
+ CONFIG_WIFI_SCRIPTS_UCODE=y
+ # CONFIG_WIFI_SCRIPTS_WPS_BUTTON_DISABLED is not set
+ # CONFIG_PACKAGE_wireless-tools is not set
+@@ -2014,7 +2014,7 @@
+ # CONFIG_PACKAGE_ti-3410-firmware is not set
+ # CONFIG_PACKAGE_ti-5052-firmware is not set
+ # CONFIG_PACKAGE_wil6210-firmware is not set
+-# CONFIG_PACKAGE_wireless-regdb is not set
++CONFIG_PACKAGE_wireless-regdb=y
+ # CONFIG_PACKAGE_wl12xx-firmware is not set
+ # CONFIG_PACKAGE_wl18xx-firmware is not set
+ # end of Firmware
+@@ -2908,6 +2908,9 @@
+ # CONFIG_PACKAGE_kmod-brcmsmac is not set
+ # CONFIG_PACKAGE_kmod-brcmutil is not set
+ # CONFIG_PACKAGE_kmod-cfg80211 is not set
++CONFIG_PACKAGE_kmod-hi5622-cfg80211=y
++# CONFIG_PACKAGE_kmod-hi5622-pciet-hcc is not set
++CONFIG_PACKAGE_kmod-hi5622-wifi=y
+ # CONFIG_PACKAGE_kmod-iwlwifi is not set
+ # CONFIG_PACKAGE_kmod-mac80211 is not set
+ # CONFIG_PACKAGE_kmod-mac80211-hwsim is not set
+@@ -2995,9 +2998,9 @@
+ # CONFIG_PACKAGE_ucode-mod-log is not set
+ # CONFIG_PACKAGE_ucode-mod-math is not set
+ # CONFIG_PACKAGE_ucode-mod-netaddr is not set
+-# CONFIG_PACKAGE_ucode-mod-nl80211 is not set
++CONFIG_PACKAGE_ucode-mod-nl80211=y
+ # CONFIG_PACKAGE_ucode-mod-resolv is not set
+-# CONFIG_PACKAGE_ucode-mod-rtnl is not set
++CONFIG_PACKAGE_ucode-mod-rtnl=y
+ # CONFIG_PACKAGE_ucode-mod-serial is not set
+ # CONFIG_PACKAGE_ucode-mod-socket is not set
+ # CONFIG_PACKAGE_ucode-mod-struct is not set
+@@ -3424,16 +3427,21 @@
+ # CONFIG_PACKAGE_hostapd-basic-mbedtls is not set
+ # CONFIG_PACKAGE_hostapd-basic-openssl is not set
+ # CONFIG_PACKAGE_hostapd-basic-wolfssl is not set
+-# CONFIG_PACKAGE_hostapd-common is not set
++CONFIG_PACKAGE_hostapd-common=y
+ # CONFIG_PACKAGE_hostapd-mbedtls is not set
+-# CONFIG_PACKAGE_hostapd-mini is not set
++CONFIG_PACKAGE_hostapd-mini=y
+ # CONFIG_PACKAGE_hostapd-openssl is not set
++# CONFIG_PACKAGE_hostapd-utils is not set
+ # CONFIG_PACKAGE_hostapd-wolfssl is not set
+ # CONFIG_PACKAGE_wpa-supplicant is not set
++# CONFIG_WPA_RFKILL_SUPPORT is not set
++CONFIG_WPA_MSG_MIN_PRIORITY=3
+ # CONFIG_WPA_WOLFSSL is not set
+ # CONFIG_DRIVER_11AC_SUPPORT is not set
+ # CONFIG_DRIVER_11AX_SUPPORT is not set
+ # CONFIG_DRIVER_11BE_SUPPORT is not set
++# CONFIG_WPA_ENABLE_WEP is not set
++CONFIG_WPA_MBO_SUPPORT=y
+ # CONFIG_PACKAGE_wpa-supplicant-basic is not set
+ # CONFIG_PACKAGE_wpa-supplicant-mbedtls is not set
+ # CONFIG_PACKAGE_wpa-supplicant-mesh-mbedtls is not set
+@@ -3471,7 +3479,7 @@
+ # CONFIG_PACKAGE_ipip is not set
+ # CONFIG_PACKAGE_ipset is not set
+ # CONFIG_PACKAGE_ipset-dns is not set
+-# CONFIG_PACKAGE_iw is not set
++CONFIG_PACKAGE_iw=y
+ # CONFIG_PACKAGE_iw-full is not set
+ # CONFIG_PACKAGE_libipset is not set
+ # CONFIG_PACKAGE_map is not set
+@@ -3712,5 +3720,31 @@
+ # CONFIG_PACKAGE_whereis is not set
+ # CONFIG_PACKAGE_yafut is not set
+ # end of Utilities
+-CONFIG_KERNEL_DEVMEM=y
++# SPDX-License-Identifier: GPL-2.0-only
++#
++# Kernel-config carry-over for the bench image build (wifi-image-integration).
++#
++# APPENDED to $OWRT/.config AFTER "make defconfig", on purpose. The
++# release-line bench .config carries this override, but it has no
++# config/Config-kernel.in menu entry, so OpenWrt's defconfig drops it as an
++# unknown symbol. include/kernel-defaults.mk then maps every CONFIG_KERNEL_*
++# line in .config to the kernel's CONFIG_* symbol, so dropping it silently
++# changes the kernel build:
++#
++#   release-line .config (pre-build, current state of the shared tree):
++#       CONFIG_KERNEL_HOTPLUG_CPU=y     (appended after the generated config)
++#       -> kernel CONFIG_HOTPLUG_CPU=y  (as in the hardware-validated slice)
++#   defconfig-normalized .config:
++#       (line dropped) -> kernel CONFIG_HOTPLUG_CPU remains unset
++#       (generic/config-6.18 line 2719)
++#
++# Consequence measured on the first build attempt of this lane: the kernel was
++# rebuilt with CONFIG_HOTPLUG_CPU unset and produced a NEW kernel slice
++# (3,369,166 B sha256 853ac764..., replacing the hardware-validated
++# 3,372,638 B sha256 13e81214...). Carrying the override over reproduces the
++# validated slice, so the bench image needs no kernel write at deploy time.
++#
++# Do not "fix" this by editing target/linux/generic/config-6.18 here: that file
++# belongs to the release line / other lanes. This lane only appends to the
++# build .config and documents why.
+ CONFIG_KERNEL_HOTPLUG_CPU=y

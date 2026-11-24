@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: GPL-2.0
+# /etc/config/hi5622 - clean-room Hi5622V100 Wi-Fi image policy (FINAL module).
+#
+# Image: wifi-final-image (task-147).  Driver: the FINAL ALL-PATCH clean-room
+# module, 308,080 B sha256 5b587949... (47 module parameters), built from
+# opensource tree 008aca5 and hardware-validated in one boot on 2026-11-27
+# (AP 5-message vendor order -> hostapd AP-ENABLED; WPA2-AP GTK installed;
+# TX COMPLETED; RX arm PASSED).  See ../REPORT.md.
+#
+# TWO SWITCHES, ON PURPOSE:
+#   hi5622.main.autoload=0  BENCH DEFAULT: nothing loads at boot.  The driver
+#                           boot ladder writes the Wi-Fi chip on load, so a
+#                           bench session stays attended (the operator runs
+#                           /etc/init.d/hi5622-wifi start or hi5622-load).
+#   hi5622.main.autoload=1  PRODUCTION-STYLE: /etc/init.d/hi5622-wifi loads
+#                           cfg80211 + the driver at boot (~40 s, the ladder's
+#                           fixed sleeps), then optionally starts the AP.
+#   hi5622.ap.enabled=1     start hostapd on the AP VAP after the C2 ladder.
+#
+# The parameter values below are the FINAL all-patch module's single-boot
+# validation boot recipe (wifi-stability FINAL-INTEGRATION.md section 4), not
+# the older 19-parameter module's polish defaults: the WPA2-key / RX / beacon
+# rungs need allow_frames=32 and h2d_send_budget=10, and the feature gates
+# (rx_enable / beacon_static / wpa_keys) must be on for the validated path.
+
+config driver 'main'
+	# 0 = bench policy (load by hand); 1 = load at boot via rc.d S96.
+	option autoload '0'
+	# Vendor-derived PD4 research firmware: pushed by hand to /lib/firmware/,
+	# never packaged in the image (firmware policy).
+	option fw_path 'hi_wifi/FIRMWARE.PD4.bin'
+	# Locally captured Wi-Fi PHY/radio custom block (0x9a8 B): never packaged.
+	option wifi_block_path 'hi_wifi/wifi_block.bin'
+	# H2D frame budget.  The final all-patch WPA2/RX rungs require 32.
+	option allow_frames '32'
+	option frame_gap_ms '100'
+	# ctx-create + txq-sync72 + TXQ address hand-off + AP/scan/key frames.
+	# The final all-patch WPA2/RX rungs require 10.
+	option h2d_send_budget '10'
+	# Mode-1 VAP base: g0 id1 keys, posted before scan/AP (the AP start path
+	# posts it itself; the once-guard prevents a duplicate).
+	option vap_start_first '1'
+	option vap_start_mode '1'
+	option vap_start_module '0'
+	# Explicit vendor 60 ms scan dwell instead of "0 = vendor default".
+	option scan_dwell_ms '60'
+	option hcc_poll_ms '5'
+	# --- final all-patch feature gates (validated single-boot recipe) -------
+	# RX consumer arm on the live bank (CA 0x40050000); drain needs on-air
+	# traffic, so this only arms the proven consumer.
+	option rx_enable '1'
+	# Five-message vendor AP order + firmware beacon path (no host template).
+	option beacon_static '1'
+	option beacon_vap_start '1'
+	# cfg80211 .add_key/.del_key/.set_default_key -> WAL g0 id1 0x0078/79/7A.
+	# Hardware-validated: WPA2-AP GTK installed (firmware workers CA
+	# 0x0A5825 / 0x0A5C9D).  PTK still needs client association (mgmt RX).
+	option wpa_keys '1'
+	option wpa_key_module '0'
+	# STA-join / HT / VHT / band experiments are default-fail-closed opt-ins.
+	option sta_join '0'
+	option ht_mode '0'
+	option vht_cap '0'
+	option band_vendor '0'
+	option scan_band_cfg '0'
+	# Diagnostics off by default (mgmt_diag would dump a stack per mgmt_tx).
+	option hcc_trace '0'
+	option stop_ap_mode '0'
+	option mgmt_diag '0'
+	# Publish TXQ after the sync (part of the TX-COMPLETED milestone; module
+	# default is 1 - kept explicit as image policy).
+	option txq_publish '1'
+	# Run the C2 ladder (h2d_ctx_create=3 -> h2d_txq_sync72=1) after load.
+	option c2_ladder '1'
+	# 1 = fail the service when a gate does not come up; 0 = log and continue.
+	option strict '1'
+	# Seconds to wait for /sys/class/ieee80211/phy* after the module load.
+	option wiphy_timeout '30'
+
+config ap 'ap'
+	# 0 = do not start an AP (bench default); 1 = after the C2 ladder.
+	option enabled '0'
+	option ifname 'wlan0'
+	# auto = first wiphy registered by this load.
+	option phy 'auto'
+	# Proven interface type for this driver (iw ... type __ap).
+	option type '__ap'
+	# Regulatory country (e.g. US). Empty = leave the image regdomain as-is;
+	# the world regdomain is NO_IR, so an AP on a real channel needs a country.
+	option country ''
+	# open = proven baseline; switch to /etc/hi5622/hostapd-wpa2.conf for the
+	# WPA2 AP (GTK install is proven; association still needs mgmt RX).
+	option config '/etc/hi5622/hostapd-open.conf'

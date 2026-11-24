@@ -1,0 +1,3 @@
+# Local build evidence (full logs, extracted trees) stays untracked.
+# Curated text copies (hashes, verify output, build log tail, summary) are committed.
+build-evidence/work/
