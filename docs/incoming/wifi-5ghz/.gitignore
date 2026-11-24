@@ -1,0 +1,9 @@
+# wifi-5ghz lane: lib artifacts are local evidence only (never committed).
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+__pycache__/

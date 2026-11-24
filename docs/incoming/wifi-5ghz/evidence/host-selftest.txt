@@ -1,0 +1,103 @@
+== build
+build: OK (gcc, -std=c99 -Wall -Wextra -Werror -pedantic)
+== run
+PASS 2.4 GHz table present
+PASS 5 GHz table present
+PASS 2.4 GHz table has 14 entries
+PASS 5 GHz table has 29 entries
+PASS invalid band rejected by table lookup
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 2.4 GHz entry order/frequency
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz entry order/frequency (36..196)
+PASS 5 GHz table includes ch144 (5720 MHz)
+PASS 5 GHz table includes the 4.9 GHz block
+PASS ch52 marked DFS/radar
+PASS ch149 unrestricted by the vendor table
+PASS ch196 passive (NO_IR)
+PASS 2.4 GHz freq<->channel<->index roundtrip (14)
+PASS 5 GHz freq<->channel<->index roundtrip (29)
+PASS freq 0 not in 2.4 GHz table
+PASS 2400 MHz not in 2.4 GHz table
+PASS 6000 MHz not in 5 GHz table
+PASS invalid band rejected by freq lookup
+PASS 2.4 GHz channel 15 not in table
+PASS 5 GHz channel 145 not in table
+PASS channel 14 is in the vendor 2.4 GHz table
+PASS channel 0 invalid
+PASS channel 36 valid
+PASS channel 196 valid
+PASS channel 197 invalid
+PASS ch149 vendor index == 20 (not the 19-ch LU index)
+PASS ch144 vendor index == 19
+PASS channel counts 14/29/invalid
+PASS 2.4 GHz AP ch6 accepted with band5g=0
+PASS 2.4 GHz AP ch6 accepted with band5g=1
+PASS 2.4 GHz AP ch14 accepted (vendor table)
+PASS 5 GHz AP refused while band5g=0 (fail closed)
+PASS 5 GHz AP ch36 accepted with band5g=1
+PASS 5 GHz AP with no channel/frequency refused
+PASS 5 GHz AP ch36 derived from 5180 MHz
+PASS 5 GHz AP ch144 (DFS) resolved
+PASS 5 GHz AP ch184 (4.9 GHz block) resolved
+PASS 5 GHz AP channel/frequency mismatch refused
+PASS AP prepare NULL output refused
+PASS 5 GHz AP channel 68 (not in vendor table) refused
+PASS AP prepare invalid band refused
+PASS H1 channel for 2412 MHz == 1
+PASS H1 channel for 2484 MHz == 14
+PASS H1 channel for 5180 MHz == 36 (not 5180)
+PASS H1 channel for 5745 MHz == 149
+PASS H1 channel for 4920 MHz == 184
+PASS H1 5 GHz config refused while band5g=0
+PASS H1 unknown 5 GHz frequency refused
+PASS H1 5 GHz frequency on the 2.4 GHz band refused
+PASS H1 NULL output refused
+PASS 5 GHz HT cap word 0x0062 (20/40+SGI20/40)
+PASS 5 GHz VHT cap word 0x00400064 (HTC_VHT|160MHz|SGI80/160)
+PASS 2.4 GHz VHT cap word 0x00400000 (HTC_VHT only)
+PASS VHT MCS map 0xfffa (2 SS MCS0-9)
+PASS invalid band VHT MCS map sentinel
+PASS max power 30 dBm 2.4 / 23 dBm 5
+PASS band names
+
+98 checks, 0 failure(s)

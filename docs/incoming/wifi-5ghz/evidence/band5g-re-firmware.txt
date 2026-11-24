@@ -1,0 +1,21 @@
+== firmware /tmp/hi5622-patched/FIRMWARE.PD4.bin
+   size 928920 sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1
+PASS firmware CA 0x117AD4 = 29-entry 5 GHz channel table [ch144 + 4.9 GHz block]
+PASS firmware CA 0x117B48 = 14-entry 2.4 GHz channel table
+PASS firmware channel-table entries carry the 0xff enable byte
+PASS firmware validator CA 0x10172C counts 29 / 14 channels
+PASS firmware validator tables are CA 0x117AD4 (5G) / 0x117B48 (2.4G) [literals at CA 0x101760/0x101764]
+PASS H1 handler CA 0x5FF64 passes payload+0x0e (u16) to CA 0xD6A1E
+PASS H1 handler CA 0x5FF64 bounds the slot index to <= 7
+PASS H1 handler programs the per-slot channel context (r5+0xEC+slot*0x20)
+PASS CA 0xD6A1E thunks to the chip channel resolver CA 0x94728
+PASS CA 0x94728 gets the chip resource via CA 0x943AC
+PASS CA 0x94728 uses bitmap check 0xC1FBA + element 0xC1FF4
+PASS CA 0xC1FF4: {count, stride, base} channel-table lookup
+PASS CA 0xC1FBA: valid-channel bitmap test
+PASS AP channel worker CA 0x841B8 validates via CA 0x10172C
+PASS AP channel worker stores {channel, band, field, valid} at ctx+0x10
+PASS AP channel worker programs the PHY channel via CA 0xFDCE4
+PASS firmware owns the 5 GHz TBTT ISR (smac_tbtt_5g_isr)
+
+17 checks, 0 failure(s)

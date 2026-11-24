@@ -1,0 +1,52 @@
+== host module /tmp/rootfs2524b/lib/modules/5.10.201/hi5622v100_wifi.ko
+   size 3564728 md5 4737fcb21a1a2262a96f84d780ad8b35
+PASS 2.5.24: all 16 band/channel symbols present
+PASS 2.5.24: 2.4 GHz channel list = ch1..14 [14 entries]
+PASS 2.5.24: 5 GHz channel list = 29 vendor channels [ch144@19, 4.9GHz block@25]
+PASS 2.5.24: channel-list entries carry the 0xff enable byte
+PASS 2.5.24: 2.4 GHz frequency map matches the channel list
+PASS 2.5.24: 5 GHz frequency map matches the channel list [ch144=5720, ch184=4920, ch196=4980]
+PASS 2.5.24: static supported_band templates: 14 / 29 channels [2.4@.data+0xdf8, 5G@.data+0xe54]
+PASS 2.5.24: HT cap word 0x0062 on both bands
+PASS 2.5.24: VHT cap 0x00400000 (2.4) / 0x00400064 (5 GHz 160 MHz)
+PASS 2.5.24: VHT MCS map 0xfffa (2 SS MCS0-9)
+PASS 2.5.24: hmac_device_add_band adds exactly two bands (id 0, id 1) [get_by_id=2 init=2 sync_add=1]
+PASS 2.5.24: hmac_band_init: mac_band_init + AP channel list + DFS init
+PASS 2.5.24: hmac_band_get_by_id uses the g_ast_band stride 0x2330
+PASS 2.5.24: hmac_band_get_by_id bounds the band id to <= 1
+PASS 2.5.24: band objects live in g_ast_band
+PASS 2.5.24: hmac_band_id_to_band_type reads the type byte at band+0x10d1
+PASS 2.5.24: wal_cfg80211_init: wiphy_new_nm + type + wiphy_register
+PASS 2.5.24: wal_cfg80211_init assigns bands[0]=2.4G / bands[1]=5G by type
+PASS 2.5.24: wal_hipriv_add_vap parses the g2/g5 command band selector
+PASS 2.5.24:   (movw immediates present)
+PASS 2.5.24: band type -> band id -> wiphy resolution after g2/g5
+PASS 2.5.24: mac_get_channel_num_from_idx bounds 13 / 28 (2.4G/5G)
+PASS 2.5.24: 5 GHz list offset 0x38 after the 14-entry list
+PASS 2.5.24: mac_is_channel_num_valid counts 14 / 29 entries
+PASS 2.5.24: wal_cfg80211_start_ap calls a local channel helper first [CA 0x102e84]
+PASS 2.5.24: channel helper sends via wal_send_cfg_event [CA 0x102e84]
+PASS 2.5.24: channel helper carries the 0x0124 command id
+PASS 2.5.24: channel helper resolves width/DFS for the chandef
+
+== firmware /tmp/hi5622-patched/FIRMWARE.PD4.bin
+   size 928920 sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1
+PASS firmware CA 0x117AD4 = 29-entry 5 GHz channel table [ch144 + 4.9 GHz block]
+PASS firmware CA 0x117B48 = 14-entry 2.4 GHz channel table
+PASS firmware channel-table entries carry the 0xff enable byte
+PASS firmware validator CA 0x10172C counts 29 / 14 channels
+PASS firmware validator tables are CA 0x117AD4 (5G) / 0x117B48 (2.4G) [literals at CA 0x101760/0x101764]
+PASS H1 handler CA 0x5FF64 passes payload+0x0e (u16) to CA 0xD6A1E
+PASS H1 handler CA 0x5FF64 bounds the slot index to <= 7
+PASS H1 handler programs the per-slot channel context (r5+0xEC+slot*0x20)
+PASS CA 0xD6A1E thunks to the chip channel resolver CA 0x94728
+PASS CA 0x94728 gets the chip resource via CA 0x943AC
+PASS CA 0x94728 uses bitmap check 0xC1FBA + element 0xC1FF4
+PASS CA 0xC1FF4: {count, stride, base} channel-table lookup
+PASS CA 0xC1FBA: valid-channel bitmap test
+PASS AP channel worker CA 0x841B8 validates via CA 0x10172C
+PASS AP channel worker stores {channel, band, field, valid} at ctx+0x10
+PASS AP channel worker programs the PHY channel via CA 0xFDCE4
+PASS firmware owns the 5 GHz TBTT ISR (smac_tbtt_5g_isr)
+
+45 checks, 0 failure(s)

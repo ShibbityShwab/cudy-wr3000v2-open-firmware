@@ -1,0 +1,22 @@
+== BAND5G artifact identity (local evidence; the .ko itself is NEVER committed)
+
+-- chain base: hardware-validated FINAL all-patch module (opensource 008aca5)
+   stripped 308080 B
+   sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41  /tmp/wifi-allpatch-artifact/hi5622_wifi.ko
+
+-- wifi-5ghz patched module (reproduce: tools/build-band5g.sh)
+   stripped 312432 B
+   sha256 2bee439131eaa31d1d79048998c203770c1c3caba401711896ededd1c9e12207  /tmp/wifi-band5g-artifact/hi5622_wifi.ko
+   unstripped 1150092 B
+   sha256 2b8ff159cf6ea07eda28737fb531e92f916e9d3b555dca66a096689d4120e676  /tmp/wifi-band5g-artifact/hi5622_wifi.ko.unstripped
+   params: 48 (47 chain + band5g)
+     band_force: (int)
+     ht_mode: (uint)
+     vht_cap: (uint)
+     band_vendor: (uint)
+     band5g: (uint)
+   vermagic: vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+   compiler/modpost warnings/errors: 0
+   strip leaves .text byte-identical: yes (asserted by tools/build-band5g.sh)
+   build dir: /tmp/wifi-band5g-build (stripped sha is build-path dependent via
+   .note.gnu.build-id, as documented in wifi-stability/FINAL-INTEGRATION.md)

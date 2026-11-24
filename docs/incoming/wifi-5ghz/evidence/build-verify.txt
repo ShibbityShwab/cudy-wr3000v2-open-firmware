@@ -1,0 +1,16 @@
+== 1. chain tree staged: 72 files
+patching file hi5622_band5g.h
+patching file hi5622_band5g.c
+patching file hi5622_cfg80211.c
+patching file hi5622_scan.c
+patching file hi5622_vapscan_map.c
+patching file Kbuild
+== 2. patch applied cleanly
+== BAND5G module (final all-patch + wifi-5ghz, host-built, NOT fired)
+artifact  : /tmp/wifi-band5g-artifact/hi5622_wifi.ko (debug-stripped)
+size      : 312432
+sha256    : 2bee439131eaa31d1d79048998c203770c1c3caba401711896ededd1c9e12207
+unstripped: 1150092 B sha256 2b8ff159cf6ea07eda28737fb531e92f916e9d3b555dca66a096689d4120e676
+params    : 48 (47 chain + band5g)
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+chain     : final all-patch base (008aca5, 308,080 B 5b587949) + wifi-5ghz/0001

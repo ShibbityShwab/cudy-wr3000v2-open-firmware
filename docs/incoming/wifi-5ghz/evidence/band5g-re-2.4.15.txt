@@ -1,0 +1,32 @@
+== host module /home/shibbityshwab/recovery-extract/lib/hisilicon/ko/hi5622v100_wifi.ko
+   size 3581748 md5 1745ef77e728c411cef1921af3dc8731
+PASS 2.4.15: all 16 band/channel symbols present
+PASS 2.4.15: 2.4 GHz channel list = ch1..14 [14 entries]
+PASS 2.4.15: 5 GHz channel list = 29 vendor channels [ch144@19, 4.9GHz block@25]
+PASS 2.4.15: channel-list entries carry the 0xff enable byte
+PASS 2.4.15: 2.4 GHz frequency map matches the channel list
+PASS 2.4.15: 5 GHz frequency map matches the channel list [ch144=5720, ch184=4920, ch196=4980]
+PASS 2.4.15: static supported_band templates: 14 / 29 channels [2.4@.data+0xdf8, 5G@.data+0xe54]
+PASS 2.4.15: HT cap word 0x0062 on both bands
+PASS 2.4.15: VHT cap 0x00400000 (2.4) / 0x00400064 (5 GHz 160 MHz)
+PASS 2.4.15: VHT MCS map 0xfffa (2 SS MCS0-9)
+PASS 2.4.15: hmac_device_add_band adds exactly two bands (id 0, id 1) [get_by_id=2 init=2 sync_add=1]
+PASS 2.4.15: hmac_band_init: mac_band_init + AP channel list + DFS init
+PASS 2.4.15: hmac_band_get_by_id uses the g_ast_band stride 0x2330
+PASS 2.4.15: hmac_band_get_by_id bounds the band id to <= 1
+PASS 2.4.15: band objects live in g_ast_band
+PASS 2.4.15: hmac_band_id_to_band_type reads the type byte at band+0x10d1
+PASS 2.4.15: wal_cfg80211_init: wiphy_new_nm + type + wiphy_register
+PASS 2.4.15: wal_cfg80211_init assigns bands[0]=2.4G / bands[1]=5G by type
+PASS 2.4.15: wal_hipriv_add_vap parses the g2/g5 command band selector
+PASS 2.4.15:   (movw immediates present)
+PASS 2.4.15: band type -> band id -> wiphy resolution after g2/g5
+PASS 2.4.15: mac_get_channel_num_from_idx bounds 13 / 28 (2.4G/5G)
+PASS 2.4.15: 5 GHz list offset 0x38 after the 14-entry list
+PASS 2.4.15: mac_is_channel_num_valid counts 14 / 29 entries
+PASS 2.4.15: wal_cfg80211_start_ap calls a local channel helper first [CA 0x102c7c]
+PASS 2.4.15: channel helper sends via wal_send_cfg_event [CA 0x102c7c]
+PASS 2.4.15: channel helper carries the 0x0124 command id
+PASS 2.4.15: channel helper resolves width/DFS for the chandef
+
+28 checks, 0 failure(s)

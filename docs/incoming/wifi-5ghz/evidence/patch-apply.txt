@@ -1,0 +1,7 @@
+checking file hi5622_band5g.h
+checking file hi5622_band5g.c
+checking file hi5622_cfg80211.c
+checking file hi5622_scan.c
+checking file hi5622_vapscan_map.c
+checking file Kbuild
+== patch apply (dry run on the final all-patch tree)
