@@ -13,7 +13,7 @@
 #
 #     /proc/mtd                                  -> fixture file (stock 17 slots)
 #     /sys/class/ubi/ubi0/mtd_num                -> fixture file (booted rootfs)
-#     /sys/devices/platform/luofu-selector/*     -> fixture files (the driver ABI)
+#     /sys/devices/platform/boot-selector/*     -> fixture files (the driver ABI)
 #     /proc/cmdline                              -> fixture file (optional slot token)
 #     /etc/init.d/luofu_record_pair              -> fixture copy of the real recorder
 #     mtd, ubiformat, sync, reboot               -> shims on PATH that log each
@@ -169,7 +169,7 @@ count_log() { # <basic regex>
 }
 
 selector_value() {
-	cat "$CASE/root/sys/devices/platform/luofu-selector/current_pair" 2>/dev/null
+	cat "$CASE/root/sys/devices/platform/boot-selector/current_pair" 2>/dev/null
 }
 
 # Write the PATH shims for mtd/ubiformat/sync/reboot.
@@ -257,7 +257,7 @@ new_case() { # <name> [<selector>] [<ubi-mtd-num>]
 	CMDLOG="$CASE/log/commands"
 	mkdir -p "$CASE/root/proc" \
 		"$CASE/root/sys/class/ubi/ubi0" \
-		"$CASE/root/sys/devices/platform/luofu-selector" \
+		"$CASE/root/sys/devices/platform/boot-selector" \
 		"$CASE/root/etc/init.d" \
 		"$CASE/root/dev" "$CASE/root/tmp" \
 		"$CASE/bin" "$CASE/log" "$CASE/img"
@@ -289,8 +289,8 @@ mtd16: 01d80000 00020000 "upgrade"
 MTD
 
 	echo "$ubi_mtd" > "$CASE/root/sys/class/ubi/ubi0/mtd_num"
-	echo "$selector" > "$CASE/root/sys/devices/platform/luofu-selector/current_pair"
-	ln -s current_pair "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	echo "$selector" > "$CASE/root/sys/devices/platform/boot-selector/current_pair"
+	ln -s current_pair "$CASE/root/sys/devices/platform/boot-selector/next_pair"
 
 	local n
 	for n in 11 12 13 14 15 16; do
@@ -395,9 +395,9 @@ cmdline_set() {
 # Make the selector next_pair unwritable for the fixture user: a recorder
 # that tried to store would fail, so this proves a "no write" decision.
 selector_freeze() {
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
-	printf '%s\n' "$1" > "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
-	chmod 444 "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/next_pair"
+	printf '%s\n' "$1" > "$CASE/root/sys/devices/platform/boot-selector/next_pair"
+	chmod 444 "$CASE/root/sys/devices/platform/boot-selector/next_pair"
 }
 
 # ---------------------------------------------------------------------------
@@ -488,14 +488,14 @@ case_unknown_selector() {
 case_no_selector() {
 	note "a missing selector interface must be refused"
 	new_case no-selector a 13
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/current_pair" \
-		"$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/current_pair" \
+		"$CASE/root/sys/devices/platform/boot-selector/next_pair"
 	local image
 	image=$(make_container "$CASE" 4096 8192)
 	run_do_upgrade "$image" stub-ok
 	check_ne "no-selector exit status is a refusal" 0 "$CASE_RC"
 	check_eq "no-selector made no write" "" "$(grep -v '^stub-check-ok' "$CMDLOG")"
-	check_match "no-selector explains the refusal" "no luofu-selector interface" "$CASE/log/out.log"
+	check_match "no-selector explains the refusal" "no boot-selector interface" "$CASE/log/out.log"
 }
 
 case_kernel_oversize() {
@@ -561,8 +561,8 @@ case_root_write_fails() {
 case_selector_write_fails() {
 	note "a failing selector store must refuse and leave the active pair selected"
 	new_case selector-write-fails a 13
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
-	mkdir "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/next_pair"
+	mkdir "$CASE/root/sys/devices/platform/boot-selector/next_pair"
 	local image
 	image=$(make_container "$CASE" 4096 8192)
 	run_do_upgrade "$image" stub-ok
@@ -653,11 +653,11 @@ case_rec_unknown() {
 case_rec_no_selector() {
 	note "recorder: a missing selector interface after the bounded wait must not block the boot"
 	new_case rec-no-selector b 13
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/current_pair" \
-		"$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/current_pair" \
+		"$CASE/root/sys/devices/platform/boot-selector/next_pair"
 	run_recorder 1
 	check_eq "recorder no-selector exit status" 0 "$CASE_RC"
-	check_match "recorder no-selector fails safe after the bounded wait" "no luofu-selector interface" "$CASE/log/recorder.log"
+	check_match "recorder no-selector fails safe after the bounded wait" "no boot-selector interface" "$CASE/log/recorder.log"
 }
 
 case_rec_no_ubi() {
@@ -682,8 +682,8 @@ case_rec_bad_label() {
 case_rec_store_fails() {
 	note "recorder: a failing next_pair store must be reported and the cell left alone"
 	new_case rec-store-fails b 13
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
-	mkdir "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/next_pair"
+	mkdir "$CASE/root/sys/devices/platform/boot-selector/next_pair"
 	run_recorder 0
 	check_ne "recorder store-failure exit status is a failure" 0 "$CASE_RC"
 	check_eq "recorder store-failure left the cell untouched" b "$(selector_value)"
@@ -693,8 +693,8 @@ case_rec_store_fails() {
 case_rec_readback_mismatch() {
 	note "recorder: a store whose read-back does not match must not report success"
 	new_case rec-readback b 13
-	rm -f "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
-	printf 'a\n' > "$CASE/root/sys/devices/platform/luofu-selector/next_pair"
+	rm -f "$CASE/root/sys/devices/platform/boot-selector/next_pair"
+	printf 'a\n' > "$CASE/root/sys/devices/platform/boot-selector/next_pair"
 	run_recorder 0
 	check_ne "recorder read-back mismatch exit status is a failure" 0 "$CASE_RC"
 	check_eq "recorder read-back mismatch left current_pair on the stale value" b "$(selector_value)"

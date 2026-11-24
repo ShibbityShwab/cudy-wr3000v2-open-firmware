@@ -1,6 +1,15 @@
 # Luofu / Cudy WR3000 v2.0 - OpenWrt target skeleton
 
-> **STATUS (2026-11-21): BENCH-VERIFIED 2-CPU BRING-UP - NOT A PUBLIC/FLASHABLE RELEASE.**
+> **STATUS (2026-11-24): BENCH-VERIFIED 2-CPU TARGET + BUILD-VERIFIED CHECKPOINT - NOT A
+> PUBLIC/FLASHABLE RELEASE, NOT UPSTREAM-ACCEPTED.** The target (67 patches, board DTS,
+> image chain, config) builds in an isolated OpenWrt main tree and a full image build
+> passes; the 2026-11-24 checkpoint fixes are: patch 013a (GP1 endpoint reset pulse) and
+> the retired Wi-Fi GPIO hog are committed, the real boot-pair recorder is now enabled
+> (the bench-only duplicate is retired) and the recorder/platform use the hardware
+> `boot-selector` sysfs name, and the stale "schematic" headers are replaced with the
+> verified status. Evidence, hashes and the patch classification for submission:
+> [../docs/incoming/wifi-upstream-target/REPORT.md](../docs/incoming/wifi-upstream-target/REPORT.md).
+> The 2026-11-21 status block follows as history.
 >
 > The target now builds a 6.18 kernel image that boots on the unit and was
 > bench-verified on 2026-11-21: **2 CPUs** (the fix is the board-DTS loader

@@ -2,7 +2,8 @@
 #
 # target/linux/hisilicon/luofu/target.mk
 #
-# STATUS: SCHEMATIC / UNTESTED / NOT A WORKING TARGET.
+# STATUS (2026-11-24): BUILD SOURCE of the bench-verified 6.18 release line
+# (see ../Makefile); not an upstream-accepted target and not a public release.
 #
 # Subtarget: luofu (HiSilicon Hi5671Y, Cudy WR3000 v2.0 board R116).
 # Shape from TARGET-DESIGN.md 4.1/4.2. Mapping: copy to

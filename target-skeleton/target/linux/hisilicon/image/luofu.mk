@@ -3,20 +3,28 @@
 # target/linux/hisilicon/image/luofu.mk - image definitions for the luofu R116
 # (Cudy WR3000 v2.0) OpenWrt target.
 #
-# STATUS: HOST-BUILD STAGES ARE REAL, THE RESULT HAS NEVER BOOTED.
+# STATUS (2026-11-24): the host-build stages are real and images produced by
+# them have booted on the unit (UP bring-up 2026-11-19; 2-CPU baseline
+# 974e6ca6 2026-11-21; the 2026-11-24 GP1/PD4 Wi-Fi line).  The container is
+# still deliberately marked NOT FLASHABLE: the install/upgrade path has never
+# run end to end on a device and no factory image exists.
+#
+# Historical status block: HOST-BUILD STAGES ARE REAL, THE RESULT HAS NEVER
+# BOOTED.
 #   - every stage below is wired into the stock OpenWrt image machinery and is
 #     executed by the target install rule (image/Makefile + include/image.mk);
 #   - the kernel slice, the rootfs UBI and the sysupgrade container are
 #     validated from their own bytes at build time (tools/fip-slice.py checks
 #     the decoded loader structure, tools/luofu-image.py re-parses the UBI and
 #     cross-checks the container against fip-manifest.txt);
-#   - the 2026-11-19 attended bring-up booted an EARLIER build of this recipe
-#     to userspace (UP, 1 CPU; no rootfs_data volume). THIS EXACT REBUILD has
-#     not been flashed or booted; one attended boot of the current layout is
-#     still required (TARGET-DESIGN.md 5.2, 5.3, 9);
-#   - the A/B boot selector (sysenv 0x10100C08), the SMP second-CPU bring-up
-#     and the install path are [U] on hardware (TARGET-DESIGN.md 3.4, 5.2,
-#     5.4, 5.5). The container carries the provenance marker
+#   - the recipe chain HAS booted on hardware: the 2026-11-19 attended boot
+#     (UP, 1 CPU) and the 2026-11-21 2-CPU baseline 974e6ca6 with the same
+#     A/B/rootfs_data layout (../RELEASE-NOTES.md).  The 2026-11-24 checkpoint
+#     rebuild in this tree is host-verified only (docs/SKELETON-SMOKE.md);
+#   - the A/B selector handover is hardware-verified on the bench (W27b and
+#     the pair-B installs), but platform_do_upgrade itself has never run end
+#     to end on a device (TARGET-DESIGN.md 3.4, 5.2, 5.4, 5.5). The container
+#     carries the provenance marker
 #     "BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED" (the string
 #     "NOT FLASHABLE" is grepped by first-install-stock.sh and the target
 #     platform_check_image) and the factory/install stanza is deliberately

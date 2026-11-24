@@ -2,25 +2,25 @@
 #
 # target/linux/hisilicon/Makefile
 #
-# STATUS: SCHEMATIC / UNTESTED / NOT A WORKING TARGET.
+# STATUS (2026-11-24): this directory IS the build source of the bench-verified
+# 6.18 target line: 67 patches (001-060 + 062-067 + 013a), the board DTS, the
+# image chain and a re-derived luofu/config-6.18 build inside an OpenWrt main
+# tree (linux-6.18.60; see ../docs/SKELETON-SMOKE.md, "upstream-target session"
+# and ../docs/incoming/wifi-upstream-target/REPORT.md). Images built from this
+# line have booted on the unit: 2 CPUs, network, SSH, persistent overlay
+# (../RELEASE-NOTES.md) and the 2026-11-24 Wi-Fi transport line (GP1/PD4).
 #
-# First-pass shape from opensource/docs/TARGET-DESIGN.md sections 4-5. Nothing
-# in target-skeleton/ has been built inside an OpenWrt tree; do not read this
-# file as a buildable target. See ../README.md for the status and the mapping.
+# It is still NOT an upstream-accepted target and NOT a flashable public
+# release: no target PR has been sent, the driver series is a review form of
+# drafts/RFCs, the A/B install path has never run on a device end to end, and
+# the Hi5622 Wi-Fi driver remains vendor-only/GPL-blocked.
 #
-# Mapping: copy this directory to <openwrt>/target/linux/hisilicon/.
-#
-# What it still needs before it can build (none of it exists yet):
-#   - the kernel platform patch (TARGET-DESIGN.md 4.1):
-#       arch/arm/mach-hisilicon/Kconfig        ARCH_HISI + ARCH_LUOFU
-#       arch/arm/mach-hisilicon/Makefile       machine-$(CONFIG_ARCH_LUOFU) += luofu
-#       arch/arm/boot/dts/Makefile             dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb
-#       arch/arm/Makefile                      textofs-$(CONFIG_ARCH_LUOFU) := 0x00608000
-#   - the machine descriptor (clean mach-luofu; TARGET-DESIGN.md 7.1);
-#   - the driver + dt-binding series (TARGET-DESIGN.md 7);
-#   - a FIP trailer generator (TARGET-DESIGN.md 5.2). This skeleton cannot
-#     generate the trailer; tools/fip-slice.py only checks/assembles one.
-#   - the kernel config, re-derived against the chosen release (TARGET-DESIGN.md 4.2).
+# Mapping (copy the whole target-skeleton/ tree, not this file alone):
+#   target/linux/hisilicon/        -> <openwrt>/target/linux/hisilicon/
+#   dts/*.dts, *.dtso              -> <openwrt>/target/linux/hisilicon/dts/
+#   tools/{fip-slice,luofu-image,pad-dtb}.py -> <openwrt>/scripts/
+# See ../README.md section 4 for the full mapping and the lane REPORT for the
+# 2026-11-24 build verification.
 
 include $(TOPDIR)/rules.mk
 

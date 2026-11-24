@@ -2,7 +2,13 @@
 #
 # target/linux/hisilicon/Kconfig
 #
-# STATUS: SCHEMATIC / UNTESTED / NOT A WORKING TARGET.
+# STATUS (2026-11-24): REVIEW STUB, NOT USED BY THE BUILD.
+#
+# This file is deliberately NOT part of the working target: the release-line
+# build in OpenWrt main does not read it, and the two config symbols below are
+# not referenced by any Makefile in the tree.  It is kept only as a written
+# note for the upstream review form; the submission recommendation is to
+# DELETE it and carry the platform symbols in the kernel patch (see below).
 #
 # READ THIS BEFORE COPYING IT INTO A TREE.
 #
@@ -52,9 +58,10 @@
 config TARGET_HISILICON_LUOFU
 	bool "HiSilicon luofu (Hi5671Y / Cudy WR3000 v2.0, board R116)"
 	help
-	  SCHEMATIC entry for the wired-first luofu target (TARGET-DESIGN.md).
-	  There are no drivers, bindings or image recipe behind this yet; it is
-	  a review stub, not a supported target.
+	  REVIEW STUB ONLY - NOT USED BY THE BUILD.  The working target is
+	  selected through the standard Device/ stanzas in image/Makefile and
+	  image/luofu.mk (CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2
+	  in the tree's .config), not through this symbol.
 
 config LUOFU_FIP_TRAILER
 	string "FIP trailer input (fixed 40,732-byte uImage trailer)"

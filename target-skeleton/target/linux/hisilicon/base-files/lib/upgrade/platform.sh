@@ -9,15 +9,16 @@
 # structural field the image recipe claimed (tar layout, CONTROL, uImage
 # header, FIP trailer and gate magic, descriptor constants, rootfs UBI volume
 # shape, fip-manifest.txt cross-check, slot budgets). It refuses anything
-# else, including a vendor recovery.bin. The container still says NOT
-# FLASHABLE: that is a provenance statement (this build has never booted),
-# not a write gate - platform_do_upgrade is the A/B install path.
+# else, including a vendor recovery.bin. The container still says
+# NOT FLASHABLE-UNTIL-INSTALLED: that is a provenance statement (the install/
+# upgrade path has never run end-to-end on a device), not a write gate -
+# platform_do_upgrade is the A/B install path.
 #
 # platform_do_upgrade() implements that path host-side, fail-closed:
 #   1. re-runs platform_check_image (defence in depth: a direct do_stage2
 #      invocation must not write an unvalidated container);
 #   2. resolves the ACTIVE pair from two independent in-boot witnesses that
-#      must agree: the luofu-selector sysfs current_pair (the SYSCTRL cell's
+#      must agree: the boot-selector sysfs current_pair (the SYSCTRL cell's
 #      record of the pair) and the rootfs slot this system booted from
 #      (/sys/class/ubi/ubi0/mtd_num cross-checked with that mtd's /proc/mtd
 #      label). /proc/cmdline is not used: the measured boot carries no slot
@@ -353,7 +354,11 @@ LUOFU_ROOTFS_PART_SIZE=24379392
 LUOFU_TEST_ROOT="${LUOFU_TEST_ROOT:-}"
 LUOFU_MTD_TABLE="$LUOFU_TEST_ROOT/proc/mtd"
 LUOFU_UBI_SYS="$LUOFU_TEST_ROOT/sys/class/ubi"
-LUOFU_SELECTOR_DIR="$LUOFU_TEST_ROOT/sys/devices/platform/luofu-selector"
+# Selector platform device name: boot-selector (the devicetree node name and
+# the path observed on the unit; see the console record in the parent ledger
+# 2026-11-23).  luofu-selector is the earlier draft/fixture name and is only
+# accepted as a fallback by _luofu_selector_dir().
+LUOFU_SELECTOR_BASE="$LUOFU_TEST_ROOT/sys/devices/platform"
 LUOFU_DEV_DIR="$LUOFU_TEST_ROOT/dev"
 LUOFU_WORK_DIR="$LUOFU_TEST_ROOT/tmp/luofu-upgrade"
 
@@ -418,21 +423,36 @@ _luofu_mtd_size() { # <8-hex-digit size> -> decimal
 	echo "$((0x$1))"
 }
 
-# The selector sysfs interface (patches-6.18/017) is the only accepted
-# read/write path for the SYSCTRL boot-selector cell.
-_luofu_selector_read() {
-	local pair
+# Resolve the selector sysfs directory (patches-6.18/017 is the only accepted
+# read/write path for the SYSCTRL boot-selector cell).  boot-selector is the
+# devicetree node name and the hardware-observed path; luofu-selector is
+# accepted only for the mocked harness / earlier drafts.
+_luofu_selector_dir() {
+	local name
 
-	[ -r "$LUOFU_SELECTOR_DIR/current_pair" ] || return 1
-	read -r pair _ < "$LUOFU_SELECTOR_DIR/current_pair" 2>/dev/null || return 1
+	for name in boot-selector luofu-selector; do
+		if [ -r "$LUOFU_SELECTOR_BASE/$name/current_pair" ]; then
+			echo "$LUOFU_SELECTOR_BASE/$name"
+			return 0
+		fi
+	done
+	return 1
+}
+
+_luofu_selector_read() {
+	local pair dir
+
+	dir="$(_luofu_selector_dir)" || return 1
+	read -r pair _ < "$dir/current_pair" 2>/dev/null || return 1
 	[ -n "$pair" ] || return 1
 	echo "$pair"
 }
 
 _luofu_selector_write() { # <a|b>
-	local want="$1" got
+	local want="$1" got dir
 
-	printf '%s\n' "$want" > "$LUOFU_SELECTOR_DIR/next_pair" 2>/dev/null || return 1
+	dir="$(_luofu_selector_dir)" || return 1
+	printf '%s\n' "$want" > "$dir/next_pair" 2>/dev/null || return 1
 	got="$(_luofu_selector_read)" || return 1
 	[ "$got" = "$want" ] || return 1
 	return 0
@@ -463,7 +483,7 @@ _luofu_active_pair() {
 	local selector_pair rootfs_pair
 
 	selector_pair="$(_luofu_selector_read)" || {
-		_luofu_err "no luofu-selector interface at $LUOFU_SELECTOR_DIR/current_pair (CONFIG_LUOFU_SELECTOR and the devicetree node are required); refusing"
+		_luofu_err "no boot-selector interface at $LUOFU_SELECTOR_BASE/boot-selector/current_pair (CONFIG_LUOFU_SELECTOR and the devicetree node are required); refusing"
 		return 1
 	}
 	case "$selector_pair" in
@@ -643,7 +663,7 @@ platform_do_upgrade() {
 	_luofu_selector_write "$target" || {
 		_luofu_err "could not move the boot selector to pair $target (the next_pair store or its read-back failed); restoring pair $active"
 		_luofu_selector_write "$active" ||
-			_luofu_err "could not restore the selector either - check $LUOFU_SELECTOR_DIR/current_pair before rebooting"
+			_luofu_err "could not restore the selector either - check $LUOFU_SELECTOR_BASE/boot-selector/current_pair before rebooting"
 		return 1
 	}
 	sync

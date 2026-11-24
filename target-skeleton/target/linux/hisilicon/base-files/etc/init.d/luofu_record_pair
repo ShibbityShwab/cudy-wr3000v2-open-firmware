@@ -27,7 +27,9 @@
 #   1. determines the booted rootfs slot from /sys/class/ubi/ubi0/mtd_num and
 #      that mtd's /proc/mtd label (rootfsa -> pair a, rootfsb -> pair b), with
 #      a /proc/cmdline cross-check when the command line names the slot;
-#   2. waits (bounded) for the luofu-selector sysfs interface to exist;
+#   2. waits (bounded) for the boot-selector sysfs interface to exist (the
+#      devicetree node name; the hardware path is
+#      /sys/devices/platform/boot-selector, see _selector_find below);
 #   3. reads the recorded pair; if it already equals the running pair it does
 #      nothing (idempotent);
 #   4. otherwise it writes the running pair to next_pair, which performs the
@@ -53,7 +55,13 @@ START=96
 # base-files/lib/upgrade/platform.sh).  The mocked harness sets it to a
 # fixture tree so every lookup resolves inside the fixture.
 LUOFU_TEST_ROOT="${LUOFU_TEST_ROOT:-}"
-LUOFU_SELECTOR_DIR="$LUOFU_TEST_ROOT/sys/devices/platform/luofu-selector"
+# The selector platform device is named after its devicetree node: the
+# hardware-validated path is /sys/devices/platform/boot-selector (bench tools
+# and ledger 2026-11-23; the stock sysenv/boot_reg node does not exist under
+# our kernel).  The first draft and older fixtures used "luofu-selector", so
+# _selector_find accepts either name.  LUOFU_SELECTOR_DIR is set by the find.
+LUOFU_SELECTOR_BASE="$LUOFU_TEST_ROOT/sys/devices/platform"
+LUOFU_SELECTOR_DIR=""
 LUOFU_UBI_SYS="$LUOFU_TEST_ROOT/sys/class/ubi"
 LUOFU_MTD_TABLE="$LUOFU_TEST_ROOT/proc/mtd"
 LUOFU_CMDLINE="$LUOFU_TEST_ROOT/proc/cmdline"
@@ -148,7 +156,23 @@ _cmdline_pair() {
 	return 1
 }
 
+# Resolve the selector sysfs directory and export it as LUOFU_SELECTOR_DIR.
+# boot-selector is the devicetree node name and the path observed on the unit;
+# luofu-selector is accepted only for the mocked harness / earlier drafts.
+_selector_find() {
+	local name
+
+	for name in boot-selector luofu-selector; do
+		if [ -r "$LUOFU_SELECTOR_BASE/$name/current_pair" ]; then
+			LUOFU_SELECTOR_DIR="$LUOFU_SELECTOR_BASE/$name"
+			return 0
+		fi
+	done
+	return 1
+}
+
 _selector_read() {
+	_selector_find || return 1
 	_read_word "$LUOFU_SELECTOR_DIR/current_pair"
 }
 
@@ -156,11 +180,11 @@ _wait_selector() {
 	local i=0
 
 	while [ "$i" -lt "$LUOFU_RECORD_WAIT" ]; do
-		[ -r "$LUOFU_SELECTOR_DIR/current_pair" ] && return 0
+		_selector_find && return 0
 		i=$((i + 1))
 		sleep 1
 	done
-	[ -r "$LUOFU_SELECTOR_DIR/current_pair" ]
+	_selector_find
 }
 
 start() {
@@ -178,7 +202,7 @@ start() {
 	fi
 
 	_wait_selector || {
-		_log "no luofu-selector interface at $LUOFU_SELECTOR_DIR/current_pair after ${LUOFU_RECORD_WAIT}s; not writing the boot selector"
+		_log "no boot-selector interface at $LUOFU_SELECTOR_BASE/boot-selector/current_pair after ${LUOFU_RECORD_WAIT}s; not writing the boot selector"
 		return 0
 	}
 

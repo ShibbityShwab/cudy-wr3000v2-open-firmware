@@ -5,6 +5,38 @@ flashable release.**  This page is the short release status for the target; the
 full record is [../upstream/series-6.18/05-release-line.md](../upstream/series-6.18/05-release-line.md)
 and [../docs/SMP-RE.md](../docs/SMP-RE.md) section 24.
 
+## 2026-11-24 addendum: target checkpoint + the full-duplex Wi-Fi protocol
+
+This is a **bench/host checkpoint note, not a release change**: no new release image is
+claimed here and no upstream claim is made.
+
+- **Target checkpoint (host-only):** the 67-patch target stack, board DTS, image chain
+  and `luofu/config-6.18` build in an isolated OpenWrt main tree: `make defconfig` RC=0
+  with the device selected, kernel prepare/compile RC=0, full image build RC=0.  Patch
+  `013a` (the GP1 endpoint reset pulse: assert GPIO0 20/21/28 LOW 20 ms, release HIGH
+  100 ms before the RC clock/LTSSM) is now part of the committed target, and the
+  `wifi-pcie-hog` it supersedes is gone from the DTS (the driver owns the pulse;
+  GP1 boot-verified it on 2026-11-24).  The full-size image artifacts and hashes are in
+  `../docs/incoming/wifi-upstream-target/BUILD-VERIFICATION.md`.
+- **Boot-pair recorder fixed:** the image now enables the validated recorder
+  (`etc/rc.d/S96luofu_record_pair`) instead of the bench-only duplicate, and the recorder
+  and `platform.sh` use the hardware-observed `/sys/devices/platform/boot-selector` name
+  (they previously looked for `luofu-selector`, so the real recorder could never record a
+  pair on the unit - the bench hack was doing it).  Host-tested 94/94; one attended reboot
+  is still required before this is a hardware-verified change.
+- **Wi-Fi protocol [V, bench]:** on the GP1/PD4 line the clean-room host runs the vendor
+  HCC protocol end to end - golden boot, device ready handshake (g4 id1 + g4 id2 payload
+  0x01060850), host->device context-create (g0 id1 key 0x64) + TXQ config sync (g0 id1
+  cmd 0xd8) consumed with zero exceptions, and the firmware responds with g1 id3 (36 B)
+  and g1 id0x12 (40 B).  This is the parent `STATUS.md` section 3j record.  It uses a
+  **research-only patched firmware image (PD4)** and a clean-room out-of-tree module; it
+  is not an upstreamable driver and the firmware is closed.  The GPL request remains
+  unanswered.
+- **Submission status:** unchanged in the review form; the 2026-11-24 classification and
+  the proposed v2 series (30 kernel patches + DTS-0001) are in
+  `../docs/incoming/wifi-upstream-target/`.  The release-line manifest needs
+  `013a` (L1 55 -> 56) at the next regeneration.
+
 ## 2026-11-22 addendum: PCIe and Wi-Fi transport proof points
 
 Two bench results from 2026-11-22 supersede the stale rows below.  They are proof

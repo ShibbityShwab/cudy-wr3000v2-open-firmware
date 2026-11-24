@@ -3,13 +3,16 @@
 # -*- coding: utf-8 -*-
 """luofu-image.py - host-side image assembly for the HiSilicon luofu R116 target.
 
-STATUS: HOST-ONLY / NEVER BOOTED. This tool builds and validates host-side
-artifacts; it touches no device and proves nothing about booting. The
-rootfs_data overlay layout it now requires has NOT been booted: the previous
-booted image had no rootfs_data volume (fstools mount_root fell back to tmpfs).
-The empty-volume/autoresize behaviour is read from the kernel and fstools
-sources (fs/ubifs/sb.c, drivers/mtd/ubi/build.c, fstools libfstools/ubi.c),
-not measured on this board.
+STATUS: HOST-ONLY. This tool builds and validates host-side artifacts; it
+touches no device and proves nothing about booting. THE RECIPE HAS BOOTED on
+the unit since 2026-11-19 (UP) and 2026-11-21 (2-CPU image 974e6ca6 with this
+A/B + rootfs_data layout, SSH, persistent overlay, soak), and the 2026-11-24
+GP1 line boots as well; any SPECIFIC rebuild made by this tool is still
+host-only until it is flashed. The empty-volume/autoresize overlay path is
+read from the kernel and fstools sources (fs/ubifs/sb.c,
+drivers/mtd/ubi/build.c, fstools libfstools/ubi.c); it has booted, but the
+overlay volume's first-mount formatting on this board is not a per-rebuild
+measured fact.
 
 WHAT IT IS
   The target-side helper that image/luofu.mk calls after the kernel slice has
@@ -49,14 +52,16 @@ WHAT IT REFUSES (fail-closed)
   - Vendor-derived input paths (dumps/, firmware/, stock/, vendor rootfs dumps).
 
 WHAT IT DOES NOT CLAIM
-  The A/B slot selector protocol (sysenv 0x10100C08), the SMP second-CPU
-  bring-up and the install path are [U] on hardware (TARGET-DESIGN.md 3.4,
-  5.2, 5.4, 5.5). The 2026-11-19 attended bring-up booted an earlier build of
-  this image recipe to userspace (UP, 1 CPU; no rootfs_data volume), but THIS
-  EXACT REBUILD has not been flashed or booted. INSTALL-STATUS.txt says so:
+  The recipe chain has booted on the unit (2026-11-19 UP; 2026-11-21 2-CPU
+  baseline 974e6ca6 with this A/B + rootfs_data layout; 2026-11-24 GP1 line),
+  but THIS EXACT REBUILD has not been flashed or booted, and the
+  platform_do_upgrade / first-install path has never run end to end on a
+  device (the bench installs were manual pair-B writes). The baked command
+  line pins ubi.mtd=rootfsb (pair B only), so the container is not an
+  installable product image. INSTALL-STATUS.txt carries the marker
   "BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED" (the string
   "NOT FLASHABLE" is kept because first-install-stock.sh and the target
-  platform_check_image grep for it).
+  platform_check_image grep for it). See TARGET-DESIGN.md 3.4, 5.2-5.5, 9.
 
 EXIT CODES
   0 pass / artifact written
@@ -755,24 +760,20 @@ def install_status_text(board, target):
         "target: %s\n"
         "built:  by luofu-image.py %s (host-only)\n"
         "\n"
-        "BOOT EVIDENCE (2026-11-19 attended bring-up, this board)\n"
-        "  An earlier build of this image recipe booted to userspace on a\n"
-        "  WR3000 v2: U-Boot -> our kernel 6.18.60 -> rootfs UBI slot ->\n"
-        "  ubiblock0_0 (squashfs) -> /sbin/init -> preinit -> procd ->\n"
-        "  console. That build carried the same image chain and the same\n"
-        "  boot fixes as this one (CONFIG_CMDLINE_FORCE, 4 KiB squashfs\n"
-        "  padding before ubinize, CONFIG_XZ_DEC_ARM), but:\n"
-        "    - it was built from kernel patches 001-017 only (UP, 1 CPU);\n"
-        "      the SMP patch 018 and patches 019-021 were not part of that\n"
-        "      build and have never run on hardware;\n"
-        "    - it had no rootfs_data volume: mount_root fell back to a tmpfs\n"
-        "      overlay, i.e. the persistent overlay this container carries\n"
-        "      has NOT been observed on hardware;\n"
-        "    - its board.d/02_network sourced a missing\n"
-        "      /lib/functions/board.sh (the board_detect warning of that\n"
-        "      boot); this container ships the corrected board.d.\n"
-        "  THIS EXACT REBUILD (patches 001-021, rootfs_data overlay volume,\n"
-        "  corrected board.d) has NOT been flashed and NOT been booted.\n"
+        "BOOT EVIDENCE (this board; earlier dated builds of this recipe)\n"
+        "  - 2026-11-19 attended bring-up: this image chain booted to\n"
+        "    userspace (UP, 1 CPU; no rootfs_data volume at that time; the\n"
+        "    then-current board.d had the board_detect warning, fixed since).\n"
+        "  - 2026-11-21 2-CPU baseline (image 974e6ca6): booted from pair b\n"
+        "    with this A/B + rootfs_data layout: 2 CPUs, SSH, persistent\n"
+        "    ubifs overlay across reboot, 15-minute soak with 0 failures.\n"
+        "    The 7f270b8c board-feature image and the 6e9c54d0 DTS baseline\n"
+        "    also booted.\n"
+        "  - 2026-11-24 GP1 line: the patch-013a endpoint reset pulse boots\n"
+        "    the unit and the Wi-Fi transport/HCC bench runs on that line.\n"
+        "  THIS EXACT REBUILD has NOT been flashed and NOT been booted: the\n"
+        "  2026-11-24 checkpoint rebuild changed only comments, the committed\n"
+        "  013a GP1 patch and the base-files recorder/selector (host-tested).\n"
         "\n"
         "Structural validation of THIS file (host-side, from its own bytes):\n"
         "  kernel slice: legacy uImage + generated FIP trailer + gate magic;\n"
@@ -784,11 +785,13 @@ def install_status_text(board, target):
         "  path is read from the sources, not measured on this board.\n"
         "\n"
         "NOT FLASHABLE-UNTIL-INSTALLED: do not flash this file as a stock\n"
-        "sysupgrade and do not add a factory/install stanza for it. The A/B\n"
-        "boot-selector handover, the SMP second-CPU bring-up and the\n"
-        "rootfs_data overlay are all host-validated but not yet observed on\n"
-        "hardware in this combination (TARGET-DESIGN.md 3.4, 5.2, 5.3, 9;\n"
-        "TARGET-SKELETON README). Use the attended first-install procedure.\n"
+        "sysupgrade and do not add a factory/install stanza for it. The\n"
+        "platform_do_upgrade / first-install path has never run end to end on\n"
+        "a device (bench installs were manual pair-B writes), there is no\n"
+        "factory image, and the baked command line pins ubi.mtd=rootfsb (pair\n"
+        "B only). The A/B selector handover and the SMP second-CPU bring-up\n"
+        "are hardware-verified on the bench, but not through this API. See\n"
+        "TARGET-DESIGN.md 3.4, 5.2-5.5, 9 and the target README.\n"
         % (board, target, VERSION, UBI_VOLUME_NAME, ROOTFS_DATA_VOLUME_NAME))
 
 
