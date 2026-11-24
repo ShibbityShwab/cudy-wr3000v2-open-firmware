@@ -1,0 +1,220 @@
+{
+  "schema": "hi5622-error-path-ladders/1",
+  "lane": "wifi-stability",
+  "task": "task-136",
+  "date": "2026-11-27",
+  "attended": true,
+  "ladders": [
+    {
+      "id": "E1",
+      "title": "module rmmod/insmod cycling WITHOUT a release",
+      "purpose": "prove the probe/remove lifecycle is clean and leak-free before any boot-ladder release; the chip must stay in ROM state",
+      "allow_rmmod_before_release": true,
+      "bringup": false,
+      "classify": "PASS = 3 clean cycles, no WARN/Oops, chip page+8 != 2, no release write; FAIL = any release/exception/leak",
+      "steps": [
+        {
+          "n": "1",
+          "action": "read-only chip check (bar0read page+8 must NOT be 2) and /proc/modules must not contain hi5622_wifi",
+          "expect": "page+8 != 2, module absent",
+          "sh": [
+            "test -x /root/hi5622-bar0read || stop no-helper"
+          ]
+        },
+        {
+          "n": "2",
+          "action": "insmod the image module with explicit params (NO prepare/upload/verify/seed/release)",
+          "expect": "insmod rc=0, sysfs groups + wiphy present, no H2D frame posted",
+          "sh": [
+            "insmod /lib/modules/$(uname -r)/hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin allow_frames=0 || stop insmod",
+            "ls /sys/bus/pci/devices/0000:00:00.0/ | grep -q hcc_status || stop attrs-missing"
+          ]
+        },
+        {
+          "n": "3",
+          "action": "record dmesg delta + meminfo, then rmmod (legal ONLY because no release was ever written this boot)",
+          "expect": "rmmod rc=0, no WARN/Oops in the delta",
+          "sh": [
+            "dmesg | tail -5",
+            "grep MemAvailable /proc/meminfo",
+            "rmmod hi5622_wifi || stop rmmod"
+          ]
+        },
+        {
+          "n": "4",
+          "action": "repeat steps 2-3 for cycles 2 and 3",
+          "expect": "identical rc and a stable MemAvailable within the documented delta",
+          "sh": [
+            "echo cycle-2-3-manual"
+          ]
+        },
+        {
+          "n": "5",
+          "action": "final read-only chip check + capture",
+          "expect": "page+8 != 2, mask 0, staging 0; never a release",
+          "sh": [
+            "test -x /root/hi5622-bar0read || true"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E2",
+      "title": "AP stop_ap + hostapd restart in the same boot (production blocker)",
+      "purpose": "decide whether a hostapd restart can work in one boot: default stop_ap_mode=0 (host-side only) then optional mode=1 (user_del teardown + re-create)",
+      "bringup": true,
+      "classify": "PASS = second hostapd AP-ENABLED with golden page and no lane timeout; FAIL-CLEAN = cfg80211 refusal only; EXCEPTION = stop + power-cycle",
+      "steps": [
+        {
+          "n": "1",
+          "action": "evidence bring-up to AP-ENABLED then golden readback",
+          "expect": "AP-ENABLED, page 0x86807FEF/7/2/0xABCD, mask 0, staging 0",
+          "sh": [
+            "echo bringup-section-above"
+          ]
+        },
+        {
+          "n": "2",
+          "action": "hostapd stop (SIGTERM) -> NL80211_CMD_STOP_AP -> driver controlled stop_ap (mode 0)",
+          "expect": "hostapd exits; dmesg host-side stop_ap cfg80211 state cleared, NO firmware write; page golden",
+          "sh": [
+            "killall hostapd 2>/dev/null || true",
+            "sleep 2",
+            "dmesg | tail -10"
+          ]
+        },
+        {
+          "n": "3",
+          "action": "restart hostapd (same boot, same iface)",
+          "expect": "AP-ENABLED again; start_ap reached + ap_ssid/ap_cfg posted/consumed; page golden; no announce timeout",
+          "sh": [
+            "/usr/sbin/hostapd -B -t /tmp/wifi-soak/hostapd-open.conf || stop hostapd-restart",
+            "sleep 3",
+            "iw dev wlan0 info"
+          ]
+        },
+        {
+          "n": "4",
+          "action": "optional fresh boot + stop_ap_mode=1: stop (user_del g0 id9 committed) + restart (user_add/notify + base re-created)",
+          "expect": "same PASS with the controlled teardown dmesg lines",
+          "sh": [
+            "echo mode1-manual"
+          ]
+        },
+        {
+          "n": "5",
+          "action": "final readback + capture",
+          "expect": "golden page/mask/staging, hostapd alive, no exception",
+          "sh": [
+            "dmesg | tail -20"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E3",
+      "title": "AP start failure then retry (clean vs dirty)",
+      "purpose": "verify a clean pre-driver failure can be retried and a dirty sequence is refused",
+      "bringup": false,
+      "classify": "PASS = clean failure (no AP frame) then retry AP-ENABLED",
+      "steps": [
+        {
+          "n": "1",
+          "action": "bring the stack to C2 + iface __ap (no hostapd yet)",
+          "expect": "C2 ok=2 timeout=0, iface type __ap, page golden",
+          "sh": [
+            "echo bringup-through-iface"
+          ]
+        },
+        {
+          "n": "2",
+          "action": "hostapd with channel=14: rejected before the driver; record dmesg",
+          "expect": "hostapd fails; NO start_ap reached line; no frame posted",
+          "sh": [
+            "printf 'interface=wlan0\\ndriver=nl80211\\nssid=cudy-ap-test\\nhw_mode=g\\nchannel=14\\n' > /tmp/wifi-soak/bad.conf",
+            "/usr/sbin/hostapd -B -t /tmp/wifi-soak/bad.conf || true",
+            "sleep 1",
+            "dmesg | tail -6"
+          ]
+        },
+        {
+          "n": "3",
+          "action": "correct config restart",
+          "expect": "AP-ENABLED; start_ap reached + frames consumed; page golden",
+          "sh": [
+            "/usr/sbin/hostapd -B -t /tmp/wifi-soak/hostapd-open.conf || stop retry-failed",
+            "sleep 3",
+            "iw dev wlan0 info"
+          ]
+        },
+        {
+          "n": "4",
+          "action": "final readback",
+          "expect": "golden page/mask/staging, hostapd alive",
+          "sh": [
+            "dmesg | tail -15"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E4",
+      "title": "repeated C2 ladders across reboots (idempotency)",
+      "purpose": "one cycle per run: fresh boot -> C2 -> record every gate; run 3x with a reboot between runs and compare",
+      "bringup": false,
+      "classify": "PASS = all cycles ok=2 timeout=0, frames consumed 0 polls, mask/staging 0, identical dmesg families",
+      "steps": [
+        {
+          "n": "1",
+          "action": "fresh golden boot + insmod + boot ladder + C2",
+          "expect": "h2d_status ok=2 timeout=0; rd_catalog g1 id3 deltas; page golden",
+          "sh": [
+            "echo bringup-to-c2"
+          ]
+        },
+        {
+          "n": "2",
+          "action": "capture h2d_status, hcc_ready, rd_catalog, page/mask/staging, dmesg tail",
+          "expect": "all gates recorded for cross-cycle comparison",
+          "sh": [
+            "cat /sys/bus/pci/devices/0000:00:00.0/h2d_status",
+            "cat /sys/bus/pci/devices/0000:00:00.0/hcc_ready"
+          ]
+        },
+        {
+          "n": "3",
+          "action": "reboot the box and repeat (operator; 3 cycles total)",
+          "expect": "cycle N gates identical to cycle 1",
+          "sh": [
+            "echo cycle-break (operator)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E5",
+      "title": "exception recovery check (mask != 0 -> power-cycle)",
+      "purpose": "read-only detector + recovery card; no writes at all",
+      "bringup": false,
+      "classify": "exit 0 = clean; exit 3 = EXCEPTION-DETECTED -> power-cycle per card",
+      "steps": [
+        {
+          "n": "1",
+          "action": "read page/state/mask/staging via bar0read (READ-ONLY)",
+          "expect": "clean: golden page/state, mask 0, staging 0",
+          "sh": [
+            "echo read-only-check"
+          ]
+        },
+        {
+          "n": "2",
+          "action": "classify and print the recovery card",
+          "expect": "on exception: STOP, power-cycle, no rmmod/retry",
+          "sh": [
+            "echo recovery-card"
+          ]
+        }
+      ]
+    }
+  ]
+}

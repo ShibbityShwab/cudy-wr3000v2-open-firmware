@@ -1,0 +1,39 @@
+{
+  "schema": "hi5622-scan-ap-diagnostic/1",
+  "lane": "wifi-stability",
+  "date": "2026-11-27",
+  "purpose": "bench diagnostic fired by the Lead to pin down the scan -> AP-start failure; results recorded here",
+  "conditions": "self-contained image ae5e28bf + combined module 44c6cc12; fresh golden boot per letter; one attempt per boot; no in-boot retry",
+  "boots": [
+    {
+      "id": "A",
+      "sequence": "C2 -> managed iface scan (full) -> iface del + re-add __ap -> hostapd",
+      "result": "FAIL (hostapd rc=1) and FIRMWARE EXCEPTION",
+      "detail": "scan posts vap_add 3/16, vap_start 4/16, scan_req 5/16 (module-global base latch SET); user_del 6/16, user_add 7/16, notify 8/16; start_ap reached; ap_ssid 9/16 posted; ap_cfg announce NOT consumed (out[0]=0x8 after 50 polls); sequence aborted; page 0x00119758/0x0000009c/0x00000000/0x00000002 golden:0; hostapd Failed to set beacon parameters / Could not connect to kernel driver"
+    },
+    {
+      "id": "B",
+      "sequence": "C2 -> iface __ap -> hostapd -> kill -> hostapd (NO scan)",
+      "result": "first AP-ENABLED (rc=0), second FAIL (rc=1)",
+      "detail": "no driver start_ap message for the second attempt: cfg80211 -EALREADY because .stop_ap never cleared ap.beacon_interval"
+    },
+    {
+      "id": "C",
+      "sequence": "C2 -> iface __ap -> hostapd (AP-ENABLED) -> scan -> killall -> restart",
+      "result": "first rc=0, scan rc=0, second FAIL rc=1; page stayed golden 0x86807fef (no exception)",
+      "detail": "clean cfg80211-side failure: restart is scan-independent"
+    },
+    {
+      "id": "D",
+      "sequence": "C2 -> managed scan -> del -> __ap -> hostapd",
+      "result": "FAIL (hostapd rc=1) and FIRMWARE EXCEPTION",
+      "detail": "ap_ssid 9/16 posted then ap_cfg not consumed; page 0x00119758/0x0000009a/0x00000000/0x00000002 golden:0 (same class as A)"
+    }
+  ],
+  "conclusions": [
+    "A and D confirm the stale module-global hi5622_vap_base_posted latch: after a scan posts the mode-1 VAP base, an iface delete/re-add makes start_ap skip the base and post AP frames against a dead VAP object -> firmware exception.",
+    "B and C confirm the restart blocker is cfg80211 ap.beacon_interval / missing stop_ap, scan-independent and exception-free.",
+    "The mgmt_tx dump_stack is hostapd teardown noise, not a cause (and is gated by mgmt_diag=0).",
+    "The hardening patch addresses both (per-ctx latch cleared on user_del; stop_ap_mode 0/1) plus the stale-VAP readback guard."
+  ]
+}

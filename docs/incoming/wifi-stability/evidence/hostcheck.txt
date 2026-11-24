@@ -1,0 +1,6 @@
+== host policy gate test
+hardening_selftest: 13 passed, 0 failed
+== patch static checks
+== patch apply check (polished image source tree)
+PATCH-APPLY OK
+HOSTCHECK PASS

@@ -1,0 +1,36 @@
+{
+  "schema": "hi5622-soak-ladder/1",
+  "lane": "wifi-stability",
+  "date": "2026-11-27",
+  "purpose": "parameter set for the attended AP soak ladder (consumed by tools/soak.py)",
+  "bringup": {
+    "module": "hi5622_wifi.ko (hardened or polished or fired 44c6cc12 artifact) - record size+sha256",
+    "params": [
+      "fw_path=hi_wifi/FIRMWARE.PD4.bin",
+      "allow_frames=16",
+      "frame_gap_ms=100",
+      "h2d_send_budget=4",
+      "vap_start_first=1",
+      "vap_start_mode=1",
+      "vap_start_module=0",
+      "hcc_poll_ms=5"
+    ],
+    "firmware": "hi_wifi/FIRMWARE.PD4.bin sha256 cfe24bfb... 928,920 B (manual push; never packaged)",
+    "hostapd": "hostapd-open.conf: wlan0, nl80211, ssid cudy-ap-test, hw_mode=g, channel=6, beacon_int=100, dtim=2"
+  },
+  "soak": {
+    "duration_s": 3600,
+    "interval_s": 10,
+    "min_duration_s": 60
+  },
+  "gates": [
+    "golden page 0x86807FEF/7/2/0xABCD",
+    "state 1",
+    "mask 0",
+    "staging 0",
+    "h2d_status ok=2 timeout=0",
+    "AP-ENABLED + ssid"
+  ],
+  "policy": "tools/soak.py POLICY; PASS only if every check passes",
+  "recovery": "exception => stop, capture, power-cycle; no rmmod, no retry"
+}

@@ -1,0 +1,31 @@
+E1  module rmmod/insmod cycling WITHOUT a release              no-bringup
+E2  AP stop_ap + hostapd restart in the same boot (production blocker) bringup
+E3  AP start failure then retry (clean vs dirty)               no-bringup
+E4  repeated C2 ladders across reboots (idempotency)           no-bringup
+E5  exception recovery check (mask != 0 -> power-cycle)        no-bringup
+== E1: module rmmod/insmod cycling WITHOUT a release
+   steps: 5, script lines: 45
+   classify: PASS = 3 clean cycles, no WARN/Oops, chip page+8 != 2, no release write; FAIL = any release/exception/leak
+   AUDIT OK
+   emit with: --emit-script E1
+== E2: AP stop_ap + hostapd restart in the same boot (production blocker)
+   steps: 5, script lines: 132
+   classify: PASS = second hostapd AP-ENABLED with golden page and no lane timeout; FAIL-CLEAN = cfg80211 refusal only; EXCEPTION = stop + power-cycle
+   AUDIT OK
+   emit with: --emit-script E2
+== E3: AP start failure then retry (clean vs dirty)
+   steps: 4, script lines: 41
+   classify: PASS = clean failure (no AP frame) then retry AP-ENABLED
+   AUDIT OK
+   emit with: --emit-script E3
+== E4: repeated C2 ladders across reboots (idempotency)
+   steps: 3, script lines: 31
+   classify: PASS = all cycles ok=2 timeout=0, frames consumed 0 polls, mask/staging 0, identical dmesg families
+   AUDIT OK
+   emit with: --emit-script E4
+== E5: exception recovery check (mask != 0 -> power-cycle)
+   steps: 2, script lines: 24
+   classify: exit 0 = clean; exit 3 = EXCEPTION-DETECTED -> power-cycle per card
+   AUDIT OK
+   emit with: --emit-script E5
+DRY-RUN OK

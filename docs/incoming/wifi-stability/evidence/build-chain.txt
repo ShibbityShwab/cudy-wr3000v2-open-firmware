@@ -1,0 +1,15 @@
+== stack 1: proven combined module (hardware-validated identity)
+BASE-ID-OK 242572 44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
+== stack 2: polished image module (wifi-image-polish identity)
+POLISHED-ID-OK 242920 d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6
+== stack 3: stability-hardened module
+== stability hardened module
+artifact  : /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko (debug-stripped)
+size      : 248524
+sha256    : 29225545fa285906ab789323dcda57526b487614c1e28a25b530c04cd15a341d
+unstripped: 936064 B sha256 35c895fbf73762ea363289ff2370ce8903d9cecb2c1ee98e4cf63bd81be60b7d
+vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+depends   : depends=cfg80211
+chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> hardened
+host test : ./tools/run-hardening-check.sh
+note: .ko is local evidence only (never committed); NOT fired - attended ladder E2/E3 required
