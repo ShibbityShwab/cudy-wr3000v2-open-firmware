@@ -269,6 +269,12 @@ this layer's map touches:
 
 The exact H2D payloads remain task-103's deliverable: this lane references
 group/id/key/length only and never synthesizes a payload it cannot justify.
+Sibling-lane cross-checks for the same rows: the committed wifi-datapath lane
+(task-105, FRAME-SPECS.md + tables) independently lists g0 id7/id8 = 0xA8 B,
+g0 id9 = 0x0C B, g0 id0xC = 0x1FC B and D2H g1 ids 15/16/17 + g2 id2; the
+in-progress wifi-proto-seq lane (task-103) owns the g1 id3/g1 id0x12 decodes
+and the calibration family (g0 id2, key 0x0101), which is driver-init traffic
+and therefore intentionally NOT a cfg80211 op in this map.
 
 ---
 
@@ -419,6 +425,8 @@ context-create), wifi-h2d-frames (exact builders + catalogue),
 wifi-irq-unmask/REPORT-PD3.md + REPORT-PD4.md (firmware patch path),
 wifi-vendor-userspace (cfg80211 scope + startup order), wifi-driver-re
 (cfg80211 ops map + wiphy registration), wifi-h2d-catalog (H2D tables),
+wifi-datapath (committed frame specs/sizes cross-check), wifi-proto-seq
+(task-103: D2H response decode + calibration family, in progress),
 phase14 (wiphy/netdev skeleton lessons), phase2/power-decode.md (5 GHz LU
 channel plan), DRIVER-BLACKBOX (two endpoints, live wiphy readouts).
 
