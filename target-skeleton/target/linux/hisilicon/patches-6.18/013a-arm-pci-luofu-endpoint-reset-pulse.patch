@@ -1,0 +1,61 @@
+--- a/drivers/pci/controller/dwc/pcie-luofu.c
++++ b/drivers/pci/controller/dwc/pcie-luofu.c
+@@ -489,6 +489,42 @@
+ 	.msi_init = luofu_pcie_msi_init,
+ };
+ 
++
++/*
++ * Board_id 3 (R116): the Wi-Fi endpoint power/reset lines are SoC GPIO0
++ * pins 20/21/28 (vendor board DT overlay pcie-gpios = <&porta 20 0>,
++ * <&porta 21 0>, <&porta 28 0>, gpio-delay = <50>, reset-duration-ms = 5).
++ * The vendor's hi_pcie_enable_dev() drives them LOW (assert), waits the
++ * reset duration, then drives them HIGH (release) and waits gpio-delay,
++ * all BEFORE the RC clock is enabled and LTSSM starts.  Our board leaves
++ * these lines static-high from early boot (DTS hog), which never resets
++ * the chip; without the assert pulse the chip's mask-ROM S0/S1 stage does
++ * not run (the handshake page CA 0x1BF000 stays pre-S1 and the ETE engine
++ * never starts).  RMW keeps every other port-A bit intact.
++ */
++#define LUOFU_EP_GPIO_BASE	0x10106000u
++#define LUOFU_EP_GPIO_MASK	(BIT(20) | BIT(21) | BIT(28))
++
++static int luofu_pcie_ep_reset_pulse(struct device *dev)
++{
++	void __iomem *gpio;
++	u32 data, ddr;
++
++	gpio = devm_ioremap(dev, LUOFU_EP_GPIO_BASE, 0x1000);
++	if (!gpio)
++		return -ENOMEM;
++	ddr = readl(gpio + 0x04) | LUOFU_EP_GPIO_MASK;
++	writel(ddr, gpio + 0x04);
++	data = readl(gpio);
++	writel(data & ~LUOFU_EP_GPIO_MASK, gpio);
++	msleep(20);
++	writel(data | LUOFU_EP_GPIO_MASK, gpio);
++	msleep(100);
++	dev_info(dev, "endpoint reset pulse: data 0x%08x -> 0x%08x, ddr 0x%08x\n",
++		 data, readl(gpio), ddr);
++	return 0;
++}
++
+ static int luofu_pcie_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -547,6 +583,15 @@
+ 			}
+ 		}
+ 	}
++	/* Board_id 3 (R116): the vendor asserts the endpoint power/reset
++	 * GPIO lines and releases them before the RC clock is enabled; only the
++	 * RC0 probe carries the pcie-gpios property. */
++	if (lpc->channel == 0) {
++		ret = luofu_pcie_ep_reset_pulse(dev);
++		if (ret)
++			return ret;
++	}
++
+ 	ret = clk_prepare_enable(lpc->clk);
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to enable the PCIe clock\n");
