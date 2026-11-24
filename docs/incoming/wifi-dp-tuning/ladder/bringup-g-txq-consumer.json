@@ -1,0 +1,507 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-g-txq-consumer",
+ "about": "G-TXQ ladder (wifi-dp-tuning, task-134): the F-AIR bring-up on the TUNED module (wifi-dp-air+ap-start v7+TXQ-publish patch). It keeps the proven boot->ctx-create->txq_sync72->iface/scan (firmware VAP+channel) ->dp_probe->dp_setup->0x0320 prefix, then adds the tuning rungs: read-only MAC role-5 tail (dp_mac_ext), ONE TX post whose driver now also publishes the vendor per-TID TXQ-table queue state (dp_txq_table evidence), ONE bounded dp_tx_complete_poll that settles COMPLETED (MAC) vs POST-ONLY over tx_complete_ms, then the ONE read-only RX capture. Only the completion poll can upgrade a TX from POST-ONLY, and an on-air claim still needs an external observer. HOST-ONLY delivery: the lane built and host-tested the module; no device was contacted.",
+ "profile": "hi5622-wifi-cfg80211",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": true,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "budget_min": 3,
+  "tools": [
+   "iw",
+   "ip",
+   "dmesg"
+  ],
+  "attrs": [
+   "cfg80211_status",
+   "h2d_status",
+   "dp_probe",
+   "dp_setup",
+   "dp_rings",
+   "dp_tx_status",
+   "h2d_txq_addr_sync",
+   "dp_tx_frame",
+   "dp_rx_poll",
+   "dp_rx_capture",
+   "dp_txq_table",
+   "dp_tx_complete_poll",
+   "dp_mac_ext"
+  ]
+ },
+ "load_params": {
+  "allow_frames": 12,
+  "frame_gap_ms": 100,
+  "h2d_send_budget": 4,
+  "vap_start_first": 1,
+  "vap_start_mode": 1,
+  "vap_start_module": 0,
+  "txq_publish": 1,
+  "tx_complete_ms": 3000,
+  "mac_tail_writes": 0
+ },
+ "steps": [
+  {
+   "name": "note-ladder",
+   "kind": "note",
+   "about": "F-AIR ladder for the merged provider module (opensource/docs/incoming/wifi-dp-air, hi5622_wifi.ko built by that lane's tools/build.sh; record size/sha256 from BUILD-NOTES.md and compare with sha256sum on the box - a mismatch is a STOP). Preconditions: attended session, recovery door READY, read-only UART capture, PD4 firmware + local Wi-Fi block staged, cfg80211.ko loaded first. One boot = one idea: ONE ctx-create, ONE txq_sync72, ONE scan, ONE dp_setup, ONE 0x0320, at most TWO TX posts, ONE RX capture; no retry, no rmmod after the 0x5A5A release."
+  },
+  {
+   "name": "cfg-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "registered=1"
+   ],
+   "about": "wiphy registered after the ready handshake (cfg80211 preamble already waits for /sys/class/ieee80211; this is the sequence-local re-gate)"
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "pre-create state on this fresh boot: no context, exception mask 0, exception staging 0",
+   "reads": [
+    {
+     "label": "pre_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "readback": "h2d_status",
+   "about": "H2D frame 1/3: ONE context-create (g0 id1 key 0x64, data[0]=type 1) - the ordered precondition of the TXQ sync, the provider VAP/scan frame family and the data-plane setup/hand-off"
+  },
+  {
+   "name": "post-create",
+   "kind": "read_pack",
+   "about": "the create allocated the measured ctx4 body (same PACK as the hardware-validated C2/D2 rows: ctx4[0]=4, ctx4+0x10=0x00010001, ctx4+0x434=0x0100478C)",
+   "reads": [
+    {
+     "label": "post_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "nonzero": true
+     }
+    },
+    {
+     "label": "post_ctx4",
+     "bar0": "0x7d4458",
+     "expect": {
+      "eq": "0x00000004"
+     }
+    },
+    {
+     "label": "post_ctx10",
+     "bar0": "0x7d4468",
+     "expect": {
+      "eq": "0x00010001"
+     }
+    },
+    {
+     "label": "post_ctx434",
+     "bar0": "0x7d488c",
+     "expect": {
+      "eq": "0x0100478c"
+     }
+    }
+   ]
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "readback": "h2d_status",
+   "about": "H2D frame 2/3: ONE TXQ config sync (g0 id1 cmd 0xd8, 72-byte node) -> core ACTIVE before the provider VAP/scan sequence (vap_start_first=1 needs the ACTIVE phase)"
+  },
+  {
+   "name": "post-txq",
+   "kind": "read_pack",
+   "about": "the TXQ handler ran clean: exception mask and staging word stay 0",
+   "reads": [
+    {
+     "label": "txq_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "txq_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "vap-add",
+   "kind": "shell",
+   "cmd": "iw-iface-add",
+   "args": {
+    "phy": "phy0",
+    "ifname": "wlan0",
+    "type": "managed"
+   },
+   "expect_rc": 0,
+   "about": "iw phy phy0 interface add wlan0 type managed -> add_virtual_intf -> provider user_add g0 id7 180 B + user_add_notify g0 id8 180 B (hardware validated 2026-11-26)"
+  },
+  {
+   "name": "link-up",
+   "kind": "shell",
+   "cmd": "ip-link-up",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "bring the managed netdev up; nl80211 refuses the scan request on a down interface"
+  },
+  {
+   "name": "vap-added",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "vap0: wlan0"
+   ],
+   "about": "the driver VAP model recorded the real wlan0 netdev"
+  },
+  {
+   "name": "catalog-baseline",
+   "kind": "catalog_snapshot",
+   "about": "D2H catalogue before the scan/data-plane ladder (evidence baseline)"
+  },
+  {
+   "name": "scan",
+   "kind": "shell",
+   "cmd": "iw-scan",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "blocked_rc": [
+    95,
+    161
+   ],
+   "blocked_patterns": [
+    "Not supported",
+    "scan needs an H2D frame provider"
+   ],
+   "about": "ONE nl80211 scan: the provider posts vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req g0 id0xC 520 B (hardware validated 2026-11-26; firmware pace ~3.5 s/channel so the auto window finishes with a channel-coverage or finish-abort result and results>0). This step is BOTH the mode-1 firmware VAP creation and the radio channel selection - the air-TX precondition. iw rc=0 also holds for an ABORTED scan (results>0 is gated by scan-results below)."
+  },
+  {
+   "name": "scan-settle",
+   "kind": "sleep",
+   "seconds": 1,
+   "about": "bounded wait for the last firmware scan events to reach the direct reader and the driver's scan-done log"
+  },
+  {
+   "name": "scan-results",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "scan: phase=finished",
+    "results="
+   ],
+   "absent": [
+    "results=0"
+   ],
+   "blocked_patterns": [
+    "results=0"
+   ],
+   "about": "PASS gate: the scan finished (ok or abort) and parsed at least one firmware result (g1 id15/17), so the firmware VAP object exists and the radio has a channel. BLOCKED-DRIVER: the scan was accepted but produced results=0 - the firmware produced nothing (the known VAP/scan-state wall), so the air-TX precondition is not met and the ladder must NOT claim a data-plane verdict"
+  },
+  {
+   "name": "scan-dmesg",
+   "kind": "shell",
+   "cmd": "dmesg",
+   "expect_rc": 0,
+   "patterns": [
+    "scan channel result"
+   ],
+   "blocked_patterns": [
+    "scan DONE (finish-abort, results=0"
+   ],
+   "about": "PASS gate: the cfg80211 scan event handler logged at least one 'scan channel result slot=.. ch=..' line (g1 id17 decode). BLOCKED-DRIVER: only the driver's own results=0 abort line is present"
+  },
+  {
+   "name": "dp-probe",
+   "kind": "attr_expect",
+   "attr": "dp_probe",
+   "patterns": [
+    "dp_probe: MAC band0 CA 0x40040000"
+   ],
+   "about": "read-only reachability word of MAC band 0 +0x00 (one read, no write); it must PASS before dp_setup is allowed in this load"
+  },
+  {
+   "name": "dp-setup",
+   "kind": "attr_write",
+   "attr": "dp_setup",
+   "value": "1",
+   "readback": "dp_status",
+   "patterns": [
+    "setup_done=1",
+    "failed=0",
+    "mac_regs=14",
+    "table_entries=8"
+   ],
+   "about": "E1 (hardware-validated 2026-11-26): allocate the 0x2524 TXQ table, the 8x64x8 TX MSDU-info rings, tx_ba_info and the 256/512/4095 RX rings + 0x63c/0xb0 buffer pools; write the 8 device-RAM MSDU table entries {ring devVA,0,0}; program MAC band 0 with read-back. ONE action, no retry; a read-back mismatch closes the data-plane lane for this load."
+  },
+  {
+   "name": "dp-rings-check",
+   "kind": "attr_expect",
+   "attr": "dp_rings",
+   "patterns": [
+    "+0x38 = 0x00008000",
+    "+0x3c = 0x00008000",
+    "+0x48 = 0xfffffcc1",
+    "tid 7 entry"
+   ],
+   "about": "read-only MAC band 0 snapshot + device-RAM table read-out: the two free-ring write pointers published 0x8000 and the vendor interrupt mask 0xfffffcc1 are visible"
+  },
+  {
+   "name": "pre-tx-status",
+   "kind": "attr_expect",
+   "attr": "dp_tx_status",
+   "patterns": [
+    "bound=1",
+    "failed=0",
+    "posted=0"
+   ],
+   "about": "the txrx layer bound to this load's E1 objects at the end of dp_setup; no frame posted yet"
+  },
+  {
+   "name": "dp-txq-sync",
+   "kind": "attr_write",
+   "attr": "h2d_txq_addr_sync",
+   "value": "1",
+   "readback": "h2d_status",
+   "patterns": [
+    "txq_addr_sent=1",
+    "ok=3",
+    "timeout=0",
+    "frames_sent=3"
+   ],
+   "about": "H2D frame 3/3 and the data-plane hand-off: ONE g0 id1 key 0x0320 frame carrying the 4-byte device VA of the host-DRAM TXQ table (firmware worker CA 0x81445 stores it). The TX action gates on this commit; no retry."
+  },
+  {
+   "name": "dp-mac-ext",
+   "kind": "attr_expect",
+   "attr": "dp_mac_ext",
+   "patterns": [
+    "DP MAC band0 role-5 tail",
+    "+0x5c = 0x",
+    "+0x6c = 0x"
+   ],
+   "about": "read-only role-5 tail survey: the vendor live dump has 0x5c=0x6c=4, our host program never writes them; record the tuned-module read before any TX"
+  },
+  {
+   "name": "dp-txq-table-before",
+   "kind": "attr_expect",
+   "attr": "dp_txq_table",
+   "patterns": [
+    "DP TXQ table",
+    "publications=0",
+    "user0_flags=0x00"
+   ],
+   "about": "before the first TX the TXQ table must be untouched (no publication) - the previous lanes' zero-table state"
+  },
+  {
+   "name": "tx-frame-probe-req",
+   "kind": "attr_write",
+   "attr": "dp_tx_frame",
+   "value": "1",
+   "readback": "dp_tx_status",
+   "patterns": [
+    "posted=1"
+   ],
+   "about": "FIRST tuned data-plane TX: ring entry + device-RAM table wptr + NEW TXQ-table queue-state publish (txq_publish=1 default)"
+  },
+  {
+   "name": "tx-status-1",
+   "kind": "attr_expect",
+   "attr": "dp_tx_status",
+   "patterns": [
+    "posted=1",
+    "completion_pending=",
+    "TXQ publish: enabled=1",
+    "publications=1"
+   ],
+   "about": "host-side chain evidence: the immediate read-back is expected POST-ONLY until the bounded poll"
+  },
+  {
+   "name": "txq-table-after",
+   "kind": "attr_expect",
+   "attr": "dp_txq_table",
+   "patterns": [
+    "publications=1",
+    "user0_flags=0x01",
+    "tid 0: table{count=1"
+   ],
+   "about": "the new consumer notification is in the table: user0 bitmap bit0 set and tid0 count=1 (vendor hmac_update_user_tid_txq_table layout)"
+  },
+  {
+   "name": "tx-complete-poll",
+   "kind": "attr_write",
+   "attr": "dp_tx_complete_poll",
+   "value": "1",
+   "readback": "dp_tx_status",
+   "patterns": [
+    "tx_complete_poll: verdict="
+   ],
+   "about": "ONE bounded poll (tx_complete_ms) of the device-rptr/published-wptr pair: COMPLETED (MAC) if rptr advanced, POST-ONLY otherwise - recorded, never retried in the boot"
+  },
+  {
+   "name": "tx-status-after",
+   "kind": "attr_expect",
+   "attr": "dp_tx_status",
+   "patterns": [
+    "tx_complete_poll: verdict=",
+    "pending="
+   ],
+   "about": "the verdict and the table image stay readable for the session record"
+  },
+  {
+   "name": "rx-poll",
+   "kind": "attr_write",
+   "attr": "dp_rx_poll",
+   "value": "1",
+   "readback": "dp_rx_capture",
+   "patterns": [
+    "polled=1"
+   ]
+  },
+  {
+   "name": "rx-capture",
+   "kind": "attr_expect",
+   "attr": "dp_rx_capture",
+   "patterns": [
+    "polled=1",
+    "captures="
+   ],
+   "about": "READ-ONLY capture; 0 captures = NO-RX recorded, not a failure"
+  },
+  {
+   "name": "post-pack",
+   "kind": "read_pack",
+   "about": "hard stop gate: no firmware exception and the golden handshake survived the provider ladder + MAC program + TX posts + RX capture",
+   "reads": [
+    {
+     "label": "post_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "post_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "post_state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    },
+    {
+     "label": "post_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "post_page4",
+     "bar0": "0x877004",
+     "expect": {
+      "eq": "0x7"
+     }
+    },
+    {
+     "label": "post_page8",
+     "bar0": "0x877008",
+     "expect": {
+      "eq": "0x2"
+     }
+    },
+    {
+     "label": "post_page_c",
+     "bar0": "0x87700c",
+     "expect": {
+      "eq": "0xabcd"
+     }
+    },
+    {
+     "label": "post_out0",
+     "bar0": "0x3f1010",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "post_out2",
+     "bar0": "0x3f12d4",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "patterns": [
+    "timeout=0",
+    "refused=0",
+    "txq_addr_sent=1"
+   ],
+   "about": "all three H2D frames (ctx-create, txq_sync72, key-0x0320 hand-off) were consumed; none was refused or timed out"
+  },
+  {
+   "name": "catalog-after",
+   "kind": "catalog_snapshot",
+   "about": "post-run D2H catalogue delta (the TX entries have no known D2H answer; evidence only)"
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "F-AIR verdict: COMPLETED = posted frames landed AND completion_pending=0 (MAC consumed the MSDU entries); POST-ONLY = posted and completion_pending=1 for the whole read (host->ring->table path proven, MAC did not consume); NO-RX = RX capture polled with 0 completions (expected until the RX completion-word format is decoded); BLOCKED-DRIVER = the scan produced results=0 (no firmware VAP) so no air TX can be attempted. On-air proof additionally needs an external observer (second station / monitor) - the merged ladder can only prove the host/MAC completion chain on its own. STOP after this boot: no retry, no reload in the same attended session, recovery door armed."
+  }
+ ]
+}
