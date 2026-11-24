@@ -1,0 +1,36 @@
+{
+  "lane": "wifi-rx-static",
+  "task": "task-137",
+  "module": {
+    "rx_enable": 1,
+    "artifact": "/tmp/wifi-rx-lane-artifact/hi5622_wifi.ko",
+    "stripped_bytes": 280736,
+    "stripped_sha256": "5b43d0a2ca526f84fabd744377213024c9dde15ce22a3c18e826180944d1f7be"
+  },
+  "device": "0001:00:00.0",
+  "attrs": ["dp_rx_arm", "dp_rx_drain", "dp_rx_poll", "dp_rx_capture"],
+  "page_golden": "0x86807FEF",
+  "rungs": [
+    {"id": "L0", "rx_enable": 0, "action": ["dp_rx_arm", "dp_rx_drain"],
+     "expect": "both refused -EPERM, dmesg 'REFUSED - rx_enable=0', no register write"},
+    {"id": "L1", "rx_enable": 1, "action": ["dp_setup", "dp_txq_sync", "dp_rx_arm"],
+     "expect": "dmesg 'DP rx_arm' live bank CA 0x40050000 mask=0xfffffcc1; expect norm_rptr=small_rptr=0x20 cmp_wptr=0 (vendor stock mirror) or record zeros",
+     "pass_bounds": "no 0xffffffff, mask exactly 0xfffffcc1, indices below depth"},
+    {"id": "L2", "rx_enable": 1, "action": ["dp_rx_poll"],
+     "expect": "live bank telemetry line; captures may be 0"},
+    {"id": "L3", "rx_enable": 1, "action": ["dp_rx_drain"],
+     "expect": "'no new completion ... no pointer moved', lane not failed"},
+    {"id": "L4", "rx_enable": 1, "action": ["external STA probe/assoc stimulus", "dp_rx_drain"],
+     "expect": "drained>=1 and a capture with desc_ok=1, payload_len 1..0x618/0x8c, plausible 802.11 prefix",
+     "if_no_completion_60s": "record: firmware does not forward this frame class to host RX rings; move to L4b with a client/key-path lane"},
+    {"id": "L5", "rx_enable": 1, "action": ["60 x dp_rx_drain at 1 Hz"],
+     "expect": "no rx_failed, refilled norm/small counters grow, captures accumulate, page/mask stable"}
+  ],
+  "stop_rules": ["page != 0x86807FEF", "mask != 0xfffffcc1", "staging != 0",
+                 "chip exception", "any 'lane closed'/'REFUSED' line for the rung",
+                 "never rmmod after release"],
+  "safety": {"irq_enabled": false, "firmware_messages": false,
+             "writes": ["config +0x38", "config +0x3c", "config +0x40"],
+             "optional_writes": ["config +0x44 W1C only if rx_clear_status=1"],
+             "live_bank_writes": false}
+}

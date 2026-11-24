@@ -1,0 +1,1041 @@
+diff -ruN rx-pristine/hi5622_dp.c rx-new/hi5622_dp.c
+--- rx-pristine/hi5622_dp.c	2026-11-24 20:46:44.464931859 +0700
++++ rx-new/hi5622_dp.c	2026-11-24 20:46:44.465743257 +0700
+@@ -912,6 +912,14 @@
+ static struct device_attribute dev_attr_dp_rx_capture =
+     __ATTR(dp_rx_capture, 0444, hi5622_dp_rx_capture_show, NULL);
+ 
++/* wifi-rx-static lane (task-137): the fail-closed RX consumer path.  rx_arm is
++ * read-only validation of the live device ring bank; rx_drain is the only
++ * pointer-moving RX action and requires the rx_enable=1 module parameter. */
++static struct device_attribute dev_attr_dp_rx_arm =
++    __ATTR(dp_rx_arm, 0200, NULL, hi5622_dp_rx_arm_store);
++static struct device_attribute dev_attr_dp_rx_drain =
++    __ATTR(dp_rx_drain, 0200, NULL, hi5622_dp_rx_drain_store);
++
+ /* wifi-dp-tuning lane (task-134): TXQ-table publish evidence, bounded
+  * completion poll and the two opt-in MAC-tail experiment attributes. */
+ static struct device_attribute dev_attr_dp_txq_table =
+@@ -934,6 +942,8 @@
+     &dev_attr_dp_tx_status.attr,
+     &dev_attr_dp_rx_poll.attr,
+     &dev_attr_dp_rx_capture.attr,
++    &dev_attr_dp_rx_arm.attr,
++    &dev_attr_dp_rx_drain.attr,
+     &dev_attr_dp_txq_table.attr,
+     &dev_attr_dp_tx_complete_poll.attr,
+     &dev_attr_dp_mac_ext.attr,
+diff -ruN rx-pristine/hi5622_dp_txrx.c rx-new/hi5622_dp_txrx.c
+--- rx-pristine/hi5622_dp_txrx.c	2026-11-24 20:46:44.466375467 +0700
++++ rx-new/hi5622_dp_txrx.c	2026-11-24 20:46:44.467302593 +0700
+@@ -36,6 +36,7 @@
+ #include "hi5622_dp_txrx.h"
+ #include "dp_rings.h"
+ #include "dp_txrx.h"
++#include "hi5622_rx_live.h"
+ 
+ #define DPTX_FRAME_OWNER 0x54585258u /* "TXRX" host bookkeeping word */
+ #define DPTX_TX_POST_MAX 8u          /* per-load first-frame budget */
+@@ -58,6 +59,24 @@
+ MODULE_PARM_DESC(mac_tail_writes,
+ 	"opt-in experiment: write the vendor-live value 4 to MAC band0 +0x5c and +0x6c in dp_mac_tail_init [U]");
+ 
++/* wifi-rx-static (shared task task-137).  FAIL-CLOSED: the RX consumer path
++ * (live-bank arm + completion drain) is disabled unless rx_enable=1 is set on
++ * the module load.  rx_clear_status additionally W1Cs the observed host MAC
++ * interrupt status to the config block after a drain (default 0: status is
++ * read only).  rx_drain_max bounds one drain action. */
++static unsigned int dptx_rx_enable = 0u;
++module_param_named(rx_enable, dptx_rx_enable, uint, 0644);
++MODULE_PARM_DESC(rx_enable,
++	"enable the fail-closed RX consumer path (live bank CA 0x40050000 + completion-ring drain); default 0 = observe only");
++static unsigned int dptx_rx_clear_status = 0u;
++module_param_named(rx_clear_status, dptx_rx_clear_status, uint, 0644);
++MODULE_PARM_DESC(rx_clear_status,
++	"after a drain, W1C the observed host MAC interrupt status to MAC band0 +0x44 (vendor clear path; default 0)");
++static unsigned int dptx_rx_drain_max = HIL_RX_DRAIN_MAX;
++module_param_named(rx_drain_max, dptx_rx_drain_max, uint, 0644);
++MODULE_PARM_DESC(rx_drain_max,
++	"maximum completion-ring entries consumed by one dp_rx_drain write (1..64)");
++
+ /* Documentation-example address (02:00:... locally administered); never a
+  * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
+ static const u8 dptx_example_addr[6] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x01 };
+@@ -134,6 +153,44 @@
+ 	u32 rx_scanned_norm;
+ 	u32 rx_scanned_small;
+ 	struct dp_txrx_rx_capture rx_caps[DP_TXRX_RX_CAPTURE_MAX];
++
++	/* wifi-rx-static (task-137): live-bank RX arm + completion drain state.
++	 * The two free rings are kept logically full: rx_*_prod is the host
++	 * packed producer (0x8000 after dp_setup filled all slots), and the
++	 * device consumer is only ever read from the live bank, never from the
++	 * config-block +0x4c/+0x50/+0x54 words (the vendor never reads those). */
++	const u32 *rx_norm_dma;
++	const u32 *rx_small_dma;
++	bool rx_armed;
++	bool rx_failed;
++	u32  rx_arm_status;
++	u32  rx_arm_mask;
++	u32  rx_arm_norm_rptr;
++	u32  rx_arm_small_rptr;
++	u32  rx_arm_cmp_wptr;
++	u32  rx_live_status;
++	u32  rx_live_norm_rptr;
++	u32  rx_live_small_rptr;
++	u32  rx_live_cmp_wptr;
++	u32  rx_norm_prod;
++	u32  rx_small_prod;
++	u32  rx_cmp_cons;
++	u32  rx_last_norm_rptr;
++	u32  rx_last_small_rptr;
++	u32  rx_drain_actions;
++	u32  rx_drained;
++	u32  rx_bad_entry;
++	u32  rx_chain_refused;
++	u32  rx_refilled_norm;
++	u32  rx_refilled_small;
++	u32  rx_refill_norm_q[HIL_RX_NORM_DEPTH];
++	u32  rx_refill_small_q[HIL_RX_SMALL_DEPTH];
++	u16  rx_refill_norm_head;
++	u16  rx_refill_norm_count;
++	u16  rx_refill_small_head;
++	u16  rx_refill_small_count;
++	u32  rx_new_cap_count;
++	u32  rx_last_err;
+ };
+ 
+ static LIST_HEAD(dptx_list);
+@@ -188,6 +245,55 @@
+ 	return 0;
+ }
+ 
++/* The live device-side ring/interrupt block (vendor machw array word 8).  It
++ * is a *different* CA from the host-interface config block the 14-write
++ * program touches: the vendor's get_host_mac_int_status reads *[machw+0x20]
++ * = CA 0x40050000 (band 0) and the RX ring binders store +8/+0xc/+0x10 of
++ * that word for the norm rptr, small rptr and completion wptr.  Our region 3
++ * window (CA 0x40000000..0x4011ffff) covers it, so the same range-checked
++ * translation applies. */
++static u32 dptx_mac_read_live(struct hi5622_pci *ctx, u32 off)
++{
++	u32 bar0 = hi5622_ca_to_bar0(HIL_RX_LIVE_CA_BAND0 + off);
++
++	if (!bar0)
++		return 0xffffffffu;
++	return readl(ctx->bar0 + bar0);
++}
++
++static void dptx_live_read(struct hi5622_pci *ctx, u32 *status, u32 *norm_rptr,
++			   u32 *small_rptr, u32 *cmp_wptr)
++{
++	*status = dptx_mac_read_live(ctx, HIL_RX_LIVE_STATUS);
++	*norm_rptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_NORM_RPTR);
++	*small_rptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_SMALL_RPTR);
++	*cmp_wptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_CMP_WPTR);
++}
++
++/* Publish a packed 16-bit ring index to a config-block word, preserving the
++ * upper half (the vendor hal_set_* accessors do a 32-bit RMW while the
++ * hal_ring_set_sw2hw paths store a zero-extended u16).  Read-back checked. */
++static int dptx_publish16(struct hi5622_pci *ctx, u32 off, u32 packed,
++			  u32 *readback)
++{
++	u32 old, val, rb;
++
++	if (packed > 0xffffu)
++		return -ERANGE;
++	old = dptx_mac_read(ctx, off);
++	if (old == 0xffffffffu)
++		return -EFAULT;
++	val = (old & 0xffff0000u) | packed;
++	if (dptx_mac_write_checked(ctx, off, val) != 0)
++		return -EFAULT;
++	rb = dptx_mac_read(ctx, off);
++	if (readback)
++		*readback = rb;
++	if ((rb & 0xffffu) != packed)
++		return -EIO;
++	return 0;
++}
++
+ static u16 dptx_le16(const u8 *p)
+ {
+ 	return (u16)(p[0] | ((u16)p[1] << 8));
+@@ -693,6 +799,18 @@
+ 	}
+ 	dma_rmb();
+ 	dptx_rx_scan(t);
++	if (t->rx_armed) {
++		u32 lst, lnr, lsr, lcw;
++
++		dptx_live_read(ctx, &lst, &lnr, &lsr, &lcw);
++		t->rx_live_status = lst;
++		t->rx_live_norm_rptr = lnr;
++		t->rx_live_small_rptr = lsr;
++		t->rx_live_cmp_wptr = lcw;
++		dev_info(dev,
++			 "DP rx_poll live bank (CA 0x40050000): status=0x%08x norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x | config-bank +0x4c/+0x50/+0x54 are NOT the live device pointers (the vendor never reads them; the stock dump keeps them 0 while the live bank carries the real rptrs)\n",
++			 lst, lnr, lsr, lcw);
++	}
+ 	t->rx_polled = true;
+ 	mutex_unlock(&t->lock);
+ 
+@@ -728,9 +846,10 @@
+ 		struct dp_txrx_rx_capture *cap = &t->rx_caps[k];
+ 
+ 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+-				 "cap[%u]: ring=%s idx=%u desc_ok=%u payload_len=%u mpdu_len=%u cmp_raw=0x%08x\n",
++				 "cap[%u]: ring=%s idx=%u desc_ok=%u payload_len(+0x1a)=%u payload_len_old(+0x1e)=%u mpdu_len=%u cmp_raw=0x%08x\n",
+ 				 k, cap->ring_kind == 0u ? "norm" : "small",
+ 				 cap->ring_index, cap->desc_ok,
++				 cap->desc_ok ? dptx_le16(cap->desc + 0x1a) : 0u,
+ 				 dptx_le16(cap->desc + 0x1e), cap->mpdu_len,
+ 				 cap->cmp_raw);
+ 		pos += scnprintf(buf + pos, PAGE_SIZE - pos, "  desc = ");
+@@ -750,12 +869,463 @@
+ 				 t->rx_cap_count - 4u);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+ 			 "note: descriptor field semantics stay [I]/[U] until the bench capture fixes them; mpdu starts at descriptor+0x28 and payload_len is the vendor skb_put field\n");
++	/* wifi-rx-static (task-137): live-bank arm/drain state. */
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX static: rx_enable=%u armed=%u failed=%u actions=%u drained=%u bad_entry=%u chain_refused=%u new_caps=%u refilled{norm=%u small=%u}\n",
++			 dptx_rx_enable, t->rx_armed ? 1u : 0u,
++			 t->rx_failed ? 1u : 0u, t->rx_drain_actions,
++			 t->rx_drained, t->rx_bad_entry, t->rx_chain_refused,
++			 t->rx_new_cap_count, t->rx_refilled_norm,
++			 t->rx_refilled_small);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX static live bank CA 0x40050000: status=0x%08x norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x prod{norm=0x%04x small=0x%04x} cmp_cons=0x%04x last_err=%d\n",
++			 t->rx_live_status, t->rx_live_norm_rptr,
++			 t->rx_live_small_rptr, t->rx_live_cmp_wptr,
++			 t->rx_norm_prod & 0xffffu, t->rx_small_prod & 0xffffu,
++			 t->rx_cmp_cons & 0xffffu, (int)t->rx_last_err);
+ 	mutex_unlock(&t->lock);
+ 	return pos;
+ }
+ 
+ 
+ /* ------------------------------------------------------------------ */
++/* wifi-rx-static (task-137): live-bank RX arm + completion drain     */
++/* ------------------------------------------------------------------ */
++
++/* Locate a completion entry (device VA of buffer+4) in the two RX pools.  The
++ * pools are individual coherent allocations, so this is a bounded linear
++ * search (256 + 512 compares for at most rx_drain_max=64 entries). */
++static int dptx_rx_find_buffer(struct hi5622_dp_txrx *t, u32 entry,
++			       u8 *ring_kind, u32 *slot)
++{
++	unsigned int i;
++
++	if (!ring_kind || !slot)
++		return HIL_RX_EARG;
++	for (i = 0; i < HIL_RX_NORM_DEPTH; i++) {
++		if (!t->rx_norm_cpu || !t->rx_norm_cpu[i])
++			continue;
++		if ((u32)t->rx_norm_dma[i] + HIL_RX_SKB_WORD == entry) {
++			*ring_kind = 0u;
++			*slot = i;
++			return HIL_RX_OK;
++		}
++	}
++	for (i = 0; i < HIL_RX_SMALL_DEPTH; i++) {
++		if (!t->rx_small_cpu || !t->rx_small_cpu[i])
++			continue;
++		if ((u32)t->rx_small_dma[i] + HIL_RX_SKB_WORD == entry) {
++			*ring_kind = 1u;
++			*slot = i;
++			return HIL_RX_OK;
++		}
++	}
++	return HIL_RX_ERANGE;
++}
++
++/* Append one completed buffer (its DMA address) to a per-ring refill queue. */
++static int dptx_rx_queue_completed(struct hi5622_dp_txrx *t, u8 ring_kind,
++				   u32 buf_dma)
++{
++	u32 depth, tail;
++	u32 *q;
++	u16 *head, *count;
++
++	if (ring_kind == 0u) {
++		depth = HIL_RX_NORM_DEPTH;
++		q = t->rx_refill_norm_q;
++		head = &t->rx_refill_norm_head;
++		count = &t->rx_refill_norm_count;
++	} else {
++		depth = HIL_RX_SMALL_DEPTH;
++		q = t->rx_refill_small_q;
++		head = &t->rx_refill_small_head;
++		count = &t->rx_refill_small_count;
++	}
++	if ((u32)*count >= depth)
++		return HIL_RX_ERANGE;
++	tail = ((u32)*head + (u32)*count) % depth;
++	q[tail] = buf_dma;
++	(*count)++;
++	return HIL_RX_OK;
++}
++
++/* Refill one free ring from its refill queue, bounded by the number of slots
++ * the device consumed since the last snapshot (live-bank rptr delta).  The
++ * buffers being re-published were handed back by completions, so no buffer
++ * can be in flight twice.  Returns refilled count or a negative error (any
++ * error closes the RX lane: no retry). */
++static int dptx_rx_refill(struct hi5622_dp_txrx *t, u8 ring_kind)
++{
++	struct hi5622_pci *ctx = t->ctx;
++	u32 old, new, avail, buf_dma, idx, prod, depth, cfg_off;
++	u32 *q;
++	u16 *head, *count;
++	void *ring;
++	int rc, refilled = 0;
++
++	if (ring_kind == 0u) {
++		old = t->rx_last_norm_rptr;
++		new = t->rx_live_norm_rptr;
++		depth = HIL_RX_NORM_DEPTH;
++		cfg_off = HIL_RX_CFG_WPTR_NORM;
++		q = t->rx_refill_norm_q;
++		head = &t->rx_refill_norm_head;
++		count = &t->rx_refill_norm_count;
++		ring = t->rx_norm_ring;
++		prod = t->rx_norm_prod;
++	} else {
++		old = t->rx_last_small_rptr;
++		new = t->rx_live_small_rptr;
++		depth = HIL_RX_SMALL_DEPTH;
++		cfg_off = HIL_RX_CFG_WPTR_SMALL;
++		q = t->rx_refill_small_q;
++		head = &t->rx_refill_small_head;
++		count = &t->rx_refill_small_count;
++		ring = t->rx_small_ring;
++		prod = t->rx_small_prod;
++	}
++	if (!ring)
++		return HIL_RX_EARG;
++	rc = hi5622_rx_ring_consumed(old, new, depth, &avail);
++	if (rc != HIL_RX_OK)
++		return rc;
++	while (avail > 0u && *count > 0u) {
++		idx = prod & HIL_RX_IDX_MASK;
++		if (idx >= depth)
++			return HIL_RX_ERANGE;
++		buf_dma = q[*head];
++		((u32 *)ring)[idx] = buf_dma + HIL_RX_SKB_WORD;
++		*head = (u16)(((u32)*head + 1u) % depth);
++		(*count)--;
++		prod = hi5622_rx_idx_advance(prod, depth);
++		avail--;
++		refilled++;
++	}
++	if (ring_kind == 0u) {
++		t->rx_last_norm_rptr = new;
++		t->rx_norm_prod = prod;
++		t->rx_refilled_norm += (u32)refilled;
++	} else {
++		t->rx_last_small_rptr = new;
++		t->rx_small_prod = prod;
++		t->rx_refilled_small += (u32)refilled;
++	}
++	if (refilled > 0) {
++		dma_wmb();
++		rc = dptx_publish16(ctx, cfg_off, prod, NULL);
++		if (rc)
++			return rc;
++	}
++	return refilled;
++}
++
++static ssize_t dptx_rx_fail(struct device *dev, struct hi5622_dp_txrx *t,
++			    int rc, const char *why)
++{
++	t->rx_failed = true;
++	t->rx_last_err = (u32)rc;
++	dev_err(dev,
++		"DP rx_drain: REFUSED (%s, rc=%d) - RX lane closed, no further ring pointer published, no retry until reload (power-cycle if the module must be reloaded)\n",
++		why, rc);
++	return rc < 0 ? rc : -EIO;
++}
++
++/* dp_rx_arm: read-only validation of the live RX bank.  This is the mirror of
++ * the TXQ publish proof for the RX direction: it must show that the MAC has
++ * consumed the free-ring entries the 14-write program published.  It never
++ * writes a register (rx_enable gates only the drain). */
++ssize_t hi5622_dp_rx_arm_store(struct device *dev,
++			       struct device_attribute *attr, const char *buf,
++			       size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 st, nr, sr, cw, mask, nw, sw, cr, active = 0u, pending = 0u;
++	int rc;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	mutex_lock(&t->lock);
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->rx_failed) {
++		dev_warn(dev, "DP rx_arm: REFUSED - the RX lane is already closed in this load\n");
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	if (t->rx_armed) {
++		mutex_unlock(&t->lock);
++		return -EALREADY;
++	}
++	if (!dptx_rx_enable) {
++		dev_warn(dev,
++			 "DP rx_arm: REFUSED - rx_enable=0.  The RX consumer path is fail-closed; reload the module with rx_enable=1 for the attended RX ladder.\n");
++		mutex_unlock(&t->lock);
++		return -EPERM;
++	}
++	if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed) {
++		dev_warn(dev,
++			 "DP rx_arm: refused - transport windows/armed gate is not up (read-only action)\n");
++		mutex_unlock(&t->lock);
++		return -EBUSY;
++	}
++	if (!t->rx_norm_ring || !t->rx_small_ring || !t->rx_cmp_ring ||
++	    !t->rx_norm_cpu || !t->rx_small_cpu || !t->rx_norm_dma ||
++	    !t->rx_small_dma) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	/* Read-only validation. */
++	dptx_live_read(ctx, &st, &nr, &sr, &cw);
++	mask = dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK);
++	nw = dptx_mac_read(ctx, HIL_RX_CFG_WPTR_NORM);
++	sw = dptx_mac_read(ctx, HIL_RX_CFG_WPTR_SMALL);
++	cr = dptx_mac_read(ctx, HIL_RX_CFG_CMP_RPTR);
++	if (st == 0xffffffffu || nr == 0xffffffffu || sr == 0xffffffffu ||
++	    cw == 0xffffffffu || mask == 0xffffffffu || nw == 0xffffffffu ||
++	    sw == 0xffffffffu || cr == 0xffffffffu) {
++		rc = -EFAULT;
++		goto arm_refuse;
++	}
++	if (mask != HIL_RX_INT_MASK_INIT) {
++		rc = -ERANGE;
++		goto arm_refuse;
++	}
++	rc = hi5622_rx_ring_pending(cw, t->rx_cmp_cons, HIL_RX_CMP_DEPTH,
++				    &pending);
++	if (rc != HIL_RX_OK)
++		goto arm_refuse;
++	if ((nw & HIL_RX_IDX_MASK) >= HIL_RX_NORM_DEPTH ||
++	    (sw & HIL_RX_IDX_MASK) >= HIL_RX_SMALL_DEPTH) {
++		rc = -ERANGE;
++		goto arm_refuse;
++	}
++	hi5622_rx_status_rx_bit(st, mask, &active);
++	t->rx_armed = true;
++	t->rx_arm_status = st;
++	t->rx_arm_mask = mask;
++	t->rx_arm_norm_rptr = nr;
++	t->rx_arm_small_rptr = sr;
++	t->rx_arm_cmp_wptr = cw;
++	t->rx_live_status = st;
++	t->rx_live_norm_rptr = nr;
++	t->rx_live_small_rptr = sr;
++	t->rx_live_cmp_wptr = cw;
++	t->rx_last_norm_rptr = nr;
++	t->rx_last_small_rptr = sr;
++	mutex_unlock(&t->lock);
++
++	dev_info(dev,
++		 "DP rx_arm: live bank CA 0x%08x status=0x%08x rx_pending=%u mask=0x%08x (vendor 0xfffffcc1) norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x pending=%u | config: norm_wptr=0x%04x small_wptr=0x%04x cmp_rptr=0x%04x\n",
++		 HIL_RX_LIVE_CA_BAND0, st, active, mask, nr, sr, cw, pending,
++		 nw & 0xffffu, sw & 0xffffu, cr & 0xffffu);
++	dev_info(dev,
++		 "DP rx_arm: verdict - free-rptr movement proves the MAC consumed published free entries (vendor stock mirror was norm/small rptr = 0x20 after a full fill); config-bank +0x4c/+0x50/+0x54 are NOT the live counters (vendor never reads them, and the stock dump keeps them 0 while 0x40050008/0x0c = 0x20).  Arm is read-only; dp_rx_drain is the first pointer-moving action.\n");
++	return (ssize_t)count;
++
++arm_refuse:
++	dev_err(dev,
++		"DP rx_arm: REFUSED - live-bank validation failed (rc=%d: status=0x%08x norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x mask=0x%08x; expected mask 0xfffffcc1 and 15-bit indices below the ring depths) - no write performed\n",
++		rc, st, nr, sr, cw, mask);
++	mutex_unlock(&t->lock);
++	return rc;
++}
++
++/* dp_rx_drain: the only RX action that moves ring pointers.  Consumes a
++ * bounded prefix of the completion ring, validates every entry against the
++ * host pools and the 36-byte MAC header, queues the buffers for refill,
++ * publishes the completion-ring consumer index and refills the free rings up
++ * to the live device-rptr delta.  Any anomaly closes the lane before a single
++ * pointer is published. */
++ssize_t hi5622_dp_rx_drain_store(struct device *dev,
++				 struct device_attribute *attr, const char *buf,
++				 size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 st, nr, sr, cw, pending, max, cons, active = 0u;
++	int rc, i, norm_refill, small_refill;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	mutex_lock(&t->lock);
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (!dptx_rx_enable) {
++		dev_warn(dev, "DP rx_drain: REFUSED - rx_enable=0 (fail-closed)\n");
++		mutex_unlock(&t->lock);
++		return -EPERM;
++	}
++	if (t->rx_failed) {
++		dev_warn(dev, "DP rx_drain: REFUSED - the RX lane is already closed in this load\n");
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	if (!t->rx_armed) {
++		dev_warn(dev, "DP rx_drain: REFUSED - dp_rx_arm has not validated the live bank in this load\n");
++		mutex_unlock(&t->lock);
++		return -EINVAL;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc) {
++		dev_warn(dev,
++			 "DP rx_drain: refused by gate '%s' - no device write (needs dp_setup + dp_txq_sync in this load)\n",
++			 dptx_gate_name(rc));
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++	dptx_live_read(ctx, &st, &nr, &sr, &cw);
++	t->rx_live_status = st;
++	t->rx_live_norm_rptr = nr;
++	t->rx_live_small_rptr = sr;
++	t->rx_live_cmp_wptr = cw;
++	if (st == 0xffffffffu || nr == 0xffffffffu || sr == 0xffffffffu ||
++	    cw == 0xffffffffu) {
++		rc = -EFAULT;
++		goto drain_refuse;
++	}
++	rc = hi5622_rx_ring_pending(cw, t->rx_cmp_cons, HIL_RX_CMP_DEPTH,
++				    &pending);
++	if (rc != HIL_RX_OK)
++		goto drain_refuse;
++	max = dptx_rx_drain_max;
++	if (max == 0u || max > HIL_RX_DRAIN_MAX)
++		max = HIL_RX_DRAIN_MAX;
++	if (pending > max)
++		pending = max;
++	if (pending == 0u) {
++		hi5622_rx_status_rx_bit(st, dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK),
++					&active);
++		mutex_unlock(&t->lock);
++		dev_info(dev,
++			 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x) - no pointer moved\n",
++			 st, active, nr, sr, cw, t->rx_cmp_cons);
++		return (ssize_t)count;
++	}
++	cons = t->rx_cmp_cons;
++	for (i = 0; i < (int)pending; i++) {
++		u32 slot = cons & HIL_RX_IDX_MASK;
++		u32 entry, slot_idx, buf_dma;
++		u8 ring_kind;
++		const u8 *cpu;
++		const u32 *pool_dma;
++		struct hi5622_rx_hdr hdr;
++		u32 dma_cap;
++		u16 copy;
++
++		if (slot >= HIL_RX_CMP_DEPTH) {
++			rc = -ERANGE;
++			goto drain_refuse;
++		}
++		dma_rmb(); /* the live wptr was read before the ring memory */
++		entry = ((const u32 *)(const void *)t->rx_cmp_ring)[slot];
++		rc = dptx_rx_find_buffer(t, entry, &ring_kind, &slot_idx);
++		if (rc != HIL_RX_OK) {
++			t->rx_bad_entry++;
++			goto drain_refuse;
++		}
++		if (ring_kind == 0u) {
++			cpu = (const u8 *)t->rx_norm_cpu[slot_idx];
++			pool_dma = t->rx_norm_dma;
++			dma_cap = HIL_RX_NORM_BUFLEN;
++		} else {
++			cpu = (const u8 *)t->rx_small_cpu[slot_idx];
++			pool_dma = t->rx_small_dma;
++			dma_cap = HIL_RX_SMALL_BUFLEN;
++		}
++		if (!cpu) {
++			rc = -ENODEV;
++			goto drain_refuse;
++		}
++		rc = hi5622_rx_hdr_parse(cpu + HIL_RX_SKB_WORD, dma_cap, &hdr);
++		if (rc == HIL_RX_ECHAIN) {
++			t->rx_chain_refused++;
++			goto drain_refuse;
++		}
++		if (rc != HIL_RX_OK) {
++			t->rx_bad_entry++;
++			goto drain_refuse;
++		}
++		/* capture (diagnostic; bounded by DP_TXRX_RX_CAPTURE_MAX) */
++		if (t->rx_cap_count < DP_TXRX_RX_CAPTURE_MAX) {
++			struct dp_txrx_rx_capture *cap =
++				&t->rx_caps[t->rx_cap_count];
++
++			memset(cap, 0, sizeof(*cap));
++			cap->cmp_raw = entry;
++			cap->ring_kind = ring_kind;
++			cap->ring_index = slot_idx;
++			cap->desc_ok = 1u;
++			memcpy(cap->desc, cpu + HIL_RX_SKB_WORD,
++			       HIL_RX_HDR_BYTES);
++			copy = hdr.payload_len;
++			if (copy > DP_TXRX_RX_CAPTURE_MPDU)
++				copy = DP_TXRX_RX_CAPTURE_MPDU;
++			memcpy(cap->mpdu, cpu + HIL_RX_PAYLOAD_OFF, copy);
++			cap->mpdu_len = copy;
++			t->rx_cap_count++;
++			t->rx_new_cap_count++;
++		}
++		buf_dma = (u32)pool_dma[slot_idx];
++		rc = dptx_rx_queue_completed(t, ring_kind, buf_dma);
++		if (rc != HIL_RX_OK)
++			goto drain_refuse;
++		cons = hi5622_rx_idx_advance(cons, HIL_RX_CMP_DEPTH);
++	}
++	/* Commit point: every entry validated.  Refill the free rings first (the
++	 * buffers were handed back by completions, so this cannot double-hand a
++	 * live buffer), then publish the completion-ring consumer last. */
++	norm_refill = dptx_rx_refill(t, 0u);
++	if (norm_refill < 0) {
++		rc = norm_refill;
++		goto drain_refuse;
++	}
++	small_refill = dptx_rx_refill(t, 1u);
++	if (small_refill < 0) {
++		rc = small_refill;
++		goto drain_refuse;
++	}
++	t->rx_cmp_cons = cons;
++	rc = dptx_publish16(ctx, HIL_RX_CFG_CMP_RPTR, cons, NULL);
++	if (rc)
++		goto drain_refuse;
++	if (dptx_rx_clear_status) {
++		/* Vendor clear path: W1C the observed status word (only the bits
++		 * the live block reported; the mask value was validated at arm). */
++		if (dptx_mac_write_checked(ctx, HIL_RX_CFG_INT_STATUS, st) != 0) {
++			rc = -EIO;
++			goto drain_refuse;
++		}
++	}
++	t->rx_drained += pending;
++	t->rx_drain_actions++;
++	mutex_unlock(&t->lock);
++	dev_info(dev,
++		 "DP rx_drain: drained=%u/%u cmp_cons=0x%04x live{cmp_wptr=0x%04x norm_rptr=0x%04x small_rptr=0x%04x status=0x%08x} refilled{norm=%d small=%d} totals{drained=%u actions=%u bad=%u chain=%u} - completion ring consumer published, free rings refilled\n",
++		 pending, pending, cons, cw, nr, sr, st, norm_refill, small_refill,
++		 t->rx_drained, t->rx_drain_actions, t->rx_bad_entry,
++		 t->rx_chain_refused);
++	return (ssize_t)count;
++
++drain_refuse:
++	mutex_unlock(&t->lock);
++	return dptx_rx_fail(dev, t, rc, "completion/header validation");
++}
++
++/* ------------------------------------------------------------------ */
+ /* wifi-dp-tuning (task-134): TXQ-table publish + consumer evidence   */
+ /* ------------------------------------------------------------------ */
+ ssize_t hi5622_dp_txq_show(struct device *dev, struct device_attribute *attr,
+@@ -1034,9 +1604,17 @@
+ 	t->rx_cmp_ring = b->rx_cmp_ring;
+ 	t->rx_norm_cpu = b->rx_norm_cpu;
+ 	t->rx_small_cpu = b->rx_small_cpu;
++	t->rx_norm_dma = b->rx_norm_dma;
++	t->rx_small_dma = b->rx_small_dma;
+ 	t->msdu_table_ca = b->msdu_table_ca;
+ 	t->ready_payload = b->ready_payload;
+ 	dp_txrx_rx_state_init(&t->rx_state);
++	/* dp_setup filled both free rings completely and published index 0 /
++	 * phase 1 (0x8000) as the producer; the completion-ring consumer starts
++	 * at 0.  These are the host-side bookkeeping values only. */
++	t->rx_norm_prod = HIL_RX_PHASE_BIT;
++	t->rx_small_prod = HIL_RX_PHASE_BIT;
++	t->rx_cmp_cons = 0u;
+ 	t->tx_frame = dma_alloc_coherent(dev, DP_TXRX_FRAME_AREA, &dma,
+ 					 GFP_KERNEL);
+ 	if (!t->tx_frame) {
+diff -ruN rx-pristine/hi5622_dp_txrx.h rx-new/hi5622_dp_txrx.h
+--- rx-pristine/hi5622_dp_txrx.h	2026-11-24 20:46:44.468115213 +0700
++++ rx-new/hi5622_dp_txrx.h	2026-11-24 20:46:44.469015759 +0700
+@@ -73,6 +73,17 @@
+ ssize_t hi5622_dp_rx_capture_show(struct device *dev,
+                                   struct device_attribute *attr, char *buf);
+ 
++/* wifi-rx-static (shared task task-137): fail-closed live-bank RX enable.
++ * dp_rx_arm is read-only (validates + logs the live ring bank); dp_rx_drain
++ * is the only action that moves RX ring pointers and only runs when the
++ * rx_enable module parameter is 1. */
++ssize_t hi5622_dp_rx_arm_store(struct device *dev,
++                               struct device_attribute *attr,
++                               const char *buf, size_t count);
++ssize_t hi5622_dp_rx_drain_store(struct device *dev,
++                                 struct device_attribute *attr,
++                                 const char *buf, size_t count);
++
+ /* wifi-dp-tuning (shared task task-134): TXQ-table queue-state publish and the
+  * bounded completion/consumer read surface. */
+ ssize_t hi5622_dp_txq_show(struct device *dev,
+diff -ruN rx-pristine/hi5622_rx_live.c rx-new/hi5622_rx_live.c
+--- rx-pristine/hi5622_rx_live.c	1970-01-01 07:00:00.000000000 +0700
++++ rx-new/hi5622_rx_live.c	2026-11-24 20:46:44.469577537 +0700
+@@ -0,0 +1,158 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rx_live.c - portable MAC RX data-path logic for the Hi5622V100
++ * clean-room host (lane wifi-rx-static, shared task task-137).
++ *
++ * ORIGINAL clean-room code; no vendor source/object code, firmware byte,
++ * calibration value or per-unit identity is reproduced.  Every constant and
++ * every arithmetic rule is a derived fact with an evidence marker in
++ * REPORT.md and is re-asserted by tools/rx_selftest.c against LITERAL vendor
++ * offsets (so a header macro regression cannot make the test lie).
++ */
++#include "hi5622_rx_live.h"
++
++static rx_u16 hil_le16(const rx_u8 *p)
++{
++    return (rx_u16)((rx_u16)p[0] | ((rx_u16)p[1] << 8));
++}
++
++static rx_u32 hil_le32(const rx_u8 *p)
++{
++    return (rx_u32)p[0] | ((rx_u32)p[1] << 8) |
++           ((rx_u32)p[2] << 16) | ((rx_u32)p[3] << 24);
++}
++
++/* -------------------------------------------------------------------
++ * Producer / consumer distance.  Both rings use 15 index bits + one phase
++ * bit, so a distance of exactly one ring lap is only expressible with the
++ * phase bit.  pending() = producer - consumer (completion ring direction);
++ * consumed() = new consumer - old consumer (free-ring direction, where the
++ * ring is kept full so the consumer chases the producer).
++ * ------------------------------------------------------------------- */
++int hi5622_rx_ring_pending(rx_u32 producer, rx_u32 consumer, rx_u32 depth,
++                           rx_u32 *count)
++{
++    rx_s32 d;
++
++    if (count == NULL || depth == 0u || depth > HIL_RX_IDX_MASK)
++        return HIL_RX_EARG;
++    if ((producer & HIL_RX_IDX_MASK) >= depth ||
++        (consumer & HIL_RX_IDX_MASK) >= depth)
++        return HIL_RX_ERANGE;
++    d = (rx_s32)(producer & HIL_RX_IDX_MASK) -
++        (rx_s32)(consumer & HIL_RX_IDX_MASK);
++    if (((producer ^ consumer) & HIL_RX_PHASE_BIT) != 0u)
++        d += (rx_s32)depth;
++    if (d < 0 || (rx_u32)d > depth)
++        return HIL_RX_EFORMAT;
++    *count = (rx_u32)d;
++    return HIL_RX_OK;
++}
++
++int hi5622_rx_ring_consumed(rx_u32 old_consumer, rx_u32 new_consumer,
++                            rx_u32 depth, rx_u32 *count)
++{
++    rx_u32 oi, ni, d;
++
++    if (count == NULL || depth == 0u || depth > HIL_RX_IDX_MASK)
++        return HIL_RX_EARG;
++    oi = old_consumer & HIL_RX_IDX_MASK;
++    ni = new_consumer & HIL_RX_IDX_MASK;
++    if (oi >= depth || ni >= depth)
++        return HIL_RX_ERANGE;
++    d = (ni >= oi) ? (ni - oi) : (depth - oi + ni);
++    if (d == 0u && ((old_consumer ^ new_consumer) & HIL_RX_PHASE_BIT) != 0u)
++        d = depth; /* exactly one lap between the snapshots */
++    if (d > depth)
++        return HIL_RX_EFORMAT;
++    *count = d;
++    return HIL_RX_OK;
++}
++
++rx_u32 hi5622_rx_idx_advance(rx_u32 packed, rx_u32 depth)
++{
++    rx_u32 idx = packed & HIL_RX_IDX_MASK;
++    rx_u32 phase = (packed & HIL_RX_PHASE_BIT) ? 1u : 0u;
++
++    if (depth == 0u || idx >= depth)
++        return packed;
++    idx++;
++    if (idx == depth) {
++        idx = 0u;
++        phase ^= 1u;
++    }
++    return idx | (phase ? HIL_RX_PHASE_BIT : 0u);
++}
++
++int hi5622_rx_wptr_pack(rx_u32 index, unsigned int phase, rx_u32 depth,
++                        rx_u32 *packed)
++{
++    if (packed == NULL || depth == 0u || depth > HIL_RX_IDX_MASK)
++        return HIL_RX_EARG;
++    if (index >= depth)
++        return HIL_RX_ERANGE;
++    *packed = (index & HIL_RX_IDX_MASK) |
++              ((phase & 1u) ? HIL_RX_PHASE_BIT : 0u);
++    return HIL_RX_OK;
++}
++
++/* -------------------------------------------------------------------
++ * Completion header decode.  hdr points at buffer+4, the device-written
++ * 36-byte header; dma_cap is the usable DMA area (0x63c norm / 0xb0 small).
++ * The MPDU payload starts at hdr+0x24 == buffer+0x28, so the length field
++ * must leave the whole payload inside the DMA area.  The vendor's own check
++ * is len + 40 <= buffer allocation (0x640 band 0), identical to
++ * len <= 0x640 - 0x28 = 0x618 = dma_cap - 0x24.
++ * ------------------------------------------------------------------- */
++int hi5622_rx_hdr_parse(const rx_u8 *hdr, rx_u32 dma_cap,
++                        struct hi5622_rx_hdr *out)
++{
++    rx_u32 len, next;
++
++    if (hdr == NULL || out == NULL)
++        return HIL_RX_EARG;
++    if (dma_cap < HIL_RX_HDR_BYTES + 1u)
++        return HIL_RX_ERANGE;
++    len = hil_le16(hdr + HIL_RX_HDR_LEN_OFF);
++    next = hil_le32(hdr + HIL_RX_HDR_NEXT_OFF);
++    if (len == 0u || len > dma_cap - HIL_RX_HDR_BYTES)
++        return HIL_RX_EFORMAT;
++    if (next != 0u) {
++        /* Sub-MSDU chaining is real [V] but its slot accounting is still [U]:
++         * refuse instead of consuming/refilling a partial chain. */
++        if ((next & 3u) != 0u)
++            return HIL_RX_EFORMAT;
++        return HIL_RX_ECHAIN;
++    }
++    out->payload_len = (rx_u16)len;
++    out->next_devva = 0u;
++    out->flags9 = hdr[HIL_RX_HDR_FLAGS9_OFF];
++    out->status_b = hdr[HIL_RX_HDR_STATUSB_OFF];
++    return HIL_RX_OK;
++}
++
++int hi5622_rx_entry_split(rx_u32 entry, rx_u32 norm_lo, rx_u32 norm_hi,
++                          rx_u32 small_lo, rx_u32 small_hi, rx_u8 *ring_kind)
++{
++    if (ring_kind == NULL)
++        return HIL_RX_EARG;
++    if ((entry & 3u) != 0u)
++        return HIL_RX_EFORMAT;
++    if (norm_lo <= entry && entry <= norm_hi) {
++        *ring_kind = 0u;
++        return HIL_RX_OK;
++    }
++    if (small_lo <= entry && entry <= small_hi) {
++        *ring_kind = 1u;
++        return HIL_RX_OK;
++    }
++    return HIL_RX_ERANGE;
++}
++
++int hi5622_rx_status_rx_bit(rx_u32 status, rx_u32 mask, rx_u32 *active)
++{
++    if (active == NULL)
++        return HIL_RX_EARG;
++    *active = ((status & ~mask) & (1u << HIL_RX_INT_RX_BIT)) ? 1u : 0u;
++    return HIL_RX_OK;
++}
+diff -ruN rx-pristine/hi5622_rx_live.h rx-new/hi5622_rx_live.h
+--- rx-pristine/hi5622_rx_live.h	1970-01-01 07:00:00.000000000 +0700
++++ rx-new/hi5622_rx_live.h	2026-11-24 20:46:44.469594970 +0700
+@@ -0,0 +1,166 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rx_live.h - portable MAC RX data-path model for the Hi5622V100
++ * clean-room host (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-rx-static, shared task task-137).  No
++ * vendor source/object code, firmware byte, calibration value or per-unit
++ * identity is reproduced: the constants are derived facts with [V]/[V*]
++ * markers cited in REPORT.md, and the routines are device-free so the host
++ * selftest can pin them without a kernel or a bench.
++ *
++ * Why this file exists (the RX gap): the MAC completion ring stayed at
++ * zero captures because the driver polled config-bank +0x4c/+0x50/+0x54.
++ * The vendor never reads those words: its live device-side ring pointers sit
++ * in machw array word 8 = CA 0x40050000 (band 0), offsets +0x00 status,
++ * +0x08 norm-free rptr, +0x0c small-free rptr, +0x10 cmp-ring wptr
++ * [V wifi.ko 2.4.15: shuangta_get_host_mac_int_status 0x34af4 reads
++ * *[machw+0x20]; shuangta_rx_host_init_dscr_queue 0x37840/0x37954/0x37adc
++ * bind +8/+0xc/+0x10 of that word; rodata CA table at .rodata+0xb60; the
++ * stock register dump carries 0x40050008 = 0x4005000c = 0x20 while
++ * 0x4004004c/50/54 stay 0].  This header pins the live-bank decode, the
++ * per-buffer completion header the MAC writes (36 bytes at buffer+4) and the
++ * ring arithmetic, all fail-closed.
++ *
++ * Evidence markers: [V] decoded from the named vendor artifact; [V*] measured
++ * by an attended bench lane and quoted from the project reports; [I]
++ * inference; [U] unknown / not pinned.
++ */
++#ifndef HI5622_RX_LIVE_H
++#define HI5622_RX_LIVE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++typedef u8  rx_u8;
++typedef u16 rx_u16;
++typedef u32 rx_u32;
++typedef s32 rx_s32;
++#else
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  rx_u8;
++typedef uint16_t rx_u16;
++typedef uint32_t rx_u32;
++typedef int32_t  rx_s32;
++#endif
++
++/* ===================================================================
++ * 1. The live device-side ring block (machw array word 8) [V]
++ *
++ * The vendor machw object is 10 mapped register banks filled from the
++ * .rodata CA table (band 0: word 5 = 0x40040000 host-interface config,
++ * word 8 = 0x40050000 live interrupt/ring pointers).  The driver's inbound
++ * region 3 covers CA 0x40000000..0x4011ffff, so the live block is reachable
++ * through the transport's range-checked BAR0 translation.
++ * =================================================================== */
++#define HIL_RX_LIVE_CA_BAND0  0x40050000u  /* [V] rodata table word 8 */
++#define HIL_RX_LIVE_CA_BAND1  0x40070000u  /* [V] band-1 analogue */
++#define HIL_RX_LIVE_SPAN      0x1000u
++#define HIL_RX_LIVE_STATUS    0x00u  /* host MAC interrupt status (live) */
++#define HIL_RX_LIVE_NORM_RPTR 0x08u  /* norm free ring device consumer */
++#define HIL_RX_LIVE_SMALL_RPTR 0x0cu /* small free ring device consumer */
++#define HIL_RX_LIVE_CMP_WPTR  0x10u  /* completion ring device producer */
++
++/* Host-interface config block, CA 0x40040000 band 0 (already programmed by
++ * dp_setup's 14-write program; only the refill/publish words are rewritten by
++ * the RX drain). */
++#define HIL_RX_CFG_WPTR_NORM  0x38u  /* norm free ring producer (packed) */
++#define HIL_RX_CFG_WPTR_SMALL 0x3cu
++#define HIL_RX_CFG_CMP_RPTR   0x40u  /* completion ring host consumer (packed) */
++#define HIL_RX_CFG_INT_STATUS 0x44u  /* W1C status, vendor clear path */
++#define HIL_RX_CFG_INT_MASK   0x48u
++#define HIL_RX_INT_MASK_INIT  0xfffffcc1u /* [V*] vendor live value + constant */
++#define HIL_RX_INT_RX_BIT     2u     /* [V] MAC ISR RX branch tests status bit 2 */
++
++/* ===================================================================
++ * 2. Ring geometry [V] (unchanged from dp_rings.h; repeated here so the
++ *    RX model is self-contained for the host test)
++ * =================================================================== */
++#define HIL_RX_NORM_DEPTH   256u
++#define HIL_RX_SMALL_DEPTH  512u
++#define HIL_RX_CMP_DEPTH    4095u
++#define HIL_RX_NORM_BUFLEN  0x63cu /* DMA area after the 4-byte skb word */
++#define HIL_RX_SMALL_BUFLEN 0x00b0u
++#define HIL_RX_IDX_MASK     0x7fffu
++#define HIL_RX_PHASE_BIT    0x8000u
++#define HIL_RX_SKB_WORD     4u     /* host bookkeeping word at buffer+0 */
++
++/* ===================================================================
++ * 3. Device-written per-buffer completion header [V]
++ *
++ * shuangta_host_rx_get_msdu_info_dscr (0x3843c) decodes the MAC header the
++ * device wrote at buffer+4 (36 bytes: oam_report_dscr copies 36 bytes from
++ * skb->data+4), and shuangta_host_rx_get_msdu_info_dscr 0x385f4/
++ * shuangta_rx_get_next_sub_msdu 0x3885c read the fields below.  The vendor
++ * then does skb_put(len) and skb->data += 40 (0x28), i.e. the MPDU payload
++ * starts at buffer+0x28.  The prior dp_txrx capture model treated the
++ * descriptor as starting at buffer+0 and was therefore 4 bytes off; the
++ * corrected layout is asserted by the host selftest with literal offsets.
++ * =================================================================== */
++#define HIL_RX_HDR_BYTES      0x24u  /* 36 bytes at buffer+4 */
++#define HIL_RX_HDR_LEN_OFF    0x1au  /* u16 payload length, within the header */
++#define HIL_RX_HDR_NEXT_OFF   0x20u  /* u32 next sub-MSDU buffer devVA, 0 = end */
++#define HIL_RX_HDR_FLAGS9_OFF 0x05u  /* [U] byte buffer+9 (bit 0/7 observed) */
++#define HIL_RX_HDR_STATUSB_OFF 0x07u /* [I] byte buffer+0xb (status nibble) */
++#define HIL_RX_PAYLOAD_OFF    (HIL_RX_SKB_WORD + HIL_RX_HDR_BYTES) /* 0x28 */
++#define HIL_RX_MPDU_MAX       0x618u /* max payload: 0x640 - 0x28 [V check] */
++
++/* Drain action bound (completions consumed per sysfs write). */
++#define HIL_RX_DRAIN_MAX      64u
++
++/* Error codes (negative). */
++#define HIL_RX_OK       0
++#define HIL_RX_EARG    (-1)
++#define HIL_RX_ERANGE  (-2)
++#define HIL_RX_EFORMAT (-3)
++#define HIL_RX_ECHAIN  (-4)  /* sub-MSDU chain not decoded yet: refuse */
++
++/* Decoded view of one completion header (raw bytes are kept by the caller). */
++struct hi5622_rx_hdr {
++    rx_u16 payload_len;  /* [V] header+0x1a */
++    rx_u32 next_devva;   /* [V] header+0x20, 0 = last segment */
++    rx_u8  flags9;       /* [U] header+0x05 */
++    rx_u8  status_b;     /* [I] header+0x07 */
++};
++struct hi5622_rx_hdr_raw {
++    rx_u8 bytes[HIL_RX_HDR_BYTES];
++};
++
++/* -------------------------------------------------------------------
++ * Ring arithmetic.  A packed MAC ring index is 15 index bits + one phase
++ * bit [V]: hal_set_*_rptr/wptr de-interleave bit 15 as the phase, and
++ * hal_ring_get_entry_count (0x31f80) compares low 15 bits + phase byte.
++ * ------------------------------------------------------------------- */
++
++/* Entries the producer is ahead of the consumer (completion ring).  Returns
++ * HIL_RX_EFORMAT if the two indices cannot describe a valid distance. */
++int hi5622_rx_ring_pending(rx_u32 producer, rx_u32 consumer, rx_u32 depth,
++                           rx_u32 *count);
++/* Slots the device consumer advanced between two snapshots (free rings).
++ * Distinguishes "no movement" from "exactly one lap". */
++int hi5622_rx_ring_consumed(rx_u32 old_consumer, rx_u32 new_consumer,
++                            rx_u32 depth, rx_u32 *count);
++/* Advance a packed producer/consumer index by one slot at depth. */
++rx_u32 hi5622_rx_idx_advance(rx_u32 packed, rx_u32 depth);
++/* Pack (index, phase); refuses index >= depth. */
++int hi5622_rx_wptr_pack(rx_u32 index, unsigned int phase, rx_u32 depth,
++                        rx_u32 *packed);
++
++/* Parse the 36-byte MAC completion header at buffer+4.  dma_cap is the DMA
++ * area length after the skb word (0x63c norm / 0xb0 small).  A non-empty
++ * next-sub-MSDU chain is refused (HIL_RX_ECHAIN) until the chain decode is
++ * proven, and a length outside 1..dma_cap-0x24 is refused (HIL_RX_EFORMAT). */
++int hi5622_rx_hdr_parse(const rx_u8 *hdr, rx_u32 dma_cap,
++                        struct hi5622_rx_hdr *out);
++
++/* Classify one 4-byte completion-ring entry (device VA of buffer+4) against
++ * the two RX pools: *ring_kind 0 = norm, 1 = small; HIL_RX_ERANGE when the
++ * address belongs to neither pool. */
++int hi5622_rx_entry_split(rx_u32 entry, rx_u32 norm_lo, rx_u32 norm_hi,
++                          rx_u32 small_lo, rx_u32 small_hi, rx_u8 *ring_kind);
++
++/* Live status decode: RX completion pending when status bit 2 is asserted and
++ * not masked. */
++int hi5622_rx_status_rx_bit(rx_u32 status, rx_u32 mask, rx_u32 *active);
++
++#endif /* HI5622_RX_LIVE_H */
+diff -ruN rx-pristine/Kbuild rx-new/Kbuild
+--- rx-pristine/Kbuild	2026-11-24 20:46:44.462788142 +0700
++++ rx-new/Kbuild	2026-11-24 20:46:44.463965769 +0700
+@@ -25,6 +25,7 @@
+ 		 hcc_core.o hcc_core_kernel.o \
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+ 		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
++		 hi5622_rx_live.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
