@@ -102,7 +102,28 @@ the patch stack).
 | bare combined-base variant (no polish defaults) | 247,424 B sha256 `fd2082ab2687dfec4015b619ca3ac2275a20dee86b9508fdd29ed2d2229d3823` at `/tmp/wifi-scan-tuning/hi5622_wifi.scan-only.ko` |
 | build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 3 new params present, 10 cfg80211 imports |
 | patches | regenerated: `0001` (bare base) and `0002` (polish-applied) now carry **all five files** (hi5622_scan.c/.h, hi5622_scan_logic.c/.h, cfg80211-provider.symvers); both verified with `patch --dry-run` (fixes the stability lane's patch-gap report - the earlier 0002 lost files to a `set -e` diff loop) |
-| host tests after fixes | 37/37 scan-tuning, 196/196 scan-complete, 290/290 scan-logic PASS |
+| host tests after fixes | 37/37 scan-tuning, 196/196 scan-complete, 290/290 scan-logic PASS, plus the new 7/7 relaxed-decoder selftest |
+
+## R2 revision (after the second R1 fire: completion-event + BSS decode)
+
+The second R1 fire (artifact 247,776 B sha 613989ff) showed another failure
+mode: a firmware completion event arrived after batch 1 (complete=1, status not
+1) and was treated as scan-global -> finish-abort[complete-failed]; and all 6
+g1 id15 BSS frames failed decode (parse=6, inform_fail=0, BSS list entries=0).
+Fixes: completion events are batch-local while more batches remain; on the
+final batch the channel-coverage rule wins over a partial-request status; the
+BSS decoder gained a relaxed alignment probe (frame offset 0..32 x trailer
+len 0/4/8/12/16/20/24, reported as layout "relaxed") plus a ratelimited
+"scan BSS decode gap: len=.. first=.." hexdump on total failure so the true
+framing is visible in dmesg.
+
+| item | value |
+| --- | --- |
+| artifact for the R-ladder (base+polish+scan, final-stack parity) | **248,668 B** sha256 `ca81660f03bc06eecc526cafbfa9b0e7d862a8ff878dbbeaa2f29c2c5b235a98` at `/tmp/wifi-scan-tuning/hi5622_wifi.ko` |
+| bare combined-base variant | 248,312 B sha256 `118c3b3180bb8d1a339304a171b008640f56830332548a4c880d5d5b181bce97` at `/tmp/wifi-scan-tuning/hi5622_wifi.scan-only.ko` |
+| build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 3 new params present, 10 cfg80211 imports |
+| patches | `0001`/`0002` regenerated with **seven** files (hi5622_scan.c/.h, hi5622_scan_logic.c/.h, hi5622_scan_d2h.c/.h, cfg80211-provider.symvers); both verified with `patch --dry-run` |
+| host tests | 37/37 scan-tuning, 196/196 scan-complete, 290/290 scan-logic, 7/7 relaxed-decoder selftest PASS |
 
 ## Tree quirks
 

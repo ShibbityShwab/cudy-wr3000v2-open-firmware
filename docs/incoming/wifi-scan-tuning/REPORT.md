@@ -349,3 +349,36 @@ two `scan batch k/3 complete - next request in 300 ms` lines, 13 channel
 results, `scan BSS list check: entries>0 iw_visible>0`, and
 `finish-ok[...], channel=13, chans=13/13 batches=3/3, timeout=0` ->
 `scan_done(aborted=0)`.
+
+---
+
+## 10. Second R1 fire: completion-event semantics + BSS decode fixes (R2)
+
+The second R1 fire (artifact 247,776 B sha 613989ff) exposed two more issues:
+
+1. a firmware completion event arrived after batch 1 (complete=1, status not 1)
+   and was treated as scan-global -> finish-abort[complete-failed], so batch
+   2/3 was never posted.  The firmware emits its completion event for the
+   request it reached (6 channels), not for our cfg80211 scan.  Fix: while
+   more batches remain a completion event terminates only the CURRENT batch
+   (advance the chain); on the final batch the accumulated channel-coverage
+   rule wins over a partial-request status (logged: status=0x.. but all N
+   channels covered -> finishing OK).  An explicit abort still aborts.
+2. all six g1 id15 BSS frames failed decode (parse=6, inform_fail=0, BSS list
+   entries=0): none of the four fixed layout candidates matched.  Fix: the
+   decoder now tries a relaxed alignment sweep (frame offset 0..32 x trailer
+   length 0/4/8/12/16/20/24) that still requires a syntactically valid
+   management beacon/probe-response with a derivable channel; the recognised
+   layout is reported as "relaxed" (0x80) and the kernel logs it.  If even
+   that fails, a ratelimited `scan BSS decode gap: len=.. first=<hex>` dmesg
+   line prints the first 32 bytes for the next bench iteration.  The BSS-list
+   readback (entries/iw_visible) is kept as the visibility gate.
+
+Rebuilt artifacts (0 warnings; host suites 37/37, 196/196, 290/290, 7/7
+relaxed-decoder): the ladder artifact is **248,668 B sha256 ca81660f...**
+(base+polish+scan, /tmp/wifi-scan-tuning/hi5622_wifi.ko); bare variant
+248,312 B sha256 118c3b31....  Patches 0001/0002 now carry all seven files
+(incl hi5622_scan_d2h.c/.h and cfg80211-provider.symvers; both patch --dry-run
+clean).  Expected R1 after R2: three batch lines (no completion-event abort
+after batch 1), 13 channel results, BSS entries>0 iw_visible>0, DONE
+finish-ok channel=13 chans=13/13 batches=3/3 -> scan_done(aborted=0).

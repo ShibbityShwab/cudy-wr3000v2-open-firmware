@@ -377,7 +377,20 @@ static void hi5622_scan_work(struct work_struct *work)
 		schedule_delayed_work(&s->work, msecs_to_jiffies(HI5622_SCAN_POLL_MS));
 		return;
 	}
-	step = hi5622_scan_model_tick(&s->model, now);
+	if (s->model.complete_seen && s->model.complete_failed &&
+	    s->total_expected && s->total_seen >= s->total_expected) {
+		/* The firmware reported a non-success status for the last request,
+		 * but every requested channel was actually reported scanned.  The
+		 * channel-coverage rule wins: finish OK instead of aborting a scan
+		 * that covered the full plan.  (Bench R1: the completion status on
+		 * this path is not 1.) */
+		dev_info(wiphy_dev(c->wiphy),
+			 "cfg80211: firmware completion status=0x%02x for the last request, but all %u requested channels were covered - finishing OK (coverage wins)\n",
+			 s->model.complete_reason, s->total_expected);
+		step = HI5622_SCAN_FINISH_OK;
+	} else {
+		step = hi5622_scan_model_tick(&s->model, now);
+	}
 	if (step == HI5622_SCAN_WAIT) {
 		left = s->model.deadline_ms > now ?
 			s->model.deadline_ms - now : 0;
@@ -547,6 +560,14 @@ void hi5622_scan_deliver(struct hi5622_pci *ctx, const u8 *hdr,
 			hi5622_scan_note_parse_error(&s->model);
 		} else if (ops->parse_scan_result(payload, avail, r)) {
 			hi5622_scan_note_parse_error(&s->model);
+			/* Bench diagnostic (task-133 R2): when neither a fixed nor a
+			 * relaxed layout matches, print the first bytes so the true
+			 * framing is visible in dmesg (ratelimited, never a result). */
+			dev_warn_ratelimited(&ctx->pdev->dev,
+					     "cfg80211: scan BSS decode gap: len=%u first=%*phN\n",
+					     avail,
+					     (int)(avail > 32u ? 32u : avail),
+					     payload);
 		} else if (hi5622_scan_result_validate(r)) {
 			hi5622_scan_note_invalid_result(&s->model);
 		} else {
@@ -701,14 +722,16 @@ static int hi5622_scan_post_vap_start(struct hi5622_pci *ctx,
 /* ---- task-133: multi-request ("batched") scan ------------------------- */
 
 /* True when the CURRENT request/batch is done from the host's point of view:
- * a firmware success completion for it, or every channel it asked for was
- * reported plus the settle window.  A failed completion is not "done" so the
- * normal model tick can turn it into an honest abort. */
+ * a firmware completion event for it (success or not - the firmware may report
+ * a non-success status for a request it only partly reached, bench R1), or
+ * every channel it asked for was reported plus the settle window.  This is
+ * only consulted while more batches remain; the final batch is decided by the
+ * kernel layer (channel coverage wins over a partial-request status). */
 static bool hi5622_scan_batch_done(const struct hi5622_scan_model *m, u64 now_ms)
 {
 	if (m->phase != HI5622_SCAN_ACTIVE || m->abort_requested)
 		return false;
-	if (m->complete_seen && !m->complete_failed)
+	if (m->complete_seen)
 		return true;
 	return hi5622_scan_coverage_ready(m, now_ms);
 }
