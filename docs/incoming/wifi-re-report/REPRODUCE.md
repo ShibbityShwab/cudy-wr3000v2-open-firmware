@@ -65,13 +65,19 @@ $PY wifi-ctx-create/tools/ctx_create_re.py --selftest    # 40/40
 $PY wifi-ctx-create/tools/ctx_create_frame.py --selftest # 26/26
 $PY wifi-ctx-create/tools/ctx_create_re.py --trace       # handler -> key table -> create helper
 $PY wifi-ctx-create/tools/ctx_create_frame.py --frame    # the 48-byte create frame (TABLES T13 F4)
-$PY wifi-bench-tooling/tools/selftest.py            # 177/177, PASS
+$PY wifi-bench-tooling/tools/selftest.py            # 312/312, PASS (incl. protocol mode)
+$PY wifi-datapath/tools/build.sh                     # 77/77 PASS, frame builders + ring arithmetic
+$PY wifi-datapath/tools/fw_dp_tables.py --selftest   # 35/35 PASS, firmware key tables A/B
+bash wifi-proto-seq/tools/selftest.sh                # 66/66 + 38/38 + 55/55 PASS, calibration family
+$PY wifi-ete-wake/tools/ete_wake.py selftest         # 81/81 PASS, ETE trigger chain
 ```
 
 Frame cross-checks: `wifi-h2d-frames/tools/build.sh` runs the catalogue `--check` and the
 byte-exact builder vectors, including the 48-byte TXQ config sync quoted in [TABLES.md](TABLES.md)
 T13 (F3); `wifi-h2d-send/tools/build.sh` additionally emits the 72-byte-node variant and the
 type-variant context-create frames (kernel build required for the module part).
+The v2 calibration frames are reproduced by `wifi-proto-seq/tools/proto_seq_frames.py`
+(`--emit 3507` prints the 298-byte structural frame; `--check-response` validates an answer hex).
 
 ## 4. Reproduce the static protocol tables
 
@@ -113,9 +119,12 @@ The patched images exist only outside the repository. Do not copy them into it.
 
 ## 6. Re-run the bench result (attended only)
 
-Read first: `wifi-driver-clean/BENCH-PROCEDURE.md`, `wifi-h2d-send/BENCH-PROCEDURE.md` Ladder C,
-`wifi-bench-tooling/README.md`, and the project's `RUNBOOK.md`. The generic ladder with pass gates
-is [TABLES.md](TABLES.md) T19. One-command session shape:
+Read first: `wifi-driver-clean/BENCH-PROCEDURE.md`, `wifi-h2d-send/BENCH-PROCEDURE.md` Ladder C
+(ordered context-create -> TXQ) and Ladder D (calibration C1), `wifi-bench-tooling/README.md`,
+`wifi-cfg80211/REPORT.md` sec 8 (interface observation session) and the project's `RUNBOOK.md`.
+The generic ladder with pass gates is [TABLES.md](TABLES.md) T19. The cfg80211 bench-image build,
+extract and flash steps are in `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 2-4 (bench-only;
+the actual flash verified full-slot hash `1794a531...`). One-command session shape:
 
 ```sh
 cd $REPO/opensource/docs/incoming/wifi-bench-tooling

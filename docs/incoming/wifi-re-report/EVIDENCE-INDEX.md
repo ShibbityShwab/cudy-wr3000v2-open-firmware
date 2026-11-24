@@ -25,10 +25,17 @@ section of [REPORT.md](REPORT.md).
 | EV-005 | 1.2 | the route to that state requires the release-only boot protocol | [V]/[V*] | `wifi-rom-dump/REPORT.md` sec 6-7 | ledger 2026-11-24 10:00/10:40 | - |
 | EV-006 | 1.2 | the firmware IRQ/thread layer is not proven alive; the mailbox is serviced through the PD3/PD4 research patch | [V*] | `wifi-irq-unmask/REPORT-PD3.md` | ledger 2026-11-24 22:10 | - |
 | EV-007 | 1.2 | the ETE A->B copy is idle; the D2H path is the direct device-ring reader | [V*] | `wifi-d2h-direct/REPORT.md`, `wifi-ete-engine/REPORT.md` | ledger 2026-11-24 13:10 | - |
-| EV-008 | 1.2 | Wi-Fi interface and data path are not started; upstream is blocked by the closed firmware | [I] | `wifi-vendor-userspace/REPORT.md`, `wifi-driver-re/SUMMARY.md` | - | - |
+| EV-008 | 1.2 | the Wi-Fi *operational* interface (firmware VAP/scan/association) and the MAC data path are not started; a cfg80211 management interface (wiphy + VAP netdev, M0/M1) now exists, and upstream remains blocked by the closed firmware | [I]/[V*] | `wifi-vendor-userspace/REPORT.md`, `wifi-driver-re/SUMMARY.md`, `wifi-cfg80211/REPORT.md` | ledger 2026-11-25 15:00 | - |
 | EV-009 | 1.3 | the eight-step breakthrough ladder and its dates | [V*] | this report sec 1.3; lanes named per row | ledger 2026-11-22..11-25 | - |
 | EV-010 | 1.4 | firmware 928,920 B sha256 7fc87e20... ; ROM content 2,073 B sha256 fcfd464f... | [V] | `wifi-firmware-re/REPORT.md`, `wifi-rom-dump/REPORT.md` sec 1 | - | - |
 | EV-011 | 1.4 | 60 H2D receive slots (41 group 0 incl. early 0x2F, 19 group 2) | [V] | `wifi-h2d-catalog/REPORT.md`, `wifi-h2d-frames/catalogue.md` | - | catalogue counts checked |
+
+| EV-126 | 1.1 | the v2 chain extends to the calibration answer and the wiphy/VAP interface | [V*] | `wifi-proto-seq/REPORT.md`, `wifi-cfg80211/REPORT.md` | ledger 2026-11-25 12:30/15:00 | - |
+| EV-127 | 1.2 | cfg80211 wiphy + VAP netdev lifecycle hardware-validated on our own image (M0/M1) | [V*] | `wifi-cfg80211/REPORT.md`, `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` | ledger 2026-11-25 15:00 | - |
+| EV-128 | 1.2 | ladder C1: 298 B calibration request consumed and a 298 B g1 id3 answer counted; answer body not captured | [V*] | `wifi-proto-seq/REPORT.md` sec 4-7, `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
+| EV-129 | 1.2 | the ETE DR host lever measured negative; the data plane is mapped but not implemented; upstream still blocked | [V*]/[I] | `wifi-ete-wake/REPORT.md`, `wifi-datapath/REPORT.md`, `wifi-upstream-target/REPORT.md` | ledger 2026-11-25 08:40/10:10 | - |
+| EV-130 | 1.3 | the four additional 2026-11-25 breakthroughs of the v2 ladder (PD4 cave, ETE verdict, C1, wiphy/VAP) | [V*] | REPORT sec 1.3; lanes named per row | ledger 2026-11-25 02:10-15:00 | - |
+| EV-131 | 1.4 | v2 key numbers: image/module hashes, channel plan, C1 lengths, MAC ring geometry | [V]/[V*] | TABLES T21-T24 and the lanes they cite | ledger 2026-11-25 | constants cross-checked |
 
 ## Section 2 - system map
 
@@ -43,6 +50,9 @@ section of [REPORT.md](REPORT.md).
 | EV-018 | 2.3 | the layer stack (userspace -> cfg80211 -> HCC -> ETE -> PCIe -> chip) | [I] | `wifi-vendor-userspace/REPORT.md`, `wifi-host-replica/REPORT.md` | - | - |
 | EV-019 | 2.5 | the device-side address map rows (ROM, image, page, mailbox, ETE, rings, blocks) | [V]/[V*] | TABLES T1/T4/T14 and the lanes they cite | bench reads | constants cross-checked |
 | EV-020 | 2.5 | three distinct firmware objects 0x10C0F4 / 0x10C190 / 0x10F1F0 | [V]/[U] | `wifi-h2d-catalog/REPORT.md`, `wifi-irq-unmask/REPORT-PD2.md`, `wifi-ete-engine/REPORT.md` | - | - |
+
+| EV-132 | 2.2 | the MAC host-interface block CA 0x40040000/0x40060000 lies inside region 3 (BAR0 0x418000/0x438000); a MAC-window read once bus-errored, so ladder B2 reads before writing | [V]/[V*] | `wifi-datapath/REPORT.md` sec 2.1/9.4 | - | - |
+| EV-133 | 2.5 | device map rows for the MAC slot-5 ring block and the firmware key tables A/B | [V] | `wifi-datapath/REPORT.md` sec 2/4 | - | - |
 
 ## Section 3 - boot chain
 
@@ -88,6 +98,15 @@ section of [REPORT.md](REPORT.md).
 | EV-053 | 4 F6 | the 20-bit region-3 mask mis-maps out[3]/out[4] by 1 MiB | [V] | `wifi-hcc-core/src/hcc_core.h`, `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 17:20 | - |
 | EV-054 | 4 F6 | after the fix the deferred-notify flush retires (g+0xB4 = g+0xB8 = 0) | [V*] | `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 21:10 | - |
 
+| EV-134 | 4 F7 | the calibration carrier is g0 id2 key 0x0101, 298 B, with six cfg ids recovered statically | [V] | `wifi-proto-seq/REPORT.md` sec 4-6 | - | proto-seq 66/66 |
+| EV-135 | 4 F7 | C1 bench: frame consumed in 0 polls, 298 B g1 id3 answer counted, mask/page clean, body recycled | [V*] | `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
+| EV-136 | 4 F8 | cfg80211 M0/M1 model with ready-gated wiphy registration (no MMIO, no H2D from the cfg layer) | [V] | `wifi-cfg80211/REPORT.md` sec 3-4 | - | cfg80211 logic 454/454 |
+| EV-137 | 4 F8 | the cfg80211 image was flashed to kernelb, the wiphy registered, iw enumerates phy0 and a VAP netdev is created/deleted | [V*] | ledger 2026-11-25 15:00, `STATUS.md` 3k, T21/T22 | - | - |
+| EV-138 | 4 F9 | the frame plane is the separate MAC slot-5 ring block; the vendor's next frame is the TXQ address sync g0 id1 key 0x0320 | [V] | `wifi-datapath/REPORT.md` sec 0/2/5 | - | datapath 77/77 |
+| EV-139 | 4 F9 | the ready g4 id2 payload seeds the MSDU-info ring pointer table (ACP 0x02060850 -> MAC+0x10) | [V]/[V*] | `wifi-datapath/REPORT.md` sec 0.3 | ledger 2026-11-24 14:00 | - |
+| EV-140 | 4 F10 | PD4 is a two-window patch (4-byte entry redirect + 64-byte stub in the dead CPU 0x108240 gap), image hash cfe24bfb..., length unchanged | [V]/[V*] | `wifi-irq-unmask/REPORT-PD4.md` sec 2-3, T25 | ledger 2026-11-25 02:10 | - |
+| EV-141 | 4 F10 | no vendor-clean (unpatched-firmware) mailbox-delivery path has been demonstrated; PD4 is research-only | [I]/[U] | `wifi-irq-unmask/REPORT-PD4.md` sec 9 + fw-audit lane scope (task-115) | - | - |
+
 ## Section 5 - protocol reference
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -103,6 +122,9 @@ section of [REPORT.md](REPORT.md).
 | EV-063 | 5.5 | SR0-2 / DR0-3 channel map, 8-byte node format, packed index/depth 32 | [V]/[V*] | `wifi-transport-port/REPORT.md` sec 1, `wifi-ete-frames/REPORT.md` | bench A/B2 2026-11-22 | - |
 | EV-064 | 5.6 | the boot register table (release/gate/page/mask/mailbox) | [V]/[V*] | TABLES T4/T9; lanes as cited | GP8, PD3 | constants cross-checked |
 
+| EV-142 | 5.7 | Wi-Fi frames do not ride HCC/ETE; the TXQ-table address sync is g0 id1 key 0x0320 (4-byte device VA) | [V] | `wifi-datapath/REPORT.md` sec 2/5 | - | - |
+| EV-143 | 5.7 | TX entry and RX ring/descriptor geometry (8-byte MSDU-info, 256/512 free rings, 4095 completion ring, 0x28 B descriptor) | [V] | `wifi-datapath/REPORT.md` sec 6-7 | - | - |
+
 ## Section 6 - the operational duplex loop
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -113,6 +135,22 @@ section of [REPORT.md](REPORT.md).
 | EV-068 | 6 | TXQ sync consumed with out0/out2/out5 = 0, mask 0, staging 0, h2d_status ok=2 timeout=0 | [V*] | `wifi-h2d-send/REPORT.md` sec 12 | ledger 2026-11-25 05:10 | - |
 | EV-069 | 6 | the module used was 400,732 B sha256 774c4f1f... with 242/242 + 233/233 selftests | [V] | `wifi-h2d-send/BUILD-NOTES.md` | ledger 2026-11-25 05:10 | - |
 | EV-070 | 6 | the hcc_core state machine IDLE->BOOT->WAIT_PLAT->WAIT_DEV->READY_TXQ_SYNC->ACTIVE | [V] | `wifi-hcc-core/src/hcc_core.h`, `INTEGRATION.md` | - | hcc-core selftest 528 |
+
+| EV-144 | 6.1 | the ordered lap is deterministic on a fresh boot (identical context addresses/values) | [V*] | `wifi-h2d-send/REPORT.md` sec 11-12 | ledger 2026-11-25 07:40 | - |
+| EV-145 | 6.2 | calibration carrier geometry: g0 id2, key 0x0101, 270 B blob, 298 B frame/node, field B = module | [V] | `wifi-proto-seq/REPORT.md` sec 5 | - | - |
+| EV-146 | 6.2 | the six vendor calibration cfg ids and value sizes (3502-3507) | [V] | `wifi-proto-seq/REPORT.md` sec 5.3 | - | - |
+| EV-147 | 6.2 | C1 fired set_rssi_param 3507: consumed in 0 polls; answer catalogue count=2, last 298 B; mask 0/page golden | [V*] | `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
+| EV-148 | 6.2 | the C1 answer body was recycled before capture; g1 id3 is the generic config-sync channel (syn_id dispatch) | [V*]/[V] | `wifi-proto-seq/REPORT.md` sec 6, REPORT correction C20 | ledger 2026-11-25 12:30 | - |
+| EV-149 | 6.3 | image build artifacts: cfg80211.ko 949393f9..., container 22b72852..., kernel slice 13e81214..., slot 1794a531... | [V] | `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5, T21 | - | - |
+| EV-150 | 6.3 | the flash went through stock's mtd to kernelb with a full-slot verify and the documented handover; stock pair A preserved | [V*] | `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 3, ledger 2026-11-25 15:00 | - | - |
+| EV-151 | 6.3 | cfg80211.ko + the clean driver loaded; one wiphy per endpoint; registration gated on the ready pair | [V*] | ledger 2026-11-25 15:00, `wifi-cfg80211/REPORT.md` sec 3 | - | - |
+| EV-152 | 6.3 | iw enumerates Wiphy phy0 and the nl80211 VAP wlan0 is created and deleted (/sys/class/ieee80211/phy0 exists) | [V*] | ledger 2026-11-25 15:00, `STATUS.md` 3k | - | - |
+| EV-153 | 6.3 | M0/M1 limits: no firmware VAP object, no scan/association/data path; cfg80211 config is bench-only | [V*]/[I] | `wifi-cfg80211/REPORT.md` sec 6/8, REPORT sec 10.1 | - | - |
+| EV-154 | 6.4 | two-plane model: MAC host-interface register map, TX/RX ring formats and the 217/88-slot key tables | [V] | `wifi-datapath/REPORT.md` sec 2/4/6/7 | - | datapath 77/77 + 35/35 |
+| EV-155 | 6.4 | data-plane bring-up order D0-D5 with a read-only B2 probe as the first bench step | [I]/[V*] | `wifi-datapath/REPORT.md` sec 9-10 | - | - |
+| EV-156 | 6.5 | the trigger chain: event 0x2E status bits 24-28 -> sending trigger 0xC625A; no image or vendor-host writer of status/send/doors | [V] | `wifi-ete-wake/REPORT.md` sec 2-3 | - | ete-wake 81/81 |
+| EV-157 | 6.5 | E1a/E1b negative on hardware: the +0x38 host lever left status/send/fills unmoved; direct read stays the supported RX path | [V*] | `wifi-ete-wake/REPORT.md` sec 8, ledger 2026-11-25 10:10 | - | - |
+| EV-158 | 6.5 | the SR (H2D) A->B copy runs normally while the DR direction is gated (the asymmetry that keeps H2D working) | [V*] | `wifi-ete-wake/REPORT.md` sec 6 | ledger 2026-11-24 15:10/22:10 | - |
 
 ## Section 7 - bench evidence chain
 
@@ -144,6 +182,16 @@ section of [REPORT.md](REPORT.md).
 | EV-094 | 7 | 2026-11-25 03:10-05:10 context-create RE; type-3 lap; type-1 breakthrough | [V]/[V*] | `wifi-ctx-create/REPORT.md`, `wifi-h2d-send/REPORT.md` | ledger 2026-11-25 03:10/04:10/05:10 | ctx selftests |
 | EV-095 | 7 | 2026-11-25 06:00 response frames decoded byte-exactly | [V*] | this report TABLES T13, lane records | ledger 2026-11-25 06:00 | frame bytes cross-checked |
 
+| EV-159 | 7 | 2026-11-25 07:40 - ordered lap reproduced deterministically across boots | [V*] | `wifi-h2d-send/REPORT.md` | ledger 2026-11-25 07:40 | - |
+| EV-160 | 7 | 2026-11-25 08:40 - frame plane identified; first automated protocol-runner fire exposed host-side bugs | [V]/[V*] | `wifi-datapath/REPORT.md`, `wifi-bench-tooling/REPORT.md` | ledger 2026-11-25 08:40 | - |
+| EV-161 | 7 | 2026-11-25 09:10 - cfg80211 lane lands host-side (wiphy/VAP M0-M2) | [V] | `wifi-cfg80211/REPORT.md` | ledger 2026-11-25 09:10 | - |
+| EV-162 | 7 | 2026-11-25 10:10 - ETE-wake E1a/E1b negative; DR copy classified device/ROM-internal | [V*] | `wifi-ete-wake/REPORT.md` | ledger 2026-11-25 10:10 | - |
+| EV-163 | 7 | 2026-11-25 11:00 - g1 id3/id0x12 decoded and the six calibration frames built | [V] | `wifi-proto-seq/REPORT.md` | ledger 2026-11-25 11:00 | - |
+| EV-164 | 7 | 2026-11-25 11:40 - bench-auto protocol mode rebuilt on a raw-read transport helper (312/312) | [V] | `wifi-bench-tooling/REPORT.md` sec 8 | ledger 2026-11-25 11:40 | - |
+| EV-165 | 7 | 2026-11-25 12:30 - ladder C1: the firmware answers the first calibration message | [V*] | `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
+| EV-166 | 7 | 2026-11-25 13:30 - wave-2 lanes and the target build all delivered (image/slice hashes recorded) | [V] | `wifi-upstream-target/BUILD-VERIFICATION.md` | ledger 2026-11-25 13:30 | - |
+| EV-167 | 7 | 2026-11-25 15:00 - first real Wi-Fi interface on our own image (wiphy + VAP, M0/M1) | [V*] | `wifi-cfg80211/REPORT.md`, T21/T22 | ledger 2026-11-25 15:00 | - |
+
 ## Section 8 - corrections register
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -163,6 +211,17 @@ section of [REPORT.md](REPORT.md).
 | EV-108 | 8 | C15: sysfs grammar needs the no-newline write | [V*] | `wifi-h2d-send/BENCH-PROCEDURE.md` | 2026-11-24 15:10 | - |
 | EV-109 | 8 | C16: GP1's pulse is necessary but not sufficient | [V*] | `wifi-s1-cpu1/REPORT.md` | 2026-11-24 06:20/10:40 | - |
 
+| EV-168 | 8 | C17: a Wi-Fi management interface can exist before the full stack (wiphy+VAP validated) | [V*] | REPORT sec 8; bench 2026-11-25 15:00 | - | - |
+| EV-169 | 8 | C18: CONFIG_CFG80211 is no longer a blocker (built, loaded, exercised) | [V] | `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5 | - | - |
+| EV-170 | 8 | C19: the ETE DR copy is not wakeable from the host-owned published index | [V*] | `wifi-ete-wake/REPORT.md` sec 8 | ledger 2026-11-25 10:10 | - |
+| EV-171 | 8 | C20: g1 id3 is a generic syn_id config-sync channel; the 36 B frame is a VAP-MIB event and g1 id0x12 is the ACS family | [V] | `wifi-proto-seq/REPORT.md` sec 2-3 | - | - |
+| EV-172 | 8 | C21: Wi-Fi frames use the MAC slot-5 ring block, not HCC/ETE; the direct-read constraint is message-only | [V] | `wifi-datapath/REPORT.md` sec 2/8 | - | - |
+| EV-173 | 8 | C22: the first TXQ-sync fault was the missing context precondition, not a 48-vs-72 node-length problem | [V*] | `wifi-h2d-send/REPORT.md` sec 12 | ledger 2026-11-25 05:10 | - |
+| EV-174 | 8 | C23: empty bench step captures were the raw-read transport, not a sequence failure; bar0read fixed it | [V] | `wifi-bench-tooling/REPORT.md` sec 8 | ledger 2026-11-25 11:40 | - |
+| EV-175 | 8 | C24: an unconsumed announce can be the exception cascade corrupting the PD3 poller | [V*] | `wifi-irq-unmask/REPORT-PD4.md`, `wifi-h2d-send/REPORT.md` | ledger 2026-11-25 01:10-05:10 | - |
+| EV-176 | 8 | C25: the cfg80211 config belongs to the bench image, not the upstream kernel series | [V] | `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 5 | - | - |
+| EV-177 | 8 | C26: the domain->band wiphy mapping is an inference with a band_force override | [I] | `wifi-cfg80211/REPORT.md` sec 3/10 R4 | - | - |
+
 ## Section 9 - verification
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -176,18 +235,28 @@ section of [REPORT.md](REPORT.md).
 | EV-116 | 9.3 | bench ladders are documented but must remain attended and recovery-gated | [V] | `wifi-driver-clean/BENCH-PROCEDURE.md`, `wifi-h2d-send/BENCH-PROCEDURE.md`, project `RUNBOOK.md` | - | - |
 | EV-117 | 9.4 | this report's verifier checks cross-references, markers, claim IDs and key constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (this pass) |
 
+| EV-178 | 9.1 | the wave-2 device-free lane checks were re-run in this revision: 528, 233, 92, 40+26, 312, 77+35, 66+38+55, 81, 454+242 | [V] | the lanes' committed selftest entry points (see 9.1) | - | **yes** (this pass) |
+| EV-179 | 9.1 | the cfg80211 source selftest reports 144/145; the one failure is the known provider-symvers redundancy documented by the target lane | [V] | `wifi-cfg80211/tools/selftest.py`, `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5 | - | **yes** (this pass) |
+| EV-180 | 9.4 | the verifier was extended for the v2 tables (T21-T25), milestone vocabulary and constants | [V] | this report's `tools/verify_report.py` | - | **yes** (this pass) |
+
 ## Sections 10-13 - limits, publication, lane map, conventions
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
 | --- | --- | --- | --- | --- | --- | --- |
-| EV-118 | 10 | the result is message-level, not link-level; no VAP/scan/association/data path | [I] | `wifi-vendor-userspace/REPORT.md` sec 7 | - | - |
+| EV-118 | 10 | the result is message-level plus management-level, not link-level: the wiphy/VAP netdev lifecycle works (M0/M1) but there is no firmware VAP object, no scan/association result and no data path | [I]/[V*] | `wifi-vendor-userspace/REPORT.md` sec 7, `wifi-cfg80211/REPORT.md` sec 6/8 | ledger 2026-11-25 15:00 | - |
 | EV-119 | 10 | the firmware IRQ/thread layer remains dormant; PD3 bypasses only the mailbox | [V]/[V*] | `wifi-fw-link-event/REPORT.md`, `wifi-irq-unmask/REPORT.md` | 2026-11-24 | - |
 | EV-120 | 10 | the context-create frame is synthesized, not vendor-captured; key-0x64 sender unproven | [I] | `wifi-ctx-create/REPORT.md` sec 6/11 | - | - |
-| EV-121 | 10 | open questions ranked (IRQ layer, CECE service, engine trigger, startup sequence, response decode, cfg80211, data path) | [I]/[U] | this report sec 10.2 | - | - |
+| EV-121 | 10 | open questions re-ranked for v2 (VAP/scan payload structs, MAC data-plane bring-up, calibration body capture, vendor-clean mailbox delivery, IRQ layer, CECE service, DR start condition) | [I]/[U] | this report sec 10.2 | - | - |
 | EV-122 | 11 | no vendor binary/firmware/ROM/calibration/secret is committed by this lane; blobs remain local | [V] | this report sec 11, project `PUBLISH.md` | - | **yes** (verifier checks) |
 | EV-123 | 11 | upstream Wi-Fi stack remains blocked by the closed firmware; GPL source is the route | [V] | `wifi-driver-re/SUMMARY.md`, `opensource/docs/GPL-REQUEST.md` | - | - |
 | EV-124 | 12 | the lane documentation map matches the directories present under `opensource/docs/incoming/` | [V] | the directory listing itself | - | **yes** (verifier checks) |
 | EV-125 | 13 | conventions and glossary terms as used throughout | [V] | this report sec 13 | - | - |
+| EV-181 | 10 | limits updated: M0/M1 management only; firmware VAP/scan/data path open; ETE DR closed; calibration body not captured | [V*]/[I] | REPORT sec 10.1 | - | - |
+| EV-182 | 10.2 | open questions re-ranked around the VAP/scan payloads, data plane, calibration body and vendor-clean delivery | [I]/[U] | REPORT sec 10.2 | - | - |
+| EV-183 | 11 | the cfg80211 bench image is a research instrument, not an upstream deliverable or release | [V] | `wifi-upstream-target/REPORT.md` sec 9/12 | - | - |
+| EV-184 | 12 | the lane documentation map now covers the wave-2/3 lanes and the fw-audit lane | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
+| EV-185 | 13 | the glossary gained the cfg80211/MAC-plane/calibration vocabulary | [V] | REPORT sec 13 | - | - |
+
 
 ---
 

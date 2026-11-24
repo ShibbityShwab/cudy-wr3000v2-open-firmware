@@ -35,6 +35,11 @@ Host physical address of an endpoint window on the bench (endpoint 0):
 `phys = 0x40000000 + BAR0_offset` [V*]. The second RC endpoint enumerates with BAR0
 `0x58000000` (source: wifi-transport-port SUMMARY, A-run) [V*].
 
+The MAC host-interface ring block (CA `0x40040000`/`0x40060000`, figure in REPORT 6.4) lies
+**inside region 3**; its host offsets are therefore `0x3B8000+(CA-0x40000000)` = `0x418000` /
+`0x438000`. An earlier lane recorded a bus error on a MAC-window read, so ladder B2 starts with a
+single read-only probe before any host write [V]/[V*].
+
 ## T2. Address translation and naming rules (project-wide)
 
 | rule | statement | evidence |
@@ -284,7 +289,7 @@ message makes DEVICE READY.
 | ---: | --- | --- | --- | --- |
 | 1 | boot | driver release + ready handshake | (device -> host g4 id1, g4 id2) | - |
 | 2 | first post-ready | driver TXQ config sync | H2D g0 id1 cmd 0xD8 (key 0xD8), total 0x30 | observed g1 id3 (36 B) |
-| 3 | calibration | 6 x alg set_* | H2D g0 id2 | g1 id3 |
+| 3 | calibration | 6 x alg set_* | H2D g0 id2, key 0x0101, 298 B | g1 id3, syn 0x0101, 298 B (C1 observed) |
 | 4 | netifd VAP create | add_virtual_intf path | H2D g0 7/8 (hmac_user_add / notify) | - |
 | 5 | hostapd start_ap | WAL cfg | group 2 config commands | - |
 | 6 | scan | iw scan | H2D g0 0xC | g1 15-17 / g2 2 |
@@ -364,7 +369,30 @@ payload: 00000000 0a000000 1c000000 00000000 00000000 00000000 0401000a
 
 Note on F6: the ledger entry (2026-11-25 06:00) lists nine payload words; the header total
 (0x28 = 40) implies seven (28 B), so the last two listed words are attributed to adjacent
-staging and are marked [I]; re-read pending.
+staging and are marked [I]; re-read pending. The proto-seq lane later decoded both frames
+structurally: g1 id3 is the generic config-sync channel (`syn_id` at payload+8; the 36 B frame is
+an unsolicited VAP-MIB update with syn `0x07E0` and field B 4), and g1 id0x12 is the firmware
+ACS-response family (field B 0x12, payload_len 28, body semantics device-side [U]) (correction C20).
+
+**F7 - host -> device, calibration config event (group 0 id 2, key 0x0101, 298 B; C1):**
+
+```
+header : 00 01 00 04  2a 01  02 00  00 00 5a 5a    group 0, field B = module/vap (default 4),
+                                                    total 0x12A = 298, id 2, tag 0x5A5A
+payload: 00000000 00000000                          token[8]
+         01 01                                       u16 key 0x0101
+         0e 01                                       u16 len 270 (0x10E)
+         <270-byte alg_cfg blob>                     cfg_id u16 | type 0 (SET) | pkt_type 0 |
+                                                    dev_ret u32 0 | need_w4 1 | resv 0 |
+                                                    value[260] (offset +0x0A within value area)
+         00 00 00 00                                 inherited pad
+wire / node : 298 B / 298 B    node word1 = (298 << 16) | 0x6D2B = 0x012A6D2B
+```
+
+Expected device answer: one D2H g1 id3, total 298 B, `syn_id 0x0101`, `body_len 270`, request
+cfg id echoed, `dev_ret 0`, no host reply. C1 fired cfg id 3507 (`set_rssi_param`, zero values);
+the observed answer was a g1 id3 frame with total/len 298 B (count 2, `last_total=0x012A`), body
+recycled before capture [V]/[V*].
 
 ## T14. ETE rings and node format
 
@@ -399,7 +427,7 @@ REPORT-PD2/PD3/PD4 + ledger entries (dates given).
 | PD2 | 0x916A -> FE F7 62 B9 (b.w 0x47432) | CPU 0x47432 (62 B; supposed dead config-3 block) | 7a691807...1b7728 | boot FAILED: page 0x6F/3/9DFBEF6A/0, state garbage - the cave is LIVE on our boot - 2026-11-24 19:00 [V*] |
 | PD3 (A) | 0x0916A 00 20 21 B0 -> F6 F7 4F BF (b.w 0x4000C) | CPU 0x4000C..0x4004B (image-header exception-record area, 64 B zero) | eea9f2ff...3905ce | **SUCCESS**: golden page intact, state 1, mask 0; one announce consumed in 0 polls - 2026-11-24 22:10 [V*] |
 | PD3B | no cave; event-0x4C raise loop in the boot epilogue | inline | ef0683db... | not fired on the bench at this report's cut-off [U] |
-| PD4 | 0x0916A -> BF F0 69 B8 (b.w 0x108240) | CPU 0x108240 inside static-data gap 0x108197..0x108413 (637 B; zero branch/literal refs; outside both boot memsets and the exception staging area) | cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1 | cave verified present before/after; g0-id1 fault reproduces; ordered lap then succeeds with no exception - 2026-11-25 02:10 / 05:10 [V*] |
+| PD4 | 0x0916A -> BF F0 69 B8 (b.w 0x108240) | CPU 0x108240 inside static-data gap 0x108197..0x108413 (637 B; zero branch/literal refs; outside both boot memsets and the exception staging area) | cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1 | cave verified present before/after; g0-id1 fault reproduces; ordered lap then succeeds with no exception - 2026-11-25 02:10 / 05:10 [V*]; audit/delta: T25 |
 
 PD3/PD4 stub (our own code, 64 B at 0x4000C / 0x108240; identical logic in both patches):
 `ldr r7,=0x10C19C` (hcc+0xC init guard) -> wait for [hcc+0xC] != 0 -> poll out[0] at
@@ -474,6 +502,9 @@ This is the shape of the sessions cited in this report; the operational details 
 | S6 | **release-only**: write 0x00005A5A to CA 0x40000108; never 0xCECE during boot | - |
 | S7 | golden gate: page +8 == 2 and words 0x86807FEF/7/2/0xABCD; state 1; mask 0 | latch once, do not re-read forever |
 | S8 | ready pair via direct reader; then at most the messages planned for that session | per-session plan; one variable per fire |
+| S9 | calibration ladder C1: one `g0 id2` key 0x0101 frame after the ordered lap | announce consumed in 0 polls; one 298 B g1 id3 answer; page/state/mask clean |
+| S10 | cfg80211 bench-image session: load `cfg80211.ko` + cfg80211-enabled driver | wiphy allocated; no device write from the cfg80211 layer |
+| S11 | boot sequence -> ready pair -> wiphy registration | `/sys/class/ieee80211/phy0`; `iw phy` lists Wiphy phy0; VAP add/del works, no H2D sent by cfg80211 |
 
 Stop rules (from the lanes' procedures): one idea per fire; never retry a frame that was not
 consumed; never write CA 0x400392F0; never write 0xCECE during boot; no raw flash writes without
@@ -496,9 +527,112 @@ the preflight; capture dmesg/UART read-only, then power-cycle.
 | `wifi-fw-postboot`, `wifi-fw-link-event`, `wifi-event-router`, `wifi-boot-gate`, `wifi-boot-kick`, `wifi-fw-ready-gate` | image post-boot internals and the IRQ/event gap |
 | `wifi-vendor-userspace` | userspace surfaces, startup trace, HCC mapping, cfg80211 scope |
 | `wifi-driver-clean`, `wifi-openwrt-pkg` | clean-room instrument driver and its OpenWrt package |
-| `wifi-bench-tooling` | one-command sessions, guards, patch builder |
+| `wifi-bench-tooling` | one-command sessions incl. protocol mode, guards, patch builder, bar0read helper |
+| `wifi-proto-seq` | g1 id3/id0x12 decode, calibration (g0 id2 key 0x0101) family and response contract |
+| `wifi-cfg80211` | cfg80211 M0-M2 wiphy/VAP implementation, registration gate, 39-op map |
+| `wifi-datapath` | two-plane model, MAC slot-5 ring block, TX/RX formats, key tables A/B |
+| `wifi-ete-wake` | ETE trigger chain, host-owned field comparison, E1a/E1b negative |
+| `wifi-upstream-target` | target build verification, cfg80211 bench image, patch classification |
+| fw-audit lane (task-115; deliverable in progress) | PD4 minimality/safety audit and vendor-clean alternative analysis |
 
 Historical lanes (`wifi-framework-port`, `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`,
 `wifi-algcfg-slice`, `wifi-datapath-slice`, `wifi-thermal-re`, `wifi-driver-integration`) remain
 in the tree as history; they are not load-bearing for this report's claims.
+
+## T21. Bench image build and flash pipeline (2026-11-25 15:00)
+
+Source: `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5 + `CFG80211-BENCH-IMAGE.md` +
+ledger 2026-11-25 13:30/15:00. The image is a host-build artifact that was then flashed in an
+attended bench session; the target tree is the project's own skeleton, not an upstream submission.
+
+| artifact / step | value | evidence |
+| --- | --- | --- |
+| kernel config delta | `CONFIG_CFG80211=m` plus the resolved WLAN/RFKILL/signed-regdb symbols; prompt-free `kernel_oldconfig` re-derivation | [V] |
+| cfg80211.ko | 2,328,548 B sha256 `949393f9676cc7bab18def92f1f96a07c45bd0ff599ee418c16ba7d54715170c`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` | [V] |
+| clean-room driver | `hi5622_wifi.ko` 505,076 B sha256 `d2b3cf7917df1a7439c5dad1badd83bf97d627ae54ca9f5db7e34216edc2edaa`, depends=cfg80211, 0 compiler/modpost warnings | [V] |
+| sysupgrade container | 6,267,199 B sha256 `22b72852ff2415a6d951aadc18206f88e3402dd6661252df853f48dffde95c22`; manifest sha256 `335c79b0...` | [V] |
+| kernel slice (`kernel.bin`) | 3,372,638 B sha256 `13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f` | [V] |
+| full-slot hash | `1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e` (verified over the written kernelb slot) | [V]/[V*] |
+| flash route | box on GP1-line image (pair B) + stock on pair A; stock fetch of the slice -> `mtd erase/write` **kernelb** -> full-slot verify -> restore pristine stock files -> handover `bootflag=b` + `boot_reg=0x21` -> reboot | [V*] |
+| boot evidence | `uname -r` 6.18.60; rootfsb; selector raw `0x11`; dmesg `endpoint reset pulse: data 0x0300000f -> 0x1330000f` at 2.6 s (GP1 013a in-probe pulse) | [V*] |
+| safety state | stock pair A kernel+rootfs untouched and bootable; recovery door armed during the flash; modules loaded from /tmp (not in the rootfs) | [V*] |
+| status | BENCH image / research instrument only: not a release, cfg80211 config not in the luofu kernel series, install path not run end to end | [V] |
+
+## T22. cfg80211 interface - M0-M2 state and op map (2026-11-25)
+
+Source: `wifi-cfg80211/REPORT.md` (host-side design + selftests) and ledger 2026-11-25 09:10/15:00
+(bench result). One wiphy per PCI endpoint; the wiphy is registered only after the ready handshake.
+
+| item | value / state | evidence |
+| --- | --- | --- |
+| M0 wiphy + netdev model | wiphy_alloc in probe (no device access), wiphy_register only after `g4 id1`+`g4 id2` decoded; one wiphy per endpoint | delivered host-side and **bench-validated** [V]/[V*] |
+| M1 VAP lifecycle | `add/del/change_virtual_intf` netdev model; VAP created via nl80211, deleted again; no firmware VAP message sent | **bench-validated** (wlan0, ifindex 7, managed, doc address) [V*] |
+| M2 scan/station stubs | `scan`, `get_station`, `dump_station` registered, return `-EOPNOTSUPP`; every M3+ op NULL | delivered [V] |
+| bands / channels | 2.4 GHz ch 1-13 at 30 dBm; 5 GHz 19 LU-plan ch 36-48/52-64/100-140 at 23 dBm; 12 legacy rates + HT20 skeleton | [V]/[V*] (channel counts seen in dmesg/iw) |
+| modes / ciphers | AP + STA + monitor; WEP40/WEP104/TKIP/CCMP/GCMP/AES-CMAC/BIP-CMAC-256; `max_scan_ssids = 12` | [V] |
+| registration gate | pure function: `boot_latched && phase >= READY_TXQ_SYNC && id1 && id2`; workqueue; teardown under RTNL | [V] |
+| 39-op map | 3 implemented (M1), 3 EOPNOTSUPP stubs (M2), 33 deferred (M3-M6); machine-readable in `hi5622_cfg80211_logic.c` | [V] |
+| open H2D payloads | user/vap add `g0 id7/8` (0xA8), scan `g0 id0xC` (0x1FC), STA join family - payload structs [U]; del-user `g0 id9` (0x0C) exact builder exists | [V]/[U] |
+| config-sync backend rule | g1 id3 is the generic channel: dispatch by `syn_id` (0x0101 alg, 0x0102 cali, 0x07xx per-VAP), never by size | [V] |
+| tests | cfg80211 logic 454/454; inherited H2D 242/242; source selftest 144/145 (known provider-symvers redundancy); kernel module 0 warnings | [V] |
+| limits | management model only: no firmware VAP object, no scan results, no association, no data path | [V*/I] |
+
+## T23. Calibration ladder C1/C2 - carrier, cfg ids and response contract (2026-11-25 12:30)
+
+Source: `wifi-proto-seq/REPORT.md` sec 4-7, `wifi-h2d-send/REPORT.md` sec 13, ledger
+2026-11-25 11:00/12:30. All six messages ride the proven config-event carrier (same SR node,
+mailbox id-3 announce, release-only boot); no new host register writes.
+
+| item | value | evidence |
+| --- | --- | --- |
+| carrier | H2D `g0 id2`, key `0x0101`, field B = module/vap (default 4 = the type-1 created object) | [V]/[V*] |
+| frame / node | 298 B frame = 12 B header + 286 B payload (token[8] + key u16 + len u16 + 270 B blob + 4 B pad); node word1 `0x012A6D2B` = declared total | [V] |
+| blob | `u16 cfg_id | u8 type (0=SET) | u8 pkt_type | u32 dev_ret | u8 need_w4 (1) | u8 resv | value[260]`; value area at blob+0x0A | [V] |
+| the six commands | 3502 set_2g_power (104 B), 3503 set_2g_low_power (104), 3504 set_5g_power (70), 3505 set_5g_low_power (70), 3506 set_xo_ppm (u32), 3507 set_rssi (40) - vendor order 1..6 | [V] |
+| expected answer | one D2H `g1 id3`, total 298 B, `syn_id 0x0101`, `body_len 270`, request cfg id echoed, `dev_ret 0`, cookies echoed; no host reply | [V] |
+| **C1 fired** | one `set_rssi_param` (3507) zero-value frame after ctx-create type 1 + txq_sync72 on a PD4 golden boot: consumed in 0 polls; answer catalogue count=2, `last_total=0x012A`, `last_len=298`; mask 0, staging 0, page golden; driver ok=3 timeout=0 | [V*] |
+| C1 limits | answer body recycled before the read-only capture: length/count evidence, body expected-by-construction; not a decoded payload | [V*] |
+| **C2 next** | fresh boot, `h2d_send_budget=8`: create + txq + six calibrations in vendor order; one new message class per boot; capture the answer body immediately after the fire | [I] |
+| values policy | per-unit factory calibration stays local; only zero-value structural frames are described here | [V] |
+
+## T24. Wi-Fi frame-plane ring map (MAC host-interface block, slot 5)
+
+Source: `wifi-datapath/REPORT.md` sec 2-9 (static RE from the vendor host driver + firmware).
+**No frame has been sent or received by our host yet.** Offsets below are device CA unless
+marked CPU/BAR0.
+
+| object | address / geometry | notes | evidence |
+| --- | --- | --- | --- |
+| MAC host-interface block | CA `0x40040000` (band 0) / `0x40060000` (band 1); slot 5, stride 0x2000 | distinct from the ETE block; no cross-writes between modules | [V] |
+| MSDU-info ring pointer table | ready `g4 id2` payload `0x01060850` -> ACP alias `0x02060850` -> MAC `+0x10` | seeds the TX ring-pointer table (both bands) | [V]/[V*] |
+| RX buffer lengths | `+0x1c`: norm `0x63c`, small `0xb0` | live vendor 0x00b0063c | [V*] |
+| RX free rings | norm: 256 x 0x63c B (`+0x20`, size `+0x2c`); small: 512 x 0xb0 B (`+0x24`, size `+0x30`) | host posts buffers, device fills + writes 0x28 B descriptor | [V] |
+| RX completion ring | 4095 entries (`+0x28`, size `+0x34`); host consumer `+0x40`, device writer `+0x4c` | NAPI/ISR drain | [V] |
+| TX BA-info buffer | depth 256 (`+0x00`), device VA (`+0x04`) | 16-byte completion records | [V] |
+| MAC interrupt | status `+0x44` (W1C), mask `+0x48` (live `0xfffffcc1`) | polling alternative to ETE completion | [V] |
+| TXQ table | 0x2524 B host-DRAM non-cached; device VA synced by H2D `g0 id1` key `0x0320`, 4-byte payload | vendor's first post-ready message | [V] |
+| TX ring entry | 8 B `{u32 buf_devva; u32 ctl}`; ctl len[11:0], path[14:12], flag[15], tid[19:16], vap[21:20] | per (user,tid) non-cached ring; 20 B DMA descriptor at skb->data-0x14 | [V] |
+| packed ring index | 15-bit index + phase bit 15 (same convention as ETE rings) | publish with dmb/dsb + sev | [V] |
+| RX descriptor | 0x28 B device-written at buffer start, then the 802.11 MPDU; parsed into 0x30 B msdu-info | bit semantics [I]/[U]; offset/width table in lane report sec 7.2 | [V] |
+| key tables A / B | firmware CPU `0x10C23C` (217 slots) / `0x103BF8` (88 slots), 8 B `{u16 key; u16 pad; u32 worker}`, sentinel `{0x1451,0}` | g0 id-1 command namespace; keys 0x0004/0x0064/0x0078/0x00D8/0x0128/0x0311/0x0320 | [V] |
+| control-message family | `g0 7/8` user-add 0xA8, `g0 9` del-user 0x0C, `g0 0xC` scan 0x1FC, `g0 0xF/0x10/0x11` STA join 0x40/0x10, `g0 0x12` EDCA 0x74, `g2` WAL cfg ids [U] | D2H: `g1 15/16/17`, `g2 2`, `g2 3-6` | [V]/[U] |
+| direct-read constraint | ETE messages only; MAC DMA is independent of the ETE A->B copy | live hypothesis, ladder B2 tests it | [I] |
+| bring-up order | D0 MAC register model -> D1 RX rings/NAPI -> D2 TX ring + TXQ sync -> D3 user/VAP -> D4 scan -> D5 STA join; read-only B2 probe first | an extra iATU viewport once rebooted the box | [I]/[V*] |
+
+## T25. PD4 research patch - delta, cave proof and audit boundary
+
+Source: `wifi-irq-unmask/REPORT-PD4.md` sec 2-5 (static/verification) + bench records; audit owned
+by the fw-audit lane (shared task `task-115`; deliverable in progress at this revision). The
+patched image exists only outside the repository.
+
+| item | value | evidence |
+| --- | --- | --- |
+| PD4-ENTRY | file `0x0916A`, 4 B: `00 20 21 B0` -> `BF F0 69 B8` (`b.w 0x108240`), boot-task success epilogue | [V] |
+| PD4-LOOP | file `0x0C8240`, 64 B (zero in the vendor image) -> guarded `out[0]` poll stub; calls wrapper `0x40294` only when mailbox work is pending; consume-only substitution while the handler table is the static sentinel | [V] |
+| patched image | sha256 `cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1`, length unchanged 928,920 B; only the two segment windows differ from the pinned blob | [V] |
+| cave | CPU `0x108197..0x108413` (637 B all-zero static-data gap between two referenced read-only tables `0x108054`/`0x108414`); no branch target, no literal/address materialisation, outside both boot memsets (`0x117C00..0x1ADDE0`, `0x1000000..0x10E0000`) and outside the exception-staging area `0x4000C..0x4004B` | [V] |
+| why patching is needed | event 0x4C (H2D mailbox arrival) is delivered only through the image vector/dispatcher path; the event-controller window CA `0x40160000` is not host-visible; the image never polls the mailbox; the vendor host sends nothing between release and ready | [V]/[V*] |
+| rejected alternatives | PD3's header-record area (its own exception staging overwrites the stub); PD2's config-3 block (live on our boot); no vendor-clean mailbox-delivery path demonstrated | [V*]/[I] |
+| bench record | PD4 fires 2026-11-25 02:10 (cave bytes present before/after, fault reproduces) and the ordered lap 05:10/07:40 (announces consumed in 0 polls, mask 0, golden page) | [V*] |
+| audit status | the fw-audit lane (task-115) formalizes minimality/safety and the vendor-clean alternative analysis; at this revision the settled verdict is **research instrument only, never a shipping change** | [V]/[I] |
 

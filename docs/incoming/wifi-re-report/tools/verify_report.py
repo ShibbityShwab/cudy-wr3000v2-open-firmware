@@ -70,6 +70,12 @@ def check_report_structure():
               titles.get(n, "missing"))
     for must in ["release-only", "0xCEED", "0xCECE", "PD3", "PD4", "0x108240", "0x86807FEF"]:
         check("REPORT covers %s" % must, must in t)
+    for must in ["cfg80211", "wiphy", "calibration", "1794a531", "E1a", "data-plane"]:
+        check("REPORT covers the v2 milestone vocabulary: %s" % must, must in t)
+    subs = re.findall(r"^### (6\.\d) ", t, re.M)
+    check("REPORT section 6 has the v2 subsections 6.1-6.6",
+          subs == ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6"], ",".join(subs))
+    check("REPORT carries findings F1-F10", all(("### F%d." % i) in t for i in range(1, 11)))
 
 
 def check_markers():
@@ -127,7 +133,7 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 120 claims", len(uniq) >= 120, "%d" % len(uniq))
+    check("evidence index has at least 150 claims", len(uniq) >= 150, "%d" % len(uniq))
     check("evidence claims are numbered 1..N without gaps", uniq == list(range(1, len(uniq) + 1)),
           "max %d, count %d" % (uniq[-1] if uniq else 0, len(uniq)))
     rep = TEXT.get("REPORT.md", "")
@@ -185,6 +191,26 @@ def check_constants():
          get_lane("wifi-irq-unmask/REPORT-PD4.md").lower()),
         ("context-create key 0x64", "64001400",
          get_lane("wifi-h2d-send/REPORT.md").lower()),
+        ("v2 image container", "22b72852",
+         get_lane("wifi-upstream-target/BUILD-VERIFICATION.md").lower()),
+        ("v2 kernel slice", "13e81214",
+         get_lane("wifi-upstream-target/BUILD-VERIFICATION.md").lower()),
+        ("v2 slot hash", "1794a531",
+         get_lane("wifi-upstream-target/BUILD-VERIFICATION.md").lower()),
+        ("cfg80211 module", "949393f9",
+         get_lane("wifi-upstream-target/BUILD-VERIFICATION.md").lower()),
+        ("clean driver hash", "d2b3cf79",
+         get_lane("wifi-upstream-target/BUILD-VERIFICATION.md").lower()),
+        ("calibration node length", "012a6d2b",
+         get_lane("wifi-proto-seq/REPORT.md").lower()),
+        ("calibration key 0x0101", "0x0101",
+         get_lane("wifi-proto-seq/REPORT.md").lower()),
+        ("MAC host-interface block", "0x40040000",
+         get_lane("wifi-datapath/REPORT.md").lower()),
+        ("ETE E1a/E1b ladder", "e1a",
+         get_lane("wifi-ete-wake/REPORT.md").lower()),
+        ("cfg80211 ready gate", "g4 id1",
+         get_lane("wifi-cfg80211/REPORT.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src
@@ -207,7 +233,11 @@ def check_constants():
         for needle, what in [("01011448", "type-1 ctx allocation"),
                              ("FULL DUPLEX HCC OPERATIONAL LOOP", "the operational-loop entry"),
                              ("0x86807FEF", "the golden page"),
-                             ("0x108240", "the PD4 cave")]:
+                             ("0x108240", "the PD4 cave"),
+                             ("LADDER C1", "the calibration ladder C1 entry"),
+                             ("FIRST REAL WiFi INTERFACE", "the first Wi-Fi interface milestone"),
+                             ("1794a531", "the cfg80211 image slot hash"),
+                             ("cfg80211", "the cfg80211 milestone")]:
             check("ledger contains " + what, needle.lower() in ledger.lower())
     else:
         check("superproject ledger is readable (expected at ../mem-entries.md)", False, ledger_path)
@@ -215,6 +245,8 @@ def check_constants():
         status = read(status_path)
         check("STATUS.md carries the full-duplex state section",
               "FULL DUPLEX" in status and "0x86807FEF" in status)
+        check("STATUS.md carries the first-Wi-Fi-interface section and the image hash",
+              "FIRST REAL WiFi INTERFACE" in status and "1794a531" in status)
 
 
 def check_forbidden():
@@ -267,7 +299,11 @@ def check_tables():
     check("markdown table rows are well formed", not bad, "; ".join(bad[:5]))
     tab = TEXT.get("TABLES.md", "")
     tabs = re.findall(r"^## (T\d+)\. ", tab, re.M)
-    check("TABLES.md contains at least 18 numbered tables", len(tabs) >= 18, "%d" % len(tabs))
+    check("TABLES.md contains at least 23 numbered tables", len(tabs) >= 23, "%d" % len(tabs))
+    nums = [int(x[1:]) for x in tabs]
+    check("TABLES.md tables are numbered T1..T25 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
+    for t_ in ["T21", "T22", "T23", "T24", "T25"]:
+        check("TABLES.md carries the v2 table " + t_, ("## " + t_ + ". ") in tab)
 
 
 def main():

@@ -3,17 +3,19 @@
 **Project:** Cudy WR3000 v2.0 (luofu v2 board) bench reversal - Hi5671YV200 SoC + Hi5622v100 Wi-Fi
 endpoint, stock OpenWrt 22.03.6 / kernel 5.10.201, vendor firmware 928,920 B.
 
-**Document:** `wifi-re-report/REPORT.md`, umbrella narrative. **Date:** 2026-11-25.
-**State cut-off:** `mem-entries.md` entry 2026-11-25 06:00 (the newest ledger entry at
-consolidation time); superseded claims are catalogued in section 8. **Status:** the full duplex
-HCC protocol and the operational message lap are hardware-validated; the Wi-Fi interface and data
-path are not. Detail sources remain the lane reports listed in section 12; this document is the
-publication-grade synthesis, not a replacement.
+**Document:** `wifi-re-report/REPORT.md`, umbrella narrative, **v2**. **Date:** 2026-11-25.
+**State cut-off:** `mem-entries.md` entry 2026-11-25 15:00 (the newest ledger entry at this
+revision); superseded claims are catalogued in section 8. **Status:** the full duplex HCC
+protocol, the operational message lap, the first calibration exchange (ladder C1) and the first
+real Wi-Fi interface on our own image (cfg80211 wiphy registration + VAP netdev lifecycle) are
+hardware-validated; the firmware-side VAP/scan path and the MAC data plane are not. Detail
+sources remain the lane reports listed in section 12; this document is the publication-grade
+synthesis, not a replacement.
 
-**Lane / task:** wifi-re-report, shared task `task-109`. Host-only: no device, UART, TFTP or
-network contact was made while writing it. **Safety:** nothing in this report authorises a bench
-fire; every hardware session cited here was attended and followed the project's recovery-door
-rules.
+**Lane / task:** wifi-re-report, shared task `task-116` (v2; v1 was `task-109`, cut off at
+2026-11-25 06:00). Host-only: no device, UART, TFTP or network contact was made while writing it.
+**Safety:** nothing in this report authorises a bench fire; every hardware session cited here was
+attended and followed the project's recovery-door rules.
 
 ---
 
@@ -63,6 +65,31 @@ committed self-testing tool was re-run (section 9.1). The non-goals are the same
 this is not an upstream OpenWrt submission, not a shippable driver, and not a claim of clean-room
 reimplementation of the closed firmware.
 
+### 0.5 What changed in v2
+
+v1 stopped at the 2026-11-25 06:00 ledger entry. v2 integrates the later milestones of the same
+day; the earlier material is unchanged except where a later result superseded it (section 8):
+
+1. the **cfg80211 bench image** was built, flashed to kernelb (full-slot hash - see T21) and
+   booted on the box (section 6.3);
+2. the **first real Wi-Fi interface on our own image**: wiphy registration gated on the ready
+   handshake, `iw` enumerates phy0, and an nl80211 VAP netdev is created and deleted (M0/M1
+   hardware-validated; finding F8, table T22);
+3. **ladder C1**: the firmware answered the first calibration message (298 B g0 id2 key 0x0101
+   request -> 298 B g1 id3 config-sync answer; finding F7, table T23);
+4. the **ETE DR (D2H) A->B copy** host lever was measured negative (E1a/E1b); the start condition
+   is device/ROM state and the direct device-ring read is the supported receive path (section
+   6.5);
+5. the **data-plane architecture** is mapped: a separate MAC host-interface ring block (slot 5),
+   the TXQ-table address sync, the per-TID MSDU-info TX entries and the RX free/completion rings
+   (finding F9, table T24);
+6. the **PD4 research patch** is audited as a minimal, bench-only instrument: exact two-window
+   delta, cave proof, and the absence of a demonstrated vendor-clean mailbox delivery (finding
+   F10, table T25; delivering lane: fw-audit, task-115, in progress at this revision);
+7. the bench evidence chain gains the 2026-11-25 07:40-15:00 sessions (section 7), the
+   corrections register gains C17-C26 (section 8), and the verification, limits, publication and
+   lane-map sections are updated (sections 9-12).
+
 ---
 
 ## 1. Executive summary
@@ -85,11 +112,16 @@ SoC GPIO endpoint reset pulse
   -> host->device context-create (g0 id1, key 0x64, type 1) allocates ctx+0x190
   -> host->device TXQ config sync (g0 id1, cmd 0xD8) consumed with ZERO exceptions
   -> firmware responds with new D2H frames (g1 id3, g1 id0x12)
+  -> host->device calibration set_rssi_param (g0 id2, key 0x0101, 298 B) consumed
+  -> firmware answers with a 298 B g1 id3 config-sync frame (ladder C1)
+  -> cfg80211 wiphy registers only after the ready handshake; iw enumerates Wiphy phy0
+  -> nl80211 VAP wlan0 created and deleted on our own image (cfg80211 M0/M1)
 ```
 
 That is the project's Wi-Fi-side core RE goal: **the full duplex HCC protocol works on a
-clean-room host**. The next phase is the rest of the vendor startup sequence (calibration, VAP,
-scan) and the cfg80211 interface - see section 10.
+clean-room host**, and the first real Wi-Fi interface now exists on our own image. The remaining
+work is the firmware-side VAP/scan/AP control messages and the MAC frame plane (sections 6.2-6.4
+and 10).
 
 ### 1.2 What is proven, and what is not
 
@@ -100,17 +132,20 @@ scan) and the cfg80211 interface - see section 10.
 | golden firmware state achievable repeatedly | **proven** [V*] |
 | device->host ready handshake and other D2H frames readable | **proven** [V*] |
 | H2D transport (SR ring commit + mailbox announce) | **proven** [V*] |
-| firmware processes real H2D messages and answers | **proven** for the two ordered messages [V*] |
+| firmware processes real H2D messages and answers | **proven** for two ordered messages and the calibration class [V*] |
+| calibration exchange (g0 id2 key 0x0101 -> g1 id3 298 B) | **proven** as a protocol exchange; the answer body was not captured (length/count evidence) [V*] |
+| cfg80211 management interface (wiphy + VAP netdev) | **proven** on our own image (M0/M1); firmware VAP objects are not created yet [V*] |
 | firmware IRQ/thread layer is alive on our boot | **not proven** - bypassed by the PD3/PD4 research patch; without it the mailbox is never serviced [V*] |
-| ETE engine A->B DMA copy | **not proven** - firmware-triggered and idle; direct read substitutes for D2H [V*]/[I] |
-| Wi-Fi operational interface (VAP, scan, association) | **not started** - next phase |
-| data path (hdpp/hmac TX/RX) | **not started** |
-| upstreamable clean-room driver | **blocked** by the closed firmware blob (section 11) |
+| ETE engine DR (D2H) A->B copy | **host lever proven negative** - the only host-owned delta was tested (E1a/E1b); start is device/ROM state; direct read is the supported RX path [V*]/[I] |
+| firmware VAP/scan/AP control messages | **not started** - payload structs open (g0 id7/8, g0 id0xC [U]) |
+| MAC frame data path (TX/RX frames) | **mapped only** - separate slot-5 ring block; no host implementation, no frame sent/received [V]/[I] |
+| upstreamable clean-room driver | **blocked** by the closed firmware blob and the unmatched vendor GPL request (section 11) |
+| PD4-patched vendor firmware | **research instrument only** - never a shipping change (section 6.6) |
 
 ### 1.3 The breakthrough ladder
 
-The investigation reached the result through eight hardware-validated breakthroughs; each is also
-a correction of the then-current model (section 8 gives the full register):
+The investigation reached the result through twelve hardware-validated breakthroughs; each is
+also a correction of the then-current model (section 8 gives the full register):
 
 | # | date | breakthrough |
 | ---: | --- | --- |
@@ -122,6 +157,10 @@ a correction of the then-current model (section 8 gives the full register):
 | 6 | 2026-11-24 13:10-14:00 | D2H frames are real and readable directly from device rings; the complete ready handshake is received [V*] |
 | 7 | 2026-11-24 22:10 | **PD3**: a guarded firmware patch calls the firmware's own H2D dispatcher from the boot-task epilogue, so the firmware mailbox consumer works without the dead IRQ layer [V*] |
 | 8 | 2026-11-25 05:10 | **ordered operational loop**: context-create type 1 -> TXQ config sync, both consumed with zero exceptions, firmware responds [V*] |
+| 9 | 2026-11-25 02:10 | **PD4** moves the dispatcher stub to a genuinely dead static-data cave (the exception-staging area no longer clobbers it), which enables the context-precondition analysis [V*] |
+| 10 | 2026-11-25 10:10 | the **ETE DR wake lever is closed**: the only host-owned state delta (published index) was tested negative; the A->B copy start is device/ROM state, so the direct group-A read stays the supported RX path [V*] |
+| 11 | 2026-11-25 12:30 | **ladder C1**: the firmware answers the first calibration message (298 B g0 id2 key 0x0101 -> 298 B g1 id3) [V*] |
+| 12 | 2026-11-25 15:00 | **first real Wi-Fi interface on our own image**: cfg80211 image flashed (slot 1794a531), wiphy registered after the ready handshake, iw enumerates phy0, VAP wlan0 create/delete via nl80211 (M0/M1) [V*] |
 
 ### 1.4 Key numbers
 
@@ -138,6 +177,13 @@ a correction of the then-current model (section 8 gives the full register):
 | real H2D messages sent+answered | 2 ordered (context-create, TXQ sync); 1 control stub | [V*] |
 | H2D announce consumption | `out[0]` 0x8 -> 0 in 0 polls, `h2d_complete done=1` | [V*] |
 | firmware responses | g1 id3 (36 B), g1 id0x12 (40 B) | [V*] |
+| cfg80211 bench image | sysupgrade container 6,267,199 B sha256 `22b72852...`; kernel slice 3,372,638 B sha256 `13e81214...`; full-slot hash `1794a531ed19...` | [V] |
+| cfg80211 module / clean driver | cfg80211.ko 2,328,548 B sha256 `949393f9...`; hi5622_wifi.ko 505,076 B sha256 `d2b3cf79...`, depends=cfg80211, 0 warnings | [V]/[V*] |
+| wiphy channel plan | 2.4 GHz: 13 channels (1-13, 30 dBm); 5 GHz: 19 LU-plan channels (36-48/52-64/100-140, 23 dBm) | [V*] |
+| first VAP | wlan0, ifindex 7, type managed, locally-administered documentation address; created and deleted | [V*] |
+| calibration exchange (C1) | 298 B request (g0 id2, key 0x0101, cfg id 3507) -> 298 B answer (g1 id3, syn 0x0101) | [V*] |
+| MAC host-interface block | CA 0x40040000 (band 0) / 0x40060000 (band 1), slot 5; ready id2 payload seeds the MSDU-info ring pointer table at `0x02060850` | [V]/[V*] |
+| data-plane rings | TX: per-TID 8-byte MSDU-info entries + 0x2524 B TXQ table; RX: 256 x 0x63c + 512 x 0xb0 free rings + 4095-entry completion ring, 0x28 B descriptors | [V] |
 
 ---
 
@@ -197,7 +243,9 @@ CA `0x4000010C`. This report always writes "CPU" or "device CA" explicitly.
 +---------------------------------------------------------------+
 | Wi-Fi userspace (stock OpenWrt): netifd, hostapd/wpa_supplicant, iw  |
 +---------------------------------------------------------------+
-| cfg80211 full-MAC interface (the 39-op vendor surface)             |  <- not implemented yet
+| cfg80211 full-MAC interface (the 39-op vendor surface)             |
+|   M0 wiphy + M1 VAP netdev: on the bench image (hardware-validated)|
+|   M2 scan/station stubs: -EOPNOTSUPP; M3+ deferred                 |
 +---------------------------------------------------------------+
 | HCC message layer: 12-byte header, groups 0/1/2/3/4, mailbox ids  |
 |   H2D: SR ring commit -> out[0] mask -> out[2] doorbell -> id3     |
@@ -205,8 +253,12 @@ CA `0x4000010C`. This report always writes "CPU" or "device CA" explicitly.
 +---------------------------------------------------------------+
 | ETE rings: SR0-2 (host->device) and DR0-3 (device->host)           |
 |   node = 8 B {devva, (len<<16)|0x6D2B}; depth 32; packed indices   |
-|   engine A->B copy is firmware-triggered and idle on our boot      |
+|   engine A->B copy is firmware-triggered; DR direction stays idle  |
 |   (direct read of the device group-A rings is our substitute)      |
++---------------------------------------------------------------+
+| MAC frame plane: host-interface ring block, slot 5                 |  <- mapped, not implemented
+|   TX per-TID MSDU-info rings; RX free + completion rings           |
+|   (separate from HCC/ETE; seeded by the ready handshake)           |
 +---------------------------------------------------------------+
 | PCIe transport: BAR0 six windows, iATU viewports, mailbox regs     |
 +---------------------------------------------------------------+
@@ -228,6 +280,8 @@ HOST (our 6.18 kernel)                 ENDPOINT (Hi5622V100)
 |  - transport/boot/HCC    |          | ETE engine (channels at 0x4003A000)        |
 |  - direct D2H reader <---+--PKTRAM--+ DR0-3 ring nodes CA 0x0106xxxx              |
 |  - H2D sender -----------+---ACP----+ frame bodies CA 0x0200xxxx                  |
+|  - cfg80211 wiphy/VAP    |          | MAC host-if block CA 0x40040000/0x40060000   |
+|  - (data path: NOT impl.)|          |   slot 5: MSDU-info/TXQ/RX rings             |
 |                          |          | IO block CA 0x40000000..0x4011FFFF          |
 +--------------------------+          +--------------------------------------------+
 ```
@@ -249,6 +303,8 @@ HOST (our 6.18 kernel)                 ENDPOINT (Hi5622V100)
 | CA `0x01000000+` | PKTRAM (device D2H ring nodes) |
 | CA `0x02000000+` | ACP SRAM (device D2H frame bodies) |
 | CA `0x40000000` | IO block start (boot gate at +`0x108`, mailbox at +`0x39010`, ETE at +`0x3A000`) |
+| CA `0x40040000` / `0x40060000` | MAC host-interface ring block, slot 5 of the per-band channel table (band 0 / band 1): MSDU-info ring pointer table (+0x10), RX free/completion rings (+0x20..+0x54), tx_ba_info (+0x00/+0x04) [V] |
+| CPU `0x10C23C` / `0x103BF8` | firmware group-0 id-1 config key tables A (217 slots) / B (88 slots), sentinel {0x1451, 0}; the hdpp/alg command namespace [V] |
 | CA `0x40100000+` | MAC-side message registers (out[3]/out[4]/D2H doorbell) |
 
 ---
@@ -390,6 +446,13 @@ never delivered** to the image dispatcher. No H2D message can create that event:
 sends nothing between release and ready, and no H2D handler reaches the dispatcher (the
 `wifi-hcc-link` and `wifi-fw-postboot` lanes closed that negative) [V]/[V*].
 
+A later experiment closed the remaining host-side question about the receive engine: the DR
+(D2H) A->B copy has exactly one host-owned state delta (the group-B published index `+0x38`),
+and writing it to the current fill (E1a) or to zero (E1b) on a golden boot moved nothing - no
+status bits, no trigger counters, no ring fills (section 6.5). The only start condition is
+device/ROM-authored engine state, so the direct device-ring read is not a stop-gap but the
+supported D2H receive path for this firmware [V*]/[I].
+
 Two host-side answers were developed instead of fighting the closed IRQ layer:
 
 * **receive** (D2H): read the device's own group-A rings and frame bodies directly through the
@@ -421,8 +484,10 @@ power-on
 
 ## 4. Critical findings
 
-Six findings carry the investigation. Each is stated as symptom -> root cause -> evidence -> fix ->
-residual risk, so that a future reader can tell what is settled and what is not.
+Ten findings carry the investigation. F1-F6 are the boot/protocol findings of v1; F7-F10 are the
+management/data-plane findings integrated in v2. Each is stated as symptom -> root cause ->
+evidence -> fix -> residual risk, so that a future reader can tell what is settled and what is
+not.
 
 ### F1. The `0xCEED` boot handshake was being clobbered by our own `0xCECE` writes
 
@@ -531,7 +596,9 @@ ready handshake: id1 + id2 payload `0x01060850`, 21 frames, overruns 0) [V*].
 
 **Residual risk.** The direct-read path is a research instrument: it depends on layout constants of
 this firmware, and the engine's copy (if it ever runs) would be the vendor's actual mechanism. It
-does not resolve why the trigger never fires.
+does not resolve why the trigger never fires. The later ETE-wake ladder (E1a/E1b, section 6.5)
+measured the only host-owned candidate negative, so "why" is now classified as device/ROM state
+rather than a missing host write.
 
 ### F5. The context-create precondition and the ordered operational loop
 
@@ -578,6 +645,105 @@ deferred-notify flush retired for the first time; F4 verified on hardware [V*].
 
 **Residual risk.** Other inherited fragments may still use the 20-bit macro; the clean driver is
 the single source of truth and the bench instrument modules are deprecated.
+
+### F7. The first calibration exchange answers on a generic config-sync channel
+
+**Symptom / context.** After the ordered message lap the vendor's next boot step is the factory
+calibration: six `alg set_*` config events, HCC group 0 id 2, key `0x0101`, each carrying a
+270-byte alg_cfg blob (298 B frame, node length = declared total). The question was whether our
+host can drive that family and whether the firmware answers.
+
+**Design (from the firmware parser, not a vendor-driver capture).** The firmware's key-0x0101
+handler clears the request's `dev_ret`, reads `need_w4` and answers through the single config-sync
+sender with `syn_id 0x0101`, `body_len 270`, the request cfg id echoed and `dev_ret 0`. The six
+vendor cfg ids and value layouts were recovered statically: 3502/3503 (2.4 GHz power, 104 B),
+3504/3505 (5 GHz power, 70 B), 3506 (xo ppm, u32) and 3507 (rssi, 40 B) [V].
+
+**Bench (ladder C1, 2026-11-25 12:30).** After the type-1 context-create and the TXQ config sync,
+one zero-valued `set_rssi_param` (3507, field B = 4) was consumed in 0 polls; the direct D2H
+catalogue then showed a second g1 id3 frame with `last_total = 0x012A` (298 B) - exactly the
+mirror length of our 298 B request. Boot page and state stayed golden, mask 0, no exception [V*].
+
+**Residual risk.** The answer body was recycled by the driver/firmware before the read-only
+capture, so the evidence is count + exact-length, not the decoded body. g1 id3 is **one generic
+config-sync channel** dispatched by `syn_id` (`0x0101` alg, `0x0102` cali, `0x07xx` per-VAP), not
+a per-message answer type (correction C20). The five remaining calibration messages (C2) are
+built but not yet fired as a sequence.
+
+### F8. The first real Wi-Fi interface on our own image (cfg80211 M0/M1)
+
+**Symptom / context.** Our 6.18 image had no `CONFIG_CFG80211`, so no Wi-Fi interface could
+exist even with a working HCC protocol.
+
+**Work.** Added `CONFIG_CFG80211=m` to the board kernel config, built `cfg80211.ko` and a
+cfg80211-enabled variant of the clean driver (one wiphy per PCI endpoint, RE-derived 2.4/5 GHz
+band and channel capability, standard ciphers, AP+STA+monitor), then built the release-line image,
+extracted the kernel slice and flashed only **kernelb** from the stock pair (full-slot hash
+verified). The wiphy is registered from a workqueue **only after** the ready handshake (`g4 id1`
++ `g4 id2`) has been decoded; the cfg80211 layer performs no MMIO and sends no H2D frame [V].
+
+**Bench (2026-11-25 15:00).** The box booted the new kernel (GP1 in-probe endpoint pulse visible
+in dmesg), the golden boot and ready pair were reproduced, then `cfg80211: wiphy registered after
+the ready handshake` appeared; `/sys/class/ieee80211/phy0` exists and the stock `iw` enumerates
+`Wiphy phy0`. `iw phy phy0 interface add wlan0 type managed` created a real netdev (ifindex 7,
+locally-administered documentation address, type managed) which was deleted again - **M0/M1 are
+hardware-validated on our own image with the vendor firmware running golden** [V*].
+
+**Residual risk.** This is the *management* interface: no firmware VAP object exists yet (the
+user/vap H2D messages `g0 id7/8` are open payloads [U]), scan and station ops are honest
+`-EOPNOTSUPP` stubs, and no data path is attached. The cfg80211 kernel config is a **bench-only
+addition**, not part of the upstream luofu patch series (section 11).
+
+### F9. The Wi-Fi frame plane is a separate MAC host-interface ring block
+
+**Symptom / context.** The v1 model treated the ETE engine's idle D2H copy as a possible data-path
+blocker, because it was not clear whether Wi-Fi frames ride the HCC/ETE message plane.
+
+**Finding.** There are two data planes. The HCC message plane (12-byte header on the ETE SR/DR
+rings) carries only control and event messages. User/AP/STA frames use the **MAC host-interface
+ring block at device CA `0x40040000` (band 0) / `0x40060000` (band 1)** - slot 5 of the vendor's
+per-band channel table - a distinct block from the ETE register file, with no cross-writes between
+the two modules [V].
+
+The ready handshake seeds it: the `g4 id2` payload `0x01060850` is the device-RAM address of the
+MSDU-info ring pointer table, ACP-mapped to `0x02060850` and written to MAC slot-5 `+0x10` [V]/[V*].
+The vendor's own next frame is the **TXQ-table address sync** (`g0 id1`, key `0x0320`, 4-byte
+device VA). TX uses per-TID 8-byte MSDU-info entries; RX uses 256 x `0x63c` + 512 x `0xb0` free
+rings plus a 4095-entry completion ring with 0x28-byte device descriptors; the 217/88-slot key
+tables A/B are the g0 id-1 command namespace [V]. Details in section 6.4 and table T24.
+
+**Residual risk.** The architecture is mapped, not implemented: no host code programs the MAC
+block or moves a frame, the frame-buffer address transform and the RX descriptor bit semantics
+need bench captures, and the VAP/scan/join payload structs remain [U]. The direct-read constraint
+is an ETE-message constraint only and does not block MAC DMA [I, to be tested by ladder B2].
+
+### F10. The PD4 research patch: necessity, minimality and the audit boundary
+
+**Symptom / context.** The firmware's H2D mailbox consumer is reached only through the image's
+event-0x4C dispatcher path. Event 0x4C cannot be raised from the host on this board (the
+event-controller/GIC window at CA `0x40160000` is not host-visible), and the image never polls
+the mailbox itself, so an unpatched vendor firmware cannot service any host frame [V]/[V*].
+
+**Patch.** PD4 redirects the boot-task success epilogue (file `0x0916A`, 4 bytes) into a 64-byte
+guarded out[0] poll stub in a genuinely dead static-data gap at CPU `0x108240`; when the
+dispatcher's handler table is still the static sentinel, the stub substitutes a read-as-zero
+table for a consume-only pass. The patched image differs from the pinned vendor blob in exactly
+two windows (928,920 B length unchanged) [V].
+
+**Audit (host-only static RE + bench record; owning lane: fw-audit, shared task `task-115`).**
+The cave was chosen after a whole-image scan of all zero runs: it has no branch target, no
+PC-relative literal load, no address materialisation, sits outside both boot memsets and outside
+the exception-staging area `0x4000C..0x4004B`; the stub itself is our own code. PD3's header-area
+cave was rejected (its own exception staging overwrites it), PD2's config-block cave was rejected
+(it is live on our boot). On the bench the cave bytes survived the PD4 fire, the g0-id1 fault
+reproduced, and with the context precondition satisfied every later announce was consumed in 0
+polls with mask 0 and the golden page intact [V*].
+
+**Residual risk / honest limits.** No vendor-clean (unpatched-firmware) mailbox-delivery path has
+been demonstrated; the patch is a bench instrument that must never ship, it changes vendor firmware
+bytes, and its only purpose is to exercise the firmware's own dispatcher. An inline event-raise
+variant (PD3B) exists but was not bench-fired [U]. Full alternative analysis (event-0x2D/0x2E
+paths, ROM handlers, other apertures) is the closure item of the audit lane (section 6.6, T25).
 
 ---
 
@@ -645,11 +811,24 @@ must arm the rings and the D2H service **before** release so the ready handshake
 | exception mask | CPU `0x40008` | read-only safety gate (must stay 0) |
 | mailbox | CAs `0x40039010/14`, `0x400392D4`, `0x40101438/14/34`, never `0x400392F0` | see 5.3/5.4 |
 
+### 5.7 The Wi-Fi frame plane in one paragraph
+
+Wi-Fi frames do **not** travel in HCC messages. The HCC/ETE plane carries control and event
+messages only; the frame plane is the MAC host-interface ring block at device CA `0x40040000`
+(band 0) / `0x40060000` (band 1), slot 5. The ready handshake's `g4 id2` payload is the
+MSDU-info ring pointer table (ACP `0x02060850`) and the vendor's next frame after ready is the
+TXQ-table address sync (`g0 id1`, key `0x0320`). TX posts 8-byte MSDU-info entries into per-TID
+rings; RX free-buffer and completion rings deposit 802.11 MPDUs behind a 0x28-byte device
+descriptor. Section 6.4 and [TABLES.md](TABLES.md) T24 give the full geometry; the direct-read
+constraint of section 5.4 applies to ETE messages only [V]/[I].
+
 ---
 
-## 6. The operational duplex loop
+## 6. The operational duplex loop and the interface it enabled
 
-This is the session shape that closed the Wi-Fi-side RE goal (2026-11-25 05:10, ledger). It runs
+### 6.1 The message-level loop (2026-11-25 05:10)
+
+This is the session shape that closed the Wi-Fi-side RE goal. It runs
 on the PD4-patched firmware image and the clean-room driver (`hi5622_wifi.ko`, 400,732 B, sha256
 `774c4f1f...`), with `h2d_send_budget=2` [V*].
 
@@ -682,6 +861,178 @@ The state machine that encodes this is the committed `hcc_core` (528-check selft
 `IDLE -> BOOT -> WAIT_PLAT_READY (<= 2.0 s) -> WAIT_DEVICE_READY (<= 20 s) ->
 READY_TXQ_SYNC -> ACTIVE`, with the latched boot gate, the vendor-order D2H service, H2D
 coalescing, the evidence-only CECE policy, heartbeat and PM as separate, testable steps [V].
+
+### 6.2 Calibration ladder C1: the firmware answers the first calibration message
+
+The vendor boot sequence after the TXQ config sync is the factory calibration: six `alg set_*`
+config events, HCC **group 0 / id 2, key `0x0101`**, each carrying a fixed 270-byte alg_cfg blob
+so the frame total is **298 B** and the SR node declares `0x012A6D2B`. The blob layout is
+`u16 cfg_id | u8 type(SET=0) | u8 pkt_type | u32 dev_ret | u8 need_w4 | u8 resv | value[260]`;
+the value area starts at blob+0x0A and the request's header field B selects the module/vap object
+(default 4, the object our type-1 context-create made). The six vendor commands and cfg ids are:
+
+| order | command | cfg id | value bytes |
+| ---: | --- | ---: | ---: |
+| 1 | set_2g_power_param | 3502 | 104 |
+| 2 | set_2g_low_power_param | 3503 | 104 |
+| 3 | set_5g_power_param | 3504 | 70 |
+| 4 | set_5g_low_power_param | 3505 | 70 |
+| 5 | set_xo_ppm_cali_param | 3506 | 4 (u32) |
+| 6 | set_rssi_param | 3507 | 40 |
+
+All six are SET/device-processed and expect exactly one answer: an HCC **g1 id3** config-sync
+frame with `syn_id 0x0101`, `body_len 270`, the request cfg id echoed and `dev_ret = 0`; no host
+reply is sent. g1 id3 is a generic config-sync channel: a backend must dispatch it by `syn_id`
+(`0x0101` alg, `0x0102` cali, `0x07xx` per-VAP capability sync), never by frame size [V].
+
+**Bench (ladder C1, 2026-11-25 12:30).** On a fresh PD4 golden boot with the calibration-token
+driver (407,996 B, sha256 `2d45e545...`, 301/301 + 251/251 selftests, `h2d_send_budget=3`):
+context-create type 1 and TXQ sync consumed in 0 polls, then ONE `set_rssi_param` (3507,
+zero-value structural frame) committed as a 298 B frame in a 298 B node and consumed in 0 polls;
+the device ring catalogue then showed a **second g1 id3 with `last_total = 0x012A` (298 B)** -
+the calibration answer mirroring our request length. Boot page `0x86807FEF/7/2/0xABCD`, state 1,
+mask 0 stayed intact; `h2d_status` ok=3 timeout=0; no exception. The answer body was recycled
+before the read-only capture, so body semantics (cfg id echo, dev_ret) are expected-by-construction
+rather than observed; a future fire can capture it with an immediate post-fire read [V*].
+
+**Next (C2).** The remaining five messages in vendor order with `h2d_send_budget=8`
+(create + TXQ + six calibrations is the driver maximum), one new message class per boot until the
+sequence is proven. Values are unit-specific: only the zero-value structural frames are used
+here; real per-unit calibration values stay local (section 11).
+
+### 6.3 The first real Wi-Fi interface on our own image (2026-11-25 15:00)
+
+This is the milestone that turns the protocol into a user-visible Wi-Fi interface.
+
+**Image build.** The target kernel config gained `CONFIG_CFG80211=m` (plus the resolved
+WLAN/RFKILL/signed-regdb symbols). The board image built clean: `cfg80211.ko` 2,328,548 B
+sha256 `949393f9...`; sysupgrade container 6,267,199 B sha256 `22b72852...`; the kernel slice
+extracted from it is 3,372,638 B sha256 `13e81214...` with full-slot hash `1794a531ed19...`.
+The clean driver was rebuilt against that tree (505,076 B sha256 `d2b3cf79...`,
+`depends=cfg80211`, 0 warnings) [V].
+
+**Flash pipeline (bench-only, attended).** The box was running our GP1-line image on pair B and
+stock on pair A. The new kernel slice was fetched by the stock pair, written to **kernelb** with
+`mtd erase/write` and verified with the full-slot hash, the pristine stock files were restored,
+the handover used the documented route (`bootflag=b` + `boot_reg=0x21`), and the box rebooted.
+Stock pair A kernel+rootfs remained untouched (the write went through stock's own mtd), so the
+physical recovery path stayed intact; the recovery door was armed during the flash. Exact
+artifacts, hashes and steps: table T21 and `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` [V*].
+
+**Bench result.** The new kernel came up on our image (`uname -r` 6.18.60, rootfsb, selector raw
+`0x11`) with the GP1 in-probe endpoint pulse visible in dmesg. `insmod cfg80211.ko` then
+`insmod hi5622_wifi.ko` both returned 0; the driver allocated one wiphy per PCI endpoint (2.4 GHz
+13 channels / 5 GHz 19 LU-plan channels) with registration **gated on the ready handshake**. After
+the standard boot sequence (prepare/upload/verify/seed/arm/loop/release) the golden page and ready
+pair were reproduced, dmesg printed `cfg80211: ready handshake decoded ... scheduling wiphy
+registration` then `cfg80211: wiphy registered after the ready handshake`, and
+`/sys/class/ieee80211/phy0` appeared. The stock `iw` binary (121,952 B, pushed to /tmp with
+libnl-tiny) enumerates `Wiphy phy0`; `iw phy phy0 interface add wlan0 type managed` created a
+real netdev (ifindex 7, type managed, locally-administered documentation address) and
+`iw dev wlan0 del` removed it. **M0 (wiphy+netdev) and M1 (VAP lifecycle) are
+hardware-validated on our own image with the vendor firmware running golden** [V*].
+
+**Honest limits.** This is the management interface only: the firmware VAP objects are not
+created (the `g0 id7/8` user/vap-add payloads are open [U]), scan/get_station/dump_station are
+registered `-EOPNOTSUPP` stubs (M2), every M3+ op is NULL, and no TX/RX data path is attached.
+The cfg80211 kernel config is bench-only and is not part of the luofu kernel patch series
+(section 11). The wiphy band mapping (domain 0 -> 2.4 GHz) is an inference with a `band_force`
+override; the bench saw both bands listed on the two endpoints, not a per-band link test (C26).
+
+### 6.4 The data-plane architecture (mapped, not implemented)
+
+The frame plane is fully mapped statically from the vendor host driver and the firmware, and must
+be added to the clean driver; **no frame has been sent or received by our host** (details in
+`wifi-datapath/REPORT.md`, tables T24).
+
+**Two planes.** HCC/ETE = control/event messages (working). MAC slot-5 host-interface block =
+Wi-Fi frames (not implemented). The blocks are disjoint: `plat.ko` writes only ETE CAs, `wifi.ko`
+only MAC CAs. The direct-read workaround is therefore a message-plane workaround; MAC DMA deposits
+are expected to work independently once the block is programmed [V]/[I].
+
+**Seeding.** The ready handshake's `g4 id2` payload `0x01060850` is the device-RAM address of the
+MSDU-info ring pointer table; the host maps it as ACP `0x02060850` and writes that to MAC slot-5
+`+0x10` for both bands. The vendor's next frame is the TXQ-table address sync: `g0 id1`, key
+`0x0320`, 4-byte device VA of a 0x2524-byte host-DRAM TXQ table [V].
+
+**TX.** One non-cached ring per (user,TID); each 8-byte entry is
+`{u32 buf_devva; u32 ctl}` with `ctl[11:0]` length, `[14:12]` TX path class, `[15]` header flag,
+`[19:16]` tid and `[21:20]` vap type (vendor 1/2/3). The host builds a 20-byte DMA descriptor at
+`skb->data-0x14`, maps the frame buffer, posts the entry, and publishes the packed producer index
+(15-bit index + phase bit 15) with device-visible barriers. Completions arrive through the
+256-entry `tx_ba_info` buffer and/or core-g0 TX events; the 16-byte completion record is the
+natural first parse target [V].
+
+**RX.** Host pre-fills `rx_norm_data_free_ring` (256 x 0x63c B) and `rx_small_data_free_ring`
+(512 x 0xb0 B), advances the packed +0x38/+0x3c write pointers, drains
+`rx_data_cmp_ring` (4095 entries) via +0x40/+0x4c, parses the 0x28-byte device descriptor at the
+start of each buffer, strips it, handles A-MSDU chains, resolves VAP/user/tid, converts 802.11 to
+Ethernet and reposts the buffer. The MAC interrupt status/mask (+0x44/+0x48, mask value
+`0xfffffcc1`) is the polling alternative to ETE completion [V].
+
+**Control messages around the data path.** `g0 id7/8` user-add (0xA8 each), `g0 id9` del-user
+(0x0C), `g0 id0xC` scan request (0x1FC), `g0 id0xF/0x10/0x11` STA join family (0x40/0x10),
+`g0 id0x12` EDCA (0x74), `g2` WAL config events (AP start etc., ids [U]); D2H results are
+`g1 id15/16/17`, `g2 id2` and `g2 ids 3-6`. Only the config-event shape is byte-exact today; the
+open payload structs are the wall for VAP/scan/AP. The 217/88-entry key tables A/B decode this
+namespace; every vendor host key from the shipped modules resolves in them [V]/[U].
+
+**Bring-up order proposed by the lane.** D0 MAC register model -> D1 RX rings + NAPI skeleton ->
+D2 TX ring + TXQ address sync -> D3 user/VAP messages -> D4 scan -> D5 STA join, with a
+**read-only** first check (ladder B2: single read of CA 0x40040000 and of the ready-seeded +0x10)
+before any host write, because an earlier attempt to add an extra iATU viewport rebooted the box
+[I]/[V*].
+
+### 6.5 The ETE engine: the host lever is closed, direct read is the supported RX path
+
+**Trigger chain (fully reversed).** The firmware reads the ETE status word `CA 0x4003A874` only
+in the event-0x2E/0x2D dispatchers (CPU `0x4624C`/`0x462F8`), which are reachable only through a
+delivered device hardware event. Status bits **24-28** call the sending trigger CPU `0xC625A`,
+which reads the hardware-authored send word `CA 0x4003AC00+4*ch` (target = high half), handshakes
+the target index into the channel's PKTRAM control word, releases tagged nodes and wakes the
+message object. Whole-image and vendor-host scans find **no** software writer of the status word,
+the send words or the engine doors/global: the start is device hardware/ROM state [V].
+
+**The one host-owned delta and its test.** The DR group-B destination rings have exactly one
+host-owned field: the published index `+0x38`. Our clean driver arms it to `0x400` (32 pre-posted
+buffers) while the vendor init writes 0 and a working vendor boot shows `published == fill`. Ladder
+E1a wrote `+0x38 = fill` on all four channels (read-back OK) and E1b wrote 0 on a fresh boot; on
+both, the engine status bits stayed 0, the trigger counters and send words stayed 0 and the fills
+stayed `0x10` - the SR/mailbox notification path kept running, the DR copy never started. The engine door
+`CA 0x4003A7C0` differed from the vendor value (`0x844C0000` vs vendor `0x83FAC000`) and has no
+host writer [V*].
+
+**Verdict.** The DR (D2H) A->B copy is firmware/ROM-internal; no host register work is justified.
+The direct device group-A read is the supported RX path (and the only one on this firmware), with
+the limits stated in F4: non-vendor ABI layout constants, polled (no DMA to host DRAM), no engine
+flow control (bounded batches, overrun reporting), read-only on device state. The SR (H2D) A->B
+copy, by contrast, runs normally - that asymmetry is what keeps the H2D send path working [V*]/[I].
+
+### 6.6 The PD4 research patch: audit and boundary
+
+The PD4 patch is the reason the H2D mailbox works on an IRQ-dead boot (sections 3.8, F3, F10). Its
+audit - exact delta, cave-safety proof, minimality, and the search for a vendor-clean
+mailbox-delivery alternative - is owned by the fw-audit lane (shared task `task-115`; the
+deliverable was still in progress at this revision). The settled facts available now are:
+
+* the patched image (`cfe24bfb...`) differs from the pinned vendor blob in exactly two windows:
+  a 4-byte boot-task-epilogue redirect at file `0x0916A` and a 64-byte stub in the zero
+  static-data gap at CPU `0x108240`; length and all other bytes unchanged [V];
+* the cave has no references/writers and is outside both boot memsets and the exception-staging
+  area; the stub is our own code and only calls the firmware's own dispatcher wrapper (`0x40294`)
+  when the mailbox actually has work, with a consume-only substitution while the handler table is
+  still the static sentinel [V]/[V*];
+* on the bench the cave survives, the golden page/state/mask stay intact and every announce is
+  consumed in 0 polls; the solo g0-id1 fault of the pre-context boots was the handler's missing
+  context precondition, not the patch [V*];
+* **no vendor-clean (unpatched-firmware) mailbox-delivery path has been demonstrated**: the
+  event-controller window at CA `0x40160000` is not host-visible, the image never polls the
+  mailbox and the vendor host sends nothing between release and ready. A firmware patch is
+  therefore the only known way to exercise the firmware's own dispatcher on this board; the PD3B
+  inline-event-raise variant exists but was not fired [U] [V]/[I].
+
+Verdict: **research instrument only, never a shipping change.** It is committed as a patch recipe
+plus verifier, not as vendor firmware bytes (section 11).
 
 ---
 
@@ -732,10 +1083,20 @@ was ever run from this document.
 | 2026-11-25 04:10 | ordered lap (type 3) | both messages consumed; type 3 takes the no-alloc branch, ctx+0x190 stays 0; TXQ still faults | ledger 2026-11-25 04:10 [V*] |
 | 2026-11-25 05:10 | **ordered lap (type 1)** | **context allocated** (ctx+0x190 = 0x01011448), TXQ sync consumed with mask 0 and no staging frame, firmware responds g1 id3 + g1 id0x12 | ledger 2026-11-25 05:10 [V*] |
 | 2026-11-25 06:00 | response decode | response frames read byte-exactly from the staged rings: g1 id3 36 B, g1 id0x12 40 B (node lengths match) | ledger 2026-11-25 06:00 [V*] |
+| 2026-11-25 07:40 | lap reproducibility | the ordered lap is deterministic on a fresh boot: identical ctx addresses/values and a clean mask-0 outcome | ledger 2026-11-25 07:40 [V*] |
+| 2026-11-25 08:40 | data-path + bench-auto fire | frame plane identified as the separate MAC slot-5 ring block; first automated protocol-runner fire exposed and fixed host-side transport/capture bugs | ledger 2026-11-25 08:40 [V]/[V*] |
+| 2026-11-25 09:10 | cfg80211 lane lands | wiphy/VAP skeleton (M0-M2) compile-clean host-side; CONFIG_CFG80211 blocker handed to the target lane | ledger 2026-11-25 09:10 [V] |
+| 2026-11-25 10:10 | ETE-wake E1a/E1b | the only host-owned DR lever is negative: status/send/fills unmoved; DR copy classified device/ROM-internal | ledger 2026-11-25 10:10 [V*] |
+| 2026-11-25 11:00 | proto-seq | g1 id3/id0x12 decoded; the six calibration frames built (cfg ids 3502-3507) | ledger 2026-11-25 11:00 [V] |
+| 2026-11-25 11:40 | bench-auto rebuild | protocol-mode capture root-caused to the raw-read transport (resource0 is mmap-only); static bar0read helper, readpath self-check, 312/312 | ledger 2026-11-25 11:40 [V] |
+| 2026-11-25 12:30 | **ladder C1** | calibration set_rssi_param (298 B, g0 id2 key 0x0101) consumed in 0 polls; firmware answers 298 B g1 id3; page/state/mask clean | ledger 2026-11-25 12:30 [V*] |
+| 2026-11-25 13:30 | wave-2 close | all 7 wave-2 lanes delivered; target build verified (image 22b72852..., kernel slice 13e81214..., cfg80211 config in tree) | ledger 2026-11-25 13:30 [V] |
+| 2026-11-25 15:00 | **first Wi-Fi interface** | cfg80211 image flashed to kernelb (full-slot 1794a531...); new kernel booted; wiphy registered after the ready handshake; iw enumerates phy0; VAP wlan0 created and deleted (M0/M1) | ledger 2026-11-25 15:00 [V*] |
 
-End-of-chain bench state (ledger 2026-11-25 06:00): the box is running the successful lap - both
-messages consumed, mask 0, page golden, no further writes pending. This report's cut-off is that
-entry.
+End-of-chain bench state (ledger 2026-11-25 15:00): the box runs the cfg80211 bench image on
+pair B (new kernel on kernelb, rootfsb unchanged, stock pair A untouched and bootable), with the
+firmware booted golden, the wiphy registered and the test VAP deleted; no writes are pending and
+the recovery path is the stock pair / physical recovery. This report's cut-off is that entry.
 
 ---
 
@@ -764,6 +1125,16 @@ claim.
 | C14 | the g0 id1 fault is a transport/PD3 problem | the transport and the PD3 dispatcher are fine: the payload-free `g0 id0` control stub is consumed with no exception; the fault is inside the g0 id1 **handler** (context precondition) | control-stub fire | 2026-11-25 01:10 |
 | C15 | the sysfs arm grammar accepts `echo 1 >` | the grammar parser requires exactly `1` with no trailing newline; use `printf 1 >` | first H2D session | 2026-11-24 15:10 |
 | C16 | GP1 proves the reset pulse is sufficient | the pulse is necessary but not sufficient: GP1's occasional successes consumed a stale vendor platform block left in WRAM; the deterministic gate is the `0xCEED` handshake | s1-cpu1 + GP8 | 2026-11-24 06:20/10:40 |
+| C17 | no Wi-Fi interface can exist until the whole stack is built | the cfg80211 management interface is independent: wiphy registration gated on the ready pair and the nl80211 VAP netdev lifecycle were hardware-validated on our own image | image flash + bench | 2026-11-25 15:00 |
+| C18 | `CONFIG_CFG80211` unset in the target tree blocks any interface | the target config gained `CONFIG_CFG80211=m`; `cfg80211.ko` (2,328,548 B sha256 `949393f9...`) was built, loaded and exercised on the bench image | BUILD-VERIFICATION sec 5 + bench | 2026-11-25 13:30/15:00 |
+| C19 | the ETE DR A->B copy may wake from the host-owned published-index write | E1a (write fill) and E1b (write 0) both left status/send/fills unmoved; the DR start condition is device/ROM state, not a missing host write | ete-wake REPORT sec 8 + bench | 2026-11-25 10:10 |
+| C20 | g1 id3 (36 B) is the TXQ-sync answer and g1 id0x12 the context-create answer | g1 id3 is a generic config-sync frame dispatched by `syn_id` (`0x0101` alg / `0x0102` cali / `0x07xx` per-VAP); the 36 B frame is an unsolicited VAP-MIB update (syn `0x07E0`), and g1 id0x12 is the ACS-response family forwarded opaquely | proto-seq REPORT sec 2-3 | 2026-11-25 11:00 |
+| C21 | Wi-Fi frame data rides the HCC/ETE path, so the idle ETE engine blocks the data plane | frame data uses a separate MAC host-interface ring block (CA `0x40040000/0x40060000`, slot 5); the direct-read constraint is an ETE-message constraint only | datapath REPORT sec 2/8 | 2026-11-25 08:40 |
+| C22 | the first TXQ-sync fault was a 48-vs-72-byte node-length problem | the fault was the missing context-create precondition (handler dereferences `ctx+0x190`); the 72-byte node form is the captured wire/node shape, not the fix | txq72 + ctx-create + ordered lap | 2026-11-25 00:20-05:10 |
+| C23 | empty benchmark step captures meant a sequence failure | the capture failed because `dd if=resource0` is not a valid MMIO read on the lab kernel (resource0 is mmap-only); a static arm-musl `bar0read` helper fixed it and empty reads now report device-read-empty/MISSING, never PASS | bench-tooling REPORT sec 8.1 + ledger | 2026-11-25 11:40 |
+| C24 | an unconsumed announce after a solo TXQ sync proves the firmware consumer died | it can be the exception cascade: the handler fault corrupts the PD3 poller in the staging area; with the context precondition satisfied and the PD4 cave, announces are consumed in 0 polls | txq72/PD4 + ordered lap | 2026-11-25 01:10-05:10 |
+| C25 | cfg80211 belongs to the upstream target/kernel series | the cfg80211 config is a BENCH-ONLY addition; it is not part of the luofu kernel patch series or the proposed submission v2 | CFG80211-BENCH-IMAGE sec 5 + upstream REPORT sec 12 | 2026-11-25 13:30 |
+| C26 | the wiphy band mapping "domain 0 = 2.4 GHz" is proven | it is an inference (`[I]`) with a `band_force` override; the bench saw both bands listed on the two endpoints, not a per-band link test | cfg80211 REPORT sec 3/10 R4 + bench dmesg | 2026-11-25 15:00 |
 
 ---
 
@@ -772,8 +1143,10 @@ claim.
 ### 9.1 What was re-run while consolidating this report
 
 Consolidation did not invent evidence; it re-ran the owning lanes' committed device-free checks to
-make sure the facts this report leans on still reproduce from the tree as committed. All checks
-are host-only and device-free (no vendor blob is needed for these particular selftests):
+make sure the facts this report leans on still reproduce from the tree as committed. v2 additionally
+re-ran every wave-2 lane check whose tools are host-only (the cfg80211 kernel-module build itself was
+verified by its owning lane, not re-built here to avoid touching the shared kernel tree). All checks
+are host-only and device-free:
 
 | check | result | what it pins |
 | --- | --- | --- |
@@ -782,15 +1155,27 @@ are host-only and device-free (no vendor blob is needed for these particular sel
 | `wifi-d2h-direct/tools/d2h_selftest.py` | **PASS**, 92/92 | direct-read service: node/frame decode, catalogue, consumer-advance rules |
 | `wifi-ctx-create/tools/ctx_create_re.py --selftest` | **PASS**, 40/40 | key tables, handler/worker/helper chain, read pack |
 | `wifi-ctx-create/tools/ctx_create_frame.py --selftest` | **PASS**, 26/26 | the context-create frame builder |
-| `wifi-bench-tooling/tools/selftest.py` | **PASS**, 177/177 | session runner, guards, patch builder, audit |
+| `wifi-bench-tooling/tools/selftest.py` | **PASS**, 312/312 (was 177 in v1) | session runner incl. the data-driven protocol mode, guards, patch builder, audit |
+| `wifi-datapath/tools/build.sh` + `fw_dp_tables.py --selftest` | **PASS**, 77/77 + 35/35 | two-plane model, TX/RX ring builders, key tables A/B |
+| `wifi-proto-seq/tools/selftest.sh` | **PASS**, 66/66 + 38/38 + 55/55 | config-sync decode, calibration frame builders, alg command table |
+| `wifi-ete-wake/tools/ete_wake.py selftest` | **PASS**, 81/81 | ETE trigger chain, host/vendor comparison, BAR0 map |
+| `wifi-cfg80211` host steps (replicated device-free) | **PASS**, 454/454 cfg80211 logic + 242/242 inherited H2D | wiphy/VAP model, registration gate, 39-op map |
+| `wifi-cfg80211/tools/selftest.py --kdir <tree>` | **144/145**; the single failure is the known provider-symvers redundancy after the real tree began exporting the six cfg80211 symbols (documented in `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5) | source/contract checks |
 | `wifi-re-report/tools/verify_report.py` (this lane) | **PASS** (see 9.4) | this report's cross-references, markers, claim IDs and key constants |
 
 The remaining lane checks (e.g. `rom_s01.py` 70/70, `romdis.py` 86/86, `fw_pd_builder.py`
-56/56, `pd2_re.py` 33/33) were re-run by their owning lanes in the sessions cited in section 7
-and read the local vendor blob in place; they are quoted here from those lane records and were not
-re-executed in this consolidation pass to avoid concurrent vendor-blob reads while other lanes were
+56/56, `pd2_re.py` 33/33, the target-tree mocked harness 94/94 + 103/103 + 77/77) were re-run by
+their owning lanes in the sessions cited in section 7 and read the local vendor blob / target tree
+in place; they are quoted here from those lane records and were not re-executed in this
+consolidation pass to avoid concurrent vendor-blob or kernel-tree use while other lanes were
 working. That is a bookkeeping distinction only - those checks are committed and runnable per the
 lane READMEs.
+
+The one re-run that needs a note is the cfg80211 source selftest: its provider-symbol check fails
+by design on the current tree because `Module.symvers` now exports the six `wiphy_*/cfg80211_*`
+symbols the lane previously declared in a provider file. The owning lane's compile+modpost steps
+pass and the upstream-target lane recorded the same reconciliation; this is a lane follow-up (retire
+the redundant provider file), not a report defect.
 
 ### 9.2 Reproducing the static claims
 
@@ -805,14 +1190,24 @@ copies vendor bytes. See [REPRODUCE.md](REPRODUCE.md) for the exact commands. Th
 * Protocol constants: `wifi-hcc-core` and `wifi-h2d-frames` selftests (9.1) plus
   `wifi-host-replica/SPEC.md`.
 * Firmware patches: `wifi-irq-unmask/tools/fw_pd_builder.py` (56) and
-  `wifi-bench-tooling/tools/fw_patch_builder.py` (177-suite) rebuild/verify the PD recipes.
+  `wifi-bench-tooling/tools/fw_patch_builder.py` (312-suite) rebuild/verify the PD recipes.
+* Frame plane and calibration: `wifi-datapath/tools/build.sh` + `fw_dp_tables.py --selftest`
+  (77 + 35), `wifi-proto-seq/tools/selftest.sh` (66 + 38 + 55), `wifi-ete-wake/tools/ete_wake.py
+  selftest` (81).
+* cfg80211 management layer: the lane's host steps (454 + 242), `gen_cfg80211_symvers.py`, and the
+  source selftest (144/145, known provider-symvers redundancy).
+* Target/bench image: `wifi-upstream-target/BUILD-VERIFICATION.md` has the exact build commands and
+  artifact hashes; the flash steps are in `CFG80211-BENCH-IMAGE.md` sec 3 (bench-only, attended).
 
 ### 9.3 Reproducing the bench result
 
 The bench chain is documented in the lanes' BENCH-PROCEDURE files, in this order: clean boot with
 the reset pulse -> prepare/upload/verify -> custom-block seed -> hcc_arm/hcc_loop -> release-only
 -> golden gate -> ready pair (direct reader) -> one context-create type 1 -> one TXQ sync ->
-direct-read the responses. The generic ladder with pass gates is [TABLES.md](TABLES.md) T19.
+direct-read the responses. Ladder C1 then adds one calibration frame (section 6.2); the cfg80211
+observation session adds the module load, ready-gated wiphy registration and the nl80211 VAP
+create/delete cycle on the cfg80211 bench image (section 6.3). The generic ladder with pass gates
+is [TABLES.md](TABLES.md) T19.
 
 **This report does not authorise a fire.** Benches are attended, recovery-gated operations; the
 router's UART is read-only and host->router TX is physically dead. See the project's
@@ -832,9 +1227,13 @@ router's UART is read-only and host->router TX is physically dead. See the proje
 6. a curated set of critical constants (addresses, golden words, frame bytes, hashes) appears in
    the tables exactly as in the committed lane sources it cross-checks (e.g. the TXQ-sync wire
    bytes appear in `wifi-h2d-frames`'s committed selftest, the PD3/PD4 image hashes appear in
-   `wifi-irq-unmask`'s reports) and the end-state claims also appear in the append-only ledger and
-   `STATUS.md`;
-7. no forbidden content classes (private keys, secrets paths, oversized hex/base64 blobs that
+   `wifi-irq-unmask`'s reports, the v2 image/slice hashes appear in
+   `wifi-upstream-target/BUILD-VERIFICATION.md`, the calibration family in `wifi-proto-seq`'s
+   report, the MAC ring block in `wifi-datapath`'s report) and the end-state claims also appear in
+   the append-only ledger and `STATUS.md`;
+7. the v2 tables T21-T25 exist, the report covers the v2 milestone vocabulary (cfg80211, wiphy,
+   calibration, E1a, slot hash) and the new claims stay gap-free in [EVIDENCE-INDEX.md](EVIDENCE-INDEX.md);
+8. no forbidden content classes (private keys, secrets paths, oversized hex/base64 blobs that
    would smell of vendor binaries, per-unit MAC addresses) are present.
 
 Run it with the project venv python. It prints one PASS/FAIL line per check group and exits
@@ -849,46 +1248,68 @@ non-zero on failure.
 1. **The firmware is closed.** Everything here is interoperability research against a binary
    firmware. No upstreamable clean-room Wi-Fi driver follows from it while the blob remains
    closed; the project's own position is that vendor GPL source is the route to a shippable stack.
+   The vendor GPL request is unanswered to date.
 2. **PD3/PD4 are research instruments.** They patch the vendor firmware image to call its own
-   dispatcher. They are bench-validated but must never be presented as product changes, and they
-   do not revive the firmware's own thread/scheduler services.
-3. **The duplex result is message-level, not link-level.** Two ordered config messages were
-   consumed and answered. That proves the protocol path, not a working Wi-Fi interface: no VAP,
-   no scan, no association, no data path.
-4. **The ETE engine remains idle.** The direct-read D2H path substitutes for the engine's host-DRAM
-   copy on D2H; the engine's actual trigger (firmware event 0x2E/sending trigger CPU `0xC625A`)
-   never runs on our boot, and no host write can start it [V].
-5. **The firmware IRQ/thread layer is still dormant.** The PD3 bypass services the mailbox, but the
-   image dispatcher, event controller and scheduler services the vendor stack depends on are not
-   exercised; later flows (calibration, scan completion, TX status) may need them.
-6. **Some frames are observed but not fully decoded.** The two firmware responses (g1 id3, g1
-   id0x12) have clean headers and plausible payload shapes, but field semantics are not proven.
+   dispatcher. They are bench-validated but must never be presented as product changes. The audit
+   (section 6.6) confirms no vendor-clean mailbox-delivery alternative has been demonstrated; a
+   shipped driver on this firmware does not exist.
+3. **The result is message-level plus management-level, not link-level.** Two ordered config
+   messages and one calibration message were consumed and answered; a cfg80211 wiphy + VAP netdev
+   lifecycle was hardware-validated. None of that proves a working Wi-Fi link: no firmware VAP
+   object exists, no scan returns results, no association happens and no frame is transmitted.
+4. **The ETE DR direction is closed, not solved.** The host lever (E1a/E1b) is measured negative,
+   the direct device-ring read remains the supported RX path, and it is a research instrument: it
+   depends on this firmware's internal PKTRAM layout, it is polled with bounded batches and
+   overrun reporting (no engine flow control, no DMA to host DRAM), and it is not the vendor ABI.
+5. **The firmware IRQ/thread layer is still dormant.** PD4 services the mailbox, but the image
+   dispatcher, event controller and scheduler services the vendor stack depends on are not
+   exercised; later flows (scan completion, TX status, PM) may need them.
+6. **Some frames are observed but not fully decoded.** The two v1 responses (g1 id3 36 B, g1 id0x12
+   40 B) are now decoded structurally (C20); the calibration answer body was counted but not
+   captured (length-only evidence), and g1 id0x12's body semantics remain device-side [U].
 7. **The context-create frame is synthesized**, not captured from the vendor driver; the vendor's
    sender for key `0x0064` is unproven [I]. Type-1/2/3 semantics are inferred from the allocator
    analysis plus one type-3 and one type-1 lap.
-8. **Per-unit data stays out.** No MAC/serial/calibration value is in this report by policy.
+8. **The Wi-Fi interface is M0/M1 only.** The wiphy is registered and VAP netdevs can be created
+   and deleted, but no firmware VAP object is created: the user/vap-add H2D payloads (`g0 id7/8`,
+   0xA8) and the scan request (`g0 id0xC`, 0x1FC) are open [U]; scan/get_station/dump_station are
+   honest `-EOPNOTSUPP` stubs and every M3+ op is NULL.
+9. **The MAC data plane is mapped, not implemented.** No host code programs the slot-5 MAC block,
+   the TXQ-table address sync has not been fired, no TX ring entry or RX buffer moves a frame, and
+   the frame-buffer address transform and RX descriptor semantics still need bench captures
+   [V]/[I]/[U].
+10. **The cfg80211 bench image is a research instrument, not a release.** It carries a bench-only
+    kernel config (not in the luofu patch series), the modules are loaded from `/tmp` (not packaged
+    in the rootfs), the image is installed manually from stock, and the install path has never run
+    end to end on a device.
+11. **Per-unit data stays out.** No MAC/serial/calibration value is in this report by policy; the
+    VAP address quoted by the lane is a locally-administered documentation address, not a unit MAC.
 
 ### 10.2 Ranked open questions
 
-1. What unmasks the firmware's IRQ layer on a real vendor boot, and can the image dispatcher be
+1. What are the exact user/vap-add H2D payload structs (`g0 id7/8`, 0xA8 each) and the scan request
+   (`g0 id0xC`, 0x1FC)? They are the wall between "interface exists" and "firmware VAP/scan works";
+   each needs a struct-RE lane or one vendor kprobe capture.
+2. Can the MAC data plane be brought up on the bench with the mapped slot-5 block (read-only B2
+   check, then RX rings, then TXQ address sync + first TX frame)? This is the first physical test
+   of the two-plane model.
+3. Can the calibration answer body be captured (immediate post-fire read or a driver logging
+   extension), and do the five remaining messages in vendor order behave the same as C1?
+4. What unmasks the firmware's IRQ layer on a real vendor boot, and can the image dispatcher be
    brought up legitimately (without a firmware patch)? This is the difference between a research
-   instrument and a usable driver.
-2. What is the exact vendor CECE service protocol (order, duration, ack semantics) for the image
+   instrument and a usable driver; the vendor-clean audit is the current attempt (section 6.6).
+5. What is the exact vendor CECE service protocol (order, duration, ack semantics) for the image
    handlers, and does any later flow require it?
-3. Why is the ETE engine's A->B copy trigger never reached, and can the D2H path be made
-   engine-based instead of direct-read?
-4. What is the full post-TXQ-sync startup sequence on our boot (calibration alg set_* -> `g0 id2`,
-   VAP create, WAL config), and which handlers have context preconditions like the TXQ sync did?
-5. What do the g1 id3 / g1 id0x12 payloads mean field-by-field, and what does the firmware expect
-   next?
-6. Can the ~39-op cfg80211 full-MAC surface be built over this protocol for the stock userspace,
-   and what is the minimum viable subset (the vendor-userspace lane's M0-M6 plan)?
-7. What is the data path contract (hdpp TX/RX descriptors, PKTRAM/ACP ownership, PIE rings), and
-   what must the host do that the vendor driver does?
-8. Is there a host-visible trigger for the firmware's event layer that the vendor host performs
+6. What are the `g2` WAL config-command ids/payloads for AP start, key install and per-VAP config,
+   and the `g0 id0xF/0x10/0x11` STA join shapes?
+7. What do the D2H scan/join/PM result frames (g1 15/16/17, g2 2/3/4/5/6, g3 17) mean
+   field-by-field, and what ordering do they require?
+8. What is the DR A->B copy's device/ROM start condition, and could a future firmware patch or a
+   vendor-clean host path make the D2H path engine-based instead of direct-read?
+9. Is there a host-visible trigger for the firmware's event layer that the vendor host performs
    before the ready exchange, or is it purely ROM/image internal? (Current answer: nothing visible;
-   the vendor sends nothing between release and ready - but this is a negative result on the
-   modules scanned, not a proof about ROM code we cannot see.)
+   the vendor sends nothing between release and ready - a negative result on the modules scanned,
+   not a proof about ROM code we cannot see.)
 
 ---
 
@@ -903,6 +1324,13 @@ messages), not firmware content; the firmware patch recipes contain only the pat
 replacement code plus the 4-byte entry words they modify), consistent with the owning lanes'
 committed recipes.
 
+**The bench image is part of the experiment, not a deliverable.** The cfg80211 kernel is a
+bench-only config addition (it is not in the luofu kernel patch series), the Wi-Fi modules are
+loaded from `/tmp` rather than packaged in the rootfs, and the image was installed manually from
+stock. The board booted it and enumerated a Wi-Fi wiphy + VAP (section 6.3); that is a hardware
+milestone for the research line, not a distributable OpenWrt image and not a claim of install-path
+readiness.
+
 **Why it is publishable.** The repository is an intentionally public research notebook: negative
 results, dead ends and the ledger are part of the record. This report is written to that standard:
 it marks inference as inference, lists the corrections that cost sessions, and does not present
@@ -910,11 +1338,17 @@ bench instruments as products. The public repos' pre-policy history caveat (an o
 and vendor objects before a policy purge) is documented in `PUBLISH.md` at the project root and
 is not repeated here.
 
-**Upstream status.** Unchanged and blocked: upstream OpenWrt submission of a Wi-Fi stack for this
+**Upstream status.** Blocked for Wi-Fi: an upstream OpenWrt submission of a Wi-Fi stack for this
 board requires a licensable firmware/driver path. The vendor modules declare GPL-2.0 and a GPL
-source request names the exact symbol families/headers (wifi-driver-re SUMMARY). The clean-room
-line's ceiling is the message-level protocol proven here; the MAC/MLME and data path remain vendor
-code. This report does not claim upstream progress for Wi-Fi.
+source request names the exact symbol families/headers (wifi-driver-re SUMMARY); it is unanswered
+to date. The clean-room line's ceiling is the message-level protocol plus the M0/M1 management
+interface proven here; the firmware remains closed, PD4 must never ship, and the MAC/MLME/data path
+remain vendor code. The target side did advance: the board tree builds end to end, the GP1 reset
+pulse and the boot-pair recorder fixes are committed, the bench image was built and booted, and
+the 67 target patches were classified for submission (26 keep / 17 fold / 24 drop -> proposed
+30-patch series + DTS-0001). The install path has still never run end to end on a device, the
+submission form has not been regenerated, and the history purge is pending - so this is still not
+an upstream submission (see `wifi-upstream-target/REPORT.md` and `docs/ROADMAP-OPENWRT.md`).
 
 **Licensing of this lane's own material.** The report text is part of the notebook; the verifier
 script is original code (GPL-2.0-compatible, matching the sibling lanes). Nothing here is copied
@@ -962,6 +1396,12 @@ table and reproduction commands; where this report compresses, the lane expands.
 | `wifi-openwrt-pkg` | OpenWrt KernelPackage for the instrument driver |
 | `wifi-bench-tooling` | one-command bench sessions, guards, patch builder, audit |
 | `wifi-ctx-create` | context-create message RE, frame builder, verification pack |
+| `wifi-cfg80211` | section 6.3: cfg80211 M0-M2 lane - wiphy, VAP model, registration gate, 39-op map |
+| `wifi-datapath` | section 6.4 / T24: two-plane model, MAC slot-5 rings, TX/RX formats, key tables A/B |
+| `wifi-ete-wake` | section 6.5: ETE trigger chain, host-owned field comparison, E1a/E1b ladder |
+| `wifi-proto-seq` | sections 5.7/6.2: config-sync decode, calibration family and response contract |
+| `wifi-upstream-target` | sections 6.3/11: target tree fixes, bench-image build/flash, submission classification |
+| fw-audit (task-115; deliverable in progress) | section 6.6 / F10: PD4 minimality/safety audit and vendor-clean alternative analysis |
 
 Historical lanes still in the tree but not load-bearing for this report: `wifi-framework-port`,
 `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`, `wifi-algcfg-slice`,
@@ -988,6 +1428,15 @@ history beyond the package, and the phase-numbered docs under `opensource/docs/`
 | **field A/B/C** | the three untyped header bytes at `+0x02/+0x03/+0x08` whose meaning is message-specific |
 | **pre-S1 state** | page `0x86803FEF / +8 = 0 / 0xABCD`, state 0: the ROM handshake incomplete |
 | **RAM-fallback page** | the pre-S1 fallback signature with ROM boot-log values (`0x1BD000/0x1BD0D8`) |
+| **cfg80211 / wiphy** | the Linux wireless management layer; a wiphy is one radio instance advertised to nl80211. Our M0/M1 = wiphy registration + VAP netdev lifecycle. |
+| **VAP** | virtual access point: an interface on the wiphy and (on the firmware side) a user/vap object; created here via nl80211 `interface add` |
+| **M0 / M1 / M2** | cfg80211 milestones: M0 wiphy+netdev model, M1 VAP lifecycle, M2 scan/station stubs |
+| **MAC host-interface block** | device MAC block at CA `0x40040000`/`0x40060000` (slot 5) that carries the Wi-Fi frame DMA rings, separate from HCC/ETE |
+| **MSDU-info entry** | 8-byte TX ring entry `{u32 buf_devva; u32 ctl}` with len/path/flag/tid/vap bitfields |
+| **TXQ table** | 0x2524-byte host-DRAM table whose device VA is synced by the H2D `g0 id1` key `0x0320` message |
+| **calibration ladder C1 / C2** | C1 = one calibration message (`set_rssi_param` 3507) after the ordered lap; C2 = the remaining five in vendor order |
+| **E1a / E1b** | the ETE DR published-index experiments (write `+0x38` = fill / = 0) that came back negative |
+| **image slice / slot hash** | the `kernel.bin` extracted from the sysupgrade container (3,372,638 B sha256 `13e81214...`); its full-slot hash `1794a531...` is what the flash verifies in kernelb |
 
 Conventions used in the tables: `??` = header byte not initialised by the firmware builder;
 "BAR0 = CPU + 0x6B8000" is the CPU->BAR0 rule; "BAR0 = 0x3B8000 + (CA - 0x40000000)" is the IO-CA
