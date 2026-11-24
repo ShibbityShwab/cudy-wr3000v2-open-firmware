@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-2.0
+# src-baseline.sha256 - parity baseline of the INHERITED (unmodified)
+# files of the wifi-cfg80211 / wifi-vap-scan trees this lane extends.
+# Captured at copy time (2026-11-24/25): wifi-cfg80211 HEAD tree (module
+# 505,076 B sha256 2c30051e.../d2b3cf79... family) and the task-110
+# wifi-vap-scan src/vapscan_frames.c (commit 0e4ad45).  tools/selftest.py
+# fails if one of these files changes without an integration note.
+#
+# Expected integration edits in this lane (NOT in this baseline; each is
+# asserted directly by tools/selftest.py):
+#   src/Kbuild                        + scan/post/provider objects
+#   src/h2d_frames.h                  + shared portable-type guard
+#   src/vapscan_frames.h              + shared portable-type guard
+#   src/hi5622_scan_d2h.h             + shared portable-type guard
+#                                       (portability only; bytes unchanged)
+#                                       (portability only; bytes unchanged)
+#   src/hcc.c                         + hi5622_scan_deliver() hook
+#   src/d2h.c                         full staged payload to delivery
+#   src/hi5622_contract.h             D2H_SNAP_MAX = full HCC frame
+#   src/hi5622_d2h.h                  + rd->snap staging buffer
+#   src/hi5622_cfg80211.c/.h          + scan layer lifecycle/status
+#   src/hi5622_cfg80211_ops.c         + scan/abort_scan/start_ap/stop_ap
+#                                     + VAP user add/del messages
+#   src/cfg80211-provider.symvers     regenerated: 9 symbols
+#   tools/gen_cfg80211_symvers.py     Module.symvers grammar + KDIR
+#   src/h2d_frames.c                  + WAL group-2 cfg-event family validation
+#                                       (wifi-vap-start lane, task-117; the
+#                                       post-fire fix for the id-0 handler slot)
+#   src/hi5622_scan_d2h.c             + SSID/DS/HT/VAP IE summary fields for the
+#                                       cfg80211 BSS evidence line
+#                                       (scan-complete lane, task-123)
+#   src/hi5622_scan_d2h.h             + shared portable-type guard only
+#   src/hi5622_frames_api.h, hi5622_scan.c, hi5622_scan_logic.*,
+#   src/hi5622_vapscan_map.**, hi5622_vapscan_provider.c, Kbuild
+#                                     + scan-complete: auto scan window,
+#                                       channel-coverage completion, dwell
+#                                       override, IE summary mapping, VAP caps
+#
+# New clean-room files of this lane (not inherited, not baseline):
+#   src/hi5622_frames_api.h, hi5622_frames_provider.c, hi5622_frame_post.*,
+#   hi5622_scan.*, hi5622_scan_logic.*, hi5622_vapscan_map.*,
+#   hi5622_vapscan_provider.c
+#
+dd42941594a6a1e744966d1aa038dcc24c1eacac7cf2c9c2014149b4171c2cb1  src/.gitignore
+49d42273ddc81de34d1028f0656e9dc57b267a44f64634f9b3b6299f560ecb37  src/Makefile
+36a1128b0e6ccf4f09bc31875af0bcce2e278816b7d0e1b39cfc5038da24abef  src/ete.c
+134bbc7a7f0aed8d3df59f1ea7de68f59f4a745559468ebf4b746ddd9e463fab  src/h2d_catalogue.inc
+dc5e1e56ed547e85da9ea989ea8ed17a1b0027ebc18b945ab1903d94cb1ce9e7  src/h2d_send.c
+a4bf833878cfef4041419b699fc36c7688f52e4be8a775dcde00ff507b4c73ca  src/h2d_send.h
+ba6bc21ec7f2c32d4bd34fbdb0a0e2b6e2e1b540121fcc09d783cddc279ae264  src/h2d_send_logic.c
+c9f5c77f3c41f8566802dbdae92de4bbb8c9074742d51b5c7e87b8ee0600074e  src/h2d_send_logic.h
+4d3d4e4745a6e7ca0e9934e1ef9313c11711bfe9ecf4a3c791a8e97f0e2e6785  src/hcc_core.c
+511f8e1357573aea8fd3f08d44fe9913f0204326049a7be359253b54a348aa8f  src/hcc_core.h
+e68b98587973436cafb810a1d3740261bafac063e47214e601f51b5d05263bbc  src/hcc_core_kernel.c
+79b8e75e9aa6dc0c3d462a678eb2a22cd1adf29b13266375cd45d793027d0107  src/hcc_core_kernel.h
+35c7c7ef411ea41e292b98ce3ccc009bb104246e82e8356788f7d8598c83c940  src/hi5622_cfg80211_logic.c
+34a9a3264613d9bfda660b29ac165cb0cf166d10dc035497462f8a2c98ff3586  src/hi5622_cfg80211_logic.h
+4b3268fee01afef698474dc2ab29b3fc29ae17cf711a8549ddb2074977e8f78b  src/hi5622_driver.h
+6ae487a27ad12f3241ed0a60241791e89a6b3fab9e07d6fba69be7c2e30dfede  src/hi5622_hcc.h
+d64d9e6ba88f6a612f3e010e8f463054cc8f606d8a057851f6991d79c1f7b6e7  tools/cfg80211_logic_selftest.c
+9899bcd81e15b16420235a7ac82635ca33aec4f23e7b849962d520708abaaed7  tools/h2d_logic_selftest.c
+c7d1d0abcf2e1ba1217cd6755e6c2a19d1ff25feac964cb658e428b106987178  src/vapscan_frames.c

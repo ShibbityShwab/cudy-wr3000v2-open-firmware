@@ -1,0 +1,12 @@
+# build products only - never committed
+*.o
+*.ko
+*.mod
+*.mod.c
+*.symvers
+*.order
+modules.order
+.*.cmd
+.tmp_versions/
+# exception: the cfg80211 modpost provider declarations are source/evidence
+!cfg80211-provider.symvers

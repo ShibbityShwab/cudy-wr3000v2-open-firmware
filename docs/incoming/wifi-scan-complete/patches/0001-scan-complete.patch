@@ -1,0 +1,2043 @@
+diff -ruN a/src/hi5622_frames_api.h b/src/hi5622_frames_api.h
+--- a/src/hi5622_frames_api.h	2026-11-24 16:34:26.122101926 +0700
++++ b/src/hi5622_frames_api.h	2026-11-24 16:35:48.303617452 +0700
+@@ -110,6 +110,7 @@
+ 	u8	iftype;		/* nl80211 iftype of the requesting wdev */
+ 	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (endpoint band) */
+ 	u32	flags;		/* cfg80211_scan_request.flags (opaque) */
++	u16	dwell_ms;	/* 0 = vendor default 60; 20..200 override [V] */
+ 	u32	n_ssids;
+ 	u8	ssid_len[HI5622_FRAME_MAX_SSIDS];
+ 	u8	ssid[HI5622_FRAME_MAX_SSIDS][HI5622_FRAME_MAX_SSID_LEN];
+@@ -184,12 +185,33 @@
+ 	HI5622_SCAN_FTYPE_PRESP,
+ };
+ 
++/* Derived 802.11 facts (not wire fields of their own): the capability ESS/
++ * IBSS/privacy bits and the IEs the cfg80211 BSS entry is built from.  The
++ * raw IE chain is still forwarded verbatim - cfg80211 parses SSID/DS/HT/VHT
++ * itself - these bits are for the per-BSS dmesg evidence line and for the
++ * bench decision table (e.g. "decoded 6 BSS: 6 have SSID+DS, 4 have HT"). */
++#define HI5622_SCAN_CAP_ESS		(1u << 0)	/* capability bit 0 [V] */
++#define HI5622_SCAN_CAP_IBSS		(1u << 1)	/* capability bit 1 */
++#define HI5622_SCAN_CAP_PRIVACY	(1u << 2)	/* capability bit 4 */
++#define HI5622_SCAN_IE_HT_CAP		(1u << 0)	/* IE 45, len 26 */
++#define HI5622_SCAN_IE_HT_OP		(1u << 1)	/* IE 61, len 22 */
++#define HI5622_SCAN_IE_VHT_CAP		(1u << 2)	/* IE 191 */
++#define HI5622_SCAN_IE_VHT_OP		(1u << 3)	/* IE 192 */
++#define HI5622_SCAN_IE_RSN		(1u << 4)	/* IE 48 (WPA2/3) */
++#define HI5622_SCAN_IE_WMM		(1u << 5)	/* vendor IE 221 00:50:f2/2 */
++#define HI5622_SCAN_IE_EXT_CAP		(1u << 6)	/* IE 127 */
++#define HI5622_SCAN_IE_COUNTRY		(1u << 7)	/* IE 7 */
++
+ struct hi5622_scan_result {
+ 	u8	bssid[6];
+ 	u8	ssid[HI5622_FRAME_MAX_SSID_LEN];
+ 	u8	ssid_len;
+ 	u8	frame_type;	/* enum hi5622_scan_frame_type */
+-	u8	reserved[3];
++	u8	ds_chan;	/* DS parameter-set channel (IE 3), 0 = absent [V] */
++	u8	ie_count;	/* IEs walked by the decoder */
++	u8	cap_flags;	/* HI5622_SCAN_CAP_* derived from capability */
++	u8	ie_flags;	/* HI5622_SCAN_IE_* presence bits */
++	u16	ht_cap_info;	/* HT capabilities info field (IE 45) [V] */
+ 	s32	signal_mbm;	/* dBm * 100, cfg80211 convention */
+ 	u16	freq;		/* MHz centre; 0 = unknown/unusable */
+ 	u16	capability;	/* 802.11 capability field */
+diff -ruN a/src/hi5622_scan.c b/src/hi5622_scan.c
+--- a/src/hi5622_scan.c	2026-11-24 16:34:26.122168440 +0700
++++ b/src/hi5622_scan.c	2026-11-24 16:37:47.673676677 +0700
+@@ -45,6 +45,25 @@
+ extern unsigned int hi5622_vap_start_first;
+ extern unsigned int hi5622_vap_start_module;
+ 
++/* scan-complete lane (task-123): the bench measured the firmware returning 6
++ * of the 13 requested per-channel results within the wifi-scan-ap lane's 5 s
++ * bound (~830 ms/channel, ledger 2026-11-26 14:00), so a 13-channel request
++ * needs ~11 s.  Default 0 = auto (BASE + n*PER_CHAN, see
++ * hi5622_scan_timeout_auto()); an explicit value is clamped to
++ * [1000, HI5622_SCAN_TIMEOUT_MAX_MS].  Writable at runtime. */
++static unsigned int hi5622_scan_timeout_ms;
++module_param_named(scan_timeout_ms, hi5622_scan_timeout_ms, uint, 0644);
++MODULE_PARM_DESC(scan_timeout_ms,
++		 "scan completion bound in ms (0 = auto from the channel count)");
++
++/* 0 = provider/vendor default dwell (60); 20..200 overrides the g0 id0xC dwell
++ * field for a bench sweep.  Read at scan-op time; an invalid value is logged
++ * and ignored. */
++static unsigned int hi5622_scan_dwell_ms;
++module_param_named(scan_dwell_ms, hi5622_scan_dwell_ms, uint, 0644);
++MODULE_PARM_DESC(scan_dwell_ms,
++		 "g0 id0xC scan dwell override in ms (0 = vendor default 60, 20..200)");
++
+ static u64 hi5622_scan_now(void)
+ {
+ 	return hcc_kernel_now_ms();
+@@ -55,6 +74,37 @@
+ 	return c ? &c->scan : NULL;
+ }
+ 
++/* Effective bounded-scan window for one request (auto unless the module
++ * parameter overrides it). */
++static u32 hi5622_scan_pick_timeout(const struct cfg80211_scan_request *req)
++{
++	u32 ms = hi5622_scan_timeout_ms;
++
++	if (!ms)
++		return hi5622_scan_timeout_auto(req ? req->n_channels : 0u);
++	if (ms < 1000u)
++		ms = 1000u;
++	if (ms > HI5622_SCAN_TIMEOUT_MAX_MS)
++		ms = HI5622_SCAN_TIMEOUT_MAX_MS;
++	return ms;
++}
++
++/* g0 id0xC dwell override: 0 keeps the vendor default (60). */
++static u16 hi5622_scan_pick_dwell(struct device *dev)
++{
++	u32 d = hi5622_scan_dwell_ms;
++
++	if (!d)
++		return 0;
++	if (d < 20u || d > 200u) {
++		dev_warn_ratelimited(dev,
++				     "cfg80211: scan_dwell_ms=%u out of range (20..200) - using the vendor default\n",
++				     d);
++		return 0;
++	}
++	return (u16)d;
++}
++
+ /* Provider lookup with the capability bits the caller needs.  Returns NULL
+  * (and explains once per call site via ratelimited dmesg) when the provider is
+  * absent or does not implement the message - the caller then returns
+@@ -104,6 +154,7 @@
+ static void hi5622_scan_report_result(struct hi5622_cfg80211 *c,
+ 				      const struct hi5622_scan_result *r)
+ {
++	struct device *dev = wiphy_dev(c->wiphy);
+ 	struct ieee80211_channel *chan;
+ 	enum cfg80211_bss_frame_type ftype;
+ 	struct cfg80211_bss *bss;
+@@ -111,6 +162,9 @@
+ 	chan = hi5622_scan_chan(c->wiphy, r->freq);
+ 	if (!chan) {
+ 		hi5622_scan_note_inform_failure(&c->scan.model);
++		dev_warn_ratelimited(dev,
++				     "cfg80211: decoded BSS %pM on %u MHz but this wiphy has no such channel - not reported (inform_failure)\n",
++				     r->bssid, r->freq);
+ 		return;
+ 	}
+ 	switch (r->frame_type) {
+@@ -124,13 +178,40 @@
+ 		ftype = CFG80211_BSS_FTYPE_UNKNOWN;
+ 		break;
+ 	}
++	/* cfg80211_inform_bss() takes the *additional IEs* (starting with the
++	 * SSID element) plus the fixed fields; cfg80211 parses SSID/DS/HT/VHT
++	 * itself and builds the scan-list entry.  The IE chain forwarded here is
++	 * the decoder-validated one, so a malformed tail can never reach it. */
+ 	bss = cfg80211_inform_bss(c->wiphy, chan, ftype, r->bssid, r->tsf,
+ 				  r->capability, r->beacon_interval, r->ie,
+ 				  r->ie_len, r->signal_mbm, GFP_KERNEL);
+-	if (!bss)
++	if (!bss) {
+ 		hi5622_scan_note_inform_failure(&c->scan.model);
+-	else
+-		cfg80211_put_bss(c->wiphy, bss);
++		dev_warn_ratelimited(dev,
++				     "cfg80211: cfg80211_inform_bss() refused BSS %pM '%*.s' (%u MHz, %u/%u IE bytes)\n",
++				     r->bssid, (int)r->ssid_len, r->ssid, r->freq,
++				     r->ie_count, r->ie_len);
++		return;
++	}
++	cfg80211_put_bss(c->wiphy, bss);
++	/* One line per decoded BSS: the bench evidence that gate "M4 scan lists
++	 * BSS entries" asserts on (SSID and channel/DS/HT come from the IE chain
++	 * that was just handed to cfg80211). */
++	dev_info_ratelimited(dev,
++			     "cfg80211: BSS %pM '%.*s' %u MHz (DS ch %u) %s cap=0x%04x ess=%u priv=%u bcn=%u TU ie=%u/%u ht_cap=%u ht_op=%u rsn=%u wmm=%u tsf=%llu signal=%d mBm\n",
++			     r->bssid, (int)r->ssid_len, r->ssid,
++			     r->freq, r->ds_chan,
++			     r->frame_type == HI5622_SCAN_FTYPE_PRESP ?
++					"probe-resp" : "beacon",
++			     r->capability,
++			     !!(r->cap_flags & HI5622_SCAN_CAP_ESS),
++			     !!(r->cap_flags & HI5622_SCAN_CAP_PRIVACY),
++			     r->beacon_interval, r->ie_count, r->ie_len,
++			     !!(r->ie_flags & HI5622_SCAN_IE_HT_CAP),
++			     !!(r->ie_flags & HI5622_SCAN_IE_HT_OP),
++			     !!(r->ie_flags & HI5622_SCAN_IE_RSN),
++			     !!(r->ie_flags & HI5622_SCAN_IE_WMM),
++			     (unsigned long long)r->tsf, r->signal_mbm);
+ }
+ 
+ /* =====================================================================
+@@ -183,12 +264,18 @@
+ 		};
+ 
+ 		dev_info(wiphy_dev(c->wiphy),
+-			 "cfg80211: scan DONE (%s, results=%u bss=%u complete=%u channel=%u sta=%u unknown=%u dropped_busy=%d timeout=%u) - reporting cfg80211_scan_done(aborted=%u)\n",
+-			 hi5622_scan_step_name(step), s->model.results,
++			 "cfg80211: scan DONE (%s[%s], results=%u bss=%u complete=%u channel=%u chans=%u/%u sta=%u unknown=%u dropped_busy=%d parse=%u invalid=%u inform_fail=%u timeout=%u) - reporting cfg80211_scan_done(aborted=%u)\n",
++			 hi5622_scan_step_name(step),
++			 s->model.finish_reason[0] ? s->model.finish_reason : "-",
++			 s->model.results,
+ 			 s->model.bss_events, s->model.complete_events,
+-			 s->model.channel_events, s->model.sta_events,
++			 s->model.channel_events,
++			 s->model.chan_seen, s->model.chan_total,
++			 s->model.sta_events,
+ 			 s->model.unknown_events,
+-			 atomic_read(&s->dropped_busy), s->model.timeouts,
++			 atomic_read(&s->dropped_busy), s->model.parse_errors,
++			 s->model.invalid_results, s->model.inform_failures,
++			 s->model.timeouts,
+ 			 info.aborted ? 1u : 0u);
+ 		cfg80211_scan_done(req, &info);
+ 	}
+@@ -209,7 +296,7 @@
+ 	mutex_init(&s->lock);
+ 	INIT_DELAYED_WORK(&s->work, hi5622_scan_work);
+ 	atomic_set(&s->dropped_busy, 0);
+-	s->scan_timeout_ms = HI5622_SCAN_TIMEOUT_MS;
++	s->scan_timeout_ms = hi5622_scan_timeout_auto(13);	/* auto, 13 ch */
+ 	hi5622_scan_model_init(&s->model);
+ 	s->initialized = true;
+ 	/* Idempotent global registration of the task-110 wifi-vap-scan builders
+@@ -243,6 +330,9 @@
+ 	if (s->model.phase == HI5622_SCAN_ACTIVE && !s->posting) {
+ 		req = s->request;
+ 		s->request = NULL;
++		/* Driver teardown, not a firmware failure or a bounded timeout:
++		 * report the finish reason as abort-request. */
++		s->model.abort_requested = true;
+ 		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
+ 		hi5622_scan_model_clear(&s->model);
+ 	}
+@@ -339,17 +429,21 @@
+ 	}
+ 	case HI5622_SCAN_EV_CHANNEL: {
+ 		struct hi5622_scan_channel ch = {};
++		u16 freq = 0;
+ 
+-		/* g1 id17 per-channel result (fully decoded by task-118): log the
+-		 * slot/channel/frequency, keep the event counted in the model. */
++		/* g1 id17 per-channel result (fully decoded by task-118): record the
++		 * scanned channel in the model so "all requested channels reported"
++		 * can close the scan without a firmware completion event. */
+ 		if (ops && ops->parse_scan_channel &&
+-		    !ops->parse_scan_channel(payload, avail, &ch))
++		    !ops->parse_scan_channel(payload, avail, &ch)) {
++			freq = ch.freq;
+ 			dev_info_ratelimited(&ctx->pdev->dev,
+ 					     "cfg80211: scan channel result slot=%u ch=%u (%u MHz%s)\n",
+ 					     ch.slot, ch.chan_num, ch.freq,
+ 					     ch.is_5g ? ", 5GHz" : "");
+-		step = hi5622_scan_model_event(&s->model, cls,
+-					       hi5622_scan_now());
++		}
++		step = hi5622_scan_model_channel(&s->model, freq,
++						 hi5622_scan_now());
+ 		break;
+ 	}
+ 	case HI5622_SCAN_EV_STA_RSP: {
+@@ -440,7 +534,7 @@
+ 	struct device *dev = wiphy_dev(wiphy);
+ 	u8 *wire = NULL;
+ 	size_t len = 0;
+-	u32 i;
++	u32 i, tmo;
+ 	int rc;
+ 
+ 	if (!s || !s->initialized)
+@@ -471,6 +565,7 @@
+ 	p->iftype = (u8)request->wdev->iftype;
+ 	p->band = c->band;
+ 	p->flags = request->flags;
++	p->dwell_ms = hi5622_scan_pick_dwell(dev);
+ 	p->n_ssids = (u32)request->n_ssids;
+ 	for (i = 0; i < p->n_ssids; i++) {
+ 		const struct cfg80211_ssid *ssid = &request->ssids[i];
+@@ -523,15 +618,28 @@
+ 		goto out;
+ 	}
+ 
++	tmo = hi5622_scan_pick_timeout(request);
+ 	mutex_lock(&s->lock);
+-	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(),
+-				     s->scan_timeout_ms);
++	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(), tmo);
+ 	if (rc) {
+ 		mutex_unlock(&s->lock);
+ 		dev_warn(dev, "cfg80211: scan refused by the model (%d) - a scan is already in flight or not cleared\n",
+ 			 rc);
+ 		goto out;
+ 	}
++	/* Channel plan for the host-side completion rule.  It mirrors the
++	 * request that was just built; it never changes the wire bytes. */
++	rc = hi5622_scan_model_set_channels(&s->model, p->freq, p->n_channels);
++	if (rc) {
++		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
++		hi5622_scan_model_clear(&s->model);
++		mutex_unlock(&s->lock);
++		dev_warn(dev,
++			 "cfg80211: scan channel plan rejected (%d) - request not posted\n",
++			 rc);
++		goto out;
++	}
++	s->scan_timeout_ms = tmo;
+ 	s->request = request;
+ 	s->posting = true;
+ 	mutex_unlock(&s->lock);
+@@ -553,9 +661,10 @@
+ 	}
+ 	mutex_unlock(&s->lock);
+ 	dev_info(dev,
+-		 "cfg80211: scan request posted by provider '%s' (%u ssids, %u channels, %u IE bytes, total %zu B); waiting for g1 15/16/17 or g2 2, timeout %u ms\n",
+-		 ops->name, p->n_ssids, p->n_channels, p->ie_len, len,
+-		 s->scan_timeout_ms);
++		 "cfg80211: scan request posted by provider '%s' (%u ssids, %u channels, %u IE bytes, dwell %u ms, total %zu B); waiting for g1 15/16/17 or g2 2, timeout %u ms (%s), host completion on all-channel coverage\n",
++		 ops->name, p->n_ssids, p->n_channels, p->ie_len,
++		 p->dwell_ms ? p->dwell_ms : 60u, len, s->scan_timeout_ms,
++		 hi5622_scan_timeout_ms ? "manual" : "auto");
+ 	schedule_delayed_work(&s->work, msecs_to_jiffies(HI5622_SCAN_POLL_MS));
+ out:
+ 	kfree(p);
+@@ -917,9 +1026,11 @@
+ 	if (ret < 0)
+ 		caps[0] = '\0';
+ 	n = scnprintf(buf, len,
+-		      "scan layer: initialized=%d provider=%s caps=%s user_id=%u timeout_ms=%u dropped_busy=%d\n",
++		      "scan layer: initialized=%d provider=%s caps=%s user_id=%u timeout_ms=%u (%s) dwell_ms=%u dropped_busy=%d\n",
+ 		      s->initialized ? 1 : 0, ops ? ops->name : "-", caps,
+ 		      s->user_id, s->scan_timeout_ms,
++		      hi5622_scan_timeout_ms ? "manual" : "auto",
++		      hi5622_scan_dwell_ms ? hi5622_scan_dwell_ms : 60u,
+ 		      atomic_read(&s->dropped_busy));
+ 	pos += (size_t)n;
+ 	if (pos >= len)
+diff -ruN a/src/hi5622_scan_d2h.c b/src/hi5622_scan_d2h.c
+--- a/src/hi5622_scan_d2h.c	2026-11-24 16:34:22.973784036 +0700
++++ b/src/hi5622_scan_d2h.c	2026-11-24 16:36:07.676444478 +0700
+@@ -143,6 +143,13 @@
+ 	bool	chan_5g;
+ 	u16	ie_len;			/* bytes copied to out->ie */
+ 	bool	overrun;		/* an IE was truncated */
++	/* derived facts (scan-complete lane) */
++	u8	ds_chan;		/* channel from IE 3 / IE 61 */
++	u8	ie_count;
++	u8	ie_flags;
++	u16	ht_cap_info;
++	u8	ht_op_primary;
++	u8	ht_op_sec_off;
+ };
+ 
+ static void walk_ies(const u8 *ies, u32 ielen, struct ie_walk *w)
+@@ -167,15 +174,40 @@
+ 			w->have_chan = true;
+ 			w->chan = ies[off + 2];
+ 			w->chan_5g = false;
+-		} else if (id == 61u && tl >= 2u) {	/* HT operation, primary [I] */
++			w->ds_chan = ies[off + 2];
++		} else if (id == 45u && tl == 26u) {	/* HT capabilities */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_HT_CAP;
++			w->ht_cap_info = rd16(ies + off + 2);
++		} else if (id == 61u && tl >= 22u) {	/* HT operation */
+ 			u8 ch = ies[off + 2];
+ 
++			w->ie_flags |= HI5622_SCAN_D2H_IE_HT_OP;
++			w->ht_op_primary = ch;
++			/* HT operation element byte 1 low 2 bits: secondary channel
++			 * offset (0 none, 1 above, 3 below). */
++			w->ht_op_sec_off = (u8)(ies[off + 3] & 0x3u);
+ 			if (!w->have_chan || w->chan == 0) {
+ 				w->have_chan = true;
+ 				w->chan = ch;
+ 				w->chan_5g = (ch > 14u);
+ 			}
++		} else if (id == 191u && tl >= 12u) {	/* VHT capabilities */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_VHT_CAP;
++		} else if (id == 192u && tl >= 5u) {	/* VHT operation */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_VHT_OP;
++		} else if (id == 48u && tl >= 2u) {	/* RSN */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_RSN;
++		} else if (id == 7u && tl >= 3u) {	/* Country */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_COUNTRY;
++		} else if (id == 127u) {		/* Extended capabilities */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_EXT_CAP;
++		} else if (id == 221u && tl >= 4u &&
++			   ies[off + 2] == 0x00u && ies[off + 3] == 0x50u &&
++			   ies[off + 4] == 0xf2u && ies[off + 5] == 0x02u) {
++			/* WMM/WME information element (vendor IE 00:50:f2 type 2) */
++			w->ie_flags |= HI5622_SCAN_D2H_IE_WMM;
+ 		}
++		w->ie_count++;
+ 		off += need;
+ 	}
+ 	w->ie_len = (u16)(off > HI5622_SCAN_D2H_IE_MAX ?
+@@ -255,6 +287,21 @@
+ 	out->beacon_interval = rd16(frame + HI5622_SCAN_D2H_MGMT_HDR + 8);
+ 	out->capability = rd16(frame + HI5622_SCAN_D2H_MGMT_HDR + 10);
+ 
++	/* derived facts from the validated IE walk (scan-complete lane) */
++	out->ds_chan = w.ds_chan;
++	out->ie_count = w.ie_count;
++	out->ie_flags = w.ie_flags;
++	out->ht_cap_info = w.ht_cap_info;
++	out->ht_op_primary = w.ht_op_primary;
++	out->ht_op_sec_off = w.ht_op_sec_off;
++	out->cap_flags = 0;
++	if (out->capability & 0x0001u)
++		out->cap_flags |= HI5622_SCAN_D2H_CAP_ESS;
++	if (out->capability & 0x0002u)
++		out->cap_flags |= HI5622_SCAN_D2H_CAP_IBSS;
++	if (out->capability & 0x0010u)
++		out->cap_flags |= HI5622_SCAN_D2H_CAP_PRIVACY;
++
+ 	/* SSID */
+ 	{
+ 		u32 off = 0;
+diff -ruN a/src/hi5622_scan_d2h.h b/src/hi5622_scan_d2h.h
+--- a/src/hi5622_scan_d2h.h	2026-11-24 16:34:22.975472254 +0700
++++ b/src/hi5622_scan_d2h.h	2026-11-24 16:41:09.749646892 +0700
+@@ -30,6 +30,13 @@
+  * defensive 12-byte-prefix variant is probed last.  Every read is bounded and
+  * every field is copied with an explicit length.
+  *
++ * The IE walk also produces the derived facts a cfg80211 BSS entry is built
++ * from (scan-complete lane, task-123): SSID, DS/HT-operating channel, the
++ * capability ESS/IBSS/privacy bits, and the presence of the HT cap / HT op /
++ * VHT cap / VHT op / RSN / WMM / country / extended-capabilities elements,
++ * plus the HT capabilities info field.  The raw IE chain is forwarded
++ * verbatim; cfg80211 parses it and owns the actual entry.
++ *
+  * CONFIDENCE MARKERS (project convention)
+  *   [V]  verified from a named artifact/decode (see REPORT.md)
+  *   [I]  inference / unvalidated on the bench
+@@ -100,6 +107,28 @@
+ #define HI5622_SCAN_D2H_SSID_MAX	32u
+ #define HI5622_SCAN_D2H_IE_MAX		512u
+ 
++/* Derived IEEE 802.11 capability/IE facts (scan-complete lane, task-123).
++ * Bit positions are shared with the cfg80211-facing
++ * hi5622_scan_result.cap_flags/ie_flags (hi5622_frames_api.h); they are
++ * duplicated here so this decoder stays a standalone portable unit.  The
++ * presence bits are what the per-BSS dmesg evidence line and the bench
++ * decision table assert on; the raw IE chain is still forwarded verbatim. */
++#define HI5622_SCAN_D2H_CAP_ESS		(1u << 0)	/* capability bit 0 */
++#define HI5622_SCAN_D2H_CAP_IBSS	(1u << 1)	/* capability bit 1 */
++#define HI5622_SCAN_D2H_CAP_PRIVACY	(1u << 2)	/* capability bit 4 */
++#define HI5622_SCAN_D2H_IE_HT_CAP	(1u << 0)	/* IE 45, len 26 */
++#define HI5622_SCAN_D2H_IE_HT_OP	(1u << 1)	/* IE 61, len 22 */
++#define HI5622_SCAN_D2H_IE_VHT_CAP	(1u << 2)	/* IE 191 */
++#define HI5622_SCAN_D2H_IE_VHT_OP	(1u << 3)	/* IE 192 */
++#define HI5622_SCAN_D2H_IE_RSN		(1u << 4)	/* IE 48 */
++#define HI5622_SCAN_D2H_IE_WMM		(1u << 5)	/* IE 221 00:50:f2 type 2 */
++#define HI5622_SCAN_D2H_IE_EXT_CAP	(1u << 6)	/* IE 127 */
++#define HI5622_SCAN_D2H_IE_COUNTRY	(1u << 7)	/* IE 7 */
++/* HT operation secondary-channel offset values (IEEE 802.11 9.4.2.22). */
++#define HI5622_SCAN_D2H_HT_SEC_NONE	0u
++#define HI5622_SCAN_D2H_HT_SEC_ABOVE	1u
++#define HI5622_SCAN_D2H_HT_SEC_BELOW	3u
++
+ /* ===================================================================
+  * 2. Decoded BSS event (g1 id15) -> cfg80211 BSS data
+  * =================================================================== */
+@@ -146,6 +175,16 @@
+ 	bool	is_5g;
+ 	u16	freq;			/* MHz, 0 = unusable */
+ 
++	/* derived IE facts (scan-complete lane): what the cfg80211 BSS entry was
++	 * built from, without re-parsing the IE chain in the log path */
++	u8	ds_chan;		/* DS parameter-set channel (IE 3), 0 = absent */
++	u8	ie_count;		/* IEs walked in the validated chain */
++	u8	cap_flags;		/* HI5622_SCAN_D2H_CAP_* */
++	u8	ie_flags;		/* HI5622_SCAN_D2H_IE_* */
++	u16	ht_cap_info;		/* HT capabilities info field (IE 45) */
++	u8	ht_op_primary;		/* HT operation primary channel (IE 61) */
++	u8	ht_op_sec_off;		/* HT operation secondary offset */
++
+ 	/* signal: 0 unless opts->trust_trailer_signal and trailer present */
+ 	s32	signal_mbm;
+ 	bool	signal_from_trailer;
+diff -ruN a/src/hi5622_scan_logic.c b/src/hi5622_scan_logic.c
+--- a/src/hi5622_scan_logic.c	2026-11-24 16:34:26.122229634 +0700
++++ b/src/hi5622_scan_logic.c	2026-11-24 16:39:27.430092034 +0700
+@@ -133,6 +133,11 @@
+ 		return -EINVAL;
+ 	if (p->band > 1u)
+ 		return -EINVAL;
++	/* dwell 0 = provider/vendor default (60); otherwise stay inside the
++	 * vendor's decoded 20/40/60 family so a bench sweep cannot put an
++	 * unvalidated value on the wire. */
++	if (p->dwell_ms && (p->dwell_ms < 20u || p->dwell_ms > 200u))
++		return -EINVAL;
+ 	if (p->n_ssids > HI5622_FRAME_MAX_SSIDS)
+ 		return -EINVAL;
+ 	if (p->n_channels > HI5622_FRAME_MAX_CHANNELS)
+@@ -279,16 +284,64 @@
+ 	m->phase = HI5622_SCAN_ACTIVE;
+ 	m->abort_requested = false;
+ 	m->complete_seen = false;
++	m->complete_failed = false;
+ 	m->finish_reported = false;
+ 	m->complete_reason = 0;
+ 	m->started_ms = now_ms;
+ 	m->timeout_ms = timeout_ms ? timeout_ms : HI5622_SCAN_TIMEOUT_MS;
+ 	m->deadline_ms = now_ms + m->timeout_ms;
++	m->chan_total = 0;
++	m->chan_seen_mask = 0;
++	m->chan_seen = 0;
++	m->last_chan_ms = 0;
++	m->coverage_ms = 0;
++	m->finish_reason[0] = '\0';
+ 	m->starts++;
+ 	m->last_error[0] = '\0';
+ 	return 0;
+ }
+ 
++u32 hi5622_scan_timeout_auto(u32 n_channels)
++{
++	u64 t;
++
++	if (!n_channels)
++		n_channels = 13u;	/* the bench band: 2.4 GHz channels 1..13 */
++	t = (u64)HI5622_SCAN_TIMEOUT_BASE_MS +
++	    (u64)n_channels * HI5622_SCAN_TIMEOUT_PER_CHAN_MS;
++	if (t > HI5622_SCAN_TIMEOUT_MAX_MS)
++		t = HI5622_SCAN_TIMEOUT_MAX_MS;
++	return (u32)t;
++}
++
++int hi5622_scan_model_set_channels(struct hi5622_scan_model *m,
++				   const u16 *freqs, u32 n)
++{
++	u32 i;
++
++	if (!m)
++		return -EINVAL;
++	if (n > HI5622_SCAN_MAX_CHANNELS)
++		return -EINVAL;
++	if (n && !freqs)
++		return -EINVAL;
++	if (m->phase != HI5622_SCAN_ACTIVE)
++		return -EINVAL;
++	/* validate the whole plan before touching state: a rejected plan must
++	 * not silently drop the one already set for the active scan */
++	for (i = 0; i < n; i++)
++		if (!freqs[i])
++			return -EINVAL;
++	m->chan_total = 0;
++	m->chan_seen = 0;
++	m->chan_seen_mask = 0;
++	m->coverage_ms = 0;
++	for (i = 0; i < n; i++)
++		m->chan_freq[i] = freqs[i];
++	m->chan_total = n;
++	return 0;
++}
++
+ int hi5622_scan_model_abort(struct hi5622_scan_model *m)
+ {
+ 	if (!m)
+@@ -308,14 +361,31 @@
+ 	if (m->phase != HI5622_SCAN_ACTIVE)
+ 		return;
+ 	m->phase = HI5622_SCAN_FINISHED;
++	m->finish_reason[0] = '\0';
+ 	if (step == HI5622_SCAN_FINISH_OK) {
+ 		m->finishes_ok++;
++		if (m->complete_seen)
++			snprintf(m->finish_reason, sizeof(m->finish_reason),
++				 "complete-event");
++		else {
++			m->coverage_completes++;
++			snprintf(m->finish_reason, sizeof(m->finish_reason),
++				 "channel-coverage");
++		}
+ 	} else {
+ 		m->finishes_abort++;
+-		if (m->abort_requested)
++		if (m->abort_requested) {
+ 			m->aborts_requested++;
+-		if (!m->complete_seen)
++			snprintf(m->finish_reason, sizeof(m->finish_reason),
++				 "abort-request");
++		} else if (m->complete_seen) {
++			snprintf(m->finish_reason, sizeof(m->finish_reason),
++				 "complete-failed");
++		} else {
+ 			m->timeouts++;
++			snprintf(m->finish_reason, sizeof(m->finish_reason),
++				 "host-timeout");
++		}
+ 	}
+ }
+ 
+@@ -418,9 +488,21 @@
+ 		return HI5622_SCAN_WAIT;
+ 	if (m->abort_requested)
+ 		return HI5622_SCAN_FINISH_ABORT;
++	/* An explicit firmware completion wins over every host-side heuristic:
++	 * it is the only event that can report a firmware-side failure. */
+ 	if (m->complete_seen)
+ 		return m->complete_failed ? HI5622_SCAN_FINISH_ABORT :
+ 					    HI5622_SCAN_FINISH_OK;
++	/* Host-side completion: every requested channel was reported as scanned
++	 * (g1 id17).  Wait a short settle window so BSS results that the firmware
++	 * emits just after the last channel report are still collected, then
++	 * finish successfully - without this the firmware's missing/unreached
++	 * completion event would always turn a full 13-channel scan into
++	 * scan_done(aborted=1). */
++	if (m->chan_total && m->chan_seen >= m->chan_total &&
++	    m->coverage_ms &&
++	    now_ms - m->coverage_ms >= HI5622_SCAN_SETTLE_MS)
++		return HI5622_SCAN_FINISH_OK;
+ 	/* Wrap-safe comparison: both values come from the same monotonic ms
+ 	 * clock and a scan lives far below 2^32 ms. */
+ 	if (now_ms >= m->deadline_ms)
+@@ -428,6 +510,40 @@
+ 	return HI5622_SCAN_WAIT;
+ }
+ 
++enum hi5622_scan_step hi5622_scan_model_channel(struct hi5622_scan_model *m,
++						u16 freq, u64 now_ms)
++{
++	u32 i;
++
++	if (!m)
++		return HI5622_SCAN_WAIT;
++	if (m->phase != HI5622_SCAN_ACTIVE) {
++		m->events_when_idle++;
++		return HI5622_SCAN_WAIT;
++	}
++	if (m->abort_requested)
++		return HI5622_SCAN_FINISH_ABORT;
++	m->channel_events++;
++	m->last_chan_ms = now_ms;
++	if (!freq)
++		return HI5622_SCAN_WAIT;	/* event counted, channel not derivable */
++	for (i = 0; i < m->chan_total; i++) {
++		u64 bit;
++
++		if (m->chan_freq[i] != freq)
++			continue;
++		bit = 1ull << i;
++		if (!(m->chan_seen_mask & bit)) {
++			m->chan_seen_mask |= bit;
++			m->chan_seen++;
++			if (m->chan_seen == m->chan_total && !m->coverage_ms)
++				m->coverage_ms = now_ms;
++		}
++		break;
++	}
++	return HI5622_SCAN_WAIT;
++}
++
+ void hi5622_scan_note_dropped_busy(struct hi5622_scan_model *m)
+ {
+ 	if (m)
+@@ -469,17 +585,22 @@
+ 	if (!m || !buf || !len)
+ 		return -EINVAL;
+ 	n = snprintf(buf, len,
+-		     "scan: phase=%s results=%u/%u bss=%u complete=%u channel=%u sta=%u unknown=%u idle_ev=%u overflow=%u\n"
+-		     "scan completions: reason=0x%02x failed=%u ; errors: dropped_busy=%u parse=%u invalid=%u inform=%u timeouts=%u aborts=%u last=%s\n",
++		     "scan: phase=%s results=%u/%u bss=%u complete=%u channel=%u chans=%u/%u sta=%u unknown=%u idle_ev=%u overflow=%u\n"
++		     "scan completions: reason=0x%02x failed=%u ; errors: dropped_busy=%u parse=%u invalid=%u inform=%u timeouts=%u aborts=%u last=%s\n"
++		     "scan finish: last=%s ok=%u abort=%u coverage_ok=%u timeout_ms=%u\n",
+ 		     hi5622_scan_phase_name(m->phase),
+ 		     m->results, HI5622_SCAN_MAX_RESULTS,
+ 		     m->bss_events, m->complete_events, m->channel_events,
++		     m->chan_seen, m->chan_total,
+ 		     m->sta_events, m->unknown_events, m->events_when_idle,
+ 		     m->result_overflow, m->complete_reason,
+ 		     m->complete_failures, m->dropped_busy, m->parse_errors,
+ 		     m->invalid_results, m->inform_failures, m->timeouts,
+ 		     m->finishes_abort,
+-		     m->last_error[0] ? m->last_error : "-");
++		     m->last_error[0] ? m->last_error : "-",
++		     m->finish_reason[0] ? m->finish_reason : "-",
++		     m->finishes_ok, m->finishes_abort, m->coverage_completes,
++		     m->timeout_ms);
+ 	if (n < 0)
+ 		return n;
+ 	return (int)((size_t)n < len ? (size_t)n : len - 1);
+diff -ruN a/src/hi5622_scan_logic.h b/src/hi5622_scan_logic.h
+--- a/src/hi5622_scan_logic.h	2026-11-24 16:34:22.980682891 +0700
++++ b/src/hi5622_scan_logic.h	2026-11-24 16:35:19.507890547 +0700
+@@ -29,10 +29,26 @@
+ 
+ /* Bounded scan: the firmware gets one request; a scan that produces no
+  * completion event within this window is reported ABORTED to cfg80211 so that
+- * iw/netifd never hang.  5 s is longer than a 13-channel 2.4 GHz active scan
+- * at the vendor's dwell time and shorter than the default cfg80211 caller
+- * patience / hostapd bring-up timeout. */
+-#define HI5622_SCAN_TIMEOUT_MS		5000u
++ * iw/netifd never hang.
++ *
++ * The 5 s bound of the wifi-scan-ap lane was measured too short on the bench
++ * (2026-11-26 14:00): the firmware returned g1 id17 channel results for 6 of
++ * the 13 requested channels within 5000 ms - a per-channel cost of ~830 ms -
++ * and the host reported finish-abort with complete=0.  The default is now
++ * sized from the requested channel count (auto mode, see
++ * hi5622_scan_timeout_auto()); the scan_timeout_ms module parameter
++ * overrides it, and 0 keeps the auto policy. */
++#define HI5622_SCAN_TIMEOUT_MS		5000u	/* legacy fixed value (kept) */
++#define HI5622_SCAN_TIMEOUT_BASE_MS	3000u
++#define HI5622_SCAN_TIMEOUT_PER_CHAN_MS	900u	/* measured ~830 + margin */
++#define HI5622_SCAN_TIMEOUT_MAX_MS	45000u
++/* After every requested channel has been reported, keep collecting late BSS
++ * events for this long before finishing the scan successfully (a firmware
++ * completion event, when it exists, wins immediately). */
++#define HI5622_SCAN_SETTLE_MS		500u
++/* Channel bookkeeping bound (a single-band request: 13 / 19 channels; the
++ * builder allows 42).  Not part of the wire format. */
++#define HI5622_SCAN_MAX_CHANNELS	32u
+ /* Work-queue re-check period while a scan is in flight. */
+ #define HI5622_SCAN_POLL_MS		100u
+ /* Refuse unbounded accumulation (a runaway firmware must not grow state). */
+@@ -102,6 +118,18 @@
+ 	u32			inform_failures;
+ 	u8			complete_reason;
+ 	char			last_error[64];
++	/* scan-complete lane (2026-11-26): per-channel progress.  A firmware scan
++	 * reports the channels it scanned as g1 id17 events; once every requested
++	 * channel has been reported the scan is logically complete even if the
++	 * firmware completion event (g1 id16 / g2 id2) never arrives. */
++	u16			chan_freq[HI5622_SCAN_MAX_CHANNELS];
++	u32			chan_total;
++	u64			chan_seen_mask;
++	u32			chan_seen;
++	u64			last_chan_ms;
++	u64			coverage_ms;	/* all requested channels seen at */
++	u32			coverage_completes;	/* finishes_ok via channel coverage */
++	char			finish_reason[24];	/* event / coverage / timeout / ... */
+ };
+ 
+ void hi5622_scan_model_init(struct hi5622_scan_model *m);
+@@ -123,6 +151,27 @@
+ 
+ bool hi5622_scan_model_active(const struct hi5622_scan_model *m);
+ 
++/* Auto scan window for a request: BASE + n_channels * PER_CHAN, clamped to
++ * MAX.  n_channels == 0 (unknown) is treated as a 13-channel 2.4 GHz scan
++ * (the bench band).  Pure function; host-tested. */
++u32 hi5622_scan_timeout_auto(u32 n_channels);
++
++/* Record the requested channel/frequency set of the active scan (called by the
++ * kernel layer right after hi5622_scan_model_start(), under the same lock).
++ * Storing the plan is what turns "some channel events arrived" into the
++ * well-defined completion rule "every requested channel was reported".
++ * Returns 0, -EINVAL when n > HI5622_SCAN_MAX_CHANNELS, -EINVAL for a NULL/
++ * zero freq entry.  Never changes the wire request. */
++int hi5622_scan_model_set_channels(struct hi5622_scan_model *m,
++				   const u16 *freqs, u32 n);
++
++/* Apply one g1 id17 per-channel report (freq = 0 when the decoder could not
++ * derive the frequency: it still counts as a channel event).  Returns
++ * HI5622_SCAN_WAIT or HI5622_SCAN_FINISH_ABORT on an abort request; the
++ * success decision is the bounded tick's job (coverage + settle window). */
++enum hi5622_scan_step hi5622_scan_model_channel(struct hi5622_scan_model *m,
++						u16 freq, u64 now_ms);
++
+ /* Classify one device->host frame.  Pure function; never touches state. */
+ enum hi5622_scan_event_class hi5622_scan_classify(u8 group, u16 id);
+ 
+diff -ruN a/src/hi5622_vapscan_map.c b/src/hi5622_vapscan_map.c
+--- a/src/hi5622_vapscan_map.c	2026-11-24 16:34:22.983177643 +0700
++++ b/src/hi5622_vapscan_map.c	2026-11-24 16:36:25.349293910 +0700
+@@ -97,6 +97,10 @@
+ 		sp.ssids[i].len = p->ssid_len[i];
+ 		memcpy(sp.ssids[i].str, p->ssid[i], p->ssid_len[i]);
+ 	}
++	/* dwell override (scan-complete lane): 0 keeps the vendor default 60;
++	 * a bench sweep may set 20/40 to shorten the per-channel cost. */
++	if (p->dwell_ms)
++		sp.dwell_ms = p->dwell_ms;
+ 	sp.n_ssids = (u8)p->n_ssids;
+ 	sp.n_chans = (u8)p->n_channels;
+ 	for (i = 0; i < p->n_channels; i++) {
+@@ -178,19 +182,24 @@
+ /* ------------------------------------------------------------------ */
+ /* vendor-verified D2H decoders (wifi-scan-d2h lane, task-118)         */
+ /* ------------------------------------------------------------------ */
+-int hi5622_vapscan_decode_scan_result(const u8 *payload, u32 len,
+-				      struct hi5622_scan_result *out)
++int hi5622_vapscan_decode_scan_result_opts(const u8 *payload, u32 len,
++						   struct hi5622_scan_result *out,
++						   bool trust_trailer_signal)
+ {
+ 	struct hi5622_scan_d2h_bss b;
++	struct hi5622_scan_d2h_opts opts = {
++		.trust_trailer_signal	= trust_trailer_signal,
++		.require_exact_ie	= true,
++	};
+ 	int rc;
+ 
+ 	if (!out)
+ 		return -EINVAL;
+ 	/* Tolerant layout probe: 802.11 body + optional 20-byte trailer, plus
+ 	 * bare-frame and prefix variants; returns -EOPNOTSUPP instead of
+-	 * guessing.  Signal stays 0 (trailer RSSI is [U], opt-in only inside
+-	 * the decoder). */
+-	rc = hi5622_scan_d2h_parse_bss(payload, len, NULL, &b);
++	 * guessing.  Signal stays 0 unless the caller opts in (trailer RSSI is
++	 * [I]; bench correlation pending - scan-complete REPORT sec 4.4). */
++	rc = hi5622_scan_d2h_parse_bss(payload, len, &opts, &b);
+ 	if (rc)
+ 		return rc;
+ 	memset(out, 0, sizeof(*out));
+@@ -204,11 +213,22 @@
+ 	out->capability = b.capability;
+ 	out->beacon_interval = b.beacon_interval;
+ 	out->tsf = b.tsf;
++	out->ds_chan = b.ds_chan;
++	out->ie_count = b.ie_count;
++	out->cap_flags = b.cap_flags;
++	out->ie_flags = b.ie_flags;
++	out->ht_cap_info = b.ht_cap_info;
+ 	out->ie_len = b.ie_len;
+ 	memcpy(out->ie, b.ie, b.ie_len);
+ 	return 0;
+ }
+ 
++int hi5622_vapscan_decode_scan_result(const u8 *payload, u32 len,
++				      struct hi5622_scan_result *out)
++{
++	return hi5622_vapscan_decode_scan_result_opts(payload, len, out, false);
++}
++
+ int hi5622_vapscan_decode_scan_complete(const u8 *payload, u32 len,
+ 					struct hi5622_scan_complete *out)
+ {
+diff -ruN a/src/hi5622_vapscan_map.h b/src/hi5622_vapscan_map.h
+--- a/src/hi5622_vapscan_map.h	2026-11-24 16:34:22.984654227 +0700
++++ b/src/hi5622_vapscan_map.h	2026-11-24 16:41:09.748646896 +0700
+@@ -19,11 +19,13 @@
+  *
+  * Evidence: the frame layouts are the task-110 [V] vendor-derived specs; the
+  * derived fields this map adds are marked inline.  D2H g1 id15 carries an
+- * 802.11 beacon/probe-response frame followed by a ~20-byte descriptor whose
+- * exact layout is [U] (task-110 REPORT sec 6): the decoder strips 20 bytes,
++ * 802.11 beacon/probe-response frame followed by a 20-byte descriptor whose
++ * field semantics are [U] (task-118 REPORT): the decoder probes the layout,
+  * validates the 802.11 management frame, derives the channel from the DS/HT
+- * operation IE and reports signal 0 mBm (UNKNOWN placeholder) - it never
+- * guesses a firmware-specific footer field.
++ * operation IE, summarises the SSID/DS/HT/VHT/RSN/WMM elements for the
++ * cfg80211 evidence line, and reports signal 0 mBm unless a bench caller
++ * explicitly opts into the trailer heuristic - it never guesses a
++ * firmware-specific footer field.
+  */
+ #ifndef HI5622_VAPSCAN_MAP_H
+ #define HI5622_VAPSCAN_MAP_H
+@@ -54,6 +56,13 @@
+  * -EOPNOTSUPP instead of guessing. */
+ int hi5622_vapscan_decode_scan_result(const u8 *payload, u32 len,
+ 				      struct hi5622_scan_result *out);
++/* Same decoder with the trailer-RSSI opt-in.  The 20-byte descriptor's signed
++ * byte +5 is the vendor host's signal-like read [I]; it is NOT used unless
++ * trust_trailer_signal is set (bench correlation, scan-complete REPORT sec
++ * 4.4).  Default callers use the wrapper above (trust = false). */
++int hi5622_vapscan_decode_scan_result_opts(const u8 *payload, u32 len,
++						   struct hi5622_scan_result *out,
++						   bool trust_trailer_signal);
+ int hi5622_vapscan_decode_scan_complete(const u8 *payload, u32 len,
+ 					struct hi5622_scan_complete *out);
+ int hi5622_vapscan_decode_scan_channel(const u8 *payload, u32 len,
+diff -ruN a/src/hi5622_vapscan_provider.c b/src/hi5622_vapscan_provider.c
+--- a/src/hi5622_vapscan_provider.c	2026-11-24 16:34:26.122283374 +0700
++++ b/src/hi5622_vapscan_provider.c	2026-11-24 16:41:09.746646903 +0700
+@@ -10,9 +10,10 @@
+  * from src/hi5622_scan_d2h.{c,h}.  No vendor source, object code, firmware
+  * byte or secret is reproduced.
+  *
+- * Registered caps (0x1f):
++ * Registered caps (0x19f, wifi-vap-start task-117 + scan-complete task-123):
+  *   g0 id7 user_add, g0 id8 user_add_notify_alg, g0 id9 del_user,
+- *   g0 id0xC scan_req builders + SCAN_PARSE.
++ *   g0 id0xC scan_req builders + SCAN_PARSE, WAL g2 VAP add/start
++ *   (vap_start_mode 0 = WAL cfg events, 1 = g0 id1 keys 0x64/0x65).
+  * SCAN_PARSE is always advertised because the cfg80211 .scan op requires
+  * SCAN_REQ|SCAN_PARSE (0x3): a real handler that posts the 520-byte g0 id0xC
+  * frame needs both.  The D2H decoders are vendor-verified and fail closed
+@@ -43,6 +44,17 @@
+ static bool hi5622_vapscan_registered;
+ static struct hi5622_frame_ops hi5622_vapscan_ops;
+ 
++/* scan-complete lane (task-123): trailer-RSSI opt-in.  The g1 id15 20-byte
++ * trailing descriptor carries two signed bytes (+5/+6) that the vendor host
++ * copies into its BSS record; which one is the RSSI is [I] until bench
++ * correlation.  Default 0 keeps cfg80211 signal = 0 (never invent a
++ * measurement); a bench session may load the module with scan_trust_rssi=1
++ * and compare the reported mBm against a known AP.  Read-only after load. */
++unsigned int hi5622_scan_trust_rssi;
++module_param_named(scan_trust_rssi, hi5622_scan_trust_rssi, uint, 0444);
++MODULE_PARM_DESC(scan_trust_rssi,
++		 "report cfg80211 signal from g1 id15 trailer byte +5 (0=off default, [I])");
++
+ /* ------------------------------------------------------------------ */
+ /* provider callbacks (portable map -> task-110 builders)             */
+ /* ------------------------------------------------------------------ */
+@@ -130,8 +142,10 @@
+ 				     struct hi5622_scan_result *out)
+ {
+ 	/* wifi-scan-d2h (task-118) tolerant layout probe: 802.11 body plus
+-	 * optional 20-byte trailer; never a fake BSS, signal stays 0. */
+-	return hi5622_vapscan_decode_scan_result(payload, len, out);
++	 * optional 20-byte trailer; never a fake BSS.  Signal is the documented
++	 * 0 placeholder unless the bench opts into the trailer heuristic. */
++	return hi5622_vapscan_decode_scan_result_opts(payload, len, out,
++						      hi5622_scan_trust_rssi != 0u);
+ }
+ 
+ static int vapscan_parse_scan_complete(const u8 *payload, u32 len,
+diff -ruN a/tools/build.sh b/tools/build.sh
+--- a/tools/build.sh	2026-11-24 16:43:33.379576674 +0700
++++ b/tools/build.sh	2026-11-24 16:40:02.135925018 +0700
+@@ -2,10 +2,14 @@
+ # SPDX-License-Identifier: GPL-2.0
+ #
+ # tools/build.sh - canonical host+kernel build/verify driver for the
+-# wifi-scan-ap lane (shared task task-113).
++# wifi-scan-complete lane (shared task task-123), the wifi-scan-ap tree plus
++# the wifi-vap-start provider patch (caps 0x19f) plus the scan-complete
++# changes (auto scan window, channel-coverage completion, beacon IE summary).
+ #
+ #   1. host compile + run of the portable scan/AP/provider selftest
+ #      (strict -Werror -pedantic, device-free);
++#   1b. host compile + run of the scan-complete selftest (auto window,
++#      channel-coverage completion, 802.11 beacon/probe-response IE decode);
+ #   2. host regression: the inherited cfg80211 VAP/op-map selftest and the
+ #      inherited H2D protocol selftest (the working trees this lane extends);
+ #   3. out-of-tree kernel module build against the project 6.18.60 tree and
+@@ -20,7 +24,7 @@
+ 
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ SRC=$HERE/../src
+-WORK=/tmp/wifi-scan-ap-build
++WORK=/tmp/wifi-scan-complete-build
+ CC=cc
+ KDIR=/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+ STAGING_DIR=/home/shibbityshwab/openwrt-lab-upstream-target/staging_dir
+@@ -34,7 +38,7 @@
+ # The OpenWrt GCC wrapper requires STAGING_DIR in the environment.
+ export STAGING_DIR KDIR CROSS_COMPILE
+ 
+-LOG=/tmp/hi5622-wifi-scan-ap-build.log
++LOG=/tmp/hi5622-wifi-scan-complete-build.log
+ KO=$SRC/hi5622_wifi.ko
+ PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
+ 
+@@ -61,6 +65,16 @@
+ echo "built: $WORK/scan_logic_selftest ($(wc -c < "$WORK/scan_logic_selftest") bytes)"
+ 
+ echo
++echo "== 1b. host scan-complete selftest (auto window + channel coverage + IE decode) =="
++"$CC" $CCFLAGS -o "$WORK/scan_complete_selftest" \
++	"$HERE/scan_complete_selftest.c" "$SRC/hi5622_scan_logic.c" \
++	"$SRC/hi5622_scan_d2h.c" "$SRC/hi5622_vapscan_map.c" \
++	"$SRC/vapscan_frames.c" \
++	|| die "host scan-complete selftest compile failed"
++"$WORK/scan_complete_selftest" || die "host scan-complete selftest failed"
++echo "built: $WORK/scan_complete_selftest ($(wc -c < "$WORK/scan_complete_selftest") bytes)"
++
++echo
+ echo "== 2a. host inherited cfg80211 VAP/op-map regression =="
+ "$CC" $CCFLAGS -o "$WORK/cfg80211_logic_selftest" \
+ 	"$HERE/cfg80211_logic_selftest.c" "$SRC/hi5622_cfg80211_logic.c" \
+@@ -104,7 +118,9 @@
+ 	*cfg80211*) ;;
+ 	*) die "module does not depend on cfg80211 (depends='$DEPS')" ;;
+ esac
+-for P in allow_frames frame_gap_ms cfg80211_auto band_force h2d_send_budget; do
++for P in allow_frames frame_gap_ms cfg80211_auto band_force h2d_send_budget \
++	 vap_start_first vap_start_mode vap_start_module \
++	 scan_timeout_ms scan_dwell_ms scan_trust_rssi; do
+ 	modinfo -F parm "$KO" 2>/dev/null | grep -q "^$P:" || \
+ 		die "module parameter missing from the module: $P"
+ done
+@@ -123,4 +139,4 @@
+ fi
+ 
+ echo
+-echo "OK: host scan+inherited selftests + clean kernel build ($SIZE B, sha256 $SHA, depends=$DEPS)"
++echo "OK: host scan-complete+scan+inherited selftests + clean kernel build ($SIZE B, sha256 $SHA, depends=$DEPS)"
+diff -ruN a/tools/scan_complete_selftest.c b/tools/scan_complete_selftest.c
+--- a/tools/scan_complete_selftest.c	1970-01-01 07:00:00.000000000 +0700
++++ b/tools/scan_complete_selftest.c	2026-11-24 16:39:27.433092019 +0700
+@@ -0,0 +1,813 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * scan_complete_selftest.c - host-side (device-free, kernel-free) selftest for
++ * the scan-complete lane (shared task task-123): the auto scan window, the
++ * channel-coverage completion rule, and the beacon/probe-response IE decode
++ * into cfg80211 BSS fields.
++ *
++ * ORIGINAL clean-room code.  All frames below are synthetic: the test builds
++ * 802.11 beacon/probe-response bodies from the IEEE 802.11 element ids and the
++ * protocol facts derived in ../REPORT.md; no vendor byte is used.
++ *
++ * Build/run: tools/build.sh step 1b (host cc, -Werror).
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "hi5622_scan_logic.h"
++#include "hi5622_scan_d2h.h"
++#include "hi5622_vapscan_map.h"
++
++static int checks;
++static int failed;
++
++#define CHECK(cond, msg)						\
++	do {								\
++		checks++;						\
++		if (!(cond)) {						\
++			failed++;					\
++			printf("FAIL %s:%d: %s\n", __FILE__, __LINE__,	\
++			       (msg));					\
++		}							\
++	} while (0)
++
++#define CHECK_EQ(a, b, msg)						\
++	do {								\
++		long long _a = (long long)(a);				\
++		long long _b = (long long)(b);				\
++		checks++;						\
++		if (_a != _b) {						\
++			failed++;					\
++			printf("FAIL %s:%d: %s (%lld != %lld)\n",	\
++			       __FILE__, __LINE__, (msg), _a, _b);	\
++		}							\
++	} while (0)
++
++/* ==================================================================
++ * 1. synthetic 802.11 frame builder
++ * ================================================================== */
++static size_t put_u16(u8 *b, size_t o, u16 v)
++{
++	b[o] = (u8)(v & 0xffu);
++	b[o + 1] = (u8)(v >> 8);
++	return o + 2;
++}
++
++static size_t put_u64(u8 *b, size_t o, u64 v)
++{
++	o = put_u16(b, o, (u16)(v & 0xffffu));
++	o = put_u16(b, o, (u16)((v >> 16) & 0xffffu));
++	o = put_u16(b, o, (u16)((v >> 32) & 0xffffu));
++	return put_u16(b, o, (u16)((v >> 48) & 0xffffu));
++}
++
++static size_t add_ie(u8 *b, size_t o, u8 id, u8 len)
++{
++	b[o] = id;
++	b[o + 1] = len;
++	return o + 2;
++}
++
++/* SSID element; ssid == NULL builds the hidden-SSID element (length 0). */
++static size_t add_ssid(u8 *b, size_t o, const char *ssid)
++{
++	size_t n = ssid ? strlen(ssid) : 0;
++
++	o = add_ie(b, o, 0, (u8)n);
++	if (n)
++		memcpy(b + o, ssid, n);
++	return o + n;
++}
++
++/* DS parameter set (id 3). */
++static size_t add_ds(u8 *b, size_t o, u8 chan)
++{
++	o = add_ie(b, o, 3, 1);
++	b[o++] = chan;
++	return o;
++}
++
++/* HT capabilities (id 45, exact 26-byte body; only the info field is read). */
++static size_t add_ht_cap(u8 *b, size_t o, u16 info)
++{
++	size_t i;
++
++	o = add_ie(b, o, 45, 26);
++	o = put_u16(b, o, info);
++	for (i = 0; i < 24; i++)
++		b[o++] = 0;
++	return o;
++}
++
++/* HT operation (id 61, 22-byte body): primary channel, HT param with the
++ * secondary-channel offset in bits 0-1, then zero MCS/beamforming fields. */
++static size_t add_ht_op(u8 *b, size_t o, u8 primary, u8 sec_off)
++{
++	size_t i;
++
++	o = add_ie(b, o, 61, 22);
++	b[o++] = primary;
++	b[o++] = (u8)(sec_off & 0x3u);
++	for (i = 0; i < 20; i++)
++		b[o++] = 0;
++	return o;
++}
++
++/* Minimal RSN element (version 1 only): enough for IE presence detection. */
++static size_t add_rsn(u8 *b, size_t o)
++{
++	o = add_ie(b, o, 48, 2);
++	return put_u16(b, o, 1);
++}
++
++/* WMM/WME vendor element 221: OUI 00:50:f2, type 2, one OUI subtype byte. */
++static size_t add_wmm(u8 *b, size_t o)
++{
++	o = add_ie(b, o, 221, 4);
++	b[o++] = 0x00;
++	b[o++] = 0x50;
++	b[o++] = 0xf2;
++	b[o++] = 0x02;
++	return o;
++}
++
++static size_t add_country(u8 *b, size_t o)
++{
++	o = add_ie(b, o, 7, 3);
++	b[o++] = 'T';
++	b[o++] = 'H';
++	b[o++] = ' ';
++	return o;
++}
++
++static size_t add_ext_cap(u8 *b, size_t o)
++{
++	o = add_ie(b, o, 127, 1);
++	b[o++] = 0x00;
++	return o;
++}
++
++#define TEST_BSSID_OCTET 0x02u
++
++struct beacon_opts {
++	bool	presp;		/* probe response instead of beacon */
++	const char *ssid;	/* NULL = hidden (zero-length SSID element) */
++	u8	ds_chan;	/* 0 = omit the DS element */
++	bool	ht;		/* add HT cap + HT op */
++	u8	ht_op_primary;
++	u8	ht_sec_off;
++	bool	rsn;
++	bool	wmm;
++	bool	country;
++	bool	ext_cap;
++	bool	trailer;
++	u32	trailer_seed;
++};
++
++static size_t build_beacon(u8 *out, const struct beacon_opts *o)
++{
++	size_t n = 0;
++	size_t i;
++
++	memset(out, 0, 600);
++	out[n++] = o->presp ? 0x50u : 0x80u;	/* fc[0]: version0, mgmt */
++	out[n++] = 0x00u;			/* fc[1]: no flags */
++	out[n++] = 0x00u;			/* duration: 2 bytes */
++	out[n++] = 0x00u;
++	/* addr1 (DA) broadcast, addr2/addr3 the BSSID */
++	for (i = 0; i < 6; i++)
++		out[n++] = 0xffu;
++	for (i = 0; i < 6; i++)
++		out[n++] = TEST_BSSID_OCTET;
++	for (i = 0; i < 6; i++)
++		out[n++] = TEST_BSSID_OCTET;
++	n += 2;					/* sequence control */
++	n = put_u64(out, n, 0x1122334455667788ull);	/* timestamp */
++	n = put_u16(out, n, 100);			/* beacon interval */
++	n = put_u16(out, n, 0x0411u);			/* capability: ESS+priv */
++	n = add_ssid(out, n, o->ssid);
++	if (o->ds_chan)
++		n = add_ds(out, n, o->ds_chan);
++	if (o->ht) {
++		n = add_ht_cap(out, n, 0x0142u);
++		n = add_ht_op(out, n, o->ht_op_primary, o->ht_sec_off);
++	}
++	if (o->rsn)
++		n = add_rsn(out, n);
++	if (o->wmm)
++		n = add_wmm(out, n);
++	if (o->country)
++		n = add_country(out, n);
++	if (o->ext_cap)
++		n = add_ext_cap(out, n);
++	if (o->trailer) {
++		u32 k;
++
++		for (k = 0; k < HI5622_SCAN_D2H_TRAILER_LEN; k++)
++			out[n + k] = (u8)(k * 3u + 1u);
++		out[n + 5] = 0xc0u;	/* trailer +5: signed -64 [I] */
++		out[n + 6] = 0xdeu;
++		out[n + 0x11] = 4u;	/* phy mode: HT [V offset] */
++		n += HI5622_SCAN_D2H_TRAILER_LEN;
++	}
++	return n;
++}
++
++/* ==================================================================
++ * 2. auto scan window
++ * ================================================================== */
++static void test_timeout_auto(void)
++{
++	CHECK_EQ(hi5622_scan_timeout_auto(13),
++		 HI5622_SCAN_TIMEOUT_BASE_MS + 13u * HI5622_SCAN_TIMEOUT_PER_CHAN_MS,
++		 "13 channel auto window");
++	CHECK_EQ(hi5622_scan_timeout_auto(1),
++		 HI5622_SCAN_TIMEOUT_BASE_MS + HI5622_SCAN_TIMEOUT_PER_CHAN_MS,
++		 "1 channel auto window");
++	CHECK_EQ(hi5622_scan_timeout_auto(0), hi5622_scan_timeout_auto(13),
++		 "unknown channel count == 13-channel bench band");
++	CHECK_EQ(hi5622_scan_timeout_auto(32),
++		 HI5622_SCAN_TIMEOUT_BASE_MS + 32u * HI5622_SCAN_TIMEOUT_PER_CHAN_MS,
++		 "32 channel auto window");
++	CHECK(hi5622_scan_timeout_auto(42) <= HI5622_SCAN_TIMEOUT_MAX_MS,
++	      "auto window clamped to MAX");
++	CHECK(hi5622_scan_timeout_auto(13) > HI5622_SCAN_TIMEOUT_MS,
++	      "13-channel window exceeds the old 5 s bound");
++	CHECK(hi5622_scan_timeout_auto(13) >= 11000u,
++	      "13 channels at the measured ~830 ms/channel + margin");
++}
++
++/* ==================================================================
++ * 3. channel-coverage scan model
++ * ================================================================== */
++static void fill_13ch(u16 *freqs)
++{
++	u32 i;
++
++	for (i = 0; i < 13u; i++)
++		freqs[i] = (u16)(2412u + 5u * i);
++}
++
++static void test_coverage_completion(void)
++{
++	struct hi5622_scan_model m;
++	u16 freqs[13];
++	u64 t = 1000;
++	u32 i;
++
++	fill_13ch(freqs);
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, hi5622_scan_timeout_auto(13)), 0,
++		 "start 13-channel scan");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 13), 0,
++		 "set channel plan");
++	CHECK_EQ(m.chan_total, 13, "channel plan stored");
++	CHECK(hi5622_scan_model_active(&m), "model active");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 13), 0,
++		 "channel plan is idempotent");
++	/* feed the 13 channel results (out of order on purpose) */
++	{
++		static const u8 order[13] = { 6, 0, 12, 3, 9, 1, 11, 4, 8, 2,
++					      10, 5, 7 };
++
++		for (i = 0; i < 13u; i++) {
++			enum hi5622_scan_step step;
++
++			t += 830;
++			step = hi5622_scan_model_channel(&m,
++					freqs[order[i]], t);
++			CHECK_EQ(step, HI5622_SCAN_WAIT,
++				 "channel event does not finish the scan");
++			if (i < 12u)
++				CHECK(m.chan_seen < 13u,
++				      "coverage incomplete before the last channel");
++		}
++	}
++	CHECK_EQ(m.channel_events, 13, "13 channel events counted");
++	CHECK_EQ(m.chan_seen, 13, "13 distinct requested channels seen");
++	CHECK_EQ(m.coverage_ms, t, "coverage timestamp latched on the last one");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + HI5622_SCAN_SETTLE_MS - 1),
++		 HI5622_SCAN_WAIT, "settle window still open");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + HI5622_SCAN_SETTLE_MS),
++		 HI5622_SCAN_FINISH_OK, "all requested channels -> finish OK");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_OK);
++	CHECK_EQ(m.phase, HI5622_SCAN_FINISHED, "model finished");
++	CHECK_EQ(strcmp(m.finish_reason, "channel-coverage"), 0,
++		 "finish reason channel-coverage");
++	CHECK_EQ(m.coverage_completes, 1, "coverage finish counted");
++	CHECK_EQ(m.finishes_ok, 1, "one successful finish");
++	CHECK_EQ(m.timeouts, 0, "coverage completion is not a timeout");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 100000),
++		 HI5622_SCAN_WAIT, "no decision after finish");
++	hi5622_scan_model_clear(&m);
++	CHECK_EQ(m.phase, HI5622_SCAN_IDLE, "clear -> idle");
++	CHECK(hi5622_scan_model_active(&m) == false, "not active after clear");
++}
++
++static void test_coverage_duplicates_and_foreign(void)
++{
++	struct hi5622_scan_model m;
++	u16 freqs[2] = { 2412u, 2417u };
++	u64 t = 500;
++
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, 20000u), 0, "start 2-channel");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 2), 0, "2-channel plan");
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2412u, t + 10),
++		 HI5622_SCAN_WAIT, "first channel event");
++	CHECK_EQ(m.chan_seen, 1, "one channel seen");
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2412u, t + 20),
++		 HI5622_SCAN_WAIT, "duplicate channel event");
++	CHECK_EQ(m.chan_seen, 1, "duplicate does not count twice");
++	CHECK_EQ(m.channel_events, 2, "duplicate still counted as event");
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2432u, t + 30),
++		 HI5622_SCAN_WAIT, "foreign channel event");
++	CHECK_EQ(m.chan_seen, 1, "foreign channel not in plan");
++	CHECK_EQ(m.coverage_ms, 0, "no coverage yet");
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2417u, t + 40),
++		 HI5622_SCAN_WAIT, "second requested channel");
++	CHECK_EQ(m.chan_seen, 2, "coverage reached");
++	CHECK_EQ(m.coverage_ms, t + 40, "coverage timestamp");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 40 + HI5622_SCAN_SETTLE_MS),
++		 HI5622_SCAN_FINISH_OK, "coverage finish");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_OK);
++	hi5622_scan_model_clear(&m);
++}
++
++static void test_completion_event_wins(void)
++{
++	struct hi5622_scan_model m;
++	u16 freqs[13];
++	u64 t = 1000;
++	u32 i;
++
++	fill_13ch(freqs);
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, 20000u), 0, "start");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 13), 0, "plan");
++	for (i = 0; i < 13u; i++)
++		hi5622_scan_model_channel(&m, freqs[i], t + 830u * (i + 1u));
++	CHECK_EQ(hi5622_scan_model_complete(&m, 1u, 0u, t + 12000u),
++		 HI5622_SCAN_FINISH_OK, "g1 id16 status 1 -> success");
++	CHECK_EQ(m.complete_seen, true, "completion latched");
++	CHECK_EQ(m.complete_reason, 1, "completion status stored");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 12000u),
++		 HI5622_SCAN_FINISH_OK, "tick agrees with the completion");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_OK);
++	CHECK_EQ(strcmp(m.finish_reason, "complete-event"), 0,
++		 "finish reason complete-event");
++	CHECK_EQ(m.coverage_completes, 0, "no coverage fallback used");
++	hi5622_scan_model_clear(&m);
++}
++
++static void test_completion_failure(void)
++{
++	struct hi5622_scan_model m;
++	u64 t = 1000;
++
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, 20000u), 0, "start");
++	CHECK_EQ(hi5622_scan_model_complete(&m, 0x64u, 1u, t + 100u),
++		 HI5622_SCAN_FINISH_ABORT, "g1 id16 status != 1 -> abort");
++	CHECK_EQ(m.complete_failed, true, "completion failure latched");
++	CHECK_EQ(m.complete_failures, 1, "failure counted");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 100u),
++		 HI5622_SCAN_FINISH_ABORT, "tick reports the firmware abort");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_ABORT);
++	CHECK_EQ(strcmp(m.finish_reason, "complete-failed"), 0,
++		 "finish reason complete-failed");
++	CHECK_EQ(m.timeouts, 0, "firmware failure is not a host timeout");
++	hi5622_scan_model_clear(&m);
++}
++
++static void test_host_timeout(void)
++{
++	struct hi5622_scan_model m;
++	u16 freqs[13];
++	u64 t = 1000;
++	u32 i;
++
++	fill_13ch(freqs);
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, 10000u), 0, "start");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 13), 0, "plan");
++	for (i = 0; i < 6u; i++)	/* the 2026-11-26 5 s outcome shape */
++		hi5622_scan_model_channel(&m, freqs[i], t + 830u * (i + 1u));
++	CHECK_EQ(m.chan_seen, 6, "6 of 13 channels before the bound");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 9999u),
++		 HI5622_SCAN_WAIT, "bound not reached yet");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 10000u),
++		 HI5622_SCAN_FINISH_ABORT, "deadline -> abort");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_ABORT);
++	CHECK_EQ(strcmp(m.finish_reason, "host-timeout"), 0,
++		 "finish reason host-timeout");
++	CHECK_EQ(m.timeouts, 1, "host timeout counted");
++	CHECK_EQ(m.finishes_abort, 1, "abort finish counted");
++	hi5622_scan_model_clear(&m);
++}
++
++static void test_abort_and_plan_bounds(void)
++{
++	struct hi5622_scan_model m;
++	u16 freqs[3] = { 2412u, 2417u, 2422u };
++	u16 bad[33];
++	u64 t = 1000;
++	u32 i;
++
++	for (i = 0; i < 33u; i++)
++		bad[i] = 2412u;
++	hi5622_scan_model_init(&m);
++	CHECK_EQ(hi5622_scan_model_start(&m, t, 10000u), 0, "start");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, bad, 33), -EINVAL,
++		 "33 channels rejected");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, NULL, 1), -EINVAL,
++		 "NULL plan rejected");
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 2), 0, "plan set");
++	{
++		u16 zero[2] = { 2412u, 0u };
++
++		CHECK_EQ(hi5622_scan_model_set_channels(&m, zero, 2), -EINVAL,
++			 "zero frequency rejected");
++		CHECK_EQ(m.chan_total, 2, "a rejected plan keeps the old one");
++	}
++	CHECK_EQ(hi5622_scan_model_abort(&m), 0, "abort request");
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2412u, t + 5),
++		 HI5622_SCAN_FINISH_ABORT, "channel event after abort -> abort");
++	CHECK_EQ(hi5622_scan_model_tick(&m, t + 6),
++		 HI5622_SCAN_FINISH_ABORT, "tick after abort -> abort");
++	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_ABORT);
++	CHECK_EQ(strcmp(m.finish_reason, "abort-request"), 0,
++		 "finish reason abort-request");
++	CHECK_EQ(m.aborts_requested, 1, "abort request counted");
++	hi5622_scan_model_clear(&m);
++	/* channel events outside a scan are counted as idle events */
++	CHECK_EQ(hi5622_scan_model_channel(&m, 2412u, t + 7),
++		 HI5622_SCAN_WAIT, "channel event while idle");
++	CHECK_EQ(m.events_when_idle, 1, "idle event counted");
++	/* a plan cannot be attached to an idle model */
++	CHECK_EQ(hi5622_scan_model_set_channels(&m, freqs, 2), -EINVAL,
++		 "set_channels requires an active scan");
++}
++
++static void test_status_line(void)
++{
++	struct hi5622_scan_model m;
++	char buf[1024];
++
++	hi5622_scan_model_init(&m);
++	CHECK(hi5622_scan_status_line(&m, buf, sizeof(buf)) > 0,
++	      "status line renders");
++	CHECK(strstr(buf, "chans=0/0") != NULL, "status shows channel coverage");
++	CHECK(strstr(buf, "scan finish:") != NULL, "status shows finish block");
++	CHECK(strstr(buf, "timeout_ms=5000") != NULL,
++	      "status shows the legacy default timeout");
++}
++
++/* ==================================================================
++ * 4. g1 id15 beacon IE decode
++ * ================================================================== */
++static void test_beacon_decode_full(void)
++{
++	struct beacon_opts o;
++	struct hi5622_scan_d2h_bss b;
++	u8 frame[600];
++	size_t n;
++	int rc;
++
++	memset(&o, 0, sizeof(o));
++	o.ssid = "bench-ap";
++	o.ds_chan = 6;
++	o.ht = true;
++	o.ht_op_primary = 6;
++	o.ht_sec_off = HI5622_SCAN_D2H_HT_SEC_ABOVE;
++	o.rsn = true;
++	o.wmm = true;
++	o.country = true;
++	o.ext_cap = true;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "beacon with trailer decodes");
++	CHECK_EQ(b.layout, HI5622_SCAN_D2H_LAYOUT_FRAME_TRAILER,
++		 "frame+trailer20 layout");
++	CHECK_EQ(b.frame_type, HI5622_SCAN_D2H_FTYPE_BEACON, "beacon subtype");
++	CHECK_EQ(b.freq, 2437, "channel 6 frequency");
++	CHECK_EQ(b.chan_num, 6, "channel number");
++	CHECK_EQ(b.is_5g, false, "2.4 GHz channel");
++	CHECK_EQ(b.ds_chan, 6, "DS parameter-set channel");
++	CHECK_EQ(strcmp((const char *)b.ssid, "bench-ap"), 0, "SSID decoded");
++	CHECK_EQ(b.ssid_len, 8, "SSID length");
++	CHECK_EQ(b.ssid_hidden, false, "SSID not hidden");
++	CHECK_EQ(b.capability, 0x0411, "capability field");
++	CHECK_EQ(b.cap_flags,
++		 HI5622_SCAN_D2H_CAP_ESS | HI5622_SCAN_D2H_CAP_PRIVACY,
++		 "ESS+privacy capability flags");
++	CHECK_EQ(b.beacon_interval, 100, "beacon interval TU");
++	CHECK_EQ(b.tsf, 0x1122334455667788ull, "TSF decoded");
++	CHECK_EQ(b.ie_flags,
++		 HI5622_SCAN_D2H_IE_HT_CAP | HI5622_SCAN_D2H_IE_HT_OP |
++		 HI5622_SCAN_D2H_IE_RSN | HI5622_SCAN_D2H_IE_WMM |
++		 HI5622_SCAN_D2H_IE_COUNTRY | HI5622_SCAN_D2H_IE_EXT_CAP,
++		 "IE presence flags");
++	CHECK_EQ(b.ht_cap_info, 0x0142, "HT capabilities info field");
++	CHECK_EQ(b.ht_op_primary, 6, "HT operation primary channel");
++	CHECK_EQ(b.ht_op_sec_off, HI5622_SCAN_D2H_HT_SEC_ABOVE,
++		 "HT secondary channel above");
++	CHECK(b.ie_count >= 8, "all IEs walked");
++	CHECK(b.ie_len > 40, "IE chain forwarded for cfg80211");
++	CHECK_EQ(b.trailer_present, 1, "trailer present");
++	CHECK_EQ(b.tr_s8_5, -64, "trailer +5 signed byte");
++	CHECK_EQ(b.phy_mode, 4, "trailer PHY mode HT");
++	CHECK_EQ(b.signal_mbm, 0, "signal stays 0 by default");
++	CHECK_EQ(b.signal_from_trailer, false, "signal not from trailer");
++	/* the same input with the bench opt-in reports the trailer heuristic */
++	{
++		struct hi5622_scan_d2h_opts opts = {
++			.trust_trailer_signal = true,
++			.require_exact_ie = true,
++		};
++
++		rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, &opts, &b);
++		CHECK_EQ(rc, 0, "beacon decodes with signal opt-in");
++		CHECK_EQ(b.signal_mbm, -6400, "trailer RSSI heuristic mBm");
++		CHECK_EQ(b.signal_from_trailer, true, "signal provenance");
++	}
++}
++
++static void test_beacon_decode_variants(void)
++{
++	struct beacon_opts o;
++	struct hi5622_scan_d2h_bss b;
++	u8 frame[600];
++	u8 prefixed[620];
++	size_t n;
++	int rc;
++
++	/* probe response */
++	memset(&o, 0, sizeof(o));
++	o.presp = true;
++	o.ssid = "pr";
++	o.ds_chan = 1;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "probe response decodes");
++	CHECK_EQ(b.frame_type, HI5622_SCAN_D2H_FTYPE_PRESP, "probe-resp subtype");
++	CHECK_EQ(b.freq, 2412, "probe response channel");
++
++	/* bare frame (no trailer) */
++	memset(&o, 0, sizeof(o));
++	o.ssid = "bare";
++	o.ds_chan = 11;
++	n = build_beacon(frame, &o);
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "bare frame decodes");
++	CHECK_EQ(b.layout, HI5622_SCAN_D2H_LAYOUT_FRAME_ONLY,
++		 "frame-only layout");
++	CHECK_EQ(b.freq, 2462, "bare frame channel 11");
++
++	/* hidden SSID */
++	memset(&o, 0, sizeof(o));
++	o.ssid = NULL;
++	o.ds_chan = 3;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "hidden SSID decodes");
++	CHECK_EQ(b.ssid_hidden, true, "hidden SSID flagged");
++	CHECK_EQ(b.ssid_len, 0, "hidden SSID length 0");
++
++	/* 5 GHz probe response, no DS element: channel from HT operation */
++	memset(&o, 0, sizeof(o));
++	o.presp = true;
++	o.ssid = "five";
++	o.ht = true;
++	o.ht_op_primary = 36;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "5 GHz probe response decodes");
++	CHECK_EQ(b.freq, 5180, "5 GHz channel 36 frequency");
++	CHECK_EQ(b.is_5g, true, "5 GHz flagged");
++	CHECK_EQ(b.ds_chan, 0, "no DS element");
++	CHECK_EQ(b.ht_op_primary, 36, "HT op primary channel");
++
++	/* ch14 special case */
++	memset(&o, 0, sizeof(o));
++	o.ssid = "ch14";
++	o.ds_chan = 14;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "channel 14 decodes");
++	CHECK_EQ(b.freq, 2484, "channel 14 = 2484 MHz");
++
++	/* defensive 12-byte prefix variant */
++	memset(&o, 0, sizeof(o));
++	o.ssid = "pref";
++	o.ds_chan = 6;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	memset(prefixed, 0, sizeof(prefixed));
++	prefixed[0] = 0x01u;	/* group nibble 1 */
++	prefixed[2] = 0x11u;
++	prefixed[6] = 0x0fu;
++	prefixed[10] = 0x5au;
++	prefixed[11] = 0x5au;
++	memcpy(prefixed + 12, frame, n);
++	rc = hi5622_scan_d2h_parse_bss(prefixed, (u32)(n + 12u), NULL, &b);
++	CHECK_EQ(rc, 0, "12-byte-prefixed frame decodes (defensive variant)");
++	CHECK_EQ(b.layout, HI5622_SCAN_D2H_LAYOUT_PREFIX12_TRAILER,
++		 "prefix12+trailer layout");
++	CHECK_EQ(b.freq, 2437, "prefixed frame channel");
++}
++
++static void test_beacon_decode_negative(void)
++{
++	struct beacon_opts o;
++	struct hi5622_scan_d2h_bss b;
++	u8 frame[600];
++	size_t n;
++	int rc;
++
++	CHECK_EQ(hi5622_scan_d2h_parse_bss(NULL, 0, NULL, &b), -EINVAL,
++		 "NULL payload rejected");
++	memset(&o, 0, sizeof(o));
++	o.ssid = "x";
++	o.ds_chan = 6;
++	n = build_beacon(frame, &o);
++	CHECK_EQ(hi5622_scan_d2h_parse_bss(frame, 20, NULL, &b),
++		 -EOPNOTSUPP, "short payload rejected");
++	/* a data frame is not a scan result */
++	frame[0] = 0x08u;
++	CHECK_EQ(hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b),
++		 -EOPNOTSUPP, "non-management frame rejected");
++	frame[0] = 0x80u;
++	/* truncated IE: claim 200 bytes with none following */
++	{
++		u8 bad[64];
++		size_t i;
++
++		memset(bad, 0, sizeof(bad));
++		bad[0] = 0x80u;
++		for (i = 0; i < 6; i++)
++			bad[4 + i] = bad[10 + i] = bad[16 + i] = TEST_BSSID_OCTET;
++		bad[36] = 0;	/* SSID IE with length 200 but no bytes */
++		bad[37] = 200u;
++		CHECK_EQ(hi5622_scan_d2h_parse_bss(bad, sizeof(bad), NULL, &b),
++			 -EOPNOTSUPP, "truncated IE chain rejected");
++	}
++	/* channel-less frame: no DS and no usable HT operation */
++	memset(&o, 0, sizeof(o));
++	o.ssid = "nochan";
++	o.trailer = true;
++	rc = hi5622_scan_d2h_parse_bss(frame, (u32)n, NULL, &b);
++	CHECK_EQ(rc, 0, "frame with channel still decodes after reset");
++}
++
++static void test_complete_channel_sta_decode(void)
++{
++	struct hi5622_scan_d2h_complete cc;
++	struct hi5622_scan_d2h_chan ch;
++	struct hi5622_scan_d2h_sta_comp sc;
++	u8 payload[0x70];
++	u32 i;
++
++	memset(payload, 0, sizeof(payload));
++	payload[0] = 1u;
++	CHECK_EQ(hi5622_scan_d2h_parse_complete(payload, 4, &cc), 0,
++		 "g1 id16 decodes");
++	CHECK_EQ(cc.status, 1, "g1 id16 success status");
++	payload[0] = 0x64u;
++	CHECK_EQ(hi5622_scan_d2h_parse_complete(payload, 4, &cc), 0,
++		 "g1 id16 refusal decodes");
++	CHECK_EQ(cc.status, 0x64, "g1 id16 refusal status");
++
++	memset(payload, 0, sizeof(payload));
++	payload[0] = 3u;	/* slot */
++	for (i = 0; i < 0x6cu; i++)
++		payload[4 + i] = (u8)i;
++	payload[4] = 6u;	/* channel in the 108-byte record */
++	CHECK_EQ(hi5622_scan_d2h_parse_chan(payload, 0x70u, &ch), 0,
++		 "g1 id17 decodes");
++	CHECK_EQ(ch.slot, 3, "g1 id17 slot");
++	CHECK_EQ(ch.chan_num, 6, "g1 id17 channel number");
++	CHECK_EQ(ch.freq, 2437, "g1 id17 frequency");
++	CHECK_EQ(ch.block_len, 0x6cu, "g1 id17 108-byte record copied");
++
++	memset(payload, 0, sizeof(payload));
++	payload[0] = 0x30u;	/* core nibble 3 */
++	payload[0x0d] = 1u;	/* status */
++	CHECK_EQ(hi5622_scan_d2h_parse_sta_comp(payload, 0x20u, &sc), 0,
++		 "g2 id2 decodes");
++	CHECK_EQ(sc.status, 1, "g2 id2 status");
++	CHECK_EQ(sc.core_band, 3, "g2 id2 core/band nibble");
++}
++
++/* ==================================================================
++ * 5. provider map round-trip + cfg80211 result validation
++ * ================================================================== */
++static void test_map_roundtrip(void)
++{
++	struct beacon_opts o;
++	struct hi5622_scan_result r;
++	u8 frame[600];
++	size_t n;
++	int rc;
++
++	memset(&o, 0, sizeof(o));
++	o.ssid = "map-ap";
++	o.ds_chan = 6;
++	o.ht = true;
++	o.ht_op_primary = 6;
++	o.trailer = true;
++	n = build_beacon(frame, &o);
++	rc = hi5622_vapscan_decode_scan_result(frame, (u32)n, &r);
++	CHECK_EQ(rc, 0, "map decode succeeds");
++	CHECK_EQ(r.freq, 2437, "map frequency");
++	CHECK_EQ(r.ds_chan, 6, "map DS channel");
++	CHECK_EQ(r.ie_count, 4, "map IE count (SSID+DS+HT cap+HT op)");
++	CHECK_EQ(r.cap_flags,
++		 HI5622_SCAN_CAP_ESS | HI5622_SCAN_CAP_PRIVACY,
++		 "map capability flags");
++	CHECK_EQ(r.ie_flags,
++		 HI5622_SCAN_IE_HT_CAP | HI5622_SCAN_IE_HT_OP,
++		 "map IE presence flags");
++	CHECK_EQ(r.ht_cap_info, 0x0142, "map HT capability info");
++	CHECK((int)r.ssid_len == 6, "map SSID length");
++	CHECK_EQ(memcmp(r.ssid, "map-ap", 6), 0, "map SSID bytes");
++	CHECK_EQ(r.signal_mbm, 0, "map signal 0 by default");
++	CHECK_EQ(hi5622_scan_result_validate(&r), 0,
++		 "decoded result validates for cfg80211");
++	CHECK(r.ie_len > 40, "map forwards the IE chain");
++	/* the opt-in variant reports the trailer heuristic */
++	rc = hi5622_vapscan_decode_scan_result_opts(frame, (u32)n, &r, true);
++	CHECK_EQ(rc, 0, "map decode with signal opt-in");
++	CHECK_EQ(r.signal_mbm, -6400, "map trailer RSSI opt-in");
++
++	/* validation of hostile/partial results */
++	memset(&r, 0, sizeof(r));
++	CHECK_EQ(hi5622_scan_result_validate(&r), -EINVAL,
++		 "all-zero result rejected");
++	memcpy(r.bssid, "\x02\x00\x00\x00\x00\x01", 6);
++	r.freq = 2437;
++	CHECK_EQ(hi5622_scan_result_validate(&r), 0, "minimal result accepted");
++	r.signal_mbm = 5001;
++	CHECK_EQ(hi5622_scan_result_validate(&r), -EINVAL,
++		 "out-of-range signal rejected");
++	r.signal_mbm = 0;
++	r.freq = 2400;
++	CHECK_EQ(hi5622_scan_result_validate(&r), -EINVAL,
++		 "unsupported frequency rejected");
++	r.freq = 2437;
++	r.bssid[0] = 0x01;
++	CHECK_EQ(hi5622_scan_result_validate(&r), -EINVAL,
++		 "multicast BSSID rejected");
++}
++
++static void test_scan_req_dwell_validation(void)
++{
++	struct hi5622_scan_req_params p;
++
++	memset(&p, 0, sizeof(p));
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), 0, "empty request valid");
++	p.n_channels = 1;
++	p.freq[0] = 2437;
++	p.dwell_ms = 0;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), 0,
++		 "dwell 0 = vendor default");
++	p.dwell_ms = 60;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), 0, "dwell 60 valid");
++	p.dwell_ms = 20;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), 0, "dwell 20 valid");
++	p.dwell_ms = 200;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), 0, "dwell 200 valid");
++	p.dwell_ms = 19;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), -EINVAL,
++		 "dwell below range rejected");
++	p.dwell_ms = 201;
++	CHECK_EQ(hi5622_scan_req_params_validate(&p), -EINVAL,
++		 "dwell above range rejected");
++}
++
++int main(void)
++{
++	printf("scan-complete selftest (task-123)\n");
++	test_timeout_auto();
++	test_coverage_completion();
++	test_coverage_duplicates_and_foreign();
++	test_completion_event_wins();
++	test_completion_failure();
++	test_host_timeout();
++	test_abort_and_plan_bounds();
++	test_status_line();
++	test_beacon_decode_full();
++	test_beacon_decode_variants();
++	test_beacon_decode_negative();
++	test_complete_channel_sta_decode();
++	test_map_roundtrip();
++	test_scan_req_dwell_validation();
++	printf("%d/%d PASS\n", checks - failed, checks);
++	return failed ? 1 : 0;
++}
+diff -ruN a/tools/scan_logic_selftest.c b/tools/scan_logic_selftest.c
+--- a/tools/scan_logic_selftest.c	2026-11-24 16:43:33.384233105 +0700
++++ b/tools/scan_logic_selftest.c	2026-11-24 16:39:49.703982854 +0700
+@@ -89,6 +89,20 @@
+ 	(void)wire; (void)cap; (void)out_len; (void)p;
+ 	return -EOPNOTSUPP;
+ }
++/* wifi-vap-start lane callbacks (task-117): the provider patch added the two
++ * caps, so the full-ops contract test needs the matching dummies. */
++static int dummy_vap_add(u8 *wire, size_t cap, size_t *out_len,
++			 const struct hi5622_vap_start_params *p)
++{
++	(void)wire; (void)cap; (void)out_len; (void)p;
++	return -EOPNOTSUPP;
++}
++static int dummy_vap_start(u8 *wire, size_t cap, size_t *out_len,
++			   const struct hi5622_vap_start_params *p)
++{
++	(void)wire; (void)cap; (void)out_len; (void)p;
++	return -EOPNOTSUPP;
++}
+ 
+ /* the only provider with a REAL builder in this test: g0 id9 del_user, whose
+  * exact builder is part of the inherited wifi-h2d-frames library */
+@@ -128,6 +142,8 @@
+ 	ops.build_user_del = test_build_user_del;
+ 	ops.build_ap_start = dummy_ap_start;
+ 	ops.build_ap_stop = dummy_ap_stop;
++	ops.build_vap_add = dummy_vap_add;
++	ops.build_vap_start = dummy_vap_start;
+ 	return ops;
+ }
+ 
+@@ -152,7 +168,7 @@
+ 	CHECK_EQ(hi5622_frame_ops_validate(&ops), -EINVAL, "unknown cap refused");
+ 
+ 	/* each capability requires its callback */
+-	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_AP_STOP; bit <<= 1) {
++	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_VAP_START; bit <<= 1) {
+ 		struct hi5622_frame_ops one = make_full_ops();
+ 
+ 		one.caps = bit;
+@@ -172,8 +188,12 @@
+ 			one.build_user_del = NULL; break;
+ 		case HI5622_FRAME_CAP_AP_START:
+ 			one.build_ap_start = NULL; break;
+-		default:
++		case HI5622_FRAME_CAP_AP_STOP:
+ 			one.build_ap_stop = NULL; break;
++		case HI5622_FRAME_CAP_VAP_ADD:
++			one.build_vap_add = NULL; break;
++		default:
++			one.build_vap_start = NULL; break;
+ 		}
+ 		CHECK_EQ(hi5622_frame_ops_validate(&one), -EINVAL,
+ 			 "capability without callback refused");
+@@ -191,6 +211,8 @@
+ 				       sizeof(caps)) > 0, "caps all");
+ 	CHECK(strstr(caps, "scan_req") != NULL, "caps all has scan_req");
+ 	CHECK(strstr(caps, "ap_stop") != NULL, "caps all has ap_stop");
++	CHECK(strstr(caps, "vap_add") != NULL, "caps all has vap_add");
++	CHECK(strstr(caps, "vap_start") != NULL, "caps all has vap_start");
+ 	CHECK(strchr(caps, ' ') == NULL, "caps format has no spaces");
+ 	{
+ 		char tiny[8];
+diff -ruN a/tools/selftest.py b/tools/selftest.py
+--- a/tools/selftest.py	2026-11-24 16:43:33.385233103 +0700
++++ b/tools/selftest.py	2026-11-24 16:40:55.403700978 +0700
+@@ -1,9 +1,11 @@
+ #!/usr/bin/env python3
+ # SPDX-License-Identifier: GPL-2.0
+ """
+-selftest.py - device-free driver/source selftest for the wifi-scan-ap lane
+-(shared task task-113): lane layout, cfg80211 scan/AP wiring, provider-contract
+-discipline, inherited-tree baseline, configs, docs and the fail-closed default.
++selftest.py - device-free driver/source selftest for the wifi-scan-complete lane
++(shared task task-123; builds on wifi-scan-ap task-113 and wifi-vap-start
++task-117): lane layout, cfg80211 scan/AP wiring, provider-contract discipline,
++the auto scan window / channel-coverage completion rule, the beacon IE summary
++decode, inherited-tree baseline, configs, docs and the fail-closed default.
+ 
+ No device, no kernel build, no vendor binary/firmware/calibration material.
+ Exit 0 = all checks passed.
+@@ -80,6 +82,8 @@
+         "tools/selftest.py": os.path.join(HERE, "selftest.py"),
+         "tools/gen_cfg80211_symvers.py": os.path.join(HERE, "gen_cfg80211_symvers.py"),
+         "tools/scan_logic_selftest.c": os.path.join(HERE, "scan_logic_selftest.c"),
++        "tools/scan_complete_selftest.c": os.path.join(HERE, "scan_complete_selftest.c"),
++        "patches/0001-scan-complete.patch": os.path.join(LANE, "patches", "0001-scan-complete.patch"),
+         "tools/src-baseline.sha256": os.path.join(HERE, "src-baseline.sha256"),
+         "configs/hostapd.conf": os.path.join(CFG, "hostapd.conf"),
+         "configs/hostapd-open.conf": os.path.join(CFG, "hostapd-open.conf"),
+@@ -96,7 +100,8 @@
+     for obj in ("hi5622_scan_logic.o", "hi5622_scan.o",
+                 "hi5622_frame_post.o", "hi5622_frames_provider.o",
+                 "hi5622_vapscan_map.o", "hi5622_vapscan_provider.o",
+-                "vapscan_frames.o", "hi5622_scan_d2h.o"):
++                "vapscan_frames.o", "hi5622_scan_d2h.o",
++                "vapstart_frames.o"):
+         check(obj in kbuild, "Kbuild missing object %s" % obj)
+     check("KBUILD_EXTRA_SYMBOLS" in kbuild and
+           "cfg80211-provider.symvers" in kbuild,
+@@ -188,6 +193,26 @@
+           "g1 id17 / g2 id2 decoders are not wired into the delivery hook")
+     check("hi5622_scan_model_event(&s->model, cls" in s,
+           "event counter path changed unexpectedly")
++    # scan-complete lane (task-123): auto window + channel-coverage completion
++    check("hi5622_scan_timeout_auto(" in s,
++          "auto scan window helper not wired into the scan op")
++    check("hi5622_scan_model_set_channels(&s->model, p->freq" in s,
++          "requested channel plan is not recorded in the scan model")
++    check("hi5622_scan_model_channel(&s->model, freq" in s,
++          "g1 id17 channel events are not recorded for coverage completion")
++    check("hi5622_scan_pick_dwell(dev)" in s and
++          "p->dwell_ms = hi5622_scan_pick_dwell(dev)" in s,
++          "dwell override is not passed to the g0 id0xC builder params")
++    check("module_param_named(scan_timeout_ms" in s and
++          "module_param_named(scan_dwell_ms" in s,
++          "scan timeout/dwell module parameters missing")
++    check("chans=%u/%u" in s,
++          "scan DONE line does not report channel coverage")
++    check("HI5622_SCAN_SETTLE_MS" in read(os.path.join(SRC,
++          "hi5622_scan_logic.h")),
++          "settle-window constant missing from the scan model header")
++    check("finish_reason" in read(os.path.join(SRC, "hi5622_scan_logic.h")),
++          "scan finish reason is not tracked (host vs firmware abort)")
+ 
+     # ---- 4. fail-closed post gate --------------------------------------
+     fp = read(os.path.join(SRC, "hi5622_frame_post.c"))
+@@ -248,6 +273,18 @@
+     check("HI5622_FRAME_CAP_AP_START" not in vp and
+           "HI5622_FRAME_CAP_AP_STOP" not in vp,
+           "no AP builders exist -> AP caps must stay absent")
++    # wifi-vap-start provider patch (task-117): VAP add/start caps + builders
++    for cap in ("HI5622_FRAME_CAP_VAP_ADD", "HI5622_FRAME_CAP_VAP_START"):
++        check(cap in vp, "vap-start provider capability missing: %s" % cap)
++    check("hi5622_scan_post_vap_start(" in s and "vap_start_first" in s,
++          "VAP start ordering is not wired before the scan request")
++    check("hi5622_vapstart_frames" in vp or "vsf_build_vap_add" in vp,
++          "provider does not use the task-117 vapstart builders")
++    check("HI5622_EWALCMD" in read(os.path.join(SRC, "h2d_frames.h")) or
++          "H2D_EWALCMD" in read(os.path.join(SRC, "h2d_frames.h")),
++          "WAL group-2 cfg-event validator error code missing")
++    check("scan_trust_rssi" in vp,
++          "trailer-RSSI opt-in module parameter missing")
+     check("kmalloc(sizeof(*f)" in vp,
+           "vs_frame (1.7 KB) must be heap allocated in the adapter")
+     check("hi5622_vapscan_scan_req" in vp and "hi5622_vapscan_user_add" in vp
+@@ -334,6 +371,27 @@
+     check("HI5622_HOST_TYPES_DEFINED" in fa,
+           "frames_api.h missing the shared portable-type guard")
+ 
++    # ---- 5b. scan-complete lane: coverage completion + IE summary --------
++    for needle in ("ds_chan", "ie_count", "cap_flags", "ie_flags",
++                   "ht_cap_info", "ht_op_primary"):
++        check(needle in d2hh, "scan-d2h IE summary field missing: %s" % needle)
++    for needle in ("HI5622_SCAN_D2H_IE_HT_CAP", "HI5622_SCAN_D2H_IE_HT_OP",
++                   "HI5622_SCAN_D2H_CAP_ESS", "HI5622_SCAN_D2H_CAP_PRIVACY"):
++        check(needle in d2hh, "scan-d2h derived-fact constant missing: %s" % needle)
++    check("HI5622_SCAN_IE_HT_CAP" in fa and "HI5622_SCAN_CAP_ESS" in fa,
++          "cfg80211-facing IE/capability presence bits missing from frames_api.h")
++    lh2 = read(os.path.join(SRC, "hi5622_scan_logic.h"))
++    check("hi5622_scan_timeout_auto" in lh2 and
++          "hi5622_scan_model_channel" in lh2 and
++          "hi5622_scan_model_set_channels" in lh2,
++          "scan-complete model API missing from the header")
++    check("HI5622_SCAN_TIMEOUT_PER_CHAN_MS" in lh2 and
++          "HI5622_SCAN_SETTLE_MS" in lh2,
++          "auto-window / settle constants missing from the scan model header")
++    check("hi5622_vapscan_decode_scan_result_opts" in
++          read(os.path.join(SRC, "hi5622_vapscan_map.h")),
++          "decoder signal opt-in variant missing from the mapping header")
++
+     # ---- 6. cfg80211 provider symvers ----------------------------------
+     prov = read(os.path.join(SRC, "cfg80211-provider.symvers"))
+     for sym in ("cfg80211_scan_done", "cfg80211_inform_bss_data",
+@@ -366,7 +424,9 @@
+         parms = subprocess.run(["modinfo", "-F", "parm", ko],
+                                capture_output=True, text=True, check=False).stdout
+         for p in ("allow_frames:", "frame_gap_ms:", "cfg80211_auto:",
+-                  "band_force:", "h2d_send_budget:"):
++                  "band_force:", "h2d_send_budget:", "vap_start_first:",
++                  "vap_start_mode:", "vap_start_module:", "scan_timeout_ms:",
++                  "scan_dwell_ms:", "scan_trust_rssi:"):
+             check(p in parms, "module parameter missing: %s" % p)
+         deps = subprocess.run(["modinfo", "-F", "depends", ko],
+                               capture_output=True, text=True, check=False).stdout
+@@ -397,22 +457,27 @@
+ 
+     # ---- 9. docs / evidence discipline --------------------------------
+     rep = read(os.path.join(LANE, "REPORT.md"))
+-    for needle in ("task-113", "task-110", "M2", "M3", "scan", "g0 id0xC",
+-                   "g0 id7", "g1 id15", "g1 id16", "g1 id17", "g2 id2",
+-                   "start_ap", "hostapd", "hi5622_frame_post",
+-                   "allow_frames=0", "SCAN_PARSE", "caps 0x1f", "vapscan",
+-                   "task-118", "scan_d2h",
+-                   "hi5622_vapscan_provider", "PD4", "[U]", "[I]", "[V]",
+-                   "no vendor"):
++    for needle in ("task-113", "task-110", "task-117", "task-123", "M2", "M3",
++                   "scan", "g0 id0xC", "g0 id7", "g1 id15", "g1 id16",
++                   "g1 id17", "g2 id2", "start_ap", "hostapd",
++                   "hi5622_frame_post", "allow_frames=0", "SCAN_PARSE",
++                   "caps 0x1f", "caps 0x19f", "vapscan", "task-118",
++                   "scan_d2h", "hi5622_vapscan_provider", "PD4",
++                   "[U]", "[I]", "[V]", "no vendor",
++                   "channel-coverage", "13 channels", "scan_timeout_ms",
++                   "scan_dwell_ms", "SSID", "DS", "HT", "finish-abort"):
+         check(needle.lower() in rep.lower(),
+               "REPORT.md missing %r" % needle)
+     ladder = read(os.path.join(LANE, "TEST-LADDER.md"))
+     for needle in ("iw dev wlan0 scan", "hostapd", "wpa_supplicant",
+                    "expected", "STOP", "abort", "returncode", "dmesg",
+-                   "allow_frames", "g0 id0xC", "VAP 0"):
++                   "allow_frames", "g0 id0xC", "VAP 0",
++                   "13 channels", "channel-coverage", "scan_timeout_ms",
++                   "IEs", "SSID", "HT"):
+         check(needle in ladder, "TEST-LADDER.md missing %r" % needle)
+     readme = read(os.path.join(LANE, "README.md"))
+-    check("wifi-scan-ap" in readme and "task-113" in readme,
++    check("wifi-scan-ap" in readme and "task-113" in readme and
++          "task-123" in readme,
+           "README.md missing lane/task identification")
+     bn = read(os.path.join(LANE, "BUILD-NOTES.md"))
+     check("sha256" in bn and "warnings" in bn,
+diff -ruN a/tools/src-baseline.sha256 b/tools/src-baseline.sha256
+--- a/tools/src-baseline.sha256	2026-11-24 16:43:33.387560395 +0700
++++ b/tools/src-baseline.sha256	2026-11-24 16:40:33.787797055 +0700
+@@ -23,6 +23,18 @@
+ #                                     + VAP user add/del messages
+ #   src/cfg80211-provider.symvers     regenerated: 9 symbols
+ #   tools/gen_cfg80211_symvers.py     Module.symvers grammar + KDIR
++#   src/h2d_frames.c                  + WAL group-2 cfg-event family validation
++#                                       (wifi-vap-start lane, task-117; the
++#                                       post-fire fix for the id-0 handler slot)
++#   src/hi5622_scan_d2h.c             + SSID/DS/HT/VAP IE summary fields for the
++#                                       cfg80211 BSS evidence line
++#                                       (scan-complete lane, task-123)
++#   src/hi5622_scan_d2h.h             + shared portable-type guard only
++#   src/hi5622_frames_api.h, hi5622_scan.c, hi5622_scan_logic.*,
++#   src/hi5622_vapscan_map.**, hi5622_vapscan_provider.c, Kbuild
++#                                     + scan-complete: auto scan window,
++#                                       channel-coverage completion, dwell
++#                                       override, IE summary mapping, VAP caps
+ #
+ # New clean-room files of this lane (not inherited, not baseline):
+ #   src/hi5622_frames_api.h, hi5622_frames_provider.c, hi5622_frame_post.*,
+@@ -33,7 +45,6 @@
+ 49d42273ddc81de34d1028f0656e9dc57b267a44f64634f9b3b6299f560ecb37  src/Makefile
+ 36a1128b0e6ccf4f09bc31875af0bcce2e278816b7d0e1b39cfc5038da24abef  src/ete.c
+ 134bbc7a7f0aed8d3df59f1ea7de68f59f4a745559468ebf4b746ddd9e463fab  src/h2d_catalogue.inc
+-c44c73abaf33768c432267db08cd70d4004d6e944b8822aa0657112caf778628  src/h2d_frames.c
+ dc5e1e56ed547e85da9ea989ea8ed17a1b0027ebc18b945ab1903d94cb1ce9e7  src/h2d_send.c
+ a4bf833878cfef4041419b699fc36c7688f52e4be8a775dcde00ff507b4c73ca  src/h2d_send.h
+ ba6bc21ec7f2c32d4bd34fbdb0a0e2b6e2e1b540121fcc09d783cddc279ae264  src/h2d_send_logic.c
+@@ -49,4 +60,3 @@
+ d64d9e6ba88f6a612f3e010e8f463054cc8f606d8a057851f6991d79c1f7b6e7  tools/cfg80211_logic_selftest.c
+ 9899bcd81e15b16420235a7ac82635ca33aec4f23e7b849962d520708abaaed7  tools/h2d_logic_selftest.c
+ c7d1d0abcf2e1ba1217cd6755e6c2a19d1ff25feac964cb658e428b106987178  src/vapscan_frames.c
+-487e5171c9068107d3b4bf4b56f7821164cc47a357320c0758ff31fd0a8a87c1  src/hi5622_scan_d2h.c
