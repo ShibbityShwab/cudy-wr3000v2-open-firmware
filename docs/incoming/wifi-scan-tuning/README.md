@@ -47,6 +47,7 @@ lane.**  Nothing here is a hardware claim: the 13/13 PASS is the ladder's job.
 | TEST-LADDER.md | attended ladder rungs R0-R8, PASS gates, decision table, stop rules |
 | BUILD-NOTES.md | exact build/artifact numbers, build line, module parameters |
 | recipes/REQUEST-BYTES.md | the 520-B frame hexdump + every field, with the firmware read site |
+| recipes/BAND-CONFIG-G0ID10.md | H1 follow-up evidence: the missing scan-context config is g0 id10 (handler CA 0x5FF64) - field map + why no speculative builder is shipped |
 | src/ | the four changed source files (diff base = the combined AP+DP tree) |
 | patches/0001-scan-tuning.patch | integration diff over the bench-validated combined tree |
 | tools/ | build.sh (host tests + module build), scan_tuning_selftest.c, inherited selftests, request_dump.c, fw_scan_timing_re.py (static RE evidence) |

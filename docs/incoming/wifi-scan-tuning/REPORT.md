@@ -161,13 +161,17 @@ count/array encoding; it is correct.**
 
 The per-band scan-context fields (+0xFC cursor, +0xFE end, +0x104/+0x106
 control/defaults, +0x103 mode) are written by the firmware's **band/channel
-configuration handler** (CA 0x5FF60, writes at CA 0x600B2/0x603C6/0x603DC
-from the H2D payload: +0x0C/+0x10/+0x14/+0x15/+0x1E), i.e. the vendor host's
-g0 id1 config-event family.  Our clean-room driver boots the mode-1 VAP base
-and the scan request but does **not** send that band/scan configuration
-family, so the context keeps firmware-init defaults.  The request count (13)
-is parsed, but the inner scheduler's own cursor/end pair is not the host
-request's count.
+configuration handler, and it is a **direct group-0 H2D message, id 10**: the
+group-0 dispatch table at CA 0x10CD08 (12-B rows {id, fn|1, 0}) maps
+{id=10, fn=0x5FF65} to handler entry **CA 0x5FF64** (not 0x5FF60 - that was a
+four-byte-misaligned window; corrected in tools/fw_scan_timing_re.py F7/F7b).
+It writes the per-slot scan-context fields (+0xFC/+0xFE/+0x103/+0x104/+0x106)
+from its H2D payload (CA 0x60092/0x6009E/0x600B2/0x600BA/0x603C6/0x603DC),
+i.e. this is the context the per-channel scheduler later trusts.  Our
+clean-room driver boots the mode-1 VAP base and the scan request but **never
+sends g0 id10**, so the context keeps firmware-init defaults.  The request
+count (13) is parsed, but the inner scheduler's own cursor/end pair is not the
+host request's count.  See section 8 for the H1 follow-up decision.
 
 ### 4.4 Hypotheses, ranked, and the discriminator each needs
 
@@ -262,6 +266,28 @@ the ladder's R4 gap sweep is what finds the real value (0/300/1000 ms).
 | AP-up scan behaviour (baseline: 0 results) | [U]; ladder R6 |
 | 5 GHz / 19-channel plan | untested; the helpers are generic but the bench band is 2.4 GHz |
 | per-batch counters in the final DONE line | the model's counters accumulate across batches (clear keeps them); the final line still shows the last request's `chans` plan - batch lines carry the per-request numbers |
+
+## 8. H1 follow-up: the config message is g0 id10 (not implemented here)
+
+The H1 hypothesis is now structurally confirmed: the missing configuration is
+**group-0 direct message id 10**, handler entry CA 0x5FF64 (dispatch table
+CA 0x10CD08 row {10, 0x5FF65} [V]).  Payload field map (type byte +0x00 must
+be 3, subtype +0x01 = 1/2, then channel/slot/end fields), the context writes
+and the reason it is *not* part of this lane's module are in
+**recipes/BAND-CONFIG-G0ID10.md**.
+
+**Decision:** no speculative g0 id10 builder is bound into the module or the
+final combined build.  Reasons: (a) the accepted value semantics/ordering are
+[U] (only read-sites are [V]); (b) it is a firmware configuration message -
+the class where wrong-order use has already caused data aborts (AP-start VAP
+pointer; ctx-create precondition), so a bad frame can cost a power-cycle;
+(c) batching reaches 13/13 without any new firmware interaction and is
+ladder-provable now; (d) a dedicated attended H1 lane is the correct container
+for firing g0 id10 (single-slot, one field per experiment, recovery armed).
+The finding still matters: it names the exact message a later lane must
+validate (and would allow scan_req_batch=0 single-request scans once proven).
+
+---
 
 **Bottom line:** the wire request was never the problem; the host window and
 single-request assumption were.  The tuned defaults + chained-request scanner

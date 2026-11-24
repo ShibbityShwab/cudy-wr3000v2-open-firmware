@@ -63,6 +63,23 @@ Changed semantics of existing parameters:
 | `scan_timeout_ms` | still 0 = auto, but the auto term is per **request/batch** now: `clamp(1500 + n*scan_chan_time_ms, 1500, 120000)`; manual values are clamped to [1000, 120000] (the 45 s clamp is raised to 120 s) |
 | `scan_dwell_ms` | unchanged (0 = vendor 60, 20..200 sweep) |
 
+## Patch stack for the final combined module (task-133 handoff)
+
+Verified against the fired combined AP+DP base tree, including the
+image-polish conflict (both patches touch `hi5622_scan.c`):
+
+1. base = bench-validated combined AP+DP tree (fired module 242,572 B sha
+   `44c6cc12...`);
+2. apply image-polish's module patch first (`scan_dwell_ms` default 60 lives
+   in the same file);
+3. apply `patches/0002-scan-tuning-on-polish.patch` (clean over the
+   polish-applied tree).  `patches/0001-scan-tuning.patch` is the same lane
+   delta over the bare base if image-polish changes are not taken.
+
+The merged tree was host-tested: 37/37 scan-tuning + 196/196 scan-complete;
+merged `hi5622_scan.c` has 5 scan params (dwell 60 from polish + the three new
+ones).  stability lane is building the final hardened module from this stack.
+
 ## Tree quirks
 
 Inherited, unchanged: cfg80211-provider.symvers for the 9 modpost symbols,

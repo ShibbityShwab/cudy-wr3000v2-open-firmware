@@ -18,8 +18,11 @@ Evidence asserted (all [V] in ../REPORT.md sec 3-4):
      (CA 0x64298) and writes a hard-coded 6 into link[0x106] at CA 0x643CC.
   F6 g1 id17 is emitted from CA 0x642D0..0x64374: hcc_msg_tx call at
      CA 0x64358, 0x6C-byte record copy at CA 0x64350.
-  F7 the band/scan-context handler CA 0x5FF60 initializes the context fields
-     from an H2D payload at CA 0x600B2/0x603C6/0x603DC (g0 id1 family).
+  F7 the scan/channel-context config handler is **g0 id10**: the group-0 direct
+     H2D dispatch table at CA 0x10CD08 (12-B rows {id, fn|1, 0}) has row
+     {id=10, fn=0x5FF65} -> handler entry CA 0x5FF64.  It initializes the
+     per-slot scan-context fields (context+0xFC/+0xFE/+0x103/+0x104/+0x106)
+     from an H2D payload at CA 0x60092/0x600B2/0x603C6/0x603DC.
   F8 the firmware's own single-channel request builder CA 0x4B88C writes
      count=1 / scan_type=4 / dwell=20 into its internal request.
   F9 the scan request path reads payload+0x1EE dwell (ldrh) at CA 0x6477A
@@ -27,6 +30,7 @@ Evidence asserted (all [V] in ../REPORT.md sec 3-4):
 """
 import argparse
 import hashlib
+import struct
 import os
 import sys
 
@@ -54,7 +58,7 @@ A_ADVANCE = 0x64298
 A_DEFAULT6 = 0x643CC
 A_ID17_TX = 0x64358
 A_ID17_COPY = 0x64350
-A_BANDCFG = 0x5FF60
+A_BANDCFG = 0x5FF64  # handler entry (was 0x5FF60 from a 4-byte-misaligned window)
 A_BANDCFG_FC = 0x603DC
 A_BANDCFG_FE = 0x603C6
 A_PERCHAN_BUILD = 0x4B88C
@@ -187,6 +191,37 @@ def main(argv):
     i = fw.insn(0x4B934)
     ck(i is not None and "#0x14" in i.op_str,
        "F8 firmware internal dwell=20 constant at CA 0x4B934")
+    # F7b: the g0 id10 dispatch row and the handler entry
+    table = 0x10CD08
+    row = None
+    for k in range(40):
+        eid = struct.unpack_from("<I", fw.d, table - FW_BASE + 12 * k)[0]
+        efn = struct.unpack_from("<I", fw.d, table - FW_BASE + 12 * k + 4)[0]
+        if eid == 0 and efn == 0:
+            continue
+        if eid == 10:
+            row = (k, eid, efn)
+    ck(row is not None and row[2] == 0x5FF65,
+       "F7b group-0 dispatch table row id=10 -> handler thumb 0x5FF65")
+    i = fw.insn(A_BANDCFG)
+    ck(i is not None and i.mnemonic.startswith("push"),
+       "F7b handler entry CA 0x5FF64 is a Thumb function (push.w)")
+    i = fw.insn(0x5FFA4)
+    ck(i is not None and "[r4, #0xc]" in i.op_str,
+       "F7b g0 id10 payload+0x00 gate (==3) read at CA 0x5FFA4")
+    i = fw.insn(0x5FFAC)
+    ck(i is not None and "[r4, #0xd]" in i.op_str,
+       "F7b g0 id10 payload+0x01 subtype read at CA 0x5FFAC")
+    i = fw.insn(0x60092)
+    ck(i is not None and "[sb, #0x104]" in i.op_str,
+       "F7b context +0x104 write at CA 0x60092")
+    i = fw.insn(0x6009E)
+    ck(i is not None and "[sb, #0x106]" in i.op_str,
+       "F7b context +0x106 write at CA 0x6009E")
+    i = fw.insn(0x600B2)
+    ck(i is not None and "[r2, #0xfc]" in i.op_str,
+       "F7b context +0xFC write at CA 0x600B2")
+
     print()
     print("fw_scan_timing_re: %d/%d checks %s (fw %s)" %
           (checks[0] - checks[1], checks[0],

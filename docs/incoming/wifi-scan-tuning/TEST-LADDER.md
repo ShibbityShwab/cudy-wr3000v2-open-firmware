@@ -42,6 +42,7 @@ interface, run `iw dev wlan0 scan`, collect dmesg + `iw dev wlan0 scan dump`.
 | **R6 scan with AP up** | R1 params; start the AP (hostapd AP-ENABLED, ssid cudy-ap-test) on wlan0 first, then create a second managed VAP if the wiphy allows (or scan on wlan0 while AP is up) | checks the baseline "0 results with AP running" observation | PASS = 13/13 finish-ok + BSS >= 1; if 0 results, record the AP state and stop (do not retry blindly) |
 | **R7 D2H catalogue discriminator** | R0 (single request) run; after the host timeout, dump the direct D2H catalogue (`rd_catalog` tail from the bench tooling) | separates firmware stop from host delivery gap | if the catalogue holds >6 g1 id17 frames for the run -> **H3** (host delivery gap) and R1's PASS is still valid; if exactly 6 -> **H1/H2** (firmware stop) |
 | **R8 per-channel requests** | `scan_req_batch=1` | 13 requests of one channel each (worst case) | finish-ok 13/13 within 20 s = the chained path is robust; useful if a request beyond the first is silently refused at batch=6 |
+| R9 (research, NOT this ladder) | g0 id10 scan-context config (handler CA 0x5FF64) | future H1 experiment: seed the context so one 13-entry request works without batching | separate attended lane only; see REPORT sec 8 + recipes/BAND-CONFIG-G0ID10.md. Do not fire in the default ladder |
 
 ## 2. Expected dmesg shapes (new lines are the evidence)
 
