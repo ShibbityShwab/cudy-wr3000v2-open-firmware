@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
+# Kernel compile check for the portable hcc_core library (task-92).
+# tools/build.sh copies src/hcc_core.c, src/hcc_core_kernel.c and src/kmod/*
+# into one scratch directory and builds this module against the 6.18.60 tree.
+obj-m := hcc_core_kmod.o
+hcc_core_kmod-y := hcc_core_check.o hcc_core.o hcc_core_kernel.o
