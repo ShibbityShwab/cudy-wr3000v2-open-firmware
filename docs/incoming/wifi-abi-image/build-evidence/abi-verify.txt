@@ -1,0 +1,64 @@
+== kernel-ABI image verification (built bytes) ==
+tree      : /home/shibbityshwab/openwrt-lab-selectorfix-img
+artifacts : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/abi-image-artifacts
+work      : /tmp/abi-verify-refresh
+
+container : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+built     : 2569-11-24 17:02:58.019511600 +0700
+size/sha  : 6533439 B / df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310
+ok   container sha256 reproduces the recorded bench image df6a78c3
+kernel    : 3372638 B / 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+rootfs ubi: 3145728 B / 62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746
+ok   kernel slice sha256 == hardware-validated 13e81214
+ok   full kernel slot sha256 (kernelb flash contract)
+ok   rootfs UBI sha256 reproduces the recorded image rootfs 62344e80
+squashfs  : 2756608 B / f58ee016098f53d57bcc8fd0d5c5e5e16157f1e35f8ce343042954fdca185e18
+
+ok   tree kernel .config.set present (recomputed vermagic 6f995278d21563ed4dd8f2609f3659c8)
+ok   tree .vermagic file == recomputed vermagic
+ok   tree vermagic == the kmod .apk pin (6f995278...)
+image kernel package version : 6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   image apk-db kernel version == 6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1 (the ABI fix)
+ok   image db: kmod-hi5622-cfg80211 depends on kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   image db: kmod-hi5622-wifi depends on kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   artefact kmod-hi5622-cfg80211.apk depends on kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   artefact kmod-hi5622-wifi.apk depends on kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+PRESENT  usr/sbin/iw                                     116855 B sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23  # iw 6.17 nl80211 CLI
+ok   rootfs carries usr/sbin/iw
+PRESENT  usr/bin/iwinfo                                   16906 B sha256 88fb49430a9a0b5095f10eacf1ea63a6c8906b450a71b01bfebfc01ba959cb4c  # iwinfo C CLI
+ok   rootfs carries usr/bin/iwinfo
+PRESENT  usr/lib/libiwinfo.so.20230701                    57377 B sha256 aa35d698dfb5ec20ff343bde48f10f6cc055aeaeda62630f4615847bc3c2a806  # libiwinfo shared library
+ok   rootfs carries usr/lib/libiwinfo.so.20230701
+PRESENT  usr/share/libiwinfo/devices.txt                  18231 B sha256 dcaaa350ccc73b16341fc792d712f5b45c546344c3dc7457d141c5f2b3a804f3  # libiwinfo device data
+ok   rootfs carries usr/share/libiwinfo/devices.txt
+PRESENT  lib/firmware/regulatory.db                        6332 B sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  # wireless regulatory database
+ok   rootfs carries lib/firmware/regulatory.db
+PRESENT  lib/modules/6.18.60/cfg80211.ko                 406028 B sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a  # cfg80211 from the target kernel tree
+ok   rootfs carries lib/modules/6.18.60/cfg80211.ko
+PRESENT  lib/modules/6.18.60/hi5622_wifi.ko              133884 B sha256 e0608fa6e1489035d58febce279a13baf6988a5664b0404e1135d0b53d124094  # clean-room Hi5622 Wi-Fi host driver
+ok   rootfs carries lib/modules/6.18.60/hi5622_wifi.ko
+ok   cfg80211.ko modules vermagic 6.18.60
+ok   hi5622_wifi.ko modules vermagic 6.18.60
+ok   hi5622_wifi.ko depends on cfg80211
+ok   image installed package count
+ok   seven deployable .apk artefacts in the artifacts dir
+ok   squashfs volume == build_dir/root.squashfs (2753136 B) + ubinize padding
+
+-- flashable artifacts (/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/abi-image-artifacts) --
+  fe1edf02d65431da4be8aa015327587f7b42059c4e637f7467ca762be3f6766c  CONTROL
+  375afabdcb5faaedc1ac1be2eeb9d47181b10c9446b83676441cdd0ca679c726  INSTALL-STATUS.txt
+  df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310  bench-image-sysupgrade.bin
+  04145cf96575dd71b24c6cfb416f335b97e91f571b9c5124b7dcc168ffbebd66  fip-manifest.txt
+  9b46713fb5a0e866e7b1fb919f2a30eca4bc01d9aeabf49fa50b20faedd69f08  iw-6.17-r1.apk
+  5badc21509df6ba6df109697879cf28960315c8ceb19aabb258f79564ae5de23  iwinfo-2026.05.26~66bdd1a0-r1.apk
+  13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f  kernel-slice.bin
+  716fd384cc7ad58b7c3e4000046addce7c76b3223fe3b8d5b05600fb46ed624c  kmod-hi5622-cfg80211-6.18.60-r1.apk
+  aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef  kmod-hi5622-wifi-6.18.60-r1.apk
+  3bb216a4f2ae69a27cfe86daf97c597b92daa4f0fca68b00c0d842076d933320  libiwinfo-data-2026.05.26~66bdd1a0-r1.apk
+  d1178900f817c08c232bf4a704e5b883f02c1f67dbe93e41af9f4b8132ce3f55  libiwinfo20230701-2026.05.26~66bdd1a0-r1.apk
+  f58ee016098f53d57bcc8fd0d5c5e5e16157f1e35f8ce343042954fdca185e18  root.squashfs
+  62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746  rootfs.ubi
+  afd292e0c0947aaa5497e52b2a9e9484e690a9abfef1153c36d9a06143a758a1  wireless-regdb-2026.09.03-r1.apk
+
+== verify-abi-image: 25 passed, 0 failed ==
+RESULT: PASS - image apk-db kernel version == tree vermagic == kmod kernel= pin; kernel slice/slot/flash members match

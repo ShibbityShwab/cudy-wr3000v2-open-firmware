@@ -1,0 +1,5 @@
+package installed : /home/shibbityshwab/openwrt-lab-selectorfix-img/package/hi5622-wifi
+driver source     : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-abi-image/../wifi-cfg80211/src
+snapshot files    : 29
+snapshot manifest : /home/shibbityshwab/openwrt-lab-selectorfix-img/package/hi5622-wifi/src-sha256.txt sha256 10582bb49af68c8360d569d88e59fd994d370e76e4440e48fc24cc856af948ca
+next: append ../config-delta.config to /home/shibbityshwab/openwrt-lab-selectorfix-img/.config, run make defconfig, then make -jN
