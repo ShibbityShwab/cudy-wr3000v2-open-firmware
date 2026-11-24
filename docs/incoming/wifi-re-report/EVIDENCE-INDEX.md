@@ -50,6 +50,10 @@ section of [REPORT.md](REPORT.md).
 | EV-250 | 1.2 | the ABI-correct image was flashed (slot read-back + ABI receipt matched, kmod-ABI mismatch closed) and the AP reproduced on it from rootfs-native modules | [V*] | TABLES T21, REPORT sec 6.11/C44 | ledger 2026-11-27 06:30 | - |
 | EV-251 | 1.3 | the nine v4 breakthrough-ladder rungs (17-25) and their dates | [V*] | REPORT sec 1.3; lanes named per row | ledger 2026-11-26 12:00 - 2026-11-27 06:30 | - |
 | EV-252 | 1.4 | v4 key numbers: AP module/frames/readback, scan results, air-TX module, ABI image/flash, T0/userapd/gates numbers | [V]/[V*] | REPORT sec 1.4; TABLES T21/T29/T31 | lanes named per row | constants cross-checked in v4 verifier |
+| EV-278 | 1.1 | the v5 chain extends to the static-RE wave and its fired results: RX live-bank arm, five-message AP order, WPA2 GTK, scan ceiling, STA/5GHz/HT model, TX COMPLETED, E2 restart, 40-min soak | [V*]/[V] | REPORT sec 1.1; TABLES T32-T37 | ledger 2026-11-28 01:00 - 2026-11-29 00:00 | - |
+| EV-279 | 1.2 | the v5 proven/not-proven split: RX consumer and TX completion proven at device level; WPA2 GTK and five-message AP order proven; on-air beacons, association/PTK and STA join still open | [V*]/[U] | REPORT sec 1.2, TABLES T32-T36 | ledger 2026-11-28 | - |
+| EV-280 | 1.3 | the six v5 breakthrough-ladder rungs (27-32): TX COMPLETED, final R4+soak, scan ceiling, RX arm, five-message order, WPA2 GTK | [V*]/[V] | REPORT sec 1.3; lanes named per row | ledger 2026-11-28 | - |
+| EV-281 | 1.4 | v5 key numbers: RX live bank/header, WPA2 commands/workers/GTK frames, five-message AP order, scan ceiling, STA/5GHz/HT words, TX-completion/E2/soak, static-wave artifacts | [V]/[V*] | REPORT sec 1.4; TABLES T32-T37 | lanes named per row | constants cross-checked in v5 verifier |
 
 ## Section 2 - system map
 
@@ -134,6 +138,12 @@ section of [REPORT.md](REPORT.md).
 | EV-253 | 4 F12 | the AP-start crash was a missing firmware VAP object (workers deref `module_ctx+0x190` with no NULL check), not a malformed ap_auth; the mislabel was index-based and the 184 B frame was ap_cfg | [V]/[V*] | `wifi-ap-start/REPORT.md` sec 11.5/12, `HOSTAPD-BRINGUP.md` sec 12, REPORT F12 | ledger 2026-11-27 03:30/04:30 | - |
 | EV-254 | 4 F13 | hostapd's AP-ENABLED path is a cfg80211 capability ladder: ucode, `.connect`, `.mgmt_tx`, `mgmt_stypes`, `REPORTS_OBSS`, the connect/disconnect WARN, SET_INTERFACE/`type __ap`, and the firmware VAP base | [V]/[V*] | `wifi-ap-start/HOSTAPD-BRINGUP.md` sec 9-12, TABLES T30 | ledger 2026-11-26 20:30 - 2026-11-27 01:30 | - |
 | EV-255 | 4 F14 | AP-ENABLED is a control-plane milestone: not beaconing, association, WPA2 or data-path proof, and it runs on the PD4-patched research firmware | [V*]/[I] | REPORT F14/6.11/10.1, TABLES T29 | ledger 2026-11-27 04:30/06:30 | - |
+| EV-282 | 4 F15 | the RX negative was a wrong-block telemetry bug: live ring pointers are CA 0x40050000 (+0x00 status/+0x08 norm rptr/+0x0c small rptr/+0x10 cmp wptr), config +0x4c/50/54 are never read; completion entry = devVA(buffer+4) with a 36 B header at buffer+4 | [V]/[V*] | `wifi-rx-static/REPORT.md`, TABLES T32, ledger 2026-11-28 16:00/21:00 | ledger 2026-11-28 21:00 | - |
+| EV-283 | 4 F16 | WPA2-AP installs the GTK at AP start: key_add 0x0078 (0x44 body) + set_default_key 0x0079 (0x28) -> workers 0x0A5825/0x0A5C9D; the 4-way PTK remains RX-gated | [V]/[V*] | `wifi-wpa-static/REPORT.md`, TABLES T33, ledger 2026-11-28 23:00 | ledger 2026-11-28 23:00 | - |
+| EV-284 | 4 F17 | the vendor AP start is five messages (channel 0x0124 first, VAP start 0x0065 after ap_cfg); the firmware SMAC beacons autonomously and the host posts no beacon template | [V]/[V*] | `wifi-beacon-static/REPORT.md`, TABLES T34, ledger 2026-11-28 22:00 | ledger 2026-11-28 22:00 | - |
+| EV-285 | 4 F18 | the full 13-channel scan is structurally impossible: g0 id10 is a BA relay, the scan engine uses slot 0 only and no subtype-1 write reaches +0xFE; ceiling 6 (7-8 with H1) | [V]/[V*] | `wifi-scan-full/REPORT.md`, TABLES T35, ledger 2026-11-28 17:00 | ledger 2026-11-28 17:00 | - |
+| EV-286 | 4 F19 | STA is a WAL connect-SME (0x0123/108 B, 0x00d0/16 B), 5 GHz is one wiphy per band (14/29-channel tables) and HT/VHT words are 0x0062 / 0x00400000 / 0x00400064; capability only, patch not fired as a connect rung | [V]/[U] | `wifi-sta-static/REPORT.md`, TABLES T36 | - | - |
+| EV-306 | 4 F20 | the final all-patch module: one clean-room module (stripped 308,080 B sha256 `5b587949...`, 47 params, 0 warnings) validated in one boot - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS; remaining gaps are on-air/RX-traffic/STA-join/5GHz/image-bake | [V]/[V*] | `wifi-stability/FINAL-INTEGRATION.md`, ledger 2026-11-29 01:00, TABLES T38 | ledger 2026-11-29 01:00 | - |
 
 ## Section 5 - protocol reference
 
@@ -202,6 +212,17 @@ section of [REPORT.md](REPORT.md).
 | EV-262 | 6.11 | the AP was reproduced on the flashed ABI-correct image (rootfs-native modules, T0 full-set verify 38 gates, ABI receipt = kmod pin) | [V*] | TABLES T21/T29, REPORT 6.11 | ledger 2026-11-27 06:30 | - |
 | EV-263 | 6.12 | the first data-plane frame: `dp_probe` READ -> `dp_setup` -> key-0x0320 sync -> `dp_tx_frame` published wptr 0->1, completion_pending=1 = POST-ONLY; 0 RX captures | [V]/[V*] | `wifi-dp-air/LADDER-F-AIR.md`, TABLES T31 | ledger 2026-11-27 02:30 | v4 build 1,483 checks + clean module |
 | EV-264 | 6.8 | final all-PASS matrix run: boot/C2/D1/D2/E1 PASS, evidence `20261124T094716Z`; D2 TRUE PASS from `20261124T094310Z` | [V*] | TABLES T28, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-26 15:00/17:00 | - |
+| EV-287 | 6.13 | the MAC RX map: live bank CA 0x40050000 (status/norm rptr/small rptr/completion wptr), config block CA 0x40040000, completion entry devVA(buffer+4), 36 B header at buffer+4 (len +0x1a, next +0x20, MPDU +0x28), 15-bit+phase index | [V] | `wifi-rx-static/REPORT.md` sec 2-5, TABLES T32 | - | v5 re-run 51/51 + clean module |
+| EV-288 | 6.13 | the fired `dp_rx_arm` on a fresh AP boot read status 0x182, mask 0xfffffcc1, norm/small rptr 0x20 (exact vendor mirror) -> the MAC RX consumer is proven; `dp_rx_drain` moved nothing (no on-air traffic) | [V*] | ledger 2026-11-28 21:00, TABLES T32 | ledger 2026-11-28 21:00 | - |
+| EV-289 | 6.14 | the WPA2 key protocol: add_key 0x0078 (0x44 body), set_default_key 0x0079 (0x28), del_key 0x007A (8 B) -> workers 0x0A5825/0x0A5C9D/0x0A4271; cipher low-byte classes; no host MAC-register step | [V] | `wifi-wpa-static/REPORT.md` sec 2-3, TABLES T33 | - | v5 host check + chain identity |
+| EV-290 | 6.14 | the fired WPA2-AP GTK: key_add 96 B (idx=1, cipher 0xfac04, CCMP) + key_default 68 B (multi=1), both consumed 0 polls; AP-ENABLED; PTK still RX-gated | [V*] | ledger 2026-11-28 23:00, TABLES T33 | ledger 2026-11-28 23:00 | - |
+| EV-291 | 6.15 | the five-message vendor AP order: channel 0x0124 first (4-byte body, worker CA 0x841B8), SSID 0x0005, auth 0x006D (WAL only), AP config 0x0127, VAP start 0x0065 after ap_cfg; no host beacon template (firmware SMAC beacons) | [V] | `wifi-beacon-static/REPORT.md` sec 2-3, TABLES T34 | - | v5 65/65 + 33/33 probes |
+| EV-292 | 6.15 | the fired five-message order reached AP-ENABLED (`ap_chan` 32 B band=0 channel=6 before ap_cfg, `ap_vap_start` after ap_cfg); the `module_ctx+0x190` fresh-post guard false negative was fixed | [V*] | ledger 2026-11-28 22:00, TABLES T34 | ledger 2026-11-28 22:00 | - |
+| EV-293 | 6.16 | the scan ceiling closure: g0 id10 is the ADDBA/DELBA relay (44 B vendor shape, subtype-2 flag payload+0x14, dispatch row 0x10CD5C); scan engine uses slot 0 only and no subtype-1 field writes +0xFE; ceiling 6 (7-8 with H1 pacing), 13/13 impossible | [V]/[V*] | `wifi-scan-full/REPORT.md` sec 2-6, TABLES T35 | ledger 2026-11-28 10:00/17:00 | v5 90/90 + 65/65 + clean module |
+| EV-294 | 6.17 | STA/5GHz/HT-VHT decoded: WAL connect 0x0123/108 B, disconnect 0x00d0/16 B, firmware auth/assoc; one wiphy per band; 14/29 channel tables; HT 0x0062; VHT 2SS MCS0-9, caps 0x00400000/0x00400064; patch not fired | [V]/[U] | `wifi-sta-static/REPORT.md`, TABLES T36 | - | v5 host tests + build |
+| EV-295 | 6.12 | TX COMPLETED: the vendor TXQ-table queue-state publish (per-TID count/SN/bytes + timestamp) was the missing device-consumer step; with it device rptr == published wptr, `COMPLETED (MAC)` | [V*] | ledger 2026-11-28 01:00, TABLES T31/T37 | ledger 2026-11-28 01:00 | - |
+| EV-296 | 6.11 | E2 AP restart in one boot + 40-min AP soak: final R4 combined module (stripped 269,688 B sha256 `b5dfb883...`) restarted the AP and gave 242/242 golden samples | [V*] | ledger 2026-11-28 13:30/21:00, TABLES T37 | ledger 2026-11-28 13:30 | - |
+| EV-307 | 6.18 | the one-boot final all-patch validation: AP five-message order -> hostapd AP-ENABLED with WPA2 config; GTK key_add 96 B + set_default 68 B consumed; TX COMPLETED (TXQ table wptr=rptr=1); RX arm status 0x182/mask 0xfffffcc1/rptr 0x20; page golden/mask 0 | [V*] | ledger 2026-11-29 01:00, TABLES T38 | ledger 2026-11-29 01:00 | - |
 
 ## Section 7 - bench evidence chain
 
@@ -253,6 +274,7 @@ section of [REPORT.md](REPORT.md).
 | EV-227 | 7 | end-of-chain state 2026-11-26 06:30: cfg80211 bench image on pair B, boot/C2/D1/E1 PASS in one command, D2 BLOCKED-DRIVER, no pending writes, stock pair preserved | [V*] | ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
 | EV-265 | 7 | the v4 session chain (2026-11-26 09:00 - 2026-11-27 09:00): T0 userspace PASS, mode-0/mode-1 VAP, first scan results, 12 BSS decode, all-PASS matrix, ABI image reproduction, dp-merge, AP fires v2-v7, air-TX POST-ONLY, first live AP, flash + AP on the flashed image, AP persistence + the new g1 id0x23 family | [V*]/[V] | REPORT sec 7, ledger entry per row | ledger 2026-11-26 09:00 - 2026-11-27 09:00 | - |
 | EV-275 | 7 | 2026-11-27 09:00 - the AP on the flashed image stayed live for minutes (hostapd processes alive, same SSID/type, no exceptions) and the D2H catalogue gained a boot-absent family: g1 id0x23 (35) count=6, 24 B + g1 id3 count=20 (466 B); likely AP/beacon-period activity [I], not an on-air proof | [V*]/[I]/[U] | ledger 2026-11-27 09:00; REPORT 6.11/F14 | ledger 2026-11-27 09:00 | - |
+| EV-297 | 7 | the v5 session chain (2026-11-27 20:30 - 2026-11-29 00:00): tuning baseline, stability A-D boots, TX COMPLETED, scan-tuning/H1 re-arm, final R4 + soak, the 5-lane static wave, RX arm PASS, five-message AP order fire, WPA2 GTK fire, integration tasked | [V*]/[V] | REPORT sec 7, ledger entry per row | ledger 2026-11-27 20:30 - 2026-11-29 00:00 | - |
 
 ## Section 8 - corrections register
 
@@ -293,6 +315,8 @@ section of [REPORT.md](REPORT.md).
 | EV-232 | 8 | C33: a delivered scan request alone does not produce results; the per-radio VAP must be started (scan handler reads VAP id 0) | [V]/[V*]/[U] | firmware handler decode + scan attempt, TABLES T27 | ledger 2026-11-26 06:30 | - |
 | EV-266 | 8 | corrections C34-C44: mode-0/mode-1 VAP carrier, D2 all-PASS, ap_cfg/missing VAP object, NEW_BEACON/REPORTS_OBSS, mgmt registration gates, connect/disconnect WARN, dp_probe READ, POST-ONLY, AP-ENABLED limits, BAR0 0x7D1758, flash executed | [V]/[V*] | REPORT sec 8 | ledger 2026-11-26/27 | - |
 | EV-276 | 8 | C45: the AP milestone is strengthened by persistence + the new g1 id0x23 24 B D2H family after the AP start, but neither is an on-air beacon proof and the family's meaning is [U] | [V*]/[I]/[U] | ledger 2026-11-27 09:00, REPORT C45/6.11 | ledger 2026-11-27 09:00 | - |
+| EV-298 | 8 | v5 corrections C46-C56: RX wrong-block/live-bank, no extra RX enable, five-message AP order, scan ceiling/dispatch/shape corrections, key commands not MAC registers, STA WAL/connect-SME, per-band wiphy/HT-VHT, module_ctx+0x190 async, TX COMPLETED, E2 restart, final all-patch integration | [V]/[V*] | REPORT sec 8; the five static lane reports + wifi-stability FINAL-INTEGRATION.md; TABLES T32-T38 | ledger 2026-11-27/29 | - |
+| EV-308 | 8 | C56: the static features are no longer separate artifacts - the final all-patch module (opensource `008aca5`, 308,080 B `5b587949...`, 47 params, six additive conflict resolutions) was fired in one boot with AP order + WPA2 GTK + TX COMPLETED + RX arm all PASS | [V]/[V*] | `wifi-stability/FINAL-INTEGRATION.md`, ledger 2026-11-29 01:00; F20/6.18 | ledger 2026-11-29 01:00 | - |
 
 ## Section 9 - verification
 
@@ -320,6 +344,8 @@ section of [REPORT.md](REPORT.md).
 | EV-237 | 9.3 | the bench-ladder map now includes the C2/D1/D2/E1 phases and the one-command matrix; every real run is attended and recovery-gated | [V*] | TABLES T28, `wifi-bench-tooling/README.md` | ledger 2026-11-26 05:30 | - |
 | EV-267 | 9.1 | v4 re-ran the host-only checks: bench-tooling 563/563, ap-start build 128/128 + RE probes 63/63, hostapd deploy 14/14, vap-start 61/61, scan-complete 373/373 + clean module build, dp-air 1,483 checks + clean module (886,864 B `ca32aec4...`) | [V] | the lanes' committed selftest entry points | - | **yes** (v4) |
 | EV-268 | 9.4 | the verifier was extended for v4: sections 6.1-6.12, findings F1-F14, tables T1-T31, the v4 claim range (245-277), the v4 vocabulary and the AP/air-TX/flash constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
+| EV-299 | 9.1 | v5 re-ran the host-only static-lane checks: rx-static 51/51 + clean build, wpa-static host check PASS + chain identity CHAIN-ID-OK, scan-full 90/90 host + static-evidence PASS (lane record 65/65) + clean build, sta-static host selftests + build, beacon-static 65/65 (static probes 33/33 per vendor version, lane record) | [V] | the lanes' committed selftest entry points | - | **yes** (v5) |
+| EV-300 | 9.4 | the verifier was extended for v5: sections 6.1-6.18, findings F1-F20, tables T1-T38, the v5 claim range (278-308), the static-wave/final-module vocabulary and constants (RX live bank, key commands/workers, five-message order, scan-full corrections, STA/5GHz/HT words, all-patch module `5b587949`/308,080 B) | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
 
 ## Sections 10-13 - limits, publication, lane map, conventions
 
@@ -352,18 +378,25 @@ section of [REPORT.md](REPORT.md).
 | EV-272 | 11 | the ABI-correct image flash: stock-assisted install, kernel slot read-back, handover, ABI receipt, rootfs-native modules; overlay wiped by design; stock pair A is the rollback | [V*] | TABLES T21, `wifi-abi-image/FLASH-RUNBOOK.md` | ledger 2026-11-27 06:30 | - |
 | EV-273 | 12 | the lane map now covers wifi-vap-start, wifi-scan-d2h, wifi-scan-complete, wifi-dp-txrx, wifi-dp-air, wifi-ap-start, wifi-hostapd-deploy, wifi-bench-session, wifi-image-deploy, wifi-abi-image and wifi-image-integration | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
 | EV-274 | 13 | the glossary gained mode-0/mode-1 VAP, mode-1 VAP base, AP start sequence, AP-ENABLED, hostapd-mini/ucode, mgmt_stypes, REPORTS_OBSS, `type __ap`, POST-ONLY/COMPLETED/air-CANDIDATE, F-AIR, T0/ABI-correct, `finish-ok[channel-coverage]` and readback-pack terms | [V] | REPORT sec 13 | - | - |
+| EV-301 | 10 | v5 limits: device-level TX completion + RX consumer proven but no on-air/RX-with-traffic proof; WPA2 GTK only (PTK RX-gated); five-message order but beacons external; scan ceiling structural; STA/5GHz static-only; all-patch integration tasked | [V*]/[I] | REPORT sec 10.1 | - | - |
+| EV-302 | 10.2 | v5 open questions re-ranked: (1) external-observer beacon/association, (2) on-air TX + RX capture with traffic, (3) AP mgmt TX/RX + PTK, (4) scan quality/batching/g0 id11/5 GHz ids, (5) all-patch module + image, then IRQ/vendor-clean/WAL/D2H/DR/STA join | [U]/[I] | REPORT sec 10.2 | - | - |
+| EV-303 | 11 | v5 static-wave publication boundary: derived offsets/ids + original C + synthetic vectors only; patched/fired .ko local; no vendor code/firmware byte; upstream verdict unchanged (PD4-patched research firmware, mgmt TX/RX + on-air + GPL blockers) | [V]/[I] | REPORT sec 11; project `PUBLISH.md`; lane reports | - | - |
+| EV-304 | 12 | the lane map now covers the five static lanes (rx, wpa, scan-full, sta, beacon) and the tuning lanes (scan-tuning, stability, dp-tuning, image-polish, perf-baseline) | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
+| EV-305 | 13 | the glossary gained live-bank/rx_arm, completion entry/36 B header, WPA2 GTK/PTK, key cmds 0x78/79/7A, five-message AP order/ap_chan, SMAC beacons, scan ceiling/H1 pacing, STA connect-SME, per-band wiphy, TXQ publish/COMPLETED, E2 restart/soak and static-RE wave terms | [V] | REPORT sec 13 | - | - |
 
 
 ---
 
 **Coverage statement.** Every numbered section of [REPORT.md](REPORT.md) has at least one claim
 row here; every claim row carries a marker and either an artifact path, a ledger date, or an
-explicit [I]/[U] status. v4 adds claim numbers **245-277**, covering the mode-1 VAP base and the first real
-scan results (6.9), the hostapd capability ladder (6.10), the first live AP and its reproduction on
-the flashed image plus the persistence observation (6.11), the first data-plane frame (6.12), the
-all-PASS matrix (6.8), the v4 session chain (7), corrections C34-C45 (8), the v4 verification (9),
-the updated limits/open questions (10), publication, the flash and the upstream-final package (11),
-the lane map (12) and the glossary (13). If a future
+explicit [I]/[U] status. v4 adds claim numbers **245-277** (mode-1 VAP/scan results, hostapd ladder, first live AP + flash,
+the first data-plane frame, all-PASS matrix, v4 sessions/corrections/verification/limits/publication/
+lane map/glossary). **v5 adds claim numbers 278-308**: the static-RE wave and its fires - the RX
+live-bank correction and `dp_rx_arm` proof (6.13), the WPA2 key protocol and GTK fire (6.14), the
+five-message AP order and its fire (6.15), the scan-ceiling negative (6.16), the STA/5GHz/HT-VHT
+tables (6.17), the TX-COMPLETED/E2-restart/soak facts (6.11/6.12), the v5 session chain (7),
+corrections C46-C55 (8), the v5 verification (9), limits/open questions (10), publication boundary
+and lane map (11/12) and the glossary (13). If a future
 edit adds a claim to the report without adding it here, the lane verifier's section-coverage check
 and the project documentation audit should catch it.
 

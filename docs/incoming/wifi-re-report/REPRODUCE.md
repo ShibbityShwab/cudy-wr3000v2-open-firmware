@@ -38,8 +38,9 @@ $PY tools/verify_report.py
 Expected: a list of PASS lines (file presence, lane-path resolution, marker set, section coverage,
 claim-ID sequence, table/finding completeness, **v4** milestone vocabulary, key-constant cross-checks
 against the owning lanes' committed sources and the superproject ledger, forbidden-content scan) and
-a final PASS with the check count (v4 adds the AP-start/hostapd/air-TX/flash checks: sections
-6.1-6.12, findings F1-F14, tables T1-T31, claims EV-001..EV-278). Exit code 0 on success.
+a final PASS with the check count (v5 adds the static-RE-wave checks: sections 6.1-6.17, findings
+F1-F19, tables T1-T37, claims EV-001..EV-305, including the RX live-bank, WPA2 key, five-message
+AP-order, scan-ceiling and STA/5GHz/HT constants). Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -76,6 +77,13 @@ cd $REPO/opensource/docs/incoming/wifi-ap-start && ./tools/build.sh       # 128/
 cd $REPO/opensource/docs/incoming/wifi-ap-start && $PY tools/ap_start_re.py --selftest   # 63/63 static probes
 cd $REPO/opensource/docs/incoming/wifi-hostapd-deploy && ./tools/selftest.sh   # 14/14 host-only; then ./deploy-hostapd.sh --check (88/88) and ./tools/check-ladder.py (107/107)
 cd $REPO/opensource/docs/incoming/wifi-dp-air && ./tools/build.sh          # merge provenance + 1,483 checks + F-AIR sequence + clean 6.18.60 module build
+cd $REPO/opensource/docs/incoming/wifi-rx-static && ./tools/build.sh     # 51/51 host checks (live bank + header) + clean 6.18.60 build
+cd $REPO/opensource/docs/incoming/wifi-wpa-static && ./tools/run-host-check.sh   # key selftest (cipher classes, 3 bodies/frames, refusals)
+cd $REPO/opensource/docs/incoming/wifi-scan-full && ./tools/build.sh      # 90/90 host + 65/65 static-evidence + clean 6.18.60 build
+cd $REPO/opensource/docs/incoming/wifi-beacon-static && ./tools/build-host.sh   # 65/65 host checks (five-message plan/channel KAT)
+cd $REPO/opensource/docs/incoming/wifi-beacon-static && ./tools/build-module.sh # 33/33 static probes x2 vendor versions + 6.18.60 build
+cd $REPO/opensource/docs/incoming/wifi-sta-static && ./tools/build-sta-static.sh # host tests + 6.18.60 build (WAL connect/5 GHz/HT-VHT)
+cd $REPO/opensource/docs/incoming/wifi-scan-tuning && ./tools/build.sh    # scan batching/timing host checks + clean module build
 cd $REPO/opensource/docs/incoming/wifi-datapath-bringup && bash tools/build.sh  # 69/69 + 308/308 + 34/34, 6.18.60 module build (host-only; no device)
 $PY wifi-datapath/tools/build.sh                     # 77/77 PASS, frame builders + ring arithmetic
 $PY wifi-datapath/tools/fw_dp_tables.py --selftest   # 35/35 PASS, firmware key tables A/B
@@ -199,6 +207,11 @@ The v4 ladders extend that flow, all attended and fail-closed:
   the F-AIR sequence with `cat dp_probe` (READ) -> `echo 1 > dp_setup` -> `echo 1 >
   h2d_txq_addr_sync` -> one `dp_tx_frame` -> read-only `dp_rx_poll`; POST-ONLY is a recorded
   outcome, not a failure; an on-air claim needs an external observer.
+* **static-wave feature ladders (REPORT 6.13-6.17, TABLES T32-T37)** - each lane ship a fail-closed
+  parameter and an attended ladder; the fired rungs were: `rx_enable=1` + `cat dp_rx_arm` (live-bank
+  proof), `wpa_keys=1` + WPA2 hostapd (GTK install), `beacon_static=1 beacon_vap_start=1` (five-message
+  vendor order), and the dp-tuning `tx_complete_ms` ladder (TX COMPLETED). All are attended-only and
+  must run on a fresh PD4 golden boot; never re-send a refused frame in the same boot.
 * **image (REPORT 6.11/C44)** - the ABI-correct image and the flash runbook are in
   `wifi-abi-image/`; the flash was executed on 2026-11-27 06:30 and the post-boot ABI receipt is the
   acceptance check (`apk query --fields version kernel` = the kmod pin).

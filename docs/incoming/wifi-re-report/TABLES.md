@@ -825,6 +825,12 @@ Minutes later (2026-11-27 09:00) the AP was still live and the D2H catalogue had
 evidence; `AP-ENABLED` is a host-side fact. Beacons on the air, client association, WPA2 keys and
 data-path frame movement are separate milestones (T31 and 10.2 Q1).
 
+**v5 update (2026-11-28).** The order in this table is the v4 host-side sequence. The vendor's
+actual AP start is **five** messages - channel config **0x0124 FIRST**, SSID 0x0005, auth 0x006D
+(WAL only), AP config 0x0127, **VAP start 0x0065 AFTER ap_cfg** - and the host never posts a beacon
+template (T34, C48). The five-message order was implemented and fired to `AP-ENABLED`; WPA2-AP on
+the same AP installs its GTK (`key_add` 0x0078 96 B + `key_default` 0x0079 68 B, T33/C50).
+
 ## T30. The hostapd bring-up gates (2026-11-26 20:30 - 2026-11-27 04:30)
 
 Source: `wifi-ap-start/HOSTAPD-BRINGUP.md` sec 1-12, `wifi-hostapd-deploy/REPORT.md` sec 2-5, ledger
@@ -855,7 +861,7 @@ the lane's checker (correction C43).
 control and WPA2 `add_key` remain absent/fail-closed; `change_beacon` accepts SET_BEACON host-side
 with no firmware write; hostapd/mini does not autostart from `apk add` (no `/etc/rc.d` link).
 
-## T31. The data-plane air-TX ladder (F-AIR, 2026-11-27 02:30)
+## T31. The data-plane air-TX ladder (F-AIR, 2026-11-27 02:30; v5: POST-ONLY superseded, see T37)
 
 Source: `wifi-dp-air/LADDER-F-AIR.md` + `BUILD-NOTES.md` (task-126), the bundled sequence
 `wifi-bench-tooling/tools/sequences/bringup-f-air-txrx.json` (30 steps / 83 checks / 7 writes,
@@ -899,5 +905,160 @@ monitor on the same channel). Without it the strongest verdict is "air-CANDIDATE
 "air-verified". One boot = one ctx-create + one txq_sync72 + one scan + one dp_setup + one 0x0320 +
 at most two TX posts + one RX poll; never retry a failed step; never reload/reset in the same
 session.
+
+## T32. MAC RX - the live bank, the completion path and the 36 B device header (2026-11-28)
+
+Source: `wifi-rx-static/REPORT.md` (task-137), the fired ladder evidence (ledger 2026-11-28 21:00),
+and the stock register dumps quoted in the lane. **The fired `dp_rx_arm` is the proof rung:** the
+live bank matched the vendor stock exactly, so the MAC RX consumer is running. The RX patch is
+fail-closed (`rx_enable=0` default).
+
+| object | address / value | notes | evidence |
+| --- | --- | --- | --- |
+| live host-MAC bank (band 0) | **CA 0x40050000** | machw word 8; reachable via the existing region-3 translation (BAR0 0x3b8000 + 0x50000) | [V] |
+| +0x00 | host-MAC interrupt status | read by `shuangta_get_host_mac_int_status`; RX branch on status bit 2 (0x04) | [V] |
+| +0x08 / +0x0c | norm / small free-ring **consumer rptr** (live) | stock mirror **0x20** each (32 buffers prefetched) | [V]/[V*] |
+| +0x10 | completion-ring **producer wptr** (live) | the completion side of the RX path | [V] |
+| config block (band 0) | CA 0x40040000 | ring addresses/sizes, host-owned wptr/rptr +0x38/+0x3c/+0x40, W1C status +0x44, mask +0x48 = 0xfffffcc1 | [V] |
+| config +0x4c/+0x50/+0x54 | **never read by the vendor; stay 0** | the old `dp_rx_poll` telemetry source - the wrong-block bug | [V] |
+| completion entry | **devVA of buffer+4** | converted to host VA; skb pointer at hostva-4 | [V] |
+| device header | **36 B at buffer+4** | payload len at header+0x1a (= buffer+0x1e; gate len+0x28 <= 0x640), next sub-MSDU at header+0x20, flags/status at +0x5/+0x7, MPDU at **buffer+0x28** | [V] |
+| ring index format | 15 index bits + phase bit 15 | full/empty resolved by index+phase compare (as the ETE rings) | [V] |
+| what the host owes | **consumer only** | advance free-ring rptrs/refill from completed queues bounded by the live rptr delta, publish the completion consumer; the 12-write ring program is the whole device enable | [V] |
+| patch actions | `dp_rx_arm` (RO validation), `dp_rx_drain` (only pointer mover; bounded, validates every entry/header, no retry) | `rx_enable`/`rx_clear_status`/`rx_drain_max` params; writes only config +0x38/+0x3c/+0x40 (+0x44 behind `rx_clear_status=1`) | [V] |
+| fired `dp_rx_arm` | `status=0x00000182 mask=0xfffffcc1 norm_rptr=0x0020 small_rptr=0x0020 cmp_wptr=0x0000` | **exact vendor stock mirror** -> MAC RX consumer proven | [V*] |
+| fired `dp_rx_drain` | no new completion (`rx_pending=0`) | no pointer moved - no on-air traffic; page golden/mask 0 | [V*] |
+| host/build verification | rx selftest **51/51**; 6.18.60 build 0 warnings; patch round-trips | local artifact 280,736 B sha256 `5b43d0a2...` | [V] |
+
+## T33. WPA2 key install - cfg80211 ops, firmware commands and the GTK fire (2026-11-28)
+
+Source: `wifi-wpa-static/REPORT.md` + `TABLES.md` (task-139), the fired GTK ladder (ledger
+2026-11-28 23:00). The fired WPA2 hostapd AP proved the group-key path on hardware; the pairwise
+PTK remains RX/association-gated. All key frames ride the bench-proven g0 id1 config-event carrier.
+
+| cfg80211 op | g0 cmd | body | firmware worker (table A) | fired? |
+| --- | ---: | ---: | --- | --- |
+| add_key | **0x0078** | **0x44 B**: key_index, pairwise, MAC[6], key[32], seq[16], key_len@0x38, seq_len@0x3c, cipher@0x40 | CA **0x0A5825** | **YES** - 96 B frame, idx=1, pairwise=0, cipher `0xfac04`, key_len=16, consumed 0 polls |
+| set_default_key | **0x0079** | **0x28 B**: key_index, unicast, multicast (+ mgmt class flag) | CA **0x0A5C9D** | **YES** - 68 B frame, idx=1, uni=0, multi=1, consumed 0 polls |
+| del_key | **0x007A** | 8 B | CA **0x0A4271** | not needed in the GTK rung |
+| get_key | query event | reply layout [U] | [U] | not implemented (not needed for PSK) |
+| set_default_mgmt_key | reuses 0x0079 with a class flag | vendor builder leaves a cipher byte the fw mgmt path wants | [V] | deliberately unregistered |
+
+| item | value | evidence |
+| --- | --- | --- |
+| cipher mapping | firmware uses the **low byte** of the cfg80211 suite; classes data 0x0714 / mgmt 0x3840 / WEP 0x0022; indices data <=3, mgmt 4..5 | [V] |
+| where the key lands | per-user key cache: cipher/index at user+0x310/0x311 (data) or +0x312/+0x313 (mgmt); key-table manager at module_ctx+0x4b8; **no host MAC-register step** | [V] |
+| config requirement | cfg80211 6.18 requires `.add_key` + `.del_key` + `.set_default_key` together at wiphy_new or WARNs | [V] |
+| fail-closed policy | `wpa_keys=0` compiled default; key bytes never logged; unknown ciphers -EOPNOTSUPP; ranges -EINVAL | [V] |
+| verification | key selftest PASS; chain identity `269,688`/`b5dfb883` (CHAIN-ID-OK); patched module 0 warnings (282,048 B `11cee0aa...`) | [V] |
+| limits | GTK only; PTK/4-way needs a client + RX; mgmt-key path unregistered; no client test | [U] |
+
+## T34. The five-message vendor AP-start order (2026-11-28)
+
+Source: `wifi-beacon-static/REPORT.md` + `TABLES.md` (task-140), the fired order (ledger 2026-11-28
+22:00). The v4 four-message order is superseded (C48): the channel config comes **first** and the
+VAP start **after** the AP config. Auth (0x006D) has no static g0 key and is WAL-only.
+
+| # | message | carrier / key | wire | body | firmware worker | fired order |
+| ---: | --- | --- | ---: | --- | --- | --- |
+| 1 | channel config | WAL cmd **0x0124** (g0 key 0x0124) | 32 B g0 | 4 B {band, vendor per-VAP byte, channel, 0} | CA **0x841B8** -> module ctx +0x10..+0x13 | **FIRST** - `ap_chan posted (32 B, band=0 channel=6)` |
+| 2 | set SSID | 0x0005 | 64 B g0 | 36 B | CA 0x82878 | posted 5/16 |
+| 3 | auth algs | **0x006D** | 36 B **WAL only** | 4 B allowlist {0,1,4,8} | no static g0 key | omitted on the g0 carrier |
+| 4 | AP config | 0x0127 | 184 B g0 | 156 B (T3 of wifi-ap-start) | CA 0x84DA4 | posted 6/16 |
+| 5 | VAP start | 0x0065 | 40 B g0 | 12 B {flag 1, cookie} | CA 0x46394 | **AFTER ap_cfg** - `ap_vap_start posted after ap_cfg` |
+| - | beacons | - | - | firmware SMAC (TBTT ISRs + suspend/resume; no host template/bcn ring) | - | on-air still needs an external observer |
+
+| verification | result | evidence |
+| --- | --- | --- |
+| static probes | **33/33** on 2.5.24 and 2.4.15 + firmware | [V] |
+| host selftest | **65/65**; 6.18.60 build 0 warnings | [V] |
+| guard fix | `module_ctx+0x190` false-negative removed (async field; log-only for fresh post) | [V*] |
+| fired result | plan `vap_add ap_chan ap_ssid ap_cfg ap_vap_start`; AP-ENABLED; page golden/mask 0 | [V*] |
+| limits | on-air beacons unproven (external observer); AP-side mgmt TX (wal_cfg80211_mgmt_tx) not implemented | [U] |
+
+## T35. The full-13-channel scan ceiling - g0 id10 decode and the clean negative (2026-11-28)
+
+Source: `wifi-scan-full/REPORT.md` (task-138) + `wifi-scan-tuning` (task-133), ledger
+2026-11-28 10:00/17:00. The g0 id10 per-slot array is a BA relay, and the scan engine consumes
+**slot 0 only** - so the 13-channel question is closed as a structural negative, not a driver bug.
+
+| item | value | evidence |
+| --- | --- | --- |
+| g0 id10 handler | CA 0x5FF64: payload[0]=3, payload[1]=1 (ADDBA rsp) / 2 (DELBA); object via 0xD6A1E; slot 0..7; contexts at obj+0xEC+slot*0x20 (8 x 0x20 B) | [V] |
+| dispatch row | table CA **0x10CCFC**, 12 B rows `{u32 id; u32 fn; u32 aux}`; id-10 row **0x10CD5C**; 0x10CD08 is id 1 | [V] |
+| vendor wire shape | **44 B** (12 B header + **32 B payload**), not the R4 36 B builder; subtype-2 flag at **payload+0x14** (not +0x08) | [V] |
+| scan engine | object `[[module+0x4B8]+0x1A00]`; +0xFC start, +0xFD step, **+0xFE end/count**, +0x103 mode, +0x104/0x105 result counters, +0x106 stride (firmware default **6**) | [V] |
+| why 13 impossible | engine reads **slot 0 only** (0xEC); **no subtype-1 field writes +0xFE** (only the subtype-2 clear path writes 0); extra slot configs cannot widen a request | [V]/[I] |
+| H1 real effect | pacing alias: payload+0x10 presets the result counter (+0x104), payload+0x12 sets mode (+0x103); the subtype-2 companion clears +0xFE/+0x106/+0x05 | [V]/[I] |
+| measured ceiling | **6 channels/request** without H1; **7** with H1 (8 with a larger counter preset but results=0); mode=1 dense/passive (4 ch, up to 14 BSS) | [V*] |
+| batching fallback | one cfg80211 scan -> ceil(13/6)=3 requests (6+6+1) with per-batch coverage; achievable ~3.5-6 s | [V*] |
+| BSS/iw path | decode proven (`entries=2 iw_visible=2`); len-prefix decode and cfg80211 inform work | [V*] |
+| host verification | scan-full 90/90 + 65/65 static; 6.18.60 build 0 warnings (local 263,704 B `4dd008d8...`); inherited 37/37 + 196/196 | [V] |
+| status | clean negative result; H1 stays off by default (`scan_band_cfg=0`) | [V]/[V*] |
+
+## T36. STA connect, 5 GHz and HT/VHT - the decoded tables (2026-11-28)
+
+Source: `wifi-sta-static/REPORT.md` + `TABLES.md` (task-141). **Static only at this cut-off** - the
+patch is host-built and compile-verified but not fired; capability advertisement is not a working
+client (association completion, RX/EAPOL and keys remain open).
+
+| item | value | evidence |
+| --- | --- | --- |
+| STA connect | **WAL cfg-event** opcode **0x0123**, **108-byte body** (ssid_len, mfp, IE/SSID/BSSID/key host-buffer addresses, privacy, auth_type, key_len/key_idx, ie_len); same envelope as the AP-start WAL frames | [V] |
+| STA disconnect | opcode **0x00d0**, **16-byte body** {bssid[6], reason u16, [15]=1}; the inherited `KICK_STA` allowlist row is cfg80211 disconnect (naming correction) | [V] |
+| who auths/assocs | the **firmware** (vendor `.auth`/`.assoc` are NULL - connect-SME driver); completion is a D2H management event not yet decoded -> the patch never fakes `cfg80211_connect_done` | [V] |
+| 5 GHz model | **one wiphy per band** on chip 0 (single host MAC, two RF chips; stock WIPHY=2); domain->band mapping of our endpoints [I] | [V]/[I] |
+| band tables | 2.4 GHz **14** channels (ch1-14, max_power 30 template), 5 GHz **29** channels (36-64, 100-144, 149-165, 4.9 GHz 184-196) | [V] |
+| HT | cap **0x0062** = SUP_WIDTH_20_40 | SGI_20 | SGI_40, both bands; static MCS rx_mask all zero (INI/runtime [U], not copied) | [V]/[U] |
+| VHT | advertised both bands, **2 SS MCS0-9** (`0xfffa`), cap **0x00400000** (2.4 GHz) / **0x00400064** (5 GHz: HTC_VHT + 160 MHz + SGI80/160, matches live ch44 @160 MHz) | [V]/[V*] |
+| patch / params | WAL allowlist {0x0123,108}; `sta_join` 0/1/2, `ht_mode` 0/1/2, `vht_cap`, `band_vendor`; host-built stripped 278,044 B `333c72a5...`, 0 warnings | [V] |
+| ladder | B0-B6 designed; first controlled `sta_join=2` post carries the [U] host-buffer dereference risk | [V]/[U] |
+
+## T37. The v5 fired-results summary - TX completion, E2 restart, soak and the static feature fires
+
+Source: the ledger entries 2026-11-28 01:00/10:00/13:30/21:00/22:00/23:00/2026-11-29 00:00 and the
+lane reports named per row. Every fire below was attended, on a fresh PD4 golden boot (page
+`0x86807FEF`, state 1, mask 0) and ended with mask 0/staging 0 and no exception.
+
+| fire (date) | module (stripped) | result | evidence |
+| --- | --- | --- | --- |
+| TX COMPLETED (2026-11-28 01:00) | dp-tuning `175a4617` / 251,924 B | TXQ-table queue-state publish after the ring push -> `COMPLETED (MAC)` device rptr == published wptr; `dp_txq_table` readback tie0 {count=1 bytes=32} | [V*] |
+| H1 scan re-arm (2026-11-28 10:00) | scan-only R4 `713899a1` / 254,328 B | H1 band-config posted; 7 channels (ch1..ch7); `entries=2 iw_visible=2` BSS path proven | [V*] |
+| final R4 combined validation + soak (2026-11-28 13:30/21:00) | R4 combined stripped **269,688 B sha256 `b5dfb883...`** (unstripped 990,760 B `64ece213...`) | AP-ENABLED -> E2 restart AP-ENABLED -> TX COMPLETED in one boot; 40-min soak 242/242 samples golden | [V*] |
+| RX arm (2026-11-28 21:00) | rx-static `5b43d0a2` / 280,736 B | live bank CA 0x40050000 status 0x182, mask 0xfffffcc1, norm/small rptr 0x20 = exact vendor mirror; drain no completions (no traffic) | [V*] |
+| five-message AP order (2026-11-28 22:00) | beacon-static fixed `300cd392` / 276,140 B | vendor order with `ap_chan` first and `ap_vap_start` after `ap_cfg`; AP-ENABLED | [V*] |
+| WPA2-AP GTK (2026-11-28 23:00) | wpa-static `11cee0aa` / 282,048 B | key_add 96 B idx=1 cipher 0xfac04 + key_default 68 B multi=1 consumed 0 polls; AP-ENABLED | [V*] |
+| static-wave artifacts (host-built, not fired) | scan-full 263,704 B `4dd008d8...`; sta-static 278,044 B `333c72a5...` | scan ceiling closed; STA/5GHz/HT static model + fail-closed patch | [V] |
+| integration status | - | **DELIVERED + FIRED**: the final all-patch module (one module, 47 params, stripped 308,080 B sha256 `5b587949...`) was validated in one boot - see T38; the on-air proof still needs an external observer | [V]/[V*] |
+## T38. The final all-patch module - one boot, all features (2026-11-29 01:00)
+
+Source: `wifi-stability/FINAL-INTEGRATION.md` + `evidence/allpatch-*` (opensource `008aca5`), the
+ledger 2026-11-29 01:00, and the module's own build script
+`wifi-stability/tools/build-all-patch-module.sh` (re-stages the chain, applies the nine-patch stack
+with six documented additive conflict resolutions, and refuses drift). **This is the project's
+culminating device-level validation:** every static-wave feature in one module, fired on one fresh
+PD4 golden boot.
+
+| item | value | evidence |
+| --- | --- | --- |
+| chain | base `44c6cc12` -> image-polish `d145a205` -> dp-tuning `175a4617` -> scan R4 -> stability `b5dfb883` -> rx-static -> beacon-static (+guard fix) -> wpa-static -> sta-static | [V] |
+| module identity | **stripped 308,080 B sha256 `5b587949...`** (full: `5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41`); 47 parameters; 0 compiler/modpost warnings; cfg80211 contract 10; strip leaves .text byte-identical | [V] |
+| fire params | `fw_path=PD4`, `wifi_block_path`, `allow_frames=32`, `h2d_send_budget=10`, `vap_start_first/mode=1`, `hcc_trace=0`, `stop_ap_mode=0`, `rx_enable=1`, `beacon_static=1`, `beacon_vap_start=1`, `wpa_keys=1`, `sta_join=0`, `ht_mode=0`, `vht_cap=0`, `band_vendor=0`, `scan_band_cfg=0` | [V*] |
+
+| # | feature | one-boot observation | evidence |
+| ---: | --- | --- | --- |
+| 1 | AP, vendor five-message order | `plan (5 steps): vap_add ap_chan ap_ssid ap_cfg ap_vap_start`; `ap_chan` 32 B band=0 channel=6 before `ap_cfg`; `ap_vap_start` after `ap_cfg`; **hostapd AP-ENABLED (rc=0) with the WPA2 config**, ssid `cudy-ap-test`, type AP | [V*] |
+| 2 | WPA2-AP GTK | `key_add` g0 cmd 0x0078, 96 B, idx=1, pairwise=0, cipher 0xfac04, key_len=16 + `set_default_key` 0x0079, 68 B, multi=1; both consumed 0 polls, workers CA 0x0A5825/0x0A5C9D | [V*] |
+| 3 | TX completion | `dp_tx_complete_poll verdict=COMPLETED` (TXQ publish enabled; table `{wptr=1, rptr=1}`) | [V*] |
+| 4 | RX arm | live bank CA 0x40050000, status 0x00000182, mask 0xfffffcc1, norm/small rptr 0x0020 = vendor mirror; free-rptr movement proves the MAC consumed published free entries | [V*] |
+| 5 | post pack | page `0x86807FEF` golden, state 1, mask 0, staging 0, no exceptions | [V*] |
+
+**What this changes in the report.** The individual feature modules of T32-T37 are superseded as
+the end state by this single artifact; the features' evidence rows stand, and the earlier
+"integration tasked" statements are corrected by C56. **What it does not change:** the air-side
+proof is still external (beacon/association/4-way PTK need a client or an observer), no RX frame
+has been captured (no traffic), `sta_join=0` left the STA join unexercised, the 5 GHz band config was
+not fired, and the final module still has to be baked into the self-contained image.
+
 
 

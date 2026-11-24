@@ -21,8 +21,8 @@ OPENSOURCE = os.path.dirname(os.path.dirname(INCOMING))  # opensource
 REPO = os.path.dirname(OPENSOURCE)                # superproject root
 
 FILES = ["README.md", "REPORT.md", "TABLES.md", "EVIDENCE-INDEX.md", "REPRODUCE.md"]
-MIN_BYTES = {"REPORT.md": 185000, "TABLES.md": 70000, "EVIDENCE-INDEX.md": 54000,
-             "REPRODUCE.md": 12000, "README.md": 4000}
+MIN_BYTES = {"REPORT.md": 240000, "TABLES.md": 85000, "EVIDENCE-INDEX.md": 65000,
+             "REPRODUCE.md": 14000, "README.md": 4000}
 
 TEXT = {}
 checks = []
@@ -79,11 +79,15 @@ def check_report_structure():
                  "mgmt_stypes", "POST-ONLY", "mode-1 VAP", "0x01010F18", "flashed image",
                  "wiphy_new_nm", "g1 id0x23"]:
         check("REPORT covers the v4 milestone vocabulary: %s" % must, must in t)
+    for must in ["0x40050000", "0xfffffcc1", "0x0078", "0x0a5825", "0x0124", "0x10cd5c",
+                 "0x0123", "0x00d0", "0x0062", "0x00400064", "five-message", "txq-table",
+                 "rx_arm", "gtk", "slot 0 only", "wpa2", "5b587949", "all-patch", "308,080"]:
+        check("REPORT covers the v5 static-wave vocabulary: %s" % must, must in t.lower())
     subs = re.findall(r"^### (6\.\d+) ", t, re.M)
-    check("REPORT section 6 has the v2+v3+v4 subsections 6.1-6.12",
-          subs == ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.7", "6.8", "6.9", "6.10", "6.11", "6.12"], ",".join(subs))
-    check("REPORT carries findings F1-F14", all(("### F%d." % i) in t for i in range(1, 15)))
-    check("REPORT is the v4 revision", "**v4**" in t)
+    check("REPORT section 6 has the v2+v3+v4+v5 subsections 6.1-6.18",
+          subs == ["6." + str(i) for i in range(1, 19)], ",".join(subs))
+    check("REPORT carries findings F1-F20", all(("### F%d." % i) in t for i in range(1, 21)))
+    check("REPORT is the v5 revision", "**v5**" in t)
 
 
 def check_markers():
@@ -141,7 +145,9 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 274 claims", len(uniq) >= 274, "%d" % len(uniq))
+    check("evidence index has at least 308 claims", len(uniq) >= 308, "%d" % len(uniq))
+    check("evidence index carries the v5 range EV-278..EV-308", 278 in nums and 308 in nums,
+          "278=%s 308=%s" % (278 in nums, 308 in nums))
     check("evidence index carries the v3 range EV-196..EV-244", 196 in nums and 244 in nums,
           "196=%s 244=%s" % (196 in nums, 244 in nums))
     check("evidence index carries the v4 range EV-245..EV-277", 245 in nums and 277 in nums,
@@ -281,6 +287,40 @@ def check_constants():
          get_lane("wifi-abi-image/REPORT.md").lower()),
         ("ABI image kernel package pin", "6f995278",
          get_lane("wifi-abi-image/REPORT.md").lower()),
+        ("MAC RX live bank", "0x40050000",
+         get_lane("wifi-rx-static/REPORT.md").lower()),
+        ("MAC RX live status/mask", "0xfffffcc1",
+         get_lane("wifi-rx-static/REPORT.md").lower()),
+        ("MAC RX 36-byte device header", "36-byte",
+         get_lane("wifi-rx-static/REPORT.md").lower()),
+        ("WPA2 add_key command", "0x0078",
+         get_lane("wifi-wpa-static/REPORT.md").lower()),
+        ("WPA2 add_key worker", "0x0a5825",
+         get_lane("wifi-wpa-static/REPORT.md").lower()),
+        ("WPA2 set_default worker", "0x0a5c9d",
+         get_lane("wifi-wpa-static/REPORT.md").lower()),
+        ("WPA2 del_key command", "0x007a",
+         get_lane("wifi-wpa-static/REPORT.md").lower()),
+        ("five-message channel command", "0x0124",
+         get_lane("wifi-beacon-static/REPORT.md").lower()),
+        ("five-message channel worker", "0x841b8",
+         get_lane("wifi-beacon-static/REPORT.md").lower()),
+        ("scan dispatch row", "0x10cd5c",
+         get_lane("wifi-scan-full/REPORT.md").lower()),
+        ("g0 id10 handler", "0x5ff64",
+         get_lane("wifi-scan-full/REPORT.md").lower()),
+        ("STA connect opcode", "0x0123",
+         get_lane("wifi-sta-static/REPORT.md").lower()),
+        ("STA disconnect opcode", "0x00d0",
+         get_lane("wifi-sta-static/REPORT.md").lower()),
+        ("HT cap word", "0x0062",
+         get_lane("wifi-sta-static/REPORT.md").lower()),
+        ("VHT 160 MHz cap", "0x00400064",
+         get_lane("wifi-sta-static/REPORT.md").lower()),
+        ("final all-patch module hash", "5b587949",
+         get_lane("wifi-stability/FINAL-INTEGRATION.md").lower()),
+        ("final all-patch module size 308,080 B", "308,080",
+         get_lane("wifi-stability/FINAL-INTEGRATION.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src
@@ -341,7 +381,29 @@ def check_constants():
                              ("6f995278", "the kernel package ABI pin"),
                              ("38 gates", "the post-flash T0 verify"),
                              ("g1 id0x23", "the new post-AP D2H family"),
-                             ("12 bss", "the 12-BSS decode")]:
+                             ("12 bss", "the 12-BSS decode"),
+                             ("rx arm passed", "the RX arm fire"),
+                             ("status=0x00000182", "the RX live-bank status"),
+                             ("key_add", "the GTK key_add frame"),
+                             ("key_default", "the GTK default-key frame"),
+                             ("five-message", "the five-message AP order"),
+                             ("ap_chan", "the channel-first AP step"),
+                             ("completed (mac)", "the MAC TX completion"),
+                             ("txq-table", "the TXQ-table publish"),
+                             ("242 samples", "the 40-minute soak"),
+                             ("e2 restart", "the E2 restart"),
+                             ("all 5 static lanes", "the static-wave close"),
+                             ("slot 0 only", "the scan slot-0 ceiling"),
+                             ("0x10cd5c", "the corrected scan dispatch row"),
+                             ("0x40050000", "the RX live bank"),
+                             ("0x123", "the STA connect opcode"),
+                             ("0x00d0", "the STA disconnect opcode"),
+                             ("0x0062", "the HT cap word"),
+                             ("0x00400064", "the 5 GHz VHT cap"),
+                             ("0x0a5825", "the add_key worker"),
+                             ("0x0124", "the AP channel command"),
+                             ("final all-patch", "the final all-patch module"),
+                             ("5b587949", "the final module hash")]:
             check("ledger contains " + what, needle.lower() in ledger.lower())
     else:
         check("superproject ledger is readable (expected at ../mem-entries.md)", False, ledger_path)
@@ -405,15 +467,17 @@ def check_tables():
     check("markdown table rows are well formed", not bad, "; ".join(bad[:5]))
     tab = TEXT.get("TABLES.md", "")
     tabs = re.findall(r"^## (T\d+)\. ", tab, re.M)
-    check("TABLES.md contains at least 31 numbered tables", len(tabs) >= 31, "%d" % len(tabs))
+    check("TABLES.md contains at least 38 numbered tables", len(tabs) >= 38, "%d" % len(tabs))
     nums = [int(x[1:]) for x in tabs]
-    check("TABLES.md tables are numbered T1..T31 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
+    check("TABLES.md tables are numbered T1..T38 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
     for t_ in ["T21", "T22", "T23", "T24", "T25"]:
         check("TABLES.md carries the v2 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T26", "T27", "T28"]:
         check("TABLES.md carries the v3 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T29", "T30", "T31"]:
         check("TABLES.md carries the v4 table " + t_, ("## " + t_ + ". ") in tab)
+    for t_ in ["T32", "T33", "T34", "T35", "T36", "T37", "T38"]:
+        check("TABLES.md carries the v5 table " + t_, ("## " + t_ + ". ") in tab)
 
 
 def main():
