@@ -50,8 +50,8 @@ only.
 ```
 $ ./tools/kernel-check.sh
 == kernel-context compile result
--rw-r--r-- 1 ... 737504 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
-5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1
+-rw-r--r-- 1 ... 738080 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
+9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc
 vsf_ symbols in module: 20
 kernel-check: OK (zero warnings; module-only build; no image, no device)
 ```
@@ -112,7 +112,7 @@ New verification step:
 
 ```
 $ ./tools/validator-check.sh
-31/31 checks passed            # WAL family accepted + mutations refused
+37/37 checks passed            # WAL family + predicate accepted, mutations refused
 SUMMARY: 233 passed, 0 failed  # inherited wifi-h2d-frames selftest on the patched library
 validator-check: OK
 ```
@@ -121,3 +121,17 @@ Patch baseline: generated against the `wifi-scan-ap/src` working tree of 2026-11
 that carries the scan-d2h decoder integration the bench module is built from). It also applies
 to `git HEAD` + `../wifi-scan-d2h/patches/0001-hi5622-scan-d2h-decoder.patch` with line
 offsets (dry-run checked).
+
+## 8. Second gate on the frame-post path (second fire, 2026-11-26)
+
+The rebuilt 737,504 B module passed the h2d_frames validator but was then refused inside
+`hi5622_frame_post()` by its own `h2d_fw_handler_lookup()` check ("no firmware handler for
+group/id", -EOPNOTSUPP). That gate assumes a static HC handler-table slot, which the WAL
+family does not have. The patch now adds `h2d_frame_is_wal_cfg()` (a predicate that only passes
+a frame the structural family check already accepted) and the post path treats the WAL family
+as handled by the firmware WAL module - every other id keeps the slot rule and unknown WAL
+commands are still rejected before the gate.
+
+Rebuilt module: 738,080 B sha256
+`9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc`, zero warnings.
+`tools/validator-check.sh` is now 37/37 + inherited 233/233.

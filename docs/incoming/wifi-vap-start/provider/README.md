@@ -30,7 +30,12 @@ compile-verified by `../tools/kernel-check.sh` in a scratch copy.
    refuses unknown commands/malformed lengths with the new `H2D_EWALCMD` error. Every other
    (group,id) keeps the generic non-NULL handler-slot rule. Tested by
    `../tools/validator-check.sh` (31/31 WAL cases + inherited 233/233).
-6. **`Kbuild`** - adds `vapstart_frames.o`; the two `vapstart_frames` sources are copied from
+6. **`hi5622_frame_post.c`** - the second-fire fix: the post path's own
+   `h2d_fw_handler_lookup()` gate refused the WAL family ("no firmware handler for group/id")
+   even after h2d_frames accepted it. It now recognises the decoded family through
+   `h2d_frame_is_wal_cfg()` (firmware WAL/core module handles it; risk log prints
+   `WAL_G2_CFG`). Every other frame keeps the static handler-slot gate.
+7. **`Kbuild`** - adds `vapstart_frames.o`; the two `vapstart_frames` sources are copied from
    `../src/` by `kernel-check.sh` (they are this lane's files, not the patch's).
 
 **Baseline:** generated against the `wifi-scan-ap/src` working tree of 2026-11-26 (which
@@ -38,8 +43,8 @@ already carries the scan-d2h decoder integration the bench module builds from); 
 to `git HEAD` + `../wifi-scan-d2h/patches/0001-hi5622-scan-d2h-decoder.patch` with line
 offsets. Re-run `../tools/kernel-check.sh` after wifi-scan-ap changes.
 
-**Compile evidence:** patched module 737,504 B, sha256
-`5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1`, zero compiler/modpost
+**Compile evidence:** patched module 738,080 B, sha256
+`9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc`, zero compiler/modpost
 warnings, 20 `vsf_` symbols.
 
 ## Bench use

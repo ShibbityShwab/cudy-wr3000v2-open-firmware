@@ -92,9 +92,13 @@ Inputs (gitignored, read in place; no vendor byte is committed):
     WAL family. The provider extension now teaches the validator this one decoded family
     structurally (envelope + WAL command allowlist 0x64/0x65/0xD0/0x127 + per-command body size,
     `H2D_EWALCMD` refusals) while every other (group,id) keeps the non-NULL handler-slot rule.
-    Rebuilt module: 737,504 B sha256 `5a0bfce5...9eeb1`, zero warnings; validator check 31/31 WAL
-    cases + inherited h2d_frames selftest 233/0. The bench readback also showed the module-4
-    ctx+0x4B0/+0x4B8 and G+0x630 targets resolving, so the readback pack is usable. [V]/[V* = bench]
+    The second fire then hit a second, independent check in `hi5622_frame_post()`
+    ("no firmware handler for group/id"); `h2d_frame_is_wal_cfg()` now lets the post path treat the
+    validated WAL family as handled by the firmware WAL module (other ids keep the slot rule).
+    Final rebuilt module: **738,080 B sha256 `9e26138d...4bcc`**, zero warnings; validator
+    check 37/37 WAL/predicate cases + inherited 233/233. The bench readback also showed the
+    module-4 ctx+0x4B0/+0x4B8 and G+0x630 targets resolving, so the readback pack is usable.
+    [V]/[V* = bench]
 
 ---
 
@@ -258,8 +262,31 @@ clears the scan handler gate; that is the next attended step.
 **Rebuilt module (this lane, patch applied to the current wifi-scan-ap src tree):**
 737,504 B, sha256 `5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1`,
 zero compiler/modpost warnings, 20 `vsf_` symbols, module params include
-`vap_start_first/vap_start_mode/vap_start_module`. The refusals above become
-`frame post vap_add: ... CONSUMED` when the same module is reloaded.
+`vap_start_first/vap_start_mode/vap_start_module`.
+
+**Second fire (2026-11-26, same ladder): the h2d_frames gate is now passed, but
+`hi5622_frame_post()` has a SECOND, independent firmware-handler check.** With the 737,504 B
+module the WAL VAP-add frame was structurally accepted (provider caps 0x19f,
+ctx/txq/user_add/notify all CONSUMED) and then refused by the post path itself:
+
+```
+frame post vap_add: REFUSED (no firmware handler for group/id) - no device write performed
+cfg80211: VAP start sequence not posted (-95) - scan aborted, no scan message
+```
+
+`hi5622_frame_post()` calls `h2d_fw_handler_lookup()` a second time and requires a static
+handler-table slot; the WAL family has none (same catalogue anomaly). **Fix:** new
+`h2d_frame_is_wal_cfg()` predicate (true only for a frame the structural family check already
+accepted) and the post path treats the WAL family as handled by the firmware WAL/core module,
+printing risk `WAL_G2_CFG` instead of a table risk. The generic slot gate still applies to
+every other (group,id), and unknown/malformed WAL commands never reach the post path because
+`h2d_frame_decode(H2D_VF_HANDLER)` refuses them first. Re-verified: 37/37 WAL/predicate cases +
+inherited 233/233. **Final rebuilt module: 738,080 B sha256
+`9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc`, zero warnings.**
+The readback from the second fire is unchanged and good: G+0x630 slot0 = 0x00119758 (module-0
+context exists), module-4 ctx+0x4B0 = 0x00174BF0 / +0x4B8 = 0x0015CA08, page 0x86807FEF golden,
+mask 0, heartbeats running. The gate is now the only known obstacle before the VAP add; the next
+reload should show `frame post vap_add: ... CONSUMED` followed by `vap_start ... CONSUMED`.
 
 ---
 
@@ -347,9 +374,9 @@ advertised by the provider extension, so cfg80211 `start_ap` remains fail-closed
 | static re-verification of every claim (56 probes: firmware table rows, handler/worker/helper byte patterns, g0/g2 rows, vendor symbol addresses and builder instruction sites) | `tools/vap_start_re.py --selftest` -> **56/56 PASS** [V] |
 | host builders known-answer + refusal tests | `tools/build.sh` -> **61/61 PASS**, strict `-std=c99 -Wall -Wextra -Werror -pedantic` [V] |
 | generated frames | `tools/gen_frames_md.py` -> `recipes/frames.md` (`--check` current) [V] |
-| WAL family accepted / mutations refused by the patched h2d_frames validator | `tools/validator-check.sh` -> **31/31 PASS** [V] |
+| WAL family accepted / mutations refused by the patched h2d_frames validator | `tools/validator-check.sh` -> **37/37 PASS** [V] |
 | inherited h2d_frames regressions (patched library) | `tools/validator-check.sh` -> **233/233 PASS** [V] |
-| kernel-context compile (library + provider patch + WAL validator inside the real 6.18.60 module build) | `tools/kernel-check.sh` -> module **737,504 B sha256 `5a0bfce5...9eeb1`**, **zero warnings**, 20 vsf_ symbols [V] |
+| kernel-context compile (library + provider patch + WAL validator + WAL post gate inside the real 6.18.60 module build) | `tools/kernel-check.sh` -> module **738,080 B sha256 `9e26138d...4bcc`**, **zero warnings**, 20 vsf_ symbols [V] |
 | hardware behaviour of the frames | **not done - host-only lane** [U] |
 
 The kernel check copies the committed `../wifi-scan-ap/src` tree to `/tmp`, adds this lane's

@@ -7,7 +7,7 @@
   "preconditions": {
     "image": "cfg80211 image (slice 13e81214 / slot 1794a531) + PD4-patched firmware, boot page 0x86807FEF/7/2/0xABCD, core state 1, mask 0",
     "ladder_before": "C2 ladder from wifi-cfg80211/wifi-proto-seq: ctx_create type 1 (g0 id1 key 0x64, module 4) -> txq_sync72 (g0 id1 key 0xd8); both consumed, mask 0",
-    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied (post-validator-fix module: 737,504 B sha256 5a0bfce5...9eeb1), module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
+    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied (final post-gate module: 738,080 B sha256 9e26138d...4bcc), module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
     "human": "recovery door armed, UART read-only capture running, one fire per step, no retry in the same boot"
   },
   "families": {
@@ -193,6 +193,24 @@
       "V1 WAL VAP add: 'frame post vap_add: ... CONSUMED'",
       "V2 WAL VAP start: consumed; readback module-0 ctx+0x4B0/+0x4B8",
       "S1 scan_req: D2H g1 15/16/17 or g2 id2 within 5 s = candidate PASS"
-    ]
+    ],
+    "second_fire": {
+      "module": "post-validator-fix build 737,504 B sha256 5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1",
+      "observed": [
+        "ctx/txq/user_add/notify all CONSUMED; provider caps 0x19f",
+        "h2d_frames validator accepted the WAL family",
+        "WAL VAP add REFUSED by the frame-post path's own handler gate: 'REFUSED (no firmware handler for group/id) - no device write performed'",
+        "VAP start not posted; scan aborted (-95)",
+        "page 0x86807FEF golden, mask 0, heartbeats; readback unchanged: G+0x630 slot0=0x00119758, module-4 ctx+0x4B0=0x00174BF0/+0x4B8=0x0015CA08"
+      ],
+      "fix": "h2d_frame_is_wal_cfg() predicate; hi5622_frame_post() treats the validated WAL family as handled by the firmware WAL module (other ids keep the static handler-slot gate; unknown WAL cmds already refused by decode)",
+      "rebuilt_module": "738,080 B sha256 9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc, zero warnings, 20 vsf_ symbols",
+      "expected_next": [
+        "reload the 738,080 B module with the same params",
+        "V1 WAL VAP add: 'frame post vap_add: ... CONSUMED; ... handler risk=WAL_G2_CFG'",
+        "V2 WAL VAP start: consumed; then read module-0 ctx+0x4B0/+0x4B8 via G+0x630 slot0",
+        "S1 scan_req: D2H g1 15/16/17 or g2 id2 within 5 s = candidate PASS"
+      ]
+    }
   }
 }

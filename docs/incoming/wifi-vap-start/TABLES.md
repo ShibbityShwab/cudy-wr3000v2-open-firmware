@@ -198,3 +198,20 @@ Evidence: `tools/validator-check.sh` -> 31/31 WAL cases + inherited 233/233; enu
 | readback | module-4 ctx+0x4B0 = 0x00174BF0, ctx+0x4B8 = 0x0015CA08, G+0x630 slot0 = 0x00119758 (targets valid) |
 | fix | h2d_check_wal_cfg() family validation (T15); rebuilt module 737,504 B sha256 5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1, zero warnings, 20 vsf_ symbols |
 | next | reload the fixed module with the same params; expect "frame post vap_add: ... CONSUMED", then VAP start consumed, then scan results |
+
+## T17. Frame-post gate for the WAL family (second fire fix)
+
+`hi5622_frame_post()` applies its own `h2d_fw_handler_lookup()` check after the h2d_frames
+validation. For the WAL group-2 cfg-event family the firmware handler is the WAL/core module
+(no static H2C table slot), so the post path now uses the new predicate:
+
+| condition | post path behaviour |
+| --- | --- |
+| `h2d_frame_is_wal_cfg(f)` true (group 2, id 0, structural family check passed) | handled by the firmware WAL module; risk log shows `WAL_G2_CFG` |
+| any other frame without a non-NULL static handler slot | still refused with -EOPNOTSUPP ("no firmware handler for group/id") |
+| unknown/malformed WAL command | never reaches the post gate - `h2d_frame_decode(H2D_VF_HANDLER)` fails first with `H2D_EWALCMD` |
+
+Evidence: `tools/validator-check.sh` 37/37 (includes predicate accept/reject cases);
+kernel module 738,080 B sha256 9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc,
+zero warnings; second benchmark fire observed the pre-fix refusal "no firmware handler for
+group/id" at this exact gate.

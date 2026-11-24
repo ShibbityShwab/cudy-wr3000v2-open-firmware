@@ -45,6 +45,19 @@ static int validate_wire(const u8 *wire, size_t len, enum h2d_err *err)
 }
 
 
+/* Decode a wire frame and ask the new predicate whether the frame-post path
+ * should treat it as handled by the firmware WAL module. */
+static int wal_predicate(const u8 *wire, size_t len)
+{
+	struct h2d_frame f;
+
+	if (h2d_frame_decode(wire, len, &f,
+			     H2D_VF_TRANSPORT | H2D_VF_FIRMWARE |
+			     H2D_VF_HANDLER, NULL) != 0)
+		return -1;
+	return h2d_frame_is_wal_cfg(&f) != 0;
+}
+
 static void expect_err(const struct vsf_frame *f, enum h2d_err want,
 		       const char *what)
 {
@@ -143,6 +156,27 @@ int main(void)
 	ok(n == 56, "WAL VAP add total is 56");
 	n = build_and_validate(b_wal_start, "WAL VAP start 44 B accepted");
 	ok(n == 44, "WAL VAP start total is 44");
+
+	/* Frame-post gate: the predicate must be true only for the validated WAL
+	 * family (hi5622_frame_post.c skips the static handler-slot gate on it). */
+	ok(b_wal_add(&w) == 0 && wal_predicate(w.buf, w.len) == 1,
+	   "predicate: WAL VAP add handled by the WAL module");
+	ok(b_wal_start(&w) == 0 && wal_predicate(w.buf, w.len) == 1,
+	   "predicate: WAL VAP start handled by the WAL module");
+	ok(b_vap_add(&w) == 0 && wal_predicate(w.buf, w.len) == 0,
+	   "predicate: g0 VAP add is not the WAL family");
+	ok(b_wal_add(&w) == 0, "rebuild WAL frame for predicate mutations");
+	{
+		struct vsf_frame pm = w;
+
+		pm.buf[28] = 0x66;	/* unknown WAL cmd */
+		ok(wal_predicate(pm.buf, pm.len) == -1,
+		   "predicate: unknown WAL command refused by decode (H2D_EWALCMD)");
+		pm = w;
+		pm.len = 20;
+		ok(wal_predicate(pm.buf, pm.len) == -1,
+		   "predicate: malformed WAL frame rejected by decode");
+	}
 
 	/* The AP-config envelope is decoded (body still [U]); with a caller
 	 * body the envelope must pass the same structural family check. */

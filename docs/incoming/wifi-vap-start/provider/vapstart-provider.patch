@@ -1,6 +1,6 @@
 diff -ruN a/h2d_frames.c b/h2d_frames.c
---- a/h2d_frames.c	2026-11-24 16:09:19.978276986 +0700
-+++ b/h2d_frames.c	2026-11-24 16:09:19.978838278 +0700
+--- a/h2d_frames.c	2026-11-24 16:14:40.405855427 +0700
++++ b/h2d_frames.c	2026-11-24 16:14:46.037466021 +0700
 @@ -69,6 +69,7 @@
  	case H2D_EBOUNDS:	return "out of bounds (payload/dst/size)";
  	case H2D_EBUFFER:	return "caller buffer too small";
@@ -9,7 +9,7 @@ diff -ruN a/h2d_frames.c b/h2d_frames.c
  	case H2D_EPOLICY:	return "lane safety policy refused";
  	case H2D_ESTATE:	return "mailbox/ring state precondition not met";
  	case H2D_EWIRE:		return "malformed SR node";
-@@ -129,6 +130,54 @@
+@@ -129,6 +130,64 @@
  	return NULL;
  }
  
@@ -61,10 +61,20 @@ diff -ruN a/h2d_frames.c b/h2d_frames.c
 +	return H2D_EWALCMD;
 +}
 +
++/* Public predicate used by the frame-post path (hi5622_frame_post.c): the
++ * WAL family is handled by the firmware WAL module, not by an HCC
++ * handler-table slot.  Reuses the same structural family check. */
++int h2d_frame_is_wal_cfg(const struct h2d_frame *f)
++{
++	if (!f || f->group != H2D_GROUP_CORE || f->id != H2D_WAL_ID)
++		return 0;
++	return h2d_check_wal_cfg(f) == H2D_OK;
++}
++
  /* ------------------------------------------------------------------ */
  /* semantic validation (the frame struct is already well-formed)       */
  /* ------------------------------------------------------------------ */
-@@ -170,6 +219,12 @@
+@@ -170,6 +229,12 @@
  	if (!(vflags & H2D_VF_HANDLER))
  		return H2D_OK;
  
@@ -78,8 +88,8 @@ diff -ruN a/h2d_frames.c b/h2d_frames.c
  	if (!h || h->handler_ca == 0)
  		return H2D_ENOHANDLER;
 diff -ruN a/h2d_frames.h b/h2d_frames.h
---- a/h2d_frames.h	2026-11-24 16:09:19.979778675 +0700
-+++ b/h2d_frames.h	2026-11-24 16:09:19.980885448 +0700
+--- a/h2d_frames.h	2026-11-24 16:14:40.407799531 +0700
++++ b/h2d_frames.h	2026-11-24 16:14:46.036266354 +0700
 @@ -80,6 +80,25 @@
  /* Group 4 exists only in the device->host direction (ready pair) [V] */
  #define H2D_GROUP_D2H_PLAT	4u
@@ -114,9 +124,63 @@ diff -ruN a/h2d_frames.h b/h2d_frames.h
  	H2D_EPOLICY,	/* lane safety policy refused the frame */
  	H2D_ESTATE,	/* mailbox/ring state precondition not met (no retry) */
  	H2D_EWIRE,	/* SR node word1 malformed */
+@@ -199,6 +219,15 @@
+ 	u8	payload[H2D_MAX_PAYLOAD];
+ };
+ 
++/* 1 = the frame is the decoded WAL group-2 cfg-event family.  The firmware
++ * WAL/core module consumes these frames; the static H2D handler table has no
++ * id-0 slot, so callers that gate on h2d_fw_handler_lookup() must treat this
++ * predicate as "handled by the WAL module".  It is true only for a frame that
++ * h2d_check_wal_cfg() already accepted (exact envelope plus a command/body
++ * size pair from the decoded allowlist) - unknown WAL commands are refused
++ * earlier by h2d_frame_decode(). */
++int h2d_frame_is_wal_cfg(const struct h2d_frame *f);
++
+ /* Validation levels; TRANSPORT is always applied by h2d_frame_decode(). */
+ #define H2D_VF_TRANSPORT	0x01u	/* header/len/tag/dst/alloc/LE structure */
+ #define H2D_VF_FIRMWARE		0x02u	/* + group tables, class field, id range */
+diff -ruN a/hi5622_frame_post.c b/hi5622_frame_post.c
+--- a/hi5622_frame_post.c	2026-11-24 16:14:40.409691246 +0700
++++ b/hi5622_frame_post.c	2026-11-24 16:14:46.038209195 +0700
+@@ -123,6 +123,7 @@
+ 	struct hi5622_ete_node *nodes;
+ 	struct h2d_frame *f = NULL;
+ 	const struct h2d_fw_handler *handler;
++	bool wal_cfg;
+ 	enum h2d_err herr = H2D_OK;
+ 	u32 producer = 0, slot = 0, devva = 0, out0 = 0;
+ 	u32 poll;
+@@ -168,8 +169,15 @@
+ 					 -EPERM);
+ 		goto out;
+ 	}
+-	handler = h2d_fw_handler_lookup(f->group, f->id);
+-	if (!handler || !handler->handler_ca) {
++	/* The WAL group-2 cfg-event family is consumed by the firmware's WAL/core
++	 * module; the static H2D handler table has no id-0 slot, so the generic
++	 * handler-slot gate below must not apply to it.  The frame was already
++	 * validated by h2d_frame_decode(H2D_VF_HANDLER), which now includes the
++	 * fail-closed h2d_check_wal_cfg() envelope/command allowlist - so the WAL
++	 * family is handled by the WAL module without weakening any other id. */
++	wal_cfg = h2d_frame_is_wal_cfg(f) != 0;
++	handler = wal_cfg ? NULL : h2d_fw_handler_lookup(f->group, f->id);
++	if (!wal_cfg && (!handler || !handler->handler_ca)) {
+ 		atomic_inc(&hi5622_frames_bad);
+ 		ret = hi5622_post_refuse(dev, what,
+ 					 "no firmware handler for group/id",
+@@ -312,7 +320,7 @@
+ 		 "frame post '%s': g%u id%u total %zu B in SR0 slot %u devva 0x%08x producer 0x%08x -> 0x%08x, coalesced announce consumed after %u polls; handler risk=%s; posted %d/%u\n",
+ 		 what, f->group, f->id, len, slot, devva, producer,
+ 		 hcc_idx_plus(producer, r->depth), poll,
+-		 h2d_risk_name(handler->risk),
++		 wal_cfg ? "WAL_G2_CFG" : h2d_risk_name(handler->risk),
+ 		 atomic_read(&hi5622_frames_posted), hi5622_allow_frames);
+ out:
+ 	kfree(f);
 diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
---- a/hi5622_frames_api.h	2026-11-24 16:09:19.969991142 +0700
-+++ b/hi5622_frames_api.h	2026-11-24 16:09:19.970563815 +0700
+--- a/hi5622_frames_api.h	2026-11-24 16:14:40.398961831 +0700
++++ b/hi5622_frames_api.h	2026-11-24 16:14:40.399528031 +0700
 @@ -87,12 +87,17 @@
  #define HI5622_FRAME_CAP_USER_DEL	(1u << 4)	/* g0 id9 builder */
  #define HI5622_FRAME_CAP_AP_START	(1u << 5)	/* WAL g2 start-AP builder */
@@ -167,8 +231,8 @@ diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
  
  /* ===================================================================
 diff -ruN a/hi5622_scan.c b/hi5622_scan.c
---- a/hi5622_scan.c	2026-11-24 16:09:19.971603170 +0700
-+++ b/hi5622_scan.c	2026-11-24 16:09:19.972623609 +0700
+--- a/hi5622_scan.c	2026-11-24 16:14:40.400520446 +0700
++++ b/hi5622_scan.c	2026-11-24 16:14:40.401588705 +0700
 @@ -40,6 +40,11 @@
  /* =====================================================================
   * helpers
@@ -253,8 +317,8 @@ diff -ruN a/hi5622_scan.c b/hi5622_scan.c
  	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(),
  				     s->scan_timeout_ms);
 diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
---- a/hi5622_scan_logic.c	2026-11-24 16:09:19.973671440 +0700
-+++ b/hi5622_scan_logic.c	2026-11-24 16:09:19.974656151 +0700
+--- a/hi5622_scan_logic.c	2026-11-24 16:14:40.402679366 +0700
++++ b/hi5622_scan_logic.c	2026-11-24 16:14:40.403780727 +0700
 @@ -29,6 +29,8 @@
  	case HI5622_FRAME_CAP_USER_DEL:		return "user_del";
  	case HI5622_FRAME_CAP_AP_START:		return "ap_start";
@@ -285,8 +349,8 @@ diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
  }
  
 diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
---- a/hi5622_vapscan_provider.c	2026-11-24 16:09:19.975367446 +0700
-+++ b/hi5622_vapscan_provider.c	2026-11-24 16:09:19.977593815 +0700
+--- a/hi5622_vapscan_provider.c	2026-11-24 16:14:40.404450382 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 16:14:40.405002786 +0700
 @@ -35,6 +35,9 @@
  
  #include "hi5622_frames_api.h"
@@ -435,8 +499,8 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  
  	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);
 diff -ruN a/Kbuild b/Kbuild
---- a/Kbuild	2026-11-24 16:09:19.981548140 +0700
-+++ b/Kbuild	2026-11-24 16:09:19.982063605 +0700
+--- a/Kbuild	2026-11-24 16:14:40.411499382 +0700
++++ b/Kbuild	2026-11-24 16:14:40.412468654 +0700
 @@ -27,7 +27,8 @@
  		 hi5622_scan_logic.o hi5622_frames_provider.o \
  		 hi5622_frame_post.o hi5622_scan.o \
