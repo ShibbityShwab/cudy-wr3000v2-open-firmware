@@ -162,14 +162,9 @@ cp -a "$DPTWORK" "$HWORK"
 rm -f "$HWORK"/*.o "$HWORK"/*.ko "$HWORK"/*.mod "$HWORK"/*.mod.c "$HWORK"/.*.cmd "$HWORK"/Module.symvers "$HWORK/build.log" 2>/dev/null || true
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$POLISH_PATCH" >/dev/null )
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$SCAN_PATCH" >/dev/null )
-# The scan-tuning repo patch 0002 carries only hi5622_scan.c (its own
-# scan.h/scan_logic.c/scan_logic.h deltas ship as src/ files in that lane);
-# copy them so the final combined build carries the complete tuning.
-cp "$SCAN_LANE/src/hi5622_scan.h" "$SCAN_LANE/src/hi5622_scan_logic.c" \
-   "$SCAN_LANE/src/hi5622_scan_logic.h" "$HWORK/"
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$OUR_PATCH" >/dev/null )
-grep -q "start_ap restart: firmware VAP reset committed" "$HWORK/hi5622_scan.c" || {
-	echo "stability: E2 restart-reset path missing" >&2; exit 1; }
+grep -q "re-posting the AP config against the live firmware AP" "$HWORK/hi5622_scan.c" || {
+	echo "stability: E2 plain-restart path missing" >&2; exit 1; }
 # scan-tuning must be in the SOURCE with its defaults (acceptance for scan-tuning
 # lane): 3 new params, batch default 6, batch gap default 300 ms, split message.
 grep -q "scan_chan_time_ms" "$HWORK/hi5622_scan.c" || {
@@ -202,11 +197,11 @@ cp "$OUR_PATCH" "$ARTWORK/0001-stability-hardening.patch"
 
 missing=""
 for s in "stale module reload" "ALREADY BOOTED from a previous module load" \
-	 "VAP-base/AP latches cleared" "controlled stop_ap" "scan REFUSED" \
+	 "VAP-base/AP latches cleared" "scan REFUSED" \
 	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag" \
 	 "hcc_trace" "scan_chan_time_ms" "scan_req_batch" \
 	 "scan_batch_gap_ms" "split into %u g0 id0xC requests" \
-	 "start_ap restart: firmware VAP reset committed" \
+	 "re-posting the AP config against the live firmware AP" \
 	 "host-side stop_ap (stop_ap_mode=0 default)"; do
 	if ! strings -a "$ARTWORK/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
 done
@@ -218,6 +213,22 @@ mv "$ARTWORK" "$ART"
 [ -s "$ART/hi5622_wifi.hardened.ko" ] || {
 	echo "stability: artifact publish produced an empty .ko" >&2; exit 1; }
 echo "ARTIFACT-PUBLISHED $ART"
+NM="$CROSS""nm"
+# scan-tuning acceptance: cfg80211 import contract = 10 lines in the provided
+# cfg80211-provider.symvers (the 10th is cfg80211_bss_iter) and the module must
+# actually import cfg80211_bss_iter.
+SV=$HWORK/cfg80211-provider.symvers
+NSV=$(wc -l < "$SV" 2>/dev/null || echo 0)
+if [ "$NSV" != "10" ]; then
+	echo "stability: cfg80211-provider.symvers has $NSV lines, expected 10" >&2
+	exit 1
+fi
+grep -q 'cfg80211_bss_iter' "$SV" || {
+	echo "stability: cfg80211_bss_iter missing from provider.symvers" >&2; exit 1; }
+"$NM" -u "$ART/hi5622_wifi.hardened.ko" | grep -q ' cfg80211_bss_iter$' || {
+	echo "stability: cfg80211_bss_iter import missing from the .ko" >&2; exit 1; }
+NIMP=$("$NM" -u "$ART/hi5622_wifi.hardened.ko" | grep -c ' cfg80211_')
+echo "CFG80211-IMPORTS-OK contract=10 imported=$NIMP (cfg80211_bss_iter present)"
 VERMAGIC=$("${CROSS}strings" "$HWORK/hi5622_wifi.ko" | grep -m1 '^vermagic=')
 DEPENDS=$(strings -a "$HWORK/hi5622_wifi.ko" | grep -m1 '^depends=')
 echo "== stability hardened module (final combined)"
@@ -227,6 +238,6 @@ echo "sha256    : $H_SHA"
 echo "unstripped: $HU_SIZE B sha256 $HU_SHA"
 echo "vermagic  : $VERMAGIC"
 echo "depends   : $DEPENDS"
-echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning 246688/05dd5f6a -> hardened"
+echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning ladder 247776/613989ff (new 0002) -> hardened"
 echo "host test : ./tools/run-hardening-check.sh"
 echo "note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required"

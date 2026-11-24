@@ -40,19 +40,20 @@ AP start re-posts the mode-1 VAP base (the exact boot-A fix).
 Module param `stop_ap_mode` (default **0**):
 * **0 = host-side stop only (default): no firmware write at STOP time.**
   Clears ap_started/dirty state and returns 0, so cfg80211 clears
-  ap.beacon_interval and hostapd may restart.  Bench E2 (first fire): the
-  restart then reached start_ap (the -EALREADY barrier is gone) but the second
-  hostapd still failed later in the sequence - a plain AP-config re-post against
-  the already-started firmware AP is not reliable.  Fix: the NEXT start_ap sees
-  ap_stopped_hostside and first RESETS the firmware VAP with the individually
-  validated user_del (g0 id9), then re-creates user_add/notify + the mode-1 VAP
-  base, then posts the fresh AP config.  Any reset failure aborts fail-closed.
-  Expected restart dmesg is in [evidence/e2-restart-expected-dmesg.txt](evidence/e2-restart-expected-dmesg.txt).
-* **1 = controlled firmware teardown:** posts the individually validated
-  user_del (g0 id9) for the AP user, marks `fw_vap_deleted`, and a later
-  start_ap re-creates user_add/notify (g0 id7/id8) + the mode-1 VAP base.  Any
-  message failure returns the error to cfg80211 (no fake success, no in-boot
-  retry).  **Not bench-validated as a sequence** - ladder E2 decides.
+  ap.beacon_interval and hostapd may restart.  The NEXT start_ap sees
+  ap_stopped_hostside, logs the live-VAP readback and re-posts the AP config
+  against the still-live firmware AP (NO structural firmware write).
+  Bench E2 history: (a) a user_del (g0 id9) reset of an AP-started VAP +
+  user_add/notify re-create CRASHED the chip (mask 0x04000010, golden lost),
+  and (b) a plain re-post on the earlier module failed later - the plain-restart
+  build now logs the exact post sequence around the restart for the next fire
+  (hcc_trace=1 recommended).  Expected restart dmesg:
+  [evidence/e2-restart-expected-dmesg.txt](evidence/e2-restart-expected-dmesg.txt).
+* **1 = DISABLED (bench crash).**  The stop-time user_del (g0 id9) teardown
+  proved unsafe on an AP-started firmware VAP: the following user_add/notify
+  re-create took the chip to mask 0x04000010 (golden lost).  stop_ap_mode=1 now
+  refuses with -EOPNOTSUPP and a dmesg pointer; mode 0 (plain restart) is the
+  only supported restart path.
 
 Handler precedence in `hi5622_scan_op_stop_ap`: if a provider ever supplies a
 real AP-stop builder it is used first; otherwise if an AP was started the
@@ -109,7 +110,7 @@ stack 1  dp-air + ap-start v7                   242,572 B  44c6cc12...  (hardwar
 stack 2  + wifi-image-polish delta              242,920 B  d145a205...  (polished, not fired)
 stack 3  dp-air + ap-start + dp-tuning TXQ       251,924 B  175a4617...  (bench-validated, TX COMPLETED)
 stack 4  stack3 + polish + scan-tuning 0002
-         + this lane's harden.                   263,196 B  d6b85fff...  (FINAL COMBINED, NOT fired)
+         + this lane's harden.                   262,852 B  62a1aeb1...  (FINAL COMBINED, NOT fired)
 ```
 
 `tools/build-hardened-module.sh` asserts stacks 1-3 byte-for-byte (base

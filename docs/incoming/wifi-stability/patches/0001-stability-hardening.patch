@@ -1,6 +1,6 @@
-diff -Nru pre2/hcc.c final_hard/hcc.c
+diff -Nru pre3/hcc.c final_hard3/hcc.c
 --- a/hcc.c	2026-11-24 17:03:08.822233177 +0700
-+++ b/hcc.c	2026-11-24 19:37:12.273702218 +0700
++++ b/hcc.c	2026-11-24 19:44:54.473605269 +0700
 @@ -36,6 +36,18 @@
  #include "hi5622_hcc.h"
  #include "hi5622_scan.h"
@@ -28,9 +28,9 @@ diff -Nru pre2/hcc.c final_hard/hcc.c
  
  	/* CECE policy parameter maps 1:1 to the core enum (0 evidence, 1 off,
  	 * 2 evidence + bounded manual kick). */
-diff -Nru pre2/hcc_core_kernel.c final_hard/hcc_core_kernel.c
+diff -Nru pre3/hcc_core_kernel.c final_hard3/hcc_core_kernel.c
 --- a/hcc_core_kernel.c	2026-11-24 17:03:08.822594168 +0700
-+++ b/hcc_core_kernel.c	2026-11-24 19:37:12.274819423 +0700
++++ b/hcc_core_kernel.c	2026-11-24 19:44:54.474649736 +0700
 @@ -28,10 +28,31 @@
  	writel((u32)val, k->bar0 + off);
  }
@@ -63,9 +63,9 @@ diff -Nru pre2/hcc_core_kernel.c final_hard/hcc_core_kernel.c
  	if (k->log_limit && k->logged >= k->log_limit)
  		return;
  	k->logged++;
-diff -Nru pre2/hcc_core_kernel.h final_hard/hcc_core_kernel.h
+diff -Nru pre3/hcc_core_kernel.h final_hard3/hcc_core_kernel.h
 --- a/hcc_core_kernel.h	2026-11-24 17:03:08.822621459 +0700
-+++ b/hcc_core_kernel.h	2026-11-24 19:37:12.275436365 +0700
++++ b/hcc_core_kernel.h	2026-11-24 19:44:54.475579376 +0700
 @@ -24,6 +24,12 @@
  	struct device		*dev;
  	unsigned int		log_limit;	/* max dev_info events, 0 = all */
@@ -79,9 +79,9 @@ diff -Nru pre2/hcc_core_kernel.h final_hard/hcc_core_kernel.h
  };
  
  /* Initialise the adapter (and the embedded core) on an ioremapped BAR0. */
-diff -Nru pre2/hi5622_cfg80211_ops.c final_hard/hi5622_cfg80211_ops.c
---- a/hi5622_cfg80211_ops.c	2026-11-24 19:36:56.202655090 +0700
-+++ b/hi5622_cfg80211_ops.c	2026-11-24 19:40:17.381793278 +0700
+diff -Nru pre3/hi5622_cfg80211_ops.c final_hard3/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-24 19:44:54.467323910 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 19:44:54.476691651 +0700
 @@ -42,6 +42,7 @@
  #include <net/cfg80211.h>
  
@@ -103,12 +103,26 @@ diff -Nru pre2/hi5622_cfg80211_ops.c final_hard/hi5622_cfg80211_ops.c
  	dev_info(wiphy_dev(wiphy),
  		 "cfg80211: VAP '%s' added (type %s, addr %pM) - netdev model live; firmware user_add (g0 id7/id8) %s\n",
  		 name, hi5622_cfg_iftype_name(iftype), addr,
-@@ -234,14 +241,38 @@
+@@ -234,14 +241,52 @@
  
  	/* Firmware user delete (g0 id9) before the netdev goes away; same rule
  	 * as add - a missing provider is recorded, the teardown always runs. */
 -	if (hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot))
-+	if (c->ctx->fw_vap_deleted) {
++	if (c->ctx->ap_stopped_hostside) {
++		/* Bench E2: user_del (g0 id9) of an AP-started firmware VAP crashes the
++		 * chip (dangling VAP context).  A netdev teardown after a host-side
++		 * stop therefore performs NO firmware message: clear the host state and
++		 * let the next boot own the firmware context. */
++		c->ctx->ap_stopped_hostside = false;
++		c->ctx->ap_started = false;
++		c->ctx->ap_seq_dirty = false;
++		c->ctx->ap_seq_frames = 0;
++		c->ctx->vap_base_posted = false;
++		c->ctx->vap_base_iftype = 0;
++		dev_info(wiphy_dev(wiphy),
++			 "cfg80211: VAP %u teardown after host-side stop: NO g0 id9 (bench E2 crash); host state cleared, power-cycle to reset the firmware AP\n",
++			 slot);
++	} else if (c->ctx->fw_vap_deleted) {
 +		/* A controlled stop_ap already posted the g0 id9 user_del: never send a
 +		 * second delete for a firmware user that no longer exists. */
 +		c->ctx->fw_vap_deleted = false;
@@ -119,15 +133,16 @@ diff -Nru pre2/hi5622_cfg80211_ops.c final_hard/hi5622_cfg80211_ops.c
 +		c->ctx->ap_started = false;
 +		c->ctx->ap_seq_dirty = false;
 +		c->ctx->ap_seq_frames = 0;
-+		dev_info(wiphy_dev(wiphy),
-+			 "cfg80211: VAP %u firmware user_del already committed by stop_ap; no second g0 id9; latches cleared\n",
-+			 slot);
-+	} else if (hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot)) {
  		dev_info(wiphy_dev(wiphy),
 -			 "cfg80211: VAP %u firmware user_del (g0 id9) pending (no provider / payload [U]); netdev teardown continues\n",
-+			 "cfg80211: VAP %u firmware user_del (g0 id9) pending (no provider / payload [U]); netdev teardown continues; VAP-base/AP latches kept (fail-closed)\n",
++			 "cfg80211: VAP %u firmware user_del already committed by stop_ap; no second g0 id9; latches cleared\n",
  			 slot);
 -	else
++	} else if (hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot)) {
+ 		dev_info(wiphy_dev(wiphy),
+-			 "cfg80211: VAP %u firmware user_del committed (g0 id9); netdev teardown\n",
++			 "cfg80211: VAP %u firmware user_del (g0 id9) pending (no provider / payload [U]); netdev teardown continues; VAP-base/AP latches kept (fail-closed)\n",
+ 			 slot);
 +	} else {
 +		/* The firmware VAP object is gone, so the per-load base latch is stale;
 +		 * the next scan/AP start must re-post the mode-1 VAP base.  This is the
@@ -138,17 +153,16 @@ diff -Nru pre2/hi5622_cfg80211_ops.c final_hard/hi5622_cfg80211_ops.c
 +		c->ctx->ap_started = false;
 +		c->ctx->ap_seq_dirty = false;
 +		c->ctx->ap_seq_frames = 0;
- 		dev_info(wiphy_dev(wiphy),
--			 "cfg80211: VAP %u firmware user_del committed (g0 id9); netdev teardown\n",
++		dev_info(wiphy_dev(wiphy),
 +			 "cfg80211: VAP %u firmware user_del committed (g0 id9); VAP-base/AP latches cleared (next scan/AP start re-posts the base)\n",
- 			 slot);
++			 slot);
 +	}
  	/* Unregisters the netdev too; the netdev (and the wdev inside its
  	 * private area) is freed by netdev_run_todo at rtnl_unlock
  	 * (needs_free_netdev).  Do NOT kfree(wdev) here: cfg80211's
-diff -Nru pre2/hi5622_driver.h final_hard/hi5622_driver.h
+diff -Nru pre3/hi5622_driver.h final_hard3/hi5622_driver.h
 --- a/hi5622_driver.h	2026-11-24 17:03:56.925113162 +0700
-+++ b/hi5622_driver.h	2026-11-24 19:40:17.381462375 +0700
++++ b/hi5622_driver.h	2026-11-24 19:44:54.477707313 +0700
 @@ -77,6 +77,15 @@
  	bool			blocks_seeded;
  	bool			cpu_released;
@@ -165,9 +179,9 @@ diff -Nru pre2/hi5622_driver.h final_hard/hi5622_driver.h
  	size_t			fw_size;
  
  	/* vendor host record g_dmac_to_hmac_read_msg[2] (0x64 B stride) */
-diff -Nru pre2/hi5622_frame_post.c final_hard/hi5622_frame_post.c
---- a/hi5622_frame_post.c	2026-11-24 19:36:56.202849927 +0700
-+++ b/hi5622_frame_post.c	2026-11-24 19:37:12.278741269 +0700
+diff -Nru pre3/hi5622_frame_post.c final_hard3/hi5622_frame_post.c
+--- a/hi5622_frame_post.c	2026-11-24 19:44:54.467534246 +0700
++++ b/hi5622_frame_post.c	2026-11-24 19:44:54.478561743 +0700
 @@ -186,6 +186,12 @@
  	}
  
@@ -181,9 +195,9 @@ diff -Nru pre2/hi5622_frame_post.c final_hard/hi5622_frame_post.c
  	if (!hi5622_allow_frames) {
  		ret = hi5622_post_refuse(dev, what,
  					 "allow_frames=0 (fail-closed default)",
-diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
---- a/hi5622_scan.c	2026-11-24 19:36:56.203843445 +0700
-+++ b/hi5622_scan.c	2026-11-24 19:40:17.381718106 +0700
+diff -Nru pre3/hi5622_scan.c final_hard3/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 19:44:54.468892845 +0700
++++ b/hi5622_scan.c	2026-11-24 19:46:42.482890553 +0700
 @@ -35,6 +35,7 @@
  #include "hi5622_frames_api.h"
  #include "hi5622_frame_post.h"
@@ -192,7 +206,7 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  #include "hi5622_vapscan_map.h"
  
  /* =====================================================================
-@@ -575,8 +576,6 @@
+@@ -640,8 +641,6 @@
   * both dereference module_ctx+0x190 WITHOUT a NULL check: posting an AP frame
   * before the mode-1 VAP base exists takes a firmware data abort (exception
   * mask 0x18, golden page lost). */
@@ -201,7 +215,7 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  static int hi5622_scan_post_vap_base_once(struct hi5622_pci *ctx,
  					  const struct hi5622_frame_ops *ops,
  					  u8 iftype, u8 band, u8 module)
-@@ -586,7 +585,9 @@
+@@ -651,7 +650,9 @@
  	size_t len = 0;
  	int rc;
  
@@ -212,7 +226,7 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  		return 0;
  	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
  			  HI5622_FRAME_CAP_VAP_START)) !=
-@@ -614,8 +615,10 @@
+@@ -679,8 +680,10 @@
  	if (rc)
  		goto out;
  	rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
@@ -225,19 +239,17 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  out:
  	kfree(wire);
  	return rc;
-@@ -777,6 +780,11 @@
+@@ -842,6 +845,9 @@
  	return rc;
  }
  
-+/* stability hardening forward declarations (helpers live in the AP section) */
-+static int hi5622_scan_vap_slot_of(struct hi5622_cfg80211 *c,
-+				   struct net_device *dev);
++/* stability hardening forward declaration (helper lives in the AP section) */
 +static bool hi5622_scan_vap_object_valid(struct hi5622_pci *ctx);
 +
  int hi5622_scan_op_scan(struct wiphy *wiphy,
  			struct cfg80211_scan_request *request)
  {
-@@ -796,6 +804,15 @@
+@@ -861,6 +867,15 @@
  		return -EOPNOTSUPP;
  	if (!request || !request->wdev)
  		return -EINVAL;
@@ -253,7 +265,7 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  	if (request->n_ssids > HI5622_FRAME_MAX_SSIDS ||
  	    request->n_channels > HI5622_SCAN_MAX_CHANNELS ||
  	    request->ie_len > HI5622_FRAME_MAX_SCAN_IE) {
-@@ -844,9 +861,22 @@
+@@ -912,9 +927,22 @@
  	mutex_unlock(&s->lock);
  	/* The bench-validated VAP base ordering is kept: post the vendor VAP
  	 * start order once before the first scan request (mode-1 ladder). */
@@ -279,36 +291,21 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  	if (rc) {
  		mutex_lock(&s->lock);
  		s->request = NULL;
-@@ -896,6 +926,51 @@
+@@ -964,6 +992,36 @@
  /* =====================================================================
   * cfg80211 ops: AP start/stop (WAL group-2 family; design + provider stub)
   * ===================================================================*/
 +/* Stability hardening (wifi-stability lane): stop_ap policy.
-+ * 0 (default, safest) = host-side stop only (no firmware write).
-+ * 1 = controlled firmware teardown via user_del (bench ladder E2). */
++ * 0 (default, safest) = host-side stop only (no firmware write); the restart
++ *     re-posts the AP config against the live firmware AP.
++ * 1 = DISABLED (bench: user_del of an AP-started VAP crashes the firmware). */
 +unsigned int hi5622_stop_ap_mode;
 +module_param_named(stop_ap_mode, hi5622_stop_ap_mode, uint, 0644);
 +MODULE_PARM_DESC(stop_ap_mode,
-+		 "stop_ap policy: 0=host-side only (default, no firmware write), 1=controlled firmware user_del teardown (bench ladder E2)");
-+
-+/* Stability hardening (wifi-stability lane): locate the VAP slot for a netdev
-+ * (the AP restart path needs the model entry for a user_add re-create). */
-+static int hi5622_scan_vap_slot_of(struct hi5622_cfg80211 *c,
-+				   struct net_device *dev)
-+{
-+	unsigned int i;
-+
-+	if (!c || !dev)
-+		return -EINVAL;
-+	for (i = 0; i < HI5622_CFG_MAX_VAPS; i++)
-+		if (c->vap_dev[i] == dev)
-+			return (int)i;
-+	return -ENOENT;
-+}
++		 "stop_ap policy: 0=host-side only (default, no firmware write); 1=DISABLED (bench crash)");
 +
 +/* Stale-firmware-VAP guard (hardware-confirmed crash class; bench boots A/D).
-+ * READ-ONLY readback of the bench-proven AP-start ladder addresses; zero =>
-+ * refuse, never post an AP frame against it. */
++ * READ-ONLY readback of the bench-proven AP-start ladder addresses. */
 +#define HI5622_STAB_MODULE_TABLE_SLOT0_CPU	0x175458u /* BAR0 0x829458 */
 +#define HI5622_STAB_MODULE_TABLE_BASE_CPU	0x17a504u /* BAR0 0x82a504 */
 +#define HI5622_STAB_VAP_PTR_OFF			0x190u
@@ -331,26 +328,23 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  static int hi5622_scan_fill_ap_start(struct hi5622_scan *s,
  				     const struct cfg80211_ap_settings *set,
  				     struct hi5622_ap_start_params *p)
-@@ -952,13 +1027,41 @@
+@@ -1020,6 +1078,9 @@
  	struct device *wdev_dev = wiphy_dev(wiphy);
  	u8 *wire = NULL;
  	size_t len = 0;
--	int rc;
 +	unsigned int posted = 0;
 +	bool base_was_posted;
-+	int slot, rc;
++	bool restart_plain = false;
+ 	int rc;
  
  	if (!s || !s->initialized || !settings || !dev)
- 		return -ENODEV;
+@@ -1027,6 +1088,29 @@
  	if (!dev->ieee80211_ptr ||
  	    dev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP)
  		return -EINVAL;
 +	/* Stability hardening (wifi-stability lane): one committed AP start per
-+	 * module load, no re-post after an aborted sequence that already put
-+	 * frames on the wire, and no AP frames against a VAP base posted for
-+	 * another iftype.  cfg80211 normally returns -EALREADY on a restart
-+	 * because its ap.beacon_interval is only cleared by a successful
-+	 * stop_ap; the controlled stop_ap below clears it for real. */
++	 * module load, no re-post after an aborted sequence that put frames on the
++	 * wire, and no AP frames against a VAP base posted for another iftype. */
 +	switch (hi5622_stab_ap_gate(c->ctx->ap_started, c->ctx->ap_seq_dirty,
 +				    c->ctx->vap_base_posted,
 +				    c->ctx->vap_base_iftype)) {
@@ -360,7 +354,7 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
 +		return -EBUSY;
 +	case HI5622_STAB_AP_SEQ_DIRTY:
 +		dev_warn(wdev_dev,
-+			 "cfg80211: start_ap REFUSED - a previous sequence aborted after %u AP frame(s) reached the wire; the firmware VAP state is unknown, power-cycle and analyse offline\n",
++			 "cfg80211: start_ap REFUSED - a previous sequence aborted after %u AP frame(s) reached the wire; power-cycle and analyse offline\n",
 +			 c->ctx->ap_seq_frames);
 +		return -EIO;
 +	case HI5622_STAB_AP_BASE_WRONG_IFTYPE:
@@ -374,82 +368,43 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  	dev_info(wdev_dev,
  		 "cfg80211: start_ap reached (iftype=%d beacon_interval=%d dtim=%d head=%zu tail=%zu) - provider gate next\n",
  		 (int)dev->ieee80211_ptr->iftype, settings->beacon_interval,
-@@ -987,6 +1090,66 @@
- 	 * still honours vap_start_first).  Without the VAP object the firmware
- 	 * worker NULL-derefs and the chip exception state is lost
- 	 * (power-cycle required). */
-+	/* Stability hardening (E2 restart): after a host-side stop_ap the firmware
-+	 * AP context is still live, but re-posting the AP config against an
-+	 * already-started firmware AP was measured to fail later in the sequence
-+	 * (bench E2: start_ap reached, second hostapd not enabled).  Reset the
-+	 * firmware VAP first with the individually validated user_del (g0 id9)
-+	 * and then re-create user_add/notify + the VAP base, so the re-post runs
-+	 * against a fresh VAP object.  Fail closed if the reset is not committed:
-+	 * never post AP frames against an unknown VAP state. */
-+	if (c->ctx->ap_stopped_hostside) {
-+		u8 raddr[ETH_ALEN];
-+		u16 ruser;
-+
-+		slot = hi5622_scan_vap_slot_of(c, dev);
-+		if (slot < 0) {
-+			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap restart: no VAP slot - sequence aborted\n");
-+			rc = -EINVAL;
-+			goto out;
-+		}
-+		mutex_lock(&c->lock);
-+		ruser = c->model.vap[slot].hcc_user_id;
-+		memcpy(raddr, c->model.vap[slot].addr, ETH_ALEN);
-+		mutex_unlock(&c->lock);
-+		rc = hi5622_vap_hcc_del(c, ruser, raddr, c->band, (u8)slot);
-+		if (rc) {
-+			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap restart: firmware VAP reset (g0 id9) not committed (%d) - sequence aborted (fail closed; power-cycle)\n",
-+				 rc);
-+			goto out;
-+		}
-+		c->ctx->ap_stopped_hostside = false;
-+		c->ctx->fw_vap_deleted = true;
-+		c->ctx->vap_base_posted = false;
-+		c->ctx->vap_base_iftype = 0;
-+		dev_info(wdev_dev,
-+			 "cfg80211: start_ap restart: firmware VAP reset committed (g0 id9); re-creating user_add/notify + VAP base for the fresh AP config\n");
-+	}
-+	/* Stability hardening: a controlled stop_ap deleted the firmware VAP
-+	 * (validated g0 id9); a restart must re-create user_add/notify (g0 id7/8)
-+	 * before the mode-1 VAP base. */
-+	if (c->ctx->fw_vap_deleted) {
-+		slot = hi5622_scan_vap_slot_of(c, dev);
-+		if (slot < 0) {
-+			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap: no VAP slot for a deleted firmware VAP - sequence aborted\n");
-+			rc = -EINVAL;
-+			goto out;
-+		}
-+		rc = hi5622_vap_hcc_add(c, (u16)slot);
-+		if (rc) {
-+			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap: firmware user_add/notify re-create after stop_ap failed (%d) - sequence aborted (fail closed)\n",
-+				 rc);
-+			goto out;
-+		}
-+		c->ctx->fw_vap_deleted = false;
-+		dev_info(wdev_dev,
-+			 "cfg80211: start_ap: firmware user_add/notify re-created after a controlled stop_ap\n");
-+	}
-+	base_was_posted = c->ctx->vap_base_posted;
- 	rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
- 					(u8)dev->ieee80211_ptr->iftype,
- 					c->band,
-@@ -997,13 +1160,19 @@
+@@ -1065,13 +1149,47 @@
  			 rc);
  		goto out;
  	}
 -	/* wifi-ap-start lane (task-121): the vendor AP start is a sequence.
 -	 * Post every frame the provider emits and stop on -ENODATA. */
-+	/* Stability hardening: fail closed if the latch said the firmware VAP
-+	 * object exists but the read-only readback says it is zero/gone. */
-+	if (base_was_posted && !hi5622_scan_vap_object_valid(c->ctx)) {
++	/* Stability hardening (E2 restart, bench-informed): do NOT user_del an
++	 * AP-started firmware VAP (bench E2: g0 id9 on an AP-started VAP left a
++	 * dangling VAP context and the next user_add/notify crashed the chip, mask
++	 * 0x04000010).  A host-side stop keeps the firmware AP live, so the
++	 * restart only re-posts the AP config against it. */
++	if (c->ctx->ap_stopped_hostside) {
++		bool valid = hi5622_scan_vap_object_valid(c->ctx);
++
++		c->ctx->ap_stopped_hostside = false;
++		restart_plain = true;
++		dev_info(wdev_dev,
++			 "cfg80211: start_ap restart after host-side stop: re-posting the AP config against the live firmware AP (NO structural firmware write; firmware VAP object readback=%s)\n",
++			 valid ? "nonzero" : "ZERO");
++	}
++	base_was_posted = c->ctx->vap_base_posted;
++	rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
++					(u8)dev->ieee80211_ptr->iftype,
++					c->band,
++					(u8)hi5622_vap_start_module);
++	if (rc) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap VAP base not posted (%d) - sequence aborted, no AP frame sent\n",
++			 rc);
++		goto out;
++	}
++	/* Stability hardening: fail closed if the base latch was set but the
++	 * read-only readback says the firmware VAP object is zero/gone.  The
++	 * plain restart after a host-side stop logs its readback above and is
++	 * exempt (its guard would otherwise block the restart on a stale latch). */
++	if (base_was_posted && !restart_plain &&
++	    !hi5622_scan_vap_object_valid(c->ctx)) {
 +		dev_warn(wdev_dev,
 +			 "cfg80211: start_ap REFUSED - the base latch was set but the firmware VAP object (module_ctx+0x190) reads zero (stale/dead VAP); no AP frame sent, power-cycle\n");
 +		rc = -EIO;
@@ -464,13 +419,16 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  
  		for (p->frame_index = 0;
  		     p->frame_index < HI5622_AP_START_MAX_FRAMES;
-@@ -1067,7 +1236,17 @@
+@@ -1135,7 +1253,20 @@
  	dev_info(wdev_dev,
  		 "cfg80211: start_ap sequence posted to provider '%s' - EXPERIMENTAL: beaconing is a firmware effect; verify the VAP context readback\n",
  		 ops->name);
 +	c->ctx->ap_started = true;
 +	c->ctx->ap_seq_frames = (u8)posted;
 +	posted = 0;	/* committed: not a dirty abort */
++	dev_info(wdev_dev,
++		 "cfg80211: start_ap committed; firmware VAP object readback=%s (E2 restart evidence)\n",
++		 hi5622_scan_vap_object_valid(c->ctx) ? "nonzero" : "ZERO");
  out:
 +	if (rc && posted) {
 +		c->ctx->ap_seq_dirty = true;
@@ -482,80 +440,44 @@ diff -Nru pre2/hi5622_scan.c final_hard/hi5622_scan.c
  	kfree(p);
  	kfree(wire);
  	return rc;
-@@ -1082,15 +1261,67 @@
- 	struct hi5622_ap_stop_params p;
- 	struct device *wdev_dev = wiphy_dev(wiphy);
- 	u8 *wire = NULL;
-+	u8 addr[ETH_ALEN];
- 	size_t len = 0;
--	int rc;
-+	u16 user_id;
-+	int slot, rc;
- 
- 	(void)link_id;
+@@ -1157,8 +1288,32 @@
  	if (!s || !s->initialized || !dev)
  		return -ENODEV;
  	ops = hi5622_scan_need(wiphy, HI5622_FRAME_CAP_AP_STOP, "stop_ap");
 -	if (!ops)
 -		return -EOPNOTSUPP;
 +	if (!ops) {
-+		/* Stability hardening: no reverse-engineered firmware AP-stop message.
-+		 * Default stop_ap_mode=0 does NO firmware write (cfg80211 state cleared,
-+		 * restart reuses the live firmware AP context); mode 1 posts the
-+		 * validated user_del (g0 id9) and a restart re-creates the user+VAP
-+		 * base.  Any message failure is returned (no fake success). */
++		/* Stability hardening (wifi-stability lane): no reverse-engineered
++		 * firmware AP-stop message exists.  Default stop_ap_mode=0 performs
++		 * NO firmware write at stop time - it clears the cfg80211/driver AP
++		 * state (so -EALREADY is gone) and marks the VAP for a plain
++		 * re-post restart, because bench E2 proved that a user_del (g0 id9)
++		 * of an AP-started firmware VAP leaves a dangling VAP context and
++		 * crashes the chip on the next user_add/notify. */
 +		if (!c->ctx || !c->ctx->ap_started) {
 +			dev_warn_ratelimited(wdev_dev,
 +					     "cfg80211: stop_ap with no started AP and no firmware AP-stop message - -EOPNOTSUPP\n");
 +			return -EOPNOTSUPP;
 +		}
-+		slot = hi5622_scan_vap_slot_of(c, dev);
-+		if (slot < 0)
-+			return -EINVAL;
-+		if (c->ctx->fw_vap_deleted) {
-+			c->ctx->ap_started = false;
-+			return 0;
-+		}
-+		if (!hi5622_stop_ap_mode) {
-+			c->ctx->ap_started = false;
-+			c->ctx->ap_seq_dirty = false;
-+			c->ctx->ap_seq_frames = 0;
-+			c->ctx->ap_stopped_hostside = true;
-+			dev_info(wdev_dev,
-+				 "cfg80211: host-side stop_ap (stop_ap_mode=0 default): cfg80211 state cleared, NO firmware write; the restart will RESET the firmware VAP (g0 id9) and re-create user_add/notify + VAP base before re-posting the AP config (bench E2: a plain re-post against the already-started firmware AP is not reliable)\n");
-+			return 0;
-+		}
-+		mutex_lock(&c->lock);
-+		user_id = c->model.vap[slot].hcc_user_id;
-+		memcpy(addr, c->model.vap[slot].addr, ETH_ALEN);
-+		mutex_unlock(&c->lock);
-+		rc = hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot);
-+		if (rc) {
++		if (hi5622_stop_ap_mode) {
 +			dev_warn(wdev_dev,
-+				 "cfg80211: controlled stop_ap: firmware user_del (g0 id9) not committed (%d) - returning the error (fail closed)\n",
-+				 rc);
-+			return rc;
++				 "cfg80211: stop_ap_mode=1 DISABLED - user_del (g0 id9) of an AP-started firmware VAP crashes the firmware (bench E2 mask 0x04000010); use stop_ap_mode=0 (default), or power-cycle\n");
++			return -EOPNOTSUPP;
 +		}
-+		mutex_lock(&c->lock);
-+		c->model.vap[slot].hcc_add_pending = true;
-+		c->model.vap[slot].hcc_user_id = 0;
-+		mutex_unlock(&c->lock);
-+		c->ctx->fw_vap_deleted = true;
 +		c->ctx->ap_started = false;
 +		c->ctx->ap_seq_dirty = false;
 +		c->ctx->ap_seq_frames = 0;
-+		c->ctx->vap_base_posted = false;
-+		c->ctx->vap_base_iftype = 0;
++		c->ctx->ap_stopped_hostside = true;
 +		dev_info(wdev_dev,
-+			 "cfg80211: controlled stop_ap: firmware user_del (g0 id9) committed; cfg80211 state cleared and firmware VAP removed - a restart re-creates user_add/notify + the mode-1 VAP base (NOT yet bench-validated: wifi-stability ladder E2)\n");
++			 "cfg80211: host-side stop_ap (stop_ap_mode=0 default): cfg80211 state cleared, NO firmware write; the restart will re-post the AP config against the live firmware AP (bench E2: user_del of an AP-started VAP is NOT safe)\n");
 +		return 0;
 +	}
  	memset(&p, 0, sizeof(p));
  	p.iftype = 3u;
  	p.user_id = (u8)s->user_id;
-diff -Nru pre2/hi5622_stability.h final_hard/hi5622_stability.h
+diff -Nru pre3/hi5622_stability.h final_hard3/hi5622_stability.h
 --- a/hi5622_stability.h	1970-01-01 07:00:00.000000000 +0700
-+++ b/hi5622_stability.h	2026-11-24 19:37:12.279852112 +0700
++++ b/hi5622_stability.h	2026-11-24 19:44:54.479524526 +0700
 @@ -0,0 +1,66 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -623,9 +545,9 @@ diff -Nru pre2/hi5622_stability.h final_hard/hi5622_stability.h
 +}
 +
 +#endif /* _HI5622_STABILITY_H */
-diff -Nru pre2/main.c final_hard/main.c
---- a/main.c	2026-11-24 19:36:56.203209965 +0700
-+++ b/main.c	2026-11-24 19:37:12.280878845 +0700
+diff -Nru pre3/main.c final_hard3/main.c
+--- a/main.c	2026-11-24 19:44:54.467924722 +0700
++++ b/main.c	2026-11-24 19:44:54.480166424 +0700
 @@ -136,6 +136,18 @@
  	spin_lock_init(&ctx->doorbell_lock);
  	pci_set_drvdata(pdev, ctx);
@@ -660,9 +582,9 @@ diff -Nru pre2/main.c final_hard/main.c
  	dev_info(&pdev->dev, "%s removed\n", HI5622_DRV_NAME);
  }
  
-diff -Nru pre2/transport.c final_hard/transport.c
+diff -Nru pre3/transport.c final_hard3/transport.c
 --- a/transport.c	2026-11-24 17:03:08.824228160 +0700
-+++ b/transport.c	2026-11-24 19:37:12.281520153 +0700
++++ b/transport.c	2026-11-24 19:44:54.481181436 +0700
 @@ -172,6 +172,22 @@
  	return readl(ctx->bar0 + off);
  }

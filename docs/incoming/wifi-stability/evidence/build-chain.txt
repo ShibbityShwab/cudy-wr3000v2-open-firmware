@@ -6,11 +6,12 @@ POLISHED-ID-OK 242920 d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba82
 DPT-ID-OK 251924 175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425
 == stack 4: final combined = dp-tuning + polished defaults + stability hardening
 ARTIFACT-PUBLISHED /tmp/wifi-stability-artifact
+CFG80211-IMPORTS-OK contract=10 imported=6 (cfg80211_bss_iter present)
 == stability hardened module (final combined)
 artifact  : /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko (debug-stripped)
-size      : 263196
-sha256    : d6b85fff6c81ba4b056266b3371e8074c27054aadd4a522298428a51342644ba
-unstripped: 971728 B sha256 9e2d5ff6d5ba61fb261ba7c60da8453e47a18c658674a0dcc570509ed84aedd9
+size      : 262852
+sha256    : 62a1aeb1bff0f969f70aff04d7f5ed2720f329cd5db294e85850a4cda480cf52
+unstripped: 970604 B sha256 a51d86853c7da9fb701b693c9b14a38dd737d687823dfc4e000a019efae6068d
 vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
 depends   : depends=cfg80211
 chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> polished 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> dp-tuning 251924/175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425 -> scan-tuning 246688/05dd5f6a -> hardened
