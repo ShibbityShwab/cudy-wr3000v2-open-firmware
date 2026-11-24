@@ -1,6 +1,122 @@
+diff -ruN a/h2d_frames.c b/h2d_frames.c
+--- a/h2d_frames.c	2026-11-24 16:09:19.978276986 +0700
++++ b/h2d_frames.c	2026-11-24 16:09:19.978838278 +0700
+@@ -69,6 +69,7 @@
+ 	case H2D_EBOUNDS:	return "out of bounds (payload/dst/size)";
+ 	case H2D_EBUFFER:	return "caller buffer too small";
+ 	case H2D_ENOHANDLER:	return "firmware receive slot has no handler";
++	case H2D_EWALCMD:	return "WAL cfg-event command/envelope not in the decoded allowlist";
+ 	case H2D_EPOLICY:	return "lane safety policy refused";
+ 	case H2D_ESTATE:	return "mailbox/ring state precondition not met";
+ 	case H2D_EWIRE:		return "malformed SR node";
+@@ -129,6 +130,54 @@
+ 	return NULL;
+ }
+ 
++/* WAL group-2 cfg-event family validation (wifi-vap-start lane).
++ *
++ * WHY: the vendor host emits VAP create/start as HCC group-2 frames whose
++ * 12-byte header id is 0; the firmware's static group-2 receive table has
++ * no id-0 entry, so h2d_fw_handler_lookup() cannot vet it.  The 2026-11-26
++ * bench fire showed the consequence: "frame rejected by the h2d_frames
++ * validator (firmware receive slot has no handler)" and the VAP start
++ * sequence never reached the wire.  The family is therefore validated
++ * STRUCTURALLY - exact envelope, WAL cfg-event id 1, command allowlist and
++ * per-command body size.  Unknown commands, mismatched lengths and a
++ * mutated envelope are still refused (fail-closed); every other
++ * (group,id) keeps the generic non-NULL handler-slot rule. */
++static enum h2d_err h2d_check_wal_cfg(const struct h2d_frame *f)
++{
++	static const struct {
++		u16 cmd;
++		u16 body_len;
++	} wal_cmds[] = {
++		{ H2D_WAL_CMD_VAP_ADD, 24u },
++		{ H2D_WAL_CMD_VAP_START, 12u },
++		{ H2D_WAL_CMD_KICK_STA, 16u },
++		{ H2D_WAL_CMD_AP_START, 156u },
++	};
++	u32 data_len;
++	u16 cmd, body_len;
++	size_t i;
++
++	if (f->payload_len < H2D_WAL_HDR_LEN)
++		return H2D_ESHORT;
++	if (h2d_get32(f->payload + 4) != H2D_WAL_CFG_ID)
++		return H2D_EWALCMD;
++	data_len = h2d_get16(f->payload + 0x0a);
++	cmd = h2d_get16(f->payload + 0x10);
++	body_len = h2d_get16(f->payload + 0x12);
++	if (data_len != (u32)body_len + 4u)
++		return H2D_EARG;
++	if ((u32)f->payload_len != (u32)H2D_WAL_HDR_LEN + (u32)body_len)
++		return H2D_ELEN;
++	for (i = 0; i < H2D_ARRAY_SIZE(wal_cmds); i++) {
++		if (wal_cmds[i].cmd != cmd)
++			continue;
++		if (wal_cmds[i].body_len != body_len)
++			return H2D_EARG;
++		return H2D_OK;
++	}
++	return H2D_EWALCMD;
++}
++
+ /* ------------------------------------------------------------------ */
+ /* semantic validation (the frame struct is already well-formed)       */
+ /* ------------------------------------------------------------------ */
+@@ -170,6 +219,12 @@
+ 	if (!(vflags & H2D_VF_HANDLER))
+ 		return H2D_OK;
+ 
++	/* The WAL group-2 cfg-event family has no static receive-table slot;
++	 * validate its decoded envelope instead of refusing the shape the
++	 * vendor host itself emits (see h2d_check_wal_cfg). */
++	if (f->group == H2D_GROUP_CORE && f->id == H2D_WAL_ID)
++		return h2d_check_wal_cfg(f);
++
+ 	h = h2d_fw_handler_lookup(f->group, f->id);
+ 	if (!h || h->handler_ca == 0)
+ 		return H2D_ENOHANDLER;
+diff -ruN a/h2d_frames.h b/h2d_frames.h
+--- a/h2d_frames.h	2026-11-24 16:09:19.979778675 +0700
++++ b/h2d_frames.h	2026-11-24 16:09:19.980885448 +0700
+@@ -80,6 +80,25 @@
+ /* Group 4 exists only in the device->host direction (ready pair) [V] */
+ #define H2D_GROUP_D2H_PLAT	4u
+ 
++/* WAL group-2 cfg-event family (wifi-vap-start lane, task-117) [V].
++ * The vendor host posts VAP create/start/AP-config through
++ * wal_send_cfg_event(): the HCC header id is 0 and the operation is the WAL
++ * command u16 inside the payload.  The firmware's static group-2 receive
++ * table has no id-0 slot (wifi-h2d-catalog anomaly), which is why the
++ * generic handler-slot check refuses a shape the vendor host itself emits;
++ * h2d_check_wal_cfg() validates the family structurally instead.  Envelope
++ * (HCC payload = frame+12): +0x00 u32 response cookie; +0x04 u32 WAL
++ * cfg-event id = 1; +0x08 u16 pad; +0x0A u16 data_len = 4 + body_len;
++ * +0x0C u32 seq; +0x10 u16 WAL command; +0x12 u16 body_len; +0x14 body.
++ * Wire total = 32 + body_len. */
++#define H2D_WAL_ID		0u	/* HCC header id of a WAL cfg event [V] */
++#define H2D_WAL_CFG_ID		1u	/* u32 at payload+4 [V] */
++#define H2D_WAL_HDR_LEN		20u	/* cookie+wal hdr+cmd/body_len [V] */
++#define H2D_WAL_CMD_VAP_ADD	0x0064u	/* body 24 [V] */
++#define H2D_WAL_CMD_VAP_START	0x0065u	/* body 12 [V] */
++#define H2D_WAL_CMD_KICK_STA	0x00d0u	/* body 16 [V] */
++#define H2D_WAL_CMD_AP_START	0x0127u	/* body 156 (body still [U]) [V] */
++
+ /* Mailbox layer (wifi-hcc-re sec 3, host-replica sec 4) */
+ #define H2D_CA_MBOX_PENDING	0x40039010u	/* out[0]: H2D pending bitmap [V] */
+ #define H2D_CA_MBOX_DOORBELL	0x400392d4u	/* out[2]: host ORs bit0 [V] */
+@@ -137,6 +156,7 @@
+ 	H2D_EBOUNDS,	/* payload > 0x674, dst > 0xf, ... */
+ 	H2D_EBUFFER,	/* caller buffer too small */
+ 	H2D_ENOHANDLER,	/* firmware receive slot exists but handler is NULL */
++	H2D_EWALCMD,	/* WAL cfg-event family: unknown command or bad envelope */
+ 	H2D_EPOLICY,	/* lane safety policy refused the frame */
+ 	H2D_ESTATE,	/* mailbox/ring state precondition not met (no retry) */
+ 	H2D_EWIRE,	/* SR node word1 malformed */
 diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
---- a/hi5622_frames_api.h	2026-11-24 16:00:32.634779833 +0700
-+++ b/hi5622_frames_api.h	2026-11-24 16:01:51.216623702 +0700
+--- a/hi5622_frames_api.h	2026-11-24 16:09:19.969991142 +0700
++++ b/hi5622_frames_api.h	2026-11-24 16:09:19.970563815 +0700
 @@ -87,12 +87,17 @@
  #define HI5622_FRAME_CAP_USER_DEL	(1u << 4)	/* g0 id9 builder */
  #define HI5622_FRAME_CAP_AP_START	(1u << 5)	/* WAL g2 start-AP builder */
@@ -39,7 +155,7 @@ diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
  /* ===================================================================
   * 3. Scan result (provider decoder -> cfg80211 BSS)
   * =================================================================== */
-@@ -224,6 +241,10 @@
+@@ -249,6 +266,10 @@
  			      const struct hi5622_ap_start_params *p);
  	int (*build_ap_stop)(u8 *wire, size_t cap, size_t *out_len,
  			     const struct hi5622_ap_stop_params *p);
@@ -51,8 +167,8 @@ diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
  
  /* ===================================================================
 diff -ruN a/hi5622_scan.c b/hi5622_scan.c
---- a/hi5622_scan.c	2026-11-24 16:00:32.635073970 +0700
-+++ b/hi5622_scan.c	2026-11-24 16:01:51.216767705 +0700
+--- a/hi5622_scan.c	2026-11-24 16:09:19.971603170 +0700
++++ b/hi5622_scan.c	2026-11-24 16:09:19.972623609 +0700
 @@ -40,6 +40,11 @@
  /* =====================================================================
   * helpers
@@ -65,7 +181,7 @@ diff -ruN a/hi5622_scan.c b/hi5622_scan.c
  static u64 hi5622_scan_now(void)
  {
  	return hcc_kernel_now_ms();
-@@ -339,6 +344,53 @@
+@@ -378,6 +383,53 @@
  /* =====================================================================
   * cfg80211 ops: scan / abort_scan
   * ===================================================================*/
@@ -119,7 +235,7 @@ diff -ruN a/hi5622_scan.c b/hi5622_scan.c
  int hi5622_scan_op_scan(struct wiphy *wiphy,
  			struct cfg80211_scan_request *request)
  {
-@@ -422,6 +474,16 @@
+@@ -461,6 +513,16 @@
  		goto out;
  	}
  
@@ -137,8 +253,8 @@ diff -ruN a/hi5622_scan.c b/hi5622_scan.c
  	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(),
  				     s->scan_timeout_ms);
 diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
---- a/hi5622_scan_logic.c	2026-11-24 16:00:32.634909409 +0700
-+++ b/hi5622_scan_logic.c	2026-11-24 16:01:51.216674298 +0700
+--- a/hi5622_scan_logic.c	2026-11-24 16:09:19.973671440 +0700
++++ b/hi5622_scan_logic.c	2026-11-24 16:09:19.974656151 +0700
 @@ -29,6 +29,8 @@
  	case HI5622_FRAME_CAP_USER_DEL:		return "user_del";
  	case HI5622_FRAME_CAP_AP_START:		return "ap_start";
@@ -169,9 +285,9 @@ diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
  }
  
 diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
---- a/hi5622_vapscan_provider.c	2026-11-24 16:00:32.634999108 +0700
-+++ b/hi5622_vapscan_provider.c	2026-11-24 16:01:51.216710456 +0700
-@@ -33,6 +33,9 @@
+--- a/hi5622_vapscan_provider.c	2026-11-24 16:09:19.975367446 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 16:09:19.977593815 +0700
+@@ -35,6 +35,9 @@
  
  #include "hi5622_frames_api.h"
  #include "hi5622_vapscan_map.h"
@@ -181,7 +297,7 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  
  static DEFINE_MUTEX(hi5622_vapscan_lock);
  static bool hi5622_vapscan_registered;
-@@ -128,6 +131,116 @@
+@@ -156,6 +159,116 @@
  }
  
  /* ------------------------------------------------------------------ */
@@ -298,7 +414,7 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  /* registration                                                       */
  /* ------------------------------------------------------------------ */
  int hi5622_vapscan_provider_register(void)
-@@ -146,12 +259,16 @@
+@@ -174,7 +287,9 @@
  		HI5622_FRAME_CAP_SCAN_PARSE |
  		HI5622_FRAME_CAP_USER_ADD |
  		HI5622_FRAME_CAP_USER_ADD_NOTIFY |
@@ -308,6 +424,8 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
 +		HI5622_FRAME_CAP_VAP_START;
  	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
  	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
+ 	hi5622_vapscan_ops.parse_scan_complete = vapscan_parse_scan_complete;
+@@ -184,6 +299,8 @@
  	hi5622_vapscan_ops.build_user_add = vapscan_user_add;
  	hi5622_vapscan_ops.build_user_add_notify = vapscan_user_add_notify;
  	hi5622_vapscan_ops.build_user_del = vapscan_user_del;
@@ -317,14 +435,14 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  
  	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);
 diff -ruN a/Kbuild b/Kbuild
---- a/Kbuild	2026-11-24 16:00:32.635159212 +0700
-+++ b/Kbuild	2026-11-24 16:01:51.216818170 +0700
+--- a/Kbuild	2026-11-24 16:09:19.981548140 +0700
++++ b/Kbuild	2026-11-24 16:09:19.982063605 +0700
 @@ -27,7 +27,8 @@
  		 hi5622_scan_logic.o hi5622_frames_provider.o \
  		 hi5622_frame_post.o hi5622_scan.o \
  		 vapscan_frames.o hi5622_vapscan_map.o \
--		 hi5622_vapscan_provider.o
-+		 hi5622_vapscan_provider.o \
+-		 hi5622_scan_d2h.o hi5622_vapscan_provider.o
++		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
 +		 vapstart_frames.o
  
  ccflags-y += -I$(src)

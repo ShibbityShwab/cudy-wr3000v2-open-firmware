@@ -22,8 +22,25 @@ compile-verified by `../tools/kernel-check.sh` in a scratch copy.
 4. **`hi5622_scan.c`** - `hi5622_scan_post_vap_start()` and its call in
    `hi5622_scan_op_scan`: VAP add -> VAP start -> scan. Any builder/post failure aborts the
    scan with the error and never sends the scan request. Off by default.
-5. **`Kbuild`** - adds `vapstart_frames.o`; the two `vapstart_frames` sources are copied from
+5. **`h2d_frames.c/h`** - the post-fire fix (2026-11-26): the inherited validator
+   refused the WAL family because the firmware's static group-2 receive table has no id-0 slot
+   ("firmware receive slot has no handler"), so `hi5622_frame_post()` never sent the VAP-add
+   frame. `h2d_check_wal_cfg()` now validates that one decoded family structurally - envelope,
+   WAL cfg-event id 1, command allowlist 0x0064/24, 0x0065/12, 0x00D0/16, 0x0127/156 - and
+   refuses unknown commands/malformed lengths with the new `H2D_EWALCMD` error. Every other
+   (group,id) keeps the generic non-NULL handler-slot rule. Tested by
+   `../tools/validator-check.sh` (31/31 WAL cases + inherited 233/233).
+6. **`Kbuild`** - adds `vapstart_frames.o`; the two `vapstart_frames` sources are copied from
    `../src/` by `kernel-check.sh` (they are this lane's files, not the patch's).
+
+**Baseline:** generated against the `wifi-scan-ap/src` working tree of 2026-11-26 (which
+already carries the scan-d2h decoder integration the bench module builds from); it also applies
+to `git HEAD` + `../wifi-scan-d2h/patches/0001-hi5622-scan-d2h-decoder.patch` with line
+offsets. Re-run `../tools/kernel-check.sh` after wifi-scan-ap changes.
+
+**Compile evidence:** patched module 737,504 B, sha256
+`5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1`, zero compiler/modpost
+warnings, 20 `vsf_` symbols.
 
 ## Bench use
 

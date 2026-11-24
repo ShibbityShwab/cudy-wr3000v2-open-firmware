@@ -37,8 +37,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifndef VSF_HOST_TYPES_DEFINED
-#define VSF_HOST_TYPES_DEFINED
+/* Shared portable-type guard with hi5622_frames_api.h / h2d_frames.h so a
+ * host test (and the kernel module) may include both headers under -pedantic. */
+#ifndef HI5622_HOST_TYPES_DEFINED
+#define HI5622_HOST_TYPES_DEFINED
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;

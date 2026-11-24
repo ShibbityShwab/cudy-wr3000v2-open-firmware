@@ -7,7 +7,7 @@
   "preconditions": {
     "image": "cfg80211 image (slice 13e81214 / slot 1794a531) + PD4-patched firmware, boot page 0x86807FEF/7/2/0xABCD, core state 1, mask 0",
     "ladder_before": "C2 ladder from wifi-cfg80211/wifi-proto-seq: ctx_create type 1 (g0 id1 key 0x64, module 4) -> txq_sync72 (g0 id1 key 0xd8); both consumed, mask 0",
-    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied, module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
+    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied (post-validator-fix module: 737,504 B sha256 5a0bfce5...9eeb1), module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
     "human": "recovery door armed, UART read-only capture running, one fire per step, no retry in the same boot"
   },
   "families": {
@@ -174,5 +174,25 @@
     "g0 id1 key 0x64 parent-module index for a real VAP is [I] (0x12 default = the boot-created module)",
     "AP-config WAL body (cmd 0x0127, 156 B) is still gap G1: no AP_START capability is advertised",
     "D2H scan/join event payload layouts remain with the cfg80211/scan lanes"
-  ]
+  ],
+  "bench_history": {
+    "fired": "2026-11-26 (attended, lead)",
+    "module": "provider/vapstart-provider.patch pre-validator-fix build: 707,912 B sha256 6b61103756d710578a48122541417fac2f4f6f35e0b681d4998786074f0fef00",
+    "params": "allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=8",
+    "observed": [
+      "boot golden, C2 ctx-create + txq_sync consumed",
+      "user_add (g0 id7) + user_add_notify (g0 id8) posted OK",
+      "WAL VAP add 56 B REFUSED BY THE DRIVER: 'frame post vap_add: frame rejected by the h2d_frames validator (firmware receive slot has no handler)'",
+      "VAP start not posted; scan aborted",
+      "readback after the refused frame: module-4 ctx+0x4B0=0x00174BF0, ctx+0x4B8=0x0015CA08, G+0x630 slot0=0x00119758 (readback targets valid)"
+    ],
+    "fix": "h2d_frames WAL group-2 cfg-event family validation (h2d_check_wal_cfg + H2D_EWALCMD; allowlist cmd 0x64/24, 0x65/12, 0xD0/16, 0x127/156); every other (group,id) keeps the handler-slot rule; validator-check 31/31 + inherited 233/233",
+    "rebuilt_module": "737,504 B sha256 5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1, zero warnings, 20 vsf_ symbols",
+    "expected_next": [
+      "reload fixed module with the same params",
+      "V1 WAL VAP add: 'frame post vap_add: ... CONSUMED'",
+      "V2 WAL VAP start: consumed; readback module-0 ctx+0x4B0/+0x4B8",
+      "S1 scan_req: D2H g1 15/16/17 or g2 id2 within 5 s = candidate PASS"
+    ]
+  }
 }

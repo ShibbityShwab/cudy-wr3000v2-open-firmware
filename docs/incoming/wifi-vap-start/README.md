@@ -16,8 +16,10 @@ Deliverables (this directory):
 | [src/vapstart_frames.h](src/vapstart_frames.h) | pure-C99 builder/validator API (kernel- and user-space) |
 | [src/vapstart_frames.c](src/vapstart_frames.c) | 7 builders (VAP add/start, start_sta pair, WAL VAP add/start, WAL AP-cfg envelope), validator/decoder, export |
 | [src/vapstart_selftest.c](src/vapstart_selftest.c) | 61 device-free known-answer/refusal checks + `--emit`/`--emit-raw` |
+| [src/wal_validator_selftest.c](src/wal_validator_selftest.c) | 31 checks: WAL group-2 cfg-event family accepted by the patched h2d_frames validator, mutations still refused |
 | [tools/build.sh](tools/build.sh) | host-only strict compile + selftest |
 | [tools/kernel-check.sh](tools/kernel-check.sh) | compile the library + provider patch inside the real 6.18.60 module build (zero warnings) |
+| [tools/validator-check.sh](tools/validator-check.sh) | WAL cfg-event family vs the patched h2d_frames validator (31/31) + inherited selftest (233/233) |
 | [tools/vap_start_re.py](tools/vap_start_re.py) | static re-verification: 56 byte/symbol probes against the pinned local firmware and vendor module |
 | [tools/gen_frames_md.py](tools/gen_frames_md.py) | regenerates [recipes/frames.md](recipes/frames.md) from the selftest emitter |
 | [provider/vapstart-provider.patch](provider/vapstart-provider.patch) | compile-ready extension of the wifi-scan-ap provider (caps VAP_ADD/VAP_START, builders, module params, VAP-add -> VAP-start -> scan ordering) |

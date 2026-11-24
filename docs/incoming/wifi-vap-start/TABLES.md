@@ -168,3 +168,33 @@ ctx+0x190 through CA 0xFE6BC.
 or state 1 changes; g+0xB4/+0xB8 != 0; SR node not consumed in the bounded poll; h2d_status
 refused increments; any dmesg fault. On stop: record, power-cycle, analyse offline; never
 re-send, never write CA 0x400392F0, never post mailbox id 5, never send group 1/4.*
+
+## T15. h2d_frames WAL family validation (post-fire fix, 2026-11-26)
+
+The inherited validator refused the WAL VAP-add frame in hi5622_frame_post() because the
+firmware's static group-2 receive table has no id-0 slot (H2D_ENOHANDLER). The provider patch
+adds a structural family check; every other (group,id) keeps the generic slot rule.
+
+| check | value | reject |
+| --- | --- | --- |
+| HCC family | group 2, header id 0 | n/a (other ids -> generic slot lookup) |
+| envelope length | payload >= 20 B | `H2D_ESHORT` |
+| WAL cfg-event id | u32 payload+4 == 1 | `H2D_EWALCMD` |
+| data length | u16 payload+0x0A == body_len + 4 | `H2D_EARG` |
+| payload length | payload_len == 20 + body_len | `H2D_ELEN` |
+| command allowlist | 0x0064/24, 0x0065/12, 0x00D0/16, 0x0127/156 | `H2D_EWALCMD` (unknown cmd) / `H2D_EARG` (bad size) |
+
+Evidence: `tools/validator-check.sh` -> 31/31 WAL cases + inherited 233/233; enum/string
+`H2D_EWALCMD` = "WAL cfg-event command/envelope not in the decoded allowlist".
+
+## T16. Bench feedback (2026-11-26, lead's fire of this lane's provider module)
+
+| item | observed |
+| --- | --- |
+| module fired | 707,912 B sha256 6b611037... (pre-validator-fix provider patch on the cfg80211 image) |
+| boot / C2 | golden page 0x86807FEF/7/2/0xABCD, state 1; ctx-create + txq sync consumed |
+| user_add + notify (g0 id7/id8) | posted OK |
+| WAL VAP add (56 B) | **refused by the driver's h2d_frames validator**: "firmware receive slot has no handler" -> VAP start not posted, scan aborted |
+| readback | module-4 ctx+0x4B0 = 0x00174BF0, ctx+0x4B8 = 0x0015CA08, G+0x630 slot0 = 0x00119758 (targets valid) |
+| fix | h2d_check_wal_cfg() family validation (T15); rebuilt module 737,504 B sha256 5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1, zero warnings, 20 vsf_ symbols |
+| next | reload the fixed module with the same params; expect "frame post vap_add: ... CONSUMED", then VAP start consumed, then scan results |

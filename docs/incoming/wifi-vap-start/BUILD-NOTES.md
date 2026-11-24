@@ -50,11 +50,15 @@ only.
 ```
 $ ./tools/kernel-check.sh
 == kernel-context compile result
--rw-r--r-- 1 ... 707912 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
-6b61103756d710578a48122541417fac2f4f6f35e0b681d4998786074f0fef00
+-rw-r--r-- 1 ... 737504 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
+5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1
 vsf_ symbols in module: 20
 kernel-check: OK (zero warnings; module-only build; no image, no device)
 ```
+
+(The pre-validator-fix build recorded by the 2026-11-26 bench fire was 707,912 B / sha256
+`6b611037...`; the current build adds the h2d_frames WAL family validation, the scan-ap
+working-tree scan-d2h decoder integration and this lane's provider code.)
 
 The check copies the committed `../wifi-scan-ap/src` tree to `/tmp/wifi-vap-start-kernel`
 (never modifies another lane), copies `src/vapstart_frames.{c,h}`, applies
@@ -94,3 +98,26 @@ that cfg80211 AP/STA support is complete (the WAL AP-config body is still gap G1
 Only files under `opensource/docs/incoming/wifi-vap-start/` were added. No vendor binary,
 object code, firmware byte, calibration value or secret is committed; no file outside
 `opensource/` was touched.
+
+## 7. Post-fire validator fix (2026-11-26)
+
+The first bench fire of the provider module was stopped inside `hi5622_frame_post()`: the
+56-byte WAL VAP-add frame failed `h2d_frame_decode(..., H2D_VF_HANDLER)` with
+"firmware receive slot has no handler", because the firmware's static group-2 receive table
+has no id-0 slot (the WAL family carries its command in the payload). The provider patch now
+contains `h2d_check_wal_cfg()` + `H2D_EWALCMD` (allowed commands 0x0064/24,
+0x0065/12, 0x00D0/16, 0x0127/156; unknown/malformed refused).
+
+New verification step:
+
+```
+$ ./tools/validator-check.sh
+31/31 checks passed            # WAL family accepted + mutations refused
+SUMMARY: 233 passed, 0 failed  # inherited wifi-h2d-frames selftest on the patched library
+validator-check: OK
+```
+
+Patch baseline: generated against the `wifi-scan-ap/src` working tree of 2026-11-26 (the tree
+that carries the scan-d2h decoder integration the bench module is built from). It also applies
+to `git HEAD` + `../wifi-scan-d2h/patches/0001-hi5622-scan-d2h-decoder.patch` with line
+offsets (dry-run checked).

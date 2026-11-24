@@ -84,6 +84,17 @@ Inputs (gitignored, read in place; no vendor byte is committed):
     carrier as every validated H2D lane. [V]
 14. **What is NOT proven**: hardware behaviour of every frame in this directory. The ladder is the
     falsifiable next step; sections 9 and 10 say exactly what to read back. [U]
+`
+15. **Post-fire fix (2026-11-26 bench feedback): the first bench fire of this lane's module was
+    stopped by the DRIVER, not the firmware.** The 56-byte WAL VAP-add frame was refused inside
+    `hi5622_frame_post()` by the inherited `h2d_frames` validator ("firmware receive slot has no
+    handler"): the firmware's static group-2 receive table has no id-0 slot, which is exactly the
+    WAL family. The provider extension now teaches the validator this one decoded family
+    structurally (envelope + WAL command allowlist 0x64/0x65/0xD0/0x127 + per-command body size,
+    `H2D_EWALCMD` refusals) while every other (group,id) keeps the non-NULL handler-slot rule.
+    Rebuilt module: 737,504 B sha256 `5a0bfce5...9eeb1`, zero warnings; validator check 31/31 WAL
+    cases + inherited h2d_frames selftest 233/0. The bench readback also showed the module-4
+    ctx+0x4B0/+0x4B8 and G+0x630 targets resolving, so the readback pack is usable. [V]/[V* = bench]
 
 ---
 
@@ -205,6 +216,53 @@ user_add/scan frames carry hdr[3] = 0 -> module 0 -> +0x4B8 NULL -> return 100. 
 
 ---
 
+## 3.5 Bench feedback and the validator fix (2026-11-26)
+
+The lane's provider module was fired on the attended bench (cfg80211 image, PD4 firmware):
+boot golden, C2 ctx-create + TXQ sync consumed, user_add (g0 id7) + notify (g0 id8) posted OK -
+then the NEW WAL VAP-add frame was **refused by the driver's own h2d_frames validator**:
+
+```
+frame post vap_add: frame rejected by the h2d_frames validator (firmware receive slot has no handler)
+cfg80211: VAP start sequence not posted (-1) - scan aborted, no scan message
+```
+
+**Cause [V]:** the WAL family is HCC group 2 with header id 0 (vendor builder fact, section 2.4).
+`h2d_check_semantics()` required a non-NULL slot in the firmware's static receive table for every
+frame; that table has **no group-2 id-0 entry** (the catalog anomaly; the vendor host's own frames
+share it), so a shape the firmware demonstrably accepts from the vendor host was refused before
+touching the wire. This is a validator/catalogue gap, not a frame-encoding bug.
+
+**Fix (this lane's provider patch, host-only):** `h2d_check_wal_cfg()` validates the WAL family
+structurally and fail-closed:
+
+| rule | reject on mismatch |
+| --- | --- |
+| payload length >= 20 (cookie 4 + WAL header 12 + cmd/body_len 4) | `H2D_ESHORT` |
+| u32 at payload+4 == 1 (WAL cfg-event id) | `H2D_EWALCMD` |
+| u16 data_len at payload+0x0A == 4 + body_len | `H2D_EARG` |
+| payload_len == 20 + body_len | `H2D_ELEN` |
+| cmd at payload+0x10 in {0x0064/24, 0x0065/12, 0x00D0/16, 0x0127/156} | `H2D_EWALCMD` / `H2D_EARG` |
+
+Every other (group,id) keeps the generic `h2d_fw_handler_lookup()` non-NULL slot rule. The
+extension is regression-tested: 31/31 WAL accept/refuse cases in
+`src/wal_validator_selftest.c`, and the inherited wifi-h2d-frames selftest still reports
+233/233 PASS against the patched library (`tools/validator-check.sh`).
+
+**Bench readback after the refused frame [V*]:** module-4 ctx+0x4B0 = 0x00174BF0,
+ctx+0x4B8 = 0x0015CA08 and G+0x630 slot0 = 0x00119758 were non-zero - i.e. the readback
+targets in section 7 are valid and the module-4 context (from the C2 ladder) carries the band
+binding. The VAP-add frame must be allowed first to learn whether the module-0/VAP-0 sequence
+clears the scan handler gate; that is the next attended step.
+
+**Rebuilt module (this lane, patch applied to the current wifi-scan-ap src tree):**
+737,504 B, sha256 `5a0bfce5f92c1e5eb940892ca46cbac209d85784ad05f3bc37251ba36c79eeb1`,
+zero compiler/modpost warnings, 20 `vsf_` symbols, module params include
+`vap_start_first/vap_start_mode/vap_start_module`. The refusals above become
+`frame post vap_add: ... CONSUMED` when the same module is reloaded.
+
+---
+
 ## 4. Corrections register (supersedes earlier lane claims)
 
 | earlier claim | corrected here |
@@ -289,7 +347,9 @@ advertised by the provider extension, so cfg80211 `start_ap` remains fail-closed
 | static re-verification of every claim (56 probes: firmware table rows, handler/worker/helper byte patterns, g0/g2 rows, vendor symbol addresses and builder instruction sites) | `tools/vap_start_re.py --selftest` -> **56/56 PASS** [V] |
 | host builders known-answer + refusal tests | `tools/build.sh` -> **61/61 PASS**, strict `-std=c99 -Wall -Wextra -Werror -pedantic` [V] |
 | generated frames | `tools/gen_frames_md.py` -> `recipes/frames.md` (`--check` current) [V] |
-| kernel-context compile (library + provider patch inside the real 6.18.60 module build) | `tools/kernel-check.sh` -> module 707,912 B sha256 `6b611037...fef00`, **zero warnings**, 20 vsf_ symbols [V] |
+| WAL family accepted / mutations refused by the patched h2d_frames validator | `tools/validator-check.sh` -> **31/31 PASS** [V] |
+| inherited h2d_frames regressions (patched library) | `tools/validator-check.sh` -> **233/233 PASS** [V] |
+| kernel-context compile (library + provider patch + WAL validator inside the real 6.18.60 module build) | `tools/kernel-check.sh` -> module **737,504 B sha256 `5a0bfce5...9eeb1`**, **zero warnings**, 20 vsf_ symbols [V] |
 | hardware behaviour of the frames | **not done - host-only lane** [U] |
 
 The kernel check copies the committed `../wifi-scan-ap/src` tree to `/tmp`, adds this lane's
@@ -363,6 +423,7 @@ PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
 cd opensource/docs/incoming/wifi-vap-start
 $PY tools/vap_start_re.py --selftest            # 56/56 static probes PASS
 ./tools/build.sh                                # host build + 61/61 KAT + emit
+./tools/validator-check.sh                     # WAL family 31/31 + inherited 233/233
 ./tools/kernel-check.sh                         # 6.18.60 module build, zero warnings
 $PY tools/gen_frames_md.py                      # regenerate recipes/frames.md
 $PY tools/gen_frames_md.py --check              # freshness gate
