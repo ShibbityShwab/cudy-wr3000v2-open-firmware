@@ -13,8 +13,8 @@ binary/object/firmware byte is involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **504,800 B** |
-| sha256 | **7d01e340965a1a9711fe6893cbe343e298adb5ebf1d75ea4df3b2f1fd1215e1a** |
+| size | **505,076 B** |
+| sha256 | **2c30051ef99ef8563610b634534d5a2c21108596055eecc00be92cf722a6b54c** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
@@ -22,9 +22,9 @@ binary/object/firmware byte is involved).
 | objects | main.o transport.o ete.o d2h.o hcc.o service.o hcc_core.o hcc_core_kernel.o h2d_frames.o h2d_send_logic.o h2d_send.o **hi5622_cfg80211_logic.o hi5622_cfg80211.o hi5622_cfg80211_ops.o** |
 | compiler/modpost warnings | **0** (project tree builds with -Werror) |
 | cfg80211 imports (U) | 6: wiphy_new_nm, wiphy_register, wiphy_unregister, wiphy_free, cfg80211_register_netdevice, cfg80211_unregister_wdev |
-| host cfg80211 logic selftest | **447/447 PASS** |
+| host cfg80211 logic selftest | **454/454 PASS** |
 | host inherited H2D logic selftest | **242/242 PASS** |
-| driver selftest (source/contract) | **138/138 PASS** |
+| driver selftest (source/contract) | **145/145 PASS** |
 | cfg80211 provider-symbols check | PASS (6 symbols, all real net/wireless exports, none tree-provided) |
 
 Module params: fw_path, wifi_block_path, plat_block_path,
@@ -36,6 +36,16 @@ the wiphy automatically once the HCC ready handshake is decoded) +
 The module hash is **build-path dependent** (debug info records the build
 directory), so a copy built from another path has a different hash but the
 same behaviour/flags; record the hash printed by the build you deploy.
+
+**Verified tree:** the result above was produced against the project 6.18.60
+tree at
+/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+(same canonical luofu config, CONFIG_CFG80211 unset + CONFIG_CFG80211_HEADERS=y,
+and the same OpenWrt toolchain).  The canonical selectorfix-img tree was being
+reconfigured/rebuilt by another lane (it now carries CONFIG_CFG80211=m) while
+this lane finalised; any project 6.18.60 tree with CFG80211_HEADERS=y works.
+Override the tree with: KDIR_OVERRIDE=<path> STAGING_DIR_OVERRIDE=<staging_dir>
+./tools/build.sh.  Re-verify against the canonical tree once it is idle.
 
 ## Build line
 
@@ -82,12 +92,17 @@ Host test binaries: /tmp/wifi-cfg80211-build/{cfg80211_logic_selftest,h2d_logic_
 | step | command / file | result |
 | --- | --- | --- |
 | host compile of the cfg80211 logic | cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes on cfg80211_logic_selftest.c + hi5622_cfg80211_logic.c | PASS |
-| host cfg80211 model/op-map selftest | /tmp/wifi-cfg80211-build/cfg80211_logic_selftest | **447/447 PASS** |
+| host cfg80211 model/op-map selftest | /tmp/wifi-cfg80211-build/cfg80211_logic_selftest | **454/454 PASS** |
 | host inherited H2D logic selftest | /tmp/wifi-cfg80211-build/h2d_logic_selftest | **242/242 PASS** |
 | kernel module build | project 6.18.60 tree, -Werror, modpost | PASS, 0 warnings/errors |
 | artifact evidence | modinfo / sha256sum / nm | see table above |
 | cfg80211 provider symbols | tools/gen_cfg80211_symvers.py --check | PASS |
-| driver selftest | tools/selftest.py | **138/138 PASS** |
+| driver selftest | tools/selftest.py | **145/145 PASS** |
+
+Inherited-tree integrity is checked against the committed
+tools/src-baseline.sha256 manifest (23 inherited files captured at copy time),
+not against the live wifi-h2d-send sibling directory, which other lanes
+continue to extend.
 
 The driver selftest checks: required layout; Kbuild objects + provider
 declaration; main.c/service.c/driver.h integration; exactly one

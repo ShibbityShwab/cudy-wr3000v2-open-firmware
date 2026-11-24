@@ -11,12 +11,12 @@ Wi-Fi driver **on top of the already working full-duplex HCC protocol**:
       + portable, host-tested VAP model + 39-op cfg80211 <-> HCC message map
 
 **Status: host-only, compile-clean, zero warnings, not bench-fired by this
-lane.**  Kernel module **hi5622_wifi.ko** 504,800 B sha256 7d01e340...,
+lane.**  Kernel module **hi5622_wifi.ko** 505,076 B sha256 2c30051e...,
 vermagic 6.18.60 SMP mod_unload ARMv7 p2v8, depends=cfg80211, 0
 compiler/modpost warnings (project 6.18.60 tree, cfg80211 provided to modpost
 via src/cfg80211-provider.symvers).  Host selftests: cfg80211 logic
-**447/447**, inherited H2D logic **242/242**, driver source selftest
-**138/138**.
+**454/454**, inherited H2D logic **242/242**, driver source selftest
+**145/145**.
 
 | file | what |
 | --- | --- |
@@ -28,6 +28,7 @@ via src/cfg80211-provider.symvers).  Host selftests: cfg80211 logic
 | tools/cfg80211_logic_selftest.c | 447 device-free checks: VAP lifecycle, registration gate, 39-op map, frame refs, status formatting |
 | tools/gen_cfg80211_symvers.py | validates/regenerates the cfg80211 provider symvers against the real net/wireless exports |
 | tools/selftest.py | source/contract selftest (integration wiring, ops/stub discipline, safety, no vendor material) |
+| tools/src-baseline.sha256 | committed hashes of the inherited protocol files (parity gate; sibling lanes may extend their own tree) |
 
 Quick start (host, no device):
 

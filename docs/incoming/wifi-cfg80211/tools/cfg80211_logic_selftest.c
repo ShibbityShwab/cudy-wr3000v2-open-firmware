@@ -281,7 +281,12 @@ static void test_msg_refs(void)
 	CHECK(strstr(r->builder, "pending") != NULL);
 	r = &refs[5];
 	CHECK(r->group == 0x00 && r->id == 0x000c && r->payload_len == 508);
-	CHECK(strstr(r->builder, "task-103") != NULL);
+	CHECK(strstr(r->builder, "open") != NULL);
+	/* canonical task-103 calibration row appended last: g0 id2 key 0x0101 */
+	r = &refs[n - 1];
+	CHECK(r->group == 0x00 && r->id == 0x0002 && r->payload_len == 286);
+	CHECK(strstr(r->builder, "exact") != NULL);
+	CHECK(strstr(r->builder, "298 B") != NULL);
 	r = &refs[4];
 	CHECK(r->group == 0x00 && r->id == 0x0009 && r->payload_len == 12);
 	CHECK(strstr(r->builder, "exact") != NULL);

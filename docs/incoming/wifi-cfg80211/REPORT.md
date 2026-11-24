@@ -7,17 +7,19 @@ calibration value, per-unit secret or DTS extraction is reproduced here.  The
 PD4 patch image and the Wi-Fi PHY custom block remain local bench inputs under
 the project publication rules.
 
-This lane deliberately does not duplicate protocol work: the H2D frames that
-still need builders are tracked by **task-103 (wifi-proto-seq)** and referenced
-here by group/id/key; the driver model returns -EOPNOTSUPP rather than faking
-success while a builder is missing.
+This lane deliberately does not duplicate protocol work: **task-103
+(wifi-proto-seq, committed 796bca2)** delivered the g1 id3 / g1 id0x12 D2H
+decodes and the calibration g0 id2 family; the VAP-add (g0 id7/id8) and scan
+(g0 id0xC) payloads remain OPEN (payload [U], not modelled by task-103) and are
+referenced here by group/id/key.  The driver model returns -EOPNOTSUPP rather
+than faking success while a builder is missing.
 
 ---
 
 ## 0. TL;DR
 
 * Built **hi5622_wifi.ko** (project 6.18.60 tree, ARM, zero compiler/modpost
-  warnings, 504,800 B sha256 7d01e340..., **depends=cfg80211**) from the
+  warnings, 505,076 B sha256 2c30051e..., **depends=cfg80211**) from the
   bench-validated wifi-h2d-send driver tree plus a new cfg80211 layer.
 * Wiphy is allocated per PCI endpoint, carries the **RE-derived 2.4/5 GHz
   band + channel + cipher capabilities**, and is registered **only after the
@@ -31,8 +33,8 @@ success while a builder is missing.
   stubs**; every M3+ op stays NULL (cfg80211 returns -EOPNOTSUPP by itself).
 * Portable host-tested **VAP model + registration gate + 39-op cfg80211 <-> HCC
   message map** (vendor-populated op set from wifi-driver-re sec 2.2).
-* Tests: cfg80211 logic **447/447**, inherited H2D logic **242/242**, driver
-  source selftest **138/138**; provider-symbols check PASS.
+* Tests: cfg80211 logic **454/454**, inherited H2D logic **242/242**, driver
+  source selftest **145/145**; provider-symbols check PASS.
 * Handoff: **CONFIG_CFG80211=m must be added to the target kernel config**
   (cfg80211.config; task-107) - the current project tree builds it unset.
 
@@ -192,13 +194,15 @@ it with -EOPNOTSUPP without a driver callback.
 Source of truth (machine-readable, host-tested): src/hi5622_cfg80211_logic.c
 (hi5622_op_map[], 39 rows = the vendor's populated op set,
 wifi-driver-re sec 2.2).  Group/id/key columns are the H2D contract; D2H
-columns are the expected response/event frames.  "task-103" marks the frame
-builders that are still open (wifi-proto-seq delivers them; this lane only
-references them).
+columns are the expected response/event frames.  "open" marks a frame whose
+payload struct is still [U] (no builder in the project yet: VAP add g0 id7/id8,
+scan g0 id0xC, STA join family); the committed wifi-proto-seq lane (task-103)
+delivered the D2H decodes and the calibration g0 id2 family and is cited where
+its rows are used.
 
 | # | cfg80211 op | milestone | M0-M2 state | H2D (group/id) | D2H / events | builder |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | add_virtual_intf | M1 | implemented (netdev) | g0 id7 hmac_user_add (168 B), g0 id8 notify-alg | g1 id3 sync / user events | **pending task-103** |
+| 1 | add_virtual_intf | M1 | implemented (netdev) | g0 id7 hmac_user_add (168 B), g0 id8 notify-alg | g1 id3 config-syn / user events | **open (payload [U])** |
 | 2 | del_virtual_intf | M1 | implemented (netdev) | g0 id9 hmac_del_user_notify_dmac (12 B) | g1 id3 | exact builder exists |
 | 3 | change_virtual_intf | M1 | implemented (same-type only) | - | - | n/a |
 | 4 | add_key | M3 | deferred | g2 WAL cfg event (id [U]) | g1 id3 | pending |
@@ -215,7 +219,7 @@ references them).
 | 15 | get_station | M2 | **stub -EOPNOTSUPP** | - | g2 ids 3/4/5/6 | pending |
 | 16 | dump_station | M2 | **stub -EOPNOTSUPP** | - | g2 ids 3/4/5/6 | pending |
 | 17 | change_bss | M3 | deferred | g2 WAL cfg event | - | pending |
-| 18 | scan | M2 | **stub -EOPNOTSUPP** | g0 id0xC hmac_enc_scan_send_req (508 B) | g1 15/16/17, g2 id2 | **pending task-103** |
+| 18 | scan | M2 | **stub -EOPNOTSUPP** | g0 id0xC hmac_enc_scan_send_req (508 B) | g1 15/16/17, g2 id2 | **open (payload [U])** |
 | 19 | connect | M5 | deferred | g0 id0xF / 0x10 / 0x11 join family | g2 3/4/5/6 | pending |
 | 20 | disconnect | M5 | deferred | g0 id0x10 family | g2 3/4/5/6 | pending |
 | 21 | set_wiphy_params | M4 | deferred | g0 id1 hmac_config family | g1 id3 | pending |
@@ -242,39 +246,47 @@ Counts enforced by the host selftest: 39 rows, 3 implemented (all M1), 3
 registered -EOPNOTSUPP stubs (M2), 33 deferred; 7 rows in M0-M2 scope, the rest
 M3-M6.
 
-### 5.1 HCC message reference table (task-103 handoff view)
+### 5.1 HCC message reference table (canonical frame view)
 
-src/hi5622_cfg80211_logic.c hi5622_msg_refs[] (19 rows) records every frame
-this layer's map touches:
+src/hi5622_cfg80211_logic.c hi5622_msg_refs[] (20 rows) records every frame
+this layer's map touches; the D2H and calibration rows cite the committed
+wifi-proto-seq REPORT (commit 796bca2) when they use its decode.
 
 | frame | dir | group/id | len | builder status | milestone |
 | --- | --- | --- | ---: | --- | --- |
 | ctx_create (key 0x64) | H2D | g0 id1 | 0x14 | exact (h2d_build_ctx_create), proven on hardware | M1 precondition |
 | txq_sync (cmd 0xd8) | H2D | g0 id1 | 0x14 | exact (h2d_build_txq_sync), proven on hardware | M1 |
-| user_add | H2D | g0 id7 | 168 | **pending task-103** | M1 |
-| user_add_notify_alg | H2D | g0 id8 | 168 | **pending task-103** | M1 |
+| user_add | H2D | g0 id7 | 168 | **open** (payload [U]; not modelled by task-103) | M1 |
+| user_add_notify_alg | H2D | g0 id8 | 168 | **open** (payload [U]; not modelled by task-103) | M1 |
 | del_user | H2D | g0 id9 | 12 | exact (h2d_build_del_user) | M1 |
-| scan_req | H2D | g0 id0xC | 508 | **pending task-103** (payload [U]) | M2 |
-| sta_join | H2D | g0 id0xF | - | unknown, task-103 | M5 |
-| sta_wait_join | H2D | g0 id0x10 | - | unknown, task-103 | M5 |
-| sta_join_result | H2D | g0 id0x11 | - | unknown, task-103 | M5 |
+| scan_req | H2D | g0 id0xC | 508 | **open** (payload [U]; not modelled by task-103) | M2 |
+| sta_join | H2D | g0 id0xF | - | unknown, open | M5 |
+| sta_wait_join | H2D | g0 id0x10 | - | unknown, open | M5 |
+| sta_join_result | H2D | g0 id0x11 | - | unknown, open | M5 |
 | edca_opt_timeout | H2D | g0 id0x1D | 60 | exact (h2d_build_edca_opt) | M3 |
 | WAL cfg event | H2D | g2 | - | unknown command ids [U] | M3 |
-| config_syn (response) | D2H | g1 id3 | 36 | observed on bench, decode pending task-103 | M1 |
-| g1 id0x12 (response) | D2H | g1 id0x12 | 40 | observed on bench, decode pending task-103 | M1 |
+| config_syn (response) | D2H | g1 id3 | 36 | **GENERIC config-sync channel**: syn_id u16 at +0x08 - 0x0101 alg / 0x0102 cali / 0x07xx per-VAP; observed 36 B = syn_id 0x07E0 VAP_MIB_UPDATE (task-103 sec 2/9.3) | M1 |
+| g1 id0x12 (response) | D2H | g1 id0x12 | 40 | hmac_event_acs_response family; host forwards the body opaque (task-103 sec 3) | M1 |
 | scan bss / complete / channel | D2H | g1 id15/16/17 | - | vendor path [I] | M2 |
 | scan rsp (sta) | D2H | g2 id2 | - | vendor path [I] | M2 |
 | station events | D2H | g2 ids 3/4/5/6 | - | asoc/connect/disconnect [I] | M3 |
 | PM event | D2H | g3 id17 | - | hmac_d2h_pm_event | M6 |
+| calibration alg cfg (key 0x0101) | H2D | g0 id2 | 286 (298 total) | exact - proto_seq_frames.py; 6 vendor cal cfg ids (task-103 sec 5.3 + recipes/cal-commands.json) | M6 (driver-init, not a cfg80211 op) |
 
-The exact H2D payloads remain task-103's deliverable: this lane references
-group/id/key/length only and never synthesizes a payload it cannot justify.
-Sibling-lane cross-checks for the same rows: the committed wifi-datapath lane
-(task-105, FRAME-SPECS.md + tables) independently lists g0 id7/id8 = 0xA8 B,
-g0 id9 = 0x0C B, g0 id0xC = 0x1FC B and D2H g1 ids 15/16/17 + g2 id2; the
-in-progress wifi-proto-seq lane (task-103) owns the g1 id3/g1 id0x12 decodes
-and the calibration family (g0 id2, key 0x0101), which is driver-init traffic
-and therefore intentionally NOT a cfg80211 op in this map.
+The open H2D payloads (g0 id7/id8, g0 id0xC, STA join family) have no builder
+in the project yet: this lane references group/id/key/length only and never
+synthesizes a payload it cannot justify.  Sibling-lane cross-checks: the
+committed wifi-datapath lane (task-105, FRAME-SPECS.md + tables) independently
+lists g0 id7/id8 = 0xA8 B, g0 id9 = 0x0C B, g0 id0xC = 0x1FC B and D2H g1 ids
+15/16/17 + g2 id2; the committed wifi-proto-seq lane (task-103, REPORT sec 5.3
+and sec 9 table) owns the g1 id3/g1 id0x12 decodes and the calibration family
+(g0 id2, key 0x0101, 298 B total), which is driver-init traffic and therefore
+intentionally NOT a cfg80211 op in this map.
+
+**Backend fact for M1+ (from task-103):** g1 id3 is one generic config-sync
+channel, not a per-message answer - a cfg80211 backend must dispatch it by the
+syn_id field (0x0101/0x0102 calibration, 0x07xx per-VAP), never by frame
+size.
 
 ---
 
@@ -293,7 +305,7 @@ lane's M3/M4/M5/M6.
 | milestone | gate | state |
 | --- | --- | --- |
 | M0 wiphy+netdev | compile + host selftest; bench: wiphy appears after ready, iw phy / iw dev enumerate | **delivered host-side** (bench gate pending the cfg80211 kernel config) |
-| M1 VAP create/destroy | netdev VAP add/del through nl80211; firmware VAP message once g0 id7/8 builder exists | **netdev half delivered; HCC half blocked on task-103** |
+| M1 VAP create/destroy | netdev VAP add/del through nl80211; firmware VAP message once g0 id7/8 builder exists | **netdev half delivered; HCC half blocked on an OPEN payload builder (g0 id7/id8 [U]; task-103 confirmed it does not model it)** |
 | M2 scan/station stubs | scan/get_station/dump_station return -EOPNOTSUPP cleanly | **delivered** |
 | M3 AP control | start/stop/beacon/keys/stations -> four APs enabled equivalent | planned: g2 WAL cfg payloads + g0 id7/8/9, station D2H decode |
 | M4 data path | hdpp queues + netdev TX/RX, first DHCP/ICMP through an AP | planned (datapath lane) |
@@ -306,15 +318,23 @@ lane's M3/M4/M5/M6.
 
 | step | command | result |
 | --- | --- | --- |
-| host cfg80211 logic selftest | tools/build.sh step 1 | **447/447 PASS** |
+| host cfg80211 logic selftest | tools/build.sh step 1 | **454/454 PASS** |
 | host inherited H2D logic selftest | tools/build.sh step 2 | **242/242 PASS** |
 | kernel module build | project 6.18.60 tree, -Werror, modpost | rc=0, **0 warnings** |
-| artifact | modinfo / sha256sum / nm | 504,800 B, sha256 7d01e340..., vermagic 6.18.60 SMP mod_unload ARMv7 p2v8, depends=cfg80211, exactly 6 wiphy_*/cfg80211_* imports |
+| artifact | modinfo / sha256sum / nm | 505,076 B, sha256 2c30051e..., vermagic 6.18.60 SMP mod_unload ARMv7 p2v8, depends=cfg80211, exactly 6 wiphy_*/cfg80211_* imports |
 | provider symbols | tools/gen_cfg80211_symvers.py --check | PASS: 6 symbols, all real net/wireless exports, none tree-provided |
-| driver source selftest | tools/selftest.py | **138/138 PASS** |
+| driver source selftest | tools/selftest.py | **145/145 PASS** |
 
 The module hash is build-path dependent (debug info records the build
-directory); record the hash of the build you deploy.
+directory); record the hash of the build you deploy.  The result above was
+produced against the project 6.18.60 tree at
+/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+(same canonical luofu config + OpenWrt toolchain; CONFIG_CFG80211_HEADERS=y,
+CONFIG_CFG80211 unset) because the canonical selectorfix-img tree was under
+another lane's reconfigure/rebuild at the time; tools/build.sh supports
+KDIR_OVERRIDE/STAGING_DIR_OVERRIDE for that case.  Inherited-tree integrity is
+checked against the committed tools/src-baseline.sha256 manifest (the live
+wifi-h2d-send sibling is extended by other lanes).
 
 ### 7.1 The cfg80211-unset tree quirk (why the provider file exists)
 
@@ -340,14 +360,20 @@ and struct net_device keeps its ieee80211_ptr field
 
 The target kernel still needs CONFIG_CFG80211=m for the module to load:
 that is cfg80211.config, a handoff to the target/defconfig lane (task-107),
-not a change made here (it is outside this lane's write scope).
+not a change made here (it is outside this lane's write scope).  Status at
+handoff: the target lane has since added CONFIG_CFG80211=m to the shared
+selectorfix tree config (mirroring this fragment); the module will use the
+natively built cfg80211 exports once that kernel/OpenWrt build completes, and
+the provider file remains needed only for the currently unset header-only
+tree used for compile verification.
 
 ---
 
 ## 8. Bench gate (attended only; not executed by this lane)
 
 This lane's deliverables are host-only.  When the bench is scheduled (after
-the cfg80211 kernel config and the task-103 VAP builders exist), the M0-M2
+the cfg80211 kernel config and the OPEN VAP-add g0 id7/id8 payload builders
+(no lane owns them yet; task-103 did not model them) exist), the M0-M2
 observations are read-only for this layer:
 
     0. attended session, recovery door armed; PD4 golden boot as documented
@@ -398,8 +424,8 @@ if the wiphy does not register, capture dmesg + cfg80211_status and stop
 
 | # | risk | impact | mitigation |
 | --- | --- | --- | --- |
-| R1 | CONFIG_CFG80211 unset in the target tree | driver cannot load on the bench image | cfg80211.config handoff to task-107; bench waits for it |
-| R2 | VAP firmware messages (g0 id7/id8 add) still unbuilt | no firmware VAP object, so no AP/data path yet | task-103 builders; the driver never sends a speculative frame |
+| R1 | CONFIG_CFG80211 unset in the target tree (at lane start) | driver cannot load on the bench image | cfg80211.config handoff to task-107; the config was added to the shared tree during the lane and the bench image must be rebuilt before load |
+| R2 | VAP firmware messages (g0 id7/id8 add, g0 id0xC scan) still unbuilt - payload [U], no project builder | no firmware VAP object/scan, so no AP/data path yet | open builder work (not delivered by task-103); the driver never sends a speculative frame |
 | R3 | scan payload (g0 id0xC, 508 B) still [U] | M2 scan is a stub | same handoff; D2H result ids known (g1 15/16/17, g2 2) |
 | R4 | domain->band mapping unproven (cross-wiring) | wrong band per endpoint if auto is wrong | band_force parameter + loud log; bench decision |
 | R5 | 5 GHz channel flags from a hypothesis (INI LU plan) | regulatory/DFS behaviour may differ | encoded from phase2/power-decode.md; custom regdomain port is M6 |
@@ -426,7 +452,8 @@ wifi-irq-unmask/REPORT-PD3.md + REPORT-PD4.md (firmware patch path),
 wifi-vendor-userspace (cfg80211 scope + startup order), wifi-driver-re
 (cfg80211 ops map + wiphy registration), wifi-h2d-catalog (H2D tables),
 wifi-datapath (committed frame specs/sizes cross-check), wifi-proto-seq
-(task-103: D2H response decode + calibration family, in progress),
+(task-103, committed 796bca2: D2H g1 id3/id0x12 decode + calibration g0 id2
+family, REPORT sec 5.3/9 + recipes/cal-commands.json),
 phase14 (wiphy/netdev skeleton lessons), phase2/power-decode.md (5 GHz LU
 channel plan), DRIVER-BLACKBOX (two endpoints, live wiphy readouts).
 

@@ -29,6 +29,14 @@ CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-
 export STAGING_DIR KDIR CROSS_COMPILE
 export LC_ALL=C
 
+# Optional overrides for a different project 6.18.60 build tree / toolchain
+# (the canonical selectorfix tree is shared with other lanes; see BUILD-NOTES).
+[ -n "$KDIR_OVERRIDE" ] && KDIR=$KDIR_OVERRIDE
+[ -n "$STAGING_DIR_OVERRIDE" ] && STAGING_DIR=$STAGING_DIR_OVERRIDE && \
+	CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-
+[ -n "$CROSS_COMPILE_OVERRIDE" ] && CROSS_COMPILE=$CROSS_COMPILE_OVERRIDE
+export STAGING_DIR KDIR CROSS_COMPILE
+
 LOG=/tmp/hi5622-wifi-cfg80211-build.log
 KO=$SRC/hi5622_wifi.ko
 PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python

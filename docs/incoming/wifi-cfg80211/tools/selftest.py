@@ -66,6 +66,7 @@ def main(argv):
         "tools/gen_cfg80211_symvers.py": os.path.join(HERE, "gen_cfg80211_symvers.py"),
         "tools/cfg80211_logic_selftest.c": os.path.join(HERE, "cfg80211_logic_selftest.c"),
         "tools/selftest.py": os.path.join(HERE, "selftest.py"),
+        "tools/src-baseline.sha256": os.path.join(HERE, "src-baseline.sha256"),
         "cfg80211.config": os.path.join(LANE, "cfg80211.config"),
         "README.md": os.path.join(LANE, "README.md"),
         "REPORT.md": os.path.join(LANE, "REPORT.md"),
@@ -247,26 +248,48 @@ def main(argv):
     check("wifi-cfg80211" in readme and "M0-M2" in readme,
           "README.md missing lane/milestone identification")
 
-    # ---- 8. inherited tree unchanged except the documented files -------
-    allowed = {"main.c", "service.c", "hi5622_driver.h", "Kbuild",
-               ".gitignore"}
-    if os.path.isdir(REF):
-        for name in sorted(os.listdir(REF)):
-            rp = os.path.join(REF, name)
-            sp = os.path.join(SRC, name)
-            if not os.path.isfile(rp) or not os.path.isfile(sp):
+    # ---- 8. inherited tree unchanged (committed baseline manifest) ------
+    # The wifi-h2d-send sibling lane is a living tree (other lanes extend it),
+    # so parity is checked against this lane's committed baseline manifest
+    # captured at copy time - not against the live reference directory.
+    import hashlib
+    baseline = os.path.join(HERE, "src-baseline.sha256")
+    check(exists(baseline), "tools/src-baseline.sha256 missing")
+    if exists(baseline):
+        n_base = 0
+        for line in read(baseline).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
-            if name.endswith(".mod.c") or name.startswith("."):
+            parts = line.split()
+            if len(parts) != 2:
                 continue
-            if not name.endswith((".c", ".h", ".inc", ".md")) and \
-               name not in ("Kbuild", "Makefile", ".gitignore"):
+            digest, rel = parts
+            p = os.path.join(LANE, rel)
+            if not os.path.isfile(p):
+                check(False, "baseline file missing: %s" % rel)
                 continue
-            same = read(rp) == read(sp)
-            if name in allowed:
-                continue
-            check(same, "copied protocol file changed unexpectedly: %s" % name)
+            with open(p, "rb") as fh:
+                actual = hashlib.sha256(fh.read()).hexdigest()
+            check(actual == digest,
+                  "inherited protocol file changed after baseline: %s" % rel)
+            n_base += 1
+        check(n_base >= 20, "baseline manifest too small (%d files)" % n_base)
+        # live-reference drift is a NOTE, never a failure: sibling lanes are
+        # allowed to extend wifi-h2d-send after our copy.
+        if os.path.isdir(REF):
+            drifted = [n for n in sorted(os.listdir(REF))
+                       if os.path.isfile(os.path.join(REF, n))
+                       and os.path.isfile(os.path.join(SRC, n))
+                       and not n.endswith((".mod.c", ".md"))
+                       and not n.startswith(".")
+                       and read(os.path.join(REF, n)) != read(os.path.join(SRC, n))]
+            if drifted:
+                print("NOTE: live wifi-h2d-send reference has drifted from our "
+                      "copy (sibling lane work; baseline check is canonical): %s"
+                      % ", ".join(drifted))
     else:
-        print("NOTE: reference tree %s absent - parity checks skipped" % REF)
+        print("NOTE: baseline manifest absent - parity checks skipped")
 
     # ---- 9. no vendor/secret material in the lane ----------------------
     bad_ext = (".bin", ".ko", ".o", ".mod", ".ini", ".cal", ".dat", ".fw")
