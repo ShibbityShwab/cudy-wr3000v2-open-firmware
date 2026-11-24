@@ -471,15 +471,14 @@ built-in PD recipe's expectations; see the note at the end):
 they happen to decode as — a flat segment decode at the CPU address necessarily includes them,
 exactly as emitted by capstone.)
 
-**Cross-check with the bench-tooling builder (task-97).** `fw_patch_builder.py` currently
-decodes a recipe segment at address 0 (`decode_insn(..., None)`), while its own built-in PD
-recipe's `expect` strings use CPU addresses (e.g. `bl #0x40294`). That inconsistency makes the
-*built-in* PD recipe fail its own decode check (observed at HEAD of the untracked
-`docs/incoming/wifi-bench-tooling/` tree on 2026-11-24) and also rejects this PD2 recipe unless
-the `expect` strings are rewritten with address-0 targets. The fix on the tooling side is to pass
-the segment's CPU address (`file + 0x40000`) to `decode_insn`; the PD2 recipe above is already
-in that canonical form. (The recipe also deliberately sets `based_on: null`: PD2 does not apply
-the PD segments — PD-1 is the bug being replaced and its window 0x7610 is untouched.)
+**Cross-check with the bench-tooling builder (task-97): PASS.** The independent builder
+`../wifi-bench-tooling/tools/fw_patch_builder.py` (opensource commit 742139a) auto-loads this
+recipe, decodes segments at the CPU address (the convention used above) and builds
+**FIRMWARE.PD2.bin sha256 `7a691807…1b7728`** — byte-identical to
+`pd2_patch_builder.py --build`; its `--verify-manifest` reports PASS 2/2. The earlier
+decode-address mismatch (it decoded at address 0 while the built-in PD recipe expected CPU
+addresses) was fixed on the tooling side. The deployable image is therefore confirmed by two
+independent builders; only `PD2.recipe.json` + the pinned vendor blob are needed to reproduce it.
 
 ## 9. Reproduction (host-only)
 
