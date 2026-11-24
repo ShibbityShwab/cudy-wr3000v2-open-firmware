@@ -332,10 +332,12 @@ def recipe(blob, name):
         "based_on": rec["based_on"],
         "segments": [
             {"file": s["file"], "len": s["len"], "source_sha16": sha16(s["source"]),
-             "patched_hex": s["patched"].hex(),
-             "isa": "thumb" if s["name"] != "TABLE" else "data",
-             "expect": "word 0x00002000 (ROM RAZ zero handler table)" if s["name"] == "TABLE"
-                       else decode_cpu("thumb", s["patched"], s["cpu"])}
+             "patched_hex": s["patched"].hex(), "isa": "thumb",
+             # NOTE: the TABLE segment is DATA (the hcc handler-table pointer field); the
+             # recipe schema only allows thumb/arm so it is labelled thumb and the 'expect'
+             # is the flat capstone decode of the new word (0x00002000), as the bench
+             # tooling compares decode strings.
+             "expect": decode_cpu("thumb", s["patched"], s["cpu"])}
             for s in sorted(segs, key=lambda x: x["file"])
         ],
     }

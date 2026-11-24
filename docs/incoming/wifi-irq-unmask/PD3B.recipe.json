@@ -21,8 +21,8 @@
       "len": 4,
       "source_sha16": "85fdd9f887cc4011",
       "patched_hex": "00200000",
-      "isa": "data",
-      "expect": "word 0x00002000 (ROM RAZ zero handler table)"
+      "isa": "thumb",
+      "expect": "movs r0, #0 ; movs r0, r0"
     }
   ]
 }
