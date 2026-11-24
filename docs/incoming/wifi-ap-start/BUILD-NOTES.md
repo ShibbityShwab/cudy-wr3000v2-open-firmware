@@ -68,7 +68,7 @@ Result:
 * No image build, no flash, no device access, no UART, no network to the
   router.
 
-## 7. v6 deployable module (second real AP fire follow-up, 2026-11-26)
+## 7. v7 deployable module (second real AP fire follow-up, 2026-11-26)
 
 The v2 artifact was built from the older wifi-scan-ap/src tree.  v3 rebuilds
 from the CURRENT hardware-fired provider base:
@@ -83,15 +83,15 @@ from the CURRENT hardware-fired provider base:
     -> == H2D/core/provider files byte-identical to the 748,888 B fired base
        == strip check: .text byte-identical stripped vs unstripped
        artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-       size     : 206,060 B
-       sha256   : 90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f
+       size     : 206,708 B
+       sha256   : fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020
        vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
        depends  : cfg80211
        ap builder: vapscan_ap_start present
        connect gate: hi5622_cfg11_connect present
        warnings/errors: none
 
-v6 changes beyond v2-v5: base provenance fixed to the hardware-fired tree
+v7 changes beyond v2-v6: base provenance fixed to the hardware-fired tree
 (generated artifacts are removed before the build); the SET_INTERFACE op now
 updates wdev->iftype (cfg80211_change_iface WARNs unless the driver does) and
 treats params->use_4addr == -1 as "not specified"; and a fail-closed

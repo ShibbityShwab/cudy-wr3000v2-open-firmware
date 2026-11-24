@@ -19,8 +19,8 @@ this lane; the lead's fire produced the observations below.
 ## 2. Module v2 (built by this lane, host-only)
 
     artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-    size     : 206,060 B
-    sha256   : 90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f
+    size     : 206,708 B
+    sha256   : fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020
     vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
     depends  : cfg80211
 
@@ -174,8 +174,8 @@ script now:
 * strips only debug sections and asserts the deployable .ko has a
   byte-identical .text to the unstripped build.
 
-v3 module: **206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**
+v3 module: **206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020**
 (/tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko, debug-stripped, depends=
 cfg80211, vermagic 6.18.60 SMP ARMv7, zero warnings).  The H2D send path in
 v3 is therefore exactly the path that consumes C2 in 0 polls on the bench.
@@ -247,8 +247,8 @@ snapshot and the 6.18.60 kernel found the exact gate:
 the management-frame subscriptions; the op itself returns -EOPNOTSUPP (real
 management TX/RX is data-plane/M4 work, never faked).
 
-**Module v6:** 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f (debug-stripped, same fired base; H2D/core files
+**Module v7:** 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020 (debug-stripped, same fired base; H2D/core files
 byte-identical, .text byte-identical stripped/unstripped).  This is the
 artifact to fire.
 
@@ -300,8 +300,8 @@ bring-up milestone via dmesg (no hostapd debug needed):
 | start_ap sequence frame 1/4 'ap_ssid' posted ... / 2/4 'ap_cfg' posted ... | provider frames went to the wire |
 | pr_info_once "mgmt_tx op reached" | only if hostapd tries a management TX (fails closed) |
 
-**Module v6:** 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f
+**Module v7:** 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020
 (debug-stripped, fired base; H2D/core files byte-identical; .text identical
 stripped/unstripped; 0 warnings).
 
@@ -373,8 +373,8 @@ does not depend on it (the beacon path died before NEW_BEACON).
 
 ### 11.5 Module v6 and expected dmesg
 
-**Module v6:** 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f (debug-stripped, fired base; H2D/core files
+**Module v7:** 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020 (debug-stripped, fired base; H2D/core files
 byte-identical; .text identical stripped/unstripped; 0 warnings).
 
 Expected order for the next fire (same commands as section 8.3):
@@ -391,3 +391,156 @@ Expected order for the next fire (same commands as section 8.3):
 Readback unchanged: ctx0 BAR0 0x7D1758; ctx0+0x18C (0x7D18E4) changes after
 ap_cfg; VAP = u32 at 0x7D18E8; V+0x6B8000+0x10 = 100, +0x14 = 2.
 
+## 12. v7: the exception was a missing VAP object + the mislabelled ap_cfg
+
+### 12.1 What frame 2 actually was
+
+The v6 fire's dmesg label "frame 2/4 'ap_auth'" was **wrong**: the g0 carrier
+has only two members (ap_ssid, ap_cfg) and the label array was index-based, so
+index 1 printed "ap_auth" while the provider actually built **ap_cfg** (g0 id1
+key 0x0127).  Corrected spec of the frame that was posted:
+
+| field | value |
+| --- | --- |
+| carrier | g0 id1 config event |
+| total | **184 B** = 24 B header/key/len + 156 B body + 4 B inherited 0xFF pad |
+| key | **0x0127** (firmware table-A row 110 -> worker 0x84DA4) |
+| body | 156 B, beacon_interval=100 at +0x00, dtim=2 at +0x04, mode/etc. (TABLES T3) |
+
+There is NO auth frame on the g0 carrier: firmware table A has **no 0x006D
+row**.  The 36-B WAL auth frame (group-2 cmd 0x006D, 4-B body) exists only in
+the mode-1/ vendor order [0x0005 -> 0x006D -> 0x0127 -> 0x0065], and g0
+deliberately omits it (open AP: no auth algorithm needed; WPA2 rides the RSN
+IE).  v7 makes the labels carrier-aware through a provider callback, so dmesg
+now prints ap_cfg for the 184-B frame.
+
+### 12.2 Root cause of the firmware exception
+
+Both AP workers dereference the **firmware VAP object at module_ctx+0x190
+without a NULL check**:
+
+* set-SSID worker CA 0x82878: `ldr.w r5,[r0,#0x190]; adds r5,#0x24; memcpy_s`
+* AP-config worker CA 0x84DA4: `ldr r3,[r4,#0x190]; ldrb r2,[r3,#0x64]` and
+  `str r3,[r2,#0x10]/[r2,#0x14]` for beacon_interval/DTIM
+
+The AP flow never posted the **mode-1 VAP base** (g0 id1 key 0x0064/0x0065):
+that base was only posted by the scan path (`vap_start_first`).  With no
+VAP object, the first AP frame's worker took a firmware data abort ->
+exception mask 0x18, golden page lost, staging 0xffffffff, and the second
+frame's announce was never consumed.  (The SSID frame may well have been the
+faulting one - announce consumption is at the SR/queue level, not proof the
+worker ran.)
+
+**Fix (v7):** `.start_ap` now posts the mode-1 VAP base
+(g0 id1 key 0x0064 48 B -> key 0x0065 40 B) **always, once per module load**,
+before any AP frame (flag-guarded; the scan path keeps the vap_start_first
+gate).  If the VAP base cannot be posted the sequence aborts before the wire
+(fail-closed).
+
+### 12.3 Recovery / next fire
+
+The exception state cannot be repaired host-side: **power-cycle** (the lead is
+rebooting).  A fresh golden boot is mandatory before the next fire; never
+reuse the exception boot.
+
+Module v7: **206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020** (debug-stripped, fired base 748,888 B b42ff4ec;
+H2D/core files byte-identical; .text identical stripped/unstripped; 0
+warnings).
+
+Expected dmesg (same command sequence as section 8.3; `allow_frames=8` is
+enough - the AP path now posts 2 VAP-base frames + 2 AP frames):
+
+    cfg80211: REPORTS_OBSS flag set ...
+    cfg80211: mgmt_stypes advertised (AP rx=0x3c15 tx=0x3c15) ...
+    cfg80211: SET_INTERFACE reached ...
+    frame post vap_add: g0 id1 total 48 B ... posted 1/8        [mode-1 VAP base]
+    frame post vap_start: g0 id1 total 40 B ... posted 2/8
+    cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 head=63 tail=9) ...
+    frame post ap_ssid: g0 id1 total 64 B ... posted 3/8        [key 0x0005]
+    cfg80211: start_ap sequence frame 1/4 'ap_ssid' posted (64 B ...)
+    frame post ap_cfg: g0 id1 total 184 B ... posted 4/8        [key 0x0127]
+    cfg80211: start_ap sequence frame 2/4 'ap_cfg' posted (184 B ...)
+    cfg80211: start_ap sequence posted to provider '...' (2 frame(s))
+    hostapd: wlan0: AP-ENABLED
+
+Readback: VAP pointer ctx0+0x190 (BAR0 0x7D18E8) nonzero after the VAP base;
+after ap_cfg: VAP+0x10 (u32) = 100 and VAP+0x14 = 2 (BAR0 = VAP_CA+0x6B8000);
+ctx0+0x18C (0x7D18E4) changes; mask 0, staging 0, golden page restored after
+the power-cycle.
+
+## 12. v7: the exception was a missing VAP object + the mislabelled ap_cfg
+
+### 12.1 What frame 2 actually was
+
+The v6 dmesg label "frame 2/4 'ap_auth'" was **wrong**: the g0 carrier has
+only two members (ap_ssid, ap_cfg) and the label array was index-based, so
+index 1 printed "ap_auth" while the provider actually built **ap_cfg** (g0 id1
+key 0x0127).  Corrected spec of the frame that was posted:
+
+| field | value |
+| --- | --- |
+| carrier | g0 id1 config event |
+| total | **184 B** = 24 B header/key/len + 156 B body + 4 B inherited 0xFF pad |
+| key | **0x0127** (firmware table-A row 110 -> worker 0x84DA4) |
+| body | 156 B: beacon_interval=100 at +0x00, dtim=2 at +0x04, mode/etc. (TABLES T3) |
+
+There is NO auth frame on the g0 carrier: firmware table A has **no 0x006D
+row**.  The 36-B WAL auth frame (group-2 cmd 0x006D, 4-B body) exists only in
+the vendor order [0x0005 -> 0x006D -> 0x0127 -> 0x0065], and g0 deliberately
+omits it (open AP: no auth algorithm needed; WPA2 rides the RSN IE).  v7 makes
+the labels carrier-aware through a provider callback, so dmesg now prints
+ap_cfg for the 184-B frame.
+
+### 12.2 Root cause of the firmware exception
+
+Both AP workers dereference the **firmware VAP object at module_ctx+0x190
+without a NULL check**:
+
+* set-SSID worker CA 0x82878: `ldr.w r5,[r0,#0x190]; adds r5,#0x24; memcpy_s`
+* AP-config worker CA 0x84DA4: `ldr r3,[r4,#0x190]; ldrb r2,[r3,#0x64]` and
+  `str r3,[r2,#0x10]/[r2,#0x14]` for beacon_interval/DTIM
+
+The AP flow never posted the **mode-1 VAP base** (g0 id1 key 0x0064/0x0065):
+that base was only posted by the scan path (`vap_start_first`).  With no VAP
+object, the first AP frame's worker took a firmware data abort -> exception
+mask 0x18, golden page lost, staging 0xffffffff, and the second frame's
+announce was never consumed.  (The SSID frame may well have been the faulting
+one - announce consumption is at the SR/queue level, not proof the worker
+ran.)
+
+**Fix (v7):** `.start_ap` now posts the mode-1 VAP base (g0 id1 key 0x0064
+48 B -> key 0x0065 40 B) **always, once per module load**, before any AP frame
+(flag-guarded; the scan path keeps the vap_start_first gate).  If the VAP base
+cannot be posted the sequence aborts before the wire (fail-closed).
+
+### 12.3 Recovery / next fire
+
+The exception state cannot be repaired host-side: **power-cycle** (the lead is
+rebooting).  A fresh golden boot is mandatory before the next fire; never
+reuse the exception boot.
+
+Module v7: **206,708 B sha256
+`fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020`** (debug-stripped, fired base 748,888 B b42ff4ec; H2D/core files
+byte-identical; .text identical stripped/unstripped; 0 warnings).
+
+Expected dmesg (same command sequence as section 8.3; `allow_frames=8` is
+enough - the AP path now posts 2 VAP-base frames + 2 AP frames):
+
+    cfg80211: REPORTS_OBSS flag set ...
+    cfg80211: mgmt_stypes advertised (AP rx=0x3c15 tx=0x3c15) ...
+    cfg80211: SET_INTERFACE reached ...
+    frame post vap_add: g0 id1 total 48 B ... posted 1/8        [mode-1 VAP base]
+    frame post vap_start: g0 id1 total 40 B ... posted 2/8
+    cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 head=63 tail=9) ...
+    frame post ap_ssid: g0 id1 total 64 B ... posted 3/8        [key 0x0005]
+    cfg80211: start_ap sequence frame 1/4 'ap_ssid' posted (64 B ...)
+    frame post ap_cfg: g0 id1 total 184 B ... posted 4/8        [key 0x0127]
+    cfg80211: start_ap sequence frame 2/4 'ap_cfg' posted (184 B ...)
+    cfg80211: start_ap sequence posted to provider '...' (2 frame(s))
+    hostapd: wlan0: AP-ENABLED
+
+Readback: VAP pointer ctx0+0x190 (BAR0 0x7D18E8) nonzero after the VAP base;
+after ap_cfg: VAP+0x10 (u32) = 100 and VAP+0x14 = 2 (BAR0 = VAP_CA+0x6B8000);
+ctx0+0x18C (0x7D18E4) changes; mask 0, staging 0, golden page restored after
+the power-cycle.

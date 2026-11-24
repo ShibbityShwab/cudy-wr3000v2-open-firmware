@@ -97,7 +97,7 @@ SIZE=$(stat -c %s "$ART/hi5622_wifi.ko")
 SHA=$(sha256sum "$ART/hi5622_wifi.ko" | cut -d' ' -f1)
 VERMAGIC=$("$CROSS_COMPILE"strings "$KO" | grep -m1 '^vermagic=')
 KO_ART=$ART/hi5622_wifi.ko
-echo "== AP-start bench module (v6, fired base)"
+echo "== AP-start bench module (v7, fired base)"
 echo "base     : wifi-scan-complete/src (748,888 B b42ff4ec fired tree)"
 echo "artifact : $KO_ART (debug-stripped, path-independent)"
 echo "size     : $SIZE"

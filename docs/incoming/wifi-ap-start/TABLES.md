@@ -128,7 +128,7 @@ u16 at hdr+0x14, body = frame+0x18, len byte = frame+0x16, worker from table A.
 | host strict compile + selftest | 128/128 PASS (-std=c99 -Wall -Wextra -Werror -pedantic) |
 | static RE probes (firmware + 2.5.24 host module) | 63/63 PASS |
 | generated frames freshness | tools/gen_frames_md.py --check current |
-| deployable v6 module build (6.18.60, fired base) | 206,060 B sha256 90dd2850..., depends=cfg80211, zero warnings, 14 haf_ symbols, vapscan_ap_start + connect/disconnect + mgmt_tx + mgmt_stypes + change_beacon present; WIPHY_FLAG_REPORTS_OBSS; H2D/core files byte-identical to the 748,888 B fired base; strip .text identical; bring-up instrumentation included |
+| deployable v7 module build (6.18.60, fired base) | 206,708 B sha256 fd8e1439..., depends=cfg80211, zero warnings, 14 haf_ symbols; start_ap posts the once-per-load mode-1 VAP base before AP frames; carrier-aware frame labels (ap_ssid/ap_cfg on g0, ap_ssid/ap_auth/ap_cfg/ap_vap_start on WAL); REPORTS_OBSS + mgmt_stypes + change_beacon + connect/disconnect; H2D/core files byte-identical to the 748,888 B fired base; strip .text identical |
 | hostapd capability gates | .connect registered (cfg80211 advertises NL80211_CMD_CONNECT; hostapd init gate), AP iftype change accepted |
 | kernel-context module build (6.18.60, kernel-check.sh) | same source tree, zero warnings |
 | hardware validation of the whole sequence | not done - host-only lane (real AP fire feedback is in HOSTAPD-BRINGUP.md) |

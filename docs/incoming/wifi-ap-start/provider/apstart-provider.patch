@@ -256,7 +256,7 @@
  
  /* AP stop: identify the VAP; the provider owns the message shape. */
  struct hi5622_ap_stop_params {
-@@ -284,6 +299,9 @@
+@@ -284,8 +299,15 @@
  				     const struct hi5622_vap_add_params *p);
  	int (*build_user_del)(u8 *wire, size_t cap, size_t *out_len,
  			      const struct hi5622_vap_del_params *p);
@@ -265,10 +265,69 @@
 +	 * through hi5622_frame_post() in order and stops on -ENODATA. */
  	int (*build_ap_start)(u8 *wire, size_t cap, size_t *out_len,
  			      const struct hi5622_ap_start_params *p);
++	/* Optional: carrier-aware name of the sequence frame at frame_index
++	 * (NULL = unknown/out of range).  The cfg80211 layer uses it for the
++	 * post label; index 1 is ap_cfg on the g0 carrier but ap_auth on WAL. */
++	const char *(*ap_frame_name)(u8 frame_index);
  	int (*build_ap_stop)(u8 *wire, size_t cap, size_t *out_len,
+ 			     const struct hi5622_ap_stop_params *p);
+ 	int (*build_vap_add)(u8 *wire, size_t cap, size_t *out_len,
 --- a/hi5622_scan.c
 +++ b/hi5622_scan.c
-@@ -709,6 +709,13 @@
+@@ -482,16 +482,24 @@
+  * decides whether the wire family is WAL group 2 (vendor order) or the
+  * g0 id1 config-event keys.  A builder/post failure aborts the scan: the
+  * scan message is never sent for a VAP that was not started. */
+-static int hi5622_scan_post_vap_start(struct hi5622_pci *ctx,
+-				      const struct hi5622_frame_ops *ops,
+-				      u8 iftype, u8 band, u8 module)
++/* wifi-ap-start lane (task-121, v7): the vendor VAP base must be posted
++ * exactly once per module load before any frame that resolves the firmware VAP
++ * object.  The AP set-SSID worker (0x82878) and the AP-config worker (0x84DA4)
++ * both dereference module_ctx+0x190 WITHOUT a NULL check: posting an AP frame
++ * before the mode-1 VAP base exists takes a firmware data abort (exception
++ * mask 0x18, golden page lost). */
++static bool hi5622_vap_base_posted;
++
++static int hi5622_scan_post_vap_base_once(struct hi5622_pci *ctx,
++					  const struct hi5622_frame_ops *ops,
++					  u8 iftype, u8 band, u8 module)
+ {
+ 	struct hi5622_vap_start_params vp;
+ 	u8 *wire;
+ 	size_t len = 0;
+ 	int rc;
+ 
+-	if (!hi5622_vap_start_first)
++	if (hi5622_vap_base_posted)
+ 		return 0;
+ 	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
+ 			  HI5622_FRAME_CAP_VAP_START)) !=
+@@ -519,9 +527,23 @@
+ 	if (rc)
+ 		goto out;
+ 	rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
++	if (!rc)
++		hi5622_vap_base_posted = true;
+ out:
+ 	kfree(wire);
+ 	return rc;
++}
++
++/* Scan-path policy: the scan op posts the VAP base only when the bench
++ * enabled vap_start_first; the AP path posts it unconditionally. */
++static int hi5622_scan_post_vap_start(struct hi5622_pci *ctx,
++				      const struct hi5622_frame_ops *ops,
++				      u8 iftype, u8 band, u8 module)
++{
++	if (!hi5622_vap_start_first)
++		return 0;
++	return hi5622_scan_post_vap_base_once(ctx, ops, iftype, band,
++					      module);
+ }
+ 
+ int hi5622_scan_op_scan(struct wiphy *wiphy,
+@@ -709,6 +731,13 @@
  	p->dtim_period = (u16)set->dtim_period;
  	p->privacy = set->privacy ? 1u : 0u;
  	p->auth_type = (u8)set->auth_type;
@@ -282,7 +341,7 @@
  	/* Opaque crypto summary: the WAL key/AP-start payload is gap G1, so we
  	 * pass only the userspace requirement (which WPA versions) and let the
  	 * provider decide.  Never a made-up key. */
-@@ -751,6 +758,11 @@
+@@ -751,6 +780,11 @@
  	if (!dev->ieee80211_ptr ||
  	    dev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP)
  		return -EINVAL;
@@ -294,13 +353,23 @@
  	ops = hi5622_scan_need(wiphy, HI5622_FRAME_CAP_AP_START,
  			       "start_ap");
  	if (!ops)
-@@ -768,22 +780,64 @@
+@@ -768,22 +802,92 @@
  			 rc);
  		goto out;
  	}
 -	rc = ops->build_ap_start(wire, HI5622_FRAME_MAX_TOTAL, &len, p);
--	if (rc) {
--		dev_warn(wdev_dev,
++	/* wifi-ap-start lane (task-121, v7): the AP frames dereference the
++	 * firmware VAP object at module_ctx+0x190.  The AP path ALWAYS posts the
++	 * vendor mode-1 VAP base first (once per module load; the scan path
++	 * still honours vap_start_first).  Without the VAP object the firmware
++	 * worker NULL-derefs and the chip exception state is lost
++	 * (power-cycle required). */
++	rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
++					(u8)dev->ieee80211_ptr->iftype,
++					c->band,
++					(u8)hi5622_vap_start_module);
+ 	if (rc) {
+ 		dev_warn(wdev_dev,
 -			 "cfg80211: start_ap builder '%s' returned %d - -EOPNOTSUPP (WAL group-2 AP-start payload is gap G1; no speculative frame)\n",
 -			 ops->name, rc);
 -		rc = rc < 0 ? rc : -EIO;
@@ -309,6 +378,10 @@
 -	rc = hi5622_frame_post(c->ctx, wire, len, "ap_start", NULL);
 -	if (rc)
 -		goto out;
++			 "cfg80211: start_ap VAP base not posted (%d) - sequence aborted, no AP frame sent\n",
++			 rc);
++		goto out;
++	}
 +	/* wifi-ap-start lane (task-121): the vendor AP start is a sequence.
 +	 * Post every frame the provider emits and stop on -ENODATA. */
 +	{
@@ -321,6 +394,18 @@
 +		     p->frame_index < HI5622_AP_START_MAX_FRAMES;
 +		     p->frame_index++) {
 +			const char *label = ap_seq_names[p->frame_index];
++
++			/* Carrier-aware label: index 1 is ap_cfg on the g0 carrier
++			 * and ap_auth on the WAL carrier (v7 fixes the earlier
++			 * mislabel that made dmesg say ap_auth for the 184-B
++			 * AP-config frame). */
++			if (ops->ap_frame_name) {
++				const char *n = ops->ap_frame_name(
++					(u8)p->frame_index);
++
++				if (n)
++					label = n;
++			}
 +
 +			len = 0;
 +			rc = ops->build_ap_start(wire, HI5622_FRAME_MAX_TOTAL,
@@ -384,7 +469,7 @@
  
  #include <linux/nl80211.h>
  
-@@ -289,6 +290,78 @@
+@@ -289,6 +290,92 @@
  }
  
  /* ------------------------------------------------------------------ */
@@ -459,11 +544,25 @@
 +	return rc;
 +}
 +
++/* Carrier-aware sequence names for the AP-start post labels (task-121). */
++static const char *vapscan_ap_frame_name(u8 frame_index)
++{
++	enum haf_frame_id id;
++	u8 carrier;
++
++	if (hi5622_ap_start_mode > 1u)
++		return NULL;
++	carrier = hi5622_ap_start_mode ? HAF_CARRIER_WAL_G2 : HAF_CARRIER_G0_ID1;
++	if (haf_sequence_at(frame_index, carrier, &id))
++		return NULL;
++	return haf_frame_name(id);
++}
++
 +/* ------------------------------------------------------------------ */
  /* registration                                                       */
  /* ------------------------------------------------------------------ */
  int hi5622_vapscan_provider_register(void)
-@@ -309,7 +382,8 @@
+@@ -309,7 +396,8 @@
  		HI5622_FRAME_CAP_USER_ADD_NOTIFY |
  		HI5622_FRAME_CAP_USER_DEL |
  		HI5622_FRAME_CAP_VAP_ADD |
@@ -473,7 +572,7 @@
  	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
  	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
  	hi5622_vapscan_ops.parse_scan_complete = vapscan_parse_scan_complete;
-@@ -321,7 +395,10 @@
+@@ -321,7 +409,11 @@
  	hi5622_vapscan_ops.build_user_del = vapscan_user_del;
  	hi5622_vapscan_ops.build_vap_add = vapscan_vap_add;
  	hi5622_vapscan_ops.build_vap_start = vapscan_vap_start;
@@ -481,6 +580,7 @@
 +	/* AP start sequence (task-121): set SSID -> [auth] -> AP config ->
 +	 * [VAP start]; every frame goes through the fail-closed post gate. */
 +	hi5622_vapscan_ops.build_ap_start = vapscan_ap_start;
++	hi5622_vapscan_ops.ap_frame_name = vapscan_ap_frame_name;
 +	/* AP stop: still no builder - capability omitted. */
  
  	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);

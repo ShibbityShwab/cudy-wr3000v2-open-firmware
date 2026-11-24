@@ -12,8 +12,8 @@ cfg80211 `.connect` op so the wiphy advertises NL80211_CMD_CONNECT (hostapd's
 shared nl80211 init gate refuses a driver that advertises neither
 AUTHENTICATE nor CONNECT), AP-mode iftype changes accepted by the M1 netdev
 model, and the AP-start sequence in the driver's real .start_ap.  The
-deployable module is **206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**.  See
+deployable module is **206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020**.  See
 [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) for the exact hostapd flow, expected
 logs and the corrected readback (ctx0 BAR0 0x7D1758 this boot).
 
@@ -71,8 +71,8 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    the dynamically registered group-2 handler).  [V]/[I]
 4. **Provider extension is compile-ready**: applied on top of the
    wifi-scan-complete tree (the 748,888 B b42ff4ec hardware-fired provider) it
-   builds the module (206,060 B, sha256
-   90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f) against
+   builds the module (206,708 B, sha256
+   fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020) against
    the 6.18.60 tree with **zero warnings**, advertises AP_START, adds the
    hostapd capability gates (CONNECT advertisement, AP iftype change), and
    posts the whole sequence through the existing fail-closed
@@ -89,7 +89,7 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    patch registers a fail-closed .connect (advertised CONNECT, never called by
    hostapd's AP path) and accepts AP iftype changes, so a hostapd
    NEW_BEACON reaches the driver's .start_ap and posts the AP-start sequence.
-   Module 206,060 B sha256 24e0cf02... (see HOSTAPD-BRINGUP.md).
+   Module 206,708 B sha256 24e0cf02... (see HOSTAPD-BRINGUP.md).
 
 ## 1. Scope, evidence and pins
 
@@ -280,8 +280,8 @@ wifi-vap-start provider integration) and:
 Verified by [tools/kernel-check.sh](tools/kernel-check.sh) against the real
 6.18.60 tree, and the deployable artifact built by
 [tools/build-bench-module.sh](tools/build-bench-module.sh): **hi5622_wifi.ko
-206,060 B, sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**,
+206,708 B, sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020**,
 depends=cfg80211, vermagic 6.18.60 SMP ARMv7, **zero compiler/modpost
 warnings**, 14 haf_ symbols, vapscan_ap_start and hi5622_cfg11_connect
 present.  The module is local evidence only and is not committed.
@@ -391,8 +391,8 @@ patch fixes them without touching the decoded wire format:
 | hostapd set_mode(AP) refused for a managed interface | change_virtual_intf accepts STATION<->AP<->MONITOR in the M1 netdev model, stores wdev->iftype (cfg80211_change_iface WARN contract) and treats params->use_4addr == -1 as "not specified" (create wlan0 as __ap is still the preferred flow) |
 | hostapd ucode error (image) | bench workaround script + image requirement (CONFIG_PACKAGE_wifi-scripts=y) |
 
-Deployable module: **206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**.  Exact
+Deployable module: **206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020**.  Exact
 command sequence, expected hostapd/dmesg lines, failure table and the
 corrected readback (ctx0 BAR0 0x7D1758 on the lead's boot; vap+0x10 = 100,
 vap+0x14 = 2) are in [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
@@ -434,8 +434,8 @@ lane (no device access).  The behaviour is derived from the 6.18.60
 net/wireless sources (nl80211_set_interface change logic, cfg80211_change_iface
 WARN contract); the bench fire of the v3 module is the first hardware test.
 
-v3 module: **206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f** (see
+v3 module: **206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020** (see
 HOSTAPD-BRINGUP.md section 8 for the exact re-fire procedure).
 
 ### 11.2 v4: hostapd "Could not configure driver mode" root cause
@@ -451,8 +451,8 @@ refuses every such request with -EOPNOTSUPP when the driver has no
 (mode-change-free) SET_INTERFACE, which is why no type-change dmesg appeared.
 
 v4 registers a fail-closed `.mgmt_tx` op (real management TX/RX stays
-data-plane work and never returns fake success).  Module: 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
+data-plane work and never returns fake success).  Module: 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020.
 
 SET_INTERFACE is now confirmed working on hardware by the lead's manual
 `iw dev wlan0 set type managed/__ap` test; the v4 op additions are the
@@ -471,8 +471,8 @@ all), keeps management TX fail-closed, and adds dmesg instrumentation at the
 SET_INTERFACE / start_ap / mgmt_tx / module-init milestones so the next fire
 localises any remaining gate without hostapd debug symbols.
 
-Module v5: 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
+Module v5: 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020.
 
 ### 11.4 v6: REPORTS_OBSS flag (the real beacon blocker), WARN pairing, SET_BEACON
 
@@ -491,6 +491,25 @@ gate with a fail-closed .disconnect (fixing the wiphy_new_nm WARN_ON at
 core.c:532 = ops->connect && !ops->disconnect), and adds dump_stack() to the
 one-shot mgmt_tx diagnostic to identify its caller.
 
-Module v6: 206,060 B sha256
-90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
+Module v6: 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020.
 
+### 11.5 v7: firmware exception root cause and the corrected frame
+
+The v6 "ap_auth" frame was a **label bug**: the g0 carrier's second member is
+ap_cfg (g0 id1 key 0x0127, 184 B total); ap_auth exists only on the WAL carrier
+(36 B total, cmd 0x006D) and the g0 carrier has no 0x006D key at all (table A
+has no such row).  v7 adds a carrier-aware label callback so dmesg prints
+ap_cfg.
+
+The firmware exception (mask 0x18, golden page lost) happened because
+.start_ap posted AP frames before the firmware VAP object existed: workers
+0x82878 (set SSID) and 0x84DA4 (AP config) both dereference
+module_ctx+0x190 with no NULL check, and the mode-1 VAP base (g0 id1 key
+0x0064/0x0065) had only ever been posted by the scan path.  v7 posts that base
+unconditionally (once per load) before the AP sequence; if it cannot be posted
+the sequence aborts fail-closed.  Recovery needs a power-cycle; the exception
+boot must not be reused.
+
+Module v7: 206,708 B sha256
+fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020.
