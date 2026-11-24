@@ -1,0 +1,28 @@
+{
+  "schema": "hi5622-fw-patch-recipe/1",
+  "name": "PD3B",
+  "about": "no-cave alternative: raise event 0x4C every loop from the boot epilogue (tests the firmware event controller; zero table installed)",
+  "source": {
+    "sha256": "7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b",
+    "len": 928920
+  },
+  "based_on": null,
+  "segments": [
+    {
+      "file": 37226,
+      "len": 8,
+      "source_sha16": "c0a8c159e85b161b",
+      "patched_hex": "4c207df024fefbe7",
+      "isa": "thumb",
+      "expect": "movs r0, #0x4c ; bl #0xc6db8 ; b #0x4916a"
+    },
+    {
+      "file": 836016,
+      "len": 4,
+      "source_sha16": "85fdd9f887cc4011",
+      "patched_hex": "00200000",
+      "isa": "data",
+      "expect": "word 0x00002000 (ROM RAZ zero handler table)"
+    }
+  ]
+}
