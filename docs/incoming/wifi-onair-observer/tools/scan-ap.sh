@@ -50,20 +50,21 @@ require_root || exit 2
 SCAN_OUT="$EVID/scan-ch6.txt"
 DWELL=${ONAIR_SCAN_DWELL_TU:-1500}
 
+PASSIVE_ARG=""
 section "L2 scan for '$AP_SSID' on $AP_FREQ MHz (ch$AP_CHANNEL)"
 if [ "$MODE" = passive ]; then
 	log "mode: passive on one frequency (no probe requests; only beacons can answer)"
-	SCAN_ARGS="freq $AP_FREQ passive"
+	PASSIVE_ARG="passive"
 else
 	warn "mode: ACTIVE - the AP's mgmt-TX path is fail-closed, so probe responses may be missing; diagnostic only"
-	SCAN_ARGS="freq $AP_FREQ"
+	PASSIVE_ARG=""
 fi
 
-capture_file "$SCAN_OUT" iw dev "$OBS_IF" scan $SCAN_ARGS duration "$DWELL" -u
+capture_file "$SCAN_OUT" iw dev "$OBS_IF" scan -u freq "$AP_FREQ" duration "$DWELL" $PASSIVE_ARG
 SCAN_RC=$?
 if [ "$SCAN_RC" -ne 0 ]; then
 	warn "iw scan with 'duration' failed rc=$SCAN_RC; retrying without duration"
-	capture_file "$SCAN_OUT" iw dev "$OBS_IF" scan $SCAN_ARGS -u
+	capture_file "$SCAN_OUT" iw dev "$OBS_IF" scan -u freq "$AP_FREQ" $PASSIVE_ARG
 	SCAN_RC=$?
 fi
 if [ "$SCAN_RC" -ne 0 ]; then
@@ -87,7 +88,7 @@ if [ "$PARSE_RC" -ne 0 ]; then
 	section "L2 diagnosis: full-band passive scan"
 	warn "target not seen as expected on ch$AP_CHANNEL; running a full-band passive scan to locate the SSID (diagnosis only)"
 	FALLBACK="$EVID/scan-fallback-all.txt"
-	capture_file "$FALLBACK" iw dev "$OBS_IF" scan passive -u
+	capture_file "$FALLBACK" iw dev "$OBS_IF" scan -u passive
 	FALLBACK_RC=$?
 	if [ "$FALLBACK_RC" -eq 0 ]; then
 		python3 "$TOOLS_DIR/onair_scan.py" --iw-scan "$FALLBACK" \
@@ -102,7 +103,7 @@ fi
 
 if [ "$FULL" = 1 ]; then
 	section "L2 context: full-band passive scan (informational)"
-	capture_file "$EVID/scan-full.txt" iw dev "$OBS_IF" scan passive -u || warn "full-band scan failed (informational only)"
+	capture_file "$EVID/scan-full.txt" iw dev "$OBS_IF" scan -u passive || warn "full-band scan failed (informational only)"
 fi
 
 section "L2 post-check"
