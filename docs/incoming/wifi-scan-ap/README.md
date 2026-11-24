@@ -17,16 +17,22 @@ builders** (`../wifi-vap-scan/`, opensource commit 0e4ad45):
 
 The H2D layout question is closed for these four messages (task-110 [V]
 vendor-derived specs); what remains open is the **D2H** side: the g1 id15
-trailing-descriptor layout is [U], so the best-effort decoder is opt-in
-(`d2h_scan_decode=1`, default 0) and the default `.scan` still returns
-`-EOPNOTSUPP`. AP start/stop payloads remain WAL gap G1 [U].
+trailing-descriptor layout is [U], so the best-effort decoder is tolerant: the provider advertises **caps 0x1f**
+(`scan_req|scan_parse|user_add|user_add_notify|user_del`), so `.scan` is
+available and posts a real 520-byte g0 id0xC frame once the post gate is open
+(`allow_frames>0`); the g1 id15 trailing descriptor is [U], so the decoder
+reports only what the 802.11 body proves and 'no BSS entries, bounded
+scan_done' is a valid outcome.  AP start/stop payloads remain WAL gap G1 [U].
 
 **Status: host-only, compile-clean (0 warnings), host-selftested, NOT
-bench-fired by this lane.** Module **676,116 B** sha256 `acd069e4...`, 9
+bench-fired by this lane.** Module **676,180 B** sha256 `4a1c3b9a...`, 9
 cfg80211 imports, depends=cfg80211; host selftests **248/248** (new, incl. the
 builder mapping + tolerant D2H decode) + 454/454 and 242/242 (inherited
-regressions); provider-symbols check 9/9; `allow_frames=0` and
-`d2h_scan_decode=0` fail-closed defaults.
+regressions); provider-symbols check 9/9; `allow_frames=0` fail-closed default (scan decode is
+always on, tolerant).  Bench session 2026-11-24: the first real firmware
+management frame was posted (g0 id7 user_add 180 B, consumed in 0 polls); the
+follow-up g0 id8 notify refusal and the scan-cap mismatch are fixed here (see
+REPORT.md sec 3.1).
 The M0 wiphy and M1 netdev lifecycle this builds on are hardware-validated on
 our image (STATUS.md sec 3k, 2026-11-25). The scan/AP/user-message code paths
 are compile-verified and host-tested only.

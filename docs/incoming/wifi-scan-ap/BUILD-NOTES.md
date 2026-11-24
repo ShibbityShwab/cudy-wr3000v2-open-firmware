@@ -14,8 +14,8 @@ involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **676,116 B** |
-| sha256 | **acd069e4fb1bd7e8142ac492ce10d5f03b91d0417160197059c1e3343dc8ed42** |
+| size | **676,180 B** |
+| sha256 | **4a1c3b9a3762db43a1015802e3057b4d39ec481ed3ecc32ce80f33bca053f36d** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
@@ -30,11 +30,11 @@ involved).
 
 New module parameters (besides the inherited ones): **allow_frames** (uint,
 default **0** = fail-closed: no provider-built frame is ever posted),
-**frame_gap_ms** (uint, default 100, minimum inter-frame gap) and
-**d2h_scan_decode** (uint, default **0** = the best-effort g1 id15 decoder is
-disabled, so `.scan` stays `-EOPNOTSUPP`; 1 enables it for a supervised
-bench experiment; the trailing-descriptor layout is [U] and the reported
-signal is the documented 0 mBm placeholder).  Inherited params unchanged: `fw_path`, `wifi_block_path`, `plat_block_path`,
+**frame_gap_ms** (uint, default **20**, minimum inter-frame gap; the post path
+also bounded-waits for the previous coalesced announce to clear, so the vendor
+order user_add -> user_add_notify is not refused as 'inflight').  The scan
+decoder is always installed (tolerant; the g1 id15 trailer is [U] and the
+reported signal is the documented 0 mBm placeholder).  Inherited params unchanged: `fw_path`, `wifi_block_path`, `plat_block_path`,
 `allow_unseeded_release`, `hcc_poll_ms`, `hcc_cece_mode`, `rd_ab_write`,
 `h2d_send_budget`, `cfg80211_auto`, `band_force`.
 

@@ -47,8 +47,8 @@ the g0 id0xC (508 B), g0 id7/id8 (168 B) and g0 id9 (12 B) builders are
 integrated and registered as the module's single frame provider
 (`vapscan-0e4ad45`, opensource commit 0e4ad45).  What is still missing:
 the **D2H** g1 id15 descriptor layout is [U], so the tolerant scan-result
-decoder is opt-in (`d2h_scan_decode=0` default) and `.scan` stays
-`-EOPNOTSUPP` by default; the WAL AP-start/stop payloads are gap **G1** [U];
+decoder is always installed (tolerant) and `.scan` posts the real
+520 B g0 id0xC frame whenever the post gate is open; the WAL AP-start/stop payloads are gap **G1** [U];
 `add_key`/`connect` remain M3/M5 (NULL ops); the data path is M4.  No frame is
 ever written unless the separate post gate is opened (`allow_frames=0`
 default), so the committed module is still fail-closed end to end.
@@ -110,6 +110,33 @@ frame then continues into `hcc_core_deliver_hdr()` exactly as before.
 
 ---
 
+### 3.1 Bench update (2026-11-24): the first real firmware management frame
+
+A supervised bench session (lead, 2026-11-24) drove the integrated provider on
+the cfg80211 image.  Session evidence (bench-observed [V], relayed here):
+
+* **PASS** - `frame post user_add: g0 id7 total 180 B in SR0 slot 2 devva
+  0x8417c000 producer 2->3, coalesced announce consumed after 0 polls; handler
+  risk=NO_ACCESS; posted 1/8` and `cfg80211: VAP wlan0 firmware user_add
+  committed (g0 id7, user_id=0 vap_id=0)`: the first real firmware management
+  frame sent by our clean-room host.
+* **GAP fixed** - the immediate follow-up user_add_notify (g0 id8) was refused
+  `previous mailbox announce still inflight`: the core coalescing state
+  clears on its own service tick.  The post gate now bounded-waits (5 ms polls,
+  <= 200 ms) for core-inflight=0, live out[0]=0 and the inter-frame gap;
+  `frame_gap_ms` default is now 20 ms, so the vendor order user_add ->
+  user_add_notify lands instead of being refused.
+* **GAP fixed** - the provider advertised caps 0x1d, so `.scan` refused with
+  `needs provider caps 0x3`.  It now advertises **caps 0x1f**
+  (SCAN_REQ|SCAN_PARSE|USER_ADD|USER_ADD_NOTIFY|USER_DEL) and `.scan` builds
+  the 520 B g0 id0xC frame and posts it when `allow_frames>0`; the D2H decode
+  stays best-effort (g1 id15 trailer [U]).
+
+Both fixes are compile-verified and host-tested in this commit; the D2 re-run
+(scan frame on hardware) is the next bench step.
+
+---
+
 ## 4. The frame-provider contract (`hi5622_frames_api.h`)
 
 One statically allocated `struct hi5622_frame_ops` object is registered with
@@ -118,8 +145,9 @@ capability must have its callback).  The **generic registry** still defaults
 to empty; the committed module now registers exactly ONE provider,
 `vapscan-0e4ad45` (hi5622_vapscan_provider.c), built on the task-110
 builders.  Its caps are `SCAN_REQ|USER_ADD|USER_ADD_NOTIFY|USER_DEL`
-(0x0f); `SCAN_PARSE` is added only when `d2h_scan_decode=1`, because the
-g1 id15 trailing descriptor is [U].  AP start/stop caps stay absent (no
+(0x1f): SCAN_REQ + SCAN_PARSE (the cfg80211 `.scan` op requires both) +
+USER_ADD + USER_ADD_NOTIFY + USER_DEL.  `SCAN_PARSE` is always advertised; the
+decoder is tolerant because the g1 id15 trailing descriptor is [U].  AP start/stop caps stay absent (no
 builder).  `hi5622_frame_post()` still cannot write anything unless
 `allow_frames>0`.
 
@@ -157,8 +185,8 @@ summary, beacon head/tail bounded to 512/256 B), AP stop.
 guard; no protocol byte changed; `src/hi5622_vapscan_map.c` maps the neutral
 params to the builders, including the [I] channel index rule
 `idx = band-table position` and the [V] bench fact that the firmware scan
-handler hardcodes VAP 0.  `d2h_scan_decode=1` additionally installs the
-tolerant g1 id15 decoder: it strips the 20-byte [U] trailer, validates the
+handler hardcodes VAP 0.  The provider always installs the tolerant g1 id15
+decoder: it strips the 20-byte [U] trailer, validates the
 802.11 beacon/probe-response, derives the channel from the DS or HT-operation
 IE, and reports signal 0 mBm (UNKNOWN) instead of inventing the descriptor
 RSSI.
@@ -212,8 +240,10 @@ static const struct hi5622_frame_ops vs_provider = {
 **Payload builders for the four implemented messages now exist** (task-110,
 integrated here): g0 id7/id8/id9/id0xC are built byte-exactly by
 `vapscan_frames.c` + the neutral-parameter mapping.  The cfg80211 op remains
-provider-gated and `.scan` additionally needs `SCAN_PARSE` (opt-in
-`d2h_scan_decode=1`) because the D2H scan-result payloads are still [U].
+provider-gated on `SCAN_REQ|SCAN_PARSE`, and the provider advertises both,
+so `.scan` posts the real 520 B g0 id0xC frame when the post gate is open;
+the D2H scan-result payloads are still [U], which only limits what results can
+be reported.
 
 The scan-request handler CA and risk class are inherited from the committed
 catalogue: `hmac_enc_scan_send_req` (g0 id0xC) has a firmware handler that
@@ -304,7 +334,7 @@ payload (up to one maximum HCC frame, 0x680 B) from the ring buffer snapshot to
 | host scan/AP/provider/vapscan selftest (248 checks) | **248/248 PASS** |
 | host inherited cfg80211 VAP/op-map selftest | **454/454 PASS** |
 | host inherited H2D protocol selftest | **242/242 PASS** |
-| kernel module build against project 6.18.60 (-Werror, modpost) | PASS, **0 warnings**, 676,116 B, sha256 acd069e4... |
+| kernel module build against project 6.18.60 (-Werror, modpost) | PASS, **0 warnings**, 676,180 B, sha256 4a1c3b9a... |
 | cfg80211 imports | 9 (incl. scan_done / inform_bss_data / put_bss) |
 | provider-symbols check vs net/wireless exports | PASS 9/9 |
 | static source/contract selftest | all checks PASS (one scan_done call pair, fail-closed defaults, empty registry, D2H hook, baseline parity, configs, docs, no vendor material) |
@@ -319,10 +349,10 @@ round-trips through the inherited h2d_frames validation.
 
 ## 10. Bench ladder (detail in TEST-LADDER.md)
 
-Summary - with the default load (`allow_frames=0`, `d2h_scan_decode=0`) the
-steps are **negative controls**, i.e. the expected result is a clean refusal
-with no device write; Mode P can now exercise the real task-110 H2D frames
-(and, with `d2h_scan_decode=1`, the best-effort scan path):
+Summary - with the default load (`allow_frames=0`) the steps are **negative
+controls**, i.e. the expected result is a clean refusal with no device write;
+Mode P exercises the real task-110 H2D frames and the best-effort scan path
+(the scan decoder is always installed):
 
 1. load cfg80211.ko + hi5622_wifi.ko (`allow_frames=0`) -> probe only;
 2. inherited C1-C6 boot ladder (prepare/upload/verify/seed/hcc_arm/hcc_loop/
@@ -345,12 +375,12 @@ exactly one `scan DONE` within 5 s -> BSS entries; stop rules in the ladder.
 | --- | --- | --- | --- |
 | R1 | H2D payloads delivered by task-110 are [V]/[I] vendor-derived, **not hardware-validated** | a builder byte may still be rejected/fault the firmware | existing post gate + one-frame bench budget + Ladder V1/V2/S1 stop rules; no frame is sent with `allow_frames=0` |
 | R11 | provider registered but frame gate closed | every message op logs a refusal (EPERM/EBUSY) until `allow_frames>0` | status file shows gate state; benching raises the budget only in an attended session |
-| R12 | firmware scan handler hardcodes VAP 0; host-only M1 netdev has no firmware VAP object | a scan request may be a graceful refusal with no D2H results | scan path is opt-in, accepts "no results" and always reports a bounded `scan_done`; VAP-create follow-up is the next RE item |
+| R12 | firmware scan handler hardcodes VAP 0; host-only M1 netdev has no firmware VAP object | a scan request may be a graceful refusal with no D2H results | scan path accepts "no results" and always reports a bounded `scan_done`; VAP-create follow-up is the next RE item |
 | R2 | WAL group-2 AP-start payload is gap G1 [U] | start_ap cannot be real | design + provider stub, clearly marked experimental |
 | R3 | provider frames are not EXACT captured builders | firmware handlers read payload words (id0xC risk PTR_DEREF [V]) | structural validation + handler-present + id-5 refusal + registration validation + bench stop rules; a malformed builder frame is refused before any write |
 | R4 | `allow_frames` could be raised blindly | budget-limited frames could reach the firmware | default 0; status file exposes the value; ladder requires preflight and one-frame-per-idea discipline |
 | R5 | full-payload staging increases the reader state by ~1.6 KB | memory/behaviour change in a validated component | buffer owned by serialized reader state (no stack growth); full inherited selftests re-run green |
-| R6 | g1 id15 trailing descriptor is [U]; only the 802.11 body is decoded | RSSI unavailable (reported 0 mBm placeholder) and a variant may not decode | decoder opt-in, tolerant, returns `-EOPNOTSUPP` on any unsupported variant; counted parse errors; bounded timeout still completes the scan |
+| R6 | g1 id15 trailing descriptor is [U]; only the 802.11 body is decoded | RSSI unavailable (reported 0 mBm placeholder) and a variant may not decode | decoder tolerant, returns `-EOPNOTSUPP` on any unsupported variant; counted parse errors; bounded timeout still completes the scan |
 | R7 | scan work vs cfg80211 request lifetime | multiple scan_done or use-after-free | exactly one scan_done site pair; posting latch; removal aborts; static+host checks |
 | R8 | cfg80211 BSS entries visible to all userspace | garbage could mislead netifd/hostapd | strict result validation before inform |
 | R9 | start_ap returning 0 is not an AP milestone | overclaiming | dmesg says EXPERIMENTAL; ladder requires keys/beacons/station events/data path as separate milestones |

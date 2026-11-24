@@ -43,10 +43,10 @@ module_param_named(allow_frames, hi5622_allow_frames, uint, 0644);
 MODULE_PARM_DESC(allow_frames,
 		 "post-ready provider-built H2D frames allowed per module load: 0 = fail-closed (default), N = budget");
 
-unsigned int hi5622_frame_gap_ms = 100u;
+unsigned int hi5622_frame_gap_ms = 20u;
 module_param_named(frame_gap_ms, hi5622_frame_gap_ms, uint, 0644);
 MODULE_PARM_DESC(frame_gap_ms,
-		 "minimum milliseconds between two provider-built H2D frames (default 100)");
+		 "minimum milliseconds between two provider-built H2D frames (default 20; the post path also waits for the previous coalesced announce to clear, so back-to-back vendor-order frames such as user_add -> user_add_notify are not refused)");
 
 static atomic_t hi5622_frames_posted = ATOMIC_INIT(0);
 static atomic_t hi5622_frames_refused = ATOMIC_INIT(0);
@@ -62,6 +62,55 @@ static int hi5622_post_refuse(struct device *dev, const char *what,
 		 "frame post '%s': REFUSED (%s) - no device write performed\n",
 		 what, why);
 	return err;
+}
+
+/* Bounded wait for the wire to be ready for the NEXT provider frame.
+ *
+ * Vendor order sends user_add (g0 id7) immediately followed by
+ * user_add_notify_alg (g0 id8): two frames, two SR commits, two coalesced
+ * mailbox announces.  The first bench session showed the notify being refused
+ * because the host-side coalescing flag was still set even though out[0] had
+ * been consumed in 0 polls - that flag clears on the core's own service tick
+ * (hcc_poll_ms default 5 ms), so a back-to-back frame needs a bounded wait,
+ * not a refusal.  This waits for (a) core->mbox_inflight == 0, (b) live
+ * out[0] == 0 and (c) the inter-frame gap, polling every 5 ms for at most
+ * 200 ms.  Everything is read-only; on timeout the caller refuses without a
+ * device write.  Caller must have verified windows_programmed + h->armed. */
+#define HI5622_POST_WAIT_MS		200u
+#define HI5622_POST_WAIT_POLL_MS	5u
+
+static int hi5622_frame_wait_ready(struct hi5622_pci *ctx, u64 *now_out)
+{
+	struct hi5622_hcc_service *h = ctx->hcc;
+	struct hcc_core *core = &h->hcc.core;
+	struct device *dev = &ctx->pdev->dev;
+	u32 waited = 0;
+	u32 out0 = 0;
+
+	for (;;) {
+		u64 now = hcc_kernel_now_ms();
+		bool gap_ok = !hi5622_last_post_ms ||
+			now - hi5622_last_post_ms >=
+				(u64)hi5622_frame_gap_ms;
+
+		out0 = readl(ctx->bar0 +
+			     hi5622_io_bar0(HI5622_CA_H2D_PENDING));
+		if (!core->mbox_inflight && !out0 && gap_ok) {
+			if (now_out)
+				*now_out = now;
+			return 0;
+		}
+		if (waited >= HI5622_POST_WAIT_MS) {
+			dev_warn(dev,
+				 "frame post: wire not ready within %u ms (core_inflight=0x%x out[0]=0x%08x gap_ok=%u) - next frame refused\n",
+				 HI5622_POST_WAIT_MS, core->mbox_inflight, out0,
+				 gap_ok ? 1u : 0u);
+			return -ETIMEDOUT;
+		}
+		if (msleep_interruptible(HI5622_POST_WAIT_POLL_MS))
+			return -EINTR;
+		waited += HI5622_POST_WAIT_POLL_MS;
+	}
 }
 
 int hi5622_frame_post(struct hi5622_pci *ctx, const u8 *wire, size_t len,
@@ -173,17 +222,15 @@ int hi5622_frame_post(struct hi5622_pci *ctx, const u8 *wire, size_t len,
 					 -EBUSY);
 		goto out;
 	}
-	if (core->mbox_inflight) {
+	/* Back-to-back vendor-order frames (user_add -> user_add_notify) and
+	 * any retry after a consumed announce: wait bounded for the core state
+	 * and the live out[0] word, then require the inter-frame gap.  A
+	 * timeout is a refusal with no device write (one idea, no retry). */
+	rc = hi5622_frame_wait_ready(ctx, &now);
+	if (rc) {
 		ret = hi5622_post_refuse(dev, what,
-					 "previous mailbox announce still inflight",
-					 -EBUSY);
-		goto out;
-	}
-	now = hcc_kernel_now_ms();
-	if (hi5622_last_post_ms &&
-	    now - hi5622_last_post_ms < (u64)hi5622_frame_gap_ms) {
-		ret = hi5622_post_refuse(dev, what,
-					 "inter-frame gap not elapsed", -EBUSY);
+					 "previous announce/gap did not clear within the bounded wait",
+					 rc);
 		goto out;
 	}
 

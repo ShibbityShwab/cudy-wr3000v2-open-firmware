@@ -195,6 +195,13 @@ def main(argv):
     check("HCC_PHASE_ACTIVE" in fp, "post gate does not require ACTIVE phase")
     check("mbox_inflight" in fp and "h2d_lane_closed" in fp,
           "post gate misses coalescing/lane state")
+    check("hi5622_frame_wait_ready" in fp and "HI5622_POST_WAIT_MS" in fp,
+          "post gate must bounded-wait for the previous announce (user_add -> "
+          "user_add_notify is two back-to-back frames)")
+    check("previous mailbox announce still inflight" not in fp,
+          "back-to-back frames must wait, not be refused as inflight")
+    check(re.search(r"unsigned int hi5622_frame_gap_ms = 20u;", fp)
+          is not None, "frame_gap_ms default must be 20 ms")
     for bad in ("0x400392f0", "0x400392F0", "HI5622_CA_H2D_DOORBELL",
                 "hcc_wr"):
         code_lines = [ln for ln in fp.splitlines()
@@ -220,11 +227,16 @@ def main(argv):
                 "HI5622_FRAME_CAP_USER_ADD_NOTIFY",
                 "HI5622_FRAME_CAP_USER_DEL"):
         check(cap in vp, "vapscan provider missing capability %s" % cap)
-    check(re.search(r"static unsigned int hi5622_scan_d2h_decode;", vp)
-          is not None, "d2h_scan_decode must default to 0")
-    check("if (hi5622_scan_d2h_decode)" in vp and
-          "HI5622_FRAME_CAP_SCAN_PARSE" in vp,
-          "SCAN_PARSE must be opt-in via d2h_scan_decode")
+    check("d2h_scan_decode" not in vp,
+          "no opt-in param: SCAN_PARSE must always be advertised (the cfg80211 "
+          ".scan op requires SCAN_REQ|SCAN_PARSE = 0x3)")
+    check("HI5622_FRAME_CAP_SCAN_PARSE" in vp and
+          "HI5622_FRAME_CAP_SCAN_REQ" in vp,
+          "scan caps must include SCAN_REQ|SCAN_PARSE (0x3)")
+    caps_block = vp[vp.find("hi5622_vapscan_ops.caps ="):]
+    caps_block = caps_block[:caps_block.find(";")]
+    check(caps_block and "if (" not in caps_block,
+          "scan caps must not be conditional (bench D2 needs caps 0x1f)")
     check("HI5622_FRAME_CAP_AP_START" not in vp and
           "HI5622_FRAME_CAP_AP_STOP" not in vp,
           "no AP builders exist -> AP caps must stay absent")
@@ -346,7 +358,7 @@ def main(argv):
     for needle in ("task-113", "task-110", "M2", "M3", "scan", "g0 id0xC",
                    "g0 id7", "g1 id15", "g1 id16", "g1 id17", "g2 id2",
                    "start_ap", "hostapd", "hi5622_frame_post",
-                   "allow_frames=0", "d2h_scan_decode", "vapscan",
+                   "allow_frames=0", "SCAN_PARSE", "caps 0x1f", "vapscan",
                    "hi5622_vapscan_provider", "PD4", "[U]", "[I]", "[V]",
                    "no vendor"):
         check(needle.lower() in rep.lower(),
@@ -354,7 +366,7 @@ def main(argv):
     ladder = read(os.path.join(LANE, "TEST-LADDER.md"))
     for needle in ("iw dev wlan0 scan", "hostapd", "wpa_supplicant",
                    "expected", "STOP", "abort", "returncode", "dmesg",
-                   "allow_frames", "d2h_scan_decode", "VAP 0"):
+                   "allow_frames", "g0 id0xC", "VAP 0"):
         check(needle in ladder, "TEST-LADDER.md missing %r" % needle)
     readme = read(os.path.join(LANE, "README.md"))
     check("wifi-scan-ap" in readme and "task-113" in readme,

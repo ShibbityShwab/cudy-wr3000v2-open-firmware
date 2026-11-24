@@ -7,8 +7,10 @@ hardware-validated (STATUS.md sec 3k, 2026-11-25); the scan/AP wiring delivered
 here is **compile-verified and host-selftested only, never bench-fired**. The
 H2D frame provider is now the integrated task-110 wifi-vap-scan builder set
 (`vapscan-0e4ad45`): g0 id7/id8/id9 and g0 id0xC can be built byte-exactly,
-but no frame is written while `allow_frames=0`, and `.scan` additionally needs
-the opt-in `d2h_scan_decode=1` (g1 id15 trailer is [U]). Every step below is
+but no frame is written while `allow_frames=0`.  The provider advertises caps
+**0x1f** (scan_req+scan_parse+user_add+user_add_notify+user_del), so `.scan`
+posts a real 520 B g0 id0xC frame as soon as the post gate is open; the g1 id15
+trailer is [U] and the result decoder is best-effort.  Every step below is
 written so the expected *failure* is as informative as the expected success:
 the driver must never fake a scan or an AP start.
 
@@ -17,9 +19,9 @@ the driver must never fake a scan or an AP start.
 | dependency | state | consequence |
 | --- | --- | --- |
 | wiphy registration after the HCC ready handshake | **hardware-validated** 2026-11-25 | `iw phy`, `iw dev`, VAP add/del work |
-| frame provider | **registered**: `vapscan-0e4ad45` caps `scan_req,user_add,user_add_notify,user_del` (task-110 builders, integrated) | H2D messages can be built; nothing is written while `allow_frames=0` |
+| frame provider | **registered**: `vapscan-0e4ad45` caps **0x1f** (`scan_req,scan_parse,user_add,user_add_notify,user_del`) (task-110 builders, integrated) | H2D messages can be built and `.scan` posts g0 id0xC; nothing is written while `allow_frames=0` |
 | scan request g0 id0xC + g0 id7/id8/id9 builders | **delivered** by task-110 (commit 0e4ad45), [V]/[I] vendor-derived, not hardware-validated | Mode P can exercise them under the gate |
-| D2H scan results (g1 15/16/17, g2 2) | **g1 id15 body decoded best-effort** (802.11 frame; 20-byte trailer [U] -> signal placeholder 0 mBm); **opt-in** `d2h_scan_decode=1` | default `.scan` is `-EOPNOTSUPP` (no parse capability); opt-in scan may produce zero BSS |
+| D2H scan results (g1 15/16/17, g2 2) | **g1 id15 body decoded best-effort** (802.11 frame; 20-byte trailer [U] -> signal placeholder 0 mBm); decoder always on | scan may produce zero BSS (valid outcome); `.scan` needs `allow_frames>0` to post |
 | firmware scan handler | hardcodes **VAP 0** (CA 0x6494c); the host-only M1 netdev has no firmware VAP object | a posted scan request may be a *graceful refusal*: accept "no D2H results", rely on a VAP-create follow-up |
 | WAL group-2 AP-start payload (gap G1) | **[U]** | `start_ap`/`stop_ap` stay `-EOPNOTSUPP` (no provider capability) |
 | `add_key` / `connect` (M3/M5) | NULL in `cfg80211_ops` | WPA2 hostapd stops at key install; wpa_supplicant stops at connect |
@@ -64,7 +66,7 @@ sync. Exact syntax and stop rules are in
 insmod /tmp/cfg80211.ko
 insmod /tmp/hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin \
         wifi_block_path=<local block> h2d_send_budget=3 \
-        allow_frames=0 frame_gap_ms=100 d2h_scan_decode=0
+        allow_frames=0 frame_gap_ms=20
 D=/sys/devices/platform/0000:00:00.0    # check `ls`; PCI domain 0 = 2.4 GHz
 
 # C1..C6 (from the h2d-send procedure; each step must report OK before the next)
@@ -90,9 +92,8 @@ iw phy phy0 info               # Wiphy phy0, 2.4 GHz channels 1..13
 iw phy phy0 interface add wlan0 type managed   # M0/M1 netdev gate
 ip link set wlan0 up
 cat $D/cfg80211_status
-# expect: provider=vapscan-0e4ad45 caps=scan_req,user_add,user_add_notify,user_del
+# expect: provider=vapscan-0e4ad45 caps=scan_req,scan_parse,user_add,user_add_notify,user_del
 #         frame_post allow_frames=0 ; scan: phase=idle
-# (caps gain scan_parse only when d2h_scan_decode=1)
 ```
 
 **STOP** if `cfg80211_status` is absent (wrong module build) or
@@ -109,14 +110,15 @@ echo "rc=$?"                   # expect non-zero; iw prints
                                #   "command failed: Operation not supported (-95)"
 ```
 
-Expected dmesg (one ratelimited warning per op): with the provider registered
-but `d2h_scan_decode=0` the scan request has the builder but lacks the decode
-capability, so the op refuses before building anything:
+Expected dmesg (one ratelimited warning per op): the provider advertises caps
+0x1f, so the scan request is built and reaches the post gate, which with
+`allow_frames=0` refuses before any device write:
 
 ```
-cfg80211: scan needs provider caps 0x3, 'vapscan-0e4ad45' has 0xf
-          - -EOPNOTSUPP (partial builder)
+frame post 'scan_req': REFUSED (allow_frames=0 (fail-closed default)) - no device write performed
 ```
+
+(`iw` then reports the op error, e.g. `Operation not permitted (-1)`.)
 
 Now try the VAP firmware-message step (default gate closed):
 
@@ -142,11 +144,11 @@ Also negative-control the abort path:
 iw dev wlan0 scan abort        # expect "command failed: Operation not supported (-95)"
 ```
 
-### 3.2 Mode P - real task-110 builders, `allow_frames>0` AND `d2h_scan_decode=1`
+### 3.2 Mode P - real task-110 builders, `allow_frames>0`
 
-The provider `vapscan-0e4ad45` is registered by default, but `.scan` needs
-the `SCAN_PARSE` capability, which is only added when the module is loaded
-with `d2h_scan_decode=1` (the g1 id15 trailer is [U]).
+The provider `vapscan-0e4ad45` is registered by default with caps 0x1f
+(`scan_req,scan_parse,user_add,user_add_notify,user_del`), so `.scan` builds
+and posts the real 520 B g0 id0xC frame once the gate is open.
 
 Preflight *read-only* first:
 
@@ -159,7 +161,7 @@ cat $D/cfg80211_status
 Then (budget must cover the frame; start with 4):
 
 ```sh
-insmod ... allow_frames=4 frame_gap_ms=100 d2h_scan_decode=1  # fresh load only
+insmod ... allow_frames=8 frame_gap_ms=20   # fresh load only; 8 = the bench budget
 printf 1 > $D/h2d_ctx_create ; printf 1 > $D/h2d_txq_sync72
 iw dev wlan0 scan
 ```
@@ -191,9 +193,9 @@ only the bounded `scan_done(aborted=1)` appears.
 
 ### 3.3 VAP user-message ladder (task-110 g0 id7/id8/id9)
 
-With `allow_frames>0` (budget >= 3) and no `d2h_scan_decode` requirement, the
-VAP netdev lifecycle now also carries the firmware user messages through the
-same gate:
+With `allow_frames>0` (budget >= 3), the VAP netdev lifecycle carries the
+firmware user messages through the same gate; the post path bounded-waits for
+the previous announce, so the vendor order user_add -> user_add_notify lands:
 
 ```sh
 iw phy phy0 interface add wlan0 type managed
@@ -263,7 +265,7 @@ iw dev wlan0 del
 iw phy phy0 interface add wlan0 type managed
 ip link set wlan0 up
 iw dev wlan0 scan                      # prerequisite; default -EOPNOTSUPP
-                                       # (opt-in d2h_scan_decode=1 may return no BSS)
+                                       # (or -EPERM when allow_frames=0)
 cp wpa_supplicant.conf /tmp/wpa_supplicant.conf   # replace placeholder PSK locally
 wpa_supplicant -dd -i wlan0 -c /tmp/wpa_supplicant.conf -D nl80211
 ```
@@ -292,8 +294,8 @@ attached; the lane's host-only claims stop at the M0/M1 gates.
 1. wifi-vap-scan (task-110) H2D builders are delivered and integrated
    (done); hardware validation of the g0 id7/id8/id9/0xC frames is the next
    bench lap (its ladder V1/V2/V4/S1).
-2. A bench session loads the module with `allow_frames>0` (and, for scan,
-   `d2h_scan_decode=1`) and the firmware consumes the built frames.
+2. A bench session loads the module with `allow_frames>0` and the firmware
+   consumes the built frames (bench 2026-11-24: g0 id7 user_add CONSUMED).
 3. A firmware VAP object exists and the g1 id15 20-byte descriptor is decoded,
    so cfg80211 BSS entries appear in `iw scan` and a scan completes with
    `aborted=0` (or a recorded reason) at least once.

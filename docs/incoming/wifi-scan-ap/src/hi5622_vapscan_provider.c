@@ -8,14 +8,14 @@
  * 2026-11-25).  Builders: wifi-vap-scan lane (task-110, commit 0e4ad45).
  * No vendor source, object code, firmware byte or secret is reproduced.
  *
- * What is registered by default (caps 0x0f):
+ * Registered caps (0x1f):
  *   g0 id7 user_add, g0 id8 user_add_notify_alg, g0 id9 del_user,
- *   g0 id0xC scan_req builders.
- * With d2h_scan_decode=1 the caps gain SCAN_PARSE, which is what makes the
- * cfg80211 .scan op available (it requires SCAN_REQ|SCAN_PARSE); the decoder
- * is tolerant and reports signal 0 mBm because the g1 id15 trailing descriptor
- * is [U].  With the default 0 the scan op stays -EOPNOTSUPP: no speculative
- * BSS entries.
+ *   g0 id0xC scan_req builders + SCAN_PARSE.
+ * SCAN_PARSE is always advertised because the cfg80211 .scan op requires
+ * SCAN_REQ|SCAN_PARSE (0x3): a real handler that posts the 520-byte g0 id0xC
+ * frame needs both.  The g1 id15 decoder is tolerant - it reports only what
+ * the 802.11 body proves and returns -EOPNOTSUPP for undecodable variants, so
+ * "scan posted, zero BSS entries, bounded scan_done" is a valid outcome.
  *
  * Registration is harmless: no frame can reach the wire unless the separate
  * hi5622_frame_post() gate has allow_frames>0 (default 0).
@@ -33,13 +33,6 @@
 
 #include "hi5622_frames_api.h"
 #include "hi5622_vapscan_map.h"
-
-/* Default 0: the g1 id15 trailing-descriptor layout is [U]; enabling this is a
- * supervised bench decision, not a default behaviour. */
-static unsigned int hi5622_scan_d2h_decode;
-module_param_named(d2h_scan_decode, hi5622_scan_d2h_decode, uint, 0644);
-MODULE_PARM_DESC(d2h_scan_decode,
-		 "enable the best-effort g1 id15 scan-result decoder (default 0: .scan stays -EOPNOTSUPP; signal reported as 0 mBm because the trailer is [U])");
 
 static DEFINE_MUTEX(hi5622_vapscan_lock);
 static bool hi5622_vapscan_registered;
@@ -150,11 +143,10 @@ int hi5622_vapscan_provider_register(void)
 	hi5622_vapscan_ops.name = HI5622_VAPSCAN_PROVIDER_NAME;
 	hi5622_vapscan_ops.caps =
 		HI5622_FRAME_CAP_SCAN_REQ |
+		HI5622_FRAME_CAP_SCAN_PARSE |
 		HI5622_FRAME_CAP_USER_ADD |
 		HI5622_FRAME_CAP_USER_ADD_NOTIFY |
 		HI5622_FRAME_CAP_USER_DEL;
-	if (hi5622_scan_d2h_decode)
-		hi5622_vapscan_ops.caps |= HI5622_FRAME_CAP_SCAN_PARSE;
 	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
 	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
 	hi5622_vapscan_ops.build_user_add = vapscan_user_add;
@@ -165,9 +157,8 @@ int hi5622_vapscan_provider_register(void)
 	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);
 	if (!rc) {
 		hi5622_vapscan_registered = true;
-		pr_info("hi5622 frames: provider '%s' registered (caps=0x%x, d2h_scan_decode=%u)\n",
-			hi5622_vapscan_ops.name, hi5622_vapscan_ops.caps,
-			hi5622_scan_d2h_decode);
+		pr_info("hi5622 frames: provider '%s' registered (caps=0x%x)\n",
+			hi5622_vapscan_ops.name, hi5622_vapscan_ops.caps);
 	}
 	mutex_unlock(&hi5622_vapscan_lock);
 	return rc;
