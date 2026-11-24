@@ -15,7 +15,7 @@ never copied into this directory.
 | `tools/pd2_re.py` | read-only verifier for the dispatcher contract, the PD abort chain/ABT-frame arithmetic and the PD2 code cave; `dispatcher`, `fault`, `cave`, `selftest` (33/33) |
 | `tools/pd2_patch_builder.py` | PD2 builder/verifier: pinned blob + per-window sha256, patched `FIRMWARE.PD2.bin` + manifest written only outside the repo, machine-readable recipe for the bench tooling; `--list`, `--build`, `--recipe`, `--selftest` (42/42) |
 | `PD2.recipe.json` | the machine-readable PD2 recipe (`hi5622-fw-patch-recipe/1`, `based_on: null`) for `wifi-bench-tooling/tools/fw_patch_builder.py --build PD2 --recipe-file ...`; offsets/hashes/our patch bytes only |
-| `REPORT-PD3.md` | PD3 iteration (task-98): proof that PD2-A failed because its config-3 cave CPU 0x47432 is LIVE on our boots (bench page 0x6F analysis + PD1/PD2 differential), PD3 relocation of the guarded poll stub to the image-header exception-record area CPU 0x4000C (unreachable: no branch/literal reference, zero-fill, only crash-path writer), exact bytes/hashes, the no-cave PD3B alternative (event-0x4C raise loop), expected observables, the module latch fix and ranks |
+| `REPORT-PD3.md` | PD3 iteration (task-91 follow-up): proof that PD2-A failed because its config-3 cave CPU 0x47432 is LIVE on our boots (bench page 0x6F analysis + PD1/PD2 differential), PD3 relocation of the guarded poll stub to the image-header exception-record area CPU 0x4000C (unreachable: no branch/literal reference, zero-fill, only crash-path writer), exact bytes/hashes, the no-cave PD3B alternative (event-0x4C raise loop), expected observables, the module latch fix and ranks |
 | `tools/fw_pd_builder.py` | PD2/PD3/PD3B builder+verifier: pinned blob, per-window sha256, patched images + manifests written outside the repo, machine-readable recipes; `--list`, `--build NAME`, `--recipe NAME`, `--selftest` (56/56) |
 | `tools/pd3_re.py` | verifier for the PD3 cave proof (header layout, record-area zero/census, crash-path writer) and the PD2-A failure reconstruction; `header`, `pd2-fail`, `selftest` (15/15) |
 | `PD3.recipe.json`, `PD3B.recipe.json` | machine-readable PD3 and no-cave PD3B recipes (`hi5622-fw-patch-recipe/1`) for `wifi-bench-tooling/tools/fw_patch_builder.py` |
@@ -64,7 +64,7 @@ ack/consume/doorbell contract runs without an unverified `blx`. Patched image sh
     $PY $T/pd2_patch_builder.py --selftest   # 38/38 PASS
     $PY $T/pd2_patch_builder.py --recipe     # bench-tooling recipe
     $PY $T/pd2_patch_builder.py --build /tmp/hi5622-pd2
-    # PD3 (task-98)
+    # PD3 (task-91 follow-up)
     $PY $T/pd3_re.py --selftest          # 15/15 PASS
     $PY $T/pd3_re.py --header            # record-area cave proof
     $PY $T/pd3_re.py --pd2-fail          # why PD2-A failed on the bench

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """fw_pd_builder.py - host-only builder/verifier for the Hi5622V100 PD2/PD3 firmware patches.
 
-Lane wifi-irq-unmask, shared tasks task-91/task-98 (PD2/PD3). Reads the LOCAL vendor
+Lane wifi-irq-unmask, shared tasks task-91 (PD2) and task-91 follow-up (PD3). Reads the LOCAL vendor
 firmware blob in place, verifies it by sha256 and each source window by sha256, applies a
 patch recipe, writes the patched image + manifest into a NON-repo directory, and prints the
 machine-readable recipe used by the bench tooling. It never copies vendor bytes into this
