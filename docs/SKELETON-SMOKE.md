@@ -4756,3 +4756,44 @@ the same 12,296 B DTB sha256
 `50daf3d0d50929aaa3af35fa40fae69a73428fd5b1c5bcc686795e89cb92d8eb` and the two
 hand-off nodes plus the enable-method are present.  The short release status is
 `../target-skeleton/RELEASE-NOTES.md`.
+
+
+## 2026-11-24 upstream-target session: checkpoint target + cfg80211 bench kernel
+
+Host-only. Canonical target tree synced into the release-line OpenWrt tree
+(/home/shibbityshwab/openwrt-lab-selectorfix-img, OpenWrt main 27663a0, linux-6.18.60,
+OpenWrt GCC 14.4.0). Full detail and hashes: docs/incoming/wifi-upstream-target/
+BUILD-VERIFICATION.md.
+
+- Target install: 67 patch files (001-060 + 062-067 + 013a), board DTS, image tools.
+  make defconfig **RC=0** with the device selected (CONFIG_TARGET_PROFILE=
+  "DEVICE_cudy_wr3000-v2", board/subtarget hisilicon/luofu).
+- Kernel: make target/linux/prepare **RC=0** (all 67 patches), make
+  target/linux/compile **RC=0**; vmlinux 57,659,036 B sha256 0ba3c951..., zImage
+  3,325,728 B; patch 013a present in the compiled pcie-luofu.c; zero .rej files.
+- Image (checkpoint): make -j16 **RC=0**; sysupgrade container 6,246,719 B sha256
+  77de5fe9...; base DTB 12,728 B sha256 36034465... (compiled from the committed DTS,
+  no wifi-pcie-hog), loader overlay 230 B sha256 8e4ab83b...; FIP slice 3,352,486 B
+  sha256 a5d3ceb1..., load/entry 0x80608000, gate magic 0xd7b7ab1e; renamed
+  container marker text rebuilt as f7718860....  The rebuilt rootfs carries
+  /etc/rc.d/S96luofu_record_pair and not the retired bench-only recorder.
+- cfg80211 bench kernel (wifi-cfg80211 task-104 handoff): the target kernel config
+  gained CONFIG_CFG80211=m (canonical regenerated delta, prompt-free: prepare+compile
+  RC=0 with zero NEW prompts); cfg80211.ko 2,328,548 B sha256 949393f9..., vermagic
+  6.18.60 SMP; final image 6,267,199 B sha256 22b72852..., kernel slice
+  13e81214.../slot 1794a531....  The clean-room hi5622_wifi.ko re-checked against the
+  final tree (505,076 B sha256 d2b3cf79..., depends=cfg80211, 0 warnings; its lane's
+  provider-symbol workaround check is now redundant).  Attended deploy/flash steps:
+  docs/incoming/wifi-upstream-target/CFG80211-BENCH-IMAGE.md.
+- Fixes in the same session: GP1 013a committed + DTS hog retired; boot-pair recorder
+  enabled (S96luofu_record_pair) and its hardware sysfs name (boot-selector) fixed in
+  the recorder and platform.sh (mock tests 94/94); stale "schematic" headers and the
+  never-included profile sketch cleaned up; target skeleton README/RELEASE-NOTES and
+  docs/ROADMAP-OPENWRT.md updated; 67-patch submission classification (26 keep /
+  17 fold / 24 drop -> proposed 30-patch v2 series + DTS-0001) in
+  docs/incoming/wifi-upstream-target/PATCH-CLASSIFICATION.md.
+- Tree state/concurrency: the world builds ran in the shared release tree; that
+  transiently removed vmlinux/Module.symvers while the wifi-cfg80211 lane was
+  verifying its module (its check was re-run at the end against the final tree).
+  Serialize world builds with other lanes' module checks.  Nothing was flashed or
+  booted in this session; the image container remains NOT FLASHABLE-UNTIL-INSTALLED.

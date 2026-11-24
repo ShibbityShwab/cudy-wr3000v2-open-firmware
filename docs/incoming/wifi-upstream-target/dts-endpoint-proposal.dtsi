@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * PROPOSAL ONLY - NOT APPLIED, NOT BOOT-TESTED.
+ *
+ * Hi5622V100 Wi-Fi endpoint description for the luofu R116 board, to be merged
+ * into target-skeleton/dts/luofu-r116.dts only when a Wi-Fi driver/binding
+ * exists (today the Hi5622 stack is vendor-binary and the GPL source request is
+ * unanswered - see ../../../docs/ROADMAP-OPENWRT.md and
+ * ../../../docs/upstream/SUBMISSION-STATUS.md).  An empty/undriven endpoint
+ * node is not upstreamable and must not be shipped as if Wi-Fi worked.
+ *
+ * What is measured (all from the 2026-11-22/24 bench record):
+ *   - one chip behind each RC, PCI vendor:device 59e7:0005, both functions
+ *     reporting the same internal chip (BAR0 16 MiB / BAR2 16 KiB /
+ *     BAR4 8 MiB) - see the parent ledger 2026-11-23 18:40 and
+ *     docs/phase18/inbound-map.md;
+ *   - board power/reset lines: SoC GPIO0 pins 20, 21, 28; the vendor pulses
+ *     them LOW (assert) then HIGH (release) before RC clock/LTSSM start;
+ *     GP1 (2026-11-24) proved this sequence makes the mask ROM run S0/S1.
+ *
+ * The upstream form should carry those lines as board data (reset-gpios on the
+ * RC node, consumed by the generic DWC glue) rather than as driver-hardcoded
+ * GPIO0 access (what patch 013a does today for the bench).
+ */
+
+&pcie0 {
+	/*
+	 * The endpoint is not a child-bus node with its own compatible until a
+	 * binding exists: PCI endpoints bind by vendor/device ID.  This child
+	 * only records the board reset line so a future driver can request it.
+	 * reg = <devfn 0> (device 0, function 0) with the RC's 3/2 address
+	 * cells; the second function of the same chip is left to PCI enumeration.
+	 */
+	wifi@0,0 {
+		compatible = "cudy,wr3000-v2-wifi";	/* placeholder: no binding yet */
+		reg = <0x00000 0x0 0x0 0x0 0x0>;
+		/* board_id 3 GPIO map; active-low assert pulse is done by the RC driver */
+		reset-gpios = <&porta 20 GPIO_ACTIVE_LOW>,
+			      <&porta 21 GPIO_ACTIVE_LOW>,
+			      <&porta 28 GPIO_ACTIVE_LOW>;
+		status = "disabled";		/* no driver, no binding: keep it out of use */
+	};
+};
+
+&pcie1 {
+	wifi@0,0 {
+		compatible = "cudy,wr3000-v2-wifi";
+		reg = <0x00000 0x0 0x0 0x0 0x0>;
+		reset-gpios = <&porta 20 GPIO_ACTIVE_LOW>,
+			      <&porta 21 GPIO_ACTIVE_LOW>,
+			      <&porta 28 GPIO_ACTIVE_LOW>;
+		status = "disabled";
+	};
+};

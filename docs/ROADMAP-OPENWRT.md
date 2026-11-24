@@ -1,12 +1,17 @@
 # Roadmap: from a working box to a complete open-source OpenWrt submission
 
-> **Status 2026-11-18: this is a phase plan, not current state.** The bench lab-kernel line
-> reached its documented ceiling (v17: it boots the vendor userspace, the full module stack
-> loads, `eth2` comes up and `br-lan` is created, but the vendor HYFI/bridge userspace contract
-> needs a multi-step port - see the parent `STATUS.md` section 3 and the parent ledger entry
-> 2026-11-18 06:50). There is **no OpenWrt target, board DTS, image recipe or driver series**
-> yet; that is recorded in the parent `EVIDENCE-INDEX.md` ("Upstream submission is not
-> started") and the ledger entry 2026-11-17 00:20. Bench gates are not upstream progress.
+> **Status 2026-11-24: the plan below is history; the live state is the parent `STATUS.md`
+> and [upstream/SUBMISSION-STATUS.md](upstream/SUBMISSION-STATUS.md).** The target now
+> exists and is bench-verified: 67 target patches (L0) / 55-patch release line (L1), board
+> DTS with the loader hand-off contract, full image recipe (uImage + FIP slice + rootfs UBI
+> + sysupgrade container), 2-CPU boot with network/SSH/persistent overlay, and a working
+> clean-room HCC Wi-Fi transport/full-duplex protocol on the host side (2026-11-24/25).
+> It is **still not upstream progress**: no target PR or accepted driver series exists,
+> Wi-Fi has no upstreamable driver and its firmware is closed, and the install path has
+> never run end to end on a device. Bench gates are not upstream progress.
+> The 2026-11-24 target/series checkpoint (build verification, patch classification for
+> submission, target fixes) is
+> [incoming/wifi-upstream-target/REPORT.md](incoming/wifi-upstream-target/REPORT.md).
 >
 > The concrete design is now **[TARGET-DESIGN.md](TARGET-DESIGN.md)** (target/subtarget layout,
 > DTS conversion, FIP/dual-slot image recipe, sysupgrade metadata, per-driver upstream
@@ -69,6 +74,39 @@ checklist and the proposed submission split are in
   the final patch 013 and re-validated: `gen-series.py --check` clean, release-line
   validator PASS (55/55 strict), review form 26/26 with 0 errors / 73 warnings, PCIe
   `dt_binding_check` RC=0.
+
+## Where the plan stands on 2026-11-24
+
+**2026-11-24 target/series checkpoint (host-only, no device).**  Nothing here is upstream
+acceptance; the phase-plan caveat still stands.
+
+- **The target tree is bench-verified and now build-verified as a checkpoint.** 67 patches
+  (001-060 + 062-067 + 013a; L0), the board DTS, the image chain and the re-derived
+  `luofu/config-6.18` build in an isolated OpenWrt main tree (linux-6.18.60): `make defconfig`
+  RC=0 with the device selected, kernel prepare/compile RC=0, full image build RC=0
+  (details and hashes: [incoming/wifi-upstream-target/BUILD-VERIFICATION.md](incoming/wifi-upstream-target/BUILD-VERIFICATION.md)).
+  Images from this line have booted on the unit (2 CPUs, SSH, overlay, GP1/PD4 Wi-Fi line).
+- **The target defects found in review are fixed host-side**: patch 013a (GP1 endpoint
+  reset pulse) is now committed and the retired Wi-Fi GPIO hog is gone from the DTS; the
+  real boot-pair recorder is enabled and the bench-only duplicate retired; the recorder and
+  `platform.sh` now use the hardware-observed `boot-selector` sysfs name (they looked for
+  `luofu-selector`, so the validated recorder had never run on the unit); the never-included
+  profile sketch is removed. The recorder/selector changes are host-tested (94/94 mocked
+  assertions) and need one attended reboot to be hardware-confirmed.
+- **Patch series classified for submission**: 26 keep (7 regenerated with folds), 17 fold,
+  24 drop (bench-only diagnostics/probes/workarounds) -> proposed **30 kernel patches +
+  DTS-0001** v2 series, with commit-message drafts and acceptance criteria:
+  [PATCH-CLASSIFICATION.md](incoming/wifi-upstream-target/PATCH-CLASSIFICATION.md),
+  [submission-series.md](incoming/wifi-upstream-target/submission-series.md).  The frozen
+  26-patch review form and release-line manifest are unchanged; L1 must grow 55 -> 56 for
+  013a when the review form is next regenerated.
+- **Wi-Fi boundary unchanged for upstream.**  The clean-room transport and the full duplex
+  HCC protocol (ready handshake, context-create, TXQ config sync, firmware responses) are
+  proven on the bench with the research-only PD4 firmware patch (parent `STATUS.md` 3j), but
+  they are not a mainline-able driver: the firmware blob is closed, the GPL source request is
+  unanswered, and the PD4 patch is research-only and must never ship.  Do not present the
+  Wi-Fi work as upstream progress.
+- **Publication** stays NOT READY (history purge pending, `PUBLISH-READINESS.md`).
 
 ## Where the plan stands on 2026-11-18
 
