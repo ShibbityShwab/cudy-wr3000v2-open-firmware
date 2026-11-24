@@ -1,6 +1,6 @@
 # PD3: PD2 bench-failure RCA and a stub in a genuinely unreachable cave (image-header record area)
 
-**Lane:** `wifi-irq-unmask`, shared task **task-98 (PD3)**, **host-only static RE**, 2026-11-24.
+**Lane:** `wifi-irq-unmask`, shared task **task-91 follow-up (PD3)**, **host-only static RE**, 2026-11-24.
 Bench evidence is cited from the Lead's PD2-A fire (attended, GP8-style session); the subsequent
 analysis and tooling are host-only. The vendor firmware blob and mask-ROM dump stay **local
 evidence only**; nothing vendor-derived is committed. Address conventions unchanged: image
@@ -310,7 +310,7 @@ into the repository.
 
 ---
 
-*Lane wifi-irq-unmask, 2026-11-24, shared task task-98. Host-only static reversal and patch
+*Lane wifi-irq-unmask, 2026-11-24, shared task task-91 follow-up. Host-only static reversal and patch
 design; the PD2-A failure is device-measured and cited. The vendor firmware blob and mask-ROM
 dump remain local evidence only; this directory keeps addresses, constants, instruction
 encodings and hashes, never vendor bytes.*

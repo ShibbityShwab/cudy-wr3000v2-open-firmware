@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """pd3_re.py - host-only verifier for the PD3 cave/header proofs and the PD2 bench failure RCA.
 
-Lane wifi-irq-unmask, shared task task-98 (PD3). Reads the LOCAL vendor firmware blob in
+Lane wifi-irq-unmask, shared task **task-91 follow-up (PD3)**. Reads the LOCAL vendor firmware blob in
 place and prints derived annotations only. No vendor bytes are copied into the repository
 and no device is opened.
 
