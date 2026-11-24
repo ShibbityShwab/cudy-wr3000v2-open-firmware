@@ -25,6 +25,25 @@ capture-and-stop.  One idea per fire, one boot, no retries.
   reachable only from the **g0 id1 config event with u16 key = 0x0064**.  Boot
   creates module 18 with type 0 and takes the no-alloc path, so a solo TXQ
   sync always faults.  Ladder C sends the create first.
+* **FIRST ORDERED LAP RESULT (type 3, module 399,816 B sha b11ffea6...):**
+  ctx_create was consumed in 0 polls and wrote `ctx[0]=4` (the helper ran),
+  **but `ctx+0x190` stayed 0** and the create-buffer signatures never
+  appeared; the TXQ sync then faulted again (mask 0x12, exception staging
+  0x00119448).  The post-create PACK also read `refcnt=0` - which is expected:
+  the key-0x64 worker bumps G+0x6C8+id at entry (CA 0xBC726) and drops it at
+  exit (CA 0x943CC), so the net after a fire is 0 (the older "refcnt=1"
+  expectation was wrong).
+* **Static type-dispatch analysis (REPORT.md sec 12, tool
+  `tools/ctx_type_dispatch.py`):** the helper's `data[0]` type is NOT the
+  allocation switch - **types 1, 2 and 3 all call the same
+  `0xBF128(0x96, 0x327, 1, 0x3a8)` allocation** (types 1/2 run the 0xFE804
+  defaults block first); types 0/4/5/6 take no-alloc tails.  Type 1 alone adds
+  a second small allocation (`ctx+0x434`) and a post-fill path that can
+  return 0x3e8 (which makes the worker free the buffer).  The observed
+  "ctx[0] written, ctx+0x190 zero, no signatures" therefore points at the
+  **allocator returning 0** (failure path, helper returns 0x67), not at a
+  type-3 no-alloc branch.  The next lap fires **type 1** and adds the
+  allocator/no-alloc diagnostics below, which settle the cause.
 
 Global rules unchanged: recovery door armed first, UART **read-only** capture
 to an absolute path, no blind flash writes, no `rmmod` after the release, no
@@ -40,8 +59,8 @@ CECE during boot, never write CA 0x400392F0 (out[5]), never mailbox id 5.
   (local evidence only - never committed);
 * the Wi-Fi PHY custom block `/lib/firmware/hi_wifi/wifi_block.bin` staged
   from the local stock capture with `tools/mkblocks.py` (never committed);
-* the module from THIS tree on the rootfs: `hi5622_wifi.ko`, **399,816 B**,
-  sha256 `b11ffea6d1cebb9f03a3a4d162dbc0c5cbd684bb6298bcf22d5e6d9ebb1d882f`
+* the module from THIS tree on the rootfs: `hi5622_wifi.ko`, **400,732 B**,
+  sha256 `774c4f1f094d6b5565e0463d9186a21ddeea3c3485755e603a27392d1f0d4310`
   (build-path dependent - record the value printed by `./tools/build.sh` of
   the build you deploy), vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`;
 * Lead decision recorded: the session fires the **ordered pair** -
@@ -86,8 +105,11 @@ Each attribute lives in the endpoint device directory
                h2d_send (WO)  h2d_status (RO)  h2d_plan (RO)
     d2h:       rd_poll rd_advance rd_status rd_decode rd_catalog
 
-`h2d_send` grammar now also accepts the new token `ctx_create` (the WO
-`h2d_ctx_create` attribute is the preferred one-shot form).
+`h2d_send` grammar now also accepts `ctx_create` (type 3) plus the type
+variants `ctx_create_t1` / `ctx_create_t2`.  The WO `h2d_ctx_create` attribute
+takes the **write value 1|2|3 = the create helper's data[0] type** (preferred
+one-shot form; any other value is refused).  The three selectors emit the same
+48-byte frame - only wire byte 24 (data[0]) differs.
 
 ## Ladder C (CURRENT) - ordered create -> TXQ sync
 
@@ -101,10 +123,10 @@ Each attribute lives in the endpoint device directory
 | C5 | `echo 1 > hcc_loop` | service thread started (core tick + direct reader); start BEFORE the release |
 | C6 | `echo 1 > release` | 0x5A5A only; refused unless windows+upload+verify+seed are done |
 | C7 | watch `boot hcc_ready hcc_events rd_status` | LATCHED golden page 0x86807FEF/7/2/0xABCD, state CA 0x118B60=1, mask CA 0x40008=0; ready pair g4 id1 (<=2.0 s) then g4 id2 (<=20.0 s); core phase `READY_TXQ_SYNC`. STOP if the ready pair does not arrive (different experiment) |
-| C8 | **pre-create read pack** (read-only, one shot; table below) | ctx4+0x190 = 0, table entry 4 = 0x0011C458, ctx4 body = 0, G = 0x00170E28, mask = 0, staging = 0. STOP if mask != 0 or the table/G values differ (the expected boot state is not there) |
-| C9 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan` prints `msg=txq_sync wire_total=48 wire=000100043000010000005a5a...ffffffff`, `msg=txq_sync72 node_len=72 node_word1=0x00486d2b`, **and the new `msg=ctx_create wire_total=48 wire=000100043000010000005a5a0000000001000000640014000304000004000000000000000000000000000000ffffffff` with `node_len=48 node_word1=0x00306d2b`**, plus `gate ctx_create=ok`; `h2d_status` gates show `ctx_create=ok`. **STOP if the gate is not ok** - do not fire, capture the reason, do not raise the budget |
-| C10 | **fire ONE create**: `printf 1 > h2d_ctx_create` (or `printf ctx_create > h2d_send`); note `echo $?` | success only if out[0] was consumed within the bounded window. On success dmesg shows `H2D ctx_create: frame 48 B in a 48 B node committed ... CONSUMED after N polls`. **Do NOT repeat the command** |
-| C11 | **post-create read pack** (read-only; table below) | **ctx4+0x190 = V non-zero**, V+0x10=0x64, V+0x14=3, V+0x238=0x92A, V+0x52&0xff=0x01, ctx4 body byte0=4 / byte4=3, G+0x6C8+4 refcount=1, mask still 0, staging still 0/unmodified. **STOP if V stays 0** (create path failed - see fallback matrix; do NOT fire the TXQ) |
+| C8 | **pre-create read pack** (read-only, one shot; table below) | ctx4+0x190 = 0, table entry 4 = 0x0011C458, ctx4 body = 0, G = 0x00170E28, mask = 0, staging = 0; baseline `ctx+0x187` = 0, `ctx+0x434` = 0; **pool-1 descriptor CPU 0x1722BC** recorded (see "allocator diagnostics" below). STOP if mask != 0 or the table/G values differ (the expected boot state is not there) |
+| C9 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan` prints `msg=txq_sync wire_total=48 wire=000100043000010000005a5a...ffffffff`, `msg=txq_sync72 node_len=72 node_word1=0x00486d2b`, the **`msg=ctx_create wire_total=48 wire=000100043000010000005a5a0000000001000000640014000304000004000000000000000000000000000000ffffffff` with `node_len=48 node_word1=0x00306d2b`**, and the ctx_create-variants line (t1/t2 differ only in wire[24]); `h2d_status` gates show `ctx_create(t1/t2/t3)=ok/ok/ok`. **STOP if the gate is not ok** - do not fire, capture the reason, do not raise the budget |
+| C10 | **fire ONE create, TYPE 1 first**: `printf 1 > h2d_ctx_create` (or `printf ctx_create_t1 > h2d_send`); note `echo $?` | write value 1 = data[0]=type 1 (the variant with the full defaults block + type-1 extra path). Success only if out[0] was consumed within the bounded window. On success dmesg shows `H2D ctx_create_t1: frame 48 B in a 48 B node committed ... CONSUMED after N polls`. **Do NOT repeat the command.** (Type 3 was already fired: consumed, ctx[0]=4, ctx+0x190 stayed 0 - do not repeat type 3.) |
+| C11 | **post-create read pack** (read-only; table below + per-type table) | **ctx4+0x190 = V non-zero** (allocated), V+0x10=0x64, V+0x14=3, V+0x238=0x92A, V+0x52&0xff=0x01, ctx4 body byte0=4 / byte4=3; **type 1 additionally**: ctx+0x434 (second alloc) non-zero, ctx+0xF=0x0A; refcount G+0x6C8+4 = **0 (net, inc then dec)**; mask still 0, staging still 0/unmodified; ctx+0x187 = 0. **If V stays 0:** read the allocator diagnostics (below) and STOP - do NOT fire the TXQ; do not try another type blindly |
 | C12 | **dry-run preflight for the TXQ**: `cat h2d_status ; cat h2d_plan` | `h2d_status` state: `phase=ACTIVE ... ctx_created=1`, `frames_sent=1 txq_sent=0 ctx_sent=1 ok=1`, `mbox_inflight=0x00000000 out[0]=0x00000000`, gate `txq_sync72=ok`. STOP if the gate is not ok (in-flight/pending announce is a stop, not a retry) |
 | C13 | **fire ONE TXQ sync**: `printf 1 > h2d_txq_sync72`; note `echo $?` | success only if out[0] was consumed. Expected: the g0 id1 **key-0xd8** worker CA 0x81038 now finds `ctx+0x190 = V` and stores one byte; **no new exception**. **Do NOT repeat** |
 | C14 | **capture (read-only)**: `cat h2d_status h2d_plan hcc_events hcc_ready hcc_status boot rd_status rd_catalog` + `dmesg | tail -60` + the UART log; then STOP | see the observables table; one boot, one ordered pair |
@@ -139,14 +161,58 @@ After create (C11), with V = the value read back from BAR0 0x7D45E8:
     rd32 $(( V + 0x6B8052 ))                      # low byte expect 0x01
     rd32 0x7D4458                                 # ctx4 body: low byte = 4 (user id)
     rd32 0x7D445C                                 # ctx4[4]: low byte = 3 (type)
-    rd32 0x8294F4                                 # G+0x6C8+4 refcount,  expect low byte 0x01
+    rd32 0x8294F4                                 # G+0x6C8+4 refcount: expect 0 (net inc+dec)
     rd32 0x6F8008                                 # mask stays 0
     rd32 0x6F800C                                 # staging stays 0/unmodified
+    # allocator / no-alloc diagnostics (read-only; decisive when V == 0)
+    rd32 0x7D45DC                                 # top byte = ctx+0x187: 0x2B = no-alloc tail ran; 0 = alloc-failure path
+    rd32 0x7D488C                                 # ctx+0x434: type-1 second alloc pointer (nonzero only for type 1)
+    rd32 0x8212BC                                 # pool-1 descriptor: low16 = max block size (need >= 0x3B0); byte2 = block count (>0)
+    rd32 0x821134                                 # pool-0 descriptor (baseline comparison)
+    rd32 $(( V + 0x6B80F0 ))                      # create buffer +0xF0 region (optional; type-1 extra init)
 
 Note: V is the allocator's return; firmware-RAM pointers are CPU addresses, so
 the buffer's BAR0 address is V + 0x6B8000.  If V reads in the device-CA window
 (0x40xxxxxx) instead, the pointer convention differs - report it as an open
 item and use the device-IO mapping for the buffer reads; do not guess.
+
+### Allocator / no-alloc diagnostics (why V can be 0)
+
+The task-102 follow-up analysis (REPORT.md sec 12, [`tools/ctx_type_dispatch.py`](tools/ctx_type_dispatch.py))
+derived the helper's type dispatch from the pinned firmware:
+
+| data[0] type | branch | shared 0x3a8 alloc | notes |
+| ---: | --- | --- | --- |
+| 1 | CA 0xFE804 defaults -> CA 0xFE7CA | **yes** | + data[5]==0 gate -> extra 0xc alloc to ctx+0x434; post-fill 0xD4048 path can return 0x3e8 (worker then frees + clears ctx+0x190) |
+| 2 | CA 0xFE804 defaults -> CA 0xFE7CA | **yes** | keeps the buffer; returns 0 via CA 0xFF940 |
+| 3 | CA 0xFE7CA directly | **yes** | keeps the buffer; returns 0 via CA 0xFF940 |
+| 0 | CA 0xFE7C4 -> CA 0xFE7CA | no (alloc dispatch rejects) | sets ctx+0x187=0x2B |
+| 4, 6 | CA 0xFE7CA | no (alloc dispatch rejects) | -> CA 0xFF940, sets ctx+0x187=0x2B |
+| 5, >6 | CA 0xFE892 | no | log + return 0x3e8 |
+
+So type is **not** the allocation switch: 1/2/3 all call
+`0xBF128(0x96, 0x327, 1, 0x3a8)` and store its return at ctx+0x190.  The shared
+fill (`CA 0xFE8BC`, after a successful alloc) writes the +0x10/+0x14/+0x238/
++0x52 signatures for all three.  The type-3 lap wrote ctx[0]=4 but left
+ctx+0x190 = 0, so the leading explanation is **the allocator returned 0**
+(helper error path CA 0xFE800 returns 0x67; worker then clears ctx+0x190,
+which was already 0) - not a type-3 no-alloc branch.  Consequences:
+
+* `ctx+0x187 == 0x2B` -> a no-alloc tail ran (types 0/4/6, or the
+  types-2/3 success tail at CA 0xFF940 - but that tail is reached *after* a
+  successful allocation, so it would come with ctx+0x190 != 0).
+* `ctx+0x187 == 0` and ctx+0x190 == 0 -> the helper returned via the
+  alloc-failure path (0x67) or never reached the fill; read the pool-1
+  descriptor to see whether the pool manager is initialised:
+  `[0x1722BC] & 0xffff >= 0x3B0` and `byte2 > 0` are required for the
+  allocation to get past its first checks (allocator CA 0xBF128 checks
+  `u16 pool[base+0x188*pool] >= size+8`).  Zeros there mean the firmware's
+  memory-pool manager (initialised by the boot-init code at CA 0x47696) is not
+  usable on this boot - report it; a different data[0] type cannot fix that.
+* Type 1 caveat: even a successful allocation can end with ctx+0x190 cleared
+  if the type-1 post-fill path returns 0x3e8.  Then ctx+0x434 (the type-1
+  second allocation) is the evidence that the buffer had been allocated; read
+  it before concluding "alloc failed".
 
 ## Expected observables
 
@@ -155,8 +221,8 @@ item and use the device-IO mapping for the buffer reads; do not guess.
 | # | observable | pass / meaning |
 | --- | --- | --- |
 | 1 | the C10 write returned success | frame committed and the id-3 announce was consumed within the bounded window |
-| 2 | `h2d_status`: `frames_sent=1 txq_sent=0 ctx_sent=1 ok=1 timeout=0 refused=0 desync=0`, `last_out0=0x00000000`, small `max_polls`, gate line `ctx_create=ctx_already_created`, state `ctx_created=1` | the create went through the full carrier path |
-| 3 | dmesg `H2D ctx_create: frame 48 B in a 48 B node committed on SR0 slot N devva 0x... node word1 0x00306d2b producer ... -> ...; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls; core phase=ACTIVE` | exact commit evidence (record slot/devva/N) |
+| 2 | `h2d_status`: `frames_sent=1 txq_sent=0 ctx_sent=1 ok=1 timeout=0 refused=0 desync=0`, `last_out0=0x00000000`, small `max_polls`, gate line `ctx_create(t1/t2/t3)=ctx_already_created/...`, state `ctx_created=1`, `last attempt msg=ctx_create_t1` | the create went through the full carrier path |
+| 3 | dmesg `H2D ctx_create_t1: frame 48 B in a 48 B node committed on SR0 slot N devva 0x... node word1 0x00306d2b producer ... -> ...; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls; core phase=ACTIVE` (type-1 name shows in the line) | exact commit evidence (record slot/devva/N) |
 | 4 | `hcc_events`: `h2d{pub=1 done=1 ...}`, `h2d_complete data=0x8`, lane open | core consumed the announce |
 | 5 | the core phase is now **ACTIVE** (it keys on group/id; ctx_create is also g0/id1) and hcc_events may show a `txq_sync` event - **expected artifact, not a pass signal** (see risk R1) | expected |
 | 6 | the C11 pack (above) shows ctx4+0x190 non-zero + the create-buffer signatures | the firmware called the create helper and allocated the context |
@@ -200,7 +266,10 @@ item and use the device-IO mapping for the buffer reads; do not guess.
 
 | symptom | most likely meaning | next host-only step |
 | --- | --- | --- |
-| create consumed, ctx4+0x190 stays 0 | a create-worker parser gate: parent module byte1 != 0, type/parent mismatch, or the allocated pointer convention is different | ctx-create lane: re-check data[1] parent and the [U] allocator return convention; do not resend blindly |
+| create consumed, ctx4+0x190 stays 0, ctx+0x187 == 0 | the leading hypothesis (type 3 lap): the firmware's 0xBF128 pool allocator returned 0 - helper error path 0x67; the create frame/type is not the switch (types 1/2/3 share the same alloc) | read the pool-1 descriptor BAR0 0x8212BC; if zero, the pool manager is not usable on this boot -> report, do not try more types. If the pool looks sane, capture dmesg and [U] the allocator's runtime state |
+| create consumed, ctx4+0x190 stays 0, ctx+0x187 == 0x2B | a no-alloc tail ran (not expected for a valid type 1/2/3 frame) | verify the frame's data[0] byte with `h2d_plan` and the wire hex; report the type/bytes actually emitted |
+| create consumed, ctx4+0x190 stays 0, ctx+0x434 != 0 | type-1 only: the buffer WAS allocated but the type-1 post-fill path returned 0x3e8 and the worker freed it (ctx+0x190 cleared) | the context precondition is closer than the type-3 lap; report the dmesg + PACK, next step is a firmware-side look at 0xD4048, not another frame |
+| create consumed, ctx4+0x190 stays 0, mask != 0 | the create path itself faulted | capture dmesg/UART + exception record; power-cycle; do not resend |
 | create consumed, ctx+0x190 non-zero, signatures correct, TXQ consumed + no exception | **the ordered ladder worked**: the context precondition was the fault cause | next question is the firmware's response policy (new D2H?); continue the vendor startup order in a supervised session |
 | TXQ consumed, new exception appears (mask != 0) | a different handler-stage fault after the context exists (the context is no longer the blocker) | read-only exception record at BAR0 0x6F800C; capture the PC; do not retry |
 | create itself faults | a payload/config error (out-of-range module index or a parent whose byte 1 is non-zero) - the parser has no other dereference | stop; report the exception record; the frame is synthesized and may need a corrected instance |

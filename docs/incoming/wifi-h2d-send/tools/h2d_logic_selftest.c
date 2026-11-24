@@ -7,7 +7,8 @@
  * h2d_send_logic.c + h2d_frames.c + hcc_core.c) and asserts:
  *   - the byte-exact emission vectors (txq_sync 48 B wire / 72 B capture,
  *     txq_sync72 same wire with a 72 B node length, the ordered ctx_create
- *     g0 id1 key-0x64 precondition, stub, edca, del_user),
+ *     g0 id1 key-0x64 precondition in its three create-helper type variants
+ *     t1/t2/t3, stub, edca, del_user),
  *     including the SR node word (total<<16)|0x6D2B and the packed producer
  *     arithmetic via h2d_plan_post();
  *   - the gate matrix (phase, latched boot, release, arm, lane, liveness,
@@ -93,20 +94,22 @@ static void expected_txq_sync(u8 out[48])
 }
 
 /* The synthesized context-create frame (g0 id1, key 0x0064, len 0x14,
- * type 3 / vap 4 / user 4, inherited 0xffffffff tail) - from
- * ../wifi-ctx-create/recipes/ctx-create-g0id1-key64.json. */
-static void expected_ctx_create(u8 out[48])
+ * vap 4 / user 4, inherited 0xffffffff tail) for create-helper type
+ * `type` (data[0]; 1/2/3 are the only allocating types) - from
+ * ../wifi-ctx-create/recipes/ctx-create-g0id1-key64.json plus the type-dispatch
+ * analysis in REPORT.md section 12. */
+static void expected_ctx_create(u8 out[48], u8 type)
 {
 	static const u8 hdr[12] = {
 		0x00, 0x01, 0x00, 0x04, 0x30, 0x00,
 		0x01, 0x00, 0x00, 0x00, 0x5a, 0x5a,
 	};
-	static const u8 payload[36] = {
+	u8 payload[36] = {
 		/* token[8] = {0,0,0,0,1,0,0,0} */
 		0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
 		/* u16 key 0x0064, u16 len 0x14 */
 		0x64, 0x00, 0x14, 0x00,
-		/* data[20]: type 3, vap 4, user 4 at +4 */
+		/* data[20]: type, vap 4, user 4 at +4 */
 		0x03, 0x04, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00,
@@ -114,6 +117,7 @@ static void expected_ctx_create(u8 out[48])
 		0xff, 0xff, 0xff, 0xff,
 	};
 
+	payload[12] = type;	/* payload+0xC = data[0] = frame byte 24 */
 	memcpy(out, hdr, sizeof(hdr));
 	memcpy(out + sizeof(hdr), payload, sizeof(payload));
 }
@@ -283,7 +287,7 @@ static void test_emission(void)
 				    sizeof(wire), &total, &err) == 0 &&
 		      err == H2D_OK, h2d_strerror(err));
 		check("ctx_create total = 0x30", total == H2D_CTX_TOTAL, "");
-		expected_ctx_create(want);
+		expected_ctx_create(want, 3);
 		expect_bytes("ctx_create 48-byte wire image == the ctx-create recipe",
 			     wire, total, want, 48);
 		check("ctx_create frame struct: group 0 id 1 dst 0 fb 4 fa 0 fc 0",
@@ -327,6 +331,77 @@ static void test_emission(void)
 		check("ctx_create builder module index > 0x12 refused",
 		      h2d_build_ctx_create(&f, 0, 3, 0x13, 4, &err) != 0 &&
 		      h2d_build_ctx_create(&f, 0, 3, 4, 0x13, &err) != 0, "");
+	}
+
+	/* --- ctx_create TYPE variants: only data[0] (wire[24]) differs ------ */
+	{
+		u8 wire_t1[H2D_MAX_TOTAL], wire_t2[H2D_MAX_TOTAL];
+		u32 total_t1 = 0, total_t2 = 0;
+		u32 node_len = 0;
+		u8 pad_byte = 0;
+
+		memset(&f, 0, sizeof(f));
+		memset(wire_t1, 0xaa, sizeof(wire_t1));
+		check("ctx_create_t1 builds",
+		      h2d_msg_build(H2D_MSG_CTX_CREATE_T1, 0, 0, NULL, &f,
+				    wire_t1, sizeof(wire_t1), &total_t1,
+				    &err) == 0 && err == H2D_OK,
+		      h2d_strerror(err));
+		check("ctx_create_t1 total = 0x30",
+		      total_t1 == H2D_CTX_TOTAL, "");
+		expected_ctx_create(want, 1);
+		expect_bytes("ctx_create_t1 48-byte wire image (data[0]=1)",
+			     wire_t1, total_t1, want, 48);
+		check("ctx_create_t1 frame struct identical (g0 id1 dst0 fb4)",
+		      f.group == 0 && f.id == 1 && f.dst == 0 && f.fb == 4 &&
+		      f.fa == 0 && f.fc == 0, "");
+		check("ctx_create_t1 wire[24] = 1 (type field)",
+		      wire_t1[24] == 1 && wire_t1[25] == 4 &&
+		      wire_t1[28] == 4, "");
+
+		memset(&f, 0, sizeof(f));
+		memset(wire_t2, 0xaa, sizeof(wire_t2));
+		check("ctx_create_t2 builds",
+		      h2d_msg_build(H2D_MSG_CTX_CREATE_T2, 0, 0, NULL, &f,
+				    wire_t2, sizeof(wire_t2), &total_t2,
+				    &err) == 0 && err == H2D_OK,
+		      h2d_strerror(err));
+		expected_ctx_create(want, 2);
+		expect_bytes("ctx_create_t2 48-byte wire image (data[0]=2)",
+			     wire_t2, total_t2, want, 48);
+		check("ctx_create_t2 wire[24] = 2 (type field)",
+		      wire_t2[24] == 2 && wire_t2[25] == 4 &&
+		      wire_t2[28] == 4, "");
+
+		/* the three variants are byte-identical except wire[24] */
+		check("ctx_create variants differ ONLY at data[0]",
+		      wire_t1[24] == 1 && wire_t2[24] == 2 && wire[24] == 3 &&
+		      total_t1 == total_t2 && total_t1 == total &&
+		      !memcmp(wire_t1, wire, 24) &&
+		      !memcmp(wire_t1 + 25, wire + 25, 23) &&
+		      !memcmp(wire_t2 + 25, wire + 25, 23), "");
+		check("ctx_create variants share the fb/type/user fields",
+		      wire_t1[3] == 4 && wire_t2[3] == 4 && wire_t1[28] == 4 &&
+		      wire_t2[28] == 4, "");
+		check("h2d_msg_is_ctx covers all three type variants",
+		      h2d_msg_is_ctx(H2D_MSG_CTX_CREATE) &&
+		      h2d_msg_is_ctx(H2D_MSG_CTX_CREATE_T1) &&
+		      h2d_msg_is_ctx(H2D_MSG_CTX_CREATE_T2) &&
+		      !h2d_msg_is_ctx(H2D_MSG_TXQ_SYNC) &&
+		      !h2d_msg_is_ctx(H2D_MSG_EDCA_OPT) &&
+		      !h2d_msg_is_ctx(H2D_MSG_STUB), "");
+		check("ctx_create_t1 dst != 0 refused (byte-exact only)",
+		      h2d_msg_build(H2D_MSG_CTX_CREATE_T1, 1, 0, NULL, &f,
+				    wire_t1, sizeof(wire_t1), &total_t1,
+				    &err) != 0 && err == H2D_EPOLICY,
+		      h2d_strerror(err));
+		check("ctx_create_t1/t2 node_len plan = 0x30, pad 0",
+		      h2d_msg_emit_plan(H2D_MSG_CTX_CREATE_T1, total_t1,
+					&node_len, &pad_byte) == 0 &&
+		      node_len == H2D_CTX_TOTAL && pad_byte == 0u &&
+		      h2d_msg_emit_plan(H2D_MSG_CTX_CREATE_T2, total_t2,
+					&node_len, &pad_byte) == 0 &&
+		      node_len == H2D_CTX_TOTAL && pad_byte == 0u, "");
 	}
 
 	/* --- stub: the payload-free group-0 id-0 probe -------------------- */
@@ -464,6 +539,10 @@ static void test_gates(void)
 	      h2d_gate_check(&good, H2D_MSG_STUB) == H2D_GATE_OK, "");
 	check("gate: READY + all preconditions -> ok (ctx_create)",
 	      h2d_gate_check(&good, H2D_MSG_CTX_CREATE) == H2D_GATE_OK, "");
+	check("gate: READY + all preconditions -> ok (ctx_create_t1)",
+	      h2d_gate_check(&good, H2D_MSG_CTX_CREATE_T1) == H2D_GATE_OK, "");
+	check("gate: READY + all preconditions -> ok (ctx_create_t2)",
+	      h2d_gate_check(&good, H2D_MSG_CTX_CREATE_T2) == H2D_GATE_OK, "");
 
 	/* The ORDERED path: ctx_create is also g0/id1, so the core phase is ACTIVE
 	 * after it.  The driver allows exactly one real TXQ frame in ACTIVE when
@@ -480,6 +559,11 @@ static void test_gates(void)
 		check("gate: create is once per load (DUP_CTX)",
 		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
 		      H2D_GATE_DUP_CTX, "");
+		check("gate: any ctx type variant is once per load (shared)",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE_T1) ==
+		      H2D_GATE_DUP_CTX &&
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE_T2) ==
+		      H2D_GATE_DUP_CTX, "");
 		l.txq_submitted = true;
 		check("gate: ordered path still allows only ONE txq frame",
 		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC72) ==
@@ -491,6 +575,8 @@ static void test_gates(void)
 		      H2D_GATE_TXQ_PHASE, "");
 		check("gate: ACTIVE without a create refuses ctx_create (CTX_PHASE)",
 		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_CTX_PHASE &&
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE_T1) ==
 		      H2D_GATE_CTX_PHASE, "");
 	}
 
@@ -680,6 +766,19 @@ static void test_parser(void)
 	check("parse name lookup ctx_create",
 	      h2d_msg_name_parse("ctx_create", &req.msg) == 0 &&
 	      req.msg == H2D_MSG_CTX_CREATE, "");
+	check("parse 'ctx_create_t1'",
+	      h2d_req_parse("ctx_create_t1", &req) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE_T1, "");
+	check("parse 'ctx_create_t2\n'",
+	      h2d_req_parse("ctx_create_t2\n", &req) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE_T2, "");
+	check("parse 'ctx_create_t1 dst=1' refused (byte-exact)",
+	      h2d_req_parse("ctx_create_t1 dst=1", &req) != 0, "");
+	check("parse name lookup ctx_create_t1/t2",
+	      h2d_msg_name_parse("ctx_create_t1", &req.msg) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE_T1 &&
+	      h2d_msg_name_parse("ctx_create_t2", &req.msg) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE_T2, "");
 	check("parse 'stub dst=15'", h2d_req_parse("stub dst=15", &req) == 0 &&
 	      req.msg == H2D_MSG_STUB && req.dst == 15, "");
 	check("parse 'stub dst=16' refused",
@@ -740,6 +839,18 @@ static void test_parser(void)
 			    sizeof(wire), &total, &err) == 0 &&
 	      total == H2D_CTX_TOTAL && wire[20] == 0x64 &&
 	      wire[24] == 3 && wire[28] == 4, h2d_strerror(err));
+	check("parse->build ctx_create_t1 (data[0]=1)",
+	      h2d_req_parse("ctx_create_t1", &req) == 0 &&
+	      h2d_msg_build(req.msg, req.dst, req.user_id, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0 &&
+	      total == H2D_CTX_TOTAL && wire[24] == 1,
+	      h2d_strerror(err));
+	check("parse->build ctx_create_t2 (data[0]=2)",
+	      h2d_req_parse("ctx_create_t2", &req) == 0 &&
+	      h2d_msg_build(req.msg, req.dst, req.user_id, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0 &&
+	      total == H2D_CTX_TOTAL && wire[24] == 2,
+	      h2d_strerror(err));
 	check("parse->build del_user user=1 addr=... -> builder refuses",
 	      h2d_req_parse("del_user user=1 addr=a1b2c3d4", &req) == 0 &&
 	      h2d_msg_build(req.msg, req.dst, req.user_id, req.addr, &f,

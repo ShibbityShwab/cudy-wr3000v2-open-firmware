@@ -41,11 +41,13 @@ declared total 0x30, 0xff inherited tail) through the same carrier and gate
 family, once-per-load and READY-only, so the ladder can be create -> read-only
 verification -> txq_sync72 without rmmod'ing after the release.  A strict
 `h2d_send` attribute exposes only the six **EXACT** frames the h2d-frames
-library can synthesize (txq_sync / txq_sync72 / ctx_create / stub / edca /
-del_user), never a synthetic payload.  Module `hi5622_wifi.ko`, **399,816 B**,
-sha256 `b11ffea6...`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, **0
-compiler/modpost warnings**; host logic selftest **202/202**, driver selftest
-**226/226** and firmware-handler analysis selftest **38/38** PASS.
+library can synthesize (txq_sync / txq_sync72 / ctx_create with its t1/t2/t3
+create-helper type variants / stub / edca / del_user), never a synthetic
+payload.  Module `hi5622_wifi.ko`, **400,732 B**, sha256 `774c4f1f...`,
+vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, **0 compiler/modpost
+warnings**; host logic selftest **242/242**, driver selftest **233/233**,
+firmware-handler analysis **38/38** and create-helper type analysis **26/26**
+PASS.
 
 ## 1. Deliverable tree
 
@@ -232,10 +234,10 @@ and still match the wifi-hcc-core lane hashes.
 
 | check | command | result |
 | --- | --- | --- |
-| host H2D logic selftest | `./tools/build.sh` (step 1) | **202/202 PASS** |
+| host H2D logic selftest | `./tools/build.sh` (step 1) | **242/242 PASS** |
 | kernel module build (project 6.18.60, -Werror) | `./tools/build.sh` (step 2) | PASS, **0 warnings**, 31 `T h2d_*` symbols |
-| module artifact | `modinfo`/`sha256sum` | 399,816 B, sha256 `b11ffea6d1cebb9f03a3a4d162dbc0c5cbd684bb6298bcf22d5e6d9ebb1d882f`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` |
-| driver selftest (extended, 133 -> 226) | `./tools/build.sh` (step 3) | **226/226 PASS** |
+| module artifact | `modinfo`/`sha256sum` | 400,732 B, sha256 `774c4f1f094d6b5565e0463d9186a21ddeea3c3485755e603a27392d1f0d4310`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` |
+| driver selftest (extended, 133 -> 233) | `./tools/build.sh` (step 3) | **233/233 PASS** |
 | firmware g0 id1 handler analysis | `python3 tools/fw_g0id1_handler.py --selftest` | **38/38 PASS** (separate host tool; needs the local pinned blob + capstone) |
 | h2d library provenance | driver selftest | h2d_frames.c/.h/.inc byte-identical to wifi-h2d-frames; hcc_core identical to wifi-hcc-core |
 | no mailbox/gate/out[5] write in the new path | driver selftest | PASS (one `hcc_core_sr_commit` call site, no direct mailbox writel) |
@@ -352,6 +354,13 @@ not exist), which is exactly what the ordered ladder fixes.
     /tmp/h2d_logic_selftest
     python3 tools/selftest.py
 
+    # optional, host-only analysis of the create helper's type dispatch
+    # (reads the pinned local vendor blob in place; see REPORT sec 12):
+    PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
+    $PY tools/ctx_type_dispatch.py --selftest   # 26/26
+    $PY tools/ctx_type_dispatch.py --types      # the data[0] truth table
+    $PY tools/ctx_type_dispatch.py --dispatch   # annotated listings
+
 ## 10. Handover / next steps
 
 1. **Attended PD4 golden-boot session with the ordered ladder
@@ -437,11 +446,12 @@ retry, one `hcc_core_sr_commit` call site (selftest-enforced).
 
 | check | result |
 | --- | --- |
-| `./tools/build.sh` host logic selftest | **202/202 PASS** |
+| `./tools/build.sh` host logic selftest | **242/242 PASS** |
 | kernel module build (project 6.18.60, -Werror, modpost) | PASS, **0 warnings** |
-| module artifact | **399,816 B**, sha256 `b11ffea6d1cebb9f03a3a4d162dbc0c5cbd684bb6298bcf22d5e6d9ebb1d882f`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, `T h2d_*` = 31 (incl. `h2d_build_ctx_create`) |
-| driver selftest | **226/226 PASS** |
+| module artifact | **400,732 B**, sha256 `774c4f1f094d6b5565e0463d9186a21ddeea3c3485755e603a27392d1f0d4310`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, `T h2d_*` = 32 (incl. `h2d_build_ctx_create`, `h2d_msg_is_ctx`) |
+| driver selftest | **233/233 PASS** |
 | firmware g0 id1 handler analysis (separate tool) | 38/38 PASS (unchanged) |
+| create-helper type-dispatch analysis (separate tool) | **26/26 PASS** |
 
 ### 11.5 Bench ladder (summary; full text in BENCH-PROCEDURE.md)
 
@@ -471,3 +481,111 @@ no rmmod after the release; one idea per fire; no retry.
   procedure.
 * O4: after a clean ordered pair, no D2H response is expected from the TXQ
   sync; consumed+silent is a positive transport result.
+## 12. task-102 follow-up: the first ordered lap + the create helper's type dispatch
+
+### 12.1 Bench result of the first ordered lap (module `b11ffea6`, PD4 golden boot, `h2d_send_budget=2`)
+
+| step | result |
+| --- | --- |
+| PACK BEFORE | ctx190=0, table entry 4 = 0x0011C458, ctx0=0, mask=0, staging=0, refcnt=0 |
+| FIRE 1 `h2d_ctx_create` (data[0]=type 3) | rc=0, announce CONSUMED in 0 polls, `ok=1 max_polls=0`, `ctx_sent=1 ctx_created=1` |
+| PACK AFTER | **ctx0=0x00000004** (the helper wrote `ctx[0]=data[4]`), **ctx190=0**, no create-buffer signatures, refcnt=0 |
+| FIRE 2 `h2d_txq_sync72` | rc=0, consumed in 0 polls (`ok=2`), **but mask=0x12 again**, staging word 0 = 0x00119448 -> the key-0xd8 worker still dereferenced `ctx+0x190 == 0` |
+
+So the create frame reached the firmware, the key-0x64 worker ran and the
+helper wrote its early fields, but the per-context buffer was not left
+allocated.  **Refcount correction:** the worker bumps the byte at
+`G+0x6C8+id` at entry (CA 0xBC726, `[base+0x6E8+id]` with base = G-0x20) and
+drops it at exit (CA 0x943CC), on both the success and the failure return
+paths - the net after a fire is **0**, so the older "refcount = 1 after
+create" expectation was wrong (a raw 0 does not indicate that the worker
+skipped the bump).
+
+### 12.2 The type dispatch (re-derived from the pinned blob, [V])
+
+`tools/ctx_type_dispatch.py --types` (26/26 assertions; reads the local pinned
+blob in place, no vendor byte in the repo):
+
+| data[0] | dispatch (encoded in the helper) | shared 0x3a8 alloc | result |
+| ---: | --- | --- | --- |
+| 1 | CA 0xFE7B0 test: `(1<<t)&0x58 == 0`, `(1<<t)&0x06 != 0` -> CA 0xFE804 | **yes** (after the defaults block) | defaults block (`ctx+0x3E2/+0xF8=0xFFF`, `+0xD1=0x1E`, `+0x18C..0x18E` bits, list inits at `+0x24C`/`+0x3F4`) then alloc; extra type-1 path after the fill |
+| 2 | same CA 0xFE804 block (type-2 variant bit) | **yes** | keeps the buffer; returns 0 via CA 0xFF940 |
+| 3 | `(1<<t)&0x58 != 0` -> CA 0xFE7CA directly | **yes** | keeps the buffer; returns 0 via CA 0xFF940 |
+| 0 | CA 0xFE7C4 (`ctx+0x187=0x2B`) then CA 0xFE7CA | no (alloc dispatch rejects `t-1 > 2`) | CA 0xFF940 no-alloc tail (sets `ctx+0x187=0x2B`, returns 0) |
+| 4, 6 | CA 0xFE7CA | no (rejects `t-1 > 2`) | CA 0xFF940 no-alloc tail |
+| 5 | CA 0xFE892 | no | log + return 0x3e8, no buffer |
+| >6 | CA 0xFE892 | no | log + return 0x3e8, no buffer |
+| 7 | CA 0xFEA98 special path -> CA 0xFF94C | - | transport-class special case, not used |
+
+The shared allocation is `CA 0xBF128(0x96, 0x327, pool 1, 0x3A8)`; its return
+is stored at `ctx+0x190` (CA 0xFE7E4) and then filled by the shared success
+path (CA 0xFE8BC): buffer `+0x10=0x64`, `+0x14=3`, `+0x238/+0x23C=0x92A`,
+`+0x52=1`, `+0x49..+0x4C=1`, `+0x46=0x80`, etc.  The fill is identical for
+types 1/2/3.  `ctx[0]=data[4]`, `ctx[4]=data[0]`, `ctx[5]=data[0x11]`,
+`ctx[7]=data[0x12]` are written before the dispatch.
+
+**Key finding: data[0] is NOT the allocation switch.**  Types 1, 2 and 3 all
+reach the same allocator call; the older reading ("type 3 = straight to alloc"
+vs "1/2 = defaults") is correct only about the defaults block, not about
+allocation.  Types 1/2/3 therefore expect the same PACK signature after a
+successful create; types 0/4/5/6 never allocate.
+
+### 12.3 What the type-1 variant adds (and the one way it can still end with ctx190=0)
+
+Type 1 only (`CA 0xFF832`), gated on `data[5] == 0` and `ctx[4] == 1`:
+a second allocation `CA 0xBF128(0x96, 0x859, pool 0, 0xC)` stored at
+`ctx+0x434` (its failure only logs, it continues), then `ctx+0xF = 0xA`,
+then `bl 0xD4048`; if that returns 0 -> `bl 0xD41AC` -> CA 0xFF940 (return 0,
+buffer kept), otherwise `bl 0xFDB58` -> **return 0x3E8** (CA 0xFE8A6) and the
+worker's error path frees the buffer and clears `ctx+0x190`.  So for a type-1
+fire:
+
+* `ctx+0x190 != 0` -> allocated and kept (pass the precondition);
+* `ctx+0x190 == 0` **with** `ctx+0x434 != 0` -> allocation worked, the
+  type-1 post-fill failed (0x3e8) and freed it - a different (deeper) finding;
+* `ctx+0x190 == 0` with `ctx+0x434 == 0` and `ctx+0x187 == 0` -> the shared
+  allocator returned 0 (helper 0x67 path) or the worker never reached the fill.
+
+### 12.4 Why the type-3 lap most likely failed at the allocator
+
+The dispatch table shows type 3 must call the same allocator as types 1/2.
+The bench saw `ctx[0]=4` (helper got past its early field writes at
+CA 0xFE6DA..0xFE6EE) and then no `ctx+0x190`.  The only paths that fit are:
+(a) the allocator returned 0 -> CA 0xFE800 returns 0x67, worker clears
+`ctx+0x190` (already 0); or (b) a type-1 0x3e8 path, impossible for type 3.
+So **allocator failure is the leading explanation**, and the type selector
+is a diagnostic, not the likely fix.  The allocator is the firmware's memory
+pool manager: base literal `0x00172134` (CA 0xBF240), pool descriptor
+`base + 0x188*pool`; its first checks are
+`u16 descriptor[0] >= size+8` and `descriptor[2] != 0`.  The pool manager is
+initialised by the boot-init code at CA 0x47696 (which clears and fills the
+descriptors with `memset(descriptor+4, 0, 0x180)` - see
+`tools/ctx_type_dispatch.py --dispatch`).  The next session's PACK therefore
+includes CPU 0x1722BC (BAR0 0x8212BC, pool 1) and CPU 0x172134 (pool 0), plus
+`ctx+0x187` (no-alloc marker) and `ctx+0x434` (type-1 second allocation) -
+all read-only.
+
+### 12.5 Surface changes in this follow-up
+
+`h2d_ctx_create` now takes the **write value 1|2|3 = data[0] type** (any other
+value is refused); the grammar gained `ctx_create_t1` / `ctx_create_t2`
+(`ctx_create` keeps type 3).  All three selectors emit the same 48-byte frame
+(wire byte 24 = data[0] = 1/2/3), share the same gates (READY-only,
+once-per-load, latched/released/armed/lane/budget/inflight/out0), and count
+into the same `ctx_sent`/budget telemetry.  `h2d_status` shows
+`ctx_create(t1/t2/t3)=...`, `h2d_plan` shows the type-variant line, and the
+dmesg line names the exact variant fired.  No carrier/gate behavior changed;
+`h2d_frames.*` and `hcc_core.*` remain untouched.
+
+### 12.6 Next bench action (one idea)
+
+Golden PD4 boot -> load **400,732 B** module with `h2d_send_budget=2` ->
+extended read-only PACK (previous rows + pool descriptors 0x8212BC/0x821134 +
+`ctx+0x187`/`ctx+0x434`) -> `cat h2d_plan h2d_status` (expect
+`ctx_create(t1/t2/t3)=ok/ok/ok`) -> **ONE `h2d_ctx_create` with write value 1**
+(`printf 1 > h2d_ctx_create`) -> re-read the PACK -> interpret per section
+12.3: `ctx+0x190 != 0` -> continue with ONE `h2d_txq_sync72`; `ctx+0x190 == 0`
+-> STOP (do not fire the TXQ, do not try another type blindly) and report the
+PACK, especially the pool-1 descriptor and `ctx+0x434`.  One boot, one idea,
+no retry; refcount reads are a net-zero diagnostic only.
+

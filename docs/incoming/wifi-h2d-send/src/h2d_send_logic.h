@@ -48,7 +48,9 @@ enum h2d_msg {
 	H2D_MSG_TXQ_SYNC72,	/* g0 id1, same frame, 72-byte live node buffer */
 	H2D_MSG_EDCA_OPT,	/* g0 id0x1d, exact 0x3c-byte zero payload */
 	H2D_MSG_DEL_USER,	/* g0 id9, exact 12-byte payload */
-	H2D_MSG_CTX_CREATE,	/* g0 id1 key0x64, the ordered txq_sync precondition */
+	H2D_MSG_CTX_CREATE,	/* g0 id1 key0x64, data[0]=type 3 (the default) */
+	H2D_MSG_CTX_CREATE_T1,	/* same frame, data[0]=type 1 (defaults+2nd alloc) */
+	H2D_MSG_CTX_CREATE_T2,	/* same frame, data[0]=type 2 (defaults) */
 	H2D_MSG_COUNT,
 };
 
@@ -129,6 +131,9 @@ const char *h2d_gate_name(enum h2d_gate gate);
 const char *h2d_msg_name(enum h2d_msg msg);
 int h2d_msg_name_parse(const char *name, enum h2d_msg *msg);
 
+/* True for every context-create variant (they share the once-per-load rule). */
+bool h2d_msg_is_ctx(enum h2d_msg msg);
+
 /* Post-buffer length for one emission.  Default rule: node_len == frame_total
  * (the declared header total); only H2D_MSG_TXQ_SYNC72 overrides it to the
  * vendor's captured 72-byte live buffer (requires frame_total == H2D_TXQ_TOTAL).
@@ -153,11 +158,14 @@ int h2d_build_ctx_create(struct h2d_frame *f, u8 dst, u8 ctx_type, u8 vap,
 			 u8 user, enum h2d_err *err);
 
 /* Strict sysfs grammar:
- *   h2d_send: "txq_sync" | "txq_sync72" | "ctx_create" | "stub [dst=N]" |
- *             "edca [dst=N]" | "del_user user=U [addr=8hex] [dst=N]"
+ *   h2d_send: "txq_sync" | "txq_sync72" | "ctx_create" | "ctx_create_t1" |
+ *             "ctx_create_t2" | "stub [dst=N]" | "edca [dst=N]" |
+ *             "del_user user=U [addr=8hex] [dst=N]"
  * Commas/tabs/newlines are separators; "txq_sync dst=0" is the only accepted
  * TXQ form (the canned frame is byte-exact with dst 0) and "ctx_create dst=0"
- * the only accepted context-create form.
+ * the only accepted context-create form.  The three ctx_create variants are
+ * the same 48-byte frame with data[0] = 3 / 1 / 2 (the create helper's type
+ * dispatch; see REPORT.md section 12).
  * Returns 0, -EINVAL (grammar) or -ERANGE (field overflow). */
 int h2d_req_parse(const char *buf, struct h2d_req *req);
 

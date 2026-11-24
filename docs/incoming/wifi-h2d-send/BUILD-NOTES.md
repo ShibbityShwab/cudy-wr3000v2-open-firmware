@@ -13,18 +13,18 @@ binary/object/firmware byte is involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **399,816 B** |
-| sha256 | **b11ffea6d1cebb9f03a3a4d162dbc0c5cbd684bb6298bcf22d5e6d9ebb1d882f** |
+| size | **400,732 B** |
+| sha256 | **774c4f1f094d6b5565e0463d9186a21ddeea3c3485755e603a27392d1f0d4310** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
 | depends | (none - one self-contained module) |
 | objects | main.o transport.o ete.o d2h.o hcc.o service.o hcc_core.o hcc_core_kernel.o h2d_frames.o h2d_send_logic.o h2d_send.o |
 | compiler/modpost warnings | **0** (project tree builds with -Werror) |
-| exported `T h2d_*` symbols | 31 (h2d_frames builders/validators + h2d_send_logic gate/build/parse/emit-plan incl. `h2d_build_ctx_create`) |
+| exported `T h2d_*` symbols | 32 (h2d_frames builders/validators + h2d_send_logic gate/build/parse/emit-plan incl. `h2d_build_ctx_create` and `h2d_msg_is_ctx`) |
 | PCI alias | pci:v000059E7d00000005sv*sd*bc*sc*i* |
-| host H2D logic selftest | **202/202 PASS** |
-| driver selftest (extended) | **226/226 PASS** |
+| host H2D logic selftest | **242/242 PASS** |
+| driver selftest (extended) | **233/233 PASS** |
 | firmware g0 id1 handler analysis selftest | **38/38 PASS** (reads the local pinned vendor blob; not part of the kernel build) |
 
 Module params: `h2d_send_budget` (uint, default 1), `fw_path`, `wifi_block_path`,
@@ -42,9 +42,10 @@ same behaviour/flags; record the hash printed by the build you deploy.
   padded to the vendor's live 72 bytes (24 x 0xff after the frame) and node
   word1 `(72<<16)|0x6d2b`; declared header total stays 0x30.  Same gates
   (READY_TXQ_SYNC/ACTIVE, latched boot, one-frame budget, once-only TXQ).
-* The built module hash above is the task-102 build; the task-99 build was
-  394,272 B sha256 `4677ceac...` and the task-98 build 391,456 B sha256
-  `047be179...`.
+* The built module hash above is the task-102 **type-selectable** build;
+  the first ordered-lap build (type 3 only, fired on the bench) was 399,816 B
+  sha256 `b11ffea6...`; the task-99 build was 394,272 B sha256 `4677ceac...`
+  and the task-98 build 391,456 B sha256 `047be179...`.
 * `tools/fw_g0id1_handler.py` + `REPORT-G0ID1-HANDLER.md`: static analysis of
   the firmware group-0 id-1 receive handler (parse offsets, key tables, the
   key-0xd8 worker, the fault candidates and the dispatcher path).  The tool is
@@ -71,9 +72,24 @@ same behaviour/flags; record the hash printed by the build you deploy.
   at insmod).  A reboot loses the created context, and a second module load
   would require `rmmod` after the release (forbidden).  See
   BENCH-PROCEDURE.md Ladder C.
-* Selftests: host 202/202 (byte-exact ctx vector, builder refusals, ordered
-  gate matrix, grammar, parse->build) and driver 226/226 (+22 ctx_create
-  source/contract checks).  Build still 0 compiler/modpost warnings.
+* Bench result of the first ordered lap (type 3): create consumed,
+  `ctx[0]=4` written, **ctx+0x190 stayed 0** -> the TXQ sync faulted again.
+* **Follow-up (bench result + type analysis):** `data[0]` is NOT the
+  allocation switch - types 1/2/3 all call the same
+  `0xBF128(0x96,0x327,1,0x3A8)` allocator and share the fill; type 1 adds a
+  second `0xc` allocation to `ctx+0x434` and a post-fill 0x3e8 path that can
+  free the buffer.  The observed `ctx[0]=4 + ctx190=0` therefore points at
+  the allocator returning 0, not at a type-3 branch.  The driver now exposes
+  the type variants (`h2d_ctx_create` write value 1|2|3;
+  `ctx_create_t1`/`ctx_create_t2` grammar) so the next attended lap can fire
+  type 1 with the extended PACK diagnostics (pool descriptors, `ctx+0x187`,
+  `ctx+0x434`).  The refcount expectation is corrected to **net 0** (the
+  worker bumps then drops it).  New tool `tools/ctx_type_dispatch.py`
+  (26/26) re-derives the dispatch from the pinned blob.
+* Selftests: host 242/242 (byte-exact ctx t1/t2/t3 vectors, builder
+  refusals, ordered gate matrix, grammar, parse->build) and driver 233/233
+  (+29 ctx_create source/contract checks).  Build still 0 compiler/modpost
+  warnings.
 
 ## Build line
 
@@ -96,11 +112,12 @@ goes to `/tmp/wifi-h2d-send-build/h2d_logic_selftest` (local build products).
 | step | command / file | result |
 | --- | --- | --- |
 | host compile of the H2D logic | `cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` on h2d_logic_selftest.c + h2d_send_logic.c + h2d_frames.c + hcc_core.c | PASS (57,256 B binary) |
-| host emission/gating selftest | `/tmp/wifi-h2d-send-build/h2d_logic_selftest` | **202/202 PASS** |
+| host emission/gating selftest | `/tmp/wifi-h2d-send-build/h2d_logic_selftest` | **242/242 PASS** |
 | kernel module build | project 6.18.60 tree, `-Werror`, modpost | PASS, 0 warnings/errors |
 | artifact evidence | `modinfo` / `sha256sum` / `nm` | see table above; `h2d_send_budget` present in modinfo |
-| driver selftest | `python3 tools/selftest.py` | **226/226 PASS** (133 inherited + 93 H2D checks) |
+| driver selftest | `python3 tools/selftest.py` | **233/233 PASS** (133 inherited + 100 H2D checks) |
 | firmware handler analysis | `.provision-venv/bin/python tools/fw_g0id1_handler.py --selftest` | **38/38 PASS** |
+| create-helper type-dispatch analysis | `.provision-venv/bin/python tools/ctx_type_dispatch.py --selftest` | **26/26 PASS** (needs the pinned local blob) |
 
 The driver selftest additions check: the H2D source/Kbuild layout, main.c
 wiring, the h2d_frames library byte-identical provenance, the six EXACT

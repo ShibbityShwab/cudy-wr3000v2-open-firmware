@@ -452,7 +452,32 @@ def main():
           "DEVICE_ATTR_WO(h2d_ctx_create)" in send_c and
           "&dev_attr_h2d_ctx_create.attr" in send_c)
     check("H2D ctx-create dst != 0 refused (byte-exact)",
-          "msg == H2D_MSG_CTX_CREATE) && req->dst != 0u" in logic_c)
+          "h2d_msg_is_ctx(msg)) && req->dst != 0u" in logic_c)
+    check("H2D ctx-create type variants declared",
+          "H2D_MSG_CTX_CREATE_T1" in logic_h and
+          "H2D_MSG_CTX_CREATE_T2" in logic_h and
+          "h2d_msg_is_ctx" in logic_h)
+    check("H2D ctx-create variants map to data[0] type 1/2/3",
+          "case H2D_MSG_CTX_CREATE_T1:" in logic_c and
+          "case H2D_MSG_CTX_CREATE_T2:" in logic_c and
+          "ctx_type = 1u" in logic_c and "ctx_type = 2u" in logic_c and
+          "u8 ctx_type = H2D_CTX_TYPE" in logic_c)
+    check("H2D ctx-create variant grammar tokens",
+          '{ "ctx_create_t1"' in logic_c and
+          '{ "ctx_create_t2"' in logic_c)
+    check("H2D ctx-create variants share the once-per-load gate",
+          "h2d_msg_is_ctx(msg)" in logic_c and
+          "live->ctx_created" in logic_c)
+    check("H2D ctx_create attr write VALUE selects the type",
+          "H2D_MSG_CTX_CREATE_T1" in send_c and
+          "H2D_MSG_CTX_CREATE_T2" in send_c and
+          'sysfs_streq(buf, "1")' in send_c and
+          'sysfs_streq(buf, "3")' in send_c)
+    check("H2D ctx-create telemetry covers all type variants",
+          "h2d_msg_is_ctx(msg)" in send_c)
+    check("H2D status/plan expose the three ctx type gates",
+          "ctx_create(t1/t2/t3)=%s/%s/%s" in send_c and
+          "ctx_create variants:" in send_c)
     check("H2D ctx-create telemetry counter",
           "h2d_ctx_create_sent" in send_c and
           "h2d_ctx_create_sent" in read("hi5622_hcc.h"))
@@ -461,11 +486,12 @@ def main():
     check("H2D plan shows the ctx_create message",
           "msg=ctx_create wire_total=" in send_c and
           "msg=ctx_create node_len=" in send_c)
-    check("H2D status exposes the ctx_create gate",
-          "ctx_create=%s" in send_c and "ctx_sent=%u" in send_c)
+    check("H2D status exposes the ctx_create gates",
+          "ctx_create(t1/t2/t3)=%s/%s/%s" in send_c and
+          "ctx_sent=%u" in send_c)
     check("H2D ctx-create reuses the same post path (single commit site)",
           send_c.count("hcc_core_sr_commit(") == 1 and
-          "h2d_post(ctx, H2D_MSG_CTX_CREATE" in send_c)
+          "ret = h2d_post(ctx, msg, 0u, 0u, NULL);" in send_c)
 
     # -- 12b. version parity with the reference driver tree -----------------
     ref = os.path.normpath(os.path.join(CLEAN, "..", "wifi-driver-clean",

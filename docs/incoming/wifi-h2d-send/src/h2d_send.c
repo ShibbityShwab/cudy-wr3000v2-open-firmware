@@ -20,9 +20,11 @@
  *     synthesized group-0 id-1 config event with u16 key 0x0064 that makes the
  *     firmware allocate the per-module context (ctx+0x190) the key-0xd8 TXQ
  *     worker dereferences (../wifi-ctx-create/REPORT.md; payload synthesized
- *     from the firmware parser, not a vendor capture).  Same carrier/gates as
- *     txq_sync72, one frame per idea; the ordered ladder is create -> (read-only
- *     verification) -> txq_sync72, which needs h2d_send_budget=2 on the load;
+ *     from the firmware parser, not a vendor capture).  The write VALUE 1|2|3
+ *     selects the create helper's data[0] type (ctx_create_t1/t2/t3 grammar
+ *     aliases); all three share the same carrier/gates/one-frame rule.  The
+ *     ordered ladder is create -> (read-only verification) -> txq_sync72, which
+ *     needs h2d_send_budget=2 on the load;
  *   - h2d_send: the strict, name-based grammar for the six EXACT frames the
  *     library can synthesize (txq_sync / txq_sync72 / ctx_create / stub /
  *     edca / del_user).  It never accepts a synthetic payload - the firmware
@@ -314,7 +316,7 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 	h->h2d_frames_sent++;
 	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
 		h->h2d_txq_sync_sent++;
-	else if (msg == H2D_MSG_CTX_CREATE)
+	else if (h2d_msg_is_ctx(msg))
 		h->h2d_ctx_create_sent++;
 	h->h2d_last_msg = (u32)msg;
 	h->h2d_last_gate = (u32)H2D_GATE_OK;
@@ -399,19 +401,32 @@ static DEVICE_ATTR_WO(h2d_txq_sync72);
  * config event with u16 key 0x0064 (hdpp_config_send_event shape).  It makes
  * the firmware allocate module 4's context (ctx+0x190); the key-0xd8 TXQ
  * worker dereferences that pointer, so a solo TXQ sync faults (PD4).
+ * Write value = the create helper's data[0] TYPE: "1" (defaults block + the
+ * extra 0xc-byte second allocation), "2" (defaults block), "3" (straight to
+ * the shared 0x3a8 allocation).  The three selectors are otherwise identical
+ * (same 48-byte frame, only wire byte 24 differs) and share the once-per-load
+ * rule.  Type 1's post-allocation path can return 0x3e8 and make the worker
+ * free the buffer, so its PACK interpretation differs (REPORT.md sec 12).
  * Same carrier + gates as txq_sync72; not the once-only TXQ idea. */
 static ssize_t h2d_ctx_create_store(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
 	struct hi5622_pci *ctx = h2d_ctx(dev);
+	enum h2d_msg msg;
 	int ret;
 
 	if (!ctx || !ctx->hcc)
 		return -ENODEV;
-	if (!sysfs_streq(buf, "1"))
+	if (sysfs_streq(buf, "1"))
+		msg = H2D_MSG_CTX_CREATE_T1;
+	else if (sysfs_streq(buf, "2"))
+		msg = H2D_MSG_CTX_CREATE_T2;
+	else if (sysfs_streq(buf, "3"))
+		msg = H2D_MSG_CTX_CREATE;
+	else
 		return -EINVAL;
-	ret = h2d_post(ctx, H2D_MSG_CTX_CREATE, 0u, 0u, NULL);
+	ret = h2d_post(ctx, msg, 0u, 0u, NULL);
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_ctx_create);
@@ -467,9 +482,11 @@ static ssize_t h2d_status_show(struct device *dev,
 			 live.lane_closed ? 1u : 0u,
 			 live.liveness_sent, live.ctx_created ? 1u : 0u);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "gates: txq_sync=%s txq_sync72=%s ctx_create=%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
+			 "gates: txq_sync=%s txq_sync72=%s ctx_create(t1/t2/t3)=%s/%s/%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC72)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T1)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T2)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_EDCA_OPT)),
 			 live.out0, live.mbox_inflight);
@@ -572,10 +589,14 @@ static ssize_t h2d_plan_show(struct device *dev, struct device_attribute *attr,
 					 "msg=ctx_create node_len=%u node_word1=0x%08x pad=0x%02x (ordered before the TXQ sync; one frame per idea)\n",
 					 nlen,
 					 (nlen << 16) | H2D_NODE_FLAGS, padb);
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+				 "ctx_create variants: ctx_create_t1/t2 = the same 48-byte frame with data[0] (wire[24]) = 1 / 2; h2d_ctx_create write VALUE selects the type (1|2|3)\n");
 	}
 	h2d_live_fill(ctx, &live);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "gate ctx_create=%s (READY-only, once per load; create -> read-only pack -> txq_sync72 needs h2d_send_budget=2 on the load)\n",
+			 "gate ctx_create(t1/t2/t3)=%s/%s/%s (READY-only, once per load; create -> read-only pack -> txq_sync72 needs h2d_send_budget=2 on the load)\n",
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T1)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T2)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)));
 	gate = h2d_gate_check(&live, H2D_MSG_TXQ_SYNC);
 	if (gate != H2D_GATE_OK) {

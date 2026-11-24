@@ -99,6 +99,8 @@ const char *h2d_msg_name(enum h2d_msg msg)
 	case H2D_MSG_EDCA_OPT:	return "edca";
 	case H2D_MSG_DEL_USER:	return "del_user";
 	case H2D_MSG_CTX_CREATE:	return "ctx_create";
+	case H2D_MSG_CTX_CREATE_T1:	return "ctx_create_t1";
+	case H2D_MSG_CTX_CREATE_T2:	return "ctx_create_t2";
 	default:		return "?";
 	}
 }
@@ -126,6 +128,12 @@ const char *h2d_gate_name(enum h2d_gate gate)
 	}
 }
 
+bool h2d_msg_is_ctx(enum h2d_msg msg)
+{
+	return msg == H2D_MSG_CTX_CREATE || msg == H2D_MSG_CTX_CREATE_T1 ||
+	       msg == H2D_MSG_CTX_CREATE_T2;
+}
+
 int h2d_msg_name_parse(const char *name, enum h2d_msg *msg)
 {
 	static const struct {
@@ -135,6 +143,8 @@ int h2d_msg_name_parse(const char *name, enum h2d_msg *msg)
 		{ "txq_sync",	H2D_MSG_TXQ_SYNC },
 		{ "txq_sync72",	H2D_MSG_TXQ_SYNC72 },
 		{ "ctx_create",	H2D_MSG_CTX_CREATE },
+		{ "ctx_create_t1",	H2D_MSG_CTX_CREATE_T1 },
+		{ "ctx_create_t2",	H2D_MSG_CTX_CREATE_T2 },
 		{ "stub",	H2D_MSG_STUB },
 		{ "edca",	H2D_MSG_EDCA_OPT },
 		{ "del_user",	H2D_MSG_DEL_USER },
@@ -185,9 +195,10 @@ enum h2d_gate h2d_gate_check(const struct h2d_live *live, enum h2d_msg msg)
 	/* Core phase must be READY_TXQ_SYNC or later (FAILED is not "later"). */
 	if (!h2d_phase_ok(live->phase))
 		return H2D_GATE_PHASE;
-	if (msg == H2D_MSG_CTX_CREATE) {
+	if (h2d_msg_is_ctx(msg)) {
 		/* The context-create must precede the TXQ sync and allocates the
-		 * single ctx+0x190 buffer, so it is READY-only and once per load. */
+		 * single ctx+0x190 buffer, so it is READY-only and once per load.
+		 * All three data[0] type variants share this one-shot rule. */
 		if (live->ctx_created)
 			return H2D_GATE_DUP_CTX;
 		if (live->phase != HCC_PHASE_READY_TXQ_SYNC)
@@ -302,16 +313,28 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 						    h2d_txq_tail, &e);
 		break;
 	case H2D_MSG_CTX_CREATE:
+	case H2D_MSG_CTX_CREATE_T1:
+	case H2D_MSG_CTX_CREATE_T2: {
 		/* Synthesized config event: only the canned dst-0 instance is
-		 * allowed (the header fields are part of the derived frame). */
+		 * allowed (the header fields are part of the derived frame).  The
+		 * three variants differ ONLY in data[0] (wire byte 24): the create
+		 * helper's type dispatch (1 = defaults + second 0xc alloc, 2 =
+		 * defaults, 3 = straight to the shared 0x3a8 alloc). */
+		u8 ctx_type = H2D_CTX_TYPE;
+
 		if (dst != 0u) {
 			if (err)
 				*err = H2D_EPOLICY;
 			return -1;
 		}
-		rc = h2d_build_ctx_create(f, 0u, H2D_CTX_TYPE, H2D_CTX_VAP,
+		if (msg == H2D_MSG_CTX_CREATE_T1)
+			ctx_type = 1u;
+		else if (msg == H2D_MSG_CTX_CREATE_T2)
+			ctx_type = 2u;
+		rc = h2d_build_ctx_create(f, 0u, ctx_type, H2D_CTX_VAP,
 					  H2D_CTX_USER, &e);
 		break;
+	}
 	case H2D_MSG_EDCA_OPT:
 		rc = h2d_build_g0_id1d_edca_opt(f, dst, H2D_EDCA_FA,
 						H2D_EDCA_FB, H2D_EDCA_FC, &e);
@@ -524,7 +547,7 @@ int h2d_req_parse(const char *buf, struct h2d_req *req)
 	if (msg == H2D_MSG_DEL_USER && !req->has_user)
 		return -EINVAL;
 	if ((msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72 ||
-	     msg == H2D_MSG_CTX_CREATE) && req->dst != 0u)
+	     h2d_msg_is_ctx(msg)) && req->dst != 0u)
 		return -EINVAL;
 	return 0;
 }
