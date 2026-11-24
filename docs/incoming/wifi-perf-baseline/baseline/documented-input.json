@@ -1,0 +1,146 @@
+{
+ "schema": "hi5622-perf-documented/1",
+ "about": "Prior-lane hardware-validated numbers that the recorded evidence in this checkout cannot re-derive directly. They are merged into the baseline with grade V (documented) and are NOT presented as raw measurements of this lane. Every entry names its source.",
+ "entries": [
+  {
+   "id": "ap.hostapd_launch_to_ap_enabled_ms",
+   "title": "hostapd launch -> 'wlan0: AP-ENABLED' (open config, 2.4 GHz ch6)",
+   "unit": "ms",
+   "value": 2000,
+   "grade": "V",
+   "method": "documented: lead lane brief 2026-11-27 ('hostapd startup ~2 s'); the live perf_probe/watch mode measures it exactly",
+   "source": "lead lane brief 2026-11-27 (project STATE); wifi-ap-start/HOSTAPD-BRINGUP.md sec 12",
+   "detail": "approximate (~2 s); not re-measured in this lane"
+  },
+  {
+   "id": "ap.hostapd_processes",
+   "title": "hostapd processes alive after AP-ENABLED",
+   "unit": "processes",
+   "value": 4,
+   "grade": "V",
+   "method": "documented: wifi-ap-start/REPORT.md (persistent AP check)",
+   "source": "wifi-ap-start/REPORT.md sec 11-12; ledger 2026-11-27 04:30/06:30",
+   "detail": "5 processes reported at the persistence check (2026-11-27 09:00); 4 at the fire"
+  },
+  {
+   "id": "scan.reported_13ch_channels_covered",
+   "title": "13-channel scan: channels covered before the host window expired (prior fire)",
+   "unit": "channels",
+   "value": 4,
+   "grade": "V",
+   "method": "documented: prior-lane fire report; the raw UART record in this checkout has a 6/13 fire at the same 14.7 s window (variance recorded)",
+   "source": "ledger 2026-11-26 16:30; wifi-scan-complete/REPORT.md",
+   "detail": "12 BSS parsed, 4/13 channels in the 14,700 ms window (~3.5 s/channel effective)"
+  },
+  {
+   "id": "scan.reported_13ch_bss",
+   "title": "13-channel scan: BSS entries decoded in the prior fire",
+   "unit": "BSS",
+   "value": 12,
+   "grade": "V",
+   "method": "documented: prior-lane fire report",
+   "source": "ledger 2026-11-26 16:30; wifi-re-report/REPORT.md sec 6.9",
+   "detail": "first full BSS decode on the clean-room stack"
+  },
+  {
+   "id": "scan.window_formula_base_ms",
+   "title": "auto scan window formula: base",
+   "unit": "ms",
+   "value": 3000,
+   "grade": "V",
+   "method": "documented: source constant in wifi-scan-complete/hi5622_scan_logic.c (scan_timeout_ms=0 -> auto)",
+   "source": "opensource/docs/incoming/wifi-scan-complete/REPORT.md sec (auto window)",
+   "detail": "auto window = clamp(3000 + n_channels*900, 1000, 45000) ms"
+  },
+  {
+   "id": "scan.window_formula_per_channel_ms",
+   "title": "auto scan window formula: per-channel term",
+   "unit": "ms/ch",
+   "value": 900,
+   "grade": "V",
+   "method": "documented: source constant in wifi-scan-complete/hi5622_scan_logic.c",
+   "source": "opensource/docs/incoming/wifi-scan-complete/REPORT.md",
+   "detail": "matches the ~830 ms/channel estimate from the 6-result/5 s fire, NOT the later ~3.5 s/channel fire"
+  },
+  {
+   "id": "scan.window_formula_clamp_ms",
+   "title": "auto scan window formula: clamp maximum",
+   "unit": "ms",
+   "value": 45000,
+   "grade": "V",
+   "method": "documented: source constant in wifi-scan-complete/hi5622_scan_logic.c",
+   "source": "opensource/docs/incoming/wifi-scan-complete/REPORT.md",
+   "detail": "13-channel auto a=14700 ms; manual scan_timeout_ms is clamped to 45000 ms"
+  },
+  {
+   "id": "h2d.poll_ms",
+   "title": "H2D announce-consumption poll period",
+   "unit": "ms",
+   "value": 5,
+   "grade": "V",
+   "method": "documented: driver source constant HI5622_H2D_POLL_MS=5 (h2d_send.c); also the recorded max_polls unit",
+   "source": "opensource/docs/incoming/wifi-dp-air/src/h2d_send.c",
+   "detail": "'consumed after 0 polls' therefore means <5 ms, not 0 ms"
+  },
+  {
+   "id": "h2d.bench_frame_gap_ms",
+   "title": "bench policy frame gap between H2D frames (allow_frames ladder)",
+   "unit": "ms",
+   "value": 100,
+   "grade": "V",
+   "method": "documented: bench-session module params frame_gap_ms=100; driver default is 20 ms",
+   "source": "wifi-bench-tooling sequences + module param default",
+   "detail": "100 ms x 6 cfg_cal = ~0.5 s of the C2 phase; production default is 20 ms"
+  },
+  {
+   "id": "d2h.service_cadence_ms",
+   "title": "D2H direct-reader service thread cadence (hcc_poll_ms default)",
+   "unit": "ms",
+   "value": 5,
+   "grade": "V",
+   "method": "documented: driver module param hcc_poll_ms default 5 (service.c); one thread per PCI endpoint",
+   "source": "opensource/docs/incoming/wifi-dp-air/src/service.c + dmesg 'cadence 5 ms' (raw)",
+   "detail": "two endpoints => two service threads at up to 200 wakeups/s each; the console print cost is what actually stretches the cadence"
+  },
+  {
+   "id": "d2h.heartbeat_watchdog_ms",
+   "title": "HCC heartbeat watchdog (vendor hrtimer restarted by g4 id4)",
+   "unit": "ms",
+   "value": 10000,
+   "grade": "V",
+   "method": "documented: hcc_core.h HCC_HEARTBEAT_MS=10000 (vendor RE)",
+   "source": "opensource/docs/incoming/wifi-dp-air/src/hcc_core.h",
+   "detail": "the device sends g4 id4 about once per second; the watchdog is 10 s"
+  },
+  {
+   "id": "d2h.irq_count",
+   "title": "Wi-Fi interrupts used by the driver (polled design)",
+   "unit": "IRQs",
+   "value": 0,
+   "grade": "V",
+   "method": "documented + dmesg: 'no MSI/INTx routing documented; enumerating without interrupts'; the direct reader polls",
+   "source": "dmesg boot lines (UART/session evidence) + wifi-d2h-direct lane",
+   "detail": "the whole receive path is poll-driven; there is no IRQ to wake the host"
+  },
+  {
+   "id": "dp.tx_post_only",
+   "title": "TX frame completion_pending after a publish (1 = POST-ONLY, device rptr not advanced)",
+   "unit": "bool",
+   "value": 1,
+   "grade": "V",
+   "method": "documented: combined AP+DP fire; the recorded E1 session evidence only covers dp_setup + TXQ sync, not a TX publish",
+   "source": "ledger 2026-11-27 10:30; wifi-ap-start/REPORT.md; wifi-dp-air/LADDER-F-AIR.md",
+   "detail": "wptr 0->1, table wptr=1 rptr=0, completion_pending=1, magic_processed=0"
+  },
+  {
+   "id": "dp.rx_captures",
+   "title": "RX frames captured by dp_rx_poll after the POST-ONLY publish",
+   "unit": "frames",
+   "value": 0,
+   "grade": "V",
+   "method": "documented: combined AP+DP fire",
+   "source": "ledger 2026-11-27 10:30",
+   "detail": "the MAC consumer does not advance rptr; RX is not reached"
+  }
+ ]
+}
