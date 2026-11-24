@@ -43,6 +43,7 @@ if TOOLDIR not in sys.path:
 import bench_guards as G          # noqa: E402
 import fw_patch_builder as FWB    # noqa: E402
 import bench_session as BS        # noqa: E402
+import protocol_sequence as PS    # noqa: E402
 
 ROOT = BS.ROOT
 CHECKS = []
@@ -799,6 +800,492 @@ def test_session_cli(tmp: str, env: dict) -> None:
        r.returncode == 0 and "hcc_cece_kick" not in r.stdout)
 
 
+
+# ---------------------------------------------------------------------------
+# E. protocol-sequence mode (data-driven H2D sequence runner, task-108)
+# ---------------------------------------------------------------------------
+def sha256_path(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def minimal_proto_doc() -> dict:
+    return {
+        "schema": PS.SCHEMA_SEQ, "name": "engine-smoke",
+        "about": "engine selftest", "profile": PS.PROFILE,
+        "module_names": ["hi5622_wifi"],
+        "load_params": {"h2d_send_budget": 2},
+        "steps": [
+            {"name": "boot", "kind": "read_pack", "reads": [
+                {"label": "page0", "bar0": "0x877000",
+                 "expect": {"eq": "0x86807fef"}},
+                {"label": "mask", "bar0": "0x6f8008",
+                 "expect": {"eq": "0x0"}}]},
+            {"name": "create", "kind": "attr_write",
+             "attr": "h2d_ctx_create", "value": "1",
+             "patterns": ["frames_sent=1"]},
+            {"name": "post", "kind": "read_pack", "reads": [
+                {"label": "ctx190", "bar0": "0x7d45e8",
+                 "expect": {"nonzero": True}},
+                {"label": "sig10", "base": "ctx190", "add": "0x10",
+                 "expect": {"eq": "0x64"}}]},
+        ],
+    }
+
+
+def proto_sequence_doc(env: dict) -> dict:
+    doc = minimal_proto_doc()
+    doc["name"] = "proto-smoke"
+    doc["about"] = "selftest protocol end-to-end"
+    doc["require"] = {"ready_pair": True, "boot_page": True,
+                      "fw_sha256": env["fw_sha"], "fw_len": env["fw_len"],
+                      "budget_min": 2}
+    return doc
+
+
+def proto_env(tmp: str) -> dict:
+    env = {}
+    env["module"] = os.path.join(tmp, "hi5622_wifi.ko")
+    make_fake_ko(env["module"], name="hi5622_wifi",
+                 params=("fw_path:charp", "wifi_block_path:charp",
+                         "h2d_send_budget:uint", "hcc_poll_ms:uint"))
+    _src, patched, manifest = make_patched_fw(tmp, name="FIRMWARE.PD4.bin")
+    env["fw_file"] = patched
+    env["manifest"] = manifest
+    env["fw_sha"] = sha256_path(patched)
+    env["fw_len"] = os.path.getsize(patched)
+    env["wifi_block_bin"] = os.path.join(tmp, "wifi_block.bin")
+    with open(env["wifi_block_bin"], "wb") as f:
+        f.write(bytes(((i * 7 + 3) & 0xFF) for i in range(G.WIFI_BLOCK_BYTES)))
+    env["wifi_block_txt"] = os.path.join(tmp, "wifi_block.txt")
+    write_block_file(env["wifi_block_txt"], 618, 5)
+    env["seq"] = os.path.join(tmp, "protocol-seq.json")
+    with open(env["seq"], "w") as f:
+        json.dump(proto_sequence_doc(env), f)
+    env["report_pass"] = proto_report()
+    env["report_boot_fail"] = proto_report(fail="boot")
+    env["report_attr_fail"] = proto_report(fail="attr")
+    return env
+
+
+def proto_report(fail: str | None = None) -> str:
+    """Synthetic device report matching the generated protocol script output."""
+    L = ["== SECTION preflight",
+         "GATE image PASS kernel=6.18.60",
+         "== SECTION protocol-boot",
+         "STEP name=boot kind=read_pack"]
+    page = "0x86807fef" if fail != "boot" else "0x86803fef"
+    L.append("RD32 label=boot.page0 bar0=0x877000 v=%s" % page)
+    L.append("GATE boot.page0 %s raw=%s mask=ffffffff want=0x86807fef"
+             % ("PASS" if fail != "boot" else "FAIL", page))
+    if fail == "boot":
+        L += ["GATE-FAIL name=boot.page0",
+              "STOP:boot.page0: expectation failed: raw=%s" % page,
+              "== SECTION writes",
+              "WRITES-DEVICE total=8",
+              "SESSION_RESULT: STOP:boot.page0"]
+        return "\n".join(L) + "\n"
+    L += ["RD32 label=boot.mask bar0=0x6f8008 v=0x00000000",
+          "GATE boot.mask PASS raw=0x00000000 mask=ffffffff want=0x00000000",
+          "== SECTION seq-create-h2d_ctx_create",
+          ("H2D send path (real post-ready messages, one frame per idea): "
+           "budget=2 frames_sent=1 txq_sent=0 ctx_sent=1"
+           if fail != "attr" else
+           "H2D send path (real post-ready messages, one frame per idea): "
+           "budget=2 frames_sent=0 txq_sent=0 ctx_sent=0"),
+          "state: armed=1 released=1 boot_latched=1 phase=ACTIVE "
+          "lane_closed=0 liveness_used=0 ctx_created="
+          + ("0" if fail == "attr" else "1"),
+          "GATE create.write PASS"]
+    if fail == "attr":
+        L += ["STOP:create.p0: pattern not found in h2d_status: frames_sent=1",
+              "GATE-FAIL name=create.p0",
+              "== SECTION writes",
+              "WRITES-DEVICE total=9",
+              "SESSION_RESULT: STOP:create.p0"]
+        return "\n".join(L) + "\n"
+    L += ["GATE create.p0 PASS (attr=h2d_status)",
+          "== SECTION protocol-post",
+          "RD32 label=post.ctx190 bar0=0x7d45e8 v=0x01011448",
+          "GATE post.ctx190 PASS raw=0x01011448 mask=ffffffff want=0x00000000",
+          "PTR-CONV post.sig10 base=0x01011448 conv=pktram",
+          "RD32 label=post.sig10 bar0=0x1e9458 v=0x00000064",
+          "GATE post.sig10 PASS raw=0x00000064 mask=ffffffff want=0x00000064",
+          "SEQUENCE-END name=proto-smoke",
+          "== SECTION writes",
+          "WRITES-DEVICE total=9",
+          "SESSION_RESULT: PASS",
+          "== SECTION dmesg",
+          "HCC service ready"]
+    return "\n".join(L) + "\n"
+
+
+def test_protocol_engine(tmp: str) -> None:
+    seq = PS.validate(minimal_proto_doc(), "selftest")
+    ck("protocol engine: minimal sequence validates", seq["name"] == "engine-smoke")
+    pdoc = PS.plan_doc(seq)
+    ck("protocol engine: plan totals 3 steps / 6 checks / 1 write",
+       pdoc["totals"] == {"steps": 3, "checks": 6, "attr_writes": 1},
+       str(pdoc["totals"]))
+    names = PS.check_names(seq)
+    ck("protocol engine: check names in order",
+       names == ["boot.page0", "boot.mask", "create.write", "create.p0",
+                 "post.ctx190", "post.sig10"], str(names))
+    script = "\n".join(PS.render_script(seq))
+    ck("protocol engine: script emits gate_num/gate_attr/stop",
+       "gate_num 'boot.page0'" in script and "gate_attr" in script
+       and "stop post.bad-pointer" in script, script[:200])
+    ck("protocol engine: script emits the pointer resolver",
+       "SEQ_CONV=unresolved" in script and "SEQ_OFF=" in script)
+    # pointer conventions (the measured allocator returns a PKTRAM CA)
+    ck("protocol engine: resolve fw-RAM CPU pointer",
+       PS.resolve_pointer(0x11C458)["bar0"] == 0x7D4458,
+       str(PS.resolve_pointer(0x11C458)))
+    ck("protocol engine: resolve PKTRAM CA 0x01011448",
+       PS.resolve_pointer(0x01011448)["bar0"] == 0x1E9448
+       and PS.resolve_pointer(0x01011448)["conv"] == "pktram")
+    ck("protocol engine: resolve IO CA mailbox",
+       PS.resolve_pointer(0x40039010)["bar0"] == 0x3F1010)
+    ck("protocol engine: unresolved pointer",
+       PS.resolve_pointer(0x30000000) is None)
+
+    def refuse_seq(label, mutate, code):
+        doc = minimal_proto_doc()
+        mutate(doc)
+        try:
+            PS.validate(doc, "selftest")
+        except G.GuardError as e:
+            ck("protocol refuse: %s [%s]" % (label, e.code),
+               e.code == code or code == "*")
+            return
+        ck("protocol refuse: %s" % label, False, "no exception (want %s)" % code)
+
+    refuse_seq("bad schema", lambda d: d.update(schema="x"), "seq-schema")
+    refuse_seq("unknown kind",
+               lambda d: d["steps"][0].update(kind="shell"), "seq-schema")
+    refuse_seq("duplicate step name",
+               lambda d: d["steps"][1].update(name="boot"), "seq-schema")
+    refuse_seq("duplicate read label",
+               lambda d: d["steps"][2]["reads"][1].update(label="ctx190"),
+               "seq-schema")
+    refuse_seq("forward base reference",
+               lambda d: d["steps"][0]["reads"][0].update(base="ctx190", add="0x4"),
+               "seq-schema")
+    refuse_seq("unaligned dynamic add",
+               lambda d: d["steps"][2]["reads"][1].update(add="0x52"),
+               "seq-schema")
+    refuse_seq("read outside BAR0 viewports",
+               lambda d: d["steps"][0]["reads"][0].update(bar0="0x900000"),
+               "bar0-read-not-allowed")
+    refuse_seq("unknown expectation key",
+               lambda d: d["steps"][0]["reads"][0]["expect"].update(gt="0x1"),
+               "seq-schema")
+    refuse_seq("expectation without comparison",
+               lambda d: d["steps"][0]["reads"][0].update(expect={"mask": "0xff"}),
+               "seq-schema")
+    refuse_seq("write to a read-only attribute",
+               lambda d: d["steps"][1].update(attr="h2d_status"),
+               "seq-schema")
+    refuse_seq("expect on an unknown attribute",
+               lambda d: d["steps"][1].update(kind="attr_expect",
+                                              attr="not_an_attr",
+                                              patterns=["x"]),
+               "seq-schema")
+    refuse_seq("bad load param name",
+               lambda d: d["load_params"].update({"Bad Key": 1}), "seq-schema")
+    refuse_seq("RC misc window pattern",
+               lambda d: d["steps"][1].update(patterns=["0x10161000"]),
+               "seq-schema")
+
+    # guard policy for the H2D attributes
+    guard = G.WriteGuard()
+    guard.check_attr_write("h2d_ctx_create", "1")
+    guard.check_attr_write("h2d_txq_sync72", "1")
+    ck("protocol guards: h2d trigger writes allowed", True)
+    expect_guard("h2d_ctx_create type 4",
+                 lambda: guard.check_attr_write("h2d_ctx_create", "4"),
+                 "h2d-payload")
+    expect_guard("h2d_txq_sync value 2",
+                 lambda: guard.check_attr_write("h2d_txq_sync", "2"),
+                 "h2d-payload")
+    expect_guard("h2d_send payload grammar",
+                 lambda: guard.check_attr_write("h2d_send", "payload=aa"),
+                 "h2d-grammar")
+    guard.check_attr_write("seed", "1")
+    ck("protocol guards: seed allowed for hi5622_wifi", True)
+    expect_guard("bar0 read outside viewports",
+                 lambda: G.check_bar0_read(0x10161000), "bar0-read-not-allowed")
+    G.check_bar0_read(0x2E9448)
+    ck("protocol guards: PKTRAM BAR0 read allowed", True)
+
+
+def proto_opts(env: dict, tmp: str, **kw) -> BS.SessionOptions:
+    opts = BS.SessionOptions(
+        mode="protocol", module=env["module"], dry_run=True,
+        fw_file=env["fw_file"], fw_manifest=env["manifest"],
+        wifi_block_bin=env["wifi_block_bin"], sequence=env["seq"],
+        report_dir=os.path.join(tmp, "reports", "protocol"))
+    for k, v in kw.items():
+        setattr(opts, k, v)
+    return opts
+
+
+def test_protocol_plan(tmp: str, env: dict) -> None:
+    opts = proto_opts(env, tmp)
+    plan = BS.make_plan(opts, G.WriteGuard())
+    ck("protocol plan: script audit PASS", plan.audit["ok"],
+       json.dumps(plan.audit["violations"][:3]))
+    ck("protocol plan: module/fw/wifi-block deployed",
+       sorted(d["kind"] for d in plan.deploy)
+       == ["firmware", "module", "wifi-block"],
+       str([d["kind"] for d in plan.deploy]))
+    ck("protocol plan: fw deployed as FIRMWARE.PD4.bin",
+       plan.fw["remote"] == "/lib/firmware/hi_wifi/FIRMWARE.PD4.bin")
+    ck("protocol plan: insmod params include fw_path/wifi_block_path/budget",
+       plan.opts["insmod_params"] == [
+           "fw_path=hi_wifi/FIRMWARE.PD4.bin",
+           "wifi_block_path=hi_wifi/wifi_block.bin",
+           "h2d_send_budget=2"], str(plan.opts["insmod_params"]))
+    ck("protocol plan: sequence steps become plan steps",
+       [s.name for s in plan.steps][-4:] ==
+       ["seq-boot", "seq-create", "seq-post", "observe"],
+       str([s.name for s in plan.steps]))
+    ck("protocol plan: 7 boot writes + 1 sequence write",
+       sum(len(s.writes) for s in plan.steps) == 8,
+       str(sum(len(s.writes) for s in plan.steps)))
+    ck("protocol plan: release is the only CA write",
+       [w.target for st in plan.steps for w in st.writes
+        if w.kind == "attr" and w.target == "release"] == ["release"])
+    sp = os.path.join(tmp, "protocol.sh")
+    with open(sp, "w") as f:
+        f.write(plan.script)
+    sh = subprocess.run(["sh", "-n", sp], capture_output=True, text=True)
+    ck("protocol plan: generated script parses (sh -n)", sh.returncode == 0,
+       sh.stderr[:200])
+    non_comment = "\n".join(ln for ln in plan.script.splitlines()
+                            if not ln.strip().startswith("#"))
+    ck("protocol plan: no rmmod / raw CECE in executable lines",
+       "rmmod" not in non_comment
+       and not re.search(r"0[xX]0*[cC][eE][cC][eE]\b", non_comment))
+    ck("protocol plan: sequence sha recorded",
+       plan.opts["sequence_sha256"] == sha256_path(env["seq"]))
+    ck("protocol plan: strict ready pair", plan.opts["ready_mode"] == "strict")
+    ck("protocol plan: no devmem writes (seed attr owns the block)",
+       not any(w.kind == "devmem" for st in plan.steps for w in st.writes))
+    paths = BS.write_artifacts(opts.report_dir, plan, G.WriteAudit(), [], None,
+                               {"result": "DRY-RUN"})
+    ck("protocol plan: protocol-plan.json written",
+       os.path.isfile(os.path.join(opts.report_dir, "protocol-plan.json")))
+    ck("protocol plan: REPORT.md names the protocol mode",
+       "protocol" in open(os.path.join(opts.report_dir, "REPORT.md")).read())
+
+    # text block conversion path
+    opts_txt = proto_opts(env, tmp, wifi_block_bin=None,
+                          wifi_block=env["wifi_block_txt"],
+                          report_dir=os.path.join(tmp, "reports", "proto-txt"))
+    plan_txt = BS.make_plan(opts_txt, G.WriteGuard())
+    ck("protocol plan: text PHY block converted to 2472 B",
+       plan_txt.deploy[2]["size"] == G.WIFI_BLOCK_BYTES,
+       str(plan_txt.deploy[2]["size"]))
+
+    def plan_refused(label, mutate, code):
+        o = proto_opts(env, tmp)
+        mutate(o)
+        try:
+            BS.make_plan(o, G.WriteGuard())
+        except G.GuardError as e:
+            ck("protocol plan refusal: %s [%s]" % (label, e.code),
+               e.code == code or code == "*")
+            return
+        ck("protocol plan refusal: %s" % label, False,
+           "no exception (want %s)" % code)
+
+    plan_refused("missing fw args",
+                 lambda o: (setattr(o, "fw_file", None),
+                            setattr(o, "fw_manifest", None)),
+                 "patched-fw-args")
+    plan_refused("budget below the sequence minimum",
+                 lambda o: setattr(o, "module_params", ["h2d_send_budget=1"]),
+                 "budget-required")
+    plan_refused("unknown module parameter",
+                 lambda o: setattr(o, "module_params", ["bogus_param=1"]),
+                 "module-param-unknown")
+    plan_refused("missing sequence",
+                 lambda o: setattr(o, "sequence", os.path.join(tmp, "nope.json")),
+                 "seq-missing")
+
+    # fw pin mismatch
+    bad = proto_sequence_doc(env)
+    bad["require"]["fw_sha256"] = "0" * 64
+    bad_path = os.path.join(tmp, "bad-pin.json")
+    with open(bad_path, "w") as f:
+        json.dump(bad, f)
+    plan_refused("firmware pin mismatch",
+                 lambda o: setattr(o, "sequence", bad_path),
+                 "fw-pin-mismatch")
+
+    # wrong module profile
+    other = os.path.join(tmp, "hi5622_pciet_hcc.ko")
+    make_fake_ko(other, name="hi5622_pciet_hcc")
+    plan_refused("module outside the sequence profile",
+                 lambda o: setattr(o, "module", other), "module-profile")
+
+    # generated gate_num runs correctly under a POSIX shell
+    func = []
+    started = False
+    for line in plan.script.splitlines():
+        if line.startswith("gate_num() {"):
+            started = True
+        if started:
+            func.append(line)
+            if line.rstrip().endswith("fi; }"):
+                break
+    ck("protocol plan: gate_num function extracted", len(func) > 10,
+       str(len(func)))
+    sh_path = os.path.join(tmp, "gate_num-test.sh")
+    with open(sh_path, "w") as f:
+        f.write("#!/bin/sh\n")
+        f.write('say() { echo "SAY $*"; }\n')
+        f.write('stop() { echo "STOP $1: $2"; }\n')
+        f.write("\n".join(func) + "\n")
+        f.write('gate_num g1 86807fef eq 0xFFFFFFFF 0x86807FEF 0\n')
+        f.write('gate_num g2 00000000 nonzero 0xFFFFFFFF 0x00000000 0\n')
+        f.write('gate_num g3 00000004 eq 0x000000FF 0x00000004 0\n')
+        f.write('gate_num g4 0000002b eq 0xFF000000 0x00000000 24\n')
+        f.write('gate_num g5 2b000000 eq 0xFF000000 0x00000000 24\n')
+        f.write('gate_num g6 000003b0 ge 0x0000FFFF 0x000003B0 0\n')
+        f.write("echo DONE\n")
+    sh = subprocess.run(["/bin/sh", sh_path], capture_output=True, text=True)
+    out = sh.stdout
+    ck("protocol shell: gate_num full-mask eq", "GATE g1 PASS" in out, out[-300:])
+    ck("protocol shell: gate_num nonzero fails on zero", "STOP g2" in out)
+    ck("protocol shell: gate_num low-byte mask", "GATE g3 PASS" in out)
+    ck("protocol shell: gate_num high-byte mask (zero top byte)",
+       "GATE g4 PASS" in out)
+    ck("protocol shell: gate_num high-byte mask fails on 0x2B",
+       "STOP g5" in out)
+    ck("protocol shell: gate_num 16-bit ge", "GATE g6 PASS" in out)
+
+
+def test_protocol_execute(tmp: str, env: dict) -> None:
+    opts = proto_opts(env, tmp, dry_run=False, skip_preflight=True,
+                      report_dir=os.path.join(tmp, "reports", "proto-e2e"))
+    plan = BS.make_plan(opts, G.WriteGuard())
+    transport = FakeTransport(env["report_pass"], rc=0)
+    transport.files["%s/%s/writes.log" % (BS.REMOTE_BASE, plan.session_id)] = \
+        b"WRITE attr=prepare step=prepare value=1\n"
+    audit = G.WriteAudit()
+    res = BS.execute(plan, opts, transport, audit, [])
+    summ = res["summary"]
+    proto = summ.get("protocol") or {}
+    ck("protocol execute: session PASS", summ["result"] == "PASS", str(summ))
+    ck("protocol execute: protocol verdict PASS", proto.get("verdict") == "PASS",
+       json.dumps(proto.get("totals")))
+    ck("protocol execute: 6/6 checks passed",
+       (proto.get("totals") or {}).get("checks") == 6
+       and (proto.get("totals") or {}).get("passed") == 6,
+       str(proto.get("totals")))
+    ck("protocol execute: dynamic read resolved through PKTRAM convention",
+       any(c.get("conv") == "pktram"
+           for s in proto.get("steps", []) for c in s["checks"]))
+    paths = BS.write_artifacts(opts.report_dir, plan, audit, [],
+                               res["report_text"], summ, res.get("extra"),
+                               protocol_evidence=proto)
+    for name in ("protocol-plan.json", "protocol-evidence.json",
+                 "PROTOCOL-SEQUENCE.md"):
+        ck("protocol execute: artifact %s" % name,
+           os.path.isfile(os.path.join(opts.report_dir, name)))
+    md = open(os.path.join(opts.report_dir, "PROTOCOL-SEQUENCE.md")).read()
+    ck("protocol execute: markdown verdict PASS", "protocol verdict: **PASS**" in md)
+    ev = json.load(open(os.path.join(opts.report_dir, "protocol-evidence.json")))
+    ck("protocol execute: evidence schema", ev["schema"] == PS.SCHEMA_EVIDENCE)
+    ck("protocol execute: evidence carries device gates",
+       bool(ev.get("device_gates")))
+
+    # stop-on-first-failure: read gate fails, later steps NOT-RUN
+    t2 = FakeTransport(env["report_boot_fail"], rc=10)
+    t2.files["%s/%s/writes.log" % (BS.REMOTE_BASE, plan.session_id)] = b"x\n"
+    a2 = G.WriteAudit()
+    res2 = BS.execute(plan, opts, t2, a2, [])
+    p2 = res2["summary"].get("protocol") or {}
+    ck("protocol execute: failed read -> FAIL at boot",
+       p2.get("verdict") == "FAIL" and p2.get("failed_step") == "boot",
+       json.dumps(p2.get("totals")))
+    ck("protocol execute: later steps NOT-RUN",
+       [s["status"] for s in p2.get("steps", [])][1:] == ["NOT-RUN", "NOT-RUN"],
+       str([s["status"] for s in p2.get("steps", [])]))
+    ck("protocol execute: read-mismatch triage present",
+       "read-mismatch" in json.dumps(p2))
+    md2 = PS.render_markdown(p2)
+    ck("protocol execute: markdown triage for read-mismatch",
+       "read-mismatch" in md2 and "Do not fire" in md2)
+
+    # attr-pattern failure at the H2D step
+    t3 = FakeTransport(env["report_attr_fail"], rc=10)
+    t3.files["%s/%s/writes.log" % (BS.REMOTE_BASE, plan.session_id)] = b"x\n"
+    a3 = G.WriteAudit()
+    res3 = BS.execute(plan, opts, t3, a3, [])
+    p3 = res3["summary"].get("protocol") or {}
+    ck("protocol execute: attr pattern failure -> FAIL",
+       p3.get("verdict") == "FAIL" and p3.get("failed_step") == "create",
+       json.dumps(p3.get("totals")))
+    ck("protocol execute: attr-pattern-missing code present",
+       "attr-pattern-missing" in json.dumps(p3))
+
+
+def test_protocol_cli(tmp: str, env: dict) -> None:
+    base = [sys.executable, os.path.join(TOOLDIR, "bench_session.py")]
+    r = subprocess.run(base + ["--list-sequences"], capture_output=True,
+                       text=True, timeout=60)
+    ck("protocol cli --list-sequences rc=0",
+       r.returncode == 0 and "ladder-c-ordered" in r.stdout,
+       (r.stdout + r.stderr)[-300:])
+    rdir = os.path.join(tmp, "cli-protocol")
+    r = subprocess.run(base + ["--mode", "protocol", "--dry-run",
+                               "--module", env["module"],
+                               "--fw-file", env["fw_file"],
+                               "--fw-manifest", env["manifest"],
+                               "--wifi-block-bin", env["wifi_block_bin"],
+                               "--sequence", env["seq"], "--json",
+                               "--report-dir", rdir],
+                       capture_output=True, text=True, timeout=120)
+    ck("protocol cli dry-run rc=0", r.returncode == 0,
+       (r.stdout + r.stderr)[-400:])
+    ck("protocol cli dry-run prints the sequence plan",
+       "protocol sequence (data-driven" in r.stdout)
+    ck("protocol cli dry-run claims no device contact",
+       "no device was contacted" in r.stdout)
+    ck("protocol cli dry-run writes protocol-plan.json",
+       os.path.isfile(os.path.join(rdir, "protocol-plan.json")))
+    ck("protocol cli dry-run summary includes the protocol totals",
+       '"sequence"' in r.stdout and '"checks"' in r.stdout)
+    r2 = subprocess.run(base + ["--mode", "protocol", "--dry-run",
+                                "--module", env["module"],
+                                "--fw-file", env["fw_file"],
+                                "--fw-manifest", env["manifest"],
+                                "--wifi-block-bin", env["wifi_block_bin"],
+                                "--sequence", env["seq"],
+                                "--module-param", "h2d_send_budget=1",
+                                "--report-dir", os.path.join(tmp, "cli-budget")],
+                        capture_output=True, text=True, timeout=120)
+    ck("protocol cli refuses a budget below the sequence minimum",
+       r2.returncode == 2 and "budget" in (r2.stderr + r2.stdout),
+       (r2.stderr + r2.stdout)[-300:])
+    r3 = subprocess.run(base + ["--mode", "protocol", "--dry-run",
+                                "--module", env["module"],
+                                "--fw-file", env["fw_file"],
+                                "--fw-manifest", env["manifest"],
+                                "--wifi-block-bin", env["wifi_block_bin"],
+                                "--sequence", env["seq"],
+                                "--module-param", "no_such_param=1",
+                                "--report-dir", os.path.join(tmp, "cli-param")],
+                        capture_output=True, text=True, timeout=120)
+    ck("protocol cli refuses an unknown module parameter",
+       r3.returncode == 2
+       and "module-param-unknown" in (r3.stderr + r3.stdout),
+       (r3.stderr + r3.stdout)[-300:])
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -812,6 +1299,11 @@ def main() -> int:
         test_session_parser()
         test_session_execute(tmp, env)
         test_session_cli(tmp, env)
+        proto = proto_env(tmp)
+        test_protocol_engine(tmp)
+        test_protocol_plan(tmp, proto)
+        test_protocol_execute(tmp, proto)
+        test_protocol_cli(tmp, proto)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     passed = sum(1 for _, ok, _ in CHECKS if ok)

@@ -311,3 +311,58 @@ CLI; and the "write session without --attended is refused" gate.
   states that explicitly rather than pretending /tmp is evidence.
 - The patched images are local evidence only (default /tmp/hi5622-patched);
   no patched file, block file, vendor byte or ROM byte is committed here.
+
+---
+
+## 8. task-108: data-driven protocol-sequence mode
+
+Added 2026-11-25 (host-only, no device contact). The 2026-11-25 ledger gave
+the project its first *protocol sequence*: PD4 golden boot -> ready pair ->
+ONE context-create H2D (g0 id1 key 0x64, type 1) -> PACK -> ONE TXQ config
+sync H2D (72-byte node) -> zero exceptions -> the firmware D2H responses
+g1 id3 (36 B) and g1 id0x12 (40 B).  task-108 automates exactly that as data.
+
+What was added:
+
+- **bench_session.py --mode protocol**: PD4 boot skeleton for the
+  hi5622_wifi driver (fw pin + PHY block deploy + sha read-back, insmod with
+  fw_path / wifi_block_path / h2d_send_budget validated against the module's
+  real parameters, prepare/upload/verify/seed, hcc_arm/hcc_loop,
+  release-only 0x5A5A, strict golden-page + ready-pair gate), followed by the
+  data-driven steps, final observable capture and the usual sha256-chained
+  write audit.
+- **tools/protocol_sequence.py**: schema hi5622-protocol-sequence/1 validator
+  (fail-closed: unknown fields/kinds/attrs/expectations, duplicate labels,
+  forward base references, unaligned adds, reads outside the six inbound BAR0
+  viewports are refused at plan time), shell-gate + pointer-convention code
+  generation, an independent host-side re-evaluation of every gate, and the
+  evidence renderers (hi5622-protocol-evidence/1 JSON + PROTOCOL-SEQUENCE.md).
+- **tools/sequences/ladder-c-ordered.json**: the bundled ladder (11 steps /
+  62 checks / 2 H2D writes) mirroring bench ladder C8-C14 plus the measured
+  D2H response delta.  Future messages are a JSON change plus, at most, one
+  line in the attribute policy census - no runner code edits.
+- **Pointer conventions**: the hardware-validated type-1 lap read
+  ctx+0x190 = 0x01011448, a PKTRAM region-2 device CA - not a fw-RAM CPU
+  pointer.  Dynamic reads therefore resolve pointers through the real
+  endpoint inbound-region table (pktram/acp/fwram-ca/io/tcm/cpu) and stop
+  before reading if a pointer matches no convention.  The old C11 note's
+  V + 0x6B8000 formula only applies to fw-RAM CPU pointers; the bundled
+  buffer reads are captured-only until those PKTRAM contents are measured.
+- **Evidence**: protocol-plan.json, protocol-evidence.json (per-check host
+  verdict + captured actual + device gate verdict, boot/mailbox observables,
+  rd32 map, hashes, totals), PROTOCOL-SEQUENCE.md with the step table and the
+  failure triage block; stop-on-first-failure means one boot yields one
+  failing step and everything later is NOT-RUN.
+- **Tests**: selftest 177 -> **258/258** checks (schema/strictness refusals,
+  pointer resolution, plan/audit/sh -n, the generated gate_num function run
+  under /bin/sh, synthetic end-to-end execute() with PASS / read-FAIL /
+  attr-pattern-FAIL fixtures, evidence artifacts and triage, CLI incl.
+  --list-sequences and budget/parameter refusals).  Host-only real-metadata
+  dry-run: module 400,732 B sha256 774c4f1f..., PD4 image pinned
+  cfe24bfb..., 11 steps / 62 checks / 9 planned attribute writes, audit PASS,
+  sh -n PASS.
+
+Limits: the automation has not been fired on hardware; the bundled gates
+mirror the 2026-11-25 validated lap.  The first attended run is the real
+validation.  See PROTOCOL-SEQUENCE.md for the schema, exact commands and the
+failure triage table.

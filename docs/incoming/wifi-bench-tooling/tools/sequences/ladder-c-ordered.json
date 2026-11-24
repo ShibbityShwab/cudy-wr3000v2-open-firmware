@@ -1,0 +1,419 @@
+{
+  "schema": "hi5622-protocol-sequence/1",
+  "name": "ladder-c-ordered",
+  "about": "PD4 golden boot -> pre-create PACK -> ONE context-create g0 id1 key-0x64 (type 1) -> post-create PACK -> ONE TXQ config sync (72-byte node) -> post-TXQ PACK -> D2H response delta. The current hardware-validated working lap (2026-11-25 05:10/06:00 ledger).",
+  "profile": "hi5622-wifi-h2d",
+  "module_names": [
+    "hi5622_wifi"
+  ],
+  "require": {
+    "ready_pair": true,
+    "boot_page": true,
+    "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+    "fw_len": 928920,
+    "budget_min": 2
+  },
+  "load_params": {
+    "h2d_send_budget": 2
+  },
+  "steps": [
+    {
+      "name": "boot-golden",
+      "kind": "read_pack",
+      "about": "LATCHED golden handshake page + state/mask/staging before any H2D message",
+      "reads": [
+        {
+          "label": "page0",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          },
+          "about": "handshake page word 0"
+        },
+        {
+          "label": "page4",
+          "bar0": "0x877004",
+          "expect": {
+            "eq": "0x00000007"
+          }
+        },
+        {
+          "label": "page8",
+          "bar0": "0x877008",
+          "expect": {
+            "eq": "0x00000002"
+          },
+          "about": "+8==2 = S1 completed (the latch)"
+        },
+        {
+          "label": "pagec",
+          "bar0": "0x87700c",
+          "expect": {
+            "eq": "0x0000abcd"
+          }
+        },
+        {
+          "label": "state",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          },
+          "about": "boot state CA 0x118b60"
+        },
+        {
+          "label": "mask",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "exception-seen bitmap (0 = no exceptions)"
+        },
+        {
+          "label": "staging",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "exception staging frame word 0 (must be zero before the lap)"
+        },
+        {
+          "label": "cave",
+          "bar0": "0x7c0240",
+          "about": "PD4 stub cave integrity snapshot (captured, expected stub code)"
+        }
+      ]
+    },
+    {
+      "name": "catalog-boot",
+      "kind": "catalog_snapshot",
+      "about": "D2H catalogue before the H2D pair (baseline for the response delta)"
+    },
+    {
+      "name": "pre-create-pack",
+      "kind": "read_pack",
+      "about": "read-only PACK before the context-create (C8 of the bench ladder)",
+      "reads": [
+        {
+          "label": "g",
+          "bar0": "0x821e90",
+          "expect": {
+            "eq": "0x00170e28"
+          },
+          "about": "G singleton"
+        },
+        {
+          "label": "table4",
+          "bar0": "0x829468",
+          "expect": {
+            "eq": "0x0011c458"
+          },
+          "about": "module-table entry 4"
+        },
+        {
+          "label": "ctx190",
+          "bar0": "0x7d45e8",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "ctx4+0x190 must be 0 before the create"
+        },
+        {
+          "label": "ctx0",
+          "bar0": "0x7d4458",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "ctx4 body word 0"
+        },
+        {
+          "label": "ctx187",
+          "bar0": "0x7d45dc",
+          "expect": {
+            "mask": "0xff000000",
+            "eq": "0x00000000"
+          },
+          "about": "ctx+0x187 top byte = 0 (no no-alloc tail)"
+        },
+        {
+          "label": "ctx434",
+          "bar0": "0x7d488c",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "ctx+0x434 type-1 second alloc pointer (0 before)"
+        },
+        {
+          "label": "refcnt",
+          "bar0": "0x8294f4",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "G+0x6C8+4 refcount"
+        },
+        {
+          "label": "pool1",
+          "bar0": "0x8212bc",
+          "expect": {
+            "mask": "0x0000ffff",
+            "ge": "0x000003b0"
+          },
+          "about": "pool-1 descriptor: low16 max block size must be >= 0x3B0"
+        },
+        {
+          "label": "mask2",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "mask still 0 before any fire"
+        },
+        {
+          "label": "staging2",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        }
+      ]
+    },
+    {
+      "name": "preflight-plan",
+      "kind": "attr_expect",
+      "about": "read-only preflight of the two canned frames + the ctx_create gate (no write)",
+      "attr": "h2d_plan",
+      "patterns": [
+        "msg=txq_sync wire_total=48",
+        "msg=ctx_create wire_total=48",
+        "node_len=48 node_word1=0x00306d2b",
+        "node_len=72 node_word1=0x00486d2b",
+        "gate ctx_create"
+      ]
+    },
+    {
+      "name": "ctx-create-t1",
+      "kind": "attr_write",
+      "about": "ONE context-create H2D message (g0 id1 key 0x64, type 1). No retry.",
+      "attr": "h2d_ctx_create",
+      "value": "1",
+      "patterns": [
+        "budget=2",
+        "frames_sent=1",
+        "ctx_sent=1",
+        "ctx_created=1",
+        "phase=ACTIVE",
+        "msg=ctx_create_t1"
+      ]
+    },
+    {
+      "name": "post-create-pack",
+      "kind": "read_pack",
+      "about": "read-only PACK after the create (C11): ctx+0x190 allocated, ctx[0]=4, ctx+0x434 second alloc, table entry, mask=0, staging=0; the create-buffer reads are captured-only with automatic inbound-region pointer resolution (the allocator returned a PKTRAM device CA 0x01011448 in the hardware-validated lap, not a fw-RAM CPU pointer)",
+      "reads": [
+        {
+          "label": "ctx190p",
+          "bar0": "0x7d45e8",
+          "expect": {
+            "nonzero": true
+          },
+          "about": "V = created context pointer"
+        },
+        {
+          "label": "buf10",
+          "base": "ctx190p",
+          "add": "0x10",
+          "about": "create buffer +0x10 (captured; resolved through the inbound-region table)"
+        },
+        {
+          "label": "buf14",
+          "base": "ctx190p",
+          "add": "0x14",
+          "about": "create buffer +0x14 (captured)"
+        },
+        {
+          "label": "buf238",
+          "base": "ctx190p",
+          "add": "0x238",
+          "about": "create buffer +0x238 (captured)"
+        },
+        {
+          "label": "buf50",
+          "base": "ctx190p",
+          "add": "0x50",
+          "about": "create buffer +0x50 (captured; the bench ladder's +0x52 read truncates here)"
+        },
+        {
+          "label": "ctx0b",
+          "bar0": "0x7d4458",
+          "expect": {
+            "mask": "0x000000ff",
+            "eq": "0x00000004"
+          },
+          "about": "ctx[0] low byte = user id 4"
+        },
+        {
+          "label": "ctx434p",
+          "bar0": "0x7d488c",
+          "expect": {
+            "nonzero": true
+          },
+          "about": "type-1 second allocation pointer (nonzero)"
+        },
+        {
+          "label": "table4p",
+          "bar0": "0x829468",
+          "expect": {
+            "eq": "0x0011c458"
+          },
+          "about": "module-table entry 4 unchanged"
+        },
+        {
+          "label": "ctx187p",
+          "bar0": "0x7d45dc",
+          "about": "ctx+0x187 top byte (captured; the validated type-1 lap read 0x2B000000 here)"
+        },
+        {
+          "label": "refcntp",
+          "bar0": "0x8294f4",
+          "about": "G+0x6C8+4 refcount (captured)"
+        },
+        {
+          "label": "maskp",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "NO exception was taken by the create"
+        },
+        {
+          "label": "stagingp",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "staging frame still zero"
+        }
+      ]
+    },
+    {
+      "name": "pre-txq-status",
+      "kind": "attr_expect",
+      "about": "read-only gate check before the TXQ sync",
+      "attr": "h2d_status",
+      "patterns": [
+        "frames_sent=1",
+        "txq_sent=0",
+        "ctx_created=1",
+        "txq_sync72=ok",
+        "mbox_inflight=0x00000000"
+      ]
+    },
+    {
+      "name": "txq-sync72",
+      "kind": "attr_write",
+      "about": "ONE TXQ config sync H2D message (g0 id1 cmd 0xd8, 72-byte live node length). No retry.",
+      "attr": "h2d_txq_sync72",
+      "value": "1",
+      "patterns": [
+        "frames_sent=2",
+        "txq_sent=1",
+        "ok=2",
+        "timeout=0",
+        "msg=txq_sync72"
+      ]
+    },
+    {
+      "name": "post-txq-pack",
+      "kind": "read_pack",
+      "about": "read-only PACK after the TXQ sync: zero exceptions, TXQ node consumed, boot intact",
+      "reads": [
+        {
+          "label": "maskq",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "the whole point: mask stays 0"
+        },
+        {
+          "label": "stagingq",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "no exception frame"
+        },
+        {
+          "label": "out0",
+          "bar0": "0x3f1010",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "H2D pending word drained"
+        },
+        {
+          "label": "out2",
+          "bar0": "0x3f12d4",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "doorbell drained"
+        },
+        {
+          "label": "ctx190q",
+          "bar0": "0x7d45e8",
+          "expect": {
+            "nonzero": true
+          },
+          "about": "context still allocated"
+        },
+        {
+          "label": "page0q",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          },
+          "about": "boot page still golden"
+        },
+        {
+          "label": "stateq",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          }
+        }
+      ]
+    },
+    {
+      "name": "d2h-responses",
+      "kind": "d2h_catalog",
+      "about": "the firmware must answer the pair: NEW g1 id0x12 (create ack, 40 B) and g1 id0x03 (TXQ ack, 36 B) frames",
+      "before": "catalog-boot",
+      "require_frames_increase": true,
+      "expect_entries": [
+        {
+          "group": 1,
+          "id": 18,
+          "min_count": 1,
+          "last_total": "0x28",
+          "about": "g1 id0x12 40-byte response to the context-create"
+        },
+        {
+          "group": 1,
+          "id": 3,
+          "min_count": 1,
+          "last_total": "0x24",
+          "about": "g1 id3 36-byte response to the TXQ config sync"
+        }
+      ],
+      "device_patterns": [
+        "g=1.*id=0x12",
+        "g=1.*id=0x03"
+      ]
+    },
+    {
+      "name": "done-note",
+      "kind": "note",
+      "about": "ordered lap complete: capture artifacts and stop. One idea per fire; no retry in this session."
+    }
+  ]
+}

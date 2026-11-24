@@ -127,6 +127,41 @@ DEVWRITE_WINDOWS = (
     ("wifi-block", PHYS_WIFI_BLOCK, PHYS_WIFI_BLOCK + WIFI_BLOCK_BYTES),
 )
 
+# Read-only BAR0 windows the bench tooling may touch (host BAR0 offsets; the two
+# endpoint viewports the driver maps).  Anything outside them is an address
+# mistake, not an experiment, so the protocol runner refuses it at plan time.
+BAR0_READ_WINDOWS = (
+    # the six endpoint inbound regions (hi5622_contract.h table [V*])
+    ("rom-wram", 0x000000, 0x01C0000),
+    ("tcm", 0x1C0000, 0x1D8000),
+    ("pktram", 0x1D8000, 0x3B8000),
+    ("device-io", 0x3B8000, 0x4D8000),
+    ("acp", 0x4D8000, 0x6B8000),
+    ("fw-ram", 0x6B8000, 0x8D0000),   # region 5 = CPU view 0x0..0x217fff
+)
+
+
+def check_bar0_read(off: int) -> int:
+    """Validate a host BAR0 read offset against the two endpoint viewports.
+
+    Returns the normalised offset; raises GuardError otherwise.  This is the
+    plan-time half of the read-only evidence pack policy (the generated device
+    script is additionally audited as a whole).
+    """
+    off = normalize_ca(off)
+    if off % 4:
+        raise GuardError("bar0-read-align", "unaligned BAR0 read offset 0x%08X" % off)
+    for name, lo, hi in BAR0_READ_WINDOWS:
+        if lo <= off < hi:
+            return off
+    raise GuardError(
+        "bar0-read-not-allowed",
+        "BAR0 read at 0x%08X is outside the mapped endpoint viewports "
+        "(fw-ram 0x%X..0x%X, device-io 0x%X..0x%X)"
+        % (off, BAR0_CPU_BASE, BAR0_CPU_BASE + 0x220000,
+           BAR0_IO_BASE, BAR0_IO_BASE + 0x100000),
+    )
+
 
 def ca_of_bar0(bar0_off: int) -> Optional[int]:
     """Best-effort inverse of bar0_io/bar0_cpu for audit messages."""
@@ -150,6 +185,7 @@ ALLOWED_MODULES = {
     "hi5622_pciet": "clean-room base transport (B3-era instrument)",
     "hi5622_pciet_hcc": "HCC service / direct-read D2H instrument",
     "hi5622_pciet_b3": "B3 ETE ring instrument",
+    "hi5622_wifi": "clean-room Wi-Fi driver + HCC service + real H2D message path",
 }
 EXPECTED_VERMAGIC_PREFIX = "6.18.60"
 EXPECTED_VERMAGIC_MARKERS = ("SMP", "ARMv7")
@@ -168,12 +204,21 @@ HCC_ATTRS = {
     "hcc_plan",
 }
 RD_ATTRS = {"rd_poll", "rd_advance", "rd_status", "rd_decode", "rd_catalog"}
+# Real post-ready H2D message surface (hi5622_wifi, task-98/99/101/102).  The
+# *status/plan* attributes are read-only; only the four message triggers are WO.
+H2D_ATTRS = {"h2d_txq_sync", "h2d_txq_sync72", "h2d_ctx_create", "h2d_send",
+             "h2d_status", "h2d_plan"}
+H2D_WO_ATTRS = {"h2d_txq_sync", "h2d_txq_sync72", "h2d_ctx_create", "h2d_send"}
+# hi5622_wifi transport surface: seed (built-in platform descriptor + PHY
+# block from /lib/firmware) and gate_repair (the F4 translation fix).
+WIFI_TRANSPORT_ATTRS = {"seed", "gate_repair"}
+WIFI_TRANSPORT_WO_ATTRS = WIFI_TRANSPORT_ATTRS
 WO_ATTRS = {
     "prepare", "upload", "release", "verify", "ringinit", "send", "poll",
     "announce",
     "hcc_arm", "hcc_loop", "hcc_service", "hcc_sr_announce", "hcc_cece_kick",
     "hcc_dr_republish", "hcc_clear", "rd_poll", "rd_advance",
-}
+} | H2D_WO_ATTRS | WIFI_TRANSPORT_WO_ATTRS
 # Legacy attributes that the HCC-service build deliberately refuses (they
 # encode the pre-GP8, wrong protocol).  Writing them in an HCC session is a
 # policy violation even though the module would refuse it at runtime.
@@ -769,7 +814,8 @@ class WriteGuard:
         payload = "" if payload is None else str(payload)
         if not attr or "/" in attr or attr.startswith("."):
             raise GuardError("attr-name", "bad sysfs attribute name %r" % attr)
-        known = BASE_ATTRS | HCC_ATTRS | RD_ATTRS
+        known = (BASE_ATTRS | HCC_ATTRS | RD_ATTRS | H2D_ATTRS |
+                 WIFI_TRANSPORT_ATTRS)
         if attr not in known:
             raise GuardError("attr-unknown", "unknown sysfs attribute %r" % attr)
         if attr not in WO_ATTRS:
@@ -814,9 +860,29 @@ class WriteGuard:
                 raise GuardError("republish-payload", "payload must be '1'")
             return
         if attr in ("prepare", "upload", "verify", "hcc_arm", "hcc_loop",
-                    "hcc_service", "hcc_clear", "rd_poll", "hcc_dr_republish"):
+                    "hcc_service", "hcc_clear", "rd_poll", "hcc_dr_republish",
+                    "seed", "gate_repair"):
             if payload.strip() != "1":
                 raise GuardError("attr-payload", "%r store payload must be '1'" % attr)
+            return
+        if attr == "h2d_ctx_create":
+            if payload.strip() not in ("1", "2", "3"):
+                raise GuardError("h2d-payload",
+                                 "h2d_ctx_create payload is the create-helper type "
+                                 "1|2|3, got %r" % payload)
+            return
+        if attr in ("h2d_txq_sync", "h2d_txq_sync72"):
+            if payload.strip() != "1":
+                raise GuardError("h2d-payload", "%r store payload must be '1'" % attr)
+            return
+        if attr == "h2d_send":
+            # Dedicated-frame grammar only; payload frames stay refused.
+            if not re.match(r"^(txq_sync|txq_sync72|ctx_create|ctx_create_t1|"
+                            r"ctx_create_t2|stub( dst=[0-9]+)?|"
+                            r"edca( dst=[0-9]+)?|del_user( user=[0-9]+)"
+                            r"( addr=[0-9a-fA-Fx]+)?( dst=[0-9]+)?)$", payload.strip()):
+                raise GuardError("h2d-grammar",
+                                 "h2d_send grammar rejected: %r" % payload)
             return
         raise GuardError("attr-unhandled", "no policy for attribute %r" % attr)
 
