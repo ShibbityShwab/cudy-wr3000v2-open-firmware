@@ -113,6 +113,10 @@ $PY wifi-irq-unmask/tools/pd2_re.py selftest                  # 33/33
 $PY wifi-irq-unmask/tools/pd3_re.py selftest                  # 15/15
 $PY wifi-irq-unmask/tools/pd4_re.py cave                     # the 0x108240 cave proof
 $PY wifi-bench-tooling/tools/fw_patch_builder.py --verify-manifest /tmp/hi5622-patched/manifest.json
+# the independent audit of PD4 (identity, delta, cave census, H1/H2, variants):
+$PY wifi-fw-audit/tools/verify_pd4.py --selftest              # 14/14 PASS (no vendor blob needed)
+$PY wifi-fw-audit/tools/verify_pd4.py                         # 31 checks; reads the local pinned blob
+$PY wifi-fw-audit/tools/pd4_variants.py --selftest            # 14/14 PASS
 ```
 
 The patched images exist only outside the repository. Do not copy them into it.

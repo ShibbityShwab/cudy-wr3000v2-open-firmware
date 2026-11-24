@@ -83,9 +83,10 @@ day; the earlier material is unchanged except where a later result superseded it
 5. the **data-plane architecture** is mapped: a separate MAC host-interface ring block (slot 5),
    the TXQ-table address sync, the per-TID MSDU-info TX entries and the RX free/completion rings
    (finding F9, table T24);
-6. the **PD4 research patch** is audited as a minimal, bench-only instrument: exact two-window
-   delta, cave proof, and the absence of a demonstrated vendor-clean mailbox delivery (finding
-   F10, table T25; delivering lane: fw-audit, task-115, in progress at this revision);
+6. the **PD4 research patch** is audited as a minimal, bench-only instrument: byte-identical
+   rebuild (two segments, 68 patched bytes), independently re-verified cave proof, the unresolved
+   H1/H2 sentinel question, ranked diagnostic variants, and no proven vendor-clean mailbox
+   delivery (finding F10, table T25, `wifi-fw-audit/REPORT.md`);
 7. the bench evidence chain gains the 2026-11-25 07:40-15:00 sessions (section 7), the
    corrections register gains C17-C26 (section 8), and the verification, limits, publication and
    lane-map sections are updated (sections 9-12).
@@ -730,20 +731,37 @@ dispatcher's handler table is still the static sentinel, the stub substitutes a 
 table for a consume-only pass. The patched image differs from the pinned vendor blob in exactly
 two windows (928,920 B length unchanged) [V].
 
-**Audit (host-only static RE + bench record; owning lane: fw-audit, shared task `task-115`).**
-The cave was chosen after a whole-image scan of all zero runs: it has no branch target, no
-PC-relative literal load, no address materialisation, sits outside both boot memsets and outside
-the exception-staging area `0x4000C..0x4004B`; the stub itself is our own code. PD3's header-area
-cave was rejected (its own exception staging overwrites it), PD2's config-block cave was rejected
-(it is live on our boot). On the bench the cave bytes survived the PD4 fire, the g0-id1 fault
-reproduced, and with the context precondition satisfied every later announce was consumed in 0
-polls with mask 0 and the golden page intact [V*].
+**Audit (delivered by the fw-audit lane, shared task `task-115`; `wifi-fw-audit/REPORT.md`,
+harness `verify_pd4.py` 31 checks + 14/14 selftest, `pd4_variants.py` 14/14).** The published
+image rebuilds byte-identically from the pinned blob with exactly two segments (4-byte branch at
+file `0x0916A` + 64-byte stub at file `0x0C8240`): 68 patched bytes, 59 differing byte positions,
+length unchanged 928,920 B, no other byte differs [V]. The cave proof was independently re-run: the
+637-byte gap CPU `0x108197..0x108413` is all zero and bracketed by two referenced read-only
+tables, outside both boot memsets and the exception-staging frame, and an exhaustive Thumb census
+finds zero branch/literal/ADR references into it [V]. The stub only reads mailbox out[0]
+(CA `0x40039010`) and calls the firmware's own wrapper CPU `0x40294` -> dispatcher CPU `0xC18AC`
+(which performs ack `out[5]=1`, clear out[0], doorbell `out[2]=8`, then handler dispatch); every
+device write is the firmware's, and the host "never write CA `0x400392F0`" rule is unchanged [V].
+On the bench the cave bytes survived, the g0-id1 fault reproduced and the ordered lap consumed
+every announce in 0 polls with mask 0 and the golden page intact [V*].
 
-**Residual risk / honest limits.** No vendor-clean (unpatched-firmware) mailbox-delivery path has
-been demonstrated; the patch is a bench instrument that must never ship, it changes vendor firmware
-bytes, and its only purpose is to exercise the firmware's own dispatcher. An inline event-raise
-variant (PD3B) exists but was not bench-fired [U]. Full alternative analysis (event-0x2D/0x2E
-paths, ROM handlers, other apertures) is the closure item of the audit lane (section 6.6, T25).
+**Residual risk / honest limits.** The audit's one material open question is **H1/H2**: the stub
+compares the instance handler-table pointer field (CPU `0x10C1B0`) with the static value
+`0x00118D68`, and static evidence says the field keeps that value (the registration helper reads
+it and populates the RAM table rather than rewriting the field). If H1 holds, PD4 always takes the
+consume-only branch, the mailbox handlers never execute, and the measured duplex lap is driven by
+the dispatcher's ack/clear/doorbell side effects. A five-word **read-only** pack (BAR0 `0x7C41B0`,
+`0x7D0D68`, `0x2000`; no fire) settles it on the next attended session [V]/[U]. No vendor-clean
+(unpatched-firmware) mailbox-delivery path has been demonstrated: the vendor mailbox sequence is
+already reproduced, the deferred-send variant's extra `out[5]=8` pre-kick had been tried once in
+the takeover era (accepted, no frame accept), ETE 0x2D/0x2E do not deliver, the ROM has no mailbox
+service and the image has no other out[0] reader [V]/[V*]. The one host-only candidate is a spare
+inbound iATU viewport onto CA `0x40160000` plus a one-shot raise of event 0x4C (CA
+`0x40161188 = 0x1000`, mirror `0x40161288`; enable already set at CA `0x40161108` bit 12) - a new
+device-write class, never attempted, needing its own attended design and IRQ-storm bounds
+[V]/[I]/[U]. Verdict: firmware patching is required for the closed vendor blob **as delivered**
+(conditional on that aperture experiment), not fundamental to the hardware; PD4 stays a
+research-only artifact that must never ship [I high].
 
 ---
 
@@ -1010,29 +1028,52 @@ copy, by contrast, runs normally - that asymmetry is what keeps the H2D send pat
 
 ### 6.6 The PD4 research patch: audit and boundary
 
-The PD4 patch is the reason the H2D mailbox works on an IRQ-dead boot (sections 3.8, F3, F10). Its
-audit - exact delta, cave-safety proof, minimality, and the search for a vendor-clean
-mailbox-delivery alternative - is owned by the fw-audit lane (shared task `task-115`; the
-deliverable was still in progress at this revision). The settled facts available now are:
+The PD4 patch is the reason the H2D mailbox works on an IRQ-dead boot (sections 3.8, F3, F10).
+The audit has now been delivered by the fw-audit lane (shared task `task-115`) as
+`wifi-fw-audit/REPORT.md` plus a reproducible harness (`verify_pd4.py` 31 checks + 14/14
+selftest; `pd4_variants.py` 14/14). Its verdicts:
 
-* the patched image (`cfe24bfb...`) differs from the pinned vendor blob in exactly two windows:
-  a 4-byte boot-task-epilogue redirect at file `0x0916A` and a 64-byte stub in the zero
-  static-data gap at CPU `0x108240`; length and all other bytes unchanged [V];
-* the cave has no references/writers and is outside both boot memsets and the exception-staging
-  area; the stub is our own code and only calls the firmware's own dispatcher wrapper (`0x40294`)
-  when the mailbox actually has work, with a consume-only substitution while the handler table is
-  still the static sentinel [V]/[V*];
-* on the bench the cave survives, the golden page/state/mask stay intact and every announce is
-  consumed in 0 polls; the solo g0-id1 fault of the pre-context boots was the handler's missing
-  context precondition, not the patch [V*];
-* **no vendor-clean (unpatched-firmware) mailbox-delivery path has been demonstrated**: the
-  event-controller window at CA `0x40160000` is not host-visible, the image never polls the
-  mailbox and the vendor host sends nothing between release and ready. A firmware patch is
-  therefore the only known way to exercise the firmware's own dispatcher on this board; the PD3B
-  inline-event-raise variant exists but was not fired [U] [V]/[I].
+* **Identity.** The published image (`cfe24bfb...`) rebuilds byte-identically from the pinned
+  vendor blob with exactly two segments: the 4-byte entry branch at file `0x0916A` and the 64-byte
+  stub at file `0x0C8240` - 68 patched bytes, 59 differing byte positions, length unchanged,
+  nothing else differs [V];
+* **Cave safety (independently re-run).** The stub lives in the 637-byte all-zero static-data gap
+  CPU `0x108197..0x108413`, outside both boot memsets and the exception-staging frame
+  `0x4000C..0x4004B`, between two referenced read-only tables; the exhaustive Thumb census finds
+  zero branch targets, literal loads, ADR/ADDW materialisations, aligned 32-bit values or movw/movt
+  pairs pointing into the gap [V];
+* **What it changes.** The boot-task success epilogue becomes a poll of mailbox out[0]
+  (CA `0x40039010`, read-only in the stub) that calls the firmware's own wrapper CPU `0x40294` ->
+  dispatcher CPU `0xC18AC`; the dispatcher acks (`out[5]=1`), clears out[0], writes the H2D-done
+  doorbell (`out[2]=8`) and dispatches the pending bit through the instance handler table. Every
+  device write is the firmware's own; our host "never write CA `0x400392F0`" rule is unchanged
+  [V]; the boot page/state/mask and the bench-validated duplex lap are untouched [V*];
+* **Open question H1/H2.** The stub's sentinel compare uses the instance handler-table pointer
+  field (CPU `0x10C1B0`, static value `0x00118D68`); static evidence says no image writer replaces
+  it, so the stub may always take the consume-only ROM-RAZ branch, in which case PD4 services the
+  mailbox through the dispatcher's ack/clear/doorbell side effects without executing the handlers.
+  A five-word **read-only** pack (BAR0 `0x7C41B0`, `0x7D0D68`, `0x2000`) settles it without a new
+  fire [V]/[U];
+* **Variants ranked.** `PD4-NOSENT` (force live branch, sha256 `0bc1b3e8...`) and
+  `PD4-ALWAYS0` (force consume-only, sha256 `84e9cd95...`) are built and hashed;
+  `PD4-MIN` (36-byte delta) and `PD4-LITE` (44-byte) are specified; the one-shot epilogue-call
+  variant is rejected (the host posts frames after boot) [V];
+* **Vendor-clean alternatives.** No host-only path is proven. The vendor mailbox sequence is
+  already reproduced; the vendor's deferred-send additionally writes `out[5]=8` pre-kick and was
+  tried once in the takeover era (accepted, no frame accept); ETE 0x2D/0x2E do not deliver, the ROM
+  has no mailbox service, the image has no other out[0] reader, and CA `0x40160000` is outside the
+  host-visible device-IO region [V]/[V*];
+* **The one remaining host-only candidate** is a spare inbound iATU viewport onto device CA
+  `0x40160000` plus a one-shot raise of event 0x4C (CA `0x40161188 = 0x1000`, mirror
+  `0x40161288`; per-event enable already set at CA `0x40161108` bit 12). This is a new
+  device-write class (firmware-owned interrupt controller) and has not been attempted; it needs its
+  own attended experiment, recovery card and IRQ-storm/one-shot bounds [V]/[I]/[U].
 
-Verdict: **research instrument only, never a shipping change.** It is committed as a patch recipe
-plus verifier, not as vendor firmware bytes (section 11).
+**Verdict.** Firmware patching is required for the closed vendor blob **as delivered** on this
+board; it is conditional only on the untested event-controller aperture experiment and is not a
+fundamental property of the hardware. PD4 stays a **research instrument only, never a shipping
+change**, and is published as a patch recipe plus verifier, not as vendor firmware bytes (section
+11). The audit also corrects two older lane statements (section 8, C27/C28).
 
 ---
 
@@ -1097,6 +1138,8 @@ End-of-chain bench state (ledger 2026-11-25 15:00): the box runs the cfg80211 be
 pair B (new kernel on kernelb, rootfsb unchanged, stock pair A untouched and bootable), with the
 firmware booted golden, the wiphy registered and the test VAP deleted; no writes are pending and
 the recovery path is the stock pair / physical recovery. This report's cut-off is that entry.
+The only post-cut-off artefact folded in is the **host-only PD4 audit** (no device session; section
+6.6, `wifi-fw-audit/REPORT.md`), delivered after the commit window and integrated here.
 
 ---
 
@@ -1135,6 +1178,8 @@ claim.
 | C24 | an unconsumed announce after a solo TXQ sync proves the firmware consumer died | it can be the exception cascade: the handler fault corrupts the PD3 poller in the staging area; with the context precondition satisfied and the PD4 cave, announces are consumed in 0 polls | txq72/PD4 + ordered lap | 2026-11-25 01:10-05:10 |
 | C25 | cfg80211 belongs to the upstream target/kernel series | the cfg80211 config is a BENCH-ONLY addition; it is not part of the luofu kernel patch series or the proposed submission v2 | CFG80211-BENCH-IMAGE sec 5 + upstream REPORT sec 12 | 2026-11-25 13:30 |
 | C26 | the wiphy band mapping "domain 0 = 2.4 GHz" is proven | it is an inference (`[I]`) with a `band_force` override; the bench saw both bands listed on the two endpoints, not a per-band link test | cfg80211 REPORT sec 3/10 R4 + bench dmesg | 2026-11-25 15:00 |
+| C27 | the firmware event-raise helper writes event 0x4C to CA `0x401611A0` (PD3B design note) | the helper CPU `0xC6DB8` uses base CA `0x40161180` + word index `id>>5`, so 0x4C targets CA `0x40161188` / mirror `0x40161288` (bit 12 = `0x1000`); `0x401611A0` would be id 0x100, outside the helper range. Matters only if the audit's A3 aperture experiment is ever designed | `wifi-fw-audit/REPORT.md` sec 13 C1 + `verify_pd4.py` | 2026-11-24 (audit) |
+| C28 | "twin/ack word" table maps `ctx+0x34` to a separate "twin copy B" register | the six context slots `ctx+0x2c..0x40` are `{out[0], out[1], out[2] doorbell, out[3] D2H ack, out[4] D2H rearm, out[5] ack}`; the vendor's "twin" write is simply the out[2] doorbell OR-1 that the clean transport already reproduces - there is no extra host register to write | `wifi-fw-audit/REPORT.md` sec 13 C2 | 2026-11-24 (audit) |
 
 ---
 
@@ -1161,6 +1206,7 @@ are host-only and device-free:
 | `wifi-ete-wake/tools/ete_wake.py selftest` | **PASS**, 81/81 | ETE trigger chain, host/vendor comparison, BAR0 map |
 | `wifi-cfg80211` host steps (replicated device-free) | **PASS**, 454/454 cfg80211 logic + 242/242 inherited H2D | wiphy/VAP model, registration gate, 39-op map |
 | `wifi-cfg80211/tools/selftest.py --kdir <tree>` | **144/145**; the single failure is the known provider-symvers redundancy after the real tree began exporting the six cfg80211 symbols (documented in `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5) | source/contract checks |
+| `wifi-fw-audit/tools/verify_pd4.py` + `pd4_variants.py` | **PASS**, 14/14 selftest + 31/31 checks + 14/14 variants | PD4 identity/delta, cave census, H1/H2 observation and the diagnostic variant builds |
 | `wifi-re-report/tools/verify_report.py` (this lane) | **PASS** (see 9.4) | this report's cross-references, markers, claim IDs and key constants |
 
 The remaining lane checks (e.g. `rom_s01.py` 70/70, `romdis.py` 86/86, `fw_pd_builder.py`
@@ -1297,7 +1343,10 @@ non-zero on failure.
    extension), and do the five remaining messages in vendor order behave the same as C1?
 4. What unmasks the firmware's IRQ layer on a real vendor boot, and can the image dispatcher be
    brought up legitimately (without a firmware patch)? This is the difference between a research
-   instrument and a usable driver; the vendor-clean audit is the current attempt (section 6.6).
+   instrument and a usable driver. The audit's answer is provisional: no host-only path is proven,
+   the H1/H2 read-only pack must be taken, and the only candidate (spare-iATU aperture onto the
+   event controller + one-shot raise of event 0x4C) is an untested device-write class (section
+   6.6).
 5. What is the exact vendor CECE service protocol (order, duration, ack semantics) for the image
    handlers, and does any later flow require it?
 6. What are the `g2` WAL config-command ids/payloads for AP start, key install and per-VAP config,
@@ -1401,7 +1450,7 @@ table and reproduction commands; where this report compresses, the lane expands.
 | `wifi-ete-wake` | section 6.5: ETE trigger chain, host-owned field comparison, E1a/E1b ladder |
 | `wifi-proto-seq` | sections 5.7/6.2: config-sync decode, calibration family and response contract |
 | `wifi-upstream-target` | sections 6.3/11: target tree fixes, bench-image build/flash, submission classification |
-| fw-audit (task-115; deliverable in progress) | section 6.6 / F10: PD4 minimality/safety audit and vendor-clean alternative analysis |
+| `wifi-fw-audit` | section 6.6 / F10: PD4 minimality/safety audit, H1/H2 open question, ranked variants and the vendor-clean alternative analysis (task-115) |
 
 Historical lanes still in the tree but not load-bearing for this report: `wifi-framework-port`,
 `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`, `wifi-algcfg-slice`,

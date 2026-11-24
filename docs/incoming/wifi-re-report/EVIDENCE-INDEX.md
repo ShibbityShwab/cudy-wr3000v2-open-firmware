@@ -105,7 +105,12 @@ section of [REPORT.md](REPORT.md).
 | EV-138 | 4 F9 | the frame plane is the separate MAC slot-5 ring block; the vendor's next frame is the TXQ address sync g0 id1 key 0x0320 | [V] | `wifi-datapath/REPORT.md` sec 0/2/5 | - | datapath 77/77 |
 | EV-139 | 4 F9 | the ready g4 id2 payload seeds the MSDU-info ring pointer table (ACP 0x02060850 -> MAC+0x10) | [V]/[V*] | `wifi-datapath/REPORT.md` sec 0.3 | ledger 2026-11-24 14:00 | - |
 | EV-140 | 4 F10 | PD4 is a two-window patch (4-byte entry redirect + 64-byte stub in the dead CPU 0x108240 gap), image hash cfe24bfb..., length unchanged | [V]/[V*] | `wifi-irq-unmask/REPORT-PD4.md` sec 2-3, T25 | ledger 2026-11-25 02:10 | - |
-| EV-141 | 4 F10 | no vendor-clean (unpatched-firmware) mailbox-delivery path has been demonstrated; PD4 is research-only | [I]/[U] | `wifi-irq-unmask/REPORT-PD4.md` sec 9 + fw-audit lane scope (task-115) | - | - |
+| EV-141 | 4 F10 | no vendor-clean (unpatched-firmware) mailbox-delivery path has been demonstrated; the audit's only host-only candidate is a spare-iATU aperture onto the event controller + one-shot event-0x4C raise (untested) | [V]/[I]/[U] | `wifi-fw-audit/REPORT.md` sec 7 | - | - |
+
+| EV-186 | 4 F10 | PD4 rebuilds byte-identically from the pinned blob: exactly 2 segments, 68 patched bytes, 59 differing byte positions, length unchanged 928,920 B | [V] | `wifi-fw-audit/REPORT.md` sec 2, `verify_pd4.py` (31 checks) | - | **yes** (harness re-run 31/31) |
+| EV-187 | 4 F10 | the stub's 637-byte cave has zero references (exhaustive Thumb census + ARM filtered scan), sits outside both boot memsets and the exception-staging frame | [V] | `wifi-fw-audit/REPORT.md` sec 4 | - | **yes** (harness re-run) |
+| EV-188 | 4 F10 | H1/H2: the sentinel field CPU `0x10C1B0` keeps its static `0x00118D68`; a 5-word read-only pack settles whether the dispatcher handlers ever execute | [V]/[U] | `wifi-fw-audit/REPORT.md` sec 5 | - | - |
+| EV-189 | 4 F10 | diagnostic variants PD4-NOSENT (`0bc1b3e8...`) and PD4-ALWAYS0 (`84e9cd95...`) are built/hashed; PD4-MIN/PD4-LITE specified; one-shot epilogue call rejected | [V] | `wifi-fw-audit/REPORT.md` sec 3, `pd4_variants.py` | - | **yes** (14/14 selftest) |
 
 ## Section 5 - protocol reference
 
@@ -151,6 +156,9 @@ section of [REPORT.md](REPORT.md).
 | EV-156 | 6.5 | the trigger chain: event 0x2E status bits 24-28 -> sending trigger 0xC625A; no image or vendor-host writer of status/send/doors | [V] | `wifi-ete-wake/REPORT.md` sec 2-3 | - | ete-wake 81/81 |
 | EV-157 | 6.5 | E1a/E1b negative on hardware: the +0x38 host lever left status/send/fills unmoved; direct read stays the supported RX path | [V*] | `wifi-ete-wake/REPORT.md` sec 8, ledger 2026-11-25 10:10 | - | - |
 | EV-158 | 6.5 | the SR (H2D) A->B copy runs normally while the DR direction is gated (the asymmetry that keeps H2D working) | [V*] | `wifi-ete-wake/REPORT.md` sec 6 | ledger 2026-11-24 15:10/22:10 | - |
+
+| EV-190 | 6.6 | the PD4 stub only reads out[0] CA `0x40039010` and calls the firmware wrapper `0x40294` -> dispatcher `0xC18AC`; every device write (ack/clear/doorbell/handler dispatch) is the firmware's own | [V] | `wifi-fw-audit/REPORT.md` sec 6 | - | - |
+| EV-191 | 6.6 | audit verdict: patching is required for the closed vendor blob as delivered, conditional only on the untested event-controller aperture experiment; not fundamental to the hardware; PD4 research-only (strong inference) | [I] | `wifi-fw-audit/REPORT.md` sec 7-10 | - | - |
 
 ## Section 7 - bench evidence chain
 
@@ -222,6 +230,9 @@ section of [REPORT.md](REPORT.md).
 | EV-176 | 8 | C25: the cfg80211 config belongs to the bench image, not the upstream kernel series | [V] | `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 5 | - | - |
 | EV-177 | 8 | C26: the domain->band wiphy mapping is an inference with a band_force override | [I] | `wifi-cfg80211/REPORT.md` sec 3/10 R4 | - | - |
 
+| EV-192 | 8 | C27: the event-raise helper targets CA `0x40161188`/`0x40161288` for event 0x4C (not `0x401611A0`) | [V] | `wifi-fw-audit/REPORT.md` sec 13 C1, C27 in REPORT | - | - |
+| EV-193 | 8 | C28: the vendor "twin/ack word" is simply the out[2] doorbell OR-1; no extra host register needs writing | [V] | `wifi-fw-audit/REPORT.md` sec 13 C2, C28 in REPORT | - | - |
+
 ## Section 9 - verification
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -238,6 +249,9 @@ section of [REPORT.md](REPORT.md).
 | EV-178 | 9.1 | the wave-2 device-free lane checks were re-run in this revision: 528, 233, 92, 40+26, 312, 77+35, 66+38+55, 81, 454+242 | [V] | the lanes' committed selftest entry points (see 9.1) | - | **yes** (this pass) |
 | EV-179 | 9.1 | the cfg80211 source selftest reports 144/145; the one failure is the known provider-symvers redundancy documented by the target lane | [V] | `wifi-cfg80211/tools/selftest.py`, `wifi-upstream-target/BUILD-VERIFICATION.md` sec 5 | - | **yes** (this pass) |
 | EV-180 | 9.4 | the verifier was extended for the v2 tables (T21-T25), milestone vocabulary and constants | [V] | this report's `tools/verify_report.py` | - | **yes** (this pass) |
+
+| EV-194 | 9.1 | the audit harness was re-run in this revision: verify_pd4 14/14 selftest + 31/31 checks; pd4_variants 14/14 | [V] | `wifi-fw-audit/tools/verify_pd4.py`, `pd4_variants.py` | - | **yes** (this pass) |
+| EV-195 | 11 | the audit deliverable is a patch recipe + verifier + derived analysis; the patched image and vendor blob stay local (no vendor bytes committed) | [V] | `wifi-fw-audit/README.md` sec publication, `wifi-fw-audit/recipes/PD4.recipe.json` | - | - |
 
 ## Sections 10-13 - limits, publication, lane map, conventions
 

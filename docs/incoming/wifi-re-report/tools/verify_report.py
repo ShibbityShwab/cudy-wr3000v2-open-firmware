@@ -133,7 +133,7 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 150 claims", len(uniq) >= 150, "%d" % len(uniq))
+    check("evidence index has at least 190 claims", len(uniq) >= 190, "%d" % len(uniq))
     check("evidence claims are numbered 1..N without gaps", uniq == list(range(1, len(uniq) + 1)),
           "max %d, count %d" % (uniq[-1] if uniq else 0, len(uniq)))
     rep = TEXT.get("REPORT.md", "")
@@ -211,6 +211,16 @@ def check_constants():
          get_lane("wifi-ete-wake/REPORT.md").lower()),
         ("cfg80211 ready gate", "g4 id1",
          get_lane("wifi-cfg80211/REPORT.md").lower()),
+        ("PD4 audit footprint", "68 patched bytes",
+         get_lane("wifi-fw-audit/REPORT.md").lower()),
+        ("PD4 audit harness", "31 checks",
+         get_lane("wifi-fw-audit/REPORT.md").lower()),
+        ("PD4 audit variant hash", "0bc1b3e8",
+         get_lane("wifi-fw-audit/REPORT.md").lower()),
+        ("PD4 audit H1 read pack", "0x7c41b0",
+         get_lane("wifi-fw-audit/REPORT.md").lower()),
+        ("PD4 audit raise CA", "0x40161188",
+         get_lane("wifi-fw-audit/REPORT.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src

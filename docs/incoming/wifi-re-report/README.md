@@ -4,7 +4,8 @@
 2026-11-25. **Status:** publication-grade umbrella report of the whole Hi5622V100 Wi-Fi/chip-protocol
 investigation, **v2**. v2 integrates the later 2026-11-25 milestones: the cfg80211 bench image and
 its flash, wiphy registration + nl80211 VAP lifecycle (M0/M1), calibration ladder C1, the ETE-wake
-negative, the mapped MAC data plane and the PD4 research-patch audit. The per-lane reports under
+negative, the mapped MAC data plane and the PD4 research-patch audit (delivered as `wifi-fw-audit/`, with
+its H1/H2 open question folded into finding F10 and section 6.6). The per-lane reports under
 `opensource/docs/incoming/wifi-*` remain the detail sources and the evidence of first record; this
 lane only consolidates, cross-checks and narrates.
 

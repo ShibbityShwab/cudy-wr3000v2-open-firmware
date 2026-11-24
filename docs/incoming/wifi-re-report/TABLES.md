@@ -426,7 +426,7 @@ REPORT-PD2/PD3/PD4 + ledger entries (dates given).
 | PD1 | 0x7610 31 46 03 48 BB F0 -> F8 F7 40 FE FC E7; 0x916A 00 20 21 B0 -> FE F7 51 BA | inline in the handshake retry body | f52a9322... | S1 completed but data abort (mask 0x10), page later clobbered; crash-loop - 2026-11-24 16:10 [V*] |
 | PD2 | 0x916A -> FE F7 62 B9 (b.w 0x47432) | CPU 0x47432 (62 B; supposed dead config-3 block) | 7a691807...1b7728 | boot FAILED: page 0x6F/3/9DFBEF6A/0, state garbage - the cave is LIVE on our boot - 2026-11-24 19:00 [V*] |
 | PD3 (A) | 0x0916A 00 20 21 B0 -> F6 F7 4F BF (b.w 0x4000C) | CPU 0x4000C..0x4004B (image-header exception-record area, 64 B zero) | eea9f2ff...3905ce | **SUCCESS**: golden page intact, state 1, mask 0; one announce consumed in 0 polls - 2026-11-24 22:10 [V*] |
-| PD3B | no cave; event-0x4C raise loop in the boot epilogue | inline | ef0683db... | not fired on the bench at this report's cut-off [U] |
+| PD3B | no cave; event-0x4C raise loop in the boot epilogue (raise CA corrected to `0x40161188` by C27) | inline | ef0683db... | not fired on the bench at this report's cut-off [U] |
 | PD4 | 0x0916A -> BF F0 69 B8 (b.w 0x108240) | CPU 0x108240 inside static-data gap 0x108197..0x108413 (637 B; zero branch/literal refs; outside both boot memsets and the exception staging area) | cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1 | cave verified present before/after; g0-id1 fault reproduces; ordered lap then succeeds with no exception - 2026-11-25 02:10 / 05:10 [V*]; audit/delta: T25 |
 
 PD3/PD4 stub (our own code, 64 B at 0x4000C / 0x108240; identical logic in both patches):
@@ -533,7 +533,7 @@ the preflight; capture dmesg/UART read-only, then power-cycle.
 | `wifi-datapath` | two-plane model, MAC slot-5 ring block, TX/RX formats, key tables A/B |
 | `wifi-ete-wake` | ETE trigger chain, host-owned field comparison, E1a/E1b negative |
 | `wifi-upstream-target` | target build verification, cfg80211 bench image, patch classification |
-| fw-audit lane (task-115; deliverable in progress) | PD4 minimality/safety audit and vendor-clean alternative analysis |
+| `wifi-fw-audit` | PD4 minimality/safety audit, H1/H2 open question, ranked variants, vendor-clean alternative analysis (task-115) |
 
 Historical lanes (`wifi-framework-port`, `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`,
 `wifi-algcfg-slice`, `wifi-datapath-slice`, `wifi-thermal-re`, `wifi-driver-integration`) remain
@@ -619,20 +619,26 @@ marked CPU/BAR0.
 | direct-read constraint | ETE messages only; MAC DMA is independent of the ETE A->B copy | live hypothesis, ladder B2 tests it | [I] |
 | bring-up order | D0 MAC register model -> D1 RX rings/NAPI -> D2 TX ring + TXQ sync -> D3 user/VAP -> D4 scan -> D5 STA join; read-only B2 probe first | an extra iATU viewport once rebooted the box | [I]/[V*] |
 
-## T25. PD4 research patch - delta, cave proof and audit boundary
+## T25. PD4 research patch - identity, audit, H1/H2 and vendor-clean alternatives
 
-Source: `wifi-irq-unmask/REPORT-PD4.md` sec 2-5 (static/verification) + bench records; audit owned
-by the fw-audit lane (shared task `task-115`; deliverable in progress at this revision). The
-patched image exists only outside the repository.
+Source: `wifi-fw-audit/REPORT.md` (task-115; harness `verify_pd4.py` 31 checks + 14/14 selftest,
+`pd4_variants.py` 14/14), `wifi-irq-unmask/REPORT-PD4.md` sec 2-5, and the bench records. The
+patched image exists only outside the repository (recipe-only publication).
 
 | item | value | evidence |
 | --- | --- | --- |
-| PD4-ENTRY | file `0x0916A`, 4 B: `00 20 21 B0` -> `BF F0 69 B8` (`b.w 0x108240`), boot-task success epilogue | [V] |
-| PD4-LOOP | file `0x0C8240`, 64 B (zero in the vendor image) -> guarded `out[0]` poll stub; calls wrapper `0x40294` only when mailbox work is pending; consume-only substitution while the handler table is the static sentinel | [V] |
-| patched image | sha256 `cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1`, length unchanged 928,920 B; only the two segment windows differ from the pinned blob | [V] |
-| cave | CPU `0x108197..0x108413` (637 B all-zero static-data gap between two referenced read-only tables `0x108054`/`0x108414`); no branch target, no literal/address materialisation, outside both boot memsets (`0x117C00..0x1ADDE0`, `0x1000000..0x10E0000`) and outside the exception-staging area `0x4000C..0x4004B` | [V] |
-| why patching is needed | event 0x4C (H2D mailbox arrival) is delivered only through the image vector/dispatcher path; the event-controller window CA `0x40160000` is not host-visible; the image never polls the mailbox; the vendor host sends nothing between release and ready | [V]/[V*] |
-| rejected alternatives | PD3's header-record area (its own exception staging overwrites the stub); PD2's config-3 block (live on our boot); no vendor-clean mailbox-delivery path demonstrated | [V*]/[I] |
+| PD4-ENTRY | file `0x0916A`, 4 B: `00 20 21 B0` -> `BF F0 69 B8` (`b.w 0x108240`), boot-task success epilogue; minimum possible redirect | [V] |
+| PD4-LOOP | file `0x0C8240`, 64 B (zero in the vendor image) -> guarded `out[0]` poll stub; `sub sp,#4` restores AAPCS alignment after skipping the epilogue's `add sp`+pop; calls wrapper `0x40294` only when mailbox work is pending | [V] |
+| patched image | sha256 `cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1` rebuilds byte-identically from the pinned blob; exactly 2 segments, 68 patched bytes, 59 differing byte positions, length unchanged 928,920 B, no other byte differs | [V] |
+| cave | CPU `0x108197..0x108413` (637 B all-zero static-data gap between two referenced read-only tables `0x108054`/`0x108414`); exhaustive Thumb census: 0 branch/literal/ADR references; outside both boot memsets (`0x117C00..0x1ADDE0`, memset(`0x01000000,0,0xE0000`)) and outside the exception-staging frame `0x4000C..0x4004B` | [V] |
+| what the stub changes | boot-task epilogue -> out[0] poll; calls firmware wrapper CPU `0x40294` -> dispatcher CPU `0xC18AC` (ack `out[5]=1`, clear out[0], doorbell `out[2]=8`, handler-table dispatch). Stub reads only CA `0x40039010`, writes no device CA; host never-write rule for CA `0x400392F0` unchanged | [V] |
 | bench record | PD4 fires 2026-11-25 02:10 (cave bytes present before/after, fault reproduces) and the ordered lap 05:10/07:40 (announces consumed in 0 polls, mask 0, golden page) | [V*] |
-| audit status | the fw-audit lane (task-115) formalizes minimality/safety and the vendor-clean alternative analysis; at this revision the settled verdict is **research instrument only, never a shipping change** | [V]/[I] |
+| **H1/H2 open question** | the sentinel compare uses instance handler-table pointer field CPU `0x10C1B0` = static `0x00118D68`; no image writer found, so the stub may always take the consume-only ROM-RAZ branch and the handlers may never execute. Decisive read-only pack (no fire): BAR0 `0x7C41B0` (instance+0x20), `0x7D0D68/+0x10/+0x20` (table ids 1/3/5), `0x2000` (ROM RAZ) | [V]/[U] |
+| diagnostic variants | `PD4-NOSENT` force live branch, sha256 `0bc1b3e8c5b875095945ba37c700205237ba4049e53148d282e60f4ef5fc2820`; `PD4-ALWAYS0` force consume-only, sha256 `84e9cd9503fa8d2740d3382efe114639b29f439c0e611ec9504796a215590210`; `PD4-MIN` (36 B delta) / `PD4-LITE` (44 B) specified; one-shot epilogue call rejected | [V] |
+| vendor-clean alternatives | NO host-only path proven. Vendor mailbox sequence already reproduced; deferred-send writes `out[5]=8` pre-kick (tried once in the takeover era: accepted, no frame accept); ETE 0x2D/0x2E do not deliver; ROM has no mailbox service; image has no other out[0] reader; CA `0x40160000` outside host-visible region | [V]/[V*] |
+| one host-only candidate | spare inbound iATU viewport onto CA `0x40160000` + one-shot raise of event 0x4C: CA `0x40161188 = 0x1000`, mirror `0x40161288`; enable already set at CA `0x40161108` bit 12. New device-write class, untested, needs its own attended design + IRQ-storm bounds | [V]/[I]/[U] |
+| verdict | patching required for the closed vendor blob **as delivered** (conditional only on the untested aperture experiment; not fundamental to the hardware); PD4 = research instrument only, never a shipping change | [I high] |
+
+Audit corrections folded into the report: PD3B raise CA `0x401611A0` -> `0x40161188` (C27) and
+the "twin/ack word" = out[2] doorbell (C28), both in REPORT section 8.
 
