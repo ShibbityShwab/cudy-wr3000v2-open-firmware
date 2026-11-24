@@ -1,0 +1,242 @@
+{
+  "schema": "hi5622-protocol-sequence/1",
+  "name": "ladder-d-datapath",
+  "about": "PD4 golden boot -> ONE ordered context-create (g0 id1 key 0x64, type 1) -> read-only MAC slot-5 reachability probe (dp_probe, ONE word) -> dp_setup (allocate TXQ table + 8x64 TX MSDU rings + tx_ba_info + RX 256/512 free rings + 4095 completion ring; write device-RAM MSDU-info table; program+verify MAC band0) -> ONE TXQ-table address sync H2D frame (g0 id1 key 0x0320, 4-byte table devVA) -> post packs. Host-only lane's ladder D (wifi-datapath-bringup, task-111), NOT yet fired at the device.",
+  "profile": "hi5622-wifi-h2d",
+  "module_names": [
+    "hi5622_wifi"
+  ],
+  "require": {
+    "ready_pair": true,
+    "boot_page": true,
+    "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+    "fw_len": 928920,
+    "budget_min": 2
+  },
+  "load_params": {
+    "h2d_send_budget": 2
+  },
+  "steps": [
+    {
+      "name": "boot-golden",
+      "kind": "read_pack",
+      "about": "LATCHED golden handshake page + state/mask/staging before any H2D message or MAC write",
+      "reads": [
+        {
+          "label": "page0",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          },
+          "about": "handshake page word 0"
+        },
+        {
+          "label": "page4",
+          "bar0": "0x877004",
+          "expect": {
+            "eq": "0x00000007"
+          }
+        },
+        {
+          "label": "page8",
+          "bar0": "0x877008",
+          "expect": {
+            "eq": "0x00000002"
+          },
+          "about": "+8==2 = S1 completed (the latch)"
+        },
+        {
+          "label": "pagec",
+          "bar0": "0x87700c",
+          "expect": {
+            "eq": "0x0000abcd"
+          }
+        },
+        {
+          "label": "state",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          },
+          "about": "boot state CA 0x118b60"
+        },
+        {
+          "label": "mask",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "exception bitmap (0 = no exceptions)"
+        },
+        {
+          "label": "staging",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "exception staging frame word 0"
+        },
+        {
+          "label": "cave",
+          "bar0": "0x7c0240",
+          "about": "PD4 stub cave snapshot (captured, expected stub code)"
+        }
+      ]
+    },
+    {
+      "name": "catalog-boot",
+      "kind": "catalog_snapshot",
+      "about": "D2H catalogue before the H2D pair (baseline for the post-run delta)"
+    },
+    {
+      "name": "ctx-create-t1",
+      "kind": "attr_write",
+      "attr": "h2d_ctx_create",
+      "value": "1",
+      "about": "ONE context-create H2D message (g0 id1 key 0x64, type 1) - the ordered precondition of every key-addressed message. No retry."
+    },
+    {
+      "name": "post-create-status",
+      "kind": "attr_expect",
+      "attr": "h2d_status",
+      "patterns": [
+        "ctx_created=1",
+        "frames_sent=1",
+        "phase=ACTIVE"
+      ],
+      "about": "the create was committed and the core phase moved ACTIVE (source of the second frame's legality)"
+    },
+    {
+      "name": "dp-probe",
+      "kind": "attr_expect",
+      "attr": "dp_probe",
+      "patterns": [
+        "dp_probe: MAC band0 CA 0x40040000"
+      ],
+      "about": "ONE read-only word read of MAC band-0 +0x00. Gate is that the window answered without a bus error (value captured: vendor boot 0x100, a 0/other value is recorded and setup may still run)."
+    },
+    {
+      "name": "dp-setup",
+      "kind": "attr_write",
+      "attr": "dp_setup",
+      "value": "1",
+      "about": "ONE data-plane setup: allocate TXQ table 0x2524 + 8x64x8 TX MSDU rings + tx_ba_info 0x800 + RX free rings 256/512 x 4 B + completion ring 4095 x 4 B + 0x63c/0xb0 buffer pools; write 8 device-RAM MSDU-info table entries {ring devVA,0,0} through ACP; program MAC band0 in vendor order with read-back verify. No retry on failure."
+    },
+    {
+      "name": "dp-setup-status",
+      "kind": "attr_expect",
+      "attr": "dp_status",
+      "patterns": [
+        "setup_done=1",
+        "failed=0",
+        "mac_regs=14",
+        "table_entries=8"
+      ],
+      "about": "setup completed with all 14 MAC writes verified and all 8 ring-table entries read back"
+    },
+    {
+      "name": "dp-rings-check",
+      "kind": "attr_expect",
+      "attr": "dp_rings",
+      "patterns": [
+        "+0x38 = 0x00008000",
+        "+0x3c = 0x00008000",
+        "+0x48 = 0xfffffcc1",
+        "tid 7 entry"
+      ],
+      "about": "live MAC band-0 register snapshot: RX free-ring producers published full (index 0/phase 1), vendor interrupt mask, and the device-RAM table entries readable"
+    },
+    {
+      "name": "pre-txq-status",
+      "kind": "attr_expect",
+      "attr": "h2d_status",
+      "patterns": [
+        "txq_addr_sent=0",
+        "frames_sent=1",
+        "txq_addr_sync=ok"
+      ],
+      "about": "the key-0x0320 hand-off is legal now and has not been sent"
+    },
+    {
+      "name": "dp-txq-sync",
+      "kind": "attr_write",
+      "attr": "h2d_txq_addr_sync",
+      "value": "1",
+      "about": "ONE g0 id1 key-0x0320 TXQ-table address sync frame: 32 B frame, data = 4-byte device VA of the 0x2524-byte host TXQ table, through the exact H2D carrier (SR node) + coalesced mailbox id-3 announce + bounded out[0] poll. No retry."
+    },
+    {
+      "name": "post-txq-status",
+      "kind": "attr_expect",
+      "attr": "h2d_status",
+      "patterns": [
+        "txq_addr_sent=1",
+        "ok=2",
+        "timeout=0",
+        "frames_sent=2"
+      ],
+      "about": "the firmware consumed the second announce (no timeout) and the hand-off is recorded"
+    },
+    {
+      "name": "post-txq-pack",
+      "kind": "read_pack",
+      "about": "the whole point: mask 0 + staging 0 after the MAC program and the 0x320 frame; page/state still golden; mailbox drains",
+      "reads": [
+        {
+          "label": "mask2",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "no firmware exception after the data-plane setup / hand-off"
+        },
+        {
+          "label": "staging2",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        },
+        {
+          "label": "state2",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          }
+        },
+        {
+          "label": "page0b",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          }
+        },
+        {
+          "label": "out0",
+          "bar0": "0x3f1010",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "out[0] CA 0x40039010 drained"
+        },
+        {
+          "label": "out2",
+          "bar0": "0x3f12d4",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "out[2] doorbell CA 0x400392d4 at rest"
+        }
+      ]
+    },
+    {
+      "name": "catalog-after",
+      "kind": "catalog_snapshot",
+      "about": "post-run D2H catalogue delta capture (the 0x320 worker has no known D2H answer; this is evidence, not a gate)"
+    },
+    {
+      "name": "done-note",
+      "kind": "note",
+      "about": "STOP after this boot. One setup + one hand-off frame per load; do not retry a failed step, do not reload in the same boot (the PD4 cave poll loop is one-shot). Recovery door armed for the whole session."
+    }
+  ]
+}
