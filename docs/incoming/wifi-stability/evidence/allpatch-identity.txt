@@ -1,0 +1,18 @@
+FINAL ALL-PATCH module (host-built, NOT fired as this exact combination)
+chain: base 44c6cc12 -> polished d145a205 -> dp-tuning 175a4617 ->
+       scan-tuning R4 -> stability hardening (b5dfb883) ->
+       rx-static + beacon-static(+72dabe8) + wpa-static + sta-static
+artifact: /tmp/wifi-allpatch-artifact/hi5622_wifi.ko
+stripped:   308080 B sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+unstripped: 1138024 B sha256 a50680915eb432a4b9ec64f6180a5629773950989aa98b69677ab103961abc56
+vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
+depends: cfg80211
+params: 47
+warnings: 0; strip leaves .text byte-identical
+cfg80211 contract: 10-line provider symvers, cfg80211_bss_iter imported, no undefined symbols
+resolved overlaps: hi5622_frames_api.h, hi5622_scan_logic.c,
+  hi5622_vapscan_provider.c, Kbuild, hi5622_cfg80211.c, hi5622_cfg80211_ops.c
+  (WPA caps renumbered to bits 12/13/14 to avoid beacon bit 9)
+fire recipe: FINAL-INTEGRATION.md section 4 (allow_frames=32 h2d_send_budget=10
+  wpa_keys=1 rx_enable=1 beacon_static=1; AP 5-step order + WPA2 GTK + TX
+  COMPLETED + rx_arm)
