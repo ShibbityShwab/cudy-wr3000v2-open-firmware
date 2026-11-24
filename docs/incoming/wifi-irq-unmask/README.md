@@ -19,6 +19,9 @@ never copied into this directory.
 | `tools/fw_pd_builder.py` | PD2/PD3/PD3B builder+verifier: pinned blob, per-window sha256, patched images + manifests written outside the repo, machine-readable recipes; `--list`, `--build NAME`, `--recipe NAME`, `--selftest` (56/56) |
 | `tools/pd3_re.py` | verifier for the PD3 cave proof (header layout, record-area zero/census, crash-path writer) and the PD2-A failure reconstruction; `header`, `pd2-fail`, `selftest` (15/15) |
 | `PD3.recipe.json`, `PD3B.recipe.json` | machine-readable PD3 and no-cave PD3B recipes (`hi5622-fw-patch-recipe/1`) for `wifi-bench-tooling/tools/fw_patch_builder.py` |
+| `REPORT-PD4.md` | PD4 iteration (task-100): the PD3 cave's fatal writer (exception-staging frame at exactly 0x4000C..0x4004B), whole-image re-scan of every zero gap with verdicts, the chosen **CPU 0x108240** cave inside the 637-byte static-data alignment gap 0x108197..0x108413 (zero branch/literal/word/movw references, outside both boot memsets and the staging area, bracketed by two referenced read-only tables), exact patch bytes/hashes, expected first-fault-frame observables, and the **g0 id1 field-B context precondition** (CA 0xFE578 -> boot-populated 19-entry table at G=0x170E28 + 0x630+id*4; +0x190 only set by the context-create helper 0xFE6BC, so our boot's context 4 is non-NULL but zeroed -> worker stores through NULL -> DABT at 0x81040) |
+| `tools/pd4_re.py` | PD4 verifier: `cave` (gap proof + whole-image reference census + writer exclusion + patch segments), `ctx` (field-B context lookup/init precondition + fault model), `selftest` (42/42) |
+| `PD4.recipe.json` | machine-readable PD4 recipe (`hi5622-fw-patch-recipe/1`) for `wifi-bench-tooling/tools/fw_patch_builder.py`; patched image sha256 `cfe24bfb…037b1` |
 
 **Headline result.** The missing transition is *not* the CPU IRQ mask: the image executes
 `cpsie i` (0xC2B80) before every task body via the task-entry trampoline 0xC2B88 -> 0xC2B7A,
@@ -49,6 +52,18 @@ uninitialised value (0x118D68, image code) it substitutes the ROM RAZ window 0x2
 ack/consume/doorbell contract runs without an unverified `blx`. Patched image sha256
 `7a691807...1b7728`; see `REPORT-PD2.md`.
 
+**PD4 (2026-11-24, task-100).** PD3's cave is the exception-staging frame area, so the first
+exception destroys the poller and the true first-fault frame is lost (that is the txq_sync72
+mask 0x12 cascade). PD4 moves the identical guarded out[0] poll stub to **CPU 0x108240**, inside
+the **637-byte all-zero static-data alignment gap CPU 0x108197..0x108413** - outside both boot
+memsets, outside the staging area, referenced by no branch/literal/word/movw anywhere, and
+bracketed by two referenced read-only tables. Image **`cfe24bfb…037b1`**. One txq_sync72 fire
+then leaves the TRUE first exception frame intact at CPU 0x4000C (BAR0 0x6F800C): expected
+pc 0x8103C/0x81040 with r3=0, which would confirm the **field-B context precondition** found in
+`REPORT-PD4.md` section 6: CA 0xFE578 returns a valid boot-created context pointer for field B,
+but ctx+0x190 is NULL until a context-create message has run, so the TXQ config sync cannot be the
+first real message on our host-only boot.
+
 **Reproduce** (host-only; local blob read in place):
 
     PY=.provision-venv/bin/python
@@ -73,3 +88,8 @@ ack/consume/doorbell contract runs without an unverified `blx`. Patched image sh
     $PY $T/fw_pd_builder.py --selftest   # 56/56 PASS (PD2/PD3/PD3B)
     $PY $T/fw_pd_builder.py --recipe PD3
     $PY $T/fw_pd_builder.py --build PD3 --out /tmp/hi5622-pd3
+    # PD4 (task-100)
+    $PY $T/pd4_re.py --selftest            # 42/42 PASS
+    $PY $T/pd4_re.py --cave                # 0x108240 cave proof + census + segments
+    $PY $T/pd4_re.py --ctx                 # g0 id1 field-B context precondition
+    $PY $T/fw_pd_builder.py --build PD4 --out /tmp/hi5622-pd4   # sha256 cfe24bfb…037b1

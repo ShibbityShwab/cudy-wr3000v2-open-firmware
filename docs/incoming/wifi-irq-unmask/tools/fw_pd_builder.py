@@ -15,12 +15,26 @@ PD2 (historical, FIRED ON THE BENCH AND FAILED - kept for the record)
   golden page, i.e. entry A took the config-3 branch (runtime selector == 3) and executed the
   stub.  See ../REPORT-PD3.md.
 
-PD3 (current)
+PD3 (validated on hardware, but its cave is the exception-staging area)
   Same guarded poll logic, but the stub is placed in the image header's exception-record
-  area CPU 0x4000C..0x4004B: the only control-flow-unreachable, file-backed region in the
-  image (ROM only uses header +0x00/+0x04 and the handler table at +0x50; no branch target
-  and no PC-relative literal load exists into the record area; the only runtime writer is the
-  exception staging routine, i.e. a crash path that already ends the experiment).
+  area CPU 0x4000C..0x4004B: no branch target and no PC-relative literal load exists into
+  the record area; the only runtime writer is the exception staging routine, i.e. a crash
+  path that already ends the experiment.  The POST-READY fire showed WHY that is fatal:
+  the FIRST exception's 17-word staged frame is written to exactly 0x4000C..0x4004B, i.e.
+  over the parked poller, so the poller dies and the record is overwritten by follow-up
+  (undefined) exceptions - the true first-fault frame is lost.
+
+PD4 (current)
+  Identical guarded poll logic, relocated to CPU 0x108240 (file 0xC8240), inside the
+  637-byte all-zero static-data padding gap CPU 0x108197..0x108413 (file 0xC8197..0xC8413).
+  The gap is (a) file-backed static read-only data, (b) OUTSIDE both boot memsets
+  (0x117C00..0x1ADDE0 and 0x1000000..0x10E0000), (c) outside the exception-record area,
+  (d) referenced by NO branch target, NO PC-relative literal load, NO word/movw/movt
+  address materialisation, and (e) bracketed by two referenced read-only tables
+  (0x108054 read at 0xDE79C; 0x108414 read at 0xDE864, both accessed with positive
+  offsets from their base) so it is neither read nor written at runtime.  The exception
+  staging routine does not touch it, so after one post-ready fire CA 0x4000C..0x4004B
+  holds the TRUE first exception frame.
 
 Subcommands:
   --list [NAME]          recipe segments + source windows (hash-verified against the blob)
@@ -50,7 +64,11 @@ FW_LEN = 928920
 # Decoded facts (each verified by --selftest).
 CPU_EPILOGUE = 0x4916A          # boot-task success epilogue (movs r0,#0; add sp,#0x84; pop)
 CPU_PD2_CAVE = 0x47432          # PD2: config-3 block of entry A (NOT dead on our boots)
-CPU_PD3_CAVE = 0x4000C          # PD3: image-header exception-record area (unreachable)
+CPU_PD3_CAVE = 0x4000C          # PD3: image-header exception-record area (staging frame clobbers it)
+CPU_PD4_CAVE = 0x108240         # PD4: static-data alignment gap (zero-fill, never referenced/written)
+PD4_GAP_LO = 0x108197           # zero-run start (first zero byte after the previous table)
+PD4_GAP_HI = 0x108414           # zero-run end (exclusive; next table base, referenced at 0xDE89C)
+PD4_IMAGE_SHA256 = "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1"
 CPU_HANDLER_TABLE = 0x40050     # image header handler table: cave must end before this
 CPU_WRAPPER = 0x40294           # ldr r0,=0x10C190 ; b.w 0xC18AC (event-0x4C handler)
 CPU_DISPATCH = 0xC18AC          # H2D mailbox dispatcher
@@ -239,6 +257,13 @@ RECIPES = {
         "based_on": None,
         "expect": "PD3 guard+poll stub (image header record area, unreachable)",
     },
+    "PD4": {
+        "about": "post-boot H2D mailbox poll loop in the 637-byte zero static-data alignment gap "
+                 "(CPU 0x108240), outside both boot memsets and outside the exception-staging area",
+        "cave": CPU_PD4_CAVE,
+        "based_on": None,
+        "expect": "PD4 guard+poll stub (0x108240 static-data gap, never referenced/written)",
+    },
     "PD3B": {
         "about": "no-cave alternative: raise event 0x4C every loop from the boot epilogue (tests the firmware event controller; zero table installed)",
         "cave": None,
@@ -270,6 +295,12 @@ def build_segments(blob, name):
     if cave == CPU_PD3_CAVE:
         assert cave >= MASK_WORD + 4, "record mask halfword must not be overwritten"
         assert cave + len(stub) <= CPU_HANDLER_TABLE, "stub must end before the header table"
+    elif cave == CPU_PD4_CAVE:
+        assert cave % 4 == 0, "PD4 cave must be word aligned"
+        assert PD4_GAP_LO <= cave and cave + len(stub) <= PD4_GAP_HI, \
+            "PD4 stub must fit inside the all-zero static-data gap"
+        assert blob[off:off + len(stub)] == b"\x00" * len(stub), \
+            "PD4 cave source window must be all zero in the vendor image"
     else:
         assert cave >= 0x47432 and cave + len(stub) <= 0x47472
     entry_off = CPU_EPILOGUE - BASE
@@ -441,11 +472,37 @@ def selftest():
        "(mask 0x40008 + 17-word frame 0x4000C..0x4004C, crash path only)",
        u32(STAGING_LITERAL) == 0x40008 and True, "")
 
+    # --- PD4 cave: the 637-byte all-zero static-data gap CPU 0x108197..0x108413
+    ck("PD4 cave inside the all-zero static-data gap",
+       PD4_GAP_LO <= CPU_PD4_CAVE and CPU_PD4_CAVE + 64 <= PD4_GAP_HI,
+       "0x%x + 64 vs [0x%x,0x%x)" % (CPU_PD4_CAVE, PD4_GAP_LO, PD4_GAP_HI))
+    ck("PD4 gap is all zero in the vendor image",
+       blob[PD4_GAP_LO - BASE:PD4_GAP_HI - BASE] == b"\x00" * (PD4_GAP_HI - PD4_GAP_LO))
+    ck("PD4 cave source window is all zero",
+       blob[CPU_PD4_CAVE - BASE:CPU_PD4_CAVE - BASE + 64] == b"\x00" * 64)
+    ck("PD4 gap ends at the next referenced static table base (0x108414)",
+       struct.unpack_from("<I", blob, 0xDE89C - BASE)[0] == 0x108414
+       and struct.unpack_from("<I", blob, 0xDE898 - BASE)[0] == 0x108054)
+    ck("PD4 gap is outside both boot memsets",
+       not (0x117C00 <= PD4_GAP_LO <= 0x1ADDE0) and not (0x117C00 <= PD4_GAP_HI <= 0x1ADDE0)
+       and not (0x1000000 <= PD4_GAP_LO <= 0x10E0000))
+    ck("boot memset bounds (0x117C00..0x1ADDE0)",
+       u32(0x46DEC) == 0x117C00 and u32(0x46DF0) == 0x1ADDE0)
+
     # --- build both recipes, verify bytes + decode + only-segments-differ
-    for name in ("PD2", "PD3", "PD3B"):
+    for name in ("PD2", "PD3", "PD4", "PD3B"):
         rec, segs = build_segments(blob, name)
         for s in segs:
             ck("%s %s len inside %s cave" % (name, s["name"], name), s["len"] > 0)
+            if name == "PD4" and s["name"] == "LOOP":
+                ck("PD4 stub starts at the static-data-gap cave", s["cpu"] == CPU_PD4_CAVE)
+                ck("PD4 stub fits inside the zero gap before the next table",
+                   PD4_GAP_LO <= s["cpu"] and s["cpu"] + s["len"] <= PD4_GAP_HI,
+                   "0x%x+%d vs 0x%x" % (s["cpu"], s["len"], PD4_GAP_HI))
+                ck("PD4 source window is the all-zero gap", s["source"] == b"\x00" * s["len"])
+                ck("PD4 cave is not the exception-staging area",
+                   not (MASK_WORD < s["cpu"] < CPU_HANDLER_TABLE))
+                ck("PD4 cave is not the PD2 config-3 block", s["cpu"] != CPU_PD2_CAVE)
             if name == "PD3" and s["name"] == "LOOP":
                 ck("PD3 stub starts at 0x4000C (record area, after the mask halfword)",
                    s["cpu"] == CPU_PD3_CAVE)
@@ -456,7 +513,7 @@ def selftest():
                    s["cpu"] >= MASK_WORD + 4, hex(s["cpu"]))
                 ck("PD3 source window is the all-zero record area",
                    s["source"] == b"\x00" * s["len"], s["source"][:8].hex())
-            if s["name"] == "ENTRY" and name in ("PD2", "PD3"):
+            if s["name"] == "ENTRY" and name in ("PD2", "PD3", "PD4"):
                 ins = dis1(s["patched"], s["cpu"])
                 tgt = segs[1]["cpu"]
                 ck("%s ENTRY decodes as b.w target 0x%x" % (name, tgt),
@@ -518,6 +575,9 @@ def selftest():
         ck("%s patched image differs only inside the segments" % name, diff <= allowed,
            "%d outside" % len(diff - allowed))
         ck("%s patched image length unchanged" % name, len(img) == len(blob))
+        if name == "PD4" and PD4_IMAGE_SHA256 != "PENDING":
+            ck("PD4 patched image sha256 is the pinned binary",
+               sha256(img) == PD4_IMAGE_SHA256, sha256(img))
         with open(man) as f:
             mtxt = f.read()
         ck("%s manifest has hashes only" % name,
@@ -563,7 +623,8 @@ def main(argv):
         print("error: %s is not the pinned vendor blob (%s, %d B)"
               % (a.fw, sha256(blob), len(blob)))
         return 2
-    names = ("PD2", "PD3") if getattr(a, "list", None) == "ALL" else [getattr(a, "list", None)]
+    names = (("PD2", "PD3", "PD4") if getattr(a, "list", None) == "ALL"
+             else [getattr(a, "list", None)])
     if a.list is not None:
         for name in names:
             rec, segs = build_segments(blob, name)

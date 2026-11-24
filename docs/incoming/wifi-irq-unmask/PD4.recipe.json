@@ -1,0 +1,28 @@
+{
+  "schema": "hi5622-fw-patch-recipe/1",
+  "name": "PD4",
+  "about": "post-boot H2D mailbox poll loop in the 637-byte zero static-data alignment gap (CPU 0x108240), outside both boot memsets and outside the exception-staging area",
+  "source": {
+    "sha256": "7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b",
+    "len": 928920
+  },
+  "based_on": null,
+  "segments": [
+    {
+      "file": 37226,
+      "len": 4,
+      "source_sha16": "c5975cf4bd702f88",
+      "patched_hex": "bff069b8",
+      "isa": "thumb",
+      "expect": "b.w #0x108240"
+    },
+    {
+      "file": 819776,
+      "len": 64,
+      "source_sha16": "f5a5fd42d16a2030",
+      "patched_hex": "0b4f81b03b68002bfcd00a4a1368002bf8d07b69084ca34202d038f71bf8f1e7064c7c6138f716f87b61ebe700bf00bf9cc1100010900340688d110000200000",
+      "isa": "thumb",
+      "expect": "ldr r7, [pc, #0x2c] ; sub sp, #4 ; ldr r3, [r7] ; cmp r3, #0 ; beq #0x108244 ; ldr r2, [pc, #0x28] ; ldr r3, [r2] ; cmp r3, #0 ; beq #0x108244 ; ldr r3, [r7, #0x14] ; ldr r4, [pc, #0x20] ; cmp r3, r4 ; beq #0x108260 ; bl #0x40294 ; b #0x108244 ; ldr r4, [pc, #0x18] ; str r4, [r7, #0x14] ; bl #0x40294 ; str r3, [r7, #0x14] ; b #0x108244 ; nop ; nop ; stm r1!, {r2, r3, r4, r7} ; movs r0, r2 ; str r0, [sp, #0x40] ; ands r3, r0 ; ldrh r0, [r5, #0x2a] ; movs r1, r2 ; movs r0, #0 ; movs r0, r0"
+    }
+  ]
+}
