@@ -30,7 +30,7 @@ boot task's success epilogue into a permanent poll loop calling the firmware's o
 dispatcher wrapper 0x40294: expected after one host mailbox post — out[0] bit3 clears,
 out[5] reads 1, out[2] reads 8.
 
-**PD3 (2026-11-24, task-98): PD2-A failed on the bench - its cave (entry A config-3 block
+**PD3 (2026-11-24, task-91 follow-up): PD2-A failed on the bench - its cave (entry A config-3 block
 0x47432) is live on our boots; PD3 moves the same guarded out[0] poll stub to the image-header
 exception-record area CPU 0x4000C (globally unreachable, entered only by our epilogue patch).
 PD3 image sha256 `eea9f2ff...3905ce`; zero-cave alternative PD3B (event-0x4C raise loop +
