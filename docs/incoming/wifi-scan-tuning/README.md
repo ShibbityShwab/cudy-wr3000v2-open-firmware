@@ -41,7 +41,7 @@ the observed cadence, and sized as if the firmware would report every channel.
 **Status: host-only, compile-clean, host-selftested; R1 was fired once by the
 lead and exposed a chain-advance bug (batch 1/3 closed the cfg80211 scan
 instead of chaining).**  This revision fixes it and rebuilds (REPORT.md sec 9):
-artifact **249,580 B sha256 `1710bf11...`** (R3: real g1 id15 framing + batch window).  Nothing here is a hardware claim:
+artifact **254,328 B sha256 `713899a1...`** (R4: optional H1 g0 id10 scan-context config experiment + repost cap + per-batch BSS readback).  Nothing here is a hardware claim:
 the corrected 13/13 PASS is the ladder's job.
 
 | file | what |

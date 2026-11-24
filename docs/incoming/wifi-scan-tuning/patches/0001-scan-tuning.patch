@@ -1,6 +1,6 @@
 --- a/hi5622_scan.c
 +++ b/hi5622_scan.c
-@@ -64,6 +64,33 @@
+@@ -64,6 +64,73 @@
  MODULE_PARM_DESC(scan_dwell_ms,
  		 "g0 id0xC scan dwell override in ms (0 = vendor default 60, 20..200)");
  
@@ -31,10 +31,50 @@
 +MODULE_PARM_DESC(scan_batch_gap_ms,
 +		 "pause between chained scan requests in ms (default 300, 0..5000)");
 +
++/* ---- task-133 R4: H1 experiment - the vendor g0 id10 scan-context config ---
++ * The bench showed a second chained scan request is accepted but never scanned
++ * (the firmware does not re-arm its scan context).  The vendor host configures
++ * that context with the g0 direct message id 10 (handler CA 0x5FF64) which our
++ * clean-room host never sends.  This is an OPTIONAL, default-OFF experiment:
++ *   0 = off (fail-closed default)
++ *   1 = send the config once, before the first scan request
++ *   2 = send the config before every chained scan request
++ * Field semantics are inference-level ([I]) - see REPORT.md sec 12. */
++static unsigned int hi5622_scan_band_cfg;
++module_param_named(scan_band_cfg, hi5622_scan_band_cfg, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg,
++		 "H1 experiment: send g0 id10 scan-context config (0=off, 1=first request, 2=every request)");
++static unsigned int hi5622_scan_band_cfg_chan;	/* 0 = first requested channel */
++module_param_named(scan_band_cfg_chan, hi5622_scan_band_cfg_chan, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_chan,
++		 "g0 id10 payload+0x02 channel id (0 = first requested 2.4 GHz channel number)");
++static unsigned int hi5622_scan_band_cfg_slot;	/* payload+0x07, firmware 0..7 */
++module_param_named(scan_band_cfg_slot, hi5622_scan_band_cfg_slot, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_slot, "g0 id10 slot index (0..7)");
++static unsigned int hi5622_scan_band_cfg_start = 12u;	/* payload+0x0C */
++module_param_named(scan_band_cfg_start, hi5622_scan_band_cfg_start, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_start,
++		 "g0 id10 context end/start index (payload+0x0C, default 12 = 13-channel plan)");
++static unsigned int hi5622_scan_band_cfg_field10 = 13u;	/* payload+0x10 */
++module_param_named(scan_band_cfg_field10, hi5622_scan_band_cfg_field10, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_field10,
++		 "g0 id10 payload+0x10 (context +0x104, default 13 = channel count)");
++static unsigned int hi5622_scan_band_cfg_mode = 2u;	/* payload+0x12 */
++module_param_named(scan_band_cfg_mode, hi5622_scan_band_cfg_mode, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_mode,
++		 "g0 id10 payload+0x12 mode byte (context +0x103, default 2 = 2.4 GHz/normal)");
++static unsigned int hi5622_scan_band_cfg_cmp;	/* payload+0x14 */
++module_param_named(scan_band_cfg_cmp, hi5622_scan_band_cfg_cmp, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_cmp, "g0 id10 payload+0x14 compare field (default 0)");
++static unsigned int hi5622_scan_band_cfg_use2 = 1u;	/* also send subtype 2 */
++module_param_named(scan_band_cfg_use2, hi5622_scan_band_cfg_use2, uint, 0644);
++MODULE_PARM_DESC(scan_band_cfg_use2,
++		 "also send the subtype-2 arm message when scan_band_cfg is enabled (default 1)");
++
  static u64 hi5622_scan_now(void)
  {
  	return hcc_kernel_now_ms();
-@@ -74,14 +101,22 @@
+@@ -74,14 +141,22 @@
  	return c ? &c->scan : NULL;
  }
  
@@ -62,7 +102,7 @@
  	if (ms < 1000u)
  		ms = 1000u;
  	if (ms > HI5622_SCAN_TIMEOUT_MAX_MS)
-@@ -214,6 +249,50 @@
+@@ -214,6 +289,50 @@
  			     (unsigned long long)r->tsf, r->signal_mbm);
  }
  
@@ -113,7 +153,7 @@
  /* =====================================================================
   * scan completion work: reports cfg80211_scan_done() exactly once
   * ===================================================================*/
-@@ -242,7 +321,112 @@
+@@ -242,7 +361,148 @@
  		return;
  	}
  	now = hi5622_scan_now();
@@ -122,19 +162,40 @@
 +	 * likely silently refused (firmware still in scan-in-progress); repost it
 +	 * once before the bounded timeout aborts the whole scan. */
 +	if (s->batches_sent > 1u && s->batches_sent < s->batches_total &&
-+	    !s->batch_pending && !s->batch_retried &&
++	    !s->batch_pending &&
 +	    s->total_seen == s->batch_start_seen &&
++	    !s->model.complete_seen &&
 +	    now - s->batch_started_ms >= HI5622_SCAN_BATCH_RETRY_MS) {
 +		u32 first = s->batch_first;
 +		u32 len = s->batch_n;
 +		struct cfg80211_scan_request *rq = s->request;
 +		int rrc;
 +
-+		s->batch_retried = true;
++		if (s->batch_reposts >= HI5622_SCAN_BATCH_MAX_RETRIES) {
++			/* The firmware accepted the request but never scanned it: the
++			 * H1 signature (scan context not re-armed).  Abort honestly
++			 * instead of looping/reposting (the bench saw nine attempts and
++			 * a frame-budget exhaustion before this cap). */
++			dev_warn(wiphy_dev(c->wiphy),
++				 "cfg80211: scan batch %u/%u produced no channel result after %u repost(s) - firmware did not re-arm the scan context (H1); aborting scan\n",
++				 s->batches_sent, s->batches_total,
++				 s->batch_reposts);
++			hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
++			hi5622_scan_model_clear(&s->model);
++			mutex_unlock(&s->lock);
++			if (rq) {
++				struct cfg80211_scan_info info = { .aborted = true };
++
++				cfg80211_scan_done(rq, &info);
++			}
++			return;
++		}
++		s->batch_reposts++;
 +		dev_info(wiphy_dev(c->wiphy),
-+			 "cfg80211: scan batch %u/%u produced no channel result in %u ms - reposting it once (firmware scan-in-progress may not be clear yet)\n",
++			 "cfg80211: scan batch %u/%u produced no channel result in %u ms - reposting it (attempt %u/%u; firmware scan-in-progress may not be clear yet)\n",
 +			 s->batches_sent, s->batches_total,
-+			 HI5622_SCAN_BATCH_RETRY_MS);
++			 HI5622_SCAN_BATCH_RETRY_MS, s->batch_reposts,
++			 HI5622_SCAN_BATCH_MAX_RETRIES);
 +		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
 +		hi5622_scan_model_clear(&s->model);
 +		mutex_unlock(&s->lock);
@@ -187,10 +248,25 @@
 +
 +		s->batch_pending = false;
 +		s->batch_due_ms = 0;
++		s->batch_reposts = 0;
 +		/* Close the finished batch's model window but keep owning the
 +		 * cfg80211 request; the counters survive model_clear(). */
 +		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_OK);
 +		hi5622_scan_model_clear(&s->model);
++		/* Per-batch BSS visibility (R4 task 3): the bench can see that batch
++		 * 1's decoded BSS frames are in the cfg80211 list even if a later
++		 * batch is firmware-limited. */
++		{
++			struct hi5622_scan_bss_diag diag = {};
++
++			cfg80211_bss_iter(c->wiphy, NULL,
++					  hi5622_scan_bss_count, &diag);
++			dev_info(wiphy_dev(c->wiphy),
++				 "cfg80211: scan BSS list check after batch %u/%u: entries=%u iw_visible=%u (reported=%u inform_fail=%u)\n",
++				 s->batches_sent, s->batches_total,
++				 diag.total, diag.iw_visible,
++				 s->model.results, s->model.inform_failures);
++		}
 +		mutex_unlock(&s->lock);
 +		brc = hi5622_scan_send_batch(s, first, len);
 +		if (brc) {
@@ -227,7 +303,7 @@
  	if (step == HI5622_SCAN_WAIT) {
  		left = s->model.deadline_ms > now ?
  			s->model.deadline_ms - now : 0;
-@@ -263,14 +447,25 @@
+@@ -263,14 +523,25 @@
  			.aborted = (step == HI5622_SCAN_FINISH_ABORT),
  		};
  
@@ -255,7 +331,7 @@
  			 s->model.sta_events,
  			 s->model.unknown_events,
  			 atomic_read(&s->dropped_busy), s->model.parse_errors,
-@@ -296,7 +491,7 @@
+@@ -296,7 +567,7 @@
  	mutex_init(&s->lock);
  	INIT_DELAYED_WORK(&s->work, hi5622_scan_work);
  	atomic_set(&s->dropped_busy, 0);
@@ -264,7 +340,7 @@
  	hi5622_scan_model_init(&s->model);
  	s->initialized = true;
  	/* Idempotent global registration of the task-110 wifi-vap-scan builders
-@@ -401,6 +596,14 @@
+@@ -401,6 +672,14 @@
  			hi5622_scan_note_parse_error(&s->model);
  		} else if (ops->parse_scan_result(payload, avail, r)) {
  			hi5622_scan_note_parse_error(&s->model);
@@ -279,7 +355,7 @@
  		} else if (hi5622_scan_result_validate(r)) {
  			hi5622_scan_note_invalid_result(&s->model);
  		} else {
-@@ -436,7 +639,13 @@
+@@ -436,7 +715,13 @@
  		 * can close the scan without a firmware completion event. */
  		if (ops && ops->parse_scan_channel &&
  		    !ops->parse_scan_channel(payload, avail, &ch)) {
@@ -293,7 +369,7 @@
  			dev_info_ratelimited(&ctx->pdev->dev,
  					     "cfg80211: scan channel result slot=%u ch=%u (%u MHz%s)\n",
  					     ch.slot, ch.chan_num, ch.freq,
-@@ -546,37 +755,46 @@
+@@ -546,37 +831,120 @@
  					      module);
  }
  
@@ -308,12 +384,88 @@
 + * only consulted while more batches remain; the final batch is decided by the
 + * kernel layer (channel coverage wins over a partial-request status). */
 +static bool hi5622_scan_batch_done(const struct hi5622_scan_model *m, u64 now_ms)
-+{
+ {
+-	struct hi5622_cfg80211 *c = wiphy_priv(wiphy);
+-	struct hi5622_scan *s = hi5622_scan_of(c);
 +	if (m->phase != HI5622_SCAN_ACTIVE || m->abort_requested)
 +		return false;
 +	if (m->complete_seen)
 +		return true;
 +	return hi5622_scan_coverage_ready(m, now_ms);
++}
++
++/* Send the optional H1 band-config frames (g0 id10) before a scan request.
++ * Default off (scan_band_cfg=0) - fail-closed.  Returns 0 when nothing was
++ * sent or the frames were committed, negative errno on a build/post failure. */
++static int hi5622_scan_post_band_cfg(struct hi5622_scan *s, u32 first, u32 n)
++{
++	struct hi5622_cfg80211 *c = s->cfg;
++	struct device *dev = wiphy_dev(c->wiphy);
++	struct hi5622_band_cfg_params bp;
++	u8 wire[HI5622_BAND_CFG_TOTAL];
++	size_t len = 0;
++	u16 auto_chan = 0;
++	int rc;
++
++	if (!hi5622_scan_band_cfg)
++		return 0;
++	if (hi5622_scan_band_cfg < 3u && hi5622_scan_band_cfg == 1u &&
++	    s->batches_sent > 0u)
++		return 0;	/* mode 1: first request only */
++	if (hi5622_scan_band_cfg_slot > 7u) {
++		dev_warn(dev, "cfg80211: scan_band_cfg_slot=%u out of range (0..7) - config not sent\\n",
++			 hi5622_scan_band_cfg_slot);
++		return -EINVAL;
++	}
++	if (hi5622_scan_band_cfg_chan)
++		auto_chan = (u16)hi5622_scan_band_cfg_chan;
++	else if (n && first < s->n_freqs) {
++		u16 f = s->freqs[first];
++
++		if (f >= 2412u && f <= 2472u)
++			auto_chan = (u16)((f - 2407u) / 5u);	/* 2412 -> 1 */
++		else
++			auto_chan = f;
++	}
++	memset(&bp, 0, sizeof(bp));
++	bp.subtype = HI5622_BAND_CFG_SUB_SLOT;
++	bp.chan_id = auto_chan;
++	bp.slot = (u8)hi5622_scan_band_cfg_slot;
++	bp.start = (u16)hi5622_scan_band_cfg_start;
++	bp.field10 = (u16)hi5622_scan_band_cfg_field10;
++	bp.mode = (u8)hi5622_scan_band_cfg_mode;
++	bp.cmp = (u16)hi5622_scan_band_cfg_cmp;
++	rc = hi5622_band_cfg_build(wire, sizeof(wire), &len, &bp);
++	if (rc) {
++		dev_warn(dev, "cfg80211: H1 band-config build failed (%d) - not sent\\n", rc);
++		return rc;
++	}
++	rc = hi5622_frame_post(c->ctx, wire, len, "band_cfg1", NULL);
++	if (rc) {
++		dev_warn(dev, "cfg80211: H1 band-config subtype1 NOT posted (%d)\\n", rc);
++		return rc;
++	}
++	dev_info(dev,
++		 "cfg80211: H1 band-config subtype1 sent (chan=%u slot=%u start=%u f10=%u mode=%u cmp=%u, %zu B)\\n",
++		 auto_chan, hi5622_scan_band_cfg_slot,
++		 hi5622_scan_band_cfg_start, hi5622_scan_band_cfg_field10,
++		 hi5622_scan_band_cfg_mode, hi5622_scan_band_cfg_cmp, len);
++	if (hi5622_scan_band_cfg_use2) {
++		bp.subtype = HI5622_BAND_CFG_SUB_ARM;
++		bp.sub2_flag = 0u;
++		rc = hi5622_band_cfg_build(wire, sizeof(wire), &len, &bp);
++		if (rc)
++			return rc;
++		rc = hi5622_frame_post(c->ctx, wire, len, "band_cfg2", NULL);
++		if (rc) {
++			dev_warn(dev, "cfg80211: H1 band-config subtype2 NOT posted (%d)\\n", rc);
++			return rc;
++		}
++		dev_info(dev,
++			 "cfg80211: H1 band-config subtype2 sent (chan=%u slot=%u flag=%u, %zu B)\\n",
++			 auto_chan, hi5622_scan_band_cfg_slot, bp.sub2_flag, len);
++	}
++	return 0;
 +}
 +
 +/* Post ONE g0 id0xC request for s->freqs[first .. first+n): start the scan
@@ -322,9 +474,7 @@
 + * (the caller does not call cfg80211_scan_done for the first batch, matching
 + * the .scan op contract). */
 +static int hi5622_scan_send_batch(struct hi5622_scan *s, u32 first, u32 n)
- {
--	struct hi5622_cfg80211 *c = wiphy_priv(wiphy);
--	struct hi5622_scan *s = hi5622_scan_of(c);
++{
 +	struct hi5622_cfg80211 *c = s->cfg;
 +	struct device *dev = wiphy_dev(c->wiphy);
 +	struct cfg80211_scan_request *req = s->request;
@@ -360,7 +510,7 @@
  	p = kzalloc(sizeof(*p), GFP_KERNEL);
  	wire = kmalloc(HI5622_FRAME_MAX_TOTAL, GFP_KERNEL);
  	if (!p || !wire) {
-@@ -584,35 +802,34 @@
+@@ -584,35 +952,34 @@
  		goto out;
  	}
  	p->user_id = (u8)s->user_id;
@@ -414,7 +564,7 @@
  		goto out;
  	}
  	rc = ops->build_scan_req(wire, HI5622_FRAME_MAX_TOTAL, &len, p);
-@@ -629,19 +846,21 @@
+@@ -629,19 +996,24 @@
  		rc = -EINVAL;
  		goto out;
  	}
@@ -426,7 +576,10 @@
 -		dev_warn(dev,
 -			 "cfg80211: VAP start sequence not posted (%d) - scan aborted, no scan message\n",
 -			 rc);
--		goto out;
++	/* H1 experiment (R4): optional g0 id10 scan-context config first. */
++	rc = hi5622_scan_post_band_cfg(s, first, n);
++	if (rc)
+ 		goto out;
 -	}
 -
 -	tmo = hi5622_scan_pick_timeout(request);
@@ -444,11 +597,10 @@
 +	s->batch_due_ms = 0;
 +	s->batch_start_seen = s->total_seen;
 +	s->batch_started_ms = hi5622_scan_now();
-+	s->batch_retried = false;
  	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(), tmo);
  	if (rc) {
  		mutex_unlock(&s->lock);
-@@ -649,25 +868,19 @@
+@@ -649,25 +1021,19 @@
  			 rc);
  		goto out;
  	}
@@ -476,7 +628,7 @@
  	mutex_lock(&s->lock);
  	s->posting = false;
  	if (rc) {
-@@ -681,19 +894,124 @@
+@@ -681,19 +1047,125 @@
  			 rc);
  		goto out;
  	}
@@ -565,6 +717,7 @@
 +	s->total_seen_mask = 0;
 +	s->total_expected = n;
 +	s->batches_sent = 0;
++	s->batch_reposts = 0;
 +	s->batch_pending = false;
 +	s->batch_due_ms = 0;
 +	s->batch_first = 0;
@@ -608,7 +761,15 @@
  	struct hi5622_cfg80211 *c = wiphy_priv(wiphy);
 --- a/hi5622_scan.h
 +++ b/hi5622_scan.h
-@@ -49,6 +49,29 @@
+@@ -33,6 +33,7 @@
+ #include <linux/workqueue.h>
+ #include <net/cfg80211.h>
+ 
++#include "hi5622_band_cfg.h"
+ #include "hi5622_scan_logic.h"
+ 
+ struct hi5622_pci;
+@@ -49,6 +50,29 @@
  	atomic_t		dropped_busy;	/* events lost to trylock */
  	u32			scan_timeout_ms;
  	u32			user_id;	/* user id used in builders [U] */
@@ -633,7 +794,7 @@
 +	u64			batch_due_ms;
 +	u32			batch_start_seen;	/* total_seen when this request was posted */
 +	u64			batch_started_ms;
-+	bool			batch_retried;	/* repost budget for this request */
++	u32			batch_reposts;	/* repost attempts for this request */
 +	bool			batch_reposting;	/* send_batch does not advance the index */
  };
  
@@ -947,6 +1108,146 @@
  
  /* PHY mode byte inside the 20-byte trailer (trailer[0x11]) [V offset, I naming]:
   * the vendor host maps 4 -> internal 0x0f, 8 -> 0x10, 0x0c -> 0x11 in
+--- a/hi5622_band_cfg.c
++++ b/hi5622_band_cfg.c
+@@ -0,0 +1,64 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* hi5622_band_cfg.c - optional g0 id10 scan-context config builder (R4).
++ * Clean-room; the field map is derived from the firmware handler CA 0x5FF64
++ * (see REPORT.md sec 12).  Nothing sends these frames unless scan_band_cfg is
++ * enabled on the bench. */
++#include "hi5622_band_cfg.h"
++
++#ifdef __KERNEL__
++#include <linux/string.h>
++#else
++#include <string.h>
++#endif
++
++static void put_le16(u8 *p, u16 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)(v >> 8);
++}
++
++int hi5622_band_cfg_build(u8 *out, size_t cap, size_t *len,
++			  const struct hi5622_band_cfg_params *p)
++{
++	u8 pl[HI5622_BAND_CFG_PAYLOAD_LEN];
++
++	if (!out || !p || cap < HI5622_BAND_CFG_TOTAL)
++		return -EINVAL;
++	if (p->subtype != HI5622_BAND_CFG_SUB_SLOT &&
++	    p->subtype != HI5622_BAND_CFG_SUB_ARM)
++		return -EINVAL;
++	if (p->slot > 7u)	/* firmware logs and refuses slots > 7 */
++		return -EINVAL;
++	memset(out, 0, HI5622_BAND_CFG_TOTAL);
++	memset(pl, 0, sizeof(pl));
++
++	/* 12-byte HCC header: same g0 direct shape as the scan request we
++	 * already post on the bench (group 0, alloc=1, dst 0, tag 0x5A5A). */
++	out[0] = 0x00u;
++	out[1] = 0x01u;			/* VS_ALLOC_NIBBLE | dst<<4 */
++	out[2] = 0x00u;			/* vap id 0 */
++	out[3] = 0x00u;			/* chip 0 (handler resolves module) */
++	put_le16(out + 4, (u16)HI5622_BAND_CFG_TOTAL);
++	out[6] = HI5622_BAND_CFG_ID;
++	out[7] = 0x00u;
++	out[8] = 0x00u;
++	out[9] = 0x00u;
++	out[10] = 0x5au;
++	out[11] = 0x5au;
++
++	pl[0x00] = HI5622_BAND_CFG_TYPE;
++	pl[0x01] = p->subtype;
++	put_le16(pl + 0x02, p->chan_id);
++	pl[0x07] = p->slot;
++	pl[0x08] = p->sub2_flag;
++	pl[0x09] = p->action;
++	put_le16(pl + 0x0c, p->start);
++	put_le16(pl + 0x10, p->field10);
++	pl[0x12] = p->mode;
++	put_le16(pl + 0x14, p->cmp);
++	memcpy(out + 12, pl, sizeof(pl));
++	if (len)
++		*len = HI5622_BAND_CFG_TOTAL;
++	return 0;
++}
++
+--- a/hi5622_band_cfg.h
++++ b/hi5622_band_cfg.h
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_band_cfg.h - optional builder for the vendor scan-context config
++ * message (H1 experiment; wifi-scan-tuning lane, task-133 R4).
++ *
++ * ORIGINAL clean-room code.  No vendor source/object/firmware byte reproduced.
++ *
++ * The g0 direct H2D message id 10 (handler CA 0x5FF64; group-0 dispatch table
++ * CA 0x10CD08 row {10, 0x5FF65}) configures the firmware's per-slot
++ * scan/channel context.  Our clean-room host never sends it, which is the H1
++ * explanation for the firmware not re-arming for a second scan request.
++ * Payload fields decoded from the handler (payload offset -> write):
++ *   +0x00 u8  type, must be 3
++ *   +0x01 u8  subtype: 1 = per-slot channel/scan context config, 2 = arm/flag
++ *   +0x02 u16 channel id (looked up by the firmware via CA 0xD6A1E)
++ *   +0x07 u8  slot index 0..7 (band object + 0xEC + slot*0x20)
++ *   +0x08 u8  subtype-2 flag (0 = reset path CA 0x5FEC0, else CA 0x5FF06)
++ *   +0x09 u8  action/flag (nonzero takes the reset path in subtype 1)
++ *   +0x0C u16 start index  -> context +0xFC (if currently zero) / +0x106
++ *   +0x10 u16              -> context +0x104
++ *   +0x12 u8  mode         -> context +0x103
++ *   +0x14 u16 compare field (slot +0x15)
++ * Payload is padded to 0x18; wire total = 12 + 0x18 = 36.
++ *
++ * FAIL CLOSED: nothing in the driver calls this builder unless the
++ * scan_band_cfg module parameter is non-zero (default 0 = off).  The field
++ * semantics are inference-level ([I]) and only a bench experiment can decide
++ * whether they re-arm the scan context; see REPORT.md sec 12.
++ */
++#ifndef HI5622_BAND_CFG_H
++#define HI5622_BAND_CFG_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#else
++#include <errno.h>
++#include <stdint.h>
++#include <stddef.h>
++typedef uint8_t u8;
++typedef uint16_t u16;
++#endif
++
++#define HI5622_BAND_CFG_ID		0x0Au	/* g0 direct H2D id 10 */
++#define HI5622_BAND_CFG_PAYLOAD_LEN	0x18u
++#define HI5622_BAND_CFG_TOTAL		0x24u	/* 12-byte HCC header + payload */
++#define HI5622_BAND_CFG_TYPE		0x03u
++#define HI5622_BAND_CFG_SUB_SLOT	0x01u	/* per-slot context config */
++#define HI5622_BAND_CFG_SUB_ARM		0x02u	/* arm/flag path */
++
++struct hi5622_band_cfg_params {
++	u8	subtype;	/* 1 = slot config, 2 = arm flag */
++	u16	chan_id;	/* payload+0x02 */
++	u8	slot;		/* payload+0x07, firmware accepts 0..7 */
++	u8	sub2_flag;	/* payload+0x08 (subtype 2 only) */
++	u8	action;		/* payload+0x09 */
++	u16	start;		/* payload+0x0C -> context +0xFC */
++	u16	field10;	/* payload+0x10 -> context +0x104 */
++	u8	mode;		/* payload+0x12 -> context +0x103 */
++	u16	cmp;		/* payload+0x14 */
++};
++
++/* Build one config frame into out (cap >= HI5622_BAND_CFG_TOTAL).
++ * Returns 0 on success, -EINVAL for bad arguments/params.  Pure function;
++ * host-tested by tools/scan_band_cfg_selftest.c. */
++int hi5622_band_cfg_build(u8 *out, size_t cap, size_t *len,
++			  const struct hi5622_band_cfg_params *p);
++
++#endif /* HI5622_BAND_CFG_H */
++
 --- a/cfg80211-provider.symvers
 +++ b/cfg80211-provider.symvers
 @@ -7,3 +7,4 @@
@@ -954,3 +1255,15 @@
  0x00000000	wiphy_register	cfg80211	EXPORT_SYMBOL	
  0x00000000	wiphy_unregister	cfg80211	EXPORT_SYMBOL	
 +0x00000000	cfg80211_bss_iter	cfg80211	EXPORT_SYMBOL	
+--- a/Kbuild
++++ b/Kbuild
+@@ -31,7 +31,8 @@
+ 		 hi5622_frame_post.o hi5622_scan.o \
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+-		 vapstart_frames.o hi5622_ap_frames.o
++		 vapstart_frames.o hi5622_ap_frames.o \
++		 hi5622_band_cfg.o
+ 
+ ccflags-y += -I$(src)
+ 

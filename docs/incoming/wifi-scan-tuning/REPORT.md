@@ -416,3 +416,41 @@ R3 artifacts: ladder 249,580 B sha256 1710bf11...; bare 249,228 B sha256
 patches regenerated (7 files).  Expected R1 after R3: three batch lines,
 13/13 coverage, BSS list entries>0 iw_visible>0 (the real BSS frames now
 decode), DONE finish-ok chans=13/13 batches=3/3.
+
+---
+
+## 12. H1 experiment: optional g0 id10 scan-context config (R4)
+
+Fourth R1 fire (R3 artifact, 249,580 B sha 1710bf11): batch 1 scanned and its
+completion advanced the chain, batch 2/3 was posted and consumed but produced
+NO channel results (the scan context is not re-armed without the vendor
+config) - the H1 signature.  The repost recovery looped nine times because
+send_batch reset the retry flag on every repost and the frame budget
+(h2d_send_budget=4) ran out (-1).
+
+R4 changes:
+1. Optional g0 id10 builder (new src/hi5622_band_cfg.c/.h), wired into the
+   scan path behind scan_band_cfg (default 0 = off).  Payload field map is
+   the one decoded from handler CA 0x5FF64 (type=3, subtype 1/2, chan id,
+   slot, start -> context +0xFC/+0x106, +0x10 -> +0x104, mode -> +0x103) with
+   every value exposed as a module parameter so the bench can sweep it.
+   The frames go through the same post gate as the scan request (no new
+   transport, no allow_frames bypass).
+2. Repost cap: exactly ONE repost per request (counter, not a flag that gets
+   reset); when it produced no result the scan aborts cleanly with the
+   explicit line 'firmware did not re-arm the scan context (H1)' instead of
+   looping and exhausting the frame budget.
+3. Per-batch BSS-list readback: after every completed batch the driver logs
+   'scan BSS list check after batch k/n: entries=.. iw_visible=..' so the
+   batch-1 BSS decode (len-prefix layout) is observable even when a later
+   batch is firmware-limited.
+
+H1 ladder experiment (TEST-LADDER R10): the clean control is
+scan_req_batch=0 (single 13-entry request) with scan_band_cfg=0 -> the
+documented 6/13 timeout; then scan_band_cfg=1 + scan_req_batch=0 -> if the
+config re-arms the context a SINGLE request scans 13/13 (the original goal).
+scan_band_cfg=2 + scan_req_batch=6 tests re-arm between chained requests.
+Field values are [U]/[I]: start the sweep at chan=auto, slot=0, start=12,
+field10=13, mode=2, use2=1 and then vary one at a time (see TEST-LADDER).
+Stop on any page/mask deviation or exception - the config-class frames are
+the only unproven wire bytes in this lane; default remains fail-closed off.

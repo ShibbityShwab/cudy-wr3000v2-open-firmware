@@ -33,6 +33,7 @@
 #include <linux/workqueue.h>
 #include <net/cfg80211.h>
 
+#include "hi5622_band_cfg.h"
 #include "hi5622_scan_logic.h"
 
 struct hi5622_pci;
@@ -70,7 +71,7 @@ struct hi5622_scan {
 	u64			batch_due_ms;
 	u32			batch_start_seen;	/* total_seen when this request was posted */
 	u64			batch_started_ms;
-	bool			batch_retried;	/* repost budget for this request */
+	u32			batch_reposts;	/* repost attempts for this request */
 	bool			batch_reposting;	/* send_batch does not advance the index */
 };
 

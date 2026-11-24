@@ -176,3 +176,34 @@ request while the firmware still holds scan-in-progress).
 | build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 3 scan params, 10 imports |
 | host tests | 12/12 decoder (incl. bench framing), 37/37 tuning, 196/196 scan-complete, 290/290 scan-logic |
 | patches | 0001/0002 regenerated (7 files), patch --dry-run clean |
+
+## R4 revision (H1 scan-context config experiment + repost cap)
+
+Fourth R1 fire (R3 artifact): batch 2/3 was accepted but never scanned - the
+H1 signature.  R4 adds the optional H1 g0 id10 band-config builder, caps the
+repost loop, and prints a per-batch BSS-list readback.
+
+| item | value |
+| --- | --- |
+| artifact for the R-ladder (base+polish+scan, final-stack parity) | **254,328 B** sha256 713899a1b7b754d41b38d594c7b2a113295dda5418ddb4784b9912c585c7b650 at /tmp/wifi-scan-tuning/hi5622_wifi.ko |
+| bare combined-base variant | 254,020 B sha256 1e449d038538e5e136e43f430fca256c4c960171ff10eb8ac35ea144ba41d858 |
+| build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 10 imports |
+| host tests | 18/18 band-config builder, 12/12 decoder, 37/37 tuning, 196/196 scan-complete |
+| patches | 0001/0002 regenerated (10 files incl hi5622_band_cfg.c/.h; patch --dry-run clean) |
+
+New module parameters (all default OFF / fail-closed):
+
+| param | default | meaning |
+| --- | ---: | --- |
+| scan_band_cfg | **0** | 0 off; 1 send g0 id10 config before the first request; 2 before every chained request |
+| scan_band_cfg_chan | 0 | payload+0x02 channel id (0 = first requested 2.4 GHz channel number) |
+| scan_band_cfg_slot | 0 | payload+0x07 slot index (0..7, firmware limit) |
+| scan_band_cfg_start | 12 | payload+0x0C context end/start index (13-channel plan) |
+| scan_band_cfg_field10 | 13 | payload+0x10 -> context +0x104 (channel count) |
+| scan_band_cfg_mode | 2 | payload+0x12 -> context +0x103 (2.4 GHz/normal) |
+| scan_band_cfg_cmp | 0 | payload+0x14 compare field |
+| scan_band_cfg_use2 | 1 | also send the subtype-2 arm message |
+
+For H1 experiments load with more frame budget: allow_frames=32
+h2d_send_budget=10 (config + scan requests; the default budget=4 is what
+produced the final 'repost failed (-1)' after the repost loop).
