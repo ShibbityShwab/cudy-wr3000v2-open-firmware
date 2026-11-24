@@ -1,0 +1,3 @@
+# local work tree: full logs, config snapshot, rootfs staging tar, extracted images
+# text evidence files in this directory are committed
+work/

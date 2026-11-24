@@ -1,0 +1,60 @@
+== bench image verification (built bytes) ==
+tree        : /home/shibbityshwab/openwrt-lab-selectorfix-img
+container   : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+built       : 2569-11-24 14:08:11.791661178 +0700
+size        : 6533439 B
+sha256      : df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310
+
+kernel slice: 3372638 B sha256 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+rootfs ubi  : 3145728 B sha256 62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746
+kernel check: UNCHANGED - the hardware-validated cfg80211 slice 13e81214...
+
+-- rootfs squashfs reassembled from the UBI image --
+UBI image: 3145728 B, PEB 131072 B, 24 PEBs
+volume 0: 22 LEBs, 2756608 B reassembled -> /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration/build-evidence/work/verify/rootfs.squashfs
+header: 68737173e1020000
+format: squashfs (magic hsqs) OK
+squashfs    : 2756608 B sha256 f58ee016098f53d57bcc8fd0d5c5e5e16157f1e35f8ce343042954fdca185e18
+consistency : squashfs volume == build_dir/.../root.squashfs (2753136 B sha256 68450ee4730302747508b94ef45875c433e48b14c1540975ea2143ae72d3af44) + 3472 B ubinize padding
+rootfs files: 463
+
+-- required rootfs content --
+PRESENT  usr/sbin/iw                                      116855 B sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23  # iw CLI (nl80211)
+PRESENT  usr/bin/iwinfo                                    16906 B sha256 88fb49430a9a0b5095f10eacf1ea63a6c8906b450a71b01bfebfc01ba959cb4c  # iwinfo CLI (C implementation)
+PRESENT  usr/lib/libiwinfo.so.20230701                     57377 B sha256 aa35d698dfb5ec20ff343bde48f10f6cc055aeaeda62630f4615847bc3c2a806  # libiwinfo shared library
+PRESENT  usr/share/libiwinfo/devices.txt                   18231 B sha256 dcaaa350ccc73b16341fc792d712f5b45c546344c3dc7457d141c5f2b3a804f3  # libiwinfo device data
+PRESENT  usr/lib/libnl-tiny.so.1                           29034 B sha256 d7d73dbd242c45416faa29e557ccb976a309fb90808c37f9521265cb1b389916  # libnl-tiny (iw dependency)
+PRESENT  lib/firmware/regulatory.db                         6332 B sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  # wireless regulatory database
+PRESENT  lib/modules/6.18.60/cfg80211.ko                  406028 B sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a  # cfg80211 kernel module (target kernel tree)
+PRESENT  lib/modules/6.18.60/hi5622_wifi.ko               133884 B sha256 e0608fa6e1489035d58febce279a13baf6988a5664b0404e1135d0b53d124094  # clean-room Hi5622 Wi-Fi host driver
+
+-- kernel module metadata (extracted .ko files) --
+cfg80211.ko:
+  vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8 
+  depends : 
+  license : GPL
+  build   : differs from tree artifact /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60/net/wireless/cfg80211.ko (OpenWrt strips kernel modules at install; vermagic/deps above are the proof of identity)
+hi5622_wifi.ko:
+  vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8 
+  depends : cfg80211
+  license : GPL
+  build   : byte-identical to /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/hi5622-wifi/ipkg-arm_cortex-a9/kmod-hi5622-wifi/lib/modules/6.18.60/hi5622_wifi.ko
+
+-- apk manifest packages --
+PRESENT  iw - 6.17-r1
+PRESENT  iwinfo - 2026.05.26~66bdd1a0-r1
+PRESENT  libiwinfo20230701 - 2026.05.26~66bdd1a0-r1
+PRESENT  libiwinfo-data - 2026.05.26~66bdd1a0-r1
+PRESENT  wireless-regdb - 2026.09.03-r1
+PRESENT  kmod-hi5622-cfg80211 - 6.18.60-r1
+PRESENT  kmod-hi5622-wifi - 6.18.60-r1
+PRESENT  libnl-tiny1 - 2025.12.02~40493a65-r1
+manifest    : openwrt-hisilicon-luofu-cudy_wr3000-v2.manifest, 81 packages
+
+-- byte deltas vs the previous release image 22b72852 --
+container : 6533439 B (was 6267199 B, delta +266240)
+kernel    : 3372638 B (was 3372638 B)
+rootfs ubi: 3145728 B (was 2883584 B, delta +262144)
+squashfs  : 2756608 B (padded volume; was 2498560 B, delta +258048)
+
+RESULT: PASS - all required files and packages are in the built image
