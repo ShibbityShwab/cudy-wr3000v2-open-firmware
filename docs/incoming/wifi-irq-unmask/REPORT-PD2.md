@@ -17,7 +17,7 @@ Inputs (local, read in place):
 | prior lanes | `wifi-rom-dump`, `wifi-rom-s01`, `wifi-fw-postboot`, `wifi-ready-emit`, `wifi-abort-rca`, `wifi-irq-unmask` |
 
 Evidence markers: **[V]** verified in this lane from the local artifacts with
-`tools/pd2_re.py` (33/33 selftest) or `tools/pd2_patch_builder.py` (38/38 selftest);
+`tools/pd2_re.py` (33/33 selftest) or `tools/pd2_patch_builder.py` (42/42 selftest);
 **[V\*]** device-measured by an earlier attended lane (cited); **[I]** inference from code;
 **[U]** not decidable without a device read.
 
@@ -91,7 +91,7 @@ directly addressable by the firmware.
 code-cave justification: entry, neighbours, reference census) and `selftest` (33 checks).
 `tools/pd2_patch_builder.py` (new) is the PD2 build/verify tool: `--list`, `--build [OUTDIR]`
 (defaults to a non-repo /tmp dir; refuses to write inside the repository), `--recipe`
-(machine-readable recipe for the bench tooling) and `--selftest` (38 checks: pinned blob
+(machine-readable recipe for the bench tooling) and `--selftest` (42 checks: pinned blob
 sha256/len, every source-window hash, every patched-instruction decode, offset/overlap/range
 checks, "only the segments differ", manifest has no vendor bytes).
 
@@ -391,7 +391,7 @@ the host.
 
     PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
     T=opensource/docs/incoming/wifi-irq-unmask/tools
-    $PY $T/pd2_patch_builder.py --selftest            # 38/38 PASS
+    $PY $T/pd2_patch_builder.py --selftest            # 42/42 PASS
     $PY $T/pd2_patch_builder.py --recipe              # machine-readable recipe
     $PY $T/pd2_patch_builder.py --build /tmp/hi5622-pd2
     # -> /tmp/hi5622-pd2/FIRMWARE.PD2.bin  sha256 7a6918077af91601f00901ad46b47f5ea36956b03faeda9d742ecc384a1b7728
@@ -490,7 +490,7 @@ the PD segments — PD-1 is the bug being replaced and its window 0x7610 is unto
     $PY $T/pd2_re.py --cave                # dead-cave proof + neighbours + reference census
     $PY $T/pd2_re.py --selftest            # 33/33 PASS
     $PY $T/pd2_patch_builder.py --list     # segments + source-window hashes
-    $PY $T/pd2_patch_builder.py --selftest # 38/38 PASS
+    $PY $T/pd2_patch_builder.py --selftest # 42/42 PASS
     $PY $T/pd2_patch_builder.py --build /tmp/hi5622-pd2
 
 Both tools read the pinned local artifacts in place, refuse a wrong blob, and never write vendor
