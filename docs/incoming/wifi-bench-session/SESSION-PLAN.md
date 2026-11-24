@@ -141,9 +141,10 @@ and the clean golden packs. This sequence creates no VAP and posts no AP frame.
             /root/hostapd-deploy/hostapd-open.conf
         # rc=0 means the driver's start_ap returned 0; the provider posts the
         # carrier's sequence:
-        #   ap_start_mode=0 (g0 id1 static, default): 2 frames -
-        #     frame 1/2 ap_ssid (key 0x0005, 64 B) ->
-        #     frame 2/2 ap_cfg (key 0x0127, 184 B = 156-B body: beacon_int
+        #   ap_start_mode=0 (g0 id1 static, default): 2 frames (dmesg prints
+        #     them over the carrier's max slot count 4) -
+        #     frame 1/4 ap_ssid (key 0x0005, 64 B) ->
+        #     frame 2/4 ap_cfg (key 0x0127, 184 B = 156-B body: beacon_int
         #     100, DTIM 2, ...).  Static table A has no 0x006D (auth) row and
         #     the g0 carrier omits the VAP start (the mode-1 VAP base did it).
         #   ap_start_mode=1 (WAL g2 fallback): 4 frames - ap_ssid, ap_auth

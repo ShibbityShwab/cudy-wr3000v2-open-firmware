@@ -18,8 +18,10 @@
 #   3. hostapd -B -i wlan0 <open conf> -> cfg80211 start_ap -> provider posts
 #      the carrier's AP sequence, each frame through the inherited
 #      hi5622_frame_post gate (allow_frames=16 one-shot budget):
-#        ap_start_mode=0 (g0 id1 static, default): 2 frames - ap_ssid
-#          (key 0x0005, 64 B) then ap_cfg (key 0x0127, 184 B).  The static
+#        ap_start_mode=0 (g0 id1 static, default): 2 frames - frame 1/4
+#          ap_ssid (key 0x0005, 64 B) then frame 2/4 ap_cfg (key 0x0127,
+#          184 B; dmesg's /4 is HI5622_AP_START_MAX_FRAMES, not the carrier
+#          count).  The static
 #          firmware table A has no 0x006D (auth) row and the g0 carrier omits
 #          the VAP start (the mode-1 VAP base already started it).
 #        ap_start_mode=1 (WAL g2 vendor order): 4 frames - ap_ssid, ap_auth

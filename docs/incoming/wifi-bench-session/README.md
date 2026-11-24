@@ -6,8 +6,8 @@ bench. **Date:** 2026-11-26. **Status:** the phase-S and phase-A plans are
 dry-run verified end to end (artifact pins, bench_session plans, generated
 device scripts, audits); phase X is wired to the wifi-dp-air merged module and
 its committed F-AIR ladder (task-126 commit `a615a8c`) and phase A's hostapd
-path is wired to the wifi-hostapd-deploy T0 apk-add (task-125; pins come from
-that lane's verified on-box manifest).
+path is wired to the wifi-hostapd-deploy T0 apk-add (task-125 commit `a32f028`;
+pins come from that lane's verified on-box manifest).
 A real run additionally requires (a) that attended hostapd T0 deploy to have
 run first and (b) the wifi-dp-air bench_guards payload-policy fix for the
 dp_tx_frame/dp_rx_poll stores (the package's X dry-run stays RED until it
@@ -116,6 +116,7 @@ prerequisites come from the parallel lanes and are wired as pins/contracts:
    hostapd-common + ucode-mod-nl80211 + ucode-mod-rtnl; every other shared lib
    is already in the bench image). Run it attended before this session:
    `cd ../wifi-hostapd-deploy && ./deploy-hostapd.sh --apply --attended --yes-really`.
+   (lane deliverable: [../wifi-hostapd-deploy/AP-START-LADDER.md](../wifi-hostapd-deploy/AP-START-LADDER.md).)
    The package pins the *on-box* artifacts from that lane's manifest:
    `/usr/sbin/hostapd` sha256 `13cb3a43...` and
    `/root/hostapd-deploy/hostapd-open.conf` sha256 `e4f6edc6...`; phase A

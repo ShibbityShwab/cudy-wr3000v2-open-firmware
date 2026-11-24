@@ -90,7 +90,7 @@ STOP means the AP stage is **not** attempted (the box state is unknown).
 | VAP base | dmesg `frame post 'vap_add'` **and** `frame post 'vap_start'` | STOP (mode-1 VAP not created; no AP attempt) |
 | VAP pointer | ctx0 (BAR0 0x7D1758) -> ctx0+0x190 (0x7D18E8) nonzero | STOP (firmware VAP object missing) |
 | hostapd start | `hostapd -B ...` rc 0 | STOP (start_ap didn't run; log captured) |
-| AP frames | carrier set: mode 0 (g0 static) = `frame post 'ap_ssid'` + `'ap_cfg'` (2/2); mode 1 (WAL g2) = all four labels (4/4) | STOP |
+| AP frames | carrier set: mode 0 (g0 static) = `frame post 'ap_ssid'` + `'ap_cfg'` (dmeg 1/4, 2/4 of the max-4 slots); mode 1 (WAL g2) = all four labels | STOP |
 | sequence posted | dmesg `start_ap sequence posted to provider`; no `not posted` | STOP (partial AP start aborted by design) |
 | provider wire | `cfg80211_status refused=0 timeout=0 bad=0` | STOP |
 | golden post-pack | page/state golden, mask/staging 0, out0/out2 0 | STOP (exception/health) |
