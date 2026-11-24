@@ -71,7 +71,9 @@ A verdict is PASS only if all checks pass.  Result template:
 The hardened module defaults hcc_trace=0, so a steady-state soak has a quiet
 dmesg (only one-shot/failure hcc-core lines).  For a debugging session pass
 hcc_trace=1 on the insmod line; the analyzer's dmesg check only looks for
-fatal/error patterns, so both settings are valid.
+fatal/error patterns, so both settings are valid.  The final combined module
+also carries the scan-tuning params (scan_req_batch=6, scan_batch_gap_ms=300,
+scan_chan_time_ms) for a 3-batch 13-channel scan.
 
 ## 5. Stop and recovery rules (hard)
 

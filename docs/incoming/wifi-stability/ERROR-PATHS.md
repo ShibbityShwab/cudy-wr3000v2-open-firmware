@@ -42,3 +42,21 @@ Both are fixed by the hardening patch (see HARDENING.md).
 
 The emitted scripts refuse to run without the same golden-page gate and never
 contain rmmod (except E1, which is explicitly pre-release and audited for it).
+
+## 4. E2 restart - expected dmesg (final combined module, stop_ap_mode=0 default)
+
+First stop (hostapd SIGTERM -> NL80211_CMD_STOP_AP):
+    cfg80211: host-side stop_ap (stop_ap_mode=0 default): cfg80211 state cleared,
+      NO firmware write; the restart will RESET the firmware VAP (g0 id9) and
+      re-create user_add/notify + VAP base before re-posting the AP config
+Second start (hostapd again -> NL80211_CMD_NEW_BEACON):
+    cfg80211: start_ap reached (...)
+    cfg80211: start_ap restart: firmware VAP reset committed (g0 id9);
+      re-creating user_add/notify + VAP base for the fresh AP config
+    cfg80211: start_ap: firmware user_add/notify re-created after a controlled stop_ap
+    frame post vap_add / vap_start / ap_ssid / ap_cfg ... (consumed 0 polls each)
+    cfg80211: start_ap sequence posted to provider ...
+    wlan0: AP-ENABLED
+Expected readback: golden page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0.
+If instead 'start_ap restart: firmware VAP reset (g0 id9) not committed (-110)'
+appears: STOP, capture, power-cycle - the H2D lane closed and no retry is allowed.

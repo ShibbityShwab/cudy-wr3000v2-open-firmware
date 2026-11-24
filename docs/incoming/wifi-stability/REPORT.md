@@ -83,10 +83,10 @@ Applied on top of the polished image source delta (image-polish lane owns
 | H7 | scan-after-AP and dead-VAP scan refusal | scan/AP interaction |
 | H8 | hcc_trace=0 default suppresses per-frame/periodic hcc-core console lines (hcc_trace=1 restores historic output) | console/perf census: 128 lines/session, 9.99 ms/line |
 
-Final combined identity: hardened module 258,220 B sha256 `694c704a...`, unstripped 959,300 B
-sha256 `7cd2d0aa...`, vermagic 6.18.60 SMP mod_unload ARMv7 p2v8,
+Final combined identity: hardened module 263,196 B sha256 `d6b85fff...`, unstripped 971,728 B
+sha256 `9e2d5ff6...`, vermagic 6.18.60 SMP mod_unload ARMv7 p2v8,
 depends=cfg80211, 0 warnings.  Chain asserted by the build:
-base 44c6cc12 (hardware-fired) -> polished d145a205 (image lane) -> dp-tuning 175a4617 (first MAC TX COMPLETED) -> hardened.
+base 44c6cc12 (hardware-fired) -> polished d145a205 (image lane) -> dp-tuning 175a4617 (first MAC TX COMPLETED) -> scan-tuning 0002 (batched scan; scan_req_batch=6/scan_batch_gap_ms=300) -> hardened.
 NOT fired; the attended ladders are E2 (stop/restart) and E3 (failed start).
 Note: the stripped sha is build-directory dependent via .note.gnu.build-id
 (the debug info embeds the build path; the base and polished builds use their

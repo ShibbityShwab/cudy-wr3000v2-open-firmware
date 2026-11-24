@@ -95,7 +95,9 @@ kernel tree), but it does gate NEW_BEACON on `wdev->links[link].ap.beacon_interv
    up).  hcc_trace=1 restores the historic debugging output.
 
 The final combined artifact stacks: hardware-fired base 44c6cc12 -> polished
-d145a205 -> dp-tuning TXQ 175a4617 (first MAC TX COMPLETION) -> this hardening.
+d145a205 -> dp-tuning TXQ 175a4617 (first MAC TX COMPLETION) -> scan-tuning
+0002 (batched scan; scan_req_batch=6, scan_batch_gap_ms=300,
+scan_chan_time_ms) -> this hardening.
 
 ## Honest limits
 

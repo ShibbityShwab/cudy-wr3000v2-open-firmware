@@ -1,10 +1,17 @@
-final combined stability module (host-built, NOT fired)
-stack: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617 -> this hardening
-size: 258220 B
-sha256: 694c704a634adf2ca4900b4f96101ff5204fa7df2c9c8ce2c26dfdbeac3a3aba
-unstripped: 959300 B sha256 7cd2d0aaa97deab50cacb11257d8986aaa7e512f14ad607bcbd837f23dc3d4fe
+final combined stability module (host-built, NOT fired as this exact build)
+chain: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617
+       (first MAC TX COMPLETED) -> scan-tuning 0002 (batched scan) -> hardening
+size: 263196 B
+sha256: d6b85fff6c81ba4b056266b3371e8074c27054aadd4a522298428a51342644ba
+unstripped: 971728 B sha256 9e2d5ff6d5ba61fb261ba7c60da8453e47a18c658674a0dcc570509ed84aedd9
 vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
 depends: cfg80211
 warnings: 0
-new params: hcc_trace=0 (hot-path hcc-core traces off; 1=historic), stop_ap_mode=0 (host-side stop; 1=firmware user_del teardown)
-ladders: E2 (stop/restart), E3 (failed-start retry), soak 60 min
+params: hcc_trace=0 (quiet steady state; 1=historic), stop_ap_mode=0 (host-side
+  stop; restart resets firmware VAP via g0 id9 then re-creates user+VAP base) or
+  1 (teardown at stop time); scan_chan_time_ms / scan_req_batch=6 /
+  scan_batch_gap_ms=300 (scan-tuning, 3-batch 13-channel scan); txq_publish=1;
+  mgmt_diag=0.
+new dmesg: 'host-side stop_ap (stop_ap_mode=0 default) ... restart will RESET the
+  firmware VAP'; restart: 'start_ap restart: firmware VAP reset committed (g0
+  id9); re-creating user_add/notify + VAP base for the fresh AP config'.

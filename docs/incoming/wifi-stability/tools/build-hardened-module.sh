@@ -33,17 +33,20 @@ LANE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 DOCS=$(cd "$LANE_DIR/.." && pwd)            # .../docs/incoming
 DP_SRC=$DOCS/wifi-dp-air/src
 DPT_LANE=$DOCS/wifi-dp-tuning
+SCAN_LANE=$DOCS/wifi-scan-tuning
 AP_LANE=$DOCS/wifi-ap-start
 POLISH_LANE=$DOCS/wifi-image-polish
 AP_PATCH=$AP_LANE/provider/apstart-provider.patch
 POLISH_PATCH=$POLISH_LANE/patches/0001-polish-module-defaults-and-mgmt-diag.patch
 DPT_PATCH=$DPT_LANE/patches/0001-txq-consumer-tuning.patch
+SCAN_PATCH=$SCAN_LANE/patches/0002-scan-tuning-on-polish.patch
 OUR_PATCH=$LANE_DIR/patches/0001-stability-hardening.patch
 BASEWORK=/tmp/wifi-combined-build
 PWORK=/tmp/wifi-image-polish-build
 DPTWORK=/tmp/wifi-dp-tuning-build
 HWORK=/tmp/wifi-stability-build/combined
 ART=/tmp/wifi-stability-artifact
+ARTWORK=$ART.work
 
 KDIR=
 STAGING_DIR=
@@ -66,6 +69,7 @@ fi
 [ -f "$AP_PATCH" ] || { echo "stability: missing ap-start patch: $AP_PATCH" >&2; exit 2; }
 [ -f "$POLISH_PATCH" ] || { echo "stability: missing polish patch: $POLISH_PATCH" >&2; exit 2; }
 [ -f "$DPT_PATCH" ] || { echo "stability: missing dp-tuning patch: $DPT_PATCH" >&2; exit 2; }
+[ -f "$SCAN_PATCH" ] || { echo "stability: missing scan-tuning patch: $SCAN_PATCH" >&2; exit 2; }
 [ -f "$OUR_PATCH" ] || { echo "stability: missing hardening patch: $OUR_PATCH" >&2; exit 2; }
 [ -d "$KDIR" ] || { echo "stability: 6.18.60 kernel tree not found" >&2; exit 2; }
 [ -n "$STAGING_DIR" ] || { echo "stability: staging dir not found" >&2; exit 2; }
@@ -110,15 +114,15 @@ strip_artifact() { # $1 = dir, $2 = output
 	cmp -s "$1/.t1" "$1/.t2" || { echo "stability: STRIP CHANGED .text" >&2; exit 1; }
 }
 
-rm -rf "$BASEWORK" "$PWORK" "$HWORK" "$ART"
-mkdir -p "$ART"
+rm -rf "$BASEWORK" "$PWORK" "$HWORK" "$ART" "$ARTWORK"
+mkdir -p "$ARTWORK"
 
 echo "== stack 1: proven combined module (hardware-validated identity)"
 stage_proven "$BASEWORK"
 build_module "$BASEWORK"
-strip_artifact "$BASEWORK" "$ART/hi5622_wifi.base.ko"
-B_SIZE=$(stat -c %s "$ART/hi5622_wifi.base.ko")
-B_SHA=$(sha256sum "$ART/hi5622_wifi.base.ko" | cut -d' ' -f1)
+strip_artifact "$BASEWORK" "$ARTWORK/hi5622_wifi.base.ko"
+B_SIZE=$(stat -c %s "$ARTWORK/hi5622_wifi.base.ko")
+B_SHA=$(sha256sum "$ARTWORK/hi5622_wifi.base.ko" | cut -d' ' -f1)
 if [ "$B_SIZE" != "$BASE_SIZE" ] || [ "$B_SHA" != "$BASE_SHA" ]; then
 	echo "stability: BASE MISMATCH expected $BASE_SIZE/$BASE_SHA got $B_SIZE/$B_SHA" >&2
 	exit 1
@@ -129,9 +133,9 @@ echo "== stack 2: polished image module (wifi-image-polish identity)"
 stage_proven "$PWORK"
 ( cd "$PWORK" && patch -p1 --no-backup-if-mismatch < "$POLISH_PATCH" >/dev/null )
 build_module "$PWORK"
-strip_artifact "$PWORK" "$ART/hi5622_wifi.polished.ko"
-P_SIZE=$(stat -c %s "$ART/hi5622_wifi.polished.ko")
-P_SHA=$(sha256sum "$ART/hi5622_wifi.polished.ko" | cut -d' ' -f1)
+strip_artifact "$PWORK" "$ARTWORK/hi5622_wifi.polished.ko"
+P_SIZE=$(stat -c %s "$ARTWORK/hi5622_wifi.polished.ko")
+P_SHA=$(sha256sum "$ARTWORK/hi5622_wifi.polished.ko" | cut -d' ' -f1)
 if [ "$P_SIZE" != "$POLISHED_SIZE" ] || [ "$P_SHA" != "$POLISHED_SHA" ]; then
 	echo "stability: POLISHED MISMATCH expected $POLISHED_SIZE/$POLISHED_SHA got $P_SIZE/$P_SHA" >&2
 	echo "stability: the wifi-image-polish artifact changed; re-pin this lane first" >&2
@@ -143,9 +147,9 @@ echo "== stack 3: dp-tuning TXQ-publish module (bench-validated identity)"
 stage_proven "$DPTWORK"
 ( cd "$DPTWORK" && patch -p1 --no-backup-if-mismatch < "$DPT_PATCH" >/dev/null )
 build_module "$DPTWORK"
-strip_artifact "$DPTWORK" "$ART/hi5622_wifi.dp-tuning.ko"
-D_SIZE=$(stat -c %s "$ART/hi5622_wifi.dp-tuning.ko")
-D_SHA=$(sha256sum "$ART/hi5622_wifi.dp-tuning.ko" | cut -d' ' -f1)
+strip_artifact "$DPTWORK" "$ARTWORK/hi5622_wifi.dp-tuning.ko"
+D_SIZE=$(stat -c %s "$ARTWORK/hi5622_wifi.dp-tuning.ko")
+D_SHA=$(sha256sum "$ARTWORK/hi5622_wifi.dp-tuning.ko" | cut -d' ' -f1)
 if [ "$D_SIZE" != "$DPT_SIZE" ] || [ "$D_SHA" != "$DPT_SHA" ]; then
 	echo "stability: DP-TUNING MISMATCH expected $DPT_SIZE/$DPT_SHA got $D_SIZE/$D_SHA" >&2
 	exit 1
@@ -157,7 +161,29 @@ rm -rf "$HWORK"
 cp -a "$DPTWORK" "$HWORK"
 rm -f "$HWORK"/*.o "$HWORK"/*.ko "$HWORK"/*.mod "$HWORK"/*.mod.c "$HWORK"/.*.cmd "$HWORK"/Module.symvers "$HWORK/build.log" 2>/dev/null || true
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$POLISH_PATCH" >/dev/null )
+( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$SCAN_PATCH" >/dev/null )
+# The scan-tuning repo patch 0002 carries only hi5622_scan.c (its own
+# scan.h/scan_logic.c/scan_logic.h deltas ship as src/ files in that lane);
+# copy them so the final combined build carries the complete tuning.
+cp "$SCAN_LANE/src/hi5622_scan.h" "$SCAN_LANE/src/hi5622_scan_logic.c" \
+   "$SCAN_LANE/src/hi5622_scan_logic.h" "$HWORK/"
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$OUR_PATCH" >/dev/null )
+grep -q "start_ap restart: firmware VAP reset committed" "$HWORK/hi5622_scan.c" || {
+	echo "stability: E2 restart-reset path missing" >&2; exit 1; }
+# scan-tuning must be in the SOURCE with its defaults (acceptance for scan-tuning
+# lane): 3 new params, batch default 6, batch gap default 300 ms, split message.
+grep -q "scan_chan_time_ms" "$HWORK/hi5622_scan.c" || {
+	echo "stability: scan-tuning scan_chan_time_ms missing" >&2; exit 1; }
+grep -q "hi5622_scan_req_batch = HI5622_SCAN_DEFAULT_BATCH" "$HWORK/hi5622_scan.c" || {
+	echo "stability: scan-tuning scan_req_batch default missing" >&2; exit 1; }
+grep -q "hi5622_scan_batch_gap_ms = HI5622_SCAN_BATCH_GAP_MS" "$HWORK/hi5622_scan.c" || {
+	echo "stability: scan-tuning scan_batch_gap_ms default missing" >&2; exit 1; }
+grep -q "split into %u g0 id0xC requests" "$HWORK/hi5622_scan.c" || {
+	echo "stability: scan-tuning split message missing" >&2; exit 1; }
+grep -q "define HI5622_SCAN_DEFAULT_BATCH[[:space:]]*6u" "$HWORK/hi5622_scan_logic.h" || {
+	echo "stability: HI5622_SCAN_DEFAULT_BATCH != 6u" >&2; exit 1; }
+grep -q "define HI5622_SCAN_BATCH_GAP_MS[[:space:]]*300u" "$HWORK/hi5622_scan_logic.h" || {
+	echo "stability: HI5622_SCAN_BATCH_GAP_MS != 300u" >&2; exit 1; }
 # hcc_trace gating must be in the SOURCE (the static helper inlines away, so
 # the stripped artifact only carries the param name).
 grep -q "hcc_kernel_event_hot" "$HWORK/hcc_core_kernel.c" || {
@@ -165,23 +191,33 @@ grep -q "hcc_kernel_event_hot" "$HWORK/hcc_core_kernel.c" || {
 grep -q "hi5622_hcc_trace" "$HWORK/hcc.c" || {
 	echo "stability: hcc_trace param missing from hcc.c" >&2; exit 1; }
 build_module "$HWORK"
-strip_artifact "$HWORK" "$ART/hi5622_wifi.hardened.ko"
-H_SIZE=$(stat -c %s "$ART/hi5622_wifi.hardened.ko")
-H_SHA=$(sha256sum "$ART/hi5622_wifi.hardened.ko" | cut -d' ' -f1)
+strip_artifact "$HWORK" "$ARTWORK/hi5622_wifi.hardened.ko"
+H_SIZE=$(stat -c %s "$ARTWORK/hi5622_wifi.hardened.ko")
+H_SHA=$(sha256sum "$ARTWORK/hi5622_wifi.hardened.ko" | cut -d' ' -f1)
 HU_SIZE=$(stat -c %s "$HWORK/hi5622_wifi.ko")
 HU_SHA=$(sha256sum "$HWORK/hi5622_wifi.ko" | cut -d' ' -f1)
-cp "$HWORK/hi5622_wifi.ko" "$ART/hi5622_wifi.hardened.ko.unstripped"
-cp "$HWORK/build.log" "$ART/build.log"
-cp "$OUR_PATCH" "$ART/0001-stability-hardening.patch"
+cp "$HWORK/hi5622_wifi.ko" "$ARTWORK/hi5622_wifi.hardened.ko.unstripped"
+cp "$HWORK/build.log" "$ARTWORK/build.log"
+cp "$OUR_PATCH" "$ARTWORK/0001-stability-hardening.patch"
 
 missing=""
 for s in "stale module reload" "ALREADY BOOTED from a previous module load" \
 	 "VAP-base/AP latches cleared" "controlled stop_ap" "scan REFUSED" \
 	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag" \
-	 "hcc_trace"; do
-	if ! strings -a "$ART/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
+	 "hcc_trace" "scan_chan_time_ms" "scan_req_batch" \
+	 "scan_batch_gap_ms" "split into %u g0 id0xC requests" \
+	 "start_ap restart: firmware VAP reset committed" \
+	 "host-side stop_ap (stop_ap_mode=0 default)"; do
+	if ! strings -a "$ARTWORK/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
 done
 [ -z "$missing" ] || { echo "stability: missing hardened strings:$missing" >&2; exit 1; }
+# Publish the artifact directory atomically: copying during a build must never
+# see an empty/partial directory (bench E2 report: lead copied an empty dir).
+rm -rf "$ART"
+mv "$ARTWORK" "$ART"
+[ -s "$ART/hi5622_wifi.hardened.ko" ] || {
+	echo "stability: artifact publish produced an empty .ko" >&2; exit 1; }
+echo "ARTIFACT-PUBLISHED $ART"
 VERMAGIC=$("${CROSS}strings" "$HWORK/hi5622_wifi.ko" | grep -m1 '^vermagic=')
 DEPENDS=$(strings -a "$HWORK/hi5622_wifi.ko" | grep -m1 '^depends=')
 echo "== stability hardened module (final combined)"
@@ -191,6 +227,6 @@ echo "sha256    : $H_SHA"
 echo "unstripped: $HU_SIZE B sha256 $HU_SHA"
 echo "vermagic  : $VERMAGIC"
 echo "depends   : $DEPENDS"
-echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> hardened"
+echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning 246688/05dd5f6a -> hardened"
 echo "host test : ./tools/run-hardening-check.sh"
 echo "note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required"

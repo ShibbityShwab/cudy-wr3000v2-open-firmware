@@ -5,13 +5,14 @@ POLISHED-ID-OK 242920 d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba82
 == stack 3: dp-tuning TXQ-publish module (bench-validated identity)
 DPT-ID-OK 251924 175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425
 == stack 4: final combined = dp-tuning + polished defaults + stability hardening
+ARTIFACT-PUBLISHED /tmp/wifi-stability-artifact
 == stability hardened module (final combined)
 artifact  : /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko (debug-stripped)
-size      : 258220
-sha256    : 694c704a634adf2ca4900b4f96101ff5204fa7df2c9c8ce2c26dfdbeac3a3aba
-unstripped: 959300 B sha256 7cd2d0aaa97deab50cacb11257d8986aaa7e512f14ad607bcbd837f23dc3d4fe
+size      : 263196
+sha256    : d6b85fff6c81ba4b056266b3371e8074c27054aadd4a522298428a51342644ba
+unstripped: 971728 B sha256 9e2d5ff6d5ba61fb261ba7c60da8453e47a18c658674a0dcc570509ed84aedd9
 vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
 depends   : depends=cfg80211
-chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> polished 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> dp-tuning 251924/175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425 -> hardened
+chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> polished 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> dp-tuning 251924/175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425 -> scan-tuning 246688/05dd5f6a -> hardened
 host test : ./tools/run-hardening-check.sh
 note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required

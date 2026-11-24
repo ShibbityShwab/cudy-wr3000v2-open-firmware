@@ -64,7 +64,7 @@ if grep -q '^+unsigned int hi5622_mgmt_diag;' "$PATCH"; then
 	fail=1
 fi
 
-echo "== patch apply check (dp-tuning + polished image source tree)"
+echo "== patch apply check (dp-tuning + polished + scan-tuning source tree)"
 WORK=/tmp/wifi-stability-patchcheck
 rm -rf "$WORK"; mkdir -p "$WORK"
 cp -a "$DOCS/wifi-dp-air/src/." "$WORK/"
@@ -76,6 +76,8 @@ cp "$DOCS/wifi-ap-start/src/hi5622_ap_frames.h" \
 	"$DOCS/wifi-dp-tuning/patches/0001-txq-consumer-tuning.patch" >/dev/null )
 ( cd "$WORK" && patch -p1 --no-backup-if-mismatch < \
 	"$DOCS/wifi-image-polish/patches/0001-polish-module-defaults-and-mgmt-diag.patch" >/dev/null )
+( cd "$WORK" && patch -p1 --no-backup-if-mismatch < \
+	"$DOCS/wifi-scan-tuning/patches/0002-scan-tuning-on-polish.patch" >/dev/null )
 ( cd "$WORK" && patch -p1 --dry-run --no-backup-if-mismatch < "$PATCH" >/dev/null ) \
 	|| { echo "PATCH-APPLY FAILED" >&2; fail=1; }
 echo "PATCH-APPLY OK"

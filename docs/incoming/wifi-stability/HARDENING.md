@@ -38,12 +38,16 @@ AP start re-posts the mode-1 VAP base (the exact boot-A fix).
 ### 2.2 Controlled stop_ap (G2) - two modes, default safest
 
 Module param `stop_ap_mode` (default **0**):
-* **0 = host-side stop only (default): no firmware write.**  Clears
-  ap_started/dirty state and returns 0, so cfg80211 clears ap.beacon_interval
-  and hostapd may restart.  The live firmware VAP/AP context is reused: the
-  restart re-posts ap_ssid/ap_cfg against it (boot C showed the boot-B failure
-  is purely cfg80211-side: clean page, no firmware exception).  This is the
-  zero-new-risk path and the recommended production restart.
+* **0 = host-side stop only (default): no firmware write at STOP time.**
+  Clears ap_started/dirty state and returns 0, so cfg80211 clears
+  ap.beacon_interval and hostapd may restart.  Bench E2 (first fire): the
+  restart then reached start_ap (the -EALREADY barrier is gone) but the second
+  hostapd still failed later in the sequence - a plain AP-config re-post against
+  the already-started firmware AP is not reliable.  Fix: the NEXT start_ap sees
+  ap_stopped_hostside and first RESETS the firmware VAP with the individually
+  validated user_del (g0 id9), then re-creates user_add/notify + the mode-1 VAP
+  base, then posts the fresh AP config.  Any reset failure aborts fail-closed.
+  Expected restart dmesg is in [evidence/e2-restart-expected-dmesg.txt](evidence/e2-restart-expected-dmesg.txt).
 * **1 = controlled firmware teardown:** posts the individually validated
   user_del (g0 id9) for the AP user, marks `fw_vap_deleted`, and a later
   start_ap re-creates user_add/notify (g0 id7/id8) + the mode-1 VAP base.  Any
@@ -104,7 +108,8 @@ beyond HCC_EVENT_HEARTBEAT, which is covered by the same gate.
 stack 1  dp-air + ap-start v7                   242,572 B  44c6cc12...  (hardware-fired)
 stack 2  + wifi-image-polish delta              242,920 B  d145a205...  (polished, not fired)
 stack 3  dp-air + ap-start + dp-tuning TXQ       251,924 B  175a4617...  (bench-validated, TX COMPLETED)
-stack 4  stack3 + polish + this lane's harden.   258,220 B  694c704a...  (FINAL COMBINED, NOT fired)
+stack 4  stack3 + polish + scan-tuning 0002
+         + this lane's harden.                   263,196 B  d6b85fff...  (FINAL COMBINED, NOT fired)
 ```
 
 `tools/build-hardened-module.sh` asserts stacks 1-3 byte-for-byte (base
