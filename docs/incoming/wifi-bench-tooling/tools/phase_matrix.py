@@ -71,14 +71,19 @@ PHASES = (
      "mode": "cfg80211", "sequence": "bringup-d1-vap.json",
      "expect": "wiphy registered -> iw phy -> iw iface add wlan0 -> iw iface "
                "del; no H2D message"},
-    {"id": "D2", "row": "scan", "label": "scan request (D2)",
+    {"id": "D2", "row": "scan", "label": "scan request (D2) TRUE PASS",
      "mode": "cfg80211", "sequence": "bringup-d2-scan.json",
-     "expect": "iw dev wlan0 scan (rc=0) + no exception (mask 0/staging 0) + "
-               "H2D timeout=0/refused=0; D2H g1 15/16/17 / g2 2 scan events "
-               "are WATCH-ONLY (host-only M1 VAP may give a graceful no-VAP "
-               "refusal). Until the wifi-vap-scan g0 id0xC builder is in the "
-               "provider registry the fail-closed -EOPNOTSUPP stub (rc=95) "
-               "stops the ladder - that is BLOCKED-DRIVER, not FAIL"},
+     "needs": "the wifi-vap-start PROVIDER module (wifi-scan-ap tree + "
+              "vapstart-provider.patch, vap_start_mode=1, allow_frames=12) - "
+              "the plain cfg80211/scan-ap module is refused at plan time "
+              "(module-param-unknown -> BLOCKED-PREREQ). Build: "
+              "../wifi-vap-start/tools/kernel-check.sh",
+     "expect": "ready -> ctx_create t1 -> txq_sync72 -> iw iface add wlan0 -> "
+               "link up -> ONE iw dev wlan0 scan; PASS = iw rc=0 + dmesg "
+               "'cfg80211: scan channel result' + results>0 + mask/staging 0 + "
+               "golden page/state; BLOCKED-DRIVER (not FAIL) only when the "
+               "ladder ran and results=0; the D2H g1 15/16/17 catalogue is "
+               "captured watch/evidence-only"},
     {"id": "E1", "row": "dataplane", "label": "data-plane setup + TXQ sync (E1)",
      "mode": "protocol", "sequence": "bringup-e1-dataplane.json",
      "expect": "ready id2 ring-pointer seed + dp_probe read-only MAC slot-5 "
@@ -95,6 +100,10 @@ BLOCK_CODES = {
     "tool-missing": "BLOCKED-PREREQ",
     "budget-required": "BLOCKED-PREREQ",
     "insmod": "BLOCKED-PREREQ",
+    # a sequence load_params / --module-param name the target module does not
+    # expose: the phase needs a different (e.g. provider) module build.  That
+    # is a prerequisite gap, not a bench failure (D2 on the plain module).
+    "module-param-unknown": "BLOCKED-PREREQ",
 }
 REFUSED_RE = re.compile(r"REFUSED: ([a-z0-9-]+): ?([^\n]*)")
 
@@ -134,7 +143,11 @@ def phase_by_id(pid: str) -> dict:
     raise KeyError(pid)
 
 
-def sequence_path(p: dict) -> str:
+def sequence_path(p: dict, args=None) -> str:
+    """Bundled sequence path, or the per-phase --sequence-for override."""
+    overrides = getattr(args, "sequence_for_map", None) or {}
+    if overrides.get(p["id"]):
+        return overrides[p["id"]]
     return os.path.join(SEQUENCE_DIR, p["sequence"])
 
 
@@ -142,6 +155,19 @@ def module_for(args, p: dict):
     """Per-phase module override (--module-for D1=/path/ko), else --module."""
     overrides = getattr(args, "module_for_map", None) or {}
     return overrides.get(p["id"]) or args.module
+
+
+def phase_module_params(args, p: dict) -> list:
+    """Per-phase insmod params (D2 needs the provider load_params).
+
+    Order: global --module-param entries first, then the per-phase
+    --module-param-for PHASE=KEY=VALUE entries for this phase.  The sequence's
+    own load_params stay the authoritative default; these override them at
+    insmod (bench_session applies CLI params after the sequence load_params).
+    """
+    out = list(getattr(args, "module_param", None) or [])
+    per = getattr(args, "module_param_for_map", None) or {}
+    return out + list(per.get(p["id"]) or [])
 
 
 def want_reboot_after(args, index: int, total: int) -> bool:
@@ -163,7 +189,7 @@ def want_reboot_after(args, index: int, total: int) -> bool:
 
 def build_argv(args, p: dict, phase_dir: str) -> list:
     argv = [sys.executable, BENCH_SESSION, "--mode", p["mode"],
-            "--sequence", sequence_path(p), "--report-dir", phase_dir,
+            "--sequence", sequence_path(p, args), "--report-dir", phase_dir,
             "--endpoint", args.endpoint,
             "--session-timeout", str(args.session_timeout),
             "--ready-id1", str(args.ready_id1),
@@ -185,7 +211,7 @@ def build_argv(args, p: dict, phase_dir: str) -> list:
         argv += ["--bar0read", os.path.abspath(args.bar0read)]
     if args.ssh_host:
         argv += ["--ssh-host", args.ssh_host]
-    for mp in args.module_param or []:
+    for mp in phase_module_params(args, p):
         argv += ["--module-param", mp]
     if p["mode"] == "cfg80211":
         for flag, val in (("--cfg80211-ko", args.cfg80211_ko),
@@ -277,6 +303,14 @@ def classify(args, p: dict, rc: int, out: str, err: str,
     if pdoc:
         rec["sequence_sha256"] = pdoc.get("sha256")
         rec["totals"] = pdoc.get("totals")
+        rec["load_params"] = pdoc.get("load_params")
+    spdoc = load_json(os.path.join(phase_dir, "session-plan.json")) or {}
+    smod = spdoc.get("module") or {}
+    rec["module_sha256"] = smod.get("sha256")
+    rec["module_size"] = smod.get("size")
+    swarn = spdoc.get("warnings") or []
+    if swarn:
+        rec["warnings"] = list(swarn)[:8]
     summary = load_json(os.path.join(phase_dir, "summary.json")) or {}
     ev = load_json(os.path.join(phase_dir, "protocol-evidence.json")) or {}
     rec["bench_result"] = summary.get("result")
@@ -367,9 +401,14 @@ def classify_stop(evidence: dict) -> str:
 def run_phase(args, p: dict, base: str, stamp: str) -> dict:
     phase_dir = os.path.join(base, stamp, p["id"])
     argv = build_argv(args, p, phase_dir)
+    mod = module_for(args, p)
     rec = {"phase": p["id"], "row": p["row"], "label": p["label"],
            "mode": p["mode"], "sequence": p["sequence"],
            "run_kind": "dry-run" if args.dry_run else "attended-real",
+           "module": os.path.abspath(mod) if mod else None,
+           "module_params": phase_module_params(args, p),
+           "sequence_path": sequence_path(p, args),
+           "needs": p.get("needs"),
            "command": argv, "expect": p["expect"]}
     print("== phase %-3s (%s) ==" % (p["id"], p["label"]), flush=True)
     t0 = time.time()
@@ -413,6 +452,34 @@ def render_markdown(matrix: dict) -> str:
             a("  - blocked: %s - %s" % (rec["blocked_reason"],
                                          rec.get("detail", "")))
     a("")
+    a("## Phase configuration (module / insmod params)")
+    a("")
+    a("| phase | module | module sha256 (if run) | module params | sequence load_params |")
+    a("| --- | --- | --- | --- | --- |")
+    for rec in matrix["phases"]:
+        mod = (rec.get("module") or "-")
+        sha = rec.get("module_sha256") or "-"
+        params = ", ".join(rec.get("module_params") or []) or "-"
+        loadp = rec.get("load_params")
+        if isinstance(loadp, dict):
+            loadp = ", ".join("%s=%s" % (k, loadp[k]) for k in sorted(loadp)) \
+                or "-"
+        else:
+            loadp = "-"
+        a("| %s | %s | %s | %s | %s |"
+          % (rec["phase"], mod, sha, params, loadp))
+    a("")
+    a("## D2 PASS vs BLOCKED-DRIVER decision table")
+    a("")
+    a("| iw scan rc | dmesg 'scan channel result' | scan results | mask/staging | page/state | matrix status |")
+    a("| --- | --- | --- | --- | --- | --- |")
+    a("| 0 | present | >0 | 0 | golden | **PASS** |")
+    a("| 0 | absent + driver 'scan DONE (finish-abort, results=0 ...)' | 0 | 0 | golden | **BLOCKED-DRIVER** (ladder ran, firmware produced nothing) |")
+    a("| 95/161 + documented stub signature | - | - | - | - | **BLOCKED-DRIVER** (legacy fail-closed scan stub) |")
+    a("| 0 | absent, no results=0 signature | any | 0 | golden | **STOP/FAIL** (gate mismatch, inspect evidence) |")
+    a("| any | - | any | nonzero | any | **FAIL** (firmware exception) |")
+    a("| nonzero (other) | - | - | - | - | **FAIL/STOP** (provider refusal or tool error) |")
+    a("")
     a("## How to read the statuses")
     a("")
     a("- PLAN-OK: the data-driven plan validated end to end (sequence schema,")
@@ -423,10 +490,13 @@ def render_markdown(matrix: dict) -> str:
     a("  the owning lane, not a bench failure; the sequence JSON is the single")
     a("  edit point when the token lands.")
     a("- BLOCKED-DRIVER: a real attended run reached a documented pending")
-    a("  driver feature (e.g. the cfg80211 M2 scan stub: blocked_rc [95,161] +")
-    a("  'Not supported' signature -> the scan step records BLOCKED/SESSION_RESULT")
-    a("  BLOCKED, or a STOP whose evidence carries blocked-driver/rc=95/161);")
-    a("  the ladder is ready for the next driver revision.")
+    a("  driver/firmware feature: either a blocked_rc shell step (legacy stub)")
+    a("  or a blocked_patterns signature gate (D2: scan accepted rc=0 but the")
+    a("  driver reports results=0 / dmesg 'scan DONE (finish-abort, results=0")
+    a("  ...)') -> the step records BLOCKED, the session continues, the")
+    a("  SESSION_RESULT is BLOCKED and the matrix maps it to BLOCKED-DRIVER.")
+    a("  A firmware exception (mask/staging nonzero) or a page drift is always")
+    a("  FAIL, never BLOCKED.")
     a("- PASS / FAIL / STOP: real attended session results (see each phase's")
     a("  evidence dir for protocol-evidence.json + PROTOCOL-SEQUENCE.md).")
     a("- --reboot-between/--reboot-after are orchestrated by the MATRIX: it")
@@ -451,13 +521,26 @@ def main(argv=None) -> int:
                     help="per-phase module override (repeatable), e.g. "
                          "--module-for D1=../wifi-cfg80211/src/hi5622_wifi.ko; "
                          "phases without an override use --module")
+    ap.add_argument("--sequence-for", action="append", metavar="PHASE=PATH",
+                    help="per-phase sequence override (repeatable), e.g. a "
+                         "D2 variant matrix row; phases without an override "
+                         "use the bundled tools/sequences/<phase>.json")
     ap.add_argument("--fw-file")
     ap.add_argument("--fw-manifest")
     ap.add_argument("--fw-path")
     ap.add_argument("--wifi-block-bin")
     ap.add_argument("--wifi-block")
     ap.add_argument("--bar0read")
-    ap.add_argument("--module-param", action="append", metavar="KEY=VALUE")
+    ap.add_argument("--module-param", action="append", metavar="KEY=VALUE",
+                    help="global insmod parameter applied to every selected "
+                         "phase (repeatable); a PHASE:KEY=VALUE form targets one "
+                         "phase, e.g. --module-param D2:allow_frames=12")
+    ap.add_argument("--module-param-for", action="append",
+                    metavar="PHASE=KEY=VALUE",
+                    help="per-phase insmod parameter (repeatable), e.g. "
+                         "--module-param-for D2=allow_frames=12; applied only "
+                         "to that phase and overriding its sequence "
+                         "load_params")
     ap.add_argument("--cfg80211-ko")
     ap.add_argument("--iw-bin")
     ap.add_argument("--libnl-tiny")
@@ -504,6 +587,8 @@ def main(argv=None) -> int:
             print("%-3s row=%-11s mode=%-9s sequence=%s"
                   % (p["id"], p["row"], p["mode"], p["sequence"]))
             print("    %s" % p["expect"])
+            if p.get("needs"):
+                print("    NEEDS: %s" % p["needs"])
         return 0
     args.dry_run = args.dry_run or not args.yes_really
     if not args.dry_run and not args.attended:
@@ -520,6 +605,42 @@ def main(argv=None) -> int:
                   "got %r" % (", ".join(PHASE_IDS), raw), file=sys.stderr)
             return 2
         args.module_for_map[pid] = path.strip()
+    args.sequence_for_map = {}
+    for raw in args.sequence_for or []:
+        pid, sep, path = raw.partition("=")
+        pid, path = pid.strip(), path.strip()
+        if not sep or pid not in PHASE_IDS or not path:
+            print("error: --sequence-for expects PHASE=PATH with PHASE in %s, "
+                  "got %r" % (", ".join(PHASE_IDS), raw), file=sys.stderr)
+            return 2
+        args.sequence_for_map[pid] = os.path.abspath(path)
+    # ---- per-phase insmod parameters -----------------------------------
+    args.module_param_for_map = {}
+
+    def _param_ok(pid: str, kv: str) -> bool:
+        k, sep, v = kv.partition("=")
+        if not sep or not k.strip() or not v.strip():
+            return False
+        return True
+
+    for raw in args.module_param_for or []:
+        pid, sep, kv = raw.partition("=")
+        pid, kv = pid.strip(), kv.strip()
+        if not sep or pid not in PHASE_IDS or not _param_ok(pid, kv):
+            print("error: --module-param-for expects PHASE=KEY=VALUE with "
+                  "PHASE in %s, got %r"
+                  % (", ".join(PHASE_IDS), raw), file=sys.stderr)
+            return 2
+        args.module_param_for_map.setdefault(pid, []).append(kv)
+    # sugar: --module-param D2:allow_frames=12 (phase id + colon + KEY=VALUE)
+    globals_ = []
+    for raw in args.module_param or []:
+        pid, sep, kv = raw.partition(":")
+        if sep and pid in PHASE_IDS and _param_ok(pid, kv):
+            args.module_param_for_map.setdefault(pid, []).append(kv.strip())
+        else:
+            globals_.append(raw)
+    args.module_param = globals_
     if args.phase == "all":
         selected = list(PHASE_IDS)
     elif args.phase == "ready":

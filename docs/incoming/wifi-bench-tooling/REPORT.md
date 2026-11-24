@@ -896,3 +896,133 @@ Real validation of the bound: reboot_and_wait against an unreachable host with
 a 2 s deadline returns in 2.1 s (no bench contact), and the full dry-run matrix
 (including --reboot-between) still validates all five phases (no reboot in
 dry-run).
+
+## 10. task-124: D2 TRUE-PASS ladder - provider prerequisites + result gates (2026-11-26)
+
+**Host-only.**  This section extends section 9.8: the 2026-11-26 14:00 attended
+mode-1 provider fire produced the project's first real firmware scan results, so
+the D2 row is redefined from "scan request accepted + no exception" to a
+true-PASS ladder with firmware-result gates.  Nothing here was fired by this
+lane; the fire is the Lead's.
+
+### 10.1 What the hardware-validated D2 chain actually is
+
+Ledger 2026-11-26 14:00 (mode-1 provider module 738,112 B sha e09dc697...;
+params `allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0
+frame_gap_ms=100 h2d_send_budget=8`):
+
+1. boot golden, strict ready pair;
+2. **C2 ctx+txq consumed** - ctx_create type 1 (g0 id1 key 0x64) then
+   txq_sync72 (g0 id1 cmd 0xd8, 72-byte node).  `vap_start_first=1` makes the
+   provider's scan op post the h2d VAP create/start family, and that path
+   requires the hCC core ACTIVE, hence the two prerequisite writes before any
+   iw action;
+3. `iw phy phy0 interface add wlan0 type managed` -> provider user_add
+   g0 id7 180 B + user_add_notify g0 id8 180 B (1/12, 2/12 consumed);
+4. `iw dev wlan0 scan` -> provider vap_add g0 id1 48 B (3/12) -> vap_start
+   g0 id1 40 B (4/12) -> scan_req g0 id0xC 520 B (5/12), all consumed;
+5. firmware answers: dmesg `cfg80211: scan channel result slot=0 ch=1
+   (2412 MHz)` ... `slot=5 ch=6 (2437 MHz)`, `scan DONE (finish-abort,
+   results=6 bss=6 complete=0 channel=6 sta=0 unknown=0 dropped_busy=0
+   timeout=1)`, cfg80211_scan_done(aborted=1); rd_catalog g1 id17 count=6
+   (124 B) + g1 id15 count=6 (509 B); page 0x86807FEF/7/2/0xABCD, mask 0,
+   staging 0.
+   The provider's 5 s bound ends the scan after 6 of 13 channels
+   (finish-abort); results flow, so the results>0 gate is satisfied - full
+   13-channel completion is the separate scan-completion lane (task-123).
+
+Key behavioural fact relied on by the gates: **iw returns 0 on an aborted
+scan** (iw 6.17 `handle_scan_combined`: NL80211_CMD_SCAN_ABORTED ->
+"scan aborted!" -> return 0; checked against the local iw-6.17 source, no
+device).  So `iw rc=0` alone cannot mean "the scan worked"; the result gates
+must read the driver/firmware evidence (cfg80211_status results counter and the
+driver's dmesg lines).
+
+### 10.2 The new D2 sequence (`tools/sequences/bringup-d2-scan.json`)
+
+22 steps / 48 checks / 2 device writes / 5 shell actions, cfg80211 profile,
+fresh-boot state re-gated before anything is written:
+
+- `pre-pack` (ctx4+0x190=0, mask/staging=0) -> `ctx-create-t1` (WO
+  h2d_ctx_create=1, readback h2d_status `ctx_created=1`) -> `post-create`
+  (the measured ctx4 body PACK: 0x7D4458=4, 0x7D4468=0x00010001, 0x7D488C=
+  0x0100478C) -> `txq-sync72` (WO h2d_txq_sync72=1, readback `txq_sent=1`)
+  -> `post-txq` (mask/staging 0);
+- `vap-add` (iw iface add, rc=0) -> `link-up` (ip link set up) ->
+  `vap-added` (cfg80211_status `vap0: wlan0`) -> catalogue baseline;
+- `scan` (ONE iw dev wlan0 scan, rc=0; keeps the legacy fail-closed
+  blocked_rc [95,161] + `Not supported` signature) -> 1 s settle;
+- `scan-results`: cfg80211_status patterns `scan: phase=` + `results=`,
+  absent `results=0`, blocked `results=0` -> **PASS gate results>0**;
+- `scan-dmesg`: dmesg patterns `scan channel result`, blocked `scan DONE
+  (finish-abort, results=0` -> **PASS gate the firmware channel results**;
+- `post-scan-pack` (mask/staging 0 - hard FAIL, never BLOCKED),
+  `post-scan-page` (page0/page4/page8/pageC + state0=1 - hard FAIL),
+  `frame-post` (cfg80211_status frame_post allow_frames=12, posted=,
+  refused=0, timeout=0, bad=0), `h2d-summary` (timeout=0/refused=0),
+  catalogue-after (evidence-only), `vap-del`, note-end.
+
+### 10.3 Schema addition: documented-pending gates (BLOCKED-DRIVER)
+
+The old tooling only had the exit-code form (`blocked_rc` + signatures).  A
+scan that is *accepted* (rc=0) but returns nothing has no blocked rc, so
+task-124 adds two signature-driven forms that record BLOCKED and continue the
+session (the post-scan health pack is still captured):
+
+- `attr_expect.blocked_patterns`: if the required attr gate fails but the same
+  attribute matches a pending signature (D2 `results=0`), the step is BLOCKED;
+- `shell.blocked_patterns` without `blocked_rc`: same for a command whose rc
+  is normal (dmesg rc=0) while the required result line is absent and the
+  documented pending line is present (D2 `scan DONE (finish-abort,
+  results=0 ...)`).
+
+Generated device script: a combined `ATTR_OK`/`OUT_OK` guard evaluates the
+PASS patterns and the blocked signatures in one block; the emitted `GATE`
+names are identical to the normal path, and a failing gate without a signature
+still `stop`s on the first failure.  Host evaluation re-checks the captured
+report text (`_capture_text` strips control lines) and converts only the
+FAILed checks to BLOCKED with code `blocked-driver`; the session result is
+BLOCKED:<step> and the phase matrix maps it to BLOCKED-DRIVER.  A firmware
+exception or page drift stays FAIL.
+
+### 10.4 Per-phase configuration
+
+- `--module-for PHASE=PATH` (existing; D2 = the wifi-vap-start provider
+  module built by `../wifi-vap-start/tools/kernel-check.sh`);
+- `--module-param-for PHASE=KEY=VALUE` (new, repeatable) and the
+  `--module-param PHASE:KEY=VALUE` sugar: applies only to that phase's child
+  invocation, after the sequence `load_params` (override).  Global
+  `--module-param` remains global;
+- `--sequence-for PHASE=PATH` (new): per-phase sequence document (variant row /
+  dry-run with an unpinned fixture);
+- the D2 sequence carries the provider `load_params` itself, so
+  `--module-for D2=<provider.ko>` is the only required flag on the real run;
+  the plain cfg80211/scan-ap module is refused at plan time with
+  `module-param-unknown` -> **BLOCKED-PREREQ** (recorded negative control);
+- the matrix record now carries the resolved module path/sha256, the per-phase
+  CLI params and the sequence load_params, and the rendered matrix markdown
+  includes the D2 PASS-vs-BLOCKED-DRIVER decision table.
+
+### 10.5 Evidence (host-only, 2026-11-24 09:41 UTC)
+
+- D2 provider-module dry-run: **PLAN-OK**, 22 steps / 48 checks / 2 writes;
+  sequence sha256 7167dd99...; module 738,112 B e09dc697...; PD4 fw
+  cfe24bfb...; cfg80211.ko 2,328,548 B 949393f9...; iw 121,952 B 348dfdac...;
+  libnl-tiny 30,252 B 3c2ff8b9...; generated script `sh -n` PASS, write audit
+  PASS, insmod carries all six provider params.
+- matrix/evidence: `build/evidence-bench-gates/wifi-bench-phase-matrix/
+  20261124T094057Z/` (gitignored; /tmp is never evidence).
+- negative control: same D2 on the plain scan-ap module (704,720 B
+  20d38c5c...) -> **BLOCKED-PREREQ** (`module-param-unknown: allow_frames`),
+  recorded under `.../plain-module-reference/20261124T094058Z/`.
+- full-matrix regression on that module: boot/D1/D2 PLAN-OK (5/18, 11/24,
+  22/48 steps/checks) and C2/E1 BLOCKED-TOKEN (their own module tokens),
+  matrix + BRINGUP-STATUS.md under
+  `build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T094059Z/`.
+- selftest: **542/542** device-free checks (was 503): schema/refusal tests for
+  the blocked forms, device-side execution of the rendered blocked branches
+  under `/bin/sh -u` (documented rc, pattern-only signature, PASS case,
+  unsigned STOP), the full synthetic D2 decision table (hardware PASS,
+  results=0 BLOCKED, exception FAIL, page-drift FAIL, unsigned gate-miss FAIL),
+  per-phase module-param/-sequence argv tests and provider-vs-plain D2 matrix
+  dry-runs.  No device was contacted; no vendor byte is reproduced.

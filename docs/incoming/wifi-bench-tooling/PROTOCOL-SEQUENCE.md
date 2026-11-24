@@ -109,7 +109,7 @@ Step kinds (unknown keys are refused, so typos fail closed):
 | kind | fields | behaviour |
 | --- | --- | --- |
 | `read_pack` | `reads`: list of `{label, bar0}` or `{label, base, add}`, optional `expect`, `about` | read-only BAR0 word reads with numeric gates; labels are session-global and must be defined before use |
-| `attr_expect` | `attr`, `patterns` (list) | every pattern must match the attribute (device-side grep; host re-checks the captured text) |
+| `attr_expect` | `attr`, `patterns` (list), `absent` (list, optional), `blocked_patterns` (list, optional) | every pattern must match the attribute and no absent pattern may (device-side grep; host re-checks the captured text). `blocked_patterns` is the documented-pending (BLOCKED-DRIVER) form: if the PASS gate fails but the attribute matches one of those signatures, the step records BLOCKED and the session continues instead of stopping (task-124, D2 results=0) |
 | `attr_write` | `attr`, `value`, `patterns` (optional) | ONE write-only sysfs store (the H2D message trigger) + post-write expectations; a failed store stops the session |
 | `catalog_snapshot` | - | capture rd_catalog + rd_decode as a delta baseline |
 | `d2h_catalog` | `expect_entries`: `[{group, id, min_count}]`, `device_patterns`, `before` (snapshot step), `require_frames_increase` | the firmware must answer with the expected new device->host catalogue entries (count and frame-count deltas) |
@@ -396,7 +396,7 @@ step runs.
 | bringup-boot-ready.json | h2d | 5 / 18 / 0 | golden page/state/mask/staging, ready pair + id2 payload, READY_TXQ_SYNC |
 | bringup-c2-calibration.json | h2d | 28 / 55 / 8 | ctx_create t1 alloc + measured body PACK, txq clean, 6x cfg_cal consumed + 6 relative g1 id3 last_total=0x12A answers, counters, final page |
 | bringup-d1-vap.json | cfg80211 | 11 / 24 / 0 | wiphy registered, iw phy, netdev add (type/addr), VAP counters, del + absence |
-| bringup-d2-scan.json | cfg80211 | 11 / 15 / 0 | scan rc=0, mask/staging 0, timeout=0/refused=0; D2H events watch-only |
+| bringup-d2-scan.json | cfg80211 | 22 / 48 / 2 | TRUE-PASS ladder: ctx_create t1 + txq_sync72, iw iface add + link up + ONE iw scan; gates iw rc=0, dmesg 'scan channel result', results>0, mask/staging 0, page/state golden, provider refused=0; results=0 is the documented BLOCKED-DRIVER outcome (task-124) |
 | bringup-e1-dataplane.json | h2d | 13 / 42 / 3 | dp_probe RO MAC reachability probe, dp_setup WO (14 MAC regs / 8 table entries) with dp_status readback, dp_rings snapshot, ONE key-0x0320 h2d_txq_addr_sync (h2d_status readback: txq_addr_sent=1 ok=2 timeout=0), post pack mask/staging/page/state/out0/out2 |
 
 Phases are run one at a time by tools/phase_matrix.py (dry-run by default) and
@@ -407,4 +407,41 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **503/503** device-free checks after task-114 (was 312).
+Selftest: **542/542** device-free checks after task-124 (was 503 after task-114, 312 before it).
+
+### 10.6 task-124: D2 documented-pending gates + per-phase configuration
+
+The D2 TRUE-PASS ladder needs two new pieces on top of task-114:
+
+1. **documented-pending (BLOCKED-DRIVER) gates** - a real scan can be accepted
+   (iw rc=0) and still return nothing; that must be BLOCKED, never FAIL.  Two
+   forms, both set SEQ_BLOCKED and let the session continue (so the post-scan
+   mask/staging/page evidence is still captured):
+
+       {"name": "scan-results", "kind": "attr_expect",
+        "attr": "cfg80211_status",
+        "patterns": ["scan: phase=", "results="], "absent": ["results=0"],
+        "blocked_patterns": ["results=0"]}
+
+       {"name": "scan-dmesg", "kind": "shell", "cmd": "dmesg",
+        "expect_rc": 0, "patterns": ["scan channel result"],
+        "blocked_patterns": ["scan DONE (finish-abort, results=0"]}
+
+   - `attr_expect.blocked_patterns`: same-attribute pending signatures.
+   - `shell.blocked_patterns` **without** `blocked_rc`: signature-driven form
+     for a command whose rc is normal (dmesg rc=0); the old `blocked_rc` +
+     signatures form is unchanged for exit-code-driven stubs.
+   Both are re-evaluated host-side from the captured report text; a gate miss
+   without a documented signature is still FAIL.  The D2 decision table lives
+   in PHASES.md section 5.1.
+
+2. **per-phase configuration** in tools/phase_matrix.py: `--module-for
+   PHASE=PATH`, `--module-param-for PHASE=KEY=VALUE` (plus the `--module-param
+   PHASE:KEY=VALUE` sugar) and `--sequence-for PHASE=PATH`.  The D2 sequence
+   itself carries the provider `load_params`
+   (`allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0
+   frame_gap_ms=100 h2d_send_budget=8`), so `--module-for
+   D2=<provider.ko>` is the only required flag; per-phase CLI params override
+   the sequence defaults for that phase only.  The matrix record names the
+   module sha256, the per-phase CLI params and the sequence load_params it
+   validated.

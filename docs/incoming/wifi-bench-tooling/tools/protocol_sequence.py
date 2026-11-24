@@ -449,6 +449,8 @@ def _validate_shell(step: dict, where: str, profile: str) -> dict:
             or not 0 <= expect_rc <= 255:
         _refuse(where, "expect_rc must be an integer 0..255")
     blocked_rc = step.get("blocked_rc")
+    blocked_patterns = _validate_patterns(
+        step.get("blocked_patterns") or [], where + ".blocked_patterns")
     if blocked_rc is not None:
         if not isinstance(blocked_rc, list) or not blocked_rc:
             _refuse(where, "blocked_rc must be a non-empty list of exit codes")
@@ -459,15 +461,15 @@ def _validate_shell(step: dict, where: str, profile: str) -> dict:
             if v not in norm:
                 norm.append(v)
         blocked_rc = sorted(norm)
-        blocked_patterns = _validate_patterns(
-            step.get("blocked_patterns") or [], where + ".blocked_patterns")
         if not blocked_patterns:
             _refuse(where, "blocked_rc needs at least one blocked_patterns "
                            "signature (the documented pending-feature output)")
-    else:
-        if step.get("blocked_patterns"):
-            _refuse(where, "blocked_patterns requires blocked_rc")
-        blocked_patterns = []
+    # A shell step may also carry blocked_patterns WITHOUT blocked_rc: the
+    # documented pending-feature outcome is then signature-driven only (the
+    # command itself can return 0, e.g. a dmesg gate that greps for the
+    # firmware's own 'scan DONE (finish-abort, results=0 ...)' line).  That is
+    # how the D2 decision table distinguishes BLOCKED-DRIVER (results=0) from
+    # PASS without hard-failing the ladder.
     body = {"cmd": cmd, "args": args, "expect_rc": expect_rc,
             "patterns": _validate_patterns(step.get("patterns") or [],
                                            where + ".patterns"),
@@ -606,7 +608,8 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                 _refuse(w, "unknown keys: %s" % ", ".join(sorted(extra)))
             body["reads"] = _validate_reads(st, w, labels)
         elif kind == "attr_expect":
-            extra = set(st) - common - {"attr", "patterns", "absent"}
+            extra = set(st) - common - {"attr", "patterns", "absent",
+                                        "blocked_patterns"}
             if extra:
                 _refuse(w, "unknown keys: %s" % ", ".join(sorted(extra)))
             attr = _need(st, "attr", w)
@@ -627,6 +630,14 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                                                  w + ".patterns")
             body["absent"] = _validate_patterns(st.get("absent") or [],
                                                w + ".absent")
+            # A blocked_patterns entry documents a *pending-feature* value of
+            # the same attribute: if the PASS gate fails but the captured
+            # attribute matches one of these signatures, the step records
+            # BLOCKED (documented pending driver feature) and the session
+            # continues - it must not be reported as FAIL/STOP.  D2 uses it
+            # for "results=0": scan accepted, firmware produced nothing.
+            body["blocked_patterns"] = _validate_patterns(
+                st.get("blocked_patterns") or [], w + ".blocked_patterns")
             if not body["patterns"] and not body["absent"]:
                 _refuse(w, "attr_expect needs at least one of patterns/absent")
         elif kind == "attr_write":
@@ -833,6 +844,8 @@ def plan_doc(seq: dict) -> dict:
             entry["patterns"] = st["patterns"]
             if st.get("absent"):
                 entry["absent"] = st["absent"]
+            if st.get("blocked_patterns"):
+                entry["blocked_patterns"] = st["blocked_patterns"]
         elif st["kind"] == "shell":
             entry["cmd"] = st["cmd"]
             entry["args"] = st["args"]
@@ -946,11 +959,47 @@ def render_script(seq: dict) -> list:
         elif kind == "attr_expect":
             attr = st["attr"]
             a("r_attr_as seq-%s %s" % (n, attr))
-            for i, p in enumerate(st["patterns"]):
-                L.extend(_gate_attr_lines("%s.p%d" % (n, i), attr, p))
-            for i, p in enumerate(st.get("absent") or []):
-                a("  gate_attr_absent %s %s %s"
-                  % (_q("%s.a%d" % (n, i)), _q(attr), _q(p)))
+            blocked = st.get("blocked_patterns") or []
+            if not blocked:
+                for i, p in enumerate(st["patterns"]):
+                    L.extend(_gate_attr_lines("%s.p%d" % (n, i), attr, p))
+                for i, p in enumerate(st.get("absent") or []):
+                    a("  gate_attr_absent %s %s %s"
+                      % (_q("%s.a%d" % (n, i)), _q(attr), _q(p)))
+            else:
+                # PASS gate + documented-pending gate in one block: a failing
+                # gate whose captured attr matches a blocked signature records
+                # BLOCKED (session continues, result BLOCKED:<step>); any
+                # other failure still STOPs on the first bad gate.
+                a("  ATTR_OK=1")
+                for p in st["patterns"]:
+                    a("  attr_has %s %s || ATTR_OK=0" % (_q(attr), _q(p)))
+                for p in st.get("absent") or []:
+                    a("  attr_has %s %s && ATTR_OK=0" % (_q(attr), _q(p)))
+                a('  if [ "$ATTR_OK" = "1" ]; then')
+                for i in range(len(st["patterns"])):
+                    a('    say "GATE %s.p%d PASS (attr=%s)"'
+                      % (n, i, attr))
+                for i in range(len(st.get("absent") or [])):
+                    a('    say "GATE %s.a%d PASS (attr=%s absent-pattern)"'
+                      % (n, i, attr))
+                a("  else")
+                a("    BLOCKED_HIT=0")
+                for p in blocked:
+                    a("    attr_has %s %s && BLOCKED_HIT=1"
+                      % (_q(attr), _q(p)))
+                a('    if [ "$BLOCKED_HIT" = "1" ]; then')
+                # No pattern text in the generated say: attr names are
+                # validation-constrained, arbitrary signature text is not
+                # allowed to reach a double-quoted shell expansion.
+                a('      say "BLOCKED %s (documented pending outcome in '
+                  'attr %s)"' % (n, attr))
+                a("      SEQ_BLOCKED=%s" % n)
+                a("    else")
+                a('      stop %s "attr %s did not match the required gate"'
+                  % (_q(n), attr))
+                a("    fi")
+                a("  fi")
         elif kind == "attr_write":
             attr = st["attr"]
             readback = st["readback"]
@@ -981,7 +1030,43 @@ def render_script(seq: dict) -> list:
             a('cat "$RDIR/seq-%s.out" >> "$R" 2>/dev/null || :' % n)
             a('say "SHELL-RC %s rc=$SRC"' % n)
             blocked_rc = st.get("blocked_rc") or []
-            if not blocked_rc:
+            blocked_pats = st.get("blocked_patterns") or []
+            if not blocked_rc and blocked_pats:
+                # Signature-driven documented-pending gate (no rc list): the
+                # command may return its normal exit code (e.g. dmesg rc=0)
+                # while a required pattern is absent because the pending
+                # firmware/driver feature produced no result.  A blocked
+                # signature turns the failure into BLOCKED + SEQ_BLOCKED and
+                # the session continues; any other failure STOPs.
+                a("  OUT_OK=1")
+                a('  [ "$SRC" = "%d" ] || OUT_OK=0' % st["expect_rc"])
+                for p in st["patterns"]:
+                    a('  out_has "$RDIR/seq-%s.out" %s || OUT_OK=0'
+                      % (n, _q(p)))
+                for p in st["absent"]:
+                    a('  out_has "$RDIR/seq-%s.out" %s && OUT_OK=0'
+                      % (n, _q(p)))
+                a('  if [ "$OUT_OK" = "1" ]; then')
+                a('    say "GATE %s PASS rc=$SRC"' % _q("%s.rc" % n))
+                for i in range(len(st["patterns"])):
+                    a('    say "GATE %s.p%d PASS (shell)"' % (n, i))
+                for i in range(len(st["absent"])):
+                    a('    say "GATE %s.a%d PASS (shell absent)"' % (n, i))
+                a("  else")
+                a("    BLOCKED_HIT=0")
+                for p in blocked_pats:
+                    a('    out_has "$RDIR/seq-%s.out" %s && BLOCKED_HIT=1'
+                      % (n, _q(p)))
+                a('    if [ "$BLOCKED_HIT" = "1" ]; then')
+                a('      say "BLOCKED %s rc=$SRC (documented pending feature)"'
+                  % n)
+                a("      SEQ_BLOCKED=%s" % n)
+                a("    else")
+                a('      stop %s "exit code $SRC, expected %d"'
+                  % (_q("%s.rc" % n), st["expect_rc"]))
+                a("    fi")
+                a("  fi")
+            elif not blocked_rc:
                 a('gate_rc %s "$SRC" %d'
                   % (_q("%s.rc" % n), st["expect_rc"]))
             else:
@@ -1010,12 +1095,15 @@ def render_script(seq: dict) -> list:
             # single-quoted '$RDIR/...' reaches the gate literally (no shell
             # expansion) and grep fails on a file that does not exist - the
             # 2026-11-25 D1 fire's phy-info gate searched '\$RDIR/seq-...out'.
-            for i, p in enumerate(st["patterns"]):
-                a('gate_out_has %s "$RDIR/seq-%s.out" %s'
-                  % (_q("%s.p%d" % (n, i)), n, _q(p)))
-            for i, p in enumerate(st["absent"]):
-                a('gate_out_absent %s "$RDIR/seq-%s.out" %s'
-                  % (_q("%s.a%d" % (n, i)), n, _q(p)))
+            # The signature-driven blocked branch already evaluated the same
+            # patterns in its OUT_OK guard, so it must not gate them twice.
+            if blocked_rc or not blocked_pats:
+                for i, p in enumerate(st["patterns"]):
+                    a('gate_out_has %s "$RDIR/seq-%s.out" %s'
+                      % (_q("%s.p%d" % (n, i)), n, _q(p)))
+                for i, p in enumerate(st["absent"]):
+                    a('gate_out_absent %s "$RDIR/seq-%s.out" %s'
+                      % (_q("%s.a%d" % (n, i)), n, _q(p)))
         elif kind == "catalog_snapshot":
             a("r_attr_as seq-%s-rd_catalog rd_catalog" % n)
             a("r_attr_as seq-%s-rd_decode rd_decode" % n)
@@ -1380,6 +1468,21 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
                            "status": "PASS" if text else "FAIL",
                            "code": None if text else "attr-capture-missing",
                            "detail": "attribute %r captured" % st["attr"]}]
+            blocked_pats = st.get("blocked_patterns") or []
+            if blocked_pats:
+                bad = [c for c in checks if c["status"] == "FAIL"]
+                if bad:
+                    text = _capture_text(reads, "seq-%s" % n)
+                    hit = next((p for p in blocked_pats
+                                if _search_pattern_ws(text, p)), None)
+                    if hit is not None:
+                        for c in bad:
+                            c["status"] = "BLOCKED"
+                            c["code"] = "blocked-driver"
+                            c["detail"] = (
+                                "documented pending-feature outcome: attr %r "
+                                "matched %r (the PASS gate requires the "
+                                "feature to land)" % (st["attr"], hit))
         elif kind == "attr_write":
             readback = st.get("readback") or st["attr"]
             post = _read_section(reads, "seq-%s-%s" % (n, readback))
@@ -1440,6 +1543,22 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
                                           st["patterns"], body, reads)
                 checks += _check_absent_patterns(n, "shell", st["cmd"],
                                                  st["absent"], body, reads)
+                blocked_pats = st.get("blocked_patterns") or []
+                if blocked_pats and not st.get("blocked_rc"):
+                    # signature-driven documented-pending gate (D2 results=0)
+                    bad = [c for c in checks if c["status"] == "FAIL"]
+                    if bad:
+                        body_text = _capture_text(reads, body)
+                        hit = next((p for p in blocked_pats
+                                    if _search_pattern_ws(body_text, p)), None)
+                        if hit is not None:
+                            for c in bad:
+                                c["status"] = "BLOCKED"
+                                c["code"] = "blocked-driver"
+                                c["detail"] = (
+                                    "documented pending-feature outcome: "
+                                    "output matched %r (the PASS gate requires "
+                                    "the feature to land)" % hit)
         elif kind == "catalog_snapshot":
             text = _read_section(reads, "seq-%s-rd_catalog" % n)
             checks = [{"name": "%s.captured" % n, "kind": "snapshot",

@@ -1864,7 +1864,7 @@ def test_bringup_sequences(tmp: str) -> None:
         "bringup-boot-ready": (PS.PROFILE, 5),
         "bringup-c2-calibration": (PS.PROFILE, steps_c2 := 28),
         "bringup-d1-vap": (PS.PROFILE_CFG80211, 11),
-        "bringup-d2-scan": (PS.PROFILE_CFG80211, 11),
+        "bringup-d2-scan": (PS.PROFILE_CFG80211, 22),
         "bringup-e1-dataplane": (PS.PROFILE, 13),
     }
     seqs = {}
@@ -2032,9 +2032,81 @@ def test_bringup_sequences(tmp: str) -> None:
            == [0x6F8008, 0x6F800C, 0x7D0B60, 0x877000, 0x3F1010, 0x3F12D4])
     d2 = seqs.get("bringup-d2-scan")
     if d2:
+        byname = {st["name"]: st for st in d2["steps"]}
         ck("D2 sequence: one scan request with rc=0 gate",
            any(st["kind"] == "shell" and st["cmd"] == "iw-scan"
                and st["expect_rc"] == 0 for st in d2["steps"]))
+        # ---- TRUE-PASS prerequisite ladder (task-124) -------------------
+        ck("D2 sequence: uses the provider module load_params",
+           d2["load_params"] == {"allow_frames": 12, "frame_gap_ms": 100,
+                                 "h2d_send_budget": 8, "vap_start_first": 1,
+                                 "vap_start_mode": 1, "vap_start_module": 0},
+           str(d2["load_params"]))
+        ck("D2 sequence: budget_min 8 matches the provider h2d_send_budget",
+           d2["require"]["budget_min"] == 8
+           and d2["load_params"]["h2d_send_budget"] == 8)
+        writes = PS.plan_writes(d2)
+        ck("D2 sequence: ctx_create t1 -> txq_sync72 are the two ladder writes",
+           [w[1] for w in writes] == ["h2d_ctx_create", "h2d_txq_sync72"]
+           and writes[0][2] == "1" and writes[1][2] == "1",
+           str(writes))
+        order = [st["name"] for st in d2["steps"]]
+        ck("D2 sequence: ladder order ctx_create -> txq -> iface add -> link "
+           "up -> scan",
+           order.index("ctx-create-t1") < order.index("txq-sync72")
+           < order.index("vap-add") < order.index("link-up")
+           < order.index("scan"))
+        ck("D2 sequence: iface add uses the validated cfg80211 op",
+           byname["vap-add"]["cmd"] == "iw-iface-add"
+           and byname["vap-add"]["args"]
+           == {"phy": "phy0", "ifname": "wlan0", "type": "managed"})
+        ck("D2 sequence: link-up brings wlan0 up before the scan",
+           byname["link-up"]["cmd"] == "ip-link-up"
+           and byname["link-up"]["args"] == {"ifname": "wlan0"})
+        # ---- PASS gates --------------------------------------------------
+        ck("D2 sequence: PASS gate iw rc=0 on the scan step",
+           byname["scan"]["expect_rc"] == 0)
+        ck("D2 sequence: PASS gate dmesg 'scan channel result'",
+           byname["scan-dmesg"]["kind"] == "shell"
+           and byname["scan-dmesg"]["cmd"] == "dmesg"
+           and "scan channel result" in byname["scan-dmesg"]["patterns"])
+        ck("D2 sequence: PASS gate results>0 (absent results=0)",
+           "results=" in byname["scan-results"]["patterns"]
+           and "results=0" in byname["scan-results"]["absent"])
+        ck("D2 sequence: PASS gate mask/staging 0 after the scan",
+           [r["label"] for r in byname["post-scan-pack"]["reads"]]
+           == ["postscan_mask0", "postscan_staging0"]
+           and all(r["expect"].get("zero") for r in
+                   byname["post-scan-pack"]["reads"]))
+        ck("D2 sequence: PASS gate golden page/state after the scan",
+           [r["label"] for r in byname["post-scan-page"]["reads"]]
+           == ["post_page0", "post_page4", "post_page8", "post_page_c",
+               "post_state0"]
+           and [r["expect"].get("eq") for r in
+                byname["post-scan-page"]["reads"]]
+           == [0x86807FEF, 0x7, 0x2, 0xABCD, 0x1])
+        # ---- BLOCKED-DRIVER (results=0) decision-table branches ----------
+        ck("D2 sequence: results=0 is a documented BLOCKED outcome",
+           byname["scan-results"]["blocked_patterns"] == ["results=0"]
+           and "results=0" in byname["scan-results"]["absent"]
+           and not byname["scan-results"].get("blocked_rc"))
+        ck("D2 sequence: dmesg results=0 finish-abort is a documented "
+           "BLOCKED outcome",
+           "scan DONE (finish-abort, results=0"
+           in byname["scan-dmesg"]["blocked_patterns"]
+           and not byname["scan-dmesg"].get("blocked_rc"))
+        script = "\n".join(PS.render_script(d2))
+        ck("D2 sequence: rendered script has the blocked attr/dmesg guards",
+           "attr_has 'cfg80211_status' 'results=0'" in script
+           and "out_has \"$RDIR/seq-scan-dmesg.out\" "
+               "'scan DONE (finish-abort, results=0'" in script
+           and "SEQ_BLOCKED=scan-results" in script
+           and "SEQ_BLOCKED=scan-dmesg" in script
+           and "SEQ_BLOCKED=scan;" in script)
+        ck("D2 sequence: no raw BAR0 MAC-window read",
+           all(r["bar0"] not in (0x3F8000, 0x402A000)
+               for st in d2["steps"] if st["kind"] == "read_pack"
+               for r in st["reads"] if "bar0" in r))
 
 
 def _fake_cfg_module(tmp: str) -> dict:
@@ -2240,6 +2312,247 @@ def test_phase_matrix(tmp: str, proto: dict) -> None:
                "run_kind": "dry-run", "rows": rows})
                for r in ("boot", "ready", "calibration", "vap", "scan",
                          "dataplane")))
+
+
+# ---------------------------------------------------------------------------
+# D2 TRUE-PASS ladder (task-124): decision table + per-phase module params
+# ---------------------------------------------------------------------------
+def _d2_rd32(mask: int = 0) -> dict:
+    return {
+        "pre-pack.pre_ctx190": 0, "pre-pack.pre_mask0": 0,
+        "pre-pack.pre_staging0": 0,
+        "post-create.post_ctx190": 0x01011448,
+        "post-create.post_ctx4": 0x00000004,
+        "post-create.post_ctx10": 0x00010001,
+        "post-create.post_ctx434": 0x0100478C,
+        "post-txq.txq_mask0": 0, "post-txq.txq_staging0": 0,
+        "post-scan-pack.postscan_mask0": mask,
+        "post-scan-pack.postscan_staging0": 0,
+        "post-scan-page.post_page0": 0x86807FEF,
+        "post-scan-page.post_page4": 0x7,
+        "post-scan-page.post_page8": 0x2,
+        "post-scan-page.post_page_c": 0xABCD,
+        "post-scan-page.post_state0": 0x1,
+    }
+
+
+def _d2_reads(kind: str, mask: int = 0) -> dict:
+    reads = {
+        "seq-cfg-status": "cfg80211 model: band=2.4GHz wiphy=alloc "
+                          "registered=1 removing=0\n",
+        "seq-ctx-create-t1-h2d_status":
+            "H2D send path: budget=8 frames_sent=1 ctx_created=1\n"
+            "counters: ok=1 timeout=0 refused=0",
+        "seq-txq-sync72-h2d_status":
+            "H2D send path: budget=8 frames_sent=2 txq_sent=1\n"
+            "counters: ok=2 timeout=0 refused=0",
+        "seq-vap-add": "\nSHELL-RC vap-add rc=0\n",
+        "seq-link-up": "\nSHELL-RC link-up rc=0\n",
+        "seq-vap-added": "register: attempts=1 failures=0 vaps=1\n"
+                         "vap0: wlan0 iftype=managed state=registered\n",
+        "seq-catalog-baseline-rd_catalog": _catalog(10, 0, 0),
+        "seq-catalog-baseline-rd_decode": "decode: no frames yet\n",
+        "seq-scan": "scan aborted!\nSHELL-RC scan rc=0\n",
+        "seq-frame-post": "frame_post: allow_frames=12 gap_ms=100 posted=5 "
+                          "refused=0 timeout=0 bad=0\n",
+        "seq-h2d-summary": "H2D send path: budget=8 frames_sent=2 ok=2 "
+                           "timeout=0 refused=0\n",
+        "seq-catalog-after-rd_catalog": _catalog(16, 6, 0x12A),
+        "seq-catalog-after-rd_decode": "decode: g1 id17 count=6 g1 id15 "
+                                       "count=6\n",
+        "seq-vap-del": "\nSHELL-RC vap-del rc=0\n",
+    }
+    if kind == "pass":
+        reads["seq-scan-results"] = (
+            "scan: phase=idle results=6/256 bss=6 complete=0 channel=6 "
+            "sta=0 unknown=0 idle_ev=0 overflow=0\n")
+        reads["seq-scan-dmesg"] = (
+            "[ 12.0] cfg80211: scan channel result slot=0 ch=1 (2412 MHz)\n"
+            "[ 12.1] cfg80211: scan channel result slot=5 ch=6 (2437 MHz)\n"
+            "[ 12.2] cfg80211: scan DONE (finish-abort, results=6 bss=6 "
+            "complete=0 channel=6 sta=0 unknown=0 dropped_busy=0 timeout=1) "
+            "- reporting cfg80211_scan_done(aborted=1)\n"
+            "SHELL-RC scan-dmesg rc=0\n")
+    elif kind == "blocked":
+        reads["seq-scan-results"] = (
+            "scan: phase=idle results=0/256 bss=0 complete=0 channel=0 "
+            "sta=0 unknown=0 idle_ev=0 overflow=0\n")
+        reads["seq-scan-dmesg"] = (
+            "[ 12.2] cfg80211: scan DONE (finish-abort, results=0 bss=0 "
+            "complete=0 channel=0 sta=0 unknown=0 dropped_busy=0 timeout=1) "
+            "- reporting cfg80211_scan_done(aborted=1)\n"
+            "SHELL-RC scan-dmesg rc=0\n")
+    else:  # "noresult": the gate failed but no documented signature matched
+        reads["seq-scan-results"] = (
+            "scan: phase=idle results=0/256 bss=0 complete=0 channel=0\n")
+        reads["seq-scan-dmesg"] = ("[ 12.2] cfg80211: unrelated log line\n"
+                                   "SHELL-RC scan-dmesg rc=0\n")
+    return reads
+
+
+def test_d2_true_pass(tmp: str, proto: dict) -> None:
+    from types import SimpleNamespace
+    import phase_matrix as PM
+    import bringup_report as BR
+    d2 = PS.load(os.path.join(TOOLDIR, "sequences", "bringup-d2-scan.json"))
+    ck("D2 true-pass: sequence is 22 steps / 48 checks / 2 ladder writes",
+       len(d2["steps"]) == 22
+       and PS.plan_doc(d2)["totals"] == {"steps": 22, "checks": 48,
+                                         "attr_writes": 2, "shell_actions": 5},
+       str(PS.plan_doc(d2)["totals"]))
+    ev_pass = PS.evaluate(d2, {"result": "PASS", "stop_rule": None,
+                               "rd32": _d2_rd32(), "reads": _d2_reads("pass"),
+                               "gates": []})
+    ck("D2 true-pass: synthetic hardware scan evaluates PASS",
+       ev_pass["verdict"] == "PASS" and ev_pass["failed_step"] is None,
+       json.dumps(ev_pass["totals"]))
+    ck("D2 true-pass: blocked checks are 0 on PASS",
+       ev_pass["totals"]["blocked"] == 0
+       and ev_pass["totals"]["failed"] == 0)
+    ev_block = PS.evaluate(d2, {"result": "BLOCKED", "stop_rule": "scan",
+                                "rd32": _d2_rd32(),
+                                "reads": _d2_reads("blocked"), "gates": []})
+    ck("D2 true-pass: results=0 (+ driver results=0 DONE line) is BLOCKED, "
+       "not FAIL",
+       ev_block["verdict"] == "BLOCKED" and ev_block["failed_step"] is None,
+       json.dumps(ev_block["totals"]))
+    ck("D2 true-pass: the BLOCKED outcome names the documented gate",
+       ev_block["blocked_step"] in ("scan-results", "scan-dmesg"),
+       str(ev_block["blocked_step"]))
+    ck("D2 true-pass: BLOCKED has zero failed checks and >=2 blocked checks",
+       ev_block["totals"]["failed"] == 0
+       and ev_block["totals"]["blocked"] >= 2,
+       str(ev_block["totals"]))
+    ck("D2 true-pass: blocked-driver triage rendered for D2",
+       "blocked-driver" in PS.render_markdown(ev_block))
+    ev_mask = PS.evaluate(d2, {"result": "STOP", "stop_rule": "post-scan-pack",
+                               "rd32": _d2_rd32(mask=0x10),
+                               "reads": _d2_reads("pass"), "gates": []})
+    ck("D2 true-pass: a firmware exception is FAIL, never BLOCKED",
+       ev_mask["verdict"] == "FAIL"
+       and ev_mask["failed_step"] == "post-scan-pack",
+       str(ev_mask["failed_step"]))
+    page = _d2_rd32()
+    page["post-scan-page.post_page0"] = 0x0010C190
+    ev_page = PS.evaluate(d2, {"result": "STOP", "stop_rule": "post-scan-page",
+                               "rd32": page, "reads": _d2_reads("pass"),
+                               "gates": []})
+    ck("D2 true-pass: a boot-page drift is FAIL, never BLOCKED",
+       ev_page["verdict"] == "FAIL"
+       and ev_page["failed_step"] == "post-scan-page",
+       str(ev_page["failed_step"]))
+    ev_nosig = PS.evaluate(d2, {"result": "STOP", "stop_rule": "scan-results",
+                                "rd32": _d2_rd32(),
+                                "reads": _d2_reads("noresult"), "gates": []})
+    ck("D2 true-pass: a gate miss without the documented signature is FAIL",
+       ev_nosig["verdict"] == "FAIL", ev_nosig["verdict"])
+
+    # ---- per-phase module params: helper + end-to-end dry-run ------------
+    args = SimpleNamespace(
+        endpoint="0000:00:00.0", session_timeout=240, ready_id1=2.0,
+        ready_id2=20.0, module="/x/plain.ko",
+        module_for_map={"D2": "/x/provider.ko"},
+        fw_file="/x/FIRMWARE.PD4.bin", fw_manifest="/x/manifest.json",
+        fw_path=None, wifi_block_bin="/x/wifi_block.bin", wifi_block=None,
+        bar0read=None, ssh_host=None,
+        module_param=["h2d_send_budget=8"],
+        module_param_for_map={"D2": ["allow_frames=12"]},
+        cfg80211_ko="/x/cfg80211.ko", iw_bin="/x/iw",
+        libnl_tiny="/x/libnl-tiny.so", dry_run=True)
+    argv_d2 = PM.build_argv(args, PM.phase_by_id("D2"), "/tmp/phase-d2")
+    pargs = [argv_d2[i + 1] for i, a in enumerate(argv_d2)
+             if a == "--module-param"]
+    ck("D2 true-pass: per-phase module params reach only the D2 child",
+       pargs == ["h2d_send_budget=8", "allow_frames=12"], str(pargs))
+    argv_boot = PM.build_argv(args, PM.phase_by_id("boot"), "/tmp/phase-boot")
+    bargs = [argv_boot[i + 1] for i, a in enumerate(argv_boot)
+             if a == "--module-param"]
+    ck("D2 true-pass: global --module-param stays global, per-phase does not "
+       "leak", bargs == ["h2d_send_budget=8"], str(bargs))
+    ck("D2 true-pass: D2 child uses the provider --module-for path",
+       "/x/provider.ko" in argv_d2
+       and "/x/provider.ko" not in argv_boot, str(argv_d2[:8]))
+
+    # end-to-end matrix dry-run: provider module plans, plain module blocks
+    prov = os.path.join(tmp, "hi5622_wifi_provider.ko")
+    make_fake_ko(prov, name="hi5622_wifi",
+                 params=("fw_path:charp", "wifi_block_path:charp",
+                         "h2d_send_budget:uint", "allow_frames:uint",
+                         "frame_gap_ms:uint", "vap_start_first:uint",
+                         "vap_start_mode:uint", "vap_start_module:uint"))
+    with open(prov, "ab") as f:
+        f.write(b"\x00cfg80211_status\x00h2d_status\x00h2d_ctx_create\x00"
+                b"h2d_txq_sync72\x00" + b"\x00" * 8192)
+    fake_cfg = os.path.join(tmp, "cfg80211_fake.ko")
+    make_fake_ko(fake_cfg, name="cfg80211", params=())
+    fake_iw = make_fake_bar0read(os.path.join(tmp, "iw-fake"))
+    fake_lib = os.path.join(tmp, "libnl-tiny.so")
+    make_fake_ko(fake_lib, name="libnl-tiny", etype=3)
+    with open(fake_lib, "ab") as f:
+        f.write(b"\x00" * 2048)
+    # D2 sequence copy without the PD4 fw pin (the selftest fw is synthetic),
+    # selected per phase via the documented --sequence-for override.
+    with open(os.path.join(TOOLDIR, "sequences", "bringup-d2-scan.json")) as f:
+        unpinned = json.load(f)
+    unpinned["require"].pop("fw_sha256", None)
+    unpinned["require"].pop("fw_len", None)
+    useq = os.path.join(tmp, "d2-unpinned.json")
+    with open(useq, "w") as f:
+        json.dump(unpinned, f, indent=1)
+    pmdir = os.path.join(tmp, "pm-d2-evidence")
+
+    def run_matrix(module_path: str):
+        rc = PM.main(["--phase", "D2", "--dry-run",
+                      "--module", module_path,
+                      "--sequence-for", "D2=" + useq,
+                      "--fw-file", proto["fw_file"],
+                      "--fw-manifest", proto["manifest"],
+                      "--wifi-block-bin", proto["wifi_block_bin"],
+                      "--bar0read", proto["bar0read"],
+                      "--cfg80211-ko", fake_cfg,
+                      "--iw-bin", fake_iw,
+                      "--libnl-tiny", fake_lib,
+                      "--module-param-for", "D2=allow_frames=12",
+                      "--report-dir", pmdir])
+        paths = BR.find_matrices(pmdir)
+        matrix = BR.load_matrix(paths[-1]) if paths else None
+        return rc, matrix
+
+    rc_prov, m_prov = run_matrix(prov)
+    ck("D2 true-pass: provider-module D2 dry-run rc=0", rc_prov == 0,
+       str(rc_prov))
+    ck("D2 true-pass: provider-module D2 plans PLAN-OK",
+       m_prov is not None and m_prov["phases"][0]["status"] == "PLAN-OK",
+       json.dumps((m_prov or {}).get("phases", [{}])[0])[:400])
+    if m_prov:
+        rec = m_prov["phases"][0]
+        ck("D2 true-pass: matrix records the provider module + per-phase param",
+           (rec.get("module") or "").endswith("hi5622_wifi_provider.ko")
+           and rec.get("module_params") == ["allow_frames=12"]
+           and bool(rec.get("module_sha256")),
+           json.dumps({k: rec.get(k) for k in
+                       ("module", "module_params", "module_sha256")})[:300])
+        ck("D2 true-pass: matrix records the sequence load_params",
+           (rec.get("load_params") or {}).get("vap_start_mode") == 1
+           and (rec.get("load_params") or {}).get("allow_frames") == 12,
+           str(rec.get("load_params")))
+        mdpath = os.path.join(os.path.dirname(
+            BR.find_matrices(pmdir)[-1]), "PHASE-MATRIX.md")
+        with open(mdpath) as f:
+            md = f.read()
+        ck("D2 true-pass: matrix markdown carries the D2 decision table",
+           "D2 PASS vs BLOCKED-DRIVER decision table" in md
+           and "BLOCKED-DRIVER" in md and "results=0" in md)
+    rc_plain, m_plain = run_matrix(proto["module"])
+    ck("D2 true-pass: the plain module is refused as BLOCKED-PREREQ",
+       rc_plain == 0 and m_plain is not None
+       and m_plain["phases"][0]["status"] == "BLOCKED-PREREQ",
+       json.dumps((m_plain or {}).get("phases", [{}])[0])[:400])
+    ck("D2 true-pass: BLOCKED-PREREQ names module-param-unknown",
+       m_plain is not None
+       and (m_plain["phases"][0].get("blocked_reason")
+            == "module-param-unknown"),
+       str((m_plain or {}).get("phases", [{}])[0].get("blocked_reason")))
 
 
 def test_bringup_report_ready(tmp: str) -> None:
@@ -2546,8 +2859,14 @@ def test_blocked_outcome(tmp: str, proto: dict) -> None:
            lambda d: d["steps"][0].update({"blocked_rc": [300]}))
     refuse("blocked_rc without signatures",
            lambda d: d["steps"][0].pop("blocked_patterns"))
-    refuse("blocked_patterns without blocked_rc",
-           lambda d: d["steps"][0].pop("blocked_rc"))
+    # A shell step may carry blocked_patterns WITHOUT blocked_rc: that is the
+    # signature-driven documented-pending gate (dmesg 'scan DONE ... results=0'
+    # while the command itself returned 0) used by the D2 decision table.
+    ponly = json.loads(json.dumps(base))
+    ponly["steps"][0].pop("blocked_rc")
+    ck("blocked: pattern-only blocked shell step validates",
+       PS.validate(ponly, "blocked-pattern-only")["steps"][0]
+       ["blocked_patterns"] == ["Not supported"])
     seq = PS.validate(base, "blocked-smoke")
     pdoc = PS.plan_doc(seq)
     ck("blocked: plan doc carries the blocked outcome",
@@ -2596,6 +2915,116 @@ def test_blocked_outcome(tmp: str, proto: dict) -> None:
         ck("blocked: an undocumented rc still STOPs the session",
            "STOP scan.rc" in out3 and "BLOCKED" not in out3,
            out3[-300:])
+
+    # ---- device-side: signature-driven (pattern-only) blocked branch ------
+    # dmesg-style step: the command returns 0, the required result pattern is
+    # absent, and the documented pending-feature signature is present -> the
+    # step is BLOCKED (continues); any other missing pattern STOPs.
+    pdoc = {"schema": PS.SCHEMA_SEQ, "name": "blocked-pattern-only",
+            "profile": PS.PROFILE_CFG80211,
+            "steps": [{"name": "scan-dmesg", "kind": "shell", "cmd": "dmesg",
+                       "expect_rc": 0, "patterns": ["scan channel result"],
+                       "blocked_patterns":
+                           ["scan DONE (finish-abort, results=0"]}]}
+    pseq = PS.validate(pdoc, "blocked-pattern-only")
+    prender = "\n".join(PS.render_script(pseq))
+    plines = prender.splitlines()
+    pistart = next((i for i, ln in enumerate(plines)
+                    if ln.startswith("  OUT_OK=1")), None)
+    ck("blocked: pattern-only branch rendered", pistart is not None)
+    if pistart is not None:
+        piend = next((i for i in range(pistart, len(plines))
+                      if plines[i] == "  fi"), None)
+        pblock = plines[pistart:piend + 1] if piend else []
+        pdir = os.path.join(tmp, "blocked-pattern")
+        os.makedirs(pdir, exist_ok=True)
+
+        def run_pblock(body: str) -> str:
+            with open(os.path.join(pdir, "seq-scan-dmesg.out"), "w") as f:
+                f.write(body)
+            path = os.path.join(tmp, "blocked-pattern-dev.sh")
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nset -u\nRDIR=%s\nSRC=0\n"
+                        "SEQ_BLOCKED=''\n"
+                        "say() { echo \"SAY $*\"; }\n"
+                        "stop() { echo \"STOP $1: $2\"; exit 10; }\n"
+                        "out_has() { f=$1; p=$2; grep -q \"$p\" \"$f\"; }\n"
+                        % pdir)
+                f.write("\n".join(pblock) + "\n")
+                f.write("echo \"RESULT=$SEQ_BLOCKED\"\n")
+            sh = subprocess.run(["/bin/sh", "-u", path], capture_output=True,
+                                text=True, env={"PATH": "/usr/bin:/bin"})
+            return sh.stdout + sh.stderr
+
+        pout = run_pblock("[  12.0] cfg80211: scan DONE (finish-abort, "
+                          "results=0 bss=0 complete=0 channel=0 timeout=1)\n")
+        ck("blocked: pattern-only signature records BLOCKED and continues",
+           "BLOCKED scan-dmesg" in pout and "RESULT=scan-dmesg" in pout,
+           pout[-400:])
+        pout2 = run_pblock("[  12.0] cfg80211: scan channel result slot=0 "
+                           "ch=1 (2412 MHz)\n")
+        ck("blocked: pattern-only gate PASSes when the result line is present",
+           "GATE 'scan-dmesg.rc' PASS" in pout2
+           and "RESULT=" in pout2 and "BLOCKED" not in pout2, pout2[-300:])
+        pout3 = run_pblock("[  12.0] some unrelated kernel message\n")
+        ck("blocked: pattern-only gate STOPs on an undocumented miss",
+           "STOP scan-dmesg.rc" in pout3 and "BLOCKED" not in pout3,
+           pout3[-300:])
+
+    # ---- device-side: blocked-aware attr_expect branch -------------------
+    adoc = {"schema": PS.SCHEMA_SEQ, "name": "blocked-attr",
+            "profile": PS.PROFILE_CFG80211,
+            "steps": [{"name": "scan-results", "kind": "attr_expect",
+                       "attr": "cfg80211_status",
+                       "patterns": ["scan: phase=", "results="],
+                       "absent": ["results=0"],
+                       "blocked_patterns": ["results=0"]}]}
+    aseq = PS.validate(adoc, "blocked-attr")
+    arender = "\n".join(PS.render_script(aseq))
+    alines = arender.splitlines()
+    astart = next((i for i, ln in enumerate(alines)
+                   if ln.startswith("  ATTR_OK=1")), None)
+    ck("blocked: blocked-aware attr branch rendered", astart is not None)
+    if astart is not None:
+        aend = next((i for i in range(astart, len(alines))
+                     if alines[i] == "  fi"), None)
+        ablock = alines[astart:aend + 1] if aend else []
+        adir = os.path.join(tmp, "blocked-attr")
+        os.makedirs(adir, exist_ok=True)
+
+        def run_ablock(body: str) -> str:
+            with open(os.path.join(adir, "cfg80211_status"), "w") as f:
+                f.write(body)
+            path = os.path.join(tmp, "blocked-attr-dev.sh")
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nset -u\nP=%s\nSEQ_BLOCKED=''\n"
+                        "say() { echo \"SAY $*\"; }\n"
+                        "stop() { echo \"STOP $1: $2\"; exit 10; }\n"
+                        "attr_has() { at=$1; p=$2; "
+                        "grep -q \"$p\" \"$P/$at\"; }\n"
+                        % adir)
+                f.write("\n".join(ablock) + "\n")
+                f.write("echo \"RESULT=$SEQ_BLOCKED\"\n")
+            sh = subprocess.run(["/bin/sh", "-u", path], capture_output=True,
+                                text=True, env={"PATH": "/usr/bin:/bin"})
+            return sh.stdout + sh.stderr
+
+        aout = run_ablock("scan: phase=idle results=6/256 bss=6 "
+                          "complete=0 channel=6\n")
+        ck("blocked: blocked-aware attr PASSes on results>0",
+           "GATE scan-results.p0 PASS" in aout
+           and "GATE scan-results.p1 PASS" in aout
+           and "GATE scan-results.a0 PASS" in aout
+           and "RESULT=" in aout and "BLOCKED" not in aout, aout[-300:])
+        aout2 = run_ablock("scan: phase=idle results=0/256 bss=0 "
+                           "complete=0 channel=0\n")
+        ck("blocked: blocked-aware attr records BLOCKED on results=0 and "
+           "continues", "BLOCKED scan-results" in aout2
+           and "RESULT=scan-results" in aout2, aout2[-400:])
+        aout3 = run_ablock("cfg80211: unrelated status text\n")
+        ck("blocked: blocked-aware attr STOPs on an unsigned gate miss",
+           "STOP scan-results" in aout3 and "BLOCKED" not in aout3,
+           aout3[-300:])
 
     # ---- host evaluator: BLOCKED not FAIL, genuine misses still FAIL ----
     doc = {"schema": PS.SCHEMA_SEQ, "name": "blocked-host",
@@ -2925,6 +3354,7 @@ def main() -> int:
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)
         test_phase_matrix(tmp, proto)
+        test_d2_true_pass(tmp, proto)
         test_bringup_report_ready(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

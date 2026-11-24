@@ -61,8 +61,11 @@ NEXT_ACTION = {
     "calibration": "run phase C2 on the calibration-token driver with "
                    "h2d_send_budget=8",
     "vap": "run phase D1 on the cfg80211 image/module: wiphy + VAP add/del",
-    "scan": "wait for the scan-wiring lane (non-stub cfg80211 scan op + g0 id0xC "
-            "builder + D2H result path), then re-run phase D2",
+    "scan": "run phase D2 on the wifi-vap-start PROVIDER module "
+            "(vap_start_mode=1, allow_frames=12; build with "
+            "../wifi-vap-start/tools/kernel-check.sh): the ladder is ready -> "
+            "ctx_create -> txq_sync72 -> iw iface add/link up -> ONE iw scan; "
+            "results=0 is the documented BLOCKED-DRIVER outcome",
     "dataplane": "wait for the dp-bringup driver token (contracted name "
                  "h2d_txq_addr_sync; the E1 sequence JSON is the single edit "
                  "point), then run phase E1",

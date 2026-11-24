@@ -1,7 +1,7 @@
 {
  "schema": "hi5622-protocol-sequence/1",
  "name": "bringup-d2-scan",
- "about": "Bring-up matrix row scan (D2): VAP up, ONE nl80211 scan request (iw dev wlan0 scan) and the D2H scan-event watch. PASS gate for the frame-validity phase = scan request accepted (rc=0) + no firmware exception (mask 0/staging 0) + no H2D timeout/refusal. DOCUMENTED BLOCKED state: the fail-closed cfg80211 M2 scan stub returns -EOPNOTSUPP (iw rc=161, 'Not supported (-95)') - the scan step records BLOCKED, the session continues, and the phase matrix reports BLOCKED-DRIVER (not ERROR/FAIL) until the wifi-vap-scan g0 id0xC provider builder lands. The D2H g1 15/16/17 / g2 2 events are WATCH-ONLY (host-only M1 VAP; firmware scan handler CA 0x6494C hardcodes VAP lookup id 0, a graceful no-VAP refusal with no events is accepted).",
+ "about": "Bring-up matrix row scan (D2) TRUE-PASS ladder: ready -> ctx_create t1 (g0 id1 key 0x64) -> txq_sync72 -> iw iface add wlan0 (provider user_add g0 id7/id8) -> link up -> ONE iw dev wlan0 scan (provider vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req g0 id0xC 520 B). PASS gates: iw rc=0, dmesg 'cfg80211: scan channel result' present, scan results>0, mask/staging 0, golden boot page/state. BLOCKED-DRIVER (not FAIL) only when the ladder ran but the firmware produced nothing: scan accepted rc=0 with results=0 + the driver's own 'scan DONE (finish-abort, results=0 ...)' dmesg line. Requires the wifi-vap-start provider module (vap_start_mode=1, allow_frames=12); see PHASES.md sec 5 decision table.",
  "profile": "hi5622-wifi-cfg80211",
  "module_names": [
   "hi5622_wifi"
@@ -12,14 +12,30 @@
   "cfg80211": true,
   "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
   "fw_len": 928920,
+  "budget_min": 8,
   "tools": [
-   "iw"
+   "iw",
+   "dmesg"
   ],
   "attrs": [
-   "cfg80211_status"
+   "cfg80211_status",
+   "h2d_status"
   ]
  },
+ "load_params": {
+  "allow_frames": 12,
+  "frame_gap_ms": 100,
+  "h2d_send_budget": 8,
+  "vap_start_first": 1,
+  "vap_start_mode": 1,
+  "vap_start_module": 0
+ },
  "steps": [
+  {
+   "name": "note-ladder",
+   "kind": "note",
+   "about": "D2 ladder: this row is only meaningful on the wifi-vap-start provider module (../wifi-vap-start/provider/vapstart-provider.patch, built with ../wifi-vap-start/tools/kernel-check.sh, 738,112 B sha256 e09dc697...): vap_start_first=1 requires the core ACTIVE after ctx_create+txq, and vap_start_mode=1 is the hardware-validated VAP create path that makes the firmware scan handler produce results. The plain cfg80211/scan-ap module is refused at plan time (module-param-unknown = BLOCKED-PREREQ), never silently mis-run."
+  },
   {
    "name": "cfg-status",
    "kind": "attr_expect",
@@ -27,7 +43,113 @@
    "patterns": [
     "registered=1"
    ],
-   "about": "wiphy registered after the ready handshake"
+   "about": "wiphy registered after the ready handshake (the cfg80211 preamble already waits for /sys/class/ieee80211; this is the sequence-local re-gate)"
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "pre-create state on this fresh boot: no context (ctx4+0x190 = 0), exception mask 0, exception staging word 0",
+   "reads": [
+    {
+     "label": "pre_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 1/2: ONE context-create H2D (g0 id1 key 0x64, data[0]=type 1) - the 2026-11-26 mode-1 bench ladder had this consumed in 0 polls before the scan"
+  },
+  {
+   "name": "post-create",
+   "kind": "read_pack",
+   "about": "the create allocated the measured ctx4 body (same PACK as C2: ctx4[0]=4, ctx4+0x10=0x00010001, ctx4+0x434=0x0100478C)",
+   "reads": [
+    {
+     "label": "post_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "nonzero": true
+     }
+    },
+    {
+     "label": "post_ctx4",
+     "bar0": "0x7d4458",
+     "expect": {
+      "eq": "0x00000004"
+     }
+    },
+    {
+     "label": "post_ctx10",
+     "bar0": "0x7d4468",
+     "expect": {
+      "eq": "0x00010001"
+     }
+    },
+    {
+     "label": "post_ctx434",
+     "bar0": "0x7d488c",
+     "expect": {
+      "eq": "0x0100478c"
+     }
+    }
+   ]
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 2/2: ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node) -> the core is ACTIVE before the provider VAP/scan sequence (vap_start_first=1)"
+  },
+  {
+   "name": "post-txq",
+   "kind": "read_pack",
+   "about": "the TXQ handler ran clean: exception mask and staging word stay 0",
+   "reads": [
+    {
+     "label": "txq_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "txq_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
   },
   {
    "name": "vap-add",
@@ -39,7 +161,7 @@
     "type": "managed"
    },
    "expect_rc": 0,
-   "about": "scan needs a netdev/VAP first (add_virtual_intf)"
+   "about": "iw phy phy0 interface add wlan0 type managed -> add_virtual_intf -> provider user_add g0 id7 180 B + user_add_notify g0 id8 180 B (hardware: 1/12 + 2/12 consumed). A user_add post failure keeps the netdev live and is caught by the frame_post gate below"
   },
   {
    "name": "link-up",
@@ -52,9 +174,18 @@
    "about": "bring the managed netdev up; nl80211 refuses scan requests on a down interface"
   },
   {
-   "name": "scan-baseline",
+   "name": "vap-added",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "vap0: wlan0"
+   ],
+   "about": "the driver VAP model recorded wlan0 (real netdev); the provider user frames are gated by the post-scan frame_post counters"
+  },
+  {
+   "name": "catalog-baseline",
    "kind": "catalog_snapshot",
-   "about": "D2H catalogue before the scan request (delta baseline for the result events)"
+   "about": "D2H catalogue before the scan request (evidence baseline: no scan-event family present yet)"
   },
   {
    "name": "scan",
@@ -64,7 +195,6 @@
     "ifname": "wlan0"
    },
    "expect_rc": 0,
-   "about": "ONE nl80211 scan request: g0 id0xC hmac_enc_scan_send_req (0x1FC B struct; payload builder is the scan lane's deliverable). DOCUMENTED BLOCKED OUTCOME: while the cfg80211 scan op is the fail-closed -EOPNOTSUPP stub, iw exits non-zero (rc=161/-95, output 'Not supported (-95)') - that is the expected BLOCKED-DRIVER state, not a failure: the step records BLOCKED, the session continues and reports SESSION_RESULT: BLOCKED:scan. The step turns PASS once the provider forwards a real scan request (rc=0).",
    "blocked_rc": [
     95,
     161
@@ -72,28 +202,58 @@
    "blocked_patterns": [
     "Not supported",
     "scan needs an H2D frame provider"
-   ]
+   ],
+   "about": "ONE nl80211 scan request: the provider posts vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req g0 id0xC 520 B (hardware: 3/12, 4/12, 5/12) and the firmware answers with g1 id17 channel results + g1 id15 beacons. iw rc=0 also holds for an ABORTED scan (iw prints 'scan aborted!' and returns 0): results>0 is gated by the scan-results attr below, results=0 is the documented BLOCKED outcome. Legacy fail-closed stub still records BLOCKED via blocked_rc"
   },
   {
    "name": "scan-settle",
    "kind": "sleep",
    "seconds": 1,
-   "about": "bounded wait for the firmware scan events to reach the direct reader"
+   "about": "bounded wait for the firmware scan events to reach the direct reader and the driver's scan-done log"
+  },
+  {
+   "name": "scan-results",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "scan: phase=",
+    "results="
+   ],
+   "absent": [
+    "results=0"
+   ],
+   "blocked_patterns": [
+    "results=0"
+   ],
+   "about": "PASS gate results>0: the driver scan model counted the parsed results (hardware 2026-11-26 14:00: results=6 bss=6 channel=6 after 6 channels, finish-abort at the provider 5 s bound). BLOCKED-DRIVER branch: scan accepted but results=0 - the firmware produced nothing (VAP/scan-state wall or decode gap), so the row is BLOCKED, not FAIL"
+  },
+  {
+   "name": "scan-dmesg",
+   "kind": "shell",
+   "cmd": "dmesg",
+   "expect_rc": 0,
+   "patterns": [
+    "scan channel result"
+   ],
+   "blocked_patterns": [
+    "scan DONE (finish-abort, results=0"
+   ],
+   "about": "PASS gate: the cfg80211 scan event handler logged at least one 'cfg80211: scan channel result slot=.. ch=.. (.. MHz)' line (g1 id17 decode). BLOCKED-DRIVER branch: the driver's own 'scan DONE (finish-abort, results=0 ...)' line is present - the ladder ran, the firmware returned no results"
   },
   {
    "name": "post-scan-pack",
    "kind": "read_pack",
-   "about": "the scan request did not fault the firmware: exception mask and staging stay clean (frame validity)",
+   "about": "hard gate: the provider scan sequence did not fault the firmware (mask 0, staging 0); a nonzero value here is FAIL, never BLOCKED",
    "reads": [
     {
-     "label": "scan_mask0",
+     "label": "postscan_mask0",
      "bar0": "0x6f8008",
      "expect": {
       "zero": true
      }
     },
     {
-     "label": "scan_staging0",
+     "label": "postscan_staging0",
      "bar0": "0x6f800c",
      "expect": {
       "zero": true
@@ -102,19 +262,74 @@
    ]
   },
   {
-   "name": "h2d-summary",
-   "kind": "attr_expect",
-   "attr": "h2d_status",
-   "about": "the scan H2D node was consumed (no timeout) and no store was refused",
-   "patterns": [
-    "timeout=0",
-    "refused=0"
+   "name": "post-scan-page",
+   "kind": "read_pack",
+   "about": "hard gate: the golden boot handshake page and boot state survived the scan ladder",
+   "reads": [
+    {
+     "label": "post_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "post_page4",
+     "bar0": "0x877004",
+     "expect": {
+      "eq": "0x7"
+     }
+    },
+    {
+     "label": "post_page8",
+     "bar0": "0x877008",
+     "expect": {
+      "eq": "0x2"
+     }
+    },
+    {
+     "label": "post_page_c",
+     "bar0": "0x87700c",
+     "expect": {
+      "eq": "0xabcd"
+     }
+    },
+    {
+     "label": "post_state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    }
    ]
   },
   {
-   "name": "scan-events-watch",
+   "name": "frame-post",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "allow_frames=12",
+    "posted=",
+    "refused=0",
+    "timeout=0",
+    "bad=0"
+   ],
+   "about": "the provider wire path accepted every ladder frame (hardware 5/12 posted: user_add, user_add_notify, vap_add, vap_start, scan_req) with no refusal/timeout/bad frame. The exact posted count is captured in the evidence but not gated (the PASS gates are the scan result gates)"
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "patterns": [
+    "timeout=0",
+    "refused=0"
+   ],
+   "about": "the two prerequisite H2D frames (ctx_create + txq_sync72) were consumed and none was refused"
+  },
+  {
+   "name": "catalog-after",
    "kind": "catalog_snapshot",
-   "about": "WATCH-ONLY: capture the D2H catalogue after the scan. The vendor event family is g1 ids 15/16/17 + g2 id2 (wifi-vap-scan REPORT section 6); with the host-only M1 VAP the firmware may gracefully refuse (no .12/.26 events) - accepted for this phase, the evidence is captured for the next revision."
+   "about": "watch/evidence: capture the D2H catalogue after the scan. Hardware 14:00 saw g1 id17 count=6 (124 B channel results) + g1 id15 count=6 (509 B beacon frames); the catalogue is captured, not gated (the scan-results + dmesg gates are the PASS decision)"
   },
   {
    "name": "vap-del",
@@ -124,12 +339,12 @@
     "ifname": "wlan0"
    },
    "expect_rc": 0,
-   "about": "tear the VAP down again"
+   "about": "tear the VAP down again (provider user_del g0 id9); a failure after a green scan is a teardown defect, not a scan verdict change"
   },
   {
    "name": "note-end",
    "kind": "note",
-   "about": "D2 row PASS = scan request accepted (rc=0) + no exception (mask 0/staging 0) + H2D timeout=0/refused=0; D2H events are watch-only. rc=95 is the known fail-closed provider/M2 stub (BLOCKED-DRIVER), any other rc is a real failure - never retry on the same boot."
+   "about": "D2 PASS = scan ladder completed + iw scan rc=0 + dmesg 'scan channel result' + results>0 + mask/staging 0 + golden page/state + no provider refusal. BLOCKED-DRIVER = scan rc=0 but results=0 (documented pending-feature outcome, the two blocked gates above). Any other nonzero gate (provider rc, firmware exception, page drift) is FAIL/STOP. Decision table: PHASES.md sec 5; never retry a scan on the same boot"
   }
  ]
 }

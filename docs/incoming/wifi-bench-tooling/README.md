@@ -22,6 +22,15 @@ gates the wiphy registration; `tools/phase_matrix.py` (one command per phase,
 evidence JSON + markdown) and `tools/bringup_report.py` (the
 boot/ready/calibration/vap/scan/dataplane state table).  See **PHASES.md**.
 
+**task-124 extension (wave 5, 2026-11-26):** D2 is a **TRUE-PASS scan ladder**
+(ready -> ctx_create t1 -> txq_sync72 -> iw iface add -> link up -> ONE iw scan
+on the wifi-vap-start provider module) with firmware-result gates (dmesg
+`scan channel result`, results>0, mask/staging 0, golden page) and a
+**PASS vs BLOCKED-DRIVER decision table** (results=0 is BLOCKED, never FAIL);
+plus per-phase module params/sequence (`--module-param-for`,
+`--sequence-for`) and the documented-pending `blocked_patterns` gates.  See
+README section 9.10 and PHASES.md section 5.1.
+
 
 **Read first:** STATUS.md sections 3b/3c, the newest mem-entries.md entries
 (2026-11-24 GP8/GP9/GP10/PD), and the lane reports this tool consumes:
@@ -214,7 +223,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 503/503 device-free checks (task-114: +191)
+    ./tools/run-selftest.sh        # 542/542 device-free checks (task-114: +191; task-124: +39)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -265,7 +274,7 @@ through the same one-command session runner:
 | boot/ready | bringup-boot-ready.json | protocol | golden page/state/mask/staging + strict ready pair, read-only |
 | C2 | bringup-c2-calibration.json | protocol | full six-calibration boot: ctx_create type 1 -> txq_sync72 -> 6x cfg_cal 3502..3507 -> six 298 B g1 id3 answers (budget 8) |
 | D1 | bringup-d1-vap.json | cfg80211 | wiphy registration gate + iw phy + netdev VAP add/del lifecycle (M0/M1) |
-| D2 | bringup-d2-scan.json | cfg80211 | ONE nl80211 scan request + no-exception gate; D2H scan events watch-only |
+| D2 | bringup-d2-scan.json | cfg80211 | TRUE-PASS ladder: ctx_create t1 -> txq_sync72 -> iw iface add -> link up -> ONE iw scan on the **wifi-vap-start provider module** (vap_start_mode=1); gates iw rc=0 + dmesg 'scan channel result' + results>0 + mask/staging 0 + golden page/state + provider refused=0; results=0 is the documented BLOCKED-DRIVER outcome (task-124; 22 steps / 48 checks / 2 writes) |
 | E1 | bringup-e1-dataplane.json | protocol | dp lane ladder D: dp_probe read-only MAC reachability + ONE dp_setup (rings/table/MAC program verified) + ONE key-0x0320 TXQ-table address sync + post pack |
 
 New tools/modes:
@@ -294,15 +303,21 @@ New tools/modes:
 - **tools/phase_matrix.py**: --phase boot|ready|C2|D1|D2|E1|all runs the
   phase through bench_session.py, writes per-phase evidence dirs plus
   phase-matrix.json/PHASE-MATRIX.md; --module-for PHASE=PATH selects a
-  different module per phase (e.g. the cfg80211 build for D1/D2);
-  --yes-really --attended for a real session, dry-run by default.
+  different module per phase (e.g. the cfg80211 build for D1/D2 and the
+  wifi-vap-start provider module for D2), --module-param-for
+  PHASE=KEY=VALUE applies a per-phase insmod parameter (the sequence's own
+  load_params stay the defaults), --sequence-for PHASE=PATH selects a variant
+  sequence row; --yes-really --attended for a real session, dry-run by
+  default.  The matrix markdown carries the D2 PASS-vs-BLOCKED-DRIVER decision
+  table and the phase configuration (module sha256 + params) it validated.
 - **tools/bringup_report.py**: reads phase-matrix evidence and renders the
   boot/ready/calibration/vap/scan/dataplane state table (BRINGUP-STATUS.md +
   JSON), with a next action for every non-green row.  Never contacts the
   device.
 
 Dry-run evidence (2026-11-25, real local artifact digests; full table in
-**PHASES.md** section 6): boot/C2/D1/D2 **PLAN-OK** (5/28/11/11 steps with
+**PHASES.md** section 6.2; task-124 redefined D2, see 9.10): boot/C2/D1/D2
+**PLAN-OK** (5/28/11/11 steps with
 18/54/24/15 checks; C2 8 device writes; cfg80211-first load order + wiphy gate
 + sh -n PASS) and E1 **BLOCKED-TOKEN** (the current calibration-token module
 carries no h2d_txq_addr_sync C string - the dp-bringup lane's deliverable).
@@ -355,7 +370,35 @@ pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),
 capability-probe refusals (module-attr-missing + sequence-profile), phase-matrix
 end-to-end dry-runs (PLAN-OK and BLOCKED-TOKEN) and the bring-up report mapping.
 
-Explicitly not proven: no phase was fired on hardware by this lane.  D2 is
-BLOCKED-DRIVER today (the scan-ap lane's fail-closed -EOPNOTSUPP stub, rc=95)
-and E1 is BLOCKED-TOKEN until the dp-bringup token lands; the sequences are
-ready JSON edits when they do.  See PHASES.md section 7.
+### 9.10 task-124: D2 TRUE-PASS ladder (2026-11-26, host-only)
+
+The D2 row no longer stops at "scan request accepted": it now runs the full
+prerequisite ladder the provider needs and gates the real firmware result.
+
+- D2 sequence: ready -> **ctx_create t1** (g0 id1 key 0x64) -> **txq_sync72** ->
+  `iw phy phy0 interface add wlan0 type managed` (provider user_add/notify) ->
+  link up -> **ONE `iw dev wlan0 scan`** (provider vap_add 48 B + vap_start
+  40 B + scan_req 520 B) -> results.  22 steps / 48 checks / 2 writes.
+- PASS = iw rc=0 + dmesg `cfg80211: scan channel result` + results>0 +
+  mask/staging 0 + golden page/state + provider refused=0/timeout=0/bad=0.
+  BLOCKED-DRIVER = the ladder ran (scan accepted) but results=0 with the
+  driver's own `scan DONE (finish-abort, results=0 ...)` line - implemented as
+  the new documented-pending gates (`attr_expect.blocked_patterns` and
+  shell pattern-only `blocked_patterns`); a firmware exception or page drift
+  is always FAIL.  Full decision table: PHASES.md section 5.1.
+- Per-phase configuration: `phase_matrix.py --module-for D2=<provider.ko>`,
+  `--module-param-for PHASE=KEY=VALUE`, `--sequence-for PHASE=PATH`; the D2
+  sequence itself carries the provider load_params
+  (`allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0
+  frame_gap_ms=100 h2d_send_budget=8`), so the plain cfg80211/scan-ap module
+  is refused at plan time (**BLOCKED-PREREQ**, module-param-unknown).
+- Dry-run evidence (host-only, local artefact digests): provider-module D2
+  **PLAN-OK** (module 738,112 B sha e09dc697..., PD4 fw cfe24bfb..., script
+  sh -n + audit PASS) and plain-module D2 **BLOCKED-PREREQ**; selftest grows to
+  **542/542** device-free checks.  See PHASES.md section 6.1.
+
+Explicitly not proven: no phase was fired on hardware by this lane.  The D2
+PASS observables are the 2026-11-26 14:00 attended mode-1 provider fire
+(scan channel results ch1-6, results=6 bss=6, g1 id17/15 counts=6); the fire
+remains the Lead's.  E1 is BLOCKED-TOKEN until the dp-bringup token lands; the
+sequences are ready JSON edits when they do.  See PHASES.md section 7.
