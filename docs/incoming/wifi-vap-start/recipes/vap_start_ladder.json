@@ -1,0 +1,178 @@
+{
+  "schema": "hi5622-wifi-vap-start-ladder/1",
+  "lane": "wifi-vap-start",
+  "task": "task-117",
+  "date": "2026-11-26",
+  "mode": "host-only deliverable; the bench steps below are for an ATTENDED session",
+  "preconditions": {
+    "image": "cfg80211 image (slice 13e81214 / slot 1794a531) + PD4-patched firmware, boot page 0x86807FEF/7/2/0xABCD, core state 1, mask 0",
+    "ladder_before": "C2 ladder from wifi-cfg80211/wifi-proto-seq: ctx_create type 1 (g0 id1 key 0x64, module 4) -> txq_sync72 (g0 id1 key 0xd8); both consumed, mask 0",
+    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied, module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
+    "human": "recovery door armed, UART read-only capture running, one fire per step, no retry in the same boot"
+  },
+  "families": {
+    "wal_g2": "WAL group-2 cfg-event envelope (vendor order). hdr[6..7]=0 in the vendor builder; the WAL command id is the u16 at data[0] (0x0064 VAP add, 0x0065 VAP start).",
+    "g0_id1": "g0 id1 config-event family (hdpp/hmac_config_send_event shape): key at payload+8; key 0x0064 = module/VAP context add, key 0x0065 = VAP start.",
+    "g0_direct": "g0 direct start_sta pair: id 0x0010 (16 B) join/start, id 0x000F (64 B) join-request params."
+  },
+  "readback_pack": {
+    "convention": "BAR0 = firmware CA + 0x6B8000; G (radio 0 object) = CA 0x170E28",
+    "addresses": [
+      {
+        "name": "G+0x630 module-table slot 0 (u32)",
+        "bar0": "0x829458",
+        "expect": "0 before the VAP add, then the module-0 context CA (or offset base)"
+      },
+      {
+        "name": "G+0x640 module-table slot 4 (u32)",
+        "bar0": "0x829468",
+        "expect": "0x0011C458 after the C2 ctx-create (known-good reference)"
+      },
+      {
+        "name": "G+0x6DC u16 base offset",
+        "bar0": "0x82A504",
+        "expect": "0 on the validated PD4 boot"
+      },
+      {
+        "name": "module-0 ctx+0x4B8 (band resource)",
+        "bar0": "derived: ctx0 + 0x6B8000 + 0x4B8",
+        "expect": "nonzero after a successful VAP add/bind; NULL = scan handler returns 100 (the 2026-11-26 no-result cause)"
+      },
+      {
+        "name": "module-0 ctx+0x4B0 (bind pointer)",
+        "bar0": "derived: ctx0 + 0x6B8000 + 0x4B0",
+        "expect": "nonzero with ctx+0x4B8"
+      },
+      {
+        "name": "module-0 ctx+0x190 (created context buffer)",
+        "bar0": "derived: ctx0 + 0x6B8000 + 0x190",
+        "expect": "nonzero after the VAP add (create helper CA 0xFE6BC)"
+      },
+      {
+        "name": "exception mask",
+        "bar0": "0x40008",
+        "expect": "0 (any nonzero = STOP)"
+      },
+      {
+        "name": "exception staging frame",
+        "bar0": "0x6F800C",
+        "expect": "all zero (any frame = STOP)"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "B0",
+      "kind": "read-only",
+      "action": "golden-boot pack before the sequence",
+      "expect": "page 0x86807FEF/7/2/0xABCD, state=1, mask=0, staging=0; C2 ladder consumed; core phase ACTIVE",
+      "stop": true
+    },
+    {
+      "id": "V1",
+      "kind": "frame",
+      "family": "wal_g2",
+      "frame": "wal_vap_add_g2_cmd0x64",
+      "total": 56,
+      "params": "vap_start_mode=0 -> provider builds WAL cmd 0x0064, iftype=AP(2), band=0, module=0 (cfg80211 layer passes request->wdev->iftype; hi5622_vap_start_module=0)",
+      "expect": [
+        "SR node consumed (out[0] pending clears within the bounded poll)",
+        "mask CA 0x40008 stays 0, staging frame stays 0",
+        "page/state golden",
+        "readback V1: module-table slot0 changes from 0 (firmware now owns a VAP/module context)"
+      ],
+      "notes": "first WAL group-2 frame the project ever posts: the frame header id is 0 and the WAL command is the payload u16 (vendor builder fact). Any exception/mask change means STOP - do not send V2."
+    },
+    {
+      "id": "V2",
+      "kind": "frame",
+      "family": "wal_g2",
+      "frame": "wal_vap_start_g2_cmd0x65",
+      "total": 44,
+      "params": "WAL cmd 0x0065, start_flag=1, cookie=0, seq=2",
+      "expect": [
+        "consumed, mask 0, staging 0, page/state golden",
+        "possible D2H g1 id3 36 B config-sync frame (watch item, not a PASS criterion)",
+        "readback: module-0 ctx+0x4B0/+0x4B8 become nonzero"
+      ],
+      "notes": "vendor order: the AP config (WAL cmd 0x0127) is only needed for a full hostapd start, not for scan results."
+    },
+    {
+      "id": "V3",
+      "kind": "frame",
+      "family": "g0_id1",
+      "frame": "vap_add_g0id1_key0x64",
+      "total": 48,
+      "params": "only if V1/V2 leave module-0 +0x4B8 NULL: g0 id1 key 0x64, data[0]=1/2, data[1]=0x12 parent, data[4]=0 module, data[0x12]=0 band (vap_start_mode=1 path)",
+      "expect": [
+        "consumed, mask 0",
+        "ctx0+0x190 allocated and ctx0+0x4B0/+0x4B8 nonzero (decisive for the scan handler)"
+      ],
+      "stop": true
+    },
+    {
+      "id": "V4",
+      "kind": "frame",
+      "family": "g0_id1",
+      "frame": "vap_start_g0id1_key0x65",
+      "total": 40,
+      "params": "g0 id1 key 0x65, data[0]=channel(0), data[1]=1 (started state [I]), data[2..3]=0, data[4..7]=0",
+      "expect": [
+        "consumed, mask 0",
+        "possible D2H g1 id3 type 0x07xx VAP MIB sync"
+      ],
+      "notes": "the firmware-side VAP-start worker (CA 0x46394) completes with CA 0x94518 (MAC VAP start); if V1/V2 already produce results this step is optional."
+    },
+    {
+      "id": "S1",
+      "kind": "frame",
+      "family": "existing",
+      "frame": "wifi-vap-scan: scan_req g0 id0xC 520 B",
+      "expect": [
+        "scan_req consumed",
+        "D2H g1 id15/16/17 or g2 id2 within scan_timeout_ms=5000: RESULTS -> AP-start milestone",
+        "zero result events but clean mask/page = firmware still refuses: record catalog + dmesg and continue to V3/V4"
+      ],
+      "stop": false
+    },
+    {
+      "id": "AP1",
+      "kind": "userspace",
+      "action": "hostapd -dd configs/hostapd-open.conf on wlan0 (only if S1 returned results)",
+      "expect": [
+        "cfg80211 start_ap reaches the driver",
+        "with vap_start_first=1 the provider may post the WAL VAP add/start again; the 156-byte AP config body (WAL cmd 0x0127) is still [U] - the provider advertises no AP_START cap, so start_ap must fail closed with -EOPNOTSUPP (honest state)"
+      ],
+      "stop": false
+    },
+    {
+      "id": "STA1",
+      "kind": "planned",
+      "family": "g0_direct",
+      "frames": [
+        "sta_join_params_g0id0x0F (76 B)",
+        "sta_join_start_g0id0x10 (28 B)"
+      ],
+      "params": "BSSID/channel/IE from a decoded scan result; own MAC in the 16-byte frame; the 64-byte frame carries 33 IE bytes at payload+20",
+      "expect": [
+        "consumed, mask 0",
+        "D2H join/assoc events (handlers to be wired by the cfg80211 connect lane)"
+      ],
+      "notes": "start_sta is the STA-mode alternative to the WAL VAP start; it needs a real join context, so it is NOT part of the scan ladder."
+    }
+  ],
+  "stop_rules": [
+    "exception mask CA 0x40008 != 0, or a nonzero exception-staging frame at BAR0 0x6F800C",
+    "golden page 0x86807FEF/7/2/0xABCD, core state 1, or g+0xB4/+0xB8 change",
+    "SR node not consumed within the bounded poll (H2D timeout / lane closed)",
+    "h2d_status/refused counters increment, or any dmesg fault/abort line",
+    "on STOP: record mask/out[]/rd_catalog/readback/dmesg, power-cycle, analyse offline; never re-send the failed frame, never write CA 0x400392F0, never post mailbox id 5, never send group 1/4"
+  ],
+  "open_items": [
+    "WAL group-2 firmware dispatch: hdr[6..7]=0 in the vendor builder and no group-2 table id 0 - the firmware-side receive path for WAL cfg events is [U]; the vendor host code makes the frames authoritative anyway",
+    "WAL VAP-add body byte meanings beyond iftype/band/cookie are [I] (fill_param source values are runtime WAL state)",
+    "g0 id1 key 0x64 parent-module index for a real VAP is [I] (0x12 default = the boot-created module)",
+    "AP-config WAL body (cmd 0x0127, 156 B) is still gap G1: no AP_START capability is advertised",
+    "D2H scan/join event payload layouts remain with the cfg80211/scan lanes"
+  ]
+}

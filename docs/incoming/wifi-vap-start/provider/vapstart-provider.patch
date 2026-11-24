@@ -1,0 +1,331 @@
+diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
+--- a/hi5622_frames_api.h	2026-11-24 16:00:32.634779833 +0700
++++ b/hi5622_frames_api.h	2026-11-24 16:01:51.216623702 +0700
+@@ -87,12 +87,17 @@
+ #define HI5622_FRAME_CAP_USER_DEL	(1u << 4)	/* g0 id9 builder */
+ #define HI5622_FRAME_CAP_AP_START	(1u << 5)	/* WAL g2 start-AP builder */
+ #define HI5622_FRAME_CAP_AP_STOP	(1u << 6)	/* WAL g2 stop-AP builder */
++/* extra caps (wifi-vap-start lane, task-117): the VAP start family that
++ * must run before the firmware accepts a scan request / returns results. */
++#define HI5622_FRAME_CAP_VAP_ADD	(1u << 7)	/* VAP add builder */
++#define HI5622_FRAME_CAP_VAP_START	(1u << 8)	/* VAP start builder */
+ 
+ #define HI5622_FRAME_CAPS_ALL						\
+ 	(HI5622_FRAME_CAP_SCAN_REQ | HI5622_FRAME_CAP_SCAN_PARSE |	\
+ 	 HI5622_FRAME_CAP_USER_ADD | HI5622_FRAME_CAP_USER_ADD_NOTIFY |	\
+ 	 HI5622_FRAME_CAP_USER_DEL | HI5622_FRAME_CAP_AP_START |	\
+-	 HI5622_FRAME_CAP_AP_STOP)
++	 HI5622_FRAME_CAP_AP_STOP | HI5622_FRAME_CAP_VAP_ADD |	\
++	 HI5622_FRAME_CAP_VAP_START)
+ 
+ /* ===================================================================
+  * 2. Neutral parameter structs (cfg80211/netlink -> provider)
+@@ -158,6 +163,18 @@
+ 	u16	center_freq;
+ };
+ 
++/* One VAP start sequence entry (wifi-vap-start lane): build the vendor's
++ * VAP add followed by the VAP start for this wdev/band.  The provider
++ * chooses the wire family (WAL group-2 vendor order, or the g0 id1
++ * config-event keys); the cfg80211 layer only owns the ordering. */
++struct hi5622_vap_start_params {
++	u8	iftype;		/* nl80211 iftype */
++	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
++	u8	module;		/* module/VAP index, <= 0x12 [I] */
++	u8	dst;		/* HCC dst nibble, 0 = local endpoint */
++	u32	seq;		/* WAL cfg-event sequence [I] */
++};
++
+ /* ===================================================================
+  * 3. Scan result (provider decoder -> cfg80211 BSS)
+  * =================================================================== */
+@@ -224,6 +241,10 @@
+ 			      const struct hi5622_ap_start_params *p);
+ 	int (*build_ap_stop)(u8 *wire, size_t cap, size_t *out_len,
+ 			     const struct hi5622_ap_stop_params *p);
++	int (*build_vap_add)(u8 *wire, size_t cap, size_t *out_len,
++			     const struct hi5622_vap_start_params *p);
++	int (*build_vap_start)(u8 *wire, size_t cap, size_t *out_len,
++			       const struct hi5622_vap_start_params *p);
+ };
+ 
+ /* ===================================================================
+diff -ruN a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 16:00:32.635073970 +0700
++++ b/hi5622_scan.c	2026-11-24 16:01:51.216767705 +0700
+@@ -40,6 +40,11 @@
+ /* =====================================================================
+  * helpers
+  * ===================================================================*/
++/* wifi-vap-start lane (task-117): module params owned by the provider;
++ * this file owns only the cfg80211 ordering (VAP add -> VAP start -> scan). */
++extern unsigned int hi5622_vap_start_first;
++extern unsigned int hi5622_vap_start_module;
++
+ static u64 hi5622_scan_now(void)
+ {
+ 	return hcc_kernel_now_ms();
+@@ -339,6 +344,53 @@
+ /* =====================================================================
+  * cfg80211 ops: scan / abort_scan
+  * ===================================================================*/
++/* Post the vendor VAP start order before the first scan request.  This is
++ * OFF by default; the bench enables vap_start_first=1 and the provider
++ * decides whether the wire family is WAL group 2 (vendor order) or the
++ * g0 id1 config-event keys.  A builder/post failure aborts the scan: the
++ * scan message is never sent for a VAP that was not started. */
++static int hi5622_scan_post_vap_start(struct hi5622_pci *ctx,
++				      const struct hi5622_frame_ops *ops,
++				      u8 iftype, u8 band, u8 module)
++{
++	struct hi5622_vap_start_params vp;
++	u8 *wire;
++	size_t len = 0;
++	int rc;
++
++	if (!hi5622_vap_start_first)
++		return 0;
++	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
++			  HI5622_FRAME_CAP_VAP_START)) !=
++	    (HI5622_FRAME_CAP_VAP_ADD | HI5622_FRAME_CAP_VAP_START))
++		return -EOPNOTSUPP;
++	if (!ops->build_vap_add || !ops->build_vap_start)
++		return -EOPNOTSUPP;
++	wire = kmalloc(HI5622_FRAME_MAX_TOTAL, GFP_KERNEL);
++	if (!wire)
++		return -ENOMEM;
++	memset(&vp, 0, sizeof(vp));
++	vp.iftype = iftype;
++	vp.band = band;
++	vp.module = module;
++	vp.seq = 1;
++	rc = ops->build_vap_add(wire, HI5622_FRAME_MAX_TOTAL, &len, &vp);
++	if (rc)
++		goto out;
++	rc = hi5622_frame_post(ctx, wire, len, "vap_add", NULL);
++	if (rc)
++		goto out;
++	len = 0;
++	vp.seq = 2;
++	rc = ops->build_vap_start(wire, HI5622_FRAME_MAX_TOTAL, &len, &vp);
++	if (rc)
++		goto out;
++	rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
++out:
++	kfree(wire);
++	return rc;
++}
++
+ int hi5622_scan_op_scan(struct wiphy *wiphy,
+ 			struct cfg80211_scan_request *request)
+ {
+@@ -422,6 +474,16 @@
+ 		goto out;
+ 	}
+ 
++	rc = hi5622_scan_post_vap_start(c->ctx, ops,
++					(u8)request->wdev->iftype, c->band,
++					(u8)hi5622_vap_start_module);
++	if (rc) {
++		dev_warn(dev,
++			 "cfg80211: VAP start sequence not posted (%d) - scan aborted, no scan message\n",
++			 rc);
++		goto out;
++	}
++
+ 	mutex_lock(&s->lock);
+ 	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(),
+ 				     s->scan_timeout_ms);
+diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
+--- a/hi5622_scan_logic.c	2026-11-24 16:00:32.634909409 +0700
++++ b/hi5622_scan_logic.c	2026-11-24 16:01:51.216674298 +0700
+@@ -29,6 +29,8 @@
+ 	case HI5622_FRAME_CAP_USER_DEL:		return "user_del";
+ 	case HI5622_FRAME_CAP_AP_START:		return "ap_start";
+ 	case HI5622_FRAME_CAP_AP_STOP:		return "ap_stop";
++	case HI5622_FRAME_CAP_VAP_ADD:		return "vap_add";
++	case HI5622_FRAME_CAP_VAP_START:	return "vap_start";
+ 	default:				return "?";
+ 	}
+ }
+@@ -46,7 +48,7 @@
+ 		n = snprintf(buf, len, "none");
+ 		return n < 0 ? n : (int)((size_t)n < len ? (size_t)n : len - 1);
+ 	}
+-	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_AP_STOP; bit <<= 1) {
++	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_VAP_START; bit <<= 1) {
+ 		const char *name;
+ 
+ 		if (!(caps & bit))
+@@ -84,6 +86,10 @@
+ 		return -EINVAL;
+ 	if ((ops->caps & HI5622_FRAME_CAP_AP_STOP) && !ops->build_ap_stop)
+ 		return -EINVAL;
++	if ((ops->caps & HI5622_FRAME_CAP_VAP_ADD) && !ops->build_vap_add)
++		return -EINVAL;
++	if ((ops->caps & HI5622_FRAME_CAP_VAP_START) && !ops->build_vap_start)
++		return -EINVAL;
+ 	return 0;
+ }
+ 
+diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
+--- a/hi5622_vapscan_provider.c	2026-11-24 16:00:32.634999108 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 16:01:51.216710456 +0700
+@@ -33,6 +33,9 @@
+ 
+ #include "hi5622_frames_api.h"
+ #include "hi5622_vapscan_map.h"
++#include "vapstart_frames.h"
++
++#include <linux/nl80211.h>
+ 
+ static DEFINE_MUTEX(hi5622_vapscan_lock);
+ static bool hi5622_vapscan_registered;
+@@ -128,6 +131,116 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* VAP start family (wifi-vap-start lane, task-117)                  */
++/* ------------------------------------------------------------------ */
++
++/* Ordering knob owned by the cfg80211 layer (hi5622_scan.c): post the
++ * VAP add + start sequence before the first scan request.  Default 0. */
++unsigned int hi5622_vap_start_first;
++module_param_named(vap_start_first, hi5622_vap_start_first, uint, 0644);
++MODULE_PARM_DESC(vap_start_first,
++		 "post the VAP add+start sequence before a scan (0=off default, 1=on)");
++
++/* Wire family: 0 = WAL group-2 cfg events (vendor order), 1 = g0 id1
++ * config-event keys 0x64/0x65.  Read-only after load. */
++unsigned int hi5622_vap_start_mode;
++module_param_named(vap_start_mode, hi5622_vap_start_mode, uint, 0444);
++MODULE_PARM_DESC(vap_start_mode,
++		 "VAP start wire family: 0=WAL g2 vendor order, 1=g0 id1 keys");
++
++/* module/VAP index the start sequence applies to (<= 0x12). */
++unsigned int hi5622_vap_start_module;
++module_param_named(vap_start_module, hi5622_vap_start_module, uint, 0444);
++MODULE_PARM_DESC(vap_start_module, "module/VAP index for the start sequence");
++
++static u8 vapscan_iftype(u8 nl80211_iftype)
++{
++	return nl80211_iftype == NL80211_IFTYPE_AP ? VSF_IFTYPE_AP :
++						     VSF_IFTYPE_STA;
++}
++
++static int vapscan_vap_add(u8 *wire, size_t cap, size_t *out_len,
++			   const struct hi5622_vap_start_params *p)
++{
++	struct vsf_frame *f;
++	int rc;
++
++	if (!wire || !out_len || !p || p->module > VSF_MODULE_MAX ||
++	    p->band > 1u || p->dst > 0x0fu)
++		return -EINVAL;
++	f = kmalloc(sizeof(*f), GFP_KERNEL);
++	if (!f)
++		return -ENOMEM;
++	if (hi5622_vap_start_mode == 1u) {
++		struct vsf_vap_add gp;
++
++		vsf_vap_add_defaults(&gp);
++		gp.iftype = vapscan_iftype(p->iftype);
++		gp.module = p->module;
++		gp.band = p->band;
++		gp.dst = p->dst;
++		rc = vsf_build_vap_add(f, &gp);
++	} else {
++		struct vsf_wal_vap_add wp;
++
++		vsf_wal_vap_add_defaults(&wp);
++		wp.iftype = vapscan_iftype(p->iftype);
++		wp.band = p->band;
++		wp.dst = p->dst;
++		wp.seq = p->seq ? p->seq : 1u;
++		rc = vsf_build_wal_vap_add(f, &wp);
++	}
++	if (!rc) {
++		size_t n = 0;
++
++		if (vsf_frame_export(f, wire, cap, &n) == 0)
++			*out_len = n;
++		else
++			rc = -ENOSPC;
++	}
++	kfree(f);
++	return rc;
++}
++
++static int vapscan_vap_start(u8 *wire, size_t cap, size_t *out_len,
++			     const struct hi5622_vap_start_params *p)
++{
++	struct vsf_frame *f;
++	int rc;
++
++	if (!wire || !out_len || !p || p->module > VSF_MODULE_MAX ||
++	    p->dst > 0x0fu)
++		return -EINVAL;
++	f = kmalloc(sizeof(*f), GFP_KERNEL);
++	if (!f)
++		return -ENOMEM;
++	if (hi5622_vap_start_mode == 1u) {
++		struct vsf_vap_start gp;
++
++		vsf_vap_start_defaults(&gp);
++		gp.dst = p->dst;
++		rc = vsf_build_vap_start(f, &gp);
++	} else {
++		struct vsf_wal_vap_start sp;
++
++		vsf_wal_vap_start_defaults(&sp);
++		sp.dst = p->dst;
++		sp.seq = p->seq ? p->seq : 2u;
++		rc = vsf_build_wal_vap_start(f, &sp);
++	}
++	if (!rc) {
++		size_t n = 0;
++
++		if (vsf_frame_export(f, wire, cap, &n) == 0)
++			*out_len = n;
++		else
++			rc = -ENOSPC;
++	}
++	kfree(f);
++	return rc;
++}
++
++/* ------------------------------------------------------------------ */
+ /* registration                                                       */
+ /* ------------------------------------------------------------------ */
+ int hi5622_vapscan_provider_register(void)
+@@ -146,12 +259,16 @@
+ 		HI5622_FRAME_CAP_SCAN_PARSE |
+ 		HI5622_FRAME_CAP_USER_ADD |
+ 		HI5622_FRAME_CAP_USER_ADD_NOTIFY |
+-		HI5622_FRAME_CAP_USER_DEL;
++		HI5622_FRAME_CAP_USER_DEL |
++		HI5622_FRAME_CAP_VAP_ADD |
++		HI5622_FRAME_CAP_VAP_START;
+ 	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
+ 	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
+ 	hi5622_vapscan_ops.build_user_add = vapscan_user_add;
+ 	hi5622_vapscan_ops.build_user_add_notify = vapscan_user_add_notify;
+ 	hi5622_vapscan_ops.build_user_del = vapscan_user_del;
++	hi5622_vapscan_ops.build_vap_add = vapscan_vap_add;
++	hi5622_vapscan_ops.build_vap_start = vapscan_vap_start;
+ 	/* AP start/stop: no builder (task-110 scope) - capabilities omitted. */
+ 
+ 	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-24 16:00:32.635159212 +0700
++++ b/Kbuild	2026-11-24 16:01:51.216818170 +0700
+@@ -27,7 +27,8 @@
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
+ 		 hi5622_frame_post.o hi5622_scan.o \
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+-		 hi5622_vapscan_provider.o
++		 hi5622_vapscan_provider.o \
++		 vapstart_frames.o
+ 
+ ccflags-y += -I$(src)
+ 
