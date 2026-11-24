@@ -180,9 +180,9 @@ MODULE_LICENSE("GPL");
  * metadata unconditionally so modinfo/modpost still see it. */
 #ifdef CONFIG_MODULE_STRIPPED
 MODULE_INFO(description,
-	    "Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path (Linux 6.18)");
+	    "Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create (Linux 6.18)");
 MODULE_INFO(author, "cudy-wr3000v2 clean-room reverse-engineering project");
 #else
-MODULE_DESCRIPTION("Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path (Linux 6.18)");
+MODULE_DESCRIPTION("Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create (Linux 6.18)");
 MODULE_AUTHOR("cudy-wr3000v2 clean-room reverse-engineering project");
 #endif

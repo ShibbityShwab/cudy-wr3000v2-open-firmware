@@ -1,33 +1,77 @@
-# BENCH-PROCEDURE - first REAL post-ready H2D message (g0 id1 TXQ config sync)
+# BENCH-PROCEDURE - ordered context-create -> TXQ config sync (g0 id1, key 0x64 -> 0xd8)
 
-Host-only lane deliverable (wifi-h2d-send; task-98 ladder A, task-99 ladder B).
-This is the attended ladder for the next session: golden PD3 boot -> ready pair
--> ONE frame -> capture-and-stop.  One variable, one boot, one frame, no
-retries.  **Ladder A** fires the 48-byte node (`h2d_txq_sync`); **Ladder B**
-fires the vendor's 72-byte live-node variant (`h2d_txq_sync72`) and is the
-task-99 recommendation (see REPORT-G0ID1-HANDLER.md).  The task-98 module was
-already fired once on a PD3 golden boot (Ladder A, 48-byte node): the frame
-reached the device ring (ETE engine consumed the node) but the firmware
-faulted (mask 0x12) and did not consume the mailbox announce - the boot stayed
-golden.  Ladder B exists to change exactly one variable (node length) and to
-collect the exception record that names the fault site.  Global rules unchanged: recovery door armed first, UART
-**read-only** capture to an absolute path, no blind flash writes, no `rmmod`
-after the release, no CECE during boot.
+Host-only lane deliverable (wifi-h2d-send; task-98 ladder A, task-99 ladder B,
+**task-102 ladder C = the CURRENT procedure**).  This is the attended ladder for
+the next session: golden PD4 boot -> ready pair -> read-only verification pack
+-> ONE context-create frame -> re-read the pack -> ONE TXQ sync frame ->
+capture-and-stop.  One idea per fire, one boot, no retries.
+
+**Where the lane stands (fired history, do not repeat):**
+
+* Ladder A (task-98, 48-byte node) fired on a PD3 golden boot: the frame
+  reached the device ring and the ETE engine consumed the node, but the
+  firmware faulted (mask 0x12) and never consumed the mailbox announce; the
+  boot stayed golden.
+* Control fire (g0 id0 `stub`): consumed in 0 polls, mask 0, no exception ->
+  the real post-ready H2D transport path is proven; the fault is specific to
+  the g0 id1 handler path.
+* Ladder B (task-99, 72-byte live-node variant) fired twice (PD3 2026-11-25
+  00:20 and PD4 02:10): same fault (mask 0x12, announce not consumed), the PD4
+  cave stayed intact (stub survived), and the exception record holds the
+  firmware's *secondary* cascade frame, not the first data abort.
+* The ctx-create lane (task-101) identified the missing precondition: the
+  TXQ-sync worker CA 0x81038 does `ldr r3,[ctx+0x190]; strb r1,[r3+0x4c]`,
+  and `ctx+0x190` is written ONLY by the context-create helper CA 0xFE6BC,
+  reachable only from the **g0 id1 config event with u16 key = 0x0064**.  Boot
+  creates module 18 with type 0 and takes the no-alloc path, so a solo TXQ
+  sync always faults.  Ladder C sends the create first.
+
+Global rules unchanged: recovery door armed first, UART **read-only** capture
+to an absolute path, no blind flash writes, no `rmmod` after the release, no
+CECE during boot, never write CA 0x400392F0 (out[5]), never mailbox id 5.
 
 ## Preconditions
 
 * recovery door READY (`tools/recovery-card.sh`), bench link PASS
   (`tools/bench-link.sh`), UART read-only capture running to an absolute path;
-* the PD3-patched firmware is staged locally as `/lib/firmware/hi_wifi/FIRMWARE.PD3.bin`
-  (sha256 `eea9f2ff9345dc8d16badd65e77a5f8b82cf58740b7203239838259adc3905ce`,
-  local evidence only - never committed);
-* the Wi-Fi PHY custom block `/lib/firmware/hi_wifi/wifi_block.bin` is staged
+* the **PD4-patched firmware** staged locally as
+  `/lib/firmware/hi_wifi/FIRMWARE.PD4.bin`, sha256
+  `cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1`
+  (local evidence only - never committed);
+* the Wi-Fi PHY custom block `/lib/firmware/hi_wifi/wifi_block.bin` staged
   from the local stock capture with `tools/mkblocks.py` (never committed);
-* the module from THIS tree is on the rootfs:
-  `hi5622_wifi.ko` (`./tools/build.sh` reports size/sha256; the hash is
-  build-path dependent - record the value printed by the build you deploy);
-* Lead decision recorded: this session fires **exactly one** post-ready H2D
-  frame (`h2d_send_budget=1`, the default).
+* the module from THIS tree on the rootfs: `hi5622_wifi.ko`, **399,816 B**,
+  sha256 `b11ffea6d1cebb9f03a3a4d162dbc0c5cbd684bb6298bcf22d5e6d9ebb1d882f`
+  (build-path dependent - record the value printed by `./tools/build.sh` of
+  the build you deploy), vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`;
+* Lead decision recorded: the session fires the **ordered pair** -
+  `h2d_ctx_create` then `h2d_txq_sync72` - and nothing else.
+
+### One module load with `h2d_send_budget=2` (decision, with reasons)
+
+**Load the module with `h2d_send_budget=2`** (the supervised multi-message
+setting; it is declared before the first fire, never raised afterwards).
+
+Why not two module loads:
+
+1. The created context lives in **firmware RAM**.  A reboot re-runs the
+   firmware and loses it, so the TXQ sync must follow the create in the same
+   firmware boot - a "fresh boot between the two messages" cannot work.
+2. Reloading the module on the same boot to obtain a fresh one-frame budget
+   would require `rmmod` after the release, which is forbidden (project stop
+   rule: no `rmmod` after the release; the firmware keeps hcc state pointing
+   at the host rings).
+3. The cleanest allowed path is therefore ONE load / ONE budget table of two
+   frames, fired in order with only read-only observation between them.  Each
+   fire keeps its own safety gate: `h2d_ctx_create` is READY-only and
+   once-per-load; `h2d_txq_sync72` is once-per-load and, in the ACTIVE phase
+   the create produces, is allowed only when this load sent the create
+   (`ctx_created=1`).  Nothing else is enabled by the budget.
+
+Smallest-step alternative: load with `h2d_send_budget=1` and fire only
+`h2d_ctx_create`.  That answers "is the create consumed, and does it allocate
+ctx+0x190", but the TXQ question then needs another session with a fresh PD4
+boot and budget=2 anyway.  It does not reduce the number of boots.
 
 ## Sysfs surface used here
 
@@ -38,136 +82,186 @@ Each attribute lives in the endpoint device directory
     service:   hcc_arm hcc_loop hcc_service hcc_clear hcc_status hcc_ready
                hcc_events hcc_rings hcc_plan
     hcc:       hcc_sr_announce hcc_cece_kick hcc_dr_republish
-    h2d:       h2d_txq_sync (WO)  h2d_txq_sync72 (WO)  h2d_send (WO)
-               h2d_status (RO)  h2d_plan (RO)
+    h2d:       h2d_ctx_create (WO)  h2d_txq_sync (WO)  h2d_txq_sync72 (WO)
+               h2d_send (WO)  h2d_status (RO)  h2d_plan (RO)
     d2h:       rd_poll rd_advance rd_status rd_decode rd_catalog
 
-## Ladder
+`h2d_send` grammar now also accepts the new token `ctx_create` (the WO
+`h2d_ctx_create` attribute is the preferred one-shot form).
+
+## Ladder C (CURRENT) - ordered create -> TXQ sync
 
 | step | action | expected / stop rule |
 | --- | --- | --- |
-| S0 | `insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD3.bin` | probe only (no device writes). dmesg: "HCC service ready", "HCC core: portable hcc_core initialised". `cat h2d_status` shows `budget=1 frames_sent=0 txq_sent=0` and gates `not_armed`. STOP if the `h2d_*` attrs are absent (wrong module loaded) |
-| S1 | `echo 1 > prepare` | six endpoint-iATU viewports, 6/6 readback OK |
-| S2 | `echo 1 > upload ; echo 1 > verify` | PD3 image upload 928,920 B, verify diffs=0 |
-| S3 | `echo 1 > seed` | platform descriptor (built-in) + wifi block (local file) written and read back; STOP on readback diff |
-| S4 | `echo 1 > hcc_arm` | vendor-exact 7-channel ETE init, readback OK; NEVER write CECE here |
-| S5 | `echo 1 > hcc_loop` | service thread started (core tick + direct reader); start BEFORE the release |
-| S6 | `echo 1 > release` | 0x5A5A only; refused unless windows+upload+verify+seed are done. The core arms its boot watch |
-| S7 | watch `boot hcc_ready hcc_events rd_status` | LATCHED golden handshake 0x86807FEF/7/2/0xABCD, state CA 0x118B60=1, mask CA 0x40008=0; direct reader decodes g4 id1 (<=2.0 s) then g4 id2 (<=20.0 s); core phase `READY_TXQ_SYNC`. STOP if the ready pair does not arrive (that is a different experiment) |
-| S8 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan: gate=ok` with `msg=txq_sync wire_total=48` and `wire=000100043000010000005a5a0000000001000000d800140001000000...ffffffff`, `node_word1=0x00306d2b`, `producer=0x00000000 -> 0x00000001`, `mailbox id=3 out[0]=0x00000008 out[2]|=1`. `h2d_status` gates: `txq_sync=ok real_msg=ok`. **STOP if the gate is not "ok"** - do not raise the budget, do not retry; capture the gate reason |
-| S9 | **fire one frame**: `printf 1 > h2d_txq_sync` | the store returns after the bounded consumption window (<= ~1 s) and returns success only if out[0] was consumed. On the shell: `echo $?`. Do NOT repeat the command |
-| S10 | immediately capture (read-only): `cat h2d_status h2d_plan hcc_events hcc_ready boot rd_status rd_catalog` + `dmesg \| tail -40` + UART log | see the observables table below; then STOP (one boot, one frame) |
+| C0 | `insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin h2d_send_budget=2` | probe only (no device writes); dmesg "HCC service ready"; `cat h2d_status` shows `budget=2 frames_sent=0 txq_sent=0 ctx_sent=0` and gate `ctx_create=not_armed`. STOP if the `h2d_*` attrs are absent (wrong module build) |
+| C1 | `echo 1 > prepare` | six endpoint-iATU viewports, 6/6 readback OK |
+| C2 | `echo 1 > upload ; echo 1 > verify` | PD4 image (same 928,920 B layout), verify diffs=0 |
+| C3 | `echo 1 > seed` | platform descriptor (built-in) + wifi block (local file) written and read back; STOP on readback diff |
+| C4 | `echo 1 > hcc_arm` | vendor-exact 7-channel ETE init, readback OK; NEVER write CECE here |
+| C5 | `echo 1 > hcc_loop` | service thread started (core tick + direct reader); start BEFORE the release |
+| C6 | `echo 1 > release` | 0x5A5A only; refused unless windows+upload+verify+seed are done |
+| C7 | watch `boot hcc_ready hcc_events rd_status` | LATCHED golden page 0x86807FEF/7/2/0xABCD, state CA 0x118B60=1, mask CA 0x40008=0; ready pair g4 id1 (<=2.0 s) then g4 id2 (<=20.0 s); core phase `READY_TXQ_SYNC`. STOP if the ready pair does not arrive (different experiment) |
+| C8 | **pre-create read pack** (read-only, one shot; table below) | ctx4+0x190 = 0, table entry 4 = 0x0011C458, ctx4 body = 0, G = 0x00170E28, mask = 0, staging = 0. STOP if mask != 0 or the table/G values differ (the expected boot state is not there) |
+| C9 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan` prints `msg=txq_sync wire_total=48 wire=000100043000010000005a5a...ffffffff`, `msg=txq_sync72 node_len=72 node_word1=0x00486d2b`, **and the new `msg=ctx_create wire_total=48 wire=000100043000010000005a5a0000000001000000640014000304000004000000000000000000000000000000ffffffff` with `node_len=48 node_word1=0x00306d2b`**, plus `gate ctx_create=ok`; `h2d_status` gates show `ctx_create=ok`. **STOP if the gate is not ok** - do not fire, capture the reason, do not raise the budget |
+| C10 | **fire ONE create**: `printf 1 > h2d_ctx_create` (or `printf ctx_create > h2d_send`); note `echo $?` | success only if out[0] was consumed within the bounded window. On success dmesg shows `H2D ctx_create: frame 48 B in a 48 B node committed ... CONSUMED after N polls`. **Do NOT repeat the command** |
+| C11 | **post-create read pack** (read-only; table below) | **ctx4+0x190 = V non-zero**, V+0x10=0x64, V+0x14=3, V+0x238=0x92A, V+0x52&0xff=0x01, ctx4 body byte0=4 / byte4=3, G+0x6C8+4 refcount=1, mask still 0, staging still 0/unmodified. **STOP if V stays 0** (create path failed - see fallback matrix; do NOT fire the TXQ) |
+| C12 | **dry-run preflight for the TXQ**: `cat h2d_status ; cat h2d_plan` | `h2d_status` state: `phase=ACTIVE ... ctx_created=1`, `frames_sent=1 txq_sent=0 ctx_sent=1 ok=1`, `mbox_inflight=0x00000000 out[0]=0x00000000`, gate `txq_sync72=ok`. STOP if the gate is not ok (in-flight/pending announce is a stop, not a retry) |
+| C13 | **fire ONE TXQ sync**: `printf 1 > h2d_txq_sync72`; note `echo $?` | success only if out[0] was consumed. Expected: the g0 id1 **key-0xd8** worker CA 0x81038 now finds `ctx+0x190 = V` and stores one byte; **no new exception**. **Do NOT repeat** |
+| C14 | **capture (read-only)**: `cat h2d_status h2d_plan hcc_events hcc_ready hcc_status boot rd_status rd_catalog` + `dmesg | tail -60` + the UART log; then STOP | see the observables table; one boot, one ordered pair |
+| C15 | only if C13/C10 faulted: read-only exception record at BAR0 **0x6F800C** (CPU 0x0004000C, 17 words r0-r12/sp/lr/PC/SPSR) and cave BAR0 0x7C0240 | record and power-cycle; never write this area, never retry |
 
-Do **not** use `hcc_sr_announce` in this load: the liveness stub and a real
-message are one idea per module load (the driver refuses the second one with
-an explanatory message).  The PD3 session already proved the 12-byte announce
-is consumed; this session asks whether the real 48-byte body is.
+## Read-only verification pack (C8 / C11)
 
-## Expected observables (S10)
+Reads are host reads of the endpoint BAR0 (`/sys/bus/pci/devices/<bdf>/resource0`),
+the same read path the bench tooling uses.  BAR0 = CPU + 0x6B8000 for firmware
+RAM; BAR0 = 0x3B8000 + (CA - 0x40000000) for the IO window.  Read-only - no
+write is needed for any of this.  Example helper (ran on the box):
+
+    R0=/sys/bus/pci/devices/<bdf>/resource0
+    rd32() { dd if="$R0" bs=4 skip=$(( $1 / 4 )) count=1 2>/dev/null | od -An -tx4 | tr -d ' 
+'; echo "  <- $1"; }
+    # pre-create (C8)
+    rd32 0x821E90   # G singleton,            expect 0x00170e28
+    rd32 0x829468   # module-table entry 4,   expect 0x0011c458
+    rd32 0x829504   # u16 G+0x6DC common off, expect 0x0000 (16-bit read)
+    rd32 0x7D45E8   # ctx4+0x190,             expect 0x00000000
+    rd32 0x7D4458   # ctx4 body word 0,       expect 0x00000000
+    rd32 0x6F8008   # exception mask,         expect 0x00000000
+    rd32 0x6F800C   # staging frame word 0,   expect 0x00000000
+    rd32 0x7C0240   # PD4 cave (integrity),   expect the PD4 stub words
+
+After create (C11), with V = the value read back from BAR0 0x7D45E8:
+
+    rd32 $(( 0x7D45E8 ))                          # V: must be non-zero
+    rd32 $(( V + 0x6B8010 ))                      # create buffer +0x10,  expect 0x00000064
+    rd32 $(( V + 0x6B8014 ))                      # create buffer +0x14,  expect 0x00000003
+    rd32 $(( V + 0x6B8238 ))                      # create buffer +0x238, expect 0x0000092A
+    rd32 $(( V + 0x6B8052 ))                      # low byte expect 0x01
+    rd32 0x7D4458                                 # ctx4 body: low byte = 4 (user id)
+    rd32 0x7D445C                                 # ctx4[4]: low byte = 3 (type)
+    rd32 0x8294F4                                 # G+0x6C8+4 refcount,  expect low byte 0x01
+    rd32 0x6F8008                                 # mask stays 0
+    rd32 0x6F800C                                 # staging stays 0/unmodified
+
+Note: V is the allocator's return; firmware-RAM pointers are CPU addresses, so
+the buffer's BAR0 address is V + 0x6B8000.  If V reads in the device-CA window
+(0x40xxxxxx) instead, the pointer convention differs - report it as an open
+item and use the device-IO mapping for the buffer reads; do not guess.
+
+## Expected observables
+
+### C10 - the create frame
 
 | # | observable | pass / meaning |
 | --- | --- | --- |
-| 1 | the S9 sysfs write returned success | frame was committed and the announce was consumed within the bounded window |
-| 2 | `h2d_status`: `frames_sent=1 txq_sent=1 ok=1 timeout=0 refused=0 desync=0`, `last_out0=0x00000000`, small `max_polls`, phase `ACTIVE` | full consumption path |
-| 3 | dmesg `H2D txq_sync: frame 48 B committed on SR0 slot 0 devva 0x... node word1 0x00306d2b producer 0x00000000 -> 0x00000001; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls; core phase=ACTIVE` | exact commit evidence (record N and the devva) |
-| 4 | `hcc_events`: `h2d: pub=1 done=1 ...` (or pub>1 if the tick coalesced), core `phase=ACTIVE`, the `txq_sync` event in dmesg | the core observed the SR commit and the announce completion |
-| 5 | `boot`: page/state/mask still golden (page may show the PD3 overwrite; the **latched** gate is authoritative; `page_lost_after_latch` counts it), mask CA 0x40008 = 0 | no boot-state damage |
-| 6 | `rd_status`/`rd_catalog` keep decoding; the direct reader is still primary | receive path unaffected |
-| 7 | out[5] CA 0x400392F0 reads 1 (read-only observation; the driver never writes it) | PD3 dispatcher ack behaviour, if the firmware path ran |
-| 8 | any NEW D2H frame (a new g4 id, a g3 frame, or a g1/g2 catalogue id) | **discovery**: capture the raw frame with `rd_decode` and stop |
+| 1 | the C10 write returned success | frame committed and the id-3 announce was consumed within the bounded window |
+| 2 | `h2d_status`: `frames_sent=1 txq_sent=0 ctx_sent=1 ok=1 timeout=0 refused=0 desync=0`, `last_out0=0x00000000`, small `max_polls`, gate line `ctx_create=ctx_already_created`, state `ctx_created=1` | the create went through the full carrier path |
+| 3 | dmesg `H2D ctx_create: frame 48 B in a 48 B node committed on SR0 slot N devva 0x... node word1 0x00306d2b producer ... -> ...; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls; core phase=ACTIVE` | exact commit evidence (record slot/devva/N) |
+| 4 | `hcc_events`: `h2d{pub=1 done=1 ...}`, `h2d_complete data=0x8`, lane open | core consumed the announce |
+| 5 | the core phase is now **ACTIVE** (it keys on group/id; ctx_create is also g0/id1) and hcc_events may show a `txq_sync` event - **expected artifact, not a pass signal** (see risk R1) | expected |
+| 6 | the C11 pack (above) shows ctx4+0x190 non-zero + the create-buffer signatures | the firmware called the create helper and allocated the context |
+| 7 | mask CA 0x40008 = 0 and staging BAR0 0x6F800C unchanged/zero | no exception was taken |
+| 8 | boot page/state still golden | no boot-state damage |
 
-There is no guarantee of a D2H response to the TXQ sync: **consumed with a
-silent firmware is a valid, positive result** (the first real post-ready H2D
-reached the firmware dispatch path).  Record the exact capture; "no response"
-is data, not failure.
+### C13 - the TXQ config sync, now with its context
+
+| # | observable | pass / meaning |
+| --- | --- | --- |
+| 1 | the C13 write returned success | frame committed + announce consumed |
+| 2 | `h2d_status`: `frames_sent=2 txq_sent=1 ctx_sent=1 ok=2 timeout=0 refused=0 desync=0`, `last attempt msg=txq_sync72 gate=ok wire_total=48 node_len=72` | ordered pair completed with the 72-byte node |
+| 3 | dmesg `H2D txq_sync72: frame 48 B in a 72 B node committed on SR0 slot N devva 0x... node word1 0x00486d2b ... CONSUMED after N polls; core phase=ACTIVE` | exact commit evidence |
+| 4 | **no new exception**: mask CA 0x40008 = 0, staging BAR0 0x6F800C unchanged/zero | the key-0xd8 worker found `ctx+0x190` and did not fault (the whole point) |
+| 5 | SR0 producer/consumer from `hcc_rings`: consumer advanced past the node | the ETE engine took the node |
+| 6 | boot page/state still golden; out[5] read-only unchanged behaviour | no boot damage |
+| 7 | any NEW D2H frame (new g4 id, g3, or a g1/g2 catalogue id) | **discovery**: capture the raw frame with `rd_decode` and stop |
+| 8 | consumed with a silent firmware | valid positive result: the ordered H2D pair reached the firmware dispatch path; no response is data, not failure |
 
 ## Stop rules (all mandatory)
 
-* **One boot, one frame, no retry.**  The store refuses a second frame
-  (`budget_exhausted`, and the core closes the lane on timeout).  A repeat
-  experiment needs a fresh boot and a Lead decision.
-* `h2d_status timeout=1` or dmesg "announce NOT consumed": STOP.  Capture
-  out[0], out[2], out[5], `hcc_rings` (SR0 producer/consumer), boot page/mask/
-  state.  Do not re-fire, do not reload to retry the same boot.
-* The golden page / state / mask change, or `hcc_ready` leaves
-  `READY_TXQ_SYNC`/`ACTIVE` in the wrong direction: STOP and capture.
+* **One idea per fire, one ordered pair per boot, no retry.**  A repeat needs a
+  fresh boot and a Lead decision.
+* C9/C12 gate not `ok`: do not fire; capture the reason; never raise the
+  budget after a refusal.
+* C11: create consumed but `ctx4+0x190` still 0 -> **STOP**, do not fire the
+  TXQ.  Capture the C8/C11 packs, `h2d_status`, dmesg.  The create worker
+  failed a parser gate (type/parent) - a payload question for the ctx-create
+  lane, not something to retry.
+* C11: `ctx4+0x190` non-zero but the +0x10/+0x14/+0x238/+0x52 signatures
+  mismatch -> report; do not fire the TXQ.
+* C10 or C13 returns `-ETIMEDOUT` / dmesg "announce NOT consumed": STOP.
+  Capture out[0], out[2], out[5], `hcc_rings` (SR0 producer/consumer), boot
+  page/mask/state.  Do not re-fire, do not reload to retry the same boot.
 * Any data abort / SError / wedged register read in dmesg or on UART: capture
   dmesg + UART, then **power-cycle**.  Do not `rmmod` after the release.
-* Any unexpected D2H burst or new message id: capture and stop (discovery -
-  next session analyses it).
-* The gate at S8 is not `ok`: do not fire, capture the reason (see the gate
-  table in REPORT.md 3.3) and stop.
+* Any unexpected D2H burst or new message id: capture and stop (discovery).
+* The golden page / state / mask change at any point: STOP and capture.
 
-## Ladder B - the 72-byte LIVE-node fire (task-99)
+## Fallback matrix (host-side, after the session)
 
-**Question it answers:** does the vendor's captured 72-byte SR node buffer
-(48 frame bytes + 24 x 0xff pad, node word1 `(72<<16)|0x6d2b`, header total
-still 0x30) change the firmware's behaviour versus the 48-byte node of the
-first fire?  The static analysis says the g0 id1 handler parses no length
-field, so this isolates the transport/engine layer.
-
-**Module:** the task-99 build of this tree (`hi5622_wifi.ko`, **394,272 B**,
-sha256 **4677ceac...**, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, 0
-warnings, host 156/156 + driver 204/204).  Record the hash printed by
-`./tools/build.sh` of the build you deploy (it is build-path dependent).
-
-**Preconditions** are Ladder A's, plus: a fresh PD3 golden boot (the lane is
-closed after a fault; never reuse a boot that already fired).
-
-| step | action | expected / stop rule |
+| symptom | most likely meaning | next host-only step |
 | --- | --- | --- |
-| B0 | `insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD3.bin` | as A/S0; `h2d_status` shows the new gate line `txq_sync72=...`; STOP if the attr/module is the task-98 build |
-| B1-B6 | prepare / upload / verify / seed / hcc_arm / hcc_loop / release | as A/S1-S6 (release 0x5A5A only, no CECE during boot) |
-| B7 | watch `boot hcc_ready hcc_events rd_status` | golden page 0x86807FEF/7/2/0xABCD, state 1, mask 0, ready pair id1+id2, phase READY_TXQ_SYNC; STOP if not |
-| B8 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan` prints BOTH variants: `msg=txq_sync node_len=48 node_word1=0x00306d2b` and `msg=txq_sync72 node_len=72 node_word1=0x00486d2b pad=0xff`, plus `gate=ok`; `h2d_status` gates `txq_sync=ok txq_sync72=ok`. STOP if the gate is not ok - do not raise the budget |
-| B9 | **fire one frame**: `printf 1 > h2d_txq_sync72`; note `echo $?` | success only if out[0] was consumed within the bounded window; **do NOT repeat** |
-| B10 | capture (read-only): `cat h2d_status h2d_plan hcc_events hcc_ready boot rd_status rd_catalog`, `dmesg | tail -40`, UART log | see observables below; then STOP |
-| B11 | **read-only exception record** (only if B9 failed or mask != 0): bench read helper at CA **0x0004000C..0x0004004F** (region-0 alias, BAR0 = CA; 17 words: r0-r12, sp, lr, PC, SPSR of the LAST exception) | PC 0x8103C/0x81040 => the g0 id1 handler's field-B context fault; a cave address (0x4000C..0x4004F) => the PD3 poller-clobber cascade; SPSR mode 0x17/0x1B = ABT/UND. **Read only - never write this area** |
+| create consumed, ctx4+0x190 stays 0 | a create-worker parser gate: parent module byte1 != 0, type/parent mismatch, or the allocated pointer convention is different | ctx-create lane: re-check data[1] parent and the [U] allocator return convention; do not resend blindly |
+| create consumed, ctx+0x190 non-zero, signatures correct, TXQ consumed + no exception | **the ordered ladder worked**: the context precondition was the fault cause | next question is the firmware's response policy (new D2H?); continue the vendor startup order in a supervised session |
+| TXQ consumed, new exception appears (mask != 0) | a different handler-stage fault after the context exists (the context is no longer the blocker) | read-only exception record at BAR0 0x6F800C; capture the PC; do not retry |
+| create itself faults | a payload/config error (out-of-range module index or a parent whose byte 1 is non-zero) - the parser has no other dereference | stop; report the exception record; the frame is synthesized and may need a corrected instance |
+| gate `phase_not_ready` / `not_latched` at C9 | the boot did not reach the latched ready state | capture boot/hcc_ready; the ready-pair experiment is the gate, not these frames |
+| gate `budget_exhausted` at C12 | the module was loaded with the default budget=1 | the ordered ladder needs budget=2 declared at insmod; do not raise it mid-session |
 
-### Expected observables (B10) - 72-byte variant
+## Risk flags specific to this ladder
 
-| # | observable | pass / meaning |
-| --- | --- | --- |
-| 1 | B9 store returned success | frame committed and the announce consumed within the window |
-| 2 | `h2d_status`: `frames_sent=1 txq_sent=1 ok=1 timeout=0`, phase ACTIVE, `last attempt ... wire_total=48 node_len=72` | full consumption path with the 72-byte node |
-| 3 | dmesg: `H2D txq_sync72: frame 48 B in a 72 B node committed on SR0 slot 0 devva 0x... node word1 0x00486d2b producer ... -> ...; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls` | exact commit evidence (record N/devva) |
-| 4 | SR0 producer/consumer from `hcc_rings` | consumer advanced (ETE engine took the node) |
-| 5 | `boot`: page/state/mask still golden; mask CA 0x40008 = 0 | no exception taken |
-| 6 | `hcc_events`: `h2d{pub=1 done=1 ...}`, `vector_mask=0x0` | clean |
-| 7 | read-only out[5]/out[2] diagnostics | not pass criteria (write-pulse observables) |
+* **R1 - g0 id1 collision.**  Both messages are group 0 / id 1, so the portable
+  core's phase machine latches ACTIVE and sets its `txq_sync_submitted` flag on
+  the *create* commit (it keys on group/id only).  The driver keeps the
+  semantic distinction: `h2d_status` reports `ctx_sent` vs `txq_sent`,
+  `txq_submitted` is derived from the real TXQ counter, and the TXQ gate allows
+  ACTIVE only when this load sent the create.  A `txq_sync` core event on the
+  create is expected bookkeeping, not evidence the TXQ ran.  Do not interpret
+  phase=ACTIVE before C13 as "TXQ already sent".
+* **R2 - one load / budget=2** (above).  Do not try two loads; do not rmmod
+  after the release.
+* **R3 - synthesized payload.**  The create payload is derived from the
+  firmware parser (type 3 / vap 4 / user 4), not a vendor capture; the vendor
+  key-0x64 sender is unproven in the analysed teardown .ko.  The C11 read pack
+  is what decides whether the instance was accepted.
+* **R4 - node length.**  The ladder fires the header-consistent 48-byte node
+  for the create and the vendor-captured 72-byte node for the TXQ.  If the
+  create is consumed with no allocation, node length is the next
+  one-variable experiment (72-byte capture-style buffer), not a payload change.
+* **R5 - read-pack convention.**  Use BAR0 0x6F8008 for the exception mask and
+  0x6F800C for the staging frame (CPU 0x40008/0x4000C + 0x6B8000).  The
+  ctx-create lane README's readback table lists these two rows with the BAR0
+  column equal to the CPU value (0x00400008/0x0040000C); that is a
+  documentation slip in the readback tool, not a different window.  The
+  exception record and the cave row (0x7C0240) are correct.
+* **R6 - no expected D2H response.**  Consumed + silent firmware is a valid
+  positive result.
 
-### Interpreting the 72-byte result
+## History ladders A/B (fired; kept for the record - do not repeat)
 
-| symptom | meaning | next host-side step |
-| --- | --- | --- |
-| success (rows 1-6) | node length 72 is accepted; node length was not the fault cause; compare with the 48-byte fire -> transport layer was the difference or nothing was | report; next question is the field-B context/precondition (REPORT-G0ID1-HANDLER sec 2/4) |
-| same fault signature as the 48-byte fire (3x `out[1]=4`, mask 0x12, out[0] stuck) | node length is **not** the cause; the g0 id1 handler/dispatcher path faults (context or cave cascade) | B11 read-back; then fresh boot with the payload-free g0 id0 control ('stub') to separate transport from payload |
-| clean transport but new D2H frames | the firmware reacted to the frame | capture and stop (discovery) |
-
-**Stop rules** are Ladder A's, plus: after any exception/mask change, B11 is
-read-only once and the session ends (power-cycle; never rmmod after release).
-One boot, one frame, no retry.  A second experiment needs a fresh boot and a
-Lead decision.
-
-## Interpreting the negative cases
-
-| symptom | most likely meaning | next step (host-only) |
-| --- | --- | --- |
-| gate `not_latched` / `phase_not_ready` | the boot did not reach the latched ready state this time | capture boot/hcc_ready; the ready-pair experiment is the gate, not this frame |
-| gate `liveness_probe_used` | `hcc_sr_announce` was already fired in this load | fresh boot; choose ONE of the two |
-| gate `announce_inflight` / `out0_not_consumed` | a previous announce word is still pending | fresh boot; never stack/fire again |
-| write returns `-ETIMEDOUT` / dmesg "NOT consumed" | the firmware did not clear the real body announce within 1000 ms (the PD3 stub announce was consumed in 0 polls - so this isolates the real frame/body path) | record SR0 producer/consumer + out[0]; compare node length 48 vs the vendor live 72 (REPORT risk 1); no retry in-session |
-| consumed, no firmware reaction | the TXQ-sync handler ran and produced nothing observable (or nothing after the sync) | clean negative; decide the next exact message (edca/del_user) in a supervised session |
-| consumed, new D2H frames | the firmware reacted to the first real message | capture and stop; new experiment |
+* **A (task-98, 48-byte node, PD3):** fired one `h2d_txq_sync`; node reached
+  the device ring (ETE consumed it) but the firmware faulted (mask 0x12) and
+  the announce was not consumed; boot stayed golden.
+* **Control (g0 id0 `stub`):** consumed in 0 polls, no exception, mask 0 -
+  transport proven; g0 id1 fault is handler-path-specific.
+* **B (task-99, 72-byte live-node variant):** fired on PD3 (00:20) and PD4
+  (02:10); same fault (mask 0x12, not consumed).  PD4 proved the safe cave
+  (stub survived) and that the exception record holds the image's secondary
+  cascade frame; the first data abort at the g0 id1 worker is evidenced by the
+  staged `0x00081039`/`0x00043DF5` words.  Full analysis:
+  `REPORT-G0ID1-HANDLER.md`, `../wifi-irq-unmask/REPORT-PD4.md`.
+* **The old A/B expected-observables tables are superseded by Ladder C** -
+  the only change is that the create must run first.
 
 ## Read-out cheat sheet
 
-* `h2d_status` - the H2D send path's own view: phase/latched/lane, both gate
-  verdicts, budget/frames, ok/timeout/refused/desync counters, last out[0],
-  max polls, last attempt.
-* `h2d_plan` - read-only preflight of the canned TXQ sync: frame hex, gate,
-  node words, producer before/after, mailbox plan.  Safe to read at any time
-  (it performs no write).
+* `h2d_status` - the H2D send path's own view: budget/frames/txq/ctx counts,
+  phase/latched/lane/ctx_created, the gate verdicts (`txq_sync`,
+  `txq_sync72`, `ctx_create`, `real_msg`), ok/timeout/refused/desync
+  counters, last out[0], max polls, last attempt (msg/gate/wire_total/node_len).
+* `h2d_plan` - read-only preflight: the canned TXQ-48 / TXQ-72 / ctx_create
+  frames (wire hex, node lengths, node word1), the ctx_create gate and the TXQ
+  post-plan (producer before/after, mailbox id-3 announce).  Safe to read at
+  any time; it performs no write.
 * `hcc_events` / `hcc_status` / `hcc_ready` - core view: phase, mailbox
   pub/done/timeouts, CECE policy, ready pair, direct-reader state.
 * `boot` - handshake page + gate + state/mask + the six mailbox words

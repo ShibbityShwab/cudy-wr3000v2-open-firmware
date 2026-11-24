@@ -6,13 +6,17 @@
  * Builds the portable code exactly as the kernel module does (same sources:
  * h2d_send_logic.c + h2d_frames.c + hcc_core.c) and asserts:
  *   - the byte-exact emission vectors (txq_sync 48 B wire / 72 B capture,
- *     txq_sync72 same wire with a 72 B node length, stub, edca, del_user),
+ *     txq_sync72 same wire with a 72 B node length, the ordered ctx_create
+ *     g0 id1 key-0x64 precondition, stub, edca, del_user),
  *     including the SR node word (total<<16)|0x6D2B and the packed producer
  *     arithmetic via h2d_plan_post();
  *   - the gate matrix (phase, latched boot, release, arm, lane, liveness,
  *     per-load budget, announce in-flight, live out[0] pending, duplicate TXQ);
  *   - the strict sysfs grammar of h2d_send and the refusal of anything that is
- *     not one of the four EXACT builders (no synthetic payload path).
+ *     not one of the six EXACT builders (no synthetic payload path);
+ *   - the ordered create -> TXQ gate exception (both frames are group 0/id 1,
+ *     so the core phase reaches ACTIVE on the create; the driver still allows
+ *     exactly one real TXQ frame after it).
  *
  * No kernel tree, no device access, no vendor artifact.  Run with the lane's
  * tools/build.sh (or: cc -std=c99 -Wall -Wextra -Werror -pedantic ...).
@@ -80,6 +84,32 @@ static void expected_txq_sync(u8 out[48])
 		0x01, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		/* inherited tail 0xffffffff */
+		0xff, 0xff, 0xff, 0xff,
+	};
+
+	memcpy(out, hdr, sizeof(hdr));
+	memcpy(out + sizeof(hdr), payload, sizeof(payload));
+}
+
+/* The synthesized context-create frame (g0 id1, key 0x0064, len 0x14,
+ * type 3 / vap 4 / user 4, inherited 0xffffffff tail) - from
+ * ../wifi-ctx-create/recipes/ctx-create-g0id1-key64.json. */
+static void expected_ctx_create(u8 out[48])
+{
+	static const u8 hdr[12] = {
+		0x00, 0x01, 0x00, 0x04, 0x30, 0x00,
+		0x01, 0x00, 0x00, 0x00, 0x5a, 0x5a,
+	};
+	static const u8 payload[36] = {
+		/* token[8] = {0,0,0,0,1,0,0,0} */
+		0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		/* u16 key 0x0064, u16 len 0x14 */
+		0x64, 0x00, 0x14, 0x00,
+		/* data[20]: type 3, vap 4, user 4 at +4 */
+		0x03, 0x04, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
 		/* inherited tail 0xffffffff */
 		0xff, 0xff, 0xff, 0xff,
 	};
@@ -239,6 +269,66 @@ static void test_emission(void)
 		      err == H2D_EPOLICY, h2d_strerror(err));
 	}
 
+	/* --- ctx_create: the ordered g0 id1 key-0x64 pre-TXQ message ------ */
+	{
+		struct h2d_post_plan plan;
+		u32 node_len = 0;
+		u8 pad_byte = 0;
+
+		memset(&f, 0, sizeof(f));
+		memset(wire, 0, sizeof(wire));
+		total = 0;
+		check("ctx_create builds",
+		      h2d_msg_build(H2D_MSG_CTX_CREATE, 0, 0, NULL, &f, wire,
+				    sizeof(wire), &total, &err) == 0 &&
+		      err == H2D_OK, h2d_strerror(err));
+		check("ctx_create total = 0x30", total == H2D_CTX_TOTAL, "");
+		expected_ctx_create(want);
+		expect_bytes("ctx_create 48-byte wire image == the ctx-create recipe",
+			     wire, total, want, 48);
+		check("ctx_create frame struct: group 0 id 1 dst 0 fb 4 fa 0 fc 0",
+		      f.group == 0 && f.id == 1 && f.dst == 0 && f.fb == 4 &&
+		      f.fa == 0 && f.fc == 0, "");
+		check("ctx_create is an EXACT-policy frame",
+		      (f.policy & H2D_F_EXACT) != 0, "");
+		check("ctx_create key at payload+8 == 0x0064",
+		      wire[20] == 0x64 && wire[21] == 0x00, "");
+		check("ctx_create len at payload+10 == 0x14",
+		      wire[22] == 0x14 && wire[23] == 0x00, "");
+		check("ctx_create data block type/vap/user == 3/4/4",
+		      wire[24] == 3 && wire[25] == 4 && wire[28] == 4, "");
+		check("ctx_create helper flags data[0x11]/[0x12] are 0",
+		      wire[24 + 0x11] == 0 && wire[24 + 0x12] == 0, "");
+		check("ctx_create inherited tail is 0xffffffff",
+		      wire[44] == 0xff && wire[47] == 0xff, "");
+		check("ctx_create node_len plan = declared total (48), pad 0",
+		      h2d_msg_emit_plan(H2D_MSG_CTX_CREATE, total, &node_len,
+					&pad_byte) == 0 &&
+		      node_len == H2D_CTX_TOTAL && pad_byte == 0u, "");
+		check("ctx_create plan_post node word1 = (0x30<<16)|0x6d2b",
+		      h2d_plan_post(&f, 0, 32, 0x84543000u, 0, 0, &plan,
+				    &err) == 0 &&
+		      plan.sr.node_word1 == 0x00306d2bu &&
+		      plan.frame_total == H2D_CTX_TOTAL, h2d_strerror(err));
+		check("ctx_create dst != 0 refused (byte-exact only)",
+		      h2d_msg_build(H2D_MSG_CTX_CREATE, 1, 0, NULL, &f, wire,
+				    sizeof(wire), &total, &err) != 0 &&
+		      err == H2D_EPOLICY, h2d_strerror(err));
+		/* the parameterised builder + the firmware parser's constraints */
+		check("ctx_create builder types 1/2/3 accepted",
+		      h2d_build_ctx_create(&f, 0, 1, 4, 4, &err) == 0 &&
+		      h2d_build_ctx_create(&f, 0, 2, 4, 4, &err) == 0 &&
+		      h2d_build_ctx_create(&f, 0, 3, 4, 4, &err) == 0,
+		      h2d_strerror(err));
+		check("ctx_create builder types 0/4/5 refused (no +0x190 alloc)",
+		      h2d_build_ctx_create(&f, 0, 0, 4, 4, &err) != 0 &&
+		      h2d_build_ctx_create(&f, 0, 4, 4, 4, &err) != 0 &&
+		      h2d_build_ctx_create(&f, 0, 5, 4, 4, &err) != 0, "");
+		check("ctx_create builder module index > 0x12 refused",
+		      h2d_build_ctx_create(&f, 0, 3, 0x13, 4, &err) != 0 &&
+		      h2d_build_ctx_create(&f, 0, 3, 4, 0x13, &err) != 0, "");
+	}
+
 	/* --- stub: the payload-free group-0 id-0 probe -------------------- */
 	memset(&f, 0, sizeof(f));
 	total = 0;
@@ -372,6 +462,37 @@ static void test_gates(void)
 	      h2d_gate_check(&good, H2D_MSG_DEL_USER) == H2D_GATE_OK, "");
 	check("gate: READY + all preconditions -> ok (stub)",
 	      h2d_gate_check(&good, H2D_MSG_STUB) == H2D_GATE_OK, "");
+	check("gate: READY + all preconditions -> ok (ctx_create)",
+	      h2d_gate_check(&good, H2D_MSG_CTX_CREATE) == H2D_GATE_OK, "");
+
+	/* The ORDERED path: ctx_create is also g0/id1, so the core phase is ACTIVE
+	 * after it.  The driver allows exactly one real TXQ frame in ACTIVE when
+	 * this load committed the create, and refuses a duplicate create. */
+	{
+		struct h2d_live l = good;
+
+		l.ctx_created = true;
+		l.phase = HCC_PHASE_ACTIVE;
+		check("gate: ordered create -> ACTIVE + ctx_created -> txq ok",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) == H2D_GATE_OK, "");
+		check("gate: ordered create -> ACTIVE + ctx_created -> txq_sync72 ok",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC72) == H2D_GATE_OK, "");
+		check("gate: create is once per load (DUP_CTX)",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_DUP_CTX, "");
+		l.txq_submitted = true;
+		check("gate: ordered path still allows only ONE txq frame",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC72) ==
+		      H2D_GATE_DUP_TXQ, "");
+		l.txq_submitted = false;
+		l.ctx_created = false;
+		check("gate: ACTIVE without a create is not a TXQ path (TXQ_PHASE)",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) ==
+		      H2D_GATE_TXQ_PHASE, "");
+		check("gate: ACTIVE without a create refuses ctx_create (CTX_PHASE)",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_CTX_PHASE, "");
+	}
 
 	/* READY_TXQ_SYNC or later: ACTIVE allows all but the once-only TXQ. */
 	{
@@ -411,6 +532,9 @@ static void test_gates(void)
 		check("gate: not released",
 		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) ==
 		      H2D_GATE_NOT_RELEASED, "");
+		check("gate: ctx_create not released",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_NOT_RELEASED, "");
 		l = good;
 		l.boot_latched = false;
 		check("gate: boot not latched (never H2D during ROM boot)",
@@ -420,6 +544,9 @@ static void test_gates(void)
 		l.phase = HCC_PHASE_BOOT;
 		check("gate: phase BOOT refused",
 		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) ==
+		      H2D_GATE_PHASE, "");
+		check("gate: phase BOOT refuses ctx_create",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
 		      H2D_GATE_PHASE, "");
 		l.phase = HCC_PHASE_WAIT_PLAT_READY;
 		check("gate: phase WAIT_PLAT_READY refused",
@@ -469,6 +596,21 @@ static void test_gates(void)
 		check("gate: supervised budget 8 allows frame 8",
 		      h2d_gate_check(&l, H2D_MSG_EDCA_OPT) ==
 		      H2D_GATE_OK, "");
+		l = good;
+		l.frames_sent = 1;
+		check("gate: ctx_create obeys the per-load budget",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_BUDGET, "");
+		l = good;
+		l.liveness_sent = 1;
+		check("gate: ctx_create refuses after the liveness stub",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_LIVENESS_USED, "");
+		l = good;
+		l.out0 = 0x8;
+		check("gate: ctx_create refuses an unconsumed out[0]",
+		      h2d_gate_check(&l, H2D_MSG_CTX_CREATE) ==
+		      H2D_GATE_OUT0_PENDING, "");
 		l = good;
 		l.mbox_inflight = 0x8;
 		check("gate: previous announce in flight",
@@ -525,6 +667,19 @@ static void test_parser(void)
 	check("parse name lookup txq_sync72",
 	      h2d_msg_name_parse("txq_sync72", &req.msg) == 0 &&
 	      req.msg == H2D_MSG_TXQ_SYNC72, "");
+	check("parse 'ctx_create'", h2d_req_parse("ctx_create", &req) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE && req.dst == 0, "");
+	check("parse 'ctx_create\n'", h2d_req_parse("ctx_create\n", &req) == 0,
+	      "");
+	check("parse 'ctx_create dst=0'",
+	      h2d_req_parse("ctx_create dst=0", &req) == 0, "");
+	check("parse 'ctx_create dst=1' refused (byte-exact)",
+	      h2d_req_parse("ctx_create dst=1", &req) != 0, "");
+	check("parse ctx_create rejects an unknown key",
+	      h2d_req_parse("ctx_create type=1", &req) != 0, "");
+	check("parse name lookup ctx_create",
+	      h2d_msg_name_parse("ctx_create", &req.msg) == 0 &&
+	      req.msg == H2D_MSG_CTX_CREATE, "");
 	check("parse 'stub dst=15'", h2d_req_parse("stub dst=15", &req) == 0 &&
 	      req.msg == H2D_MSG_STUB && req.dst == 15, "");
 	check("parse 'stub dst=16' refused",
@@ -579,6 +734,12 @@ static void test_parser(void)
 	      h2d_msg_build(req.msg, req.dst, req.user_id, NULL, &f, wire,
 			    sizeof(wire), &total, &err) == 0 &&
 	      total == 0x30u, h2d_strerror(err));
+	check("parse->build ctx_create (the ordered pre-TXQ frame)",
+	      h2d_req_parse("ctx_create", &req) == 0 &&
+	      h2d_msg_build(req.msg, req.dst, req.user_id, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0 &&
+	      total == H2D_CTX_TOTAL && wire[20] == 0x64 &&
+	      wire[24] == 3 && wire[28] == 4, h2d_strerror(err));
 	check("parse->build del_user user=1 addr=... -> builder refuses",
 	      h2d_req_parse("del_user user=1 addr=a1b2c3d4", &req) == 0 &&
 	      h2d_msg_build(req.msg, req.dst, req.user_id, req.addr, &f,
@@ -621,6 +782,14 @@ static void test_policy(void)
 	      h2d_frame_export(&f, wire, sizeof(wire), 72, 0xff, NULL,
 			       &err) == 0 && wire[48] == 0xff &&
 	      wire[71] == 0xff, h2d_strerror(err));
+	check("policy: ctx_create is a g0 id1 key-0x64 config event",
+	      h2d_msg_build(H2D_MSG_CTX_CREATE, 0, 0, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0 &&
+	      f.group == 0 && f.id == 1 && wire[20] == 0x64 &&
+	      wire[21] == 0x00 && wire[22] == 0x14 && wire[23] == 0x00,
+	      h2d_strerror(err));
+	check("policy: ctx_create is refused unless the gate allows it",
+	      h2d_gate_check(NULL, H2D_MSG_CTX_CREATE) == H2D_GATE_BAD_MSG, "");
 }
 
 int main(void)

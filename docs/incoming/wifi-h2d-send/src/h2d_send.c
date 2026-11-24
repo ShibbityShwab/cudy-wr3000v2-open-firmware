@@ -16,10 +16,17 @@
  *     keeps node_len = header total (48), h2d_txq_sync72 sends the same 48
  *     frame bytes in a 72-byte node buffer (48 + 24 x 0xff) with node word1
  *     = (72 << 16) | 0x6d2b - the one-variable transport experiment;
- *   - h2d_send: the strict, name-based grammar for the four EXACT frames the
- *     library can synthesize (txq_sync / stub / edca / del_user).  It never
- *     accepts a synthetic payload - the firmware handlers dereference payload
- *     words (wifi-h2d-catalog Appendix B);
+ *   - h2d_ctx_create: the ORDERED precondition of the TXQ sync - the
+ *     synthesized group-0 id-1 config event with u16 key 0x0064 that makes the
+ *     firmware allocate the per-module context (ctx+0x190) the key-0xd8 TXQ
+ *     worker dereferences (../wifi-ctx-create/REPORT.md; payload synthesized
+ *     from the firmware parser, not a vendor capture).  Same carrier/gates as
+ *     txq_sync72, one frame per idea; the ordered ladder is create -> (read-only
+ *     verification) -> txq_sync72, which needs h2d_send_budget=2 on the load;
+ *   - h2d_send: the strict, name-based grammar for the six EXACT frames the
+ *     library can synthesize (txq_sync / txq_sync72 / ctx_create / stub /
+ *     edca / del_user).  It never accepts a synthetic payload - the firmware
+ *     handlers dereference payload words (wifi-h2d-catalog Appendix B);
  *   - h2d_status (RO) and h2d_plan (RO read-only preflight) for the bench.
  *
  * The send path, in vendor order:
@@ -103,7 +110,12 @@ static void h2d_live_fill(struct hi5622_pci *ctx, struct h2d_live *live)
 	live->released = core->released && ctx->cpu_released;
 	live->boot_latched = core->boot_latched;
 	live->lane_closed = core->h2d_lane_closed;
-	live->txq_submitted = core->txq_sync_submitted;
+	/* The core's phase machine keys on group/id and therefore latches
+	 * ACTIVE/txq_sync_submitted on ctx_create too (it is also g0/id1).  The
+	 * driver's gate keeps the semantic distinction from what THIS load
+	 * actually committed: only a real TXQ frame sets live->txq_submitted. */
+	live->txq_submitted = h->h2d_txq_sync_sent > 0u;
+	live->ctx_created = h->h2d_ctx_create_sent > 0u;
 	live->phase = core->phase;
 	live->frames_sent = h->h2d_frames_sent;
 	live->budget = h2d_budget();
@@ -302,6 +314,8 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 	h->h2d_frames_sent++;
 	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
 		h->h2d_txq_sync_sent++;
+	else if (msg == H2D_MSG_CTX_CREATE)
+		h->h2d_ctx_create_sent++;
 	h->h2d_last_msg = (u32)msg;
 	h->h2d_last_gate = (u32)H2D_GATE_OK;
 	h->h2d_last_total = total;
@@ -381,6 +395,27 @@ static ssize_t h2d_txq_sync72_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(h2d_txq_sync72);
 
+/* The ORDERED precondition of the TXQ sync: the synthesized group-0 id-1
+ * config event with u16 key 0x0064 (hdpp_config_send_event shape).  It makes
+ * the firmware allocate module 4's context (ctx+0x190); the key-0xd8 TXQ
+ * worker dereferences that pointer, so a solo TXQ sync faults (PD4).
+ * Same carrier + gates as txq_sync72; not the once-only TXQ idea. */
+static ssize_t h2d_ctx_create_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct hi5622_pci *ctx = h2d_ctx(dev);
+	int ret;
+
+	if (!ctx || !ctx->hcc)
+		return -ENODEV;
+	if (!sysfs_streq(buf, "1"))
+		return -EINVAL;
+	ret = h2d_post(ctx, H2D_MSG_CTX_CREATE, 0u, 0u, NULL);
+	return ret ? ret : (ssize_t)count;
+}
+static DEVICE_ATTR_WO(h2d_ctx_create);
+
 static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
 			      const char *buf, size_t count)
 {
@@ -393,7 +428,7 @@ static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
 	ret = h2d_req_parse(buf, &req);
 	if (ret) {
 		ctx->hcc->h2d_send_refused++;
-		dev_warn(dev, "H2D send: grammar rejected (%d); use 'txq_sync', 'stub [dst=N]', 'edca [dst=N]' or 'del_user user=U [addr=8hex] [dst=N]'\n",
+		dev_warn(dev, "H2D send: grammar rejected (%d); use 'txq_sync', 'txq_sync72', 'ctx_create', 'stub [dst=N]', 'edca [dst=N]' or 'del_user user=U [addr=8hex] [dst=N]'\n",
 			 ret);
 		return ret;
 	}
@@ -421,19 +456,21 @@ static ssize_t h2d_status_show(struct device *dev,
 	core = &h->hcc.core;
 	h2d_live_fill(ctx, &live);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "H2D send path (real post-ready messages, one frame per idea): budget=%u frames_sent=%u txq_sent=%u\n",
-			 h2d_budget(), h->h2d_frames_sent, h->h2d_txq_sync_sent);
+			 "H2D send path (real post-ready messages, one frame per idea): budget=%u frames_sent=%u txq_sent=%u ctx_sent=%u\n",
+			 h2d_budget(), h->h2d_frames_sent, h->h2d_txq_sync_sent,
+			 h->h2d_ctx_create_sent);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "state: armed=%u released=%u boot_latched=%u phase=%s lane_closed=%u liveness_used=%u\n",
+			 "state: armed=%u released=%u boot_latched=%u phase=%s lane_closed=%u liveness_used=%u ctx_created=%u\n",
 			 live.armed ? 1u : 0u, live.released ? 1u : 0u,
 			 live.boot_latched ? 1u : 0u,
 			 hcc_phase_name(core->phase),
 			 live.lane_closed ? 1u : 0u,
-			 live.liveness_sent);
+			 live.liveness_sent, live.ctx_created ? 1u : 0u);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "gates: txq_sync=%s txq_sync72=%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
+			 "gates: txq_sync=%s txq_sync72=%s ctx_create=%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC72)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_EDCA_OPT)),
 			 live.out0, live.mbox_inflight);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
@@ -513,7 +550,33 @@ static ssize_t h2d_plan_show(struct device *dev, struct device_attribute *attr,
 					 nlen, (nlen << 16) | H2D_NODE_FLAGS, padb,
 					 nlen - total, total);
 	}
+	/* The ordered prerequisite: the synthesized g0 id1 key-0x64 context
+	 * create.  Shown read-only for the bench preflight; no device write. */
+	rc = h2d_msg_build(H2D_MSG_CTX_CREATE, 0u, 0u, NULL, f, wire,
+			   HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr);
+	if (rc) {
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+				 "h2d_plan: canned ctx_create frame build FAILED (%s)\n",
+				 h2d_strerror(herr));
+	} else {
+		u32 nlen = 0;
+		u8 padb = 0;
+
+		h2d_hex(wire, total, hex, sizeof(hex));
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+				 "msg=ctx_create wire_total=%u wire=%s\n",
+				 total, hex);
+		if (h2d_msg_emit_plan(H2D_MSG_CTX_CREATE, total, &nlen,
+				      &padb) == 0)
+			pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+					 "msg=ctx_create node_len=%u node_word1=0x%08x pad=0x%02x (ordered before the TXQ sync; one frame per idea)\n",
+					 nlen,
+					 (nlen << 16) | H2D_NODE_FLAGS, padb);
+	}
 	h2d_live_fill(ctx, &live);
+	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+			 "gate ctx_create=%s (READY-only, once per load; create -> read-only pack -> txq_sync72 needs h2d_send_budget=2 on the load)\n",
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)));
 	gate = h2d_gate_check(&live, H2D_MSG_TXQ_SYNC);
 	if (gate != H2D_GATE_OK) {
 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
@@ -523,6 +586,16 @@ static ssize_t h2d_plan_show(struct device *dev, struct device_attribute *attr,
 				 live.boot_latched ? 1u : 0u, live.frames_sent,
 				 live.budget, live.liveness_sent,
 				 live.mbox_inflight, live.out0);
+		goto pending;
+	}
+	/* Rebuild the TXQ frame: the post plan below must describe the frame the
+	 * next send would commit (the ctx_create display overwrote f/wire). */
+	rc = h2d_msg_build(H2D_MSG_TXQ_SYNC, 0u, 0u, NULL, f, wire,
+			   HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr);
+	if (rc) {
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+				 "h2d_plan: canned txq_sync frame rebuild FAILED (%s)\n",
+				 h2d_strerror(herr));
 		goto pending;
 	}
 	r = &h->sr[0].ete;
@@ -561,6 +634,7 @@ static DEVICE_ATTR_RO(h2d_plan);
 static struct attribute *hi5622_h2d_attrs[] = {
 	&dev_attr_h2d_txq_sync.attr,
 	&dev_attr_h2d_txq_sync72.attr,
+	&dev_attr_h2d_ctx_create.attr,
 	&dev_attr_h2d_send.attr,
 	&dev_attr_h2d_status.attr,
 	&dev_attr_h2d_plan.attr,

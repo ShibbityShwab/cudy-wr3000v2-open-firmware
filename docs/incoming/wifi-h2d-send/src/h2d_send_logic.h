@@ -3,9 +3,9 @@
  * h2d_send_logic.h - portable (host + kernel) policy and emission logic for
  * the Hi5622V100 clean-room driver's first REAL post-ready H2D message path.
  *
- * ORIGINAL clean-room code written by the wifi-h2d-send lane (shared task
- * task-98, 2026-11-24) from the project's committed decoded contract (see
- * REPORT.md for the per-claim evidence).  No vendor source, object code,
+ * ORIGINAL clean-room code written by the wifi-h2d-send lane (shared tasks
+ * task-98/task-102, 2026-11-24) from the project's committed decoded contract
+ * (see REPORT.md for the per-claim evidence).  No vendor source, object code,
  * firmware byte, calibration value or secret is reproduced here.
  *
  * Why a separate file: the frame choice, the byte-exact builders, the gate
@@ -22,14 +22,18 @@
  *     synthetic payload: several firmware handlers dereference payload words);
  *   - node word1 = (frame_total << 16) | 0x6D2B, packed producer depth 32.
  *
- * The only messages this driver will synthesize are the five EXACT ones:
- *   stub       group 0 id 0   payload-free liveness stub (safe bare probe)
- *   txq_sync   group 0 id 1   the vendor's first post-ready message, byte-exact
- *   txq_sync72 group 0 id 1   the same 48-byte frame, but the SR node declares
- *                             the vendor's captured 72-byte live buffer
- *                             (48 frame bytes + 24 x 0xff inherited pad)
- *   edca       group 0 id 0x1d hmac_edca_opt_timeout_fn, zeroed 0x3c payload
- *   del_user   group 0 id 9   hmac_del_user_notify_dmac, 12-byte payload
+ * The only messages this driver will synthesize are the six EXACT ones:
+ *   stub        group 0 id 0   payload-free liveness stub (safe bare probe)
+ *   txq_sync    group 0 id 1   the vendor's first post-ready message, byte-exact
+ *   txq_sync72  group 0 id 1   the same 48-byte frame, but the SR node declares
+ *                              the vendor's captured 72-byte live buffer
+ *                              (48 frame bytes + 24 x 0xff inherited pad)
+ *   ctx_create  group 0 id 1   the ordered PRECONDITION of txq_sync: the
+ *                              hdpp config event with u16 key 0x0064 that makes
+ *                              the firmware create the per-module context
+ *                              (ctx+0x190) the key-0xd8 TXQ worker dereferences
+ *   edca        group 0 id 0x1d hmac_edca_opt_timeout_fn, zeroed 0x3c payload
+ *   del_user    group 0 id 9   hmac_del_user_notify_dmac, 12-byte payload
  */
 #ifndef H2D_SEND_LOGIC_H
 #define H2D_SEND_LOGIC_H
@@ -44,6 +48,7 @@ enum h2d_msg {
 	H2D_MSG_TXQ_SYNC72,	/* g0 id1, same frame, 72-byte live node buffer */
 	H2D_MSG_EDCA_OPT,	/* g0 id0x1d, exact 0x3c-byte zero payload */
 	H2D_MSG_DEL_USER,	/* g0 id9, exact 12-byte payload */
+	H2D_MSG_CTX_CREATE,	/* g0 id1 key0x64, the ordered txq_sync precondition */
 	H2D_MSG_COUNT,
 };
 
@@ -54,6 +59,20 @@ enum h2d_msg {
 #define H2D_TXQ_TOTAL		0x30u
 #define H2D_TXQ_NODE_LEN	72u
 #define H2D_TXQ_PAD_BYTE	0xffu
+
+/* The ordered precondition of txq_sync: the group-0 / id-1 config event with
+ * u16 key = 0x0064 at payload+8 (hdpp_config_send_event shape token[8] | key |
+ * len | data | pad).  Declared total 0x30, len 0x14, data type 3 / vap 4 /
+ * user 4, data[4] == hdr[3] == 4 (the created module is the TXQ context).
+ * SYNTHESIZED from the firmware parser, not a vendor capture - see
+ * ../wifi-ctx-create/REPORT.md.  Node length = declared total (48 B). */
+#define H2D_CTX_TOTAL		0x30u
+#define H2D_CTX_KEY		0x0064u
+#define H2D_CTX_LEN		0x14u
+#define H2D_CTX_TYPE		3u
+#define H2D_CTX_VAP		4u
+#define H2D_CTX_USER		4u
+#define H2D_CTX_MAX_MODULE	0x12u	/* module table index bound */
 
 /* Gate refusal reasons; H2D_GATE_OK == 0 is the only allowed value. */
 enum h2d_gate {
@@ -70,6 +89,8 @@ enum h2d_gate {
 	H2D_GATE_INFLIGHT,	/* core coalescing state still awaiting clear */
 	H2D_GATE_OUT0_PENDING,	/* live out[0] != 0: previous word unconsumed */
 	H2D_GATE_DUP_TXQ,	/* TXQ sync already committed this load */
+	H2D_GATE_DUP_CTX,	/* ctx_create already committed this load */
+	H2D_GATE_CTX_PHASE,	/* ctx_create is legal only in READY_TXQ_SYNC */
 	H2D_GATE_FRAME_INVALID,	/* the frame builder/validator refused */
 };
 
@@ -80,7 +101,8 @@ struct h2d_live {
 	bool		released;
 	bool		boot_latched;
 	bool		lane_closed;
-	bool		txq_submitted;
+	bool		txq_submitted;	/* a REAL txq_sync/txq_sync72 frame was sent */
+	bool		ctx_created;	/* a ctx_create frame was sent this load */
 	enum hcc_phase	phase;
 	hcc_u32		frames_sent;	/* real H2D frames posted this load */
 	hcc_u32		budget;		/* per-load real-frame budget */
@@ -123,11 +145,19 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 		  struct h2d_frame *f, u8 *wire, u32 cap, u32 *total,
 		  enum h2d_err *err);
 
+/* The context-create config event, parameterised for tests: id 1 group 0,
+ * key 0x0064, len 0x14, fb == user == the module index that gets created.
+ * ctx_type must be 1..3 (only those allocate ctx+0x190); vap/user <= 0x12.
+ * The production path only uses the defaults (type 3 / vap 4 / user 4). */
+int h2d_build_ctx_create(struct h2d_frame *f, u8 dst, u8 ctx_type, u8 vap,
+			 u8 user, enum h2d_err *err);
+
 /* Strict sysfs grammar:
- *   h2d_send: "txq_sync" | "txq_sync72" | "stub [dst=N]" | "edca [dst=N]" |
- *             "del_user user=U [addr=8hex] [dst=N]"
+ *   h2d_send: "txq_sync" | "txq_sync72" | "ctx_create" | "stub [dst=N]" |
+ *             "edca [dst=N]" | "del_user user=U [addr=8hex] [dst=N]"
  * Commas/tabs/newlines are separators; "txq_sync dst=0" is the only accepted
- * TXQ form (the canned frame is byte-exact with dst 0).
+ * TXQ form (the canned frame is byte-exact with dst 0) and "ctx_create dst=0"
+ * the only accepted context-create form.
  * Returns 0, -EINVAL (grammar) or -ERANGE (field overflow). */
 int h2d_req_parse(const char *buf, struct h2d_req *req);
 

@@ -13,8 +13,9 @@
 # the firmware-RAM addresses, the custom-block pre-seed layout, the release-
 # only boot gates, the write allowlist, the source/module layout, and the H2D
 # send path (version parity with the reference driver tree, the h2d_frames
-# library provenance, the four EXACT message builders, the boot/phase/one-
-# frame/consumption gates and the absence of any direct mailbox write).
+# library provenance, the six EXACT message builders incl. the ordered
+# context-create precondition, the boot/phase/one-frame/consumption gates and
+# the absence of any direct mailbox write).
 import hashlib
 import os
 import re
@@ -267,7 +268,7 @@ def main():
                  "hcc_dr_republish", "hcc_status", "hcc_ready", "hcc_events",
                  "hcc_rings", "hcc_plan", "rd_poll", "rd_advance", "rd_status",
                  "rd_decode", "rd_catalog", "h2d_txq_sync", "h2d_txq_sync72",
-                 "h2d_send", "h2d_status", "h2d_plan"):
+                 "h2d_ctx_create", "h2d_send", "h2d_status", "h2d_plan"):
         check("sysfs attr %s defined" % attr,
               ("DEVICE_ATTR_WO(%s)" % attr) in all_src or
               ("DEVICE_ATTR_RO(%s)" % attr) in all_src)
@@ -333,7 +334,7 @@ def main():
     # -- 12. H2D send path policy ------------------------------------------
     for fn in ("h2d_build_g0_id1_hdpp_txq_sync", "h2d_build_safe_probe",
                "h2d_build_g0_id1d_edca_opt", "h2d_build_g0_id09_del_user",
-               "h2d_frame_encode"):
+               "h2d_build_ctx_create", "h2d_frame_encode"):
         check("H2D emission reuses %s" % fn, fn in logic_c)
     check("H2D send path plans through h2d_plan_post", "h2d_plan_post(" in send_c)
     check("H2D send path commits through the core allowlisted writer",
@@ -408,6 +409,63 @@ def main():
           "h2d_send_timeout" in read("hi5622_hcc.h"))
     check("hcc_clear never resets the one-frame budget",
           "h2d_frames_sent = 0" not in read("service.c"))
+
+    # -- 12c. task-102: the ordered context-create (g0 id1 key 0x64) ---------
+    check("H2D ctx-create selector in the logic header",
+          "H2D_MSG_CTX_CREATE" in logic_h and "H2D_CTX_TOTAL" in logic_h and
+          "H2D_CTX_KEY" in logic_h and "H2D_CTX_LEN" in logic_h and
+          "H2D_CTX_TYPE" in logic_h and "H2D_CTX_VAP" in logic_h and
+          "H2D_CTX_USER" in logic_h)
+    check("H2D ctx-create constants: total 0x30, key 0x0064, len 0x14",
+          re.search(r"#define H2D_CTX_TOTAL\s+0x30u", logic_h) is not None and
+          re.search(r"#define H2D_CTX_KEY\s+0x0064u", logic_h) is not None and
+          re.search(r"#define H2D_CTX_LEN\s+0x14u", logic_h) is not None)
+    check("H2D ctx-create uses the byte-exact config-event builder",
+          "h2d_build_g0_cfg_event" in logic_c)
+    check("H2D ctx-create builder is declared and defined",
+          "h2d_build_ctx_create" in logic_h and
+          "int h2d_build_ctx_create" in logic_c)
+    check("H2D ctx-create payload is type 3 / vap 4 / user 4",
+          re.search(r"h2d_ctx_data\[.*?\] = \{(.*?)\n\};", logic_c, re.S) is not None)
+    m = re.search(r"h2d_ctx_data\[.*?\] = \{(.*?)\n\};", logic_c, re.S)
+    if m:
+        words = hexwords(m.group(1))
+        check("H2D ctx-create data block: 20 B, type 3, vap 4, user 4",
+              len(words) == 20 and words[0] == 3 and words[1] == 4 and
+              words[4] == 4 and words[0x11] == 0 and words[0x12] == 0,
+              repr(words[:8]))
+    check("H2D ctx-create keeps a 0xffffffff inherited tail",
+          "h2d_ctx_tail" in logic_c and "0xff, 0xff, 0xff, 0xff" in logic_c)
+    check("H2D ctx-create refuses type 0/4/5 (no +0x190 allocation)",
+          "ctx_type < 1u || ctx_type > 3u" in logic_c)
+    check("H2D ctx-create creates the same module index it looks up",
+          "h2d_build_g0_cfg_event(f, 1u, dst, H2D_CTX_FA, user" in logic_c)
+    check("H2D ctx-create is READY-only and once-only",
+          "H2D_GATE_DUP_CTX" in logic_c and "H2D_GATE_CTX_PHASE" in logic_c and
+          "live->ctx_created" in logic_c)
+    check("H2D ordered ladder: TXQ allowed in ACTIVE only after ctx_create",
+          "live->phase == HCC_PHASE_ACTIVE && live->ctx_created" in logic_c)
+    check("H2D ctx_create does not set the real TXQ once-only flag",
+          "live->txq_submitted = h->h2d_txq_sync_sent > 0u" in send_c)
+    check("H2D ctx-create grammar token", '{ "ctx_create"' in logic_c)
+    check("H2D ctx-create sysfs attribute defined",
+          "DEVICE_ATTR_WO(h2d_ctx_create)" in send_c and
+          "&dev_attr_h2d_ctx_create.attr" in send_c)
+    check("H2D ctx-create dst != 0 refused (byte-exact)",
+          "msg == H2D_MSG_CTX_CREATE) && req->dst != 0u" in logic_c)
+    check("H2D ctx-create telemetry counter",
+          "h2d_ctx_create_sent" in send_c and
+          "h2d_ctx_create_sent" in read("hi5622_hcc.h"))
+    check("H2D ctx-create telemetry is not reset by hcc_clear",
+          "h2d_ctx_create_sent = 0" not in read("service.c"))
+    check("H2D plan shows the ctx_create message",
+          "msg=ctx_create wire_total=" in send_c and
+          "msg=ctx_create node_len=" in send_c)
+    check("H2D status exposes the ctx_create gate",
+          "ctx_create=%s" in send_c and "ctx_sent=%u" in send_c)
+    check("H2D ctx-create reuses the same post path (single commit site)",
+          send_c.count("hcc_core_sr_commit(") == 1 and
+          "h2d_post(ctx, H2D_MSG_CTX_CREATE" in send_c)
 
     # -- 12b. version parity with the reference driver tree -----------------
     ref = os.path.normpath(os.path.join(CLEAN, "..", "wifi-driver-clean",

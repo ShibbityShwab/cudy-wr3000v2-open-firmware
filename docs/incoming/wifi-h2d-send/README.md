@@ -2,34 +2,38 @@
 
 Host-only deliverable of the wifi-h2d-send lane (shared task **task-98**,
 2026-11-24; extended by **task-99** with the 72-byte live-node-length variant
-and the static g0 id1 handler analysis).  It extends the clean-room Hi5622V100 driver
+and the static g0 id1 handler analysis, and by **task-102** with the ordered
+context-create precondition).  It extends the clean-room Hi5622V100 driver
 (`../wifi-driver-clean`) with a validated H2D frame send path that carries the
 vendor's **first post-ready message** - group-0 id-1 hdpp TXQ config sync,
-byte-exact from the phase38 capture - and a strict grammar for the four EXACT
-frames the `wifi-h2d-frames` library can synthesize.  It builds on the PD3
-bench result (announce consumed by the firmware, core at `READY_TXQ_SYNC`)
-and answers the next protocol question: **is the real 48-byte body inside the
-SR ring dispatched and consumed too?**
+byte-exact from the phase38 capture - the **context-create config event**
+(g0 id1 key 0x0064) that must precede it, and a strict grammar for the six
+EXACT frames the `wifi-h2d-frames` library + this lane can synthesize.  It
+builds on the PD3/PD4 bench results (announce consumed by the firmware, core
+at `READY_TXQ_SYNC`, control stub fault-free, solo TXQ sync fault at the
+key-0xd8 worker) and answers the next protocol question: **does the ordered
+create -> TXQ sync pair run without the handler fault?**
 
 **Status: host-only.**  Compile-clean against the project 6.18.60 tree
-(`hi5622_wifi.ko`, 394,272 B, sha256 `4677ceac...`, 0 warnings), host logic
-selftest 156/156, driver selftest 204/204, firmware-handler analysis selftest
-38/38.  The first fire (task-98 build, 48-byte node) reached the device ring
-and the ETE engine, but the firmware faulted (mask 0x12) - see
-`REPORT-G0ID1-HANDLER.md` for what the g0 id1 handler parses and the two
-remaining benches (72-byte node variant / payload-free g0 id0 control).
+(`hi5622_wifi.ko`, **399,816 B**, sha256 `b11ffea6...`, 0 warnings), host
+logic selftest **202/202**, driver selftest **226/226**, firmware-handler
+analysis selftest 38/38.  Fired history: task-98 (48-byte node) and task-99
+(72-byte node, PD3 and PD4) TXQ-sync fires faulted in the g0 id1 handler
+(mask 0x12); the payload-free g0 id0 control was consumed in 0 polls with no
+exception.  The task-102 ordered ladder (create -> read-only pack ->
+txq_sync72 on a golden PD4 boot) is the current bench procedure.
 
 | file | what |
 | --- | --- |
-| REPORT.md | the lane report: protocol step, send-path design, gate order, integration diff, verification, risks, safety boundary |
+| REPORT.md | the lane report: protocol step, send-path design, gate order, integration diff, verification, risks, safety boundary, and the task-102 ordered context-create integration (sec 11) |
 | REPORT-G0ID1-HANDLER.md | static analysis of the firmware's group-0 id-1 receive handler: what it parses, the key table/key 0xd8 worker, the fault candidates, 48-vs-72 relevance, dispatcher preconditions |
-| BENCH-PROCEDURE.md | the attended first-real-message ladder (48-byte and 72-byte node variants) + expected observables + stop rules |
+| BENCH-PROCEDURE.md | the attended **ordered context-create -> TXQ sync ladder** (Ladder C, current) + expected observables + stop rules; fired Ladders A/B kept as history |
 | BUILD-NOTES.md | exact build result (size/sha256/vermagic/warnings), toolchain, selftest counts |
 | src/ | the driver tree: clean driver + h2d_frames library + h2d_send_logic/h2d_send + Kbuild |
 | tools/build.sh | canonical build: host selftest, kernel module build + evidence, driver selftest |
 | tools/fw_g0id1_handler.py | host-only static analysis of the firmware g0 id1 handler/dispatcher (reads the local pinned vendor blob, prints derived annotations; 38/38 selftest) |
-| tools/h2d_logic_selftest.c | 156 device-free checks: byte-exact emission (incl. the 72-byte node variant), SR node/producer plan, full gate matrix, sysfs grammar |
-| tools/selftest.py | 192 device-free driver checks (133 inherited + 59 H2D) |
+| tools/h2d_logic_selftest.c | 202 device-free checks: byte-exact emission (incl. the 72-byte node variant and the ordered ctx_create frame), SR node/producer plan, full gate matrix (incl. the ordered create -> TXQ path), sysfs grammar |
+| tools/selftest.py | 226 device-free driver checks (133 inherited + 93 H2D) |
 | tools/mkblocks.py | local Wi-Fi PHY custom-block staging (bench only, never committed) |
 
 Quick start (host, no device):
@@ -38,12 +42,16 @@ Quick start (host, no device):
 
 Sysfs surface added to the driver (endpoint device directory):
 
+    h2d_ctx_create (WO) "1" -> synthesized g0 id1 key-0x64 context-create
+                         config event (wire 48 = node 48); the ordered
+                         precondition of the TXQ sync (READY-only, once/load)
     h2d_txq_sync   (WO) "1" -> canned byte-exact g0 id1 TXQ config sync
                          (wire 48, SR node length = declared total 48)
     h2d_txq_sync72 (WO) "1" -> the same 48 frame bytes, but the SR node
                          declares the vendor's live 72-byte buffer
                          (48 + 24 x 0xff, node word1 (72<<16)|0x6d2b)
-    h2d_send       (WO) txq_sync | txq_sync72 | stub [dst=N] | edca [dst=N] |
+    h2d_send       (WO) txq_sync | txq_sync72 | ctx_create |
+                        stub [dst=N] | edca [dst=N] |
                         del_user user=U [addr=8hex] [dst=N]
     h2d_status   (RO)  gate verdicts, phase, budget, ok/timeout counters
     h2d_plan     (RO)  read-only preflight of the canned TXQ sync frame

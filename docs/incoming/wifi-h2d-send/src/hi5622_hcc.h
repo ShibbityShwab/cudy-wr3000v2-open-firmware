@@ -60,6 +60,7 @@ struct hi5622_hcc_service {
 	 * module load, and hcc_clear never resets the budget counters. */
 	u32			h2d_frames_sent;	/* real frames committed */
 	u32			h2d_txq_sync_sent;
+	u32			h2d_ctx_create_sent;	/* ordered txq precondition */
 	u64			h2d_send_ok;		/* announce consumed */
 	u64			h2d_send_timeout;	/* announce not consumed */
 	u64			h2d_send_refused;
