@@ -1,0 +1,25 @@
+REC    qemu: qemu-arm version 7.2.0 (Debian 1:7.2+dfsg-1~bpo11+2)
+REC    emulation aid: 24 /lib -> ../usr/lib symlink(s) for qemu -L only (the image ships those libs in /usr/lib and musl finds them on the device)
+== SAE hostapd shipped-binary functional gate ==
+container/rootfs : /home/shibbityshwab/wifi-hostapd-sae-artifacts/B/final-image-with-hostapd-sae-B.bin
+guest binary     : /tmp/wifi-hostapd-sae-gate/rootfs/usr/sbin/hostapd
+REC    shipped hostapd size/sha256 = 1032951 / 451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
+ok    shipped hostapd is ELF32 ARM
+ok    shipped hostapd links libmbedcrypto (SAE EC backend)
+ok    shipped hostapd -v reports v2.12 under emulation
+REC    hostapd v2.12 -v prints no build-config list (CONFIG_SAE proven by build log + parse gate)
+ok    hostapd-wpa3-sae.conf: configuration file read
+ok    hostapd-wpa3-sae.conf: no parse/semantic errors
+ok    hostapd-wpa3-sae.conf: accepted - stopped only at the pre-driver boundary
+ok    hostapd-wpa2-wpa3.conf: configuration file read
+ok    hostapd-wpa2-wpa3.conf: no parse/semantic errors
+ok    hostapd-wpa2-wpa3.conf: accepted - stopped only at the pre-driver boundary
+ok    hostapd-wpa2-hardened.conf: configuration file read
+ok    hostapd-wpa2-hardened.conf: no parse/semantic errors
+ok    hostapd-wpa2-hardened.conf: accepted - stopped only at the pre-driver boundary
+ok    negative control: invalid config refused (parser is live)
+REC    old image hostapd-mini size/sha256 = 504333 / 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919
+ok    negative control: old hostapd-mini refuses key_mgmt=SAE (the exact fixed failure)
+
+== validate-wpa3-configs: 14 passed, 0 failed ==
+RESULT: PASS - the shipped SAE hostapd parses all three WPA3/PMF fixtures; old hostapd-mini refused SAE

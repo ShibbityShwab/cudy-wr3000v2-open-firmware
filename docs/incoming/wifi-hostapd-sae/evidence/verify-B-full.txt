@@ -1,0 +1,49 @@
+== wifi-hostapd-sae image verification (built bytes), variant B ==
+container : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+RECORD  container size/sha256 = 7188799 / 8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
+
+PASS  container kernel slice is the validated 13e81214... (sha)
+PASS  kernel slice size unchanged (3372638 B)
+RECORD  rootfs.ubi size/sha256 = 3801088 / 7817f090af022ae4cc4fc28087c0b242a9ecf9b5403414f679afbd402465ec07
+PASS  rootfs UBI starts with UBI# EC magic
+PASS  UBI volume 0 == build_dir root.squashfs prefix (3304908 B) + zero padding only
+RECORD  volume size 3305472 B, squashfs 3304908 B, end padding 564 B
+RECORD  image /usr/sbin/hostapd size/sha256 = 1032951 / 451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
+PASS  hostapd is NOT the old hostapd-mini binary 13cb3a43...
+PASS  hostapd size differs from hostapd-mini (504,333 B)
+PASS  hostapd is ARM EABI5
+PASS  hostapd DT_NEEDED libmbedcrypto (SAE EC backend)
+PASS  hostapd DT_NEEDED libmbedx509
+PASS  hostapd DT_NEEDED libmbedtls
+PASS  hostapd carries SAE code strings (13)
+PASS  hostapd config parser string present
+PASS  hostapd-radius symlink installed (full variant)
+PASS  image carries libmbedcrypto runtime
+PASS  image carries libmbedx509 runtime
+PASS  image carries libmbedtls runtime
+PASS  fixture hostapd-wpa3-sae.conf present in image
+PASS  fixture hostapd-wpa3-sae.conf byte-identical to payload (0d9aaca65897cf4dc77f147072d14d58cef71260473e0c4a55523ad6ee781846)
+PASS  fixture hostapd-wpa2-wpa3.conf present in image
+PASS  fixture hostapd-wpa2-wpa3.conf byte-identical to payload (cb4a135ac310d5a970ac95dc9469669dc2ab1d101183c0897907f4377cab477a)
+PASS  fixture hostapd-wpa2-hardened.conf present in image
+PASS  fixture hostapd-wpa2-hardened.conf byte-identical to payload (de4718a0bff6b0611f4b958d15229d9ab22088de4369df5bb1a21991fd6565a0)
+RECORD  installed module size/sha256 = 294168 / c7124bb9cd47b52ba1b85b7321d05bc916b49b4776059b2c264bbb9d1a4fdd78
+PASS  installed module name hi5622_wifi
+PASS  installed module vermagic 6.18.60
+PASS  installed module depends cfg80211
+PASS  installed module carries 47 parameters
+PASS  variant B module bytes are the wpa3-sae build (installed sha c7124bb9cd47b52ba1b85b7321d05bc916b49b4776059b2c264bbb9d1a4fdd78)
+PASS  manifest has hostapd-mbedtls
+PASS  manifest has no hostapd-mini
+PASS  manifest has libmbedtls21
+PASS  manifest has kmod-hi5622-wifi
+PASS  manifest has hostapd-common
+RECORD  manifest packages = 83
+PASS  no vendor firmware packaged (only regulatory.db: /lib/firmware/regulatory.db)
+PASS  no vendor FIRMWARE*.bin in rootfs
+PASS  no large binary blobs under /lib/modules
+PASS  hi5622-wifi rc.d link present (service is autoload=0 no-op)
+PASS  hi5622 uci policy autoload=0 (bench: nothing loads at boot)
+
+== verify-image-with-hostapd-sae: 37 passed, 0 failed ==
+RESULT: PASS - variant B image carries SAE hostapd, WPA3 fixtures, pinned module; kernel slice unchanged

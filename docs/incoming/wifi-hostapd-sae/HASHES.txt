@@ -1,0 +1,112 @@
+# HASHES - wifi-hostapd-sae (task-148)
+#
+# Host-only build.  Nothing was flashed or booted by this lane.
+# All identities below were derived from the built bytes by
+# tools/build-hostapd-sae-package.sh, tools/bake-image-with-hostapd-sae.sh and
+# tools/verify-image-with-hostapd-sae.sh in the recorded runs (see
+# evidence/package-build.txt and evidence/image-A.txt / image-B.txt).
+# Binaries/apk/UBI/container files are LOCAL artifacts, never committed:
+#   /home/shibbityshwab/wifi-hostapd-sae-artifacts/
+#
+# ===========================================================================
+# BUILD ENVIRONMENT PINS
+# ===========================================================================
+openwrt_tree                = /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_git_head               = 27663a0
+tree_config_sha256          = 9052d5e36fd30e6c59276910f2b286d5a109a5dffd03f3a8e1386aece0ed075d
+built_kernel_config_sha256  = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (before == after, both bakes)
+target_kernel_config_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
+hostapd_source_tarball_sha256 = d1b9ca0e6aaaba928fc5d5b02c0084083e745a38ae1214d0e2dc5d1ea6d50393
+profile                     = DEVICE_cudy_wr3000-v2 (hisilicon/luofu)
+
+# ===========================================================================
+# HOSTAPD PACKAGE (the new SAE-capable userspace; task-148 artifact)
+# ===========================================================================
+package                    = hostapd-mbedtls 2026.08.07~831364bf-r7
+variant                    = full-mbedtls (OpenWrt "full" hostapd)
+sae_build_flag             = CONFIG_SAE=y (151 -DCONFIG_SAE compile lines) + CONFIG_TLS=mbedtls
+ieee80211w                 = unconditional PMF support in hostap 2026-08-07 source (no build flag)
+apk_path_local             = /home/shibbityshwab/wifi-hostapd-sae-artifacts/hostapd-mbedtls-2026.08.07~831364bf-r7.apk
+apk_size                   = 554,612 B
+apk_sha256                 = b3c95eb6cffcc8de11723125fba3b54f1b51c485a68af4970dbcb463baaa5a6f
+buildtree_binary_size      = 1,214,784 B (unstripped)
+buildtree_binary_sha256    = 3baf5aa15e3786c625a88ffa3a53fc9f265d4c7dcd6ae3cfb9511f5f70fff614
+image_installed_size       = 1,032,951 B (/usr/sbin/hostapd, rstrip.sh stripped)
+image_installed_sha256     = 451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
+hostapd_common_apk_sha256  = e064cd3f52859ce3bd11fcc6d863524821c471fe9a440f9c0e0769ccee70ef3f (1,922 B, unchanged from task-147)
+libmbedtls21_apk_sha256    = 7e0fdef54b2535d15f5b62ad1806b9014c1ff2339ba29f383b1874559ea67f42 (289,811 B, baseline image package unchanged)
+former_hostapd_mini_size   = 504,333 B (image before this lane - SAE-less, refuses key_mgmt=SAE)
+former_hostapd_mini_sha256 = 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919
+old_config_error           = "Line 44: invalid key_mgmt 'SAE'" (reproduced as negative control)
+
+# ===========================================================================
+# IMAGE A - task-147 final image + SAE hostapd (strict drop-in, 308,080 B module)
+# ===========================================================================
+image_A_container_size     = 7,188,799 B
+image_A_container_sha256   = a31bc405d817f7fcb87d0b1e2e8adbc58d6b654cd4c315f62638785209ae1c75
+image_A_kernel_size        = 3,372,638 B (UNCHANGED)
+image_A_kernel_sha256      = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+image_A_kernel_slot_sha256 = 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e (8,650,752 B slot, not written by a rootfs-only flash)
+image_A_rootfs_ubi_size    = 3,801,088 B
+image_A_rootfs_ubi_sha256  = 2ce5c1913b3af4c1b6dd0d7ff26ce98ddd5177f134331bb881c2987e3fa1c155
+image_A_squashfs_size      = 3,303,800 B
+image_A_squashfs_sha256    = f01a5124a41c85cc61cedd79ad3cf02b9d9438e9bde7e60527963c2108b4d0b0
+image_A_ubi_volume_size    = 3,305,472 B (1,672 B zero padding after the squashfs)
+image_A_module_artifact_size   = 308,080 B (FINAL all-patch; staged prebuilt)
+image_A_module_artifact_sha256 = 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+image_A_module_installed_size   = 291,292 B (stripped /lib/modules/6.18.60/hi5622_wifi.ko)
+image_A_module_installed_sha256 = f07dd505f1d7ac5dd62a826c440414bf2bc1662fe2fecb504dc4cec5b5e0d412
+image_A_manifest_packages  = 83
+image_A_local_artifact     = /home/shibbityshwab/wifi-hostapd-sae-artifacts/A/
+
+# ===========================================================================
+# IMAGE B - recommended WPA3 bench combination (image A + wpa3-sae PMF/IGTK module)
+# ===========================================================================
+image_B_container_size     = 7,188,799 B
+image_B_container_sha256   = 8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
+image_B_kernel_size        = 3,372,638 B (UNCHANGED)
+image_B_kernel_sha256      = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+image_B_rootfs_ubi_size    = 3,801,088 B
+image_B_rootfs_ubi_sha256  = 7817f090af022ae4cc4fc28087c0b242a9ecf9b5403414f679afbd402465ec07
+image_B_squashfs_size      = 3,304,908 B
+image_B_squashfs_sha256    = 3664ce2a90a29ef4c7c67581dc43d91dfe32e5448f280940fdb336b6e1238d81
+image_B_ubi_volume_size    = 3,305,472 B (564 B zero padding after the squashfs)
+image_B_module_artifact_size   = 311,108 B (wpa3-sae PMF/IGTK build)
+image_B_module_artifact_sha256 = 08832e750725980893962940e1b792f8361a6b49b5f3faea5c1777c70dca2960
+image_B_module_installed_size   = 294,168 B (stripped)
+image_B_module_installed_sha256 = c7124bb9cd47b52ba1b85b7321d05bc916b49b4776059b2c264bbb9d1a4fdd78
+image_B_manifest_packages  = 83
+image_B_local_artifact     = /home/shibbityshwab/wifi-hostapd-sae-artifacts/B/
+
+# ===========================================================================
+# SUPERSEDED task-147 image (for the rootfs-only delta proof)
+# ===========================================================================
+previous_container_size    = 6,922,559 B
+previous_container_sha256  = 0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada
+previous_rootfs_ubi_sha256 = 6196232d878e141ad1833a5dbed4ef4e339dd41d5c450151842c285a328ba30e
+rootfs_growth_container    = +266,240 B (6,922,559 -> 7,188,799)
+rootfs_growth_ubi          = +262,144 B (3,538,944 -> 3,801,088)
+rootfsb_partition          = 24,379,392 B (0x1740000, mtd14); image B uses 15.6 %
+
+# ===========================================================================
+# WPA3 / PMF FIXTURES STAGED INTO THE IMAGE (/etc/hi5622/)
+# ===========================================================================
+hostapd-wpa3-sae.conf      = 1,663 B sha256 0d9aaca65897cf4dc77f147072d14d58cef71260473e0c4a55523ad6ee781846
+hostapd-wpa2-wpa3.conf     = 1,154 B sha256 cb4a135ac310d5a970ac95dc9469669dc2ab1d101183c0897907f4377cab477a (supersedes task-147's stale transition fixture 04892d34...)
+hostapd-wpa2-hardened.conf = 1,164 B sha256 de4718a0bff6b0611f4b958d15229d9ab22088de4369df5bb1a21991fd6565a0
+
+# ===========================================================================
+# VERIFICATION GATE SUMMARY
+# ===========================================================================
+functional_gate_qemu_arm  = 14/14 PASS on the SHIPPED binary (A and B roots), incl. negative controls
+  shipped hostapd identity = see image_installed_* rows above
+  old mini refusal         = "invalid key_mgmt 'SAE'" (exact fixed failure)
+image_verify              = 37/37 PASS for image A and image B
+qemu_arm_tool_sha256      = 9f07762a3cd0f8a199cb5471a92402a4765f8e2fcb7fe91a87ee75da9616a806 (v7.2.0 static, local tool only)
+
+# ===========================================================================
+# LOCAL SHA256SUMS RECORDS (regenerate with: cd <dir> && sha256sum -c SHA256SUMS)
+# ===========================================================================
+local_package_record = /home/shibbityshwab/wifi-hostapd-sae-artifacts/SHA256SUMS
+local_image_A_record = /home/shibbityshwab/wifi-hostapd-sae-artifacts/A/SHA256SUMS
+local_image_B_record = /home/shibbityshwab/wifi-hostapd-sae-artifacts/B/SHA256SUMS

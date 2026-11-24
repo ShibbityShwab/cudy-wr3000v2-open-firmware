@@ -1,0 +1,39 @@
+# wifi-hostapd-sae image B (B: wpa3-sae PMF/IGTK module (311,108 B 08832e75) + hostapd-mbedtls SAE (WPA3 bench combination))
+# host-only bake; nothing flashed/booted by this lane
+# generated: 2026-11-24T15:14:34Z
+build_start_utc = 2026-11-24T15:14:21Z
+build_end_utc   = 2026-11-24T15:14:34Z
+build_duration_s = 13
+openwrt_tree = /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_head = 27663a0
+target_kconfig_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
+kernel_config_sha256 = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (pre) / 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (post)
+
+== image container (sysupgrade .bin, the flash unit) ==
+container_path   = /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+container_size   = 7188799
+container_sha256 = 8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
+previous_container_sha256 = 0efcd1f1a5b16a73f040695f90ae00b41684d0f9348b60b1a13b45b2e27c2ada (wifi-final-image 0efcd1f1)
+
+== kernel slice - UNCHANGED requirement ==
+kernel_size   = 3372638
+kernel_sha256 = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_unchanged = YES
+
+== rootfs (rebuilt) ==
+rootfs_ubi_size   = 3801088
+rootfs_ubi_sha256 = 7817f090af022ae4cc4fc28087c0b242a9ecf9b5403414f679afbd402465ec07
+root_squashfs_size   = 3304908
+root_squashfs_sha256 = 3664ce2a90a29ef4c7c67581dc43d91dfe32e5448f280940fdb336b6e1238d81
+
+== driver module ==
+module_artifact_size   = 311108
+module_artifact_sha256 = 08832e750725980893962940e1b792f8361a6b49b5f3faea5c1777c70dca2960
+module_artifact_vermagic = 6.18.60 SMP mod_unload ARMv7 p2v8 
+module_artifact_params   = 47
+module_installed_sha256  = c7124bb9cd47b52ba1b85b7321d05bc916b49b4776059b2c264bbb9d1a4fdd78
+
+== build / verify ==
+build_rc = 0
+verify_rc = 0
+local_artifacts = /home/shibbityshwab/wifi-hostapd-sae-artifacts/B

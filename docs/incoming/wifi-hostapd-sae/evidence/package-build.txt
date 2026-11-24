@@ -1,0 +1,34 @@
+wifi-hostapd-sae package build record (host-only; no device)
+generated: 2026-11-24T15:09:50Z
+openwrt tree      : /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree HEAD         : 27663a0
+package           : hostapd-mbedtls 2026.08.07~831364bf-r7 (OpenWrt 'full' hostapd variant, mbedtls TLS)
+openwrt defconfig base .config sha256 (pre-build) : 9052d5e36fd30e6c59276910f2b286d5a109a5dffd03f3a8e1386aece0ed075d
+built kernel .config sha256 pre/post             : 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c / 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
+
+== SAE build proof (target ARM artifact) ==
+compile line -DCONFIG_SAE occurrences in log : 151
+SAE code strings in binary                   : 13
+DT_NEEDED:
+    Shared library: [libmbedcrypto.so.16]
+    Shared library: [libmbedx509.so.7]
+    Shared library: [libmbedtls.so.21]
+    Shared library: [libubox.so.20261103]
+    Shared library: [libubus.so.20261028]
+    Shared library: [libblobmsg_json.so.20261103]
+    Shared library: [libucode.so.20261009]
+    Shared library: [libnl-tiny.so.1]
+    Shared library: [libudebug.so]
+    Shared library: [libgcc_s.so.1]
+    Shared library: [libc.so]
+
+== artifacts (local, not committed) ==
+binary (build tree)  : /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/hostapd-full-mbedtls/hostapd-2026.08.07~831364bf/hostapd/hostapd
+binary size/sha256   : 1214784 / 3baf5aa15e3786c625a88ffa3a53fc9f265d4c7dcd6ae3cfb9511f5f70fff614
+installed payload    : /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/hostapd-full-mbedtls/hostapd-2026.08.07~831364bf/.pkgdir/hostapd-mbedtls/usr/sbin/hostapd
+installed size/sha256: 1214784 / 3baf5aa15e3786c625a88ffa3a53fc9f265d4c7dcd6ae3cfb9511f5f70fff614
+apk                  : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/packages/arm_cortex-a9/base/hostapd-mbedtls-2026.08.07~831364bf-r7.apk
+apk size/sha256      : 554612 / b3c95eb6cffcc8de11723125fba3b54f1b51c485a68af4970dbcb463baaa5a6f
+hostapd-common apk   : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/packages/arm_cortex-a9/base/hostapd-common-2026.08.07~831364bf-r7.apk
+libmbedtls apk       : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/packages/arm_cortex-a9/base/libmbedtls21-3.6.8-r1.apk
+local artifact dir   : /home/shibbityshwab/wifi-hostapd-sae-artifacts

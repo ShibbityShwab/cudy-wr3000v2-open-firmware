@@ -1,0 +1,11 @@
+# Local build/verification work and binaries are never committed.
+# Everything under the local artifact dir is a binary/image artifact:
+# /home/shibbityshwab/wifi-hostapd-sae-artifacts/
+build-evidence/work/
+*.bin
+*.ubi
+*.squashfs
+*.apk
+*.arm
+*.ko
+*.o
