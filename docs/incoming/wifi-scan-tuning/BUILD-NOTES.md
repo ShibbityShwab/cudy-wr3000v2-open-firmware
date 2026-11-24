@@ -207,3 +207,18 @@ New module parameters (all default OFF / fail-closed):
 For H1 experiments load with more frame budget: allow_frames=32
 h2d_send_budget=10 (config + scan requests; the default budget=4 is what
 produced the final 'repost failed (-1)' after the repost loop).
+
+## Final combined module pin R4 (handed to the lead for the H1 experiment)
+
+| item | value |
+| --- | --- |
+| final combined R4 (stripped) | **269,688 B** sha256 b5dfb883a0352d24d3279c73c6410d60c90318b2f17c84b9d3fa006ebb1a50b2 |
+| final combined R4 (unstripped) | 990,760 B sha256 64ece2137ddd5698e8f53dca85dc35bfb5f17a9c70835ac983977799bf8c4c5a |
+| path | /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko |
+| chain | base 44c6cc12 -> polished d145a205 -> dp-tuning 175a4617 -> scan-tuning R4 10-file 0002 -> stability hardening (stale-VAP timing + E2 plain restart) |
+| verified here | 8 scan_band_cfg* params; 10 cfg80211 imports; R4 strings (H1 band-config, did not re-arm, BSS list check after batch) and R3 strings (len-prefix, scan BSS decode gap, split into 3 requests) present; vermagic 6.18.60, depends cfg80211, 0 warnings |
+| opensource | stability commit 0bc0e24; lane commit cf6df0d |
+
+Fire R10 with hcc_trace=0 and allow_frames=32 h2d_send_budget=10 (H1
+config + scan requests need the larger frame budget); scan_band_cfg=1 with
+scan_req_batch=0 is the decisive single-request H1 test.
