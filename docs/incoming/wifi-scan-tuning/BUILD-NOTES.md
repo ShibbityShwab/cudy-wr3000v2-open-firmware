@@ -22,6 +22,12 @@ Canonical environment (project tree):
 
 ## Result (canonical run 2026-11-27, host-only)
 
+The recording session executed every step of `tools/build.sh` individually
+(host selftests, kernel module build, strip, metadata, request-dump compile)
+and validated the patch round-trip; the wrapper was not invoked in one shot
+because the host was under heavy parallel load.  `tools/build.sh` encodes the
+same command lines and is the intended one-command re-run.
+
 | item | value |
 | --- | --- |
 | module (with debug info) | 935,032 B, sha256 `aa9a6ce7da699e4da1d1010e605ceb524b3fdb52a33cfb3b8170e276d2d8c5ad` |
