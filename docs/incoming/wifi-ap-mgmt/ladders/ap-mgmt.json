@@ -1,0 +1,119 @@
+{
+  "lane": "wifi-ap-mgmt",
+  "task": "task-143",
+  "title": "AP management TX (WAL cfg-event cmd 0x01F2) + D2H mgmt RX (HCC group1 id13) - design only, NOT FIRED by this lane",
+  "host_only": true,
+  "preconditions": [
+    "base image: FINAL all-patch module (stability 008aca5, 47 params) + patches/0001-mgmt-tx-rx.patch = 49 params",
+    "fresh golden boot: page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0",
+    "attended session with the recovery door READY (tools/recovery-card.sh); human at the bench",
+    "one module load per boot; UART read-only; recovery physical",
+    "test client: one dedicated station, MAC recorded, on a test SSID only",
+    "M2 needs an external on-air observer (second radio/phone); our own RX is not proof of TX"
+  ],
+  "module_params": {
+    "common": "proven final-integration recipe: allow_frames=32 frame_gap_ms=100 h2d_send_budget=10 vap_start_first=1 vap_start_mode=1 vap_start_module=0 hcc_poll_ms=5 hcc_trace=0 stop_ap_mode=0 mgmt_diag=0 rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_keys=1 wpa_key_module=0 sta_join=0 ht_mode=0 vht_cap=0 band_vendor=0 scan_band_cfg=0",
+    "m0": "mgmt_tx=0 mgmt_rx=0 (compiled-default control)",
+    "m1": "mgmt_tx=0 mgmt_rx=1 (RX decode only)",
+    "m2": "mgmt_tx=1 mgmt_rx=1 (WAL mgmt-tx carrier)",
+    "m3": "same as M2 + client association (expected add_station blocker); WPA2 only after station ops land"
+  },
+  "rungs": [
+    {
+      "id": "M0",
+      "name": "control - compiled-default path is byte-inert",
+      "purpose": "prove mgmt_tx=0/mgmt_rx=0 changes no host or device behaviour",
+      "steps": [
+        "fire the proven AP start (beacon_static=1) until hostapd AP-ENABLED",
+        "let the test client attempt authentication",
+        "capture dmesg, cfg80211_status, page/mask before and after"
+      ],
+      "pass": [
+        "AP-ENABLED as the project baseline",
+        "dmesg: 'hi5622: mgmt_tx op reached - mgmt_tx=0 fail-closed'",
+        "dmesg: no \"frame post 'mgmt_tx'\" line, no 'mgmt RX delivered' line",
+        "page 0x86807FEF golden, state 1, mask 0, staging 0, no exception",
+        "modinfo/cfg80211_status list mgmt_tx=0 and mgmt_rx=0"
+      ],
+      "fail_if": [
+        "any H2D frame posted by the mgmt path",
+        "any DMA-buffer allocation (dmesg 'mgmt_tx: DMA frame buffer')",
+        "page/mask change or firmware exception"
+      ]
+    },
+    {
+      "id": "M1",
+      "name": "RX decode - D2H group1 id13 on a live management frame",
+      "purpose": "prove the 60-byte-prefix/48-byte-RX-info layout on hardware and the cfg80211 delivery",
+      "steps": [
+        "AP start with mgmt_rx=1 (mgmt_tx stays 0)",
+        "test client sends a probe/auth request",
+        "capture dmesg and the client/hostapd logs"
+      ],
+      "pass": [
+        "dmesg: 'cfg80211: mgmt RX delivered (subtype 0x0? ch 6 2437 MHz rssi -?? len ??)' for the client frame",
+        "hostapd starts its AP-side management handling; its reply fails with -EOPNOTSUPP (mgmt_tx=0, expected)",
+        "page/mask clean, no exception, H2D lane open"
+      ],
+      "fail_if": [
+        "no id13 event decoded when the client transmits",
+        "wrong channel/frequency, wrong frame length, malformed counter increments",
+        "any device write from the RX path"
+      ]
+    },
+    {
+      "id": "M2",
+      "name": "TX carrier - WAL cfg-event cmd 0x01F2 (the lane's central [U])",
+      "purpose": "decide whether the PD4 firmware WAL group-2 dispatch accepts the vendor mgmt-tx command and DMA-reads the frame",
+      "steps": [
+        "AP start with mgmt_tx=1 mgmt_rx=1",
+        "test client authenticates; hostapd replies to the auth request through .mgmt_tx",
+        "watch dmesg for the frame-post line; watch the external observer for the auth response on air"
+      ],
+      "pass": [
+        "host: \"frame post 'mgmt_tx': g2 id0 total 44 B in SR0 slot ... devva 0x8....... coalesced announce consumed after N polls\"",
+        "air (external observer): authentication response visible with the VAP BSSID (or the client reports authenticated)",
+        "page/mask clean, no exception, no out[0] timeout"
+      ],
+      "outcomes": [
+        "refused by the fail-closed gates (no device write) -> adjust allow_frames budget/gate; carrier still untested",
+        "announce consumed but no frame on air -> firmware accepted the WAL event but did not fetch the frame at the descriptor address (host-VA/devVA convention missing on this firmware); record, then use the data-TXQ fallback design",
+        "consumed + auth rsp on air -> the host-SME mgmt path works"
+      ],
+      "fail_if": [
+        "coalesced announce not consumed (H2D lane closed; never retry)",
+        "firmware exception or page/mask change"
+      ]
+    },
+    {
+      "id": "M3",
+      "name": "association + WPA2 (expected blocker measurement, cross-lane)",
+      "purpose": "measure how far host-SME association gets; station ops and EAPOL are later lanes",
+      "steps": [
+        "continue from M2: client sends the association request",
+        "expect the RX delivery line for the assoc request, then hostapd 'Could not add STA to kernel driver' (no .add_station op)",
+        "only after station ops land: WPA2 fixture from wifi-wpa-static, watch the 4-way handshake (needs EAPOL data delivery to the netdev)"
+      ],
+      "pass": [
+        "assoc request decoded and delivered (RX line)",
+        "the failure point is exactly the documented missing station op",
+        "page/mask clean, no exception"
+      ],
+      "fail_if": [
+        "assoc request not decoded (points back at M1)",
+        "any attempt to fake association or install a PTK without the firmware STA context"
+      ]
+    }
+  ],
+  "stop_rules": [
+    "firmware exception / golden page lost / state != 1 / mask != 0 / staging != 0 -> record dmesg + counters, power-cycle, analyse offline",
+    "frame post timeout or out[0] not consumed -> H2D lane closed; never retry; record and power-cycle",
+    "never re-post a frame in the same boot; never write CA 0x400392F0; never read CA window 0x10161000; never post mailbox id 5; never send HCC groups 1/4 H2D; never rmmod the vendor modules",
+    "a client that produced an exception stays disconnected for the rest of the boot"
+  ],
+  "evidence_to_capture": [
+    "dmesg (full boot + rung), cfg80211_status, modinfo -p, page/mask before/after",
+    "external observer capture of the auth/assoc response (M2/PASS) with BSSID + channel",
+    "client MAC and its management-frame log"
+  ]
+}

@@ -1,0 +1,74 @@
+== firmware: /tmp/hi5622-patched/FIRMWARE.PD4.bin (928920 B, sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1)
+PASS F1 table A key 0x0124 -> channel worker 0x841B9
+PASS F1 table A key 0x0127 -> AP-config worker 0x84DA5
+PASS F1 table A has NO 0x01F2 row (WAL mgmt-tx is not a g0 config key)
+PASS F1 table A neighbour 0x01F0 -> worker 0x49C8D
+PASS F2 table-A 0x01F0 worker is a 6-byte-body dispatcher [10b513461278062a0bd9]
+== vendor host module (2.4.15): /tmp/vmods/hi5622v100_wifi.ko (3581748 B, sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2)
+PASS 2.4.15 H1 symbol wal_cfg80211_mgmt_tx present
+PASS 2.4.15 H1 symbol wal_cfg80211_mgmt_tx_pre_proc present
+PASS 2.4.15 H1 symbol wal_cfg80211_mgmt_tx_try present
+PASS 2.4.15 H1 symbol wal_cfg80211_mgmt_tx_status present
+PASS 2.4.15 H1 symbol wal_send_cfg_event present
+PASS 2.4.15 H1 symbol wal_add_cookie_to_array present
+PASS 2.4.15 H1 symbol wal_check_cookie_timeout present
+PASS 2.4.15 H1 symbol wal_cfg80211_mgmt_frame_register present
+PASS 2.4.15 H1 mgmt_tx function size 0x754 [0x754]
+PASS 2.4.15 H1 mgmt_tx_pre_proc size 0x1dc
+PASS 2.4.15 H1 mgmt_tx_try size 0x22c
+PASS 2.4.15 H1 mgmt_tx_status size 0x1f8
+PASS 2.4.15 H2 unique WAL cmd 0x01F2 TLV build [hits=['0x104398']]
+PASS 2.4.15 H2 mov r3,#12 (descriptor len) precedes the TLV
+PASS 2.4.15 H2 TLV build is followed by a BL (memcpy_s)
+PASS 2.4.15 H2 strh stores cmd 0x1F2 into the TLV
+PASS 2.4.15 H2b do_tx calls wal_send_cfg_event
+PASS 2.4.15 H3 wal_send_cfg_event stores event/len at body+0/+6
+PASS 2.4.15 H3 body starts 12 bytes after the WAL header
+PASS 2.4.15 H4 RX strips 60-byte prefix when total > 59
+PASS 2.4.15 H4 RX info starts at data+12
+PASS 2.4.15 H4 RX copies 48-byte info block
+PASS 2.4.15 H5 RX channel read from msg+31
+PASS 2.4.15 H5 RX frame length read from msg+41
+PASS 2.4.15 H5 tail-call hmac_send_mgmt_to_host
+PASS 2.4.15 H6 RSSI read from msg+63 then +100
+PASS 2.4.15 H6 callback gets msg length/data for the frame
+PASS 2.4.15 H7 wdev loaded from the netdev ieee80211_ptr slot
+PASS 2.4.15 H7 freq multiplied by 1000 (kHz)
+PASS 2.4.15 H7 calls cfg80211_rx_mgmt_khz
+PASS 2.4.15 H8 imports cfg80211_rx_mgmt_khz
+PASS 2.4.15 H8 imports cfg80211_mgmt_tx_status
+== vendor host module (2.5.24): /tmp/bootkick/hi5622v100_wifi.ko (3564728 B, sha256 de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521)
+PASS 2.5.24 H1 symbol wal_cfg80211_mgmt_tx present
+PASS 2.5.24 H1 symbol wal_cfg80211_mgmt_tx_pre_proc present
+PASS 2.5.24 H1 symbol wal_cfg80211_mgmt_tx_try present
+PASS 2.5.24 H1 symbol wal_cfg80211_mgmt_tx_status present
+PASS 2.5.24 H1 symbol wal_send_cfg_event present
+PASS 2.5.24 H1 symbol wal_add_cookie_to_array present
+PASS 2.5.24 H1 symbol wal_check_cookie_timeout present
+PASS 2.5.24 H1 symbol wal_cfg80211_mgmt_frame_register present
+PASS 2.5.24 H1 mgmt_tx function size 0x754 [0x754]
+PASS 2.5.24 H1 mgmt_tx_pre_proc size 0x1dc
+PASS 2.5.24 H1 mgmt_tx_try size 0x22c
+PASS 2.5.24 H1 mgmt_tx_status size 0x1f8
+PASS 2.5.24 H2 unique WAL cmd 0x01F2 TLV build [hits=['0x1045a0']]
+PASS 2.5.24 H2 mov r3,#12 (descriptor len) precedes the TLV
+PASS 2.5.24 H2 TLV build is followed by a BL (memcpy_s)
+PASS 2.5.24 H2 strh stores cmd 0x1F2 into the TLV
+PASS 2.5.24 H2b do_tx calls wal_send_cfg_event
+PASS 2.5.24 H3 wal_send_cfg_event stores event/len at body+0/+6
+PASS 2.5.24 H3 body starts 12 bytes after the WAL header
+PASS 2.5.24 H4 RX strips 60-byte prefix when total > 59
+PASS 2.5.24 H4 RX info starts at data+12
+PASS 2.5.24 H4 RX copies 48-byte info block
+PASS 2.5.24 H5 RX channel read from msg+31
+PASS 2.5.24 H5 RX frame length read from msg+41
+PASS 2.5.24 H5 tail-call hmac_send_mgmt_to_host
+PASS 2.5.24 H6 RSSI read from msg+63 then +100
+PASS 2.5.24 H6 callback gets msg length/data for the frame
+PASS 2.5.24 H7 wdev loaded from the netdev ieee80211_ptr slot
+PASS 2.5.24 H7 freq multiplied by 1000 (kHz)
+PASS 2.5.24 H7 calls cfg80211_rx_mgmt_khz
+PASS 2.5.24 H8 imports cfg80211_rx_mgmt_khz
+PASS 2.5.24 H8 imports cfg80211_mgmt_tx_status
+
+mgmt_re: 69 probes, 0 failures

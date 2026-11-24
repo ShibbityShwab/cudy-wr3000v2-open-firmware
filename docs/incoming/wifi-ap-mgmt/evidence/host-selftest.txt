@@ -1,0 +1,23 @@
+== 1. strict C99 compile + host selftest
+hi5622 mgmt wire selftest (wifi-ap-mgmt lane, task-143)
+mgmt_selftest: 60 checks, 0 failures
+== 2. static fail-closed gates
+PASS mgmt_tx module param compiled default is 0 (no initializer)
+PASS mgmt_rx module param compiled default is 0 (no initializer)
+PASS mgmt_tx=0 refuses before any build/post
+PASS carrier gate: values >1 refused
+PASS AP-only policy (non-AP mgmt_tx refused)
+PASS frame pointer is the coherent DMA address (devva checked)
+PASS vendor WAL cmd 0x01F2 body 12 in the portable logic
+PASS vendor envelope overhead 32 bytes
+PASS D2H RX group1 id13 pinned
+PASS D2H rx info 48 B / channel+7 / len+17 / rssi+39 pinned
+PASS RX delivery goes through cfg80211_rx_mgmt, never a device write
+PASS TX post goes through the fail-closed frame gate
+PASS patch adds cap bit 15 exactly once
+PASS patch wires the provider builder
+PASS patch replaces the fail-closed stub with the gated op
+PASS patch hooks the D2H delivery
+PASS patch adds the two cfg80211 imports (12-line symvers contract)
+
+build-host: PASS (selftest + static fail-closed gates)

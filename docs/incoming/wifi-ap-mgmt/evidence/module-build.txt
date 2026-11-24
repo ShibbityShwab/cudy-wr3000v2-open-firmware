@@ -1,0 +1,12 @@
+== 1. all-patch tree staged (75 files) + lane patch applied
+== 2. build
+== 3. artifact gates
+== AP-MGMT module (final all-patch tree + mgmt patch; host-built, NOT fired)
+tree      : all-patch 008aca5 (47 params) + patches/0001-mgmt-tx-rx.patch
+artifact  : /tmp/wifi-ap-mgmt-module-artifact/hi5622_wifi.ko (debug-stripped)
+size      : 313796
+sha256    : a36ecf5495c72047943a40a9c49d5af9aa2f709a2280655eea1dfab4bedbcd7c
+unstripped: 1173568 B sha256 36140410ad22e947bb1bf1b924ed26e5ac691c2a83d3802c074317fa01e414b8
+params    : 49
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+EXIT=0

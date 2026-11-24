@@ -1,0 +1,974 @@
+diff -ruN a/cfg80211-provider.symvers b/cfg80211-provider.symvers
+--- a/cfg80211-provider.symvers	2026-11-24 20:45:25.812966138 +0700
++++ b/cfg80211-provider.symvers	2026-11-24 21:50:25.597619745 +0700
+@@ -8,3 +8,5 @@
+ 0x00000000	wiphy_register	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	wiphy_unregister	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	cfg80211_bss_iter	cfg80211	EXPORT_SYMBOL	
++0x00000000	cfg80211_mgmt_tx_status_ext	cfg80211	EXPORT_SYMBOL	
++0x00000000	cfg80211_rx_mgmt_ext	cfg80211	EXPORT_SYMBOL	
+diff -ruN a/h2d_frames.c b/h2d_frames.c
+--- a/h2d_frames.c	2026-11-24 21:23:33.795175418 +0700
++++ b/h2d_frames.c	2026-11-24 21:50:25.597056014 +0700
+@@ -153,6 +153,7 @@
+ 		{ H2D_WAL_CMD_KICK_STA, 16u },
+ 		{ H2D_WAL_CMD_AP_START, 156u },
+ 		{ H2D_WAL_CMD_STA_CONNECT, 108u },
++		{ H2D_WAL_CMD_MGMT_TX, 12u },
+ 	};
+ 	u32 data_len;
+ 	u16 cmd, body_len;
+diff -ruN a/h2d_frames.h b/h2d_frames.h
+--- a/h2d_frames.h	2026-11-24 21:23:33.799175444 +0700
++++ b/h2d_frames.h	2026-11-24 21:50:25.596965042 +0700
+@@ -102,6 +102,10 @@
+  * decoded 108-byte body (hi5622_sta_frames.h); .disconnect reuses the
+  * existing 0x00d0/16 carrier above. */
+ #define H2D_WAL_CMD_STA_CONNECT	0x0123u	/* body 108 [V] */
++/* wifi-ap-mgmt lane (task-143): management-frame TX carrier decoded from the
++ * vendor cfg80211 .mgmt_tx path (wal_cfg80211_mgmt_tx -> wal_mgmt_do_tx):
++ * one WAL cfg-event TLV, cmd 0x01F2, body 12, no frame bytes in the message. */
++#define H2D_WAL_CMD_MGMT_TX	0x01F2u	/* body 12 [V] */
+ 
+ /* Mailbox layer (wifi-hcc-re sec 3, host-replica sec 4) */
+ #define H2D_CA_MBOX_PENDING	0x40039010u	/* out[0]: H2D pending bitmap [V] */
+diff -ruN a/hcc.c b/hcc.c
+--- a/hcc.c	2026-11-24 20:45:25.814669636 +0700
++++ b/hcc.c	2026-11-24 21:50:25.597417154 +0700
+@@ -35,6 +35,7 @@
+ 
+ #include "hi5622_hcc.h"
+ #include "hi5622_scan.h"
++#include "hi5622_mgmt.h"
+ 
+ /* Stability/perf hardening (wifi-stability lane): gate the hot-path hcc-core
+  * event traces.  Default 0 = quiet steady state (the bench console census
+@@ -102,6 +103,9 @@
+ 	 * group/id, never writes and uses a trylock, so the HCC service thread
+ 	 * cannot be blocked here.  A missing/partial provider counts an error. */
+ 	hi5622_scan_deliver(ctx, hdr, payload, payload_avail);
++	/* wifi-ap-mgmt lane: D2H management-frame events (group1 id13) decode
++	 * to cfg80211_rx_mgmt behind mgmt_rx=1; default counts only. */
++	hi5622_mgmt_deliver(ctx, hdr, payload, payload_avail, wire_len);
+ 	return hcc_core_deliver_hdr(&ctx->hcc->hcc.core, src, hdr, payload,
+ 				    payload_avail, wire_len,
+ 				    hcc_kernel_now_ms());
+diff -ruN a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+--- a/hi5622_cfg80211.c	2026-11-24 21:23:33.827413290 +0700
++++ b/hi5622_cfg80211.c	2026-11-24 21:50:25.597543281 +0700
+@@ -43,6 +43,7 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_cfg80211.h"
+ #include "hi5622_keys.h"
++#include "hi5622_mgmt.h"
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_logic.h"
+ 
+@@ -566,6 +567,8 @@
+ 	hi5622_scan_remove(c);
+ 	/* Release the STA join host buffer, if any (wifi-sta-static). */
+ 	hi5622_sta_remove(c);
++	/* Release the management-frame DMA buffer, if any (wifi-ap-mgmt). */
++	hi5622_mgmt_remove(ctx);
+ 
+ 	registered = c->wiphy_registered;
+ 	created = c->model.netdev_created;
+diff -ruN a/hi5622_cfg80211_ops.c b/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-24 21:23:33.828393875 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 21:50:25.597233758 +0700
+@@ -45,6 +45,7 @@
+ #include "hi5622_driver.h"
+ #include "hi5622_scan.h"
+ #include "hi5622_keys.h"
++#include "hi5622_mgmt.h"
+ #include "hi5622_sta.h"
+ 
+ /* ---------------------------------------------------------------------
+@@ -436,14 +437,12 @@
+ 				struct cfg80211_mgmt_tx_params *params,
+ 				u64 *cookie)
+ {
+-	(void)wiphy;
+-	(void)wdev;
+-	(void)params;
+-	(void)cookie;
+-	pr_info_once("hi5622: mgmt_tx op reached - fails closed (management TX is data-plane/M4 work)\n");
+ 	if (hi5622_mgmt_diag)
+ 		dump_stack();	/* caller stack only when explicitly requested */
+-	return -EOPNOTSUPP;
++	/* wifi-ap-mgmt lane (task-143): decoded vendor WAL cfg-event mgmt-tx
++	 * carrier behind mgmt_tx=1, fail-closed at mgmt_tx=0 (compiled default).
++	 * Every byte still goes through hi5622_frame_post()'s gates. */
++	return hi5622_mgmt_op_tx(wiphy, wdev, params, cookie);
+ }
+ 
+ /* Paired with .connect: wiphy_new_nm() WARNs when a driver registers
+diff -ruN a/hi5622_frames_api.h b/hi5622_frames_api.h
+--- a/hi5622_frames_api.h	2026-11-24 21:23:33.823514060 +0700
++++ b/hi5622_frames_api.h	2026-11-24 21:50:25.596543318 +0700
+@@ -103,6 +103,11 @@
+ #define HI5622_FRAME_CAP_KEY_ADD	(1u << 12)	/* cmd 0x0078 builder */
+ #define HI5622_FRAME_CAP_KEY_DEL	(1u << 13)	/* cmd 0x007A builder */
+ #define HI5622_FRAME_CAP_KEY_DEFAULT	(1u << 14)	/* cmd 0x0079 builder */
++/* wifi-ap-mgmt lane (task-143): management-frame TX carrier.  The vendor
++ * cfg80211 .mgmt_tx path emits ONE WAL cfg-event TLV, cmd 0x01F2, body 12
++ * bytes {channel, cookie idx, len, device-visible frame address}; the frame
++ * bytes themselves are not in the message (see hi5622_mgmt_logic.h). */
++#define HI5622_FRAME_CAP_MGMT_TX	(1u << 15)	/* WAL cmd 0x01F2 builder */
+ 
+ #define HI5622_FRAME_CAPS_ALL						\
+ 	(HI5622_FRAME_CAP_SCAN_REQ | HI5622_FRAME_CAP_SCAN_PARSE |	\
+@@ -111,7 +116,7 @@
+ 	 HI5622_FRAME_CAP_AP_STOP | HI5622_FRAME_CAP_VAP_ADD |	\
+ 	 HI5622_FRAME_CAP_VAP_START | HI5622_FRAME_CAP_CHAN_CFG | \
+ 	 HI5622_FRAME_CAP_KEY_ADD | HI5622_FRAME_CAP_KEY_DEL | \
+-	 HI5622_FRAME_CAP_KEY_DEFAULT)
++	 HI5622_FRAME_CAP_KEY_DEFAULT | HI5622_FRAME_CAP_MGMT_TX)
+ 
+ /* ===================================================================
+  * 2. Neutral parameter structs (cfg80211/netlink -> provider)
+@@ -345,6 +350,19 @@
+  * not decoded yet, -EINVAL on a malformed body.  A decoder must never read
+  * beyond payload+len and must bound every copied field.
+  */
++/* wifi-ap-mgmt lane: one management-frame TX request.  The frame bytes live
++ * in the driver's coherent buffer (DMA window checked); the provider builder
++ * only receives the device-visible address, the length, the AP channel and
++ * the WAL cfg-event sequence number. */
++struct hi5622_mgmt_tx_params {
++	u32	channel;	/* channel number the AP transmits on */
++	u8	cookie_idx;	/* vendor cookie-array slot [I] */
++	u16	len;		/* 802.11 management frame length */
++	u32	frame_devaddr;	/* device-visible host-DRAM address of the frame */
++	u32	seq;		/* WAL cfg-event sequence number */
++	u8	dst;		/* HCC dst nibble (0 for the single AP VAP) */
++};
++
+ struct hi5622_frame_ops {
+ 	const char	*name;		/* dmesg/status identity, never NULL */
+ 	u32		caps;		/* HI5622_FRAME_CAP_* bitmask */
+@@ -394,6 +412,10 @@
+ 			     const struct hi5622_key_params *p);
+ 	int (*build_key_default)(u8 *wire, size_t cap, size_t *out_len,
+ 				 const struct hi5622_key_default_params *p);
++	/* wifi-ap-mgmt lane: vendor WAL cfg-event mgmt-tx carrier (cmd 0x01F2,
++	 * 12-byte descriptor).  Posted through the same fail-closed gate. */
++	int (*build_mgmt_tx)(u8 *wire, size_t cap, size_t *out_len,
++			     const struct hi5622_mgmt_tx_params *p);
+ };
+ 
+ /* ===================================================================
+diff -ruN a/hi5622_mgmt.c b/hi5622_mgmt.c
+--- a/hi5622_mgmt.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_mgmt.c	2026-11-24 21:52:57.238496376 +0700
+@@ -0,0 +1,271 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_mgmt.c - kernel-side management-frame TX/RX glue (Hi5622V100
++ * clean-room driver, Cudy WR3000 v2.0).
++ *
++ * ORIGINAL clean-room code (lane wifi-ap-mgmt, shared task task-143).
++ * See hi5622_mgmt_logic.h for the decoded vendor wire layouts and
++ * ../REPORT.md / ../TABLES.md for the evidence behind every constant.
++ *
++ * SAFETY: this file allocates one coherent frame buffer (only when mgmt_tx=1
++ * actually posts), never writes a device register itself, and routes every
++ * H2D byte through hi5622_frame_post() (allow_frames budget, inter-frame gap,
++ * armed/released/ACTIVE lane gates, h2d_frames validator incl. the WAL
++ * cfg-event family allowlist).  The RX path is read-only: decode + cfg80211
++ * notification for frames the device already staged.
++ */
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++#include <linux/kernel.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_driver.h"
++#include "hi5622_cfg80211.h"
++#include "hi5622_frame_post.h"
++#include "hi5622_frames_api.h"
++#include "hi5622_mgmt.h"
++#include "hi5622_mgmt_logic.h"
++
++/* Management-frame TX carrier (wifi-ap-mgmt, task-143).  Default 0 keeps the
++ * .mgmt_tx op exactly as fail-closed as the bench-proven image: hostapd's
++ * frame-registration gate is satisfied by the op's presence, and every frame
++ * request is refused before any buffer/device work. */
++static unsigned int hi5622_mgmt_tx;
++module_param_named(mgmt_tx, hi5622_mgmt_tx, uint, 0644);
++MODULE_PARM_DESC(mgmt_tx,
++		 "management frame TX: 0=fail-closed default (-EOPNOTSUPP), 1=vendor WAL cfg-event carrier cmd 0x01F2 (needs allow_frames budget + armed/ACTIVE lane)");
++/* Management-frame RX decode/delivery.  Default 0 = count only. */
++static unsigned int hi5622_mgmt_rx;
++module_param_named(mgmt_rx, hi5622_mgmt_rx, uint, 0644);
++MODULE_PARM_DESC(mgmt_rx,
++		 "D2H mgmt RX: 0=count only (fail-closed default), 1=decode group1 id13 and deliver to cfg80211_rx_mgmt for the AP wdev");
++
++/* One driver instance is the bench model; a second probe is refused rather
++ * than silently sharing the buffer/counters. */
++struct hi5622_mgmt_state {
++	struct mutex	lock;		/* serializes buffer init/post/teardown */
++	struct hi5622_pci *ctx;
++	void		*tx_buf;	/* HIMG_MAX_FRAME_TX coherent bytes */
++	dma_addr_t	tx_dma;		/* device-visible address */
++	u32		seq;		/* WAL cfg-event sequence */
++	u32		tx_posts;
++	u32		tx_refused;
++	u32		tx_errors;
++	u32		rx_events;
++	u32		rx_delivered;
++	u32		rx_malformed;
++	u32		rx_busy;
++	u32		rx_no_wdev;
++};
++
++static struct hi5622_mgmt_state mgmt_state = {
++	.lock = __MUTEX_INITIALIZER(mgmt_state.lock),
++};
++
++/* Allocate the single mgmt-frame DMA buffer (the descriptor hands the firmware
++ * a device-visible host-DRAM address; the vendor relies on its 2 GiB/2 GiB
++ * VMSPLIT identity that this kernel does not have - see REPORT section 6). */
++static int hi5622_mgmt_ensure_buf(struct hi5622_pci *ctx)
++{
++	struct device *dev;
++	void *buf;
++	dma_addr_t dma;
++
++	if (mgmt_state.tx_buf) {
++		if (mgmt_state.ctx != ctx)
++			return -EBUSY;
++		return 0;
++	}
++	if (!ctx || !ctx->pdev)
++		return -ENODEV;
++	dev = &ctx->pdev->dev;
++	buf = dma_alloc_coherent(dev, HIMG_MAX_FRAME_TX, &dma, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++	if ((u64)dma < (u64)HI5622_HOST_DMA_LO ||
++	    (u64)dma > (u64)HI5622_HOST_DMA_HI) {
++		dev_err(dev,
++			"mgmt_tx: frame buffer DMA 0x%llx outside the host DMA window 0x%08x..0x%08x - refusing the vendor descriptor carrier\n",
++			(unsigned long long)dma,
++			(unsigned int)HI5622_HOST_DMA_LO,
++			(unsigned int)HI5622_HOST_DMA_HI);
++		dma_free_coherent(dev, HIMG_MAX_FRAME_TX, buf, dma);
++		return -ERANGE;
++	}
++	mgmt_state.ctx = ctx;
++	mgmt_state.tx_buf = buf;
++	mgmt_state.tx_dma = dma;
++	dev_info(dev,
++		 "mgmt_tx: DMA frame buffer %u B (devva 0x%08x) - WAL cfg-event carrier cmd 0x%04x\n",
++		 (unsigned int)HIMG_MAX_FRAME_TX, (unsigned int)dma,
++		 (unsigned int)HIMG_WAL_CMD_MGMT_TX);
++	return 0;
++}
++
++/* cfg80211_ops.mgmt_tx.  Fail-closed order: parameter sanity -> param gate ->
++ * AP-only policy -> provider capability -> build -> post gate.  Nothing is
++ * allocated or written unless every earlier step passed. */
++int hi5622_mgmt_op_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
++		      struct cfg80211_mgmt_tx_params *params, u64 *cookie)
++{
++	struct hi5622_cfg80211 *c;
++	const struct hi5622_frame_ops *ops;
++	struct hi5622_mgmt_tx_params p;
++	u8 wire[HIMG_WAL_OVERHEAD + HIMG_WAL_CMD_MGMT_TX_BODY];
++	size_t wire_len = 0;
++	u64 ck = 0;
++	bool ack = false;
++	int rc;
++
++	if (!wiphy || !wdev || !params || !cookie)
++		return -EINVAL;
++	if (!params->buf || params->len == 0u)
++		return -EINVAL;
++	if (!hi5622_mgmt_tx) {
++		pr_info_once("hi5622: mgmt_tx op reached - mgmt_tx=0 fail-closed (management TX stays off until the attended ladder enables it)\n");
++		return -EOPNOTSUPP;
++	}
++	if (hi5622_mgmt_tx > 1u)
++		return -EOPNOTSUPP;
++	/* The AP-side exchange is the decoded path; the vendor STA offchannel
++	 * branch (wal_cfg80211_mgmt_tx) is a different function and stays out
++	 * of scope for this lane, so refuse non-AP interfaces explicitly. */
++	if (wdev->iftype != NL80211_IFTYPE_AP)
++		return -EOPNOTSUPP;
++	if (!wdev->wiphy || wdev->wiphy != wiphy)
++		return -EINVAL;
++	/* Vendor requires a channel: for the AP the frame goes out on the AP's
++	 * channel and cfg80211/hostapd always pass it (the vendor logs "vap
++	 * pchan ptr is null" and refuses otherwise) [V]. */
++	if (!params->chan)
++		return -EINVAL;
++	if (himg_mgmt_frame_ok(params->buf, params->len))
++		return -EINVAL;
++	c = wiphy_priv(wiphy);
++	if (!c || !c->ctx)
++		return -ENODEV;
++
++	mutex_lock(&mgmt_state.lock);
++	rc = hi5622_mgmt_ensure_buf(c->ctx);
++	if (rc) {
++		mgmt_state.tx_refused++;
++		goto out_unlock;
++	}
++	ops = hi5622_frame_ops_get();
++	if (!ops || !(ops->caps & HI5622_FRAME_CAP_MGMT_TX) ||
++	    !ops->build_mgmt_tx) {
++		mgmt_state.tx_refused++;
++		rc = -EOPNOTSUPP;
++		goto out_unlock;
++	}
++	/* The frame must live in the coherent buffer the descriptor points at;
++	 * the cfg80211 buffer itself is not device-visible in this kernel. */
++	memcpy(mgmt_state.tx_buf, params->buf, params->len);
++	memset(&p, 0, sizeof(p));
++	p.channel = params->chan->hw_value;
++	p.cookie_idx = 0u;	/* vendor cookie-array slot; firmware echoes it */
++	p.len = (u16)params->len;
++	p.frame_devaddr = (u32)mgmt_state.tx_dma;
++	p.seq = ++mgmt_state.seq;
++	p.dst = 0u;		/* single AP VAP -> dst nibble 0 [V] */
++	rc = ops->build_mgmt_tx(wire, sizeof(wire), &wire_len, &p);
++	if (rc) {
++		mgmt_state.tx_errors++;
++		goto out_unlock;
++	}
++	rc = hi5622_frame_post(c->ctx, wire, wire_len, "mgmt_tx", NULL);
++	if (!rc) {
++		mgmt_state.tx_posts++;
++		ck = (u64)p.seq;
++		*cookie = ck;
++		ack = true;
++	} else {
++		mgmt_state.tx_errors++;
++	}
++out_unlock:
++	mutex_unlock(&mgmt_state.lock);
++	/* hostapd wants a status notification for every accepted request; report
++	 * the post result (the frame-post consumption poll already waited for the
++	 * coalesced announce, so this is a real ack fact, not a guess). */
++	if (ck)
++		cfg80211_mgmt_tx_status(wdev, ck, params->buf, params->len,
++					ack, GFP_ATOMIC);
++	return rc;
++}
++
++/* Device->host delivery (both receive paths).  Runs in the HCC service
++ * thread: trylock only, bounded reads, no retry. */
++void hi5622_mgmt_deliver(struct hi5622_pci *ctx, const u8 *hdr,
++			 const u8 *payload, u32 avail, u32 wire_len)
++{
++	struct himg_rx_frame rx;
++	struct hi5622_cfg80211 *c;
++	struct wireless_dev *wdev = NULL;
++	int rc;
++	unsigned int i;
++
++	if (!ctx || !hdr || !payload)
++		return;
++	rc = himg_parse_rx_mgmt(hdr, payload, avail, wire_len, &rx);
++	if (rc) {
++		if (rc != -ENODATA)
++			mgmt_state.rx_malformed++;
++		return;
++	}
++	mgmt_state.rx_events++;
++	if (!hi5622_mgmt_rx)
++		return;		/* count only (fail-closed default) */
++	c = ctx->cfg;
++	if (!c || !c->wiphy_registered)
++		return;
++	if (!mutex_trylock(&c->lock)) {
++		mgmt_state.rx_busy++;	/* dropped, never retried */
++		return;
++	}
++	for (i = 0; i < HI5622_CFG_MAX_VAPS; i++) {
++		if (c->vap_wdev[i] &&
++		    c->vap_wdev[i]->iftype == NL80211_IFTYPE_AP) {
++			wdev = c->vap_wdev[i];
++			break;
++		}
++	}
++	if (!wdev) {
++		mgmt_state.rx_no_wdev++;
++		mutex_unlock(&c->lock);
++		return;
++	}
++	/* Vendor oal_cfg80211_rx_mgmt passes sig_dbm=0 [V]; the decoded RX-info
++	 * RSSI is signed dBm-like ([I]); use it only when it is in the plausible
++	 * dBm range, else 0 (unknown) - cfg80211 accepts 0. */
++	cfg80211_rx_mgmt(wdev, rx.freq,
++			 (rx.rssi <= 0 && rx.rssi >= -120) ? (int)rx.rssi : 0,
++			 rx.frame, rx.frame_len, 0);
++	mgmt_state.rx_delivered++;
++	mutex_unlock(&c->lock);
++	dev_info_ratelimited(&ctx->pdev->dev,
++			     "cfg80211: mgmt RX delivered (subtype 0x%02x ch %u %u MHz rssi %d len %u) to the AP wdev\n",
++			     rx.subtype, rx.channel, rx.freq, rx.rssi,
++			     rx.frame_len);
++}
++
++void hi5622_mgmt_remove(struct hi5622_pci *ctx)
++{
++	void *buf;
++	dma_addr_t dma;
++
++	if (!ctx)
++		return;
++	mutex_lock(&mgmt_state.lock);
++	buf = mgmt_state.tx_buf;
++	dma = mgmt_state.tx_dma;
++	mgmt_state.tx_buf = NULL;
++	mgmt_state.tx_dma = 0;
++	mgmt_state.ctx = NULL;
++	mutex_unlock(&mgmt_state.lock);
++	if (buf)
++		dma_free_coherent(&ctx->pdev->dev, HIMG_MAX_FRAME_TX, buf, dma);
++}
+diff -ruN a/hi5622_mgmt.h b/hi5622_mgmt.h
+--- a/hi5622_mgmt.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_mgmt.h	2026-11-24 21:50:12.176746831 +0700
+@@ -0,0 +1,45 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_mgmt.h - kernel-side management-frame TX/RX glue (Hi5622V100
++ * clean-room driver, Cudy WR3000 v2.0).
++ *
++ * ORIGINAL clean-room code (lane wifi-ap-mgmt, shared task task-143).
++ * The wire decisions live in the portable hi5622_mgmt_logic.c (host-tested);
++ * this file only bridges cfg80211 <-> provider builder <-> the fail-closed
++ * hi5622_frame_post() gate and the D2H direct reader.
++ *
++ * Fail-closed contract:
++ *   mgmt_tx=0 (compiled default)  .mgmt_tx returns -EOPNOTSUPP, no DMA buffer
++ *                                 is allocated and no frame is posted;
++ *   mgmt_tx=1                     the decoded vendor WAL cfg-event mgmt-tx
++ *                                 carrier is built and posted through the same
++ *                                 allow_frames budget / gap / lane gates that
++ *                                 every other provider frame uses.
++ *   mgmt_rx=0 (compiled default)  D2H group-1 id-13 events are counted only;
++ *   mgmt_rx=1                     decoded management frames are delivered to
++ *                                 cfg80211_rx_mgmt() for the AP wdev.
++ */
++#ifndef _HI5622_MGMT_H
++#define _HI5622_MGMT_H
++
++#include <linux/types.h>
++
++struct hi5622_pci;
++struct wiphy;
++struct wireless_dev;
++struct cfg80211_mgmt_tx_params;
++
++/* cfg80211_ops.mgmt_tx implementation (wired from hi5622_cfg80211_ops.c). */
++int hi5622_mgmt_op_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
++		      struct cfg80211_mgmt_tx_params *params, u64 *cookie);
++
++/* Device->host delivery hook, called by hi5622_hcc_deliver() for EVERY frame
++ * on both receive paths.  Filters group/id itself, never blocks the service
++ * thread (trylock), never writes a device register. */
++void hi5622_mgmt_deliver(struct hi5622_pci *ctx, const u8 *hdr,
++			 const u8 *payload, u32 avail, u32 wire_len);
++
++/* Release the optional DMA frame buffer at cfg80211 teardown. */
++void hi5622_mgmt_remove(struct hi5622_pci *ctx);
++
++#endif /* _HI5622_MGMT_H */
+diff -ruN a/hi5622_mgmt_logic.c b/hi5622_mgmt_logic.c
+--- a/hi5622_mgmt_logic.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_mgmt_logic.c	2026-11-24 21:51:10.031385900 +0700
+@@ -0,0 +1,228 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_mgmt_logic.c - portable management-frame TX/RX wire logic
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0).
++ *
++ * ORIGINAL clean-room code (lane wifi-ap-mgmt, shared task task-143).
++ * Host-tested by tools/mgmt_selftest.c; the kernel layer (hi5622_mgmt.c)
++ * contains no duplicated decision logic.  See hi5622_mgmt_logic.h for the
++ * decoded wire layouts and evidence markers.
++ */
++#include "hi5622_mgmt_logic.h"
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/string.h>
++#else
++#include <errno.h>
++#include <string.h>
++#endif
++
++/* ------------------------------------------------------------------ */
++/* little-endian wire helpers                                         */
++/* ------------------------------------------------------------------ */
++static himg_u16 hg_get16(const himg_u8 *p)
++{
++	return (himg_u16)((himg_u16)p[0] | ((himg_u16)p[1] << 8));
++}
++
++static void hg_put16(himg_u8 *p, himg_u16 v)
++{
++	p[0] = (himg_u8)(v & 0xffu);
++	p[1] = (himg_u8)((v >> 8) & 0xffu);
++}
++
++static void hg_put32(himg_u8 *p, himg_u32 v)
++{
++	p[0] = (himg_u8)(v & 0xffu);
++	p[1] = (himg_u8)((v >> 8) & 0xffu);
++	p[2] = (himg_u8)((v >> 16) & 0xffu);
++	p[3] = (himg_u8)((v >> 24) & 0xffu);
++}
++
++/* ------------------------------------------------------------------ */
++/* 1. channel -> centre frequency                                     */
++/* ------------------------------------------------------------------ */
++/* Vendor hmac_rx_mgmt_send_to_host (2.4.15 0x4277c / 2.5.24 0x4288c) [V]:
++ *   ch == 0            -> 0 (unset; caller refuses)
++ *   ch <= 13           -> 2407 + 5*ch   (2.4 GHz, 1..13)
++ *   ch == 14           -> 2484
++ *   182 <= ch <= 196   -> 4000 + 5*ch   (4.9 GHz public-safety band)
++ *   other ch > 14      -> 5000 + 5*ch   (5 GHz)
++ * The vendor code has no upper bound (its loop can only produce channels the
++ * scan layer returned); this portable decoder bounds the band plan because
++ * the RX info byte is untrusted device input. */
++int himg_chan_to_freq(himg_u8 channel, himg_u16 *freq)
++{
++	himg_u32 f;
++
++	if (!freq)
++		return -EINVAL;
++	if (channel >= 1u && channel <= 13u)
++		f = 2407u + 5u * (himg_u32)channel;
++	else if (channel == 14u)
++		f = 2484u;
++	else if (channel >= 182u && channel <= 196u)
++		f = 4000u + 5u * (himg_u32)channel;
++	else if (channel >= 32u && channel <= 177u)
++		f = 5000u + 5u * (himg_u32)channel;
++	else
++		return -EINVAL;
++	*freq = (himg_u16)f;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 2. mgmt-tx descriptor + WAL cfg-event wire frame                   */
++/* ------------------------------------------------------------------ */
++int himg_build_tx_desc(himg_u8 *desc, size_t cap,
++		       const struct himg_tx_desc *d)
++{
++	himg_u16 freq;
++
++	if (!desc || !d || cap < HIMG_WAL_CMD_MGMT_TX_BODY)
++		return -EINVAL;
++	if (d->channel > 0xffu || d->len < HIMG_MIN_MGMT_FRAME ||
++	    d->len > HIMG_MAX_FRAME_TX || d->frame_addr == 0u)
++		return -EINVAL;
++	if (himg_chan_to_freq((himg_u8)d->channel, &freq))
++		return -EINVAL;
++	memset(desc, 0, HIMG_WAL_CMD_MGMT_TX_BODY);
++	hg_put32(desc + 0, d->channel);
++	desc[4] = d->cookie_idx;
++	desc[5] = 0u;
++	hg_put16(desc + 6, d->len);
++	hg_put32(desc + 8, d->frame_addr);
++	return 0;
++}
++
++int himg_build_wal_mgmt_tx(himg_u8 *wire, size_t cap, size_t *out_len,
++			   const struct himg_tx_params *p)
++{
++	struct himg_tx_desc d;
++	himg_u8 desc[HIMG_WAL_CMD_MGMT_TX_BODY];
++	size_t total = (size_t)HIMG_WAL_OVERHEAD + HIMG_WAL_CMD_MGMT_TX_BODY;
++	himg_u8 *b;
++
++	if (!wire || !out_len || !p)
++		return -EINVAL;
++	if (total > cap)
++		return -ENOSPC;
++	if (p->dst > 0x0fu)
++		return -EINVAL;
++	d.channel = p->channel;
++	d.cookie_idx = p->cookie_idx;
++	d.pad = 0u;
++	d.len = p->len;
++	d.frame_addr = p->frame_addr;
++	if (himg_build_tx_desc(desc, sizeof(desc), &d))
++		return -EINVAL;
++
++	memset(wire, 0, total);
++	b = wire;
++	/* 12-byte HCC header [V]: group 2, alloc nibble 0x1 + dst nibble,
++	 * fa/fb 0 (single AP VAP, module 0), total, id 0 (WAL cfg family),
++	 * fc 0, dst, tag 0x5a5a. */
++	b[0] = HIMG_HCC_GROUP_WAL;
++	b[1] = (himg_u8)(HIMG_ALLOC_NIBBLE | ((p->dst & 0x0fu) << 4));
++	b[2] = 0u;
++	b[3] = 0u;
++	hg_put16(b + 4, (himg_u16)total);
++	hg_put16(b + 6, HIMG_HCC_ID_WAL);
++	b[8] = 0u;
++	b[9] = (himg_u8)(p->dst & 0x0fu);
++	hg_put16(b + 10, HIMG_HCC_TAG);
++	/* WAL cfg-event envelope [V]: cookie 0, id 1, pad 0, data_len =
++	 * 4 + body_len, seq, cmd 0x01F2, body_len 12. */
++	hg_put32(b + 12, 0u);
++	hg_put32(b + 16, HIMG_WAL_MSG_CFG);
++	hg_put16(b + 20, 0u);
++	hg_put16(b + 22, (himg_u16)(4u + HIMG_WAL_CMD_MGMT_TX_BODY));
++	hg_put32(b + 24, p->seq);
++	hg_put16(b + 28, HIMG_WAL_CMD_MGMT_TX);
++	hg_put16(b + 30, HIMG_WAL_CMD_MGMT_TX_BODY);
++	memcpy(b + HIMG_WAL_OVERHEAD, desc, sizeof(desc));
++	*out_len = total;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 3. 802.11 management-frame sanity                                  */
++/* ------------------------------------------------------------------ */
++int himg_mgmt_frame_ok(const himg_u8 *frame, size_t len)
++{
++	if (!frame)
++		return -EINVAL;
++	if (len < HIMG_MIN_MGMT_FRAME || len > HIMG_MAX_FRAME_TX)
++		return -EINVAL;
++	/* Frame control word [V 802.11-2020]: bits 0-1 protocol version (0),
++	 * bits 2-3 type (0 = management).  Any management subtype is legal;
++	 * the kernel layer decides which ones it is willing to post. */
++	if ((frame[0] & 0x03u) != 0u)
++		return -EINVAL;
++	if (((frame[0] >> 2) & 0x03u) != 0u)
++		return -EINVAL;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 4. D2H management-frame RX decode                                  */
++/* ------------------------------------------------------------------ */
++/* Wire layout (vendor, [V]): hmac_rx_event_pre_process reads msg->len
++ * (= HCC total) and msg->data (= HCC header start), and if total > 59 moves
++ * the frame pointer to data+60 and the frame length to total-60; it copies
++ * 48 bytes from data+12 to msg->cb.  hmac_rx_mgmt_send_to_host then derives
++ * the frequency from msg->cb+7 (channel) and the frame length from
++ * msg->cb+17, and hmac_send_mgmt_to_host copies the frame from msg->data and
++ * takes the RSSI from msg->cb+39.  So with our payload pointer = data+12:
++ * payload[0..47] = RX info, payload[48..] = 802.11 frame. */
++int himg_parse_rx_mgmt(const himg_u8 *hdr, const himg_u8 *payload,
++		       himg_u32 avail, himg_u32 wire_len,
++		       struct himg_rx_frame *out)
++{
++	himg_u16 total, id, tag, info_len, freq;
++	himg_u32 frame_len;
++	himg_u8 channel, fc0;
++
++	if (!hdr || !payload || !out)
++		return -EINVAL;
++	if ((hdr[0] & 0x0fu) != HIMG_RX_GROUP)
++		return -ENODATA;
++	id = hg_get16(hdr + 6);
++	if (id != HIMG_RX_ID)
++		return -ENODATA;
++	tag = hg_get16(hdr + 10);
++	if (tag != HIMG_HCC_TAG)
++		return -EPROTO;
++	total = hg_get16(hdr + 4);
++	if ((himg_u32)total != wire_len)
++		return -EPROTO;
++	if ((himg_u32)total <= (himg_u32)HIMG_RX_FRAME_OFF)
++		return -EPROTO;	/* no frame bytes: not a frame event */
++	if (avail < HIMG_RX_INFO_LEN)
++		return -EPROTO;
++	frame_len = (himg_u32)total - (himg_u32)HIMG_RX_FRAME_OFF;
++	if (frame_len < HIMG_MIN_MGMT_FRAME || frame_len > HIMG_MAX_FRAME_TX)
++		return -EPROTO;
++	if (avail < (himg_u32)HIMG_RX_INFO_LEN + frame_len)
++		return -EPROTO;	/* snapshot truncated the frame */
++	info_len = hg_get16(payload + HIMG_RX_INFO_FRAME_LEN);
++	if ((himg_u32)info_len != frame_len)
++		return -EPROTO;	/* vendor cross-check in the RX info */
++	channel = payload[HIMG_RX_INFO_CHANNEL];
++	if (himg_chan_to_freq(channel, &freq))
++		return -EPROTO;
++	/* payload already excludes the 12-byte HCC header, so the frame
++	 * starts at payload+48 while the wire total measured 60 bytes earlier. */
++	fc0 = payload[HIMG_RX_INFO_LEN];
++	if ((fc0 & 0x03u) != 0u || ((fc0 >> 2) & 0x03u) != 0u)
++		return -EPROTO;	/* only management frames belong to id 13 */
++	memset(out, 0, sizeof(*out));
++	out->frame = payload + HIMG_RX_INFO_LEN;
++	out->frame_len = frame_len;
++	out->freq = freq;
++	out->rssi = (himg_s8)payload[HIMG_RX_INFO_RSSI];
++	out->channel = channel;
++	out->subtype = (himg_u8)(fc0 >> 4);
++	return 0;
++}
+diff -ruN a/hi5622_mgmt_logic.h b/hi5622_mgmt_logic.h
+--- a/hi5622_mgmt_logic.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_mgmt_logic.h	2026-11-24 21:49:16.998384976 +0700
+@@ -0,0 +1,144 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_mgmt_logic.h - portable management-frame TX/RX wire logic for the
++ * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-ap-mgmt, shared task task-143).
++ * No vendor source/object code, firmware byte, calibration value or secret is
++ * reproduced.  Every constant is a derived fact with the evidence marker used
++ * in REPORT.md/TABLES.md:
++ *
++ *   [V]  decoded from a local vendor artifact (vendor host module 2.4.15 /
++ *        2.5.24 or the PD4 firmware image; the artifacts stay local/gitignored)
++ *   [V*] measured by an attended bench lane, quoted from the project reports
++ *   [I]  inference; [U] unknown / not pinned
++ *
++ * THIS FILE IS DEVICE-FREE.  It builds/validates bytes only; the kernel half
++ * (hi5622_mgmt.c) copies frames into DMA memory and posts them through the
++ * fail-closed hi5622_frame_post() gate.  The host selftest
++ * (tools/mgmt_selftest.c) compiles this file with a C99 compiler.
++ *
++ * WHAT IT DECODES
++ * ---------------
++ * 1. WAL cfg-event mgmt-tx carrier (host -> firmware), the vendor
++ *    wal_cfg80211_mgmt_tx path [V]: HCC group 2, header id 0, WAL cfg-event
++ *    id 1, one TLV {u16 cmd 0x01F2; u16 len 12; 12-byte tx descriptor}.
++ *    The descriptor is {u32 channel; u8 cookie_idx; u8 pad; u16 len;
++ *    u32 frame_addr} where frame_addr is a DEVICE-VISIBLE host-DRAM address
++ *    (the vendor passes the cfg80211 frame pointer because its 2 GiB/2 GiB
++ *    VMSPLIT makes that pointer fall in the 0x80000000..0x8FFFFFFF host
++ *    window; this kernel is VMSPLIT_3G, so the driver must pass the DMA
++ *    address of its own coherent copy - exactly the project rule already
++ *    documented in hi5622_driver.h for the ETE/HCC buffers).
++ * 2. D2H management-frame RX event (firmware -> host), vendor HCC group 1
++ *    id 13 handler hmac_rx_process_mgmt_event [V]: the frame is staged after
++ *    a 60-byte prefix (12-byte HCC header + 48-byte RX info).  Decoded RX
++ *    info fields: +7 channel, +17 u16 frame length, +39 s8 RSSI.
++ */
++#ifndef _HI5622_MGMT_LOGIC_H
++#define _HI5622_MGMT_LOGIC_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++typedef u8  himg_u8;
++typedef u16 himg_u16;
++typedef u32 himg_u32;
++typedef s8  himg_s8;
++#else
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  himg_u8;
++typedef uint16_t himg_u16;
++typedef uint32_t himg_u32;
++typedef int8_t   himg_s8;
++#endif
++
++/* ===================================================================
++ * 1. HCC / WAL envelope constants [V]
++ * =================================================================== */
++#define HIMG_HCC_HDR_LEN	12u
++#define HIMG_HCC_TAG		0x5a5au
++#define HIMG_HCC_GROUP_WAL	2u	/* group-2 WAL/chip config events */
++#define HIMG_HCC_ID_WAL		0u	/* header id of the WAL cfg family */
++#define HIMG_ALLOC_NIBBLE	0x01u	/* hcc_msg_alloc host nibble [V] */
++/* WAL cfg-event envelope after the 12-byte HCC header [V]:
++ * cookie[4], wal{id[4], pad[2], data_len[2], seq[4]}, {cmd[2], len[2]}, body */
++#define HIMG_WAL_OVERHEAD	32u
++#define HIMG_WAL_MSG_CFG	1u	/* wal_cfg_event type/op byte 1 [V] */
++/* Vendor WAL cfg command for cfg80211 .mgmt_tx [V: 2.4.15 and 2.5.24 emit
++ * the identical TLV; the firmware g0 static config-key table A has no row
++ * for it, so this carrier is the vendor WAL path, not the g0 path]. */
++#define HIMG_WAL_CMD_MGMT_TX	0x01F2u
++#define HIMG_WAL_CMD_MGMT_TX_BODY 12u	/* 12-byte descriptor [V] */
++#define HIMG_MAX_FRAME_TX	588u	/* vendor memcpy_s bound 0x24c [V] */
++#define HIMG_MIN_MGMT_FRAME	24u	/* 802.11 header only */
++
++/* ===================================================================
++ * 2. D2H management-frame RX (group 1 id 13) [V]
++ * =================================================================== */
++#define HIMG_RX_GROUP		1u
++#define HIMG_RX_ID		13u	/* hmac_rx_process_mgmt_event [V] */
++#define HIMG_RX_INFO_LEN	48u	/* rx info copied to hcc_msg->cb [V] */
++#define HIMG_RX_FRAME_OFF	(HIMG_HCC_HDR_LEN + HIMG_RX_INFO_LEN) /* 60 */
++#define HIMG_RX_INFO_CHANNEL	7u	/* msg->cb+7 -> channel number [V] */
++#define HIMG_RX_INFO_FRAME_LEN	17u	/* u16, == wire total - 60 [V] */
++#define HIMG_RX_INFO_RSSI	39u	/* s8, 100+raw clamped by vendor [V] */
++
++/* ===================================================================
++ * 3. Neutral parameter/result structs
++ * =================================================================== */
++struct himg_tx_desc {
++	himg_u32	channel;	/* channel number the AP is on */
++	himg_u8		cookie_idx;	/* vendor cookie-array slot [I] */
++	himg_u8		pad;
++	himg_u16	len;		/* 802.11 frame length */
++	himg_u32	frame_addr;	/* device-visible host-DRAM address */
++};
++
++struct himg_tx_params {
++	himg_u32	channel;
++	himg_u8		cookie_idx;
++	himg_u16	len;
++	himg_u32	frame_addr;
++	himg_u32	seq;		/* WAL cfg-event sequence number */
++	himg_u8		dst;		/* HCC dst nibble (0 for the AP VAP) */
++};
++
++struct himg_rx_frame {
++	const himg_u8	*frame;		/* points into the caller's payload */
++	himg_u32	frame_len;
++	himg_u16	freq;		/* MHz */
++	himg_s8		rssi;		/* vendor raw s8 field */
++	himg_u8		channel;
++	himg_u8		subtype;	/* 802.11 management subtype */
++};
++
++/* ===================================================================
++ * 4. API (implemented in hi5622_mgmt_logic.c)
++ * =================================================================== */
++/* Channel number -> centre frequency (MHz), vendor hmac_rx_mgmt_send_to_host
++ * formula [V].  0 = valid, -EINVAL on a channel this band plan cannot map. */
++int himg_chan_to_freq(himg_u8 channel, himg_u16 *freq);
++
++/* 12-byte mgmt-tx descriptor; 0 = valid. */
++int himg_build_tx_desc(himg_u8 *desc, size_t cap,
++		       const struct himg_tx_desc *d);
++
++/* Full vendor HCC wire frame for the WAL mgmt-tx carrier; 0 = valid. */
++int himg_build_wal_mgmt_tx(himg_u8 *wire, size_t cap, size_t *out_len,
++			   const struct himg_tx_params *p);
++
++/* 802.11 management-frame sanity (protocol 0, type management, sane length).
++ * 0 = acceptable to hand to the TX carrier. */
++int himg_mgmt_frame_ok(const himg_u8 *frame, size_t len);
++
++/* Decode one D2H group-1 id-13 mgmt event.  hdr is the 12-byte HCC header,
++ * payload the bytes after it, avail how many of them are readable (the direct
++ * reader clamps to its snapshot), wire_len the node total from the header.
++ * 0 = decoded; -ENODATA = not this event; -EINVAL/-EPROTO = malformed
++ * (always fail-closed, never a partial frame). */
++int himg_parse_rx_mgmt(const himg_u8 *hdr, const himg_u8 *payload,
++		       himg_u32 avail, himg_u32 wire_len,
++		       struct himg_rx_frame *out);
++
++#endif /* _HI5622_MGMT_LOGIC_H */
+diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
+--- a/hi5622_scan_logic.c	2026-11-24 21:23:33.824517769 +0700
++++ b/hi5622_scan_logic.c	2026-11-24 21:50:25.596850176 +0700
+@@ -35,6 +35,7 @@
+ 	case HI5622_FRAME_CAP_KEY_ADD:		return "key_add";
+ 	case HI5622_FRAME_CAP_KEY_DEL:		return "key_del";
+ 	case HI5622_FRAME_CAP_KEY_DEFAULT:	return "key_default";
++	case HI5622_FRAME_CAP_MGMT_TX:		return "mgmt_tx";
+ 	default:				return "?";
+ 	}
+ }
+@@ -52,7 +53,7 @@
+ 		n = snprintf(buf, len, "none");
+ 		return n < 0 ? n : (int)((size_t)n < len ? (size_t)n : len - 1);
+ 	}
+-	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_KEY_DEFAULT; bit <<= 1) {
++	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_MGMT_TX; bit <<= 1) {
+ 		const char *name;
+ 
+ 		if (!(caps & bit))
+@@ -102,6 +103,8 @@
+ 		return -EINVAL;
+ 	if ((ops->caps & HI5622_FRAME_CAP_KEY_DEFAULT) && !ops->build_key_default)
+ 		return -EINVAL;
++	if ((ops->caps & HI5622_FRAME_CAP_MGMT_TX) && !ops->build_mgmt_tx)
++		return -EINVAL;
+ 	return 0;
+ }
+ 
+diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
+--- a/hi5622_vapscan_provider.c	2026-11-24 21:23:33.825471184 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 21:50:34.310222018 +0700
+@@ -38,6 +38,7 @@
+ #include "hi5622_vapscan_map.h"
+ #include "vapstart_frames.h"
+ #include "hi5622_ap_frames.h"
++#include "hi5622_mgmt_logic.h"
+ #include "hi5622_key_frames.h"
+ 
+ #include <linux/nl80211.h>
+@@ -513,6 +514,37 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* wifi-ap-mgmt lane (task-143): WAL cfg-event mgmt-tx carrier         */
++/* ------------------------------------------------------------------ */
++/* Vendor cfg80211 .mgmt_tx (wal_cfg80211_mgmt_tx -> wal_mgmt_do_tx) emits
++ * ONE WAL cfg-event TLV: HCC group2 id0, WAL id 1, cmd 0x01F2, 12-byte body
++ * {channel, cookie idx, pad, len, device-visible frame address}.  The frame
++ * bytes are NOT in the message; the kernel half copies them into its coherent
++ * DMA buffer and passes that device-visible address.  The command is added to
++ * the h2d_frames WAL cfg-event allowlist so hi5622_frame_post() keeps its
++ * fail-closed envelope/size validation. */
++static int vapscan_mgmt_tx(u8 *wire, size_t cap, size_t *out_len,
++			   const struct hi5622_mgmt_tx_params *p)
++{
++	struct himg_tx_params hp;
++	int rc;
++
++	if (!wire || !out_len || !p)
++		return -EINVAL;
++	memset(&hp, 0, sizeof(hp));
++	hp.channel = p->channel;
++	hp.cookie_idx = p->cookie_idx;
++	hp.len = p->len;
++	hp.frame_addr = p->frame_devaddr;
++	hp.seq = p->seq;
++	hp.dst = p->dst & 0x0fu;
++	rc = himg_build_wal_mgmt_tx(wire, cap, out_len, &hp);
++	if (rc)
++		return rc;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
+ /* registration                                                       */
+ /* ------------------------------------------------------------------ */
+ int hi5622_vapscan_provider_register(void)
+@@ -538,7 +570,8 @@
+ 		HI5622_FRAME_CAP_AP_START | HI5622_FRAME_CAP_CHAN_CFG |
+ 		HI5622_FRAME_CAP_KEY_ADD |
+ 		HI5622_FRAME_CAP_KEY_DEL |
+-		HI5622_FRAME_CAP_KEY_DEFAULT;
++		HI5622_FRAME_CAP_KEY_DEFAULT |
++		HI5622_FRAME_CAP_MGMT_TX;
+ 	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
+ 	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
+ 	hi5622_vapscan_ops.parse_scan_complete = vapscan_parse_scan_complete;
+@@ -562,6 +595,8 @@
+ 	hi5622_vapscan_ops.build_key_add = vapscan_key_add;
+ 	hi5622_vapscan_ops.build_key_del = vapscan_key_del;
+ 	hi5622_vapscan_ops.build_key_default = vapscan_key_default;
++	/* wifi-ap-mgmt lane: vendor WAL cfg-event mgmt-tx carrier (cmd 0x01F2). */
++	hi5622_vapscan_ops.build_mgmt_tx = vapscan_mgmt_tx;
+ 
+ 	rc = hi5622_frame_ops_register(&hi5622_vapscan_ops);
+ 	if (!rc) {
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-24 21:23:33.826546799 +0700
++++ b/Kbuild	2026-11-24 21:50:25.597581573 +0700
+@@ -35,7 +35,8 @@
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+ 		 hi5622_band_cfg.o \
+ 		 hi5622_band_cfg.o hi5622_key_frames.o hi5622_keys.o \
+-		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o
++		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
++		 hi5622_mgmt_logic.o hi5622_mgmt.o
+ 
+ ccflags-y += -I$(src)
+ 
