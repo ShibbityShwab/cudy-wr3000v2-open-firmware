@@ -241,7 +241,8 @@ For request cfg id X, the next new g1 id3 frame must satisfy
 3. body_len == 270;
 4. body u16 @0 == X;
 5. body u32 @4 (dev_ret) == 0;
-6. field B mirrors the request field B;
+6. response field B = vap id byte of the resolved object (expected 4 = our created
+   module; [I] - record what the bench sees);
 7. device safety: mask CA 0x40008 == 0, handshake page 0x86807FEF/7/2/0xABCD, state == 1.
 
 No host reply is required or sent for these responses (config-sync is notification).
