@@ -1,0 +1,108 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-boot-ready",
+ "about": "Bring-up matrix row boot/ready: after the strict ready gate, re-read the golden handshake page, boot state, exception mask and exception staging word, and gate the ready handshake through both the direct reader and rd_catalog. Read-only: NO H2D message is fired, so this is the safe first session on any new image.",
+ "profile": "hi5622-wifi-h2d",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": false
+ },
+ "steps": [
+  {
+   "name": "boot-readback",
+   "kind": "read_pack",
+   "about": "golden handshake page (CA 0x1BF000), boot state (CA 0x118B60), exception mask (CA 0x40008) and exception staging word (CA 0x4000C)",
+   "reads": [
+    {
+     "label": "page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "page4",
+     "bar0": "0x877004",
+     "expect": {
+      "eq": "0x7"
+     }
+    },
+    {
+     "label": "page8",
+     "bar0": "0x877008",
+     "expect": {
+      "eq": "0x2"
+     }
+    },
+    {
+     "label": "page_c",
+     "bar0": "0x87700c",
+     "expect": {
+      "eq": "0xabcd"
+     }
+    },
+    {
+     "label": "state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    },
+    {
+     "label": "mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ready-direct",
+   "kind": "attr_expect",
+   "attr": "hcc_ready",
+   "about": "direct device group-A reader: id1 + id2 and the id2 payload = the vendor device-RAM ring-pointer table (data-plane seed)",
+   "patterns": [
+    "id1_seen=1",
+    "id2_seen=1",
+    "payload=0x01060850"
+   ]
+  },
+  {
+   "name": "ready-phase",
+   "kind": "attr_expect",
+   "attr": "hcc_ready",
+   "patterns": [
+    "phase=READY_TXQ_SYNC"
+   ],
+   "about": "the vendor post-ready phase before any H2D message"
+  },
+  {
+   "name": "catalog",
+   "kind": "attr_expect",
+   "attr": "rd_catalog",
+   "about": "boot D2H catalogue still carries the ready pair (captured for the matrix row)",
+   "patterns": [
+    "id1_seen=1",
+    "id2_seen=1",
+    "dword0=0x01060850"
+   ]
+  },
+  {
+   "name": "note",
+   "kind": "note",
+   "about": "read-only row: no H2D frame is posted; any g1 response seen here belongs to a firmware-unsolicited event family"
+  }
+ ]
+}

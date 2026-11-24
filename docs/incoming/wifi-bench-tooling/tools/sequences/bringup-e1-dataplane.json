@@ -1,0 +1,169 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-e1-dataplane",
+ "about": "Bring-up matrix row dataplane (E1): the vendor's data-plane setup after the control-plane loop - re-check the ready id2 payload (device-RAM MSDU-info ring-pointer table), the clean exception state, ONE read-only MAC slot-5 reachability probe (CA 0x40040000 via the region-3 translation), then the vendor's own TXQ-table address sync (g0 id1 key 0x0320) through the contracted h2d_txq_addr_sync token. MAC ring REGISTER programming (B2b) is a driver deliverable and is deliberately NOT done by devmem here.",
+ "profile": "hi5622-wifi-h2d",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": false,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "budget_min": 4,
+  "attrs": [
+   "h2d_txq_addr_sync"
+  ]
+ },
+ "load_params": {
+  "h2d_send_budget": 4
+ },
+ "steps": [
+  {
+   "name": "note",
+   "kind": "note",
+   "about": "E1 needs the wave-3 dp-bringup driver token h2d_txq_addr_sync (contracted name; the JSON is the single edit point if the lane names it differently). Without the token the plan is refused as module-attr-missing and the matrix row is BLOCKED."
+  },
+  {
+   "name": "dp-seed",
+   "kind": "attr_expect",
+   "attr": "rd_catalog",
+   "about": "the ready handshake seeded the data plane: g4 id2 payload 0x01060850 = device-RAM MSDU-info ring-pointer table (ACP-mapped into MAC +0x10)",
+   "patterns": [
+    "id2_seen=1",
+    "dword0=0x01060850"
+   ]
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "clean control state before the data-plane messages: mask 0, staging 0, out[0] (CA 0x40039010) 0",
+   "reads": [
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_out0",
+     "bar0": "0x3f1010",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "about": "the data-plane messages still need the ordered control state (the 2026-11-25 validated create+sync precondition)"
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "about": "the vendor's TXQ config sync 0xd8, ordered after the context create"
+  },
+  {
+   "name": "clean-state",
+   "kind": "read_pack",
+   "about": "both control messages ran clean: no exception mask, no staged frame",
+   "reads": [
+    {
+     "label": "clean_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "clean_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "mac-probe",
+   "kind": "read_pack",
+   "about": "B2a single READ-ONLY reachability probe of the MAC host-interface block (device CA 0x40040000 -> region-3 BAR0 0x3F8000; the datapath ladder's B2a). Capture-only: a bus-error/empty read stops the session here and no host write is attempted. NOTE the BENCH-LADDER text says BAR0 0x402A000; the region-3 rule gives 0x3F8000 - this probe resolves the discrepancy with actual (attended) reads.",
+   "reads": [
+    {
+     "label": "mac0",
+     "bar0": "0x3f8000",
+     "expect": {
+      "present": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "dp-txq-sync",
+   "kind": "attr_write",
+   "attr": "h2d_txq_addr_sync",
+   "value": "1",
+   "patterns": [
+    "frames_sent=3",
+    "timeout=0"
+   ],
+   "about": "the vendor's own data-plane init message: HCC g0 id1, u16 key 0x0320, 4-byte device VA of a host-allocated zeroed 0x2524 B non-cached TXQ table (builder dp_build_txq_addr_sync). ONE frame, one idea."
+  },
+  {
+   "name": "post-dp",
+   "kind": "read_pack",
+   "about": "the data-plane message did not fault the firmware: exception mask and staging stay clean",
+   "reads": [
+    {
+     "label": "post_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "post_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "patterns": [
+    "refused=0"
+   ],
+   "about": "no H2D store was refused"
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "E1 row PASS = MAC slot-5 window readable + key-0x0320 message consumed with mask 0. The RX/TX ring register program (B2b) and the 8-byte MSDU-info ring posts are the dp-bringup driver's deliverable, not automation devmem writes."
+  }
+ ]
+}

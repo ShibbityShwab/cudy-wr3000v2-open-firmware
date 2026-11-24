@@ -204,21 +204,36 @@ HCC_ATTRS = {
     "hcc_plan",
 }
 RD_ATTRS = {"rd_poll", "rd_advance", "rd_status", "rd_decode", "rd_catalog"}
-# Real post-ready H2D message surface (hi5622_wifi, task-98/99/101/102).  The
-# *status/plan* attributes are read-only; only the four message triggers are WO.
+# Real post-ready H2D message surface (hi5622_wifi, task-98/99/101/102/103).
+# The *status/plan* attributes are read-only; only the message triggers are WO.
+# h2d_cfg_cal is task-103's calibration alg set_* trigger (g0 id2 key 0x0101).
 H2D_ATTRS = {"h2d_txq_sync", "h2d_txq_sync72", "h2d_ctx_create", "h2d_send",
-             "h2d_status", "h2d_plan"}
-H2D_WO_ATTRS = {"h2d_txq_sync", "h2d_txq_sync72", "h2d_ctx_create", "h2d_send"}
+             "h2d_cfg_cal", "h2d_status", "h2d_plan"}
+H2D_WO_ATTRS = {"h2d_txq_sync", "h2d_txq_sync72", "h2d_ctx_create", "h2d_send",
+                "h2d_cfg_cal"}
 # hi5622_wifi transport surface: seed (built-in platform descriptor + PHY
 # block from /lib/firmware) and gate_repair (the F4 translation fix).
 WIFI_TRANSPORT_ATTRS = {"seed", "gate_repair"}
 WIFI_TRANSPORT_WO_ATTRS = WIFI_TRANSPORT_ATTRS
+# cfg80211 layer surface (wifi-cfg80211/src/hi5622_cfg80211.c): a read-only
+# status line only.  VAP add/del and scan are nl80211 operations driven through
+# `iw` (shell steps), never sysfs writes.
+CFG80211_ATTRS = {"cfg80211_status"}
+# Contracted data-plane token for the wave-3 dp-bringup lane: the vendor's own
+# TXQ-table address sync (g0 id1, u16 key 0x0320, 4-byte device VA; builder
+# dp_build_txq_addr_sync in ../wifi-datapath/src/dp_frames.c).  The token name
+# is the bench-automation contract: if the dp-bringup driver names it
+# differently, the E1 sequence JSON is the single edit point (see PHASES.md).
+DP_ATTRS = {"h2d_txq_addr_sync"}
+DP_WO_ATTRS = DP_ATTRS
+ALL_KNOWN_ATTRS = (BASE_ATTRS | HCC_ATTRS | RD_ATTRS | H2D_ATTRS |
+                   WIFI_TRANSPORT_ATTRS | CFG80211_ATTRS | DP_ATTRS)
 WO_ATTRS = {
     "prepare", "upload", "release", "verify", "ringinit", "send", "poll",
     "announce",
     "hcc_arm", "hcc_loop", "hcc_service", "hcc_sr_announce", "hcc_cece_kick",
     "hcc_dr_republish", "hcc_clear", "rd_poll", "rd_advance",
-} | H2D_WO_ATTRS | WIFI_TRANSPORT_WO_ATTRS
+} | H2D_WO_ATTRS | WIFI_TRANSPORT_WO_ATTRS | DP_WO_ATTRS
 # Legacy attributes that the HCC-service build deliberately refuses (they
 # encode the pre-GP8, wrong protocol).  Writing them in an HCC session is a
 # policy violation even though the module would refuse it at runtime.
@@ -663,6 +678,122 @@ def validate_arm_executable(path: str) -> HelperInfo:
     return HelperInfo(os.path.abspath(path), len(data), sha256_bytes(data),
                       e_type, e_machine)
 
+
+@dataclasses.dataclass
+class SupportModuleInfo:
+    """A kernel module deployed as a dependency (not the instrument .ko).
+
+    Used for cfg80211.ko in the cfg80211 bench mode: it is not an instrument
+    binder, so the instrument allowlist does not apply, but it must still be a
+    GPL, EABI-consistent (same vermagic) ARM module written by this same kernel
+    tree - anything else must never be insmod'ed on the box.
+    """
+    path: str
+    size: int
+    sha256: str
+    name: str
+    vermagic: str
+    license: str
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+def validate_support_module(path: str, expected_name: str | None = None,
+                            expected_vermagic_prefix: str = EXPECTED_VERMAGIC_PREFIX,
+                            ) -> SupportModuleInfo:
+    """Validate a required kernel module dependency (e.g. cfg80211.ko)."""
+    info = parse_module_elf(path)
+    if expected_name and info.name != expected_name:
+        raise GuardError(
+            "support-module-name",
+            "support module %s reports name %r, expected %r"
+            % (path, info.name, expected_name))
+    if info.license != "GPL":
+        raise GuardError("support-module-license",
+                         "support module %r license is %r, expected GPL"
+                         % (info.name, info.license))
+    if not info.vermagic.startswith(expected_vermagic_prefix):
+        raise GuardError(
+            "support-module-vermagic",
+            "support module %r vermagic %r does not start with %r (wrong "
+            "kernel tree?)" % (info.name, info.vermagic,
+                              expected_vermagic_prefix))
+    for marker in EXPECTED_VERMAGIC_MARKERS:
+        if marker not in info.vermagic:
+            raise GuardError(
+                "support-module-vermagic",
+                "support module %r vermagic %r lacks %r"
+                % (info.name, info.vermagic, marker))
+    return SupportModuleInfo(os.path.abspath(path), info.size, info.sha256,
+                             info.name, info.vermagic, info.license)
+
+
+@dataclasses.dataclass
+class SharedObjectInfo:
+    path: str
+    size: int
+    sha256: str
+    e_type: int
+    e_machine: int
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+def validate_arm_shared_object(path: str) -> SharedObjectInfo:
+    """Validate a 32-bit ARM shared library (ELF32 LE ET_DYN, EM_ARM).
+
+    The bench userspace (iw) links against libnl-tiny, which is deployed to
+    /tmp with the binary (the image rootfs carries neither); a wrong-arch or
+    non-ELF file must be refused before deploy.
+    """
+    if not os.path.isfile(path):
+        raise GuardError("shared-object-missing",
+                         "shared object not found: %s" % path)
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 52 or data[:4] != ELF_MAGIC:
+        raise GuardError("shared-object-not-elf",
+                         "%s is not an ELF file" % path)
+    if data[4] != 1:
+        raise GuardError("shared-object-not-elf32",
+                         "%s is not ELF32" % path)
+    if data[5] != 1:
+        raise GuardError("shared-object-not-le",
+                         "%s is not little-endian" % path)
+    e_type, e_machine = struct.unpack_from("<HH", data, 16)
+    if e_type != 3:
+        raise GuardError("shared-object-not-dyn",
+                         "%s is not a shared object (e_type=%d, want 3)"
+                         % (path, e_type))
+    if e_machine != EM_ARM:
+        raise GuardError("shared-object-not-arm",
+                         "%s is not an ARM shared object (e_machine=%d)"
+                         % (path, e_machine))
+    if len(data) < 1024:
+        raise GuardError("shared-object-too-small",
+                         "%s is only %d bytes" % (path, len(data)))
+    return SharedObjectInfo(os.path.abspath(path), len(data),
+                            sha256_bytes(data), e_type, e_machine)
+
+
+def module_has_strings(path: str, names: Iterable[str]) -> dict:
+    """Best-effort static capability probe: are these C strings in the .ko?
+
+    sysfs attribute names and h2d grammar tokens are plain C strings in the
+    module image, so a host-only byte scan can tell the phase matrix whether a
+    token exists in this build WITHOUT loading it on the box.  It is a
+    capability hint, not proof: the real session still gates on the attribute
+    file existing under the PCI device.
+    """
+    if not os.path.isfile(path):
+        raise GuardError("module-missing", "module not found: %s" % path)
+    with open(path, "rb") as f:
+        blob = f.read()
+    return {str(n): (str(n).encode("ascii", "replace") in blob)
+            for n in names}
+
 # ---------------------------------------------------------------------------
 # CECE gate latch
 # ---------------------------------------------------------------------------
@@ -864,9 +995,7 @@ class WriteGuard:
         payload = "" if payload is None else str(payload)
         if not attr or "/" in attr or attr.startswith("."):
             raise GuardError("attr-name", "bad sysfs attribute name %r" % attr)
-        known = (BASE_ATTRS | HCC_ATTRS | RD_ATTRS | H2D_ATTRS |
-                 WIFI_TRANSPORT_ATTRS)
-        if attr not in known:
+        if attr not in ALL_KNOWN_ATTRS:
             raise GuardError("attr-unknown", "unknown sysfs attribute %r" % attr)
         if attr not in WO_ATTRS:
             raise GuardError("attr-readonly", "%r is read-only; never write it" % attr)
@@ -924,6 +1053,24 @@ class WriteGuard:
         if attr in ("h2d_txq_sync", "h2d_txq_sync72"):
             if payload.strip() != "1":
                 raise GuardError("h2d-payload", "%r store payload must be '1'" % attr)
+            return
+        if attr == "h2d_cfg_cal":
+            # task-103 calibration alg set_* trigger: vendor-script order N=1..6
+            # or the literal cfg id 3502..3507, optional " fb=M" with M=0..0x12
+            # (decimal or 0x hex); the value area is the zero structural probe.
+            if not re.match(r"^(?:[1-6]|350[2-7])(?: fb=(?:0[xX][0-9a-fA-F]+|"
+                            r"\d{1,2}))?$", payload.strip()):
+                raise GuardError("h2d-grammar",
+                                 "h2d_cfg_cal grammar is N[ fb=M] with N=1..6 "
+                                 "or 3502..3507, got %r" % payload)
+            return
+        if attr == "h2d_txq_addr_sync":
+            # Contracted data-plane token: the vendor's own key-0x0320 frame;
+            # the driver owns the TXQ-table VA, so the host trigger is ONE
+            # payload-free store.
+            if payload.strip() != "1":
+                raise GuardError("h2d-payload",
+                                 "h2d_txq_addr_sync store payload must be '1'")
             return
         if attr == "h2d_send":
             # Dedicated-frame grammar only; payload frames stay refused.

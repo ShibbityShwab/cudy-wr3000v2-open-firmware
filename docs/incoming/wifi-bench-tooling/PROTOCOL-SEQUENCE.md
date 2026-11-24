@@ -304,3 +304,81 @@ Fixes, all host-side re-verified:
    second confirming read and waits up to 300 s; only idempotent deploy
    operations retry across a link drop, never the session script.
 
+
+---
+
+## 10. task-114 extensions: shell steps, cfg80211 mode, bring-up phases
+
+Added 2026-11-25 (host-only).  On top of the H2D sequence engine:
+
+### 10.1 New shell step kind
+
+ONE allowlisted userspace command per step, rebuilt from SHELL_TEMPLATES
+(no free command text ever reaches the device script):
+
+    {"name": "vap-add", "kind": "shell", "cmd": "iw-iface-add",
+     "args": {"phy": "phy0", "ifname": "wlan0", "type": "managed"},
+     "expect_rc": 0, "patterns": ["wlan0"], "absent": ["error"]}
+
+Templates: iw-dev-list / iw-phy-list / iw-phy-info / iw-iface-add /
+iw-iface-del / iw-scan / ip-link-up / ip-link-down / sysfs-read (only
+/sys/class/{ieee80211,net}/...) / dmesg.  Typed args are validated (^phyN,
+ifname regex, iftype managed|monitor|AP, sysfs path allowlist); expect_rc is
+0..255; patterns must appear in the captured output, absent must not.
+iw steps are only valid in the hi5622-wifi-cfg80211 profile.  The generated
+script runs the command, captures its rc + output into the session report, and
+gates both device-side and host-side (shell-rc-mismatch / shell-pattern-missing
+/ shell-pattern-present triage).
+
+### 10.2 Profile + require additions
+
+- profile hi5622-wifi-cfg80211 (cfg80211 mode) alongside hi5622-wifi-h2d
+  (protocol mode); a mismatch is refused.
+- require.module_sha256, require.cfg80211, require.attrs (sysfs attrs the phase
+  needs), require.tools (iw/ip/dmesg).
+- host-side capability probe: for a real module (>= 4 KiB) every attr/token in
+  the sequence + require.attrs must exist as a C string in the .ko, else the
+  plan is refused with module-attr-missing (the phase matrix reports BLOCKED).
+  Synthetic selftest fixtures skip the probe with a warning.
+
+### 10.3 Expectation extensions
+
+- {"present": true} on a read: the raw read must be non-empty (reachability
+  probes where any plausible value is acceptable; empty read = device-read-empty
+  stop).
+- absent patterns on attr_expect (e.g. 'vap0:' must be gone after del).
+- min_count_delta + exact last_total on d2h_catalog entries: relative
+  catalogue deltas (baseline-absent = count 0) and frame-size gates - used by
+  C2 to require six 298 B (0x12A) g1 id3 answers.
+
+### 10.4 The cfg80211 mode
+
+bench_session.py --mode cfg80211 = protocol mode + cfg80211 environment:
+support artifacts --cfg80211-ko (GPL/vermagic-validated), --iw-bin (static ARM
+ET_EXEC) and --libnl-tiny (ARM ET_DYN), deployed sha-verified to
+/root/cfg80211.ko, /tmp/hi5622-bench-iw and /tmp/<libnl>; the script enforces
+cfg80211-before-instrument module order, iw path selection,
+LD_LIBRARY_PATH=/tmp, and after the ready pair a bounded wait for
+/sys/class/ieee80211/phy* + the cfg80211_status registered=1 gate (the driver
+registers the wiphy from a workqueue after the handshake) before any sequence
+step runs.
+
+### 10.5 Bundled bring-up sequences
+
+| sequence | profile | steps/checks/writes | gates |
+| --- | --- | --- | --- |
+| bringup-boot-ready.json | h2d | 5 / 18 / 0 | golden page/state/mask/staging, ready pair + id2 payload, READY_TXQ_SYNC |
+| bringup-c2-calibration.json | h2d | 28 / 54 / 8 | ctx_create t1 alloc signatures, txq clean, 6x cfg_cal consumed + 6 relative g1 id3 last_total=0x12A answers, counters, final page |
+| bringup-d1-vap.json | cfg80211 | 11 / 24 / 0 | wiphy registered, iw phy, netdev add (type/addr), VAP counters, del + absence |
+| bringup-d2-scan.json | cfg80211 | 11 / 15 / 0 | scan rc=0, mask/staging 0, timeout=0/refused=0; D2H events watch-only |
+| bringup-e1-dataplane.json | h2d | 11 / 22 / 3 | id2 ring-pointer seed, clean create+sync, present-gated MAC slot-5 probe, key-0x0320 token consumed, mask 0 |
+
+Phases are run one at a time by tools/phase_matrix.py (dry-run by default) and
+aggregated into the boot/ready/calibration/vap/scan/dataplane table by
+tools/bringup_report.py.  Statuses: PLAN-OK/READY, PASS, BLOCKED-TOKEN,
+BLOCKED-PREREQ, BLOCKED-DRIVER, STOP/FAIL/ERROR, NOT-RUN.  See **PHASES.md**
+for the commands, the dry-run evidence table and the cross-lane prerequisites
+(calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
+g0 id0xC builder for D2, the dp-bringup token for E1).
+
+Selftest: **382/382** device-free checks after task-114 (was 312).

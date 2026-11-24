@@ -1,0 +1,372 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-c2-calibration",
+ "about": "Bring-up matrix row calibration (C2): full six-calibration boot on the calibration-token hi5622_wifi driver with h2d_send_budget=8. ctx_create type 1 -> txq_sync72 -> 6x cfg_cal (3502..3507); gates every consumption, every 298 B g1 id3 answer (relative catalogue delta + last_total), the h2d_status counters and the final golden page.",
+ "profile": "hi5622-wifi-h2d",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": false,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "budget_min": 8,
+  "attrs": [
+   "h2d_cfg_cal"
+  ]
+ },
+ "load_params": {
+  "h2d_send_budget": 8
+ },
+ "steps": [
+  {
+   "name": "note",
+   "kind": "note",
+   "about": "C2: the canonical six-calibration boot on the calibration-token driver - ONE ctx_create type 1, ONE txq_sync72, then the six vendor calibration alg set_* events (cfg ids 3502/3503/3504/3505/3506/3507), one message per idea, budget 8. Expected: every message consumed in 0 polls, six 298 B g1 id3 config-syn answers, mask stays 0 and the boot page stays golden."
+  },
+  {
+   "name": "baseline",
+   "kind": "catalog_snapshot",
+   "about": "D2H catalogue before the first H2D message (delta baseline for the six responses)"
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "pre-create state: ctx+0x190 = 0 (no context), mask = 0, staging = 0/unmodified",
+   "reads": [
+    {
+     "label": "pre_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "about": "ONE context-create H2D: g0 id1 key 0x64, data[0]=type 1 (the allocating variant; the 2026-11-25 validated lap)"
+  },
+  {
+   "name": "post-create",
+   "kind": "read_pack",
+   "about": "the create allocated the context: ctx+0x190 != 0, V+0x10 = 0x64 and V+0x14 = 3 (the two 2026-11-25 validated signatures)",
+   "reads": [
+    {
+     "label": "post_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "nonzero": true
+     }
+    },
+    {
+     "label": "post_sig10",
+     "base": "post_ctx190",
+     "add": "0x10",
+     "expect": {
+      "eq": "0x64"
+     }
+    },
+    {
+     "label": "post_sig14",
+     "base": "post_ctx190",
+     "add": "0x14",
+     "expect": {
+      "eq": "0x3"
+     }
+    }
+   ]
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "about": "ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node); requires the allocated context from ctx-create-t1"
+  },
+  {
+   "name": "post-txq",
+   "kind": "read_pack",
+   "about": "the TXQ handler ran clean: no exception mask bit and no staged exception frame",
+   "reads": [
+    {
+     "label": "txq_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "txq_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "cal-3502",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3502",
+   "patterns": [
+    "cfg_cal_sent=1"
+   ],
+   "about": "calibration alg set_* #1: HCC g0 id2 key 0x0101, cfg id 3502 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3502",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3502",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 1,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #1 the catalogue must show at least 1 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "cal-3503",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3503",
+   "patterns": [
+    "cfg_cal_sent=2"
+   ],
+   "about": "calibration alg set_* #2: HCC g0 id2 key 0x0101, cfg id 3503 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3503",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3503",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 2,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #2 the catalogue must show at least 2 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "cal-3504",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3504",
+   "patterns": [
+    "cfg_cal_sent=3"
+   ],
+   "about": "calibration alg set_* #3: HCC g0 id2 key 0x0101, cfg id 3504 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3504",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3504",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 3,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #3 the catalogue must show at least 3 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "cal-3505",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3505",
+   "patterns": [
+    "cfg_cal_sent=4"
+   ],
+   "about": "calibration alg set_* #4: HCC g0 id2 key 0x0101, cfg id 3505 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3505",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3505",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 4,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #4 the catalogue must show at least 4 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "cal-3506",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3506",
+   "patterns": [
+    "cfg_cal_sent=5"
+   ],
+   "about": "calibration alg set_* #5: HCC g0 id2 key 0x0101, cfg id 3506 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3506",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3506",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 5,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #5 the catalogue must show at least 5 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "cal-3507",
+   "kind": "attr_write",
+   "attr": "h2d_cfg_cal",
+   "value": "3507",
+   "patterns": [
+    "cfg_cal_sent=6"
+   ],
+   "about": "calibration alg set_* #6: HCC g0 id2 key 0x0101, cfg id 3507 (298 B frame); ONE message per idea, never repeated on the same boot"
+  },
+  {
+   "name": "settle-3507",
+   "kind": "sleep",
+   "seconds": 0.5,
+   "about": "bounded wait for the firmware answer to reach the direct reader"
+  },
+  {
+   "name": "resp-3507",
+   "kind": "d2h_catalog",
+   "before": "baseline",
+   "require_frames_increase": true,
+   "expect_entries": [
+    {
+     "group": 1,
+     "id": 3,
+     "min_count_delta": 6,
+     "last_total": "0x12a",
+     "about": "the firmware's config-syn answer: g1 id3, 298 B (0x12A) total, one per calibration message"
+    }
+   ],
+   "about": "after calibration #6 the catalogue must show at least 6 more g1 id3 frames, the newest being 298 B"
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "about": "canonical C2 counters: 8 H2D frames (1 create + 1 TXQ + 6 calibration), all ok, no timeout, no refusal",
+   "patterns": [
+    "cfg_cal_sent=6",
+    "frames_sent=8",
+    "ok=8",
+    "timeout=0",
+    "refused=0"
+   ]
+  },
+  {
+   "name": "final-pack",
+   "kind": "read_pack",
+   "about": "the calibration boot left the firmware golden: page intact, state 1, mask 0",
+   "reads": [
+    {
+     "label": "final_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "final_state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    },
+    {
+     "label": "final_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "C2 row PASS requires all six g1 id3 answers; a stop at any cal-<id> or resp-<id> is a discovery, never a retry on the same boot"
+  }
+ ]
+}

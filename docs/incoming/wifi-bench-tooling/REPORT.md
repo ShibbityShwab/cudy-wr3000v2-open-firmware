@@ -410,3 +410,73 @@ happened are MISSING (not PASS), and a device stop before the first sequence
 step becomes pre_sequence_failure with every step NOT-RUN.  Selftest grew
 258 -> 312 device-free checks (SSH transport, reboot semantics, helper
 validation/handling, empty-read evidence, pre-sequence stop).
+
+---
+
+## 9. task-114: bring-up phase matrix, cfg80211 mode, wave-2 ladder
+
+Added 2026-11-25, host-only, no device contact.  Extends the protocol-sequence
+runner into the **bring-up ladder**:
+
+1. **cfg80211 bench mode** (bench_session.py --mode cfg80211): validates and
+   deploys the cfg80211 environment the new image lacks - cfg80211.ko
+   (GPL + vermagic support-module policy, insmoded BEFORE the instrument),
+   iw (static ARM ET_EXEC -> /tmp/hi5622-bench-iw) and libnl-tiny (ARM ET_DYN
+   -> /tmp, LD_LIBRARY_PATH) - then after the strict ready pair waits for
+   /sys/class/ieee80211/phy* (wiphy registration workqueue), gates
+   cfg80211_status registered=1 and runs iw phy as a read-only enumeration
+   gate.  Missing support artifacts refuse a real run; dry-runs warn with
+   unverified placeholders.
+2. **shell step kind** in protocol_sequence.py: one allowlisted userspace
+   command (iw dev/phy/iface/scan, ip link, cat /sys/class/{ieee80211,net},
+   dmesg) with typed args, expect_rc and required/absent output patterns;
+   iw only in the new hi5622-wifi-cfg80211 profile.  The generated script
+   captures rc + output, gates device-side (gate_rc/gate_out_has/
+   gate_out_absent) and the host re-evaluates each gate.
+3. **Schema additions**: require.module_sha256 / cfg80211 / attrs / tools;
+   present read gates; absent attr patterns; relative min_count_delta plus
+   exact last_total D2H catalogue gates.  Host-side capability probe: every
+   attr/token a sequence touches must be a C string in the target .ko (real
+   modules only, >= 4 KiB), else the plan is refused with module-attr-missing
+   - a phase whose driver token is still pending shows as BLOCKED before any
+   bench time.
+4. **Bundled phase sequences** (tools/sequences/):
+   - bringup-boot-ready (read-only golden page + ready pair, 5/18/0)
+   - bringup-c2-calibration (six-calibration boot, 28/54/8, budget 8; six
+     298 B g1 id3 answers gated by relative delta + last_total)
+   - bringup-d1-vap (cfg80211 M0/M1 wiphy + netdev add/del, 11/24/0)
+   - bringup-d2-scan (scan request rc=0 + no-exception gates, 11/15/0; D2H
+     scan events watch-only - see cross-lane note below)
+   - bringup-e1-dataplane (ready id2 ring-pointer seed + read-only MAC slot-5
+     probe + key-0x0320 TXQ-table address sync, 11/22/3)
+5. **tools/phase_matrix.py**: one command per phase (boot/ready/C2/D1/D2/E1/
+   all), per-phase bench_session evidence dirs plus phase-matrix.json +
+   PHASE-MATRIX.md; --module-for PHASE=PATH for phase-specific modules;
+   dry-run default, real run needs --yes-really --attended.
+   **tools/bringup_report.py**: aggregates the matrix into the
+   boot/ready/calibration/vap/scan/dataplane state table (BRINGUP-STATUS.md +
+   JSON) with a next action for every non-green row; never contacts the device.
+6. **Dry-run evidence** (real local artifact digests, host-only): boot/C2/D1/D2
+   PLAN-OK (5/28/11/11 steps; 18/54/24/15 checks; C2 8 planned writes; the
+   cfg80211 plan deploys support-module/userspace/library, renders the
+   cfg80211-first load order + wiphy gate and passes sh -n) and E1
+   BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
+   no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
+   calibration/vap/scan READY, dataplane BLOCKED.
+7. **Tests**: 312 -> 382 device-free checks (+70): shell-step refusal matrix,
+   shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
+   wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
+   add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
+   (sh -n), capability-probe refusals, phase-matrix end-to-end dry-runs
+   (PLAN-OK + BLOCKED-TOKEN) and bring-up report mapping.
+
+Cross-lane prerequisites consumed here: the calibration-token module
+(wifi-h2d-send, 407,996 B), the cfg80211 image/module (wifi-cfg80211 505,076 B
++ cfg80211.ko 2,328,548 B), the scan-ap driver wiring (task-113, 622,544 B,
+fail-closed -EOPNOTSUPP until a provider builder is registered) and the
+wifi-vap-scan frame recipes + ladder (task-110; g0 id7/id8/id9/id0xC frames).
+D2's PASS gate is "scan request accepted + no firmware exception", with D2H
+events watch-only because the firmware scan handler (CA 0x6494C) hardcodes VAP
+lookup id 0 while the M1 VAP is host-only; a graceful no-VAP refusal is an
+accepted frame-validity outcome.  E1's token name is the automation contract
+(h2d_txq_addr_sync); a rename is a one-line sequence-JSON change.

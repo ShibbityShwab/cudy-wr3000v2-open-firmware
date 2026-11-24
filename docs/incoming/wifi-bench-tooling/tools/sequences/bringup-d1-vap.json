@@ -1,0 +1,146 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-d1-vap",
+ "about": "Bring-up matrix row vap (D1): the cfg80211 netdev VAP lifecycle through the driver + nl80211 (M0/M1) - wiphy registration gate, iw phy enumeration, iw interface add, netdev sysfs checks, iw dev del, and the cfg80211_status VAP counters before/after. No H2D message is fired: M1 is the driver's own netdev model.",
+ "profile": "hi5622-wifi-cfg80211",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": true,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "tools": [
+   "iw"
+  ],
+  "attrs": [
+   "cfg80211_status"
+  ]
+ },
+ "steps": [
+  {
+   "name": "cfg-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "about": "the wiphy registration gate fired after the ready handshake: allocated + registered, no VAP yet",
+   "patterns": [
+    "wiphy=alloc",
+    "registered=1"
+   ],
+   "absent": [
+    "vap0:"
+   ]
+  },
+  {
+   "name": "phy-info",
+   "kind": "shell",
+   "cmd": "iw-phy-info",
+   "args": {
+    "phy": "phy0"
+   },
+   "expect_rc": 0,
+   "patterns": [
+    "Wiphy phy0"
+   ],
+   "about": "iw phy phy0 info enumerates the clean wiphy (read-only)"
+  },
+  {
+   "name": "vap-add",
+   "kind": "shell",
+   "cmd": "iw-iface-add",
+   "args": {
+    "phy": "phy0",
+    "ifname": "wlan0",
+    "type": "managed"
+   },
+   "expect_rc": 0,
+   "about": "M1: iw phy phy0 interface add wlan0 type managed -> real netdev through add_virtual_intf"
+  },
+  {
+   "name": "netdev-type",
+   "kind": "shell",
+   "cmd": "sysfs-read",
+   "args": {
+    "path": "/sys/class/net/wlan0/type"
+   },
+   "expect_rc": 0,
+   "patterns": [
+    "1"
+   ],
+   "about": "the netdev exists and is ARPHRD_ETHER (sysfs type=1)"
+  },
+  {
+   "name": "netdev-addr",
+   "kind": "shell",
+   "cmd": "sysfs-read",
+   "args": {
+    "path": "/sys/class/net/wlan0/address"
+   },
+   "expect_rc": 0,
+   "patterns": [
+    "^[0-9a-f][0-9a-f]:"
+   ],
+   "about": "the netdev carries a locally-administered style address (the 2026-11-25 milestone saw 02:00:68:69:35:01)"
+  },
+  {
+   "name": "vap-added",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "about": "the driver model recorded the VAP: vap0 line + netdev created counter",
+   "patterns": [
+    "vap0: wlan0",
+    "created=1"
+   ]
+  },
+  {
+   "name": "dev-list",
+   "kind": "shell",
+   "cmd": "iw-dev-list",
+   "expect_rc": 0,
+   "patterns": [
+    "wlan0"
+   ],
+   "about": "iw dev lists the new interface"
+  },
+  {
+   "name": "vap-del",
+   "kind": "shell",
+   "cmd": "iw-iface-del",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "M1 teardown: iw dev wlan0 del -> del_virtual_intf unregisters the wdev/netdev"
+  },
+  {
+   "name": "vap-removed",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "about": "the VAP model is empty again: vaps=0 and the netdev removed counter",
+   "patterns": [
+    "vaps=0",
+    "removed=1"
+   ],
+   "absent": [
+    "vap0:"
+   ]
+  },
+  {
+   "name": "dev-list-after",
+   "kind": "shell",
+   "cmd": "iw-dev-list",
+   "expect_rc": 0,
+   "absent": [
+    "wlan0"
+   ],
+   "about": "iw dev no longer lists wlan0"
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "D1 row PASS = wiphy registered + netdev add/del both round-trip; a failure is a driver-model bug, not a firmware event (no H2D was sent). NOTE: the firmware VAP/user messages (g0 id7/id8 user_add, g0 id9 del_user) are the wifi-vap-scan lane's byte-exact builders (recipes/frames.md) and need a driver provider registration; this row deliberately stops at the hardware-validated M1 netdev model."
+  }
+ ]
+}

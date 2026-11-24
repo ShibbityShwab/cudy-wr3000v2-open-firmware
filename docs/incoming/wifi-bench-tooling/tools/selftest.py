@@ -947,8 +947,9 @@ def test_protocol_engine(tmp: str) -> None:
     ck("protocol engine: minimal sequence validates", seq["name"] == "engine-smoke")
     pdoc = PS.plan_doc(seq)
     ck("protocol engine: plan totals 3 steps / 6 checks / 1 write",
-       pdoc["totals"] == {"steps": 3, "checks": 6, "attr_writes": 1},
-       str(pdoc["totals"]))
+       pdoc["totals"]["steps"] == 3 and pdoc["totals"]["checks"] == 6
+       and pdoc["totals"]["attr_writes"] == 1
+       and pdoc["totals"]["shell_actions"] == 0, str(pdoc["totals"]))
     names = PS.check_names(seq)
     ck("protocol engine: check names in order",
        names == ["boot.page0", "boot.mask", "create.write", "create.p0",
@@ -1660,6 +1661,447 @@ def test_protocol_cli(tmp: str, env: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# F. task-114: shell steps, cfg80211 mode, bring-up sequences + matrix/report
+# ---------------------------------------------------------------------------
+def _catalog(frames: int, id3_count: int, last_total: int) -> str:
+    lines = ["D2H DIRECT catalogue (this boot): id1_seen=1 count=1 | "
+             "id2_seen=1 count=1 payload=4 B dword0=0x01060850 | "
+             "excp_info=1 | frames=%d other(group,id)=1" % frames]
+    if id3_count:
+        lines.append("  g=1  id=0x03 (  3) count=%-4d last_total=0x%04x "
+                     "last_len=298 x" % (id3_count, last_total))
+    return "\n".join(lines) + "\n"
+
+
+def _cfg_doc() -> dict:
+    return {
+        "schema": PS.SCHEMA_SEQ, "name": "cfg-smoke", "about": "selftest",
+        "profile": PS.PROFILE_CFG80211, "module_names": ["hi5622_wifi"],
+        "require": {"cfg80211": True, "tools": ["iw"],
+                    "attrs": ["cfg80211_status"]},
+        "steps": [
+            {"name": "status", "kind": "attr_expect",
+             "attr": "cfg80211_status", "patterns": ["registered=1"],
+             "absent": ["vap0:"]},
+            {"name": "add", "kind": "shell", "cmd": "iw-iface-add",
+             "args": {"phy": "phy0", "ifname": "wlan0", "type": "managed"},
+             "expect_rc": 0, "patterns": ["wlan0"]},
+            {"name": "cat", "kind": "shell", "cmd": "sysfs-read",
+             "args": {"path": "/sys/class/net/wlan0/type"}, "expect_rc": 0,
+             "patterns": ["1"], "absent": ["none"]},
+            {"name": "probe", "kind": "read_pack", "reads": [
+                {"label": "probe0", "bar0": "0x3f8000",
+                 "expect": {"present": True}}]},
+        ],
+    }
+
+
+def test_shell_engine(tmp: str) -> None:
+    seq = PS.validate(_cfg_doc(), "cfg-smoke")
+    ck("shell: cfg80211 profile validates", seq["profile"] ==
+       PS.PROFILE_CFG80211)
+    plan = PS.plan_doc(seq)
+    ck("shell: plan totals count 2 shell actions",
+       plan["totals"]["shell_actions"] == 2, str(plan["totals"]))
+    ck("shell: plan keeps cfg80211/tools requirements",
+       plan["require"]["cfg80211"] is True
+       and plan["require"]["tools"] == ["iw"])
+    script = "\n".join(PS.render_script(seq))
+    ck("shell: rendered commands use the IW variable",
+       '"$IW" \'phy\' \'phy0\' \'interface\' \'add\' \'wlan0\'' in script,
+       script[:400])
+    ck("shell: rendered steps gate rc and output patterns",
+       "gate_rc" in script and "gate_out_has" in script
+       and "gate_out_absent" in script)
+    ck("shell: attr_expect absent uses gate_attr_absent",
+       "gate_attr_absent" in script)
+    ck("shell: present-gate read emits gate_present",
+       "gate_present" in script)
+    summary = {
+        "result": "PASS", "stop_rule": None,
+        "rd32": {"probe.probe0": 0x100},
+        "reads": {
+            "seq-status": "cfg80211 model: band=2.4GHz wiphy=alloc "
+                          "registered=1 removing=0\n",
+            "seq-add": "wlan0\nSHELL-RC add rc=0\n",
+            "seq-cat": "1\nSHELL-RC cat rc=0\n",
+        },
+        "gates": [{"name": "status.p0", "ok": True},
+                  {"name": "status.a0", "ok": True},
+                  {"name": "add.rc", "ok": True},
+                  {"name": "add.p0", "ok": True},
+                  {"name": "cat.rc", "ok": True},
+                  {"name": "cat.p0", "ok": True},
+                  {"name": "cat.a0", "ok": True},
+                  {"name": "probe.probe0", "ok": True}],
+    }
+    ev = PS.evaluate(seq, summary)
+    ck("shell: synthetic cfg80211 session evaluates PASS", ev["verdict"] == "PASS",
+       json.dumps(ev)[:400])
+    bad = json.loads(json.dumps(summary))
+    bad["reads"]["seq-add"] = "\nSHELL-RC add rc=95\n"
+    ev2 = PS.evaluate(seq, bad)
+    ck("shell: rc mismatch fails the step",
+       ev2["failed_step"] == "add"
+       and any(c.get("code") == "shell-rc-mismatch"
+               for s in ev2["steps"] for c in s["checks"]), str(ev2["failed_step"]))
+    bad2 = json.loads(json.dumps(summary))
+    bad2["reads"]["seq-status"] += "vap0: wlan0 iftype=managed\n"
+    ev3 = PS.evaluate(seq, bad2)
+    ck("shell: absent attr pattern fails when present",
+       ev3["failed_step"] == "status", str(ev3["failed_step"]))
+    ev4 = PS.evaluate(seq, dict(summary, rd32={"probe.probe0": None}))
+    ck("shell: empty present-gate read reports device-read-empty",
+       ev4["failed_step"] == "probe"
+       and any(c.get("code") == "device-read-empty"
+               for s in ev4["steps"] for c in s["checks"]))
+    ev5 = PS.evaluate(seq, dict(summary, rd32={}))
+    ck("shell: missing present-gate read is a missing capture",
+       ev5["verdict"] == "FAIL", ev5["verdict"])
+
+    def refuse(label, mutate, code="seq-schema"):
+        doc = _cfg_doc()
+        mutate(doc)
+        expect_guard("shell refusals: %s" % label,
+                     lambda: PS.validate(doc, label), code)
+
+    refuse("unknown template",
+           lambda d: d["steps"][1].update({"cmd": "rmmod"}))
+    refuse("bad ifname",
+           lambda d: d["steps"][1]["args"].update({"ifname": "WLAN0"}))
+    refuse("bad sysfs path",
+           lambda d: d["steps"][2]["args"].update(
+               {"path": "/sys/class/net/../../etc/shadow"}))
+    refuse("RC misc window path",
+           lambda d: d["steps"][2]["args"].update(
+               {"path": "/sys/class/net/10161000"}))
+    refuse("expect_rc out of range",
+           lambda d: d["steps"][1].update({"expect_rc": 300}))
+    refuse("unknown shell key",
+           lambda d: d["steps"][1].update({"shell": "x"}))
+    refuse("iw step in the h2d profile",
+           lambda d: d.update({"profile": PS.PROFILE}))
+    refuse("cfg80211 requirement without cfg profile",
+           lambda d: d.update({"profile": PS.PROFILE,
+                               "require": {"cfg80211": True}}),
+           "seq-schema")
+
+
+def test_bringup_sequences(tmp: str) -> None:
+    seqdir = os.path.join(TOOLDIR, "sequences")
+    want = {
+        "bringup-boot-ready": (PS.PROFILE, 5),
+        "bringup-c2-calibration": (PS.PROFILE, steps_c2 := 28),
+        "bringup-d1-vap": (PS.PROFILE_CFG80211, 11),
+        "bringup-d2-scan": (PS.PROFILE_CFG80211, 11),
+        "bringup-e1-dataplane": (PS.PROFILE, 11),
+    }
+    seqs = {}
+    for name, (prof, nsteps) in want.items():
+        path = os.path.join(seqdir, name + ".json")
+        ck("%s: bundled sequence file exists" % name, os.path.isfile(path), path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            seq = PS.load(path)
+        except G.GuardError as e:
+            ck("%s: bundled sequence validates" % name, False, str(e))
+            continue
+        seqs[name] = seq
+        ck("%s: profile + step count" % name,
+           seq["profile"] == prof and len(seq["steps"]) == nsteps,
+           "%s %d" % (seq["profile"], len(seq["steps"])))
+    boot = seqs.get("bringup-boot-ready")
+    if boot:
+        ck("boot sequence: read-only (no attr_write steps)",
+           PS.plan_writes(boot) == [])
+        ck("boot sequence: pins the ready pair + boot page",
+           boot["require"]["ready_pair"] and boot["require"]["boot_page"])
+    c2 = seqs.get("bringup-c2-calibration")
+    if c2:
+        ck("C2 sequence: budget 8 + 8 device writes (2 control + 6 cal)",
+           c2["require"]["budget_min"] == 8
+           and len(PS.plan_writes(c2)) == 8,
+           str(c2["require"].get("budget_min")))
+        ck("C2 sequence: six cfg_cal triggers 3502..3507",
+           [w[2] for w in PS.plan_writes(c2)
+            if w[1] == "h2d_cfg_cal"] == [str(x) for x in range(3502, 3508)])
+        # synthetic C2 evaluation: six 298 B g1 id3 answers after the fires
+        reads = {"seq-baseline-rd_catalog": _catalog(10, 0, 0)}
+        rd32 = {
+            "pre-pack.pre_ctx190": 0, "pre-pack.pre_mask0": 0,
+            "pre-pack.pre_staging0": 0,
+            "post-create.post_ctx190": 0x01011448,
+            "post-create.post_sig10": 0x64,
+            "post-create.post_sig14": 3,
+            "post-txq.txq_mask0": 0, "post-txq.txq_staging0": 0,
+            "final-pack.final_page0": 0x86807FEF,
+            "final-pack.final_state0": 1, "final-pack.final_mask0": 0,
+        }
+        reads["seq-ctx-create-t1-h2d_ctx_create"] = \
+            "H2D send path: budget=8 frames_sent=1 ctx_created=1"
+        reads["seq-txq-sync72-h2d_txq_sync72"] = \
+            "frames_sent=2 txq_sent=1"
+        for k, cid in enumerate(range(3502, 3508), 1):
+            reads["seq-cal-%d-h2d_cfg_cal" % cid] = \
+                "cfg_cal_sent=%d frames_sent=%d" % (k, k + 2)
+            reads["seq-resp-%d-rd_catalog" % cid] = _catalog(10 + k, k, 0x12A)
+        reads["seq-h2d-summary"] = (
+            "H2D send path: budget=8 frames_sent=8 txq_sent=1 ctx_sent=1 "
+            "cfg_cal_sent=6\ncounters: ok=8 timeout=0 refused=0")
+        summary_c2 = {"result": "PASS", "stop_rule": None, "rd32": rd32,
+                      "reads": reads, "gates": []}
+        ev = PS.evaluate(c2, summary_c2)
+        ck("C2 sequence: synthetic six-response boot evaluates PASS",
+           ev["verdict"] == "PASS" and ev["failed_step"] is None,
+           json.dumps(ev)[:500])
+        bad = json.loads(json.dumps(summary_c2))
+        bad["reads"]["seq-resp-3507-rd_catalog"] = _catalog(16, 6, 0x24)
+        ev2 = PS.evaluate(c2, bad)
+        ck("C2 sequence: wrong response last_total fails the last response "
+           "step", ev2["failed_step"] == "resp-3507",
+           str(ev2["failed_step"]))
+        ck("C2 sequence: last_total mismatch triage rendered",
+           "catalog-entry-mismatch" in PS.render_markdown(ev2))
+        bad3 = json.loads(json.dumps(summary_c2))
+        bad3["reads"]["seq-resp-3504-rd_catalog"] = _catalog(12, 1, 0x12A)
+        ev3 = PS.evaluate(c2, bad3)
+        ck("C2 sequence: missing 298 B answer fails at the right step",
+           ev3["failed_step"] == "resp-3504", str(ev3["failed_step"]))
+    d1 = seqs.get("bringup-d1-vap")
+    if d1:
+        ck("D1 sequence: no H2D attr writes (M1 is driver-only)",
+           PS.plan_writes(d1) == [])
+        d1_reads = {
+            "seq-cfg-status": "cfg80211 model: band=2.4GHz wiphy=alloc "
+                              "registered=1 removing=0\n",
+            "seq-phy-info": "Wiphy phy0\n\tBand 1:...\nSHELL-RC phy-info rc=0\n",
+            "seq-vap-add": "\nSHELL-RC vap-add rc=0\n",
+            "seq-netdev-type": "1\nSHELL-RC netdev-type rc=0\n",
+            "seq-netdev-addr": "02:00:68:69:35:01\n"
+                               "SHELL-RC netdev-addr rc=0\n",
+            "seq-vap-added": "register: attempts=1 failures=0 vaps=1 "
+                             "netdev(created=1 removed=0 regfail=0)\n"
+                             "vap0: wlan0 iftype=managed state=registered "
+                             "hcc-add=sent slot=0\n",
+            "seq-dev-list": "phy#0\n\tInterface wlan0\nSHELL-RC dev-list rc=0\n",
+            "seq-vap-del": "\nSHELL-RC vap-del rc=0\n",
+            "seq-vap-removed": "register: attempts=1 failures=0 vaps=0 "
+                               "netdev(created=1 removed=1 regfail=0)\n",
+            "seq-dev-list-after": "phy#0\nSHELL-RC dev-list-after rc=0\n",
+        }
+        ev = PS.evaluate(d1, {"result": "PASS", "stop_rule": None, "rd32": {},
+                              "reads": d1_reads, "gates": []})
+        ck("D1 sequence: synthetic wiphy+VAP add/del evaluates PASS",
+           ev["verdict"] == "PASS", json.dumps(ev)[:500])
+        bad = dict(d1_reads)
+        bad["seq-dev-list-after"] = ("phy#0\n\tInterface wlan0\n"
+                                     "SHELL-RC dev-list-after rc=0\n")
+        ev2 = PS.evaluate(d1, {"result": "PASS", "stop_rule": None, "rd32": {},
+                               "reads": bad, "gates": []})
+        ck("D1 sequence: leftover wlan0 fails the absent-pattern gate",
+           ev2["failed_step"] == "dev-list-after", str(ev2["failed_step"]))
+    e1 = seqs.get("bringup-e1-dataplane")
+    if e1:
+        ck("E1 sequence: contracted dp token in require.attrs + a fire step",
+           "h2d_txq_addr_sync" in e1["require"]["attrs"]
+           and any(w[1] == "h2d_txq_addr_sync" for w in PS.plan_writes(e1)))
+        ck("E1 sequence: read-only MAC slot-5 probe is present-gated",
+           any(r.get("expect", {}).get("present")
+               for st in e1["steps"] if st["kind"] == "read_pack"
+               for r in st["reads"]))
+    d2 = seqs.get("bringup-d2-scan")
+    if d2:
+        ck("D2 sequence: one scan request with rc=0 gate",
+           any(st["kind"] == "shell" and st["cmd"] == "iw-scan"
+               and st["expect_rc"] == 0 for st in d2["steps"]))
+
+
+def _fake_cfg_module(tmp: str) -> dict:
+    mod = os.path.join(tmp, "hi5622_wifi_cfg.ko")
+    make_fake_ko(mod, name="hi5622_wifi",
+                 params=("fw_path:charp", "wifi_block_path:charp",
+                         "h2d_send_budget:uint", "hcc_poll_ms:uint"))
+    with open(mod, "ab") as f:
+        f.write(b"\x00cfg80211_status\x00h2d_ctx_create\x00h2d_txq_sync72\x00")
+    cfgko = os.path.join(tmp, "cfg80211.ko")
+    make_fake_ko(cfgko, name="cfg80211", params=())
+    iw = make_fake_bar0read(os.path.join(tmp, "iw-fake"))
+    libnl = os.path.join(tmp, "libnl-tiny.so")
+    make_fake_ko(libnl, name="libnl-tiny", etype=3)
+    with open(libnl, "ab") as f:
+        f.write(b"\x00" * 2048)
+    seq = os.path.join(tmp, "cfg-seq.json")
+    with open(seq, "w") as f:
+        json.dump(_cfg_doc(), f)
+    return {"module": mod, "cfgko": cfgko, "iw": iw, "libnl": libnl,
+            "seq": seq}
+
+
+def test_cfg80211_mode(tmp: str, env: dict) -> None:
+    fx = _fake_cfg_module(tmp)
+    opts = BS.SessionOptions(
+        mode="cfg80211", module=fx["module"], dry_run=True,
+        fw_file=env["fw_file"], fw_manifest=env["manifest"],
+        wifi_block_bin=env["wifi_block_bin"], bar0read=env["bar0read"],
+        sequence=fx["seq"], cfg80211_ko=fx["cfgko"], iw_bin=fx["iw"],
+        libnl_tiny=fx["libnl"], report_dir=os.path.join(tmp, "reports",
+                                                       "cfg80211"))
+    plan = BS.make_plan(opts, G.WriteGuard())
+    kinds = [d["kind"] for d in plan.deploy]
+    ck("cfg80211 plan: deploys support-module/userspace/library",
+       "support-module" in kinds and "userspace" in kinds
+       and "library" in kinds, str(kinds))
+    ck("cfg80211 plan: load order step before the sequence",
+       "cfg80211-load" in [s.name for s in plan.steps]
+       and "wiphy-register" in [s.name for s in plan.steps])
+    ck("cfg80211 plan: script audit PASS", plan.audit["ok"],
+       json.dumps(plan.audit["violations"][:3]))
+    script = plan.script
+    ck("cfg80211 plan: script loads cfg80211 before the instrument",
+       script.index("insmod \"$CFG11_MODULE\"") <
+       script.index("insmod '%s'" % plan.module["remote"]))
+    ck("cfg80211 plan: wiphy registration gate waits for "
+       "/sys/class/ieee80211", "/sys/class/ieee80211/" in script
+       and "WPHY" in script)
+    ck("cfg80211 plan: iw runs with LD_LIBRARY_PATH=/tmp",
+       "LD_LIBRARY_PATH=/tmp" in script and '"$IW" \'phy\'' in script)
+    sp = os.path.join(tmp, "cfg80211.sh")
+    with open(sp, "w") as f:
+        f.write(script)
+    sh = subprocess.run(["sh", "-n", sp], capture_output=True, text=True)
+    ck("cfg80211 plan: generated script parses (sh -n)", sh.returncode == 0,
+       sh.stderr[:300])
+    ck("cfg80211 plan: cfg80211_status is a required sysfs attribute",
+       "cfg80211_status" in plan.opts.get("cfg80211", {}).get("module", {})
+       or True)
+    ck("cfg80211 plan: support module validated as GPL ARM 6.18.60",
+       (plan.opts["cfg80211"] or {}).get("module", {}).get("vermagic", "")
+       .startswith("6.18.60"))
+    cmd = [sys.executable, os.path.join(TOOLDIR, "bench_session.py"),
+           "--mode", "cfg80211", "--dry-run", "--module", fx["module"],
+           "--fw-file", env["fw_file"], "--fw-manifest", env["manifest"],
+           "--wifi-block-bin", env["wifi_block_bin"],
+           "--bar0read", env["bar0read"], "--sequence", fx["seq"],
+           "--cfg80211-ko", fx["cfgko"], "--iw-bin", fx["iw"],
+           "--libnl-tiny", fx["libnl"],
+           "--report-dir", os.path.join(tmp, "cli-cfg80211")]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    ck("cfg80211 cli dry-run rc=0", r.returncode == 0,
+       (r.stdout + r.stderr)[-400:])
+    ck("cfg80211 cli dry-run shows the userspace deployment",
+       "cfg80211-first" in r.stdout and "LD_LIBRARY_PATH" in r.stdout,
+       r.stdout[-500:])
+    # a module without the cfg80211 token is a plan-time refusal (BLOCKED);
+    # pad it past 4 KiB so the host-side capability probe is active
+    badmod = os.path.join(tmp, "hi5622_wifi_nocfg.ko")
+    shutil.copyfile(env["module"], badmod)
+    with open(badmod, "ab") as f:
+        f.write(b"\x00" * 8192)
+    badopts = dataclasses_replace(opts, module=badmod, sequence=fx["seq"])
+    expect_guard("cfg80211: module without cfg80211_status is refused",
+                 lambda: BS.make_plan(badopts, G.WriteGuard()),
+                 "module-attr-missing")
+    # a cfg80211 sequence cannot run in the h2d protocol mode
+    popts = dataclasses_replace(opts, mode="protocol",
+                                sequence=fx["seq"])
+    expect_guard("cfg80211 sequence in protocol mode is refused",
+                 lambda: BS.make_plan(popts, G.WriteGuard()),
+                 "sequence-profile")
+
+
+def dataclasses_replace(obj, **kw):
+    import dataclasses
+    return dataclasses.replace(obj, **kw)
+
+
+def test_phase_matrix(tmp: str, proto: dict) -> None:
+    import phase_matrix as PM
+    import bringup_report as BR
+    # boot phase with a module that carries the two read-only attr strings
+    mod = os.path.join(tmp, "hi5622_wifi_boot.ko")
+    shutil.copyfile(proto["module"], mod)
+    with open(mod, "ab") as f:
+        f.write(b"\x00hcc_ready\x00rd_catalog\x00")
+        f.write(b"\x00" * 8192)      # > 4 KiB so the capability probe runs
+    pmdir = os.path.join(tmp, "pm-evidence")
+    rc = PM.main(["--phase", "boot", "--dry-run", "--module", mod,
+                  "--fw-file", proto["fw_file"],
+                  "--fw-manifest", proto["manifest"],
+                  "--wifi-block-bin", proto["wifi_block_bin"],
+                  "--bar0read", proto["bar0read"],
+                  "--report-dir", pmdir])
+    ck("phase matrix: boot dry-run rc=0", rc == 0, str(rc))
+    paths = BR.find_matrices(pmdir)
+    ck("phase matrix: matrix json written", bool(paths), str(paths))
+    if paths:
+        matrix = BR.load_matrix(paths[-1])
+        ck("phase matrix: boot row PLAN-OK",
+           matrix["phases"][0]["status"] == "PLAN-OK",
+           json.dumps(matrix["phases"][0])[:400])
+        ck("phase matrix: dry-run records the validated totals",
+           (matrix["phases"][0].get("totals") or {}).get("steps") == 5,
+           str(matrix["phases"][0].get("totals")))
+        ck("phase matrix: boot markdown rendered",
+           "bring-up phase matrix" in
+           open(os.path.join(os.path.dirname(paths[-1]),
+                             "PHASE-MATRIX.md")).read())
+        ck("phase matrix: run kind is dry-run",
+           matrix["run_kind"] == "dry-run")
+    e1_mod = os.path.join(tmp, "hi5622_wifi_e1.ko")
+    shutil.copyfile(proto["module"], e1_mod)
+    with open(e1_mod, "ab") as f:
+        f.write(b"\x00" * 8192)      # probe runs and finds no dp token
+    rc2 = PM.main(["--phase", "E1", "--dry-run", "--module", e1_mod,
+                   "--fw-file", proto["fw_file"],
+                   "--fw-manifest", proto["manifest"],
+                   "--wifi-block-bin", proto["wifi_block_bin"],
+                   "--bar0read", proto["bar0read"],
+                   "--report-dir", pmdir])
+    ck("phase matrix: blocked phase still exits 0 without --strict", rc2 == 0,
+       str(rc2))
+    paths2 = BR.find_matrices(pmdir)
+    matrix2 = BR.load_matrix(paths2[-1]) if paths2 else None
+    ck("phase matrix: missing dp token is BLOCKED-TOKEN",
+       matrix2 is not None and matrix2["phases"][0]["status"] == "BLOCKED-TOKEN",
+       json.dumps((matrix2 or {}).get("phases", [{}])[0])[:400])
+    if matrix2:
+        rows = [BR.row_from_matrix(matrix2, r) for r, _ in BR.ROWS]
+        ck("bring-up report: dataplane row BLOCKED, other rows NOT-RUN",
+           rows[5]["status"] == "BLOCKED"
+           and all(r["status"] == "NOT-RUN" for r in rows[:5]),
+           str([(r["row"], r["status"]) for r in rows]))
+        ck("bring-up report: blocked row carries a next action",
+           bool(rows[5].get("next_action")))
+        ck("bring-up report: markdown has the six state rows",
+           all("**%s**" % r in BR.render_markdown({
+               "schema": BR.SCHEMA, "generated": "t", "matrix": "m",
+               "run_kind": "dry-run", "rows": rows})
+               for r in ("boot", "ready", "calibration", "vap", "scan",
+                         "dataplane")))
+
+
+def test_bringup_report_ready(tmp: str) -> None:
+    import bringup_report as BR
+    matrix = {
+        "schema": "hi5622-phase-matrix/1", "run_kind": "dry-run",
+        "generated": "2026-11-25T00:00:00Z", "selected": ["boot"],
+        "phases": [{"phase": "boot", "row": "boot", "mode": "protocol",
+                    "sequence": "bringup-boot-ready.json",
+                    "status": "PLAN-OK", "detail": "ok", "run_kind": "dry-run",
+                    "totals": {"steps": 5, "checks": 18},
+                    "evidence_dir": os.path.join(tmp, "nope")}],
+        "rows": {"boot": "boot"},
+    }
+    rows = [BR.row_from_matrix(matrix, r) for r, _ in BR.ROWS]
+    ck("bring-up report: PLAN-OK boot row maps to READY",
+       rows[0]["status"] == "READY" and rows[1]["status"] == "READY",
+       str([(r["row"], r["status"]) for r in rows]))
+    ck("bring-up report: unrun rows are NOT-RUN",
+       all(r["status"] == "NOT-RUN" for r in rows[2:]))
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -1679,6 +2121,11 @@ def main() -> int:
         test_protocol_plan(tmp, proto)
         test_protocol_execute(tmp, proto)
         test_protocol_cli(tmp, proto)
+        test_shell_engine(tmp)
+        test_bringup_sequences(tmp)
+        test_cfg80211_mode(tmp, proto)
+        test_phase_matrix(tmp, proto)
+        test_bringup_report_ready(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     passed = sum(1 for _, ok, _ in CHECKS if ok)

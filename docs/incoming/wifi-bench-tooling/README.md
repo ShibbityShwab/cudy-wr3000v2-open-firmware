@@ -13,6 +13,15 @@ record - PD4 golden boot -> context-create type 1 -> PACK -> TXQ config sync 72
 -> PACK -> D2H response delta.  See **PROTOCOL-SEQUENCE.md** for the schema,
 exact commands and the failure triage table.
 
+**task-114 extension (wave 2):** the **cfg80211 bench mode** + the **bring-up
+ladder**: bundled sequences for phases **C2** (six-calibration boot),
+**D1** (cfg80211 VAP add/del), **D2** (scan request) and **E1** (data-plane
+setup + TXQ-table sync); an allowlisted `shell` step kind for iw/ip/sysfs
+actions; a cfg80211 mode that deploys/loads cfg80211.ko + iw + libnl-tiny and
+gates the wiphy registration; `tools/phase_matrix.py` (one command per phase,
+evidence JSON + markdown) and `tools/bringup_report.py` (the
+boot/ready/calibration/vap/scan/dataplane state table).  See **PHASES.md**.
+
 
 **Read first:** STATUS.md sections 3b/3c, the newest mem-entries.md entries
 (2026-11-24 GP8/GP9/GP10/PD), and the lane reports this tool consumes:
@@ -24,8 +33,11 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | tool | what it does |
 | --- | --- |
 | tools/bench_session.py | one command for an attended Wi-Fi bench session: modes stock-golden / our-golden / patched / h2d / **protocol**; host preflight, deploy+sha read-back, module load with the fw_path variant, prepare/upload/verify/seed, hcc_arm/hcc_loop, release-only, golden-page gate, strict ready pair, then either the one-shot announce or the data-driven protocol sequence, structured report + sha256-chained write audit |
-| tools/protocol_sequence.py | the data-driven protocol-sequence engine: JSON schema validation (fail-closed), shell-gate + pointer-convention code generation, independent host-side re-evaluation of every gate, evidence JSON/markdown rendering, failure triage |
+| tools/protocol_sequence.py | the data-driven protocol-sequence engine: JSON schema validation (fail-closed), shell-gate + pointer-convention code generation, independent host-side re-evaluation of every gate, evidence JSON/markdown rendering, failure triage; task-114 adds the allowlisted `shell` step kind, profiles, `present`/`absent`/delta expectations |
 | tools/sequences/ladder-c-ordered.json | the bundled hardware-validated ladder: golden boot -> ctx_create t1 -> PACK -> txq_sync72 -> PACK -> D2H delta (11 steps / 62 checks / 2 H2D writes) |
+| tools/sequences/bringup-*.json | the task-114 bring-up ladder: boot-ready (read-only), C2 six-calibration (28 steps / 8 writes), D1 VAP add/del, D2 scan request, E1 data-plane setup + TXQ-table sync |
+| tools/phase_matrix.py | one command runs a selected bring-up phase (boot/C2/D1/D2/E1) through bench_session.py, per-phase evidence dir + `phase-matrix.json`/`PHASE-MATRIX.md`; dry-run by default, real run needs --yes-really --attended |
+| tools/bringup_report.py | aggregates phase-matrix evidence into the bring-up state table (boot/ready/calibration/vap/scan/dataplane) + `BRINGUP-STATUS.md` + JSON; never contacts the device |
 | tools/fw_patch_builder.py | patched-firmware builder/verifier: pinned-source check, PD/PD2/PD3/PD3B recipe application (all ../wifi-irq-unmask/*.recipe.json auto-discovered), per-window sha16, capstone decode check, image-header protection (entry words + RAZ-only exception-record area), full-image verify of an existing patched copy, manifest |
 | tools/bench_guards.py | the safety policy library shared by both tools (forbidden CA, CECE latch, release magic, devmem census, module/fw validation, static script audit, tamper-evident audit log) |
 | tools/selftest.py | device-free unit/integration selftest, 312 checks |
@@ -37,6 +49,8 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
     cd opensource/docs/incoming/wifi-bench-tooling
     ./tools/run-selftest.sh                      # 312/312 PASS
     python3 tools/bench_session.py --list-sequences   # bundled protocol sequences
+    python3 tools/phase_matrix.py --list-phases       # the bring-up ladder
+    python3 tools/bench_session.py --list              # modes (incl. cfg80211)
 
     # what would an attended session do? (prints every planned write + audit)
     python3 tools/bench_session.py --list
@@ -70,6 +84,7 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | patched | our instrument .ko + FIRMWARE.<PATCH>.bin (PD2/PD3/PD3B) | same boot on a patched image + PD/PD2/PD3 observables | same as our-golden + fw deploy |
 | h2d | our instrument .ko | our-golden then exactly ONE hcc_sr_announce | +1 announce |
 | protocol | hi5622_wifi .ko + PD4-patched fw + PHY block | PD4 golden boot, strict ready pair, then the data-driven sequence (ctx_create t1 -> PACK -> txq_sync72 -> PACK -> D2H delta) with per-step gates + JSON/markdown evidence | prepare/upload/verify/seed/hcc_arm/hcc_loop/release + 2 H2D writes |
+| cfg80211 | hi5622_wifi (cfg80211 build) .ko + PD4 fw + PHY block + cfg80211.ko + iw + libnl-tiny | protocol mode plus: deploy/load cfg80211.ko BEFORE the instrument, /tmp userspace (iw + libnl-tiny), strict ready pair, wiphy-registration gate (/sys/class/ieee80211 + iw phy), then a cfg80211/VAP/scan sequence with `shell` steps | same boot writes + support-file deploys + the sequence's own iw actions |
 
 Real attended command (needs a human at the bench, recovery door armed,
 read-only UART capture running):
@@ -199,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 312/312 device-free checks
+    ./tools/run-selftest.sh        # 382/382 device-free checks (task-114: +70)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -238,3 +253,70 @@ protocol CLI (--list-sequences, dry-run, budget/parameter refusals).
 - build/ is root-owned on this checkout; the runner falls back to the
   user-owned build/evidence-bench-gates/wifi-bench/ tree and warns loudly if
   no project evidence dir is writable (/tmp is not evidence).
+
+## 9. task-114: bring-up phase matrix, cfg80211 mode and the wave-2 ladder
+
+Added 2026-11-25 (host-only, no device contact).  The lane now covers the whole
+post-flash bring-up as *phases*, each a bundled data-driven sequence that runs
+through the same one-command session runner:
+
+| phase | sequence | mode | what it proves |
+| --- | --- | --- | --- |
+| boot/ready | bringup-boot-ready.json | protocol | golden page/state/mask/staging + strict ready pair, read-only |
+| C2 | bringup-c2-calibration.json | protocol | full six-calibration boot: ctx_create type 1 -> txq_sync72 -> 6x cfg_cal 3502..3507 -> six 298 B g1 id3 answers (budget 8) |
+| D1 | bringup-d1-vap.json | cfg80211 | wiphy registration gate + iw phy + netdev VAP add/del lifecycle (M0/M1) |
+| D2 | bringup-d2-scan.json | cfg80211 | ONE nl80211 scan request + no-exception gate; D2H scan events watch-only |
+| E1 | bringup-e1-dataplane.json | protocol | ready id2 ring-pointer seed + MAC slot-5 read-only probe + key-0x0320 TXQ-table address sync |
+
+New tools/modes:
+
+- **bench_session.py --mode cfg80211** (also a new ModeSpec): validates and
+  deploys cfg80211.ko (GPL/vermagic support-module policy) to /root, iw to
+  /tmp/hi5622-bench-iw and libnl-tiny to /tmp; enforces cfg80211-BEFORE-
+  instrument module order, selects the iw path (deployed copy else $PATH),
+  sets LD_LIBRARY_PATH=/tmp, and after the strict ready pair waits for the
+  driver's wiphy registration (up to --cfg-ready s) and gates
+  cfg80211_status registered=1 + iw phy before the sequence.  Missing support
+  artifacts refuse a real run; a dry-run records unverified placeholders and
+  warns.
+- **protocol_sequence.py** grows the allowlisted **shell** step kind (iw dev /
+  iw phy / iw iface add|del / iw scan / ip link / cat /sys/class/... / dmesg -
+  typed args, expect_rc, required and absent output patterns; iw only in the
+  cfg80211 profile), the hi5622-wifi-cfg80211 profile, require keys
+  (module_sha256/cfg80211/attrs/tools), present read gates, absent attr
+  patterns, and relative D2H catalogue deltas (min_count_delta) plus exact
+  last_total gates.
+- **host-side capability probe**: every attr/token a sequence touches must be
+  present as a C string in the target .ko; otherwise the plan is refused with
+  module-attr-missing (BLOCKED in the matrix).  This is how a missing wave-3
+  driver token becomes visible before bench time.  (Tiny synthetic fixtures
+  skip the probe with a warning.)
+- **tools/phase_matrix.py**: --phase boot|ready|C2|D1|D2|E1|all runs the
+  phase through bench_session.py, writes per-phase evidence dirs plus
+  phase-matrix.json/PHASE-MATRIX.md; --module-for PHASE=PATH selects a
+  different module per phase (e.g. the cfg80211 build for D1/D2);
+  --yes-really --attended for a real session, dry-run by default.
+- **tools/bringup_report.py**: reads phase-matrix evidence and renders the
+  boot/ready/calibration/vap/scan/dataplane state table (BRINGUP-STATUS.md +
+  JSON), with a next action for every non-green row.  Never contacts the
+  device.
+
+Dry-run evidence (2026-11-25, real local artifact digests; full table in
+**PHASES.md** section 6): boot/C2/D1/D2 **PLAN-OK** (5/28/11/11 steps with
+18/54/24/15 checks; C2 8 device writes; cfg80211-first load order + wiphy gate
++ sh -n PASS) and E1 **BLOCKED-TOKEN** (the current calibration-token module
+carries no h2d_txq_addr_sync C string - the dp-bringup lane's deliverable).
+The rendered bring-up table is: boot READY | ready READY | calibration READY |
+vap READY | scan READY | dataplane BLOCKED.
+
+Selftest: **312 -> 382** device-free checks (+70): shell-step refusal matrix,
+shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
+wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
+pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),
+capability-probe refusals (module-attr-missing + sequence-profile), phase-matrix
+end-to-end dry-runs (PLAN-OK and BLOCKED-TOKEN) and the bring-up report mapping.
+
+Explicitly not proven: no phase was fired on hardware by this lane.  D2 is
+BLOCKED-DRIVER today (the scan-ap lane's fail-closed -EOPNOTSUPP stub, rc=95)
+and E1 is BLOCKED-TOKEN until the dp-bringup token lands; the sequences are
+ready JSON edits when they do.  See PHASES.md section 7.

@@ -1,0 +1,127 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "bringup-d2-scan",
+ "about": "Bring-up matrix row scan (D2): VAP up, ONE nl80211 scan request (iw dev wlan0 scan) and the D2H scan-event watch. PASS gate for the frame-validity phase = scan request accepted (rc=0) + no firmware exception (mask 0, staging 0) + no H2D timeout/refusal; the D2H g1 15/16/17 / g2 2 events are WATCH-ONLY because the current M1 VAP is host-only and the firmware scan handler (CA 0x6494C) hardcodes VAP lookup id 0 - a graceful no-VAP refusal with no events is an accepted outcome. Driver prerequisite: the provider registry must carry the wifi-vap-scan g0 id0xC builder (recipes/frames.md); until then the cfg80211 scan op is the fail-closed -EOPNOTSUPP stub (rc=95) and the matrix row reports BLOCKED-DRIVER.",
+ "profile": "hi5622-wifi-cfg80211",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": true,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "tools": [
+   "iw"
+  ],
+  "attrs": [
+   "cfg80211_status"
+  ]
+ },
+ "steps": [
+  {
+   "name": "cfg-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "registered=1"
+   ],
+   "about": "wiphy registered after the ready handshake"
+  },
+  {
+   "name": "vap-add",
+   "kind": "shell",
+   "cmd": "iw-iface-add",
+   "args": {
+    "phy": "phy0",
+    "ifname": "wlan0",
+    "type": "managed"
+   },
+   "expect_rc": 0,
+   "about": "scan needs a netdev/VAP first (add_virtual_intf)"
+  },
+  {
+   "name": "link-up",
+   "kind": "shell",
+   "cmd": "ip-link-up",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "bring the managed netdev up; nl80211 refuses scan requests on a down interface"
+  },
+  {
+   "name": "scan-baseline",
+   "kind": "catalog_snapshot",
+   "about": "D2H catalogue before the scan request (delta baseline for the result events)"
+  },
+  {
+   "name": "scan",
+   "kind": "shell",
+   "cmd": "iw-scan",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "ONE nl80211 scan request: g0 id0xC hmac_enc_scan_send_req (0x1FC B struct; payload builder is the scan lane's deliverable). iw blocks until the scan-done event."
+  },
+  {
+   "name": "scan-settle",
+   "kind": "sleep",
+   "seconds": 1,
+   "about": "bounded wait for the firmware scan events to reach the direct reader"
+  },
+  {
+   "name": "post-scan-pack",
+   "kind": "read_pack",
+   "about": "the scan request did not fault the firmware: exception mask and staging stay clean (frame validity)",
+   "reads": [
+    {
+     "label": "scan_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "scan_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "about": "the scan H2D node was consumed (no timeout) and no store was refused",
+   "patterns": [
+    "timeout=0",
+    "refused=0"
+   ]
+  },
+  {
+   "name": "scan-events-watch",
+   "kind": "catalog_snapshot",
+   "about": "WATCH-ONLY: capture the D2H catalogue after the scan. The vendor event family is g1 ids 15/16/17 + g2 id2 (wifi-vap-scan REPORT section 6); with the host-only M1 VAP the firmware may gracefully refuse (no .12/.26 events) - accepted for this phase, the evidence is captured for the next revision."
+  },
+  {
+   "name": "vap-del",
+   "kind": "shell",
+   "cmd": "iw-iface-del",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "tear the VAP down again"
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "D2 row PASS = scan request accepted (rc=0) + no exception (mask 0/staging 0) + H2D timeout=0/refused=0; D2H events are watch-only. rc=95 is the known fail-closed provider/M2 stub (BLOCKED-DRIVER), any other rc is a real failure - never retry on the same boot."
+  }
+ ]
+}

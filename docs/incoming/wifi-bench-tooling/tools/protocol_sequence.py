@@ -12,12 +12,18 @@ protocol startup as an ordered list of steps with explicit per-step gates:
                  may be dynamic ("base": <earlier label>, "add": <hex>): the
                  device script computes BAR0 = RD_<base> + 0x6B8000 + add and
                  refuses to read if the result leaves the firmware-RAM window.
-  attr_expect    required substrings in a sysfs attribute (device-side grep).
+  attr_expect    required (and optionally absent) substrings in a sysfs
+                 attribute (device-side grep).
   attr_write     one WO sysfs store (the real H2D message trigger) plus the
                  post-write attribute expectations.
   catalog_snapshot  capture rd_catalog/rd_decode for later deltas.
   d2h_catalog    capture rd_catalog/rd_decode and require expected
                  (group,id) entries (optionally vs. an earlier snapshot).
+  shell          ONE allowlisted userspace command (iw / ip / cat sysfs /
+                 dmesg) with an exit-code gate plus required/absent output
+                 patterns - the cfg80211 VAP/scan/iw deployment path.  The
+                 command must be instantiated from SHELL_TEMPLATES; no free
+                 text ever reaches the device script.
   sleep          a bounded wait (0.1..10 s).
   note           documentation-only step (no gate).
 
@@ -42,11 +48,44 @@ SCHEMA_SEQ = "hi5622-protocol-sequence/1"
 SCHEMA_PLAN = "hi5622-protocol-plan/1"
 SCHEMA_EVIDENCE = "hi5622-protocol-evidence/1"
 PROFILE = "hi5622-wifi-h2d"
+PROFILE_CFG80211 = "hi5622-wifi-cfg80211"
+PROFILES = (PROFILE, PROFILE_CFG80211)
 STEP_KINDS = ("read_pack", "attr_expect", "attr_write", "catalog_snapshot",
-              "d2h_catalog", "sleep", "note")
+              "d2h_catalog", "shell", "sleep", "note")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 ATTR_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+# ---------------------------------------------------------------------------
+# Allowlisted userspace commands for the cfg80211/VAP/scan/data-plane ladders.
+#
+# The sequence JSON never carries a free-form command line: a shell step names
+# one of these templates plus typed arguments, and the renderer re-builds the
+# argv from them.  New actions are a template + a selftest refusal case, so a
+# typo or an invented command fails closed at plan time.
+# ---------------------------------------------------------------------------
+SHELL_IFNAME_RE = re.compile(r"^[a-z][a-z0-9]{0,14}$")
+SHELL_PHY_RE = re.compile(r"^phy[0-9]{1,2}$")
+SHELL_IFTYPES = ("managed", "monitor", "AP")
+SHELL_SYSFS_RE = re.compile(
+    r"^/sys/class/(?:ieee80211|net)/[A-Za-z0-9_./-]{1,120}$")
+SHELL_TEMPLATES = {
+    # name: (argv with {arg} placeholders, is-a-state-changing action)
+    "iw-dev-list": (("iw", "dev"), False),
+    "iw-phy-list": (("iw", "phy"), False),
+    "iw-phy-info": (("iw", "phy", "{phy}", "info"), False),
+    "iw-iface-add": (("iw", "phy", "{phy}", "interface", "add", "{ifname}",
+                      "type", "{type}"), True),
+    "iw-iface-del": (("iw", "dev", "{ifname}", "del"), True),
+    "iw-scan": (("iw", "dev", "{ifname}", "scan"), True),
+    "ip-link-up": (("ip", "link", "set", "{ifname}", "up"), True),
+    "ip-link-down": (("ip", "link", "set", "{ifname}", "down"), True),
+    "sysfs-read": (("cat", "{path}"), False),
+    "dmesg": (("dmesg",), False),
+}
+SHELL_ARG_NAMES = {"phy", "ifname", "type", "path"}
+SHELL_PROFILE_GATE = {"iw": PROFILE_CFG80211}   # iw needs the cfg80211 mode
+REQUIRE_TOOLS = ("iw", "ip", "dmesg")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +197,50 @@ TRIAGE = {
         "Not executed because an earlier step stopped the session "
         "(stop-on-first-failure). Fix/report the first failing step; do not "
         "resume mid-boot."),
+    "shell-rc-mismatch": (
+        "The allowlisted userspace command returned an unexpected exit code. "
+        "For an iw VAP add/del: check dmesg for the cfg80211 VAP line and the "
+        "cfg80211_status counters. For an iw scan step with rc=95 "
+        "(-EOPNOTSUPP) the cfg80211 M2 scan stub is still in place - the "
+        "scan-ap lane's scan wiring + D2H result path are the prerequisite; "
+        "do not retry on the same boot."),
+    "shell-pattern-missing": (
+        "A required pattern was absent from the command output. Capture the "
+        "step output and dmesg; the driver may have refused the op or the "
+        "op is still a stub (-EOPNOTSUPP). Do not retry."),
+    "attr-pattern-present": (
+        "An 'absent' attribute pattern unexpectedly appeared (e.g. the VAP line "
+        "is still listed after del). Capture cfg80211_status + dmesg; do not "
+        "force another netlink delete on the same boot."),
+    "shell-pattern-present": (
+        "An 'absent' pattern unexpectedly appeared (e.g. the VAP/netdev is "
+        "still there after del). Capture iw dev, ip link and dmesg; never "
+        "force-delete with another netlink write on the same boot."),
+    "catalog-entry-mismatch": (
+        "The expected D2H frame was seen but its last_total/last_len did not "
+        "match the expected frame size. Capture rd_catalog/rd_decode; the "
+        "firmware answered with a different body length: treat as a "
+        "discovery, do not resend."),
+    "module-attr-missing": (
+        "The target module does not contain the sysfs attribute/token this "
+        "phase's steps need (host-side .ko string scan). This is a driver "
+        "deliverable gap, not a bench failure: wait for the lane that adds "
+        "the token (the sequence JSON is the single edit point if it lands "
+        "under a different name)."),
+    "cfg80211-missing": (
+        "The cfg80211 support module is neither built in nor loadable from "
+        "the deployed file. Check the insmod rc/dmesg; the cfg80211 image "
+        "must be the flashed kernel (CONFIG_CFG80211=m) and the deployed "
+        "cfg80211.ko must match that kernel's vermagic."),
+    "wiphy-timeout": (
+        "No /sys/class/ieee80211 phy appeared after the ready handshake: the "
+        "wiphy registration gate did not fire. Capture cfg80211_status, "
+        "hcc_ready and dmesg; a missing ready pair or a non-cfg80211 module "
+        "build are the usual causes. Do not load/unload repeatedly."),
+    "tool-missing": (
+        "A required userspace tool is absent from the image and no deployable "
+        "copy was supplied on the command line (--iw-bin/--libnl-tiny). "
+        "Deploy it with the runner instead of fishing it out of a rootfs."),
 }
 
 # ---------------------------------------------------------------------------
@@ -205,7 +288,7 @@ def _validate_expect(expect, where: str) -> dict:
         return {}
     if not isinstance(expect, dict):
         _refuse(where, "expect must be an object")
-    allowed = {"eq", "ne", "zero", "nonzero", "ge", "mask"}
+    allowed = {"eq", "ne", "zero", "nonzero", "ge", "mask", "present"}
     for k in expect:
         if k not in allowed:
             _refuse(where, "unknown expectation %r (allowed: %s)"
@@ -219,8 +302,14 @@ def _validate_expect(expect, where: str) -> dict:
             if not isinstance(expect[k], bool):
                 _refuse(where, "%s must be a boolean" % k)
             out[k] = expect[k]
-    if not any(k in out for k in ("eq", "ne", "zero", "nonzero", "ge")):
-        _refuse(where, "expect has no comparison (eq/ne/zero/nonzero/ge)")
+    if "present" in expect:
+        if expect["present"] is not True:
+            _refuse(where, "present must be true (a non-empty raw read)")
+        out["present"] = True
+    if not any(k in out for k in ("eq", "ne", "zero", "nonzero", "ge",
+                                  "present")):
+        _refuse(where, "expect has no comparison "
+                       "(eq/ne/zero/nonzero/ge/present)")
     if "mask" in out and out["mask"] == 0:
         _refuse(where, "mask must be non-zero")
     out.setdefault("mask", 0xFFFFFFFF)
@@ -274,10 +363,12 @@ def _validate_reads(step: dict, where: str, labels: dict) -> list:
 
 
 def _validate_patterns(patterns, where: str) -> list:
-    if patterns is None:
+    if not patterns:
+        # [] is normalised to "no patterns"; callers that require at least one
+        # enforce it themselves (attr_expect needs patterns and/or absent).
         return []
-    if not isinstance(patterns, list) or not patterns:
-        _refuse(where, "patterns must be a non-empty list")
+    if not isinstance(patterns, list):
+        _refuse(where, "patterns must be a list")
     out = []
     for i, p in enumerate(patterns):
         if not isinstance(p, str) or not p:
@@ -292,6 +383,89 @@ def _validate_patterns(patterns, where: str) -> list:
     return out
 
 
+def _validate_shell_arg(name: str, value, where: str) -> str:
+    if not isinstance(value, str):
+        _refuse(where, "shell arg %r must be a string" % name)
+    if name == "phy":
+        if not SHELL_PHY_RE.match(value):
+            _refuse(where, "bad phy %r (expected phy0..phy99)" % (value,))
+    elif name == "ifname":
+        if not SHELL_IFNAME_RE.match(value):
+            _refuse(where, "bad interface name %r (^[a-z][a-z0-9]{0,14}$)"
+                    % (value,))
+    elif name == "type":
+        if value not in SHELL_IFTYPES:
+            _refuse(where, "bad interface type %r (allowed: %s)"
+                    % (value, ", ".join(SHELL_IFTYPES)))
+    elif name == "path":
+        if (".." in value or "10161000" in value.lower()
+                or not SHELL_SYSFS_RE.match(value)):
+            _refuse(where, "sysfs read path %r is not an allowlisted "
+                           "/sys/class/{ieee80211,net} path" % (value,))
+    else:
+        _refuse(where, "unknown shell arg %r" % name)
+    return value
+
+
+def _validate_shell(step: dict, where: str, profile: str) -> dict:
+    extra = set(step) - {"name", "kind", "about", "cmd", "args",
+                         "expect_rc", "patterns", "absent"}
+    if extra:
+        _refuse(where, "unknown keys: %s" % ", ".join(sorted(extra)))
+    cmd = _need(step, "cmd", where)
+    if not isinstance(cmd, str) or cmd not in SHELL_TEMPLATES:
+        _refuse(where, "unknown shell command template %r (allowed: %s)"
+                % (cmd, ", ".join(sorted(SHELL_TEMPLATES))))
+    argv, _is_write = SHELL_TEMPLATES[cmd]
+    needed = set()
+    for tok in argv:
+        if tok.startswith("{") and tok.endswith("}"):
+            needed.add(tok[1:-1])
+    args_in = step.get("args", {})
+    if not isinstance(args_in, dict):
+        _refuse(where, "args must be an object")
+    if set(args_in) != needed:
+        _refuse(where, "args must be exactly %s (got %s)"
+                % (", ".join(sorted(needed)) or "none",
+                   ", ".join(sorted(args_in)) or "none"))
+    args = {}
+    for name in sorted(needed):
+        args[name] = _validate_shell_arg(name, args_in[name],
+                                        where + ".args." + name)
+    const = SHELL_PROFILE_GATE.get(argv[0])
+    if const is not None and profile != const:
+        _refuse(where, "shell command %r needs profile %r, sequence profile "
+                       "is %r" % (cmd, const, profile))
+    expect_rc = step.get("expect_rc", 0)
+    if isinstance(expect_rc, bool) or not isinstance(expect_rc, int) \
+            or not 0 <= expect_rc <= 255:
+        _refuse(where, "expect_rc must be an integer 0..255")
+    body = {"cmd": cmd, "args": args, "expect_rc": expect_rc,
+            "patterns": _validate_patterns(step.get("patterns") or [],
+                                           where + ".patterns"),
+            "absent": _validate_patterns(step.get("absent") or [],
+                                         where + ".absent"),
+            "is_write": bool(SHELL_TEMPLATES[cmd][1])}
+    return body
+
+
+def shell_argv(cmd: str, args: dict) -> list:
+    """Re-build the argv of one shell template (args are already validated)."""
+    argv, _ = SHELL_TEMPLATES[cmd]
+    out = []
+    for tok in argv:
+        if tok.startswith("{") and tok.endswith("}"):
+            out.append(str(args[tok[1:-1]]))
+        else:
+            out.append(tok)
+    return out
+
+
+def shell_command_text(cmd: str, args: dict) -> str:
+    """Human/plan form of a shell step (the exact argv, no shell quoting)."""
+    return " ".join(shell_argv(cmd, args))
+
+
 def validate(doc: dict, source: str = "<sequence>") -> dict:
     """Validate + normalise a sequence document (schema hi5622-protocol-sequence/1)."""
     if not isinstance(doc, dict):
@@ -303,9 +477,9 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
         _refuse(source, "bad sequence name %r" % (name,))
     about = str(doc.get("about", ""))[:400]
     profile = doc.get("profile", PROFILE)
-    if profile != PROFILE:
-        _refuse(source, "profile must be %r (the hi5622_wifi H2D driver), got %r"
-                % (PROFILE, profile))
+    if profile not in PROFILES:
+        _refuse(source, "profile must be one of %s, got %r"
+                % (", ".join(repr(p) for p in PROFILES), profile))
     module_names = doc.get("module_names")
     if module_names is None:
         module_names = ["hi5622_wifi"]
@@ -316,7 +490,8 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
     require = doc.get("require", {})
     if not isinstance(require, dict):
         _refuse(source, "require must be an object")
-    allowed_req = {"ready_pair", "boot_page", "fw_sha256", "fw_len", "budget_min"}
+    allowed_req = {"ready_pair", "boot_page", "fw_sha256", "fw_len",
+                   "budget_min", "module_sha256", "cfg80211", "attrs", "tools"}
     for k in require:
         if k not in allowed_req:
             _refuse(source, "unknown require key %r" % (k,))
@@ -324,14 +499,39 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
         "ready_pair": bool(require.get("ready_pair", True)),
         "boot_page": bool(require.get("boot_page", True)),
         "budget_min": int(require.get("budget_min", 0) or 0),
+        "cfg80211": bool(require.get("cfg80211", False)),
     }
     if "fw_sha256" in require:
         s = require["fw_sha256"]
         if not isinstance(s, str) or not re.match(r"^[0-9a-f]{64}$", s):
             _refuse(source, "require.fw_sha256 must be 64 lowercase hex chars")
         norm_require["fw_sha256"] = s
+    if "module_sha256" in require:
+        s = require["module_sha256"]
+        if not isinstance(s, str) or not re.match(r"^[0-9a-f]{64}$", s):
+            _refuse(source, "require.module_sha256 must be 64 lowercase hex chars")
+        norm_require["module_sha256"] = s
     if "fw_len" in require:
         norm_require["fw_len"] = _parse_num(require["fw_len"], source + ".require.fw_len")
+    if "attrs" in require:
+        attrs = require["attrs"]
+        if not isinstance(attrs, list) or not attrs:
+            _refuse(source, "require.attrs must be a non-empty list")
+        norm_require["attrs"] = []
+        for i, a in enumerate(attrs):
+            if not isinstance(a, str) or not ATTR_RE.match(a) \
+                    or a not in G.ALL_KNOWN_ATTRS:
+                _refuse(source + ".require.attrs[%d]" % i,
+                        "unknown sysfs attribute %r" % (a,))
+            norm_require["attrs"].append(a)
+    if "tools" in require:
+        tools = require["tools"]
+        if not isinstance(tools, list) or not tools \
+                or not all(isinstance(t, str) and t in REQUIRE_TOOLS
+                           for t in tools):
+            _refuse(source, "require.tools must be a non-empty subset of %s"
+                    % ", ".join(REQUIRE_TOOLS))
+        norm_require["tools"] = sorted(set(tools))
     load_params = doc.get("load_params", {})
     if not isinstance(load_params, dict):
         _refuse(source, "load_params must be an object")
@@ -376,18 +576,21 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                 _refuse(w, "unknown keys: %s" % ", ".join(sorted(extra)))
             body["reads"] = _validate_reads(st, w, labels)
         elif kind == "attr_expect":
-            extra = set(st) - common - {"attr", "patterns"}
+            extra = set(st) - common - {"attr", "patterns", "absent"}
             if extra:
                 _refuse(w, "unknown keys: %s" % ", ".join(sorted(extra)))
             attr = _need(st, "attr", w)
             if not isinstance(attr, str) or not ATTR_RE.match(attr):
                 _refuse(w, "bad attribute name %r" % (attr,))
-            if attr not in (G.BASE_ATTRS | G.HCC_ATTRS | G.RD_ATTRS |
-                            G.H2D_ATTRS | G.WIFI_TRANSPORT_ATTRS):
+            if attr not in G.ALL_KNOWN_ATTRS:
                 _refuse(w, "unknown sysfs attribute %r" % attr)
             body["attr"] = attr
-            body["patterns"] = _validate_patterns(_need(st, "patterns", w),
+            body["patterns"] = _validate_patterns(st.get("patterns") or [],
                                                  w + ".patterns")
+            body["absent"] = _validate_patterns(st.get("absent") or [],
+                                               w + ".absent")
+            if not body["patterns"] and not body["absent"]:
+                _refuse(w, "attr_expect needs at least one of patterns/absent")
         elif kind == "attr_write":
             extra = set(st) - common - {"attr", "value", "patterns"}
             if extra:
@@ -405,6 +608,8 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
             body["patterns"] = _validate_patterns(st.get("patterns") or [],
                                                   w + ".patterns")
             body["post_attr"] = attr
+        elif kind == "shell":
+            body.update(_validate_shell(st, w, profile))
         elif kind == "catalog_snapshot":
             extra = set(st) - common
             if extra:
@@ -423,7 +628,8 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                 ew = "%s.expect_entries[%d]" % (w, j)
                 if not isinstance(e, dict):
                     _refuse(ew, "entry must be an object")
-                if set(e) - {"group", "id", "min_count", "last_total", "about"}:
+                if set(e) - {"group", "id", "min_count", "min_count_delta",
+                             "last_total", "about"}:
                     _refuse(ew, "unknown keys")
                 group = _parse_num(_need(e, "group", ew), ew + ".group")
                 mid = _parse_num(_need(e, "id", ew), ew + ".id")
@@ -433,6 +639,12 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                        "min_count": _parse_num(e.get("min_count", 1),
                                                ew + ".min_count"),
                        "about": str(e.get("about", ""))[:200]}
+                if "min_count_delta" in e:
+                    delta = _parse_num(e["min_count_delta"],
+                                       ew + ".min_count_delta")
+                    if delta < 0:
+                        _refuse(ew, "min_count_delta must be >= 0")
+                    rec["min_count_delta"] = delta
                 if "last_total" in e:
                     rec["last_total"] = _parse_num(e["last_total"],
                                                    ew + ".last_total")
@@ -505,6 +717,16 @@ def plan_writes(seq: dict) -> list:
     return out
 
 
+def plan_shell_actions(seq: dict) -> list:
+    """Return [(step_name, command_text, is_write, about)] for shell steps."""
+    out = []
+    for st in seq["steps"]:
+        if st["kind"] == "shell":
+            out.append((st["name"], shell_command_text(st["cmd"], st["args"]),
+                        st["is_write"], st["about"]))
+    return out
+
+
 def check_names(seq: dict) -> list:
     """Every device-side gate/check name the sequence will emit, in order."""
     names = []
@@ -517,6 +739,11 @@ def check_names(seq: dict) -> list:
             names.append("%s.write" % n if st["kind"] == "attr_write" else
                          "%s.read" % n)
             names += ["%s.p%d" % (n, i) for i in range(len(st["patterns"]))]
+            names += ["%s.a%d" % (n, i) for i in range(len(st.get("absent") or []))]
+        elif st["kind"] == "shell":
+            names.append("%s.rc" % n)
+            names += ["%s.p%d" % (n, i) for i in range(len(st["patterns"]))]
+            names += ["%s.a%d" % (n, i) for i in range(len(st["absent"]))]
         elif st["kind"] in ("catalog_snapshot", "sleep", "note"):
             names.append("%s.captured" % n)
         elif st["kind"] == "d2h_catalog":
@@ -546,6 +773,16 @@ def plan_doc(seq: dict) -> dict:
             if st["kind"] == "attr_write":
                 entry["value"] = st["value"]
             entry["patterns"] = st["patterns"]
+            if st.get("absent"):
+                entry["absent"] = st["absent"]
+        elif st["kind"] == "shell":
+            entry["cmd"] = st["cmd"]
+            entry["args"] = st["args"]
+            entry["command"] = shell_command_text(st["cmd"], st["args"])
+            entry["expect_rc"] = st["expect_rc"]
+            entry["patterns"] = st["patterns"]
+            entry["absent"] = st["absent"]
+            entry["is_write"] = st["is_write"]
         elif st["kind"] == "d2h_catalog":
             entry["expect_entries"] = st["expect_entries"]
             entry["before"] = st.get("before")
@@ -560,7 +797,8 @@ def plan_doc(seq: dict) -> dict:
             "module_names": seq["module_names"], "require": seq["require"],
             "load_params": seq["load_params"], "steps": steps,
             "totals": {"steps": len(steps), "checks": total_checks,
-                       "attr_writes": len(plan_writes(seq))}}
+                       "attr_writes": len(plan_writes(seq)),
+                       "shell_actions": len(plan_shell_actions(seq))}}
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +809,10 @@ def _shell_var(label: str) -> str:
 
 
 def _gate_num_lines(name: str, raw: str, expect: dict) -> list:
+    if expect.get("present"):
+        # Only requires that the raw read returned a value (non-empty) - used
+        # for reachability probes where any plausible value is acceptable.
+        return ['  gate_present %s "%s"' % (_q(name), raw)]
     mode = None
     want = 0
     for k in ("eq", "ne", "ge", "zero", "nonzero"):
@@ -645,6 +887,9 @@ def render_script(seq: dict) -> list:
             a("r_attr_as seq-%s %s" % (n, attr))
             for i, p in enumerate(st["patterns"]):
                 L.extend(_gate_attr_lines("%s.p%d" % (n, i), attr, p))
+            for i, p in enumerate(st.get("absent") or []):
+                a("  gate_attr_absent %s %s %s"
+                  % (_q("%s.a%d" % (n, i)), _q(attr), _q(p)))
         elif kind == "attr_write":
             attr = st["attr"]
             a("w_attr %s %s %s" % (attr, _q(st["value"]), _q(n)))
@@ -653,6 +898,27 @@ def render_script(seq: dict) -> list:
                 a("r_attr_as seq-%s-%s %s" % (n, attr, attr))
                 for i, p in enumerate(st["patterns"]):
                     L.extend(_gate_attr_lines("%s.p%d" % (n, i), attr, p))
+        elif kind == "shell":
+            cmd = shell_command_text(st["cmd"], st["args"])
+            argv = shell_argv(st["cmd"], st["args"])
+            a('say "SHELL-CMD %s %s"' % (n, cmd))
+            if argv[0] == "iw":
+                rendered = '"$IW" ' + " ".join(_q(x) for x in argv[1:])
+            else:
+                rendered = " ".join(_q(x) for x in argv)
+            a('%s > "$RDIR/seq-%s.out" 2>&1' % (rendered, n))
+            a("SRC=$?")
+            a('cat "$RDIR/seq-%s.out" >> "$R" 2>/dev/null || :' % n)
+            a('say "SHELL-RC %s rc=$SRC"' % n)
+            a('gate_rc %s "$SRC" %d' % (_q("%s.rc" % n), st["expect_rc"]))
+            for i, p in enumerate(st["patterns"]):
+                a("gate_out_has %s %s %s"
+                  % (_q("%s.p%d" % (n, i)), _q("$RDIR/seq-%s.out" % n),
+                     _q(p)))
+            for i, p in enumerate(st["absent"]):
+                a("gate_out_absent %s %s %s"
+                  % (_q("%s.a%d" % (n, i)), _q("$RDIR/seq-%s.out" % n),
+                     _q(p)))
         elif kind == "catalog_snapshot":
             a("r_attr_as seq-%s-rd_catalog rd_catalog" % n)
             a("r_attr_as seq-%s-rd_decode rd_decode" % n)
@@ -770,6 +1036,10 @@ def _check_read(read: dict, label_map: dict, rd32: dict, step: str) -> dict:
                               "run?)" % name)
         return rec
     exp = read["expect"]
+    if exp.get("present"):
+        rec.update(status="PASS", code=None,
+                   detail="raw read non-empty (reachability probe)")
+        return rec
     mask = exp.get("mask", 0xFFFFFFFF)
     got = int(actual) & mask
     ok = False
@@ -802,7 +1072,8 @@ def _check_read(read: dict, label_map: dict, rd32: dict, step: str) -> dict:
 
 
 CONTROL_LINE_RE = re.compile(
-    r"^(?:STOP:|GATE-FAIL|GATE |SESSION_RESULT|FAIL:|READ-FAIL|== SECTION)")
+    r"^(?:STOP:|GATE-FAIL|GATE |SESSION_RESULT|FAIL:|READ-FAIL|== SECTION|"
+    r"SHELL-RC )")
 
 
 def _capture_text(reads: dict, section: str) -> str:
@@ -840,6 +1111,32 @@ def _check_patterns(step_name: str, kind: str, attr: str, patterns: list,
     return out
 
 
+def _check_absent_patterns(step_name: str, kind: str, attr: str,
+                           patterns: list, section: str, reads: dict) -> list:
+    text = _capture_text(reads, section)
+    out = []
+    for i, p in enumerate(patterns):
+        name = "%s.a%d" % (step_name, i)
+        try:
+            found = bool(re.search(p, text))
+        except re.error as e:
+            out.append({"name": name, "kind": kind, "attr": attr,
+                        "pattern": p, "status": "FAIL",
+                        "code": "shell-pattern-present" if kind == "shell"
+                                else "attr-pattern-missing",
+                        "detail": "invalid host regex: %s" % e})
+            continue
+        out.append({"name": name, "kind": kind, "attr": attr,
+                    "pattern": p, "status": "FAIL" if found else "PASS",
+                    "code": ("shell-pattern-present" if kind == "shell"
+                             else "attr-pattern-present") if found else None,
+                    "detail": ("pattern UNEXPECTEDLY present in %s" % section)
+                    if found else
+                    ("pattern absent in %s (%d B captured)"
+                     % (section, len(text)))})
+    return out
+
+
 def _check_catalog(step: dict, reads: dict) -> list:
     n = step["name"]
     text = _read_section(reads, "seq-%s-rd_catalog" % n)
@@ -872,20 +1169,34 @@ def _check_catalog(step: dict, reads: dict) -> list:
         key = (e["group"], e["id"])
         post = cat["entries"].get(key)
         pre = before["entries"].get(key) if before else None
-        ok = post is not None and post["count"] >= e["min_count"]
+        want = e["min_count"]
+        if "min_count_delta" in e:
+            # A missing baseline entry means "count 0 at the snapshot": the
+            # unsolicited event families only appear once the startup runs.
+            base_count = 0 if pre is None else pre["count"]
+            want = base_count + e["min_count_delta"]
+        ok = post is not None and post["count"] >= want
+        code = None if ok else "catalog-entry-missing"
         detail = ("absent: no g=%d id=0x%02x entry in the catalogue"
                   % (e["group"], e["id"]) if post is None else
                   "g=%d id=0x%02x count=%d last_total=%s (min_count=%d%s)"
                   % (e["group"], e["id"], post["count"],
                      ("0x%04x" % post["last_total"])
                      if post["last_total"] is not None else "?",
-                     e["min_count"],
+                     want,
                      (", before count=%d" % pre["count"]) if pre is not None
                      else ""))
+        if ok and e.get("last_total") is not None:
+            got_total = post["last_total"]
+            if got_total != e["last_total"]:
+                ok = False
+                code = "catalog-entry-mismatch"
+                detail += ("; last_total mismatch: got %s, expected 0x%04x"
+                           % (("0x%04x" % got_total) if got_total is not None
+                              else "?", e["last_total"]))
         out.append({"name": name, "kind": "catalog", "group": e["group"],
                     "id": e["id"], "status": "PASS" if ok else "FAIL",
-                    "code": None if ok else "catalog-entry-missing",
-                    "detail": detail})
+                    "code": code, "detail": detail})
     for i, p in enumerate(step["device_patterns"]):
         name = "%s.p%d" % (n, i)
         try:
@@ -932,6 +1243,9 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
         elif kind == "attr_expect":
             checks = _check_patterns(n, kind, st["attr"], st["patterns"],
                                      "seq-%s" % n, reads)
+            checks += _check_absent_patterns(n, kind, st["attr"],
+                                             st.get("absent") or [],
+                                             "seq-%s" % n, reads)
             if not checks:
                 text = _read_section(reads, "seq-%s" % n)
                 checks = [{"name": "%s.read" % n, "kind": "attr",
@@ -950,6 +1264,32 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
             if st["patterns"]:
                 checks += _check_patterns(n, kind, st["attr"], st["patterns"],
                                           "seq-%s-%s" % (n, st["attr"]), reads)
+        elif kind == "shell":
+            text = _read_section(reads, "seq-%s" % n)
+            m = re.search(r"^SHELL-RC %s rc=(\d+)\s*$" % re.escape(n),
+                          text, re.M) if text else None
+            if m is None:
+                checks = [{"name": "%s.rc" % n, "kind": "shell",
+                           "command": shell_command_text(st["cmd"], st["args"]),
+                           "status": "FAIL", "code": "attr-capture-missing",
+                           "detail": "no shell exit-code capture for step %r "
+                                     "(step not run, or the command output never "
+                                     "reached the report)" % n}]
+            else:
+                rc = int(m.group(1))
+                ok = rc == st["expect_rc"]
+                checks = [{"name": "%s.rc" % n, "kind": "shell",
+                           "command": shell_command_text(st["cmd"], st["args"]),
+                           "status": "PASS" if ok else "FAIL",
+                           "code": None if ok else "shell-rc-mismatch",
+                           "actual": "rc=%d" % rc,
+                           "detail": "exit code %d (expected %d)"
+                                     % (rc, st["expect_rc"])}]
+                body = "seq-%s" % n
+                checks += _check_patterns(n, "shell", st["cmd"],
+                                          st["patterns"], body, reads)
+                checks += _check_absent_patterns(n, "shell", st["cmd"],
+                                                 st["absent"], body, reads)
         elif kind == "catalog_snapshot":
             text = _read_section(reads, "seq-%s-rd_catalog" % n)
             checks = [{"name": "%s.captured" % n, "kind": "snapshot",
@@ -999,8 +1339,11 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
             for c in checks:
                 c["status"] = "NOT-RUN"
                 c["code"] = "step-not-run"
-        steps_out.append({"name": n, "kind": kind, "about": st.get("about", ""),
-                          "status": status, "checks": checks})
+        step_rec = {"name": n, "kind": kind, "about": st.get("about", ""),
+                    "status": status, "checks": checks}
+        if kind == "shell":
+            step_rec["command"] = shell_command_text(st["cmd"], st["args"])
+        steps_out.append(step_rec)
     if failed_at is None and result == "STOP" and stop_rule:
         prefix = stop_rule.split(".")[0]
         for s in steps_out:
@@ -1122,6 +1465,8 @@ def render_markdown(evidence: dict) -> str:
     for s in evidence.get("steps") or []:
         a("### %s (%s) - %s" % (s["name"], s["kind"], s["status"]))
         a("")
+        if s.get("command"):
+            a("- command: `%s`" % s["command"])
         if not s["checks"]:
             a("- no checks")
         for c in s["checks"]:
@@ -1205,6 +1550,102 @@ def _selftest() -> int:
     scripts = render_script(seq)
     assert any("gate_num" in ln for ln in scripts)
     assert any("gate_attr" in ln for ln in scripts)
+
+    # cfg80211 profile: shell steps + absent patterns + a relative catalogue
+    # delta on the same document machinery.
+    cfg_doc = {
+        "schema": SCHEMA_SEQ, "name": "selftest-cfg", "about": "unit",
+        "profile": PROFILE_CFG80211, "module_names": ["hi5622_wifi"],
+        "require": {"cfg80211": True, "tools": ["iw"],
+                    "attrs": ["cfg80211_status"]},
+        "steps": [
+            {"name": "base", "kind": "catalog_snapshot"},
+            {"name": "status", "kind": "attr_expect", "attr": "cfg80211_status",
+             "patterns": ["registered=1"], "absent": ["vap0:"]},
+            {"name": "add", "kind": "shell", "cmd": "iw-iface-add",
+             "args": {"phy": "phy0", "ifname": "wlan0", "type": "managed"},
+             "expect_rc": 0, "patterns": ["wlan0"]},
+            {"name": "scan", "kind": "shell", "cmd": "iw-scan",
+             "args": {"ifname": "wlan0"}, "expect_rc": 95,
+             "patterns": ["Operation not supported"]},
+            {"name": "cat", "kind": "shell", "cmd": "sysfs-read",
+             "args": {"path": "/sys/class/net/wlan0/type"}, "expect_rc": 0,
+             "patterns": ["^1$"], "absent": ["none"]},
+            {"name": "resp", "kind": "d2h_catalog",
+             "before": "base",
+             "expect_entries": [
+                 {"group": 1, "id": 3, "min_count_delta": 2,
+                  "last_total": 0x12A}]},
+        ],
+    }
+    cseq = validate(cfg_doc, "selftest-cfg")
+    cplan = plan_doc(cseq)
+    assert cplan["totals"]["shell_actions"] == 3, cplan["totals"]
+    assert cplan["require"]["cfg80211"] is True
+    assert cplan["require"]["tools"] == ["iw"]
+    cscripts = "\n".join(render_script(cseq))
+    assert "SHELL-RC" in cscripts and "gate_out_has" in cscripts
+    assert "gate_attr_absent" in cscripts
+    csummary = {
+        "result": "PASS", "stop_rule": None, "rd32": {},
+        "reads": {
+            "seq-base-rd_catalog":
+                "D2H DIRECT catalogue (this boot): id1_seen=1 count=1 | "
+                "id2_seen=1 count=1 payload=4 B dword0=0x01060850 | "
+                "excp_info=1 | frames=10 other(group,id)=1\n"
+                "  g=1  id=0x03 (  3) count=1    last_total=0x0024 last_len=36 x\n",
+            "seq-resp-rd_catalog":
+                "D2H DIRECT catalogue (this boot): id1_seen=1 count=1 | "
+                "id2_seen=1 count=1 payload=4 B dword0=0x01060850 | "
+                "excp_info=1 | frames=13 other(group,id)=1\n"
+                "  g=1  id=0x03 (  3) count=3    last_total=0x012a last_len=298 x\n",
+            "seq-status":
+                "cfg80211 model: band=2.4GHz wiphy=alloc registered=1 "
+                "removing=0\n",
+            "seq-add": "wlan0\nSHELL-RC add rc=0\n",
+            "seq-scan": "command failed: Operation not supported (-95)\n"
+                        "SHELL-RC scan rc=95\n",
+            "seq-cat": "1\nSHELL-RC cat rc=0\n",
+        },
+        "gates": [{"name": "status.p0", "ok": True},
+                  {"name": "status.a0", "ok": True},
+                  {"name": "add.rc", "ok": True},
+                  {"name": "add.p0", "ok": True},
+                  {"name": "scan.rc", "ok": True},
+                  {"name": "scan.p0", "ok": True},
+                  {"name": "cat.rc", "ok": True},
+                  {"name": "cat.p0", "ok": True},
+                  {"name": "cat.a0", "ok": True},
+                  {"name": "resp.frames", "ok": True},
+                  {"name": "resp.e0", "ok": True}],
+    }
+    cev = evaluate(cseq, csummary)
+    assert cev["verdict"] == "PASS", json.dumps(cev)[:800]
+    shell_steps = [s for s in cev["steps"] if s["kind"] == "shell"]
+    assert all(s["status"] == "PASS" for s in shell_steps)
+    assert shell_steps[0].get("command") == "iw phy phy0 interface add wlan0 type managed"
+    bad_shell = dict(csummary)
+    bad_reads = dict(csummary["reads"])
+    bad_reads["seq-scan"] = "SHELL-RC scan rc=0\n"
+    bad_shell["reads"] = bad_reads
+    cev2 = evaluate(cseq, bad_shell)
+    assert cev2["verdict"] == "FAIL", cev2["verdict"]
+    bad_vap = dict(csummary)
+    bad_reads2 = dict(csummary["reads"])
+    bad_reads2["seq-status"] = ("cfg80211 model: band=2.4GHz wiphy=alloc "
+                                "registered=1 removing=0\nvap0: wlan0 "
+                                "iftype=managed state=registered\n")
+    bad_vap["reads"] = bad_reads2
+    cev3 = evaluate(cseq, bad_vap)
+    assert cev3["verdict"] == "FAIL", cev3["verdict"]
+    try:
+        validate({"schema": SCHEMA_SEQ, "name": "bad-shell",
+                  "profile": PROFILE_CFG80211,
+                  "steps": [{"name": "x", "kind": "shell", "cmd": "rmmod",
+                             "args": {}}]}, "bad-shell")
+        raise AssertionError("unknown shell template accepted")
+    except G.GuardError as e:
+        assert e.code == "seq-schema", e.code
     return 0
 
 
