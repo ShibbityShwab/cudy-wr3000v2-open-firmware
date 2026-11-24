@@ -2,9 +2,10 @@
 
 **Lane:** wifi-scan-ap (shared task task-113), host-only. **Date:** 2026-11-24.
 **Source:** this directory's src/ (the wifi-cfg80211 tree plus the new
-scan/provider/post layer, the task-110 wifi-vap-scan builders
-`vapscan_frames.c/h` integrated with a one-line portability edit, and the
-documented integration edits of REPORT.md sec 7).  No build-time patch is
+scan/provider/post layer, the task-110 wifi-vap-scan builders and the task-118 scan-D2H decoders
+(`vapscan_frames.c/h` and `hi5622_scan_d2h.c/h` integrated with a
+one-line portability edit each), and the documented integration edits of
+REPORT.md sec 7).  No build-time patch is
 applied.  The built .ko is local evidence only and is NOT committed
 (src/.gitignore covers build products; no vendor binary/object/firmware byte is
 involved).
@@ -14,19 +15,19 @@ involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **676,180 B** |
-| sha256 | **4a1c3b9a3762db43a1015802e3057b4d39ec481ed3ecc32ce80f33bca053f36d** |
+| size | **704,720 B** |
+| sha256 | **20d38c5c54a8e8673367e52d3564bd0f473ac49901075d4863a91a8671c5128b** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
 | depends | **cfg80211** |
 | cfg80211 imports (U) | **9**: wiphy_new_nm, wiphy_register, wiphy_unregister, wiphy_free, cfg80211_register_netdevice, cfg80211_unregister_wdev, **cfg80211_scan_done**, **cfg80211_inform_bss_data**, **cfg80211_put_bss** |
 | compiler/modpost warnings | **0** (project tree builds with -Werror) |
-| host scan/provider/vapscan selftest | **248/248 PASS** |
+| host scan/provider/vapscan/scan-d2h selftest | **284/284 PASS** |
 | host inherited cfg80211 logic selftest | **454/454 PASS** |
 | host inherited H2D logic selftest | **242/242 PASS** |
 | cfg80211 provider-symbols check | PASS (9 symbols, all real net/wireless exports, none tree-provided) |
-| static driver/source selftest | see the tools/build.sh output (all checks PASS) |
+| static driver/source selftest | **317/317 PASS** |
 
 New module parameters (besides the inherited ones): **allow_frames** (uint,
 default **0** = fail-closed: no provider-built frame is ever posted),
@@ -90,7 +91,7 @@ Log: /tmp/hi5622-wifi-scan-ap-build.log. Host test binaries:
 
 | step | command | result |
 | --- | --- | --- |
-| host scan/provider/vapscan selftest | tools/scan_logic_selftest.c + src/hi5622_scan_logic.c + src/hi5622_vapscan_map.c + src/vapscan_frames.c + src/h2d_frames.c | **248/248 PASS** |
+| host scan/provider/vapscan/scan-d2h selftest | tools/scan_logic_selftest.c + src/hi5622_scan_logic.c + src/hi5622_vapscan_map.c + src/hi5622_scan_d2h.c + src/vapscan_frames.c + src/h2d_frames.c | **284/284 PASS** |
 | host inherited cfg80211 regression | tools/cfg80211_logic_selftest.c + src/hi5622_cfg80211_logic.c | 454/454 PASS |
 | host inherited H2D regression | tools/h2d_logic_selftest.c + h2d_send_logic.c + h2d_frames.c + hcc_core.c | 242/242 PASS |
 | kernel module build | project 6.18.60 tree, -Werror, modpost | PASS, 0 warnings |

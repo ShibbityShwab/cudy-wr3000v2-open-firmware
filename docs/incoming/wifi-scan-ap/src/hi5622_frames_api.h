@@ -184,8 +184,26 @@ struct hi5622_scan_result {
 
 /* Optional scan-complete detail (g1 id16 / g2 id2 family [I]). */
 struct hi5622_scan_complete {
-	u8	reason;		/* provider-defined completion reason */
-	u8	aborted;	/* 1 = scan stopped early */
+	u8	reason;		/* provider status/reason byte */
+	u8	aborted;	/* 1 = completion reports failure/early stop */
+};
+
+/* Optional g1 id17 per-channel result (firmware sender 124 B frame [V]). */
+struct hi5622_scan_channel {
+	u8	slot;		/* firmware array slot [V] */
+	u8	chan_num;	/* channel number [V] */
+	u8	is_5g;		/* 1 = 5 GHz */
+	u8	reserved;
+	u16	freq;		/* MHz, 0 = not derivable */
+};
+
+/* Optional g2 id2 WAL/STA scan completion (the vendor cfg80211 feed point [V]);
+ * status semantics are [I]/[U] - callers log it and treat the event as a
+ * completion candidate. */
+struct hi5622_scan_sta_complete {
+	u8	status;
+	u8	core_band;
+	u8	chip_id;
 };
 
 /* ===================================================================
@@ -214,6 +232,13 @@ struct hi5622_frame_ops {
 				 struct hi5622_scan_result *out);
 	int (*parse_scan_complete)(const u8 *payload, u32 len,
 				   struct hi5622_scan_complete *out);
+	/* Optional diagnostics/completion decoders (no capability bit needed):
+	 * g1 id17 channel results and g2 id2 WAL/STA completion.  NULL is fine;
+	 * the scan layer then only counts the event. */
+	int (*parse_scan_channel)(const u8 *payload, u32 len,
+				  struct hi5622_scan_channel *out);
+	int (*parse_scan_sta_complete)(const u8 *payload, u32 len,
+				       struct hi5622_scan_sta_complete *out);
 	int (*build_user_add)(u8 *wire, size_t cap, size_t *out_len,
 			      const struct hi5622_vap_add_params *p);
 	int (*build_user_add_notify)(u8 *wire, size_t cap, size_t *out_len,

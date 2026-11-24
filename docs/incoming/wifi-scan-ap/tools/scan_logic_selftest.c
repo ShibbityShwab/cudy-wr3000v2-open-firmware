@@ -445,9 +445,9 @@ static void test_model(void)
 	CHECK_EQ(m.result_overflow, 5, "overflow counted");
 	CHECK_EQ(m.bss_events, HI5622_SCAN_MAX_RESULTS + 5, "bss event counter");
 	(void)hi5622_scan_model_event(&m, HI5622_SCAN_EV_CHANNEL, 1200);
-	(void)hi5622_scan_model_event(&m, HI5622_SCAN_EV_STA_RSP, 1200);
 	CHECK_EQ(m.channel_events, 1, "channel counter");
-	CHECK_EQ(m.sta_events, 1, "sta counter");
+	/* g2 id2 (STA completion) is checked in test_model_completion: it now
+	 * completes the scan, so it must not be injected before this timeout. */
 	CHECK_EQ(hi5622_scan_model_tick(&m, 1500), HI5622_SCAN_FINISH_ABORT,
 		 "deadline aborts");
 
@@ -830,9 +830,8 @@ static u32 build_scan_body(u8 *body, u8 subtype, bool with_ds, bool with_ht)
 	body[o++] = 0xaa; body[o++] = 0xbb; body[o++] = 0xcc;
 	if (with_ht) {
 		body[o++] = 61; body[o++] = 22;	/* HT operation */
-		body[o++] = 0;			/* primary channel byte 0 */
-		body[o++] = 36;			/* primary channel */
-		o += 20;
+		body[o++] = 36;			/* primary channel (body[0]) */
+		o += 21;
 	}
 	memset(body + o, 0xee, 20);		/* [U] trailing descriptor */
 	o += 20;
@@ -842,14 +841,19 @@ static u32 build_scan_body(u8 *body, u8 subtype, bool with_ds, bool with_ht)
 static void test_vapscan_scan_decode(void)
 {
 	struct hi5622_scan_result r;
+	struct hi5622_scan_complete cc;
+	struct hi5622_scan_channel ch;
+	struct hi5622_scan_sta_complete sc;
 	u8 body[512];
+	u8 payload[128];
 	u32 len;
 	int rc;
+	u16 i;
 
-	/* 8.1 beacon with DS IE -> 2.4 GHz result */
+	/* 8.1 beacon + 20-byte trailer -> 2.4 GHz result (task-118 decoder) */
 	len = build_scan_body(body, 8, true, false);
-	rc = hi5622_vapscan_parse_scan_result(body, len, &r);
-	CHECK_EQ(rc, 0, "beacon scan result decodes");
+	rc = hi5622_vapscan_decode_scan_result(body, len, &r);
+	CHECK_EQ(rc, 0, "beacon scan result decodes (task-118)");
 	CHECK_EQ(r.frame_type, HI5622_SCAN_FTYPE_BEACON, "decoded ftype beacon");
 	CHECK_EQ(r.freq, 2437, "decoded DS channel freq");
 	CHECK_EQ(r.beacon_interval, 100, "decoded beacon interval");
@@ -863,30 +867,120 @@ static void test_vapscan_scan_decode(void)
 	CHECK_EQ(hi5622_scan_result_validate(&r), 0,
 		 "decoded result passes cfg80211 validation");
 
-	/* 8.2 probe response without DS but with HT operation -> 5 GHz */
+	/* 8.2 probe response without DS but with HT operation body[0]=36 */
 	len = build_scan_body(body, 5, false, true);
-	rc = hi5622_vapscan_parse_scan_result(body, len, &r);
-	CHECK_EQ(rc, 0, "probe response without DS decodes via HT op");
+	rc = hi5622_vapscan_decode_scan_result(body, len, &r);
+	CHECK_EQ(rc, 0, "probe response decodes via HT op primary channel");
 	CHECK_EQ(r.frame_type, HI5622_SCAN_FTYPE_PRESP, "decoded ftype presp");
 	CHECK_EQ(r.freq, 5180, "decoded HT primary channel freq");
 	CHECK_EQ(hi5622_scan_result_validate(&r), 0,
 		 "5 GHz decoded result passes cfg80211 validation");
 
-	/* 8.3 tolerant failures */
+	/* 8.3 a bare frame (no trailer) is also a valid layout */
+	len = build_scan_body(body, 8, true, false) - 20u;
+	rc = hi5622_vapscan_decode_scan_result(body, len, &r);
+	CHECK_EQ(rc, 0, "bare frame layout accepted");
+	CHECK_EQ(r.freq, 2437, "bare frame DS freq");
+
+	/* 8.4 tolerant failures (never a fake BSS) */
 	body[0] = 0x08;	/* data frame, not management */
-	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, 512, &r),
+	CHECK_EQ(hi5622_vapscan_decode_scan_result(body, 512, &r),
 		 -EOPNOTSUPP, "non-management frame refused");
 	len = build_scan_body(body, 8, false, false);	/* no DS/HT */
-	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, len, &r),
+	CHECK_EQ(hi5622_vapscan_decode_scan_result(body, len, &r),
 		 -EOPNOTSUPP, "no channel IE -> not decodable");
-	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, 20, &r),
+	CHECK_EQ(hi5622_vapscan_decode_scan_result(body, 20, &r),
 		 -EOPNOTSUPP, "too short -> not decodable");
-	CHECK_EQ(hi5622_vapscan_parse_scan_result(NULL, 100, &r), -EINVAL,
+	CHECK_EQ(hi5622_vapscan_decode_scan_result(NULL, 100, &r), -EINVAL,
 		 "NULL payload refused");
 	len = build_scan_body(body, 8, true, false);
 	body[24 + 12 + 1] = 0xfe;	/* SSID IE length overruns the frame */
-	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, len, &r),
-		 -EOPNOTSUPP, "truncated IE list -> no DS found");
+	CHECK_EQ(hi5622_vapscan_decode_scan_result(body, len, &r),
+		 -EOPNOTSUPP, "truncated IE chain -> layout refused");
+
+	/* 8.5 g1 id16 completion: success == 1, anything else is an abort */
+	memset(payload, 0, sizeof(payload));
+	payload[0] = 1;
+	CHECK_EQ(hi5622_vapscan_decode_scan_complete(payload, 16, &cc), 0,
+		 "completion status decodes");
+	CHECK_EQ(cc.reason, 1, "completion reason/status 1");
+	CHECK_EQ(cc.aborted, 0, "status 1 is success");
+	payload[0] = 2;
+	CHECK_EQ(hi5622_vapscan_decode_scan_complete(payload, 16, &cc), 0,
+		 "completion failure status decodes");
+	CHECK_EQ(cc.aborted, 1, "non-1 status maps to aborted");
+
+	/* 8.6 g1 id17 channel result: payload[0]=slot, payload+4 block */
+	memset(payload, 0, sizeof(payload));
+	payload[0] = 3;		/* slot */
+	payload[4] = 6;		/* channel number in the record */
+	CHECK_EQ(hi5622_vapscan_decode_scan_channel(payload, 124, &ch), 0,
+		 "channel result decodes (fixed 124 B frame)");
+	CHECK_EQ(ch.slot, 3, "channel result slot");
+	CHECK_EQ(ch.chan_num, 6, "channel result channel");
+	CHECK_EQ(ch.freq, 2437, "channel result freq");
+	CHECK_EQ(ch.is_5g, 0, "channel result 2.4 GHz");
+
+	/* 8.7 g2 id2 WAL/STA scan completion */
+	memset(payload, 0, sizeof(payload));
+	payload[0] = 0x01;
+	payload[0x0d] = 1;
+	CHECK_EQ(hi5622_vapscan_decode_scan_sta_complete(payload, 32, &sc), 0,
+		 "STA completion decodes");
+	CHECK_EQ(sc.status, 1, "STA completion status");
+	CHECK_EQ(sc.core_band, 0, "STA completion core/band");
+	(void)i;
+}
+
+/* ------------------------------------------------------------------ */
+/* 5b. firmware completion semantics (task-118 status bytes)           */
+/* ------------------------------------------------------------------ */
+static void test_model_completion(void)
+{
+	struct hi5622_scan_model m;
+
+	hi5622_scan_model_init(&m);
+	CHECK_EQ(hi5622_scan_model_start(&m, 1000, 500), 0, "completion scan start");
+	CHECK_EQ(hi5622_scan_model_complete(&m, 1, 0, 1100),
+		 HI5622_SCAN_FINISH_OK, "status 1 => finish ok");
+	CHECK(m.complete_seen, "completion latched");
+	CHECK_EQ(m.complete_reason, 1, "completion reason stored");
+	CHECK_EQ(m.complete_failures, 0, "no completion failure");
+	CHECK_EQ(hi5622_scan_model_tick(&m, 1100), HI5622_SCAN_FINISH_OK,
+		 "tick honours successful completion");
+	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_OK);
+	CHECK_EQ(m.finishes_ok, 1, "finish ok counted");
+	hi5622_scan_model_clear(&m);
+
+	hi5622_scan_model_init(&m);
+	CHECK_EQ(hi5622_scan_model_start(&m, 2000, 500), 0, "failure scan start");
+	CHECK_EQ(hi5622_scan_model_complete(&m, 2, 1, 2100),
+		 HI5622_SCAN_FINISH_ABORT, "failure status => finish abort");
+	CHECK(m.complete_failed, "failed completion latched");
+	CHECK_EQ(m.complete_failures, 1, "completion failure counted");
+	CHECK_EQ(hi5622_scan_model_tick(&m, 2100), HI5622_SCAN_FINISH_ABORT,
+		 "tick honours failed completion");
+	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_ABORT);
+	CHECK_EQ(m.finishes_abort, 1, "abort finish counted");
+	CHECK_EQ(m.timeouts, 0, "failed completion is not a timeout");
+	hi5622_scan_model_clear(&m);
+	CHECK(!m.complete_failed, "clear resets completion failure");
+
+	/* g2 id2 wal_scan_comp_proc_sta is the vendor cfg80211 feed/completion
+	 * point [V]: a completion candidate exactly like g1 id16. */
+	hi5622_scan_model_init(&m);
+	CHECK_EQ(hi5622_scan_model_start(&m, 3000, 500), 0, "sta comp scan start");
+	CHECK_EQ(hi5622_scan_model_event(&m, HI5622_SCAN_EV_STA_RSP, 3100),
+		 HI5622_SCAN_FINISH_OK, "g2 id2 completes the scan");
+	CHECK(m.complete_seen, "g2 id2 latches completion");
+	CHECK_EQ(m.sta_events, 1, "g2 id2 counted");
+	CHECK_EQ(hi5622_scan_model_tick(&m, 3100), HI5622_SCAN_FINISH_OK,
+		 "tick after g2 id2 reports finish");
+	hi5622_scan_model_finish(&m, HI5622_SCAN_FINISH_OK);
+	hi5622_scan_model_clear(&m);
+	CHECK_EQ(hi5622_scan_model_complete(&m, 1, 0, 3200),
+		 HI5622_SCAN_WAIT, "idle completion ignored");
+	CHECK_EQ(m.events_when_idle, 1, "idle completion counted");
 }
 
 int main(void)
@@ -896,6 +990,7 @@ int main(void)
 	test_validators();
 	test_classify();
 	test_model();
+	test_model_completion();
 	test_provider_wire_roundtrip();
 	test_vapscan_errno_and_guards();
 	test_vapscan_scan_frames();

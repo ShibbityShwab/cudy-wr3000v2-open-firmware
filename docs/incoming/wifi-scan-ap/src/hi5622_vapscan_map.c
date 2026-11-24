@@ -12,6 +12,7 @@
  * host-tested by tools/scan_logic_selftest.c.
  */
 #include "hi5622_vapscan_map.h"
+#include "hi5622_scan_d2h.h"
 
 #ifdef __KERNEL__
 #include <linux/errno.h>
@@ -175,112 +176,90 @@ int hi5622_vapscan_user_del(struct vs_frame *f,
 }
 
 /* ------------------------------------------------------------------ */
-/* Tolerant g1 id15 decoder                                           */
+/* vendor-verified D2H decoders (wifi-scan-d2h lane, task-118)         */
 /* ------------------------------------------------------------------ */
-static u16 hi5622_le16(const u8 *p)
+int hi5622_vapscan_decode_scan_result(const u8 *payload, u32 len,
+				      struct hi5622_scan_result *out)
 {
-	return (u16)((u16)p[0] | ((u16)p[1] << 8));
-}
+	struct hi5622_scan_d2h_bss b;
+	int rc;
 
-static u64 hi5622_le64(const u8 *p)
-{
-	u64 v = 0;
-	int i;
-
-	for (i = 7; i >= 0; i--)
-		v = (v << 8) | p[i];
-	return v;
-}
-
-static int hi5622_ie_channel(const u8 *ies, u32 len, u16 *freq)
-{
-	u32 off = 0;
-
-	while (off + HI5622_IE_HDR_LEN <= len) {
-		u8 id = ies[off];
-		u8 tl = ies[off + 1];
-
-		if (off + HI5622_IE_HDR_LEN + tl > len)
-			return -EINVAL;
-		if (id == 3u && tl == 1u) {	/* DS parameter set [V] */
-			*freq = (u16)(2407u + 5u * ies[off + 2]);
-			return 0;
-		}
-		if (id == 61u && tl >= 2u) {	/* HT operation: primary ch [I] */
-			*freq = (u16)(5000u + 5u * ies[off + 3]);
-			return 0;
-		}
-		off += HI5622_IE_HDR_LEN + tl;
-	}
-	return -EOPNOTSUPP;
-}
-
-int hi5622_vapscan_parse_scan_result(const u8 *payload, u32 len,
-				     struct hi5622_scan_result *out)
-{
-	u32 flen;
-	const u8 *frame;
-	const u8 *ies;
-	u32 ielen, off;
-	u16 fc, cap, interval, freq = 0;
-	u8 subtype;
-
-	if (!payload || !out)
+	if (!out)
 		return -EINVAL;
+	/* Tolerant layout probe: 802.11 body + optional 20-byte trailer, plus
+	 * bare-frame and prefix variants; returns -EOPNOTSUPP instead of
+	 * guessing.  Signal stays 0 (trailer RSSI is [U], opt-in only inside
+	 * the decoder). */
+	rc = hi5622_scan_d2h_parse_bss(payload, len, NULL, &b);
+	if (rc)
+		return rc;
 	memset(out, 0, sizeof(*out));
-	/* Strip the host descriptor trailer [U]; the 802.11 frame must remain
-	 * a complete management frame. */
-	if (len <= HI5622_VAPSCAN_SCAN_FOOTER)
-		return -EOPNOTSUPP;
-	flen = len - HI5622_VAPSCAN_SCAN_FOOTER;
-	if (flen < HI5622_MGMT_HDR_LEN + HI5622_BEACON_FIXED_LEN)
-		return -EOPNOTSUPP;
-	frame = payload;
-	fc = hi5622_le16(frame);
-	if (((fc >> 2) & 0x3u) != 0u)	/* management frame only */
-		return -EOPNOTSUPP;
-	subtype = (u8)((fc >> 4) & 0xfu);
-	if (subtype == 8u)		/* beacon */
-		out->frame_type = HI5622_SCAN_FTYPE_BEACON;
-	else if (subtype == 5u)		/* probe response */
-		out->frame_type = HI5622_SCAN_FTYPE_PRESP;
-	else
-		return -EOPNOTSUPP;
-	memcpy(out->bssid, frame + 16, 6);	/* addr3 [V] */
-	out->tsf = hi5622_le64(frame + HI5622_MGMT_HDR_LEN);
-	interval = hi5622_le16(frame + HI5622_MGMT_HDR_LEN + 8);
-	cap = hi5622_le16(frame + HI5622_MGMT_HDR_LEN + 10);
-	out->beacon_interval = interval;
-	out->capability = cap;
-	ies = frame + HI5622_MGMT_HDR_LEN + HI5622_BEACON_FIXED_LEN;
-	ielen = flen - (HI5622_MGMT_HDR_LEN + HI5622_BEACON_FIXED_LEN);
-	off = 0;
-	while (off + HI5622_IE_HDR_LEN <= ielen) {
-		u8 id = ies[off];
-		u8 tl = ies[off + 1];
-		u32 need = HI5622_IE_HDR_LEN + tl;
+	memcpy(out->bssid, b.bssid, sizeof(out->bssid));
+	memcpy(out->ssid, b.ssid, b.ssid_len);
+	out->ssid_len = b.ssid_len;
+	out->frame_type = (b.frame_type == HI5622_SCAN_D2H_FTYPE_PRESP) ?
+			  HI5622_SCAN_FTYPE_PRESP : HI5622_SCAN_FTYPE_BEACON;
+	out->signal_mbm = b.signal_mbm;
+	out->freq = b.freq;
+	out->capability = b.capability;
+	out->beacon_interval = b.beacon_interval;
+	out->tsf = b.tsf;
+	out->ie_len = b.ie_len;
+	memcpy(out->ie, b.ie, b.ie_len);
+	return 0;
+}
 
-		if (off + need > ielen)
-			break;	/* stop at the first incomplete IE */
-		if (id == 0u && tl <= HI5622_FRAME_MAX_SSID_LEN) {
-			out->ssid_len = tl;
-			memcpy(out->ssid, ies + off + HI5622_IE_HDR_LEN, tl);
-		}
-		if (out->ie_len + need <= HI5622_SCAN_MAX_IE) {
-			memcpy(out->ie + out->ie_len, ies + off, need);
-			out->ie_len = (u16)(out->ie_len + need);
-		}
-		off += need;
-	}
-	if (hi5622_ie_channel(ies, ielen, &freq)) {
-		/* A 5 GHz probe response may carry only the HT operation IE,
-		 * a 2.4 GHz beacon always carries the DS IE; a body with
-		 * neither cannot be placed on a channel -> not decodable. */
-		return -EOPNOTSUPP;
-	}
-	out->freq = freq;
-	/* The RSSI lives in the [U] descriptor; report UNKNOWN (0 mBm) rather
-	 * than inventing a value.  Callers must treat this as [U]. */
-	out->signal_mbm = 0;
+int hi5622_vapscan_decode_scan_complete(const u8 *payload, u32 len,
+					struct hi5622_scan_complete *out)
+{
+	struct hi5622_scan_d2h_complete cc;
+	int rc;
+
+	if (!out)
+		return -EINVAL;
+	rc = hi5622_scan_d2h_parse_complete(payload, len, &cc);
+	if (rc)
+		return rc;
+	out->reason = cc.status;
+	/* Only 'success == 1' is proven [V]; everything else is reported as an
+	 * abort so cfg80211 never sees a fake successful scan. */
+	out->aborted = (cc.status != 1u) ? 1u : 0u;
+	return 0;
+}
+
+int hi5622_vapscan_decode_scan_channel(const u8 *payload, u32 len,
+				       struct hi5622_scan_channel *out)
+{
+	struct hi5622_scan_d2h_chan ch;
+	int rc;
+
+	if (!out)
+		return -EINVAL;
+	rc = hi5622_scan_d2h_parse_chan(payload, len, &ch);
+	if (rc)
+		return rc;
+	memset(out, 0, sizeof(*out));
+	out->slot = ch.slot;
+	out->chan_num = ch.chan_num;
+	out->is_5g = ch.is_5g ? 1u : 0u;
+	out->freq = ch.freq;
+	return 0;
+}
+
+int hi5622_vapscan_decode_scan_sta_complete(const u8 *payload, u32 len,
+					    struct hi5622_scan_sta_complete *out)
+{
+	struct hi5622_scan_d2h_sta_comp sc;
+	int rc;
+
+	if (!out)
+		return -EINVAL;
+	rc = hi5622_scan_d2h_parse_sta_comp(payload, len, &sc);
+	if (rc)
+		return rc;
+	memset(out, 0, sizeof(*out));
+	out->status = sc.status;
+	out->core_band = sc.core_band;
+	out->chip_id = sc.chip_id;
 	return 0;
 }

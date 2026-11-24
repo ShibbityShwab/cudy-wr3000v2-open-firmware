@@ -12,6 +12,7 @@ builders** (`../wifi-vap-scan/`, opensource commit 0e4ad45):
     add/del_virtual_intf       -> g0 id7/id8 user add + g0 id9 del through the provider
     hi5622_frame_post()        -> ONE fail-closed wire path (allow_frames=0 default)
     hi5622_vapscan_provider    -> registers the g0 id7/id8/id9/id0xC builders
+                                  + the task-118 g1 id15/16/17 + g2 id2 decoders
     hi5622_frame_ops           -> generic provider registry (empty default; the
                                   vapscan adapter is the one committed provider)
 
@@ -25,9 +26,9 @@ reports only what the 802.11 body proves and 'no BSS entries, bounded
 scan_done' is a valid outcome.  AP start/stop payloads remain WAL gap G1 [U].
 
 **Status: host-only, compile-clean (0 warnings), host-selftested, NOT
-bench-fired by this lane.** Module **676,180 B** sha256 `4a1c3b9a...`, 9
-cfg80211 imports, depends=cfg80211; host selftests **248/248** (new, incl. the
-builder mapping + tolerant D2H decode) + 454/454 and 242/242 (inherited
+bench-fired by this lane.** Module **704,720 B** sha256 `20d38c5c...`, 9
+cfg80211 imports, depends=cfg80211; host selftests **284/284** (new, incl. the builder
+mapping + the integrated vendor-verified task-118 D2H decoders) + 454/454 and 242/242 (inherited
 regressions); provider-symbols check 9/9; `allow_frames=0` fail-closed default (scan decode is
 always on, tolerant).  Bench session 2026-11-24: the first real firmware
 management frame was posted (g0 id7 user_add 180 B, consumed in 0 polls); the
@@ -45,7 +46,7 @@ are compile-verified and host-tested only.
 | configs/ | hostapd.conf (WPA2-CCMP ch6), hostapd-open.conf, wpa_supplicant.conf + README (placeholder PSKs only) |
 | src/ | working driver tree (wifi-cfg80211 + new scan/provider/post layer + integrated task-110 vapscan builders + the documented integration edits) |
 | tools/build.sh | canonical: host scan selftest -> inherited cfg80211/H2D regressions -> kernel module -> provider check -> static selftest |
-| tools/scan_logic_selftest.c | 248 device-free checks: provider contract, validators, event classifier, scan model, exact g0 id9 round-trip, task-110 builder mapping (id7/id8/id9/id0xC byte offsets) and the tolerant g1 id15 decode |
+| tools/scan_logic_selftest.c | 284 device-free checks: provider contract, validators, event classifier, scan model/completion, exact g0 id9 round-trip, task-110 builder mapping (id7/id8/id9/id0xC byte offsets) and the task-118 g1 id15/16/17 + g2 id2 decoders |
 | tools/selftest.py | source/contract checks: ops table, one scan_done, fail-closed defaults, D2H hook, baseline parity, configs, docs, no vendor material |
 | tools/gen_cfg80211_symvers.py | regenerates/validates the 9-symbol cfg80211 provider symvers (Module.symvers grammar) |
 | tools/src-baseline.sha256 | inherited-tree parity baseline (19 unmodified files) + the documented integration-edit list |

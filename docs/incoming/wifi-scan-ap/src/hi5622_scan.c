@@ -319,9 +319,48 @@ void hi5622_scan_deliver(struct hi5622_pci *ctx, const u8 *hdr,
 	case HI5622_SCAN_EV_COMPLETE: {
 		struct hi5622_scan_complete cc = {};
 
+		/* g1 id16: the decoder exposes the vendor status byte
+		 * (wifi-scan-d2h, task-118) so a failed completion is reported
+		 * to cfg80211 as an aborted scan instead of a fake success. */
 		if (ops && ops->parse_scan_complete &&
 		    !ops->parse_scan_complete(payload, avail, &cc))
-			s->model.complete_reason = cc.reason;
+			step = hi5622_scan_model_complete(&s->model, cc.reason,
+							  cc.aborted,
+							  hi5622_scan_now());
+		else
+			step = hi5622_scan_model_event(&s->model, cls,
+						       hi5622_scan_now());
+		break;
+	}
+	case HI5622_SCAN_EV_CHANNEL: {
+		struct hi5622_scan_channel ch = {};
+
+		/* g1 id17 per-channel result (fully decoded by task-118): log the
+		 * slot/channel/frequency, keep the event counted in the model. */
+		if (ops && ops->parse_scan_channel &&
+		    !ops->parse_scan_channel(payload, avail, &ch))
+			dev_info_ratelimited(&ctx->pdev->dev,
+					     "cfg80211: scan channel result slot=%u ch=%u (%u MHz%s)\n",
+					     ch.slot, ch.chan_num, ch.freq,
+					     ch.is_5g ? ", 5GHz" : "");
+		step = hi5622_scan_model_event(&s->model, cls,
+					       hi5622_scan_now());
+		break;
+	}
+	case HI5622_SCAN_EV_STA_RSP: {
+		struct hi5622_scan_sta_complete sc = {};
+
+		/* g2 id2 wal_scan_comp_proc_sta is the vendor's cfg80211 feed /
+		 * scan-done path [V]; the model treats it as a completion
+		 * candidate exactly like g1 id16.  Status semantics [I]/[U],
+		 * so it is logged and recorded, never used as a false aborted. */
+		if (ops && ops->parse_scan_sta_complete &&
+		    !ops->parse_scan_sta_complete(payload, avail, &sc)) {
+			s->model.complete_reason = sc.status;
+			dev_info_ratelimited(&ctx->pdev->dev,
+					     "cfg80211: scan STA completion status=0x%02x core_band=%u chip_id=%u\n",
+					     sc.status, sc.core_band, sc.chip_id);
+		}
 		step = hi5622_scan_model_event(&s->model, cls,
 					       hi5622_scan_now());
 		break;

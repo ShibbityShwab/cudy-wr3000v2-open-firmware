@@ -77,6 +77,7 @@ struct hi5622_scan_model {
 	enum hi5622_scan_phase	phase;
 	bool			abort_requested;
 	bool			complete_seen;
+	bool			complete_failed;	/* completion reported failure */
 	bool			finish_reported;	/* kernel called scan_done */
 	u64			started_ms;
 	u64			deadline_ms;
@@ -90,6 +91,7 @@ struct hi5622_scan_model {
 	u32			result_overflow;
 	u32			bss_events;
 	u32			complete_events;
+	u32			complete_failures;
 	u32			channel_events;
 	u32			sta_events;
 	u32			unknown_events;
@@ -128,6 +130,14 @@ enum hi5622_scan_event_class hi5622_scan_classify(u8 group, u16 id);
 enum hi5622_scan_step hi5622_scan_model_event(struct hi5622_scan_model *m,
 					      enum hi5622_scan_event_class cls,
 					      u64 now_ms);
+
+/* Firmware completion (g1 id16 hmac_scan_proc_scan_comp_event, and g2 id2
+ * wal_scan_comp_proc_sta as the vendor's cfg80211 feed/completion path [V]).
+ * Records the status byte and decides success (FINISH_OK) vs failure
+ * (FINISH_ABORT, counted in complete_failures - not a timeout). */
+enum hi5622_scan_step hi5622_scan_model_complete(struct hi5622_scan_model *m,
+						u8 status, u8 aborted,
+						u64 now_ms);
 
 /* Bounded timeout / abort check; returns the step decision. */
 enum hi5622_scan_step hi5622_scan_model_tick(struct hi5622_scan_model *m,

@@ -21,7 +21,7 @@ the driver must never fake a scan or an AP start.
 | wiphy registration after the HCC ready handshake | **hardware-validated** 2026-11-25 | `iw phy`, `iw dev`, VAP add/del work |
 | frame provider | **registered**: `vapscan-0e4ad45` caps **0x1f** (`scan_req,scan_parse,user_add,user_add_notify,user_del`) (task-110 builders, integrated) | H2D messages can be built and `.scan` posts g0 id0xC; nothing is written while `allow_frames=0` |
 | scan request g0 id0xC + g0 id7/id8/id9 builders | **delivered** by task-110 (commit 0e4ad45), [V]/[I] vendor-derived, not hardware-validated | Mode P can exercise them under the gate |
-| D2H scan results (g1 15/16/17, g2 2) | **g1 id15 body decoded best-effort** (802.11 frame; 20-byte trailer [U] -> signal placeholder 0 mBm); decoder always on | scan may produce zero BSS (valid outcome); `.scan` needs `allow_frames>0` to post |
+| D2H scan results (g1 15/16/17, g2 2) | **task-118 vendor-verified decoders integrated**: g1 id15 (802.11 body + 20-byte trailer layout probe), g1 id16 status, g1 id17 channel (124 B fixed), g2 id2 WAL completion; signal stays 0 mBm [U] | scan may produce zero BSS (valid firmware outcome); `.scan` needs `allow_frames>0` to post |
 | firmware scan handler | hardcodes **VAP 0** (CA 0x6494c); the host-only M1 netdev has no firmware VAP object | a posted scan request may be a *graceful refusal*: accept "no D2H results", rely on a VAP-create follow-up |
 | WAL group-2 AP-start payload (gap G1) | **[U]** | `start_ap`/`stop_ap` stay `-EOPNOTSUPP` (no provider capability) |
 | `add_key` / `connect` (M3/M5) | NULL in `cfg80211_ops` | WPA2 hostapd stops at key install; wpa_supplicant stops at connect |
@@ -175,11 +175,14 @@ next RE item.
 
 Expected observable chain: `cfg80211: scan request posted by provider
 'vapscan-0e4ad45' (… total 520 B)` dmesg -> `frame post 'scan_req': g0 id12
-total 520 B … coalesced announce consumed after N polls` -> zero or more BSS
-results decoded from g1 id15 (802.11 body; signal reported 0 mBm because the
-trailer is [U]) -> exactly one `cfg80211: scan DONE (…)` -> `iw` prints a BSS
-list or "No scan results".  If the firmware refuses the scan (VAP-0 fact),
-only the bounded `scan_done(aborted=1)` appears.
+total 520 B … coalesced announce consumed after N polls` -> per channel,
+`cfg80211: scan channel result slot=… ch=… (… MHz)` (g1 id17) -> zero or
+more BSS results decoded from g1 id15 (task-118 layout probe; signal 0 mBm
+[U]) -> optionally `cfg80211: scan STA completion status=0x…` (g2 id2,
+completion candidate) -> exactly one `cfg80211: scan DONE (…)` -> `iw`
+prints a BSS list or "No scan results".  If the firmware refuses the scan
+(VAP-0 fact), only the bounded `scan_done(aborted=1)` appears.  A g1 id16
+status != 1 is reported as `scan_done(aborted=1)`, never as a fake success.
 
 **Stop rules (Mode P):** stop and power-cycle on any of
 * `frame post 'scan_req': REFUSED ...` (gate refusal is a stop, not a retry),
@@ -216,6 +219,28 @@ answer with a D2H event for the lap to be recorded.
 != 0, exception-staging frame, golden page/state change, g+0xB4/+0xB8 != 0,
 announce timeout, or any dmesg fault line -> record and power-cycle; never
 re-send the failed frame, never write out[5], never use mailbox id 5.
+
+### 3.4 Reading scan D2H observables (task-118 decision table)
+
+Immediately after the scan request (before the 5 s cfg80211 timeout), read
+`cat $D/d2h_status`/`rd_catalog` (direct-reader seen table) and
+`cat $D/cfg80211_status`.  Classify without guessing:
+
+| firmware events | driver scan counters | verdict |
+| --- | --- | --- |
+| no g1 15/16/17, no g2 2 | results=0 bss=0 | firmware produced nothing (scan refused: VAP object missing) - request consumed, transport OK |
+| g1 id17 present (124 B total), g1 id15 absent | channel_events>0 bss=0 | scan running, channels reported, no BSS decoded from the air (range/channel list) |
+| g1 id15 present, parse_errors/invalid_results>0 | bss>0 results=0 | decode gap: capture the raw payload and extend the decoder; it never invents a result |
+| g1 id15 present, inform_failures>0 | results>0 inform>0 | decoded BSS on a frequency this wiphy does not list (e.g. ch14 / out-of-plan 5 GHz) |
+
+**D2 pass criteria:** `scan_done(aborted=0)` plus at least one BSS informed
+with plausible freq/SSID; no exception, boot page golden.  Signal stays 0 mBm
+until the trailer RSSI is bench-correlated.
+
+**External blocker:** the VAP-start frame family is currently rejected by the
+inherited h2d_frames allowlist (wifi-vap-start lane is fixing it); our own
+provider frames g0 id7/8/9/0xC already pass the same validator, so the full
+VAP start -> user_add/notify -> scan -> results ladder needs both fixes.
 
 ## 4. hostapd ladder (AP)
 

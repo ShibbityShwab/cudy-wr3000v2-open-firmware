@@ -54,8 +54,9 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 "$CC" $CCFLAGS -o "$WORK/scan_logic_selftest" \
 	"$HERE/scan_logic_selftest.c" "$SRC/hi5622_scan_logic.c" \
-	"$SRC/hi5622_vapscan_map.c" "$SRC/vapscan_frames.c" \
-	"$SRC/h2d_frames.c" || die "host scan selftest compile failed"
+	"$SRC/hi5622_vapscan_map.c" "$SRC/hi5622_scan_d2h.c" \
+	"$SRC/vapscan_frames.c" "$SRC/h2d_frames.c" \
+	|| die "host scan selftest compile failed"
 "$WORK/scan_logic_selftest" || die "host scan logic selftest failed"
 echo "built: $WORK/scan_logic_selftest ($(wc -c < "$WORK/scan_logic_selftest") bytes)"
 

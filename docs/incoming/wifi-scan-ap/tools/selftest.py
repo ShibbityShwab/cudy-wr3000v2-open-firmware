@@ -73,6 +73,8 @@ def main(argv):
         "src/hi5622_vapscan_provider.c": os.path.join(SRC, "hi5622_vapscan_provider.c"),
         "src/vapscan_frames.h": os.path.join(SRC, "vapscan_frames.h"),
         "src/vapscan_frames.c": os.path.join(SRC, "vapscan_frames.c"),
+        "src/hi5622_scan_d2h.h": os.path.join(SRC, "hi5622_scan_d2h.h"),
+        "src/hi5622_scan_d2h.c": os.path.join(SRC, "hi5622_scan_d2h.c"),
         "src/cfg80211-provider.symvers": os.path.join(SRC, "cfg80211-provider.symvers"),
         "tools/build.sh": os.path.join(HERE, "build.sh"),
         "tools/selftest.py": os.path.join(HERE, "selftest.py"),
@@ -94,7 +96,7 @@ def main(argv):
     for obj in ("hi5622_scan_logic.o", "hi5622_scan.o",
                 "hi5622_frame_post.o", "hi5622_frames_provider.o",
                 "hi5622_vapscan_map.o", "hi5622_vapscan_provider.o",
-                "vapscan_frames.o"):
+                "vapscan_frames.o", "hi5622_scan_d2h.o"):
         check(obj in kbuild, "Kbuild missing object %s" % obj)
     check("KBUILD_EXTRA_SYMBOLS" in kbuild and
           "cfg80211-provider.symvers" in kbuild,
@@ -180,6 +182,12 @@ def main(argv):
     check("p.band = c->band;" in s,
           "scan/VAP neutral params do not carry the endpoint band")
     check("EOPNOTSUPP" in s, "scan/AP layer must fail closed with -EOPNOTSUPP")
+    check("hi5622_scan_model_complete(" in s,
+          "g1 id16 completion status is not routed to the scan model")
+    check("ops->parse_scan_channel" in s and "ops->parse_scan_sta_complete" in s,
+          "g1 id17 / g2 id2 decoders are not wired into the delivery hook")
+    check("hi5622_scan_model_event(&s->model, cls" in s,
+          "event counter path changed unexpectedly")
 
     # ---- 4. fail-closed post gate --------------------------------------
     fp = read(os.path.join(SRC, "hi5622_frame_post.c"))
@@ -252,7 +260,7 @@ def main(argv):
           "mapping layer does not call the task-110 builders")
     check("HI5622_VAPSCAN_SCAN_FOOTER" in vm and "20u" in vm,
           "g1 id15 trailer strip (20 B [U]) missing")
-    check("signal_mbm = 0" in vm,
+    check(("signal stays 0" in vm.lower()) and "signal_mbm" in vm,
           "unknown signal fallback must be explicit (0 mBm [U])")
     check("hardcodes VAP 0" in vm,
           "scan VAP-0 bench fact must be documented in the mapping")
@@ -261,13 +269,47 @@ def main(argv):
     check("Portability edit" in read(os.path.join(SRC, "vapscan_frames.h")),
           "integrated vapscan_frames.h must document the portability edit")
 
+    # task-118 decoder integration
+    d2h = read(os.path.join(SRC, "hi5622_scan_d2h.c"))
+    d2hh = read(os.path.join(SRC, "hi5622_scan_d2h.h"))
+    check("hi5622_scan_d2h_parse_bss" in d2h and
+          "hi5622_scan_d2h_parse_complete" in d2h and
+          "hi5622_scan_d2h_parse_chan" in d2h and
+          "hi5622_scan_d2h_parse_sta_comp" in d2h,
+          "integrated task-118 decoder API incomplete")
+    check("HI5622_SCAN_D2H_TRAILER_LEN\t20u" in d2hh,
+          "task-118 20-byte trailer constant missing")
+    check("signal_mbm = 0" in d2h or "signal_from_trailer" in d2h,
+          "decoder signal must stay fail-closed/opt-in")
+    check("HI5622_HOST_TYPES_DEFINED" in d2hh and
+          "Portability edit" in d2hh,
+          "integrated hi5622_scan_d2h.h must carry the portability guard")
+    check("hi5622_vapscan_parse_scan_result" not in vm,
+          "old heuristic scan decoder must be removed from the mapping layer")
+    check("hi5622_scan_d2h_parse_bss" in vm and
+          "hi5622_scan_d2h_parse_complete" in vm and
+          "hi5622_scan_d2h_parse_chan" in vm and
+          "hi5622_scan_d2h_parse_sta_comp" in vm,
+          "mapping layer does not call the task-118 decoders")
+    check("hi5622_vapscan_decode_scan_result" in vp and
+          "hi5622_vapscan_decode_scan_complete" in vp,
+          "provider does not use the task-118 BSS/completion decoders")
+    check("vapscan_parse_scan_complete" in vp and
+          "hi5622_scan_model_complete" in s,
+          "provider/model completion-status wiring missing")
+    check("hi5622_vapscan_decode_scan_channel" in vp and
+          "hi5622_vapscan_decode_scan_sta_complete" in vp,
+          "provider channel/STA-completion decoders missing")
     lh = read(os.path.join(SRC, "hi5622_scan_logic.h"))
     for needle in ("HI5622_SCAN_D2H_ID_BSS\t\t0x0fu",
                    "HI5622_SCAN_D2H_ID_COMPLETE\t0x10u",
                    "HI5622_SCAN_D2H_ID_CHANNEL\t0x11u",
                    "HI5622_SCAN_D2H_ID_STA_RSP\t0x02u",
                    "HI5622_SCAN_TIMEOUT_MS\t\t5000u",
-                   "HI5622_SCAN_MAX_RESULTS\t\t256u"):
+                   "HI5622_SCAN_MAX_RESULTS\t\t256u",
+                   "hi5622_scan_model_complete",
+                   "complete_failed",
+                   "complete_failures"):
         check(needle in lh, "scan logic header missing %r" % needle)
 
     # ---- 5. D2H integration: full payload to the scan decoder -----------
@@ -359,6 +401,7 @@ def main(argv):
                    "g0 id7", "g1 id15", "g1 id16", "g1 id17", "g2 id2",
                    "start_ap", "hostapd", "hi5622_frame_post",
                    "allow_frames=0", "SCAN_PARSE", "caps 0x1f", "vapscan",
+                   "task-118", "scan_d2h",
                    "hi5622_vapscan_provider", "PD4", "[U]", "[I]", "[V]",
                    "no vendor"):
         check(needle.lower() in rep.lower(),

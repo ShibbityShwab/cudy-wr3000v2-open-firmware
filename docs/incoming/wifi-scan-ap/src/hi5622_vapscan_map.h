@@ -47,13 +47,19 @@ int hi5622_vapscan_user_alg(struct vs_frame *f,
 int hi5622_vapscan_user_del(struct vs_frame *f,
 			    const struct hi5622_vap_del_params *p);
 
-/* Tolerant g1 id15 (hmac_scan_proc_scanned_bss) decoder: payload = 802.11
- * beacon/probe-response frame + trailing 20-byte host descriptor [U].
- * Returns 0 and fills *out, -EOPNOTSUPP when the body is not a decodable scan
- * result (unknown footer/variant), -EINVAL on a malformed body.  signal_mbm
- * is 0 (UNKNOWN placeholder) because the descriptor layout is [U]. */
-int hi5622_vapscan_parse_scan_result(const u8 *payload, u32 len,
-				     struct hi5622_scan_result *out);
+/* Vendor-verified D2H decoders (wifi-scan-d2h lane, task-118, commit 469b193)
+ * wrapped for the provider contract.  These replace this lane's earlier
+ * 'trim 20 bytes from the end' heuristic; the decoder probes the layout
+ * (802.11 body + 20-byte trailer / bare frame / prefix variants) and returns
+ * -EOPNOTSUPP instead of guessing. */
+int hi5622_vapscan_decode_scan_result(const u8 *payload, u32 len,
+				      struct hi5622_scan_result *out);
+int hi5622_vapscan_decode_scan_complete(const u8 *payload, u32 len,
+					struct hi5622_scan_complete *out);
+int hi5622_vapscan_decode_scan_channel(const u8 *payload, u32 len,
+				       struct hi5622_scan_channel *out);
+int hi5622_vapscan_decode_scan_sta_complete(const u8 *payload, u32 len,
+					    struct hi5622_scan_sta_complete *out);
 
 #ifdef __KERNEL__
 /* Kernel adapter: register the task-110 builders as the module's single frame

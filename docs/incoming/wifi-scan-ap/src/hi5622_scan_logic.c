@@ -321,6 +321,7 @@ void hi5622_scan_model_clear(struct hi5622_scan_model *m)
 		m->phase = HI5622_SCAN_IDLE;
 		m->abort_requested = false;
 		m->complete_seen = false;
+		m->complete_failed = false;
 		m->finish_reported = false;
 	}
 }
@@ -370,12 +371,38 @@ enum hi5622_scan_step hi5622_scan_model_event(struct hi5622_scan_model *m,
 		return HI5622_SCAN_WAIT;
 	case HI5622_SCAN_EV_STA_RSP:
 		m->sta_events++;
-		return HI5622_SCAN_WAIT;
+		/* g2 id2 wal_scan_comp_proc_sta is the vendor's WAL scan completion
+		 * and cfg80211 feed point [V]: treat it as a completion candidate
+		 * exactly like g1 id16. */
+		m->complete_seen = true;
+		return HI5622_SCAN_FINISH_OK;
 	default:
 		m->unknown_events++;
 		return HI5622_SCAN_WAIT;
 	}
 	(void)now_ms;
+}
+
+enum hi5622_scan_step hi5622_scan_model_complete(struct hi5622_scan_model *m,
+						u8 status, u8 aborted,
+						u64 now_ms)
+{
+	if (!m)
+		return HI5622_SCAN_WAIT;
+	if (m->phase != HI5622_SCAN_ACTIVE) {
+		m->events_when_idle++;
+		return HI5622_SCAN_WAIT;
+	}
+	(void)now_ms;
+	m->complete_events++;
+	m->complete_seen = true;
+	m->complete_reason = status;
+	if (aborted) {
+		m->complete_failed = true;
+		m->complete_failures++;
+		return HI5622_SCAN_FINISH_ABORT;
+	}
+	return HI5622_SCAN_FINISH_OK;
 }
 
 enum hi5622_scan_step hi5622_scan_model_tick(struct hi5622_scan_model *m,
@@ -386,7 +413,8 @@ enum hi5622_scan_step hi5622_scan_model_tick(struct hi5622_scan_model *m,
 	if (m->abort_requested)
 		return HI5622_SCAN_FINISH_ABORT;
 	if (m->complete_seen)
-		return HI5622_SCAN_FINISH_OK;
+		return m->complete_failed ? HI5622_SCAN_FINISH_ABORT :
+					    HI5622_SCAN_FINISH_OK;
 	/* Wrap-safe comparison: both values come from the same monotonic ms
 	 * clock and a scan lives far below 2^32 ms. */
 	if (now_ms >= m->deadline_ms)
@@ -436,12 +464,13 @@ int hi5622_scan_status_line(const struct hi5622_scan_model *m, char *buf,
 		return -EINVAL;
 	n = snprintf(buf, len,
 		     "scan: phase=%s results=%u/%u bss=%u complete=%u channel=%u sta=%u unknown=%u idle_ev=%u overflow=%u\n"
-		     "scan errors: dropped_busy=%u parse=%u invalid=%u inform=%u timeouts=%u aborts=%u last=%s\n",
+		     "scan completions: reason=0x%02x failed=%u ; errors: dropped_busy=%u parse=%u invalid=%u inform=%u timeouts=%u aborts=%u last=%s\n",
 		     hi5622_scan_phase_name(m->phase),
 		     m->results, HI5622_SCAN_MAX_RESULTS,
 		     m->bss_events, m->complete_events, m->channel_events,
 		     m->sta_events, m->unknown_events, m->events_when_idle,
-		     m->result_overflow, m->dropped_busy, m->parse_errors,
+		     m->result_overflow, m->complete_reason,
+		     m->complete_failures, m->dropped_busy, m->parse_errors,
 		     m->invalid_results, m->inform_failures, m->timeouts,
 		     m->finishes_abort,
 		     m->last_error[0] ? m->last_error : "-");

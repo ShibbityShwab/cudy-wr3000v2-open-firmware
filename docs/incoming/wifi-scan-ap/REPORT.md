@@ -137,6 +137,40 @@ Both fixes are compile-verified and host-tested in this commit; the D2 re-run
 
 ---
 
+### 3.2 Scan D2H decoders integrated (task-118, commit 469b193)
+
+The wifi-scan-d2h lane's vendor-verified decoder is now the provider's D2H
+implementation (src/hi5622_scan_d2h.{c,h}, integrated unchanged except the
+shared host-type guard; hash-pinned in tools/src-baseline.sha256):
+
+* **g1 id15** - 802.11 beacon/probe-response body plus the 20-byte trailer
+  (frame_len = skb_len - 0x14 [V]).  The decoder probes the layout instead of
+  assuming it (frame+trailer / bare frame / prefix variants) and validates the
+  IE chain, so an unrecognised variant is -EOPNOTSUPP, never a fake BSS.  The
+  signal stays 0 mBm (the trailer RSSI bytes are [U]; the decoder exposes all
+  trailer fields but only fills signal when a caller opts into the heuristic).
+* **g1 id16** - completion status (payload[0], success == 1 [V]): a non-1
+  status is now reported to cfg80211 as `scan_done(aborted=1)`, not a fake
+  success (new `hi5622_scan_model_complete()` in the portable model).
+* **g1 id17** - per-channel result fully decoded (slot, channel, frequency,
+  fixed 124-byte frame); logged per event and counted, for the bench
+  observables ("scan running, no BSS" vs "decode gap").
+* **g2 id2** - wal_scan_comp_proc_sta, the vendor cfg80211 feed/completion
+  point [V]: decoded (status/core/chip) and treated as a **completion
+  candidate** exactly like g1 id16, so a scan cannot hang waiting only for
+  g1 id16.
+
+The signal value remains 0 until the trailer RSSI byte is correlated on the
+bench.  The bench-observable decision table (firmware produced nothing vs
+decode gap vs cfg80211 channel-not-listed) is in
+`../wifi-scan-d2h/REPORT.md` sec 10.  Remaining external blocker for the full
+VAP start -> user_add/notify -> scan -> results ladder: the VAP-start frame
+family is currently rejected by the inherited h2d_frames allowlist (reported
+by the bench; the wifi-vap-start lane is fixing it) - our own provider frames
+(g0 id7/8/9/0xC) already pass the same validator.
+
+---
+
 ## 4. The frame-provider contract (`hi5622_frames_api.h`)
 
 One statically allocated `struct hi5622_frame_ops` object is registered with
@@ -154,8 +188,9 @@ builder).  `hi5622_frame_post()` still cannot write anything unless
 | capability | callback | message / data |
 | --- | --- | --- |
 | `SCAN_REQ` | `build_scan_req(wire, cap, &len, params)` | g0 id0xC hmac_enc_scan_send_req, payload 508 B [U] |
-| `SCAN_PARSE` | `parse_scan_result(payload, len, result)` | D2H g1 id15 BSS [I] |
-| `SCAN_PARSE` | `parse_scan_complete(payload, len, complete)` | D2H g1 id16 [I] |
+| `SCAN_PARSE` | `parse_scan_result(payload, len, result)` | D2H g1 id15 BSS - task-118 vendor-verified decoder [V] |
+| `SCAN_PARSE` | `parse_scan_complete(payload, len, complete)` | D2H g1 id16 completion status [V] |
+| (optional) | `parse_scan_channel` / `parse_scan_sta_complete` | D2H g1 id17 channel result [V] / g2 id2 WAL completion [V] |
 | `USER_ADD` | `build_user_add(...)` | g0 id7 hmac_user_add, payload 168 B [U] |
 | `USER_ADD_NOTIFY` | `build_user_add_notify(...)` | g0 id8 notify-alg [U] |
 | `USER_DEL` | `build_user_del(...)` | g0 id9 hmac_del_user_notify_dmac, 12 B exact [V] |
@@ -331,13 +366,13 @@ payload (up to one maximum HCC frame, 0x680 B) from the ring buffer snapshot to
 
 | check | result |
 | --- | --- |
-| host scan/AP/provider/vapscan selftest (248 checks) | **248/248 PASS** |
+| host scan/AP/provider/vapscan/scan-d2h selftest (284 checks) | **284/284 PASS** |
 | host inherited cfg80211 VAP/op-map selftest | **454/454 PASS** |
 | host inherited H2D protocol selftest | **242/242 PASS** |
-| kernel module build against project 6.18.60 (-Werror, modpost) | PASS, **0 warnings**, 676,180 B, sha256 4a1c3b9a... |
+| kernel module build against project 6.18.60 (-Werror, modpost) | PASS, **0 warnings**, 704,720 B, sha256 20d38c5c... |
 | cfg80211 imports | 9 (incl. scan_done / inform_bss_data / put_bss) |
 | provider-symbols check vs net/wireless exports | PASS 9/9 |
-| static source/contract selftest | all checks PASS (one scan_done call pair, fail-closed defaults, empty registry, D2H hook, baseline parity, configs, docs, no vendor material) |
+| static source/contract selftest | **317/317 PASS** (one scan_done call pair, fail-closed defaults, provider caps, task-118 decoder wiring, D2H hook, baseline parity, configs, docs, no vendor material) |
 
 The selftest explicitly proves the fail-closed properties: provider registry
 starts empty, `allow_frames` has no initializer (0), ops-table entries are
@@ -376,11 +411,12 @@ exactly one `scan DONE` within 5 s -> BSS entries; stop rules in the ladder.
 | R1 | H2D payloads delivered by task-110 are [V]/[I] vendor-derived, **not hardware-validated** | a builder byte may still be rejected/fault the firmware | existing post gate + one-frame bench budget + Ladder V1/V2/S1 stop rules; no frame is sent with `allow_frames=0` |
 | R11 | provider registered but frame gate closed | every message op logs a refusal (EPERM/EBUSY) until `allow_frames>0` | status file shows gate state; benching raises the budget only in an attended session |
 | R12 | firmware scan handler hardcodes VAP 0; host-only M1 netdev has no firmware VAP object | a scan request may be a graceful refusal with no D2H results | scan path accepts "no results" and always reports a bounded `scan_done`; VAP-create follow-up is the next RE item |
+| R13 | the VAP-start frame family is currently rejected by the inherited h2d_frames allowlist (bench report; wifi-vap-start lane is fixing it) | the full VAP start -> user_add/notify -> scan -> results ladder cannot run until both land | our provider frames (g0 id7/8/9/0xC) pass the same validator; the allowlist fix is tracked as an external dependency |
 | R2 | WAL group-2 AP-start payload is gap G1 [U] | start_ap cannot be real | design + provider stub, clearly marked experimental |
 | R3 | provider frames are not EXACT captured builders | firmware handlers read payload words (id0xC risk PTR_DEREF [V]) | structural validation + handler-present + id-5 refusal + registration validation + bench stop rules; a malformed builder frame is refused before any write |
 | R4 | `allow_frames` could be raised blindly | budget-limited frames could reach the firmware | default 0; status file exposes the value; ladder requires preflight and one-frame-per-idea discipline |
 | R5 | full-payload staging increases the reader state by ~1.6 KB | memory/behaviour change in a validated component | buffer owned by serialized reader state (no stack growth); full inherited selftests re-run green |
-| R6 | g1 id15 trailing descriptor is [U]; only the 802.11 body is decoded | RSSI unavailable (reported 0 mBm placeholder) and a variant may not decode | decoder tolerant, returns `-EOPNOTSUPP` on any unsupported variant; counted parse errors; bounded timeout still completes the scan |
+| R6 | trailer RSSI byte is [U]; the 802.11 body is decoded vendor-verified | signal reported 0 mBm until correlated | decoder exposes raw trailer fields, signal opt-in only; unsupported variants return `-EOPNOTSUPP` |
 | R7 | scan work vs cfg80211 request lifetime | multiple scan_done or use-after-free | exactly one scan_done site pair; posting latch; removal aborts; static+host checks |
 | R8 | cfg80211 BSS entries visible to all userspace | garbage could mislead netifd/hostapd | strict result validation before inform |
 | R9 | start_ap returning 0 is not an AP milestone | overclaiming | dmesg says EXPERIMENTAL; ladder requires keys/beacons/station events/data path as separate milestones |
@@ -395,6 +431,9 @@ exactly one `scan DONE` within 5 s -> BSS entries; stop rules in the ladder.
 * `../wifi-h2d-send/` BENCH-PROCEDURE.md - the boot/ctx-create/TXQ sequence
   the scan ladder follows; REPORT.md - post gate semantics.
 * `../wifi-vap-scan/` - the g0 id0xC / id7 / id8 / id9 payload builders
+* `../wifi-scan-d2h/` - task-118 vendor-verified D2H scan decoder (g1 id15/16/17,
+  g2 id2), bench observables and the decode-gap decision table (integrated
+  here as src/hi5622_scan_d2h.{c,h}).
   (task-110, commit 0e4ad45) integrated here as the module's frame provider;
   its recipes/frames.md has the byte-exact bench frames and SR node word1.
 * `../wifi-proto-seq/` - g1 id3 / g1 id0x12 / calibration decodes.
