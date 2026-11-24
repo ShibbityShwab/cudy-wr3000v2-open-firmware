@@ -1,0 +1,61 @@
+{
+  "schema": "hi5622-fw-patch-recipe/1",
+  "lane": "wifi-fw-audit",
+  "name": "PD4",
+  "about": "post-boot firmware-side H2D mailbox poller: redirect the boot-task success epilogue (CPU 0x4916A) onto a guarded out[0] poll stub parked in the all-zero static-data alignment gap CPU 0x108197..0x108413 (stub at CPU 0x108240); the stub waits for the hcc instance (CPU 0x10C190) to be initialised, polls mailbox out[0] (CA 0x40039010), and calls the firmware's own event-0x4C handler wrapper CPU 0x40294 -> H2D mailbox dispatcher CPU 0xC18AC. Reconstructed and independently verified by lane wifi-fw-audit; original design lane wifi-irq-unmask (task-100).",
+  "source": {
+    "sha256": "7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b",
+    "len": 928920
+  },
+  "based_on": null,
+  "image_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "cpu_file_base": 262144,
+  "segments": [
+    {
+      "file": 37226,
+      "len": 4,
+      "source_sha16": "c5975cf4bd702f88",
+      "patched_hex": "bff069b8",
+      "isa": "thumb",
+      "expect": "b.w #0x108240",
+      "cpu": 299370,
+      "role": "PD4-ENTRY: boot-task success epilogue CPU 0x4916A ('movs r0,#0; add sp,#0x84') -> branch into the stub"
+    },
+    {
+      "file": 819776,
+      "len": 64,
+      "source_sha16": "f5a5fd42d16a2030",
+      "patched_hex": "0b4f81b03b68002bfcd00a4a1368002bf8d07b69084ca34202d038f71bf8f1e7064c7c6138f716f87b61ebe700bf00bf9cc1100010900340688d110000200000",
+      "isa": "thumb",
+      "expect": "ldr r7, [pc, #0x2c] ; sub sp, #4 ; ldr r3, [r7] ; cmp r3, #0 ; beq #0x108244 ; ldr r2, [pc, #0x28] ; ldr r3, [r2] ; cmp r3, #0 ; beq #0x108244 ; ldr r3, [r7, #0x14] ; ldr r4, [pc, #0x20] ; cmp r3, r4 ; beq #0x108260 ; bl #0x40294 ; b #0x108244 ; ldr r4, [pc, #0x18] ; str r4, [r7, #0x14] ; bl #0x40294 ; str r3, [r7, #0x14] ; b #0x108244 ; nop ; nop ; stm r1!, {r2, r3, r4, r7} ; movs r0, r2 ; str r0, [sp, #0x40] ; ands r3, r0 ; ldrh r0, [r5, #0x2a] ; movs r1, r2 ; movs r0, #0 ; movs r0, r0",
+      "cpu": 1081920,
+      "role": "PD4-LOOP: guarded out[0] poll stub in the zero static-data gap (64 B incl. 16 B literal pool)"
+    }
+  ],
+  "semantics": {
+    "entry_site": "boot-task success epilogue CPU 0x4916A (reached only after the full boot/init chain including pcie_msg_init)",
+    "loop_site": "static-data alignment gap CPU 0x108197..0x108413; 637 B all-zero in the vendor image; outside both boot memsets and outside the exception-staging area",
+    "callee": "CPU 0x40294: ldr r0,=0x0010C190 (hcc instance) ; b.w CPU 0xC18AC (H2D mailbox dispatcher)",
+    "device_ca_read_by_stub": [
+      "0x40039010"
+    ],
+    "device_ca_written_by_callee": [
+      "0x400392F0",
+      "0x40039010",
+      "0x400392D4"
+    ],
+    "never_touched": [
+      "0xCECE",
+      "0x40000108",
+      "0x4000010C",
+      "0x400392D4-by-host"
+    ],
+    "stack": "sub sp,#4 compensates the skipped add sp,#0x84 frame: 0x84+8*4 = 0xA4 == 4 (mod 8) before the public call, so the extra 4 B restores AAPCS 8-byte alignment"
+  },
+  "safety": {
+    "host_writes_device_ca": false,
+    "patch_writes_device_ca": false,
+    "vendor_bytes_committed": false,
+    "note": "the patched image is built locally from the reader's own vendor blob; this recipe carries offsets, source-window hashes and OUR patch bytes only"
+  }
+}
