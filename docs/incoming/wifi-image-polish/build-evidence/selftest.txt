@@ -1,0 +1,20 @@
+RESULT: PASS (162 checks)
+ok   validate.py PASS (static checks + hostapd config-parse gate)
+ok   loader dry-run (): packaged defaults + explicit insmod incantation
+ok   loader dry-run (): never unloads
+ok   loader dry-run (--no-c2 --no-ap): packaged defaults + explicit insmod incantation
+ok   loader dry-run (--no-c2 --no-ap): never unloads
+ok   compile evidence: stack1 reproduces the hardware-fired artifact (242572 B 44c6cc12...)
+ok   compile evidence: polished module pin (242920 B d145a205..., 20 parms)
+ok   compile evidence: polished vermagic matches the image kernel ABI
+ok   compile evidence: depends=cfg80211
+ok   compile log clean: stack1-build.log
+ok   compile log clean: stack2-build.log
+ok   patch: LF line endings
+ok   patch: contains mgmt_diag
+ok   patch: contains hi_wifi/FIRMWARE.PD4.bin
+ok   patch: contains hi5622_allow_frames = 16u
+ok   patch: contains hi5622_vap_start_first = 1u
+ok   patch: dump_stack gating present
+
+RESULT: PASS (179 passed, 0 skipped; host-only, no device contact)

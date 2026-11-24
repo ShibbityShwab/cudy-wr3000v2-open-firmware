@@ -1,0 +1,82 @@
+# artifact-identity.txt - pinned identities for the Cudy WR3000 v2.0 Wi-Fi
+# image polish lane (wifi-image-polish, shared task task-135).
+#
+# Host-only evidence.  All hashes are sha256.  "image" = the flashed
+# self-contained final image (bench-validated 2026-11-27); "prebuilt" = the
+# hardware-fired combined module staged into the kmod package; "polished" =
+# this lane's host-built (NOT fired) module.
+#
+# Regeneration (host, no device):
+#   IMAGE=/home/shibbityshwab/wifi-image-integration-artifacts
+#   sha256sum $IMAGE/bench-image-final-sysupgrade.bin $IMAGE/kernel-slice.bin #             $IMAGE/rootfs.ubi $IMAGE/root.squashfs
+#   unsquashfs -q -d /tmp/sq/root $IMAGE/root.squashfs 2>/dev/null
+#   modinfo /tmp/sq/root/lib/modules/6.18.60/hi5622_wifi.ko
+#   ./tools/build-polished-module.sh    # prints stack1 + polished identity
+
+[image]
+container            = bench-image-final-sysupgrade.bin
+container_size       = 6922559
+container_sha256     = ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994
+kernel_slice_size    = 3372638
+kernel_slice_sha256  = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_uimage_name   = Linux-6.18.60
+kernel_abi_pin       = 6.18.60~6f995278   # recorded from apk query on the flashed image (STATUS.md 3m / DEPLOY.md)
+rootfs_ubi_size      = 3538944
+rootfs_ubi_sha256    = ff9f3e1c83c36a2a9170cdf6373228692b46b7fa0fbb64abbdc70a25b841aaa9
+rootfs_squashfs_size = 3077036
+rootfs_squashfs_sha256 = 1dbd0d19bc21332684704859a8fb6da890984adf13ebdca569ce22207eea4d98
+
+[installed_image_module]
+path            = /lib/modules/6.18.60/hi5622_wifi.ko
+size            = 231132
+sha256          = 51608fd556fa474d2da0dd88975c2a8b610301fb6b8a22d4b6e0589ade247a78
+vermagic        = 6.18.60 SMP mod_unload ARMv7 p2v8
+depends         = cfg80211
+parameter_count = 19
+loaded_by       = insmod with explicit parameters (modprobe does NOT pass params on this image)
+note            = installed copy is the OpenWrt-stripped form of the 242,572 B artifact
+
+[installed_image_cfg80211]
+path    = /lib/modules/6.18.60/cfg80211.ko
+size    = 406028
+sha256  = 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a
+source  = target kernel tree build (CONFIG_CFG80211=m) - NOT the mac80211 backports cfg80211
+abi     = must match the kernel the driver was compiled against (6.18.60)
+
+[prebuilt_hardware_fired_module]
+artifact_size   = 242572
+artifact_sha256 = 44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
+unstripped_size = 925192
+unstripped_sha256 = 21d051613b57177557f7ab75b6d3ea1d11ccd104cad1bf5dd05a7963235ae61d
+source          = wifi-dp-air/src + wifi-ap-start provider patch v7 + hi5622_ap_frames.{c,h}
+fired           = 2026-11-27 10:30 (AP-ENABLED + POST-ONLY MAC TX, ledger)
+parameter_count = 19
+
+[polished_module_host_built_not_fired]
+artifact_size   = 242920
+artifact_sha256 = d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6
+unstripped_size = 926120
+unstripped_sha256 = 512b47342c20e1f2af7fb3c4de34ac3344a541de5f1f63f3e00db2a1fb084cef
+source          = prebuilt stack + patches/0001-polish-module-defaults-and-mgmt-diag.patch
+vermagic        = 6.18.60 SMP mod_unload ARMv7 p2v8
+depends         = cfg80211
+parameter_count = 20   # + mgmt_diag (default 0)
+build           = 6.18.60 tree, arm-openwrt-linux-muslgnueabi-gcc 14.4.0, zero warnings
+identity_caveat = the toolchain build-id hashes debug info (absolute build path); the
+                  recorded sha assumes this lane's canonical workdir
+                  (tools/build-polished-module.sh: /tmp/wifi-image-polish-build).
+                  ABI-relevant content (.text, parameters, vermagic) is path-independent.
+fired           = NO - needs one attended fire before deployment (see REPORT.md section 6)
+
+[firmware_artifacts_never_packaged]
+PD4_firmware_size   = 928920
+PD4_firmware_sha256 = cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1
+PD4_source_sha256   = 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+pushed_to           = /lib/firmware/hi_wifi/FIRMWARE.PD4.bin   (manual, attended)
+wifi_block          = /lib/firmware/hi_wifi/wifi_block.bin     (0x9a8 B local capture, manual)
+policy              = vendor-derived; never committed, never packaged; driver fails closed without them
+
+[hostapd_userspace]
+path    = /usr/sbin/hostapd   (hostapd-mini 2.12 from the image)
+size    = 504333
+sha256  = 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Build artifacts stay local (the .ko is evidence, never committed).
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+__pycache__/
+build/

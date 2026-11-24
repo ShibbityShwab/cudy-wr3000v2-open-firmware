@@ -1,0 +1,144 @@
+diff -ruN polish-base/h2d_send.c polish-edit/h2d_send.c
+--- a/h2d_send.c	2026-11-24 17:04:59.549719321 +0700
++++ b/h2d_send.c	2026-11-24 19:07:49.463615868 +0700
+@@ -72,14 +72,13 @@
+ #include "h2d_send.h"
+ #include "h2d_send_logic.h"
+ 
+-/* Post-ready H2D frames allowed per module load.  1 = the bench default
+- * ("one idea, one frame"); 0 is the negative control (compile/load path
+- * exercised but no real frame); raise only in a supervised multi-message
+- * session. */
+-unsigned int hi5622_h2d_send_budget = 1;
++/* Post-ready H2D frames allowed per module load.  4 = the shipped AP image
++ * default (ctx-create + txq-sync72 + TXQ address hand-off + one spare);
++ * 0 is the negative control (compile/load path exercised but no real frame). */
++unsigned int hi5622_h2d_send_budget = 4;
+ module_param_named(h2d_send_budget, hi5622_h2d_send_budget, uint, 0644);
+ MODULE_PARM_DESC(h2d_send_budget,
+-		 "post-ready H2D frames per module load: 0=negative control, 1=one frame per idea (default), max 8");
++		 "post-ready H2D frames per module load: 0=negative control, N=frames (default 4), max 8");
+ 
+ #define HI5622_H2D_SEND_BUDGET_MAX	8u
+ #define HI5622_H2D_POLL_MAX		200u	/* 200 x 5 ms = core 1000 ms bound */
+diff -ruN polish-base/hi5622_cfg80211_ops.c polish-edit/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-24 19:07:25.998399349 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 19:07:49.464087946 +0700
+@@ -362,6 +362,15 @@
+ 	return -EOPNOTSUPP;
+ }
+ 
++/* Image polish (wifi-image-polish, task-135): the one-shot mgmt_tx probe used
++ * to dump a stack on every hostapd AP start, which dmesg reports as an
++ * "Exception stack" during an otherwise clean AP bring-up.  Keep the probe
++ * available for M4 work but off by default. */
++unsigned int hi5622_mgmt_diag;
++module_param_named(mgmt_diag, hi5622_mgmt_diag, uint, 0644);
++MODULE_PARM_DESC(mgmt_diag,
++		 "diagnostic: dump the caller stack from the fail-closed mgmt_tx op (0=off default, 1=on)");
++
+ /* hostapd AP-mode bring-up (task-121): cfg80211's NL80211_CMD_REGISTER_FRAME
+  * handler refuses to install a management-frame filter when the driver has no
+  * .mgmt_tx op ("not much point in registering if we can't reply",
+@@ -384,7 +393,8 @@
+ 	(void)params;
+ 	(void)cookie;
+ 	pr_info_once("hi5622: mgmt_tx op reached - fails closed (management TX is data-plane/M4 work)\n");
+-	dump_stack();	/* identify the caller in the next fire's dmesg */
++	if (hi5622_mgmt_diag)
++		dump_stack();	/* caller stack only when explicitly requested */
+ 	return -EOPNOTSUPP;
+ }
+ 
+diff -ruN polish-base/hi5622_contract.h polish-edit/hi5622_contract.h
+--- a/hi5622_contract.h	2026-11-24 17:03:08.823391522 +0700
++++ b/hi5622_contract.h	2026-11-24 19:07:49.463186591 +0700
+@@ -137,7 +137,7 @@
+ /* =====================================================================
+  * 5. Firmware upload contract (firmware-re sec 2, [V]/[V*])
+  * ===================================================================*/
+-#define HI5622_FW_PATH_DEFAULT		"hi_wifi/FIRMWARE.bin"
++#define HI5622_FW_PATH_DEFAULT		"hi_wifi/FIRMWARE.PD4.bin"
+ #define HI5622_FW_TARGET_CA		0x01240000u	/* [V] */
+ #define HI5622_FW_TARGET_BAR0		0x6f8000u	/* BAR0+0x6f8000 [V*] */
+ #define HI5622_FW_ALIAS_BAR0		0x40000u	/* read-back alias once running */
+diff -ruN polish-base/hi5622_frame_post.c polish-edit/hi5622_frame_post.c
+--- a/hi5622_frame_post.c	2026-11-24 17:03:08.825098793 +0700
++++ b/hi5622_frame_post.c	2026-11-24 19:07:49.463414359 +0700
+@@ -38,15 +38,15 @@
+ #define HI5622_POST_POLL_MAX	200u	/* 200 x 5 ms = the core 1000 ms bound */
+ #define HI5622_POST_POLL_MS	5u
+ 
+-unsigned int hi5622_allow_frames;
++unsigned int hi5622_allow_frames = 16u;
+ module_param_named(allow_frames, hi5622_allow_frames, uint, 0644);
+ MODULE_PARM_DESC(allow_frames,
+-		 "post-ready provider-built H2D frames allowed per module load: 0 = fail-closed (default), N = budget");
++		 "post-ready provider-built H2D frames allowed per module load: 0 = fail-closed (negative control), N = budget (default 16)");
+ 
+-unsigned int hi5622_frame_gap_ms = 20u;
++unsigned int hi5622_frame_gap_ms = 100u;
+ module_param_named(frame_gap_ms, hi5622_frame_gap_ms, uint, 0644);
+ MODULE_PARM_DESC(frame_gap_ms,
+-		 "minimum milliseconds between two provider-built H2D frames (default 20; the post path also waits for the previous coalesced announce to clear, so back-to-back vendor-order frames such as user_add -> user_add_notify are not refused)");
++		 "minimum milliseconds between two provider-built H2D frames (default 100; the post path also waits for the previous coalesced announce to clear, so back-to-back vendor-order frames such as user_add -> user_add_notify are not refused)");
+ 
+ static atomic_t hi5622_frames_posted = ATOMIC_INIT(0);
+ static atomic_t hi5622_frames_refused = ATOMIC_INIT(0);
+diff -ruN polish-base/hi5622_scan.c polish-edit/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 19:07:25.998638399 +0700
++++ b/hi5622_scan.c	2026-11-24 19:07:49.463966537 +0700
+@@ -59,10 +59,10 @@
+ /* 0 = provider/vendor default dwell (60); 20..200 overrides the g0 id0xC dwell
+  * field for a bench sweep.  Read at scan-op time; an invalid value is logged
+  * and ignored. */
+-static unsigned int hi5622_scan_dwell_ms;
++static unsigned int hi5622_scan_dwell_ms = 60u;
+ module_param_named(scan_dwell_ms, hi5622_scan_dwell_ms, uint, 0644);
+ MODULE_PARM_DESC(scan_dwell_ms,
+-		 "g0 id0xC scan dwell override in ms (0 = vendor default 60, 20..200)");
++		 "g0 id0xC scan dwell in ms (default 60 = vendor default, 20..200; 0 also selects vendor default)");
+ 
+ static u64 hi5622_scan_now(void)
+ {
+diff -ruN polish-base/hi5622_vapscan_provider.c polish-edit/hi5622_vapscan_provider.c
+--- a/hi5622_vapscan_provider.c	2026-11-24 19:07:25.998988517 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 19:07:49.463797430 +0700
+@@ -178,18 +178,20 @@
+ /* ------------------------------------------------------------------ */
+ 
+ /* Ordering knob owned by the cfg80211 layer (hi5622_scan.c): post the
+- * VAP add + start sequence before the first scan request.  Default 0. */
+-unsigned int hi5622_vap_start_first;
++ * VAP add + start sequence before the first scan request.  Default 1 (shipped
++ * image); the AP start path posts the base itself and the "once" guard keeps
++ * a later scan from posting it twice. */
++unsigned int hi5622_vap_start_first = 1u;
+ module_param_named(vap_start_first, hi5622_vap_start_first, uint, 0644);
+ MODULE_PARM_DESC(vap_start_first,
+-		 "post the VAP add+start sequence before a scan (0=off default, 1=on)");
++		 "post the VAP add+start sequence before a scan (1=on default, 0=off)");
+ 
+ /* Wire family: 0 = WAL group-2 cfg events (vendor order), 1 = g0 id1
+  * config-event keys 0x64/0x65.  Read-only after load. */
+-unsigned int hi5622_vap_start_mode;
++unsigned int hi5622_vap_start_mode = 1u;
+ module_param_named(vap_start_mode, hi5622_vap_start_mode, uint, 0444);
+ MODULE_PARM_DESC(vap_start_mode,
+-		 "VAP start wire family: 0=WAL g2 vendor order, 1=g0 id1 keys");
++		 "VAP start wire family: 0=WAL g2 vendor order, 1=g0 id1 keys (default 1)");
+ 
+ /* module/VAP index the start sequence applies to (<= 0x12). */
+ unsigned int hi5622_vap_start_module;
+diff -ruN polish-base/main.c polish-edit/main.c
+--- a/main.c	2026-11-24 17:04:02.465507640 +0700
++++ b/main.c	2026-11-24 19:07:49.463250281 +0700
+@@ -41,7 +41,7 @@
+ char *hi5622_fw_path = HI5622_FW_PATH_DEFAULT;
+ module_param_named(fw_path, hi5622_fw_path, charp, 0444);
+ MODULE_PARM_DESC(fw_path,
+-		 "firmware image name relative to /lib/firmware (default hi_wifi/FIRMWARE.bin)");
++		 "firmware image name relative to /lib/firmware (default hi_wifi/FIRMWARE.PD4.bin, a local operator-pushed artifact that is never packaged)");
+ 
+ char *hi5622_wifi_block_path = HI5622_WIFI_BLOCK_PATH_DEFAULT;
+ module_param_named(wifi_block_path, hi5622_wifi_block_path, charp, 0444);

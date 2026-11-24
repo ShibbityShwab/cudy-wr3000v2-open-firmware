@@ -1,0 +1,61 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0
+#
+# /etc/init.d/hi5622-wifi - clean-room Hi5622V100 Wi-Fi bring-up service.
+#
+# BENCH POLICY: hi5622.main.autoload=0 is the shipped default, so this service
+# is a no-op at boot; the operator starts it explicitly.  Set autoload=1 (and
+# /etc/init.d/hi5622-wifi enable) for production-style boot loading.
+#
+# It loads cfg80211 -> hi5622_wifi (explicit insmod parameters) -> waits for
+# the wiphy -> runs the C2 ladder -> optionally starts hostapd.  All work is
+# delegated to /usr/sbin/hi5622-load so the boot path and the manual path are
+# the same code.
+#
+# STOP NEVER UNLOADS THE DRIVER: the project hard rule is no rmmod after a
+# CPU release; stop only stops hostapd.  Unloading requires a reboot.
+START=96
+STOP=20
+USE_PROCD=0
+
+start() {
+	local autoload
+	autoload=$(uci -q get hi5622.main.autoload 2>/dev/null) || autoload=""
+	case "$autoload" in
+		1|on|true|yes|enabled) ;;
+		*)
+			echo "hi5622-wifi: autoload disabled (hi5622.main.autoload='$autoload'); run 'hi5622-load' for an attended load" >&2
+			return 0
+			;;
+	esac
+	/usr/sbin/hi5622-load
+}
+
+boot() {
+	start "$@"
+}
+
+stop() {
+	local pid
+	if [ -f /var/run/hi5622-hostapd.pid ]; then
+		pid=$(cat /var/run/hi5622-hostapd.pid 2>/dev/null) || pid=""
+		if [ -n "$pid" ]; then
+			kill "$pid" 2>/dev/null || true
+			sleep 1
+			if kill -0 "$pid" 2>/dev/null; then
+				kill -9 "$pid" 2>/dev/null || true
+			fi
+		fi
+		rm -f /var/run/hi5622-hostapd.pid
+		echo "hi5622-wifi: hostapd stopped" >&2
+	else
+		echo "hi5622-wifi: no hostapd pidfile" >&2
+	fi
+	echo "hi5622-wifi: driver module left loaded (bench rule: no rmmod after a CPU release; reboot to unload)" >&2
+	return 0
+}
+
+restart() {
+	stop
+	start
+}

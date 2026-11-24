@@ -1,0 +1,40 @@
+# module-params.txt - authoritative parameter surface of the shipped driver
+#
+# Source of truth: the INSTALLED module of the flashed image,
+#   /lib/modules/6.18.60/hi5622_wifi.ko  size 231132  sha256 51608fd5...
+# read with: modinfo /tmp/sq/root/lib/modules/6.18.60/hi5622_wifi.ko
+# The hardware-fired prebuilt artifact (242572 B sha 44c6cc12...) exposes the
+# same 19 names; the polished host build adds mgmt_diag (20 total, default 0).
+#
+# "source default" = compiled-in default in docs/incoming/wifi-dp-air/src
+# (+ wifi-ap-start provider patch) BEFORE this lane's polish patch.
+# "image default" = the value the shipped loader/modprobe.d pass explicitly
+# (and the compiled-in default AFTER patches/0001, for the polished build).
+# "perm" is the sysfs mode from module_param_named() (0444 = read-only after
+# load, load-time only; 0644 = writable at runtime unless noted otherwise).
+#
+# name               type  perm  source default              image default            notes
+scan_trust_rssi      uint  0444  0                           0                        do not invent RSSI ([I] trailer byte)
+vap_start_first      uint  0644  0                           1                        post mode-1 VAP base before scan/AP
+vap_start_mode       uint  0444  0                           1                        g0 id1 keys (mode 1); read-only after load
+vap_start_module     uint  0444  0                           0                        VAP/module index for the start sequence
+ap_start_mode        uint  0444  0                           0                        g0 id1 static AP frames (vendor table A)
+scan_timeout_ms      uint  0644  0 (auto)                    0 (auto)                 host window = base + n*per-channel, clamped 45 s
+scan_dwell_ms        uint  0644  0 (=vendor 60)              60                       explicit vendor dwell in the polished build
+allow_frames         uint  0644  0 (fail-closed)             16                       2 add/notify + 4 AP-start + scan/VAP-base + spares
+frame_gap_ms         uint  0644  20                          100                      min gap between posted H2D frames
+cfg80211_auto        uint  0644  1                           1                        register the wiphy after the ready handshake
+band_force           int   0644  -1 (auto per PCI domain)    (unset, default -1)      -1 auto, 0 = 2.4 GHz, 1 = 5 GHz
+h2d_send_budget      uint  0644  1 (max 8)                   4                        ctx-create + txq-sync72 + TXQ addr hand-off + spare
+hcc_poll_ms          uint  0644  5                           5                        HCC service cadence
+hcc_cece_mode        uint  0644  0                           0                        evidence-driven CECE policy
+rd_ab_write          uint  0644  0                           0                        never write the experimental ring consumer
+fw_path              charp 0444  hi_wifi/FIRMWARE.bin        hi_wifi/FIRMWARE.PD4.bin operator-pushed PD4 research firmware
+wifi_block_path      charp 0444  hi_wifi/wifi_block.bin      hi_wifi/wifi_block.bin   locally captured custom block, never packaged
+plat_block_path      charp 0444  "" (built-in descriptor)   ""                       optional 0x60 B platform override
+allow_unseeded_release uint 0644 0                           0                        never release without the custom block
+mgmt_diag            uint  0644  - (polished build only)     0                        opt-in caller stack dump from the fail-closed mgmt_tx op
+#
+# NOT parameters (do not pass them): the C2-ladder values are sysfs writes, not
+# load parameters - h2d_ctx_create=3 and h2d_txq_sync72=1 (the old spelling
+# "h2d_ctx_create_t1" in some lane notes does NOT exist in sysfs).

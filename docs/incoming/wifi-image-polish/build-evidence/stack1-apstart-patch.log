@@ -1,0 +1,7 @@
+patching file Kbuild
+Hunk #1 succeeded at 31 (offset 3 lines).
+patching file hi5622_cfg80211.c
+patching file hi5622_cfg80211_ops.c
+patching file hi5622_frames_api.h
+patching file hi5622_scan.c
+patching file hi5622_vapscan_provider.c

@@ -1,0 +1,28 @@
+Hi5622 firmware / calibration policy for this image
+=====================================================
+
+This image NEVER contains the vendor-derived Wi-Fi firmware or calibration
+data.  The driver refuses to release the chip without them (fail-closed:
+allow_unseeded_release=0), so push both files by hand in an attended session
+after the image is flashed:
+
+  /lib/firmware/hi_wifi/FIRMWARE.PD4.bin   928,920 B
+      sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1
+      The PD4-patched research image (consume-only patch, research artifact).
+      Local source: the bench session's /tmp/hi5622-pd4 artifact.  It is
+      vendor-derived and is NEVER committed or packaged.
+
+  /lib/firmware/hi_wifi/wifi_block.bin     0x9a8 B
+      The locally captured Wi-Fi PHY/radio custom block.  Also never
+      committed or packaged; verify it against the capture manifest
+      (MANIFEST.sha256) before pushing.
+
+Both files live only on the box after the manual push; a reflash/overlay wipe
+removes them.  This is deliberate: see PACKAGING.md in
+docs/incoming/wifi-image-polish/ for the full policy and the commands.
+
+Upstream note: the packaged default fw_path is the research PD4 name only
+because the bench image is a research instrument.  An upstreamable driver
+would default to a clean-room firmware name and the file would be supplied by
+the vendor's GPL/redistributable firmware package instead - see PACKAGING.md
+section "Upstream path".

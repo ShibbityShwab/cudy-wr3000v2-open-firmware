@@ -1,0 +1,7 @@
+patching file h2d_send.c
+patching file hi5622_cfg80211_ops.c
+patching file hi5622_contract.h
+patching file hi5622_frame_post.c
+patching file hi5622_scan.c
+patching file hi5622_vapscan_provider.c
+patching file main.c
