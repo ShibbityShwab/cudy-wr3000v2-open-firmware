@@ -131,3 +131,22 @@ Inherited, unchanged: cfg80211-provider.symvers for the 9 modpost symbols,
 heap-allocated h2d_frame / vs_frame, shared KDIR must be idle during a world
 build.  New: the lane `src/` is a **four-file delta**, not a full tree - build.sh
 copies `BASE_TREE` and overlays it, which is also how the patch was made.
+
+## Final combined module pin (R2 handed to the stability lane)
+
+Stability rebuilt the hardened combined module with this lane's R2 patch
+(opensource commit 8b95aa1) and it was independently re-verified from the
+artifact before handing it to the lead to fire:
+
+| item | value |
+| --- | --- |
+| final combined R2 (stripped) | **263,740 B** sha256 79bfad6e5f80c8ef053040c55ccd945fe1824ee380c24e97c3e20a204a40d768 |
+| final combined R2 (unstripped) | 972,208 B sha256 f9f916b1e19ee23abc65b6888bf10e61d0be15c8e659eb38b4716394054e321e |
+| path | /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko (unstripped under /tmp/wifi-stability-build/combined/) |
+| chain | base 44c6cc12 -> polished d145a205 -> dp-tuning 175a4617 -> scan-tuning R2 (0002, 7 files) -> stability hardening |
+| verified | vermagic 6.18.60 SMP ARMv7, depends cfg80211, 0 warnings; scan_chan_time_ms/scan_req_batch/scan_batch_gap_ms params; 10 cfg80211 imports incl cfg80211_bss_iter; R2 strings ('split into %u g0 id0xC requests', 'scan BSS decode gap', 'relaxed') present |
+
+The lead fires R1 with this artifact (defaults; hcc_trace=0). Expected: 3
+batch lines, 13 channel results, no complete-failed abort after a non-final
+batch, `scan BSS list check: entries>0 iw_visible>0`, DONE
+`finish-ok[...], channel=13, chans=13/13 batches=3/3`, iw >=1 BSS.
