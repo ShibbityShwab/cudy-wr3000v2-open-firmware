@@ -183,7 +183,7 @@ diff -Nru a/hi5622_frames_api.h b/hi5622_frames_api.h
  /* ===================================================================
 diff -Nru a/hi5622_scan.c b/hi5622_scan.c
 --- a/hi5622_scan.c	2026-11-24 20:06:33.941604495 +0700
-+++ b/hi5622_scan.c	2026-11-24 20:50:41.515402267 +0700
++++ b/hi5622_scan.c	2026-11-24 21:15:12.075038897 +0700
 @@ -46,6 +46,30 @@
   * this file owns only the cfg80211 ordering (VAP add -> VAP start -> scan). */
  extern unsigned int hi5622_vap_start_first;
@@ -368,7 +368,7 @@ diff -Nru a/hi5622_scan.c b/hi5622_scan.c
  	p->hidden_ssid = (u8)(set->hidden_ssid != NL80211_HIDDEN_SSID_NOT_IN_USE);
  	p->auth_algs = (u8)set->auth_type;
  	p->module = (u8)s->user_id;
-@@ -1399,30 +1491,123 @@
+@@ -1399,30 +1491,148 @@
  			 "cfg80211: start_ap restart after host-side stop: re-posting the AP config against the live firmware AP (NO structural firmware write; firmware VAP object readback=%s after %u ms wait)\n",
  			 valid ? "nonzero" : "ZERO", HI5622_STAB_VAP_WAIT_MS);
  	}
@@ -400,6 +400,7 @@ diff -Nru a/hi5622_scan.c b/hi5622_scan.c
 +		struct hi5622_chan_cfg_params cp;
 +		u8 plan[HI5622_BEACON_STEP_MAX];
 +		unsigned int plan_n, i;
++		bool readback_ok;
 +
 +		/* The plan is the pure ordering contract (host-tested) and is
 +		 * logged so the bench reads the intended rung from dmesg. */
@@ -425,29 +426,53 @@ diff -Nru a/hi5622_scan.c b/hi5622_scan.c
 +			goto out;
 +		}
 +		/* Vendor order: user_add first (the AP workers dereference the
-+		 * firmware VAP object), then the channel config. */
-+		rc = hi5622_scan_post_vap_add_frame(c->ctx, ops,
-+						   (u8)dev->ieee80211_ptr->iftype,
-+						   c->band,
-+						   (u8)hi5622_vap_start_module,
-+						   (u8)p->channel, 1u);
-+		if (rc) {
-+			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap beacon_static: VAP add not posted (%d) - sequence aborted, no AP frame sent\n",
-+				 rc);
-+			goto out;
++		 * firmware VAP object), then the channel config.  A base posted in
++		 * THIS call is required; a PRE-EXISTING latch (a scan or an earlier
++		 * AP start) is not re-posted, and a host-side stop restart keeps the
++		 * live firmware VAP (no structural write). */
++		if (!base_was_posted && !restart_plain) {
++			rc = hi5622_scan_post_vap_add_frame(
++				c->ctx, ops, (u8)dev->ieee80211_ptr->iftype,
++				c->band, (u8)hi5622_vap_start_module,
++				(u8)p->channel, 1u);
++			if (rc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static: VAP add not posted (%d) - sequence aborted, no AP frame sent\n",
++					 rc);
++				goto out;
++			}
++			c->ctx->vap_base_posted = true;
++			c->ctx->vap_base_iftype =
++				(u8)dev->ieee80211_ptr->iftype;
++		} else {
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap beacon_static: %s - no structural user_add (latch already set)\n",
++				 restart_plain ? "restart after host-side stop"
++					       : "VAP base pre-existed this call");
 +		}
-+		c->ctx->vap_base_posted = true;
-+		c->ctx->vap_base_iftype = (u8)dev->ieee80211_ptr->iftype;
-+		/* Bounded wait for the async VAP-object population before the
-+		 * channel/AP workers dereference it (fail closed, no AP frame). */
-+		if (!hi5622_scan_vap_wait_valid(c->ctx, HI5622_STAB_VAP_WAIT_MS)) {
++		/* Read-only readback of module_ctx+0x190.  Bench correction
++		 * (task-140 fire, 2026-11-24): the firmware populates that field
++		 * asynchronously and it was observed ZERO after 100 ms even on a
++		 * SUCCESSFUL AP start (the stability final combined module
++		 * b5dfb883 works with exactly that zero readback), so it is NOT a
++		 * VAP-validity indicator.  A base posted in THIS call therefore
++		 * only LOGS the readback; a genuinely stale pre-existing latch
++		 * still fails closed (same rule as the stability patch). */
++		readback_ok = hi5622_scan_vap_wait_valid(c->ctx,
++							 HI5622_STAB_VAP_WAIT_MS);
++		if (base_was_posted && !restart_plain && !readback_ok) {
 +			dev_warn(wdev_dev,
-+				 "cfg80211: start_ap beacon_static REFUSED - the firmware VAP object (module_ctx+0x190) still reads zero after %u ms post-add; no channel/AP frame sent\n",
++				 "cfg80211: start_ap beacon_static REFUSED - a pre-existing VAP base latch reads module_ctx+0x190 == 0 after %u ms (stale/dead VAP); no channel/AP frame sent, power-cycle\n",
 +				 HI5622_STAB_VAP_WAIT_MS);
 +			rc = -EIO;
 +			goto out;
 +		}
++		dev_info(wdev_dev,
++			 "cfg80211: start_ap beacon_static: VAP-object readback=%s after %u ms (%s, non-gating) - continuing the vendor order\n",
++			 readback_ok ? "nonzero" : "ZERO",
++			 HI5622_STAB_VAP_WAIT_MS,
++			 base_was_posted && !restart_plain
++				 ? "pre-existing latch" : "fresh base post");
 +		memset(&cp, 0, sizeof(cp));
 +		cp.band = p->band;
 +		cp.channel = (u8)p->channel;
@@ -516,7 +541,7 @@ diff -Nru a/hi5622_scan.c b/hi5622_scan.c
  	}
  	/* wifi-ap-start lane (task-121): the vendor AP start is a sequence. */
  	{
-@@ -1489,6 +1674,32 @@
+@@ -1489,6 +1699,32 @@
  			goto out;
  		}
  	}

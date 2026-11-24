@@ -1,16 +1,16 @@
 BUILD OK (zero warnings/errors)
--rw-r--r-- 1 shibbityshwab shibbityshwab 1002872 พ.ย.  24 20:50 hi5622_wifi.ko
+-rw-r--r-- 1 shibbityshwab shibbityshwab 1003884 พ.ย.  24 21:15 hi5622_wifi.ko
 vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
-320ad838b9d452d1382c0d5652ad9d4784bde3e10bfb9a1417818b7ae2ae0000  hi5622_wifi.ko
+869083188219ab427b5a1d85d83d74e9bb1fdd7b3fdd059dce9ffc3fe4dbe167  hi5622_wifi.ko
 stripped:
--rw-r--r-- 1 shibbityshwab shibbityshwab 275304 พ.ย.  24 20:50 hi5622_wifi.stripped.ko
-e633f847cff8f1e74706d88b8fecf6e09bca58ef4983ba2ab8f82789bef6fd01  hi5622_wifi.stripped.ko
+-rw-r--r-- 1 shibbityshwab shibbityshwab 276140 พ.ย.  24 21:15 hi5622_wifi.stripped.ko
+300cd392c6691bcbeca947658255f6b6bad2726ca628e717d39bc8d0bd6c2a29  hi5622_wifi.stripped.ko
 6
 beacon_static symbols:
-0001a898 T haf_build_chan_frame
+0001a934 T haf_build_chan_frame
 00012c84 T hi5622_beacon_plan
 00012d04 T hi5622_beacon_step_name
-00018964 t vapscan_chan_cfg
+00018a00 t vapscan_chan_cfg
 beacon_static strings:
 beacon_static
 ap_chan
@@ -18,7 +18,8 @@ cfg80211: start_ap beacon_static=1 plan (%u steps):
 cfg80211: start_ap beacon_static=1 REFUSED - provider '%s' has no module-channel-config builder; no frame sent
 cfg80211: start_ap beacon_static=1 REFUSED - the chandef has no channel number; no frame sent
 cfg80211: start_ap beacon_static: VAP add not posted (%d) - sequence aborted, no AP frame sent
-cfg80211: start_ap beacon_static REFUSED - the firmware VAP object (module_ctx+0x190) still reads zero after %u ms post-add; no channel/AP frame sent
+cfg80211: start_ap beacon_static REFUSED - a pre-existing VAP base latch reads module_ctx+0x190 == 0 after %u ms (stale/dead VAP); no channel/AP frame sent, power-cycle
+cfg80211: start_ap beacon_static: VAP-object readback=%s after %u ms (%s, non-gating) - continuing the vendor order
 cfg80211: start_ap beacon_static: channel-config builder refused (%d) - sequence aborted
 ap_chan
 cfg80211: start_ap beacon_static: channel-config frame not posted (%d) - sequence aborted
@@ -27,7 +28,7 @@ cfg80211: start_ap beacon_static channel ctx readback: module_ctx+0x10 u32=0x%08
 cfg80211: start_ap beacon_static: VAP start (vendor order, after ap_cfg) not posted (%d) - sequence aborted
 cfg80211: start_ap beacon_static: 'ap_vap_start' posted after ap_cfg (channel=%u) - vendor AP-start order complete
 cfg80211: start_ap beacon_static: VAP start owned by the WAL carrier sequence (already posted after ap_cfg)
+cfg80211: start_ap beacon_static: %s - no structural user_add (latch already set)
 parmtype=beacon_static:uint
 hi5622_beacon_static
 __param_str_beacon_static
-__param_beacon_static

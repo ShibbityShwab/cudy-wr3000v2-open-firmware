@@ -1,0 +1,35 @@
+# wifi-beacon-static — Lead bench fire of the ordered-plan rung (B2)
+
+Artifact fired: stripped 275,304 B sha256
+e633f847cff8f1e74706d88b8fecf6e09bca58ef4983ba2ab8f82789bef6fd01
+(that build's pre-fix guard; see f9b795b "non-gating" fix in the next build).
+
+Parameters: beacon_static=1 beacon_vap_start=1 hcc_trace=1.
+
+Observed dmesg (host-side facts):
+  cfg80211: start_ap beacon_static=1 plan (5 steps): vap_add ap_chan ap_ssid ap_cfg ap_vap_start
+  cfg80211: frame post vap_add ... posted 3/16
+  cfg80211: start_ap beacon_static REFUSED - the firmware VAP object
+    (module_ctx+0x190) still reads zero after 100 ms post-add;
+    no channel/AP frame sent
+  hostapd: ap_rc=1
+
+## Verdict — false negative in the lane's fail-closed guard
+
+The readback gate was wrong, not the sequence: the stability lane's final
+combined module (b5dfb883) also reads module_ctx+0x190 == 0 after 100 ms on a
+SUCCESSFUL AP start (its fresh-path exemption is exactly why it works).  The
+field is populated asynchronously / may not be the VAP-validity indicator this
+lane assumed, so a fresh base post must not be refused on it.
+
+## Fix (this build)
+
+* beacon_static path no longer posts user_add when the latch pre-existed this
+  call (or on a host-side stop restart): it logs and continues.
+* The bounded readback is now LOG-ONLY for a fresh base post
+  ("...readback=... (fresh base post, non-gating) - continuing the vendor
+  order").  A genuinely stale PRE-EXISTING latch still fails closed with
+  "a pre-existing VAP base latch reads module_ctx+0x190 == 0 ... power-cycle"
+  (same rule as the stability patch).
+* Re-fire expectation unchanged: vap_add -> channel 0x0124 -> ap_ssid ->
+  ap_cfg -> VAP start, hostapd AP-ENABLED, channel readback line, page golden.

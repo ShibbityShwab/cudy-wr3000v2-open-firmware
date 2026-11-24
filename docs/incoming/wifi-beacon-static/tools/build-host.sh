@@ -24,6 +24,12 @@ grep -q '^+static unsigned int hi5622_beacon_vap_start = 1u;' "$P" || { echo 'FA
 grep -q 'haf_build_chan_frame' "$P" || { echo 'FAIL: channel builder missing'; exit 1; }
 grep -q 'HI5622_FRAME_CAP_CHAN_CFG' "$P" || { echo 'FAIL: capability missing'; exit 1; }
 grep -q 'if (hi5622_beacon_static) {' "$P" || { echo 'FAIL: AP path branch missing'; exit 1; }
+grep -q 'if (base_was_posted && !restart_plain && !readback_ok) {' "$P" || { echo 'FAIL: guard must gate only a pre-existing latch'; exit 1; }
+grep -q 'fresh base post' "$P" || { echo 'FAIL: fresh-base readback must be non-gating'; exit 1; }
+if grep -q 'still reads zero after %u ms post-add' "$P"; then
+	echo 'FAIL: unconditional fresh-base readback refusal still present'; exit 1
+fi
+grep -q 'non-gating' "$P" || { echo 'FAIL: non-gating readback log missing'; exit 1; }
 echo 'static checks: PASS (beacon_static=0 default, legacy path branch preserved)'
 $PY -c 'import ast; ast.parse(open("'$LANE'/tools/beacon_re.py").read()); print("beacon_re.py syntax: PASS")'
 echo "build-host: OK ($OUT/beacon_selftest)"

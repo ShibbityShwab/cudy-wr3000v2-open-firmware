@@ -81,7 +81,7 @@ All reads go through the existing `hi5622_fw_ram_read()` path (no new interface)
 | module-table base offset | 0x17a504 (BAR0 0x82a504) | 0 on the validated PD4 boot |
 | module ctx CA | slot0 value + base value | base of the AP-start worker context |
 | module channel ctx | module ctx CA + 0x10 (u32) | packed bytes: channel / band / field / valid — new dmesg line in the beacon path |
-| firmware VAP object | module ctx CA + 0x190 | nonzero after user_add (used by the existing stale-VAP guard) |
+| firmware VAP object | module ctx CA + 0x190 | **bench-corrected:** async / NOT a validity signal — zero after 100 ms even on a successful AP start (Lead fire 2026-11-24, artifact e633f847, and b5dfb883); fresh-post readback is log-only, stale pre-existing latch only is gated |
 
 ## T8. Patch parameter contract [V]
 

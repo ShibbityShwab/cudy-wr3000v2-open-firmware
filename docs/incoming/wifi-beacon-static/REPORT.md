@@ -38,9 +38,16 @@ artifact, [V*] hardware-observed in a prior (Lead) session, [I] inference,
    `CHAN_CFG` + channel frame builder (g0 id1 key 0x0124 / WAL cmd 0x0124,
    4-byte body), pure ordering plan, and the ordered execution *user_add →
    channel → SSID → AP config → VAP start* with a read-only module-context
-   channel readback line.  Module: 1,002,872 B / stripped 275,304 B, zero
+   channel readback line.  Module: 1,003,884 B / stripped 276,140 B, zero
    warnings, vermagic 6.18.60, cfg80211 imports unchanged (6), strip .text
    identical.  [V]
+   **Bench fire (Lead, 2026-11-24) of the first build:** the 5-step plan and
+   `vap_add` executed, then the lane's own readback guard FALSE-NEGATIVED
+   (`module_ctx+0x190` still zero after 100 ms on a fresh base post).  The
+   stability final combined module shows the same zero readback on a
+   *successful* AP start, so that field is async/not a VAP-validity indicator.
+   Fixed: the readback is now LOG-ONLY for a fresh base post; only a genuinely
+   stale PRE-EXISTING latch still fails closed.  Re-fire identity below.  [V*]
 5. **Verification split:** the host-side PASS is the module-context channel
    readback (`ctx+0x10` packed channel/band/field/valid); the decisive on-air
    PASS needs an **external observer** (phone/laptop scan or a second monitor
@@ -226,7 +233,7 @@ b5dfb883...).  It touches 7 files:
 | `hi5622_ap_frames.{c,h}` | 4-byte channel body builder + `haf_build_chan_frame` (g0 key / WAL cmd 0x0124) |
 | `hi5622_scan_logic.{c,h}` | cap name + contract validation; pure ordered plan `hi5622_beacon_plan()` (host-tested) |
 | `hi5622_vapscan_provider.c` | channel builder callback + capability; channel byte in the g0 VAP-start body |
-| `hi5622_scan.c` | `beacon_static` (default **0**) / `beacon_vap_start` (default 1) params; ordered execution (user_add → channel → AP sequence → VAP start) with bounded VAP-object wait, dirty latch on abort, read-only module-ctx channel readback log |
+| `hi5622_scan.c` | `beacon_static` (default **0**) / `beacon_vap_start` (default 1) params; ordered execution (user_add → channel → AP sequence → VAP start) with a bounded VAP-object readback (log-only for a fresh base post, fail-closed only for a stale pre-existing latch — bench-corrected), dirty latch on abort, read-only module-ctx channel readback log |
 
 Order when `beacon_static=1`:
 
@@ -248,7 +255,8 @@ added.
 | static-RE probes, 2.5.24 host module + firmware | **33/33 PASS** | evidence/beacon-re-2.5.24.txt |
 | static-RE probes, 2.4.15 host module + firmware | **33/33 PASS** | evidence/beacon-re-2.4.15.txt |
 | module compile-verify, 6.18.60 tree, zero warnings/errors | PASS | evidence/module-build.txt |
-| module identity | unstripped 1,002,872 B sha256 320ad838b9d4…, stripped 275,304 B sha256 e633f847cff8…, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, depends=cfg80211, 6 cfg80211 imports | evidence/module-build.txt |
+| module identity (guard-fix build) | unstripped 1,003,884 B sha256 869083188219…, stripped 276,140 B sha256 300cd392c669…, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, depends=cfg80211, 6 cfg80211 imports | evidence/module-build.txt |
+| first build fired by the Lead (pre guard-fix) | stripped 275,304 B sha256 e633f847cff8… — refused at the false-negative guard; see §7.1 | evidence/bench-fire-b2-guard-false-negative.txt |
 | strip .text identity | PASS (.text byte-identical after `--strip-debug`) | evidence/module-build.txt |
 | fail-closed defaults | `beacon_static=0` (no initializer) and `beacon_vap_start=1` asserted by build-host static gates | evidence/host-selftest.txt |
 
@@ -274,11 +282,44 @@ stay local and are never committed.
   wait → record dmesg, power-cycle, analyse offline.  Never re-post in the same
   boot; never write CA 0x400392F0; never post mailbox id 5; never send group 1/4.
 
+### 7.1 Lead fire result (2026-11-24) — guard false negative, fixed
+
+The Lead fired the ordered-plan rung with `beacon_static=1 beacon_vap_start=1
+hcc_trace=1` on stripped artifact `e633f847cff8…` (pre-fix guard):
+
+    cfg80211: start_ap beacon_static=1 plan (5 steps): vap_add ap_chan ap_ssid ap_cfg ap_vap_start
+    cfg80211: frame post vap_add ... posted 3/16
+    cfg80211: start_ap beacon_static REFUSED - the firmware VAP object
+      (module_ctx+0x190) still reads zero after 100 ms post-add; no channel/AP frame sent
+    hostapd: ap_rc=1
+
+The sequence code was correct; the readback gate was wrong.  The stability
+lane's final combined module (b5dfb883) also reads `module_ctx+0x190 == 0`
+after 100 ms on a **successful** AP start (its fresh-path exemption is why it
+works), so the field is async / not a VAP-validity indicator.  Fix in this
+build:
+
+* a fresh base post (this call) only **logs** the readback
+  ("... (fresh base post, non-gating) - continuing the vendor order");
+* a **pre-existing** base latch that still reads zero stays fail-closed
+  ("a pre-existing VAP base latch reads module_ctx+0x190 == 0 ... power-cycle");
+* a host-side stop restart posts **no** structural `user_add` (the firmware
+  VAP is live), matching the stability E2 rule.
+
+Re-fire expectation is unchanged (vap_add → channel → ap_ssid → ap_cfg → VAP
+start, hostapd AP-ENABLED, channel readback line, page golden/mask 0).
+**RX-lane hint for readback validation:** the live bank window CA 0x40050000
+is valid (mask `0xfffffcc1`, norm/small rptr 0x20 matching vendor) and may
+expose module-context-like fields; the module-table slot-0/base recipe is the
+only channel readback path this lane has today.  [V*]
+
 ## 8. Open items / evidence levels
 
 | # | item | status |
 | ---: | --- | --- |
 | 1 | Is the missing module channel context the actual reason no beacons were observed? | [I] — ladder B1/B2 decides |
+| 1b | `module_ctx+0x190` as VAP-validity indicator | **REFUTED by the bench fire** (zero on a successful AP start); readback is now log-only for fresh posts [V*] |
+| 1c | Channel readback (module ctx +0x10) validity | log-only until a re-fire; live-bank CA 0x40050000 is a candidate better source [V*]/[I] |
 | 2 | Does the firmware require the VAP start strictly after the AP config (vs. tolerate the pre-start)? | [I] — B2 decides |
 | 3 | Channel body byte +1 (vendor `mac_vap+2`) semantics | [I] — sent 0 (single VAP); worker stores it only |
 | 4 | Channel-valid flag at module ctx +0x13 exact value | [U] — readback logs the byte; PASS needs non-zero only |

@@ -51,10 +51,16 @@ Evidence: `evidence/beacon-re-2.5.24.txt`, `evidence/beacon-re-2.4.15.txt`.
 * KDIR: `/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60`
 * toolchain: `staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi`
 * **BUILD OK — zero warnings/errors**
-* unstripped: 1,002,872 B sha256
-  `320ad838b9d452d1382c0d5652ad9d4784bde3e10bfb9a1417818b7ae2ae0000`
-* stripped (debug): 275,304 B sha256
-  `e633f847cff8f1e74706d88b8fecf6e09bca58ef4983ba2ab8f82789bef6fd01`
+* unstripped: 1,003,884 B sha256
+  `869083188219ab427b5a1d85d83d74e9bb1fdd7b3fdd059dce9ffc3fe4dbe167`
+* stripped (debug): 276,140 B sha256
+  `300cd392c6691bcbeca947658255f6b6bad2726ca628e717d39bc8d0bd6c2a29`
+* first build fired by the Lead (pre guard-fix): stripped 275,304 B sha256
+  `e633f847cff8f1e74706d88b8fecf6e09bca58ef4983ba2ab8f82789bef6fd01` — the
+  ordered plan executed but the lane's readback guard false-negatived
+  (`module_ctx+0x190 == 0` is also observed on a successful AP start); fixed in
+  this build by making a fresh-base readback log-only (a stale pre-existing
+  latch still fails closed).  See evidence/bench-fire-b2-guard-false-negative.txt.
 * vermagic: `6.18.60 SMP mod_unload ARMv7 p2v8`; depends `cfg80211`; 6
   cfg80211 imports (unchanged provider contract)
 * `--strip-debug` leaves `.text` byte-identical (objcopy + cmp check)

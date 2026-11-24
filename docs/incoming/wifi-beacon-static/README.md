@@ -22,9 +22,17 @@ configured when the AP state machine starts.  This is the static candidate for
 "hostapd AP-ENABLED but no on-air proof".  The lane delivers a fail-closed
 patch (`beacon_static=1`, default 0 = bench-proven path unchanged) that
 executes the vendor order, a pure ordering plan, the 0x0124 channel-frame
-builder, host tests, the 6.18.60 compile-verify identities, and a
-not-fired ladder with an external-observer on-air gate (our own RX capture is
-0 and g3 id19/20 are *received*-beacon reports, not proof of our AP).
+builder, host tests, the 6.18.60 compile-verify identities, and a bench ladder
+with an external-observer on-air gate (our own RX capture is 0 and g3 id19/20
+are *received*-beacon reports, not proof of our AP).
+
+**Bench fire (Lead, 2026-11-24):** the ordered plan executed (`vap_add`
+posted) and then the lane's own VAP-object readback guard **false-negatived**
+(`module_ctx+0x190 == 0` after 100 ms — the stability lane's successful AP
+start shows the same zero readback).  Fixed in the current build: a fresh base
+post logs the readback and continues; only a genuinely stale pre-existing latch
+still fails closed.  Current identity: stripped 276,140 B sha256
+`300cd392c669…`; the pre-fix fired artifact was `e633f847cff8…`.
 
 ## Deliverables
 

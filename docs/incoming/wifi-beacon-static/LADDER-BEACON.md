@@ -31,7 +31,7 @@ missing host step.
 | module-table base offset | 0x17a504 | 0 |
 | module ctx CA | slot0 + base | — |
 | **module channel ctx** | module ctx CA + 0x10 (u32) | channel byte == hostapd channel; band byte == 0; valid byte (bits 24..31) != 0; new dmesg line `beacon_static channel ctx readback` |
-| firmware VAP object | module ctx CA + 0x190 | nonzero after the AP start (existing guard logs it) |
+| firmware VAP object | module ctx CA + 0x190 | **NOT a validity signal** — bench fire 2026-11-24: zero after 100 ms even on a successful AP start (b5dfb883); the driver logs it for a fresh base post and only gates a stale pre-existing latch |
 
 ## 2. Rungs
 
@@ -61,10 +61,19 @@ Then `hostapd` start on the configured channel (e.g. ch6).
 `insmod ... beacon_static=1 beacon_vap_start=1`
 Then hostapd start on the configured channel.
 
+**Fired once by the Lead, 2026-11-24 (pre-fix build e633f847):** the 5-step plan
+was built and the first `vap_add` posted, then the lane's own readback guard
+false-negatived (`module_ctx+0x190 == 0` after 100 ms — also zero on the
+stability lane's successful AP start).  **Fixed** in the current build: the
+readback is log-only for a fresh base post; only a stale pre-existing latch
+fails closed.  Re-fire in progress by the Lead.
+
 * Expect dmesg: 5-step plan `vap_add ap_chan ap_ssid ap_cfg ap_vap_start`;
-  `ap_chan posted`; `ap_vap_start posted after ap_cfg`; AP-ENABLED.
+  `ap_chan posted`; `VAP-object readback=... (fresh base post, non-gating)`;
+  `ap_vap_start posted after ap_cfg`; AP-ENABLED.
 * PASS (host): B1 readbacks + `ap_vap_start` posted without refusal; page
-  golden; mask 0; heartbeats.
+  golden; mask 0; heartbeats.  (A zero VAP-object readback does NOT fail B2 —
+  bench-proven unrelated on a fresh base post.)
 * **PASS (on air, decisive):** external observer sees the SSID on the
   configured channel and, with a monitor radio, captures beacons at the
   configured interval (~100 TU), BSSID = the AP VAP MAC, with the SSID/rates/
