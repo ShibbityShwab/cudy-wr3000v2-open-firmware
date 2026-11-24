@@ -454,3 +454,15 @@ Field values are [U]/[I]: start the sweep at chan=auto, slot=0, start=12,
 field10=13, mode=2, use2=1 and then vary one at a time (see TEST-LADDER).
 Stop on any page/mask deviation or exception - the config-class frames are
 the only unproven wire bytes in this lane; default remains fail-closed off.
+
+### Measured H1 ceiling (R10c, hardware)
+
+Sweep of the R4 scan-only artifact with the g0 id10 config enabled: baseline
+7 channels (ch1-7) with 4 BSS; C1 use2=0 identical (subtype-2 harmless);
+C2 start=25 identical (start field inert); C3 field10=25 -> 8 channels;
+C4 mode=1 -> dense scan, 4 channels at ~3 s each but 14 BSS.  Page/mask clean
+on every rung.  Full 13/13 was NOT reached; the documented ceiling is
+6 channels without H1 and 7-8 channels with the partially decoded H1 config.
+The BSS path is hardware-proven (len-prefix decode -> cfg80211 entries ->
+iw).  Details, recommendation and the two remaining decider combos:
+FINDINGS-R10C.md.
