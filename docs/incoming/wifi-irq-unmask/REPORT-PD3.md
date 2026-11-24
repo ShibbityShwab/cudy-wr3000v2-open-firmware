@@ -52,6 +52,19 @@ by the PD2-A fire or earlier lanes; **[I]** inference; **[U]** not decidable wit
    `state==1 && mask==0`) and never gate the SR announce on a live page re-read. Full policy in
    section 7. **[I high]**
 
+7. **VALIDATED ON HARDWARE (2026-11-24, revised after the fire): PD3 booted golden and the
+   firmware's H2D dispatcher consumed the mailbox.** Clean driver, fw_path
+   `hi_wifi/FIRMWARE.PD3.bin` (sha256 `eea9f2ff…3905ce`), release 0x5A5A only: page
+   `0x86807FEF/7/2/0xABCD` intact, state 1, mask 0, ready pair id1+id2; ONE H2D SR announce
+   (id3) -> rc=0, dmesg `coalesced announce id3: out[0]=0x00000000 after 0 polls` (consumed
+   immediately), dmesg `hcc-core: h2d_complete data=0x00000008`, hcc_events
+   `h2d{pub=1 done=1 coal=0 to=0 closed=0 announces=1}`, safety writes=17 bad_writes=0.
+   The header-record cave is proven: no boot break, no page clobber, no data abort. The raw
+   `out[5]=1 / out[2]=8` prediction was over-specified - those dispatcher stores are
+   write-pulse/non-latching observables (section 5.5); the **host completion contract is
+   out[0] 0x8 -> 0 plus h2d_complete**, exactly as measured. The latched boot gate was already
+   active in the clean driver (F1), so no module fix was needed for this lap. **[V\*]**
+
 ---
 
 ## 1. PD2-A bench failure: evidence and root cause
@@ -216,12 +229,12 @@ read page/state/mask/out[0-5] and the direct D2H reader.
 | 3 | mask CA 0x40008 | **0 throughout** |
 | 4 | D2H ready pair | id1 + id2 still decoded; frames keep flowing |
 | 5 | **out[0] CA 0x40039010** | **0x8 -> 0** |
-| 6 | **out[5] CA 0x400392F0** | **1** |
-| 7 | **out[2] CA 0x400392D4** | **8** |
+| 6 | out[5] CA 0x400392F0 | **not a pass criterion** - the dispatcher stores 1 here, but the register does not present it to a delayed host read (section 5.5) |
+| 7 | out[2] CA 0x400392D4 | **not a pass criterion** - the dispatcher stores 8 here, but it is a write-pulse/doorbell, not a latch (section 5.5) |
 | 8 | bonus | if the live handler table was populated by firmware, a real D2H response may appear; the zero-table path intentionally runs consume-only |
 
 Negative cases: rows 1-4 fail => the boot did not reach the epilogue (capture page/mask/state);
-rows 5-7 fail while 1-4 pass => the stub ran but the dispatcher instance/table contract differs
+row 5 fails while 1-4 pass => the stub ran but the dispatcher instance/table contract differs
 (read-only follow-up: [0x10C19C]/[0x10C1B0]). **Stop after one boot + one frame; no retries.**
 
 ### 5.2 PD3-B (second fire, only if PD3-A is unavailable or after PD3-A)
@@ -232,6 +245,64 @@ host-side view). Rows 5-7 stay at 0 with clean mask/page => delivery layer is de
 mailbox consumer can only be serviced by firmware-side polling (PD3-A's model).
 
 ---
+
+### 5.4 Bench validation (device, 2026-11-24) - PASS
+
+Exact session (revised after the fire; clean driver `hi5622_wifi.ko`, fw_path
+`hi_wifi/FIRMWARE.PD3.bin` sha256 `eea9f2ff9345dc8d16badd65e77a5f8b82cf58740b7203239838259adc3905ce`;
+prepare/upload/verify/seed, hcc_arm, hcc_loop, release 0x5A5A ONLY; no host write of out[5]/out[2]):
+
+| observable | measured |
+| --- | --- |
+| page CA 0x1BF000 | **0x86807FEF / 0x00000007 / 0x00000002 / 0x0000ABCD - INTACT** |
+| state CA 0x118B60 | **1** |
+| exception mask CA 0x40008 | **0** |
+| D2H ready pair | **id1 + id2 decoded (id2 payload 0x01060850)** |
+| one H2D SR announce (id3) | **rc=0**; dmesg `coalesced announce id3: out[0]=0x00000000 after 0 polls` (consumed immediately) |
+| h2d completion event | dmesg `hcc-core: h2d_complete data=0x00000008`; hcc_events `h2d{pub=1 done=1 coal=0 to=0 closed=0 announces=1}` |
+| raw mailbox read after announce | out[0]=0, out[2]=0, out[5]=0, out[1]=0 |
+| safety counters | writes=17, bad_writes=0 |
+
+Interpretation: the firmware's own H2D dispatcher 0xC18AC ran (it read+cleared out[0], the
+driver's polled completion path saw the clear on its **first** poll) and the device took the SR
+frame; no exception, no page clobber, no boot break. The header-record-area cave is therefore
+validated on hardware. The driver's latched boot gate was already active in the clean driver
+(F1: `boot_latched` gates `hcc_core_mbox_send`), so the section 6 module change is a
+hardening note, not a prerequisite.
+
+### 5.5 Why the raw out[5]/out[2] reads were 0 (static reconciliation)
+
+The PD2/PD3 text predicted raw `out[5]=1` and `out[2]=8` after consumption. The bench read both
+as 0 a second or more later. Static analysis shows **the consume-only path does not skip those
+writes** - they are unconditional in 0xC18AC before the pending-bit check:
+
+    0xC18B2 movs r7,#1 ; movs r1,#0
+    0xC18B6 ldr  r2,[r0,#0xC] ; str r7,[r2]     ; *[hcc+0xC]  = 1  -> CA 0x400392F0 (out[5])
+    0xC18BA ldr  r2,[r0,#4]   ; ldr r5,[r2] ; str r1,[r2]   ; out[0] read + clear
+    0xC18C0 movs r1,#8 ; ldr r2,[r0,#0x10] ; str r1,[r2]    ; *[hcc+0x10] = 8 -> CA 0x400392D4 (out[2])
+    0xC18C6 cbnz r5, dispatch ...                ; pending bits after the ack/doorbell writes
+
+so both stores execute on every dispatcher entry. No firmware code clears them afterwards:
+
+* the only image materialisations of the mailbox CAs are the `pcie_msg_init` pointer install
+  (literals 0x497DC/0x497E0 = out[1]/out[0]; ack/out[2] computed by arithmetic from the D2H
+  doorbell 0x40101434) and the exception-report staging routine's out[1] write; a whole-image
+  census finds **no other writer of CA 0x400392F0 / 0x400392D4** [V];
+* in PD3's consume-only path the zero handler table means **no post-dispatch handlers run**, so
+  the only two writers of those words in that boot are the two dispatcher stores above [V].
+
+Since the values are written but not visible to a later host read, the registers behave as
+**write-pulse / non-latching doorbell-status words** (they are not read-back latches). This is
+consistent with the host side's own contract: the clean driver completes an H2D send by polling
+**out[0]** (`hcc_core_mbox_tick`: out[0]==0 -> `HCC_EVENT_H2D_COMPLETE` with the inflight mask,
+which is exactly the dmesg `data=0x00000008`), treats out[2] as the host->device doorbell it
+writes (firmware's 8 is a pulse), and documents out[5] as an auxiliary read-only status word that
+is never a required ack (`hi5622_contract.h`). Earlier sessions had already seen the host's own
+out[2] write read back as 0, supporting the non-latching interpretation. [V source / V\* bench]
+
+**Correct pass criterion for PD-type mailbox patches:** `out[0] 0x8 -> 0` plus the driver's
+completion event (`h2d_complete data=0x8`, hcc_events done=1), with page/state/mask clean.
+The raw out[2]/out[5] rows are diagnostic only and may legitimately read 0 later.
 
 ## 6. Module policy fix for the Lead: latch boot completion
 

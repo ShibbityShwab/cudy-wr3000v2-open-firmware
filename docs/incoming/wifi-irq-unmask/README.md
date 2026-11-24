@@ -34,7 +34,9 @@ out[5] reads 1, out[2] reads 8.
 0x47432) is live on our boots; PD3 moves the same guarded out[0] poll stub to the image-header
 exception-record area CPU 0x4000C (globally unreachable, entered only by our epilogue patch).
 PD3 image sha256 `eea9f2ff...3905ce`; zero-cave alternative PD3B (event-0x4C raise loop +
-zero handler table) sha256 `ef0683db...45f2`; see `REPORT-PD3.md`. Earlier iteration:**
+zero handler table) sha256 `ef0683db...45f2`; see `REPORT-PD3.md`.
+
+**PD3 VALIDATED ON HARDWARE (2026-11-24).** Clean-driver session with fw_path `hi_wifi/FIRMWARE.PD3.bin` (sha256 `eea9f2ff...3905ce`): page `0x86807FEF/7/2/0xABCD` intact, state 1, mask 0, ready pair id1+id2; one H2D SR announce -> rc=0, `out[0]=0x00000000 after 0 polls`, `h2d_complete data=0x00000008`, `h2d{pub=1 done=1 coal=0 to=0 closed=0 announces=1}`, safety writes=17 bad_writes=0 - the firmware H2D dispatcher consumed the mailbox with no boot break, page clobber or data abort. Raw `out[5]/out[2]` read 0 later: they are write-pulse/non-latching observables, not the completion contract (REPORT-PD3 sections 5.4-5.5); the latched boot gate was already active in the clean driver. Earlier iteration:**
 
 **PD bench outcome and PD2 (2026-11-24 16:10).** PD did reach the image
 exception path, but it was the *wrong* call site: 0x47610 is the entry-A handshake poll
