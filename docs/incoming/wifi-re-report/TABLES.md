@@ -295,6 +295,12 @@ message makes DEVICE READY.
 | 6 | scan | iw scan | H2D g0 0xC | g1 15-17 / g2 2 |
 | 7 | STA join | wpa_supplicant | H2D g0 0xF/0x10 | connect events |
 
+Hardware status of the order (2026-11-26): step 2 and step 3 are proven; step 4 now posts the
+real `user_add`/`user_add_notify` frames and the firmware commits the mailbox-layer VAP; step 6
+posts the real scan request and the firmware consumes it, but the D2H scan response does not flow
+yet because the per-radio VAP start step between 4 and 6 is still [U] (corrections C31/C33, REPORT
+6.7). Steps 5 and 7 remain open.
+
 Footnote: the context-create message (g0 id1 key **0x64**) is not on the userspace trace; it is
 the firmware-internal precondition our lane discovered for the TXQ-sync handler and must be sent
 before step 2 on our boot (REPORT.md finding F5) [V*]/[I].
@@ -527,13 +533,16 @@ the preflight; capture dmesg/UART read-only, then power-cycle.
 | `wifi-fw-postboot`, `wifi-fw-link-event`, `wifi-event-router`, `wifi-boot-gate`, `wifi-boot-kick`, `wifi-fw-ready-gate` | image post-boot internals and the IRQ/event gap |
 | `wifi-vendor-userspace` | userspace surfaces, startup trace, HCC mapping, cfg80211 scope |
 | `wifi-driver-clean`, `wifi-openwrt-pkg` | clean-room instrument driver and its OpenWrt package |
-| `wifi-bench-tooling` | one-command sessions incl. protocol mode, guards, patch builder, bar0read helper |
+| `wifi-bench-tooling` | one-command sessions incl. protocol mode, phase matrix (T28), guards, blocked-outcome classification, bounded reboot, patch builder, bar0read helper |
 | `wifi-proto-seq` | g1 id3/id0x12 decode, calibration (g0 id2 key 0x0101) family and response contract |
 | `wifi-cfg80211` | cfg80211 M0-M2 wiphy/VAP implementation, registration gate, 39-op map |
 | `wifi-datapath` | two-plane model, MAC slot-5 ring block, TX/RX formats, key tables A/B |
 | `wifi-ete-wake` | ETE trigger chain, host-owned field comparison, E1a/E1b negative |
 | `wifi-upstream-target` | target build verification, cfg80211 bench image, patch classification |
-| `wifi-fw-audit` | PD4 minimality/safety audit, H1/H2 open question, ranked variants, vendor-clean alternative analysis (task-115) |
+| `wifi-fw-audit` | PD4 minimality/safety audit, H1/H2 read-only pack, ranked variants, vendor-clean alternative analysis (task-115) |
+| `wifi-vap-scan` | T27: byte-exact g0 id7/id8/id9/id0xC builders, firmware-handler decode, V1-V4/S1-S2 ladder |
+| `wifi-scan-ap` | T22/T27: cfg80211 scan/AP wiring, provider caps 0x1f, bounded announce wait/frame gap, provider module |
+| `wifi-datapath-bringup` | T26: host data-plane implementation (dp_*), MAC slot-5 program, TXQ address sync, E1 ladder |
 
 Historical lanes (`wifi-framework-port`, `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`,
 `wifi-algcfg-slice`, `wifi-datapath-slice`, `wifi-thermal-re`, `wifi-driver-integration`) remain
@@ -566,16 +575,17 @@ Source: `wifi-cfg80211/REPORT.md` (host-side design + selftests) and ledger 2026
 | item | value / state | evidence |
 | --- | --- | --- |
 | M0 wiphy + netdev model | wiphy_alloc in probe (no device access), wiphy_register only after `g4 id1`+`g4 id2` decoded; one wiphy per endpoint | delivered host-side and **bench-validated** [V]/[V*] |
-| M1 VAP lifecycle | `add/del/change_virtual_intf` netdev model; VAP created via nl80211, deleted again; no firmware VAP message sent | **bench-validated** (wlan0, ifindex 7, managed, doc address) [V*] |
-| M2 scan/station stubs | `scan`, `get_station`, `dump_station` registered, return `-EOPNOTSUPP`; every M3+ op NULL | delivered [V] |
+| M1 VAP lifecycle | `add/del/change_virtual_intf` netdev model; VAP created via nl80211; real `user_add`/`user_add_notify` frames now create the mailbox-layer firmware VAP; the per-radio VAP **start** object is still absent | **bench-validated** (wlan0, ifindex 7, managed, doc address; `user_id=0 vap_id=0` committed) [V*] |
+| M2 scan/station | `scan` is wired to the provider: with `allow_frames>0` it builds and posts the real g0 id0xC 520 B frame and waits a bounded 5 s for results; default fail-closed `-EOPNOTSUPP`; `get_station`/`dump_station` stubs; every M3+ op NULL. D2 row = BLOCKED-DRIVER until a VAP start exists | delivered [V]/[V*] |
 | bands / channels | 2.4 GHz ch 1-13 at 30 dBm; 5 GHz 19 LU-plan ch 36-48/52-64/100-140 at 23 dBm; 12 legacy rates + HT20 skeleton | [V]/[V*] (channel counts seen in dmesg/iw) |
 | modes / ciphers | AP + STA + monitor; WEP40/WEP104/TKIP/CCMP/GCMP/AES-CMAC/BIP-CMAC-256; `max_scan_ssids = 12` | [V] |
 | registration gate | pure function: `boot_latched && phase >= READY_TXQ_SYNC && id1 && id2`; workqueue; teardown under RTNL | [V] |
 | 39-op map | 3 implemented (M1), 3 EOPNOTSUPP stubs (M2), 33 deferred (M3-M6); machine-readable in `hi5622_cfg80211_logic.c` | [V] |
-| open H2D payloads | user/vap add `g0 id7/8` (0xA8), scan `g0 id0xC` (0x1FC), STA join family - payload structs [U]; del-user `g0 id9` (0x0C) exact builder exists | [V]/[U] |
+| H2D payload builders | `user_add` g0 id7 (180 B wire), `user_add_notify` g0 id8 (180 B), `scan_req` g0 id0xC (520 B) byte-exact from the firmware handlers and **firmware-accepted** (2026-11-26); del-user g0 id9 (24 B) exact; STA join family still [U]; unpinned scan flags/channel-index [U] | [V]/[V*]/[U] |
 | config-sync backend rule | g1 id3 is the generic channel: dispatch by `syn_id` (0x0101 alg, 0x0102 cali, 0x07xx per-VAP), never by size | [V] |
-| tests | cfg80211 logic 454/454; inherited H2D 242/242; source selftest 144/145 (known provider-symvers redundancy); kernel module 0 warnings | [V] |
-| limits | management model only: no firmware VAP object, no scan results, no association, no data path | [V*/I] |
+| tests | cfg80211 logic 454/454; inherited H2D 242/242; scan/AP/provider 248/248; source/contract 294/294 (the separate 144/145 provider-symvers item is a known redundancy); provider module 676,180 B sha256 `4a1c3b9a...`, 0 warnings | [V] |
+| real-frame session (2026-11-26) | g0 id7 180 B + g0 id8 180 B + g0 id0xC 520 B consumed in 0 polls, no exception; scan aborted with 0 results (VAP-start wall) | [V*] |
+| limits | management model + mailbox-layer VAP: no per-radio VAP start, no scan results, no association, no data path | [V*/I] |
 
 ## T23. Calibration ladder C1/C2 - carrier, cfg ids and response contract (2026-11-25 12:30)
 
@@ -592,14 +602,17 @@ mailbox id-3 announce, release-only boot); no new host register writes.
 | expected answer | one D2H `g1 id3`, total 298 B, `syn_id 0x0101`, `body_len 270`, request cfg id echoed, `dev_ret 0`, cookies echoed; no host reply | [V] |
 | **C1 fired** | one `set_rssi_param` (3507) zero-value frame after ctx-create type 1 + txq_sync72 on a PD4 golden boot: consumed in 0 polls; answer catalogue count=2, `last_total=0x012A`, `last_len=298`; mask 0, staging 0, page golden; driver ok=3 timeout=0 | [V*] |
 | C1 limits | answer body recycled before the read-only capture: length/count evidence, body expected-by-construction; not a decoded payload | [V*] |
-| **C2 next** | fresh boot, `h2d_send_budget=8`: create + txq + six calibrations in vendor order; one new message class per boot; capture the answer body immediately after the fire | [I] |
+| **C2 fired** | 2026-11-25 16:30, `h2d_send_budget=8`: ctx + txq + six calibrations (3502-3507) in vendor order; every write consumed in 0 polls; **six 298 B g1 id3 answers** (catalogue count 7, `last_total=0x012A`, `last_len=298`); mask 0, staging 0, page golden, `ok=8 timeout=0 refused=0` | [V*] |
+| **C2 automated** | 2026-11-25 23:40: phase C2 PASS - 28 steps, 54/54 checks, 0 failed, 7.02 s; per-phase evidence dir; this is the first fully automated bench-phase pass | [V*] |
+| C2 limits | answer bodies counted, not decoded (buffers recycled before the read-only capture); values policy unchanged (zero-value structural frames only) | [V*]/[I] |
 | values policy | per-unit factory calibration stays local; only zero-value structural frames are described here | [V] |
 
 ## T24. Wi-Fi frame-plane ring map (MAC host-interface block, slot 5)
 
-Source: `wifi-datapath/REPORT.md` sec 2-9 (static RE from the vendor host driver + firmware).
-**No frame has been sent or received by our host yet.** Offsets below are device CA unless
-marked CPU/BAR0.
+Source: `wifi-datapath/REPORT.md` sec 2-9 (static RE from the vendor host driver + firmware) and
+`wifi-datapath-bringup/REPORT.md` (host implementation, E1). **The host-side setup is implemented
+and bench-fired (E1 PASS); no frame has traversed the rings yet.** Offsets below are device CA
+unless marked CPU/BAR0.
 
 | object | address / geometry | notes | evidence |
 | --- | --- | --- | --- |
@@ -616,8 +629,11 @@ marked CPU/BAR0.
 | RX descriptor | 0x28 B device-written at buffer start, then the 802.11 MPDU; parsed into 0x30 B msdu-info | bit semantics [I]/[U]; offset/width table in lane report sec 7.2 | [V] |
 | key tables A / B | firmware CPU `0x10C23C` (217 slots) / `0x103BF8` (88 slots), 8 B `{u16 key; u16 pad; u32 worker}`, sentinel `{0x1451,0}` | g0 id-1 command namespace; keys 0x0004/0x0064/0x0078/0x00D8/0x0128/0x0311/0x0320 | [V] |
 | control-message family | `g0 7/8` user-add 0xA8, `g0 9` del-user 0x0C, `g0 0xC` scan 0x1FC, `g0 0xF/0x10/0x11` STA join 0x40/0x10, `g0 0x12` EDCA 0x74, `g2` WAL cfg ids [U] | D2H: `g1 15/16/17`, `g2 2`, `g2 3-6` | [V]/[U] |
-| direct-read constraint | ETE messages only; MAC DMA is independent of the ETE A->B copy | live hypothesis, ladder B2 tests it | [I] |
-| bring-up order | D0 MAC register model -> D1 RX rings/NAPI -> D2 TX ring + TXQ sync -> D3 user/VAP -> D4 scan -> D5 STA join; read-only B2 probe first | an extra iATU viewport once rebooted the box | [I]/[V*] |
+| direct-read constraint | ETE messages only; MAC DMA is independent of the ETE A->B copy | E1 ran clean (no exception); no frame yet | [I]/[V*] |
+| host implementation (dp-bringup) | `dp_probe` = one RO word of MAC band-0 `0x40040000`; `dp_setup` = one-shot: 8 MSDU-info table entries through the ACP alias with read-back + the 14-write MAC program with per-write read-back; `dp_rings`/`dp_status` = RO snapshots; `dp_txq_sync` = ONE g0 id1 key-`0x0320` frame with the TXQ-table device VA | module 462,952 B sha256 `8fc693ad...`, 0 warnings, 6.18.60 vermagic; not fired until E1 | [V] |
+| **E1 bench result** | automated phase E1 **PASS, 37/37 checks, 0 failed**: `dp_probe` p0 clean, `dp_setup` write + p0-p3 gates, `dp_rings` p0-p3, then TXQ sync accepted (`txq_addr_sent=1 ok=2 timeout=0`); post pack mask 0, staging 0, page golden | ledger 2026-11-26 03:00; no exception | [V*] |
+| what E1 does not show | no TX ring entry/RX buffer moved; RX completion ring + 0x28 B descriptor unconsumed [U]; rings assume user index 0 (no queueing user yet); TX 8 B entry + 20 B DMA descriptor untested; band 1 untouched | honest limits | [I]/[U] |
+| bring-up order | D0 MAC register model -> D1 RX rings/NAPI -> D2 TX ring + TXQ sync -> D3 user/VAP -> D4 scan -> D5 STA join; read-only B2 probe first. Executed: B2a probe + dp_setup + TXQ sync (E1); next is a first frame | an extra iATU viewport once rebooted the box; never add one | [I]/[V*] |
 
 ## T25. PD4 research patch - identity, audit, H1/H2 and vendor-clean alternatives
 
@@ -633,12 +649,92 @@ patched image exists only outside the repository (recipe-only publication).
 | cave | CPU `0x108197..0x108413` (637 B all-zero static-data gap between two referenced read-only tables `0x108054`/`0x108414`); exhaustive Thumb census: 0 branch/literal/ADR references; outside both boot memsets (`0x117C00..0x1ADDE0`, memset(`0x01000000,0,0xE0000`)) and outside the exception-staging frame `0x4000C..0x4004B` | [V] |
 | what the stub changes | boot-task epilogue -> out[0] poll; calls firmware wrapper CPU `0x40294` -> dispatcher CPU `0xC18AC` (ack `out[5]=1`, clear out[0], doorbell `out[2]=8`, handler-table dispatch). Stub reads only CA `0x40039010`, writes no device CA; host never-write rule for CA `0x400392F0` unchanged | [V] |
 | bench record | PD4 fires 2026-11-25 02:10 (cave bytes present before/after, fault reproduces) and the ordered lap 05:10/07:40 (announces consumed in 0 polls, mask 0, golden page) | [V*] |
-| **H1/H2 open question** | the sentinel compare uses instance handler-table pointer field CPU `0x10C1B0` = static `0x00118D68`; no image writer found, so the stub may always take the consume-only ROM-RAZ branch and the handlers may never execute. Decisive read-only pack (no fire): BAR0 `0x7C41B0` (instance+0x20), `0x7D0D68/+0x10/+0x20` (table ids 1/3/5), `0x2000` (ROM RAZ) | [V]/[U] |
+| **H1 confirmed** (was the open question) | read-only pack (BAR0 `0x7C41B0` = CPU `0x10C1B0`, `0x7D0D68` = the live table, `0x2000` = ROM RAZ) on a PD4 golden boot at 2 s and 48 s after release: handler-table pointer CPU `0x10C1B0` = `0x00118D68` (image static value; file `0xCC1B0` contains it once), live table CPU `0x118D68` **all zero** at both reads, ROM RAZ window `0x2000` = 0, sanity anchor CPU `0x40000` = `0x00046971`. Interpretation: sentinel always equal -> PD4 consumes the mailbox through the ROM zero table, **handlers never execute**; the working duplex is non-mailbox ETE/polled H2D | ledger 2026-11-25 21:30; correction C29 | [V*] |
+| H1 consequences | PD4-ALWAYS0 should behave identically (consume-only); PD4-NOSENT would enter the empty table and is not a diagnostic candidate; earlier lane claims that PD4 dispatches through the real handler table are refuted | ledger 2026-11-25 21:30 | [V*]/[I] |
 | diagnostic variants | `PD4-NOSENT` force live branch, sha256 `0bc1b3e8c5b875095945ba37c700205237ba4049e53148d282e60f4ef5fc2820`; `PD4-ALWAYS0` force consume-only, sha256 `84e9cd9503fa8d2740d3382efe114639b29f439c0e611ec9504796a215590210`; `PD4-MIN` (36 B delta) / `PD4-LITE` (44 B) specified; one-shot epilogue call rejected | [V] |
 | vendor-clean alternatives | NO host-only path proven. Vendor mailbox sequence already reproduced; deferred-send writes `out[5]=8` pre-kick (tried once in the takeover era: accepted, no frame accept); ETE 0x2D/0x2E do not deliver; ROM has no mailbox service; image has no other out[0] reader; CA `0x40160000` outside host-visible region | [V]/[V*] |
 | one host-only candidate | spare inbound iATU viewport onto CA `0x40160000` + one-shot raise of event 0x4C: CA `0x40161188 = 0x1000`, mirror `0x40161288`; enable already set at CA `0x40161108` bit 12. New device-write class, untested, needs its own attended design + IRQ-storm bounds | [V]/[I]/[U] |
-| verdict | patching required for the closed vendor blob **as delivered** (conditional only on the untested aperture experiment; not fundamental to the hardware); PD4 = research instrument only, never a shipping change | [I high] |
+| verdict | patching required for the closed vendor blob **as delivered** (conditional only on the untested aperture experiment; not fundamental to the hardware); with H1 confirmed PD4 is a consume-only mailbox servicer, not a handler-dispatch path; PD4 = research instrument only, never a shipping change | [I high] |
 
 Audit corrections folded into the report: PD3B raise CA `0x401611A0` -> `0x40161188` (C27) and
 the "twin/ack word" = out[2] doorbell (C28), both in REPORT section 8.
+
+## T26. MAC data-plane bring-up - host implementation, ladder and E1 (2026-11-26 03:00)
+
+Source: `wifi-datapath-bringup/REPORT.md` (deliverable), `wifi-datapath/REPORT.md` (static RE),
+`wifi-bench-tooling/PHASES.md` (E1 sequence) and the ledger 2026-11-26 03:00. The host-side data
+plane is implemented and bench-fired; **no frame has traversed the rings yet**. The E1 phase is the
+data-plane row of the phase matrix (T28).
+
+| item | value / state | evidence |
+| --- | --- | --- |
+| module | `hi5622_wifi.ko` **462,952 B** sha256 `8fc693ad4c3c9338baa1089ecb2acd420be78eb059760bfc0fa356ade205cec9`, vermagic 6.18.60, 0 warnings, 13 `dp_*` T-symbols, inherited H2D 308/308 | v3 re-verified by kernel build + host tests | [V] |
+| host tests | data-plane logic 69/69; inherited H2D 308/308; static decode 34/34; E1 sequence schema 10/10 | v3 re-run | [V] |
+| `dp_probe` (RO) | ONE read-only word of MAC band-0 `0x40040000` (the B2a reachability probe); value recorded, not gated; no write | E1 p0 PASS | [V*] |
+| `dp_setup` (WO "1") | allocate TXQ table 0x2524 B, 8 x 64 x 8 B TX MSDU-info rings, `tx_ba_info` 0x800 B depth 0x100, RX free rings 0x400/0x800/0x3ffc B, 256+512 coherent RX buffers; write 8 device-RAM MSDU-table entries through the ACP alias with read-back; run the 14-write MAC band-0 program in vendor order with per-write masked read-back | E1 write + p0-p3 PASS; one shot, failure closes the lane | [V*] |
+| ready seed | `g4 id2` payload `0x01060850` = PKTRAM device CA of the MSDU-info ring-pointer table; MAC +0x10 receives ACP alias `0x02060850` | static + live vendor value | [V]/[V*] |
+| MSDU-info table | 12-byte entries at `base + 12*(tid + user*8)`, `{ring_devVA, 0, 0}` at ring init | static decode | [V] |
+| TX MSDU ring | depth 64 (0x40), 8-byte entries `{u32 buf_devva; u32 ctl}`; packed producer index (15-bit + phase bit 15) | static decode | [V] |
+| RX free rings | 256 x 0x63c B and 512 x 0xb0 B; entries are 4-byte device VAs = `buffer + 4`; ring storage 0x400/0x800 B | static decode | [V] |
+| completion ring | 4095 entries x 4 B (0x3ffc B); `+0x40`/`+0x4c` consumer/writer; format [U] | static decode | [V]/[U] |
+| MAC program | 14 writes, vendor order, RMW where masked; live check `+0x38/+0x3c = 0x8000`, `+0x48 = 0xfffffcc1`; per-write read-back, first mismatch closes the lane | E1 dp_rings p0-p3 PASS | [V*] |
+| TXQ-table address sync | `dp_txq_sync` posts ONE g0 id1 key-`0x0320` 32-byte frame carrying the 4-byte TXQ-table device VA; firmware worker CA `0x81445` stores it at fw RAM `+0x2524 + 0x252c*band` | accepted: `txq_addr_sent=1 ok=2 timeout=0` | [V]/[V*] |
+| E1 result | automated phase E1 **PASS 37/37 checks, 0 failed**: probe, setup/read-back, rings, TXQ sync, post pack (mask 0, staging 0, page golden); library plan is 13 steps / 42 checks / 3 writes | ledger 2026-11-26 03:00; evidence dir under `build/evidence-bench-gates/` | [V*] |
+| E1 does not show | no TX entry or RX buffer moved a frame; completion-ring/descriptor semantics unconsumed [U]; rings assume user index 0; first TX encoder + 20 B DMA descriptor untested on hardware; band 1 untouched | honest limits | [U]/[I] |
+| safety invariants | probe/setup never before armed+released; only MAC band 0 and one device-RAM table written; never CA `0x400392f0`, RC misc window, release or gate; no retry after failure; never add an iATU viewport | carried from the ladder | [V] |
+
+## T27. The real firmware management frames (2026-11-26 04:30/06:30)
+
+Source: `wifi-vap-scan/REPORT.md` + `recipes/frames.md` (builders, firmware-handler decode,
+node word1s), `wifi-scan-ap/REPORT.md` + `BUILD-NOTES.md` (provider module), ledger 2026-11-26
+04:30/06:30 (bench). All frames were built by the registered provider, validated against the
+firmware H2D tables, gated (fail-closed) and posted through the working HCC carrier; each was
+consumed by the firmware in 0 polls with no exception. Numbers are wire totals (12-byte header
+included) unless stated.
+
+| # | frame | direction / id | builder (firmware handler) | payload -> wire | SR node word1 | post (slot/devva/producer) | firmware result | evidence |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `user_add` | H2D g0 id7 | `hmac_user_add` (CPU `0x9832C`) | 168 B -> **180 B** | `0x00b46d2b` | SR0 slot 2, devva `0x8417c000`, producer 2->3, posted 1/8 | consumed 0 polls; **VAP committed** (`user_id=0 vap_id=0`) | [V]/[V*] |
+| 2 | `user_add_notify` | H2D g0 id8 | `hmac_user_add_notify_alg` (uid, alg, 24 B VHT/44 B HT/58 B HE caps, nss) | 168 B -> **180 B** | `0x00b46d2b` | posted 2/8 | consumed 0 polls (after the bounded announce wait + 20 ms frame gap; the first attempt was refused inflight) | [V]/[V*] |
+| 3 | `scan_req` | H2D g0 id0xC | `hmac_enc_scan_send_req` (entry CPU `0x6494C`) | 508 B -> **520 B** | `0x02086d2b` | SR0 slot 4, devva `0x8371f000`, producer 4->5, posted 3/8 | consumed 0 polls; **no result events** within 5000 ms -> scan aborted (results=0) | [V]/[V*] |
+| 4 | `del_user` | H2D g0 id9 | `hmac_del_user_notify_dmac` | 12 B -> 24 B | `0x00186d2b` | - | byte-exact from the shipped del_user attr; not needed/fired in the recorded sessions | [V] |
+| - | expected scan results | D2H g1 15/16/17, g2 2 | - | - | - | - | **none observed**; rd_catalog held only the boot-time 36 B g1 id3 unsolicited frame. Decode is best-effort [I]/[U] | [V*]/[U] |
+| - | why no response | - | firmware scan handler CA `0x6494C` reads **VAP id 0** and needs the per-radio VAP object **started**; g0 id7/id8 only register the mailbox-layer user/VAP | - | - | - | VAP start family still [U] (WAL g2 AP start or g0 0xF/0x10); correction C33 | [V]/[U] |
+| - | un-pinned builder fields | five scan flag bytes, channel-index convention (idx = band-table position [I]), VAP id in the payload | - | - | - | - | accepted by the firmware anyway; fields stay [U]/[I] | [I]/[U] |
+
+Provider/state around the session: module **676,180 B** sha256 `4a1c3b9a...` (caps `0x1f`,
+9 cfg80211 imports, depends=cfg80211, 0 warnings; host 248/248 + inherited 454/454 + 242/242 +
+static 294/294), `allow_frames` 0 by default (raised only in the attended session), `frame_gap_ms`
+20; boot page `0x86807FEF/7/2/0xABCD`, state 1, mask 0, staging 0, heartbeats continuing [V]/[V*].
+
+## T28. One-command phase matrix (2026-11-26 05:30)
+
+Source: `wifi-bench-tooling/PHASES.md` + `REPORT.md` sec 9.9, the ledger 2026-11-26 05:30, and the
+evidence directory `build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T083424Z/`
+(gitignored: PHASE-MATRIX.md + per-phase dirs + BRINGUP-STATUS.md). The matrix is an **attended
+operator tool**, not a release artifact; it never makes a PASS out of a documented pending feature.
+
+| phase | sequence (bundled) | plan steps/checks/writes | real result | key gates |
+| --- | --- | ---: | --- | --- |
+| boot | `bringup-boot-ready.json` | 5 / 18 / 0 | **PASS** (15/15 checks) | page `0x86807FEF/7/2/0xABCD`, state 1, mask 0, staging 0; ready id1+id2, id2 payload `0x01060850`, phase READY_TXQ_SYNC |
+| C2 | `bringup-c2-calibration.json` | 28 / 55 / 8 | **PASS 54/54** | ctx_create type 1 + measured ctx4 body pack -> txq_sync72 clean -> six cfg_cal 3502-3507, each answered by a 298 B g1 id3 (catalogue delta + `last_total=0x12A`); `ok=8 timeout=0 refused=0`; page/state/mask golden |
+| D1 | `bringup-d1-vap.json` | 11 / 24 / 0 | **PASS 21/21** | wiphy registered -> `iw phy phy0 info` -> `interface add wlan0 type managed` -> netdev + VAP counters -> `iw dev wlan0 del` -> removed |
+| D2 | `bringup-d2-scan.json` | 11 / 15 / 0 | **BLOCKED-DRIVER** (expected; real run 13 checks: 12 passed, 1 blocked scan step, 0 failed) | scan step declares `blocked_rc [95,161]` + documented patterns; session records BLOCKED and continues; post-scan mask/catalogue/VAP-del steps still run; row flips to PASS automatically when rc=0 |
+| E1 | `bringup-e1-dataplane.json` | 13 / 42 / 3 | **PASS 37/37** | ready seed -> clean ctx_create -> RO `dp_probe` -> `dp_setup` + `dp_rings` (14 MAC writes + 8 device-RAM entries verified) -> ONE key-`0x0320` sync (`txq_addr_sent=1 ok=2 timeout=0`) -> mask/staging 0, page golden |
+| all | - | - | **boot PASS, C2 PASS, D1 PASS, D2 BLOCKED-DRIVER, E1 PASS** | one command, one box, bounded reboots between phases |
+
+| harness property | behaviour (commit `0394f80` and predecessors) | evidence |
+| --- | --- | --- |
+| between-phase reboot | `--reboot-between` (all but last) / `--reboot-after`: immediate `/sbin/reboot -f` in the background, accept "back" only after unreachable/backwards-uptime/fresh-uptime plus a confirming re-read; observed back after 61.5 s, uptime 46 s, `seen_down=1` | ledger 2026-11-26 05:30 |
+| bounds | every transport call clamped to the remaining budget; `--reboot-deadline` 300 s, `--reboot-poll` 4 s; child phases in killable process groups under a hard `--phase-timeout` (900 s default) - no orphan ssh/bench_session can survive the matrix | `wifi-bench-tooling/REPORT.md` sec 9.9 |
+| classification | real runs classified from the session summary + protocol evidence, not the exit code: PASS / STOP / FAIL / ERROR / BLOCKED / NOT-RUN; documented pending-feature evidence maps to BLOCKED-DRIVER with a reason | `wifi-bench-tooling/PHASES.md` |
+| capability probe | every attr/token a sequence touches must be a C string in the target module (>= 4 KiB real module), else the plan is refused before any bench time (`module-attr-missing` / `BLOCKED-TOKEN`) | `wifi-bench-tooling/REPORT.md` sec 9 |
+| device-free tests | `tools/selftest.py` **503/503** (v3 re-run); dry-run of all five phases PLAN-OK with no device contact | v3 re-run |
+| operator rules | `--yes-really --attended` only; host preflight (recovery door READY, UART capture, TFTP, single-session, ssh-host); no device writes outside the driver's one-shot attrs; UART stays read-only | project RUNBOOK/fire rules |
+
+**Reading the matrix.** A BLOCKED-DRIVER row is an honest statement that a documented feature is
+pending, not a failed run and never a pass; D2 is currently the only such row and it is exactly the
+scan-result wall of T27/REPORT 6.7. The matrix is the operator-visible state table for the whole
+wave: boot (transport), C2 (calibration), D1 (management interface), D2 (scan, blocked), E1 (data
+plane setup).
 

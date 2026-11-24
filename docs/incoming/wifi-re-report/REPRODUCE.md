@@ -36,8 +36,9 @@ $PY tools/verify_report.py
 ```
 
 Expected: a list of PASS lines (file presence, lane-path resolution, marker set, section coverage,
-claim-ID sequence, key-constant cross-checks against the owning lanes' committed sources, forbidden
-content scan) and a final PASS with the check count. Exit code 0 on success.
+claim-ID sequence, table/finding completeness, v3 milestone vocabulary, key-constant cross-checks
+against the owning lanes' committed sources and the superproject ledger, forbidden-content scan) and
+a final PASS with the check count. Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -65,7 +66,10 @@ $PY wifi-ctx-create/tools/ctx_create_re.py --selftest    # 40/40
 $PY wifi-ctx-create/tools/ctx_create_frame.py --selftest # 26/26
 $PY wifi-ctx-create/tools/ctx_create_re.py --trace       # handler -> key table -> create helper
 $PY wifi-ctx-create/tools/ctx_create_frame.py --frame    # the 48-byte create frame (TABLES T13 F4)
-$PY wifi-bench-tooling/tools/selftest.py            # 312/312, PASS (incl. protocol mode)
+$PY wifi-bench-tooling/tools/selftest.py            # 503/503, PASS (incl. protocol mode, phase matrix, blocked outcomes)
+cd $REPO/opensource/docs/incoming/wifi-vap-scan && ./tools/build.sh   # 137/137 PASS, byte-exact g0 id7/id8/id9/id0xC builders
+cd $REPO/opensource/docs/incoming/wifi-scan-ap && $PY tools/selftest.py   # 294/294 PASS, provider caps 0x1f + fail-closed defaults
+cd $REPO/opensource/docs/incoming/wifi-datapath-bringup && bash tools/build.sh  # 69/69 + 308/308 + 34/34, 6.18.60 module build (host-only; no device)
 $PY wifi-datapath/tools/build.sh                     # 77/77 PASS, frame builders + ring arithmetic
 $PY wifi-datapath/tools/fw_dp_tables.py --selftest   # 35/35 PASS, firmware key tables A/B
 bash wifi-proto-seq/tools/selftest.sh                # 66/66 + 38/38 + 55/55 PASS, calibration family
@@ -114,6 +118,9 @@ $PY wifi-irq-unmask/tools/pd3_re.py selftest                  # 15/15
 $PY wifi-irq-unmask/tools/pd4_re.py cave                     # the 0x108240 cave proof
 $PY wifi-bench-tooling/tools/fw_patch_builder.py --verify-manifest /tmp/hi5622-patched/manifest.json
 # the independent audit of PD4 (identity, delta, cave census, H1/H2, variants):
+# NOTE: the H1/H2 read-only pack itself was a bench (device-attended) read; its result is quoted
+# from the ledger 2026-11-25 21:30 and integrated in REPORT 6.6/F10 and TABLES T25. The host tools
+# re-verify the static prediction only.
 $PY wifi-fw-audit/tools/verify_pd4.py --selftest              # 14/14 PASS (no vendor blob needed)
 $PY wifi-fw-audit/tools/verify_pd4.py                         # 31 checks; reads the local pinned blob
 $PY wifi-fw-audit/tools/pd4_variants.py --selftest            # 14/14 PASS
@@ -139,6 +146,31 @@ $PY tools/bench_session.py --mode patched --dry-run \
 # only in an attended session, with the recovery door armed:
 #   $PY tools/bench_session.py --mode patched ...   (follow the printed plan step by step)
 ```
+
+The v3 bring-up matrix (REPORT 6.8, TABLES T28) is the operator entry point for the whole state
+table; it is dry-run by default and needs the attended/recovery gates for a real run:
+
+```sh
+cd $REPO/opensource/docs/incoming/wifi-bench-tooling
+$PY tools/phase_matrix.py --list-phases
+$PY tools/phase_matrix.py --phase all --dry-run \
+    --module ../wifi-h2d-send/src/hi5622_wifi.ko \
+    --module-for D1=../wifi-cfg80211/src/hi5622_wifi.ko \
+    --module-for D2=../wifi-cfg80211/src/hi5622_wifi.ko \
+    --module-for E1=../wifi-datapath-bringup/src/hi5622_wifi.ko \
+    --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
+    --fw-manifest /tmp/hi5622-patched/manifest.json \
+    --wifi-block-bin /tmp/blocks/wifi_block.bin \
+    --cfg80211-ko /path/cfg80211.ko --iw-bin /path/iw --libnl-tiny /path/libnl-tiny.so
+# attended only, recovery door armed:
+#   $PY tools/phase_matrix.py --phase all --reboot-between --yes-really --attended ...
+```
+
+The real-frame session (REPORT 6.7, TABLES T27) uses the cfg80211 mode with the scan-ap provider
+module (676,180 B sha256 `4a1c3b9a...`, caps 0x1f) and a small `allow_frames` budget (`N`) so the
+VAP `user_add`/`user_add_notify` and the 520 B scan request are posted; it must run after the C2
+ladder in the same boot and is attended-only. The single scan response wall (the per-radio VAP
+start object) means a second scan attempt without new evidence has no value.
 
 Mandatory rules (from the project, restated because violating them has cost recovery cycles):
 

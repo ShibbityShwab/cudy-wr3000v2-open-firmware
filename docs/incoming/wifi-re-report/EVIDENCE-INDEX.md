@@ -25,7 +25,7 @@ section of [REPORT.md](REPORT.md).
 | EV-005 | 1.2 | the route to that state requires the release-only boot protocol | [V]/[V*] | `wifi-rom-dump/REPORT.md` sec 6-7 | ledger 2026-11-24 10:00/10:40 | - |
 | EV-006 | 1.2 | the firmware IRQ/thread layer is not proven alive; the mailbox is serviced through the PD3/PD4 research patch | [V*] | `wifi-irq-unmask/REPORT-PD3.md` | ledger 2026-11-24 22:10 | - |
 | EV-007 | 1.2 | the ETE A->B copy is idle; the D2H path is the direct device-ring reader | [V*] | `wifi-d2h-direct/REPORT.md`, `wifi-ete-engine/REPORT.md` | ledger 2026-11-24 13:10 | - |
-| EV-008 | 1.2 | the Wi-Fi *operational* interface (firmware VAP/scan/association) and the MAC data path are not started; a cfg80211 management interface (wiphy + VAP netdev, M0/M1) now exists, and upstream remains blocked by the closed firmware | [I]/[V*] | `wifi-vendor-userspace/REPORT.md`, `wifi-driver-re/SUMMARY.md`, `wifi-cfg80211/REPORT.md` | ledger 2026-11-25 15:00 | - |
+| EV-008 | 1.2 | the Wi-Fi *operational* interface is partially started: a cfg80211 management interface (wiphy + VAP netdev, M0/M1) and the mailbox-layer firmware VAP (g0 id7/id8) exist and the scan request (g0 id0xC) is consumed; scan **results**, association and any frame TX/RX are not started; upstream remains blocked by the closed firmware | [I]/[V*] | `wifi-vendor-userspace/REPORT.md`, `wifi-cfg80211/REPORT.md`, `wifi-scan-ap/REPORT.md` | ledger 2026-11-25 15:00 - 2026-11-26 06:30 | - |
 | EV-009 | 1.3 | the eight-step breakthrough ladder and its dates | [V*] | this report sec 1.3; lanes named per row | ledger 2026-11-22..11-25 | - |
 | EV-010 | 1.4 | firmware 928,920 B sha256 7fc87e20... ; ROM content 2,073 B sha256 fcfd464f... | [V] | `wifi-firmware-re/REPORT.md`, `wifi-rom-dump/REPORT.md` sec 1 | - | - |
 | EV-011 | 1.4 | 60 H2D receive slots (41 group 0 incl. early 0x2F, 19 group 2) | [V] | `wifi-h2d-catalog/REPORT.md`, `wifi-h2d-frames/catalogue.md` | - | catalogue counts checked |
@@ -33,9 +33,15 @@ section of [REPORT.md](REPORT.md).
 | EV-126 | 1.1 | the v2 chain extends to the calibration answer and the wiphy/VAP interface | [V*] | `wifi-proto-seq/REPORT.md`, `wifi-cfg80211/REPORT.md` | ledger 2026-11-25 12:30/15:00 | - |
 | EV-127 | 1.2 | cfg80211 wiphy + VAP netdev lifecycle hardware-validated on our own image (M0/M1) | [V*] | `wifi-cfg80211/REPORT.md`, `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` | ledger 2026-11-25 15:00 | - |
 | EV-128 | 1.2 | ladder C1: 298 B calibration request consumed and a 298 B g1 id3 answer counted; answer body not captured | [V*] | `wifi-proto-seq/REPORT.md` sec 4-7, `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
-| EV-129 | 1.2 | the ETE DR host lever measured negative; the data plane is mapped but not implemented; upstream still blocked | [V*]/[I] | `wifi-ete-wake/REPORT.md`, `wifi-datapath/REPORT.md`, `wifi-upstream-target/REPORT.md` | ledger 2026-11-25 08:40/10:10 | - |
+| EV-129 | 1.2 | the ETE DR host lever measured negative; the data plane is mapped **and host-implemented with its TXQ address sync bench-accepted (E1)**, but no frame has moved; upstream still blocked | [V*]/[I] | `wifi-ete-wake/REPORT.md`, `wifi-datapath/REPORT.md`, `wifi-datapath-bringup/REPORT.md` | ledger 2026-11-25 10:10, 2026-11-26 03:00 | - |
 | EV-130 | 1.3 | the four additional 2026-11-25 breakthroughs of the v2 ladder (PD4 cave, ETE verdict, C1, wiphy/VAP) | [V*] | REPORT sec 1.3; lanes named per row | ledger 2026-11-25 02:10-15:00 | - |
 | EV-131 | 1.4 | v2 key numbers: image/module hashes, channel plan, C1 lengths, MAC ring geometry | [V]/[V*] | TABLES T21-T24 and the lanes they cite | ledger 2026-11-25 | constants cross-checked |
+| EV-196 | 1.1 | the v3 chain extends to the complete calibration boot, the real VAP/scan management frames, the data-plane E1 setup and the one-command matrix | [V*] | `wifi-proto-seq/REPORT.md`, `wifi-scan-ap/REPORT.md`, `wifi-datapath-bringup/REPORT.md`, TABLES T26-T28 | ledger 2026-11-25 16:30 - 2026-11-26 06:30 | - |
+| EV-197 | 1.1 | the firmware receives and consumes our hand-built VAP user_add/user_add_notify and the first scan request, but returns no scan results | [V*] | `wifi-vap-scan/REPORT.md`, `wifi-scan-ap/REPORT.md`, TABLES T27 | ledger 2026-11-26 04:30/06:30 | - |
+| EV-198 | 1.2 | firmware VAP/scan/AP control messages are partially proven: VAP add + notify + scan request delivered; per-radio VAP start, scan results and AP start remain open | [V*]/[U] | TABLES T27, `wifi-vap-scan/REPORT.md` sec 8 | ledger 2026-11-26 06:30 | - |
+| EV-199 | 1.2 | the MAC data path is host-set-up and TXQ-table-synced (E1 PASS), but no frame has traversed the rings | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build 69/69 + 308/308 + 34/34 |
+| EV-200 | 1.2 | one command runs the full matrix: boot/C2/D1/D2/E1 = PASS/PASS/PASS/BLOCKED-DRIVER/PASS | [V*] | `wifi-bench-tooling/PHASES.md`, TABLES T28 | ledger 2026-11-26 05:30 | - |
+| EV-201 | 1.3 | the four new breakthrough-ladder rungs (C2, H1, one-command matrix, real frames) and their key numbers | [V*]/[V] | REPORT sec 1.3/1.4; TABLES T23/T25/T26/T27/T28 | ledger 2026-11-25/26 | constants cross-checked |
 
 ## Section 2 - system map
 
@@ -109,8 +115,14 @@ section of [REPORT.md](REPORT.md).
 
 | EV-186 | 4 F10 | PD4 rebuilds byte-identically from the pinned blob: exactly 2 segments, 68 patched bytes, 59 differing byte positions, length unchanged 928,920 B | [V] | `wifi-fw-audit/REPORT.md` sec 2, `verify_pd4.py` (31 checks) | - | **yes** (harness re-run 31/31) |
 | EV-187 | 4 F10 | the stub's 637-byte cave has zero references (exhaustive Thumb census + ARM filtered scan), sits outside both boot memsets and the exception-staging frame | [V] | `wifi-fw-audit/REPORT.md` sec 4 | - | **yes** (harness re-run) |
-| EV-188 | 4 F10 | H1/H2: the sentinel field CPU `0x10C1B0` keeps its static `0x00118D68`; a 5-word read-only pack settles whether the dispatcher handlers ever execute | [V]/[U] | `wifi-fw-audit/REPORT.md` sec 5 | - | - |
+| EV-188 | 4 F10 | H1 confirmed by the 5-word read-only pack: sentinel field CPU `0x10C1B0` = static `0x00118D68`, live table CPU `0x118D68` all zero, ROM RAZ `0x2000` = 0 -> the dispatcher handlers never execute under PD4 | [V*] | `wifi-fw-audit/REPORT.md` sec 5, ledger 2026-11-25 21:30 | ledger 2026-11-25 21:30 | - |
 | EV-189 | 4 F10 | diagnostic variants PD4-NOSENT (`0bc1b3e8...`) and PD4-ALWAYS0 (`84e9cd95...`) are built/hashed; PD4-MIN/PD4-LITE specified; one-shot epilogue call rejected | [V] | `wifi-fw-audit/REPORT.md` sec 3, `pd4_variants.py` | - | **yes** (14/14 selftest) |
+| EV-202 | 4 F7 | C2 fired: six calibration messages (3502-3507) consumed in 0 polls and all six answered by 298 B g1 id3 (catalogue count 7, `last_total 0x012A`); automated C2 PASS 54/54 | [V*] | `wifi-proto-seq/REPORT.md` sec 7, `wifi-bench-tooling/PHASES.md`, TABLES T23 | ledger 2026-11-25 16:30/23:40 | - |
+| EV-203 | 4 F8 | the cfg80211 management interface later carries real VAP messages and the scan request; the per-radio VAP start object is still absent | [V*]/[I] | `wifi-scan-ap/REPORT.md`, TABLES T22/T27 | ledger 2026-11-26 04:30/06:30 | - |
+| EV-204 | 4 F9 | the frame plane is host-implemented (dp_probe/dp_setup/dp_rings/dp_txq_sync) and E1 PASS; no frame has been sent or received | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build re-run |
+| EV-205 | 4 F10 | H1 confirmed: sentinel pointer keeps static `0x00118D68`, live handler table all zero, so PD4 dispatches through the ROM zero table and its handlers never execute; duplex is non-mailbox | [V*]/[I] | ledger 2026-11-25 21:30, `wifi-fw-audit/REPORT.md` sec 5, TABLES T25 | ledger 2026-11-25 21:30 | - |
+| EV-206 | 4 F11 | the four management-frame builders recovered from firmware handlers: g0 id7 168->180 B, id8 168->180 B, id9 12->24 B, id0xC 508->520 B, with SR node word1s | [V] | `wifi-vap-scan/REPORT.md` sec 3, `recipes/frames.md`, TABLES T27 | - | v3 host build 137/137 |
+| EV-207 | 4 F11 | provider module 676,180 B sha256 `4a1c3b9a...` with caps `0x1f`: id7 commits the VAP, id8/id0xC consumed in 0 polls, scan yields no results -> VAP-start wall | [V]/[V*] | `wifi-scan-ap/BUILD-NOTES.md`, `wifi-scan-ap/REPORT.md`, TABLES T27 | ledger 2026-11-26 04:30/06:30 | v3 source selftest 294/294 |
 
 ## Section 5 - protocol reference
 
@@ -150,15 +162,26 @@ section of [REPORT.md](REPORT.md).
 | EV-150 | 6.3 | the flash went through stock's mtd to kernelb with a full-slot verify and the documented handover; stock pair A preserved | [V*] | `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 3, ledger 2026-11-25 15:00 | - | - |
 | EV-151 | 6.3 | cfg80211.ko + the clean driver loaded; one wiphy per endpoint; registration gated on the ready pair | [V*] | ledger 2026-11-25 15:00, `wifi-cfg80211/REPORT.md` sec 3 | - | - |
 | EV-152 | 6.3 | iw enumerates Wiphy phy0 and the nl80211 VAP wlan0 is created and deleted (/sys/class/ieee80211/phy0 exists) | [V*] | ledger 2026-11-25 15:00, `STATUS.md` 3k | - | - |
-| EV-153 | 6.3 | M0/M1 limits: no firmware VAP object, no scan/association/data path; cfg80211 config is bench-only | [V*]/[I] | `wifi-cfg80211/REPORT.md` sec 6/8, REPORT sec 10.1 | - | - |
+| EV-153 | 6.3 | M0/M1 limits at the v2 cut-off: no firmware VAP object, no scan/association/data path, cfg80211 config bench-only. v3 adds the mailbox-layer VAP and the accepted scan request; the per-radio VAP start and scan results remain open (v3 claims in section 6) | [V*]/[I] | `wifi-cfg80211/REPORT.md` sec 6/8, REPORT sec 10.1 | - | - |
 | EV-154 | 6.4 | two-plane model: MAC host-interface register map, TX/RX ring formats and the 217/88-slot key tables | [V] | `wifi-datapath/REPORT.md` sec 2/4/6/7 | - | datapath 77/77 + 35/35 |
-| EV-155 | 6.4 | data-plane bring-up order D0-D5 with a read-only B2 probe as the first bench step | [I]/[V*] | `wifi-datapath/REPORT.md` sec 9-10 | - | - |
+| EV-155 | 6.4 | data-plane bring-up order D0-D5 with a read-only B2 probe first; executed in v3 as B2a probe -> dp_setup -> TXQ address sync (E1 PASS) | [I]/[V*] | `wifi-datapath/REPORT.md` sec 9-10, `wifi-datapath-bringup/REPORT.md`, T26 | ledger 2026-11-26 03:00 | - |
 | EV-156 | 6.5 | the trigger chain: event 0x2E status bits 24-28 -> sending trigger 0xC625A; no image or vendor-host writer of status/send/doors | [V] | `wifi-ete-wake/REPORT.md` sec 2-3 | - | ete-wake 81/81 |
 | EV-157 | 6.5 | E1a/E1b negative on hardware: the +0x38 host lever left status/send/fills unmoved; direct read stays the supported RX path | [V*] | `wifi-ete-wake/REPORT.md` sec 8, ledger 2026-11-25 10:10 | - | - |
 | EV-158 | 6.5 | the SR (H2D) A->B copy runs normally while the DR direction is gated (the asymmetry that keeps H2D working) | [V*] | `wifi-ete-wake/REPORT.md` sec 6 | ledger 2026-11-24 15:10/22:10 | - |
 
 | EV-190 | 6.6 | the PD4 stub only reads out[0] CA `0x40039010` and calls the firmware wrapper `0x40294` -> dispatcher `0xC18AC`; every device write (ack/clear/doorbell/handler dispatch) is the firmware's own | [V] | `wifi-fw-audit/REPORT.md` sec 6 | - | - |
-| EV-191 | 6.6 | audit verdict: patching is required for the closed vendor blob as delivered, conditional only on the untested event-controller aperture experiment; not fundamental to the hardware; PD4 research-only (strong inference) | [I] | `wifi-fw-audit/REPORT.md` sec 7-10 | - | - |
+| EV-191 | 6.6 | audit verdict: patching is required for the closed vendor blob as delivered, conditional only on the untested event-controller aperture experiment; with H1 confirmed PD4 is a consume-only mailbox servicer (handlers never run), not fundamental to the hardware; PD4 research-only | [I]/[V*] | `wifi-fw-audit/REPORT.md` sec 7-10, ledger 2026-11-25 21:30 | ledger 2026-11-25 21:30 | - |
+| EV-208 | 6.2 | C2: all six calibration messages consumed in 0 polls; six 298 B g1 id3 answers (count 7, last_total 0x012A, last_len 298); mask 0, staging 0, page golden, ok=8 timeout=0; automated 54/54 | [V*] | TABLES T23, `wifi-proto-seq/REPORT.md` sec 7, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-25 16:30/23:40 | - |
+| EV-209 | 6.4 | E1 PASS 37/37: dp_probe one RO read, dp_setup (rings + 8 MSDU entries + 14 MAC writes with read-back), dp_rings snapshots, TXQ sync accepted (`txq_addr_sent=1 ok=2 timeout=0`); module 462,952 B sha256 `8fc693ad...` | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 kernel build + 69/69 + 34/34 |
+| EV-210 | 6.6 | H1 pack detail: CPU `0x10C1B0` = `0x00118D68`, CPU `0x118D68` all zero at 2 s and 48 s, ROM RAZ `0x2000` = 0, sanity anchor CPU `0x40000` = `0x00046971`; PD4-ALWAYS0 should behave identically, PD4-NOSENT would enter the empty table | [V*] | ledger 2026-11-25 21:30, `wifi-fw-audit/REPORT.md` sec 5, TABLES T25 | ledger 2026-11-25 21:30 | - |
+| EV-211 | 6.7 | real-frame operational record: user_add (slot 2, devva `0x8417c000`, producer 2->3, posted 1/8), user_add_notify (posted 2/8), scan_req (slot 4, devva `0x8371f000`, producer 4->5, posted 3/8), all consumed in 0 polls | [V*] | TABLES T27, ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
+| EV-212 | 6.7 | the firmware scan handler CA `0x6494C` reads VAP id 0 and needs the per-radio VAP started; no D2H scan events arrived, the scan completed aborted (results=0, timeout=1) and `iw` said "scan aborted!" | [V]/[V*]/[U] | `wifi-vap-scan/REPORT.md` sec 3.4, TABLES T27, ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
+| EV-213 | 6.8 | one-command matrix result: boot PASS, C2 PASS 54/54, D1 PASS 21/21, D2 BLOCKED-DRIVER, E1 PASS 37/37 with per-phase evidence and bounded reboots | [V*] | `wifi-bench-tooling/PHASES.md`, TABLES T28 | ledger 2026-11-26 05:30 | - |
+| EV-214 | 6.8 | bounded reboot orchestration: immediate `/sbin/reboot -f` background, every transport call budget-clamped, `[reboot]` progress, observed back after 61.5 s (uptime 46 s, seen_down=1), killable phase process groups under `--phase-timeout` | [V*] | `wifi-bench-tooling/REPORT.md` sec 9.9, ledger 2026-11-26 05:30 | ledger 2026-11-26 05:30 | - |
+| EV-215 | 6.8 | the bench-tooling device-free selftest is 503/503 in v3 (was 312 in v2) | [V] | `wifi-bench-tooling/tools/selftest.py` | - | **yes** (v3 re-run 503/503) |
+| EV-216 | 6.7 | provider facts: module 676,180 B sha256 `4a1c3b9a...`, caps `0x1f`, `frame_gap_ms` 20, `allow_frames` default 0 (fail-closed), 0 compiler/modpost warnings | [V] | `wifi-scan-ap/BUILD-NOTES.md`, `wifi-scan-ap/REPORT.md` | - | v3 source selftest 294/294 |
+| EV-217 | 6.7 | state after the real-frame session: golden page `0x86807FEF/7/2/0xABCD`, state 1, mask 0, staging 0, heartbeats continuing, no exception, stock pair preserved | [V*] | ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
+| EV-218 | 6.4 | data-plane [U] remainders: no frame traversed, RX completion ring/descriptor format unconsumed, rings assume user index 0, TX entry encoder/20 B descriptor untested on hardware, band 1 untouched | [U]/[I] | `wifi-datapath-bringup/REPORT.md` sec 4, TABLES T26 | - | - |
 
 ## Section 7 - bench evidence chain
 
@@ -199,6 +222,15 @@ section of [REPORT.md](REPORT.md).
 | EV-165 | 7 | 2026-11-25 12:30 - ladder C1: the firmware answers the first calibration message | [V*] | `wifi-h2d-send/REPORT.md` sec 13 | ledger 2026-11-25 12:30 | - |
 | EV-166 | 7 | 2026-11-25 13:30 - wave-2 lanes and the target build all delivered (image/slice hashes recorded) | [V] | `wifi-upstream-target/BUILD-VERIFICATION.md` | ledger 2026-11-25 13:30 | - |
 | EV-167 | 7 | 2026-11-25 15:00 - first real Wi-Fi interface on our own image (wiphy + VAP, M0/M1) | [V*] | `wifi-cfg80211/REPORT.md`, T21/T22 | ledger 2026-11-25 15:00 | - |
+| EV-219 | 7 | 2026-11-25 16:30 - ladder C2: all six calibration messages answered (six 298 B g1 id3), calibration boot complete | [V*] | `wifi-proto-seq/REPORT.md`, TABLES T23 | ledger 2026-11-25 16:30 | - |
+| EV-220 | 7 | 2026-11-25 18:30/19:30 - scan-ap fail-closed module bench-validated; VAP-scan builders, data-plane host side, image integration and provider integration land host-side | [V]/[V*] | lane reports; ledger 2026-11-25 18:30/19:30 | ledger 2026-11-25 18:30/19:30 | - |
+| EV-221 | 7 | 2026-11-25 21:30 - H1/H2 decisive read-only pack: PD4 consume-only, handlers never execute; duplex is non-mailbox | [V*] | ledger 2026-11-25 21:30, `wifi-fw-audit/REPORT.md` sec 5 | ledger 2026-11-25 21:30 | - |
+| EV-222 | 7 | 2026-11-25 23:40 - first fully automated bench phase PASS (C2, 54/54, 7.02 s) | [V*] | `wifi-bench-tooling/REPORT.md`, ledger | ledger 2026-11-25 23:40 | - |
+| EV-223 | 7 | 2026-11-26 03:00 - automated matrix per-phase: C2 PASS, D1 PASS, E1 PASS, D2 documented BLOCKED-DRIVER | [V*] | ledger 2026-11-26 03:00, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-26 03:00 | - |
+| EV-224 | 7 | 2026-11-26 04:30 - first real firmware management message (g0 id7 user_add 180 B consumed, VAP committed); gaps: id8 inflight refusal, scan caps 0x1d vs 0x3 | [V*] | ledger 2026-11-26 04:30, `wifi-scan-ap/REPORT.md` sec 3.1 | ledger 2026-11-26 04:30 | - |
+| EV-225 | 7 | 2026-11-26 05:30 - one-command full matrix complete with bounded reboot orchestration | [V*] | ledger 2026-11-26 05:30, TABLES T28 | ledger 2026-11-26 05:30 | - |
+| EV-226 | 7 | 2026-11-26 06:30 - three real frames (user_add, user_add_notify, first scan request) consumed in 0 polls; no scan results within 5 s -> scan aborted; VAP-start hypothesis | [V*] | ledger 2026-11-26 06:30, TABLES T27 | ledger 2026-11-26 06:30 | - |
+| EV-227 | 7 | end-of-chain state 2026-11-26 06:30: cfg80211 bench image on pair B, boot/C2/D1/E1 PASS in one command, D2 BLOCKED-DRIVER, no pending writes, stock pair preserved | [V*] | ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
 
 ## Section 8 - corrections register
 
@@ -232,6 +264,11 @@ section of [REPORT.md](REPORT.md).
 
 | EV-192 | 8 | C27: the event-raise helper targets CA `0x40161188`/`0x40161288` for event 0x4C (not `0x401611A0`) | [V] | `wifi-fw-audit/REPORT.md` sec 13 C1, C27 in REPORT | - | - |
 | EV-193 | 8 | C28: the vendor "twin/ack word" is simply the out[2] doorbell OR-1; no extra host register needs writing | [V] | `wifi-fw-audit/REPORT.md` sec 13 C2, C28 in REPORT | - | - |
+| EV-228 | 8 | C29: the assumption that PD4 dispatches through the real handler table is refuted; H1 confirms the consume-only branch, so the duplex path is non-mailbox | [V*]/[I] | H1 pack ledger 2026-11-25 21:30, REPORT C29/T25 | ledger 2026-11-25 21:30 | - |
+| EV-229 | 8 | C30: "C2 is the next open sequence" is superseded - C2 ran and all six messages were answered; automated C2 PASS 54/54 | [V*] | ledger 2026-11-25 16:30/23:40, TABLES T23 | ledger 2026-11-25 16:30/23:40 | - |
+| EV-230 | 8 | C31: the payload structs are no longer an absolute wall - byte-exact builders were accepted by the firmware (id7 commit, id8/id0xC consumed); remaining [U] fields did not block acceptance | [V]/[V*] | `wifi-vap-scan/REPORT.md`, TABLES T27, ledger 2026-11-26 | ledger 2026-11-26 04:30/06:30 | - |
+| EV-231 | 8 | C32: "data plane mapped only / TXQ sync not fired" is superseded - host implementation + E1 PASS, TXQ sync accepted; still no frame moved | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build re-run |
+| EV-232 | 8 | C33: a delivered scan request alone does not produce results; the per-radio VAP must be started (scan handler reads VAP id 0) | [V]/[V*]/[U] | firmware handler decode + scan attempt, TABLES T27 | ledger 2026-11-26 06:30 | - |
 
 ## Section 9 - verification
 
@@ -252,12 +289,17 @@ section of [REPORT.md](REPORT.md).
 
 | EV-194 | 9.1 | the audit harness was re-run in this revision: verify_pd4 14/14 selftest + 31/31 checks; pd4_variants 14/14 | [V] | `wifi-fw-audit/tools/verify_pd4.py`, `pd4_variants.py` | - | **yes** (this pass) |
 | EV-195 | 11 | the audit deliverable is a patch recipe + verifier + derived analysis; the patched image and vendor blob stay local (no vendor bytes committed) | [V] | `wifi-fw-audit/README.md` sec publication, `wifi-fw-audit/recipes/PD4.recipe.json` | - | - |
+| EV-233 | 9.1 | v3 re-ran the host-only lane checks: bench-tooling 503/503, vap-scan 137/137, scan-ap source 294/294, fw-audit 14/14 + 14/14, datapath-bringup 69/69 + 308/308 + 34/34 | [V] | the lanes' committed selftest entry points | - | **yes** (v3) |
+| EV-234 | 9.1 | v3 compile-verified the data-plane module against the project 6.18.60 tree: 462,952 B sha256 `8fc693ad...`, vermagic 6.18.60, 0 compiler/modpost warnings, 13 dp symbols | [V] | `wifi-datapath-bringup/tools/build.sh`, v3 build log | - | **yes** (v3 build) |
+| EV-235 | 9.4 | the verifier was extended for v3: section 6.1-6.8, findings F1-F11, tables T1-T28, the v3 evidence range and the v3 milestone vocabulary/constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
+| EV-236 | 9.4 | v3 constants cross-checked against the owning lanes and ledger: `4a1c3b9a`/caps 0x1f, 180/180/520 B, `8fc693ad`/key 0x0320, 503 checks, H1 pack values | [V] | the lanes named per check, superproject ledger | - | **yes** (verifier) |
+| EV-237 | 9.3 | the bench-ladder map now includes the C2/D1/D2/E1 phases and the one-command matrix; every real run is attended and recovery-gated | [V*] | TABLES T28, `wifi-bench-tooling/README.md` | ledger 2026-11-26 05:30 | - |
 
 ## Sections 10-13 - limits, publication, lane map, conventions
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
 | --- | --- | --- | --- | --- | --- | --- |
-| EV-118 | 10 | the result is message-level plus management-level, not link-level: the wiphy/VAP netdev lifecycle works (M0/M1) but there is no firmware VAP object, no scan/association result and no data path | [I]/[V*] | `wifi-vendor-userspace/REPORT.md` sec 7, `wifi-cfg80211/REPORT.md` sec 6/8 | ledger 2026-11-25 15:00 | - |
+| EV-118 | 10 | the result is message-level + management-level + real-request-level, not link-level: wiphy/VAP netdev lifecycle and mailbox-layer VAP frames work, but no per-radio VAP is started, no scan/association result exists and no frame has moved | [I]/[V*] | `wifi-scan-ap/REPORT.md`, `wifi-vap-scan/REPORT.md`, `wifi-cfg80211/REPORT.md` sec 6/8 | ledger 2026-11-25 15:00 - 2026-11-26 06:30 | - |
 | EV-119 | 10 | the firmware IRQ/thread layer remains dormant; PD3 bypasses only the mailbox | [V]/[V*] | `wifi-fw-link-event/REPORT.md`, `wifi-irq-unmask/REPORT.md` | 2026-11-24 | - |
 | EV-120 | 10 | the context-create frame is synthesized, not vendor-captured; key-0x64 sender unproven | [I] | `wifi-ctx-create/REPORT.md` sec 6/11 | - | - |
 | EV-121 | 10 | open questions re-ranked for v2 (VAP/scan payload structs, MAC data-plane bring-up, calibration body capture, vendor-clean mailbox delivery, IRQ layer, CECE service, DR start condition) | [I]/[U] | this report sec 10.2 | - | - |
@@ -265,11 +307,18 @@ section of [REPORT.md](REPORT.md).
 | EV-123 | 11 | upstream Wi-Fi stack remains blocked by the closed firmware; GPL source is the route | [V] | `wifi-driver-re/SUMMARY.md`, `opensource/docs/GPL-REQUEST.md` | - | - |
 | EV-124 | 12 | the lane documentation map matches the directories present under `opensource/docs/incoming/` | [V] | the directory listing itself | - | **yes** (verifier checks) |
 | EV-125 | 13 | conventions and glossary terms as used throughout | [V] | this report sec 13 | - | - |
-| EV-181 | 10 | limits updated: M0/M1 management only; firmware VAP/scan/data path open; ETE DR closed; calibration body not captured | [V*]/[I] | REPORT sec 10.1 | - | - |
-| EV-182 | 10.2 | open questions re-ranked around the VAP/scan payloads, data plane, calibration body and vendor-clean delivery | [I]/[U] | REPORT sec 10.2 | - | - |
+| EV-181 | 10 | v3 limits: real-request-level (not link-level); H1 consume-only PD4; data plane host-set-up and E1-PASS but frame-moving unproven; D2 BLOCKED-DRIVER; ETE DR closed; calibration bodies not captured | [V*]/[I] | REPORT sec 10.1, T26/T28 | - | - |
+| EV-182 | 10.2 | v3 open questions re-ranked: (1) what starts the per-radio VAP, (2) first frame on the rings, (3) calibration-body/scan-field captures, (4) IRQ layer/vendor-clean delivery, then CECE/g2/join/D2H/DR/event-trigger | [I]/[U] | REPORT sec 10.2 | - | - |
 | EV-183 | 11 | the cfg80211 bench image is a research instrument, not an upstream deliverable or release | [V] | `wifi-upstream-target/REPORT.md` sec 9/12 | - | - |
 | EV-184 | 12 | the lane documentation map now covers the wave-2/3 lanes and the fw-audit lane | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
 | EV-185 | 13 | the glossary gained the cfg80211/MAC-plane/calibration vocabulary | [V] | REPORT sec 13 | - | - |
+| EV-238 | 10 | v3 limits updated: real-request-level not link-level; H1 consume-only PD4; data plane host-set-up but no frame; D2 BLOCKED-DRIVER; no per-radio VAP start | [V*]/[I] | REPORT sec 10.1, TABLES T26/T28 | - | - |
+| EV-239 | 10.2 | v3 open questions re-ranked: (1) what starts the per-radio VAP, (2) first frame on the rings, (3) calibration-body/scan-field capture, (4) IRQ layer/vendor-clean delivery, then CECE/g2/join/D2H/DR/event-trigger | [U]/[I] | REPORT sec 10.2 | - | - |
+| EV-240 | 10.1 | D2 BLOCKED-DRIVER is an honest pending-feature outcome, never "scan works"; the row flips to PASS only when the scan path returns a real result | [V*] | TABLES T28, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-26 05:30 | - |
+| EV-241 | 11 | the cfg80211 bench image and the phase matrix are bench instruments, not releases; real frames and phase runs are attended-only | [V] | REPORT sec 11, `wifi-bench-tooling/README.md` | - | - |
+| EV-242 | 11 | PD4 remains research-only: H1 confirms it is a consume-only servicer, no vendor-clean mailbox alternative is proven, and it must never ship | [V*]/[I] | REPORT sec 11, `wifi-fw-audit/REPORT.md` | ledger 2026-11-25 21:30 | - |
+| EV-243 | 12 | the lane documentation map now covers wifi-vap-scan, wifi-scan-ap and wifi-datapath-bringup, and the updated bench-tooling/fw-audit roles | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
+| EV-244 | 13 | the glossary gained C2/provider-caps/user_add/scan_req/VAP-start/phase-matrix/dp_*/H1 terms | [V] | REPORT sec 13 | - | - |
 
 
 ---
