@@ -34,7 +34,7 @@ performs after the ready handshake.
 first air-TX/RX ladder and is deliberately **not** a phase-matrix row yet: its
 module is the lane artifact `opensource/docs/incoming/wifi-dp-air` (the
 mode-1 provider **merged with** the E1 data plane + the wifi-dp-txrx actions,
-module 884,576 B sha256 ec74fccd...), not a pinned phase dependency. It runs
+module revision 2: 886,864 B sha256 ca32aec4...), not a pinned phase dependency. It runs
 through the same `bench_session.py --mode protocol --sequence ...` path after
 the normal boot ladder: ctx_create t1 -> txq_sync72 -> iw iface add -> link up
 -> ONE iw scan (the provider's mode-1 VAP create + the radio channel = the
@@ -338,7 +338,7 @@ matrix dry-runs (PLAN-OK vs BLOCKED-PREREQ).
 | --- | --- |
 | sequence | `bringup-f-air-txrx.json` sha256 **96354365867beaedeb77c001fed31a2afdb0d4d2edb949cd898fab2fcc8342f6** |
 | F-AIR row | **PLAN-OK** - 30 steps / 83 checks / 7 device writes / 4 shell actions; dry-run generated script audit PASS, no refused step |
-| merged module | `opensource/docs/incoming/wifi-dp-air/src` build: **884,576 B** sha256 **ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3** (base provider 748,888 B b42ff4ec...; 0 warnings; vermagic 6.18.60) |
+| merged module | `opensource/docs/incoming/wifi-dp-air/src` build (**revision 2**): **886,864 B** sha256 **ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0** (base provider 748,888 B b42ff4ec...; 0 warnings; vermagic 6.18.60) |
 | sequence load_params | allow_frames=12, frame_gap_ms=100, h2d_send_budget=4, vap_start_first=1, vap_start_mode=1, vap_start_module=0 (budget_min=3) |
 | allowlist | `dp_tx_frame`, `dp_tx_status`, `dp_rx_poll`, `dp_rx_capture` in DP_ATTRS; `dp_tx_frame`/`dp_rx_poll` in DP_WO_ATTRS; write-readback `dp_tx_frame->dp_tx_status`, `dp_rx_poll->dp_rx_capture`; payload-policy branches: selector 1..4 / one-shot `1` (exact stores only) |
 | dry-run | `bench_session.py --mode cfg80211 --sequence .../bringup-f-air-txrx.json --module <merged .ko> ... --dry-run` -> plan renders 14 attr stores, 4 shell actions, 1 insmod, 1 host-run; `sh -n` + static write audit PASS; no device contacted |

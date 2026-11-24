@@ -19,10 +19,14 @@ data-plane frame can exist in the same module load.
   portable TX/RX logic and its four sysfs actions (dp_tx_frame /
   dp_tx_status / dp_rx_poll / dp_rx_capture) + the g0 id1 key-0x0320
   TXQ-table address sync post path.
-* **Artifact (canonical build):** `hi5622_wifi.ko` **884,576 B** sha256
-  **ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3**,
+* **Artifact (canonical build, revision 2 after the 2026-11-26 air-TX fire):**
+  `hi5622_wifi.ko` **886,864 B** sha256
+  **ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0**,
   vermagic 6.18.60, 0 compiler/modpost warnings (BUILD-NOTES.md records the
-  exact build line; the .ko sha is build-path dependent).
+  exact build line; the .ko sha is build-path dependent). Revision 2 makes
+  `dp_probe` accept BOTH `cat dp_probe` and `echo 1 > dp_probe` (the same one
+  read-only MAC word read) and gives the missing-probe refusal its own
+  `probe_read_required` gate name + explicit hint.
 
 | file | contents |
 | --- | --- |

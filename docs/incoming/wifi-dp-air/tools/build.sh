@@ -190,6 +190,10 @@ grep -q 'dp_tx_frame' "$SRC/hi5622_dp.c" || die "dp_tx_frame attr missing"
 grep -q 'dp_rx_capture' "$SRC/hi5622_dp.c" || die "dp_rx_capture attr missing"
 grep -q 'txq_addr_sent' "$SRC/h2d_send.c" || die "hand-off status missing"
 grep -q 'hi5622_dp_txrx_bind' "$SRC/hi5622_dp.c" || die "txrx bind missing"
+grep -q 'static DEVICE_ATTR(dp_probe, 0644, dp_probe_show, dp_probe_store)' \
+	"$SRC/hi5622_dp.c" || die "dp_probe dual read/write-1 attribute missing"
+grep -q 'probe_read_required' "$SRC/hi5622_dp.c" || die "probe gate name missing"
+grep -q 'dp_probe is ONE read-only MAC word' "$SRC/hi5622_dp.c" || die "dp_status probe hint missing"
 for f in "$SRC/dp_txrx.c" "$SRC/hi5622_dp_txrx.c" \
 	 "$SRC/hi5622_dp_txrx.h" "$HERE/merged_selftest.c"; do
 	head -1 "$f" | grep -q 'SPDX-License-Identifier: GPL-2.0' ||

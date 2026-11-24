@@ -44,7 +44,8 @@ Purpose: settle the region-3 window question recorded in wifi-datapath REPORT
 open item 4 (an earlier lane bus-errored reading BAR0 0x402a004 while the
 declared window covers CA 0x4004xxxx).
 
-    echo 1 > /sys/.../dp_probe      # or: cat /sys/.../dp_probe
+    cat /sys/.../dp_probe           # dp_probe is a READ-ONLY attribute (0444):
+                                    # cat it; a write is refused and never sets probe_ok
     read the attr output
 
 | observation | meaning | next |

@@ -29,10 +29,10 @@ builds that merged module and the first air-TX/RX ladder on top of it.
 | --- | --- |
 | base | `../wifi-scan-complete/src` - the provider tree, 47 source files |
 | lane source | `src/` - 55 source files (47 unchanged + 8 added) |
-| merge patch | `patches/0001-merge-dp-txrx-into-provider.patch`, 139,848 B, sha256 254148c3... |
+| merge patch | `patches/0001-merge-dp-txrx-into-provider.patch`, 142,595 B sha256 084c2d34... (revision 2) |
 | changed/added files | exactly 16 (8 added + 8 modified), enforced by tools/verify_merge.py |
-| module | **884,576 B** sha256 ec74fccd... (canonical build path in BUILD-NOTES.md) |
-| provider delta | +135,688 B over the 748,888 B provider module (data-plane objects + their debug info); the provider code itself is unchanged |
+| module | **886,864 B** sha256 ca32aec4... (canonical build path in BUILD-NOTES.md; revision 2 adds the dp_probe dual read/write-1 form + clearer probe-gate refusals) |
+| provider delta | +137,976 B over the 748,888 B provider module (data-plane objects + their debug info); the provider code itself is unchanged |
 
 The merge is reproducible and drift-checked: tools/verify_merge.py regenerates
 the patch from (base -> src), compares it byte-for-byte with the committed
@@ -44,7 +44,7 @@ every resulting file with `src/`. tools/build.sh runs it first.
 | file | origin | role |
 | --- | --- | --- |
 | dp_rings.c / dp_rings.h | wifi-datapath-bringup | portable E1 ring geometry, device-RAM MSDU-info table arithmetic, MAC slot-5 register program vendored into the provider build unchanged |
-| hi5622_dp.c / hi5622_dp.h | wifi-datapath-bringup | E1 host-side data plane: dp_probe (RO one-word MAC reachability read), dp_setup (ONE ring-allocation + device-RAM table + MAC band-0 program with read-back), dp_txq_sync (key-0x0320 hand-off), dp_status/dp_rings (RO evidence). `hi5622_dp.c` additionally carries the wifi-dp-txrx patch hunks: a `hi5622_dp_txrx_bind()` call at the end of a successful dp_setup, `hi5622_dp_txrx_release()` on failure and in dp_remove, and the four txrx device attributes inside the existing dp attribute group |
+| hi5622_dp.c / hi5622_dp.h | wifi-datapath-bringup | E1 host-side data plane: dp_probe (one READ-ONLY word MAC reachability read), dp_setup (ONE ring-allocation + device-RAM table + MAC band-0 program with read-back), dp_txq_sync (key-0x0320 hand-off), dp_status/dp_rings (RO evidence). `hi5622_dp.c` additionally carries the wifi-dp-txrx patch hunks (a `hi5622_dp_txrx_bind()` call at the end of a successful dp_setup, `hi5622_dp_txrx_release()` on failure and in dp_remove, and the four txrx device attributes inside the existing dp attribute group) **and the revision-2 probe-gate UX fix** (see section 8) |
 | dp_txrx.c / dp_txrx.h | wifi-dp-txrx | portable, host-tested TX/RX logic: 8-B MSDU-info ring entry encode/decode, 12-B device-RAM table entry pack/publish fields, packed ring index arithmetic, 802.11 probe-request/null-data/QoS-null/ARP builders + FC mapping, [owner][16-B zero][MPDU] frame-buffer layout, RX 0x28-B descriptor parser + bounded capture |
 | hi5622_dp_txrx.c / hi5622_dp_txrx.h | wifi-dp-txrx | kernel extension: one coherent TX frame buffer, dp_tx_frame (WO: first MAC data-plane TX post + device-RAM wptr publish + read-back), dp_tx_status (RO), dp_rx_poll (WO: ONE bounded read-only RX capture action), dp_rx_capture (RO); gates on the E1 setup + this load's 0x0320 sync |
 
@@ -95,6 +95,22 @@ provider symvers still declares exactly the 9 imported symbols.
 * **RX consume/repost** stays disabled (capture-only, no ring pointer moved):
   the RX completion-word format is still [U]; see ../wifi-dp-txrx/REPORT.md 4.4.
 * **Band 1** is not programmed (same as E1); every MAC write is band 0 only.
+
+## 8. Revision history
+
+* **revision 1** (2026-11-26, commit a615a8c): first merge; module 884,576 B
+  sha256 ec74fccd...; patch 139,848 B sha256 254148c3...
+* **revision 2** (2026-11-26, after the air-TX fire): module 886,864 B sha256
+  ca32aec4...; patch 142,595 B sha256 084c2d34.... Changes are limited to
+  `hi5622_dp.c`: `dp_probe` now accepts BOTH `cat dp_probe` and
+  `echo 1 > dp_probe` (the write-1 form runs the same single read-only MAC
+  word read; never a device write) and the missing-probe setup refusal returns
+  -ENODATA with the gate name `probe_read_required` plus an explicit
+  "cat dp_probe first" warning; dp_txq_sync's not-set-up refusal prints the
+  full attr order. Gate semantics are unchanged (a `dp_setup` still requires
+  this load's probe read, ctx_create, ready phase and boot gates). The
+  revision-1 artifact remains ladder-correct as long as `dp_probe` is read
+  with `cat`.
 
 ## 7. Verification map
 

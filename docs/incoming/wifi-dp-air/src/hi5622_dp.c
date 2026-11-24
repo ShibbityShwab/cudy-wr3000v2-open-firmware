@@ -505,6 +505,7 @@ static const char *dp_gate_name(int rc)
     case -ENODEV:   return "no_hcc_service";
     case -EBUSY:    return "not_armed_or_not_released";
     case -EPERM:    return "phase_or_ctx_gate";
+    case -ENODATA:  return "probe_read_required";
     case -EALREADY: return "already_done";
     case -EIO:      return "device_write_failed";
     default:        return "error";
@@ -532,20 +533,29 @@ static int dp_gate_setup(struct hi5622_pci *ctx, bool probe_required)
         return -EPERM;
     if (!h->h2d_ctx_create_sent)
         return -EPERM;
+    /* The MAC reachability read is an explicit attended step of the ladder:
+     * no MAC/device-RAM write may happen until THIS load has performed it.
+     * -ENODATA has its own gate name so the refusal is self-explanatory
+     * (dp_probe is a read: 'cat dp_probe' or 'echo 1 > dp_probe' run it). */
     if (probe_required && !ctx->dp->probe_ok)
-        return -EPERM;
+        return -ENODATA;
     return 0;
 }
 
 /* ------------------------------------------------------------------ */
-/* sysfs: dp_probe (read-only single MAC word)                        */
+/* sysfs: dp_probe (ONE read-only MAC word; the setup prerequisite)    */
 /* ------------------------------------------------------------------ */
-static ssize_t dp_probe_show(struct device *dev, struct device_attribute *attr,
-                             char *buf)
+/* The one access this action performs.  Shared by the show handler and the
+ * write-1 convenience store handler so both spellings ('cat dp_probe' and
+ * 'echo 1 > dp_probe') run the exact same single read and set the same
+ * evidence fields (probe_ok / probe_value / probe_bar0).  It NEVER writes the
+ * device: the store only means "run the read".  This closes the operator trap
+ * that cost the 2026-11-26 air-TX fire (writing a RO attribute returned an
+ * error and silently left probe_ok=0, so dp_setup failed closed). */
+static int dp_probe_run(struct hi5622_pci *ctx, u32 *value)
 {
-    struct hi5622_pci *ctx = dp_ctx(dev);
     struct hi5622_dp *dp;
-    u32 bar0, val;
+    u32 bar0;
 
     if (!ctx || !ctx->dp)
         return -ENODEV;
@@ -555,15 +565,55 @@ static ssize_t dp_probe_show(struct device *dev, struct device_attribute *attr,
     bar0 = dp_ca_bar0(ctx, DP_MAC_CA_BAND0 + DP_MAC_REG_TXBA_DEPTH);
     if (!bar0)
         return -EFAULT;
-    val = readl(ctx->bar0 + bar0);
     dp->probe_bar0 = bar0;
-    dp->probe_value = val;
+    dp->probe_value = readl(ctx->bar0 + bar0);
     dp->probe_ok = true;
-    return scnprintf(buf, PAGE_SIZE,
-                     "dp_probe: MAC band0 CA 0x%08x+0x%02x -> BAR0 0x%x = 0x%08x (read-only; vendor boot 0x00000100 expected, 0/other = record; dp_setup now allowed)\n",
-                     DP_MAC_CA_BAND0, DP_MAC_REG_TXBA_DEPTH, bar0, val);
+    if (value)
+        *value = dp->probe_value;
+    return 0;
 }
-static DEVICE_ATTR_RO(dp_probe);
+
+static ssize_t dp_probe_show(struct device *dev, struct device_attribute *attr,
+                             char *buf)
+{
+    struct hi5622_pci *ctx = dp_ctx(dev);
+    u32 val = 0;
+    int rc;
+
+    rc = dp_probe_run(ctx, &val);
+    if (rc)
+        return rc;
+    return scnprintf(buf, PAGE_SIZE,
+                     "dp_probe: MAC band0 CA 0x%08x+0x%02x -> BAR0 0x%x = 0x%08x (one READ-ONLY word read: 'cat dp_probe' or 'echo 1 > dp_probe' run it; vendor boot 0x00000100 expected, 0/other = record; probe_ok=1, dp_setup now allowed)\n",
+                     DP_MAC_CA_BAND0, DP_MAC_REG_TXBA_DEPTH,
+                     ctx->dp->probe_bar0, val);
+}
+
+/* Write-1 convenience form: runs the same single read-only access.  The value
+ * written is ignored except that it must be '1' (one idea, one action). */
+static ssize_t dp_probe_store(struct device *dev, struct device_attribute *attr,
+                              const char *buf, size_t count)
+{
+    struct hi5622_pci *ctx = dp_ctx(dev);
+    u32 val = 0;
+    int rc;
+
+    (void)attr;
+    if (!sysfs_streq(buf, "1"))
+        return -EINVAL;
+    rc = dp_probe_run(ctx, &val);
+    if (rc) {
+        dev_warn(dev,
+                 "DP probe: refused (%d) - no device write; needs windows programmed + hcc armed\n",
+                 rc);
+        return rc;
+    }
+    dev_info(dev,
+             "DP probe: MAC band0 word 0x%08x read (write-1 convenience form; same read-only access as 'cat dp_probe'; probe_ok=1, dp_setup now allowed)\n",
+             val);
+    return (ssize_t)count;
+}
+static DEVICE_ATTR(dp_probe, 0644, dp_probe_show, dp_probe_store);
 
 /* ------------------------------------------------------------------ */
 /* sysfs: dp_setup (one shot; the only MAC-program action)            */
@@ -589,6 +639,9 @@ static ssize_t dp_setup_store(struct device *dev, struct device_attribute *attr,
                  hcc_phase_name(ctx->hcc->hcc.core.phase),
                  ctx->hcc->h2d_ctx_create_sent ? 1u : 0u,
                  dp->probe_ok ? 1u : 0u);
+        if (rc == -ENODATA)
+            dev_warn(dev,
+                     "DP setup: the read-only MAC reachability probe has not run in this module load - run 'cat dp_probe' (or 'echo 1 > dp_probe': same single read-only access) BEFORE dp_setup; no device write performed\n");
         return rc;
     }
     mutex_lock(&dp->lock);
@@ -695,7 +748,8 @@ static ssize_t dp_txq_sync_store(struct device *dev,
         return -EINVAL;
     dp = ctx->dp;
     if (dp->failed || !dp->setup_done) {
-        dev_warn(dev, "DP txq_sync: refused - dp_setup has not succeeded for this module load\n");
+        dev_warn(dev,
+                 "DP txq_sync: refused - dp_setup has not succeeded for this module load (sequence: cat dp_probe -> echo 1 > dp_setup -> echo 1 > h2d_txq_addr_sync)\n");
         return -EPERM;
     }
     if (dp->txq_sent)
@@ -733,6 +787,8 @@ static ssize_t dp_status_show(struct device *dev, struct device_attribute *attr,
                      dp->setup_done ? 1u : 0u, dp->failed ? 1u : 0u,
                      dp->txq_sent ? 1u : 0u, dp->mac_reg_count,
                      dp->table_entries_written);
+    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+                     "probe action: dp_probe is ONE read-only MAC word ('cat dp_probe' or 'echo 1 > dp_probe'); probe_ok=1 is required before dp_setup\n");
     pos += scnprintf(buf + pos, PAGE_SIZE - pos,
                      "device-RAM MSDU table: ready_payload=0x%08x ca=0x%08x acp=0x%08x (12-byte entries, index tid+user*8, user 0 tids 0..7)\n",
                      dp->ready_payload, dp->msdu_table_ca,

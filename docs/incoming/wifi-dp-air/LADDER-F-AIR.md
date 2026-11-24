@@ -8,8 +8,10 @@ Wi-Fi module loaded, one clean driver, never `rmmod` after the 0x5A5A release.
 
 Image baseline: the current cfg80211 bench image (kernel slice 13e81214, slot
 1794a531) with the PD4-patched firmware sha256 cfe24bfb... Module:
-`opensource/docs/incoming/wifi-dp-air` build (hi5622_wifi.ko **884,576 B**
-sha256 **ec74fccd...** canonical; compare with the file you deploy).
+`opensource/docs/incoming/wifi-dp-air` build **revision 2** (hi5622_wifi.ko
+**886,864 B** sha256 **ca32aec4...** canonical; compare with the file you
+deploy). Revision 1 (`884,576 B ec74fccd...`) is behaviour-identical for the
+ladder below as long as `dp_probe` is READ with `cat` (do not write it).
 Insert order: `cfg80211.ko` first, then `hi5622_wifi.ko` with the F-AIR
 parameters from BUILD-NOTES.md section 5.
 
@@ -18,6 +20,42 @@ One-command form: bench tooling sequence
 96354365867beaedeb77c001fed31a2afdb0d4d2edb949cd898fab2fcc8342f6)
 (30 steps / 83 checks / 7 device writes / 4 shell actions; steps below are
 the same stages by name). Manual form: the sections below.
+
+## Exact attribute sequence, access mode and expected values
+
+This table is the answer to the 2026-11-26 air-TX fire, which stopped before
+any data-plane write because `dp_probe` was used as a **write** trigger. The
+reachability probe is a READ: revision 1 accepts only `cat dp_probe`; writing
+it returns an error, performs no read and leaves `probe_ok=0`, so `dp_setup`
+correctly fails closed (`probe_read_required` in revision 2,
+`phase_or_ctx_gate` + `probe_ok=0` in revision 1). Revision 2 also accepts
+`echo 1 > dp_probe` as a convenience form that runs the *same single read-only
+MAC word read* - it is never a device write.
+
+| # | attribute | mode | command | expected immediately after |
+| --- | --- | --- | --- | --- |
+| 1 | module load | - | `insmod cfg80211.ko`; `insmod hi5622_wifi.ko` with the F-AIR params | probe performs no device write; data-plane state empty |
+| 2 | boot ladder: `prepare/upload/verify/seed/hcc_arm/hcc_loop/release` | WO | `echo 1 >` each (bench session does this) | golden page 0x86807FEF/7/2/0xABCD, state 1, mask 0; SR armed |
+| 3 | `h2d_ctx_create` | WO | `echo 1 >` | `cat h2d_status`: `ctx_created=1 frames_sent=1` (post-create ctx4 body PACK) |
+| 4 | `h2d_txq_sync72` | WO | `echo 1 >` | `cat h2d_status`: `txq_sent=1 frames_sent=2 ok=2 timeout=0` |
+| 5 | VAP add + link up | shell | `iw phy phy0 interface add wlan0 type managed`; `ip link set wlan0 up` | `cat cfg80211_status`: `vap0: wlan0` |
+| 6 | scan (mode-1 firmware VAP create + channel) | shell | `iw dev wlan0 scan` | `cat cfg80211_status`: `scan: phase=finished results=<n>/...`; `dmesg`: `scan channel result`; `results=0` -> BLOCKED-DRIVER (no firmware VAP) |
+| 7 | `dp_probe` | **READ** (rev1: 0444; rev2: 0644 with read-store) | `cat dp_probe` (rev2 also `echo 1 > dp_probe`) | attr prints `MAC band0 CA 0x40040000+0x00 -> BAR0 0x3f... = 0x00000020 ... probe_ok=1, dp_setup now allowed`; then `cat dp_status`: `probe_ok=1 probe_value=0x00000020 setup_done=0`. A WRITE on rev1 returns rc=1 and leaves `probe_ok=0` - the fire's failure mode |
+| 8 | `dp_setup` | WO | `echo 1 >` | `cat dp_status`: `setup_done=1 failed=0 mac_regs=14 table_entries=8`; `cat dp_rings`: `+0x38=0x8000 +0x3c=0x8000 +0x48=0xfffffcc1` and 8 table entries |
+| 9 | `h2d_txq_addr_sync` (= `dp_txq_sync`) | WO | `echo 1 >` | `cat h2d_status`: `txq_addr_sent=1 ok=3 timeout=0 frames_sent=3` |
+| 10 | `dp_tx_status` | RO | `cat` | `bound=1 failed=0 posted=0` |
+| 11 | `dp_tx_frame` | WO | `echo 1 >` (optional `2`) | `cat dp_tx_status`: `posted=1 ... completion_pending=0` = **COMPLETED (MAC)**; `=1` = **POST-ONLY** |
+| 12 | `dp_rx_poll` | WO | `echo 1 >` | `cat dp_rx_capture`: `polled=1 ... captures=<n>`; `0` = **NO-RX** (recorded, not a failure) |
+| 13 | post packs | RO | bench read pack (`rd32`) | mask 0, staging 0, state 1, page golden, out0/out2 0 |
+| 14 | `h2d_status` | RO | `cat` | `timeout=0 refused=0 txq_addr_sent=1` |
+
+Mode summary: **READ (cat)** = `dp_probe` (rev1), `dp_status`, `dp_rings`,
+`dp_tx_status`, `dp_rx_capture`, `h2d_status`, `cfg80211_status`,
+`rd_catalog`, `hcc_*` status attrs. **WRITE (echo 1 >)** = `dp_setup`,
+`dp_txq_sync`/`h2d_txq_addr_sync`, `dp_tx_frame`, `dp_rx_poll`,
+`h2d_ctx_create`, `h2d_txq_sync72`, and the boot-ladder attrs. Writing a READ
+attribute is a no-op that returns an error: it is not a driver fault and never
+touches the device.
 
 ## F0 - boot + control plane (read-only / two H2D frames)
 

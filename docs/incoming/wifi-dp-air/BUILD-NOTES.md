@@ -28,7 +28,7 @@ Sections (all pass on the authoring host):
             hi5622_dp_txrx.c hi5622_dp_txrx.h
     mod   : Kbuild h2d_send.c h2d_send.h h2d_send_logic.c h2d_send_logic.h
             hi5622_driver.h hi5622_hcc.h main.c
-    patch : 139848 B sha256 254148c310b4970f2bcb07b78f1d0687b3b29fc9bae519244db707fe281a6e54
+    patch : 142595 B sha256 084c2d3466f1c49841181cc848cd32f5f3cc4187d3cb2ba09b61dfe5d1830006
     PASS: merge patch reproduces the lane tree; scope + drift checks OK
     == 2. inherited host regressions on the merged tree ==
     h2d_send_logic selftest: 242/242 checks PASS
@@ -43,15 +43,15 @@ Sections (all pass on the authoring host):
     sequence sha256: 96354365867beaedeb77c001fed31a2afdb0d4d2edb949cd898fab2fcc8342f6
     == 5. kernel module build (project 6.18.60 tree, staged src copy) ==
     module      : /tmp/wifi-dp-air-build/src/hi5622_wifi.ko
-    size_bytes  : 884576
-    sha256      : ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3
+    size_bytes  : 886864
+    sha256      : ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0
     vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8
     cfg80211 U  : 9 (wiphy_* + cfg80211_*)
     warnings    : 0 (compiler+modpost; 0 expected)
     == 6. device-free source/publication checks ==
     OK: merge provenance + 1435 inherited host checks + 48 merged checks +
         sequence + clean module build + publication checks
-    artifact: 884576 B sha256 ec74fccd...
+    artifact: 886864 B sha256 ca32aec4...  (revision 2)
 
 Total device-free host checks on the merged tree: **1,483**
 (242 + 254 + 290 + 195 + 454 inherited + 48 merge-specific).
@@ -61,15 +61,16 @@ Total device-free host checks on the merged tree: **1,483**
 | item | value |
 | --- | --- |
 | module | `hi5622_wifi.ko` |
-| size | **884,576 B** |
-| sha256 | **ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3** |
+| size | **886,864 B** (revision 2; revision 1 was 884,576 B) |
+| sha256 | **ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0** (revision 1 was ec74fccd...) |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
 | depends | cfg80211 |
 | cfg80211 imports (U) | 9 (wiphy_new_nm, wiphy_register, wiphy_unregister, wiphy_free, cfg80211_register_netdevice, cfg80211_unregister_wdev, cfg80211_scan_done, cfg80211_inform_bss_data, cfg80211_put_bss) |
 | compiler/modpost warnings | 0 (project tree builds with -Werror) |
 | base provider module | 748,888 B sha256 b42ff4ec... (../wifi-scan-complete/BUILD-NOTES.md) |
-| merge delta | +135,688 B (dp_rings + hi5622_dp + dp_txrx + hi5622_dp_txrx objects and their debug info) |
+| merge delta | +137,976 B (dp_rings + hi5622_dp + dp_txrx + hi5622_dp_txrx objects and their debug info) |
+| revision 2 | 2026-11-26 post-fire fix: `dp_probe` accepts `cat` and `echo 1 >` (same single read-only MAC word read; the write-1 form runs the read, never a device write); missing-probe setup refusal now returns -ENODATA with gate name `probe_read_required` and an explicit "cat dp_probe first" hint; dp_txq_sync refusal prints the full attr order. Behaviour for a correctly ordered ladder is identical; revision 1 works too with `cat dp_probe` |
 
 Required data-plane symbols in the built module (checked by the script):
 `hi5622_dp_txrx_bind`, `h2d_post_txq_addr`, `dp_mac_program`,
