@@ -69,7 +69,7 @@
  }
  
  /* ---------------------------------------------------------------------
-@@ -320,6 +343,21 @@
+@@ -320,6 +343,45 @@
   * Everything else stays NULL: cfg80211 returns -EOPNOTSUPP for the deferred
   * M3+ ops without involving the driver (add_key etc. are M3).
   * -------------------------------------------------------------------*/
@@ -88,16 +88,43 @@
 +	return -EOPNOTSUPP;
 +}
 +
++/* hostapd AP-mode bring-up (task-121): cfg80211's NL80211_CMD_REGISTER_FRAME
++ * handler refuses to install a management-frame filter when the driver has no
++ * .mgmt_tx op ("not much point in registering if we can't reply",
++ * net/wireless/nl80211.c nl80211_register_mgmt).  hostapd's
++ * nl80211_setup_ap() subscribes to auth/assoc/reassoc/disassoc/deauth/
++ * probe-request frames from its set_mode(AP) path; without the op the
++ * subscription fails and hostapd prints "Could not configure driver mode"
++ * even though SET_INTERFACE succeeded (and, for an interface already in AP
++ * mode, no type-change message appears at all).
++ * The op fails closed: management TX belongs to the data-plane/M4 work and is
++ * never faked; this only advertises the capability the registration gate
++ * needs. */
++static int hi5622_cfg11_mgmt_tx(struct wiphy *wiphy,
++				struct wireless_dev *wdev,
++				struct cfg80211_mgmt_tx_params *params,
++				u64 *cookie)
++{
++	(void)wiphy;
++	(void)wdev;
++	(void)params;
++	(void)cookie;
++	return -EOPNOTSUPP;
++}
++
  const struct cfg80211_ops hi5622_cfg11_ops = {
  	.add_virtual_intf	= hi5622_cfg11_add_virtual_intf,
  	.del_virtual_intf	= hi5622_cfg11_del_virtual_intf,
-@@ -330,4 +368,7 @@
+@@ -330,4 +392,10 @@
  	.abort_scan		= hi5622_scan_op_abort,
  	.start_ap		= hi5622_scan_op_start_ap,
  	.stop_ap		= hi5622_scan_op_stop_ap,
 +	/* Advertise NL80211_CMD_CONNECT so hostapd passes its driver init gate;
 +	 * fail-closed and never used by the AP path (task-121). */
 +	.connect		= hi5622_cfg11_connect,
++	/* Needed so cfg80211 accepts hostapd's AP-mode management-frame
++	 * subscriptions; fails closed (see above). */
++	.mgmt_tx		= hi5622_cfg11_mgmt_tx,
  };
 --- a/hi5622_frames_api.h
 +++ b/hi5622_frames_api.h

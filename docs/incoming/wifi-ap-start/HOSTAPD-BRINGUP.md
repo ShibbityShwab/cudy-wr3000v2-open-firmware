@@ -19,8 +19,8 @@ this lane; the lead's fire produced the observations below.
 ## 2. Module v2 (built by this lane, host-only)
 
     artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-    size     : 204,644 B
-    sha256   : 24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722
+    size     : 204,712 B
+    sha256   : b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e
     vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
     depends  : cfg80211
 
@@ -174,8 +174,8 @@ script now:
 * strips only debug sections and asserts the deployable .ko has a
   byte-identical .text to the unstripped build.
 
-v3 module: **204,644 B sha256
-24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**
+v3 module: **204,712 B sha256
+b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e**
 (/tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko, debug-stripped, depends=
 cfg80211, vermagic 6.18.60 SMP ARMv7, zero warnings).  The H2D send path in
 v3 is therefore exactly the path that consumes C2 in 0 polls on the bench.
@@ -218,4 +218,50 @@ iftype).  The v3 bench fire is the deciding test: on success hostapd must print
 
 Readback unchanged: ctx0 BAR0 0x7D1758 -> ctx0+0x18C (0x7D18E4) changes after
 ap_cfg; VAP = u32 at 0x7D18E8, then V+0x6B8000+0x10 = 100 and +0x14 = 2.
+
+## 9. v4 (second fire follow-up): the missing .mgmt_tx capability
+
+The lead's isolation showed the SET_INTERFACE op itself works (manual
+`iw dev wlan0 set type managed` and `set type __ap` both returned 0
+with the driver dmesg lines), yet hostapd printed "Could not configure driver
+mode" with no type-change message.  Static analysis of the hostapd 2.12
+snapshot and the 6.18.60 kernel found the exact gate:
+
+1. hostapd's `wpa_driver_nl80211_finish_drv_init()` calls
+   `wpa_driver_nl80211_set_mode(bss, NL80211_IFTYPE_AP)`; the SET_INTERFACE
+   succeeds (no-op if the iface is already AP -> no dmesg, which is exactly
+   what the fire showed).
+2. `wpa_driver_nl80211_set_mode_impl()` then, for AP mode, calls
+   `nl80211_setup_ap()` -> `nl80211_mgmt_subscribe_ap()`, which sends
+   `NL80211_CMD_REGISTER_FRAME` for auth/assoc/reassoc/disassoc/deauth/
+   probe-request (and registers the action/class-3 handlers).
+3. The kernel's `nl80211_register_mgmt()` refuses every REGISTER_FRAME
+   request when the driver has no `.mgmt_tx` op:
+   `/* not much point in registering if we can't reply */ if (!rdev->ops->mgmt_tx) return -EOPNOTSUPP;`
+   (net/wireless/nl80211.c).  The clean-room driver advertised no .mgmt_tx,
+   so the subscription failed, setup_ap returned -1 and hostapd reported
+   "Could not configure driver mode" - after the mode change had already
+   succeeded.
+
+**Fix (v4):** register a fail-closed `.mgmt_tx` op.  cfg80211 then accepts
+the management-frame subscriptions; the op itself returns -EOPNOTSUPP (real
+management TX/RX is data-plane/M4 work, never faked).
+
+**Module v4:** 204,712 B sha256
+b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e (debug-stripped, same fired base; H2D/core files
+byte-identical, .text byte-identical stripped/unstripped).  This is the
+artifact to fire.
+
+Expected progression after this fix (same command sequence as section 8.3):
+hostapd proceeds past set_mode, prints `nl80211: Setup of wlan0 completed`,
+then calls NEW_BEACON -> our `.start_ap` -> dmesg
+`start_ap sequence frame 1/4 'ap_ssid' posted (64 B)` /
+`2/4 'ap_cfg' posted (184 B)` -> `wlan0: AP-ENABLED`.
+
+If it still stops, the next candidate gates are: (a) NEW_BEACON rejected by
+cfg80211 regulatory (NO_IR - run `iw reg set US` first), (b) a beacon
+attribute cfg80211 rejects (capture the -dd line), (c) a later hostapd step
+needing add_key (WPA2 - use the OPEN config first).  The fail-closed
+mgmt_tx means hostapd will not receive auth frames: an AP with clients needs
+the data-plane lane, but the control-plane deadline (beacon start) does not.
 

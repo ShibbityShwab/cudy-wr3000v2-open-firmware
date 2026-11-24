@@ -28,7 +28,7 @@ What the patch changes (13 hunks):
 | hi5622_frames_api.h | AP-start sequence fields on struct hi5622_ap_start_params (frame_index/band/module/vap_id/hidden_ssid/auth_algs), HI5622_AP_START_MAX_FRAMES, build_ap_start sequence contract comment |
 | hi5622_scan.c | fill the new hints from cfg80211 settings; hi5622_scan_op_start_ap posts the whole provider sequence through hi5622_frame_post() (labels ap_ssid/ap_auth/ap_cfg/ap_vap_start), aborts on the first refusal, refuses zero frames |
 | hi5622_vapscan_provider.c | include hi5622_ap_frames.h; AP-start builder callback (ap_start_mode 0 = g0 id1 static keys default, 1 = WAL g2 vendor order); advertise caps AP_START and register build_ap_start |
-| hi5622_cfg80211_ops.c | hostapd gates: fail-closed .connect op (cfg80211 advertises NL80211_CMD_CONNECT so hostapd's nl80211 init gate passes; the op is never called by the AP path); corrected change_virtual_intf for SET_INTERFACE - accepts STATION<->AP<->MONITOR, stores dev->ieee80211_ptr->iftype (the cfg80211_change_iface WARN contract), updates the monitor ARPHRD and treats params->use_4addr == -1 as "not specified" |
+| hi5622_cfg80211_ops.c | hostapd gates: fail-closed .connect op (cfg80211 advertises NL80211_CMD_CONNECT so hostapd's nl80211 init gate passes; the op is never called by the AP path); corrected change_virtual_intf for SET_INTERFACE - accepts STATION<->AP<->MONITOR, stores dev->ieee80211_ptr->iftype (the cfg80211_change_iface WARN contract), updates the monitor ARPHRD and treats params->use_4addr == -1 as "not specified"; fail-closed .mgmt_tx op so cfg80211 accepts hostapd's AP-mode management-frame subscriptions (nl80211_register_mgmt refuses REGISTER_FRAME without it) |
 
 Behaviour:
 
@@ -43,8 +43,8 @@ Behaviour:
   and the per-load budget bounds the sequence (8 is enough for the ladder).
 
 Verified with ../tools/build-bench-module.sh against the real 6.18.60 tree
-(v3): hi5622_wifi.ko **204,644 B sha256
-24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**
+(v4): hi5622_wifi.ko **204,712 B sha256
+b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e**
 (debug-stripped, path-independent), depends=cfg80211, 14 haf_ symbols,
 vapscan_ap_start + hi5622_cfg11_connect present, zero warnings; the H2D/core
 files are byte-identical to the fired base.  The module is local evidence only
