@@ -50,8 +50,8 @@ only.
 ```
 $ ./tools/kernel-check.sh
 == kernel-context compile result
--rw-r--r-- 1 ... 738080 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
-9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc
+-rw-r--r-- 1 ... 738112 ... /tmp/wifi-vap-start-kernel/hi5622_wifi.ko
+e09dc697bd305c599c26712f60994c8e86cf127e00cfe329002e9979067dc4bf
 vsf_ symbols in module: 20
 kernel-check: OK (zero warnings; module-only build; no image, no device)
 ```
@@ -132,6 +132,22 @@ a frame the structural family check already accepted) and the post path treats t
 as handled by the firmware WAL module - every other id keeps the slot rule and unknown WAL
 commands are still rejected before the gate.
 
-Rebuilt module: 738,080 B sha256
-`9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc`, zero warnings.
+Rebuilt module: 738,112 B sha256
+`e09dc697bd305c599c26712f60994c8e86cf127e00cfe329002e9979067dc4bf`, zero warnings.
 `tools/validator-check.sh` is now 37/37 + inherited 233/233.
+
+## 9. Third fire + mode-1 rung (2026-11-26)
+
+The 738,080 B module put all five frames on the wire (user_add, notify, WAL vap_add 56 B,
+WAL vap_start 44 B, scan_req 520 B - all CONSUMED, page golden, mask 0), but the scan stayed
+empty: the WAL layer does not populate the hCC module context, and the scan handler's first gate
+is module0+0x4B8. The g0-mode VAP add now uses parent module = the module being created (same
+self-parent pattern as the bench-validated C2 frame) and the mode-1 module was rebuilt:
+**738,112 B sha256
+`e09dc697bd305c599c26712f60994c8e86cf127e00cfe329002e9979067dc4bf`**, zero warnings;
+validator-check 37/37 + inherited 233/233.
+
+Mode-1 bench params: allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0
+frame_gap_ms=100. Expected dmesg after the scan op: vap_add g0 id1 total 48 B CONSUMED,
+vap_start g0 id1 total 40 B CONSUMED, then scan_req; decisive readback ctx0+0x190
+(BAR0 0x7D28E8), ctx0+0x4B0 (0x7D2C08), ctx0+0x4B8 (0x7D2C10) non-zero (see TABLES T18).

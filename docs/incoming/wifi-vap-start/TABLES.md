@@ -215,3 +215,21 @@ Evidence: `tools/validator-check.sh` 37/37 (includes predicate accept/reject cas
 kernel module 738,080 B sha256 9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc,
 zero warnings; second benchmark fire observed the pre-fix refusal "no firmware handler for
 group/id" at this exact gate.
+
+## T18. Module-context readback convention (corrected after third fire)
+
+| item | value | evidence |
+| --- | --- | --- |
+| BAR0 of a firmware CA | BAR0 = CA + 0x6B8000 | C2 lane: ctx4 CA 0x11C458 -> BAR0 0x7D4458 [V*] |
+| context array base | CA 0x119758 (runtime) | slot0 value 0x119758 on every pack [V*] |
+| context array stride | 0xB40 | module-4 CA 0x119758 + 4*0xB40 = 0x11C458 matches the C2 lane [V] |
+| module m context | CA(m) = 0x119758 + m*0xB40 | [V] |
+| module-table slot | boot-static CA of the context body; does NOT change on create | C2 fire: slot4 = 0x11C458 before and after the create [V*] |
+| ctx0+0x00 word | reads 0 pre-create (chip id byte 0 + static zeros) - not a failure | third fire pack [V*] |
+| ctx0+0x190 | 0 until a g0 id1 key-0x64 create with data[0] in 1/2/3 | creation helper CA 0xFE6BC [V] |
+| ctx0+0x4B0 / +0x4B8 | 0 until the create worker's band bind runs; +0x4B8 is the scan handler gate | CA 0x44BBC bind / CA 0x64986 gate [V] |
+| WAL g2 VAP add/start effect | does NOT populate the hCC module context (different layer) | third fire readback: +0x190/+0x4B0/+0x4B8 zero [V*] |
+| VAP lookup CA 0x581C8(0) | returns radio object G (0x170E28) for id 0, always non-NULL | CA 0x943AC accepts only id 0 [V] |
+
+Third fire: user_add/notify/vap_add(56 B)/vap_start(44 B)/scan_req(520 B) all CONSUMED, page
+golden, mask 0; scan empty -> V3/V4 g0-mode rung is next.

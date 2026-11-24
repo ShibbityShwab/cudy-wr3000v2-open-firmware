@@ -43,8 +43,8 @@ already carries the scan-d2h decoder integration the bench module builds from); 
 to `git HEAD` + `../wifi-scan-d2h/patches/0001-hi5622-scan-d2h-decoder.patch` with line
 offsets. Re-run `../tools/kernel-check.sh` after wifi-scan-ap changes.
 
-**Compile evidence:** patched module 738,080 B, sha256
-`9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc`, zero compiler/modpost
+**Compile evidence:** patched module 738,112 B, sha256
+`e09dc697bd305c599c26712f60994c8e86cf127e00cfe329002e9979067dc4bf`, zero compiler/modpost
 warnings, 20 `vsf_` symbols.
 
 ## Bench use
@@ -58,3 +58,10 @@ Then run the existing C2 ladder and trigger `iw dev wlan0 scan`; the scan op pos
 sequence first. `recipes/vap_start_ladder.json` records the expected observables and the
 stop rules. The patch is deliberately fail-closed: no AP_START capability is advertised (the
 WAL AP-config body is still [U]), so `start_ap` keeps returning `-EOPNOTSUPP`.
+
+## Mode 1 (g0 id1 keys) note
+
+`vap_start_mode=1` builds the g0 id1 key-0x64 VAP add with **parent module = the module being
+created** (the C2-validated self-parent pattern) and the g0 id1 key-0x65 VAP start. Expected after
+`iw dev wlan0 scan`: vap_add 48 B consumed, vap_start 40 B consumed, then scan_req; read
+ctx0+0x190 / +0x4B0 / +0x4B8 (TABLES T18) to confirm the scan-handler gate is cleared.

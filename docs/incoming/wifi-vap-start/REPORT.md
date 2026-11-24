@@ -288,6 +288,33 @@ context exists), module-4 ctx+0x4B0 = 0x00174BF0 / +0x4B8 = 0x0015CA08, page 0x8
 mask 0, heartbeats running. The gate is now the only known obstacle before the VAP add; the next
 reload should show `frame post vap_add: ... CONSUMED` followed by `vap_start ... CONSUMED`.
 
+### 3.5.1 Third fire: both WAL frames on the wire, scan still empty - the hCC module gate remains
+
+The fixed 738,080 B module fired the full chain: user_add (g0 id7), user_add_notify (g0 id8),
+**vap_add (g2 id0 56 B, risk WAL_G2_CFG), vap_start (g2 id0 44 B), scan_req (g0 id12 520 B)** -
+all CONSUMED, page golden 0x86807FEF, mask 0, staging 0, heartbeats running. The scan still
+returned no results (5000 ms timeout, 0 bss/complete/channel events) because the **WAL group-2
+layer is a different firmware layer**: the scan handler's first gate is the hCC module context,
+and the readback shows module-0 ctx+0x190/+0x4B0/+0x4B8 all ZERO after the WAL add/start. The
+next ladder rung is therefore V3/V4 = the g0 id1 key 0x64/key 0x65 pair (vap_start_mode=1).
+
+**Readback convention (corrected - see also TABLES T18):** BAR0 = CA + 0x6B8000 is correct,
+but the module-table slot is **boot-static**: ctx(m) = 0x119758 + m*0xB40 (verified: module 4 =
+0x119758 + 4*0xB40 = 0x11C458, exactly the C2 lane's value). Slot0 = 0x119758 is the CA of the
+module-0 context body, and the slot does **not** change when a module is added (the C2 fire saw
+slot4 = 0x11C458 before and after its create; only the body fields changed). The word at ctx0+0x00
+is expected to read 0 pre-create (chip id byte 0 + static zeros). The decisive reads are
+ctx0+0x190 (BAR0 0x7D28E8, context buffer allocated by the create helper), ctx0+0x4B0
+(BAR0 0x7D2C08) and ctx0+0x4B8 (BAR0 0x7D2C10, the scan handler gate). Also note the VAP lookup
+CA 0x581C8(0) returns the radio object G unconditionally for id 0 (CA 0x943AC accepts only id 0),
+so the real blocker is ctx0+0x4B8, not a missing VAP object.
+
+**Mode-1 provider change:** the g0-mode VAP add now uses **parent module = the module being
+created** (same self-parent pattern as the bench-validated C2 ctx-create frame), because the
+firmware worker's parent lookup requires parent_ctx[1] == 0 and the boot-created module 18's
+inherited byte is not guaranteed. Rebuilt mode-1 module: **738,112 B sha256
+`e09dc697bd305c599c26712f60994c8e86cf127e00cfe329002e9979067dc4bf`**, zero warnings.
+
 ---
 
 ## 4. Corrections register (supersedes earlier lane claims)
@@ -375,6 +402,7 @@ advertised by the provider extension, so cfg80211 `start_ap` remains fail-closed
 | host builders known-answer + refusal tests | `tools/build.sh` -> **61/61 PASS**, strict `-std=c99 -Wall -Wextra -Werror -pedantic` [V] |
 | generated frames | `tools/gen_frames_md.py` -> `recipes/frames.md` (`--check` current) [V] |
 | WAL family accepted / mutations refused by the patched h2d_frames validator | `tools/validator-check.sh` -> **37/37 PASS** [V] |
+| g0-mode VAP add parent module | self-parent (module being created), matching the bench-validated C2 frame; module param `vap_start_mode=1` [V]/[V*] |
 | inherited h2d_frames regressions (patched library) | `tools/validator-check.sh` -> **233/233 PASS** [V] |
 | kernel-context compile (library + provider patch + WAL validator + WAL post gate inside the real 6.18.60 module build) | `tools/kernel-check.sh` -> module **738,080 B sha256 `9e26138d...4bcc`**, **zero warnings**, 20 vsf_ symbols [V] |
 | hardware behaviour of the frames | **not done - host-only lane** [U] |

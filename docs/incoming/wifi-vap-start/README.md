@@ -7,7 +7,7 @@ kernel-context compile check + provider-extension patch + attended bench ladder.
 fires before the wire - the inherited `h2d_frames` handler-slot check (no group-2 id-0 slot) and
 then the post path's own `h2d_fw_handler_lookup()` gate. Both are now handled for the decoded WAL
 group-2 cfg-event family only (`h2d_check_wal_cfg` + `h2d_frame_is_wal_cfg`, still fail-closed);
-the final rebuilt module is 738,080 B sha256 `9e26138d...4bcc`, zero warnings
+the final rebuilt module is 738,112 B sha256 `e09dc697...c4bf` (mode-1 build, parent = self), zero warnings
 (`tools/validator-check.sh`: 37/37 + inherited 233/233). See REPORT section 3.5.
 The bench router was **never contacted by this lane**; no image was built; no vendor binary, object
 code, firmware byte, calibration value or secret is reproduced here - only derived

@@ -7,7 +7,7 @@
   "preconditions": {
     "image": "cfg80211 image (slice 13e81214 / slot 1794a531) + PD4-patched firmware, boot page 0x86807FEF/7/2/0xABCD, core state 1, mask 0",
     "ladder_before": "C2 ladder from wifi-cfg80211/wifi-proto-seq: ctx_create type 1 (g0 id1 key 0x64, module 4) -> txq_sync72 (g0 id1 key 0xd8); both consumed, mask 0",
-    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied (final post-gate module: 738,080 B sha256 9e26138d...4bcc), module params allow_frames=8 vap_start_first=1 vap_start_mode=0 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=0",
+    "driver": "wifi-scan-ap image with provider/vapstart-provider.patch applied (mode-1 build: 738,112 B sha256 e09dc697...c4bf), module params allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0 frame_gap_ms=100",
     "human": "recovery door armed, UART read-only capture running, one fire per step, no retry in the same boot"
   },
   "families": {
@@ -211,6 +211,17 @@
         "V2 WAL VAP start: consumed; then read module-0 ctx+0x4B0/+0x4B8 via G+0x630 slot0",
         "S1 scan_req: D2H g1 15/16/17 or g2 id2 within 5 s = candidate PASS"
       ]
+    },
+    "third_fire": {
+      "module": "post-second-gate build 738,080 B sha256 9e26138de06c94371bfa776a8a511b3386bc852fca0020947729866f55b94bcc",
+      "observed": [
+        "user_add, user_add_notify, vap_add (g2 id0 56 B), vap_start (g2 id0 44 B), scan_req (g0 id12 520 B) all CONSUMED; risk=WAL_G2_CFG on the WAL frames",
+        "page 0x86807FEF golden, mask 0, staging 0, heartbeats",
+        "scan still returned no results (5000 ms, bss/complete/channel = 0)",
+        "readback: G+0x630 slot0 = 0x00119758 unchanged; module-0 ctx (BAR0 0x7D2758) word 0 = 0; ctx0+0x190/+0x4B0/+0x4B8 all zero"
+      ],
+      "conclusion": "WAL g2 is a different firmware layer: it does not populate the hCC module context that the scan handler gates on (module0+0x4B8). Readback convention corrected in TABLES T18 (ctx(m) = 0x119758 + m*0xB40; slot is boot-static and does not change on create; ctx0 word 0 = normal).",
+      "next": "V3/V4 g0-mode rung: reload the 738,112 B mode-1 module (allow_frames=12, vap_start_first=1, vap_start_mode=1, vap_start_module=0) and run iw dev wlan0 scan; expected vap_add g0 id1 48 B CONSUMED, vap_start g0 id1 40 B CONSUMED, then scan_req; decisive readback ctx0+0x190 (0x7D28E8) / +0x4B0 (0x7D2C08) / +0x4B8 (0x7D2C10) non-zero"
     }
   }
 }

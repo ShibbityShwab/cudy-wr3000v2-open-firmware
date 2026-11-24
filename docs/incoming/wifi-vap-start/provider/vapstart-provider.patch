@@ -350,7 +350,7 @@ diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
  
 diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
 --- a/hi5622_vapscan_provider.c	2026-11-24 16:14:40.404450382 +0700
-+++ b/hi5622_vapscan_provider.c	2026-11-24 16:14:40.405002786 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 16:19:00.735560590 +0700
 @@ -35,6 +35,9 @@
  
  #include "hi5622_frames_api.h"
@@ -361,7 +361,7 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  
  static DEFINE_MUTEX(hi5622_vapscan_lock);
  static bool hi5622_vapscan_registered;
-@@ -156,6 +159,116 @@
+@@ -156,6 +159,122 @@
  }
  
  /* ------------------------------------------------------------------ */
@@ -411,6 +411,12 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
 +		vsf_vap_add_defaults(&gp);
 +		gp.iftype = vapscan_iftype(p->iftype);
 +		gp.module = p->module;
++		/* Parent module index: use the module being created (the same
++		 * pattern the bench-validated C2 ctx-create frame uses).  The
++		 * firmware worker's parent lookup requires parent_ctx[1]==0, which
++		 * holds for the target module's untouched static context; using the
++		 * boot-created module 18 would depend on its inherited byte. */
++		gp.parent = (u8)p->module;
 +		gp.band = p->band;
 +		gp.dst = p->dst;
 +		rc = vsf_build_vap_add(f, &gp);
@@ -478,7 +484,7 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  /* registration                                                       */
  /* ------------------------------------------------------------------ */
  int hi5622_vapscan_provider_register(void)
-@@ -174,7 +287,9 @@
+@@ -174,7 +293,9 @@
  		HI5622_FRAME_CAP_SCAN_PARSE |
  		HI5622_FRAME_CAP_USER_ADD |
  		HI5622_FRAME_CAP_USER_ADD_NOTIFY |
@@ -489,7 +495,7 @@ diff -ruN a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
  	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
  	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
  	hi5622_vapscan_ops.parse_scan_complete = vapscan_parse_scan_complete;
-@@ -184,6 +299,8 @@
+@@ -184,6 +305,8 @@
  	hi5622_vapscan_ops.build_user_add = vapscan_user_add;
  	hi5622_vapscan_ops.build_user_add_notify = vapscan_user_add_notify;
  	hi5622_vapscan_ops.build_user_del = vapscan_user_del;
