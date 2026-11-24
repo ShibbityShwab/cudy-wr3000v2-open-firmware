@@ -1,0 +1,270 @@
+# Scan pace/tuning: full 13-channel scan (lane wifi-scan-tuning, task-133)
+
+**Status:** host-only, compile-verified, host-selftested.  NOT bench-fired by
+this lane; the attended procedure and its PASS gates are TEST-LADDER.md.  The
+baseline measurement below was made on hardware by the bench wave
+(self-contained image + combined module) before this lane; the request bytes
+and firmware read offsets are re-derived here from the pinned local artifacts.
+
+**Date:** 2026-11-27.  **Task:** shared task-133.  **Write scope:**
+`opensource/docs/incoming/wifi-scan-tuning/` only.  **Nothing here was sent to
+the bench router by this lane.**
+
+Evidence markers: **[V]** verified from a named artifact/decode, **[V\*]**
+hardware-measured by the bench wave, **[I]** inference, **[U]** unknown.
+
+---
+
+## 0. Headline
+
+1. **The request was already correct.**  Our provider builds the 520-B g0 id0xC
+   request with **13 channel entries and count=13** at payload+0x1EC (hexdump +
+   field map: recipes/REQUEST-BYTES.md).  A host regeneration of the builder
+   confirms every field; the firmware engine reads exactly that count
+   (CA 0x6462A) and iterates 13 entries.  **A wrong count field or malformed
+   channel array is ruled out [V].**
+2. **The firmware completed only 6 channels, quickly.**  Measured run:
+   6 g1 id17 results in **0.94 s total (~156 ms/channel)** for channels 1..6,
+   then no frame for the remaining ~14 s until the host window closed
+   (`finish-abort[host-timeout], channel=6, chans=6/13`) [V\*].  The retired
+   "~830 ms/channel" figure was an artefact of that same host-bound run: it is
+   not the firmware cadence.
+3. **The firmware scan architecture is one-channel-per-inner-request.**
+   CA 0x63CB8 starts a scan for ONE entry of the request array (index =
+   link[0xfc]+link[0xfd]); the result handler emits g1 id17 for that index and
+   advances the cursor while `link[0xfd] < link[0xfe]` (CA 0x64298).  The
+   cursor/end fields live in a scan-context object, not in the host request;
+   a hard-coded 6 is written to `link[0x106]` when it is zero (CA 0x643CC)
+   [V].  The 6-channel stop is therefore attributed to the firmware's
+   per-request scan-context (ranked hypotheses, sec 4), not to the wire
+   request; the host-side fix is the same in either case: **split one
+   cfg80211 scan into several g0 id0xC requests** [I].
+4. **Tuning implemented**: auto window from the measured cadence
+   (`1500 + 250*n` ms, 13 ch -> 4,750 ms; clamp raised 45 s -> 120 s), three
+   new module parameters (`scan_chan_time_ms`, `scan_req_batch`,
+   `scan_batch_gap_ms`) and chained multi-request scanning with compiled
+   default `scan_req_batch=6` (13 channels = 3 requests of 6+6+1, 300 ms gap).
+   The per-batch model keeps the proven channel-coverage/settle completion rule;
+   a per-batch firmware completion advances the chain instead of ending the
+   scan; every failure path stays an honest abort.
+5. **Verification**: 37/37 new host checks, inherited host suites still green
+   (196/196 + 290/290 + 454/454 + 242/242), kernel module builds clean on
+   6.18.60 (stripped 246,688 B sha256 05dd5f6a...; vermagic
+   `6.18.60 SMP mod_unload ARMv7 p2v8`; 9 cfg80211 imports, unchanged).
+   Target floor stated in sec 6: full 13/13 should be reachable in ~4-6 s of
+   firmware time; ladder PASS bound is 20 s.
+
+---
+
+## 1. Inputs and pins
+
+| input | pin |
+| --- | --- |
+| diff base | bench-validated **combined AP+DP** source tree (ap-start v7 + dp-air merge + scan-complete); fired artifact 242,572 B stripped sha256 `44c6cc12...` |
+| local vendor firmware (RE only, never committed) | original `FIRMWARE.bin`, sha256 `7fc87e2051e80b5e...`, 928,920 B; CPU address = file offset + 0x40000 |
+| local vendor host module (RE only, never committed) | `hi5622v100_wifi.ko`, sha256 `de78ec07e46e70ce...`, 3,564,728 B; .text offsets in this report |
+| baseline bench run [V\*] | self-contained image ae5e28bf; combined module 242,572 B sha 44c6cc12; insmod `fw_path=PD4 allow_frames=16 vap_start_first=1 vap_start_mode=1 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=4`; golden boot page 0x86807FEF/7/2/0xABCD, C2 clean, mode-1 VAP base |
+| static RE helper | `tools/fw_scan_timing_re.py` (asserts every CA cited below from the two pinned artifacts) |
+| host selftests | tools/scan_tuning_selftest.c + the inherited scan-complete/scan-logic/cfg80211/H2D suites |
+
+Safety: no device access by this lane; `allow_frames=0` default remains; no
+vendor binary, firmware byte, calibration value or secret is copied into this
+directory; the only wire family touched is the already-bench-validated
+g0 id0xC scan request (split across requests, never extended/changed).
+
+---
+
+## 2. Baseline: what the bench wave measured [V\*]
+
+Mode-1 load on the self-contained image, fresh golden boot, AP not running,
+`iw dev wlan0 scan`:
+
+| t (s) | observable |
+| ---: | --- |
+| 73.77 | `scan request posted ... (1 ssids, 13 channels, 0 IE bytes, dwell 60 ms, total 520 B)` |
+| 73.91 | g1 id17 slot=0 ch=1 2412 MHz |
+| 74.03 | slot=1 ch=2 2417 MHz |
+| 74.15 | slot=2 ch=3 2422 MHz |
+| 74.47 | slot=3 ch=4 2427 MHz |
+| 74.62 | slot=4 ch=5 2432 MHz |
+| 74.71 | slot=5 ch=6 2437 MHz |
+| 74.71 - 87.8 | **no further scan frame** (heartbeat/service traffic continues) |
+| 87.8 | `scan DONE (finish-abort[host-timeout], results=8 bss=8 complete=0 channel=6 chans=6/13)` -> `cfg80211_scan_done(aborted=1)` |
+
+Derived: **6 channels in 0.94 s = ~156 ms/channel**; the firmware emitted no
+g1 id16/g2 id2 completion before the host bound; the stop is clean (no log,
+no exception mask, page stays 0x86807FEF golden).  A second observation from
+the same wave: with the AP running the scan produced 0 results - consistent
+with the same stop/gating rather than a pace problem (see ladder R6).
+
+This invalidates the assumptions of the scan-complete lane's window formula
+`3000 + 900*n` (it assumed every channel would eventually appear at
+~830 ms/channel).  Both parts are re-tuned here.
+
+---
+
+## 3. The request is not the problem [V]
+
+`tools/request_dump.c` regenerates the exact 520-B frame from the lane's
+clean-room builder; the full hexdump and per-field evidence are in
+recipes/REQUEST-BYTES.md.  Key facts for the diagnosis:
+
+- payload+0x1EC (wire 0x1F8) = **13**, the count the firmware engine reads at
+  CA 0x6462A (`ldrb r6,[r4,#0x4EC]`, r4 = VAP, request copied to VAP+0x300);
+- 13 valid 4-B entries at payload+0x140: `{num=i+1, band=0, pad=0, idx=i}`,
+  the remaining 29 slots zero (inside the 42-slot array);
+- dwell payload+0x1EE = 60 (LE), scan_type +0x1F0 = 0 (4/8 rejected), one +0x1F1
+  = 1, type +0x1F2 = 11 - all as vendor-verified in wifi-vap-scan;
+- header family byte = 0x0C, tag 0x5A5A, total 0x0208 - consumed by the
+  handler with no refusal log in the baseline run (a refusal returns 100 and
+  logs; the engine was reached and the g1 id17 stream proves it ran).
+
+So the 6-channel stop is downstream of request parsing.  **Do not "fix" the
+count/array encoding; it is correct.**
+
+---
+
+## 4. Firmware RE: why six, and what the fix must target
+
+### 4.1 Path (all [V], regenerated by tools/fw_scan_timing_re.py)
+
+    g0 id0xC handler CA 0x6494C
+      -> VAP-0 lookup CA 0x581C8 (NULL -> log + return 100)
+      -> store payload+0x13B -> VAP+0x502 (CA 0x649B8)
+      -> tail-call scan engine CA 0x644A4
+         -> scan_type check (reject 4/8), VAP+0x51C busy check
+         -> set VAP+0x51C = 1 (CA 0x645A2)
+         -> memcpy_s 0x1FC B payload -> VAP+0x300 (CA 0x645B0, helper CA 0xC1E44)
+         -> timer create (movw 0x9c40 = 40000, CA 0x64616; id stored VAP+0x518)
+         -> enumerate request: count [VAP+0x4EC], band bytes [VAP+0x440+4i+1]
+            (CA 0x64624-0x646D0 one-loop band counter; 13 iterations with our
+            request)
+         -> per-channel start CA 0x63CB8, then result/advance loop
+
+### 4.2 One channel per inner request
+
+- CA 0x63CB8: index = `[link+0xFC] + [link+0xFD]` (CA 0x63D10/0x63D14);
+  `entry = VAP + 0x440 + 4*index`; num/band from the host request are copied
+  into the channel-start path (CA 0x63D64/0x63D72) and the low-level scan is
+  started (CA 0x5E028; single-channel request builder CA 0x4B88C, which
+  itself writes `count=1` to payload+0x1EC, `scan_type=4` to +0x1F0 and
+  `dwell=20` to +0x1EE).
+- On a per-channel result the firmware emits g1 id17 (CA 0x642D0-0x64374:
+  slot = link[0xFC]+link[0xFD], 108-B record from ctx+0x1688, hcc_msg_tx
+  CA 0x102760 called at CA 0x64358) and advances:
+  `step=link[0xFD]; end=link[0xFE]; if step<end -> CA 0x63CB8 next channel`
+  (CA 0x64298 / CA 0x643EE).
+- When a scan-control field is uninitialised the firmware writes a **default
+  6**: `movs r3,#6; strb.w r3,[r4,#0x106]` at CA 0x643CC.
+
+### 4.3 Where those cursor/end/control fields come from
+
+The per-band scan-context fields (+0xFC cursor, +0xFE end, +0x104/+0x106
+control/defaults, +0x103 mode) are written by the firmware's **band/channel
+configuration handler** (CA 0x5FF60, writes at CA 0x600B2/0x603C6/0x603DC
+from the H2D payload: +0x0C/+0x10/+0x14/+0x15/+0x1E), i.e. the vendor host's
+g0 id1 config-event family.  Our clean-room driver boots the mode-1 VAP base
+and the scan request but does **not** send that band/scan configuration
+family, so the context keeps firmware-init defaults.  The request count (13)
+is parsed, but the inner scheduler's own cursor/end pair is not the host
+request's count.
+
+### 4.4 Hypotheses, ranked, and the discriminator each needs
+
+| # | hypothesis | evidence for | discriminator (ladder) |
+| --- | --- | --- | --- |
+| H1 | **scan-context not configured by our host** (cursor/end/defaults from g0 id1 band family; default 6) - firmware stops cleanly after its context allows | engine parses 13 [V]; inner scheduler uses context fields, not request count [V]; hard default 6 exists [V]; stop is clean/no completion [V\*] | R7 D2H catalogue after timeout: only 6 id17 -> firmware stop (H1/H2). Then a vendor-capture comparison of the g0 id1 band config sequence (open [U]) confirms H1 |
+| H2 | firmware accepts only **6 explicit channel entries per request** (silent truncation) | stop is exactly at the 6th [V\*]; fits the observed cadence | R1/R2 batch=6 vs batch=13: batch=6 covering 13 channels PASSES 13/13 -> batching works regardless of which is true; batch=13 alone fails identically to baseline (control) |
+| H3 | host **D2H delivery gap**: firmware emitted >6 g1 id17 but the direct reader decoded 6 | possible by construction (reader is a workaround) but the 14 s silence after a fast burst argues against a transport stall (frames would drain when the next request/heartbeat arrives) | R7 catalogue: >6 id17 frames visible in the D2H record while dmesg says 6 -> H3; only 6 -> H1/H2 |
+
+**The chosen fix works for H1 and H2 and is the discriminator instrument for
+H3**: the host splits the scan so no single request asks for more than the
+observed limit, and it reports per-batch observables that the ladder checks.
+
+---
+
+## 5. Tuning implemented (diff over the combined bench tree)
+
+### 5.1 Window
+
+| item | old (scan-complete) | new (this lane) |
+| --- | --- | --- |
+| auto formula | 3000 + 900*n ms (13 ch -> 14,700 ms) | **1500 + 250*n ms** (13 ch -> 4,750 ms; per request/batch) |
+| rationale | assumed ~830 ms/ch from a host-bound run | measured **~156 ms/ch**; 250 ms = measured + margin |
+| clamp | 45,000 ms | **120,000 ms** (task asks the 45 s clamp be raised/removed) |
+| manual override | scan_timeout_ms clamped [1000,45000] | scan_timeout_ms clamped [1000,120000], applies per request/batch |
+| new | - | `scan_chan_time_ms` (0 = compiled 250; 50..2000) |
+
+### 5.2 Chained multi-request scan
+
+- `scan_req_batch` (default **6**): batch size in channels.  `0` or `>= n` =
+  one request (legacy, used as ladder control); `1` = one request per channel.
+- `scan_batch_gap_ms` (default 300): pause between requests (firmware
+  scan-in-progress clear + late BSS flush; 0..5000).
+- hi5622_scan.c keeps the full cfg80211 channel plan; for each batch it builds
+  the same g0 id0xC request with only that batch's channels (same fields,
+  count = batch size), starts the model window for that request, posts, and
+  on host-complete coverage (all batch channels + 500 ms settle) or a firmware
+  success completion for the batch, closes the batch model and posts the next
+  one after the gap.  The final batch falls through to the normal model tick ->
+  `cfg80211_scan_done(aborted=0)`.  The DONE line reports the last request's
+  plan plus totals; per-batch dmesg lines make each request observable.
+- Failure paths: first-batch build/post failure returns the errno from the
+  scan op (no scan_done, cfg80211 contract as before); a chained batch failure
+  after acceptance reports `scan_done(aborted=1)`; a batch timeout aborts the
+  whole scan (honest partial result: chans=<partial>/13).
+- Wire delta: **none in field encoding**; the only change is that the channel
+  array of each request carries fewer entries.  Nothing else is sent: no new
+  frame family, no config event, no extra IE bytes.
+
+### 5.3 Portable policy surface (host-testable)
+
+New pure helpers in hi5622_scan_logic.c: `hi5622_scan_timeout_for(n,
+chan_ms)`, `hi5622_scan_batch_size/count/len(n, param, i)`,
+`hi5622_scan_coverage_ready(m, now)`; the existing `hi5622_scan_timeout_auto`
+now delegates to `timeout_for(n, 0)`.  The kernel layer holds no duplicated
+arithmetic.
+
+---
+
+## 6. Verification (host-only) and the achievable floor
+
+| check | result |
+| --- | --- |
+| new host selftest `tools/scan_tuning_selftest.c` | **37/37 PASS** (retuned window, clamp, batch split incl. partial last batch/empty plan/param 0/1/42, coverage-ready incl. abort suppression) |
+| inherited scan-complete selftest | **196/196 PASS** (two window assertions updated to the re-measured cadence; 830 ms feed replaced by 156 ms) |
+| inherited scan/provider selftest | 290/290 PASS |
+| inherited cfg80211 regression | 454/454 PASS |
+| inherited H2D regression | 242/242 PASS |
+| kernel module build (6.18.60 tree) | PASS, 0 warnings; stripped 246,688 B sha256 `05dd5f6a...`; vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`; depends cfg80211; 9 imports unchanged |
+
+**Achievable floor:** the firmware spends ~156 ms per channel; 13 channels is
+at least ~2.0 s of firmware time.  With ceil(13/6)=3 requests and a 300 ms
+gap plus the 500 ms settle window, the host-visible full scan should complete
+in roughly **3.5-6 s** (no completion event depended on).  The ladder PASS
+bound is **20 s total**, which leaves margin for the firmware per-request
+stop/restart latency and for a slower environment; a scan that needs the
+bounded timeout still ends as `aborted=1` with `chans<13` (never a fake
+success).  The floor is bounded by the firmware, not by this driver: if the
+batch gap is too short for the firmware to clear its scan-in-progress byte,
+the ladder's R4 gap sweep is what finds the real value (0/300/1000 ms).
+
+---
+
+## 7. What is not proven / open items
+
+| item | state |
+| --- | --- |
+| which hypothesis (H1 vs H2 vs H3) explains the 6-channel stop | open; the ladder R0/R1/R2/R7 matrix discriminates |
+| whether chained requests are accepted while the firmware still has scan-in-progress set (batch gap too short -> silent refusal) | open; default 300 ms + R4 sweep; a refusal is visible as a batch with no results then host-timeout abort |
+| 13/13 + BSS decode on hardware | **not proven here** - TEST-LADDER.md is the proof; this lane must not claim it |
+| vendor g0 id1 band/scan config sequence (the H1 completion path) | [U]; finding it would remove the need for batching entirely |
+| AP-up scan behaviour (baseline: 0 results) | [U]; ladder R6 |
+| 5 GHz / 19-channel plan | untested; the helpers are generic but the bench band is 2.4 GHz |
+| per-batch counters in the final DONE line | the model's counters accumulate across batches (clear keeps them); the final line still shows the last request's `chans` plan - batch lines carry the per-request numbers |
+
+**Bottom line:** the wire request was never the problem; the host window and
+single-request assumption were.  The tuned defaults + chained-request scanner
+are the smallest host-side change that can cover all 13 channels, and the
+ladder is built so a bench run can prove it (or falsify H1/H2/H3) without
+speculative register or firmware work.
