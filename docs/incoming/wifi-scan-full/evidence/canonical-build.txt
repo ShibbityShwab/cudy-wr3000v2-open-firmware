@@ -1,0 +1,25 @@
+== 1. host selftest (refined g0 id10 builder) ==
+scan_full_selftest: 90/90 checks PASS
+== 2. inherited scan-tuning regressions (logical scan model) ==
+37/37 checks PASS
+196/196 PASS
+== 3. kernel module build ==
+module      : /tmp/wifi-scan-full-build/hi5622_wifi.ko
+unstripped  : 979512  sha256 5a00e7adc1eee26505f9ea37409b9784e36572bd551f239a85f0147b3eeecc36
+stripped    : 263704  sha256 4dd008d8aecf9261ae7ae8323d35ba51dbf281ce4fc40bc508cdb0970cf4e6fc
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+depends     : cfg80211
+cfg imports : 10
+warnings    : 0 (0 expected)
+parm:           scan_band_cfg:uint
+parm:           scan_band_cfg_chan:uint
+parm:           scan_band_cfg_slot:uint
+parm:           scan_band_cfg_start:uint
+parm:           scan_band_cfg_field10:uint
+parm:           scan_band_cfg_mode:uint
+parm:           scan_band_cfg_cmp:uint
+parm:           scan_band_cfg_use2:uint
+== 4. static evidence (firmware read in place) ==
+---------------------------------------------
+fw_scan_full_re: 65/65 checks PASS
+PASS: wifi-scan-full host verification complete

@@ -1,0 +1,6 @@
+  MODPOST Module.symvers
+  CC [M]  hi5622_wifi.mod.o
+  CC [M]  .module-common.o
+  LD [M]  hi5622_wifi.ko
+make[1]: Leaving directory '/tmp/wifi-scan-full-build'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'

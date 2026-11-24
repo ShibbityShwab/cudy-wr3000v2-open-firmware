@@ -1,0 +1,10 @@
+         U cfg80211_bss_iter
+         U cfg80211_inform_bss_data
+         U cfg80211_put_bss
+         U cfg80211_register_netdevice
+         U cfg80211_scan_done
+         U cfg80211_unregister_wdev
+         U wiphy_free
+         U wiphy_new_nm
+         U wiphy_register
+         U wiphy_unregister

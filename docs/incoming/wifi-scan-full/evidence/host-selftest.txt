@@ -1,0 +1,1 @@
+scan_full_selftest: 90/90 checks PASS

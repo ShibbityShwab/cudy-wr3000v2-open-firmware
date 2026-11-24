@@ -1,0 +1,202 @@
+# SPDX-License-Identifier: GPL-2.0
+# wifi-scan-full (task-138): refine the g0 id10 builder to the vendor wire
+# shape (44 B = 12 hcc header + 32 B payload) and the firmware-read field map.
+# Base: wifi-scan-tuning R4 tree (patches/0002-scan-tuning-on-polish.patch applied).
+# Applies also on the hardened combined tree (same two files, identical base).
+#
+--- a/hi5622_band_cfg.h
++++ b/hi5622_band_cfg.h
+@@ -1,31 +1,58 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /*
+- * hi5622_band_cfg.h - optional builder for the vendor scan-context config
+- * message (H1 experiment; wifi-scan-tuning lane, task-133 R4).
++ * hi5622_band_cfg.h - refined builder for the g0 direct H2D message id 10
++ * ("H1 band-config"; CLEAN-ROOM, original code).
+  *
+- * ORIGINAL clean-room code.  No vendor source/object/firmware byte reproduced.
++ * Lane: wifi-scan-full (shared task-138), builds on wifi-scan-tuning R4.
++ * The message is the vendor host's relay of a received BA management frame:
++ *   - payload+0x01 = 1: hmac_mgmt_rx_addba_rsp  (2.5.24 builder at .text 0x45A94)
++ *   - payload+0x01 = 2: hmac_mgmt_rx_delba      (2.5.24 builder at .text 0x45D88)
++ * Firmware handler: g0 direct message id 10, entry CA 0x5FF64, reached from
++ * the firmware's g0 H2D table at CA 0x10CCFC (12-byte rows; the row for id 10
++ * is at CA 0x10CD5C: {id=10, fn=0x5FF65, aux=0}).
+  *
+- * The g0 direct H2D message id 10 (handler CA 0x5FF64; group-0 dispatch table
+- * CA 0x10CD08 row {10, 0x5FF65}) configures the firmware's per-slot
+- * scan/channel context.  Our clean-room host never sends it, which is the H1
+- * explanation for the firmware not re-arming for a second scan request.
+- * Payload fields decoded from the handler (payload offset -> write):
+- *   +0x00 u8  type, must be 3
+- *   +0x01 u8  subtype: 1 = per-slot channel/scan context config, 2 = arm/flag
+- *   +0x02 u16 channel id (looked up by the firmware via CA 0xD6A1E)
+- *   +0x07 u8  slot index 0..7 (band object + 0xEC + slot*0x20)
+- *   +0x08 u8  subtype-2 flag (0 = reset path CA 0x5FEC0, else CA 0x5FF06)
+- *   +0x09 u8  action/flag (nonzero takes the reset path in subtype 1)
+- *   +0x0C u16 start index  -> context +0xFC (if currently zero) / +0x106
+- *   +0x10 u16              -> context +0x104
+- *   +0x12 u8  mode         -> context +0x103
+- *   +0x14 u16 compare field (slot +0x15)
+- * Payload is padded to 0x18; wire total = 12 + 0x18 = 36.
++ * R4 used a 36-byte frame (12-byte HCC header + 24-byte payload) and put the
++ * subtype-2 flag at payload+0x08.  This revision matches the vendor shape and
++ * the firmware reads:
++ *   - wire total 0x2C (44) = 12-byte HCC header + 32-byte payload (0x20);
++ *     the vendor allocates hcc_msg_alloc(32) and the firmware handler reads
++ *     payload+0x14/+0x15 (frame bytes 0x20/0x21), so the R4 36-byte frame was
++ *     short of the vendor form;
++ *   - subtype 2 reads payload+0x14 (byte) as its flag, not payload+0x08
++ *     (0x5FF64 subtype-2 path: CA 0x60184 loads payload+0x07 into r8 and
++ *     payload+0x14 into sb; payload+0x08 is never read on either path).
+  *
+- * FAIL CLOSED: nothing in the driver calls this builder unless the
+- * scan_band_cfg module parameter is non-zero (default 0 = off).  The field
+- * semantics are inference-level ([I]) and only a bench experiment can decide
+- * whether they re-arm the scan context; see REPORT.md sec 12.
++ * FIRMWARE FIELD MAP - subtype 1 (all [V] from CA 0x5FF64, see REPORT.md):
++ *   +0x00 u8  type, must be 3 (CA 0x5FFA4/CMP #3; else handler ignores frame)
++ *   +0x01 u8  subtype 1 (CA 0x5FFAC/#1 -> CA 0x5FFCE)
++ *   +0x02 u16 object key -> 0xD6A1E(key) (object-table lookup; NULL -> return)
++ *   +0x07 u8  slot 0..7 (CA 0x5FFF0/CMP #7; >7 -> log+return)
++ *   +0x09 u8  action: NONZERO -> clear/remove path 0x5FEC0(module,obj,slot)
++ *             (CA 0x6002C/CBNZ -> CA 0x601C2); 0 -> configure path
++ *   +0x0C u16 start: writes context +0x10 (min rule, CA 0x600B2) and
++ *             context +0x1A = max(1,value) (CA 0x6009E)
++ *   +0x10 u16 -> context +0x18 (CA 0x60092)
++ *   +0x12 u8  -> context +0x17 mode (CA 0x600BA)
++ *   +0x13 u8  -> context +0x13 = 2 state/enable (CA 0x600C0)
++ *   +0x14 u16 compared with context +0x15 u16 (CA 0x60048); a mismatch while
++ *             context +0x12 != 0 takes the 0x950C4 path (CA 0x60054..0x60086)
++ *   +0x15 u8  logged only (CA 0x6005A/0x600E8); not written to the object
++ *   +0x08     never read on the subtype-1 path (vendor leaves it 0)
++ * Context base = object + slot*0x20 + 0xEC (CA 0x6003E/0x60042/0x60046).
++ *
++ * FIRMWARE FIELD MAP - subtype 2 (CA 0x60184 path; clear/remove):
++ *   +0x00 = 3, +0x01 = 2, +0x02 u16 object key, +0x07 u8 slot (all same gates)
++ *   +0x14 u8 flag: 0 -> 0x5FEC0(module,obj,slot), which zeroes context +0x12,
++ *             +0x1A and +0x05 and calls 0xBCD54([module+0x4B8], context)
++ *             (CA 0x5FEDE/0x5FEF0/0x5FEF2); nonzero -> 0x5FF06(obj+slot*0x20
++ *             +0x108 record) (CA 0x601CE/0x601D6)
++ *   +0x08     never read.
++ *
++ * FAIL CLOSED: the driver only calls this builder when the scan_band_cfg
++ * module parameter is non-zero (default 0 = nothing is transmitted).  The
++ * message is a BA-relay frame being reused as a research lever; the semantics
++ * of the values beyond the firmware read-sites are [I], so the builder never
++ * changes a value the caller did not ask for and zero-fills the rest.
+  */
+ #ifndef HI5622_BAND_CFG_H
+ #define HI5622_BAND_CFG_H
+@@ -42,29 +69,29 @@
+ #endif
+ 
+ #define HI5622_BAND_CFG_ID		0x0Au	/* g0 direct H2D id 10 */
+-#define HI5622_BAND_CFG_PAYLOAD_LEN	0x18u
+-#define HI5622_BAND_CFG_TOTAL		0x24u	/* 12-byte HCC header + payload */
+-#define HI5622_BAND_CFG_TYPE		0x03u
+-#define HI5622_BAND_CFG_SUB_SLOT	0x01u	/* per-slot context config */
+-#define HI5622_BAND_CFG_SUB_ARM		0x02u	/* arm/flag path */
++#define HI5622_BAND_CFG_PAYLOAD_LEN	0x20u	/* vendor payload: 32 B */
++#define HI5622_BAND_CFG_TOTAL		0x2Cu	/* 12-byte HCC header + 32 B payload */
++#define HI5622_BAND_CFG_TYPE		0x03u	/* payload+0x00, required */
++#define HI5622_BAND_CFG_SUB_SLOT	0x01u	/* addba-rsp relay: per-slot context */
++#define HI5622_BAND_CFG_SUB_CLEAR	0x02u	/* delba relay: slot clear/remove */
++#define HI5622_BAND_CFG_SUB_ARM		HI5622_BAND_CFG_SUB_CLEAR /* R4 compat name */
+ 
+ struct hi5622_band_cfg_params {
+-	u8	subtype;	/* 1 = slot config, 2 = arm flag */
+-	u16	chan_id;	/* payload+0x02 */
++	u8	subtype;	/* 1 = slot config, 2 = clear/remove */
++	u16	chan_id;	/* payload+0x02 (object-table key; first scan channel) */
+ 	u8	slot;		/* payload+0x07, firmware accepts 0..7 */
+-	u8	sub2_flag;	/* payload+0x08 (subtype 2 only) */
+-	u8	action;		/* payload+0x09 */
+-	u16	start;		/* payload+0x0C -> context +0xFC */
+-	u16	field10;	/* payload+0x10 -> context +0x104 */
+-	u8	mode;		/* payload+0x12 -> context +0x103 */
+-	u16	cmp;		/* payload+0x14 */
++	u8	sub2_flag;	/* subtype 2: payload+0x14 flag (0 = clear slot) */
++	u8	action;		/* payload+0x09: nonzero = firmware clear path */
++	u16	start;		/* payload+0x0C -> context +0x10/+0x1A */
++	u16	field10;	/* payload+0x10 -> context +0x18 */
++	u8	mode;		/* payload+0x12 -> context +0x17 */
++	u16	cmp;		/* subtype 1: payload+0x14 u16 (compare field) */
+ };
+ 
+-/* Build one config frame into out (cap >= HI5622_BAND_CFG_TOTAL).
++/* Build one config frame into out (cap >= HI5622_BAND_CFG_TOTAL = 44).
+  * Returns 0 on success, -EINVAL for bad arguments/params.  Pure function;
+- * host-tested by tools/scan_band_cfg_selftest.c. */
++ * host-tested by tools/scan_full_selftest.c. */
+ int hi5622_band_cfg_build(u8 *out, size_t cap, size_t *len,
+ 			  const struct hi5622_band_cfg_params *p);
+ 
+ #endif /* HI5622_BAND_CFG_H */
+-
+--- a/hi5622_band_cfg.c
++++ b/hi5622_band_cfg.c
+@@ -1,8 +1,9 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+-/* hi5622_band_cfg.c - optional g0 id10 scan-context config builder (R4).
+- * Clean-room; the field map is derived from the firmware handler CA 0x5FF64
+- * (see REPORT.md sec 12).  Nothing sends these frames unless scan_band_cfg is
+- * enabled on the bench. */
++/* hi5622_band_cfg.c - refined g0 id10 builder (wifi-scan-full, task-138).
++ * Clean-room; field map from the firmware handler CA 0x5FF64 and the vendor
++ * host builders hmac_mgmt_rx_addba_rsp (0x45A94) / hmac_mgmt_rx_delba
++ * (0x45D88) in hi5622v100_wifi.ko 2.5.24.  Nothing is sent unless the
++ * scan_band_cfg module parameter is enabled on the bench. */
+ #include "hi5622_band_cfg.h"
+ 
+ #ifdef __KERNEL__
+@@ -25,7 +26,7 @@
+ 	if (!out || !p || cap < HI5622_BAND_CFG_TOTAL)
+ 		return -EINVAL;
+ 	if (p->subtype != HI5622_BAND_CFG_SUB_SLOT &&
+-	    p->subtype != HI5622_BAND_CFG_SUB_ARM)
++	    p->subtype != HI5622_BAND_CFG_SUB_CLEAR)
+ 		return -EINVAL;
+ 	if (p->slot > 7u)	/* firmware logs and refuses slots > 7 */
+ 		return -EINVAL;
+@@ -33,7 +34,8 @@
+ 	memset(pl, 0, sizeof(pl));
+ 
+ 	/* 12-byte HCC header: same g0 direct shape as the scan request we
+-	 * already post on the bench (group 0, alloc=1, dst 0, tag 0x5A5A). */
++	 * already post on the bench (group 0, alloc=1, dst 0, tag 0x5A5A).
++	 * Header[3] = 0 lets the firmware resolve module 0 (2.4 GHz VAP). */
+ 	out[0] = 0x00u;
+ 	out[1] = 0x01u;			/* VS_ALLOC_NIBBLE | dst<<4 */
+ 	out[2] = 0x00u;			/* vap id 0 */
+@@ -50,15 +52,23 @@
+ 	pl[0x01] = p->subtype;
+ 	put_le16(pl + 0x02, p->chan_id);
+ 	pl[0x07] = p->slot;
+-	pl[0x08] = p->sub2_flag;
+-	pl[0x09] = p->action;
+-	put_le16(pl + 0x0c, p->start);
+-	put_le16(pl + 0x10, p->field10);
+-	pl[0x12] = p->mode;
+-	put_le16(pl + 0x14, p->cmp);
++
++	if (p->subtype == HI5622_BAND_CFG_SUB_SLOT) {
++		/* addba-rsp relay shape (vendor builder writes the same set:
++		 * +0x09, +0x0C, +0x10, +0x12, +0x14; +0x08/+0x15 not used). */
++		pl[0x09] = p->action;
++		put_le16(pl + 0x0c, p->start);
++		put_le16(pl + 0x10, p->field10);
++		pl[0x12] = p->mode;
++		put_le16(pl + 0x14, p->cmp);
++	} else {
++		/* delba relay shape: the firmware reads payload+0x14 (byte)
++		 * as the clear/remove flag.  0 = clear the slot context. */
++		pl[0x14] = p->sub2_flag;
++	}
++
+ 	memcpy(out + 12, pl, sizeof(pl));
+ 	if (len)
+ 		*len = HI5622_BAND_CFG_TOTAL;
+ 	return 0;
+ }
+-
