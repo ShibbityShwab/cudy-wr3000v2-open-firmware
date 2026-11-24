@@ -181,7 +181,7 @@ rebuilds the recipe in memory and compares the whole 928,920 B image;
 | recipe | segments | output | sha256 | cross-check |
 | --- | --- | --- | --- | --- |
 | PD | file 0x7610 len 6 + 0x916A len 4 | FIRMWARE.PD.bin (928,920 B) | f52a9322c575a8cd3a24c232d98586879a79edeeb8d6c16cc1aad8d506e1435d | matches the ledger's 2026-11-24 16:10 PD bench image prefix f52a9322 |
-| PD2 | file 0x7432 len 62 + 0x916A len 4 | FIRMWARE.PD2.bin (928,920 B) | 7a6918077af91601f00901ad46b47f5ea36956b03faeda9d742ecc384a1b7728 | matches the pd2 lane's expected image sha exactly (message 2026-11-24) |
+| PD2 | file 0x7432 len 62 + 0x916A len 4 | FIRMWARE.PD2.bin (928,920 B) | 7a6918077af91601f00901ad46b47f5ea36956b03faeda9d742ecc384a1b7728 | matches the pd2 lane's expected image sha exactly; independently reproduced byte-identically by both builders (wifi-irq-unmask/REPORT-PD2.md section 8, opensource 5e64bfd) |
 
 Both are byte-for-byte verify-PASS against their recipes and manifest. Two
 builder bugs found and fixed while integrating the pd2 recipe: capstone decode
@@ -251,7 +251,10 @@ CLI; and the "write session without --attended is refused" gate.
 2. Build the instrument .ko (wifi-d2h-direct/tools/build.sh) and the patched
    image if needed ($PY tools/fw_patch_builder.py --build PD2).
 3. Start with our-golden (record the evidence dir), then patched PD2 / h2d as
-   separate sessions (one idea per session).
+   separate sessions (one idea per session). PD2 pass/fail observables are
+   specified in wifi-irq-unmask/REPORT-PD2.md section 5.5: golden page/state/mask,
+   then after exactly one H2D SR announce out[0] 0x8->0, out[5]=1, out[2]=8 - the
+   patched/h2d modes capture exactly those readbacks in the report.
 4. After the run: read summary.json + REPORT.md; the classifier already names
    the expected PD observables (data-abort bit, page bit14 missing, page
    clobber, out[1] bit2) and the h2d result. Power-cycle after a PD image run
