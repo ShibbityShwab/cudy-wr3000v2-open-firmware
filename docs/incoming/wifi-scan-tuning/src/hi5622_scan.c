@@ -321,6 +321,42 @@ static void hi5622_scan_work(struct work_struct *work)
 		return;
 	}
 	now = hi5622_scan_now();
+	/* R3: a non-first request that produced no channel result at all was most
+	 * likely silently refused (firmware still in scan-in-progress); repost it
+	 * once before the bounded timeout aborts the whole scan. */
+	if (s->batches_sent > 1u && s->batches_sent < s->batches_total &&
+	    !s->batch_pending && !s->batch_retried &&
+	    s->total_seen == s->batch_start_seen &&
+	    now - s->batch_started_ms >= HI5622_SCAN_BATCH_RETRY_MS) {
+		u32 first = s->batch_first;
+		u32 len = s->batch_n;
+		struct cfg80211_scan_request *rq = s->request;
+		int rrc;
+
+		s->batch_retried = true;
+		dev_info(wiphy_dev(c->wiphy),
+			 "cfg80211: scan batch %u/%u produced no channel result in %u ms - reposting it once (firmware scan-in-progress may not be clear yet)\n",
+			 s->batches_sent, s->batches_total,
+			 HI5622_SCAN_BATCH_RETRY_MS);
+		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
+		hi5622_scan_model_clear(&s->model);
+		mutex_unlock(&s->lock);
+		s->batch_reposting = true;
+		rrc = hi5622_scan_send_batch(s, first, len);
+		if (rrc) {
+			if (rq) {
+				struct cfg80211_scan_info info = { .aborted = true };
+
+				dev_warn(wiphy_dev(c->wiphy),
+					 "cfg80211: scan batch repost failed (%d) - reporting cfg80211_scan_done(aborted=1)\n",
+					 rrc);
+				cfg80211_scan_done(rq, &info);
+			}
+			return;
+		}
+		schedule_delayed_work(&s->work, msecs_to_jiffies(HI5622_SCAN_POLL_MS));
+		return;
+	}
 	/* task-133 multi-request scan: when the CURRENT request is done (every
 	 * batch channel reported + settle, or a firmware success completion for
 	 * it) post the next batch instead of closing the cfg80211 scan.  The final
@@ -811,11 +847,20 @@ static int hi5622_scan_send_batch(struct hi5622_scan *s, u32 first, u32 n)
 		goto out;
 	}
 	tmo = hi5622_scan_pick_timeout(n);
+	/* Request 2+ also needs the inter-batch gap and the firmware scan-restart
+	 * latency; the bench saw the plain 3 s window expire during batch 2. */
+	if (first != 0u)
+		tmo = tmo > HI5622_SCAN_TIMEOUT_MAX_MS - HI5622_SCAN_TIMEOUT_LATER_MS ?
+		      HI5622_SCAN_TIMEOUT_MAX_MS :
+		      tmo + HI5622_SCAN_TIMEOUT_LATER_MS;
 	mutex_lock(&s->lock);
 	s->batch_first = first;
 	s->batch_n = n;
 	s->batch_pending = false;
 	s->batch_due_ms = 0;
+	s->batch_start_seen = s->total_seen;
+	s->batch_started_ms = hi5622_scan_now();
+	s->batch_retried = false;
 	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(), tmo);
 	if (rc) {
 		mutex_unlock(&s->lock);
@@ -849,7 +894,10 @@ static int hi5622_scan_send_batch(struct hi5622_scan *s, u32 first, u32 n)
 			 rc);
 		goto out;
 	}
-	s->batches_sent++;
+	if (s->batch_reposting)
+		s->batch_reposting = false;
+	else
+		s->batches_sent++;
 	mutex_unlock(&s->lock);
 	dev_info(dev,
 		 "cfg80211: scan request batch %u/%u posted by provider '%s' (%u of %u channels, ch %u..%u, %u ssids, dwell %u ms, total %zu B); request window %u ms (%s), host completion on channel coverage%s\n",

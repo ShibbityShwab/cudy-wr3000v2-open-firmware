@@ -1,9 +1,12 @@
 --- a/hi5622_scan.c
 +++ b/hi5622_scan.c
-@@ -64,6 +64,33 @@
+@@ -62,7 +62,34 @@
+ static unsigned int hi5622_scan_dwell_ms = 60u;
+ module_param_named(scan_dwell_ms, hi5622_scan_dwell_ms, uint, 0644);
  MODULE_PARM_DESC(scan_dwell_ms,
- 		 "g0 id0xC scan dwell in ms (default 60 = vendor default, 20..200; 0 also selects vendor default)");
- 
+-		 "g0 id0xC scan dwell in ms (default 60 = vendor default, 20..200; 0 also selects vendor default)");
++		 "g0 id0xC scan dwell override in ms (0 = vendor default 60, 20..200)");
++
 +/* task-133 (wifi-scan-tuning): per-channel cost used by the auto scan window.
 + * 0 = compiled default (250 ms; the bench measured ~156 ms/channel on the
 + * self-contained image).  Out-of-range values are ignored, not clamped, so a
@@ -30,10 +33,9 @@
 +module_param_named(scan_batch_gap_ms, hi5622_scan_batch_gap_ms, uint, 0644);
 +MODULE_PARM_DESC(scan_batch_gap_ms,
 +		 "pause between chained scan requests in ms (default 300, 0..5000)");
-+
+ 
  static u64 hi5622_scan_now(void)
  {
- 	return hcc_kernel_now_ms();
 @@ -74,14 +101,22 @@
  	return c ? &c->scan : NULL;
  }
@@ -113,11 +115,47 @@
  /* =====================================================================
   * scan completion work: reports cfg80211_scan_done() exactly once
   * ===================================================================*/
-@@ -242,7 +321,76 @@
+@@ -242,7 +321,112 @@
  		return;
  	}
  	now = hi5622_scan_now();
 -	step = hi5622_scan_model_tick(&s->model, now);
++	/* R3: a non-first request that produced no channel result at all was most
++	 * likely silently refused (firmware still in scan-in-progress); repost it
++	 * once before the bounded timeout aborts the whole scan. */
++	if (s->batches_sent > 1u && s->batches_sent < s->batches_total &&
++	    !s->batch_pending && !s->batch_retried &&
++	    s->total_seen == s->batch_start_seen &&
++	    now - s->batch_started_ms >= HI5622_SCAN_BATCH_RETRY_MS) {
++		u32 first = s->batch_first;
++		u32 len = s->batch_n;
++		struct cfg80211_scan_request *rq = s->request;
++		int rrc;
++
++		s->batch_retried = true;
++		dev_info(wiphy_dev(c->wiphy),
++			 "cfg80211: scan batch %u/%u produced no channel result in %u ms - reposting it once (firmware scan-in-progress may not be clear yet)\n",
++			 s->batches_sent, s->batches_total,
++			 HI5622_SCAN_BATCH_RETRY_MS);
++		hi5622_scan_model_finish(&s->model, HI5622_SCAN_FINISH_ABORT);
++		hi5622_scan_model_clear(&s->model);
++		mutex_unlock(&s->lock);
++		s->batch_reposting = true;
++		rrc = hi5622_scan_send_batch(s, first, len);
++		if (rrc) {
++			if (rq) {
++				struct cfg80211_scan_info info = { .aborted = true };
++
++				dev_warn(wiphy_dev(c->wiphy),
++					 "cfg80211: scan batch repost failed (%d) - reporting cfg80211_scan_done(aborted=1)\n",
++					 rrc);
++				cfg80211_scan_done(rq, &info);
++			}
++			return;
++		}
++		schedule_delayed_work(&s->work, msecs_to_jiffies(HI5622_SCAN_POLL_MS));
++		return;
++	}
 +	/* task-133 multi-request scan: when the CURRENT request is done (every
 +	 * batch channel reported + settle, or a firmware success completion for
 +	 * it) post the next batch instead of closing the cfg80211 scan.  The final
@@ -191,7 +229,7 @@
  	if (step == HI5622_SCAN_WAIT) {
  		left = s->model.deadline_ms > now ?
  			s->model.deadline_ms - now : 0;
-@@ -263,14 +411,25 @@
+@@ -263,14 +447,25 @@
  			.aborted = (step == HI5622_SCAN_FINISH_ABORT),
  		};
  
@@ -219,7 +257,7 @@
  			 s->model.sta_events,
  			 s->model.unknown_events,
  			 atomic_read(&s->dropped_busy), s->model.parse_errors,
-@@ -296,7 +455,7 @@
+@@ -296,7 +491,7 @@
  	mutex_init(&s->lock);
  	INIT_DELAYED_WORK(&s->work, hi5622_scan_work);
  	atomic_set(&s->dropped_busy, 0);
@@ -228,7 +266,7 @@
  	hi5622_scan_model_init(&s->model);
  	s->initialized = true;
  	/* Idempotent global registration of the task-110 wifi-vap-scan builders
-@@ -401,6 +560,14 @@
+@@ -401,6 +596,14 @@
  			hi5622_scan_note_parse_error(&s->model);
  		} else if (ops->parse_scan_result(payload, avail, r)) {
  			hi5622_scan_note_parse_error(&s->model);
@@ -243,7 +281,7 @@
  		} else if (hi5622_scan_result_validate(r)) {
  			hi5622_scan_note_invalid_result(&s->model);
  		} else {
-@@ -436,7 +603,13 @@
+@@ -436,7 +639,13 @@
  		 * can close the scan without a firmware completion event. */
  		if (ops && ops->parse_scan_channel &&
  		    !ops->parse_scan_channel(payload, avail, &ch)) {
@@ -257,7 +295,7 @@
  			dev_info_ratelimited(&ctx->pdev->dev,
  					     "cfg80211: scan channel result slot=%u ch=%u (%u MHz%s)\n",
  					     ch.slot, ch.chan_num, ch.freq,
-@@ -546,37 +719,46 @@
+@@ -546,37 +755,46 @@
  					      module);
  }
  
@@ -324,7 +362,7 @@
  	p = kzalloc(sizeof(*p), GFP_KERNEL);
  	wire = kmalloc(HI5622_FRAME_MAX_TOTAL, GFP_KERNEL);
  	if (!p || !wire) {
-@@ -584,35 +766,34 @@
+@@ -584,35 +802,34 @@
  		goto out;
  	}
  	p->user_id = (u8)s->user_id;
@@ -378,7 +416,7 @@
  		goto out;
  	}
  	rc = ops->build_scan_req(wire, HI5622_FRAME_MAX_TOTAL, &len, p);
-@@ -629,19 +810,12 @@
+@@ -629,19 +846,21 @@
  		rc = -EINVAL;
  		goto out;
  	}
@@ -395,15 +433,24 @@
 -
 -	tmo = hi5622_scan_pick_timeout(request);
 +	tmo = hi5622_scan_pick_timeout(n);
++	/* Request 2+ also needs the inter-batch gap and the firmware scan-restart
++	 * latency; the bench saw the plain 3 s window expire during batch 2. */
++	if (first != 0u)
++		tmo = tmo > HI5622_SCAN_TIMEOUT_MAX_MS - HI5622_SCAN_TIMEOUT_LATER_MS ?
++		      HI5622_SCAN_TIMEOUT_MAX_MS :
++		      tmo + HI5622_SCAN_TIMEOUT_LATER_MS;
  	mutex_lock(&s->lock);
 +	s->batch_first = first;
 +	s->batch_n = n;
 +	s->batch_pending = false;
 +	s->batch_due_ms = 0;
++	s->batch_start_seen = s->total_seen;
++	s->batch_started_ms = hi5622_scan_now();
++	s->batch_retried = false;
  	rc = hi5622_scan_model_start(&s->model, hi5622_scan_now(), tmo);
  	if (rc) {
  		mutex_unlock(&s->lock);
-@@ -649,25 +823,19 @@
+@@ -649,25 +868,19 @@
  			 rc);
  		goto out;
  	}
@@ -431,11 +478,14 @@
  	mutex_lock(&s->lock);
  	s->posting = false;
  	if (rc) {
-@@ -681,19 +849,121 @@
+@@ -681,19 +894,124 @@
  			 rc);
  		goto out;
  	}
-+	s->batches_sent++;
++	if (s->batch_reposting)
++		s->batch_reposting = false;
++	else
++		s->batches_sent++;
  	mutex_unlock(&s->lock);
  	dev_info(dev,
 -		 "cfg80211: scan request posted by provider '%s' (%u ssids, %u channels, %u IE bytes, dwell %u ms, total %zu B); waiting for g1 15/16/17 or g2 2, timeout %u ms (%s), host completion on all-channel coverage\n",
@@ -560,7 +610,7 @@
  	struct hi5622_cfg80211 *c = wiphy_priv(wiphy);
 --- a/hi5622_scan.h
 +++ b/hi5622_scan.h
-@@ -49,6 +49,25 @@
+@@ -49,6 +49,29 @@
  	atomic_t		dropped_busy;	/* events lost to trylock */
  	u32			scan_timeout_ms;
  	u32			user_id;	/* user id used in builders [U] */
@@ -583,6 +633,10 @@
 +	u64			total_seen_mask;
 +	bool			batch_pending;	/* gap timer armed for the next batch */
 +	u64			batch_due_ms;
++	u32			batch_start_seen;	/* total_seen when this request was posted */
++	u64			batch_started_ms;
++	bool			batch_retried;	/* repost budget for this request */
++	bool			batch_reposting;	/* send_batch does not advance the index */
  };
  
  /* cfg80211 layer lifecycle (hi5622_cfg80211.c calls these). */
@@ -697,7 +751,7 @@
  	 * clock and a scan lives far below 2^32 ms. */
 --- a/hi5622_scan_logic.h
 +++ b/hi5622_scan_logic.h
-@@ -31,17 +31,36 @@
+@@ -31,17 +31,44 @@
   * completion event within this window is reported ABORTED to cfg80211 so that
   * iw/netifd never hang.
   *
@@ -740,11 +794,19 @@
 + * module parameter; 0 = one request (legacy behaviour). */
 +#define HI5622_SCAN_DEFAULT_BATCH	6u
 +#define HI5622_SCAN_MAX_BATCH		42u	/* builder channel slots */
-+#define HI5622_SCAN_BATCH_GAP_MS	300u	/* default inter-batch pause */
++/* task-133 R3: extra per-request window for every batch after the first (the
++ * bench saw batch 2 time out: the request needs gap + full scan time while the
++ * firmware may still hold its scan-in-progress state). */
++#define HI5622_SCAN_TIMEOUT_LATER_MS	2500u
++/* If a non-first batch produces no channel result for this long, repost the
++ * same request once (a silently refused request leaves no other observable). */
++#define HI5622_SCAN_BATCH_RETRY_MS	2000u
++#define HI5622_SCAN_BATCH_MAX_RETRIES	1u
++#define HI5622_SCAN_BATCH_GAP_MS	800u	/* default inter-batch pause */
  /* After every requested channel has been reported, keep collecting late BSS
   * events for this long before finishing the scan successfully (a firmware
   * completion event, when it exists, wins immediately). */
-@@ -127,6 +146,7 @@
+@@ -127,6 +154,7 @@
  	u64			chan_seen_mask;
  	u32			chan_seen;
  	u64			last_chan_ms;
@@ -752,7 +814,7 @@
  	u64			coverage_ms;	/* all requested channels seen at */
  	u32			coverage_completes;	/* finishes_ok via channel coverage */
  	char			finish_reason[24];	/* event / coverage / timeout / ... */
-@@ -151,11 +171,38 @@
+@@ -151,11 +179,38 @@
  
  bool hi5622_scan_model_active(const struct hi5622_scan_model *m);
  
@@ -794,19 +856,47 @@
   * Storing the plan is what turns "some channel events arrived" into the
 --- a/hi5622_scan_d2h.c
 +++ b/hi5622_scan_d2h.c
-@@ -95,6 +95,8 @@
+@@ -95,6 +95,10 @@
  		return "beacon";
  	case HI5622_SCAN_D2H_FTYPE_PRESP:
  		return "probe-resp";
++	case HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX:
++		return "len-prefix";
 +	case HI5622_SCAN_D2H_LAYOUT_RELAXED:
 +		return "relaxed";
  	default:
  		return "unknown";
  	}
-@@ -423,6 +425,40 @@
+@@ -422,6 +426,66 @@
+ 			return 0;
  		}
  	}
- 	memset(out, 0, sizeof(*out));
++	/* Bench R2 framing (task-133 R3): the g1 id15 payload captured on the
++	 * wire is [72-byte vendor scan-result header][802.11 frame][20-byte
++	 * trailer], and the u16 at payload[0] is exactly the 802.11 frame length
++	 * (457 - 20 - 365 = 72, 497 - 20 - 405 = 72 for the two bench lengths).
++	 * Derive the frame offset from that length instead of assuming it, and
++	 * keep the fixed/relaxed probes as fallbacks for other captures. */
++	if (len > HI5622_SCAN_D2H_TRAILER_LEN + 2u) {
++		u32 flen = rd16(payload);
++		u32 off;
++
++		if (flen >= HI5622_SCAN_D2H_MGMT_HDR + HI5622_SCAN_D2H_BEACON_FIXED &&
++		    flen <= len - HI5622_SCAN_D2H_TRAILER_LEN) {
++			off = len - HI5622_SCAN_D2H_TRAILER_LEN - flen;
++			if (off <= 128u) {
++				rc = hi5622_scan_d2h_parse_bss_layout(payload, len,
++					off, HI5622_SCAN_D2H_TRAILER_LEN, opts, out);
++				if (!rc) {
++					out->layout =
++						HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX;
++					return 0;
++				}
++			}
++		}
++	}
++
++	memset(out, 0, sizeof(*out));
 +	out->raw_len = (u16)(len > 0xffffu ? 0xffffu : len);
 +
 +	/* Relaxed probe (task-133 R2 follow-up): the bench showed g1 id15 frames
@@ -819,8 +909,9 @@
 +	 * HI5622_SCAN_D2H_LAYOUT_RELAXED and the kernel logs it, so a bench run
 +	 * still tells us the true framing. */
 +	{
-+		static const u32 offs[] = { 0, 2, 4, 6, 8, 10, 12, 16, 20,
-+					    24, 28, 32 };
++		static const u32 offs[] = { 72, 68, 76, 64, 80, 0, 2, 4, 6,
++					    8, 10, 12, 16, 20, 24, 28, 32, 36,
++					    40, 44, 48, 52, 56, 60, 88, 92, 96 };
 +		static const u32 trs[] = { HI5622_SCAN_D2H_TRAILER_LEN,
 +					   0, 4, 8, 12, 16, 24 };
 +		struct hi5622_scan_d2h_opts ropts;
@@ -840,18 +931,20 @@
 +			}
 +		}
 +	}
-+	memset(out, 0, sizeof(*out));
+ 	memset(out, 0, sizeof(*out));
  	out->raw_len = (u16)(len > 0xffffu ? 0xffffu : len);
  	return -EOPNOTSUPP;
- }
 --- a/hi5622_scan_d2h.h
 +++ b/hi5622_scan_d2h.h
-@@ -144,6 +144,9 @@
+@@ -144,6 +144,12 @@
  #define HI5622_SCAN_D2H_LAYOUT_FRAME_ONLY	0x02u	/* bare 802.11 frame */
  #define HI5622_SCAN_D2H_LAYOUT_PREFIX12_TRAILER	0x04u	/* defensive variant */
  #define HI5622_SCAN_D2H_LAYOUT_PREFIX12_ONLY	0x08u
 +/* task-133 R2: alignment found by the relaxed probe (frame offset / trailer
 + * length not one of the four fixed candidates); logged as "relaxed". */
++/* task-133 R3: frame offset derived from the u16 frame-length at payload[0]
++ * ([72-byte vendor header][frame][20-byte trailer] on the bench capture). */
++#define HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX	0x40u
 +#define HI5622_SCAN_D2H_LAYOUT_RELAXED		0x80u
  
  /* PHY mode byte inside the 20-byte trailer (trailer[0x11]) [V offset, I naming]:

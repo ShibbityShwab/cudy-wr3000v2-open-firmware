@@ -95,6 +95,8 @@ const char *hi5622_scan_d2h_ftype_name(u8 ftype)
 		return "beacon";
 	case HI5622_SCAN_D2H_FTYPE_PRESP:
 		return "probe-resp";
+	case HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX:
+		return "len-prefix";
 	case HI5622_SCAN_D2H_LAYOUT_RELAXED:
 		return "relaxed";
 	default:
@@ -424,6 +426,31 @@ int hi5622_scan_d2h_parse_bss(const u8 *payload, u32 len,
 			return 0;
 		}
 	}
+	/* Bench R2 framing (task-133 R3): the g1 id15 payload captured on the
+	 * wire is [72-byte vendor scan-result header][802.11 frame][20-byte
+	 * trailer], and the u16 at payload[0] is exactly the 802.11 frame length
+	 * (457 - 20 - 365 = 72, 497 - 20 - 405 = 72 for the two bench lengths).
+	 * Derive the frame offset from that length instead of assuming it, and
+	 * keep the fixed/relaxed probes as fallbacks for other captures. */
+	if (len > HI5622_SCAN_D2H_TRAILER_LEN + 2u) {
+		u32 flen = rd16(payload);
+		u32 off;
+
+		if (flen >= HI5622_SCAN_D2H_MGMT_HDR + HI5622_SCAN_D2H_BEACON_FIXED &&
+		    flen <= len - HI5622_SCAN_D2H_TRAILER_LEN) {
+			off = len - HI5622_SCAN_D2H_TRAILER_LEN - flen;
+			if (off <= 128u) {
+				rc = hi5622_scan_d2h_parse_bss_layout(payload, len,
+					off, HI5622_SCAN_D2H_TRAILER_LEN, opts, out);
+				if (!rc) {
+					out->layout =
+						HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX;
+					return 0;
+				}
+			}
+		}
+	}
+
 	memset(out, 0, sizeof(*out));
 	out->raw_len = (u16)(len > 0xffffu ? 0xffffu : len);
 
@@ -437,8 +464,9 @@ int hi5622_scan_d2h_parse_bss(const u8 *payload, u32 len,
 	 * HI5622_SCAN_D2H_LAYOUT_RELAXED and the kernel logs it, so a bench run
 	 * still tells us the true framing. */
 	{
-		static const u32 offs[] = { 0, 2, 4, 6, 8, 10, 12, 16, 20,
-					    24, 28, 32 };
+		static const u32 offs[] = { 72, 68, 76, 64, 80, 0, 2, 4, 6,
+					    8, 10, 12, 16, 20, 24, 28, 32, 36,
+					    40, 44, 48, 52, 56, 60, 88, 92, 96 };
 		static const u32 trs[] = { HI5622_SCAN_D2H_TRAILER_LEN,
 					   0, 4, 8, 12, 16, 24 };
 		struct hi5622_scan_d2h_opts ropts;

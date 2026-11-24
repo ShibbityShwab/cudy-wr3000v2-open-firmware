@@ -146,6 +146,9 @@ enum hi5622_scan_d2h_ftype {
 #define HI5622_SCAN_D2H_LAYOUT_PREFIX12_ONLY	0x08u
 /* task-133 R2: alignment found by the relaxed probe (frame offset / trailer
  * length not one of the four fixed candidates); logged as "relaxed". */
+/* task-133 R3: frame offset derived from the u16 frame-length at payload[0]
+ * ([72-byte vendor header][frame][20-byte trailer] on the bench capture). */
+#define HI5622_SCAN_D2H_LAYOUT_LEN_PREFIX	0x40u
 #define HI5622_SCAN_D2H_LAYOUT_RELAXED		0x80u
 
 /* PHY mode byte inside the 20-byte trailer (trailer[0x11]) [V offset, I naming]:

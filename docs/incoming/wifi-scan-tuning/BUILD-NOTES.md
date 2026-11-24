@@ -150,3 +150,29 @@ The lead fires R1 with this artifact (defaults; hcc_trace=0). Expected: 3
 batch lines, 13 channel results, no complete-failed abort after a non-final
 batch, `scan BSS list check: entries>0 iw_visible>0`, DONE
 `finish-ok[...], channel=13, chans=13/13 batches=3/3`, iw >=1 BSS.
+
+## R3 revision (after the third R1 fire: batch window + real g1 id15 framing)
+
+Third R1 fire: the chain advanced to batch 2/3 (batch-local completion works),
+then the per-request window expired during batch 2 with zero new channel
+results, and the BSS decoder still failed - but the new decode-gap hexdumps
+captured the real g1 id15 framing.
+
+Framing decoded from the captures: payload = [72-byte vendor scan-result
+header][802.11 frame][20-byte trailer], where the u16 at payload[0] IS the
+802.11 frame length: 457 - 20 - 365 = 72 and 497 - 20 - 405 = 72 for both
+bench lengths.  The parser now derives frame offset = len - 20 - u16(payload[0])
+(layout reported as "len-prefix"), keeps the fixed/relaxed probes as
+fallbacks, and keeps the decode-gap hexdump.  Chain: default inter-batch gap
+raised 300 -> 800 ms, every batch after the first gets +2500 ms of request
+window (batch 2/3: ~5.5 s), and a non-first request that yields no channel
+result within 2000 ms is reposted once (recovery from a silently refused
+request while the firmware still holds scan-in-progress).
+
+| item | value |
+| --- | --- |
+| artifact for the R-ladder (base+polish+scan, final-stack parity) | **249,580 B** sha256 1710bf113a7e11ee40bbd9b7bbc05f196120dd91859f85c52816f93dc924c6aa at /tmp/wifi-scan-tuning/hi5622_wifi.ko |
+| bare combined-base variant | 249,228 B sha256 8e6f3b176edb68335e3c5b50d04c9bce088ce6071536cf6f55080faefacfc849 |
+| build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 3 scan params, 10 imports |
+| host tests | 12/12 decoder (incl. bench framing), 37/37 tuning, 196/196 scan-complete, 290/290 scan-logic |
+| patches | 0001/0002 regenerated (7 files), patch --dry-run clean |

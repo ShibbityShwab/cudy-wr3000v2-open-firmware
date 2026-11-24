@@ -60,7 +60,15 @@
  * module parameter; 0 = one request (legacy behaviour). */
 #define HI5622_SCAN_DEFAULT_BATCH	6u
 #define HI5622_SCAN_MAX_BATCH		42u	/* builder channel slots */
-#define HI5622_SCAN_BATCH_GAP_MS	300u	/* default inter-batch pause */
+/* task-133 R3: extra per-request window for every batch after the first (the
+ * bench saw batch 2 time out: the request needs gap + full scan time while the
+ * firmware may still hold its scan-in-progress state). */
+#define HI5622_SCAN_TIMEOUT_LATER_MS	2500u
+/* If a non-first batch produces no channel result for this long, repost the
+ * same request once (a silently refused request leaves no other observable). */
+#define HI5622_SCAN_BATCH_RETRY_MS	2000u
+#define HI5622_SCAN_BATCH_MAX_RETRIES	1u
+#define HI5622_SCAN_BATCH_GAP_MS	800u	/* default inter-batch pause */
 /* After every requested channel has been reported, keep collecting late BSS
  * events for this long before finishing the scan successfully (a firmware
  * completion event, when it exists, wins immediately). */

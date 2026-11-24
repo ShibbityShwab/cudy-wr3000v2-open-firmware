@@ -382,3 +382,37 @@ relaxed-decoder): the ladder artifact is **248,668 B sha256 ca81660f...**
 clean).  Expected R1 after R2: three batch lines (no completion-event abort
 after batch 1), 13 channel results, BSS entries>0 iw_visible>0, DONE
 finish-ok channel=13 chans=13/13 batches=3/3 -> scan_done(aborted=0).
+
+---
+
+## 11. Third R1 fire: the real g1 id15 framing + batch-window fixes (R3)
+
+The chain advanced to batch 2/3 (batch-local completion handling works), then
+the bounded per-request window expired during batch 2 with no new channel
+result.  The decode-gap hexdumps (kept from R2) captured the real g1 id15
+payload framing:
+
+    len=457 first=6d011800ff000404110e000000ff0403009901ff0f80009c0f0000ff0f000000
+    len=457 first=6d011800ff000004110e000000ff0403009901ff0f80006e050000ff0f000000
+    len=497 first=95011800ff000404110e000000ff040300c101ff0f80009e0a0000ff0f000000
+    len=497 first=95011800ff000004110e000000ff040300c101ff0f8000e80a0000ff0f000000
+
+Decoding: the u16 at payload[0] is the 802.11 frame length (LE: 0x016d=365,
+0x0195=405) and the payload is [72-byte vendor scan-result header][802.11
+frame][20-byte trailer]: 457 - 20 - 365 = 72 and 497 - 20 - 405 = 72 for the
+two payload sizes (497 is the previously documented 509-byte-total BSS
+payload).  The four variant pairs differ only in flags/TSF-like fields, not in
+the framing.  The parser now derives the frame offset from the length prefix
+(layout "len-prefix"), keeps the fixed/relaxed probes as fallbacks and keeps
+the decode-gap hexdump.
+
+Chain fixes: default inter-batch gap 300 -> 800 ms; every batch after the
+first gets +2500 ms of request window (batch 2/3: 3000 + 2500 = 5500 ms); a
+non-first request that produces no channel result within 2000 ms is reposted
+once (a silently refused request leaves no other host-visible trace).
+
+R3 artifacts: ladder 249,580 B sha256 1710bf11...; bare 249,228 B sha256
+8e6f3b17...; host tests 12/12 + 37/37 + 196/196 + 290/290; 0 warnings;
+patches regenerated (7 files).  Expected R1 after R3: three batch lines,
+13/13 coverage, BSS list entries>0 iw_visible>0 (the real BSS frames now
+decode), DONE finish-ok chans=13/13 batches=3/3.

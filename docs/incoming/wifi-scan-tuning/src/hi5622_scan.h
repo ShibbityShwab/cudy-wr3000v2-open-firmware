@@ -68,6 +68,10 @@ struct hi5622_scan {
 	u64			total_seen_mask;
 	bool			batch_pending;	/* gap timer armed for the next batch */
 	u64			batch_due_ms;
+	u32			batch_start_seen;	/* total_seen when this request was posted */
+	u64			batch_started_ms;
+	bool			batch_retried;	/* repost budget for this request */
+	bool			batch_reposting;	/* send_batch does not advance the index */
 };
 
 /* cfg80211 layer lifecycle (hi5622_cfg80211.c calls these). */
