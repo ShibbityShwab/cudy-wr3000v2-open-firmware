@@ -1,0 +1,107 @@
+== wifi-hostapd-deploy / task-125 / mode=check / host=root@192.168.1.1
+== wifi-hostapd-deploy host check (never contacts the router)
+== host check inputs
+ok   table present: expected-packages.txt
+ok   table present: expected-files.txt
+ok   table present: image-baseline-packages.txt
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   image-baseline-packages.txt sha256
+ok   OpenWrt host apk-tools: /home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/host/bin/apk
+ok   readelf: /usr/bin/readelf
+ok   tool: python3
+ok   tool: tar
+ok   host-config validator present
+== apk identity
+ok   ucode-mod-nl80211 size
+ok   ucode-mod-nl80211 sha256
+ok   ucode-mod-rtnl size
+ok   ucode-mod-rtnl sha256
+ok   hostapd-common size
+ok   hostapd-common sha256
+ok   hostapd-mini size
+ok   hostapd-mini sha256
+KV packages=4
+ok   4-package deploy set
+== apk metadata + dependency closure
+ok   ucode-mod-nl80211 metadata name
+ok   ucode-mod-nl80211 metadata version
+ok   ucode-mod-nl80211 metadata arch
+ok   ucode-mod-nl80211 installed-size
+ok   ucode-mod-rtnl metadata name
+ok   ucode-mod-rtnl metadata version
+ok   ucode-mod-rtnl metadata arch
+ok   ucode-mod-rtnl installed-size
+ok   hostapd-common metadata name
+ok   hostapd-common metadata version
+ok   hostapd-common metadata arch
+ok   hostapd-common installed-size
+ok   hostapd-mini metadata name
+ok   hostapd-mini metadata version
+ok   hostapd-mini metadata arch
+ok   hostapd-mini installed-size
+KV dependencies=14
+KV unresolved_dependencies=0
+ok   every dependency resolves in the set or the baseline image
+== payload extraction + installed-file manifest
+ok   apk extract rc=0 (4 packages extracted)
+ok   file etc/capabilities/wpad.json sha256
+ok   file etc/capabilities/wpad.json size
+ok   file etc/init.d/wpad sha256
+ok   file etc/init.d/wpad size
+ok   file lib/netifd/dhcp-get-server.sh sha256
+ok   file lib/netifd/dhcp-get-server.sh size
+ok   file usr/lib/ucode/nl80211.so sha256
+ok   file usr/lib/ucode/nl80211.so size
+ok   file usr/lib/ucode/rtnl.so sha256
+ok   file usr/lib/ucode/rtnl.so size
+ok   file usr/sbin/hostapd sha256
+ok   file usr/sbin/hostapd size
+ok   file usr/share/acl.d/wpad_acl.json sha256
+ok   file usr/share/acl.d/wpad_acl.json size
+ok   file usr/share/hostap/hostapd.uc sha256
+ok   file usr/share/hostap/hostapd.uc size
+KV manifest_files=8
+ok   8 installed payload files
+ok   payload contains exactly the manifest files (no extras, no omissions)
+== ELF / ABI
+ok   hostapd ELF class
+ok   hostapd ELF machine
+ok   hostapd EABI5
+ok   hostapd is a PIE (OpenWrt PKG_ASLR_PIE)
+ok   hostapd interpreter /lib/ld-musl-arm.so.1
+KV needed_libs=libblobmsg_json.so.20261103 libc.so libgcc_s.so.1 libnl-tiny.so.1 libubox.so.20261103 libubus.so.20261028 libucode.so.20261009 libudebug.so 
+ok   NEEDED libblobmsg_json.so.20261103 <- baseline package libblobmsg-json20261103
+ok   NEEDED libc.so <- baseline package libc
+ok   NEEDED libgcc_s.so.1 <- baseline package libgcc1
+ok   NEEDED libnl-tiny.so.1 <- baseline package libnl-tiny1
+ok   NEEDED libubox.so.20261103 <- baseline package libubox20261103
+ok   NEEDED libubus.so.20261028 <- baseline package libubus20261028
+ok   NEEDED libucode.so.20261009 <- baseline package libucode20261009
+ok   NEEDED libudebug.so <- baseline package libudebug
+KV needed_unresolved=0
+ok   8 DT_NEEDED libraries checked
+== config fixture validity (tree-source hostapd v2.12)
+ok   config fixtures parse with hostapd v2.12 (negative control caught)
+ok   hostapd-open.conf interface=wlan0
+ok   hostapd-open.conf beacon_int=100
+ok   hostapd-open.conf dtim_period=2
+ok   hostapd-wpa2.conf interface=wlan0
+ok   hostapd-wpa2.conf beacon_int=100
+ok   hostapd-wpa2.conf dtim_period=2
+ok   open fixture is an open network
+ok   wpa2 fixture uses a placeholder passphrase only
+== AP-start ladder recipe
+ok   ladder recipe consistent (107 passed)
+== script syntax + static safety audit
+ok   bash -n deploy-hostapd.sh
+ok   bash -n hostapd-device.sh
+ok   bash -n build-host-hostapd.sh
+ok   bash -n readback-pack.sh
+ok   bash -n selftest.sh
+ok   bash -n validate-configs.sh
+ok   python compile check-ladder.py
+ok   no flash/selector/devmem/module/power-cycle/UART operation in any lane script
+
+== deploy-hostapd: 88 passed, 0 failed (mode=check) ==
+RESULT: PASS

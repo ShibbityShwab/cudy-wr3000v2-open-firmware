@@ -1,0 +1,13 @@
+# wifi-hostapd-deploy installed-file manifest (task-125): every payload file the four
+# packages add to the bench-image rootfs (apk database metadata under lib/apk/packages/ is
+# excluded; the package manager owns it).  Regenerated/verified by tools/selftest.sh; the
+# deploy verify/rollback gates compare these exact sha256 values on the box.
+# columns: path sha256 size
+etc/capabilities/wpad.json 8abee2b7faa6bd6c71779c74ac6901fe6c265d56d4889d810822b5cabb1369cd 407
+etc/init.d/wpad b6679419287fa73cfbf808a5330ee329a246af17efbb5d9ab31a1647743d3855 1262
+lib/netifd/dhcp-get-server.sh 9e23eb5c5aa5a2ce6c07d1c432a4bc05e99356970554a50ca9783094b587c166 47
+usr/lib/ucode/nl80211.so 54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f 61442
+usr/lib/ucode/rtnl.so fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d 73731
+usr/sbin/hostapd 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919 504333
+usr/share/acl.d/wpad_acl.json 04fe5a758a5a1ecf92359b0d95c099548ee977649d8c60f49e7ca5c2d5bfa020 521
+usr/share/hostap/hostapd.uc 160af9e095108a5d8d476dd5a87771491b733fde4b422406352baafca02dd242 71062

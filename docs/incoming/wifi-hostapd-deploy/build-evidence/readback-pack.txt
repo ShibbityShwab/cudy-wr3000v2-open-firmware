@@ -1,0 +1,19 @@
+readback                                         BAR0         expected
+--------                                         ----         --------
+golden page word0                                0x877000     0x86807FEF
+golden page +4                                   0x877004     0x7
+golden page +8                                   0x877008     0x2
+golden page +C                                   0x87700C     0xABCD
+boot state                                       0x7D0B60     1
+exception mask                                   0x6F8008     0
+exception staging                                0x6F800C     0
+module-table slot0 (radio object G+0x630)        0x829458     0x00119758 (boot-static context-array CA per wifi-vap-start TABLES T18); if it differs, stop and record - do not guess an address
+ctx0 = u32(slot0) -> BAR0 0x119758 + 0x6B8000    0x7D1758     context body base (module 0)
+ctx0+0x190 VAP pointer                           0x7D18E8     0 before V1/V2, nonzero after a mode-1 VAP add (PKTRAM CA form 0x01xxxxxx [I])
+ctx0+0x18C flags word (0x18C..0x18F)             0x7D18E4     capture pre/post; changed by the AP-config worker (mode/HT flags)
+VAP+0x10 beacon interval                                      100 (0x64) [I: deref window to be confirmed on the first AP fire]
+VAP+0x14 DTIM                                                 2 [I]
+VAP+0x94 MDID / +0x96..0x98 MD bits                           0 without an MD IE (optional evidence)
+
+# read-only only: never write these addresses.  mask/staging must stay 0;
+# a nonzero mask or staging word is a STOP, not a retry.

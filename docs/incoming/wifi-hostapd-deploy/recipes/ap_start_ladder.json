@@ -1,0 +1,184 @@
+{
+ "lane": "wifi-hostapd-deploy",
+ "task": "task-125",
+ "date": "2026-11-26",
+ "bench_only": true,
+ "attended": true,
+ "never_contact_vendor_router": true,
+ "purpose": "Attended AP-start ladder: install the OpenWrt hostapd package set into the running bench rootfs (zero-flash T0 apk-add), run the proven boot + C2 calibration + mode-1 VAP base, start hostapd on an AP-type wlan0 and decide from READ-ONLY evidence whether the firmware accepted the reverse-engineered AP configuration (WAL cmd 0x0127 body 156 B).",
+ "prerequisites": {
+  "image": "cfg80211 bench image (kernel slice 13e81214..., slot 1794a531...) booted on pair B",
+  "firmware": "PD4-patched vendor firmware, golden cold-boot page 0x86807FEF/7/2/0xABCD state 1",
+  "modules": "cfg80211.ko + the wifi-ap-start provider module (770,304 B sha256 11511980, ap-start provider patch on the wifi-scan-ap + wifi-vap-start tree) loaded from /tmp",
+  "hostapd": "OpenWrt hostapd-mini + hostapd-common + ucode-mod-nl80211 + ucode-mod-rtnl installed by ../deploy-hostapd.sh (see ../DEPLOY.md)",
+  "recovery": "recovery door armed, read-only UART capture running, bench link PASS",
+  "tools": "../wifi-bench-tooling (bench_session.py cfg80211 mode + bar0read) and the project tools/rsh.sh"
+ },
+ "hostapd": {
+  "package": "hostapd-mini",
+  "version": "recorded in ../tools/expected-packages.txt (OpenWrt tree 27663a0, hostapd source 2026-08-07 831364bf, v2.12)",
+  "binary": "/usr/sbin/hostapd",
+  "config": "/root/hostapd-deploy/hostapd-open.conf",
+  "pidfile": "/root/hostapd-deploy/hostapd.pid",
+  "start_command": "hostapd -B -i wlan0 -P /root/hostapd-deploy/hostapd.pid /root/hostapd-deploy/hostapd-open.conf",
+  "iface_rule": "create wlan0 as iw type __ap BEFORE hostapd: hostapd always sends NL80211_CMD_SET_INTERFACE(AP) at init and our change_virtual_intf returns -EOPNOTSUPP for a type change, so a managed VAP aborts hostapd with 'nl80211 driver initialization failed' and never reaches NEW_BEACON",
+  "depends": "the image already carries libnl-tiny1, libucode, libubus, libblobmsg-json, libudebug, libubox; the deploy set only adds hostapd-mini, hostapd-common, ucode-mod-nl80211, ucode-mod-rtnl"
+ },
+ "module_params": {
+  "allow_frames": 16,
+  "frame_gap_ms": 100,
+  "h2d_send_budget": 8,
+  "vap_start_first": 1,
+  "vap_start_mode": 1,
+  "vap_start_module": 0,
+  "ap_start_mode": 0,
+  "note": "ap_start_mode 0 = g0 id1 static keys 0x0005 (ap_ssid) + 0x0127 (ap_cfg); the static table-A dispatch is the firmware-validated carrier. vap_start_first=1 + vap_start_mode=1 are required because the provider posts the g0 id1 0x64/0x65 VAP-add/start pair ONLY inside hi5622_scan_op_scan. allow_frames=16: the frame-post budget is a per-module-instance total, and this single-boot ladder posts C2 (ctx_create + txq_sync72 + six cfg_cal = 8) + the iface-add user_add pair (2) + the scan VAP base (vap_add + vap_start + scan_req = 3) + the AP start (ap_ssid + ap_cfg = 2) = 15 frames."
+ },
+ "steps": [
+  {
+   "step": "B0",
+   "action": "read-only golden readback pack (../tools/readback-pack.sh) before any load",
+   "expect": "page 0x877000=0x86807FEF, +4=0x7, +8=0x2, +0xC=0xABCD; state 0x7D0B60=1; mask 0x6F8008=0; staging 0x6F800C=0",
+   "on_fail": "stop: do not load modules or post frames"
+  },
+  {
+   "step": "C2",
+   "action": "proven boot ladder + six-message calibration (ctx_create type 1, txq_sync72, six cfg_cal 3502..3507) with the AP-start provider module loaded",
+   "expect": "all frames CONSUMED, rd_catalog g1 id3 count increases by 6, mask 0; dmesg 'core phase=ACTIVE'",
+   "on_fail": "stop: the AP-config worker needs the active core"
+  },
+  {
+   "step": "H0",
+   "action": "../deploy-hostapd.sh --verify --attended --yes-really (read-only): apk db entries, installed file hashes, hostapd -v",
+   "expect": "all set packages installed, 'hostapd v2.12' in the -v output, config files present with the pinned sha256",
+   "on_fail": "stop: fix the deploy (../DEPLOY.md), do not hand-run half a package set"
+  },
+  {
+   "step": "V1",
+   "action": "iw phy phy0 interface add wlan0 type __ap ; ip link set wlan0 up",
+   "expect": "rc=0; dmesg \"cfg80211: VAP 'wlan0' added (type AP\"; frame post 'user_add': g0 id7 total 180 B consumed; frame post 'user_add_notify': g0 id8 total 180 B consumed",
+   "on_fail": "stop: a refused VAP add is a driver/provider gate problem, not an AP-start problem"
+  },
+  {
+   "step": "V2",
+   "action": "mode-1 VAP base: iw dev wlan0 scan freq 2412 (bounded to one channel; cfg80211 6.18 allows a scan on an AP iftype)",
+   "expect": "dmesg \"frame post 'vap_add': g0 id1 total 48 B ... consumed after 0 polls\" then \"frame post 'vap_start': g0 id1 total 40 B ... consumed after 0 polls\" (the provider posts the mode-1 VAP base at the start of the scan op, BEFORE scan_req g0 id0xC); readback module-table slot0 0x829458 = 0x00119758 and ctx0+0x190 (BAR0 0x7D18E8) nonzero. The scan itself may finish-abort at the host window - the scan result is NOT a gate for the AP ladder.",
+   "on_fail": "stop: without the firmware VAP object the AP-config worker has nothing to write into"
+  },
+  {
+   "step": "A1/A2",
+   "action": "start hostapd (see hostapd.start_command) -> NL80211_CMD_NEW_BEACON -> cfg80211 start_ap -> provider posts ap_ssid (g0 id1 key 0x0005, 64 B) then ap_cfg (g0 id1 key 0x0127, 184 B = 156-byte body)",
+   "expect": "hostapd -B rc=0; dmesg \"cfg80211: start_ap sequence frame 1/4 'ap_ssid' posted (64 B\" + \"cfg80211: start_ap sequence frame 2/4 'ap_cfg' posted (184 B\" + \"cfg80211: start_ap sequence posted to provider 'hi5622_vapscan' (2 frame(s))\"; dmesg \"frame post 'ap_ssid': g0 id1 total 64 B ... consumed\" + \"frame post 'ap_cfg': g0 id1 total 184 B ... consumed\"; cfg80211_status frame_post allow_frames=16 posted=..., refused=0 timeout=0 bad=0; mask 0, staging 0; page/state unchanged",
+   "on_fail": "stop; capture readback pack + dmesg before any retry (a second start_ap in the same boot is forbidden)"
+  },
+  {
+   "step": "A3",
+   "action": "read-only: iw dev wlan0 info; ip link show wlan0; hostapd pid alive; readback ctx0+0x18C/+0x18D (BAR0 0x7D1758+0x18C) and, if the ctx0+0x190 pointer dereferences, VAP+0x10/+0x14",
+   "expect": "dev type AP over the firmware-started VAP; ctx0+0x18C word differs from the pre-A1 capture; VAP+0x10 == 100 and VAP+0x14 == 2 [I deref window, first bench confirmation]; heartbeats continue",
+   "on_fail": "record, kill hostapd, power-cycle, analyse offline"
+  },
+  {
+   "step": "A4",
+   "action": "optional second rung: same ladder with ap_start_mode=1 (vendor WAL g2 cmds 0x0005/0x006D/0x0127/0x0065)",
+   "expect": "all four frames CONSUMED, mask 0, same readback change; if not, the static g0 carrier stays the supported path",
+   "on_fail": "classify WAL g2 as dynamic-handler-only [U]; keep mode 0"
+  },
+  {
+   "step": "Z",
+   "action": "cleanup: kill hostapd (kill $(cat /root/hostapd-deploy/hostapd.pid)); iw dev wlan0 del; leave the deployed package set installed for the next session (rollback only with ../deploy-hostapd.sh --rollback)",
+   "expect": "iw del rc=0, no netdev left, mask 0, page golden",
+   "on_fail": "do not force another netlink delete on the same boot; power-cycle and record"
+  }
+ ],
+ "readback_pack": [
+  {
+   "name": "golden page word0",
+   "bar0": "0x877000",
+   "expect": "0x86807FEF"
+  },
+  {
+   "name": "golden page +4",
+   "bar0": "0x877004",
+   "expect": "0x7"
+  },
+  {
+   "name": "golden page +8",
+   "bar0": "0x877008",
+   "expect": "0x2"
+  },
+  {
+   "name": "golden page +C",
+   "bar0": "0x87700C",
+   "expect": "0xABCD"
+  },
+  {
+   "name": "boot state",
+   "bar0": "0x7D0B60",
+   "expect": "1"
+  },
+  {
+   "name": "exception mask",
+   "bar0": "0x6F8008",
+   "expect": "0"
+  },
+  {
+   "name": "exception staging",
+   "bar0": "0x6F800C",
+   "expect": "0"
+  },
+  {
+   "name": "module-table slot0 (radio object G+0x630)",
+   "bar0": "0x829458",
+   "expect": "0x00119758 (boot-static context-array CA per wifi-vap-start TABLES T18); if it differs, stop and record - do not guess an address"
+  },
+  {
+   "name": "ctx0 = u32(slot0) -> BAR0 0x119758 + 0x6B8000",
+   "bar0": "0x7D1758",
+   "expect": "context body base (module 0)"
+  },
+  {
+   "name": "ctx0+0x190 VAP pointer",
+   "bar0": "0x7D18E8",
+   "expect": "0 before V1/V2, nonzero after a mode-1 VAP add (PKTRAM CA form 0x01xxxxxx [I])"
+  },
+  {
+   "name": "ctx0+0x18C flags word (0x18C..0x18F)",
+   "bar0": "0x7D18E4",
+   "expect": "capture pre/post; changed by the AP-config worker (mode/HT flags)"
+  },
+  {
+   "name": "VAP+0x10 beacon interval",
+   "expr": "u32(BAR0 0x7D18E8) + 0x6B8000 + 0x10",
+   "expect": "100 (0x64) [I: deref window to be confirmed on the first AP fire]"
+  },
+  {
+   "name": "VAP+0x14 DTIM",
+   "expr": "u32(BAR0 0x7D28E8) + 0x6B8000 + 0x14",
+   "expect": "2 [I]"
+  },
+  {
+   "name": "VAP+0x94 MDID / +0x96..0x98 MD bits",
+   "expr": "u32(BAR0 0x7D28E8) + 0x6B8000 + 0x94",
+   "expect": "0 without an MD IE (optional evidence)"
+  }
+ ],
+ "stop_rules": [
+  "exception mask CA -> BAR0 0x6F8008 != 0 or the staging word BAR0 0x6F800C != 0",
+  "golden page/state or g+0xB4/+0xB8 changes",
+  "module-table slot0 (BAR0 0x829458) is not 0x00119758: do not dereference a guessed context",
+  "any posted AP frame is not CONSUMED inside the bounded poll (cfg80211_status refused/timeout/bad increments)",
+  "any dmesg fault, a H2D lane closed, or hostapd rc != 0",
+  "never re-send start_ap or the VAP base in the same boot after a stop; power-cycle and analyse offline",
+  "never write CA 0x400392F0, never post mailbox id 5, never send group 1/4",
+  "never rmmod the modules; never reboot except via the documented attended path"
+ ],
+ "claim_rules": [
+  "a CONSUMED frame is not an AP: PASS(A2) needs the firmware readback change (ctx0+0x18C/0x18D) and, when available, VAP+0x10=100/+0x14=2",
+  "beaconing over the air is NOT observable from the same radio and is out of scope; hostapd rc=0 is a host-side fact only",
+  "do not claim the AP is functional (association/data) - add_key, STA events and the data path are separate M3/M4/M5 work"
+ ],
+ "hostapd_configs": {
+  "open": "../configs/hostapd-open.conf (2.4 GHz ch 6, OPEN, ssid wr3000v2-apstart, beacon_int 100, dtim 2)",
+  "wpa2_negative": "../configs/hostapd-wpa2.conf (2.4 GHz ch 6, WPA2-PSK/CCMP; expected to stop at add_key -EOPNOTSUPP after the start_ap sequence; records the M3 gap)"
+ }
+}

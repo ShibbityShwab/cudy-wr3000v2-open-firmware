@@ -1,0 +1,8 @@
+host hostapd: /tmp/hostapd-host/src/hostapd/hostapd (hostapd v2.12)
+ok   hostapd version matches the tree source (v2.12)
+ok   hostapd-open.conf: config parsed cleanly (pre-driver)
+ok   hostapd-wpa2.conf: config parsed cleanly (pre-driver)
+ok   negative-control: broken config refused by the parser (negative control)
+
+== validate-configs: 4 passed, 0 failed ==
+RESULT: PASS - both fixtures parse with the tree-source hostapd v2.12; a broken config is refused

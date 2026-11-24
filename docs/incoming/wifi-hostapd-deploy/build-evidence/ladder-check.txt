@@ -1,0 +1,111 @@
+ladder: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-hostapd-deploy/recipes/ap_start_ladder.json
+ok   top-level lane == 'wifi-hostapd-deploy'
+ok   top-level task == 'task-125'
+ok   top-level bench_only == True
+ok   top-level attended == True
+ok   top-level never_contact_vendor_router == True
+ok   step order is the documented ladder (B0,C2,H0,V1,V2,A1/A2,A3,A4,Z)
+ok   step B0 has an action
+ok   step B0 has PASS evidence
+ok   step B0 has a fail action
+ok   step C2 has an action
+ok   step C2 has PASS evidence
+ok   step C2 has a fail action
+ok   step H0 has an action
+ok   step H0 has PASS evidence
+ok   step H0 has a fail action
+ok   step V1 has an action
+ok   step V1 has PASS evidence
+ok   step V1 has a fail action
+ok   step V2 has an action
+ok   step V2 has PASS evidence
+ok   step V2 has a fail action
+ok   step A1/A2 has an action
+ok   step A1/A2 has PASS evidence
+ok   step A1/A2 has a fail action
+ok   step A3 has an action
+ok   step A3 has PASS evidence
+ok   step A3 has a fail action
+ok   step A4 has an action
+ok   step A4 has PASS evidence
+ok   step A4 has a fail action
+ok   step Z has an action
+ok   step Z has PASS evidence
+ok   step Z has a fail action
+ok   hostapd binary path
+ok   hostapd version is the tree-source v2.12
+ok   start_command starts with hostapd
+ok   start_command uses supported flags only (-B -i -P)
+ok   start_command daemonizes with -B (rc reflects start_ap)
+ok   start_command interface is wlan0
+ok   start_command config lives under /root/hostapd-deploy/
+ok   iface_rule demands iw type __ap
+ok   iface_rule explains the managed->AP failure
+ok   V1 creates the VAP as type __ap
+ok   V1 does not create a managed VAP
+ok   V2 posts the mode-1 VAP base via a single-channel scan
+ok   V2 documents the g0 id1 0x64/0x65 VAP-add/start pair
+ok   module parameter key set
+ok   ap_start_mode 0 (static g0 carrier)
+ok   vap_start_first 1 (scan-triggered VAP base)
+ok   vap_start_mode 1 (g0 id1 keys)
+ok   readback 0x877000 present
+ok   readback 0x877000 expects 0x86807FEF
+ok   readback 0x877004 present
+ok   readback 0x877004 expects 0x7
+ok   readback 0x877008 present
+ok   readback 0x877008 expects 0x2
+ok   readback 0x87700C present
+ok   readback 0x87700C expects 0xABCD
+ok   readback 0x7D0B60 present
+ok   readback 0x7D0B60 expects 1
+ok   readback 0x6F8008 present
+ok   readback 0x6F8008 expects 0
+ok   readback 0x6F800C present
+ok   readback 0x6F800C expects 0
+ok   module-table slot0 readback expects 0x00119758
+ok   ctx0 CA 0x119758 -> BAR0 0x7D1758 arithmetic follows the validated +0x6B8000 convention
+ok   ctx0 BAR0 0x7D1758 present in the readback pack
+ok   ctx0 readback does not carry the stale 0x7D2758 constant
+ok   ctx0+0x190 VAP pointer readback at BAR0 0X7D18E8
+ok   ctx0+0x18C flags readback at BAR0 0X7D18E4
+ok   VAP deref readbacks present (beacon interval / DTIM)
+ok   deref expr uses the +0x6B8000 window
+ok   deref expr uses the +0x6B8000 window
+ok   deref expr uses the +0x6B8000 window
+ok   a deref readback expects beacon interval 100
+ok   a deref readback expects DTIM 2
+ok   A1/A2 PASS gate mentions 'start_ap sequence frame 1/4'
+ok   A1/A2 PASS gate mentions 'ap_ssid'
+ok   A1/A2 PASS gate mentions 'ap_cfg'
+ok   A1/A2 PASS gate mentions 'refused=0'
+ok   A1/A2 PASS gate mentions 'timeout=0'
+ok   A1/A2 PASS gate mentions 'mask 0'
+ok   stop rules mention 'exception mask'
+ok   stop rules mention 'staging'
+ok   stop rules mention 'same boot'
+ok   stop rules mention '0x400392f0'
+ok   stop rules mention 'rmmod'
+ok   claim rules bound the beacon claim
+ok   hostapd-open.conf interface=wlan0
+ok   hostapd-open.conf hw_mode=g
+ok   hostapd-open.conf channel=6
+ok   hostapd-open.conf beacon_int=100
+ok   hostapd-open.conf dtim_period=2
+ok   hostapd-open.conf driver=nl80211
+ok   hostapd-open.conf is open (no wpa= line)
+ok   hostapd-wpa2.conf interface=wlan0
+ok   hostapd-wpa2.conf hw_mode=g
+ok   hostapd-wpa2.conf channel=6
+ok   hostapd-wpa2.conf beacon_int=100
+ok   hostapd-wpa2.conf dtim_period=2
+ok   hostapd-wpa2.conf driver=nl80211
+ok   hostapd-wpa2.conf is WPA2
+ok   both fixture families referenced
+ok   expected-packages lists hostapd-mini
+ok   expected-packages lists hostapd-common
+ok   expected-packages lists ucode-mod-nl80211
+ok   expected-packages lists ucode-mod-rtnl
+
+== check-ladder: 107 passed, 0 failed ==
+RESULT: PASS - ladder recipe is consistent with the validated conventions

@@ -1,0 +1,12 @@
+# wifi-hostapd-deploy deploy set - authoritative apk identities (task-125).
+# Built from the OpenWrt release-line tree /home/shibbityshwab/openwrt-lab-selectorfix-img
+# (git HEAD 27663a0, target hisilicon/luofu, arm_cortex-a9 musl) by the lane build recorded in
+# BUILD-NOTES.md; .config was restored byte-identically afterwards.  The four packages are the
+# complete AP-start hostapd runtime delta: every other dependency is already in the bench image
+# (see tools/image-baseline-packages.txt); no kernel= dependency, so the set installs on any
+# bench image with the same apk/musl ABI and never touches the kmod kernel-ABI pin.
+# columns: name version apk_size apk_sha256 installed_size
+ucode-mod-nl80211 2026.10.28~dfc64d41-r1 24228 af25dfe5b7513d3a6a70082f3470abe2d329c641fc2f335357ff735e0558fa44 61468
+ucode-mod-rtnl 2026.10.28~dfc64d41-r1 29292 685443d6e5a58a00940268ea94d3e2e5e50af090dd5ddad7a75b62d8a9a1f3c4 73754
+hostapd-common 2026.08.07~831364bf-r7 1922 e064cd3f52859ce3bd11fcc6d863524821c471fe9a440f9c0e0769ccee70ef3f 2344
+hostapd-mini 2026.08.07~831364bf-r7 283790 daf80bebc7495273dbd3a30627349b9063451183686fac314061ab92fb0ce10c 575504
