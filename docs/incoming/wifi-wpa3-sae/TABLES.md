@@ -1,6 +1,6 @@
 # wifi-wpa3-sae - TABLES (derived constants, layouts, hostapd/kernel facts)
 
-**Lane:** wifi-wpa3-sae (shared task task-144), **host-only**, 2026-11-28.
+**Lane:** wifi-wpa3-sae (shared task task-144), **host-only**, 2026-11-24.
 **Evidence markers:** [V] re-verified in this lane from a named local artifact;
 [V*] device-measured by an earlier attended lane and cited; [I] inference;
 [U] undecoded.  **No vendor byte/object/firmware content is reproduced** - only

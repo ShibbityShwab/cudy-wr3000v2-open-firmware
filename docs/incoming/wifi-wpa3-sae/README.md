@@ -1,6 +1,6 @@
 # wifi-wpa3-sae - WPA3-SAE / WPA2+WPA3 / WPA2-hardened hostapd profiles + SAE host-side bits
 
-Lane for shared task **task-144**, host-only (2026-11-28).  Base: the pinned
+Lane for shared task **task-144**, host-only (2026-11-24).  Base: the pinned
 FINAL all-patch module (opensource `008aca5`).  Nothing here was fired; no
 device contact happened in this lane.
 

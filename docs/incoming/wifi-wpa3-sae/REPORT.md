@@ -1,6 +1,6 @@
 # wifi-wpa3-sae - WPA3-SAE / WPA2+WPA3 / WPA2-hardened hostapd profiles + SAE host-side bits
 
-**Lane:** wifi-wpa3-sae (shared task task-144), **host-only**, 2026-11-28.
+**Lane:** wifi-wpa3-sae (shared task task-144), **host-only**, 2026-11-24.
 **Scope:** build the three security-profile hostapd fixtures, implement the
 host-side bits WPA3/PMF needs from the clean-room driver (AKM/cipher
 advertisement, correct AP management TX bitmap, the PMF default-management-key
