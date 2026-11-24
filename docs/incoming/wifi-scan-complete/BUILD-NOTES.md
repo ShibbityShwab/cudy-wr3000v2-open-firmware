@@ -42,9 +42,11 @@ Environment (canonical project tree):
 | static lane selftest | 373/373 PASS |
 | integration patch round-trip | `patches/0001-scan-complete.patch` applies to the pinned base tree and reproduces this tree |
 
-The module hash is **build-path dependent** (debug info records the build
-directory); a copy built from another path has a different hash with the same
-behaviour. Re-record the hash printed by the build you deploy.
+The module **size and sha256 are build-path dependent** (debug info records
+the build directory): the same committed tree rebuilt from
+`/tmp/final-check` produced 748,564 B sha256 `02162d4a...` with the same
+behaviour, zero warnings and identical selftest counts. Re-record the numbers
+printed by the build you deploy.
 
 ## Module parameters
 

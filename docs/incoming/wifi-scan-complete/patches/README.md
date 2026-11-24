@@ -22,7 +22,8 @@ Apply:
 The patch changes only `src/` and `tools/` (no docs): docs live in this
 directory. Applying it to the base tree and building must reproduce
 `tools/build.sh` PASS with the artifact recorded in BUILD-NOTES.md (module
-sha256 is build-path dependent; size and behaviour are not).
+size and sha256 are build-path dependent through debug info; behaviour is
+not).
 
 Regeneration (from this lane's tree): the patch is `diff -ruN` between the
 base tree above (with pristine `wifi-scan-ap/tools`) and this lane's
