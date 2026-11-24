@@ -584,6 +584,14 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
                 _refuse(w, "bad attribute name %r" % (attr,))
             if attr not in G.ALL_KNOWN_ATTRS:
                 _refuse(w, "unknown sysfs attribute %r" % attr)
+            if G.attr_is_write_only(attr):
+                # WO attrs return EACCES on read; a generated r_attr_as would
+                # STOP with READ-FAIL.  Post-write gates belong on the RO
+                # status/events attr (see WO_ATTR_READBACK in bench_guards).
+                _refuse(w, "attribute %r is write-only and cannot be read back; "
+                           "use the read-only status/events attribute "
+                           "(%r) for post-write gates"
+                        % (attr, G.attr_readback(attr) or "h2d_status"))
             body["attr"] = attr
             body["patterns"] = _validate_patterns(st.get("patterns") or [],
                                                  w + ".patterns")
@@ -592,7 +600,8 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
             if not body["patterns"] and not body["absent"]:
                 _refuse(w, "attr_expect needs at least one of patterns/absent")
         elif kind == "attr_write":
-            extra = set(st) - common - {"attr", "value", "patterns"}
+            extra = set(st) - common - {"attr", "value", "patterns",
+                                        "readback"}
             if extra:
                 _refuse(w, "unknown keys: %s" % ", ".join(sorted(extra)))
             attr = _need(st, "attr", w)
@@ -603,11 +612,29 @@ def validate(doc: dict, source: str = "<sequence>") -> dict:
             value = _need(st, "value", w)
             if isinstance(value, bool) or not isinstance(value, (int, str)):
                 _refuse(w, "value must be an int or string")
+            # The post-write gate must capture a READ-ONLY attribute: the
+            # write-only trigger itself returns EACCES when cat'ed.  Default
+            # comes from the bench_guards policy; a sequence may override it
+            # with an explicit RO readback attr.
+            readback = st.get("readback")
+            if readback is None:
+                readback = G.attr_readback(attr)
+                if readback is None:
+                    _refuse(w, "no readback policy for write-only attribute %r; "
+                               "set 'readback' to a read-only status attr"
+                            % (attr,))
+            if not isinstance(readback, str) or not ATTR_RE.match(readback):
+                _refuse(w, "bad readback attribute name %r" % (readback,))
+            if readback not in G.ALL_KNOWN_ATTRS:
+                _refuse(w, "unknown readback sysfs attribute %r" % (readback,))
+            if G.attr_is_write_only(readback):
+                _refuse(w, "readback attribute %r is itself write-only; "
+                           "post-write gates need a read-only attr" % (readback,))
             body["attr"] = attr
             body["value"] = str(value)
+            body["readback"] = readback
             body["patterns"] = _validate_patterns(st.get("patterns") or [],
                                                   w + ".patterns")
-            body["post_attr"] = attr
         elif kind == "shell":
             body.update(_validate_shell(st, w, profile))
         elif kind == "catalog_snapshot":
@@ -772,6 +799,7 @@ def plan_doc(seq: dict) -> dict:
             entry["attr"] = st["attr"]
             if st["kind"] == "attr_write":
                 entry["value"] = st["value"]
+                entry["readback"] = st["readback"]
             entry["patterns"] = st["patterns"]
             if st.get("absent"):
                 entry["absent"] = st["absent"]
@@ -892,12 +920,15 @@ def render_script(seq: dict) -> list:
                   % (_q("%s.a%d" % (n, i)), _q(attr), _q(p)))
         elif kind == "attr_write":
             attr = st["attr"]
+            readback = st["readback"]
             a("w_attr %s %s %s" % (attr, _q(st["value"]), _q(n)))
             a('say "GATE %s.write PASS"' % n)
             if st["patterns"]:
-                a("r_attr_as seq-%s-%s %s" % (n, attr, attr))
+                # The trigger is write-only: capture the RO status/events attr
+                # instead (cat of the WO file would STOP with READ-FAIL).
+                a("r_attr_as seq-%s-%s %s" % (n, readback, readback))
                 for i, p in enumerate(st["patterns"]):
-                    L.extend(_gate_attr_lines("%s.p%d" % (n, i), attr, p))
+                    L.extend(_gate_attr_lines("%s.p%d" % (n, i), readback, p))
         elif kind == "shell":
             cmd = shell_command_text(st["cmd"], st["args"])
             argv = shell_argv(st["cmd"], st["args"])
@@ -1273,17 +1304,22 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
                            "code": None if text else "attr-capture-missing",
                            "detail": "attribute %r captured" % st["attr"]}]
         elif kind == "attr_write":
-            post = _read_section(reads, "seq-%s-%s" % (n, st["attr"]))
+            readback = st.get("readback") or st["attr"]
+            post = _read_section(reads, "seq-%s-%s" % (n, readback))
             write_ok = bool(post) or not st["patterns"]
             checks = [{"name": "%s.write" % n, "kind": "write",
                        "attr": st["attr"], "value": st["value"],
+                       "readback": readback,
                        "status": "PASS" if write_ok else "FAIL",
                        "code": None if write_ok else "attr-capture-missing",
-                       "detail": ("post-write capture present (%d B)" % len(post))
-                       if post else "no post-write attribute capture"}]
+                       "detail": ("post-write %s capture present (%d B)"
+                                  % (readback, len(post)))
+                       if post else
+                       "no %s post-write capture (the trigger %r is "
+                       "write-only and must not be cat'ed)" % (readback, st["attr"])}]
             if st["patterns"]:
-                checks += _check_patterns(n, kind, st["attr"], st["patterns"],
-                                          "seq-%s-%s" % (n, st["attr"]), reads)
+                checks += _check_patterns(n, kind, readback, st["patterns"],
+                                          "seq-%s-%s" % (n, readback), reads)
         elif kind == "shell":
             text = _read_section(reads, "seq-%s" % n)
             m = re.search(r"^SHELL-RC %s rc=(\d+)\s*$" % re.escape(n),
@@ -1551,7 +1587,7 @@ def _selftest() -> int:
         "result": "PASS", "stop_rule": None,
         "rd32": {"pack.v": 0x011C458, "pack.sig": 0x64},
         "reads": {"seq-pre": "H2D send path: budget=2 frames_sent=0",
-                  "seq-fire-h2d_ctx_create": "frames_sent=1 ctx_created=1"},
+                  "seq-fire-h2d_status": "frames_sent=1 ctx_created=1"},
         "gates": [{"name": "pack.sig", "ok": True},
                   {"name": "pre.p0", "ok": True},
                   {"name": "fire.write", "ok": True},

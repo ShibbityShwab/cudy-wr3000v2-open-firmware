@@ -909,7 +909,7 @@ def proto_report(fail: str | None = None) -> str:
         return "\n".join(L) + "\n"
     L += ["RD32 label=boot.mask bar0=0x6f8008 v=0x00000000",
           "GATE boot.mask PASS raw=0x00000000 mask=ffffffff want=0x00000000",
-          "== SECTION seq-create-h2d_ctx_create",
+          "== SECTION seq-create-h2d_status",
           ("H2D send path (real post-ready messages, one frame per idea): "
            "budget=2 frames_sent=1 txq_sent=0 ctx_sent=1"
            if fail != "attr" else
@@ -1838,12 +1838,12 @@ def test_bringup_sequences(tmp: str) -> None:
             "final-pack.final_page0": 0x86807FEF,
             "final-pack.final_state0": 1, "final-pack.final_mask0": 0,
         }
-        reads["seq-ctx-create-t1-h2d_ctx_create"] = \
+        reads["seq-ctx-create-t1-h2d_status"] = \
             "H2D send path: budget=8 frames_sent=1 ctx_created=1"
-        reads["seq-txq-sync72-h2d_txq_sync72"] = \
+        reads["seq-txq-sync72-h2d_status"] = \
             "frames_sent=2 txq_sent=1"
         for k, cid in enumerate(range(3502, 3508), 1):
-            reads["seq-cal-%d-h2d_cfg_cal" % cid] = \
+            reads["seq-cal-%d-h2d_status" % cid] = \
                 "cfg_cal_sent=%d frames_sent=%d" % (k, k + 2)
             reads["seq-resp-%d-rd_catalog" % cid] = _catalog(10 + k, k, 0x12A)
         reads["seq-h2d-summary"] = (
@@ -2210,6 +2210,116 @@ def test_pattern_whitespace(tmp: str, proto: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# H. write-only trigger vs read-only post-write capture policy
+# ---------------------------------------------------------------------------
+def test_wo_readback(tmp: str, proto: dict) -> None:
+    # ---- policy table in bench_guards ----
+    ck("wo-readback: policy maps the h2d triggers to h2d_status",
+       G.attr_readback("h2d_ctx_create") == "h2d_status"
+       and G.attr_readback("h2d_cfg_cal") == "h2d_status"
+       and G.attr_readback("h2d_txq_addr_sync") == "h2d_status")
+    ck("wo-readback: policy maps the hcc/base triggers to RO status/events",
+       G.attr_readback("prepare") == "status"
+       and G.attr_readback("hcc_sr_announce") == "hcc_events"
+       and G.attr_readback("hcc_arm") == "hcc_rings")
+    ck("wo-readback: h2d_status is known and read-only",
+       "h2d_status" in G.ALL_KNOWN_ATTRS and "h2d_status" in G.RO_ATTRS
+       and not G.attr_is_write_only("h2d_status"))
+
+    # ---- schema refusals: a plan may never read a WO trigger ----
+    def refuse(label, mutate, code="seq-schema"):
+        doc = {"schema": PS.SCHEMA_SEQ, "name": "wo-smoke",
+               "steps": [{"name": "x", "kind": "attr_expect",
+                          "attr": "h2d_status", "patterns": ["ok=1"]}]}
+        mutate(doc)
+        expect_guard("wo-readback refusals: %s" % label,
+                     lambda: PS.validate(doc, label), code)
+
+    refuse("attr_expect on a write-only trigger",
+           lambda d: d["steps"].__setitem__(0, {
+               "name": "x", "kind": "attr_expect", "attr": "h2d_ctx_create",
+               "patterns": ["ctx_created=1"]}))
+    refuse("readback attr is itself write-only",
+           lambda d: d["steps"].__setitem__(0, {
+               "name": "x", "kind": "attr_write", "attr": "h2d_ctx_create",
+               "value": "1", "readback": "h2d_ctx_create"}))
+    refuse("readback attr is unknown",
+           lambda d: d["steps"].__setitem__(0, {
+               "name": "x", "kind": "attr_write", "attr": "h2d_ctx_create",
+               "value": "1", "readback": "not_an_attr"}))
+
+    # ---- default readback, generated script, host evaluation ----
+    doc = {"schema": PS.SCHEMA_SEQ, "name": "wo-smoke",
+           "steps": [{"name": "create", "kind": "attr_write",
+                      "attr": "h2d_ctx_create", "value": "1",
+                      "patterns": ["ctx_created=1"]}]}
+    seq = PS.validate(doc, "wo-smoke")
+    ck("wo-readback: default readback is h2d_status",
+       seq["steps"][0]["readback"] == "h2d_status", str(seq["steps"][0]))
+    pdoc = PS.plan_doc(seq)
+    ck("wo-readback: plan doc records the readback attribute",
+       pdoc["steps"][0]["readback"] == "h2d_status")
+    script = "\n".join(PS.render_script(seq))
+    ck("wo-readback: generated capture reads the RO attr, not the trigger",
+       "r_attr_as seq-create-h2d_status h2d_status" in script
+       and "r_attr_as seq-create-h2d_ctx_create" not in script,
+       script[-500:])
+    ck("wo-readback: generated gate targets the RO attr",
+       "gate_attr 'create.p0' 'h2d_status' 'ctx_created=1'" in script)
+    summary = {"result": "PASS", "stop_rule": None, "rd32": {},
+               "reads": {"seq-create-h2d_status":
+                         "counters: ok=1 ctx_created=1"},
+               "gates": [{"name": "create.write", "ok": True},
+                         {"name": "create.p0", "ok": True}]}
+    ev = PS.evaluate(seq, summary)
+    ck("wo-readback: evaluate passes from the RO status capture",
+       ev["verdict"] == "PASS", json.dumps(ev)[:300])
+    bad = {"result": "PASS", "stop_rule": None, "rd32": {},
+           "reads": {"seq-create-h2d_ctx_create": "ctx_created=1"}, "gates": []}
+    ev2 = PS.evaluate(seq, bad)
+    ck("wo-readback: a WO-attr capture cannot satisfy the post-write gate",
+       ev2["verdict"] == "FAIL"
+       and any(c.get("code") == "attr-capture-missing"
+               for s in ev2["steps"] for c in s["checks"]), ev2["verdict"])
+
+    # ---- every bundled sequence: no post-write capture may read a WO attr ----
+    seqdir = os.path.join(TOOLDIR, "sequences")
+    bad_hits = []
+    for fn in sorted(os.listdir(seqdir)):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            s = PS.load(os.path.join(seqdir, fn))
+        except G.GuardError as e:
+            bad_hits.append((fn, "REFUSED: %s" % e.code))
+            continue
+        txt = "\n".join(PS.render_script(s))
+        for ln in txt.splitlines():
+            m = re.match(r"\s*r_attr_as (seq-\S+) (\w+)$", ln)
+            if m and m.group(2) in G.WO_ATTRS:
+                bad_hits.append((fn, ln.strip()))
+    ck("wo-readback: no bundled sequence captures a write-only attr on read",
+       not bad_hits, str(bad_hits[:3]))
+    c2 = PS.load(os.path.join(seqdir, "bringup-c2-calibration.json"))
+    wsteps = [st for st in c2["steps"] if st["kind"] == "attr_write"]
+    ck("wo-readback: C2's 8 triggers all read back via h2d_status",
+       len(wsteps) == 8
+       and all(st["readback"] == "h2d_status" for st in wsteps),
+       str([(st["name"], st["readback"]) for st in wsteps]))
+    c2txt = "\n".join(PS.render_script(c2))
+    ck("wo-readback: C2 script has no read of a WO trigger attr",
+       not re.search(r"r_attr_as \S+ (?:h2d_ctx_create|h2d_txq_sync72|"
+                     r"h2d_cfg_cal|h2d_txq_addr_sync)\b", c2txt))
+    e1 = PS.load(os.path.join(seqdir, "bringup-e1-dataplane.json"))
+    e1w = [st for st in e1["steps"] if st["kind"] == "attr_write"]
+    ck("wo-readback: E1's 3 triggers all read back via h2d_status",
+       len(e1w) == 3 and all(st["readback"] == "h2d_status" for st in e1w))
+    # the flag is surfaced in the plan for the operator
+    ck("wo-readback: plan text names the RO readback for the C2 plan",
+       "h2d_status" in PS.plan_doc(c2)["steps"][3].get("readback", ""))
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -2231,6 +2341,7 @@ def main() -> int:
         test_protocol_cli(tmp, proto)
         test_shell_engine(tmp)
         test_pattern_whitespace(tmp, proto)
+        test_wo_readback(tmp, proto)
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)
         test_phase_matrix(tmp, proto)

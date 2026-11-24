@@ -340,6 +340,15 @@ gates both device-side and host-side (shell-rc-mismatch / shell-pattern-missing
   the sequence + require.attrs must exist as a C string in the .ko, else the
   plan is refused with module-attr-missing (the phase matrix reports BLOCKED).
   Synthetic selftest fixtures skip the probe with a warning.
+- **write-only trigger vs read-only post-write capture**: attr_write steps gate
+  on a RO status/events attribute, never on the WO trigger they just wrote
+  (WO files return EACCES on read).  Default from the bench_guards
+  WO_ATTR_READBACK policy (h2d_* -> h2d_status, hcc_sr_announce/cece/
+  dr_republish -> hcc_events, hcc_arm -> hcc_rings, prepare/upload/verify/
+  seed/release -> status, rd_poll/rd_advance -> rd_status); an explicit
+  'readback' may override it but must be a known RO attr.  attr_expect of a WO
+  attr is refused at plan time.  (Found by the 2026-11-25 C2 re-fire:
+  post-write gates tried to cat h2d_ctx_create; REPORT.md 9.2.)
 
 ### 10.3 Expectation extensions
 
@@ -389,4 +398,4 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **398/398** device-free checks after task-114 (was 312).
+Selftest: **415/415** device-free checks after task-114 (was 312).

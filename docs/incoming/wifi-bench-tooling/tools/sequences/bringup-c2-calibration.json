@@ -67,7 +67,8 @@
    "patterns": [
     "ctx_created=1"
    ],
-   "about": "ONE context-create H2D: g0 id1 key 0x64, data[0]=type 1 (the allocating variant; the 2026-11-25 validated lap)"
+   "about": "ONE context-create H2D: g0 id1 key 0x64, data[0]=type 1 (the allocating variant; the 2026-11-25 validated lap)",
+   "readback": "h2d_status"
   },
   {
    "name": "post-create",
@@ -107,7 +108,8 @@
    "patterns": [
     "txq_sent=1"
    ],
-   "about": "ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node); requires the allocated context from ctx-create-t1"
+   "about": "ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node); requires the allocated context from ctx-create-t1",
+   "readback": "h2d_status"
   },
   {
    "name": "post-txq",
@@ -138,7 +140,8 @@
    "patterns": [
     "cfg_cal_sent=1"
    ],
-   "about": "calibration alg set_* #1: HCC g0 id2 key 0x0101, cfg id 3502 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #1: HCC g0 id2 key 0x0101, cfg id 3502 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3502",
@@ -170,7 +173,8 @@
    "patterns": [
     "cfg_cal_sent=2"
    ],
-   "about": "calibration alg set_* #2: HCC g0 id2 key 0x0101, cfg id 3503 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #2: HCC g0 id2 key 0x0101, cfg id 3503 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3503",
@@ -202,7 +206,8 @@
    "patterns": [
     "cfg_cal_sent=3"
    ],
-   "about": "calibration alg set_* #3: HCC g0 id2 key 0x0101, cfg id 3504 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #3: HCC g0 id2 key 0x0101, cfg id 3504 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3504",
@@ -234,7 +239,8 @@
    "patterns": [
     "cfg_cal_sent=4"
    ],
-   "about": "calibration alg set_* #4: HCC g0 id2 key 0x0101, cfg id 3505 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #4: HCC g0 id2 key 0x0101, cfg id 3505 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3505",
@@ -266,7 +272,8 @@
    "patterns": [
     "cfg_cal_sent=5"
    ],
-   "about": "calibration alg set_* #5: HCC g0 id2 key 0x0101, cfg id 3506 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #5: HCC g0 id2 key 0x0101, cfg id 3506 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3506",
@@ -298,7 +305,8 @@
    "patterns": [
     "cfg_cal_sent=6"
    ],
-   "about": "calibration alg set_* #6: HCC g0 id2 key 0x0101, cfg id 3507 (298 B frame); ONE message per idea, never repeated on the same boot"
+   "about": "calibration alg set_* #6: HCC g0 id2 key 0x0101, cfg id 3507 (298 B frame); ONE message per idea, never repeated on the same boot",
+   "readback": "h2d_status"
   },
   {
    "name": "settle-3507",

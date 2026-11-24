@@ -1593,9 +1593,17 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
         if a not in attr_checks:
             attr_checks.append(a)
     for st in seq["steps"]:
-        if st["kind"] in ("attr_expect", "attr_write"):
+        if st["kind"] == "attr_expect":
             if st["attr"] not in attr_checks:
                 attr_checks.append(st["attr"])
+        elif st["kind"] == "attr_write":
+            if st["attr"] not in attr_checks:
+                attr_checks.append(st["attr"])
+            rb = st.get("readback")
+            if rb and rb not in attr_checks:
+                # the post-write gates capture the read-only status attr, not
+                # the write-only trigger (which returns EACCES on read)
+                attr_checks.append(rb)
     cfg["attr_checks"] = attr_checks
     script = generate_protocol_script(cfg)
     audit = G.audit_device_script(script, profile="hcc")

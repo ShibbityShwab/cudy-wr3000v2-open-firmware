@@ -234,6 +234,47 @@ WO_ATTRS = {
     "hcc_arm", "hcc_loop", "hcc_service", "hcc_sr_announce", "hcc_cece_kick",
     "hcc_dr_republish", "hcc_clear", "rd_poll", "rd_advance",
 } | H2D_WO_ATTRS | WIFI_TRANSPORT_WO_ATTRS | DP_WO_ATTRS
+RO_ATTRS = ALL_KNOWN_ATTRS - WO_ATTRS
+# Write-only triggers cannot be read back: "cat /sys/.../<wo-attr>" returns
+# EACCES and a generated r_attr_as capture would STOP with READ-FAIL.  Every
+# write-only trigger therefore maps to the read-only status/events attribute
+# whose content carries the post-write observables; the sequence engine uses
+# this policy so a sequence can never "caption a write" by reading the
+# write-only file it just wrote (found by the 2026-11-25 C2 re-fire: the
+# ctx-create post-write gate tried to cat h2d_ctx_create itself).
+WO_ATTR_READBACK = {
+    "prepare": "status",
+    "upload": "status",
+    "verify": "status",
+    "seed": "status",
+    "release": "status",
+    "gate_repair": "status",
+    "hcc_arm": "hcc_rings",
+    "hcc_loop": "hcc_status",
+    "hcc_service": "hcc_status",
+    "hcc_clear": "hcc_status",
+    "hcc_sr_announce": "hcc_events",
+    "hcc_cece_kick": "hcc_events",
+    "hcc_dr_republish": "hcc_events",
+    "rd_poll": "rd_status",
+    "rd_advance": "rd_status",
+    "h2d_txq_sync": "h2d_status",
+    "h2d_txq_sync72": "h2d_status",
+    "h2d_ctx_create": "h2d_status",
+    "h2d_send": "h2d_status",
+    "h2d_cfg_cal": "h2d_status",
+    "h2d_txq_addr_sync": "h2d_status",
+}
+
+
+def attr_is_write_only(attr: str) -> bool:
+    """True if the attribute is a WO trigger (never readable on the box)."""
+    return (attr or "").strip() in WO_ATTRS
+
+
+def attr_readback(attr: str) -> Optional[str]:
+    """The read-only status attribute a post-write gate must capture."""
+    return WO_ATTR_READBACK.get((attr or "").strip())
 # Legacy attributes that the HCC-service build deliberately refuses (they
 # encode the pre-GP8, wrong protocol).  Writing them in an HCC session is a
 # policy violation even though the module would refuse it at runtime.

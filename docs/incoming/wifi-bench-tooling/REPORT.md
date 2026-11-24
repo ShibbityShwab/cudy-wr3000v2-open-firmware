@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 398 device-free checks (+86): shell-step refusal matrix,
+7. **Tests**: 312 -> 415 device-free checks (+103): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -528,6 +528,62 @@ Fixes:
 Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 54 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-398/398 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+415/415 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
+
+### 9.2 Second C2 fire: write-only trigger vs read-only post-write capture
+
+After the pattern-gate fix the re-fire (evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T071817Z/C2) ran the
+boot ladder and pre-pack gates, wrote the context-create trigger, and then
+STOPPED:
+
+    GATE ctx-create-t1.write PASS
+    == SECTION seq-ctx-create-t1-h2d_ctx_create
+    cat: can't open '/sys/bus/pci/devices/0000:00:00.0/h2d_ctx_create':
+    Permission denied
+    READ-FAIL attr=h2d_ctx_create
+    STOP:ctx-create-t1.p0: pattern not found in h2d_ctx_create: ctx_created=1
+
+Root cause: the attr_write renderer captured the WRITE-ONLY trigger attribute
+for its post-write pattern gates.  A WO sysfs attribute cannot be cat'ed back
+(EACCES), so every attr_write step with patterns (ctx_create, txq_sync72, the
+six cfg_cal triggers, the E1 dp token, ladder-c's two triggers) would fail the
+same way; ctx-create-t1 was simply the first.
+
+Fix (applied to ALL sequences, no per-sequence special cases):
+
+1. **bench_guards policy**: WO_ATTR_READBACK maps every write-only trigger to
+   the read-only status/events attribute that carries its observables
+   (h2d_* -> h2d_status, hcc_sr_announce/cece/dr_republish -> hcc_events,
+   hcc_arm -> hcc_rings, prepare/upload/verify/seed/release -> status,
+   rd_poll/rd_advance -> rd_status), plus RO_ATTRS / attr_is_write_only() /
+   attr_readback() helpers.
+2. **schema**: attr_write gains an optional 'readback' (must be a known RO
+   attr; default from the policy; unknown/WO readback is refused); attr_expect
+   now refuses a WO attribute outright - a plan can never read a WO trigger.
+3. **render/evaluate**: post-write capture renders
+   'r_attr_as seq-<step>-<readback> <readback>' and host evaluation reads that
+   section; the write check documents the readback attr, and a WO-attr capture
+   does not satisfy it (attr-capture-missing).
+4. **explicit documentation**: C2 (8 triggers), E1 (3) and ladder-c (2) now
+   carry 'readback: h2d_status' in the sequence JSON, and bench_session adds
+   the readback attr to the required-attribute profile check.
+5. **tests** (selftest 398 -> 415): attr_expect-on-WO refusal, readback-is-WO
+   refusal, unknown-readback refusal, default readback + rendered capture +
+   host evaluation (RO capture PASS, WO capture FAIL), a scan of every bundled
+   sequence for any r_attr_as of a WO attr, and per-sequence readback checks
+   (C2's eight triggers, E1's three).
+
+Replay of the real failed fire: the fixed generated post-write gate, executed
+against an h2d_status capture containing the expected post-create state,
+returns "GATE ctx-create-t1.p0 PASS (attr=h2d_status)" and "...
+frames_sent=1 PASS"; the old script's line
+'r_attr_as seq-ctx-create-t1-h2d_ctx_create h2d_ctx_create' is gone from the
+new script (fresh C2 dry-run: r_attr_as seq-ctx-create-t1-h2d_status
+h2d_status; grep for any r_attr_as of a WO attr: NONE; sh -n PASS).
+
+Note on H1/H2: the pending-mask pack reading H1 with PD4 is expected - PD4 is
+consume-only and the firmware responses arrive through the non-mailbox
+(direct device group-A ring) path our reader uses; no sequence change needed.

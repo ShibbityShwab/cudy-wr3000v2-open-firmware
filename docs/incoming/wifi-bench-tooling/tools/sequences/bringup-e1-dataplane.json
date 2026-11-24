@@ -72,7 +72,8 @@
    "patterns": [
     "ctx_created=1"
    ],
-   "about": "the data-plane messages still need the ordered control state (the 2026-11-25 validated create+sync precondition)"
+   "about": "the data-plane messages still need the ordered control state (the 2026-11-25 validated create+sync precondition)",
+   "readback": "h2d_status"
   },
   {
    "name": "txq-sync72",
@@ -82,7 +83,8 @@
    "patterns": [
     "txq_sent=1"
    ],
-   "about": "the vendor's TXQ config sync 0xd8, ordered after the context create"
+   "about": "the vendor's TXQ config sync 0xd8, ordered after the context create",
+   "readback": "h2d_status"
   },
   {
    "name": "clean-state",
@@ -128,7 +130,8 @@
     "frames_sent=3",
     "timeout=0"
    ],
-   "about": "the vendor's own data-plane init message: HCC g0 id1, u16 key 0x0320, 4-byte device VA of a host-allocated zeroed 0x2524 B non-cached TXQ table (builder dp_build_txq_addr_sync). ONE frame, one idea."
+   "about": "the vendor's own data-plane init message: HCC g0 id1, u16 key 0x0320, 4-byte device VA of a host-allocated zeroed 0x2524 B non-cached TXQ table (builder dp_build_txq_addr_sync). ONE frame, one idea.",
+   "readback": "h2d_status"
   },
   {
    "name": "post-dp",
