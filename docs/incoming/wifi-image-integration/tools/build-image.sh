@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# build-image.sh - build the cfg80211/Wi-Fi BENCH image with the userspace
-# tools (iw, libnl-tiny, iwinfo, wireless-regdb) and the clean-room driver
-# packages, record the evidence and restore the shared tree afterwards.
+# build-image.sh - build the SELF-CONTAINED cfg80211/Wi-Fi BENCH image: iw +
+# wireless-regdb + hostapd-mini (+ ucode) + the wifi-scripts ucode files + the
+# target-tree cfg80211.ko and the clean-room hi5622_wifi.ko kmod. Records the
+# evidence and restores the shared tree afterwards.
 #
-#   ./tools/build-image.sh [--owrt DIR] [--driver-src DIR] [--jobs N]
+#   ./tools/build-image.sh [--owrt DIR] [--driver-ko FILE|--driver-src DIR]
+#                          [--label TEXT] [--jobs N]
 #                          [--keep-config] [--keep-installed] [--skip-verify]
+#
+# DEFAULT DRIVER: /tmp/wifi-ap-dp-combined-artifact/hi5622_wifi.ko - the
+# combined dp-air + AP-start v7 module (242,572 B sha 44c6cc12..., documented in
+# docs/incoming/wifi-ap-start/combined/README.md) - packaged as the PREBUILT
+# module; v7-only AP-start (206,708 B sha fd8e1439...) or a --driver-src snapshot
+# are also supported.
+# The kernel slice is expected to stay UNCHANGED (13e81214...); this is a
+# rootfs-only rebuild - verify-image.sh asserts the kernel hash.
 #
 # SERIALIZATION: one world build at a time in a shared OpenWrt tree. This
 # script refuses to start if a make process is running in $OWRT, and holds
@@ -23,8 +33,11 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 LANE=$(cd "$HERE/.." && pwd)
 DEFAULT_OWRT=/home/shibbityshwab/openwrt-lab-selectorfix-img
+DEFAULT_DRIVER_KO=/tmp/wifi-ap-dp-combined-artifact/hi5622_wifi.ko
 OWRT=$DEFAULT_OWRT
 DRIVER_SRC=$HERE/../../wifi-cfg80211/src
+DRIVER_KO=
+LABEL="combined dp-air + AP-start v7 module (ap-start task-121, 242,572 B sha 44c6cc12; dp-air derived from the fired module ca32aec4, v7 AP path hardware-validated 2026-11-27)"
 JOBS=$(nproc)
 KEEP_CONFIG=0
 KEEP_INSTALLED=0
@@ -35,7 +48,9 @@ die() { echo "build-image: ERROR: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--owrt) OWRT=$2; shift 2 ;;
-		--driver-src) DRIVER_SRC=$2; shift 2 ;;
+		--driver-src) DRIVER_SRC=$2; DRIVER_KO=source; shift 2 ;;
+		--driver-ko) DRIVER_KO=$2; shift 2 ;;
+		--label) LABEL=$2; shift 2 ;;
 		--jobs) JOBS=$2; shift 2 ;;
 		--keep-config) KEEP_CONFIG=1; shift ;;
 		--keep-installed) KEEP_INSTALLED=1; shift ;;
@@ -47,6 +62,15 @@ done
 
 [ -f "$OWRT/rules.mk" ] && [ -f "$OWRT/.config" ] || die "not a configured OpenWrt tree: $OWRT"
 
+# Driver mode: default to the local ABI-validated prebuilt artifact when present.
+if [ -z "$DRIVER_KO" ]; then
+	if [ -f "$DEFAULT_DRIVER_KO" ]; then DRIVER_KO=$DEFAULT_DRIVER_KO; else DRIVER_KO=source; fi
+fi
+if [ "$DRIVER_KO" = source ]; then DRIVER_MODE=source; else
+	DRIVER_MODE=prebuilt
+	[ -f "$DRIVER_KO" ] || die "prebuilt driver not found: $DRIVER_KO (use --driver-src for source mode)"
+fi
+
 WORK=$LANE/build-evidence/work
 mkdir -p "$WORK" "$LANE/build-evidence"
 TARGET_ROOT=$OWRT/build_dir/target-arm_cortex-a9_musl_eabi/root-hisilicon
@@ -54,9 +78,10 @@ KCONFIG=target/linux/hisilicon/luofu/config-6.18
 KERNEL_CFG=$OWRT/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60/.config
 LOCKFILE=/tmp/cudy-openwrt-world-build.lock
 
-echo "== wifi-image-integration: bench image build =="
+echo "== wifi-image-integration: FINAL self-contained bench image build =="
 echo "tree       : $OWRT"
-echo "driver src : $DRIVER_SRC"
+echo "driver     : $DRIVER_MODE"
+echo "driver path: $DRIVER_KO"
 echo "jobs       : $JOBS"
 echo "work       : $WORK"
 
@@ -85,9 +110,21 @@ CONTAINER_BEFORE=$(ls -t "$OWRT"/bin/targets/hisilicon/luofu/*squashfs-sysupgrad
 cp -p "$OWRT/.config" "$WORK/.config.pre-build"
 
 # ---- install package + apply config delta --------------------------------
-"$HERE/install-into-tree.sh" --owrt "$OWRT" --driver-src "$DRIVER_SRC" --force
-PKG_SRC_MANIFEST_SHA=$(sha256sum "$OWRT/package/hi5622-wifi/src-sha256.txt" | cut -d' ' -f1)
-PKG_SRC_FILES=$(find "$OWRT/package/hi5622-wifi/src" -maxdepth 1 -type f | wc -l)
+rm -f "$LANE/build-evidence/driver-artifact.txt"
+if [ "$DRIVER_MODE" = prebuilt ]; then
+	"$HERE/install-into-tree.sh" --owrt "$OWRT" --driver-ko "$DRIVER_KO" --label "$LABEL" --force
+	DRIVER_MANIFEST=$OWRT/package/hi5622-wifi/prebuilt/prebuilt-sha256.txt
+	DRIVER_SHA=$(grep '^sha256=' "$DRIVER_MANIFEST" | cut -d= -f2)
+	DRIVER_SIZE=$(grep '^size_bytes=' "$DRIVER_MANIFEST" | cut -d= -f2)
+	cp "$DRIVER_MANIFEST" "$LANE/build-evidence/driver-artifact.txt"
+else
+	"$HERE/install-into-tree.sh" --owrt "$OWRT" --driver-src "$DRIVER_SRC" --force
+	DRIVER_MANIFEST=$OWRT/package/hi5622-wifi/src-sha256.txt
+	DRIVER_SHA=$(sha256sum "$DRIVER_MANIFEST" | cut -d' ' -f1)
+	DRIVER_SIZE="$(find "$OWRT/package/hi5622-wifi/src" -maxdepth 1 -type f | wc -l) source files"
+	cp "$DRIVER_MANIFEST" "$LANE/build-evidence/driver-artifact.txt"
+fi
+DRIVER_MANIFEST_SHA=$(sha256sum "$DRIVER_MANIFEST" | cut -d' ' -f1)
 
 {
 	printf '\n# ---- wifi-image-integration bench delta (task-112) ----\n'
@@ -107,17 +144,18 @@ echo "-- make defconfig (resolving the delta) --"
 ( cd "$OWRT" && make defconfig ) 2>&1 | tee "$WORK/defconfig.log"
 
 MISSING=0
-for sym in CONFIG_PACKAGE_iw CONFIG_PACKAGE_iwinfo CONFIG_PACKAGE_libiwinfo \
-           CONFIG_PACKAGE_libiwinfo-data CONFIG_PACKAGE_wireless-regdb \
+for sym in CONFIG_PACKAGE_iw CONFIG_PACKAGE_wireless-regdb \
+           CONFIG_PACKAGE_wifi-scripts CONFIG_WIFI_SCRIPTS_UCODE \
+           CONFIG_PACKAGE_hostapd-mini CONFIG_PACKAGE_hostapd-common \
+           CONFIG_PACKAGE_ucode-mod-nl80211 CONFIG_PACKAGE_ucode-mod-rtnl \
            CONFIG_PACKAGE_kmod-hi5622-cfg80211 CONFIG_PACKAGE_kmod-hi5622-wifi; do
 	if ! grep -q "^$sym=y$" "$OWRT/.config"; then
 		echo "MISSING config symbol: $sym"
 		MISSING=$((MISSING + 1))
 	fi
 done
-grep -q '^# CONFIG_WIFI_SCRIPTS_UCODE is not set$' "$OWRT/.config" || { echo "MISSING: WIFI_SCRIPTS_UCODE=n"; MISSING=$((MISSING + 1)); }
 [ "$MISSING" -eq 0 ] || die "$MISSING config delta symbol(s) did not resolve; see $WORK/.config.resolved"
-echo "config delta resolved: all selected symbols =y / ucode CLI disabled"
+echo "config delta resolved: all selected symbols =y (self-contained image: iw+regdb+hostapd+ucode+wifi-scripts+kmods)"
 
 # Carry over the release-line kernel symbols that defconfig drops (unknown to
 # config/Config-kernel.in but mapped to CONFIG_* by include/kernel-defaults.mk).
@@ -203,8 +241,10 @@ fi
 	echo "make -j                    : $JOBS"
 	echo "build rc                   : $BUILD_RC"
 	echo "driver source              : $DRIVER_SRC"
-	echo "driver snapshot files      : $PKG_SRC_FILES"
-	echo "driver snapshot manifest   : package/hi5622-wifi/src-sha256.txt sha256 $PKG_SRC_MANIFEST_SHA"
+	echo "driver mode                : $DRIVER_MODE"
+	echo "driver path                : $DRIVER_KO"
+	echo "driver size / sha          : $DRIVER_SIZE / $DRIVER_SHA"
+	echo "driver manifest            : $(basename "$DRIVER_MANIFEST") sha256 $DRIVER_MANIFEST_SHA"
 	echo "kernel symbols carried over: kernel-symbols.config sha256 $(sha256sum "$LANE/kernel-symbols.config" | cut -d' ' -f1)"
 	echo
 	echo "== config =="
@@ -214,8 +254,8 @@ fi
 	echo "  sha256 before/after      : $KCFG_SHA_PRE / $KCFG_SHA_POST"
 	echo "built kernel .config       : $KERNEL_CFG_SHA_PRE / $KERNEL_CFG_SHA_POST"
 	echo "resolved package delta     :"
-	grep -E '^CONFIG_PACKAGE_(iw|iwinfo|libiwinfo|libiwinfo-data|wireless-regdb|kmod-hi5622-cfg80211|kmod-hi5622-wifi)=' "$WORK/.config.resolved" | sed 's/^/  /'
-	grep -E '^# CONFIG_WIFI_SCRIPTS_UCODE is not set' "$WORK/.config.resolved" | sed 's/^/  /'
+	grep -E '^CONFIG_PACKAGE_(iw|wireless-regdb|wifi-scripts|hostapd-mini|hostapd-common|ucode-mod-nl80211|ucode-mod-rtnl|kmod-hi5622-cfg80211|kmod-hi5622-wifi)=' "$WORK/.config.resolved" | sed 's/^/  /'
+	grep -E '^CONFIG_WIFI_SCRIPTS_UCODE=' "$WORK/.config.resolved" | sed 's/^/  /'
 	echo
 	echo "== image artifacts =="
 	echo "container                  : $CONTAINER"

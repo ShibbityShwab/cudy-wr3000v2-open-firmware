@@ -1,7 +1,13 @@
-# BUILD-NOTES - bench image build record (wifi-image-integration, task-112)
+# BUILD-NOTES - bench image build records (wifi-image-integration, task-112/132)
 
-**Recorded build:** 2026-11-24 (local UTC+07), lane img-integ, host-only.
-**Result:** `make -j16` RC=0 in 153 s; verifier PASS; shared tree restored.
+**Round 3 (FINAL SELF-CONTAINED IMAGE) recorded build:** 2026-11-27 (local
+UTC+07), lane img-integ, host-only. **Result:** `make -j16` RC=0 in 12 s
+(kernel compile skipped: kernel `.config` unchanged), verifier PASS, shared
+tree restored. Round 3 is at the bottom of this file.
+
+**Round 2 (ABI image) recorded build:** 2026-11-24, `make -j16` RC=0 in 153 s;
+verifier PASS; shared tree restored. Evidence archived under
+`build-evidence/round2-abi-image-df6a78c3/`.
 
 ## Tree and inputs
 
@@ -108,3 +114,85 @@ slice, rootfs UBI, squashfs, the seven .apk files, `SHA256SUMS`).
 * No multi-run byte-reproducibility claim for the image container by this lane
   (the second run was made after a kernel-config fix; the kernel slice itself
   reproduced the earlier validated build exactly).
+
+
+---
+
+# Round 3 - FINAL self-contained image (2026-11-27)
+
+**Driver packaged:** the ap-start lane's COMBINED dp-air + AP-start v7 module,
+canonical deployable debug-stripped artifact
+`/tmp/wifi-ap-dp-combined-artifact/hi5622_wifi.ko` (242,572 B sha256
+`44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b`; documented in
+`docs/incoming/wifi-ap-start/combined/README.md`, commit `bacd3c1`).
+Staged PREBUILT (no compile) via
+`tools/install-into-tree.sh --driver-ko FILE`; identity recorded in
+`build-evidence/driver-artifact.txt` (sha256/size/modinfo/params).
+The v7-only AP-start artifact (206,708 B sha `fd8e1439...`) remains the
+fallback for `--driver-ko`.
+
+## Result artifacts (final image)
+
+| artefact | size | sha256 |
+| --- | ---: | --- |
+| sysupgrade container | **6,922,559 B** | **`ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994`** |
+| kernel slice (container member `kernel`) | 3,372,638 B | `13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f` (UNCHANGED) |
+| rootfs UBI (container member `root`) | **3,538,944 B** | **`ff9f3e1c83c36a2a9170cdf6373228692b46b7fa0fbb64abbdc70a25b841aaa9`** |
+| rootfs squashfs (build_dir) | 3,077,036 B | `1dbd0d19bc21332684704859a8fb6da890984adf13ebdca569ce22207eea4d98` |
+| rootfs squashfs volume in the UBI (padded) | 3,080,192 B | see `image-verify.txt` |
+| `cfg80211.ko` installed (stripped) | 406,028 B | `11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a` |
+| `hi5622_wifi.ko` artifact / installed (stripped) | 242,572 B / 231,132 B | `44c6cc12...` / `51608fd556fa474d2da0dd88975c2a8b610301fb6b8a22d4b6e0589ade247a78` |
+| `iw` | 116,855 B | `e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23` |
+| ucode `iwinfo` | 6,371 B | `ecd3a04a31f6fbbf4426f330a67ffffbed7455f40373b9f1452f27b452686674` |
+| `hostapd` | 504,333 B | `13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919` |
+| `nl80211.so` / `rtnl.so` | 61,442 / 73,731 B | `54ac57bc...` / `fc42ccf2...` |
+| hostap ucode (common/wdev/wifi-detect) | 10,171 / 6,097 / 5,952 B | see `image-verify.txt` |
+| `regulatory.db` | 6,332 B | `c682b8e0...` |
+
+Image manifest: **83 packages**. Userspace apk artefacts (same build; local
+copy in the artifacts dir, `SHA256SUMS`):
+
+| package | apk size | sha256 |
+| --- | ---: | --- |
+| `iw-6.17-r1.apk` | 52,997 B | `9b46713f...` |
+| `wifi-scripts-1.0-r5.apk` | 82,672 B | `64cfa515480ae6dd9348a6ef8457fb1995ea4116edce2afe7510d869aeb8fc72` |
+| `hostapd-mini-...r7.apk` | 283,790 B | `daf80bebc7495273dbd3a30627349b9063451183686fac314061ab92fb0ce10c` |
+| `hostapd-common-...r7.apk` | 1,922 B | `e064cd3f...` |
+| `ucode-mod-nl80211-...apk` | 24,228 B | `af25dfe5...` |
+| `ucode-mod-rtnl-...apk` | 29,292 B | `685443d6...` |
+| `wireless-regdb-2026.09.03-r1.apk` | 3,440 B | `afd292e0...` |
+| `kmod-hi5622-cfg80211-6.18.60-r1.apk` | 183,520 B | `716fd384...` |
+| `kmod-hi5622-wifi-6.18.60-r1.apk` | 101,923 B | `59286d639a2a3d6bbb9c576fa257ed72252a2d8615c8c7aeafa28041c647f85c` |
+
+Full per-file verification output: `build-evidence/image-verify.txt`
+(PASS, kernel check UNCHANGED, all IDENT lines exact).
+
+## Config delta round 3 (bench-only, appended then `make defconfig`)
+
+`CONFIG_PACKAGE_iw`, `wireless-regdb`, `wifi-scripts`,
+`CONFIG_WIFI_SCRIPTS_UCODE`, `hostapd-mini`, `hostapd-common`,
+`ucode-mod-nl80211`, `ucode-mod-rtnl`, `kmod-hi5622-cfg80211`,
+`kmod-hi5622-wifi` (see `config-delta.config`); still appended
+`kernel-symbols.config` (`CONFIG_KERNEL_HOTPLUG_CPU=y`) after defconfig so the
+validated kernel config/slice is reproduced.
+
+## Tree state after the round-3 build (verified)
+
+* `.config` restored byte-identically (sha256 `9052d5e3...`, `cmp` pass).
+* Built kernel `.config` sha256 `08b6e595...` unchanged before/after
+  (kernel slice `13e81214...`; no kernel rebuild - 12 s build).
+* rootfs staging tree restored from the pre-build snapshot (no bench packages
+  left installed); `package/hi5622-wifi/` remains untracked in the tree (not
+  selected by the restored `.config`).
+* The container in `bin/targets/hisilicon/luofu/` is the final image recorded
+  above; it does not match the restored `.config` (re-run `build-image.sh` to
+  reproduce).
+
+## What round 3 does NOT prove
+
+* The final image was never flashed/booted by this lane. The ABI predecessor
+  `df6a78c3` was flashed and the AP verified live on it; the combined module
+  itself has not been fired yet.
+* No multi-run byte-reproducibility claim for the container by this lane (the
+  package set is pinned by apk identities and the kernel slice by hash).
+

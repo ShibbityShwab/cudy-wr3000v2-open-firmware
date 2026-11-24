@@ -111,14 +111,51 @@ while IFS='|' read -r rel desc; do
 	fi
 done <<'EOF'
 usr/sbin/iw|iw CLI (nl80211)
-usr/bin/iwinfo|iwinfo CLI (C implementation)
-usr/lib/libiwinfo.so.20230701|libiwinfo shared library
-usr/share/libiwinfo/devices.txt|libiwinfo device data
+usr/bin/iwinfo|iwinfo CLI (ucode implementation, wifi-scripts)
+usr/share/ucode/iwinfo.uc|ucode iwinfo module (wifi-scripts)
+usr/share/ucode/wifi/common.uc|ucode wifi scripts (wifi-scripts)
+usr/share/hostap/common.uc|hostapd ucode module (wifi-scripts)
+usr/share/hostap/wdev.uc|hostapd ucode module (wifi-scripts)
+usr/share/hostap/wifi-detect.uc|hostapd ucode module (wifi-scripts)
+usr/share/hostap/hostapd.uc|hostapd config backend (hostapd-mini)
+usr/sbin/hostapd|hostapd daemon (hostapd-mini)
+etc/init.d/wpad|hostapd init script (hostapd-common)
+etc/capabilities/wpad.json|hostapd capability declaration
+usr/lib/ucode/nl80211.so|ucode nl80211 module
+usr/lib/ucode/rtnl.so|ucode rtnl module
 usr/lib/libnl-tiny.so.1|libnl-tiny (iw dependency)
 lib/firmware/regulatory.db|wireless regulatory database
 lib/modules/6.18.60/cfg80211.ko|cfg80211 kernel module (target kernel tree)
-lib/modules/6.18.60/hi5622_wifi.ko|clean-room Hi5622 Wi-Fi host driver
+lib/modules/6.18.60/hi5622_wifi.ko|clean-room Hi5622 Wi-Fi host driver (ABI-validated)
 EOF
+
+echo
+echo "-- expected file identities (known-good hashes) --"
+IDENT_MISMATCH=0
+while IFS='|' read -r rel want_size want_sha; do
+	[ -z "$rel" ] && continue
+	if [ ! -e "$ROOT/$rel" ]; then
+		echo "MISSING  $rel"
+		IDENT_MISMATCH=$((IDENT_MISMATCH + 1))
+		continue
+	fi
+	got_size=$(stat -c %s "$ROOT/$rel")
+	got_sha=$(sha256sum "$ROOT/$rel" | cut -d' ' -f1)
+	if [ "$got_size" = "$want_size" ] && [ "$got_sha" = "$want_sha" ]; then
+		echo "IDENT    $rel ($got_size B sha256 $got_sha)"
+	else
+		echo "DRIFT    $rel size $got_size (expected $want_size) sha256 $got_sha (expected $want_sha)"
+		IDENT_MISMATCH=$((IDENT_MISMATCH + 1))
+	fi
+done <<'EOF'
+usr/sbin/iw|116855|e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23
+usr/sbin/hostapd|504333|13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919
+usr/lib/ucode/nl80211.so|61442|54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f
+usr/lib/ucode/rtnl.so|73731|fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d
+lib/firmware/regulatory.db|6332|c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d
+lib/modules/6.18.60/cfg80211.ko|406028|11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a
+EOF
+MISSING=$((MISSING + IDENT_MISMATCH))
 
 echo
 echo "-- kernel module metadata (extracted .ko files) --"
@@ -129,6 +166,24 @@ for mod in cfg80211 hi5622_wifi; do
 	echo "  vermagic: $(modinfo -F vermagic "$KO" 2>/dev/null || echo unknown)"
 	echo "  depends : $(modinfo -F depends "$KO" 2>/dev/null || echo unknown)"
 	echo "  license : $(modinfo -F license "$KO" 2>/dev/null || echo unknown)"
+	if [ "$mod" = hi5622_wifi ]; then
+		PARMS=$(modinfo -F parm "$KO" 2>/dev/null || true)
+		for want in ap_start_mode vap_start_first h2d_send_budget fw_path; do
+			case "$PARMS" in
+			*"$want:"*) echo "  param   : $want present" ;;
+			*) echo "  param   : MISSING $want"; MISSING=$((MISSING + 1)) ;;
+			esac
+		done
+		# Combined dp-air + AP-start marker: the deployable module must carry
+		# BOTH feature sets (AP-start attrs + data-plane attrs).
+		SYMS=$(strings "$KO" 2>/dev/null || true)
+		for want in ap_start_mode dp_probe dp_setup dp_tx_frame dp_tx_status dp_rx_poll h2d_txq_addr_sync; do
+			case "$SYMS" in
+			*"$want"*) echo "  feature : $want present" ;;
+			*) echo "  feature : MISSING $want"; MISSING=$((MISSING + 1)) ;;
+			esac
+		done
+	fi
 	BUILT_KO=$(find "$OWRT/build_dir" -name "$mod.ko" -path '*6.18.60*' 2>/dev/null | head -1)
 	if [ -n "$BUILT_KO" ]; then
 		if cmp -s "$BUILT_KO" "$KO"; then
@@ -144,11 +199,10 @@ echo "-- apk manifest packages --"
 MANIFEST=$(ls -t "$TARGETS"/*.manifest 2>/dev/null | head -1)
 [ -n "$MANIFEST" ] || die "no image manifest"
 MANIFEST_MISSING=0
-for pkg in iw iwinfo libiwinfo libiwinfo-data wireless-regdb kmod-hi5622-cfg80211 kmod-hi5622-wifi libnl-tiny1; do
-	# ABI-versioned package names: libiwinfo -> libiwinfo20230701,
+for pkg in iw wifi-scripts wireless-regdb hostapd-mini hostapd-common \
+           ucode-mod-nl80211 ucode-mod-rtnl kmod-hi5622-cfg80211 kmod-hi5622-wifi libnl-tiny1; do
 	# libnl-tiny -> libnl-tiny1 (OpenWrt appends the ABI version).
 	case "$pkg" in
-		libiwinfo)  pat='^libiwinfo[0-9]{8} - ' ;;
 		libnl-tiny*) pat='^libnl-tiny[0-9]* - ' ;;
 		*)          pat="^$pkg - " ;;
 	esac
@@ -162,11 +216,11 @@ done
 echo "manifest    : $(basename "$MANIFEST"), $(wc -l < "$MANIFEST") packages"
 
 echo
-echo "-- byte deltas vs the previous release image 22b72852 --"
-echo "container : $(stat -c %s "$CONTAINER") B (was 6267199 B, delta +$(( $(stat -c %s "$CONTAINER") - 6267199 )))"
-echo "kernel    : $KERNEL_SIZE B (was 3372638 B)"
-echo "rootfs ubi: $ROOTFS_SIZE B (was 2883584 B, delta +$(( ROOTFS_SIZE - 2883584 )))"
-echo "squashfs  : $SQ_SIZE B (padded volume; was 2498560 B, delta +$(( SQ_SIZE - 2498560 )))"
+echo "-- byte deltas vs the previous ABI image df6a78c3 (rootfs-only rebuild) --"
+echo "container : $(stat -c %s "$CONTAINER") B (was 6533439 B, delta $(( $(stat -c %s "$CONTAINER") - 6533439 )))"
+echo "kernel    : $KERNEL_SIZE B (was 3372638 B, delta $(( KERNEL_SIZE - 3372638 )))"
+echo "rootfs ubi: $ROOTFS_SIZE B (was 3145728 B, delta $(( ROOTFS_SIZE - 3145728 )))"
+echo "squashfs  : $SQ_SIZE B (padded volume; was 2756608 B, delta $(( SQ_SIZE - 2756608 )))"
 
 echo
 if [ "$MISSING" -ne 0 ] || [ "$MANIFEST_MISSING" -ne 0 ]; then

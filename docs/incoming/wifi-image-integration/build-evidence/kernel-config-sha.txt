@@ -1,5 +1,5 @@
 kernel config sha256 before/after build:
   target/linux/hisilicon/luofu/config-6.18: ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f -> ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
-  built kernel .config: 8ddb783dd394baeb0d524ff214cf08a3ff021801fe58a63e4e1da73fa34d558a -> 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
+  built kernel .config: 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c -> 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
 container before this build: /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
 container after  this build: /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin

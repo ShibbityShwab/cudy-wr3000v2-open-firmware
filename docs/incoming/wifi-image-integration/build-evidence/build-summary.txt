@@ -4,58 +4,73 @@
 tree                       : /home/shibbityshwab/openwrt-lab-selectorfix-img
 tree git HEAD              : 27663a0
 work dir (full logs)       : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration/build-evidence/work
-start (UTC)                : 2569-11-24T07:05:39Z
-end   (UTC)                : 2569-11-24T07:08:12Z
-duration                   : 153 s
+start (UTC)                : 2569-11-24T11:38:58Z
+end   (UTC)                : 2569-11-24T11:39:10Z
+duration                   : 12 s
 make -j                    : 16
 build rc                   : 0
 driver source              : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration/tools/../../wifi-cfg80211/src
-driver snapshot files      : 29
-driver snapshot manifest   : package/hi5622-wifi/src-sha256.txt sha256 10582bb49af68c8360d569d88e59fd994d370e76e4440e48fc24cc856af948ca
+driver mode                : prebuilt
+driver path                : /tmp/wifi-ap-dp-combined-artifact/hi5622_wifi.ko
+driver size / sha          : 242572 / 44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
+driver manifest            : prebuilt-sha256.txt sha256 dcf2a41688b751b7f1c7a430288e04bda76d2d287498fd803ced54c156287b52
 kernel symbols carried over: kernel-symbols.config sha256 d2f12ad2aca24e5d1b1c1eeb81401ad0746664ce69d9f8c8f17abd21ab487bc0
 
 == config ==
 pre-build .config sha256   : 9052d5e36fd30e6c59276910f2b286d5a109a5dffd03f3a8e1386aece0ed075d
-resolved .config sha256    : b377f6c9edfcc41e51061ee6b0c8ad0702b82dc8d5bd50a449ff301a29a0f932
+resolved .config sha256    : b153e9d3d45bd6fff98d477d3c30debc73ad2cefb4849cf05c6f2a591e0e39f3
 target kernel config       : target/linux/hisilicon/luofu/config-6.18
   sha256 before/after      : ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f / ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
-built kernel .config       : 8ddb783dd394baeb0d524ff214cf08a3ff021801fe58a63e4e1da73fa34d558a / 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
+built kernel .config       : 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c / 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c
 resolved package delta     :
-  CONFIG_PACKAGE_libiwinfo-data=y
+  CONFIG_PACKAGE_wifi-scripts=y
   CONFIG_PACKAGE_wireless-regdb=y
   CONFIG_PACKAGE_kmod-hi5622-cfg80211=y
   CONFIG_PACKAGE_kmod-hi5622-wifi=y
-  CONFIG_PACKAGE_libiwinfo=y
+  CONFIG_PACKAGE_ucode-mod-nl80211=y
+  CONFIG_PACKAGE_ucode-mod-rtnl=y
+  CONFIG_PACKAGE_hostapd-common=y
+  CONFIG_PACKAGE_hostapd-mini=y
   CONFIG_PACKAGE_iw=y
-  CONFIG_PACKAGE_iwinfo=y
-  # CONFIG_WIFI_SCRIPTS_UCODE is not set
+  CONFIG_WIFI_SCRIPTS_UCODE=y
 
 == image artifacts ==
 container                  : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
-container size / sha256    : 6533439 B / df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310
+container size / sha256    : 6922559 B / ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994
 kernel slice size / sha256 : 3372638 B / 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
-rootfs ubi size / sha256   : 3145728 B / 62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746
-rootfs squashfs size / sha256: 2753136 B / 68450ee4730302747508b94ef45875c433e48b14c1540975ea2143ae72d3af44
+rootfs ubi size / sha256   : 3538944 B / ff9f3e1c83c36a2a9170cdf6373228692b46b7fa0fbb64abbdc70a25b841aaa9
+rootfs squashfs size / sha256: 3077036 B / 1dbd0d19bc21332684704859a8fb6da890984adf13ebdca569ce22207eea4d98
 cfg80211.ko size / sha256  : 2328548 B / 949393f9676cc7bab18def92f1f96a07c45bd0ff599ee418c16ba7d54715170c
-hi5622_wifi.ko size / sha256: 505748 B / 340586180860c326ef1e5a7fd96c8851acaa953e828c10f67c3ddd856c0cdad1
+hi5622_wifi.ko size / sha256: 242572 B / 44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
 
 == verification ==
 verify rc                  : 0
   kernel check: UNCHANGED - the hardware-validated cfg80211 slice 13e81214...
-  consistency : squashfs volume == build_dir/.../root.squashfs (2753136 B sha256 68450ee4730302747508b94ef45875c433e48b14c1540975ea2143ae72d3af44) + 3472 B ubinize padding
+  consistency : squashfs volume == build_dir/.../root.squashfs (3077036 B sha256 1dbd0d19bc21332684704859a8fb6da890984adf13ebdca569ce22207eea4d98) + 3156 B ubinize padding
   PRESENT  usr/sbin/iw                                      116855 B sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23  # iw CLI (nl80211)
-  PRESENT  usr/bin/iwinfo                                    16906 B sha256 88fb49430a9a0b5095f10eacf1ea63a6c8906b450a71b01bfebfc01ba959cb4c  # iwinfo CLI (C implementation)
-  PRESENT  usr/lib/libiwinfo.so.20230701                     57377 B sha256 aa35d698dfb5ec20ff343bde48f10f6cc055aeaeda62630f4615847bc3c2a806  # libiwinfo shared library
-  PRESENT  usr/share/libiwinfo/devices.txt                   18231 B sha256 dcaaa350ccc73b16341fc792d712f5b45c546344c3dc7457d141c5f2b3a804f3  # libiwinfo device data
+  PRESENT  usr/bin/iwinfo                                     6371 B sha256 ecd3a04a31f6fbbf4426f330a67ffffbed7455f40373b9f1452f27b452686674  # iwinfo CLI (ucode implementation, wifi-scripts)
+  PRESENT  usr/share/ucode/iwinfo.uc                         17028 B sha256 617dc0f90b44f2e1b2e09efffc795ffe29f3e7d823881ffb95620c4a6469db43  # ucode iwinfo module (wifi-scripts)
+  PRESENT  usr/share/ucode/wifi/common.uc                     3760 B sha256 e42a0c0b06421fa98d1177f7cfe4ffd4e661ca9a5a207389c6f2350e44c75c37  # ucode wifi scripts (wifi-scripts)
+  PRESENT  usr/share/hostap/common.uc                        10171 B sha256 517d3202c1a75fca80aaf1cfcbb6ee0c7fa130403dc948dbb8518315f2dd70eb  # hostapd ucode module (wifi-scripts)
+  PRESENT  usr/share/hostap/wdev.uc                           6097 B sha256 fa8de4333f95c3dd8473aef64f883ae4b6078430d4c7726daaeeae37a753999e  # hostapd ucode module (wifi-scripts)
+  PRESENT  usr/share/hostap/wifi-detect.uc                    5952 B sha256 02f6d7aa2a55f47de65d4c99254a234bbea4fe3cc56fea3d1bad340830c792de  # hostapd ucode module (wifi-scripts)
+  PRESENT  usr/share/hostap/hostapd.uc                       71062 B sha256 160af9e095108a5d8d476dd5a87771491b733fde4b422406352baafca02dd242  # hostapd config backend (hostapd-mini)
+  PRESENT  usr/sbin/hostapd                                 504333 B sha256 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919  # hostapd daemon (hostapd-mini)
+  PRESENT  etc/init.d/wpad                                    1262 B sha256 b6679419287fa73cfbf808a5330ee329a246af17efbb5d9ab31a1647743d3855  # hostapd init script (hostapd-common)
+  PRESENT  etc/capabilities/wpad.json                          407 B sha256 8abee2b7faa6bd6c71779c74ac6901fe6c265d56d4889d810822b5cabb1369cd  # hostapd capability declaration
+  PRESENT  usr/lib/ucode/nl80211.so                          61442 B sha256 54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f  # ucode nl80211 module
+  PRESENT  usr/lib/ucode/rtnl.so                             73731 B sha256 fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d  # ucode rtnl module
   PRESENT  usr/lib/libnl-tiny.so.1                           29034 B sha256 d7d73dbd242c45416faa29e557ccb976a309fb90808c37f9521265cb1b389916  # libnl-tiny (iw dependency)
   PRESENT  lib/firmware/regulatory.db                         6332 B sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  # wireless regulatory database
   PRESENT  lib/modules/6.18.60/cfg80211.ko                  406028 B sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a  # cfg80211 kernel module (target kernel tree)
-  PRESENT  lib/modules/6.18.60/hi5622_wifi.ko               133884 B sha256 e0608fa6e1489035d58febce279a13baf6988a5664b0404e1135d0b53d124094  # clean-room Hi5622 Wi-Fi host driver
+  PRESENT  lib/modules/6.18.60/hi5622_wifi.ko               231132 B sha256 51608fd556fa474d2da0dd88975c2a8b610301fb6b8a22d4b6e0589ade247a78  # clean-room Hi5622 Wi-Fi host driver (ABI-validated)
   PRESENT  iw - 6.17-r1
-  PRESENT  iwinfo - 2026.05.26~66bdd1a0-r1
-  PRESENT  libiwinfo20230701 - 2026.05.26~66bdd1a0-r1
-  PRESENT  libiwinfo-data - 2026.05.26~66bdd1a0-r1
+  PRESENT  wifi-scripts - 1.0-r5
   PRESENT  wireless-regdb - 2026.09.03-r1
+  PRESENT  hostapd-mini - 2026.08.07~831364bf-r7
+  PRESENT  hostapd-common - 2026.08.07~831364bf-r7
+  PRESENT  ucode-mod-nl80211 - 2026.10.28~dfc64d41-r1
+  PRESENT  ucode-mod-rtnl - 2026.10.28~dfc64d41-r1
   PRESENT  kmod-hi5622-cfg80211 - 6.18.60-r1
   PRESENT  kmod-hi5622-wifi - 6.18.60-r1
   PRESENT  libnl-tiny1 - 2025.12.02~40493a65-r1

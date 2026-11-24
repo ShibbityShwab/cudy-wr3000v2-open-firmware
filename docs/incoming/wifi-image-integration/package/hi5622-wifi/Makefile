@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # OpenWrt package: clean-room Hi5622V100 Wi-Fi host driver + the target
-# kernel's cfg80211 module for the BENCH image (lane: img-integ, task-112).
+# kernel's cfg80211 module for the BENCH image (lane: img-integ, task-112/132).
 #
 # Two KernelPackages in one Makefile, on purpose:
 #
@@ -15,11 +15,20 @@
 #     selected. Selecting both would install two different cfg80211.ko files.
 #
 #   kmod-hi5622-wifi
-#     Builds hi5622_wifi.ko from ./src, a source snapshot of
-#     opensource/docs/incoming/wifi-cfg80211/src (cfg80211 full-MAC M0-M2 over
-#     the working HCC duplex protocol). The snapshot is placed here by
-#     tools/install-into-tree.sh together with a src-sha256.txt manifest; no
-#     binary is stored in the repository.
+#     Installs hi5622_wifi.ko. Two build modes, chosen by what
+#     tools/install-into-tree.sh staged into this package directory:
+#
+#     PREBUILT mode (hi5622_wifi.ko in ./prebuilt/):
+#       The module is a LOCAL, ABI-validated bench artifact (e.g. the v7
+#       AP-start driver 206,708 B sha fd8e1439...). It is copied as-is; the
+#       package records its sha256 in prebuilt/prebuilt-sha256.txt. Nothing is
+#       compiled, so the exact hardware-validated bytes are flashed.
+#       NO BINARY IS STORED IN THE GIT REPOSITORY: install-into-tree.sh copies
+#       the artifact from a local path into the (untracked) OpenWrt tree.
+#
+#     SOURCE mode (no ./prebuilt/): builds hi5622_wifi.ko from ./src, a source
+#       snapshot of a committed driver tree (e.g. docs/incoming/wifi-cfg80211/
+#       src) with $(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules.
 #
 # SAFETY / BENCH POLICY
 #   * No AUTOLOAD and no init script: the module is loaded by hand in an
@@ -40,6 +49,10 @@ PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0
 PKG_MAINTAINER:=Cudy WR3000 v2 reverse-engineering project (bench image only)
 PKG_BUILD_PARALLEL:=1
+
+# Build mode: prebuilt artifact if staged, else build from the src snapshot.
+HI5622_KO := hi5622_wifi.ko
+HI5622_PREBUILT_KO := $(CURDIR)/prebuilt/$(HI5622_KO)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -65,22 +78,42 @@ define KernelPackage/hi5622-cfg80211/description
 endef
 
 # ---------------------------------------------------------------------------
-# The clean-room driver (source snapshot in ./src, Kbuild included).
+# The clean-room driver: prebuilt ABI-validated artifact or ./src compile.
 # ---------------------------------------------------------------------------
-define Build/Prepare
+ifneq ($(wildcard $(HI5622_PREBUILT_KO)),)
+  HI5622_MODE := prebuilt
+  define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+	$(CP) $(CURDIR)/prebuilt/. $(PKG_BUILD_DIR)/
+	# The kernel-package symvers export hook expects kbuild outputs; a
+	# prebuilt module exports no symbols, so empty manifests are correct
+	# (needed because the hook runs a fixed shell sequence).
+	: > $(PKG_BUILD_DIR)/Module.symvers
+	: > $(PKG_BUILD_DIR)/modules.order
+  endef
+  define Build/Compile
+	# prebuilt, ABI-validated module: nothing is compiled or modified.
+	@test -f $(PKG_BUILD_DIR)/$(HI5622_KO) || { \
+		echo "ERROR: prebuilt $(HI5622_KO) missing from PKG_BUILD_DIR" >&2; exit 1; }
+	@echo "hi5622-wifi: installing PREBUILT module $(HI5622_KO) (no compile)"
+	@sha256sum $(PKG_BUILD_DIR)/$(HI5622_KO)
+  endef
+else
+  HI5622_MODE := source
+  define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) $(CURDIR)/src/. $(PKG_BUILD_DIR)/
-endef
-
-define Build/Compile
+  endef
+  define Build/Compile
 	+$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules
-endef
+  endef
+endif
 
 define KernelPackage/hi5622-wifi
   SUBMENU:=Wireless Drivers
-  TITLE:=Hi5622V100 clean-room Wi-Fi host driver (cfg80211 full-MAC, bench)
+  TITLE:=Hi5622V100 clean-room Wi-Fi host driver (bench)
   DEPENDS:=@TARGET_hisilicon_luofu +kmod-hi5622-cfg80211
-  FILES:=$(PKG_BUILD_DIR)/hi5622_wifi.ko
+  FILES:=$(PKG_BUILD_DIR)/$(HI5622_KO)
   KCONFIG:=CONFIG_CFG80211
   # deliberately no AUTOLOAD: bench policy, load by hand
 endef
@@ -89,10 +122,10 @@ define KernelPackage/hi5622-wifi/description
   Clean-room host driver for the Hi5622V100 Wi-Fi endpoint on the Hi5671Y
   (Cudy WR3000 v2.0) PCIe link: endpoint transport, firmware upload and
   release-only boot (0x5A5A, never 0xCECE during boot), HCC duplex protocol,
-  direct-read device group-A D2H, and the cfg80211 full-MAC M0-M2 interface
-  (wiphy + VAP lifecycle; scan/AP firmware messages still pending). BENCH
-  IMAGE ONLY. The vendor firmware is not included; point fw_path at a local
-  copy at bench time. Loading the module performs no device writes.
+  direct-read device group-A D2H, cfg80211 full-MAC interface and the AP-start
+  feature set. BENCH IMAGE ONLY. The vendor firmware is not included; point
+  fw_path at a local copy at bench time. Loading the module performs no device
+  writes. Build mode: $(HI5622_MODE).
 endef
 
 $(eval $(call KernelPackage,hi5622-cfg80211))

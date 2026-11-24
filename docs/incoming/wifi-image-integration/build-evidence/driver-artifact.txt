@@ -1,0 +1,29 @@
+# hi5622-wifi prebuilt module identity (staged by install-into-tree.sh)
+# source artifact : /tmp/wifi-ap-dp-combined-artifact/hi5622_wifi.ko
+# label           : combined dp-air + AP-start v7 module (ap-start task-121, 242,572 B sha 44c6cc12; dp-air derived from the fired module ca32aec4, v7 AP path hardware-validated 2026-11-27)
+# staged (host)   : 2569-11-24T11:38:58Z
+size_bytes=242572
+sha256=44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
+modinfo_name=hi5622_wifi
+modinfo_vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+modinfo_depends=cfg80211
+modinfo_license=GPL
+modinfo_param=scan_trust_rssi: (uint)
+modinfo_param=vap_start_first: (uint)
+modinfo_param=vap_start_mode: (uint)
+modinfo_param=vap_start_module: (uint)
+modinfo_param=ap_start_mode: (uint)
+modinfo_param=scan_timeout_ms: (uint)
+modinfo_param=scan_dwell_ms: (uint)
+modinfo_param=allow_frames: (uint)
+modinfo_param=frame_gap_ms: (uint)
+modinfo_param=cfg80211_auto: (uint)
+modinfo_param=band_force: (int)
+modinfo_param=h2d_send_budget: (uint)
+modinfo_param=hcc_poll_ms: (uint)
+modinfo_param=hcc_cece_mode: (uint)
+modinfo_param=rd_ab_write: (uint)
+modinfo_param=fw_path: (charp)
+modinfo_param=wifi_block_path: (charp)
+modinfo_param=plat_block_path: (charp)
+modinfo_param=allow_unseeded_release: (uint)

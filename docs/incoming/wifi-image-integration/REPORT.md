@@ -1,71 +1,109 @@
-# wifi-image-integration - bench image with iw/libnl-tiny/iwinfo/regdb + the clean-room driver
+# wifi-image-integration - self-contained bench image (iw/iwinfo/regdb/kmods/hostapd/ucode)
 
-**Lane:** img-integ (shared task task-112), host-only. **Date:** 2026-11-24.
-**Status:** package + config delta + build/verify tooling delivered; the bench
-image is **BUILT and VERIFIED FROM ITS BYTES** host-side with the
-**hardware-validated kernel slice unchanged**. **Nothing was flashed or booted by
-this lane** - the attended install is a separate decision (DEPLOY.md).
+**Lane:** img-integ (shared task task-112 -> final-image task-132), host-only.
+**Date:** 2026-11-24 (rounds 1-2) / 2026-11-27 (round 3, final image).
+**Status:** the **SELF-CONTAINED FINAL BENCH IMAGE** is BUILT and VERIFIED FROM
+ITS BYTES host-side in the shared release-line tree, with the
+**hardware-validated kernel slice UNCHANGED** (`13e81214...`, slot
+`1794a531...`): a rootfs-only rebuild. **Nothing was flashed or booted by this
+lane** - the ABI predecessor image was flashed by the Lead on 2026-11-27 and the
+AP runs on it; installing this final image is the next attended decision
+(DEPLOY.md).
 
-## 0. TL;DR
+## 0. TL;DR (round 3 - final image)
 
-* **Config delta (bench-only, 7 packages)**: `iw`, `iwinfo` (C CLI),
-  `libiwinfo` (+ `libiwinfo-data`), `wireless-regdb`,
-  `kmod-hi5622-cfg80211`, `kmod-hi5622-wifi`; `CONFIG_WIFI_SCRIPTS_UCODE`
-  is disabled so package `iwinfo` installs the C binary (with the ucode scripts
-  selected it installs nothing).
-* **Packaging**: one tracked OpenWrt package defines two KernelPackages:
-  `kmod-hi5622-cfg80211` installs the target kernel tree's own
-  `net/wireless/cfg80211.ko` (NOT the mac80211 backports `kmod-cfg80211`),
-  `kmod-hi5622-wifi` builds the clean-room driver from a source snapshot of
-  `docs/incoming/wifi-cfg80211/src` (29 source files + sha256 manifest, no
-  binary committed).
-* **Build (serialized, shared release tree, `make -j16`, 153 s)**: container
-  **6,533,439 B sha256 `df6a78c3...`**; kernel slice **UNCHANGED**
-  **3,372,638 B sha256 `13e81214...`** (the hardware-validated cfg80211
-  slice); rootfs UBI **3,145,728 B sha256 `62344e80...`**; squashfs
-  **2,753,136 B sha256 `68450ee4...`**; manifest **81** packages (baseline 74).
-* **Verification from the built bytes**: the rootfs squashfs is reassembled
-  from the UBI image in the sysupgrade container (read-only tool here), then
-  `unsquashfs`; all required paths are PRESENT with hashes (iw, iwinfo,
-  libiwinfo, libnl-tiny, regulatory.db, cfg80211.ko, hi5622_wifi.ko); both
-  modules carry vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` and the driver
-  `depends=cfg80211`. `tools/verify-image.sh` exits 0 only on a full PASS.
-* **Key finding (F1)**: normalizing the release-line `.config` with
-  `make defconfig` silently DROPS the out-of-menu
-  `CONFIG_KERNEL_HOTPLUG_CPU=y` override. `include/kernel-defaults.mk` maps
-  every `CONFIG_KERNEL_*` line to the kernel's `CONFIG_*`, so the first build
-  attempt rebuilt the kernel with `CONFIG_HOTPLUG_CPU` unset and produced a
-  **new** kernel slice (3,369,166 B sha256 `853ac764...`) instead of the
-  validated `13e81214...`. `kernel-symbols.config` carries the override over
-  after defconfig; the re-run reproduces the validated slice exactly (kernel
-  `.config` sha before/after: `8ddb783d...` -> `08b6e595...`, i.e. the
-  pre-build/validated kernel config).
-* **Deploy decision**: the kernel slice is unchanged, so the only on-device
-  change is the rootfs. Recommended next-session path is the zero-flash
-  `apk add` of the same built packages (T0 in DEPLOY.md); a full pair-B rootfs
-  rewrite (T1) is a dedicated attended window with a saved rollback UBI and an
-  accepted overlay loss. No kernel write is needed.
+* **Image (recorded build 2026-11-27, tree `27663a0`, `make -j16`, 12 s):**
 
-## 1. What the image now carries
+  | artefact | size | sha256 |
+  | --- | ---: | --- |
+  | sysupgrade container | **6,922,559 B** | **`ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994`** |
+  | kernel slice (container member `kernel`) | 3,372,638 B | `13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f` (**UNCHANGED**) |
+  | rootfs UBI (container member `root`) | **3,538,944 B** | **`ff9f3e1c83c36a2a9170cdf6373228692b46b7fa0fbb64abbdc70a25b841aaa9`** |
+  | rootfs squashfs (padded volume) | 3,080,192 B | `b5a8d10b...` (see image-verify.txt) |
+  | apk manifest | **83 packages** | see `build-evidence/image-verify.txt` |
+
+* **Rootfs-only by construction**: the build reused the validated kernel build
+  (kernel `.config` sha `08b6e595...` unchanged before/after, kernel slice
+  identical, kernel compile skipped), so flashing this image needs **only a
+  rootfsb write** - the kernelb slot `13e81214...`/`1794a531...` is untouched.
+  `tools/verify-image.sh` asserts the kernel hash and fails on any drift.
+* **Self-contained userspace + modules** (no /tmp deployment for these):
+  `iw` 6.17, ucode `iwinfo` + `wifi-scripts` (its ucode files incl.
+  `/usr/share/hostap/{common,wdev,wifi-detect}.uc` and
+  `/usr/share/ucode/wifi/*`), `hostapd-mini` v2.12 + `hostapd-common`,
+  `ucode-mod-nl80211`/`ucode-mod-rtnl`, `wireless-regdb`, and both kernel
+  modules `/lib/modules/6.18.60/{cfg80211,hi5622_wifi}.ko`.
+  `hostapd` binary sha256 `13cb3a43...` (504,333 B) and the ucode module
+  hashes match the wifi-hostapd-deploy lane's authoritative expected-files
+  manifest exactly (verifier IDENT lines).
+* **Driver packaged = the COMBINED dp-air + AP-start v7 module** (ap-start lane
+  delivered it before this build: `dataops/incoming/wifi-ap-start/combined/
+  README.md`): deployable debug-stripped **242,572 B sha256
+  `44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b`**, packaged
+  as PREBUILT (nothing recompiled; the validated bytes are installed,
+  OpenWrt-stripped to 231,132 B sha256 `51608fd5...` in the rootfs). It carries
+  **both** feature sets - AP-start (v7) and the data plane
+  (`dp_probe/dp_setup/dp_txq_sync/h2d_txq_addr_sync/dp_tx_frame/dp_tx_status/
+  dp_rx_poll`) - so one module load on a fresh flash can run the single-boot
+  air-TX milestone without a /tmp module push.
+* **Still LOCAL by policy (not in the image)**: the PD4-patched vendor firmware
+  (vendor-derived, never committed) and the attended bench scripts/configs
+  (hostapd-open.conf etc.); the bench copies the firmware at session time
+  (`fw_path`).
+* **Deployment**: the new rootfs UBI goes to `rootfsb` (mtd14) from a stock
+  pair-A boot via the proven stock-telnet transport. The existing
+  `tools/stock-telnet-install.sh --apply` writes BOTH pair-b members; a strict
+  rootfs-only write is possible with the same transport but needs either a
+  small `--rootfs-only` extension of that tool (root repo, not this lane) or
+  the manual 4-command sequence in DEPLOY.md. Writing the identical kernel slot
+  with the existing tool is safe and verified (slot hash read-back), just
+  unnecessary. Full analysis + rollback: DEPLOY.md.
+* **Round 2 (ABI image `df6a78c3`) is preserved as history**: evidence moved to
+  `build-evidence/round2-abi-image-df6a78c3/`; that image was flashed by the
+  Lead (ABI closed, AP-ENABLED live) and this final image is its rootfs-only
+  successor.
+
+## 0b. Round 2 history (ABI image, 2026-11-24) - superseded by round 3
+
+The first self-contained step packaged `iw`, C `iwinfo` + `libiwinfo`,
+`wireless-regdb`, `kmod-hi5622-cfg80211` and a `kmod-hi5622-wifi` compiled
+from the `docs/incoming/wifi-cfg80211/src` snapshot. Recorded image:
+container 6,533,439 B sha `df6a78c3...`, kernel slice unchanged
+`13e81214...`, rootfs UBI 3,145,728 B sha `62344e80...`, 81 packages. That
+image was flashed 2026-11-27 via the stock-telnet path and closed the kmod ABI
+mismatch (native `modprobe cfg80211` + `hi5622_wifi` from `/lib/modules`,
+hostapd AP-ENABLED live). Its evidence and numbers are in
+`build-evidence/round2-abi-image-df6a78c3/`.
+
+Key finding from round 2 that still governs this tooling (**F1**): normalizing
+the release-line `.config` with `make defconfig` silently DROPS the
+out-of-menu `CONFIG_KERNEL_HOTPLUG_CPU=y` override; `include/kernel-defaults.mk`
+maps every `CONFIG_KERNEL_*` line to the kernel's `CONFIG_*`, so a naive
+incremental build rebuilds a DIFFERENT kernel slice (measured:
+3,369,166 B sha `853ac764...`). `kernel-symbols.config` re-appends the
+override after defconfig; the kernel `.config` then reproduces the validated
+`08b6e595...` and the kernel slice stays `13e81214...`.
+
+## 1. What the final image carries
 
 | package | version | what it provides |
 | --- | --- | --- |
-| `iw` | 6.17-r1 | `/usr/sbin/iw` (nl80211 tool used for the 2026-11-25 phy/VAP milestone) |
-| `libnl-tiny` | 2025.12.02~40493a65 | `/usr/lib/libnl-tiny.so.1` - was ALREADY in the baseline image (see F2) |
-| `iwinfo` | 2026.05.26~66bdd1a0 | `/usr/bin/iwinfo` C CLI |
-| `libiwinfo` (+data) | 2026.05.26~66bdd1a0 | `/usr/lib/libiwinfo.so.20230701`, `/usr/share/libiwinfo/devices.txt` |
-| `wireless-regdb` | 2026.09.03 | `/lib/firmware/regulatory.db` |
+| `iw` | 6.17-r1 | `/usr/sbin/iw` (nl80211 tool used for the phy/VAP milestone) |
+| `wifi-scripts` | 1.0-r5 | ucode wifi scripts: `/usr/bin/iwinfo`, `/usr/share/ucode/iwinfo.uc`, `/usr/share/ucode/wifi/*`, hostapd ucode `/usr/share/hostap/{common,wdev,wifi-detect}.uc`, netifd integration |
+| `hostapd-mini` | 2026.08.07~831364bf-r7 | `/usr/sbin/hostapd` (504,333 B), hostapd config backend |
+| `hostapd-common` | 2026.08.07~831364bf-r7 | `/etc/init.d/wpad`, `/etc/capabilities/wpad.json`, acl |
+| `ucode-mod-nl80211` / `ucode-mod-rtnl` | 2026.10.28~dfc64d41 | `/usr/lib/ucode/{nl80211,rtnl}.so` |
+| `wireless-regdb` | 2026.09.03-r1 | `/lib/firmware/regulatory.db` (see 2.4: unsigned db => world regdomain) |
 | `kmod-hi5622-cfg80211` | 6.18.60-r1 | `/lib/modules/6.18.60/cfg80211.ko` (target kernel tree, stripped at install) |
-| `kmod-hi5622-wifi` | 6.18.60-r1 | `/lib/modules/6.18.60/hi5622_wifi.ko` (clean-room driver) |
+| `kmod-hi5622-wifi` | 6.18.60-r1 | `/lib/modules/6.18.60/hi5622_wifi.ko` (combined dp-air + AP-start v7, prebuilt) |
+| `libnl-tiny` | 2025.12.02~40493a65 | `/usr/lib/libnl-tiny.so.1` - already in the baseline image |
 
-No autoload entry and no init script are installed: the modules are loaded by
-hand in an attended session (bench policy). No vendor firmware, no calibration
-or custom-block bytes are in the image; the driver reads the local firmware via
-its `fw_path` module parameter.
+No autoload entry and no driver init script: the driver is loaded by hand in an
+attended session (bench policy). No vendor firmware, no calibration or
+custom-block bytes are in the image.
 
-Size effect vs the previous release image `22b72852` (kernel-only cfg80211
-config change): container +266,240 B, rootfs UBI +262,144 B (2 extra 128 KiB
-PEBs), kernel slice +-0 B.
+Size vs the ABI image `df6a78c3`: container +389,120 B, rootfs UBI +393,216 B
+(3 extra 128 KiB PEBs), kernel slice +-0 B.
 
 ## 2. Packaging design and decisions
 
@@ -74,196 +112,189 @@ PEBs), kernel slice +-0 B.
 The clean-room driver is compiled against the luofu kernel tree's
 `net/wireless` headers and imports six cfg80211 symbols, so at runtime it must
 use the cfg80211 built from THAT tree. `target/linux/hisilicon/luofu/config-6.18`
-already sets `CONFIG_CFG80211=m` (handoff from the wifi-upstream-target lane,
-`docs/incoming/wifi-upstream-target/CFG80211-BENCH-IMAGE.md`), so the module is
-produced by `target/linux/compile`; `kmod-hi5622-cfg80211` only installs it
+already sets `CONFIG_CFG80211=m` (handoff from the wifi-upstream-target lane),
+so the module is produced by `target/linux/compile`;
+`kmod-hi5622-cfg80211` only installs it
 (`FILES:=$(LINUX_DIR)/net/wireless/cfg80211.ko`, `KCONFIG:=CONFIG_CFG80211`).
-OpenWrt's own `kmod-cfg80211` (defined in `package/kernel/mac80211`) builds a
-DIFFERENT cfg80211 from the backports tarball; selecting both would install two
-different `cfg80211.ko` files. The delta leaves `CONFIG_PACKAGE_kmod-cfg80211`
-unset; the package description states this explicitly.
+OpenWrt's own `kmod-cfg80211` (package/kernel/mac80211) builds a DIFFERENT
+cfg80211 from the backports tarball; selecting both would install two different
+`cfg80211.ko` files. The delta leaves `CONFIG_PACKAGE_kmod-cfg80211` unset.
 
-### 2.2 Driver source snapshot
+### 2.2 Driver packaging: PREBUILT (validated bytes) or SOURCE
 
-`tools/install-into-tree.sh` copies the source files (Kbuild, Makefile, *.c,
-*.h, *.inc, and the committed `cfg80211-provider.symvers`) from
-`docs/incoming/wifi-cfg80211/src` into the OpenWrt tree's
-`package/hi5622-wifi/src/`, rejects any build product that would leak (e.g.
-the generated `hi5622_wifi.mod.c` or a kbuild `Module.symvers`), and records
-`src-sha256.txt` (29 files, manifest sha256
-`10582bb49af68c8360d569d88e59fd994d370e76e4440e48fc24cc856af948ca`). The
-package runs `$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules`, so it uses the same
-out-of-tree kbuild line as the lane's own build.sh. The module hash is
-build-path dependent (debug info records the build directory), so the package
-build hash differs from the lane's recorded hash by design:
-* lane artifact: 505,076 B sha256 `d2b3cf79...` / later `2c30051e...`;
-* this package build: 505,748 B sha256
-  `340586180860c326ef1e5a7fd96c8851acaa953e828c10f67c3ddd856c0cdad1`;
-* installed (stripped) module: 133,884 B sha256 `e0608fa6...`, vermagic
-  `6.18.60 SMP mod_unload ARMv7 p2v8`, `depends=cfg80211`.
+`kmod-hi5622-wifi` has two modes, chosen by what `tools/install-into-tree.sh`
+staged into the (untracked) package dir:
 
-### 2.3 iwinfo: C CLI (WIFI_SCRIPTS_UCODE disabled)
+* **prebuilt (final image)**: `prebuilt/hi5622_wifi.ko` - the local,
+  ABI-validated bench artifact. `install-into-tree.sh --driver-ko FILE`
+  validates the ELF/RAM/vermagic/depends/name, records sha256+size+modinfo in
+  `prebuilt/prebuilt-sha256.txt` and the package copies the bytes as-is (no
+  compile). Nothing is stored in the git repository; only the identity manifest
+  is recorded in the build evidence. This is what lets the flashed image carry
+  the EXACT hardware-validated module.
+* **source**: no `prebuilt/` => build from the `src/` snapshot of a committed
+  driver tree with `$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules` (round-1/2
+  behaviour; snapshot filter drops generated `*.mod.c`/Module.symvers).
 
-With the tree default `CONFIG_WIFI_SCRIPTS_UCODE=y`, package `iwinfo` has an
-empty install rule (`package/network/utils/iwinfo/Makefile`: with the ucode
-scripts the CLI is provided by `wifi-scripts/files-ucode/usr/bin/iwinfo`
-instead) and its dependency on `libiwinfo` is conditional, so selecting
-`iwinfo` alone would put NO iwinfo binary in the rootfs. The delta disables
-`WIFI_SCRIPTS_UCODE` and selects `iwinfo` + `libiwinfo`: the rootfs gets the
-classic C CLI and the library. `wifi-scripts` itself is not selected, so no
-netifd wifi integration is activated by this change.
+Round-3 identity: artifact 242,572 B sha `44c6cc12...` (combined dp-air +
+AP-start v7, from `docs/incoming/wifi-ap-start/combined/README.md`), installed
+(OpenWrt-stripped) 231,132 B sha `51608fd5...`, `depends=cfg80211`,
+vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, AP-start + dp sysfs feature
+attributes verified by `tools/verify-image.sh`.
+
+### 2.3 iwinfo: ucode CLI via wifi-scripts (changed in round 3)
+
+The tree default `CONFIG_WIFI_SCRIPTS_UCODE=y` + `CONFIG_PACKAGE_wifi-scripts=y`
+installs `/usr/bin/iwinfo` as the OpenWrt ucode implementation (6,371 B) and
+the ucode wifi modules; `hostapd-mini` additionally REQUIRES the
+`/usr/share/hostap/*.uc` files that only wifi-scripts ships (bench finding:
+`../wifi-ap-start/image/wifi-scripts-ucode.md`, hostapd exited with
+"Unable to resolve path for module 'common'"). Round 2's C iwinfo /
+libiwinfo selection is therefore retired: with ucode enabled the C package
+installs nothing and there is no reason to ship two CLIs.
 
 ### 2.4 wireless-regdb and the signed-db caveat
 
 The kernel delta keeps `CONFIG_CFG80211_REQUIRE_SIGNED_REGDB=y` and
 `CONFIG_CFG80211_USE_KERNEL_REGDB_KEYS=y`, while OpenWrt's `wireless-regdb`
 package installs only the unsigned `regulatory.db` (no `.p7s`). At runtime
-cfg80211 therefore rejects the file and falls back to the built-in world
-regulatory domain - permissive, and the driver's RE-derived bands/channels are
-unaffected (`iw phy` enumeration is driver-provided; the 2026-11-25 milestone
-worked with the world domain). The file is shipped so the artefact and the
-behaviour are explicit; if a bench needs a real country domain, the right fix
-is the M6 vendor INI/regdomain port or `REQUIRE_SIGNED_REGDB=n`, both kernel
-config changes deliberately NOT made here (they would rebuild a new kernel).
+cfg80211 rejects the file and falls back to the built-in world regulatory
+domain - permissive; the driver's RE-derived bands/channels are unaffected.
+The file is shipped so the artefact and the behaviour are explicit; a real
+country domain would need the M6 vendor regdomain port or
+`REQUIRE_SIGNED_REGDB=n` (kernel config change, deliberately not made here).
 
 ### 2.5 Bench policy
 
-No AUTOLOAD, no init script: nothing in the rootfs touches the Wi-Fi chip at
-boot. Loading is `modprobe cfg80211` + `modprobe hi5622_wifi fw_path=...` in
-an attended session (driver probe is write-free and sends no H2D message).
+No AUTOLOAD, no driver init script: nothing in the rootfs touches the Wi-Fi
+chip at boot. Loading is `modprobe cfg80211` + `modprobe hi5622_wifi
+fw_path=...` in an attended session (driver probe is write-free and sends no
+H2D message). The vendor firmware is local-only evidence, never in the image.
 
-## 3. Build and verification evidence
+## 3. Build and verification evidence (round 3)
 
 Committed evidence (`build-evidence/`, text only):
-
-| file | content |
-| --- | --- |
-| `build-summary.txt` | tree/HEAD, config shas, package delta, artefact sizes+sha256, verify status |
-| `image-verify.txt` | full verifier output (per-file presence/hashes, module metadata, manifest) |
-| `build-log.txt` | `make -j16` log of the recorded build (4.1 KiB) |
-| `config-resolved.txt` | the resolved .config used for the build |
-| `config-delta-applied.diff` | pre-build .config vs resolved .config |
-| `kernel-config-sha.txt` | target kernel config + built kernel .config sha256 before/after |
-
-Recorded build (2026-11-24 14:05-14:08 UTC+07: tree `27663a0`):
-
-    container  : 6,533,439 B sha256 df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310
-    kernel     : 3,372,638 B sha256 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f  (UNCHANGED, hardware-validated)
-    rootfs ubi : 3,145,728 B sha256 62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746
-    squashfs   : 2,753,136 B sha256 68450ee4730302747508b94ef45875c433e48b14c1540975ea2143ae72d3af44
-    manifest   : 81 packages (+ iw, iwinfo, libiwinfo20230701, libiwinfo-data, wireless-regdb, kmod-hi5622-cfg80211, kmod-hi5622-wifi)
+`build-summary.txt`, `image-verify.txt`, `driver-artifact.txt` (prebuilt
+module identity + modinfo), `build-log.txt`, `config-resolved.txt`,
+`config-delta-applied.diff`, `kernel-config-sha.txt`; round-2 evidence under
+`build-evidence/round2-abi-image-df6a78c3/`; local work tree under
+`build-evidence/work/` (gitignored: full config snapshot, rootfs staging tar,
+extracted UBI/squashfs).
 
 The verifier is NOT a staging-tree check: it takes the newest sysupgrade
-container, extracts the `kernel` and `root` members, reassembles the squashfs
-volume from the UBI image with `tools/extract-ubi-rootfs.py` (per-PEB EC/VID
-parsing, LEB order, 128 KiB PEB / 4 KiB data offset as ubinize emitted here),
-verifies the volume prefix against `build_dir/.../root.squashfs` (remaining
-bytes are ubinize padding: 3,472 B), extracts with `unsquashfs`, checks every
-required path's size+sha256, dumps each module's vermagic/depends/license and
-the manifest package lines.
+container, extracts `kernel`/`root`, reassembles the squashfs from the UBI
+image (`tools/extract-ubi-rootfs.py`: per-PEB EC/VID parsing, LEB order,
+128 KiB PEB / 4 KiB data offset), checks the volume prefix against
+`build_dir/.../root.squashfs`, extracts with `unsquashfs`, checks every
+required path, asserts known-good hashes for iw/hostapd/ucode/regdb/cfg80211
+(IDENT lines), dumps module vermagic/depends/license/params+features, and
+checks the apk manifest package list.
 
-## 4. Deployment decision (details in DEPLOY.md)
+Recorded build: kernel `.config` sha unchanged (`08b6e595...`), kernel slice
+`13e81214...` (UNCHANGED), build duration 12 s (kernel compile skipped).
+Deployable .apk files from the same build (paths+sha in BUILD-NOTES.md; local
+copy `/home/shibbityshwab/wifi-image-integration-artifacts/`):
+`iw`, `wifi-scripts`, `hostapd-mini`, `hostapd-common`,
+`ucode-mod-nl80211`, `ucode-mod-rtnl`, `wireless-regdb`,
+`kmod-hi5622-cfg80211`, `kmod-hi5622-wifi`.
 
-The kernel slice is byte-identical to the hardware-validated one, so:
+## 4. Deployment (details + exact commands in DEPLOY.md)
 
-* **T0 (recommended next session, zero flash)**: `apk add --allow-untrusted` the
-  same built packages on the running pair-B system (persistent overlay); fully
-  reversible; no selector/flash change.
-* **T1 (clean image, dedicated attended window)**: rewrite only `rootfsb`
-  (rootfs UBI from the container; kernel slot unchanged), with the current
-  rootfs UBI saved as rollback and the overlay loss accepted; stock pair A and
-  the physical recovery door remain the fallbacks.
-* **No kernel write is required** (`kernelb` already carries `13e81214...`
-  per STATUS 3k); verify the running slot hash before deciding otherwise.
+* The kernel slice is byte-identical to the running validated one, so the new
+  image is a **rootfs-only change**: write the new rootfs UBI to `rootfsb`
+  (mtd14) from a stock pair-A boot over the proven stock-telnet transport; keep
+  kernelb untouched; hand back to pair b; the overlay is wiped by the rootfs
+  write (accepted; back it up if needed).
+* **Answer to "is a rootfs-only flash possible via the stock-telnet-install
+  path?"**: the TRANSPORT supports it, the current TOOL does not have a
+  rootfs-only mode - `tools/stock-telnet-install.sh --apply` always writes
+  kernelb (mtd12, erase+write, full-slot hash verify) and then ubiformats
+  rootfsb (mtd14). Using it as-is is SAFE here (the kernel write is
+  content-identical and verified), just unnecessary; a strict rootfs-only write
+  needs either a small `--rootfs-only` extension of that root-repo tool or the
+  documented manual 4-command sequence in DEPLOY.md (wget root member, sha
+  verify, `ubiformat /dev/mtd14`, handover b).
+* Rollback: stock pair A remains bootable; previous rootfs UBI (round-2
+  `62344e80...` or this image's own) can be re-written the same way; physical
+  RESET+TFTP recovery is the last resort. No kernel write is needed at all.
 
 ## 5. Findings
 
-**F1 - defconfig normalization silently changes the kernel (measured).**
-The release-line `.config` carries an out-of-menu override
-`CONFIG_KERNEL_HOTPLUG_CPU=y` (appended after the generated config, no
-`config/Config-kernel.in` entry). `make defconfig` drops it, and
-`include/kernel-defaults.mk` maps every `CONFIG_KERNEL_*` line into the
-kernel's `CONFIG_*`, so the first build attempt rebuilt the kernel with
-`CONFIG_HOTPLUG_CPU` unset: new slice 3,369,166 B sha256 `853ac764...`
-(`build-evidence/work/build-summary-first-attempt.txt` not kept; the fact is
-recorded here and in `kernel-symbols.config`). Adding
-`kernel-symbols.config` after defconfig restored kernel `.config` sha
-`08b6e595...` and reproduced the validated slice `13e81214...` exactly.
-Any lane that runs `make defconfig` in this tree and then builds a kernel will
-hit the same trap.
+**F1 - defconfig normalization silently changes the kernel (measured in round 2,
+carried into the final tooling).** See 0b. `kernel-symbols.config` is required
+for any world build in this tree that must keep the validated kernel.
 
-**F2 - libnl-tiny was already in the baseline image.** The task premise said
-the image lacks iw/libnl-tiny; the manifest of `22b72852` already lists
-`libnl-tiny1 - 2025.12.02~40493a65-r1` and `/usr/lib/libnl-tiny.so.1`
-(sha256 `d7d73dbd...`). What was actually missing: `iw`, `iwinfo`,
-`libiwinfo`, `wireless-regdb` and both modules (`cfg80211.ko` was built but
-not packaged).
+**F2 - the baseline image already carried libnl-tiny** (round 2 finding). The
+missing pieces were iw/iwinfo/regdb/hostapd/ucode and the packaged modules.
 
-**F3 - iwinfo is a no-op package under the tree default.** See 2.3; the delta
-explicitly disables `WIFI_SCRIPTS_UCODE` and the verifier checks
-`/usr/bin/iwinfo` (16,906 B sha256 `88fb4943...`) so a regression to an empty
-package cannot pass silently.
+**F3 - hostapd needs wifi-scripts ucode files** (bench finding from the AP
+work): image fix = `CONFIG_PACKAGE_wifi-scripts=y`; verified by the IDENT
+hashes of the ucode files and by `usr/share/hostap/{common,wdev,
+wifi-detect}.uc` presence.
 
 **F4 - regdb is installed but not loaded by the kernel** (signed-db
-requirement, section 2.4). Documented, not hidden.
+requirement, 2.4). Documented, not hidden.
 
-**F5 - module identity.** The installed `cfg80211.ko` is the OpenWrt-stripped
-form of the tree's `949393f9...` module (2,328,548 B unstripped -> 406,028 B
-installed, sha256 `11a5e2b5...`; same vermagic; the tree artifact hash equals
-the upstream-target lane's recorded cfg80211 build). The installed
-`hi5622_wifi.ko` is byte-identical to the package's ipkg tree file
-(133,884 B stripped, `depends=cfg80211`).
+**F5 - module identity**: prebuilt combined module artifact `44c6cc12...`
+(242,572 B) -> installed stripped `51608fd5...` (231,132 B); package ipkg
+tree file byte-identical to the installed one; vermagic/depends/feature
+attributes verified from the built image. The verifier would fail if the wrong
+module were packaged (AP or dp features missing).
 
-**F6 - shared-tree hygiene implemented.** `tools/build-image.sh` refuses to run
-while a make process works in the tree, holds `/tmp/cudy-openwrt-world-build.lock`,
-snapshots and restores `build_dir/target-*/root-hisilicon` and restores
-`.config` byte-identically (verified with `cmp`), so a later build by another
-lane cannot inherit the bench package set. The tree's `target/linux/*` and
-kernel patch files were not modified by this lane (target kernel config sha
-unchanged: `ecf1aae2...`).
+**F6 - shared-tree hygiene** (`tools/build-image.sh`): refuses to run while a
+make process works in the tree, holds
+`/tmp/cudy-openwrt-world-build.lock`, snapshots/restores the rootfs staging
+tree and restores `.config` byte-identically (`cmp`-verified). The round-3 run
+was refused once because another lane was running a module build against the
+shared kernel tree - serialization works as intended.
+
+**F7 - the combined module is host-built, not yet hardware-fired** (the air-TX
+single-boot run it was made for is the next bench step, not done by this
+host-only lane). The v7 AP half of it was hardware-validated (AP-ENABLED) and
+the dp half derives from the fired dp module (`ca32aec4...`); the combined
+binary itself has not been fired.
 
 ## 6. Limitations / honest notes
 
-* Host-only: no boot, no flash, no on-device load; the image is not a release
-  image (container keeps its NOT FLASHABLE marker; the A/B install path has
-  never run end to end).
-* The driver snapshot is research code (cfg80211 M0-M2: wiphy + VAP lifecycle;
-  scan/AP firmware messages still pending - see wifi-cfg80211 REPORT). The
-  package does not update when the sibling lane changes its src; re-run
-  `install-into-tree.sh` (or `build-image.sh`) to refresh and re-record the
-  manifest/hash.
-* The module hash is build-path dependent; compare behaviour/vermagic, not the
-  lane's recorded hash.
-* `CONFIG_DEVMEM=y` is part of the release-line tree (uncommitted
-  `target/linux/generic/config-6.18` change by an earlier lane) and is needed
-  by the bench `bar0read` tool; this lane did not touch it.
-* One recorded build, not a multi-run reproducibility claim (the image chain
-  itself is claimed byte-reproducible elsewhere; the second run here was used
-  to fix F1 and produced the recorded artefact).
+* Host-only: no boot/flash by this lane; the final image has never been booted.
+  The ABI predecessor was flashed and the AP verified live on it.
+* The combined module is verified only by identity/build evidence and its
+  components' prior bench runs (F7); it must be fired before claiming its
+  behaviour.
+* The vendor firmware (PD4-patched) and bench configs/scripts are still local
+  pushes at session time; the image covers userspace + modules only.
+* The image is BENCH-ONLY: the delta is not in `target/linux/hisilicon/
+  luofu/target.mk` or the image stanza; the driver is research code.
+* `wireless-regdb` does not actually load (2.4).
+* `CONFIG_DEVMEM=y` comes from the release-line tree (uncommitted
+  `target/linux/generic/config-6.18` change by an earlier lane, needed by the
+  bench `bar0read`); this lane does not touch it.
 
 ## 7. Follow-ups
 
-1. Attended T0/T1 execution per DEPLOY.md; after boot verify
-   `sha256sum` of the rootfs files against `build-evidence/image-verify.txt`.
-2. When the wifi-cfg80211 lane's M3+ code lands, re-run
-   `tools/install-into-tree.sh` + `tools/build-image.sh` and update the pin.
-3. Optional: decide the Wi-Fi userland stack for a target PR (`wifi-scripts`
-   ucode vs C iwinfo) - this delta is bench-only.
-4. Optional bench improvement: `CONFIG_CFG80211_REQUIRE_SIGNED_REGDB=n` (kernel
-   rebuild) if a real country domain is ever needed before the M6 regdomain
-   port.
+1. Attended install of this image per DEPLOY.md (rootfs-only if a
+   `--rootfs-only` flag is added to the stock-telnet tool, else the tool as-is;
+   the kernel write is identical bytes).
+2. Post-boot receipt: `apk query hostapd-mini wifi-scripts kmod-hi5622-wifi`,
+   `sha256sum /usr/sbin/hostapd /lib/modules/6.18.60/hi5622_wifi.ko`,
+   `modprobe cfg80211 hi5622_wifi fw_path=...`, then the single-boot air-TX
+   ladder of `../wifi-ap-start/combined/README.md`.
+3. If the ap-start lane delivers a newer combined module: one command refresh
+   (`tools/install-into-tree.sh --driver-ko FILE` + `tools/build-image.sh`);
+   the build re-records everything.
+4. Optional: bake the local PD4 firmware into a LOCAL-ONLY image variant if the
+   publication rules allow (currently out of scope; firmware is never
+   committed).
 
 ## 8. Provenance and regeneration
 
-    ./tools/selftest.sh                       # device-free contract checks
-    ./tools/install-into-tree.sh --owrt <tree>   # package + driver snapshot
-    ./tools/build-image.sh                    # serialize, build, verify, restore
-    ./tools/verify-image.sh --owrt <tree>     # re-verify the newest container
-    sha256sum -c build-evidence/<recorded hashes in build-summary.txt>
+    ./tools/selftest.sh                              # device-free contract checks
+    ./tools/install-into-tree.sh --driver-ko FILE    # stage prebuilt module + package
+    ./tools/build-image.sh                           # serialize, build, verify, restore
+    ./tools/verify-image.sh --owrt <tree>            # re-verify the newest container
 
-Everything is text in this directory (no binary, no vendor bytes); the built
-artefacts and the full 27 MiB work tree (config snapshot, rootfs staging tar,
-extracted UBI/squashfs) stay LOCAL and are excluded via
-`build-evidence/.gitignore`; the local convenience copy for deployment is
-`/home/shibbityshwab/wifi-image-integration-artifacts/` (sysupgrade container,
-kernel slice, rootfs UBI, squashfs, the seven .apk packages, `SHA256SUMS`).
+Everything in this directory is text (no binary, no vendor bytes); build
+artefacts and the local work tree stay untracked/gitignored. Local convenience
+copy for the bench: `/home/shibbityshwab/wifi-image-integration-artifacts/`
+(final container, kernel slice, rootfs UBI, squashfs, the nine .apk files,
+`SHA256SUMS`).

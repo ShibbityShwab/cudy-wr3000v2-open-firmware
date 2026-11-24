@@ -1,32 +1,49 @@
 == bench image verification (built bytes) ==
 tree        : /home/shibbityshwab/openwrt-lab-selectorfix-img
 container   : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
-built       : 2569-11-24 14:08:11.791661178 +0700
-size        : 6533439 B
-sha256      : df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310
+built       : 2569-11-24 18:39:10.074419754 +0700
+size        : 6922559 B
+sha256      : ae5e28bfef591fad7d9b4da726128ec2307273aebc41008e0ad9c3867bde6994
 
 kernel slice: 3372638 B sha256 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
-rootfs ubi  : 3145728 B sha256 62344e8040f4b17ae8d3a9843dd6a57ec35f55636cd3aa8e868b605951642746
+rootfs ubi  : 3538944 B sha256 ff9f3e1c83c36a2a9170cdf6373228692b46b7fa0fbb64abbdc70a25b841aaa9
 kernel check: UNCHANGED - the hardware-validated cfg80211 slice 13e81214...
 
 -- rootfs squashfs reassembled from the UBI image --
-UBI image: 3145728 B, PEB 131072 B, 24 PEBs
-volume 0: 22 LEBs, 2756608 B reassembled -> /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration/build-evidence/work/verify/rootfs.squashfs
-header: 68737173e1020000
+UBI image: 3538944 B, PEB 131072 B, 27 PEBs
+volume 0: 25 LEBs, 3080192 B reassembled -> /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration/build-evidence/work/verify/rootfs.squashfs
+header: 6873717311030000
 format: squashfs (magic hsqs) OK
-squashfs    : 2756608 B sha256 f58ee016098f53d57bcc8fd0d5c5e5e16157f1e35f8ce343042954fdca185e18
-consistency : squashfs volume == build_dir/.../root.squashfs (2753136 B sha256 68450ee4730302747508b94ef45875c433e48b14c1540975ea2143ae72d3af44) + 3472 B ubinize padding
-rootfs files: 463
+squashfs    : 3080192 B sha256 6fcd33a50faa8bffd372ebced9889ed8e098974263a137fa938122f4009d2631
+consistency : squashfs volume == build_dir/.../root.squashfs (3077036 B sha256 1dbd0d19bc21332684704859a8fb6da890984adf13ebdca569ce22207eea4d98) + 3156 B ubinize padding
+rootfs files: 503
 
 -- required rootfs content --
 PRESENT  usr/sbin/iw                                      116855 B sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23  # iw CLI (nl80211)
-PRESENT  usr/bin/iwinfo                                    16906 B sha256 88fb49430a9a0b5095f10eacf1ea63a6c8906b450a71b01bfebfc01ba959cb4c  # iwinfo CLI (C implementation)
-PRESENT  usr/lib/libiwinfo.so.20230701                     57377 B sha256 aa35d698dfb5ec20ff343bde48f10f6cc055aeaeda62630f4615847bc3c2a806  # libiwinfo shared library
-PRESENT  usr/share/libiwinfo/devices.txt                   18231 B sha256 dcaaa350ccc73b16341fc792d712f5b45c546344c3dc7457d141c5f2b3a804f3  # libiwinfo device data
+PRESENT  usr/bin/iwinfo                                     6371 B sha256 ecd3a04a31f6fbbf4426f330a67ffffbed7455f40373b9f1452f27b452686674  # iwinfo CLI (ucode implementation, wifi-scripts)
+PRESENT  usr/share/ucode/iwinfo.uc                         17028 B sha256 617dc0f90b44f2e1b2e09efffc795ffe29f3e7d823881ffb95620c4a6469db43  # ucode iwinfo module (wifi-scripts)
+PRESENT  usr/share/ucode/wifi/common.uc                     3760 B sha256 e42a0c0b06421fa98d1177f7cfe4ffd4e661ca9a5a207389c6f2350e44c75c37  # ucode wifi scripts (wifi-scripts)
+PRESENT  usr/share/hostap/common.uc                        10171 B sha256 517d3202c1a75fca80aaf1cfcbb6ee0c7fa130403dc948dbb8518315f2dd70eb  # hostapd ucode module (wifi-scripts)
+PRESENT  usr/share/hostap/wdev.uc                           6097 B sha256 fa8de4333f95c3dd8473aef64f883ae4b6078430d4c7726daaeeae37a753999e  # hostapd ucode module (wifi-scripts)
+PRESENT  usr/share/hostap/wifi-detect.uc                    5952 B sha256 02f6d7aa2a55f47de65d4c99254a234bbea4fe3cc56fea3d1bad340830c792de  # hostapd ucode module (wifi-scripts)
+PRESENT  usr/share/hostap/hostapd.uc                       71062 B sha256 160af9e095108a5d8d476dd5a87771491b733fde4b422406352baafca02dd242  # hostapd config backend (hostapd-mini)
+PRESENT  usr/sbin/hostapd                                 504333 B sha256 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919  # hostapd daemon (hostapd-mini)
+PRESENT  etc/init.d/wpad                                    1262 B sha256 b6679419287fa73cfbf808a5330ee329a246af17efbb5d9ab31a1647743d3855  # hostapd init script (hostapd-common)
+PRESENT  etc/capabilities/wpad.json                          407 B sha256 8abee2b7faa6bd6c71779c74ac6901fe6c265d56d4889d810822b5cabb1369cd  # hostapd capability declaration
+PRESENT  usr/lib/ucode/nl80211.so                          61442 B sha256 54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f  # ucode nl80211 module
+PRESENT  usr/lib/ucode/rtnl.so                             73731 B sha256 fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d  # ucode rtnl module
 PRESENT  usr/lib/libnl-tiny.so.1                           29034 B sha256 d7d73dbd242c45416faa29e557ccb976a309fb90808c37f9521265cb1b389916  # libnl-tiny (iw dependency)
 PRESENT  lib/firmware/regulatory.db                         6332 B sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  # wireless regulatory database
 PRESENT  lib/modules/6.18.60/cfg80211.ko                  406028 B sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a  # cfg80211 kernel module (target kernel tree)
-PRESENT  lib/modules/6.18.60/hi5622_wifi.ko               133884 B sha256 e0608fa6e1489035d58febce279a13baf6988a5664b0404e1135d0b53d124094  # clean-room Hi5622 Wi-Fi host driver
+PRESENT  lib/modules/6.18.60/hi5622_wifi.ko               231132 B sha256 51608fd556fa474d2da0dd88975c2a8b610301fb6b8a22d4b6e0589ade247a78  # clean-room Hi5622 Wi-Fi host driver (ABI-validated)
+
+-- expected file identities (known-good hashes) --
+IDENT    usr/sbin/iw (116855 B sha256 e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23)
+IDENT    usr/sbin/hostapd (504333 B sha256 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919)
+IDENT    usr/lib/ucode/nl80211.so (61442 B sha256 54ac57bcef3a2bf78d5ca58d22a0a5dfc1b17505978beac5c9133e48d970f09f)
+IDENT    usr/lib/ucode/rtnl.so (73731 B sha256 fc42ccf216ff12447393a95174ed8b46b34b5c2895a806139e45d9bfb7e1b94d)
+IDENT    lib/firmware/regulatory.db (6332 B sha256 c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d)
+IDENT    lib/modules/6.18.60/cfg80211.ko (406028 B sha256 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a)
 
 -- kernel module metadata (extracted .ko files) --
 cfg80211.ko:
@@ -38,23 +55,36 @@ hi5622_wifi.ko:
   vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8 
   depends : cfg80211
   license : GPL
+  param   : ap_start_mode present
+  param   : vap_start_first present
+  param   : h2d_send_budget present
+  param   : fw_path present
+  feature : ap_start_mode present
+  feature : dp_probe present
+  feature : dp_setup present
+  feature : dp_tx_frame present
+  feature : dp_tx_status present
+  feature : dp_rx_poll present
+  feature : h2d_txq_addr_sync present
   build   : byte-identical to /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/hi5622-wifi/ipkg-arm_cortex-a9/kmod-hi5622-wifi/lib/modules/6.18.60/hi5622_wifi.ko
 
 -- apk manifest packages --
 PRESENT  iw - 6.17-r1
-PRESENT  iwinfo - 2026.05.26~66bdd1a0-r1
-PRESENT  libiwinfo20230701 - 2026.05.26~66bdd1a0-r1
-PRESENT  libiwinfo-data - 2026.05.26~66bdd1a0-r1
+PRESENT  wifi-scripts - 1.0-r5
 PRESENT  wireless-regdb - 2026.09.03-r1
+PRESENT  hostapd-mini - 2026.08.07~831364bf-r7
+PRESENT  hostapd-common - 2026.08.07~831364bf-r7
+PRESENT  ucode-mod-nl80211 - 2026.10.28~dfc64d41-r1
+PRESENT  ucode-mod-rtnl - 2026.10.28~dfc64d41-r1
 PRESENT  kmod-hi5622-cfg80211 - 6.18.60-r1
 PRESENT  kmod-hi5622-wifi - 6.18.60-r1
 PRESENT  libnl-tiny1 - 2025.12.02~40493a65-r1
-manifest    : openwrt-hisilicon-luofu-cudy_wr3000-v2.manifest, 81 packages
+manifest    : openwrt-hisilicon-luofu-cudy_wr3000-v2.manifest, 83 packages
 
--- byte deltas vs the previous release image 22b72852 --
-container : 6533439 B (was 6267199 B, delta +266240)
-kernel    : 3372638 B (was 3372638 B)
-rootfs ubi: 3145728 B (was 2883584 B, delta +262144)
-squashfs  : 2756608 B (padded volume; was 2498560 B, delta +258048)
+-- byte deltas vs the previous ABI image df6a78c3 (rootfs-only rebuild) --
+container : 6922559 B (was 6533439 B, delta 389120)
+kernel    : 3372638 B (was 3372638 B, delta 0)
+rootfs ubi: 3538944 B (was 3145728 B, delta 393216)
+squashfs  : 3080192 B (padded volume; was 2756608 B, delta 323584)
 
 RESULT: PASS - all required files and packages are in the built image
