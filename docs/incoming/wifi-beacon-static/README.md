@@ -59,3 +59,9 @@ Host-only (no 192.168.1.1 / 192.168.10.1 / UART / flash); no vendor binary,
 object byte, firmware byte, calibration value or secret in tracked text —
 only derived addresses, ids, field offsets and original C; the bench ladder is
 design-only and the Lead fires it attended.
+A separate finding for the AP data path: the vendor host implements the AP-side
+auth/assoc management exchange in host software and drives it through
+`wal_cfg80211_mgmt_tx`; the clean-room driver's `.mgmt_tx` is still a
+fail-closed stub and MAC RX has 0 captures, so a client's assoc/auth is a
+separate blocker (WAL/mgmt-tx message family + RX lane) even with beacons on
+air.  See REPORT.md §3.4 and TABLES.md T10.

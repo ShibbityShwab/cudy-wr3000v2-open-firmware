@@ -101,3 +101,14 @@ All reads go through the existing `hi5622_fw_ram_read()` path (no new interface)
 | `beacon_re.py` probes (firmware + 2.4.15) | 33/33 PASS | evidence/beacon-re-2.4.15.txt |
 | module build warnings/errors | 0 | evidence/module-build.txt |
 | cfg80211 imports | 6 (unchanged contract) | evidence/module-build.txt |
+## T10. AP data path (assoc/auth side) is a separate, still-open host gap [V]
+
+| observation | evidence |
+| --- | --- |
+| vendor host implements the AP-side management exchange in software | `hmac_ap_up_rx_mgmt`, `hmac_mgmt_encap_auth_rsp`, `hmac_mgmt_encap_asoc_rsp_ap` symbols in the 2.4.15/2.5.24 host module |
+| AP MLME frames leave the host through the cfg80211 mgmt-tx op | `wal_cfg80211_mgmt_tx` → `wal_cfg80211_mgmt_tx_pre_proc` / `..._try`; status via `oal_cfg80211_mgmt_tx_status` |
+| clean-room driver mgmt_tx is fail-closed today | `hi5622_cfg80211_ops.c`: `.mgmt_tx` returns `-EOPNOTSUPP` (image-polish lane `mgmt_diag`) |
+| RX of client frames | 0 captures on the bench (wifi-rx-static lane scope) |
+
+⇒ beacons (this lane) and client assoc/auth/data (mgmt-tx message family + RX
+lane) are independent blockers for a usable AP.

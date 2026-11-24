@@ -47,6 +47,15 @@ artifact, [V*] hardware-observed in a prior (Lead) session, [I] inference,
    radio).  Our own RX capture is 0 and the g3 id19/20 D2H events are
    *received*-beacon reports (scan/STA side), not proof of our AP beaconing —
    this matches the wifi-ap-start lane's §7 conclusion.  [V*]/[I]
+6. **AP data path (assoc/auth side):** beacons alone do not make the AP usable.
+   The vendor host implements the AP-side management exchange in host software
+   (`hmac_ap_up_rx_mgmt` → `hmac_mgmt_encap_auth_rsp` /
+   `hmac_mgmt_encap_asoc_rsp_ap`) and drives AP MLME frames through
+   `wal_cfg80211_mgmt_tx`; the clean-room driver's `.mgmt_tx` is still a
+   fail-closed stub (`-EOPNOTSUPP`) and the RX path has 0 captures, so a
+   client's auth/assoc would be dropped even with beacons on air.  Closing the
+   AP data path needs the vendor mgmt-frame TX message family (the WAL/M4 gap)
+   plus RX; it is not a beacon-template problem.  [V]
 
 ## 1. Scope, evidence and pins
 
@@ -158,6 +167,21 @@ carrier can carry the whole vendor sequence.
 * **Conclusion:** beacons are generated and transmitted autonomously by the
   firmware after a correct VAP start; the host's job is the parameter/state
   sequence.  A "missing beacon template message" is **not** the blocker.
+
+### 3.4 AP data path (assoc/auth) — a separate blocker [V]
+
+The task also asks about the AP data path (assoc/assoc-resp TX, station table,
+RX of client frames).  Static finding: the vendor host performs the AP-side
+management exchange **in host software** — `hmac_ap_up_rx_mgmt` (received mgmt
+processing) calls `hmac_mgmt_encap_auth_rsp` / `hmac_mgmt_encap_asoc_rsp_ap`
+and the frames leave through `wal_cfg80211_mgmt_tx` (→
+`wal_cfg80211_mgmt_tx_pre_proc`/`..._try`, status via
+`oal_cfg80211_mgmt_tx_status`).  The clean-room driver's `.mgmt_tx` is still a
+fail-closed stub returning `-EOPNOTSUPP` (image-polish lane's `mgmt_diag`), and
+the MAC RX path has 0 captures (wifi-rx-static lane).  Therefore beacons can be
+on air while a client's auth/assoc is still dropped: the usable-AP gate needs
+the vendor mgmt-frame TX message family (WAL/M4 gap) + RX, independently of
+this lane's beacon fix.  [V]
 
 ## 4. What the clean-room bench path is missing (static)
 
