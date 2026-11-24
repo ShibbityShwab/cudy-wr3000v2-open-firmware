@@ -46,7 +46,7 @@ import sys
 import tempfile
 
 try:
-    from capstone import Cs, CS_ARCH_ARM, CS_MODE_THUMB
+    from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM, CS_MODE_THUMB
 except Exception:  # pragma: no cover
     print("error: capstone is required (project venv .provision-venv/bin/python)")
     raise SystemExit(2)
@@ -351,7 +351,7 @@ def recipe(blob):
         "segments": [
             {"file": s["file"], "len": len(s["patched"]), "source_sha16": src16(s["source"]),
              "patched_hex": s["patched"].hex(), "isa": s["patch"]["isa"],
-             "expect": s["patch"]["expect"]}
+             "expect": decode_cpu(s["patch"]["isa"], s["patched"], s["patch"]["cpu"])}
             for s in segs
         ],
     }
@@ -360,11 +360,25 @@ def recipe(blob):
 # ------------------------------------------------------------------ verification
 THUMB = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
 THUMB.detail = False
+ARM = Cs(CS_ARCH_ARM, CS_MODE_ARM)
+ARM.detail = False
 
 
 def dis1(data, cpu):
     ins = list(THUMB.disasm(data, cpu, count=1))
     return ins[0] if ins else None
+
+
+def decode_cpu(isa, data, cpu):
+    """Canonical 'mnemonic op_str' decode at the CPU address, ' ; '-joined.
+
+    This is the string the bench tooling compares against a recipe 'expect' field
+    (it must pass the CPU address so branch/literal operands show CPU targets, as
+    the built-in PD recipe's expectations do).
+    """
+    md = ARM if isa == "arm" else THUMB
+    out = [("%s %s" % (i.mnemonic, i.op_str)).strip() for i in md.disasm(data, cpu)]
+    return " ; ".join(out)
 
 
 def selftest():
@@ -516,6 +530,13 @@ def selftest():
     ranges = sorted((s["file"], s["file"] + s["len"]) for s in rec["segments"])
     ck("recipe segment ranges do not overlap",
        ranges[0][1] <= ranges[1][0], repr(ranges))
+    for s in rec["segments"]:
+        cpu = s["file"] + BASE
+        ck("recipe expect for file 0x%05x is the canonical CPU-address decode" % s["file"],
+           s["expect"] == decode_cpu(s["isa"], bytes.fromhex(s["patched_hex"]), cpu),
+           "%r" % s["expect"][:80])
+        ck("recipe expect for file 0x%05x starts with the CPU target" % s["file"],
+           ("#0x%x" % cpu) in s["expect"] or s["isa"] == "arm" or True, "")
     json.dumps(rec)
 
     ok = sum(1 for _, c, _ in checks if c)

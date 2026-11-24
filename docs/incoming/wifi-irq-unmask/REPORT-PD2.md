@@ -444,26 +444,42 @@ direct reader running to prove the boot and the D2H path are unaffected.
 
 ## 8. Machine-readable recipe (bench tooling schema)
 
+`pd2_patch_builder.py --recipe` emits this exact document (the `expect` field is the
+canonical capstone decode **at the CPU address**, ' ; '-joined — the same convention as the
+built-in PD recipe's expectations; see the note at the end):
+
     {
       "schema": "hi5622-fw-patch-recipe/1",
       "name": "PD2",
       "about": "post-boot H2D mailbox poll loop: boot epilogue -> out[0] poll -> firmware dispatcher (guarded)",
-      "source": {"sha256": "7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b", "len": 928920},
+      "source": {"sha256": "7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b",
+                 "len": 928920},
       "based_on": null,
       "segments": [
         {"file": 29746, "len": 62, "source_sha16": "4ab344e16a74f8b4",
          "patched_hex": "0b4f81b03b68002bfcd0094a1368002bf8d07b69084ca34202d0f8f722fff1e7064c7c61f8f71dff7b61ebe700bf9cc1100010900340688d110000200000",
-         "isa": "thumb", "expect": "PD2 guard+poll stub (CPU 0x47432..0x4746F)"},
+         "isa": "thumb",
+         "expect": "ldr r7, [pc, #0x2c] ; sub sp, #4 ; ldr r3, [r7] ; cmp r3, #0 ; beq #0x47436 ; ldr r2, [pc, #0x24] ; ldr r3, [r2] ; cmp r3, #0 ; beq #0x47436 ; ldr r3, [r7, #0x14] ; ldr r4, [pc, #0x20] ; cmp r3, r4 ; beq #0x47452 ; bl #0x40294 ; b #0x47436 ; ldr r4, [pc, #0x18] ; str r4, [r7, #0x14] ; bl #0x40294 ; str r3, [r7, #0x14] ; b #0x47436 ; nop ; stm r1!, {r2, r3, r4, r7} ; movs r0, r2 ; str r0, [sp, #0x40] ; ands r3, r0 ; ldrh r0, [r5, #0x2a] ; movs r1, r2 ; movs r0, #0 ; movs r0, r0"},
         {"file": 37226, "len": 4, "source_sha16": "c5975cf4bd702f88",
          "patched_hex": "fef762b9", "isa": "thumb",
-         "expect": "b.w 0x47432 (boot-task epilogue CPU 0x4916A -> PD2 loop)"}
+         "expect": "b.w #0x47432"}
       ]
     }
 
-(29746 = 0x7432, 37226 = 0x916A; the recipe prints these as decimal, exactly as emitted by
-`pd2_patch_builder.py --recipe`.)
+(29746 = 0x7432, 37226 = 0x916A; the tool prints these as decimal. The last six
+`expect` tokens of the PD2-LOOP string are the four literal-pool words plus the instruction
+they happen to decode as — a flat segment decode at the CPU address necessarily includes them,
+exactly as emitted by capstone.)
 
----
+**Cross-check with the bench-tooling builder (task-97).** `fw_patch_builder.py` currently
+decodes a recipe segment at address 0 (`decode_insn(..., None)`), while its own built-in PD
+recipe's `expect` strings use CPU addresses (e.g. `bl #0x40294`). That inconsistency makes the
+*built-in* PD recipe fail its own decode check (observed at HEAD of the untracked
+`docs/incoming/wifi-bench-tooling/` tree on 2026-11-24) and also rejects this PD2 recipe unless
+the `expect` strings are rewritten with address-0 targets. The fix on the tooling side is to pass
+the segment's CPU address (`file + 0x40000`) to `decode_insn`; the PD2 recipe above is already
+in that canonical form. (The recipe also deliberately sets `based_on: null`: PD2 does not apply
+the PD segments — PD-1 is the bug being replaced and its window 0x7610 is untouched.)
 
 ## 9. Reproduction (host-only)
 
