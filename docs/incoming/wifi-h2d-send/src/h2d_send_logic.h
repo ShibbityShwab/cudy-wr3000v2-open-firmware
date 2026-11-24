@@ -22,11 +22,14 @@
  *     synthetic payload: several firmware handlers dereference payload words);
  *   - node word1 = (frame_total << 16) | 0x6D2B, packed producer depth 32.
  *
- * The only messages this driver will synthesize are the four EXACT ones:
- *   stub     group 0 id 0   payload-free liveness stub (safe bare probe)
- *   txq_sync group 0 id 1   the vendor's first post-ready message, byte-exact
- *   edca     group 0 id 0x1d hmac_edca_opt_timeout_fn, zeroed 0x3c payload
- *   del_user group 0 id 9   hmac_del_user_notify_dmac, 12-byte payload
+ * The only messages this driver will synthesize are the five EXACT ones:
+ *   stub       group 0 id 0   payload-free liveness stub (safe bare probe)
+ *   txq_sync   group 0 id 1   the vendor's first post-ready message, byte-exact
+ *   txq_sync72 group 0 id 1   the same 48-byte frame, but the SR node declares
+ *                             the vendor's captured 72-byte live buffer
+ *                             (48 frame bytes + 24 x 0xff inherited pad)
+ *   edca       group 0 id 0x1d hmac_edca_opt_timeout_fn, zeroed 0x3c payload
+ *   del_user   group 0 id 9   hmac_del_user_notify_dmac, 12-byte payload
  */
 #ifndef H2D_SEND_LOGIC_H
 #define H2D_SEND_LOGIC_H
@@ -38,10 +41,19 @@
 enum h2d_msg {
 	H2D_MSG_STUB = 0,	/* g0 id0, payload-free */
 	H2D_MSG_TXQ_SYNC,	/* g0 id1, vendor first post-ready, byte-exact */
+	H2D_MSG_TXQ_SYNC72,	/* g0 id1, same frame, 72-byte live node buffer */
 	H2D_MSG_EDCA_OPT,	/* g0 id0x1d, exact 0x3c-byte zero payload */
 	H2D_MSG_DEL_USER,	/* g0 id9, exact 12-byte payload */
 	H2D_MSG_COUNT,
 };
+
+/* The vendor's byte-exact first post-ready frame: declared total 0x30.
+ * The live vendor SR node declared a 72-byte buffer (48-byte frame + 24
+ * inherited 0xff bytes), so H2D_MSG_TXQ_SYNC72 exposes that node length as a
+ * separate, one-variable experiment while the header total stays 0x30. */
+#define H2D_TXQ_TOTAL		0x30u
+#define H2D_TXQ_NODE_LEN	72u
+#define H2D_TXQ_PAD_BYTE	0xffu
 
 /* Gate refusal reasons; H2D_GATE_OK == 0 is the only allowed value. */
 enum h2d_gate {
@@ -95,6 +107,14 @@ const char *h2d_gate_name(enum h2d_gate gate);
 const char *h2d_msg_name(enum h2d_msg msg);
 int h2d_msg_name_parse(const char *name, enum h2d_msg *msg);
 
+/* Post-buffer length for one emission.  Default rule: node_len == frame_total
+ * (the declared header total); only H2D_MSG_TXQ_SYNC72 overrides it to the
+ * vendor's captured 72-byte live buffer (requires frame_total == H2D_TXQ_TOTAL).
+ * pad_byte is the value of the bytes between frame_total and node_len.
+ * Returns 0, -EINVAL for an unknown message or an inconsistent frame_total. */
+int h2d_msg_emit_plan(enum h2d_msg msg, u32 frame_total, u32 *node_len,
+		      u8 *pad_byte);
+
 /* Build + validate + wire-encode one exact message.
  * Returns 0 and the validated frame (struct h2d_frame) plus its 12-byte
  * header + payload wire image in wire[0..*total) on success, -1 otherwise
@@ -104,7 +124,7 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 		  enum h2d_err *err);
 
 /* Strict sysfs grammar:
- *   h2d_send: "txq_sync" | "stub [dst=N]" | "edca [dst=N]" |
+ *   h2d_send: "txq_sync" | "txq_sync72" | "stub [dst=N]" | "edca [dst=N]" |
  *             "del_user user=U [addr=8hex] [dst=N]"
  * Commas/tabs/newlines are separators; "txq_sync dst=0" is the only accepted
  * TXQ form (the canned frame is byte-exact with dst 0).

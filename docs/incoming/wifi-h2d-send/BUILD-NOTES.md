@@ -1,6 +1,7 @@
 # BUILD-NOTES - hi5622_wifi.ko with the first real post-ready H2D message path
 
-**Lane:** wifi-h2d-send (task-98), host-only.  **Date:** 2026-11-24.
+**Lane:** wifi-h2d-send (task-98, extended by task-99), host-only.
+**Date:** 2026-11-24.
 **Source:** this directory's `src/` (a copy of the wifi-driver-clean tree plus
 the wifi-h2d-frames library plus the new h2d_send_logic/h2d_send files; no
 build-time patch is applied).  The built `.ko` is local evidence only and is
@@ -12,18 +13,19 @@ binary/object/firmware byte is involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **391,456 B** |
-| sha256 | **047be179f79e395b550876be8acef7352f8f61d7250e4b8eed974c2b37c7adc6** |
+| size | **394,272 B** |
+| sha256 | **4677ceac2667331760d8be1803a599e4b52412f92a17199b519b463450ea8215** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
 | depends | (none - one self-contained module) |
 | objects | main.o transport.o ete.o d2h.o hcc.o service.o hcc_core.o hcc_core_kernel.o h2d_frames.o h2d_send_logic.o h2d_send.o |
 | compiler/modpost warnings | **0** (project tree builds with -Werror) |
-| exported `T h2d_*` symbols | 29 (h2d_frames builders/validators + h2d_send_logic gate/build/parse) |
+| exported `T h2d_*` symbols | 30 (h2d_frames builders/validators + h2d_send_logic gate/build/parse/emit-plan) |
 | PCI alias | pci:v000059E7d00000005sv*sd*bc*sc*i* |
-| host H2D logic selftest | **128/128 PASS** |
-| driver selftest (extended) | **192/192 PASS** |
+| host H2D logic selftest | **156/156 PASS** |
+| driver selftest (extended) | **204/204 PASS** |
+| firmware g0 id1 handler analysis selftest | **38/38 PASS** (reads the local pinned vendor blob; not part of the kernel build) |
 
 Module params: `h2d_send_budget` (uint, default 1), `fw_path`, `wifi_block_path`,
 `plat_block_path`, `allow_unseeded_release`, `hcc_poll_ms`, `hcc_cece_mode`,
@@ -32,6 +34,21 @@ Module params: `h2d_send_budget` (uint, default 1), `fw_path`, `wifi_block_path`
 The module hash is **build-path dependent** (debug info records the build
 directory), so a copy built from another path has a different hash but the
 same behaviour/flags; record the hash printed by the build you deploy.
+
+## task-99 extension (72-byte live-node variant + static handler analysis)
+
+* `H2D_MSG_TXQ_SYNC72` / `h2d_send "txq_sync72"` / `h2d_txq_sync72` (WO):
+  the same 48-byte byte-exact TXQ frame, committed with the SR node buffer
+  padded to the vendor's live 72 bytes (24 x 0xff after the frame) and node
+  word1 `(72<<16)|0x6d2b`; declared header total stays 0x30.  Same gates
+  (READY_TXQ_SYNC/ACTIVE, latched boot, one-frame budget, once-only TXQ).
+* The built module hash above is the task-99 build; the task-98 build was
+  391,456 B sha256 `047be179...`.
+* `tools/fw_g0id1_handler.py` + `REPORT-G0ID1-HANDLER.md`: static analysis of
+  the firmware group-0 id-1 receive handler (parse offsets, key tables, the
+  key-0xd8 worker, the fault candidates and the dispatcher path).  The tool is
+  host-only and needs the local pinned vendor firmware blob + capstone from
+  `.provision-venv`; it is not part of `tools/build.sh`.
 
 ## Build line
 
@@ -54,19 +71,22 @@ goes to `/tmp/wifi-h2d-send-build/h2d_logic_selftest` (local build products).
 | step | command / file | result |
 | --- | --- | --- |
 | host compile of the H2D logic | `cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` on h2d_logic_selftest.c + h2d_send_logic.c + h2d_frames.c + hcc_core.c | PASS (57,256 B binary) |
-| host emission/gating selftest | `/tmp/wifi-h2d-send-build/h2d_logic_selftest` | **128/128 PASS** |
+| host emission/gating selftest | `/tmp/wifi-h2d-send-build/h2d_logic_selftest` | **156/156 PASS** |
 | kernel module build | project 6.18.60 tree, `-Werror`, modpost | PASS, 0 warnings/errors |
 | artifact evidence | `modinfo` / `sha256sum` / `nm` | see table above; `h2d_send_budget` present in modinfo |
-| driver selftest | `python3 tools/selftest.py` | **192/192 PASS** (133 inherited + 59 H2D checks) |
+| driver selftest | `python3 tools/selftest.py` | **204/204 PASS** (133 inherited + 71 H2D checks) |
+| firmware handler analysis | `.provision-venv/bin/python tools/fw_g0id1_handler.py --selftest` | **38/38 PASS** |
 
 The driver selftest additions check: the H2D source/Kbuild layout, main.c
-wiring, the h2d_frames library byte-identical provenance, the four EXACT
-builders, the boot/phase/one-frame/consumption gate strings, exactly one
+wiring, the h2d_frames library byte-identical provenance, the five EXACT
+builders, the txq_sync72 node-length variant (emit plan, 72-byte pad, node
+word1 `(72<<16)|0x6d2b`, same gate block, sysfs attr/grammar token), the
+boot/phase/one-frame/consumption gate strings, exactly one
 `hcc_core_sr_commit` call site (no retry), no direct mailbox/gate/out[5]
 write, the bounded scheduled-sleep poll, the `h2d_send_budget` parameter, the
-telemetry fields, and **file-by-file parity with the reference
-wifi-driver-clean tree** (exactly five files modified: main.c, hcc.c,
-service.c, hi5622_hcc.h, Kbuild).
+telemetry fields (incl. the recorded node length), and **file-by-file parity
+with the reference wifi-driver-clean tree** (exactly five files modified:
+main.c, hcc.c, service.c, hi5622_hcc.h, Kbuild).
 
 ## Build-time notes
 

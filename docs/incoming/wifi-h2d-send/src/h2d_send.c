@@ -11,9 +11,11 @@
  * What this adds on top of the clean driver:
  *   - h2d_txq_sync: the vendor's FIRST post-ready message, byte-exact
  *     (group-0 id-1 hdpp_config_send_event, declared total 0x30, cmd 0x00d8,
- *     len 0x14, 0xff inherited tail, 72-byte capture reproduced only as the
- *     known-answer vector - the wire frame and SR node length are the header
- *     total 48 per the wifi-h2d-frames rule);
+ *     len 0x14, 0xff inherited tail).  The vendor's LIVE first post declared
+ *     a 72-byte SR node buffer while the header total is 48; h2d_txq_sync
+ *     keeps node_len = header total (48), h2d_txq_sync72 sends the same 48
+ *     frame bytes in a 72-byte node buffer (48 + 24 x 0xff) with node word1
+ *     = (72 << 16) | 0x6d2b - the one-variable transport experiment;
  *   - h2d_send: the strict, name-based grammar for the four EXACT frames the
  *     library can synthesize (txq_sync / stub / edca / del_user).  It never
  *     accepts a synthetic payload - the firmware handlers dereference payload
@@ -173,7 +175,9 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 	enum h2d_gate gate;
 	enum h2d_err herr = H2D_OK;
 	u8 *wire = NULL;
-	u32 total = 0, producer, slot, devva, out2, out0 = 0, polls = 0;
+	u32 total = 0, node_len = 0, producer, slot, devva, out2, out0 = 0;
+	u32 polls = 0;
+	u8 pad_byte = 0;
 	int ret = 0;
 
 	if (!ctx || !ctx->hcc)
@@ -203,6 +207,18 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
 		dev_warn(dev, "H2D %s: frame refused by the exact builder/validator (%s); no device write performed\n",
 			 h2d_msg_name(msg), h2d_strerror(herr));
+		ret = -EPERM;
+		goto out;
+	}
+
+	/* Post-buffer length: node_len == frame total for every message except
+	 * txq_sync72, which declares the vendor's 72-byte live node buffer. */
+	if (h2d_msg_emit_plan(msg, total, &node_len, &pad_byte) != 0 ||
+	    node_len < total || node_len > HI5622_HCC_SR_BUF_LEN ||
+	    node_len > 0xffffu) {
+		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+		dev_warn(dev, "H2D %s: node length plan refused (frame %u B, node %u B); no device write performed\n",
+			 h2d_msg_name(msg), total, node_len);
 		ret = -EPERM;
 		goto out;
 	}
@@ -255,9 +271,17 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 		goto out;
 	}
 
+	/* node word1 declares the POST-BUFFER length (the 72-byte variant) while
+	 * the frame's declared header total stays 0x30.  For every other message
+	 * node_len == total and this is h2d_plan_post's own value. */
+	if (node_len != total)
+		plan.sr.node_word1 = (node_len << 16) | H2D_NODE_FLAGS;
+
 	/* 3. Vendor SR commit order: body -> node -> barrier -> producer
 	 * register -> barrier -> coalesced mailbox id-3 announce (core). */
 	memcpy(r->bufs[slot], wire, total);
+	if (node_len > total)
+		memset((u8 *)r->bufs[slot] + total, pad_byte, node_len - total);
 	nodes[slot].devva = plan.sr.node_word0;
 	nodes[slot].word1 = plan.sr.node_word1;
 	wmb();
@@ -276,11 +300,12 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 		goto out;
 	}
 	h->h2d_frames_sent++;
-	if (msg == H2D_MSG_TXQ_SYNC)
+	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
 		h->h2d_txq_sync_sent++;
 	h->h2d_last_msg = (u32)msg;
 	h->h2d_last_gate = (u32)H2D_GATE_OK;
 	h->h2d_last_total = total;
+	h->h2d_last_node_len = node_len;
 	mutex_unlock(&h->lock);
 
 	/* 4. Bounded consumption observation of the coalesced announce. */
@@ -299,8 +324,8 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 		h->h2d_send_max_polls = polls;
 	if (!out0) {
 		h->h2d_send_ok++;
-		dev_info(dev, "H2D %s: frame %u B committed on SR0 slot %u devva 0x%08x node word1 0x%08x producer 0x%08x -> 0x%08x; coalesced announce id%u out[0]=0x%08x CONSUMED after %u polls; core phase=%s\n",
-			 h2d_msg_name(msg), total, slot, devva,
+		dev_info(dev, "H2D %s: frame %u B in a %u B node committed on SR0 slot %u devva 0x%08x node word1 0x%08x producer 0x%08x -> 0x%08x; coalesced announce id%u out[0]=0x%08x CONSUMED after %u polls; core phase=%s\n",
+			 h2d_msg_name(msg), total, node_len, slot, devva,
 			 plan.sr.node_word1, producer, plan.sr.producer_after,
 			 HI5622_H2D_MSG_ETE_ANNOUNCE, out0, polls,
 			 hcc_phase_name(core->phase));
@@ -337,6 +362,24 @@ static ssize_t h2d_txq_sync_store(struct device *dev,
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_txq_sync);
+
+/* Same byte-exact frame, but the SR node declares the vendor's 72-byte live
+ * buffer (48 frame bytes + 24 x 0xff): the one-variable node-length probe. */
+static ssize_t h2d_txq_sync72_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct hi5622_pci *ctx = h2d_ctx(dev);
+	int ret;
+
+	if (!ctx || !ctx->hcc)
+		return -ENODEV;
+	if (!sysfs_streq(buf, "1"))
+		return -EINVAL;
+	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC72, 0u, 0u, NULL);
+	return ret ? ret : (ssize_t)count;
+}
+static DEVICE_ATTR_WO(h2d_txq_sync72);
 
 static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
 			      const char *buf, size_t count)
@@ -388,8 +431,9 @@ static ssize_t h2d_status_show(struct device *dev,
 			 live.lane_closed ? 1u : 0u,
 			 live.liveness_sent);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "gates: txq_sync=%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
+			 "gates: txq_sync=%s txq_sync72=%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC72)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_EDCA_OPT)),
 			 live.out0, live.mbox_inflight);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
@@ -405,10 +449,10 @@ static ssize_t h2d_status_show(struct device *dev,
 				 "last attempt: none (no real H2D frame fired this load)\n");
 	else
 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-				 "last attempt: msg=%s gate=%s wire_total=%u\n",
+				 "last attempt: msg=%s gate=%s wire_total=%u node_len=%u\n",
 				 h2d_msg_name((enum h2d_msg)h->h2d_last_msg),
 				 h2d_gate_name((enum h2d_gate)h->h2d_last_gate),
-				 h->h2d_last_total);
+				 h->h2d_last_total, h->h2d_last_node_len);
 	return pos;
 }
 static DEVICE_ATTR_RO(h2d_status);
@@ -450,10 +494,25 @@ static ssize_t h2d_plan_show(struct device *dev, struct device_attribute *attr,
 		goto pending;
 	}
 	h2d_hex(wire, total, hex, sizeof(hex));
-	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "h2d_plan: canned first post-ready message (read-only preflight, no device write)\n"
-			 "msg=txq_sync wire_total=%u wire=%s\n",
-			 total, hex);
+	{
+		u32 nlen = 0;
+		u8 padb = 0;
+
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+				 "h2d_plan: canned first post-ready message (read-only preflight, no device write)\n"
+				 "msg=txq_sync wire_total=%u wire=%s\n",
+				 total, hex);
+		if (h2d_msg_emit_plan(H2D_MSG_TXQ_SYNC, total, &nlen, &padb) == 0)
+			pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+					 "msg=txq_sync node_len=%u node_word1=0x%08x pad=0x%02x\n",
+					 nlen, (nlen << 16) | H2D_NODE_FLAGS, padb);
+		if (h2d_msg_emit_plan(H2D_MSG_TXQ_SYNC72, total, &nlen,
+				      &padb) == 0)
+			pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+					 "msg=txq_sync72 node_len=%u node_word1=0x%08x pad=0x%02x (the %u pad bytes are not part of the declared 0x%x frame total)\n",
+					 nlen, (nlen << 16) | H2D_NODE_FLAGS, padb,
+					 nlen - total, total);
+	}
 	h2d_live_fill(ctx, &live);
 	gate = h2d_gate_check(&live, H2D_MSG_TXQ_SYNC);
 	if (gate != H2D_GATE_OK) {
@@ -501,6 +560,7 @@ static DEVICE_ATTR_RO(h2d_plan);
 
 static struct attribute *hi5622_h2d_attrs[] = {
 	&dev_attr_h2d_txq_sync.attr,
+	&dev_attr_h2d_txq_sync72.attr,
 	&dev_attr_h2d_send.attr,
 	&dev_attr_h2d_status.attr,
 	&dev_attr_h2d_plan.attr,

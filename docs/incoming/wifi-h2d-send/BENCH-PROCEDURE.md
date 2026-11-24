@@ -1,9 +1,16 @@
 # BENCH-PROCEDURE - first REAL post-ready H2D message (g0 id1 TXQ config sync)
 
-Host-only lane deliverable (wifi-h2d-send, task-98).  This is the attended
-ladder for the next session: golden PD3 boot -> ready pair -> ONE
-`h2d_txq_sync` frame -> capture-and-stop.  One variable, one boot, one frame,
-no retries.  Global rules unchanged: recovery door armed first, UART
+Host-only lane deliverable (wifi-h2d-send; task-98 ladder A, task-99 ladder B).
+This is the attended ladder for the next session: golden PD3 boot -> ready pair
+-> ONE frame -> capture-and-stop.  One variable, one boot, one frame, no
+retries.  **Ladder A** fires the 48-byte node (`h2d_txq_sync`); **Ladder B**
+fires the vendor's 72-byte live-node variant (`h2d_txq_sync72`) and is the
+task-99 recommendation (see REPORT-G0ID1-HANDLER.md).  The task-98 module was
+already fired once on a PD3 golden boot (Ladder A, 48-byte node): the frame
+reached the device ring (ETE engine consumed the node) but the firmware
+faulted (mask 0x12) and did not consume the mailbox announce - the boot stayed
+golden.  Ladder B exists to change exactly one variable (node length) and to
+collect the exception record that names the fault site.  Global rules unchanged: recovery door armed first, UART
 **read-only** capture to an absolute path, no blind flash writes, no `rmmod`
 after the release, no CECE during boot.
 
@@ -31,7 +38,8 @@ Each attribute lives in the endpoint device directory
     service:   hcc_arm hcc_loop hcc_service hcc_clear hcc_status hcc_ready
                hcc_events hcc_rings hcc_plan
     hcc:       hcc_sr_announce hcc_cece_kick hcc_dr_republish
-    h2d:       h2d_txq_sync (WO)  h2d_send (WO)  h2d_status (RO)  h2d_plan (RO)
+    h2d:       h2d_txq_sync (WO)  h2d_txq_sync72 (WO)  h2d_send (WO)
+               h2d_status (RO)  h2d_plan (RO)
     d2h:       rd_poll rd_advance rd_status rd_decode rd_catalog
 
 ## Ladder
@@ -89,6 +97,57 @@ is data, not failure.
   next session analyses it).
 * The gate at S8 is not `ok`: do not fire, capture the reason (see the gate
   table in REPORT.md 3.3) and stop.
+
+## Ladder B - the 72-byte LIVE-node fire (task-99)
+
+**Question it answers:** does the vendor's captured 72-byte SR node buffer
+(48 frame bytes + 24 x 0xff pad, node word1 `(72<<16)|0x6d2b`, header total
+still 0x30) change the firmware's behaviour versus the 48-byte node of the
+first fire?  The static analysis says the g0 id1 handler parses no length
+field, so this isolates the transport/engine layer.
+
+**Module:** the task-99 build of this tree (`hi5622_wifi.ko`, **394,272 B**,
+sha256 **4677ceac...**, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, 0
+warnings, host 156/156 + driver 204/204).  Record the hash printed by
+`./tools/build.sh` of the build you deploy (it is build-path dependent).
+
+**Preconditions** are Ladder A's, plus: a fresh PD3 golden boot (the lane is
+closed after a fault; never reuse a boot that already fired).
+
+| step | action | expected / stop rule |
+| --- | --- | --- |
+| B0 | `insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD3.bin` | as A/S0; `h2d_status` shows the new gate line `txq_sync72=...`; STOP if the attr/module is the task-98 build |
+| B1-B6 | prepare / upload / verify / seed / hcc_arm / hcc_loop / release | as A/S1-S6 (release 0x5A5A only, no CECE during boot) |
+| B7 | watch `boot hcc_ready hcc_events rd_status` | golden page 0x86807FEF/7/2/0xABCD, state 1, mask 0, ready pair id1+id2, phase READY_TXQ_SYNC; STOP if not |
+| B8 | **dry-run preflight (no write)**: `cat h2d_plan ; cat h2d_status` | `h2d_plan` prints BOTH variants: `msg=txq_sync node_len=48 node_word1=0x00306d2b` and `msg=txq_sync72 node_len=72 node_word1=0x00486d2b pad=0xff`, plus `gate=ok`; `h2d_status` gates `txq_sync=ok txq_sync72=ok`. STOP if the gate is not ok - do not raise the budget |
+| B9 | **fire one frame**: `printf 1 > h2d_txq_sync72`; note `echo $?` | success only if out[0] was consumed within the bounded window; **do NOT repeat** |
+| B10 | capture (read-only): `cat h2d_status h2d_plan hcc_events hcc_ready boot rd_status rd_catalog`, `dmesg | tail -40`, UART log | see observables below; then STOP |
+| B11 | **read-only exception record** (only if B9 failed or mask != 0): bench read helper at CA **0x0004000C..0x0004004F** (region-0 alias, BAR0 = CA; 17 words: r0-r12, sp, lr, PC, SPSR of the LAST exception) | PC 0x8103C/0x81040 => the g0 id1 handler's field-B context fault; a cave address (0x4000C..0x4004F) => the PD3 poller-clobber cascade; SPSR mode 0x17/0x1B = ABT/UND. **Read only - never write this area** |
+
+### Expected observables (B10) - 72-byte variant
+
+| # | observable | pass / meaning |
+| --- | --- | --- |
+| 1 | B9 store returned success | frame committed and the announce consumed within the window |
+| 2 | `h2d_status`: `frames_sent=1 txq_sent=1 ok=1 timeout=0`, phase ACTIVE, `last attempt ... wire_total=48 node_len=72` | full consumption path with the 72-byte node |
+| 3 | dmesg: `H2D txq_sync72: frame 48 B in a 72 B node committed on SR0 slot 0 devva 0x... node word1 0x00486d2b producer ... -> ...; coalesced announce id3 out[0]=0x00000000 CONSUMED after N polls` | exact commit evidence (record N/devva) |
+| 4 | SR0 producer/consumer from `hcc_rings` | consumer advanced (ETE engine took the node) |
+| 5 | `boot`: page/state/mask still golden; mask CA 0x40008 = 0 | no exception taken |
+| 6 | `hcc_events`: `h2d{pub=1 done=1 ...}`, `vector_mask=0x0` | clean |
+| 7 | read-only out[5]/out[2] diagnostics | not pass criteria (write-pulse observables) |
+
+### Interpreting the 72-byte result
+
+| symptom | meaning | next host-side step |
+| --- | --- | --- |
+| success (rows 1-6) | node length 72 is accepted; node length was not the fault cause; compare with the 48-byte fire -> transport layer was the difference or nothing was | report; next question is the field-B context/precondition (REPORT-G0ID1-HANDLER sec 2/4) |
+| same fault signature as the 48-byte fire (3x `out[1]=4`, mask 0x12, out[0] stuck) | node length is **not** the cause; the g0 id1 handler/dispatcher path faults (context or cave cascade) | B11 read-back; then fresh boot with the payload-free g0 id0 control ('stub') to separate transport from payload |
+| clean transport but new D2H frames | the firmware reacted to the frame | capture and stop (discovery) |
+
+**Stop rules** are Ladder A's, plus: after any exception/mask change, B11 is
+read-only once and the session ends (power-cycle; never rmmod after release).
+One boot, one frame, no retry.  A second experiment needs a fresh boot and a
+Lead decision.
 
 ## Interpreting the negative cases
 

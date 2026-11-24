@@ -1,6 +1,7 @@
 # REPORT - first REAL post-ready H2D message path (g0 id1 TXQ config sync + validated senders)
 
-**Lane:** wifi-h2d-send (shared task **task-98**, host-only).  **Date:** 2026-11-24.
+**Lane:** wifi-h2d-send (shared task **task-98**, extended by **task-99**,
+host-only).  **Date:** 2026-11-24.
 **Inputs (all committed lanes, read in place; no build-time patch):**
 wifi-driver-clean (the clean driver this lane copies and extends),
 wifi-h2d-frames (byte-exact builders/validators + the portable SR node /
@@ -9,21 +10,30 @@ wifi-hcc-core (the baked-in protocol core; **not modified**, byte-identical),
 wifi-irq-unmask REPORT-PD3 (the bench result this lane's message builds on),
 wifi-h2d-catalog / wifi-host-replica / phase20 / phase38 (decoded contract and
 the byte-exact first-post capture, cited through the lanes above).
-**Nothing in this lane contacted the device.**
+**Nothing in this lane contacted the device.**  The task-98 module was fired
+by the Lead on the PD3 golden boot (one frame): the frame reached the device
+ring (ETE engine consumed the node) but the firmware faulted and did not
+consume the mailbox announce.  The task-99 extension adds the vendor's live
+72-byte node-length variant plus a static analysis of the firmware handler
+(`REPORT-G0ID1-HANDLER.md`) that explains the fault candidates.
 
 ## 0. One-line result
 
 The clean driver now has the vendor's **first real post-ready H2D message**: a
 new `h2d_txq_sync` attribute sends the byte-exact **group-0 id-1 TXQ config
 sync** (`total 0x30, cmd 0x00d8, len 0x14, 0xff inherited tail`) through the
-proven carrier (SR node `devva | total<<16 | 0x6D2B`, packed producer depth 32,
-coalesced mailbox id-3 announce, bounded out[0] consumption watch), gated on
-the **latched** golden boot and core phase `READY_TXQ_SYNC`; a strict
-`h2d_send` attribute exposes only the four **EXACT** frames the h2d-frames
-library can synthesize (txq_sync / stub / edca / del_user), never a synthetic
-payload.  Module `hi5622_wifi.ko`, **391,456 B**, sha256 `047be179...`,
-vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, **0 compiler/modpost warnings**;
-host logic selftest **128/128** and driver selftest **192/192** PASS.
+proven carrier (SR node `devva | node_len<<16 | 0x6D2B`, packed producer depth
+32, coalesced mailbox id-3 announce, bounded out[0] consumption watch), gated on
+the **latched** golden boot and core phase `READY_TXQ_SYNC`; the task-99
+extension `h2d_txq_sync72` / `h2d_send "txq_sync72"` sends the same 48 frame
+bytes with the vendor's captured **72-byte live node buffer** (24 x 0xff pad,
+node word1 `(72<<16)|0x6D2B`) under exactly the same gates.  A strict
+`h2d_send` attribute exposes only the five **EXACT** frames the h2d-frames
+library can synthesize (txq_sync / txq_sync72 / stub / edca / del_user), never
+a synthetic payload.  Module `hi5622_wifi.ko`, **394,272 B**, sha256
+`4677ceac...`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, **0
+compiler/modpost warnings**; host logic selftest **156/156**, driver selftest
+**204/204** and firmware-handler analysis selftest **38/38** PASS.
 
 ## 1. Deliverable tree
 
@@ -43,6 +53,9 @@ host logic selftest **128/128** and driver selftest **192/192** PASS.
       Kbuild                   + h2d_frames.o h2d_send_logic.o h2d_send.o
       (all other copied files are byte-identical to wifi-driver-clean;
        tools/selftest.py enforces that parity)
+    tools/fw_g0id1_handler.py  host-only static analysis of the firmware
+                               g0 id1 receive handler/dispatcher (38/38)
+    REPORT-G0ID1-HANDLER.md    the handler/parse/fault/precondition write-up
     tools/build.sh             canonical host+kernel build/verify + evidence
     tools/h2d_logic_selftest.c host, device-free selftest of emission + gating
     tools/selftest.py          driver selftest, extended (133 -> 192 checks)
@@ -142,9 +155,12 @@ The 72-byte capture is asserted byte-for-byte in the host selftest.
 
 ### 3.4 sysfs surface
 
-    h2d_txq_sync  (WO)  "1" -> send the canned byte-exact g0 id1 TXQ config sync
-    h2d_send      (WO)  grammar: txq_sync | stub [dst=N] | edca [dst=N] |
-                        del_user user=U [addr=8hex] [dst=N]
+    h2d_txq_sync   (WO) "1" -> send the canned byte-exact g0 id1 TXQ config
+                         sync (wire 48, node 48 = declared total)
+    h2d_txq_sync72 (WO) "1" -> the same 48 wire bytes in the vendor's captured
+                         72-byte live node buffer (24 x 0xff pad)
+    h2d_send       (WO) grammar: txq_sync | txq_sync72 | stub [dst=N] |
+                        edca [dst=N] | del_user user=U [addr=8hex] [dst=N]
     h2d_status    (RO)  phase/boot/lane, gate verdicts, budget, counters
                         (ok/timeout/refused/desync), last out[0], max polls
     h2d_plan      (RO)  read-only preflight: the canned frame hex, the gate
@@ -157,12 +173,13 @@ budget.
 
 ### 3.5 The four synthesized messages (all from EXACT builders)
 
-| attr form | group/id | wire | source |
+| attr form | group/id | wire / node | source |
 | --- | --- | --- | --- |
-| `txq_sync` / `h2d_txq_sync` | 0/1 | 48 B (72 B capture vector) | phase38 byte-exact first post |
-| `stub [dst=N]` | 0/0 | 12 B | payload-free liveness stub |
-| `edca [dst=N]` | 0/0x1d | 72 B | live steady-state message A (zeroed 0x3c) |
-| `del_user user=U [addr=..]` | 0/9 | 24 B | decoded 12-byte del-user payload |
+| `txq_sync` / `h2d_txq_sync` | 0/1 | 48 B / 48 B | phase38 byte-exact first post |
+| `txq_sync72` / `h2d_txq_sync72` | 0/1 | 48 B / 72 B (24 x 0xff pad) | the vendor's captured LIVE node length |
+| `stub [dst=N]` | 0/0 | 12 B / 12 B | payload-free liveness stub |
+| `edca [dst=N]` | 0/0x1d | 72 B / 72 B | live steady-state message A (zeroed 0x3c) |
+| `del_user user=U [addr=..]` | 0/9 | 24 B / 24 B | decoded 12-byte del-user payload |
 
 Nothing else is synthesizable: the vendor payload structs are not recoverable
 from the firmware image and several firmware handlers dereference payload
@@ -189,10 +206,11 @@ and still match the wifi-hcc-core lane hashes.
 
 | check | command | result |
 | --- | --- | --- |
-| host H2D logic selftest | `./tools/build.sh` (step 1) | **128/128 PASS** |
-| kernel module build (project 6.18.60, -Werror) | `./tools/build.sh` (step 2) | PASS, **0 warnings**, 29 `T h2d_*` symbols |
-| module artifact | `modinfo`/`sha256sum` | 391,456 B, sha256 `047be179f79e395b550876be8acef7352f8f61d7250e4b8eed974c2b37c7adc6`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` |
-| driver selftest (extended, 133 -> 192) | `./tools/build.sh` (step 3) | **192/192 PASS** |
+| host H2D logic selftest | `./tools/build.sh` (step 1) | **156/156 PASS** |
+| kernel module build (project 6.18.60, -Werror) | `./tools/build.sh` (step 2) | PASS, **0 warnings**, 30 `T h2d_*` symbols |
+| module artifact | `modinfo`/`sha256sum` | 394,272 B, sha256 `4677ceac2667331760d8be1803a599e4b52412f92a17199b519b463450ea8215`, vermagic `6.18.60 SMP mod_unload ARMv7 p2v8` |
+| driver selftest (extended, 133 -> 204) | `./tools/build.sh` (step 3) | **204/204 PASS** |
+| firmware g0 id1 handler analysis | `python3 tools/fw_g0id1_handler.py --selftest` | **38/38 PASS** (separate host tool; needs the local pinned blob + capstone) |
 | h2d library provenance | driver selftest | h2d_frames.c/.h/.inc byte-identical to wifi-h2d-frames; hcc_core identical to wifi-hcc-core |
 | no mailbox/gate/out[5] write in the new path | driver selftest | PASS (one `hcc_core_sr_commit` call site, no direct mailbox writel) |
 
@@ -214,15 +232,17 @@ one frame, no retry; timeout/page change/abort => capture and stop.
 
 ## 7. Risks, limits and open items (honest)
 
-1. **Node length 48 vs the vendor's live 72.** The captured vendor node word1
-   declared 72 B (inherited ring buffer) while the header declares 48 B.  This
-   driver follows the h2d-frames rule (node length = frame total = 48).  If the
-   firmware's SR receive path requires node_len == buffer length or uses
-   node_len rather than the header total, the first real frame could be
-   rejected/dropped: the bench result will show it (out[0] consumed but no
-   handler effect, or a clean rejection in the firmware log).  Fallback is a
-   72-byte export/pad variant; the known-answer vector is already in the host
-   selftest.
+1. **Node length 48 vs the vendor's live 72 (first fire RESULT, task-99).**
+   The first fire (48-byte node) reached the device ring and the ETE engine
+   consumed the node, but the firmware faulted (mask 0x12 = undefined + data
+   abort) and did not consume the mailbox announce; boot stayed golden.  This
+   lane now exposes the **72-byte node-length variant** with the same 48-byte
+   frame under the same gates (`REPORT-G0ID1-HANDLER.md` gives the static
+   expectations and the read-back that settles the fault site).  The static
+   analysis says the g0 id1 handler itself is node-length agnostic, so the
+   variant is a transport-engine isolation experiment; if the fault signature
+   repeats identically the node length is not the cause, and the field-B
+   user/vap context precondition is the remaining lever.
 2. **cmd 0x00d8 provenance is open** (no producing call site in the analysed
    vendor build - wifi-h2d-frames REPORT 8).  The frame is the live capture,
    not a reconstruction; it is still the vendor's first post-ready send.
@@ -269,14 +289,19 @@ one frame, no retry; timeout/page change/abort => capture and stop.
 
 1. Attended PD3 golden-boot session: follow BENCH-PROCEDURE.md; load this
    module, run the existing ladder to `READY_TXQ_SYNC`, then send exactly one
-   `h2d_txq_sync`.
+   frame.  Recommended order: (a) the payload-free g0 id0 control
+   (`h2d_send` `"stub"`) to prove the real post-ready SR path runs without a
+   firmware fault; (b) a fresh boot with one `h2d_txq_sync72` (the 48-vs-72
+   isolation, REPORT-G0ID1-HANDLER sec 3).
 2. Capture the observables (out[0]/out[2]/out[5], phase, events, D2H catalogue)
    and the exact dmesg H2D line; then stop (one boot, one frame).
 3. If consumed but no firmware reaction: the next question is firmware-side
    (what the TXQ-sync handler does); the next host-side messages would be the
    edca / del_user exact frames behind the same gate (raise
    `h2d_send_budget` only for a supervised session).
-4. If not consumed: the H2D lane stays closed after the core timeout - record
-   and stop; the open item is the mailbox consumer path (PD3 evidence says it
-   runs, so a real-message timeout would point at the handler/SR body path,
-   not the announce).
+4. If not consumed: STOP.  With the 72-byte fire also capture the read-only
+   exception record at CA 0x0004000C..0x0004004F (staged r0-r12/sp/lr/PC/SPSR
+   of the last exception, REPORT-G0ID1-HANDLER sec 2): PC 0x8103C/0x81040 ->
+   the g0 id1 handler context fault; a cave address -> the PD3 poller-clobber
+   cascade.  Either way the next host-side lever is the field-B user/vap
+   context precondition, not another speculative payload.

@@ -6,8 +6,9 @@
  * Builds the portable code exactly as the kernel module does (same sources:
  * h2d_send_logic.c + h2d_frames.c + hcc_core.c) and asserts:
  *   - the byte-exact emission vectors (txq_sync 48 B wire / 72 B capture,
- *     stub, edca, del_user), including the SR node word (total<<16)|0x6D2B
- *     and the packed producer arithmetic via h2d_plan_post();
+ *     txq_sync72 same wire with a 72 B node length, stub, edca, del_user),
+ *     including the SR node word (total<<16)|0x6D2B and the packed producer
+ *     arithmetic via h2d_plan_post();
  *   - the gate matrix (phase, latched boot, release, arm, lane, liveness,
  *     per-load budget, announce in-flight, live out[0] pending, duplicate TXQ);
  *   - the strict sysfs grammar of h2d_send and the refusal of anything that is
@@ -191,6 +192,53 @@ static void test_emission(void)
 		      h2d_strerror(err));
 	}
 
+	/* --- txq_sync72: same 48-byte frame, 72-byte LIVE SR node buffer --- */
+	{
+		struct h2d_post_plan plan;
+		u32 node_len = 0;
+		u8 pad_byte = 0;
+
+		memset(&f, 0, sizeof(f));
+		total = 0;
+		check("txq_sync72 builds",
+		      h2d_msg_build(H2D_MSG_TXQ_SYNC72, 0, 0, NULL, &f, wire,
+				    sizeof(wire), &total, &err) == 0 &&
+		      err == H2D_OK, h2d_strerror(err));
+		check("txq_sync72 declared frame total stays 0x30",
+		      total == H2D_TXQ_TOTAL, "");
+		expected_txq_sync(want);
+		expect_bytes("txq_sync72 48-byte wire image == txq_sync",
+			     wire, total, want, 48);
+		check("txq_sync72 frame struct identical (g0 id1 dst0 fb4)",
+		      f.group == 0 && f.id == 1 && f.dst == 0 && f.fb == 4 &&
+		      f.fa == 0 && f.fc == 0, "");
+		check("txq_sync72 node_len plan = 72, pad = 0xff",
+		      h2d_msg_emit_plan(H2D_MSG_TXQ_SYNC72, total, &node_len,
+					&pad_byte) == 0 &&
+		      node_len == 72u && pad_byte == 0xffu, "");
+		check("txq_sync72 node word1 = (72<<16)|0x6d2b",
+		      ((node_len << 16) | H2D_NODE_FLAGS) == 0x00486d2bu, "");
+		check("txq_sync node_len plan = frame total, pad = 0x00",
+		      h2d_msg_emit_plan(H2D_MSG_TXQ_SYNC, total, &node_len,
+					&pad_byte) == 0 &&
+		      node_len == total && pad_byte == 0u, "");
+		check("txq_sync72 default plan_post still the 48-byte node word1",
+		      h2d_plan_post(&f, 0, 32, 0x84543000u, 0, 0x8, &plan,
+				    &err) == 0 &&
+		      plan.sr.node_word1 == 0x00306d2bu &&
+		      plan.frame_total == H2D_TXQ_TOTAL, h2d_strerror(err));
+		check("txq_sync72 emit plan refuses a non-0x30 frame total",
+		      h2d_msg_emit_plan(H2D_MSG_TXQ_SYNC72, 0x48, &node_len,
+					&pad_byte) != 0, "");
+		check("txq_sync72 emit plan refuses a bad selector",
+		      h2d_msg_emit_plan(H2D_MSG_COUNT, total, &node_len,
+					&pad_byte) != 0, "");
+		check("txq_sync72 dst != 0 refused (byte-exact only)",
+		      h2d_msg_build(H2D_MSG_TXQ_SYNC72, 1, 0, NULL, &f, wire,
+				    sizeof(wire), &total, &err) != 0 &&
+		      err == H2D_EPOLICY, h2d_strerror(err));
+	}
+
 	/* --- stub: the payload-free group-0 id-0 probe -------------------- */
 	memset(&f, 0, sizeof(f));
 	total = 0;
@@ -316,6 +364,8 @@ static void test_gates(void)
 
 	check("gate: READY + all preconditions -> ok (txq_sync)",
 	      h2d_gate_check(&good, H2D_MSG_TXQ_SYNC) == H2D_GATE_OK, "");
+	check("gate: READY + all preconditions -> ok (txq_sync72)",
+	      h2d_gate_check(&good, H2D_MSG_TXQ_SYNC72) == H2D_GATE_OK, "");
 	check("gate: READY + all preconditions -> ok (edca)",
 	      h2d_gate_check(&good, H2D_MSG_EDCA_OPT) == H2D_GATE_OK, "");
 	check("gate: READY + all preconditions -> ok (del_user)",
@@ -332,12 +382,18 @@ static void test_gates(void)
 		check("gate: ACTIVE -> txq_sync refused DUP_TXQ",
 		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) ==
 		      H2D_GATE_DUP_TXQ, "");
+		check("gate: ACTIVE -> txq_sync72 refused DUP_TXQ (same idea)",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC72) ==
+		      H2D_GATE_DUP_TXQ, "");
 		check("gate: ACTIVE -> edca ok",
 		      h2d_gate_check(&l, H2D_MSG_EDCA_OPT) == H2D_GATE_OK,
 		      "");
 		l.txq_submitted = false;
 		check("gate: ACTIVE without submission -> TXQ_PHASE",
 		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC) ==
+		      H2D_GATE_TXQ_PHASE, "");
+		check("gate: txq_sync72 is READY-only too",
+		      h2d_gate_check(&l, H2D_MSG_TXQ_SYNC72) ==
 		      H2D_GATE_TXQ_PHASE, "");
 	}
 
@@ -459,6 +515,16 @@ static void test_parser(void)
 	      h2d_req_parse("txq_sync dst=0", &req) == 0, "");
 	check("parse 'txq_sync dst=1' refused (byte-exact)",
 	      h2d_req_parse("txq_sync dst=1", &req) != 0, "");
+	check("parse 'txq_sync72'",
+	      h2d_req_parse("txq_sync72", &req) == 0 &&
+	      req.msg == H2D_MSG_TXQ_SYNC72 && req.dst == 0, "");
+	check("parse 'txq_sync72\n'",
+	      h2d_req_parse("txq_sync72\n", &req) == 0, "");
+	check("parse 'txq_sync72 dst=1' refused (byte-exact)",
+	      h2d_req_parse("txq_sync72 dst=1", &req) != 0, "");
+	check("parse name lookup txq_sync72",
+	      h2d_msg_name_parse("txq_sync72", &req.msg) == 0 &&
+	      req.msg == H2D_MSG_TXQ_SYNC72, "");
 	check("parse 'stub dst=15'", h2d_req_parse("stub dst=15", &req) == 0 &&
 	      req.msg == H2D_MSG_STUB && req.dst == 15, "");
 	check("parse 'stub dst=16' refused",
@@ -544,6 +610,11 @@ static void test_policy(void)
 	      h2d_msg_build(H2D_MSG_TXQ_SYNC, 0, 0, NULL, &f, wire,
 			    sizeof(wire), &total, &err) == 0 &&
 	      wire[12 + 8] == 0xd8 && wire[12 + 9] == 0x00, "");
+	check("policy: txq_sync72 wire is the same byte-exact frame",
+	      h2d_msg_build(H2D_MSG_TXQ_SYNC72, 0, 0, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0 &&
+	      total == 0x30u && wire[12 + 8] == 0xd8 &&
+	      wire[12 + 10] == 0x14, h2d_strerror(err));
 	check("policy: txq_sync wire len field is 0x14",
 	      wire[12 + 10] == 0x14 && wire[12 + 11] == 0x00, "");
 	check("policy: txq_sync 72-byte capture tail is 0xff * 24",

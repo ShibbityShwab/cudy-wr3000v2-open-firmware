@@ -266,8 +266,8 @@ def main():
                  "hcc_service", "hcc_sr_announce", "hcc_cece_kick",
                  "hcc_dr_republish", "hcc_status", "hcc_ready", "hcc_events",
                  "hcc_rings", "hcc_plan", "rd_poll", "rd_advance", "rd_status",
-                 "rd_decode", "rd_catalog", "h2d_txq_sync", "h2d_send",
-                 "h2d_status", "h2d_plan"):
+                 "rd_decode", "rd_catalog", "h2d_txq_sync", "h2d_txq_sync72",
+                 "h2d_send", "h2d_status", "h2d_plan"):
         check("sysfs attr %s defined" % attr,
               ("DEVICE_ATTR_WO(%s)" % attr) in all_src or
               ("DEVICE_ATTR_RO(%s)" % attr) in all_src)
@@ -371,6 +371,38 @@ def main():
     check("H2D post path has no retry loop around the commit",
           send_c.count("hcc_core_sr_commit(") == 1 and
           "while (ret" not in send_c)
+    # -- 12a. txq_sync72: the 72-byte LIVE node-length variant -------------
+    check("H2D 72-byte node-length variant selector in the logic header",
+          "H2D_MSG_TXQ_SYNC72" in logic_h and
+          "H2D_TXQ_NODE_LEN" in logic_h and "H2D_TXQ_PAD_BYTE" in logic_h)
+    check("H2D emit plan defaults node_len to the frame total",
+          "h2d_msg_emit_plan" in logic_h and
+          "h2d_msg_emit_plan" in logic_c and
+          "*node_len = frame_total" in logic_c)
+    check("H2D 72-byte variant keeps the declared frame total 0x30",
+          "frame_total != H2D_TXQ_TOTAL" in logic_c and
+          "H2D_TXQ_TOTAL" in logic_h)
+    check("H2D txq_sync72 shares the byte-exact builder",
+          "case H2D_MSG_TXQ_SYNC72:" in logic_c and
+          "h2d_build_g0_id1_hdpp_txq_sync" in logic_c)
+    check("H2D txq_sync72 is READY-only and once-only (same gate block)",
+          "msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72" in logic_c)
+    check("H2D 72-byte variant grammar token",
+          '{ "txq_sync72"' in logic_c)
+    check("H2D 72-byte variant sysfs attribute defined",
+          "DEVICE_ATTR_WO(h2d_txq_sync72)" in send_c)
+    check("H2D send path pads the SR node buffer to the emit-plan length",
+          "memset((u8 *)r->bufs[slot] + total" in send_c and
+          "node_len > total" in send_c)
+    check("H2D send path sets node word1 from the emit-plan node length",
+          "(node_len << 16) | H2D_NODE_FLAGS" in send_c and
+          "h2d_msg_emit_plan(msg, total, &node_len, &pad_byte)" in send_c)
+    check("H2D telemetry records the SR node length",
+          "h2d_last_node_len" in send_c and
+          "h2d_last_node_len" in read("hi5622_hcc.h"))
+    check("H2D plan/status expose both TXQ node lengths",
+          "txq_sync72 node_len=" in send_c and
+          "txq_sync72=%s" in send_c)
     check("H2D telemetry fields in the service state",
           "h2d_frames_sent" in read("hi5622_hcc.h") and
           "h2d_send_timeout" in read("hi5622_hcc.h"))

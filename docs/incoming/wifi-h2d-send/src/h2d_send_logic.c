@@ -63,6 +63,7 @@ const char *h2d_msg_name(enum h2d_msg msg)
 	switch (msg) {
 	case H2D_MSG_STUB:	return "stub";
 	case H2D_MSG_TXQ_SYNC:	return "txq_sync";
+	case H2D_MSG_TXQ_SYNC72:	return "txq_sync72";
 	case H2D_MSG_EDCA_OPT:	return "edca";
 	case H2D_MSG_DEL_USER:	return "del_user";
 	default:		return "?";
@@ -97,6 +98,7 @@ int h2d_msg_name_parse(const char *name, enum h2d_msg *msg)
 		enum h2d_msg	msg;
 	} table[] = {
 		{ "txq_sync",	H2D_MSG_TXQ_SYNC },
+		{ "txq_sync72",	H2D_MSG_TXQ_SYNC72 },
 		{ "stub",	H2D_MSG_STUB },
 		{ "edca",	H2D_MSG_EDCA_OPT },
 		{ "del_user",	H2D_MSG_DEL_USER },
@@ -147,7 +149,7 @@ enum h2d_gate h2d_gate_check(const struct h2d_live *live, enum h2d_msg msg)
 	/* Core phase must be READY_TXQ_SYNC or later (FAILED is not "later"). */
 	if (!h2d_phase_ok(live->phase))
 		return H2D_GATE_PHASE;
-	if (msg == H2D_MSG_TXQ_SYNC) {
+	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72) {
 		/* The vendor's first post-ready message is sent exactly once,
 		 * from READY_TXQ_SYNC (the core flips to ACTIVE on commit). */
 		if (live->txq_submitted)
@@ -200,7 +202,9 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 			e = H2D_EPOLICY;
 		break;
 	case H2D_MSG_TXQ_SYNC:
-		/* Byte-exact canned frame: only dst 0 is the vendor capture. */
+	case H2D_MSG_TXQ_SYNC72:
+		/* Byte-exact canned frame: only dst 0 is the vendor capture.  The
+		 * 72 variant differs only in the SR node buffer length below. */
 		if (dst != 0u) {
 			if (err)
 				*err = H2D_EPOLICY;
@@ -244,6 +248,25 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 	*total = (u32)wire_len;
 	if (err)
 		*err = H2D_OK;
+	return 0;
+}
+
+/* Post-buffer length: default node_len = frame_total; txq_sync72 declares the
+ * vendor's captured 72-byte live buffer for the same 48-byte frame. */
+int h2d_msg_emit_plan(enum h2d_msg msg, u32 frame_total, u32 *node_len,
+		      u8 *pad_byte)
+{
+	if (!node_len || !pad_byte || msg >= H2D_MSG_COUNT)
+		return -EINVAL;
+	if (msg == H2D_MSG_TXQ_SYNC72) {
+		if (frame_total != H2D_TXQ_TOTAL)
+			return -EINVAL;
+		*node_len = H2D_TXQ_NODE_LEN;
+		*pad_byte = H2D_TXQ_PAD_BYTE;
+		return 0;
+	}
+	*node_len = frame_total;
+	*pad_byte = 0u;
 	return 0;
 }
 
@@ -404,7 +427,8 @@ int h2d_req_parse(const char *buf, struct h2d_req *req)
 	}
 	if (msg == H2D_MSG_DEL_USER && !req->has_user)
 		return -EINVAL;
-	if (msg == H2D_MSG_TXQ_SYNC && req->dst != 0u)
+	if ((msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72) &&
+	    req->dst != 0u)
 		return -EINVAL;
 	return 0;
 }

@@ -69,6 +69,7 @@ struct hi5622_hcc_service {
 	u32			h2d_last_msg;		/* enum h2d_msg */
 	u32			h2d_last_gate;		/* enum h2d_gate */
 	u32			h2d_last_total;		/* wire bytes of last frame */
+	u32			h2d_last_node_len;	/* SR node buffer bytes of last frame */
 	struct hi5622_d2h_direct rd;	/* primary (direct) receive path */
 	bool			boot_logged;
 };
