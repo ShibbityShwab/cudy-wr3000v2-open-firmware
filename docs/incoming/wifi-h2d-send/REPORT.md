@@ -589,3 +589,29 @@ extended read-only PACK (previous rows + pool descriptors 0x8212BC/0x821134 +
 PACK, especially the pool-1 descriptor and `ctx+0x434`.  One boot, one idea,
 no retry; refcount reads are a net-zero diagnostic only.
 
+## 13. task-103: the calibration alg set_* send path (h2d_cfg_cal)
+
+The calibration config family of the wifi-proto-seq lane (task-103) is now
+available on the same carrier:
+
+* **frame**: group 0 / id 2; payload = token[8] | u16 key 0x0101 | u16 len |
+  270-byte alg_cfg blob | 4-byte tail; total **298 B**; SR node length =
+  declared total; node word1 0x012A6D2B.
+* **blob**: u16 cfg id, u8 type SET=0, u8 pkt_type 0, u32 dev_ret 0,
+  u8 need_w4=1, u8 resv, value[260] (zero = structural probe).
+* **attr/token**: h2d_cfg_cal (WO, N | N fb=M) and h2d_send cfg_cal
+  [cfg=N] [fb=M]; N = 1..6 vendor order or a literal cfg id 3502..3507;
+  fb = header field B (default 4 = the module the type-1 create made;
+  fallbacks 0 / 0x12 on later boots).
+* **gate**: same carrier gates as every real frame (latched boot, released,
+  armed, phase READY_TXQ_SYNC/ACTIVE, lane open, previous announce consumed,
+  per-load budget).  Unlike txq_sync and ctx_create it is repeatable within
+  the budget, because the six calibration messages are a sequence.
+* **expected answer**: one D2H **g1 id3 total 298 B** config-syn frame with
+  syn_id 0x0101, body_len 270, request cfg id echoed and dev_ret 0.  (The
+  36-byte 0x07E0 vap-MIB event of the working lap is a different message.)
+* **bench**: BENCH-PROCEDURE.md Ladder D (one set_rssi_param 3507 frame first,
+  then the vendor order on later boots).
+* **verification**: host selftest 301/301, driver selftest 251/251, kernel
+  build 407,996 B sha256 2d45e5...40b5cb, 0 warnings.
+

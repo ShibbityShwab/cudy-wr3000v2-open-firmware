@@ -13,18 +13,18 @@ binary/object/firmware byte is involved).
 | item | value |
 | --- | --- |
 | module | hi5622_wifi.ko |
-| size | **400,732 B** |
-| sha256 | **774c4f1f094d6b5565e0463d9186a21ddeea3c3485755e603a27392d1f0d4310** |
+| size | **407,996 B** |
+| sha256 | **2d45e5458838f7aa511bf70e5f75c64faeb4dcc88d2711596cea4d17e040b5cb** |
 | ELF | 32-bit LSB relocatable, ARM, EABI5 (with debug_info, not stripped) |
 | license | GPL |
 | vermagic | 6.18.60 SMP mod_unload ARMv7 p2v8 |
 | depends | (none - one self-contained module) |
 | objects | main.o transport.o ete.o d2h.o hcc.o service.o hcc_core.o hcc_core_kernel.o h2d_frames.o h2d_send_logic.o h2d_send.o |
 | compiler/modpost warnings | **0** (project tree builds with -Werror) |
-| exported `T h2d_*` symbols | 32 (h2d_frames builders/validators + h2d_send_logic gate/build/parse/emit-plan incl. `h2d_build_ctx_create` and `h2d_msg_is_ctx`) |
+| exported T h2d_* symbols | 36 (h2d_frames builders/validators + h2d_send_logic gate/build/parse/emit-plan incl. h2d_build_ctx_create and the task-103 calibration h2d_build_cfg_cal / h2d_build_cfg_cal_raw / h2d_cfg_cal_parse) |
 | PCI alias | pci:v000059E7d00000005sv*sd*bc*sc*i* |
-| host H2D logic selftest | **242/242 PASS** |
-| driver selftest (extended) | **233/233 PASS** |
+| host H2D logic selftest | **301/301 PASS** |
+| driver selftest (extended) | **251/251 PASS** |
 | firmware g0 id1 handler analysis selftest | **38/38 PASS** (reads the local pinned vendor blob; not part of the kernel build) |
 
 Module params: `h2d_send_budget` (uint, default 1), `fw_path`, `wifi_block_path`,
@@ -91,6 +91,39 @@ same behaviour/flags; record the hash printed by the build you deploy.
   (+29 ctx_create source/contract checks).  Build still 0 compiler/modpost
   warnings.
 
+## task-103 extension (the calibration alg set_* config event: h2d_cfg_cal)
+
+* Added ONE structured **group-0 / id-2 calibration config event** on the
+  existing config-event carrier (wifi-proto-seq lane, task-103): payload =
+  token[8] | u16 key **0x0101** | u16 len | **270-byte alg_cfg blob** | 4-byte
+  tail; blob = {u16 cfg id, u8 type SET=0, u8 pkt_type 0, u32 dev_ret 0,
+  u8 need_w4=1, u8 resv, value[260]}; frame total **298 B**, SR node length =
+  declared total, node word1 **0x012A6D2B**.
+* Sysfs: **h2d_cfg_cal (WO)**, write N or "N fb=M": N = 1..6 in vendor
+  script order (1=set_2g_power_param 3502, 2=set_2g_low_power_param 3503,
+  3=set_5g_power_param 3504, 4=set_5g_low_power_param 3505,
+  5=set_xo_ppm_cali_param 3506, 6=set_rssi_param 3507) or a literal cfg id
+  3502..3507; M = header field B (module/vap, 0..0x12, default **4** = the
+  module the type-1 context-create made).  h2d_send grammar token:
+  **cfg_cal [cfg=N] [fb=M]**.
+* Value area is the zero-valued structural probe; the builder also exposes
+  h2d_build_cfg_cal_raw(value,len) for a local per-unit run (calibration
+  values are never committed).  The expected D2H answer is one 298-byte
+  g1 id3 config-syn frame (syn_id 0x0101, body_len 270, cfg id echoed, dev_ret
+  0); see the wifi-proto-seq lane report.  Same carrier gates as the other
+  real frames (latched boot, released, armed, READY_TXQ_SYNC/ACTIVE, lane
+  open, announce consumed, per-load h2d_send_budget); it is NOT a once-per
+  load type - budget governs how many of the six ids a boot may fire.
+* Build: **407,996 B, sha256
+  2d45e5458838f7aa511bf70e5f75c64faeb4dcc88d2711596cea4d17e040b5cb**,
+  vermagic 6.18.60 SMP mod_unload ARMv7 p2v8, 0 compiler/modpost warnings.
+  Selftests: host **301/301**, driver **251/251**.
+* Build environment: the historical KDIR (openwrt-lab-selectorfix-img) has
+  been cleaned; tools/build.sh now falls back to the first configured
+  6.18.60 luofu build dir (openwrt-lab-verify, then selectorfix-k, then
+  openwrt-lab).  Pin KDIR/STAGING_DIR/CROSS_COMPILE explicitly when an
+  evidence hash must be reproduced.
+
 ## Build line
 
 Canonical (host selftest + kernel module + driver selftest + evidence):
@@ -112,10 +145,10 @@ goes to `/tmp/wifi-h2d-send-build/h2d_logic_selftest` (local build products).
 | step | command / file | result |
 | --- | --- | --- |
 | host compile of the H2D logic | `cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` on h2d_logic_selftest.c + h2d_send_logic.c + h2d_frames.c + hcc_core.c | PASS (57,256 B binary) |
-| host emission/gating selftest | `/tmp/wifi-h2d-send-build/h2d_logic_selftest` | **242/242 PASS** |
+| host emission/gating selftest | /tmp/wifi-h2d-send-build/h2d_logic_selftest | **301/301 PASS** |
 | kernel module build | project 6.18.60 tree, `-Werror`, modpost | PASS, 0 warnings/errors |
 | artifact evidence | `modinfo` / `sha256sum` / `nm` | see table above; `h2d_send_budget` present in modinfo |
-| driver selftest | `python3 tools/selftest.py` | **233/233 PASS** (133 inherited + 100 H2D checks) |
+| driver selftest | python3 tools/selftest.py | **251/251 PASS** (133 inherited + 118 H2D/ctx/cal) |
 | firmware handler analysis | `.provision-venv/bin/python tools/fw_g0id1_handler.py --selftest` | **38/38 PASS** |
 | create-helper type-dispatch analysis | `.provision-venv/bin/python tools/ctx_type_dispatch.py --selftest` | **26/26 PASS** (needs the pinned local blob) |
 

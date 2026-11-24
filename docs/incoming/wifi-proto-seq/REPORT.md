@@ -260,8 +260,8 @@ Machine-readable: recipes/cal-alg-ladder.json. Summary:
      -> P3 rd_catalog                   [expect g1 id3 36 B + g1 id0x12 40 B; decode them]
      -> C1 ONE calibration frame: set_rssi_param (3507), zeros, field B 4, 298 B node
            [expect consumed + ONE g1 id3 syn 0x0101 cfg 3507 dev_ret 0 + clean boot]
-     -> C2 fresh boot, budget 5: 3502, 3503, 3504, 3505, 3506 (vendor order minus the probe)
-     -> C3 fresh boot, budget 6: canonical vendor order 3502..3507
+     -> C2 fresh boot, budget 7: create + txq + 3502, 3503, 3504, 3505, 3506 (vendor order minus the probe)
+     -> C3 fresh boot, budget 8 (driver max): create + txq + canonical vendor order 3502..3507
      -> C4 optional: repeat C3 with local per-unit values
 
 Stop rules: on the first exception (mask != 0), page change, announce not consumed, or a
@@ -270,14 +270,16 @@ bisect on a fresh boot (one variable per boot). If a message is consumed but pro
 answer, the field-B object lookup failed: retry ONE of field B = {0, 0x12} on a fresh boot.
 Never send a second new message class on a boot where a stop rule fired.
 
-### 7.1 What the bench driver needs
+### 7.1 Bench driver support (implemented)
 
-The clean driver's current grammar sends g0 id1 frames only. For C1 the driver needs one
-structured g0 id2 send path: reuse the existing config-event builder
-(h2d_build_g0_cfg_event(id=2, dst, fa, fb, token, key, data, len, tail); it already enforces
-id in {1,2}) with the 270-byte blob from this lane, and the same SR-node + mailbox id3
-announce + consume-poll gates as h2d_txq_sync. Node length = declared total (298). Suggested
-sysfs token: h2d_cal_alg <3502..3507> [hex-values-file], one frame per token, same budget.
+The wifi-h2d-send lane's task-103 extension implements this path: **h2d_cfg_cal (WO)** takes
+N (1..6 vendor order) or a literal cfg id 3502..3507, optionally " fb=M" for the header field
+B (default 4), and the h2d_send grammar token **cfg_cal [cfg=N] [fb=M]**. It builds the
+298-byte frame through h2d_build_g0_cfg_event(id=2,...) with the 270-byte blob, commits it
+through the same SR node + mailbox id3 announce + consume-poll path and gates as
+h2d_txq_sync, node length = declared total (298), and records cfg_cal_sent in h2d_status /
+h2d_plan (read-only C1 preflight). Budget: C1 needs h2d_send_budget=3 (create + txq + one
+calibration frame); the canonical six-message boot needs 8 (the driver maximum).
 
 ---
 

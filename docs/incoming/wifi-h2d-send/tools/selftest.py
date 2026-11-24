@@ -452,7 +452,8 @@ def main():
           "DEVICE_ATTR_WO(h2d_ctx_create)" in send_c and
           "&dev_attr_h2d_ctx_create.attr" in send_c)
     check("H2D ctx-create dst != 0 refused (byte-exact)",
-          "h2d_msg_is_ctx(msg)) && req->dst != 0u" in logic_c)
+          "h2d_msg_is_ctx(msg) || msg == H2D_MSG_CFG_CAL) &&" in logic_c and
+          "req->dst != 0u" in logic_c)
     check("H2D ctx-create type variants declared",
           "H2D_MSG_CTX_CREATE_T1" in logic_h and
           "H2D_MSG_CTX_CREATE_T2" in logic_h and
@@ -491,7 +492,74 @@ def main():
           "ctx_sent=%u" in send_c)
     check("H2D ctx-create reuses the same post path (single commit site)",
           send_c.count("hcc_core_sr_commit(") == 1 and
-          "ret = h2d_post(ctx, msg, 0u, 0u, NULL);" in send_c)
+          send_c.count("ret = h2d_post(ctx, msg, 0u, 0u, NULL, 0u,") == 1 and
+          send_c.count("h2d_post(ctx, H2D_MSG_CFG_CAL,") == 1)
+
+    # -- 12e. task-103: calibration alg set_* config event (g0 id2) --------
+    host_test = open(os.path.join(HERE, "h2d_logic_selftest.c"), "r",
+                encoding="utf-8").read()
+    check("H2D cfg_cal message enum declared",
+          "H2D_MSG_CFG_CAL" in logic_h and "H2D_MSG_CFG_CAL" in logic_c)
+    check("H2D cfg_cal constants declared (298 B frame, key 0x0101, 270 B blob)",
+          all(k in logic_h for k in (
+              "H2D_CAL_TOTAL", "H2D_CAL_KEY", "H2D_CAL_BLOB_LEN",
+              "H2D_CAL_VALUE_OFF", "H2D_CAL_NEED_W4_OFF",
+              "H2D_CAL_NEED_W4", "H2D_CAL_CFG_FIRST", "H2D_CAL_CFG_LAST",
+              "H2D_CAL_CFG_PROBE", "H2D_CAL_FB_DEFAULT")) and
+          "298u" in logic_h and "0x0101u" in logic_h and
+          "270u" in logic_h and "3502u" in logic_h and
+          "3507u" in logic_h and "0x04u" in logic_h)
+    check("H2D cfg_cal builders + extended build + sysfs parser declared",
+          all(fn in logic_h for fn in (
+              "int h2d_build_cfg_cal(", "int h2d_build_cfg_cal_raw(",
+              "int h2d_msg_build_ext(", "int h2d_cfg_cal_parse(")))
+    check("H2D cfg_cal builds through the g0 id2 config-event carrier",
+          "h2d_build_g0_cfg_event(f, 2u, dst, 0u, fb, 0u, h2d_cal_token," in logic_c and
+          "H2D_CAL_KEY" in logic_c and
+          "blob[0] = (u8)(cfg_id & 0xffu);" in logic_c and
+          "blob[H2D_CAL_NEED_W4_OFF] = H2D_CAL_NEED_W4;" in logic_c and
+          "blob[2] = 0u;" in logic_c)
+    check("H2D cfg_cal refuses ids outside 3502..3507 and fb > 0x12",
+          "cfg_id < H2D_CAL_CFG_FIRST || cfg_id > H2D_CAL_CFG_LAST" in logic_c and
+          "fb > H2D_CTX_MAX_MODULE" in logic_c)
+    check("H2D cfg_cal value area is parameterisable but bounded",
+          "value_len > H2D_CAL_BLOB_LEN - H2D_CAL_VALUE_OFF" in logic_c and
+          "memcpy(blob + H2D_CAL_VALUE_OFF, value, value_len);" in logic_c)
+    check("H2D cfg_cal selected by _ext with cfg id + field B defaults",
+          "case H2D_MSG_CFG_CAL: {" in logic_c and
+          "u16 cal_id = cfg_id ? cfg_id : H2D_CAL_CFG_PROBE;" in logic_c and
+          "H2D_CAL_FB_DEFAULT_UNSET" in logic_c)
+    check("H2D cfg_cal grammar token + cfg=/fb= options",
+          chr(123) + chr(32) + chr(34) + "cfg_cal" + chr(34) in logic_c and
+          chr(34) + "cfg=" + chr(34) + ", 4" in logic_c and
+          chr(34) + "fb=" + chr(34) + ", 3" in logic_c)
+    check("H2D cfg_cal sysfs parser accepts selector 1..6 / literal id",
+          "int h2d_cfg_cal_parse(const char *buf, u16 *cfg_id, u8 *fb)" in logic_c and
+          "H2D_CAL_CFG_FIRST + v - 1u" in logic_c)
+    check("H2D cfg_cal uses the single builder dispatch entry",
+          "rc = h2d_build_cfg_cal(f, 0u, cal_id, cal_fb, &e);" in logic_c)
+    check("H2D cfg_cal sysfs attribute defined + registered",
+          "DEVICE_ATTR_WO(h2d_cfg_cal)" in send_c and
+          "&dev_attr_h2d_cfg_cal.attr" in send_c)
+    check("H2D cfg_cal goes through h2d_post with cfg id + field B",
+          "h2d_post(ctx, H2D_MSG_CFG_CAL, 0u, 0u, NULL, cfg_id, fb)" in send_c and
+          "h2d_msg_build_ext(msg, dst, user_id, addr, cfg_id, fb, f, wire," in send_c)
+    check("H2D cfg_cal telemetry counter",
+          "h2d_cfg_cal_sent" in send_c and "h2d_cfg_cal_sent" in read("hi5622_hcc.h") and
+          "cfg_cal_sent=%u" in send_c)
+    check("H2D cfg_cal appears in status gates + plan preflight",
+          "cfg_cal=%s" in send_c and "msg=cfg_cal wire_total=" in send_c)
+    check("H2D cfg_cal keeps the single SR-commit call site",
+          send_c.count("hcc_core_sr_commit(") == 1)
+    check("H2D cfg_cal documented as one frame per load budget",
+          "The calibration config event (g0 id2, key 0x0101" in send_c and
+          "h2d_send_budget" in send_c)
+    check("host logic selftest covers cfg_cal",
+          "expected_cfg_cal" in host_test and "test_cfg_cal" in host_test and
+          "cfg_cal parse" in host_test and "cfg_cal gate" in host_test)
+    check("h2d_send grammar doc mentions cfg_cal",
+          "cfg_cal [cfg=N] [fb=M]" in logic_h and
+          "h2d_cfg_cal (WO)" in logic_h)
 
     # -- 12b. version parity with the reference driver tree -----------------
     ref = os.path.normpath(os.path.join(CLEAN, "..", "wifi-driver-clean",

@@ -34,6 +34,8 @@
  *                              (ctx+0x190) the key-0xd8 TXQ worker dereferences
  *   edca        group 0 id 0x1d hmac_edca_opt_timeout_fn, zeroed 0x3c payload
  *   del_user    group 0 id 9   hmac_del_user_notify_dmac, 12-byte payload
+	*   cfg_cal     group 0 id 2   calibration config event (key 0x0101,
+	*                              270-byte alg_cfg blob; cfg id 3502..3507)
  */
 #ifndef H2D_SEND_LOGIC_H
 #define H2D_SEND_LOGIC_H
@@ -51,6 +53,7 @@ enum h2d_msg {
 	H2D_MSG_CTX_CREATE,	/* g0 id1 key0x64, data[0]=type 3 (the default) */
 	H2D_MSG_CTX_CREATE_T1,	/* same frame, data[0]=type 1 (defaults+2nd alloc) */
 	H2D_MSG_CTX_CREATE_T2,	/* same frame, data[0]=type 2 (defaults) */
+	H2D_MSG_CFG_CAL,	/* g0 id2 key 0x0101, 270-byte calibration blob */
 	H2D_MSG_COUNT,
 };
 
@@ -75,6 +78,28 @@ enum h2d_msg {
 #define H2D_CTX_VAP		4u
 #define H2D_CTX_USER		4u
 #define H2D_CTX_MAX_MODULE	0x12u	/* module table index bound */
+
+/* The six vendor calibration alg set_* config events (wifi-proto-seq lane,
+ * task-103): HCC group 0 / id 2, config key 0x0101, alg_cfg blob of a fixed
+ * 270 bytes; frame total 298 B; node length = declared total.
+ *   blob[0..1] u16 cfg id, [2] u8 type (0=SET), [3] u8 pkt_type,
+ *   [4..7] u32 dev_ret (0), [8] u8 need_w4 = 1, [9] u8 resv,
+ *   [10..] value area (zero-valued structural probe; command-specific size).
+ * cfg ids: 3502 2g power, 3503 2g low power, 3504 5g power, 3505 5g low
+ * power, 3506 xo ppm cali, 3507 rssi.  Selector values 1..6 map to that
+ * vendor order; 3502..3507 are accepted literally. */
+#define H2D_CAL_TOTAL		298u
+#define H2D_CAL_KEY		0x0101u
+#define H2D_CAL_BLOB_LEN	270u
+#define H2D_CAL_VALUE_OFF	10u
+#define H2D_CAL_NEED_W4_OFF	8u	/* blob offset of the need_w4 byte */
+#define H2D_CAL_NEED_W4		1u
+#define H2D_CAL_CFG_FIRST	3502u
+#define H2D_CAL_CFG_LAST	3507u
+#define H2D_CAL_CFG_PROBE	3507u	/* set_rssi_param: first C1 bench fire */
+#define H2D_CAL_CFG_COUNT	6u
+#define H2D_CAL_FB_DEFAULT	0x04u	/* the module the context-create made */
+#define H2D_CAL_FB_DEFAULT_UNSET 0xffu	/* selector sentinel: use the default */
 
 /* Gate refusal reasons; H2D_GATE_OK == 0 is the only allowed value. */
 enum h2d_gate {
@@ -121,6 +146,10 @@ struct h2d_req {
 	u16		user_id;	/* H2D_MSG_DEL_USER */
 	bool		has_addr;
 	u8		addr[4];	/* H2D_MSG_DEL_USER, user_id 0x0fff */
+	bool	has_cfg;
+	u16	cfg_id;	/* H2D_MSG_CFG_CAL: 3502..3507 */
+	bool	has_fb;
+	u8	fb;	/* H2D_MSG_CFG_CAL: header field B (module) */
 };
 
 /* Gate evaluation, in the documented order (see REPORT.md sec 3). */
@@ -157,10 +186,40 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 int h2d_build_ctx_create(struct h2d_frame *f, u8 dst, u8 ctx_type, u8 vap,
 			 u8 user, enum h2d_err *err);
 
+/* The calibration config event (wifi-proto-seq lane, task-103): group 0 /
+ * id 2, key 0x0101, fixed 270-byte alg_cfg blob with cfg_type SET, dev_ret 0,
+ * need_w4 = 1 and a zero value area (the structural probe).  cfg_id must be
+ * one of 3502..3507; fb is the header field B (module/vap selector, 0..0x12;
+ * 4 = the module the type-1 context-create created).  EXACT builder. */
+int h2d_build_cfg_cal(struct h2d_frame *f, u8 dst, u16 cfg_id, u8 fb,
+		  enum h2d_err *err);
+
+/* Same, with an explicit value area (len <= 260; the blob is zero-padded).
+ * value may be NULL for the structural probe. */
+int h2d_build_cfg_cal_raw(struct h2d_frame *f, u8 dst, u16 cfg_id, u8 fb,
+		  const u8 *value, u16 value_len,
+		  enum h2d_err *err);
+
+/* Extended build: cfg_id == 0 selects H2D_CAL_CFG_PROBE and fb == 0xff the
+ * default field B for H2D_MSG_CFG_CAL (ignored for every other message).
+ * h2d_msg_build() is the shorthand with both sentinels. */
+int h2d_msg_build_ext(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
+		      u16 cfg_id, u8 fb, struct h2d_frame *f, u8 *wire,
+		      u32 cap, u32 *total, enum h2d_err *err);
+
+/* Strict h2d_cfg_cal sysfs grammar: "N" | "N fb=M" | "N,M" | "N:M" where N is
+ * a 1..6 vendor-order selector or a literal cfg id 3502..3507, and M is the
+ * header field B (0..0x12).  Defaults: fb = 4.  Returns 0, -EINVAL/-ERANGE. */
+int h2d_cfg_cal_parse(const char *buf, u16 *cfg_id, u8 *fb);
+
 /* Strict sysfs grammar:
  *   h2d_send: "txq_sync" | "txq_sync72" | "ctx_create" | "ctx_create_t1" |
  *             "ctx_create_t2" | "stub [dst=N]" | "edca [dst=N]" |
  *             "del_user user=U [addr=8hex] [dst=N]"
+	*             "cfg_cal [cfg=N] [fb=M]"   (N 1..6 or 3502..3507, M 0..0x12)
+	*   h2d_cfg_cal (WO): "N" | "N fb=M"   (same N/M grammar;
+	*             header field B defaults to 4 = the module the
+	*             ordered context-create made)
  * Commas/tabs/newlines are separators; "txq_sync dst=0" is the only accepted
  * TXQ form (the canned frame is byte-exact with dst 0) and "ctx_create dst=0"
  * the only accepted context-create form.  The three ctx_create variants are

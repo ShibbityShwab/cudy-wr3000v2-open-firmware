@@ -176,7 +176,7 @@ static void h2d_hex(const u8 *p, u32 len, char *out, size_t cap)
 /* the send path                                                       */
 /* ------------------------------------------------------------------ */
 static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
-		    u16 user_id, const u8 *addr)
+		    u16 user_id, const u8 *addr, u16 cfg_id, u8 fb)
 {
 	struct hi5622_hcc_service *h;
 	struct device *dev;
@@ -216,7 +216,7 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 	}
 
 	/* 1. Exact frame build + full policy validation (no device access). */
-	if (h2d_msg_build(msg, dst, user_id, addr, f, wire,
+	if (h2d_msg_build_ext(msg, dst, user_id, addr, cfg_id, fb, f, wire,
 			  HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr) != 0) {
 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
 		dev_warn(dev, "H2D %s: frame refused by the exact builder/validator (%s); no device write performed\n",
@@ -318,6 +318,8 @@ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
 		h->h2d_txq_sync_sent++;
 	else if (h2d_msg_is_ctx(msg))
 		h->h2d_ctx_create_sent++;
+	else if (msg == H2D_MSG_CFG_CAL)
+		h->h2d_cfg_cal_sent++;
 	h->h2d_last_msg = (u32)msg;
 	h->h2d_last_gate = (u32)H2D_GATE_OK;
 	h->h2d_last_total = total;
@@ -374,7 +376,8 @@ static ssize_t h2d_txq_sync_store(struct device *dev,
 	if (!sysfs_streq(buf, "1"))
 		return -EINVAL;
 	/* The canned vendor first post-ready frame is byte-exact with dst 0. */
-	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC, 0u, 0u, NULL);
+	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC, 0u, 0u, NULL, 0u,
+			H2D_CAL_FB_DEFAULT_UNSET);
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_txq_sync);
@@ -392,7 +395,8 @@ static ssize_t h2d_txq_sync72_store(struct device *dev,
 		return -ENODEV;
 	if (!sysfs_streq(buf, "1"))
 		return -EINVAL;
-	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC72, 0u, 0u, NULL);
+	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC72, 0u, 0u, NULL, 0u,
+			H2D_CAL_FB_DEFAULT_UNSET);
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_txq_sync72);
@@ -426,10 +430,47 @@ static ssize_t h2d_ctx_create_store(struct device *dev,
 		msg = H2D_MSG_CTX_CREATE;
 	else
 		return -EINVAL;
-	ret = h2d_post(ctx, msg, 0u, 0u, NULL);
+	ret = h2d_post(ctx, msg, 0u, 0u, NULL, 0u,
+			H2D_CAL_FB_DEFAULT_UNSET);
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_ctx_create);
+
+/* The calibration config event (g0 id2, key 0x0101; wifi-proto-seq lane,
+ * task-103): the SIX vendor alg set_* messages.  One frame per load by
+ * default (h2d_send_budget; raise only for a supervised multi-message run).
+ * Write value: N | "N fb=M" where N = 1..6 in vendor script order
+ * (1=2g power 3502, 2=2g low 3503, 3=5g power 3504, 4=5g low 3505,
+ * 5=xo ppm cali 3506, 6=rssi 3507) or a literal cfg id 3502..3507, and M is
+ * the header field B (module/vap selector, 0..0x12; default 4 = the module
+ * the ordered type-1 context-create made; 0 and 0x12 are later-boot
+ * fallbacks).  The frame is 298 B (270-byte alg_cfg blob, cfg_type SET,
+ * dev_ret 0, need_w4 1, zero value area) in an SR node of the declared
+ * total; the expected D2H answer is one 298-byte g1 id3 config-syn frame
+ * with syn_id 0x0101 and the cfg id echoed.  Same gates as the other
+ * frames: latched boot, released, armed, READY_TXQ_SYNC/ACTIVE, lane open,
+ * previous announce consumed, per-load budget. */
+static ssize_t h2d_cfg_cal_store(struct device *dev,
+			 struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct hi5622_pci *ctx = h2d_ctx(dev);
+	u16 cfg_id = 0;
+	u8 fb = H2D_CAL_FB_DEFAULT_UNSET;
+	int ret;
+
+	if (!ctx || !ctx->hcc)
+		return -ENODEV;
+	ret = h2d_cfg_cal_parse(buf, &cfg_id, &fb);
+	if (ret) {
+		ctx->hcc->h2d_send_refused++;
+		dev_warn(dev, "H2D cfg_cal: grammar rejected (%d); write N or N fb=M with N=1..6 (vendor order: 1=2g power 2=2g low 3=5g power 4=5g low 5=xo ppm 6=rssi) or 3502..3507, M=header field B 0..0x12 default 4\n", ret);
+		return ret;
+	}
+	ret = h2d_post(ctx, H2D_MSG_CFG_CAL, 0u, 0u, NULL, cfg_id, fb);
+	return ret ? ret : (ssize_t)count;
+}
+static DEVICE_ATTR_WO(h2d_cfg_cal);
 
 static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
 			      const char *buf, size_t count)
@@ -448,7 +489,9 @@ static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
 		return ret;
 	}
 	ret = h2d_post(ctx, req.msg, req.dst, req.user_id,
-		       req.has_addr ? req.addr : NULL);
+		       req.has_addr ? req.addr : NULL,
+		       req.has_cfg ? req.cfg_id : 0u,
+		       req.has_fb ? req.fb : H2D_CAL_FB_DEFAULT_UNSET);
 	return ret ? ret : (ssize_t)count;
 }
 static DEVICE_ATTR_WO(h2d_send);
@@ -471,9 +514,9 @@ static ssize_t h2d_status_show(struct device *dev,
 	core = &h->hcc.core;
 	h2d_live_fill(ctx, &live);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "H2D send path (real post-ready messages, one frame per idea): budget=%u frames_sent=%u txq_sent=%u ctx_sent=%u\n",
+			 "H2D send path (real post-ready messages, one frame per idea): budget=%u frames_sent=%u txq_sent=%u ctx_sent=%u cfg_cal_sent=%u\n",
 			 h2d_budget(), h->h2d_frames_sent, h->h2d_txq_sync_sent,
-			 h->h2d_ctx_create_sent);
+			 h->h2d_ctx_create_sent, h->h2d_cfg_cal_sent);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
 			 "state: armed=%u released=%u boot_latched=%u phase=%s lane_closed=%u liveness_used=%u ctx_created=%u\n",
 			 live.armed ? 1u : 0u, live.released ? 1u : 0u,
@@ -482,13 +525,14 @@ static ssize_t h2d_status_show(struct device *dev,
 			 live.lane_closed ? 1u : 0u,
 			 live.liveness_sent, live.ctx_created ? 1u : 0u);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
-			 "gates: txq_sync=%s txq_sync72=%s ctx_create(t1/t2/t3)=%s/%s/%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
+			 "gates: txq_sync=%s txq_sync72=%s ctx_create(t1/t2/t3)=%s/%s/%s real_msg=%s cfg_cal=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC72)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T1)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T2)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)),
 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_EDCA_OPT)),
+			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CFG_CAL)),
 			 live.out0, live.mbox_inflight);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
 			 "counters: ok=%llu timeout=%llu refused=%llu desync=%u last_out0=0x%08x max_polls=%u\n",
@@ -592,6 +636,28 @@ static ssize_t h2d_plan_show(struct device *dev, struct device_attribute *attr,
 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
 				 "ctx_create variants: ctx_create_t1/t2 = the same 48-byte frame with data[0] (wire[24]) = 1 / 2; h2d_ctx_create write VALUE selects the type (1|2|3)\n");
 	}
+	/* The C1 calibration probe: one 298-byte g0 id2 key-0x0101 frame */
+	rc = h2d_msg_build_ext(H2D_MSG_CFG_CAL, 0u, 0u, NULL, 0u,
+			H2D_CAL_FB_DEFAULT_UNSET, f, wire,
+			HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr);
+	if (rc) {
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+			 "h2d_plan: canned cfg_cal frame build FAILED (%s)\n",
+			 h2d_strerror(herr));
+	} else {
+		u32 nlen = 0;
+		u8 padb = 0;
+		u32 nword = 0u;
+
+		if (h2d_msg_emit_plan(H2D_MSG_CFG_CAL, total, &nlen, &padb) == 0)
+			nword = (nlen << 16) | H2D_NODE_FLAGS;
+		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+			 "msg=cfg_cal wire_total=%u node_len=%u node_word1=0x%08x header=%02x%02x%02x%02x key=0x%04x blob_len=%u cfg_id=%u fb=%u\n",
+			 total, nlen, nword, wire[0], wire[1], wire[2], wire[3],
+			 (unsigned)(wire[20] | (wire[21] << 8)),
+			 (unsigned)(wire[22] | (wire[23] << 8)),
+			 (unsigned)(wire[24] | (wire[25] << 8)), (unsigned)wire[3]);
+	}
 	h2d_live_fill(ctx, &live);
 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
 			 "gate ctx_create(t1/t2/t3)=%s/%s/%s (READY-only, once per load; create -> read-only pack -> txq_sync72 needs h2d_send_budget=2 on the load)\n",
@@ -656,6 +722,7 @@ static struct attribute *hi5622_h2d_attrs[] = {
 	&dev_attr_h2d_txq_sync.attr,
 	&dev_attr_h2d_txq_sync72.attr,
 	&dev_attr_h2d_ctx_create.attr,
+	&dev_attr_h2d_cfg_cal.attr,
 	&dev_attr_h2d_send.attr,
 	&dev_attr_h2d_status.attr,
 	&dev_attr_h2d_plan.attr,

@@ -81,6 +81,19 @@ static const u8 h2d_ctx_tail[4] = { 0xff, 0xff, 0xff, 0xff };
 #define H2D_CTX_FA	0x00u
 #define H2D_CTX_FC	0x00u
 
+/* ------------------------------------------------------------------ */
+/* calibration config events (g0 id2, key 0x0101) - wifi-proto-seq     */
+/* ------------------------------------------------------------------ */
+
+/* The vendor alg set_* config events all carry the same zero token[8] and a
+ * zero 4-byte tail (the vendor leaves the tail uninitialised; zero is the
+ * safe structural value).  The 270-byte alg_cfg blob is built in
+ * h2d_build_cfg_cal_raw: cfg id, SET type, dev_ret 0, need_w4 1, value at
+ * blob+10 (fixed by the firmware equipment-param handlers; wifi-proto-seq
+ * REPORT.md sec 5.2). */
+static const u8 h2d_cal_token[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+static const u8 h2d_cal_tail[4] = { 0, 0, 0, 0 };
+
 /* hmac_edca_opt_timeout_fn live steady-state frame: group-0 id 0x1d, fa=0,
  * fb=4, fc=0, 0x3c-byte zero payload (wifi-h2d-frames REPORT 4.2(d) [V]). */
 #define H2D_EDCA_FA	0x00u
@@ -96,11 +109,12 @@ const char *h2d_msg_name(enum h2d_msg msg)
 	case H2D_MSG_STUB:	return "stub";
 	case H2D_MSG_TXQ_SYNC:	return "txq_sync";
 	case H2D_MSG_TXQ_SYNC72:	return "txq_sync72";
-	case H2D_MSG_EDCA_OPT:	return "edca";
+case H2D_MSG_EDCA_OPT:	return "edca";
 	case H2D_MSG_DEL_USER:	return "del_user";
 	case H2D_MSG_CTX_CREATE:	return "ctx_create";
 	case H2D_MSG_CTX_CREATE_T1:	return "ctx_create_t1";
 	case H2D_MSG_CTX_CREATE_T2:	return "ctx_create_t2";
+	case H2D_MSG_CFG_CAL:		return "cfg_cal";
 	default:		return "?";
 	}
 }
@@ -145,6 +159,7 @@ int h2d_msg_name_parse(const char *name, enum h2d_msg *msg)
 		{ "ctx_create",	H2D_MSG_CTX_CREATE },
 		{ "ctx_create_t1",	H2D_MSG_CTX_CREATE_T1 },
 		{ "ctx_create_t2",	H2D_MSG_CTX_CREATE_T2 },
+		{ "cfg_cal",	H2D_MSG_CFG_CAL },
 		{ "stub",	H2D_MSG_STUB },
 		{ "edca",	H2D_MSG_EDCA_OPT },
 		{ "del_user",	H2D_MSG_DEL_USER },
@@ -271,9 +286,64 @@ int h2d_build_ctx_create(struct h2d_frame *f, u8 dst, u8 ctx_type, u8 vap,
 				      data, (u16)sizeof(data), h2d_ctx_tail, err);
 }
 
+/* The calibration config event: group 0 / id 2, key 0x0101, fixed 270-byte
+ * alg_cfg blob.  Only cfg ids 3502..3507 exist for the six factory-cal
+ * commands; every other id belongs to the runtime alg path and is not
+ * modelled here.  fb (header field B) is the module/vap selector the
+ * firmware resolves; 4 = the module the type-1 context-create created.
+ * The value area is zero for the structural probe; per-unit calibration
+ * values are injected through h2d_build_cfg_cal_raw (never committed). */
+int h2d_build_cfg_cal_raw(struct h2d_frame *f, u8 dst, u16 cfg_id, u8 fb,
+		  const u8 *value, u16 value_len,
+		  enum h2d_err *err)
+{
+	u8 blob[H2D_CAL_BLOB_LEN];
+
+	if (cfg_id < H2D_CAL_CFG_FIRST || cfg_id > H2D_CAL_CFG_LAST) {
+		if (err)
+			*err = H2D_EARG;
+		return -1;
+	}
+	if (fb > H2D_CTX_MAX_MODULE) {
+		if (err)
+			*err = H2D_EBOUNDS;
+		return -1;
+	}
+	if (value_len > H2D_CAL_BLOB_LEN - H2D_CAL_VALUE_OFF) {
+		if (err)
+			*err = H2D_EBOUNDS;
+		return -1;
+	}
+	memset(blob, 0, sizeof(blob));
+	blob[0] = (u8)(cfg_id & 0xffu);
+	blob[1] = (u8)((cfg_id >> 8) & 0xffu);
+	blob[2] = 0u;	/* cfg_type = SET */
+	blob[3] = 0u;	/* pkt_type = irrelevant */
+	blob[H2D_CAL_NEED_W4_OFF] = H2D_CAL_NEED_W4;	/* device answers */
+	if (value && value_len)
+		memcpy(blob + H2D_CAL_VALUE_OFF, value, value_len);
+	return h2d_build_g0_cfg_event(f, 2u, dst, 0u, fb, 0u, h2d_cal_token,
+			      H2D_CAL_KEY, blob, (u16)sizeof(blob),
+			      h2d_cal_tail, err);
+}
+
+int h2d_build_cfg_cal(struct h2d_frame *f, u8 dst, u16 cfg_id, u8 fb,
+		  enum h2d_err *err)
+{
+	return h2d_build_cfg_cal_raw(f, dst, cfg_id, fb, NULL, 0u, err);
+}
 int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 		  struct h2d_frame *f, u8 *wire, u32 cap, u32 *total,
 		  enum h2d_err *err)
+{
+	return h2d_msg_build_ext(msg, dst, user_id, addr, 0u,
+			   H2D_CAL_FB_DEFAULT_UNSET, f, wire, cap, total, err);
+}
+
+int h2d_msg_build_ext(enum h2d_msg msg, u8 dst, u16 user_id,
+		      const u8 *addr, u16 cfg_id, u8 fb,
+		      struct h2d_frame *f, u8 *wire, u32 cap, u32 *total,
+		      enum h2d_err *err)
 {
 	size_t wire_len = 0;
 	enum h2d_err e = H2D_OK;
@@ -333,6 +403,20 @@ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
 			ctx_type = 2u;
 		rc = h2d_build_ctx_create(f, 0u, ctx_type, H2D_CTX_VAP,
 					  H2D_CTX_USER, &e);
+		break;
+	}
+	case H2D_MSG_CFG_CAL: {
+		u16 cal_id = cfg_id ? cfg_id : H2D_CAL_CFG_PROBE;
+		u8 cal_fb = (fb == H2D_CAL_FB_DEFAULT_UNSET) ?
+			H2D_CAL_FB_DEFAULT : fb;
+
+		/* The bench frame is byte-exact with dst 0. */
+		if (dst != 0u) {
+			if (err)
+				*err = H2D_EPOLICY;
+			return -1;
+		}
+		rc = h2d_build_cfg_cal(f, 0u, cal_id, cal_fb, &e);
 		break;
 	}
 	case H2D_MSG_EDCA_OPT:
@@ -481,6 +565,52 @@ static int h2d_parse_hex_addr(const char **pp, u8 addr[4])
 	return 0;
 }
 
+/* Strict h2d_cfg_cal sysfs grammar: "N" | "N fb=M" | "N,M" | "N:M".
+ * N = 1..6 vendor-order selector or a literal cfg id 3502..3507;
+ * M = header field B (module/vap selector, 0..0x12); default fb = 4. */
+int h2d_cfg_cal_parse(const char *buf, u16 *cfg_id, u8 *fb)
+{
+	const char *p = buf;
+	u16 id;
+	u8 out_fb = H2D_CAL_FB_DEFAULT;
+	u32 v;
+	int rc;
+
+	if (!buf || !cfg_id || !fb)
+		return -EINVAL;
+	while (h2d_sep(*p))
+		p++;
+	rc = h2d_parse_u32(&p, 0xffffu, &v);
+	if (rc)
+		return rc;
+	if (v >= 1u && v <= H2D_CAL_CFG_COUNT)
+		id = (u16)(H2D_CAL_CFG_FIRST + v - 1u);
+	else if (v >= H2D_CAL_CFG_FIRST && v <= H2D_CAL_CFG_LAST)
+		id = (u16)v;
+	else
+		return -EINVAL;
+	if (*p && !h2d_sep(*p))
+		return -EINVAL;
+	while (h2d_sep(*p))
+		p++;
+	if (*p) {
+		if (!strncmp(p, "fb=", 3))
+			p += 3;
+		rc = h2d_parse_u32(&p, H2D_CTX_MAX_MODULE, &v);
+		if (rc)
+			return rc;
+		out_fb = (u8)v;
+		if (*p && !h2d_sep(*p))
+			return -EINVAL;
+		while (h2d_sep(*p))
+			p++;
+		if (*p)
+			return -EINVAL;
+	}
+	*cfg_id = id;
+	*fb = out_fb;
+	return 0;
+}
 int h2d_req_parse(const char *buf, struct h2d_req *req)
 {
 	const char *p = buf, *name;
@@ -538,6 +668,29 @@ int h2d_req_parse(const char *buf, struct h2d_req *req)
 			if (rc)
 				return rc;
 			req->has_addr = true;
+		} else if (msg == H2D_MSG_CFG_CAL &&
+			   !strncmp(p, "cfg=", 4)) {
+			p += 4;
+			rc = h2d_parse_u32(&p, 0xffffu, &v);
+			if (rc)
+				return rc;
+			if (v >= 1u && v <= H2D_CAL_CFG_COUNT) {
+				req->cfg_id = (u16)(H2D_CAL_CFG_FIRST + v - 1u);
+			} else if (v >= H2D_CAL_CFG_FIRST &&
+				   v <= H2D_CAL_CFG_LAST) {
+				req->cfg_id = (u16)v;
+			} else {
+				return -EINVAL;
+			}
+			req->has_cfg = true;
+		} else if (msg == H2D_MSG_CFG_CAL &&
+			   !strncmp(p, "fb=", 3)) {
+			p += 3;
+			rc = h2d_parse_u32(&p, H2D_CTX_MAX_MODULE, &v);
+			if (rc)
+				return rc;
+			req->has_fb = true;
+			req->fb = (u8)v;
 		} else {
 			return -EINVAL;
 		}
@@ -547,7 +700,8 @@ int h2d_req_parse(const char *buf, struct h2d_req *req)
 	if (msg == H2D_MSG_DEL_USER && !req->has_user)
 		return -EINVAL;
 	if ((msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72 ||
-	     h2d_msg_is_ctx(msg)) && req->dst != 0u)
+	     h2d_msg_is_ctx(msg) || msg == H2D_MSG_CFG_CAL) &&
+	    req->dst != 0u)
 		return -EINVAL;
 	return 0;
 }

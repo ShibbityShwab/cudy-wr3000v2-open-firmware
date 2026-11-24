@@ -8,8 +8,8 @@
  *   - the byte-exact emission vectors (txq_sync 48 B wire / 72 B capture,
  *     txq_sync72 same wire with a 72 B node length, the ordered ctx_create
  *     g0 id1 key-0x64 precondition in its three create-helper type variants
- *     t1/t2/t3, stub, edca, del_user),
- *     including the SR node word (total<<16)|0x6D2B and the packed producer
+ *     t1/t2/t3, stub, edca, del_user, the 298-byte g0 id2 calibration
+ *     config event cfg_cal), including the SR node word (total<<16)|0x6D2B
  *     arithmetic via h2d_plan_post();
  *   - the gate matrix (phase, latched boot, release, arm, lane, liveness,
  *     per-load budget, announce in-flight, live out[0] pending, duplicate TXQ);
@@ -133,6 +133,29 @@ static void expected_edca(u8 out[72])
 	memcpy(out, hdr, sizeof(hdr));
 }
 
+/* The 298-byte calibration config event: g0 id2, key 0x0101, 270-byte
+ * alg_cfg blob (cfg id, SET type 0, pkt 0, dev_ret 0, need_w4 1 at blob+8,
+ * zero value area), zero inherited tail.  wifi-proto-seq lane task-103. */
+static void expected_cfg_cal(u8 out[H2D_CAL_TOTAL], u16 cfg_id, u8 fb)
+{
+	u8 hdr[12] = {
+		/* group 0, byte1 = (dst 0 << 4) | alloc 1, fa 0, fb,
+		 * total 0x012a, id 2, fc 0, dst 0, tag 0x5a5a */
+		0x00, 0x01, 0x00, fb, 0x2a, 0x01,
+		0x02, 0x00, 0x00, 0x00, 0x5a, 0x5a,
+	};
+
+	memset(out, 0, H2D_CAL_TOTAL);
+	memcpy(out, hdr, sizeof(hdr));
+	/* payload: token[8] | key 0x0101 | len 0x010e | blob[270] | tail[4] */
+	out[12 + 8] = 0x01;
+	out[12 + 9] = 0x01;
+	out[12 + 10] = (u8)(H2D_CAL_BLOB_LEN & 0xffu);
+	out[12 + 11] = (u8)((H2D_CAL_BLOB_LEN >> 8) & 0xffu);
+	out[12 + 12] = (u8)(cfg_id & 0xffu);
+	out[12 + 13] = (u8)((cfg_id >> 8) & 0xffu);
+	out[12 + 12 + H2D_CAL_NEED_W4_OFF] = H2D_CAL_NEED_W4;
+}
 static void expected_stub(u8 out[12], u8 dst)
 {
 	static const u8 hdr[12] = {
@@ -496,7 +519,8 @@ static void test_emission(void)
 		      h2d_strerror(err));
 		check("emission group 0 only", g.group == 0, "");
 		check("emission id is an exact-builder id",
-		      g.id == 0 || g.id == 1 || g.id == 0x1d || g.id == 9, "");
+		      g.id == 0 || g.id == 1 || g.id == 2 || g.id == 0x1d ||
+		      g.id == 9, "");
 		check("emission tag 0x5a5a", w[10] == 0x5a && w[11] == 0x5a,
 		      "");
 		check("emission declared total == wire length",
@@ -514,6 +538,180 @@ static void test_emission(void)
 /* ------------------------------------------------------------------ */
 /* gate matrix                                                         */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* calibration config event (g0 id2, key 0x0101) - wifi-proto-seq       */
+/* ------------------------------------------------------------------ */
+static void test_cfg_cal(void)
+{
+	struct h2d_frame f;
+	struct h2d_req req;
+	struct h2d_live live;
+	u8 wire[H2D_MAX_TOTAL];
+	u8 want[H2D_CAL_TOTAL];
+	u32 total = 0, node_len = 0;
+	u8 pad = 0;
+	u16 id = 0;
+	u8 fb = 0;
+	enum h2d_err err = H2D_OK;
+	size_t i;
+	int zero = 1;
+
+	/* 1. the default (first C1 bench fire): set_rssi_param 3507, field B 4 */
+	check("cfg_cal: build ok",
+		      h2d_msg_build(H2D_MSG_CFG_CAL, 0, 0, NULL, &f, wire,
+			    sizeof(wire), &total, &err) == 0, h2d_strerror(err));
+	check("cfg_cal: frame total 298 B", total == H2D_CAL_TOTAL, "");
+	expected_cfg_cal(want, H2D_CAL_CFG_PROBE, H2D_CAL_FB_DEFAULT);
+	expect_bytes("cfg_cal: byte-exact 298-byte frame", wire, total,
+		     want, sizeof(want));
+	check("cfg_cal: is group 0 id 2", f.group == 0 && f.id == 2, "");
+	check("cfg_cal: header tag 0x5a5a", wire[10] == 0x5a && wire[11] == 0x5a, "");
+	check("cfg_cal: key 0x0101 at payload+8",
+		      (u32)(wire[20] | (wire[21] << 8)) == H2D_CAL_KEY, "");
+	check("cfg_cal: len field = 270",
+		      (u32)(wire[22] | (wire[23] << 8)) == H2D_CAL_BLOB_LEN, "");
+	check("cfg_cal: cfg id 3507 little-endian",
+		      wire[24] == 0xb3 && wire[25] == 0x0d, "");
+	check("cfg_cal: cfg_type SET / pkt_type 0",
+		      wire[26] == 0x00 && wire[27] == 0x00, "");
+	check("cfg_cal: need_w4 = 1 at blob+8",
+		      wire[12 + 12 + H2D_CAL_NEED_W4_OFF] == H2D_CAL_NEED_W4, "");
+	for (i = 12 + 12 + H2D_CAL_VALUE_OFF; i < H2D_CAL_TOTAL - 4; i++)
+		if (wire[i])
+			zero = 0;
+	check("cfg_cal: value area is the zero structural probe", zero, "");
+	check("cfg_cal: inherited tail is zero",
+		      wire[H2D_CAL_TOTAL - 4] == 0 && wire[H2D_CAL_TOTAL - 1] == 0, "");
+	check("cfg_cal: node_len == frame total",
+		      h2d_msg_emit_plan(H2D_MSG_CFG_CAL, total, &node_len, &pad) == 0 &&
+		      node_len == H2D_CAL_TOTAL && pad == 0x00, "");
+	check("cfg_cal: SR node word1 = 0x012a6d2b",
+		      ((node_len << 16) | H2D_NODE_FLAGS) == 0x012a6d2bu, "");
+
+	/* 2. the other five cfg ids are selectable (vendor order 1..6) and the
+	 * header field B is a parameter (default 4; fallbacks 0 / 0x12). */
+	check("cfg_cal: cfg=3502 fb=0 builds",
+		      h2d_msg_build_ext(H2D_MSG_CFG_CAL, 0, 0, NULL, 3502u, 0u, &f,
+		                       wire, sizeof(wire), &total, &err) == 0 &&
+		      wire[24] == 0xae && wire[25] == 0x0d && wire[3] == 0x00 &&
+		      total == H2D_CAL_TOTAL, h2d_strerror(err));
+	check("cfg_cal: cfg=3506 fb=0x12 builds",
+		      h2d_msg_build_ext(H2D_MSG_CFG_CAL, 0, 0, NULL, 3506u, 0x12u, &f,
+		                       wire, sizeof(wire), &total, &err) == 0 &&
+		      wire[24] == 0xb2 && wire[25] == 0x0d && wire[3] == 0x12,
+		      h2d_strerror(err));
+	check("cfg_cal: builder refuses cfg 3501",
+		      h2d_build_cfg_cal(&f, 0, 3501u, 4u, &err) != 0, "");
+	check("cfg_cal: builder refuses cfg 3508",
+		      h2d_build_cfg_cal(&f, 0, 3508u, 4u, &err) != 0, "");
+	check("cfg_cal: builder refuses fb > 0x12",
+		      h2d_build_cfg_cal(&f, 0, 3507u, 0x13u, &err) != 0, "");
+	check("cfg_cal: raw builder accepts a value area",
+		      h2d_build_cfg_cal_raw(&f, 0, 3507u, 4u, (const u8 *)"abcd", 4u,
+		                            &err) == 0, h2d_strerror(err));
+	check("cfg_cal: raw builder refuses value > 260",
+		      h2d_build_cfg_cal_raw(&f, 0, 3507u, 4u, wire, 261u, &err) != 0, "");
+
+	/* 3. the strict h2d_cfg_cal sysfs grammar */
+	check("cfg_cal parse: '6' -> 3507 fb 4",
+		      h2d_cfg_cal_parse("6", &id, &fb) == 0 &&
+		      id == 3507u && fb == H2D_CAL_FB_DEFAULT, "");
+	check("cfg_cal parse: '1' -> 3502",
+		      h2d_cfg_cal_parse("1", &id, &fb) == 0 && id == 3502u, "");
+	check("cfg_cal parse: literal cfg id + fb",
+		      h2d_cfg_cal_parse("3505 fb=0", &id, &fb) == 0 &&
+		      id == 3505u && fb == 0u, "");
+	check("cfg_cal parse: comma form N,M",
+		      h2d_cfg_cal_parse("6,18", &id, &fb) == 0 &&
+		      id == 3507u && fb == 0x12u, "");
+	check("cfg_cal parse: rejects selector 7",
+		      h2d_cfg_cal_parse("7", &id, &fb) != 0, "");
+	check("cfg_cal parse: rejects selector 0",
+		      h2d_cfg_cal_parse("0", &id, &fb) != 0, "");
+	check("cfg_cal parse: rejects fb 0x13",
+		      h2d_cfg_cal_parse("3507 fb=19", &id, &fb) != 0, "");
+	check("cfg_cal parse: rejects trailing junk",
+		      h2d_cfg_cal_parse("3507 xyz", &id, &fb) != 0, "");
+
+	/* 4. the h2d_send grammar token cfg_cal [cfg=N] [fb=M] */
+	check("h2d_send cfg_cal: bare token",
+		      h2d_req_parse("cfg_cal", &req) == 0 &&
+		      req.msg == H2D_MSG_CFG_CAL && !req.has_cfg && !req.has_fb, "");
+	check("h2d_send cfg_cal: cfg=6",
+		      h2d_req_parse("cfg_cal cfg=6", &req) == 0 && req.has_cfg &&
+		      req.cfg_id == 3507u, "");
+	check("h2d_send cfg_cal: cfg=1 fb=0",
+		      h2d_req_parse("cfg_cal cfg=1 fb=0", &req) == 0 &&
+		      req.cfg_id == 3502u && req.has_fb && req.fb == 0u, "");
+	check("h2d_send cfg_cal: dst=1 rejected",
+		      h2d_req_parse("cfg_cal dst=1", &req) != 0, "");
+	check("h2d_send cfg_cal: cfg=9 rejected",
+		      h2d_req_parse("cfg_cal cfg=9", &req) != 0, "");
+	check("h2d_send cfg_cal: unknown option rejected",
+		      h2d_req_parse("cfg_cal user=1", &req) != 0, "");
+	check("cfg_cal name is registered",
+		      h2d_msg_name(H2D_MSG_CFG_CAL)[0] == 'c', "");
+	{
+		enum h2d_msg m;
+
+		check("cfg_cal token parses to the enum",
+			      h2d_msg_name_parse("cfg_cal", &m) == 0 &&
+			      m == H2D_MSG_CFG_CAL, "");
+	}
+
+	/* 5. gate matrix: same carrier gates as the other real messages; the
+	 * calibration frame is legal in READY_TXQ_SYNC and ACTIVE and may be
+	 * repeated within the per-load budget (the other five ids, C2/C3). */
+	memset(&live, 0, sizeof(live));
+	live.armed = true;
+	live.released = true;
+	live.boot_latched = true;
+	live.phase = HCC_PHASE_READY_TXQ_SYNC;
+	live.budget = 1;
+	check("cfg_cal gate: READY + preconditions -> ok",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_OK, "");
+	memset(&live, 0, sizeof(live));
+	check("cfg_cal gate: not armed",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_NOT_ARMED, "");
+	live.armed = true;
+	check("cfg_cal gate: not released",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_NOT_RELEASED, "");
+	live.released = true;
+	check("cfg_cal gate: not latched",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_NOT_LATCHED, "");
+	live.boot_latched = true;
+	check("cfg_cal gate: phase not ready",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_PHASE, "");
+	live.phase = HCC_PHASE_ACTIVE;
+	live.budget = 6;
+	check("cfg_cal gate: ACTIVE -> ok",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_OK, "");
+	live.frames_sent = 1;
+	check("cfg_cal gate: repeatable within the budget (other cfg ids)",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_OK, "");
+	live.lane_closed = true;
+	check("cfg_cal gate: lane closed",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_LANE_CLOSED, "");
+	live.lane_closed = false;
+	live.liveness_sent = 1;
+	check("cfg_cal gate: liveness probe used",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_LIVENESS_USED, "");
+	live.liveness_sent = 0;
+	live.frames_sent = 6;
+	check("cfg_cal gate: budget exhausted",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_BUDGET, "");
+	live.frames_sent = 1;
+	live.mbox_inflight = 1;
+	check("cfg_cal gate: announce in flight",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_INFLIGHT, "");
+	live.mbox_inflight = 0;
+	live.out0 = 0x08;
+	check("cfg_cal gate: out[0] not consumed",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_OUT0_PENDING, "");
+	live.out0 = 0;
+	check("cfg_cal gate: six-id budget -> ok",
+		      h2d_gate_check(&live, H2D_MSG_CFG_CAL) == H2D_GATE_OK, "");
+}
 static void test_gates(void)
 {
 	struct h2d_live good;
@@ -907,6 +1105,7 @@ int main(void)
 {
 	printf("h2d_send_logic selftest (host, device-free)\n");
 	test_emission();
+	test_cfg_cal();
 	test_gates();
 	test_parser();
 	test_policy();

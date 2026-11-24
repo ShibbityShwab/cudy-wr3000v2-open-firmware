@@ -15,8 +15,8 @@ key-0xd8 worker) and answers the next protocol question: **does the ordered
 create -> TXQ sync pair run without the handler fault?**
 
 **Status: host-only.**  Compile-clean against the project 6.18.60 tree
-(`hi5622_wifi.ko`, **400,732 B**, sha256 `774c4f1f...`, 0 warnings), host
-logic selftest **242/242**, driver selftest **233/233**, firmware-handler
+(`hi5622_wifi.ko`, **407,996 B**, sha256 `2d45e5...`, 0 warnings), host
+logic selftest **301/301**, driver selftest **251/251**, firmware-handler
 analysis 38/38, create-helper type analysis 26/26.  Fired history: task-98 (48-byte node) and task-99
 (72-byte node, PD3 and PD4) TXQ-sync fires faulted in the g0 id1 handler
 (mask 0x12); the payload-free g0 id0 control was consumed in 0 polls with no
@@ -58,9 +58,14 @@ Sysfs surface added to the driver (endpoint device directory):
     h2d_txq_sync72 (WO) "1" -> the same 48 frame bytes, but the SR node
                          declares the vendor's live 72-byte buffer
                          (48 + 24 x 0xff, node word1 (72<<16)|0x6d2b)
+    h2d_cfg_cal    (WO)  N | "N fb=M": ONE calibration alg set_* config
+                         event (g0 id2 key 0x0101, 270-byte blob, 298 B;
+                         N=1..6 vendor order or cfg id 3502..3507; fb =
+                         header field B, default 4).  task-103.
     h2d_send       (WO) txq_sync | txq_sync72 | ctx_create |
                         ctx_create_t1 | ctx_create_t2 | stub [dst=N] |
-                        edca [dst=N] | del_user user=U [addr=8hex] [dst=N]
+                        edca [dst=N] | del_user user=U [addr=8hex] [dst=N] |
+                        cfg_cal [cfg=N] [fb=M]
     h2d_status   (RO)  gate verdicts, phase, budget, ok/timeout counters
     h2d_plan     (RO)  read-only preflight of the canned TXQ sync frame
 

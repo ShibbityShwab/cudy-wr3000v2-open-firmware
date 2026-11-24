@@ -1,4 +1,4 @@
-# BENCH-PROCEDURE - ordered context-create -> TXQ config sync (g0 id1, key 0x64 -> 0xd8)
+# BENCH-PROCEDURE - ordered context-create -> TXQ config sync (g0 id1, key 0x64 -> 0xd8), and the calibration alg set_* C1 ladder (task-103)
 
 Host-only lane deliverable (wifi-h2d-send; task-98 ladder A, task-99 ladder B,
 **task-102 ladder C = the CURRENT procedure**).  This is the attended ladder for
@@ -102,7 +102,7 @@ Each attribute lives in the endpoint device directory
                hcc_events hcc_rings hcc_plan
     hcc:       hcc_sr_announce hcc_cece_kick hcc_dr_republish
     h2d:       h2d_ctx_create (WO)  h2d_txq_sync (WO)  h2d_txq_sync72 (WO)
-               h2d_send (WO)  h2d_status (RO)  h2d_plan (RO)
+               h2d_cfg_cal (WO)  h2d_send (WO)  h2d_status (RO)  h2d_plan (RO)
     d2h:       rd_poll rd_advance rd_status rd_decode rd_catalog
 
 `h2d_send` grammar now also accepts `ctx_create` (type 3) plus the type
@@ -110,6 +110,18 @@ variants `ctx_create_t1` / `ctx_create_t2`.  The WO `h2d_ctx_create` attribute
 takes the **write value 1|2|3 = the create helper's data[0] type** (preferred
 one-shot form; any other value is refused).  The three selectors emit the same
 48-byte frame - only wire byte 24 (data[0]) differs.
+
+The WO h2d_cfg_cal attribute (task-103) fires ONE calibration config event
+(HCC group 0 / id 2, config key 0x0101, 270-byte alg_cfg blob, frame total
+298 B, SR node length = declared total; field B defaults to 4 = the created
+module).  Write value: N or "N fb=M" where N = 1..6 in vendor script order
+(1=2g power 3502, 2=2g low power 3503, 3=5g power 3504, 4=5g low power 3505,
+5=xo ppm cali 3506, 6=rssi 3507) or a literal cfg id 3502..3507; M = header
+field B (0..0x12).  The h2d_send grammar token is cfg_cal [cfg=N] [fb=M].
+The value area is the zero-valued structural probe (per-unit calibration
+values are local-only and not committed); the expected D2H answer is one
+298-byte g1 id3 config-syn frame with syn_id 0x0101, body_len 270, the
+request cfg id echoed and dev_ret 0.
 
 ## Ladder C (CURRENT) - ordered create -> TXQ sync
 
@@ -131,6 +143,67 @@ one-shot form; any other value is refused).  The three selectors emit the same
 | C13 | **fire ONE TXQ sync**: `printf 1 > h2d_txq_sync72`; note `echo $?` | success only if out[0] was consumed. Expected: the g0 id1 **key-0xd8** worker CA 0x81038 now finds `ctx+0x190 = V` and stores one byte; **no new exception**. **Do NOT repeat** |
 | C14 | **capture (read-only)**: `cat h2d_status h2d_plan hcc_events hcc_ready hcc_status boot rd_status rd_catalog` + `dmesg | tail -60` + the UART log; then STOP | see the observables table; one boot, one ordered pair |
 | C15 | only if C13/C10 faulted: read-only exception record at BAR0 **0x6F800C** (CPU 0x0004000C, 17 words r0-r12/sp/lr/PC/SPSR) and cave BAR0 0x7C0240 | record and power-cycle; never write this area, never retry |
+
+## Ladder D (task-103, next calibration fire) - one calibration alg set_* message after the working duplex lap
+
+Purpose: after the working ordered duplex lap (create -> TXQ sync) the firmware
+accepts the vendor calibration config events.  D fires ONE of the six
+alg set_* messages (h2d_cfg_cal), starting with set_rssi_param (3507)
+(zero-value structural probe, field B 4) because its device handler only
+copies a 40-byte RAM block - the lowest blast radius of the six.  The five
+other cfg ids are selectable with the same attribute on later boots.
+
+Bundle: PD4-patched firmware + the driver built by this lane
+(hi5622_wifi.ko, see BUILD-NOTES; task-103 build: size, sha256 and vermagic
+there).  One module load, h2d_send_budget=3 (create + TXQ + one calibration
+frame; the budget is the only thing that changes for multi-message runs).
+
+| step | action | expected / stop rule |
+| --- | --- | --- |
+| D0 | insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin h2d_send_budget=3 | probe only; dmesg "HCC service ready"; cat h2d_status shows budget=3 ... cfg_cal_sent=0 and gate cfg_cal=not_armed; STOP if the h2d_cfg_cal attribute is absent (wrong module build: record sha256sum of the .ko) |
+| D1 | echo 1 > prepare | six endpoint-iATU viewports, 6/6 readback OK |
+| D2 | echo 1 > upload ; echo 1 > verify | PD4 image, verify diffs=0 |
+| D3 | echo 1 > seed | platform descriptor + wifi block written and read back; STOP on readback diff |
+| D4 | echo 1 > hcc_arm | vendor-exact 7-channel ETE init; NEVER write CECE here |
+| D5 | echo 1 > hcc_loop | service thread started BEFORE the release |
+| D6 | echo 1 > release | 0x5A5A only; refused unless windows+upload+verify+seed are done |
+| D7 | watch boot hcc_ready hcc_events rd_status | LATCHED golden page 0x86807FEF/7/2/0xABCD, state CA 0x118B60=1, mask CA 0x40008=0; ready pair g4 id1 then g4 id2; core phase READY_TXQ_SYNC. STOP if the ready pair does not arrive |
+| D8 | printf 1 > h2d_ctx_create (one shot) | consumed in 0 polls; ctx4+0x190 non-zero per the Ladder C read pack. STOP on any mask/page change (see Ladder C C10/C11 rules) |
+| D9 | printf 1 > h2d_txq_sync72 (one shot) | consumed; mask stays 0; no exception staging frame. STOP on timeout or mask != 0 |
+| D10 | dry-run preflight: cat h2d_plan ; cat h2d_status | h2d_plan prints msg=cfg_cal wire_total=298 node_len=298 node_word1=0x012a6d2b header=00010004 key=0x0101 blob_len=270 cfg_id=3507 fb=4; h2d_status shows cfg_cal_sent=0, state phase=ACTIVE ... ctx_created=1, frames_sent=2, and gate cfg_cal=ok. STOP if the gate is not ok - do not fire, capture the reason |
+| D11 | fire ONE calibration frame: printf 3507 > h2d_cfg_cal (equivalent: printf "cfg_cal" > h2d_send) ; note echo $? | success only if out[0] was consumed within the bounded window: dmesg "H2D cfg_cal: frame 298 B in a 298 B node committed ... CONSUMED after N polls". Do NOT repeat. The same rule applies to any other cfg id: one message per boot until the answer class is proven |
+| D12 | capture (read-only): cat h2d_status hcc_events hcc_ready rd_catalog ; dmesg | tail -60 + UART log | expected NEW D2H frame: g1 id3, total 298 B (12-byte header + 286-byte payload): payload syn_id 0x0101, body_len 270, body u16 @0 = 3507, body u32 @4 (dev_ret) = 0; handshake page 0x86807FEF/7/2/0xABCD, state 1, mask CA 0x40008 = 0, staging BAR0 0x6F800C unchanged. Then STOP (one calibration message per boot for the first fire) |
+| D13 | fallback probes (only if D12 shows no answer) | next FRESH boot, same D1-D9, then ONE variant: printf "3507 fb=0" > h2d_cfg_cal (field B 0) or printf "3507 fb=18" > h2d_cfg_cal (field B 0x12 = the boot-created module 18). One variable per boot; never two field-B values on one boot |
+
+Command sequence, exactly as run on the bench host (D0-D12):
+
+    insmod hi5622_wifi.ko fw_path=hi_wifi/FIRMWARE.PD4.bin h2d_send_budget=3
+    BDF=$(basename $(readlink -f /sys/bus/pci/devices/*/driver | head -1))
+    D=/sys/bus/pci/devices/$BDF
+    echo 1 > $D/prepare ; echo 1 > $D/upload ; echo 1 > $D/verify ; echo 1 > $D/seed
+    echo 1 > $D/hcc_arm ; echo 1 > $D/hcc_loop ; echo 1 > $D/release
+    sleep 1 ; cat $D/boot $D/hcc_ready $D/hcc_events
+    printf 1 > $D/h2d_ctx_create
+    cat $D/h2d_status
+    printf 1 > $D/h2d_txq_sync72
+    cat $D/h2d_plan $D/h2d_status
+    printf 3507 > $D/h2d_cfg_cal ; echo "cfg_cal rc=$?"
+    sleep 1 ; cat $D/h2d_status $D/hcc_events $D/rd_catalog ; dmesg | tail -60
+
+Stop rules for Ladder D (in addition to Ladder C):
+
+* h2d_cfg_cal refused by the gate: do not fire; the gate name says why
+  (budget_exhausted -> the budget is 3 and create+TXQ already used 2).
+* announce NOT consumed (-ETIMEDOUT) or mask != 0: STOP, capture out[0]/out[2]/
+  out[5], SR0 producer/consumer, page/mask/state, dmesg; power-cycle before any
+  new attempt.  Do not re-fire on the same boot.
+* consumed but no 298-byte g1 id3 answer: the field-B object lookup likely
+  failed (g0 id2 returns 0x64 with no frame).  Use the D13 fallback on a fresh
+  boot; if both field-B variants fail the key path needs review.
+* answer present but syn_id != 0x0101 / cfg id mismatch / dev_ret != 0:
+  capture the frame hex and STOP - that is a protocol finding, not a retry.
+* the 36-byte g1 id3 vap-MIB event from the working lap may also appear: it is
+  a different syn_id (0x07E0) and is informational only.
 
 ## Read-only verification pack (C8 / C11)
 

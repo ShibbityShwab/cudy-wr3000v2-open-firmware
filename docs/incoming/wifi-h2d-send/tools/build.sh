@@ -23,6 +23,26 @@ KDIR=${KDIR:-/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-ar
 STAGING_DIR=${STAGING_DIR:-/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir}
 CROSS_COMPILE=${CROSS_COMPILE:-$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-}
 # The OpenWrt GCC wrapper requires STAGING_DIR in the environment.
+
+# The historical default KDIR (openwrt-lab-selectorfix-img) may have been
+# cleaned; fall back to another configured 6.18.60 luofu build dir so the
+# canonical build keeps working.  Override KDIR/STAGING_DIR/CROSS_COMPILE to
+# pin a specific tree for an evidence hash.
+if [ ! -f "$KDIR/include/generated/autoconf.h" ]; then
+	for cand in /home/shibbityshwab/openwrt-lab-verify \
+		        /home/shibbityshwab/openwrt-lab-selectorfix-k \
+		        /home/shibbityshwab/openwrt-lab; do
+		k="$cand/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60"
+		if [ -f "$k/include/generated/autoconf.h" ] &&
+		   [ -x "$cand/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-gcc" ]; then
+			KDIR=$k
+			STAGING_DIR=$cand/staging_dir
+			CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-
+			break
+		fi
+		done
+	export STAGING_DIR KDIR CROSS_COMPILE
+fi
 export STAGING_DIR KDIR CROSS_COMPILE
 
 LOG=${LOG:-/tmp/hi5622-wifi-h2d-send-build.log}
