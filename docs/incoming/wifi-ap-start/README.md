@@ -7,6 +7,13 @@ builders on both carriers (static g0 id-1 config keys and vendor group-2 WAL
 envelopes), with a compile-ready provider extension (caps AP_START) and an
 attended bench ladder.  **Nothing was sent to the firmware; the bench router
 was never contacted.**
+**v2 (after the bench's first real hostapd fire):** the patch also fixes the
+hostapd integration gaps (NL80211_CMD_CONNECT advertisement via a fail-closed
+.connect op, AP iftype changes accepted, AP-start sequence inside the real
+.start_ap).  Deployable module **199,344 B sha256
+f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**; exact
+hostapd flow, expected logs and corrected readback in
+[HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
 
 Headline facts:
 
@@ -42,12 +49,18 @@ Deliverables (this directory):
 | [provider/apstart-provider.patch](provider/apstart-provider.patch) | caps AP_START + AP-start sequence loop + ap_start_mode param |
 | [recipes/ap_start_ladder.json](recipes/ap_start_ladder.json) | attended ladder: steps, readback pack, stop rules, claim rules |
 | [recipes/frames.md](recipes/frames.md) | generated synthetic bench frames |
+| [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) | v2: real-AP-fire gaps, module identity, exact hostapd flow, expected logs, readback, failure table |
+| [tools/build-bench-module.sh](tools/build-bench-module.sh) | build the deployable v2 bench module (size/sha) |
+| [tools/push-hostapd-ucode.sh](tools/push-hostapd-ucode.sh) | bench workaround for the missing hostapd ucode files |
+| [image/wifi-scripts-ucode.md](image/wifi-scripts-ucode.md) | image fix: CONFIG_PACKAGE_wifi-scripts=y |
 | [BUILD-NOTES.md](BUILD-NOTES.md) | exact commands and results |
 
 Quick start:
 
     PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
-    ./tools/build.sh && ./tools/kernel-check.sh && $PY tools/ap_start_re.py --selftest
+    ./tools/build.sh && ./tools/ap_start_re.py --selftest
+    ./tools/build-bench-module.sh      # deployable v2 module: size/sha
+    ./tools/kernel-check.sh            # zero-warning module build
 
 Cross-references: [../wifi-vap-start](../wifi-vap-start/) (mode-1 VAP base +
 WAL envelope), [../wifi-scan-ap](../wifi-scan-ap/) (provider contract and

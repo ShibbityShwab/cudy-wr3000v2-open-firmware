@@ -6,6 +6,17 @@ extension patch + kernel-context compile + host selftests + attended bench
 ladder.  **No frame has been sent to the firmware by this lane; the bench
 router was never contacted.**
 
+**v2 (2026-11-26, after the bench's first real hostapd fire):** the provider
+patch now also carries the hostapd integration fixes - a fail-closed
+cfg80211 `.connect` op so the wiphy advertises NL80211_CMD_CONNECT (hostapd's
+shared nl80211 init gate refuses a driver that advertises neither
+AUTHENTICATE nor CONNECT), AP-mode iftype changes accepted by the M1 netdev
+model, and the AP-start sequence in the driver's real .start_ap.  The
+deployable module is **199,344 B sha256
+f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**.  See
+[HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) for the exact hostapd flow, expected
+logs and the corrected readback (ctx0 BAR0 0x7D1758 this boot).
+
 Deliverables:
 
 | path | contents |
@@ -22,6 +33,10 @@ Deliverables:
 | [provider/apstart-provider.patch](provider/apstart-provider.patch) | compile-ready extension of the wifi-scan-ap + wifi-vap-start provider tree: caps AP_START, AP-start sequence loop, module param |
 | [recipes/ap_start_ladder.json](recipes/ap_start_ladder.json) | data-driven attended ladder with readback pack and stop rules |
 | [recipes/frames.md](recipes/frames.md) | generated synthetic bench frames (hex) |
+| [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) | v2: real-AP-fire integration gaps, module identity, exact hostapd command flow, expected logs, corrected readback, failure table |
+| [tools/build-bench-module.sh](tools/build-bench-module.sh) | build the deployable bench module (v2) and print size/sha |
+| [tools/push-hostapd-ucode.sh](tools/push-hostapd-ucode.sh) | bench workaround: push /usr/share/hostap/{common,wdev,wifi-detect}.uc (image fix is the real solution) |
+| [image/wifi-scripts-ucode.md](image/wifi-scripts-ucode.md) | image requirement: CONFIG_PACKAGE_wifi-scripts=y provides the hostapd ucode modules |
 | [BUILD-NOTES.md](BUILD-NOTES.md) | exact commands and verification results |
 
 Cross-references: [../wifi-vap-start](../wifi-vap-start/) (VAP add/start family,
@@ -55,17 +70,25 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    bench-proven config carrier) and wal_g2_vendor (vendor order, requires
    the dynamically registered group-2 handler).  [V]/[I]
 4. **Provider extension is compile-ready**: applied on top of the
-   wifi-scan-ap + wifi-vap-start tree it builds the module (770,304 B, sha256
-   115119809f103abe753c335e8a386c58987f2578422cc1d359db1d0303992f94) against
-   the 6.18.60 tree with **zero warnings**, advertises AP_START, and posts the
-   whole sequence through the existing fail-closed hi5622_frame_post() gate
-   (allow_frames budget).  [V]
+   wifi-scan-ap + wifi-vap-start tree it builds the module (199,344 B, sha256
+   f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5) against
+   the 6.18.60 tree with **zero warnings**, advertises AP_START, adds the
+   hostapd capability gates (CONNECT advertisement, AP iftype change), and
+   posts the whole sequence through the existing fail-closed
+   hi5622_frame_post() gate (allow_frames budget).  [V]
 5. **The bench gate is a READ-ONLY firmware readback**, not "hostapd
    started": after the AP-config frame is consumed, the worker writes
    beacon_interval/DTIM into VAP ctx +0x10/+0x14, hidden-SSID into
    ctx+0x18D bit0, mode/HT bits into ctx+0x18C/+0x18D, MD into
    ctx+0x138/+0x13A; the ladder PASS requires those values.  [V] firmware
    worker / [U] unexercised.
+6. **v2 - hostapd integration (real-AP-fire feedback):** hostapd's shared
+   nl80211 init gate (driver_nl80211_capa.c) refuses a cfg80211 driver that
+   advertises neither NL80211_CMD_AUTHENTICATE nor NL80211_CMD_CONNECT; the
+   patch registers a fail-closed .connect (advertised CONNECT, never called by
+   hostapd's AP path) and accepts AP iftype changes, so a hostapd
+   NEW_BEACON reaches the driver's .start_ap and posts the AP-start sequence.
+   Module 199,344 B sha256 f9175ee3... (see HOSTAPD-BRINGUP.md).
 
 ## 1. Scope, evidence and pins
 
@@ -242,13 +265,24 @@ top of the wifi-scan-ap src tree **plus** the wifi-vap-start provider patch
   from the cfg80211 settings (band, hidden_ssid, auth_type, beacon head/tail,
   SSID);
 * advertises HI5622_FRAME_CAP_AP_START, and adds the library object to
-  Kbuild.
+  Kbuild;
+* v2 hostapd gates (hi5622_cfg80211_ops.c): a fail-closed .connect op so
+  cfg80211 advertises NL80211_CMD_CONNECT (hostapd's shared nl80211 init gate
+  requires AUTHENTICATE or CONNECT), and STATION<->AP<->MONITOR iftype changes
+  accepted by the M1 netdev model (hostapd set_mode; cfg80211 core updates the
+  wdev iftype).  Interface combinations are not required for a single AP:
+  cfg80211_iftype_allowed(..., check_swif=0) checks wiphy->interface_modes,
+  which already advertises AP|STATION|MONITOR.  Cipher suites already cover
+  WEP40/WEP104/TKIP/CCMP/GCMP/AES_CMAC/BIP_CMAC_256.
 
 Verified by [tools/kernel-check.sh](tools/kernel-check.sh) against the real
-6.18.60 tree: **hi5622_wifi.ko 770,304 B, sha256
-115119809f103abe753c335e8a386c58987f2578422cc1d359db1d0303992f94, zero
-compiler/modpost warnings**, 14 haf_ symbols, vapscan_ap_start present.  The
-module is local evidence only and is not committed.
+6.18.60 tree, and the deployable artifact built by
+[tools/build-bench-module.sh](tools/build-bench-module.sh): **hi5622_wifi.ko
+199,344 B, sha256
+f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**,
+depends=cfg80211, vermagic 6.18.60 SMP ARMv7, **zero compiler/modpost
+warnings**, 14 haf_ symbols, vapscan_ap_start and hi5622_cfg11_connect
+present.  The module is local evidence only and is not committed.
 
 No byte reaches the wire unless allow_frames > 0; the sequence posts at most
 4 frames per start_ap and every frame faces the inherited
@@ -342,3 +376,22 @@ post mailbox id 5, never send group 1/4.
     $PY tools/ap_start_re.py --selftest    # 63/63 static probes PASS
     $PY tools/gen_frames_md.py --check     # frames.md current
     ./tools/kernel-check.sh                # module build 770,304 B, 0 warnings
+
+## 11. v2: real AP fire integration (2026-11-26)
+
+The bench's first hostapd fire surfaced host-side integration gaps; the v2
+patch fixes them without touching the decoded wire format:
+
+| gap | fix |
+| --- | --- |
+| hostapd: "Driver does not support authentication/association or connect commands" (fatal at nl80211 init) | register a fail-closed .connect op -> cfg80211 advertises NL80211_CMD_CONNECT (advertisement only; hostapd's AP path never calls it) |
+| .start_ap was the old M3 stub in the fired module | the v2 module carries the AP-start provider patch: .start_ap posts ap_ssid (g0 id1 0x0005, 64 B) then ap_cfg (g0 id1 0x0127, 184 B) via hi5622_frame_post() |
+| hostapd set_mode(AP) refused for a managed interface | change_virtual_intf accepts STATION<->AP<->MONITOR in the M1 netdev model (create wlan0 as __ap is still the preferred flow) |
+| hostapd ucode error (image) | bench workaround script + image requirement (CONFIG_PACKAGE_wifi-scripts=y) |
+
+Deployable module: **199,344 B sha256
+f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**.  Exact
+command sequence, expected hostapd/dmesg lines, failure table and the
+corrected readback (ctx0 BAR0 0x7D1758 on the lead's boot; vap+0x10 = 100,
+vap+0x14 = 2) are in [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
+

@@ -128,8 +128,10 @@ u16 at hdr+0x14, body = frame+0x18, len byte = frame+0x16, worker from table A.
 | host strict compile + selftest | 128/128 PASS (-std=c99 -Wall -Wextra -Werror -pedantic) |
 | static RE probes (firmware + 2.5.24 host module) | 63/63 PASS |
 | generated frames freshness | tools/gen_frames_md.py --check current |
-| kernel-context module build (6.18.60) | 770,304 B sha256 11511980..., zero warnings, 14 haf_ symbols |
-| hardware validation | not done - host-only lane |
+| deployable v2 module build (6.18.60) | 199,344 B sha256 f9175ee3..., depends=cfg80211, zero warnings, 14 haf_ symbols, vapscan_ap_start + hi5622_cfg11_connect present |
+| hostapd capability gates | .connect registered (cfg80211 advertises NL80211_CMD_CONNECT; hostapd init gate), AP iftype change accepted |
+| kernel-context module build (6.18.60, kernel-check.sh) | same source tree, zero warnings |
+| hardware validation of the whole sequence | not done - host-only lane (real AP fire feedback is in HOSTAPD-BRINGUP.md) |
 
 ## T11. Stop rules (bench)
 

@@ -66,3 +66,33 @@ Result:
   next attended step (recipes/ap_start_ladder.json).
 * No image build, no flash, no device access, no UART, no network to the
   router.
+
+## 7. v2 deployable module (after the real AP fire, 2026-11-26)
+
+    ./tools/build-bench-module.sh
+    -> artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
+       size     : 199,344 B
+       sha256   : f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5
+       vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
+       depends  : cfg80211
+       ap builder: vapscan_ap_start present
+       connect gate: hi5622_cfg11_connect present
+       warnings/errors: none
+
+The deployable artifact is debug-stripped (path-independent sha; the kernel
+tree's DEBUG_INFO would otherwise embed the build directory in the .ko).
+The build-bench-module.sh output above is the canonical identity; the
+kernel-check.sh gate prints the unstripped size and only proves zero
+warnings.
+
+The v2 patch (provider/apstart-provider.patch) also carries the hostapd
+capability gates: a fail-closed .connect op so cfg80211 advertises
+NL80211_CMD_CONNECT (hostapd's shared nl80211 init gate requires
+AUTHENTICATE or CONNECT), and STATION<->AP<->MONITOR iftype changes accepted
+by the M1 netdev model.  The patch now touches Kbuild, hi5622_frames_api.h,
+hi5622_scan.c, hi5622_vapscan_provider.c and hi5622_cfg80211_ops.c (12 hunks).
+
+Hostapd flow, expected logs and readback: HOSTAPD-BRINGUP.md.
+Ucode workaround: tools/push-hostapd-ucode.sh (image fix:
+image/wifi-scripts-ucode.md).
+

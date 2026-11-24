@@ -9,6 +9,61 @@
  
  ccflags-y += -I$(src)
  
+--- a/hi5622_cfg80211_ops.c
++++ b/hi5622_cfg80211_ops.c
+@@ -267,10 +267,20 @@
+ 		}
+ 		return 0;
+ 	}
++	/* wifi-ap-start lane (task-121, hostapd bring-up): hostapd switches the
++	 * interface to AP through NL80211_CMD_SET_INTERFACE.  The M1 netdev
++	 * model does not depend on the iftype (the firmware VAP object is created
++	 * by the base VAP messages), so accept the standard mode changes;
++	 * cfg80211 core updates the wdev iftype after this op returns 0.  The
++	 * preferred hostapd flow is still to create the interface directly as
++	 * AP (iw ... type __ap) so the base VAP messages carry AP mode. */
++	if (type != NL80211_IFTYPE_STATION && type != NL80211_IFTYPE_AP &&
++	    type != NL80211_IFTYPE_MONITOR)
++		return -EOPNOTSUPP;
+ 	dev_warn(wiphy_dev(wiphy),
+-		 "cfg80211: type change %d -> %d not supported by the M1 VAP model (delete + add the interface)\n",
++		 "cfg80211: type change %d -> %d accepted by the M1 netdev model (hostapd set_mode; firmware VAP iftype is fixed by the VAP base messages)\n",
+ 		 (int)wdev->iftype, (int)type);
+-	return -EOPNOTSUPP;
++	return 0;
+ }
+ 
+ /* ---------------------------------------------------------------------
+@@ -320,6 +330,21 @@
+  * Everything else stays NULL: cfg80211 returns -EOPNOTSUPP for the deferred
+  * M3+ ops without involving the driver (add_key etc. are M3).
+  * -------------------------------------------------------------------*/
++/* hostapd's shared nl80211 init gate (driver_nl80211_capa.c) requires the
++ * wiphy to advertise NL80211_CMD_AUTHENTICATE or NL80211_CMD_CONNECT:
++ * cfg80211 lists CONNECT when .connect exists, and hostapd otherwise bails
++ * out with "Driver does not support authentication/association or connect
++ * commands" before any AP op is attempted.  This bench driver is AP-only, so
++ * the connect op fails closed and is never reached by hostapd's AP path. */
++static int hi5622_cfg11_connect(struct wiphy *wiphy, struct net_device *dev,
++				struct cfg80211_connect_params *params)
++{
++	(void)wiphy;
++	(void)dev;
++	(void)params;
++	return -EOPNOTSUPP;
++}
++
+ const struct cfg80211_ops hi5622_cfg11_ops = {
+ 	.add_virtual_intf	= hi5622_cfg11_add_virtual_intf,
+ 	.del_virtual_intf	= hi5622_cfg11_del_virtual_intf,
+@@ -330,4 +355,7 @@
+ 	.abort_scan		= hi5622_scan_op_abort,
+ 	.start_ap		= hi5622_scan_op_start_ap,
+ 	.stop_ap		= hi5622_scan_op_stop_ap,
++	/* Advertise NL80211_CMD_CONNECT so hostapd passes its driver init gate;
++	 * fail-closed and never used by the AP path (task-121). */
++	.connect		= hi5622_cfg11_connect,
+ };
 --- a/hi5622_frames_api.h
 +++ b/hi5622_frames_api.h
 @@ -154,7 +154,22 @@
