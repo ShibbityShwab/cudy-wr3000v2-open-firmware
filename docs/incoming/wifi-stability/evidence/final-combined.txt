@@ -1,19 +1,18 @@
 final combined stability module (host-built, NOT fired as this build)
 chain: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617
-       (first MAC TX COMPLETED) -> scan-tuning 0002 all-five-files (batched scan,
-       10-line cfg80211 provider symvers incl cfg80211_bss_iter) -> hardening
-size: 262852 B
-sha256: 62a1aeb1bff0f969f70aff04d7f5ed2720f329cd5db294e85850a4cda480cf52
-unstripped: 970604 B sha256 a51d86853c7da9fb701b693c9b14a38dd737d687823dfc4e000a019efae6068d
+       (first MAC TX COMPLETED) -> scan-tuning R2 0002 seven-files (batched scan +
+       relaxed BSS alignment sweep + cfg80211_bss_iter; 248668/ca81660f ladder
+       reference) -> stability hardening (E2 plain-restart, hcc_trace, latches)
+size: 263740 B
+sha256: 79bfad6e5f80c8ef053040c55ccd945fe1824ee380c24e97c3e20a204a40d768
+unstripped: 972208 B sha256 f9f916b1e19ee23abc65b6888bf10e61d0be15c8e659eb38b4716394054e321e
 vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
 depends: cfg80211
 warnings: 0
-cfg80211 imports contract: 10 (cfg80211_bss_iter present); 6 symbols actually
-  undefined in the .ko (the symvers contract lists all provider imports).
-params: hcc_trace=0 (quiet; 1=historic), stop_ap_mode=0 (host-side stop; restart
+cfg80211 import contract: 10 lines (cfg80211_bss_iter present)
+params: scan_chan_time_ms, scan_req_batch (default 6), scan_batch_gap_ms
+  (default 300), hcc_trace=0 (1=historic), stop_ap_mode=0 (host-side stop; restart
   re-posts AP config against the live firmware AP, NO structural write) /
-  1=DISABLED (bench crash), scan_chan_time_ms / scan_req_batch=6 /
-  scan_batch_gap_ms=300, txq_publish=1, mgmt_diag=0.
-E2 fix: user_del-based reset removed (bench mask 0x04000010 load crash);
-  stop_ap keeps cfg80211 -EALREADY cleared; restart logs firmware VAP readback
-  and re-posts AP config; mode 1 refuses fail-closed.
+  1=DISABLED (bench crash), txq_publish=1, mgmt_diag=0
+E2: user_del reset removed (bench mask 0x04000010); restart logs VAP readback and
+  the AP-config re-post sequence (fire with hcc_trace=1 for the full frame trace)
