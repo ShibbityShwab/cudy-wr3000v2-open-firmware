@@ -158,3 +158,23 @@ results/RESULT-TEMPLATE.md for the operator template.
    for any exception state.
 4. C/D results (Lead) to be appended to ladders/scan-ap-diag.json and this
    report when available.
+## 8. Final scan status (R10b/R10c, scan-tuning lane) - recorded at lane close
+
+The final combined R4 artifact (269,688 B sha256 b5dfb883..., opensource
+0bc0e24) is the FINAL scan artifact for this stack.  Bench R10b/R10c
+(scan-tuning lane, committed there as FINDINGS-R10B.md / FINDINGS-R10C.md and
+opensource 38a4074) proved on hardware:
+
+* H1 g0 direct id10 band-config re-arm is real and safe: 7-8 channels handled in
+  ONE request, boot page/mask clean on every rung.
+* len-prefix BSS decode + cfg80211/iw visibility are hardware-proven
+  (entries=2 iw_visible=2 on the decisive rung; up to 14 BSS reported with
+  mode=1).
+* Measured ceiling: 6 channels without H1, 7-8 with the partially decoded H1
+  config.  Full 13/13 was NOT reached.
+
+No new module code is needed.  The shipped/default scan path stays
+fail-closed (scan_band_cfg=0, batching defaults), so the final combined
+artifact and all stability behaviour in this lane are unchanged.  Closeout
+should cite "H1 re-arm 7-8 channel ceiling + BSS decode proven" as the scan
+milestone; any R5 delta would only matter if a decider combo moves the count.
