@@ -1,0 +1,61 @@
+# host-only verifier suite result
+- generated: 2569-11-24T11:55:52Z
+- runner sha256: cc245164328b8ff8b0c154b458f11d23b314676aa56ff23d4a12f233adffdc81
+
+| entry | rc | s | pass-count |
+| --- | --- | --- | --- |
+| wifi-bench-tooling.selftest | 0 | 5 | 563/563 |
+| wifi-bench-session.selftest | 1 | 1 | 20 passed |
+| wifi-bench-session.artifacts | 1 | 0 | - |
+| wifi-bench-tooling.fw-builder | 0 | 0 | 27/27 PASS |
+| wifi-fw-audit.pd4 | 0 | 0 | 14/14 PASS |
+| wifi-fw-audit.variants | 0 | 0 | 14/14 PASS |
+| wifi-ete-engine.selftest | 0 | 9 | 150/150 PASS |
+| wifi-ete-wake.selftest | 0 | 2 | 81/81 |
+| wifi-rom-s01.selftest | 0 | 5 | 70/70 PASS |
+| wifi-s1-cpu1.selftest | 0 | 11 | 46/46 PASS |
+| wifi-rom-dump.selftest | 0 | 0 | 86/86 PASS |
+| wifi-chip-reset.selftest | 0 | 1 | 13/13 PASS |
+| wifi-hcc-service.selftest | 0 | 0 | - |
+| wifi-d2h-direct.selftest | 0 | 0 | 92/92 |
+| wifi-ete-frames.verify | 0 | 0 | - |
+| wifi-datapath.tables | 0 | 0 | 35 passed |
+| wifi-datapath.build | 0 | 0 | 77 passed |
+| wifi-h2d-frames.build | 0 | 0 | 233 passed |
+| wifi-h2d-inject.selftest | 0 | 1 | 63 passed |
+| wifi-hcc-core.host | 0 | 0 | - |
+| wifi-vap-scan.build | 0 | 1 | 137/137 |
+| wifi-vap-start.build | 0 | 0 | 61/61 |
+| wifi-ap-start.build | 0 | 0 | 128 passed |
+| wifi-ap-start.re | 0 | 3 | - |
+| wifi-scan-d2h.selftest | 0 | 1 | 85/85 |
+| wifi-proto-seq.selftest | 0 | 0 | 55/55 |
+| wifi-openwrt-pkg.selftest | 0 | 0 | 92/92 |
+| wifi-hostapd-deploy.check | 0 | 3 | 88 passed |
+| wifi-hostapd-deploy.selftest | 0 | 8 | 14 passed |
+| wifi-hostapd-deploy.ladder | 0 | 0 | 107 passed |
+| wifi-image-deploy.selftest | 1 | 3 | 80 passed |
+| wifi-image-integration.selftest | 0 | 0 | - |
+| wifi-abi-image.selftest | 0 | 0 | 89 passed |
+| wifi-re-report.verify | 0 | 0 | 172/172 |
+| wifi-driver-clean.build | 0 | 4 | 133/133 |
+| wifi-h2d-send.build | 0 | 4 | 251/251 |
+| wifi-cfg80211.build | 1 | 6 | 242/242 |
+| wifi-scan-ap.build | 0 | 8 | 317/317 |
+| wifi-scan-complete.build | 0 | 9 | 373/373 |
+| wifi-datapath-bringup.build | 0 | 17 | 308/308 |
+| wifi-dp-txrx.build | 0 | 21 | 12 passed |
+| wifi-dp-air.build | 0 | 11 | 48/48 |
+| wifi-hcc-core.build | 0 | 1 | - |
+| wifi-vap-start.kernel | 0 | 7 | - |
+| wifi-h2d-frames.kernel | 0 | 2 | - |
+| wifi-ap-start.kernel | 0 | 7 | - |
+| target-skeleton.mac-provisioning | 0 | 2 | - |
+| target-skeleton.mac-nvmem | 0 | 1 | - |
+| upstream-series.gen-check | 0 | 0 | - |
+| upstream-series.release-line | 77 | 0 | local OpenWrt tarball prerequisite (run with --external) |
+| platform.check-lab-src | 0 | 55 | - |
+| platform.check-init-shadow | 0 | 0 | - |
+| platform.bench-inventory-tests | 0 | 67 | 145/145 assertions |
+
+TOTAL 53  PASS 48  FAIL 4  SKIP 1

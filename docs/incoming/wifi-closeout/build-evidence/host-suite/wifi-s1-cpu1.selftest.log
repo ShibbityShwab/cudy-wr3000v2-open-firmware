@@ -1,0 +1,52 @@
+==============================================================================
+selftest - every host-side fact used by REPORT.md
+==============================================================================
+  [PASS] firmware file length == 928920 B
+  [PASS] image CPU span 0x40000..0x122C98
+  [PASS] header +0 = entry A (Thumb 0x46971)
+  [PASS] header +4 = entry B (Thumb 0xC742D)
+  [PASS] header +8..+0x4C are zero (no CPU1 entry field)
+  [PASS] header +0x50..+0x60 = five ARM handler stubs
+  [PASS] header +0x64 starts the ARM IRQ/FIQ trampoline
+  [PASS] the strd source {0,0xABCD} is materialised at 0x47510/0x47514
+  [PASS] 0x473D4 is 'strd r2, r3, [r4]' ({+8=0, +0xC=0xABCD})
+  [PASS] 0x473C8 movw r3, #0xabcd
+  [PASS] 0x473E0 mov.w r2, #0x20000 (inter-core wake to core 1)
+  [PASS] 0x473E6 stores the wake value to CA 0x40161F00
+  [PASS] 0x473F0 loads the status word and 0x473F2 compares with 2
+  [PASS] wait path 0x47610 takes the cache-range end r6 and re-polls (no timeout)
+  [PASS] only image stores to the page are +0 RMW ORRs, one +4 ORR and the +8/+C strd (no writer of 2)
+  [PASS] literal homes of CPU 0x1BF008 are exactly 0x47510 and 0x47620
+  [PASS] entry B 0xC7432 ORRs bit4 into page +4
+  [PASS] entry A loads the platform-custom block pointer 0x1B2800
+  [PASS] entry A reads custom_plat +0x24..+0x54 (mode + 12 config words)
+  [PASS] entry A copies those into the low-RAM boot object 0x10C080
+  [PASS] page-descriptor loads at 0x46D3A/42/44/48 read custom_plat +4/+8/+0xC/+0x10
+  [PASS] range check ITCM/DTCM descriptor stays below the page (0x1BF000)
+  [PASS] 0x46D5E calls the safe copy with dest 0x400000 / cap 0xC000 (ITCM)
+  [PASS] 0x46D70 calls the safe copy with dest 0x410000 / cap 0x8000 (DTCM)
+  [PASS] 0x46D7E calls memset(0x416400, 0, 0x80) on the DTCM param area
+  [PASS] entry A stores custom_plat[+0] to DTCM 0x416400
+  [PASS] 0xC1E44 is a bounds-checked copy that calls memcpy 0x1036AC
+  [PASS] 0xC1E0C is a bounds-checked memset that calls 0x1031A4
+  [PASS] ITCM image starts with its own ARM vector table at its offset 0
+  [PASS] ITCM image vector targets lie inside the ITCM image (0xA3EC etc.)
+  [PASS] DTCM image starts with a device-address table word 0x40034000
+  [PASS] ITCM+DTCM images tile the file exactly: 0x117BC4+0xA968 == 0x12252C, 0x12252C+0x76C == image end
+  [PASS] the secondary-core image (0x120000..0x122C98) never references the handshake page or the doorbell
+  [PASS] 0x120A6C movw r2,#0x4408 (memset end 0x14408) and movw r3,#0x7b8
+  [PASS] 0x120A96 calls memset(0x107B8, 0, 0x3C50)
+  [PASS] CPU1 readies per-core clock glue at CA 0x40033024..0x40033048
+  [PASS] CPU1 stores its coreword to CPU 0x10938 (0x107B8+0x180)
+  [PASS] CPU1 registers ROM Thumb handlers 0x67d/0x691/0x6d9 for events 0x39/0x3a/0x3b via 0x117C54
+  [PASS] ROM IRQ target 0x40064 is the image ARM trampoline (handler word)
+  [PASS] doorbell base 0x40161F00 has exactly four image writers
+  [PASS] region maths: CPU 0x1B2800 -> BAR0 0x86A800 (ACP-fw +0x6B8000)
+  [PASS] region maths: CA 0x400000 -> host BAR0 0x1C0000 (WRAM/TCM window)
+  [PASS] region maths: CA 0x410000 -> host BAR0 0x1D0000
+  [PASS] region maths: CPU 0x1BF000 handshake page -> BAR0 0x877000
+  [PASS] device INI confirms the ITCM/DTCM file layout (itcm 0x117BC4/0xA968, dtcm 0x12252C/0x76C)
+  [PASS] device INI names the platform/wifi custom block addresses 0x1B2800/0x1B2860
+
+selftest: 46/46 PASS
+

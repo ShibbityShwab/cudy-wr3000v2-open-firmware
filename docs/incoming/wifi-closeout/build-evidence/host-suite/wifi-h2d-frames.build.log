@@ -1,0 +1,13 @@
+== 1. catalogue tables
+gen_catalogue: wrote /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-h2d-frames/src/h2d_catalogue.inc (48 vendor senders) and /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-h2d-frames/catalogue.md (60 fw slots)
+gen_catalogue: OK (committed files current)
+
+== 2. compile (cc, C99, -Werror -pedantic)
+built: /tmp/wifi-h2d-frames-build/h2d_selftest (51584 bytes)
+
+== 3. selftest
+wifi-h2d-frames selftest: HCC header, exact builders, refusals,
+SR node/packed-index, mailbox plan, catalogue, D2H ready decode
+SUMMARY: 233 passed, 0 failed
+
+BUILD OK (host-only; no device contact)

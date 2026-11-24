@@ -1,0 +1,41 @@
+== shell syntax ==
+PASS sh -n device/ap-fire.sh
+PASS sh -n device/ap-readback.sh
+PASS sh -n host/run-session.sh
+PASS sh -n tools/check-artifacts.sh
+PASS sh -n tools/selftest.sh
+PASS sh -n generated/phase-a-device-script.sh
+PASS sh -n generated/phase-s-device-script.sh
+PASS sh -n generated/phase-x-device-script.sh
+== python compile ==
+PASS py_compile session_driver.py
+== sequence schema (committed runner) ==
+  session-scan13: sha256=950f325c06cbc7c6 steps=24 checks=56 writes=2
+PASS sequence sequences/session-scan13.json
+  session-ap-base: sha256=ca84682874005ab8 steps=10 checks=30 writes=2
+PASS sequence sequences/session-ap-base.json
+== hard-rule token audit ==
+PASS no rmmod/UART/flash/CA-write/devmem-write tokens
+== hostapd config ==
+PASS hostapd.conf interface=wlan0
+PASS hostapd.conf driver=nl80211
+PASS hostapd.conf beacon_int=100
+PASS hostapd.conf dtim_period=2
+PASS hostapd.conf auth_algs=1
+PASS hostapd.conf OPEN network
+== artifact pins ==
+FAIL artifact pins
+iw                     OK sha256=6345e1cacf... size=152912
+libnl-tiny             OK sha256=5978991097... size=40812
+X merged module        FAIL sha256=ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0 size=886864 (want ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3 884576)
+X sequence             OK sha256=9635436586... size=16600
+check-artifacts: FAIL (1 pin(s) failed)
+== no vendor binaries in the lane ==
+PASS no vendor/binary artifacts
+== dry-run plan (bench_session --dry-run; host only) ==
+PASS dry-run plan S+A+X
+  [driver] phase S -> PLAN-OK (dry-run plan validated (no device contacted))
+  [driver] phase A -> PLAN-OK (dry-run plan validated (no device contacted))
+  [driver] phase X -> PLAN-OK (dry-run plan validated (no device contacted))
+
+selftest: 20 passed, 1 failed

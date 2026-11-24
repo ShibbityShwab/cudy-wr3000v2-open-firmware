@@ -1,0 +1,40 @@
+== 1. host build (portable core + deterministic selftest)
+wifi-hcc-core selftest: hcc_core 1.0
+- address maps
+- ring index arithmetic
+- frame contract
+- boot latch / page overwrite
+- CECE policy
+- D2H mailbox service
+- ready pair
+- TXQ sync + H2D mailbox
+- SR ring wrap
+- heartbeat / PM
+- status line / write safety
+
+528 checks, 0 failure(s)
+RESULT: PASS
+host selftest: PASS
+
+== 2. kernel compile check (6.18.60 module build)
+make: Entering directory '/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+make[1]: Entering directory '/tmp/wifi-hcc-core-build/kmod'
+  CC [M]  hcc_core_check.o
+  CC [M]  hcc_core.o
+  CC [M]  hcc_core_kernel.o
+  LD [M]  hcc_core_kmod.o
+  MODPOST Module.symvers
+  CC [M]  hcc_core_kmod.mod.o
+  CC [M]  .module-common.o
+  LD [M]  hcc_core_kmod.ko
+make[1]: Leaving directory '/tmp/wifi-hcc-core-build/kmod'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+
+== kernel compile check result
+-rw-r--r-- 1 shibbityshwab shibbityshwab 85404 พ.ย.  24 18:53 /tmp/wifi-hcc-core-build/kmod/hcc_core_kmod.ko
+96e16cbbfc10057f992ece5d9d36710a394fadb32c0fb77637a8edcdc5b02c15  /tmp/wifi-hcc-core-build/kmod/hcc_core_kmod.ko
+description:    hcc_core compile check + device-free frame contract smoke
+license:        GPL
+name:           hcc_core_kmod
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+kernel compile check: PASS (device-free compile/link only; the module is not for the device path)

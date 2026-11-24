@@ -1,0 +1,88 @@
+[reboot] reboot issued=True rc=0 pre_uptime=50 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: uptime=50s seen_down=0 pre_uptime=50 remaining=2s
+[reboot] poll t+0.1s: uptime=7s seen_down=0 pre_uptime=50 remaining=2s
+[reboot] box back after 0.1s (uptime=12s, seen_down=0)
+[reboot] reboot issued=True rc=0 pre_uptime=500 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: uptime=500s seen_down=0 pre_uptime=500 remaining=2s
+[reboot] poll t+0.1s: uptime=400s seen_down=0 pre_uptime=500 remaining=2s
+[reboot] box back after 0.1s (uptime=30s, seen_down=0)
+[reboot] reboot issued=True rc=0 pre_uptime=3000 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.1s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.2s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.2s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.3s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.3s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] poll t+0.4s: uptime=3000s seen_down=0 pre_uptime=3000 remaining=0s
+[reboot] reboot issued=True rc=0 pre_uptime=900 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=2s
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=2s
+[reboot] poll t+0.2s: unreachable (seen_down=1) remaining=2s
+[reboot] poll t+0.2s: uptime=5s seen_down=1 pre_uptime=900 remaining=2s
+[reboot] box back after 0.2s (uptime=9s, seen_down=1)
+[reboot] reboot issued=True rc=0 pre_uptime=700 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.2s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.2s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.3s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.3s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.4s: unreachable (seen_down=1) remaining=0s
+[reboot] reboot issued=False rc=127 pre_uptime=100 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] reboot issued=True rc=0 pre_uptime=None cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=2s
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=2s
+[reboot] poll t+0.2s: uptime=9s seen_down=1 pre_uptime=None remaining=2s
+[reboot] box back after 0.2s (uptime=14s, seen_down=1)
+[reboot] reboot issued=True rc=0 pre_uptime=400 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.1s: uptime=6s seen_down=1 pre_uptime=400 remaining=0s
+[reboot] poll t+0.2s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.2s: unreachable (seen_down=1) remaining=0s
+[reboot] poll t+0.3s: unreachable (seen_down=1) remaining=0s
+[reboot] reboot issued=True rc=0 pre_uptime=1000 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'
+[reboot] poll t+0.1s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.1s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.2s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.2s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.3s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.3s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+[reboot] poll t+0.4s: uptime=1000s seen_down=0 pre_uptime=1000 remaining=0s
+WARNING: --reboot after FAILED (bounded wait): reboot issued=True rc=0 pre_uptime=1000 cmd='sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED'; device did not come back within 0.4s (last: uptime=1000s seen_down=0 pre_uptime=1000)
+[matrix] reboot between phases: issuing /sbin/reboot -f and waiting up to 300 s ...
+[matrix] reboot OK: fake: back after 12s
+[matrix] reboot between phases: issuing /sbin/reboot -f and waiting up to 300 s ...
+[matrix] reboot FAILED: fake: did not come back within 300s
+== phase boot (boot + ready handshake) ==
+   status: PLAN-OK        dry-run plan validated: 5 step(s), 18 check(s), 0 device write(s)
+
+== phase matrix ==
+  boot PLAN-OK        dry-run plan validated: 5 step(s), 18 check(s), 0 device write(s)
+matrix: /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/phase-matrix.json
+markdown: /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/PHASE-MATRIX.md
+next: python3 tools/bringup_report.py --matrix /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/phase-matrix.json
+== phase E1  (data-plane setup + TXQ sync (E1)) ==
+   status: BLOCKED-TOKEN  module hi5622_wifi (8600 B sha256 e6f39c39a1cc..) carries no C string for: dp_probe, dp_rings, dp_setup, dp_status, h2d_ctx_create, h2d_status, h2d_txq_addr_syn
+
+== phase matrix ==
+  E1  BLOCKED-TOKEN  module hi5622_wifi (8600 B sha256 e6f39c39a1cc..) carries no C string for: dp_probe, dp_rings, dp_setup, dp_st
+matrix: /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/phase-matrix.json
+markdown: /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/PHASE-MATRIX.md
+next: python3 tools/bringup_report.py --matrix /tmp/wifi-bench-selftest-9laca9ta/pm-evidence/20261124T115121Z/phase-matrix.json
+== phase D2  (scan request (D2) TRUE PASS) ==
+   status: PLAN-OK        dry-run plan validated: 22 step(s), 48 check(s), 2 device write(s)
+
+== phase matrix ==
+  D2  PLAN-OK        dry-run plan validated: 22 step(s), 48 check(s), 2 device write(s)
+matrix: /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/phase-matrix.json
+markdown: /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/PHASE-MATRIX.md
+next: python3 tools/bringup_report.py --matrix /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/phase-matrix.json
+== phase D2  (scan request (D2) TRUE PASS) ==
+   status: BLOCKED-PREREQ sequence load_params['allow_frames'] is not a parameter of module 'hi5622_wifi' (has: fw_path, h2d_send_budget, hcc_poll_ms, wifi_block_path)
+
+== phase matrix ==
+  D2  BLOCKED-PREREQ sequence load_params['allow_frames'] is not a parameter of module 'hi5622_wifi' (has: fw_path, h2d_send_budget
+matrix: /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/phase-matrix.json
+markdown: /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/PHASE-MATRIX.md
+next: python3 tools/bringup_report.py --matrix /tmp/wifi-bench-selftest-9laca9ta/pm-d2-evidence/20261124T115121Z/phase-matrix.json
+wifi-bench-tooling selftest: 563/563 checks PASS

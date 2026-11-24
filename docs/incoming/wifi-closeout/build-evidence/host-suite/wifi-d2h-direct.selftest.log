@@ -1,0 +1,109 @@
+== window arithmetic
+PASS PKTRAM node array CA 0x01060110 -> BAR0 0x238110 (13:10 DR3 ring)  [0x238110]
+PASS PKTRAM node array CA 0x01060440 -> BAR0 0x238440 (13:10 DR0 ring)
+PASS ACP frame body CA 0x02048c48 -> BAR0 0x520c48 (region 4)  [0x520c48]
+PASS ACP alias delta PKTRAM->ACP is 0x01000000 (CPU 0xC1D88) [V]
+PASS ACP alias of the DR3 node array 0x01060110 lands in region 4
+PASS firmware record CPU 0x10f2b8 -> BAR0 0x7c72b8 (region 5: 0x6b8000+CPU)  [0x7c72b8]
+PASS producer shadow CPU 0x10f2c4 -> BAR0 0x7c72c4
+PASS all four records fit the mapped firmware-RAM window
+PASS channel CA table = 0x4003a590/5e0/630/680
+PASS send-register CA table = 0x4003ac00/04/08/0c
+PASS channel register block offsets match the ETE DR0..3 offsets
+PASS body resolver accepts ACP, PKTRAM, host-DMA and rejects unmapped
+
+== packed ring-index arithmetic (depth 32)
+PASS fresh index 0 advances to 1
+PASS index 31 advances to phase-1 index 0 (0x400)  [0x400]
+PASS phase-1 index 0 toggles back to 0 at the next wrap
+PASS prev of 0 is 0x400+31 (wrap backwards)  [0x41f]
+PASS prev of phase-1 index 0 is 31
+PASS count(0, producer=12) = 12 staged nodes
+PASS count across the wrap 30 -> 0x400+2 = 4
+PASS count(0x400, 0x400) = 0
+PASS count detects a full-ring overrun (0 -> 0x401 depth 32 = 33 > 32)
+PASS pre-post value 0x400 = 32 published buffers (phase 1, index 0)  [0x400]
+PASS round trip plus/prev is identity for 0..2*depth
+PASS service sanity predicate accepts 0..31/0x400..0x41f, rejects 32/0x421
+
+== DR node format {word0, word1=(len<<16)|0x6D2B}
+PASS word1 of a 73-byte node = 0x00496d2b  [0x496d2b]
+PASS node length extracts 73
+PASS node flags are 0x6d2b (present bits 13/14 + 0xd2b)
+PASS present bits are inside 0x6d2b: bit14|bit13|0xd2b
+PASS a zero (unused) slot is rejected by the service
+PASS staging word0 for the ready announce 0x02048c48 resolves in ACP
+PASS 13:10 DR3 node0 = {0x02048c48, 0x000c6d2b} len 12
+PASS 12 <= len <= 0x680 predicate holds for every captured length
+
+== 12-byte HCC header + catalogue
+PASS g4 id1 device_plat_ready decodes to the catalogued (group,id)  [(4, 1)]
+PASS g4 id1 device_plat_ready passes tag+length validation  [tag_ok=True len_ok=True]
+PASS g4 id1 device_plat_ready total length field == node len (12)
+PASS g4 id2 DEVICE READY decodes to the catalogued (group,id)  [(4, 2)]
+PASS g4 id2 DEVICE READY passes tag+length validation  [tag_ok=True len_ok=True]
+PASS g4 id2 DEVICE READY total length field == node len (16)
+PASS g4 id3 exception_info decodes to the catalogued (group,id)  [(4, 3)]
+PASS g4 id3 exception_info passes tag+length validation  [tag_ok=True len_ok=True]
+PASS g4 id3 exception_info total length field == node len (73)
+PASS g3 id18 temp_state decodes to the catalogued (group,id)  [(3, 18)]
+PASS g3 id18 temp_state passes tag+length validation  [tag_ok=True len_ok=True]
+PASS g3 id18 temp_state total length field == node len (16)
+PASS g4 id1 wire total = 0x0c (12 B, no payload)
+PASS g4 id2 wire total = 0x10 (16 B) and payload dword = 0x01060850
+PASS g4 id2 payload equals the firmware builder literal 0x01060850 [V]
+PASS g4 id3 payload starts with the 'DEVICE EXCP_INFO' body
+PASS g3 id18 header group low nibble = 3 and id = 0x12
+PASS id 0x12 = 18 = hmac_d2h_temp_state_update in the g3 catalogue
+PASS a frame without tag 0x5A5A is rejected (firmware drops it)
+PASS the old 64-byte zero header is rejected (tag 0, total 0)
+PASS a total/node-length mismatch is rejected
+PASS a 12-byte header-only frame is accepted with no payload
+
+== 2026-11-24 13:10 captured batch (device group-A rings)
+PASS capture inventory = 16 nodes (DR3=12, DR0=4, DR1=DR2=0)
+PASS DR3 first node len 12 = the device ready announce (g4 id1) [V*]
+PASS DR3 second node len 73 = the EXCP_INFO message (g4 id3) [V*]
+PASS one captured DR3 length matches 0x250=592 (likely g4 id0 oam log) [I]
+PASS all DR0 nodes are 16 B (ready id2, total 0x10, or g3 id18)
+PASS id2 may be among the four 16-B DR0 frames: 16 == 12+4 payload - NEXT-BENCH RE-READ REQUIRED
+PASS batch fits the depth-32 ring with 16 slots spare (no overrun in the read-only pass)
+
+== service source safety census
+PASS exactly two device writes exist in the direct service (2)  [writel(pub, ctx->bar0 + HI5622_BAR0_ETE_BASE +
+		       RD_D | writel(c->last, ctx->bar0 + HI5622_BAR0_ETE_BASE +
+		       ]
+PASS write #1 targets the host-owned group-B +0x38 (HI5622_ETE_CH_B_PRD)
+PASS write #2 targets the experimental group-A +0x1C (HI5622_ETE_CH_A_CNS)
+PASS the +0x1C write sits behind the rd_ab_write gate
+PASS no write target references out[5] CA 0x400392F0
+PASS no writew/writeb/memset_io against device windows
+PASS no device-RAM (firmware record) store: only readl/readb in the record helpers
+PASS headline safety comment names the +0x1C default-OFF gate
+PASS header documents the never-write PKTRAM control word (base + 0x100)
+PASS header documents out[5] CA 0x400392F0 as never written
+PASS patch file present and touches only the hcc module build/service
+PASS patch adds the new object to Kbuild
+PASS patch touches only pciet_hcc_service.c and Kbuild (Kbuild, pciet_hcc_service.c)
+
+== local firmware static DR record table (read in place)
+PASS firmware image size is the known 928,920 B local artifact  [928920]
+PASS hcc_instance+0x14 -> first DR record CPU 0x10f2b8 [V]
+PASS DR0 record word0 = node-array CA 0x01060440 [V]
+PASS DR0 record +0x31c = channel CA 0x4003a590 [V]
+PASS DR0 record +0x32c = send-register CA 0x4003ac00 [V]
+PASS DR1 record word0 = node-array CA 0x01060330 [V]
+PASS DR1 record +0x31c = channel CA 0x4003a5e0 [V]
+PASS DR1 record +0x32c = send-register CA 0x4003ac04 [V]
+PASS DR2 record word0 = node-array CA 0x01060220 [V]
+PASS DR2 record +0x31c = channel CA 0x4003a630 [V]
+PASS DR2 record +0x32c = send-register CA 0x4003ac08 [V]
+PASS DR3 record word0 = node-array CA 0x01060110 [V]
+PASS DR3 record +0x31c = channel CA 0x4003a680 [V]
+PASS DR3 record +0x32c = send-register CA 0x4003ac0c [V]
+PASS record order: DR3 node array 0x01060110 and DR0 0x01060440 are the 13:10 rings
+PASS record control word = node array + 0x100 (depth 32 * 8 B)
+PASS control word offset arithmetic: 8 bytes/node * 32 nodes = 0x100
+PASS firmware record producer shadow starts at 0 in the static image
+
+wifi-d2h-direct selftest: 92/92 checks PASS

@@ -1,0 +1,10 @@
+== proto_seq_frames ==
+proto_seq_frames: 66/66 checks PASS
+== fw_proto_static ==
+fw_proto_static: 38/38 checks PASS (fw sha256 7fc87e2051e80b5e)
+== alg_cmd_table ==
+alg_cmd_table: 55/55 checks PASS (wifi sha256 22fa789a3d431f49)
+== recipes JSON ==
+JSON OK: cal-alg-ladder.json
+JSON OK: cal-commands.json
+all wifi-proto-seq host checks PASS

@@ -1,0 +1,99 @@
+== 1. host scan/AP/provider logic selftest (device-free) ==
+wifi-scan-ap scan logic selftest (task-113), device-free
+290/290 checks passed
+PASS
+built: /tmp/wifi-scan-complete-build/scan_logic_selftest (79848 bytes)
+
+== 1b. host scan-complete selftest (auto window + channel coverage + IE decode) ==
+scan-complete selftest (task-123)
+195/195 PASS
+built: /tmp/wifi-scan-complete-build/scan_complete_selftest (57744 bytes)
+
+== 2a. host inherited cfg80211 VAP/op-map regression ==
+wifi-cfg80211 logic selftest (device-free)
+454/454 checks passed
+PASS
+
+== 2b. host inherited H2D protocol regression ==
+h2d_send_logic selftest (host, device-free)
+h2d_send_logic selftest: 242/242 checks PASS
+
+== 3. kernel module build (project 6.18.60 tree) ==
+module      : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-scan-complete/tools/../src/hi5622_wifi.ko
+size_bytes  : 750512
+sha256      : 389ae6fe5f203616f6fad45fbff3a37e25115e267b8c1f1d5e0e3bb5630b8255
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+depends     : cfg80211
+cfg imports : 9 (wiphy_*/cfg80211_* undefined; 9 expected)
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/hi5622-wifi-scan-complete-build.log
+
+
+== 4. cfg80211 provider-symbols check (kernel tree exports) ==
+OK: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-scan-complete/src/cfg80211-provider.symvers complete (9 symbols), all real net/wireless exports, none tree-provided
+
+== 5. driver selftest (source-level, device-free) ==
+NOTE: gitignored build product present: src/hi5622_wifi.mod
+NOTE: gitignored build product present: src/.hi5622_wifi.mod.cmd
+NOTE: gitignored build product present: src/main.o
+NOTE: gitignored build product present: src/.main.o.cmd
+NOTE: gitignored build product present: src/transport.o
+NOTE: gitignored build product present: src/.transport.o.cmd
+NOTE: gitignored build product present: src/ete.o
+NOTE: gitignored build product present: src/.ete.o.cmd
+NOTE: gitignored build product present: src/d2h.o
+NOTE: gitignored build product present: src/.d2h.o.cmd
+NOTE: gitignored build product present: src/hcc.o
+NOTE: gitignored build product present: src/.hcc.o.cmd
+NOTE: gitignored build product present: src/service.o
+NOTE: gitignored build product present: src/.service.o.cmd
+NOTE: gitignored build product present: src/hcc_core.o
+NOTE: gitignored build product present: src/.hcc_core.o.cmd
+NOTE: gitignored build product present: src/hcc_core_kernel.o
+NOTE: gitignored build product present: src/.hcc_core_kernel.o.cmd
+NOTE: gitignored build product present: src/h2d_frames.o
+NOTE: gitignored build product present: src/.h2d_frames.o.cmd
+NOTE: gitignored build product present: src/h2d_send_logic.o
+NOTE: gitignored build product present: src/.h2d_send_logic.o.cmd
+NOTE: gitignored build product present: src/h2d_send.o
+NOTE: gitignored build product present: src/.h2d_send.o.cmd
+NOTE: gitignored build product present: src/hi5622_cfg80211_logic.o
+NOTE: gitignored build product present: src/.hi5622_cfg80211_logic.o.cmd
+NOTE: gitignored build product present: src/hi5622_cfg80211.o
+NOTE: gitignored build product present: src/.hi5622_cfg80211.o.cmd
+NOTE: gitignored build product present: src/hi5622_cfg80211_ops.o
+NOTE: gitignored build product present: src/.hi5622_cfg80211_ops.o.cmd
+NOTE: gitignored build product present: src/hi5622_scan_logic.o
+NOTE: gitignored build product present: src/.hi5622_scan_logic.o.cmd
+NOTE: gitignored build product present: src/hi5622_frames_provider.o
+NOTE: gitignored build product present: src/.hi5622_frames_provider.o.cmd
+NOTE: gitignored build product present: src/hi5622_frame_post.o
+NOTE: gitignored build product present: src/.hi5622_frame_post.o.cmd
+NOTE: gitignored build product present: src/hi5622_scan.o
+NOTE: gitignored build product present: src/.hi5622_scan.o.cmd
+NOTE: gitignored build product present: src/vapscan_frames.o
+NOTE: gitignored build product present: src/.vapscan_frames.o.cmd
+NOTE: gitignored build product present: src/hi5622_vapscan_map.o
+NOTE: gitignored build product present: src/.hi5622_vapscan_map.o.cmd
+NOTE: gitignored build product present: src/hi5622_scan_d2h.o
+NOTE: gitignored build product present: src/.hi5622_scan_d2h.o.cmd
+NOTE: gitignored build product present: src/hi5622_vapscan_provider.o
+NOTE: gitignored build product present: src/.hi5622_vapscan_provider.o.cmd
+NOTE: gitignored build product present: src/vapstart_frames.o
+NOTE: gitignored build product present: src/.vapstart_frames.o.cmd
+NOTE: gitignored build product present: src/hi5622_wifi.o
+NOTE: gitignored build product present: src/.hi5622_wifi.o.cmd
+NOTE: gitignored build product present: src/modules.order
+NOTE: gitignored build product present: src/.modules.order.cmd
+NOTE: gitignored build product present: src/.Module.symvers.cmd
+NOTE: gitignored build product present: src/hi5622_wifi.mod.o
+NOTE: gitignored build product present: src/.hi5622_wifi.mod.o.cmd
+NOTE: gitignored build product present: src/.module-common.o
+NOTE: gitignored build product present: src/..module-common.o.cmd
+NOTE: gitignored build product present: src/hi5622_wifi.ko
+NOTE: gitignored build product present: src/.hi5622_wifi.ko.cmd
+
+373/373 checks passed
+PASS
+
+OK: host scan-complete+scan+inherited selftests + clean kernel build (750512 B, sha256 389ae6fe5f203616f6fad45fbff3a37e25115e267b8c1f1d5e0e3bb5630b8255, depends=cfg80211)

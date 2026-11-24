@@ -1,0 +1,11 @@
+== host decoder unit tests
+scan_d2h_selftest: 4076/4076 checks PASS
+
+== RE evidence self-check (pinned local vendor artifacts, read-only)
+fw_scan_d2h_re: 50/50 checks PASS (fw 7fc87e2051e80b5e, ko de78ec07e46e70ce)
+
+== test vectors
+wrote /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-scan-d2h/testvectors/scan-d2h-vectors.json (9 vectors)
+gen_vectors --check: 85/85 checks PASS
+
+selftest.sh: ALL HOST CHECKS PASS

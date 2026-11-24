@@ -1,0 +1,4 @@
+./run-release-line-check.sh: line 10: cd: ./../../upstream/series-6.18: No such file or directory
+using tarball: /home/shibbityshwab/openwrt-lab/dl/linux-6.18.60.tar.xz
+./run-release-line-check.sh: line 20: cd: null directory
+bash: tools/check-release-line.sh: No such file or directory

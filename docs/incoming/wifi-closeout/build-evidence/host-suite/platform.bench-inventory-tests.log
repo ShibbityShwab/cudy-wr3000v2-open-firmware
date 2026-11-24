@@ -1,0 +1,147 @@
+ok 1 - help exits 0 (rc=0)
+ok 2 - help states the tool is read-only
+ok 3 - help prints usage
+ok 4 - help never contacts the device
+ok 5 - print-plan exits 0 (rc=0)
+ok 6 - print-plan lists the full allowlist (600 reads)
+ok 7 - print-plan contains no RC misc window row
+ok 8 - print-plan has LSW rows
+ok 9 - print-plan has PIE rows
+ok 10 - print-plan has CRG rows
+ok 11 - print-plan has SYSCTRL rows
+ok 12 - print-plan documents the hard exclusions
+ok 13 - print-plan never contacts the device
+ok 14 - explain allows 0x10100c08 (rc=0)
+ok 15 - explain prints ALLOW for 0x10100c08
+ok 16 - explain allows 0x10100c00 (rc=0)
+ok 17 - explain prints ALLOW for 0x10100c00
+ok 18 - explain allows 0x10100c10 (rc=0)
+ok 19 - explain prints ALLOW for 0x10100c10
+ok 20 - explain allows 0x12442800 (rc=0)
+ok 21 - explain prints ALLOW for 0x12442800
+ok 22 - explain allows 0x14880090 (rc=0)
+ok 23 - explain prints ALLOW for 0x14880090
+ok 24 - explain allows 0x14880198 (rc=0)
+ok 25 - explain prints ALLOW for 0x14880198
+ok 26 - explain allows 0x10a71000 (rc=0)
+ok 27 - explain prints ALLOW for 0x10a71000
+ok 28 - explain allows 0x1100001c (rc=0)
+ok 29 - explain prints ALLOW for 0x1100001c
+ok 30 - explain allows 0x12180000 (rc=0)
+ok 31 - explain prints ALLOW for 0x12180000
+ok 32 - explain allows 0x11281008 (rc=0)
+ok 33 - explain prints ALLOW for 0x11281008
+ok 34 - explain denies 0x10161000 (rc=1)
+ok 35 - explain prints DENY for 0x10161000
+ok 36 - explain denies 0x10161004 (rc=1)
+ok 37 - explain prints DENY for 0x10161004
+ok 38 - explain denies 0x10165000 (rc=1)
+ok 39 - explain prints DENY for 0x10165000
+ok 40 - explain denies 0x1016ffff (rc=1)
+ok 41 - explain prints DENY for 0x1016ffff
+ok 42 - explain denies 0x400392f0 (rc=1)
+ok 43 - explain prints DENY for 0x400392f0
+ok 44 - explain denies 0xdeadbeef (rc=1)
+ok 45 - explain prints DENY for 0xdeadbeef
+ok 46 - explain denies 0x10a70003 (rc=1)
+ok 47 - explain prints DENY for 0x10a70003
+ok 48 - explain denies 0x11000000 (rc=1)
+ok 49 - explain prints DENY for 0x11000000
+ok 50 - explain denies 0x10100c09 (rc=1)
+ok 51 - explain prints DENY for 0x10100c09
+ok 52 - explain denies 0x14880001 (rc=1)
+ok 53 - explain prints DENY for 0x14880001
+ok 54 - denial explains the RC misc window rule
+ok 55 - refuses without --attended (rc=2)
+ok 56 - refusal names the attended gate
+ok 57 - no device contact without --attended
+ok 58 - refuses when the bench link gate fails (rc=2)
+ok 59 - refusal names the bench-link gate
+ok 60 - no device contact when the bench link fails
+ok 61 - refuses when the recovery door gate fails (rc=2)
+ok 62 - refusal names the recovery-door gate
+ok 63 - no device contact when recovery is not ready
+ok 64 - refuses without a read-only UART capture (rc=2)
+ok 65 - refusal names the UART capture gate
+ok 66 - --no-uart allows the run with a warning (rc=0)
+ok 67 - --no-uart is recorded as a warning
+ok 68 - refuses without the SSH transport (rc=2)
+ok 69 - refusal names the transport gate
+ok 70 - no device contact after the transport refusal
+ok 71 - refuses when the box is unreachable (rc=2)
+ok 72 - refusal names the stock-health gate
+ok 73 - refusal happens before any register read
+ok 74 - refuses on a non-stock kernel (rc=2)
+ok 75 - refusal names the kernel check
+ok 76 - refuses when the selector pair does not match bootflag (rc=2)
+ok 77 - refusal names the selector check
+ok 78 - refuses when there is no read path (rc=2)
+ok 79 - refusal names the read-path check
+ok 80 - check-only passes on a healthy stock fixture (rc=0)
+ok 81 - check-only JSON has a summary
+ok 82 - check-only result is CHECK-ONLY-PASS
+ok 83 - check-only reads no registers
+ok 84 - check-only reads no registers
+ok 85 - check-only records eight PASS gates (seven local plus stock-health)
+ok 86 - full allowlisted run completes (rc=0)
+ok 87 - full run reports COMPLETE
+ok 88 - JSON result is COMPLETE
+ok 89 - JSON has one entry per planned read
+ok 90 - every entry has an ok read
+ok 91 - no read errors in the full run
+ok 92 - no failed batches in the full run
+ok 93 - batch count matches batch size 32
+ok 94 - JSON records the batch size
+ok 95 - JSON records the repeat count
+ok 96 - selector sysfs/devmem cross-check passes
+ok 97 - selector pair expected-value check passes
+ok 98 - selector devmem value is captured
+ok 99 - CRG PLL lock mask check passes
+ok 100 - CRG status entry carries its expected mask
+ok 101 - PIE TX ring-size shift expected value matches
+ok 102 - PIE global-control clear/mask check passes
+ok 103 - entries map to the spec sections
+ok 104 - TSV has a header plus one row per read
+ok 105 - SHA256SUMS verifies
+ok 106 - inventory.json is valid JSON
+ok 107 - emitted commands are read-only, key-free and fully allowlisted
+ok 108 - the tool never sends a command the transport stubs did not expect
+ok 109 - repeat=2 run completes (rc=0)
+ok 110 - JSON records repeat=2
+ok 111 - a stable register is marked stable
+ok 112 - each entry keeps both read passes
+ok 113 - batch=1 run completes (rc=0)
+ok 114 - batch=1 produces one SSH call per address
+ok 115 - JSON records three batches
+ok 116 - a failed read exits 3 (rc=3)
+ok 117 - JSON result is PARTIAL
+ok 118 - the failed register is recorded as an error
+ok 119 - the failed entry is marked error
+ok 120 - partial evidence still verifies by SHA256SUMS
+ok 121 - a timed-out SSH call exits 3 (rc=3)
+ok 122 - the timeout is reported as a failed batch
+ok 123 - the timeout is attributed to the timed-out call
+ok 124 - timeout yields a PARTIAL result
+ok 125 - truncated remote output exits 3 (rc=3)
+ok 126 - truncation is reported
+ok 127 - an out-of-batch address in the output exits 3 (rc=3)
+ok 128 - the unexpected address is reported
+ok 129 - two consecutive failed batches exit 3 (rc=3)
+ok 130 - the run stops after the configured consecutive failures
+ok 131 - unattempted batches are recorded as not-attempted
+ok 132 - a changed boot_id exits 3 (rc=3)
+ok 133 - a changed boot_id yields INVALID
+ok 134 - the invalid result is reported
+ok 135 - --no-context run completes (rc=0)
+ok 136 - --no-context records no context
+ok 137 - --no-context sends no context script
+ok 138 - a failed context capture is a warning, not a failure (rc=0)
+ok 139 - the context failure is reported as a warning
+ok 140 - group-filtered run completes (rc=0)
+ok 141 - crg group has 13 planned reads
+ok 142 - group-filtered run contains only one group
+ok 143 - an unknown group is a usage error (rc=1)
+ok 144 - an out-of-range batch size is a usage error (rc=1)
+ok 145 - an invalid label is a usage error (rc=1)
+
+PASS: 145/145 assertions passed

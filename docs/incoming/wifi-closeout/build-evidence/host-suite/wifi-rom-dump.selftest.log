@@ -1,0 +1,88 @@
+PASS ROM sha256 matches the device-dump identity                             
+PASS ROM size is 16 KiB                                                      
+PASS last nonzero byte is 0x818 (banner end)                                 
+PASS 0x81C-0x3FFF all zero (no hidden ROM code)                              
+PASS banner                                                                  
+PASS vec[0..4] ldr pc,[pc,#24] stubs                                         
+PASS vec[5] = nop                                                            
+PASS vec[6]/[7] = ldr pc,[pc,#20]                                            
+PASS targets reset/undef/svc/prefetch/abort                                  
+PASS IRQ target = image trampoline 0x40064                                   
+PASS FIQ target = ROM stub 0x7C                                              
+PASS 5 ROM exception stubs load their own slot address 0x1E0..0x1F0          
+PASS slot table 0x1E0..0x1F8                                                 
+PASS stub slot -> image header offset map                                    
+PASS 0x8C reset: SCTLR clear/enable + MPIDR                                  
+PASS per-mode CPSR constants                                                 
+PASS stack-top literals 0x1F4/0x1F8                                          
+PASS CP15 c6 region sequence (select/base/size/attr x3)                      
+PASS SCTLR.M enable at 0x1BC..0x1C8                                          
+PASS MPIDR dispatch                                                          
+PASS ARM->Thumb dispatch words                                               
+PASS 0x608/0x610 = ldr pc,[pc,#-4]                                           
+PASS dispatch targets are odd (Thumb ABI)                                    
+PASS 0x1FC begins with Thumb2 MOVW (not a data magic)                        
+PASS fn 0x1FC = read 16-bit [0x4000010C]                                     
+PASS fn 0x208 = write 0xBAAD to [0x4000010C]                                 
+PASS fn 0x218 = write 0xCEED to [0x4000010C]                                 
+PASS fn 0x228 = set progress-page bit1 (0x262..0x270)                        
+PASS 0x50C: clear page +0, read 16-bit status gate                           
+PASS 0x50C: 0xCEED path stores page +0 = 0x18                                
+PASS 0x50C: fallback clears [0x40000] (stale image header)                   
+PASS 0x50C: fallback page=1 -> bl 0x4C4 -> page |= 8                         
+PASS 0x4C4: BAAD -> init 0x344 -> page|=4 -> poll -> CEED                    
+PASS 0x4C4: poll 16-bit [0x40000108] == 0x5A5A                               
+PASS 0x54C: re-read [0x40000] then blx image entry A                         
+PASS 0x564: clear page +4 and +C                                             
+PASS 0x564: read 16-bit gate and record CEED / not-CEED                      
+PASS 0x564: write CPU1 event-controller words                                
+PASS 0x564: arm page +4 bit1, WFI loop waits magic 0xABCD                    
+PASS 0x564: WFI loop also waits 16-bit gate == 0xCEED                        
+PASS 0x564: success writes +4 |=4 and strd {+4,+8}={flags,1<<core}           
+PASS 0x564: clear stale image header +4 (entry-B ptr) on non-CEED path       
+PASS 0x564: post-S1 CPU1 dispatch = blx image header +0x04 (entry B)         
+PASS page stores resolve to {+0,+4,+8}; +C is core-indexed (r6 = page+4*core)
+PASS no ROM store outside the handshake page window (0x1BF000-0x1BFFFF)      
+PASS constant 0x1BF000 materialised in ROM code                              
+PASS constant 0x4000010C materialised in ROM code                            
+PASS constant 0x40000108 materialised in ROM code                            
+PASS constant 0x40160100 materialised in ROM code                            
+PASS constant 0x40160104 materialised in ROM code                            
+PASS constant 0x1BF110 materialised in ROM code                              
+PASS constant 0x1BEF00 materialised in ROM code                              
+PASS constant 0x40000 materialised in ROM code                               
+PASS constant 0x40000000 materialised in ROM code                            
+PASS constant 0x80000000 materialised in ROM code                            
+PASS constant 0xBAAD materialised in ROM code                                
+PASS constant 0xCEED materialised in ROM code                                
+PASS constant 0x5A5A materialised in ROM code                                
+PASS constant 0xABCD materialised in ROM code                                
+PASS secondary path materialises image header base 0x40000 (movw/movt)       
+PASS no reference to image entry A absolute address (0x46970) in ROM         
+PASS no literal-2 store to [0x1BF008] (only computed 1<<core)                
+PASS no store to [0x40000108] in ROM (release is host-written)               
+PASS table A first/last entry                                                
+PASS table B first/last entry                                                
+PASS fn 0x2E8 applies table A (16 entries) then table B (14)                 
+PASS pre-release page +0 = 7 = fallback bits {0,1,2}                         
+PASS pre-release page +4 = 3 = CPU1 bits {0,1}                               
+PASS golden page +4 = 7 = CPU1 bits {0,1,2}                                  
+PASS success page +0 = GP2 | bit14                                           
+PASS image sha256                                                            
+PASS image header entry A/B                                                  
+PASS image header handlers +0x50..+0x60                                      
+PASS ROM slot words == image header handler words                            
+PASS FIQ handler 0x103140 prologue (pop/srsdb)                               
+PASS IRQ trampoline 0x40064 (sub lr / srsdb / blx 0xC2EFC)                   
+PASS r1 ids: 0xC6FEA->1 0xC6FE0->2 0xC6FD6->3 0xC6FC8->4                     
+PASS ROM->header->id mapping is undef=1 svc=2 prefetch=3 abort=4             
+PASS image FIQ dispatcher 0xC2EEC literal = 0x17D398                         
+PASS image event dispatcher: status-reg ptr literal 0x4016010C               
+PASS image event dispatcher: system object literal 0x17D398                  
+PASS image exception-seen mask literal CA 0x40008                            
+PASS image CECE consumer 0xC20F8 = movw 0xCECE + ldr 0x4000010C + spin       
+PASS image has no aligned literal 0x40000108 (host-only register)            
+PASS image READS CA 0x40000004 (status word) and has no store site           
+PASS handshake store site CPU 0x473D4 is the strd form of entry A            
+
+selftest: 86/86 PASS, 0 FAIL

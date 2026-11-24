@@ -1,0 +1,76 @@
+== wifi-image-integration selftest ==
+dir: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-integration
+ok   package Makefile exists
+ok   package README exists
+ok   KernelPackage hi5622-cfg80211
+ok   KernelPackage hi5622-wifi
+ok   cfg80211 FILES from LINUX_DIR
+ok   driver FILES from PKG_BUILD_DIR
+ok   package has PREBUILT mode
+ok   package has SOURCE mode
+ok   package records prebuilt identity
+ok   driver depends on cfg80211 kmod
+ok   target dependency declared
+ok   no AUTOLOAD (bench policy)
+ok   Kbuild uses kernel make
+ok   no init script shipped
+ok   config delta exists
+ok   delta selects CONFIG_PACKAGE_iw=y
+ok   delta selects CONFIG_PACKAGE_wireless-regdb=y
+ok   delta selects CONFIG_PACKAGE_wifi-scripts=y
+ok   delta selects CONFIG_PACKAGE_hostapd-mini=y
+ok   delta selects CONFIG_PACKAGE_hostapd-common=y
+ok   delta selects CONFIG_PACKAGE_ucode-mod-nl80211=y
+ok   delta selects CONFIG_PACKAGE_ucode-mod-rtnl=y
+ok   delta selects CONFIG_PACKAGE_kmod-hi5622-cfg80211=y
+ok   delta selects CONFIG_PACKAGE_kmod-hi5622-wifi=y
+ok   delta enables ucode wifi-scripts
+ok   delta is self-contained (hostapd)
+ok   driver Kbuild present
+ok   driver obj-m is hi5622_wifi.o
+ok   13 driver objects in Kbuild
+ok   cfg80211 provider symvers present
+ok   cfg80211 layer sources present
+ok   no vendor firmware in driver src
+ok   no driver objects committed
+ok   install-into-tree.sh syntax
+ok   installer supports --driver-ko
+ok   installer validates the artifact
+ok   build-image.sh syntax
+ok   build script defaults to prebuilt
+ok   verify-image.sh syntax
+ok   selftest.sh syntax
+ok   UBI extractor syntax
+ok   REPORT.md present
+ok   BUILD-NOTES.md present
+ok   DEPLOY.md present
+ok   README.md present
+ok   kernel-symbols.config present
+ok   HOTPLUG_CPU carry-over present
+ok   build script carries over symbols
+ok   build-evidence gitignores work/
+ok   recorded build summary present
+ok   recorded image verify PASS
+ok   recorded build PASS
+ok   validated kernel slice recorded
+ok   round-2 ABI image evidence archived
+ok   prebuilt driver identity recorded
+ok   final container hash recorded
+ok   final rootfs hash recorded
+ok   combined driver artifact recorded
+ok   hostapd in final manifest
+ok   wifi-scripts in final manifest
+ok   DEPLOY documents rootfs-only path
+ok   required list has iw
+ok   required list has iwinfo
+ok   required list has hostapd
+ok   required list has hostap ucode
+ok   required list has ucode wifi
+ok   required list has ucode nl80211
+ok   required list has cfg80211.ko
+ok   required list has hi5622_wifi.ko
+ok   required list has regulatory.db
+ok   no binaries committed in lane dir
+ok   no private key material
+
+wifi-image-integration selftest: 72 checks PASS, 0 failed

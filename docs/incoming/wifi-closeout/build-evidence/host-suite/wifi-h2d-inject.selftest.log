@@ -1,0 +1,68 @@
+== wifi-h2d-inject build driver: tree=base work=/tmp/wifi-h2d-inject-base
+== [1/2] userspace selftest (shared frame model, no device)
+PASS build: minimal frame returns OK
+PASS build: minimal frame total = 12 B
+PASS build: success leaves err empty
+PASS build: hdr[0] = group 4
+PASS build: hdr[1] = alloc bit | dst 0
+PASS build: hdr u16@4 = payload + 12
+PASS build: hdr u16@6 = id 1 (LE)
+PASS build: hdr[8] field c default 0
+PASS build: hdr[9] dst 0
+PASS build: hdr u16@0xa = tag 0x5a5a
+PASS build: 4-byte payload total = 16 B
+PASS build: dst 0x0f -> hdr[1] = 0xf1
+PASS build: dst 0x0f -> hdr[9] = 0x0f
+PASS build: fields a/b/c at hdr[2]/[3]/[8]
+PASS build: payload copied at hdr+0x0c
+PASS build: hdr u16@4 = 16
+PASS build: hdr u16@6 = id 0x1234 (LE)
+PASS build: max payload 0x674 -> total 0x680
+PASS build: max frame hdr u16@4 = 0x680
+PASS build: max payload last byte copied
+PASS build: payload 0x675 refused (EBOUNDS)
+PASS build: id 5 refused (EREFUSED)
+PASS build: group 16 refused (EBOUNDS)
+PASS build: dst 16 refused (EBOUNDS)
+PASS build: buffer too small refused (EBUFFER)
+PASS build: buffer-too-small leaves output untouched
+PASS build: writes exactly total bytes (no padding)
+PASS validate: canonical frame accepted
+PASS validate: short frame refused
+PASS validate: total > 0x680 refused
+PASS validate: declared length mismatch refused
+PASS validate: bad transport tag refused
+PASS validate: raw id 5 refused (EREFUSED)
+PASS validate: hdr[9] != hdr[1]>>4 refused
+PASS validate: alloc bit not required on a raw frame
+PASS parse: group/id/dst
+PASS parse: payload hex
+PASS parse: fields a/b/c default 0
+PASS parse: whitespace + 0x-prefixed numbers
+PASS parse: fields a/b/c overrides
+PASS parse: mixed-case hex payload
+PASS parse: missing group refused
+PASS parse: duplicate key refused
+PASS parse: unknown key refused
+PASS parse: id 5 refused (EREFUSED)
+PASS parse: odd payload hex refused
+PASS parse: non-hex payload refused
+PASS parse: group 16 refused
+PASS parse: empty request refused
+PASS parse: payload 0x674 hex accepted
+PASS parse: payload 0x675 refused (EBOUNDS)
+PASS roundtrip: request parsed
+PASS roundtrip: 16-B payload -> 28 B frame
+PASS roundtrip: built frame validates
+PASS roundtrip: fields land in the header
+PASS raw: frame-to-hex length
+PASS raw: canonical hex round trips
+PASS raw: whitespace tolerated
+PASS raw: non-hex refused
+PASS raw: odd digit count refused
+PASS raw: shorter than 12 B refused
+PASS raw: declared length mismatch refused
+PASS raw: id 5 refused
+SUMMARY: 63 passed, 0 failed
+h2d selftest: OK (63 passed, 0 failed)
+== OK

@@ -1,0 +1,174 @@
+PASS  file exists and is non-trivial: README.md
+PASS  file exists and is non-trivial: REPORT.md
+PASS  file exists and is non-trivial: TABLES.md
+PASS  file exists and is non-trivial: EVIDENCE-INDEX.md
+PASS  file exists and is non-trivial: REPRODUCE.md
+PASS  REPORT has the 14 top-level sections 0..13
+PASS  REPORT section 0 present (Document control)
+PASS  REPORT section 1 present (Executive summary)
+PASS  REPORT section 2 present (System map)
+PASS  REPORT section 3 present (boot chain)
+PASS  REPORT section 4 present (Critical findings)
+PASS  REPORT section 5 present (Protocol reference)
+PASS  REPORT section 6 present (duplex loop)
+PASS  REPORT section 7 present (Bench evidence chain)
+PASS  REPORT section 8 present (Corrections register)
+PASS  REPORT section 9 present (Verification and reproduction)
+PASS  REPORT section 10 present (Limitations)
+PASS  REPORT section 11 present (Publication)
+PASS  REPORT section 12 present (Lane documentation map)
+PASS  REPORT section 13 present (Conventions)
+PASS  REPORT covers release-only
+PASS  REPORT covers 0xCEED
+PASS  REPORT covers 0xCECE
+PASS  REPORT covers PD3
+PASS  REPORT covers PD4
+PASS  REPORT covers 0x108240
+PASS  REPORT covers 0x86807FEF
+PASS  REPORT covers the v2 milestone vocabulary: cfg80211
+PASS  REPORT covers the v2 milestone vocabulary: wiphy
+PASS  REPORT covers the v2 milestone vocabulary: calibration
+PASS  REPORT covers the v2 milestone vocabulary: 1794a531
+PASS  REPORT covers the v2 milestone vocabulary: E1a
+PASS  REPORT covers the v2 milestone vocabulary: data-plane
+PASS  REPORT covers the v3 milestone vocabulary: user_add
+PASS  REPORT covers the v3 milestone vocabulary: user_add_notify
+PASS  REPORT covers the v3 milestone vocabulary: scan_req
+PASS  REPORT covers the v3 milestone vocabulary: BLOCKED-DRIVER
+PASS  REPORT covers the v3 milestone vocabulary: consume-only
+PASS  REPORT covers the v3 milestone vocabulary: 4a1c3b9a
+PASS  REPORT covers the v3 milestone vocabulary: 8fc693ad
+PASS  REPORT covers the v3 milestone vocabulary: 0x0320
+PASS  REPORT covers the v3 milestone vocabulary: one-command
+PASS  REPORT covers the v3 milestone vocabulary: VAP start
+PASS  REPORT covers the v4 milestone vocabulary: AP-ENABLED
+PASS  REPORT covers the v4 milestone vocabulary: cudy-ap-test
+PASS  REPORT covers the v4 milestone vocabulary: fd8e1439
+PASS  REPORT covers the v4 milestone vocabulary: ca32aec4
+PASS  REPORT covers the v4 milestone vocabulary: REPORTS_OBSS
+PASS  REPORT covers the v4 milestone vocabulary: mgmt_stypes
+PASS  REPORT covers the v4 milestone vocabulary: POST-ONLY
+PASS  REPORT covers the v4 milestone vocabulary: mode-1 VAP
+PASS  REPORT covers the v4 milestone vocabulary: 0x01010F18
+PASS  REPORT covers the v4 milestone vocabulary: flashed image
+PASS  REPORT covers the v4 milestone vocabulary: wiphy_new_nm
+PASS  REPORT covers the v4 milestone vocabulary: g1 id0x23
+PASS  REPORT section 6 has the v2+v3+v4 subsections 6.1-6.12
+PASS  REPORT carries findings F1-F14
+PASS  REPORT is the v4 revision
+PASS  only the four evidence markers are used
+PASS  all four markers are actually used
+PASS  findings section carries evidence markers
+PASS  every cited lane path resolves
+PASS  evidence claim IDs are unique
+PASS  evidence index has at least 274 claims
+PASS  evidence index carries the v3 range EV-196..EV-244
+PASS  evidence index carries the v4 range EV-245..EV-277
+PASS  evidence claims are numbered 1..N without gaps
+PASS  every evidence row maps to a real report section and has a marker
+PASS  evidence index covers report sections 1..13
+PASS  cross-check: golden page word 0 matches the owning lane source
+PASS  cross-check: golden page word 3 matches the owning lane source
+PASS  cross-check: release magic 0x5A5A matches the owning lane source
+PASS  cross-check: ready payload 0x01060850 matches the owning lane source
+PASS  cross-check: ctx precondition ctx+0x190 matches the owning lane source
+PASS  cross-check: TXQ sync cmd 0xD8 matches the owning lane source
+PASS  cross-check: PD3 patched image hash matches the owning lane source
+PASS  cross-check: PD4 patched image hash matches the owning lane source
+PASS  cross-check: PD4 cave CPU 0x108240 matches the owning lane source
+PASS  cross-check: context-create key 0x64 matches the owning lane source
+PASS  cross-check: v2 image container matches the owning lane source
+PASS  cross-check: v2 kernel slice matches the owning lane source
+PASS  cross-check: v2 slot hash matches the owning lane source
+PASS  cross-check: cfg80211 module matches the owning lane source
+PASS  cross-check: clean driver hash matches the owning lane source
+PASS  cross-check: calibration node length matches the owning lane source
+PASS  cross-check: calibration key 0x0101 matches the owning lane source
+PASS  cross-check: MAC host-interface block matches the owning lane source
+PASS  cross-check: ETE E1a/E1b ladder matches the owning lane source
+PASS  cross-check: cfg80211 ready gate matches the owning lane source
+PASS  cross-check: PD4 audit footprint matches the owning lane source
+PASS  cross-check: PD4 audit harness matches the owning lane source
+PASS  cross-check: PD4 audit variant hash matches the owning lane source
+PASS  cross-check: PD4 audit H1 read pack matches the owning lane source
+PASS  cross-check: PD4 audit raise CA matches the owning lane source
+PASS  cross-check: VAP user_add SR node word1 matches the owning lane source
+PASS  cross-check: scan request SR node word1 matches the owning lane source
+PASS  cross-check: provider caps 0x1f matches the owning lane source
+PASS  cross-check: data-plane module hash matches the owning lane source
+PASS  cross-check: TXQ-table address sync key 0x0320 matches the owning lane source
+PASS  cross-check: bench-tooling selftest count 503 matches the owning lane source
+PASS  cross-check: phase-matrix BLOCKED-DRIVER vocabulary matches the owning lane source
+PASS  cross-check: H1 static sentinel pointer matches the owning lane source
+PASS  cross-check: AP-start module hash matches the owning lane source
+PASS  cross-check: AP-start module size 206,708 B matches the owning lane source
+PASS  cross-check: hostapd AP mgmt bitmap 0x3c15 matches the owning lane source
+PASS  cross-check: REPORTS_OBSS gate matches the owning lane source
+PASS  cross-check: wiphy_new_nm WARN line matches the owning lane source
+PASS  cross-check: merged data-plane module hash matches the owning lane source
+PASS  cross-check: merged data-plane module size 886,864 B matches the owning lane source
+PASS  cross-check: F-AIR sequence hash matches the owning lane source
+PASS  cross-check: g1 id17 channel record size 124 B matches the owning lane source
+PASS  cross-check: g1 id15 beacon size 509 B matches the owning lane source
+PASS  cross-check: hostapd-mini package size 283,790 B matches the owning lane source
+PASS  cross-check: AP interface type rule matches the owning lane source
+PASS  cross-check: ctx0 BAR0 correction 0x7D1758 matches the owning lane source
+PASS  cross-check: ABI image container hash matches the owning lane source
+PASS  cross-check: ABI image rootfs UBI hash matches the owning lane source
+PASS  cross-check: ABI image kernel package pin matches the owning lane source
+PASS  TXQ config sync wire frame matches the owning lane
+PASS  context-create wire frame matches the owning lane
+PASS  AP-start frame sizes 48/40/64/184 B match the owning lane
+PASS  scan-result numbers (6 results/6 beacons, 124/509 B) match the owning lane
+PASS  the matrix all-PASS evidence id appears in the report and the ledger
+PASS  the historical fired provider module (676,180 B / 4a1c3b9a...) is recorded in the report and the ledger
+PASS  the owning lane's current provider build (704,720 B / 20d38c5c...) is cross-checked
+PASS  ledger contains type-1 ctx allocation
+PASS  ledger contains the operational-loop entry
+PASS  ledger contains the golden page
+PASS  ledger contains the PD4 cave
+PASS  ledger contains the calibration ladder C1 entry
+PASS  ledger contains the first Wi-Fi interface milestone
+PASS  ledger contains the cfg80211 image slot hash
+PASS  ledger contains the cfg80211 milestone
+PASS  ledger contains the three-real-frames milestone
+PASS  ledger contains the real VAP notify frame
+PASS  ledger contains the one-command matrix entry
+PASS  ledger contains the phase-matrix evidence
+PASS  ledger contains the bounded reboot observation
+PASS  ledger contains the H1 consume-only verdict
+PASS  ledger contains the first-live-AP milestone
+PASS  ledger contains the AP-ENABLED state
+PASS  ledger contains the AP SSID
+PASS  ledger contains the VAP pointer
+PASS  ledger contains the ctx0 flag change
+PASS  ledger contains the flash milestone
+PASS  ledger contains the handover script
+PASS  ledger contains the kernel package ABI pin
+PASS  ledger contains the post-flash T0 verify
+PASS  ledger contains the new post-AP D2H family
+PASS  ledger contains the 12-BSS decode
+PASS  STATUS.md carries the full-duplex state section
+PASS  STATUS.md carries the first-Wi-Fi-interface section and the image hash
+PASS  STATUS.md carries the automation-matrix + real-frame section (3l)
+PASS  no secret/private-key material
+PASS  no per-unit MAC addresses
+PASS  no oversized hex blobs (vendor-binary smell)
+PASS  no oversized base64 blobs
+PASS  relative markdown links resolve to companion files
+PASS  markdown table rows are well formed
+PASS  TABLES.md contains at least 31 numbered tables
+PASS  TABLES.md tables are numbered T1..T31 without gaps
+PASS  TABLES.md carries the v2 table T21
+PASS  TABLES.md carries the v2 table T22
+PASS  TABLES.md carries the v2 table T23
+PASS  TABLES.md carries the v2 table T24
+PASS  TABLES.md carries the v2 table T25
+PASS  TABLES.md carries the v3 table T26
+PASS  TABLES.md carries the v3 table T27
+PASS  TABLES.md carries the v3 table T28
+PASS  TABLES.md carries the v4 table T29
+PASS  TABLES.md carries the v4 table T30
+PASS  TABLES.md carries the v4 table T31
+
+RESULT: PASS (172/172 checks)

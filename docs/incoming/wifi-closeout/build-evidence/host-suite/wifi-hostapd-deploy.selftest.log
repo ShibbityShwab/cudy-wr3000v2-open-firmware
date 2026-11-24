@@ -1,0 +1,20 @@
+== wifi-hostapd-deploy selftest ==
+lane: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-hostapd-deploy
+work: /tmp/hostapd-selftest.EGdd3C
+ok   deploy-hostapd --check PASS: == deploy-hostapd: 88 passed, 0 failed (mode=check) ==
+ok   deploy set has no kernel= dependency (userspace-only, kmod ABI pin untouched)
+ok   deploy set contains no kmod package
+ok   tampered .apk caught by the identity gate
+ok   tampered pin table caught by the pinned-sha256 gate
+ok   tampered config fixture caught by the config validity gate
+ok   'type managed' caught by the iface-type gate
+ok   stale 0x7D2758 constant caught by the arithmetic gate
+ok   device action refused without --attended
+ok   rollback refused without --attended/--yes-really
+ok   --check path never invokes the ssh transport (host-only)
+ok   device script fails closed on a broken stage (RESULT line emitted)
+ok   device preflight never attempts a package mutation
+ok   ladder hostapd command uses only supported flags
+
+== selftest: 14 passed, 0 failed ==
+RESULT: PASS - host checks + mutation tests green; no device contact

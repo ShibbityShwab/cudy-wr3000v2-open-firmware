@@ -1,0 +1,166 @@
+== wifi-image-deploy selftest ==
+lane: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-deploy
+ok   deploy-t0.sh present
+ok   t0-device.sh present
+ok   host simulator present
+ok   README.md present
+ok   REPORT.md present
+ok   BENCH-VALIDATION.md present
+ok   deploy-t0.sh executable
+ok   verify-apks-host.sh executable
+ok   deploy-t0.sh bash -n
+ok   host simulator bash -n
+ok   selftest.sh bash -n
+ok   device script sh -n
+ok   shellcheck deploy-t0.sh
+ok   shellcheck verify-apks-host.sh
+ok   shellcheck selftest.sh
+ok   shellcheck t0-device.sh
+ok   expected-packages has 7 rows
+ok   expected-files has 7 rows
+ok   every apk row has 5 fields
+ok   every file row has 3 fields
+ok   device script embeds the kernel dep
+ok   deploy script embeds the kernel dep
+ok   deploy does not default to a write mode
+ok   deploy requires --attended
+ok   deploy requires --yes-really
+ok   device script verifies the no-autoload policy
+ok   no script writes an autoload entry
+ok   deploy script has a userspace-only set
+ok   userspace set is exactly five packages
+ok   userspace set contains no kmod rows
+ok   device script accepts --set
+ok   device script filters kmod rows for userspace
+ok   device script refuses load for userspace set
+ok   read_pkg_field uses manifest column arithmetic (f + 1)
+ok   expected-packages column 2 carries the iw version
+ok   iwinfo gate records output instead of matching usage
+ok   device reports install_mutated for rollback policy
+ok   world gate handles apk v3 name>hash lines
+ok   deploy offers --keep-on-failure
+ok   deploy auto-rollback consults install_mutated
+ok   no binaries in the lane
+ok   no 'mtd' command invocation in the scripts
+ok   no 'ubiformat' command invocation in the scripts
+ok   no 'nvram' command invocation in the scripts
+ok   no 'reboot' command invocation in the scripts
+ok   no 'sysupgrade' command invocation in the scripts
+ok   no 'rmmod' command invocation in the scripts
+ok   no 'flash_erase' command invocation in the scripts
+ok   device script does not touch /dev/mtd
+ok   device script does not touch /dev/mem
+ok   device script does not touch /dev/tty
+ok   device script does not touch ttyUSB
+ok   device script does not touch devmem
+ok   device script never writes to device nodes
+FAIL container present
+ok   kernel slice present
+ok   kernel slice is the validated one
+FAIL container is the bench image (got '' want 'df6a78c3717b0f792391e7f7d488a9f2850c9640553ef391163dd34abdb47310')
+ok   iw sha256
+FAIL iwinfo apk missing
+FAIL libiwinfo20230701 apk missing
+FAIL libiwinfo-data apk missing
+ok   wireless-regdb sha256
+ok   kmod-hi5622-cfg80211 sha256
+FAIL kmod-hi5622-wifi sha256 (got '59286d639a2a3d6bbb9c576fa257ed72252a2d8615c8c7aeafa28041c647f85c' want 'aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef')
+ok   tree vermagic recomputed from .config.set
+ok   tree kernel config has CONFIG_CFG80211=m
+ok   tree driver .ko .modinfo == packaged .ko .modinfo
+ok   default mode never invoked a device helper
+ok   default mode reports a result
+FAIL host check FAIL on the real artifacts
+FAIL kmod-hi5622-wifi installed-size (got 231168 want 133920)
+ok   kmod-hi5622-wifi depends kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   kmod-hi5622-wifi hooks are stock OpenWrt boilerplate (no device ops)
+ok   tree kernel vermagic (recomputed from .config.set)
+ok   tree kernel config has CONFIG_CFG80211=m
+ok   tree .vermagic file
+ok   tree cfg80211.ko build product present
+
+== host check: 28 passed, 6 failed ==
+RESULT: FAIL - do not deploy
+ok   tampered artifact fails the host check
+ok   tampered artifact reported
+FAIL host check FAIL for the userspace-only set
+ok   wireless-regdb installed-size
+ok   wireless-regdb has no kernel= dependency (userspace-safe)
+ok   wireless-regdb hooks are stock OpenWrt boilerplate (no device ops)
+ok   tree kernel vermagic (recomputed from .config.set)
+ok   tree kernel config has CONFIG_CFG80211=m
+ok   tree .vermagic file
+ok   tree cfg80211.ko build product present
+
+== host check: 21 passed, 3 failed ==
+RESULT: FAIL - do not deploy
+ok   userspace host check used the five-package set
+FAIL userspace host check verified no kernel= dependency
+ok   apply without --attended/--yes-really is refused
+FAIL refusal names --attended
+ok   apply with --attended but no --yes-really is refused
+FAIL refusal names --yes-really
+FAIL mocked apply exits 0 (got '1' want '0')
+FAIL mocked apply reported PASS
+FAIL mocked apply staged the 7 apks + script + manifests
+FAIL mocked apply ran the device install
+FAIL mocked apply staged under the device /tmp
+FAIL mocked rollback exits 0 (got '1' want '0')
+FAIL mocked rollback ran the device rollback
+FAIL mocked userspace apply exits 0 (got '1' want '0')
+FAIL mocked userspace apply passed the userspace set to the device
+FAIL mocked userspace apply staged only the five apks
+ok   mocked userspace apply staged no kmod package
+ok   userspace-only --load-check is refused
+FAIL userspace-only load refusal names the full set
+ok   userspace-only load refusal did not contact the device
+FAIL failed install that mutated the db triggers automatic rollback
+ok   failed install is kept with --keep-on-failure
+ok   failed idempotent verify does not roll back a pre-existing set
+ok   device preflight FAIL aborts the deploy
+ok   no install step ran after the failed preflight
+ok   device script without args prints usage and exits 2
+ok   device script fails closed off the bench image
+ok   device script emitted gate lines
+ok   device script emitted a FAIL result
+FAIL host apk-transaction simulation FAIL
+== T0 host apk-transaction simulation ==
+artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
+tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
+work     : /tmp/t0-verify.7EWuUf
+
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   iw apk sha256
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/iwinfo-2026.05.26~66bdd1a0-r1.apk
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/libiwinfo20230701-2026.05.26~66bdd1a0-r1.apk
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/libiwinfo-data-2026.05.26~66bdd1a0-r1.apk
+ok   wireless-regdb apk sha256
+ok   kmod-hi5622-cfg80211 apk sha256
+FAIL kmod-hi5622-wifi apk sha256 (got '59286d639a2a3d6bbb9c576fa257ed72252a2d8615c8c7aeafa28041c647f85c' want 'aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef')
+FAIL missing container /home/shibbityshwab/wifi-image-integration-artifacts/bench-image-sysupgrade.bin
+
+== verify-apks-host: 5 passed, 5 failed ==
+RESULT: FAIL
+FAIL host userspace-only transaction simulation FAIL
+== T0 host apk-transaction simulation ==
+artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
+tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
+work     : /tmp/t0-verify.cGKnpA
+
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   iw apk sha256
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/iwinfo-2026.05.26~66bdd1a0-r1.apk
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/libiwinfo20230701-2026.05.26~66bdd1a0-r1.apk
+FAIL missing /home/shibbityshwab/wifi-image-integration-artifacts/libiwinfo-data-2026.05.26~66bdd1a0-r1.apk
+ok   wireless-regdb apk sha256
+ok   kmod-hi5622-cfg80211 apk sha256
+FAIL kmod-hi5622-wifi apk sha256 (got '59286d639a2a3d6bbb9c576fa257ed72252a2d8615c8c7aeafa28041c647f85c' want 'aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef')
+FAIL missing container /home/shibbityshwab/wifi-image-integration-artifacts/bench-image-sysupgrade.bin
+
+== verify-apks-host: 5 passed, 5 failed ==
+RESULT: FAIL
+
+== wifi-image-deploy selftest: 80 passed, 25 failed, 0 skipped ==
+RESULT: FAIL

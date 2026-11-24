@@ -1,0 +1,42 @@
+== 1. merge provenance (provider base -> this src tree) ==
+base  : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-scan-complete/src (47 source files)
+lane  : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-dp-air/src (55 source files)
+added : dp_rings.c, dp_rings.h, dp_txrx.c, dp_txrx.h, hi5622_dp.c, hi5622_dp.h, hi5622_dp_txrx.c, hi5622_dp_txrx.h
+mod   : Kbuild, h2d_send.c, h2d_send.h, h2d_send_logic.c, h2d_send_logic.h, hi5622_driver.h, hi5622_hcc.h, main.c
+patch : 142595 B sha256 084c2d3466f1c49841181cc848cd32f5f3cc4187d3cb2ba09b61dfe5d1830006
+merged tree sha256 (fingerprint): 5a0026cdc879e7ea71777cbe0908b4f286f930c5c1c08c0abcce7d6aee4eb4ff
+PASS: merge patch reproduces the lane tree; scope + drift checks OK
+
+== 2. inherited host regressions on the merged tree ==
+h2d_send_logic selftest: 242/242 checks PASS
+SUMMARY: 254 passed, 0 failed
+290/290 checks passed
+195/195 PASS
+454/454 checks passed
+
+== 3. merged-tree data-plane selftest (host, device-free) ==
+wifi-dp-air merged-tree selftest (host, device-free)
+[merge shape]
+[geometry]
+[ring index]
+[MSDU table]
+[MAC program]
+[txq addr sync frame]
+[gates]
+wifi-dp-air merged-tree selftest: 48/48 checks PASS
+
+== 4. F-AIR protocol-sequence validation (bench tooling) ==
+sequence: 30 steps, 83 checks, 7 writes, 344 rendered lines (order checked)
+
+== 5. kernel module build (project 6.18.60 tree, staged src copy) ==
+module      : /tmp/wifi-dp-air-build/src/hi5622_wifi.ko
+size_bytes  : 886864
+sha256      : ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+cfg80211 U  : 9 (wiphy_* + cfg80211_*)
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/hi5622-wifi-dp-air-build.log
+
+== 6. device-free source/publication checks ==
+OK: merge provenance + 1435 inherited host checks + 48 merged checks + sequence + clean module build + publication checks
+artifact: 886864 B sha256 ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0

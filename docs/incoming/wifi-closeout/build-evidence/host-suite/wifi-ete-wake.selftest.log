@@ -1,0 +1,83 @@
+PASS   1: firmware identity sha256 = 7fc87e20...ef311b
+PASS   2: image size 928,920 B
+PASS   3: hcc+0x04 = 4 DR channels
+PASS   4: hcc+0x08 = 3 SR channels
+PASS   5: hcc+0x0C = ETE status base 0x4003A86C
+PASS   6: hcc+0x14 = DR record array 0x10F2B8
+PASS   7: hcc+0xB0 crash-dump source = 0x4003A000
+PASS   8: hcc+0xB4 crash-dump length = 0xC28
+PASS   9: 0x4624C literal home 0x462EC = hcc_instance
+PASS  10: 0x4624C reads hcc+0xC
+PASS  11: 0x4624C reads [base+8] status word
+PASS  12: 0x4624C acks [base+4]
+PASS  13: 0x4624C bits24-28 -> [hcc+0x1C]
+PASS  14: 0x4624C bits16-20 -> [hcc+0x24]
+PASS  15: 0x4624C tail d2h_notify id 3
+PASS  16: 0x4624C extracts channel idx as bits[24:29]
+PASS  17: 0x462F8 reads hcc+0xC
+PASS  18: 0x462F8 reads [base+8] status word
+PASS  19: 0x462F8 bits0-2 -> [hcc+0x20]
+PASS  20: 0x462F8 bits8-10 -> [hcc+0x28]
+PASS  21: install literal +0x1C = 0xC625B
+PASS  22: install literal +0x20 = 0xC6803
+PASS  23: install literal +0x24 = 0xC1903
+PASS  24: install literal +0x28 = 0xC18FF
+PASS  25: install store hcc+0x1C
+PASS  26: install store hcc+0x20
+PASS  27: install store hcc+0x24
+PASS  28: install store hcc+0x28
+PASS  29: stub 0xC1902 returns 0
+PASS  30: stub 0xC18FE returns 0
+PASS  31: registration literal 0x2D handler = 0x462F9
+PASS  32: registration literal 0x2E handler = 0x4624D
+PASS  33: 0x496C8 site passes event id 0x2D
+PASS  34: 0x496D6 site passes event id 0x2E
+PASS  35: events 0x2D/0x2E enabled via 0xC6FF4
+PASS  36: no BL/BLX caller of event-0x2E handler
+PASS  37: no BL/BLX caller of event-0x2D handler
+PASS  38: event dispatcher 0xC2EFC has exactly one caller (ARM trampoline CPU 0x40094)
+PASS  39: ARM trampoline at 0x40064 ends its blx at 0x40094 to 0xC2EFC
+PASS  40: cross-check: d2h_notify 0xC6170 has exactly the two known callers
+PASS  41: status word 0x4003A874 has no literal home
+PASS  42: no image materialisation of the DR send words (no ldr/movw-movt refs)
+PASS  43: no image materialisation of the SR send words (no ldr/movw-movt refs)
+PASS  44: door0 CA only as the data pair home 0x10CACC
+PASS  45: door1 CA only as the data pair home 0x10CB94
+PASS  46: no code materialises the engine door CA 0x4003A7C0
+PASS  47: no code materialises the engine door CA 0x4003A7D0
+PASS  48: engine global base 0x4003A000 is not materialised inside a movw/movt pair
+PASS  49: trigger requires hcc+0x5C (g)
+PASS  50: trigger requires hcc+0x14 (DR records)
+PASS  51: trigger bounds ch by hcc+0x04
+PASS  52: trigger uses record stride 0x354
+PASS  53: trigger bumps record+0x344
+PASS  54: trigger reads send word CA record+0x32C
+PASS  55: trigger target = send word hi16
+PASS  56: trigger handshake-writes PKTRAM control word record+0x14
+PASS  57: trigger read-back compares control word
+PASS  58: trigger scans for tag 0x5A5A
+PASS  59: trigger checks node tag byte +0xA
+PASS  60: trigger accounts released nodes at record+0x34C
+PASS  61: trigger sets progress record+0x10 = target
+PASS  62: trigger wakes g via 0xC5128
+PASS  63: 0xC6802 is the SR receive callback (reads hcc+0x5C/0x10/0x08)
+PASS  64: 17 software event-raise sites in the image
+PASS  65: no image site raises event 0x2D
+PASS  66: no image site raises event 0x2E
+PASS  67: pcie_msg_init raises 0x4C and 0x4E (census sanity)
+PASS  68: ETE ops table base 0x4003A000
+PASS  69: ETE ops table intr word 0x40039508
+PASS  70: vendor plat.ko identity sha256 = 6f2eac41...cd491
+PASS  71: vendor dr_reg_init writes DR +0x38 from inst[+0x1C] (str r2,[r3,#56])
+PASS  72: vendor dr_init zeroes inst+0x1C (str r6,[r1,#28])
+PASS  73: vendor D2H re-arm writes +0x38 from ctx[+0x1C]
+PASS  74: vendor D2H re-arm writes +0x18 from ctx[+0x28]
+PASS  75: pcie_trigger_ete_sending_handle is a branch (tail call), not data
+PASS  76: vendor .data contains only the ETE CA pair {0x4003A000, 0x40039508}
+PASS  77: BAR0 map: ETE status word -> 0x3F2874
+PASS  78: BAR0 map: DR0 published -> 0x3F25C8
+PASS  79: BAR0 map: door0 -> 0x3F27C0
+PASS  80: BAR0 map: DR trigger counter0 -> 0x7C35FC
+PASS  81: BAR0 map: PKTRAM DR0 node array -> 0x238540
+
+81/81 checks PASS

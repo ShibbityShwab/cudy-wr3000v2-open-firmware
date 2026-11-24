@@ -1,0 +1,37 @@
+== 1. host cfg80211 logic selftest (device-free) ==
+wifi-cfg80211 logic selftest (device-free)
+454/454 checks passed
+PASS
+built: /tmp/wifi-cfg80211-build/cfg80211_logic_selftest (46320 bytes)
+
+== 2. host H2D logic selftest (inherited protocol regression) ==
+h2d_send_logic selftest (host, device-free)
+h2d_send_logic selftest: 242/242 checks PASS
+built: /tmp/wifi-cfg80211-build/h2d_logic_selftest (69784 bytes)
+
+== 3. kernel module build (project 6.18.60 tree) ==
+module      : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-cfg80211/tools/../src/hi5622_wifi.ko
+size_bytes  : 505076
+sha256      : d2b3cf7917df1a7439c5dad1badd83bf97d627ae54ca9f5db7e34216edc2edaa
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+depends     : cfg80211
+cfg imports : 6 (wiphy_*/cfg80211_* undefined)
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/hi5622-wifi-cfg80211-build.log
+
+
+== 4. cfg80211 provider-symbols check (kernel tree exports) ==
+ERROR: provider symbol cfg80211_register_netdevice is already in the tree Module.symvers
+ERROR: provider symbol cfg80211_unregister_wdev is already in the tree Module.symvers
+ERROR: provider symbol wiphy_free is already in the tree Module.symvers
+ERROR: provider symbol wiphy_new_nm is already in the tree Module.symvers
+ERROR: provider symbol wiphy_register is already in the tree Module.symvers
+ERROR: provider symbol wiphy_unregister is already in the tree Module.symvers
+WARNING: provider symbol no longer imported: cfg80211_register_netdevice
+WARNING: provider symbol no longer imported: cfg80211_unregister_wdev
+WARNING: provider symbol no longer imported: wiphy_free
+WARNING: provider symbol no longer imported: wiphy_new_nm
+WARNING: provider symbol no longer imported: wiphy_register
+WARNING: provider symbol no longer imported: wiphy_unregister
+FAIL: 6 provider-symbol error(s); run with --update to regenerate
+FAIL: cfg80211-provider.symvers does not match the module/tree exports

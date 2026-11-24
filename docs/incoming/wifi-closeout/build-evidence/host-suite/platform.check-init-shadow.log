@@ -1,0 +1,1 @@
+PASS: the shadow keeps the pinctrl and the switch, drops only hi_kphy/hi_kmdio/hi_kmac

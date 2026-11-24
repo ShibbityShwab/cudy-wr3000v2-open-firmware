@@ -1,0 +1,26 @@
+check-artifacts: env=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-bench-session/artifacts.env phases: s a x
+FW PD4                 OK sha256=cfe24bfb19... size=928920
+FW manifest            OK sha256=d89f01a7b6... size=9033
+PHY block              OK sha256=0b4ef9188f... size=2472
+cfg80211.ko            OK sha256=949393f967... size=2328548
+iw                     OK sha256=6345e1cacf... size=152912
+libnl-tiny             OK sha256=5978991097... size=40812
+scan module            OK sha256=02162d4a62... size=748564
+FW PD4                 OK sha256=cfe24bfb19... size=928920
+FW manifest            OK sha256=d89f01a7b6... size=9033
+PHY block              OK sha256=0b4ef9188f... size=2472
+cfg80211.ko            OK sha256=949393f967... size=2328548
+iw                     OK sha256=6345e1cacf... size=152912
+libnl-tiny             OK sha256=5978991097... size=40812
+AP module              FAIL sha256=e9eeeb69830a55db9e2b3880fbbbbcdc7194296c2163d29e2f7dad09d53c4bbd size=787072 (want 115119809f103abe753c335e8a386c58987f2578422cc1d359db1d0303992f94 770304)
+hostapd on-box         OK on-box=/usr/sbin/hostapd sha256=13cb3a4306... (verified in phase A)
+hostapd conf           OK on-box=/root/hostapd-deploy/hostapd-open.conf sha256=e4f6edc694... (verified in phase A)
+FW PD4                 OK sha256=cfe24bfb19... size=928920
+FW manifest            OK sha256=d89f01a7b6... size=9033
+PHY block              OK sha256=0b4ef9188f... size=2472
+cfg80211.ko            OK sha256=949393f967... size=2328548
+iw                     OK sha256=6345e1cacf... size=152912
+libnl-tiny             OK sha256=5978991097... size=40812
+X merged module        FAIL sha256=ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0 size=886864 (want ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3 884576)
+X sequence             OK sha256=9635436586... size=16600
+check-artifacts: FAIL (1 pin(s) failed)

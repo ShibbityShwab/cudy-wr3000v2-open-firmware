@@ -1,0 +1,123 @@
+# luofu factory-MAC provisioning - host-side mocked tests
+# helper: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/target-skeleton/tools/../target/linux/hisilicon/base-files/lib/functions/luofu-mac.sh
+# board.d: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/target-skeleton/tools/../target/linux/hisilicon/base-files/etc/board.d/02_network
+
+  # static: syntax, modes, wiring, no factory-partition writes
+ok 1 - helper passes sh -n
+ok 2 - board.d/02_network passes sh -n
+ok 3 - test itself passes bash -n
+ok 4 - helper mode is 0644
+ok 5 - board.d/02_network mode is 0755
+ok 6 - board.d sources the MAC helper
+ok 7 - board.d calls luofu_mac_setup
+ok 8 - board.d calls luofu_mac_apply
+ok 9 - board.d no longer sources the non-existent board.sh
+ok 10 - helper never writes the bdinfo partition
+ok 11 - helper never reads the U-Boot env
+ok 12 - helper reads offset 0xde00
+ok 13 - helper reads the bdinfo partition
+  # canonicalize: colon/dash/dot/12-hex/upper case
+ok 14 - canon: upper-case colon form
+ok 15 - canon: bare 12-hex
+ok 16 - canon: dash form
+ok 17 - canon: dot form
+ok 18 - canon: garbage rejected
+ok 19 - canon: too long rejected
+ok 20 - canon: short octets padded
+  # validate: factory-style acceptance and every rejection class
+ok 21 - validate: accepts a universal unicast MAC
+ok 22 - validate: canonicalizes upper case
+ok 23 - validate: rejects multicast
+ok 24 - validate: rejects locally-administered
+ok 25 - validate: rejects all-zero
+ok 26 - validate: rejects erased flash
+ok 27 - validate: rejects unassigned OUI 00:00:00
+ok 28 - validate: rejects the WAN-wrap base
+ok 29 - validate: rejects non-MAC input
+  # add: vendor/OpenWrt macaddr_add rule (both implementations)
+ok 30 - add: simple +1
+ok 31 - add: last byte ff keeps the OUI
+ok 32 - add: NIC-field wrap, no OUI carry
+ok 33 - add: full NIC wrap to 00:00:00
+ok 34 - add: zero NIC increments low byte
+ok 35 - add: last NIC address wraps
+ok 36 - add: POSIX fallback and system.sh implementation agree on all vectors
+  # read: mtd_get_mac_binary (vendor 2.5.24 path)
+ok 37 - read-helper: setup rc
+ok 38 - read-helper: source is factory
+ok 39 - read-helper: LAN = base MAC
+ok 40 - read-helper: WAN = base+1
+ok 41 - read-helper: read path recorded
+ok 42 - read-helper: applied through ucidef
+ok 43 - read-helper: WAN entry recorded
+  # read: direct /dev/mtdN fallback when the standard helper is absent
+ok 44 - read-direct: setup rc
+ok 45 - read-direct: source is factory
+ok 46 - read-direct: LAN
+ok 47 - read-direct: WAN
+ok 48 - read-direct: path names the char device and offset
+ok 49 - read-direct: factory read is logged
+  # read: direct fallback when mtd_get_mac_binary returns empty or garbage
+ok 50 - read-empty-helper: LAN from direct read
+ok 51 - read-empty-helper: source is factory
+ok 52 - read-garbage-helper: LAN from direct read
+ok 53 - read-garbage-helper: source is factory
+  # read: bdinfo is found by label, never by a hardcoded mtd index
+ok 54 - read-label: LAN read from mtd5 by label
+ok 55 - read-label: path names mtd5
+  # read: only the 6 bytes at 0xde00 are used
+ok 56 - read-offset: exact 0xde00 bytes used
+ok 57 - read-offset: WAN derived from them
+  # read: missing table / label / device / short partition all fall back
+ok 58 - read-no-table: source is random
+ok 59 - read-no-table: log names the unreadable table
+ok 60 - read-no-label: source is random
+ok 61 - read-no-label: log names the missing label
+ok 62 - read-small-partition: source is random
+ok 63 - read-small-partition: log names the too-small partition
+ok 64 - read-missing-device: source is random
+ok 65 - read-missing-device: log names the missing device
+ok 66 - read-short-device: source is random
+ok 67 - read-short-device: log names the short read
+  # corrupt: every invalid factory value -> logged random fallback
+ok 68 - corrupt [00:00:00:00:00:00]: source is random
+ok 69 - corrupt [00:00:00:00:00:00]: log names the rejection
+ok 70 - corrupt [ff:ff:ff:ff:ff:ff]: source is random
+ok 71 - corrupt [ff:ff:ff:ff:ff:ff]: log names the rejection
+ok 72 - corrupt [01:22:33:44:55:66]: source is random
+ok 73 - corrupt [01:22:33:44:55:66]: log names the rejection
+ok 74 - corrupt [02:22:33:44:55:66]: source is random
+ok 75 - corrupt [02:22:33:44:55:66]: log names the rejection
+ok 76 - corrupt [00:00:00:12:34:56]: source is random
+ok 77 - corrupt [00:00:00:12:34:56]: log names the rejection
+ok 78 - corrupt [00:11:22:ff:ff:ff]: source is random
+ok 79 - corrupt [00:11:22:ff:ff:ff]: log names the rejection
+  # random: locally-administered unicast MACs + WAN relation
+ok 80 - random-bits: source is random
+ok 81 - random-bits: multicast cleared, LA bit set
+ok 82 - random-bits: WAN = LAN+1
+ok 83 - random-bits: warning logged
+ok 84 - random-wrap: existing LA bit kept, unchanged
+ok 85 - random-wrap: WAN wraps the NIC field
+ok 86 - random-source: real /dev/urandom gives a 12-hex MAC
+ok 87 - random-source: random MAC is a unicast UNIVERSAL address before fallback marking
+ok 88 - random-failure: setup rc is a failure
+ok 89 - random-failure: LAN left empty
+ok 90 - random-failure: WAN left empty
+ok 91 - random-failure: apply refused
+ok 92 - random-failure: clear error logged
+ok 93 - random-failure: nothing applied
+  # apply: exact board.json entries, nothing when setup failed
+ok 94 - apply: refuses without a setup result
+ok 95 - apply: wrote nothing
+ok 96 - apply: rc
+ok 97 - apply: lan entry first
+ok 98 - apply: wan entry second
+ok 99 - apply: exactly two entries
+  # read-only: the fixture bdinfo bytes are never modified
+ok 100 - read-only: fake bdinfo device unchanged
+ok 101 - read-only: no write command in the log
+ok 102 - load: sourcing the helper prints nothing on stdout
+ok 103 - load: sourcing the helper prints nothing on stderr
+
+# passed: 103  failed: 0

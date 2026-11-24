@@ -1,0 +1,81 @@
+== 1. host data-plane selftest (device-free) ==
+dp_rings selftest (host, device-free)
+[geometry]
+[ring index]
+[MSDU table]
+[MAC program]
+[txq addr sync frame]
+[gates]
+dp_rings selftest: 69/69 checks PASS
+
+== 2. host H2D control-plane regression selftest ==
+h2d_send_logic selftest (host, device-free)
+h2d_send_logic selftest: 308/308 checks PASS
+
+== 3. static decode selftest (local vendor artifacts, host-only) ==
+dp_static_decode: host-only assertions on the local vendor artifacts
+== vendor host module: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/rootfs-2.4.15/lib/hisilicon/ko/hi5622v100_wifi.ko
+PASS: vendor module md5 pin
+PASS: symbol hmac_txq_table_init @0x1b0b4/0x1e0
+PASS: symbol hmac_txq_table_addr_sync @0x1af00/0x10c
+PASS: symbol hmac_tx_msdu_info_ring_table_addr_init @0x184f0/0x164
+PASS: symbol hmac_get_user_tid_tx_msdu_info_ring_table_addr @0x183a0/0x150
+PASS: symbol shuangta_tx_msdu_ring_buf_alloc @0x38f5c/0x128
+PASS: symbol hmac_tx_msdu_dscr_init @0x18654/0xc8
+PASS: symbol shuangta_rx_host_init_dscr_queue @0x37888/0x460
+PASS: symbol shuangta_ba_info_res_alloc @0x37d18/0x210
+PASS: symbol hmac_update_user_tid_txq_table @0x1b294/0x238
+PASS: symbol hdpp_config_send_event @0x59c0/0x18c
+PASS: txq table alloc size 0x2524 in hmac_txq_table_init
+PASS: txq init calls MSDU-table-base init before addr sync
+PASS: addr sync sends hdpp_config_send_event
+PASS: addr sync cmd 0x320 / len 4
+PASS: addr sync payload = [dev+0x948] (TXQ table DMA address)
+PASS: MSDU table base init: d2h read msg -> ACP -> MAC +0x10
+PASS: MSDU table entry stride 12 and user*8 index
+PASS: MSDU table entry resolved through devca->hostva
+PASS: TX ring alloc: noncached alloc + 0x40 entry writes
+PASS: TX ring publish barriers dmb+dsb+sev
+PASS: TX MSDU ring depth default 0x40 (str r6,[r3,#-0x20], r6=0x40)
+PASS: RX norm free ring 0x400 B (256 x 4)
+PASS: RX small free ring 0x800 B (512 x 4)
+PASS: RX completion ring 0x3ffc B (4095 x 4)
+PASS: RX buffer lengths 0x63c / 0xb0
+PASS: RX ring sizes 256/512/4095 written through 12-bit fields
+PASS: tx_ba_info alloc 0x800 B, depth 0x100
+PASS: TXQ table user block stride 0x40 at +0x520/+4
+PASS: config event header key/len offsets
+== vendor firmware image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+PASS: firmware sha256/len pin
+PASS: fw worker 0x81445: band-array stride 0x252c
+PASS: fw worker 0x81445: TXQ table devVA stored at +0x2524
+PASS: fw worker 0x81039: key-0x00d8 data[0] -> ctx+0x190+0x4c
+SUMMARY: 34 passed, 0 failed, 0 skipped
+
+== 4. kernel module build (project 6.18.60 tree) ==
+module      : /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-datapath-bringup/tools/../src/hi5622_wifi.ko
+size_bytes  : 462952
+sha256      : 8fc693ad4c3c9338baa1089ecb2acd420be78eb059760bfc0fa356ade205cec9
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+dp syms     : 13 (T dp_*/hi5622_dp*)
+h2d syms    : 38 (T h2d_*)
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/hi5622-wifi-datapath-bringup-build.log
+
+== 5. protocol sequence schema validation (bench-tooling validator) ==
+PASS: schema/name
+PASS: profile
+PASS: boot golden pack gates (>=8 numeric gates)
+PASS: three attr writes (ctx_create, dp_setup, txq addr)
+PASS: dp_probe read gate emitted
+PASS: dp_setup read-back gate emitted
+PASS: dp_rings read gate emitted
+PASS: txq addr write uses the allowlisted alias
+PASS: post-run mask/staging gates emitted
+PASS: stop-on-first-failure chain present
+sequence: 14 steps, 156 rendered lines
+SUMMARY: 10 passed, 0 failed
+
+== 6. source checks ==
+OK: host data-plane selftest + H2D regression + static decode + clean kernel build
+artifact: 462952 B sha256 8fc693ad4c3c9338baa1089ecb2acd420be78eb059760bfc0fa356ade205cec9

@@ -1,0 +1,4 @@
+== compile (-std=c99 -Wall -Wextra -Werror -pedantic) ==
+== run selftest ==
+SUMMARY: 77 passed, 0 failed
+BUILD OK (host-only; no device contact)

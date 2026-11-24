@@ -1,0 +1,19 @@
+make: Entering directory '/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+make[1]: Entering directory '/tmp/wifi-h2d-frames-kernel'
+  CC [M]  pciet_main.o
+  CC [M]  pciet_ete.o
+  CC [M]  pciet_hcc_service.o
+  CC [M]  h2d_frames.o
+  LD [M]  hi5622_pciet_hcc.o
+  MODPOST Module.symvers
+  CC [M]  hi5622_pciet_hcc.mod.o
+  CC [M]  .module-common.o
+  LD [M]  hi5622_pciet_hcc.ko
+make[1]: Leaving directory '/tmp/wifi-h2d-frames-kernel'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+
+== kernel-context compile result
+-rw-r--r-- 1 shibbityshwab shibbityshwab 233768 พ.ย.  24 18:53 /tmp/wifi-h2d-frames-kernel/hi5622_pciet_hcc.ko
+6a3efa57e628a9d32726a9d79ef867db5dcbef9c4d619aa37316221edb2a9c8c  /tmp/wifi-h2d-frames-kernel/hi5622_pciet_hcc.ko
+h2d symbols in module: 29
+kernel-check: OK (zero warnings; module-only build; no image, no device)

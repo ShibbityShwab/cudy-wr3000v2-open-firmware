@@ -1,0 +1,95 @@
+== wifi-abi-image lane selftest (device-free) ==
+lane: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-abi-image
+
+ok   README.md exists
+ok   REPORT.md exists
+ok   FLASH-RUNBOOK.md exists
+ok   tools/build-abi-image.sh exists
+ok   tools/verify-abi-image.sh exists
+ok   tools/selftest.sh exists
+ok   build script executable
+ok   verify script executable
+ok   build-abi-image.sh bash -n
+ok   verify-abi-image.sh bash -n
+ok   selftest.sh bash -n
+ok   build-abi-image.sh has no 'ssh ' command
+ok   build-abi-image.sh has no 'rsh.sh' command
+ok   build-abi-image.sh has no 'rscp.sh' command
+ok   build-abi-image.sh has no 'mtd ' command
+ok   build-abi-image.sh has no 'ubiformat' command
+ok   build-abi-image.sh has no 'devmem' command
+ok   build-abi-image.sh has no 'insmod ' command
+ok   build-abi-image.sh has no 'rmmod ' command
+ok   build-abi-image.sh has no '/dev/mtd' command
+ok   build-abi-image.sh has no 'flash_erase' command
+ok   build-abi-image.sh has no 'nandwrite' command
+ok   build-abi-image.sh has no '/sbin/sysupgrade' command
+ok   build-abi-image.sh has no 'reboot ' command
+ok   verify-abi-image.sh has no 'ssh ' command
+ok   verify-abi-image.sh has no 'rsh.sh' command
+ok   verify-abi-image.sh has no 'rscp.sh' command
+ok   verify-abi-image.sh has no 'mtd ' command
+ok   verify-abi-image.sh has no 'ubiformat' command
+ok   verify-abi-image.sh has no 'devmem' command
+ok   verify-abi-image.sh has no 'insmod ' command
+ok   verify-abi-image.sh has no 'rmmod ' command
+ok   verify-abi-image.sh has no '/dev/mtd' command
+ok   verify-abi-image.sh has no 'flash_erase' command
+ok   verify-abi-image.sh has no 'nandwrite' command
+ok   verify-abi-image.sh has no '/sbin/sysupgrade' command
+ok   verify-abi-image.sh has no 'reboot ' command
+ok   build serializes with flock
+ok   build refuses to run while a make works in the tree
+ok   build restores .config byte-identically
+ok   build restores the rootfs staging tree
+ok   build verifies the kernel package version
+ok   verify pins the validated kernel slice
+ok   verify pins the kernel slot hash
+ok   verify pins the kernel vermagic
+ok   verify pins the kernel package dep
+ok   verify checks the image apk-db kernel version
+ok   verify checks kmod .apk kernel= deps
+ok   verify checks module vermagic
+ok   integration config delta present
+ok   kernel symbols carry-over present
+ok   integration driver-install tool present
+ok   integration image verifier present
+ok   UBI extractor present
+ok   driver source present
+ok   runbook names 'tools/bench-link.sh'
+ok   runbook names 'tools/recovery-card.sh'
+ok   runbook names 'tools/uart-capture.sh'
+ok   runbook names 'tools/stock-telnet-install.sh'
+ok   runbook names '--inspect'
+ok   runbook names '--apply --attended --recovery-armed'
+ok   runbook names 'ubiformat'
+ok   runbook names '1794a531'
+ok   runbook names '6f995278'
+ok   runbook names 'query --fields version kernel'
+ok   runbook names 'rollback'
+ok   runbook names 'pair A'
+ok   runbook names 'RESET'
+ok   runbook names '0x400392F0'
+ok   runbook names 'never write the active pair'
+ok   runbook warns about the active pair/ubiformat hazard
+ok   runbook references the saved stock rollback
+ok   report names the kernel slot hash
+ok   report names the kernel package pin
+ok   readme names the flash runbook
+ok   build evidence records result PASS
+ok   build evidence records the kernel package dep
+ok   abi verification PASS
+ok   abi verification has zero failed checks
+ok   integration verifier PASS
+ok   container recorded in the build summary
+ok   kernel slice recorded in the build summary
+ok   rootfs UBI recorded in the build summary
+ok   artifacts kernel-slice.bin sha256
+ok   artifacts rootfs.ubi present
+ok   artifacts SHA256SUMS present
+ok   artifacts SHA256SUMS has 14 entries
+ok   artifacts SHA256SUMS verifies (sha256sum -c)
+ok   artifact kernel full-slot hash verified in evidence
+
+== wifi-abi-image selftest: 89 passed, 0 failed ==
+RESULT: PASS

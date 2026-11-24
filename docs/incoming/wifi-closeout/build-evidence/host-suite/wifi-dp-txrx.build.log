@@ -1,0 +1,38 @@
+== 1. host portable TX/RX selftest (device-free) ==
+SUMMARY: 254 passed, 0 failed
+
+== 2. static-decode assertions (local vendor artifacts, host-only) ==
+== vendor host module: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/rootfs-2.4.15/lib/hisilicon/ko/hi5622v100_wifi.ko
+== vendor firmware image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+== lane source consistency (no device) ==
+SUMMARY: 87 passed, 0 failed, 0 skipped
+
+== 3. protocol-sequence validation (bench tooling, no device) ==
+PASS: schema/name
+PASS: profile
+PASS: boot golden page/state/mask gates
+PASS: one ctx-create, one setup, one 0x320, 3 TX posts, 1 RX poll
+PASS: dp_probe read gate emitted
+PASS: dp_setup read-back gate emitted
+PASS: txrx bind/status gate emitted
+PASS: TX posts use dp_tx_frame values 1/2/3
+PASS: RX capture is a read-only attribute
+PASS: RX poll is a single write
+PASS: post-run mask/staging gates emitted
+PASS: stop-on-first-failure chain present
+sequence: 21 steps, 205 rendered lines
+SUMMARY: 12 passed, 0 failed
+
+== 4. kernel integration: scratch copy + patch + module build ==
+patch_builder: edits applied to /tmp/wifi-dp-txrx-build/src
+patch_builder: wrote /tmp/wifi-dp-txrx-build/0001-hi5622-dp-txrx.patch
+module      : /tmp/wifi-dp-txrx-build/src/hi5622_wifi.ko
+size_bytes  : 540936
+sha256      : aae8487b4e4dad0c8ec0e20b33ef718e68a4e8a92d78f7f4c11afe1b5c12c502
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/hi5622-wifi-dp-txrx-build.log
+
+== 5. device-free source/publication checks ==
+OK: host selftest + static decode + sequence + clean kernel build + publication checks
+artifact: 540936 B sha256 aae8487b4e4dad0c8ec0e20b33ef718e68a4e8a92d78f7f4c11afe1b5c12c502

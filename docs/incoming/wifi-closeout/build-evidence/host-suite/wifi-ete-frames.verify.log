@@ -1,0 +1,15 @@
+== FIRMWARE.bin: 928920 bytes   (CPU = file + 0x40000)
+== plat.ko .text: 119588 bytes   (sh_addr=0x0)
+
+== device->host ready frames (recovered, see REPORT.md sec 2)
+  g4 id1 : 04 00 ?? 00 0c 00 01 00 ?? 00 ?? ??
+           group=4 id=1 total_len=0x0C (header only); src core=hdr[1]>>4=0
+  g4 id2 : 04 00 ?? 00 10 00 02 00 ?? 00 ?? ?? 50 08 06 01
+           group=4 id=2 total_len=0x10 payload=4B; payload = device addr 0x01060850
+
+== H2D carrier contract (host -> device)
+  node 8B : word0 = buffer device VA, word1 = (len<<16)|0x6D2B
+  frame   : hdr[4..5]=payload+12, hdr[0xA..0xB]=0x5A5A, dst in hdr[1]>>4 == hdr[9]
+  mailbox : out[0] |= BIT(3) then out[2] |= 1 ; device ack is out[5] (read only)
+
+VERIFY: 43/43 byte claims PASS

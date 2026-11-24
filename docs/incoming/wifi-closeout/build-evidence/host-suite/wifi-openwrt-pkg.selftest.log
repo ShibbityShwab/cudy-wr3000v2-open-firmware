@@ -1,0 +1,40 @@
+== wifi-openwrt-pkg self-test: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-openwrt-pkg
+
+== 1. source snapshot integrity (src/SHA256SUMS)
+PASS src/SHA256SUMS: all driver-snapshot files match
+
+== 2. package Makefile contract
+PASS Makefile contains: include $(INCLUDE_DIR)/kernel.mk
+PASS Makefile contains: define KernelPackage/hi5622-pciet-hcc
+PASS Makefile contains: FILES:=$(PKG_BUILD_DIR)/hi5622_pciet_hcc.ko
+PASS Makefile contains: include $(INCLUDE_DIR)/package.mk
+PASS Makefile contains: $(eval $(call KernelPackage,hi5622-pciet-hcc))
+PASS Makefile is download-free (local src/ snapshot)
+PASS Makefile has no AUTOLOAD (load stays explicit/attended)
+PASS Kbuild names hi5622_pciet_hcc
+PASS Kbuild includes the direct-read D2H object (assembled lane state)
+
+== 2b. lane tooling scripts: syntax
+PASS tools/install-into-tree.sh: sh -n clean
+PASS tools/build-package.sh: bash -n clean
+
+== 3. instance scripts: shell syntax + policy defaults
+PASS files/hi5622-pciet.init: sh -n clean
+PASS files/hi5622-status: sh -n clean
+PASS config default enabled=0
+PASS init refuses to unload the module (never rmmod after release)
+PASS init script is write-free (no release/CECE/devmem)
+
+== 4. package-tree hygiene (no vendor blob / object / firmware byte)
+PASS no firmware blob / object / image file in the package tree
+PASS all package-tree files are <200 KiB (text only)
+
+== 5. seed helper (hi5622-seed.c) compile syntax
+PASS cc -std=gnu99 -Wall -Wextra -Werror -fsyntax-only hi5622-seed.c
+
+== 6. lane models: HCC frame/ring + D2H direct reader
+PASS frame_selftest.py (HCC frame/ring model)
+wifi-d2h-direct selftest: 92/92 checks PASS
+PASS d2h_selftest.py (direct-read D2H model)
+
+wifi-openwrt-pkg selftest: 22 checks PASS

@@ -1,0 +1,12 @@
+recipe SYNPD: 2 segment(s), 4096 B -> FIRMWARE.SYNPD.bin sha256 41f931a2df5cdbb7...
+   file 0x000100 cpu 0x00040100  0020  (movs r0, #0)
+   file 0x000200 cpu 0x00040200  fef751ba  (b.w #0x3e6a6)
+built + verified FIRMWARE.SYNPD.bin -> /tmp/fwbuild-selftest-ipsnq9w1/out/FIRMWARE.SYNPD.bin sha256 41f931a2df5cdbb7...
+manifest: /tmp/fwbuild-selftest-ipsnq9w1/out/manifest.json (1 build(s))
+VERIFY PASS: /tmp/fwbuild-selftest-ipsnq9w1/out/FIRMWARE.SYNPD.bin
+  sha256 41f931a2df5cdbb751871e81ad45210a771a62e3ea2b26751e9f98db755490fa (4096 B)
+  file 0x000100 cpu 0x00040100 0020 movs r0, #0
+  file 0x000200 cpu 0x00040200 fef751ba b.w #0x3e6a6
+PASS SYNPD: file matches recipe chain; sha256 41f931a2df5cdbb7...
+verify-manifest: 1 build(s), 0 failure(s)
+fw_patch_builder selftest: 27/27 PASS

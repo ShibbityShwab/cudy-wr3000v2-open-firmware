@@ -1,0 +1,15 @@
+PASS plat.ko imports no gpio/clk/reset APIs                     
+PASS plat.ko low_power_init exists                              low_power_init
+PASS low_power_init is printk-only                              printk
+PASS pcie_init_chip_res emitted by pcie_init_static_res         pcie_init_static_res
+PASS hi_pcie.ko hi_pcie_enable_dev present                      hi_pcie_enable_dev
+PASS hi_pcie_enable_dev is ops[15]                              0x3c
+PASS enable_dev drives direction+value (3+3 sites)              2/3
+PASS module has the gpio-timing-quirk gate (2.5.24+)            
+PASS module parses the pcie-gpios DT property                   
+PASS clk_bulk_prepare call recorded in probe                    0x1234
+PASS 2.4.15-era variant comparison                              SKIP (artifact absent)
+PASS kernel slot carries the board_id 3 overlay                 0x421254
+PASS board overlay pcie-gpios pins == (20,21,28)                [20, 21, 28]
+
+13/13 PASS

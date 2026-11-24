@@ -1,0 +1,2 @@
+PASS: 45 snapshot files match the build tree
+PASS: all 43 modified source files are in FILES

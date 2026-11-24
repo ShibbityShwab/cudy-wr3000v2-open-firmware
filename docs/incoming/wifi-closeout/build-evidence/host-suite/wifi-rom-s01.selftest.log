@@ -1,0 +1,73 @@
+  [PASS] image size 928920
+  [PASS] image sha256 prefix 7fc87e20
+  [PASS] header entry A = 0x00046971
+  [PASS] header entry B = 0x000C742D
+  [PASS] header prefetch slot (+0x5C) = 0x001030BC
+  [PASS] 0x46974 ldr r5,=0x001BF000
+  [PASS] 0x4697A orr #0x20 (bit5)
+  [PASS] 0x469A4 orr #0x40 (bit6)
+  [PASS] 0x473C2 orr #0x2000 (bit13)
+  [PASS] 0x473FC orr #0x4000 (bit14)
+  [PASS] 0x473C8 movw r3,#0xabcd
+  [PASS] 0x473CC ldr r4,=0x001BF008
+  [PASS] 0x473D4 strd {r2,r3},[r4]
+  [PASS] 0x473E0 mov.w r2,#0x20000
+  [PASS] 0x473E4 ldr r3,=0x40161F00
+  [PASS] 0x473F0 ldr r3,[r4] poll
+  [PASS] 0x473F2 cmp r3,#2
+  [PASS] 0x47610 wait-path reload of 0x001BF008
+  [PASS] 0xC742E ldr r2,=0x001BF004
+  [PASS] 0xC7432 orr r3,#0x10 (entry B bit4)
+  [PASS] 0x40166 ldr r2,=0x001BF000
+  [PASS] 0x4016A orr #0x80000000 (bit31)
+  [PASS] 0x410C6 ldr r3,=0x001BF000
+  [PASS] 0x410CE orr #0x2000000 (bit25)
+  [PASS] 0x4126C ldr r4,=0x001BF000
+  [PASS] 0x41276 orr #0x100000 (bit20)
+  [PASS] 0x46D4C ldr r1,=0x001BF000 (RAM top bound)
+  [PASS] 0x001BD000 occurs once (crash table src0)
+  [PASS] 0x001BD0D8 occurs nowhere in image
+  [PASS] 0x001BF008 appears exactly twice
+  [PASS] 0x8CAC4ECA is not a materialisable constant
+  [PASS] 0x4003A7C0 door CA not materialised
+  [PASS] 0x4003A7D0 door CA not materialised
+  [PASS] 0x4003A874 status word not materialised
+  [PASS] 0x4003AC00 send word not materialised
+  [PASS] 0x001BF008 literal homes = 0x47510,0x47620
+  [PASS] doors live as static CA fields paired with control blocks
+  [PASS] no literal load of the door CA field address 0x10CACC
+  [PASS] crash table src0 = 0x001BD000
+  [PASS] crash table len0 = 0x2000
+  [PASS] crash table src1 = 0x4003A000
+  [PASS] crash table len1 = 0xC28
+  [PASS] crash table src2 = 0x40039000
+  [PASS] crash table len2 = 0xD5C
+  [PASS] handler literals dest/end
+  [PASS] ETE dump dest => PKTRAM BAR0 0x2B5800
+  [PASS] log copy dest => PKTRAM BAR0 0x2B3800
+  [PASS] pcie glue copy dest => PKTRAM BAR0 0x2B6428
+  [PASS] 0x120A6C movw r2,#0x4408
+  [PASS] 0x120A9A mrc p15 c1
+  [PASS] 0x120A9E bic r0,#1 (MMU off)
+  [PASS] 0x120B04 orr r0,#1 (MMU on)
+  [PASS] CPU1 tail never references 0x001BF000
+  [PASS] ROM v0 word -> target 0x20
+  [PASS] ROM IRQ word (0x18) -> target 0x34
+  [PASS] ROM FIQ word (0x1C) -> target 0x38
+  [PASS] ROM slot pointer 0x1E4 -> image header+0x5C
+  [PASS] header+0x5C value is prefetch stub 0x001030BC
+  [PASS] door CA readable at BAR0 0x3F27C0
+  [PASS] ETE base readable at BAR0 0x3F2000
+  [PASS] CA 0x4016010C NOT host-readable
+  [PASS] BAR0 0x51810C decodes ACP CA 0x0204010C
+  [PASS] CPU 0x1BF008 identity BAR0 0x1BF008
+  [PASS] CPU 0x1BF008 region-5 BAR0 0x877008
+  [PASS] CPU 0x10F29C cursor BAR0 0x7C729C
+  [PASS] plat.ko .text pcie_trigger_ete_sending_handle stub = FE FF FF EA
+  [PASS] plat.ko lacks CA 0x4003A7C0
+  [PASS] plat.ko lacks CA 0x4003A7D0
+  [PASS] plat.ko lacks CA 0x4003A874
+  [PASS] plat.ko lacks CA 0x4003AC00
+
+selftest: 70/70 PASS
+

@@ -1,0 +1,18 @@
+== 1. host build (portable core + deterministic selftest)
+wifi-hcc-core selftest: hcc_core 1.0
+- address maps
+- ring index arithmetic
+- frame contract
+- boot latch / page overwrite
+- CECE policy
+- D2H mailbox service
+- ready pair
+- TXQ sync + H2D mailbox
+- SR ring wrap
+- heartbeat / PM
+- status line / write safety
+
+528 checks, 0 failure(s)
+RESULT: PASS
+host selftest: PASS
+kernel compile check skipped (--no-kernel)
