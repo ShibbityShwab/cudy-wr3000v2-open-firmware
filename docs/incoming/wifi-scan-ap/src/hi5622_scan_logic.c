@@ -1,0 +1,477 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * hi5622_scan_logic.c - portable scan/AP-start state model and frame-provider
+ * contract validation for the Hi5622V100 clean-room full-MAC driver
+ * (Cudy WR3000 v2.0, Linux 6.18).
+ *
+ * ORIGINAL clean-room code (wifi-scan-ap lane, shared task task-113,
+ * 2026-11-24).  No vendor source, object code, firmware byte, calibration
+ * value or secret is reproduced.  Host-tested by tools/scan_logic_selftest.c;
+ * the kernel layer (hi5622_scan.c) contains no duplicated decision logic.
+ */
+#include "hi5622_scan_logic.h"
+
+#ifdef __KERNEL__
+#include <linux/kernel.h>
+#endif
+
+/* =====================================================================
+ * Frame-provider contract validation
+ * ===================================================================*/
+
+const char *hi5622_frame_cap_name(u32 cap)
+{
+	switch (cap) {
+	case HI5622_FRAME_CAP_SCAN_REQ:		return "scan_req";
+	case HI5622_FRAME_CAP_SCAN_PARSE:	return "scan_parse";
+	case HI5622_FRAME_CAP_USER_ADD:		return "user_add";
+	case HI5622_FRAME_CAP_USER_ADD_NOTIFY:	return "user_add_notify";
+	case HI5622_FRAME_CAP_USER_DEL:		return "user_del";
+	case HI5622_FRAME_CAP_AP_START:		return "ap_start";
+	case HI5622_FRAME_CAP_AP_STOP:		return "ap_stop";
+	default:				return "?";
+	}
+}
+
+int hi5622_frame_caps_format(u32 caps, char *buf, size_t len)
+{
+	size_t pos = 0;
+	u32 bit;
+	int n;
+
+	if (!buf || !len)
+		return -EINVAL;
+	buf[0] = '\0';
+	if (!caps) {
+		n = snprintf(buf, len, "none");
+		return n < 0 ? n : (int)((size_t)n < len ? (size_t)n : len - 1);
+	}
+	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_AP_STOP; bit <<= 1) {
+		const char *name;
+
+		if (!(caps & bit))
+			continue;
+		name = hi5622_frame_cap_name(bit);
+		n = snprintf(buf + pos, len - pos, "%s%s",
+			     pos ? "," : "", name);
+		if (n < 0)
+			return n;
+		pos += (size_t)n;
+		if (pos >= len)
+			return (int)(len - 1);
+	}
+	return (int)pos;
+}
+
+int hi5622_frame_ops_validate(const struct hi5622_frame_ops *ops)
+{
+	if (!ops || !ops->name || !ops->name[0])
+		return -EINVAL;
+	if (!ops->caps || (ops->caps & ~HI5622_FRAME_CAPS_ALL))
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_SCAN_REQ) && !ops->build_scan_req)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_SCAN_PARSE) && !ops->parse_scan_result)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_USER_ADD) && !ops->build_user_add)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_USER_ADD_NOTIFY) &&
+	    !ops->build_user_add_notify)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_USER_DEL) && !ops->build_user_del)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_AP_START) && !ops->build_ap_start)
+		return -EINVAL;
+	if ((ops->caps & HI5622_FRAME_CAP_AP_STOP) && !ops->build_ap_stop)
+		return -EINVAL;
+	return 0;
+}
+
+/* =====================================================================
+ * Neutral parameter validation (bounds only; no policy guesses)
+ * ===================================================================*/
+
+static bool hi5622_mac_is_unicast(const u8 *mac)
+{
+	return mac && !(mac[0] & 0x01u) && (mac[0] | mac[1] | mac[2] |
+					    mac[3] | mac[4] | mac[5]);
+}
+
+static bool hi5622_freq_supported(u16 freq)
+{
+	/* The two endpoints advertise 2.4 GHz ch 1..13 and the LU-plan 5 GHz
+	 * channels (hi5622_cfg80211.c band tables); accept exactly those
+	 * centre frequencies and reject everything else instead of letting a
+	 * bogus channel reach the firmware. */
+	const u16 g2[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447,
+			   2452, 2457, 2462, 2467, 2472 };
+	const u16 g5[] = { 5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
+			   5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640,
+			   5660, 5680, 5700 };
+	size_t i;
+
+	for (i = 0; i < sizeof(g2) / sizeof(g2[0]); i++)
+		if (freq == g2[i])
+			return true;
+	for (i = 0; i < sizeof(g5) / sizeof(g5[0]); i++)
+		if (freq == g5[i])
+			return true;
+	return false;
+}
+
+int hi5622_scan_req_params_validate(const struct hi5622_scan_req_params *p)
+{
+	u32 i;
+
+	if (!p)
+		return -EINVAL;
+	if (p->n_ssids > HI5622_FRAME_MAX_SSIDS)
+		return -EINVAL;
+	if (p->n_channels > HI5622_FRAME_MAX_CHANNELS)
+		return -EINVAL;
+	if (p->ie_len > HI5622_FRAME_MAX_SCAN_IE)
+		return -EINVAL;
+	for (i = 0; i < p->n_ssids; i++)
+		if (p->ssid_len[i] > HI5622_FRAME_MAX_SSID_LEN)
+			return -EINVAL;
+	for (i = 0; i < p->n_channels; i++)
+		if (!hi5622_freq_supported(p->freq[i]))
+			return -EINVAL;
+	/* A hidden-SSID scan may carry a zero-length SSID, but never a
+	 * partially filled one. */
+	return 0;
+}
+
+int hi5622_vap_add_params_validate(const struct hi5622_vap_add_params *p)
+{
+	if (!p)
+		return -EINVAL;
+	if (!p->name[0] || memchr(p->name, '\0', sizeof(p->name)) == NULL)
+		return -EINVAL;
+	if (!hi5622_mac_is_unicast(p->mac))
+		return -EINVAL;
+	if (p->user_id > HI5622_FRAME_MAX_USER_ID)
+		return -EINVAL;
+	if (p->iftype != 2u && p->iftype != 3u && p->iftype != 6u)
+		return -EINVAL;	/* STA / AP / MONITOR: the advertised modes */
+	return 0;
+}
+
+int hi5622_vap_del_params_validate(const struct hi5622_vap_del_params *p)
+{
+	if (!p)
+		return -EINVAL;
+	if (p->user_id > 0x0fffu)
+		return -EINVAL;
+	if (p->user_id != 0x0fffu && !hi5622_mac_is_unicast(p->mac))
+		return -EINVAL;
+	return 0;
+}
+
+int hi5622_ap_start_params_validate(const struct hi5622_ap_start_params *p)
+{
+	if (!p)
+		return -EINVAL;
+	if (!p->ssid_len || p->ssid_len > HI5622_FRAME_MAX_SSID_LEN)
+		return -EINVAL;
+	if (p->iftype != 3u)
+		return -EINVAL;	/* AP only (hostapd path) */
+	if (p->user_id > HI5622_FRAME_MAX_USER_ID)
+		return -EINVAL;
+	if (!hi5622_freq_supported(p->center_freq))
+		return -EINVAL;
+	if (p->width > 8u)
+		return -EINVAL;
+	if (!p->beacon_interval)
+		return -EINVAL;
+	if (!p->dtim_period)
+		return -EINVAL;
+	if (p->privacy > 1u)
+		return -EINVAL;
+	if (p->auth_type > 6u)
+		return -EINVAL;
+	if (p->head_len > HI5622_FRAME_MAX_BCN_HEAD ||
+	    p->tail_len > HI5622_FRAME_MAX_BCN_TAIL)
+		return -EINVAL;
+	/* A beacon head shorter than the 24-byte 802.11 MAC header plus the
+	 * 12-byte beacon fixed fields is not a beacon. */
+	if (p->head_len && p->head_len < 36u)
+		return -EINVAL;
+	return 0;
+}
+
+int hi5622_ap_stop_params_validate(const struct hi5622_ap_stop_params *p)
+{
+	if (!p)
+		return -EINVAL;
+	if (p->iftype != 3u)
+		return -EINVAL;
+	if (p->user_id > HI5622_FRAME_MAX_USER_ID)
+		return -EINVAL;
+	if (p->center_freq && !hi5622_freq_supported(p->center_freq))
+		return -EINVAL;
+	return 0;
+}
+
+int hi5622_scan_result_validate(const struct hi5622_scan_result *r)
+{
+	if (!r)
+		return -EINVAL;
+	if (!hi5622_mac_is_unicast(r->bssid))
+		return -EINVAL;
+	if (r->freq == 0)
+		return -EINVAL;	/* cfg80211 needs a channel pointer */
+	if (!hi5622_freq_supported(r->freq))
+		return -EINVAL;
+	if (r->ie_len > HI5622_SCAN_MAX_IE)
+		return -EINVAL;
+	if (r->ssid_len > HI5622_FRAME_MAX_SSID_LEN)
+		return -EINVAL;
+	if (r->frame_type > HI5622_SCAN_FTYPE_PRESP)
+		return -EINVAL;
+	/* cfg80211 mBm convention; anything outside -150..+5 dBm is garbage. */
+	if (r->signal_mbm < -15000 || r->signal_mbm > 5000)
+		return -EINVAL;
+	return 0;
+}
+
+/* =====================================================================
+ * Scan model
+ * ===================================================================*/
+
+void hi5622_scan_model_init(struct hi5622_scan_model *m)
+{
+	if (!m)
+		return;
+	memset(m, 0, sizeof(*m));
+	m->phase = HI5622_SCAN_IDLE;
+	m->timeout_ms = HI5622_SCAN_TIMEOUT_MS;
+}
+
+bool hi5622_scan_model_active(const struct hi5622_scan_model *m)
+{
+	return m && m->phase == HI5622_SCAN_ACTIVE;
+}
+
+int hi5622_scan_model_start(struct hi5622_scan_model *m, u64 now_ms,
+			    u32 timeout_ms)
+{
+	if (!m)
+		return -EINVAL;
+	if (m->phase == HI5622_SCAN_ACTIVE)
+		return -EBUSY;
+	/* A FINISHED model must be cleared by the caller after scan_done; a new
+	 * request before then would race the previous request pointer. */
+	if (m->phase != HI5622_SCAN_IDLE)
+		return -EBUSY;
+	m->phase = HI5622_SCAN_ACTIVE;
+	m->abort_requested = false;
+	m->complete_seen = false;
+	m->finish_reported = false;
+	m->complete_reason = 0;
+	m->started_ms = now_ms;
+	m->timeout_ms = timeout_ms ? timeout_ms : HI5622_SCAN_TIMEOUT_MS;
+	m->deadline_ms = now_ms + m->timeout_ms;
+	m->starts++;
+	m->last_error[0] = '\0';
+	return 0;
+}
+
+int hi5622_scan_model_abort(struct hi5622_scan_model *m)
+{
+	if (!m)
+		return -EINVAL;
+	if (m->phase != HI5622_SCAN_ACTIVE)
+		return 0;	/* nothing to abort: cfg80211 tolerates this */
+	m->abort_requested = true;
+	m->last_error[0] = '\0';
+	return 0;
+}
+
+void hi5622_scan_model_finish(struct hi5622_scan_model *m,
+			      enum hi5622_scan_step step)
+{
+	if (!m)
+		return;
+	if (m->phase != HI5622_SCAN_ACTIVE)
+		return;
+	m->phase = HI5622_SCAN_FINISHED;
+	if (step == HI5622_SCAN_FINISH_OK) {
+		m->finishes_ok++;
+	} else {
+		m->finishes_abort++;
+		if (m->abort_requested)
+			m->aborts_requested++;
+		if (!m->complete_seen)
+			m->timeouts++;
+	}
+}
+
+void hi5622_scan_model_clear(struct hi5622_scan_model *m)
+{
+	if (!m)
+		return;
+	if (m->phase == HI5622_SCAN_FINISHED) {
+		m->phase = HI5622_SCAN_IDLE;
+		m->abort_requested = false;
+		m->complete_seen = false;
+		m->finish_reported = false;
+	}
+}
+
+enum hi5622_scan_event_class hi5622_scan_classify(u8 group, u16 id)
+{
+	if (group == HI5622_SCAN_D2H_GROUP_BSS) {
+		switch (id) {
+		case HI5622_SCAN_D2H_ID_BSS:		return HI5622_SCAN_EV_BSS;
+		case HI5622_SCAN_D2H_ID_COMPLETE:	return HI5622_SCAN_EV_COMPLETE;
+		case HI5622_SCAN_D2H_ID_CHANNEL:	return HI5622_SCAN_EV_CHANNEL;
+		default:				return HI5622_SCAN_EV_NONE;
+		}
+	}
+	if (group == HI5622_SCAN_D2H_GROUP_STA &&
+	    id == HI5622_SCAN_D2H_ID_STA_RSP)
+		return HI5622_SCAN_EV_STA_RSP;
+	return HI5622_SCAN_EV_NONE;
+}
+
+enum hi5622_scan_step hi5622_scan_model_event(struct hi5622_scan_model *m,
+					      enum hi5622_scan_event_class cls,
+					      u64 now_ms)
+{
+	if (!m)
+		return HI5622_SCAN_WAIT;
+	if (m->phase != HI5622_SCAN_ACTIVE) {
+		m->events_when_idle++;
+		return HI5622_SCAN_WAIT;
+	}
+	if (m->abort_requested)
+		return HI5622_SCAN_FINISH_ABORT;
+	switch (cls) {
+	case HI5622_SCAN_EV_BSS:
+		m->bss_events++;
+		if (m->results < HI5622_SCAN_MAX_RESULTS)
+			m->results++;
+		else
+			m->result_overflow++;
+		return HI5622_SCAN_WAIT;
+	case HI5622_SCAN_EV_COMPLETE:
+		m->complete_events++;
+		m->complete_seen = true;
+		return HI5622_SCAN_FINISH_OK;
+	case HI5622_SCAN_EV_CHANNEL:
+		m->channel_events++;
+		return HI5622_SCAN_WAIT;
+	case HI5622_SCAN_EV_STA_RSP:
+		m->sta_events++;
+		return HI5622_SCAN_WAIT;
+	default:
+		m->unknown_events++;
+		return HI5622_SCAN_WAIT;
+	}
+	(void)now_ms;
+}
+
+enum hi5622_scan_step hi5622_scan_model_tick(struct hi5622_scan_model *m,
+					     u64 now_ms)
+{
+	if (!m || m->phase != HI5622_SCAN_ACTIVE)
+		return HI5622_SCAN_WAIT;
+	if (m->abort_requested)
+		return HI5622_SCAN_FINISH_ABORT;
+	if (m->complete_seen)
+		return HI5622_SCAN_FINISH_OK;
+	/* Wrap-safe comparison: both values come from the same monotonic ms
+	 * clock and a scan lives far below 2^32 ms. */
+	if (now_ms >= m->deadline_ms)
+		return HI5622_SCAN_FINISH_ABORT;
+	return HI5622_SCAN_WAIT;
+}
+
+void hi5622_scan_note_dropped_busy(struct hi5622_scan_model *m)
+{
+	if (m)
+		m->dropped_busy++;
+}
+
+void hi5622_scan_note_parse_error(struct hi5622_scan_model *m)
+{
+	if (m)
+		m->parse_errors++;
+}
+
+void hi5622_scan_note_invalid_result(struct hi5622_scan_model *m)
+{
+	if (m)
+		m->invalid_results++;
+}
+
+void hi5622_scan_note_inform_failure(struct hi5622_scan_model *m)
+{
+	if (m)
+		m->inform_failures++;
+}
+
+void hi5622_scan_note_error(struct hi5622_scan_model *m, const char *what,
+			    int err)
+{
+	if (!m)
+		return;
+	snprintf(m->last_error, sizeof(m->last_error), "%s: %d",
+		 what ? what : "error", err);
+}
+
+int hi5622_scan_status_line(const struct hi5622_scan_model *m, char *buf,
+			    size_t len)
+{
+	int n;
+
+	if (!m || !buf || !len)
+		return -EINVAL;
+	n = snprintf(buf, len,
+		     "scan: phase=%s results=%u/%u bss=%u complete=%u channel=%u sta=%u unknown=%u idle_ev=%u overflow=%u\n"
+		     "scan errors: dropped_busy=%u parse=%u invalid=%u inform=%u timeouts=%u aborts=%u last=%s\n",
+		     hi5622_scan_phase_name(m->phase),
+		     m->results, HI5622_SCAN_MAX_RESULTS,
+		     m->bss_events, m->complete_events, m->channel_events,
+		     m->sta_events, m->unknown_events, m->events_when_idle,
+		     m->result_overflow, m->dropped_busy, m->parse_errors,
+		     m->invalid_results, m->inform_failures, m->timeouts,
+		     m->finishes_abort,
+		     m->last_error[0] ? m->last_error : "-");
+	if (n < 0)
+		return n;
+	return (int)((size_t)n < len ? (size_t)n : len - 1);
+}
+
+const char *hi5622_scan_phase_name(enum hi5622_scan_phase p)
+{
+	switch (p) {
+	case HI5622_SCAN_IDLE:		return "idle";
+	case HI5622_SCAN_ACTIVE:	return "active";
+	case HI5622_SCAN_FINISHED:	return "finished";
+	default:			return "?";
+	}
+}
+
+const char *hi5622_scan_step_name(enum hi5622_scan_step s)
+{
+	switch (s) {
+	case HI5622_SCAN_WAIT:		return "wait";
+	case HI5622_SCAN_FINISH_OK:	return "finish-ok";
+	case HI5622_SCAN_FINISH_ABORT:	return "finish-abort";
+	default:			return "?";
+	}
+}
+
+const char *hi5622_scan_event_name(enum hi5622_scan_event_class c)
+{
+	switch (c) {
+	case HI5622_SCAN_EV_NONE:	return "none";
+	case HI5622_SCAN_EV_BSS:	return "bss";
+	case HI5622_SCAN_EV_COMPLETE:	return "complete";
+	case HI5622_SCAN_EV_CHANNEL:	return "channel";
+	case HI5622_SCAN_EV_STA_RSP:	return "sta-rsp";
+	default:			return "?";
+	}
+}
