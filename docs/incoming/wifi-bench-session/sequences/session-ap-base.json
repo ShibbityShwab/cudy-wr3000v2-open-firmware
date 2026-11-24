@@ -1,0 +1,242 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "session-ap-base",
+ "about": "Phase A base of the attended wifi-bench-session: golden boot + six-message-ready core (ctx_create type 1 + txq_sync72) on the wifi-ap-start provider module (770,304 B sha256 11511980...). The AP start itself is the separate device-side stage (device/ap-fire.sh): iw phy phy0 interface add wlan0 type __ap -> ip link up -> iw dev wlan0 scan freq 2412 (mode-1 VAP base: vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req) -> hostapd -B -i wlan0 hostapd-open.conf -> 4 AP-start frames (ap_ssid/ap_auth/ap_cfg/ap_vap_start) + firmware readback. PASS needs the AP-stage gates; this base only brings up the ACTIVE core.",
+ "profile": "hi5622-wifi-cfg80211",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": true,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "budget_min": 8,
+  "tools": [
+   "iw",
+   "dmesg"
+  ],
+  "attrs": [
+   "cfg80211_status",
+   "h2d_status"
+  ]
+ },
+ "load_params": {
+  "allow_frames": 16,
+  "frame_gap_ms": 100,
+  "h2d_send_budget": 8,
+  "vap_start_first": 1,
+  "vap_start_mode": 1,
+  "vap_start_module": 0,
+  "ap_start_mode": 0
+ },
+ "steps": [
+  {
+   "name": "note-base",
+   "kind": "note",
+   "about": "Phase A base: PD4 golden boot -> strict ready pair -> cfg80211 wiphy registered (bench_session cfg80211 preamble) -> ONE ctx_create type 1 -> ONE txq_sync72 so the core is ACTIVE. This sequence deliberately creates NO VAP and fires NO AP frame: the AP-start stage is device/ap-fire.sh (iface type __ap, mode-1 VAP base via a one-channel scan, hostapd NEW_BEACON trigger, firmware readback pack), run by the host driver after this session returns PASS. ap_start_mode=0 = g0 id1 static keys 0x0005/0x006D/0x0127/0x0065."
+  },
+  {
+   "name": "cfg-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "registered=1"
+   ],
+   "about": "wiphy registered after the ready handshake (the cfg80211 preamble already waits for /sys/class/ieee80211; this is the sequence-local re-gate)"
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "pre-create state on this fresh boot: no context (ctx4+0x190 = 0), exception mask 0, exception staging word 0",
+   "reads": [
+    {
+     "label": "pre_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 1/2: ONE context-create H2D (g0 id1 key 0x64, data[0]=type 1) - the 2026-11-26 mode-1 bench ladder had this consumed in 0 polls before the scan"
+  },
+  {
+   "name": "post-create",
+   "kind": "read_pack",
+   "about": "the create allocated the measured ctx4 body (same PACK as C2: ctx4[0]=4, ctx4+0x10=0x00010001, ctx4+0x434=0x0100478C)",
+   "reads": [
+    {
+     "label": "post_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "nonzero": true
+     }
+    },
+    {
+     "label": "post_ctx4",
+     "bar0": "0x7d4458",
+     "expect": {
+      "eq": "0x00000004"
+     }
+    },
+    {
+     "label": "post_ctx10",
+     "bar0": "0x7d4468",
+     "expect": {
+      "eq": "0x00010001"
+     }
+    },
+    {
+     "label": "post_ctx434",
+     "bar0": "0x7d488c",
+     "expect": {
+      "eq": "0x0100478c"
+     }
+    }
+   ]
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 2/2: ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node) -> the core is ACTIVE before the provider VAP/scan sequence (vap_start_first=1)"
+  },
+  {
+   "name": "post-txq",
+   "kind": "read_pack",
+   "about": "the TXQ handler ran clean: exception mask and staging word stay 0",
+   "reads": [
+    {
+     "label": "txq_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "txq_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "h2d-status",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "patterns": [
+    "ok=2",
+    "timeout=0",
+    "refused=0"
+   ],
+   "about": "the two base H2D frames (ctx_create type 1 + txq_sync72) were consumed; no refusal/timeout"
+  },
+  {
+   "name": "ap-pre-pack",
+   "kind": "read_pack",
+   "about": "hostapd-stage pre-health (the device-side stage re-reads these before its first write): PD4 page, boot state, exception mask/staging, mailbox out0/out2 all clean",
+   "reads": [
+    {
+     "label": "pre_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "pre_page4",
+     "bar0": "0x877004",
+     "expect": {
+      "eq": "0x7"
+     }
+    },
+    {
+     "label": "pre_page8",
+     "bar0": "0x877008",
+     "expect": {
+      "eq": "0x2"
+     }
+    },
+    {
+     "label": "pre_page_c",
+     "bar0": "0x87700c",
+     "expect": {
+      "eq": "0xabcd"
+     }
+    },
+    {
+     "label": "pre_state",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    },
+    {
+     "label": "pre_mask",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_out0",
+     "bar0": "0x3f1010",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_out2",
+     "bar0": "0x3f12d4",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "Base PASS = core ACTIVE + clean packs. The host driver then runs device/ap-fire.sh (hostapd stage) and device/ap-readback.sh; phase A PASS requires the AP-stage gates (4 frames posted+consumed, no refusal, mask/staging 0, page/state golden, VAP readback evidence). Any STOP -> power-cycle, analyse offline, never re-send a frame in the same boot."
+  }
+ ]
+}

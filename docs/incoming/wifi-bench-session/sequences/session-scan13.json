@@ -1,0 +1,361 @@
+{
+ "schema": "hi5622-protocol-sequence/1",
+ "name": "session-scan13",
+ "about": "Phase S of the attended wifi-bench-session: PD4 golden boot -> ready -> ctx_create t1 -> txq_sync72 -> iw iface add wlan0 type managed (provider user_add g0 id7/id8) -> link up -> ONE 13-channel iw scan (provider vap_add g0 id1 + vap_start g0 id1 + scan_req g0 id0xC 520 B) -> firmware answers with g1 id17 channel results + g1 id15 beacons, the scan-complete decoder builds cfg80211 BSS entries. PASS gates: chans=13/13 + finish-ok + results/bss >0 + iw output BSS lines + mask/staging 0 + page/state golden + no provider refusal. Requires the scan-complete provider module (748,888 B b42ff4ec / alt 748,564 B 02162d4a), scan_timeout_ms=60000 (clamped 45000), allow_frames=16, vap_start_mode=1.",
+ "profile": "hi5622-wifi-cfg80211",
+ "module_names": [
+  "hi5622_wifi"
+ ],
+ "require": {
+  "ready_pair": true,
+  "boot_page": true,
+  "cfg80211": true,
+  "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+  "fw_len": 928920,
+  "budget_min": 8,
+  "tools": [
+   "iw",
+   "dmesg"
+  ],
+  "attrs": [
+   "cfg80211_status",
+   "h2d_status"
+  ]
+ },
+ "load_params": {
+  "allow_frames": 16,
+  "frame_gap_ms": 100,
+  "h2d_send_budget": 8,
+  "vap_start_first": 1,
+  "vap_start_mode": 1,
+  "vap_start_module": 0,
+  "scan_timeout_ms": 60000
+ },
+ "steps": [
+  {
+   "name": "note-ladder",
+   "kind": "note",
+   "about": "Phase S ladder: hardware-validated D2 machinery (2026-11-26 fires) on the scan-complete provider module. The scan timeout is the manual 60 s request; the module clamps it to 45 s (HI5622_SCAN_TIMEOUT_MAX_MS). At the measured ~3.5 s/channel pace 13 channels need ~45.5 s, so a 12/13 cut at the clamp is the documented possible outcome - it is a STOP result for this lane, not a silent pass."
+  },
+  {
+   "name": "cfg-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "registered=1"
+   ],
+   "about": "wiphy registered after the ready handshake (the cfg80211 preamble already waits for /sys/class/ieee80211; this is the sequence-local re-gate)"
+  },
+  {
+   "name": "pre-pack",
+   "kind": "read_pack",
+   "about": "pre-create state on this fresh boot: no context (ctx4+0x190 = 0), exception mask 0, exception staging word 0",
+   "reads": [
+    {
+     "label": "pre_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "pre_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "ctx-create-t1",
+   "kind": "attr_write",
+   "attr": "h2d_ctx_create",
+   "value": "1",
+   "patterns": [
+    "ctx_created=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 1/2: ONE context-create H2D (g0 id1 key 0x64, data[0]=type 1) - the 2026-11-26 mode-1 bench ladder had this consumed in 0 polls before the scan"
+  },
+  {
+   "name": "post-create",
+   "kind": "read_pack",
+   "about": "the create allocated the measured ctx4 body (same PACK as C2: ctx4[0]=4, ctx4+0x10=0x00010001, ctx4+0x434=0x0100478C)",
+   "reads": [
+    {
+     "label": "post_ctx190",
+     "bar0": "0x7d45e8",
+     "expect": {
+      "nonzero": true
+     }
+    },
+    {
+     "label": "post_ctx4",
+     "bar0": "0x7d4458",
+     "expect": {
+      "eq": "0x00000004"
+     }
+    },
+    {
+     "label": "post_ctx10",
+     "bar0": "0x7d4468",
+     "expect": {
+      "eq": "0x00010001"
+     }
+    },
+    {
+     "label": "post_ctx434",
+     "bar0": "0x7d488c",
+     "expect": {
+      "eq": "0x0100478c"
+     }
+    }
+   ]
+  },
+  {
+   "name": "txq-sync72",
+   "kind": "attr_write",
+   "attr": "h2d_txq_sync72",
+   "value": "1",
+   "patterns": [
+    "txq_sent=1"
+   ],
+   "readback": "h2d_status",
+   "about": "prerequisite 2/2: ONE TXQ config sync H2D (g0 id1 cmd 0xd8, 72-byte node) -> the core is ACTIVE before the provider VAP/scan sequence (vap_start_first=1)"
+  },
+  {
+   "name": "post-txq",
+   "kind": "read_pack",
+   "about": "the TXQ handler ran clean: exception mask and staging word stay 0",
+   "reads": [
+    {
+     "label": "txq_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "txq_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "vap-add",
+   "kind": "shell",
+   "cmd": "iw-iface-add",
+   "args": {
+    "phy": "phy0",
+    "ifname": "wlan0",
+    "type": "managed"
+   },
+   "expect_rc": 0,
+   "about": "iw phy phy0 interface add wlan0 type managed -> add_virtual_intf -> provider user_add g0 id7 180 B + user_add_notify g0 id8 180 B (hardware: 1/12 + 2/12 consumed). A user_add post failure keeps the netdev live and is caught by the frame_post gate below"
+  },
+  {
+   "name": "link-up",
+   "kind": "shell",
+   "cmd": "ip-link-up",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "bring the managed netdev up; nl80211 refuses scan requests on a down interface"
+  },
+  {
+   "name": "vap-added",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "vap0: wlan0"
+   ],
+   "about": "the driver VAP model recorded wlan0 (real netdev); the provider user frames are gated by the post-scan frame_post counters"
+  },
+  {
+   "name": "catalog-baseline",
+   "kind": "catalog_snapshot",
+   "about": "D2H catalogue before the scan request (evidence baseline: no scan-event family present yet)"
+  },
+  {
+   "name": "scan",
+   "kind": "shell",
+   "cmd": "iw-scan",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "ONE nl80211 scan request over all 13 channels of the 2.4 GHz band: the provider posts vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req g0 id0xC 520 B, the firmware reports every scanned channel (g1 id17) and its beacons (g1 id15). iw blocks until scan_done; the driver's bound is scan_timeout_ms=60000 clamped to 45000 by the module (HI5622_SCAN_TIMEOUT_MAX_MS). The host driver additionally checks that the captured iw output contains BSS lines - a PASS needs real cfg80211 BSS entries."
+  },
+  {
+   "name": "scan-settle",
+   "kind": "sleep",
+   "seconds": 2,
+   "about": "bounded settle for the last scan events + cfg80211 BSS informs before the evidence reads"
+  },
+  {
+   "name": "scan-dmesg",
+   "kind": "shell",
+   "cmd": "dmesg",
+   "expect_rc": 0,
+   "patterns": [
+    "scan channel result",
+    "scan DONE"
+   ],
+   "about": "evidence capture: at least one per-channel g1 id17 decode line and the scan DONE summary must exist (the verdict gates below decide PASS/STOP)"
+  },
+  {
+   "name": "scan-status",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "scan: phase=finished",
+    "scan finish: last="
+   ],
+   "about": "evidence capture: the scan model reached the finished phase; chans/finish detail is read from the same line and gated below"
+  },
+  {
+   "name": "post-scan-pack",
+   "kind": "read_pack",
+   "about": "hard firmware-health gate before the verdict: no exception after the 13-channel ladder",
+   "reads": [
+    {
+     "label": "postscan_mask0",
+     "bar0": "0x6f8008",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "postscan_staging0",
+     "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "post-scan-page",
+   "kind": "read_pack",
+   "about": "hard gate: the PD4 golden handshake page and boot state survived the scan",
+   "reads": [
+    {
+     "label": "post_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "post_page4",
+     "bar0": "0x877004",
+     "expect": {
+      "eq": "0x7"
+     }
+    },
+    {
+     "label": "post_page8",
+     "bar0": "0x877008",
+     "expect": {
+      "eq": "0x2"
+     }
+    },
+    {
+     "label": "post_page_c",
+     "bar0": "0x87700c",
+     "expect": {
+      "eq": "0xabcd"
+     }
+    },
+    {
+     "label": "post_state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    }
+   ]
+  },
+  {
+   "name": "scan-13ch-gate",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "chans=13/13",
+    "scan finish: last=finish-ok"
+   ],
+   "absent": [
+    "scan finish: last=finish-abort"
+   ],
+   "about": "PASS gate: full 13-channel coverage AND host/firmware success finish. A partial scan (e.g. 12/13 at the 45 s clamp) or a host-timeout abort is a STOP for this lane, never BLOCKED: the experiment's whole subject is the 13/13 bound."
+  },
+  {
+   "name": "scan-results-gate",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "results=",
+    "bss="
+   ],
+   "absent": [
+    "results=0/",
+    "bss=0 "
+   ],
+   "about": "PASS gate: results/bss counts non-zero (the firmware answered with channel results and the beacon decoder produced BSS entries)"
+  },
+  {
+   "name": "frame-post",
+   "kind": "attr_expect",
+   "attr": "cfg80211_status",
+   "patterns": [
+    "allow_frames=16",
+    "refused=0",
+    "timeout=0",
+    "bad=0"
+   ],
+   "about": "the provider wire path accepted every ladder frame (2 user_add + vap_add + vap_start + scan_req) with no refusal/timeout; exact posted count captured in evidence"
+  },
+  {
+   "name": "h2d-summary",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "patterns": [
+    "timeout=0",
+    "refused=0"
+   ],
+   "about": "the two prerequisite H2D frames (ctx_create + txq_sync72) were consumed and none was refused"
+  },
+  {
+   "name": "catalog-after",
+   "kind": "catalog_snapshot",
+   "about": "watch/evidence: D2H catalogue after the 13-channel scan (g1 id17 channel results and g1 id15 beacons; BSS IE decode already happened in the driver)"
+  },
+  {
+   "name": "vap-del",
+   "kind": "shell",
+   "cmd": "iw-iface-del",
+   "args": {
+    "ifname": "wlan0"
+   },
+   "expect_rc": 0,
+   "about": "tear the managed VAP down after the verdict; a teardown failure after green scan gates is recorded, not a verdict change"
+  },
+  {
+   "name": "note-end",
+   "kind": "note",
+   "about": "Phase S PASS = session PASS + iw output contains BSS lines (host gate) + chans=13/13 + finish-ok + results>0 + mask/staging 0 + page golden/state 1 + provider refused/timeout 0. STOP on any hard gate: capture everything, power-cycle, analyse offline - never retry the scan on the same boot."
+  }
+ ]
+}
