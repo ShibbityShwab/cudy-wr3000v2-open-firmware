@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 481 device-free checks (+169): shell-step refusal matrix,
+7. **Tests**: 312 -> 503 device-free checks (+191): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -528,7 +528,7 @@ Fixes:
 Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 55 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-481/481 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+503/503 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
 
@@ -633,7 +633,7 @@ read remains anywhere in C2, the gated values match the ledger, and a wrong
 body signature (ctx434 = 0x0100478D) fails at post-create.
 
 Re-validated: C2 dry-run PLAN-OK (28 steps / 55 checks / 8 writes), full matrix
-unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 481/481 PASS.
+unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 503/503 PASS.
 
 ### 9.4 D1 fire: unset LD_LIBRARY_PATH under set -u (generated-script fix)
 
@@ -753,7 +753,7 @@ Fixes and tests (selftest 432 -> 443):
 Re-validated: D1 dry-run script has 'section seq-phy-info' before the iw call
 and 'gate_out_has 'phy-info.p0' "$RDIR/seq-phy-info.out" 'Wiphy phy0'';
 sh -n/sh -u -n PASS; full matrix unchanged (boot/C2/D1/D2/E1 all PLAN-OK);
-selftest 481/481 PASS.  The next D1 fire should reach the VAP add/del steps
+selftest 503/503 PASS.  The next D1 fire should reach the VAP add/del steps
 (iw phy phy0 interface add wlan0 / iw dev wlan0 del).
 
 ### 9.7 E1 fire: host pattern matcher rejected literal (non-regex) fragments
@@ -831,3 +831,68 @@ classify() maps BLOCKED/STOP/FAIL/PASS correctly; reboot-between/after helper
 semantics.  Full matrix remains boot/C2/D1/D2/E1 PLAN-OK; D2 dry-run script has
 the blocked case branch and the conditional session result; all sh -n / sh -u
 -n PASS.
+
+### 9.9 Full-matrix hang: the --reboot-after path was neither robust nor bounded
+
+The first --phase all --reboot-between run (2026-11-25 15:14, evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T081406Z) completed
+boot and C2 (~3-4 min each), then the D1 child (bench_session ... --reboot
+after) was still alive 12+ min later with the box uptime unchanged, its
+evidence dir holding only writes-host.jsonl, and a child ssh stuck on a
+"cut -d. -f1 /proc/uptime" poll.  The matrix parent's kill left the child
+running (an orphan that could later reboot the box under the operator).
+
+Audit of the old path:
+
+- (a) It issued a plain synchronous 'reboot' over ssh.  On this image that can
+  wait for the procd shutdown path (or return without resetting when procd is
+  wedged); it is not the project's /sbin/reboot -f form.  The ssh call was
+  capped at 15 s but the box never reset, so the wait polled the unchanged
+  uptime.
+- (b) The wait had a nominal 300 s deadline but no per-call budget: each poll
+  could spend poll_s + up-to-15 s in ssh, and an ssh call that hangs in
+  communicate() could outlive the loop; there was no progress output, so a
+  stuck run was indistinguishable from a slow one.
+- (c) --session-timeout only bounds the remote session-script ssh call, not the
+  reboot wait, the writes.log fetch, or the child process as a whole; the
+  phase matrix had a flat 600 s subprocess timeout and subprocess.run() killed
+  only the direct child, leaving ssh grandchildren alive.
+
+Fixes:
+
+1. **bench_session.reboot_and_wait() rewritten, hard-bounded and logged**:
+   samples the pre-uptime; issues
+   'sync; (sleep 1; /sbin/reboot -f[|reboot]) >/dev/null 2>&1 & echo
+   REBOOT-ISSUED' (immediate reset, background so the ssh call returns);
+   prints '[reboot] ...' progress lines with elapsed/remaining on every poll;
+   clamps EVERY transport call to the remaining overall budget; accepts 'back'
+   only after seen-unreachable / uptime-went-backwards / fresh small uptime
+   plus a confirming re-read; returns (False, diagnostic) at the deadline and
+   records reboot_after_ok in the session summary; a clearly refused command
+   fails immediately.  New CLI --reboot-deadline (default 300 s) and
+   --reboot-poll (default 4 s).
+2. **phase_matrix owns the between-phase reboot**: it no longer asks the child
+   session to reboot; after a real phase it calls do_reboot() (the same bounded
+   helper over SshTransport), logs progress, and on failure stops and marks all
+   remaining phases NOT-RUN (never start the next phase on a stale box).
+   Use --reboot-between (all but last) or --reboot-after (every phase).
+3. **matrix child supervision**: phases run with a hard --phase-timeout
+   (default 900 s, --phase-timeout to change) in a new process group; on
+   timeout the WHOLE group is SIGKILLed so no bench_session/ssh orphan survives
+   the matrix run (the exact failure mode above).
+4. The child's session-level --reboot after remains supported for direct one-
+   command use, but multi-phase runs should let the matrix orchestrate it.
+
+Tests (selftest 481 -> 503): reboot wait with a fake transport - normal
+down-then-up, fast reboot, backwards uptime, slow reboot, stubborn old uptime
+(bounded), reboot-but-never-returns (bounded), refused reset command,
+failed stability re-read; the reset command content/background form and
+'[reboot]' progress logging; execute() with --reboot after against a box that
+never returns (session PASS unaffected, reboot_after_ok=False, execute
+bounded, immediate reset issued); matrix child timeout kills the process group
+and a normal child returns normally; matrix child argv never carries
+--reboot; do_reboot() success/failure via a monkeypatched bounded helper.
+Real validation of the bound: reboot_and_wait against an unreachable host with
+a 2 s deadline returns in 2.1 s (no bench contact), and the full dry-run matrix
+(including --reboot-between) still validates all five phases (no reboot in
+dry-run).

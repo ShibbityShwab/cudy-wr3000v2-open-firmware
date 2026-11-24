@@ -73,7 +73,15 @@ read-only UART capture running):
 For several real phases in one sitting add **--reboot-between** (reboots after
 every phase except the last) or **--reboot-after** (reboots after every phase):
 a loaded hi5622_wifi makes the next phase stop at the module-already-loaded gate
-/ insmod rc=255, so back-to-back phases need a fresh boot between them.
+/ insmod rc=255, so back-to-back phases need a fresh boot between them.  The
+**matrix** owns that reboot: it issues /sbin/reboot -f in the background and
+waits with a HARD deadline (--reboot-deadline, default 300 s; --reboot-poll,
+default 4 s), logging '[reboot]' progress; if the box does not come back the
+remaining phases are marked NOT-RUN (never run on a stale box).  Each real
+phase child also has a hard --phase-timeout (default 900 s) and is killed as a
+whole process group on timeout, so no bench_session/ssh orphan survives the
+run.  (bench_session --reboot before/after remains available for direct
+single-command use and uses the same bounded wait.)
 
 The underlying one-command session is unchanged:
 `python3 tools/bench_session.py --mode {protocol|cfg80211} --dry-run ...`.
@@ -178,7 +186,7 @@ Bring-up status rendered from that matrix:
 
     boot READY | ready READY | calibration READY | vap READY | scan READY | dataplane READY (dp-bringup module)
 
-Selftest: **481/481** device-free checks (was 312), including the shell-step
+Selftest: **503/503** device-free checks (was 312), including the shell-step
 refusal matrix, the shell/absent/present evaluation fixtures, the synthetic
 C2 six-response evaluation (+ wrong-length and missing-response negatives), the
 synthetic D1 wiphy+VAP add/del evaluation, the cfg80211 mode plan/deploy/script

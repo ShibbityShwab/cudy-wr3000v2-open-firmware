@@ -2660,6 +2660,23 @@ def deploy_plan(plan: SessionPlan, transport, opts: SessionOptions, audit) -> No
                  policy="host", detail="all deployed files sha256-verified on the box")
 
 
+REBOOT_CMD = ("sync; (sleep 1; if [ -x /sbin/reboot ]; then /sbin/reboot -f; "
+              "else reboot; fi) >/dev/null 2>&1 & echo REBOOT-ISSUED")
+
+
+def _reboot_log(msg: str) -> None:
+    """Explicit progress logging for the optional reboot path."""
+    print("[reboot] %s" % msg, file=sys.stderr, flush=True)
+
+
+def _reboot_budget(deadline_end: float, cap: float) -> float:
+    """Timeout for one transport call: never beyond the overall deadline."""
+    left = deadline_end - time.time()
+    if left <= 0:
+        return 0.05
+    return max(0.2, min(float(cap), left))
+
+
 def _uptime(transport, timeout: float = 15.0):
     rc, out, err = transport.run("cut -d. -f1 /proc/uptime", timeout=timeout)
     if rc == 0 and out.strip().isdigit():
@@ -2669,36 +2686,67 @@ def _uptime(transport, timeout: float = 15.0):
 
 def reboot_and_wait(transport, opts: SessionOptions, poll_s: float = None,
                     deadline_s: float = None):
-    """Harden the optional --reboot before/after path.
+    """Issue a reboot and wait for the box to come back - hard bounded.
 
-    The old version polled uptime and accepted the PRE-reboot uptime as
-    "back" as soon as it was <240 s, which raced the deploy during shutdown
-    (the first live fire lost the deploy this way).  The hardened version:
+    The 2026-11-25 full-matrix run hung here: the old code issued a plain
+    'reboot' synchronously over ssh (which can block when procd is wedged and
+    did not actually reset the box), had no per-call timeout budget, logged
+    nothing and could (with slow ssh calls) outlive its nominal deadline.
 
-      1. samples the pre-reboot uptime;
-      2. issues the reboot and treats a poll as proof only when the box was
-         observed unreachable at least once, or the uptime went backwards, or
-         the uptime is very small (<= 8 s);
-      3. requires a second confirming uptime read before declaring success;
-      4. waits up to deadline_s (default 300 s) and reports the last state.
+    The hardened version:
+      1. samples the pre-reboot uptime (bounded call);
+      2. issues 'sync; (sleep 1; /sbin/reboot -f | reboot) & echo REBOOT-ISSUED'
+         (immediate -f reset like the project's bench scripts; the background
+         subshell means the ssh call returns instead of waiting for the
+         shutdown), prints progress to stderr;
+      3. polls with a HARD overall deadline: every transport call timeout is
+         clamped to the remaining budget, and each poll is logged with elapsed
+         time/state;
+      4. accepts "back" only when the box was seen unreachable, or the uptime
+         went backwards, or the uptime is very small (<= 8 s), and requires a
+         second confirming uptime read;
+      5. returns (False, diagnostic) at the deadline - never hangs.
     """
-    poll_s = REBOOT_POLL_S if poll_s is None else float(poll_s)
-    deadline_s = REBOOT_DEADLINE_S if deadline_s is None else float(deadline_s)
-    pre_up = _uptime(transport)
-    rc, out, err = transport.run("reboot", timeout=15)
-    note = ("reboot issued (rc=%s, pre_uptime=%s)" % (rc, pre_up))
+    poll_s = REBOOT_POLL_S if poll_s is None else max(0.05, float(poll_s))
+    deadline_s = (REBOOT_DEADLINE_S if deadline_s is None
+                  else max(0.2, float(deadline_s)))
     t0 = time.time()
+    deadline_end = t0 + deadline_s
+    pre_up = _uptime(transport, timeout=_reboot_budget(deadline_end, 15.0))
+    try:
+        rc, out, err = transport.run(
+            REBOOT_CMD, timeout=_reboot_budget(deadline_end, 20.0))
+    except Exception as e:  # noqa: BLE001 - the reset may kill the ssh call
+        rc, out, err = 255, "", "ssh call interrupted: %r" % (e,)
+    # rc=124 means our bounded ssh call for the reset command timed out - the
+    # box may already be going down, so poll rather than abort prematurely;
+    # only a clear refusal (127/1/...) fails immediately.
+    issued = bool("REBOOT-ISSUED" in (out or "")) or rc in (0, 255, 124)
+    note = ("reboot issued=%s rc=%s pre_uptime=%s cmd=%r"
+            % (issued, rc, pre_up, REBOOT_CMD))
+    _reboot_log(note)
+    if not issued:
+        return False, (note + "; the reboot command was not accepted (%s)"
+                       % ((err or out or "").strip()[:200]))
     seen_down = False
     last = "no poll completed"
-    while time.time() - t0 < deadline_s:
-        time.sleep(poll_s)
-        up = _uptime(transport)
+    while time.time() < deadline_end:
+        time.sleep(min(poll_s, max(0.05, deadline_end - time.time())))
+        if time.time() >= deadline_end:
+            break
+        up = _uptime(transport,
+                     timeout=_reboot_budget(deadline_end, 15.0))
+        elapsed = time.time() - t0
         if up is None:
             seen_down = True
             last = "unreachable (seen_down=1)"
+            _reboot_log("poll t+%.1fs: %s remaining=%.0fs"
+                        % (elapsed, last, deadline_end - time.time()))
             continue
         last = ("uptime=%ds seen_down=%d pre_uptime=%s"
                 % (up, 1 if seen_down else 0, pre_up))
+        _reboot_log("poll t+%.1fs: %s remaining=%.0fs"
+                    % (elapsed, last, deadline_end - time.time()))
         fresh = False
         if seen_down:
             fresh = up < 240
@@ -2708,14 +2756,16 @@ def reboot_and_wait(transport, opts: SessionOptions, poll_s: float = None,
             fresh = True
         if not fresh:
             continue
-        time.sleep(poll_s)
-        up2 = _uptime(transport)
+        up2 = _uptime(transport,
+                      timeout=_reboot_budget(deadline_end, 15.0))
         if up2 is not None and up2 < 240:
-            return True, ("%s; stable after reboot, uptime=%ds "
-                          "(seen_down=%d)" % (note, up2,
-                                              1 if seen_down else 0))
-        last = "%s; stability re-read failed" % last
-    return False, ("%s; device did not come back within %.0f s (last: %s)"
+            _reboot_log("box back after %.1fs (uptime=%ds, seen_down=%d)"
+                        % (time.time() - t0, up2, 1 if seen_down else 0))
+            return True, ("%s; back after %.1fs, uptime=%ds (seen_down=%d)"
+                          % (note, time.time() - t0, up2,
+                             1 if seen_down else 0))
+        last = "%s; stability re-read failed (got %s)" % (last, up2)
+    return False, ("%s; device did not come back within %.1fs (last: %s)"
                    % (note, deadline_s, last))
 
 
@@ -2776,7 +2826,12 @@ def execute(plan: SessionPlan, opts: SessionOptions, transport, audit,
                                    poll_s=opts.reboot_poll_s,
                                    deadline_s=opts.reboot_deadline_s)
         summary["reboot_after"] = note
-        audit.record("reboot-after", "host-run", "reboot", note, policy="host")
+        summary["reboot_after_ok"] = ok
+        audit.record("reboot-after", "host-run", "reboot", note,
+                     policy="host", detail="confirmed=%s" % ok)
+        if not ok:
+            print("WARNING: --reboot after FAILED (bounded wait): %s"
+                  % note, file=sys.stderr, flush=True)
     return {"summary": summary, "report_text": report_text, "extra": extra}
 
 
@@ -3031,7 +3086,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--telnet-port", type=int, default=23)
     ap.add_argument("--ssh-host", default=None)
     ap.add_argument("--reboot", choices=["none", "before", "after"], default="none",
-                    help="optional box reboot before/after the session (attended only)")
+                    help="optional box reboot before/after the session (attended only; "
+                         "issued as /sbin/reboot -f in the background and waited for "
+                         "with a HARD bounded deadline)")
+    ap.add_argument("--reboot-deadline", type=float, default=REBOOT_DEADLINE_S,
+                    help="--reboot before/after: hard deadline for the box to come "
+                         "back (default %.0f s)" % REBOOT_DEADLINE_S)
+    ap.add_argument("--reboot-poll", type=float, default=REBOOT_POLL_S,
+                    help="--reboot before/after: poll interval (default %.0f s)"
+                         % REBOOT_POLL_S)
     ap.add_argument("--skip-preflight", action="store_true",
                     help="skip host preflight (testing only)")
     ap.add_argument("--skip-blocks", action="store_true",
@@ -3121,7 +3184,9 @@ def main(argv=None) -> int:
         ready_id1_s=args.ready_id1, ready_id2_s=args.ready_id2,
         observe_s=args.observe, require_ready=args.require_ready,
         allow_other_source=args.allow_other_source, transport=args.transport,
-        reboot=args.reboot, skip_preflight=args.skip_preflight,
+        reboot=args.reboot, reboot_deadline_s=args.reboot_deadline,
+        reboot_poll_s=args.reboot_poll,
+        skip_preflight=args.skip_preflight,
         skip_blocks=args.skip_blocks, telnet_host=args.telnet_host,
         telnet_port=args.telnet_port, ssh_host=args.ssh_host)
     guard = G.WriteGuard(G.GuardContext(cece_mode=args.cece_mode, profile="hcc"))

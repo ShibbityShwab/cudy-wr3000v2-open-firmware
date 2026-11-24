@@ -35,6 +35,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 TOOLDIR = os.path.dirname(os.path.abspath(__file__))
 if TOOLDIR not in sys.path:
@@ -1466,16 +1467,20 @@ class FakeRebootTransport:
 
     name = "fake-reboot"
 
-    def __init__(self, pre_uptime, polls):
+    def __init__(self, pre_uptime, polls, reboot_rc=0, marker=True):
         self.pre_uptime = pre_uptime
         self.polls = list(polls)
         self.i = 0
         self.reboots = 0
+        self.commands = []
+        self.reboot_rc = reboot_rc
+        self.marker = marker
 
     def run(self, command, timeout=60):
-        if command == "reboot":
+        self.commands.append(command)
+        if "sbin/reboot" in command or command == "reboot":
             self.reboots += 1
-            return 0, "", ""
+            return self.reboot_rc, ("REBOOT-ISSUED\n" if self.marker else ""), ""
         if "proc/uptime" in command:
             if self.i == 0:
                 self.i += 1
@@ -1492,12 +1497,22 @@ class FakeRebootTransport:
 
 
 def test_reboot_wait(tmp: str) -> None:
+    import contextlib
+    import io
     o = BS.SessionOptions(mode="protocol")
     # normal reboot: old uptime, a drop, then a fresh uptime + stable re-read
     t = FakeRebootTransport(100, [None, 12, 17])
-    ok, note = BS.reboot_and_wait(t, o, poll_s=0.001, deadline_s=2.0)
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        ok, note = BS.reboot_and_wait(t, o, poll_s=0.001, deadline_s=2.0)
     ck("reboot: down then fresh uptime -> back", ok and "uptime=17" in note, note)
     ck("reboot: reboot issued exactly once", t.reboots == 1)
+    ck("reboot: issues the immediate-background reset command",
+       any("/sbin/reboot -f" in c and "REBOOT-ISSUED" in c
+           for c in t.commands), str(t.commands[:2]))
+    ck("reboot: progress is logged with elapsed polls",
+       "[reboot]" in stderr.getvalue()
+       and "back after" in stderr.getvalue(), stderr.getvalue()[-300:])
     # fast reboot without a visible drop: pre 50 -> 7 -> 12 (up<=8 proves reboot)
     t2 = FakeRebootTransport(50, [50, 7, 12])
     ok, note = BS.reboot_and_wait(t2, o, poll_s=0.001, deadline_s=2.0)
@@ -1506,15 +1521,39 @@ def test_reboot_wait(tmp: str) -> None:
     t3 = FakeRebootTransport(500, [500, 400, 30, 35])
     os_ok, note = BS.reboot_and_wait(t3, o, poll_s=0.001, deadline_s=2.0)
     ck("reboot: uptime-went-backwards detected", os_ok, note)
-    # never reboots -> failure with a timeout note (no false PASS)
-    t4 = FakeRebootTransport(3000, [3000, 3000, 3000, 3000])
-    ok, note = BS.reboot_and_wait(t4, o, poll_s=0.001, deadline_s=0.3)
+    # never reboots -> failure with a timeout note (no false PASS), bounded
+    t4 = FakeRebootTransport(3000, [3000] * 50)
+    t0 = time.time()
+    ok, note = BS.reboot_and_wait(t4, o, poll_s=0.05, deadline_s=0.4)
+    elapsed4 = time.time() - t0
     ck("reboot: stubborn old uptime -> FAIL (race closed)", not ok, note)
     ck("reboot: timeout note names the last state", "last" in note, note)
+    ck("reboot: no-reboot wait is hard-bounded (%.2fs for a 0.4s deadline)"
+       % elapsed4, elapsed4 < 2.5)
+    # slow reboot: down for a while, then comes back
+    t6 = FakeRebootTransport(900, [None, None, None, 5, 9])
+    ok, note = BS.reboot_and_wait(t6, o, poll_s=0.001, deadline_s=2.0)
+    ck("reboot: slow reboot (down, then fresh uptime) -> back", ok, note)
+    # reboot-but-never-returns -> bounded FAIL
+    t7 = FakeRebootTransport(700, [None] * 100)
+    t0 = time.time()
+    ok, note = BS.reboot_and_wait(t7, o, poll_s=0.05, deadline_s=0.4)
+    ck("reboot: reboot but never returns -> FAIL at the deadline", not ok, note)
+    ck("reboot: never-returns wait is bounded (%.2fs)" % (time.time() - t0),
+       time.time() - t0 < 2.5)
+    # the reset command not accepted -> immediate diagnostic failure
+    t8 = FakeRebootTransport(100, [100, 100], reboot_rc=127, marker=False)
+    ok, note = BS.reboot_and_wait(t8, o, poll_s=0.001, deadline_s=1.0)
+    ck("reboot: a refused reset command reports it immediately",
+       not ok and "not accepted" in note, note)
     # pre-reboot unreachable then a fresh uptime is still a success
     t5 = FakeRebootTransport(None, [None, None, 9, 14])
     ok, note = BS.reboot_and_wait(t5, o, poll_s=0.001, deadline_s=2.0)
     ck("reboot: unreachable pre-state then fresh boot -> back", ok, note)
+    # stability re-read failure must not false-PASS
+    t9 = FakeRebootTransport(400, [None, 6, None])
+    ok, note = BS.reboot_and_wait(t9, o, poll_s=0.01, deadline_s=0.3)
+    ck("reboot: failed stability re-read does not false-PASS", not ok, note)
 
 
 def test_protocol_execute(tmp: str, env: dict) -> None:
@@ -1602,6 +1641,38 @@ def test_protocol_execute(tmp: str, env: dict) -> None:
        "device-read-empty" in md4 and "/dev/mem" in md4)
     ck("protocol execute: pre-sequence triage rendered",
        "pre-sequence-stop" in md4 or "pre-sequence" in md4)
+
+
+    # --reboot after is hard-bounded: a box that never comes back must not
+    # hang execute() (the 2026-11-25 full-matrix run hung 12+ min here)
+    class FakeRebootAfter(FakeTransport):
+        def run(self, command, timeout=60):
+            self.commands.append(command)
+            if "REBOOT-ISSUED" in command:
+                return 0, "REBOOT-ISSUED\n", ""
+            if "proc/uptime" in command:
+                return 0, "1000\n", ""      # stubborn old uptime
+            return super().run(command, timeout)
+
+    o5 = dataclasses_replace(opts, reboot="after", reboot_deadline_s=0.4,
+                             reboot_poll_s=0.05)
+    p5 = BS.make_plan(o5, G.WriteGuard())
+    t5b = FakeRebootAfter(env["report_pass"], rc=0)
+    t5b.files["%s/%s/writes.log" % (BS.REMOTE_BASE, p5.session_id)] = b"x\n"
+    t0 = time.time()
+    res5 = BS.execute(p5, o5, t5b, G.WriteAudit(), [])
+    elapsed5 = time.time() - t0
+    s5 = res5["summary"]
+    ck("reboot-after: the session result is unaffected",
+       s5["result"] == "PASS", str(s5.get("result")))
+    ck("reboot-after: a never-returning box is recorded as failure",
+       s5.get("reboot_after_ok") is False
+       and "did not come back" in (s5.get("reboot_after") or ""),
+       str(s5.get("reboot_after"))[:200])
+    ck("reboot-after: execute() stays bounded (%.2fs with a 0.4s deadline)"
+       % elapsed5, elapsed5 < 5.0)
+    ck("reboot-after: the immediate reset command was issued",
+       any("/sbin/reboot -f" in c for c in t5b.commands), str(t5b.commands[:3]))
 
 
 def test_protocol_cli(tmp: str, env: dict) -> None:
@@ -2633,6 +2704,82 @@ def test_blocked_outcome(tmp: str, proto: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# K. phase-matrix orchestration: matrix-owned reboot + bounded child kill
+# ---------------------------------------------------------------------------
+def test_matrix_orchestration(tmp: str) -> None:
+    import phase_matrix as PM
+    from types import SimpleNamespace
+    base_args = SimpleNamespace(
+        endpoint="0000:00:00.0", session_timeout=240, ready_id1=2.0,
+        ready_id2=20.0, module="/x/hi5622_wifi.ko", module_for_map={},
+        fw_file="/x/FIRMWARE.PD4.bin", fw_manifest="/x/manifest.json",
+        fw_path=None, wifi_block_bin="/x/wifi_block.bin", wifi_block=None,
+        bar0read=None, ssh_host=None, module_param=None,
+        cfg80211_ko="/x/cfg80211.ko", iw_bin="/x/iw",
+        libnl_tiny="/x/libnl-tiny.so", dry_run=True)
+    d2 = PM.phase_by_id("D2")
+    argv = PM.build_argv(base_args, d2, "/tmp/phase-d2")
+    ck("matrix: child argv never carries a session-level reboot",
+       "--reboot" not in argv, str(argv[-4:]))
+    ck("matrix: dry-run child argv has --dry-run",
+       "--dry-run" in argv and "--yes-really" not in argv)
+    def clone(ns, **kw):
+        d = dict(vars(ns))
+        d.update(kw)
+        return SimpleNamespace(**d)
+
+    real_args = clone(base_args, dry_run=False)
+    argv2 = PM.build_argv(real_args, d2, "/tmp/phase-d2")
+    ck("matrix: real child argv is attended but not rebooting",
+       "--yes-really" in argv2 and "--attended" in argv2
+       and "--reboot" not in argv2)
+    d1 = PM.phase_by_id("D1")
+    ov = clone(base_args, module_for_map={"D1": "/x/cfg.ko"})
+    argv3 = PM.build_argv(ov, d1, "/tmp/phase-d1")
+    ck("matrix: per-phase module override is honoured",
+       "/x/cfg.ko" in argv3, str([a for a in argv3 if "cfg" in a][:3]))
+
+    # ---- child timeout kills the whole process group --------------------
+    t0 = time.time()
+    rc, out, err = PM._run_child(
+        ["/bin/sh", "-c", "echo START; sleep 30"], 0.4)
+    elapsed = time.time() - t0
+    ck("matrix: a hung phase child is killed at the phase timeout",
+       rc == 124 and "START" in out and "killed" in err, (rc, out[-80:],
+                                                          err[-160:]))
+    ck("matrix: phase child kill is prompt (%.2fs for a 0.4s timeout)"
+       % elapsed, elapsed < 5.0)
+    rc2, out2, err2 = PM._run_child(["/bin/sh", "-c", "echo OK"], 5.0)
+    ck("matrix: a normal phase child returns its output",
+       rc2 == 0 and "OK" in out2 and "killed" not in (err2 or ""))
+
+    # ---- do_reboot uses the bounded hardened helper (monkeypatched) -----
+    orig_t, orig_r = PM.BS.SshTransport, PM.BS.reboot_and_wait
+    calls = []
+    try:
+        class FakeSsh:
+            def __init__(self, host=None):
+                calls.append(host)
+        PM.BS.SshTransport = FakeSsh
+        PM.BS.reboot_and_wait = lambda tr, o, poll_s=None, deadline_s=None: \
+            (True, "fake: back after 12s")
+        args = SimpleNamespace(ssh_host="root@192.168.1.1",
+                               reboot_poll=4.0, reboot_deadline=300.0)
+        ok, note = PM.do_reboot(args)
+        ck("matrix: between-phase reboot reports success", ok, note)
+        ck("matrix: between-phase reboot targets --ssh-host",
+           calls == ["root@192.168.1.1"], str(calls))
+        PM.BS.reboot_and_wait = lambda tr, o, poll_s=None, deadline_s=None: \
+            (False, "fake: did not come back within 300s")
+        ok2, note2 = PM.do_reboot(args)
+        ck("matrix: a failed between-phase reboot is reported",
+           not ok2 and "did not come back" in note2, note2)
+    finally:
+        PM.BS.SshTransport = orig_t
+        PM.BS.reboot_and_wait = orig_r
+
+
+# ---------------------------------------------------------------------------
 # H. write-only trigger vs read-only post-write capture policy
 # ---------------------------------------------------------------------------
 def test_wo_readback(tmp: str, proto: dict) -> None:
@@ -2773,6 +2920,7 @@ def main() -> int:
         test_pattern_whitespace(tmp, proto)
         test_shell_output_matching(tmp, proto)
         test_blocked_outcome(tmp, proto)
+        test_matrix_orchestration(tmp)
         test_wo_readback(tmp, proto)
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)

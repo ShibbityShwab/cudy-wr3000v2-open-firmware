@@ -214,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 481/481 device-free checks (task-114: +169)
+    ./tools/run-selftest.sh        # 503/503 device-free checks (task-114: +191)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -340,9 +340,15 @@ fire report replays PASS; (h) shell steps support a documented BLOCKED outcome
 (blocked_rc + blocked_patterns) so the D2 scan's -EOPNOTSUPP stub records
 BLOCKED, the session continues and the phase matrix reports BLOCKED-DRIVER
 (not ERROR); phase_matrix also gained --reboot-after/--reboot-between for
-back-to-back phases (a loaded hi5622_wifi blocks the next phase).
+back-to-back phases (a loaded hi5622_wifi blocks the next phase); the first
+full-matrix attempt hung 12+ min because the old reboot-after path issued a
+plain synchronous 'reboot' with no per-call budget and the matrix killed only
+the direct child - the reboot path is now hard-bounded and logged
+(/sbin/reboot -f background + --reboot-deadline), matrix-owned between phases,
+and phase children are killed as a process group on --phase-timeout (no
+orphans).
 
-Selftest: **312 -> 481** device-free checks (+169): shell-step refusal matrix,
+Selftest: **312 -> 503** device-free checks (+191): shell-step refusal matrix,
 shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
 wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
 pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),

@@ -161,8 +161,7 @@ def want_reboot_after(args, index: int, total: int) -> bool:
     return False
 
 
-def build_argv(args, p: dict, phase_dir: str,
-               reboot_after: bool = False) -> list:
+def build_argv(args, p: dict, phase_dir: str) -> list:
     argv = [sys.executable, BENCH_SESSION, "--mode", p["mode"],
             "--sequence", sequence_path(p), "--report-dir", phase_dir,
             "--endpoint", args.endpoint,
@@ -197,9 +196,10 @@ def build_argv(args, p: dict, phase_dir: str,
     if args.dry_run:
         argv.append("--dry-run")
     else:
+        # Rebooting is orchestrated by the MATRIX (do_reboot), not by the
+        # child session: the child then ends cleanly and the matrix owns the
+        # bounded, logged reboot between phases (the 2026-11-25 hang).
         argv += ["--yes-really", "--attended"]
-        if reboot_after:
-            argv += ["--reboot", "after"]
     return argv
 
 
@@ -209,6 +209,59 @@ def load_json(path: str):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def _run_child(argv: list, timeout: float) -> tuple:
+    """Run the bench_session child with a HARD timeout and process-group kill.
+
+    subprocess.run(timeout=) only signals the direct child; its ssh/rsh
+    grandchildren can survive and keep the pipe open (the 2026-11-25 full-matrix
+    run left a bench_session alive for 12+ min).  The child is started in its
+    own session and the WHOLE process group is killed on timeout.
+    """
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=max(1.0, float(timeout)))
+        return proc.returncode, out or "", err or ""
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, 15)
+            time.sleep(0.5)
+            os.killpg(proc.pid, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
+        note = ("phase child killed after the %.0f s phase timeout "
+                "(process group %d; session-timeout=%s)" % (timeout,
+                                                            proc.pid,
+                                                            "child"))
+        return 124, out or "", (err or "") + "\n" + note
+
+
+def do_reboot(args) -> tuple:
+    """Bounded, logged reboot between phases (matrix-owned).
+
+    Reuses bench_session.reboot_and_wait() - the same hardened, deadline-bound
+    wait the session-level --reboot uses - through the SSH transport, so a
+    loaded module from the previous phase cannot poison the next one.
+    """
+    o = BS.SessionOptions(mode="protocol", ssh_host=args.ssh_host,
+                          reboot="after",
+                          reboot_poll_s=args.reboot_poll,
+                          reboot_deadline_s=args.reboot_deadline)
+    transport = BS.SshTransport(args.ssh_host)
+    print("[matrix] reboot between phases: issuing /sbin/reboot -f and "
+          "waiting up to %.0f s ..." % args.reboot_deadline, flush=True)
+    ok, note = BS.reboot_and_wait(transport, o, poll_s=args.reboot_poll,
+                                  deadline_s=args.reboot_deadline)
+    print("[matrix] reboot %s: %s" % ("OK" if ok else "FAILED", note),
+          flush=True)
+    return ok, note
 
 
 def classify(args, p: dict, rc: int, out: str, err: str,
@@ -311,25 +364,26 @@ def classify_stop(evidence: dict) -> str:
     return "STOP"
 
 
-def run_phase(args, p: dict, base: str, stamp: str,
-              reboot_after: bool = False) -> dict:
+def run_phase(args, p: dict, base: str, stamp: str) -> dict:
     phase_dir = os.path.join(base, stamp, p["id"])
-    argv = build_argv(args, p, phase_dir, reboot_after=reboot_after)
+    argv = build_argv(args, p, phase_dir)
     rec = {"phase": p["id"], "row": p["row"], "label": p["label"],
            "mode": p["mode"], "sequence": p["sequence"],
            "run_kind": "dry-run" if args.dry_run else "attended-real",
-           "reboot_after": reboot_after,
            "command": argv, "expect": p["expect"]}
-    print("== phase %-3s (%s) ==" % (p["id"], p["label"]))
+    print("== phase %-3s (%s) ==" % (p["id"], p["label"]), flush=True)
     t0 = time.time()
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    timeout = args.phase_timeout if not args.dry_run else 600
+    rc, out, err = _run_child(argv, timeout)
     rec["elapsed_s"] = round(time.time() - t0, 2)
-    rec.update(classify(args, p, proc.returncode, proc.stdout, proc.stderr,
-                        phase_dir))
-    rec["stdout_tail"] = proc.stdout.strip().splitlines()[-3:]
-    if proc.stderr.strip():
-        rec["stderr_tail"] = proc.stderr.strip().splitlines()[-3:]
-    print("   status: %-14s %s" % (rec["status"], rec["detail"][:160]))
+    rec["rc"] = rc
+    rec["phase_timeout_s"] = timeout
+    rec.update(classify(args, p, rc, out, err, phase_dir))
+    rec["stdout_tail"] = out.strip().splitlines()[-3:]
+    if err.strip():
+        rec["stderr_tail"] = err.strip().splitlines()[-3:]
+    print("   status: %-14s %s" % (rec["status"], rec["detail"][:160]),
+          flush=True)
     return rec
 
 
@@ -375,6 +429,11 @@ def render_markdown(matrix: dict) -> str:
     a("  the ladder is ready for the next driver revision.")
     a("- PASS / FAIL / STOP: real attended session results (see each phase's")
     a("  evidence dir for protocol-evidence.json + PROTOCOL-SEQUENCE.md).")
+    a("- --reboot-between/--reboot-after are orchestrated by the MATRIX: it")
+    a("  issues /sbin/reboot -f and waits with a hard --reboot-deadline; if the")
+    a("  box does not come back the remaining phases are NOT-RUN (never run on")
+    a("  a stale box), and a per-phase --phase-timeout kills the child's whole")
+    a("  process group so an ssh grandchild cannot outlive the run.")
     a("")
     return "\n".join(L) + "\n"
 
@@ -419,13 +478,23 @@ def main(argv=None) -> int:
                     help="operator marked the bench attended (required for "
                          "--yes-really)")
     ap.add_argument("--reboot-after", action="store_true",
-                    help="real runs: reboot the box after every phase "
-                         "(bench_session --reboot after) so each phase loads "
-                         "the module on a fresh boot")
+                    help="real runs: reboot the box after every phase (the "
+                         "matrix issues /sbin/reboot -f and waits with a hard "
+                         "deadline; the child session is never asked to reboot)")
     ap.add_argument("--reboot-between", action="store_true",
                     help="real multi-phase runs: reboot after every phase "
                          "except the last (a loaded hi5622_wifi blocks the "
                          "next phase: module-already-loaded / insmod rc=255)")
+    ap.add_argument("--reboot-deadline", type=float, default=300.0,
+                    help="between-phase reboot: hard deadline for the box to "
+                         "come back in seconds (default 300)")
+    ap.add_argument("--reboot-poll", type=float, default=4.0,
+                    help="between-phase reboot: poll interval in seconds "
+                         "(default 4)")
+    ap.add_argument("--phase-timeout", type=float, default=900.0,
+                    help="real runs: hard wall-clock limit per phase child in "
+                         "seconds (default 900); on timeout the child's whole "
+                         "process group is killed and the phase is ERROR")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero on any BLOCKED/REFUSED/ERROR status")
     ap.add_argument("--json", action="store_true", help="print the matrix JSON")
@@ -469,10 +538,26 @@ def main(argv=None) -> int:
               "(use --reboot-after instead)")
     records = []
     for idx, pid in enumerate(selected):
-        rec = run_phase(args, phase_by_id(pid), base, stamp,
-                        reboot_after=want_reboot_after(args, idx,
-                                                       len(selected)))
+        rec = run_phase(args, phase_by_id(pid), base, stamp)
         records.append(rec)
+        if want_reboot_after(args, idx, len(selected)):
+            ok, note = do_reboot(args)
+            rec["reboot_after"] = note
+            rec["reboot_after_ok"] = ok
+            if not ok:
+                # do not start the next phase on a stale/unknown box state
+                print("[matrix] ABORTING remaining phases: the between-phase "
+                      "reboot did not come back", file=sys.stderr, flush=True)
+                for rest in selected[idx + 1:]:
+                    records.append({
+                        "phase": rest, "row": phase_by_id(rest)["row"],
+                        "status": "NOT-RUN",
+                        "detail": "skipped: the between-phase reboot after "
+                                  "%s failed: %s" % (pid, note),
+                        "rc": None, "sequence":
+                            phase_by_id(rest)["sequence"],
+                        "mode": phase_by_id(rest)["mode"]})
+                break
     matrix = {
         "schema": SCHEMA,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
