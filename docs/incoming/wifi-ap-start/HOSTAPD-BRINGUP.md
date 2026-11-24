@@ -19,8 +19,8 @@ this lane; the lead's fire produced the observations below.
 ## 2. Module v2 (built by this lane, host-only)
 
     artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-    size     : 199,344 B
-    sha256   : f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5
+    size     : 204,644 B
+    sha256   : 24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722
     vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
     depends  : cfg80211
 
@@ -28,10 +28,13 @@ The artifact is **debug-stripped** (the kernel tree has DEBUG_INFO on, so the
 raw .ko embeds the build path and its sha varies with the work directory).
 The stripped module is path-independent and keeps .symtab/.rel.* needed for
 loading and EXPORT_SYMBOL; build-bench-module.sh prints exactly this size/sha.
-    content  : wifi-scan-ap src + wifi-vap-start builder/provider patch
-               + wifi-ap-start builder/provider patch v2
+    base     : wifi-scan-complete/src (748,888 B b42ff4ec..., hardware-fired
+               provider tree; already contains the wifi-vap-start integration)
+    content  : base + wifi-ap-start builder/provider patch v3
                (caps AP_START, AP-start sequence in .start_ap, .connect gate,
-                AP iftype change, ap_start_mode param)
+                corrected SET_INTERFACE, ap_start_mode param)
+    evidence : H2D/core/provider files byte-identical to the fired base;
+               deployable .text byte-identical to the unstripped build
 
 Reproduce: [../tools/build-bench-module.sh](../tools/build-bench-module.sh)
 (prints size/sha; the .ko is local evidence only and is never committed).
@@ -123,9 +126,10 @@ do not guess an alternative window.
 
 | log | meaning | action |
 | --- | --- | --- |
-| "Driver does not support authentication/association or connect commands" | module without the v2 .connect gate (old .ko) is loaded | verify sha256 aba5c02e..., insmod the v2 module |
-| "Could not configure driver mode" | wlan0 is managed and change_virtual_intf refused (old module) OR interface busy | use the v2 module; or create wlan0 with type __ap directly |
-| ".start_ap ... -EOPNOTSUPP" | module has no AP_START provider (old .ko) or ap_start_mode invalid | verify v2 module; ap_start_mode must be 0 or 1 |
+| "Driver does not support authentication/association or connect commands" | module without the .connect gate (old .ko) is loaded | verify sha256 24e0cf02..., insmod the v3 module |
+| "Could not configure driver mode" | wlan0 is managed and change_virtual_intf refused (old module) OR interface busy | use the v3 module (its SET_INTERFACE op now works); or create wlan0 with type __ap directly |
+| ".start_ap ... -EOPNOTSUPP" | module has no AP_START provider (old .ko) or ap_start_mode invalid | verify v3 module; ap_start_mode must be 0 or 1 |
+| h2d txq_sync72 announce timeout / H2D lane closed | v2 was built from the older wifi-scan-ap tree | v3 is built from the hardware-fired wifi-scan-complete base; its H2D/core files are byte-identical to the fired base (see section 8) |
 | "frame post 'ap_ssid' REFUSED (...)" | allow_frames=0/exhausted, core not ACTIVE, wire not ready, out[0] pending | check module params, run the C2 ladder first, do not retry in the same boot |
 | start_ap returns -EINVAL from cfg80211 | regulatory: channel has NO_IR (world regdomain) or bad chandef | iw reg set US (regdb), re-check iw phy phy0 info flags |
 | "Hardware does not support configured mode" / HT errors | hostapd config enabled HT/WMM | use the OPEN/no-HT config first |
@@ -150,3 +154,68 @@ never post mailbox id 5, never send group 1/4.
   is a control-plane milestone, not a usable AP.
 * Image: add CONFIG_PACKAGE_wifi-scripts=y so the ucode workaround is not
   needed (image lane).
+## 8. v3 rebuild (second fire, 2026-11-26)
+
+Two findings from the v2 fire, both fixed in v3:
+
+### 8.1 C2 txq_sync72 timeout -> v2 was built from the wrong tree
+
+v2 was built from docs/incoming/wifi-scan-ap/src; the hardware-fired provider
+base is docs/incoming/wifi-scan-complete/src (module 748,888 B sha256
+b42ff4ec..., D2 TRUE PASS).  v3 builds from the fired base and the build
+script now:
+
+* deletes all generated build artifacts before compiling (v2's tree carried
+  stale hi5622_wifi.mod/.mod.c/Module.symvers and older scan/provider objects);
+* asserts h2d_send.c/h2d_send_logic.c/h2d_send.h/h2d_send_logic.h/hcc.c/
+  hcc_core.c/hcc_core.h/h2d_frames.c/h2d_frames.h are byte-identical to the
+  fired base -> prints "H2D/core/provider files byte-identical to the
+  748,888 B fired base";
+* strips only debug sections and asserts the deployable .ko has a
+  byte-identical .text to the unstripped build.
+
+v3 module: **204,644 B sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**
+(/tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko, debug-stripped, depends=
+cfg80211, vermagic 6.18.60 SMP ARMv7, zero warnings).  The H2D send path in
+v3 is therefore exactly the path that consumes C2 in 0 polls on the bench.
+If the timeout ever recurs with v3, capture h2d_status (frames_sent/budget)
+and out[] before doing anything else - do not retry in the same boot.
+
+### 8.2 SET_INTERFACE ("Could not configure driver mode")
+
+The M1 change_virtual_intf op had two bugs, both fixed in v3:
+
+| bug | fix |
+| --- | --- |
+| returned 0 for a type change without storing wdev->iftype (cfg80211_change_iface WARNs and later AP checks read the stale type) | set dev->ieee80211_ptr->iftype = type (and ARPHRD_IEEE80211_RADIOTAP for monitor / back to ARPHRD_ETHER when leaving monitor) |
+| compared params->use_4addr (-1 = "not specified" from nl80211_set_interface) against wdev->use_4addr and refused | only an explicit 4-address request is refused; -1 is ignored |
+
+Same-type SET_INTERFACE does not even reach the op: nl80211_set_interface only
+calls cfg80211_change_iface when the type/4addr/monitor parameters actually
+change, so hostapd's set_mode(AP) on an interface already created as __ap is a
+no-op success.  The station->AP transition is the path the op now handles.
+
+**Test status:** not hardware-tested (this lane is host-only); the code path is
+derived from 6.18.60 net/wireless/nl80211.c (change flag + use_4addr = -1) and
+net/wireless/util.c (cfg80211_change_iface WARN requiring the driver to store
+iftype).  The v3 bench fire is the deciding test: on success hostapd must print
+"nl80211: Setup of wlan0 completed" / "wlan0: AP-ENABLED" with no
+"Could not configure driver mode".
+
+### 8.3 Re-fire command (updated module)
+
+    tools/rscp.sh /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko root@192.168.1.1:/tmp/
+    # fresh cold boot; golden page; then:
+    insmod /tmp/cfg80211.ko
+    insmod /tmp/hi5622_wifi.ko allow_frames=8 frame_gap_ms=100 h2d_send_budget=8
+    # boot prep + C2 ladder until the post gate reports ACTIVE
+    iw reg set US
+    iw dev wlan0 del 2>/dev/null || true
+    iw phy phy0 interface add wlan0 type __ap
+    ip link set wlan0 up
+    /usr/sbin/hostapd -dd -t /tmp/hostapd-open.conf 2>&1 | tee /tmp/hostapd.log
+
+Readback unchanged: ctx0 BAR0 0x7D1758 -> ctx0+0x18C (0x7D18E4) changes after
+ap_cfg; VAP = u32 at 0x7D18E8, then V+0x6B8000+0x10 = 100 and +0x14 = 2.
+

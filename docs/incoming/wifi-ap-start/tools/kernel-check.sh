@@ -3,20 +3,18 @@
 # tools/kernel-check.sh - kernel-context compile check for the wifi-ap-start
 # lane (host-only: no image build, no device contact).
 #
-# Copies the COMMITTED wifi-scan-ap src tree to a scratch directory (never
-# modifies another lane's files), drops this lane's hi5622_ap_frames.{c,h} in,
-# applies the wifi-vap-start provider patch (base) and this lane's
-# provider/apstart-provider.patch, then builds the module against the real
-# 6.18.60 tree with zero warnings.  The .ko is local evidence only and is NOT
-# committed.
+# BASE = opensource/docs/incoming/wifi-scan-complete/src (the hardware-fired
+# 748,888 B b42ff4ec provider tree, which already contains the wifi-vap-start
+# integration).  The script copies that tree to scratch, adds this lane's
+# hi5622_ap_frames.{c,h}, applies provider/apstart-provider.patch and builds
+# the module against the real 6.18.60 tree with zero warnings.
 #
 #   ./tools/kernel-check.sh
 #   KDIR=... STAGING_DIR=... ./tools/kernel-check.sh
 set -eu
 LANE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 DOCS=$(cd "$LANE_DIR/.." && pwd)
-KO_SRC=$DOCS/wifi-scan-ap/src
-BASE_PATCH=$DOCS/wifi-vap-start/provider/vapstart-provider.patch
+KO_SRC=$DOCS/wifi-scan-complete/src
 PATCH=$LANE_DIR/provider/apstart-provider.patch
 
 KDIR=
@@ -44,20 +42,15 @@ if [ -z "$KDIR" ]; then
 	echo "kernel-check: 6.18.60 kernel tree not found" >&2
 	exit 2
 fi
-[ -d "$KO_SRC" ] || { echo "kernel-check: missing reference module src: $KO_SRC" >&2; exit 2; }
-[ -f "$BASE_PATCH" ] || { echo "kernel-check: missing base patch: $BASE_PATCH" >&2; exit 2; }
+[ -d "$KO_SRC" ] || { echo "kernel-check: missing base tree: $KO_SRC" >&2; exit 2; }
 [ -f "$PATCH" ] || { echo "kernel-check: missing provider patch: $PATCH" >&2; exit 2; }
-[ -x "$CROSS_COMPILE"gcc ] || { echo "kernel-check: toolchain not found: $CROSS_COMPILE"gcc >&2; exit 2; }
+[ -x "$CROSS_COMPILE"gcc ] || { echo "kernel-check: toolchain not found" >&2; exit 2; }
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
 cp -a "$KO_SRC/." "$WORK/"
-rm -f "$WORK"/*.o "$WORK"/*.ko "$WORK"/.*.cmd
+rm -f "$WORK"/*.o "$WORK"/*.ko "$WORK"/*.mod "$WORK"/*.mod.c "$WORK"/.*.cmd "$WORK"/Module.symvers
 cp "$LANE_DIR/src/hi5622_ap_frames.h" "$LANE_DIR/src/hi5622_ap_frames.c" "$WORK/"
-# The wifi-vap-start provider patch (base) needs that lane's builder library.
-VAP_SRC=$DOCS/wifi-vap-start/src
-cp "$VAP_SRC/vapstart_frames.h" "$VAP_SRC/vapstart_frames.c" "$WORK/"
-( cd "$WORK" && patch -p1 --no-backup-if-mismatch < "$BASE_PATCH" )
 ( cd "$WORK" && patch -p1 --no-backup-if-mismatch < "$PATCH" )
 
 export STAGING_DIR
@@ -69,7 +62,7 @@ KO=$WORK/hi5622_wifi.ko
 [ -f "$KO" ] || { echo "kernel-check: BUILD FAILED: $KO missing" >&2; exit 1; }
 
 echo
-echo "== kernel-context compile result"
+echo "== kernel-context compile result (base: 748,888 B fired tree)"
 ls -l "$KO"
 sha256sum "$KO"
 "$CROSS_COMPILE"nm "$KO" | grep -cE ' [Tt] haf_' | sed 's/^/haf_ symbols in module: /'

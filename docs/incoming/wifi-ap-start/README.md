@@ -7,11 +7,13 @@ builders on both carriers (static g0 id-1 config keys and vendor group-2 WAL
 envelopes), with a compile-ready provider extension (caps AP_START) and an
 attended bench ladder.  **Nothing was sent to the firmware; the bench router
 was never contacted.**
-**v2 (after the bench's first real hostapd fire):** the patch also fixes the
-hostapd integration gaps (NL80211_CMD_CONNECT advertisement via a fail-closed
-.connect op, AP iftype changes accepted, AP-start sequence inside the real
-.start_ap).  Deployable module **199,344 B sha256
-f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**; exact
+**v2/v3 (after the bench's real hostapd fires):** the patch fixes the hostapd
+integration gaps (NL80211_CMD_CONNECT advertisement via a fail-closed .connect
+op, AP iftype changes with correct wdev->iftype update and use_4addr=-1
+handling, AP-start sequence inside the real .start_ap) and v3 rebuilds from
+the hardware-fired provider base (wifi-scan-complete/src, 748,888 B
+b42ff4ec).  Deployable module **204,644 B sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**; exact
 hostapd flow, expected logs and corrected readback in
 [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
 
@@ -59,7 +61,7 @@ Quick start:
 
     PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
     ./tools/build.sh && ./tools/ap_start_re.py --selftest
-    ./tools/build-bench-module.sh      # deployable v2 module: size/sha
+    ./tools/build-bench-module.sh      # deployable v3 module: size/sha
     ./tools/kernel-check.sh            # zero-warning module build
 
 Cross-references: [../wifi-vap-start](../wifi-vap-start/) (mode-1 VAP base +

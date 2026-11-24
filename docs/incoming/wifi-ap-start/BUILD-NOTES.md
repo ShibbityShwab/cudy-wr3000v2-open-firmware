@@ -36,11 +36,12 @@ Pins: firmware sha256 7fc87e20... (928,920 B), module sha256 de78ec07...
 
     ./tools/kernel-check.sh
 
-The script copies the committed wifi-scan-ap src tree to /tmp scratch, adds
-this lane src/hi5622_ap_frames.{h,c} and the wifi-vap-start builder library,
-applies the wifi-vap-start provider patch (base) and this lane's
-provider/apstart-provider.patch, then builds the module against
-build_dir/.../linux-6.18.60.
+The script copies the hardware-fired base tree
+(opensource/docs/incoming/wifi-scan-complete/src, 748,888 B b42ff4ec) to /tmp
+scratch, adds this lane src/hi5622_ap_frames.{h,c}, applies this lane's
+provider/apstart-provider.patch (v3, 13 hunks), then builds the module against
+build_dir/.../linux-6.18.60.  Generated artifacts are removed first so no
+stale .o/.mod/Module.symvers from an older tree can leak into the build.
 
 Result:
 
@@ -67,30 +68,34 @@ Result:
 * No image build, no flash, no device access, no UART, no network to the
   router.
 
-## 7. v2 deployable module (after the real AP fire, 2026-11-26)
+## 7. v3 deployable module (second real AP fire, 2026-11-26)
+
+The v2 artifact was built from the older wifi-scan-ap/src tree.  v3 rebuilds
+from the CURRENT hardware-fired provider base:
+
+    BASE = opensource/docs/incoming/wifi-scan-complete/src
+           (module 748,888 B sha256 b42ff4ec..., the D2 TRUE PASS provider,
+            already containing the wifi-vap-start provider integration)
+    + this lane src/hi5622_ap_frames.{h,c}
+    + provider/apstart-provider.patch (13 hunks)
 
     ./tools/build-bench-module.sh
-    -> artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-       size     : 199,344 B
-       sha256   : f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5
+    -> == H2D/core/provider files byte-identical to the 748,888 B fired base
+       == strip check: .text byte-identical stripped vs unstripped
+       artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
+       size     : 204,644 B
+       sha256   : 24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722
        vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
        depends  : cfg80211
        ap builder: vapscan_ap_start present
        connect gate: hi5622_cfg11_connect present
        warnings/errors: none
 
-The deployable artifact is debug-stripped (path-independent sha; the kernel
-tree's DEBUG_INFO would otherwise embed the build directory in the .ko).
-The build-bench-module.sh output above is the canonical identity; the
-kernel-check.sh gate prints the unstripped size and only proves zero
-warnings.
-
-The v2 patch (provider/apstart-provider.patch) also carries the hostapd
-capability gates: a fail-closed .connect op so cfg80211 advertises
-NL80211_CMD_CONNECT (hostapd's shared nl80211 init gate requires
-AUTHENTICATE or CONNECT), and STATION<->AP<->MONITOR iftype changes accepted
-by the M1 netdev model.  The patch now touches Kbuild, hi5622_frames_api.h,
-hi5622_scan.c, hi5622_vapscan_provider.c and hi5622_cfg80211_ops.c (12 hunks).
+v3 changes beyond v2: base provenance fixed to the hardware-fired tree
+(generated artifacts are removed before the build); the SET_INTERFACE op now
+updates wdev->iftype (cfg80211_change_iface WARNs unless the driver does) and
+treats params->use_4addr == -1 as "not specified" (the value
+nl80211_set_interface uses when NL80211_ATTR_4ADDR is absent).
 
 Hostapd flow, expected logs and readback: HOSTAPD-BRINGUP.md.
 Ucode workaround: tools/push-hostapd-ucode.sh (image fix:

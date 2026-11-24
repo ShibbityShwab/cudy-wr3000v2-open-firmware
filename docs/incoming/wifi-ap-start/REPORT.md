@@ -12,8 +12,8 @@ cfg80211 `.connect` op so the wiphy advertises NL80211_CMD_CONNECT (hostapd's
 shared nl80211 init gate refuses a driver that advertises neither
 AUTHENTICATE nor CONNECT), AP-mode iftype changes accepted by the M1 netdev
 model, and the AP-start sequence in the driver's real .start_ap.  The
-deployable module is **199,344 B sha256
-f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**.  See
+deployable module is **204,644 B sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**.  See
 [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) for the exact hostapd flow, expected
 logs and the corrected readback (ctx0 BAR0 0x7D1758 this boot).
 
@@ -30,7 +30,7 @@ Deliverables:
 | [tools/build.sh](tools/build.sh) | host strict compile + selftest + emit |
 | [tools/gen_frames_md.py](tools/gen_frames_md.py) | regenerates [recipes/frames.md](recipes/frames.md) with a freshness check |
 | [tools/kernel-check.sh](tools/kernel-check.sh) | compile the extension inside the real 6.18.60 module build (zero warnings) |
-| [provider/apstart-provider.patch](provider/apstart-provider.patch) | compile-ready extension of the wifi-scan-ap + wifi-vap-start provider tree: caps AP_START, AP-start sequence loop, module param |
+| [provider/apstart-provider.patch](provider/apstart-provider.patch) | compile-ready extension of the hardware-fired wifi-scan-complete provider tree (748,888 B b42ff4ec): caps AP_START, AP-start sequence loop, module param, hostapd capability gates, corrected SET_INTERFACE |
 | [recipes/ap_start_ladder.json](recipes/ap_start_ladder.json) | data-driven attended ladder with readback pack and stop rules |
 | [recipes/frames.md](recipes/frames.md) | generated synthetic bench frames (hex) |
 | [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) | v2: real-AP-fire integration gaps, module identity, exact hostapd command flow, expected logs, corrected readback, failure table |
@@ -70,8 +70,9 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    bench-proven config carrier) and wal_g2_vendor (vendor order, requires
    the dynamically registered group-2 handler).  [V]/[I]
 4. **Provider extension is compile-ready**: applied on top of the
-   wifi-scan-ap + wifi-vap-start tree it builds the module (199,344 B, sha256
-   f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5) against
+   wifi-scan-complete tree (the 748,888 B b42ff4ec hardware-fired provider) it
+   builds the module (204,644 B, sha256
+   24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722) against
    the 6.18.60 tree with **zero warnings**, advertises AP_START, adds the
    hostapd capability gates (CONNECT advertisement, AP iftype change), and
    posts the whole sequence through the existing fail-closed
@@ -88,7 +89,7 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    patch registers a fail-closed .connect (advertised CONNECT, never called by
    hostapd's AP path) and accepts AP iftype changes, so a hostapd
    NEW_BEACON reaches the driver's .start_ap and posts the AP-start sequence.
-   Module 199,344 B sha256 f9175ee3... (see HOSTAPD-BRINGUP.md).
+   Module 204,644 B sha256 24e0cf02... (see HOSTAPD-BRINGUP.md).
 
 ## 1. Scope, evidence and pins
 
@@ -250,8 +251,9 @@ by tools/gen_frames_md.py, freshness-checked).
 ## 5. Provider extension (compile-ready)
 
 [provider/apstart-provider.patch](provider/apstart-provider.patch) applies on
-top of the wifi-scan-ap src tree **plus** the wifi-vap-start provider patch
-(the mode-1 bench module base) and:
+top of the hardware-fired wifi-scan-complete/src tree (module 748,888 B
+sha256 b42ff4ec..., the D2 TRUE PASS provider; it already contains the
+wifi-vap-start provider integration) and:
 
 * extends hi5622_ap_start_params with frame_index/band/module/vap_id/
   hidden_ssid/auth_algs and documents the sequence contract on
@@ -266,7 +268,7 @@ top of the wifi-scan-ap src tree **plus** the wifi-vap-start provider patch
   SSID);
 * advertises HI5622_FRAME_CAP_AP_START, and adds the library object to
   Kbuild;
-* v2 hostapd gates (hi5622_cfg80211_ops.c): a fail-closed .connect op so
+* v3 hostapd gates (hi5622_cfg80211_ops.c): a fail-closed .connect op so
   cfg80211 advertises NL80211_CMD_CONNECT (hostapd's shared nl80211 init gate
   requires AUTHENTICATE or CONNECT), and STATION<->AP<->MONITOR iftype changes
   accepted by the M1 netdev model (hostapd set_mode; cfg80211 core updates the
@@ -278,8 +280,8 @@ top of the wifi-scan-ap src tree **plus** the wifi-vap-start provider patch
 Verified by [tools/kernel-check.sh](tools/kernel-check.sh) against the real
 6.18.60 tree, and the deployable artifact built by
 [tools/build-bench-module.sh](tools/build-bench-module.sh): **hi5622_wifi.ko
-199,344 B, sha256
-f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**,
+204,644 B, sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**,
 depends=cfg80211, vermagic 6.18.60 SMP ARMv7, **zero compiler/modpost
 warnings**, 14 haf_ symbols, vapscan_ap_start and hi5622_cfg11_connect
 present.  The module is local evidence only and is not committed.
@@ -377,7 +379,7 @@ post mailbox id 5, never send group 1/4.
     $PY tools/gen_frames_md.py --check     # frames.md current
     ./tools/kernel-check.sh                # module build 770,304 B, 0 warnings
 
-## 11. v2: real AP fire integration (2026-11-26)
+## 11. v2/v3: real AP fire integration (2026-11-26)
 
 The bench's first hostapd fire surfaced host-side integration gaps; the v2
 patch fixes them without touching the decoded wire format:
@@ -385,13 +387,54 @@ patch fixes them without touching the decoded wire format:
 | gap | fix |
 | --- | --- |
 | hostapd: "Driver does not support authentication/association or connect commands" (fatal at nl80211 init) | register a fail-closed .connect op -> cfg80211 advertises NL80211_CMD_CONNECT (advertisement only; hostapd's AP path never calls it) |
-| .start_ap was the old M3 stub in the fired module | the v2 module carries the AP-start provider patch: .start_ap posts ap_ssid (g0 id1 0x0005, 64 B) then ap_cfg (g0 id1 0x0127, 184 B) via hi5622_frame_post() |
-| hostapd set_mode(AP) refused for a managed interface | change_virtual_intf accepts STATION<->AP<->MONITOR in the M1 netdev model (create wlan0 as __ap is still the preferred flow) |
+| .start_ap was the old M3 stub in the fired module | the v2/v3 module carries the AP-start provider patch: .start_ap posts ap_ssid (g0 id1 0x0005, 64 B) then ap_cfg (g0 id1 0x0127, 184 B) via hi5622_frame_post() |
+| hostapd set_mode(AP) refused for a managed interface | change_virtual_intf accepts STATION<->AP<->MONITOR in the M1 netdev model, stores wdev->iftype (cfg80211_change_iface WARN contract) and treats params->use_4addr == -1 as "not specified" (create wlan0 as __ap is still the preferred flow) |
 | hostapd ucode error (image) | bench workaround script + image requirement (CONFIG_PACKAGE_wifi-scripts=y) |
 
-Deployable module: **199,344 B sha256
-f9175ee3d2143429ce071ddce4103c0c8eabd14a173841ccdb253ecfb0754dc5**.  Exact
+Deployable module: **204,644 B sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722**.  Exact
 command sequence, expected hostapd/dmesg lines, failure table and the
 corrected readback (ctx0 BAR0 0x7D1758 on the lead's boot; vap+0x10 = 100,
 vap+0x14 = 2) are in [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
+
+
+### 11.1 v3 (second fire): fired base provenance + corrected SET_INTERFACE
+
+The second real fire found two integration issues in the v2 artifact:
+
+1. **C2 failed with v2** (ctx_create consumed, then h2d_txq_sync72 announce
+   timeout -> H2D lane closed), while the hardware-fired provider modules
+   consume txq_sync72 in 0 polls.  v2 was built from the older wifi-scan-ap
+   tree.  v3 builds from the CURRENT hardware-fired base
+   (docs/incoming/wifi-scan-complete/src, module 748,888 B sha256
+   b42ff4ec..., D2 TRUE PASS) and the build script now:
+   * removes every generated artifact (.o/.ko/.mod/.mod.c/.*.cmd/Module.symvers)
+     before the build so nothing stale can leak in;
+   * proves the H2D/core/provider files (h2d_send*, hcc*, h2d_frames*) are
+     byte-identical to that fired base;
+   * proves the deployable debug-stripped .ko keeps a byte-identical .text.
+2. **SET_INTERFACE still failed in the fired (stale) flow.**  Code inspection
+   against 6.18.60 found two real bugs in the M1 op that the v2 hunk only
+   half-fixed:
+   * cfg80211_change_iface() WARNs unless the driver updates
+     dev->ieee80211_ptr->iftype; the v2 hunk returned 0 without storing the
+     new type (so a station -> AP transition left the wdev as STATION and
+     start_ap would then fail its AP-iftype check);
+   * nl80211_set_interface() sets params->use_4addr = -1 when
+     NL80211_ATTR_4ADDR is absent; the op compared -1 against
+     wdev->use_4addr and wrongly returned -EOPNOTSUPP.
+   v3 stores wdev->iftype (and the monitor ARPHRD) and treats -1 as "not
+   specified".  Same-type SET_INTERFACE never even reaches the op:
+   nl80211 only calls cfg80211_change_iface when something changes, so
+   hostapd's set_mode(AP) on an interface already created as __ap is a no-op
+   success.
+
+**SET_INTERFACE test status:** not exercised on hardware from this host-only
+lane (no device access).  The behaviour is derived from the 6.18.60
+net/wireless sources (nl80211_set_interface change logic, cfg80211_change_iface
+WARN contract); the bench fire of the v3 module is the first hardware test.
+
+v3 module: **204,644 B sha256
+24e0cf022cb28c866ead6be9a9517ae9beb58c7a2b4502f0ab73450bad2bb722** (see
+HOSTAPD-BRINGUP.md section 8 for the exact re-fire procedure).
 
