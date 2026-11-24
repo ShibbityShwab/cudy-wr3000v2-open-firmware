@@ -1,0 +1,22 @@
+wifi-wpa3-sae lane - module / patch identity (host-built, NOT fired)
+==================================================================
+Patch      : patches/0001-wpa3-sae.patch
+             9 files changed; applies with patch -p1 on the pinned final
+             all-patch chain tree (opensource 008aca5 / wifi-stability
+             tools/build-all-patch-module.sh output).
+Base chain : final all-patch module stripped artifact
+             308,080 B  sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+             (verified by tools/build-wpa3-sae-module.sh, CHAIN-ID-OK)
+Patched    : stripped (debug stripped)
+             311,108 B  sha256 08832e750725980893962940e1b792f8361a6b49b5f3faea5c1777c70dca2960
+             unstripped 1,143,344 B
+             sha256 c32837a3e99d303959fcfabfb184506bd42c3446ba2aff9fc6f1cdb7b72bc4ce
+             vermagic "6.18.60 SMP mod_unload ARMv7 p2v8"
+             module params 47 (unchanged)
+             cfg80211-provider.symvers 10 entries (unchanged contract)
+             .text binary-identical stripped vs unstripped (strip did not
+             change code)
+Reproducible: two consecutive runs of tools/build-wpa3-sae-module.sh
+             produced the same stripped sha256 08832e75... .
+Local only  : the .ko lives in /tmp/wifi-wpa3-sae-artifact/ and is NOT
+             committed (host-only lane, nothing was fired).

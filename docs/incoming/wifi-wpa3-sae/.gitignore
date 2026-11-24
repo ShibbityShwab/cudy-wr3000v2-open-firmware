@@ -1,0 +1,8 @@
+# local build output / vendored inputs, never committed
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+__pycache__/
+evidence/local/

@@ -1,0 +1,47 @@
+hostapd config gate - validator build identity and evidence
+=============================================================
+
+validator build (same source tarball as the bench image tree):
+source tarball: /home/shibbityshwab/openwrt-lab-selectorfix-img/dl/hostapd-2026.08.07~831364bf.tar.zst
+tarball sha256: d1b9ca0e6aaaba928fc5d5b02c0084083e745a38ae1214d0e2dc5d1ea6d50393
+host gcc      : cc (GCC) 16.2.1 20260810
+../src/ap/hostapd.c: In function ‘hostapd_add_iface’:
+../src/ap/hostapd.c:3916:21: warning: assignment discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+
+config gate output:
+-------------------
+host hostapd: /tmp/wifi-wpa3-sae-hostapd/hostapd-2026.08.07~831364bf/hostapd/hostapd (hostapd v2.12)
+ok   hostapd version matches the tree source (v2.12)
+ok   hostapd-wpa3-sae.conf: configuration file loaded
+ok   hostapd-wpa3-sae.conf: no parse/semantic errors
+ok   hostapd-wpa3-sae.conf: reached the pre-driver stop (config check passed)
+ok   hostapd-wpa2-wpa3.conf: configuration file loaded
+ok   hostapd-wpa2-wpa3.conf: no parse/semantic errors
+ok   hostapd-wpa2-wpa3.conf: reached the pre-driver stop (config check passed)
+ok   hostapd-wpa2-hardened.conf: configuration file loaded
+ok   hostapd-wpa2-hardened.conf: no parse/semantic errors
+ok   hostapd-wpa2-hardened.conf: reached the pre-driver stop (config check passed)
+ok   negative-control: parser: control config was read (real parse)
+ok   negative-control: parser: invalid config refused
+ok   negative-control: semantic (WPA-PSK without passphrase): control config was read (real parse)
+ok   negative-control: semantic (WPA-PSK without passphrase): invalid config refused
+ok   hostapd-wpa3-sae.conf: SAE-only AKM
+ok   hostapd-wpa3-sae.conf: PMF required
+ok   hostapd-wpa3-sae.conf: BIP-CMAC-256 group mgmt cipher
+ok   hostapd-wpa3-sae.conf: CCMP pairwise
+ok   hostapd-wpa3-sae.conf: no TKIP/WEP
+ok   hostapd-wpa2-wpa3.conf: PSK+SAE transition AKM
+ok   hostapd-wpa2-wpa3.conf: PMF optional
+ok   hostapd-wpa2-wpa3.conf: SAE stations must negotiate PMF
+ok   hostapd-wpa2-hardened.conf: WPA2-PSK AKM
+ok   hostapd-wpa2-hardened.conf: PMF required (hardened WPA2)
+ok   hostapd-wpa2-hardened.conf: no SAE/TKIP/WEP
+ok   hostapd-wpa3-sae.conf: target shape (driver/ifname/ssid/2.4GHz HT20/placeholder passphrase)
+ok   hostapd-wpa3-sae.conf: no literal PSK material
+ok   hostapd-wpa2-wpa3.conf: target shape (driver/ifname/ssid/2.4GHz HT20/placeholder passphrase)
+ok   hostapd-wpa2-wpa3.conf: no literal PSK material
+ok   hostapd-wpa2-hardened.conf: target shape (driver/ifname/ssid/2.4GHz HT20/placeholder passphrase)
+ok   hostapd-wpa2-hardened.conf: no literal PSK material
+
+== validate-configs: 31 passed, 0 failed ==
+RESULT: PASS - 3 fixtures parse+validate with hostapd v2.12 (CONFIG_SAE+CONFIG_IEEE80211W), profile shape asserted, 2 negative controls refused

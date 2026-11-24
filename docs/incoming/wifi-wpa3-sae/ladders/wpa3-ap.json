@@ -1,0 +1,173 @@
+{
+  "lane": "wifi-wpa3-sae",
+  "task": "task-144",
+  "title": "WPA3-SAE / WPA2+WPA3 / WPA2-hardened AP profiles - key-setup ladder (design only, NOT FIRED by this lane)",
+  "host_only": true,
+  "base": {
+    "chain": "opensource 008aca5 FINAL all-patch module (wpa-static + beacon-static + rx-static + sta-static)",
+    "base_stripped_sha256": "5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41",
+    "base_stripped_size": 308080,
+    "patched_stripped_sha256": "08832e750725980893962940e1b792f8361a6b49b5f3faea5c1777c70dca2960",
+    "patched_stripped_size": 311108,
+    "patched_artifact": "local /tmp/wifi-wpa3-sae-artifact/hi5622_wifi.ko (never committed)"
+  },
+  "preconditions": [
+    "fresh golden boot: page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0",
+    "attended session with the recovery door READY (tools/recovery-card.sh)",
+    "PD4 firmware pushed by hand; local Wi-Fi block staged; never packaged/committed",
+    "one module load per boot; record params before the fire"
+  ],
+  "module_params": {
+    "common": "fw_path=hi_wifi/FIRMWARE.PD4.bin wifi_block_path=<local block> allow_frames=32 frame_gap_ms=100 h2d_send_budget=10 vap_start_first=1 vap_start_mode=1 vap_start_module=0 hcc_poll_ms=5 hcc_trace=0 stop_ap_mode=0 mgmt_diag=0 rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_key_module=0 sta_join=0 ht_mode=0 vht_cap=0 band_vendor=0 scan_band_cfg=0",
+    "r1": "wpa_keys=0 (fail-closed control)",
+    "r2_r4": "wpa_keys=1 (key wire path enabled)"
+  },
+  "fixtures": {
+    "wpa3": "configs/hostapd-wpa3-sae.conf (WPA3-SAE only, ieee80211w=2, BIP-CMAC-256)",
+    "transition": "configs/hostapd-wpa2-wpa3.conf (WPA-PSK+SAE, ieee80211w=1, sae_require_mfp=1)",
+    "wpa2_hardened": "configs/hostapd-wpa2-hardened.conf (WPA-PSK, ieee80211w=2)",
+    "open_control": "wifi-image-polish/rootfs/etc/hi5622/hostapd-open.conf (existing control fixture)"
+  },
+  "expected_key_sequence": [
+    {"order": 1, "action": "GTK add_key", "cmd": "0x0078", "frame_bytes": 96, "idx": 1, "pairwise": 0, "cipher": "0x000fac04", "class": "data", "key_len": 16},
+    {"order": 2, "action": "GTK default", "cmd": "0x0079", "frame_bytes": 68, "idx": 1, "unicast": 0, "multicast": 1},
+    {"order": 3, "action": "IGTK add_key", "cmd": "0x0078", "frame_bytes": 96, "idx": 4, "pairwise": 0, "cipher": "0x000fac0d", "class": "mgmt", "key_len": 16},
+    {"order": 4, "action": "IGTK default management", "cmd": "0x0079", "frame_bytes": 68, "idx": 4, "class_flag": "multicast", "cipher_byte": "0x0d"}
+  ],
+  "rungs": [
+    {
+      "id": "R0",
+      "name": "patched-module baseline (open AP control)",
+      "fixture": "open_control",
+      "wpa_keys": 1,
+      "purpose": "prove the capability patch does not change the AP-start baseline",
+      "steps": [
+        "fresh golden boot; capture page/mask",
+        "insmod with the common params (wpa_keys=1)",
+        "boot ladder + C2, iface __ap, hostapd with the open fixture",
+        "record AP-ENABLED, page/mask, cfg80211_status"
+      ],
+      "pass": [
+        "AP-ENABLED as the project baseline",
+        "page golden, mask 0, no exception",
+        "cfg80211_status: wpa_keys=1, add_ok=0, defmgmt_ok=0"
+      ]
+    },
+    {
+      "id": "R1",
+      "name": "fail-closed proof (wpa_keys=0 + WPA3-SAE hostapd)",
+      "fixture": "wpa3",
+      "wpa_keys": 0,
+      "purpose": "prove the new management-key path never writes a frame when disabled",
+      "steps": [
+        "fresh golden boot; page/mask",
+        "insmod with the common params but wpa_keys=0",
+        "boot ladder + C2, iface __ap, hostapd with the WPA3-SAE fixture",
+        "capture dmesg and cfg80211_status"
+      ],
+      "pass": [
+        "AP-start 5-message plan posted",
+        "add_key log: 'add_key refused - wpa_keys=0 (fail-closed default; bench loads wpa_keys=1)'",
+        "hostapd reports the key-install failure (-EOPNOTSUPP) and tears the AP down cleanly",
+        "cfg80211_status: wpa_keys=0, add_ok=0, add_err=0, defmgmt_ok=0, gate_refused>=1",
+        "page golden, mask 0, no exception"
+      ],
+      "fail_if": [
+        "any key_add/key_default/key_default_mgmt announce appears",
+        "page/mask changes or an exception is reported"
+      ]
+    },
+    {
+      "id": "R2",
+      "name": "PRIMARY: WPA3-SAE AP startup GTK+IGTK key setup",
+      "fixture": "wpa3",
+      "wpa_keys": 1,
+      "purpose": "clear the PMF AP-start blocker: hostapd installs GTK and IGTK and selects the default management key",
+      "steps": [
+        "fresh golden boot; page/mask",
+        "insmod with the common params and wpa_keys=1 wpa_key_module=0",
+        "boot ladder + C2, iface __ap, hostapd with the WPA3-SAE fixture",
+        "watch dmesg for the 5 AP frames, GTK pair, IGTK pair, then AP-ENABLED",
+        "record cfg80211_status and hostapd liveness for >=120 s"
+      ],
+      "expect_dmesg": [
+        "cfg80211: start_ap beacon_static=1 plan (5 steps): vap_add ap_chan ap_ssid ap_cfg ap_vap_start",
+        "cfg80211: add_key posted (g0 id1 cmd 0x0078 'key_add', 96 B, module=0 idx=1 pairwise=0 cipher=0x000fac04 class=data key_len=16 seq_len=0)",
+        "cfg80211: set_default_key posted (g0 id1 cmd 0x0079 'key_default', 68 B, module=0 idx=1 uni=0 multi=1)",
+        "cfg80211: add_key posted (g0 id1 cmd 0x0078 'key_add', 96 B, module=0 idx=4 pairwise=0 cipher=0x000fac0d class=mgmt key_len=16 seq_len=0)",
+        "cfg80211: set_default_mgmt_key posted (g0 id1 cmd 0x0079 'key_default_mgmt', 68 B, module=0 idx=4 cipher=0xd mgmt-class)",
+        "wlan0: AP-ENABLED",
+        "no 'Failed to set key' / 'Failed to set beacon parameters' after the key lines"
+      ],
+      "pass": [
+        "AP-ENABLED and hostapd alive >=120 s",
+        "exactly one data key_add (96 B idx 1) + one key_default (68 B idx 1) consumed",
+        "exactly one mgmt key_add (96 B idx 4 BIP-CMAC-256) + one key_default_mgmt (68 B idx 4) consumed",
+        "cfg80211_status: wpa_keys=1 add_ok=2 add_err=0 def_ok=1 defmgmt_ok=1 defmgmt_err=0 last_op=set_default_mgmt_key last_idx=4 last_errno=0",
+        "page 0x86807FEF golden, state 1, mask 0, staging 0, no exception"
+      ],
+      "fail_if": [
+        "post refused (budget/gap/phase/out[0]) -> record the exact refusal line, no retry",
+        "IGTK add_key or default-mgmt NOT posted -> record the refusal; the mgmt-class body field is then wrong",
+        "page/mask abnormal, H2D lane closed, or firmware exception -> STOP, power-cycle",
+        "hostapd still reports a key error after the default-mgmt line -> capture hostapd -dd log"
+      ],
+      "optional_readback": [
+        "module_ctx+0x190 recipe -> VAP user: user+0x310 = 0x04 (data cipher CCMP), user+0x311 = 1 (data key index), user+0x312 = 4 (mgmt key index), user+0x313 = 0x0d (BIP-CMAC-256)",
+        "this readback is optional evidence; never required to pass R2"
+      ]
+    },
+    {
+      "id": "R3",
+      "name": "transition profile startup (PSK+SAE, PMF optional)",
+      "fixture": "transition",
+      "wpa_keys": 1,
+      "purpose": "same PMF startup path as R2 with ieee80211w=1; proves the transition fixture reaches the same key state",
+      "steps": ["repeat the R2 steps with configs/hostapd-wpa2-wpa3.conf"],
+      "pass": ["same key sequence and cfg80211_status as R2", "AP-ENABLED, hostapd alive >=120 s", "page golden, mask 0"]
+    },
+    {
+      "id": "R4",
+      "name": "WPA2-hardened profile startup (PMF required)",
+      "fixture": "wpa2_hardened",
+      "wpa_keys": 1,
+      "purpose": "same PMF startup path with ieee80211w=2 and no SAE; proves the hardened WPA2 fallback profile reaches the same key state",
+      "steps": ["repeat the R2 steps with configs/hostapd-wpa2-hardened.conf"],
+      "pass": ["same key sequence and cfg80211_status as R2", "AP-ENABLED, hostapd alive >=120 s", "page golden, mask 0"]
+    },
+    {
+      "id": "R5",
+      "name": "BLOCKED: SAE/4-way client association",
+      "status": "blocked",
+      "purpose": "document the next gate honestly; do not attempt to fake it",
+      "steps": [
+        "SAE authentication is host software and needs the AP management TX path (wal_cfg80211_mgmt_tx family, wifi-ap-mgmt lane) plus management RX; the SAE commit/confirm are auth frames (mgmt subtype 11)",
+        "association also needs cfg80211 .add_station/.del_station + the firmware per-STA user context; without it hostapd logs 'Could not add STA to kernel driver' and sends no assoc response",
+        "the 4-way PTK then needs EAPOL over the RX data path"
+      ]
+    },
+    {
+      "id": "R6",
+      "name": "teardown/soak observation",
+      "fixture": "wpa3",
+      "wpa_keys": 1,
+      "purpose": "confirm no new leak or hot-path regression",
+      "steps": [
+        "hostapd kill -> controlled stop_ap path",
+        "60-minute soak sampler (wifi-stability soak tooling) alongside the AP",
+        "if a key_del is emitted during teardown, record it (expected only for a known STA)"
+      ],
+      "pass": [
+        "no new dmesg noise class from the PMF key path when idle",
+        "page/mask stable across the soak; hostapd count stable"
+      ]
+    }
+  ],
+  "abort_policy": [
+    "any page != golden or mask != 0 -> stop, capture, power-cycle (never rmmod after release)",
+    "H2D lane closed / timeout -> stop; do not retry the same frame in the same boot",
+    "no bench link / recovery door not READY -> no fire",
+    "do not attempt R5 until the mgmt TX/RX + station-op lanes are closed"
+  ],
+  "not_fired_by_this_lane": true
+}

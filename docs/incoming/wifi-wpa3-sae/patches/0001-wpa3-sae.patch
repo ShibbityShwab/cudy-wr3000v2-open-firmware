@@ -1,0 +1,438 @@
+--- a/hi5622_cfg80211.c	2026-11-24 21:23:33.827413290 +0700
++++ b/hi5622_cfg80211.c	2026-11-24 21:47:57.014860212 +0700
+@@ -95,6 +95,45 @@
+ 	WLAN_CIPHER_SUITE_GCMP,
+ 	WLAN_CIPHER_SUITE_AES_CMAC,
+ 	WLAN_CIPHER_SUITE_BIP_CMAC_256,
++	/* wifi-wpa3-sae lane (task-144): the firmware key worker's mgmt class
++	 * mask is 0x3840 = {AES-CMAC 6, BIP-GMAC-128 11, BIP-GMAC-256 12,
++	 * BIP-CMAC-256 13} [V, fw worker CA 0xA5825], so the two GMAC BIP
++	 * suites are advertised for PMF-capable WPA3 profiles.  The default
++	 * WPA3 group_mgmt_cipher (BIP-CMAC-256) is already above. */
++	WLAN_CIPHER_SUITE_BIP_GMAC_128,
++	WLAN_CIPHER_SUITE_BIP_GMAC_256,
++};
++
++/* wifi-wpa3-sae lane (task-144): AKM (key_management) advertisement.
++ *
++ * cfg80211 exposes the wiphy AKM list as NL80211_ATTR_AKM_SUITES and a
++ * per-interface override as NL80211_ATTR_IFTYPE_AKM_SUITES
++ * (net/wireless/nl80211.c nl80211_send_wiphy); hostapd's nl80211 capability
++ * parser reads both (src/drivers/driver_nl80211_capa.c
++ * wiphy_info_akm_suites/wiphy_info_iftype_akm_suites).  Without any
++ * advertisement hostapd falls back to a hardcoded list that does NOT include
++ * SAE, so a wpa_supplicant-driven station would refuse an SAE profile even
++ * though the AP-side is configured for it.  hostapd's own AP path does not
++ * gate on the list (no capa.key_mgmt reads under hostapd/src/ap), which is why
++ * the AP-setup gate never caught this - it is a capability-contract fix, not
++ * a new AP gate.
++ *
++ * wiphy default = PSK (the STA/connect path that exists), AP iftype override
++ * = PSK + SAE (the usable-AP target of this lane).  The bits are WLAN_AKM_*
++ * suite selectors (00-0f-ac:2 / 00-0f-ac:8). */
++static const u32 hi5622_akm_suites[] = {
++	WLAN_AKM_SUITE_PSK,	/* WPA2-Personal, 0x000fac02 */
++};
++static const u32 hi5622_ap_akm_suites[] = {
++	WLAN_AKM_SUITE_PSK,	/* WPA2-Personal half of transition mode */
++	WLAN_AKM_SUITE_SAE,	/* WPA3-Personal (SAE), 0x000fac08 */
++};
++static const struct wiphy_iftype_akm_suites hi5622_iftype_akm_suites[] = {
++	{
++		.iftypes_mask = BIT(NL80211_IFTYPE_AP),
++		.akm_suites = hi5622_ap_akm_suites,
++		.n_akm_suites = ARRAY_SIZE(hi5622_ap_akm_suites),
++	},
+ };
+ 
+ /* ---------------------------------------------------------------------
+@@ -436,7 +475,17 @@
+ 						 * disassoc/deauth, action */
+ 	},
+ 	[NL80211_IFTYPE_AP] = {
+-		.tx = BIT(0x00) | BIT(0x02) | BIT(0x04) | BIT(0x0a) |
++		/* wifi-wpa3-sae lane (task-144): the AP must be able to TX the
++		 * *response* management subtypes hostapd generates
++		 * ((re)assoc response, probe response, disassoc, auth,
++		 * deauth, action).  cfg80211_mlme_mgmt_tx() checks
++		 * wiphy->mgmt_stypes[iftype].tx (net/wireless/mlme.c) and
++		 * returns -EINVAL for a subtype bit not set here, so the old
++		 * copy of the rx mask (assoc/probe *request* bits, no
++		 * response bits) would have refused every AP auth/assoc
++		 * response before the driver op was reached.  SAE commit/
++		 * confirm are auth frames (bit 11), already TX-capable. */
++		.tx = BIT(0x01) | BIT(0x03) | BIT(0x05) | BIT(0x0a) |
+ 		      BIT(0x0b) | BIT(0x0c) | BIT(0x0d),
+ 		.rx = BIT(0x00) | BIT(0x02) | BIT(0x04) | BIT(0x0a) |
+ 		      BIT(0x0b) | BIT(0x0c) | BIT(0x0d),
+@@ -495,6 +544,14 @@
+ 	memcpy(wiphy->perm_addr, hi5622_cfg11_perm_addr, ETH_ALEN);
+ 	wiphy->cipher_suites = hi5622_cipher_suites;
+ 	wiphy->n_cipher_suites = ARRAY_SIZE(hi5622_cipher_suites);
++	/* wifi-wpa3-sae lane (task-144): AKM advertisement (PSK wiphy-wide,
++	 * +SAE for the AP iftype).  See hi5622_akm_suites above. */
++	wiphy->akm_suites = hi5622_akm_suites;
++	wiphy->n_akm_suites = ARRAY_SIZE(hi5622_akm_suites);
++	wiphy->iftype_akm_suites = hi5622_iftype_akm_suites;
++	wiphy->num_iftype_akm_suites = ARRAY_SIZE(hi5622_iftype_akm_suites);
++	dev_info(&ctx->pdev->dev,
++		 "cfg80211: AKM suites advertised (wiphy PSK; AP PSK+SAE, iftype override) - WPA3-SAE capability contract, hostapd AP does not gate on it\n");
+ 	/* wifi-ap-start lane (task-121, hostapd bring-up): cfg80211 refuses
+ 	 * NL80211_CMD_REGISTER_FRAME with -EOPNOTSUPP when wiphy->mgmt_stypes is
+ 	 * NULL (cfg80211_mlme_register_mgmt) and with -EINVAL when the per-iftype
+--- a/hi5622_cfg80211_logic.c	2026-11-24 21:23:33.769718054 +0700
++++ b/hi5622_cfg80211_logic.c	2026-11-24 21:46:32.357592231 +0700
+@@ -320,9 +320,9 @@
+ 	{ "set_default_key", HI5622_M3, HI5622_OP_IMPL,
+ 	  0x00, 0x0001, 0x0079, "g0 id1 hdpp cfg event (cmd 0x0079, body 0x28)",
+ 	  "wifi-wpa-static (task-139): vendor wal_cfg80211_set_default_key 0x100ffc + fw worker CA 0xA5C9D" },
+-	{ "set_default_mgmt_key", HI5622_M3, HI5622_OP_DEFERRED,
+-	  0x02, 0xffff, -1, "WAL cfg event",
+-	  "key payload layout [U]" },
++	{ "set_default_mgmt_key", HI5622_M3, HI5622_OP_IMPL,
++	  0x00, 0x0001, 0x0079, "g0 id1 hdpp cfg event (cmd 0x0079, body 0x28, mgmt class)",
++	  "wifi-wpa3-sae (task-144): fw worker CA 0xA5C9D mgmt branch (bg+4 cipher from the preceding IGTK add_key; wpa_keys=1 gate)" },
+ 	{ "start_ap", HI5622_M3, HI5622_OP_DEFERRED,
+ 	  0x00, 0x0001, -1, "hmac_config g0 id1 family + g2 WAL cfg",
+ 	  "start_ap config-blob layout is gap G1; vendor wal_cfg80211_start_ap" },
+--- a/hi5622_cfg80211_ops.c	2026-11-24 21:23:33.828393875 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 21:46:21.321864762 +0700
+@@ -488,6 +488,13 @@
+ 	.add_key		= hi5622_keys_op_add,
+ 	.del_key		= hi5622_keys_op_del,
+ 	.set_default_key	= hi5622_keys_op_set_default,
++	/* wifi-wpa3-sae lane (task-144): PMF group management key (IGTK)
++	 * default-key selection.  hostapd installs the IGTK at AP startup
++	 * whenever ieee80211w != 0 and then sends NL80211_CMD_SET_KEY with
++	 * NL80211_KEY_DEFAULT_MGMT; cfg80211 returns -EOPNOTSUPP unless this
++	 * op exists (net/wireless/nl80211.c nl80211_set_key default-mgmt
++	 * branch), which failed wpa_init_keys() for every PMF profile. */
++	.set_default_mgmt_key	= hi5622_keys_op_set_default_mgmt,
+ 	/* Advertise NL80211_CMD_CONNECT so hostapd passes its driver init gate;
+ 	 * fail-closed and never used by the AP path (task-121). */
+ 	.connect		= hi5622_cfg11_connect,
+--- a/hi5622_frames_api.h	2026-11-24 21:23:33.823514060 +0700
++++ b/hi5622_frames_api.h	2026-11-24 21:46:32.357338243 +0700
+@@ -215,12 +215,16 @@
+ 	u8	seq[HI5622_KEY_SEQ_MAX];
+ };
+ 
+-/* One default-key selection (data keys 0..3; the management-key variant is a
+- * separate firmware path and is not registered by this lane). */
++/* One default-key selection.  mgmt = 0 is the data-key path (keys 0..3, the
++ * wifi-wpa-static lane); mgmt = 1 is the PMF/default-management-key path
++ * (keys 4..5, wifi-wpa3-sae lane task-144) whose wire body needs the mgmt
++ * cipher learned from the preceding IGTK add_key. */
+ struct hi5622_key_default_params {
+-	u8	key_index;	/* 0..3 */
++	u8	key_index;	/* 0..3 data; 4..5 mgmt */
+ 	u8	unicast;
+ 	u8	multicast;
++	u8	mgmt;		/* 1 = default management key (PMF/IGTK) */
++	u32	cipher;		/* mgmt path only: cfg80211 cipher suite */
+ 	u8	module;
+ 	u8	dst;
+ };
+--- a/hi5622_key_frames.c	2026-11-24 21:23:33.779533040 +0700
++++ b/hi5622_key_frames.c	2026-11-24 21:46:32.357150059 +0700
+@@ -109,11 +109,31 @@
+ {
+ 	if (!p)
+ 		return -EINVAL;
+-	/* The firmware default-key worker 0xA5C9D routes key_index > 3 to the
+-	 * management-key path, which expects a cipher byte this data-key
+-	 * command does not carry; set_default_mgmt_key is a separate op (not
+-	 * implemented in this lane), so refuse it here instead of posting a
+-	 * frame the worker rejects. */
++	if (p->mgmt > 1u)
++		return -EINVAL;
++	if (p->mgmt) {
++		/* wifi-wpa3-sae lane (task-144): the firmware default-key
++		 * worker 0xA5C9D routes key_index > 3 to the management-key
++		 * branch, which requires:
++		 *   - key_index 4..5 (worker: sub #4, cmp #1, bhi error 0x520a);
++		 *   - one of the body+1/body+2 class flags set (worker error
++		 *     0x545) - the vendor/IGTK form is unicast=0, multicast=1;
++		 *   - a cipher byte at body+0x04 that is in the mgmt class mask
++		 *     0x3840 (worker error 0x520b for 0 or any non-mgmt value).
++		 * cfg80211's set_default_mgmt_key op does not carry the
++		 * cipher, so the caller supplies the one observed on the
++		 * preceding add_key (IGTK) and an unknown cipher is refused
++		 * here, never posted as a guessed byte. */
++		if (p->key_index < HKF_MIN_MGMT_KEY_INDEX ||
++		    p->key_index > HKF_MAX_KEY_INDEX)
++			return -EINVAL;
++		if (p->unicast || !p->multicast)
++			return -EINVAL;
++		if (hkf_cipher_classify(p->cipher) != HKF_CIPHER_MGMT)
++			return -EOPNOTSUPP;
++		return 0;
++	}
++	/* data-key path: keys 0..3 only */
+ 	if (p->key_index > HKF_MAX_DATA_KEY_INDEX)
+ 		return -EINVAL;
+ 	if (!p->unicast && !p->multicast)
+@@ -173,6 +193,8 @@
+ 	body[0x00] = p->key_index;
+ 	body[0x01] = p->unicast;
+ 	body[0x02] = p->multicast;
++	if (p->mgmt)
++		body[0x04] = (u8)(p->cipher & 0xffu);
+ 	return 0;
+ }
+ 
+--- a/hi5622_key_frames.h	2026-11-24 21:23:33.780715676 +0700
++++ b/hi5622_key_frames.h	2026-11-24 21:46:32.356304419 +0700
+@@ -43,7 +43,10 @@
+  *   +0x00 u8 key_index, +0x01 u8 pairwise, +0x02 u8 mac[6]
+  *
+  * default-key body (0x28 B, worker 0xA5C9D):
+- *   +0x00 u8 key_index, +0x01 u8 unicast, +0x02 u8 multicast
++ *   data path: +0x00 u8 key_index, +0x01 u8 unicast, +0x02 u8 multicast
++ *   mgmt path (key_index 4..5): +0x00 key_index, +0x02 = 1 class flag,
++ *     +0x04 u8 mgmt cipher low byte (must be in the mgmt class mask 0x3840;
++ *     0 is rejected by the worker with error 0x520b)
+  *
+  * The firmware worker cipher classes (low byte of the cfg80211 suite) are
+  * [V] from worker 0xA5825:
+@@ -136,12 +139,17 @@
+ 	u8	seq[HKF_SEQ_MAX];
+ };
+ 
+-/* One default-key selection (data keys only; keys 4/5 are the separate
+- * set_default_mgmt_key firmware path, not modelled here). */
++/* One default-key selection.  mgmt=0 is the data-key path (keys 0..3);
++ * mgmt=1 is the PMF/default-management-key path (keys 4..5) added for the
++ * WPA3-SAE lane: the firmware worker (CA 0xA5C9D) reads a management cipher
++ * byte at body+0x04 on that branch and rejects 0 with worker error 0x520b, so
++ * the caller must supply a cipher from the mgmt class mask 0x3840. */
+ struct hkf_default_key_params {
+-	u8	key_index;	/* 0..3 */
++	u8	key_index;	/* 0..3 data; 4..5 mgmt */
+ 	u8	unicast;
+ 	u8	multicast;
++	u8	mgmt;		/* 1 = management-key (default mgmt key) path */
++	u32	cipher;		/* mgmt path only: WLAN_CIPHER_SUITE_* */
+ };
+ 
+ /* One built wire frame. */
+--- a/hi5622_keys.c	2026-11-24 21:23:33.782670185 +0700
++++ b/hi5622_keys.c	2026-11-24 21:47:29.417575343 +0700
+@@ -79,6 +79,8 @@
+ 	u32 del_err;
+ 	u32 def_ok;
+ 	u32 def_err;
++	u32 defmgmt_ok;
++	u32 defmgmt_err;
+ 	u32 refused_gate;
+ 	u32 refused_validate;
+ 	s32 last_errno;
+@@ -90,12 +92,28 @@
+ static DEFINE_MUTEX(hi5622_keys_lock);
+ static struct hi5622_key_stats hi5622_key_stats;
+ 
++/* wifi-wpa3-sae lane (task-144): management-key cipher latch.
++ *
++ * The firmware default-management-key worker (CA 0xA5C9D, key_index > 3
++ * branch) does not trust a bare key index: it reads a cipher byte from
++ * body+0x04, bounds it <= 0x0d and requires it in the management class mask
++ * 0x3840, else it fails the config event with worker error 0x520b.  cfg80211's
++ * .set_default_mgmt_key callback carries only the key index, so the cipher is
++ * latched from the add_key that hostapd sends immediately before it
++ * (wpa_group_config_group_keys: NL80211_CMD_NEW_KEY for the IGTK, then
++ * NL80211_CMD_SET_KEY with NL80211_KEY_DEFAULT_MGMT).  A zero entry means
++ * "no management key add seen" and the default-mgmt frame is refused instead
++ * of posting a guessed cipher byte. */
++static u8 hi5622_mgmt_key_cipher[HKF_MAX_KEY_INDEX + 1u -
++				 HKF_MIN_MGMT_KEY_INDEX];
++
+ static const char *hi5622_keys_op_name(u8 op)
+ {
+ 	switch (op) {
+ 	case 1:	return "add_key";
+ 	case 2:	return "del_key";
+ 	case 3:	return "set_default_key";
++	case 4:	return "set_default_mgmt_key";
+ 	default: return "?";
+ 	}
+ }
+@@ -252,6 +270,10 @@
+ 		hi5622_key_stats.last_key_index = p.key_index;
+ 		hi5622_key_stats.last_pairwise = p.pairwise;
+ 		hi5622_key_stats.last_errno = 0;
++		if (!p.pairwise && cls == HKF_CIPHER_MGMT)
++			hi5622_mgmt_key_cipher[p.key_index -
++					       HKF_MIN_MGMT_KEY_INDEX] =
++				(u8)(p.cipher & 0xffu);
+ 	}
+ 	mutex_unlock(&hi5622_keys_lock);
+ 	kfree(f);
+@@ -321,6 +343,9 @@
+ 		hi5622_key_stats.last_key_index = p.key_index;
+ 		hi5622_key_stats.last_pairwise = p.pairwise;
+ 		hi5622_key_stats.last_errno = 0;
++		if (!p.pairwise && p.key_index >= HKF_MIN_MGMT_KEY_INDEX)
++			hi5622_mgmt_key_cipher[p.key_index -
++					       HKF_MIN_MGMT_KEY_INDEX] = 0;
+ 	}
+ 	mutex_unlock(&hi5622_keys_lock);
+ 	kfree(f);
+@@ -409,6 +434,117 @@
+ 	return 0;
+ }
+ 
++/* wifi-wpa3-sae lane (task-144): cfg80211 .set_default_mgmt_key.
++ *
++ * hostapd's AP startup installs the PMF group management key (IGTK) through
++ * wpa_group_config_group_keys() whenever MFP is enabled: NEW_KEY for the
++ * IGTK (group key, cipher = group_mgmt_cipher, idx = GN_igtk = 4), then
++ * SET_KEY + NL80211_KEY_DEFAULT_MGMT.  The cfg80211 default-mgmt branch of
++ * nl80211_set_key() returns -EOPNOTSUPP unless the driver registers this op,
++ * which made wpa_init_keys() fail for every WPA3/WPA2-PMF profile after the
++ * GTK was already installed.  The firmware frame is the decoded g0 id1
++ * cmd 0x0079 with the management-class body (worker CA 0xA5C9D): key_index,
++ * class flag, and the body+0x04 cipher latched from the IGTK add_key. */
++int hi5622_keys_op_set_default_mgmt(struct wiphy *wiphy,
++				    struct net_device *netdev,
++				    int link_id, u8 key_index)
++{
++	struct hi5622_cfg80211 *c = wiphy_priv(wiphy);
++	const struct hi5622_frame_ops *ops = NULL;
++	struct device *dev = wiphy_dev(wiphy);
++	struct hkf_default_key_params p;
++	struct hkf_frame *f;
++	u8 cipher;
++	size_t len = 0;
++	int rc;
++
++	if (!dev || !netdev || !netdev->ieee80211_ptr)
++		return -EINVAL;
++	if (link_id > 0)
++		return -EOPNOTSUPP;
++	if (netdev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP)
++		return -EOPNOTSUPP;
++	rc = hi5622_keys_gate(c, &ops, HI5622_FRAME_CAP_KEY_DEFAULT,
++			      "set_default_mgmt_key", dev);
++	if (rc)
++		return rc;
++	if (key_index < HKF_MIN_MGMT_KEY_INDEX ||
++	    key_index > HKF_MAX_KEY_INDEX) {
++		mutex_lock(&hi5622_keys_lock);
++		hi5622_key_stats.refused_validate++;
++		hi5622_key_stats.last_errno = -EINVAL;
++		mutex_unlock(&hi5622_keys_lock);
++		dev_warn(dev,
++			 "cfg80211: set_default_mgmt_key refused - idx=%u outside the firmware mgmt range %u..%u\n",
++			 key_index, HKF_MIN_MGMT_KEY_INDEX, HKF_MAX_KEY_INDEX);
++		return -EINVAL;
++	}
++	mutex_lock(&hi5622_keys_lock);
++	cipher = hi5622_mgmt_key_cipher[key_index - HKF_MIN_MGMT_KEY_INDEX];
++	mutex_unlock(&hi5622_keys_lock);
++	if (!cipher) {
++		mutex_lock(&hi5622_keys_lock);
++		hi5622_key_stats.refused_validate++;
++		hi5622_key_stats.last_errno = -EINVAL;
++		mutex_unlock(&hi5622_keys_lock);
++		dev_warn(dev,
++			 "cfg80211: set_default_mgmt_key refused - no management cipher latched for idx=%u (an IGTK add_key with a mgmt-class cipher must precede it; the firmware worker rejects cipher byte 0)\n",
++			 key_index);
++		return -EINVAL;
++	}
++	memset(&p, 0, sizeof(p));
++	p.key_index = key_index;
++	p.unicast = 0;
++	p.multicast = 1;	/* worker 0xA5C9D mgmt form: body+2 class flag */
++	p.mgmt = 1;
++	p.cipher = cipher;
++	rc = hkf_default_key_params_validate(&p);
++	if (rc) {
++		mutex_lock(&hi5622_keys_lock);
++		hi5622_key_stats.refused_validate++;
++		hi5622_key_stats.last_errno = rc;
++		mutex_unlock(&hi5622_keys_lock);
++		dev_warn(dev,
++			 "cfg80211: set_default_mgmt_key refused - firmware mgmt-class validation failed (idx=%u cipher=0x%x rc=%d)\n",
++			 p.key_index, p.cipher, rc);
++		return rc == -EOPNOTSUPP ? rc : -EINVAL;
++	}
++	f = kzalloc(sizeof(*f), GFP_KERNEL);
++	if (!f)
++		return -ENOMEM;
++	rc = hkf_build_default_key(f, (u8)hi5622_wpa_key_module, 0u, &p);
++	if (rc) {
++		kfree(f);
++		return rc < 0 ? rc : -EIO;
++	}
++	len = f->len;
++	rc = hi5622_keys_post(c, f->buf, len, "key_default_mgmt");
++	mutex_lock(&hi5622_keys_lock);
++	if (rc) {
++		hi5622_key_stats.defmgmt_err++;
++		hi5622_key_stats.last_errno = rc;
++	} else {
++		hi5622_key_stats.defmgmt_ok++;
++		hi5622_key_stats.last_op = 4;
++		hi5622_key_stats.last_key_index = p.key_index;
++		hi5622_key_stats.last_pairwise = 0;
++		hi5622_key_stats.last_errno = 0;
++	}
++	mutex_unlock(&hi5622_keys_lock);
++	kfree(f);
++	if (rc) {
++		dev_warn(dev,
++			 "cfg80211: set_default_mgmt_key NOT posted (idx=%u cipher=0x%x) rc=%d\n",
++			 p.key_index, p.cipher, rc);
++		return rc;
++	}
++	dev_info(dev,
++		 "cfg80211: set_default_mgmt_key posted (g0 id1 cmd 0x%04x 'key_default_mgmt', %zu B, module=%u idx=%u cipher=0x%x mgmt-class) - firmware worker CA 0xA5C9D selects the PMF default management key\n",
++		 HKF_CMD_SET_DEFAULT_KEY, len, hi5622_wpa_key_module,
++		 p.key_index, p.cipher);
++	return 0;
++}
++
+ int hi5622_keys_status(struct hi5622_cfg80211 *c, char *buf, size_t len)
+ {
+ 	struct hi5622_key_stats st;
+@@ -420,10 +556,11 @@
+ 	st = hi5622_key_stats;
+ 	mutex_unlock(&hi5622_keys_lock);
+ 	n = scnprintf(buf, len,
+-		      "wpa_keys=%u key_module=%u add_ok=%u add_err=%u del_ok=%u del_err=%u def_ok=%u def_err=%u gate_refused=%u validate_refused=%u last_op=%s last_idx=%u last_pairwise=%u last_errno=%d\n",
++		      "wpa_keys=%u key_module=%u add_ok=%u add_err=%u del_ok=%u del_err=%u def_ok=%u def_err=%u defmgmt_ok=%u defmgmt_err=%u gate_refused=%u validate_refused=%u last_op=%s last_idx=%u last_pairwise=%u last_errno=%d\n",
+ 		      hi5622_wpa_keys, hi5622_wpa_key_module, st.add_ok,
+ 		      st.add_err, st.del_ok, st.del_err, st.def_ok,
+-		      st.def_err, st.refused_gate, st.refused_validate,
++		      st.def_err, st.defmgmt_ok, st.defmgmt_err,
++		      st.refused_gate, st.refused_validate,
+ 		      hi5622_keys_op_name(st.last_op), st.last_key_index,
+ 		      st.last_pairwise, st.last_errno);
+ 	return n;
+--- a/hi5622_keys.h	2026-11-24 21:23:33.784341912 +0700
++++ b/hi5622_keys.h	2026-11-24 21:46:21.321946065 +0700
+@@ -45,6 +45,12 @@
+ int hi5622_keys_op_set_default(struct wiphy *wiphy, struct net_device *netdev,
+ 			       int link_id, u8 key_index, bool unicast,
+ 			       bool multicast);
++/* wifi-wpa3-sae lane (task-144): PMF default management key (IGTK, idx 4/5).
++ * The firmware worker needs the mgmt cipher in the body, learned from the
++ * preceding add_key; the op refuses when no IGTK add was seen. */
++int hi5622_keys_op_set_default_mgmt(struct wiphy *wiphy,
++				    struct net_device *netdev,
++				    int link_id, u8 key_index);
+ 
+ /* Read-only status (sysfs): counters + last key operation. */
+ int hi5622_keys_status(struct hi5622_cfg80211 *c, char *buf, size_t len);
+--- a/hi5622_vapscan_provider.c	2026-11-24 21:23:33.825471184 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 21:46:32.357477465 +0700
+@@ -502,6 +502,9 @@
+ 	dp.key_index = p->key_index;
+ 	dp.unicast = p->unicast ? 1u : 0u;
+ 	dp.multicast = p->multicast ? 1u : 0u;
++	/* wifi-wpa3-sae lane (task-144): PMF default management key variant */
++	dp.mgmt = p->mgmt ? 1u : 0u;
++	dp.cipher = p->cipher;
+ 	rc = hkf_build_default_key(&f, p->module, p->dst, &dp);
+ 	if (rc)
+ 		return rc;

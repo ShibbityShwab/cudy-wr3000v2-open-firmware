@@ -1,0 +1,81 @@
+=== 1. portable key-frame selftest (44 checks) ===
+ok   selftest compiles warning-free (-Wall -Wextra -Werror)
+ok   selftest PASS (== wpa3_selftest: 44 checks, 0 failed ==)
+wifi-wpa3-sae host selftest (portable key-frame builders)
+ok   classify CCMP = data
+ok   classify TKIP = data
+ok   classify AES-CMAC = mgmt
+ok   classify BIP-CMAC-256 = mgmt
+ok   classify BIP-GMAC-128 = mgmt
+ok   classify BIP-GMAC-256 = mgmt
+ok   classify WEP40 = wep
+ok   classify unknown suite = unknown
+ok   classify cipher 0 = unknown
+ok   data default-key body builds (idx 1, multicast)
+ok   data default-key body fields at +0/+1/+2
+ok   data default-key body leaves the mgmt cipher byte +4 zero
+ok   PMF default-mgmt body builds (idx 4, BIP-CMAC-256)
+ok   PMF default-mgmt body +0 = key_index 4
+ok   PMF default-mgmt body +1/+2 = unicast 0 / multicast class flag 1
+ok   PMF default-mgmt body +4 = BIP-CMAC-256 low byte 0x0d (worker requires a mgmt-class cipher)
+ok   PMF default-mgmt body accepts BIP-GMAC-256 (low byte 0x0c)
+ok   PMF default-mgmt body accepts BIP-GMAC-128 (low byte 0x0b)
+ok   PMF default-mgmt body accepts AES-CMAC/BIP-CMAC-128 (low byte 0x06)
+ok   PMF default-mgmt refuses key index 3 (firmware mgmt range 4..5)
+ok   PMF default-mgmt refuses unicast flag (vendor/IGTK form is multicast)
+ok   PMF default-mgmt refuses zero class flags (worker error 0x545)
+ok   PMF default-mgmt refuses a data cipher (CCMP)
+ok   PMF default-mgmt refuses cipher byte 0 (the latched cipher is required)
+ok   data default-key path still refuses key index 4
+ok   default-mgmt refuses a non-boolean mgmt flag
+ok   PMF default-mgmt frame builds
+ok   PMF default-mgmt frame length = 28-byte g0 overhead + 0x28 body
+ok   PMF default-mgmt frame cmd = 0x0079
+ok   frame header group 0
+ok   frame header total length
+ok   frame header id 1 (cfg event)
+ok   frame header tag 0x5a5a
+ok   payload cmd 0x0079
+ok   payload body length 0x28
+ok   PMF default-mgmt frame body carries idx/class/cipher
+ok   frame pad is 0xff (inherited g0 id1 pad)
+ok   data default-key frame unchanged (cmd 0x0079, same length)
+ok   WPA2 add-key frame unchanged (cmd 0x0078)
+ok   WPA2 add-key frame length = 28 + 0x44
+ok   WPA2 add-key body layout unchanged (idx/key_len/cipher at +0/+0x38/+0x40)
+ok   frame builder refuses module out of range
+ok   frame builder refuses dst out of range
+ok   frame builder refuses NULL params
+
+== wpa3_selftest: 44 checks, 0 failed ==
+RESULT: PASS
+
+=== 2. static assertions on the patched kernel sources ===
+ok   wiphy AKM table advertises SAE
+ok   wiphy AKM table advertises PSK
+ok   wiphy->akm_suites registered
+ok   wiphy->n_akm_suites registered
+ok   AP iftype AKM override registered
+ok   BIP-GMAC-256 cipher advertised (PMF)
+ok   BIP-CMAC-256 cipher advertised (WPA3 default)
+ok   AP mgmt TX mask covers (re)assoc/probe responses
+ok   cfg80211 .set_default_mgmt_key registered
+ok   cfg80211 .add_key still registered
+ok   keys layer latches the management cipher
+ok   PMF default-mgmt frame post label present
+ok   unknown cipher fails closed (never posts a guessed byte)
+ok   default-mgmt op reads the latch by key index
+ok   mgmt body carries the cipher at +0x04
+ok   mgmt cipher class enforced in the portable validator
+ok   op map marks set_default_mgmt_key implemented
+ok   neutral default-key params carry the mgmt variant
+ok   provider forwards the mgmt variant
+ok   wpa_keys still has no non-zero initializer (fail-closed default 0)
+
+=== 3. hostapd config gate ===
+ok   hostapd config gate PASS
+
+== validate-configs: 31 passed, 0 failed ==
+
+== run-host-check: 23 passed, 0 failed ==
+RESULT: PASS - portable selftest, patched-source static assertions, hostapd v2.12 config gate

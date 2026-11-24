@@ -1,0 +1,13 @@
+CHAIN-ID-OK base stripped sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+chain tree staged: 72 files
+== applying /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-wpa3-sae/patches/0001-wpa3-sae.patch
+patch applied
+== WIFI-WPA3-SAE module (host-built on the pinned final chain, NOT fired)
+base chain: stripped 308080 sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+artifact  : /tmp/wifi-wpa3-sae-artifact/hi5622_wifi.ko (debug-stripped)
+size      : 311108
+sha256    : 08832e750725980893962940e1b792f8361a6b49b5f3faea5c1777c70dca2960
+unstripped: 1143344 B sha256 c32837a3e99d303959fcfabfb184506bd42c3446ba2aff9fc6f1cdb7b72bc4ce
+vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params    : 47 (unchanged)
+text .text: binary-identical stripped/unstripped

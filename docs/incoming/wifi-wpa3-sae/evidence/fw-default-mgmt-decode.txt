@@ -1,0 +1,76 @@
+wifi-wpa3-sae lane - firmware default-management-key / mgmt-class decode
+======================================================================
+Host-only static analysis.  Local artifacts (NOT committed):
+  FIRMWARE.bin sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+  (firmware CPU address = file offset + 0x40000; addresses are firmware CAs)
+  vendor host modules hi5622v100_wifi.ko 2.4.15 / 2.5.24 (md5 1745ef77... /
+  4737fcb2...) were used by the wifi-wpa-static lane for the host senders.
+No vendor instruction bytes, firmware bytes or calibration content are
+reproduced below - only derived addresses, field offsets, masks and error
+codes.
+
+1. Default-key worker CA 0x0A5C9D (table A key 0x0079, Thumb entry 0xA5C9C)
+---------------------------------------------------------------------------
+Body layout: 0x28 bytes.  Worker reads:
+  body+0x00 u8  key_index
+  body+0x01 u8  unicast
+  body+0x02 u8  multicast (class flag)
+  body+0x04 u8  management cipher (mgmt/default-mgmt branch only)
+Control flow:
+  - key_index > 5          -> error 0x520a
+  - (body[1] | body[2])==0 -> error 0x545
+  - key_index <= 3         -> DATA path
+      * legacy/WEP gate helper CA 0xFFF6C decides the WEP branch; the
+        non-WEP CCMP/GCMP group-key selection is consumed successfully
+        (matches the bench-proven WPA2 GTK selection)
+      * reads body[3] only on the WEP/legacy branch (not our frames)
+  - key_index 4..5         -> MANAGEMENT path
+      * VAP user id = module_ctx+0xacc, validated by helper CA 0xD6A1E
+        (failure -> error 0x520F)
+      * r5 = body+0x04 cipher byte
+      * cipher > 0x0D     -> error 0x520B
+      * (1 << cipher) & 0x3840 == 0 -> error 0x520B
+        (0x3840 = AES-CMAC 6 | BIP-GMAC-128 11 | BIP-GMAC-256 12 |
+         BIP-CMAC-256 13; cipher byte 0 is therefore REJECTED)
+      * success: user+0x312 = key_index, user+0x313 = cipher, return 0
+
+=> CONSEQUENCE FOR THE HOST: a default-management-key frame must carry a
+   management-class cipher in body+0x04.  cfg80211's
+   .set_default_mgmt_key(wiphy, netdev, link_id, key_index) callback carries
+   only the key index, so the clean-room driver latches the cipher from the
+   IGTK add_key that hostapd sends immediately before it and refuses the
+   default-mgmt frame when the latch is empty (never posts a guessed byte).
+
+2. Key-install worker CA 0x0A5825 (table A key 0x0078) - cross-check
+---------------------------------------------------------------------
+  body+0x00 key_index (<=5), body+0x01 pairwise, body+0x02 MAC[6],
+  body+0x08 key[32], body+0x28 seq[16], body+0x38 key_len,
+  body+0x3c seq_len, body+0x40 cipher (low byte)
+  - cipher low byte > 0x0D -> error 0x520B
+  - data class mask 0x0714 -> key_index must be <= 3
+  - mgmt class mask 0x3840 -> key_index must be 4..5 (else error 0x520A)
+  - WEP mask 0x0022
+  - mgmt success stores user+0x312 = key_index, user+0x313 = cipher
+This is the worker that installs the PMF IGTK (cipher BIP-CMAC-256 ->
+low byte 0x0D, index 4) at AP startup; no new key-install layout was needed
+for WPA3/PMF, only the default-mgmt selection above.
+
+3. Host order this pairs with (hostapd v2.12 source, same tarball as the
+   bench image, sha256 recorded in evidence/host-build.log of the validator)
+-------------------------------------------------------------------------
+  hostapd_setup_interface() -> hostapd_start_beacon() (AP-ENABLED path),
+  then wpa_init_keys() -> wpa_group_sm_step() ->
+  wpa_group_config_group_keys() (src/ap/wpa_auth.c):
+    a. GTK:        set_key(broadcast, GN=1, GTK, KEY_FLAG_GROUP_TX_DEFAULT)
+                   -> NL80211_CMD_NEW_KEY  + NL80211_CMD_SET_KEY (default
+                   multicast)  [bench-proven, wifi-stability F16]
+    b. IGTK:       if MFP enabled: set_key(broadcast, GN_igtk=4, IGTK,
+                   group_mgmt_cipher, KEY_FLAG_GROUP_TX_DEFAULT)
+                   -> NL80211_CMD_NEW_KEY (BIP cipher, idx 4)
+                   + NL80211_CMD_SET_KEY with NL80211_KEY_DEFAULT_MGMT
+  The default-mgmt SET_KEY is rejected with -EOPNOTSUPP by cfg80211 unless
+  the driver registers .set_default_mgmt_key (net/wireless/nl80211.c
+  nl80211_set_key()), and wpa_init_keys() then fails the whole interface
+  setup.  That is why every PMF profile (WPA3-SAE, transition ieee80211w=1,
+  WPA2 hardened ieee80211w=2) could install the GTK and still tear the AP
+  down before this lane's patch.

@@ -1,0 +1,12 @@
+wifi-wpa3-sae lane - portable key-frame selftest evidence
+==========================================================
+Command : ./tools/run-host-check.sh --evidence evidence/host-check.txt
+Compiler: host cc -O2 -std=c99 -Wall -Wextra -Werror
+Result  : 44 checks, 0 failed (see the "1. portable key-frame selftest"
+          section of evidence/host-check.txt for every check name)
+Coverage: cipher classification (data/mgmt/WEP/unknown), unchanged WPA2
+          data default-key and add-key bodies/frames, new PMF default-mgmt
+          body (+0 index, +2 class flag, +4 management cipher), gm0 id1
+          frame envelope (group/id/tag/cmd/body-len/pad), key-index and
+          class-flag refusals, data-cipher-on-mgmt-path refusal, cipher-0
+          refusal, module/dst bounds.
