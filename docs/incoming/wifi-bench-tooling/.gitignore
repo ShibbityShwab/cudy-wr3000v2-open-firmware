@@ -1,0 +1,7 @@
+# session evidence and build products are local only
+__pycache__/
+*.pyc
+build/
+work/
+*.ko
+*.bin
