@@ -2188,7 +2188,9 @@ non-zero on failure.
    today) and, for WPA2, the `add_key` M3 path.
 2. **Does the first data-plane frame complete now that the radio is up?** Re-fire the F-AIR ladder
    with the mode-1 VAP base and the AP running in the same module load: `completion_pending=0` =
-   COMPLETED (MAC); then the read-only RX capture (0 captures so far). With the observer from Q1,
+   COMPLETED (MAC); then the read-only RX capture (0 captures so far). A **combined AP-start +
+   dp-txrx module** (one boot: AP-ENABLED, then dp_probe/dp_setup/0x0320/dp_tx_frame) is tasked but
+   not yet built (ledger 2026-11-27 08:30) - that is the direct path from POST-ONLY to COMPLETED. With the observer from Q1,
    the same fire can upgrade air-CANDIDATE to an on-air observation. Optional rung: the second
    frame form (`echo 2 >`) to settle the ctl vap-type mapping.
 3. **What implements management TX/RX, association and WPA2 keys?** The AP's mgmt ops are
@@ -2202,7 +2204,9 @@ non-zero on failure.
 5. **What remains on the image track?** The ABI-correct image is flashed and the ABI receipt
    matches (Q5's old form is answered). Remaining: re-provision the overlay after the flash wiped
    it (SSH keys/config/receipts), and bake hostapd + the wifi-scripts package into a rebuilt rootfs if the
-   AP is to survive a reflash - the kmod pin is unchanged, so only the rootfs hash would change.
+   AP is to survive a reflash - the kmod pin is unchanged, so only the rootfs hash would change. A
+   **self-contained rootfs rebuild** (v7 ap-start driver as the kmod + hostapd package set + ucode
+   files, kernel slice unchanged) is tasked (ledger 2026-11-27 08:30).
 6. **Can a calibration answer body and the remaining [U] scan fields be captured** (five flag
    bytes, the channel-index convention)? Both need a bounded, immediate post-fire read or a driver
    logging extension, not a new message class.
