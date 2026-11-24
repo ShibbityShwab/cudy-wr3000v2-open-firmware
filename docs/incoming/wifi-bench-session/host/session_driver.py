@@ -564,19 +564,13 @@ def run_phase(env, phase, base_dir, dry_run, evidence):
         else:
             rec["status"] = "PLAN-FAIL"
             rec["detail"] = "bench_session dry-run rc=%s" % rc
-        # keep the exact generated device script for review + sh -n audit
-        gen = os.path.join(LANE, "generated")
-        os.makedirs(gen, exist_ok=True)
+        # the exact generated device script stays in the phase evidence dir
+        # (the reviewed snapshots under ../../generated/ are committed once;
+        # dry-runs never dirty the lane tree)
         src = os.path.join(phase_dir, "device-script.sh")
         if os.path.isfile(src):
-            dst = os.path.join(gen, "phase-%s-device-script.sh" % phase)
-            with open(src, "r", encoding="utf-8") as f:
-                script = f.read()
-            with open(dst, "w", encoding="utf-8") as f:
-                f.write(script)
-            rec["rendered_script"] = dst
-            rc_sh = subprocess.call(["sh", "-n", dst])
-            rec["script_syntax_ok"] = rc_sh == 0
+            rec["rendered_script"] = src
+            rec["script_syntax_ok"] = subprocess.call(["sh", "-n", src]) == 0
         return rec
     status, why, c = bench_status(env, phase_dir, rc)
     rec.update({"status": status, "detail": why, "bench": c})

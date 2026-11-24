@@ -50,7 +50,7 @@ Bench state after the 2026-11-26 capstone (all hardware-validated):
 | [device/ap-fire.sh](device/ap-fire.sh) | **phase A** device-side AP-start stage: iface type __ap, mode-1 VAP base, hostapd NEW_BEACON, 4 frame gates, firmware readback |
 | [device/ap-readback.sh](device/ap-readback.sh) | phase A read-only firmware readback pack (run even after a STOP) |
 | [device/hostapd-open.conf](device/hostapd-open.conf) | phase A hostapd config (2.4 GHz ch6, OPEN, beacon 100, DTIM 2) |
-| [generated/](generated/) | the **exact generated device-side shell scripts** for S and A (rendered by bench_session --dry-run, `sh -n` clean) |
+| [generated/](generated/README.md) | reviewed snapshots of the **exact generated device-side shell scripts** for S/A/X (rendered by bench_session --dry-run, `sh -n` clean; every run re-renders them into its evidence dir) |
 | [tools/check-artifacts.sh](tools/check-artifacts.sh) | host-only pin check |
 | [tools/selftest.sh](tools/selftest.sh) | host-only selftest of the whole package |
 | [SESSION-PLAN.md](SESSION-PLAN.md) | the exact attended procedure (step order, commands, expected lines, stop rules) |
