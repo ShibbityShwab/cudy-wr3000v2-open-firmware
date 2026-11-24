@@ -1,0 +1,51 @@
+BSS 02:00:00:00:00:01 (on wlan1)
+	last seen: 0.412s [boottime]
+	TSF: 1234567890 usec (0d, 00:20:34)
+	freq: 2437
+	beacon interval: 100 TUs
+	capability: ESS Privacy ShortSlotTime (0x0411)
+	signal: -42.00 dBm
+	last seen: 0.000s [boottime]
+	Information elements from Beacon frame:
+	 SSID: cudy-ap-test
+	 Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0
+	 DS Parameter set: channel 6
+	 TIM: DTIM Count 1 DTIM Period 2 Bitmap Control 0x0 Bitmap[0] 0x0
+	 ERP: Barker_Preamble_Mode
+	 Extended supported rates: 24.0 36.0 48.0 54.0
+	 RSN:	 * Version: 1
+		 * Group cipher: CCMP
+		 * Pairwise ciphers: CCMP
+		 * Authentication suites: PSK
+		 * Capabilities: 1-PTKSA-RC 1-GTKSA-RC (0x000c)
+
+BSS 02:11:22:33:44:55 (on wlan1)
+	last seen: 0.211s [boottime]
+	TSF: 2222222222 usec (0d, 00:37:02)
+	freq: 5745
+	beacon interval: 100 TUs
+	capability: ESS Privacy ShortSlotTime (0x0411)
+	signal: -71.00 dBm
+	last seen: 0.000s [boottime]
+	Information elements from Beacon frame:
+	 SSID: neighbour-5g
+	 Supported rates: 6.0* 9.0 12.0 18.0 24.0 36.0 48.0 54.0
+	 DS Parameter set: channel 149
+	 RSN:	 * Version: 1
+		 * Group cipher: CCMP
+		 * Pairwise ciphers: CCMP
+		 * Authentication suites: PSK
+		 * Capabilities: 1-PTKSA-RC 1-GTKSA-RC (0x000c)
+
+BSS 02:22:33:44:55:66 (on wlan1)
+	last seen: 0.300s [boottime]
+	TSF: 3333333333 usec (0d, 00:55:33)
+	freq: 2412
+	beacon interval: 100 TUs
+	capability: ESS (0x0401)
+	signal: -80.00 dBm
+	last seen: 0.000s [boottime]
+	Information elements from Beacon frame:
+	 SSID: neighbour-open
+	 Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0
+	 DS Parameter set: channel 1

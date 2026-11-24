@@ -1,0 +1,11 @@
+BSS 02:11:22:33:44:55 (on wlan1)
+	freq: 5745
+	capability: ESS Privacy ShortSlotTime (0x0411)
+	signal: -71.00 dBm
+	Information elements from Beacon frame:
+	 SSID: neighbour-5g
+	 DS Parameter set: channel 149
+	 RSN:	 * Version: 1
+		 * Group cipher: CCMP
+		 * Pairwise ciphers: CCMP
+		 * Authentication suites: PSK

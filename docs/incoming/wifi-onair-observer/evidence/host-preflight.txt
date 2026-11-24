@@ -1,0 +1,38 @@
+# wifi-onair-observer host preflight (read-only, --check-only)
+# captured on the observer workstation; full log kept local.
+# the lane never contacts the bench router; this only reads host state.
+# project timeline: 2026-11-29 (the workstation clock is unreliable)
+# reproduce: ONAIR_EVIDENCE_DIR=<tmp> tools/preflight.sh --check-only
+
+=== host environment ===
+[preflight] lane: <repo>/opensource/docs/incoming/wifi-onair-observer
+[preflight] mode: dry-run=0 check-only=1 base-if=wlan0 observer-if=wlan1 monitor-if=mon-onair
+[preflight] ap: ssid='cudy-ap-test' freq=2437MHz channel=6
+[preflight] ok   python3: Python 3.14.9
+[preflight] ok   iw: iw version 6.17
+[preflight] ok   wpa_supplicant: wpa_supplicant v2.12-hostap_2_12+
+[preflight] ok   wpa_cli: present
+[preflight] ok   ip: present
+[preflight] ok   nmcli: nmcli tool, version 1.58.1-3
+[preflight] ok   ping: ping from iputils 20250605
+[preflight] ok   arping: present
+[preflight] ok   git: present (evidence-root discovery)
+=== base uplink guard (must never be touched) ===
+[preflight] ok   base iface wlan0 present
+[preflight] ok   base iface phy: phy0
+=== wiphy capability for a second managed interface ===
+[preflight] ok   managed mode supported
+[preflight] ok   monitor mode advertised (optional beacon capture rung)
+[preflight] ok   wiphy allows 2 managed interfaces in one combination (second iface can coexist with wlan0)
+[preflight] ok   wiphy supports 2 channels concurrently (base uplink can stay on its channel during the ch6 scan)
+=== observer interface name and state ===
+[preflight] ok   observer iface name 'wlan1' is safe
+[preflight] ok   observer iface wlan1 does not exist (L1 will create it)
+[preflight] ok   no stale wpa_supplicant pid file
+=== bench-link interface (informational only; harness never touches it) ===
+[preflight] ok   bench USB-Ethernet enp195s0f3u1 present; the harness never addresses it
+=== root / mode ===
+[preflight] ok   check-only: read-only; live phases must be re-run under sudo
+=== verdict ===
+
+ONAIR-VERDICT|preflight|PASS|host stack, base-uplink guard target and observer name checks passed (check-only=1)

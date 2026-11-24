@@ -1,0 +1,29 @@
+# mocked end-to-end dry run of tools/run-all.sh (host-only, no radio, no root)
+# every host command is simulated by tests/mockcmd.py; ZERO host mutation.
+# reproduce: python3 tests/selftest.py (section 'mocked end-to-end dry run')
+# project timeline: 2026-11-29 (the workstation clock is unreliable)
+# dry-run exit code: 0 (0 = every phase matched its expected class)
+
+ONAIR-VERDICT|preflight|PASS|host stack, base-uplink guard target and observer name checks passed (check-only=0)
+ONAIR-VERDICT|iface-up|PASS|wlan1 created on phy0, managed by wpa_supplicant only; base wlan0 untouched
+ONAIR-VERDICT|scan|PASS|on-air beacon proof on ch6: ssid=cudy-ap-test (see (local mock evidence dir)/evidence/scan-ch6.json)
+ONAIR-VERDICT|wpa2-assoc|EXPECTED-FAIL|attempt stopped at the documented AP mgmt-TX/RX blocker; 4-way not reached (see (local mock evidence dir)/evidence/assoc-result.json)
+ONAIR-VERDICT|dhcp|SKIP|association not complete (L3 EXPECTED-FAIL); DHCP/ping not reached
+ONAIR-VERDICT|cleanup|PASS|observer artefacts removed; base uplink wlan0 untouched
+
+# External-observer PASS/FAIL matrix
+
+Run: mocked run (evidence dir redacted)
+
+| phase | verdict | expectation | detail |
+| --- | --- | --- | --- |
+| preflight | **PASS** | expected | host stack, base-uplink guard target and observer name checks passed (check-only=0) |
+| iface-up | **PASS** | expected | wlan1 created on phy0, managed by wpa_supplicant only; base wlan0 untouched |
+| scan | **PASS** | expected - decisive on-air beacon proof | on-air beacon proof on ch6: ssid=cudy-ap-test (see (local mock evidence dir)/evidence/scan-ch6.json) |
+| wpa2-assoc | **EXPECTED-FAIL** | expected - AP mgmt-TX/RX fail-closed blocker | attempt stopped at the documented AP mgmt-TX/RX blocker; 4-way not reached (see (local mock evidence dir)/evidence/assoc-result.json) |
+| dhcp | **SKIP** | expected (no association / static mode) | association not complete (L3 EXPECTED-FAIL); DHCP/ping not reached |
+| cleanup | **PASS** | expected | observer artefacts removed; base uplink wlan0 untouched |
+
+## Findings
+
+- none: every phase matched its expected class

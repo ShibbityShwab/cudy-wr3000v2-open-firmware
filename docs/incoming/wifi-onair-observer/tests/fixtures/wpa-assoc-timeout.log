@@ -1,0 +1,3 @@
+wlan1: SME: Trying to authenticate with 02:00:00:00:00:01 (SSID='cudy-ap-test' freq=2437 MHz)
+wlan1: Authenticating with 02:00:00:00:00:01 (SSID='cudy-ap-test' freq=2437 MHz)
+wlan1: Association with 02:00:00:00:00:01 timed out.

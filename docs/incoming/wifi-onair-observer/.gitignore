@@ -1,0 +1,8 @@
+# live-run artefacts are local evidence only - never commit them
+local-evidence/
+*.pcap
+*.pcapng
+
+# python bytecode from the host selftest
+__pycache__/
+*.pyc

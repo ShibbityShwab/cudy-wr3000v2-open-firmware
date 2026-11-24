@@ -1,0 +1,25 @@
+Wiphy phy0
+	wiphy index: 0
+	max # scan SSIDs: 4
+	max scan IEs length: 477 bytes
+	Retry short limit: 7
+	Supported Ciphers:
+		* WEP40 (00-0f-ac:1)
+		* CCMP-128 (00-0f-ac:4)
+	Supported interface modes:
+		 * managed
+		 * AP
+		 * monitor
+		 * P2P-client
+	Band 1:
+		Frequencies:
+			* 2412 MHz [1] (20.0 dBm)
+			* 2437 MHz [6] (20.0 dBm)
+	Band 2:
+		Frequencies:
+			* 5180 MHz [36] (20.0 dBm)
+	valid interface combinations:
+		 * #{ managed, P2P-client } <= 2, #{ P2P-GO } <= 1, #{ P2P-device } <= 1,
+		   total <= 3, #channels <= 2
+
+	Device supports scan flush.

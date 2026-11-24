@@ -1,0 +1,26 @@
+# wifi-onair-observer host selftest
+# host-only: no radio, no root, no device, no bench-router contact.
+# project timeline: 2026-11-29 (the workstation clock is unreliable)
+# reproduce: cd opensource/docs/incoming/wifi-onair-observer && python3 tests/selftest.py
+
+wifi-onair-observer selftest (host-only, no radio, no device)
+== syntax ==
+   -> syntax: 17 checks passed, 0 failed
+== structure and documents ==
+   -> structure and documents: 39 checks passed, 0 failed
+== supplicant fixtures ==
+   -> supplicant fixtures: 10 checks passed, 0 failed
+== iw scan parser ==
+   -> iw scan parser: 15 checks passed, 0 failed
+== association classifier ==
+   -> association classifier: 12 checks passed, 0 failed
+== DHCP probe ==
+   -> DHCP probe: 21 checks passed, 0 failed
+== monitor sniffer ==
+   -> monitor sniffer: 17 checks passed, 0 failed
+== static safety ==
+   -> static safety: 61 checks passed, 0 failed
+== mocked end-to-end dry run ==
+   -> mocked end-to-end dry run: 24 checks passed, 0 failed
+
+selftest: 216/216 passed, 0 failed

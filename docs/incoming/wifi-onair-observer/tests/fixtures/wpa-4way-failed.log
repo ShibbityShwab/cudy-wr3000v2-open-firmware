@@ -1,0 +1,4 @@
+wlan1: Trying to associate with 02:00:00:00:00:01 (SSID='cudy-ap-test' freq=2437 MHz)
+wlan1: Associated with 02:00:00:00:00:01
+wlan1: WPA: 4-Way Handshake failed - pre-shared key may be incorrect
+wlan1: CTRL-EVENT-DISCONNECTED bssid=02:00:00:00:00:01 reason=15

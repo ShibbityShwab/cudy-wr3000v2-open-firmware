@@ -1,0 +1,4 @@
+wlan1: SME: Trying to authenticate with 02:00:00:00:00:01 (SSID='cudy-ap-test' freq=2437 MHz)
+wlan1: Trying to associate with 02:00:00:00:00:01 (SSID='cudy-ap-test' freq=2437 MHz)
+wlan1: Authentication with 02:00:00:00:00:01 timed out.
+wlan1: Added BSSID 02:00:00:00:00:01 into blacklist

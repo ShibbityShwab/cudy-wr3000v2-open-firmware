@@ -1,0 +1,13 @@
+BSS 02:00:00:00:00:02 (on wlan1)
+	freq: 2412
+	beacon interval: 100 TUs
+	capability: ESS Privacy ShortSlotTime (0x0411)
+	signal: -55.00 dBm
+	Information elements from Beacon frame:
+	 SSID: cudy-ap-test
+	 Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0
+	 DS Parameter set: channel 1
+	 RSN:	 * Version: 1
+		 * Group cipher: CCMP
+		 * Pairwise ciphers: CCMP
+		 * Authentication suites: PSK
