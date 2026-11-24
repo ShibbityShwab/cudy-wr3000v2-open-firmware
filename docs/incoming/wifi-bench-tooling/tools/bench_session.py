@@ -1591,12 +1591,18 @@ class SshTransport:
                 pass
 
     def put(self, local: str, remote: str):
-        return run_local([os.path.join(ROOT, "tools", "rscp.sh"), "-q", local,
-                          "%s:%s" % (self.host, remote)], timeout=300)
+        # The lab image runs dropbear without legacy scp; use the project convention
+        # (cat | ssh 'cat > remote') through tools/rsh.sh, which honours ROUTER_HOST.
+        rsh = os.path.join(ROOT, "tools", "rsh.sh")
+        cmd = "cat %s | %s %s" % (shlex.quote(local), shlex.quote(rsh),
+                                  shlex.quote("cat > %s" % remote))
+        return run_local(["/bin/sh", "-c", cmd], timeout=300)
 
     def get(self, remote: str, local: str):
-        return run_local([os.path.join(ROOT, "tools", "rscp.sh"), "-q",
-                          "%s:%s" % (self.host, remote), local], timeout=300)
+        rsh = os.path.join(ROOT, "tools", "rsh.sh")
+        cmd = "%s %s > %s" % (shlex.quote(rsh),
+                              shlex.quote("cat %s" % remote), shlex.quote(local))
+        return run_local(["/bin/sh", "-c", cmd], timeout=300)
 
 
 class TelnetTransport:
