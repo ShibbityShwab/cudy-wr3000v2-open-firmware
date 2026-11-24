@@ -21,7 +21,7 @@
     "vap_start_mode": 1,
     "vap_start_module": 0,
     "ap_start_mode": 0,
-    "note": "ap_start_mode 0 = g0 id1 static keys (default, statically dispatched by firmware table A); 1 = vendor WAL g2 envelopes (needs the dynamic group-2 handler; fallback only).  v3 module: 204,712 B sha256 b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e (see ../HOSTAPD-BRINGUP.md)."
+    "note": "ap_start_mode 0 = g0 id1 static keys (default, statically dispatched by firmware table A); 1 = vendor WAL g2 envelopes (needs the dynamic group-2 handler; fallback only).  v3 module: 205,516 B sha256 d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc (see ../HOSTAPD-BRINGUP.md)."
   },
   "readback_pack": [
     {"name": "golden page", "bar0": "0x829E28", "expect": "0x86807FEF, state 1, mask 0 at CA 0x40008, staging 0 at BAR0 0x6F800C"},
@@ -97,7 +97,7 @@
   ],
   "hostapd_flow": {
     "doc": "../HOSTAPD-BRINGUP.md",
-    "module": "204,712 B sha256 b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e",
+    "module": "205,516 B sha256 d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc",
     "preconditions": "C2 ladder done (core ACTIVE); ucode files at /usr/share/hostap/; regdb installed",
     "commands": [
       "insmod /tmp/cfg80211.ko",

@@ -43,8 +43,8 @@ Behaviour:
   and the per-load budget bounds the sequence (8 is enough for the ladder).
 
 Verified with ../tools/build-bench-module.sh against the real 6.18.60 tree
-(v4): hi5622_wifi.ko **204,712 B sha256
-b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e**
+(v5): hi5622_wifi.ko **205,516 B sha256
+d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**
 (debug-stripped, path-independent), depends=cfg80211, 14 haf_ symbols,
 vapscan_ap_start + hi5622_cfg11_connect present, zero warnings; the H2D/core
 files are byte-identical to the fired base.  The module is local evidence only

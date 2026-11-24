@@ -12,8 +12,8 @@ integration gaps (NL80211_CMD_CONNECT advertisement via a fail-closed .connect
 op, AP iftype changes with correct wdev->iftype update and use_4addr=-1
 handling, AP-start sequence inside the real .start_ap) and v3 rebuilds from
 the hardware-fired provider base (wifi-scan-complete/src, 748,888 B
-b42ff4ec).  Deployable module **204,712 B sha256
-b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e**; exact
+b42ff4ec).  Deployable module **205,516 B sha256
+d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**; exact
 hostapd flow, expected logs and corrected readback in
 [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
 

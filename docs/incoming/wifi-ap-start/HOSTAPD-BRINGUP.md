@@ -19,8 +19,8 @@ this lane; the lead's fire produced the observations below.
 ## 2. Module v2 (built by this lane, host-only)
 
     artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-    size     : 204,712 B
-    sha256   : b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e
+    size     : 205,516 B
+    sha256   : d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc
     vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
     depends  : cfg80211
 
@@ -174,8 +174,8 @@ script now:
 * strips only debug sections and asserts the deployable .ko has a
   byte-identical .text to the unstripped build.
 
-v3 module: **204,712 B sha256
-b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e**
+v3 module: **205,516 B sha256
+d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**
 (/tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko, debug-stripped, depends=
 cfg80211, vermagic 6.18.60 SMP ARMv7, zero warnings).  The H2D send path in
 v3 is therefore exactly the path that consumes C2 in 0 polls on the bench.
@@ -247,8 +247,8 @@ snapshot and the 6.18.60 kernel found the exact gate:
 the management-frame subscriptions; the op itself returns -EOPNOTSUPP (real
 management TX/RX is data-plane/M4 work, never faked).
 
-**Module v4:** 204,712 B sha256
-b5050518d44cb78601e86ebdd0d8a7f7ef4dc2ec7d26725abfe918fb2edc1c7e (debug-stripped, same fired base; H2D/core files
+**Module v5:** 205,516 B sha256
+d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc (debug-stripped, same fired base; H2D/core files
 byte-identical, .text byte-identical stripped/unstripped).  This is the
 artifact to fire.
 
@@ -264,4 +264,58 @@ attribute cfg80211 rejects (capture the -dd line), (c) a later hostapd step
 needing add_key (WPA2 - use the OPEN config first).  The fail-closed
 mgmt_tx means hostapd will not receive auth frames: an AP with clients needs
 the data-plane lane, but the control-plane deadline (beacon start) does not.
+
+## 10. v5: the actual AP-setup gate - wiphy->mgmt_stypes
+
+The v4 fire still failed with "Could not configure driver mode" and the
+hostapd-mini build has MSG_DEBUG compiled out, so the command was invisible.
+v4's .mgmt_tx was necessary but NOT sufficient: cfg80211 has a second check
+that runs inside the same REGISTER_FRAME path:
+
+1. `nl80211_register_mgmt()` (passes with .mgmt_tx present) calls
+   `cfg80211_mlme_register_mgmt()` (net/wireless/mlme.c).
+2. That function first does
+   `if (!wdev->wiphy->mgmt_stypes) return -EOPNOTSUPP;` and then
+   `if (!(wdev->wiphy->mgmt_stypes[wdev->iftype].rx & BIT(mgmt_type))) return -EINVAL;`
+   for every frame type hostapd subscribes to.
+3. The clean-room driver never set `wiphy->mgmt_stypes`, so the first
+   CONNECT/AUTH/ASSOC_REQ/... subscription returned -EOPNOTSUPP, setup_ap
+   failed, and hostapd printed the mode error right after a successful
+   SET_INTERFACE (hence no type-change dmesg).
+
+**Fix (v5):** advertise a per-iftype mgmt_stypes table in the wiphy:
+AP rx/tx = ASSOC_REQ, REASSOC_REQ, PROBE_REQ, DISASSOC, AUTH, DEAUTH, ACTION;
+STA rx = (re)assoc resp, probe resp, disassoc/deauth, action; monitor rx/tx
+all subtypes.  The management TX path stays fail-closed (data-plane/M4 work);
+the table only lets cfg80211 accept hostapd's subscriptions.
+
+**Visibility for the next fire (also in v5):** the module now logs every
+bring-up milestone via dmesg (no hostapd debug needed):
+
+| dmesg line | meaning |
+| --- | --- |
+| cfg80211: mgmt_stypes advertised (AP rx=0x.... tx=0x....) - hostapd frame subscriptions accepted | module init; confirms the v5 capability set |
+| cfg80211: SET_INTERFACE reached (iftype X -> Y, use_4addr=Z) | hostapd's nl80211_set_mode reached the driver op |
+| cfg80211: start_ap reached (iftype=.. beacon_interval=.. dtim=.. head=.. tail=..) | hostapd's NEW_BEACON reached .start_ap |
+| start_ap sequence frame 1/4 'ap_ssid' posted ... / 2/4 'ap_cfg' posted ... | provider frames went to the wire |
+| pr_info_once "mgmt_tx op reached" | only if hostapd tries a management TX (fails closed) |
+
+**Module v5:** 205,516 B sha256
+d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc
+(debug-stripped, fired base; H2D/core files byte-identical; .text identical
+stripped/unstripped; 0 warnings).
+
+Re-fire with the same command sequence as section 8.3 (swap in the v5 .ko).
+Readback unchanged: ctx0 BAR0 0x7D1758, ctx0+0x18C (0x7D18E4) changes after
+ap_cfg; VAP=u32@0x7D18E8, V+0x6B8000+0x10=100, +0x14=2.
+
+Remaining candidates if hostapd still stops after v5 (each is now visible in
+dmesg):
+* (b) regulatory: NEW_BEACON's cfg80211_reg_can_beacon_relax can reject a
+  NO_IR channel.  `iw reg get` on the box must show a real country (US) and
+  the 2.4 GHz channel flags must not be no-IR; `iw reg set US` before
+  hostapd.  If it is no-IR, the "start_ap reached" log still appears but the
+  cfg80211 return code is -EINVAL.
+* (c) later hostapd steps (add_key for WPA2 - use the OPEN config first;
+  set_txq_params is non-fatal and skipped because the driver op is absent).
 

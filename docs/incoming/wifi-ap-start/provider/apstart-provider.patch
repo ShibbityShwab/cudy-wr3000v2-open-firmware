@@ -9,6 +9,60 @@
  
  ccflags-y += -I$(src)
  
+--- a/hi5622_cfg80211.c
++++ b/hi5622_cfg80211.c
+@@ -330,6 +330,31 @@
+ /* ---------------------------------------------------------------------
+  * Probe/remove lifecycle
+  * -------------------------------------------------------------------*/
++/* Per-iftype management frame subscription/transmit bitmaps (802.11
++ * management subtype numbers; cfg80211_mlme_register_mgmt checks rx,
++ * cfg80211_mlme_mgmt_tx checks tx).  The actual management TX path is
++ * fail-closed (data-plane/M4 work); these bits only let cfg80211 accept the
++ * hostapd frame subscriptions. */
++static const struct ieee80211_txrx_stypes
++hi5622_mgmt_stypes[NUM_NL80211_IFTYPES] = {
++	[NL80211_IFTYPE_STATION] = {
++		.tx = BIT(0x0b) | BIT(0x0d),	/* auth, action */
++		.rx = BIT(0x01) | BIT(0x03) | BIT(0x05) | BIT(0x0a) |
++		      BIT(0x0c) | BIT(0x0d),	/* (re)assoc resp, probe resp,
++						 * disassoc/deauth, action */
++	},
++	[NL80211_IFTYPE_AP] = {
++		.tx = BIT(0x00) | BIT(0x02) | BIT(0x04) | BIT(0x0a) |
++		      BIT(0x0b) | BIT(0x0c) | BIT(0x0d),
++		.rx = BIT(0x00) | BIT(0x02) | BIT(0x04) | BIT(0x0a) |
++		      BIT(0x0b) | BIT(0x0c) | BIT(0x0d),
++	},
++	[NL80211_IFTYPE_MONITOR] = {
++		.tx = 0xffff,
++		.rx = 0xffff,
++	},
++};
++
+ int hi5622_cfg80211_init(struct hi5622_pci *ctx)
+ {
+ 	struct hi5622_cfg80211 *c;
+@@ -372,6 +397,19 @@
+ 	memcpy(wiphy->perm_addr, hi5622_cfg11_perm_addr, ETH_ALEN);
+ 	wiphy->cipher_suites = hi5622_cipher_suites;
+ 	wiphy->n_cipher_suites = ARRAY_SIZE(hi5622_cipher_suites);
++	/* wifi-ap-start lane (task-121, hostapd bring-up): cfg80211 refuses
++	 * NL80211_CMD_REGISTER_FRAME with -EOPNOTSUPP when wiphy->mgmt_stypes is
++	 * NULL (cfg80211_mlme_register_mgmt) and with -EINVAL when the per-iftype
++	 * rx bitmap lacks the subtype.  hostapd's AP-mode setup subscribes to
++	 * auth/assoc/reassoc/disassoc/deauth/probe-request/action frames during
++	 * set_mode(AP); without this table hostapd reports "Could not configure
++	 * driver mode" after a successful SET_INTERFACE.  rx/tx bitmap bit N =
++	 * 802.11 management subtype N. */
++	wiphy->mgmt_stypes = hi5622_mgmt_stypes;
++	dev_info(&ctx->pdev->dev,
++		 "cfg80211: mgmt_stypes advertised (AP rx=0x%04x tx=0x%04x) - hostapd frame subscriptions accepted\n",
++		 (unsigned int)hi5622_mgmt_stypes[NL80211_IFTYPE_AP].rx,
++		 (unsigned int)hi5622_mgmt_stypes[NL80211_IFTYPE_AP].tx);
+ 	if (strscpy(wiphy->fw_version, "hi5622-cleanroom",
+ 		    sizeof(wiphy->fw_version)) < 0)
+ 		dev_warn(&ctx->pdev->dev, "cfg80211: fw_version truncated\n");
 --- a/hi5622_cfg80211_ops.c
 +++ b/hi5622_cfg80211_ops.c
 @@ -250,6 +250,22 @@
@@ -34,7 +88,7 @@
  static int hi5622_cfg11_change_virtual_intf(struct wiphy *wiphy,
  					    struct net_device *dev,
  					    enum nl80211_iftype type,
-@@ -259,18 +275,25 @@
+@@ -259,18 +275,29 @@
  
  	if (!wdev)
  		return -EINVAL;
@@ -44,6 +98,10 @@
 -				 "cfg80211: 4-address change deferred to M5 (VAP delete/add needed)\n");
 -			return -EOPNOTSUPP;
 -		}
++	dev_info(wiphy_dev(wiphy),
++		 "cfg80211: SET_INTERFACE reached (iftype %d -> %d, use_4addr=%d)\n",
++		 (int)wdev->iftype, (int)type,
++		 params ? params->use_4addr : -1);
 +	if (hi5622_cfg11_model_iftype(type) == 0)
 +		return -EOPNOTSUPP;
 +	if (params && params->use_4addr != -1 &&
@@ -69,7 +127,7 @@
  }
  
  /* ---------------------------------------------------------------------
-@@ -320,6 +343,45 @@
+@@ -320,6 +347,46 @@
   * Everything else stays NULL: cfg80211 returns -EOPNOTSUPP for the deferred
   * M3+ ops without involving the driver (add_key etc. are M3).
   * -------------------------------------------------------------------*/
@@ -109,13 +167,14 @@
 +	(void)wdev;
 +	(void)params;
 +	(void)cookie;
++	pr_info_once("hi5622: mgmt_tx op reached - fails closed (management TX is data-plane/M4 work)\n");
 +	return -EOPNOTSUPP;
 +}
 +
  const struct cfg80211_ops hi5622_cfg11_ops = {
  	.add_virtual_intf	= hi5622_cfg11_add_virtual_intf,
  	.del_virtual_intf	= hi5622_cfg11_del_virtual_intf,
-@@ -330,4 +392,10 @@
+@@ -330,4 +397,10 @@
  	.abort_scan		= hi5622_scan_op_abort,
  	.start_ap		= hi5622_scan_op_start_ap,
  	.stop_ap		= hi5622_scan_op_stop_ap,
@@ -178,7 +237,19 @@
  	/* Opaque crypto summary: the WAL key/AP-start payload is gap G1, so we
  	 * pass only the userspace requirement (which WPA versions) and let the
  	 * provider decide.  Never a made-up key. */
-@@ -768,22 +775,64 @@
+@@ -751,6 +758,11 @@
+ 	if (!dev->ieee80211_ptr ||
+ 	    dev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP)
+ 		return -EINVAL;
++	dev_info(wdev_dev,
++		 "cfg80211: start_ap reached (iftype=%d beacon_interval=%d dtim=%d head=%zu tail=%zu) - provider gate next\n",
++		 (int)dev->ieee80211_ptr->iftype, settings->beacon_interval,
++		 settings->dtim_period, settings->beacon.head_len,
++		 settings->beacon.tail_len);
+ 	ops = hi5622_scan_need(wiphy, HI5622_FRAME_CAP_AP_START,
+ 			       "start_ap");
+ 	if (!ops)
+@@ -768,22 +780,64 @@
  			 rc);
  		goto out;
  	}
