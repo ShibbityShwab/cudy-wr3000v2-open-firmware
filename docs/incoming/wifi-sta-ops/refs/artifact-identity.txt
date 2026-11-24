@@ -1,0 +1,19 @@
+wifi-sta-ops (shared task task-149) artifact identity - HOST-BUILT, never fired
+================================================================================
+Date            : 2026-11-24
+Lane            : opensource/docs/incoming/wifi-sta-ops
+Base tree       : FINAL ALL-PATCH integration tree (wifi-stability
+                  FINAL-INTEGRATION.md; chain b5dfb883 + rx-static +
+                  beacon-static + wpa-static + sta-static lane patches)
+Base artifact   : 308080 B sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+                  (asserted by tools/build-sta-ops-module.sh when present)
+Patch           : patches/0001-sta-ops.patch (9 files, original clean-room C)
+Lane stripped   : 320908 B sha256 a0a5444dc35366f62ce25dd4173e7cb6547b15bd9ef7d41760051a1da7c8d66f
+Lane unstripped : 1209260 B sha256 661cc7ab1d98ca915d4faa503706304581e6ee9a76adf3ce6543bd6aeb546c10
+Vermagic        : 6.18.60 SMP mod_unload ARMv7 p2v8 ; depends=cfg80211
+Parameters      : 50 = 47 all-patch + sta_ops + eapol_rx + sta_user_del
+New symbols     : hi5622_sta_ops_add/change/del/get/dump,
+                  hi5622_sta_ops_rx_deliver, hi5622_sta_ops_init/remove/status,
+                  hsop_* portable builders/parsers (hi5622_sta_ops_logic.o)
+Imports added   : netif_rx (core kernel; no cfg80211 contract change)
+Regenerate      : tools/build-sta-ops-module.sh (host-only; cross module build)

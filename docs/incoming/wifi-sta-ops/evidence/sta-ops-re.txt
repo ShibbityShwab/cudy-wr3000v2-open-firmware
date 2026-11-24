@@ -1,0 +1,64 @@
+== vendor host module: rootfs-2.5.24/lib/modules/5.10.201/hi5622v100_wifi.ko (3564728 B, sha256 de78ec07e46e70ce)
+
+[1] cfg80211 station ops
+  ok   wal_cfg80211_add_station present
+  ok   wal_cfg80211_add_station .text 0x1048f0 size 0x8
+  ok   wal_cfg80211_change_station present
+  ok   wal_cfg80211_change_station .text 0x103ac8 size 0x8
+  ok   wal_cfg80211_del_station present
+  ok   wal_cfg80211_del_station .text 0x102470 size 0x29c
+  ok   wal_cfg80211_get_station present
+  ok   wal_cfg80211_dump_station present
+  ok   cfg80211_ops .data slots resolved once each
+  ok   station op slots are consecutive .data entries
+
+[2] AP client station context path (vendor hmac AP SME)
+  hmac_ap_assoc_check_chip_exist_user_proc @ 0x4e598 calls: mac_vap_find_user_by_macaddr, hmac_ap_find_exist_user_auth_node, hmac_ap_delete_exist_user_auth_node, hmac_ap_rx_auth_chip_find_user_proc, hmac_user_add, oam_error_log1, oam_error_log0, hmac_user_get_valid, hmac_user_init_key, hmac_tid_clear, mac_user_set_asoc_state, hmac_config_user_asoc_state_syn, oam_error_log1, oam_warning_log0, __stack_chk_fail
+  ok   assoc path calls hmac_ap_rx_auth_chip_find_user_proc
+  ok   assoc path calls hmac_user_add
+  ok   assoc path calls mac_user_set_asoc_state
+  ok   assoc path calls hmac_config_user_asoc_state_syn
+
+[3] g0 id7 user_add body (hmac_user_add)
+  ok   hmac_user_add writes data#0xc (uid/mac/type/rssi)
+  ok   hmac_user_add writes data#0xe (uid/mac/type/rssi)
+  ok   hmac_user_add writes data#0x9a (uid/mac/type/rssi)
+  ok   hmac_user_add writes data#0xb0 (uid/mac/type/rssi)
+  ok   hmac_user_add uses HCC id 7 (mov r1,#7)
+  ok   hmac_user_add allocates the 168-byte body (0xa8)
+  ok   hmac_user_add posts through hcc_msg_alloc/hcc_msg_tx
+
+[4] g0 id1 cmd 0x07d2 association-state sync
+  ok   asoc sync calls hmac_config_send_event
+  ok   asoc sync command id 0x07d2
+  ok   asoc sync body length 4
+  ok   asoc sync reads the AID field (user+0xa6c+0x18 = user+0xa84)
+  ok   asoc sync reads the state byte (user+0xa6c+0x3d = user+0xaa9)
+  ok   user_del allocates the 12-byte body
+  ok   user_del uses HCC id 9
+
+[5] vendor .del_station -> WAL kick body
+  ok   vendor .del_station posts the WAL cfg-event kick builder
+  ok   del_station maps subtype 12 to the 0xc0 deauth flag
+
+[6] EAPOL / data RX helpers
+  ok   RX frame proc calls hmac_rx_frame_80211_to_eth
+  ok   802.11 header length: 24 B base / 30 B 4-address
+  ok   EAPOL ethertype 0x888e (byte-swapped constant 0x8e88)
+  ok   EAPOL-Key minimum length 0x5e
+  ok   EAPOL-Key pairwise bit 3
+  ok   TX completion detects the 4/4-like EAPOL-Key frame (authorization hook)
+
+[7] PD4 firmware dispatch (table A CA 0x10c23c)
+  firmware image /tmp/fw-audit-pd4/FIRMWARE.PD4.bin (928920 B, sha256 cfe24bfb194899f3)
+  ok   table A has row key 0x07d2 -> worker CA 0x83e25
+  ok   table A row 0x0078 (add_key) -> worker CA 0xa5825
+  ok   table A row 0x0079 (set_default_key) -> worker CA 0xa5c9d
+  ok   table A row 0x007a (del_key) -> worker CA 0xa4271
+  ok   table A has NO 0x01F2 row (WAL mgmt-tx is another family)
+  ok   worker reads body[2] (asoc state)
+  ok   worker reads body[0..1] (AID / user id)
+  ok   worker writes the firmware user state byte at +0x3d
+  ok   worker returns 0x64 (user not found) on failure
+
+sta_ops_re: all derived facts match the lane header/tables

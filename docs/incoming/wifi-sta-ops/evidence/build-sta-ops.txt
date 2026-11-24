@@ -1,0 +1,14 @@
+lane      : wifi-sta-ops (task-149), host-only build gate
+date      : 2026-11-24T15:21:23Z
+base-tree : all-patch integration tree (/tmp/wifi-allpatch-build/integ)
+chain-id  : all-patch base artifact asserted 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41
+patch     : patches/0001-sta-ops.patch (1734 lines, 9 files)
+kernel    : /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+cross     : /home/shibbityshwab/openwrt-lab-upstream-target/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-
+unstripped: 1209260 B sha256 661cc7ab1d98ca915d4faa503706304581e6ee9a76adf3ce6543bd6aeb546c10
+stripped  : 320908 B sha256 a0a5444dc35366f62ce25dd4173e7cb6547b15bd9ef7d41760051a1da7c8d66f
+vermagic  : 6.18.60 SMP mod_unload ARMv7 p2v8  ; depends=cfg80211
+params    : 50 (47 all-patch + sta_ops,eapol_rx,sta_user_del)
+symbols   : hi5622_sta_ops_add, hi5622_sta_ops_rx_deliver, hi5622_sta_ops_init; netif_rx imported
+warnings  : 0 (build.log checked)
+strip     : .text byte-identical

@@ -1,0 +1,67 @@
+== 1. portable builder + RX-parser host selftest
+sta_ops_selftest: OK (112 checks)
+== 2. patch content (module patch must touch every claimed file)
+  ok   patch adds/edits hi5622_sta_ops.c
+  ok   patch adds/edits hi5622_sta_ops.h
+  ok   patch adds/edits hi5622_sta_ops_logic.c
+  ok   patch adds/edits hi5622_sta_ops_logic.h
+  ok   patch adds/edits hi5622_cfg80211_ops.c
+  ok   patch adds/edits hi5622_cfg80211.c
+  ok   patch adds/edits hi5622_cfg80211.h
+  ok   patch adds/edits hi5622_dp_txrx.c
+  ok   patch adds/edits Kbuild
+  ok   patch carries hi5622_sta_ops_add
+  ok   patch carries hi5622_sta_ops_change
+  ok   patch carries hi5622_sta_ops_del
+  ok   patch carries hi5622_sta_ops_rx_deliver
+  ok   patch carries hi5622_sta_ops_xmit_drop
+  ok   patch carries sta_user_del
+  ok   patch carries eapol_rx
+  ok   patch carries netif_rx
+  ok   patch carries hsop_build_user_add
+  ok   patch carries hsop_build_asoc_syn
+  ok   patch carries hsop_rx_to_eth
+== 3. decoded wire facts (header + tables)
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   TABLES records 0x83e25
+  ok   TABLES records 0x10c23c
+  ok   TABLES records 0x07d2
+  ok   TABLES records 0x00d0
+  ok   TABLES records 0x102470
+  ok   TABLES records 0x1048f0
+  ok   TABLES records 0x103ac8
+  ok   TABLES records 180
+  ok   TABLES records 24 B
+  ok   TABLES records 32 B
+  ok   TABLES records 0xc0
+  ok   TABLES records 0x888e
+  ok   TABLES records 0x5e
+== 4. fail-closed policy + no secret/no vendor binary
+  ok   sta_ops module param
+  ok   eapol_rx module param
+  ok   fail-closed default documented
+  ok   patch has no private key
+  ok   no .ko/.bin/.o under the lane directory
+  ok   patch carries no local vendor path
+== 5. ladder
+  ok   ladders/sta-assoc-eapol.json parses
+  ok   ladder marked not fired
+  ok   abort policy present
+  ok   host-only rule stated
+== 6. evidence <-> refs consistency
+  ok   refs carry the asserted all-patch chain sha
+  ok   refs carry the patched stripped sha
+  ok   refs carry the patched stripped size
+  ok   refs carry the patched unstripped sha
+== 7. optional: re-derive the vendor/firmware facts
+  ok   sta_ops_re.py: all derived facts match
+
+wifi-sta-ops host check: PASS

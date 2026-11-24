@@ -1,0 +1,189 @@
+{
+  "lane": "wifi-sta-ops",
+  "task": "task-149",
+  "title": "AP client station lifecycle + EAPOL/data RX - DESIGN ONLY, NOT FIRED by this lane",
+  "host_only": true,
+  "not_fired_by_this_lane": true,
+  "bench_contact": false,
+  "preconditions": [
+    "fresh golden boot: page 0x86807FEF/7/2/0xABCD, mask 0, staging 0",
+    "attended session with the recovery door READY (tools/recovery-card.sh) - recovery is physical, an agent cannot recover alone",
+    "bench link PASS (tools/bench-link.sh); harness never writes the UART (read-only captures only)",
+    "hostapd fixtures + the on-air observer from the earlier lanes are available (client = the observer host's station interface or a phone)",
+    "module params recorded before the fire; one module load per boot"
+  ],
+  "base": {
+    "tree": "FINAL ALL-PATCH module (wifi-stability FINAL-INTEGRATION; stripped 308080 B sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41)",
+    "lane_patch": "patches/0001-sta-ops.patch - not yet part of the fired all-patch artifact"
+  },
+  "module_params": {
+    "common": "fw_path=hi_wifi/FIRMWARE.PD4.bin wifi_block_path=<local block> allow_frames=32 frame_gap_ms=100 h2d_send_budget=10 vap_start_first=1 vap_start_mode=1 vap_start_module=0 hcc_poll_ms=5 hcc_trace=0 stop_ap_mode=0 mgmt_diag=0 rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_keys=1 wpa_key_module=0 sta_join=0 ht_mode=0 vht_cap=0 band_vendor=0 scan_band_cfg=0",
+    "lane_default": "sta_ops=0 eapol_rx=0 sta_user_del=0 (fail-closed control)",
+    "lane_enabled": "sta_ops=1 eapol_rx=1 sta_user_del=0"
+  },
+  "rungs": [
+    {
+      "id": "L0",
+      "name": "host-only preflight (no fire)",
+      "purpose": "prove the patch builds and carries the declared wire facts before touching the bench",
+      "steps": [
+        "ALLPATCH_TREE=<all-patch tree> tools/build-sta-ops-module.sh",
+        "tools/run-host-check.sh",
+        "STA_OPS_KO=<local vendor .ko> STA_OPS_PD4=<local PD4> tools/sta_ops_re.py"
+      ],
+      "pass": [
+        "0 warnings; 50 parameters; strip .text identical; artifact identity recorded",
+        "selftest 112/112 checks; RE tool all facts match"
+      ]
+    },
+    {
+      "id": "L1",
+      "name": "fail-closed control (sta_ops=0 eapol_rx=0)",
+      "purpose": "prove the new ops never build/post/register-deliver when disabled",
+      "steps": [
+        "boot fresh; page/mask",
+        "insmod with the common params + lane_default",
+        "proven boot ladder, C2 ctx-create, iface __ap, hostapd WPA2 AP",
+        "let a client attempt association; capture dmesg"
+      ],
+      "pass": [
+        "AP-ENABLED as before; no sta_user_add/sta_asoc_syn/sta_kick frame post",
+        "dmesg: 'hi5622: .add_station reached - fails closed (sta_ops=0; ...)' once",
+        "hostapd: 'Could not add STA to kernel driver'; cfg80211_status shows sta_ops=0 eapol_rx=0",
+        "page golden, mask 0, no exception"
+      ],
+      "fail_if": [
+        "any g0 id7/id9/0x07d2 announce appears in the trace",
+        "page/mask change or exception"
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "enabled, no client",
+      "purpose": "prove enabling the lane does not change the AP start (no early frames)",
+      "steps": [
+        "boot fresh; page/mask",
+        "insmod with lane_enabled",
+        "AP start + hostapd WPA2 AP, no client"
+      ],
+      "pass": [
+        "AP-ENABLED; page golden; mask 0",
+        "cfg80211_status: sta_ops=1 eapol_rx=1 stations=0 user_add=0 asoc_syn=0"
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "association -> hostapd STA added + firmware context",
+      "purpose": "the core new hardware fact: .add_station posts the decoded per-STA context and hostapd proceeds",
+      "steps": [
+        "same load (fresh boot, one load)",
+        "start AP; from the observer, authenticate + associate with the WPA2 fixture (psk test-passphrase-121)",
+        "capture dmesg + cfg80211_status"
+      ],
+      "pass": [
+        "dmesg: 'sta_ops: STA <mac> added (AID ..., vap 0, band 0): firmware context committed (g0 id7 user_add 180 B + g0 id1 cmd 0x7d2 asoc state 1)'",
+        "dmesg: frame post 'sta_user_add' (180 B, g0 id7) and 'sta_asoc_syn' (32 B, g0 id1) consumed with no retry",
+        "hostapd logs the station add (STA-ADDED) instead of 'Could not add STA to kernel driver'",
+        "cfg80211_status: stations=1 user_add=1 asoc_syn=1; allow_frames budget still > 0",
+        "page golden, mask 0, AP alive"
+      ],
+      "fail_if": [
+        "frame post refuses (budget/HCC gate) and hostapd reports the add failure",
+        "firmware exception / page-mask change (power-cycle, stop the ladder)"
+      ]
+    },
+    {
+      "id": "L4",
+      "name": "EAPOL/data RX probe (expected STOP: host data TX missing)",
+      "purpose": "show the RX path is armed and expose exactly the remaining TX blocker",
+      "steps": [
+        "same load as L3",
+        "observe hostapd's EAPOL-Key msg1 attempt (TX) and wait for the client's response",
+        "capture dmesg + cfg80211_status"
+      ],
+      "pass": [
+        "cfg80211_status: xmit_dropped increments for hostapd's EAPOL TX (documented current limit)",
+        "no crash; AP alive; page golden",
+        "EXPECTED STOP: rx frames=0 because msg1 never reached the client - the peer-aware host->AP data TX lane is the next deliverable"
+      ],
+      "fail_if": [
+        "claim the 4-way works when no EAPOL was exchanged",
+        "page/mask change or firmware exception"
+      ]
+    },
+    {
+      "id": "L5",
+      "name": "(future, after the data-TX lane) 4-way EAPOL -> WPA2 PTK",
+      "purpose": "complete the association: EAPOL msg1/msg3 out, msg2/msg4 in, pairwise add_key, authorized data",
+      "steps": [
+        "requires the host->AP data TX lane merged and its own fail-closed proof",
+        "repeat L3 then let the 4-way run; watch cfg80211_status rx frames/eapol/delivered"
+      ],
+      "pass": [
+        "rx eapol >= 2 (msg2, msg4-like); rx delivered >= 2",
+        "add_key pairwise (cmd 0x0078, body 0x44, MAC = STA) posted; hostapd marks the STA authorized",
+        "dmesg: 'sta_ops: CHANGE_STATION <mac>: authorized=1'",
+        "post-authorization data (ping) delivered; page golden"
+      ]
+    },
+    {
+      "id": "L6",
+      "name": "station teardown (kick) and re-add",
+      "purpose": "prove .del_station posts the vendor WAL kick and the station can re-associate",
+      "steps": [
+        "from hostapd, deauthenticate the client (or let it leave)",
+        "re-associate the same client"
+      ],
+      "pass": [
+        "dmesg: 'sta_ops: DEL_STATION <mac> (... subtype 12, reason ...): kick committed'",
+        "frame post 'sta_kick' (WAL cfg-event opcode 0x00d0, 48 B) consumed",
+        "re-association posts user_add + asoc_syn again and succeeds; AP alive; page golden"
+      ],
+      "fail_if": [
+        "firmware exception on delete (stop; do not enable sta_user_del=1 on the same boot)",
+        "stale station blocks the re-add"
+      ]
+    },
+    {
+      "id": "L7",
+      "name": "optional: sta_user_del=1 experiment (separate attended boot)",
+      "purpose": "only if L6 shows the firmware user leaks / re-add fails: post g0 id9 user_del on del_station",
+      "steps": [
+        "fresh boot; insmod with sta_ops=1 eapol_rx=1 sta_user_del=1",
+        "repeat L3 + L6"
+      ],
+      "pass": [
+        "dmesg: 'sta_user_del' frame post (24 B, g0 id9) consumed",
+        "no firmware exception (the E2 crash class is a double user_del)",
+        "re-add works"
+      ],
+      "fail_if": [
+        "firmware exception / page-mask change - power-cycle and record the negative result"
+      ]
+    },
+    {
+      "id": "L8",
+      "name": "soak",
+      "purpose": "no new noise class from the station/RX additions",
+      "steps": [
+        "30-60 min AP with one associated client (after L5)",
+        "periodic cfg80211_status + dp_status reads"
+      ],
+      "pass": [
+        "no exception; page golden; counters consistent; no RX lane close",
+        "xmit_dropped only from the documented TX gap (or zero after L5)"
+      ]
+    }
+  ],
+  "abort_policy": [
+    "ANY firmware exception, page/mask deviation, H2D lane close or post refusal that repeats: power-cycle, stop the ladder, record the rung",
+    "one module load per boot; never reload after the HCC ready handshake",
+    "sta_user_del=1 never runs on the same boot as a failed delete",
+    "recovery is physical: keep the RESET/TFTP door armed and a human at the bench"
+  ],
+  "stop_rules": [
+    "no retry after a refused post; the post path never retries by design",
+    "allow_frames budget exhaustion is a stop, not a reason to raise the budget mid-boot",
+    "the RX lane closes for the load on any anomaly - do not retry dp_rx_drain"
+  ]
+}
