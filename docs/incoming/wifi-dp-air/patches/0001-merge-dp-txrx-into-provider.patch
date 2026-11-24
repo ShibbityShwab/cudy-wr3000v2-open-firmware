@@ -1,0 +1,3646 @@
+--- a/Kbuild
++++ b/Kbuild
+@@ -1,7 +1,9 @@
+ # SPDX-License-Identifier: GPL-2.0
+ #
+ # Out-of-tree build of the Hi5622V100 clean-room Wi-Fi transport driver
+-# against the luofu 6.18.60 kernel tree (M0-M2 cfg80211 full-MAC layer).
++# against the luofu 6.18.60 kernel tree (M0-M2 cfg80211 full-MAC layer +
++# MAC host-interface data plane: E1 rings/table + first TX/RX actions;
++# wifi-dp-air merge of wifi-dp-txrx into the mode-1 provider).
+ #
+ # Build line (see tools/build.sh, which also reports size/sha256/vermagic):
+ #   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+@@ -22,6 +24,7 @@
+ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hcc_core.o hcc_core_kernel.o \
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
++		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
+--- /dev/null
++++ b/dp_rings.c
+@@ -0,0 +1,217 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * dp_rings.c - portable data-plane geometry/register-model implementation for
++ * the Hi5622V100 clean-room host (wifi-datapath-bringup lane, task-111).
++ *
++ * ORIGINAL clean-room code; no vendor source/object code, firmware byte,
++ * calibration value or per-unit identity is reproduced.  The constants and the
++ * vendor init order are derived facts with evidence markers in REPORT.md and
++ * FRAME-SPECS.md (and re-asserted host-only by tools/dp_static_decode.py).
++ */
++#include "dp_rings.h"
++
++/* ===================================================================
++ * MAC slot-5 register program (vendor init order)
++ * =================================================================== */
++int dp_mac_program(const struct dp_mac_params *p, struct dp_mac_reg *regs,
++                   unsigned int max, unsigned int *count)
++{
++    unsigned int n = 0;
++
++    if (!p || !regs || !count)
++        return DP_EARG;
++    if (max < DP_MAC_REG_COUNT)
++        return DP_EARG;
++    if (p->rx_norm_len > 0xffffu || p->rx_small_len > 0xffffu)
++        return DP_ERANGE;
++    if (p->rx_norm_depth > 0xfffu || p->rx_small_depth > 0xfffu ||
++        p->rx_cmp_depth > 0xfffu)
++        return DP_ERANGE;
++    if (p->txba_depth > 0xffffu)
++        return DP_ERANGE;
++    if (p->txba_depth != DP_TXBA_DEPTH_INIT ||
++        p->rx_norm_depth != DP_RX_NORM_DEPTH ||
++        p->rx_small_depth != DP_RX_SMALL_DEPTH ||
++        p->rx_cmp_depth != DP_RXCMP_DEPTH ||
++        p->rx_norm_len != DP_RX_NORM_BUFLEN ||
++        p->rx_small_len != DP_RX_SMALL_BUFLEN)
++        return DP_EARG;
++    if (p->msdu_table_acp < DP_ACP_CA_LO || p->msdu_table_acp > DP_ACP_CA_HI)
++        return DP_ERANGE;
++    if (p->rx_norm_addr < DP_HOST_DMA_LO || p->rx_norm_addr > DP_HOST_DMA_HI ||
++        p->rx_small_addr < DP_HOST_DMA_LO || p->rx_small_addr > DP_HOST_DMA_HI ||
++        p->rx_cmp_addr < DP_HOST_DMA_LO || p->rx_cmp_addr > DP_HOST_DMA_HI ||
++        p->txba_addr < DP_HOST_DMA_LO || p->txba_addr > DP_HOST_DMA_HI)
++        return DP_ERANGE;
++
++    /* 1. MSDU-info ring-pointer table base (ACP alias of ready id2) [V] */
++    regs[n].off = DP_MAC_REG_MSDU_TBL;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->msdu_table_acp;
++    n++;
++    /* 2. RX buffer lengths: norm[15:0] | small[31:16] = 0x00b0063c [V*] */
++    regs[n].off = DP_MAC_REG_RX_BUFLEN;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = (p->rx_norm_len & 0xffffu) |
++                    ((p->rx_small_len & 0xffffu) << 16);
++    n++;
++    /* 3. the three ring base addresses (device VAs) [V] */
++    regs[n].off = DP_MAC_REG_RXNORM_ADDR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->rx_norm_addr;
++    n++;
++    regs[n].off = DP_MAC_REG_RXSMALL_ADDR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->rx_small_addr;
++    n++;
++    regs[n].off = DP_MAC_REG_RXCMP_ADDR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->rx_cmp_addr;
++    n++;
++    /* 4. ring sizes (bits 11:0, RMW preserves the other bits) [V] */
++    regs[n].off = DP_MAC_REG_RXNORM_SIZE;
++    regs[n].mask = 0x00000fffu;
++    regs[n].value = p->rx_norm_depth;
++    n++;
++    regs[n].off = DP_MAC_REG_RXSMALL_SIZE;
++    regs[n].mask = 0x00000fffu;
++    regs[n].value = p->rx_small_depth;
++    n++;
++    regs[n].off = DP_MAC_REG_RXCMP_SIZE;
++    regs[n].mask = 0x00000fffu;
++    regs[n].value = p->rx_cmp_depth;
++    n++;
++    /* 5. tx_ba_info depth (bits 15:0) + address [V] */
++    regs[n].off = DP_MAC_REG_TXBA_DEPTH;
++    regs[n].mask = 0x0000ffffu;
++    regs[n].value = p->txba_depth;
++    n++;
++    regs[n].off = DP_MAC_REG_TXBA_ADDR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->txba_addr;
++    n++;
++    /* 6. host MAC interrupt mask (vendor initialises the full word) [V] */
++    regs[n].off = DP_MAC_REG_INT_MASK;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = p->int_mask;
++    n++;
++    /* 7. producer/consumer indices: the free rings were filled exactly once,
++     * so both wptrs publish index 0/phase 1 (live vendor 0x8000) [V*]; the
++     * completion ring consumer starts at 0. */
++    regs[n].off = DP_MAC_REG_RXNORM_WPTR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = DP_RING_WPTR_FULL;
++    n++;
++    regs[n].off = DP_MAC_REG_RXSMALL_WPTR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = DP_RING_WPTR_FULL;
++    n++;
++    regs[n].off = DP_MAC_REG_RXCMP_RPTR;
++    regs[n].mask = 0xffffffffu;
++    regs[n].value = 0u;
++    n++;
++
++    *count = n;
++    return DP_EOK;
++}
++
++/* ===================================================================
++ * Ring index arithmetic (15-bit index + phase bit; MAC rings)
++ * =================================================================== */
++dp_u32 dp_ring_idx_pack(dp_u32 index, unsigned int phase)
++{
++    return (index & DP_RING_IDX_MASK) |
++           (phase ? DP_RING_PHASE : 0u);
++}
++
++void dp_ring_idx_unpack(dp_u32 packed, dp_u32 *index, unsigned int *phase)
++{
++    if (index)
++        *index = packed & DP_RING_IDX_MASK;
++    if (phase)
++        *phase = (packed & DP_RING_PHASE) ? 1u : 0u;
++}
++
++dp_u32 dp_ring_idx_next(dp_u32 packed, dp_u32 depth)
++{
++    dp_u32 index = packed & DP_RING_IDX_MASK;
++    unsigned int phase = (packed & DP_RING_PHASE) ? 1u : 0u;
++
++    if (!depth)
++        return packed;
++    index++;
++    if (index >= depth) {
++        index = 0;
++        phase ^= 1u;
++    }
++    return dp_ring_idx_pack(index, phase);
++}
++
++/* ===================================================================
++ * Device-RAM MSDU-info ring-pointer table
++ * =================================================================== */
++int dp_ready_payload_ptrtable(dp_u32 payload, dp_u32 *table_ca,
++                              dp_u32 *table_acp)
++{
++    if (!table_ca || !table_acp)
++        return DP_EARG;
++    /* The ready id2 dword0 is a device CA in the PKTRAM window. */
++    if (payload < DP_PKTRAM_CA_LO || payload > DP_PKTRAM_CA_HI)
++        return DP_ERANGE;
++    if (payload & 3u)
++        return DP_EALIGN;
++    if (payload > DP_PKTRAM_CA_HI - (DP_MSDU_TABLE_ENTRY_BYTES - 1u))
++        return DP_ERANGE;
++    *table_ca = payload;
++    *table_acp = payload + DP_MSDU_TABLE_ACP_DELTA;
++    return DP_EOK;
++}
++
++int dp_msdu_table_entry_ca(dp_u32 table_ca, unsigned int user,
++                           unsigned int tid, dp_u32 *entry_ca,
++                           dp_u32 *entry_acp)
++{
++    dp_u32 index, off, ca;
++
++    if (!entry_ca || !entry_acp)
++        return DP_EARG;
++    if (user > DP_MSDU_TABLE_MAX_USER || tid > DP_MSDU_TABLE_MAX_TID)
++        return DP_EARG;
++    if (table_ca < DP_PKTRAM_CA_LO || table_ca > DP_PKTRAM_CA_HI)
++        return DP_ERANGE;
++    if (table_ca & 3u)
++        return DP_EALIGN;
++    index = (dp_u32)tid + (dp_u32)user * DP_MSDU_TABLE_USER_STRIDE;
++    off = index * DP_MSDU_TABLE_ENTRY_BYTES;
++    ca = table_ca + off;
++    if (ca < table_ca || ca > DP_PKTRAM_CA_HI ||
++        ca > DP_PKTRAM_CA_HI - (DP_MSDU_TABLE_ENTRY_BYTES - 1u))
++        return DP_ERANGE;
++    *entry_ca = ca;
++    *entry_acp = ca + DP_MSDU_TABLE_ACP_DELTA;
++    return DP_EOK;
++}
++
++void dp_msdu_table_entry_encode(dp_u8 entry[DP_MSDU_TABLE_ENTRY_BYTES],
++                                dp_u32 ring_devva)
++{
++    unsigned int i;
++
++    for (i = 0; i < DP_MSDU_TABLE_ENTRY_BYTES; i++)
++        entry[i] = 0u;
++    entry[0] = (dp_u8)(ring_devva & 0xffu);
++    entry[1] = (dp_u8)((ring_devva >> 8) & 0xffu);
++    entry[2] = (dp_u8)((ring_devva >> 16) & 0xffu);
++    entry[3] = (dp_u8)((ring_devva >> 24) & 0xffu);
++}
++
++dp_u32 dp_tx_ring_devva(dp_u32 rings_dma, unsigned int tid)
++{
++    return rings_dma + (dp_u32)tid * DP_TX_MSDU_RING_DEPTH *
++                       DP_TX_MSDU_ENTRY_BYTES;
++}
++
++dp_u32 dp_rx_buf_entry_devva(dp_u32 buf_dma)
++{
++    return buf_dma + DP_RX_BUF_HDR;
++}
+--- /dev/null
++++ b/dp_rings.h
+@@ -0,0 +1,226 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * dp_rings.h - portable data-plane geometry, register-program model and ring
++ * encoders for the Hi5622V100 clean-room host (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code written by the wifi-datapath-bringup lane (shared
++ * task task-111, 2026-11-25) from the project's committed decoded contract
++ * (wifi-datapath REPORT/FRAME-SPECS) plus the static decode done in
++ * tools/dp_static_decode.py (vendor .ko / FIRMWARE.bin read locally; only
++ * derived constants are committed - no vendor bytes, code text or firmware
++ * image material is reproduced here).
++ *
++ * Why this file: the ring geometry, the device-RAM MSDU-info table arithmetic,
++ * the 4-byte RX free-ring entries and the MAC slot-5 register program are the
++ * parts that must be testable on the host without a device and without the
++ * kernel.  hi5622_dp.c only adds the DMA allocation and the MMIO writes.
++ *
++ * Evidence markers: [V] decoded from a named vendor artifact; [V*] measured by
++ * an attended bench lane and cited in the project reports; [I] inference;
++ * [U] unknown/not pinned.
++ */
++#ifndef DP_RINGS_H
++#define DP_RINGS_H
++
++#ifdef __KERNEL__
++#include <linux/string.h>
++#include <linux/types.h>
++typedef u8  dp_u8;
++typedef u16 dp_u16;
++typedef u32 dp_u32;
++typedef s32 dp_s32;
++#else
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++typedef uint8_t  dp_u8;
++typedef uint16_t dp_u16;
++typedef uint32_t dp_u32;
++typedef int32_t  dp_s32;
++#endif
++
++/* ===================================================================
++ * 1. MAC host-interface block (slot 5) [V: phase43 S5 + wifi.ko hal_set_*]
++ * =================================================================== */
++#define DP_MAC_CA_BAND0        0x40040000u  /* 2.4 GHz band, host interface */
++#define DP_MAC_CA_BAND1        0x40060000u  /* 5 GHz band (NOT programmed yet) */
++
++#define DP_MAC_REG_TXBA_DEPTH  0x00u  /* tx_ba_info_buff_depth (bits 15:0) */
++#define DP_MAC_REG_TXBA_ADDR   0x04u  /* tx_ba_info_buf_addr (device VA) */
++#define DP_MAC_REG_MSDU_TBL    0x10u  /* msdu_info_ring_ptr_table_base (dev VA) */
++#define DP_MAC_REG_RX_BUFLEN   0x1cu  /* norm[15:0] | small[31:16] */
++#define DP_MAC_REG_RXNORM_ADDR 0x20u
++#define DP_MAC_REG_RXSMALL_ADDR 0x24u
++#define DP_MAC_REG_RXCMP_ADDR  0x28u
++#define DP_MAC_REG_RXNORM_SIZE 0x2cu  /* bits 11:0 */
++#define DP_MAC_REG_RXSMALL_SIZE 0x30u /* bits 11:0 */
++#define DP_MAC_REG_RXCMP_SIZE  0x34u  /* bits 11:0 */
++#define DP_MAC_REG_RXNORM_WPTR 0x38u  /* idx[14:0] | phase<<15 */
++#define DP_MAC_REG_RXSMALL_WPTR 0x3cu
++#define DP_MAC_REG_RXCMP_RPTR  0x40u
++#define DP_MAC_REG_INT_STATUS  0x44u  /* W1C, host ISR */
++#define DP_MAC_REG_INT_MASK    0x48u  /* vendor live 0xfffffcc1 */
++#define DP_MAC_REG_RXCMP_WPTR  0x4cu  /* device producer */
++#define DP_MAC_REG_RXNORM_RPTR 0x50u  /* device consumer */
++#define DP_MAC_REG_RXSMALL_RPTR 0x54u
++
++#define DP_MAC_INT_MASK_INIT   0xfffffcc1u  /* [V] hal_set_host_intr_mask caller */
++#define DP_MAC_REG_COUNT       14u          /* entries in the program model */
++
++/* Ring index packing for the MAC rings: low 15 bits index, bit 15 phase.
++ * Live vendor values: +0x38/+0x3c read 0x8000 = index 0, phase 1 after the
++ * free rings were filled and wrapped once [V*]. */
++#define DP_RING_IDX_MASK       0x7fffu
++#define DP_RING_PHASE          0x8000u
++#define DP_RING_WPTR_FULL      0x8000u  /* after filling exactly depth entries */
++
++/* ===================================================================
++ * 2. Host-DRAM rings and buffers [V: wifi.ko shuangta_rx_host_init_dscr_queue,
++ *    shuangta_ba_info_res_alloc, hmac_txq_table_init, hmac_tx_msdu_dscr_init]
++ * =================================================================== */
++#define DP_TXQ_TABLE_BYTES     0x2524u  /* host DRAM, zeroed, oal_noncache_alloc */
++#define DP_TXQ_BAND_STRIDE     0x252cu  /* firmware RAM stride per band [V fw] */
++#define DP_TX_MSDU_RINGS       8u       /* one ring per TID (0..7) */
++#define DP_TX_MSDU_RING_DEPTH  0x40u    /* 64 entries; vendor slot +0x38 default */
++#define DP_TX_MSDU_ENTRY_BYTES 8u
++#define DP_TX_MSDU_RING_BYTES  (DP_TX_MSDU_RINGS * DP_TX_MSDU_RING_DEPTH * DP_TX_MSDU_ENTRY_BYTES)
++#define DP_TXBA_DEPTH          256u     /* oal_noncache_alloc(0x800) = 256 x 8 */
++#define DP_TXBA_DEPTH_INIT     0x100u
++#define DP_TXBA_BYTES          0x800u
++#define DP_TXBA_ENTRY_BYTES    8u
++
++#define DP_RX_NORM_DEPTH       256u
++#define DP_RX_SMALL_DEPTH      512u
++#define DP_RXCMP_DEPTH         4095u
++#define DP_RX_NORM_BUFLEN      0x63cu   /* rx_norm_buff_len */
++#define DP_RX_SMALL_BUFLEN     0xb0u    /* rx_small_buff_len */
++#define DP_RX_BUF_HDR          4u       /* host bookkeeping word before the DMA area */
++#define DP_RX_NORM_STRIDE      (DP_RX_BUF_HDR + DP_RX_NORM_BUFLEN)
++#define DP_RX_SMALL_STRIDE     (DP_RX_BUF_HDR + DP_RX_SMALL_BUFLEN)
++/* Every ring entry is one 4-byte device VA of a buffer/entry [V]:
++ * norm free ring oal_noncache_alloc(0x400) = 256 x 4, small = 512 x 4,
++ * completion ring = 0x3ffc = 4095 x 4. */
++#define DP_RX_RING_ENTRY_BYTES 4u
++#define DP_RX_NORM_RING_BYTES  (DP_RX_NORM_DEPTH * DP_RX_RING_ENTRY_BYTES)
++#define DP_RX_SMALL_RING_BYTES (DP_RX_SMALL_DEPTH * DP_RX_RING_ENTRY_BYTES)
++#define DP_RXCMP_RING_BYTES    (DP_RXCMP_DEPTH * DP_RX_RING_ENTRY_BYTES)
++
++/* ===================================================================
++ * 3. Device-RAM MSDU-info ring-pointer table (the ready g4 id2 payload)
++ *
++ * The firmware's g4 id2 payload dword0 (0x01060850 on the bench) is the
++ * PKTRAM device CA of a table with 12-byte entries; MAC +0x10 receives its
++ * ACP alias (+0x01000000, live value 0x02060850) [V/V*].  The vendor resolves
++ * entry (user,tid) as base + 12*(tid + user*8) with user <= 0x91 and writes
++ * {ring_device_va, 0, 0} into it (hmac_get_user_tid_tx_msdu_info_ring_table_addr
++ * + shuangta_tx_msdu_ring_buf_alloc) [V].
++ * =================================================================== */
++#define DP_MSDU_TABLE_ENTRY_BYTES 12u
++#define DP_MSDU_TABLE_USER_STRIDE 8u    /* index = tid + user*8 */
++#define DP_MSDU_TABLE_MAX_USER    0x91u
++#define DP_MSDU_TABLE_MAX_TID     7u
++#define DP_MSDU_TABLE_ACP_DELTA   0x01000000u  /* PKTRAM CA -> ACP alias [V*] */
++#define DP_MSDU_TABLE_ENTRY_DWORDS 3u   /* {ring_devva, 0, 0} */
++
++/* Device memory windows used to range-check the payload/table (contract) */
++#define DP_PKTRAM_CA_LO       0x01000000u
++#define DP_PKTRAM_CA_HI       0x011dffffu
++#define DP_ACP_CA_LO          0x02000000u
++#define DP_ACP_CA_HI          0x021dffffu
++
++/* Host-DRAM window the device addresses (DTS dma-ranges identity; same check
++ * the ETE ring path uses). */
++#define DP_HOST_DMA_LO        0x80000000u
++#define DP_HOST_DMA_HI        0x8fffffffu
++
++/* ===================================================================
++ * 4. TXQ table (handed to the firmware by the g0 id1 key-0x0320 frame)
++ *
++ * 0x2524-byte host-DRAM non-cached table, allocated+zeroed by
++ * hmac_txq_table_init and its device VA sent by hmac_txq_table_addr_sync
++ * (hdpp_config_send_event cmd 0x320, len 4).  The per-user blocks live at
++ * +0x524 + user*0x40 {8x u16 queue len, 8x u16 start sn, 8x u32 bytes}
++ * (hmac_update_user_tid_txq_table) [V].  The table is zero at first sync,
++ * exactly what the vendor does.
++ * =================================================================== */
++#define DP_TXQ_USER_BLOCKS_OFF 0x524u
++#define DP_TXQ_USER_BLOCK_BYTES 0x40u
++#define DP_TXQ_USER_MAX        0x7fu   /* >0x7f uses a different vendor branch [U] */
++
++/* ===================================================================
++ * 5. Error codes (negative; dp_* functions return these)
++ * =================================================================== */
++#define DP_EOK                 0
++#define DP_EARG                (-1)
++#define DP_ERANGE              (-2)
++#define DP_EALIGN              (-3)
++
++/* ===================================================================
++ * 6. The MAC slot-5 register program model
++ *
++ * One entry per MAC register write, in the vendor init order.  mask = bits to
++ * preserve from the read value (RMW); mask == 0xffffffff means a plain write.
++ * hi5622_dp.c executes them in order: read (RMW), write, read back and compare
++ * the masked fields.
++ * =================================================================== */
++struct dp_mac_reg {
++    dp_u8  off;
++    dp_u8  pad[3];
++    dp_u32 mask;
++    dp_u32 value;
++};
++
++struct dp_mac_params {
++    dp_u32 msdu_table_acp;  /* ACP alias of the ready id2 payload */
++    dp_u32 rx_norm_addr;    /* device VA of the norm free ring */
++    dp_u32 rx_small_addr;   /* device VA of the small free ring */
++    dp_u32 rx_cmp_addr;     /* device VA of the completion ring */
++    dp_u32 txba_addr;       /* device VA of the 0x800-byte BA-info buffer */
++    dp_u32 txba_depth;      /* 256 */
++    dp_u32 rx_norm_len;     /* 0x63c */
++    dp_u32 rx_small_len;    /* 0xb0 */
++    dp_u32 rx_norm_depth;   /* 256 */
++    dp_u32 rx_small_depth;  /* 512 */
++    dp_u32 rx_cmp_depth;    /* 4095 */
++    dp_u32 int_mask;        /* DP_MAC_INT_MASK_INIT */
++};
++
++/* Fill regs[] (capacity max) with the program in vendor order; *count gets the
++ * number of entries (exactly DP_MAC_REG_COUNT for valid parameters).  The
++ * function range-checks every value (ring depths <= 0xfff, lengths <= 0xffff,
++ * DMA addresses inside DP_HOST_DMA_LO..HI) and returns DP_EARG/DP_ERANGE. */
++int dp_mac_program(const struct dp_mac_params *p, struct dp_mac_reg *regs,
++                   unsigned int max, unsigned int *count);
++
++/* ===================================================================
++ * 7. Ring / table arithmetic
++ * =================================================================== */
++/* packed MAC-ring index (low 15 bits index, bit 15 phase) */
++dp_u32 dp_ring_idx_pack(dp_u32 index, unsigned int phase);
++void   dp_ring_idx_unpack(dp_u32 packed, dp_u32 *index, unsigned int *phase);
++/* next packed value after publishing one entry at depth */
++dp_u32 dp_ring_idx_next(dp_u32 packed, dp_u32 depth);
++
++/* Validate the ready g4 id2 payload (PKTRAM device CA of the MSDU table) and
++ * return both the PKTRAM CA and the ACP alias (CA + 0x01000000). */
++int dp_ready_payload_ptrtable(dp_u32 payload, dp_u32 *table_ca,
++                              dp_u32 *table_acp);
++
++/* Entry (user,tid) of the device-RAM table: CA and ACP alias, both range
++ * checked; user <= 0x91, tid <= 7, entry must stay inside PKTRAM. */
++int dp_msdu_table_entry_ca(dp_u32 table_ca, unsigned int user,
++                           unsigned int tid, dp_u32 *entry_ca,
++                           dp_u32 *entry_acp);
++
++/* Encode the 12-byte entry {ring_devva, 0, 0} (host writes it through ACP). */
++void dp_msdu_table_entry_encode(dp_u8 entry[DP_MSDU_TABLE_ENTRY_BYTES],
++                                dp_u32 ring_devva);
++
++/* Device VA of TID tid inside one contiguous allocation of all 8 rings. */
++dp_u32 dp_tx_ring_devva(dp_u32 rings_dma, unsigned int tid);
++
++/* Device VA the device must see as a free-ring entry: the vendor ring entry is
++ * the buffer address AFTER the 4-byte host bookkeeping word, i.e. buf+4. */
++dp_u32 dp_rx_buf_entry_devva(dp_u32 buf_dma);
++
++#endif /* DP_RINGS_H */
+--- /dev/null
++++ b/dp_txrx.c
+@@ -0,0 +1,521 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * dp_txrx.c - first TX/RX data-plane host logic for the Hi5622V100
++ * clean-room driver. Original clean-room code (lane wifi-dp-txrx, task-122);
++ * only decoded constants/offsets, no vendor code or data. See REPORT.md.
++ */
++#include "dp_txrx.h"
++
++/* ------------------------------------------------------------------ */
++/* little-endian helpers                                              */
++/* ------------------------------------------------------------------ */
++dp_u32 dp_txrx_le32(const dp_u8 *p)
++{
++    return (dp_u32)p[0] | ((dp_u32)p[1] << 8) | ((dp_u32)p[2] << 16) |
++           ((dp_u32)p[3] << 24);
++}
++
++void dp_txrx_put_le16(dp_u8 *p, dp_u16 v)
++{
++    p[0] = (dp_u8)(v & 0xffu);
++    p[1] = (dp_u8)((v >> 8) & 0xffu);
++}
++
++void dp_txrx_put_le32(dp_u8 *p, dp_u32 v)
++{
++    p[0] = (dp_u8)(v & 0xffu);
++    p[1] = (dp_u8)((v >> 8) & 0xffu);
++    p[2] = (dp_u8)((v >> 16) & 0xffu);
++    p[3] = (dp_u8)((v >> 24) & 0xffu);
++}
++
++static dp_u16 dp_le16(const dp_u8 *p)
++{
++    return (dp_u16)(p[0] | ((dp_u16)p[1] << 8));
++}
++
++/* ------------------------------------------------------------------ */
++/* device-RAM MSDU-info ring-pointer table entries                    */
++/* ------------------------------------------------------------------ */
++void dp_txrx_table_entry_pack(dp_u8 out[DP_TXRX_TABLE_ENTRY_BYTES],
++                              dp_u32 ring_devva, dp_u32 wptr, dp_u32 rptr)
++{
++    if (out == NULL)
++        return;
++    dp_txrx_put_le32(out + 0, ring_devva);
++    dp_txrx_put_le32(out + 4, wptr);
++    dp_txrx_put_le32(out + 8, rptr);
++}
++
++dp_u32 dp_txrx_table_entry_wptr(const dp_u8 e[DP_TXRX_TABLE_ENTRY_BYTES])
++{
++    return e == NULL ? 0u : dp_txrx_le32(e + 4);
++}
++
++dp_u32 dp_txrx_table_entry_rptr(const dp_u8 e[DP_TXRX_TABLE_ENTRY_BYTES])
++{
++    return e == NULL ? 0u : dp_txrx_le32(e + 8);
++}
++
++int dp_txrx_table_entry_acp(dp_u32 table_ca, unsigned int user,
++                            unsigned int tid, dp_u32 *acp)
++{
++    dp_u32 ca;
++
++    if (dp_txrx_table_entry_ca(table_ca, user, tid, &ca) != DP_TXRX_OK)
++        return DP_TXRX_EARG;
++    *acp = ca + DP_TXRX_TABLE_ACP_DELTA;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_table_entry_ca(dp_u32 table_ca, unsigned int user,
++                           unsigned int tid, dp_u32 *ca)
++{
++    dp_u32 index;
++
++    if (ca == NULL || user >= DP_TXRX_TABLE_USERS || tid >= DP_TXRX_TABLE_TIDS)
++        return DP_TXRX_EARG;
++    if (table_ca == 0u)
++        return DP_TXRX_EARG;
++    index = tid + user * DP_TXRX_TABLE_TIDS;
++    /* CA = base + 12 * index; the multiply cannot overflow for the bounded
++     * user/tid space (0x91*8+7 = 1167 -> 14 KB). */
++    *ca = table_ca + DP_TXRX_TABLE_ENTRY_BYTES * index;
++    return DP_TXRX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* TX MSDU-info ring entry                                            */
++/* ------------------------------------------------------------------ */
++int dp_txrx_txe_encode(dp_u8 entry[DP_TXRX_TXE_BYTES], dp_u32 buf_devva,
++                       dp_u16 frame_len, dp_u8 path_class,
++                       dp_u8 hdr_flag, dp_u8 tid, dp_u8 vap_type)
++{
++    dp_u32 ctl;
++
++    if (entry == NULL)
++        return DP_TXRX_EARG;
++    if (frame_len == 0u || frame_len > DP_TXRX_TXE_LEN_MASK ||
++        path_class > 7u || tid > 0x0fu || vap_type > 3u || vap_type == 0u)
++        return DP_TXRX_EARG;
++    ctl = (dp_u32)frame_len;
++    ctl |= ((dp_u32)path_class << DP_TXRX_TXE_PATH_SHIFT) &
++           DP_TXRX_TXE_PATH_MASK;
++    if (hdr_flag)
++        ctl |= DP_TXRX_TXE_FLAG15;
++    ctl |= ((dp_u32)tid << 16) & DP_TXRX_TXE_TID_MASK;
++    ctl |= ((dp_u32)vap_type << DP_TXRX_TXE_VAP_SHIFT) & DP_TXRX_TXE_VAP_MASK;
++    dp_txrx_put_le32(entry + 0, buf_devva);
++    dp_txrx_put_le32(entry + 4, ctl);
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_txe_decode(const dp_u8 entry[DP_TXRX_TXE_BYTES],
++                       dp_u32 *buf_devva, dp_u32 *ctl)
++{
++    if (entry == NULL)
++        return DP_TXRX_EARG;
++    if (buf_devva != NULL)
++        *buf_devva = dp_txrx_le32(entry);
++    if (ctl != NULL)
++        *ctl = dp_txrx_le32(entry + 4);
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_txe_is_processed(const dp_u8 entry[DP_TXRX_TXE_BYTES])
++{
++    if (entry == NULL)
++        return 0;
++    return (dp_txrx_le32(entry + 4) & DP_TXRX_TXE_MAGIC_MASK) ==
++           DP_TXRX_TXE_MAGIC_MASK;
++}
++
++void dp_txrx_txe_mark_processed(dp_u8 entry[DP_TXRX_TXE_BYTES])
++{
++    dp_u32 ctl;
++
++    if (entry == NULL)
++        return;
++    ctl = dp_txrx_le32(entry + 4) | DP_TXRX_TXE_MAGIC_MASK;
++    dp_txrx_put_le32(entry + 4, ctl);
++}
++
++/* ------------------------------------------------------------------ */
++/* packed ring index arithmetic                                       */
++/* ------------------------------------------------------------------ */
++dp_u32 dp_txrx_idx_pack(dp_u32 index, unsigned int phase)
++{
++    return (index & 0x7fffu) | (phase != 0u ? 0x8000u : 0u);
++}
++
++void dp_txrx_idx_unpack(dp_u32 packed, dp_u32 *index, unsigned int *phase)
++{
++    if (index != NULL)
++        *index = packed & 0x7fffu;
++    if (phase != NULL)
++        *phase = (packed & 0x8000u) != 0u ? 1u : 0u;
++}
++
++dp_u32 dp_txrx_idx_next(dp_u32 packed, dp_u32 depth)
++{
++    dp_u32 index = packed & 0x7fffu;
++    dp_u32 phase = packed & 0x8000u;
++
++    if (depth == 0u || depth > 0x7fffu)
++        return packed;
++    index++;
++    if (index >= depth) {
++        index = 0;
++        phase ^= 0x8000u;
++    }
++    return (index & 0x7fffu) | phase;
++}
++
++int dp_txrx_idx_count(dp_u32 producer, dp_u32 consumer, dp_u32 depth)
++{
++    dp_u32 idx_p, idx_c, phase_p, phase_c, distance;
++
++    if (depth == 0u || depth > 0x7fffu)
++        return DP_TXRX_EARG;
++    idx_p = producer & 0x7fffu;
++    idx_c = consumer & 0x7fffu;
++    phase_p = producer & 0x8000u;
++    phase_c = consumer & 0x8000u;
++    if (idx_p >= depth || idx_c >= depth)
++        return DP_TXRX_EFORMAT;
++    if (phase_p == phase_c) {
++        if (idx_p < idx_c)
++            return DP_TXRX_EFORMAT; /* consumer overtook the producer */
++        distance = idx_p - idx_c;
++    } else {
++        if (depth == 0u)
++            return DP_TXRX_EARG;
++        distance = depth - idx_c + idx_p;
++    }
++    if (distance > depth)
++        return DP_TXRX_EFORMAT;
++    return (int)distance;
++}
++
++/* ------------------------------------------------------------------ */
++/* TX frame buffer layout                                             */
++/* ------------------------------------------------------------------ */
++int dp_txrx_tx_buffer_init(dp_u8 *buf, size_t cap, dp_u32 owner,
++                           const dp_u8 *mpdu, size_t mpdu_len,
++                           dp_u32 *buf_devva_off)
++{
++    if (buf == NULL || mpdu == NULL || buf_devva_off == NULL)
++        return DP_TXRX_EARG;
++    if (mpdu_len == 0u || mpdu_len > DP_TXRX_MAX_MPDU)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_FRAME_MPDU_OFF + mpdu_len)
++        return DP_TXRX_EBOUNDS;
++    memset(buf, 0, DP_TXRX_FRAME_MPDU_OFF);
++    dp_txrx_put_le32(buf + 0, owner);
++    memcpy(buf + DP_TXRX_FRAME_MPDU_OFF, mpdu, mpdu_len);
++    *buf_devva_off = DP_TXRX_FRAME_HOST_HDR;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_tx_buffer_check(const dp_u8 *buf, size_t cap)
++{
++    size_t i;
++
++    if (buf == NULL || cap < DP_TXRX_FRAME_MPDU_OFF)
++        return DP_TXRX_ESHORT;
++    for (i = DP_TXRX_FRAME_HOST_HDR; i < DP_TXRX_FRAME_MPDU_OFF; i++) {
++        if (buf[i] != 0u)
++            return DP_TXRX_EFORMAT;
++    }
++    return DP_TXRX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* 802.11 MPDU builders                                               */
++/* ------------------------------------------------------------------ */
++static void dp_put_addr(dp_u8 *p, const dp_u8 addr[6])
++{
++    memcpy(p, addr, 6);
++}
++
++static void dp_put_bcast(dp_u8 *p)
++{
++    memset(p, 0xff, 6);
++}
++
++/* Common 24-byte header: FC, duration 0, addr1, addr2, addr3, seq. */
++static void dp_write_hdr(dp_u8 *out, dp_u16 fc, const dp_u8 a1[6],
++                         const dp_u8 a2[6], const dp_u8 a3[6],
++                         dp_u16 seq)
++{
++    dp_txrx_put_le16(out + 0, fc);
++    dp_txrx_put_le16(out + 2, 0u);
++    dp_put_addr(out + 4, a1);
++    dp_put_addr(out + 10, a2);
++    dp_put_addr(out + 16, a3);
++    dp_txrx_put_le16(out + 22, (dp_u16)((seq & 0x0fffu) << 4));
++}
++
++int dp_txrx_build_probe_req(dp_u8 *out, size_t cap, const dp_u8 bssid[6],
++                            dp_u16 seq, size_t *len)
++{
++    static const dp_u8 rates[4] = { 0x82u, 0x84u, 0x8bu, 0x96u };
++
++    if (out == NULL || bssid == NULL || len == NULL)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_HDR_LEN + 2u + 2u + 2u + sizeof(rates))
++        return DP_TXRX_EBOUNDS;
++    dp_put_bcast(out + 4);              /* addr1 = DA = broadcast */
++    dp_write_hdr(out, DP_TXRX_FC_PROBE_REQ, out + 4, bssid, bssid, seq);
++    {
++        size_t off = DP_TXRX_HDR_LEN;
++
++        out[off++] = 0u;                /* SSID IE id */
++        out[off++] = 0u;                /* wildcard SSID length */
++        out[off++] = 1u;                /* supported rates IE */
++        out[off++] = (dp_u8)sizeof(rates);
++        memcpy(out + off, rates, sizeof(rates));
++        off += sizeof(rates);
++        *len = off;
++    }
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_build_null_data(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                            dp_u16 seq, size_t *len)
++{
++    if (out == NULL || sa == NULL || len == NULL)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_HDR_LEN)
++        return DP_TXRX_EBOUNDS;
++    dp_put_bcast(out + 4);
++    dp_write_hdr(out, DP_TXRX_FC_NULL_DATA, out + 4, sa, sa, seq);
++    *len = DP_TXRX_HDR_LEN;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_build_qos_null(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                           dp_u16 seq, size_t *len)
++{
++    if (out == NULL || sa == NULL || len == NULL)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_QOS_HDR_LEN)
++        return DP_TXRX_EBOUNDS;
++    dp_put_bcast(out + 4);
++    dp_write_hdr(out, DP_TXRX_FC_QOS_NULL, out + 4, sa, sa, seq);
++    dp_txrx_put_le16(out + DP_TXRX_HDR_LEN, 0u); /* QoS control: TID 0 */
++    *len = DP_TXRX_QOS_HDR_LEN;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_build_arp_bcast(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                            const dp_u8 sip[4], const dp_u8 tip[4],
++                            dp_u16 seq, size_t *len)
++{
++    static const dp_u8 llc_snap[8] = { 0xaau, 0xaau, 0x03u, 0x00u, 0x00u,
++                                         0x00u, 0x08u, 0x06u };
++    dp_u8 *arp;
++    size_t off;
++
++    if (out == NULL || sa == NULL || sip == NULL || tip == NULL || len == NULL)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_HDR_LEN + sizeof(llc_snap) + 28u)
++        return DP_TXRX_EBOUNDS;
++    dp_put_bcast(out + 4);
++    dp_write_hdr(out, DP_TXRX_FC_QOS_DATA, out + 4, sa, sa, seq);
++    off = DP_TXRX_HDR_LEN;
++    memcpy(out + off, llc_snap, sizeof(llc_snap));
++    off += sizeof(llc_snap);
++    arp = out + off;
++    dp_txrx_put_le16(arp + 0, 0x0001u);  /* htype Ethernet */
++    dp_txrx_put_le16(arp + 2, 0x0800u);  /* ptype IPv4 */
++    arp[4] = 6u;                          /* hlen */
++    arp[5] = 4u;                          /* plen */
++    dp_txrx_put_le16(arp + 6, 0x0001u);  /* op request */
++    memcpy(arp + 8, sa, 6);               /* sender hardware */
++    memcpy(arp + 14, sip, 4);             /* sender protocol */
++    memset(arp + 18, 0, 6);               /* target hardware */
++    memcpy(arp + 24, tip, 4);             /* target protocol */
++    off += 28u;
++    if (off > cap)
++        return DP_TXRX_EBOUNDS;
++    *len = off;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_frame_class(dp_u16 fc, dp_u8 *vap_type, dp_u8 *tid,
++                        dp_u8 *hdr_flag)
++{
++    dp_u8 type = (dp_u8)((fc >> 2) & 0x3u);
++
++    if (vap_type == NULL || tid == NULL || hdr_flag == NULL)
++        return DP_TXRX_EARG;
++    if (type == 0u) {            /* management */
++        *vap_type = DP_TXRX_VAP_TYPE_1;
++        *tid = 0u;
++        *hdr_flag = 1u;
++        return DP_TXRX_OK;
++    }
++    if (type == 2u) {            /* data/QoS: TID comes from QoS control [I] */
++        *vap_type = DP_TXRX_VAP_TYPE_2;
++        *tid = 0u;
++        *hdr_flag = 0u;
++        return DP_TXRX_OK;
++    }
++    return DP_TXRX_EUNKNOWN;     /* control frames need their own builder */
++}
++
++/* ------------------------------------------------------------------ */
++/* RX descriptor + capture                                            */
++/* ------------------------------------------------------------------ */
++int dp_txrx_rx_desc_parse(const dp_u8 *buf, size_t cap,
++                          struct dp_txrx_rx_desc *out)
++{
++    if (buf == NULL || out == NULL)
++        return DP_TXRX_EARG;
++    if (cap < DP_TXRX_RX_DESC_LEN)
++        return DP_TXRX_ESHORT;
++    memset(out, 0, sizeof(*out));
++    out->len_a = (dp_u16)(dp_le16(buf + 0x08) & 0x0fffu);
++    out->word0c = dp_le16(buf + 0x0c);
++    out->len_b = (dp_u16)(dp_le16(buf + 0x0e) & 0x0fffu);
++    out->word10 = dp_txrx_le32(buf + 0x10);
++    out->word14 = dp_le16(buf + 0x14);
++    out->word16 = dp_le16(buf + 0x16);
++    out->len_c = (dp_u16)(dp_le16(buf + 0x18) & 0x0fffu);
++    out->band_vap = (dp_u8)((buf[0x19] >> 5) & 0x3u);
++    out->flags_1b = buf[0x1b];
++    out->word1c = (dp_u16)(dp_le16(buf + 0x1c) >> 4);
++    out->payload_len = dp_le16(buf + 0x1e);
++    out->word20 = (dp_u16)(dp_le16(buf + 0x20) & 0x0fffu);
++    out->flags_21 = buf[0x21];
++    out->flags_23 = buf[0x23];
++    if (out->payload_len < DP_TXRX_RX_DESC_LEN)
++        return DP_TXRX_EFORMAT; /* vendor skb_put keeps the descriptor inside */
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_rx_dma_ok(const struct dp_txrx_rx_desc *d, size_t ring_buflen)
++{
++    if (d == NULL)
++        return DP_TXRX_EARG;
++    if (d->payload_len < DP_TXRX_RX_DESC_LEN)
++        return DP_TXRX_EFORMAT;
++    if ((size_t)d->payload_len > ring_buflen)
++        return DP_TXRX_EBOUNDS;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_rx_capture_build(const dp_u8 *ring_buf, size_t ring_cap,
++                             dp_u8 ring_kind, dp_u32 ring_index,
++                             struct dp_txrx_rx_capture *out)
++{
++    struct dp_txrx_rx_desc desc;
++    size_t mpdu_len;
++
++    if (out == NULL)
++        return DP_TXRX_EARG;
++    memset(out, 0, sizeof(*out));
++    out->ring_kind = ring_kind;
++    out->ring_index = ring_index;
++    if (ring_buf == NULL)
++        return DP_TXRX_EARG;
++    if (ring_kind > 1u)
++        return DP_TXRX_EARG;
++    if (ring_cap < DP_TXRX_RX_DESC_LEN)
++        return DP_TXRX_ESHORT;
++    if (dp_txrx_rx_desc_parse(ring_buf, ring_cap, &desc) != DP_TXRX_OK)
++        return DP_TXRX_EFORMAT;
++    if (dp_txrx_rx_dma_ok(&desc, ring_cap) != DP_TXRX_OK)
++        return DP_TXRX_EFORMAT;
++    memcpy(out->desc, ring_buf, DP_TXRX_RX_DESC_LEN);
++    out->desc_ok = 1u;
++    mpdu_len = (size_t)desc.payload_len - DP_TXRX_RX_DESC_LEN;
++    if (mpdu_len > DP_TXRX_RX_CAPTURE_MPDU)
++        mpdu_len = DP_TXRX_RX_CAPTURE_MPDU;
++    if (mpdu_len > ring_cap - DP_TXRX_RX_DESC_LEN)
++        mpdu_len = ring_cap - DP_TXRX_RX_DESC_LEN;
++    memcpy(out->mpdu, ring_buf + DP_TXRX_RX_DESC_LEN, mpdu_len);
++    out->mpdu_len = (dp_u16)mpdu_len;
++    return DP_TXRX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* RX bookkeeping                                                     */
++/* ------------------------------------------------------------------ */
++void dp_txrx_rx_state_init(struct dp_txrx_rx_state *st)
++{
++    if (st == NULL)
++        return;
++    memset(st, 0, sizeof(*st));
++}
++
++int dp_txrx_rx_pending(const struct dp_txrx_rx_state *st,
++                       dp_u32 device_cmp_wptr, dp_u32 *count)
++{
++    int n;
++
++    if (st == NULL || count == NULL)
++        return DP_TXRX_EARG;
++    n = dp_txrx_idx_count(device_cmp_wptr, st->cmp_rptr, DP_TXRX_RX_CMP_DEPTH);
++    if (n < 0)
++        return DP_TXRX_EFORMAT;
++    *count = (dp_u32)n;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_rx_plan(const dp_u8 *cmp_ring, size_t cmp_cap,
++                    dp_u32 device_cmp_wptr, struct dp_txrx_rx_state *st,
++                    struct dp_txrx_rx_capture *out)
++{
++    dp_u32 index, count;
++    int rc;
++
++    if (cmp_ring == NULL || st == NULL || out == NULL)
++        return DP_TXRX_EARG;
++    rc = dp_txrx_rx_pending(st, device_cmp_wptr, &count);
++    if (rc != DP_TXRX_OK)
++        return rc;
++    if (count == 0u)
++        return DP_TXRX_EBUSY;
++    index = st->cmp_rptr & 0x7fffu;
++    if (index >= DP_TXRX_RX_CMP_DEPTH || 4u * (index + 1u) > cmp_cap)
++        return DP_TXRX_EBOUNDS;
++    memset(out, 0, sizeof(*out));
++    out->cmp_raw = dp_txrx_le32(cmp_ring + 4u * index);
++    out->ring_kind = 0u;                 /* decoder [U] supplies the kind */
++    out->ring_index = st->cmp_rptr & 0x7fffu;
++    st->last_cmp_raw = out->cmp_raw;
++    st->captured++;
++    return DP_TXRX_OK;                   /* capture-only: pointers not moved */
++}
++
++int dp_txrx_rx_commit(struct dp_txrx_rx_state *st, dp_u8 ring_kind)
++{
++    if (st == NULL)
++        return DP_TXRX_EARG;
++    if (ring_kind > 1u)
++        return DP_TXRX_EARG;
++    st->cmp_rptr = dp_txrx_idx_next(st->cmp_rptr, DP_TXRX_RX_CMP_DEPTH);
++    if (ring_kind == 0u)
++        st->norm_rptr = dp_txrx_idx_next(st->norm_rptr, DP_TXRX_RX_NORM_DEPTH);
++    else
++        st->small_rptr = dp_txrx_idx_next(st->small_rptr,
++                                          DP_TXRX_RX_SMALL_DEPTH);
++    st->consumed++;
++    return DP_TXRX_OK;
++}
++
++int dp_txrx_rx_free_entry(const dp_u32 *entries, size_t entries_count,
++                          dp_u32 host_rptr, dp_u32 *entry)
++{
++    dp_u32 index;
++
++    if (entries == NULL || entry == NULL)
++        return DP_TXRX_EARG;
++    index = host_rptr & 0x7fffu;
++    if (index >= entries_count)
++        return DP_TXRX_EBOUNDS;
++    *entry = entries[index];
++    return DP_TXRX_OK;
++}
+--- /dev/null
++++ b/dp_txrx.h
+@@ -0,0 +1,261 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * dp_txrx.h - first TX/RX data-plane host logic for the Hi5622V100
++ * clean-room driver (Cudy WR3000 v2.0, luofu v2).
++ *
++ * Lane wifi-dp-txrx (shared task task-122). ORIGINAL clean-room code; every
++ * constant below is a decoded protocol fact with an evidence marker:
++ *   [V]  decoded from a named vendor artifact (host .ko / FIRMWARE.bin)
++ *   [V*] device-measured in an earlier project lane
++ *   [I]  inference, must be confirmed on the bench
++ *   [U]  unknown - the code fails closed instead of guessing
++ *
++ * No vendor byte, object or calibration value is embedded here: only derived
++ * constants, offsets and boolean protocol rules (see FRAME-SPECS.md).
++ * This file is device-free C99 (host selftest + kernel extension share it).
++ */
++#ifndef DP_TXRX_H
++#define DP_TXRX_H
++
++#ifdef __KERNEL__
++#include <linux/string.h>
++#include <linux/types.h>
++typedef u8  dp_u8;
++typedef u16 dp_u16;
++typedef u32 dp_u32;
++#else
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++typedef uint8_t  dp_u8;
++typedef uint16_t dp_u16;
++typedef uint32_t dp_u32;
++#endif
++
++enum {
++    DP_TXRX_OK = 0,
++    DP_TXRX_ESHORT = 1,   /* buffer too short */
++    DP_TXRX_EARG = 2,     /* bad argument (range/type) */
++    DP_TXRX_EBOUNDS = 3,  /* would exceed a ring/buffer/window */
++    DP_TXRX_EFORMAT = 4,  /* image fails the fail-closed format check */
++    DP_TXRX_EBUSY = 5,    /* not idle / already captured */
++    DP_TXRX_EUNKNOWN = 6  /* format still [U]: refuse, do not advance */
++};
++
++/* ====================================================================== */
++/* 1. TX: device-RAM MSDU-info ring-pointer table entry (12 bytes)       */
++/* ====================================================================== */
++/* [V] shuangta_tx_msdu_ring_buf_alloc (wifi.ko 2.4.15 0x38f5c):
++ *   entry = { ring_device_va, published_wptr, device_consumed_rptr }
++ * Ring-init writes {devva, 0, 0}; hmac_tx_msdu_ring_push writes only the
++ * packed producer index into +4 after the 8-byte ring entry is visible
++ * (dmb ish), and hmac_tx_msdu_ring_proc reads the device-consumed index from
++ * +8. This corrects the earlier lane's "[U] dwords 1/2" note.
++ * Entry CA = table_base_ca + 12 * (tid + user*8); user <= 0x91, tid <= 7. */
++#define DP_TXRX_TABLE_ENTRY_BYTES 12u
++#define DP_TXRX_TABLE_ENTRY_DWORDS 3u
++#define DP_TXRX_TABLE_ACP_DELTA 0x01000000u /* [V] memmap_get_dev_acp_addr */
++#define DP_TXRX_TABLE_USERS 0x92u
++#define DP_TXRX_TABLE_TIDS 8u
++
++void     dp_txrx_table_entry_pack(dp_u8 out[DP_TXRX_TABLE_ENTRY_BYTES],
++                                  dp_u32 ring_devva, dp_u32 wptr,
++                                  dp_u32 rptr);
++dp_u32 dp_txrx_table_entry_wptr(const dp_u8 e[DP_TXRX_TABLE_ENTRY_BYTES]);
++dp_u32 dp_txrx_table_entry_rptr(const dp_u8 e[DP_TXRX_TABLE_ENTRY_BYTES]);
++int      dp_txrx_table_entry_ca(dp_u32 table_ca, unsigned int user,
++                                unsigned int tid, dp_u32 *ca);
++int      dp_txrx_table_entry_acp(dp_u32 table_ca, unsigned int user,
++                                 unsigned int tid, dp_u32 *acp);
++
++/* ====================================================================== */
++/* 2. TX: 8-byte MSDU-info ring entry (per-TID host-DRAM ring, depth 64) */
++/* ====================================================================== */
++/* [V] hmac_tx_msdu_ring_push 0x19174 / shuangta_set_tx_msdu_info_ring:
++ *   { u32 buf_devva; u32 ctl }
++ *   ctl[11:0]  frame length (skb->len; 12-bit bound)
++ *   ctl[14:12] tx path class (0 for the first frame; vendor default branch)
++ *   ctl[15]    tx header flag
++ *   ctl[19:16] tid / priority nibble
++ *   ctl[21:20] vap type: 1/2/3 (vendor hmac_tx_frame_control_dscr_set writes
++ *              0x10/0x20/0x30 at ctl byte 2 bits 4/5)
++ *   ctl[31:22] not written by the analyzed vendor builder -> zero.
++ * The vendor marks a *processed* entry by OR-ing 0xE0 into byte 7
++ * (shuangta_tx_msdu_info_ring_magic_set); a fresh entry must not carry it. */
++#define DP_TXRX_TXE_BYTES 8u
++#define DP_TXRX_TXE_LEN_MASK 0x00000FFFu
++#define DP_TXRX_TXE_PATH_SHIFT 12u
++#define DP_TXRX_TXE_PATH_MASK 0x00007000u
++#define DP_TXRX_TXE_FLAG15 0x00008000u
++#define DP_TXRX_TXE_TID_MASK 0x000F0000u
++#define DP_TXRX_TXE_VAP_SHIFT 20u
++#define DP_TXRX_TXE_VAP_MASK 0x00300000u
++#define DP_TXRX_TXE_MAGIC_MASK 0xE0000000u
++#define DP_TXRX_TX_RING_DEPTH 64u   /* [V] hmac_tx_msdu_dscr_init */
++#define DP_TXRX_TX_RING_BYTES (DP_TXRX_TX_RING_DEPTH * DP_TXRX_TXE_BYTES)
++#define DP_TXRX_TX_USER_DEFAULT 0u  /* first rings are handed for user 0 [I] */
++
++enum dp_txrx_vap_type {
++    DP_TXRX_VAP_TYPE_1 = 1, /* [V] 0x10 in ctl byte 2 */
++    DP_TXRX_VAP_TYPE_2 = 2, /* [V] 0x20 (AP path in the vendor branch) */
++    DP_TXRX_VAP_TYPE_3 = 3  /* [V] 0x30 (default sub-branch) */
++};
++
++int      dp_txrx_txe_encode(dp_u8 entry[DP_TXRX_TXE_BYTES],
++                            dp_u32 buf_devva, dp_u16 frame_len,
++                            dp_u8 path_class, dp_u8 hdr_flag,
++                            dp_u8 tid, dp_u8 vap_type);
++int      dp_txrx_txe_decode(const dp_u8 entry[DP_TXRX_TXE_BYTES],
++                            dp_u32 *buf_devva, dp_u32 *ctl);
++int      dp_txrx_txe_is_processed(const dp_u8 entry[DP_TXRX_TXE_BYTES]);
++void     dp_txrx_txe_mark_processed(dp_u8 entry[DP_TXRX_TXE_BYTES]);
++
++/* packed ring index (index[14:0] | phase<<15) [V] */
++dp_u32 dp_txrx_idx_pack(dp_u32 index, unsigned int phase);
++void     dp_txrx_idx_unpack(dp_u32 packed, dp_u32 *index,
++                            unsigned int *phase);
++dp_u32 dp_txrx_idx_next(dp_u32 packed, dp_u32 depth);
++/* in-ring distance producer->consumer with packed-index phase semantics.
++ * 0 = empty, depth = full; DP_TXRX_EFORMAT if the pair is inconsistent. */
++int      dp_txrx_idx_count(dp_u32 producer, dp_u32 consumer, dp_u32 depth);
++
++/* ====================================================================== */
++/* 3. TX: frame buffer layout (what the ring entry points at)            */
++/* ====================================================================== */
++/* [V] hmac_tx_msdu_dscr_add 0x19b40 + shuangta_get_msdu_info_ring_addr
++ * 0x38ad8: pskb_expand_head(skb, 0x14, ...); the 20 bytes below skb->data are
++ * zeroed and dword0 is replaced with the skb pointer; the buffer is DMA-mapped
++ * and the ring entry gets devva(skb->data - 0x10). The device-visible part is
++ * therefore the 16 zero bytes at +4..+19 followed by the 802.11 MPDU at +20;
++ * bytes +0..+3 are host bookkeeping.
++ * Clean-room layout: one coherent buffer per posted frame,
++ * [owner u32][16-byte zero DMA header][MPDU]; the MSDU entry devVA is
++ * buffer + 4 because the coherent DMA address already is the device VA in
++ * this driver's identity translation ([V*] E1 dp_setup read-backs). */
++#define DP_TXRX_FRAME_HOST_HDR 4u
++#define DP_TXRX_FRAME_DMA_HDR 16u
++#define DP_TXRX_FRAME_MPDU_OFF (DP_TXRX_FRAME_HOST_HDR + DP_TXRX_FRAME_DMA_HDR)
++#define DP_TXRX_FRAME_AREA 0x400u
++
++int dp_txrx_tx_buffer_init(dp_u8 *buf, size_t cap, dp_u32 owner,
++                           const dp_u8 *mpdu, size_t mpdu_len,
++                           dp_u32 *buf_devva_off);
++int dp_txrx_tx_buffer_check(const dp_u8 *buf, size_t cap);
++
++/* ====================================================================== */
++/* 4. TX: 802.11 MPDU builders for the first frames                      */
++/* ====================================================================== */
++/* 802.11-2016 management/data headers; no FCS (the MAC appends it). A first
++ * AP-mode broadcast frame uses addr1=DA=broadcast, addr2=SA=BSSID,
++ * addr3=BSSID. The FC->vendor-class mapping is [I] (the vendor derives the
++ * class from its own frame object, not from the FC): the ladder starts on the
++ * AP data path (vap type 2). */
++#define DP_TXRX_FC_PROBE_REQ 0x0040u
++#define DP_TXRX_FC_NULL_DATA 0x0048u
++#define DP_TXRX_FC_QOS_NULL 0x00C8u
++#define DP_TXRX_FC_QOS_DATA 0x0088u
++#define DP_TXRX_HDR_LEN 24u
++#define DP_TXRX_QOS_HDR_LEN 26u
++#define DP_TXRX_MAX_MPDU 0x300u
++
++int dp_txrx_build_probe_req(dp_u8 *out, size_t cap, const dp_u8 bssid[6],
++                            dp_u16 seq, size_t *len);
++int dp_txrx_build_null_data(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                            dp_u16 seq, size_t *len);
++int dp_txrx_build_qos_null(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                           dp_u16 seq, size_t *len);
++int dp_txrx_build_arp_bcast(dp_u8 *out, size_t cap, const dp_u8 sa[6],
++                            const dp_u8 sip[4], const dp_u8 tip[4],
++                            dp_u16 seq, size_t *len);
++int dp_txrx_frame_class(dp_u16 fc, dp_u8 *vap_type, dp_u8 *tid,
++                        dp_u8 *hdr_flag);
++
++/* ====================================================================== */
++/* 5. RX: rings, 0x28-byte descriptor, capture + bookkeeping             */
++/* ====================================================================== */
++#define DP_TXRX_RX_NORM_DEPTH 256u   /* [V] */
++#define DP_TXRX_RX_SMALL_DEPTH 512u  /* [V] */
++#define DP_TXRX_RX_CMP_DEPTH 4095u   /* [V] */
++#define DP_TXRX_RX_NORM_BUFLEN 0x63Cu
++#define DP_TXRX_RX_SMALL_BUFLEN 0x00B0u
++#define DP_TXRX_RX_BUF_HDR 4u
++#define DP_TXRX_RX_DESC_LEN 0x28u
++#define DP_TXRX_RX_MPDU_OFF DP_TXRX_RX_DESC_LEN
++#define DP_TXRX_MAC_REG_RXNORM_WPTR 0x38u
++#define DP_TXRX_MAC_REG_RXSMALL_WPTR 0x3cu
++#define DP_TXRX_MAC_REG_RXCMP_RPTR 0x40u
++#define DP_TXRX_MAC_REG_RXCMP_WPTR 0x4cu
++#define DP_TXRX_MAC_REG_RXNORM_RPTR 0x50u
++#define DP_TXRX_MAC_REG_RXSMALL_RPTR 0x54u
++#define DP_TXRX_RX_NORM_ALLOC (DP_TXRX_RX_BUF_HDR + DP_TXRX_RX_NORM_BUFLEN)
++#define DP_TXRX_RX_SMALL_ALLOC (DP_TXRX_RX_BUF_HDR + DP_TXRX_RX_SMALL_BUFLEN)
++
++/* Device-written 0x28-byte RX descriptor, observed field accesses only [V]
++ * (shuangta_host_rx_get_msdu_info_dscr 0x3843c). The parser accepts a
++ * candidate only when payload_len (the vendor's skb_put(len+0x28) field at
++ * +0x1e) is inside the buffer; all other semantics stay [I]/[U]. */
++struct dp_txrx_rx_desc {
++    dp_u16 len_a;       /* +0x08 & 0x0fff  [V] first segment length */
++    dp_u16 word0c;      /* +0x0c raw u16   [V] */
++    dp_u16 len_b;       /* +0x0e & 0x0fff  [V] second length */
++    dp_u32 word10;      /* +0x10 raw u32   [V] device pointer field */
++    dp_u16 word14;      /* +0x14 raw u16   [V] */
++    dp_u16 word16;      /* +0x16 raw u16   [V] */
++    dp_u16 len_c;       /* +0x18 & 0x0fff  [V] length */
++    dp_u8  band_vap;    /* +0x19 bits 6:5  [I] band/vap */
++    dp_u8  flags_1b;    /* +0x1b bits 7:4/3:0 [U] */
++    dp_u16 word1c;      /* +0x1c >> 4      [V] */
++    dp_u16 payload_len; /* +0x1e full u16  [V] vendor skb_put length */
++    dp_u16 word20;      /* +0x20 & 0x0fff  [V] length */
++    dp_u8  flags_21;    /* +0x21 bits 6:4  [U] */
++    dp_u8  flags_23;    /* +0x23 bits 3:0,bit7 [U] */
++};
++int dp_txrx_rx_desc_parse(const dp_u8 *buf, size_t cap,
++                          struct dp_txrx_rx_desc *out);
++
++#define DP_TXRX_RX_CAPTURE_MPDU 128u
++#define DP_TXRX_RX_CAPTURE_MAX 16u
++struct dp_txrx_rx_capture {
++    dp_u32 cmp_raw;    /* 4-byte rx_data_cmp_ring entry, format [U] */
++    dp_u32 ring_index; /* free-ring slot the completion maps to [U] */
++    dp_u8  ring_kind;  /* 0=norm (256), 1=small (512) */
++    dp_u8  desc_ok;    /* descriptor parse accepted */
++    dp_u8  desc[DP_TXRX_RX_DESC_LEN];
++    dp_u16 mpdu_len;
++    dp_u8  mpdu[DP_TXRX_RX_CAPTURE_MPDU];
++};
++int dp_txrx_rx_capture_build(const dp_u8 *ring_buf, size_t ring_cap,
++                             dp_u8 ring_kind, dp_u32 ring_index,
++                             struct dp_txrx_rx_capture *out);
++
++/* RX bookkeeping. The host owns packed rptrs for the two free rings and the
++ * completion ring. The completion-word -> (ring, slot) decoder is [U]; until
++ * the bench capture fixes it the ladder runs capture-only (dp_txrx_rx_plan +
++ * no commit) and the consume path needs the decoder's ring kind, is strictly
++ * sequential (slot must equal the current free-ring rptr) and fails closed. */
++struct dp_txrx_rx_state {
++    dp_u32 norm_rptr;
++    dp_u32 small_rptr;
++    dp_u32 cmp_rptr;
++    dp_u32 captured;  /* raw completion words captured this load */
++    dp_u32 consumed;  /* completion entries consumed (pointers moved) */
++    dp_u32 unknown;   /* refused completion entries */
++    dp_u32 last_cmp_raw;
++};
++void dp_txrx_rx_state_init(struct dp_txrx_rx_state *st);
++int  dp_txrx_rx_pending(const struct dp_txrx_rx_state *st,
++                        dp_u32 device_cmp_wptr, dp_u32 *count);
++int  dp_txrx_rx_plan(const dp_u8 *cmp_ring, size_t cmp_cap,
++                     dp_u32 device_cmp_wptr, struct dp_txrx_rx_state *st,
++                     struct dp_txrx_rx_capture *out);
++int  dp_txrx_rx_commit(struct dp_txrx_rx_state *st, dp_u8 ring_kind);
++int  dp_txrx_rx_free_entry(const dp_u32 *entries, size_t entries_count,
++                           dp_u32 host_rptr, dp_u32 *entry);
++int  dp_txrx_rx_dma_ok(const struct dp_txrx_rx_desc *d, size_t ring_buflen);
++
++/* little-endian helpers shared by both worlds */
++dp_u32 dp_txrx_le32(const dp_u8 *p);
++void     dp_txrx_put_le16(dp_u8 *p, dp_u16 v);
++void     dp_txrx_put_le32(dp_u8 *p, dp_u32 v);
++
++#endif /* DP_TXRX_H */
+--- a/h2d_send.c
++++ b/h2d_send.c
+@@ -118,6 +118,7 @@
+ 	 * actually committed: only a real TXQ frame sets live->txq_submitted. */
+ 	live->txq_submitted = h->h2d_txq_sync_sent > 0u;
+ 	live->ctx_created = h->h2d_ctx_create_sent > 0u;
++	live->txq_addr_sent = h->h2d_txq_addr_sent > 0u;
+ 	live->phase = core->phase;
+ 	live->frames_sent = h->h2d_frames_sent;
+ 	live->budget = h2d_budget();
+@@ -142,7 +143,10 @@
+ 	case H2D_GATE_TXQ_PHASE:
+ 	case H2D_GATE_DUP_TXQ:
+ 	case H2D_GATE_FRAME_INVALID:
++	case H2D_GATE_NEED_CTX:
+ 		return -EPERM;
++	case H2D_GATE_DUP_TXQ_ADDR:
++		return -EBUSY;
+ 	default:
+ 		return -EBUSY;
+ 	}
+@@ -175,8 +179,11 @@
+ /* ------------------------------------------------------------------ */
+ /* the send path                                                       */
+ /* ------------------------------------------------------------------ */
++/* txq_devva != 0 selects the data-plane hand-off (g0 id1 key 0x0320); its
++ * device VA comes from the driver's own DMA allocation, never from user input,
++ * and a valid host-DMA address is never 0x00000000 (window 0x80000000..). */
+ static int h2d_post(struct hi5622_pci *ctx, enum h2d_msg msg, u8 dst,
+-		    u16 user_id, const u8 *addr)
++		    u16 user_id, const u8 *addr, u32 txq_devva)
+ {
+ 	struct hi5622_hcc_service *h;
+ 	struct device *dev;
+@@ -192,16 +199,19 @@
+ 	u32 total = 0, node_len = 0, producer, slot, devva, out2, out0 = 0;
+ 	u32 polls = 0;
+ 	u8 pad_byte = 0;
+-	int ret = 0;
++	int ret = 0, rc;
++	const char *name = h2d_msg_name(msg);
+ 
+ 	if (!ctx || !ctx->hcc)
+ 		return -ENODEV;
+ 	h = ctx->hcc;
+ 	dev = &ctx->pdev->dev;
++	if (txq_devva != 0u)
++		name = "txq_addr_sync";
+ 	if (!ctx->windows_programmed || !h->armed) {
+ 		h2d_note_refused(h, msg, H2D_GATE_NOT_ARMED);
+ 		dev_warn(dev, "H2D %s: refused - run prepare + hcc_arm first (SR rings must be programmed and armed); no device write performed\n",
+-			 h2d_msg_name(msg));
++			 name);
+ 		return -EBUSY;
+ 	}
+ 	core = &h->hcc.core;
+@@ -215,24 +225,34 @@
+ 		goto out;
+ 	}
+ 
+-	/* 1. Exact frame build + full policy validation (no device access). */
+-	if (h2d_msg_build(msg, dst, user_id, addr, f, wire,
+-			  HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr) != 0) {
++	/* 1. Exact frame build + full policy validation (no device access).
++	 * The data-plane hand-off is the one frame outside enum h2d_msg; it is
++	 * built by its own exact builder and the same encode-side validation. */
++	if (txq_devva != 0u)
++		rc = h2d_msg_build_txq_addr(f, txq_devva, wire,
++					    HI5622_HCC_FRAME_MAX_TOTAL,
++					    &total, &herr);
++	else
++		rc = h2d_msg_build(msg, dst, user_id, addr, f, wire,
++				   HI5622_HCC_FRAME_MAX_TOTAL, &total, &herr);
++	if (rc != 0) {
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		dev_warn(dev, "H2D %s: frame refused by the exact builder/validator (%s); no device write performed\n",
+-			 h2d_msg_name(msg), h2d_strerror(herr));
++			 name, h2d_strerror(herr));
+ 		ret = -EPERM;
+ 		goto out;
+ 	}
+ 
+ 	/* Post-buffer length: node_len == frame total for every message except
+-	 * txq_sync72, which declares the vendor's 72-byte live node buffer. */
+-	if (h2d_msg_emit_plan(msg, total, &node_len, &pad_byte) != 0 ||
++	 * txq_sync72, which declares the vendor's 72-byte live node buffer.  The
++	 * data-plane hand-off uses the default (node_len == frame total). */
++	if (h2d_msg_emit_plan(txq_devva != 0u ? H2D_MSG_STUB : msg, total,
++			      &node_len, &pad_byte) != 0 ||
+ 	    node_len < total || node_len > HI5622_HCC_SR_BUF_LEN ||
+ 	    node_len > 0xffffu) {
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		dev_warn(dev, "H2D %s: node length plan refused (frame %u B, node %u B); no device write performed\n",
+-			 h2d_msg_name(msg), total, node_len);
++			 name, total, node_len);
+ 		ret = -EPERM;
+ 		goto out;
+ 	}
+@@ -241,12 +261,13 @@
+ 	 * the service-thread tick only reads/times the mailbox state). */
+ 	mutex_lock(&h->lock);
+ 	h2d_live_fill(ctx, &live);
+-	gate = h2d_gate_check(&live, msg);
++	gate = txq_devva != 0u ? h2d_gate_check_txq_addr(&live) :
++				 h2d_gate_check(&live, msg);
+ 	if (gate != H2D_GATE_OK) {
+ 		mutex_unlock(&h->lock);
+ 		h2d_note_refused(h, msg, gate);
+ 		dev_warn(dev, "H2D %s: refused by the gate '%s' (phase=%s boot_latched=%u budget=%u/%u liveness=%u inflight=0x%08x out0=0x%08x); one frame per idea, no retry\n",
+-			 h2d_msg_name(msg), h2d_gate_name(gate),
++			 name, h2d_gate_name(gate),
+ 			 hcc_phase_name(live.phase),
+ 			 live.boot_latched ? 1u : 0u, live.frames_sent,
+ 			 live.budget, live.liveness_sent, live.mbox_inflight,
+@@ -261,7 +282,7 @@
+ 		mutex_unlock(&h->lock);
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		dev_err(dev, "H2D %s: SR0 slot %u outside depth %u - refused\n",
+-			h2d_msg_name(msg), slot, r->depth);
++			name, slot, r->depth);
+ 		ret = -EINVAL;
+ 		goto out;
+ 	}
+@@ -270,7 +291,7 @@
+ 		mutex_unlock(&h->lock);
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		dev_err(dev, "H2D %s: SR0 buffer 0x%08x outside the RC inbound window - refused\n",
+-			h2d_msg_name(msg), devva);
++			name, devva);
+ 		ret = -ERANGE;
+ 		goto out;
+ 	}
+@@ -280,7 +301,7 @@
+ 		mutex_unlock(&h->lock);
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		dev_warn(dev, "H2D %s: post plan refused (%s); the previous announce is not consumed (H2D_ESTATE) or the frame is invalid - no retry\n",
+-			 h2d_msg_name(msg), h2d_strerror(herr));
++			 name, h2d_strerror(herr));
+ 		ret = herr == H2D_ESTATE ? -EBUSY : -EPERM;
+ 		goto out;
+ 	}
+@@ -310,15 +331,17 @@
+ 		h2d_note_refused(h, msg, H2D_GATE_FRAME_INVALID);
+ 		mutex_unlock(&h->lock);
+ 		dev_err(dev, "H2D %s: core refused the SR commit (%d) AFTER the wire write; one-frame rule: no retry - record SR0 producer/consumer and power-cycle\n",
+-			h2d_msg_name(msg), ret);
++			name, ret);
+ 		goto out;
+ 	}
+ 	h->h2d_frames_sent++;
+-	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
++	if (txq_devva != 0u)
++		h->h2d_txq_addr_sent++;
++	else if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
+ 		h->h2d_txq_sync_sent++;
+ 	else if (h2d_msg_is_ctx(msg))
+ 		h->h2d_ctx_create_sent++;
+-	h->h2d_last_msg = (u32)msg;
++	h->h2d_last_msg = txq_devva != 0u ? (u32)H2D_MSG_COUNT : (u32)msg;
+ 	h->h2d_last_gate = (u32)H2D_GATE_OK;
+ 	h->h2d_last_total = total;
+ 	h->h2d_last_node_len = node_len;
+@@ -341,14 +364,14 @@
+ 	if (!out0) {
+ 		h->h2d_send_ok++;
+ 		dev_info(dev, "H2D %s: frame %u B in a %u B node committed on SR0 slot %u devva 0x%08x node word1 0x%08x producer 0x%08x -> 0x%08x; coalesced announce id%u out[0]=0x%08x CONSUMED after %u polls; core phase=%s\n",
+-			 h2d_msg_name(msg), total, node_len, slot, devva,
++			 name, total, node_len, slot, devva,
+ 			 plan.sr.node_word1, producer, plan.sr.producer_after,
+ 			 HI5622_H2D_MSG_ETE_ANNOUNCE, out0, polls,
+ 			 hcc_phase_name(core->phase));
+ 	} else {
+ 		h->h2d_send_timeout++;
+ 		dev_warn(dev, "H2D %s: announce NOT consumed within the bounded window (out[0]=0x%08x after %u polls, lane_closed=%u); the core closes the H2D lane on its own 1000 ms timeout - NO RETRY in this session\n",
+-			 h2d_msg_name(msg), out0, polls,
++			 name, out0, polls,
+ 			 core->h2d_lane_closed ? 1u : 0u);
+ 		ret = -ETIMEDOUT;
+ 	}
+@@ -374,7 +397,7 @@
+ 	if (!sysfs_streq(buf, "1"))
+ 		return -EINVAL;
+ 	/* The canned vendor first post-ready frame is byte-exact with dst 0. */
+-	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC, 0u, 0u, NULL);
++	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC, 0u, 0u, NULL, 0u);
+ 	return ret ? ret : (ssize_t)count;
+ }
+ static DEVICE_ATTR_WO(h2d_txq_sync);
+@@ -392,7 +415,7 @@
+ 		return -ENODEV;
+ 	if (!sysfs_streq(buf, "1"))
+ 		return -EINVAL;
+-	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC72, 0u, 0u, NULL);
++	ret = h2d_post(ctx, H2D_MSG_TXQ_SYNC72, 0u, 0u, NULL, 0u);
+ 	return ret ? ret : (ssize_t)count;
+ }
+ static DEVICE_ATTR_WO(h2d_txq_sync72);
+@@ -426,10 +449,24 @@
+ 		msg = H2D_MSG_CTX_CREATE;
+ 	else
+ 		return -EINVAL;
+-	ret = h2d_post(ctx, msg, 0u, 0u, NULL);
++	ret = h2d_post(ctx, msg, 0u, 0u, NULL, 0u);
+ 	return ret ? ret : (ssize_t)count;
+ }
+ static DEVICE_ATTR_WO(h2d_ctx_create);
++
++/* The data-plane hand-off frame (wifi-dp-air merge): group-0 id-1 hdpp config
++ * event, key 0x0320, 4-byte device VA of the host-DRAM TXQ table.  Called by
++ * hi5622_dp.c after dp_setup succeeded; carries no sysfs grammar of its own
++ * because the value is the DMA address the driver allocated (never user
++ * input).  One frame per load, gated on this load's context-create. */
++int h2d_post_txq_addr(struct hi5622_pci *ctx, u32 txq_devva)
++{
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	if (!txq_devva)
++		return -EINVAL;
++	return h2d_post(ctx, H2D_MSG_STUB, 0u, 0u, NULL, txq_devva);
++}
+ 
+ static ssize_t h2d_send_store(struct device *dev, struct device_attribute *attr,
+ 			      const char *buf, size_t count)
+@@ -448,7 +485,7 @@
+ 		return ret;
+ 	}
+ 	ret = h2d_post(ctx, req.msg, req.dst, req.user_id,
+-		       req.has_addr ? req.addr : NULL);
++		       req.has_addr ? req.addr : NULL, 0u);
+ 	return ret ? ret : (ssize_t)count;
+ }
+ static DEVICE_ATTR_WO(h2d_send);
+@@ -475,28 +512,30 @@
+ 			 h2d_budget(), h->h2d_frames_sent, h->h2d_txq_sync_sent,
+ 			 h->h2d_ctx_create_sent);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+-			 "state: armed=%u released=%u boot_latched=%u phase=%s lane_closed=%u liveness_used=%u ctx_created=%u\n",
++			 "state: armed=%u released=%u boot_latched=%u phase=%s lane_closed=%u liveness_used=%u ctx_created=%u txq_addr_sent=%u\n",
+ 			 live.armed ? 1u : 0u, live.released ? 1u : 0u,
+ 			 live.boot_latched ? 1u : 0u,
+ 			 hcc_phase_name(core->phase),
+ 			 live.lane_closed ? 1u : 0u,
+-			 live.liveness_sent, live.ctx_created ? 1u : 0u);
++			 live.liveness_sent, live.ctx_created ? 1u : 0u,
++			 live.txq_addr_sent ? 1u : 0u);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+-			 "gates: txq_sync=%s txq_sync72=%s ctx_create(t1/t2/t3)=%s/%s/%s real_msg=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
++			 "gates: txq_sync=%s txq_sync72=%s ctx_create(t1/t2/t3)=%s/%s/%s real_msg=%s txq_addr_sync=%s out[0]=0x%08x mbox_inflight=0x%08x\n",
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC)),
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_TXQ_SYNC72)),
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T1)),
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE_T2)),
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_CTX_CREATE)),
+ 			 h2d_gate_name(h2d_gate_check(&live, H2D_MSG_EDCA_OPT)),
++			 h2d_gate_name(h2d_gate_check_txq_addr(&live)),
+ 			 live.out0, live.mbox_inflight);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+-			 "counters: ok=%llu timeout=%llu refused=%llu desync=%u last_out0=0x%08x max_polls=%u\n",
++			 "counters: ok=%llu timeout=%llu refused=%llu desync=%u txq_addr_sent=%u last_out0=0x%08x max_polls=%u\n",
+ 			 (unsigned long long)h->h2d_send_ok,
+ 			 (unsigned long long)h->h2d_send_timeout,
+ 			 (unsigned long long)h->h2d_send_refused,
+-			 h->h2d_desync, h->h2d_send_last_out0,
+-			 h->h2d_send_max_polls);
++			 h->h2d_desync, h->h2d_txq_addr_sent,
++			 h->h2d_send_last_out0, h->h2d_send_max_polls);
+ 	if (!h->h2d_frames_sent && !h->h2d_send_refused &&
+ 	    !h->h2d_send_timeout)
+ 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+@@ -504,6 +543,8 @@
+ 	else
+ 		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+ 				 "last attempt: msg=%s gate=%s wire_total=%u node_len=%u\n",
++				 h->h2d_last_msg >= (u32)H2D_MSG_COUNT ?
++				 "txq_addr_sync" :
+ 				 h2d_msg_name((enum h2d_msg)h->h2d_last_msg),
+ 				 h2d_gate_name((enum h2d_gate)h->h2d_last_gate),
+ 				 h->h2d_last_total, h->h2d_last_node_len);
+--- a/h2d_send.h
++++ b/h2d_send.h
+@@ -17,6 +17,11 @@
+  * multi-message session. */
+ extern unsigned int hi5622_h2d_send_budget;
+ 
++/* The data-plane hand-off (g0 id1 key 0x0320): 4-byte device VA of the
++ * host-DRAM TXQ table, committed through the same exact-frame carrier/gates as
++ * the other post-ready messages.  Called by hi5622_dp.c only. */
++int  h2d_post_txq_addr(struct hi5622_pci *ctx, u32 txq_devva);
++
+ int  hi5622_h2d_add_attrs(struct device *dev);
+ void hi5622_h2d_del_attrs(struct device *dev);
+ 
+--- a/h2d_send_logic.c
++++ b/h2d_send_logic.c
+@@ -124,6 +124,8 @@
+ 	case H2D_GATE_DUP_CTX:		return "ctx_already_created";
+ 	case H2D_GATE_CTX_PHASE:	return "ctx_phase_not_ready";
+ 	case H2D_GATE_FRAME_INVALID:	return "frame_invalid";
++	case H2D_GATE_NEED_CTX:		return "ctx_create_required";
++	case H2D_GATE_DUP_TXQ_ADDR:	return "txq_addr_already_sent";
+ 	default:			return "?";
+ 	}
+ }
+@@ -178,12 +180,13 @@
+ 	       phase == HCC_PHASE_ACTIVE;
+ }
+ 
+-enum h2d_gate h2d_gate_check(const struct h2d_live *live, enum h2d_msg msg)
+-{
+-	if (!live || msg >= H2D_MSG_COUNT)
++/* Common boot-stage gates: never post H2D during the ROM boot stage and
++ * never before the transport release (project hard rules).  Shared by every
++ * message gate so a later family cannot accidentally skip one. */
++static enum h2d_gate h2d_gate_check_pre(const struct h2d_live *live)
++{
++	if (!live)
+ 		return H2D_GATE_BAD_MSG;
+-	/* Boot-stage gates first: never post H2D during the ROM boot stage and
+-	 * never before the transport release (project hard rules). */
+ 	if (!live->armed)
+ 		return H2D_GATE_NOT_ARMED;
+ 	if (!live->released)
+@@ -195,6 +198,34 @@
+ 	/* Core phase must be READY_TXQ_SYNC or later (FAILED is not "later"). */
+ 	if (!h2d_phase_ok(live->phase))
+ 		return H2D_GATE_PHASE;
++	return H2D_GATE_OK;
++}
++
++/* Common per-load emission gates: one idea per frame, budget, and the
++ * coalescing preconditions (the device must have consumed the previous
++ * announce word before a new SR commit may publish another). */
++static enum h2d_gate h2d_gate_check_post(const struct h2d_live *live)
++{
++	if (live->liveness_sent)
++		return H2D_GATE_LIVENESS_USED;
++	if (live->frames_sent >= live->budget)
++		return H2D_GATE_BUDGET;
++	if (live->mbox_inflight)
++		return H2D_GATE_INFLIGHT;
++	if (live->out0)
++		return H2D_GATE_OUT0_PENDING;
++	return H2D_GATE_OK;
++}
++
++enum h2d_gate h2d_gate_check(const struct h2d_live *live, enum h2d_msg msg)
++{
++	enum h2d_gate g;
++
++	if (!live || msg >= H2D_MSG_COUNT)
++		return H2D_GATE_BAD_MSG;
++	g = h2d_gate_check_pre(live);
++	if (g != H2D_GATE_OK)
++		return g;
+ 	if (h2d_msg_is_ctx(msg)) {
+ 		/* The context-create must precede the TXQ sync and allocates the
+ 		 * single ctx+0x190 buffer, so it is READY-only and once per load.
+@@ -220,19 +251,26 @@
+ 		      (live->phase == HCC_PHASE_ACTIVE && live->ctx_created)))
+ 			return H2D_GATE_TXQ_PHASE;
+ 	}
+-	/* One idea, one frame: the liveness stub and a real message are
+-	 * mutually exclusive in a module load. */
+-	if (live->liveness_sent)
+-		return H2D_GATE_LIVENESS_USED;
+-	if (live->frames_sent >= live->budget)
+-		return H2D_GATE_BUDGET;
+-	/* Coalescing preconditions: the device must have consumed the previous
+-	 * announce word before a new SR commit may publish another. */
+-	if (live->mbox_inflight)
+-		return H2D_GATE_INFLIGHT;
+-	if (live->out0)
+-		return H2D_GATE_OUT0_PENDING;
+-	return H2D_GATE_OK;
++	return h2d_gate_check_post(live);
++}
++
++/* The data-plane hand-off (0x0320) is legal only after this load's
++ * context-create (the firmware worker resolves the module context) and at
++ * most once per load; every common gate still applies. */
++enum h2d_gate h2d_gate_check_txq_addr(const struct h2d_live *live)
++{
++	enum h2d_gate g;
++
++	if (!live)
++		return H2D_GATE_BAD_MSG;
++	g = h2d_gate_check_pre(live);
++	if (g != H2D_GATE_OK)
++		return g;
++	if (live->txq_addr_sent)
++		return H2D_GATE_DUP_TXQ_ADDR;
++	if (!live->ctx_created)
++		return H2D_GATE_NEED_CTX;
++	return h2d_gate_check_post(live);
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -269,6 +307,77 @@
+ 	return h2d_build_g0_cfg_event(f, 1u, dst, H2D_CTX_FA, user,
+ 				      H2D_CTX_FC, h2d_ctx_token, H2D_CTX_KEY,
+ 				      data, (u16)sizeof(data), h2d_ctx_tail, err);
++}
++
++/* The data-plane hand-off frame (wifi-dp-air merge): group 0 / id 1,
++ * key 0x0320, len 4, data = u32 LE device VA of the host-DRAM TXQ table.
++ * Payload = token[8] (zero) | key | len | data | tail[4] (zero); declared
++ * total 0x20, node len = total.  Same exact config-event builder family as
++ * the ctx-create / txq-sync frames.  Only the vendor-shaped dst 0 / fb 0
++ * instance exists (fb is header field B, stored as 0 by the vendor). */
++int h2d_build_txq_addr_sync(struct h2d_frame *f, u8 dst, u8 fb, u32 txq_devva,
++			    enum h2d_err *err)
++{
++	u8 data[4];
++	u8 token[8];
++	u8 tail[4];
++
++	if (dst != 0u || fb > H2D_MAX_DST) {
++		if (err)
++			*err = H2D_EPOLICY;
++		return -1;
++	}
++	data[0] = (u8)(txq_devva & 0xffu);
++	data[1] = (u8)((txq_devva >> 8) & 0xffu);
++	data[2] = (u8)((txq_devva >> 16) & 0xffu);
++	data[3] = (u8)((txq_devva >> 24) & 0xffu);
++	memset(token, 0, sizeof(token));
++	memset(tail, 0, sizeof(tail));
++	return h2d_build_g0_id1_hdpp_txq_sync(f, dst, 0u, fb, token,
++					      H2D_TXQ_ADDR_KEY, data,
++					      (u16)sizeof(data), tail, err);
++}
++
++/* Build + validate + wire-encode the data-plane hand-off: the exact builder
++ * above followed by the same transport/firmware/handler/policy validation the
++ * general path runs, so no byte can reach the ring unvalidated. */
++int h2d_msg_build_txq_addr(struct h2d_frame *f, u32 txq_devva, u8 *wire,
++			   u32 cap, u32 *total, enum h2d_err *err)
++{
++	size_t wire_len = 0;
++	enum h2d_err e = H2D_OK;
++
++	if (!f || !wire || !total) {
++		if (err)
++			*err = H2D_EARG;
++		return -1;
++	}
++	/* A zero device VA is never a valid TXQ-table hand-off (the host-DMA
++	 * window starts at 0x80000000); fail closed before the frame is built. */
++	if (txq_devva == 0u) {
++		if (err)
++			*err = H2D_EPOLICY;
++		return -1;
++	}
++	if (h2d_build_txq_addr_sync(f, 0u, 0u, txq_devva, &e) != 0) {
++		if (err)
++			*err = e;
++		return -1;
++	}
++	if (h2d_frame_encode(f, wire, (size_t)cap, &wire_len, &e) != 0) {
++		if (err)
++			*err = e;
++		return -1;
++	}
++	if (wire_len > 0xffffu) {
++		if (err)
++			*err = H2D_EBOUNDS;
++		return -1;
++	}
++	*total = (u32)wire_len;
++	if (err)
++		*err = H2D_OK;
++	return 0;
+ }
+ 
+ int h2d_msg_build(enum h2d_msg msg, u8 dst, u16 user_id, const u8 *addr,
+--- a/h2d_send_logic.h
++++ b/h2d_send_logic.h
+@@ -61,6 +61,21 @@
+ #define H2D_TXQ_TOTAL		0x30u
+ #define H2D_TXQ_NODE_LEN	72u
+ #define H2D_TXQ_PAD_BYTE	0xffu
++
++/* The data-plane hand-off (wifi-dp-air merge, task-126): the vendor's
++ * TXQ-table address sync (hmac_txq_table_addr_sync ->
++ * hdpp_config_send_event(cmd=0x320, len=4, data=&devva)): group 0 id 1,
++ * header field B = 0, token zero, 4-byte LE device VA of the host-DRAM
++ * 0x2524-byte TXQ table, zero tail; declared total 0x20, node length = total.
++ * Firmware worker CA 0x81445 stores the dword into firmware RAM at
++ * (band-array base) + 0x252C*band + 0x2524 [V: FIRMWARE.bin disassembly].
++ *
++ * Deliberately NOT an enum h2d_msg member: the inherited message table (and
++ * the host regression test's every-message emission loop) stays byte-for-byte
++ * unchanged.  The hand-off is driven by h2d_post_txq_addr() (h2d_send.c) with
++ * its own builder and gate below. */
++#define H2D_TXQ_ADDR_TOTAL	0x20u
++#define H2D_TXQ_ADDR_KEY	0x0320u
+ 
+ /* The ordered precondition of txq_sync: the group-0 / id-1 config event with
+  * u16 key = 0x0064 at payload+8 (hdpp_config_send_event shape token[8] | key |
+@@ -94,6 +109,8 @@
+ 	H2D_GATE_DUP_CTX,	/* ctx_create already committed this load */
+ 	H2D_GATE_CTX_PHASE,	/* ctx_create is legal only in READY_TXQ_SYNC */
+ 	H2D_GATE_FRAME_INVALID,	/* the frame builder/validator refused */
++	H2D_GATE_NEED_CTX,	/* data-plane hand-off needs this load's ctx_create */
++	H2D_GATE_DUP_TXQ_ADDR,	/* the 0x0320 hand-off was already sent this load */
+ };
+ 
+ /* Live driver-state snapshot the gate needs (filled by h2d_send.c or a test
+@@ -105,6 +122,7 @@
+ 	bool		lane_closed;
+ 	bool		txq_submitted;	/* a REAL txq_sync/txq_sync72 frame was sent */
+ 	bool		ctx_created;	/* a ctx_create frame was sent this load */
++	bool		txq_addr_sent;	/* the key-0x320 data-plane hand-off was sent */
+ 	enum hcc_phase	phase;
+ 	hcc_u32		frames_sent;	/* real H2D frames posted this load */
+ 	hcc_u32		budget;		/* per-load real-frame budget */
+@@ -156,6 +174,24 @@
+  * The production path only uses the defaults (type 3 / vap 4 / user 4). */
+ int h2d_build_ctx_create(struct h2d_frame *f, u8 dst, u8 ctx_type, u8 vap,
+ 			 u8 user, enum h2d_err *err);
++
++/* The data-plane hand-off builder (wifi-dp-air merge): group 0 / id 1,
++ * key 0x0320, len 4, data = u32 LE device VA of the host-DRAM TXQ table.
++ * EXACT builder derived from hmac_txq_table_addr_sync and the firmware worker
++ * it reaches; dst/fb are the canned 0/0 of the vendor frame. */
++int h2d_build_txq_addr_sync(struct h2d_frame *f, u8 dst, u8 fb, u32 txq_devva,
++			    enum h2d_err *err);
++
++/* Build + validate + wire-encode the data-plane hand-off frame.  Same
++ * contract as h2d_msg_build(), for the message that is deliberately not in
++ * enum h2d_msg (see the H2D_TXQ_ADDR_* comment). */
++int h2d_msg_build_txq_addr(struct h2d_frame *f, u32 txq_devva, u8 *wire,
++			   u32 cap, u32 *total, enum h2d_err *err);
++
++/* Gate for the data-plane hand-off: every common boot/phase/budget gate of
++ * h2d_gate_check() plus "this load's context-create happened" and "sent at
++ * most once per load".  No IO; host-testable. */
++enum h2d_gate h2d_gate_check_txq_addr(const struct h2d_live *live);
+ 
+ /* Strict sysfs grammar:
+  *   h2d_send: "txq_sync" | "txq_sync72" | "ctx_create" | "ctx_create_t1" |
+--- /dev/null
++++ b/hi5622_dp.c
+@@ -0,0 +1,904 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_dp.c - MAC host-interface data-plane bring-up for the Hi5622V100
++ * clean-room driver (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (wifi-datapath-bringup lane, shared task task-111,
++ * 2026-11-25).  No vendor source/object code, firmware byte, calibration value,
++ * per-unit identity or vendor text is reproduced.  Every constant and the
++ * register-program order is a derived fact with evidence markers in REPORT.md /
++ * FRAME-SPECS.md (static decode re-asserted by tools/dp_static_decode.py).
++ *
++ * What this adds on top of the working HCC control plane (clean driver +
++ * post-ready H2D messages):
++ *
++ *   dp_probe     (RO)  ONE read-only word read of MAC band-0 +0x00: the
++ *                      reachability probe that must PASS before any MAC write.
++ *   dp_setup     (WO)  allocate the host-DRAM data rings (TXQ table 0x2524,
++ *                      8 per-TID MSDU-info rings of 64 x 8 B, tx_ba_info
++ *                      0x800 B, RX norm/small free rings 256/512 x 4 B,
++ *                      completion ring 4095 x 4 B, 0x63c/0xb0 buffer pools),
++ *                      write the device-RAM MSDU-info ring-pointer table
++ *                      (12-byte entries {ring devVA,0,0} at ACP table base),
++ *                      fill the RX free rings entirely (wptr -> 0x8000) and
++ *                      program MAC slot-5 band 0 in the vendor order with
++ *                      read-back verification of every write.  Gated on:
++ *                      windows programmed + SR armed + CPU released + latched
++ *                      golden boot + READY_TXQ_SYNC/ACTIVE + this load's
++ *                      context-create + a passed dp_probe.
++ *   dp_txq_sync  (WO)  ONE group-0 id-1 key-0x0320 frame carrying the device VA
++ *                      of the allocated TXQ table, through the existing exact
++ *                      H2D carrier (SR node + mailbox id-3 announce + bounded
++ *                      out[0] poll).  Gated on dp_setup + h2d_send_budget.
++ *   dp_status    (RO)  counters, gates, ring/table device VAs, MAC read-back.
++ *   dp_rings     (RO)  live MAC slot-5 register snapshot + device-RAM table and
++ *                      ring index read-out for the bench (reads only).
++ *
++ * HARD SAFETY (unchanged project rules): probe performs no writes; no register
++ * is written outside MAC band 0; the MAC block is never touched before
++ * dp_probe passed in the same module load; every value is range-checked before
++ * a write; CA 0x400392f0 (out[5]) and the RC misc window are never touched;
++ * one setup per module load and no retry after a partial program (the lane is
++ * marked failed and every later setup/txq request is refused until reload).
++ */
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/pci.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#include "hi5622_driver.h"
++#include "hi5622_hcc.h"
++#include "hi5622_dp.h"
++#include "h2d_send.h"
++#include "dp_rings.h"
++#include "hi5622_dp_txrx.h"
++
++/* Host bookkeeping + DMA area size per RX buffer (vendor: 4-byte skb word
++ * followed by the descriptor/MPDU area). */
++#define DP_RX_NORM_ALLOC (DP_RX_BUF_HDR + DP_RX_NORM_BUFLEN)
++#define DP_RX_SMALL_ALLOC (DP_RX_BUF_HDR + DP_RX_SMALL_BUFLEN)
++#define DP_DP_MAC_ALL_OFF_REGS 18u
++#define DP_DP_MAC_ALL_OFF_MAX 0x54u
++
++struct hi5622_dp {
++    struct device *dev;
++    struct mutex lock;
++    bool probe_ok;
++    bool setup_done;
++    bool failed;
++    bool txq_sent;
++    u32 probe_bar0;
++    u32 probe_value;
++
++    /* device-RAM MSDU-info ring-pointer table (ready g4 id2 payload) */
++    u32 ready_payload;
++    u32 msdu_table_ca;
++    u32 msdu_table_acp;
++    u32 table_entries_written;
++
++    /* host-DRAM rings/tables (dma_alloc_coherent) */
++    void *txq_table;
++    dma_addr_t txq_table_dma;
++    u32 txq_table_devva;
++
++    void *tx_msdu_rings;
++    dma_addr_t tx_msdu_rings_dma;
++
++    void *txba;
++    dma_addr_t txba_dma;
++
++    void *rx_norm_ring;
++    dma_addr_t rx_norm_ring_dma;
++    void *rx_small_ring;
++    dma_addr_t rx_small_ring_dma;
++    void *rx_cmp_ring;
++    dma_addr_t rx_cmp_ring_dma;
++
++    /* per-buffer RX pools (allocated one coherent buffer each: no high-order
++     * allocation, so setup cannot fail on a fragmented post-boot allocator) */
++    void **rx_norm_cpu;
++    dma_addr_t *rx_norm_dma;
++    void **rx_small_cpu;
++    dma_addr_t *rx_small_dma;
++
++    /* last executed MAC program + read-backs */
++    unsigned int mac_reg_count;
++    u32 mac_written[DP_MAC_REG_COUNT];
++    u32 mac_readback[DP_MAC_REG_COUNT];
++    u32 mac_snapshot[DP_DP_MAC_ALL_OFF_REGS];
++    bool mac_snapshot_valid;
++    u32 last_err;
++};
++
++static const u8 dp_mac_all_offs[DP_DP_MAC_ALL_OFF_REGS] = {
++    0x00u, 0x04u, 0x10u, 0x1cu, 0x20u, 0x24u, 0x28u, 0x2cu,
++    0x30u, 0x34u, 0x38u, 0x3cu, 0x40u, 0x44u, 0x48u, 0x4cu,
++    0x50u, 0x54u,
++};
++
++/* ------------------------------------------------------------------ */
++/* small helpers                                                       */
++/* ------------------------------------------------------------------ */
++static struct hi5622_pci *dp_ctx(struct device *dev)
++{
++    return pci_get_drvdata(to_pci_dev(dev));
++}
++
++static u32 dp_le32(const u8 *p)
++{
++    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
++           ((u32)p[3] << 24);
++}
++
++/* Device CA -> BAR0 window offset, refusing anything the six vendor inbound
++ * regions do not cover (the transport's contract). */
++static u32 dp_ca_bar0(struct hi5622_pci *ctx, u32 ca)
++{
++    u32 off = hi5622_ca_to_bar0(ca);
++
++    if (!off) {
++        dev_err(&ctx->pdev->dev,
++                "DP: CA 0x%08x is outside the six inbound regions - refused\n",
++                ca);
++        return 0;
++    }
++    return off;
++}
++
++static u32 dp_mac_read(struct hi5622_pci *ctx, u32 off)
++{
++    u32 bar0 = dp_ca_bar0(ctx, DP_MAC_CA_BAND0 + off);
++
++    if (!bar0)
++        return 0xffffffffu;
++    return readl(ctx->bar0 + bar0);
++}
++
++static void dp_mac_write(struct hi5622_pci *ctx, u32 off, u32 val)
++{
++    u32 bar0 = dp_ca_bar0(ctx, DP_MAC_CA_BAND0 + off);
++
++    if (!bar0)
++        return;
++    writel(val, ctx->bar0 + bar0);
++}
++
++/* Vendor-order MAC program with RMW, immediate read-back and masked compare. */
++static int dp_mac_program_and_verify(struct hi5622_pci *ctx,
++                                     const struct dp_mac_params *p)
++{
++    struct device *dev = &ctx->pdev->dev;
++    struct hi5622_dp *dp = ctx->dp;
++    struct dp_mac_reg regs[DP_MAC_REG_COUNT];
++    unsigned int count = 0, i;
++    int rc;
++
++    rc = dp_mac_program(p, regs, ARRAY_SIZE(regs), &count);
++    if (rc) {
++        dev_err(dev, "DP: MAC register program rejected (%d)\n", rc);
++        return -EINVAL;
++    }
++    if (count != DP_MAC_REG_COUNT) {
++        dev_err(dev, "DP: MAC register program count %u != %u\n",
++                count, DP_MAC_REG_COUNT);
++        return -EINVAL;
++    }
++    dp->mac_reg_count = count;
++    for (i = 0; i < count; i++) {
++        u32 val;
++
++        if (regs[i].mask == 0xffffffffu)
++            val = regs[i].value;
++        else
++            val = (dp_mac_read(ctx, regs[i].off) & ~regs[i].mask) |
++                  (regs[i].value & regs[i].mask);
++        dp->mac_written[i] = val;
++        dp_mac_write(ctx, regs[i].off, val);
++        dp->mac_readback[i] = dp_mac_read(ctx, regs[i].off);
++        if ((dp->mac_readback[i] & regs[i].mask) != (val & regs[i].mask)) {
++            dev_err(dev,
++                    "DP: MAC +0x%02x read-back 0x%08x != written 0x%08x (mask 0x%08x) - stop, no retry\n",
++                    regs[i].off, dp->mac_readback[i], val, regs[i].mask);
++            return -EIO;
++        }
++    }
++    return 0;
++}
++
++static void dp_snapshot_mac(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    unsigned int i;
++
++    for (i = 0; i < DP_DP_MAC_ALL_OFF_REGS; i++)
++        dp->mac_snapshot[i] = dp_mac_read(ctx, dp_mac_all_offs[i]);
++    dp->mac_snapshot_valid = true;
++}
++
++/* ------------------------------------------------------------------ */
++/* DMA allocation / free                                              */
++/* ------------------------------------------------------------------ */
++static void *dp_dma_alloc(struct hi5622_pci *ctx, size_t size,
++                          dma_addr_t *dma, const char *what)
++{
++    struct device *dev = &ctx->pdev->dev;
++    void *p;
++
++    if (!size || !dma)
++        return NULL;
++    p = dma_alloc_coherent(dev, size, dma, GFP_KERNEL);
++    if (!p) {
++        dev_err(dev, "DP: dma_alloc_coherent(%zu B, %s) failed\n",
++                size, what);
++        return NULL;
++    }
++    if ((u64)*dma < (u64)DP_HOST_DMA_LO ||
++        (u64)*dma > (u64)DP_HOST_DMA_HI) {
++        dev_err(dev,
++                "DP: %s DMA address 0x%llx outside the device-visible host window 0x%08x..0x%08x - refused\n",
++                what, (unsigned long long)*dma, DP_HOST_DMA_LO,
++                DP_HOST_DMA_HI);
++        dma_free_coherent(dev, size, p, *dma);
++        return NULL;
++    }
++    memset(p, 0, size);
++    return p;
++}
++
++static void dp_free_rx_pool(struct hi5622_pci *ctx, void ***cpu,
++                            dma_addr_t **dma, unsigned int count, size_t size)
++{
++    struct device *dev = &ctx->pdev->dev;
++    unsigned int i;
++
++    if (!cpu || !dma || !*cpu || !*dma)
++        return;
++    for (i = 0; i < count; i++) {
++        if ((*cpu)[i] && (*dma)[i] != 0) {
++            dma_free_coherent(dev, size, (*cpu)[i], (*dma)[i]);
++            (*cpu)[i] = NULL;
++            (*dma)[i] = 0;
++        }
++    }
++    kfree(*cpu);
++    kfree(*dma);
++    *cpu = NULL;
++    *dma = NULL;
++}
++
++static int dp_alloc_rx_pool(struct hi5622_pci *ctx, void ***cpu,
++                            dma_addr_t **dma, unsigned int count,
++                            size_t size, const char *what)
++{
++    void **c;
++    dma_addr_t *d;
++    unsigned int i;
++
++    c = kcalloc(count, sizeof(*c), GFP_KERNEL);
++    d = kcalloc(count, sizeof(*d), GFP_KERNEL);
++    if (!c || !d) {
++        kfree(c);
++        kfree(d);
++        return -ENOMEM;
++    }
++    *cpu = c;
++    *dma = d;
++    for (i = 0; i < count; i++) {
++        c[i] = dp_dma_alloc(ctx, size, &d[i], what);
++        if (!c[i]) {
++            dp_free_rx_pool(ctx, cpu, dma, count, size);
++            return -ENOMEM;
++        }
++    }
++    return 0;
++}
++
++static void dp_free_rings(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    struct device *dev = &ctx->pdev->dev;
++
++    if (!dp)
++        return;
++    dp_free_rx_pool(ctx, &dp->rx_norm_cpu, &dp->rx_norm_dma,
++                    DP_RX_NORM_DEPTH, DP_RX_NORM_ALLOC);
++    dp_free_rx_pool(ctx, &dp->rx_small_cpu, &dp->rx_small_dma,
++                    DP_RX_SMALL_DEPTH, DP_RX_SMALL_ALLOC);
++    if (dp->rx_cmp_ring) {
++        dma_free_coherent(dev, DP_RXCMP_RING_BYTES, dp->rx_cmp_ring,
++                          dp->rx_cmp_ring_dma);
++        dp->rx_cmp_ring = NULL;
++        dp->rx_cmp_ring_dma = 0;
++    }
++    if (dp->rx_small_ring) {
++        dma_free_coherent(dev, DP_RX_SMALL_RING_BYTES, dp->rx_small_ring,
++                          dp->rx_small_ring_dma);
++        dp->rx_small_ring = NULL;
++        dp->rx_small_ring_dma = 0;
++    }
++    if (dp->rx_norm_ring) {
++        dma_free_coherent(dev, DP_RX_NORM_RING_BYTES, dp->rx_norm_ring,
++                          dp->rx_norm_ring_dma);
++        dp->rx_norm_ring = NULL;
++        dp->rx_norm_ring_dma = 0;
++    }
++    if (dp->txba) {
++        dma_free_coherent(dev, DP_TXBA_BYTES, dp->txba, dp->txba_dma);
++        dp->txba = NULL;
++        dp->txba_dma = 0;
++    }
++    if (dp->tx_msdu_rings) {
++        dma_free_coherent(dev, DP_TX_MSDU_RING_BYTES, dp->tx_msdu_rings,
++                          dp->tx_msdu_rings_dma);
++        dp->tx_msdu_rings = NULL;
++        dp->tx_msdu_rings_dma = 0;
++    }
++    if (dp->txq_table) {
++        dma_free_coherent(dev, DP_TXQ_TABLE_BYTES, dp->txq_table,
++                          dp->txq_table_dma);
++        dp->txq_table = NULL;
++        dp->txq_table_dma = 0;
++        dp->txq_table_devva = 0;
++    }
++}
++
++static int dp_alloc_rings(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    dma_addr_t dma;
++
++    dp->txq_table = dp_dma_alloc(ctx, DP_TXQ_TABLE_BYTES, &dma, "txq_table");
++    if (!dp->txq_table)
++        return -ENOMEM;
++    dp->txq_table_dma = dma;
++    dp->txq_table_devva = (u32)dma;
++
++    dp->tx_msdu_rings = dp_dma_alloc(ctx, DP_TX_MSDU_RING_BYTES, &dma,
++                                    "tx_msdu_rings");
++    if (!dp->tx_msdu_rings)
++        return -ENOMEM;
++    dp->tx_msdu_rings_dma = dma;
++
++    dp->txba = dp_dma_alloc(ctx, DP_TXBA_BYTES, &dma, "tx_ba_info");
++    if (!dp->txba)
++        return -ENOMEM;
++    dp->txba_dma = dma;
++
++    dp->rx_norm_ring = dp_dma_alloc(ctx, DP_RX_NORM_RING_BYTES, &dma,
++                                    "rx_norm_free_ring");
++    if (!dp->rx_norm_ring)
++        return -ENOMEM;
++    dp->rx_norm_ring_dma = dma;
++
++    dp->rx_small_ring = dp_dma_alloc(ctx, DP_RX_SMALL_RING_BYTES, &dma,
++                                     "rx_small_free_ring");
++    if (!dp->rx_small_ring)
++        return -ENOMEM;
++    dp->rx_small_ring_dma = dma;
++
++    dp->rx_cmp_ring = dp_dma_alloc(ctx, DP_RXCMP_RING_BYTES, &dma,
++                                   "rx_data_cmp_ring");
++    if (!dp->rx_cmp_ring)
++        return -ENOMEM;
++    dp->rx_cmp_ring_dma = dma;
++
++    if (dp_alloc_rx_pool(ctx, &dp->rx_norm_cpu, &dp->rx_norm_dma,
++                         DP_RX_NORM_DEPTH, DP_RX_NORM_ALLOC,
++                         "rx_norm_buffer") != 0)
++        return -ENOMEM;
++    if (dp_alloc_rx_pool(ctx, &dp->rx_small_cpu, &dp->rx_small_dma,
++                         DP_RX_SMALL_DEPTH, DP_RX_SMALL_ALLOC,
++                         "rx_small_buffer") != 0)
++        return -ENOMEM;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* device-RAM MSDU-info ring-pointer table                            */
++/* ------------------------------------------------------------------ */
++static int dp_lookup_msdu_table(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    struct hi5622_hcc_service *h = ctx->hcc;
++    u32 payload = 0;
++    int rc;
++
++    if (!h)
++        return -ENODEV;
++    payload = h->rd.id2_payload;
++    if (!payload)
++        payload = dp_le32(ctx->read_msg[0]);
++    rc = dp_ready_payload_ptrtable(payload, &dp->msdu_table_ca,
++                                   &dp->msdu_table_acp);
++    if (rc) {
++        dev_err(&ctx->pdev->dev,
++                "DP: ready g4 id2 payload 0x%08x is not a PKTRAM MSDU-info table pointer (%d) - no device write\n",
++                payload, rc);
++        return -EINVAL;
++    }
++    dp->ready_payload = payload;
++    return 0;
++}
++
++/* The vendor writes the per-(user,tid) 12-byte table entries into device RAM
++ * (hmac_get_user_tid_tx_msdu_info_ring_table_addr + shuangta_tx_msdu_ring_buf_alloc)
++ * with {ring device VA, 0, 0}; we do the same for user 0 (the vendor's default
++ * band-0 user slot) and TIDs 0..7, through the ACP alias, verifying read-back. */
++static int dp_write_msdu_table(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    struct device *dev = &ctx->pdev->dev;
++    unsigned int tid;
++
++    for (tid = 0; tid < DP_TX_MSDU_RINGS; tid++) {
++        u8 entry[DP_MSDU_TABLE_ENTRY_BYTES];
++        u32 ca = 0, acp = 0, bar0, ring_devva;
++        u32 rb[DP_MSDU_TABLE_ENTRY_DWORDS];
++        unsigned int i;
++        int rc;
++
++        rc = dp_msdu_table_entry_ca(dp->msdu_table_ca, 0u, tid, &ca, &acp);
++        if (rc) {
++            dev_err(dev, "DP: MSDU table entry (user 0, tid %u) CA refused (%d)\n",
++                    tid, rc);
++            return -EINVAL;
++        }
++        ring_devva = dp_tx_ring_devva((u32)dp->tx_msdu_rings_dma, tid);
++        if (ring_devva < DP_HOST_DMA_LO || ring_devva > DP_HOST_DMA_HI) {
++            dev_err(dev, "DP: TID %u ring devVA 0x%08x outside the host DMA window - no write\n",
++                    tid, ring_devva);
++            return -ERANGE;
++        }
++        dp_msdu_table_entry_encode(entry, ring_devva);
++        bar0 = dp_ca_bar0(ctx, acp);
++        if (!bar0)
++            return -EFAULT;
++        for (i = 0; i < DP_MSDU_TABLE_ENTRY_DWORDS; i++)
++            writel(dp_le32(entry + 4u * i), ctx->bar0 + bar0 + 4u * i);
++        wmb();
++        for (i = 0; i < DP_MSDU_TABLE_ENTRY_DWORDS; i++)
++            rb[i] = readl(ctx->bar0 + bar0 + 4u * i);
++        if (rb[0] != ring_devva || rb[1] != 0u || rb[2] != 0u) {
++            dev_err(dev,
++                    "DP: MSDU table entry tid %u read-back 0x%08x/0x%08x/0x%08x != 0x%08x/0/0 - stop, no retry\n",
++                    tid, rb[0], rb[1], rb[2], ring_devva);
++            return -EIO;
++        }
++        dp->table_entries_written++;
++    }
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* RX free-ring fill                                                  */
++/* ------------------------------------------------------------------ */
++static void dp_fill_rx_rings(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp = ctx->dp;
++    u32 *norm = dp->rx_norm_ring;
++    u32 *small = dp->rx_small_ring;
++    unsigned int i;
++
++    for (i = 0; i < DP_RX_NORM_DEPTH; i++)
++        norm[i] = dp_rx_buf_entry_devva((u32)dp->rx_norm_dma[i]);
++    for (i = 0; i < DP_RX_SMALL_DEPTH; i++)
++        small[i] = dp_rx_buf_entry_devva((u32)dp->rx_small_dma[i]);
++    /* Publish the ring contents before the MAC produces/consumes. */
++    dma_wmb();
++}
++
++/* ------------------------------------------------------------------ */
++/* gates                                                              */
++/* ------------------------------------------------------------------ */
++static const char *dp_gate_name(int rc)
++{
++    switch (rc) {
++    case 0:         return "ok";
++    case -ENODEV:   return "no_hcc_service";
++    case -EBUSY:    return "not_armed_or_not_released";
++    case -EPERM:    return "phase_or_ctx_gate";
++    case -EALREADY: return "already_done";
++    case -EIO:      return "device_write_failed";
++    default:        return "error";
++    }
++}
++
++/* The full setup gate: no MAC/device-RAM write may happen before every one of
++ * these is true in THIS module load. */
++static int dp_gate_setup(struct hi5622_pci *ctx, bool probe_required)
++{
++    struct hi5622_hcc_service *h = ctx->hcc;
++    struct hcc_core *core;
++
++    if (!h || !ctx->dp)
++        return -ENODEV;
++    core = &h->hcc.core;
++    if (!ctx->windows_programmed || !h->armed)
++        return -EBUSY;
++    if (!core->released || !ctx->cpu_released)
++        return -EBUSY;
++    if (!core->boot_latched)
++        return -EBUSY;
++    if (core->phase != HCC_PHASE_READY_TXQ_SYNC &&
++        core->phase != HCC_PHASE_ACTIVE)
++        return -EPERM;
++    if (!h->h2d_ctx_create_sent)
++        return -EPERM;
++    if (probe_required && !ctx->dp->probe_ok)
++        return -EPERM;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* sysfs: dp_probe (read-only single MAC word)                        */
++/* ------------------------------------------------------------------ */
++static ssize_t dp_probe_show(struct device *dev, struct device_attribute *attr,
++                             char *buf)
++{
++    struct hi5622_pci *ctx = dp_ctx(dev);
++    struct hi5622_dp *dp;
++    u32 bar0, val;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed)
++        return -EBUSY;
++    dp = ctx->dp;
++    bar0 = dp_ca_bar0(ctx, DP_MAC_CA_BAND0 + DP_MAC_REG_TXBA_DEPTH);
++    if (!bar0)
++        return -EFAULT;
++    val = readl(ctx->bar0 + bar0);
++    dp->probe_bar0 = bar0;
++    dp->probe_value = val;
++    dp->probe_ok = true;
++    return scnprintf(buf, PAGE_SIZE,
++                     "dp_probe: MAC band0 CA 0x%08x+0x%02x -> BAR0 0x%x = 0x%08x (read-only; vendor boot 0x00000100 expected, 0/other = record; dp_setup now allowed)\n",
++                     DP_MAC_CA_BAND0, DP_MAC_REG_TXBA_DEPTH, bar0, val);
++}
++static DEVICE_ATTR_RO(dp_probe);
++
++/* ------------------------------------------------------------------ */
++/* sysfs: dp_setup (one shot; the only MAC-program action)            */
++/* ------------------------------------------------------------------ */
++static ssize_t dp_setup_store(struct device *dev, struct device_attribute *attr,
++                              const char *buf, size_t count)
++{
++    struct hi5622_pci *ctx = dp_ctx(dev);
++    struct hi5622_dp *dp;
++    struct dp_mac_params p;
++    int rc;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    if (!sysfs_streq(buf, "1"))
++        return -EINVAL;
++    dp = ctx->dp;
++    rc = dp_gate_setup(ctx, true);
++    if (rc) {
++        dev_warn(dev,
++                 "DP setup: refused by gate '%s' (phase=%s ctx_created=%u probe_ok=%u) - no device write\n",
++                 dp_gate_name(rc),
++                 hcc_phase_name(ctx->hcc->hcc.core.phase),
++                 ctx->hcc->h2d_ctx_create_sent ? 1u : 0u,
++                 dp->probe_ok ? 1u : 0u);
++        return rc;
++    }
++    mutex_lock(&dp->lock);
++    if (dp->setup_done || dp->failed) {
++        mutex_unlock(&dp->lock);
++        return -EALREADY;
++    }
++    rc = dp_lookup_msdu_table(ctx);
++    if (rc)
++        goto fail;
++    rc = dp_alloc_rings(ctx);
++    if (rc)
++        goto fail;
++    rc = dp_write_msdu_table(ctx);
++    if (rc)
++        goto fail;
++    dp_fill_rx_rings(ctx);
++    memset(&p, 0, sizeof(p));
++    p.msdu_table_acp = dp->msdu_table_acp;
++    p.rx_norm_addr = (u32)dp->rx_norm_ring_dma;
++    p.rx_small_addr = (u32)dp->rx_small_ring_dma;
++    p.rx_cmp_addr = (u32)dp->rx_cmp_ring_dma;
++    p.txba_addr = (u32)dp->txba_dma;
++    p.txba_depth = DP_TXBA_DEPTH_INIT;
++    p.rx_norm_len = DP_RX_NORM_BUFLEN;
++    p.rx_small_len = DP_RX_SMALL_BUFLEN;
++    p.rx_norm_depth = DP_RX_NORM_DEPTH;
++    p.rx_small_depth = DP_RX_SMALL_DEPTH;
++    p.rx_cmp_depth = DP_RXCMP_DEPTH;
++    p.int_mask = DP_MAC_INT_MASK_INIT;
++    rc = dp_mac_program_and_verify(ctx, &p);
++    if (rc)
++        goto fail;
++    dp_snapshot_mac(ctx);
++    {
++        struct hi5622_dp_txrx_bind b;
++
++        memset(&b, 0, sizeof(b));
++        b.pci = ctx;
++        b.tx_msdu_rings = dp->tx_msdu_rings;
++        b.tx_msdu_rings_dma = (u64)(u32)dp->tx_msdu_rings_dma;
++        b.txq_table = dp->txq_table;
++        b.txq_table_dma = (u64)(u32)dp->txq_table_dma;
++        b.txq_table_devva = dp->txq_table_devva;
++        b.rx_norm_ring = dp->rx_norm_ring;
++        b.rx_small_ring = dp->rx_small_ring;
++        b.rx_cmp_ring = dp->rx_cmp_ring;
++        b.rx_norm_ring_dma = (u64)(u32)dp->rx_norm_ring_dma;
++        b.rx_small_ring_dma = (u64)(u32)dp->rx_small_ring_dma;
++        b.rx_cmp_ring_dma = (u64)(u32)dp->rx_cmp_ring_dma;
++        b.rx_norm_cpu = dp->rx_norm_cpu;
++        b.rx_small_cpu = dp->rx_small_cpu;
++        b.rx_norm_dma = (const u32 *)dp->rx_norm_dma;
++        b.rx_small_dma = (const u32 *)dp->rx_small_dma;
++        b.msdu_table_ca = dp->msdu_table_ca;
++        b.ready_payload = dp->ready_payload;
++        rc = hi5622_dp_txrx_bind(ctx, &b);
++        if (rc)
++            goto fail;
++    }
++    dp->setup_done = true;
++    mutex_unlock(&dp->lock);
++    dev_info(dev,
++             "DP setup: OK - rings 256/512/4095 (4-byte entries), TXQ table 0x2524 devva 0x%08x, tx rings 8x64x8, tx_ba_info 0x800 devva 0x%08x, MSDU table %u entries at CA 0x%08x/ACP 0x%08x, MAC band0 %u regs written+verified (mask 0x%08x); next: dp_txq_sync\n",
++             dp->txq_table_devva, (u32)dp->txba_dma,
++             dp->table_entries_written, dp->msdu_table_ca,
++             dp->msdu_table_acp, dp->mac_reg_count,
++             dp_mac_read(ctx, DP_MAC_REG_INT_MASK));
++    return count;
++
++fail:
++    dp->failed = true;
++    dp->last_err = (u32)(-rc);
++    hi5622_dp_txrx_release(ctx);
++    dp_free_rings(ctx);
++    dp_snapshot_mac(ctx);
++    mutex_unlock(&dp->lock);
++    dev_err(dev,
++            "DP setup: FAILED at step '%s' (rc %d) - lane closed for this module load; no retry, no further writes\n",
++            rc == -ENOMEM ? "dma_alloc" :
++            rc == -EINVAL ? "msdu_table_lookup" :
++            rc == -ERANGE ? "ring_devva_range" :
++            rc == -EFAULT ? "ca_translation" :
++            rc == -EIO ? "readback_verify" : "mac_program",
++            rc);
++    return rc;
++}
++static DEVICE_ATTR_WO(dp_setup);
++
++/* ------------------------------------------------------------------ */
++/* sysfs: dp_txq_sync (the key-0x0320 hand-off, through h2d_send)     */
++/* ------------------------------------------------------------------ */
++static ssize_t dp_txq_sync_store(struct device *dev,
++                                 struct device_attribute *attr,
++                                 const char *buf, size_t count)
++{
++    struct hi5622_pci *ctx = dp_ctx(dev);
++    struct hi5622_dp *dp;
++    int rc;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    if (!sysfs_streq(buf, "1"))
++        return -EINVAL;
++    dp = ctx->dp;
++    if (dp->failed || !dp->setup_done) {
++        dev_warn(dev, "DP txq_sync: refused - dp_setup has not succeeded for this module load\n");
++        return -EPERM;
++    }
++    if (dp->txq_sent)
++        return -EALREADY;
++    rc = h2d_post_txq_addr(ctx, dp->txq_table_devva);
++    if (rc) {
++        dev_warn(dev, "DP txq_sync: H2D carrier refused/failed (%d) - no retry in this session\n",
++                 rc);
++        return rc;
++    }
++    dp->txq_sent = true;
++    dev_info(dev,
++             "DP txq_sync: g0 id1 key 0x0320 sent with TXQ-table devVA 0x%08x (%u B table, %u B frame); firmware worker CA 0x81445 stores it into firmware RAM; observe dp_status/rd_catalog and mask CA 0x400008\n",
++             dp->txq_table_devva, DP_TXQ_TABLE_BYTES, 0x20u);
++    return count;
++}
++static DEVICE_ATTR_WO(dp_txq_sync);
++
++/* ------------------------------------------------------------------ */
++/* sysfs: dp_status / dp_rings (read-only evidence)                   */
++/* ------------------------------------------------------------------ */
++static ssize_t dp_status_show(struct device *dev, struct device_attribute *attr,
++                              char *buf)
++{
++    struct hi5622_pci *ctx = dp_ctx(dev);
++    struct hi5622_dp *dp;
++    int pos = 0;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    dp = ctx->dp;
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "DP status (data plane host side, one setup per load): probe_ok=%u probe_value=0x%08x setup_done=%u failed=%u txq_sent=%u mac_regs=%u table_entries=%u\n",
++                     dp->probe_ok ? 1u : 0u, dp->probe_value,
++                     dp->setup_done ? 1u : 0u, dp->failed ? 1u : 0u,
++                     dp->txq_sent ? 1u : 0u, dp->mac_reg_count,
++                     dp->table_entries_written);
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "device-RAM MSDU table: ready_payload=0x%08x ca=0x%08x acp=0x%08x (12-byte entries, index tid+user*8, user 0 tids 0..7)\n",
++                     dp->ready_payload, dp->msdu_table_ca,
++                     dp->msdu_table_acp);
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "host rings: txq_table=0x%08x (%u B) tx_msdu_rings=0x%08x (%u B, 8x%ux%u) txba=0x%08x (%u B) norm_ring=0x%08x small_ring=0x%08x cmp_ring=0x%08x\n",
++                     dp->txq_table_devva, DP_TXQ_TABLE_BYTES,
++                     (u32)dp->tx_msdu_rings_dma, DP_TX_MSDU_RING_BYTES,
++                     DP_TX_MSDU_RINGS, DP_TX_MSDU_RING_DEPTH,
++                     (u32)dp->txba_dma, DP_TXBA_BYTES,
++                     (u32)dp->rx_norm_ring_dma,
++                     (u32)dp->rx_small_ring_dma,
++                     (u32)dp->rx_cmp_ring_dma);
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "setup gates: windows=%u armed=%u released=%u latched=%u phase=%s ctx_created=%u probe_required=1 h2d_budget=%u\n",
++                     ctx->windows_programmed ? 1u : 0u,
++                     (ctx->hcc && ctx->hcc->armed) ? 1u : 0u,
++                     (ctx->hcc && ctx->hcc->hcc.core.released &&
++                      ctx->cpu_released) ? 1u : 0u,
++                     (ctx->hcc && ctx->hcc->hcc.core.boot_latched) ? 1u : 0u,
++                     ctx->hcc ? hcc_phase_name(ctx->hcc->hcc.core.phase) : "?",
++                     (ctx->hcc && ctx->hcc->h2d_ctx_create_sent) ? 1u : 0u,
++                     hi5622_h2d_send_budget);
++    if (dp->mac_snapshot_valid) {
++        pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                         "MAC band0 snapshot: +00=0x%08x +04=0x%08x +10=0x%08x +1c=0x%08x +20=0x%08x +24=0x%08x +28=0x%08x\n",
++                         dp->mac_snapshot[0], dp->mac_snapshot[1],
++                         dp->mac_snapshot[2], dp->mac_snapshot[3],
++                         dp->mac_snapshot[4], dp->mac_snapshot[5],
++                         dp->mac_snapshot[6]);
++        pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                         "MAC band0 snapshot: +2c=0x%08x +30=0x%08x +34=0x%08x +38=0x%08x +3c=0x%08x +40=0x%08x +44=0x%08x +48=0x%08x +4c=0x%08x +50=0x%08x +54=0x%08x\n",
++                         dp->mac_snapshot[7], dp->mac_snapshot[8],
++                         dp->mac_snapshot[9], dp->mac_snapshot[10],
++                         dp->mac_snapshot[11], dp->mac_snapshot[12],
++                         dp->mac_snapshot[13], dp->mac_snapshot[14],
++                         dp->mac_snapshot[15], dp->mac_snapshot[16],
++                         dp->mac_snapshot[17]);
++    }
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "stop rules: page CA 0x1bf000 golden 0x86807fef/7/2/0xabcd, state CA 0x118b60=1, mask CA 0x400008=0, staging CA 0x40000c=0 (read with the bench read pack, not here)\n");
++    return pos;
++}
++static DEVICE_ATTR_RO(dp_status);
++
++static ssize_t dp_rings_show(struct device *dev, struct device_attribute *attr,
++                             char *buf)
++{
++    struct hi5622_pci *ctx = dp_ctx(dev);
++    struct hi5622_dp *dp;
++    int pos = 0;
++    unsigned int tid, i;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    dp = ctx->dp;
++    if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed)
++        return -EBUSY;
++    dp_snapshot_mac(ctx);
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "DP rings (read-only; MAC band0 CA 0x%08x):\n",
++                     DP_MAC_CA_BAND0);
++    for (i = 0; i < DP_DP_MAC_ALL_OFF_REGS; i++)
++        pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                         "  +0x%02x = 0x%08x\n", dp_mac_all_offs[i],
++                         dp->mac_snapshot[i]);
++    if (!dp->setup_done)
++        return pos;
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "device-RAM MSDU table entries (user 0):\n");
++    for (tid = 0; tid < DP_TX_MSDU_RINGS; tid++) {
++        u32 ca = 0, acp = 0, bar0;
++        u32 w0, w1, w2;
++
++        if (dp_msdu_table_entry_ca(dp->msdu_table_ca, 0u, tid, &ca, &acp))
++            continue;
++        bar0 = dp_ca_bar0(ctx, acp);
++        if (!bar0)
++            continue;
++        w0 = readl(ctx->bar0 + bar0);
++        w1 = readl(ctx->bar0 + bar0 + 4u);
++        w2 = readl(ctx->bar0 + bar0 + 8u);
++        pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                         "  tid %u entry CA 0x%08x = {0x%08x, 0x%08x, 0x%08x} (expected {ring_devva 0x%08x,0,0})\n",
++                         tid, ca, w0, w1, w2,
++                         dp_tx_ring_devva((u32)dp->tx_msdu_rings_dma, tid));
++    }
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "ring producers: norm_wptr=0x%08x small_wptr=0x%08x cmp_rptr=0x%08x / device: cmp_wptr=0x%08x norm_rptr=0x%08x small_rptr=0x%08x\n",
++                     dp->mac_snapshot[10], dp->mac_snapshot[11],
++                     dp->mac_snapshot[12], dp->mac_snapshot[15],
++                     dp->mac_snapshot[16], dp->mac_snapshot[17]);
++    return pos;
++}
++static DEVICE_ATTR_RO(dp_rings);
++
++/* Bench-tooling compatibility name: the wifi-bench-tooling lane's protocol
++ * profile already allowlists `h2d_txq_addr_sync` as the data-plane trigger
++ * attribute (bench_guards.DP_ATTRS).  It is a pure alias of dp_txq_sync so a
++ * sequence can fire the hand-off without naming a not-yet-allowlisted attr. */
++static ssize_t h2d_txq_addr_sync_store(struct device *dev,
++                                       struct device_attribute *attr,
++                                       const char *buf, size_t count)
++{
++    return dp_txq_sync_store(dev, attr, buf, count);
++}
++static DEVICE_ATTR_WO(h2d_txq_addr_sync);
++
++/* wifi-dp-txrx lane (task-122): handler prototypes come from
++ * hi5622_dp_txrx.h; the attribute objects must live in this translation unit
++ * because the 6.18 DEVICE_ATTR_RO/WO macros define them static. */
++static struct device_attribute dev_attr_dp_tx_frame =
++    __ATTR(dp_tx_frame, 0200, NULL, hi5622_dp_tx_frame_store);
++static struct device_attribute dev_attr_dp_tx_status =
++    __ATTR(dp_tx_status, 0444, hi5622_dp_tx_status_show, NULL);
++static struct device_attribute dev_attr_dp_rx_poll =
++    __ATTR(dp_rx_poll, 0200, NULL, hi5622_dp_rx_poll_store);
++static struct device_attribute dev_attr_dp_rx_capture =
++    __ATTR(dp_rx_capture, 0444, hi5622_dp_rx_capture_show, NULL);
++
++static struct attribute *hi5622_dp_attrs[] = {
++    &dev_attr_dp_probe.attr,
++    &dev_attr_dp_setup.attr,
++    &dev_attr_dp_txq_sync.attr,
++    &dev_attr_h2d_txq_addr_sync.attr,
++    &dev_attr_dp_status.attr,
++    &dev_attr_dp_rings.attr,
++    &dev_attr_dp_tx_frame.attr,
++    &dev_attr_dp_tx_status.attr,
++    &dev_attr_dp_rx_poll.attr,
++    &dev_attr_dp_rx_capture.attr,
++    NULL,
++};
++ATTRIBUTE_GROUPS(hi5622_dp);
++
++int hi5622_dp_add_attrs(struct device *dev)
++{
++    return device_add_groups(dev, hi5622_dp_groups);
++}
++
++void hi5622_dp_del_attrs(struct device *dev)
++{
++    device_remove_groups(dev, hi5622_dp_groups);
++}
++
++/* ------------------------------------------------------------------ */
++/* probe / remove                                                     */
++/* ------------------------------------------------------------------ */
++int hi5622_dp_probe(struct hi5622_pci *ctx)
++{
++    struct hi5622_dp *dp;
++
++    dp = devm_kzalloc(&ctx->pdev->dev, sizeof(*dp), GFP_KERNEL);
++    if (!dp)
++        return -ENOMEM;
++    dp->dev = &ctx->pdev->dev;
++    mutex_init(&dp->lock);
++    ctx->dp = dp;
++    return 0;
++}
++
++void hi5622_dp_remove(struct hi5622_pci *ctx)
++{
++    if (!ctx || !ctx->dp)
++        return;
++    hi5622_dp_txrx_release(ctx);
++    dp_free_rings(ctx);
++    ctx->dp = NULL;
++}
+--- /dev/null
++++ b/hi5622_dp.h
+@@ -0,0 +1,30 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_dp.h - MAC host-interface data-plane bring-up surface for the
++ * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (wifi-datapath-bringup lane, shared task task-111).
++ * This header only declares the probe/remove and sysfs-group hooks; the state
++ * and all device access live in hi5622_dp.c, the portable geometry in
++ * dp_rings.c.
++ *
++ * Bench model (unchanged project rules): probe() performs NO device writes;
++ * every device write is an explicit attended sysfs action behind the
++ * boot-stage gates, one idea per session, no retry after a failure.
++ */
++#ifndef _HI5622_DP_H
++#define _HI5622_DP_H
++
++struct hi5622_pci;
++struct device;
++
++/* Allocate the (empty) data-plane state at PCI probe.  Performs no device
++ * access and allocates no rings: the 0x63c/0xb0 buffer pools are allocated by
++ * dp_setup only after the ready handshake and the context-create succeeded. */
++int  hi5622_dp_probe(struct hi5622_pci *ctx);
++void hi5622_dp_remove(struct hi5622_pci *ctx);
++
++int  hi5622_dp_add_attrs(struct device *dev);
++void hi5622_dp_del_attrs(struct device *dev);
++
++#endif /* _HI5622_DP_H */
+--- /dev/null
++++ b/hi5622_dp_txrx.c
+@@ -0,0 +1,743 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_dp_txrx.c - kernel side of the first MAC data-plane TX/RX frames
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-dp-txrx, shared task task-122).
++ * Portable, host-tested logic lives in dp_txrx.c; this file owns the one
++ * coherent TX frame buffer, the sysfs actions and the device reads/writes.
++ *
++ * Bench model (project rules): every action is attended and explicitly
++ * triggered from sysfs; dp_tx_frame is the FIRST frame write and requires
++ * dp_txq_sync (key 0x0320) to have been committed; one frame per write with a
++ * small per-load budget; no retry after a failed step; no register is touched
++ * outside MAC band 0; CA 0x400392f0 and the RC misc window are never touched.
++ * The RX action is read-only (it captures MAC counters + host-DRAM RX
++ * descriptors and moves NO ring pointer).
++ */
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/list.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/pci.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#include "hi5622_driver.h"
++#include "hi5622_hcc.h"
++#include "hi5622_dp.h"
++#include "hi5622_dp_txrx.h"
++#include "dp_rings.h"
++#include "dp_txrx.h"
++
++#define DPTX_FRAME_OWNER 0x54585258u /* "TXRX" host bookkeeping word */
++#define DPTX_TX_POST_MAX 8u          /* per-load first-frame budget */
++#define DPTX_RX_POLL_MS 2000u        /* bounded RX observation window */
++#define DPTX_RX_POLL_STEP_MS 50u
++
++/* Documentation-example address (02:00:... locally administered); never a
++ * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
++static const u8 dptx_example_addr[6] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x01 };
++
++struct hi5622_dp_txrx {
++	struct list_head node;
++	struct hi5622_pci *ctx;
++	struct mutex lock;
++
++	bool bound;
++	bool failed;
++	bool tx_frame_ready;
++	u32 tx_posted;
++	u32 tx_wptr;
++	u32 tx_completion_rptr;
++	u32 tx_last_devva;
++	u32 tx_last_type;
++	u32 tx_last_ring_index;
++	u32 tx_last_tid;
++	u32 tx_last_vap_type;
++	u32 tx_last_mpdu_len;
++	u8  tx_last_mpdu[DP_TXRX_MAX_MPDU];
++	u8  tx_last_entry[DP_TXRX_TXE_BYTES];
++	u8  tx_last_table[DP_TXRX_TABLE_ENTRY_BYTES];
++
++	void *tx_frame;
++	u64  tx_frame_dma;
++
++	/* E1 objects (copied from the bind snapshot) */
++	void *tx_msdu_rings;
++	u32  tx_msdu_rings_dma;
++	u32  txq_table_devva;
++	void *rx_norm_ring;
++	void *rx_small_ring;
++	void *rx_cmp_ring;
++	void **rx_norm_cpu;
++	void **rx_small_cpu;
++	u32  msdu_table_ca;
++	u32  ready_payload;
++
++	/* RX capture evidence (read-only; ring pointers are not moved) */
++	struct dp_txrx_rx_state rx_state;
++	bool rx_polled;
++	unsigned long rx_waited_ms;
++	u32 rx_cmp_wptr;
++	u32 rx_cmp_rptr;
++	u32 rx_norm_rptr;
++	u32 rx_small_rptr;
++	u32 rx_pending;
++	u32 rx_last_cmp_raw;
++	u32 rx_cap_count;
++	u32 rx_scanned_norm;
++	u32 rx_scanned_small;
++	struct dp_txrx_rx_capture rx_caps[DP_TXRX_RX_CAPTURE_MAX];
++};
++
++static LIST_HEAD(dptx_list);
++static DEFINE_MUTEX(dptx_list_lock);
++
++static struct hi5622_dp_txrx *dptx_find(struct hi5622_pci *ctx)
++{
++	struct hi5622_dp_txrx *t;
++
++	list_for_each_entry(t, &dptx_list, node) {
++		if (t->ctx == ctx)
++			return t;
++	}
++	return NULL;
++}
++
++static struct hi5622_pci *dptx_ctx_from_dev(struct device *dev)
++{
++	return pci_get_drvdata(to_pci_dev(dev));
++}
++
++static struct hi5622_dp_txrx *dptx_from_dev(struct device *dev)
++{
++	struct hi5622_pci *ctx = dptx_ctx_from_dev(dev);
++
++	if (!ctx)
++		return NULL;
++	return dptx_find(ctx);
++}
++
++/* MAC band-0 word read through the driver's range-checked translation. */
++static u32 dptx_mac_read(struct hi5622_pci *ctx, u32 off)
++{
++	u32 bar0 = hi5622_ca_to_bar0(DP_MAC_CA_BAND0 + off);
++
++	if (!bar0)
++		return 0xffffffffu;
++	return readl(ctx->bar0 + bar0);
++}
++
++static u16 dptx_le16(const u8 *p)
++{
++	return (u16)(p[0] | ((u16)p[1] << 8));
++}
++
++static const char *dptx_gate_name(int rc)
++{
++	switch (rc) {
++	case 0:         return "ok";
++	case -ENODEV:   return "no_hcc_service";
++	case -EBUSY:    return "not_armed_or_not_released";
++	case -EPERM:    return "phase_or_ctx_or_txq_gate";
++	case -EALREADY: return "already_done";
++	case -EIO:      return "device_write_failed";
++	default:        return "error";
++	}
++}
++
++/* Write-path gate: identical to the dp_setup gate plus "this load's 0x0320\n * TXQ-table address sync was committed". */
++static int dptx_write_gate(struct hi5622_pci *ctx)
++{
++	struct hi5622_hcc_service *h = ctx->hcc;
++	struct hcc_core *core;
++
++	if (!h)
++		return -ENODEV;
++	core = &h->hcc.core;
++	if (!ctx->windows_programmed || !h->armed)
++		return -EBUSY;
++	if (!core->released || !ctx->cpu_released || !core->boot_latched)
++		return -EBUSY;
++	if (core->phase != HCC_PHASE_READY_TXQ_SYNC &&
++	    core->phase != HCC_PHASE_ACTIVE)
++		return -EPERM;
++	if (!h->h2d_ctx_create_sent || !h->h2d_txq_addr_sent)
++		return -EPERM;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* device-RAM MSDU-info table helpers (user 0, requested TID)         */
++/* ------------------------------------------------------------------ */
++static int dptx_table_bar0(struct hi5622_dp_txrx *t, unsigned int tid,
++			    u32 *bar0, u32 *ca)
++{
++	u32 acp;
++
++	if (dp_msdu_table_entry_ca(t->msdu_table_ca, DP_TXRX_TX_USER_DEFAULT,
++				   tid, ca, &acp) != DP_EOK)
++		return -EINVAL;
++	*bar0 = hi5622_ca_to_bar0(acp);
++	if (!*bar0)
++		return -EFAULT;
++	return 0;
++}
++
++static int dptx_table_snapshot(struct hi5622_dp_txrx *t, u32 d[3])
++{
++	u32 bar0 = 0, ca = 0;
++	u32 i;
++
++	if (dptx_table_bar0(t, DP_TXRX_TX_USER_DEFAULT == 0u ? 0u : 0u,
++			    &bar0, &ca) != 0)
++		return -EFAULT;
++	for (i = 0; i < DP_TXRX_TABLE_ENTRY_DWORDS; i++)
++		d[i] = readl(t->ctx->bar0 + bar0 + 4u * i);
++	return 0;
++}
++
++/* Publish the packed producer index into table dword1 exactly like the vendor
++ * ring push (dmb ish before the store; the vendor then reads +8 back). */
++static int dptx_table_publish(struct hi5622_dp_txrx *t, unsigned int tid,
++			      u32 wptr, u32 ring_devva, u32 d[3])
++{
++	u32 bar0 = 0, ca = 0;
++	u32 i;
++	int rc;
++
++	rc = dptx_table_bar0(t, tid, &bar0, &ca);
++	if (rc)
++		return rc;
++	dma_wmb();
++	writel(wptr, t->ctx->bar0 + bar0 + 4u);
++	wmb();
++	for (i = 0; i < DP_TXRX_TABLE_ENTRY_DWORDS; i++)
++		d[i] = readl(t->ctx->bar0 + bar0 + 4u * i);
++	if (d[0] != ring_devva || d[1] != wptr)
++		return -EIO;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* TX frame actions                                                   */
++/* ------------------------------------------------------------------ */
++static int dptx_build_frame(struct hi5622_dp_txrx *t, u32 type, dp_u8 *mpdu,
++			    size_t cap, size_t *mpdu_len, dp_u16 *fc,
++			    dp_u8 *vap, dp_u8 *tid, dp_u8 *hdr_flag)
++{
++	dp_u16 seq = (dp_u16)(t->tx_posted & 0x0fffu);
++	u16 fc_le = 0;
++	int rc;
++
++	switch (type) {
++	case 1u: /* probe request, management, broadcast DA */
++		rc = dp_txrx_build_probe_req(mpdu, cap, dptx_example_addr, seq,
++					     mpdu_len);
++		fc_le = DP_TXRX_FC_PROBE_REQ;
++		break;
++	case 2u: /* null-data, broadcast DA */
++		rc = dp_txrx_build_null_data(mpdu, cap, dptx_example_addr, seq,
++					     mpdu_len);
++		fc_le = DP_TXRX_FC_NULL_DATA;
++		break;
++	case 3u: /* QoS null, broadcast DA */
++		rc = dp_txrx_build_qos_null(mpdu, cap, dptx_example_addr, seq,
++					    mpdu_len);
++		fc_le = DP_TXRX_FC_QOS_NULL;
++		break;
++	case 4u: { /* broadcast ARP request (documentation IPs) */
++		static const dp_u8 sip[4] = { 192u, 0u, 2u, 10u };
++		static const dp_u8 tip[4] = { 192u, 0u, 2u, 1u };
++
++		rc = dp_txrx_build_arp_bcast(mpdu, cap, dptx_example_addr, sip,
++					     tip, seq, mpdu_len);
++		fc_le = DP_TXRX_FC_QOS_DATA;
++		break;
++	}
++	default:
++		return -EINVAL;
++	}
++	if (rc != DP_TXRX_OK)
++		return -EINVAL;
++	*fc = fc_le;
++	if (dp_txrx_frame_class(fc_le, vap, tid, hdr_flag) != DP_TXRX_OK)
++		return -EINVAL;
++	return 0;
++}
++
++ssize_t hi5622_dp_tx_frame_store(struct device *dev,
++				 struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	dp_u8 mpdu[DP_TXRX_MAX_MPDU];
++	dp_u8 entry[DP_TXRX_TXE_BYTES];
++	dp_u8 vap = 0, tid = 0, hdr_flag = 0;
++	dp_u16 fc = 0;
++	size_t mpdu_len = 0;
++	u32 type = 0, off = 0, result = 0, ring_devva = 0, next = 0;
++	u32 entry_addr = 0, d[3];
++	u32 index, prev;
++	int rc;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (sysfs_streq(buf, "1"))
++		type = 1u;
++	else if (sysfs_streq(buf, "2"))
++		type = 2u;
++	else if (sysfs_streq(buf, "3"))
++		type = 3u;
++	else if (sysfs_streq(buf, "4"))
++		type = 4u;
++	else
++		return -EINVAL;
++
++	mutex_lock(&t->lock);
++	if (t->failed || !t->bound || !t->tx_frame_ready) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->tx_posted >= DPTX_TX_POST_MAX) {
++		mutex_unlock(&t->lock);
++		return -EALREADY;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc) {
++		dev_warn(dev,
++			 "DP tx_frame: refused by gate '%s' - no device write (need dp_setup + dp_txq_sync in this load)\n",
++			 dptx_gate_name(rc));
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++
++	rc = dptx_build_frame(t, type, mpdu, sizeof(mpdu), &mpdu_len, &fc,
++			      &vap, &tid, &hdr_flag);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		return -EINVAL;
++	}
++	rc = dp_txrx_tx_buffer_init(t->tx_frame, DP_TXRX_FRAME_AREA,
++				    DPTX_FRAME_OWNER, mpdu, mpdu_len, &off);
++	if (rc != DP_TXRX_OK) {
++		dev_err(dev, "DP tx_frame: frame buffer refused (%d)\n", rc);
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EINVAL;
++	}
++	if (off != DP_TXRX_FRAME_HOST_HDR) {
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	result = (u32)t->tx_frame_dma + off; /* coherent DMA addr = device VA */
++	rc = dp_txrx_txe_encode(entry, result, (dp_u16)mpdu_len, 0u, hdr_flag,
++				tid, vap);
++	if (rc != DP_TXRX_OK) {
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EINVAL;
++	}
++	if (tid >= DP_TXRX_TABLE_TIDS) {
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EINVAL;
++	}
++	index = t->tx_wptr & 0x7fffu;
++	if (index >= DP_TXRX_TX_RING_DEPTH) {
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	entry_addr = (u32)(unsigned long)t->tx_msdu_rings +
++		     tid * DP_TXRX_TX_RING_BYTES +
++		     index * DP_TXRX_TXE_BYTES;
++	memcpy((void *)(unsigned long)entry_addr, entry, DP_TXRX_TXE_BYTES);
++	dma_wmb();
++	ring_devva = dp_tx_ring_devva(t->tx_msdu_rings_dma, tid);
++	next = dp_txrx_idx_next(t->tx_wptr, DP_TXRX_TX_RING_DEPTH);
++	prev = t->tx_wptr;
++	rc = dptx_table_publish(t, tid, next, ring_devva, d);
++	if (rc) {
++		dev_err(dev,
++			"DP tx_frame: MSDU table write read-back FAILED (rc %d) - lane closed for this load, no retry\n",
++			rc);
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++
++	t->tx_wptr = next;
++	t->tx_completion_rptr = d[2];
++	t->tx_last_devva = result;
++	t->tx_last_type = type;
++	t->tx_last_ring_index = index;
++	t->tx_last_tid = tid;
++	t->tx_last_vap_type = vap;
++	t->tx_last_mpdu_len = (u32)mpdu_len;
++	memcpy(t->tx_last_mpdu, mpdu, mpdu_len);
++	memcpy(t->tx_last_entry, entry, DP_TXRX_TXE_BYTES);
++	dp_txrx_table_entry_pack(t->tx_last_table, d[0], d[1], d[2]);
++	t->tx_posted++;
++
++	dev_info(dev,
++		 "DP tx_frame: type=%u fc=0x%04x mpdu=%u B buf_devva=0x%08x ring[tid=%u idx=%u]={buf=0x%08x ctl=0x%08x} wptr 0x%04x->0x%04x table@CA 0x%08x={ring=0x%08x wptr=0x%08x rptr=0x%08x} completion_pending=%d\n",
++		 type, fc, (unsigned int)mpdu_len, result, tid, index,
++		 dp_txrx_le32(entry), dp_txrx_le32(entry + 4),
++		 prev, next, t->msdu_table_ca, d[0], d[1], d[2],
++		 dp_txrx_idx_count(next, d[2], DP_TXRX_TX_RING_DEPTH));
++	mutex_unlock(&t->lock);
++	return (ssize_t)count;
++}
++
++ssize_t hi5622_dp_tx_status_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	u32 d[3] = { 0u, 0u, 0u };
++	int pending = -1;
++	int pos = 0;
++	u32 i;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	mutex_lock(&t->lock);
++	if (dptx_table_snapshot(t, d) == 0)
++		pending = dp_txrx_idx_count(d[1], d[2],
++					    DP_TXRX_TX_RING_DEPTH);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "DP tx status: bound=%u failed=%u frame_ready=%u posted=%u wptr=0x%04x completion_pending=%d\n",
++			 t->bound ? 1u : 0u, t->failed ? 1u : 0u,
++			 t->tx_frame_ready ? 1u : 0u, t->tx_posted,
++			 t->tx_wptr, pending);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "E1 objects: msdu_table_ca=0x%08x ready_payload=0x%08x tx_rings_dma=0x%08x txq_table_devva=0x%08x rx_cmp_ring=0x%08x\n",
++			 t->msdu_table_ca, t->ready_payload,
++			 t->tx_msdu_rings_dma, t->txq_table_devva,
++			 (u32)(unsigned long)t->rx_cmp_ring);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "MSDU table entry (user 0 tid 0) currently = {0x%08x, 0x%08x, 0x%08x}\n",
++			 d[0], d[1], d[2]);
++	if (t->tx_posted) {
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "last frame: type=%u mpdu_len=%u buf_devva=0x%08x ring_index=%u tid=%u vap_type=%u\n",
++				 t->tx_last_type, t->tx_last_mpdu_len,
++				 t->tx_last_devva, t->tx_last_ring_index,
++				 t->tx_last_tid, t->tx_last_vap_type);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "last MSDU entry = ");
++		for (i = 0; i < DP_TXRX_TXE_BYTES; i++)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos, "%02x",
++					 t->tx_last_entry[i]);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "  (magic_processed=%u)\n",
++				 dp_txrx_txe_is_processed(t->tx_last_entry) ? 1u : 0u);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "last table image = {0x%08x, 0x%08x, 0x%08x} (published wptr vs device rptr)\n",
++				 dp_txrx_table_entry_wptr(t->tx_last_table),
++				 dp_txrx_table_entry_rptr(t->tx_last_table),
++				 dp_txrx_le32(t->tx_last_table));
++	}
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "MAC band0 read-only: +0x00=0x%08x +0x38=0x%08x +0x3c=0x%08x +0x40=0x%08x +0x48=0x%08x +0x4c=0x%08x +0x50=0x%08x +0x54=0x%08x\n",
++			 dptx_mac_read(t->ctx, 0x00u),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXNORM_WPTR),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXSMALL_WPTR),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXCMP_RPTR),
++			 dptx_mac_read(t->ctx, 0x48u),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXCMP_WPTR),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXNORM_RPTR),
++			 dptx_mac_read(t->ctx, DP_TXRX_MAC_REG_RXSMALL_RPTR));
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "completion rule: TX done when device rptr == published wptr and the consumed entry has magic 0xE0 in ctl byte 7; stop if a table read-back mismatches\n");
++	mutex_unlock(&t->lock);
++	return pos;
++}
++
++/* ------------------------------------------------------------------ */
++/* RX capture (read-only: no ring pointer is moved)                   */
++/* ------------------------------------------------------------------ */
++static void dptx_rx_scan(struct hi5622_dp_txrx *t)
++{
++	unsigned int i;
++
++	t->rx_cap_count = 0u;
++	t->rx_scanned_norm = 0u;
++	t->rx_scanned_small = 0u;
++	if (t->rx_norm_cpu) {
++		for (i = 0; i < DP_TXRX_RX_NORM_DEPTH; i++) {
++			const dp_u8 *buf;
++
++			if (!t->rx_norm_cpu[i])
++				continue;
++			buf = (const dp_u8 *)t->rx_norm_cpu[i] +
++			      DP_TXRX_RX_BUF_HDR;
++			t->rx_scanned_norm++;
++			if (t->rx_cap_count >= DP_TXRX_RX_CAPTURE_MAX)
++				continue;
++			if (dp_txrx_rx_capture_build(buf, DP_TXRX_RX_NORM_BUFLEN,
++						     0u, i,
++						     &t->rx_caps[t->rx_cap_count]) ==
++			    DP_TXRX_OK) {
++				t->rx_caps[t->rx_cap_count].cmp_raw =
++					t->rx_last_cmp_raw;
++				t->rx_cap_count++;
++			}
++		}
++	}
++	if (t->rx_small_cpu) {
++		for (i = 0; i < DP_TXRX_RX_SMALL_DEPTH; i++) {
++			const dp_u8 *buf;
++
++			if (!t->rx_small_cpu[i])
++				continue;
++			buf = (const dp_u8 *)t->rx_small_cpu[i] +
++			      DP_TXRX_RX_BUF_HDR;
++			t->rx_scanned_small++;
++			if (t->rx_cap_count >= DP_TXRX_RX_CAPTURE_MAX)
++				continue;
++			if (dp_txrx_rx_capture_build(buf,
++						     DP_TXRX_RX_SMALL_BUFLEN,
++						     1u, i,
++						     &t->rx_caps[t->rx_cap_count]) ==
++			    DP_TXRX_OK) {
++				t->rx_caps[t->rx_cap_count].cmp_raw =
++					t->rx_last_cmp_raw;
++				t->rx_cap_count++;
++			}
++		}
++	}
++}
++
++ssize_t hi5622_dp_rx_poll_store(struct device *dev,
++				struct device_attribute *attr,
++				const char *buf, size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	unsigned long waited = 0;
++	u32 pending = 0;
++	int rc = 0;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++
++	mutex_lock(&t->lock);
++	if (t->failed || !t->bound) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->rx_polled) {
++		mutex_unlock(&t->lock);
++		return -EALREADY;
++	}
++	if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed) {
++		dev_warn(dev,
++			 "DP rx_poll: refused - transport windows/armed gate is not up (read-only action)\n");
++		mutex_unlock(&t->lock);
++		return -EBUSY;
++	}
++
++	/* Bounded wait for the device completion producer to move. */
++	while (waited < DPTX_RX_POLL_MS) {
++		u32 wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
++
++		pending = (u32)dp_txrx_idx_count(wptr, t->rx_state.cmp_rptr,
++						 DP_TXRX_RX_CMP_DEPTH);
++		if (pending > 0u)
++			break;
++		msleep(DPTX_RX_POLL_STEP_MS);
++		waited += DPTX_RX_POLL_STEP_MS;
++	}
++	t->rx_waited_ms = waited;
++	t->rx_cmp_wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
++	t->rx_cmp_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_RPTR);
++	t->rx_norm_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXNORM_RPTR);
++	t->rx_small_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXSMALL_RPTR);
++	if (t->rx_cmp_wptr != 0xffffffffu) {
++		pending = (u32)dp_txrx_idx_count(t->rx_cmp_wptr,
++						 t->rx_state.cmp_rptr,
++						 DP_TXRX_RX_CMP_DEPTH);
++	}
++	t->rx_pending = pending;
++	t->rx_last_cmp_raw = 0u;
++	if (pending > 0u && t->rx_cmp_ring) {
++		struct dp_txrx_rx_capture headcap;
++
++		rc = dp_txrx_rx_plan((const dp_u8 *)t->rx_cmp_ring,
++				     4u * DP_TXRX_RX_CMP_DEPTH,
++				     t->rx_cmp_wptr, &t->rx_state,
++				     &headcap);
++		if (rc == DP_TXRX_OK)
++			t->rx_last_cmp_raw = headcap.cmp_raw;
++	}
++	dma_rmb();
++	dptx_rx_scan(t);
++	t->rx_polled = true;
++	mutex_unlock(&t->lock);
++
++	dev_info(dev,
++		 "DP rx_poll: waited_ms=%lu pending=%u cmp_wptr=0x%08x cmp_rptr=0x%08x norm_rptr=0x%08x small_rptr=0x%08x head_cmp=0x%08x captures=%u (norm=%u small=%u scanned; no ring pointer moved)\n",
++		 waited, t->rx_pending, t->rx_cmp_wptr, t->rx_cmp_rptr,
++		 t->rx_norm_rptr, t->rx_small_rptr, t->rx_last_cmp_raw,
++		 t->rx_cap_count, t->rx_cap_count, 0u);
++	if (pending == 0u)
++		dev_info(dev,
++			 "DP rx_poll: no RX completion within %u ms - capture-only (the MAC RX data path may still need a started VAP/radio; record, no retry)\n",
++			 DPTX_RX_POLL_MS);
++	return (ssize_t)count;
++}
++
++ssize_t hi5622_dp_rx_capture_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	int pos = 0;
++	unsigned int k, i;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	mutex_lock(&t->lock);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "DP rx capture: polled=%u waited_ms=%lu pending=%u cmp_wptr=0x%08x cmp_rptr=0x%08x norm_rptr=0x%08x small_rptr=0x%08x head_cmp=0x%08x captures=%u (norm+small scanned)\n",
++			 t->rx_polled ? 1u : 0u, t->rx_waited_ms, t->rx_pending,
++			 t->rx_cmp_wptr, t->rx_cmp_rptr, t->rx_norm_rptr,
++			 t->rx_small_rptr, t->rx_last_cmp_raw, t->rx_cap_count);
++	for (k = 0; k < t->rx_cap_count && k < 4u; k++) {
++		struct dp_txrx_rx_capture *cap = &t->rx_caps[k];
++
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "cap[%u]: ring=%s idx=%u desc_ok=%u payload_len=%u mpdu_len=%u cmp_raw=0x%08x\n",
++				 k, cap->ring_kind == 0u ? "norm" : "small",
++				 cap->ring_index, cap->desc_ok,
++				 dptx_le16(cap->desc + 0x1e), cap->mpdu_len,
++				 cap->cmp_raw);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, "  desc = ");
++		for (i = 0; i < DP_TXRX_RX_DESC_LEN; i++)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos, "%02x",
++					 cap->desc[i]);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "\n  mpdu[0..31] = ");
++		for (i = 0; i < 32u && i < cap->mpdu_len; i++)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos, "%02x",
++					 cap->mpdu[i]);
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, "\n");
++	}
++	if (t->rx_cap_count > 4u)
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "... %u more captures not printed (PAGE_SIZE bound)\n",
++				 t->rx_cap_count - 4u);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "note: descriptor field semantics stay [I]/[U] until the bench capture fixes them; mpdu starts at descriptor+0x28 and payload_len is the vendor skb_put field\n");
++	mutex_unlock(&t->lock);
++	return pos;
++}
++
++/* ------------------------------------------------------------------ */
++/* bind / release                                                     */
++/* ------------------------------------------------------------------ */
++int hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
++			const struct hi5622_dp_txrx_bind *b)
++{
++	struct device *dev;
++	struct hi5622_dp_txrx *t;
++	dma_addr_t dma = 0;
++	u32 devva;
++
++	if (!ctx || !b)
++		return -EINVAL;
++	dev = &ctx->pdev->dev;
++	mutex_lock(&dptx_list_lock);
++	if (dptx_find(ctx)) {
++		mutex_unlock(&dptx_list_lock);
++		return -EALREADY;
++	}
++	t = devm_kzalloc(dev, sizeof(*t), GFP_KERNEL);
++	if (!t) {
++		mutex_unlock(&dptx_list_lock);
++		return -ENOMEM;
++	}
++	t->ctx = ctx;
++	mutex_init(&t->lock);
++	t->tx_msdu_rings = b->tx_msdu_rings;
++	t->tx_msdu_rings_dma = (u32)b->tx_msdu_rings_dma;
++	t->txq_table_devva = b->txq_table_devva;
++	t->rx_norm_ring = b->rx_norm_ring;
++	t->rx_small_ring = b->rx_small_ring;
++	t->rx_cmp_ring = b->rx_cmp_ring;
++	t->rx_norm_cpu = b->rx_norm_cpu;
++	t->rx_small_cpu = b->rx_small_cpu;
++	t->msdu_table_ca = b->msdu_table_ca;
++	t->ready_payload = b->ready_payload;
++	dp_txrx_rx_state_init(&t->rx_state);
++	t->tx_frame = dma_alloc_coherent(dev, DP_TXRX_FRAME_AREA, &dma,
++					 GFP_KERNEL);
++	if (!t->tx_frame) {
++		mutex_unlock(&dptx_list_lock);
++		return -ENOMEM;
++	}
++	if ((u64)dma < (u64)DP_HOST_DMA_LO || (u64)dma > (u64)DP_HOST_DMA_HI) {
++		dev_err(dev,
++			"DP txrx: TX frame buffer DMA 0x%llx outside the device window 0x%08x..0x%08x\n",
++			(unsigned long long)dma, DP_HOST_DMA_LO, DP_HOST_DMA_HI);
++		dma_free_coherent(dev, DP_TXRX_FRAME_AREA, t->tx_frame, dma);
++		t->tx_frame = NULL;
++		mutex_unlock(&dptx_list_lock);
++		return -ERANGE;
++	}
++	t->tx_frame_dma = (u64)dma;
++	devva = (u32)dma + DP_TXRX_FRAME_HOST_HDR;
++	memset(t->tx_frame, 0, DP_TXRX_FRAME_AREA);
++	t->tx_frame_ready = true;
++	t->bound = true;
++	list_add_tail(&t->node, &dptx_list);
++	mutex_unlock(&dptx_list_lock);
++
++	dev_info(dev,
++		 "DP txrx: bound - TX frame buffer %u B devva 0x%08x (host word + 16 B zero DMA header + MPDU); MSDU table CA 0x%08x; attrs dp_tx_frame/dp_tx_status/dp_rx_poll/dp_rx_capture\n",
++		 DP_TXRX_FRAME_AREA, devva, t->msdu_table_ca);
++	return 0;
++}
++
++void hi5622_dp_txrx_release(struct hi5622_pci *ctx)
++{
++	struct device *dev;
++	struct hi5622_dp_txrx *t;
++
++	if (!ctx)
++		return;
++	dev = &ctx->pdev->dev;
++	mutex_lock(&dptx_list_lock);
++	t = dptx_find(ctx);
++	if (!t) {
++		mutex_unlock(&dptx_list_lock);
++		return;
++	}
++	list_del(&t->node);
++	mutex_unlock(&dptx_list_lock);
++	if (t->tx_frame) {
++		dma_free_coherent(dev, DP_TXRX_FRAME_AREA, t->tx_frame,
++				  (dma_addr_t)t->tx_frame_dma);
++		t->tx_frame = NULL;
++		t->tx_frame_dma = 0;
++	}
++	t->bound = false;
++	t->tx_frame_ready = false;
++}
+--- /dev/null
++++ b/hi5622_dp_txrx.h
+@@ -0,0 +1,73 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_dp_txrx.h - kernel glue for the first MAC data-plane TX/RX frames
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-dp-txrx, shared task task-122). The
++ * portable device-free logic is dp_txrx.h/dp_txrx.c (host selftested); this
++ * header only binds that logic to one PCI endpoint after the E1 data-plane
++ * setup has succeeded (wifi-datapath-bringup dp_setup).
++ *
++ * Integration is a small patch to the wifi-datapath-bringup source tree:
++ *   patches/0001-hi5622-dp-txrx.patch  (dp_setup bind + remove release +
++ *   four sysfs attributes + Kbuild). tools/build.sh applies it to a scratch
++ *   copy and compile-verifies against the project 6.18.60 tree.
++ */
++#ifndef _HI5622_DP_TXRX_H
++#define _HI5622_DP_TXRX_H
++
++#include <linux/device.h>
++#include <linux/types.h>
++
++struct hi5622_pci;
++
++/* Snapshot of the E1 data-plane objects handed over by dp_setup. Addresses
++ * are 32-bit device/host-window addresses (the driver's DMA window is
++ * 0x80000000..0x8fffffff); 64-bit holders only avoid dma_addr_t width
++ * differences on ARM32. */
++struct hi5622_dp_txrx_bind {
++	struct hi5622_pci *pci;
++
++	void *tx_msdu_rings;           /* 8 rings x 64 x 8 B host DRAM */
++	u64  tx_msdu_rings_dma;
++	void *txq_table;               /* 0x2524 B host-DRAM TXQ table */
++	u64  txq_table_dma;
++	u32  txq_table_devva;
++
++	void *rx_norm_ring;            /* 256 x 4 B free ring */
++	void *rx_small_ring;           /* 512 x 4 B free ring */
++	void *rx_cmp_ring;             /* 4095 x 4 B completion ring */
++	u64  rx_norm_ring_dma;
++	u64  rx_small_ring_dma;
++	u64  rx_cmp_ring_dma;
++	void **rx_norm_cpu;            /* 256 coherent buffers (host word + DMA) */
++	void **rx_small_cpu;           /* 512 coherent buffers */
++	const u32 *rx_norm_dma;        /* coherent DMA addresses of the pools */
++	const u32 *rx_small_dma;
++
++	u32  msdu_table_ca;            /* device-RAM MSDU-info table base CA */
++	u32  ready_payload;            /* ready g4 id2 payload (evidence) */
++};
++
++/* Called once at the end of a successful dp_setup: allocates the one TX frame
++ * buffer and arms the tx/rx attribute surface for this endpoint. */
++int  hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
++                         const struct hi5622_dp_txrx_bind *b);
++/* Idempotent teardown (dp remove / failed bind). */
++void hi5622_dp_txrx_release(struct hi5622_pci *ctx);
++
++/* sysfs handlers; the patched hi5622_dp.c owns the device_attribute objects
++ * (the 6.18 DEVICE_ATTR_RO/WO macros define them static, so they cannot be
++ * shared across translation units). */
++ssize_t hi5622_dp_tx_frame_store(struct device *dev,
++                                 struct device_attribute *attr,
++                                 const char *buf, size_t count);
++ssize_t hi5622_dp_tx_status_show(struct device *dev,
++                                 struct device_attribute *attr, char *buf);
++ssize_t hi5622_dp_rx_poll_store(struct device *dev,
++                                struct device_attribute *attr,
++                                const char *buf, size_t count);
++ssize_t hi5622_dp_rx_capture_show(struct device *dev,
++                                  struct device_attribute *attr, char *buf);
++
++#endif /* _HI5622_DP_TXRX_H */
+--- a/hi5622_driver.h
++++ b/hi5622_driver.h
+@@ -27,6 +27,7 @@
+ 
+ struct hi5622_hcc_service;
+ struct hi5622_cfg80211;
++struct hi5622_dp;
+ 
+ /* ---------------------------------------------------------------------
+  * Outbound (SR) / inbound (DR) ETE ring, host-DRAM mirror.
+@@ -65,6 +66,7 @@
+ 	void __iomem		*bar2;	/* 16 KiB: endpoint iATU */
+ 	struct hi5622_hcc_service *hcc;
+ 	struct hi5622_cfg80211	*cfg;	/* cfg80211 full-MAC layer (M0-M2) */
++	struct hi5622_dp	*dp;	/* MAC host-interface data plane (wifi-dp-air merge) */
+ 
+ 	/* boot-stage state (each gate documented in hi5622_transport.c) */
+ 	bool			windows_programmed;
+--- a/hi5622_hcc.h
++++ b/hi5622_hcc.h
+@@ -61,6 +61,7 @@
+ 	u32			h2d_frames_sent;	/* real frames committed */
+ 	u32			h2d_txq_sync_sent;
+ 	u32			h2d_ctx_create_sent;	/* ordered txq precondition */
++	u32			h2d_txq_addr_sent;	/* g0 id1 key 0x0320 data-plane hand-off */
+ 	u64			h2d_send_ok;		/* announce consumed */
+ 	u64			h2d_send_timeout;	/* announce not consumed */
+ 	u64			h2d_send_refused;
+--- a/main.c
++++ b/main.c
+@@ -22,6 +22,7 @@
+ 
+ #include "hi5622_hcc.h"
+ #include "hi5622_cfg80211.h"
++#include "hi5622_dp.h"
+ #include "h2d_send.h"
+ 
+ /* ---------------------------------------------------------------------
+@@ -73,6 +74,7 @@
+ 	{ "hcc", hi5622_hcc_add_attrs, hi5622_hcc_del_attrs },
+ 	{ "h2d", hi5622_h2d_add_attrs, hi5622_h2d_del_attrs },
+ 	{ "d2h", hi5622_d2h_add_attrs, hi5622_d2h_del_attrs },
++	{ "dp", hi5622_dp_add_attrs, hi5622_dp_del_attrs },
+ 	{ "cfg80211", hi5622_cfg80211_add_attrs, hi5622_cfg80211_del_attrs },
+ };
+ 
+@@ -147,8 +149,18 @@
+ 		return dev_err_probe(dev, ret, "cfg80211 init\n");
+ 	}
+ 
++	/* MAC data plane (merged wifi-dp-air lane): host state only at probe
++	 * (no rings, no device access); dp_setup is the one MAC/ring action. */
++	ret = hi5622_dp_probe(ctx);
++	if (ret) {
++		hi5622_cfg80211_remove(ctx);
++		hi5622_hcc_remove(ctx);
++		return dev_err_probe(dev, ret, "dp probe\n");
++	}
++
+ 	ret = hi5622_add_all_attrs(dev);
+ 	if (ret) {
++		hi5622_dp_remove(ctx);
+ 		hi5622_cfg80211_remove(ctx);
+ 		hi5622_hcc_remove(ctx);
+ 		return ret;
+@@ -167,6 +179,7 @@
+ 	struct hi5622_pci *ctx = pci_get_drvdata(pdev);
+ 
+ 	hi5622_del_all_attrs(&pdev->dev);
++	hi5622_dp_remove(ctx);
+ 	hi5622_hcc_remove(ctx);
+ 	hi5622_cfg80211_remove(ctx);
+ 	dev_info(&pdev->dev, "%s removed\n", HI5622_DRV_NAME);
+@@ -192,9 +205,9 @@
+  * metadata unconditionally so modinfo/modpost still see it. */
+ #ifdef CONFIG_MODULE_STRIPPED
+ MODULE_INFO(description,
+-	    "Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create (Linux 6.18)");
++	    "Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create + MAC data-plane host bring-up + first TX/RX actions (Linux 6.18)");
+ MODULE_INFO(author, "cudy-wr3000v2 clean-room reverse-engineering project");
+ #else
+-MODULE_DESCRIPTION("Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create (Linux 6.18)");
++MODULE_DESCRIPTION("Hi5622V100 clean-room PCIe/ETE Wi-Fi transport + HCC service + post-ready H2D send path incl. ordered context-create + MAC data-plane host bring-up + first TX/RX actions (Linux 6.18)");
+ MODULE_AUTHOR("cudy-wr3000v2 clean-room reverse-engineering project");
+ #endif

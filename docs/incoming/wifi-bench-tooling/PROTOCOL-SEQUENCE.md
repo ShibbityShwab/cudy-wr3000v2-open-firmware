@@ -19,7 +19,7 @@ stop-on-first-failure, and a JSON + markdown evidence record.
 ## 1. Quick start (host only, no device)
 
     cd opensource/docs/incoming/wifi-bench-tooling
-    ./tools/run-selftest.sh                              # 312/312 device-free checks
+    ./tools/run-selftest.sh                              # 563/563 device-free checks
     python3 tools/bench_session.py --list-sequences      # bundled sequences + sha256
 
     # what would the protocol session do? (real module + PD4 image metadata,
@@ -243,7 +243,7 @@ PD4 image, so a future experiment cannot silently boot a different image.
 
 ## 9. Tests and limits
 
-- `./tools/run-selftest.sh`: **312/312** device-free checks, including +135
+- `./tools/run-selftest.sh`: **563/563** device-free checks, including +135
   protocol checks: schema/strictness refusals, pointer-convention
   resolution, plan/audit/`sh -n` for the protocol mode, the generated `gate_num`
   and `norm_reg` shell functions executed under `/bin/sh` (full-mask string
@@ -398,6 +398,7 @@ step runs.
 | bringup-d1-vap.json | cfg80211 | 11 / 24 / 0 | wiphy registered, iw phy, netdev add (type/addr), VAP counters, del + absence |
 | bringup-d2-scan.json | cfg80211 | 22 / 48 / 2 | TRUE-PASS ladder: ctx_create t1 + txq_sync72, iw iface add + link up + ONE iw scan; gates iw rc=0, dmesg 'scan channel result', results>0, mask/staging 0, page/state golden, provider refused=0; results=0 is the documented BLOCKED-DRIVER outcome (task-124) |
 | bringup-e1-dataplane.json | h2d | 13 / 42 / 3 | dp_probe RO MAC reachability probe, dp_setup WO (14 MAC regs / 8 table entries) with dp_status readback, dp_rings snapshot, ONE key-0x0320 h2d_txq_addr_sync (h2d_status readback: txq_addr_sent=1 ok=2 timeout=0), post pack mask/staging/page/state/out0/out2 |
+| bringup-f-air-txrx.json | cfg80211 | 30 / 83 / 7 | **F-AIR first air-TX/RX on the merged provider+data-plane module** (task-126, ../wifi-dp-air): ctx_create t1 -> txq_sync72 -> iw iface add + link up -> ONE iw scan (firmware VAP g0 id1 0x64/0x65 + channel) -> RO dp_probe -> ONE dp_setup -> ONE key-0x0320 hand-off -> probe-request TX entry + table wptr publish -> RO completion read -> RO RX capture -> post packs. Four verdicts: COMPLETED (MAC) / POST-ONLY / NO-RX / BLOCKED-DRIVER (scan results=0); air needs an external observer. The four txrx attributes are allowlisted in bench_guards.DP_ATTRS/DP_WO_ATTRS + WO readback mapping |
 
 Phases are run one at a time by tools/phase_matrix.py (dry-run by default) and
 aggregated into the boot/ready/calibration/vap/scan/dataplane table by
@@ -407,7 +408,7 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **542/542** device-free checks after task-124 (was 503 after task-114, 312 before it).
+Selftest: **563/563** device-free checks after task-126 (546 after task-124, 503 after task-114, 312 before it).
 
 ### 10.6 task-124: D2 documented-pending gates + per-phase configuration
 

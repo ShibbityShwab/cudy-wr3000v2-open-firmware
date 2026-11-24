@@ -1037,6 +1037,26 @@ def test_protocol_engine(tmp: str) -> None:
                  "h2d-grammar")
     guard.check_attr_write("seed", "1")
     ck("protocol guards: seed allowed for hi5622_wifi", True)
+    # merged DP txrx policy (task-126): payload-free selector / one-shot stores
+    guard.check_attr_write("dp_setup", "1")
+    guard.check_attr_write("dp_txq_sync", "1")
+    guard.check_attr_write("h2d_txq_addr_sync", "1")
+    guard.check_attr_write("dp_tx_frame", "1")
+    guard.check_attr_write("dp_tx_frame", "4")
+    guard.check_attr_write("dp_rx_poll", "1")
+    ck("protocol guards: merged dp txrx trigger writes allowed", True)
+    expect_guard("dp_tx_frame selector 5 refused",
+                 lambda: guard.check_attr_write("dp_tx_frame", "5"),
+                 "dp-payload")
+    expect_guard("dp_tx_frame non-numeric payload refused",
+                 lambda: guard.check_attr_write("dp_tx_frame", "probe"),
+                 "dp-payload")
+    expect_guard("dp_rx_poll value 2 refused",
+                 lambda: guard.check_attr_write("dp_rx_poll", "2"),
+                 "dp-payload")
+    ck("protocol guards: dp tx_status/rx_capture stay read-only",
+       not G.attr_is_write_only("dp_tx_status")
+       and not G.attr_is_write_only("dp_rx_capture"))
 
     # empty device read -> explicit device-read-empty (the 2026-11-25 live fire)
     empty = PS.evaluate(seq, {
@@ -1866,6 +1886,7 @@ def test_bringup_sequences(tmp: str) -> None:
         "bringup-d1-vap": (PS.PROFILE_CFG80211, 11),
         "bringup-d2-scan": (PS.PROFILE_CFG80211, 22),
         "bringup-e1-dataplane": (PS.PROFILE, 13),
+        "bringup-f-air-txrx": (PS.PROFILE_CFG80211, 30),
     }
     seqs = {}
     for name, (prof, nsteps) in want.items():
@@ -2030,6 +2051,58 @@ def test_bringup_sequences(tmp: str) -> None:
            [r["bar0"] for st in e1["steps"] if st["kind"] == "read_pack"
             for r in st["reads"] if "post" in r["label"]]
            == [0x6F8008, 0x6F800C, 0x7D0B60, 0x877000, 0x3F1010, 0x3F12D4])
+    f_air = seqs.get("bringup-f-air-txrx")
+    if f_air:
+        req = f_air["require"]
+        ck("F-AIR sequence: merged dp-txrx attrs required + pinned",
+           {"dp_probe", "dp_setup", "dp_rings", "dp_tx_status",
+            "h2d_txq_addr_sync", "dp_tx_frame", "dp_rx_poll",
+            "dp_rx_capture"} <= set(req["attrs"]),
+           str(req["attrs"]))
+        ck("F-AIR sequence: mode-1 provider params + budget 4 (3 H2D frames)",
+           req["budget_min"] == 3
+           and f_air["load_params"].get("h2d_send_budget") == 4
+           and f_air["load_params"].get("vap_start_first") == 1
+           and f_air["load_params"].get("vap_start_mode") == 1
+           and f_air["load_params"].get("allow_frames") == 12,
+           str(f_air["load_params"]))
+        writes = [w[1] for w in PS.plan_writes(f_air)]
+        ck("F-AIR sequence: 7 WO triggers in the documented order",
+           writes == ["h2d_ctx_create", "h2d_txq_sync72", "dp_setup",
+                      "h2d_txq_addr_sync", "dp_tx_frame", "dp_tx_frame",
+                      "dp_rx_poll"], str(writes))
+        names = [st["name"] for st in f_air["steps"]]
+        idx = {n: i for i, n in enumerate(names)}
+        ck("F-AIR sequence: ctx -> txq -> VAP/scan -> setup -> 0x320 -> TX",
+           idx["ctx-create-t1"] < idx["txq-sync72"] < idx["scan"] <
+           idx["dp-setup"] < idx["dp-txq-sync"] < idx["tx-frame-probe-req"],
+           str([n for n in names if n in (
+               "ctx-create-t1", "txq-sync72", "scan", "dp-setup",
+               "dp-txq-sync", "tx-frame-probe-req")]))
+        byname = {st["name"]: st for st in f_air["steps"]}
+        ck("F-AIR sequence: the scan is the firmware-VAP/air precondition",
+           byname["scan"]["kind"] == "shell"
+           and byname["scan"]["cmd"] == "iw-scan"
+           and "vap_start" in byname["scan"]["about"]
+           and byname["scan"]["expect_rc"] == 0, "")
+        ck("F-AIR sequence: RO evidence vs WO triggers mapped to readbacks",
+           byname["dp-probe"]["kind"] == "attr_expect"
+           and byname["dp-txq-sync"]["attr"] == "h2d_txq_addr_sync"
+           and byname["dp-txq-sync"]["readback"] == "h2d_status"
+           and byname["tx-frame-probe-req"]["readback"] == "dp_tx_status"
+           and byname["rx-poll"]["readback"] == "dp_rx_capture"
+           and byname["rx-capture"]["kind"] == "attr_expect", "")
+        ck("F-AIR sequence: no raw MAC-window read and no pointer conversion",
+           all("base" not in r
+               for st in f_air["steps"] if st["kind"] == "read_pack"
+               for r in st["reads"]), "")
+        ck("F-AIR sequence: post pack gates mask/staging/page/state/out0/out2",
+           [r["bar0"] for r in byname["post-pack"]["reads"]]
+           == [0x6F8008, 0x6F800C, 0x7D0B60, 0x877000, 0x877004, 0x877008,
+               0x87700C, 0x3F1010, 0x3F12D4], "")
+        ck("F-AIR sequence: BLOCKED-DRIVER branch is the scan results=0 wall",
+           byname["scan-results"].get("blocked_patterns") == ["results=0"],
+           str(byname["scan-results"].get("blocked_patterns")))
     d2 = seqs.get("bringup-d2-scan")
     if d2:
         byname = {st["name"]: st for st in d2["steps"]}
@@ -3320,6 +3393,15 @@ def test_wo_readback(tmp: str, proto: dict) -> None:
        and G.attr_readback("dp_txq_sync") == "h2d_status"
        and G.attr_is_write_only("dp_status") is False
        and G.attr_is_write_only("dp_probe") is False)
+    ck("wo-readback: merged txrx triggers map to their RO evidence",
+       G.attr_readback("dp_tx_frame") == "dp_tx_status"
+       and G.attr_readback("dp_rx_poll") == "dp_rx_capture"
+       and G.attr_is_write_only("dp_tx_frame") is True
+       and G.attr_is_write_only("dp_rx_poll") is True
+       and G.attr_is_write_only("dp_tx_status") is False
+       and G.attr_is_write_only("dp_rx_capture") is False
+       and {"dp_tx_frame", "dp_tx_status", "dp_rx_poll",
+            "dp_rx_capture"} <= G.DP_ATTRS)
     # the flag is surfaced in the plan for the operator
     ck("wo-readback: plan text names the RO readback for the C2 plan",
        "h2d_status" in PS.plan_doc(c2)["steps"][3].get("readback", ""))

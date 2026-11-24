@@ -1,0 +1,4 @@
+# lane-local ignores: Python bytecode from the host tools (no build products
+# ever live here - tools/build.sh stages the kernel build under /tmp)
+tools/__pycache__/
+*.pyc

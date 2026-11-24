@@ -219,15 +219,22 @@ WIFI_TRANSPORT_WO_ATTRS = WIFI_TRANSPORT_ATTRS
 # status line only.  VAP add/del and scan are nl80211 operations driven through
 # `iw` (shell steps), never sysfs writes.
 CFG80211_ATTRS = {"cfg80211_status"}
-# Data-plane host-side surface of the wave-3 dp-bringup driver
-# (../wifi-datapath-bringup/src/hi5622_dp.c, module 462,952 B sha256
-# 8fc693ad...): dp_probe (RO one-word MAC reachability read), dp_setup (WO,
-# the ONE MAC-program/ring-allocation action), dp_txq_sync (WO key-0x0320
-# hand-off) with h2d_txq_addr_sync as its bench-tooling alias, dp_status and
-# dp_rings (RO evidence).  See sequences/bringup-e1-dataplane.json.
+# Data-plane host-side surface.  E1 (../wifi-datapath-bringup/src/hi5622_dp.c,
+# module 462,952 B sha256 8fc693ad...): dp_probe (RO one-word MAC reachability
+# read), dp_setup (WO, the ONE MAC-program/ring-allocation action), dp_txq_sync
+# (WO key-0x0320 hand-off) with h2d_txq_addr_sync as its bench-tooling alias,
+# dp_status and dp_rings (RO evidence).  See sequences/bringup-e1-dataplane.json.
+# wifi-dp-txrx / wifi-dp-air (task-122/126, ../wifi-dp-txrx, ../wifi-dp-air):
+# dp_tx_frame (WO: the FIRST MAC data-plane TX post, one 8-B MSDU ring entry +
+# device-RAM table wptr publish), dp_tx_status (RO completion/pending evidence),
+# dp_rx_poll (WO: one bounded read-only RX capture action; moves no pointer) and
+# dp_rx_capture (RO captured evidence).  See sequences/ladder-f-txrx.json and
+# sequences/bringup-f-air-txrx.json.
 DP_ATTRS = {"dp_probe", "dp_setup", "dp_txq_sync", "dp_status", "dp_rings",
-            "h2d_txq_addr_sync"}
-DP_WO_ATTRS = {"dp_setup", "dp_txq_sync", "h2d_txq_addr_sync"}
+            "h2d_txq_addr_sync",
+            "dp_tx_frame", "dp_tx_status", "dp_rx_poll", "dp_rx_capture"}
+DP_WO_ATTRS = {"dp_setup", "dp_txq_sync", "h2d_txq_addr_sync",
+               "dp_tx_frame", "dp_rx_poll"}
 ALL_KNOWN_ATTRS = (BASE_ATTRS | HCC_ATTRS | RD_ATTRS | H2D_ATTRS |
                    WIFI_TRANSPORT_ATTRS | CFG80211_ATTRS | DP_ATTRS)
 WO_ATTRS = {
@@ -268,6 +275,8 @@ WO_ATTR_READBACK = {
     "dp_txq_sync": "h2d_status",
     "h2d_txq_addr_sync": "h2d_status",
     "dp_setup": "dp_status",
+    "dp_tx_frame": "dp_tx_status",
+    "dp_rx_poll": "dp_rx_capture",
 }
 
 
@@ -1122,6 +1131,24 @@ class WriteGuard:
             if payload.strip() != "1":
                 raise GuardError("dp-payload",
                                  "dp_setup store payload must be '1'")
+            return
+        if attr == "dp_tx_frame":
+            # The first MAC data-plane TX post (task-122/126): the store VALUE
+            # selects one of the driver's pre-built, payload-free frames
+            # (1 = 32 B broadcast probe request, 2 = 24 B null-data, 3 = 26 B
+            # QoS-null, 4 = broadcast ARP). No user frame bytes are accepted;
+            # the driver publishes the MSDU ring entry + device-RAM wptr itself.
+            if not re.match(r"^[1-4]$", payload.strip()):
+                raise GuardError("dp-payload",
+                                 "dp_tx_frame payload is the frame selector "
+                                 "1..4, got %r" % payload)
+            return
+        if attr == "dp_rx_poll":
+            # ONE bounded READ-ONLY RX capture action per module load: it
+            # moves no ring pointer and reposts nothing; payload is '1'.
+            if payload.strip() != "1":
+                raise GuardError("dp-payload",
+                                 "dp_rx_poll store payload must be '1'")
             return
         if attr == "h2d_send":
             # Dedicated-frame grammar only; payload frames stay refused.

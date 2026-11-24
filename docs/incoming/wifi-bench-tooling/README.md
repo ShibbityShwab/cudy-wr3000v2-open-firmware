@@ -44,12 +44,12 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | tools/bench_session.py | one command for an attended Wi-Fi bench session: modes stock-golden / our-golden / patched / h2d / **protocol**; host preflight, deploy+sha read-back, module load with the fw_path variant, prepare/upload/verify/seed, hcc_arm/hcc_loop, release-only, golden-page gate, strict ready pair, then either the one-shot announce or the data-driven protocol sequence, structured report + sha256-chained write audit |
 | tools/protocol_sequence.py | the data-driven protocol-sequence engine: JSON schema validation (fail-closed), shell-gate + pointer-convention code generation, independent host-side re-evaluation of every gate, evidence JSON/markdown rendering, failure triage; task-114 adds the allowlisted `shell` step kind, profiles, `present`/`absent`/delta expectations |
 | tools/sequences/ladder-c-ordered.json | the bundled hardware-validated ladder: golden boot -> ctx_create t1 -> PACK -> txq_sync72 -> PACK -> D2H delta (11 steps / 62 checks / 2 H2D writes) |
-| tools/sequences/bringup-*.json | the task-114 bring-up ladder: boot-ready (read-only), C2 six-calibration (28 steps / 8 writes), D1 VAP add/del, D2 scan request, E1 data-plane setup + TXQ-table sync |
+| tools/sequences/bringup-*.json | the task-114 bring-up ladder: boot-ready (read-only), C2 six-calibration (28 steps / 8 writes), D1 VAP add/del, D2 scan request, E1 data-plane setup + TXQ-table sync, and (task-126) the F-AIR first air-TX/RX ladder on the **merged provider+data-plane module**: ctx_create t1 -> txq_sync72 -> iface add -> link up -> ONE scan (firmware VAP + channel) -> dp_probe -> dp_setup -> key-0x0320 hand-off -> probe-request TX + completion read -> read-only RX capture -> packs (30 steps / 83 checks / 7 writes; COMPLETED / POST-ONLY / NO-RX / BLOCKED-DRIVER are separate verdicts) |
 | tools/phase_matrix.py | one command runs a selected bring-up phase (boot/C2/D1/D2/E1) through bench_session.py, per-phase evidence dir + `phase-matrix.json`/`PHASE-MATRIX.md`; dry-run by default, real run needs --yes-really --attended |
 | tools/bringup_report.py | aggregates phase-matrix evidence into the bring-up state table (boot/ready/calibration/vap/scan/dataplane) + `BRINGUP-STATUS.md` + JSON; never contacts the device |
 | tools/fw_patch_builder.py | patched-firmware builder/verifier: pinned-source check, PD/PD2/PD3/PD3B recipe application (all ../wifi-irq-unmask/*.recipe.json auto-discovered), per-window sha16, capstone decode check, image-header protection (entry words + RAZ-only exception-record area), full-image verify of an existing patched copy, manifest |
 | tools/bench_guards.py | the safety policy library shared by both tools (forbidden CA, CECE latch, release magic, devmem census, module/fw validation, static script audit, tamper-evident audit log) |
-| tools/selftest.py | device-free unit/integration selftest, 312 checks |
+| tools/selftest.py | device-free unit/integration selftest, 563 checks |
 | tools/bar0read.c | tiny READ-ONLY static ARM /dev/mem mmap helper (built on the host from this source, deployed as /root/hi5622-bar0read): the image has no busybox devmem applet, cannot read() PCI MMIO through /dev/mem on ARM, and PCI resource0 has no read(), so a PROT_READ mmap helper is the only reliable raw BAR0 read path |
 | tools/run-selftest.sh | wrapper: python3 tools/selftest.py |
 
@@ -223,7 +223,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 542/542 device-free checks (task-114: +191; task-124: +39)
+    ./tools/run-selftest.sh        # 563/563 device-free checks (task-114: +191; task-124: +39; task-126: +17)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -276,6 +276,7 @@ through the same one-command session runner:
 | D1 | bringup-d1-vap.json | cfg80211 | wiphy registration gate + iw phy + netdev VAP add/del lifecycle (M0/M1) |
 | D2 | bringup-d2-scan.json | cfg80211 | TRUE-PASS ladder: ctx_create t1 -> txq_sync72 -> iw iface add -> link up -> ONE iw scan on the **wifi-vap-start provider module** (vap_start_mode=1); gates iw rc=0 + dmesg 'scan channel result' + results>0 + mask/staging 0 + golden page/state + provider refused=0; results=0 is the documented BLOCKED-DRIVER outcome (task-124; 22 steps / 48 checks / 2 writes) |
 | E1 | bringup-e1-dataplane.json | protocol | dp lane ladder D: dp_probe read-only MAC reachability + ONE dp_setup (rings/table/MAC program verified) + ONE key-0x0320 TXQ-table address sync + post pack |
+| F-AIR | bringup-f-air-txrx.json | cfg80211 | **sequence-only (not a phase-matrix row yet)**: first air-TX/RX on the merged provider+data-plane module (opensource/docs/incoming/wifi-dp-air): ctx_create t1 -> txq_sync72 -> iw iface add -> link up -> ONE iw scan (firmware VAP g0 id1 0x64/0x65 + channel) -> read-only dp_probe -> dp_setup -> key-0x0320 hand-off -> probe-request TX entry + device-RAM wptr publish -> completion read -> read-only RX capture -> post packs. Verdicts: COMPLETED (MAC) / POST-ONLY / NO-RX / BLOCKED-DRIVER (scan results=0); an on-air claim additionally needs an external observer (task-126; 30 steps / 83 checks / 7 writes) |
 
 New tools/modes:
 
@@ -394,8 +395,10 @@ prerequisite ladder the provider needs and gates the real firmware result.
   is refused at plan time (**BLOCKED-PREREQ**, module-param-unknown).
 - Dry-run evidence (host-only, local artefact digests): provider-module D2
   **PLAN-OK** (module 738,112 B sha e09dc697..., PD4 fw cfe24bfb..., script
-  sh -n + audit PASS) and plain-module D2 **BLOCKED-PREREQ**; selftest grows to
-  **542/542** device-free checks.  See PHASES.md section 6.1.
+  sh -n + audit PASS) and plain-module D2 **BLOCKED-PREREQ**; task-126 adds the
+  merged-module F-AIR sequence + the four txrx attribute allowlist/payload-policy
+  entries, so the selftest grows to **563/563** device-free checks.  See PHASES.md
+  section 6.1 and ../wifi-dp-air/LADDER-F-AIR.md.
 
 Explicitly not proven: no phase was fired on hardware by this lane.  The D2
 PASS observables are the 2026-11-26 14:00 attended mode-1 provider fire

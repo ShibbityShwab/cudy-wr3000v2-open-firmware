@@ -43,6 +43,13 @@ patch differs).
 
 ## Handoffs
 
+* **MERGE DONE (2026-11-26, task-126):** this lane's two kernel objects and
+  its portable logic are merged into the mode-1 provider module by the
+  **wifi-dp-air** lane (`../wifi-dp-air/`): merged module **884,576 B**
+  sha256 ec74fccd..., 1,483 device-free host checks, F-AIR sequence
+  `../wifi-bench-tooling/tools/sequences/bringup-f-air-txrx.json`. This lane's
+  standalone E1-post-only module/ladder F remains valid and unchanged; the
+  F-AIR ladder in that lane is the air-capable follow-up described below.
 * **bench tooling (allowlist for the ladder):** add
   `dp_tx_frame, dp_tx_status, dp_rx_poll, dp_rx_capture` to
   bench_guards.DP_ATTRS/ALL_KNOWN_ATTRS; add `dp_tx_frame, dp_rx_poll` to

@@ -30,6 +30,25 @@ performs after the ready handshake.
 | `D2` | scan | cfg80211 | `bringup-d2-scan.json` | **22 / 48 / 2** | **TRUE-PASS ladder**: ready -> ctx_create t1 (g0 id1 key 0x64) -> txq_sync72 -> `iw phy phy0 interface add wlan0 type managed` (provider user_add g0 id7 + notify g0 id8) -> link up -> ONE `iw dev wlan0 scan` (provider vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req g0 id0xC 520 B). PASS = iw rc=0 **and** dmesg `cfg80211: scan channel result slot=.. ch=.. (.. MHz)` present **and** scan results>0 (cfg80211_status `results=` present, `results=0` absent) **and** mask/staging 0 **and** golden page/state **and** provider frame_post refused=0/timeout=0/bad=0. The D2H g1 15/16/17 (and g2 2) catalogue is **captured as evidence**, not gated (the PASS decision is the scan result set) | **the wifi-vap-start PROVIDER module** (wifi-scan-ap src + `../wifi-vap-start/provider/vapstart-provider.patch`, mode `vap_start_mode=1`, `allow_frames=12`, 738,112 B sha256 e09dc697...; build with `../wifi-vap-start/tools/kernel-check.sh`). The plain cfg80211/scan-ap module has no `vap_start_*` params: D2 is refused at plan time (module-param-unknown -> **BLOCKED-PREREQ**), never silently mis-run. PD4 firmware cfe24bfb..., cfg80211.ko/iw/libnl-tiny as D1 |
 | `E1` | dataplane | protocol | `bringup-e1-dataplane.json` | 13 / 42 / 3 | ready id2 payload 0x01060850 (MSDU-info ring-pointer table) -> clean ctx_create -> ONE read-only MAC slot-5 reachability read via the RO dp_probe attribute -> ONE dp_setup (TXQ table 0x2524 + 8x64x8 TX MSDU rings + tx_ba_info + RX 256/512 + 4095 completion ring; 14 MAC band-0 registers written+verified, 8 device-RAM table entries) -> dp_rings snapshot -> ONE key-0x0320 h2d_txq_addr_sync (txq_addr_sent=1, ok=2, timeout=0) -> post pack mask/staging 0, state 1, page golden, out0/out2 0 | the wifi-datapath-bringup driver (module 462,952 B sha256 8fc693ad..., attrs dp_probe/dp_setup/dp_txq_sync/dp_status/dp_rings + h2d_txq_addr_sync alias), PD4 firmware cfe24bfb..., budget 2; MAC ring register programming is the driver's action, never automation devmem |
 
+**F-AIR (task-126, sequence-only):** `bringup-f-air-txrx.json` is the
+first air-TX/RX ladder and is deliberately **not** a phase-matrix row yet: its
+module is the lane artifact `opensource/docs/incoming/wifi-dp-air` (the
+mode-1 provider **merged with** the E1 data plane + the wifi-dp-txrx actions,
+module 884,576 B sha256 ec74fccd...), not a pinned phase dependency. It runs
+through the same `bench_session.py --mode protocol --sequence ...` path after
+the normal boot ladder: ctx_create t1 -> txq_sync72 -> iw iface add -> link up
+-> ONE iw scan (the provider's mode-1 VAP create + the radio channel = the
+air-TX precondition) -> read-only dp_probe -> ONE dp_setup -> ONE key-0x0320
+hand-off -> probe-request TX entry + device-RAM table wptr publish ->
+read-only completion read -> ONE read-only RX capture -> post packs. It has
+four explicit outcomes instead of one PASS: **COMPLETED (MAC)** (frames
+consumed by the MAC), **POST-ONLY** (host->ring->table publish proven, MAC did
+not consume), **NO-RX** (no RX frame captured) and **BLOCKED-DRIVER** (scan
+results=0: no firmware VAP, so no air-TX claim). An *on-air* claim additionally
+needs an external observer - the clean-room host can only prove the MAC
+completion chain. Ladder + stop rules: `../wifi-dp-air/LADDER-F-AIR.md`;
+build: `../wifi-dp-air/tools/build.sh`.
+
 **D2 provider prerequisites, in order (why the ladder is not just "iw scan"):**
 the provider patch enables `vap_start_first=1`, which posts the h2d VAP-create
 (g0 id1 key 0x64) + VAP-start (g0 id1 key 0x65) family inside the scan op; that
@@ -303,13 +322,28 @@ dataplane BLOCKED.
 
 ### 6.4 Selftest
 
-`./tools/run-selftest.sh` - **542/542** device-free checks (was 503),
+`./tools/run-selftest.sh` - **563/563** device-free checks (was 546 after
+task-124, 503 before it; task-126 adds the F-AIR sequence + txrx
+allowlist/payload-policy),
 including the new blocked-patterns gate tests (schema/refusals, device-side
 script execution under `sh -u`, host evaluation PASS/BLOCKED/FAIL), the
 synthetic D2 decision-table matrix (hardware-result PASS, results=0 BLOCKED,
 firmware-exception FAIL, page-drift FAIL, unsigned gate-miss FAIL), the
 per-phase module-param/-sequence tests and the provider-vs-plain-module D2
 matrix dry-runs (PLAN-OK vs BLOCKED-PREREQ).
+
+### 6.5 task-126: F-AIR merged-module ladder (recorded 2026-11-26)
+
+| item | value |
+| --- | --- |
+| sequence | `bringup-f-air-txrx.json` sha256 **96354365867beaedeb77c001fed31a2afdb0d4d2edb949cd898fab2fcc8342f6** |
+| F-AIR row | **PLAN-OK** - 30 steps / 83 checks / 7 device writes / 4 shell actions; dry-run generated script audit PASS, no refused step |
+| merged module | `opensource/docs/incoming/wifi-dp-air/src` build: **884,576 B** sha256 **ec74fccd7c6d26585b30604828d4469100bb6714ada7dddf1e1b2ea0320a98e3** (base provider 748,888 B b42ff4ec...; 0 warnings; vermagic 6.18.60) |
+| sequence load_params | allow_frames=12, frame_gap_ms=100, h2d_send_budget=4, vap_start_first=1, vap_start_mode=1, vap_start_module=0 (budget_min=3) |
+| allowlist | `dp_tx_frame`, `dp_tx_status`, `dp_rx_poll`, `dp_rx_capture` in DP_ATTRS; `dp_tx_frame`/`dp_rx_poll` in DP_WO_ATTRS; write-readback `dp_tx_frame->dp_tx_status`, `dp_rx_poll->dp_rx_capture`; payload-policy branches: selector 1..4 / one-shot `1` (exact stores only) |
+| dry-run | `bench_session.py --mode cfg80211 --sequence .../bringup-f-air-txrx.json --module <merged .ko> ... --dry-run` -> plan renders 14 attr stores, 4 shell actions, 1 insmod, 1 host-run; `sh -n` + static write audit PASS; no device contacted |
+| verdicts | COMPLETED (MAC) / POST-ONLY / NO-RX / BLOCKED-DRIVER (scan results=0); an on-air claim needs an external observer |
+| ladder / build | `../wifi-dp-air/LADDER-F-AIR.md` + `../wifi-dp-air/tools/build.sh` |
 
 ---
 
