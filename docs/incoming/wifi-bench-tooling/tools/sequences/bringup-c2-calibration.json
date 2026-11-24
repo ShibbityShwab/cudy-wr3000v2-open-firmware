@@ -73,7 +73,7 @@
   {
    "name": "post-create",
    "kind": "read_pack",
-   "about": "the create allocated the context: ctx+0x190 != 0, V+0x10 = 0x64 and V+0x14 = 3 (the two 2026-11-25 validated signatures)",
+   "about": "the create allocated the context: ctx4+0x190 != 0, and the HARDWARE-MEASURED ctx4 body pack (ledger 2026-11-25 05:10 lap, measured twice; BENCH-PROCEDURE post-create pack): ctx4[0]=4, ctx4+0x10=0x00010001, ctx4+0x434=0x0100478C. Absolute BAR0 addresses are used on purpose: the allocator return value V is a firmware-RAM/PKTRAM pointer whose host read translation is [U] (the ctx-create lane documents BAR0 = V + 0x6B8000 for firmware-RAM CPU pointers, which overflows BAR0 for V=0x01011448, and the region-2 CA conversion reads a different memory -> 0). The measured body pack is the robust signature set.",
    "reads": [
     {
      "label": "post_ctx190",
@@ -83,19 +83,24 @@
      }
     },
     {
-     "label": "post_sig10",
-     "base": "post_ctx190",
-     "add": "0x10",
+     "label": "post_ctx4",
+     "bar0": "0x7d4458",
      "expect": {
-      "eq": "0x64"
+      "eq": "0x00000004"
      }
     },
     {
-     "label": "post_sig14",
-     "base": "post_ctx190",
-     "add": "0x14",
+     "label": "post_ctx10",
+     "bar0": "0x7d4468",
      "expect": {
-      "eq": "0x3"
+      "eq": "0x00010001"
+     }
+    },
+    {
+     "label": "post_ctx434",
+     "bar0": "0x7d488c",
+     "expect": {
+      "eq": "0x0100478c"
      }
     }
    ]

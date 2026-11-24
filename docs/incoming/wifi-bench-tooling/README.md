@@ -214,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 415/415 device-free checks (task-114: +103)
+    ./tools/run-selftest.sh        # 419/419 device-free checks (task-114: +107)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -309,7 +309,7 @@ carries no h2d_txq_addr_sync C string - the dp-bringup lane's deliverable).
 The rendered bring-up table is: boot READY | ready READY | calibration READY |
 vap READY | scan READY | dataplane BLOCKED.
 
-Live-fire fixes (REPORT.md 9.1/9.2): (a) the generated attr-pattern shell gates
+Live-fire fixes (REPORT.md 9.1/9.2/9.3): (a) the generated attr-pattern shell gates
 had a corrupted pattern literal (hard-coded path instead of $p), so every
 pattern gate failed on the first C2 fire - fixed, and the gates are now
 whitespace-tolerant both device-side and host-side (wrapped long attr lines
@@ -317,9 +317,14 @@ still match), with a wrapped-capture regression test; (b) post-write gates
 cat'ed the WRITE-ONLY trigger attribute (EACCES) - every write step now
 captures the read-only status/events attr from the bench_guards
 WO_ATTR_READBACK policy (h2d_* -> h2d_status etc.), attr_expect of a WO attr is
-refused at plan time, and every bundled sequence is checked for WO reads.
+refused at plan time, and every bundled sequence is checked for WO reads;
+(c) the C2 post-create gate translated the allocator return V through the
+region-2 PKTRAM CA convention, whose host read is unvalidated/reads 0 - the
+step now gates the HARDWARE-MEASURED ctx4 body PACK at absolute BAR0
+addresses (0x7D4458=4, 0x7D4468=0x00010001, 0x7D488C=0x0100478C) with no
+pointer conversion, and tests lock the addresses/values in.
 
-Selftest: **312 -> 415** device-free checks (+103): shell-step refusal matrix,
+Selftest: **312 -> 419** device-free checks (+107): shell-step refusal matrix,
 shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
 wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
 pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),

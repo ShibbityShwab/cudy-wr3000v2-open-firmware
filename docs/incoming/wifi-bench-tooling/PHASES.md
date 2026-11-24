@@ -24,7 +24,7 @@ performs after the ready handshake.
 | phase | row | mode | sequence (bundled) | steps/checks/writes | PASS gate | external dependency |
 | --- | --- | --- | --- | --- | --- | --- |
 | `boot` | boot + ready | protocol | `bringup-boot-ready.json` | 5 / 18 / 0 | page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0; ready id1+id2, id2 payload 0x01060850, phase READY_TXQ_SYNC | none (read-only) |
-| `C2` | calibration | protocol | `bringup-c2-calibration.json` | 28 / 54 / 8 | ctx_create type 1 -> ctx+0x190 allocated (signatures 0x64/3) -> txq_sync72 clean -> **six** cfg_cal 3502..3507, each consumed and each answered by a 298 B g1 id3 frame (relative catalogue delta + last_total=0x12A), counters frames_sent=8 ok=8 cfg_cal_sent=6 timeout=0 refused=0, page/state/mask still golden | calibration-token driver (**407,996 B sha256 2d45e545...**, attrs h2d_cfg_cal etc.), PD4 firmware cfe24bfb..., budget 8 |
+| `C2` | calibration | protocol | `bringup-c2-calibration.json` | 28 / 55 / 8 | ctx_create type 1 -> ctx4+0x190 allocated + the measured ctx4 body PACK (0x7D4458=4, 0x7D4468=0x00010001, 0x7D488C=0x0100478C) -> txq_sync72 clean -> **six** cfg_cal 3502..3507, each consumed and each answered by a 298 B g1 id3 frame (relative catalogue delta + last_total=0x12A), counters frames_sent=8 ok=8 cfg_cal_sent=6 timeout=0 refused=0, page/state/mask still golden | calibration-token driver (**407,996 B sha256 2d45e545...**, attrs h2d_cfg_cal etc.), PD4 firmware cfe24bfb..., budget 8 |
 | `D1` | vap | cfg80211 | `bringup-d1-vap.json` | 11 / 24 / 0 | cfg80211_status wiphy=alloc/registered=1 -> iw phy phy0 info -> iw phy phy0 interface add wlan0 type managed -> real netdev (sysfs type=1, address) -> VAP counters vap0: wlan0/created=1 -> iw dev wlan0 del -> vaps=0/removed=1, vap0 line absent, iw dev no longer lists wlan0 | cfg80211-enabled hi5622_wifi module (505,076 B d2b3cf79... or the newer scan-ap build 622,544 B 77987ed0...), cfg80211.ko 2,328,548 B 949393f9..., iw 121,952 B, libnl-tiny |
 | `D2` | scan | cfg80211 | `bringup-d2-scan.json` | 11 / 15 / 0 | VAP up -> ONE iw dev wlan0 scan rc=0 -> mask 0 + staging 0 (no firmware exception) -> h2d_status timeout=0/refused=0; the D2H scan events are **watch-only** | the provider registry must carry the wifi-vap-scan g0 id0xC builder (520 B, SR node word1 0x02086d2b - ../wifi-vap-scan/recipes/frames.md); today the scan op is the fail-closed -EOPNOTSUPP stub (rc=95) |
 | `E1` | dataplane | protocol | `bringup-e1-dataplane.json` | 11 / 22 / 3 | ready id2 payload 0x01060850 (MSDU-info ring-pointer table) -> clean ctx_create+txq_sync72 -> ONE read-only MAC slot-5 reachability probe (CA 0x40040000 via the region-3 translation, BAR0 0x3F8000; capture-only) -> ONE key-0x0320 TXQ-table address sync (h2d_txq_addr_sync, consumed, mask 0/staging 0, refused=0) | contracted dp-bringup token h2d_txq_addr_sync (the sequence JSON is the single edit point if the lane names it differently); MAC ring **register** programming (B2b) is the driver's job, not automation devmem |
@@ -163,7 +163,7 @@ gitignored; digests are the real local artifacts):
 | phase | status | detail |
 | --- | --- | --- |
 | boot | **PLAN-OK** | 5 steps / 18 checks / 0 writes; page/state/mask/staging + ready-pair gates validated |
-| C2 | **PLAN-OK** | 28 steps / 54 checks / 8 device writes; six 298 B response gates; budget=8 enforced |
+| C2 | **PLAN-OK** | 28 steps / 55 checks / 8 device writes; six 298 B response gates; budget=8 enforced |
 | D1 | **PLAN-OK** | 11 steps / 24 checks / 0 writes; cfg80211.ko 2,328,548 B, iw 121,952 B, libnl-tiny validated, cfg80211-first load order + wiphy gate rendered, sh -n PASS |
 | D2 | **PLAN-OK** | 11 steps / 15 checks; scan request gate + exception gates; D2H events watch-only |
 | E1 | **BLOCKED-TOKEN** | the current calibration-token module carries no h2d_txq_addr_sync C string: dp-bringup deliverable pending; the E1 sequence JSON is the single edit point |
@@ -172,7 +172,7 @@ Bring-up status rendered from that matrix:
 
     boot READY | ready READY | calibration READY | vap READY | scan READY | dataplane BLOCKED (wait for dp-bringup token)
 
-Selftest: **415/415** device-free checks (was 312), including the shell-step
+Selftest: **419/419** device-free checks (was 312), including the shell-step
 refusal matrix, the shell/absent/present evaluation fixtures, the synthetic
 C2 six-response evaluation (+ wrong-length and missing-response negatives), the
 synthetic D1 wiphy+VAP add/del evaluation, the cfg80211 mode plan/deploy/script

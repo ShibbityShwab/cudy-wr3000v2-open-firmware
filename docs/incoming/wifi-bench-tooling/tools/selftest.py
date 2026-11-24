@@ -1832,8 +1832,9 @@ def test_bringup_sequences(tmp: str) -> None:
             "pre-pack.pre_ctx190": 0, "pre-pack.pre_mask0": 0,
             "pre-pack.pre_staging0": 0,
             "post-create.post_ctx190": 0x01011448,
-            "post-create.post_sig10": 0x64,
-            "post-create.post_sig14": 3,
+            "post-create.post_ctx4": 0x00000004,
+            "post-create.post_ctx10": 0x00010001,
+            "post-create.post_ctx434": 0x0100478C,
             "post-txq.txq_mask0": 0, "post-txq.txq_staging0": 0,
             "final-pack.final_page0": 0x86807FEF,
             "final-pack.final_state0": 1, "final-pack.final_mask0": 0,
@@ -1868,6 +1869,30 @@ def test_bringup_sequences(tmp: str) -> None:
         ev3 = PS.evaluate(c2, bad3)
         ck("C2 sequence: missing 298 B answer fails at the right step",
            ev3["failed_step"] == "resp-3504", str(ev3["failed_step"]))
+        # post-create PACK: the measured ctx4 body signatures, absolute BAR0.
+        # The allocator return V's host translation is [U] (the region-2 CA
+        # conversion read 0 on the 2026-11-25 C2 fire; V+0x6B8000 overflows
+        # BAR0 for V=0x01011448), so the sequence gates the measured body.
+        pc = next(st for st in c2["steps"] if st["name"] == "post-create")
+        ck("C2 sequence: post-create uses the measured ctx4 body PACK at "
+           "absolute BAR0",
+           [(r["label"], r["bar0"]) for r in pc["reads"]] ==
+           [("post_ctx190", 0x7D45E8), ("post_ctx4", 0x7D4458),
+            ("post_ctx10", 0x7D4468), ("post_ctx434", 0x7D488C)],
+           str([(r["label"], hex(r["bar0"])) for r in pc["reads"]]))
+        ck("C2 sequence: post-create carries no pointer-conversion read",
+           not any("base" in r for r in pc["reads"])
+           and not any("base" in r for st in c2["steps"]
+                       if st["kind"] == "read_pack" for r in st["reads"]))
+        ck("C2 sequence: body PACK gates the measured values",
+           [r.get("expect", {}).get("eq") for r in pc["reads"][1:]] ==
+           [0x00000004, 0x00010001, 0x0100478C]
+           and pc["reads"][0]["expect"].get("nonzero") is True)
+        badpack = json.loads(json.dumps(summary_c2))
+        badpack["rd32"]["post-create.post_ctx434"] = 0x0100478D
+        ev4 = PS.evaluate(c2, badpack)
+        ck("C2 sequence: a wrong ctx4 body signature fails at post-create",
+           ev4["failed_step"] == "post-create", str(ev4["failed_step"]))
     d1 = seqs.get("bringup-d1-vap")
     if d1:
         ck("D1 sequence: no H2D attr writes (M1 is driver-only)",

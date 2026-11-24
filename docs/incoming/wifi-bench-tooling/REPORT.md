@@ -442,7 +442,7 @@ runner into the **bring-up ladder**:
    bench time.
 4. **Bundled phase sequences** (tools/sequences/):
    - bringup-boot-ready (read-only golden page + ready pair, 5/18/0)
-   - bringup-c2-calibration (six-calibration boot, 28/54/8, budget 8; six
+   - bringup-c2-calibration (six-calibration boot, 28/55/8, budget 8; six
      298 B g1 id3 answers gated by relative delta + last_total)
    - bringup-d1-vap (cfg80211 M0/M1 wiphy + netdev add/del, 11/24/0)
    - bringup-d2-scan (scan request rc=0 + no-exception gates, 11/15/0; D2H
@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 415 device-free checks (+103): shell-step refusal matrix,
+7. **Tests**: 312 -> 419 device-free checks (+107): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -525,10 +525,10 @@ Fixes:
    fixed generated shell gate executed directly on that captured content
    ("GATE load-budget PASS (attr=h2d_status)").
 
-Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 54 checks /
+Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 55 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-415/415 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+419/419 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
 
@@ -587,3 +587,50 @@ h2d_status; grep for any r_attr_as of a WO attr: NONE; sh -n PASS).
 Note on H1/H2: the pending-mask pack reading H1 with PD4 is expected - PD4 is
 consume-only and the firmware responses arrive through the non-mailbox
 (direct device group-A ring) path our reader uses; no sequence change needed.
+
+### 9.3 Third C2 fire: post-create V-pointer translation -> measured ctx4 body PACK
+
+After the WO-readback fix the fire (evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T072242Z/C2) went
+green through pre-pack, ctx-create-t1.write and ctx-create-t1.p0
+(attr=h2d_status), then STOPPED:
+
+    GATE post-create.post_ctx190 PASS raw=0x01011448
+    PTR-CONV post-create.post_sig10 base=0x01011448 conv=pktram
+    RD32 label=post-create.post_sig10 bar0=0x1e9458 v=0x00000000
+    STOP:post-create.post_sig10: expectation failed: raw=0x00000000 want=0x00000064
+
+Root cause: the sequence gated two create-buffer signatures by translating the
+allocator return V (0x01011448) through the region-2 PKTRAM device-CA
+convention.  That convention is right for device-CA pointers, but V's host read
+translation is [U]: the ctx-create lane documents BAR0 = V + 0x6B8000 for
+firmware-RAM CPU pointers (which overflows the 16 MiB BAR0 for V=0x01011448),
+and the region-2 CA conversion lands in a different memory and reads 0.  The
+signature values themselves (0x64/3/0x92A) are real, but the host address
+mapping was never hardware-validated.
+
+Fix (robust option (a) - use the HARDWARE-MEASURED body pack): the C2
+post-create step now gates the ctx4 body at absolute BAR0 addresses, measured
+twice in the successful manual laps and recorded in the wifi-h2d-send
+BENCH-PROCEDURE post-create PACK:
+
+| read | BAR0 | expect |
+| --- | ---: | --- |
+| post_ctx190 | 0x7D45E8 | non-zero (0x01011448 in the fire) |
+| post_ctx4 | 0x7D4458 | 0x00000004 |
+| post_ctx10 | 0x7D4468 | 0x00010001 |
+| post_ctx434 | 0x7D488C | 0x0100478C |
+
+read_pack already supports an explicit absolute 'bar0' read (the dynamic
+base+offset form is optional), so no schema change was needed; the C2 sequence
+no longer performs any pointer-conversion read, and the ambiguity is documented
+in the step's 'about'.  This also keeps the post-create gate independent of the
+allocator's internal addressing.
+
+Tests (selftest 415 -> 419): the C2 positive fixture now uses the measured PACK
+values; new checks assert the exact absolute BAR0 addresses, no base+offset
+read remains anywhere in C2, the gated values match the ledger, and a wrong
+body signature (ctx434 = 0x0100478D) fails at post-create.
+
+Re-validated: C2 dry-run PLAN-OK (28 steps / 55 checks / 8 writes), full matrix
+unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 419/419 PASS.
