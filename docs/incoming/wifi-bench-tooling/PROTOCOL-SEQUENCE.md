@@ -398,4 +398,4 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **432/432** device-free checks after task-114 (was 312).
+Selftest: **443/443** device-free checks after task-114 (was 312).

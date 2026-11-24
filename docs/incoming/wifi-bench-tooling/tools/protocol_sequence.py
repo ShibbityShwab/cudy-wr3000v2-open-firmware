@@ -933,6 +933,12 @@ def render_script(seq: dict) -> list:
             cmd = shell_command_text(st["cmd"], st["args"])
             argv = shell_argv(st["cmd"], st["args"])
             a('say "SHELL-CMD %s %s"' % (n, cmd))
+            # Output must live in its own seq-<n> report section: the host
+            # evaluator reads the captured shell stdout from there (it is NOT
+            # the protocol-<n> step header section - the 2026-11-25 D1 fire
+            # hd its output only under protocol-phy-info, so the host-side
+            # pattern check could never match).
+            a("section seq-%s" % n)
             if argv[0] == "iw":
                 rendered = '"$IW" ' + " ".join(_q(x) for x in argv[1:])
             else:
@@ -942,14 +948,16 @@ def render_script(seq: dict) -> list:
             a('cat "$RDIR/seq-%s.out" >> "$R" 2>/dev/null || :' % n)
             a('say "SHELL-RC %s rc=$SRC"' % n)
             a('gate_rc %s "$SRC" %d' % (_q("%s.rc" % n), st["expect_rc"]))
+            # The output file argument must be a DOUBLE-quoted expansion: a
+            # single-quoted '$RDIR/...' reaches the gate literally (no shell
+            # expansion) and grep fails on a file that does not exist - the
+            # 2026-11-25 D1 fire's phy-info gate searched '\$RDIR/seq-...out'.
             for i, p in enumerate(st["patterns"]):
-                a("gate_out_has %s %s %s"
-                  % (_q("%s.p%d" % (n, i)), _q("$RDIR/seq-%s.out" % n),
-                     _q(p)))
+                a('gate_out_has %s "$RDIR/seq-%s.out" %s'
+                  % (_q("%s.p%d" % (n, i)), n, _q(p)))
             for i, p in enumerate(st["absent"]):
-                a("gate_out_absent %s %s %s"
-                  % (_q("%s.a%d" % (n, i)), _q("$RDIR/seq-%s.out" % n),
-                     _q(p)))
+                a('gate_out_absent %s "$RDIR/seq-%s.out" %s'
+                  % (_q("%s.a%d" % (n, i)), n, _q(p)))
         elif kind == "catalog_snapshot":
             a("r_attr_as seq-%s-rd_catalog rd_catalog" % n)
             a("r_attr_as seq-%s-rd_decode rd_decode" % n)
@@ -1104,7 +1112,7 @@ def _check_read(read: dict, label_map: dict, rd32: dict, step: str) -> dict:
 
 CONTROL_LINE_RE = re.compile(
     r"^(?:STOP:|GATE-FAIL|GATE |SESSION_RESULT|FAIL:|READ-FAIL|== SECTION|"
-    r"SHELL-RC )")
+    r"SHELL-RC |SHELL-CMD |STEP-ABOUT |STEP )")
 
 # Long sysfs attribute lines can arrive wrapped (80-column console/capture,
 # fold-style pipes) or be re-joined by the device shell gate; a pattern such

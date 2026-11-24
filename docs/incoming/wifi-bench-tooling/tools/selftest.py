@@ -2331,6 +2331,112 @@ def test_pattern_whitespace(tmp: str, proto: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# I. shell-step output pattern gates (full captured stdout, wrapped-tolerant)
+# ---------------------------------------------------------------------------
+def test_shell_output_matching(tmp: str, proto: dict) -> None:
+    # ---- rendering: the gate must pass the DOUBLE-quoted output path ----
+    seqpath = os.path.join(tmp, "shellout-seq.json")
+    with open(seqpath, "w") as f:
+        json.dump(_cfg_doc(), f)
+    opts = BS.SessionOptions(
+        mode="cfg80211", module=proto["module"], dry_run=True,
+        fw_file=proto["fw_file"], fw_manifest=proto["manifest"],
+        wifi_block_bin=proto["wifi_block_bin"], bar0read=proto["bar0read"],
+        sequence=seqpath, report_dir=os.path.join(tmp, "reports", "shellout"))
+    plan = BS.make_plan(opts, G.WriteGuard())
+    script = plan.script
+    ck("shell-output: gate call passes the expanded $RDIR output path",
+       'gate_out_has \'add.p0\' "$RDIR/seq-add.out" \'wlan0\'' in script,
+       [ln for ln in script.splitlines() if "gate_out_has" in ln][:2])
+    ck("shell-output: no single-quoted (unexpanded) $RDIR path in gates",
+       "'$RDIR/" not in script,
+       [ln for ln in script.splitlines() if "'$RDIR/" in ln][:2])
+    ck("shell-output: captured stdout is written into its own seq-<n> "
+       "report section", "section seq-add" in script
+       and "seq-add.out" in script
+       and script.index("section seq-add") < script.index("seq-add.out"),
+       [ln for ln in script.splitlines() if "section seq-add" in ln])
+    func = _extract_func(script, "gate_out_has() {")
+    func_absent = _extract_func(script, "gate_out_absent() {")
+    ck("shell-output: gate_out_has/absent functions extracted",
+       len(func) >= 2 and len(func_absent) >= 2,
+       "%d/%d" % (len(func), len(func_absent)))
+    rdir = os.path.join(tmp, "shellout")
+    os.makedirs(rdir, exist_ok=True)
+    with open(os.path.join(rdir, "t1.out"), "w") as f:
+        f.write("Wiphy phy0\n\tBand 1:\n\t\tFrequencies:\n")
+    with open(os.path.join(rdir, "t2.out"), "w") as f:
+        f.write("one frame per\nidea: budget=8 frames_sent=0\n")
+    with open(os.path.join(rdir, "t3.out"), "w") as f:
+        f.write("something else entirely\n")
+    head = ("#!/bin/sh\nset -u\n"
+            "RDIR=%s\n"
+            "say() { echo \"SAY $*\"; }\n"
+            "stop() { echo \"STOP $1: $2\"; exit 10; }\n" % rdir)
+    sp = os.path.join(tmp, "gate-out-test.sh")
+    with open(sp, "w") as f:
+        f.write(head + "\n".join(func + func_absent) + "\n")
+        f.write('gate_out_has first "$RDIR/t1.out" "Wiphy phy0"\n')
+        f.write('gate_out_has wrapped "$RDIR/t2.out" "one frame per idea"\n')
+        f.write('gate_out_absent absent-ok "$RDIR/t3.out" "Wiphy phy0"\n')
+        f.write("echo STAGE-OK\n")
+        f.write('gate_out_has missing "$RDIR/t3.out" "Wiphy phy0"\n')
+        f.write("echo STAGE-BAD\n")
+    sh = subprocess.run(["/bin/sh", "-u", sp], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin"})
+    out = sh.stdout
+    ck("shell-output: a pattern on the first output line matches",
+       "GATE first PASS" in out, out[-300:])
+    ck("shell-output: a pattern spanning a wrap matches",
+       "GATE wrapped PASS" in out, out[-300:])
+    ck("shell-output: absent gate passes on a real miss",
+       "GATE absent-ok PASS" in out)
+    ck("shell-output: genuine miss still STOPs the session",
+       "STOP missing" in out and "STAGE-BAD" not in out, out[-300:])
+
+    # ---- host evaluator: same guarantees on the captured report section ----
+    doc = {"schema": PS.SCHEMA_SEQ, "name": "shell-out-smoke",
+           "profile": PS.PROFILE_CFG80211,
+           "steps": [{"name": "phy", "kind": "shell", "cmd": "iw-phy-info",
+                      "args": {"phy": "phy0"}, "expect_rc": 0,
+                      "patterns": ["Wiphy phy0", "one frame per idea"]}]}
+    seq2 = PS.validate(doc, "shell-out-smoke")
+    report = ("== SECTION seq-phy\n"
+              "STEP name=phy kind=shell\n"
+              "SHELL-CMD phy iw phy phy0 info\n"
+              "Wiphy phy0\n"
+              "one frame per\n"
+              "idea: budget=8 frames_sent=0\n"
+              "SHELL-RC phy rc=0\n"
+              "GATE phy.rc PASS\nGATE phy.p0 PASS\nGATE phy.p1 PASS\n"
+              "== SECTION writes\nSESSION_RESULT: PASS\n")
+    summary = BS.parse_report(report)
+    ev = PS.evaluate(seq2, summary)
+    ck("shell-output: captured first line + wrapped pattern both match "
+       "host-side", ev["verdict"] == "PASS", json.dumps(ev)[:400])
+    # a pattern present only in control lines (STEP-ABOUT) must not match
+    doc3 = {"schema": PS.SCHEMA_SEQ, "name": "shell-ctl-smoke",
+            "profile": PS.PROFILE_CFG80211,
+            "steps": [{"name": "x", "kind": "shell", "cmd": "iw-phy-info",
+                       "args": {"phy": "phy0"}, "expect_rc": 0,
+                       "patterns": ["marker-token"]}]}
+    report3 = ("== SECTION seq-x\nSTEP name=x kind=shell\n"
+               "STEP-ABOUT marker-token only in the about line\n"
+               "SHELL-CMD x iw phy phy0 info\nreal output\n"
+               "SHELL-RC x rc=0\nSESSION_RESULT: PASS\n")
+    ev3 = PS.evaluate(PS.validate(doc3, "shell-ctl-smoke"),
+                      BS.parse_report(report3))
+    ck("shell-output: control lines (STEP-ABOUT) are excluded from pattern "
+       "matching", ev3["verdict"] == "FAIL", ev3["verdict"])
+    # genuine miss in the captured output still fails
+    bad_report = report.replace("Wiphy phy0\n", "Wiphy phy1\n")
+    ev4 = PS.evaluate(seq2, BS.parse_report(bad_report))
+    ck("shell-output: a genuine host-side miss still FAILs",
+       ev4["verdict"] == "FAIL" and ev4["failed_step"] == "phy",
+       str(ev4["failed_step"]))
+
+
+# ---------------------------------------------------------------------------
 # H. write-only trigger vs read-only post-write capture policy
 # ---------------------------------------------------------------------------
 def test_wo_readback(tmp: str, proto: dict) -> None:
@@ -2469,6 +2575,7 @@ def main() -> int:
         test_protocol_cli(tmp, proto)
         test_shell_engine(tmp)
         test_pattern_whitespace(tmp, proto)
+        test_shell_output_matching(tmp, proto)
         test_wo_readback(tmp, proto)
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)

@@ -214,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 432/432 device-free checks (task-114: +120)
+    ./tools/run-selftest.sh        # 443/443 device-free checks (task-114: +131)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -328,9 +328,14 @@ sets the support dir explicitly, a static audit rejects any referenced-but-
 never-assigned variable, and the iw preload section is executed under sh -u
 with an empty environment in the selftest; (e) E1 now uses the
 wifi-datapath-bringup driver surface (dp_probe/dp_setup/dp_status/dp_rings +
-h2d_txq_addr_sync alias) and gates the dp ladder D end to end.
+h2d_txq_addr_sync alias) and gates the dp ladder D end to end; (f) shell-step
+output gates searched a single-quoted '$RDIR' path (never expanded) and the
+host evaluator read the shell stdout from the wrong report section - gates now
+pass "$RDIR/seq-<n>.out" double-quoted and each shell step owns a
+'section seq-<n>' capture, with first-line/wrapped/genuine-miss and
+control-line-exclusion tests plus a replay of the real 45-line fire capture.
 
-Selftest: **312 -> 432** device-free checks (+120): shell-step refusal matrix,
+Selftest: **312 -> 443** device-free checks (+131): shell-step refusal matrix,
 shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
 wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
 pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),

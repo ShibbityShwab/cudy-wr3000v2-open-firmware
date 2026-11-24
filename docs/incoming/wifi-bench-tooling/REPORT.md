@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 432 device-free checks (+120): shell-step refusal matrix,
+7. **Tests**: 312 -> 443 device-free checks (+131): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -528,7 +528,7 @@ Fixes:
 Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 55 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-432/432 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+443/443 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
 
@@ -633,7 +633,7 @@ read remains anywhere in C2, the gated values match the ledger, and a wrong
 body signature (ctx434 = 0x0100478D) fails at post-create.
 
 Re-validated: C2 dry-run PLAN-OK (28 steps / 55 checks / 8 writes), full matrix
-unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 432/432 PASS.
+unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 443/443 PASS.
 
 ### 9.4 D1 fire: unset LD_LIBRARY_PATH under set -u (generated-script fix)
 
@@ -701,3 +701,57 @@ Validated host-only: E1 dry-run with the lane's module (462,952 B sha256
 the full matrix with per-phase modules (--module-for E1=dp module) is
 boot/C2/D1/D2/E1 all PLAN-OK.  The dp_setup MAC program has not been fired on
 the device by this lane.
+
+### 9.6 D1 fire #3: shell-output pattern gates searched the wrong buffer
+
+The D1 re-fire with the LD_LIBRARY_PATH fix (evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T073341Z/D1) loaded
+the cfg80211 stack and passed every support gate, the wiphy gate and
+cfg80211_status gates, then stopped at:
+
+    STOP:phy-info.p0: pattern not found in shell output: Wiphy phy0
+
+while the same report section shows the captured stdout beginning with exactly
+"Wiphy phy0" (report.txt lines 1438-1460).  Two independent tooling bugs, both
+in the shell-step path:
+
+1. **Device gate read a non-existent file.**  The rendered gate call was
+       gate_out_has 'phy-info.p0' '$RDIR/seq-phy-info.out' 'Wiphy phy0'
+   The output path was single-quoted, so the shell never expanded $RDIR and
+   grep looked at a literal '$RDIR/seq-...out' file that does not exist.  (The
+   direct bench_session-generated cfg-iw-phy gate used double quotes and
+   passed - that asymmetry was the tell.)  This is the same class as the
+   earlier pattern-literal bug.
+2. **Host evaluator read the wrong report section.**  The shell step's stdout
+   was appended under the step-header section 'protocol-<n>', while the host
+   evaluator reads the shell capture from 'seq-<n>'; host-side shell pattern
+   checks could therefore never match (the device stop masked it).  Shell
+   steps now open their own 'section seq-<n>' immediately before running the
+   command, so the captured stdout (and the SHELL-RC line) live where the
+   evaluator expects them; STEP/STEP-ABOUT/SHELL-CMD lines are additionally
+   excluded from pattern matching, so a pattern that only appears in a step's
+   documentation cannot false-PASS.
+
+Fixes and tests (selftest 432 -> 443):
+
+- rendered gate calls pass the output file as a DOUBLE-quoted expansion
+  ("$RDIR/seq-<n>.out"); a test asserts the generated script contains no
+  single-quoted '$RDIR path;
+- rendered shell steps emit 'section seq-<n>' before the command; test asserts
+  the section precedes the capture;
+- the generated gate_out_has/gate_out_absent functions are extracted and run
+  under /bin/sh -u against fixture files: pattern on the first output line,
+  pattern spanning a wrap, absent-gate PASS and a genuine miss still STOP;
+- host evaluator tests: first-line + wrapped pattern both match in a captured
+  report section; a pattern present only in STEP-ABOUT lines does not match; a
+  genuine host-side miss still FAILs;
+- replay of the REAL captured output from the failed fire (45 lines,
+  'Wiphy phy0' first): the fixed device gate prints
+  'GATE phy-info.p0 PASS (shell)' and the host evaluator over the corrected
+  report layout returns PASS for both phy-info.rc and phy-info.p0.
+
+Re-validated: D1 dry-run script has 'section seq-phy-info' before the iw call
+and 'gate_out_has 'phy-info.p0' "$RDIR/seq-phy-info.out" 'Wiphy phy0'';
+sh -n/sh -u -n PASS; full matrix unchanged (boot/C2/D1/D2/E1 all PLAN-OK);
+selftest 443/443 PASS.  The next D1 fire should reach the VAP add/del steps
+(iw phy phy0 interface add wlan0 / iw dev wlan0 del).
