@@ -165,6 +165,12 @@ rm -f "$HWORK"/*.o "$HWORK"/*.ko "$HWORK"/*.mod "$HWORK"/*.mod.c "$HWORK"/.*.cmd
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$OUR_PATCH" >/dev/null )
 grep -q "re-posting the AP config against the live firmware AP" "$HWORK/hi5622_scan.c" || {
 	echo "stability: E2 plain-restart path missing" >&2; exit 1; }
+[ -f "$HWORK/hi5622_band_cfg.c" ] || {
+	echo "stability: scan-tuning R4 band-config source missing" >&2; exit 1; }
+grep -q "hi5622_band_cfg.o" "$HWORK/Kbuild" || {
+	echo "stability: scan-tuning R4 band-config not in Kbuild" >&2; exit 1; }
+grep -q "did not re-arm the scan context" "$HWORK/hi5622_scan.c" || {
+	echo "stability: scan-tuning R4 H1 abort string missing" >&2; exit 1; }
 # scan-tuning must be in the SOURCE with its defaults (acceptance for scan-tuning
 # lane): 3 new params, batch default 6, batch gap default 300 ms, split message.
 grep -q "scan_chan_time_ms" "$HWORK/hi5622_scan.c" || {
@@ -201,7 +207,9 @@ for s in "stale module reload" "ALREADY BOOTED from a previous module load" \
 	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag" \
 	 "hcc_trace" "scan_chan_time_ms" "scan_req_batch" \
 	 "scan_batch_gap_ms" "split into %u g0 id0xC requests" \
-	 "len-prefix" "reposting it once" \
+	 "len-prefix" "did not re-arm the scan context" \
+	 "H1 band-config subtype1 sent" "BSS list check after batch" \
+	 "scan_band_cfg" "scan_band_cfg_use2" "scan_band_cfg_field10" \
 	 "re-posting the AP config against the live firmware AP" \
 	 "host-side stop_ap (stop_ap_mode=0 default)"; do
 	if ! strings -a "$ARTWORK/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
@@ -239,6 +247,6 @@ echo "sha256    : $H_SHA"
 echo "unstripped: $HU_SIZE B sha256 $HU_SHA"
 echo "vermagic  : $VERMAGIC"
 echo "depends   : $DEPENDS"
-echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning R3 ladder 249580/1710bf11 -> hardened"
+echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning R4 ladder 254328/713899a1 -> hardened"
 echo "host test : ./tools/run-hardening-check.sh"
 echo "note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required"

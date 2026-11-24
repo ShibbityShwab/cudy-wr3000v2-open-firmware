@@ -1,6 +1,6 @@
-diff -Nru pre5/hcc.c final_hard5/hcc.c
+diff -Nru pre6/hcc.c final_hard6/hcc.c
 --- a/hcc.c	2026-11-24 17:03:08.822233177 +0700
-+++ b/hcc.c	2026-11-24 20:01:10.590577546 +0700
++++ b/hcc.c	2026-11-24 20:05:32.999017924 +0700
 @@ -36,6 +36,18 @@
  #include "hi5622_hcc.h"
  #include "hi5622_scan.h"
@@ -28,9 +28,9 @@ diff -Nru pre5/hcc.c final_hard5/hcc.c
  
  	/* CECE policy parameter maps 1:1 to the core enum (0 evidence, 1 off,
  	 * 2 evidence + bounded manual kick). */
-diff -Nru pre5/hcc_core_kernel.c final_hard5/hcc_core_kernel.c
+diff -Nru pre6/hcc_core_kernel.c final_hard6/hcc_core_kernel.c
 --- a/hcc_core_kernel.c	2026-11-24 17:03:08.822594168 +0700
-+++ b/hcc_core_kernel.c	2026-11-24 20:01:10.590702511 +0700
++++ b/hcc_core_kernel.c	2026-11-24 20:05:32.999076384 +0700
 @@ -28,10 +28,31 @@
  	writel((u32)val, k->bar0 + off);
  }
@@ -63,9 +63,9 @@ diff -Nru pre5/hcc_core_kernel.c final_hard5/hcc_core_kernel.c
  	if (k->log_limit && k->logged >= k->log_limit)
  		return;
  	k->logged++;
-diff -Nru pre5/hcc_core_kernel.h final_hard5/hcc_core_kernel.h
+diff -Nru pre6/hcc_core_kernel.h final_hard6/hcc_core_kernel.h
 --- a/hcc_core_kernel.h	2026-11-24 17:03:08.822621459 +0700
-+++ b/hcc_core_kernel.h	2026-11-24 20:01:10.590767954 +0700
++++ b/hcc_core_kernel.h	2026-11-24 20:05:32.999105839 +0700
 @@ -24,6 +24,12 @@
  	struct device		*dev;
  	unsigned int		log_limit;	/* max dev_info events, 0 = all */
@@ -79,9 +79,9 @@ diff -Nru pre5/hcc_core_kernel.h final_hard5/hcc_core_kernel.h
  };
  
  /* Initialise the adapter (and the embedded core) on an ioremapped BAR0. */
-diff -Nru pre5/hi5622_cfg80211_ops.c final_hard5/hi5622_cfg80211_ops.c
---- a/hi5622_cfg80211_ops.c	2026-11-24 20:01:04.481289216 +0700
-+++ b/hi5622_cfg80211_ops.c	2026-11-24 20:01:10.590861921 +0700
+diff -Nru pre6/hi5622_cfg80211_ops.c final_hard6/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-24 20:05:26.173747976 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 20:05:32.999147318 +0700
 @@ -42,6 +42,7 @@
  #include <net/cfg80211.h>
  
@@ -160,9 +160,9 @@ diff -Nru pre5/hi5622_cfg80211_ops.c final_hard5/hi5622_cfg80211_ops.c
  	/* Unregisters the netdev too; the netdev (and the wdev inside its
  	 * private area) is freed by netdev_run_todo at rtnl_unlock
  	 * (needs_free_netdev).  Do NOT kfree(wdev) here: cfg80211's
-diff -Nru pre5/hi5622_driver.h final_hard5/hi5622_driver.h
+diff -Nru pre6/hi5622_driver.h final_hard6/hi5622_driver.h
 --- a/hi5622_driver.h	2026-11-24 17:03:56.925113162 +0700
-+++ b/hi5622_driver.h	2026-11-24 20:01:10.590990534 +0700
++++ b/hi5622_driver.h	2026-11-24 20:05:32.999199937 +0700
 @@ -77,6 +77,15 @@
  	bool			blocks_seeded;
  	bool			cpu_released;
@@ -179,9 +179,9 @@ diff -Nru pre5/hi5622_driver.h final_hard5/hi5622_driver.h
  	size_t			fw_size;
  
  	/* vendor host record g_dmac_to_hmac_read_msg[2] (0x64 B stride) */
-diff -Nru pre5/hi5622_frame_post.c final_hard5/hi5622_frame_post.c
---- a/hi5622_frame_post.c	2026-11-24 20:01:04.481473853 +0700
-+++ b/hi5622_frame_post.c	2026-11-24 20:01:10.591079241 +0700
+diff -Nru pre6/hi5622_frame_post.c final_hard6/hi5622_frame_post.c
+--- a/hi5622_frame_post.c	2026-11-24 20:05:26.173840030 +0700
++++ b/hi5622_frame_post.c	2026-11-24 20:05:32.999239972 +0700
 @@ -186,6 +186,12 @@
  	}
  
@@ -195,9 +195,9 @@ diff -Nru pre5/hi5622_frame_post.c final_hard5/hi5622_frame_post.c
  	if (!hi5622_allow_frames) {
  		ret = hi5622_post_refuse(dev, what,
  					 "allow_frames=0 (fail-closed default)",
-diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
---- a/hi5622_scan.c	2026-11-24 20:01:04.483219310 +0700
-+++ b/hi5622_scan.c	2026-11-24 20:02:38.502463867 +0700
+diff -Nru pre6/hi5622_scan.c final_hard6/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 20:05:26.174690902 +0700
++++ b/hi5622_scan.c	2026-11-24 20:05:32.999319041 +0700
 @@ -16,6 +16,7 @@
   * SAFETY: no device access here.  The only way to the wire is
   * hi5622_frame_post() (allow_frames=0 default) and the inherited core SR path.
@@ -214,7 +214,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  #include "hi5622_vapscan_map.h"
  
  /* =====================================================================
-@@ -697,8 +699,6 @@
+@@ -773,8 +775,6 @@
   * both dereference module_ctx+0x190 WITHOUT a NULL check: posting an AP frame
   * before the mode-1 VAP base exists takes a firmware data abort (exception
   * mask 0x18, golden page lost). */
@@ -223,7 +223,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  static int hi5622_scan_post_vap_base_once(struct hi5622_pci *ctx,
  					  const struct hi5622_frame_ops *ops,
  					  u8 iftype, u8 band, u8 module)
-@@ -708,7 +708,9 @@
+@@ -784,7 +784,9 @@
  	size_t len = 0;
  	int rc;
  
@@ -234,7 +234,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  		return 0;
  	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
  			  HI5622_FRAME_CAP_VAP_START)) !=
-@@ -736,8 +738,10 @@
+@@ -812,8 +814,10 @@
  	if (rc)
  		goto out;
  	rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
@@ -247,7 +247,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  out:
  	kfree(wire);
  	return rc;
-@@ -913,6 +917,9 @@
+@@ -1066,6 +1070,9 @@
  	return rc;
  }
  
@@ -257,7 +257,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  int hi5622_scan_op_scan(struct wiphy *wiphy,
  			struct cfg80211_scan_request *request)
  {
-@@ -932,6 +939,15 @@
+@@ -1085,6 +1092,15 @@
  		return -EOPNOTSUPP;
  	if (!request || !request->wdev)
  		return -EINVAL;
@@ -273,7 +273,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	if (request->n_ssids > HI5622_FRAME_MAX_SSIDS ||
  	    request->n_channels > HI5622_SCAN_MAX_CHANNELS ||
  	    request->ie_len > HI5622_FRAME_MAX_SCAN_IE) {
-@@ -983,9 +999,22 @@
+@@ -1137,9 +1153,22 @@
  	mutex_unlock(&s->lock);
  	/* The bench-validated VAP base ordering is kept: post the vendor VAP
  	 * start order once before the first scan request (mode-1 ladder). */
@@ -299,7 +299,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	if (rc) {
  		mutex_lock(&s->lock);
  		s->request = NULL;
-@@ -1035,6 +1064,55 @@
+@@ -1189,6 +1218,55 @@
  /* =====================================================================
   * cfg80211 ops: AP start/stop (WAL group-2 family; design + provider stub)
   * ===================================================================*/
@@ -355,7 +355,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  static int hi5622_scan_fill_ap_start(struct hi5622_scan *s,
  				     const struct cfg80211_ap_settings *set,
  				     struct hi5622_ap_start_params *p)
-@@ -1091,6 +1169,9 @@
+@@ -1245,6 +1323,9 @@
  	struct device *wdev_dev = wiphy_dev(wiphy);
  	u8 *wire = NULL;
  	size_t len = 0;
@@ -365,7 +365,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	int rc;
  
  	if (!s || !s->initialized || !settings || !dev)
-@@ -1098,6 +1179,29 @@
+@@ -1252,6 +1333,29 @@
  	if (!dev->ieee80211_ptr ||
  	    dev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP)
  		return -EINVAL;
@@ -395,7 +395,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	dev_info(wdev_dev,
  		 "cfg80211: start_ap reached (iftype=%d beacon_interval=%d dtim=%d head=%zu tail=%zu) - provider gate next\n",
  		 (int)dev->ieee80211_ptr->iftype, settings->beacon_interval,
-@@ -1120,12 +1224,29 @@
+@@ -1274,12 +1378,29 @@
  			 rc);
  		goto out;
  	}
@@ -431,7 +431,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
  					(u8)dev->ieee80211_ptr->iftype,
  					c->band,
-@@ -1136,13 +1257,24 @@
+@@ -1290,13 +1411,24 @@
  			 rc);
  		goto out;
  	}
@@ -459,7 +459,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  
  		for (p->frame_index = 0;
  		     p->frame_index < HI5622_AP_START_MAX_FRAMES;
-@@ -1206,7 +1338,22 @@
+@@ -1360,7 +1492,22 @@
  	dev_info(wdev_dev,
  		 "cfg80211: start_ap sequence posted to provider '%s' - EXPERIMENTAL: beaconing is a firmware effect; verify the VAP context readback\n",
  		 ops->name);
@@ -482,7 +482,7 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	kfree(p);
  	kfree(wire);
  	return rc;
-@@ -1228,8 +1375,32 @@
+@@ -1382,8 +1529,32 @@
  	if (!s || !s->initialized || !dev)
  		return -ENODEV;
  	ops = hi5622_scan_need(wiphy, HI5622_FRAME_CAP_AP_STOP, "stop_ap");
@@ -517,9 +517,9 @@ diff -Nru pre5/hi5622_scan.c final_hard5/hi5622_scan.c
  	memset(&p, 0, sizeof(p));
  	p.iftype = 3u;
  	p.user_id = (u8)s->user_id;
-diff -Nru pre5/hi5622_stability.h final_hard5/hi5622_stability.h
+diff -Nru pre6/hi5622_stability.h final_hard6/hi5622_stability.h
 --- a/hi5622_stability.h	1970-01-01 07:00:00.000000000 +0700
-+++ b/hi5622_stability.h	2026-11-24 20:01:10.591564354 +0700
++++ b/hi5622_stability.h	2026-11-24 20:05:32.999468562 +0700
 @@ -0,0 +1,66 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -587,9 +587,9 @@ diff -Nru pre5/hi5622_stability.h final_hard5/hi5622_stability.h
 +}
 +
 +#endif /* _HI5622_STABILITY_H */
-diff -Nru pre5/main.c final_hard5/main.c
---- a/main.c	2026-11-24 20:01:04.481809295 +0700
-+++ b/main.c	2026-11-24 20:01:10.591600632 +0700
+diff -Nru pre6/main.c final_hard6/main.c
+--- a/main.c	2026-11-24 20:05:26.174030107 +0700
++++ b/main.c	2026-11-24 20:05:32.999503799 +0700
 @@ -136,6 +136,18 @@
  	spin_lock_init(&ctx->doorbell_lock);
  	pci_set_drvdata(pdev, ctx);
@@ -624,9 +624,9 @@ diff -Nru pre5/main.c final_hard5/main.c
  	dev_info(&pdev->dev, "%s removed\n", HI5622_DRV_NAME);
  }
  
-diff -Nru pre5/transport.c final_hard5/transport.c
+diff -Nru pre6/transport.c final_hard6/transport.c
 --- a/transport.c	2026-11-24 17:03:08.824228160 +0700
-+++ b/transport.c	2026-11-24 20:01:10.591656337 +0700
++++ b/transport.c	2026-11-24 20:05:32.999553382 +0700
 @@ -172,6 +172,22 @@
  	return readl(ctx->bar0 + off);
  }

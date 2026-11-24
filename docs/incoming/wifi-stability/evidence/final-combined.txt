@@ -1,20 +1,23 @@
 final combined stability module (host-built, NOT fired as this build)
 chain: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617
-       (first MAC TX COMPLETED) -> scan-tuning R3 0002 seven-files (len-prefix BSS
-       decode, 800 ms batch gap, non-first +2500 ms window, one repost; ladder
-       reference 249580/1710bf11) -> stability hardening
-size: 264852 B
-sha256: 73af893b1513a52060911f9495a0d20fee65129961fe78399f5e10c22049548c
-unstripped: 975320 B sha256 bad13a051ab4249401a254186405213d512a8081f431446167266558a2295d92
+       (first MAC TX COMPLETED) -> scan-tuning R4 (10-file 0002: H1 optional band
+       config g0 id10 builder, one-repost cap + H1 abort, per-batch BSS readback;
+       len-prefix decoder; 800 ms batch gap; ladder reference 254328/713899a1)
+       -> stability hardening (stale-VAP timing fix, E2 plain-restart, hcc_trace)
+size: 269688 B
+sha256: b5dfb883a0352d24d3279c73c6410d60c90318b2f17c84b9d3fa006ebb1a50b2
+unstripped: 990760 B sha256 64ece2137ddd5698e8f53dca85dc35bfb5f17a9c70835ac983977799bf8c4c5a
 vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
 depends: cfg80211
 warnings: 0
 cfg80211 import contract: 10 (cfg80211_bss_iter present)
-params: scan_chan_time_ms, scan_req_batch (6), scan_batch_gap_ms (800),
-  hcc_trace=0 (1=historic), stop_ap_mode=0 (host-side stop; restart re-posts
-  AP config against the live firmware AP) / 1=DISABLED, txq_publish=1, mgmt_diag=0
-E2/stale-VAP fix: the guard now captures the pre-call base latch and only applies
-  to a latch that PRE-EXISTED the call (scan/prior AP), with a bounded 100 ms
-  readback poll (firmware populates module_ctx+0x190 asynchronously); a base
-  posted in the same call is exempt.  The bench R2 fire's false refusal of the
-  FIRST start_ap is fixed; the restart path logs its readback with the wait.
+scan params: scan_chan_time_ms, scan_req_batch (6), scan_batch_gap_ms (800),
+  scan_band_cfg (0 off / 1 before first request / 2 before every request),
+  scan_band_cfg_chan (0=auto), scan_band_cfg_slot (0), scan_band_cfg_start (12),
+  scan_band_cfg_field10 (13), scan_band_cfg_mode (2), scan_band_cfg_cmp (0),
+  scan_band_cfg_use2 (1) - all H1 params default fail-closed/off
+stability params: hcc_trace=0 (1=historic), stop_ap_mode=0 (host-side stop;
+  restart re-posts AP config against the live firmware AP) / 1=DISABLED,
+  txq_publish=1, mgmt_diag=0
+H1 fire note: allow_frames=32 h2d_send_budget=10 (per scan-tuning R4) for the
+  H1 band-config experiment; one repost per request, then explicit H1 abort.

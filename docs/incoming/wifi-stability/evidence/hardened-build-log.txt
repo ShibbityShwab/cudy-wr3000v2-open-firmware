@@ -28,6 +28,7 @@ make[1]: Entering directory '/tmp/wifi-stability-build/combined'
   CC [M]  hi5622_vapscan_provider.o
   CC [M]  vapstart_frames.o
   CC [M]  hi5622_ap_frames.o
+  CC [M]  hi5622_band_cfg.o
   LD [M]  hi5622_wifi.o
   MODPOST Module.symvers
   CC [M]  hi5622_wifi.mod.o
