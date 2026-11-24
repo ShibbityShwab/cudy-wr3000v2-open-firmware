@@ -1,0 +1,154 @@
+{
+  "lane": "wifi-scan-d2h",
+  "synthetic": true,
+  "vectors": [
+    {
+      "name": "bss_beacon_2g_trailer",
+      "kind": "bss",
+      "provenance": "synthetic from REPORT.md section 3.1 layout",
+      "payload_hex": "80000000ffffffffffff2021222324250211223344550000080706050403020164001104000b62656e63682d61702d32670301060000000011d6d100340000005600000078040000",
+      "expect": {
+        "rc": 0,
+        "layout": 1,
+        "frame_type": 1,
+        "bssid": "021122334455",
+        "ssid_len": 11,
+        "ssid": "62656e63682d61702d3267",
+        "chan": 6,
+        "is_5g": 0,
+        "freq": 2437,
+        "interval": 100,
+        "capability": 1041,
+        "tsf": 72623859790382856,
+        "phy": 4,
+        "trailer": 1,
+        "signal_mbm": -4200,
+        "ie_len": null
+      }
+    },
+    {
+      "name": "bss_presp_5g_ht_trailer",
+      "kind": "bss",
+      "provenance": "synthetic from REPORT.md section 3.1 layout",
+      "payload_hex": "50000000ffffffffffff2021222324250203040506070000080706050403020132000100000235673d16240000000000000000000000000000000000000000000000000011c9c400340000005600000078080000",
+      "expect": {
+        "rc": 0,
+        "layout": 1,
+        "frame_type": 2,
+        "bssid": "020304050607",
+        "ssid_len": 2,
+        "ssid": "3567",
+        "chan": 36,
+        "is_5g": 1,
+        "freq": 5180,
+        "interval": 50,
+        "capability": 1,
+        "tsf": 72623859790382856,
+        "phy": 8,
+        "trailer": 1,
+        "signal_mbm": -5500,
+        "ie_len": null
+      }
+    },
+    {
+      "name": "bss_beacon_2g_frame_only",
+      "kind": "bss",
+      "provenance": "synthetic; layout hypothesis B (no trailer)",
+      "payload_hex": "80000000ffffffffffff2021222324250a000000000b00000807060504030201c800010400046261726503010b",
+      "expect": {
+        "rc": 0,
+        "layout": 2,
+        "frame_type": 1,
+        "bssid": "0a000000000b",
+        "ssid_len": 4,
+        "ssid": "62617265",
+        "chan": 11,
+        "is_5g": 0,
+        "freq": 2462,
+        "interval": 200,
+        "capability": 1025,
+        "tsf": 72623859790382856,
+        "phy": 0,
+        "trailer": 0,
+        "signal_mbm": 0,
+        "ie_len": null
+      }
+    },
+    {
+      "name": "bss_hidden_ssid_trailer",
+      "kind": "bss",
+      "provenance": "synthetic; hidden SSID is a zero-length SSID IE",
+      "payload_hex": "80000000ffffffffffff202122232425020202020202000008070605040302016400010400000301010000000011bab500340000005600000078000000",
+      "expect": {
+        "rc": 0,
+        "layout": 1,
+        "frame_type": 1,
+        "bssid": "020202020202",
+        "ssid_len": 0,
+        "ssid": "",
+        "chan": 1,
+        "is_5g": 0,
+        "freq": 2412,
+        "interval": 100,
+        "capability": 1025,
+        "tsf": 72623859790382856,
+        "phy": 0,
+        "trailer": 1,
+        "signal_mbm": -7000,
+        "ie_len": null
+      }
+    },
+    {
+      "name": "reject_data_frame",
+      "kind": "bss",
+      "provenance": "synthetic negative: 802.11 type field is not mgmt",
+      "payload_hex": "88000000ffffffffffff2021222324250202020202020000080706050403020164000000000178030106",
+      "expect": {
+        "rc": -95
+      }
+    },
+    {
+      "name": "reject_truncated_ie",
+      "kind": "bss",
+      "provenance": "synthetic negative: last IE cut in half",
+      "payload_hex": "80000000ffffffffffff2021222324250202020202020000080706050403020164000000000661626364656603",
+      "expect": {
+        "rc": -95
+      }
+    },
+    {
+      "name": "complete_status1",
+      "kind": "complete",
+      "provenance": "synthetic; g1 id16 status byte at payload[0]",
+      "payload_hex": "01100000",
+      "expect": {
+        "rc": 0,
+        "status": 1
+      }
+    },
+    {
+      "name": "chan_result_slot7_5g",
+      "kind": "chan",
+      "provenance": "synthetic; g1 id17 payload from firmware sender CA 0x641B4",
+      "payload_hex": "07000000240000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expect": {
+        "rc": 0,
+        "slot": 7,
+        "chan": 36,
+        "is_5g": 1,
+        "freq": 5180,
+        "block_len": 108
+      }
+    },
+    {
+      "name": "sta_scan_complete_status1",
+      "kind": "sta",
+      "provenance": "synthetic; g2 id2 status byte at payload[0xD] [I]",
+      "payload_hex": "12000000000000000000000000010000",
+      "expect": {
+        "rc": 0,
+        "status": 1
+      }
+    }
+  ]
+}

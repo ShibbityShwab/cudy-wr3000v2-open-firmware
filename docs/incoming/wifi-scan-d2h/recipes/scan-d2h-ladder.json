@@ -1,0 +1,86 @@
+{
+  "lane": "wifi-scan-d2h",
+  "task": "task-118",
+  "note": "read-only observables; requires the firmware VAP object (wifi-vap-scan lane)",
+  "watch": [
+    {
+      "group": 1,
+      "id": 15,
+      "name": "hmac_scan_proc_scanned_bss",
+      "total": "12+frame_len+20",
+      "min_total": 72,
+      "variable": true
+    },
+    {
+      "group": 1,
+      "id": 16,
+      "name": "hmac_scan_proc_scan_comp_event",
+      "total": "small ([U] >= 13)",
+      "status_offset_payload": 0
+    },
+    {
+      "group": 1,
+      "id": 17,
+      "name": "hmac_scan_process_chan_result_event",
+      "total": 124,
+      "fixed": true
+    },
+    {
+      "group": 2,
+      "id": 2,
+      "name": "wal_scan_comp_proc_sta",
+      "total": "small ([U])",
+      "status_offset_frame": 13
+    }
+  ],
+  "ladder": [
+    {
+      "step": "S0",
+      "action": "rd_status/hcc_status",
+      "expect": "phase ACTIVE, h2d budget free"
+    },
+    {
+      "step": "S1",
+      "action": "post g0 id0xC 520B scan request",
+      "expect": "consumed 0 polls, mask 0, no exception"
+    },
+    {
+      "step": "S2",
+      "action": "rd_catalog immediately",
+      "expect": "g1 0x11 entries, total 0x7C each"
+    },
+    {
+      "step": "S3",
+      "action": "rd_catalog after 1-5 s",
+      "expect": "g1 0x0F/0x10 and g2 0x02 entries"
+    },
+    {
+      "step": "S4",
+      "action": "scan sysfs + dmesg",
+      "expect": "bss_events>0 results>0 aborted=0"
+    },
+    {
+      "step": "S5",
+      "action": "final boot pack",
+      "expect": "golden page, state 1, mask 0, staging 0"
+    }
+  ],
+  "classification": [
+    {
+      "observed": "no g1 15/16/17/g2 2",
+      "verdict": "firmware produced nothing (scan refused / VAP precondition)"
+    },
+    {
+      "observed": "g1 0x11 but no g1 0x0F",
+      "verdict": "scan ran, no BSS heard"
+    },
+    {
+      "observed": "g1 0x0F and parse_errors>0",
+      "verdict": "decode gap - capture full payload, extend decoder"
+    },
+    {
+      "observed": "g1 0x0F and inform_failures>0",
+      "verdict": "channel/frequency not in wiphy band table"
+    }
+  ]
+}
