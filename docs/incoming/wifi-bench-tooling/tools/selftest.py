@@ -2102,6 +2102,114 @@ def test_bringup_report_ready(tmp: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# G. wrapped-capture (80-column) regression for attr pattern gates
+# ---------------------------------------------------------------------------
+def _extract_func(script: str, header: str) -> list:
+    func = []
+    started = False
+    for line in script.splitlines():
+        if line.startswith(header):
+            started = True
+        if started:
+            func.append(line)
+            if line.rstrip().endswith("fi; }"):
+                break
+    return func
+
+
+def test_pattern_whitespace(tmp: str, proto: dict) -> None:
+    # ---- host-side normalisation unit ----
+    ck("ws-match: newlines/tabs/runs collapse to single spaces",
+       PS._norm_ws("H2D send path (real post-ready messages, one frame per\n"
+                   "idea):\tbudget=8  frames_sent=0")
+       == "H2D send path (real post-ready messages, one frame per idea): "
+          "budget=8 frames_sent=0")
+    ck("ws-match: multi-token pattern across a wrap matches",
+       PS._search_pattern_ws("one frame per\nidea", "one frame per idea"))
+    ck("ws-match: raw text still matches first (anchored per-line)",
+       PS._search_pattern_ws("budget=8\n", "^budget=8$"))
+    ck("ws-match: missing token still fails",
+       not PS._search_pattern_ws("budget=8\nother", "not-there"))
+
+    # ---- device-shell gate functions: wrapped attr file ----
+    opts = proto_opts(proto, tmp)
+    plan = BS.make_plan(opts, G.WriteGuard())
+    gate_attr = _extract_func(plan.script, "gate_attr() {")
+    gate_absent = _extract_func(plan.script, "gate_attr_absent() {")
+    gate_out = _extract_func(plan.script, "gate_out_has() {")
+    ck("ws-match: generated gate_attr uses the pattern argument",
+       'grep -q "$p"' in "\n".join(gate_attr)
+       and "bench_session.py" not in "\n".join(gate_attr),
+       "\n".join(gate_attr)[:200])
+    ck("ws-match: generated gate_attr normalises whitespace",
+       "tr -s ' '" in "\n".join(gate_attr)
+       and "tr '\\n\\t'" in "\n".join(gate_attr))
+    ck("ws-match: generated gate_attr_absent uses the pattern argument",
+       'grep -q "$p"' in "\n".join(gate_absent)
+       and "bench_session.py" not in "\n".join(gate_absent))
+    ck("ws-match: generated gate_out_has normalises whitespace",
+       "tr -s ' '" in "\n".join(gate_out))
+    attr_dir = os.path.join(tmp, "fakeP")
+    os.makedirs(attr_dir, exist_ok=True)
+    with open(os.path.join(attr_dir, "h2d_status"), "w") as f:
+        f.write("H2D send path (real post-ready messages, one frame per\n"
+                "idea): budget=8 frames_sent=0\n")
+    head = ("#!/bin/sh\n"
+            "P=%s\n"
+            "say() { echo \"SAY $*\"; }\n"
+            "stop() { echo \"STOP $1: $2\"; exit 10; }\n" % attr_dir)
+    def run_gate(body: str) -> str:
+        path = os.path.join(tmp, "gate-ws-%d.sh" % abs(hash(body)))
+        with open(path, "w") as f:
+            f.write(head + "\n".join(gate_attr + gate_absent) + "\n" + body)
+        sh = subprocess.run(["/bin/sh", path], capture_output=True, text=True)
+        return sh.stdout + sh.stderr
+    out = run_gate("gate_attr load-budget h2d_status \"budget=8\"\n"
+                   "gate_attr span h2d_status \"one frame per idea\"\n"
+                   "gate_attr_absent absent h2d_status \"not-there\"\n"
+                   "echo STAGE1\n")
+    ck("ws-match: shell gate matches a token on a wrapped line",
+       "GATE load-budget PASS" in out, out[-400:])
+    ck("ws-match: shell gate matches a pattern spanning the wrap",
+       "GATE span PASS" in out, out[-400:])
+    ck("ws-match: shell absent gate passes on a missing token",
+       "GATE absent PASS" in out and "STAGE1" in out, out[-400:])
+    out2 = run_gate("gate_attr_absent present h2d_status \"budget=8\"\n"
+                    "echo STAGE2\n")
+    ck("ws-match: shell absent gate stops on a present token",
+       "STOP present" in out2 and "STAGE2" not in out2, out2[-300:])
+    out3 = run_gate("gate_attr missing h2d_status \"not-there\"\n"
+                    "echo STAGE3\n")
+    ck("ws-match: shell gate still stops on a genuinely missing token",
+       "STOP missing" in out3 and "STAGE3" not in out3, out3[-300:])
+
+    # ---- end-to-end: a wrapped capture goes through parse_report/evaluate ----
+    report = ("== SECTION seq-wrap\n"
+              "H2D send path (real post-ready messages, one frame per\n"
+              "idea): budget=8 frames_sent=0\n"
+              "GATE wrap.p0 PASS\n"
+              "== SECTION writes\n"
+              "SESSION_RESULT: PASS\n")
+    doc = {"schema": PS.SCHEMA_SEQ, "name": "wrap-smoke",
+           "steps": [{"name": "wrap", "kind": "attr_expect",
+                      "attr": "h2d_status",
+                      "patterns": ["one frame per idea", "budget=8"]}]}
+    seq = PS.validate(doc, "wrap-smoke")
+    summary = BS.parse_report(report)
+    ev = PS.evaluate(seq, summary)
+    ck("ws-match: wrapped attr capture evaluates PASS end to end",
+       ev["verdict"] == "PASS", json.dumps(ev)[:400])
+    report_bad = report.replace("budget=8", "budget=9")
+    ev2 = PS.evaluate(seq, BS.parse_report(report_bad))
+    ck("ws-match: wrapped capture with the wrong value still FAILs",
+       ev2["verdict"] == "FAIL" and ev2["failed_step"] == "wrap",
+       str(ev2["failed_step"]))
+    # documented limit: a break INSIDE a token is not recovered
+    ck("ws-match: a wrap inside a token is documented as not recovered",
+       not PS._search_pattern_ws("budg\net=8", "budget=8"))
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -2122,6 +2230,7 @@ def main() -> int:
         test_protocol_execute(tmp, proto)
         test_protocol_cli(tmp, proto)
         test_shell_engine(tmp)
+        test_pattern_whitespace(tmp, proto)
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)
         test_phase_matrix(tmp, proto)

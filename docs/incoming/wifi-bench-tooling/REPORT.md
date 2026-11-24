@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 382 device-free checks (+70): shell-step refusal matrix,
+7. **Tests**: 312 -> 398 device-free checks (+86): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -480,3 +480,54 @@ events watch-only because the firmware scan handler (CA 0x6494C) hardcodes VAP
 lookup id 0 while the M1 VAP is host-only; a graceful no-VAP refusal is an
 accepted frame-validity outcome.  E1's token name is the automation contract
 (h2d_txq_addr_sync); a rename is a one-line sequence-JSON change.
+
+### 9.1 First C2 phase fire: attribute-pattern gate fix + regression test
+
+The first real matrix phase fire (C2, evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T071150Z/C2) reached
+the boot ladder cleanly - deploy/sha read-back, host preflight, module-order
+gate PASS, service-ready PASS, module-profile PASS - and then STOPPED at
+GATE load-budget ("pattern not found in h2d_status: budget=8") although the
+captured h2d_status readout right above it contained
+"H2D send path (real post-ready messages, one frame per idea): budget=8 ...".
+
+Root cause (host tooling, not the device): the generated shell helper's grep
+pattern literal had been corrupted at generation time - gate_attr(),
+gate_attr_absent(), gate_out_has() and gate_out_absent() were grepping a
+hard-coded repository path string instead of the passed pattern $p (an edit
+artifact in the generator template, not a wrapping problem: the raw sysfs
+capture was not wrapped).  Every attribute/output pattern gate in every
+sequence would have failed for this reason; load-budget was simply the first
+one to run.
+
+Fixes:
+
+1. **Generator**: all four helpers now use the real pattern argument and
+   normalise whitespace before matching (tr newline/tab to spaces, tr -s ' ',
+   then grep -q "$p"), so a long sysfs line that does arrive wrapped
+   (80-column console/capture, fold-style pipe) is joined back to single
+   spaces and a multi-token pattern still matches.  gate_out_has and
+   gate_out_absent do the same for captured userspace output; gate_grep
+   (dmesg gates) is normalised the same way.
+2. **Host evaluator**: protocol_sequence._search_pattern_ws() matches the raw
+   capture first (so anchored per-line patterns keep working) and then a
+   whitespace-normalised copy; used by attr_expect patterns, absent patterns
+   and d2h_catalog device patterns.
+3. **Regression tests** (selftest 382 -> 398): generated helpers are extracted
+   from a real plan script and executed under /bin/sh against a fake sysfs
+   attribute file containing wrapped lines - a token on the wrapped line, a
+   pattern spanning the wrap, the absent-gate PASS/STOP paths and a genuinely
+   missing token all asserted; plus an end-to-end wrapped report through
+   parse_report() + evaluate() (PASS, and wrong-value FAIL).  The tests also
+   assert the generated helper uses $p and contains no hard-coded path.
+4. **Replay of the actual failed fire**: the real report's captured
+   h2d_status text now (a) passes the host pattern check and (b) passes the
+   fixed generated shell gate executed directly on that captured content
+   ("GATE load-budget PASS (attr=h2d_status)").
+
+Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 54 checks /
+8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
+full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
+398/398 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+298 B g1 id3 answers): this fix only brings the automation gate in line with
+the captured attr format.

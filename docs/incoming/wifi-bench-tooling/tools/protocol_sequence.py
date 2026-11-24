@@ -1075,6 +1075,26 @@ CONTROL_LINE_RE = re.compile(
     r"^(?:STOP:|GATE-FAIL|GATE |SESSION_RESULT|FAIL:|READ-FAIL|== SECTION|"
     r"SHELL-RC )")
 
+# Long sysfs attribute lines can arrive wrapped (80-column console/capture,
+# fold-style pipes) or be re-joined by the device shell gate; a pattern such
+# as "one frame per idea" may then span a line break.  Attribute/output
+# pattern gates therefore match the RAW text first and then a
+# whitespace-normalised copy (newlines/tabs/runs -> single spaces), so a
+# multi-token pattern still matches after a wrap.  Anchored per-line patterns
+# keep working through the raw match.
+_WS_RE = re.compile(r"\s+")
+
+
+def _norm_ws(text: str) -> str:
+    return _WS_RE.sub(" ", text or "").strip()
+
+
+def _search_pattern_ws(text: str, pattern: str) -> bool:
+    """True if pattern matches raw text or the whitespace-normalised text."""
+    if re.search(pattern, text):
+        return True
+    return bool(re.search(pattern, _norm_ws(text)))
+
 
 def _capture_text(reads: dict, section: str) -> str:
     """Attribute capture text with control lines removed.
@@ -1095,7 +1115,7 @@ def _check_patterns(step_name: str, kind: str, attr: str, patterns: list,
     for i, p in enumerate(patterns):
         name = "%s.p%d" % (step_name, i)
         try:
-            ok = bool(re.search(p, text))
+            ok = _search_pattern_ws(text, p)
         except re.error as e:
             out.append({"name": name, "kind": "attr", "attr": attr,
                         "pattern": p, "status": "FAIL",
@@ -1118,7 +1138,7 @@ def _check_absent_patterns(step_name: str, kind: str, attr: str,
     for i, p in enumerate(patterns):
         name = "%s.a%d" % (step_name, i)
         try:
-            found = bool(re.search(p, text))
+            found = _search_pattern_ws(text, p)
         except re.error as e:
             out.append({"name": name, "kind": kind, "attr": attr,
                         "pattern": p, "status": "FAIL",
@@ -1200,7 +1220,7 @@ def _check_catalog(step: dict, reads: dict) -> list:
     for i, p in enumerate(step["device_patterns"]):
         name = "%s.p%d" % (n, i)
         try:
-            ok = bool(re.search(p, text))
+            ok = _search_pattern_ws(text, p)
         except re.error:
             ok = False
         out.append({"name": name, "kind": "catalog", "pattern": p,

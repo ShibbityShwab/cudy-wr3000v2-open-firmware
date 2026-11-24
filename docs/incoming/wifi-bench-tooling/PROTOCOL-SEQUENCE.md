@@ -350,6 +350,14 @@ gates both device-side and host-side (shell-rc-mismatch / shell-pattern-missing
 - min_count_delta + exact last_total on d2h_catalog entries: relative
   catalogue deltas (baseline-absent = count 0) and frame-size gates - used by
   C2 to require six 298 B (0x12A) g1 id3 answers.
+- **wrapped-capture tolerance**: attr/output pattern gates normalise whitespace
+  both device-side (the generated gate pipes the sysfs file through
+  tr newline/tab -> space + tr -s ' ' before grep) and host-side
+  (_search_pattern_ws: raw match first, then a whitespace-normalised copy), so
+  a long h2d_status/hcc_status/rd_status line that arrives wrapped with the
+  break inside a multi-token pattern still matches.  Regression tests execute
+  the generated helpers under /bin/sh against wrapped fixtures and replay a
+  wrapped report through parse_report()+evaluate() (REPORT.md 9.1).
 
 ### 10.4 The cfg80211 mode
 
@@ -381,4 +389,4 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **382/382** device-free checks after task-114 (was 312).
+Selftest: **398/398** device-free checks after task-114 (was 312).

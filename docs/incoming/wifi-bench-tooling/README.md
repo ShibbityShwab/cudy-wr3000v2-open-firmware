@@ -214,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 382/382 device-free checks (task-114: +70)
+    ./tools/run-selftest.sh        # 398/398 device-free checks (task-114: +86)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -309,7 +309,14 @@ carries no h2d_txq_addr_sync C string - the dp-bringup lane's deliverable).
 The rendered bring-up table is: boot READY | ready READY | calibration READY |
 vap READY | scan READY | dataplane BLOCKED.
 
-Selftest: **312 -> 382** device-free checks (+70): shell-step refusal matrix,
+First live-fire fix (REPORT.md 9.1): the generated attr-pattern shell gates
+had a corrupted pattern literal (hard-coded path instead of $p), so every
+pattern gate failed on the first C2 fire; fixed, and the gates are now
+whitespace-tolerant both device-side and host-side (wrapped long attr lines
+still match).  A wrapped-capture regression test replays the real failed
+capture and asserts PASS.
+
+Selftest: **312 -> 398** device-free checks (+86): shell-step refusal matrix,
 shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
 wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
 pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),

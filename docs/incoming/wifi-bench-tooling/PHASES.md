@@ -172,7 +172,7 @@ Bring-up status rendered from that matrix:
 
     boot READY | ready READY | calibration READY | vap READY | scan READY | dataplane BLOCKED (wait for dp-bringup token)
 
-Selftest: **382/382** device-free checks (was 312), including the shell-step
+Selftest: **398/398** device-free checks (was 312), including the shell-step
 refusal matrix, the shell/absent/present evaluation fixtures, the synthetic
 C2 six-response evaluation (+ wrong-length and missing-response negatives), the
 synthetic D1 wiphy+VAP add/del evaluation, the cfg80211 mode plan/deploy/script
