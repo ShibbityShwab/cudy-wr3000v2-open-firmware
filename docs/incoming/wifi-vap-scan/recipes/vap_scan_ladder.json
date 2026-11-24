@@ -1,0 +1,203 @@
+{
+  "_doc": "wifi-vap-scan bench ladder V1-V4/S1-S2 (task-110, 2026-11-25). Host-only data file; every frame is produced by src/vapscan_frames.c with the byte-exact hex in recipes/frames.md. Run only after the C1 calibration boot of STATUS 3j/3k (golden PD4 boot, ready handshake, ctx_create type 1, txq_sync72, cfg_cal 3507/0x0101 answered g1 id3 298 B). No device is contacted by this file.",
+  "schema": {
+    "step": "step id",
+    "frame": "builder call / recipe name",
+    "payload": "builder arguments",
+    "total_bytes": "HCC frame length including the 12-byte header",
+    "sr_node_word1": "((total<<16)|0x6d2b), one SR node, announce mailbox id 3",
+    "expect": "observables that must hold for PASS",
+    "watch": "additional read-only observables to record",
+    "stop": "hard stop conditions (any one aborts the lap, no retry)",
+    "on_fail": "narrow follow-up, never a retry in the same boot"
+  },
+  "phase": "C1 calibration boot -> VAP/user add -> scan (V1-V4, S1-S2)",
+  "preconditions": [
+    "module loaded with the PD4-patched firmware (image sha256 cfe24bfb..., research artifact)",
+    "golden boot page CA 0x1BF000 = 0x86807FEF/7/2/0xABCD, state 1, mask 0",
+    "ready handshake decoded (g4 id1 + g4 id2 payload 0x01060850), core phase >= READY_TXQ_SYNC",
+    "C1 calibration exchange already answered (g0 id2 key 0x0101 298 B -> g1 id3 298 B)",
+    "h2d_send_budget >= 5 (driver maximum is 8; C1 consumed 3)",
+    "current driver h2d_send grammar must be extended with user_add / user_alg / del_user_by_mac / scan_req attributes before this ladder can run (see REPORT.md section 'Bench ladder')"
+  ],
+  "steps": [
+    {
+      "step": "V1",
+      "frame": "vs_build_user_add",
+      "payload": {
+        "user_id": 0,
+        "mac": "02:00:68:69:35:01",
+        "chip_id": 0,
+        "vap_id": 0,
+        "dst": 0,
+        "type": 2,
+        "rssi": 100
+      },
+      "total_bytes": 180,
+      "sr_node_word1": "0x00b46d2b",
+      "expect": [
+        "SR node consumed by the firmware: out[0] (CA 0x40039010) returns to 0 within the driver poll budget, h2d_status timeout=0",
+        "exception mask CA 0x40008 stays 0 (no svc/abort/undef)",
+        "boot page 0x86807FEF/7/2/0xABCD and state 1 unchanged; g+0xB4/+0xB8 = 0",
+        "h2d_status ok increments by 1, no 'refused'"
+      ],
+      "watch": [
+        "rd_catalog delta: any new device->host frame (g1 id3 generic config-sync with syn_id 0x07xx is the plausible VAP/user confirmation)",
+        "dmesg: h2d_complete, no firmware fault lines",
+        "core phase stays ACTIVE"
+      ],
+      "stop": [
+        "any nonzero exception mask / exception staging frame",
+        "out[0] not consumed after the bounded poll window (h2d timeout)",
+        "boot page or core state changed"
+      ],
+      "on_fail": "do not retry; record mask/out[]/catalog and stop - the g0 id7 handler was reached but rejected or faulted (see REPORT.md risk table)"
+    },
+    {
+      "step": "V2",
+      "frame": "vs_build_user_alg",
+      "payload": {
+        "user_id": 0,
+        "chip_id": 0,
+        "vap_id": 0,
+        "dst": 0,
+        "alg": 0,
+        "nss": 0,
+        "caps": "zero blocks [I]"
+      },
+      "total_bytes": 180,
+      "sr_node_word1": "0x00b46d2b",
+      "expect": [
+        "node consumed, out[0]=0, h2d ok+1, timeout=0",
+        "mask stays 0, page/state golden"
+      ],
+      "watch": [
+        "rd_catalog delta",
+        "dmesg h2d_complete"
+      ],
+      "stop": [
+        "nonzero mask",
+        "timeout",
+        "page/state change"
+      ],
+      "on_fail": "stop; the id8 handler copies three capability blocks into the user object (zero blocks are legal data) - a fault would mean the user object from V1 is missing, so V1 did not take effect"
+    },
+    {
+      "step": "V3",
+      "frame": "read-only checks (no frame)",
+      "payload": {},
+      "total_bytes": 0,
+      "sr_node_word1": "",
+      "expect": [
+        "mask CA 0x40008 = 0",
+        "h2d_status: ok = 5 (create+txq+cal+user_add+user_alg), timeout 0, refused 0, lane open",
+        "golden page/state, g+0xB4/+0xB8 = 0"
+      ],
+      "watch": [
+        "dmesg tail",
+        "rd_catalog snapshot as the pre-scan baseline"
+      ],
+      "stop": [
+        "any mismatch - do not proceed to S1"
+      ],
+      "on_fail": "power-cycle and collect the full trace"
+    },
+    {
+      "step": "S1",
+      "frame": "vs_build_scan_req",
+      "payload": {
+        "chip_id": 0,
+        "vap_id": 0,
+        "dst": 0,
+        "chans": "none (whole band)",
+        "ssids": "none",
+        "dwell_ms": 60,
+        "scan_type": 0
+      },
+      "total_bytes": 520,
+      "sr_node_word1": "0x02086d2b",
+      "expect": [
+        "node consumed, out[0]=0, h2d ok+1, timeout=0, mask stays 0",
+        "two possible outcomes are both PASS for frame validity: (a) no device->host frame - firmware handler CA 0x6494C logs 'get vap fail' because no firmware VAP object exists yet (our M1 netdev is host-only), returns 100; (b) if a VAP 0 object exists, the scan starts and g1 id15/16/17 events appear"
+      ],
+      "watch": [
+        "rd_catalog: g1 id 15 (scanned BSS), id 16 (scan complete), id 17 (chan result), g2 id 2 (wal scan comp)",
+        "dmesg: handler log lines, no abort/svc",
+        "firmware exception mask and golden page"
+      ],
+      "stop": [
+        "nonzero mask / exception staging",
+        "timeout on the announce",
+        "page/state change"
+      ],
+      "on_fail": "stop; record rd_catalog and mask - a scan without VAP is expected to be refused, a fault is not"
+    },
+    {
+      "step": "S2",
+      "frame": "vs_build_scan_req",
+      "payload": {
+        "chip_id": 0,
+        "vap_id": 0,
+        "dst": 0,
+        "chans": "2.4GHz 1-13 (idx = chan-1, [I])",
+        "ssids": "none",
+        "dwell_ms": 60,
+        "scan_type": 0
+      },
+      "total_bytes": 520,
+      "sr_node_word1": "0x02086d2b",
+      "expect": [
+        "same as S1; the channel-entry encoding is the [I] item under test"
+      ],
+      "watch": [
+        "rd_catalog delta",
+        "mask/page/state"
+      ],
+      "stop": [
+        "nonzero mask",
+        "timeout"
+      ],
+      "on_fail": "the chan idx byte is [I] - a refusal here does not invalidate S1; record it and stop"
+    },
+    {
+      "step": "V4",
+      "frame": "vs_build_user_del",
+      "payload": {
+        "user_id": "0x0fff (by MAC)",
+        "mac": "02:00:68:69:35:01",
+        "chip_id": 0,
+        "vap_id": 0,
+        "flag": 0
+      },
+      "total_bytes": 24,
+      "sr_node_word1": "0x00186d2b",
+      "expect": [
+        "node consumed, out[0]=0, h2d ok+1, mask stays 0, page/state golden",
+        "this is the exact builder already carried by the h2d_send 'del_user' grammar"
+      ],
+      "watch": [
+        "mask/page",
+        "dmesg"
+      ],
+      "stop": [
+        "nonzero mask",
+        "timeout"
+      ],
+      "on_fail": "stop; user object left behind is harmless (fresh boot clears it) but record the state"
+    }
+  ],
+  "global_stop_rules": [
+    "NEVER write CA 0x400392F0 (out[5]) and NEVER post mailbox id 5 (firmware BUG() trap)",
+    "NEVER send an HCC frame in group 1 or group 4 (no firmware H2D receive table exists; group 4 is device->host only)",
+    "one frame per idea, one lap per boot; no retry after any failure",
+    "if the exception mask is nonzero or the boot page/state changed: stop, dump mask/out[]/catalog/dmesg, power-cycle",
+    "no device RAM writes, no firmware re-patch, no calibration writes in this ladder"
+  ],
+  "expected_d2h": {
+    "g1_15": "hmac_scan_proc_scanned_bss: carries an 802.11 beacon/probe-response frame; the vendor host trims the trailing 20-byte descriptor before parsing IEs with mac_find_ie (SSID IE 0, DS/HT IEs). Exact prefix/trailer layout [U].",
+    "g1_16": "hmac_scan_proc_scan_comp_event: scan completion; drives cfg80211_scan_done.",
+    "g1_17": "hmac_scan_process_chan_result_event: per-channel scan result.",
+    "g2_2": "wal_scan_comp_proc_sta: WAL-level scan complete (SSID/band summary), delivered to cfg80211 scan results."
+  },
+  "regenerate_frames": "./tools/build.sh && /tmp/vapscan_selftest --emit  (byte recipes in recipes/frames.md)"
+}
