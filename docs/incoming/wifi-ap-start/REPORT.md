@@ -12,8 +12,8 @@ cfg80211 `.connect` op so the wiphy advertises NL80211_CMD_CONNECT (hostapd's
 shared nl80211 init gate refuses a driver that advertises neither
 AUTHENTICATE nor CONNECT), AP-mode iftype changes accepted by the M1 netdev
 model, and the AP-start sequence in the driver's real .start_ap.  The
-deployable module is **205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**.  See
+deployable module is **206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**.  See
 [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md) for the exact hostapd flow, expected
 logs and the corrected readback (ctx0 BAR0 0x7D1758 this boot).
 
@@ -71,8 +71,8 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    the dynamically registered group-2 handler).  [V]/[I]
 4. **Provider extension is compile-ready**: applied on top of the
    wifi-scan-complete tree (the 748,888 B b42ff4ec hardware-fired provider) it
-   builds the module (205,516 B, sha256
-   d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc) against
+   builds the module (206,060 B, sha256
+   90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f) against
    the 6.18.60 tree with **zero warnings**, advertises AP_START, adds the
    hostapd capability gates (CONNECT advertisement, AP iftype change), and
    posts the whole sequence through the existing fail-closed
@@ -89,7 +89,7 @@ WAL flow), [../wifi-proto-seq](../wifi-proto-seq/) (g0 id1 config carrier).
    patch registers a fail-closed .connect (advertised CONNECT, never called by
    hostapd's AP path) and accepts AP iftype changes, so a hostapd
    NEW_BEACON reaches the driver's .start_ap and posts the AP-start sequence.
-   Module 205,516 B sha256 24e0cf02... (see HOSTAPD-BRINGUP.md).
+   Module 206,060 B sha256 24e0cf02... (see HOSTAPD-BRINGUP.md).
 
 ## 1. Scope, evidence and pins
 
@@ -280,8 +280,8 @@ wifi-vap-start provider integration) and:
 Verified by [tools/kernel-check.sh](tools/kernel-check.sh) against the real
 6.18.60 tree, and the deployable artifact built by
 [tools/build-bench-module.sh](tools/build-bench-module.sh): **hi5622_wifi.ko
-205,516 B, sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**,
+206,060 B, sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**,
 depends=cfg80211, vermagic 6.18.60 SMP ARMv7, **zero compiler/modpost
 warnings**, 14 haf_ symbols, vapscan_ap_start and hi5622_cfg11_connect
 present.  The module is local evidence only and is not committed.
@@ -391,8 +391,8 @@ patch fixes them without touching the decoded wire format:
 | hostapd set_mode(AP) refused for a managed interface | change_virtual_intf accepts STATION<->AP<->MONITOR in the M1 netdev model, stores wdev->iftype (cfg80211_change_iface WARN contract) and treats params->use_4addr == -1 as "not specified" (create wlan0 as __ap is still the preferred flow) |
 | hostapd ucode error (image) | bench workaround script + image requirement (CONFIG_PACKAGE_wifi-scripts=y) |
 
-Deployable module: **205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**.  Exact
+Deployable module: **206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**.  Exact
 command sequence, expected hostapd/dmesg lines, failure table and the
 corrected readback (ctx0 BAR0 0x7D1758 on the lead's boot; vap+0x10 = 100,
 vap+0x14 = 2) are in [HOSTAPD-BRINGUP.md](HOSTAPD-BRINGUP.md).
@@ -434,8 +434,8 @@ lane (no device access).  The behaviour is derived from the 6.18.60
 net/wireless sources (nl80211_set_interface change logic, cfg80211_change_iface
 WARN contract); the bench fire of the v3 module is the first hardware test.
 
-v3 module: **205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc** (see
+v3 module: **206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f** (see
 HOSTAPD-BRINGUP.md section 8 for the exact re-fire procedure).
 
 ### 11.2 v4: hostapd "Could not configure driver mode" root cause
@@ -451,8 +451,8 @@ refuses every such request with -EOPNOTSUPP when the driver has no
 (mode-change-free) SET_INTERFACE, which is why no type-change dmesg appeared.
 
 v4 registers a fail-closed `.mgmt_tx` op (real management TX/RX stays
-data-plane work and never returns fake success).  Module: 205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc.
+data-plane work and never returns fake success).  Module: 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
 
 SET_INTERFACE is now confirmed working on hardware by the lead's manual
 `iw dev wlan0 set type managed/__ap` test; the v4 op additions are the
@@ -471,6 +471,26 @@ all), keeps management TX fail-closed, and adds dmesg instrumentation at the
 SET_INTERFACE / start_ap / mgmt_tx / module-init milestones so the next fire
 localises any remaining gate without hostapd debug symbols.
 
-Module v5: 205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc.
+Module v5: 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
+
+### 11.4 v6: REPORTS_OBSS flag (the real beacon blocker), WARN pairing, SET_BEACON
+
+The v5 fire got hostapd past set_mode but failed at "Failed to set beacon
+parameters" with no start_ap reached.  The failing call is not SET_BEACON:
+hostapd's first beacon is NEW_BEACON, and cfg80211's SET_BEACON handler
+additionally requires a non-zero AP beacon interval (only set by a successful
+start_ap).  With userspace AP SME, wpa_driver_nl80211_set_ap() first calls
+nl80211_get_wiphy_data_ap(), which registers NL80211_CMD_REGISTER_BEACONS;
+cfg80211 rejects that with -EOPNOTSUPP unless wiphy->flags has
+WIPHY_FLAG_REPORTS_OBSS, so hostapd returned -ENOBUFS before sending
+NEW_BEACON.  v6 sets the flag (registration bookkeeping only - no OBSS
+reporting implementation), registers a .change_beacon op that accepts
+SET_BEACON host-side and logs (no firmware write yet, M3), pairs the .connect
+gate with a fail-closed .disconnect (fixing the wiphy_new_nm WARN_ON at
+core.c:532 = ops->connect && !ops->disconnect), and adds dump_stack() to the
+one-shot mgmt_tx diagnostic to identify its caller.
+
+Module v6: 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f.
 

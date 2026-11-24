@@ -19,8 +19,8 @@ this lane; the lead's fire produced the observations below.
 ## 2. Module v2 (built by this lane, host-only)
 
     artifact : /tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko
-    size     : 205,516 B
-    sha256   : d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc
+    size     : 206,060 B
+    sha256   : 90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f
     vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
     depends  : cfg80211
 
@@ -174,8 +174,8 @@ script now:
 * strips only debug sections and asserts the deployable .ko has a
   byte-identical .text to the unstripped build.
 
-v3 module: **205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc**
+v3 module: **206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f**
 (/tmp/wifi-ap-start-bench-artifact/hi5622_wifi.ko, debug-stripped, depends=
 cfg80211, vermagic 6.18.60 SMP ARMv7, zero warnings).  The H2D send path in
 v3 is therefore exactly the path that consumes C2 in 0 polls on the bench.
@@ -247,8 +247,8 @@ snapshot and the 6.18.60 kernel found the exact gate:
 the management-frame subscriptions; the op itself returns -EOPNOTSUPP (real
 management TX/RX is data-plane/M4 work, never faked).
 
-**Module v5:** 205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc (debug-stripped, same fired base; H2D/core files
+**Module v6:** 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f (debug-stripped, same fired base; H2D/core files
 byte-identical, .text byte-identical stripped/unstripped).  This is the
 artifact to fire.
 
@@ -300,8 +300,8 @@ bring-up milestone via dmesg (no hostapd debug needed):
 | start_ap sequence frame 1/4 'ap_ssid' posted ... / 2/4 'ap_cfg' posted ... | provider frames went to the wire |
 | pr_info_once "mgmt_tx op reached" | only if hostapd tries a management TX (fails closed) |
 
-**Module v5:** 205,516 B sha256
-d0e941d001fbb7b140e37b5d7b81a6ffba2053269a52fa72c108aa21604ec0bc
+**Module v6:** 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f
 (debug-stripped, fired base; H2D/core files byte-identical; .text identical
 stripped/unstripped; 0 warnings).
 
@@ -318,4 +318,76 @@ dmesg):
   cfg80211 return code is -EINVAL.
 * (c) later hostapd steps (add_key for WPA2 - use the OPEN config first;
   set_txq_params is non-fatal and skipped because the driver op is absent).
+
+## 11. v6: the actual beacon blocker (REPORTS_OBSS) + WARN + SET_BEACON
+
+### 11.1 It was never SET_BEACON
+
+hostapd's first beacon uses **NL80211_CMD_NEW_BEACON**: in
+`wpa_driver_nl80211_set_ap()`, `beacon_set = params->reenable ? 0 : link->beacon_set`
+is 0 at start, and only a non-zero value selects NL80211_CMD_SET_BEACON.
+cfg80211's SET_BEACON handler is additionally gated on
+`rdev->ops->change_beacon` AND a non-zero
+`wdev->links[].ap.beacon_interval` (set only by a successful
+start_ap), so **SET_BEACON cannot be the initial failure**.  v6 nonetheless
+registers a `.change_beacon` op for later updates: it accepts host-side,
+logs the beacon lengths and performs **no firmware write yet** (the real
+firmware beacon update is g0 id1 key 0x0127 with start flag 0; wiring it
+needs cached AP state - M3).
+
+### 11.2 The real blocker: WIPHY_FLAG_REPORTS_OBSS
+
+With userspace AP SME (`drv->device_ap_sme == 0`) and
+`beacon_set == 0`, `wpa_driver_nl80211_set_ap()` first calls
+`nl80211_get_wiphy_data_ap(bss)`; if that returns NULL the function
+returns **-ENOBUFS before building the NEW_BEACON message** (so cfg80211 never
+sees it, our .start_ap never runs, and no dmesg appears).  That helper
+registers beacon events with `NL80211_CMD_REGISTER_BEACONS`, and
+cfg80211's `nl80211_register_beacons()` rejects it with -EOPNOTSUPP
+unless the wiphy advertises:
+
+    if (!(rdev->wiphy.flags & WIPHY_FLAG_REPORTS_OBSS))
+            return -EOPNOTSUPP;      /* net/wireless/nl80211.c */
+
+The clean-room wiphy never set that flag.  **Fix (v6):** set
+`WIPHY_FLAG_REPORTS_OBSS`.  The driver has no OBSS beacon reporting
+implementation, so the flag only satisfies hostapd's registration
+bookkeeping; no beacon events are expected from the firmware path.
+
+### 11.3 The kernel warning: connect without disconnect
+
+core.c:532 is
+
+    WARN_ON(ops->connect && !ops->disconnect);
+
+v2 added the fail-closed `.connect` gate for hostapd's driver-init check
+without a paired `.disconnect`, hence the wiphy_new_nm+0x5b8 WARN.
+**Fix (v6):** register a fail-closed `.disconnect` stub (never used by the
+AP path).
+
+### 11.4 The mgmt_tx caller
+
+v6 adds `dump_stack()` to the one-shot mgmt_tx diagnostic so the next fire
+prints the caller in dmesg.  The op still fails closed; the current failure
+does not depend on it (the beacon path died before NEW_BEACON).
+
+### 11.5 Module v6 and expected dmesg
+
+**Module v6:** 206,060 B sha256
+90dd28505f23425fd7ea84847027ab909405b083332a3a5141f3d76da878a79f (debug-stripped, fired base; H2D/core files
+byte-identical; .text identical stripped/unstripped; 0 warnings).
+
+Expected order for the next fire (same commands as section 8.3):
+
+    cfg80211: REPORTS_OBSS flag set (hostapd wiphy-data AP registration)   [module init]
+    cfg80211: mgmt_stypes advertised (AP rx=0x3c15 tx=0x3c15) ...           [module init]
+    cfg80211: SET_INTERFACE reached ...                                     [hostapd set_mode]
+    cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 ...)    [NEW_BEACON]
+    cfg80211: start_ap sequence frame 1/4 'ap_ssid' posted (64 B ...)
+    cfg80211: start_ap sequence frame 2/4 'ap_cfg' posted (184 B ...)
+    cfg80211: start_ap sequence posted to provider '...' (2 frame(s))
+    hostapd: wlan0: AP-ENABLED
+
+Readback unchanged: ctx0 BAR0 0x7D1758; ctx0+0x18C (0x7D18E4) changes after
+ap_cfg; VAP = u32 at 0x7D18E8; V+0x6B8000+0x10 = 100, +0x14 = 2.
 

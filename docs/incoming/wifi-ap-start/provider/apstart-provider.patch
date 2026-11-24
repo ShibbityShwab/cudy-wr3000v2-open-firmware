@@ -43,7 +43,7 @@
  int hi5622_cfg80211_init(struct hi5622_pci *ctx)
  {
  	struct hi5622_cfg80211 *c;
-@@ -372,6 +397,19 @@
+@@ -372,6 +397,30 @@
  	memcpy(wiphy->perm_addr, hi5622_cfg11_perm_addr, ETH_ALEN);
  	wiphy->cipher_suites = hi5622_cipher_suites;
  	wiphy->n_cipher_suites = ARRAY_SIZE(hi5622_cipher_suites);
@@ -55,6 +55,17 @@
 +	 * set_mode(AP); without this table hostapd reports "Could not configure
 +	 * driver mode" after a successful SET_INTERFACE.  rx/tx bitmap bit N =
 +	 * 802.11 management subtype N. */
++	/* hostapd's first NEW_BEACON goes through nl80211_get_wiphy_data_ap()
++	 * (userspace AP SME), which registers NL80211_CMD_REGISTER_BEACONS;
++	 * cfg80211 rejects that registration with -EOPNOTSUPP unless the wiphy
++	 * advertises WIPHY_FLAG_REPORTS_OBSS.  Without the flag hostapd returns
++	 * -ENOBUFS *before* sending NEW_BEACON ("Failed to set beacon
++	 * parameters", no start_ap reached).  We have no OBSS reporting
++	 * implementation, so the flag only satisfies the registration
++	 * bookkeeping. */
++	wiphy->flags |= WIPHY_FLAG_REPORTS_OBSS;
++	dev_info(&ctx->pdev->dev,
++		 "cfg80211: REPORTS_OBSS flag set (hostapd wiphy-data AP registration)\n");
 +	wiphy->mgmt_stypes = hi5622_mgmt_stypes;
 +	dev_info(&ctx->pdev->dev,
 +		 "cfg80211: mgmt_stypes advertised (AP rx=0x%04x tx=0x%04x) - hostapd frame subscriptions accepted\n",
@@ -127,7 +138,7 @@
  }
  
  /* ---------------------------------------------------------------------
-@@ -320,6 +347,46 @@
+@@ -320,6 +347,76 @@
   * Everything else stays NULL: cfg80211 returns -EOPNOTSUPP for the deferred
   * M3+ ops without involving the driver (add_key etc. are M3).
   * -------------------------------------------------------------------*/
@@ -168,13 +179,43 @@
 +	(void)params;
 +	(void)cookie;
 +	pr_info_once("hi5622: mgmt_tx op reached - fails closed (management TX is data-plane/M4 work)\n");
++	dump_stack();	/* identify the caller in the next fire's dmesg */
 +	return -EOPNOTSUPP;
++}
++
++/* Paired with .connect: wiphy_new_nm() WARNs when a driver registers
++ * .connect without .disconnect (net/wireless/core.c).  AP-only bench driver,
++ * fail-closed. */
++static int hi5622_cfg11_disconnect(struct wiphy *wiphy,
++				   struct net_device *dev, u16 reason_code)
++{
++	(void)wiphy;
++	(void)dev;
++	(void)reason_code;
++	return -EOPNOTSUPP;
++}
++
++/* SET_BEACON path (running-AP beacon update).  hostapd only reaches it after a
++ * successful NEW_BEACON (cfg80211 also requires a non-zero AP beacon interval
++ * and this op), so it is not on the initial AP-start path.  The firmware
++ * beacon update (g0 id1 key 0x0127 with start flag 0) is not wired yet, so
++ * this ACCEPTS the update host-side and logs the parameters: a bench
++ * instrument with no firmware write (M3 work). */
++static int hi5622_cfg11_change_beacon(struct wiphy *wiphy,
++				      struct net_device *dev,
++				      struct cfg80211_ap_update *info)
++{
++	dev_info(wiphy_dev(wiphy),
++		 "cfg80211: SET_BEACON accepted host-side only (beacon head=%zu tail=%zu, no firmware write yet - M3)\n",
++		 info ? info->beacon.head_len : 0,
++		 info ? info->beacon.tail_len : 0);
++	return 0;
 +}
 +
  const struct cfg80211_ops hi5622_cfg11_ops = {
  	.add_virtual_intf	= hi5622_cfg11_add_virtual_intf,
  	.del_virtual_intf	= hi5622_cfg11_del_virtual_intf,
-@@ -330,4 +397,10 @@
+@@ -330,4 +427,14 @@
  	.abort_scan		= hi5622_scan_op_abort,
  	.start_ap		= hi5622_scan_op_start_ap,
  	.stop_ap		= hi5622_scan_op_stop_ap,
@@ -184,6 +225,10 @@
 +	/* Needed so cfg80211 accepts hostapd's AP-mode management-frame
 +	 * subscriptions; fails closed (see above). */
 +	.mgmt_tx		= hi5622_cfg11_mgmt_tx,
++	/* cfg80211 WARN pairing for .connect (core.c wiphy_new_nm). */
++	.disconnect		= hi5622_cfg11_disconnect,
++	/* Host-side-accepted SET_BEACON (see above; no firmware write yet). */
++	.change_beacon		= hi5622_cfg11_change_beacon,
  };
 --- a/hi5622_frames_api.h
 +++ b/hi5622_frames_api.h
