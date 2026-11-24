@@ -1,0 +1,39 @@
+{
+  "schema": "hi5622-hcc-h2d-frame/1",
+  "lane": "wifi-ctx-create",
+  "name": "ctx_create_g0id1_key0x64",
+  "direction": "host->device",
+  "carrier": {
+    "ring": "SR",
+    "announce_mailbox_id": 3,
+    "node_len_rule": "header total (0x30)"
+  },
+  "hcc": {
+    "group": 0,
+    "id": 1,
+    "dst": 0,
+    "alloc": 1,
+    "field_a": 0,
+    "field_b": 4,
+    "field_c": 0,
+    "total": 48,
+    "tag": "0x5a5a"
+  },
+  "payload": {
+    "key": "0x0064",
+    "len": 20,
+    "data_len": 20,
+    "data": {
+      "type": 3,
+      "vap": 4,
+      "user": 4
+    }
+  },
+  "node_buffer_hex": "000100043000010000005a5a0000000001000000640014000304000004000000000000000000000000000000ffffffff",
+  "derived_from": {
+    "handler": "CA 0x43D58 (group 0 id 1, config-event demultiplexer)",
+    "key_table": "CA 0x10C23C entry 1 (u16 key 0x64 -> worker CA 0x449E4)",
+    "create_helper": "CA 0xFE6BC (str.w r0,[ctx,#0x190] at CA 0xFE7E4)",
+    "status": "SYNTHESIZED payload, not a vendor capture"
+  }
+}
