@@ -13,10 +13,13 @@
 #      -> 242,572 B sha256 44c6cc12...  (hardware-fired combined module)
 #   2. + docs/incoming/wifi-image-polish/patches/0001-...patch
 #      -> 242,920 B sha256 d145a205...  (polished image module, NOT fired)
-#   3. + this lane's patches/0001-stability-hardening.patch
-#      -> hardened module  (per-ctx VAP/AP latches, controlled stop_ap +
-#         restart, stale-VAP readback guard, stale-reload refusal, remove
-#         ordering; NOT fired - one attended ladder E2/E3 run is required)
+#   3. + docs/incoming/wifi-dp-tuning/patches/0001-txq-consumer-tuning.patch
+#      -> 251,924 B sha256 175a4617...  (bench-validated TXQ publish/completion)
+#   4. + this lane's patches/0001-stability-hardening.patch
+#      -> hardened final combined module (per-ctx VAP/AP latches, controlled
+#         stop_ap + restart, stale-VAP readback guard, stale-reload refusal,
+#         remove ordering, hcc_trace hot-path suppression; NOT fired - one
+#         attended final validation is required)
 #
 # Build-dir note: .note.gnu.build-id hashes the debug info, which embeds the
 # absolute build path.  Stack 1 and stack 2 are therefore built in exactly the
@@ -29,14 +32,17 @@ set -eu
 LANE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 DOCS=$(cd "$LANE_DIR/.." && pwd)            # .../docs/incoming
 DP_SRC=$DOCS/wifi-dp-air/src
+DPT_LANE=$DOCS/wifi-dp-tuning
 AP_LANE=$DOCS/wifi-ap-start
 POLISH_LANE=$DOCS/wifi-image-polish
 AP_PATCH=$AP_LANE/provider/apstart-provider.patch
 POLISH_PATCH=$POLISH_LANE/patches/0001-polish-module-defaults-and-mgmt-diag.patch
+DPT_PATCH=$DPT_LANE/patches/0001-txq-consumer-tuning.patch
 OUR_PATCH=$LANE_DIR/patches/0001-stability-hardening.patch
 BASEWORK=/tmp/wifi-combined-build
 PWORK=/tmp/wifi-image-polish-build
-HWORK=/tmp/wifi-stability-build/hard
+DPTWORK=/tmp/wifi-dp-tuning-build
+HWORK=/tmp/wifi-stability-build/combined
 ART=/tmp/wifi-stability-artifact
 
 KDIR=
@@ -59,6 +65,7 @@ fi
 [ -d "$DP_SRC" ] || { echo "stability: missing dp-air base: $DP_SRC" >&2; exit 2; }
 [ -f "$AP_PATCH" ] || { echo "stability: missing ap-start patch: $AP_PATCH" >&2; exit 2; }
 [ -f "$POLISH_PATCH" ] || { echo "stability: missing polish patch: $POLISH_PATCH" >&2; exit 2; }
+[ -f "$DPT_PATCH" ] || { echo "stability: missing dp-tuning patch: $DPT_PATCH" >&2; exit 2; }
 [ -f "$OUR_PATCH" ] || { echo "stability: missing hardening patch: $OUR_PATCH" >&2; exit 2; }
 [ -d "$KDIR" ] || { echo "stability: 6.18.60 kernel tree not found" >&2; exit 2; }
 [ -n "$STAGING_DIR" ] || { echo "stability: staging dir not found" >&2; exit 2; }
@@ -69,6 +76,8 @@ BASE_SIZE=242572
 BASE_SHA=44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
 POLISHED_SIZE=242920
 POLISHED_SHA=d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6
+DPT_SIZE=251924
+DPT_SHA=175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425
 
 stage_proven() { # $1 = work dir
 	dir=$1
@@ -130,11 +139,31 @@ if [ "$P_SIZE" != "$POLISHED_SIZE" ] || [ "$P_SHA" != "$POLISHED_SHA" ]; then
 fi
 echo "POLISHED-ID-OK $P_SIZE $P_SHA"
 
-echo "== stack 3: stability-hardened module"
+echo "== stack 3: dp-tuning TXQ-publish module (bench-validated identity)"
+stage_proven "$DPTWORK"
+( cd "$DPTWORK" && patch -p1 --no-backup-if-mismatch < "$DPT_PATCH" >/dev/null )
+build_module "$DPTWORK"
+strip_artifact "$DPTWORK" "$ART/hi5622_wifi.dp-tuning.ko"
+D_SIZE=$(stat -c %s "$ART/hi5622_wifi.dp-tuning.ko")
+D_SHA=$(sha256sum "$ART/hi5622_wifi.dp-tuning.ko" | cut -d' ' -f1)
+if [ "$D_SIZE" != "$DPT_SIZE" ] || [ "$D_SHA" != "$DPT_SHA" ]; then
+	echo "stability: DP-TUNING MISMATCH expected $DPT_SIZE/$DPT_SHA got $D_SIZE/$D_SHA" >&2
+	exit 1
+fi
+echo "DPT-ID-OK $D_SIZE $D_SHA"
+
+echo "== stack 4: final combined = dp-tuning + polished defaults + stability hardening"
 rm -rf "$HWORK"
-cp -a "$PWORK" "$HWORK"
+cp -a "$DPTWORK" "$HWORK"
 rm -f "$HWORK"/*.o "$HWORK"/*.ko "$HWORK"/*.mod "$HWORK"/*.mod.c "$HWORK"/.*.cmd "$HWORK"/Module.symvers "$HWORK/build.log" 2>/dev/null || true
+( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$POLISH_PATCH" >/dev/null )
 ( cd "$HWORK" && patch -p1 --no-backup-if-mismatch < "$OUR_PATCH" >/dev/null )
+# hcc_trace gating must be in the SOURCE (the static helper inlines away, so
+# the stripped artifact only carries the param name).
+grep -q "hcc_kernel_event_hot" "$HWORK/hcc_core_kernel.c" || {
+	echo "stability: hcc_trace gating missing from hcc_core_kernel.c" >&2; exit 1; }
+grep -q "hi5622_hcc_trace" "$HWORK/hcc.c" || {
+	echo "stability: hcc_trace param missing from hcc.c" >&2; exit 1; }
 build_module "$HWORK"
 strip_artifact "$HWORK" "$ART/hi5622_wifi.hardened.ko"
 H_SIZE=$(stat -c %s "$ART/hi5622_wifi.hardened.ko")
@@ -148,19 +177,20 @@ cp "$OUR_PATCH" "$ART/0001-stability-hardening.patch"
 missing=""
 for s in "stale module reload" "ALREADY BOOTED from a previous module load" \
 	 "VAP-base/AP latches cleared" "controlled stop_ap" "scan REFUSED" \
-	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag"; do
+	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag" \
+	 "hcc_trace"; do
 	if ! strings -a "$ART/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
 done
 [ -z "$missing" ] || { echo "stability: missing hardened strings:$missing" >&2; exit 1; }
 VERMAGIC=$("${CROSS}strings" "$HWORK/hi5622_wifi.ko" | grep -m1 '^vermagic=')
 DEPENDS=$(strings -a "$HWORK/hi5622_wifi.ko" | grep -m1 '^depends=')
-echo "== stability hardened module"
+echo "== stability hardened module (final combined)"
 echo "artifact  : $ART/hi5622_wifi.hardened.ko (debug-stripped)"
 echo "size      : $H_SIZE"
 echo "sha256    : $H_SHA"
 echo "unstripped: $HU_SIZE B sha256 $HU_SHA"
 echo "vermagic  : $VERMAGIC"
 echo "depends   : $DEPENDS"
-echo "chain     : $BASE_SIZE/$BASE_SHA -> $POLISHED_SIZE/$POLISHED_SHA -> hardened"
+echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> hardened"
 echo "host test : ./tools/run-hardening-check.sh"
-echo "note: .ko is local evidence only (never committed); NOT fired - attended ladder E2/E3 required"
+echo "note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required"

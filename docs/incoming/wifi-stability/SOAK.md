@@ -66,6 +66,13 @@ The sampler does no device writes, no rmmod, no reboot, no network.
 A verdict is PASS only if all checks pass.  Result template:
 [results/RESULT-TEMPLATE.md](../results/RESULT-TEMPLATE.md).
 
+## 4b. Console noise
+
+The hardened module defaults hcc_trace=0, so a steady-state soak has a quiet
+dmesg (only one-shot/failure hcc-core lines).  For a debugging session pass
+hcc_trace=1 on the insmod line; the analyzer's dmesg check only looks for
+fatal/error patterns, so both settings are valid.
+
 ## 5. Stop and recovery rules (hard)
 
 * mask != 0, staging != 0, page lost or exception_info > 0: **FIRMWARE

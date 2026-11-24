@@ -46,7 +46,7 @@ kernel tree), but it does gate NEW_BEACON on `wdev->links[link].ap.beacon_interv
 | [tools/soak_sampler.sh](tools/soak_sampler.sh) | read-only on-device sampler (busybox shell) |
 | [tools/soak_selftest.py](tools/soak_selftest.py) | 33 host tests: analyzer verdicts, TSV format, script audit, CLI |
 | [tools/error_paths.py](tools/error_paths.py) | error-path ladder definitions + dry-run/audit/plan generator |
-| [tools/build-hardened-module.sh](tools/build-hardened-module.sh) | reproduces base 44c6cc12 + polished d145a205, then builds the hardened module |
+| [tools/build-hardened-module.sh](tools/build-hardened-module.sh) | asserts base 44c6cc12 + polished d145a205 + dp-tuning 175a4617, then builds the final combined hardened module |
 | [tools/run-hardening-check.sh](tools/run-hardening-check.sh) | host gate: policy test + patch anchors + apply check (+ --with-build) |
 | [ladders/](ladders/) | machine-readable bench ladders (soak, error paths E1-E5, scan-AP diag A-D) |
 | [results/RESULT-TEMPLATE.md](results/RESULT-TEMPLATE.md) | soak result template with the PASS table |
@@ -90,6 +90,12 @@ kernel tree), but it does gate NEW_BEACON on `wdev->links[link].ap.beacon_interv
 6. **Remove ordering fix** (cfg80211 teardown before HCC rings are freed) and
    **mgmt_diag** already owned by the image-polish lane (this patch builds on it
    and does not duplicate it).
+7. **hcc_trace=0 default** suppresses the hot-path hcc-core traces that flooded
+   the bench console (128 lines/session; heartbeat ~1 line/s while the AP is
+   up).  hcc_trace=1 restores the historic debugging output.
+
+The final combined artifact stacks: hardware-fired base 44c6cc12 -> polished
+d145a205 -> dp-tuning TXQ 175a4617 (first MAC TX COMPLETION) -> this hardening.
 
 ## Honest limits
 

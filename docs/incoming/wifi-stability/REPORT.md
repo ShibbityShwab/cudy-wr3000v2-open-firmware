@@ -81,11 +81,12 @@ Applied on top of the polished image source delta (image-polish lane owns
 | H5 | stale module reload refusal (probe page+8 latch; upload/seed/release/H2D) | reload-after-release safety |
 | H6 | remove ordering: cfg80211 teardown before HCC rings free | teardown race |
 | H7 | scan-after-AP and dead-VAP scan refusal | scan/AP interaction |
+| H8 | hcc_trace=0 default suppresses per-frame/periodic hcc-core console lines (hcc_trace=1 restores historic output) | console/perf census: 128 lines/session, 9.99 ms/line |
 
-Identity: hardened module 248,524 B sha256 `29225545...`, unstripped 936,064 B
-sha256 `35c895fb...`, vermagic 6.18.60 SMP mod_unload ARMv7 p2v8,
+Final combined identity: hardened module 258,220 B sha256 `694c704a...`, unstripped 959,300 B
+sha256 `7cd2d0aa...`, vermagic 6.18.60 SMP mod_unload ARMv7 p2v8,
 depends=cfg80211, 0 warnings.  Chain asserted by the build:
-base 44c6cc12 (hardware-fired) -> polished d145a205 (image lane) -> hardened.
+base 44c6cc12 (hardware-fired) -> polished d145a205 (image lane) -> dp-tuning 175a4617 (first MAC TX COMPLETED) -> hardened.
 NOT fired; the attended ladders are E2 (stop/restart) and E3 (failed start).
 Note: the stripped sha is build-directory dependent via .note.gnu.build-id
 (the debug info embeds the build path; the base and polished builds use their

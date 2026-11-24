@@ -13,7 +13,8 @@
       "vap_start_first=1",
       "vap_start_mode=1",
       "vap_start_module=0",
-      "hcc_poll_ms=5"
+      "hcc_poll_ms=5",
+      "hcc_trace=0"
     ],
     "firmware": "hi_wifi/FIRMWARE.PD4.bin sha256 cfe24bfb... 928,920 B (manual push; never packaged)",
     "hostapd": "hostapd-open.conf: wlan0, nl80211, ssid cudy-ap-test, hw_mode=g, channel=6, beacon_int=100, dtim=2"

@@ -85,16 +85,32 @@ path then refuse with -EBUSY and a power-cycle message.  The pre-existing
 probe), so scan work is cancelled and VAPs unregistered before the HCC service
 and rings are freed.
 
+### 2.7 hcc_trace hot-path suppression (final polish item)
+
+The bench console census found 128 hot-path hcc-core lines per session
+(per-frame txq_sync/h2d_sent/h2d_complete/d2h_word/d2h_dispatch plus the
+heartbeat ~1 line/s; console printk measured 9.99 ms/line => ~1.3 s/session
+and continuous console I/O while the AP is up).  New module param **hcc_trace**
+(default **0**): when 0 the adapter drops the hot events (TXQ_SYNC, HEARTBEAT,
+H2D_SENT, H2D_COMPLETE, D2H_WORD, D2H_DISPATCH) before the dev_info; every
+one-shot/failure line (boot latch, ready, timeouts, refusals, invalid/unknown
+frames, exception vector capture, cece) stays always on.  hcc_trace=1 restores
+the historic output for debugging.  No periodic HB print exists in this tree
+beyond HCC_EVENT_HEARTBEAT, which is covered by the same gate.
+
 ## 3. Build identities (host, not fired)
 
 ```
 stack 1  dp-air + ap-start v7                   242,572 B  44c6cc12...  (hardware-fired)
 stack 2  + wifi-image-polish delta              242,920 B  d145a205...  (polished, not fired)
-stack 3  + this lane's hardening patch          248,524 B  29225545fa2859...  (host-built, NOT fired)
+stack 3  dp-air + ap-start + dp-tuning TXQ       251,924 B  175a4617...  (bench-validated, TX COMPLETED)
+stack 4  stack3 + polish + this lane's harden.   258,220 B  694c704a...  (FINAL COMBINED, NOT fired)
 ```
 
-`tools/build-hardened-module.sh` asserts stack 1 and stack 2 byte-for-byte
-before building stack 3, so a drift in either upstream pin fails closed.
+`tools/build-hardened-module.sh` asserts stacks 1-3 byte-for-byte (base
+44c6cc12, polished d145a205, dp-tuning 175a4617) before building the final
+combined artifact, so a drift in any upstream pin fails closed.  Stack 4 is
+the build the Lead should fire for the final validation.
 Warnings: 0; vermagic 6.18.60 SMP mod_unload ARMv7 p2v8; depends=cfg80211.
 
 Build-dir note: .note.gnu.build-id hashes the debug info, which embeds the

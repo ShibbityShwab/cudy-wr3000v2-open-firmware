@@ -1,0 +1,10 @@
+final combined stability module (host-built, NOT fired)
+stack: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617 -> this hardening
+size: 258220 B
+sha256: 694c704a634adf2ca4900b4f96101ff5204fa7df2c9c8ce2c26dfdbeac3a3aba
+unstripped: 959300 B sha256 7cd2d0aaa97deab50cacb11257d8986aaa7e512f14ad607bcbd837f23dc3d4fe
+vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
+depends: cfg80211
+warnings: 0
+new params: hcc_trace=0 (hot-path hcc-core traces off; 1=historic), stop_ap_mode=0 (host-side stop; 1=firmware user_del teardown)
+ladders: E2 (stop/restart), E3 (failed-start retry), soak 60 min

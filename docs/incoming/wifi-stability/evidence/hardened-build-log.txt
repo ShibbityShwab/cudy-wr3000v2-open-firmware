@@ -1,5 +1,5 @@
 make: Entering directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
-make[1]: Entering directory '/tmp/wifi-stability-build/hard'
+make[1]: Entering directory '/tmp/wifi-stability-build/combined'
   CC [M]  main.o
   CC [M]  transport.o
   CC [M]  ete.o
@@ -33,5 +33,5 @@ make[1]: Entering directory '/tmp/wifi-stability-build/hard'
   CC [M]  hi5622_wifi.mod.o
   CC [M]  .module-common.o
   LD [M]  hi5622_wifi.ko
-make[1]: Leaving directory '/tmp/wifi-stability-build/hard'
+make[1]: Leaving directory '/tmp/wifi-stability-build/combined'
 make: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'

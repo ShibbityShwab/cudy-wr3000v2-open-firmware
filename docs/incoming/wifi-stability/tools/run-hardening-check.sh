@@ -30,7 +30,7 @@ echo "== patch static checks"
 [ -f "$PATCH" ] || { echo "missing $PATCH" >&2; exit 1; }
 [ -f "$HDR" ] || { echo "missing $HDR" >&2; exit 1; }
 files=$(grep -c '^+++ b/' "$PATCH")
-[ "$files" = "7" ] || { echo "PATCH-FILES want 7 got $files" >&2; fail=1; }
+[ "$files" = "10" ] || { echo "PATCH-FILES want 10 got $files" >&2; fail=1; }
 for anchor in \
 	"hi5622_transport_reload_refused" \
 	"chip_booted_at_probe" \
@@ -40,6 +40,8 @@ for anchor in \
 	"VAP-base/AP latches cleared" \
 	"controlled stop_ap" \
 	"stop_ap_mode" \
+	"hcc_trace" \
+	"hcc_kernel_event_hot" \
 	"stale/dead VAP" \
 	"HI5622_STAB_AP_BASE_WRONG_IFTYPE" \
 	"scan REFUSED" \
@@ -62,7 +64,7 @@ if grep -q '^+unsigned int hi5622_mgmt_diag;' "$PATCH"; then
 	fail=1
 fi
 
-echo "== patch apply check (polished image source tree)"
+echo "== patch apply check (dp-tuning + polished image source tree)"
 WORK=/tmp/wifi-stability-patchcheck
 rm -rf "$WORK"; mkdir -p "$WORK"
 cp -a "$DOCS/wifi-dp-air/src/." "$WORK/"
@@ -70,6 +72,8 @@ cp "$DOCS/wifi-ap-start/src/hi5622_ap_frames.h" \
    "$DOCS/wifi-ap-start/src/hi5622_ap_frames.c" "$WORK/"
 ( cd "$WORK" && patch -p1 --no-backup-if-mismatch < \
 	"$DOCS/wifi-ap-start/provider/apstart-provider.patch" >/dev/null )
+( cd "$WORK" && patch -p1 --no-backup-if-mismatch < \
+	"$DOCS/wifi-dp-tuning/patches/0001-txq-consumer-tuning.patch" >/dev/null )
 ( cd "$WORK" && patch -p1 --no-backup-if-mismatch < \
 	"$DOCS/wifi-image-polish/patches/0001-polish-module-defaults-and-mgmt-diag.patch" >/dev/null )
 ( cd "$WORK" && patch -p1 --dry-run --no-backup-if-mismatch < "$PATCH" >/dev/null ) \

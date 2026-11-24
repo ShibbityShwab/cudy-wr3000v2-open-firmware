@@ -1,6 +1,87 @@
-diff -Nru polished/hi5622_cfg80211_ops.c hard2/hi5622_cfg80211_ops.c
---- a/hi5622_cfg80211_ops.c	2026-11-24 19:21:30.385637128 +0700
-+++ b/hi5622_cfg80211_ops.c	2026-11-24 19:22:19.988681862 +0700
+diff -Nru combined_pre/hcc.c combined_hard/hcc.c
+--- a/hcc.c	2026-11-24 17:03:08.822233177 +0700
++++ b/hcc.c	2026-11-24 19:28:49.346173714 +0700
+@@ -36,6 +36,18 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_scan.h"
+ 
++/* Stability/perf hardening (wifi-stability lane): gate the hot-path hcc-core
++ * event traces.  Default 0 = quiet steady state (the bench console census
++ * measured 128 hcc-core lines and ~1.3 s of printk per session; the heartbeat
++ * event alone prints ~1 line/s while the AP is up).  hcc_trace=1 restores the
++ * historic per-frame/periodic output for debugging; one-shot boot/ready/
++ * timeout/refusal/invalid-frame lines are always on. */
++unsigned int hi5622_hcc_trace;
++module_param_named(hcc_trace, hi5622_hcc_trace, uint, 0644);
++MODULE_PARM_DESC(hcc_trace,
++		 "hcc-core hot-path traces: 0=quiet default, 1=per-frame/periodic (debug)");
++
++
+ int hi5622_hcc_init(struct hi5622_pci *ctx)
+ {
+ 	struct hi5622_hcc_service *h = ctx->hcc;
+@@ -47,6 +59,7 @@
+ 	cfg.allow_ceed_repair = false;	/* GP8 golden boot needs no repair */
+ 	cfg.mbox_clear_timeout_ms = 1000;
+ 	hcc_kernel_init(&h->hcc, &ctx->pdev->dev, ctx->bar0, &cfg);
++	h->hcc.trace = hi5622_hcc_trace != 0;
+ 
+ 	/* CECE policy parameter maps 1:1 to the core enum (0 evidence, 1 off,
+ 	 * 2 evidence + bounded manual kick). */
+diff -Nru combined_pre/hcc_core_kernel.c combined_hard/hcc_core_kernel.c
+--- a/hcc_core_kernel.c	2026-11-24 17:03:08.822594168 +0700
++++ b/hcc_core_kernel.c	2026-11-24 19:28:49.346021958 +0700
+@@ -28,10 +28,31 @@
+ 	writel((u32)val, k->bar0 + off);
+ }
+ 
++/* Hot-path events: per-frame H2D/D2H bookkeeping plus the periodic heartbeat.
++ * These are the lines that flooded the bench console; keep everything else
++ * (boot latch, ready, timeouts, refusals, invalid/unknown frames, exception
++ * captures) always on - those are one-shot or failure evidence. */
++static bool hcc_kernel_event_hot(enum hcc_event ev)
++{
++	switch (ev) {
++	case HCC_EVENT_TXQ_SYNC:
++	case HCC_EVENT_HEARTBEAT:
++	case HCC_EVENT_H2D_SENT:
++	case HCC_EVENT_H2D_COMPLETE:
++	case HCC_EVENT_D2H_WORD:
++	case HCC_EVENT_D2H_DISPATCH:
++		return true;
++	default:
++		return false;
++	}
++}
++
+ static void hcc_kernel_event(void *priv, enum hcc_event ev, hcc_u32 data)
+ {
+ 	struct hcc_kernel *k = priv;
+ 
++	if (!k->trace && hcc_kernel_event_hot(ev))
++		return;
+ 	if (k->log_limit && k->logged >= k->log_limit)
+ 		return;
+ 	k->logged++;
+diff -Nru combined_pre/hcc_core_kernel.h combined_hard/hcc_core_kernel.h
+--- a/hcc_core_kernel.h	2026-11-24 17:03:08.822621459 +0700
++++ b/hcc_core_kernel.h	2026-11-24 19:28:49.345961224 +0700
+@@ -24,6 +24,12 @@
+ 	struct device		*dev;
+ 	unsigned int		log_limit;	/* max dev_info events, 0 = all */
+ 	unsigned int		logged;
++	/* Stability/perf hardening (wifi-stability lane): per-frame and periodic
++	 * hcc-core traces (txq_sync/h2d_sent/h2d_complete/d2h_word/d2h_dispatch/
++	 * heartbeat) are hot-path console noise (bench census: 128 such lines per
++	 * session; printk measured 9.99 ms/line).  They are OFF by default and the
++	 * hcc_trace=1 module param re-enables the historic output. */
++	bool			trace;
+ };
+ 
+ /* Initialise the adapter (and the embedded core) on an ioremapped BAR0. */
+diff -Nru combined_pre/hi5622_cfg80211_ops.c combined_hard/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-24 19:28:49.340680823 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-24 19:28:49.345187425 +0700
 @@ -42,6 +42,7 @@
  #include <net/cfg80211.h>
  
@@ -61,9 +142,9 @@ diff -Nru polished/hi5622_cfg80211_ops.c hard2/hi5622_cfg80211_ops.c
  	/* Unregisters the netdev too; the netdev (and the wdev inside its
  	 * private area) is freed by netdev_run_todo at rtnl_unlock
  	 * (needs_free_netdev).  Do NOT kfree(wdev) here: cfg80211's
-diff -Nru polished/hi5622_driver.h hard2/hi5622_driver.h
+diff -Nru combined_pre/hi5622_driver.h combined_hard/hi5622_driver.h
 --- a/hi5622_driver.h	2026-11-24 17:03:56.925113162 +0700
-+++ b/hi5622_driver.h	2026-11-24 19:22:01.719981190 +0700
++++ b/hi5622_driver.h	2026-11-24 19:28:49.345274349 +0700
 @@ -77,6 +77,14 @@
  	bool			blocks_seeded;
  	bool			cpu_released;
@@ -79,9 +160,9 @@ diff -Nru polished/hi5622_driver.h hard2/hi5622_driver.h
  	size_t			fw_size;
  
  	/* vendor host record g_dmac_to_hmac_read_msg[2] (0x64 B stride) */
-diff -Nru polished/hi5622_frame_post.c hard2/hi5622_frame_post.c
---- a/hi5622_frame_post.c	2026-11-24 19:21:30.385759639 +0700
-+++ b/hi5622_frame_post.c	2026-11-24 19:22:01.720321401 +0700
+diff -Nru combined_pre/hi5622_frame_post.c combined_hard/hi5622_frame_post.c
+--- a/hi5622_frame_post.c	2026-11-24 19:28:49.340823302 +0700
++++ b/hi5622_frame_post.c	2026-11-24 19:28:49.345330846 +0700
 @@ -186,6 +186,12 @@
  	}
  
@@ -95,9 +176,9 @@ diff -Nru polished/hi5622_frame_post.c hard2/hi5622_frame_post.c
  	if (!hi5622_allow_frames) {
  		ret = hi5622_post_refuse(dev, what,
  					 "allow_frames=0 (fail-closed default)",
-diff -Nru polished/hi5622_scan.c hard2/hi5622_scan.c
---- a/hi5622_scan.c	2026-11-24 19:21:30.385826595 +0700
-+++ b/hi5622_scan.c	2026-11-24 19:25:57.012517745 +0700
+diff -Nru combined_pre/hi5622_scan.c combined_hard/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 19:28:49.340922809 +0700
++++ b/hi5622_scan.c	2026-11-24 19:28:49.345422599 +0700
 @@ -35,6 +35,7 @@
  #include "hi5622_frames_api.h"
  #include "hi5622_frame_post.h"
@@ -450,9 +531,9 @@ diff -Nru polished/hi5622_scan.c hard2/hi5622_scan.c
  	memset(&p, 0, sizeof(p));
  	p.iftype = 3u;
  	p.user_id = (u8)s->user_id;
-diff -Nru polished/hi5622_stability.h hard2/hi5622_stability.h
+diff -Nru combined_pre/hi5622_stability.h combined_hard/hi5622_stability.h
 --- a/hi5622_stability.h	1970-01-01 07:00:00.000000000 +0700
-+++ b/hi5622_stability.h	2026-11-24 19:22:01.721546362 +0700
++++ b/hi5622_stability.h	2026-11-24 19:28:49.345580847 +0700
 @@ -0,0 +1,66 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -520,9 +601,9 @@ diff -Nru polished/hi5622_stability.h hard2/hi5622_stability.h
 +}
 +
 +#endif /* _HI5622_STABILITY_H */
-diff -Nru polished/main.c hard2/main.c
---- a/main.c	2026-11-24 19:21:30.385948986 +0700
-+++ b/main.c	2026-11-24 19:22:01.720062283 +0700
+diff -Nru combined_pre/main.c combined_hard/main.c
+--- a/main.c	2026-11-24 19:28:49.341076028 +0700
++++ b/main.c	2026-11-24 19:28:49.345625020 +0700
 @@ -136,6 +136,18 @@
  	spin_lock_init(&ctx->doorbell_lock);
  	pci_set_drvdata(pdev, ctx);
@@ -557,9 +638,9 @@ diff -Nru polished/main.c hard2/main.c
  	dev_info(&pdev->dev, "%s removed\n", HI5622_DRV_NAME);
  }
  
-diff -Nru polished/transport.c hard2/transport.c
+diff -Nru combined_pre/transport.c combined_hard/transport.c
 --- a/transport.c	2026-11-24 17:03:08.824228160 +0700
-+++ b/transport.c	2026-11-24 19:22:01.720281696 +0700
++++ b/transport.c	2026-11-24 19:28:49.345693729 +0700
 @@ -172,6 +172,22 @@
  	return readl(ctx->bar0 + off);
  }
