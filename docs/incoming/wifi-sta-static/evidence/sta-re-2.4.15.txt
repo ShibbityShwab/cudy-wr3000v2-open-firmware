@@ -1,0 +1,177 @@
+== module identity
+  file /home/shibbityshwab/recovery-extract/lib/hisilicon/ko/hi5622v100_wifi.ko
+  size 3581748  sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2
+  md5  1745ef77e728c411cef1921af3dc8731
+== cfg80211 STA entry points (link-time .text offsets)
+  wal_cfg80211_connect                       .text+0x100388 size 0x2b4
+  wal_cfg80211_start_connect                 .text+0x127ed0 size 0x24
+  wal_cfg80211_disconnect                    .text+0x10063c size 0x1b8
+  wal_cfg80211_start_disconnect              .text+0x127ef4 size 0xbc
+  wal_cfg80211_start_req                     .text+0x127a84 size 0x1d0
+  wal_send_cfg_event                         .text+0x126c98 size 0x474
+  hmac_sta_sync_join_req_params              .text+0x052f38 size 0x254
+  hmac_sta_wait_join                         .text+0x053844 size 0x2c8
+  hmac_sta_handle_disassoc_rsp               .text+0x053bd0 size 0x170
+  wal_cfg80211_init                          .text+0x10686c size 0x490
+== connect chain (opcode/body evidence)
+  wal_cfg80211_start_connect @ .text+0x127ed0 (size 0x24)
+    0x127ed0  str      lr, [sp, #-4]!
+    0x127ed4  mov      r2, #1
+    0x127ed8  movw     r3, #0x123
+    0x127edc  sub      sp, sp, #0xc
+    0x127ee0  str      r2, [sp]
+    0x127ee4  mov      r2, #0x6c
+    0x127ee8  bl       #0x127ee8
+    0x127eec  add      sp, sp, #0xc
+    0x127ef0  pop      {pc}
+  --- wal_cfg80211_start_disconnect (opcode/body store) ---
+  wal_cfg80211_start_disconnect @ .text+0x127ef4 (size 0xbc)
+    0x127ef4  push     {r4, r5, r6, lr}
+    0x127ef8  mov      r6, r0
+    0x127efc  mov      r4, r1
+    0x127f00  ldr      r5, [r0, #0x328]
+    0x127f04  sub      sp, sp, #0x10
+    0x127f08  cmp      r5, #0
+    0x127f0c  beq      #0x127f98
+    0x127f10  ldrb     r1, [r5, #4]
+    0x127f14  cmp      r1, #1
+    0x127f18  beq      #0x127fa8
+    0x127f1c  mov      r3, #1
+    0x127f20  strb     r3, [r4, #0xf]
+    0x127f24  ldrb     r0, [r5]
+    0x127f28  cmp      r4, #0
+    0x127f2c  ldrh     r2, [r4, #6]
+    0x127f30  moveq    r3, r4
+    0x127f34  ldrbne   r3, [r4, #1]
+    0x127f38  ldrbne   r1, [r4]
+    0x127f3c  lslne    r3, r3, #0x10
+    0x127f40  addne    r3, r3, r1, lsl #24
+    0x127f44  ldrbne   r1, [r4, #3]
+    0x127f48  addne    r3, r3, r1
+    0x127f4c  ldrbne   r1, [r4, #2]
+    0x127f50  addne    r3, r3, r1, lsl #8
+    0x127f54  movw     r1, #0
+    0x127f58  movt     r1, #0
+    0x127f5c  strd     r2, r3, [sp, #4]
+    0x127f60  str      r1, [sp]
+    0x127f64  movw     r3, #0x418
+    0x127f68  movw     r2, #0x4bf
+    0x127f6c  mov      r1, #0x75
+    0x127f70  bl       #0x127f70
+    0x127f74  mov      r1, r4
+    0x127f78  mov      r0, r6
+    0x127f7c  mov      r3, #1
+    0x127f80  mov      r2, #0x10
+    0x127f84  str      r3, [sp]
+    0x127f88  mov      r3, #0xd0
+    0x127f8c  bl       #0x127f8c
+    0x127f90  add      sp, sp, #0x10
+    0x127f94  pop      {r4, r5, r6, pc}
+  --- hmac_sta_sync_join_req_params (header/id/alloc) ---
+  hmac_sta_sync_join_req_params @ .text+0x52f38 (size 0x254)
+    0x52f38  push     {r4, r5, r6, r7, r8, sb, sl, lr}
+    0x52f3c  cmp      r1, #0
+    0x52f40  cmpne    r0, #0
+    0x52f44  sub      sp, sp, #8
+    0x52f48  moveq    r8, #1
+    0x52f4c  movne    r8, #0
+    0x52f50  beq      #0x530d4
+    0x52f54  mov      r5, r0
+    0x52f58  mov      r6, r1
+    0x52f5c  add      sb, r5, #0xfa0
+    0x52f60  mov      r1, r8
+    0x52f64  mov      r0, #0x40
+    0x52f68  add      sb, sb, #8
+    0x52f6c  bl       #0x52f6c
+    0x52f70  subs     r7, r0, #0
+    0x52f74  beq      #0x53164
+    0x52f78  ldr      r4, [r7, #0x118]
+    0x52f7c  cmp      r4, #0
+    0x52f80  beq      #0x53104
+    0x52f84  ldrb     r3, [r4]
+    0x52f88  add      r5, r5, #0x1000
+    0x52f8c  strb     r8, [r4, #7]
+    0x52f90  mov      ip, #1
+    0x52f94  add      r0, r4, #0x20
+    0x52f98  add      sl, r4, #0xc
+    0x52f9c  bfi      r3, r8, #0, #4
+    0x52fa0  strb     r3, [r4]
+    0x52fa4  mov      r3, #0xf
+    0x52fa8  strb     r3, [r4, #6]
+    0x52fac  ldrb     r3, [r4, #1]
+    0x52fb0  ldrb     r2, [r5, #-0x56]
+    0x52fb4  bfi      r3, r2, #4, #4
+    0x52fb8  strb     r3, [r4, #1]
+    0x52fbc  add      r2, r6, #0xb
+    0x52fc0  ldrb     r3, [r5, #-0x57]
+    0x52fc4  strb     r3, [r4, #2]
+    0x52fc8  ldrb     r3, [r5, #-0x58]
+    0x52fcc  strb     r3, [r4, #3]
+    0x52fd0  strb     r8, [r4, #8]
+    0x52fd4  mov      r8, #0
+    0x52fd8  ldrb     r3, [r6, #0x36]
+    0x52fdc  strb     r3, [r4, #0xc]
+    0x52fe0  ldrb     r3, [r6, #0x37]
+    0x52fe4  strb     r3, [r4, #0xd]
+    0x52fe8  ldrb     r3, [r6, #0x38]
+    0x52fec  strb     r3, [r4, #0xe]
+    0x52ff0  ldrb     r3, [r6, #0x39]
+    0x52ff4  strb     r3, [r4, #0xf]
+    0x52ff8  ldrb     r3, [r6, #0x3a]
+    0x52ffc  strb     r3, [r4, #0x10]
+    0x53000  ldrb     r3, [r6, #0x3b]
+    0x53004  strb     r3, [r4, #0x11]
+    0x53008  ldrb     r3, [r5, #-0x48]
+    0x5300c  strb     r3, [r4, #0x14]
+    0x53010  ldrb     r3, [r5, #-0x47]
+    0x53014  strb     r3, [r4, #0x15]
+    0x53018  ldrb     r3, [r5, #-0x46]
+    0x5301c  strb     r3, [r4, #0x16]
+    0x53020  ldrb     r3, [r5, #-0x45]
+    0x53024  strb     r3, [r4, #0x17]
+    0x53028  ldrh     r3, [r6, #0x2c]
+    0x5302c  strh     r3, [r4, #0x12]
+    0x53030  ldrb     r3, [r5, #-0x47]
+    0x53034  cmp      r3, #0
+    0x53038  ldr      r3, [r5, #0x134]
+    0x5303c  ldrb     r3, [r3, #0x34c]
+    0x53040  str      r8, [r4, #0x18]
+    0x53044  andeq    r3, r3, #1
+    0x53048  str      ip, [r4, #0x1c]
+    0x5304c  ubfxne   r3, r3, #1, #1
+    0x53050  strb     r3, [r4, #0x42]
+    0x53054  mov      r3, #0x21
+    0x53058  mov      r1, r3
+    0x5305c  bl       #0x5305c
+    0x53060  subs     r5, r0, #0
+    0x53064  bne      #0x53130
+    0x53068  add      r2, r6, #0x84
+    0x5306c  mov      r1, sl
+    0x53070  mov      r0, sb
+    0x53074  strb     r5, [r4, #0x40]
+    0x53078  bl       #0x53078
+    0x5307c  mov      r0, r7
+    0x53080  bl       #0x53080
+    0x53084  subs     r4, r0, #0
+    0x53088  bne      #0x53098
+    0x5308c  mov      r0, r4
+    0x53090  add      sp, sp, #8
+    0x53094  pop      {r4, r5, r6, r7, r8, sb, sl, pc}
+== static band capability tables (vendor .data)
+  2.4 GHz supported_band @ .data+0xdf8: channels .data+0x16e4, bitrates .data+0x19f4
+    n_channels 14 n_bitrates 12 ht_supported 1 ht_cap 0x0062 vht_supported 1 vht_cap 0x00400000 vht_mcs 0xfffafffa
+    channels: 1(2412) 2(2417) 3(2422) 4(2427) 5(2432) 6(2437) 7(2442) 8(2447) 9(2452) 10(2457) 11(2462) 12(2467) 13(2472) 14(2484)
+    rates: 10 20 55 110 60 90 120 180 240 360 480 540
+  5 GHz supported_band @ .data+0xe54: channels .data+0x108c, bitrates .data+0x1a24
+    n_channels 29 n_bitrates 8 ht_supported 1 ht_cap 0x0062 vht_supported 1 vht_cap 0x00400064 vht_mcs 0xfffafffa
+    channels: 36(5180) 40(5200) 44(5220) 48(5240) 52(5260) 56(5280) 60(5300) 64(5320) 100(5500) 104(5520) 108(5540) 112(5560) 116(5580) 120(5600) 124(5620) 128(5640) 132(5660) 136(5680) 140(5700) 144(5720) 149(5745) 153(5765) 157(5785) 161(5805) 165(5825) 184(4920) 188(4940) 192(4960) 196(4980)
+    rates: 60 90 120 180 240 360 480 540
+== summary assertions
+  join builder present: True
+  2.4 GHz channel count 14 -> True
+  5 GHz channel count 29 -> True
+  HT cap word 0x0062 (2g and 5g) -> True
+  VHT cap 2g 0x00400000 -> True
+  VHT cap 5g 0x00400064 (160 MHz/SGI) -> True
+  VHT MCS map 0xfffa (2 SS MCS0-9) -> True
+  HT MCS rx_mask in the static template: 0x0 (all-zero = the vendor fills it at runtime [U])

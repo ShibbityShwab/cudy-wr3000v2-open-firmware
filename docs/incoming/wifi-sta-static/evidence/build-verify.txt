@@ -1,0 +1,15 @@
+== stack 1: combined AP+DP+scan+stability chain (pre-lane baseline)
+BASE-BUILD-OK size=990664 sha256=5cab10eb6279518411839033550a22d4b5611788d6f2a3262f76309c2774c9d2
+== stack 2: + patches/0001-sta-static.patch
+== artifact assertions
+PATCHED-BUILD-OK size=278044 sha256=333c72a51e2031508bf23cec6305314e81f17c46779af9bb0b11cbd9d45e1ba5
+ARTIFACT /tmp/wifi-sta-static-build/artifact/hi5622_wifi.sta-static.ko
+== host selftests
+== host compiler: cc (GCC) 16.2.1 20260810
+== sta_logic_selftest
+sta_logic_selftest: PASS (2.4G 14ch / 5G 29ch tables, HT 20/40 words, VHT map, connect bounds)
+== sta_frames_selftest
+sta_frames_selftest: PASS (connect body 108 B, disconnect body 16 B, WAL frame 140/48 B, mutation rejection)
+== h2d allowlist: STA connect opcode present (0x123/108)
+ALL-SELFTESTS-PASS
+BUILD-EVIDENCE-COMPLETE

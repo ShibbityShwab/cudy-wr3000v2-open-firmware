@@ -1,0 +1,7 @@
+== host compiler: cc (GCC) 16.2.1 20260810
+== sta_logic_selftest
+sta_logic_selftest: PASS (2.4G 14ch / 5G 29ch tables, HT 20/40 words, VHT map, connect bounds)
+== sta_frames_selftest
+sta_frames_selftest: PASS (connect body 108 B, disconnect body 16 B, WAL frame 140/48 B, mutation rejection)
+== h2d allowlist: STA connect opcode present (0x123/108)
+ALL-SELFTESTS-PASS

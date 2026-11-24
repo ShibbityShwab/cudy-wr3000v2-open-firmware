@@ -1,0 +1,9 @@
+lane artifact (stripped):
+size=278044
+333c72a51e2031508bf23cec6305314e81f17c46779af9bb0b11cbd9d45e1ba5  /tmp/wifi-sta-static-build/artifact/hi5622_wifi.sta-static.ko
+unstripped:
+size=1036052
+5c0f05b540f120c8c41d62ab78ff1a9de0596fc8a889ee3b7b90208b55478d2b  /tmp/wifi-sta-static-build/artifact/hi5622_wifi.sta-static.ko.unstripped
+vermagic/depends:
+depends=cfg80211
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
