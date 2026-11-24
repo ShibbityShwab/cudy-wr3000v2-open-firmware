@@ -294,6 +294,7 @@ int hi5622_scan_model_start(struct hi5622_scan_model *m, u64 now_ms,
 	m->chan_seen_mask = 0;
 	m->chan_seen = 0;
 	m->last_chan_ms = 0;
+	m->last_bss_ms = 0;
 	m->coverage_ms = 0;
 	m->finish_reason[0] = '\0';
 	m->starts++;
@@ -362,9 +363,14 @@ bool hi5622_scan_coverage_ready(const struct hi5622_scan_model *m, u64 now_ms)
 {
 	if (!m || m->phase != HI5622_SCAN_ACTIVE || m->abort_requested)
 		return false;
+	u64 last;
+
 	if (!m->chan_total || m->chan_seen < m->chan_total || !m->coverage_ms)
 		return false;
-	return now_ms - m->coverage_ms >= HI5622_SCAN_SETTLE_MS;
+	last = m->coverage_ms;
+	if (m->last_bss_ms > last)
+		last = m->last_bss_ms;
+	return now_ms - last >= HI5622_SCAN_SETTLE_MS;
 }
 
 int hi5622_scan_model_set_channels(struct hi5622_scan_model *m,
@@ -486,6 +492,7 @@ enum hi5622_scan_step hi5622_scan_model_event(struct hi5622_scan_model *m,
 	switch (cls) {
 	case HI5622_SCAN_EV_BSS:
 		m->bss_events++;
+		m->last_bss_ms = now_ms;
 		if (m->results < HI5622_SCAN_MAX_RESULTS)
 			m->results++;
 		else

@@ -78,7 +78,31 @@ image-polish conflict (both patches touch `hi5622_scan.c`):
 
 The merged tree was host-tested: 37/37 scan-tuning + 196/196 scan-complete;
 merged `hi5622_scan.c` has 5 scan params (dwell 60 from polish + the three new
-ones).  stability lane is building the final hardened module from this stack.
+ones).  stability lane built the final hardened module from this stack, but
+the first bench R1 (fired with the earlier artifact) exposed a chain-advance
+bug; this revision fixes it and rebuilds (see below).
+
+## R1-follow-up rebuild (after the first bench R1, 2026-11-27)
+
+The first artifact (246,688 B sha `05dd5f6a`) was fired: batch 1/3 started but
+the scan closed `finish-ok` right after batch 1 (chain never advanced) and
+`iw` showed no BSS lines although 8 were parsed.  Root cause + all fixes:
+REPORT.md sec 9.  Summary: the work item fell through to the model tick after
+arming the inter-batch gap, and the batch-local coverage finished the scan.
+Fixes: chain advance blocks the tick while the next request is pending;
+coverage is accumulated over all batches (`chans=13/13 batches=3/3`); settle
+also follows the last BSS event; kernel-side cfg80211 BSS-list readback
+(`entries`/`iw_visible`) diagnoses iw visibility (`cfg80211_bss_iter` is now
+the 10th import; `cfg80211-provider.symvers` gained one line and is part of
+the patch stack).
+
+| item | value |
+| --- | --- |
+| artifact for the R-ladder (base+polish+scan, final-stack parity) | **247,776 B** sha256 `613989fff96028a1678b95e92208cb8a34416ac9aec2e7cffb7c77c5530d5419` at `/tmp/wifi-scan-tuning/hi5622_wifi.ko` |
+| bare combined-base variant (no polish defaults) | 247,424 B sha256 `fd2082ab2687dfec4015b619ca3ac2275a20dee86b9508fdd29ed2d2229d3823` at `/tmp/wifi-scan-tuning/hi5622_wifi.scan-only.ko` |
+| build | 0 warnings, vermagic 6.18.60 SMP ARMv7, depends cfg80211, 3 new params present, 10 cfg80211 imports |
+| patches | regenerated: `0001` (bare base) and `0002` (polish-applied) now carry **all five files** (hi5622_scan.c/.h, hi5622_scan_logic.c/.h, cfg80211-provider.symvers); both verified with `patch --dry-run` (fixes the stability lane's patch-gap report - the earlier 0002 lost files to a `set -e` diff loop) |
+| host tests after fixes | 37/37 scan-tuning, 196/196 scan-complete, 290/290 scan-logic PASS |
 
 ## Tree quirks
 

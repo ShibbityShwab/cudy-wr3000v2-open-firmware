@@ -38,8 +38,11 @@ the observed cadence, and sized as if the firmware would report every channel.
    (TEST-LADDER.md) with explicit PASS gates for 13/13 coverage, decoded BSS,
    bounded time, golden page and no firmware exception.
 
-**Status: host-only, compile-clean, host-selftested; NOT bench-fired by this
-lane.**  Nothing here is a hardware claim: the 13/13 PASS is the ladder's job.
+**Status: host-only, compile-clean, host-selftested; R1 was fired once by the
+lead and exposed a chain-advance bug (batch 1/3 closed the cfg80211 scan
+instead of chaining).**  This revision fixes it and rebuilds (REPORT.md sec 9):
+artifact **247,776 B sha256 `613989ff...`**.  Nothing here is a hardware claim:
+the corrected 13/13 PASS is the ladder's job.
 
 | file | what |
 | --- | --- |

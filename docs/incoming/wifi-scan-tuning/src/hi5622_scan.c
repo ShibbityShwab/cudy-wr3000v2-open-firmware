@@ -249,6 +249,45 @@ static void hi5622_scan_report_result(struct hi5622_cfg80211 *c,
 			     (unsigned long long)r->tsf, r->signal_mbm);
 }
 
+/* cfg80211 BSS-list readback (task-133 R1 follow-up): after the last batch is
+ * complete, ask cfg80211 how many BSS entries the scan actually inserted and
+ * how many of them pass the nl80211 "use for normal connection" dump filter
+ * that iw relies on (iw does not request NL80211_ATTR_BSS_DUMP_INCLUDE_USE_DATA).
+ * This turns "iw shows 0 BSS although results>0" into a precise observation:
+ *   entries=0 -> cfg80211_inform_bss() never inserted (check inform_fail),
+ *   entries>0 iw_visible=0 -> entries hidden by use_for/ABI mismatch,
+ *   entries>0 iw_visible>0 -> results are visible; an empty iw dump then points
+ *                              at the iw invocation/interface, not the driver.
+ * cfg80211_bss_iter is a cfg80211 export (declared in cfg80211.h); the
+ * cfg80211-provider.symvers file carries it for modpost. */
+struct hi5622_scan_bss_diag {
+	u32 total;
+	u32 iw_visible;
+};
+
+static void hi5622_scan_bss_count(struct wiphy *wiphy,
+				  struct cfg80211_bss *bss, void *data)
+{
+	struct hi5622_scan_bss_diag *d = data;
+
+	(void)wiphy;
+	d->total++;
+	if (bss->use_for & (u8)NL80211_BSS_USE_FOR_NORMAL)
+		d->iw_visible++;
+}
+
+/* Index of a requested frequency in the current cfg80211 scan (for the
+ * accumulated all-batch coverage counter). */
+static u32 hi5622_scan_freq_index(struct hi5622_scan *s, u16 freq)
+{
+	u32 i;
+
+	for (i = 0; i < s->n_freqs && i < 64u; i++)
+		if (s->freqs[i] == freq)
+			return i;
+	return 0xffffffffu;
+}
+
 /* task-133 forward declarations (the batch helpers live below the .scan op,
  * the work item above them needs them). */
 static bool hi5622_scan_batch_done(const struct hi5622_scan_model *m, u64 now_ms);
@@ -297,7 +336,16 @@ static void hi5622_scan_work(struct work_struct *work)
 				 hi5622_scan_batch_gap_ms);
 		}
 	}
-	if (s->batch_pending && now >= s->batch_due_ms) {
+	if (s->batch_pending && !s->model.abort_requested) {
+		if (now < s->batch_due_ms) {
+			left = s->batch_due_ms - now;
+			if (left > HI5622_SCAN_POLL_MS)
+				left = HI5622_SCAN_POLL_MS;
+			mutex_unlock(&s->lock);
+			schedule_delayed_work(&s->work,
+					      msecs_to_jiffies((unsigned int)left));
+			return;
+		}
 		u32 next = s->batches_sent;
 		u32 first = s->batch_first + s->batch_n;
 		u32 len = hi5622_scan_batch_len(s->n_freqs, s->batch_param, next);
@@ -350,14 +398,25 @@ static void hi5622_scan_work(struct work_struct *work)
 			.aborted = (step == HI5622_SCAN_FINISH_ABORT),
 		};
 
+		{
+			struct hi5622_scan_bss_diag diag = {};
+
+			cfg80211_bss_iter(c->wiphy, NULL, hi5622_scan_bss_count,
+					  &diag);
+			dev_info(wiphy_dev(c->wiphy),
+				 "cfg80211: scan BSS list check: entries=%u iw_visible=%u (reported=%u inform_fail=%u) - iw needs iw_visible>0\n",
+				 diag.total, diag.iw_visible,
+				 s->model.results, s->model.inform_failures);
+		}
 		dev_info(wiphy_dev(c->wiphy),
-			 "cfg80211: scan DONE (%s[%s], results=%u bss=%u complete=%u channel=%u chans=%u/%u sta=%u unknown=%u dropped_busy=%d parse=%u invalid=%u inform_fail=%u timeout=%u) - reporting cfg80211_scan_done(aborted=%u)\n",
+			 "cfg80211: scan DONE (%s[%s], results=%u bss=%u complete=%u channel=%u chans=%u/%u batches=%u/%u sta=%u unknown=%u dropped_busy=%d parse=%u invalid=%u inform_fail=%u timeout=%u) - reporting cfg80211_scan_done(aborted=%u)\n",
 			 hi5622_scan_step_name(step),
 			 s->model.finish_reason[0] ? s->model.finish_reason : "-",
 			 s->model.results,
 			 s->model.bss_events, s->model.complete_events,
 			 s->model.channel_events,
-			 s->model.chan_seen, s->model.chan_total,
+			 s->total_seen, s->total_expected,
+			 s->batches_sent, s->batches_total,
 			 s->model.sta_events,
 			 s->model.unknown_events,
 			 atomic_read(&s->dropped_busy), s->model.parse_errors,
@@ -523,7 +582,13 @@ void hi5622_scan_deliver(struct hi5622_pci *ctx, const u8 *hdr,
 		 * can close the scan without a firmware completion event. */
 		if (ops && ops->parse_scan_channel &&
 		    !ops->parse_scan_channel(payload, avail, &ch)) {
+			u32 fi = hi5622_scan_freq_index(s, ch.freq);
+
 			freq = ch.freq;
+			if (fi < 64u && !(s->total_seen_mask & (1ULL << fi))) {
+				s->total_seen_mask |= (1ULL << fi);
+				s->total_seen++;
+			}
 			dev_info_ratelimited(&ctx->pdev->dev,
 					     "cfg80211: scan channel result slot=%u ch=%u (%u MHz%s)\n",
 					     ch.slot, ch.chan_num, ch.freq,
@@ -834,6 +899,9 @@ int hi5622_scan_op_scan(struct wiphy *wiphy,
 	 * value >= n) keeps the legacy single-request form. */
 	s->batch_param = hi5622_scan_req_batch;
 	s->batches_total = hi5622_scan_batch_count(n, s->batch_param);
+	s->total_seen = 0;
+	s->total_seen_mask = 0;
+	s->total_expected = n;
 	s->batches_sent = 0;
 	s->batch_pending = false;
 	s->batch_due_ms = 0;

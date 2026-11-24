@@ -294,3 +294,58 @@ single-request assumption were.  The tuned defaults + chained-request scanner
 are the smallest host-side change that can cover all 13 channels, and the
 ladder is built so a bench run can prove it (or falsify H1/H2/H3) without
 speculative register or firmware work.
+
+---
+
+## 9. R1 bench result and the fixes in this revision (2026-11-27)
+
+The lead fired R1 with the first artifact (246,688 B sha `05dd5f6a`).  The
+chain started but did not advance:
+
+    scan is split into 3 g0 id0xC requests ...
+    scan request batch 1/3 posted (6 of 13 channels, ch 1..6)
+    scan batch 1/3 complete - next request in 300 ms
+    scan DONE (finish-ok[channel-coverage], results=8 bss=8 complete=0
+               channel=6 chans=6/6 ... timeout=0) -> scan_done(aborted=0)
+
+Root cause: after arming the inter-batch gap the work item **fell through to
+the model tick in the same pass**; the model's batch-local plan was 6/6
+covered and its settle window had already elapsed, so the tick returned
+FINISH_OK before the gap timer fired.  Second observation: 8 BSS were
+parsed/informed while `iw dev wlan0 scan` printed no BSS lines - the BSS-list
+visibility path needed its own evidence.
+
+Fixes in this revision (device-free verified):
+
+1. **Chain advance**: while the next request is pending the model tick is not
+   allowed to finish the cfg80211 scan; the work item waits out the gap, closes
+   only the batch-local model, and posts the next request.  An abort request
+   still cuts the chain.  This is the fix that makes 3/3 batch lines reachable.
+2. **Accumulated coverage**: the kernel layer tracks distinct requested
+   frequencies across all batches; the DONE line now reports
+   `chans=<seen>/<requested>` (13/13) and `batches=<sent>/<total>` instead of
+   the last request's local counts.
+3. **Late-BSS settle**: the completion predicate settles after the last channel
+   **or BSS** event, so g1 id15 frames arriving just after the last channel
+   report are included before `cfg80211_scan_done()`.
+4. **iw-visibility readback**: immediately before scan_done the driver calls
+   `cfg80211_bss_iter()` and logs
+   `scan BSS list check: entries=<n> iw_visible=<m> (reported=... inform_fail=0)`.
+   entries=0 -> the inform path failed (check inform_fail); entries>0
+   iw_visible=0 -> entries hidden by the nl80211 `use_for` dump filter
+   (ABI/version issue); entries>0 iw_visible>0 -> results are visible and an
+   empty iw dump points at the iw invocation, not the driver.  This adds
+   `cfg80211_bss_iter` as the 10th cfg80211 import; the flashed image's
+   cfg80211.ko (sha256 949393f9) exports it (checked against the local artifact).
+5. Rebuilt artifacts: **247,776 B sha256 `613989ff...`** (base+polish+scan,
+   final-stack parity, `/tmp/wifi-scan-tuning/hi5622_wifi.ko`; for the ladder)
+   and 247,424 B sha256 `fd2082ab...` (bare combined base).  0 warnings; host
+   suites 37/37, 196/196, 290/290.  Patches 0001/0002 regenerated with all five
+   files (the earlier 0002 had only hi5622_scan.c because a `set -e` aborted
+   the diff loop after the first file - stability's patch-gap report).
+
+Expected R1 dmesg after the fix: three `scan request batch k/3 posted` lines,
+two `scan batch k/3 complete - next request in 300 ms` lines, 13 channel
+results, `scan BSS list check: entries>0 iw_visible>0`, and
+`finish-ok[...], channel=13, chans=13/13 batches=3/3, timeout=0` ->
+`scan_done(aborted=0)`.

@@ -60,6 +60,12 @@ struct hi5622_scan {
 	u32			batch_n;	/* channels in the current batch */
 	u32			batches_sent;
 	u32			batches_total;
+	/* accumulated coverage over ALL batches (the DONE line reports this, not
+	 * just the last request): total_seen counts distinct requested frequencies
+	 * that produced a g1 id17 channel result. */
+	u32			total_seen;
+	u32			total_expected;
+	u64			total_seen_mask;
 	bool			batch_pending;	/* gap timer armed for the next batch */
 	u64			batch_due_ms;
 };

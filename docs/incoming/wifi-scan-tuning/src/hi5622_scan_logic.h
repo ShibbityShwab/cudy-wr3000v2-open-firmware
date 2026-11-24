@@ -146,6 +146,7 @@ struct hi5622_scan_model {
 	u64			chan_seen_mask;
 	u32			chan_seen;
 	u64			last_chan_ms;
+	u64			last_bss_ms;	/* last BSS event (late-BSS settle) */
 	u64			coverage_ms;	/* all requested channels seen at */
 	u32			coverage_completes;	/* finishes_ok via channel coverage */
 	char			finish_reason[24];	/* event / coverage / timeout / ... */
@@ -190,7 +191,8 @@ u32 hi5622_scan_timeout_for(u32 n_channels, u32 chan_time_ms);
  *   hi5622_scan_batch_count(n, size)  - ceil(n / size), 0 for an empty request
  *   hi5622_scan_batch_len(n, size, i) - number of channels in batch i
  * and hi5622_scan_coverage_ready() is the host-side "this request is done"
- * predicate (every channel of the request reported + settle). */
+ * predicate (every channel of the request reported, then a settle window
+ * after the LAST channel or BSS event so late g1 id15 frames are collected). */
 u32 hi5622_scan_batch_size(u32 n_channels, u32 batch_param);
 u32 hi5622_scan_batch_count(u32 n_channels, u32 batch_param);
 u32 hi5622_scan_batch_len(u32 n_channels, u32 batch_param, u32 batch_index);
