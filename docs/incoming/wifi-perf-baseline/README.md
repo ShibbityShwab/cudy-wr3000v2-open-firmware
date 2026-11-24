@@ -12,7 +12,7 @@ the remaining (live) measurements. This README is the quickstart.
 | path | purpose |
 | --- | --- |
 | `REPORT.md` | the lane report: baseline, top inefficiencies, evidence mapping, limits, next actions |
-| `baseline/baseline.json` | machine-readable baseline: 92 metrics, per-sample evidence paths, evidence sha256, documented prior-lane entries, grades |
+| `baseline/baseline.json` | machine-readable baseline: 105 metrics, per-sample evidence paths, evidence sha256, documented prior-lane entries, grades |
 | `baseline/baseline.csv` | one row per metric (n/min/median/mean/max/stdev/method) |
 | `baseline/BASELINE.md` | generated markdown table |
 | `baseline/documented-input.json` | prior-lane hardware-validated numbers (grade V) merged into the baseline; each names its source |
@@ -65,8 +65,11 @@ the main one).
 - serial console printk 9.99 ms/line (n=63) x 176 driver lines/session ~ 1.8 s/session;
 - H2D: consumed in 0 polls every capture; measured 8.29 ms write->consumed is printk,
   not wire latency; frame gap policy 100 ms (default 20 ms);
-- scan: 5 s window -> 6/13 channels; 14.7 s -> 6/13 raw (4/13 prior lane); 45 s clamp is
-  below the 45.5 s a 3.5 s/channel 13-channel scan needs;
+- live tuning-phase sample (grade V): CPU ~0 % during AP operation, D2H reader
+  ~145 polls/s (0 overruns), heartbeat 1.009-1.011 s (<1 ms jitter), 66,784 kB free;
+- scan: the firmware is fast for 6 channels then HARD-STOPS - ch1..ch6 in 0.94 s
+  (~156 ms/ch) and then silence; every 13-channel fire covers 6/13 (host window is not
+  the limiter; channel count/array/pagination in g0 id0xC is);
 - AP start: 437-448 ms for the 4 AP frames (~300 ms is bench frame gap); hostapd
   launch->AP-ENABLED ~2 s (documented);
 - heartbeat 1.00 s median (IQR 990-1010 ms); memory: 458,752 B ring staging per

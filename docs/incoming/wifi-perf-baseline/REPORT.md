@@ -15,8 +15,8 @@ and effective poll/event rates).
 - Harness: `tools/perf_session.py` (host: ingest recorded evidence, or gated read-only
   live mode) + `tools/perf_probe.sh` (device: read-only /proc, /sys, dmesg; piped over
   ssh stdin so nothing is written on the box). `tools/selftest.py`: **87/87 PASS**.
-- Baseline: **92 metrics** from 3 phase-matrix runs, 11 bench-session summaries, 9
-  attended session records and 192 UART console logs -> `baseline/baseline.json`,
+- Baseline: **105 metrics** from 3 phase-matrix runs, 11 bench-session summaries, 9
+  attended session records, 192 UART console logs and the live tuning-phase sample -> `baseline/baseline.json`,
   `baseline/baseline.csv`, `baseline/BASELINE.md`. Every sample carries its evidence
   path and the evidence file's sha256; 14 documented prior-lane numbers are marked
   grade V instead of being passed off as raw measurements.
@@ -32,9 +32,10 @@ and effective poll/event rates).
   - H2D: consumed in **0 polls always** (57 captures); measured write->consumed
     **8.29 ms** and write->completion **42.8 ms**, both dominated by the two printk
     lines, not by wire latency;
-  - scan: 5 s window -> 6/13 channels (833 ms/channel effective); 14.7 s window ->
-    6/13 in the raw UART record and 4/13 in the prior-lane fire (~3.7 s/channel);
-    the 45 s clamp is still below the 45.5 s a 13-channel 3.5 s/channel scan needs;
+  - scan: **the firmware is fast for 6 channels then hard-stops** - live 0.94 s for
+    ch1..ch6 (~156 ms/ch) and then no result for the remaining 14 s; every recorded
+    13-channel fire (5 s and 14.7 s windows) covers exactly 6/13, so the host window is
+    not the primary limiter;
   - AP start: **437-448 ms** from hostapd NEW_BEACON to all 4 AP frames posted (n=3),
     of which ~300 ms is the bench 100 ms frame gap; frames consumed in 0 polls;
     hostapd launch->AP-ENABLED ~2 s (documented, grade V);
@@ -43,9 +44,14 @@ and effective poll/event rates).
     16 MiB, TXQ table 9,508 B, MSDU table 8 entries, firmware image 928,920 B,
     driver artifact 242,572 B (final combined image module) / 407,996-738,112 B across
     the session modules.
+- Live tuning-phase sample (grade V, 2026-11-27 20:30): CPU ~0 % busy during AP
+  operation (user+sys unchanged, idle +200/200 jiffies/s), D2H reader ~145 polls/s
+  (21,288 polls / 147 s, 0 overruns), heartbeat 1.009-1.011 s with <1 ms jitter,
+  66,784 kB free, hi5622_wifi 184,320 B + cfg80211 339,968 B resident.
 - Top inefficiencies, in order: (1) attended reboot cycle, (2) serial-console printk,
-  (3) fixed ladder sleeps + 1 Hz ready polling, (4) scan-window calibration / firmware
-  scan pace, (5) bench frame-gap policy on the H2D/AP sequences. Details + evidence in
+  (3) fixed ladder sleeps + 1 Hz ready polling, (4) **scan hard-stop after 6 channel
+  entries** (firmware/pagination issue, not a slow scan), (5) bench frame-gap policy
+  on the H2D/AP sequences. Details + evidence in
   section 3.
 
 ## 1. The harness
@@ -170,11 +176,14 @@ separate later protocol tick. H2D is **not** a bottleneck.
 | scan.window_actual_ms | ms | V* | 10 | 9756.8 | 195.4..14670.0 |
 
 The auto window is clamp(3000 + 900*n, 1000, 45000) ms (documented, grade V): 14.7 s for
-13 channels. Recorded fires: a 5 s window covers 6/13 (833 ms/channel effective); a
-14.7 s window covers 6/13 in the raw UART record (2450 ms/channel effective) and 4/13
-in the prior-lane fire (~3.7 s/channel, documented grade V). The first results arrive
-in ~150 ms and then the stream stalls; the window/pace estimate is therefore NOT
-settled and needs per-channel timestamps from the live harness (section 4).
+13 channels. The recorded fires all cover exactly 6 of 13 channels (5 s window: 6/13;
+14.7 s window: 6/13 in the raw UART record; 4/13 in the older prior-lane fire). The
+first results arrive in ~150 ms and then the stream stalls. The **live tuning-phase
+sample (grade V) resolves the ambiguity: ch1..ch6 arrive in 0.94 s (~156 ms/channel)
+and then there is no result for the remaining ~14 s** - the firmware processes only the
+first 6 channel entries of the g0 id0xC request and idles. Raising the host window or
+the 45 s clamp cannot fix this; the channel-count/array/pagination fields in the scan
+request are the candidates (section 3.4).
 
 ### 2.5 AP start
 
@@ -236,6 +245,26 @@ again by this lane, section 5).
 | console.driver_lines_per_session | lines | V* | 11 | 176 | 159..313 |
 | console.driver_console_time_s | s | I | 11 | 1.77 | 1.60..3.13 |
 
+### 2.9 Live tuning-phase confirmation (grade V; ledger 2026-11-27 20:30)
+
+The tuning-phase bench sample closes the main grade-U dimensions this lane could not
+measure from the records. These values are merged into the baseline as documented
+entries (source named per entry in baseline/documented-input.json):
+
+| metric | unit | grade | value | note |
+| --- | --- | --- | ---: | --- |
+| cpu.live_busy_pct | % | V | 0 | user+sys unchanged, idle +200/200 jiffies over 1 s (2 CPUs) |
+| d2h.live_poll_rate_hz | polls/s | V | 145 | 21,288 polls over ~147 s, 0 overruns, 64 frames |
+| heartbeat.live_interval_ms | ms | V | 1010 | 1.009-1.011 s, jitter < 1 ms (10 samples) |
+| mem.live_total_kB / mem.live_free_kB | kB | V | 112400 / 66784 | /proc/meminfo during AP operation |
+| mem.live_module_loaded_bytes | B | V | 184320 | hi5622_wifi in /proc/modules (stripped 231,132 B on disk) |
+| mem.live_cfg80211_bytes | B | V | 339968 | cfg80211 in /proc/modules |
+| boot.live_ready_handshake_ms | ms | V | 1000 | consistent with the 1120 ms dmesg record |
+| boot.live_setup_insmod_to_iface_ms | ms | V | 3000 | boot ladder + cfg80211 registration |
+| scan.live_first_6ch_span_ms | ms | V | 940 | ch1..ch6; then silence |
+| scan.live_ms_per_channel_6ch | ms/ch | V | 156 | contradicts the earlier 830 ms / 3.5 s estimates |
+| scan.live_channels_before_stop | channels | V | 6 | every recorded 13-channel fire stops at 6 |
+
 ## 3. Top inefficiencies (ranked, with evidence)
 
 ### 3.1 The attended reboot cycle dominates every matrix run (largest win available)
@@ -281,17 +310,20 @@ round trips. Next step: replace the post-insmod sleep with an attribute poll
 100 ms; this should recover ~1.5 s per boot (a 37 % ladder reduction) with no
 semantic change.
 
-### 3.4 Scan window/pace calibration does not match the measured firmware pace
+### 3.4 Scan hard-stop after 6 channel entries (corrected diagnosis)
 
-Evidence: auto window 3000 + 900*n = **14,700 ms** for 13 channels (documented, V) is
-based on a ~830 ms/channel estimate. Recorded fires: 5 s -> 6/13 (833 ms/channel
-effective [I]); raw UART 14.7 s fire -> 6/13 (**2450 ms/channel** effective); prior-lane
-fire -> 4/13 (~3.7 s/channel, grade V). First results arrive in 149 ms then the stream
-stalls (median gap 118 ms). At 3.5 s/channel a 13-channel scan needs ~45.5 s while the
-manual timeout clamp is 45,000 ms. Next step: collect per-channel arrival timestamps
-(harness `watch` during an attended scan; `rd_decode` keeps per-frame device jiffies),
-sweep `scan_dwell_ms` (20/40/60/120) against arrival spacing, and re-derive the window
-from data instead of a single fire estimate.
+Evidence: every recorded 13-channel fire covers exactly **6/13** channels - a 5 s window
+gives 6 results in ~0.9 s, a 14.7 s window gives the same 6 results and then nothing for
+14 s, and the live tuning-phase sample measures ch1..ch6 in **0.94 s (~156 ms/channel)**
+followed by silence (grade V, ledger 2026-11-27 20:30). The earlier "830 ms/ch" and
+"3.5 s/ch" numbers were host-window ratios, not firmware pace; the firmware is fast and
+then hard-stops. Hypotheses [I]: wrong channel-count field (+0x1EC), truncated channel
+array in the 520 B request, a firmware cap of 6 channels per request (pagination
+needed), or a cursor/next-channel field. Next step (scan-tuning lane): instrument the
+g0 id0xC request fields against the firmware handler, then test pagination / a second
+request from the next channel. The host window and the 45 s clamp are secondary until
+the 6-channel stop is fixed; the harness `watch` mode can timestamp arrivals live and
+`rd_decode` keeps per-frame device jiffies.
 
 ### 3.5 Bench H2D/AP frame-gap policy (100 ms vs 20 ms default)
 
@@ -314,14 +346,17 @@ policy in the owning lane (the gap exists to avoid inflight refusals).
 
 ## 4. Open measurements the live probe closes (grade U)
 
+Most grade-U dimensions from the first baseline pass are now closed by the grade-V live
+tuning-phase sample in section 2.9 (CPU ~0 %, poll rate ~145/s, heartbeat 1.009-1.011 s,
+memory). What remains genuinely unmeasured:
+
 | dimension | why it is not in the recorded evidence | instrument |
 | --- | --- | --- |
-| CPU% total + per-service-kthread CPU | /proc/stat was never sampled over time | `watch` CPU deltas + THREAD utime/stime |
-| actual D2H poll rate (polls/s) | rd_status `polls` counter has no host timestamp pairing | `watch` rd_status deltas / uptime |
-| heartbeat interval/jitter live | recorded numbers come from dmesg print spacing | `watch` dmesg/heartbeat counters |
-| hostapd launch -> AP-ENABLED wall time | hostapd stdout is not in the kernel/UART records | host-side timestamps around hostapd + dmesg `start_ap` |
-| 13-channel scan full sequence | every recorded fire hit a host timeout first | `watch` during an attended scan + rd_decode jiffies |
+| per-kthread CPU split | the live sample measured total CPU, not the service tasks | `watch` THREAD utime/stime deltas |
+| hostapd launch -> AP-ENABLED wall time | hostapd stdout is not in the kernel/UART records; ~2 s is documented | host-side timestamps around hostapd + dmesg `start_ap` |
+| full 13-channel scan sequence | the firmware hard-stops at 6; blocked on scan-tuning | `watch` during an attended scan + rd_decode jiffies |
 | per-frame event-loop latency | not observable without timestamps/tracepoints | live pairing of dmesg + rd_decode |
+| reset -> SSH-ready split of the 80 s reboot cycle | only the total back-after time is recorded | boot-stage timestamps (UART) + host watch |
 
 Attended operator recipe (needs a human at the bench, open recovery door, bench-link
 PASS - see `RUNBOOK.md`; this lane does not run it):
@@ -381,7 +416,9 @@ shot is the same command without `--duration`.
   2026-11-27 10:30 combined fire, not the post-134 code state.
 - The source of the documented entries is `baseline/documented-input.json` (each entry
   names its lane/ledger source); they are grade V and are excluded from any claim of
-  "measured by this lane".
+  "measured by this lane". The live tuning-phase values (section 2.9) come from the
+  lead's 2026-11-27 20:30 bench sample and the ledger entry that records it, not from
+  raw files in this checkout.
 
 ## 7. Suggested next actions (for the tuning wave)
 
@@ -393,5 +430,6 @@ shot is the same command without `--duration`.
    phase matrix; expect ~4.0 s -> ~2.6 s ladder.
 4. Reboot path measurement (separate reset latency from host wait; try the restart
    handler path) - the single biggest wall-time item (88-90 % of a matrix run).
-5. Scan dwell/window sweep with per-channel timestamps; then re-derive the auto window
-   and raise the 45 s clamp if the firmware really needs it.
+5. Scan: fix the 6-channel hard stop (channel count/array/pagination in g0 id0xC), not
+   the host window; the scan-tuning lane owns the request fields, this harness supplies
+   the timestamps. Re-derive the auto window afterwards from a full 13-channel run.

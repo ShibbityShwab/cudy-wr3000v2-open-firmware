@@ -141,6 +141,136 @@
    "method": "documented: combined AP+DP fire",
    "source": "ledger 2026-11-27 10:30",
    "detail": "the MAC consumer does not advance rptr; RX is not reached"
+  },
+  {
+   "id": "cpu.live_busy_pct",
+   "title": "CPU busy during normal AP operation (live 1 s /proc/stat sample)",
+   "unit": "%",
+   "value": 0,
+   "grade": "V",
+   "method": "documented: live tuning-phase bench sample; user+sys unchanged and idle +200/200 jiffies over a 1 s sample (2 CPUs)",
+   "source": "ledger 2026-11-27 20:30 (tuning-phase baseline)",
+   "detail": "the D2H poll loop is cheap at the observed cadence; a finer sweep is still available via watch"
+  },
+  {
+   "id": "d2h.live_poll_rate_hz",
+   "title": "direct D2H reader poll rate (live counter delta)",
+   "unit": "polls/s",
+   "value": 145,
+   "grade": "V",
+   "method": "documented: 21,288 rd_status polls over ~147 s of AP operation",
+   "source": "ledger 2026-11-27 20:30 (tuning-phase baseline)",
+   "detail": "configured cadence is 5 ms (200/s); the observed ~145/s includes service-pass work; 0 overruns, 64 frames"
+  },
+  {
+   "id": "d2h.live_frames",
+   "title": "direct D2H frames decoded during the live sample",
+   "unit": "frames",
+   "value": 64,
+   "grade": "V",
+   "method": "documented: live rd_status/rd_catalog delta over ~147 s",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "0 overruns; d2h words=43, dropped=0"
+  },
+  {
+   "id": "heartbeat.live_interval_ms",
+   "title": "g4 id4 heartbeat interval (live, 10 samples)",
+   "unit": "ms",
+   "value": 1010,
+   "grade": "V",
+   "method": "documented: live 10-sample measurement during AP operation",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "1.009-1.011 s, jitter < 1 ms (the dmesg-recorded 1000 ms median in this baseline is print-timestamp granularity)"
+  },
+  {
+   "id": "mem.live_module_loaded_bytes",
+   "title": "hi5622_wifi module memory in /proc/modules (live)",
+   "unit": "B",
+   "value": 184320,
+   "grade": "V",
+   "method": "documented: live /proc/modules sample during AP operation",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "image module is stripped 231,132 B on disk; 184,320 B resident code+data accounting"
+  },
+  {
+   "id": "mem.live_cfg80211_bytes",
+   "title": "cfg80211 module memory in /proc/modules (live)",
+   "unit": "B",
+   "value": 339968,
+   "grade": "V",
+   "method": "documented: live /proc/modules sample",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": ""
+  },
+  {
+   "id": "mem.live_total_kB",
+   "title": "MemTotal during AP operation (live)",
+   "unit": "kB",
+   "value": 112400,
+   "grade": "V",
+   "method": "documented: live /proc/meminfo sample",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "66,784 kB free"
+  },
+  {
+   "id": "mem.live_free_kB",
+   "title": "MemFree during AP operation (live)",
+   "unit": "kB",
+   "value": 66784,
+   "grade": "V",
+   "method": "documented: live /proc/meminfo sample",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": ""
+  },
+  {
+   "id": "boot.live_ready_handshake_ms",
+   "title": "CPU release -> READY handshake (live tuning-phase sample)",
+   "unit": "ms",
+   "value": 1000,
+   "grade": "V",
+   "method": "documented: live tuning-phase measurement (approximate)",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "consistent with the dmesg-recorded 1120 ms release->ready-pair (n=11, grade V*)"
+  },
+  {
+   "id": "boot.live_setup_insmod_to_iface_ms",
+   "title": "insmod -> usable iface (live tuning-phase sample)",
+   "unit": "ms",
+   "value": 3000,
+   "grade": "V",
+   "method": "documented: live tuning-phase measurement (approximate)",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "includes the boot ladder + cfg80211 registration; the dmesg-observed ladder is 4.03 s to READY and the phase timer is 6.1 s including deploy"
+  },
+  {
+   "id": "scan.live_first_6ch_span_ms",
+   "title": "13-channel scan: time for the first 6 channel results (live)",
+   "unit": "ms",
+   "value": 940,
+   "grade": "V",
+   "method": "documented: live tuning-phase measurement (ch1..ch6 in 0.94 s)",
+   "source": "ledger 2026-11-27 20:30 (tuning-phase baseline)",
+   "detail": "~156 ms/channel, consistent with the 82-320 ms per-channel gaps in the recorded dmesg"
+  },
+  {
+   "id": "scan.live_ms_per_channel_6ch",
+   "title": "13-channel scan: early per-channel cost (live, 6 channels)",
+   "unit": "ms/ch",
+   "value": 156,
+   "grade": "V",
+   "method": "documented: 940 ms / 6 channels",
+   "source": "ledger 2026-11-27 20:30",
+   "detail": "contradicts the earlier 830 ms/ch and 3.5 s/ch estimates; the firmware is fast for 6 channels and then stops"
+  },
+  {
+   "id": "scan.live_channels_before_stop",
+   "title": "13-channel scan: channels processed before the firmware hard-stops",
+   "unit": "channels",
+   "value": 6,
+   "grade": "V",
+   "method": "documented: live tuning-phase measurement + every recorded 13-channel fire",
+   "source": "ledger 2026-11-27 20:30; this baseline's UART/dmesg records (6/13 fires)",
+   "detail": "no results for the remaining 14 s; hypotheses: wrong channel-count field (+0x1EC), truncated channel array, firmware caps 6 per request (needs pagination) or a cursor field"
   }
  ]
 }

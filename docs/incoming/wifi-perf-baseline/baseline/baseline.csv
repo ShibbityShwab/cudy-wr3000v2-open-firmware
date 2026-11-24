@@ -20,6 +20,8 @@ bench.reboot.cleanup_back_s,s,V*,1,59.0,59.0,59.0,59.0,0.0,wifi-bench-session se
 bench.reboot.cycle_s,s,V*,8,73.0,80.1,80.65,91.0,7.3677,phase-matrix reboot_after record
 bench.reboot.pre_uptime_s,s,V*,8,62.0,69.5,72.125,89.0,8.6377,phase-matrix reboot_after record
 boot.hcc_arm_ms,ms,V*,11,134.67,134.69,134.71,134.78,0.0411,dmesg kernel timestamps
+boot.live_ready_handshake_ms,ms,V,1,1000.0,1000.0,1000.0,1000.0,0.0,documented: live tuning-phase measurement (approximate)
+boot.live_setup_insmod_to_iface_ms,ms,V,1,3000.0,3000.0,3000.0,3000.0,0.0,documented: live tuning-phase measurement (approximate)
 boot.load_to_both_endpoints_ms,ms,V*,11,307.08,308.42,323.9536,351.37,18.5162,dmesg kernel timestamps
 boot.load_to_ready_pair_ms,ms,V*,11,3975.05,4027.68,4033.5564,4079.23,35.6912,dmesg kernel timestamps
 boot.load_to_service_ready_ms,ms,V*,11,20.76,21.17,24.2327,32.91,4.9048,dmesg kernel timestamps
@@ -38,10 +40,13 @@ boot.verify_MBps,MB/s,V*,11,1.121,1.123,1.126,1.132,0.0052,"928,920 B / dmesg ve
 boot.verify_ms,ms,V*,11,820.24,827.54,824.9373,828.7,3.7414,dmesg kernel timestamps (upload done -> verify done; no host sleep between)
 console.driver_console_time_s,s,I,11,1.598,1.77,2.1644,3.134,0.6134,console.driver_lines x median line cost
 console.driver_lines_per_session,lines,V*,11,159.0,176.0,215.7273,313.0,61.538,count of hi5622 driver lines in the session dmesg
-console.printk_line_ms,ms,V*,64,9.28,9.985,9.9942,10.07,0.0975,median spacing of dense consecutive driver dmesg lines
+console.printk_line_ms,ms,V*,65,9.28,9.98,9.9938,10.07,0.0968,median spacing of dense consecutive driver dmesg lines
+cpu.live_busy_pct,%,V,1,0.0,0.0,0.0,0.0,0.0,documented: live tuning-phase bench sample; user+sys unchanged and idle +200/200 jiffies over a 1 s sample (2 CPUs)
 d2h.frames_counter,frames,V*,44,0.0,21.0,21.5227,56.0,16.8745,hcc_status/rd_status capture
 d2h.heartbeat_watchdog_ms,ms,V,1,10000.0,10000.0,10000.0,10000.0,0.0,documented: hcc_core.h HCC_HEARTBEAT_MS=10000 (vendor RE)
 d2h.irq_count,IRQs,V,1,0.0,0.0,0.0,0.0,0.0,documented + dmesg: 'no MSI/INTx routing documented; enumerating without interrupts'; the direct reader polls
+d2h.live_frames,frames,V,1,64.0,64.0,64.0,64.0,0.0,documented: live rd_status/rd_catalog delta over ~147 s
+d2h.live_poll_rate_hz,polls/s,V,1,145.0,145.0,145.0,145.0,0.0,"documented: 21,288 rd_status polls over ~147 s of AP operation"
 d2h.poll_counter,polls,V*,44,1.0,10.5,46.7727,293.0,91.7325,hcc_status/rd_status capture
 d2h.service_cadence_ms,ms,V,1,5.0,5.0,5.0,5.0,0.0,documented: driver module param hcc_poll_ms default 5 (service.c); one thread per PCI endpoint
 dp.msdu_table_entries,entries,V*,2,8.0,8.0,8.0,8.0,0.0,dmesg DP setup: line
@@ -62,32 +67,40 @@ h2d.poll_ms,ms,V,1,5.0,5.0,5.0,5.0,0.0,documented: driver source constant HI5622
 h2d.send_to_complete_ms,ms,V*,44,8.26,42.77,33.7125,62.34,18.3566,dmesg h2d_sent -> h2d_complete sequential delta
 h2d.send_to_consumed_ms,ms,V*,26,8.24,8.29,8.2896,8.36,0.0262,dmesg h2d_sent -> CONSUMED after N polls delta; N is in 5 ms poll units
 h2d.send_to_consumed_polls,polls,V*,26,0.0,0.0,0.0,0.0,0.0,dmesg CONSUMED after N polls
-heartbeat.interval_ms,ms,V*,403,725.89,1000.0,1049.3769,2000.0,242.2144,dmesg heartbeat print spacing; kernel console timestamps
-heartbeat.interval_outliers,intervals,V*,53,0.0,0.0,2.283,17.0,3.7081,dmesg heartbeat intervals
+heartbeat.interval_ms,ms,V*,410,725.89,1000.0,1048.1433,2000.0,240.4361,dmesg heartbeat print spacing; kernel console timestamps
+heartbeat.interval_outliers,intervals,V*,54,0.0,0.0,2.2407,17.0,3.6865,dmesg heartbeat intervals
 heartbeat.jitter_ms,ms,V*,3,82.62,96.2,97.48,113.62,12.688,dmesg heartbeat intervals
-heartbeat.tick_delta_ms,ms,V*,405,800.0,1000.0,1054.8889,2000.0,250.7013,dmesg heartbeat tick field deltas
+heartbeat.live_interval_ms,ms,V,1,1010.0,1010.0,1010.0,1010.0,0.0,documented: live 10-sample measurement during AP operation
+heartbeat.tick_delta_ms,ms,V*,412,800.0,1000.0,1053.568,2000.0,248.8744,dmesg heartbeat tick field deltas
 mem.bar0_window_bytes,B,V*,2,16777216.0,16777216.0,16777216.0,16777216.0,0.0,dmesg PCI BAR assignment
 mem.firmware_image_bytes,B,V*,11,928920.0,928920.0,928920.0,928920.0,0.0,bench_session session.firmware.len
+mem.live_cfg80211_bytes,B,V,1,339968.0,339968.0,339968.0,339968.0,0.0,documented: live /proc/modules sample
+mem.live_free_kB,kB,V,1,66784.0,66784.0,66784.0,66784.0,0.0,documented: live /proc/meminfo sample
+mem.live_module_loaded_bytes,B,V,1,184320.0,184320.0,184320.0,184320.0,0.0,documented: live /proc/modules sample during AP operation
+mem.live_total_kB,kB,V,1,112400.0,112400.0,112400.0,112400.0,0.0,documented: live /proc/meminfo sample
 mem.module_artifact_bytes,B,V*,11,407996.0,462952.0,525670.5455,738112.0,134670.916,bench_session session.module.size
 mem.ring_buffers_bytes,B,V*,11,458752.0,458752.0,458752.0,458752.0,0.0,dmesg ETE ring lines (per-endpoint)
 mem.ring_buflen,B,V*,11,2048.0,2048.0,2048.0,2048.0,0.0,dmesg ETE ring lines
 mem.ring_depth,nodes,V*,11,32.0,32.0,32.0,32.0,0.0,dmesg ETE ring lines
-os.kernel_to_userspace_ms,ms,V*,46,5982.032,6024.152,6230.8665,15560.644,1390.9808,dmesg kernel timestamps (boot time base)
-os.lan_forwarding_at_s,s,V*,41,18.9949,19.4885,20.4494,40.5445,3.5154,UART dmesg kernel timestamp
-os.module_load_at_uptime_s,s,V*,52,28.9989,61.8069,69.0821,159.8109,24.1026,dmesg module load timestamp; host waited for the box before deploying
+os.kernel_to_userspace_ms,ms,V*,47,5982.032,6024.152,6226.6856,15560.644,1376.3957,dmesg kernel timestamps (boot time base)
+os.lan_forwarding_at_s,s,V*,42,18.9949,19.5182,20.4733,40.5445,3.4766,UART dmesg kernel timestamp
+os.module_load_at_uptime_s,s,V*,53,28.9989,61.8489,70.752,159.8109,26.739,dmesg module load timestamp; host waited for the box before deploying
 ready.boot_age_ms,ms,V*,26,460.0,660.0,1523.8462,7770.0,2251.6081,hcc_ready capture in session summary
 ready.phase_reached,bool,V*,54,1.0,1.0,1.0,1.0,0.0,hcc_ready capture
 scan.bss,BSS,V*,3,8.0,8.0,8.0,8.0,0.0,dmesg scan DONE counters
 scan.channel_gap_ms,ms,V*,15,82.45,118.34,151.6167,320.41,83.2431,dmesg kernel timestamps
-scan.channels_seen,channels,V*,9,1.0,6.0,4.3333,6.0,2.357,dmesg scan channel result count
+scan.channels_seen,channels,V*,10,1.0,6.0,4.0,6.0,2.4495,dmesg scan channel result count
 scan.done_total_ms,ms,V*,3,4868.59,4901.82,4894.08,4911.83,18.4816,dmesg kernel timestamps
-scan.effective_ms_per_channel,ms/ch,I,8,833.33,833.33,1802.0812,3900.0,1318.8404,host_window_ms / channels_seen
-scan.first_result_latency_ms,ms,V*,9,125.54,138.77,159.0,278.76,44.6077,dmesg kernel timestamps
-scan.host_window_ms,ms,V*,11,3900.0,5000.0,7445.4545,14700.0,4461.0157,dmesg scan request posted ... timeout N ms
+scan.effective_ms_per_channel,ms/ch,I,9,833.33,833.33,2035.1833,3900.0,1407.3992,host_window_ms / channels_seen
+scan.first_result_latency_ms,ms,V*,10,125.54,138.735,155.965,278.76,43.287,dmesg kernel timestamps
+scan.host_window_ms,ms,V*,12,3900.0,5000.0,7150.0,14700.0,4382.0657,dmesg scan request posted ... timeout N ms
+scan.live_channels_before_stop,channels,V,1,6.0,6.0,6.0,6.0,0.0,documented: live tuning-phase measurement + every recorded 13-channel fire
+scan.live_first_6ch_span_ms,ms,V,1,940.0,940.0,940.0,940.0,0.0,documented: live tuning-phase measurement (ch1..ch6 in 0.94 s)
+scan.live_ms_per_channel_6ch,ms/ch,V,1,156.0,156.0,156.0,156.0,0.0,documented: 940 ms / 6 channels
 scan.reported_13ch_bss,BSS,V,1,12.0,12.0,12.0,12.0,0.0,documented: prior-lane fire report
 scan.reported_13ch_channels_covered,channels,V,1,4.0,4.0,4.0,4.0,0.0,documented: prior-lane fire report; the raw UART record in this checkout has a 6/13 fire at the same 14.7 s window (variance recorded)
 scan.results,frames,V*,3,8.0,8.0,8.0,8.0,0.0,dmesg scan DONE counters
-scan.window_actual_ms,ms,V*,11,190.94,4911.9,8454.9882,14670.04,5866.6812,UART dmesg timestamps
+scan.window_actual_ms,ms,V*,12,185.28,4911.865,7765.8458,14670.04,6064.1466,UART dmesg timestamps
 scan.window_formula_base_ms,ms,V,1,3000.0,3000.0,3000.0,3000.0,0.0,documented: source constant in wifi-scan-complete/hi5622_scan_logic.c (scan_timeout_ms=0 -> auto)
 scan.window_formula_clamp_ms,ms,V,1,45000.0,45000.0,45000.0,45000.0,0.0,documented: source constant in wifi-scan-complete/hi5622_scan_logic.c
 scan.window_formula_per_channel_ms,ms/ch,V,1,900.0,900.0,900.0,900.0,0.0,documented: source constant in wifi-scan-complete/hi5622_scan_logic.c

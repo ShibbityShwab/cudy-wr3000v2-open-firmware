@@ -281,7 +281,7 @@ def run_tests() -> int:
         # ---- 7. documented input --------------------------------------
         b4 = P.Baseline()
         P.load_documented(P.DOCUMENTED_INPUT, b4)
-        check("documented-schema", len(b4.documented) == 14)
+        check("documented-schema", len(b4.documented) == 27)
         check("documented-grade", all(e.get("grade") == "V" for e in b4.documented))
         check("documented-metric", "ap.hostapd_launch_to_ap_enabled_ms" in b4.metrics)
 
