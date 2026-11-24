@@ -1,6 +1,6 @@
 # wifi-irq-unmask — IRQ-unmask transition and the H2D mailbox delivery gap
 
-**Lane:** `wifi-irq-unmask` (shared task **task-90**), host-only static RE, 2026-11-24.
+**Lane:** `wifi-irq-unmask` (shared tasks **task-90** and **task-91**), host-only static RE, 2026-11-24.
 No device was contacted; the vendor firmware blob and the mask-ROM dump stay local and are
 never copied into this directory.
 
@@ -11,6 +11,9 @@ never copied into this directory.
 | `REPORT.md` | full reversal: the post-boot continuation map, the exact unmask sites (task-entry trampoline 0xC2B88 -> 0xC2B7A `cpsie i` at 0xC2B80, resume/idle paths), the ROM IRQ vector -> image trampoline 0x40064 -> dispatcher 0xC2EFC path, the event-0x4C H2D mailbox registration/enable/priority/target decode, the delivery-prerequisite table (what is met vs open), the patch candidates with exact CPU/file offsets and byte encodings (PA/PB/PC/PD), expected bench observables, and the host-only conclusion |
 | `tools/irq_map.py` | capstone-based read-only census/disassembler: `rom`, `map`, `unmask`, `mailbox`, `patch`, `selftest` |
 | `tools/patch_builder.py` | verifies the local vendor blob + each source window by sha256 and writes patched copies into a non-repo directory (default `/tmp/hi5622-patched`); `--list`, `--patch NAME`, `--all`, `--selftest` |
+| `REPORT-PD2.md` | PD2 iteration (task-91): the precise H2D dispatcher path and calling convention (wrapper 0x40294 -> dispatcher 0xC18AC; instance fields +4/+0xC/+0x10 = CA out[0]/ack/out[2], +0x20 = handler table; event-0x4C registration/enable), the reconstruction of PD's data abort (the patched 0x47610 is the *handshake retry* body, called before `pcie_msg_init` initialises the instance -> first fault at 0xC18B8, nested ABT frames -> the exact CA 0x1BF000 page overwrite), the PD2 design (boot-epilogue redirect + guarded out[0] poll stub in the dead config-3 block CPU 0x47432, exact file offsets/bytes/hashes), expected bench observables, the SR-announce latch policy fix and open items |
+| `tools/pd2_re.py` | read-only verifier for the dispatcher contract, the PD abort chain/ABT-frame arithmetic and the PD2 code cave; `dispatcher`, `fault`, `cave`, `selftest` (33/33) |
+| `tools/pd2_patch_builder.py` | PD2 builder/verifier: pinned blob + per-window sha256, patched `FIRMWARE.PD2.bin` + manifest written only outside the repo, machine-readable recipe for the bench tooling; `--list`, `--build`, `--recipe`, `--selftest` (38/38) |
 
 **Headline result.** The missing transition is *not* the CPU IRQ mask: the image executes
 `cpsie i` (0xC2B80) before every task body via the task-entry trampoline 0xC2B88 -> 0xC2B7A,
@@ -22,6 +25,17 @@ boot task's success epilogue into a permanent poll loop calling the firmware's o
 dispatcher wrapper 0x40294: expected after one host mailbox post — out[0] bit3 clears,
 out[5] reads 1, out[2] reads 8.
 
+**PD bench outcome and PD2 (2026-11-24 16:10 + this iteration).** PD did reach the image
+exception path, but it was the *wrong* call site: 0x47610 is the entry-A handshake poll
+retry (executed before `pcie_msg_init` initialised the hcc instance), so the dispatcher
+data-aborted on a NULL mailbox pointer, and four nested ABT frames stacked down onto the
+handshake page (0x0010C190/0/0/0x1BEE50 = frame words {r0,r1,r2,r3}). PD2 keeps only the
+boot-epilogue redirect (CPU 0x4916A -> CPU 0x47432) and runs a guarded out[0] poll loop from
+a genuinely dead code block; when the dispatcher handler table still holds its static
+uninitialised value (0x118D68, image code) it substitutes the ROM RAZ window 0x2000 so the
+ack/consume/doorbell contract runs without an unverified `blx`. Patched image sha256
+`7a691807...1b7728`; see `REPORT-PD2.md`.
+
 **Reproduce** (host-only; local blob read in place):
 
     PY=.provision-venv/bin/python
@@ -31,3 +45,11 @@ out[5] reads 1, out[2] reads 8.
     $PY $T/patch_builder.py --list
     $PY $T/patch_builder.py --selftest
     $PY $T/patch_builder.py --patch PD
+    # PD2 (task-91)
+    $PY $T/pd2_re.py --selftest          # 33/33 PASS
+    $PY $T/pd2_re.py --dispatcher        # dispatcher contract
+    $PY $T/pd2_re.py --fault             # PD abort chain + page clobber proof
+    $PY $T/pd2_re.py --cave              # PD2 dead-cave proof
+    $PY $T/pd2_patch_builder.py --selftest   # 38/38 PASS
+    $PY $T/pd2_patch_builder.py --recipe     # bench-tooling recipe
+    $PY $T/pd2_patch_builder.py --build /tmp/hi5622-pd2
