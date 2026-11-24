@@ -1,0 +1,1391 @@
+--- a/d2h.c
++++ b/d2h.c
+@@ -40,6 +40,8 @@
+ #include <asm/barrier.h>
+ 
+ #include "hi5622_hcc.h"
++#include "hi5622_sta.h"
++#include "hi5622_sta_logic.h"
+ 
+ #define RD_DR_CHAN_CA(ch)	(HI5622_D2H_DR_CHAN_CA0 + \
+ 				 HI5622_ETE_CH_STRIDE * (ch))
+@@ -333,6 +335,17 @@
+ 				 p + HI5622_HCC_HDR_LEN, plen,
+ 				 fr->node_len);
+ 
++	/* wifi-sta-join (task-146): LOG-ONLY decode of the STA completion
++	 * family (WAL chip-group 2 id 3 assoc / id 4 disassoc).  This never
++	 * calls cfg80211_connect_done() and never dereferences the
++	 * firmware-supplied IE addresses - see hi5622_sta_logic.h sec 6.
++	 * gated internally by sta_join (0 = default, silent). */
++	if (group == HI5622_STA_D2H_WAL_GROUP &&
++	    (id == HI5622_STA_D2H_ID_ASSOC_COMP ||
++	     id == HI5622_STA_D2H_ID_DISASOC_COMP))
++		hi5622_sta_d2h_deliver(ctx, fr->hdr,
++				       p + HI5622_HCC_HDR_LEN, plen);
++
+ 	rd_hex(asc, sizeof(asc), p + HI5622_HCC_HDR_LEN,
+ 	       min_t(u32, plen, 16));
+ 	dev_info(dev,
+--- a/hi5622_cfg80211.h
++++ b/hi5622_cfg80211.h
+@@ -47,16 +47,24 @@
+ 	struct wireless_dev	wdev;
+ };
+ 
+-/* STA join bookkeeping (wifi-sta-static lane, task-141).  The connect path
+- * may hand the firmware one host-DRAM buffer holding bssid/ssid/ie/key; it
+- * stays alive until disconnect or layer teardown. */
++/* STA join bookkeeping (wifi-sta-static lane task-141; hardened by the
++ * wifi-sta-join lane task-146).  The connect path hands the firmware ONE
++ * host-DRAM buffer holding bssid/ssid/ie/key; it stays alive until a posted
++ * disconnect or layer teardown so the firmware's [U] dereference window is
++ * never freed underneath it. */
+ struct hi5622_sta_ctx {
+ 	void	*join_buf;	/* dma_alloc_coherent buffer, NULL when unused */
+ 	u32	join_dma;	/* device-visible address of join_buf */
+ 	u32	seq;		/* WAL cfg-event sequence counter */
+ 	u32	connects;	/* connect attempts that passed validation */
+ 	u32	disconnects;	/* disconnect attempts */
++	u32	dry_runs;	/* sta_join=1 build+validate runs */
++	u32	refusals;	/* fail-closed refusals (post gate/health) */
++	u32	d2h_assoc_seen;	/* g2 id3 assoc-completion frames decoded */
++	u32	d2h_disasoc_seen; /* g2 id4 disassoc-completion frames decoded */
+ 	u8	bssid[6];	/* bssid of the last posted join */
++	bool	join_attempted;	/* a POST was attempted in this load (no retry) */
++	bool	disconnect_attempted; /* a disconnect POST was attempted */
+ 	bool	join_posted;	/* a connect frame reached the wire */
+ 	int	last_error;	/* last refusal errno (status/debug) */
+ };
+--- a/hi5622_sta.c
++++ b/hi5622_sta.c
+@@ -4,6 +4,7 @@
+  * clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
+  *
+  * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141,
++ * 2026-11-24; HARDENED by the wifi-sta-join lane, shared task task-146,
+  * 2026-11-24).  No vendor source text/object/firmware byte reproduced.
+  * Decoded facts and their evidence markers: ../REPORT.md sections 3-5.
+  *
+@@ -20,20 +21,32 @@
+  *        -> WAL opcode 0x00d0, body 16 B {bssid[6], reason u16, [15]=1}
+  *
+  * The 108-byte connect body carries four host-DRAM buffer addresses
+- * (bssid/ssid/ie/key).  The device reaches host DRAM through the same
+- * inbound window the data-plane rings use (devva == dma_addr), which makes
+- * the vendor-shaped frame expressible here - but the exact firmware
+- * dereference contract is [U], so posting is gated twice:
++ * (bssid/ssid/ie/key).  The firmware dereferences them; on the vendor
++ * VMSPLIT_2G kernel the raw cfg80211 params pointers happen to equal the
++ * device-visible host-DRAM addresses, on our VMSPLIT_3G kernel they do not.
++ * The hardened path only ever encodes dma_alloc_coherent DEVICE addresses
++ * inside the bench-proven identity window (0x80000000..0x8fffffff, the same
++ * window the proven SR ring nodes use), validates every address/length,
++ * requires all four to be non-zero, and posts exactly once per load:
+  *
+- *   hi5622_sta_join=0  (default) fail closed: -EOPNOTSUPP, no frame built
++ *   hi5622_sta_join=0  (default) fail closed: -EOPNOTSUPP, no frame built,
++ *                       no DMA buffer, no device write
+  *   hi5622_sta_join=1            build + validate + log the frame, no post
+- *   hi5622_sta_join=2            post it (EXPERIMENTAL: needs allow_frames>0
+- *                                and the bench ladder in TEST-LADDER.md)
++ *                                (the frame buffer IS built and checked so
++ *                                the DMA-address math is exercised, but no
++ *                                key material is copied into it)
++ *   hi5622_sta_join=2            POST once (needs allow_frames>0); a second
++ *                                connect returns -EALREADY, every post
++ *                                failure is final (no retry), and the post
++ *                                refuses while a firmware exception is
++ *                                latched ("stop on mask/staging": firmware
++ *                                CPU 0x400008 / CPU 0x40000c read by the HCC
++ *                                core's exception watch).
+  *
+  * cfg80211_connect_done() is deliberately NOT called: the firmware's connect
+- * result arrives on the D2H management path, which this driver does not
+- * decode yet (the RX lane owns it).  Returning success without completing
+- * would be a fake success; userspace sees a clean timeout instead.
++ * result arrives on the D2H WAL chip-group-2 id-3 message, which this driver
++ * decodes LOG-ONLY (hi5622_sta_d2h_deliver(); no cfg80211 completion is
++ * faked).  The RX/AP-mgmt lanes own the cfg80211 completion wiring.
+  */
+ #include <linux/device.h>
+ #include <linux/dma-mapping.h>
+@@ -46,137 +59,234 @@
+ #include <linux/string.h>
+ #include <linux/types.h>
+ #include <net/cfg80211.h>
++#include <asm/barrier.h>
+ 
+ #include "hi5622_cfg80211.h"
++#include "hi5622_contract.h"
+ #include "hi5622_driver.h"
+ #include "hi5622_frame_post.h"
++#include "hi5622_hcc.h"
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_frames.h"
+ #include "hi5622_sta_logic.h"
+ 
+-/* 0 = fail closed (default), 1 = build+validate only, 2 = post. */
++/* 0 = fail closed (default), 1 = build+validate only, 2 = one post/load. */
+ unsigned int hi5622_sta_join;
+-module_param_named(sta_join, hi5622_sta_join, uint, 0644);
++module_param_named(sta_join, hi5622_sta_join, uint, 0444);
+ MODULE_PARM_DESC(sta_join,
+-		 "STA join path: 0=fail closed (default), 1=build+validate the vendor WAL cfg-event join frame only, 2=post it (experimental; also needs allow_frames>0)");
++		 "STA join path: 0=fail closed (default), 1=build+validate the vendor WAL cfg-event join frame only (dry run, no post), 2=one single-shot post per module load (also needs allow_frames>0; no retry)");
+ 
+-#define HI5622_STA_JOIN_MAX	2u
+ 
+-/* Host-DRAM buffer the connect body points at, laid out as one coherent
+- * allocation: bssid[6], ssid[32], key[32], ies[512]. */
+-#define HI5622_STA_OFF_BSSID	0u
+-#define HI5622_STA_OFF_SSID	8u
+-#define HI5622_STA_OFF_KEY	40u
+-#define HI5622_STA_OFF_IE	72u
+-#define HI5622_STA_BUF_SIZE	(HI5622_STA_OFF_IE + HI5622_STA_MAX_IE)	/* 584 */
+-
+-static void hi5622_sta_free_buffer(struct hi5622_cfg80211 *c)
++/* ---------------------------------------------------------------------
++ * Host buffer lifetime.  Zeroize before free: the key region must not be
++ * left in a freed coherent page, and the firmware's [U] dereference window
++ * must not be freed while the frame may still be processed.
++ * -------------------------------------------------------------------*/
++static void hi5622_sta_buf_free(struct hi5622_cfg80211 *c)
+ {
+ 	struct hi5622_sta_ctx *s = &c->sta;
+ 
+ 	if (s->join_buf && c->ctx && c->ctx->pdev) {
+-		dma_free_coherent(&c->ctx->pdev->dev, HI5622_STA_BUF_SIZE,
++		memset(s->join_buf, 0, HI5622_STA_JOIN_BUF_SIZE);
++		dma_free_coherent(&c->ctx->pdev->dev,
++				  HI5622_STA_JOIN_BUF_SIZE,
+ 				  s->join_buf, (dma_addr_t)s->join_dma);
+ 	}
+ 	s->join_buf = NULL;
+ 	s->join_dma = 0;
+ }
+ 
+-/* Fill the coherent buffer with the cfg80211 request data and return the
+- * device-visible addresses for the body. */
+-static int hi5622_sta_fill_buffer(struct hi5622_cfg80211 *c,
+-				  struct cfg80211_connect_params *sme,
+-				  struct hi5622_sta_join_bufs *bufs)
++/* ---------------------------------------------------------------------
++ * Request validation: every cfg80211 field the body will copy is checked
++ * here AND re-checked at the memcpy site (defence in depth).
++ * -------------------------------------------------------------------*/
++static int hi5622_sta_params_check(struct hi5622_cfg80211 *c,
++				   struct cfg80211_connect_params *sme)
+ {
+-	struct hi5622_sta_ctx *s = &c->sta;
++	struct hi5622_sta_connect_check chk;
+ 	struct device *dev = &c->ctx->pdev->dev;
+-	dma_addr_t dma;
+-	void *buf;
+ 
+-	buf = dma_alloc_coherent(dev, HI5622_STA_BUF_SIZE, &dma, GFP_KERNEL);
+-	if (!buf)
+-		return -ENOMEM;
+-	memset(buf, 0, HI5622_STA_BUF_SIZE);
++	memset(&chk, 0, sizeof(chk));
++	chk.ssid = sme->ssid;
++	chk.ssid_len = (u32)sme->ssid_len;
++	chk.bssid = sme->bssid;
++	chk.ie = sme->ie;
++	chk.ie_len = (u32)sme->ie_len;
++	chk.key = sme->key;
++	chk.key_len = (u32)sme->key_len;
++	chk.auth_type = (u32)sme->auth_type;
++	chk.key_idx = (u32)sme->key_idx;
++	if (hi5622_sta_connect_check(&chk))
++		return -EINVAL;
+ 
+-	/* BSSID is mandatory for a posted join (body always carries a bssid
+-	 * address; a NULL would hand the firmware a wild pointer). */
+-	memcpy((u8 *)buf + HI5622_STA_OFF_BSSID, sme->bssid, ETH_ALEN);
+-	memcpy((u8 *)buf + HI5622_STA_OFF_SSID, sme->ssid, sme->ssid_len);
+-	if (sme->key && sme->key_len)
+-		memcpy((u8 *)buf + HI5622_STA_OFF_KEY, sme->key, sme->key_len);
+-	if (sme->ie && sme->ie_len)
+-		memcpy((u8 *)buf + HI5622_STA_OFF_IE, sme->ie, sme->ie_len);
+-
+-	hi5622_sta_free_buffer(c);
+-	s->join_buf = buf;
+-	s->join_dma = (u32)dma;
+-
+-	bufs->bssid_va = s->join_dma + HI5622_STA_OFF_BSSID;
+-	bufs->ssid_va = s->join_dma + HI5622_STA_OFF_SSID;
+-	bufs->key_va = sme->key_len ? s->join_dma + HI5622_STA_OFF_KEY : 0u;
+-	bufs->ie_va = sme->ie_len ? s->join_dma + HI5622_STA_OFF_IE : 0u;
+-	bufs->ie_len = sme->ie_len;
++	/* The vendor body ALWAYS carries a bssid address; a wildcard connect
++	 * would need a NULL address the firmware may not accept.  Fail
++	 * closed on wildcard rather than guess the [U] contract. */
++	if (!sme->bssid) {
++		dev_warn(dev,
++			 "sta connect: wildcard BSSID is not postable (the vendor body always carries a bssid address) - fail closed\n");
++		return -EOPNOTSUPP;
++	}
++	if (is_zero_ether_addr(sme->bssid) ||
++	    is_multicast_ether_addr(sme->bssid)) {
++		dev_warn(dev,
++			 "sta connect: invalid BSSID %pM (zero/multicast) - fail closed\n",
++			 sme->bssid);
++		return -EINVAL;
++	}
+ 	return 0;
+ }
+ 
+-static int hi5622_sta_build_connect(struct hi5622_cfg80211 *c,
+-				    struct cfg80211_connect_params *sme,
+-				    u8 *frame, size_t cap, size_t *frame_len,
+-				    bool with_buffers)
++/* ---------------------------------------------------------------------
++ * Firmware health stop condition.  The bench read pack's rules are
++ *   page CA 0x1bf000 golden, state CA 0x118b60=1,
++ *   mask CA 0x400008=0, staging CA 0x40000c=0.
++ * The HCC core already reads mask (CPU 0x400008) and the staged vector
++ * frame (CPU 0x40000c) read-only in its exception watch; a nonzero latched
++ * mask or any captured vector frame is a STOP for this path (no retry).
++ * -------------------------------------------------------------------*/
++static int hi5622_sta_health(struct hi5622_cfg80211 *c)
+ {
+-	struct hi5622_sta_join_bufs bufs;
+-	struct hi5622_sta_connect_check chk;
+-	u8 body[HI5622_STA_CONNECT_BODY_LEN];
++	struct hcc_core *core;
++	u32 exc_mask = 0;
++	u32 staged = 0;
++	int exc_valid = 0;
+ 	int rc;
+ 
+-	memset(&bufs, 0, sizeof(bufs));
+-	chk.ssid = sme->ssid;
+-	chk.ssid_len = (u32)sme->ssid_len;
+-	chk.bssid = sme->bssid;
+-	chk.ie_len = (u32)sme->ie_len;
+-	chk.key_len = (u32)sme->key_len;
+-	chk.auth_type = (u32)sme->auth_type;
+-	rc = hi5622_sta_connect_check(&chk);
+-	if (rc)
+-		return rc;
+-	if (with_buffers) {
+-		if (!sme->bssid) {
+-			dev_warn(&c->ctx->pdev->dev,
+-				 "sta connect: wildcard BSSID is not postable (the vendor body always carries a bssid address) - fail closed\n");
+-			return -EOPNOTSUPP;
+-		}
+-		rc = hi5622_sta_fill_buffer(c, sme, &bufs);
+-		if (rc)
+-			return rc;
+-	}
+-	bufs.ssid_len = (u8)sme->ssid_len;
+-	bufs.mfp = (u8)sme->mfp;
+-	bufs.privacy = sme->privacy ? 1u : 0u;
+-	bufs.auth_type = (u8)sme->auth_type;
+-	bufs.key_len = sme->key_len;
+-	bufs.key_idx = sme->key_idx;
++	if (!c->ctx || !c->ctx->hcc)
++		return -EINVAL;
++	core = &c->ctx->hcc->hcc.core;
++	if (core->exception_mask_valid) {
++		exc_valid = 1;
++		exc_mask = core->exception_mask;
++	}
++	staged = core->vector_capture_count;
++	rc = hi5622_sta_health_gate(exc_mask, exc_valid, staged);
++	if (rc) {
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta join: REFUSED - firmware health stop (mask=0x%08x valid=%d staged_vectors=%u); mask CA 0x400008 / staging CA 0x40000c are the bench stop rules - no retry, power-cycle if nonzero\n",
++			 exc_mask, exc_valid, staged);
++	}
++	return rc;
++}
+ 
+-	rc = hi5622_sta_connect_body(body, sizeof(body), &bufs);
+-	if (rc)
+-		return rc;
+-	rc = hi5622_sta_wal_frame(frame, cap, frame_len,
+-				  HI5622_STA_WAL_CMD_CONNECT, body,
+-				  sizeof(body), c->sta.seq++, 0u);
++/* ---------------------------------------------------------------------
++ * Build the one coherent join buffer and validate the four body addresses.
++ * with_key=false (dry run) never copies key material: the key region stays
++ * zero and the frame carries key_len=0, so no secret ever reaches a buffer
++ * that will not be posted.
++ * -------------------------------------------------------------------*/
++static int hi5622_sta_buf_build(struct hi5622_cfg80211 *c,
++				struct cfg80211_connect_params *sme,
++				bool with_key,
++				struct hi5622_sta_join_bufs *out)
++{
++	struct device *dev = &c->ctx->pdev->dev;
++	struct hi5622_sta_join_bufs b;
++	dma_addr_t dma;
++	void *buf;
++	u32 dma32;
++	int rc;
++
++	memset(&b, 0, sizeof(b));
++	buf = dma_alloc_coherent(dev, HI5622_STA_JOIN_BUF_SIZE, &dma,
++				 GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++	if (dma_mapping_error(dev, dma)) {
++		dma_free_coherent(dev, HI5622_STA_JOIN_BUF_SIZE, buf, dma);
++		return -EIO;
++	}
++	if ((u64)dma + HI5622_STA_JOIN_BUF_SIZE - 1u > 0xffffffffu) {
++		dev_warn(dev,
++			 "sta join: coherent DMA address 0x%llx does not fit u32 - fail closed\n",
++			 (unsigned long long)dma);
++		dma_free_coherent(dev, HI5622_STA_JOIN_BUF_SIZE, buf, dma);
++		return -ERANGE;
++	}
++	dma32 = (u32)dma;
++	if (dma32 < HI5622_HOST_DMA_LO || dma32 > HI5622_HOST_DMA_HI) {
++		dev_warn(dev,
++			 "sta join: coherent buffer 0x%08x outside the proven host-DMA window 0x%08x..0x%08x - fail closed\n",
++			 dma32, HI5622_HOST_DMA_LO, HI5622_HOST_DMA_HI);
++		dma_free_coherent(dev, HI5622_STA_JOIN_BUF_SIZE, buf, dma);
++		return -ERANGE;
++	}
++	memset(buf, 0, HI5622_STA_JOIN_BUF_SIZE);
++
++	/* The checks above and in hi5622_sta_params_check() bound every
++	 * length; assert them again at the copy site. */
++	if (sme->ssid_len == 0 || sme->ssid_len > HI5622_STA_MAX_SSID ||
++	    !sme->ssid) {
++		rc = -EINVAL;
++		goto free;
++	}
++	if (sme->ie_len > HI5622_STA_MAX_IE || (sme->ie_len && !sme->ie)) {
++		rc = -E2BIG;
++		goto free;
++	}
++	if (sme->key_len > HI5622_STA_MAX_KEY ||
++	    (sme->key_len && !sme->key)) {
++		rc = -E2BIG;
++		goto free;
++	}
++	memcpy((u8 *)buf + HI5622_STA_JOIN_OFF_BSSID, sme->bssid, ETH_ALEN);
++	memcpy((u8 *)buf + HI5622_STA_JOIN_OFF_SSID, sme->ssid,
++	       sme->ssid_len);
++	if (sme->ie_len)
++		memcpy((u8 *)buf + HI5622_STA_JOIN_OFF_IE, sme->ie,
++		       sme->ie_len);
++	if (with_key && sme->key_len)
++		memcpy((u8 *)buf + HI5622_STA_JOIN_OFF_KEY, sme->key,
++		       sme->key_len);
++
++	b.bssid_va = dma32 + HI5622_STA_JOIN_OFF_BSSID;
++	b.ssid_va = dma32 + HI5622_STA_JOIN_OFF_SSID;
++	b.ie_va = dma32 + HI5622_STA_JOIN_OFF_IE;
++	b.key_va = dma32 + HI5622_STA_JOIN_OFF_KEY;
++	b.ie_len = (u32)sme->ie_len;
++	b.ssid_len = (u8)sme->ssid_len;
++	b.mfp = (u8)sme->mfp;
++	b.privacy = sme->privacy ? 1u : 0u;
++	b.auth_type = (u8)sme->auth_type;
++	b.key_len = with_key ? sme->key_len : 0u;
++	b.key_idx = sme->key_idx;
++
++	rc = hi5622_sta_join_bufs_check(&b, dma32,
++					HI5622_STA_JOIN_BUF_SIZE,
++					HI5622_HOST_DMA_LO,
++					HI5622_HOST_DMA_HI);
+ 	if (rc)
+-		return rc;
+-	return hi5622_sta_frame_check(frame, *frame_len,
+-				      HI5622_STA_WAL_CMD_CONNECT,
+-				      sizeof(body));
++		goto free;
++	/* make the buffer contents visible to the device before the post */
++	wmb();
++
++	hi5622_sta_buf_free(c);
++	c->sta.join_buf = buf;
++	c->sta.join_dma = dma32;
++	*out = b;
++	return 0;
++free:
++	memset(buf, 0, HI5622_STA_JOIN_BUF_SIZE);
++	dma_free_coherent(dev, HI5622_STA_JOIN_BUF_SIZE, buf, dma);
++	return rc;
+ }
+ 
++/* ---------------------------------------------------------------------
++ * cfg80211 .connect
++ * -------------------------------------------------------------------*/
+ int hi5622_sta_connect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 		       struct cfg80211_connect_params *sme)
+ {
++	struct hi5622_sta_join_bufs bufs;
++	struct hi5622_sta_ctx *s = c ? &c->sta : NULL;
++	u8 body[HI5622_STA_CONNECT_BODY_LEN];
+ 	u8 frame[HI5622_STA_FRAME_MAX];
+ 	size_t frame_len = 0;
++	bool post;
+ 	int rc;
+ 
+-	if (!c || !dev || !sme || !c->ctx || !c->ctx->pdev)
++	if (!c || !dev || !sme || !c->ctx || !c->ctx->pdev || !s)
+ 		return -EINVAL;
+ 	if (!c->wiphy_registered)
+ 		return -ENODEV;
+@@ -187,109 +297,255 @@
+ 			 dev->ieee80211_ptr->iftype);
+ 		return -EOPNOTSUPP;
+ 	}
+-	if (hi5622_sta_join > HI5622_STA_JOIN_MAX) {
++
++	post = hi5622_sta_join == HI5622_STA_JOIN_POST;
++	rc = hi5622_sta_join_gate(hi5622_sta_join, hi5622_allow_frames,
++				  s->join_attempted ? 1 : 0);
++	if (rc) {
++		s->refusals++;
++		s->last_error = rc;
++		if (hi5622_sta_join == HI5622_STA_JOIN_OFF)
++			dev_info_once(&c->ctx->pdev->dev,
++				      "sta connect: host STA model validated but the firmware join is disabled (sta_join=0 fail-closed); the vendor path is WAL cfg-event opcode 0x123 - see docs/incoming/wifi-sta-join/\n");
++		else
++			dev_warn(&c->ctx->pdev->dev,
++				 "sta connect: join gate refused (%d) sta_join=%u allow_frames=%u attempted=%d - no frame built, no device write\n",
++				 rc, hi5622_sta_join, hi5622_allow_frames,
++				 s->join_attempted ? 1 : 0);
++		return rc;
++	}
++	rc = hi5622_sta_health(c);
++	if (rc) {
++		s->refusals++;
++		s->last_error = rc;
++		return rc;
++	}
++	if (s->join_posted) {
++		s->last_error = -EALREADY;
+ 		dev_warn(&c->ctx->pdev->dev,
+-			 "sta connect: sta_join=%u out of range (0..%u)\n",
+-			 hi5622_sta_join, HI5622_STA_JOIN_MAX);
+-		return -EINVAL;
++			 "sta connect: already joined in this load - one join per load, no retry\n");
++		return -EALREADY;
+ 	}
+-	if (!hi5622_sta_join) {
+-		dev_info_once(&c->ctx->pdev->dev,
+-			      "sta connect: host STA model validated but the firmware join is disabled (sta_join=0 fail-closed); the vendor path is WAL cfg-event opcode 0x123 - see docs/incoming/wifi-sta-static/\n");
+-		return -EOPNOTSUPP;
++
++	rc = hi5622_sta_params_check(c, sme);
++	if (rc) {
++		s->refusals++;
++		s->last_error = rc;
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta connect: request refused (%d) - no frame built\n", rc);
++		return rc;
+ 	}
++	s->connects++;
+ 
+-	c->sta.connects++;
+-	rc = hi5622_sta_build_connect(c, sme, frame, sizeof(frame), &frame_len,
+-				      hi5622_sta_join >= 2u);
++	rc = hi5622_sta_buf_build(c, sme, post, &bufs);
+ 	if (rc) {
+-		c->sta.last_error = rc;
++		s->last_error = rc;
+ 		dev_warn(&c->ctx->pdev->dev,
+-			 "sta connect: frame build refused (%d) - no device write\n", rc);
++			 "sta connect: join buffer/address validation refused (%d) - no frame built, no device write\n",
++			 rc);
+ 		return rc;
+ 	}
+-	if (hi5622_sta_join == 1u) {
++	rc = hi5622_sta_connect_body(body, sizeof(body), &bufs);
++	if (rc == 0)
++		rc = hi5622_sta_connect_body_check(body, sizeof(body), &bufs);
++	if (rc == 0)
++		rc = hi5622_sta_wal_frame(frame, sizeof(frame), &frame_len,
++					  HI5622_STA_WAL_CMD_CONNECT, body,
++					  sizeof(body), s->seq++, 0u);
++	if (rc == 0)
++		rc = hi5622_sta_frame_check(frame, frame_len,
++					    HI5622_STA_WAL_CMD_CONNECT,
++					    sizeof(body));
++	if (rc) {
++		s->last_error = rc;
++		hi5622_sta_buf_free(c);
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta connect: frame build/validation refused (%d) - no device write\n",
++			 rc);
++		return rc;
++	}
++
++	if (!post) {
++		s->dry_runs++;
+ 		dev_info(&c->ctx->pdev->dev,
+-			 "sta connect: WAL cfg-event opcode 0x%x frame built+validated (%zu B, ssid_len=%zu auth=%d privacy=%d bssid=%pM) - dry run (sta_join=1), nothing posted\n",
+-			 HI5622_STA_WAL_CMD_CONNECT, frame_len, sme->ssid_len,
+-			 (int)sme->auth_type, sme->privacy ? 1 : 0, sme->bssid);
+-		c->sta.last_error = -EOPNOTSUPP;
++			 "sta connect: WAL cfg-event opcode 0x%x frame built+validated (%zu B, ssid_len=%u auth=%d privacy=%d bssid=%pM; bssid/ssid/ie/key device addrs 0x%08x/0x%08x/0x%08x/0x%08x, key_len=%u, key NOT copied) - dry run (sta_join=1), nothing posted\n",
++			 HI5622_STA_WAL_CMD_CONNECT, frame_len,
++			 (unsigned int)sme->ssid_len, (int)sme->auth_type,
++			 sme->privacy ? 1 : 0, sme->bssid, bufs.bssid_va,
++			 bufs.ssid_va, bufs.ie_va, bufs.key_va, bufs.key_len);
++		hi5622_sta_buf_free(c);
++		s->last_error = -EOPNOTSUPP;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	/* Single-shot POST: latch BEFORE the write so a failure can never be
++	 * retried in this load. */
++	s->join_attempted = true;
++	dev_info(&c->ctx->pdev->dev,
++		 "sta connect: POSTING WAL cfg-event opcode 0x%x (%zu B, ssid_len=%u auth=%d privacy=%d bssid=%pM, key_len=%u) - single shot, no retry\n",
++		 HI5622_STA_WAL_CMD_CONNECT, frame_len,
++		 (unsigned int)sme->ssid_len, (int)sme->auth_type,
++		 sme->privacy ? 1 : 0, sme->bssid, bufs.key_len);
+ 	rc = hi5622_frame_post(c->ctx, frame, frame_len, "sta_connect", NULL);
+ 	if (rc) {
+-		c->sta.last_error = rc;
++		s->last_error = rc;
+ 		dev_warn(&c->ctx->pdev->dev,
+-			 "sta connect: WAL join frame NOT posted (%d) - fail closed (allow_frames=%u)\n",
++			 "sta connect: WAL join frame NOT posted (%d) - STOP, NO RETRY (one join per load); allow_frames=%u; inspect page/mask/staging, power-cycle if nonzero\n",
+ 			 rc, hi5622_allow_frames);
+ 		return rc;
+ 	}
+-	memcpy(c->sta.bssid, sme->bssid, ETH_ALEN);
+-	c->sta.join_posted = true;
++	memcpy(s->bssid, sme->bssid, ETH_ALEN);
++	s->join_posted = true;
+ 	dev_info(&c->ctx->pdev->dev,
+-		 "sta connect: WAL cfg-event opcode 0x%x posted (%zu B, ssid_len=%zu auth=%d privacy=%d bssid=%pM) - EXPERIMENTAL: completion needs the D2H management path, no cfg80211_connect_done is faked\n",
+-		 HI5622_STA_WAL_CMD_CONNECT, frame_len, sme->ssid_len,
+-		 (int)sme->auth_type, sme->privacy ? 1 : 0, c->sta.bssid);
++		 "sta connect: WAL cfg-event opcode 0x%x posted (bssid=%pM) - completion arrives as D2H WAL group2 id3 and is DECODED LOG-ONLY; cfg80211_connect_done is NOT faked (RX/AP-mgmt lanes own it)\n",
++		 HI5622_STA_WAL_CMD_CONNECT, s->bssid);
+ 	return 0;
+ }
+ 
++/* ---------------------------------------------------------------------
++ * cfg80211 .disconnect (WAL opcode 0x00d0, 16-byte body)
++ * -------------------------------------------------------------------*/
+ int hi5622_sta_disconnect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 			  u16 reason_code)
+ {
++	struct hi5622_sta_ctx *s = c ? &c->sta : NULL;
+ 	struct hi5622_sta_disconnect_params p;
+ 	u8 body[HI5622_STA_DISCONNECT_BODY_LEN];
+ 	u8 frame[HI5622_STA_FRAME_MAX];
+ 	size_t frame_len = 0;
++	bool post;
+ 	int rc;
+ 
+-	if (!c || !dev || !c->ctx || !c->ctx->pdev)
++	if (!c || !dev || !c->ctx || !c->ctx->pdev || !s)
+ 		return -EINVAL;
+-	if (!hi5622_sta_join || hi5622_sta_join > HI5622_STA_JOIN_MAX)
++	if (hi5622_sta_join > HI5622_STA_JOIN_MAX)
++		return -EOPNOTSUPP;
++	if (hi5622_sta_join == HI5622_STA_JOIN_OFF)
+ 		return -EOPNOTSUPP;
+-	if (!c->sta.join_posted)
++	post = hi5622_sta_join == HI5622_STA_JOIN_POST;
++	rc = hi5622_sta_health(c);
++	if (rc) {
++		s->refusals++;
++		s->last_error = rc;
++		return rc;
++	}
++	if (!s->join_posted)
+ 		return -ENOTCONN;
++	if (post && s->disconnect_attempted) {
++		s->refusals++;
++		s->last_error = -EALREADY;
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta disconnect: already attempted in this load - no retry\n");
++		return -EALREADY;
++	}
+ 
+-	c->sta.disconnects++;
++	s->disconnects++;
+ 	memset(&p, 0, sizeof(p));
+-	memcpy(p.bssid, c->sta.bssid, ETH_ALEN);
++	memcpy(p.bssid, s->bssid, ETH_ALEN);
+ 	p.reason_code = reason_code;
+ 	rc = hi5622_sta_disconnect_body(body, sizeof(body), &p);
+ 	if (rc == 0)
+ 		rc = hi5622_sta_wal_frame(frame, sizeof(frame), &frame_len,
+ 					  HI5622_STA_WAL_CMD_DISCONNECT, body,
+-					  sizeof(body), c->sta.seq++, 0u);
++					  sizeof(body), s->seq++, 0u);
+ 	if (rc == 0)
+ 		rc = hi5622_sta_frame_check(frame, frame_len,
+ 					    HI5622_STA_WAL_CMD_DISCONNECT,
+ 					    sizeof(body));
+ 	if (rc) {
+-		c->sta.last_error = rc;
++		s->last_error = rc;
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta disconnect: frame build/validation refused (%d) - no device write\n",
++			 rc);
+ 		return rc;
+ 	}
+-	if (hi5622_sta_join == 1u) {
++	if (!post) {
+ 		dev_info(&c->ctx->pdev->dev,
+ 			 "sta disconnect: WAL cfg-event opcode 0x%x frame built+validated (%zu B, reason=%u) - dry run, nothing posted\n",
+ 			 HI5622_STA_WAL_CMD_DISCONNECT, frame_len, reason_code);
++		s->last_error = -EOPNOTSUPP;
+ 		return -EOPNOTSUPP;
+ 	}
++	s->disconnect_attempted = true;
+ 	rc = hi5622_frame_post(c->ctx, frame, frame_len, "sta_disconnect", NULL);
+ 	if (rc) {
+-		c->sta.last_error = rc;
++		s->last_error = rc;
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta disconnect: WAL frame NOT posted (%d) - STOP, NO RETRY; inspect page/mask/staging\n",
++			 rc);
+ 		return rc;
+ 	}
+-	c->sta.join_posted = false;
++	s->join_posted = false;
++	/* The disconnect is posted; the firmware is done with the join buffer
++	 * of the previous connect - free it (zeroized) so the [U] dereference
++	 * window does not outlive its purpose. */
++	hi5622_sta_buf_free(c);
+ 	dev_info(&c->ctx->pdev->dev,
+-		 "sta disconnect: WAL cfg-event opcode 0x%x posted (%zu B, reason=%u, bssid=%pM)\n",
+-		 HI5622_STA_WAL_CMD_DISCONNECT, frame_len, reason_code,
+-		 c->sta.bssid);
++		 "sta disconnect: WAL cfg-event opcode 0x%x posted (reason=%u, bssid=%pM) - join buffer freed\n",
++		 HI5622_STA_WAL_CMD_DISCONNECT, reason_code, s->bssid);
+ 	return 0;
+ }
+ 
++/* ---------------------------------------------------------------------
++ * D2H completion decode (log-only).  See hi5622_sta_logic.h sec 6.
++ * -------------------------------------------------------------------*/
++void hi5622_sta_d2h_deliver(struct hi5622_pci *ctx, const u8 *hdr,
++			    const u8 *payload, u32 payload_len)
++{
++	u16 id;
++	int rc;
++
++	if (!ctx || !hdr || !payload || !hi5622_sta_join)
++		return;
++	if (!ctx->pdev)
++		return;
++	id = (u16)(hdr[6] | ((u16)hdr[7] << 8));
++
++	if (id == HI5622_STA_D2H_ID_ASSOC_COMP) {
++		struct hi5622_sta_assoc_comp ac;
++
++		rc = hi5622_sta_assoc_comp_decode(hdr, HI5622_STA_D2H_HDR_LEN,
++						 payload, payload_len,
++						 HI5622_HOST_DMA_LO,
++						 HI5622_HOST_DMA_HI, &ac);
++		if (ctx->cfg)
++			ctx->cfg->sta.d2h_assoc_seen++;
++		if (rc) {
++			dev_warn(&ctx->pdev->dev,
++				 "STA D2H g2 id3 assoc-completion REFUSED by decoder (%d): 12-byte hdr + %u B payload; untrusted IE addresses/lengths not used\n",
++				 rc, payload_len);
++			return;
++		}
++		dev_info(&ctx->pdev->dev,
++			 "STA D2H g2 id3 assoc-completion: status=%u bssid=%pM req_ie_len=%u resp_ie_len=%u req_ie_devva=0x%08x resp_ie_devva=0x%08x (log-only; IE addresses validated in the host-DMA window, NEVER dereferenced; cfg80211_connect_done NOT called)\n",
++			 ac.status, ac.bssid, ac.req_ie_len, ac.resp_ie_len,
++			 ac.req_ie_va, ac.resp_ie_va);
++		return;
++	}
++	if (id == HI5622_STA_D2H_ID_DISASOC_COMP) {
++		struct hi5622_sta_disasoc_comp dc;
++
++		rc = hi5622_sta_disasoc_comp_decode(hdr,
++						    HI5622_STA_D2H_HDR_LEN,
++						    payload, payload_len, &dc);
++		if (ctx->cfg)
++			ctx->cfg->sta.d2h_disasoc_seen++;
++		if (rc) {
++			dev_warn(&ctx->pdev->dev,
++				 "STA D2H g2 id4 disassoc-completion REFUSED by decoder (%d) (%u B payload)\n",
++				 rc, payload_len);
++			return;
++		}
++		dev_info(&ctx->pdev->dev,
++			 "STA D2H g2 id4 disassoc-completion: reason=%u (log-only; cfg80211_disconnected NOT called)\n",
++			 dc.reason);
++	}
++}
++
+ void hi5622_sta_remove(struct hi5622_cfg80211 *c)
+ {
+ 	if (!c)
+ 		return;
+-	hi5622_sta_free_buffer(c);
++	hi5622_sta_buf_free(c);
+ 	c->sta.join_posted = false;
+ }
+--- a/hi5622_sta.h
++++ b/hi5622_sta.h
+@@ -3,10 +3,11 @@
+  * hi5622_sta.h - kernel-side cfg80211 STA connect/disconnect path for the
+  * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
+  *
+- * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141).
+- * The wire frames are built by the portable hi5622_sta_frames.c; this file
+- * only maps cfg80211 state to those frames and posts them through the
+- * inherited fail-closed hi5622_frame_post() gate.
++ * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141;
++ * hardened by the wifi-sta-join lane, shared task task-146).  The wire
++ * frames are built by the portable hi5622_sta_frames.c; this file maps
++ * cfg80211 state to those frames, applies the fail-closed one-shot gates and
++ * posts them through the inherited hi5622_frame_post() gate.
+  */
+ #ifndef HI5622_STA_H
+ #define HI5622_STA_H
+@@ -15,16 +16,28 @@
+ 
+ struct cfg80211_connect_params;
+ struct hi5622_cfg80211;
++struct hi5622_pci;
+ struct net_device;
+ 
+ /* cfg80211 .connect / .disconnect.  Both are fail-closed: they return
+  * -EOPNOTSUPP unless the hi5622_sta_join module parameter enables the
+- * vendor WAL cfg-event join path (see hi5622_sta.c). */
++ * vendor WAL cfg-event join path (see hi5622_sta.c):
++ *   sta_join=0  fail closed (default)
++ *   sta_join=1  build+validate the frame only (dry run, no device write)
++ *   sta_join=2  one single-shot post per module load (also needs
++ *               allow_frames>0); no retry, stop on firmware exception. */
+ int hi5622_sta_connect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 		       struct cfg80211_connect_params *sme);
+ int hi5622_sta_disconnect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 			  u16 reason_code);
+ 
++/* Log-only D2H completion decode (g2 id3 assoc / g2 id4 disassoc; see
++ * hi5622_sta_logic.h).  Called from the direct D2H reader; NEVER calls
++ * cfg80211_connect_done() and never dereferences the firmware-supplied IE
++ * addresses - the completion wiring belongs to the RX/AP-mgmt lanes. */
++void hi5622_sta_d2h_deliver(struct hi5622_pci *ctx, const u8 *hdr,
++			    const u8 *payload, u32 payload_len);
++
+ /* Free the per-connect host buffer (called from hi5622_cfg80211_remove()). */
+ void hi5622_sta_remove(struct hi5622_cfg80211 *c);
+ 
+--- a/hi5622_sta_frames.c
++++ b/hi5622_sta_frames.c
+@@ -1,7 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+  * hi5622_sta_frames.c - WAL cfg-event STA join/disconnect frame builders
+- * (clean-room).  See hi5622_sta_frames.h and ../REPORT.md sec 3.
++ * (clean-room; hardened by the wifi-sta-join lane, task-146).
++ * See hi5622_sta_frames.h and ../REPORT.md sec 3.
+  */
+ #include "hi5622_sta_frames.h"
+ 
+@@ -36,6 +37,78 @@
+ 	       ((u32)p[3] << 24);
+ }
+ 
++/* ---------------------------------------------------------------------
++ * Body-pointer validation (task-146).  These addresses are handed to the
++ * FIRMWARE; the firmware dereferences them, so any value that is not a
++ * host-DRAM device address inside the proven identity window is a wild
++ * pointer.  All checks are pure integer arithmetic.
++ * -------------------------------------------------------------------*/
++int hi5622_sta_join_bufs_check(const struct hi5622_sta_join_bufs *p,
++			       u32 buf_va, u32 buf_size,
++			       u32 dma_lo, u32 dma_hi)
++{
++	u64 buf_end, end;
++
++	if (!p)
++		return -EINVAL;
++	if (buf_size < HI5622_STA_JOIN_BUF_SIZE)
++		return -ENOSPC;
++	if (buf_va < dma_lo || buf_va > dma_hi)
++		return -ERANGE;
++	buf_end = (u64)buf_va + (u64)buf_size;
++	if (buf_end - 1u > (u64)dma_hi)
++		return -ERANGE;	/* the whole buffer must stay in the window */
++	if (p->ssid_len == 0u || p->ssid_len > HI5622_STA_MAX_SSID)
++		return -EINVAL;
++	if (p->ie_len > HI5622_STA_MAX_IE)
++		return -E2BIG;
++	if (p->key_len > HI5622_STA_MAX_KEY)
++		return -E2BIG;
++	if (p->key_idx > 3u)
++		return -EINVAL;
++	if (!hi5622_sta_auth_type_valid(p->auth_type))
++		return -EINVAL;
++
++	/* no-NULL policy: every field must be a real address */
++	if (!p->bssid_va || !p->ssid_va || !p->ie_va || !p->key_va)
++		return -EINVAL;
++	/* each address: alignment + window (before the layout compare so a
++	 * wild value is reported as ERANGE, not hidden as a layout error) */
++	if (p->bssid_va & 0x3u || p->ssid_va & 0x3u ||
++	    p->ie_va & 0x3u || p->key_va & 0x3u)
++		return -EINVAL;
++	if (p->bssid_va < dma_lo || p->bssid_va > dma_hi)
++		return -ERANGE;
++	if (p->ssid_va < dma_lo || p->ssid_va > dma_hi)
++		return -ERANGE;
++	if (p->ie_va < dma_lo || p->ie_va > dma_hi)
++		return -ERANGE;
++	if (p->key_va < dma_lo || p->key_va > dma_hi)
++		return -ERANGE;
++	/* the fixed layout is the only layout this driver builds */
++	if (p->bssid_va != buf_va + HI5622_STA_JOIN_OFF_BSSID)
++		return -EINVAL;
++	if (p->ssid_va != buf_va + HI5622_STA_JOIN_OFF_SSID)
++		return -EINVAL;
++	if (p->ie_va != buf_va + HI5622_STA_JOIN_OFF_IE)
++		return -EINVAL;
++	if (p->key_va != buf_va + HI5622_STA_JOIN_OFF_KEY)
++		return -EINVAL;
++	end = (u64)p->bssid_va + 6u;
++	if (end > buf_end)
++		return -ERANGE;
++	end = (u64)p->ssid_va + (u64)p->ssid_len;
++	if (end > buf_end)
++		return -ERANGE;
++	end = (u64)p->ie_va + (u64)p->ie_len;
++	if (end > buf_end)
++		return -ERANGE;
++	end = (u64)p->key_va + (u64)p->key_len;
++	if (end > buf_end)
++		return -ERANGE;
++	return 0;
++}
++
+ int hi5622_sta_connect_body(u8 *body, size_t cap,
+ 			    const struct hi5622_sta_join_bufs *p)
+ {
+@@ -49,8 +122,13 @@
+ 		return -EINVAL;
+ 	if (p->key_len > HI5622_STA_MAX_KEY)
+ 		return -EINVAL;
++	if (p->key_idx > 3u)
++		return -EINVAL;
+ 	if (!hi5622_sta_auth_type_valid(p->auth_type))
+ 		return -EINVAL;
++	/* a zero address is not a firmware-compatible "absent" sentinel */
++	if (!p->bssid_va || !p->ssid_va || !p->ie_va || !p->key_va)
++		return -EINVAL;
+ 
+ 	memset(body, 0, HI5622_STA_CONNECT_BODY_LEN);
+ 	/* +0x00 stays 0 (reserved [V]: the vendor struct is memset() to 0). */
+@@ -69,6 +147,30 @@
+ 	return 0;
+ }
+ 
++int hi5622_sta_connect_body_check(const u8 *body, size_t body_len,
++				  const struct hi5622_sta_join_bufs *p)
++{
++	if (!body || !p)
++		return -EINVAL;
++	if (body_len != HI5622_STA_CONNECT_BODY_LEN)
++		return -EINVAL;
++	if (body[0x00] != 0u || body[0x03] != 0u)
++		return -EINVAL;
++	if (body[0x01] != p->ssid_len || body[0x02] != p->mfp)
++		return -EINVAL;
++	if (body[0x10] != (p->privacy ? 1u : 0u) ||
++	    body[0x11] != p->auth_type ||
++	    body[0x12] != p->key_len || body[0x13] != p->key_idx)
++		return -EINVAL;
++	if (hst_get32(body + 0x04) != p->ie_va ||
++	    hst_get32(body + 0x08) != p->ssid_va ||
++	    hst_get32(body + 0x0c) != p->bssid_va ||
++	    hst_get32(body + 0x14) != p->key_va ||
++	    hst_get32(body + 0x68) != p->ie_len)
++		return -EINVAL;
++	return 0;
++}
++
+ int hi5622_sta_disconnect_body(u8 *body, size_t cap,
+ 			      const struct hi5622_sta_disconnect_params *p)
+ {
+--- a/hi5622_sta_frames.h
++++ b/hi5622_sta_frames.h
+@@ -3,9 +3,11 @@
+  * hi5622_sta_frames.h - WAL cfg-event STA join/disconnect frame builders
+  * for the Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
+  *
+- * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141,
+- * 2026-11-24).  Only decoded wire facts are encoded here; the vendor code
+- * itself is not reproduced or linked.
++ * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141;
++ * harden-by-re-derivation of the 108-byte body's four host-DRAM pointer
++ * fields in the wifi-sta-join lane, shared task task-146, 2026-11-24).
++ * Only decoded wire facts are encoded here; the vendor code itself is not
++ * reproduced or linked.
+  *
+  * WIRE SHAPE (proven on the bench for the same WAL family by the AP-start
+  * lane, whose 4 frames are consumed by the firmware):
+@@ -24,21 +26,35 @@
+  * 108-byte local struct it memcpy()s into wal_cfg80211_start_req):
+  *   +0x01 u8  ssid_len      (cfg80211_connect_params.ssid_len)
+  *   +0x02 u8  mfp
+- *   +0x04 u32 ie buffer address      (host-DRAM address, see REPORT 3.3)
+- *   +0x08 u32 ssid buffer address
+- *   +0x0c u32 bssid buffer address
++ *   +0x04 u32 ie buffer DEVICE ADDRESS
++ *   +0x08 u32 ssid buffer DEVICE ADDRESS
++ *   +0x0c u32 bssid buffer DEVICE ADDRESS
+  *   +0x10 u8  privacy
+  *   +0x11 u8  auth_type
+  *   +0x12 u8  key_len
+  *   +0x13 u8  key_idx
+- *   +0x14 u32 key buffer address
++ *   +0x14 u32 key buffer DEVICE ADDRESS
+  *   +0x18..+0x67 zero
+  *   +0x68 u32 ie_len
+  *
+- * DISCONNECT BODY (16 B; wal_cfg80211_disconnect .text+0x100844):
+- *   +0x00 u8 bssid[6]
+- *   +0x06 u16 reason code
+- *   +0x0f u8 1 (vendor constant, wal_cfg80211_start_disconnect [V])
++ * THE FOUR ADDRESS FIELDS (the [U] deref risk):
++ *   The vendor stores the cfg80211 params POINTERS raw.  Its OpenWrt kernel
++ *   uses VMSPLIT_2G, so a kmalloc VA (0x80000000+phys, PHYS_OFFSET
++ *   0x80000000 on this SoC) numerically equals the device-visible host-DRAM
++ *   address (DTS dma-ranges identity, HI5622_HOST_DMA_LO..HI).  Our luofu
++ *   6.18 kernel is VMSPLIT_3G (PAGE_OFFSET 0xC0000000), so a kernel VA is
++ *   NOT a device address; passing one would hand the firmware a wild
++ *   pointer.  This builder therefore only ever encodes dma_alloc_coherent
++ *   device addresses inside the identity window, requires all four to be
++ *   non-zero (a zero/NULL field is not a provable "absent" sentinel in the
++ *   firmware), and hi5622_sta_join_bufs_check() enforces:
++ *     - each address is 4-byte aligned and inside [dma_lo, dma_hi];
++ *     - each pointee region is inside the caller's buffer;
++ *     - the addresses match the fixed buffer layout below;
++ *     - ssid_len/ie_len/key_len fit their regions;
++ *     - no 32-bit wrap of address+length.
++ *   The firmware's actual dereference contract stays [U]: the post path is
++ *   module-parameter gated, one-shot, no retry (ladder B2 is the experiment).
+  *
+  * FAIL CLOSED: these are pure builders; nothing posts unless the kernel
+  * caller passes the hi5622_sta module-parameter gate.
+@@ -58,6 +74,7 @@
+ typedef uint8_t  u8;
+ typedef uint16_t u16;
+ typedef uint32_t u32;
++typedef uint64_t u64;
+ #endif
+ #endif
+ 
+@@ -71,11 +88,18 @@
+ #define HI5622_STA_HCC_GROUP_CORE	2u
+ #define HI5622_STA_HCC_ID_WAL		0u	/* bench-proven AP WAL carrier */
+ #define HI5622_STA_WAL_MSG_CFG		1u	/* WAL message class          */
+-#define HI5622_STA_FRAME_MAX							\
+-	(HI5622_STA_WAL_HDR_LEN + HI5622_STA_CONNECT_BODY_LEN)
++#define HI5622_STA_FRAME_MAX								(HI5622_STA_WAL_HDR_LEN + HI5622_STA_CONNECT_BODY_LEN)
+ 
+-/* The four host-DRAM buffer addresses the body carries.  0 = absent
+- * (the firmware must not dereference it - connect [I]/[U] contract). */
++/* Fixed layout of the one coherent host-DRAM buffer the four body pointers
++ * address: bssid[6], pad, ssid[32], ies[512], key[32]. */
++#define HI5622_STA_JOIN_OFF_BSSID	0u
++#define HI5622_STA_JOIN_OFF_SSID	8u
++#define HI5622_STA_JOIN_OFF_IE		40u
++#define HI5622_STA_JOIN_OFF_KEY		552u
++#define HI5622_STA_JOIN_BUF_SIZE	(HI5622_STA_JOIN_OFF_KEY + 					 HI5622_STA_MAX_KEY)	/* 584 */
++
++/* The four host-DRAM device addresses the body carries (0 = absent; the
++ * hardened driver never emits 0 - see the header comment). */
+ struct hi5622_sta_join_bufs {
+ 	u32 ssid_va;
+ 	u32 bssid_va;
+@@ -95,10 +119,27 @@
+ 	u16 reason_code;
+ };
+ 
+-/* Fill the 108-byte connect body; 0 on success, -EINVAL/-ENOSPC otherwise. */
++/* Fill the 108-byte connect body; 0 on success, -EINVAL/-ENOSPC otherwise.
++ * All four address fields must be non-zero and lengths in bounds. */
+ int hi5622_sta_connect_body(u8 *body, size_t cap,
+ 			    const struct hi5622_sta_join_bufs *p);
+ 
++/* Independent re-parse + validation of a built 108-byte body: every
++ * address is non-zero and equal to p's, lengths equal, no reserved byte
++ * written.  Used as a post-build self-check before the frame is posted. */
++int hi5622_sta_connect_body_check(const u8 *body, size_t body_len,
++				  const struct hi5622_sta_join_bufs *p);
++
++/* Bounds/window validation of the four addresses before any frame is
++ * built:
++ *   buf_va     device address of the coherent buffer holding all four
++ *   buf_size   its size (>= HI5622_STA_JOIN_BUF_SIZE)
++ *   dma_lo/hi  the proven device-visible host-DRAM window
++ * Returns 0 only when every field is safe. */
++int hi5622_sta_join_bufs_check(const struct hi5622_sta_join_bufs *p,
++			       u32 buf_va, u32 buf_size,
++			       u32 dma_lo, u32 dma_hi);
++
+ /* Fill the 16-byte disconnect body. */
+ int hi5622_sta_disconnect_body(u8 *body, size_t cap,
+ 			      const struct hi5622_sta_disconnect_params *p);
+--- a/hi5622_sta_logic.c
++++ b/hi5622_sta_logic.c
+@@ -1,14 +1,19 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+- * hi5622_sta_logic.c - portable STA/band/HT capability logic (clean-room).
+- * See hi5622_sta_logic.h and ../REPORT.md for the decoded facts.
++ * hi5622_sta_logic.c - portable STA/band/HT capability + join-gate +
++ * D2H completion logic (clean-room).
++ *
++ * ORIGINAL clean-room code (wifi-sta-static task-141; hardened by the
++ * wifi-sta-join lane, task-146).  See hi5622_sta_logic.h and ../REPORT.md.
+  */
+ #include "hi5622_sta_logic.h"
+ 
+ #ifdef __KERNEL__
+ #include <linux/errno.h>
++#include <linux/string.h>
+ #else
+ #include <errno.h>
++#include <string.h>
+ #endif
+ 
+ /* Vendor 2.4 GHz channel table (.data+0x16e4, 14 x 56 B): ch1..13 + ch14. */
+@@ -19,9 +24,7 @@
+ 	{ 2472, 13, 0 }, { 2484, 14, 0 },
+ };
+ 
+-/* Vendor 5 GHz channel table (.data+0x108c, 29 x 56 B).  Flags are 0 in the
+- * vendor table; the 4.9 GHz block (4920..4980) is marked NO_IR here because
+- * no kernel regulatory domain enables it for initiator use. */
++/* Vendor 5 GHz channel table (.data+0x108c, 29 x 56 B). */
+ static const struct hi5622_sta_chan hi5622_sta_chan_5g[] = {
+ 	{ 5180,  36,  0 }, { 5200,  40,  0 }, { 5220,  44,  0 },
+ 	{ 5240,  48,  0 }, { 5260,  52,  HI5622_STA_CHAN_RADAR },
+@@ -100,9 +103,155 @@
+ 		return -EINVAL;
+ 	if (p->ie_len > HI5622_STA_MAX_IE)
+ 		return -E2BIG;
++	if (p->ie_len && !p->ie)
++		return -EINVAL;
+ 	if (p->key_len > HI5622_STA_MAX_KEY)
+ 		return -E2BIG;
++	if (p->key_len && !p->key)
++		return -EINVAL;
++	if (p->key_idx > 3u)
++		return -EINVAL;
+ 	if (!hi5622_sta_auth_type_valid(p->auth_type))
+ 		return -EINVAL;
+ 	return 0;
+ }
++
++/* ---------------------------------------------------------------------
++ * Join fire-path gates (task-146)
++ * -------------------------------------------------------------------*/
++int hi5622_sta_join_gate(u32 sta_join, u32 allow_frames,
++			 int already_attempted)
++{
++	if (sta_join > HI5622_STA_JOIN_MAX)
++		return -EINVAL;
++	if (sta_join == HI5622_STA_JOIN_OFF)
++		return -EOPNOTSUPP;
++	if (sta_join == HI5622_STA_JOIN_DRY)
++		return 0;	/* build+validate only; no device write */
++	/* single-shot post */
++	if (!allow_frames)
++		return -EPERM;	/* inherited post path is fail-closed */
++	if (already_attempted)
++		return -EALREADY;	/* one join per module load, no retry */
++	return 0;
++}
++
++int hi5622_sta_health_gate(u32 exc_mask, int exc_valid, u32 staged)
++{
++	/* "mask" = firmware CPU 0x400008 exception-seen bitmap (HCC read);
++	 * "staging" = firmware CPU 0x40000c vector context frame captured.
++	 * Either is a stop condition: no retry, power-cycle, analyse. */
++	if (exc_valid && exc_mask)
++		return -EIO;
++	if (staged)
++		return -EIO;
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * D2H completion decode (task-146).  Fields decoded from the vendor host
++ * handlers wal_asoc_comp_proc_sta / wal_disasoc_comp_proc_sta; the two IE
++ * addresses are firmware-supplied and are only range-checked here.
++ * -------------------------------------------------------------------*/
++static u16 sta_get16(const u8 *p)
++{
++	return (u16)((u16)p[0] | ((u16)p[1] << 8));
++}
++
++static u32 sta_get32(const u8 *p)
++{
++	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
++	       ((u32)p[3] << 24);
++}
++
++static int sta_d2h_hdr_check(const u8 *hdr, size_t hdr_len, u16 want_id,
++			     size_t payload_len)
++{
++	if (!hdr || hdr_len < HI5622_STA_D2H_HDR_LEN)
++		return -EINVAL;
++	if (hdr_len != HI5622_STA_D2H_HDR_LEN)
++		return -EINVAL;
++	if ((hdr[0] & 0x0fu) != HI5622_STA_D2H_WAL_GROUP)
++		return -EINVAL;
++	if (sta_get16(hdr + 0x06) != want_id)
++		return -EINVAL;
++	if (sta_get16(hdr + 0x0a) != HI5622_STA_D2H_TAG)
++		return -EINVAL;
++	if (sta_get16(hdr + 0x04) !=
++	    (u16)(HI5622_STA_D2H_HDR_LEN + payload_len))
++		return -EINVAL;
++	return 0;
++}
++
++/* A firmware-supplied host-DRAM address is usable only inside the identity
++ * host-DMA window; a value outside it is untrusted input, not a pointer. */
++static int sta_devva_ok(u32 va, u32 len, u32 dma_lo, u32 dma_hi)
++{
++	u64 end;
++
++	if (va < dma_lo || va > dma_hi)
++		return 0;
++	if (va & 0x3u)
++		return 0;
++	end = (u64)va + (u64)len;
++	if (end > (u64)dma_hi + 1u)
++		return 0;
++	return 1;
++}
++
++int hi5622_sta_assoc_comp_decode(const u8 *hdr, size_t hdr_len,
++				 const u8 *payload, size_t payload_len,
++				 u32 dma_lo, u32 dma_hi,
++				 struct hi5622_sta_assoc_comp *out)
++{
++	u32 req_len, resp_len, req_va, resp_va;
++	int rc;
++
++	if (!payload || !out)
++		return -EINVAL;
++	if (payload_len < HI5622_STA_ASSOC_MIN_LEN)
++		return -ENOSPC;
++	rc = sta_d2h_hdr_check(hdr, hdr_len, HI5622_STA_D2H_ID_ASSOC_COMP,
++			       payload_len);
++	if (rc)
++		return rc;
++	req_len = sta_get32(payload + HI5622_STA_ASSOC_OFF_REQ_IE_LEN);
++	resp_len = sta_get32(payload + HI5622_STA_ASSOC_OFF_RESP_IE_LEN);
++	req_va = sta_get32(payload + HI5622_STA_ASSOC_OFF_REQ_IE_VA);
++	resp_va = sta_get32(payload + HI5622_STA_ASSOC_OFF_RESP_IE_VA);
++	if (req_len > HI5622_STA_D2H_IE_MAX || resp_len > HI5622_STA_D2H_IE_MAX)
++		return -E2BIG;
++	if (req_len && !sta_devva_ok(req_va, req_len, dma_lo, dma_hi))
++		return -ERANGE;
++	if (resp_len && !sta_devva_ok(resp_va, resp_len, dma_lo, dma_hi))
++		return -ERANGE;
++	memset(out, 0, sizeof(*out));
++	out->status = sta_get16(payload + HI5622_STA_ASSOC_OFF_STATUS);
++	out->unknown0 = sta_get16(payload + HI5622_STA_ASSOC_OFF_UNK0);
++	out->unknown_a = sta_get16(payload + HI5622_STA_ASSOC_OFF_UNKA);
++	memcpy(out->bssid, payload + HI5622_STA_ASSOC_OFF_BSSID, 6);
++	out->req_ie_len = req_len;
++	out->resp_ie_len = resp_len;
++	out->req_ie_va = req_va;
++	out->resp_ie_va = resp_va;
++	return 0;
++}
++
++int hi5622_sta_disasoc_comp_decode(const u8 *hdr, size_t hdr_len,
++				   const u8 *payload, size_t payload_len,
++				   struct hi5622_sta_disasoc_comp *out)
++{
++	int rc;
++
++	if (!payload || !out)
++		return -EINVAL;
++	if (payload_len < HI5622_STA_DISASOC_MIN_LEN)
++		return -ENOSPC;
++	rc = sta_d2h_hdr_check(hdr, hdr_len, HI5622_STA_D2H_ID_DISASOC_COMP,
++			       payload_len);
++	if (rc)
++		return rc;
++	memset(out, 0, sizeof(*out));
++	out->reason = sta_get16(payload + HI5622_STA_DISASOC_OFF_REASON);
++	return 0;
++}
+--- a/hi5622_sta_logic.h
++++ b/hi5622_sta_logic.h
+@@ -3,13 +3,14 @@
+  * hi5622_sta_logic.h - portable STA/band/HT capability logic for the
+  * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
+  *
+- * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141,
+- * 2026-11-24).  No vendor source text, object code, firmware byte or
+- * calibration value is reproduced; every constant below is a decoded fact
+- * with the vendor-module address recorded in ../REPORT.md / ../TABLES.md.
++ * ORIGINAL clean-room code (wifi-sta-static lane, shared task task-141;
++ * hardened by the wifi-sta-join lane, shared task task-146, 2026-11-24).
++ * No vendor source text, object code, firmware byte or calibration value is
++ * reproduced; every constant below is a decoded fact with the vendor-module
++ * address recorded in ../REPORT.md / ../TABLES.md.
+  *
+  * This header is pure C99: it compiles unchanged in the 6.18 kernel module
+- * and host-side (tools/sta_logic_selftest.c).
++ * and host-side (tools/sta_join_selftest.c).
+  */
+ #ifndef HI5622_STA_LOGIC_H
+ #define HI5622_STA_LOGIC_H
+@@ -24,6 +25,7 @@
+ typedef uint8_t  u8;
+ typedef uint16_t u16;
+ typedef uint32_t u32;
++typedef uint64_t u64;
+ #endif
+ #endif
+ 
+@@ -80,8 +82,6 @@
+  * 2.4 GHz: 14 channels, 1..13 at 2412..2472 + ch14 at 2484.
+  * 5 GHz:   29 channels: 36..64, 100..144, 149..165, and the 4.9 GHz
+  *          public-safety channels 184..196 (4920..4980 MHz).
+- * Static channel flags are 0 in the vendor table; wiphy_apply_custom_
+- * regulatory (vendor) / the kernel regdb (our driver) restrict them.
+  * =================================================================== */
+ #define HI5622_STA_CHAN_2G_COUNT	14u
+ #define HI5622_STA_CHAN_5G_COUNT	29u
+@@ -111,21 +111,119 @@
+ /* Auth-type bytes the vendor connect body carries (nl80211 values). */
+ int hi5622_sta_auth_type_valid(u32 auth_type);
+ 
+-/* Bounds-check one neutral connect request before any frame is built. */
++/* ===================================================================
++ * 4. Connect request bounds (wifi-sta-static, re-checked here)
++ * =================================================================== */
++#define HI5622_STA_MAX_SSID	32u
++#define HI5622_STA_MAX_IE	512u
++#define HI5622_STA_MAX_KEY	32u
++
+ struct hi5622_sta_connect_check {
+ 	u32 ssid_len;
+ 	const void *ssid;
+ 	const void *bssid;	/* may be NULL for a wildcard connect */
+ 	u32 ie_len;
++	const void *ie;
+ 	u32 key_len;
++	const void *key;
+ 	u32 auth_type;
++	u32 key_idx;
+ };
+ 
+-#define HI5622_STA_MAX_SSID	32u
+-#define HI5622_STA_MAX_IE	512u
+-#define HI5622_STA_MAX_KEY	32u
+-
+-/* 0 = usable; negative errno otherwise.  Portable (no kernel calls). */
+ int hi5622_sta_connect_check(const struct hi5622_sta_connect_check *p);
+ 
++/* ===================================================================
++ * 5. Join fire-path gates (wifi-sta-join lane, task-146)
++ *
++ * The vendor path is a single WAL cfg event whose body carries four
++ * host-DRAM buffer ADDRESSES the FIRMWARE dereferences.  On the vendor
++ * kernel (VMSPLIT_2G) a kernel kmalloc VA happens to equal the
++ * device-visible host-DRAM address; on our VMSPLIT_3G kernel it does not,
++ * so the driver passes dma_alloc_coherent device addresses (the same
++ * 0x80000000..0x8fffffff identity window the bench-proven SR ring nodes
++ * use) and refuses anything outside it.  The firmware's dereference
++ * contract itself remains [U]; the post path is therefore module-parameter
++ * gated, one-shot per module load, no retry, and stops on a firmware
++ * exception.
++ * =================================================================== */
++#define HI5622_STA_JOIN_OFF	0u	/* fail closed (default)          */
++#define HI5622_STA_JOIN_DRY	1u	/* build+validate, no post        */
++#define HI5622_STA_JOIN_POST	2u	/* one single-shot post per load  */
++#define HI5622_STA_JOIN_MAX	HI5622_STA_JOIN_POST
++
++/* One-shot join gate.  sta_join = module parameter; allow_frames = the
++ * inherited post path budget; already_attempted = this load already had a
++ * posted join (no retry).  Returns 0 to proceed, negative errno to refuse. */
++int hi5622_sta_join_gate(u32 sta_join, u32 allow_frames,
++			 int already_attempted);
++
++/* Health gate: stop on a firmware exception.  exc_mask is the latched
++ * exception-seen halfword (firmware CPU 0x400008, "mask") and staged is the
++ * number of captured vector frames (firmware CPU 0x40000c, "staging").
++ * Nonzero mask or any staged vector = stop, no retry, power-cycle. */
++int hi5622_sta_health_gate(u32 exc_mask, int exc_valid, u32 staged);
++
++/* ===================================================================
++ * 6. D2H assoc / disassoc completion decode (wifi-sta-join, task-146)
++ *
++ * The vendor wifi.ko registers the WAL chip-group-2 handler table with
++ * hcc_msg_register_tab_chip(2, table, 0x13) (wal_main_init, 2.5.24):
++ *   g2 id 3 -> wal_asoc_comp_proc_sta   (.text+0x125b6c) -> cfg80211
++ *              connect result (calls oal_cfg80211_connect_result)
++ *   g2 id 4 -> wal_disasoc_comp_proc_sta (.text+0x125e3c) -> cfg80211
++ *              disconnected
++ * Field extraction decoded from those two handlers; the payload starts at
++ * wire offset 12 (after the 12-byte HCC header).  The assoc-completion
++ * payload carries TWO FIRMWARE-SUPPLIED HOST-DRAM ADDRESSES (req_ie,
++ * resp_ie): they are untrusted input and must be validated against the
++ * host-DMA window before any translation/deref.  This decoder NEVER
++ * dereferences them (log-only on our side).
++ * =================================================================== */
++#define HI5622_STA_D2H_WAL_GROUP	2u	/* HCC group nibble of WAL msgs   */
++#define HI5622_STA_D2H_ID_ASSOC_COMP	3u	/* wal_asoc_comp_proc_sta   [V]   */
++#define HI5622_STA_D2H_ID_DISASOC_COMP	4u	/* wal_disasoc_comp_proc_sta[V]   */
++#define HI5622_STA_D2H_HDR_LEN		12u	/* HCC header                    */
++#define HI5622_STA_D2H_TAG		0x5a5au
++
++#define HI5622_STA_ASSOC_OFF_UNK0	0x00u	/* [U] not read by the handler   */
++#define HI5622_STA_ASSOC_OFF_STATUS	0x02u	/* u16 status (0 = success)      */
++#define HI5622_STA_ASSOC_OFF_BSSID	0x04u	/* u8 bssid[6]                   */
++#define HI5622_STA_ASSOC_OFF_UNKA	0x0au	/* [U] not read by the handler   */
++#define HI5622_STA_ASSOC_OFF_REQ_IE_LEN	0x0cu	/* u32                           */
++#define HI5622_STA_ASSOC_OFF_RESP_IE_LEN 0x10u	/* u32                          */
++#define HI5622_STA_ASSOC_OFF_REQ_IE_VA	0x14u	/* u32 host-DRAM device address  */
++#define HI5622_STA_ASSOC_OFF_RESP_IE_VA	0x18u	/* u32 host-DRAM device address  */
++#define HI5622_STA_ASSOC_MIN_LEN	0x1cu	/* 28 bytes                      */
++#define HI5622_STA_D2H_IE_MAX		1024u	/* decode sanity bound [I]       */
++
++#define HI5622_STA_DISASOC_OFF_REASON	0x00u	/* u16 cfg80211 reason code      */
++#define HI5622_STA_DISASOC_MIN_LEN	2u
++
++struct hi5622_sta_assoc_comp {
++	u16 status;
++	u16 unknown0;		/* payload +0x00 [U] */
++	u16 unknown_a;		/* payload +0x0a [U] */
++	u8  bssid[6];
++	u32 req_ie_len;
++	u32 resp_ie_len;
++	u32 req_ie_va;
++	u32 resp_ie_va;
++};
++
++struct hi5622_sta_disasoc_comp {
++	u16 reason;
++};
++
++/* 0 = decoded and every pointer/length is inside the supplied host-DMA
++ * window; negative errno otherwise.  hdr = the 12-byte HCC header,
++ * payload = payload_len bytes after it (the reader hands them separately).
++ * The IE addresses are returned, never read. */
++int hi5622_sta_assoc_comp_decode(const u8 *hdr, size_t hdr_len,
++				 const u8 *payload, size_t payload_len,
++				 u32 dma_lo, u32 dma_hi,
++				 struct hi5622_sta_assoc_comp *out);
++int hi5622_sta_disasoc_comp_decode(const u8 *hdr, size_t hdr_len,
++				   const u8 *payload, size_t payload_len,
++				   struct hi5622_sta_disasoc_comp *out);
++
+ #endif /* HI5622_STA_LOGIC_H */

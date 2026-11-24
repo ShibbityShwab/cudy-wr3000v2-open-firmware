@@ -1,0 +1,11 @@
+== wifi-sta-join hardening module (host-built, NOT fired)
+date        : 2569-11-24T15:00:04Z
+integ tree  : /tmp/wifi-allpatch-build/integ
+kernel      : /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+artifact    : /tmp/sta-join-hardening-build/artifact/hi5622_wifi.ko (debug-stripped)
+size        : 314244
+sha256      : e4e6118418f87bdb2a67395508fb104ad0dc789034a50ce2e1d9a7e7eac6cca6
+unstripped  : 1156840 B sha256 3c5cfb80abec3727706e1ed48a0e3ddda8cd77598a061da15ee055184581b7ac
+params      : 47
+patch       : 527ecac561702eb661037c189e2887950d272dce0f0ad96fc1569451219593bd  8 files
+chain       : all-patch 008aca5 (AP+DP+scan+stability+rx-static+beacon-static+wpa-static+sta-static) + sta-join hardening

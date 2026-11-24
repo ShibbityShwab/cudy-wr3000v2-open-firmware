@@ -1,0 +1,99 @@
+== apply lane patch on the all-patch integration tree
+   files changed: 8
+== clean build against /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+== strip + assert debug-strip only removed debug sections
+== artifact assertions
+depends:        cfg80211
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+== wifi-sta-join hardening module (host-built, NOT fired)
+date        : 2569-11-24T15:00:04Z
+integ tree  : /tmp/wifi-allpatch-build/integ
+kernel      : /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+artifact    : /tmp/sta-join-hardening-build/artifact/hi5622_wifi.ko (debug-stripped)
+size        : 314244
+sha256      : e4e6118418f87bdb2a67395508fb104ad0dc789034a50ce2e1d9a7e7eac6cca6
+unstripped  : 1156840 B sha256 3c5cfb80abec3727706e1ed48a0e3ddda8cd77598a061da15ee055184581b7ac
+params      : 47
+patch       : 527ecac561702eb661037c189e2887950d272dce0f0ad96fc1569451219593bd  8 files
+chain       : all-patch 008aca5 (AP+DP+scan+stability+rx-static+beacon-static+wpa-static+sta-static) + sta-join hardening
+== host selftests
+== H0 host unit tests
+wifi-sta-join host selftest
+checks=111 fails=0
+STA-JOIN-SELFTEST-PASS
+== H1 static re-derivation (local vendor module; optional)
+== module identity
+  file   /tmp/rootfs2524b/lib/modules/5.10.201/hi5622v100_wifi.ko
+  size   3564728
+  sha256 de78ec07e46e70ce8befa788a2a5d11d17e80cdea7c2789b721b0be5dcfd9521
+== symbol anchors (link-time .text offsets)
+  oal_cfg80211_disconnected          .text+0x00077c size 0x28
+  oal_cfg80211_connect_result        .text+0x000888 size 0x98
+  wal_cfg80211_connect               .text+0x100590 size 0x2b4
+  wal_cfg80211_disconnect            .text+0x100844 size 0x1b8
+  wal_main_init                      .text+0x123cac size 0x150
+  wal_asoc_comp_proc_sta             .text+0x125b6c size 0x2d0
+  wal_disasoc_comp_proc_sta          .text+0x125e3c size 0x124
+  wal_send_cfg_event                 .text+0x1270d8 size 0x474
+  wal_cfg80211_start_req             .text+0x127ec4 size 0x1d0
+  wal_cfg80211_start_connect         .text+0x128310 size 0x24
+  wal_cfg80211_start_disconnect      .text+0x128334 size 0xbc
+== A. cfg80211 connect/disconnect -> WAL cfg event
+  .connect    -> opcode 0x123, body 108 B
+  .disconnect -> opcode 0x0d0, body  16 B (payload[15]=1)
+== B. 108-byte connect body field map (stack body at sp+0x18)
+  .text+0x100600  str        r3, [sp, #0x20]         +0x08 ssid address
+  .text+0x100618  strb       r3, [sp, #0x19]         +0x01 ssid_len
+  .text+0x100620  str        r3, [sp, #0x24]         +0x0c bssid address
+  .text+0x10062c  strb       r3, [sp, #0x29]         +0x11 auth_type
+  .text+0x100638  strb       r3, [sp, #0x28]         +0x10 privacy
+  .text+0x100644  strb       r3, [sp, #0x1a]         +0x02 mfp
+  .text+0x100680  str        r2, [sp, #0x1c]         +0x04 ie address
+  .text+0x100684  str        r3, [sp, #0x80]         +0x68 ie_len
+  .text+0x1006d4  strb       r7, [sp, #0x2a]         +0x12 key_len
+  .text+0x1006d8  str        r2, [sp, #0x2c]         +0x14 key address
+  .text+0x1006dc  strb       r3, [sp, #0x2b]         +0x13 key_idx
+  NOTE: the four address fields are stored RAW from cfg80211
+        params pointers (no translation helper call between the
+        load and the store) - the vendor runs VMSPLIT_2G, where
+        kmalloc VA == device host-DRAM address.  Our VMSPLIT_3G
+        kernel must pass dma device addresses instead.
+== C. WAL chip-group-2 dispatch table (wal_main_init)
+  id 0    -> wal_config_process_pkt
+  id 1    -> wal_acs_netlink_recv_handle
+  id 2    -> wal_scan_comp_proc_sta
+  id 3    -> wal_asoc_comp_proc_sta
+  id 4    -> wal_disasoc_comp_proc_sta
+  id 5    -> wal_connect_new_sta_proc_ap
+  id 6    -> wal_disconnect_sta_proc_ap
+  id 7    -> wal_mic_failure_proc
+  id 8    -> wal_acs_response_event_handler
+  id 9    -> wal_send_mgmt_to_host
+  id 12   -> wal_cfg80211_init_evt_handle
+  id 13   -> wal_cfg80211_mgmt_tx_status
+  id 20   -> wal_cfg80211_cac_report
+  id 21   -> wal_receive_all_sta_rssi_proc
+  id 30   -> wal_report_external_auth_req
+  id 31   -> wal_process_packet_xmit
+  id 32   -> wal_dfr_power_down_dev
+  id 37   -> wal_multiap_report_proc
+  id 38   -> wal_hiwifi_report_proc
+  => D2H WAL g2 id3 = STA assoc completion, id4 = disassoc
+== D. D2H completion decode (wire = 12-byte HCC hdr + payload)
+  payload offsets (payload base = hdr + 0x0c):
+    +0x02 u16 status        (hdr+0x0e)
+    +0x04 u8  bssid[6]      (hdr+0x10)
+    +0x0c u32 req_ie_len    (hdr+0x18)
+    +0x10 u32 resp_ie_len   (hdr+0x1c)
+    +0x14 u32 req_ie ADDR   (hdr+0x20)
+    +0x18 u32 resp_ie ADDR  (hdr+0x24)
+    +0x00, +0x0a            not read by the handler [U]
+  payload +0x00 u16 reason code (cfg80211 reason)
+checks=86 fails=0
+STA-JOIN-RE-PASS
+== H2 safety / fail-closed audit
+checks=23 fails=0
+STA-JOIN-AUDIT-PASS
+ALL-SELFTESTS-PASS
+BUILD-VERIFY-PASS
+exit=0
