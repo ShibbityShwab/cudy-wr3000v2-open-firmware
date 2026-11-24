@@ -1,0 +1,102 @@
+{
+  "lane": "wifi-ap-start",
+  "task": "task-121",
+  "date": "2026-11-26",
+  "bench_only": true,
+  "attended": true,
+  "never_contact_vendor_router": true,
+  "purpose": "Attended AP-start ladder: run the proven C2 calibration boot + mode-1 VAP base, then post the reverse-engineered AP-start sequence and decide from READ-ONLY evidence whether the firmware accepted the AP configuration.",
+  "prerequisites": {
+    "image": "cfg80211 bench image (kernel slice 13e81214..., slot 1794a531...)",
+    "firmware": "PD4-patched vendor firmware, golden cold boot page 0x86807FEF/7/2/0xABCD state 1",
+    "modules": "cfg80211.ko + clean-room hi5622_wifi.ko built from wifi-scan-ap src + wifi-vap-start provider patch + wifi-ap-start provider patch (ap_start_mode selectable)",
+    "recovery": "recovery door armed, UART capture running (read-only), bench link PASS",
+    "tools": "opensource/docs/incoming/wifi-bench-tooling (bench_session.py protocol mode, bar0read, phase_matrix.py)"
+  },
+  "module_params": {
+    "allow_frames": 6,
+    "frame_gap_ms": 100,
+    "h2d_send_budget": 8,
+    "vap_start_first": 1,
+    "vap_start_mode": 1,
+    "vap_start_module": 0,
+    "ap_start_mode": 0,
+    "note": "ap_start_mode 0 = g0 id1 static keys (default, statically dispatched by firmware table A); 1 = vendor WAL g2 envelopes (needs the dynamic group-2 handler; fallback only)."
+  },
+  "readback_pack": [
+    {"name": "golden page", "bar0": "0x829E28", "expect": "0x86807FEF, state 1, mask 0 at CA 0x40008, staging 0 at BAR0 0x6F800C"},
+    {"name": "module-table slot 0", "bar0": "0x829458", "expect": "0 before the VAP base, nonzero afterwards"},
+    {"name": "module-table base offset u16", "bar0": "0x82A504", "expect": "0 on the validated PD4 boot"},
+    {"name": "ctx0", "expr": "u32(BAR0 0x829458) + u16(BAR0 0x82A504)", "expect": "module-0 context CA"},
+    {"name": "vap0 pointer", "bar0": "ctx0 + 0x6B8000 + 0x190", "expect": "nonzero after the mode-1 VAP add"},
+    {"name": "ctx0 flags 0x18c", "bar0": "ctx0 + 0x6B8000 + 0x18C", "expect": "changes after AP config (mode/HT flags set by worker 0x84DA4)"},
+    {"name": "ctx0 flags 0x18d", "bar0": "ctx0 + 0x6B8000 + 0x18D", "expect": "bit0 = hidden SSID, bit2 = band/mode flag"},
+    {"name": "vap0+0x10 beacon_interval", "bar0": "u32(ctx0+0x190) + 0x6B8000 + 0x10", "expect": "100 (LE u32) after ap_cfg consumed"},
+    {"name": "vap0+0x14 dtim_period", "bar0": "u32(ctx0+0x190) + 0x6B8000 + 0x14", "expect": "2 after ap_cfg consumed"},
+    {"name": "vap0+0x64 flags", "bar0": "u32(ctx0+0x190) + 0x6B8000 + 0x64", "expect": "bits cleared/set by the AP-config worker"},
+    {"name": "vap0+0x13a MDID", "bar0": "u32(ctx0+0x190) + 0x6B8000 + 0x13A", "expect": "0 when no MD IE, else IE payload[0..1]"},
+    {"name": "exception mask", "bar0": "0x40008", "expect": "0"},
+    {"name": "staging frame", "bar0": "0x6F800C", "expect": "all zero"}
+  ],
+  "ladder": [
+    {
+      "step": "B0",
+      "action": "read-only golden pack before any write",
+      "expect": "golden page 0x86807FEF state 1, mask 0, staging 0",
+      "on_fail": "stop: do not load modules or post frames"
+    },
+    {
+      "step": "C2",
+      "action": "boot ladder + C2 calibration (ctx_create type 1, txq_sync72, six cfg_cal 3502..3507)",
+      "expect": "all frames consumed, rd_catalog g1 id3 count increases, mask 0",
+      "on_fail": "stop and keep the C2 evidence; AP ladder requires the active core"
+    },
+    {
+      "step": "V1",
+      "action": "mode-1 VAP base: iw phy phy0 interface add wlan0 type managed -> g0 id1 key 0x64 (48 B) + key 0x65 (40 B) posts (vap_start_mode=1, vap_start_first=1)",
+      "expect": "both frames CONSUMED, mask 0, module-table slot 0 nonzero, ctx0+0x190 nonzero",
+      "on_fail": "stop: the AP-config worker requires the module-0 VAP object"
+    },
+    {
+      "step": "A1",
+      "action": "hostapd-open.conf start (NL80211_CMD_NEW_BEACON -> driver start_ap -> provider ap_start_mode=0 posts frame 0 'ap_ssid' = g0 id1 key 0x0005, 64 B)",
+      "expect": "frame CONSUMED in the bounded poll, mask 0, dmesg 'start_ap sequence frame 1/4 ap_ssid posted'",
+      "on_fail": "stop: a refused SSID frame means the gate/budget is wrong, not the wire"
+    },
+    {
+      "step": "A2",
+      "action": "continue the same start_ap: frame 1 'ap_cfg' = g0 id1 key 0x0127, 184 B (156-byte body: beacon_interval 100, dtim 2, hidden 0, RSN IE at +0x09 for WPA2, mode 5 for HT)",
+      "expect": "frame CONSUMED in the bounded poll, mask 0; then readback: vap0+0x10 == 100, vap0+0x14 == 2, ctx0+0x18c/0x18d changed",
+      "on_fail": "stop; capture the readback pack before any retry"
+    },
+    {
+      "step": "A3",
+      "action": "hostapd stays up; read iw dev wlan0 info and dmesg",
+      "expect": "type AP reported; no exception; heartbeats continue.  Beaconing itself is NOT observable from the host radio - do not claim an AP",
+      "on_fail": "record, power-cycle, analyse offline"
+    },
+    {
+      "step": "A4",
+      "action": "optional second rung: same ladder with ap_start_mode=1 (WAL g2 cmd 0x05/0x6D/0x127/0x65)",
+      "expect": "all four frames CONSUMED, mask 0, same readback changes; if not, the static g0 carrier stays the supported path",
+      "on_fail": "classify WAL g2 as dynamic-handler-only [U]; keep mode 0"
+    }
+  ],
+  "stop_rules": [
+    "exception mask CA 0x40008 != 0 or a nonzero staging frame at BAR0 0x6F800C",
+    "golden page 0x86807FEF/7/2/0xABCD, state 1 or g+0xB4/+0xB8 changes",
+    "any posted frame is not consumed inside the provider's bounded poll (h2d_status refused/timeout increments)",
+    "any dmesg fault, or the module reports the H2D lane closed",
+    "never re-send a frame in the same boot after a stop; power-cycle and analyse offline",
+    "never write CA 0x400392F0 (out[5]), never post mailbox id 5, never send group 1/4"
+  ],
+  "claim_rules": [
+    "PASS on A2 requires the firmware readback match - a consumed frame alone is not an AP",
+    "beaconing over the air is out of scope for this host-only lane; the gate is firmware context acceptance",
+    "hostapd reaching start_ap is a host-side fact; it is not proof of an operational AP"
+  ],
+  "hostapd_configs": {
+    "hostapd-open.conf": "2.4 GHz ch 6, OPEN, ssid cudy-ap-test",
+    "hostapd-wpa2.conf": "2.4 GHz ch 6, WPA2-PSK/CCMP, ssid cudy-ap-test (needs add_key M3 later; start_ap sequence runs first)"
+  }
+}
