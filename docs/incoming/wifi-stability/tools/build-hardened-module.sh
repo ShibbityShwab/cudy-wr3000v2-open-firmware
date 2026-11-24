@@ -177,7 +177,7 @@ grep -q "split into %u g0 id0xC requests" "$HWORK/hi5622_scan.c" || {
 	echo "stability: scan-tuning split message missing" >&2; exit 1; }
 grep -q "define HI5622_SCAN_DEFAULT_BATCH[[:space:]]*6u" "$HWORK/hi5622_scan_logic.h" || {
 	echo "stability: HI5622_SCAN_DEFAULT_BATCH != 6u" >&2; exit 1; }
-grep -q "define HI5622_SCAN_BATCH_GAP_MS[[:space:]]*300u" "$HWORK/hi5622_scan_logic.h" || {
+grep -q "define HI5622_SCAN_BATCH_GAP_MS[[:space:]]*800u" "$HWORK/hi5622_scan_logic.h" || {
 	echo "stability: HI5622_SCAN_BATCH_GAP_MS != 300u" >&2; exit 1; }
 # hcc_trace gating must be in the SOURCE (the static helper inlines away, so
 # the stripped artifact only carries the param name).
@@ -201,6 +201,7 @@ for s in "stale module reload" "ALREADY BOOTED from a previous module load" \
 	 "start_ap REFUSED" "stale/dead VAP" "host-side stop_ap" "mgmt_diag" \
 	 "hcc_trace" "scan_chan_time_ms" "scan_req_batch" \
 	 "scan_batch_gap_ms" "split into %u g0 id0xC requests" \
+	 "len-prefix" "reposting it once" \
 	 "re-posting the AP config against the live firmware AP" \
 	 "host-side stop_ap (stop_ap_mode=0 default)"; do
 	if ! strings -a "$ARTWORK/hi5622_wifi.hardened.ko" | grep -qF "$s"; then missing="$missing '$s'"; fi
@@ -238,6 +239,6 @@ echo "sha256    : $H_SHA"
 echo "unstripped: $HU_SIZE B sha256 $HU_SHA"
 echo "vermagic  : $VERMAGIC"
 echo "depends   : $DEPENDS"
-echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning R2 ladder 248668/ca81660f -> hardened"
+echo "chain     : $BASE_SIZE/$BASE_SHA -> polished $POLISHED_SIZE/$POLISHED_SHA -> dp-tuning $DPT_SIZE/$DPT_SHA -> scan-tuning R3 ladder 249580/1710bf11 -> hardened"
 echo "host test : ./tools/run-hardening-check.sh"
 echo "note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required"

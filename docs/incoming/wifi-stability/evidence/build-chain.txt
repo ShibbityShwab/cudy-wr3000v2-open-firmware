@@ -9,11 +9,11 @@ ARTIFACT-PUBLISHED /tmp/wifi-stability-artifact
 CFG80211-IMPORTS-OK contract=10 imported=6 (cfg80211_bss_iter present)
 == stability hardened module (final combined)
 artifact  : /tmp/wifi-stability-artifact/hi5622_wifi.hardened.ko (debug-stripped)
-size      : 263740
-sha256    : 79bfad6e5f80c8ef053040c55ccd945fe1824ee380c24e97c3e20a204a40d768
-unstripped: 972208 B sha256 f9f916b1e19ee23abc65b6888bf10e61d0be15c8e659eb38b4716394054e321e
+size      : 264852
+sha256    : 73af893b1513a52060911f9495a0d20fee65129961fe78399f5e10c22049548c
+unstripped: 975320 B sha256 bad13a051ab4249401a254186405213d512a8081f431446167266558a2295d92
 vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
 depends   : depends=cfg80211
-chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> polished 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> dp-tuning 251924/175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425 -> scan-tuning R2 ladder 248668/ca81660f -> hardened
+chain     : 242572/44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b -> polished 242920/d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6 -> dp-tuning 251924/175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425 -> scan-tuning R3 ladder 249580/1710bf11 -> hardened
 host test : ./tools/run-hardening-check.sh
 note: .ko is local evidence only (never committed); the combined artifact is NOT fired - attended final validation required

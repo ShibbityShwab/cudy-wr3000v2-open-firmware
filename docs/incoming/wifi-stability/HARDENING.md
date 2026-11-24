@@ -110,7 +110,7 @@ stack 1  dp-air + ap-start v7                   242,572 B  44c6cc12...  (hardwar
 stack 2  + wifi-image-polish delta              242,920 B  d145a205...  (polished, not fired)
 stack 3  dp-air + ap-start + dp-tuning TXQ       251,924 B  175a4617...  (bench-validated, TX COMPLETED)
 stack 4  stack3 + polish + scan-tuning 0002
-         + this lane's harden.                   263,740 B  79bfad6e...  (FINAL COMBINED, NOT fired)
+         + this lane's harden.                   264,852 B  73af893b...  (FINAL COMBINED, NOT fired)
 ```
 
 `tools/build-hardened-module.sh` asserts stacks 1-3 byte-for-byte (base

@@ -1,23 +1,28 @@
-E2 restart - expected dmesg (final combined module, stop_ap_mode=0 default)
-============================================================================
-First stop (hostapd SIGTERM -> NL80211_CMD_STOP_AP):
+FINAL combined module (R3) - expected first start and E2 restart dmesg
+========================================================================
+FIRST start_ap (fresh boot, no pre-existing base latch):
+  cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 ...)
+  frame post vap_add ... posted 3/N ; frame post vap_start ... posted 4/N
+  frame post ap_ssid ... posted ; frame post ap_cfg ... posted
+  cfg80211: start_ap sequence posted to provider ...
+  cfg80211: start_ap committed; firmware VAP object readback=nonzero after 100 ms
+    wait (E2 restart evidence)
+  wlan0: AP-ENABLED
+  NOTE: the strict stale-VAP guard is NOT applied to this fresh first start
+  (base was posted in the same call; firmware population is asynchronous).
+E2 stop (hostapd SIGTERM -> NL80211_CMD_STOP_AP):
   cfg80211: host-side stop_ap (stop_ap_mode=0 default): cfg80211 state cleared,
     NO firmware write; the restart will re-post the AP config against the live
     firmware AP (bench E2: user_del of an AP-started VAP is NOT safe)
-Second start (hostapd again -> NL80211_CMD_NEW_BEACON):
-  cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 ...)
+E2 restart (hostapd again -> NL80211_CMD_NEW_BEACON):
+  cfg80211: start_ap reached (...)
   cfg80211: start_ap restart after host-side stop: re-posting the AP config
     against the live firmware AP (NO structural firmware write; firmware VAP
-    object readback=nonzero)
-  frame post vap_add is SKIPPED (base latch kept); frame post ap_ssid +
-    ap_cfg follow (consumed 0 polls each)
-  cfg80211: start_ap sequence posted to provider ...
-  cfg80211: start_ap committed; firmware VAP object readback=nonzero (E2 restart evidence)
-  wlan0: AP-ENABLED
+    object readback=nonzero|ZERO after 100 ms wait)
+  (base post skipped - latch kept) -> frame post ap_ssid + frame post ap_cfg
+  cfg80211: start_ap sequence posted ... ; wlan0: AP-ENABLED
+  cfg80211: start_ap committed; firmware VAP object readback=... after 100 ms wait
 Readback: page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0.
-DIAGNOSTIC: fire this with hcc_trace=1 so the full post sequence around the
-restart is captured.  If it fails, the decisive lines are the last
-'frame post ...' line before hostapd gives up (refused / announce NOT consumed /
-wire not ready / lane closed) - capture those verbatim.
-UNSAFE (do not use): stop_ap_mode=1 is disabled; user_del (g0 id9) of an
-AP-started VAP crashed the chip (mask 0x04000010, golden lost).
+If the strict guard still refuses: it prints 'pre-existing base latch but the
+firmware VAP object ... reads zero after 100 ms' - that means a base posted by a
+scan/prior op did not materialize; STOP and report (do not retry in-boot).

@@ -1,18 +1,20 @@
 final combined stability module (host-built, NOT fired as this build)
 chain: base 44c6cc12 (hardware-fired) -> polished d145a205 -> dp-tuning 175a4617
-       (first MAC TX COMPLETED) -> scan-tuning R2 0002 seven-files (batched scan +
-       relaxed BSS alignment sweep + cfg80211_bss_iter; 248668/ca81660f ladder
-       reference) -> stability hardening (E2 plain-restart, hcc_trace, latches)
-size: 263740 B
-sha256: 79bfad6e5f80c8ef053040c55ccd945fe1824ee380c24e97c3e20a204a40d768
-unstripped: 972208 B sha256 f9f916b1e19ee23abc65b6888bf10e61d0be15c8e659eb38b4716394054e321e
+       (first MAC TX COMPLETED) -> scan-tuning R3 0002 seven-files (len-prefix BSS
+       decode, 800 ms batch gap, non-first +2500 ms window, one repost; ladder
+       reference 249580/1710bf11) -> stability hardening
+size: 264852 B
+sha256: 73af893b1513a52060911f9495a0d20fee65129961fe78399f5e10c22049548c
+unstripped: 975320 B sha256 bad13a051ab4249401a254186405213d512a8081f431446167266558a2295d92
 vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
 depends: cfg80211
 warnings: 0
-cfg80211 import contract: 10 lines (cfg80211_bss_iter present)
-params: scan_chan_time_ms, scan_req_batch (default 6), scan_batch_gap_ms
-  (default 300), hcc_trace=0 (1=historic), stop_ap_mode=0 (host-side stop; restart
-  re-posts AP config against the live firmware AP, NO structural write) /
-  1=DISABLED (bench crash), txq_publish=1, mgmt_diag=0
-E2: user_del reset removed (bench mask 0x04000010); restart logs VAP readback and
-  the AP-config re-post sequence (fire with hcc_trace=1 for the full frame trace)
+cfg80211 import contract: 10 (cfg80211_bss_iter present)
+params: scan_chan_time_ms, scan_req_batch (6), scan_batch_gap_ms (800),
+  hcc_trace=0 (1=historic), stop_ap_mode=0 (host-side stop; restart re-posts
+  AP config against the live firmware AP) / 1=DISABLED, txq_publish=1, mgmt_diag=0
+E2/stale-VAP fix: the guard now captures the pre-call base latch and only applies
+  to a latch that PRE-EXISTED the call (scan/prior AP), with a bounded 100 ms
+  readback poll (firmware populates module_ctx+0x190 asynchronously); a base
+  posted in the same call is exempt.  The bench R2 fire's false refusal of the
+  FIRST start_ap is fixed; the restart path logs its readback with the wait.
