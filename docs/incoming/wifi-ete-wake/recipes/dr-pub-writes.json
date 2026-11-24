@@ -1,0 +1,90 @@
+{
+  "lane": "wifi-ete-wake",
+  "task": "task-106",
+  "date": "2026-11-25",
+  "purpose": "E1a/E1b single-write-class rows for the host-owned DR group-B published index (+0x38)",
+  "gating": [
+    "windows_programmed && rings armed (hcc_arm done)",
+    "core boot latch observed (handshake page +8 == 2 / state CA 0x118b60 == 1 / mask CA 0x40008 == 0)",
+    "R0 read-only pack taken and decision D1 (status/ack 0, send words 0, fills 0x10, trig 0)",
+    "one value rule per boot; no retry; power-cycle to end"
+  ],
+  "write_class": {
+    "name": "host-owned DR group-B published index",
+    "field": "+0x38 of each DR0..DR3 channel",
+    "owner": "host",
+    "never_touch": [
+      "0x4003a874 (ETE status word)",
+      "0x4003a870 (ETE ack word)",
+      "0x4003a86c (ETE status/control word)",
+      "0x4003ac00..0x4003ac20 (send words)",
+      "0x4003a540..0x4003a548, 0x4003a720..0x4003a728 (engine blocks)",
+      "0x4003a7c0..0x4003a7cc, 0x4003a7d0..0x4003a7dc (engine doors)",
+      "0x4003a000..0x4003a3ff (engine global)",
+      "0x400392f0 (never write)"
+    ],
+    "channels": [
+      {
+        "ch": 0,
+        "ca_chan": "0x4003a590",
+        "ca_pub": "0x4003a5c8",
+        "ca_fill": "0x4003a5cc",
+        "bar0_pub": "0x3f25c8",
+        "bar0_fill": "0x3f25cc"
+      },
+      {
+        "ch": 1,
+        "ca_chan": "0x4003a5e0",
+        "ca_pub": "0x4003a618",
+        "ca_fill": "0x4003a61c",
+        "bar0_pub": "0x3f2618",
+        "bar0_fill": "0x3f261c"
+      },
+      {
+        "ch": 2,
+        "ca_chan": "0x4003a630",
+        "ca_pub": "0x4003a668",
+        "ca_fill": "0x4003a66c",
+        "bar0_pub": "0x3f2668",
+        "bar0_fill": "0x3f266c"
+      },
+      {
+        "ch": 3,
+        "ca_chan": "0x4003a680",
+        "ca_pub": "0x4003a6b8",
+        "ca_fill": "0x4003a6bc",
+        "bar0_pub": "0x3f26b8",
+        "bar0_fill": "0x3f26bc"
+      }
+    ],
+    "rules": [
+      {
+        "id": "E1a",
+        "attr": "hcc_dr_pub",
+        "value": "fill",
+        "write_value": "read each channel's +0x3c (fill) first, then write that same value to +0x38",
+        "rationale": "restore the vendor working-boot invariant published == fill; the current arm writes 0x400 while the reset-class fill is 0x10"
+      },
+      {
+        "id": "E1b",
+        "attr": "hcc_dr_pub",
+        "value": "zero",
+        "write_value": "0x00000000",
+        "rationale": "vendor dr_reg_init initial value (pcie_ete_dr_init zeroes inst+0x1C; dr_reg_init stores it to +0x38)"
+      }
+    ],
+    "expected_observables": [
+      "status CA 0x4003a874 gains bits 24-28",
+      "DR record trig(+0x344) becomes nonzero",
+      "send words 0x4003ac00..0c become nonzero",
+      "fill(+0x3c) advances past 0x10 and/or host DRAM DR node word1 becomes tagged",
+      "hcc_events / dmesg engine fill advance; runes drain without mailbox word"
+    ],
+    "stop_rules": [
+      "exception mask CA 0x40008 becomes nonzero",
+      "handshake page/state changes from the golden values",
+      "module oops/panic or device hang",
+      "no observable change after the 10 s read window -> stop, power-cycle, do not retry in session"
+    ]
+  }
+}

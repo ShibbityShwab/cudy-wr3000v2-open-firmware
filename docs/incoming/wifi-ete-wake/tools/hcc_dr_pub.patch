@@ -1,0 +1,202 @@
+--- a/src/hcc.c
++++ b/src/hcc.c
+@@ -25,6 +25,7 @@
+ #include <linux/device.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
++#include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/pci.h>
+@@ -386,6 +387,147 @@
+ }
+ 
+ /* =====================================================================
++ * DR published-free-index (+0x38) VALUE experiment (wifi-ete-wake lane)
++ *
++ * The only host-owned ETE state delta found against the vendor stack is the
++ * initial group-B published index: this driver arms +0x38 = 0x400 (prepost 32)
++ * while the vendor driver publishes 0 at init, and a working vendor boot keeps
++ * fill(+0x3c) == published(+0x38) on every DR channel.  This attribute writes
++ * that host-owned field only (never the status word, send words, group A or
++ * engine blocks/doors/global), after the boot latch, one value for all four
++ * channels, with a read-back log:
++ *   fill = current fill(+0x3c) value ; zero = 0x00000000 (vendor dr_reg_init).
++ * ===================================================================*/
++int hi5622_hcc_dr_pub_set(struct hi5622_pci *ctx, bool use_fill)
++{
++	struct hi5622_hcc_service *h = ctx->hcc;
++	struct device *dev = &ctx->pdev->dev;
++	struct hcc_core *core = &h->hcc.core;
++	int ch, ret = 0;
++
++	if (!ctx->windows_programmed || !h->armed)
++		return -EBUSY;
++	if (!core->boot_latched) {
++		dev_warn(dev, "HCC DR pub: refused before the boot latch (no speculative writes during boot)\n");
++		return -EBUSY;
++	}
++	for (ch = 0; ch < HI5622_HCC_DR_CH_COUNT; ch++) {
++		struct hi5622_ete_ring *r = &h->dr[ch].ete;
++		void __iomem *prd = ctx->bar0 + HI5622_ETE_BAR0 + r->chan_off +
++				    HI5622_ETE_CH_B_PRD;
++		void __iomem *cns = ctx->bar0 + HI5622_ETE_BAR0 + r->chan_off +
++				    HI5622_ETE_CH_B_CNS;
++		u32 fill = readl(cns);
++		u32 val = use_fill ? fill : 0;
++		u32 rb;
++
++		writel(val, prd);
++		wmb();
++		rb = readl(prd);
++		dev_info(dev, "HCC DR%d: +0x38 <- 0x%08x (%s; fill(+0x3c)=0x%08x, readback=0x%08x %s)\n",
++			 ch, val, use_fill ? "current fill" : "vendor-init zero",
++			 fill, rb, rb == val ? "OK" : "MISMATCH");
++		if (rb != val)
++			ret = -EIO;
++	}
++	return ret;
++}
++
++/* =====================================================================
++ * Read-only ETE/DR wake snapshot (wifi-ete-wake lane, R0 read pack)
++ *
++ * Prints every address the ETE wake ladder needs, with CA and BAR0 values:
++ * status/ack/ctrl, engine global + blocks + doors, DR0-3 channel A/B groups,
++ * the device send words, the firmware DR record trigger counters/progress and
++ * g in-flight/shadow, plus the first staged D2H node words.  READ-ONLY: only
++ * readl() of endpoint BAR0 windows; no writes, no side effects.
++ * ===================================================================*/
++#define EW_DR_RECORD0_CPU	0x0010f2b8u
++#define EW_DR_RECORD_STRIDE	0x354u
++#define EW_DR_REC_TRIG		0x344u
++#define EW_DR_REC_PROGRESS	0x10u
++#define EW_DR_NODE0_CA		0x01060540u
++
++static ssize_t hcc_ete_wake_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	void __iomem *b;
++	u32 ete;
++	int n = 0, i, ch;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	b = ctx->bar0;
++	ete = HI5622_ETE_BAR0;
++#define EW_ADD(...) do { if (n < (int)PAGE_SIZE) \
++	n += scnprintf(buf + n, PAGE_SIZE - n, __VA_ARGS__); } while (0)
++	EW_ADD("hcc_ete_wake: ETE/DR wake snapshot (READ-ONLY; CA and BAR0)\n");
++	EW_ADD("armed=%d windows=%d\n", ctx->hcc->armed, ctx->windows_programmed);
++	EW_ADD("status CA 0x4003a874 BAR0 0x%06x = 0x%08x\n",
++	       HI5622_BAR0_CA(HI5622_CA_ETE_STATUS),
++	       readl(b + HI5622_BAR0_CA(HI5622_CA_ETE_STATUS)));
++	EW_ADD("ack    CA 0x4003a870 BAR0 0x%06x = 0x%08x\n",
++	       HI5622_BAR0_CA(0x4003a870u), readl(b + HI5622_BAR0_CA(0x4003a870u)));
++	EW_ADD("ctrl   CA 0x4003a86c BAR0 0x%06x = 0x%08x\n",
++	       HI5622_BAR0_CA(0x4003a86cu), readl(b + HI5622_BAR0_CA(0x4003a86cu)));
++	for (i = 0; i < 8; i++)
++		EW_ADD("global[%d] CA 0x%08x = 0x%08x\n", i, 0x4003a000u + 4 * i,
++		       readl(b + ete + 4 * i));
++	EW_ADD("block0 CA 0x4003a540..548 = 0x%08x 0x%08x 0x%08x\n",
++	       readl(b + ete + 0x540), readl(b + ete + 0x544),
++	       readl(b + ete + 0x548));
++	EW_ADD("block1 CA 0x4003a720..728 = 0x%08x 0x%08x 0x%08x\n",
++	       readl(b + ete + 0x720), readl(b + ete + 0x724),
++	       readl(b + ete + 0x728));
++	for (i = 0; i < 4; i++)
++		EW_ADD("door0[%d] CA 0x%08x = 0x%08x\n", i, 0x4003a7c0u + 4 * i,
++		       readl(b + ete + 0x7c0 + 4 * i));
++	for (i = 0; i < 4; i++)
++		EW_ADD("door1[%d] CA 0x%08x = 0x%08x\n", i, 0x4003a7d0u + 4 * i,
++		       readl(b + ete + 0x7d0 + 4 * i));
++	for (ch = 0; ch < HI5622_HCC_DR_CH_COUNT; ch++) {
++		u32 off = HI5622_ETE_DR0_OFF + ch * HI5622_ETE_CH_STRIDE;
++		u32 rec = HI5622_FW_RAM_BAR_BASE + EW_DR_RECORD0_CPU +
++			  ch * EW_DR_RECORD_STRIDE;
++
++		EW_ADD("DR%d ch=0x%03x enable=0x%08x A base=0x%08x depth=0x%02x prd=0x%08x cns=0x%08x\n",
++		       ch, off, readl(b + ete + off + HI5622_ETE_CH_ENABLE),
++		       readl(b + ete + off + HI5622_ETE_CH_A_BASE),
++		       readl(b + ete + off + HI5622_ETE_CH_A_DEPTH) & 0x3ff,
++		       readl(b + ete + off + HI5622_ETE_CH_A_PRD),
++		       readl(b + ete + off + HI5622_ETE_CH_A_CNS));
++		EW_ADD("    B base=0x%08x depth=0x%02x pub=0x%08x fill=0x%08x send=0x%08x\n",
++		       readl(b + ete + off + HI5622_ETE_CH_B_BASE),
++		       readl(b + ete + off + HI5622_ETE_CH_B_DEPTH) & 0x3ff,
++		       readl(b + ete + off + HI5622_ETE_CH_B_PRD),
++		       readl(b + ete + off + HI5622_ETE_CH_B_CNS),
++		       readl(b + ete + HI5622_ETE_SEND_DR0 + 4 * ch));
++		EW_ADD("    record CPU 0x%08x: trig=0x%08x progress=0x%08x\n",
++		       EW_DR_RECORD0_CPU + ch * EW_DR_RECORD_STRIDE,
++		       readl(b + rec + EW_DR_REC_TRIG),
++		       readl(b + rec + EW_DR_REC_PROGRESS));
++	}
++	for (i = 0; i < 3; i++)
++		EW_ADD("send SR%d = 0x%08x\n", i,
++		       readl(b + ete + HI5622_ETE_SEND_SR0 + 4 * i));
++	EW_ADD("g in-flight CA 0x10c1a8 = 0x%08x shadow CA 0x10c1ac = 0x%08x\n",
++	       readl(b + HI5622_FW_RAM_BAR_BASE + 0x0010c1a8u),
++	       readl(b + HI5622_FW_RAM_BAR_BASE + 0x0010c1acu));
++	for (i = 0; i < 2; i++) {
++		u32 node = HI5622_PKTRAM_BAR_BASE +
++			   (EW_DR_NODE0_CA - HI5622_PKTRAM_CA_LO) + 8 * i;
++
++		EW_ADD("DR0 source node%d CA 0x%08x: word0=0x%08x word1=0x%08x\n",
++		       i, EW_DR_NODE0_CA + 8 * i, readl(b + node),
++		       readl(b + node + 4));
++	}
++#undef EW_ADD
++	return n;
++}
++static DEVICE_ATTR_RO(hcc_ete_wake);
++
++/* =====================================================================
+  * sysfs write attributes (protocol layer)
+  * ===================================================================*/
+ static ssize_t hcc_sr_announce_store(struct device *dev,
+@@ -443,10 +585,33 @@
+ }
+ static DEVICE_ATTR_WO(hcc_dr_republish);
+ 
++static ssize_t hcc_dr_pub_store(struct device *dev,
++				struct device_attribute *attr,
++				const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	bool use_fill;
++	int ret;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	if (sysfs_streq(buf, "fill"))
++		use_fill = true;
++	else if (sysfs_streq(buf, "zero"))
++		use_fill = false;
++	else
++		return -EINVAL;
++	ret = hi5622_hcc_dr_pub_set(ctx, use_fill);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(hcc_dr_pub);
++
+ static struct attribute *hi5622_hcc_attrs[] = {
+ 	&dev_attr_hcc_sr_announce.attr,
+ 	&dev_attr_hcc_cece_kick.attr,
+ 	&dev_attr_hcc_dr_republish.attr,
++	&dev_attr_hcc_dr_pub.attr,
++	&dev_attr_hcc_ete_wake.attr,
+ 	NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_hcc);
+--- a/src/hi5622_hcc.h
++++ b/src/hi5622_hcc.h
+@@ -88,6 +88,7 @@
+ int  hi5622_hcc_sr_announce(struct hi5622_pci *ctx, const char *buf);
+ int  hi5622_hcc_cece_kick(struct hi5622_pci *ctx);
+ int  hi5622_hcc_dr_republish(struct hi5622_pci *ctx);
++int  hi5622_hcc_dr_pub_set(struct hi5622_pci *ctx, bool use_fill);
+ int  hi5622_hcc_add_attrs(struct device *dev);
+ void hi5622_hcc_del_attrs(struct device *dev);
+ 
