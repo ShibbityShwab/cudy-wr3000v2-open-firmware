@@ -1,0 +1,45 @@
+hi5622-pciet-hcc OpenWrt package build record
+date:        20261124T105648Z
+openwrt:     /home/shibbityshwab/openwrt-lab-selectorfix-img
+make rc:     0
+full log:    /home/shibbityshwab/wifi-openwrt-pkg-work/build-20261124T105648Z.log (sha256 8030efd57597e9722b9f2ce1896bdfc24becb35ba7e8d47fe6065933e243426a)
+
+== target kernel
+linux:       6.18.60
+profile:     "DEVICE_cudy_wr3000-v2"
+
+== artifacts
+module:      /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/hi5622-pciet-hcc/hi5622_pciet_hcc.ko
+module size: 262920 B
+module sha:  dba4f8c28356b5a65b46da4ed6c9766f627672c286a20e3899f10c27dbf0f75e
+license:        GPL
+alias:          pci:v000059E7d00000005sv*sd*bc*sc*i*
+name:           hi5622_pciet_hcc
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+parm:           rd_ab_write:uint
+parm:           hcc_poll_ms:uint
+parm:           hcc_cece_mode:uint
+parm:           poll_ms:uint
+parm:           twin_enabled:bool
+parm:           use_irq:bool
+parm:           fw_path:charp
+seed tool:   /home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/hi5622-pciet-hcc/hi5622-seed
+seed size:   62536 B
+seed sha:    56df0591e322afd2108a4690925e5515aa589a0c56fb18e69e6f217805488c0f
+/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/hi5622-pciet-hcc/hi5622-seed: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped
+apk:         /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/packages/kmod-hi5622-pciet-hcc-6.18.60-r1.apk
+apk size:    73795 B
+apk sha:     a7e2e58401641045926cf11e7a5101b062746cf505d765e939ddea5e5d4ce2db
+
+== package payload (installed tree)
+-rw------- 999 ./etc/config/hi5622-pciet
+-rw-r--r-- 137 ./lib/apk/packages/kmod-hi5622-pciet-hcc.list
+-rw-r--r-- 25 ./lib/apk/packages/kmod-hi5622-pciet-hcc.conffiles
+-rw-r--r-- 80328 ./lib/modules/6.18.60/hi5622_pciet_hcc.ko
+-rw-r--r-- 90 ./lib/apk/packages/kmod-hi5622-pciet-hcc.conffiles_static
+-rwxr-xr-x 1856 ./etc/init.d/hi5622-pciet
+-rwxr-xr-x 2565 ./usr/sbin/hi5622-status
+-rwxr-xr-x 61751 ./usr/sbin/hi5622-seed
+
+== .config
+restored:    byte-identical to the pre-build .config

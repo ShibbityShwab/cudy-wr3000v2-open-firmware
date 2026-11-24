@@ -1,0 +1,76 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# hi5622-status - READ-ONLY state snapshot for the clean-room Hi5622V100 bench
+# driver.  It performs no writes of any kind: files and MMIO reads only.
+#
+# Usage: hi5622-status [--bdf 0000:00:00.0]
+#
+# Reminder printed at the end: never write CA 0x400392F0 (out[5]); never write
+# 0xCECE before the handshake page +8 reads 2; the release (0x5A5A) and the
+# custom-block pre-seed stay explicit attended steps.
+
+set -u
+
+BDF=0000:00:00.0
+[ "${1:-}" = "--bdf" ] && BDF="${2:-}"
+P=/sys/bus/pci/devices/$BDF
+FW_NAME=hi_wifi/FIRMWARE.bin
+FW_SIZE_EXPECTED=928920
+
+echo "== hi5622-status $(date) =="
+echo "== endpoint $BDF"
+if [ -d "$P" ]; then
+	echo "vendor=$(cat "$P/vendor" 2>/dev/null) device=$(cat "$P/device" 2>/dev/null) driver=$(basename "$(readlink "$P/driver")" 2>/dev/null)"
+	echo "-- BAR resources (start end flags)"
+	cat "$P/resource" 2>/dev/null | head -7
+else
+	echo "MISSING: $P (endpoint not enumerated: check the PCIe host driver / DTB)"
+fi
+
+echo
+echo "== module"
+if lsmod 2>/dev/null | grep -q '^hi5622_pciet_hcc'; then
+	echo "loaded: hi5622_pciet_hcc"
+	grep -H . /sys/module/hi5622_pciet_hcc/parameters/* 2>/dev/null | sed 's|/sys/module/hi5622_pciet_hcc/parameters/||'
+else
+	echo "not loaded (insmod/modprobe hi5622_pciet_hcc)"
+fi
+
+echo
+echo "== firmware (firmware-loader name, local evidence only - never committed)"
+for base in /lib/firmware /lib/firmware/updates; do
+	if [ -f "$base/$FW_NAME" ]; then
+		set -- $(stat -c '%s' "$base/$FW_NAME" 2>/dev/null)
+		echo "$base/$FW_NAME size=${1:-?} expected=$FW_SIZE_EXPECTED"
+		if command -v sha256sum >/dev/null 2>&1; then
+			echo "sha256=$(sha256sum "$base/$FW_NAME" | cut -d' ' -f1)"
+		fi
+	fi
+done
+
+echo
+echo "== policy config (/etc/config/hi5622-pciet)"
+uci show hi5622-pciet 2>/dev/null || echo "(no /etc/config/hi5622-pciet)"
+
+echo
+echo "== read-only driver attributes (device reads only; no writes)"
+for attr in hcc_status hcc_ready hcc_events hcc_rings rd_status rd_catalog hcc_plan; do
+	if [ -f "$P/$attr" ]; then
+		echo "---- $attr"
+		cat "$P/$attr" 2>/dev/null
+	fi
+done
+
+echo
+echo "== local-only custom-block helper"
+if command -v hi5622-seed >/dev/null 2>&1; then
+	echo "hi5622-seed present: dump/write the two local custom blocks (data is LOCAL EVIDENCE ONLY)"
+else
+	echo "hi5622-seed missing"
+fi
+
+echo
+echo "SAFETY: release-only (0x5A5A); never write 0xCECE before handshake page +8 == 2;"
+echo "never write CA 0x400392F0 (out[5]); never read the RC misc window 0x10161000;"
+echo "never rmmod after a CPU release - power-cycle is the reset."

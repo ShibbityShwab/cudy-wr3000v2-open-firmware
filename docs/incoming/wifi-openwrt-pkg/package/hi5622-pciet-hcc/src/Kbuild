@@ -1,0 +1,22 @@
+# Kbuild - wifi-hcc-service lane (task-87), host-side HCC service counterpart
+#
+# Self-contained tree: the wifi-transport-port clean-room transport skeleton
+# (hi5622_pciet.h / pciet_main.c / pciet_ete.c, verbatim copies) plus the
+# new HCC service layer (hi5622_hcc_service.h / pciet_hcc_service.c).
+# Built as its OWN module (hi5622_pciet_hcc.ko) so it can never collide with
+# another lane's hi5622_pciet.ko / hi5622_pciet_b3.ko: only one driver can
+# bind the endpoint, therefore load ONLY this module on the bench.
+#
+# Build line (module only - NEVER an image/world build):
+#   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+#   export STAGING_DIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir
+#   make ARCH=arm CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi- \
+#        -C $KDIR M=$(pwd) modules
+
+obj-m := hi5622_pciet_hcc.o
+hi5622_pciet_hcc-y := pciet_main.o pciet_ete.o pciet_hcc_service.o \
+		     pciet_d2h_direct.o
+
+# -DHI5622_HCC_BUILD selects the HCC driver name, disables the base poll
+# default and gates the incompatible legacy device-write attrs off.
+ccflags-y += -I$(src) -DHI5622_HCC_BUILD

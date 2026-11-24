@@ -1,0 +1,104 @@
+--- a/Kbuild
++++ b/Kbuild
+@@ -14,7 +14,8 @@
+ #        -C $KDIR M=$(pwd) modules
+ 
+ obj-m := hi5622_pciet_hcc.o
+-hi5622_pciet_hcc-y := pciet_main.o pciet_ete.o pciet_hcc_service.o
++hi5622_pciet_hcc-y := pciet_main.o pciet_ete.o pciet_hcc_service.o \
++		     pciet_d2h_direct.o
+ 
+ # -DHI5622_HCC_BUILD selects the HCC driver name, disables the base poll
+ # default and gates the incompatible legacy device-write attrs off.
+--- a/pciet_hcc_service.c
++++ b/pciet_hcc_service.c
+@@ -69,6 +69,7 @@
+ 
+ #include "hi5622_pciet.h"
+ #include "hi5622_hcc_service.h"
++#include "hi5622_d2h_direct.h"
+ 
+ #define HCC_RESULT_LEN		4096
+ #define HCC_MAX_HIST		16
+@@ -132,6 +133,8 @@
+ 	struct hi5622_pci	*ctx;
+ 	struct hcc_ring		sr[HI5622_HCC_SR_CH_COUNT];
+ 	struct hcc_ring		dr[HI5622_HCC_DR_CH_COUNT];
++	/* direct-read device group-A D2H receive (engine-independent) */
++	struct hi5622_d2h_direct	rd;
+ 	struct mutex		lock;
+ 	bool			armed;
+ 	u32			prepost;
+@@ -338,6 +341,14 @@
+ 	return pci_get_drvdata(to_pci_dev(dev));
+ }
+ 
++/* Direct-read D2H accessor for pciet_d2h_direct.c (the hcc service
++ * state is private to this file, so the direct path cannot dereference
++ * ctx->hcc itself). */
++struct hi5622_d2h_direct *pciet_hcc_rd(struct hi5622_pci *ctx)
++{
++	return ctx && ctx->hcc ? &ctx->hcc->rd : NULL;
++}
++
+ /* Firmware-RAM and device-IO read helpers (read-only by construction). */
+ static u32 hcc_ram_read(struct hi5622_pci *ctx, u32 cpu_addr)
+ {
+@@ -992,6 +1003,12 @@
+ 	}
+ 
+ 	hcc_boot_watch(ctx);
++
++	/* Direct-read device group-A DR rings: the firmware stages HCC
++	 * frames in PKTRAM before (and without) the ETE engine copy, so the
++	 * host receive path reads them directly.  Read-only here. */
++	pciet_d2h_poll(ctx, &h->rd, false);
++
+ 	hcc_cece_policy(ctx, bitmap);
+ 
+ 	mutex_unlock(&h->lock);
+@@ -1556,6 +1573,13 @@
+ 			   h->g4_id2_plen <= HI5622_HCC_DR_PAYLOAD_CAP ? "OK" : "VIOLATION",
+ 			   hexbuf);
+ 	}
++	{
++		char direct[256];
++
++		if (pciet_d2h_ready_line(ctx, &h->rd, direct,
++					  sizeof(direct)))
++			hcc_printf(&o, "%s", direct);
++	}
+ 	if (h->state == HCC_RS_READY)
+ 		hcc_printf(&o, "VERDICT: READY - the vendor host would resume multi_chip_loading and open the H2D lane. The vendor's first H2D send is the post-ready group-0 id1 TXQ config sync with a dynamic payload: do NOT synthesize it; this service's H2D path is a bounded liveness probe only.\n");
+ 	else if (h->boot_seen && h->dev_timeout)
+@@ -1911,6 +1935,7 @@
+ 	h->prepost = HI5622_ETE_DEPTH;
+ 	mutex_init(&h->lock);
+ 	ctx->hcc = h;
++	pciet_d2h_init(ctx, &h->rd);
+ 
+ 	/* Host-DRAM ring mirrors only - no device writes in probe. */
+ 	for (i = 0; i < HI5622_HCC_SR_CH_COUNT; i++) {
+@@ -1932,6 +1957,14 @@
+ 		goto err_free;
+ 	}
+ 
++	/* Direct-read D2H attributes (rd_poll/rd_advance/rd_status/
++	 * rd_decode/rd_catalog).  Best-effort: a failure leaves the
++	 * vendor-order service fully usable. */
++	ret = pciet_d2h_add_attrs(dev);
++	if (ret)
++		dev_warn(dev, "D2H DIRECT: rd_* attributes unavailable (%d)\n",
++			 ret);
++
+ 	for (i = 0; i < HI5622_HCC_DR_CH_COUNT; i++)
+ 		if (!hcc_dma_in_window((u32)h->dr[i].ete.node_dma))
+ 			dev_warn(dev, "HCC: DR%u node dma 0x%08x outside the RC inbound window 0x80000000..0x8fffffff; hcc_arm will refuse\n",
+@@ -1960,6 +1993,7 @@
+ 		kthread_stop(h->loop);
+ 		h->loop = NULL;
+ 	}
++	pciet_d2h_del_attrs(&ctx->pdev->dev);
+ 	device_remove_groups(&ctx->pdev->dev, hcc_groups);
+ 	hcc_rings_free(ctx, h);
+ 	ctx->hcc = NULL;

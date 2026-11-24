@@ -1,0 +1,55 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# /etc/init.d/hi5622-pciet - load the clean-room Hi5622V100 bench driver.
+#
+# SAFETY MODEL (project hard rules):
+#   * default disabled (enabled='0' in /etc/config/hi5622-pciet);
+#   * this script only runs "modprobe hi5622_pciet_hcc fw_path=...": probe is
+#     documented write-free (host ring allocation + sysfs attributes only);
+#   * it NEVER writes the release word, NEVER writes the CECE gate, NEVER
+#     uploads firmware and NEVER touches the custom blocks - those stay
+#     attended, explicit bench steps (BENCH-PROCEDURE.md of wifi-d2h-direct);
+#   * stop() refuses to unload: after a CPU release a power-cycle is the only
+#     reset (never rmmod on a released chip).
+
+START=95
+STOP=10
+
+CONFIG_NAME=hi5622-pciet
+MODULE_NAME=hi5622_pciet_hcc
+DEFAULT_FW_PATH='hi_wifi/FIRMWARE.bin'
+
+start() {
+	local enabled fw_path
+
+	config_load "$CONFIG_NAME" || {
+		logger -t hi5622-pciet "no /etc/config/$CONFIG_NAME - module NOT loaded"
+		return 0
+	}
+	config_get_bool enabled main enabled 0
+	if [ "$enabled" != "1" ]; then
+		logger -t hi5622-pciet "disabled in /etc/config/$CONFIG_NAME (enabled=0): load the module explicitly in the attended session"
+		return 0
+	fi
+
+	config_get fw_path main fw_path "$DEFAULT_FW_PATH"
+	case "$fw_path" in
+	/*)
+		logger -t hi5622-pciet "refusing absolute fw_path '$fw_path' (firmware-loader names are relative to /lib/firmware)"
+		return 1
+		;;
+	esac
+
+	modprobe "$MODULE_NAME" fw_path="$fw_path" || {
+		logger -t hi5622-pciet "modprobe $MODULE_NAME failed (fw_path=$fw_path)"
+		return 1
+	}
+	logger -t hi5622-pciet "loaded $MODULE_NAME fw_path=$fw_path (probe only: no device write, no release, no CECE)"
+	return 0
+}
+
+stop() {
+	logger -t hi5622-pciet "stop: refusing to unload $MODULE_NAME - never rmmod after a CPU release; power-cycle instead"
+	return 0
+}
