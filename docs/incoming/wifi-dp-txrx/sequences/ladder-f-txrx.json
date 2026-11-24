@@ -1,0 +1,304 @@
+{
+  "schema": "hi5622-protocol-sequence/1",
+  "name": "ladder-f-txrx",
+  "about": "PD4 golden boot -> ONE ordered context-create (g0 id1 key 0x64 type 1) -> ONE read-only MAC reachability read (dp_probe) -> ONE dp_setup (E1 rings/table/MAC program) -> ONE TXQ-table address sync (g0 id1 key 0x0320) -> FIRST DATA-PLANE TX: post 8-byte MSDU-info ring entries for a probe request / null-data / QoS-null frame and publish the packed producer index into the device-RAM 12-byte table entry dword1 -> read the device-consumed index back (dword2) -> ONE read-only RX capture (bounded cmp-ring poll + host-DRAM 0x28-byte descriptor scan, NO ring pointer moved) -> post packs. Host-only lane ladder F (wifi-dp-txrx, task-122), NOT yet fired at the device.",
+  "profile": "hi5622-wifi-h2d",
+  "module_names": [
+    "hi5622_wifi"
+  ],
+  "require": {
+    "ready_pair": true,
+    "boot_page": true,
+    "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
+    "fw_len": 928920,
+    "budget_min": 2
+  },
+  "load_params": {
+    "h2d_send_budget": 2
+  },
+  "steps": [
+    {
+      "name": "boot-golden",
+      "kind": "read_pack",
+      "about": "LATCHED golden handshake page + state/mask/staging before any H2D message, MAC write or data-plane frame",
+      "reads": [
+        {
+          "label": "page0",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          },
+          "about": "handshake page word 0"
+        },
+        {
+          "label": "page4",
+          "bar0": "0x877004",
+          "expect": {
+            "eq": "0x00000007"
+          }
+        },
+        {
+          "label": "page8",
+          "bar0": "0x877008",
+          "expect": {
+            "eq": "0x00000002"
+          }
+        },
+        {
+          "label": "pagec",
+          "bar0": "0x87700c",
+          "expect": {
+            "eq": "0x0000abcd"
+          }
+        },
+        {
+          "label": "state",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          }
+        },
+        {
+          "label": "mask",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        },
+        {
+          "label": "staging",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        }
+      ]
+    },
+    {
+      "name": "catalog-boot",
+      "kind": "catalog_snapshot",
+      "about": "D2H catalogue baseline before the H2D pair plus the data-plane frames"
+    },
+    {
+      "name": "ctx-create-t1",
+      "kind": "attr_write",
+      "attr": "h2d_ctx_create",
+      "value": "1",
+      "about": "ONE context-create H2D message (g0 id1 key 0x64 type 1) - ordered precondition of dp_setup and of the TXQ-table address sync. No retry."
+    },
+    {
+      "name": "post-create-status",
+      "kind": "attr_expect",
+      "attr": "h2d_status",
+      "patterns": [
+        "ctx_created=1",
+        "frames_sent=1",
+        "phase=ACTIVE"
+      ]
+    },
+    {
+      "name": "dp-probe",
+      "kind": "attr_expect",
+      "attr": "dp_probe",
+      "patterns": [
+        "dp_probe: MAC band0 CA 0x40040000"
+      ],
+      "about": "ONE read-only word read of MAC band-0 +0x00; no write, no retry in this boot"
+    },
+    {
+      "name": "dp-setup",
+      "kind": "attr_write",
+      "attr": "dp_setup",
+      "value": "1",
+      "about": "ONE data-plane setup (E1): BOTH the ping 0x2524 TXQ table and the 8x64x8 TX MSDU rings, tx_ba_info, the RX free/cmp rings and the 0x63c/0xb0 buffer pools are allocated; 8 device-RAM MSDU-info table entries {ring devVA,0,0} written; MAC band0 programmed with read-back. This is the same action E1 PASSes; no retry."
+    },
+    {
+      "name": "dp-setup-status",
+      "kind": "attr_expect",
+      "attr": "dp_status",
+      "patterns": [
+        "setup_done=1",
+        "failed=0",
+        "mac_regs=14",
+        "table_entries=8"
+      ]
+    },
+    {
+      "name": "dp-rings-check",
+      "kind": "attr_expect",
+      "attr": "dp_rings",
+      "patterns": [
+        "+0x38 = 0x00008000",
+        "+0x3c = 0x00008000",
+        "+0x48 = 0xfffffcc1",
+        "tid 7 entry"
+      ]
+    },
+    {
+      "name": "pre-tx-status",
+      "kind": "attr_expect",
+      "attr": "dp_tx_status",
+      "patterns": [
+        "bound=1",
+        "failed=0",
+        "posted=0"
+      ],
+      "about": "txrx bound to this load's E1 objects; no frame posted yet"
+    },
+    {
+      "name": "dp-txq-sync",
+      "kind": "attr_write",
+      "attr": "h2d_txq_addr_sync",
+      "value": "1",
+      "about": "ONE g0 id1 key-0x0320 TXQ-table address sync (the data-plane hand-off the TX path gates on). No retry."
+    },
+    {
+      "name": "post-txq-status",
+      "kind": "attr_expect",
+      "attr": "h2d_status",
+      "patterns": [
+        "txq_addr_sent=1",
+        "ok=2",
+        "timeout=0",
+        "frames_sent=2"
+      ]
+    },
+    {
+      "name": "tx-frame-probe-req",
+      "kind": "attr_write",
+      "attr": "dp_tx_frame",
+      "value": "1",
+      "readback": "dp_tx_status",
+      "patterns": [
+        "posted=1"
+      ],
+      "about": "FIRST DATA-PLANE TX: build a 32-B broadcast probe request (802.11 mgmt, no FCS), place it after the 16-B zero DMA header in the one coherent frame buffer, write the 8-B MSDU-info ring entry {buf_devva, ctl(len,tid=0,vap=1,hdr=1)} for user 0/TID 0 slot 0, dma_wmb, then publish packed wptr 0 -> 1 into the device-RAM 12-B table entry dword1 and read back all three dwords. One frame, no retry."
+    },
+    {
+      "name": "tx-status-1",
+      "kind": "attr_expect",
+      "attr": "dp_tx_status",
+      "patterns": [
+        "posted=1",
+        "ring_index=0",
+        "vap_type=1",
+        "table image"
+      ],
+      "about": "the post landed: MSDU entry written + table wptr read back; completion_pending may be 1 (device not yet consumed) or 0 = MAC consumed the entry and wrote table dword2 (the TX completion observable)"
+    },
+    {
+      "name": "tx-frame-null",
+      "kind": "attr_write",
+      "attr": "dp_tx_frame",
+      "value": "2",
+      "readback": "dp_tx_status",
+      "patterns": [
+        "posted=2"
+      ],
+      "about": "second frame: 24-B broadcast null-data (data path, vap type 2) at ring slot 1"
+    },
+    {
+      "name": "tx-frame-qos-null",
+      "kind": "attr_write",
+      "attr": "dp_tx_frame",
+      "value": "3",
+      "readback": "dp_tx_status",
+      "patterns": [
+        "posted=3"
+      ],
+      "about": "third frame: 26-B broadcast QoS-null (vap type 2, TID 0) at ring slot 2"
+    },
+    {
+      "name": "tx-status-3",
+      "kind": "attr_expect",
+      "attr": "dp_tx_status",
+      "patterns": [
+        "posted=3",
+        "completion_pending="
+      ],
+      "about": "all three entries are posted; completion_pending is captured as evidence (0 = device consumed all, >0 = not yet - the ladder classifies POST-ONLY, not FAIL)"
+    },
+    {
+      "name": "rx-poll",
+      "kind": "attr_write",
+      "attr": "dp_rx_poll",
+      "value": "1",
+      "readback": "dp_rx_capture",
+      "patterns": [
+        "polled=1"
+      ],
+      "about": "ONE read-only RX observation: bounded 2000 ms poll of MAC band0 +0x4c (completion producer) then scan of the host-DRAM RX buffer pools for 0x28-byte device descriptors. Moves NO ring pointer, reposts nothing; a zero-completion window is a recorded NO-RX outcome, not a failure."
+    },
+    {
+      "name": "rx-capture",
+      "kind": "attr_expect",
+      "attr": "dp_rx_capture",
+      "patterns": [
+        "polled=1",
+        "captures=",
+        "note: descriptor field semantics"
+      ],
+      "about": "the captured evidence (MAC cmp/norm/small counters, raw completion word, descriptor + MPDU hex) is read back; 0 captures = no RX frame arrived in the window"
+    },
+    {
+      "name": "post-txrx-pack",
+      "kind": "read_pack",
+      "about": "mask 0 + staging 0 after the first data-plane TX/RX session; page/state golden; mailbox drained",
+      "reads": [
+        {
+          "label": "mask2",
+          "bar0": "0x6f8008",
+          "expect": {
+            "eq": "0x00000000"
+          },
+          "about": "no firmware exception after the TX posts / RX capture"
+        },
+        {
+          "label": "staging2",
+          "bar0": "0x6f800c",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        },
+        {
+          "label": "state2",
+          "bar0": "0x7d0b60",
+          "expect": {
+            "eq": "0x00000001"
+          }
+        },
+        {
+          "label": "page0b",
+          "bar0": "0x877000",
+          "expect": {
+            "eq": "0x86807fef"
+          }
+        },
+        {
+          "label": "out0",
+          "bar0": "0x3f1010",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        },
+        {
+          "label": "out2",
+          "bar0": "0x3f12d4",
+          "expect": {
+            "eq": "0x00000000"
+          }
+        }
+      ]
+    },
+    {
+      "name": "catalog-after",
+      "kind": "catalog_snapshot",
+      "about": "post-run D2H catalogue delta capture (the TX entries have no known D2H answer; evidence only)"
+    },
+    {
+      "name": "done-note",
+      "kind": "note",
+      "about": "STOP after this boot: one setup, one 0x320 frame, up to 3 TX entries and one read-only RX capture per module load. Do not retry a failed step, do not reload in the same attended session (the PD4 cave poll loop is one-shot). Recovery door armed."
+    }
+  ]
+}

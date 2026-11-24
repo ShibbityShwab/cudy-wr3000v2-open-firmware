@@ -1,0 +1,9 @@
+# built kernel artifacts are local evidence only (never committed)
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+*.order
+*.symvers
+__pycache__/

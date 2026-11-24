@@ -1,0 +1,100 @@
+--- a/src/hi5622_dp.c
++++ b/src/hi5622_dp.c
+@@ -59,6 +59,7 @@
+ #include "hi5622_dp.h"
+ #include "h2d_send.h"
+ #include "dp_rings.h"
++#include "hi5622_dp_txrx.h"
+ 
+ /* Host bookkeeping + DMA area size per RX buffer (vendor: 4-byte skb word
+  * followed by the descriptor/MPDU area). */
+@@ -622,6 +623,32 @@
+     if (rc)
+         goto fail;
+     dp_snapshot_mac(ctx);
++    {
++        struct hi5622_dp_txrx_bind b;
++
++        memset(&b, 0, sizeof(b));
++        b.pci = ctx;
++        b.tx_msdu_rings = dp->tx_msdu_rings;
++        b.tx_msdu_rings_dma = (u64)(u32)dp->tx_msdu_rings_dma;
++        b.txq_table = dp->txq_table;
++        b.txq_table_dma = (u64)(u32)dp->txq_table_dma;
++        b.txq_table_devva = dp->txq_table_devva;
++        b.rx_norm_ring = dp->rx_norm_ring;
++        b.rx_small_ring = dp->rx_small_ring;
++        b.rx_cmp_ring = dp->rx_cmp_ring;
++        b.rx_norm_ring_dma = (u64)(u32)dp->rx_norm_ring_dma;
++        b.rx_small_ring_dma = (u64)(u32)dp->rx_small_ring_dma;
++        b.rx_cmp_ring_dma = (u64)(u32)dp->rx_cmp_ring_dma;
++        b.rx_norm_cpu = dp->rx_norm_cpu;
++        b.rx_small_cpu = dp->rx_small_cpu;
++        b.rx_norm_dma = (const u32 *)dp->rx_norm_dma;
++        b.rx_small_dma = (const u32 *)dp->rx_small_dma;
++        b.msdu_table_ca = dp->msdu_table_ca;
++        b.ready_payload = dp->ready_payload;
++        rc = hi5622_dp_txrx_bind(ctx, &b);
++        if (rc)
++            goto fail;
++    }
+     dp->setup_done = true;
+     mutex_unlock(&dp->lock);
+     dev_info(dev,
+@@ -635,6 +662,7 @@
+ fail:
+     dp->failed = true;
+     dp->last_err = (u32)(-rc);
++    hi5622_dp_txrx_release(ctx);
+     dp_free_rings(ctx);
+     dp_snapshot_mac(ctx);
+     mutex_unlock(&dp->lock);
+@@ -813,6 +841,18 @@
+ }
+ static DEVICE_ATTR_WO(h2d_txq_addr_sync);
+ 
++/* wifi-dp-txrx lane (task-122): handler prototypes come from
++ * hi5622_dp_txrx.h; the attribute objects must live in this translation unit
++ * because the 6.18 DEVICE_ATTR_RO/WO macros define them static. */
++static struct device_attribute dev_attr_dp_tx_frame =
++    __ATTR(dp_tx_frame, 0200, NULL, hi5622_dp_tx_frame_store);
++static struct device_attribute dev_attr_dp_tx_status =
++    __ATTR(dp_tx_status, 0444, hi5622_dp_tx_status_show, NULL);
++static struct device_attribute dev_attr_dp_rx_poll =
++    __ATTR(dp_rx_poll, 0200, NULL, hi5622_dp_rx_poll_store);
++static struct device_attribute dev_attr_dp_rx_capture =
++    __ATTR(dp_rx_capture, 0444, hi5622_dp_rx_capture_show, NULL);
++
+ static struct attribute *hi5622_dp_attrs[] = {
+     &dev_attr_dp_probe.attr,
+     &dev_attr_dp_setup.attr,
+@@ -820,6 +860,10 @@
+     &dev_attr_h2d_txq_addr_sync.attr,
+     &dev_attr_dp_status.attr,
+     &dev_attr_dp_rings.attr,
++    &dev_attr_dp_tx_frame.attr,
++    &dev_attr_dp_tx_status.attr,
++    &dev_attr_dp_rx_poll.attr,
++    &dev_attr_dp_rx_capture.attr,
+     NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_dp);
+@@ -854,6 +898,7 @@
+ {
+     if (!ctx || !ctx->dp)
+         return;
++    hi5622_dp_txrx_release(ctx);
+     dp_free_rings(ctx);
+     ctx->dp = NULL;
+ }
+--- a/src/Kbuild
++++ b/src/Kbuild
+@@ -13,6 +13,7 @@
+ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hcc_core.o hcc_core_kernel.o \
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+-		 dp_rings.o hi5622_dp.o
++		 dp_rings.o hi5622_dp.o \
++		 dp_txrx.o hi5622_dp_txrx.o
+ 
+ ccflags-y += -I$(src)
