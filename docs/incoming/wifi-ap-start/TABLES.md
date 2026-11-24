@@ -142,3 +142,4 @@ u16 at hdr+0x14, body = frame+0x18, len byte = frame+0x16, worker from table A.
 * dmesg fault or the H2D lane closing;
 * never re-send in the same boot; power-cycle and analyse offline;
 * never write CA 0x400392F0, never post mailbox id 5, never send group 1/4.
+| combined dp-air + ap-start module (single boot, 6.18.60) | deployable 242,572 B sha256 44c6cc12... (unstripped 925,192 B sha256 21d05161...), debug-stripped, `.text` identical, vermagic 6.18.60, depends=cfg80211, 0 warnings; AP-start feature set (v7: VAP-base-first, carrier-aware labels, REPORTS_OBSS, mgmt_stypes, change_beacon, connect/disconnect) + data plane (dp_probe/dp_setup/dp_txq_sync/h2d_txq_addr_sync/dp_tx_frame/dp_tx_status/dp_rx_poll); built from wifi-dp-air/src + apstart-provider.patch (Kbuild +3 offset only) |

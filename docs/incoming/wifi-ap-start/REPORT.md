@@ -513,3 +513,24 @@ boot must not be reused.
 
 Module v7: 206,708 B sha256
 fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020.
+### 11.6 Combined module: wifi-dp-air data plane + ap-start v7
+
+One module load for the last air-TX milestone: the wifi-dp-air merged tree
+(wifi-scan-complete base + dp-txrx merge rev2, canonical module 886,864 B
+ca32aec4...) with this lane's v7 apstart provider patch applied on top (the
+only shared file is Kbuild; patch applies with a 3-line offset, everything
+else cleanly). Reproducible: tools/build-combined-dp-ap-module.sh.
+
+Module: deployable debug-stripped **242,572 B sha256
+44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b**;
+unstripped 925,192 B sha256
+21d051613b57177557f7ab75b6d3ea1d11ccd104cad1bf5dd05a7963235ae61d;
+vermagic 6.18.60, depends=cfg80211, 0 warnings, .text identical
+stripped/unstripped. Carries both feature sets (AP-start ops + VAP-base
+posting + carrier-aware labels; dp_probe/dp_setup/dp_txq_sync/
+h2d_txq_addr_sync/dp_tx_frame/dp_tx_status/dp_rx_poll).
+
+The single-boot ladder (cold boot -> module -> C2 -> iftype __ap ->
+hostapd -B AP-ENABLED -> dp_probe -> dp_setup -> h2d_txq_addr_sync ->
+dp_tx_frame -> dp_tx_status expecting COMPLETED -> dp_rx_poll) and the
+exact parameters are in combined/README.md.

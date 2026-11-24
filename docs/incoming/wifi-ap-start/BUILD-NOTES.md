@@ -104,3 +104,15 @@ Hostapd flow, expected logs and readback: HOSTAPD-BRINGUP.md.
 Ucode workaround: tools/push-hostapd-ucode.sh (image fix:
 image/wifi-scripts-ucode.md).
 
+## 8. Combined dp-air + ap-start module (air-TX milestone)
+
+Build script: tools/build-combined-dp-ap-module.sh. Staged tree =
+docs/incoming/wifi-dp-air/src + provider/apstart-provider.patch + this lane's
+hi5622_ap_frames.{h,c}; only Kbuild overlaps (3-line offset, applies clean).
+
+Canonical run 2026-11-26: deployable debug-stripped 242,572 B sha256
+44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b;
+unstripped 925,192 B sha256
+21d051613b57177557f7ab75b6d3ea1d11ccd104cad1bf5dd05a7963235ae61d;
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8, depends=cfg80211, 0 warnings,
+.text identical stripped/unstripped. Sequence/params: combined/README.md.
