@@ -613,6 +613,56 @@ def validate_module(path: str,
     return info
 
 
+
+
+# ---------------------------------------------------------------------------
+# Deployed read-only helper (static ARM executable, never a shared object)
+# ---------------------------------------------------------------------------
+@dataclasses.dataclass
+class HelperInfo:
+    path: str
+    size: int
+    sha256: str
+    e_type: int
+    e_machine: int
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+def validate_arm_executable(path: str) -> HelperInfo:
+    """Validate the static ARM read helper (ELF32 LE ET_EXEC, EM_ARM).
+
+    The helper is our own tiny read-only /dev/mem mmap tool (tools/bar0read.c),
+    built on the host and deployed to the box; it is not a kernel module and
+    must never be a shared object (ET_DYN).  Refuse anything else.
+    """
+    if not os.path.isfile(path):
+        raise GuardError("helper-missing", "read helper not found: %s" % path)
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 52 or data[:4] != ELF_MAGIC:
+        raise GuardError("helper-not-elf", "%s is not an ELF file" % path)
+    if data[4] != 1:
+        raise GuardError("helper-not-elf32", "%s is not ELF32" % path)
+    if data[5] != 1:
+        raise GuardError("helper-not-le", "%s is not little-endian" % path)
+    e_type, e_machine = struct.unpack_from("<HH", data, 16)
+    if e_type != 2:
+        raise GuardError("helper-not-exec",
+                         "%s is not a static executable (e_type=%d, want 2)"
+                         % (path, e_type))
+    if e_machine != EM_ARM:
+        raise GuardError("helper-not-arm",
+                         "%s is not an ARM executable (e_machine=%d)"
+                         % (path, e_machine))
+    if len(data) < 4096:
+        raise GuardError("helper-too-small",
+                         "%s is only %d bytes - not a static ARM binary"
+                         % (path, len(data)))
+    return HelperInfo(os.path.abspath(path), len(data), sha256_bytes(data),
+                      e_type, e_machine)
+
 # ---------------------------------------------------------------------------
 # CECE gate latch
 # ---------------------------------------------------------------------------

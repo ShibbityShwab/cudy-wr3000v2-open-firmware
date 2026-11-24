@@ -28,13 +28,14 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | tools/sequences/ladder-c-ordered.json | the bundled hardware-validated ladder: golden boot -> ctx_create t1 -> PACK -> txq_sync72 -> PACK -> D2H delta (11 steps / 62 checks / 2 H2D writes) |
 | tools/fw_patch_builder.py | patched-firmware builder/verifier: pinned-source check, PD/PD2/PD3/PD3B recipe application (all ../wifi-irq-unmask/*.recipe.json auto-discovered), per-window sha16, capstone decode check, image-header protection (entry words + RAZ-only exception-record area), full-image verify of an existing patched copy, manifest |
 | tools/bench_guards.py | the safety policy library shared by both tools (forbidden CA, CECE latch, release magic, devmem census, module/fw validation, static script audit, tamper-evident audit log) |
-| tools/selftest.py | device-free unit/integration selftest, 258 checks |
+| tools/selftest.py | device-free unit/integration selftest, 312 checks |
+| tools/bar0read.c | tiny READ-ONLY static ARM /dev/mem mmap helper (built on the host from this source, deployed as /root/hi5622-bar0read): the image has no busybox devmem applet, cannot read() PCI MMIO through /dev/mem on ARM, and PCI resource0 has no read(), so a PROT_READ mmap helper is the only reliable raw BAR0 read path |
 | tools/run-selftest.sh | wrapper: python3 tools/selftest.py |
 
 ## Quick start (host only, no device)
 
     cd opensource/docs/incoming/wifi-bench-tooling
-    ./tools/run-selftest.sh                      # 258/258 PASS
+    ./tools/run-selftest.sh                      # 312/312 PASS
     python3 tools/bench_session.py --list-sequences   # bundled protocol sequences
 
     # what would an attended session do? (prints every planned write + audit)
@@ -46,7 +47,10 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
         --module /path/hi5622_wifi.ko \
         --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
         --fw-manifest /tmp/hi5622-patched/manifest.json \
-        --wifi-block-bin /path/wifi_block.bin
+        --wifi-block-bin /path/wifi_block.bin \
+        --ssh-host 192.168.1.1     # our image LAN; stock is 192.168.10.1
+    # the static read helper is auto-built from tools/bar0read.c with the lab
+    # cross compiler (pass --bar0read <prebuilt> to use an existing binary)
     python3 tools/bench_session.py --mode our-golden --dry-run \
         --module /path/hi5622_pciet_hcc.ko \
         --plat-block /path/plat_block.txt --wifi-block /path/wifi_block.txt
@@ -91,6 +95,40 @@ read-only UART capture running):
 
 Watch mode = add --print-script / --print-plan to see the exact device-side
 script and plan before running; --json prints the machine-readable summary.
+
+### SSH transport, the raw read path, and the reboot gate (first live fire fixes)
+
+The first live fire of the protocol mode (2026-11-25 06:23 UTC, evidence
+build/evidence-bench-gates/wifi-bench/20261124T062301Z-protocol-6f974fe1)
+exposed three host-side issues, all fixed here and re-verified device-free:
+
+1. **File transfer.** The lab dropbear rejects the legacy scp protocol, so
+   put/get no longer use tools/rscp.sh.  Both go through tools/rsh.sh with the
+   project convention put = cat local | rsh 'cat > remote' (stdin-streamed,
+   binary-safe) and get = rsh 'cat remote' > local.  The SSH transport now
+   pins ROUTER_HOST from --ssh-host (preferred) or the ROUTER_HOST env var and
+   normalises a bare IP to root@IP.  Our image normally answers at
+   root@192.168.1.1; the stock vendor LAN is root@192.168.10.1.  The plan and
+   preflight show the exact target, and warn when neither is supplied.
+2. **Raw BAR0 reads.** The 2026-11-25 fire emitted RD32 lines with EMPTY
+   values: the generated script read dd if=/sys/.../resource0, which this
+   kernel does not support for read().  The protocol mode now deploys the
+   static READ-ONLY helper tools/bar0read.c (ELF32 ARM ET_EXEC, sha-verified,
+   chmod +x, refuses unaligned addresses and the RC misc window) and reads
+   through a PROT_READ /dev/mem mmap at the BAR0 physical base from
+   /sys/.../resource.  A readpath self-check reads BAR0+0 BEFORE the boot
+   ladder and stops the session if the read path is broken; the host-side
+   evidence distinguishes an EMPTY device read (device-read-empty) from a
+   missing label, and a pre-sequence stop marks every sequence step
+   NOT-RUN instead of pretending step 1 failed.
+3. **--reboot before/after.** The old wait accepted the PRE-reboot uptime as
+   "back" and raced the deploy during shutdown.  The hardened wait samples
+   the pre-reboot uptime first, accepts only an observed-down-then-up, an
+   uptime that went backwards, or a very fresh (<=8 s) uptime, requires a
+   second confirming read, waits up to 300 s, and the deploy path retries
+   only IDEMPOTENT host->box operations (mkdir/put/sha256sum) across a
+   transient link drop - the session script itself is still fired exactly
+   once (never retried).
 
 ## What a run produces
 
@@ -161,7 +199,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 258/258 device-free checks
+    ./tools/run-selftest.sh        # 312/312 device-free checks
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -169,12 +207,18 @@ layered recipes, manifests/tamper detection, module ELF validation, the static
 script audit (positive and negative cases), report parsing/classifier fixtures,
 dry-run CLI for all five modes, a fake-transport end-to-end run (golden and
 stop fixtures), host TFTP/UART/evidence checks, and the sha256 audit chain.
-The +81 protocol checks cover: sequence-schema refusals (unknown/duplicate/
+The +135 protocol checks cover: sequence-schema refusals (unknown/duplicate/
 forward/unaligned/out-of-window/RC-misc cases), inbound-region pointer
-resolution, protocol plan/audit/sh -n, the generated gate_num shell function
-executed under /bin/sh (full-mask string compare, byte masks, 16-bit ge), a
-synthetic protocol end-to-end execute() PASS + read-gate FAIL + attr-pattern
-FAIL (NOT-RUN accounting, evidence artifacts, triage rendering), and the
+resolution, protocol plan/audit/sh -n, the generated gate_num and norm_reg
+shell functions executed under /bin/sh (full-mask string compare, byte masks,
+16-bit ge, 8-hex normalisation), a synthetic protocol end-to-end execute()
+PASS + read-gate FAIL + attr-pattern FAIL + pre-sequence readpath FAIL
+(NOT-RUN accounting, device-read-empty, evidence artifacts, triage
+rendering), the SSH transport (ROUTER_HOST pinning, bare-IP normalisation,
+stdin put / byte-exact get / failure handling), the hardened reboot wait
+(down-then-up, fast reboot, backwards uptime, stubborn old uptime, no false
+PASS), the read helper (ELF validation, deployed sha in the script, helper
+miss/build refusals, rd32 primary + /dev/mem fallback under /bin/sh), and the
 protocol CLI (--list-sequences, dry-run, budget/parameter refusals).
 
 ## Not proven here
@@ -182,8 +226,12 @@ protocol CLI (--list-sequences, dry-run, budget/parameter refusals).
 - The device-side shell has never been executed on hardware by this lane; it
   is validated by construction, static audit, sh -n, and a fake transport.
   The protocol-sequence automation mirrors the 2026-11-25 hardware-validated
-  ordered lap, but the automation itself has not been fired on hardware yet -
-  its first attended run is the real validation.
+  ordered lap.  The FIRST live fire (2026-11-25 06:23 UTC) validated the boot
+  ladder end to end (insmod/prepare/upload/verify/seed/arm/loop/release and
+  the strict ready pair all PASSED) but stopped at the first raw read because
+  the resource0 dd path returns nothing on this kernel; the fixes above are
+  host-only verified (no device contact) and the re-fire is the real
+  validation of the sequence steps themselves.
 - The first attended run of each mode is the real validation; start with
   stock-golden (read-only) and our-golden, record the evidence dir, then
   patched/h2d.

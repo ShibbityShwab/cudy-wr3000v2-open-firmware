@@ -353,16 +353,60 @@ What was added:
   rd32 map, hashes, totals), PROTOCOL-SEQUENCE.md with the step table and the
   failure triage block; stop-on-first-failure means one boot yields one
   failing step and everything later is NOT-RUN.
-- **Tests**: selftest 177 -> **258/258** checks (schema/strictness refusals,
-  pointer resolution, plan/audit/sh -n, the generated gate_num function run
-  under /bin/sh, synthetic end-to-end execute() with PASS / read-FAIL /
-  attr-pattern-FAIL fixtures, evidence artifacts and triage, CLI incl.
-  --list-sequences and budget/parameter refusals).  Host-only real-metadata
+- **Tests**: selftest 177 -> **312/312** checks after the first-live-fire
+  follow-up (schema/strictness refusals, pointer resolution, plan/audit/
+  sh -n, the generated gate_num/norm_reg functions run under /bin/sh,
+  synthetic end-to-end execute() with PASS / read-FAIL / attr-pattern-FAIL /
+  pre-sequence readpath-FAIL fixtures, SSH transport, reboot-wait semantics,
+  read-helper validation + miss/build refusals, evidence artifacts/triage,
+  CLI incl. --list-sequences/--bar0read and budget/parameter refusals).
+  Host-only real-metadata
   dry-run: module 400,732 B sha256 774c4f1f..., PD4 image pinned
   cfe24bfb..., 11 steps / 62 checks / 9 planned attribute writes, audit PASS,
   sh -n PASS.
 
-Limits: the automation has not been fired on hardware; the bundled gates
-mirror the 2026-11-25 validated lap.  The first attended run is the real
-validation.  See PROTOCOL-SEQUENCE.md for the schema, exact commands and the
-failure triage table.
+Limits: the automation's first live fire (see 8.1) validated the boot ladder
+but exposed the raw-read/SSH/reboot issues now fixed; the sequence steps
+themselves are still only host-verified.  See PROTOCOL-SEQUENCE.md for the
+schema, exact commands and the failure triage table.
+
+### 8.1 First live fire (2026-11-25 06:23 UTC): three host-side fixes
+
+The Lead fired the new protocol mode on the PD4 image
+(evidence build/evidence-bench-gates/wifi-bench/20261124T062301Z-protocol-6f974fe1).
+The boot ladder and the strict ready pair all PASSED, then the session stopped
+at the first protocol read: every RD32 line had an EMPTY value because the
+generated script read dd if=/sys/.../resource0 and this kernel's PCI resource0
+file does not implement read() for MMIO.  The host evaluator reported
+read-missing for every sequence step - the sequence wiring was fine, the raw
+read transport was not.  Three host-side fixes, device-free re-verified:
+
+1. **Raw read path.** tools/bar0read.c is a tiny static READ-ONLY ARM helper
+   (PROT_READ mmap of /dev/mem at the BAR0 physical base from
+   /sys/.../resource; refuses unaligned addresses and the RC misc window
+   0x10160000..0x1016FFFF).  It is auto-built from source with the lab musl
+   cross compiler, deployed to /root/hi5622-bar0read, sha-verified, chmod +x'd,
+   and probed by a readpath self-check on BAR0+0 BEFORE the boot ladder.  This
+   is needed because the image has CONFIG_DEVMEM=y/STRICT_DEVMEM=n but no
+   busybox devmem applet (and no od), ARM __va() cannot map 0x5xxxxxxxx device
+   addresses for read(), and resource0 is mmap-only.
+2. **SSH transport.** put/get now stream through tools/rsh.sh
+   (cat local | rsh 'cat > remote' / rsh 'cat remote' > local) instead of
+   tools/rscp.sh (the lab dropbear rejects legacy scp).  ROUTER_HOST is pinned
+   from --ssh-host or the env var and a bare IP becomes root@IP; the plan and
+   preflight display the target and warn when neither is set.  Our image is
+   normally root@192.168.1.1; the stock vendor LAN default is
+   root@192.168.10.1.
+3. **Reboot gate.** The --reboot before/after wait now samples the pre-reboot
+   uptime, accepts only an observed down-then-up, a backwards uptime or a very
+   fresh (<=8 s) uptime, requires a second confirming read and waits up to
+   300 s; deploy retries only IDEMPOTENT host->box operations (mkdir/put/
+   sha256sum) across a transient drop - the session script is still fired
+   exactly once, never retried.
+
+Evidence honesty added with the fixes: an empty device read is reported as
+device-read-empty (not "label missing"), capture-only reads that never
+happened are MISSING (not PASS), and a device stop before the first sequence
+step becomes pre_sequence_failure with every step NOT-RUN.  Selftest grew
+258 -> 312 device-free checks (SSH transport, reboot semantics, helper
+validation/handling, empty-read evidence, pre-sequence stop).

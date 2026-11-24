@@ -19,7 +19,7 @@ stop-on-first-failure, and a JSON + markdown evidence record.
 ## 1. Quick start (host only, no device)
 
     cd opensource/docs/incoming/wifi-bench-tooling
-    ./tools/run-selftest.sh                              # 258/258 device-free checks
+    ./tools/run-selftest.sh                              # 312/312 device-free checks
     python3 tools/bench_session.py --list-sequences      # bundled sequences + sha256
 
     # what would the protocol session do? (real module + PD4 image metadata,
@@ -28,7 +28,14 @@ stop-on-first-failure, and a JSON + markdown evidence record.
       --module /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-h2d-send/src/hi5622_wifi.ko \
       --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
       --fw-manifest /tmp/hi5622-patched/manifest.json \
-      --wifi-block-bin /tmp/blocks/wifi_block.bin
+      --wifi-block-bin /tmp/blocks/wifi_block.bin \
+      --ssh-host 192.168.1.1
+
+The static ARM read helper is auto-built on the host from
+`tools/bar0read.c` with the lab cross compiler (cached under
+@@BT@/tmp/hi5622-bench-tools/`; pass `--bar0read <prebuilt>` to use an existing
+binary).  A real run refuses if it cannot be built, and the device script
+sha-verifies, chmods and self-checks it before the boot ladder.
 
 The dry-run prints the sequence table, the exact planned writes, the static
 script audit and writes `protocol-plan.json` into the evidence dir.  The
@@ -37,16 +44,28 @@ current host-only result for the bundled sequence with real metadata:
 - module `hi5622_wifi.ko` 400,732 B sha256 `774c4f1f...`, vermagic 6.18.60 SMP ARMv7;
 - firmware `FIRMWARE.PD4.bin` 928,920 B sha256 `cfe24bfb...` (pinned in the sequence);
 - PHY block 2,472 B (local evidence, never committed);
+- the static read helper (ELF32 ARM ET_EXEC, READ-ONLY /dev/mem mmap,
+  auto-built) is deployed to @@BT@/root/hi5622-bar0read` and sha-pinned;
 - 11 steps / 62 checks / 9 planned attribute writes, script audit PASS,
   `sh -n` PASS, devmem writes 0 (the driver's `seed` attribute owns the block).
 
 ## 2. The attended command (Lead only)
 
     python3 tools/bench_session.py --mode protocol --yes-really --attended \
+      --transport ssh --ssh-host 192.168.1.1 \
       --module /root-on-host/hi5622_wifi.ko \
       --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
       --fw-manifest /tmp/hi5622-patched/manifest.json \
       --wifi-block-bin /tmp/blocks/wifi_block.bin
+
+The SSH transport needs `tools/rsh.sh` and a reachable ROUTER_HOST:
+`--ssh-host 192.168.1.1` (our image) or `ROUTER_HOST=root@192.168.1.1`; the stock
+vendor LAN default is root@192.168.10.1 and a bare IP is normalised to
+`root@IP`.  File transfer is the project convention
+`cat local | rsh 'cat > remote'` / `rsh 'cat remote' > local` (the lab dropbear
+rejects legacy scp).  The optional `--reboot before/after` path is hardened and
+only idempotent deploy operations retry across a link drop - the session
+script itself is fired exactly once.
 
 Preconditions are identical to the other write modes and enforced by the host
 preflight: `tools/bench-link.sh` PASS, `tools/recovery-card.sh` READY, a live
@@ -183,6 +202,7 @@ text is in `PROTOCOL-SEQUENCE.md` under "Failure triage".
 | --- | --- | --- |
 | `read-mismatch` | boot/PACK word differs from the expected PD4 golden state | do not fire another message; re-read boot/hcc_ready/rd_status, capture raw values, treat as a different experiment |
 | `read-missing` | a read label was never emitted | find the first failing step from `stop_rule`; do not rerun blindly |
+| `device-read-empty` | the label WAS emitted but with an empty value: the raw BAR0 read returned nothing (the pre-fix fire read resource0 with dd, which this kernel does not support) | check the READPATH line + the read-helper section; the protocol script now reads via the static /dev/mem mmap helper and gates the path before boot - do not fire the H2D pair |
 | `attr-pattern-missing` | a sysfs gate string did not match | capture h2d_status/h2d_plan/hcc_events/dmesg; compare with the sequence step text; never raise the budget mid-session |
 | `attr-capture-missing` | the post-write capture is absent (store failed) | do not resend; power-cycle for another boot |
 | `write-failed` | the H2D store failed (announce not consumed / gate refused) | capture out[0]/out[2], hcc_rings SR0 producer/consumer, page/mask; no retry in this session |
@@ -191,11 +211,13 @@ text is in `PROTOCOL-SEQUENCE.md` under "Failure triage".
 | `resolved-pointer-outside-window` | a dynamic pointer matched no inbound region (or resolved outside BAR0) | report the raw base value; do not guess the mapping |
 | `device-gate-fail` | the device-side gate failed while the host evidence looked different | capture the evidence dir; follow the check's own triage |
 | `step-not-run` | skipped because an earlier step stopped the session | fix/report the first failing step; do not resume mid-boot |
+| `pre-sequence-stop` | the device stopped BEFORE the first sequence step (boot ladder or readpath/boot gates) - nothing was fired | read `stop_rule` + the section before it, fix that gate, do not resume mid-boot |
 
 Device-side stops that never reach a protocol step keep the existing mode
 stop rules (`attr-write-failed`, `ready-id1-timeout`, `ready-id2-timeout`,
-`module-sha-mismatch`, `firmware-sha-mismatch`, `seed ...`) and are recorded in the
-same evidence record.
+`module-sha-mismatch`, `firmware-sha-mismatch`, `bar0-readpath`, `helper-*`,
+`seed ...`) and are recorded in the same evidence record as
+`pre_sequence_failure`, with every sequence step marked NOT-RUN.
 
 ## 8. Adding future messages without code edits
 
@@ -221,19 +243,64 @@ PD4 image, so a future experiment cannot silently boot a different image.
 
 ## 9. Tests and limits
 
-- `./tools/run-selftest.sh`: **258/258** device-free checks, including +81
-  new protocol checks: schema/strictness refusals, pointer-convention
+- `./tools/run-selftest.sh`: **312/312** device-free checks, including +135
+  protocol checks: schema/strictness refusals, pointer-convention
   resolution, plan/audit/`sh -n` for the protocol mode, the generated `gate_num`
-  shell function executed under `/bin/sh` (full-mask string compare, low/high
-  byte masks, 16-bit ge), synthetic end-to-end `execute()` against a fake
-  transport (PASS + read-gate FAIL + attr-pattern FAIL fixtures, NOT-RUN
-  accounting, evidence artifacts, triage rendering), and the CLI
-  (`--list-sequences`, dry-run, budget/parameter refusals).
+  and `norm_reg` shell functions executed under `/bin/sh` (full-mask string
+  compare, low/high byte masks, 16-bit ge, 8-hex normalisation), synthetic
+  end-to-end `execute()` against a fake transport (PASS + read-gate FAIL +
+  attr-pattern FAIL + pre-sequence readpath FAIL fixtures, NOT-RUN accounting,
+  `device-read-empty`, evidence artifacts, triage rendering), the SSH
+  transport (ROUTER_HOST pinning, bare-IP normalisation, stdin put /
+  byte-exact get / failure handling), the hardened reboot wait (down-then-up,
+  fast reboot, backwards uptime, stubborn old uptime, no false PASS), the
+  static read helper (ELF validation, deployed sha in the script, helper
+  miss/build refusals, rd32 helper read + /dev/mem fallback under `/bin/sh`),
+  and the CLI (`--list-sequences`, `--bar0read`, dry-run,
+  budget/parameter refusals).
 - `tools/fw_patch_builder.py --selftest`: 27/27 (unchanged; PD4 builds to the
   pinned `cfe24bfb...` locally).
 - Limits: the protocol runner executes the device script as one POSIX shell
   script, so it cannot adapt mid-run (by design - stop-on-first-failure);
   a new idea needs a fresh boot.  Dynamic-read buffer expectations are
   captured-only until the PKTRAM buffer contents are measured on hardware.
-  The lane never contacts the device and does not claim the automation has
-  been fired; the bundled gates mirror the 2026-11-25 hardware-validated lap.
+  The bundled gates mirror the 2026-11-25 hardware-validated lap.  The FIRST
+  live fire (2026-11-25 06:23 UTC) validated the boot ladder (insmod through
+  the ready pair: all PASS) but stopped at the first raw read because the
+  resource0 dd path returns nothing on this kernel; the transport/read-path/
+  reboot fixes are host-only verified (no device contact in this lane) and
+  the re-fire is the real validation of the sequence steps.
+
+## 10. First live fire findings and fixes (2026-11-25 06:23 UTC)
+
+Evidence: `build/evidence-bench-gates/wifi-bench/20261124T062301Z-protocol-6f974fe1`.
+The session reached `seq-ready-rd_status` with the boot ladder all PASS, then
+every `RD32` line was emitted with an EMPTY value (`v=0x`): the generated
+script read `dd if=/sys/bus/pci/devices/.../resource0`, and PCI sysfs resource
+files do not implement read() for MMIO on this kernel.  The script's first
+gate therefore stopped with "empty register read", and the host evaluator
+correctly flagged `read-missing` for every sequence step - the sequence wiring
+was not the bug; the raw read transport was.
+
+Fixes, all host-side re-verified:
+
+1. **Read path**: a static READ-ONLY ARM helper (`tools/bar0read.c`) does a
+   `PROT_READ` mmap of `/dev/mem` at the BAR0 physical base parsed from
+   `/sys/.../resource` (the image has `CONFIG_DEVMEM=y` /
+   `CONFIG_STRICT_DEVMEM=n` but no busybox devmem applet and no od).  It is
+   auto-built with the lab musl cross compiler, deployed to
+   `/root/hi5622-bar0read`, sha-verified, chmod +x'd, and exercised by a
+   readpath self-check on BAR0+0 BEFORE the boot ladder.  The helper refuses
+   unaligned addresses and the RC misc window 0x10160000..0x1016FFFF.
+2. **Evidence honesty**: an empty device read is now `device-read-empty` (not
+   "label missing"), capture-only reads that never happened are MISSING (not
+   PASS), and a stop before the first sequence step is recorded as
+   `pre_sequence_failure` with every step NOT-RUN.
+3. **SSH transport**: put/get use `cat | rsh` through `tools/rsh.sh` with
+   ROUTER_HOST pinned from `--ssh-host`/env (bare IP -> root@IP); the plan and
+   preflight show the target and warn when neither is supplied.
+4. **Reboot gate**: the wait samples the pre-reboot uptime, accepts only
+   observed-down-then-up / backwards uptime / <=8 s fresh uptime, requires a
+   second confirming read and waits up to 300 s; only idempotent deploy
+   operations retry across a link drop, never the session script.
+

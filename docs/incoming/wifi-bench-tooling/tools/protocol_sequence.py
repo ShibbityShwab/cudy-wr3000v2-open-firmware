@@ -117,6 +117,13 @@ TRIAGE = {
         "The read label was never emitted: the session stopped before this step "
         "or the attribute/deploy failed. Use stop_rule + the previous step's "
         "evidence to find the first failure; do not rerun blindly."),
+    "device-read-empty": (
+        "The device script emitted the read label but with an EMPTY value: the "
+        "raw BAR0 read path failed (the pre-2026-11-25 tooling read resource0 "
+        "with dd, which this kernel does not support for read()). The protocol "
+        "script now reads /dev/mem at the BAR0 physical base and gates a "
+        "readpath self-check before boot; if this still fails, capture the "
+        "READPATH line and /dev/mem availability - do not fire the H2D pair."),
     "attr-pattern-missing": (
         "A sysfs gate did not match. Capture h2d_status/h2d_plan/hcc_events and "
         "dmesg; compare with the expected string in the sequence step. A gate "
@@ -143,6 +150,10 @@ TRIAGE = {
     "device-gate-fail": (
         "The device-side gate failed; the host report should carry the same "
         "check. Capture the evidence dir and follow the check's own triage."),
+    "pre-sequence-stop": (
+        "The device script stopped BEFORE the first sequence step (boot ladder "
+        "or the readpath/boot gates). Nothing was fired; read stop_rule and the "
+        "preceding section, fix that gate, and do not resume mid-boot."),
     "step-not-run": (
         "Not executed because an earlier step stopped the session "
         "(stop-on-first-failure). Fix/report the first failing step; do not "
@@ -737,11 +748,26 @@ def _check_read(read: dict, label_map: dict, rd32: dict, step: str) -> dict:
                        detail=e.message)
             return rec
     if not read["expect"]:
-        rec["status"] = "CAPTURED"
+        if actual is None and name in rd32:
+            rec.update(status="MISSING", code="device-read-empty",
+                       detail="capture label present but the device read was "
+                              "EMPTY (raw read path failed)")
+        elif actual is None:
+            rec.update(status="MISSING", code="read-missing",
+                       detail="capture label not present in the report")
+        else:
+            rec["status"] = "CAPTURED"
         return rec
     if actual is None:
-        rec.update(status="FAIL", code="read-missing",
-                   detail="label %s not present in the report (step not run?)" % name)
+        if name in rd32:
+            rec.update(status="FAIL", code="device-read-empty",
+                       detail="the device read for %s returned an EMPTY value "
+                              "(raw BAR0 read path failed; the session stopped "
+                              "at this gate)" % name)
+        else:
+            rec.update(status="FAIL", code="read-missing",
+                       detail="label %s not present in the report (step not "
+                              "run?)" % name)
         return rec
     exp = read["expect"]
     mask = exp.get("mask", 0xFFFFFFFF)
@@ -882,6 +908,12 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
     device_gates = {}
     for g in summary.get("gates") or []:
         device_gates[g["name"]] = "PASS" if g.get("ok") else "FAIL"
+    step_names = {st["name"] for st in seq["steps"]}
+    pre_stop = None
+    if result == "STOP" and stop_rule:
+        rule_step = stop_rule.split(".")[0]
+        if rule_step not in step_names:
+            pre_stop = stop_rule
     label_map = {}
     steps_out = []
     failed_at = None
@@ -946,7 +978,20 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
             if c["status"] == "PASS":
                 passed += 1
         n_fail = sum(1 for c in checks if c["status"] == "FAIL")
+        if pre_stop is not None and all(
+                c["status"] in ("FAIL", "MISSING")
+                and c.get("code") in ("read-missing", "attr-capture-missing",
+                                        "attr-pattern-missing",
+                                        "device-read-empty")
+                for c in checks):
+            # nothing of the sequence ran: the boot ladder/readpath stopped it
+            n_fail = 0
+            for c in checks:
+                c["status"] = "NOT-RUN"
+                c["code"] = "step-not-run"
         status = "FAIL" if n_fail else "PASS"
+        if pre_stop is not None and n_fail == 0 and failed_at is None:
+            status = "NOT-RUN"
         if status == "FAIL" and failed_at is None:
             failed_at = n
         if failed_at is not None and n != failed_at:
@@ -984,20 +1029,30 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
         "h2d": summary.get("h2d"),
         "rd_catalog": summary.get("rd_catalog"),
     }
+    if pre_stop is not None:
+        evidence_pre = {"pre_sequence_failure": pre_stop}
+    else:
+        evidence_pre = {}
     evidence = {
         "schema": SCHEMA_EVIDENCE, "sequence": seq["name"],
         "sequence_sha256": seq["sha256"], "session_result": result,
         "stop_rule": stop_rule, "failed_step": failed_at, "verdict": verdict,
+        **evidence_pre,
         "steps": steps_out,
         "totals": {"steps": len(steps_out), "checks": checked,
                    "passed": passed,
                    "failed": sum(1 for s in steps_out
                                  for c in s["checks"]
                                  if c["status"] == "FAIL"),
+                   "missing": sum(1 for s in steps_out
+                                  for c in s["checks"]
+                                  if c["status"] == "MISSING"),
                    "not_run": sum(1 for s in steps_out
                                   if s["status"] == "NOT-RUN")},
         "boot": boot, "device_gates": device_gates,
-        "rd32": {k: _as_hex(v) for k, v in sorted(rd32.items())},
+        "empty_reads": sorted(k for k, v in rd32.items() if v is None),
+        "rd32": {k: (_as_hex(v) if v is not None else None)
+                 for k, v in sorted(rd32.items())},
         "captures": sorted(k for k in reads if k.startswith("seq-")),
     }
     if plan is not None:
@@ -1014,6 +1069,10 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
 # ---------------------------------------------------------------------------
 def _triage_for(evidence: dict) -> list:
     seen = []
+    if evidence.get("empty_reads"):
+        seen.append("device-read-empty")
+    if evidence.get("pre_sequence_failure"):
+        seen.append("pre-sequence-stop")
     for s in evidence.get("steps") or []:
         for c in s["checks"]:
             code = c.get("code")

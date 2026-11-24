@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import glob
 import json
 import os
 import re
@@ -57,6 +58,14 @@ TOOL_VERSION = "wifi-bench-tooling/2"
 # Bundled data-driven protocol sequence (the current hardware-validated lap:
 # PD4 golden boot -> ctx_create type 1 -> TXQ config sync 72 -> D2H delta).
 PROTOCOL_SEQUENCE_DIR = os.path.join(TOOLDIR, "sequences")
+
+# Read-only BAR0 helper (task-108 follow-up).  The image's busybox has no
+# devmem applet and cannot read() PCI MMIO through /dev/mem on ARM (__va() of a
+# device address is unmapped), and the PCI sysfs resource0 file has no read():
+# a static PROT_READ mmap helper is the reliable userspace read path.
+HELPER_SRC = os.path.join(TOOLDIR, "bar0read.c")
+HELPER_REMOTE = "/root/hi5622-bar0read"
+HELPER_CACHE = os.path.join(tempfile.gettempdir(), "hi5622-bench-tools")
 
 DEFAULT_ENDPOINT = "0000:00:00.0"
 REMOTE_BASE = "/tmp/hi5622-bench"
@@ -120,14 +129,37 @@ def evidence_base() -> tuple:
     return fallback, False
 
 
-def run_local(cmd, timeout: float = 120):
+def _merged_env(env=None):
+    if not env:
+        return None
+    base = os.environ.copy()
+    base.update({k: str(v) for k, v in env.items()})
+    return base
+
+
+def run_local_capture(cmd, timeout: float = 120, env=None, input_bytes=None):
+    """Run a local command; return (rc, stdout_bytes, stderr_bytes).
+
+    env entries are layered over os.environ (used to pin ROUTER_HOST for
+    tools/rsh.sh).  input_bytes feeds stdin (binary-safe file uploads).
+    """
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, input=input_bytes,
+                           timeout=timeout, env=_merged_env(env))
         return p.returncode, p.stdout, p.stderr
     except FileNotFoundError:
-        return 127, "", "not found: %s" % cmd[0]
+        return 127, b"", ("not found: %s" % cmd[0]).encode()
     except subprocess.TimeoutExpired:
-        return 124, "", "timeout after %ss: %s" % (timeout, " ".join(cmd))
+        return 124, b"", ("timeout after %ss: %s" % (timeout, " ".join(cmd))).encode()
+    except OSError as e:
+        return 126, b"", ("exec failed: %s" % e).encode()
+
+
+def run_local(cmd, timeout: float = 120, env=None, input_bytes=None):
+    rc, out, err = run_local_capture(cmd, timeout=timeout, env=env,
+                                     input_bytes=input_bytes)
+    return (rc, out.decode("utf-8", "replace"),
+            err.decode("utf-8", "replace"))
 
 
 def sha256_text(s: str) -> str:
@@ -692,6 +724,9 @@ def generate_protocol_script(cfg: dict) -> str:
     ready_strict = bool(cfg.get("ready_strict", True))
     require_phase = cfg.get("require_phase", "READY_TXQ_SYNC")
     expected_budget = cfg.get("expected_budget")
+    helper = cfg.get("helper") or {}
+    helper_remote = helper.get("remote") or HELPER_REMOTE
+    helper_sha = helper.get("sha256") or "dry-run-unverified"
 
     insmod_line = "insmod %s" % _q(module["remote"])
     for p in params:
@@ -710,13 +745,15 @@ def generate_protocol_script(cfg: dict) -> str:
     a("MODE='protocol'")
     a("P=/sys/bus/pci/devices/%s" % cfg["endpoint"])
     a("R0=$P/resource0")
+    a("HELPER=" + _q(helper_remote))
+    a("BAR0_PHYS=0")
     a("RDIR=/tmp/hi5622-bench/$SID")
     a("R=$RDIR/report.txt")
     a("W=$RDIR/writes.log")
     a("EXPECTED_KERNEL=%s" % _q(expected_kernel))
     a("PAGE_LATCHED=0")
     a("DMESG_MARK=0")
-    a("RDVAL=00000000")
+    a("RDVAL=")
     a("mkdir -p \"$RDIR\" || exit 11")
     a(": > \"$R\"")
     a(": > \"$W\"")
@@ -731,14 +768,34 @@ def generate_protocol_script(cfg: dict) -> str:
     a('  if ! printf \'%s\' "$v" > "$P/$at" 2>>"$R"; then stop attr-write-failed "$at($s)"; fi; }')
     a('r_attr() { at=$1; section "$at"; cat "$P/$at" >> "$R" 2>&1 || say "READ-FAIL attr=$at"; }')
     a('r_attr_as() { n=$1; at=$2; section "$n"; cat "$P/$at" >> "$R" 2>&1 || say "READ-FAIL attr=$at"; }')
+    a('norm_reg() { v=$(printf \'%s\' "$1" | tr -d \' \\t\\r\\n\' | tr \'A-F\' \'a-f\');')
+    a('  case "$v" in 0x*) v=${v#0x};; esac;')
+    a('  [ -n "$v" ] || { printf \'\'; return 0; };')
+    a('  while [ "${#v}" -gt 8 ]; do v=${v#?}; done;')
+    a('  while [ "${#v}" -lt 8 ]; do v=0$v; done;')
+    a('  printf \'%s\' "$v"; }')
+    a('# raw BAR0 reads go through /dev/mem at the BAR0 physical base: the PCI')
+    a('# sysfs resource0 file does not support read() on this kernel (the first')
+    a('# live fire of 2026-11-25 got empty values from dd if=resource0).  The')
+    a('# image has CONFIG_DEVMEM=y and CONFIG_STRICT_DEVMEM=n.')
     a('rd32() { lbl=$1; off=$2;')
-    a('  if command -v hexdump >/dev/null 2>&1; then')
-    a('    val=$(dd if="$R0" bs=4 skip=$((off / 4)) count=1 2>/dev/null | hexdump -v -e \'1/4 "%08x"\')')
-    a('  else')
-    a('    val=$(dd if="$R0" bs=4 skip=$((off / 4)) count=1 2>/dev/null | od -An -tx4 | tr -d \' \\n\')')
+    a('  case "$off" in')
+    a('    0x*|0X*) oh=${off#0x}; oh=${oh#0X}; offd=$((0x$oh));;')
+    a('    *) offd=$((off));;')
+    a('  esac')
+    a('  pa=$((BAR0_PHYS + offd))')
+    a('  raw=$("$HELPER" "$pa" 2>>"$R")')
+    a('  val=$(norm_reg "$raw")')
+    a('  if [ -z "$val" ]; then')
+    a('    if command -v hexdump >/dev/null 2>&1; then')
+    a('      raw=$(dd if=/dev/mem bs=1 skip=$pa count=4 2>/dev/null | hexdump -v -e \'1/4 "%08x"\')')
+    a('    else')
+    a('      raw=$(dd if=/dev/mem bs=1 skip=$pa count=4 2>/dev/null | od -An -tx4 2>/dev/null)')
+    a('    fi')
+    a('    val=$(norm_reg "$raw")')
     a('  fi')
     a('  RDVAL=$val')
-    a('  say "RD32 label=$lbl bar0=0x$(printf %x "$off") v=0x$val"; }')
+    a('  say "RD32 label=$lbl bar0=0x$(printf %x "$offd") v=0x$val"; }')
     a('norm_hex() { v=$(printf \'%s\' "$1" | tr -d \' \\t\\n\' | tr \'A-F\' \'a-f\');')
     a('  case "$v" in 0x*) v=${v#0x};; esac; [ -n "$v" ] || { printf 0x0; return; };')
     a('  while [ "${v#0}" != "$v" ]; do v=${v#0}; done; printf \'0x%s\' "${v:-0}"; }')
@@ -783,6 +840,25 @@ def generate_protocol_script(cfg: dict) -> str:
     a('say "CMDLINE $(cat /proc/cmdline 2>/dev/null)"')
     a('[ -d "$P" ] || stop endpoint-missing "no PCI endpoint %s"' % cfg["endpoint"])
     a('[ -r "$R0" ] || stop resource-missing "resource0 not readable"')
+    a("section helper-file")
+    a('H=' + _q(helper_remote))
+    a('[ -f "$H" ] || stop helper-missing "read helper not deployed: $H"')
+    a('HSHA=$(sha256sum "$H" | awk \'{print $1}\')')
+    a('say "HELPER path=$H sha256=$HSHA size=$(wc -c < "$H" | tr -d " ")"')
+    a('if [ "$HSHA" != ' + _q(helper_sha) + ' ]; then stop helper-sha-mismatch "expected ' + helper_sha[:16] + '..."; fi')
+    a('chmod +x "$H" 2>/dev/null || :')
+    a('[ -x "$H" ] || stop helper-not-executable "$H is not executable (noexec mount?)"')
+    a('say "GATE helper PASS"')
+    a("")
+    a("section readpath")
+    a('RPHYS=$(awk \'NR==1{print $1}\' "$P/resource" 2>/dev/null)')
+    a('case "$RPHYS" in 0x*|0X*) RH=${RPHYS#0x}; RH=${RH#0X}; BAR0_PHYS=$((0x$RH));; *) BAR0_PHYS=0;; esac')
+    a('if [ "$BAR0_PHYS" -le 0 ]; then stop bar0-phys "cannot parse the BAR0 physical base from $P/resource (RPHYS=$RPHYS)"; fi')
+    a('say "READPATH /dev/mem BAR0_PHYS=0x$(printf %x "$BAR0_PHYS") helper=$HELPER (resource0 read() is unsupported)"')
+    a('RPV=$("$HELPER" "$BAR0_PHYS" 2>>"$R")')
+    a('RDVAL=$(norm_reg "$RPV")')
+    a('if [ -z "$RDVAL" ]; then stop bar0-readpath "read helper returned nothing for BAR0+0 (out=$RPV); check /dev/mem, exec permission and the helper sha"; fi')
+    a('say "GATE readpath PASS v=0x$RDVAL"')
     a('say "GATE image PASS kernel=$(uname -r)"')
     a('MODS=$(cat /proc/modules 2>/dev/null | awk \'{print $1}\')')
     a('if printf "%s\\n" "$MODS" | grep -q "^%s "; then stop module-already-loaded "%s already loaded - reboot first"; fi'
@@ -967,6 +1043,8 @@ class SessionOptions:
     allow_other_source: bool = False
     transport: str | None = None
     reboot: str = "none"
+    reboot_poll_s: float = 4.0
+    reboot_deadline_s: float = 300.0
     skip_preflight: bool = False
     skip_blocks: bool = False
     telnet_host: str = "192.168.10.1"
@@ -975,6 +1053,7 @@ class SessionOptions:
     sequence: str | None = None
     wifi_block_bin: str | None = None
     module_params: list | None = None
+    bar0read: str | None = None
 
 
 def stage_wifi_block(opts, sid: str, guard) -> dict:
@@ -1019,6 +1098,89 @@ def stage_wifi_block(opts, sid: str, guard) -> dict:
             "source": os.path.abspath(opts.wifi_block), "words": len(words)}
 
 
+def find_bar0read_cc():
+    """Find a cross compiler able to build the static ARM read helper.
+
+    Order: $BAR0READ_CC (env), any OpenWrt musl toolchain in the local lab
+    trees, then the kernel toolchain.  Returns (cc, staging_dir_or_None).
+    """
+    env_cc = os.environ.get("BAR0READ_CC")
+    if env_cc:
+        return env_cc, os.environ.get("STAGING_DIR")
+    patterns = [
+        "/home/shibbityshwab/openwrt-lab*/staging_dir/toolchain-*/bin/"
+        "arm-*-linux-muslgnueabi-gcc",
+        os.path.join(ROOT, "build", "linux-kbuild", "toolchain", "bin",
+                     "arm-none-linux-gnueabihf-gcc"),
+    ]
+    for pat in patterns:
+        for cc in sorted(glob.glob(pat), reverse=True):
+            if not os.access(cc, os.X_OK):
+                continue
+            # <staging_dir>/toolchain-*/bin/<cc>  (or just a flat path)
+            staging = os.path.dirname(os.path.dirname(os.path.dirname(cc)))
+            if not staging.endswith("staging_dir"):
+                staging = None
+            return cc, staging
+    return None, None
+
+
+def build_bar0read(opts: "SessionOptions", warnings: list) -> dict:
+    """Build/locate the static read-only BAR0 helper for the protocol mode.
+
+    The host-side build is pure-local (cross gcc -static); the binary is a
+    local evidence artifact, deployed to the box by the session and never
+    committed.  --bar0read may name a prebuilt helper.
+    """
+    if opts.bar0read:
+        info = G.validate_arm_executable(opts.bar0read)
+        return {"path": info.path, "sha256": info.sha256, "size": info.size,
+                "remote": HELPER_REMOTE, "source": "explicit"}
+    if not os.path.isfile(HELPER_SRC):
+        raise G.GuardError("bar0read-src-missing",
+                           "read helper source not found: %s" % HELPER_SRC)
+    src_sha = G.sha256_file(HELPER_SRC)
+    cache_dir = os.path.join(HELPER_CACHE, src_sha[:16])
+    cached = os.path.join(cache_dir, "hi5622-bar0read")
+    if os.path.isfile(cached):
+        try:
+            info = G.validate_arm_executable(cached)
+            return {"path": info.path, "sha256": info.sha256,
+                    "size": info.size, "remote": HELPER_REMOTE,
+                    "source": "cache"}
+        except G.GuardError:
+            pass
+    cc, staging = find_bar0read_cc()
+    if not cc:
+        msg = ("no ARM cross compiler found (set BAR0READ_CC, or pass "
+               "--bar0read <prebuilt static ARM helper>)")
+        if opts.dry_run:
+            warnings.append("read helper NOT built: %s; the dry-run plan is "
+                            "incomplete and the real session would refuse" % msg)
+            return {"path": None, "sha256": "dry-run-unverified", "size": 0,
+                    "remote": HELPER_REMOTE, "source": "unbuilt",
+                    "warning": msg}
+        raise G.GuardError("bar0read-toolchain", msg)
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp = cached + ".tmp"
+    env = {"STAGING_DIR": staging} if staging else None
+    rc, out, err = run_local(
+        [cc, "-static", "-O2", "-Wall", "-Wextra", "-o", tmp, HELPER_SRC],
+        timeout=180, env=env)
+    if rc != 0 or not os.path.isfile(tmp):
+        raise G.GuardError(
+            "bar0read-build",
+            "static ARM helper build failed with %s (rc=%s): %s"
+            % (cc, rc, (err or out).strip()[-400:]))
+    os.chmod(tmp, 0o755)
+    info = G.validate_arm_executable(tmp)
+    os.replace(tmp, cached)
+    warnings.append("read helper built with %s (%d B sha256 %s)"
+                    % (cc, info.size, info.sha256[:16]))
+    return {"path": cached, "sha256": info.sha256, "size": info.size,
+            "remote": HELPER_REMOTE, "source": "built", "cc": cc}
+
+
 def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
     """Plan the data-driven protocol-sequence session (PD4 golden boot + H2D)."""
     spec = MODES["protocol"]
@@ -1027,6 +1189,7 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
     steps = []
     deploy = []
 
+    warnings.append(ssh_host_note(opts))
     seq_path = os.path.abspath(opts.sequence or PS.default_sequence_path())
     seq = PS.load(seq_path)
     if not seq.get("sha256"):
@@ -1109,6 +1272,7 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
     wblock.setdefault("label", "wifi")
     wblock["words"] = G.WIFI_BLOCK_WORDS
     wblock["base"] = "0x%08X" % G.PHYS_WIFI_BLOCK
+    helper = build_bar0read(opts, warnings)
     params = {}
     module_params = module["params"] or {}
     if "fw_path" in module_params:
@@ -1171,7 +1335,7 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
     cfg = {
         "mode": "protocol", "sid": sid, "endpoint": opts.endpoint,
         "sequence": seq, "module": module, "fw": fw, "wifi_block": wblock,
-        "insmod_params": insmod_params,
+        "helper": helper, "insmod_params": insmod_params,
         "attr_checks": attr_checks,
         "expected_kernel": "6.18.60",
         "boot_wait_s": 0.4,
@@ -1191,6 +1355,9 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
     add("host-preflight", "preflight",
         "bench-link PASS, recovery READY, UART capture, TFTP safe, single-session "
         "lock, local module/fw/PHY-block validation, sequence validation, script audit")
+    add("readpath", "preflight",
+        "static ARM read helper deployed+sha-verified+executable; /dev/mem "
+        "BAR0+0 read non-empty (raw register reads work)")
     if opts.reboot == "before":
         add("reboot-before", "preflight", "box rebooted and back (ssh, uptime fresh)")
     add("load", "boot", "insmod with %s; probe dmesg + h2d attributes present"
@@ -1222,6 +1389,10 @@ def make_protocol_plan(opts: SessionOptions, guard) -> SessionPlan:
         "final h2d_status/h2d_plan/hcc_events/hcc_ready/hcc_status/boot/"
         "rd_status/rd_catalog/rd_decode + dmesg + writes log")
 
+    if helper.get("path"):
+        deploy.append({"kind": "tool", "local": helper["path"],
+                       "remote": helper["remote"], "sha256": helper["sha256"],
+                       "size": helper["size"]})
     deploy.append({"kind": "module", "local": module["path"],
                    "remote": module["remote"], "sha256": module["sha256"],
                    "size": module["size"]})
@@ -1270,6 +1441,8 @@ def make_plan(opts: SessionOptions, guard) -> SessionPlan:
     warnings = []
     steps = []
     deploy = []
+    if spec.transport == "ssh":
+        warnings.append(ssh_host_note(opts))
     cfg = {
         "mode": opts.mode, "sid": sid, "endpoint": opts.endpoint,
         "strict_boot_gate": spec.strict_boot_gate,
@@ -1555,6 +1728,8 @@ def host_preflight(opts: SessionOptions, spec: ModeSpec) -> list:
     checks.append(Check("attended", opts.attended, spec.needs_attended,
                         "operator marked the bench attended" if opts.attended else
                         "not --attended: recovery needs a human at the bench"))
+    if (opts.transport or spec.transport) == "ssh":
+        checks.append(Check("ssh-host", True, False, ssh_host_note(opts)))
     base, is_project = evidence_base()
     report_dir = opts.report_dir or os.path.join(base, G.uuidish_session_id(opts.mode))
     ok_ev, why = G.gitignored_evidence_ok(report_dir)
@@ -1568,15 +1743,47 @@ def host_preflight(opts: SessionOptions, spec: ModeSpec) -> list:
 # ---------------------------------------------------------------------------
 # Transports
 # ---------------------------------------------------------------------------
+DEFAULT_ROUTER_HOST = "root@192.168.10.1"   # stock vendor LAN; our image is .1.1
+
+
+def normalize_router_host(host: str) -> str:
+    """A bare host/IP means root@host (both LANs are root-only over dropbear)."""
+    host = (host or "").strip()
+    if host and "@" not in host:
+        return "root@" + host
+    return host
+
+
+def resolve_router_host(host=None) -> str:
+    """--ssh-host > ROUTER_HOST env > stock default (root@192.168.10.1).
+
+    A bare --ssh-host 192.168.1.1 is normalised to root@192.168.1.1 so the
+    documented one-liner works; our image normally answers at 192.168.1.1.
+    """
+    return normalize_router_host(
+        host or os.environ.get("ROUTER_HOST") or DEFAULT_ROUTER_HOST)
+
+
 class SshTransport:
+    """SSH transport via tools/rsh.sh (dropbear; NO legacy scp).
+
+    run/run_script/put/get all go through tools/rsh.sh with ROUTER_HOST pinned
+    to self.host, so --ssh-host actually takes effect (the stock default is
+    root@192.168.10.1; our own image normally answers at 192.168.1.1).  File
+    transfer is the project convention: put = cat local | rsh 'cat > remote',
+    get = rsh 'cat remote' > local - the lab dropbear rejects scp -O.
+    """
     name = "ssh"
 
     def __init__(self, host=None):
-        self.host = host or os.environ.get("ROUTER_HOST", "root@192.168.10.1")
+        self.host = resolve_router_host(host)
+        self.rsh = os.path.join(ROOT, "tools", "rsh.sh")
+
+    def _env(self) -> dict:
+        return {"ROUTER_HOST": self.host}
 
     def run(self, command: str, timeout: float = 60):
-        return run_local([os.path.join(ROOT, "tools", "rsh.sh"), command],
-                         timeout=timeout)
+        return run_local([self.rsh, command], timeout=timeout, env=self._env())
 
     def run_script(self, script: str, timeout: float = 60):
         fd, path = tempfile.mkstemp(prefix="bench-script-", suffix=".sh")
@@ -1591,18 +1798,42 @@ class SshTransport:
                 pass
 
     def put(self, local: str, remote: str):
-        # The lab image runs dropbear without legacy scp; use the project convention
-        # (cat | ssh 'cat > remote') through tools/rsh.sh, which honours ROUTER_HOST.
-        rsh = os.path.join(ROOT, "tools", "rsh.sh")
-        cmd = "cat %s | %s %s" % (shlex.quote(local), shlex.quote(rsh),
-                                  shlex.quote("cat > %s" % remote))
-        return run_local(["/bin/sh", "-c", cmd], timeout=300)
+        try:
+            with open(local, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            return 1, "", "cannot read local file %s: %s" % (local, e)
+        rc, out, err = run_local_capture(
+            [self.rsh, "cat > %s" % shlex.quote(remote)],
+            timeout=300, env=self._env(), input_bytes=data)
+        return rc, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
     def get(self, remote: str, local: str):
-        rsh = os.path.join(ROOT, "tools", "rsh.sh")
-        cmd = "%s %s > %s" % (shlex.quote(rsh),
-                              shlex.quote("cat %s" % remote), shlex.quote(local))
-        return run_local(["/bin/sh", "-c", cmd], timeout=300)
+        rc, out, err = run_local_capture(
+            [self.rsh, "cat %s" % shlex.quote(remote)],
+            timeout=300, env=self._env())
+        if rc != 0:
+            return rc, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+        try:
+            with open(local, "wb") as f:
+                f.write(out)
+        except OSError as e:
+            return 1, "", "cannot write local file %s: %s" % (local, e)
+        return 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+def ssh_host_note(opts: "SessionOptions") -> str:
+    """Plan-time note: which router host the SSH transport will target."""
+    env_host = os.environ.get("ROUTER_HOST")
+    host = resolve_router_host(opts.ssh_host)
+    how = ("--ssh-host" if opts.ssh_host else
+           ("ROUTER_HOST" if env_host else "default (stock vendor LAN)"))
+    note = ("SSH transport target %s via tools/rsh.sh (%s); the lab dropbear "
+            "rejects legacy scp - put/get use cat|ssh" % (host, how))
+    if host == DEFAULT_ROUTER_HOST and not opts.ssh_host and not env_host:
+        note += ("; OUR image normally answers at root@192.168.1.1 -> set "
+                 "ROUTER_HOST=root@192.168.1.1 or --ssh-host root@192.168.1.1")
+    return note
 
 
 class TelnetTransport:
@@ -1698,8 +1929,11 @@ def parse_report(text: str) -> dict:
                           "ack2": m.group(6) == "1"})
             continue
         m = RD32_RE.match(line)
-        if m and m.group(3):
-            rd32[m.group(1)] = int(m.group(3), 16)
+        if m:
+            # An EMPTY value (v=0x) is kept as None on purpose: the device's
+            # raw-read path failed, and the host evaluator reports that as
+            # device-read-empty instead of silently treating it as absent.
+            rd32[m.group(1)] = int(m.group(3), 16) if m.group(3) else None
             continue
         m = GATE_RE.match(line)
         if m:
@@ -2035,39 +2269,76 @@ class BenchError(Exception):
     pass
 
 
+DEPLOY_RETRY_DELAYS = (2.0, 5.0, 10.0)
+REBOOT_POLL_S = 4.0
+REBOOT_DEADLINE_S = 300.0
+
+
+def _retry_op(label: str, fn, audit=None, delays=DEPLOY_RETRY_DELAYS):
+    """Retry an IDEMPOTENT host->box operation across a transient link drop.
+
+    Used for deploy/files/sha256sum only - never for the session script itself
+    (one boot, one idea: the actual experiment is never retried).
+    """
+    last = (1, "", "not attempted")
+    for i, delay in enumerate((0.0,) + tuple(delays)):
+        if i:
+            time.sleep(delay)
+        rc, out, err = fn()
+        if rc == 0:
+            if i and audit is not None:
+                audit.record(label + "-retry", "host-run", label,
+                             "ok after %d retry(ies)" % i, policy="host")
+            return rc, out, err
+        last = (rc, out, err)
+        if audit is not None:
+            audit.record(label + "-attempt", "host-run", label, "rc=%s" % rc,
+                         policy="host", detail=(out or err).strip()[:160])
+    return last
+
+
 def deploy_plan(plan: SessionPlan, transport, opts: SessionOptions, audit) -> None:
     remote_dir = "%s/%s" % (REMOTE_BASE, plan.session_id)
-    rc, out, err = transport.run("mkdir -p %s && echo OK" % shlex.quote(remote_dir),
-                                 timeout=30)
+    rc, out, err = _retry_op(
+        "mkdir", lambda: transport.run(
+            "mkdir -p %s && echo OK" % shlex.quote(remote_dir), timeout=30),
+        audit=audit)
     if rc != 0:
-        raise BenchError("cannot create remote session dir: %s"
+        raise BenchError("cannot create remote session dir after retries: %s"
                          % (out or err).strip()[:200])
     checks = []
     for d in plan.deploy:
         audit.record(d["kind"] + "-deploy", "host-deploy", d["remote"],
                      d["sha256"], policy="host",
                      detail="%s -> %s" % (d["local"], d["remote"]))
-        rc, out, err = transport.put(d["local"], d["remote"])
+        rc, out, err = _retry_op(
+            d["kind"] + "-put",
+            lambda d=d: transport.put(d["local"], d["remote"]), audit=audit)
         if rc != 0:
-            raise BenchError("deploy failed (%s -> %s): %s"
-                             % (d["local"], d["remote"], (out or err).strip()[:200]))
+            raise BenchError("deploy failed after retries (%s -> %s): %s"
+                             % (d["local"], d["remote"],
+                                (out or err).strip()[:200]))
         checks.append((d["remote"], d["sha256"]))
     script_remote = os.path.join(remote_dir, "session.sh")
     fd, local_script = tempfile.mkstemp(prefix="bench-session-", suffix=".sh")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(plan.script)
-        rc, out, err = transport.put(local_script, script_remote)
+        rc, out, err = _retry_op(
+            "script-put", lambda: transport.put(local_script, script_remote),
+            audit=audit)
     finally:
         os.unlink(local_script)
     if rc != 0:
-        raise BenchError("deploy failed (session script): %s"
+        raise BenchError("deploy failed after retries (session script): %s"
                          % (out or err).strip()[:200])
     checks.append((script_remote, sha256_text(plan.script)))
     cmd = "sha256sum %s" % " ".join(shlex.quote(c[0]) for c in checks)
-    rc, out, err = transport.run(cmd, timeout=60)
+    rc, out, err = _retry_op(
+        "sha256sum", lambda: transport.run(cmd, timeout=60), audit=audit)
     if rc != 0:
-        raise BenchError("remote sha256sum failed: %s" % (out or err).strip()[:200])
+        raise BenchError("remote sha256sum failed after retries: %s"
+                         % (out or err).strip()[:200])
     remote_shas = {}
     for line in out.splitlines():
         parts = line.split()
@@ -2088,18 +2359,63 @@ def deploy_plan(plan: SessionPlan, transport, opts: SessionOptions, audit) -> No
                  policy="host", detail="all deployed files sha256-verified on the box")
 
 
-def reboot_and_wait(transport, opts: SessionOptions):
-    rc, out, err = transport.run("reboot", timeout=10)
-    note = "reboot issued (rc=%s)" % rc
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        time.sleep(4)
-        rc, out, err = transport.run("cut -d. -f1 /proc/uptime", timeout=10)
-        if rc == 0 and out.strip().isdigit():
-            up = int(out.strip())
-            if up < 240:
-                return True, "%s; back after reboot, uptime=%ds" % (note, up)
-    return False, "%s; device did not come back within 240 s" % note
+def _uptime(transport, timeout: float = 15.0):
+    rc, out, err = transport.run("cut -d. -f1 /proc/uptime", timeout=timeout)
+    if rc == 0 and out.strip().isdigit():
+        return int(out.strip())
+    return None
+
+
+def reboot_and_wait(transport, opts: SessionOptions, poll_s: float = None,
+                    deadline_s: float = None):
+    """Harden the optional --reboot before/after path.
+
+    The old version polled uptime and accepted the PRE-reboot uptime as
+    "back" as soon as it was <240 s, which raced the deploy during shutdown
+    (the first live fire lost the deploy this way).  The hardened version:
+
+      1. samples the pre-reboot uptime;
+      2. issues the reboot and treats a poll as proof only when the box was
+         observed unreachable at least once, or the uptime went backwards, or
+         the uptime is very small (<= 8 s);
+      3. requires a second confirming uptime read before declaring success;
+      4. waits up to deadline_s (default 300 s) and reports the last state.
+    """
+    poll_s = REBOOT_POLL_S if poll_s is None else float(poll_s)
+    deadline_s = REBOOT_DEADLINE_S if deadline_s is None else float(deadline_s)
+    pre_up = _uptime(transport)
+    rc, out, err = transport.run("reboot", timeout=15)
+    note = ("reboot issued (rc=%s, pre_uptime=%s)" % (rc, pre_up))
+    t0 = time.time()
+    seen_down = False
+    last = "no poll completed"
+    while time.time() - t0 < deadline_s:
+        time.sleep(poll_s)
+        up = _uptime(transport)
+        if up is None:
+            seen_down = True
+            last = "unreachable (seen_down=1)"
+            continue
+        last = ("uptime=%ds seen_down=%d pre_uptime=%s"
+                % (up, 1 if seen_down else 0, pre_up))
+        fresh = False
+        if seen_down:
+            fresh = up < 240
+        elif pre_up is not None and up < pre_up - 2:
+            fresh = True
+        elif up <= 8:
+            fresh = True
+        if not fresh:
+            continue
+        time.sleep(poll_s)
+        up2 = _uptime(transport)
+        if up2 is not None and up2 < 240:
+            return True, ("%s; stable after reboot, uptime=%ds "
+                          "(seen_down=%d)" % (note, up2,
+                                              1 if seen_down else 0))
+        last = "%s; stability re-read failed" % last
+    return False, ("%s; device did not come back within %.0f s (last: %s)"
+                   % (note, deadline_s, last))
 
 
 def execute(plan: SessionPlan, opts: SessionOptions, transport, audit,
@@ -2111,10 +2427,18 @@ def execute(plan: SessionPlan, opts: SessionOptions, transport, audit,
     audit.record("transport", "host-run", transport.name, "uname -r",
                  policy="host", detail=out.strip()[:80])
     if opts.reboot == "before":
-        ok, note = reboot_and_wait(transport, opts)
+        ok, note = reboot_and_wait(transport, opts,
+                                   poll_s=opts.reboot_poll_s,
+                                   deadline_s=opts.reboot_deadline_s)
         audit.record("reboot-before", "host-run", "reboot", note, policy="host")
         if not ok:
             raise BenchError(note)
+        rc, out, err = _retry_op(
+            "post-reboot-uname",
+            lambda: transport.run("uname -r", timeout=30), audit=audit)
+        if rc != 0:
+            raise BenchError("box not answering after the reboot: %s"
+                             % (out or err).strip()[:200])
     deploy_plan(plan, transport, opts, audit)
     remote_dir = "%s/%s" % (REMOTE_BASE, plan.session_id)
     script_remote = os.path.join(remote_dir, "session.sh")
@@ -2147,7 +2471,9 @@ def execute(plan: SessionPlan, opts: SessionOptions, transport, audit,
                 "verdict": "ERROR",
                 "error": "host evaluation failed: %r" % (e,)}
     if opts.reboot == "after":
-        ok, note = reboot_and_wait(transport, opts)
+        ok, note = reboot_and_wait(transport, opts,
+                                   poll_s=opts.reboot_poll_s,
+                                   deadline_s=opts.reboot_deadline_s)
         summary["reboot_after"] = note
         audit.record("reboot-after", "host-run", "reboot", note, policy="host")
     return {"summary": summary, "report_text": report_text, "extra": extra}
@@ -2186,6 +2512,13 @@ def plan_to_text(plan: SessionPlan, opts: SessionOptions) -> str:
         pdoc = PS.plan_doc(plan.sequence)
         L.append("")
         L.append("-- protocol sequence (data-driven; per-step gates) --")
+        helper = [d for d in plan.deploy if d["kind"] == "tool"]
+        if helper:
+            L.append("  read helper: %s -> %s sha256 %s"
+                     % (helper[0]["local"], helper[0]["remote"],
+                        helper[0]["sha256"][:16] + "..."))
+        else:
+            L.append("  read helper: NOT BUILT (dry-run warning; real run refuses)")
         L.append("  sequence:   %s" % pdoc["name"])
         L.append("  sha256:     %s" % pdoc["sha256"])
         L.append("  profile:    %s  module(s): %s"
@@ -2331,6 +2664,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--list-sequences", action="store_true",
                     help="list the bundled protocol sequences (no device)")
     ap.add_argument("--module", help="local instrument .ko to load (write modes)")
+    ap.add_argument("--bar0read", help="protocol mode: prebuilt static ARM read helper "
+                                       "(ELF32 ET_EXEC; normally auto-built from "
+                                       "tools/bar0read.c with the lab cross compiler)")
     ap.add_argument("--fw-file", help="local firmware file to deploy (patched mode)")
     ap.add_argument("--fw-manifest", help="builder manifest for the patched firmware")
     ap.add_argument("--fw-path", help="kernel firmware name under /lib/firmware "
@@ -2452,7 +2788,7 @@ def main(argv=None) -> int:
         fw_manifest=args.fw_manifest, fw_path=args.fw_path,
         plat_block=args.plat_block, wifi_block=args.wifi_block,
         sequence=args.sequence, wifi_block_bin=args.wifi_block_bin,
-        module_params=args.module_param,
+        module_params=args.module_param, bar0read=args.bar0read,
         announce=(not args.no_announce), cece_mode=args.cece_mode,
         attended=args.attended, dry_run=dry_run, report_dir=args.report_dir,
         endpoint=args.endpoint, session_timeout=args.session_timeout,

@@ -107,6 +107,15 @@ def make_fake_ko(path: str, name: str = "hi5622_pciet_hcc",
         f.write(data)
 
 
+def make_fake_bar0read(path: str) -> str:
+    """Write a synthetic static ARM helper (ELF32 LE ET_EXEC, > 4 KiB)."""
+    make_fake_ko(path, name="hi5622_bar0read", etype=2)
+    with open(path, "ab") as f:
+        f.write(b"\x00" * 8192)
+    os.chmod(path, 0o755)
+    return path
+
+
 def synth_bytes(n: int, seed: int = 131, mod: int = 4096) -> bytes:
     return bytes(((i * seed + 7) ^ (i >> 8)) & 0xFF for i in range(n))
 
@@ -859,21 +868,34 @@ def proto_env(tmp: str) -> dict:
         f.write(bytes(((i * 7 + 3) & 0xFF) for i in range(G.WIFI_BLOCK_BYTES)))
     env["wifi_block_txt"] = os.path.join(tmp, "wifi_block.txt")
     write_block_file(env["wifi_block_txt"], 618, 5)
+    env["bar0read"] = make_fake_bar0read(os.path.join(tmp, "hi5622-bar0read"))
     env["seq"] = os.path.join(tmp, "protocol-seq.json")
     with open(env["seq"], "w") as f:
         json.dump(proto_sequence_doc(env), f)
     env["report_pass"] = proto_report()
     env["report_boot_fail"] = proto_report(fail="boot")
     env["report_attr_fail"] = proto_report(fail="attr")
+    env["report_read_fail"] = proto_report(fail="readpath")
     return env
 
 
 def proto_report(fail: str | None = None) -> str:
     """Synthetic device report matching the generated protocol script output."""
     L = ["== SECTION preflight",
-         "GATE image PASS kernel=6.18.60",
-         "== SECTION protocol-boot",
-         "STEP name=boot kind=read_pack"]
+         "GATE image PASS kernel=6.18.60"]
+    if fail == "readpath":
+        L += ["READPATH /dev/mem BAR0_PHYS=0x58000000 (resource0 read() is unsupported)",
+              "RD32 label=readpath.bar0 bar0=0x0 v=0x",
+              "STOP:bar0-readpath: /dev/mem read of BAR0+0 returned nothing",
+              "GATE-FAIL name=bar0-readpath",
+              "== SECTION protocol",
+              "SEQUENCE name=ladder-c-ordered sha256=0 steps=11",
+              "== SECTION writes",
+              "WRITES-DEVICE total=0",
+              "SESSION_RESULT: STOP:bar0-readpath"]
+        return "\n".join(L) + "\n"
+    L += ["== SECTION protocol-boot",
+          "STEP name=boot kind=read_pack"]
     page = "0x86807fef" if fail != "boot" else "0x86803fef"
     L.append("RD32 label=boot.page0 bar0=0x877000 v=%s" % page)
     L.append("GATE boot.page0 %s raw=%s mask=ffffffff want=0x86807fef"
@@ -1013,6 +1035,31 @@ def test_protocol_engine(tmp: str) -> None:
                  "h2d-grammar")
     guard.check_attr_write("seed", "1")
     ck("protocol guards: seed allowed for hi5622_wifi", True)
+
+    # empty device read -> explicit device-read-empty (the 2026-11-25 live fire)
+    empty = PS.evaluate(seq, {
+        "result": "STOP", "stop_rule": "boot.page0",
+        "rd32": {"boot.page0": None},
+        "reads": {}, "gates": [{"name": "boot.page0", "ok": False}]})
+    first = (empty["steps"][0]["checks"] or [{}])[0]
+    ck("protocol engine: empty device read flagged device-read-empty",
+       first.get("code") == "device-read-empty"
+       and first.get("status") == "FAIL", str(first))
+    ck("protocol engine: device-read-empty triage rendered",
+       "device-read-empty" in PS.render_markdown(empty)
+       and "/dev/mem" in PS.render_markdown(empty))
+    cap = PS.evaluate(
+        PS.validate({"schema": PS.SCHEMA_SEQ, "name": "cap",
+                     "profile": PS.PROFILE, "module_names": ["hi5622_wifi"],
+                     "steps": [{"name": "snap", "kind": "read_pack", "reads": [
+                         {"label": "cave", "bar0": "0x7c0240"}]}]}, "t"),
+        {"result": "PASS", "stop_rule": None, "rd32": {},
+         "reads": {}, "gates": []})
+    c = cap["steps"][0]["checks"][0]
+    ck("protocol engine: missing capture-only read is MISSING, not PASS",
+       c["status"] == "MISSING" and c["code"] == "read-missing", str(c))
+    ck("protocol engine: totals count missing captures",
+       cap["totals"]["missing"] == 1, str(cap["totals"]))
     expect_guard("bar0 read outside viewports",
                  lambda: G.check_bar0_read(0x10161000), "bar0-read-not-allowed")
     G.check_bar0_read(0x2E9448)
@@ -1024,6 +1071,7 @@ def proto_opts(env: dict, tmp: str, **kw) -> BS.SessionOptions:
         mode="protocol", module=env["module"], dry_run=True,
         fw_file=env["fw_file"], fw_manifest=env["manifest"],
         wifi_block_bin=env["wifi_block_bin"], sequence=env["seq"],
+        bar0read=env.get("bar0read"),
         report_dir=os.path.join(tmp, "reports", "protocol"))
     for k, v in kw.items():
         setattr(opts, k, v)
@@ -1035,10 +1083,16 @@ def test_protocol_plan(tmp: str, env: dict) -> None:
     plan = BS.make_plan(opts, G.WriteGuard())
     ck("protocol plan: script audit PASS", plan.audit["ok"],
        json.dumps(plan.audit["violations"][:3]))
-    ck("protocol plan: module/fw/wifi-block deployed",
+    ck("protocol plan: helper/module/fw/wifi-block deployed",
        sorted(d["kind"] for d in plan.deploy)
-       == ["firmware", "module", "wifi-block"],
+       == ["firmware", "module", "tool", "wifi-block"],
        str([d["kind"] for d in plan.deploy]))
+    ck("protocol plan: read helper deployed to /root and sha-pinned",
+       any(d["kind"] == "tool" and d["remote"] == BS.HELPER_REMOTE
+           and d["sha256"] == sha256_path(env["bar0read"])
+           for d in plan.deploy))
+    ck("protocol plan: readpath preflight step present",
+       "readpath" in [s.name for s in plan.steps])
     ck("protocol plan: fw deployed as FIRMWARE.PD4.bin",
        plan.fw["remote"] == "/lib/firmware/hi_wifi/FIRMWARE.PD4.bin")
     ck("protocol plan: insmod params include fw_path/wifi_block_path/budget",
@@ -1084,9 +1138,9 @@ def test_protocol_plan(tmp: str, env: dict) -> None:
                           wifi_block=env["wifi_block_txt"],
                           report_dir=os.path.join(tmp, "reports", "proto-txt"))
     plan_txt = BS.make_plan(opts_txt, G.WriteGuard())
+    wdeploy = [d for d in plan_txt.deploy if d["kind"] == "wifi-block"][0]
     ck("protocol plan: text PHY block converted to 2472 B",
-       plan_txt.deploy[2]["size"] == G.WIFI_BLOCK_BYTES,
-       str(plan_txt.deploy[2]["size"]))
+       wdeploy["size"] == G.WIFI_BLOCK_BYTES, str(wdeploy["size"]))
 
     def plan_refused(label, mutate, code):
         o = proto_opts(env, tmp)
@@ -1113,6 +1167,14 @@ def test_protocol_plan(tmp: str, env: dict) -> None:
     plan_refused("missing sequence",
                  lambda o: setattr(o, "sequence", os.path.join(tmp, "nope.json")),
                  "seq-missing")
+    txt = os.path.join(tmp, "not-a-helper.txt")
+    with open(txt, "w") as f:
+        f.write("not an elf\n")
+    plan_refused("bad read helper (not ELF)",
+                 lambda o: setattr(o, "bar0read", txt), "helper-not-elf")
+    plan_refused("missing read helper",
+                 lambda o: setattr(o, "bar0read", os.path.join(tmp, "nope-helper")),
+                 "helper-missing")
 
     # fw pin mismatch
     bad = proto_sequence_doc(env)
@@ -1165,6 +1227,293 @@ def test_protocol_plan(tmp: str, env: dict) -> None:
     ck("protocol shell: gate_num high-byte mask fails on 0x2B",
        "STOP g5" in out)
     ck("protocol shell: gate_num 16-bit ge", "GATE g6 PASS" in out)
+
+
+    # ---- read path: /dev/mem (the resource0 dd read is broken on this kernel) ----
+    rd32_def = [ln for ln in plan.script.splitlines()
+                if "dd if=/dev/mem" in ln]
+    ck("protocol plan: raw reads go through /dev/mem", bool(rd32_def), str(rd32_def[:2]))
+    ck("protocol plan: no resource0 dd read remains",
+       'dd if="$R0"' not in plan.script)
+    ck("protocol plan: BAR0 physical base parsed from sysfs resource",
+       'print $1}' in plan.script and '"$P/resource"' in plan.script)
+    ck("protocol plan: readpath self-check gates before boot",
+       "stop bar0-readpath" in plan.script
+       and plan.script.index("GATE readpath PASS") < plan.script.index("section module-file"))
+    ck("protocol plan: BAR0 phys parse guard present", "stop bar0-phys" in plan.script)
+    ck("protocol plan: rd32 uses the deployed read helper",
+       'raw=$("$HELPER" "$pa"' in plan.script)
+    ck("protocol plan: helper deployed path/sha are wired into the script",
+       ("HELPER=" in plan.script) and BS.HELPER_REMOTE in plan.script
+       and sha256_path(env["bar0read"]) in plan.script)
+    ck("protocol plan: helper sha checked + chmod + exec gate",
+       "stop helper-sha-mismatch" in plan.script
+       and 'chmod +x "$H"' in plan.script
+       and "stop helper-not-executable" in plan.script)
+    ck("protocol plan: readpath uses the helper (not resource0)",
+       'RPV=$("$HELPER" "$BAR0_PHYS"' in plan.script)
+
+    # norm_reg shell helper (8 lowercase hex digits, empty on failure)
+    nf = []
+    started = False
+    for line in plan.script.splitlines():
+        if line.startswith("norm_reg() {"):
+            started = True
+        if started:
+            nf.append(line)
+            if line.strip().endswith("; }"):
+                break
+    ck("protocol plan: norm_reg function extracted", len(nf) >= 4, str(len(nf)))
+    nsh = os.path.join(tmp, "norm_reg-test.sh")
+    with open(nsh, "w") as f:
+        f.write("#!/bin/sh\n")
+        f.write("\n".join(nf) + "\n")
+        f.write('n1=$(norm_reg 0x877000); echo "N1=$n1"\n')
+        f.write('n2=$(norm_reg 86807FEF); echo "N2=$n2"\n')
+        f.write('n3=$(norm_reg ""); echo "N3=$n3"\n')
+        f.write('n4=$(norm_reg 0x1); echo "N4=$n4"\n')
+    sh = subprocess.run(["/bin/sh", nsh], capture_output=True, text=True)
+    out = sh.stdout
+    ck("protocol shell: norm_reg pads 0x877000 -> 00877000", "N1=00877000" in out, out[-160:])
+    ck("protocol shell: norm_reg lowercases 86807FEF", "N2=86807fef" in out)
+    ck("protocol shell: norm_reg empty stays empty", "N3=\n" in out)
+    ck("protocol shell: norm_reg pads 0x1 -> 00000001", "N4=00000001" in out)
+
+
+    # rd32 shell behavior: /dev/mem read + hex-literal and decimal offsets
+    rf = []
+    started = False
+    for line in plan.script.splitlines():
+        if line.startswith("norm_reg() {"):
+            started = True
+        if started:
+            rf.append(line)
+            if 'v=0x$val"; }' in line:
+                break
+    ck("protocol plan: rd32 function extracted", len(rf) > 12, str(len(rf)))
+    fake_helper = os.path.join(tmp, "fake-rdhelper")
+    with open(fake_helper, "w") as f:
+        f.write("#!/bin/sh\nprintf '0x86807fef\\n'\n")
+    os.chmod(fake_helper, 0o755)
+    rsh_path = os.path.join(tmp, "rd32-test.sh")
+    with open(rsh_path, "w") as f:
+        f.write("#!/bin/sh\n")
+        f.write('say() { echo "SAY $*"; }\n')
+        f.write("HELPER=" + fake_helper + "\n")
+        f.write("R=/dev/null\n")
+        f.write("BAR0_PHYS=1476395008\n")
+        f.write("RDVAL=\n")
+        f.write("\n".join(rf) + "\n")
+        f.write("rd32 hexoff 0x877000\n")
+        f.write("rd32 decoff 8876032\n")
+    sh = subprocess.run(["/bin/sh", rsh_path], capture_output=True, text=True)
+    out = sh.stdout
+    ck("protocol shell: rd32 uses the helper for a static hex offset",
+       "RD32 label=hexoff bar0=0x877000 v=0x86807fef" in out, out[-300:])
+    ck("protocol shell: rd32 accepts the decimal dynamic-offset form",
+       "RD32 label=decoff bar0=0x877000 v=0x86807fef" in out)
+    # fallback: helper returns nothing -> /dev/mem dd+hexdump/od path
+    fail_helper = os.path.join(tmp, "fake-rdhelper-fail")
+    with open(fail_helper, "w") as f:
+        f.write("#!/bin/sh\nexit 1\n")
+    os.chmod(fail_helper, 0o755)
+    fsh_path = os.path.join(tmp, "rd32-fallback-test.sh")
+    with open(fsh_path, "w") as f:
+        f.write("#!/bin/sh\n")
+        f.write('say() { echo "SAY $*"; }\n')
+        f.write("HELPER=" + fail_helper + "\n")
+        f.write("R=/dev/null\n")
+        f.write("BAR0_PHYS=1476395008\n")
+        f.write("RDVAL=\n")
+        f.write('dd() { case "$1" in if=/dev/mem) printf "\\357\\177\\200\\206";; '
+                '*) command dd "$@";; esac; }\n')
+        f.write("\n".join(rf) + "\n")
+        f.write("rd32 fallback 0x877000\n")
+    fsh = subprocess.run(["/bin/sh", fsh_path], capture_output=True, text=True)
+    ck("protocol shell: rd32 falls back to /dev/mem when the helper fails",
+       "RD32 label=fallback bar0=0x877000 v=0x86807fef" in fsh.stdout,
+       fsh.stdout[-300:])
+
+
+
+class FakeSshCli:
+    """Capture the exact argv/env/input of the SSH transport helpers."""
+
+    def __init__(self, results=None):
+        self.calls = []
+        self.results = list(results or [])
+
+    def run_local(self, cmd, timeout=120, env=None, input_bytes=None):
+        self.calls.append(("run", list(cmd), env, input_bytes))
+        return 0, "6.18.60\n", ""
+
+    def run_capture(self, cmd, timeout=120, env=None, input_bytes=None):
+        self.calls.append(("capture", list(cmd), env, input_bytes))
+        if self.results:
+            return self.results.pop(0)
+        return 0, b"data", b""
+
+
+def test_transport(tmp: str) -> None:
+    orig_local = BS.run_local
+    orig_cap = BS.run_local_capture
+    try:
+        # host resolution: --ssh-host > ROUTER_HOST > stock default
+        old_env = os.environ.get("ROUTER_HOST")
+        try:
+            os.environ.pop("ROUTER_HOST", None)
+            ck("transport: default host is the stock LAN",
+               BS.resolve_router_host(None) == "root@192.168.10.1")
+            os.environ["ROUTER_HOST"] = "root@192.168.1.1"
+            ck("transport: ROUTER_HOST env wins over the default",
+               BS.resolve_router_host(None) == "root@192.168.1.1")
+            ck("transport: --ssh-host wins over ROUTER_HOST",
+               BS.resolve_router_host("root@192.168.2.2") == "root@192.168.2.2")
+            ck("transport: bare --ssh-host IP gets the root user prefix",
+               BS.resolve_router_host("192.168.1.1") == "root@192.168.1.1")
+        finally:
+            if old_env is None:
+                os.environ.pop("ROUTER_HOST", None)
+            else:
+                os.environ["ROUTER_HOST"] = old_env
+
+        fake = FakeSshCli(results=[(0, b"remote-bytes", b"")])
+        BS.run_local = fake.run_local
+        BS.run_local_capture = fake.run_capture
+        t = BS.SshTransport("root@192.168.1.1")
+        rc, out, err = t.run("uname -r")
+        kind, cmd, env, data = fake.calls[-1]
+        ck("transport: run goes through tools/rsh.sh", kind == "run"
+           and cmd[0].endswith("tools/rsh.sh") and cmd[1] == "uname -r")
+        ck("transport: run pins ROUTER_HOST from --ssh-host",
+           env == {"ROUTER_HOST": "root@192.168.1.1"}, str(env))
+        local = os.path.join(tmp, "upload.bin")
+        with open(local, "wb") as f:
+            f.write(b"\x01\x02deploy-bytes")
+        rc, out, err = t.put(local, "/lib/firmware/hi_wifi/wifi_block.bin")
+        kind, cmd, env, data = fake.calls[-1]
+        ck("transport: put uses cat | rsh 'cat > remote' (no scp)",
+           kind == "capture" and cmd[0].endswith("tools/rsh.sh")
+           and cmd[1].startswith("cat > "), str(cmd))
+        ck("transport: put streams the local bytes on stdin",
+           data == b"\x01\x02deploy-bytes")
+        ck("transport: put pins ROUTER_HOST", env == {"ROUTER_HOST": "root@192.168.1.1"})
+        fake.results = [(0, b"remote-bytes", b"")]
+        got_path = os.path.join(tmp, "fetched.log")
+        rc, out, err = t.get("/tmp/hi5622-bench/x/writes.log", got_path)
+        ck("transport: get returns 0", rc == 0)
+        ck("transport: get writes the remote bytes to the local file",
+           open(got_path, "rb").read() == b"remote-bytes")
+        fake.results = [(1, b"", b"cat: no such file")]
+        got2 = os.path.join(tmp, "fetched-missing.log")
+        rc, out, err = t.get("/nope", got2)
+        ck("transport: get failure does not create the file",
+           rc == 1 and not os.path.exists(got2))
+        ck("transport: read-only DryTransport still refuses", True)
+        try:
+            BS.DryTransport().get("/x", "/tmp/y")
+            ck("transport: dry transport refuses get", False)
+        except RuntimeError:
+            ck("transport: dry transport refuses get", True)
+
+        # the real plan warns about the host unless one is supplied
+        env2 = {}
+        env2["module"] = os.path.join(tmp, "hi5622_wifi.ko")
+        make_fake_ko(env2["module"], name="hi5622_wifi",
+                     params=("fw_path:charp", "wifi_block_path:charp",
+                             "h2d_send_budget:uint"))
+        env2["wifi_block_bin"] = os.path.join(tmp, "wb.bin")
+        with open(env2["wifi_block_bin"], "wb") as f:
+            f.write(bytes(2472))
+        env2["bar0read"] = make_fake_bar0read(
+            os.path.join(tmp, "hi5622-bar0read-2"))
+        _src, patched, manifest = make_patched_fw(tmp, name="FIRMWARE.PD4.bin")
+        env2.update(fw_file=patched, manifest=manifest,
+                    fw_sha=sha256_path(patched),
+                    fw_len=os.path.getsize(patched))
+        env2["seq"] = os.path.join(tmp, "seq2.json")
+        with open(env2["seq"], "w") as f:
+            json.dump(proto_sequence_doc(env2), f)
+        old = os.environ.get("ROUTER_HOST")
+        try:
+            os.environ.pop("ROUTER_HOST", None)
+            plan = BS.make_plan(proto_opts(env2, tmp), G.WriteGuard())
+            ck("transport: protocol plan warns about the stock-vs-our-image host",
+               any("192.168.1.1" in w for w in plan.warnings), str(plan.warnings[-2:]))
+        finally:
+            if old is None:
+                os.environ.pop("ROUTER_HOST", None)
+            else:
+                os.environ["ROUTER_HOST"] = old
+        os.environ["ROUTER_HOST"] = "root@192.168.1.1"
+        try:
+            plan = BS.make_plan(proto_opts(env2, tmp), G.WriteGuard())
+            ck("transport: plan notes ROUTER_HOST when set",
+               any("ROUTER_HOST" in w and "192.168.1.1" in w for w in plan.warnings))
+        finally:
+            if old is None:
+                os.environ.pop("ROUTER_HOST", None)
+            else:
+                os.environ["ROUTER_HOST"] = old
+    finally:
+        BS.run_local = orig_local
+        BS.run_local_capture = orig_cap
+
+
+class FakeRebootTransport:
+    """Scripted uptime/unreachable sequence for the hardened reboot wait."""
+
+    name = "fake-reboot"
+
+    def __init__(self, pre_uptime, polls):
+        self.pre_uptime = pre_uptime
+        self.polls = list(polls)
+        self.i = 0
+        self.reboots = 0
+
+    def run(self, command, timeout=60):
+        if command == "reboot":
+            self.reboots += 1
+            return 0, "", ""
+        if "proc/uptime" in command:
+            if self.i == 0:
+                self.i += 1
+                if self.pre_uptime is None:
+                    return 1, "", "unreachable"
+                return 0, "%d\n" % self.pre_uptime, ""
+            if self.polls:
+                v = self.polls.pop(0)
+                if v is None:
+                    return 1, "", "unreachable"
+                return 0, "%d\n" % v, ""
+            return 1, "", "no more scripted polls"
+        return 1, "", "unexpected command"
+
+
+def test_reboot_wait(tmp: str) -> None:
+    o = BS.SessionOptions(mode="protocol")
+    # normal reboot: old uptime, a drop, then a fresh uptime + stable re-read
+    t = FakeRebootTransport(100, [None, 12, 17])
+    ok, note = BS.reboot_and_wait(t, o, poll_s=0.001, deadline_s=2.0)
+    ck("reboot: down then fresh uptime -> back", ok and "uptime=17" in note, note)
+    ck("reboot: reboot issued exactly once", t.reboots == 1)
+    # fast reboot without a visible drop: pre 50 -> 7 -> 12 (up<=8 proves reboot)
+    t2 = FakeRebootTransport(50, [50, 7, 12])
+    ok, note = BS.reboot_and_wait(t2, o, poll_s=0.001, deadline_s=2.0)
+    ck("reboot: fast reboot with uptime reset detected", ok, note)
+    # boot took longer: uptime goes backwards below pre_uptime - 2
+    t3 = FakeRebootTransport(500, [500, 400, 30, 35])
+    os_ok, note = BS.reboot_and_wait(t3, o, poll_s=0.001, deadline_s=2.0)
+    ck("reboot: uptime-went-backwards detected", os_ok, note)
+    # never reboots -> failure with a timeout note (no false PASS)
+    t4 = FakeRebootTransport(3000, [3000, 3000, 3000, 3000])
+    ok, note = BS.reboot_and_wait(t4, o, poll_s=0.001, deadline_s=0.3)
+    ck("reboot: stubborn old uptime -> FAIL (race closed)", not ok, note)
+    ck("reboot: timeout note names the last state", "last" in note, note)
+    # pre-reboot unreachable then a fresh uptime is still a success
+    t5 = FakeRebootTransport(None, [None, None, 9, 14])
+    ok, note = BS.reboot_and_wait(t5, o, poll_s=0.001, deadline_s=2.0)
+    ck("reboot: unreachable pre-state then fresh boot -> back", ok, note)
 
 
 def test_protocol_execute(tmp: str, env: dict) -> None:
@@ -1232,6 +1581,27 @@ def test_protocol_execute(tmp: str, env: dict) -> None:
     ck("protocol execute: attr-pattern-missing code present",
        "attr-pattern-missing" in json.dumps(p3))
 
+    # pre-sequence read-path failure (the first live fire's symptom):
+    # empty RD32 value stops the script before the sequence -> all NOT-RUN
+    t4 = FakeTransport(env["report_read_fail"], rc=10)
+    t4.files["%s/%s/writes.log" % (BS.REMOTE_BASE, plan.session_id)] = b"x\n"
+    a4 = G.WriteAudit()
+    res4 = BS.execute(plan, opts, t4, a4, [])
+    p4 = res4["summary"].get("protocol") or {}
+    ck("protocol execute: readpath stop -> FAIL with pre_sequence_failure",
+       p4.get("verdict") == "FAIL"
+       and p4.get("pre_sequence_failure") == "bar0-readpath", json.dumps(p4)[:300])
+    ck("protocol execute: nothing fired -> all steps NOT-RUN",
+       all(s["status"] == "NOT-RUN" for s in p4.get("steps", [])),
+       str([s["status"] for s in p4.get("steps", [])]))
+    ck("protocol execute: empty read listed in the evidence",
+       "readpath.bar0" in p4.get("empty_reads", []), str(p4.get("empty_reads")))
+    md4 = PS.render_markdown(p4)
+    ck("protocol execute: device-read-empty triage mentions /dev/mem",
+       "device-read-empty" in md4 and "/dev/mem" in md4)
+    ck("protocol execute: pre-sequence triage rendered",
+       "pre-sequence-stop" in md4 or "pre-sequence" in md4)
+
 
 def test_protocol_cli(tmp: str, env: dict) -> None:
     base = [sys.executable, os.path.join(TOOLDIR, "bench_session.py")]
@@ -1246,6 +1616,7 @@ def test_protocol_cli(tmp: str, env: dict) -> None:
                                "--fw-file", env["fw_file"],
                                "--fw-manifest", env["manifest"],
                                "--wifi-block-bin", env["wifi_block_bin"],
+                               "--bar0read", env["bar0read"],
                                "--sequence", env["seq"], "--json",
                                "--report-dir", rdir],
                        capture_output=True, text=True, timeout=120)
@@ -1264,6 +1635,7 @@ def test_protocol_cli(tmp: str, env: dict) -> None:
                                 "--fw-file", env["fw_file"],
                                 "--fw-manifest", env["manifest"],
                                 "--wifi-block-bin", env["wifi_block_bin"],
+                                "--bar0read", env["bar0read"],
                                 "--sequence", env["seq"],
                                 "--module-param", "h2d_send_budget=1",
                                 "--report-dir", os.path.join(tmp, "cli-budget")],
@@ -1276,6 +1648,7 @@ def test_protocol_cli(tmp: str, env: dict) -> None:
                                 "--fw-file", env["fw_file"],
                                 "--fw-manifest", env["manifest"],
                                 "--wifi-block-bin", env["wifi_block_bin"],
+                                "--bar0read", env["bar0read"],
                                 "--sequence", env["seq"],
                                 "--module-param", "no_such_param=1",
                                 "--report-dir", os.path.join(tmp, "cli-param")],
@@ -1299,6 +1672,8 @@ def main() -> int:
         test_session_parser()
         test_session_execute(tmp, env)
         test_session_cli(tmp, env)
+        test_transport(tmp)
+        test_reboot_wait(tmp)
         proto = proto_env(tmp)
         test_protocol_engine(tmp)
         test_protocol_plan(tmp, proto)
