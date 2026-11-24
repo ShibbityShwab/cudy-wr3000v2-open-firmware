@@ -1,0 +1,198 @@
+# EVIDENCE INDEX - claim by claim
+
+Companion to [REPORT.md](REPORT.md): every material claim in the report, with its evidence marker,
+the artifact that establishes it and the bench/ledger record behind it. "Re-verified here" records
+what the consolidation pass actually re-ran (device-free only); "-" means the claim is quoted from
+its owning lane's record and was not re-executed in this pass.
+
+Marker legend: `[V]` verified from a named local artifact by the owning lane's committed tool;
+`[V*]` bench-measured in an attended session (ledger date); `[I]` inference; `[U]` unknown.
+
+Artifact paths are relative to `opensource/docs/incoming/` unless they start with `../` or are
+quoted as a superproject file (`mem-entries.md`, `STATUS.md`). "Section" refers to the numbered
+section of [REPORT.md](REPORT.md).
+
+---
+
+## Section 1 - executive summary
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-001 | 1.1 | the host can boot the endpoint firmware to the vendor-equivalent golden state | [V*] | `wifi-driver-clean/REPORT.md`, `wifi-rom-dump/REPORT.md` | ledger 2026-11-24 10:40 (GP8) | - |
+| EV-002 | 1.1 | the ready handshake is received and decoded by a clean-room host | [V*] | `wifi-d2h-direct/REPORT.md` | ledger 2026-11-24 14:00 | selftest 92/92 |
+| EV-003 | 1.1 | two ordered real H2D messages are consumed with zero exceptions and answered | [V*] | `wifi-h2d-send/REPORT.md` sec 11-12 | ledger 2026-11-25 05:10 | - |
+| EV-004 | 1.1 | the firmware responses are g1 id3 (36 B) and g1 id0x12 (40 B) | [V*] | `wifi-h2d-send/REPORT.md`, this report TABLES T13 | ledger 2026-11-25 06:00 | frame bytes cross-checked |
+| EV-005 | 1.2 | the route to that state requires the release-only boot protocol | [V]/[V*] | `wifi-rom-dump/REPORT.md` sec 6-7 | ledger 2026-11-24 10:00/10:40 | - |
+| EV-006 | 1.2 | the firmware IRQ/thread layer is not proven alive; the mailbox is serviced through the PD3/PD4 research patch | [V*] | `wifi-irq-unmask/REPORT-PD3.md` | ledger 2026-11-24 22:10 | - |
+| EV-007 | 1.2 | the ETE A->B copy is idle; the D2H path is the direct device-ring reader | [V*] | `wifi-d2h-direct/REPORT.md`, `wifi-ete-engine/REPORT.md` | ledger 2026-11-24 13:10 | - |
+| EV-008 | 1.2 | Wi-Fi interface and data path are not started; upstream is blocked by the closed firmware | [I] | `wifi-vendor-userspace/REPORT.md`, `wifi-driver-re/SUMMARY.md` | - | - |
+| EV-009 | 1.3 | the eight-step breakthrough ladder and its dates | [V*] | this report sec 1.3; lanes named per row | ledger 2026-11-22..11-25 | - |
+| EV-010 | 1.4 | firmware 928,920 B sha256 7fc87e20... ; ROM content 2,073 B sha256 fcfd464f... | [V] | `wifi-firmware-re/REPORT.md`, `wifi-rom-dump/REPORT.md` sec 1 | - | - |
+| EV-011 | 1.4 | 60 H2D receive slots (41 group 0 incl. early 0x2F, 19 group 2) | [V] | `wifi-h2d-catalog/REPORT.md`, `wifi-h2d-frames/catalogue.md` | - | catalogue counts checked |
+
+## Section 2 - system map
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-012 | 2.1 | endpoint enumerates as 59e7:0005 class 0x028000 behind each RC | [V*] | `wifi-transport-port/REPORT.md` | ledger 2026-11-22 (A run) | - |
+| EV-013 | 2.1 | the transport and driver are original host code; no vendor host module is loaded in our stack | [V] | `wifi-driver-clean/REPORT.md` | - | - |
+| EV-014 | 2.2 | IO-CA translation 0x3B8000+(CA-0x40000000) and CPU translation 0x6B8000+CPU | [V] | `wifi-transport-port/REPORT.md` sec 1, `wifi-hcc-core/src/hcc_core.h` | bench read-backs 2026-11-22 | constants cross-checked |
+| EV-015 | 2.2 | host phys = 0x40000000 + BAR0 for endpoint 0 on the bench | [V*] | `wifi-rom-dump/REPORT.md` sec 1 | stock golden-read sessions | - |
+| EV-016 | 2.2 | the 20-bit region-3 mask is wrong for CAs >= 0x40100000 (F4 bug) | [V] | `wifi-hcc-core/src/hcc_core.h` header note, `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 17:20/20:00 | - |
+| EV-017 | 2.2 | CPU addresses 0x40008/0x4000C/0x1BF000 are firmware CPU, not device CAs | [V] | `wifi-rom-dump/REPORT.md` sec 1, `wifi-hcc-core/src/hcc_core.h` | - | conventions checked in report |
+| EV-018 | 2.3 | the layer stack (userspace -> cfg80211 -> HCC -> ETE -> PCIe -> chip) | [I] | `wifi-vendor-userspace/REPORT.md`, `wifi-host-replica/REPORT.md` | - | - |
+| EV-019 | 2.5 | the device-side address map rows (ROM, image, page, mailbox, ETE, rings, blocks) | [V]/[V*] | TABLES T1/T4/T14 and the lanes they cite | bench reads | constants cross-checked |
+| EV-020 | 2.5 | three distinct firmware objects 0x10C0F4 / 0x10C190 / 0x10F1F0 | [V]/[U] | `wifi-h2d-catalog/REPORT.md`, `wifi-irq-unmask/REPORT-PD2.md`, `wifi-ete-engine/REPORT.md` | - | - |
+
+## Section 3 - boot chain
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-021 | 3.1 | the readable 16 KiB ROM window is the whole relevant mask ROM (2,073 B; rest RAZ) | [V] | `wifi-rom-dump/REPORT.md` sec 2, `wifi-rom-dump/tools/romdis.py` | ROM dump 2026-11-24 09:20 | lane tool quoted (86 checks) |
+| EV-022 | 3.2 | S0 sets up cache/MPU/stacks and splits CPU0/CPU1 on MPIDR&3 | [V] | `wifi-rom-dump/REPORT.md` sec 3 | - | - |
+| EV-023 | 3.2 | CPU0 cold fallback: 0xBAAD -> analog -> poll 0x5A5A -> write 0xCEED -> blx entry A 0x46970 | [V] | `wifi-rom-dump/REPORT.md` sec 4 | - | - |
+| EV-024 | 3.2 | the firmware must be uploaded before the release (entry pointer re-read) | [V] | `wifi-rom-dump/REPORT.md` sec 4 | - | - |
+| EV-025 | 3.3 | CPU1 S1 waits for page +C == 0xABCD and gate == 0xCEED, then writes page +8 = 1<<core = 2 and blx entry B 0xC742C | [V] | `wifi-rom-dump/REPORT.md` sec 5 | stock/GP8 golden reads | - |
+| EV-026 | 3.3 | the image never writes +8 = 2; it only consumes the ACK | [V] | `wifi-rom-dump/REPORT.md` sec 5, `wifi-rom-s01/REPORT.md` | - | - |
+| EV-027 | 3.4 | the handshake page layout and golden words 0x86807FEF/7/2/0xABCD | [V*] | `wifi-rom-s01/REPORT.md`, `wifi-driver-clean/REPORT.md` | stock golden read 2026-11-24 05:00; GP8 10:40 | constants cross-checked |
+| EV-028 | 3.4 | state CPU 0x118B60 = 1 and exception mask CPU 0x40008 = 0 on a golden boot | [V*] | `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 21:10 | - |
+| EV-029 | 3.5 | CA 0x4000010C is dual-use: ROM 0xCEED vs image 0xCECE | [V] | `wifi-rom-dump/REPORT.md` sec 6-7 | - | - |
+| EV-030 | 3.5 | our 0xCECE writes during boot destroy the 0xCEED handshake and stall S1 | [V]/[V*] | `wifi-rom-dump/REPORT.md`, `wifi-s1-cpu1/REPORT.md` | GP2-GP6 vs GP8 differential | - |
+| EV-031 | 3.5 | the vendor host never writes 0xCECE (0 hits in 60+ modules) | [V] | `wifi-host-replica/REPORT.md`, `wifi-boot-kick/tools/vendor_const_scan.py` | - | - |
+| EV-032 | 3.6 | the vendor pre-release order: firmware chunks -> platform block -> wifi block -> release | [V*] | `wifi-rom-flow`/lane records; kprobe capture | ledger 2026-11-24 07:20 | - |
+| EV-033 | 3.6 | the four TCM bounds live at platform-block words 1-4; the full 24-word block is required for byte-identical TCM | [V*] | `wifi-s1-cpu1/REPORT.md`, this report TABLES T6 | GP3/GP4 2026-11-24 | - |
+| EV-034 | 3.6 | the ETE rings and D2H service must be armed before release | [V] | `wifi-transport-port/REPORT.md`, `wifi-ete-frames/REPORT.md` sec 2.5 | bench sessions | - |
+| EV-035 | 3.7 | the golden state values incl. TCM 0xE59FF018/0x40034000/0x37C8F8D3 and boot slot 0x000C19D1 | [V*] | `wifi-driver-clean/REPORT.md`, `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 21:10, stock 05:00 | constants cross-checked |
+| EV-036 | 3.7 | ready pair g4 id1 + g4 id2 with payload 0x01060850 inside the vendor bounds | [V*] | `wifi-d2h-direct/REPORT.md` sec 5, `wifi-ete-frames/REPORT.md` sec 2.3 | ledger 2026-11-24 14:00 | - |
+| EV-037 | 3.8 | event 0x4C is never delivered on our boot; no H2D message creates it; vendor sends nothing pre-ready | [V]/[V*] | `wifi-irq-unmask/REPORT.md`, `wifi-fw-link-event/REPORT.md`, `wifi-hcc-link/REPORT.md` | ledger 2026-11-24 12:20/15:10 | - |
+| EV-038 | 3.8 | the "scheduler fingerprint absent" reading was an instrument aliasing bug (correction C7) | [V] | `wifi-fw-postboot/REPORT.md` sec 2-3 | - | - |
+| EV-039 | 3.8 | the PD3/PD4 patch calls the firmware H2D dispatcher from the boot-task epilogue | [V*] | `wifi-irq-unmask/REPORT-PD3.md`, `REPORT-PD4.md` | ledger 2026-11-24 22:10; 2026-11-25 02:10 | - |
+| EV-040 | 3.9 | the boot decision ladder (vendor / pre-fix / post-fix paths) | [V]/[V*] | synthesis of the boot-chain evidence rows above | GP8 | - |
+
+## Section 4 - critical findings
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-041 | 4 F1 | 0xCEED clobbering is the root cause of the S1 stall; the fix is release-only boot | [V]/[V*] | `wifi-rom-dump/REPORT.md` sec 6-7 | GP8 ledger 2026-11-24 10:40 | - |
+| EV-042 | 4 F1 | an evidence-driven, bounded CECE service replaces the boot-time write | [V] | `wifi-hcc-core/src/hcc_core.h` CECE policy, `wifi-driver-clean/REPORT.md` | - | hcc_core selftest 528 |
+| EV-043 | 4 F2 | the exception-staging routine writes its 17-word frame over CPU 0x4000C..0x4004B | [V*] | `wifi-irq-unmask/REPORT-PD4.md` sec 1 | ledger 2026-11-25 00:20 | - |
+| EV-044 | 4 F2 | PD4 relocates the stub to CPU 0x108240 in a 637-byte gap with zero references | [V] | `wifi-irq-unmask/REPORT-PD4.md` sec 2 | cave read-back 2026-11-25 02:10 | hash cross-checked |
+| EV-045 | 4 F3 | the dispatcher wrapper is 0x40294 -> dispatcher 0xC18AC, contract r0 = hcc instance 0x10C190 | [V] | `wifi-irq-unmask/REPORT-PD2.md` | - | - |
+| EV-046 | 4 F3 | PD3/PD4 consumption: announce consumed in 0 polls, h2d_complete done=1, page intact | [V*] | `wifi-irq-unmask/REPORT-PD3.md` sec 5.4 | ledger 2026-11-24 22:10/22:45 | - |
+| EV-047 | 4 F4 | device D2H nodes sit in PKTRAM CA 0x01060110/0x01060440 and bodies in ACP CA 0x02000000+ | [V*] | `wifi-d2h-direct/REPORT.md`, `wifi-ete-frames/REPORT.md` sec 2.5 | ledger 2026-11-24 13:10 | - |
+| EV-048 | 4 F4 | the ETE engine copy is firmware-triggered and idle; no host write starts it | [V]/[V*] | `wifi-ete-engine/REPORT.md` (150-check selftest), `wifi-ete-frames/REPORT.md` | engine status reads 2026-11-24 | lane selftest quoted |
+| EV-049 | 4 F4 | direct read delivers the ready pair and catalogue with zero overruns | [V*] | `wifi-d2h-direct/REPORT.md` sec 5 | ledger 2026-11-24 14:00 | selftest 92/92 |
+| EV-050 | 4 F5 | the g0 id1 key-0xD8 handler dereferences ctx+0x190; only the key-0x64 create writes it | [V] | `wifi-ctx-create/REPORT.md`, `wifi-h2d-send/REPORT-G0ID1-HANDLER.md` | - | ctx selftests 40/40+26/26 |
+| EV-051 | 4 F5 | context-create type 1 allocates ctx+0x190 (0x01011448) and makes the TXQ sync clean | [V*] | `wifi-h2d-send/REPORT.md` sec 11-12 | ledger 2026-11-25 05:10 | - |
+| EV-052 | 4 F5 | the ordered lap produces firmware responses g1 id3/g1 id0x12 | [V*] | `wifi-h2d-send/REPORT.md` sec 12, TABLES T13 | ledger 2026-11-25 05:10/06:00 | frame bytes cross-checked |
+| EV-053 | 4 F6 | the 20-bit region-3 mask mis-maps out[3]/out[4] by 1 MiB | [V] | `wifi-hcc-core/src/hcc_core.h`, `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 17:20 | - |
+| EV-054 | 4 F6 | after the fix the deferred-notify flush retires (g+0xB4 = g+0xB8 = 0) | [V*] | `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 21:10 | - |
+
+## Section 5 - protocol reference
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-055 | 5.1 | the 12-byte header: total = payload+12 at +4, id u16 at +6, tag 0x5A5A at +0x0A, group low nibble of byte 0 | [V] | `wifi-ete-frames/REPORT.md` sec 1.3, `wifi-h2d-frames/REPORT.md` | - | h2d-frames selftest 233 |
+| EV-056 | 5.1 | a frame is valid iff tag 0x5A5A, total == node length, dst core matches | [V] | `wifi-h2d-frames/REPORT.md`, `wifi-d2h-direct/REPORT.md` | - | h2d-frames selftest 233 |
+| EV-057 | 5.2 | group 0 (41 slots), group 2 (19), groups 1/3/4 direction and use | [V] | `wifi-h2d-catalog/REPORT.md` sec 4-6, `wifi-h2d-frames/catalogue.md` | - | catalogue counts checked |
+| EV-058 | 5.2 | keys: 0x0064 = context-create, 0x00D8 = TXQ config sync; key at payload+8, len at +0xA, data at +0xC | [V] | `wifi-ctx-create/REPORT.md`, `wifi-h2d-frames/REPORT.md` | - | ctx selftests |
+| EV-059 | 5.3 | H2D announce: OR 1<<id into out[0] (CA 0x40039010) then OR bit0 into out[2] (CA 0x400392D4); poll out[0] to 0 | [V] | `wifi-host-replica/REPORT.md` sec 3.1, `wifi-h2d-frames/REPORT.md` | bench 2026-11-24 15:10 | - |
+| EV-060 | 5.3 | mailbox ids 1/3/5/6 semantics; 5 is a BUG trap; 0,2,4,7,8,9 dropped; never write CA 0x400392F0 | [V] | `wifi-h2d-catalog/REPORT.md` sec 3 | - | - |
+| EV-061 | 5.4 | vendor D2H service order: bitmap -> ack out[3] -> drain -> re-arm out[4] -> dispatch lowest-first | [V] | `wifi-host-replica/REPORT.md` sec 4.2, `wifi-hcc-core/src/hcc_core.h` | - | hcc-core selftest 528 |
+| EV-062 | 5.4 | handler table ids {1..7}; 0/8/9/10 dropped; id > 10 stops the word | [V] | `wifi-host-replica/REPORT.md` sec 4.3 | - | hcc-core selftest 528 |
+| EV-063 | 5.5 | SR0-2 / DR0-3 channel map, 8-byte node format, packed index/depth 32 | [V]/[V*] | `wifi-transport-port/REPORT.md` sec 1, `wifi-ete-frames/REPORT.md` | bench A/B2 2026-11-22 | - |
+| EV-064 | 5.6 | the boot register table (release/gate/page/mask/mailbox) | [V]/[V*] | TABLES T4/T9; lanes as cited | GP8, PD3 | constants cross-checked |
+
+## Section 6 - the operational duplex loop
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-065 | 6 | the ordered lap session shape (S0-S11) is what the bench actually ran | [V*] | `wifi-h2d-send/BENCH-PROCEDURE.md` Ladder C, this report sec 6 | ledger 2026-11-25 05:10 | - |
+| EV-066 | 6 | PACK BEFORE: ctx190 = 0, ctx0 = 0, table entry 0x0011C458, mask 0 | [V*] | `wifi-h2d-send/REPORT.md` sec 11 | ledger 2026-11-25 05:10 | - |
+| EV-067 | 6 | type-1 create writes ctx+0x190 = 0x01011448, ctx[0]=4, ctx+0x10=0x00010001, ctx+0x434=0x0100478C | [V*] | `wifi-h2d-send/REPORT.md`, `wifi-ctx-create/README.md` | ledger 2026-11-25 05:10 | - |
+| EV-068 | 6 | TXQ sync consumed with out0/out2/out5 = 0, mask 0, staging 0, h2d_status ok=2 timeout=0 | [V*] | `wifi-h2d-send/REPORT.md` sec 12 | ledger 2026-11-25 05:10 | - |
+| EV-069 | 6 | the module used was 400,732 B sha256 774c4f1f... with 242/242 + 233/233 selftests | [V] | `wifi-h2d-send/BUILD-NOTES.md` | ledger 2026-11-25 05:10 | - |
+| EV-070 | 6 | the hcc_core state machine IDLE->BOOT->WAIT_PLAT->WAIT_DEV->READY_TXQ_SYNC->ACTIVE | [V] | `wifi-hcc-core/src/hcc_core.h`, `INTEGRATION.md` | - | hcc-core selftest 528 |
+
+## Section 7 - bench evidence chain
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-071 | 7 | 2026-11-22 transport A/B1/B2: six viewports, upload diffs=0, release, D2H bitmap, ETE rings | [V*] | `wifi-transport-port/SUMMARY.md` | ledger 2026-11-22 | - |
+| EV-072 | 7 | 2026-11-23 recovery + install-from-stock; B3 cold-boot ready gate NEGATIVE | [V*] | `wifi-fw-ready-gate/REPORT.md` sec 14 | ledger 2026-11-23 | - |
+| EV-073 | 7 | 2026-11-24 01:15 GP1: reset pulse makes ROM S0/S1 run | [V*] | `wifi-chip-reset/REPORT.md` | ledger 2026-11-24 01:15 | - |
+| EV-074 | 7 | 2026-11-24 02:20 GP1 flakiness; pre-upload state identical across boots | [V*] | `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 02:20 | - |
+| EV-075 | 7 | 2026-11-24 03:10 GP2: mask 0 but S1 never completes | [V*] | `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 03:10 | - |
+| EV-076 | 7 | 2026-11-24 04:00 GP3: TCM bounds -> TCM copied, S1 still absent | [V*] | `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 04:00 | - |
+| EV-077 | 7 | 2026-11-24 05:00/06:20 stock golden reads: page, TCM, platform block, wifi block | [V*] | `wifi-s1-cpu1/REPORT.md`, TABLES T6/T7 | ledger 2026-11-24 05:00/06:20 | - |
+| EV-078 | 7 | 2026-11-24 05:40 GP4: TCM byte-identical incl. coreword; S1 still absent | [V*] | `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 05:40 | - |
+| EV-079 | 7 | 2026-11-24 07:20 kprobe capture of the vendor pre-release order | [V*] | this report sec 3.6; lane records | ledger 2026-11-24 07:20 | - |
+| EV-080 | 7 | 2026-11-24 08:00/08:45 GP5/GP6: both blocks and vendor-matched timing do not fix S1 | [V*] | `wifi-s1-cpu1/REPORT.md` | ledger 2026-11-24 08:00/08:45 | - |
+| EV-081 | 7 | 2026-11-24 09:20 mask ROM dumped and host-readable | [V*] | `wifi-rom-dump/REPORT.md` | ledger 2026-11-24 09:20 | - |
+| EV-082 | 7 | 2026-11-24 10:00 root cause found; 10:40 GP8 golden boot | [V]/[V*] | `wifi-rom-dump/REPORT.md`, `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 10:00/10:40 | - |
+| EV-083 | 7 | 2026-11-24 11:10-12:20 GP9/GP10/hcc-service: boot golden, IRQ layer dark, mailbox dead | [V*] | `wifi-hcc-service/REPORT.md` | ledger 2026-11-24 11:10/11:40/12:20 | - |
+| EV-084 | 7 | 2026-11-24 13:10-14:00 D2H frames decoded; complete ready handshake received | [V*] | `wifi-d2h-direct/REPORT.md` | ledger 2026-11-24 13:10/14:00 | - |
+| EV-085 | 7 | 2026-11-24 15:10 first H2D frame delivered; mailbox not acked; no-newline grammar rule | [V*] | `wifi-h2d-inject/REPORT.md` | ledger 2026-11-24 15:10 | - |
+| EV-086 | 7 | 2026-11-24 16:10 PD: exception path reached, page clobbered | [V*] | `wifi-irq-unmask/REPORT.md` | ledger 2026-11-24 16:10 | - |
+| EV-087 | 7 | 2026-11-24 17:20 F4 bug found; h2d-frames + hcc-core land | [V] | `wifi-hcc-core/REPORT.md`, `wifi-h2d-frames/REPORT.md` | ledger 2026-11-24 17:20 | selftests 528/233 |
+| EV-088 | 7 | 2026-11-24 18:25-19:00 PD2 analysis and PD2-A boot failure (live cave) | [V]/[V*] | `wifi-irq-unmask/REPORT-PD2.md` | ledger 2026-11-24 18:25/19:00 | - |
+| EV-089 | 7 | 2026-11-24 20:00-21:10 clean driver lands; F4 verified on hardware (flush retires) | [V]/[V*] | `wifi-driver-clean/REPORT.md` | ledger 2026-11-24 20:00/21:10 | - |
+| EV-090 | 7 | 2026-11-24 22:10-22:45 PD3 works and is recorded | [V*] | `wifi-irq-unmask/REPORT-PD3.md` sec 5.4 | ledger 2026-11-24 22:10/22:45 | - |
+| EV-091 | 7 | 2026-11-24 23:40-2026-11-25 00:20 TXQ sync faults; exception record read | [V*] | `wifi-h2d-send/REPORT.md`, `wifi-irq-unmask/REPORT-PD4.md` | ledger 2026-11-24 23:40, 11-25 00:20 | - |
+| EV-092 | 7 | 2026-11-25 01:10 g0 id0 control stub consumed with no exception | [V*] | `wifi-h2d-send/REPORT.md` | ledger 2026-11-25 01:10 | - |
+| EV-093 | 7 | 2026-11-25 02:10 PD4 cave works; fault reproduces; handler cascades | [V*] | `wifi-irq-unmask/REPORT-PD4.md` | ledger 2026-11-25 02:10 | - |
+| EV-094 | 7 | 2026-11-25 03:10-05:10 context-create RE; type-3 lap; type-1 breakthrough | [V]/[V*] | `wifi-ctx-create/REPORT.md`, `wifi-h2d-send/REPORT.md` | ledger 2026-11-25 03:10/04:10/05:10 | ctx selftests |
+| EV-095 | 7 | 2026-11-25 06:00 response frames decoded byte-exactly | [V*] | this report TABLES T13, lane records | ledger 2026-11-25 06:00 | frame bytes cross-checked |
+
+## Section 8 - corrections register
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-096 | 8 | C1: bitmap 0x4 is not DEVICE READY; the ready handshake is g4 id1+id2 | [V] | `wifi-host-replica/REPORT.md` | - | - |
+| EV-097 | 8 | C2: release-only boot (no 0xCECE during boot) | [V]/[V*] | `wifi-rom-dump/REPORT.md` | GP8 | - |
+| EV-098 | 8 | C3/C4: exception-bit map and header-order corrections | [V] | `wifi-rom-dump/REPORT.md` sec 9 | - | - |
+| EV-099 | 8 | C5: "S1 not host-triggerable" was wrong; our own write was the blocker | [V*] | `wifi-rom-dump/REPORT.md` | GP6 vs GP8 | - |
+| EV-100 | 8 | C6: the engine copy is not required for D2H receive | [V*] | `wifi-d2h-direct/REPORT.md` | 2026-11-24 13:10 | - |
+| EV-101 | 8 | C7: the scheduler-fingerprint conclusion was an instrument aliasing bug | [V] | `wifi-fw-postboot/REPORT.md` | - | - |
+| EV-102 | 8 | C8: out[3]/out[4] region-3 translation fix | [V]/[V*] | `wifi-driver-clean/REPORT.md` | 2026-11-24 21:10 | - |
+| EV-103 | 8 | C9: the PD3 cave is not safe for first-fault analysis; PD4 moved it | [V*] | `wifi-irq-unmask/REPORT-PD4.md` | 2026-11-25 02:10 | - |
+| EV-104 | 8 | C10: out[2]/out[5] are non-latching pulse observables | [V] | `wifi-irq-unmask/REPORT-PD3.md` sec 5.5 | 2026-11-24 22:45 | - |
+| EV-105 | 8 | C11/C12: context-create precondition; type 1 allocates | [V*] | `wifi-ctx-create/REPORT.md`, `wifi-h2d-send/REPORT.md` | 2026-11-25 04:10/05:10 | - |
+| EV-106 | 8 | C13: the PD2 cave is live on our boot | [V*] | `wifi-irq-unmask/REPORT-PD2.md` | 2026-11-24 19:00 | - |
+| EV-107 | 8 | C14: the g0 id1 fault is handler-specific, not transport | [V*] | `wifi-h2d-send/REPORT.md` | 2026-11-25 01:10 | - |
+| EV-108 | 8 | C15: sysfs grammar needs the no-newline write | [V*] | `wifi-h2d-send/BENCH-PROCEDURE.md` | 2026-11-24 15:10 | - |
+| EV-109 | 8 | C16: GP1's pulse is necessary but not sufficient | [V*] | `wifi-s1-cpu1/REPORT.md` | 2026-11-24 06:20/10:40 | - |
+
+## Section 9 - verification
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-110 | 9.1 | hcc-core selftest 528/528 PASS | [V] | `wifi-hcc-core/tools/build.sh`, `tests/hcc_core_test.c` | - | **yes** (this pass) |
+| EV-111 | 9.1 | h2d-frames build/selftest 233/233 PASS | [V] | `wifi-h2d-frames/tools/build.sh` | - | **yes** (this pass) |
+| EV-112 | 9.1 | d2h-direct selftest 92/92 PASS | [V] | `wifi-d2h-direct/tools/d2h_selftest.py` | - | **yes** (this pass) |
+| EV-113 | 9.1 | ctx-create selftests 40/40 + 26/26 PASS | [V] | `wifi-ctx-create/tools/ctx_create_re.py`, `ctx_create_frame.py` | - | **yes** (this pass) |
+| EV-114 | 9.1 | bench-tooling selftest 177/177 PASS | [V] | `wifi-bench-tooling/tools/selftest.py` | - | **yes** (this pass) |
+| EV-115 | 9.2 | static claim reproduction commands are committed and read vendor artifacts in place | [V] | lane READMEs and `REPRODUCE.md` | - | **yes** (paths checked) |
+| EV-116 | 9.3 | bench ladders are documented but must remain attended and recovery-gated | [V] | `wifi-driver-clean/BENCH-PROCEDURE.md`, `wifi-h2d-send/BENCH-PROCEDURE.md`, project `RUNBOOK.md` | - | - |
+| EV-117 | 9.4 | this report's verifier checks cross-references, markers, claim IDs and key constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (this pass) |
+
+## Sections 10-13 - limits, publication, lane map, conventions
+
+| ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
+| --- | --- | --- | --- | --- | --- | --- |
+| EV-118 | 10 | the result is message-level, not link-level; no VAP/scan/association/data path | [I] | `wifi-vendor-userspace/REPORT.md` sec 7 | - | - |
+| EV-119 | 10 | the firmware IRQ/thread layer remains dormant; PD3 bypasses only the mailbox | [V]/[V*] | `wifi-fw-link-event/REPORT.md`, `wifi-irq-unmask/REPORT.md` | 2026-11-24 | - |
+| EV-120 | 10 | the context-create frame is synthesized, not vendor-captured; key-0x64 sender unproven | [I] | `wifi-ctx-create/REPORT.md` sec 6/11 | - | - |
+| EV-121 | 10 | open questions ranked (IRQ layer, CECE service, engine trigger, startup sequence, response decode, cfg80211, data path) | [I]/[U] | this report sec 10.2 | - | - |
+| EV-122 | 11 | no vendor binary/firmware/ROM/calibration/secret is committed by this lane; blobs remain local | [V] | this report sec 11, project `PUBLISH.md` | - | **yes** (verifier checks) |
+| EV-123 | 11 | upstream Wi-Fi stack remains blocked by the closed firmware; GPL source is the route | [V] | `wifi-driver-re/SUMMARY.md`, `opensource/docs/GPL-REQUEST.md` | - | - |
+| EV-124 | 12 | the lane documentation map matches the directories present under `opensource/docs/incoming/` | [V] | the directory listing itself | - | **yes** (verifier checks) |
+| EV-125 | 13 | conventions and glossary terms as used throughout | [V] | this report sec 13 | - | - |
+
+---
+
+**Coverage statement.** Every numbered section of [REPORT.md](REPORT.md) has at least one claim
+row here; every claim row carries a marker and either an artifact path, a ledger date, or an
+explicit [I]/[U] status. If a future edit adds a claim to the report without adding it here, the
+lane verifier's section-coverage check and the project documentation audit should catch it.
+
