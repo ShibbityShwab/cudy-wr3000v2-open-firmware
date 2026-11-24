@@ -1,0 +1,76 @@
+== 1. portable logic host selftest (C99 -Wall -Wextra -Werror)
+wifi-data-tx portable logic selftest: 151/151 checks passed
+== 2. patch content (every claimed file + every claimed hook)
+  ok   patch adds/edits Kbuild
+  ok   patch adds/edits hi5622_driver.h
+  ok   patch adds/edits hi5622_dp_txrx.h
+  ok   patch adds/edits hi5622_dp_txrx.c
+  ok   patch adds/edits hi5622_cfg80211.h
+  ok   patch adds/edits hi5622_cfg80211_ops.c
+  ok   patch adds/edits hi5622_cfg80211.c
+  ok   patch adds/edits hi5622_data_tx.c
+  ok   patch adds/edits hi5622_data_tx.h
+  ok   patch adds/edits hi5622_data_tx_logic.c
+  ok   patch adds/edits hi5622_data_tx_logic.h
+  ok   patch carries hi5622_data_tx_init
+  ok   patch carries hi5622_data_tx_xmit
+  ok   patch carries hi5622_data_tx_remove
+  ok   patch carries hi5622_data_tx_status
+  ok   patch carries hi5622_data_tx_probe_store
+  ok   patch carries hi5622_dp_tx_data_post
+  ok   patch carries hi5622_dp_tx_data_poll
+  ok   patch carries data_tx_probe
+  ok   patch carries tx_post_lock
+  ok   patch carries hdtx_build_data_mpdu
+  ok   patch carries hdtx_classify_eapol
+  ok   patch carries hdtx_decide_tx
+  ok   patch carries hdtx_ring_advance
+  ok   patch carries hdtx_frame_write
+  ok   patch carries hdtx_buffer_devva
+  ok   ndo_start_xmit routes to the data path when enabled
+  ok   fail-closed default keeps the accounted drop
+  ok   data path reuses the proven dp helpers
+== 3. wire facts (literal constants in the portable header)
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   header constant
+  ok   TABLES records hmac_tx_msdu_dscr_add
+  ok   TABLES records hmac_tx_frame_control_dscr_set
+  ok   TABLES records hmac_is_eapol_key_ptk_4_4
+  ok   TABLES records 8x64x8
+  ok   TABLES records 0x0078
+  ok   TABLES records 0x0008
+  ok   TABLES records vap type 2
+  ok   TABLES records FromDS=1
+== 4. fail-closed policy + no secrets / no vendor binary
+  ok   data_tx module param
+  ok   data_tx_peer module param
+  ok   data_tx_protect module param
+  ok   data_tx_timeout_ms module param
+  ok   fail-closed default documented in code
+  ok   data_tx default is not 1
+  ok   patch has no private key
+  ok   patch never hexdumps a frame/key
+  ok   no .ko/.bin/.o/.fw under the lane directory
+  ok   patch carries no local vendor path
+== 5. ladder
+  ok   ladders/data-tx.json parses
+  ok   ladder marked not fired
+  ok   ladder states no bench contact
+  ok   abort policy present
+  ok   host-only rule stated
+  ok   recovery door required
+== 6. evidence <-> refs consistency
+  ok   refs carry the asserted all-patch chain sha
+  ok   refs carry the patched stripped sha
+  ok   refs carry the patched stripped size
+  ok   refs carry the patched unstripped sha
+
+wifi-data-tx host check: PASS

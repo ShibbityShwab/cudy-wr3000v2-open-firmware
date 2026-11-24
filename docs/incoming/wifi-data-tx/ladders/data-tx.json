@@ -1,0 +1,168 @@
+{
+  "lane": "wifi-data-tx",
+  "task": "task-150",
+  "title": "Peer-aware host->AP data TX (EAPOL-Key msg1/msg3) - DESIGN ONLY, NOT FIRED by this lane",
+  "host_only": true,
+  "not_fired_by_this_lane": true,
+  "bench_contact": false,
+  "preconditions": [
+    "fresh golden boot: page 0x86807FEF/7/2/0xABCD, mask 0, staging 0",
+    "attended session with the recovery door READY (tools/recovery-card.sh) - recovery is physical, an agent cannot recover alone",
+    "bench link PASS (tools/bench-link.sh); UART capture read-only (tools/uart-capture.sh, absolute path)",
+    "PD4 firmware pushed by hand (never packaged) and the local Wi-Fi block staged (never committed)",
+    "one module load per boot; after an exception -> power-cycle, no retry"
+  ],
+  "base": {
+    "tree": "FINAL ALL-PATCH clean-room module (stripped 308080 B sha256 5b5879497c169d6ab57dddd99487de5e69177621eeead64f5a137b31d2e70d41, 47 params) + wifi-sta-ops patch (task-149, 50 params)",
+    "lane_patch": "patches/0001-data-tx.patch (11 files) on the sta-ops successor tree",
+    "artifact": "stripped 335752 B sha256 91aa1aa56a16febc96b6ba5510ed3195f7df7712b04f8e6b9aad04e2c20e4fcb, 54 params, not fired"
+  },
+  "module_params": {
+    "common": "fw_path=hi_wifi/FIRMWARE.PD4.bin wifi_block_path=<local block> allow_frames=32 frame_gap_ms=100 h2d_send_budget=10 vap_start_first=1 vap_start_mode=1 vap_start_module=0 hcc_poll_ms=5 hcc_trace=0 stop_ap_mode=0 mgmt_diag=0 rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_keys=1 wpa_key_module=0 sta_join=0 ht_mode=0 vht_cap=0 band_vendor=0 scan_band_cfg=0 sta_ops=1 eapol_rx=1 sta_user_del=0",
+    "lane_default": "data_tx=0 data_tx_peer=1 data_tx_protect=0 data_tx_timeout_ms=200",
+    "lane_enabled": "data_tx=1 data_tx_peer=1 data_tx_protect=0 data_tx_timeout_ms=200"
+  },
+  "device_path": "/sys/bus/pci/devices/0000:00:00.0 (band-0 endpoint; use the endpoint whose dp_status exists)",
+  "rungs": [
+    {
+      "id": "L0",
+      "name": "host-only gate (no fire)",
+      "purpose": "prove the patch stack builds and the portable logic is correct before touching the bench",
+      "steps": [
+        "./tools/build-data-tx-module.sh",
+        "./tools/run-host-check.sh"
+      ],
+      "pass": [
+        "0 warnings; 54 parameters (47 + 3 sta-ops + 4 data-tx); strip .text byte-identical; artifact identity recorded",
+        "portable selftest all checks pass; host check PASS"
+      ]
+    },
+    {
+      "id": "L1",
+      "name": "fail-closed control (data_tx=0)",
+      "purpose": "the default must be byte-for-byte the previous accounted-drop behaviour; no device write from the lane",
+      "steps": [
+        "boot fresh; page/mask",
+        "insmod with common params + lane_default",
+        "boot chain, C2, AP start + hostapd WPA2 AP; observer attempts association (expected to stop at AUTH today)",
+        "capture dmesg + cfg80211_status + data_tx_status"
+      ],
+      "pass": [
+        "AP-ENABLED unchanged; WPA2 GTK key_add / set_default_key unchanged; page golden, mask 0",
+        "data_tx_status: 'data-tx: data_tx=0 disabled (no pool; fail-closed default)'",
+        "no data-tx allocation line, no lane device write"
+      ],
+      "fail_if": [
+        "any data-tx pool allocation or unexpected device write",
+        "page/mask drift or exception"
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "enabled, quiet (data_tx=1, no traffic)",
+      "purpose": "enabling the lane must not change AP start or the dp chain",
+      "steps": [
+        "boot fresh; page/mask",
+        "insmod with common params + lane_enabled",
+        "boot chain; AP start + hostapd WPA2 AP; dp chain: cat dp_probe, echo 1 > dp_setup, echo 1 > h2d_txq_addr_sync",
+        "no client, no traffic; capture dmesg + data_tx_status"
+      ],
+      "pass": [
+        "dmesg 'data_tx: lane ENABLED ... 16 in-flight frames x 1024 B coherent ... peer_required=1 protect=0 timeout_ms=200'",
+        "data_tx_status: stalled=0 failed=0 in_flight=0 free=16, all counters 0",
+        "AP-ENABLED and dp setup/TXQ sync evidence unchanged; page golden, mask 0"
+      ],
+      "fail_if": [
+        "DMA pool outside the device window (lane disabled with a clear error)",
+        "AP-start regression or unexpected frame"
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "synthetic EAPOL-Key msg1 through the real builder/ring",
+      "purpose": "first driver-built host->AP data frame via the proven MSDU ring/TXQ path (same code as ndo_start_xmit; diagnostic peer mode)",
+      "steps": [
+        "same boot as L2 after the dp chain",
+        "echo 1 > $D/data_tx_probe",
+        "sleep 1; cat $D/data_tx_status; dmesg | tail -20",
+        "optional: monitor capture on the observer host (data frame to 02:00:68:69:35:02, LLC/SNAP 0x888e)"
+      ],
+      "pass": [
+        "probe rc=0; dmesg 'synthetic EAPOL-Key msg1 shape (113 B 802.3 -> data MPDU) posted'",
+        "data_tx_status: posts=1 completed=1 in_flight=0, eapol tx=1 msg1=1 msg3=0 4_4_like=1, unprotected=1",
+        "dmesg 'data_tx: EAPOL-Key msg1/4 TX COMPLETED ...'",
+        "optional on-air witness; page golden, mask 0, AP alive"
+      ],
+      "fail_if": [
+        "posts=1 but completed stays 0 -> bounded timeout closes the lane: record POST-ONLY (missing peer/firmware context or descriptor field), no retry this boot",
+        "exception/page drift -> power-cycle"
+      ]
+    },
+    {
+      "id": "L4",
+      "name": "ndo_start_xmit without association: broadcast ARP TX COMPLETED",
+      "purpose": "prove the real dev_queue_xmit -> ndo_start_xmit path with a frame that needs no peer and no encryption",
+      "params": "data_tx=1 data_tx_peer=1 data_tx_protect=2 data_tx_timeout_ms=200 (force-clear protect so the MAC-encryption unknown cannot mask the result)",
+      "steps": [
+        "fresh boot; boot chain; AP start + hostapd WPA2 AP; dp chain",
+        "ip addr add 192.0.2.1/24 dev __ap   # documentation range, local only",
+        "ping -I __ap -c 3 -W 1 192.0.2.10  # triggers broadcast ARP requests",
+        "cat $D/data_tx_status; dmesg | tail -20",
+        "optional: monitor capture of an unprotected ARP request from the AP BSSID"
+      ],
+      "pass": [
+        "data_tx_status: posts >= 1 completed >= 1 unprotected >= 1, eapol counters 0; dropped_peer may increment (the unicast echo is peer-refused - correct)",
+        "no timeout, lane not stalled; page golden, mask 0, AP alive",
+        "optional on-air ARP witness"
+      ],
+      "fail_if": [
+        "posts>0/completed=0 -> record POST-ONLY, no retry this boot",
+        "exception -> power-cycle"
+      ]
+    },
+    {
+      "id": "L5",
+      "name": "real WPA2 4-way handshake (BLOCKED TODAY on the mgmt-tx lane)",
+      "purpose": "hostapd EAPOL-Key msg1/msg3 through ndo_start_xmit; full 4-way; AUTHORIZED; ping with the on-air observer",
+      "dependency": "the driver .mgmt_tx is fail-closed and there is no mgmt RX: a client cannot associate. Needs the mgmt-tx follow-up lane (WAL mgmt-tx family 0x01F2 and the D2H mgmt path). Expected result today: EXPECTED-BLOCKED at AUTH.",
+      "params": "data_tx=1 data_tx_peer=1 data_tx_protect=0 data_tx_timeout_ms=200, sta_ops=1 eapol_rx=1 rx_enable=1",
+      "steps": [
+        "start the AP (L2 chain + dp chain); confirm AP-ENABLED and GTK installed",
+        "observer WPA2-PSK association with the published fixture (ssid cudy-ap-test)",
+        "hostapd .add_station -> sta-ops user_add + asoc_syn committed (STA-ADDED)",
+        "hostapd msg1/4 -> xmit -> MSDU ring -> completion (data_tx_status eapol msg1=1)",
+        "drain RX: echo 1 > $D/dp_rx_drain repeatedly; msg2/4 reaches hostapd; pairwise PTK install (RX-only 0x0078); hostapd sends msg3/4",
+        "msg3/4 -> xmit -> completion (eapol msg3=1)",
+        "msg4/4 protected RX (firmware pairwise RX decrypt); hostapd PTKINITDONE -> RX_TX install -> .change_station AUTHORIZED",
+        "ping via the AP VAP with the authorized station; on-air observer captures the 4 EAPOL frames + protected data"
+      ],
+      "pass": [
+        "all four EAPOL frames observed; hostapd 'pairwise key handshake completed'",
+        "stations=1 authorized=1; data_tx posts/completed match; page golden/mask 0"
+      ],
+      "unknowns_resolved": [
+        "does the firmware encrypt a Protected-bit host-posted frame with the per-user pairwise/GTK key?",
+        "does hostapd msg3 (unprotected by its PTK-install ordering) still complete the handshake?",
+        "is an explicit firmware user context beyond .add_station required for host-posted unicast data?",
+        "does the MAC accept the frame subtype 0 shape?"
+      ]
+    },
+    {
+      "id": "L6",
+      "name": "WPA3-SAE (future)",
+      "purpose": "same mgmt-tx dependency plus the SAE auth frame TX/RX path; not part of this lane",
+      "steps": [
+        "after L5 and the SAE lane"
+      ],
+      "pass": [
+        "SAE auth/assoc + 4-way with the transition fixture"
+      ]
+    }
+  ],
+  "abort_policy": [
+    "any exception, page != 0x86807FEF/7/2/0xABCD or nonzero staging -> STOP, power-cycle, capture dmesg + read-only UART, report",
+    "data_tx_status stalled=1 -> lane closed by the bounded timeout; read-only evidence allowed, no further TX rung",
+    "POST-ONLY is recorded honestly, never retried in the same boot",
+    "human at the bench + recovery door READY for every fire"
+  ]
+}

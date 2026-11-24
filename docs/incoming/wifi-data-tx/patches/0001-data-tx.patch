@@ -1,0 +1,1783 @@
+diff --git a/Kbuild b/Kbuild
+index bff29fc..9a6ea3a 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -36,7 +36,8 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hi5622_band_cfg.o \
+ 		 hi5622_band_cfg.o hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+-		 hi5622_sta_ops_logic.o hi5622_sta_ops.o
++		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
++		 hi5622_data_tx_logic.o hi5622_data_tx.o
+ 
+ ccflags-y += -I$(src)
+ 
+diff --git a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+index 259d7ae..ad1a908 100644
+--- a/hi5622_cfg80211.c
++++ b/hi5622_cfg80211.c
+@@ -46,6 +46,7 @@
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_logic.h"
+ #include "hi5622_sta_ops.h"
++#include "hi5622_data_tx.h"
+ 
+ /* ---------------------------------------------------------------------
+  * Module parameters (host-only bench experiments; defaults are the safe
+@@ -488,6 +489,12 @@ int hi5622_cfg80211_init(struct hi5622_pci *ctx)
+ 	c->model.wiphy_allocated = true;
+ 	/* wifi-sta-ops lane (task-149): empty AP station table + counters. */
+ 	hi5622_sta_ops_init(c);
++	/* wifi-data-tx lane (task-150): peer-aware host -> AP data TX pool (only
++	 * when data_tx=1; an allocation failure logs and leaves the lane disabled -
++	 * the AP bring-up must not depend on the data path). */
++	if (hi5622_data_tx_init(c))
++		dev_warn(&ctx->pdev->dev,
++			 "cfg80211: data-TX lane init failed - the AP netdev keeps the accounted xmit drop\n");
+ 	set_wiphy_dev(wiphy, &ctx->pdev->dev);
+ 
+ 	/* capabilities */
+@@ -564,6 +571,9 @@ void hi5622_cfg80211_remove(struct hi5622_pci *ctx)
+ 	c->removing = true;
+ 	mutex_unlock(&c->lock);
+ 	cancel_work_sync(&c->reg_work);
++	/* wifi-data-tx (task-150): stop the completion work and return the pool
++	 * before any VAP netdev is unregistered (no TX may race the teardown). */
++	hi5622_data_tx_remove(c);
+ 	/* Finish any in-flight scan before the wiphy/VAP teardown: cfg80211
+ 	 * must get exactly one scan_done for the request we own. */
+ 	hi5622_scan_remove(c);
+@@ -653,6 +663,12 @@ static ssize_t cfg80211_status_show(struct device *dev,
+ 		if (m > 0)
+ 			n += m;
+ 	}
++	if (n < 4096) {
++		int m = hi5622_data_tx_status(c, tmp + n, 4096 - (size_t)n);
++
++		if (m > 0)
++			n += m;
++	}
+ 	ret = sysfs_emit(buf,
+ 			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s\n%s",
+ 			 hi5622_cfg11_auto, hi5622_band_force,
+@@ -662,8 +678,39 @@ static ssize_t cfg80211_status_show(struct device *dev,
+ }
+ static DEVICE_ATTR_RO(cfg80211_status);
+ 
++/* wifi-data-tx (task-150): read-only lane evidence + the synthetic EAPOL-Key
++ * probe action (same builder/ring post as ndo_start_xmit, for the attended
++ * ladder before an association is possible).  The attribute objects must live
++ * in this translation unit (the 6.18 DEVICE_ATTR macros define them static). */
++static ssize_t data_tx_status_show(struct device *dev,
++				   struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	char *tmp;
++	int ret, n;
++
++	(void)attr;
++	if (!ctx || !ctx->cfg)
++		return sysfs_emit(buf, "data-tx: cfg80211 layer not initialised\n");
++	tmp = kmalloc(4096, GFP_KERNEL);
++	if (!tmp)
++		return -ENOMEM;
++	n = hi5622_data_tx_status(ctx->cfg, tmp, 4096);
++	if (n < 0)
++		n = 0;
++	ret = sysfs_emit(buf, "%s", tmp);
++	kfree(tmp);
++	return ret;
++}
++static DEVICE_ATTR_RO(data_tx_status);
++
++static struct device_attribute dev_attr_data_tx_probe =
++	__ATTR(data_tx_probe, 0200, NULL, hi5622_data_tx_probe_store);
++
+ static struct attribute *hi5622_cfg11_attrs[] = {
+ 	&dev_attr_cfg80211_status.attr,
++	&dev_attr_data_tx_status.attr,
++	&dev_attr_data_tx_probe.attr,
+ 	NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_cfg11);
+diff --git a/hi5622_cfg80211.h b/hi5622_cfg80211.h
+index d85efd4..40577b3 100644
+--- a/hi5622_cfg80211.h
++++ b/hi5622_cfg80211.h
+@@ -39,6 +39,7 @@
+ #include "hi5622_sta_ops_logic.h"
+ 
+ struct hi5622_pci;
++struct hi5622_data_tx;
+ 
+ /* One VAP: the wireless_dev lives in the netdev private area so that it
+  * outlives cfg80211's post-doit references and is freed with the netdev
+@@ -92,6 +93,9 @@ struct hi5622_cfg80211 {
+ 	u32				sta_ops_rx_dropped;
+ 	u32				sta_ops_rx_bad;
+ 	u32				sta_ops_xmit_dropped;
++	/* wifi-data-tx (task-150): peer-aware host -> AP data TX state (in-flight
++	 * frame pool + bounded completion work); NULL when data_tx=0 (fail closed). */
++	struct hi5622_data_tx		*data_tx;
+ 	bool				reg_scheduled;
+ 	bool				ready_logged;
+ };
+diff --git a/hi5622_cfg80211_ops.c b/hi5622_cfg80211_ops.c
+index e196805..042697b 100644
+--- a/hi5622_cfg80211_ops.c
++++ b/hi5622_cfg80211_ops.c
+@@ -49,6 +49,7 @@
+ #include "hi5622_keys.h"
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_ops.h"
++#include "hi5622_data_tx.h"
+ 
+ /* ---------------------------------------------------------------------
+  * nl80211 iftype -> portable model iftype
+@@ -78,13 +79,19 @@ static int hi5622_vap_stop(struct net_device *dev)
+ 	return 0;
+ }
+ 
+-/* Drop-stub TX: the hdpp data path is M4.  Without ndo_start_xmit an
+- * interface bring-up would oops in the IPv6 stack (phase14 wifidrv0 lesson). */
++/* AP netdev TX.  Without ndo_start_xmit an interface bring-up would oops in
++ * the IPv6 stack (phase14 wifidrv0 lesson), so the drop path always stays.
++ *
++ * wifi-data-tx (task-150): with the fail-closed module parameter data_tx=1 the
++ * frame goes through the peer-aware data path (802.3 -> 802.11 data MPDU ->
++ * proven dp MSDU ring/TXQ post -> bounded completion).  This is the path
++ * hostapd's EAPOL-Key msg1/msg3 (l2_packet -> AF_PACKET -> dev_queue_xmit)
++ * needs for the 4-way handshake.  data_tx=0 (default) keeps the exact
++ * previous behaviour: the drop is accounted (cfg80211_status xmit_dropped). */
+ static netdev_tx_t hi5622_vap_xmit(struct sk_buff *skb, struct net_device *dev)
+ {
+-	/* wifi-sta-ops (task-149): the host -> AP data TX path is not implemented
+-	 * yet (the proven dp path is the sysfs raw-frame bench instrument).  The
+-	 * drop is accounted so a ladder can see hostapd's EAPOL TX attempts. */
++	if (hi5622_data_tx_enable)
++		return hi5622_data_tx_xmit(skb, dev);
+ 	hi5622_sta_ops_xmit_drop(dev);
+ 	dev_kfree_skb(skb);
+ 	return NETDEV_TX_OK;
+diff --git a/hi5622_data_tx.c b/hi5622_data_tx.c
+new file mode 100644
+index 0000000..80f4f66
+--- /dev/null
++++ b/hi5622_data_tx.c
+@@ -0,0 +1,746 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_data_tx.c - kernel glue for the peer-aware host -> AP data TX path
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-data-tx, shared task task-150,
++ * 2026-11-29).  No vendor source/object/firmware byte is reproduced; the
++ * wire offsets are the published decoded facts of the earlier lanes
++ * (wifi-dp-txrx / wifi-dp-tuning / wifi-sta-ops), re-derived in
++ * hi5622_data_tx_logic.c (host-tested by tools/data_tx_selftest.c).
++ *
++ * WHY: after wifi-sta-ops (task-149) the AP can start, hostapd reaches
++ * AP-ENABLED, the WPA2 GTK is installed and the firmware per-STA context can
++ * be posted - but hostapd's EAPOL-Key msg1/msg3 leave through the AP netdev
++ * ndo_start_xmit, which was only an accounted drop.  This layer turns that
++ * xmit into the proven dp TX sequence:
++ *
++ *   build 802.11 data MPDU (FromDS=1, LLC/SNAP)
++ *     -> peer-aware decision (station table from sta-ops; EAPOL-only before
++ *        the peer is authorized; Protected bit only for authorized peers)
++ *     -> write the frame into a pre-allocated coherent pool buffer in the
++ *        proven [owner][16 B zero][MPDU] layout
++ *     -> hi5622_dp_tx_data_post(): 8-byte MSDU ring entry at the per-TID
++ *        producer index, dma_wmb, packed-index publish into the device-RAM
++ *        table entry, read-back, TXQ-table publish - the exact sequence the
++ *        dp-tuning lane fired as TX COMPLETED
++ *     -> bounded completion poll (delayed work) reading the device rptr;
++ *        each completion frees the oldest skb, runs the vendor 4/4-like
++ *        EAPOL-Key detector and wakes the netdev queue
++ *     -> timeout: the lane closes for this module load (buffer parity is
++ *        kept: the DMA buffers are never reused after a stall, the net
++ *        stack's skbs are returned).
++ *
++ * WHAT IS DELIBERATELY NOT DONE: no key material is read or logged; no
++ * encryption is performed in software (the 802.11 Protected bit is set and
++ * the MAC/firmware per-user key table must do the encryption - whether it
++ * does for host-originated data frames is the ladder's open question); the
++ * "4/4-like" completion detector does NOT auto-authorize a station (in the
++ * host-SME AP flow that shape also matches msg1, so doing so would be a
++ * security bug - hostapd authorizes the peer after msg4 via .change_station).
++ */
++#include <linux/atomic.h>
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/errno.h>
++#include <linux/etherdevice.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/netdevice.h>
++#include <linux/skbuff.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_cfg80211.h"
++#include "hi5622_data_tx.h"
++#include "hi5622_data_tx_logic.h"
++#include "hi5622_driver.h"
++#include "hi5622_dp_txrx.h"
++#include "hi5622_keys.h"
++#include "hi5622_sta_ops.h"
++#include "dp_rings.h"
++#include "dp_txrx.h"
++
++#define HDTX_OWNER		0x48584454u /* "HDTX" host bookkeeping word */
++#define HDTX_POLL_MS		5u
++
++/* Documentation-example STA address (locally administered); the probe frame
++ * destination.  Never a per-unit address. */
++static const u8 hdtx_doc_sta[ETH_ALEN] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x02 };
++
++/* Module parameters - all fail-closed / tuning only. */
++unsigned int hi5622_data_tx_enable;
++module_param_named(data_tx, hi5622_data_tx_enable, uint, 0644);
++MODULE_PARM_DESC(data_tx,
++	"peer-aware host->AP data TX: 0 (default, fail closed: ndo_start_xmit keeps the accounted drop) / 1 (build the data MPDU and post through the proven dp TX ring)");
++
++unsigned int hi5622_data_tx_peer = 1u;
++module_param_named(data_tx_peer, hi5622_data_tx_peer, uint, 0644);
++MODULE_PARM_DESC(data_tx_peer,
++	"require a station-table entry for unicast data TX (default 1 = peer-aware; 0 = explicit bench diagnostic mode, unknown unicast peers allowed unprotected)");
++
++unsigned int hi5622_data_tx_protect;
++module_param_named(data_tx_protect, hi5622_data_tx_protect, uint, 0644);
++MODULE_PARM_DESC(data_tx_protect,
++	"802.11 Protected bit policy: 0 (default) = only data to authorized peers / group keys, 1 = force set, 2 = force clear");
++
++unsigned int hi5622_data_tx_timeout_ms = 200u;
++module_param_named(data_tx_timeout_ms, hi5622_data_tx_timeout_ms, uint, 0644);
++MODULE_PARM_DESC(data_tx_timeout_ms,
++	"bounded TX completion timeout in ms; on expiry the data-TX lane closes for this module load (no retry)");
++
++struct hdtx_slot {
++	bool		used;
++	u8		protect;
++	u8		eapol_msg;
++	u8		ptk_done_like;
++	u8		da[ETH_ALEN];
++	u16		mpdu_len;
++	u16		fc;
++	u32		ring_index;
++	u32		published_next;
++	u32		rptr_at_post;
++	void		*buf;		/* this slot's frame buffer */
++	u32		devva;
++	struct sk_buff	*skb;		/* NULL for the sysfs probe frame */
++	unsigned long	posted;
++};
++
++struct hi5622_data_tx {
++	struct hi5622_cfg80211	*c;
++	struct device		*dev;
++	spinlock_t		lock;
++	struct delayed_work	poll;
++	void			*pool;
++	dma_addr_t		pool_dma;
++	struct net_device	*netdev;	/* last netdev that posted */
++	atomic_t		seq_ctr;
++	struct hdtx_slot	slot[HDTX_POOL_DEPTH];
++	u16			in_flight;
++	u16			head;
++	bool			rptr_valid;
++	bool			stalled;
++	bool			failed;
++	u32			last_rptr;
++	u32			last_wptr;
++	int			last_err;
++	/* counters */
++	u32	posts;
++	u32	completed;
++	u32	dropped_off;
++	u32	dropped_gate;
++	u32	dropped_peer;
++	u32	dropped_unauth;
++	u32	dropped_big;
++	u32	dropped_short;
++	u32	dropped_nonlinear;
++	u32	dropped_full;
++	u32	timeouts;
++	u32	stray_completions;
++	u32	poll_errors;
++	u32	probe_posts;
++	u32	eapol_tx;
++	u32	eapol_msg1;
++	u32	eapol_msg3;
++	u32	eapol_4_4_like;
++	u32	protected_tx;
++	u32	unprotected_tx;
++	u32	poll_runs;
++	/* last-frame evidence */
++	u32	last_mpdu_len;
++	u32	last_fc;
++	u32	last_seq;
++	u8	last_da[ETH_ALEN];
++	u8	last_eapol_msg;
++};
++
++/* ------------------------------------------------------------------ */
++/* helpers                                                            */
++/* ------------------------------------------------------------------ */
++static struct net_device *hdtx_ap_dev(struct hi5622_cfg80211 *c)
++{
++	unsigned int i;
++
++	for (i = 0; i < HI5622_CFG_MAX_VAPS; i++) {
++		struct net_device *dev = c->vap_dev[i];
++
++		if (dev && dev->ieee80211_ptr &&
++		    dev->ieee80211_ptr->iftype == NL80211_IFTYPE_AP)
++			return dev;
++	}
++	return NULL;
++}
++
++/* Synthetic EAPOL-Key msg1-shaped 802.3 frame for the sysfs probe: a
++ * structurally valid, all-zero-body frame to the documentation STA address.
++ * It is NOT a handshake message (no real nonce/secret) - it exists to
++ * exercise the same builder + MSDU ring + TXQ path before an association is
++ * possible, with the on-air observer as witness. */
++static size_t hdtx_build_probe_frame(u8 *frame, size_t cap, const u8 *bssid)
++{
++	u8 *eap;
++	size_t len = HDTX_ETH_HDR_LEN + HDTX_EAPOL_HDR_LEN +
++		     HDTX_EAPOL_KEY_MINLEN;
++
++	if (cap < len)
++		return 0;
++	memset(frame, 0, len);
++	ether_addr_copy(frame, hdtx_doc_sta);
++	ether_addr_copy(frame + 6, bssid);
++	frame[12] = 0x88;
++	frame[13] = 0x8e;
++	eap = frame + HDTX_ETH_HDR_LEN;
++	eap[0] = 0x02;			/* EAPOL version (RSN) */
++	eap[1] = HDTX_EAPOL_TYPE_KEY;	/* EAPOL-Key */
++	eap[2] = 0x00;			/* EAPOL length 95 (0x005f) */
++	eap[3] = (u8)HDTX_EAPOL_KEY_MINLEN;
++	eap[4] = 0x02;			/* descriptor type RSN */
++	eap[5] = 0x00;			/* key info 0x0088: pairwise + ACK */
++	eap[6] = 0x88;
++	eap[7] = 0x00;			/* key length 16 */
++	eap[8] = 0x10;
++	/* replay/nonce/IV/RSC/MIC and key-data-length stay zero (synthetic) */
++	return len;
++}
++
++static void hdtx_free_skbs(struct sk_buff **skbs, unsigned int count)
++{
++	unsigned int i;
++
++	for (i = 0; i < count; i++)
++		dev_kfree_skb_any(skbs[i]);
++}
++
++/* ------------------------------------------------------------------ */
++/* TX: build -> decide -> pool -> proven dp post                      */
++/* ------------------------------------------------------------------ */
++static int hdtx_send(struct hi5622_cfg80211 *c, struct hi5622_data_tx *d,
++		     struct net_device *dev, const u8 *frame, u32 frame_len,
++		     struct sk_buff *skb, int diagnostic)
++{
++	struct hdtx_eth eth;
++	struct hdtx_eapol eapol;
++	struct hdtx_tx_decision dec;
++	struct hdtx_mpdu_params p;
++	struct hdtx_slot *slot;
++	const struct hsop_sta *csta = NULL;
++	u8 mpdu[HDTX_MPDU_MAX];
++	u8 bssid[ETH_ALEN];
++	size_t mpdu_len = 0;
++	u32 off = 0, published = 0, rptr = 0, seq;
++	unsigned long flags;
++	int rc, is_mcast, peer_found = 0, peer_authorized = 0;
++	int is_eapol = 0, group_keys;
++
++	rc = hdtx_eth_parse(frame, frame_len, &eth);
++	if (rc) {
++		d->dropped_short++;
++		d->last_err = -EINVAL;
++		return -EINVAL;
++	}
++	is_mcast = hdtx_is_multicast(eth.da);
++	if (!is_mcast) {
++		csta = hsop_sta_find_const(&c->sta_table, eth.da);
++		peer_found = csta != NULL;
++		peer_authorized = peer_found && csta->authorized != 0;
++	}
++	memset(&eapol, 0, sizeof(eapol));
++	rc = hdtx_classify_eapol(&eth, &eapol);
++	if (rc == HDTX_OK)
++		is_eapol = eapol.is_eapol;
++	/* A group key is installed when hostapd's WPA2 GTK path ran (wpa_keys
++	 * enables that op); that is the only "group protected" hint available
++	 * without a decoded key-state query. */
++	group_keys = hi5622_wpa_keys != 0 ? 1 : 0;
++	rc = hdtx_decide_tx(diagnostic ? 0u : hi5622_data_tx_peer, is_mcast,
++			    peer_found, peer_authorized, is_eapol,
++			    hi5622_data_tx_protect, group_keys, &dec);
++	if (rc) {
++		d->last_err = -EINVAL;
++		return -EINVAL;
++	}
++	if (!dec.allowed) {
++		if (dec.reason == HDTX_EPEER)
++			d->dropped_peer++;
++		else
++			d->dropped_unauth++;
++		d->last_err = (dec.reason == HDTX_EPEER) ? -ENOENT : -EPERM;
++		return d->last_err;
++	}
++
++	ether_addr_copy(bssid, dev->dev_addr);
++	seq = (u32)(atomic_inc_return(&d->seq_ctr) - 1) & HDTX_SEQ_MASK;
++	memset(&p, 0, sizeof(p));
++	p.bssid = bssid;
++	p.da = eth.da;
++	p.sa = eth.sa;
++	p.payload = eth.payload;
++	p.payload_len = eth.payload_len;
++	p.seq = (u16)seq;
++	p.qos = 0;		/* non-QoS data; TID 0 (EAPOL is best effort) */
++	p.tid = 0;
++	p.protected_frame = dec.protect ? 1u : 0u;
++	rc = hdtx_build_data_mpdu(mpdu, sizeof(mpdu), &mpdu_len, &p);
++	if (rc) {
++		d->dropped_big++;
++		d->last_err = -EMSGSIZE;
++		return -EMSGSIZE;
++	}
++
++	spin_lock_irqsave(&d->lock, flags);
++	if (d->failed || d->stalled) {
++		rc = -EIO;
++		goto out_unlock;
++	}
++	if (d->in_flight >= HDTX_POOL_DEPTH) {
++		d->dropped_full++;
++		rc = -ENOSPC;
++		goto out_unlock;
++	}
++	slot = &d->slot[(d->head + d->in_flight) % HDTX_POOL_DEPTH];
++	rc = hdtx_frame_write(slot->buf, HDTX_FRAME_AREA, HDTX_OWNER, mpdu,
++			      (u32)mpdu_len, &off);
++	if (rc) {
++		rc = -EINVAL;
++		goto out_unlock;
++	}
++	if (d->in_flight == 0) {
++		/* refresh the completion baseline while the ring is idle */
++		u32 w_idle = 0, r_idle = 0;
++
++		if (hi5622_dp_tx_data_poll(c->ctx, 0u, &w_idle, &r_idle) == 0) {
++			d->last_rptr = r_idle;
++			d->last_wptr = w_idle;
++			d->rptr_valid = true;
++		}
++	}
++	rc = hi5622_dp_tx_data_post(c->ctx, slot->devva, (u16)mpdu_len,
++				    DP_TXRX_VAP_TYPE_2, 0u, 0u,
++				    &published, &rptr);
++	if (rc) {
++		d->dropped_gate++;
++		d->last_err = rc;
++		goto out_unlock;
++	}
++	slot->used = true;
++	slot->protect = dec.protect ? 1u : 0u;
++	slot->ring_index = published & 0x7fffu;
++	slot->published_next = published;
++	slot->rptr_at_post = rptr;
++	slot->skb = skb;
++	slot->posted = jiffies;
++	slot->mpdu_len = (u16)mpdu_len;
++	slot->fc = hdtx_mpdu_fc(0u, slot->protect);
++	ether_addr_copy(slot->da, eth.da);
++	slot->eapol_msg = is_eapol ? eapol.msg : HDTX_EAPOL_MSG_NONE;
++	slot->ptk_done_like = (is_eapol && eapol.ptk_done_like) ? 1u : 0u;
++	d->in_flight++;
++	d->posts++;
++	if (slot->protect)
++		d->protected_tx++;
++	else
++		d->unprotected_tx++;
++	ether_addr_copy(d->last_da, eth.da);
++	d->last_mpdu_len = (u32)mpdu_len;
++	d->last_fc = slot->fc;
++	d->last_seq = seq;
++	d->last_eapol_msg = slot->eapol_msg;
++	d->netdev = dev;
++	d->last_err = 0;
++	rc = 0;
++out_unlock:
++	spin_unlock_irqrestore(&d->lock, flags);
++	if (rc)
++		return rc;
++	queue_delayed_work(system_wq, &d->poll,
++			   msecs_to_jiffies(HDTX_POLL_MS));
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* TX completion: bounded poll, skb recycle, vendor 4/4-like detector */
++/* ------------------------------------------------------------------ */
++struct hdtx_done {
++	u8	eapol_msg;
++	u8	protect;
++	u8	ptk_done_like;
++	u8	da[ETH_ALEN];
++	u16	mpdu_len;
++};
++
++static void hdtx_poll_work(struct work_struct *work)
++{
++	struct delayed_work *dw = to_delayed_work(work);
++	struct hi5622_data_tx *d = container_of(dw, struct hi5622_data_tx,
++						poll);
++	struct hi5622_cfg80211 *c = d->c;
++	struct sk_buff *freed[HDTX_POOL_DEPTH];
++	struct hdtx_done done[HDTX_POOL_DEPTH];
++	unsigned int nfreed = 0, ndone = 0, i;
++	unsigned long flags;
++	u32 wptr = 0, rptr = 0, adv = 0;
++	bool rearm = false, stalled = false, poll_ok = false;
++	int rc;
++
++	d->poll_runs++;
++	rc = hi5622_dp_tx_data_poll(c->ctx, 0u, &wptr, &rptr);
++	poll_ok = (rc == 0);
++
++	spin_lock_irqsave(&d->lock, flags);
++	if (poll_ok) {
++		if (!d->rptr_valid) {
++			d->last_rptr = rptr;
++			d->rptr_valid = true;
++		} else if (hdtx_ring_advance(d->last_rptr, rptr,
++					     DP_TXRX_TX_RING_DEPTH,
++					     &adv) != HDTX_OK) {
++			d->poll_errors++;
++		} else {
++			d->last_rptr = rptr;
++			d->last_wptr = wptr;
++			if (adv > d->in_flight) {
++				d->stray_completions += adv - d->in_flight;
++				adv = d->in_flight;
++			}
++			while (adv > 0u && d->in_flight > 0u) {
++				struct hdtx_slot *slot = &d->slot[d->head];
++
++				if (!slot->used)
++					break; /* bookkeeping mismatch: stop */
++				slot->used = false;
++				if (slot->skb && nfreed < HDTX_POOL_DEPTH)
++					freed[nfreed++] = slot->skb;
++				slot->skb = NULL;
++				d->completed++;
++				if (slot->eapol_msg != HDTX_EAPOL_MSG_NONE) {
++					d->eapol_tx++;
++					if (slot->eapol_msg ==
++					    HDTX_EAPOL_MSG_1)
++						d->eapol_msg1++;
++					else if (slot->eapol_msg ==
++						 HDTX_EAPOL_MSG_3)
++						d->eapol_msg3++;
++					if (slot->ptk_done_like)
++						d->eapol_4_4_like++;
++					if (ndone < HDTX_POOL_DEPTH) {
++						done[ndone].eapol_msg =
++							slot->eapol_msg;
++						done[ndone].protect =
++							slot->protect;
++						done[ndone].ptk_done_like =
++							slot->ptk_done_like;
++						done[ndone].mpdu_len =
++							slot->mpdu_len;
++						ether_addr_copy(
++							done[ndone].da,
++							slot->da);
++						ndone++;
++					}
++				}
++				d->head = (u16)((d->head + 1u) %
++						HDTX_POOL_DEPTH);
++				d->in_flight--;
++				adv--;
++			}
++		}
++	}
++	if (d->in_flight > 0u && !d->stalled) {
++		struct hdtx_slot *oldest = &d->slot[d->head];
++		unsigned long limit =
++			msecs_to_jiffies(hi5622_data_tx_timeout_ms);
++
++		if (time_after(jiffies, oldest->posted + limit)) {
++			/* bounded completion timeout: return the net stack's
++			 * skbs, keep the DMA buffers (parity), close the lane */
++			d->stalled = true;
++			d->timeouts++;
++			for (i = 0; i < d->in_flight; i++) {
++				struct hdtx_slot *s =
++					&d->slot[(d->head + i) %
++						 HDTX_POOL_DEPTH];
++
++				if (s->skb && nfreed < HDTX_POOL_DEPTH)
++					freed[nfreed++] = s->skb;
++				s->skb = NULL;
++			}
++			d->in_flight = 0;
++			d->head = 0;
++			stalled = true;
++		}
++	}
++	if (d->stalled)
++		rearm = false;
++	else if (d->in_flight > 0u)
++		rearm = true;
++	spin_unlock_irqrestore(&d->lock, flags);
++
++	hdtx_free_skbs(freed, nfreed);
++	for (i = 0; i < ndone; i++) {
++		const char *what = done[i].eapol_msg == HDTX_EAPOL_MSG_1 ?
++			"msg1/4" :
++			done[i].eapol_msg == HDTX_EAPOL_MSG_3 ? "msg3/4" :
++			"other EAPOL-Key";
++
++		dev_info(d->dev,
++			 "data_tx: EAPOL-Key %s TX COMPLETED (peer %pM, %u B MPDU, protected=%u, key-data-len-zero=%u) - vendor hmac_is_eapol_key_ptk_4_4 shape=%u (no key material logged)\n",
++			 what, done[i].da, done[i].mpdu_len,
++			 done[i].protect, done[i].ptk_done_like,
++			 done[i].ptk_done_like);
++	}
++	if (stalled)
++		dev_err(d->dev,
++			"data_tx: bounded completion timeout (%u ms): device rptr did not consume the posted frame - lane CLOSED for this module load (no retry; a power-cycle/module reload is the reset; the DMA buffers stay owned by the device)\n",
++			hi5622_data_tx_timeout_ms);
++	if (rearm)
++		queue_delayed_work(system_wq, &d->poll,
++				   msecs_to_jiffies(HDTX_POLL_MS));
++}
++
++/* ------------------------------------------------------------------ */
++/* ndo_start_xmit                                                     */
++/* ------------------------------------------------------------------ */
++netdev_tx_t hi5622_data_tx_xmit(struct sk_buff *skb, struct net_device *dev)
++{
++	struct wireless_dev *wdev;
++	struct hi5622_cfg80211 *c;
++	struct hi5622_data_tx *d;
++
++	if (!skb || !dev)
++		return NETDEV_TX_OK;
++	wdev = dev->ieee80211_ptr;
++	if (!wdev || !wdev->wiphy)
++		goto drop;
++	c = wiphy_priv(wdev->wiphy);
++	if (!c)
++		goto drop;
++	d = c->data_tx;
++	if (!d) {
++		hi5622_sta_ops_xmit_drop(dev);
++		goto drop;
++	}
++	if (wdev->iftype != NL80211_IFTYPE_AP) {
++		d->dropped_off++;
++		goto drop;
++	}
++	if (!netif_running(dev)) {
++		d->dropped_off++;
++		goto drop;
++	}
++	if (skb->len < HDTX_ETH_HDR_LEN) {
++		d->dropped_short++;
++		goto drop;
++	}
++	if (skb_headlen(skb) < skb->len) {
++		/* the builder needs a linear 802.3 frame and xmit is atomic */
++		d->dropped_nonlinear++;
++		goto drop;
++	}
++	if (hdtx_send(c, d, dev, skb->data, (u32)skb->len, skb, 0) != 0)
++		goto drop;
++	return NETDEV_TX_OK;
++drop:
++	dev_kfree_skb_any(skb);
++	return NETDEV_TX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* lifecycle                                                          */
++/* ------------------------------------------------------------------ */
++int hi5622_data_tx_init(struct hi5622_cfg80211 *c)
++{
++	struct hi5622_data_tx *d;
++	unsigned int i;
++	int rc;
++
++	if (!c || !c->ctx)
++		return -EINVAL;
++	if (!hi5622_data_tx_enable) {
++		dev_info(&c->ctx->pdev->dev,
++			 "data_tx: lane disabled (data_tx=0, fail-closed default) - ndo_start_xmit keeps the accounted drop; set data_tx=1 at insmod to enable the peer-aware data TX path\n");
++		return 0;
++	}
++	BUILD_BUG_ON(HDTX_FRAME_AREA != DP_TXRX_FRAME_AREA);
++	BUILD_BUG_ON(HDTX_MPDU_MAX != DP_TXRX_MAX_MPDU);
++	BUILD_BUG_ON(HDTX_FRAME_HOST_HDR != DP_TXRX_FRAME_HOST_HDR);
++	BUILD_BUG_ON(HDTX_FRAME_DMA_HDR != DP_TXRX_FRAME_DMA_HDR);
++	BUILD_BUG_ON(DP_TXRX_VAP_TYPE_2 != 2);
++	BUILD_BUG_ON(HDTX_POOL_DEPTH > DP_TXRX_TX_RING_DEPTH);
++
++	d = kzalloc(sizeof(*d), GFP_KERNEL);
++	if (!d)
++		return -ENOMEM;
++	d->c = c;
++	/* hi5622_data_tx_init runs from hi5622_cfg80211_init BEFORE
++	 * set_wiphy_dev(), so root the device at the PCI endpoint directly. */
++	d->dev = &c->ctx->pdev->dev;
++	spin_lock_init(&d->lock);
++	INIT_DELAYED_WORK(&d->poll, hdtx_poll_work);
++	atomic_set(&d->seq_ctr, 0);
++	d->pool = dma_alloc_coherent(d->dev, HDTX_POOL_BYTES, &d->pool_dma,
++				     GFP_KERNEL);
++	if (!d->pool) {
++		dev_err(d->dev,
++			"data_tx: dma_alloc_coherent(%u B) failed - lane disabled (fail closed)\n",
++			HDTX_POOL_BYTES);
++		kfree(d);
++		return 0;
++	}
++	for (i = 0; i < HDTX_POOL_DEPTH; i++) {
++		u64 dma = (u64)d->pool_dma + (u64)i * HDTX_FRAME_AREA;
++		u32 devva = 0;
++
++		rc = hdtx_buffer_devva(dma, DP_HOST_DMA_LO, DP_HOST_DMA_HI,
++				       &devva);
++		if (rc) {
++			dev_err(d->dev,
++				"data_tx: pool buffer %u DMA 0x%llx outside the device window 0x%08x..0x%08x - lane disabled\n",
++				i, (unsigned long long)dma, DP_HOST_DMA_LO,
++				DP_HOST_DMA_HI);
++			dma_free_coherent(d->dev, HDTX_POOL_BYTES, d->pool,
++					  d->pool_dma);
++			kfree(d);
++			return 0;
++		}
++		d->slot[i].buf = (u8 *)d->pool + (size_t)i * HDTX_FRAME_AREA;
++		d->slot[i].devva = devva;
++	}
++	c->data_tx = d;
++	dev_info(d->dev,
++		 "data_tx: lane ENABLED (data_tx=1) - %u in-flight frames x %u B coherent at devva 0x%08x, peer_required=%u protect=%u timeout_ms=%u; AP ndo_start_xmit now builds the 802.11 data MPDU (FromDS=1, LLC/SNAP) and posts it through the proven MSDU ring/TXQ path\n",
++		 HDTX_POOL_DEPTH, HDTX_FRAME_AREA, d->slot[0].devva,
++		 hi5622_data_tx_peer, hi5622_data_tx_protect,
++		 hi5622_data_tx_timeout_ms);
++	return 0;
++}
++
++void hi5622_data_tx_remove(struct hi5622_cfg80211 *c)
++{
++	struct hi5622_data_tx *d;
++	struct sk_buff *freed[HDTX_POOL_DEPTH];
++	unsigned int nfreed = 0, i;
++	unsigned long flags;
++
++	if (!c)
++		return;
++	d = c->data_tx;
++	if (!d)
++		return;
++	c->data_tx = NULL;
++	cancel_delayed_work_sync(&d->poll);
++	spin_lock_irqsave(&d->lock, flags);
++	for (i = 0; i < HDTX_POOL_DEPTH; i++) {
++		if (d->slot[i].skb && nfreed < HDTX_POOL_DEPTH)
++			freed[nfreed++] = d->slot[i].skb;
++		d->slot[i].skb = NULL;
++		d->slot[i].used = false;
++	}
++	spin_unlock_irqrestore(&d->lock, flags);
++	hdtx_free_skbs(freed, nfreed);
++	if (d->pool)
++		dma_free_coherent(d->dev, HDTX_POOL_BYTES, d->pool, d->pool_dma);
++	kfree(d);
++}
++
++/* ------------------------------------------------------------------ */
++/* sysfs: status + probe                                              */
++/* ------------------------------------------------------------------ */
++int hi5622_data_tx_status(struct hi5622_cfg80211 *c, char *buf, size_t len)
++{
++	struct hi5622_data_tx *d;
++	unsigned long flags;
++	int n = 0;
++
++	if (!c || !buf)
++		return -EINVAL;
++	d = c->data_tx;
++	if (!d)
++		return scnprintf(buf, len,
++				 "data-tx: data_tx=%u disabled (no pool; fail-closed default)\n",
++				 hi5622_data_tx_enable);
++	if (len == 0)
++		return 0;
++	spin_lock_irqsave(&d->lock, flags);
++	if (n < (int)len)
++		n += scnprintf(buf + n, len - (size_t)n,
++			       "data-tx: data_tx=%u peer_required=%u protect=%u timeout_ms=%u stalled=%u failed=%u pool=%u in_flight=%u free=%u\n",
++			       hi5622_data_tx_enable, hi5622_data_tx_peer,
++			       hi5622_data_tx_protect,
++			       hi5622_data_tx_timeout_ms,
++			       d->stalled ? 1u : 0u, d->failed ? 1u : 0u,
++			       HDTX_POOL_DEPTH, d->in_flight,
++			       (unsigned int)(HDTX_POOL_DEPTH - d->in_flight));
++	if (n < (int)len)
++		n += scnprintf(buf + n, len - (size_t)n,
++			       "data-tx tx: posts=%u completed=%u protected=%u unprotected=%u dropped(off=%u gate=%u peer=%u unauth=%u big=%u short=%u nonlin=%u full=%u) timeouts=%u stray=%u poll_errors=%u probes=%u\n",
++			       d->posts, d->completed, d->protected_tx,
++			       d->unprotected_tx, d->dropped_off,
++			       d->dropped_gate, d->dropped_peer,
++			       d->dropped_unauth, d->dropped_big,
++			       d->dropped_short, d->dropped_nonlinear,
++			       d->dropped_full, d->timeouts,
++			       d->stray_completions, d->poll_errors,
++			       d->probe_posts);
++	if (n < (int)len)
++		n += scnprintf(buf + n, len - (size_t)n,
++			       "data-tx eapol: tx=%u msg1=%u msg3=%u 4_4_like=%u (vendor hmac_is_eapol_key_ptk_4_4 shape on TX completion; not used to authorize - hostapd .change_station owns AUTHORIZED)\n",
++			       d->eapol_tx, d->eapol_msg1, d->eapol_msg3,
++			       d->eapol_4_4_like);
++	if (n < (int)len)
++		n += scnprintf(buf + n, len - (size_t)n,
++			       "data-tx last: mpdu=%u B fc=0x%04x seq=%u da=%pM eapol_msg=%u rptr=0x%04x wptr=0x%04x last_err=%d\n",
++			       d->last_mpdu_len, d->last_fc, d->last_seq,
++			       d->last_da, d->last_eapol_msg,
++			       d->last_rptr, d->last_wptr, d->last_err);
++	spin_unlock_irqrestore(&d->lock, flags);
++	return n;
++}
++
++ssize_t hi5622_data_tx_probe_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = dev_get_drvdata(dev);
++	struct hi5622_cfg80211 *c;
++	struct hi5622_data_tx *d;
++	struct net_device *vap;
++	u8 frame[HDTX_ETH_HDR_LEN + HDTX_EAPOL_HDR_LEN +
++		 HDTX_EAPOL_KEY_MINLEN];
++	size_t frame_len;
++	int rc;
++
++	(void)attr;
++	if (!ctx || !ctx->cfg)
++		return -ENODEV;
++	if (sysfs_streq(buf, "1") == 0)
++		return -EINVAL;
++	c = ctx->cfg;
++	d = c->data_tx;
++	if (!d)
++		return -EOPNOTSUPP;
++	vap = hdtx_ap_dev(c);
++	if (!vap) {
++		dev_warn(dev,
++			 "data_tx_probe: no AP VAP netdev yet - start the AP first (hostapd NEW_BEACON/start_ap creates it); no frame posted\n");
++		return -ENODEV;
++	}
++	frame_len = hdtx_build_probe_frame(frame, sizeof(frame), vap->dev_addr);
++	if (frame_len == 0)
++		return -ENOMEM;
++	rc = hdtx_send(c, d, vap, frame, (u32)frame_len, NULL, 1);
++	if (rc) {
++		dev_warn(dev,
++			 "data_tx_probe: probe frame refused (rc %d) at the dp TX gate/peer decision - no device write or no completion; check data_tx_status\n",
++			 rc);
++		return rc;
++	}
++	d->probe_posts++;
++	dev_info(dev,
++		 "data_tx_probe: synthetic EAPOL-Key msg1 shape (%zu B 802.3 -> data MPDU) posted through the same builder + MSDU ring + TXQ publish as ndo_start_xmit, dst 02:00:68:69:35:02; no key material (all-zero synthetic body). Observe data_tx_status (posts/completed), dp_tx_complete_poll and the on-air observer.\n",
++		 frame_len);
++	return (ssize_t)count;
++}
+diff --git a/hi5622_data_tx.h b/hi5622_data_tx.h
+new file mode 100644
+index 0000000..b15e022
+--- /dev/null
++++ b/hi5622_data_tx.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_data_tx.h - kernel glue for the peer-aware host -> AP data TX path
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-data-tx, shared task task-150,
++ * 2026-11-29).  The portable 802.3 -> 802.11 MPDU / EAPOL / decision logic
++ * lives in hi5622_data_tx_logic.c (host-tested); this header is the kernel
++ * binding used by:
++ *   - the AP netdev's ndo_start_xmit (hostapd's EAPOL-Key msg1/msg3 and all
++ *     bridged data frames),
++ *   - the data_tx_probe sysfs action (the same builder/ring post without an
++ *     association, for the attended ladder),
++ *   - the read-only data_tx_status evidence line.
++ *
++ * The ring push + TXQ publish + completion read reuse the proven dp TX
++ * sequence (wifi-dp-tuning TX COMPLETED) through two small helpers exported
++ * by hi5622_dp_txrx.c; this layer owns the in-flight frame pool and the
++ * bounded completion/timeout policy.
++ *
++ * Fail-closed: data_tx=0 (default) means the AP netdev keeps the old
++ * accounted drop (hi5622_sta_ops_xmit_drop) and nothing is allocated.
++ */
++#ifndef HI5622_DATA_TX_H
++#define HI5622_DATA_TX_H
++
++#include <linux/netdevice.h>
++#include <linux/skbuff.h>
++#include <linux/types.h>
++
++struct device;
++struct device_attribute;
++struct hi5622_cfg80211;
++
++/* Module parameters (defined in hi5622_data_tx.c). */
++extern unsigned int hi5622_data_tx_enable;	/* data_tx: 0 = fail closed */
++extern unsigned int hi5622_data_tx_peer;	/* data_tx_peer: peer required */
++extern unsigned int hi5622_data_tx_protect;	/* data_tx_protect: 0/1/2   */
++extern unsigned int hi5622_data_tx_timeout_ms;	/* completion timeout      */
++
++/* Probe the tx/rx object and allocate the in-flight pool (called from
++ * hi5622_cfg80211_init; no device access).  Returns 0 even when the pool
++ * cannot be allocated - the lane then stays disabled and accounts drops. */
++int  hi5622_data_tx_init(struct hi5622_cfg80211 *c);
++void hi5622_data_tx_remove(struct hi5622_cfg80211 *c);
++
++/* ndo_start_xmit: consumes the skb in every path (NETDEV_TX_OK). */
++netdev_tx_t hi5622_data_tx_xmit(struct sk_buff *skb, struct net_device *dev);
++
++/* sysfs: data_tx_status (RO) and data_tx_probe (WO, write 1). */
++int hi5622_data_tx_status(struct hi5622_cfg80211 *c, char *buf, size_t len);
++ssize_t hi5622_data_tx_probe_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count);
++
++#endif /* HI5622_DATA_TX_H */
+diff --git a/hi5622_data_tx_logic.c b/hi5622_data_tx_logic.c
+new file mode 100644
+index 0000000..9ef7a5e
+--- /dev/null
++++ b/hi5622_data_tx_logic.c
+@@ -0,0 +1,293 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_data_tx_logic.c - portable data-TX logic (802.3 -> 802.11 data
++ * MPDU, EAPOL-Key classification, peer-aware TX decision, completion
++ * bookkeeping).  Host-tested by tools/data_tx_selftest.c; shared verbatim by
++ * the kernel glue.  ORIGINAL clean-room code (lane wifi-data-tx, task-150).
++ *
++ * No Linux header and no device access: this file is compiled both by the
++ * host selftest (C99) and as part of the kernel module.
++ */
++#include "hi5622_data_tx_logic.h"
++
++static void hdtx_put_le16(u8 *p, u16 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)((v >> 8) & 0xffu);
++}
++
++static void hdtx_put_le32(u8 *p, u32 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)((v >> 8) & 0xffu);
++	p[2] = (u8)((v >> 16) & 0xffu);
++	p[3] = (u8)((v >> 24) & 0xffu);
++}
++
++static u16 hdtx_get_be16(const u8 *p)
++{
++	return (u16)(((u16)p[0] << 8) | (u16)p[1]);
++}
++
++static void hdtx_copy_addr(u8 *p, const u8 addr[6])
++{
++	p[0] = addr[0];
++	p[1] = addr[1];
++	p[2] = addr[2];
++	p[3] = addr[3];
++	p[4] = addr[4];
++	p[5] = addr[5];
++}
++
++int hdtx_is_multicast(const u8 addr[6])
++{
++	if (addr == NULL)
++		return 0;
++	return (addr[0] & 0x01u) != 0u;
++}
++
++/* ------------------------------------------------------------------ */
++/* 802.3 -> 802.11 data MPDU                                          */
++/* ------------------------------------------------------------------ */
++int hdtx_eth_parse(const u8 *frame, u32 len, struct hdtx_eth *out)
++{
++	if (out == NULL)
++		return HDTX_EARG;
++	memset(out, 0, sizeof(*out));
++	if (frame == NULL)
++		return HDTX_EARG;
++	if (len < HDTX_ETH_HDR_LEN)
++		return HDTX_ESHORT;
++	out->da = frame;
++	out->sa = frame + 6;
++	out->ethertype = hdtx_get_be16(frame + 12);
++	out->payload = frame + 12;
++	out->payload_len = len - 12u;
++	out->frame_len = len;
++	out->ok = 1;
++	if (out->ethertype == HDTX_ETH_P_VLAN)
++		return HDTX_EFORMAT; /* 802.3ac tags are not supported (fail closed) */
++	return HDTX_OK;
++}
++
++u16 hdtx_mpdu_fc(u8 qos, u8 protected_frame)
++{
++	u16 fc = qos ? HDTX_FC_QOS_DATA_FROMDS : HDTX_FC_DATA_FROMDS;
++
++	if (protected_frame)
++		fc |= HDTX_FC_PROTECTED;
++	return fc;
++}
++
++int hdtx_build_data_mpdu(u8 *out, size_t cap, size_t *out_len,
++			 const struct hdtx_mpdu_params *p)
++{
++	static const u8 llc_snap[6] = { 0xaau, 0xaau, 0x03u, 0x00u, 0x00u,
++					0x00u };
++	size_t hdr_len;
++	size_t total;
++
++	if (out == NULL || out_len == NULL || p == NULL)
++		return HDTX_EARG;
++	if (p->bssid == NULL || p->da == NULL || p->sa == NULL ||
++	    p->payload == NULL)
++		return HDTX_EARG;
++	if (p->payload_len < 2u) /* the LLC/SNAP type must be present */
++		return HDTX_ESHORT;
++	if (p->qos > 1u || p->protected_frame > 1u || p->tid > 15u)
++		return HDTX_EARG;
++	hdr_len = p->qos ? HDTX_80211_QOS_HDR_LEN : HDTX_80211_HDR_LEN;
++	/* payload starts with the 2-byte Ethernet type, so only the 6-byte LLC
++	 * header is added in front of it (the full LLC/SNAP prefix is 8) */
++	total = hdr_len + HDTX_LLC_HDR_LEN + (size_t)p->payload_len;
++	if (total > cap)
++		return HDTX_EBOUNDS;
++	if (total > HDTX_MPDU_MAX)
++		return HDTX_EBOUNDS;
++
++	hdtx_put_le16(out + 0, hdtx_mpdu_fc(p->qos, p->protected_frame));
++	hdtx_put_le16(out + 2, 0u);		/* duration */
++	hdtx_copy_addr(out + 4, p->da);		/* addr1 = DA */
++	hdtx_copy_addr(out + 10, p->bssid);	/* addr2 = BSSID/TA */
++	hdtx_copy_addr(out + 16, p->sa);	/* addr3 = SA (FromDS=1) */
++	hdtx_put_le16(out + 22,
++		      (u16)(((u16)p->seq & (u16)HDTX_SEQ_MASK) <<
++			    HDTX_80211_SEQ_SHIFT));
++	if (p->qos)
++		hdtx_put_le16(out + 24, (u16)(p->tid & 0x0fu));
++	memcpy(out + hdr_len, llc_snap, sizeof(llc_snap));
++	/* the caller's payload starts with the 2-byte big-endian Ethernet type,
++	 * i.e. the last two bytes of the 8-byte LLC/SNAP prefix */
++	memcpy(out + hdr_len + sizeof(llc_snap), p->payload,
++	       (size_t)p->payload_len);
++	*out_len = total;
++	return HDTX_OK;
++}
++
++int hdtx_frame_write(u8 *buf, size_t cap, u32 owner, const u8 *mpdu,
++		     u32 mpdu_len, u32 *devva_off)
++{
++	if (buf == NULL || mpdu == NULL || devva_off == NULL)
++		return HDTX_EARG;
++	if (mpdu_len == 0u || mpdu_len > HDTX_MPDU_MAX)
++		return HDTX_EARG;
++	if (cap < (size_t)HDTX_FRAME_MPDU_OFF + (size_t)mpdu_len)
++		return HDTX_EBOUNDS;
++	memset(buf, 0, HDTX_FRAME_MPDU_OFF);
++	hdtx_put_le32(buf, owner);
++	memcpy(buf + HDTX_FRAME_MPDU_OFF, mpdu, (size_t)mpdu_len);
++	*devva_off = HDTX_FRAME_HOST_HDR;
++	return HDTX_OK;
++}
++
++int hdtx_buffer_devva(u64 dma, u32 lo, u32 hi, u32 *devva)
++{
++	u64 end;
++
++	if (devva == NULL || lo > hi)
++		return HDTX_EARG;
++	if (dma < (u64)lo || dma > (u64)hi)
++		return HDTX_EBOUNDS;
++	end = dma + HDTX_FRAME_AREA - 1u;
++	if (end > (u64)hi)
++		return HDTX_EBOUNDS;
++	*devva = (u32)dma + HDTX_FRAME_HOST_HDR;
++	return HDTX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* EAPOL / EAPOL-Key classification                                   */
++/* ------------------------------------------------------------------ */
++int hdtx_classify_eapol(const struct hdtx_eth *eth, struct hdtx_eapol *out)
++{
++	const u8 *eap;
++	u32 avail;
++
++	if (out == NULL)
++		return HDTX_EARG;
++	memset(out, 0, sizeof(*out));
++	if (eth == NULL || !eth->ok || eth->payload == NULL)
++		return HDTX_EARG;
++	if (eth->ethertype != HDTX_ETH_P_PAE)
++		return HDTX_OK; /* not EAPOL: a plain data frame */
++	if (eth->payload_len < 2u + HDTX_EAPOL_HDR_LEN)
++		return HDTX_ESHORT;
++
++	eap = eth->payload + 2;			/* first EAPOL byte */
++	avail = eth->payload_len - 2u;		/* bytes of EAPOL */
++	out->is_eapol = 1;
++	out->eapol_type = eap[1];
++	out->eapol_len = hdtx_get_be16(eap + 2);
++	if (out->eapol_type != HDTX_EAPOL_TYPE_KEY)
++		return HDTX_OK;
++	if (out->eapol_len < HDTX_EAPOL_KEY_MINLEN)
++		return HDTX_OK;
++	if (avail < HDTX_EAPOL_HDR_LEN + (u32)HDTX_EAPOL_KEY_MINLEN)
++		return HDTX_ESHORT; /* header claims a key body beyond the frame */
++	out->is_key = 1;
++	if (avail >= HDTX_EAPOL_KEY_INFO_OFF + 2u) {
++		u16 info = hdtx_get_be16(eap + HDTX_EAPOL_KEY_INFO_OFF);
++
++		out->key_info = info;
++		out->pairwise = (info & HDTX_KEY_INFO_PAIRWISE) != 0u;
++	}
++	if (out->pairwise && avail >= HDTX_EAPOL_KEYDLEN_OFF + 2u) {
++		u16 dlen = hdtx_get_be16(eap + HDTX_EAPOL_KEYDLEN_OFF);
++
++		out->key_datalen = dlen;
++		/* vendor hmac_is_eapol_key_ptk_4_4: pairwise + key-data-len 0 */
++		out->ptk_done_like = (dlen == 0u);
++	}
++	if (out->pairwise && (out->key_info & HDTX_KEY_INFO_ACK))
++		out->msg = (out->key_info & HDTX_KEY_INFO_MIC) ?
++			HDTX_EAPOL_MSG_3 : HDTX_EAPOL_MSG_1;
++	else
++		out->msg = HDTX_EAPOL_MSG_OTHER;
++	return HDTX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* Peer-aware TX decision + Protected bit                             */
++/* ------------------------------------------------------------------ */
++int hdtx_decide_tx(unsigned int peer_required, int is_multicast,
++		   int peer_found, int peer_authorized, int is_eapol,
++		   unsigned int protect_mode, int group_keys,
++		   struct hdtx_tx_decision *out)
++{
++	int protect = 0;
++
++	if (out == NULL)
++		return HDTX_EARG;
++	if (protect_mode > HDTX_PROTECT_NEVER)
++		return HDTX_EARG;
++	memset(out, 0, sizeof(*out));
++
++	if (protect_mode == HDTX_PROTECT_ALWAYS)
++		protect = 1;
++	else if (protect_mode == HDTX_PROTECT_NEVER)
++		protect = 0;
++
++	if (is_multicast) {
++		if (protect_mode == HDTX_PROTECT_AUTO)
++			protect = group_keys ? 1 : 0;
++		out->allowed = 1;
++		out->reason = HDTX_OK;
++		out->protect = protect;
++		return HDTX_OK;
++	}
++
++	if (!peer_found) {
++		if (peer_required) {
++			out->allowed = 0;
++			out->reason = HDTX_EPEER;
++			out->protect = 0;
++			return HDTX_OK;
++		}
++		/* explicit diagnostic mode: unknown peer, never protect */
++		out->allowed = 1;
++		out->reason = HDTX_OK;
++		out->protect = protect_mode == HDTX_PROTECT_ALWAYS ? 1 : 0;
++		return HDTX_OK;
++	}
++
++	if (!peer_authorized && !is_eapol) {
++		out->allowed = 0;
++		out->reason = HDTX_EUNAUTH;
++		out->protect = 0;
++		return HDTX_OK;
++	}
++
++	if (protect_mode == HDTX_PROTECT_AUTO)
++		protect = peer_authorized ? 1 : 0;
++	out->allowed = 1;
++	out->reason = HDTX_OK;
++	out->protect = protect;
++	return HDTX_OK;
++}
++
++/* ------------------------------------------------------------------ */
++/* Completion bookkeeping                                             */
++/* ------------------------------------------------------------------ */
++int hdtx_ring_advance(u32 prev_rptr, u32 now_rptr, u32 depth, u32 *advance)
++{
++	u32 pi, ni, adv;
++
++	if (advance == NULL || depth == 0u || depth > 0x7fffu)
++		return HDTX_EARG;
++	pi = prev_rptr & 0x7fffu;
++	ni = now_rptr & 0x7fffu;
++	if (pi >= depth || ni >= depth)
++		return HDTX_EFORMAT;
++	if ((prev_rptr ^ now_rptr) & 0x8000u) {
++		/* the consumer wrapped (phase flipped): depth - prev + now */
++		adv = depth - pi + ni;
++	} else if (ni >= pi) {
++		adv = ni - pi;
++	} else {
++		return HDTX_EFORMAT; /* consumer moved backwards */
++	}
++	if (adv > depth)
++		return HDTX_EFORMAT;
++	*advance = adv;
++	return HDTX_OK;
++}
+diff --git a/hi5622_data_tx_logic.h b/hi5622_data_tx_logic.h
+new file mode 100644
+index 0000000..30e38c4
+--- /dev/null
++++ b/hi5622_data_tx_logic.h
+@@ -0,0 +1,248 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_data_tx_logic.h - portable, kernel-free data-TX logic for the
++ * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-data-tx, shared task task-150,
++ * 2026-11-29).  No vendor source, object, firmware or calibration byte is
++ * reproduced; only wire facts that earlier lanes decoded from the local
++ * (gitignored) vendor artifacts appear here, each with an evidence marker:
++ *
++ *   [V]   decoded from a named vendor artifact (host .ko / PD4 firmware)
++ *   [V*]  device-measured/previously bench-proven by an earlier project lane
++ *   [I]   inference - must be confirmed on the bench
++ *   [U]   unknown - the code fails closed instead of guessing
++ *
++ * WHAT THIS LAYER DOES
++ *   Hostapd runs the AP SME in host software.  Its EAPOL-Key msg1/msg3 leave
++ *   through the AP netdev's ndo_start_xmit as plain 802.3 frames (hostapd's
++ *   l2_packet socket).  This layer turns such a frame into the 802.11
++ *   data MPDU the proven dp TX path expects, decides whether the peer may be
++ *   transmitted to at all (peer-aware / fail-closed), picks the 802.11
++ *   Protected bit, and classifies the EAPOL-Key shape (including the
++ *   vendor's tx-completion "4/4-like" detector, hmac_is_eapol_key_ptk_4_4).
++ *
++ *   802.11 -> MPDU rules (AP transmit, FromDS=1 / ToDS=0) [V] (802.11 spec,
++ *   mirror of the decoded vendor RX rules in wifi-sta-ops TABLES T8):
++ *     FC = 0x0208 (data, FromDS) or 0x0288 (QoS data, FromDS); the Protected
++ *     bit is FC bit 14 (0x4000).
++ *     addr1 = DA (the client), addr2 = BSSID/TA (the AP netdev address),
++ *     addr3 = SA (the Ethernet source address; for hostapd's own frames it
++ *     equals the BSSID).
++ *     24-byte header (26 with a QoS control field), then LLC/SNAP
++ *     AA AA 03 00 00 00 + the Ethernet type big-endian + payload.
++ *     No FCS - the MAC appends it.
++ *
++ *   Frame buffer layout handed to the MSDU ring [V] (wifi-dp-txrx
++ *   FRAME-SPECS.md, hmac_tx_msdu_dscr_add 0x19b40): the ring entry points at
++ *   [16 zero device-visible header bytes][MPDU]; this lane keeps the vendor
++ *   host bookkeeping word in front: [owner u32][16 B zero][MPDU], so the
++ *   device VA of the MPDU area is buffer + 20 (DP_TXRX_FRAME_MPDU_OFF) and
++ *   the ring entry's buf_devva is buffer + 4 (DP_TXRX_FRAME_HOST_HDR).
++ *
++ *   MSDU ring entry ctl [V] (hmac_tx_msdu_ring_push 0x18f18 /
++ *   hmac_tx_frame_control_dscr_set 0x18b9c): length[11:0], tx path class
++ *   [14:12], header flag[15], tid[19:16], vap type[21:20].  A data frame is
++ *   vap type 2 [I] (the same mapping the hardware-fired ARP frame used).
++ *
++ * FAIL-CLOSED POLICY (the kernel glue enforces the order):
++ *   - the master module parameter data_tx defaults to 0: the netdev xmit
++ *     keeps the old accounted drop, nothing is built or posted;
++ *   - unicast frames are only posted to a peer that exists in the host
++ *     station table (sta-ops, task-149) unless data_tx_peer=0;
++ *   - a non-EAPOL frame to a peer that is not authorized is refused
++ *     (pre-4-way data cannot leak);
++ *   - the master lane is one-shot per module load after the first post
++ *     failure/timeout (the dp lane's "no retry" rule).
++ */
++#ifndef HI5622_DATA_TX_LOGIC_H
++#define HI5622_DATA_TX_LOGIC_H
++
++#ifdef __KERNEL__
++#include <linux/string.h>
++#include <linux/types.h>
++#else
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++#ifndef HI5622_HDTX_HOST_TYPES
++#define HI5622_HDTX_HOST_TYPES
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++typedef uint64_t u64;
++#endif
++#endif
++
++/* ------------------------------------------------------------------ */
++/* 1. Frame buffer / MPDU constants (must match the proven dp path)    */
++/* ------------------------------------------------------------------ */
++#define HDTX_FRAME_HOST_HDR	4u	/* [V] vendor host word */
++#define HDTX_FRAME_DMA_HDR	16u	/* [V] zero device-visible header */
++#define HDTX_FRAME_MPDU_OFF	(HDTX_FRAME_HOST_HDR + HDTX_FRAME_DMA_HDR)
++#define HDTX_FRAME_AREA		0x400u	/* one slab per in-flight frame */
++#define HDTX_MPDU_MAX		0x300u	/* DP_TXRX_MAX_MPDU (proven ctl bound) */
++
++#define HDTX_ETH_HDR_LEN	14u
++#define HDTX_ETH_P_PAE		0x888eu
++#define HDTX_ETH_P_VLAN		0x8100u
++#define HDTX_LLC_HDR_LEN	6u	/* AA AA 03 00 00 00            */
++#define HDTX_LLC_SNAP_LEN	8u	/* LLC header + the 2-byte type */
++#define HDTX_80211_HDR_LEN	24u
++#define HDTX_80211_QOS_HDR_LEN	26u
++#define HDTX_80211_SEQ_SHIFT	4u
++
++/* Frame control, little-endian u16 as stored on the wire.
++ * bits: 0-1 version, 2-3 type (2=data), 4-7 subtype, 8 ToDS, 9 FromDS,
++ * 14 Protected, 15 Order. */
++#define HDTX_FC_DATA		0x0008u	/* type data, subtype 0 */
++#define HDTX_FC_QOS_DATA	0x0088u	/* type data, subtype 8 */
++#define HDTX_FC_FROMDS		0x0200u	/* FromDS bit 9 */
++#define HDTX_FC_PROTECTED	0x4000u	/* bit 14 */
++#define HDTX_FC_DATA_FROMDS	(HDTX_FC_DATA | HDTX_FC_FROMDS)
++#define HDTX_FC_QOS_DATA_FROMDS	(HDTX_FC_QOS_DATA | HDTX_FC_FROMDS)
++
++/* EAPOL / EAPOL-Key wire offsets (inside the EAPOL frame; identical to the
++ * rules wifi-sta-ops TABLES T9 re-derived from mac_is_eapol_key_ptk 0x23094
++ * and hmac_is_eapol_key_ptk_4_4 0x18750) [V].  Offsets are relative to the
++ * first EAPOL byte (the 802.3 type field position + 2 in an Ethernet frame). */
++#define HDTX_EAPOL_HDR_LEN	4u
++#define HDTX_EAPOL_TYPE_KEY	3u
++#define HDTX_EAPOL_KEY_MINLEN	95u	/* EAPOL header length field, > 0x5e */
++#define HDTX_EAPOL_KEY_INFO_OFF	5u	/* u16 big-endian key info */
++#define HDTX_EAPOL_KEYDLEN_OFF	97u	/* u16 big-endian key data length */
++#define HDTX_KEY_INFO_PAIRWISE	0x0008u	/* bit 3 key type = pairwise */
++#define HDTX_KEY_INFO_INSTALL	0x0040u
++#define HDTX_KEY_INFO_ACK	0x0080u
++#define HDTX_KEY_INFO_MIC	0x0100u
++#define HDTX_KEY_INFO_SECURE	0x0200u
++#define HDTX_KEY_INFO_ENCR	0x1000u
++
++/* vendor 4/4-like detector message classes (AP transmit perspective) */
++#define HDTX_EAPOL_MSG_NONE	0u
++#define HDTX_EAPOL_MSG_1	1u	/* ACK, no MIC: the AP's msg1/4 */
++#define HDTX_EAPOL_MSG_3	3u	/* ACK + MIC: the AP's msg3/4 */
++#define HDTX_EAPOL_MSG_OTHER	5u	/* some other EAPOL-Key frame */
++
++/* result codes (kernel glue maps them to errno) */
++#define HDTX_OK		0
++#define HDTX_ESHORT	1
++#define HDTX_EARG	2
++#define HDTX_EBOUNDS	3
++#define HDTX_EFORMAT	4
++#define HDTX_EPEER	5	/* unicast to a peer not in the station table */
++#define HDTX_EUNAUTH	6	/* non-EAPOL data to an unauthorized peer  */
++#define HDTX_EGATE	7	/* dp TX gate closed / post failed          */
++#define HDTX_ETIMEOUT	8	/* bounded completion timeout               */
++
++/* protect mode module parameter values */
++#define HDTX_PROTECT_AUTO	0u	/* protect data to authorized peers     */
++#define HDTX_PROTECT_ALWAYS	1u	/* force the Protected bit (bounds test) */
++#define HDTX_PROTECT_NEVER	2u	/* never set it (4-way msg1/msg3 form)  */
++
++/* ------------------------------------------------------------------ */
++/* 2. 802.3 frame -> 802.11 data MPDU                                  */
++/* ------------------------------------------------------------------ */
++struct hdtx_eth {
++	int	ok;
++	const u8 *da;
++	const u8 *sa;
++	u16	ethertype;	/* host order */
++	const u8 *payload;	/* frame + 12: big-endian type + data */
++	u32	payload_len;	/* frame_len - 12 */
++	u32	frame_len;
++};
++
++/* Parse an Ethernet frame (14-byte header).  Refuses short frames, a
++ * non-linear/odd VLAN tag payload and the max-size overflow. */
++int hdtx_eth_parse(const u8 *frame, u32 len, struct hdtx_eth *out);
++
++struct hdtx_mpdu_params {
++	const u8 *bssid;	/* AP address (addr2)                          */
++	const u8 *da;		/* destination (addr1)                         */
++	const u8 *sa;		/* source (addr3; FromDS=1)                    */
++	const u8 *payload;	/* LLC payload: ethertype BE + data            */
++	u32	payload_len;
++	u16	seq;		/* 12-bit sequence number                      */
++	u8	tid;		/* 0..15, used when qos != 0                   */
++	u8	qos;		/* 0 = 24-byte header, 1 = 26 + QoS control    */
++	u8	protected_frame; /* 1 = set the 802.11 Protected bit (FC bit 14) */
++};
++
++/* Build the complete MPDU (no FCS).  Bounds: MPDU <= HDTX_MPDU_MAX. */
++int hdtx_build_data_mpdu(u8 *out, size_t cap, size_t *out_len,
++			 const struct hdtx_mpdu_params *p);
++
++/* FC word (little-endian, as stored) for the data frame shape. */
++u16 hdtx_mpdu_fc(u8 qos, u8 protected_frame);
++
++/* Frame buffer layout: [owner u32][16 zero][MPDU]; *devva_off receives
++ * HDTX_FRAME_HOST_HDR (the offset the MSDU ring entry points at). */
++int hdtx_frame_write(u8 *buf, size_t cap, u32 owner, const u8 *mpdu,
++		     u32 mpdu_len, u32 *devva_off);
++
++/* Device VA for a coherent DMA address; enforces the driver's identity
++ * window (dp_rings DP_HOST_DMA_LO..HI) and adds the host-word offset. */
++int hdtx_buffer_devva(u64 dma, u32 lo, u32 hi, u32 *devva);
++
++/* ------------------------------------------------------------------ */
++/* 3. EAPOL / EAPOL-Key classification (TX side)                       */
++/* ------------------------------------------------------------------ */
++struct hdtx_eapol {
++	int	is_eapol;
++	int	is_key;
++	int	pairwise;
++	int	ptk_done_like;	/* vendor hmac_is_eapol_key_ptk_4_4 shape  */
++	u16	key_info;
++	u16	key_datalen;
++	u16	eapol_len;
++	u8	eapol_type;
++	u8	msg;		/* HDTX_EAPOL_MSG_*                       */
++};
++
++/* Classify the EAPOL payload of a parsed Ethernet frame.  Never reads past
++ * frame_len; every field is bounds-checked.  Only derived metadata is
++ * returned (no key material is ever examined or logged). */
++int hdtx_classify_eapol(const struct hdtx_eth *eth, struct hdtx_eapol *out);
++
++/* ------------------------------------------------------------------ */
++/* 4. Peer-aware TX decision + Protected bit                           */
++/* ------------------------------------------------------------------ */
++struct hdtx_tx_decision {
++	int	allowed;
++	int	reason;		/* HDTX_OK or the refusal code            */
++	int	protect;	/* 802.11 Protected bit for this frame     */
++};
++
++/* peer_required = data_tx_peer; group_keys = "a group key is installed"
++ * (hostapd's WPA2 GTK install happened); protect_mode = data_tx_protect.
++ * Rules (fail-closed):
++ *   - multicast/broadcast: allowed (no peer context needed);
++ *   - unicast: a missing station-table entry is refused when peer_required,
++ *     otherwise allowed (explicit bench diagnostic mode);
++ *   - unicast to an existing but unauthorized peer: only EAPOL is allowed;
++ *   - protect: AUTO = authorized unicast peers / group keys for multicast,
++ *     ALWAYS = 1, NEVER = 0. */
++int hdtx_decide_tx(unsigned int peer_required, int is_multicast,
++		   int peer_found, int peer_authorized, int is_eapol,
++		   unsigned int protect_mode, int group_keys,
++		   struct hdtx_tx_decision *out);
++
++int hdtx_is_multicast(const u8 addr[6]);
++
++/* ------------------------------------------------------------------ */
++/* 5. Completion bookkeeping                                           */
++/* ------------------------------------------------------------------ */
++/* Packed ring index = index[14:0] | phase<<15 (dp_txrx_idx_*).
++ * hdtx_ring_advance() returns the number of device-consumed entries
++ * between two packed consumer values (0..depth); it refuses an impossible
++ * backwards/wrapped-too-far pair with HDTX_EFORMAT (-style return). */
++int hdtx_ring_advance(u32 prev_rptr, u32 now_rptr, u32 depth, u32 *advance);
++
++/* Pool depth / slot bookkeeping is kernel-side; the host test covers the
++ * ordering rule: a completion frees the oldest in-flight frame first. */
++#define HDTX_POOL_DEPTH		16u	/* in-flight TX frames per wiphy */
++#define HDTX_POOL_BYTES		(HDTX_POOL_DEPTH * HDTX_FRAME_AREA)
++#define HDTX_SEQ_MASK		0x0fffu
++
++#endif /* HI5622_DATA_TX_LOGIC_H */
+diff --git a/hi5622_dp_txrx.c b/hi5622_dp_txrx.c
+index 3912a06..867255d 100644
+--- a/hi5622_dp_txrx.c
++++ b/hi5622_dp_txrx.c
+@@ -26,6 +26,7 @@
+ #include <linux/mutex.h>
+ #include <linux/pci.h>
+ #include <linux/slab.h>
++#include <linux/spinlock.h>
+ #include <linux/string.h>
+ #include <linux/jiffies.h>
+ #include <linux/types.h>
+@@ -86,6 +87,10 @@ struct hi5622_dp_txrx {
+ 	struct list_head node;
+ 	struct hi5622_pci *ctx;
+ 	struct mutex lock;
++	/* wifi-data-tx (task-150): serializes the per-TID producer index
++	 * between the sysfs dp_tx_frame instrument (inside its mutex) and the
++	 * netdev data-TX path (atomic context, this lock only). */
++	spinlock_t tx_post_lock;
+ 
+ 	bool bound;
+ 	bool failed;
+@@ -452,6 +457,7 @@ ssize_t hi5622_dp_tx_frame_store(struct device *dev,
+ 	u32 type = 0, off = 0, result = 0, ring_devva = 0, next = 0;
+ 	u32 entry_addr = 0, d[3];
+ 	u32 index, prev;
++	unsigned long txflags;
+ 	int rc;
+ 
+ 	(void)attr;
+@@ -519,8 +525,13 @@ ssize_t hi5622_dp_tx_frame_store(struct device *dev,
+ 		mutex_unlock(&t->lock);
+ 		return -EINVAL;
+ 	}
++	/* wifi-data-tx (task-150): the producer index is shared with the netdev
++	 * data-TX path; hold the same spinlock that path uses.  Lock order is
++	 * t->lock (mutex) -> tx_post_lock (this order everywhere). */
++	spin_lock_irqsave(&t->tx_post_lock, txflags);
+ 	index = t->tx_tid_wptr[tid] & 0x7fffu;
+ 	if (index >= DP_TXRX_TX_RING_DEPTH) {
++		spin_unlock_irqrestore(&t->tx_post_lock, txflags);
+ 		t->failed = true;
+ 		mutex_unlock(&t->lock);
+ 		return -EIO;
+@@ -535,6 +546,7 @@ ssize_t hi5622_dp_tx_frame_store(struct device *dev,
+ 	prev = t->tx_tid_wptr[tid];
+ 	rc = dptx_table_publish(t, tid, next, ring_devva, d);
+ 	if (rc) {
++		spin_unlock_irqrestore(&t->tx_post_lock, txflags);
+ 		dev_err(dev,
+ 			"DP tx_frame: MSDU table write read-back FAILED (rc %d) - lane closed for this load, no retry\n",
+ 			rc);
+@@ -564,6 +576,7 @@ ssize_t hi5622_dp_tx_frame_store(struct device *dev,
+ 		t->txq_published = true;
+ 		t->txq_publish_count++;
+ 	}
++	spin_unlock_irqrestore(&t->tx_post_lock, txflags);
+ 	t->tx_last_devva = result;
+ 	t->tx_last_type = type;
+ 	t->tx_last_ring_index = index;
+@@ -1506,6 +1519,121 @@ ssize_t hi5622_dp_tx_complete_poll_store(struct device *dev,
+     return (ssize_t)count;
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* wifi-data-tx (task-150): peer-aware data TX through the proven ring */
++/* ------------------------------------------------------------------ */
++int hi5622_dp_tx_data_post(struct hi5622_pci *ctx, u32 buf_devva,
++			   u16 frame_len, u8 vap_type, u8 tid, u8 hdr_flag,
++			   u32 *published_wptr, u32 *dev_rptr)
++{
++	struct hi5622_dp_txrx *t;
++	dp_u8 entry[DP_TXRX_TXE_BYTES];
++	u32 d[3] = { 0u, 0u, 0u };
++	u32 index, prev, next = 0, ring_devva = 0, entry_addr;
++	unsigned long txflags;
++	int rc;
++
++	if (!ctx || !published_wptr || tid >= DP_TXRX_TABLE_TIDS)
++		return -EINVAL;
++	t = ctx->dptx;
++	if (!t)
++		return -ENODEV;
++	rc = dp_txrx_txe_encode(entry, buf_devva, frame_len, 0u, hdr_flag,
++				tid, vap_type);
++	if (rc != DP_TXRX_OK)
++		return -EINVAL;
++
++	spin_lock_irqsave(&t->tx_post_lock, txflags);
++	if (!t->bound || t->failed || !t->tx_msdu_rings) {
++		rc = -ENODEV;
++		goto out;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc)
++		goto out;
++	index = t->tx_tid_wptr[tid] & 0x7fffu;
++	if (index >= DP_TXRX_TX_RING_DEPTH) {
++		t->failed = true;
++		rc = -EIO;
++		goto out;
++	}
++	entry_addr = (u32)(unsigned long)t->tx_msdu_rings +
++		     tid * DP_TXRX_TX_RING_BYTES +
++		     index * DP_TXRX_TXE_BYTES;
++	memcpy((void *)(unsigned long)entry_addr, entry, DP_TXRX_TXE_BYTES);
++	dma_wmb();
++	ring_devva = dp_tx_ring_devva(t->tx_msdu_rings_dma, tid);
++	prev = t->tx_tid_wptr[tid];
++	next = dp_txrx_idx_next(prev, DP_TXRX_TX_RING_DEPTH);
++	rc = dptx_table_publish(t, tid, next, ring_devva, d);
++	if (rc) {
++		dev_err(&ctx->pdev->dev,
++			"data_tx: MSDU table write read-back FAILED (rc %d) - TX lane closed for this load, no retry\n",
++			rc);
++		t->failed = true;
++		rc = -EIO;
++		goto out;
++	}
++	t->tx_tid_wptr[tid] = next;
++	t->tx_wptr = next;
++	t->tx_completion_rptr = d[2];
++	t->tx_tid_count[tid]++;
++	t->tx_tid_bytes[tid] += (u32)frame_len;
++	t->tx_tid_sn[tid] = (u16)(t->tx_tid_count[tid] & 0x0fffu);
++	/* vendor enqueue-tail order: ring push, then the per-TID TXQ-table
++	 * queue state (hmac_update_user_tid_txq_table) [V*] */
++	if (dptx_txq_publish_en && t->txq_table) {
++		dma_wmb();
++		dp_txrx_txq_publish(t->txq_table, DP_TXRX_TX_USER_DEFAULT, tid,
++				    t->tx_tid_count[tid],
++				    (dp_u32)t->tx_tid_sn[tid], true,
++				    t->tx_tid_bytes[tid],
++				    (dp_u16)jiffies_to_msecs(jiffies));
++		dma_wmb();
++		t->txq_published = true;
++		t->txq_publish_count++;
++	}
++	*published_wptr = next;
++	if (dev_rptr)
++		*dev_rptr = d[2];
++	rc = 0;
++out:
++	spin_unlock_irqrestore(&t->tx_post_lock, txflags);
++	return rc;
++}
++
++int hi5622_dp_tx_data_poll(struct hi5622_pci *ctx, u8 tid,
++			   u32 *published_wptr, u32 *dev_rptr)
++{
++	struct hi5622_dp_txrx *t;
++	u32 d[3] = { 0u, 0u, 0u };
++	unsigned long txflags;
++	int rc;
++
++	if (!ctx || !dev_rptr || tid >= DP_TXRX_TABLE_TIDS)
++		return -EINVAL;
++	t = ctx->dptx;
++	if (!t)
++		return -ENODEV;
++	spin_lock_irqsave(&t->tx_post_lock, txflags);
++	if (!t->bound) {
++		rc = -ENODEV;
++		goto out;
++	}
++	rc = dptx_table_snapshot_tid(t, tid, d);
++	if (rc) {
++		rc = -EIO;
++		goto out;
++	}
++	if (published_wptr)
++		*published_wptr = d[1];
++	*dev_rptr = d[2];
++	rc = 0;
++out:
++	spin_unlock_irqrestore(&t->tx_post_lock, txflags);
++	return rc;
++}
++
+ ssize_t hi5622_dp_mac_tail_init_store(struct device *dev,
+                                       struct device_attribute *attr,
+                                       const char *buf, size_t count)
+@@ -1600,6 +1728,7 @@ int hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
+ 	}
+ 	t->ctx = ctx;
+ 	mutex_init(&t->lock);
++	spin_lock_init(&t->tx_post_lock);
+ 	t->tx_msdu_rings = b->tx_msdu_rings;
+ 	t->tx_msdu_rings_dma = (u32)b->tx_msdu_rings_dma;
+ 	t->txq_table_devva = b->txq_table_devva;
+@@ -1643,6 +1772,9 @@ int hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
+ 	t->tx_frame_ready = true;
+ 	t->bound = true;
+ 	list_add_tail(&t->node, &dptx_list);
++	/* wifi-data-tx (task-150): lock-free handle for the netdev xmit path
++	 * (ndo_start_xmit runs in softirq context and cannot take dptx_list_lock). */
++	ctx->dptx = t;
+ 	mutex_unlock(&dptx_list_lock);
+ 
+ 	dev_info(dev,
+@@ -1666,6 +1798,11 @@ void hi5622_dp_txrx_release(struct hi5622_pci *ctx)
+ 		return;
+ 	}
+ 	list_del(&t->node);
++	/* wifi-data-tx (task-150): close the netdev data-TX handle BEFORE the
++	 * frame buffer is freed (the data path checks t->bound under the same
++	 * spinlock; ctx->dptx == NULL makes later xmit drops fail closed). */
++	t->bound = false;
++	ctx->dptx = NULL;
+ 	mutex_unlock(&dptx_list_lock);
+ 	if (t->tx_frame) {
+ 		dma_free_coherent(dev, DP_TXRX_FRAME_AREA, t->tx_frame,
+diff --git a/hi5622_dp_txrx.h b/hi5622_dp_txrx.h
+index 3c5777b..b39ff2e 100644
+--- a/hi5622_dp_txrx.h
++++ b/hi5622_dp_txrx.h
+@@ -97,4 +97,23 @@ ssize_t hi5622_dp_mac_tail_init_store(struct device *dev,
+                                       struct device_attribute *attr,
+                                       const char *buf, size_t count);
+ 
++/* wifi-data-tx (shared task task-150): peer-aware data TX through the SAME
++ * proven MSDU ring / device-RAM table publish / TXQ-table sequence the sysfs
++ * dp_tx_frame instrument uses.  Both run under the endpoint's tx_post_lock so
++ * the per-TID producer index is never advanced by two writers at once.
++ *
++ * hi5622_dp_tx_data_post() - post one already-built frame (the caller owns
++ * the coherent buffer whose device VA is buf_devva; frame_len is the MPDU
++ * length).  Returns 0 and the packed index published after the post, plus the
++ * device-consumed rptr read back from the table entry.  Negative errno
++ * otherwise (-ENODEV not bound/closed, -EPERM write gate, -EIO read-back).
++ *
++ * hi5622_dp_tx_data_poll() - read the device-RAM table entry (published wptr
++ * / device rptr) for one TID.  Never writes. */
++int hi5622_dp_tx_data_post(struct hi5622_pci *ctx, u32 buf_devva,
++			   u16 frame_len, u8 vap_type, u8 tid, u8 hdr_flag,
++			   u32 *published_wptr, u32 *dev_rptr);
++int hi5622_dp_tx_data_poll(struct hi5622_pci *ctx, u8 tid,
++			   u32 *published_wptr, u32 *dev_rptr);
++
+ #endif /* _HI5622_DP_TXRX_H */
+diff --git a/hi5622_driver.h b/hi5622_driver.h
+index f753d1c..b689ab5 100644
+--- a/hi5622_driver.h
++++ b/hi5622_driver.h
+@@ -67,6 +67,9 @@ struct hi5622_pci {
+ 	struct hi5622_hcc_service *hcc;
+ 	struct hi5622_cfg80211	*cfg;	/* cfg80211 full-MAC layer (M0-M2) */
+ 	struct hi5622_dp	*dp;	/* MAC host-interface data plane (wifi-dp-air merge) */
++	void			*dptx;	/* wifi-data-tx (task-150): bound
++					 * hi5622_dp_txrx object (opaque here);
++					 * NULL until dp_setup, cleared on release */
+ 
+ 	/* boot-stage state (each gate documented in hi5622_transport.c) */
+ 	bool			windows_programmed;
