@@ -78,6 +78,13 @@ chk "userspace set contains no kmod rows" "! sed -n '/^USERS_TABLE=/,/^UTABLE\$/
 chk "device script accepts --set" "grep -q -- '--set) SET=' '$LANE/device/t0-device.sh'"
 chk "device script filters kmod rows for userspace" "grep -q 'kmod-' '$LANE/device/t0-device.sh'"
 chk "device script refuses load for userspace set" "grep -q 'load-requires-full' '$LANE/device/t0-device.sh'"
+chk "read_pkg_field uses manifest column arithmetic (f + 1)" "grep -q '(f + 1)' '$LANE/device/t0-device.sh'"
+chk "expected-packages column 2 carries the iw version" "awk '\$1 == \"iw\" { print \$2; exit }' '$LANE/tools/expected-packages.txt' | grep -qx '6.17-r1'"
+chk "iwinfo gate records output instead of matching usage" "grep -q 'iwinfo-probe.txt' '$LANE/device/t0-device.sh' && grep -q 'ESSID' '$LANE/device/t0-device.sh'"
+chk "device reports install_mutated for rollback policy" "grep -q 'install_mutated' '$LANE/device/t0-device.sh'"
+chk "world gate handles apk v3 name>hash lines" "grep -q 'name(\\[=<>\\]' '$LANE/device/t0-device.sh'"
+chk "deploy offers --keep-on-failure" "grep -q -- '--keep-on-failure' '$LANE/deploy-t0.sh'"
+chk "deploy auto-rollback consults install_mutated" "grep -q 'install_mutated' '$LANE/deploy-t0.sh'"
 
 # --------------------------------------------------------- policy / safety ---
 chk "no binaries in the lane" "! find '$LANE' -type f \( -name '*.ko' -o -name '*.o' -o -name '*.apk' -o -name '*.bin' -o -name '*.ubi' -o -name '*.squashfs' -o -name '*.img' \) | grep -q ."
@@ -272,6 +279,38 @@ mock_env
 chk "userspace-only --load-check is refused" "[ $? -ne 0 ]"
 chk "userspace-only load refusal names the full set" "grep -q -- '--load-check needs the full set' '$TMP/mock-users-load.log'"
 chk "userspace-only load refusal did not contact the device" "[ ! -s '$TMP/mock/calls.log' ]"
+cat >"$TMP/mock/rsh-instfail" <<'RSH'
+#!/usr/bin/env bash
+printf 'RSH %s\n' "$*" >>"$MOCK_LOG"
+cmd=$*
+devcmd=$(printf '%s' "$cmd" | sed "s#/tmp/t0-deploy-#$MOCK_DEV/t0-deploy-#g")
+mut=$(printenv MOCK_MUTATED)
+if [ -z "$mut" ]; then mut=1; fi
+case "$cmd" in
+	*T0-REACHABLE*) printf 'T0-REACHABLE\n' ;;
+	*"mkdir -p"*) eval "$devcmd"; exit $? ;;
+	*"sha256sum -c apk.sha256"*) eval "$devcmd"; exit $? ;;
+	*"t0-device.sh install "*) printf 'T0KV install_mutated=%s\nT0GATE file-x FAIL simulated\nT0-RESULT: FAIL (1 passed, 1 failed)\n' "$mut"; exit 1 ;;
+	*"t0-device.sh rollback "*) printf 'T0GATE apk-del PASS rc=0\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
+	*"rm -rf"*) eval "$devcmd"; exit 0 ;;
+	*) exit 0 ;;
+esac
+RSH
+chmod +x "$TMP/mock/rsh-instfail"
+export T0_RSH=$TMP/mock/rsh-instfail T0_RSCP=$TMP/mock/rscp
+export T0_PREFLIGHT_BENCH_LINK=$TMP/mock/bench-link T0_PREFLIGHT_RECOVERY=$TMP/mock/recovery
+export MOCK_LOG=$TMP/mock/calls-instfail.log MOCK_DEV=$TMP/mock/dev MOCK_MUTATED=1
+: >"$MOCK_LOG"
+"$LANE/deploy-t0.sh" --apply --attended --yes-really --state "$TMP/state-instfail" >"$TMP/instfail.log" 2>&1
+chk "failed install that mutated the db triggers automatic rollback" "[ $? -ne 0 ] && grep -q 't0-device.sh rollback' '$TMP/mock/calls-instfail.log'"
+: >"$MOCK_LOG"
+"$LANE/deploy-t0.sh" --apply --attended --yes-really --keep-on-failure --state "$TMP/state-instfail-keep" >"$TMP/instfail-keep.log" 2>&1
+chk "failed install is kept with --keep-on-failure" "[ $? -ne 0 ] && ! grep -q 't0-device.sh rollback' '$TMP/mock/calls-instfail.log'"
+MOCK_MUTATED=0
+: >"$MOCK_LOG"
+"$LANE/deploy-t0.sh" --apply --attended --yes-really --state "$TMP/state-instfail-nomut" >"$TMP/instfail-nomut.log" 2>&1
+chk "failed idempotent verify does not roll back a pre-existing set" "[ $? -ne 0 ] && ! grep -q 't0-device.sh rollback' '$TMP/mock/calls-instfail.log'"
+unset T0_RSH T0_RSCP T0_PREFLIGHT_BENCH_LINK T0_PREFLIGHT_RECOVERY MOCK_LOG MOCK_DEV MOCK_MUTATED
 cat >"$TMP/mock/rsh-fail" <<'RSH'
 #!/usr/bin/env bash
 printf 'RSH %s\n' "$*" >>"$MOCK_LOG"

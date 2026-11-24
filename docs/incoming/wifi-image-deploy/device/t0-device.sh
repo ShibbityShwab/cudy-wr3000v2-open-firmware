@@ -101,8 +101,9 @@ selection_init() {
 selection_init
 
 # ---------------------------------------------------------------- helpers ---
-read_pkg_field() { # name field(1=version,2=apk_size,3=apk_sha256,4=installed)
-	awk -v n="$1" -v f="$2" '$1 == n { print $f; exit }' "$PKG_LIST"
+read_pkg_field() { # name logical field (1=version,2=apk_size,3=apk_sha256,4=installed)
+	# manifest columns are: 1=name 2=version 3=apk_size 4=apk_sha256 5=installed
+	awk -v n="$1" -v f="$2" '$1 == n { print $(f + 1); exit }' "$PKG_LIST"
 }
 pkg_version() { # installed package version from the local apk db (no network)
 	v=$(apk --repositories-file /dev/null --no-network query --fields version "$1" 2>/dev/null \
@@ -236,12 +237,22 @@ check_version_strings() {
 		*6.17*) ok iw-version "$iwv" ;;
 		*) bad iw-version "iw --version gave '$iwv' (want 6.17)" ;;
 	esac
+	kv iw_version "$iwv"
+	# iwinfo with no args prints usage when there is no wireless interface, or
+	# the interface list (e.g. "wlan0 ESSID: unknown") when one exists; both
+	# are healthy. Only a nonzero rc or empty output is a failure. The actual
+	# output is recorded for the evidence (never pattern-matched away).
 	out=$(iwinfo 2>&1)
 	rc=$?
-	case "$out" in
-		*Usage*|*usage*) ok iwinfo-exec "iwinfo runs from rootfs (rc=$rc, usage printed)" ;;
-		*) bad iwinfo-exec "iwinfo rc=$rc output '$(printf '%s' "$out" | head -n1)'" ;;
-	esac
+	printf '%s\n' "$out" >"$STAGE/iwinfo-probe.txt"
+	if [ "$rc" -ne 0 ]; then
+		bad iwinfo-exec "iwinfo rc=$rc output '$(printf '%s' "$out" | head -n1)'"
+	elif [ -z "$out" ]; then
+		bad iwinfo-exec "iwinfo rc=0 but produced no output"
+	else
+		kv iwinfo_probe "$(printf '%s' "$out" | head -n3 | tr '\n' '|')"
+		ok iwinfo-exec "iwinfo rc=0 from rootfs; output recorded in staging iwinfo-probe.txt"
+	fi
 	if [ -x /usr/sbin/iw ]; then ok iw-path "/usr/sbin/iw executable"
 	else bad iw-path "/usr/sbin/iw missing/not executable"; fi
 	if [ -x /usr/bin/iwinfo ]; then ok iwinfo-path "/usr/bin/iwinfo executable"
@@ -311,10 +322,12 @@ do_install() {
 	check_pkg_state
 	todo=0
 	FILES=
+	NEW_LIST=
 	while read -r name version asize asha _; do
 		case "$name" in ''|\#*) continue ;; esac
 		if [ "$(pkg_state "$name")" = absent ]; then
 			todo=$((todo + 1))
+			NEW_LIST="$NEW_LIST $name"
 			FILES="$FILES $STAGE/$name-$version.apk"
 		fi
 	done <"$SEL_PKGS"
@@ -348,15 +361,28 @@ do_install() {
 	else
 		ok apk-add "nothing to install (all packages already present)"
 	fi
+	# whether this run actually changed the package database: the host uses it
+	# to decide whether an automatic rollback may remove the set (an idempotent
+	# verify of a pre-existing install must never delete it).
+	mutated=0
+	if [ "$todo" -gt 0 ]; then mutated=1; fi
+	kv install_mutated "$mutated"
 	while read -r name version asize asha _; do
 		case "$name" in ''|\#*) continue ;; esac
 		got=$(pkg_version "$name")
 		if [ "$got" = "$version" ]; then ok "pkg-$name" "installed $got"
 		else bad "pkg-$name" "installed '$got' (want $version)"; fi
-		if grep -q "^$name\$" /etc/apk/world 2>/dev/null || grep -q "^$name=" /etc/apk/world 2>/dev/null; then
+		need_world=0
+		case " $NEW_LIST " in
+			*" $name "*) need_world=1 ;;
+		esac
+		# apk v3 world lines look like "name><hash"; older ones "name" or "name=ver"
+		if grep -qE "^$name([=<>]|\$)" /etc/apk/world 2>/dev/null; then
 			ok "world-$name" "world entry present"
+		elif [ "$need_world" -eq 1 ]; then
+			bad "world-$name" "no world entry after this run installed it (would not be tracked)"
 		else
-			bad "world-$name" "no world entry (would not be tracked)"
+			ok "world-$name" "pre-existing package without a world entry (idempotent verify; apk del by name still removes it)"
 		fi
 	done <"$SEL_PKGS"
 	verify_files

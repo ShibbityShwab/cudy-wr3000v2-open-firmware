@@ -62,7 +62,13 @@ packages have no kernel= dependency, so no kernel-ABI gate applies:
 
 Expected: host check PASS (40 gates incl. "has no kernel= dependency" x5),
 staging of exactly the five .apk files, device gates PASS, then on later runs
-it is idempotent ("already installed ... idempotent verify"). It installs
+it is idempotent ("already installed ... idempotent verify"). The iwinfo gate
+accepts the real rc=0 output even when disconnected ("wlan0 ESSID: unknown")
+and records it in the evidence; the world-entry gate accepts apk v3
+"name><hash" lines and does not fail a pre-existing manual install for its
+missing world entry. If anything does fail, the automatic rollback only undoes
+this run's own install; add --keep-on-failure to keep the set for inspection.
+It installs
 /usr/sbin/iw 6.17, /usr/bin/iwinfo, libiwinfo (+data) and
 /lib/firmware/regulatory.db; it installs NO modules and does not touch
 /lib/modules. Verify / rollback:
@@ -174,9 +180,13 @@ that T0 exists for.
 
     ./deploy-t0.sh --rollback --attended --yes-really
 
-Runs apk del for the seven package names, verifies each package is gone, each
-payload file is gone, the receipt is removed and the world is clean. Loaded
-modules are not unloaded (no rmmod); reboot to clear them. If apk del ever
+Runs apk del for the selected package names (seven for the full set, five for
+--userspace-only), verifies each package is gone, each payload file is gone,
+the receipt is removed and the world is clean. This removes the set even if it
+pre-existed the deploy; an automatic rollback after a FAILED run does not do
+that unless the run itself installed something (and --keep-on-failure
+suppresses it). Loaded modules are not unloaded (no rmmod); reboot to clear
+them. If apk del ever
 failed, pair A / stock and the image-rewrite path (T1) remain the fallbacks -
 see ../wifi-image-integration/DEPLOY.md.
 

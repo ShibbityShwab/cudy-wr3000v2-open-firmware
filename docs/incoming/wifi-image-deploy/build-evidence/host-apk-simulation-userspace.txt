@@ -1,7 +1,7 @@
 == T0 host apk-transaction simulation ==
 artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
 tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
-work     : /tmp/t0-verify.LTS2SK
+work     : /tmp/t0-verify.p6LBZw
 
 ok   expected-packages.txt sha256
 ok   expected-files.txt sha256
@@ -52,6 +52,11 @@ ok   /usr/lib/libiwinfo.so.20230701 installed sha256 (userspace)
 ok   /usr/share/libiwinfo/devices.txt installed sha256 (userspace)
 ok   /lib/firmware/regulatory.db installed sha256 (userspace)
 ok   userspace set carries no kernel= dependency
+ok   world-iw tracked after userspace install
+ok   world-iwinfo tracked after userspace install
+ok   world-libiwinfo20230701 tracked after userspace install
+ok   world-libiwinfo-data tracked after userspace install
+ok   world-wireless-regdb tracked after userspace install
 ok   second userspace apk add rc (no-op)
 ok   second userspace apk add left the payload unchanged
 ok   userspace apk del rc
@@ -62,6 +67,11 @@ ok   /usr/bin/iwinfo removed by userspace rollback
 ok   /usr/lib/libiwinfo.so.20230701 removed by userspace rollback
 ok   /usr/share/libiwinfo/devices.txt removed by userspace rollback
 ok   /lib/firmware/regulatory.db removed by userspace rollback
+ok   world-iw removed by userspace rollback
+ok   world-iwinfo removed by userspace rollback
+ok   world-libiwinfo20230701 removed by userspace rollback
+ok   world-libiwinfo-data removed by userspace rollback
+ok   world-wireless-regdb removed by userspace rollback
 
-== verify-apks-host: 53 passed, 0 failed ==
+== verify-apks-host: 63 passed, 0 failed ==
 RESULT: PASS - host-simulated T0 install/rollback is byte-identical; kernel-mismatch gate fails closed

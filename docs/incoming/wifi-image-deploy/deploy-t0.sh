@@ -74,6 +74,7 @@ RSH_OVERRIDE=$(getenv T0_RSH)
 RSCP_OVERRIDE=$(getenv T0_RSCP)
 STATE_OVERRIDE=$(getenv T0_STATE_DIR)
 KEEP_STAGING=0
+KEEP_ON_FAILURE=0
 MODULE_PARAMS=
 
 usage() {
@@ -88,6 +89,8 @@ usage() {
 	printf '                    no kmod kernel-ABI pin, no modules installed)\n'
 	printf '  --param KEY=VALUE module parameter for --load-check (repeatable)\n'
 	printf '  --keep-staging    leave the /tmp staging dir on the device\n'
+	printf '  --keep-on-failure never auto-rollback a failed install (keep the set;\n'
+	printf '                    roll back explicitly with --rollback when ready)\n'
 	printf '  --yes-really      operator confirms the action\n'
 	printf '  --attended        operator confirms a human is at the bench\n'
 	exit 2
@@ -116,6 +119,7 @@ while [ $# -gt 0 ]; do
 		--param) shift; MODULE_PARAMS="$MODULE_PARAMS --param $1" ;;
 		--param=*) MODULE_PARAMS="$MODULE_PARAMS --param $(printf '%s' "$1" | cut -c9-)" ;;
 		--keep-staging) KEEP_STAGING=1 ;;
+		--keep-on-failure) KEEP_ON_FAILURE=1 ;;
 		--yes-really) YES_REALLY=1 ;;
 		--attended) ATTENDED=1 ;;
 		-h|--help) usage ;;
@@ -450,11 +454,21 @@ device_flow() { # action: install|rollback|verify
 	fi
 	if [ "$FAILS" -ne 0 ]; then
 		if [ "$action" = install ]; then
-			say "== automatic rollback after a failed install =="
-			if run_capture "$STATE/device-rollback-auto.txt" remote_mode "$STAGE" rollback; then
-				gate_ok "automatic rollback PASS"
+			mutated=$(sed -n 's/^T0KV install_mutated=//p' "$OUT" 2>/dev/null | head -n1)
+			if [ "$KEEP_ON_FAILURE" -eq 1 ]; then
+				say "== kept on failure (--keep-on-failure): the package set is left in place =="
+				say "   inspect: $OUT"
+				say "   roll back explicitly: deploy-t0.sh --rollback --attended --yes-really"
+			elif [ "$mutated" = 1 ]; then
+				say "== automatic rollback after a failed install (this run changed the package db) =="
+				if run_capture "$STATE/device-rollback-auto.txt" remote_mode "$STAGE" rollback; then
+					gate_ok "automatic rollback PASS"
+				else
+					gate_bad "automatic rollback FAILED - run: deploy-t0.sh --rollback --attended --yes-really"
+				fi
 			else
-				gate_bad "automatic rollback FAILED - run: deploy-t0.sh --rollback --attended --yes-really"
+				say "== no automatic rollback: this run installed nothing (idempotent verify);"
+				say "   the pre-existing package set is kept. Use --rollback to remove it explicitly. =="
 			fi
 		fi
 		write_summary FAIL

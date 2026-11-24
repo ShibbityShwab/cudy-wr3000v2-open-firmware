@@ -1,7 +1,7 @@
 == T0 host apk-transaction simulation ==
 artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
 tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
-work     : /tmp/t0-verify.Q4of7g
+work     : /tmp/t0-verify.u5kWCO
 
 ok   expected-packages.txt sha256
 ok   expected-files.txt sha256
@@ -55,6 +55,13 @@ ok   /lib/modules/6.18.60/cfg80211.ko installed sha256
 ok   /lib/modules/6.18.60/hi5622_wifi.ko installed sha256
 ok   /lib/firmware/regulatory.db installed sha256
 ok   installed db carries the kmod kernel dependency 6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+ok   world-iw tracked after full install
+ok   world-iwinfo tracked after full install
+ok   world-libiwinfo20230701 tracked after full install
+ok   world-libiwinfo-data tracked after full install
+ok   world-wireless-regdb tracked after full install
+ok   world-kmod-hi5622-cfg80211 tracked after full install
+ok   world-kmod-hi5622-wifi tracked after full install
 
 -- step 3: re-run the install (idempotency) --
 ok   second apk add rc (no-op)
@@ -77,5 +84,5 @@ ok   mismatched kernel package rejects the kmod install (apk rc=23)
 ok   negative-test log names the unsatisfied kernel= constraint
 ok   control: add on the rolled-back baseline succeeds
 
-== verify-apks-host: 61 passed, 0 failed ==
+== verify-apks-host: 68 passed, 0 failed ==
 RESULT: PASS - host-simulated T0 install/rollback is byte-identical; kernel-mismatch gate fails closed

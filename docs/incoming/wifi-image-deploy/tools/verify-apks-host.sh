@@ -255,6 +255,18 @@ TABLE
 $APK_LIST
 TABLE
 	if [ "$badk" -eq 0 ]; then ok "userspace set carries no kernel= dependency"; fi
+	# apk v3 world lines look like "name><hash": our own install must track them
+	while read -r name _; do
+		case "$name" in ''|\#*) continue ;; esac
+		case "$name" in kmod-*) continue ;; esac
+		if grep -qE "^$name([=<>]|\$)" "$WORK/postu/etc/apk/world" 2>/dev/null; then
+			ok "world-$name tracked after userspace install"
+		else
+			bad "world-$name missing after userspace install"
+		fi
+	done <<TABLE
+$APK_LIST
+TABLE
 	payload_manifest "$WORK/postu" >"$WORK/postu.before-idem"
 	add_files_userspace "$WORK/postu"
 	rciu=$?
@@ -273,6 +285,17 @@ TABLE
 		case "$path" in ''|\#*) continue ;; esac
 		if [ -e "$WORK/postu/$path" ]; then bad "/$path survived the userspace rollback"; else ok "/$path removed by userspace rollback"; fi
 	done <"$WORK/files-userspace.txt"
+	while read -r name _; do
+		case "$name" in ''|\#*) continue ;; esac
+		case "$name" in kmod-*) continue ;; esac
+		if grep -qE "^$name([=<>]|\$)" "$WORK/postu/etc/apk/world" 2>/dev/null; then
+			bad "world-$name survived the userspace rollback"
+		else
+			ok "world-$name removed by userspace rollback"
+		fi
+	done <<TABLE
+$APK_LIST
+TABLE
 	finish
 fi
 
@@ -306,6 +329,16 @@ if grep -q "kernel=$KERNEL_DEP" "$WORK/post/lib/apk/db/installed"; then
 else
 	bad "installed db lacks the kmod kernel dependency"
 fi
+while read -r name _; do
+	case "$name" in ''|\#*) continue ;; esac
+	if grep -qE "^$name([=<>]|\$)" "$WORK/post/etc/apk/world" 2>/dev/null; then
+		ok "world-$name tracked after full install"
+	else
+		bad "world-$name missing after full install"
+	fi
+done <<TABLE
+$APK_LIST
+TABLE
 
 # ------------------------------------------------------------- idempotency ---
 printf '\n-- step 3: re-run the install (idempotency) --\n'

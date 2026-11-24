@@ -43,6 +43,12 @@ does not match the kmod pin, or when only native iw/iwinfo are wanted):
     ./deploy-t0.sh --userspace-only --verify --attended --yes-really
     ./deploy-t0.sh --userspace-only --rollback --attended --yes-really
 
+Rollback policy: an explicit --rollback removes the selected set. An automatic
+rollback after a FAILED run only undoes that run's own install
+(install_mutated=1); an idempotent verify never deletes a pre-existing set.
+Add **--keep-on-failure** to any --apply to keep the set even after a failure
+(ro: inspect the evidence, then roll back explicitly).
+
 Optional write-free probe of the rootfs modules in the same window:
 
     ./deploy-t0.sh --apply --attended --yes-really --load-check
@@ -61,9 +67,14 @@ wiphy+VAP gate with rootfs iw).
   pre-T0 baseline), is idempotent, and fails closed on a mismatched installed
   kernel package; 61/61 simulation gates PASS;
 * userspace-only set: host check 40/40 PASS (all five packages proven to have
-  no kernel= dependency) and transaction simulation 53/53 PASS (install payload
-  == built image minus the two module payloads, no modules installed,
-  idempotent, rollback byte-identical to the baseline);
+  no kernel= dependency) and transaction simulation 63/63 PASS (install payload
+  == built image minus the two module payloads, no modules installed, apk-v3
+  world entries present and removed, idempotent, rollback byte-identical to the
+  baseline). Full-set simulation is 68/68;
+* hardware-found gate defects fixed and regression-tested (REPORT.md F8): the
+  manifest column comparison, apk-v3 world lines for pre-existing installs,
+  the iwinfo execution gate (accepts "wlan0 ESSID: unknown" with rc=0 and
+  records the output) and rollback-of-pre-existing-install; selftest 105/105;
 * package hooks are stock OpenWrt boilerplate only (no custom code);
 * no autoload entry; module load stays manual and write-free at probe.
 
@@ -71,7 +82,7 @@ wiphy+VAP gate with rootfs iw).
 
 | file | what |
 | --- | --- |
-| deploy-t0.sh | host orchestrator: --check (default) / --apply / --verify / --rollback / --load-check / --userspace-only |
+| deploy-t0.sh | host orchestrator: --check (default) / --apply / --verify / --rollback / --load-check / --userspace-only / --keep-on-failure |
 | device/t0-device.sh | device-side modes preflight/install/rollback/load/verify |
 | tools/verify-apks-host.sh | byte-level host apk-transaction simulation |
 | tools/selftest.sh | device-free lane selftest |
@@ -86,9 +97,11 @@ Writes only into the persistent overlay (/usr, /usr/lib, /usr/share,
 /lib/modules, /lib/firmware, /lib/apk db/world + a /root receipt); staging in
 /tmp only. No mtd/ubiformat/nvram/sysupgrade, no boot-selector write, no
 reboot, no rmmod, no /dev/mem, no UART. Device actions require --attended and
---yes-really plus a PASSING bench-link check and a READY recovery door. Any
-failed install triggers an automatic apk del rollback. No vendor firmware,
-binaries or calibration bytes are committed in this directory.
+--yes-really plus a PASSING bench-link check and a READY recovery door. A
+failed install that changed the package db triggers an automatic apk del
+rollback; --keep-on-failure disables that, and an idempotent verify-only run
+never auto-rolls back. No vendor firmware, binaries or calibration bytes are
+committed in this directory.
 
 ## Honest limits
 

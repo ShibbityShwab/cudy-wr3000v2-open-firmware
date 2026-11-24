@@ -58,6 +58,15 @@ seven .apk files, SHA256SUMS) is
   vermagic matches. Two consequences are delivered here:
   **--userspace-only** (native iw/iwinfo now, no kmod pin) and section 7 (the
   two kmod-ABI paths, with the canonical one named).
+* **Hardware follow-up 2 (2026-11-26):** the userspace-only apply exposed
+  three real defects the host simulation could not see - a manifest column bug
+  in the package-state comparison, an over-strict world-entry gate (it also did
+  not know apk v3's "name><hash" world lines) and an over-strict iwinfo
+  execution pattern ("wlan0 ESSID: unknown" with rc=0 was treated as a
+  failure). It also showed the automatic rollback could delete a pre-existing
+  working install. All four are fixed: the deploy auto-rolls back **only when
+  its own run mutated the package db**, and **--keep-on-failure** disables even
+  that. Selftest 105/105; simulations 68/68 full / 63/63 userspace.
 
 ## 1. Verified package set (the exact seven artifacts)
 
@@ -206,6 +215,37 @@ carries loadable, ABI-correct modules and native iw/iwinfo. Wiphy registration
 needs the attended golden boot (ready handshake) and is validated in
 BENCH-VALIDATION.md, not here.
 
+**F8 - the first userspace-only hardware run found four defects (fixed).**
+The Lead's userspace-only apply reported 37 PASS / 11 FAIL and rolled back.
+Root causes, all real:
+1. **manifest column bug:** read_pkg_field(logical field 1 = version) returned
+   awk column 1 (the package name), so every already-installed package was
+   reported "installed different:<name> (expected <version>)"; 5 false FAILs
+   once packages pre-existed. Fixed to column f+1; covered by selftest.
+2. **world-entry gate too strict:** an apk v3 world line is "name><hash", not
+   "name" or "name=version", and a package installed by an earlier manual
+   "apk add" may have no world entry at all. Both were treated as failures
+   (5 false FAILs). The gate now recognises "name[=<>]..." and only requires a
+   world entry for packages that THIS run actually installed; pre-existing
+   packages get an idempotent-verify PASS with a note.
+3. **over-strict iwinfo pattern:** the gate expected usage text, but on the box
+   iwinfo (rc=0) printed "wlan0 ESSID: unknown" (disconnected interface). The
+   gate now accepts any rc=0 non-empty output, records the first lines in both
+   the evidence (T0KV iwinfo_probe=...) and the staging log, and only fails on
+   rc!=0 or empty output.
+4. **rollback could delete a pre-existing install:** the automatic rollback ran
+   after any failed install, including an idempotent verify that had installed
+   nothing (the box already had the set), thereby removing a working manual
+   install. The device now reports T0KV install_mutated=0/1; the host
+   auto-rolls back only when this run mutated the package db, and the new
+   **--keep-on-failure** flag disables the automatic rollback entirely (keep
+   the set, inspect, roll back explicitly later). Because the real box has the
+   five userspace packages already, the next --userspace-only --apply is an
+   idempotent verify and can never remove them automatically now.
+Regression coverage: selftest 105/105 (includes a mocked failed install with
+mutated=1 -> auto-rollback, mutated=0 -> kept, and --keep-on-failure -> kept),
+simulations 68/68 full-set and 63/63 userspace-only.
+
 ## 4. Safety analysis (what the deploy can and cannot do)
 
 Writes are limited to overlay files: the seven payload paths above,
@@ -227,7 +267,7 @@ interleave.
 
 | file | what |
 | --- | --- |
-| deploy-t0.sh | host orchestrator: --check (default, no device), --apply, --rollback, --verify, --load-check, --userspace-only |
+| deploy-t0.sh | host orchestrator: --check (default, no device), --apply, --rollback, --verify, --load-check, --userspace-only, --keep-on-failure |
 | device/t0-device.sh | device-side modes preflight/install/rollback/load/verify with T0GATE/T0KV/T0-RESULT output |
 | tools/verify-apks-host.sh | host-only byte-level transaction simulation |
 | tools/selftest.sh | device-free lane selftest (syntax/lint/policy/manifests/mocks/real simulation) |
@@ -315,6 +355,11 @@ should** and left the box unchanged:
 * No autoload, no reboot, no flash: same safety envelope as the full set.
   Native iw/iwinfo become available immediately; the modules stay in the
   proven /tmp insmod flow until the ABI path below is taken.
+* Rollback semantics: explicit --rollback removes the selected set (apk del by
+  name), including a set that was already installed before. An automatic
+  rollback after a FAILED run only undoes this run's own mutation
+  (install_mutated=1) and never removes a pre-existing idempotent-verify state;
+  --keep-on-failure suppresses the automatic rollback altogether.
 
 ### 7.3 Closing the kmod ABI - two paths, canonical decision
 
