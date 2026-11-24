@@ -1,0 +1,14 @@
+# build products / scratch (module build happens in a scratch tree; nothing
+# binary is committed)
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.module-common.o
+.tmp_versions/
+__pycache__/
+build/
+work/
