@@ -214,7 +214,7 @@ Protocol mode adds these guards on top of the list above:
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 419/419 device-free checks (task-114: +107)
+    ./tools/run-selftest.sh        # 432/432 device-free checks (task-114: +120)
     $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
@@ -266,7 +266,7 @@ through the same one-command session runner:
 | C2 | bringup-c2-calibration.json | protocol | full six-calibration boot: ctx_create type 1 -> txq_sync72 -> 6x cfg_cal 3502..3507 -> six 298 B g1 id3 answers (budget 8) |
 | D1 | bringup-d1-vap.json | cfg80211 | wiphy registration gate + iw phy + netdev VAP add/del lifecycle (M0/M1) |
 | D2 | bringup-d2-scan.json | cfg80211 | ONE nl80211 scan request + no-exception gate; D2H scan events watch-only |
-| E1 | bringup-e1-dataplane.json | protocol | ready id2 ring-pointer seed + MAC slot-5 read-only probe + key-0x0320 TXQ-table address sync |
+| E1 | bringup-e1-dataplane.json | protocol | dp lane ladder D: dp_probe read-only MAC reachability + ONE dp_setup (rings/table/MAC program verified) + ONE key-0x0320 TXQ-table address sync + post pack |
 
 New tools/modes:
 
@@ -322,9 +322,15 @@ refused at plan time, and every bundled sequence is checked for WO reads;
 region-2 PKTRAM CA convention, whose host read is unvalidated/reads 0 - the
 step now gates the HARDWARE-MEASURED ctx4 body PACK at absolute BAR0
 addresses (0x7D4458=4, 0x7D4468=0x00010001, 0x7D488C=0x0100478C) with no
-pointer conversion, and tests lock the addresses/values in.
+pointer conversion, and tests lock the addresses/values in; (d) the cfg80211
+script expanded an unset LD_LIBRARY_PATH under set -u (D1 fire rc=2) - it now
+sets the support dir explicitly, a static audit rejects any referenced-but-
+never-assigned variable, and the iw preload section is executed under sh -u
+with an empty environment in the selftest; (e) E1 now uses the
+wifi-datapath-bringup driver surface (dp_probe/dp_setup/dp_status/dp_rings +
+h2d_txq_addr_sync alias) and gates the dp ladder D end to end.
 
-Selftest: **312 -> 419** device-free checks (+107): shell-step refusal matrix,
+Selftest: **312 -> 432** device-free checks (+120): shell-step refusal matrix,
 shell/absent/present evaluation fixtures, synthetic C2 six-response pass +
 wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP add/del
 pass + leftover-netdev negative, cfg80211 mode plan/deploy/script (sh -n),

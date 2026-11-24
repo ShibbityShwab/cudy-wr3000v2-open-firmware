@@ -388,7 +388,7 @@ step runs.
 | bringup-c2-calibration.json | h2d | 28 / 55 / 8 | ctx_create t1 alloc + measured body PACK, txq clean, 6x cfg_cal consumed + 6 relative g1 id3 last_total=0x12A answers, counters, final page |
 | bringup-d1-vap.json | cfg80211 | 11 / 24 / 0 | wiphy registered, iw phy, netdev add (type/addr), VAP counters, del + absence |
 | bringup-d2-scan.json | cfg80211 | 11 / 15 / 0 | scan rc=0, mask/staging 0, timeout=0/refused=0; D2H events watch-only |
-| bringup-e1-dataplane.json | h2d | 11 / 22 / 3 | id2 ring-pointer seed, clean create+sync, present-gated MAC slot-5 probe, key-0x0320 token consumed, mask 0 |
+| bringup-e1-dataplane.json | h2d | 13 / 42 / 3 | dp_probe RO MAC reachability probe, dp_setup WO (14 MAC regs / 8 table entries) with dp_status readback, dp_rings snapshot, ONE key-0x0320 h2d_txq_addr_sync (h2d_status readback: txq_addr_sent=1 ok=2 timeout=0), post pack mask/staging/page/state/out0/out2 |
 
 Phases are run one at a time by tools/phase_matrix.py (dry-run by default) and
 aggregated into the boot/ready/calibration/vap/scan/dataplane table by
@@ -398,4 +398,4 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **419/419** device-free checks after task-114 (was 312).
+Selftest: **432/432** device-free checks after task-114 (was 312).

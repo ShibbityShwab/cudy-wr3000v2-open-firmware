@@ -81,9 +81,11 @@ PHASES = (
                "stops the ladder - that is BLOCKED-DRIVER, not FAIL"},
     {"id": "E1", "row": "dataplane", "label": "data-plane setup + TXQ sync (E1)",
      "mode": "protocol", "sequence": "bringup-e1-dataplane.json",
-     "expect": "ready id2 ring-pointer seed + MAC slot-5 read-only probe + "
-               "key-0x0320 TXQ-table address sync via the contracted "
-               "h2d_txq_addr_sync token"},
+     "expect": "ready id2 ring-pointer seed + dp_probe read-only MAC slot-5 "
+               "reachability read + ONE dp_setup (14 MAC regs / 8 ring-table "
+               "entries verified) + ONE key-0x0320 h2d_txq_addr_sync + post "
+               "pack (mask/staging 0, page/state golden, out0/out2 0) - the "
+               "wifi-datapath-bringup ladder D"},
 )
 PHASE_IDS = tuple(p["id"] for p in PHASES)
 ROWS = ("boot", "ready", "calibration", "vap", "scan", "dataplane")

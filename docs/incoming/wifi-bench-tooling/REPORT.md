@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 419 device-free checks (+107): shell-step refusal matrix,
+7. **Tests**: 312 -> 432 device-free checks (+120): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -528,7 +528,7 @@ Fixes:
 Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 55 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-419/419 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+432/432 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
 
@@ -633,4 +633,71 @@ read remains anywhere in C2, the gated values match the ledger, and a wrong
 body signature (ctx434 = 0x0100478D) fails at post-create.
 
 Re-validated: C2 dry-run PLAN-OK (28 steps / 55 checks / 8 writes), full matrix
-unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 419/419 PASS.
+unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 432/432 PASS.
+
+### 9.4 D1 fire: unset LD_LIBRARY_PATH under set -u (generated-script fix)
+
+The first D1 (cfg80211 mode) fire advanced through every boot/support gate
+(readpath, image, module-absent, module-sha, firmware-sha, wifi-block-sha,
+cfg80211-files, cfg80211-load, module-order) and then the generated session
+script exited rc=2 at:
+
+    /tmp/hi5622-bench/.../session.sh: line 211:
+    LD_LIBRARY_PATH: parameter not set
+
+Root cause: the cfg80211 preload block exported
+LD_LIBRARY_PATH=/tmp:$LD_LIBRARY_PATH; the script runs under set -u and
+LD_LIBRARY_PATH does not exist in the remote dropbear environment, so the bare
+expansion aborted the script after the successful gates (evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T072832Z/D1).
+
+Fix:
+
+1. The generated script now sets the support dir explicitly:
+   export LD_LIBRARY_PATH=/tmp (iw + libnl-tiny are deployed there), with no
+   inherited-value expansion at all.  The line has a comment naming the fire.
+2. New selftest checks (inside the cfg80211-mode tests):
+   - generated script parses under sh -u -n;
+   - it contains export LD_LIBRARY_PATH=/tmp and no bare $LD_LIBRARY_PATH or
+     braced-LD_LIBRARY_PATH reference anywhere;
+   - a static set -u audit (find_unset_expansions) parses every variable
+     reference in the generated script and fails if the name is never assigned
+     anywhere (catches this class of bug, not just this variable);
+   - the iw/LD_LIBRARY_PATH preload section is extracted from the generated
+     script and EXECUTED under /bin/sh -u with an empty environment
+     (LD_LIBRARY_PATH unset), asserting rc=0, the selected iw path and
+     LD_LIBRARY_PATH=/tmp.
+3. Re-validated against the real artifacts: the D1 dry-run script line is
+   'export LD_LIBRARY_PATH=/tmp'; unset audit returns []; sh -u -n PASS; the
+   extracted preload block runs clean under sh -u with LD_LIBRARY_PATH unset.
+
+### 9.5 E1: the wifi-datapath-bringup DP attribute surface
+
+E1 was written against the wave-3 dp-bringup driver contract; the lane has now
+delivered it, so E1 was rewritten to the lane's own ladder D (and its
+sequences/ladder-d-datapath.json), with the DP attributes registered in
+bench_guards:
+
+- DP_ATTRS: dp_probe (RO one-word MAC-slot-5 reachability read), dp_setup (WO,
+  the ONE ring-allocation + MAC band-0 program with read-back), dp_txq_sync
+  (WO key-0x0320 hand-off) and its h2d_txq_addr_sync alias, dp_status and
+  dp_rings (RO evidence); DP_WO_ATTRS: dp_setup/dp_txq_sync/h2d_txq_addr_sync.
+- WO_ATTR_READBACK: dp_setup -> dp_status (setup_done=1 failed=0 mac_regs=14
+  table_entries=8), dp_txq_sync/h2d_txq_addr_sync -> h2d_status
+  (txq_addr_sent=1 ok=2 timeout=0 frames_sent=2); write policy accepts one
+  payload-free '1' store for each and never writes dp_probe/dp_status/dp_rings.
+- E1 sequence (13 steps / 42 checks / 3 writes, budget 2): ready id2 seed ->
+  pre pack -> ONE ctx-create (h2d_status readback) -> dp_probe (RO attr_expect;
+  value captured, not gated - the driver's own region-3 translation settles
+  the earlier BAR0 0x402A000 question) -> dp_setup (patterns on the dp_status
+  readback) -> dp_rings snapshot (+0x38/+0x3c=0x8000, +0x48=0xfffffcc1,
+  tid 7 entry) -> pre-hand-off h2d_status gates (txq_addr_sent=0,
+  frames_sent=1, txq_addr_sync=ok) -> ONE h2d_txq_addr_sync -> post pack
+  (mask/staging 0, state 1, page golden, out0/out2 0) -> catalogue capture.
+  No raw userspace MAC-window read, no pointer conversion, no devmem write.
+
+Validated host-only: E1 dry-run with the lane's module (462,952 B sha256
+8fc693ad...) is PLAN-OK (13/42/3); the capability probe finds all dp_* strings;
+the full matrix with per-phase modules (--module-for E1=dp module) is
+boot/C2/D1/D2/E1 all PLAN-OK.  The dp_setup MAC program has not been fired on
+the device by this lane.

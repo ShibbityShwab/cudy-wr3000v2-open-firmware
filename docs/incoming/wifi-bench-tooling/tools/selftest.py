@@ -1794,7 +1794,7 @@ def test_bringup_sequences(tmp: str) -> None:
         "bringup-c2-calibration": (PS.PROFILE, steps_c2 := 28),
         "bringup-d1-vap": (PS.PROFILE_CFG80211, 11),
         "bringup-d2-scan": (PS.PROFILE_CFG80211, 11),
-        "bringup-e1-dataplane": (PS.PROFILE, 11),
+        "bringup-e1-dataplane": (PS.PROFILE, 13),
     }
     seqs = {}
     for name, (prof, nsteps) in want.items():
@@ -1928,13 +1928,37 @@ def test_bringup_sequences(tmp: str) -> None:
            ev2["failed_step"] == "dev-list-after", str(ev2["failed_step"]))
     e1 = seqs.get("bringup-e1-dataplane")
     if e1:
-        ck("E1 sequence: contracted dp token in require.attrs + a fire step",
-           "h2d_txq_addr_sync" in e1["require"]["attrs"]
-           and any(w[1] == "h2d_txq_addr_sync" for w in PS.plan_writes(e1)))
-        ck("E1 sequence: read-only MAC slot-5 probe is present-gated",
-           any(r.get("expect", {}).get("present")
-               for st in e1["steps"] if st["kind"] == "read_pack"
-               for r in st["reads"]))
+        ck("E1 sequence: dp lane attrs required + pinned",
+           {"dp_probe", "dp_setup", "dp_status", "dp_rings",
+            "h2d_txq_addr_sync"} <= set(e1["require"]["attrs"]),
+           str(e1["require"]["attrs"]))
+        ck("E1 sequence: budget 2 (ctx-create + key-0x0320 hand-off)",
+           e1["require"]["budget_min"] == 2
+           and e1["load_params"].get("h2d_send_budget") == 2)
+        writes = {w[1] for w in PS.plan_writes(e1)}
+        ck("E1 sequence: dp_setup + dp hand-off are the WO triggers",
+           writes == {"h2d_ctx_create", "dp_setup", "h2d_txq_addr_sync"},
+           str(sorted(writes)))
+        byname = {st["name"]: st for st in e1["steps"]}
+        ck("E1 sequence: read-only MAC probe is the dp_probe RO attribute",
+           byname["dp-probe"]["kind"] == "attr_expect"
+           and byname["dp-probe"]["attr"] == "dp_probe")
+        ck("E1 sequence: dp_setup reads back dp_status",
+           byname["dp-setup"]["readback"] == "dp_status")
+        ck("E1 sequence: 0x0320 hand-off reads back h2d_status",
+           byname["dp-txq-sync"]["attr"] == "h2d_txq_addr_sync"
+           and byname["dp-txq-sync"]["readback"] == "h2d_status")
+        ck("E1 sequence: no raw BAR0 MAC-window read and no pointer "
+           "conversion", all("base" not in r
+                             for st in e1["steps"] if st["kind"] == "read_pack"
+                             for r in st["reads"])
+           and not any(r["label"].startswith("mac")
+                       for st in e1["steps"] if st["kind"] == "read_pack"
+                       for r in st["reads"]))
+        ck("E1 sequence: post pack gates mask/staging/page/state/out0/out2",
+           [r["bar0"] for st in e1["steps"] if st["kind"] == "read_pack"
+            for r in st["reads"] if "post" in r["label"]]
+           == [0x6F8008, 0x6F800C, 0x7D0B60, 0x877000, 0x3F1010, 0x3F12D4])
     d2 = seqs.get("bringup-d2-scan")
     if d2:
         ck("D2 sequence: one scan request with rc=0 gate",
@@ -1997,6 +2021,47 @@ def test_cfg80211_mode(tmp: str, env: dict) -> None:
     sh = subprocess.run(["sh", "-n", sp], capture_output=True, text=True)
     ck("cfg80211 plan: generated script parses (sh -n)", sh.returncode == 0,
        sh.stderr[:300])
+    shu = subprocess.run(["sh", "-u", "-n", sp], capture_output=True, text=True)
+    ck("cfg80211 plan: generated script parses under sh -u -n",
+       shu.returncode == 0, shu.stderr[:300])
+    # the D1 fire bug: bare $LD_LIBRARY_PATH under set -u (rc=2).  The script
+    # must set the support dir explicitly and never expand an unset env var.
+    ck("cfg80211 plan: LD_LIBRARY_PATH is set explicitly (no unset expansion)",
+       "export LD_LIBRARY_PATH=/tmp" in script
+       and "$LD_LIBRARY_PATH" not in script
+       and "${LD_LIBRARY_PATH" not in script)
+    unset = find_unset_expansions(script)
+    ck("cfg80211 plan: no referenced-but-never-assigned variable in the "
+       "generated script", not unset, str(unset[:8]))
+    # run the iw/LD_LIBRARY_PATH preload section under sh -u with an EMPTY
+    # environment (this is the exact code path that crashed on the box)
+    lines = script.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.strip().startswith('if [ -x "$CFG11_IW" ]')), None)
+    end = next((i for i, ln in enumerate(lines)
+                if i and i > (start or 0)
+                and 'say "GATE iw-present PASS' in ln), None)
+    ck("cfg80211 plan: userspace preload section located for the sh -u run",
+       start is not None and end is not None,
+       "start=%s end=%s" % (start, end))
+    if start is not None and end is not None:
+        frag = os.path.join(tmp, "cfg80211-preload-u.sh")
+        with open(frag, "w") as f:
+            f.write("#!/bin/sh\nset -u\n"
+                    "say() { echo \"SAY $*\"; }\n"
+                    "stop() { echo \"STOP $1: $2\"; exit 10; }\n"
+                    "CFG11_IW=%s\n" % fx["iw"])
+            f.write("\n".join(lines[start:end + 1]) + "\n")
+            f.write("echo \"LLP=$LD_LIBRARY_PATH\"\n")
+            f.write("echo \"IW=$IW\"\n")
+        env_empty = {"PATH": "/usr/bin:/bin"}
+        ru = subprocess.run(["/bin/sh", "-u", frag], capture_output=True,
+                            text=True, env=env_empty)
+        ck("cfg80211 preload: runs clean under sh -u with empty LD_LIBRARY_PATH",
+           ru.returncode == 0, (ru.stdout + ru.stderr)[-400:])
+        ck("cfg80211 preload: iw path selected and LD_LIBRARY_PATH set",
+           "LLP=/tmp" in ru.stdout and "IW=" in ru.stdout,
+           ru.stdout[-300:])
     ck("cfg80211 plan: cfg80211_status is a required sysfs attribute",
        "cfg80211_status" in plan.opts.get("cfg80211", {}).get("module", {})
        or True)
@@ -2140,6 +2205,37 @@ def _extract_func(script: str, header: str) -> list:
             if line.rstrip().endswith("fi; }"):
                 break
     return func
+
+
+_SPECIAL_VARS = {"?", "#", "@", "*", "-", "$", "!", "0"}
+
+
+def find_unset_expansions(script: str) -> list:
+    """Static set -u audit: $NAME references whose NAME is never assigned.
+
+    Conservative: collects every assignment / for-loop variable anywhere in
+    the script text (so a function-local parameter counts as assigned) and
+    reports only names referenced but never assigned anywhere.  This is the
+    generated-script tripwire for unset-variable expansions (the 2026-11-25 D1
+    fire died on a bare $LD_LIBRARY_PATH under set -u).
+    """
+    assigned = set()
+    for line in script.splitlines():
+        for m in re.finditer(r"(?:^|[;{}(\s])([A-Za-z_][A-Za-z0-9_]*)=", line):
+            assigned.add(m.group(1))
+        for m in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b", line):
+            assigned.add(m.group(1))
+        for m in re.finditer(r"\bread\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*)", line):
+            assigned.add(m.group(1))
+    refs = set()
+    for m in re.finditer(
+            r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))",
+            script):
+        name = m.group(1) or m.group(2)
+        if name in _SPECIAL_VARS:
+            continue
+        refs.add(name)
+    return sorted(refs - assigned)
 
 
 def test_pattern_whitespace(tmp: str, proto: dict) -> None:
@@ -2336,9 +2432,16 @@ def test_wo_readback(tmp: str, proto: dict) -> None:
        not re.search(r"r_attr_as \S+ (?:h2d_ctx_create|h2d_txq_sync72|"
                      r"h2d_cfg_cal|h2d_txq_addr_sync)\b", c2txt))
     e1 = PS.load(os.path.join(seqdir, "bringup-e1-dataplane.json"))
-    e1w = [st for st in e1["steps"] if st["kind"] == "attr_write"]
-    ck("wo-readback: E1's 3 triggers all read back via h2d_status",
-       len(e1w) == 3 and all(st["readback"] == "h2d_status" for st in e1w))
+    e1w = {st["name"]: st["readback"] for st in e1["steps"]
+           if st["kind"] == "attr_write"}
+    ck("wo-readback: E1's 3 triggers read back via their RO attrs",
+       e1w == {"ctx-create-t1": "h2d_status", "dp-setup": "dp_status",
+               "dp-txq-sync": "h2d_status"}, str(e1w))
+    ck("wo-readback: dp_setup/dp_txq_sync carry the DP policy",
+       G.attr_readback("dp_setup") == "dp_status"
+       and G.attr_readback("dp_txq_sync") == "h2d_status"
+       and G.attr_is_write_only("dp_status") is False
+       and G.attr_is_write_only("dp_probe") is False)
     # the flag is surfaced in the plan for the operator
     ck("wo-readback: plan text names the RO readback for the C2 plan",
        "h2d_status" in PS.plan_doc(c2)["steps"][3].get("readback", ""))

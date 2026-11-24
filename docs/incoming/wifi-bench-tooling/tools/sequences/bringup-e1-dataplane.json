@@ -1,7 +1,7 @@
 {
  "schema": "hi5622-protocol-sequence/1",
  "name": "bringup-e1-dataplane",
- "about": "Bring-up matrix row dataplane (E1): the vendor's data-plane setup after the control-plane loop - re-check the ready id2 payload (device-RAM MSDU-info ring-pointer table), the clean exception state, ONE read-only MAC slot-5 reachability probe (CA 0x40040000 via the region-3 translation), then the vendor's own TXQ-table address sync (g0 id1 key 0x0320) through the contracted h2d_txq_addr_sync token. MAC ring REGISTER programming (B2b) is a driver deliverable and is deliberately NOT done by devmem here.",
+ "about": "Bring-up matrix row dataplane (E1): the wifi-datapath-bringup lane's ladder D on the dp-capable hi5622_wifi driver (module 462,952 B sha256 8fc693ad..., attrs dp_probe/dp_setup/dp_status/dp_rings + the h2d_txq_addr_sync alias). PD4 golden boot -> ONE ctx-create -> ONE read-only MAC slot-5 reachability probe (dp_probe) -> ONE dp_setup (ring/table allocation + MAC band-0 program with read-back) -> ONE TXQ-table address sync g0 id1 key 0x0320 -> post packs. One setup + one hand-off per module load; no retry. MAC ring register programming is the driver's action (never automation devmem).",
  "profile": "hi5622-wifi-h2d",
  "module_names": [
   "hi5622_wifi"
@@ -12,25 +12,29 @@
   "cfg80211": false,
   "fw_sha256": "cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1",
   "fw_len": 928920,
-  "budget_min": 4,
+  "budget_min": 2,
   "attrs": [
+   "dp_probe",
+   "dp_setup",
+   "dp_status",
+   "dp_rings",
    "h2d_txq_addr_sync"
   ]
  },
  "load_params": {
-  "h2d_send_budget": 4
+  "h2d_send_budget": 2
  },
  "steps": [
   {
    "name": "note",
    "kind": "note",
-   "about": "E1 needs the wave-3 dp-bringup driver token h2d_txq_addr_sync (contracted name; the JSON is the single edit point if the lane names it differently). Without the token the plan is refused as module-attr-missing and the matrix row is BLOCKED."
+   "about": "E1 mirrors wifi-datapath-bringup BENCH-LADDER D0-D3 (and its sequences/ladder-d-datapath.json): read-only probe then ONE setup then ONE key-0x0320 hand-off. Stop after the post pack; a failed step is a discovery, never a retry, and the PD4 cave poll loop is one-shot per load."
   },
   {
    "name": "dp-seed",
    "kind": "attr_expect",
    "attr": "rd_catalog",
-   "about": "the ready handshake seeded the data plane: g4 id2 payload 0x01060850 = device-RAM MSDU-info ring-pointer table (ACP-mapped into MAC +0x10)",
+   "about": "the ready handshake seeded the data plane: g4 id2 payload 0x01060850 = the device-RAM MSDU-info ring-pointer table (ACP-mapped into MAC +0x10)",
    "patterns": [
     "id2_seen=1",
     "dword0=0x01060850"
@@ -39,24 +43,24 @@
   {
    "name": "pre-pack",
    "kind": "read_pack",
-   "about": "clean control state before the data-plane messages: mask 0, staging 0, out[0] (CA 0x40039010) 0",
+   "about": "clean control state before the data-plane actions: exception mask 0, staging 0, out[0] (CA 0x40039010) 0",
    "reads": [
     {
-     "label": "pre_mask0",
+     "label": "dp_pre_mask0",
      "bar0": "0x6f8008",
      "expect": {
       "zero": true
      }
     },
     {
-     "label": "pre_staging0",
+     "label": "dp_pre_staging0",
      "bar0": "0x6f800c",
      "expect": {
       "zero": true
      }
     },
     {
-     "label": "pre_out0",
+     "label": "dp_pre_out0",
      "bar0": "0x3f1010",
      "expect": {
       "zero": true
@@ -69,56 +73,67 @@
    "kind": "attr_write",
    "attr": "h2d_ctx_create",
    "value": "1",
+   "readback": "h2d_status",
    "patterns": [
     "ctx_created=1"
    ],
-   "about": "the data-plane messages still need the ordered control state (the 2026-11-25 validated create+sync precondition)",
-   "readback": "h2d_status"
+   "about": "ONE ordered context-create H2D (g0 id1 key 0x64, type 1) - the precondition of the key-addressed data-plane frame"
   },
   {
-   "name": "txq-sync72",
-   "kind": "attr_write",
-   "attr": "h2d_txq_sync72",
-   "value": "1",
+   "name": "post-create-status",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "about": "the create was committed and the core moved ACTIVE (the second frame's legality)",
    "patterns": [
-    "txq_sent=1"
-   ],
-   "about": "the vendor's TXQ config sync 0xd8, ordered after the context create",
-   "readback": "h2d_status"
-  },
-  {
-   "name": "clean-state",
-   "kind": "read_pack",
-   "about": "both control messages ran clean: no exception mask, no staged frame",
-   "reads": [
-    {
-     "label": "clean_mask0",
-     "bar0": "0x6f8008",
-     "expect": {
-      "zero": true
-     }
-    },
-    {
-     "label": "clean_staging0",
-     "bar0": "0x6f800c",
-     "expect": {
-      "zero": true
-     }
-    }
+    "ctx_created=1",
+    "frames_sent=1",
+    "phase=ACTIVE"
    ]
   },
   {
-   "name": "mac-probe",
-   "kind": "read_pack",
-   "about": "B2a single READ-ONLY reachability probe of the MAC host-interface block (device CA 0x40040000 -> region-3 BAR0 0x3F8000; the datapath ladder's B2a). Capture-only: a bus-error/empty read stops the session here and no host write is attempted. NOTE the BENCH-LADDER text says BAR0 0x402A000; the region-3 rule gives 0x3F8000 - this probe resolves the discrepancy with actual (attended) reads.",
-   "reads": [
-    {
-     "label": "mac0",
-     "bar0": "0x3f8000",
-     "expect": {
-      "present": true
-     }
-    }
+   "name": "dp-probe",
+   "kind": "attr_expect",
+   "attr": "dp_probe",
+   "about": "ONE read-only MAC band-0 word read (CA 0x40040000+0x00). The gate is that the region-3 window answered without a bus error; the value is captured (vendor boot 0x00000100, 0/other recorded and setup may still run). This settles the datapath lane's BAR0 0x402A000-vs-region-3 open question with a driver-mediated read.",
+   "patterns": [
+    "dp_probe: MAC band0 CA 0x40040000"
+   ]
+  },
+  {
+   "name": "dp-setup",
+   "kind": "attr_write",
+   "attr": "dp_setup",
+   "value": "1",
+   "readback": "dp_status",
+   "about": "ONE data-plane setup: allocate TXQ table 0x2524 + 8x64x8 TX MSDU rings + tx_ba_info 0x800 + RX free rings 256/512 + completion ring 4095 + 0x63c/0xb0 pools; write the 8 device-RAM MSDU-info table entries through ACP; program MAC band-0 in vendor order with read-back verify. No retry.",
+   "patterns": [
+    "setup_done=1",
+    "failed=0",
+    "mac_regs=14",
+    "table_entries=8"
+   ]
+  },
+  {
+   "name": "dp-rings-check",
+   "kind": "attr_expect",
+   "attr": "dp_rings",
+   "about": "live MAC band-0 snapshot: RX free-ring producers published full (index 0/phase 1), vendor interrupt mask, and the device-RAM TX MSDU-table entries readable",
+   "patterns": [
+    "+0x38 = 0x00008000",
+    "+0x3c = 0x00008000",
+    "+0x48 = 0xfffffcc1",
+    "tid 7 entry"
+   ]
+  },
+  {
+   "name": "pre-txq-status",
+   "kind": "attr_expect",
+   "attr": "h2d_status",
+   "about": "the key-0x0320 hand-off is legal now (dp_setup done) and has not been sent",
+   "patterns": [
+    "txq_addr_sent=0",
+    "frames_sent=1",
+    "txq_addr_sync=ok"
    ]
   },
   {
@@ -126,28 +141,58 @@
    "kind": "attr_write",
    "attr": "h2d_txq_addr_sync",
    "value": "1",
+   "readback": "h2d_status",
+   "about": "ONE g0 id1 key-0x0320 TXQ-table address sync frame (32 B, 4-byte device VA of the 0x2524-byte host TXQ table) through the exact H2D carrier + coalesced mailbox id-3 announce + bounded out[0] poll. No retry.",
    "patterns": [
-    "frames_sent=3",
-    "timeout=0"
-   ],
-   "about": "the vendor's own data-plane init message: HCC g0 id1, u16 key 0x0320, 4-byte device VA of a host-allocated zeroed 0x2524 B non-cached TXQ table (builder dp_build_txq_addr_sync). ONE frame, one idea.",
-   "readback": "h2d_status"
+    "txq_addr_sent=1",
+    "ok=2",
+    "timeout=0",
+    "frames_sent=2"
+   ]
   },
   {
-   "name": "post-dp",
+   "name": "post-txq-pack",
    "kind": "read_pack",
-   "about": "the data-plane message did not fault the firmware: exception mask and staging stay clean",
+   "about": "the whole point: no exception after the MAC program and the 0x0320 frame; page/state still golden; mailbox drains",
    "reads": [
     {
-     "label": "post_mask0",
+     "label": "dp_post_mask0",
      "bar0": "0x6f8008",
      "expect": {
       "zero": true
      }
     },
     {
-     "label": "post_staging0",
+     "label": "dp_post_staging0",
      "bar0": "0x6f800c",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "dp_post_state0",
+     "bar0": "0x7d0b60",
+     "expect": {
+      "eq": "0x1"
+     }
+    },
+    {
+     "label": "dp_post_page0",
+     "bar0": "0x877000",
+     "expect": {
+      "eq": "0x86807fef"
+     }
+    },
+    {
+     "label": "dp_post_out0",
+     "bar0": "0x3f1010",
+     "expect": {
+      "zero": true
+     }
+    },
+    {
+     "label": "dp_post_out2",
+     "bar0": "0x3f12d4",
      "expect": {
       "zero": true
      }
@@ -155,18 +200,14 @@
    ]
   },
   {
-   "name": "h2d-summary",
-   "kind": "attr_expect",
-   "attr": "h2d_status",
-   "patterns": [
-    "refused=0"
-   ],
-   "about": "no H2D store was refused"
+   "name": "catalog-after",
+   "kind": "catalog_snapshot",
+   "about": "post-run D2H catalogue delta capture (the 0x320 worker has no known D2H answer; evidence, not a gate)"
   },
   {
-   "name": "note-end",
+   "name": "done-note",
    "kind": "note",
-   "about": "E1 row PASS = MAC slot-5 window readable + key-0x0320 message consumed with mask 0. The RX/TX ring register program (B2b) and the 8-byte MSDU-info ring posts are the dp-bringup driver's deliverable, not automation devmem writes."
+   "about": "E1 row PASS = dp_probe answered, dp_setup verified (14 MAC regs / 8 table entries), the 0x0320 frame consumed with mask/staging 0 and page/state golden. Stop the boot here: one setup + one hand-off per load, no retry."
   }
  ]
 }

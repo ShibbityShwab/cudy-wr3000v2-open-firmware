@@ -978,7 +978,11 @@ def generate_protocol_script(cfg: dict) -> str:
         a('if [ -x "$CFG11_IW" ]; then IW="$CFG11_IW"')
         a('elif command -v iw >/dev/null 2>&1; then IW=$(command -v iw)')
         a('else stop tool-missing "no iw binary (deploy --iw-bin)"; fi')
-        a('export LD_LIBRARY_PATH=%s:$LD_LIBRARY_PATH' % LIBNL_REMOTE_DIR)
+        # Set the support dir explicitly: the script runs under set -u and
+        # LD_LIBRARY_PATH is not guaranteed to exist in the remote environment
+        # (the 2026-11-25 D1 fire died on the bare $LD_LIBRARY_PATH expansion,
+        # remote rc=2).  No unset-var expansion in the generated script.
+        a('export LD_LIBRARY_PATH=%s' % LIBNL_REMOTE_DIR)
         a('say "USERSPACE iw=$IW libnl=%s/%s"'
           % (LIBNL_REMOTE_DIR,
              os.path.basename((cfg11.get("library") or {}).get("remote")

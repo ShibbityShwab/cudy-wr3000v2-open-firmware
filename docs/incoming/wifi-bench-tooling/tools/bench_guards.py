@@ -219,13 +219,15 @@ WIFI_TRANSPORT_WO_ATTRS = WIFI_TRANSPORT_ATTRS
 # status line only.  VAP add/del and scan are nl80211 operations driven through
 # `iw` (shell steps), never sysfs writes.
 CFG80211_ATTRS = {"cfg80211_status"}
-# Contracted data-plane token for the wave-3 dp-bringup lane: the vendor's own
-# TXQ-table address sync (g0 id1, u16 key 0x0320, 4-byte device VA; builder
-# dp_build_txq_addr_sync in ../wifi-datapath/src/dp_frames.c).  The token name
-# is the bench-automation contract: if the dp-bringup driver names it
-# differently, the E1 sequence JSON is the single edit point (see PHASES.md).
-DP_ATTRS = {"h2d_txq_addr_sync"}
-DP_WO_ATTRS = DP_ATTRS
+# Data-plane host-side surface of the wave-3 dp-bringup driver
+# (../wifi-datapath-bringup/src/hi5622_dp.c, module 462,952 B sha256
+# 8fc693ad...): dp_probe (RO one-word MAC reachability read), dp_setup (WO,
+# the ONE MAC-program/ring-allocation action), dp_txq_sync (WO key-0x0320
+# hand-off) with h2d_txq_addr_sync as its bench-tooling alias, dp_status and
+# dp_rings (RO evidence).  See sequences/bringup-e1-dataplane.json.
+DP_ATTRS = {"dp_probe", "dp_setup", "dp_txq_sync", "dp_status", "dp_rings",
+            "h2d_txq_addr_sync"}
+DP_WO_ATTRS = {"dp_setup", "dp_txq_sync", "h2d_txq_addr_sync"}
 ALL_KNOWN_ATTRS = (BASE_ATTRS | HCC_ATTRS | RD_ATTRS | H2D_ATTRS |
                    WIFI_TRANSPORT_ATTRS | CFG80211_ATTRS | DP_ATTRS)
 WO_ATTRS = {
@@ -263,7 +265,9 @@ WO_ATTR_READBACK = {
     "h2d_ctx_create": "h2d_status",
     "h2d_send": "h2d_status",
     "h2d_cfg_cal": "h2d_status",
+    "dp_txq_sync": "h2d_status",
     "h2d_txq_addr_sync": "h2d_status",
+    "dp_setup": "dp_status",
 }
 
 
@@ -1105,13 +1109,19 @@ class WriteGuard:
                                  "h2d_cfg_cal grammar is N[ fb=M] with N=1..6 "
                                  "or 3502..3507, got %r" % payload)
             return
-        if attr == "h2d_txq_addr_sync":
-            # Contracted data-plane token: the vendor's own key-0x0320 frame;
-            # the driver owns the TXQ-table VA, so the host trigger is ONE
-            # payload-free store.
+        if attr in ("h2d_txq_addr_sync", "dp_txq_sync"):
+            # The vendor's own key-0x0320 frame; the driver owns the TXQ-table
+            # VA (allocated by dp_setup), so the host trigger is ONE store.
             if payload.strip() != "1":
                 raise GuardError("h2d-payload",
-                                 "h2d_txq_addr_sync store payload must be '1'")
+                                 "%r store payload must be '1'" % attr)
+            return
+        if attr == "dp_setup":
+            # ONE data-plane setup per module load (ring allocation + MAC
+            # band-0 program with read-back verify); payload is always '1'.
+            if payload.strip() != "1":
+                raise GuardError("dp-payload",
+                                 "dp_setup store payload must be '1'")
             return
         if attr == "h2d_send":
             # Dedicated-frame grammar only; payload frames stay refused.
