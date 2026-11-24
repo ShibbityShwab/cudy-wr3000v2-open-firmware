@@ -1,0 +1,762 @@
+diff -Nru a/hi5622_ap_frames.c b/hi5622_ap_frames.c
+--- a/hi5622_ap_frames.c	2026-11-24 20:06:25.881587677 +0700
++++ b/hi5622_ap_frames.c	2026-11-24 20:46:21.223202632 +0700
+@@ -123,6 +123,8 @@
+ 		return -EINVAL;
+ 	if (p->band > 1u)
+ 		return -EINVAL;
++	if (p->channel > 196u)
++		return -EINVAL;
+ 	if (p->hidden_ssid > 1u || p->start > 1u)
+ 		return -EINVAL;
+ 	if (!haf_auth_ok(p->auth_algs))
+@@ -404,6 +406,45 @@
+ 	return -EINVAL;
+ }
+ 
++/* 4-byte module-channel body (worker CA 0x841B8 [V]):
++ *   [0] band (context +0x11), [1] vendor mac_vap+2 [I] (context +0x12),
++ *   [2] channel number (context +0x10), [3] unused by the worker. */
++static int haf_build_body_chan(u8 *body, size_t cap,
++			     const struct haf_ap_params *p)
++{
++	if (!body || !p || cap < HAF_CHAN_BODY_LEN)
++		return -ENOSPC;
++	if (p->band > 1u || p->vap_id > 0x0fu || p->channel == 0u)
++		return -EINVAL;
++	body[0] = (u8)p->band;
++	body[1] = p->vap_id;
++	body[2] = p->channel;
++	body[3] = 0u;
++	return 0;
++}
++
++int haf_build_chan_frame(struct haf_frame *f, const struct haf_ap_params *p)
++{
++	u8 body[HAF_CHAN_BODY_LEN];
++	int rc;
++
++	if (!f || !p)
++		return -EINVAL;
++	if (p->carrier != HAF_CARRIER_G0_ID1 &&
++	    p->carrier != HAF_CARRIER_WAL_G2)
++		return -EINVAL;
++	if (p->dst > 0x0fu || p->module > 0x12u)
++		return -EINVAL;
++	rc = haf_build_body_chan(body, sizeof(body), p);
++	if (rc)
++		return rc;
++	if (p->carrier == HAF_CARRIER_G0_ID1)
++		return haf_g0_frame(f, HAF_G0_KEY_CHAN, body,
++				    HAF_CHAN_BODY_LEN, p);
++	return haf_wal_frame(f, HAF_WAL_CMD_CHAN, body, HAF_CHAN_BODY_LEN,
++			     p, 0u);
++}
++
+ int haf_build_frame(struct haf_frame *f, enum haf_frame_id id,
+ 		    const struct haf_ap_params *p)
+ {
+diff -Nru a/hi5622_ap_frames.h b/hi5622_ap_frames.h
+--- a/hi5622_ap_frames.h	2026-11-24 20:06:25.881521773 +0700
++++ b/hi5622_ap_frames.h	2026-11-24 20:45:07.029492833 +0700
+@@ -111,6 +111,12 @@
+ #define HAF_WAL_CMD_AUTH	0x006du
+ #define HAF_WAL_CMD_AP_CFG	0x0127u
+ #define HAF_WAL_CMD_VAP_START	0x0065u
++/* wifi-beacon-static lane (task-140): module channel config.  The vendor
++ * AP-start path sends it FIRST (wal_cfg80211_do_chan_set, 4-byte body); the
++ * same command id is a static g0 id1 config key in this firmware build
++ * (table A row 108 -> worker CA 0x841B8). */
++#define HAF_WAL_CMD_CHAN	0x0124u
++#define HAF_G0_KEY_CHAN		0x0124u
+ /* static-dispatch config keys (firmware table A rows) [V] */
+ #define HAF_G0_KEY_SSID		0x0005u
+ #define HAF_G0_KEY_AP_CFG	0x0127u
+@@ -120,6 +126,7 @@
+ #define HAF_AUTH_BODY_LEN	4u
+ #define HAF_AP_CFG_BODY_LEN	156u
+ #define HAF_VAP_START_BODY_LEN	12u
++#define HAF_CHAN_BODY_LEN	4u
+ 
+ #define HAF_MAX_SSID		32u
+ #define HAF_MAX_HEAD		512u
+@@ -167,6 +174,8 @@
+ 	u8	vap_id;		/* WAL hdr[3] VAP id for this frame class */
+ 	u8	iftype;		/* 2 = AP for the WAL VAP-add family */
+ 	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (vendor band hint) */
++	u8	channel;	/* channel number for the beacon-static channel
++				 * frame (0 = not a channel-frame request) */
+ 	u8	hidden_ssid;	/* 1 = hide SSID (zero-length SSID element) */
+ 	u8	auth_algs;	/* nl80211_auth_type, allowlist above */
+ 	u8	start;		/* 1 = start_ap, 0 = change_beacon body */
+@@ -215,6 +224,14 @@
+ int haf_build_frame(struct haf_frame *f, enum haf_frame_id id,
+ 		    const struct haf_ap_params *p);
+ 
++/* Build the module channel-config frame (WAL cmd 0x0124 / g0 id1 key
++ * 0x0124, 4-byte body).  It is NOT part of the default AP-start sequences:
++ * the legacy bench-proven path must stay byte-identical; the cfg80211 layer
++ * posts it explicitly when beacon_static=1.  Only band/channel/vap_id/
++ * module/dst are read.  Returns 0, -EINVAL, -ENOSPC or -EOPNOTSUPP (WAL
++ * carrier without a valid command id). */
++int haf_build_chan_frame(struct haf_frame *f, const struct haf_ap_params *p);
++
+ /* Sequence order per carrier -> frame id (0-based index).  Returns 0 with
+  * *out_id set, or -ENODATA past the end of the sequence. */
+ int haf_sequence_at(unsigned int index, u8 carrier, enum haf_frame_id *out_id);
+diff -Nru a/hi5622_frames_api.h b/hi5622_frames_api.h
+--- a/hi5622_frames_api.h	2026-11-24 20:06:25.883800884 +0700
++++ b/hi5622_frames_api.h	2026-11-24 20:45:07.029093371 +0700
+@@ -91,13 +91,17 @@
+  * must run before the firmware accepts a scan request / returns results. */
+ #define HI5622_FRAME_CAP_VAP_ADD	(1u << 7)	/* VAP add builder */
+ #define HI5622_FRAME_CAP_VAP_START	(1u << 8)	/* VAP start builder */
++/* wifi-beacon-static lane (task-140): the vendor AP-start path configures the
++ * module channel BEFORE the SSID/AP-config frames, so the firmware's module
++ * channel context is programmed when the AP VAP starts beaconing. */
++#define HI5622_FRAME_CAP_CHAN_CFG	(1u << 9)	/* channel config builder */
+ 
+ #define HI5622_FRAME_CAPS_ALL						\
+ 	(HI5622_FRAME_CAP_SCAN_REQ | HI5622_FRAME_CAP_SCAN_PARSE |	\
+ 	 HI5622_FRAME_CAP_USER_ADD | HI5622_FRAME_CAP_USER_ADD_NOTIFY |	\
+ 	 HI5622_FRAME_CAP_USER_DEL | HI5622_FRAME_CAP_AP_START |	\
+ 	 HI5622_FRAME_CAP_AP_STOP | HI5622_FRAME_CAP_VAP_ADD |	\
+-	 HI5622_FRAME_CAP_VAP_START)
++	 HI5622_FRAME_CAP_VAP_START | HI5622_FRAME_CAP_CHAN_CFG)
+ 
+ /* ===================================================================
+  * 2. Neutral parameter structs (cfg80211/netlink -> provider)
+@@ -143,6 +147,8 @@
+ 	u8	ssid[HI5622_FRAME_MAX_SSID_LEN];
+ 	u8	ssid_len;
+ 	u8	iftype;
++	u8	channel;	/* channel number (hw_value) for the beacon-static
++				 * channel-config frame; 0 = not specified */
+ 	u16	user_id;	/* VAP user id, 12-bit [U] */
+ 	u16	center_freq;	/* chandef.chan->center_freq, MHz */
+ 	u8	width;		/* nl80211_chan_width */
+@@ -186,11 +192,34 @@
+ struct hi5622_vap_start_params {
+ 	u8	iftype;		/* nl80211 iftype */
+ 	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
++	u8	channel;	/* VAP-start channel argument: the vendor
++				 * hmac_config_do_start_vap channel byte [V];
++				 * 0 = legacy bench-proven path (unchanged) */
+ 	u8	module;		/* module/VAP index, <= 0x12 [I] */
+ 	u8	dst;		/* HCC dst nibble, 0 = local endpoint */
+ 	u32	seq;		/* WAL cfg-event sequence [I] */
+ };
+ 
++/* One module-channel config (wifi-beacon-static lane, task-140): the vendor
++ * AP-start path's FIRST message is a channel-info config (WAL cfg command
++ * 0x0124) built from the cfg80211 chandef.  The firmware side is a static
++ * g0 id1 config-event key as well (table A row 108 -> worker CA 0x841B8),
++ * so both carriers are available; the provider owns the envelope.
++ *
++ * Body (4 B, [V] firmware worker 0x841B8):  [0] band (0=2.4G, 1=5G -> module
++ * ctx +0x11), [1] vendor mac_vap+2 [I] (-> ctx +0x12), [2] channel number
++ * (-> ctx +0x10), [3] unused by the worker.  The worker then programs the
++ * PHY/band channel (CA 0xFDCE4 family) - a zero module-channel context is
++ * what the bench-proven clean-room AP path leaves behind. */
++struct hi5622_chan_cfg_params {
++	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
++	u8	channel;	/* channel number (hw_value), 1..196 */
++	u8	vap_id;		/* body[1] = vendor mac_vap+2 [I] */
++	u8	module;		/* g0 hdr[3] module index */
++	u8	dst;		/* HCC dst nibble */
++	u32	seq;		/* WAL cfg-event sequence [I] */
++};
++
+ /* ===================================================================
+  * 3. Scan result (provider decoder -> cfg80211 BSS)
+  * =================================================================== */
+@@ -314,6 +343,10 @@
+ 			     const struct hi5622_vap_start_params *p);
+ 	int (*build_vap_start)(u8 *wire, size_t cap, size_t *out_len,
+ 			       const struct hi5622_vap_start_params *p);
++	/* wifi-beacon-static lane: module channel config (WAL cmd 0x0124 /
++	 * g0 id1 key 0x0124), posted BEFORE the SSID/AP-config frames. */
++	int (*build_chan_cfg)(u8 *wire, size_t cap, size_t *out_len,
++			      const struct hi5622_chan_cfg_params *p);
+ };
+ 
+ /* ===================================================================
+diff -Nru a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-24 20:06:33.941604495 +0700
++++ b/hi5622_scan.c	2026-11-24 20:50:41.515402267 +0700
+@@ -46,6 +46,30 @@
+  * this file owns only the cfg80211 ordering (VAP add -> VAP start -> scan). */
+ extern unsigned int hi5622_vap_start_first;
+ extern unsigned int hi5622_vap_start_module;
++/* wifi-beacon-static lane (task-140): provider-owned carrier select for the
++ * channel-config frame (0 = g0 id1 key 0x0124, 1 = WAL g2 cmd 0x0124). */
++extern unsigned int hi5622_ap_start_mode;
++
++/* wifi-beacon-static lane (task-140), FAIL-CLOSED default 0.  The vendor AP
++ * start sends FIVE messages in order: module channel config (0x0124) -> set
++ * SSID (0x0005) -> auth (0x006D) -> AP config (0x0127) -> VAP start (0x0065).
++ * The bench-proven clean-room path posts the mode-1 VAP base (user_add +
++ * VAP start) BEFORE the AP config and never configures the module channel, so
++ * the firmware SMAC's per-module channel context stays zero when the AP VAP
++ * starts.  beacon_static=1 executes the vendor order instead:
++ *   VAP add -> channel config -> provider AP sequence -> VAP start.
++ * The WAL carrier (ap_start_mode=1) already ends its own sequence with the
++ * VAP start after the AP config, so the extra step is skipped there. */
++static unsigned int hi5622_beacon_static;
++module_param_named(beacon_static, hi5622_beacon_static, uint, 0644);
++MODULE_PARM_DESC(beacon_static,
++		 "AP start: vendor beacon order (channel config + VAP start AFTER the AP config; 0=off bench-proven default, 1=on)");
++/* Ladder isolation for the beacon_static rung: 1 (default) posts the VAP start
++ * after the AP config, 0 posts only the channel config (control rung). */
++static unsigned int hi5622_beacon_vap_start = 1u;
++module_param_named(beacon_vap_start, hi5622_beacon_vap_start, uint, 0644);
++MODULE_PARM_DESC(beacon_vap_start,
++		 "beacon_static rung: 1=VAP start after the AP config (default), 0=channel config only");
+ 
+ /* scan-complete lane (task-123): the bench measured the firmware returning 6
+  * of the 13 requested per-channel results within the wifi-scan-ap lane's 5 s
+@@ -775,9 +799,10 @@
+  * both dereference module_ctx+0x190 WITHOUT a NULL check: posting an AP frame
+  * before the mode-1 VAP base exists takes a firmware data abort (exception
+  * mask 0x18, golden page lost). */
+-static int hi5622_scan_post_vap_base_once(struct hi5622_pci *ctx,
++static int hi5622_scan_post_vap_add_frame(struct hi5622_pci *ctx,
+ 					  const struct hi5622_frame_ops *ops,
+-					  u8 iftype, u8 band, u8 module)
++					  u8 iftype, u8 band, u8 module,
++					  u8 channel, u32 seq)
+ {
+ 	struct hi5622_vap_start_params vp;
+ 	u8 *wire;
+@@ -786,13 +811,7 @@
+ 
+ 	if (!ctx)
+ 		return -EINVAL;
+-	if (ctx->vap_base_posted)
+-		return 0;
+-	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
+-			  HI5622_FRAME_CAP_VAP_START)) !=
+-	    (HI5622_FRAME_CAP_VAP_ADD | HI5622_FRAME_CAP_VAP_START))
+-		return -EOPNOTSUPP;
+-	if (!ops->build_vap_add || !ops->build_vap_start)
++	if (!(ops->caps & HI5622_FRAME_CAP_VAP_ADD) || !ops->build_vap_add)
+ 		return -EOPNOTSUPP;
+ 	wire = kmalloc(HI5622_FRAME_MAX_TOTAL, GFP_KERNEL);
+ 	if (!wire)
+@@ -801,25 +820,74 @@
+ 	vp.iftype = iftype;
+ 	vp.band = band;
+ 	vp.module = module;
+-	vp.seq = 1;
++	vp.channel = channel;
++	vp.seq = seq;
+ 	rc = ops->build_vap_add(wire, HI5622_FRAME_MAX_TOTAL, &len, &vp);
+-	if (rc)
+-		goto out;
+-	rc = hi5622_frame_post(ctx, wire, len, "vap_add", NULL);
+-	if (rc)
+-		goto out;
+-	len = 0;
+-	vp.seq = 2;
++	if (!rc)
++		rc = hi5622_frame_post(ctx, wire, len, "vap_add", NULL);
++	kfree(wire);
++	return rc;
++}
++
++static int hi5622_scan_post_vap_start_frame(struct hi5622_pci *ctx,
++					    const struct hi5622_frame_ops *ops,
++					    u8 iftype, u8 band, u8 module,
++					    u8 channel, u32 seq)
++{
++	struct hi5622_vap_start_params vp;
++	u8 *wire;
++	size_t len = 0;
++	int rc;
++
++	if (!ctx)
++		return -EINVAL;
++	if (!(ops->caps & HI5622_FRAME_CAP_VAP_START) || !ops->build_vap_start)
++		return -EOPNOTSUPP;
++	wire = kmalloc(HI5622_FRAME_MAX_TOTAL, GFP_KERNEL);
++	if (!wire)
++		return -ENOMEM;
++	memset(&vp, 0, sizeof(vp));
++	vp.iftype = iftype;
++	vp.band = band;
++	vp.module = module;
++	vp.channel = channel;
++	vp.seq = seq;
+ 	rc = ops->build_vap_start(wire, HI5622_FRAME_MAX_TOTAL, &len, &vp);
++	if (!rc)
++		rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
++	kfree(wire);
++	return rc;
++}
++
++/* Legacy bench-proven mode-1 base: VAP add + VAP start back-to-back, BEFORE
++ * any AP frame (byte-identical to the v7 behaviour; the beacon_static rung
++ * does not use this ordering). */
++static int hi5622_scan_post_vap_base_once(struct hi5622_pci *ctx,
++					  const struct hi5622_frame_ops *ops,
++					  u8 iftype, u8 band, u8 module)
++{
++	int rc;
++
++	if (!ctx)
++		return -EINVAL;
++	if (ctx->vap_base_posted)
++		return 0;
++	if ((ops->caps & (HI5622_FRAME_CAP_VAP_ADD |
++			  HI5622_FRAME_CAP_VAP_START)) !=
++	    (HI5622_FRAME_CAP_VAP_ADD | HI5622_FRAME_CAP_VAP_START))
++		return -EOPNOTSUPP;
++	if (!ops->build_vap_add || !ops->build_vap_start)
++		return -EOPNOTSUPP;
++	rc = hi5622_scan_post_vap_add_frame(ctx, ops, iftype, band, module,
++					    0u, 1u);
+ 	if (rc)
+-		goto out;
+-	rc = hi5622_frame_post(ctx, wire, len, "vap_start", NULL);
++		return rc;
++	rc = hi5622_scan_post_vap_start_frame(ctx, ops, iftype, band, module,
++					      0u, 2u);
+ 	if (!rc) {
+ 		ctx->vap_base_posted = true;
+ 		ctx->vap_base_iftype = iftype;
+ 	}
+-out:
+-	kfree(wire);
+ 	return rc;
+ }
+ 
+@@ -1232,6 +1300,25 @@
+ #define HI5622_STAB_MODULE_TABLE_SLOT0_CPU	0x175458u /* BAR0 0x829458 */
+ #define HI5622_STAB_MODULE_TABLE_BASE_CPU	0x17a504u /* BAR0 0x82a504 */
+ #define HI5622_STAB_VAP_PTR_OFF			0x190u
++/* wifi-beacon-static lane (task-140): the module channel-config worker
++ * (CA 0x841B8) stores its 4-byte body at module_ctx +0x10..+0x13:
++ *   byte +0x10 = channel, +0x11 = band, +0x12 = body[1] (vendor mac_vap+2),
++ *   +0x13 = channel-valid flag.  Read back through the same bench-proven
++ * module-table slot-0 recipe - READ-ONLY, evidence for the ladder. */
++#define HI5622_BEACON_MCTX_OFF		0x10u
++
++static u32 hi5622_scan_module_ctx_ca(struct hi5622_pci *ctx)
++{
++	u32 table, base;
++
++	if (!ctx || !ctx->windows_programmed)
++		return 0;
++	table = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
++	if (!table)
++		return 0;
++	base = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_BASE_CPU);
++	return table + base;
++}
+ 
+ static bool hi5622_scan_vap_object_valid(struct hi5622_pci *ctx)
+ {
+@@ -1284,6 +1371,11 @@
+ 	/* wifi-ap-start lane (task-121): provider hints from the cfg80211
+ 	 * settings; the wire decision stays in the provider. */
+ 	p->band = (u8)(set->chandef.chan->band == NL80211_BAND_5GHZ ? 1u : 0u);
++	/* wifi-beacon-static lane: channel number for the vendor-order channel
++	 * config frame; the cfg80211 chandef always names a concrete channel. */
++	p->channel = (u8)set->chandef.chan->hw_value;
++	if (!p->channel)
++		return -EINVAL;
+ 	p->hidden_ssid = (u8)(set->hidden_ssid != NL80211_HIDDEN_SSID_NOT_IN_USE);
+ 	p->auth_algs = (u8)set->auth_type;
+ 	p->module = (u8)s->user_id;
+@@ -1399,30 +1491,123 @@
+ 			 "cfg80211: start_ap restart after host-side stop: re-posting the AP config against the live firmware AP (NO structural firmware write; firmware VAP object readback=%s after %u ms wait)\n",
+ 			 valid ? "nonzero" : "ZERO", HI5622_STAB_VAP_WAIT_MS);
+ 	}
+-	/* v7 base: post the vendor mode-1 VAP base once per module load (skipped
+-	 * when a scan or a previous AP start already posted it). */
+-	rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
+-					(u8)dev->ieee80211_ptr->iftype,
+-					c->band,
+-					(u8)hi5622_vap_start_module);
+-	if (rc) {
+-		dev_warn(wdev_dev,
+-			 "cfg80211: start_ap VAP base not posted (%d) - sequence aborted, no AP frame sent\n",
+-			 rc);
+-		goto out;
+-	}
+-	/* Strict stale-VAP guard ONLY for a base latch that PRE-EXISTED this call
+-	 * (a scan or a previous AP start posted it earlier).  A base posted in
+-	 * THIS call is exempt: the firmware population is asynchronous.  Bounded
+-	 * poll (100 ms) absorbs the async window; if the object is still zero the
+-	 * firmware is in an unknown state and we fail closed. */
+-	if (base_was_posted && !restart_plain &&
+-	    !hi5622_scan_vap_wait_valid(c->ctx, HI5622_STAB_VAP_WAIT_MS)) {
+-		dev_warn(wdev_dev,
+-			 "cfg80211: start_ap REFUSED - pre-existing base latch but the firmware VAP object (module_ctx+0x190) still reads zero after %u ms - stale/dead VAP; no AP frame sent, power-cycle\n",
+-			 HI5622_STAB_VAP_WAIT_MS);
+-		rc = -EIO;
+-		goto out;
++	if (hi5622_beacon_static) {
++		struct hi5622_chan_cfg_params cp;
++		u8 plan[HI5622_BEACON_STEP_MAX];
++		unsigned int plan_n, i;
++
++		/* The plan is the pure ordering contract (host-tested) and is
++		 * logged so the bench reads the intended rung from dmesg. */
++		plan_n = hi5622_beacon_plan(1u, hi5622_beacon_vap_start, plan,
++					    HI5622_BEACON_STEP_MAX);
++		dev_info(wdev_dev,
++			 "cfg80211: start_ap beacon_static=1 plan (%u steps):", plan_n);
++		for (i = 0; i < plan_n; i++)
++			pr_cont(" %s", hi5622_beacon_step_name(plan[i]));
++		pr_cont("\n");
++		if (!(ops->caps & HI5622_FRAME_CAP_CHAN_CFG) ||
++		    !ops->build_chan_cfg) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static=1 REFUSED - provider '%s' has no module-channel-config builder; no frame sent\n",
++				 ops->name);
++			rc = -EOPNOTSUPP;
++			goto out;
++		}
++		if (!p->channel) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static=1 REFUSED - the chandef has no channel number; no frame sent\n");
++			rc = -EINVAL;
++			goto out;
++		}
++		/* Vendor order: user_add first (the AP workers dereference the
++		 * firmware VAP object), then the channel config. */
++		rc = hi5622_scan_post_vap_add_frame(c->ctx, ops,
++						   (u8)dev->ieee80211_ptr->iftype,
++						   c->band,
++						   (u8)hi5622_vap_start_module,
++						   (u8)p->channel, 1u);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static: VAP add not posted (%d) - sequence aborted, no AP frame sent\n",
++				 rc);
++			goto out;
++		}
++		c->ctx->vap_base_posted = true;
++		c->ctx->vap_base_iftype = (u8)dev->ieee80211_ptr->iftype;
++		/* Bounded wait for the async VAP-object population before the
++		 * channel/AP workers dereference it (fail closed, no AP frame). */
++		if (!hi5622_scan_vap_wait_valid(c->ctx, HI5622_STAB_VAP_WAIT_MS)) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static REFUSED - the firmware VAP object (module_ctx+0x190) still reads zero after %u ms post-add; no channel/AP frame sent\n",
++				 HI5622_STAB_VAP_WAIT_MS);
++			rc = -EIO;
++			goto out;
++		}
++		memset(&cp, 0, sizeof(cp));
++		cp.band = p->band;
++		cp.channel = (u8)p->channel;
++		cp.vap_id = p->vap_id;
++		cp.module = p->module;
++		cp.dst = 0u;
++		cp.seq = 3u;
++		len = 0;
++		rc = ops->build_chan_cfg(wire, HI5622_FRAME_MAX_TOTAL, &len,
++					 &cp);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static: channel-config builder refused (%d) - sequence aborted\n",
++				 rc);
++			rc = rc < 0 ? rc : -EIO;
++			goto out;
++		}
++		rc = hi5622_frame_post(c->ctx, wire, len, "ap_chan", NULL);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static: channel-config frame not posted (%d) - sequence aborted\n",
++				 rc);
++			goto out;
++		}
++		posted++;
++		dev_info(wdev_dev,
++			 "cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config\n",
++			 posted, plan_n, len, p->band, p->channel);
++		{
++			u32 mctx = hi5622_scan_module_ctx_ca(c->ctx);
++			u32 chrd = mctx ? hi5622_fw_ram_read(c->ctx,
++						     mctx + HI5622_BEACON_MCTX_OFF) : 0xffffffffu;
++
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap beacon_static channel ctx readback: module_ctx+0x10 u32=0x%08x (channel=%u band=%u field=%u valid=%u)\n",
++				 chrd, chrd & 0xffu, (chrd >> 8) & 0xffu,
++				 (chrd >> 16) & 0xffu, (chrd >> 24) & 0xffu);
++		}
++	} else {
++		/* v7 base: post the vendor mode-1 VAP base once per module load
++		 * (skipped when a scan or a previous AP start already posted it). */
++		rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
++						(u8)dev->ieee80211_ptr->iftype,
++						c->band,
++						(u8)hi5622_vap_start_module);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap VAP base not posted (%d) - sequence aborted, no AP frame sent\n",
++				 rc);
++			goto out;
++		}
++		/* Strict stale-VAP guard ONLY for a base latch that PRE-EXISTED
++		 * this call (a scan or a previous AP start posted it earlier).  A
++		 * base posted in THIS call is exempt: the firmware population is
++		 * asynchronous.  Bounded poll (100 ms) absorbs the async window;
++		 * if the object is still zero the firmware is in an unknown state
++		 * and we fail closed. */
++		if (base_was_posted && !restart_plain &&
++		    !hi5622_scan_vap_wait_valid(c->ctx, HI5622_STAB_VAP_WAIT_MS)) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap REFUSED - pre-existing base latch but the firmware VAP object (module_ctx+0x190) still reads zero after %u ms - stale/dead VAP; no AP frame sent, power-cycle\n",
++				 HI5622_STAB_VAP_WAIT_MS);
++			rc = -EIO;
++			goto out;
++		}
+ 	}
+ 	/* wifi-ap-start lane (task-121): the vendor AP start is a sequence. */
+ 	{
+@@ -1489,6 +1674,32 @@
+ 			goto out;
+ 		}
+ 	}
++	if (hi5622_beacon_static) {
++		if (hi5622_beacon_vap_start && hi5622_ap_start_mode == 0u) {
++			/* Vendor order: VAP start AFTER the AP config, and only
++			 * once the AP-config worker programmed the VAP context
++			 * (beacon interval/DTIM/IE slots).  The WAL carrier's own
++			 * sequence already ends with its VAP start (skipped). */
++			rc = hi5622_scan_post_vap_start_frame(
++				c->ctx, ops,
++				(u8)dev->ieee80211_ptr->iftype, c->band,
++				(u8)hi5622_vap_start_module,
++				(u8)p->channel, 5u);
++			if (rc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static: VAP start (vendor order, after ap_cfg) not posted (%d) - sequence aborted\n",
++					 rc);
++				goto out;
++			}
++			posted++;
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap beacon_static: 'ap_vap_start' posted after ap_cfg (channel=%u) - vendor AP-start order complete\n",
++				 p->channel);
++		} else {
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap beacon_static: VAP start owned by the WAL carrier sequence (already posted after ap_cfg)\n");
++		}
++	}
+ 	dev_info(wdev_dev,
+ 		 "cfg80211: start_ap sequence posted to provider '%s' - EXPERIMENTAL: beaconing is a firmware effect; verify the VAP context readback\n",
+ 		 ops->name);
+diff -Nru a/hi5622_scan_logic.c b/hi5622_scan_logic.c
+--- a/hi5622_scan_logic.c	2026-11-24 20:06:33.938725183 +0700
++++ b/hi5622_scan_logic.c	2026-11-24 20:45:07.029386703 +0700
+@@ -31,6 +31,7 @@
+ 	case HI5622_FRAME_CAP_AP_STOP:		return "ap_stop";
+ 	case HI5622_FRAME_CAP_VAP_ADD:		return "vap_add";
+ 	case HI5622_FRAME_CAP_VAP_START:	return "vap_start";
++	case HI5622_FRAME_CAP_CHAN_CFG:		return "chan_cfg";
+ 	default:				return "?";
+ 	}
+ }
+@@ -48,7 +49,7 @@
+ 		n = snprintf(buf, len, "none");
+ 		return n < 0 ? n : (int)((size_t)n < len ? (size_t)n : len - 1);
+ 	}
+-	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_VAP_START; bit <<= 1) {
++	for (bit = 1u; bit && bit <= HI5622_FRAME_CAP_CHAN_CFG; bit <<= 1) {
+ 		const char *name;
+ 
+ 		if (!(caps & bit))
+@@ -90,6 +91,8 @@
+ 		return -EINVAL;
+ 	if ((ops->caps & HI5622_FRAME_CAP_VAP_START) && !ops->build_vap_start)
+ 		return -EINVAL;
++	if ((ops->caps & HI5622_FRAME_CAP_CHAN_CFG) && !ops->build_chan_cfg)
++		return -EINVAL;
+ 	return 0;
+ }
+ 
+@@ -210,6 +213,8 @@
+ 	if (p->head_len > HI5622_FRAME_MAX_BCN_HEAD ||
+ 	    p->tail_len > HI5622_FRAME_MAX_BCN_TAIL)
+ 		return -EINVAL;
++	if (p->channel > 196u)
++		return -EINVAL;	/* highest 5 GHz channel number */
+ 	/* A beacon head shorter than the 24-byte 802.11 MAC header plus the
+ 	 * 12-byte beacon fixed fields is not a beacon. */
+ 	if (p->head_len && p->head_len < 36u)
+@@ -696,3 +701,38 @@
+ 	default:			return "?";
+ 	}
+ }
++
++/* =====================================================================
++ * AP-start ordering plan (wifi-beacon-static lane, task-140)
++ * ===================================================================*/
++unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
++				u8 *out, unsigned int max)
++{
++	unsigned int n = 0;
++
++	if (!enabled || !out || !max)
++		return 0;
++	if (n < max)
++		out[n++] = HI5622_BEACON_STEP_VAP_ADD;
++	if (n < max)
++		out[n++] = HI5622_BEACON_STEP_CHAN;
++	if (n < max)
++		out[n++] = HI5622_BEACON_STEP_SSID;
++	if (n < max)
++		out[n++] = HI5622_BEACON_STEP_AP_CFG;
++	if (vap_start && n < max)
++		out[n++] = HI5622_BEACON_STEP_VAP_START;
++	return n;
++}
++
++const char *hi5622_beacon_step_name(u8 step)
++{
++	switch (step) {
++	case HI5622_BEACON_STEP_VAP_ADD:	return "vap_add";
++	case HI5622_BEACON_STEP_CHAN:		return "ap_chan";
++	case HI5622_BEACON_STEP_SSID:		return "ap_ssid";
++	case HI5622_BEACON_STEP_AP_CFG:		return "ap_cfg";
++	case HI5622_BEACON_STEP_VAP_START:	return "ap_vap_start";
++	default:				return "none";
++	}
++}
+diff -Nru a/hi5622_scan_logic.h b/hi5622_scan_logic.h
+--- a/hi5622_scan_logic.h	2026-11-24 20:06:33.938858184 +0700
++++ b/hi5622_scan_logic.h	2026-11-24 20:45:07.029146340 +0700
+@@ -264,4 +264,37 @@
+ const char *hi5622_scan_step_name(enum hi5622_scan_step s);
+ const char *hi5622_scan_event_name(enum hi5622_scan_event_class c);
+ 
++/* =====================================================================
++ * AP-start ordering plan (wifi-beacon-static lane, task-140)
++ * ===================================================================
++ * The vendor AP start is an ordered FIVE-message sequence:
++ *   set channel (0x0124) -> set SSID (0x0005) -> auth (0x006D) ->
++ *   AP config (0x0127) -> VAP start (0x0065).
++ * The clean-room bench path posted [VAP add, VAP start] as a mode-1 base
++ * BEFORE the AP config and never set the module channel.  This plan is the
++ * pure ordering contract the kernel layer executes when the fail-closed
++ * beacon_static parameter is enabled; it lives here so the host selftest can
++ * assert the order without a kernel build.  The WAL carrier's own sequence
++ * already ends with its VAP start (after the AP config), so the kernel skips
++ * the extra VAP-start step for it. */
++enum hi5622_beacon_step {
++	HI5622_BEACON_STEP_NONE = 0,
++	HI5622_BEACON_STEP_VAP_ADD = 1,		/* mode-1 base: user_add only */
++	HI5622_BEACON_STEP_CHAN = 2,		/* channel config, vendor first */
++	HI5622_BEACON_STEP_SSID = 3,		/* provider frame 0 */
++	HI5622_BEACON_STEP_AP_CFG = 4,		/* provider frame 1 */
++	HI5622_BEACON_STEP_VAP_START = 5,	/* AFTER the AP config */
++	HI5622_BEACON_STEP_MAX = 6,
++};
++
++/* Fill out[] with the ordered plan; returns the number of steps.  enabled=0
++ * returns 0 (the legacy bench-proven path is executed instead, unchanged).
++ * vap_start=0 drops only the final VAP-start step (ladder isolation rung). */
++unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
++				u8 *out, unsigned int max);
++
++/* Stable step name ("vap_add"/"ap_chan"/"ap_ssid"/"ap_cfg"/"ap_vap_start";
++ * "none" for unknown). */
++const char *hi5622_beacon_step_name(u8 step);
++
+ #endif /* HI5622_SCAN_LOGIC_H */
+diff -Nru a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
+--- a/hi5622_vapscan_provider.c	2026-11-24 20:06:33.936390006 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-24 20:46:10.032858478 +0700
+@@ -270,6 +270,10 @@
+ 
+ 		vsf_vap_start_defaults(&gp);
+ 		gp.dst = p->dst;
++		/* wifi-beacon-static lane: the vendor hmac_config_do_start_vap
++		 * body[0] is the channel argument [V]; 0 keeps the legacy
++		 * bench-proven frame byte-identical. */
++		gp.channel = p->channel;
+ 		rc = vsf_build_vap_start(f, &gp);
+ 	} else {
+ 		struct vsf_wal_vap_start sp;
+@@ -292,6 +296,58 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* wifi-beacon-static lane (task-140): module channel config          */
++/* ------------------------------------------------------------------ */
++
++/* The vendor AP start's first message: channel info (WAL cfg cmd 0x0124,
++ * 4-byte body) posted BEFORE the SSID/AP-config frames, so the firmware's
++ * module channel context (ctx +0x10..+0x13) is programmed when the AP VAP
++ * starts its beacon engine.  Same command id on both carriers: the g0 id1
++ * config event (key 0x0124 -> table A row 108 -> worker CA 0x841B8) and the
++ * WAL group-2 envelope (vendor order).  Default-OFF: the kernel layer only
++ * calls this when beacon_static=1. */
++extern unsigned int hi5622_ap_start_mode;
++
++static int vapscan_chan_cfg(u8 *wire, size_t cap, size_t *out_len,
++			    const struct hi5622_chan_cfg_params *p)
++{
++	struct haf_ap_params hp;
++	struct haf_frame *f;
++	int rc;
++
++	if (!wire || !out_len || !p)
++		return -EINVAL;
++	if (hi5622_ap_start_mode > 1u)
++		return -EOPNOTSUPP;
++	if (p->channel == 0u || p->channel > 196u || p->band > 1u)
++		return -EINVAL;
++	if (p->module > 0x12u || p->dst > 0x0fu || p->vap_id > 0x0fu)
++		return -EINVAL;
++	memset(&hp, 0, sizeof(hp));
++	hp.carrier = hi5622_ap_start_mode ? HAF_CARRIER_WAL_G2
++					  : HAF_CARRIER_G0_ID1;
++	hp.band = p->band;
++	hp.channel = p->channel;
++	hp.vap_id = p->vap_id;
++	hp.module = p->module;
++	hp.dst = p->dst;
++	f = kmalloc(sizeof(*f), GFP_KERNEL);
++	if (!f)
++		return -ENOMEM;
++	rc = haf_build_chan_frame(f, &hp);
++	if (!rc) {
++		if (f->len > cap)
++			rc = -ENOSPC;
++		else {
++			memcpy(wire, f->buf, f->len);
++			*out_len = f->len;
++		}
++	}
++	kfree(f);
++	return rc;
++}
++
++/* ------------------------------------------------------------------ */
+ /* AP start sequence (wifi-ap-start lane, task-121)                  */
+ /* ------------------------------------------------------------------ */
+ 
+@@ -399,7 +455,8 @@
+ 		HI5622_FRAME_CAP_USER_DEL |
+ 		HI5622_FRAME_CAP_VAP_ADD |
+ 		HI5622_FRAME_CAP_VAP_START |
+-		HI5622_FRAME_CAP_AP_START;
++		HI5622_FRAME_CAP_AP_START |
++		HI5622_FRAME_CAP_CHAN_CFG;
+ 	hi5622_vapscan_ops.build_scan_req = vapscan_scan_req;
+ 	hi5622_vapscan_ops.parse_scan_result = vapscan_parse_scan_result;
+ 	hi5622_vapscan_ops.parse_scan_complete = vapscan_parse_scan_complete;
+@@ -411,6 +468,9 @@
+ 	hi5622_vapscan_ops.build_user_del = vapscan_user_del;
+ 	hi5622_vapscan_ops.build_vap_add = vapscan_vap_add;
+ 	hi5622_vapscan_ops.build_vap_start = vapscan_vap_start;
++	/* wifi-beacon-static lane: channel config posted before the AP frames
++	 * when the kernel layer enables beacon_static. */
++	hi5622_vapscan_ops.build_chan_cfg = vapscan_chan_cfg;
+ 	/* AP start sequence (task-121): set SSID -> [auth] -> AP config ->
+ 	 * [VAP start]; every frame goes through the fail-closed post gate. */
+ 	hi5622_vapscan_ops.build_ap_start = vapscan_ap_start;

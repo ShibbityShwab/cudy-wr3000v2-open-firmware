@@ -1,0 +1,7 @@
+== C99 strict compile (-Wall -Wextra -Werror -pedantic) ==
+== host selftest ==
+beacon_selftest: 65 checks, 0 failures
+== static checks (fail-closed defaults + legacy path preserved) ==
+static checks: PASS (beacon_static=0 default, legacy path branch preserved)
+beacon_re.py syntax: PASS
+build-host: OK (/tmp/wifi-beacon-static-build/beacon_selftest)

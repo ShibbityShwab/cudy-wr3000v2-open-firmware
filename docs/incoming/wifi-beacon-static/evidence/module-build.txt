@@ -1,0 +1,33 @@
+BUILD OK (zero warnings/errors)
+-rw-r--r-- 1 shibbityshwab shibbityshwab 1002872 พ.ย.  24 20:50 hi5622_wifi.ko
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+320ad838b9d452d1382c0d5652ad9d4784bde3e10bfb9a1417818b7ae2ae0000  hi5622_wifi.ko
+stripped:
+-rw-r--r-- 1 shibbityshwab shibbityshwab 275304 พ.ย.  24 20:50 hi5622_wifi.stripped.ko
+e633f847cff8f1e74706d88b8fecf6e09bca58ef4983ba2ab8f82789bef6fd01  hi5622_wifi.stripped.ko
+6
+beacon_static symbols:
+0001a898 T haf_build_chan_frame
+00012c84 T hi5622_beacon_plan
+00012d04 T hi5622_beacon_step_name
+00018964 t vapscan_chan_cfg
+beacon_static strings:
+beacon_static
+ap_chan
+cfg80211: start_ap beacon_static=1 plan (%u steps):
+cfg80211: start_ap beacon_static=1 REFUSED - provider '%s' has no module-channel-config builder; no frame sent
+cfg80211: start_ap beacon_static=1 REFUSED - the chandef has no channel number; no frame sent
+cfg80211: start_ap beacon_static: VAP add not posted (%d) - sequence aborted, no AP frame sent
+cfg80211: start_ap beacon_static REFUSED - the firmware VAP object (module_ctx+0x190) still reads zero after %u ms post-add; no channel/AP frame sent
+cfg80211: start_ap beacon_static: channel-config builder refused (%d) - sequence aborted
+ap_chan
+cfg80211: start_ap beacon_static: channel-config frame not posted (%d) - sequence aborted
+cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config
+cfg80211: start_ap beacon_static channel ctx readback: module_ctx+0x10 u32=0x%08x (channel=%u band=%u field=%u valid=%u)
+cfg80211: start_ap beacon_static: VAP start (vendor order, after ap_cfg) not posted (%d) - sequence aborted
+cfg80211: start_ap beacon_static: 'ap_vap_start' posted after ap_cfg (channel=%u) - vendor AP-start order complete
+cfg80211: start_ap beacon_static: VAP start owned by the WAL carrier sequence (already posted after ap_cfg)
+parmtype=beacon_static:uint
+hi5622_beacon_static
+__param_str_beacon_static
+__param_beacon_static

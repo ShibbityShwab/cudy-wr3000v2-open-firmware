@@ -1,0 +1,37 @@
+firmware: /tmp/hi5622-patched/FIRMWARE.PD4.bin (928920 B, sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1)
+PASS F1 table-A key 0x0005 -> worker 0x82879 [got 0x82879]
+PASS F1 table-A key 0x0064 -> worker 0x449e5 [got 0x449e5]
+PASS F1 table-A key 0x0065 -> worker 0x46395 [got 0x46395]
+PASS F1 table-A key 0x0124 -> worker 0x841b9 [got 0x841b9]
+PASS F1 table-A key 0x0127 -> worker 0x84da5 [got 0x84da5]
+PASS F2 channel worker body map (body[2]->ctx+0x10, body[0]->ctx+0x11, body[1]->ctx+0x12) [ab78204623742b7863746b78e274]
+PASS F2b channel worker validates band/body[0] and channel/body[2] [0df10702a97828787df09dfa9df80720]
+PASS F3 AP-config worker CA 0x84DA4 calls CA 0xD41AC/0x94518 then 0x961AE (VAP/MAC start path) [627c002a40f0208243f0040384f88d3120464ff050f920460ff003fb2078]
+PASS F4 VAP-start worker CA 0x46394 prologue/body setup
+PASS F4b VAP-start worker body map (body[2]->ctx+0x11, body[3]->ctx+0x12, body[4..7]->ctx+0x444)
+PASS F5 firmware owns beacon TX: 'smac_msg_proc_beacon_tx_resume_req' present
+PASS F5 firmware owns beacon TX: 'smac_msg_proc_beacon_tx_suspend_req' present
+PASS F5 firmware owns beacon TX: 'smac_tbtt_2g_isr' present
+PASS F5 firmware owns beacon TX: 'smac_tbtt_5g_isr' present
+PASS F6 no fixed 802.11 beacon template in the firmware image (frame is built at runtime)
+vendor host module: /tmp/vmods/hi5622v100_wifi.ko (3581748 B, sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2)
+PASS H0 symbol 'wal_cfg80211_start_ap' present
+PASS H0 symbol 'wal_cfg80211_start_ap_write_msg' present
+PASS H0 symbol 'wal_send_set_ssid_event' present
+PASS H0 symbol 'wal_cfg80211_set_auth_mode' present
+PASS H0 symbol 'wal_start_vap' present
+PASS H0 symbol 'wal_send_cfg_event' present
+PASS H1a start_ap calls wal_send_set_ssid_event
+PASS H1b start_ap calls wal_cfg80211_set_auth_mode
+PASS H1c start_ap calls wal_cfg80211_start_ap_write_msg
+PASS H1d start_ap calls the channel helper [target=0x102c7c]
+PASS H1e channel helper runs BEFORE set-SSID (vendor order) [chan@0x103484 < ssid@0x1034e4]
+PASS H2a channel helper calls wal_send_cfg_event (cfg command)
+PASS H2b channel helper carries the do_chan_set log string
+PASS H2c channel helper carries the fill_channel_param log string
+PASS H2d channel helper carries the set_channel_info log string
+PASS H3a write_msg sends the AP-config cfg event (cmd 0x0127)
+PASS H3b write_msg then calls wal_start_vap (VAP start AFTER ap config)
+PASS H3c AP config is sent BEFORE the VAP start [cfg@0x10338c < vap@0x10339c]
+
+beacon_re: 33 probes, 0 failures

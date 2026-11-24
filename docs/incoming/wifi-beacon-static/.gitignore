@@ -1,0 +1,8 @@
+# local-only build outputs (never commit kernel objects or vendor artifacts)
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+build.log
