@@ -17,7 +17,7 @@
 # natively, see REPORT.md F4).
 #
 # usage: verify-apks-host.sh [--artifacts DIR] [--owrt DIR] [--work DIR]
-#                            [--keep] [--evidence FILE]
+#                            [--keep] [--evidence FILE] [--userspace-only]
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -37,6 +37,7 @@ OWRT=$DEFAULT_OWRT
 WORK=
 KEEP=0
 EVIDENCE=
+USERS=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--artifacts) shift; ART=$1 ;;
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
 		--work) shift; WORK=$1 ;;
 		--work=*) WORK=$(printf '%s' "$1" | cut -c8-) ;;
 		--keep) KEEP=1 ;;
+		--userspace-only) USERS=1 ;;
 		--evidence) shift; EVIDENCE=$1 ;;
 		--evidence=*) EVIDENCE=$(printf '%s' "$1" | cut -c12-) ;;
 		-h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -168,6 +170,23 @@ del_names() { # root
 	apk_at "$root" del iw iwinfo libiwinfo20230701 libiwinfo-data wireless-regdb \
 		kmod-hi5622-cfg80211 kmod-hi5622-wifi >"$WORK/apk-del.log" 2>&1
 }
+add_files_userspace() { # root - the five packages that have no kernel= dependency
+	root=$1
+	set --
+	while read -r name version _ asha _; do
+		[ -n "$name" ] || continue
+		case "$name" in kmod-*) continue ;; esac
+		set -- "$@" "$ART/$name-$version.apk"
+	done <<TABLE
+$APK_LIST
+TABLE
+	apk_at "$root" --force-non-repository add "$@" >"$WORK/apk-add-users.log" 2>&1
+}
+del_userspace() { # root
+	root=$1
+	apk_at "$root" del iw iwinfo libiwinfo20230701 libiwinfo-data wireless-regdb \
+		>"$WORK/apk-del-users.log" 2>&1
+}
 
 # ---------------------------------------------------------------- baseline ---
 printf '\n-- step 1: delete the 7 packages from the built rootfs (reconstruct the pre-T0 state) --\n'
@@ -187,6 +206,75 @@ while read -r name _; do
 done <<TABLE
 $APK_LIST
 TABLE
+
+# ------------------------------------------------------- userspace-only path ---
+if [ "$USERS" -eq 1 ]; then
+	printf '\n-- userspace-only: install/verify/rollback the five non-kmod packages --\n'
+	grep -vE '/(cfg80211|hi5622_wifi)[.]ko$' "$WORK/ref.payload" >"$WORK/ref-nomod.payload"
+	grep -v '^lib/modules/' "$LANE/tools/expected-files.txt" >"$WORK/files-userspace.txt"
+	cp -a "$WORK/pre" "$WORK/postu" || die "cannot copy rootfs to postu"
+	add_files_userspace "$WORK/postu"
+	rcu=$?
+	eq "userspace apk add rc" "$rcu" "0"
+	eq "userspace install package count (79)" "$(grep -c '^P:' "$WORK/postu/lib/apk/db/installed")" "79"
+	payload_manifest "$WORK/postu" >"$WORK/postu.payload"
+	eq "userspace install payload == built image minus the two module payloads" \
+		"$(diff "$WORK/postu.payload" "$WORK/ref-nomod.payload" | wc -l)" "0"
+	if [ -e "$WORK/postu/lib/modules/6.18.60/cfg80211.ko" ] || [ -e "$WORK/postu/lib/modules/6.18.60/hi5622_wifi.ko" ]; then
+		bad "userspace-only install put modules in the rootfs"
+	else
+		ok "userspace-only install adds no kernel modules"
+	fi
+	while read -r name version _; do
+		case "$name" in ''|\#*) continue ;; esac
+		case "$name" in kmod-*) continue ;; esac
+		got=$(apk_q "$WORK/postu" --fields version "$name" 2>/dev/null | sed -n 's/^Version: *//p')
+		eq "$name installed version (userspace)" "$got" "$version"
+	done <<TABLE
+$APK_LIST
+TABLE
+	while read -r path sha _; do
+		case "$path" in ''|\#*) continue ;; esac
+		f=$WORK/postu/$path
+		if [ -f "$f" ]; then
+			eq "/$path installed sha256 (userspace)" "$(sha256sum "$f" | awk '{print $1}')" "$sha"
+		else
+			bad "/$path missing after userspace install"
+		fi
+	done <"$WORK/files-userspace.txt"
+	badk=0
+	while read -r name version _ asha _; do
+		case "$name" in ''|\#*) continue ;; esac
+		case "$name" in kmod-*) continue ;; esac
+		if "$APK" adbdump "$ART/$name-$version.apk" 2>/dev/null \
+			| sed -n '/^  depends:/,/^[^ ]/p' | grep -q 'kernel='; then
+			bad "userspace package $name carries a kernel= dependency"
+			badk=1
+		fi
+	done <<TABLE
+$APK_LIST
+TABLE
+	if [ "$badk" -eq 0 ]; then ok "userspace set carries no kernel= dependency"; fi
+	payload_manifest "$WORK/postu" >"$WORK/postu.before-idem"
+	add_files_userspace "$WORK/postu"
+	rciu=$?
+	eq "second userspace apk add rc (no-op)" "$rciu" "0"
+	payload_manifest "$WORK/postu" >"$WORK/postu.after-idem"
+	eq "second userspace apk add left the payload unchanged" \
+		"$(diff "$WORK/postu.before-idem" "$WORK/postu.after-idem" | wc -l)" "0"
+	del_userspace "$WORK/postu"
+	rcru=$?
+	eq "userspace apk del rc" "$rcru" "0"
+	eq "userspace rollback package count (74)" "$(grep -c '^P:' "$WORK/postu/lib/apk/db/installed")" "74"
+	payload_manifest "$WORK/postu" >"$WORK/userspace-rollback.payload"
+	eq "userspace rollback payload byte-identical to the baseline" \
+		"$(diff "$WORK/userspace-rollback.payload" "$WORK/pre.payload" | wc -l)" "0"
+	while read -r path _; do
+		case "$path" in ''|\#*) continue ;; esac
+		if [ -e "$WORK/postu/$path" ]; then bad "/$path survived the userspace rollback"; else ok "/$path removed by userspace rollback"; fi
+	done <"$WORK/files-userspace.txt"
+	finish
+fi
 
 # ----------------------------------------------------------- install path ---
 printf '\n-- step 2: apk add the exact seven artifacts (device flags, scripts skipped on host) --\n'

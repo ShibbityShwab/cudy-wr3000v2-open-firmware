@@ -1,0 +1,67 @@
+== T0 host apk-transaction simulation ==
+artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
+tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
+work     : /tmp/t0-verify.LTS2SK
+
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   iw apk sha256
+ok   iwinfo apk sha256
+ok   libiwinfo20230701 apk sha256
+ok   libiwinfo-data apk sha256
+ok   wireless-regdb apk sha256
+ok   kmod-hi5622-cfg80211 apk sha256
+ok   kmod-hi5622-wifi apk sha256
+ok   container sha256
+
+-- reconstructing the built-image rootfs from its bytes --
+ok   container kernel member sha256 (validated slice)
+ok   built rootfs installed package count (81 = 74 + 7)
+ok   /usr/sbin/iw sha256 in built image
+ok   /usr/bin/iwinfo sha256 in built image
+ok   /usr/lib/libiwinfo.so.20230701 sha256 in built image
+ok   /usr/share/libiwinfo/devices.txt sha256 in built image
+ok   /lib/modules/6.18.60/cfg80211.ko sha256 in built image
+ok   /lib/modules/6.18.60/hi5622_wifi.ko sha256 in built image
+ok   /lib/firmware/regulatory.db sha256 in built image
+
+-- step 1: delete the 7 packages from the built rootfs (reconstruct the pre-T0 state) --
+ok   baseline installed package count (74)
+ok   baseline removes exactly the 7 package payloads
+ok   iw absent in the baseline
+ok   iwinfo absent in the baseline
+ok   libiwinfo20230701 absent in the baseline
+ok   libiwinfo-data absent in the baseline
+ok   wireless-regdb absent in the baseline
+ok   kmod-hi5622-cfg80211 absent in the baseline
+ok   kmod-hi5622-wifi absent in the baseline
+
+-- userspace-only: install/verify/rollback the five non-kmod packages --
+ok   userspace apk add rc
+ok   userspace install package count (79)
+ok   userspace install payload == built image minus the two module payloads
+ok   userspace-only install adds no kernel modules
+ok   iw installed version (userspace)
+ok   iwinfo installed version (userspace)
+ok   libiwinfo20230701 installed version (userspace)
+ok   libiwinfo-data installed version (userspace)
+ok   wireless-regdb installed version (userspace)
+ok   /usr/sbin/iw installed sha256 (userspace)
+ok   /usr/bin/iwinfo installed sha256 (userspace)
+ok   /usr/lib/libiwinfo.so.20230701 installed sha256 (userspace)
+ok   /usr/share/libiwinfo/devices.txt installed sha256 (userspace)
+ok   /lib/firmware/regulatory.db installed sha256 (userspace)
+ok   userspace set carries no kernel= dependency
+ok   second userspace apk add rc (no-op)
+ok   second userspace apk add left the payload unchanged
+ok   userspace apk del rc
+ok   userspace rollback package count (74)
+ok   userspace rollback payload byte-identical to the baseline
+ok   /usr/sbin/iw removed by userspace rollback
+ok   /usr/bin/iwinfo removed by userspace rollback
+ok   /usr/lib/libiwinfo.so.20230701 removed by userspace rollback
+ok   /usr/share/libiwinfo/devices.txt removed by userspace rollback
+ok   /lib/firmware/regulatory.db removed by userspace rollback
+
+== verify-apks-host: 53 passed, 0 failed ==
+RESULT: PASS - host-simulated T0 install/rollback is byte-identical; kernel-mismatch gate fails closed

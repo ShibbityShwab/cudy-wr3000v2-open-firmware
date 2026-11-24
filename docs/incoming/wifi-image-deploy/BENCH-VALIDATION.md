@@ -52,6 +52,31 @@ insmod /lib/modules/6.18.60/hi5622_wifi.ko, verifies /proc/modules,
 "iw dev" rc=0. One load only; leave the modules loaded and reboot before a
 normal phase session.
 
+## 1b. Userspace-only deploy (when the image kernel package != the kmod pin)
+
+Use this on the current box (kernel package 6.18.60~5de0e425... vs the kmod .apk
+pin 6.18.60~6f995278...) or whenever only native iw/iwinfo are wanted. The five
+packages have no kernel= dependency, so no kernel-ABI gate applies:
+
+    ./deploy-t0.sh --userspace-only --apply --attended --yes-really
+
+Expected: host check PASS (40 gates incl. "has no kernel= dependency" x5),
+staging of exactly the five .apk files, device gates PASS, then on later runs
+it is idempotent ("already installed ... idempotent verify"). It installs
+/usr/sbin/iw 6.17, /usr/bin/iwinfo, libiwinfo (+data) and
+/lib/firmware/regulatory.db; it installs NO modules and does not touch
+/lib/modules. Verify / rollback:
+
+    ./deploy-t0.sh --userspace-only --verify --attended --yes-really
+    ./deploy-t0.sh --userspace-only --rollback --attended --yes-really
+
+Cross-check on the box: /usr/sbin/iw --version -> 6.17; iwinfo runs;
+apk query --fields version iw/iwinfo/libiwinfo20230701/libiwinfo-data/
+wireless-regdb show the pinned versions; /lib/modules/6.18.60 still has no
+cfg80211.ko/hi5622_wifi.ko. Native iw/iwinfo are then usable for the bench
+ladders; the modules stay in the proven /tmp insmod flow until the ABI path in
+section 7 is taken.
+
 ## 2. Fresh-boot verification (read-only, after a reboot)
 
     ./deploy-t0.sh --verify --attended --yes-really
@@ -162,3 +187,40 @@ passes after a reboot; section 3 loads the rootfs modules cleanly; section 4b
 reproduces the D1 wiphy/VAP gates with rootfs iw and no /tmp staging; and
 section 5 provably restores the pre-install state. Record the evidence
 directory and the module/package hashes in the session ledger.
+For the current box (kernel package mismatch), the userspace-only variant is
+accepted when section 1b reports PASS, section 2 passes after a reboot for the
+five-package set, native iw/iwinfo work (section 4b's iw phy/iw dev part runs
+once the modules are loaded via the /tmp flow), and section 1b rollback
+restores the pre-install state.
+
+## 7. Closing the kmod ABI (after the 2026-11-26 gate)
+
+Measured on the bench: running image kernel package
+6.18.60~5de0e425f1313eeec82615317fdc1f76-r1, kmod .apk pin
+6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1 (the current tree's kernel
+configuration hash). The flashed kernel slice is still the validated 13e81214
+bytes, so the module vermagic matches; apk is enforcing build provenance, not
+an ELF-ABI failure. Two paths, with a canonical decision:
+
+**P1 (canonical): rebuild the image from the current tree and flash it.** The
+build produces one kernel package version (6f995278), a rootfs apk db carrying
+that version, and kmod .apk files pinned to it. Flash in an attended window
+(T1 rootfs rewrite in ../wifi-image-integration/DEPLOY.md, or kernel slice +
+rootfs from one build). Note: the kernel= version is recorded in the rootfs apk
+db, not in the kernel image, so a kernel-slice-only write cannot fix the
+mismatch - the rootfs from the same build must be installed as well. Then the full-set T0 deploy (section 1) is consistent
+and survives reboot. This is reproducible, matches what a real image does, and
+keeps apk's dependency checking meaningful - it is the path the target/upstream
+work expects.
+
+**P2 (fallback, not canonical): rebuild the two kmod .apk files against the
+running image's kernel package version (5de0e425).** The wifi-openwrt-pkg lane
+used this technique for its own package. It pins modules to an old build's
+kernel configuration that the tree no longer reproduces and must be redone on
+every image/tree change; keep it as a local, labelled bench artifact only.
+Never force apk past the kernel= dependency and never make a metadata override
+the image's dependency policy.
+
+Interim (safe now): deploy the userspace-only set (section 1b) for native
+iw/iwinfo and keep using the proven /tmp insmod flow for the two modules; the
+choice between P1 and P2 stays open and P1 is the recommended close.

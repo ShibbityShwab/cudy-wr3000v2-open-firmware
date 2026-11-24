@@ -48,9 +48,22 @@ kmod-hi5622-cfg80211 6.18.60-r1 183520 716fd384cc7ad58b7c3e4000046addce7c76b3223
 kmod-hi5622-wifi 6.18.60-r1 59302 aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef 133920
 TABLE
 )
+# The userspace-only set: five packages with no kernel= dependency. Used when
+# the running image's kernel package revision does not match the kmod ABI pin
+# (REPORT.md section 7) - native iw/iwinfo now, modules stay /tmp until the ABI
+# path is closed.
+USERS_TABLE=$(cat <<'UTABLE'
+iw 6.17-r1 52997 9b46713fb5a0e866e7b1fb919f2a30eca4bc01d9aeabf49fa50b20faedd69f08 116868
+iwinfo 2026.05.26~66bdd1a0-r1 8322 5badc21509df6ba6df109697879cf28960315c8ceb19aabb258f79564ae5de23 16922
+libiwinfo20230701 2026.05.26~66bdd1a0-r1 25768 d1178900f817c08c232bf4a704e5b883f02c1f67dbe93e41af9f4b8132ce3f55 57408
+libiwinfo-data 2026.05.26~66bdd1a0-r1 3925 3bb216a4f2ae69a27cfe86daf97c597b92daa4f0fca68b00c0d842076d933320 18264
+wireless-regdb 2026.09.03-r1 3440 afd292e0c0947aaa5497e52b2a9e9484e690a9abfef1153c36d9a06143a758a1 6360
+UTABLE
+)
 
 MODE=check
 N_MODES=0
+USERS_ONLY=0
 DO_LOAD=0
 YES_REALLY=0
 ATTENDED=0
@@ -70,6 +83,9 @@ usage() {
 	printf '  --owrt DIR        OpenWrt tree for the host apk tool (default %s)\n' "$DEFAULT_OWRT"
 	printf '  --host USER@IP    router target (default %s)\n' "$DEFAULT_HOST"
 	printf '  --state DIR       evidence directory override\n'
+	printf '  --userspace-only  install/verify only the five userspace packages\n'
+	printf '                    (iw, iwinfo, libiwinfo, libiwinfo-data, wireless-regdb;\n'
+	printf '                    no kmod kernel-ABI pin, no modules installed)\n'
 	printf '  --param KEY=VALUE module parameter for --load-check (repeatable)\n'
 	printf '  --keep-staging    leave the /tmp staging dir on the device\n'
 	printf '  --yes-really      operator confirms the action\n'
@@ -87,6 +103,7 @@ while [ $# -gt 0 ]; do
 		--apply) MODE=apply; N_MODES=$((N_MODES + 1)) ;;
 		--rollback) MODE=rollback; N_MODES=$((N_MODES + 1)) ;;
 		--verify) MODE=verify; N_MODES=$((N_MODES + 1)) ;;
+		--userspace-only) USERS_ONLY=1 ;;
 		--load-check) DO_LOAD=1 ;;
 		--artifacts) shift; ART=$1 ;;
 		--artifacts=*) ART=$(printf '%s' "$1" | cut -c13-) ;;
@@ -107,6 +124,15 @@ while [ $# -gt 0 ]; do
 	shift
 done
 if [ "$N_MODES" -gt 1 ]; then die "choose one action mode (--apply | --rollback | --verify)"; fi
+if [ "$USERS_ONLY" -eq 1 ]; then
+	PKG_TABLE=$USERS_TABLE
+	SETARG="--set userspace"
+else
+	PKG_TABLE=$APK_TABLE
+	SETARG=""
+fi
+SETNAME=full
+if [ "$USERS_ONLY" -eq 1 ]; then SETNAME=userspace; fi
 
 # ------------------------------------------------------------------ state ---
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -155,15 +181,19 @@ check_artifacts() {
 		h=$(sha256sum "$f" | awk '{print $1}')
 		gate_file "$name sha256" "$h" "$asha"
 	done <<TABLE
-$APK_TABLE
+$PKG_TABLE
 TABLE
-	if [ -f "$ART/bench-image-sysupgrade.bin" ]; then
-		h=$(sha256sum "$ART/bench-image-sysupgrade.bin" | awk '{print $1}')
-		gate_file "bench image container sha256" "$h" "$CONTAINER_SHA"
-	fi
-	if [ -f "$ART/kernel-slice.bin" ]; then
-		h=$(sha256sum "$ART/kernel-slice.bin" | awk '{print $1}')
-		gate_file "kernel slice sha256 (must be the validated one)" "$h" "$KERNEL_SLICE_SHA"
+	if [ "$USERS_ONLY" -eq 1 ]; then
+		gate_ok "userspace-only set: container/kernel-slice identity not required (no kmod, no kernel pin)"
+	else
+		if [ -f "$ART/bench-image-sysupgrade.bin" ]; then
+			h=$(sha256sum "$ART/bench-image-sysupgrade.bin" | awk '{print $1}')
+			gate_file "bench image container sha256" "$h" "$CONTAINER_SHA"
+		fi
+		if [ -f "$ART/kernel-slice.bin" ]; then
+			h=$(sha256sum "$ART/kernel-slice.bin" | awk '{print $1}')
+			gate_file "kernel slice sha256 (must be the validated one)" "$h" "$KERNEL_SLICE_SHA"
+		fi
 	fi
 	if [ -f "$ART/SHA256SUMS" ]; then
 		bad=0
@@ -201,6 +231,14 @@ check_apk_metadata() {
 		gate_file "$name adbdump version" "$got" "$version"
 		got=$(awk '/^  installed-size:/ { print $2; exit }' "$dump")
 		gate_file "$name installed-size" "$got" "$isize"
+		if [ "$USERS_ONLY" -eq 1 ]; then
+			deps=$(awk '/^  depends:/ { f = 1; next } f && /^[^ ]/ { f = 0 } f' "$dump")
+			if printf '%s\n' "$deps" | grep -q 'kernel='; then
+				gate_bad "$name unexpectedly depends on a kernel package"
+			else
+				gate_ok "$name has no kernel= dependency (userspace-safe)"
+			fi
+		fi
 		case "$name" in
 			kmod-*)
 				if grep -q "kernel=$KERNEL_DEP" "$dump"; then
@@ -229,7 +267,7 @@ check_apk_metadata() {
 			gate_bad "$name hooks are not the expected OpenWrt boilerplate"
 		fi
 	done <<TABLE
-$APK_TABLE
+$PKG_TABLE
 TABLE
 }
 
@@ -267,6 +305,7 @@ host_check() {
 		echo "mode=check"
 		echo "artifacts=$ART"
 		echo "owrt=$OWRT"
+		echo "set=$SETNAME"
 		echo "gates_passed=$PASSES"
 		echo "gates_failed=$FAILS"
 		if [ "$FAILS" -eq 0 ]; then echo "result=PASS"; else echo "result=FAIL"; fi
@@ -312,7 +351,7 @@ put_file() { # local, remote path
 remote_mode() { # stage, mode, extra params
 	st=$1; md=$2; shift 2
 	args=$*
-	run_rsh "sh $st/t0-device.sh $md $st $args"
+	run_rsh "sh $st/t0-device.sh $md $st $args $SETARG"
 }
 
 stage_files() {
@@ -330,22 +369,23 @@ stage_files() {
 		put_file "$ART/$name-$version.apk" "$STAGE/$name-$version.apk" \
 			|| die "stage $name-$version.apk failed"
 	done <<TABLE
-$APK_TABLE
+$PKG_TABLE
 TABLE
 	: >"$STATE/apk.sha256"
 	while read -r name version asize asha isize; do
 		[ -n "$name" ] || continue
 		printf '%s  %s-%s.apk\n' "$asha" "$name" "$version" >>"$STATE/apk.sha256"
 	done <<TABLE
-$APK_TABLE
+$PKG_TABLE
 TABLE
 	put_file "$STATE/apk.sha256" "$STAGE/apk.sha256" || die "stage checksum list failed"
+	want_apk=$(printf '%s\n' "$PKG_TABLE" | grep -c '^[^ ]')
 	remote_rc=$(run_rsh "cd '$STAGE' && sha256sum -c apk.sha256" 2>&1 | tee -a "$LOG" | grep -c ': OK$')
-	if [ "$remote_rc" -ne 7 ]; then
-		gate_bad "remote sha256 re-check verified $remote_rc/7 staged artifacts"
+	if [ "$remote_rc" -ne "$want_apk" ]; then
+		gate_bad "remote sha256 re-check verified $remote_rc/$want_apk staged artifacts"
 		return 1
 	fi
-	gate_ok "remote sha256 re-check verified 7/7 staged artifacts"
+	gate_ok "remote sha256 re-check verified $remote_rc/$want_apk staged artifacts"
 }
 
 write_summary() { # result
@@ -356,7 +396,12 @@ write_summary() { # result
 		echo "artifacts=$ART"
 		echo "container_sha256=$CONTAINER_SHA"
 		echo "kernel_slice_sha256=$KERNEL_SLICE_SHA"
-		echo "kernel_package=$KERNEL_DEP"
+		echo "set=$SETNAME"
+		if [ "$USERS_ONLY" -eq 1 ]; then
+			echo "kernel_package=not-applicable (userspace-only set)"
+		else
+			echo "kernel_package=$KERNEL_DEP"
+		fi
 		echo "gates_passed=$PASSES"
 		echo "gates_failed=$FAILS"
 		echo "result=$1"
@@ -371,6 +416,9 @@ device_flow() { # action: install|rollback|verify
 	if [ "$FAILS" -ne 0 ]; then die "host verification failed; no device action"; fi
 	PASSES=0; FAILS=0
 	preflight_host
+	if [ "$DO_LOAD" -eq 1 ] && [ "$USERS_ONLY" -eq 1 ]; then
+		die "--load-check needs the full set: a userspace-only install contains no modules"
+	fi
 	say "== device reachability ($RHOST) =="
 	res=$(run_rsh "echo T0-REACHABLE; uname -a; apk --version 2>/dev/null | head -n1; cat /proc/sys/kernel/hostname 2>/dev/null" 2>&1 | tee -a "$LOG")
 	case "$res" in
@@ -417,8 +465,13 @@ device_flow() { # action: install|rollback|verify
 	say "next steps:"
 	if [ "$action" = install ]; then
 		say "  1. reboot when convenient (the next bench session needs a fresh boot)"
-		say "  2. after boot: deploy-t0.sh --verify --attended --yes-really   (read-only)"
-		say "  3. bench validation: see BENCH-VALIDATION.md (native rootfs iw/iwinfo/driver)"
+		if [ "$USERS_ONLY" -eq 1 ]; then
+			say "  2. after boot: deploy-t0.sh --userspace-only --verify --attended --yes-really"
+			say "  3. native iw/iwinfo are live now; modules stay /tmp until the kmod ABI path is closed (REPORT.md sec 7)"
+		else
+			say "  2. after boot: deploy-t0.sh --verify --attended --yes-really   (read-only)"
+			say "  3. bench validation: see BENCH-VALIDATION.md (native rootfs iw/iwinfo/driver)"
+		fi
 	else
 		say "  package set rolled back; loaded modules stay until the next reboot"
 	fi

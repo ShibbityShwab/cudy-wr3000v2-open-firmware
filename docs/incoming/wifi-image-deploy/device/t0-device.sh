@@ -16,7 +16,14 @@
 #   load       load cfg80211 + hi5622_wifi FROM /lib/modules (rootfs, not /tmp)
 #   verify     read-only post-boot verification of an installed T0 set
 #
-# usage: t0-device.sh MODE STAGEDIR [--param KEY=VALUE ...]
+# sets (--set):
+#   full       all seven packages incl. the two kmod packages (default). Needs
+#              the running kernel package to match the kmod ABI pin.
+#   userspace  only iw, iwinfo, libiwinfo, libiwinfo-data, wireless-regdb.
+#              No kernel-ABI gate and no modules (native iw/iwinfo now); the
+#              kmod ABI is closed separately (REPORT.md section 7).
+#
+# usage: t0-device.sh MODE STAGEDIR [--set full|userspace] [--param KEY=VALUE ...]
 # output: "T0GATE <name> PASS|FAIL <detail>", "T0KV key=value", "T0-RESULT: PASS|FAIL"
 set -u
 LC_ALL=C
@@ -27,6 +34,7 @@ KERNEL_DEP_EXPECTED=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
 CFG11_KO=/lib/modules/6.18.60/cfg80211.ko
 WIFI_KO=/lib/modules/6.18.60/hi5622_wifi.ko
 RECEIPT=/root/.wifi-t0-deploy.receipt
+SET=full
 
 PASS=0
 FAIL=0
@@ -43,7 +51,8 @@ finish() {
 }
 
 usage() {
-	sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '/^# t0-device.sh MODE/,/^# output:/p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '/^# modes:/,/^# output:/p' "$0" | sed 's/^# \{0,1\}//'
 	exit 2
 }
 
@@ -54,16 +63,42 @@ shift 2
 MODULE_PARAMS=
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--set) SET=$2; shift ;;
+		--set=*) SET=$(printf '%s' "$1" | cut -c7-) ;;
 		--param) MODULE_PARAMS="$MODULE_PARAMS $2"; shift ;;
 		--param=*) MODULE_PARAMS="$MODULE_PARAMS $(printf '%s' "$1" | cut -c9-)" ;;
 		*) echo "unknown argument: $1" >&2; usage ;;
 	esac
 	shift
 done
+case "$SET" in
+	full|userspace) ;;
+	*) echo "unknown --set value: $SET (want full|userspace)" >&2; usage ;;
+esac
 STAGE=$(printf '%s' "$STAGE" | sed 's:/$::')
 
 PKG_LIST=$STAGE/expected-packages.txt
 FILE_LIST=$STAGE/expected-files.txt
+SEL_PKGS=$STAGE/sel-packages.txt
+SEL_FILES=$STAGE/sel-files.txt
+
+# Build the selected package/file lists for the requested set. The manifests
+# are always complete (7 packages / 7 payload files); userspace mode filters
+# every kmod row and every /lib/modules payload. Writes only the /tmp staging
+# dir (the box itself stays untouched in preflight/verify).
+selection_init() {
+	: >"$SEL_PKGS"
+	: >"$SEL_FILES"
+	if [ ! -f "$PKG_LIST" ] || [ ! -f "$FILE_LIST" ]; then return 0; fi
+	if [ "$SET" = userspace ]; then
+		awk '!/^#/ && NF && $1 !~ /^kmod-/' "$PKG_LIST" >"$SEL_PKGS"
+		awk '!/^#/ && NF && $1 !~ /^lib\/modules\//' "$FILE_LIST" >"$SEL_FILES"
+	else
+		cp "$PKG_LIST" "$SEL_PKGS"
+		cp "$FILE_LIST" "$SEL_FILES"
+	fi
+}
+selection_init
 
 # ---------------------------------------------------------------- helpers ---
 read_pkg_field() { # name field(1=version,2=apk_size,3=apk_sha256,4=installed)
@@ -123,6 +158,10 @@ check_kernel_package() {
 	kpk=$(pkg_version kernel)
 	kv kernel_running "$(uname -r)"
 	kv kernel_package "$kpk"
+	if [ "$SET" = userspace ]; then
+		ok kernel-dep "not applicable: userspace-only set has no kmod (running kernel package recorded above)"
+		return 0
+	fi
 	if [ "$kpk" = "$KERNEL_DEP_EXPECTED" ]; then ok kernel-dep "kernel=$kpk"
 	else bad kernel-dep "kernel=$kpk (need $KERNEL_DEP_EXPECTED; kmod install fails closed)"; fi
 }
@@ -134,6 +173,9 @@ check_stage() {
 	else bad stage-files "missing $FILE_LIST"; fi
 	if [ -f "$STAGE/t0-device.sh" ]; then ok stage-script "t0-device.sh present"
 	else bad stage-script "missing $STAGE/t0-device.sh"; fi
+	kv install_set "$SET"
+	if [ -s "$SEL_PKGS" ] && [ -s "$SEL_FILES" ]; then ok stage-selection "selection lists generated for the $SET set"
+	else bad stage-selection "selection lists empty/missing for the $SET set"; fi
 	n=0
 	while read -r name version asize asha _; do
 		case "$name" in ''|\#*) continue ;; esac
@@ -145,9 +187,11 @@ check_stage() {
 		h=$(sha256sum "$f" | awk '{print $1}')
 		if [ "$h" = "$asha" ]; then ok "stage-apk-$name" "sha256 ok ($sz B)"
 		else bad "stage-apk-$name" "sha256 $h != $asha"; fi
-	done <"$PKG_LIST"
-	if [ "$n" -eq 7 ]; then ok stage-count "7 packages staged"
-	else bad stage-count "$n packages listed (want 7)"; fi
+	done <"$SEL_PKGS"
+	want=7
+	if [ "$SET" = userspace ]; then want=5; fi
+	if [ "$n" -eq "$want" ]; then ok stage-count "$n packages staged ($SET set)"
+	else bad stage-count "$n packages listed (want $want for the $SET set)"; fi
 }
 
 pkg_state() { # absent | same | different:<version>
@@ -168,7 +212,7 @@ check_pkg_state() {
 			same)   ok "pkg-state-$name" "already installed $version (idempotent verify)" ;;
 			*)      bad "pkg-state-$name" "installed $st (expected $version); refusing to clobber" ;;
 		esac
-	done <"$PKG_LIST"
+	done <"$SEL_PKGS"
 }
 
 verify_files() {
@@ -183,7 +227,7 @@ verify_files() {
 		else
 			bad "file-$path" "size=$sz sha256=$h (want $size/$sha)"
 		fi
-	done <"$FILE_LIST"
+	done <"$SEL_FILES"
 }
 
 check_version_strings() {
@@ -216,6 +260,10 @@ check_module_one() { # name path
 }
 
 check_modules_static() {
+	if [ "$SET" = userspace ]; then
+		ok modules-skipped "userspace-only set installs no modules (kmod ABI path still open)"
+		return 0
+	fi
 	check_module_one cfg80211 "$CFG11_KO"
 	check_module_one hi5622_wifi "$WIFI_KO"
 	if grep -q 'depends=cfg80211' "$WIFI_KO" 2>/dev/null; then
@@ -269,7 +317,7 @@ do_install() {
 			todo=$((todo + 1))
 			FILES="$FILES $STAGE/$name-$version.apk"
 		fi
-	done <"$PKG_LIST"
+	done <"$SEL_PKGS"
 	kv packages_to_install "$todo"
 	if [ "$todo" -gt 0 ]; then
 		if [ "$FAIL" -ne 0 ]; then
@@ -277,6 +325,19 @@ do_install() {
 			finish
 		fi
 		echo "T0ACTION apk add --allow-untrusted --force-non-repository --no-network --repositories-file /dev/null$FILES"
+		# resolve the transaction first (--simulate) so a missing dependency or
+		# an ABI pin mismatch fails closed before anything is mutated
+		# shellcheck disable=SC2086 # FILES is a deliberate space-separated list
+		apk add --allow-untrusted --force-non-repository --no-network \
+			--repositories-file /dev/null --simulate $FILES >"$STAGE/apk-simulate.log" 2>&1
+		rcsim=$?
+		kv apk_simulate_rc "$rcsim"
+		if [ "$rcsim" -eq 0 ]; then ok apk-resolve "apk add --simulate rc=0 (dependencies and ABI pin resolve)"
+		else bad apk-resolve "apk add --simulate rc=$rcsim (see $STAGE/apk-simulate.log)"; fi
+		if [ "$rcsim" -ne 0 ]; then
+			bad install "resolution failed; apk add not run"
+			finish
+		fi
 		# shellcheck disable=SC2086 # FILES is a deliberate space-separated list
 		apk add --allow-untrusted --force-non-repository --no-network \
 			--repositories-file /dev/null $FILES >"$STAGE/apk-add.log" 2>&1
@@ -297,18 +358,24 @@ do_install() {
 		else
 			bad "world-$name" "no world entry (would not be tracked)"
 		fi
-	done <"$PKG_LIST"
+	done <"$SEL_PKGS"
 	verify_files
 	check_version_strings
 	check_modules_static
 	check_no_autoload
 	check_loaded_state
 	if [ "$FAIL" -eq 0 ]; then
+		pkg_n=$(grep -cvE '^#|^[[:space:]]*$' "$SEL_PKGS")
 		{
 			echo "image=6.18.60"
-			echo "kernel_package=$KERNEL_DEP_EXPECTED"
+			echo "set=$SET"
+			if [ "$SET" = userspace ]; then
+				echo "kernel_package=not-applicable (userspace-only set)"
+			else
+				echo "kernel_package=$KERNEL_DEP_EXPECTED"
+			fi
 			echo "stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-			echo "packages=7"
+			echo "packages=$pkg_n"
 		} >"$RECEIPT" 2>/dev/null
 		if [ -f "$RECEIPT" ]; then ok receipt "wrote $RECEIPT"
 		else bad receipt "cannot write $RECEIPT"; fi
@@ -322,7 +389,7 @@ do_rollback() {
 	while read -r name version asize asha _; do
 		case "$name" in ''|\#*) continue ;; esac
 		if [ -n "$(pkg_version "$name")" ]; then names="$names $name"; fi
-	done <"$PKG_LIST"
+	done <"$SEL_PKGS"
 	if [ -z "$names" ]; then names=none; fi
 	kv packages_present "$names"
 	if [ "$names" = none ]; then
@@ -340,12 +407,12 @@ do_rollback() {
 		got=$(pkg_version "$name")
 		if [ -z "$got" ]; then ok "gone-$name" "package removed"
 		else bad "gone-$name" "still installed ($got)"; fi
-	done <"$PKG_LIST"
+	done <"$SEL_PKGS"
 	while read -r path sha size; do
 		case "$path" in ''|\#*) continue ;; esac
 		if [ -e "/$path" ]; then bad "gone-file-$path" "/$path still present"
 		else ok "gone-file-$path" "removed"; fi
-	done <"$FILE_LIST"
+	done <"$SEL_FILES"
 	if [ -f "$RECEIPT" ]; then
 		rm -f "$RECEIPT"
 		if [ -f "$RECEIPT" ]; then bad receipt-removed "cannot remove $RECEIPT"
@@ -359,6 +426,10 @@ do_rollback() {
 
 do_load() {
 	check_image
+	if [ "$SET" = userspace ]; then
+		bad load-requires-full "userspace-only set installs no modules; load needs --set full (or the /tmp insmod flow)"
+		finish
+	fi
 	check_modules_static
 	if [ "$FAIL" -ne 0 ]; then finish; fi
 	case "$CFG11_KO" in /tmp/*) bad load-path "cfg80211 path is under /tmp"; finish ;; esac

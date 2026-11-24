@@ -1,0 +1,46 @@
+== T0 deploy: host-only artifact/tree verification (no device contact) ==
+artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
+tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   iw size
+ok   iw sha256
+ok   iwinfo size
+ok   iwinfo sha256
+ok   libiwinfo20230701 size
+ok   libiwinfo20230701 sha256
+ok   libiwinfo-data size
+ok   libiwinfo-data sha256
+ok   wireless-regdb size
+ok   wireless-regdb sha256
+ok   userspace-only set: container/kernel-slice identity not required (no kmod, no kernel pin)
+ok   artifacts SHA256SUMS apk lines match
+ok   iw adbdump version
+ok   iw installed-size
+ok   iw has no kernel= dependency (userspace-safe)
+ok   iw depends libnl-tiny1
+ok   iw hooks are stock OpenWrt boilerplate (no device ops)
+ok   iwinfo adbdump version
+ok   iwinfo installed-size
+ok   iwinfo has no kernel= dependency (userspace-safe)
+ok   iwinfo depends libiwinfo20230701
+ok   iwinfo hooks are stock OpenWrt boilerplate (no device ops)
+ok   libiwinfo20230701 adbdump version
+ok   libiwinfo20230701 installed-size
+ok   libiwinfo20230701 has no kernel= dependency (userspace-safe)
+ok   libiwinfo20230701 hooks are stock OpenWrt boilerplate (no device ops)
+ok   libiwinfo-data adbdump version
+ok   libiwinfo-data installed-size
+ok   libiwinfo-data has no kernel= dependency (userspace-safe)
+ok   libiwinfo-data hooks are stock OpenWrt boilerplate (no device ops)
+ok   wireless-regdb adbdump version
+ok   wireless-regdb installed-size
+ok   wireless-regdb has no kernel= dependency (userspace-safe)
+ok   wireless-regdb hooks are stock OpenWrt boilerplate (no device ops)
+ok   tree kernel vermagic (recomputed from .config.set)
+ok   tree kernel config has CONFIG_CFG80211=m
+ok   tree .vermagic file
+ok   tree cfg80211.ko build product present
+
+== host check: 40 passed, 0 failed ==
+RESULT: PASS - artifacts/tree identity verified; a device action needs --apply --attended --yes-really

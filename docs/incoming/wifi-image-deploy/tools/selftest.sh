@@ -72,6 +72,12 @@ chk "deploy requires --attended"    "grep -q -- '--attended is required' '$LANE/
 chk "deploy requires --yes-really"  "grep -q -- '--yes-really is required' '$LANE/deploy-t0.sh'"
 chk "device script verifies the no-autoload policy" "grep -q 'check_no_autoload' '$LANE/device/t0-device.sh'"
 chk "no script writes an autoload entry" "! grep -qE '(>|>>|tee)[[:space:]]*[^|]*modules[.]d' '$LANE/device/t0-device.sh' '$LANE/deploy-t0.sh'"
+chk "deploy script has a userspace-only set" "grep -q 'USERS_TABLE=' '$LANE/deploy-t0.sh' && grep -q 'USERS_ONLY' '$LANE/deploy-t0.sh'"
+chk "userspace set is exactly five packages" "[ \$(sed -n '/^USERS_TABLE=/,/^UTABLE\$/p' '$LANE/deploy-t0.sh' | grep -c '^[a-z]') -eq 5 ]"
+chk "userspace set contains no kmod rows" "! sed -n '/^USERS_TABLE=/,/^UTABLE\$/p' '$LANE/deploy-t0.sh' | grep -q '^kmod-'"
+chk "device script accepts --set" "grep -q -- '--set) SET=' '$LANE/device/t0-device.sh'"
+chk "device script filters kmod rows for userspace" "grep -q 'kmod-' '$LANE/device/t0-device.sh'"
+chk "device script refuses load for userspace set" "grep -q 'load-requires-full' '$LANE/device/t0-device.sh'"
 
 # --------------------------------------------------------- policy / safety ---
 chk "no binaries in the lane" "! find '$LANE' -type f \( -name '*.ko' -o -name '*.o' -o -name '*.apk' -o -name '*.bin' -o -name '*.ubi' -o -name '*.squashfs' -o -name '*.img' \) | grep -q ."
@@ -172,6 +178,14 @@ if [ "$ART_OK" -eq 1 ]; then
 	else
 		skip "could not create tampered apk copy"
 	fi
+	if "$LANE/deploy-t0.sh" --check --userspace-only --state "$TMP/state-check-users" >"$TMP/check-users.log" 2>&1; then
+		ok "host check PASS for the userspace-only set"
+	else
+		bad "host check FAIL for the userspace-only set"
+		tail -10 "$TMP/check-users.log"
+	fi
+	chk "userspace host check used the five-package set" "grep -q 'userspace-only set: container/kernel-slice identity not required' '$TMP/check-users.log'"
+	chk "userspace host check verified no kernel= dependency" "grep -q 'has no kernel= dependency' '$TMP/check-users.log' && [ \$(grep -c 'has no kernel= dependency' '$TMP/check-users.log') -eq 5 ]"
 else
 	skip "host-check/tamper behavior skipped (no local artifacts)"
 fi
@@ -188,12 +202,14 @@ cat >"$TMP/mock/rsh" <<'RSH'
 #!/usr/bin/env bash
 printf 'RSH %s\n' "$*" >>"$MOCK_LOG"
 cmd=$*
+devcmd=$(printf '%s' "$cmd" | sed "s#/tmp/t0-deploy-#$MOCK_DEV/t0-deploy-#g")
 case "$cmd" in
 	*T0-REACHABLE*) printf 'T0-REACHABLE\nLinux bench 6.18.60 #1 SMP\napk-tools 3.0.5, compiled for armel.\nbench\n' ;;
-	*"mkdir -p"*) exit 0 ;;
-	*"sha256sum -c apk.sha256"*) for i in 1 2 3 4 5 6 7; do printf 'staged-%d: OK\n' "$i"; done ;;
+	*"mkdir -p"*) eval "$devcmd"; exit $? ;;
+	*"sha256sum -c apk.sha256"*) eval "$devcmd"; exit $? ;;
+	*"rm -rf"*) eval "$devcmd"; exit 0 ;;
+	*"t0-device.sh install "*) if printf '%s' "$cmd" | grep -q -- '--set userspace'; then printf 'T0GATE install_set PASS userspace\nT0-RESULT: PASS (1 gates, 0 failed)\n'; else printf 'T0GATE install_set PASS full\nT0-RESULT: PASS (1 gates, 0 failed)\n'; fi ;;
 	*"t0-device.sh preflight "*) printf 'T0GATE stage-count PASS 7 packages\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
-	*"t0-device.sh install "*) printf 'T0GATE apk-add PASS rc=0\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
 	*"t0-device.sh rollback "*) printf 'T0GATE apk-del PASS rc=0\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
 	*"t0-device.sh load "*) printf 'T0GATE load-wifi PASS rc=0\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
 	*"t0-device.sh verify "*) printf 'T0GATE receipt PASS present\nT0-RESULT: PASS (1 gates, 0 failed)\n' ;;
@@ -203,6 +219,13 @@ RSH
 cat >"$TMP/mock/rscp" <<'RSCP'
 #!/usr/bin/env bash
 printf 'RSCP %s\n' "$*" >>"$MOCK_LOG"
+src=$1
+last=""
+for a in "$@"; do last=$a; done
+dest=$(printf '%s' "$last" | cut -d: -f2-)
+rel=$(printf '%s' "$dest" | sed 's:^/tmp/::')
+mkdir -p "$MOCK_DEV/$(dirname "$rel")" || exit 1
+cp "$src" "$MOCK_DEV/$rel" || exit 1
 exit 0
 RSCP
 cat >"$TMP/mock/bench-link" <<'BL'
@@ -220,6 +243,9 @@ mock_env() {
 	export T0_RSH=$TMP/mock/rsh T0_RSCP=$TMP/mock/rscp
 	export T0_PREFLIGHT_BENCH_LINK=$TMP/mock/bench-link T0_PREFLIGHT_RECOVERY=$TMP/mock/recovery
 	export MOCK_LOG=$TMP/mock/calls.log
+	export MOCK_DEV=$TMP/mock/dev
+	rm -rf "$MOCK_DEV"
+	mkdir -p "$MOCK_DEV"
 	: >"$MOCK_LOG"
 }
 mock_env
@@ -234,6 +260,18 @@ mock_env
 "$LANE/deploy-t0.sh" --rollback --attended --yes-really --state "$TMP/state-mock-rb" >"$TMP/mock-rollback.log" 2>&1
 chkeq "mocked rollback exits 0" "$?" "0"
 chk "mocked rollback ran the device rollback" "grep -q 't0-device.sh rollback ' '$TMP/mock/calls.log'"
+mock_env
+"$LANE/deploy-t0.sh" --apply --userspace-only --attended --yes-really --state "$TMP/state-mock-users" >"$TMP/mock-users.log" 2>&1
+chkeq "mocked userspace apply exits 0" "$?" "0"
+chk "mocked userspace apply passed the userspace set to the device" "grep -q 't0-device.sh install .*--set userspace' '$TMP/mock/calls.log'"
+rscp_u=$(grep -c '^RSCP' "$TMP/mock/calls.log")
+chk "mocked userspace apply staged only the five apks" "[ $rscp_u -eq 9 ]"
+chk "mocked userspace apply staged no kmod package" "! grep -q 'kmod-hi5622' '$TMP/mock/calls.log'"
+mock_env
+"$LANE/deploy-t0.sh" --apply --userspace-only --load-check --attended --yes-really --state "$TMP/state-mock-users-load" >"$TMP/mock-users-load.log" 2>&1
+chk "userspace-only --load-check is refused" "[ $? -ne 0 ]"
+chk "userspace-only load refusal names the full set" "grep -q -- '--load-check needs the full set' '$TMP/mock-users-load.log'"
+chk "userspace-only load refusal did not contact the device" "[ ! -s '$TMP/mock/calls.log' ]"
 cat >"$TMP/mock/rsh-fail" <<'RSH'
 #!/usr/bin/env bash
 printf 'RSH %s\n' "$*" >>"$MOCK_LOG"
@@ -272,6 +310,12 @@ if [ "$QUICK" -eq 0 ] && [ "$ART_OK" -eq 1 ] && [ "$TREE_OK" -eq 1 ]; then
 	else
 		bad "host apk-transaction simulation FAIL"
 		tail -20 "$TMP/host-sim.log"
+	fi
+	if "$LANE/tools/verify-apks-host.sh" --userspace-only >"$TMP/host-sim-users.log" 2>&1; then
+		ok "host userspace-only transaction simulation PASS"
+	else
+		bad "host userspace-only transaction simulation FAIL"
+		tail -20 "$TMP/host-sim-users.log"
 	fi
 else
 	skip "host apk-transaction simulation skipped (quick mode or missing artifacts/tree)"

@@ -7,6 +7,16 @@ SSH, with no flash write, no boot-selector change and no reboot. Fully
 reversible with apk del. Then use the rootfs binaries for the bench ladders
 instead of pushing them to /tmp.
 
+Two sets are supported:
+* **full** (default): the seven packages incl. both kmod packages. This needs
+  the running image's kernel package version to match the kmod ABI pin
+  (currently 6.18.60~6f995278...-r1) - the device gate fails closed otherwise
+  and the deploy auto-rolls back (this happened on 2026-11-26; see REPORT.md
+  section 7).
+* **--userspace-only**: only iw, iwinfo, libiwinfo, libiwinfo-data and
+  wireless-regdb (no kernel= dependency, no modules). Gives native iw/iwinfo
+  immediately on any image whose package manager/deps match.
+
 Inputs are the artifacts from ../wifi-image-integration (built image container
 df6a78c3..., unchanged kernel slice 13e81214..., seven .apk packages). Nothing
 was flashed or executed on the router by this lane - the attended deploy is the
@@ -26,6 +36,13 @@ Attended deploy / verify / rollback:
     ./deploy-t0.sh --verify --attended --yes-really
     ./deploy-t0.sh --rollback --attended --yes-really
 
+Userspace-only set (no kmod kernel-ABI pin; use when the image kernel package
+does not match the kmod pin, or when only native iw/iwinfo are wanted):
+
+    ./deploy-t0.sh --userspace-only --apply --attended --yes-really
+    ./deploy-t0.sh --userspace-only --verify --attended --yes-really
+    ./deploy-t0.sh --userspace-only --rollback --attended --yes-really
+
 Optional write-free probe of the rootfs modules in the same window:
 
     ./deploy-t0.sh --apply --attended --yes-really --load-check
@@ -43,6 +60,10 @@ wiphy+VAP gate with rootfs iw).
   reproduces byte-identical payload trees (install = built image, rollback =
   pre-T0 baseline), is idempotent, and fails closed on a mismatched installed
   kernel package; 61/61 simulation gates PASS;
+* userspace-only set: host check 40/40 PASS (all five packages proven to have
+  no kernel= dependency) and transaction simulation 53/53 PASS (install payload
+  == built image minus the two module payloads, no modules installed,
+  idempotent, rollback byte-identical to the baseline);
 * package hooks are stock OpenWrt boilerplate only (no custom code);
 * no autoload entry; module load stays manual and write-free at probe.
 
@@ -50,12 +71,12 @@ wiphy+VAP gate with rootfs iw).
 
 | file | what |
 | --- | --- |
-| deploy-t0.sh | host orchestrator: --check (default) / --apply / --verify / --rollback / --load-check |
+| deploy-t0.sh | host orchestrator: --check (default) / --apply / --verify / --rollback / --load-check / --userspace-only |
 | device/t0-device.sh | device-side modes preflight/install/rollback/load/verify |
 | tools/verify-apks-host.sh | byte-level host apk-transaction simulation |
 | tools/selftest.sh | device-free lane selftest |
 | tools/expected-packages.txt, tools/expected-files.txt | pinned sha256 manifests |
-| build-evidence/ | recorded host-simulation + host-check transcripts (text only) |
+| build-evidence/ | recorded host-simulation + host-check transcripts, full and userspace-only (text only) |
 | REPORT.md | analysis, findings, safety, limits |
 | BENCH-VALIDATION.md | attended validation procedure + acceptance gates |
 
@@ -77,3 +98,11 @@ kernel/version/overlay mismatch). T0 is a bench convenience, not a product
 upgrade, and does not prove the image boots. Wiphy/VAP functionality still
 requires the attended golden boot; the scan response gap (tasks 117/118) is
 unchanged by T0. The vendor firmware blob remains local evidence only.
+
+Known ABI gap (measured 2026-11-26): the running image's kernel package
+(6.18.60~5de0e425...) does not match the kmod .apk pin (6.18.60~6f995278...);
+the full set therefore fails closed on that box by design. Userspace-only works
+now. The canonical fix is to rebuild the image from the current tree and flash
+it (self-consistent kernel package + kmods); rebuilding the kmods against the
+old pin is a non-canonical local fallback. See REPORT.md section 7 and
+BENCH-VALIDATION.md section 7.

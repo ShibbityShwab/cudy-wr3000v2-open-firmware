@@ -34,8 +34,9 @@ seven .apk files, SHA256SUMS) is
   *byte-identical* payload trees (built image / pre-T0 baseline / built image
   again), 81 <-> 74 packages, with the exact command flags the device will run;
   re-running add is a no-op; a mismatched installed kernel package makes apk
-  fail closed (rc=23) naming the kernel= constraint. 61/61 simulation gates
-  PASS (tools/verify-apks-host.sh), plus 75+ selftest gates.
+  fail closed (rc=23) naming the kernel= constraint. 61/61 full-set
+  simulation gates PASS (tools/verify-apks-host.sh), 53/53 for the
+  userspace-only set, plus 95 selftest gates.
 * **Deploy shape:** all seven packages go into the RUNNING pair-B rootfs through
   the persistent overlay; no flash write, no boot-selector change, no reboot,
   no rmmod, no /dev/mem, no UART. Rollback is one apk del. The scripts refuse
@@ -46,6 +47,17 @@ seven .apk files, SHA256SUMS) is
   lost on next reboot"); the plain "apk add --allow-untrusted /tmp/*.apk"
   recipe in ../wifi-image-integration/DEPLOY.md T0 step 2 would fail. The
   deploy script uses the verified flag set and pins integrity by sha256 anyway.
+* **Hardware follow-up (2026-11-26):** the Lead's attended run executed with
+  full preflight, **failed closed at the kernel-ABI gate** and auto-rolled
+  back cleanly (28 device gates / 21 rollback gates PASS, nothing left behind).
+  Root cause: the running image's kernel package is
+  **6.18.60~5de0e425f1313eeec82615317fdc1f76-r1**, the kmod .apk files pin
+  **6.18.60~6f995278...-r1** (the tree was rebuilt after the flashed image).
+  This is APK build-provenance bookkeeping, not an ELF-ABI mismatch: the
+  flashed kernel slice is the same validated **13e81214** bytes, so the module
+  vermagic matches. Two consequences are delivered here:
+  **--userspace-only** (native iw/iwinfo now, no kmod pin) and section 7 (the
+  two kmod-ABI paths, with the canonical one named).
 
 ## 1. Verified package set (the exact seven artifacts)
 
@@ -215,13 +227,15 @@ interleave.
 
 | file | what |
 | --- | --- |
-| deploy-t0.sh | host orchestrator: --check (default, no device), --apply, --rollback, --verify, --load-check |
+| deploy-t0.sh | host orchestrator: --check (default, no device), --apply, --rollback, --verify, --load-check, --userspace-only |
 | device/t0-device.sh | device-side modes preflight/install/rollback/load/verify with T0GATE/T0KV/T0-RESULT output |
 | tools/verify-apks-host.sh | host-only byte-level transaction simulation |
 | tools/selftest.sh | device-free lane selftest (syntax/lint/policy/manifests/mocks/real simulation) |
 | tools/expected-packages.txt, tools/expected-files.txt | pinned artifact + payload manifests (sha256) |
-| build-evidence/host-apk-simulation.txt | recorded 61/61 PASS transcript |
+| build-evidence/host-apk-simulation.txt | recorded 61/61 PASS transcript (full set) |
+| build-evidence/host-apk-simulation-userspace.txt | recorded 53/53 PASS transcript (userspace-only set) |
 | build-evidence/host-check.txt | recorded deploy-t0.sh --check transcript on the local artifacts/tree |
+| build-evidence/host-check-userspace.txt | recorded deploy-t0.sh --check --userspace-only transcript |
 | BENCH-VALIDATION.md | attended validation definition (fresh boot, native iw/iwinfo/driver, D1 ladder) |
 | README.md | quick start + file map |
 
@@ -250,3 +264,86 @@ Reproduce (host-only, no router):
   never shipped in a package.
 * The driver's functional state (wiphy/VAP/scan) is unchanged by T0; T0 only
   moves the already-used binaries into the rootfs.
+
+## 7. Hardware follow-up (2026-11-26): kernel-ABI mismatch + the two paths
+
+### 7.1 What the attended run measured
+
+The Lead ran the deploy with full preflight. It **failed closed exactly where it
+should** and left the box unchanged:
+* device pre-install gates: image/apk/overlay/space/staging all PASS, then
+  T0KV kernel_package=6.18.60~5de0e425f1313eeec82615317fdc1f76-r1 ->
+  the kernel-dep gate FAILed against the kmod pin 6.18.60~6f995278...-r1, so
+  apk add was never executed; automatic rollback then PASSed 21/21 (all seven
+  payload files absent, packages absent, receipt absent). Evidence:
+  build/evidence-t0-deploy/25691124T090251Z/ (root repo, gitignored).
+* The running image was built before the current tree's kernel configuration
+  settled: OpenWrt's kernel package version is
+  **md5 of the sorted =[ym] kernel-config lines** (include/kernel-defaults.mk:131,
+  .vermagic). Two builds can therefore have different kernel package hashes
+  while embedding the **same kernel slice bytes** - which is the case here
+  (both are the validated 13e81214 slice). The two kmod .apk files carry
+  vermagic "6.18.60 SMP mod_unload ARMv7 p2v8", i.e. they are loadable on that
+  kernel; what apk refuses is the *build-provenance* pin, and forcing past it
+  is not acceptable.
+* Later on the same bench the Lead installed the five non-kmod packages
+  manually (apk add --force-non-repository, rc=0, 79 packages): native
+  /usr/sbin/iw 6.17 and /usr/bin/iwinfo now run from the persistent overlay and
+  iwinfo already enumerates wlan0. That is exactly the userspace-only set this
+  lane now ships as a mode, so its verify path is the idempotent check for the
+  box's current state.
+
+### 7.2 Userspace-only mode (native iw/iwinfo now, no kmod ABI)
+
+    ./deploy-t0.sh --userspace-only --apply --attended --yes-really
+    ./deploy-t0.sh --userspace-only --verify --attended --yes-really
+    ./deploy-t0.sh --userspace-only --rollback --attended --yes-really
+
+* Installs/verifies/rolls back only iw, iwinfo, libiwinfo, libiwinfo-data and
+  wireless-regdb (the five packages with **no kernel= dependency**). The
+  device script filters every kmod row and every /lib/modules payload out of
+  the full manifests (--set userspace), skips the kernel-dep and module-static
+  gates (recording the running kernel package instead), runs the same
+  apk add --simulate resolve pre-gate + apk add/read-back/rollback path, and
+  refuses load mode ("--load-check needs the full set").
+* Host-verified: host check 40/40 PASS (every userspace package proven to have
+  no kernel= dependency), transaction simulation 53/53 PASS (install payload ==
+  built image minus the two module payloads, no modules installed, five payload
+  sha256 read-backs, idempotent re-add, rollback byte-identical to baseline,
+  negative "kmod-free set" gate). Selftest covers the mocked userspace flow
+  too (95/95 PASS).
+* No autoload, no reboot, no flash: same safety envelope as the full set.
+  Native iw/iwinfo become available immediately; the modules stay in the
+  proven /tmp insmod flow until the ABI path below is taken.
+
+### 7.3 Closing the kmod ABI - two paths, canonical decision
+
+**P1 - rebuild the image from the current tree and flash it: CANONICAL.**
+One tree state -> one kernel build -> one kernel package version (currently
+6f995278), and the rootfs apk db, the kmod .apk pins and the kernel slice all
+agree. Concretely: rebuild the bench image (kernel slice is expected to
+reproduce the validated 13e81214 bytes; the rootfs carries kernel=6f995278),
+then install it in an attended window (T1 rootfs rewrite in
+../wifi-image-integration/DEPLOY.md, or kernel slice + rootfs from the same
+build). Important: writing only the kernel slice does NOT change the installed
+kernel package version - the "kernel=..." string lives in the rootfs apk db,
+not in the kernel image - so the rootfs built with that kernel package must be
+written too (even though the kernel bytes are expected to be the same validated
+13e81214). After that the full-set T0 deploy (kmods) works and stays consistent
+across reboot. This is canonical because it is reproducible from the tree, it
+is what a real image does, it keeps APK's dependency checking meaningful, and
+it matches the upstream/target direction (the target/linux config is the
+source of the kernel package version).
+**P2 - rebuild the two kmod .apk files against the running image's kernel
+package version (5de0e425): fallback, not canonical.**
+The wifi-openwrt-pkg lane did this for its own package (its .apk pins
+6.18.60~5de0e425...), so the technique exists. But that pin describes an old
+build's kernel configuration that the tree no longer reproduces; every kmod
+would have to be rebuilt and re-verified whenever the running image, tree or
+kernel config changes, and it deliberately bypasses the self-consistency the
+package metadata is there to enforce. Acceptable only as a local, clearly
+labelled bench artifact for a short sprint; never merge it as the image's
+dependency policy and never force apk past the kernel= dependency.
+Interim (safe today): userspace-only T0 for native iw/iwinfo + the proven
+/tmp insmod flow for the two modules; both are hardware-validated paths and
+leave the eventual P1 decision open.

@@ -1,7 +1,7 @@
 == T0 host apk-transaction simulation ==
 artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
 tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
-work     : /tmp/t0-verify.KIA88D
+work     : /tmp/t0-verify.Q4of7g
 
 ok   expected-packages.txt sha256
 ok   expected-files.txt sha256
