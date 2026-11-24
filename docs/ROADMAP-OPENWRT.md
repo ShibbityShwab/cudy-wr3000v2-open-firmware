@@ -1,6 +1,6 @@
 # Roadmap: from a working box to a complete open-source OpenWrt submission
 
-> **Status 2026-11-24: the plan below is history; the live state is the parent `STATUS.md`
+> **Status 2026-11-27: the plan below is history; the live state is the parent `STATUS.md`
 > and [upstream/SUBMISSION-STATUS.md](upstream/SUBMISSION-STATUS.md).** The target now
 > exists and is bench-verified: 67 target patches (L0) / 55-patch release line (L1), board
 > DTS with the loader hand-off contract, full image recipe (uImage + FIP slice + rootfs UBI
@@ -31,6 +31,29 @@
 > [PUBLISH-READINESS.md](PUBLISH-READINESS.md), [GPL-REQUEST.md](GPL-REQUEST.md),
 > [VENDOR-STACK-ON-MAINLINE.md](VENDOR-STACK-ON-MAINLINE.md) (the working vendor-stack
 > recipe, bench instrument only).
+
+## Where the plan stands on 2026-11-27
+
+**2026-11-27 finalization (host-only; nothing posted).** The submission package is consolidated
+and its state is unambiguous: the **platform series is a reviewable RFC but the frozen v1 form
+must not be posted** - after the 2026-11-24 GP1 delta the hardware-validated line uses the
+committed patch 013a endpoint-reset pulse and no DTS `wifi-pcie-hog`, while review-form 0013 has
+no pulse and DTS-0001 still carries the hog; L1 is 55 patches and must become 56 (add 013a). The
+v2 form (30 kernel patches + DTS-0001) with folds, decisions, acceptance criteria and the
+regeneration procedure is specified but **not generated**. **The Wi-Fi AP milestone is real and
+research-only**: on 2026-11-27 hostapd reached AP-ENABLED (SSID `cudy-ap-test`) and the vendor
+firmware consumed the four AP-start messages, on the PD4-patched research firmware with a
+research provider module - no beacon/association/WPA2/data-plane persistence proof, no
+upstreamable driver, no host-clean boot path. The GPLv2 request is still unanswered (sent
+2026-10-01). The bench image was reproduced byte-for-byte with an ABI-correct rootfs and the
+kernel+rootfs flash runbook is ready but **not executed**; the target `platform_do_upgrade` path
+is unproven. Publication remains **NOT READY**. The full finalization dossier, with the exact
+evidence and the ordered next steps, is
+[incoming/wifi-upstream-final/REPORT.md](incoming/wifi-upstream-final/REPORT.md) (index:
+[README.md](incoming/wifi-upstream-final/README.md)); publication checks:
+[incoming/wifi-upstream-final/PUBLICATION-CHECKS.md](incoming/wifi-upstream-final/PUBLICATION-CHECKS.md).
+Nothing here is upstream acceptance: there is still no target PR, no accepted driver series and
+no Wi-Fi support claim.
 
 ## Where the plan stands on 2026-11-21
 

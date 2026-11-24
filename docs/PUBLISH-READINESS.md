@@ -5,6 +5,22 @@
 the basis of an upstream submission. The live bench state is the parent repo's `STATUS.md`;
 this file is about publication, not about the router.
 
+## Update 2026-11-27 (finalization run: still NOT READY; no checklist item closed)
+
+The submission-finalization lane re-ran the publication checks read-only. Result:
+`opensource/tools/publish-prep-check.sh` = **FAIL, 15 PASS / 9 FAIL / 8 WARN** (the honest
+current state; the root `tools/check-repo.sh` = PASS). No purge, rewrite, push or owner decision
+was performed. The FAILs: shallow-clone history scan incomplete (run on a clean full clone);
+missing `COPYING` (GPL-2.0) and `CONTRIBUTING.md`/DCO/SPDX/Copyright; the Wi-Fi + LAN-switch
+status statement missing from README/NOTICE; ten vendor `.o` blobs plus one `.pyc` still
+reachable from all three refs in history; 23 relative markdown links escape the repository root
+(mainly `docs/incoming/vendor-userspace/REPORT.md`); four tracked `.dts` copies. One credential
+pattern is a **false positive** (a self-test's own key-pattern grep in
+`docs/incoming/wifi-image-integration/tools/selftest.sh` line 81). Full matrix, triage and the
+owner-only close list: `docs/incoming/wifi-upstream-final/PUBLICATION-CHECKS.md`. Checklist item 1
+(history purge) stays **open and unchecked**. The recommended path is unchanged: fresh curated
+repositories (`PUBLISH-PREP.md` C0-C4) or the prepared legacy purge.
+
 ## Update 2026-11-21 (legacy purge runbook prepared; item 1 still open)
 
 The legacy open-firmware repository is still public and unarchived. Re-audited 2026-11-21:

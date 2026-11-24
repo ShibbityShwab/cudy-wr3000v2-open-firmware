@@ -1,7 +1,8 @@
 # Upstream submission status - HiSilicon luofu / Cudy WR3000 v2.0 (board R116)
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-**Status:** 2026-11-22. **This page is the definitive submission checklist for the
+**Status:** 2026-11-27 (finalization update in section 0; treat the 2026-11-22 verdict
+below as history where superseded). **This page is the definitive submission checklist for the
 upstream packaging lane** (task-65): per-item status, evidence pointers, remaining
 work and the proposed `openwrt/openwrt` series split.  It is host-only packaging
 state; no build was run and no device was touched to produce it.  The live state of
@@ -19,6 +20,41 @@ Evidence grades follow the project convention: **[V]** verified on hardware or f
 named artefact, **[I]** inferred, **[U]** unmeasured, **[X]** blocked/excluded.
 
 ---
+
+## 0. 2026-11-27 finalization update (read first)
+
+The submission-finalization lane (task-130) re-verified the package host-side and recorded the
+final state in `../incoming/wifi-upstream-final/REPORT.md` (index: `../incoming/wifi-upstream-final/README.md`).
+The load-bearing changes to the 2026-11-22 verdict below:
+
+- **The frozen review form (26 patches + DTS-0001) is STALE and must not be posted as-is.**
+  After the 2026-11-24 GP1 delta the hardware-validated line uses the committed patch 013a
+  endpoint-reset pulse (hardcoded GPIO0 is bench form; the v2 fold must move it to DT
+  `reset-gpios`), and the DTS `wifi-pcie-hog` was retired - yet review-form 0013 has no pulse
+  and DTS-0001 still contains the hog. L1 is 55 patches and must become 56 (add 013a).
+- **The planned v2 form is 30 kernel patches + DTS-0001**, with the fold decisions, four new RFC
+  entries (EQM/PFE-IFC/NAPT/PIE exception delivery), acceptance criteria and regeneration
+  procedure specified - **not generated**. Classification: 26 keep / 17 fold / 24 drop.
+  `gen-series.py --check` is clean (26) and there is no drift in the generated v1 files.
+- **Wi-Fi: real bench AP milestone, research-only.** On 2026-11-27 hostapd reached AP-ENABLED
+  (`cudy-ap-test`) and the vendor firmware consumed the four AP-start messages, on the
+  PD4-patched research firmware with a research provider module. No beacon/association/WPA2/
+  data-plane/persistence proof; no upstreamable driver; no host-clean boot path; never a support
+  claim. Honest page: `../incoming/wifi-upstream-final/AP-MILESTONE-HONEST.md`.
+- **GPL/PD4 unchanged:** the GPLv2 request (sent 2026-10-01) is unanswered and PD4 is a
+  research-only artifact (H1 consume-only). The platform series itself contains only our own
+  GPL-2.0 code; Wi-Fi must be declared out of scope in the cover letter.
+  `../incoming/wifi-upstream-final/GPL-PD4-STATUS.md`.
+- **Image/install:** the bench image reproduced byte-for-byte with an ABI-correct rootfs
+  (container `df6a78c3`, kernel slice `13e81214`, slot `1794a531`, rootfs `62344e80`); the
+  kernel+rootfs-from-one-build flash runbook is ready but **not executed**; T0 userspace deploy
+  is hardware-PASS; target `platform_do_upgrade` remains unproven.
+  `../incoming/wifi-upstream-final/TARGET-IMAGE-INSTALL.md`.
+- **Publication is still NOT READY** (history vendor blobs, licences/DCO, missing Wi-Fi/
+  LAN-switch statement, four DTS copies, broken links). Publication checks:
+  `../incoming/wifi-upstream-final/PUBLICATION-CHECKS.md`.
+- **Do not send the 2026-11-22 `submission/` package or its cover-email draft**: it is tied to
+  the stale v1 hashes. Regenerate it with the v2 artefacts.
 
 ## 1. Verdict (one screen)
 
