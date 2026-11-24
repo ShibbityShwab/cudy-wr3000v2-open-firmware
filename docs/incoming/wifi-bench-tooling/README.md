@@ -15,15 +15,15 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | tool | what it does |
 | --- | --- |
 | tools/bench_session.py | one command for an attended Wi-Fi bench session: modes stock-golden / our-golden / patched / h2d; host preflight, deploy+sha read-back, module load with the fw_path variant, prepare/upload/verify, custom-block pre-seed, hcc_arm/hcc_loop, release-only, golden-page gate, ready-pair check, optional one-shot announce, structured report + sha256-chained write audit |
-| tools/fw_patch_builder.py | patched-firmware builder/verifier: pinned-source check, PD/PD2 recipe application (PD2 auto-discovered from the wifi-irq-unmask lane), per-window sha16, capstone decode check, full-image verify of an existing patched copy, manifest |
+| tools/fw_patch_builder.py | patched-firmware builder/verifier: pinned-source check, PD/PD2/PD3/PD3B recipe application (all ../wifi-irq-unmask/*.recipe.json auto-discovered), per-window sha16, capstone decode check, image-header protection (entry words + RAZ-only exception-record area), full-image verify of an existing patched copy, manifest |
 | tools/bench_guards.py | the safety policy library shared by both tools (forbidden CA, CECE latch, release magic, devmem census, module/fw validation, static script audit, tamper-evident audit log) |
-| tools/selftest.py | device-free unit/integration selftest, 175 checks |
+| tools/selftest.py | device-free unit/integration selftest, 177 checks |
 | tools/run-selftest.sh | wrapper: python3 tools/selftest.py |
 
 ## Quick start (host only, no device)
 
     cd opensource/docs/incoming/wifi-bench-tooling
-    ./tools/run-selftest.sh                      # 175/175 PASS
+    ./tools/run-selftest.sh                      # 177/177 PASS
 
     # what would an attended session do? (prints every planned write + audit)
     python3 tools/bench_session.py --list
@@ -34,7 +34,7 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
     # patched-firmware build/verify against the LOCAL vendor blob (never committed)
     PY=../../../../.provision-venv/bin/python
     $PY tools/fw_patch_builder.py --list
-    $PY tools/fw_patch_builder.py --build PD --build PD2     # -> /tmp/hi5622-patched
+    $PY tools/fw_patch_builder.py --build PD --build PD2 --build PD3 --build PD3B   # -> /tmp/hi5622-patched
     $PY tools/fw_patch_builder.py --verify-manifest /tmp/hi5622-patched/manifest.json
 
 ## Modes
@@ -43,7 +43,7 @@ wifi-d2h-direct/BENCH-PROCEDURE.md, wifi-transport-port/build/ (sysfs inventory)
 | --- | --- | --- | --- |
 | stock-golden | stock vendor stack, telnet | read-only golden-state capture | none (read-only) |
 | our-golden | our instrument .ko | golden boot + D2H ready-pair check | 6 sysfs + 642 devmem + release |
-| patched | our instrument .ko + FIRMWARE.<PATCH>.bin | same boot on a patched image + PD/PD2 observables | same as our-golden + fw deploy |
+| patched | our instrument .ko + FIRMWARE.<PATCH>.bin (PD2/PD3/PD3B) | same boot on a patched image + PD/PD2/PD3 observables | same as our-golden + fw deploy |
 | h2d | our instrument .ko | our-golden then exactly ONE hcc_sr_announce | +1 announce |
 
 Real attended command (needs a human at the bench, recovery door armed,
@@ -93,6 +93,10 @@ or build/wifi-bench/ when writable):
 - fw_path must be a RELATIVE kernel firmware name (the 2026-11-24 PD run lost
   a run to an absolute path); module must be allowlisted ARM32 ET_REL, GPL,
   vermagic 6.18.60 SMP ARMv7;
+- image-header protection: file 0x00/0x04 are the live entry A/B words and are
+  never patchable; the reserved exception-record area 0x08..0x4F is patchable
+  only while the pinned source bytes there are all zero (it is RAZ in the
+  vendor image); the live exception handler table from 0x50 is never patchable;
 - the generated device script is statically audited before it is deployed
   (forbidden addresses, non-WO attribute stores, UART writes, rmmod, retry
   loops, unguarded CECE, unresolved devmem bases) and must parse with sh -n;
@@ -106,8 +110,8 @@ or build/wifi-bench/ when writable):
 
 ## Tests
 
-    ./tools/run-selftest.sh        # 175/175 device-free checks
-    $PY tools/fw_patch_builder.py --selftest   # 23/23 (capstone decode checks)
+    ./tools/run-selftest.sh        # 177/177 device-free checks
+    $PY tools/fw_patch_builder.py --selftest   # 27/27 (capstone decode checks)
 
 The selftest covers arguments/refusals, patch application on synthetic data,
 layered recipes, manifests/tamper detection, module ELF validation, the static

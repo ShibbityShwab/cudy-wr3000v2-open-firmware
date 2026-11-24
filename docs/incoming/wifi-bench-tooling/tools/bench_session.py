@@ -169,7 +169,7 @@ MODES = {
         require_ready_for_announce=False, observe_s=22.0),
     "patched": ModeSpec(
         "patched",
-        "clean-room boot with a patched FIRMWARE.<PATCH>.bin (PD/PD2) + observables",
+        "clean-room boot with a patched FIRMWARE.<PATCH>.bin (PD2/PD3/PD3B) + observables",
         uses_module=True, fw_role="patched", read_only=False, needs_blocks=True,
         needs_attended=True, transport="ssh", announce=False,
         strict_boot_gate=False, require_ready_option=False,

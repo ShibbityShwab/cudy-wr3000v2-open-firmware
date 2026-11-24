@@ -25,14 +25,18 @@ committed; patched firmware copies stay local (default /tmp/hi5622-patched).
    per-window sha16, CPU-address capstone decode check, full-image verify of an
    existing patched copy, manifest. On the local pinned blob it reproduces:
    PD = f52a9322c575a8cd... (matches the 2026-11-24 16:10 ledger PD run),
-   PD2 = 7a6918077af91601... (matches the pd2 lane's expected image sha).
+   PD2 = 7a6918077af91601... (matches the pd2 lane's expected image sha and
+   is byte-identical between both independent builders),
+   PD3 = eea9f2ff9345dc8d... and PD3B = ef0683dbc1a8b3b7... (match the pd2
+   lane's PD3/PD3B expected images). All committed *.recipe.json files in
+   ../wifi-irq-unmask/ are auto-discovered; no vendor bytes are committed.
 3. **Safety guards.** bench_guards.py encodes the hard rules from
    BENCH-FACTS/LESSONS and the 2026-11-24 GP8/PD sessions, and the generated
    device script is statically audited before deployment. The two GP8-era
    bugs (0xCECE during ROM boot; absolute fw_path) are structurally
    impossible for this tooling.
-4. **Device-free selftest:** 175/175 checks PASS (tools/run-selftest.sh), plus
-   23/23 for the builder's own --selftest with capstone.
+4. **Device-free selftest:** 177/177 checks PASS (tools/run-selftest.sh), plus
+   27/27 for the builder's own --selftest with capstone.
 
 ---
 
@@ -166,9 +170,18 @@ stores, UART writes, rmmod and retry loops are violations.
     }
 
 Validation before a byte is written: source pin (sha256+len), per-segment
-bounds/header protection/overlap/length, per-window source sha16 against the
-CURRENT image (so layered recipes must hash their parent's output), capstone
-decode comparison at the CPU address, unchanged image length. Files are only
+bounds/overlap/length and image-header policy, per-window source sha16 against
+the CURRENT image (so layered recipes must hash their parent's output), capstone
+decode comparison at the CPU address, unchanged image length.
+
+Image-header policy (narrowed 2026-11-24 for PD3 after independently checking
+the pinned image): file 0x00/0x04 are the live entry A/B words and are always
+refused; file 0x08..0x4F is the reserved exception-record area (the pinned
+image has zeros there and the first live handler word is at 0x50) and is
+patchable only while the source bytes are all zero; any segment that would
+cross from the reserved area into the live handler table is refused. This lets
+the pd2 lane's PD3 use the only file-backed region with no branch target and no
+PC-relative literal load, while entry A/B and the handler table stay protected. Files are only
 written outside the git repositories (repo-rooted /docs or /opensource output
 is refused; gitignored build/ requires the explicit --allow-repo-build flag).
 A manifest (hi5622-fw-patch-manifest/1) records the source pin, each build's
@@ -182,12 +195,25 @@ rebuilds the recipe in memory and compares the whole 928,920 B image;
 | --- | --- | --- | --- | --- |
 | PD | file 0x7610 len 6 + 0x916A len 4 | FIRMWARE.PD.bin (928,920 B) | f52a9322c575a8cd3a24c232d98586879a79edeeb8d6c16cc1aad8d506e1435d | matches the ledger's 2026-11-24 16:10 PD bench image prefix f52a9322 |
 | PD2 | file 0x7432 len 62 + 0x916A len 4 | FIRMWARE.PD2.bin (928,920 B) | 7a6918077af91601f00901ad46b47f5ea36956b03faeda9d742ecc384a1b7728 | matches the pd2 lane's expected image sha exactly; independently reproduced byte-identically by both builders (wifi-irq-unmask/REPORT-PD2.md section 8, opensource 5e64bfd) |
+| PD3 | file 0x0C len 64 (reserved exception-record area) + 0x916A len 4 | FIRMWARE.PD3.bin (928,920 B) | eea9f2ff9345dc8d16badd65e77a5f8b82cf58740b7203239838259adc3905ce | matches the pd2 lane's expected PD3 image sha; header window verified RAZ in the pinned source, entry words and 0x50 handler table untouched (REPORT-PD3.md section 3.3) |
+| PD3B | file 0x916A len 8 + 0xCC1B0 len 4 (data word) | FIRMWARE.PD3B.bin (928,920 B) | ef0683dbc1a8b3b74e99f27111105538e8a437e70a8fad2a9103ae291cb745f2 | matches the pd2 lane's expected PD3B image sha (no-cave event-raise alternative) |
 
-Both are byte-for-byte verify-PASS against their recipes and manifest. Two
-builder bugs found and fixed while integrating the pd2 recipe: capstone decode
-must run at the CPU address (file + 0x40000) for the recipe expect strings, and
-the real 6.18.60 .ko carries parameters as parmtype=name:type (not parm=), so
-the module validator now accepts both forms.
+All four are byte-for-byte verify-PASS against their recipes and manifest
+(--verify-manifest: 4 build(s), 0 failure(s)). Builder fixes made while
+integrating the pd2 recipes: capstone decode must run at the CPU address
+(file + 0x40000) for the recipe expect strings; the real 6.18.60 .ko carries
+parameters as parmtype=name:type (not parm=), so the module validator accepts
+both forms; and the image-header guard was narrowed from a blanket file < 0x40
+refusal to the entry-word / RAZ-only-reserved-area / live-handler-table policy
+needed by PD3 (see 3.1).
+
+PD2-A bench context (REPORT-PD3.md sections 1-2, recorded here for the bench
+hand-off): the PD2 cave at CPU 0x47432 (entry A config-3 block) is LIVE on our
+boots - the bench run ended at page word 0x6F, i.e. entry A died before its
+handshake - while PD1 (same epilogue hunk, no cave) booted golden. PD3 is the
+same guarded poll stub relocated to the unreachable reserved header area and is
+the recommended next patched-firmware session; PD3B is the no-cave event-raise
+alternative for the event-controller question.
 
 ---
 
@@ -217,19 +243,21 @@ the module validator now accepts both forms.
 
     cd opensource/docs/incoming/wifi-bench-tooling
     ./tools/run-selftest.sh
-    -> wifi-bench-tooling selftest: 175/175 checks PASS
+    -> wifi-bench-tooling selftest: 177/177 checks PASS
 
     PY=../../../../.provision-venv/bin/python   # has capstone
     $PY tools/fw_patch_builder.py --selftest
-    -> fw_patch_builder selftest: 23/23 PASS
+    -> fw_patch_builder selftest: 27/27 PASS
 
-    $PY tools/fw_patch_builder.py --build PD --build PD2 --out /tmp/hi5622-patched
+    $PY tools/fw_patch_builder.py --build PD --build PD2 --build PD3 --build PD3B --out /tmp/hi5622-patched
     $PY tools/fw_patch_builder.py --verify-manifest /tmp/hi5622-patched/manifest.json
-    -> PASS PD:  sha256 f52a9322...
-    -> PASS PD2: sha256 7a691807...
-    -> verify-manifest: 2 build(s), 0 failure(s)
+    -> PASS PD:   sha256 f52a9322...
+    -> PASS PD2:  sha256 7a691807...
+    -> PASS PD3:  sha256 eea9f2ff...
+    -> PASS PD3B: sha256 ef0683db...
+    -> verify-manifest: 4 build(s), 0 failure(s)
 
-The 175 checks cover: forbidden CA/devmem census/release/CECE latch and clobber
+The 177 checks cover: forbidden CA/devmem census/release/CECE latch and clobber
 semantics/H2D gate; fw_path and firmware pin validation; ELF module validation
 (including non-ARM, license, name, vermagic, missing fw_path); attribute
 policy; static script audit positive+negative cases (forbidden addresses,
@@ -250,11 +278,15 @@ CLI; and the "write session without --attended is refused" gate.
 1. Human at the bench; recovery door armed; read-only UART capture running.
 2. Build the instrument .ko (wifi-d2h-direct/tools/build.sh) and the patched
    image if needed ($PY tools/fw_patch_builder.py --build PD2).
-3. Start with our-golden (record the evidence dir), then patched PD2 / h2d as
-   separate sessions (one idea per session). PD2 pass/fail observables are
-   specified in wifi-irq-unmask/REPORT-PD2.md section 5.5: golden page/state/mask,
-   then after exactly one H2D SR announce out[0] 0x8->0, out[5]=1, out[2]=8 - the
-   patched/h2d modes capture exactly those readbacks in the report.
+3. Start with our-golden (record the evidence dir), then a patched session as
+   one idea: PD3 (recommended - guarded poll stub in the unreachable header
+   record area; PD2's cave is live on our boots, see 3.2) or PD3B (no-cave
+   event-raise alternative). Deploy with --fw-file /tmp/hi5622-patched/FIRMWARE.PD3.bin
+   --fw-manifest /tmp/hi5622-patched/manifest.json --fw-path hi_wifi/FIRMWARE.PD3.bin.
+   PD2 pass/fail observables are in wifi-irq-unmask/REPORT-PD2.md section 5.5 and
+   PD3/PD3B observables in REPORT-PD3.md: golden page/state/mask, then after
+   exactly one H2D SR announce out[0] 0x8->0, out[5]=1, out[2]=8 - the patched/h2d
+   modes capture exactly those readbacks in the report.
 4. After the run: read summary.json + REPORT.md; the classifier already names
    the expected PD observables (data-abort bit, page bit14 missing, page
    clobber, out[1] bit2) and the h2d result. Power-cycle after a PD image run

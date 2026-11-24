@@ -58,6 +58,15 @@ FW_STEM = "FIRMWARE"
 # Image regions worth warning about if a recipe touches them.
 HANDSHAKE_PAGE_FILE = G.CPU_HANDSHAKE_PAGE - CPU_BASE   # 0x17F000
 
+# Image header protection (REPORT-PD3.md section 3.3, independently checked
+# against the pinned blob): file 0x00/0x04 are the live entry A/B addresses and
+# must never be patched; file 0x08..0x4F is the reserved exception-record area
+# (all zero / RAZ in the pinned vendor image: mask halfword at 0x08, staged
+# frame from 0x0C); the live exception handler table starts at 0x50.  A recipe
+# may use the reserved area only while the source bytes there are all zero.
+ENTRY_WORDS_END = 0x08
+EXCP_RECORD_END = 0x50
+
 
 # ---------------------------------------------------------------------------
 # Built-in recipes (all host-only patch data; no vendor bytes)
@@ -145,11 +154,19 @@ def normalize_recipe(doc: dict, origin: str = "built-in") -> dict:
             raise G.GuardError("recipe-segment", "%s: %s seg %d: %s" % (origin, name, i, e)) from None
         if ln <= 0 or ln > 4096:
             raise G.GuardError("recipe-segment", "%s: %s seg %d bad len %d" % (origin, name, i, ln))
-        if off < 0x40:
+        if off < ENTRY_WORDS_END:
             raise G.GuardError(
-                "recipe-segment",
-                "%s: %s seg %d at file 0x%X touches the image header (refused)"
+                "recipe-entry-protected",
+                "%s: %s seg %d at file 0x%X touches the image entry words "
+                "(file 0x00/0x04 are live entry A/B addresses; refused)"
                 % (origin, name, i, off),
+            )
+        if off < EXCP_RECORD_END and off + ln > EXCP_RECORD_END:
+            raise G.GuardError(
+                "recipe-excp-record-cross",
+                "%s: %s seg %d (file 0x%X+%d) crosses out of the reserved "
+                "exception-record area into the live handler table at file 0x%X "
+                "(refused)" % (origin, name, i, off, ln, EXCP_RECORD_END),
             )
         patched_hex = seg.get("patched_hex")
         if not isinstance(patched_hex, str):
@@ -232,16 +249,25 @@ def load_recipe_files(paths: list[str]) -> dict[str, dict]:
     return out
 
 
-# Recipe files committed by sibling lanes that this builder should pick up
-# automatically (data only; no vendor bytes).  PD2 is the wifi-irq-unmask /
-# pd2 lane's corrected-context patch (task-91, commit d3416f1).
-DEFAULT_RECIPE_FILES = [
-    os.path.join(TOOLDIR, "..", "..", "wifi-irq-unmask", "PD2.recipe.json"),
+# Recipe directories committed by sibling lanes that this builder picks up
+# automatically (data only; no vendor bytes).  Today the wifi-irq-unmask /
+# pd2 lane holds PD2, PD3 and PD3B; any future *.recipe.json dropped there is
+# loaded deterministically (sorted) without a --recipe-file argument.
+LANE_RECIPE_DIRS = [
+    os.path.join(TOOLDIR, "..", "..", "wifi-irq-unmask"),
 ]
 
 
 def default_recipe_files() -> list[str]:
-    return [os.path.normpath(p) for p in DEFAULT_RECIPE_FILES if os.path.isfile(p)]
+    files: list[str] = []
+    for d in LANE_RECIPE_DIRS:
+        d = os.path.normpath(d)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if name.endswith(".recipe.json"):
+                files.append(os.path.normpath(os.path.join(d, name)))
+    return files
 
 
 def all_recipes(paths: list[str]) -> dict[str, dict]:
@@ -309,6 +335,15 @@ def apply_recipes(source: bytes, recipes: dict[str, dict], names: list[str]) -> 
                             % (name, n2, off, ln, o2, l2),
                         )
                 src = bytes(out[off:off + ln])
+                if off < EXCP_RECORD_END and src != b"\x00" * ln:
+                    raise G.GuardError(
+                        "recipe-window-not-reserved",
+                        "%s seg file 0x%X+%d targets the reserved image-header "
+                        "exception-record area (file 0x%X..0x%X) but the source "
+                        "bytes there are not all zero; this window is only "
+                        "patchable while it is RAZ in the pinned image"
+                        % (name, off, ln, ENTRY_WORDS_END, EXCP_RECORD_END - 1),
+                    )
                 got = _sha16(src)
                 if got != seg["source_sha16"]:
                     raise G.GuardError(
@@ -348,6 +383,10 @@ def recipe_warnings(source: bytes, segments: list[dict], out: bytes) -> list[str
         warns.append("patched image length changed (refused elsewhere)")
     for seg in segments:
         off = seg["file"]
+        if off < EXCP_RECORD_END:
+            warns.append("segment at file 0x%X uses the reserved image-header "
+                         "exception-record area (source was RAZ; entry A/B and "
+                         "the 0x50 handler table stay untouched)" % off)
         if HANDSHAKE_PAGE_FILE <= off < HANDSHAKE_PAGE_FILE + 0x10:
             warns.append("segment at file 0x%X touches the ROM<->image handshake page image window" % off)
         if seg["patched_hex"] == source[off:off + seg["len"]].hex():
@@ -713,8 +752,35 @@ def selftest() -> int:
     expect_err("window sha16", lambda: apply_recipes(src2, {"X": normalize_recipe(bad2, "synthetic")}, ["X"]),
                "recipe-window-mismatch")
     bad3 = dict(rec_doc)
-    bad3["segments"] = [dict(rec_doc["segments"][0], file=0x10)]
-    expect_err("header window refused", lambda: normalize_recipe(bad3, "synthetic"), "recipe-segment")
+    bad3["segments"] = [dict(rec_doc["segments"][0], file=0x04)]
+    expect_err("entry word refused", lambda: normalize_recipe(bad3, "synthetic"),
+               "recipe-entry-protected")
+    bad3b = dict(rec_doc)
+    bad3b["segments"] = [{"file": 0x4C, "len": 8,
+                          "source_sha16": _sha16(blob[0x4C:0x54]),
+                          "patched_hex": "00bf00bf00bf00bf", "isa": "thumb"}]
+    expect_err("crosses live handler table",
+               lambda: normalize_recipe(bad3b, "synthetic"), "recipe-excp-record-cross")
+    # reserved exception-record area: patchable only while the SOURCE is RAZ
+    bad3c = dict(rec_doc)
+    bad3c["segments"] = [{"file": 0x10, "len": 2,
+                          "source_sha16": _sha16(blob[0x10:0x12]),
+                          "patched_hex": "00bf", "isa": "thumb"}]
+    expect_err("reserved area with non-zero source",
+               lambda: apply_recipes(blob, {"X": normalize_recipe(bad3c, "synthetic")}, ["X"]),
+               "recipe-window-not-reserved")
+    # positive: zero-filled reserved window may be used (the PD3 pattern)
+    zero_blob = bytearray(blob)
+    zero_blob[0x10:0x18] = b"\x00" * 8
+    zero_blob = bytes(zero_blob)
+    rec_z = dict(rec_doc)
+    rec_z["segments"] = [{"file": 0x10, "len": 8,
+                          "source_sha16": _sha16(zero_blob[0x10:0x18]),
+                          "patched_hex": "0b4f81b03b68002b", "isa": "thumb"}]
+    patched_z, segs_z = apply_recipes(zero_blob,
+                                      {"Z": normalize_recipe(rec_z, "synthetic")}, ["Z"])
+    ck("reserved area: RAZ source allowed (PD3 pattern)",
+       patched_z[0x10:0x18] == bytes.fromhex("0b4f81b03b68002b") and len(segs_z) == 1)
     bad4 = dict(rec_doc)
     bad4["segments"] = [rec_doc["segments"][0], dict(rec_doc["segments"][1], file=0x101)]
     expect_err("overlap", lambda: normalize_recipe(bad4, "synthetic"), "recipe-overlap")
@@ -803,6 +869,15 @@ def selftest() -> int:
         sys.argv = sys_argv
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # committed sibling-lane recipes are auto-discovered (no --recipe-file)
+    lane_dir = os.path.normpath(os.path.join(TOOLDIR, "..", "..", "wifi-irq-unmask"))
+    if os.path.isdir(lane_dir):
+        names = []
+        for f in default_recipe_files():
+            names.append(json.load(open(f)).get("name"))
+        ck("discovery: PD2/PD3/PD3B recipes auto-loaded",
+           {"PD2", "PD3", "PD3B"}.issubset(set(names)))
 
     # optional capstone sanity
     dec = decode_insn("thumb", b"\x00\x20")

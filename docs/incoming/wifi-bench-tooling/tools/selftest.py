@@ -426,6 +426,15 @@ def test_guards(tmp: str) -> None:
 # B. fw_patch_builder CLI tests
 # ---------------------------------------------------------------------------
 def test_fw_builder(tmp: str) -> None:
+    lane_dir = os.path.normpath(os.path.join(TOOLDIR, "..", "..", "wifi-irq-unmask"))
+    if os.path.isdir(lane_dir):
+        names = [json.load(open(f)).get("name")
+                 for f in FWB.default_recipe_files()]
+        ck("builder: sibling-lane recipes auto-discovered",
+           {"PD2", "PD3", "PD3B"}.issubset(set(names)), str(names))
+    ck("builder: PD3/PD3B fw names are deployable",
+       G.is_patched_fw_name("FIRMWARE.PD3.bin")
+       and G.is_patched_fw_name("FIRMWARE.PD3B.bin"))
     r = subprocess.run([sys.executable, os.path.join(TOOLDIR, "fw_patch_builder.py"),
                         "--selftest"], capture_output=True, text=True, timeout=120)
     ck("fw builder --selftest rc=0", r.returncode == 0, r.stdout.strip()[-200:])
