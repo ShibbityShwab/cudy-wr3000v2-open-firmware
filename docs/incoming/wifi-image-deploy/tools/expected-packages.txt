@@ -1,0 +1,11 @@
+# T0 deploy set - authoritative apk identities (sha256 recorded by the
+# wifi-image-integration build lane; cross-checked against
+# ../wifi-image-integration/BUILD-NOTES.md and the artifacts SHA256SUMS).
+# columns: name version apk_size apk_sha256 installed_size
+iw 6.17-r1 52997 9b46713fb5a0e866e7b1fb919f2a30eca4bc01d9aeabf49fa50b20faedd69f08 116868
+iwinfo 2026.05.26~66bdd1a0-r1 8322 5badc21509df6ba6df109697879cf28960315c8ceb19aabb258f79564ae5de23 16922
+libiwinfo20230701 2026.05.26~66bdd1a0-r1 25768 d1178900f817c08c232bf4a704e5b883f02c1f67dbe93e41af9f4b8132ce3f55 57408
+libiwinfo-data 2026.05.26~66bdd1a0-r1 3925 3bb216a4f2ae69a27cfe86daf97c597b92daa4f0fca68b00c0d842076d933320 18264
+wireless-regdb 2026.09.03-r1 3440 afd292e0c0947aaa5497e52b2a9e9484e690a9abfef1153c36d9a06143a758a1 6360
+kmod-hi5622-cfg80211 6.18.60-r1 183520 716fd384cc7ad58b7c3e4000046addce7c76b3223fe3b8d5b05600fb46ed624c 406061
+kmod-hi5622-wifi 6.18.60-r1 59302 aac8f3fa0f230ac19f94cb010c6f15e443a52e35b095a7e54908b2185eaf9aef 133920

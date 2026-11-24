@@ -1,0 +1,13 @@
+# T0 installed-file manifest: every payload file the 7 packages add to the
+# built bench-image rootfs (kernel slice 13e81214 / container df6a78c3). The
+# installed bytes were verified identical to this list by the host apk
+# transaction simulation (tools/verify-apks-host.sh), so this is the on-device
+# read-back list too.
+# columns: path sha256 size
+usr/sbin/iw e0f4ba8cb1dd8f748924f7333475f6d4120bc0b9290d1cf67df1be8687accb23 116855
+usr/bin/iwinfo 88fb49430a9a0b5095f10eacf1ea63a6c8906b450a71b01bfebfc01ba959cb4c 16906
+usr/lib/libiwinfo.so.20230701 aa35d698dfb5ec20ff343bde48f10f6cc055aeaeda62630f4615847bc3c2a806 57377
+usr/share/libiwinfo/devices.txt dcaaa350ccc73b16341fc792d712f5b45c546344c3dc7457d141c5f2b3a804f3 18231
+lib/modules/6.18.60/cfg80211.ko 11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a 406028
+lib/modules/6.18.60/hi5622_wifi.ko e0608fa6e1489035d58febce279a13baf6988a5664b0404e1135d0b53d124094 133884
+lib/firmware/regulatory.db c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d 6332

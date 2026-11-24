@@ -1,0 +1,81 @@
+== T0 host apk-transaction simulation ==
+artifacts: /home/shibbityshwab/wifi-image-integration-artifacts
+tree     : /home/shibbityshwab/openwrt-lab-selectorfix-img
+work     : /tmp/t0-verify.KIA88D
+
+ok   expected-packages.txt sha256
+ok   expected-files.txt sha256
+ok   iw apk sha256
+ok   iwinfo apk sha256
+ok   libiwinfo20230701 apk sha256
+ok   libiwinfo-data apk sha256
+ok   wireless-regdb apk sha256
+ok   kmod-hi5622-cfg80211 apk sha256
+ok   kmod-hi5622-wifi apk sha256
+ok   container sha256
+
+-- reconstructing the built-image rootfs from its bytes --
+ok   container kernel member sha256 (validated slice)
+ok   built rootfs installed package count (81 = 74 + 7)
+ok   /usr/sbin/iw sha256 in built image
+ok   /usr/bin/iwinfo sha256 in built image
+ok   /usr/lib/libiwinfo.so.20230701 sha256 in built image
+ok   /usr/share/libiwinfo/devices.txt sha256 in built image
+ok   /lib/modules/6.18.60/cfg80211.ko sha256 in built image
+ok   /lib/modules/6.18.60/hi5622_wifi.ko sha256 in built image
+ok   /lib/firmware/regulatory.db sha256 in built image
+
+-- step 1: delete the 7 packages from the built rootfs (reconstruct the pre-T0 state) --
+ok   baseline installed package count (74)
+ok   baseline removes exactly the 7 package payloads
+ok   iw absent in the baseline
+ok   iwinfo absent in the baseline
+ok   libiwinfo20230701 absent in the baseline
+ok   libiwinfo-data absent in the baseline
+ok   wireless-regdb absent in the baseline
+ok   kmod-hi5622-cfg80211 absent in the baseline
+ok   kmod-hi5622-wifi absent in the baseline
+
+-- step 2: apk add the exact seven artifacts (device flags, scripts skipped on host) --
+ok   apk add rc
+ok   post-install package count (81)
+ok   install payload tree byte-identical to the built image
+ok   iw installed version
+ok   iwinfo installed version
+ok   libiwinfo20230701 installed version
+ok   libiwinfo-data installed version
+ok   wireless-regdb installed version
+ok   kmod-hi5622-cfg80211 installed version
+ok   kmod-hi5622-wifi installed version
+ok   /usr/sbin/iw installed sha256
+ok   /usr/bin/iwinfo installed sha256
+ok   /usr/lib/libiwinfo.so.20230701 installed sha256
+ok   /usr/share/libiwinfo/devices.txt installed sha256
+ok   /lib/modules/6.18.60/cfg80211.ko installed sha256
+ok   /lib/modules/6.18.60/hi5622_wifi.ko installed sha256
+ok   /lib/firmware/regulatory.db installed sha256
+ok   installed db carries the kmod kernel dependency 6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+
+-- step 3: re-run the install (idempotency) --
+ok   second apk add rc (no-op)
+ok   second apk add left the payload unchanged
+
+-- step 4: apk del rollback back to the pre-T0 state --
+ok   apk del rc
+ok   rollback package count (74)
+ok   rollback payload tree byte-identical to the baseline
+ok   /usr/sbin/iw removed by rollback
+ok   /usr/bin/iwinfo removed by rollback
+ok   /usr/lib/libiwinfo.so.20230701 removed by rollback
+ok   /usr/share/libiwinfo/devices.txt removed by rollback
+ok   /lib/modules/6.18.60/cfg80211.ko removed by rollback
+ok   /lib/modules/6.18.60/hi5622_wifi.ko removed by rollback
+ok   /lib/firmware/regulatory.db removed by rollback
+
+-- step 5: negative test - mismatched installed kernel must fail closed --
+ok   mismatched kernel package rejects the kmod install (apk rc=23)
+ok   negative-test log names the unsatisfied kernel= constraint
+ok   control: add on the rolled-back baseline succeeds
+
+== verify-apks-host: 61 passed, 0 failed ==
+RESULT: PASS - host-simulated T0 install/rollback is byte-identical; kernel-mismatch gate fails closed
