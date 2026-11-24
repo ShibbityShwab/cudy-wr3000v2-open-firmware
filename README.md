@@ -1,144 +1,146 @@
-# WR3000 V2.0 open firmware toolkit
+# Cudy WR3000 v2.0 - clean-room OpenWrt + Wi-Fi bring-up (curated public half)
 
-> **Snapshot note (2026-11-17).** This is the published half, not the live status.
-> The live status is the parent repository's `STATUS.md`; the procedure is its
-> `RUNBOOK.md`. The score table below was measured 2026-10-12 and is kept as history.
-> **Publication status: NOT READY** - the publish checklist is
-> `docs/PUBLISH-READINESS.md`. The vendor `.o` files that were tracked here were untracked on
-> 2026-11-17, but they remain in the published history until it is purged.
->
-> **Design layer (2026-11-18).** The upstream design layer exists as host-validated drafts, not
-> a working target: the target/DTS/image plan is [`docs/TARGET-DESIGN.md`](docs/TARGET-DESIGN.md),
-> the phase view is [`docs/ROADMAP-OPENWRT.md`](docs/ROADMAP-OPENWRT.md), the optional hybrid
-> vendor-lane spec is [`docs/VENDOR-SKB-BRIDGE-PORT.md`](docs/VENDOR-SKB-BRIDGE-PORT.md), the
-> remaining-block plans are [`docs/REMAINING-DRIVERS.md`](docs/REMAINING-DRIVERS.md),
-> [`docs/LSW-SPEC.md`](docs/LSW-SPEC.md), [`docs/PIE-DATAPATH.md`](docs/PIE-DATAPATH.md) and
-> [`docs/MISC-SOC-BLOCKS.md`](docs/MISC-SOC-BLOCKS.md), the first live silicon inventory (600
-> read-only register/table reads) is [`docs/INVENTORY-2026-11-18.md`](docs/INVENTORY-2026-11-18.md),
-> the A/B selector contract is reconstructed
-> in [`docs/SELECTOR-0x21.md`](docs/SELECTOR-0x21.md), the GPL request record (kept for
-> provenance; not a project gate) is [`docs/GPL-REQUEST.md`](docs/GPL-REQUEST.md), and the
-> first-install path from stock firmware to a generated image is designed host-side in
-> [`docs/FIRST-INSTALL.md`](docs/FIRST-INSTALL.md) (fail-closed tooling; never executed on
-> hardware).
->
-> The first-pass files are in [`target-skeleton/`](target-skeleton/README.md) (status
-> UNTESTED/SCHEMATIC), indexed by [`docs/TARGET-SKELETON.md`](docs/TARGET-SKELETON.md). Its target
-> layout was accepted by OpenWrt main's `make defconfig` and `make target/linux/prepare`; the
-> 001-017 patch series builds the full `linux-6.18.60` kernel with OpenWrt's own GCC 14.4.0
-> toolchain and the correct `0x80608000` load/entry address; the FIP trailer format is decoded
-> with a byte-exact generator ([TRAILER-FORMAT](target-skeleton/docs/TRAILER-FORMAT.md)); and a
-> real target image now builds end-to-end (`make world` RC=0, host-only) with an A/B install path
-> and a boot-time running-pair recorder. **Nothing has been booted or flashed, several drivers are
-> refusing drafts, and publication is NOT READY** - see
-> [`docs/SKELETON-SMOKE.md`](docs/SKELETON-SMOKE.md) and the review-form
-> [`upstream/series-6.18/`](upstream/series-6.18/README.md).
 
-Tools, build recipes, and a black-box study for the **Cudy WR3000 V2.0** router
-(`WR3000V2-R116`, SoC HiSilicon **Hi5671Y**, platform `hsan luofu`, Wi-Fi **Hi5622V100** over PCIe,
-vendor kernel 5.10.201, OpenWrt 22.03.6 based vendor userland).
+This repository is the **curated public half** of a long-running reverse-engineering and
+clean-room bring-up project for the **Cudy WR3000 v2.0** router (PCB `WR3000V2-R116`, SoC
+HiSilicon **Hi5671YV200** "luofu", Wi-Fi **Hi5622V100** over PCIe, 128 MB NAND / 128 MB DDR3;
+the retail label may say "v1" but the PCB is the luofu v2 design - read
+[docs/INVENTORY-2026-11-18.md](docs/INVENTORY-2026-11-18.md) before any hardware work).
 
-This repository is intended to contain **only our own work**: scripts, documentation, analysis,
-and reverse-engineered kernel drivers. It must contain **no vendor binaries** (no `.ko/.o`,
-firmware blobs, calibration data, or extracted bootloader images), no firmware images, no keys and
-no credentials. See `NOTICE.md` and the publication checklist in `docs/PUBLISH-READINESS.md`
-(there is a history-purge step pending from 2026-11-17).
+Two tracks are deliberately kept apart:
 
-## Progress at a glance
+1. **Bench reversal + clean-room bring-up** - our kernel, our drivers, the vendor's closed
+   Wi-Fi firmware. "It works on our stack" is a bench result, not a release.
+2. **Upstream submission** - an OpenWrt target + kernel patch series. Today the platform
+   series is a real review-form candidate; the **Wi-Fi driver is not upstreamable** because
+   it needs the patched research firmware (see the honest limits below).
 
-Score = how far the artifact record proves a subsystem was carried (evidence-graded, no test suite).
-Measured **2026-10-12** against the record: 214 phase reports, 48 lab programs, 7 `lab/luofu-*`
-drivers. The full per-lane ledger with citations is in the parent repo's `PROGRESS.md` /
-`PROGRESS.html`.
+## Final state - what is hardware-validated (2026-11-27)
 
-| | score | since 10-11 |
+| area | state | evidence |
 | --- | --- | --- |
-| **REVERSAL** (reading the closed Wi-Fi stack) | **~68%** | unchanged - the wall is hardware |
-| **REBUILD** (our own kernel + our own OpenWrt) | **~39%** | **up from ~35%** |
-| **OVERALL** toward the goal (our kernel, our drivers, no vendor kernel) | **~53%** | **up from ~51%** |
+| Platform | our 6.18.60 kernel boots the board from flash with 2 CPUs (DTS loader hand-off fix), persistent UBIFS overlay, both PCIe RCs train, thermal sensor + cooling, first real Ethernet traffic from the PIE/GEMAC path | parent notebook `EVIDENCE-INDEX.md`; [docs/SKELETON-SMOKE.md](docs/SKELETON-SMOKE.md), [docs/SMP-RE.md](docs/SMP-RE.md) |
+| Wi-Fi transport + boot protocol | our clean-room PCIe/ETE host boots the Hi5622V100 firmware to the vendor-equivalent golden state, HCC duplex + ready handshake + six-message calibration | [docs/incoming/wifi-driver-clean/REPORT.md](docs/incoming/wifi-driver-clean/REPORT.md), [docs/incoming/wifi-irq-unmask/](docs/incoming/wifi-irq-unmask/) |
+| cfg80211 + scan | wiphy + VAP lifecycle; firmware scan returns real results decoded into cfg80211 BSS entries (12 in the first full decode; 13/13 channel coverage needs the long-window session) | [docs/incoming/wifi-re-report/REPORT.md](docs/incoming/wifi-re-report/REPORT.md), [docs/incoming/wifi-scan-complete/README.md](docs/incoming/wifi-scan-complete/README.md) |
+| **Live Wi-Fi AP** | **`wlan0: AP-ENABLED`**, SSID `cudy-ap-test`; the four-message AP-start sequence (vap_add 48 B -> vap_start 40 B -> ap_ssid 64 B -> ap_cfg 184 B) is consumed by the firmware; runs both on the /tmp-deployed module and on the flashed image with native kmods, and persists for minutes (a boot-absent firmware D2H family, `g1 id0x23` 24 B, appears only after the AP start - indirect evidence, not an on-air proof) | [docs/incoming/wifi-ap-start/HOSTAPD-BRINGUP.md](docs/incoming/wifi-ap-start/HOSTAPD-BRINGUP.md), [docs/incoming/wifi-hostapd-deploy/README.md](docs/incoming/wifi-hostapd-deploy/README.md) |
+| MAC data plane | TXQ-table address sync + TX/RX rings set up; first frame published to the MAC TX ring (**POST-ONLY**) - also with the combined AP+DP module; the MAC consumer does not advance rptr, so TX completion/RX belongs to the open MAC-TX-engine work | [docs/incoming/wifi-dp-air/LADDER-F-AIR.md](docs/incoming/wifi-dp-air/LADDER-F-AIR.md) |
+| Automation | **one command runs the whole bring-up matrix**: boot / C2 calibration / D1 VAP / D2 scan / E1 data-plane = **all PASS** (C2 54/54, D1 21/21, D2 real results, E1 37/37) | [docs/incoming/wifi-bench-tooling/README.md](docs/incoming/wifi-bench-tooling/README.md) |
+| Image | bench image **reproduced byte-for-byte** (container `df6a78c3`, kernel slice `13e81214`, slot `1794a531`, rootfs UBI `62344e80`), ABI-correct rootfs (kernel pin `6f995278`), native `iw` 6.17 / `iwinfo` / `wireless-regdb` / hostapd package set, flashed attended and booted with native `modprobe` from `/lib/modules`; **self-contained final image** built host-only (container `ae5e28bf`, rootfs UBI `ff9f3e1c`, combined driver + hostapd + ucode/wifi-scripts, kernel slice unchanged) - the next flash target | [docs/incoming/wifi-abi-image/FLASH-RUNBOOK.md](docs/incoming/wifi-abi-image/FLASH-RUNBOOK.md), [docs/incoming/wifi-image-integration/README.md](docs/incoming/wifi-image-integration/README.md) |
+| Publication/upstream | platform review-form series 001-026 validated (apply/compile/checkpatch); publication checklist is **not clean** (history purge pending, vendor objects in old history, link/license issues) | [docs/incoming/wifi-upstream-final/PUBLICATION-CHECKS.md](docs/incoming/wifi-upstream-final/PUBLICATION-CHECKS.md), [docs/PUBLISH-READINESS.md](docs/PUBLISH-READINESS.md), [upstream/series-6.18/README.md](upstream/series-6.18/README.md) |
 
-> **The headline fact, and it is not a percentage:** our own 5.10 kernel booted a generic
-> `armsr/armv7` OpenWrt 25.12.5 userspace on this board (2026-10-10; ledger PHASE 50em/50en).
-> That proves the userspace handoff, not a device target: there is still no OpenWrt target, DTS,
-> image recipe, or driver series for this board, and the Wi-Fi/switch/GPL blockers stand. What is
-> left is still substantial engineering, not polish.
+Claim-by-claim evidence: the Wi-Fi umbrella report and its index
+([REPORT.md](docs/incoming/wifi-re-report/REPORT.md),
+[EVIDENCE-INDEX.md](docs/incoming/wifi-re-report/EVIDENCE-INDEX.md), EV-001..EV-277 at report
+v4 + the residual EV-278..EV-281 rows in [EVIDENCE-REFRESH.md](docs/incoming/wifi-closeout/EVIDENCE-REFRESH.md)), the
+lane map in [LANE-INDEX.md](docs/incoming/wifi-closeout/LANE-INDEX.md), and the parent
+notebook's ledger (`mem-entries.md`, newest dated entry wins). The host-only verifier suite
+summary is [TEST-MATRIX.md](docs/incoming/wifi-closeout/TEST-MATRIX.md).
 
-**Done / strong:** the whole Wi-Fi stack is *read* - firmware disassembled+symbolised, register/BAR/ring
-maps, the 414-entry `alg` API, calibration store, HCC protocol (77 handlers), FMC/NAND spec. Our own
-`wifidrv` registers a wiphy + netdev, claims both endpoints, loads and releases the firmware CPU, and
-elicits the firmware's dialogue.
+## Honest limits (read these before quoting any success)
 
-**Blocked (the hardware wall):** the Wi-Fi chip's interrupt delivery to the GIC is device-internal -
-JTAG (no hardware) and the vendor source (silent) are the only instruments, both unavailable
-(`docs/phase48/host-side-closed.md`).
+1. **The Wi-Fi path requires the PD4-patched research firmware.** The vendor blob's mailbox
+   dispatch is not programmable host-side; the patched stub is consume-only (the live handler
+   table is empty; the working duplex runs through the non-mailbox ETE/polled path). PD4 is a
+   research instrument and must never ship. See
+   [docs/incoming/wifi-fw-audit/REPORT.md](docs/incoming/wifi-fw-audit/REPORT.md).
+2. **There is no upstreamable Wi-Fi driver yet.** The clean-room driver is a research artifact;
+   the vendor GPL source request is unanswered
+   ([docs/GPL-REQUEST.md](docs/GPL-REQUEST.md)). Do not present the Wi-Fi work as a submission.
+3. **The AP milestone is a host-side "AP-ENABLED".** Beacon-on-air, client association and
+   WPA2 have not been verified with an external client (no second device on the bench yet);
+   the post-AP firmware event family is indirect evidence only. The MAC TX frame is POST-ONLY
+   on both the data-plane module and the combined AP+DP module: the host publishes correctly
+   but the MAC consumer does not advance rptr - the vendor TX-engine start/config (MAC/PIE/EQM
+   port setup or a firmware TX-queue start) is [U].
+4. **The bench is attended.** Flashing and any device action need hands on the box, a ready
+   recovery door and the fail-closed tooling; there is no remote/automatic fire path. The LAN
+   switch/PIE drivers belong to the target patch series, not to a release.
+5. **Publication policy is binding:** no vendor binaries, firmware blobs, ROM/calibration bytes
+   or secrets in tracked text; the ledger is append-only; the curated repos are the publish
+   surface. The pre-2026-11-17 public history is **not clean** and still needs a purge
+   ([docs/PUBLISH-READINESS.md](docs/PUBLISH-READINESS.md),
+   [docs/PUBLISH-PURGE-RUNBOOK.md](docs/PUBLISH-PURGE-RUNBOOK.md)); see also
+   [NOTICE.md](NOTICE.md).
 
-**The rebuild - a driver for every device-tree node that had none.** All seven `lab/luofu-*`
-drivers now carry real implementations: `luofu-pinctrl` applies the vendor's decoded `set_mux` RMW;
-`luofu-clk` has full gate/mux/PLL ops (its `set_parent` refuses `-EPERM` **by design** - writing
-`0x138` switches the CPU PLL source); `luofu-pcie` and `luofu-wifi` are read-only frames; and
-**four new drivers** landed: `luofu-gmac` (Ethernet MAC, phylink + net_device), `luofu-wdt`
-(watchdog, values read from the vendor DT binding), `luofu-mdio` (MDIO bus), `luofu-thermal`
-(temperature, conversion decoded and verified). Our device tree also gained the **thermal zone it
-was missing entirely** (`tvsensor@14900500` + `thermal-zones/cls0`).
+## How to reproduce (host-only first, bench second)
 
-**The build no longer needs CI.** The parent `RUNBOOK.md` builds locally on Linux with the ARM
-toolchain in `build/linux-kbuild/toolchain` (9/9 modules verified, `kernelb` budget PASS). The old
-Windows `tools\local-build.bat` wrapper is archived. GitHub Actions is used only to publish,
-never to check.
+**Prerequisites:** Linux host with the project's lab toolchain; a *local copy* of the vendor
+dumps/firmware needed by the reversible steps (gitignored, never published); for the bench
+itself the physical router, UART (read-only), the bench Ethernet link and a human.
 
-**Left, in order:** one fire to confirm the boot fix (the `rootfs_data` erase is now **opt-in**,
-`omo_mark` default 0, so a boot no longer writes 176 blocks inside a 180 s timer); the Ethernet path
-end to end (the MAC enable bit is staged behind the write guard); `luofu-mdio`'s bit positions
-(staged behind `layout_verified` - transfers refuse rather than guess); the internal switch driver;
-the Wi-Fi wall + data path.
+1. **Reproduce the analysis and host-side builds.** Each lane directory is self-contained:
+   `cd docs/incoming/<lane> && ./tools/build.sh` (or `./tools/selftest.sh`). Every lane's
+   `README.md` has its exact command line and expected counts. The close-out lane runs all of
+   them in one sweep: `docs/incoming/wifi-closeout/tools/run-host-suite.sh` (results in
+   [TEST-MATRIX.md](docs/incoming/wifi-closeout/TEST-MATRIX.md)).
+2. **Reproduce the umbrella analysis.** The Wi-Fi report is host-only: its verifier
+   (`docs/incoming/wifi-re-report/tools/verify_report.py`) re-checks the claim/evidence
+   structure; the report's `REPRODUCE.md` has the per-section details.
+3. **Reproduce the image.** The bench image builds from the OpenWrt tree with the target
+   skeleton: `docs/incoming/wifi-abi-image/tools/build-abi-image.sh` (serialized, restores the
+   shared tree, verifies from bytes) and
+   `docs/incoming/wifi-image-integration/tools/build-image.sh`. The self-contained final image
+   is the `78e30e8` revision of the integration lane (combined driver + hostapd packaged).
+   Expected hashes are in those lanes' BUILD-NOTES/REPORT and in the close-out evidence rows
+   ([EVIDENCE-REFRESH.md](docs/incoming/wifi-closeout/EVIDENCE-REFRESH.md) EV-279).
+4. **Run the bench matrix (attended only).**
+   `cd docs/incoming/wifi-bench-tooling && python3 tools/phase_matrix.py --phase all --yes-really --attended --reboot-between`
+   - it boots the patched firmware, runs the five phases with fail-closed gates, reboots
+   between phases and writes per-phase evidence. Read
+   [docs/incoming/wifi-bench-tooling/PHASES.md](docs/incoming/wifi-bench-tooling/PHASES.md)
+   first; every write is gated on the bench link, recovery readiness and attendance.
+5. **Run the AP.** The exact hostapd + module + PD4 firmware sequence and expected dmesg are
+   in [docs/incoming/wifi-ap-start/HOSTAPD-BRINGUP.md](docs/incoming/wifi-ap-start/HOSTAPD-BRINGUP.md)
+   (sec 8/12) with the package deploy in
+   [docs/incoming/wifi-hostapd-deploy/DEPLOY.md](docs/incoming/wifi-hostapd-deploy/DEPLOY.md).
+6. **Flash (optional, attended).** Only the ABI-correct image from step 3: read
+   [docs/incoming/wifi-abi-image/FLASH-RUNBOOK.md](docs/incoming/wifi-abi-image/FLASH-RUNBOOK.md)
+   end to end. Keep one slot stock; recovery is physical. The 2026-11-27 flash of
+   `df6a78c3` is the reference run (ledger 2026-11-27 06:30).
 
-## What is in here
+**Never:** write host-to-router UART bytes (the TX line is dead), blind-flash a slot, replace
+`/etc/rc.d/luofu` wholesale, or publish vendor bytes. Hazards:
+[docs/HAZARDS.md](docs/HAZARDS.md).
 
-| Path | What it is |
+## Repository layout
+
+| path | what it is |
 | --- | --- |
-| `docs/ROADMAP-OPENWRT.md` | The current roadmap to a complete open-source OpenWrt submission (2026-11-14). |
-| `docs/VENDOR-STACK-ON-MAINLINE.md` | The working recipe for loading the vendor's driver stack on our kernel (2026-11-14). |
-| `docs/FLASH-PLAN.md` | The verified build, flash, A/B slot switch and recovery procedure. |
-| `docs/DRIVER-BLACKBOX.md` | Black-box study of the vendor Wi-Fi stack: PCIe identity, driver symbol map, firmware load map, power/regulatory tables, the `iwpriv alg` dispatch chain, and the calibration surface. |
-| `docs/phase2/` | Detailed decodes: power and regulatory tables, the `alg` dispatch map, and their verification report. |
-| `docs/phase3/` | Full `alg` command table, kernel-trace wire capture, firmware-blob forensics (added by the analysis lanes; see the files for their current state). |
-| `docs/systime-rce-writeup.md` | The command-injection finding in the vendor `systime` page (also published as a gist). |
-| `docs/phase49/gic-view.md` | The GIC delivery study: the device reads its own GIC across the post-unmask ring tests, ADDENDUM 9 (2026-10-05) records the dual-sided INTA test (ROW 2 RING-PENDING-NOT-TAKEN plus VIRQ 207 owned), and ADDENDUM 13 records the max-parallel sweep: the deliberate storm with the bound tripped, the ladder ranking, the 209 witness source, and the folded CRG node with the `lab/luofu-clk/` skeleton. ADDENDUM 17 (2026-10-05) records the take probe: the IRQ-vector canary proves the device CPU DOES enter the firmware ISR (`V_CNT=4`, a valid entry CPSR, the handler's live window ran), but HPPIR names id `0x1D`/`0x40` and never `0x4c`, so the take is real and the `0x4c` service is a priority/sequencing matter, not a stuck mask. ADDENDUM 21 (2026-10-06) records the bracket (take5): the three-instant instrument (E5 the ring, I5 the ISR post-EOI, F5 the gate fall-through) was built and verified (instrument verdict CONFIRMED, the emitted-bytes check PASS and still rejects take3), but the boot died at the completion marker with no `omo-drv1` output and no evidence dir, so `vrun18` labels it NO-SAMPLE, a harness/run failure, and no branch row closes. ADDENDUM 22 (2026-10-06) records the stuck-active (take6): the gate 21a named is a PRIORITY-0 SOURCE HELD ACTIVE (`E5_RPR=0x00` at the ring, `0xFF` at the ISR's own post-EOI, `F_HPP=0x4C` the same boot that read `E_HPP=0x3FF`), the SGI bank and the group enable are REFUTED, and the sampler that would name the source stalled at the same completion marker the take5 bracket did. ADDENDUM 23 (2026-10-06) records the take6f capstone: the read-only fast sampler (`GICC_RPR` x16 plus the sticky bit and the word-0 active bank) and the 66-B ranked `GICC_EOIR` force, built and verified (`vtool19` CONFIRMED, 10/10 emitted), but the boot was NO-SAMPLE BY CONSTRUCTION - the vendor stack took the endpoint and our blob was never read into the chip. ADDENDUM 24 (2026-10-06) records the take6f RE-RUN: the mitigation held, the takeover bound the endpoint, every active pad deposited its sentinel, and the sampler NAMED the stuck id as SGI 2 (`STK_ACT=0x00000004`, sticky `0x00`), and the ranked EOIR force DROPPED the running priority (`STK_RPR1=0xFF` against `STK_15=0x00`, the capping proof's first half, with `F_HPP=0x4C` one site over); the cycle boot came up on the wrong image slot (`mtd13 "rootfsa"`), so the gate refused the cells as GATE-REFUSED on `INSTRUMENT_GATE=NOT_HELD_WRONG_IMAGE_SLOT` - the first complete take6/take6f reading of the arc, measured but uncertified. ADDENDUM 30 to 32 (2026-10-07) continue the arc to the capstone: the take7c re-run proved both gates passed while the store still did not land, the ADDENDUM 31 RCA named the write's `[12:10]` source-PE field as the residue and shipped the one-byte `take7d` fix, and the take7d cycle then RETIRED the priority-0 epoch (`TG_RPR 0x00 -> 0xFF`, `TG_ACT0` cleared). ADDENDUM 33 (2026-10-07) records the six-lane CODE sprint that ran alongside it: the expanded mach DT, the CRG controller, the pinctrl mapping tables, the Wi-Fi service skeleton, the DWC PCIe frame and the kernel-config lane, five of them CI-green and four smoked live on 2.5.24 (three clean load/unload pairs, one kernel refusal on the vendor's `luofu-pinctrl` driver name). ADDENDUM 34 (2026-10-07) records the FIRST OWN-KERNEL WINDOW, whose honest headline is that it was never a flash: the prep named the missing build items (`mach-luofu`, our DTB, three config groups) and the GO/NO-GO gate passed five of its seven checks while failing the shape one, because the CI candidate `uImage + DTB = 10,153,079 B` is `1,502,327 B` OVER the 8,650,752-byte `kernelb` partition (`mtd12`), so the runner FAILED CLOSED with zero device mutation, the backup verified before any (non-)write, the rollback stayed ready and the box ended healthy on 2.5.24 slot B with `boot_id` and the `kernelb` sha256 unchanged. |
-| `docs/UPSTREAM-PORT-PLAN.md` | The honest inventory and staged roadmap for our own fully-current OpenWrt (our kernel plus our drivers), with the `docs/soc/luofu-r116.dts` stage-1 skeleton, the folded `crg:` clock+reset node, the `lab/luofu-clk/` driver skeleton, the arm-A CRG write-path status block (stage-1 no-op FAILED on gate 4 `led_pwm` `0x14` b`0x0e`, so the stage-2 `pcie0` flip stays queued), and the arm-B PCIe-RC status (the aligned-dword read that panicked two kos now returns on BOTH RCs live, so what remains is the from-scratch host controller); the six-lane 2026-10-07 code sprint is recorded in the status block at the file's end, followed by the FIRST OWN-KERNEL WINDOW's status: the flash phase is QUEUED and this window ABORTED before any write, because the CI candidate (10,153,079 B) is over the 8,650,752-byte `kernelb` partition, so nothing was staged, erased, written or booted and the box stayed healthy on 2.5.24 slot B. ADDENDUM 35 (2026-10-07) records the SLOT RESTORE that put the box back on the stock pair: the vendor sysupgrade wrote STOCK 2.5.24 into the inactive slot (mtd14/rootfsb) and rebooted onto it, so slot A holds stock 2.4.15 again (the pre-slot this boot left) while slot B's own factory `kernelb` was never touched, the custom rootfs is gone, and the box ends healthy (4 AP vaps ENABLED, `alg:[SUCC]` x14, 6 netdevs, no `.omo-off`, live on 80/443). The restore is CONFIRMED by `build/register-dumps/diffs/20261007T0822Z-vrestore/verdict.txt` with one honest residual: the restored slot does not run ssh, so the MANDATED NEW-`boot_id` gate could not be read and the reboot rests on the release change plus the slot switch plus a single fresh boot log. |
-| `tools/make_custom_tar_v3.py` | Builds a custom rootfs tar from a stock rootfs tar you extracted from **your own** device. |
-| `tools/wifi-cal-snapshot.sh` / `wifi-cal-restore.sh` | Snapshot and restore the Wi-Fi calibration state, dry-run by default. |
-| `tools/web-login.sh` / `rce-probe.sh` | Log into the vendor web UI and probe the systime page (for testing your own fix). |
-| `tools/wifireg.sh` | Read a Wi-Fi chip register from userspace by its config address, on either radio (endpoint 0 or 1), using the verified BAR0 offset. See `docs/HAZARDS.md` before using it. |
-| `tools/proxy.js` | Tiny CONNECT/HTTP proxy, used to give the router internet access through a PC over SSH when it has no WAN. |
+| `docs/` | project docs: target design, inventory, specs, roadmaps, publication policy |
+| `docs/incoming/` | the lane deliverables (this is where the 2026-11 Wi-Fi work lives; see [LANE-INDEX.md](docs/incoming/wifi-closeout/LANE-INDEX.md)) |
+| `target-skeleton/` | OpenWrt target skeleton: DTS, config, image recipe, A/B install path, port notes ([README](target-skeleton/README.md)) |
+| `upstream/series-6.18/` | the kernel review-form submission series + release line + validation ([README](upstream/series-6.18/README.md)) |
+| `lab/` | legacy lab drivers and analysis artifacts (kept for provenance) |
+| `tools/` | host tools (calibration snapshot/restore, module patching, publish checks) |
 
-## The short version of the build
+## Legal and provenance
 
-1. Get root on **your own** device (the systime finding in `docs/systime-rce-writeup.md` is one path on
-   the tested firmware; the UART header is the documented recovery path in `docs/FLASH-PLAN.md`).
-2. Dump every partition, and extract the vendor rootfs from your device's own firmware image.
-3. Run `tools/make_custom_tar_v3.py` (edit the paths at the top) to produce a rootfs tar with our layer:
-   a dropbear init script, your `authorized_keys`, a firmware marker, a README, and the package-manager
-   configuration; optionally a quote-stripping wrapper for the systime page as defence in depth.
-4. Pack it with `tar2sqfs`, `ubinize` it on the device, and flash the **inactive** slot with
-   `ubiformat`. Keep the other slot stock, always.
-5. Switch slots with the env blocks plus the `boot_reg` register exactly as `docs/FLASH-PLAN.md`
-   describes, then verify from inside the booted system.
+Tools and documentation are MIT licensed ([LICENSE](LICENSE)); kernel code is GPL-2.0
+(each file carries `SPDX-License-Identifier: GPL-2.0`). Vendor firmware and modules are **not**
+included and remain the vendor's; the vendor Wi-Fi module declares `license=GPL` while
+shipping as a binary, and the GPL source request status is in
+[docs/GPL-REQUEST.md](docs/GPL-REQUEST.md). Reverse-engineered work is derived from
+GPL-licensed binaries by disassembly, and is published as GPL-2.0 - this is **not** a
+"clean-room from documents" claim for the drivers. The Wi-Fi research instrument and the
+PD4-patched firmware are never published as bytes. See [NOTICE.md](NOTICE.md).
 
-## Safety
+## Reading order
 
-- Never flash without a full dump of every partition and a documented recovery path.
-- Keep one slot stock at all times; the slot switch recipe in `docs/FLASH-PLAN.md` is the way back.
-- The calibration toolkit is dry-run by default on purpose: read `wifi-cal-restore.sh` before `--apply`.
+1. [LANE-INDEX.md](docs/incoming/wifi-closeout/LANE-INDEX.md) - the map of every lane and its evidence.
+2. [docs/incoming/wifi-re-report/REPORT.md](docs/incoming/wifi-re-report/REPORT.md) - the umbrella Wi-Fi story.
+3. [docs/TARGET-DESIGN.md](docs/TARGET-DESIGN.md) + [docs/ROADMAP-OPENWRT.md](docs/ROADMAP-OPENWRT.md) - the upstream target.
+4. [docs/SKELETON-SMOKE.md](docs/SKELETON-SMOKE.md) + [upstream/series-6.18/README.md](upstream/series-6.18/README.md) - the platform series.
+5. [docs/incoming/wifi-upstream-final/README.md](docs/incoming/wifi-upstream-final/README.md) - the submission finalization package.
+6. The parent notebook's `STATUS.md` + `mem-entries.md` - the live state and the full history.
 
-## Legal
+## Glossary (the short version)
 
-Our scripts, documentation and Python/JS tools are MIT licensed (see `LICENSE`). The kernel
-code under `lab/` is **GPL-2.0** (each file carries `SPDX-License-Identifier: GPL-2.0` and
-`MODULE_LICENSE("GPL")`); a GPL-2.0 license text and per-file copyright notices are still to be
-added. The drivers were reverse-engineered from the vendor's GPL-licensed binaries by
-disassembly and are published as GPL-2.0 derived works - this is not a "clean-room" claim.
-
-Vendor components are not included and remain the vendor's. The vendor Wi-Fi kernel module
-declares `license=GPL` while shipping as a binary; the GPL source request status is in
-`docs/GPL-REQUEST.md` (sent 2026-10-01, no reply held). Everyone using this toolkit is
-responsible for the radio regulations of their own country.
+**golden boot/page** = the vendor-equivalent firmware boot state (`0x86807FEF`, state 1,
+mask 0); **HCC** = the firmware/host message channel; **H2D/D2H** = host-to-device /
+device-to-host frames; **g0/g1/g2 idN** = message group/id; **vap_add/vap_start** = the
+firmware VAP object create/start messages; **mode-1 VAP base** = the g0 id1 key 0x0064/0x0065
+pair; **ap_ssid/ap_cfg** = the AP config messages (keys 0x0005/0x0127); **PD4** = the
+research firmware patch that services the firmware mailbox; **C2/D1/D2/E1** = the phase-matrix
+calibration / VAP / scan / data-plane phases; **POST-ONLY** = a frame published to the MAC TX
+ring but not yet consumed/completed by the radio; **kmod-ABI pin** = the kernel package version
+the modules require (`6f995278`).
