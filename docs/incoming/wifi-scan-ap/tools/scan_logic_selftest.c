@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "hi5622_scan_logic.h"
+#include "hi5622_vapscan_map.h"
 #include "h2d_frames.h"
 
 static int checks;
@@ -579,6 +580,315 @@ static void test_provider_wire_roundtrip(void)
 	}
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 6. task-110 wifi-vap-scan builders: mapping + tolerant D2H decode   */
+/* ------------------------------------------------------------------ */
+static void fill_scan_2g(struct hi5622_scan_req_params *p)
+{
+	memset(p, 0, sizeof(*p));
+	p->band = 0;
+	p->iftype = 2;
+	p->n_ssids = 1;
+	p->ssid_len[0] = 4;
+	memcpy(p->ssid[0], "test", 4);
+	p->n_channels = 3;
+	p->freq[0] = 2412;
+	p->freq[1] = 2437;
+	p->freq[2] = 2462;
+}
+
+static void fill_vap_add(struct hi5622_vap_add_params *p, u8 band)
+{
+	memset(p, 0, sizeof(*p));
+	strcpy(p->name, "wlan0");
+	p->mac[0] = 0x02; p->mac[1] = 0x00; p->mac[2] = 0x68;
+	p->mac[3] = 0x69; p->mac[4] = 0x35; p->mac[5] = 0x01;
+	p->iftype = 3;
+	p->band = band;
+	p->user_id = 1;
+	p->vap_id = 0;
+}
+
+static void test_vapscan_errno_and_guards(void)
+{
+	struct vs_frame f;
+	struct hi5622_scan_req_params p;
+
+	CHECK_EQ(hi5622_vapscan_errno(VS_OK), 0, "vs errno ok");
+	CHECK_EQ(hi5622_vapscan_errno(VS_EARG), -EINVAL, "vs errno arg");
+	CHECK_EQ(hi5622_vapscan_errno(VS_EBUFFER), -ENOSPC, "vs errno buffer");
+	CHECK_EQ(hi5622_vapscan_errno(VS_EPOLICY), -EPERM, "vs errno policy");
+	CHECK_EQ(hi5622_vapscan_errno(VS_EID), -EOPNOTSUPP, "vs errno id");
+
+	memset(&f, 0, sizeof(f));
+	CHECK_EQ(hi5622_vapscan_scan_req(NULL, &p), -EINVAL, "scan map NULL frame");
+	CHECK_EQ(hi5622_vapscan_user_add(NULL, NULL), -EINVAL, "user add map NULL");
+	fill_scan_2g(&p);
+	p.band = 2;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -EINVAL, "scan map bad band");
+}
+
+static void test_vapscan_scan_frames(void)
+{
+	static struct vs_frame f;
+	struct hi5622_scan_req_params p;
+	struct h2d_frame hf;
+	enum h2d_err herr = H2D_OK;
+	u8 wire[HI5622_FRAME_MAX_TOTAL];
+	size_t len = 0;
+	u8 family = 0, chip = 0xff, vap = 0xff;
+	u16 plen = 0;
+	int rc;
+
+	/* 6.1 passive, whole-band 2.4 GHz scan (the conservative default) */
+	memset(&p, 0, sizeof(p));
+	p.band = 0;
+	rc = hi5622_vapscan_scan_req(&f, &p);
+	CHECK_EQ(rc, 0, "passive whole-band scan builds");
+	CHECK_EQ(f.len, VS_HDR_LEN + VS_LEN_SCAN_REQ, "scan frame total 520");
+	CHECK_EQ(vs_frame_validate(f.buf, f.len), VS_OK, "scan frame vs-valid");
+	rc = vs_frame_decode(f.buf, f.len, &family, &chip, &vap, &plen);
+	CHECK_EQ(rc, VS_OK, "scan frame decodes");
+	CHECK_EQ(family, VS_ID_SCAN_REQ, "scan frame id 0xC");
+	CHECK_EQ(chip, 0, "scan frame 2.4 GHz chip id");
+	CHECK_EQ(plen, VS_LEN_SCAN_REQ, "scan payload 508 B");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_N_SSIDS], 0, "passive no ssid");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_COUNT], 0,
+		 "whole band no explicit channels");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_DWELL], 60, "dwell 60 ms");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_SCAN_TYPE], 0, "scan_type 0");
+
+	/* 6.2 the completed frame passes the inherited post-gate validation */
+	rc = vs_frame_export(&f, wire, sizeof(wire), &len);
+	CHECK_EQ(rc, VS_OK, "scan frame exports to SR buffer");
+	CHECK_EQ(len, f.len, "export length matches");
+	rc = h2d_frame_decode(wire, len, &hf,
+			      H2D_VF_TRANSPORT | H2D_VF_FIRMWARE |
+			      H2D_VF_HANDLER, &herr);
+	CHECK_EQ(rc, 0, "scan frame passes inherited structural validation");
+	CHECK_EQ(hf.group, 0, "scan frame group 0");
+	CHECK_EQ(hf.id, 0x0c, "scan frame id from header");
+	CHECK_EQ(hf.payload_len, 508, "scan payload length from header");
+	CHECK(h2d_fw_handler_lookup(0, 0x0c) != NULL,
+	      "scan id 0xC has a firmware handler");
+
+	/* 6.3 SSIDs + explicit 2.4 GHz channels -> vendor offsets */
+	fill_scan_2g(&p);
+	rc = hi5622_vapscan_scan_req(&f, &p);
+	CHECK_EQ(rc, 0, "active scan with ssid/channels builds");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_N_SSIDS], 1, "one ssid");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_SSID_AREA], 't', "ssid string");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_SSID_AREA + 4], 0, "ssid NUL");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_COUNT], 3, "three channels");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 0], 1, "ch1 num");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 3], 0, "ch1 idx");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 4], 6, "ch6 num");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 7], 5, "ch6 idx");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 8], 11, "ch11 num");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 11], 10, "ch11 idx");
+	CHECK_EQ(f.buf[1] >> 4, 0, "broadcast dst 0");
+
+	/* 6.4 5 GHz band: channel number and vendor index mapping [I] */
+	memset(&p, 0, sizeof(p));
+	p.band = 1;
+	p.n_channels = 2;
+	p.freq[0] = 5180;
+	p.freq[1] = 5700;
+	rc = hi5622_vapscan_scan_req(&f, &p);
+	CHECK_EQ(rc, 0, "5 GHz scan builds");
+	CHECK_EQ(f.buf[3], 1, "5 GHz chip id 1");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 0], 36, "ch36 num");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 1], 1, "ch36 band 1");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 3], 0, "ch36 idx 0");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 4], 140, "ch140 num");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_SC_OFF_CHAN_AREA + 7], 18, "ch140 idx 18");
+
+	/* 6.5 bounds / unsupported inputs fail closed */
+	fill_scan_2g(&p);
+	p.ie_len = 1;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -EOPNOTSUPP,
+		 "scan with IE refused (builder has no IE field)");
+	fill_scan_2g(&p);
+	p.n_ssids = VS_SC_SSID_MAX + 1;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -E2BIG, "too many ssids");
+	fill_scan_2g(&p);
+	p.n_channels = VS_SC_CHAN_MAX + 1;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -E2BIG, "too many channels");
+	fill_scan_2g(&p);
+	p.freq[1] = 2413;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -EINVAL, "off-grid channel");
+	fill_scan_2g(&p);
+	p.freq[1] = 5180;
+	CHECK_EQ(hi5622_vapscan_scan_req(&f, &p), -EINVAL, "mixed band refused");
+}
+
+static void test_vapscan_user_frames(void)
+{
+	static struct vs_frame f;
+	struct hi5622_vap_add_params va;
+	struct hi5622_vap_del_params vd;
+	struct h2d_frame hf;
+	enum h2d_err herr = H2D_OK;
+	u8 wire[HI5622_FRAME_MAX_TOTAL];
+	size_t len = 0;
+	u8 family = 0;
+	int rc;
+
+	/* 7.1 user add (g0 id7) */
+	fill_vap_add(&va, 0);
+	rc = hi5622_vapscan_user_add(&f, &va);
+	CHECK_EQ(rc, 0, "user_add builds");
+	CHECK_EQ(f.len, VS_HDR_LEN + VS_LEN_USER_ADD, "user_add total 180");
+	CHECK_EQ(vs_frame_validate(f.buf, f.len), VS_OK, "user_add vs-valid");
+	rc = vs_frame_decode(f.buf, f.len, &family, NULL, NULL, NULL);
+	CHECK_EQ(rc, VS_OK, "user_add decodes");
+	CHECK_EQ(family, VS_ID_USER_ADD, "user_add id 7");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UA_OFF_UID], 1, "user_add uid");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UA_OFF_MAC], 0x02, "user_add mac[0]");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UA_OFF_TYPE], 2, "user_add type 2");
+	CHECK_EQ((u8)f.buf[VS_HDR_LEN + VS_UA_OFF_RSSI], 100,
+		 "user_add vendor rssi +100");
+	rc = vs_frame_export(&f, wire, sizeof(wire), &len);
+	CHECK_EQ(rc, VS_OK, "user_add exports");
+	rc = h2d_frame_decode(wire, len, &hf,
+			      H2D_VF_TRANSPORT | H2D_VF_FIRMWARE |
+			      H2D_VF_HANDLER, &herr);
+	CHECK_EQ(rc, 0, "user_add passes inherited structural validation");
+	CHECK_EQ(hf.id, 7, "user_add header id 7");
+
+	/* 7.2 user notify-alg (g0 id8): the task-110 name correction */
+	fill_vap_add(&va, 1);
+	rc = hi5622_vapscan_user_alg(&f, &va);
+	CHECK_EQ(rc, 0, "user_add_notify_alg builds");
+	CHECK_EQ(f.len, VS_HDR_LEN + VS_LEN_USER_ALG, "user_alg total 180");
+	rc = vs_frame_decode(f.buf, f.len, &family, NULL, NULL, NULL);
+	CHECK_EQ(rc, VS_OK, "user_alg decodes");
+	CHECK_EQ(family, VS_ID_USER_ALG, "user_alg id 8");
+	CHECK_EQ(f.buf[3], 1, "user_alg 5 GHz chip id");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_ALG_OFF_NSS], 0,
+		 "user_alg zero caps/nss (not invented)");
+
+	/* 7.3 delete by user id (g0 id9) */
+	memset(&vd, 0, sizeof(vd));
+	vd.user_id = 1;
+	memcpy(vd.mac, va.mac, 6);
+	vd.band = 0;
+	vd.vap_id = 0;
+	rc = hi5622_vapscan_user_del(&f, &vd);
+	CHECK_EQ(rc, 0, "user_del builds");
+	CHECK_EQ(f.len, VS_HDR_LEN + VS_LEN_USER_DEL, "user_del total 24");
+	rc = vs_frame_decode(f.buf, f.len, &family, NULL, NULL, NULL);
+	CHECK_EQ(rc, VS_OK, "user_del decodes");
+	CHECK_EQ(family, VS_ID_USER_DEL, "user_del id 9");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UD_OFF_UID], 1, "user_del uid");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UD_OFF_FLAG], 0,
+		 "user_del flag 0 (semantics [U])");
+
+	/* 7.4 delete by MAC sentinel 0x0fff */
+	vd.user_id = 0x0fff;
+	rc = hi5622_vapscan_user_del(&f, &vd);
+	CHECK_EQ(rc, 0, "user_del by MAC builds");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UD_OFF_UID], 0xff, "wildcard uid low byte");
+	CHECK_EQ(f.buf[VS_HDR_LEN + VS_UD_OFF_UID + 1], 0x0f,
+		 "wildcard uid high nibble");
+
+	/* 7.5 an invalid band is refused before the builder */
+	fill_vap_add(&va, 0);
+	va.band = 2;
+	CHECK_EQ(hi5622_vapscan_user_add(&f, &va), -EINVAL, "bad band refused");
+}
+
+/* build one synthetic 802.11 beacon/probe-response body + 20 B trailer */
+static u32 build_scan_body(u8 *body, u8 subtype, bool with_ds, bool with_ht)
+{
+	u32 o = 0;
+	u8 i;
+
+	memset(body, 0, 512);
+	body[o++] = (u8)(subtype << 4);	/* frame control low: mgmt */
+	body[o++] = 0x00;
+	body[o++] = 0; body[o++] = 0;	/* duration */
+	for (i = 0; i < 6; i++)		/* addr1 broadcast */
+		body[o++] = 0xff;
+	for (i = 0; i < 6; i++)		/* addr2 */
+		body[o++] = (u8)(0x10 + i);
+	for (i = 0; i < 6; i++)		/* addr3 = BSSID */
+		body[o++] = (u8)(0x02 + i);
+	body[o++] = 0; body[o++] = 0;	/* seq */
+	for (i = 0; i < 8; i++)		/* timestamp */
+		body[o++] = (u8)(0x10 + i);
+	body[o++] = 100; body[o++] = 0;	/* beacon interval */
+	body[o++] = 0x11; body[o++] = 0x04;	/* capability */
+	body[o++] = 0; body[o++] = 4;	/* SSID IE */
+	memcpy(body + o, "test", 4);
+	o += 4;
+	if (with_ds) {
+		body[o++] = 3; body[o++] = 1; body[o++] = 6;	/* DS ch6 */
+	}
+	body[o++] = 221; body[o++] = 3;	/* vendor IE copied verbatim */
+	body[o++] = 0xaa; body[o++] = 0xbb; body[o++] = 0xcc;
+	if (with_ht) {
+		body[o++] = 61; body[o++] = 22;	/* HT operation */
+		body[o++] = 0;			/* primary channel byte 0 */
+		body[o++] = 36;			/* primary channel */
+		o += 20;
+	}
+	memset(body + o, 0xee, 20);		/* [U] trailing descriptor */
+	o += 20;
+	return o;
+}
+
+static void test_vapscan_scan_decode(void)
+{
+	struct hi5622_scan_result r;
+	u8 body[512];
+	u32 len;
+	int rc;
+
+	/* 8.1 beacon with DS IE -> 2.4 GHz result */
+	len = build_scan_body(body, 8, true, false);
+	rc = hi5622_vapscan_parse_scan_result(body, len, &r);
+	CHECK_EQ(rc, 0, "beacon scan result decodes");
+	CHECK_EQ(r.frame_type, HI5622_SCAN_FTYPE_BEACON, "decoded ftype beacon");
+	CHECK_EQ(r.freq, 2437, "decoded DS channel freq");
+	CHECK_EQ(r.beacon_interval, 100, "decoded beacon interval");
+	CHECK_EQ(r.capability, 0x0411, "decoded capability");
+	CHECK_EQ(r.ssid_len, 4, "decoded SSID length");
+	CHECK(memcmp(r.ssid, "test", 4) == 0, "decoded SSID");
+	CHECK_EQ(r.bssid[0], 0x02, "decoded BSSID");
+	CHECK_EQ(r.tsf, 0x1716151413121110ULL, "decoded TSF");
+	CHECK_EQ(r.signal_mbm, 0, "signal reported UNKNOWN (0 mBm) [U]");
+	CHECK(r.ie_len > 0, "IEs copied");
+	CHECK_EQ(hi5622_scan_result_validate(&r), 0,
+		 "decoded result passes cfg80211 validation");
+
+	/* 8.2 probe response without DS but with HT operation -> 5 GHz */
+	len = build_scan_body(body, 5, false, true);
+	rc = hi5622_vapscan_parse_scan_result(body, len, &r);
+	CHECK_EQ(rc, 0, "probe response without DS decodes via HT op");
+	CHECK_EQ(r.frame_type, HI5622_SCAN_FTYPE_PRESP, "decoded ftype presp");
+	CHECK_EQ(r.freq, 5180, "decoded HT primary channel freq");
+	CHECK_EQ(hi5622_scan_result_validate(&r), 0,
+		 "5 GHz decoded result passes cfg80211 validation");
+
+	/* 8.3 tolerant failures */
+	body[0] = 0x08;	/* data frame, not management */
+	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, 512, &r),
+		 -EOPNOTSUPP, "non-management frame refused");
+	len = build_scan_body(body, 8, false, false);	/* no DS/HT */
+	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, len, &r),
+		 -EOPNOTSUPP, "no channel IE -> not decodable");
+	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, 20, &r),
+		 -EOPNOTSUPP, "too short -> not decodable");
+	CHECK_EQ(hi5622_vapscan_parse_scan_result(NULL, 100, &r), -EINVAL,
+		 "NULL payload refused");
+	len = build_scan_body(body, 8, true, false);
+	body[24 + 12 + 1] = 0xfe;	/* SSID IE length overruns the frame */
+	CHECK_EQ(hi5622_vapscan_parse_scan_result(body, len, &r),
+		 -EOPNOTSUPP, "truncated IE list -> no DS found");
+}
+
 int main(void)
 {
 	printf("wifi-scan-ap scan logic selftest (task-113), device-free\n");
@@ -587,6 +897,10 @@ int main(void)
 	test_classify();
 	test_model();
 	test_provider_wire_roundtrip();
+	test_vapscan_errno_and_guards();
+	test_vapscan_scan_frames();
+	test_vapscan_user_frames();
+	test_vapscan_scan_decode();
 	printf("%d/%d checks passed\n", checks - failed, checks);
 	if (failed) {
 		printf("FAILED: %d check(s)\n", failed);

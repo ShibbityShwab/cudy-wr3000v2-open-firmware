@@ -68,6 +68,11 @@ def main(argv):
         "src/hi5622_frames_provider.c": os.path.join(SRC, "hi5622_frames_provider.c"),
         "src/hi5622_frame_post.h": os.path.join(SRC, "hi5622_frame_post.h"),
         "src/hi5622_frame_post.c": os.path.join(SRC, "hi5622_frame_post.c"),
+        "src/hi5622_vapscan_map.h": os.path.join(SRC, "hi5622_vapscan_map.h"),
+        "src/hi5622_vapscan_map.c": os.path.join(SRC, "hi5622_vapscan_map.c"),
+        "src/hi5622_vapscan_provider.c": os.path.join(SRC, "hi5622_vapscan_provider.c"),
+        "src/vapscan_frames.h": os.path.join(SRC, "vapscan_frames.h"),
+        "src/vapscan_frames.c": os.path.join(SRC, "vapscan_frames.c"),
         "src/cfg80211-provider.symvers": os.path.join(SRC, "cfg80211-provider.symvers"),
         "tools/build.sh": os.path.join(HERE, "build.sh"),
         "tools/selftest.py": os.path.join(HERE, "selftest.py"),
@@ -87,7 +92,9 @@ def main(argv):
 
     kbuild = read(os.path.join(SRC, "Kbuild"))
     for obj in ("hi5622_scan_logic.o", "hi5622_scan.o",
-                "hi5622_frame_post.o", "hi5622_frames_provider.o"):
+                "hi5622_frame_post.o", "hi5622_frames_provider.o",
+                "hi5622_vapscan_map.o", "hi5622_vapscan_provider.o",
+                "vapscan_frames.o"):
         check(obj in kbuild, "Kbuild missing object %s" % obj)
     check("KBUILD_EXTRA_SYMBOLS" in kbuild and
           "cfg80211-provider.symvers" in kbuild,
@@ -135,7 +142,7 @@ def main(argv):
               "deferred M3+ op must not be registered: %s" % absent)
     check("hi5622_vap_hcc_add(c, slot)" in o,
           "add_virtual_intf does not attempt the firmware user_add")
-    check("hi5622_vap_hcc_del(c, user_id, addr)" in o,
+    check("hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot)" in o,
           "del_virtual_intf does not attempt the firmware user_del")
     check(o.count("cfg80211_register_netdevice(dev)") == 1,
           "cfg80211_register_netdevice call missing")
@@ -168,6 +175,10 @@ def main(argv):
               "scan layer never posts %s through the gate" % what)
     check("hi5622_scan_need(wiphy," in s and "start_ap" in s,
           "start_ap provider gating missing")
+    check("hi5622_vapscan_provider_register()" in s,
+          "scan init does not register the task-110 provider")
+    check("p.band = c->band;" in s,
+          "scan/VAP neutral params do not carry the endpoint band")
     check("EOPNOTSUPP" in s, "scan/AP layer must fail closed with -EOPNOTSUPP")
 
     # ---- 4. fail-closed post gate --------------------------------------
@@ -200,6 +211,43 @@ def main(argv):
     check(re.search(r"static const struct hi5622_frame_ops \*hi5622_provider;",
                     pv) is not None,
           "provider registry must default to EMPTY (NULL)")
+
+    # ---- 4b. integrated task-110 provider (vapscan builders) ------------
+    vp = read(os.path.join(SRC, "hi5622_vapscan_provider.c"))
+    check("hi5622_frame_ops_register(&hi5622_vapscan_ops)" in vp,
+          "vapscan adapter does not register the provider")
+    for cap in ("HI5622_FRAME_CAP_SCAN_REQ", "HI5622_FRAME_CAP_USER_ADD",
+                "HI5622_FRAME_CAP_USER_ADD_NOTIFY",
+                "HI5622_FRAME_CAP_USER_DEL"):
+        check(cap in vp, "vapscan provider missing capability %s" % cap)
+    check(re.search(r"static unsigned int hi5622_scan_d2h_decode;", vp)
+          is not None, "d2h_scan_decode must default to 0")
+    check("if (hi5622_scan_d2h_decode)" in vp and
+          "HI5622_FRAME_CAP_SCAN_PARSE" in vp,
+          "SCAN_PARSE must be opt-in via d2h_scan_decode")
+    check("HI5622_FRAME_CAP_AP_START" not in vp and
+          "HI5622_FRAME_CAP_AP_STOP" not in vp,
+          "no AP builders exist -> AP caps must stay absent")
+    check("kmalloc(sizeof(*f)" in vp,
+          "vs_frame (1.7 KB) must be heap allocated in the adapter")
+    check("hi5622_vapscan_scan_req" in vp and "hi5622_vapscan_user_add" in vp
+          and "hi5622_vapscan_user_alg" in vp and
+          "hi5622_vapscan_user_del" in vp,
+          "adapter does not use the task-110 mapping functions")
+    vm = read(os.path.join(SRC, "hi5622_vapscan_map.c"))
+    check("vs_build_scan_req" in vm and "vs_build_user_add" in vm and
+          "vs_build_user_alg" in vm and "vs_build_user_del" in vm,
+          "mapping layer does not call the task-110 builders")
+    check("HI5622_VAPSCAN_SCAN_FOOTER" in vm and "20u" in vm,
+          "g1 id15 trailer strip (20 B [U]) missing")
+    check("signal_mbm = 0" in vm,
+          "unknown signal fallback must be explicit (0 mBm [U])")
+    check("hardcodes VAP 0" in vm,
+          "scan VAP-0 bench fact must be documented in the mapping")
+    check("HI5622_HOST_TYPES_DEFINED" in read(os.path.join(SRC, "vapscan_frames.h")),
+          "vapscan_frames.h portability guard missing (our copy is edited)")
+    check("Portability edit" in read(os.path.join(SRC, "vapscan_frames.h")),
+          "integrated vapscan_frames.h must document the portability edit")
 
     lh = read(os.path.join(SRC, "hi5622_scan_logic.h"))
     for needle in ("HI5622_SCAN_D2H_ID_BSS\t\t0x0fu",
@@ -295,17 +343,18 @@ def main(argv):
 
     # ---- 9. docs / evidence discipline --------------------------------
     rep = read(os.path.join(LANE, "REPORT.md"))
-    for needle in ("task-113", "M2", "M3", "scan", "g0 id0xC", "g0 id7",
-                   "g1 id15", "g1 id16", "g1 id17", "g2 id2",
+    for needle in ("task-113", "task-110", "M2", "M3", "scan", "g0 id0xC",
+                   "g0 id7", "g1 id15", "g1 id16", "g1 id17", "g2 id2",
                    "start_ap", "hostapd", "hi5622_frame_post",
-                   "allow_frames=0", "PD4", "[U]", "[I]", "[V]",
+                   "allow_frames=0", "d2h_scan_decode", "vapscan",
+                   "hi5622_vapscan_provider", "PD4", "[U]", "[I]", "[V]",
                    "no vendor"):
         check(needle.lower() in rep.lower(),
               "REPORT.md missing %r" % needle)
     ladder = read(os.path.join(LANE, "TEST-LADDER.md"))
     for needle in ("iw dev wlan0 scan", "hostapd", "wpa_supplicant",
                    "expected", "STOP", "abort", "returncode", "dmesg",
-                   "allow_frames"):
+                   "allow_frames", "d2h_scan_decode", "VAP 0"):
         check(needle in ladder, "TEST-LADDER.md missing %r" % needle)
     readme = read(os.path.join(LANE, "README.md"))
     check("wifi-scan-ap" in readme and "task-113" in readme,

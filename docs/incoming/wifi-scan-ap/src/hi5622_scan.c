@@ -35,6 +35,7 @@
 #include "hi5622_frames_api.h"
 #include "hi5622_frame_post.h"
 #include "hi5622_scan.h"
+#include "hi5622_vapscan_map.h"
 
 /* =====================================================================
  * helpers
@@ -206,6 +207,19 @@ int hi5622_scan_init(struct hi5622_cfg80211 *c)
 	s->scan_timeout_ms = HI5622_SCAN_TIMEOUT_MS;
 	hi5622_scan_model_init(&s->model);
 	s->initialized = true;
+	/* Idempotent global registration of the task-110 wifi-vap-scan builders
+	 * as the module's H2D frame provider (registry accepts one provider).
+	 * This sends nothing: the separate post gate still defaults to
+	 * allow_frames=0.  Failure is non-fatal (the module just stays without a
+	 * provider, i.e. the previous fail-closed behaviour). */
+	{
+		int prc = hi5622_vapscan_provider_register();
+
+		if (prc)
+			dev_warn(wiphy_dev(c->wiphy),
+				 "cfg80211: frame provider registration failed (%d) - message ops stay -EOPNOTSUPP\n",
+				 prc);
+	}
 	return 0;
 }
 
@@ -364,6 +378,7 @@ int hi5622_scan_op_scan(struct wiphy *wiphy,
 	}
 	p->user_id = (u8)s->user_id;
 	p->iftype = (u8)request->wdev->iftype;
+	p->band = c->band;
 	p->flags = request->flags;
 	p->n_ssids = (u32)request->n_ssids;
 	for (i = 0; i < p->n_ssids; i++) {
@@ -663,6 +678,7 @@ int hi5622_vap_hcc_add(struct hi5622_cfg80211 *c, u16 slot)
 	p.name[sizeof(p.name) - 1] = '\0';
 	memcpy(p.mac, vm.addr, sizeof(p.mac));
 	p.iftype = (u8)vm.iftype;
+	p.band = c->band;
 	p.user_id = (u8)(slot & 0xffu);
 	p.vap_id = (u8)(slot & 0xffu);
 	rc = hi5622_vap_add_params_validate(&p);
@@ -713,7 +729,8 @@ out:
 	return rc;
 }
 
-int hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr)
+int hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr,
+		       u8 band, u8 vap_id)
 {
 	struct hi5622_scan *s;
 	const struct hi5622_frame_ops *ops;
@@ -739,6 +756,8 @@ int hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr)
 		return -EOPNOTSUPP;
 	}
 	memset(&p, 0, sizeof(p));
+	p.band = band;
+	p.vap_id = vap_id;
 	if (user_id && user_id != 0x0fffu) {
 		p.user_id = user_id;
 		if (addr)

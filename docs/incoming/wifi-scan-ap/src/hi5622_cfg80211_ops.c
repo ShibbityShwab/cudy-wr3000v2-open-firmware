@@ -234,7 +234,7 @@ static int hi5622_cfg11_del_virtual_intf(struct wiphy *wiphy,
 
 	/* Firmware user delete (g0 id9) before the netdev goes away; same rule
 	 * as add - a missing provider is recorded, the teardown always runs. */
-	if (hi5622_vap_hcc_del(c, user_id, addr))
+	if (hi5622_vap_hcc_del(c, user_id, addr, c->band, (u8)slot))
 		dev_info(wiphy_dev(wiphy),
 			 "cfg80211: VAP %u firmware user_del (g0 id9) pending (no provider / payload [U]); netdev teardown continues\n",
 			 slot);

@@ -125,6 +125,8 @@ int hi5622_scan_req_params_validate(const struct hi5622_scan_req_params *p)
 
 	if (!p)
 		return -EINVAL;
+	if (p->band > 1u)
+		return -EINVAL;
 	if (p->n_ssids > HI5622_FRAME_MAX_SSIDS)
 		return -EINVAL;
 	if (p->n_channels > HI5622_FRAME_MAX_CHANNELS)
@@ -152,6 +154,8 @@ int hi5622_vap_add_params_validate(const struct hi5622_vap_add_params *p)
 		return -EINVAL;
 	if (p->user_id > HI5622_FRAME_MAX_USER_ID)
 		return -EINVAL;
+	if (p->band > 1u)
+		return -EINVAL;	/* only the two PCIe-endpoint bands exist */
 	if (p->iftype != 2u && p->iftype != 3u && p->iftype != 6u)
 		return -EINVAL;	/* STA / AP / MONITOR: the advertised modes */
 	return 0;
@@ -162,6 +166,8 @@ int hi5622_vap_del_params_validate(const struct hi5622_vap_del_params *p)
 	if (!p)
 		return -EINVAL;
 	if (p->user_id > 0x0fffu)
+		return -EINVAL;
+	if (p->band > 1u)
 		return -EINVAL;
 	if (p->user_id != 0x0fffu && !hi5622_mac_is_unicast(p->mac))
 		return -EINVAL;

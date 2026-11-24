@@ -25,7 +25,9 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
 		 hi5622_cfg80211_ops.o \
 		 hi5622_scan_logic.o hi5622_frames_provider.o \
-		 hi5622_frame_post.o hi5622_scan.o
+		 hi5622_frame_post.o hi5622_scan.o \
+		 vapscan_frames.o hi5622_vapscan_map.o \
+		 hi5622_vapscan_provider.o
 
 ccflags-y += -I$(src)
 

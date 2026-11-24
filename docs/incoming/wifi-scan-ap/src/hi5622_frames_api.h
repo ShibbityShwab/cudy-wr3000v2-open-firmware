@@ -103,6 +103,7 @@ typedef uint64_t u64;
 struct hi5622_scan_req_params {
 	u8	user_id;	/* user/VAP id selected by the VAP layer [U] */
 	u8	iftype;		/* nl80211 iftype of the requesting wdev */
+	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (endpoint band) */
 	u32	flags;		/* cfg80211_scan_request.flags (opaque) */
 	u32	n_ssids;
 	u8	ssid_len[HI5622_FRAME_MAX_SSIDS];
@@ -118,6 +119,7 @@ struct hi5622_vap_add_params {
 	char	name[16];	/* IFNAMSIZ-style netdev name */
 	u8	mac[6];
 	u8	iftype;		/* nl80211 iftype */
+	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (chip_id [I]) */
 	u16	user_id;	/* host-chosen vendor user id, 12-bit [U] */
 	u8	vap_id;		/* host-chosen vap id [U] */
 };
@@ -126,6 +128,8 @@ struct hi5622_vap_add_params {
 struct hi5622_vap_del_params {
 	u16	user_id;	/* 0x0fff = delete by address [V] */
 	u8	mac[6];
+	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (chip_id [I]) */
+	u8	vap_id;		/* vap id used in the add [U] */
 };
 
 /* One AP start (WAL cfg group-2 family; the exact message is gap G1). */

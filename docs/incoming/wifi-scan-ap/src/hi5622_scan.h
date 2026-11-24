@@ -77,7 +77,8 @@ void hi5622_scan_deliver(struct hi5622_pci *ctx, const u8 *hdr,
  * netdev usable (the M0/M1 lifecycle must not break because a builder is
  * absent) - the status file/bench gate is what turns that into an assertion. */
 int  hi5622_vap_hcc_add(struct hi5622_cfg80211 *c, u16 slot);
-int  hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr);
+int  hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr,
+			 u8 band, u8 vap_id);
 
 /* Read-only status (sysfs): provider, post gate and scan model. */
 int  hi5622_scan_status(struct hi5622_cfg80211 *c, char *buf, size_t len);
