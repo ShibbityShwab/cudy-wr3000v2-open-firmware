@@ -1126,7 +1126,11 @@ def generate_protocol_script(cfg: dict) -> str:
     a("section writes")
     a('say "WRITES-DEVICE total=$(wc -l < "$W")"')
     a('say "GATE no-cece-default PASS"')
-    a('say "SESSION_RESULT: PASS"')
+    a('if [ -n "$SEQ_BLOCKED" ]; then')
+    a('  say "SESSION_RESULT: BLOCKED:$SEQ_BLOCKED"')
+    a("else")
+    a('  say "SESSION_RESULT: PASS"')
+    a("fi")
     a("section end")
     a('say "SESSION end=$(date +%s)"')
     return "\n".join(lines) + "\n"
@@ -3210,6 +3214,11 @@ def main(argv=None) -> int:
         print(json.dumps(summary, sort_keys=True))
     if summary.get("result") == "PASS":
         return 0
+    if summary.get("result") == "BLOCKED":
+        # documented pending-feature outcome (e.g. the M2 scan stub): the
+        # session ran to completion; the phase matrix maps this to
+        # BLOCKED-DRIVER, not to a tool failure
+        return 12
     if summary.get("result") == "STOP":
         return 10
     return 11

@@ -26,7 +26,7 @@ performs after the ready handshake.
 | `boot` | boot + ready | protocol | `bringup-boot-ready.json` | 5 / 18 / 0 | page 0x86807FEF/7/2/0xABCD, state 1, mask 0, staging 0; ready id1+id2, id2 payload 0x01060850, phase READY_TXQ_SYNC | none (read-only) |
 | `C2` | calibration | protocol | `bringup-c2-calibration.json` | 28 / 55 / 8 | ctx_create type 1 -> ctx4+0x190 allocated + the measured ctx4 body PACK (0x7D4458=4, 0x7D4468=0x00010001, 0x7D488C=0x0100478C) -> txq_sync72 clean -> **six** cfg_cal 3502..3507, each consumed and each answered by a 298 B g1 id3 frame (relative catalogue delta + last_total=0x12A), counters frames_sent=8 ok=8 cfg_cal_sent=6 timeout=0 refused=0, page/state/mask still golden | calibration-token driver (**407,996 B sha256 2d45e545...**, attrs h2d_cfg_cal etc.), PD4 firmware cfe24bfb..., budget 8 |
 | `D1` | vap | cfg80211 | `bringup-d1-vap.json` | 11 / 24 / 0 | cfg80211_status wiphy=alloc/registered=1 -> iw phy phy0 info -> iw phy phy0 interface add wlan0 type managed -> real netdev (sysfs type=1, address) -> VAP counters vap0: wlan0/created=1 -> iw dev wlan0 del -> vaps=0/removed=1, vap0 line absent, iw dev no longer lists wlan0 | cfg80211-enabled hi5622_wifi module (505,076 B d2b3cf79... or the newer scan-ap build 622,544 B 77987ed0...), cfg80211.ko 2,328,548 B 949393f9..., iw 121,952 B, libnl-tiny |
-| `D2` | scan | cfg80211 | `bringup-d2-scan.json` | 11 / 15 / 0 | VAP up -> ONE iw dev wlan0 scan rc=0 -> mask 0 + staging 0 (no firmware exception) -> h2d_status timeout=0/refused=0; the D2H scan events are **watch-only** | the provider registry must carry the wifi-vap-scan g0 id0xC builder (520 B, SR node word1 0x02086d2b - ../wifi-vap-scan/recipes/frames.md); today the scan op is the fail-closed -EOPNOTSUPP stub (rc=95) |
+| `D2` | scan | cfg80211 | `bringup-d2-scan.json` | 11 / 15 / 0 | VAP up -> ONE iw dev wlan0 scan rc=0 -> mask 0 + staging 0 (no firmware exception) -> h2d_status timeout=0/refused=0; the D2H scan events are **watch-only** | the provider registry must carry the wifi-vap-scan g0 id0xC builder (520 B, SR node word1 0x02086d2b - ../wifi-vap-scan/recipes/frames.md). While the scan op is the fail-closed -EOPNOTSUPP stub (iw rc=161, "Not supported") the scan step declares blocked_rc [95,161] + blocked_patterns, records BLOCKED, the session continues and the matrix row is **BLOCKED-DRIVER** (not ERROR); it turns PASS automatically when rc=0 |
 | `E1` | dataplane | protocol | `bringup-e1-dataplane.json` | 13 / 42 / 3 | ready id2 payload 0x01060850 (MSDU-info ring-pointer table) -> clean ctx_create -> ONE read-only MAC slot-5 reachability read via the RO dp_probe attribute -> ONE dp_setup (TXQ table 0x2524 + 8x64x8 TX MSDU rings + tx_ba_info + RX 256/512 + 4095 completion ring; 14 MAC band-0 registers written+verified, 8 device-RAM table entries) -> dp_rings snapshot -> ONE key-0x0320 h2d_txq_addr_sync (txq_addr_sent=1, ok=2, timeout=0) -> post pack mask/staging 0, state 1, page golden, out0/out2 0 | the wifi-datapath-bringup driver (module 462,952 B sha256 8fc693ad..., attrs dp_probe/dp_setup/dp_txq_sync/dp_status/dp_rings + h2d_txq_addr_sync alias), PD4 firmware cfe24bfb..., budget 2; MAC ring register programming is the driver's action, never automation devmem |
 
 The E1 MAC probe note: the datapath BENCH-LADDER text said "BAR0 0x402A000"
@@ -69,6 +69,11 @@ read-only UART capture running):
         --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
         --fw-manifest /tmp/hi5622-patched/manifest.json \
         --wifi-block-bin /tmp/blocks/wifi_block.bin --ssh-host 192.168.1.1
+
+For several real phases in one sitting add **--reboot-between** (reboots after
+every phase except the last) or **--reboot-after** (reboots after every phase):
+a loaded hi5622_wifi makes the next phase stop at the module-already-loaded gate
+/ insmod rc=255, so back-to-back phases need a fresh boot between them.
 
 The underlying one-command session is unchanged:
 `python3 tools/bench_session.py --mode {protocol|cfg80211} --dry-run ...`.
@@ -144,7 +149,7 @@ See PROTOCOL-SEQUENCE.md for the full schema; task-114 adds:
 | PASS | real attended session, phase protocol verdict PASS |
 | BLOCKED-TOKEN | target module lacks the driver token the phase needs (host-only .ko string probe) - an owning-lane deliverable gap, not a bench failure |
 | BLOCKED-PREREQ | a local prerequisite artifact (cfg80211.ko / iw / libnl-tiny / budget) is missing |
-| BLOCKED-DRIVER | real run stopped at a documented pending driver feature (e.g. cfg80211 scan stub rc=95) |
+| BLOCKED-DRIVER | real run hit a documented pending driver feature: either a shell step with blocked_rc+blocked_patterns recorded BLOCKED (session continues) or a STOP whose evidence carries blocked-driver/rc=95/161 - e.g. the cfg80211 M2 scan stub (iw rc=161, "Not supported"); the matrix maps it from the session/evidence artefacts, not from the exit code |
 | STOP / FAIL / ERROR | real session stopped/failed, or the tool itself errored |
 | NOT-RUN | phase not part of the selected matrix |
 
@@ -173,7 +178,7 @@ Bring-up status rendered from that matrix:
 
     boot READY | ready READY | calibration READY | vap READY | scan READY | dataplane READY (dp-bringup module)
 
-Selftest: **443/443** device-free checks (was 312), including the shell-step
+Selftest: **481/481** device-free checks (was 312), including the shell-step
 refusal matrix, the shell/absent/present evaluation fixtures, the synthetic
 C2 six-response evaluation (+ wrong-length and missing-response negatives), the
 synthetic D1 wiphy+VAP add/del evaluation, the cfg80211 mode plan/deploy/script

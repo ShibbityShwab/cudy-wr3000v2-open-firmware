@@ -325,6 +325,15 @@ iw-iface-del / iw-scan / ip-link-up / ip-link-down / sysfs-read (only
 /sys/class/{ieee80211,net}/...) / dmesg.  Typed args are validated (^phyN,
 ifname regex, iftype managed|monitor|AP, sysfs path allowlist); expect_rc is
 0..255; patterns must appear in the captured output, absent must not.
+Optional **documented blocked outcome**: blocked_rc (list of exit codes) +
+blocked_patterns (output signatures) mark a known pending-feature result
+(e.g. the cfg80211 M2 scan stub: iw rc=161, "Not supported (-95)") as BLOCKED
+instead of FAIL: the script records BLOCKED, continues, and the session ends
+with SESSION_RESULT: BLOCKED:<step>; the evaluator verdict is BLOCKED and the
+phase matrix row is BLOCKED-DRIVER.  A wrong/missing signature still STOPs.
+Patterns are matched as regex first and, when not a valid regex (e.g.
+'+0x38 = 0x00008000'), as literal substrings - both on whitespace-normalised
+captures.
 iw steps are only valid in the hi5622-wifi-cfg80211 profile.  The generated
 script runs the command, captures its rc + output into the session report, and
 gates both device-side and host-side (shell-rc-mismatch / shell-pattern-missing
@@ -398,4 +407,4 @@ for the commands, the dry-run evidence table and the cross-lane prerequisites
 (calibration-token module, cfg80211 module + cfg80211.ko + iw, the wifi-vap-scan
 g0 id0xC builder for D2, the dp-bringup token for E1).
 
-Selftest: **443/443** device-free checks after task-114 (was 312).
+Selftest: **481/481** device-free checks after task-114 (was 312).

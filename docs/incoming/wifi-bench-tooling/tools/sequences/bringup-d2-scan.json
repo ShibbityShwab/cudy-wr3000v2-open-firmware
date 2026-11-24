@@ -1,7 +1,7 @@
 {
  "schema": "hi5622-protocol-sequence/1",
  "name": "bringup-d2-scan",
- "about": "Bring-up matrix row scan (D2): VAP up, ONE nl80211 scan request (iw dev wlan0 scan) and the D2H scan-event watch. PASS gate for the frame-validity phase = scan request accepted (rc=0) + no firmware exception (mask 0, staging 0) + no H2D timeout/refusal; the D2H g1 15/16/17 / g2 2 events are WATCH-ONLY because the current M1 VAP is host-only and the firmware scan handler (CA 0x6494C) hardcodes VAP lookup id 0 - a graceful no-VAP refusal with no events is an accepted outcome. Driver prerequisite: the provider registry must carry the wifi-vap-scan g0 id0xC builder (recipes/frames.md); until then the cfg80211 scan op is the fail-closed -EOPNOTSUPP stub (rc=95) and the matrix row reports BLOCKED-DRIVER.",
+ "about": "Bring-up matrix row scan (D2): VAP up, ONE nl80211 scan request (iw dev wlan0 scan) and the D2H scan-event watch. PASS gate for the frame-validity phase = scan request accepted (rc=0) + no firmware exception (mask 0/staging 0) + no H2D timeout/refusal. DOCUMENTED BLOCKED state: the fail-closed cfg80211 M2 scan stub returns -EOPNOTSUPP (iw rc=161, 'Not supported (-95)') - the scan step records BLOCKED, the session continues, and the phase matrix reports BLOCKED-DRIVER (not ERROR/FAIL) until the wifi-vap-scan g0 id0xC provider builder lands. The D2H g1 15/16/17 / g2 2 events are WATCH-ONLY (host-only M1 VAP; firmware scan handler CA 0x6494C hardcodes VAP lookup id 0, a graceful no-VAP refusal with no events is accepted).",
  "profile": "hi5622-wifi-cfg80211",
  "module_names": [
   "hi5622_wifi"
@@ -64,7 +64,15 @@
     "ifname": "wlan0"
    },
    "expect_rc": 0,
-   "about": "ONE nl80211 scan request: g0 id0xC hmac_enc_scan_send_req (0x1FC B struct; payload builder is the scan lane's deliverable). iw blocks until the scan-done event."
+   "about": "ONE nl80211 scan request: g0 id0xC hmac_enc_scan_send_req (0x1FC B struct; payload builder is the scan lane's deliverable). DOCUMENTED BLOCKED OUTCOME: while the cfg80211 scan op is the fail-closed -EOPNOTSUPP stub, iw exits non-zero (rc=161/-95, output 'Not supported (-95)') - that is the expected BLOCKED-DRIVER state, not a failure: the step records BLOCKED, the session continues and reports SESSION_RESULT: BLOCKED:scan. The step turns PASS once the provider forwards a real scan request (rc=0).",
+   "blocked_rc": [
+    95,
+    161
+   ],
+   "blocked_patterns": [
+    "Not supported",
+    "scan needs an H2D frame provider"
+   ]
   },
   {
    "name": "scan-settle",

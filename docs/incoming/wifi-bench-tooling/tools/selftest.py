@@ -2328,6 +2328,19 @@ def test_pattern_whitespace(tmp: str, proto: dict) -> None:
     # documented limit: a break INSIDE a token is not recovered
     ck("ws-match: a wrap inside a token is documented as not recovered",
        not PS._search_pattern_ws("budg\net=8", "budget=8"))
+    # invalid-regex patterns fall back to literal substring matching (the E1
+    # fire's dp_rings patterns '+0x38 = 0x00008000' raised re.error)
+    for literal in ("+0x38 = 0x00008000", "+0x48 = 0xfffffcc1", "*", "?",
+                    "(literal", "tid 7 entry"):
+        ck("ws-match: non-regex pattern %r matches literally" % literal,
+           PS._search_pattern_ws("x\n%s\ny" % literal, literal))
+    ck("ws-match: literal fallback still misses when absent",
+       not PS._search_pattern_ws("other", "+0x38 = 0x00008000"))
+    ck("ws-match: literal fallback matches across a wrap",
+       PS._search_pattern_ws("+0x48 =\n0xfffffcc1", "+0x48 = 0xfffffcc1"))
+    ck("ws-match: valid regex patterns still match as regex",
+       PS._search_pattern_ws("1", "^1$")
+       and PS._search_pattern_ws("phy0 info", "phy[0-9] info"))
 
 
 # ---------------------------------------------------------------------------
@@ -2434,6 +2447,189 @@ def test_shell_output_matching(tmp: str, proto: dict) -> None:
     ck("shell-output: a genuine host-side miss still FAILs",
        ev4["verdict"] == "FAIL" and ev4["failed_step"] == "phy",
        str(ev4["failed_step"]))
+
+
+# ---------------------------------------------------------------------------
+# J. documented BLOCKED-DRIVER outcomes (e.g. D2 scan -EOPNOTSUPP stub)
+# ---------------------------------------------------------------------------
+def test_blocked_outcome(tmp: str, proto: dict) -> None:
+    # ---- schema: blocked_rc + blocked_patterns validation ----
+    base = {"schema": PS.SCHEMA_SEQ, "name": "blocked-smoke",
+            "profile": PS.PROFILE_CFG80211,
+            "steps": [{"name": "scan", "kind": "shell", "cmd": "iw-scan",
+                       "args": {"ifname": "wlan0"}, "expect_rc": 0,
+                       "blocked_rc": [95, 161],
+                       "blocked_patterns": ["Not supported"]}]}
+
+    def refuse(label, mutate):
+        doc = json.loads(json.dumps(base))
+        mutate(doc)
+        expect_guard("blocked refusals: %s" % label,
+                     lambda: PS.validate(doc, label), "seq-schema")
+
+    ck("blocked: valid blocked outcome validates",
+       PS.validate(base, "blocked-smoke")["steps"][0]["blocked_rc"] == [95, 161])
+    refuse("blocked_rc not a list",
+           lambda d: d["steps"][0].update({"blocked_rc": 161}))
+    refuse("blocked_rc out of range",
+           lambda d: d["steps"][0].update({"blocked_rc": [300]}))
+    refuse("blocked_rc without signatures",
+           lambda d: d["steps"][0].pop("blocked_patterns"))
+    refuse("blocked_patterns without blocked_rc",
+           lambda d: d["steps"][0].pop("blocked_rc"))
+    seq = PS.validate(base, "blocked-smoke")
+    pdoc = PS.plan_doc(seq)
+    ck("blocked: plan doc carries the blocked outcome",
+       pdoc["steps"][0]["blocked_rc"] == [95, 161]
+       and pdoc["steps"][0]["blocked_patterns"] == ["Not supported"])
+    rendered = "\n".join(PS.render_script(seq))
+    ck("blocked: rendered device script has the blocked rc/pattern branch",
+       'case "$SRC" in' in rendered and "BLOCKED %s rc=" % "scan" in rendered
+       and "SEQ_BLOCKED=scan" in rendered and "gate_rc" not in rendered,
+       rendered[-800:])
+
+    # ---- device-side: execute the rendered blocked branch under /bin/sh -u --
+    lines = rendered.splitlines()
+    istart = next((i for i, ln in enumerate(lines)
+                   if ln.startswith('if [ "$SRC" = "0" ]')), None)
+    ck("blocked: rendered blocked branch located", istart is not None)
+    if istart is not None:
+        iend = next((i for i in range(istart, len(lines))
+                     if lines[i] == "fi"), None)
+        block = lines[istart:iend + 1] if iend else []
+        rdir = os.path.join(tmp, "blockedout")
+        os.makedirs(rdir, exist_ok=True)
+        with open(os.path.join(rdir, "seq-scan.out"), "w") as f:
+            f.write("command failed: Not supported (-95)\n")
+        def run_block(rc: int) -> str:
+            path = os.path.join(tmp, "blocked-dev-%d.sh" % rc)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nset -u\nRDIR=%s\nSRC=%d\n"
+                        "SEQ_BLOCKED=''\n"
+                        "say() { echo \"SAY $*\"; }\n"
+                        "stop() { echo \"STOP $1: $2\"; exit 10; }\n"
+                        % (rdir, rc))
+                f.write("\n".join(block) + "\n")
+                f.write("echo \"RESULT=$SEQ_BLOCKED\"\n")
+            sh = subprocess.run(["/bin/sh", "-u", path], capture_output=True,
+                                text=True, env={"PATH": "/usr/bin:/bin"})
+            return sh.stdout + sh.stderr
+        out = run_block(161)
+        ck("blocked: documented rc=161 + signature records BLOCKED and "
+           "continues", "BLOCKED scan rc=161" in out
+           and "RESULT=scan" in out, out[-400:])
+        out2 = run_block(95)
+        ck("blocked: documented rc=95 is also a blocked outcome",
+           "BLOCKED scan rc=95" in out2 and "RESULT=scan" in out2, out2[-300:])
+        out3 = run_block(1)
+        ck("blocked: an undocumented rc still STOPs the session",
+           "STOP scan.rc" in out3 and "BLOCKED" not in out3,
+           out3[-300:])
+
+    # ---- host evaluator: BLOCKED not FAIL, genuine misses still FAIL ----
+    doc = {"schema": PS.SCHEMA_SEQ, "name": "blocked-host",
+           "profile": PS.PROFILE_CFG80211,
+           "require": {"cfg80211": True},
+           "steps": [{"name": "scan", "kind": "shell", "cmd": "iw-scan",
+                      "args": {"ifname": "wlan0"}, "expect_rc": 0,
+                      "blocked_rc": [95, 161],
+                      "blocked_patterns": ["Not supported"]}]}
+    seq = PS.validate(doc, "blocked-host")
+    good = {"result": "BLOCKED", "stop_rule": "scan", "rd32": {},
+            "reads": {"seq-scan": "command failed: Not supported (-95)\n"
+                                  "SHELL-RC scan rc=161\n"},
+            "gates": []}
+    ev = PS.evaluate(seq, good)
+    ck("blocked: host evaluator verdict is BLOCKED (not FAIL)",
+       ev["verdict"] == "BLOCKED", ev["verdict"])
+    ck("blocked: blocked step/check carries the blocked-driver code",
+       ev["steps"][0]["status"] == "BLOCKED"
+       and any(c.get("code") == "blocked-driver"
+               for c in ev["steps"][0]["checks"])
+       and ev["blocked_step"] == "scan", json.dumps(ev["steps"][0])[:300])
+    ck("blocked: totals count blocked checks",
+       ev["totals"]["blocked"] == 1 and ev["totals"]["failed"] == 0,
+       str(ev["totals"]))
+    ck("blocked: blocked-driver triage is rendered",
+       "blocked-driver" in PS.render_markdown(ev))
+    bad_rc = {"result": "FAIL", "stop_rule": None, "rd32": {},
+              "reads": {"seq-scan": "other error\n"
+                                    "SHELL-RC scan rc=1\n"}, "gates": []}
+    ev2 = PS.evaluate(seq, bad_rc)
+    ck("blocked: undocumented rc still FAILs host-side",
+       ev2["verdict"] == "FAIL", ev2["verdict"])
+    bad_pat = {"result": "FAIL", "stop_rule": None, "rd32": {},
+               "reads": {"seq-scan": "some other failure\n"
+                                     "SHELL-RC scan rc=161\n"}, "gates": []}
+    ev3 = PS.evaluate(seq, bad_pat)
+    ck("blocked: rc=161 without the documented signature FAILs",
+       ev3["verdict"] == "FAIL", ev3["verdict"])
+    ck("blocked: SESSION_RESULT: BLOCKED is parsed",
+       BS.parse_report("SESSION_RESULT: BLOCKED:scan\n")["result"] == "BLOCKED")
+
+    # ---- bench_session graph emits the conditional session result ----------
+    seqpath = os.path.join(tmp, "blocked-seq.json")
+    with open(seqpath, "w") as f:
+        json.dump(doc, f)
+    opts = BS.SessionOptions(
+        mode="cfg80211", module=proto["module"], dry_run=True,
+        fw_file=proto["fw_file"], fw_manifest=proto["manifest"],
+        wifi_block_bin=proto["wifi_block_bin"], bar0read=proto["bar0read"],
+        sequence=seqpath, report_dir=os.path.join(tmp, "reports", "blocked"))
+    plan = BS.make_plan(opts, G.WriteGuard())
+    ck("blocked: generated session emits SESSION_RESULT: BLOCKED conditionally",
+       'say "SESSION_RESULT: BLOCKED:$SEQ_BLOCKED"' in plan.script
+       and 'say "SESSION_RESULT: PASS"' in plan.script
+       and "SEQ_BLOCKED=''" in plan.script)
+
+    # ---- D2 sequence ships the documented blocked scan outcome ------------
+    d2 = PS.load(os.path.join(TOOLDIR, "sequences", "bringup-d2-scan.json"))
+    scan = next(st for st in d2["steps"] if st["name"] == "scan")
+    ck("blocked: D2 scan step declares the documented blocked outcome",
+       scan["blocked_rc"] == [95, 161]
+       and "Not supported" in scan["blocked_patterns"])
+    ck("blocked: D2 scan step still expects rc=0 once the feature lands",
+       scan["expect_rc"] == 0)
+
+    # ---- phase matrix classifies BLOCKED-DRIVER, not ERROR ----------------
+    import phase_matrix as PM
+    from types import SimpleNamespace
+    def matrix_case(result, verdict, failed=None, rc=0, blocked_step=None):
+        d = os.path.join(tmp, "pm-%s-%s" % (result, verdict))
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "summary.json"), "w") as f:
+            json.dump({"result": result,
+                       "stop_rule": "scan" if result in ("BLOCKED", "STOP")
+                       else None}, f)
+        with open(os.path.join(d, "protocol-evidence.json"), "w") as f:
+            json.dump({"verdict": verdict, "failed_step": failed,
+                       "blocked_step": blocked_step, "totals": {}}, f)
+        args = SimpleNamespace(dry_run=False)
+        return PM.classify(args, PM.phase_by_id("D2"), rc, "", "", d)
+    rec = matrix_case("BLOCKED", "BLOCKED", blocked_step="scan", rc=12)
+    ck("blocked: phase matrix maps a BLOCKED session to BLOCKED-DRIVER",
+       rec["status"] == "BLOCKED-DRIVER", rec["status"])
+    ck("blocked: matrix record names the blocked step",
+       "scan" in (rec.get("blocked_reason") or ""), str(rec))
+    rec2 = matrix_case("STOP", "FAIL", failed="scan", rc=10)
+    ck("blocked: a real STOP keeps the STOP status", rec2["status"] == "STOP",
+       rec2["status"])
+    rec3 = matrix_case("PASS", "PASS", rc=0)
+    ck("blocked: a real PASS stays PASS", rec3["status"] == "PASS")
+    rec4 = matrix_case("FAIL", "FAIL", failed="vap-add")
+    ck("blocked: a real FAIL stays FAIL", rec4["status"] == "FAIL")
+    # reboot-between helper
+    ns = SimpleNamespace(dry_run=False, reboot_after=False,
+                         reboot_between=True)
+    ck("blocked: --reboot-between reboots between phases only",
+       PM.want_reboot_after(ns, 0, 2) and not PM.want_reboot_after(ns, 1, 2))
+    ns2 = SimpleNamespace(dry_run=False, reboot_after=True,
+                          reboot_between=False)
+    ck("blocked: --reboot-after reboots after every phase",
+       PM.want_reboot_after(ns2, 0, 1) and PM.want_reboot_after(ns2, 1, 2))
+    ns3 = SimpleNamespace(dry_run=True, reboot_after=True,
+                          reboot_between=True)
+    ck("blocked: dry-run never reboots", not PM.want_reboot_after(ns3, 0, 2))
 
 
 # ---------------------------------------------------------------------------
@@ -2576,6 +2772,7 @@ def main() -> int:
         test_shell_engine(tmp)
         test_pattern_whitespace(tmp, proto)
         test_shell_output_matching(tmp, proto)
+        test_blocked_outcome(tmp, proto)
         test_wo_readback(tmp, proto)
         test_bringup_sequences(tmp)
         test_cfg80211_mode(tmp, proto)

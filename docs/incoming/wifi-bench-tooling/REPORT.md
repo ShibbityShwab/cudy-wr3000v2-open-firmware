@@ -463,7 +463,7 @@ runner into the **bring-up ladder**:
    BLOCKED-TOKEN (the current calibration-token module 407,996 B 2d45e545 has
    no h2d_txq_addr_sync C string).  Rendered state table: boot/ready/
    calibration/vap/scan READY, dataplane BLOCKED.
-7. **Tests**: 312 -> 443 device-free checks (+131): shell-step refusal matrix,
+7. **Tests**: 312 -> 481 device-free checks (+169): shell-step refusal matrix,
    shell/absent/present evaluation fixtures, synthetic C2 six-response PASS +
    wrong-last_total + missing-response negatives, synthetic D1 wiphy+VAP
    add/del PASS + leftover-netdev negative, cfg80211 mode plan/deploy/script
@@ -528,7 +528,7 @@ Fixes:
 Re-validated after the fix: C2 dry-run PLAN-OK (28 steps / 55 checks /
 8 writes, new gate_attr load-budget h2d_status "budget=8", sh -n PASS);
 full matrix unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN); selftest
-443/443 PASS.  The manual C2 on hardware already passed (8/8 messages, six
+481/481 PASS.  The manual C2 on hardware already passed (8/8 messages, six
 298 B g1 id3 answers): this fix only brings the automation gate in line with
 the captured attr format.
 
@@ -633,7 +633,7 @@ read remains anywhere in C2, the gated values match the ledger, and a wrong
 body signature (ctx434 = 0x0100478D) fails at post-create.
 
 Re-validated: C2 dry-run PLAN-OK (28 steps / 55 checks / 8 writes), full matrix
-unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 443/443 PASS.
+unchanged (boot/C2/D1/D2 PLAN-OK, E1 BLOCKED-TOKEN), selftest 481/481 PASS.
 
 ### 9.4 D1 fire: unset LD_LIBRARY_PATH under set -u (generated-script fix)
 
@@ -753,5 +753,81 @@ Fixes and tests (selftest 432 -> 443):
 Re-validated: D1 dry-run script has 'section seq-phy-info' before the iw call
 and 'gate_out_has 'phy-info.p0' "$RDIR/seq-phy-info.out" 'Wiphy phy0'';
 sh -n/sh -u -n PASS; full matrix unchanged (boot/C2/D1/D2/E1 all PLAN-OK);
-selftest 443/443 PASS.  The next D1 fire should reach the VAP add/del steps
+selftest 481/481 PASS.  The next D1 fire should reach the VAP add/del steps
 (iw phy phy0 interface add wlan0 / iw dev wlan0 del).
+
+### 9.7 E1 fire: host pattern matcher rejected literal (non-regex) fragments
+
+The E1 fire (dp module 462,952 B sha 8fc693ad..., evidence
+build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T074035Z/E1) ran the
+whole session PASS - dp_probe, dp_setup (14 MAC regs / 8 table entries),
+dp_rings, the key-0x0320 hand-off and the post pack all device-green - but the
+protocol verdict came back FAIL: step dp-rings-check reported
+"invalid host regex: nothing to repeat at position 0" for its first three
+patterns ('+0x38 = 0x00008000', '+0x3c = 0x00008000', '+0x48 = 0xfffffcc1';
+'tid 7 entry' matched).
+
+Root cause: the host evaluator compiled every pattern as a regular expression,
+and patterns starting with '+', '*', '?', '{' (or otherwise invalid) raise
+re.error instead of being treated as literal output fragments.  The device-side
+gate uses grep (BRE), where '+' is literal, so only the host re-evaluation
+disagreed.
+
+Fix: _search_pattern_ws() now tries regex matching on the raw and the
+whitespace-normalised capture and, on re.error, falls back to a literal
+substring match on both.  This keeps real regexes working while literal output
+fragments (the dp_rings '+0x..' lines) gate correctly.
+
+Tests: literal patterns '+0x38 = 0x00008000', '+0x48 = 0xfffffcc1', '*', '?',
+'(literal' and 'tid 7 entry' all match; a literal fallback still misses when
+absent and still matches across a wrap; valid regexes ('^1$', 'phy[0-9] info')
+still work.  Replay of the REAL E1 fire report through the fixed evaluator:
+protocol verdict PASS, all four dp-rings-check patterns PASS, no non-PASS step.
+
+### 9.8 D2 fire: documented BLOCKED-DRIVER outcome + phase-matrix classification
+
+The D2 fire (evidence .../20261124T073908Z/D2) ran correctly to the scan:
+cfg-status, vap-add rc=0, link-up rc=0 and scan-baseline all PASS, then
+'iw dev wlan0 scan' returned the fail-closed cfg80211 M2 stub:
+"command failed: Not supported (-95)", SHELL-RC scan rc=161 (=-95), the old
+gate stopped the session (STOP:scan.rc) and the phase matrix reported the row
+as ERROR.
+
+Fixes:
+
+1. **Shell steps support a documented blocked outcome**: optional
+   'blocked_rc' (list of exit codes) + 'blocked_patterns' (output signatures).
+   The generated script's blocked branch records 'BLOCKED <step> rc=...' and
+   continues the session (SEQ_BLOCKED=<step>); the final line becomes
+   SESSION_RESULT: BLOCKED:<step>.  An undocumented code with the wrong/missing
+   signature still STOPs; a documented code without the signature also STOPs.
+   The host evaluator marks the step BLOCKED with code blocked-driver (not
+   FAIL), counts it in totals.blocked, sets blocked_step, and the verdict is
+   BLOCKED.  bench_session exits 12 for BLOCKED (0 PASS / 10 STOP / 11 FAIL).
+2. **D2 sequence**: the scan step declares blocked_rc [95, 161] and
+   blocked_patterns ['Not supported', 'scan needs an H2D frame provider'];
+   expect_rc stays 0 so the step turns PASS automatically when the
+   wifi-vap-scan g0 id0xC provider builder lands.  The post-scan mask/staging
+   pack, the catalogue watch and the VAP delete still run after a blocked scan.
+3. **Phase-matrix classification**: real runs are classified from the session
+   summary + protocol evidence instead of the exit code alone - BLOCKED (or a
+   blocked_step, or a STOP whose evidence carries blocked-driver/rc=95/161)
+   maps to BLOCKED-DRIVER with a blocked_reason; PASS stays PASS, STOP/FAIL
+   stay STOP/FAIL.  Replay of the REAL D2 fire evidence now classifies as
+   BLOCKED-DRIVER (was ERROR).
+4. **Back-to-back phases**: phase_matrix grew --reboot-after and
+   --reboot-between (real runs only): --reboot-between reboots the box after
+   every phase except the last (bench_session --reboot after), because a loaded
+   hi5622_wifi makes the next phase stop at module-already-loaded / insmod
+   rc=255.  want_reboot_after() is unit-tested (dry-run never reboots).
+
+Tests (selftest 443 -> 481): blocked_rc/blocked_patterns schema refusals;
+rendered blocked branch executes under /bin/sh -u - with rc=161 + signature it
+records BLOCKED and continues, rc=95 too, an undocumented rc still STOPs;
+host evaluator BLOCKED verdict/blocked_step/totals/triage; rc-without-signature
+FAILs; SESSION_RESULT: BLOCKED parsing; generated session emits the conditional
+SESSION_RESULT; D2 ships the documented blocked outcome; phase-matrix
+classify() maps BLOCKED/STOP/FAIL/PASS correctly; reboot-between/after helper
+semantics.  Full matrix remains boot/C2/D1/D2/E1 PLAN-OK; D2 dry-run script has
+the blocked case branch and the conditional session result; all sh -n / sh -u
+-n PASS.

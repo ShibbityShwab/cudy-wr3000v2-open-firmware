@@ -144,7 +144,25 @@ def module_for(args, p: dict):
     return overrides.get(p["id"]) or args.module
 
 
-def build_argv(args, p: dict, phase_dir: str) -> list:
+def want_reboot_after(args, index: int, total: int) -> bool:
+    """Reboot the box after this phase (fresh module load for the next one).
+
+    A phase that loads hi5622_wifi leaves it bound; the next phase's script
+    stops at the module-already-loaded gate (or an insmod rc=255), so real
+    multi-phase runs should reboot between phases.  --reboot-after reboots
+    after every phase, --reboot-between after every phase except the last.
+    """
+    if args.dry_run:
+        return False
+    if getattr(args, "reboot_after", False):
+        return True
+    if getattr(args, "reboot_between", False):
+        return index < total - 1
+    return False
+
+
+def build_argv(args, p: dict, phase_dir: str,
+               reboot_after: bool = False) -> list:
     argv = [sys.executable, BENCH_SESSION, "--mode", p["mode"],
             "--sequence", sequence_path(p), "--report-dir", phase_dir,
             "--endpoint", args.endpoint,
@@ -180,6 +198,8 @@ def build_argv(args, p: dict, phase_dir: str) -> list:
         argv.append("--dry-run")
     else:
         argv += ["--yes-really", "--attended"]
+        if reboot_after:
+            argv += ["--reboot", "after"]
     return argv
 
 
@@ -204,36 +224,38 @@ def classify(args, p: dict, rc: int, out: str, err: str,
     if pdoc:
         rec["sequence_sha256"] = pdoc.get("sha256")
         rec["totals"] = pdoc.get("totals")
+    summary = load_json(os.path.join(phase_dir, "summary.json")) or {}
+    ev = load_json(os.path.join(phase_dir, "protocol-evidence.json")) or {}
+    rec["bench_result"] = summary.get("result")
+    rec["protocol_verdict"] = ev.get("verdict")
+    rec["failed_step"] = ev.get("failed_step")
     ref = REFUSED_RE.search(err) or REFUSED_RE.search(out)
     code = ref.group(1) if ref else None
     msg = (ref.group(2).strip() if ref else "").strip()
-    if rc == 0:
-        summary = load_json(os.path.join(phase_dir, "summary.json")) or {}
-        rec["bench_result"] = summary.get("result")
-        if args.dry_run:
+    if args.dry_run:
+        if rc == 0:
             t = rec["totals"] or {}
             rec["status"] = "PLAN-OK"
             rec["detail"] = ("dry-run plan validated: %s step(s), %s check(s), "
                              "%s device write(s)"
                              % (t.get("steps"), t.get("checks"),
                                 t.get("attr_writes")))
-        else:
-            ev = load_json(os.path.join(phase_dir,
-                                        "protocol-evidence.json")) or {}
-            rec["protocol_verdict"] = ev.get("verdict")
-            rec["failed_step"] = ev.get("failed_step")
-            rec["detail"] = ("session result %s%s; protocol verdict %s"
-                             % (summary.get("result"),
-                                (":" + str(summary.get("stop_rule")))
-                                if summary.get("stop_rule") else "",
-                                ev.get("verdict")))
-            if summary.get("result") == "PASS" and ev.get("verdict") == "PASS":
-                rec["status"] = "PASS"
-            elif summary.get("result") == "STOP":
-                rec["status"] = classify_stop(ev)
-            else:
-                rec["status"] = "FAIL"
+            return rec
+        if code and code in BLOCK_CODES:
+            rec["status"] = BLOCK_CODES[code]
+            rec["blocked_reason"] = code
+            rec["detail"] = msg or code
+            return rec
+        if code:
+            rec["status"] = "REFUSED"
+            rec["blocked_reason"] = code
+            rec["detail"] = msg or code
+            return rec
+        rec["detail"] = (err.strip().splitlines() or ["?"])[-1][:300]
         return rec
+    # ---- real attended run: classify from the session/evidence artefacts ----
+    # (bench_session returns 0 PASS, 12 BLOCKED, 10 STOP, 11 FAIL, 2 REFUSED,
+    # 4 ABORTED - the exit code alone is not the status.)
     if code and code in BLOCK_CODES:
         rec["status"] = BLOCK_CODES[code]
         rec["blocked_reason"] = code
@@ -244,8 +266,35 @@ def classify(args, p: dict, rc: int, out: str, err: str,
         rec["blocked_reason"] = code
         rec["detail"] = msg or code
         return rec
-    tail = (err.strip().splitlines() or ["?"])[-1][:300]
-    rec["detail"] = tail
+    result = summary.get("result")
+    verdict = ev.get("verdict")
+    rec["detail"] = ("session result %s%s; protocol verdict %s"
+                     % (result,
+                        (":" + str(summary.get("stop_rule")))
+                        if summary.get("stop_rule") else "",
+                        verdict))
+    if result == "PASS" and verdict in (None, "PASS"):
+        rec["status"] = "PASS"
+    elif result == "BLOCKED" or verdict == "BLOCKED" \
+            or ev.get("blocked_step"):
+        rec["status"] = "BLOCKED-DRIVER"
+        rec["blocked_reason"] = "documented-blocked:%s" \
+            % (ev.get("blocked_step") or summary.get("stop_rule") or "?")
+        rec["detail"] += " (documented pending-feature outcome: %s)" \
+            % (ev.get("blocked_step") or summary.get("stop_rule") or "?")
+    elif result == "STOP":
+        rec["status"] = classify_stop(ev)
+        if rec["status"] == "BLOCKED-DRIVER":
+            rec["blocked_reason"] = "documented-blocked:%s" \
+                % (ev.get("failed_step") or summary.get("stop_rule") or "?")
+            rec["detail"] += (" (documented pending-feature outcome: %s)"
+                              % (ev.get("failed_step")
+                                 or summary.get("stop_rule") or "?"))
+    elif result == "FAIL" or verdict == "FAIL":
+        rec["status"] = "FAIL"
+    elif result is None:
+        rec["detail"] = ("no session result artefact; rc=%s; %s"
+                         % (rc, (err.strip().splitlines() or ["?"])[-1][:200]))
     return rec
 
 
@@ -253,21 +302,23 @@ def classify_stop(evidence: dict) -> str:
     """A STOP is a real failure unless it is a known pending-feature stop."""
     failed = evidence.get("failed_step")
     for st in evidence.get("steps") or []:
-        if st.get("name") != failed:
-            continue
         for c in st.get("checks") or []:
+            if c.get("code") == "blocked-driver":
+                return "BLOCKED-DRIVER"
             if c.get("code") == "shell-rc-mismatch" \
-                    and c.get("actual") == "rc=95":
+                    and c.get("actual") in ("rc=95", "rc=161"):
                 return "BLOCKED-DRIVER"
     return "STOP"
 
 
-def run_phase(args, p: dict, base: str, stamp: str) -> dict:
+def run_phase(args, p: dict, base: str, stamp: str,
+              reboot_after: bool = False) -> dict:
     phase_dir = os.path.join(base, stamp, p["id"])
-    argv = build_argv(args, p, phase_dir)
+    argv = build_argv(args, p, phase_dir, reboot_after=reboot_after)
     rec = {"phase": p["id"], "row": p["row"], "label": p["label"],
            "mode": p["mode"], "sequence": p["sequence"],
            "run_kind": "dry-run" if args.dry_run else "attended-real",
+           "reboot_after": reboot_after,
            "command": argv, "expect": p["expect"]}
     print("== phase %-3s (%s) ==" % (p["id"], p["label"]))
     t0 = time.time()
@@ -317,9 +368,11 @@ def render_markdown(matrix: dict) -> str:
     a("  phase needs (host-only .ko string probe). That is a deliverable gap in")
     a("  the owning lane, not a bench failure; the sequence JSON is the single")
     a("  edit point when the token lands.")
-    a("- BLOCKED-DRIVER: a real attended run stopped at a documented pending")
-    a("  driver feature (e.g. the cfg80211 M2 scan stub returning -EOPNOTSUPP")
-    a("  rc=95); the ladder is ready for the next driver revision.")
+    a("- BLOCKED-DRIVER: a real attended run reached a documented pending")
+    a("  driver feature (e.g. the cfg80211 M2 scan stub: blocked_rc [95,161] +")
+    a("  'Not supported' signature -> the scan step records BLOCKED/SESSION_RESULT")
+    a("  BLOCKED, or a STOP whose evidence carries blocked-driver/rc=95/161);")
+    a("  the ladder is ready for the next driver revision.")
     a("- PASS / FAIL / STOP: real attended session results (see each phase's")
     a("  evidence dir for protocol-evidence.json + PROTOCOL-SEQUENCE.md).")
     a("")
@@ -365,6 +418,14 @@ def main(argv=None) -> int:
     ap.add_argument("--attended", action="store_true",
                     help="operator marked the bench attended (required for "
                          "--yes-really)")
+    ap.add_argument("--reboot-after", action="store_true",
+                    help="real runs: reboot the box after every phase "
+                         "(bench_session --reboot after) so each phase loads "
+                         "the module on a fresh boot")
+    ap.add_argument("--reboot-between", action="store_true",
+                    help="real multi-phase runs: reboot after every phase "
+                         "except the last (a loaded hi5622_wifi blocks the "
+                         "next phase: module-already-loaded / insmod rc=255)")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero on any BLOCKED/REFUSED/ERROR status")
     ap.add_argument("--json", action="store_true", help="print the matrix JSON")
@@ -403,9 +464,15 @@ def main(argv=None) -> int:
         return 2
     base = args.report_dir or evidence_base()
     stamp = now_stamp()
+    if args.reboot_between and not args.dry_run and len(selected) == 1:
+        print("note: --reboot-between has no effect for a single phase "
+              "(use --reboot-after instead)")
     records = []
-    for pid in selected:
-        records.append(run_phase(args, phase_by_id(pid), base, stamp))
+    for idx, pid in enumerate(selected):
+        rec = run_phase(args, phase_by_id(pid), base, stamp,
+                        reboot_after=want_reboot_after(args, idx,
+                                                       len(selected)))
+        records.append(rec)
     matrix = {
         "schema": SCHEMA,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

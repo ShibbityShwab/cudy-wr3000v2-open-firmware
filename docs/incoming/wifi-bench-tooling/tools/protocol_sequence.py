@@ -237,6 +237,13 @@ TRIAGE = {
         "wiphy registration gate did not fire. Capture cfg80211_status, "
         "hcc_ready and dmesg; a missing ready pair or a non-cfg80211 module "
         "build are the usual causes. Do not load/unload repeatedly."),
+    "blocked-driver": (
+        "Documented pending-feature outcome (BLOCKED, not FAIL): the command "
+        "returned a known blocked exit code with its documented signature "
+        "(e.g. cfg80211 M2 scan stub: 'Not supported'/rc=161). The session "
+        "continued and later steps ran; the phase row must be reported as "
+        "BLOCKED-DRIVER and re-run when the owning lane lands the feature. "
+        "Do not retry on the same boot."),
     "tool-missing": (
         "A required userspace tool is absent from the image and no deployable "
         "copy was supplied on the command line (--iw-bin/--libnl-tiny). "
@@ -409,7 +416,8 @@ def _validate_shell_arg(name: str, value, where: str) -> str:
 
 def _validate_shell(step: dict, where: str, profile: str) -> dict:
     extra = set(step) - {"name", "kind", "about", "cmd", "args",
-                         "expect_rc", "patterns", "absent"}
+                         "expect_rc", "patterns", "absent", "blocked_rc",
+                         "blocked_patterns"}
     if extra:
         _refuse(where, "unknown keys: %s" % ", ".join(sorted(extra)))
     cmd = _need(step, "cmd", where)
@@ -440,11 +448,33 @@ def _validate_shell(step: dict, where: str, profile: str) -> dict:
     if isinstance(expect_rc, bool) or not isinstance(expect_rc, int) \
             or not 0 <= expect_rc <= 255:
         _refuse(where, "expect_rc must be an integer 0..255")
+    blocked_rc = step.get("blocked_rc")
+    if blocked_rc is not None:
+        if not isinstance(blocked_rc, list) or not blocked_rc:
+            _refuse(where, "blocked_rc must be a non-empty list of exit codes")
+        norm = []
+        for i, v in enumerate(blocked_rc):
+            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255:
+                _refuse(where, "blocked_rc[%d] must be an integer 0..255" % i)
+            if v not in norm:
+                norm.append(v)
+        blocked_rc = sorted(norm)
+        blocked_patterns = _validate_patterns(
+            step.get("blocked_patterns") or [], where + ".blocked_patterns")
+        if not blocked_patterns:
+            _refuse(where, "blocked_rc needs at least one blocked_patterns "
+                           "signature (the documented pending-feature output)")
+    else:
+        if step.get("blocked_patterns"):
+            _refuse(where, "blocked_patterns requires blocked_rc")
+        blocked_patterns = []
     body = {"cmd": cmd, "args": args, "expect_rc": expect_rc,
             "patterns": _validate_patterns(step.get("patterns") or [],
                                            where + ".patterns"),
             "absent": _validate_patterns(step.get("absent") or [],
                                          where + ".absent"),
+            "blocked_rc": blocked_rc,
+            "blocked_patterns": blocked_patterns,
             "is_write": bool(SHELL_TEMPLATES[cmd][1])}
     return body
 
@@ -810,6 +840,8 @@ def plan_doc(seq: dict) -> dict:
             entry["expect_rc"] = st["expect_rc"]
             entry["patterns"] = st["patterns"]
             entry["absent"] = st["absent"]
+            entry["blocked_rc"] = st["blocked_rc"]
+            entry["blocked_patterns"] = st["blocked_patterns"]
             entry["is_write"] = st["is_write"]
         elif st["kind"] == "d2h_catalog":
             entry["expect_entries"] = st["expect_entries"]
@@ -871,6 +903,7 @@ def render_script(seq: dict) -> list:
     a("section protocol")
     a('say "SEQUENCE name=%s sha256=%s steps=%d"'
       % (seq["name"], seq["sha256"], len(seq["steps"])))
+    a("SEQ_BLOCKED=''")
     for st in seq["steps"]:
         n = st["name"]
         a("")
@@ -947,7 +980,32 @@ def render_script(seq: dict) -> list:
             a("SRC=$?")
             a('cat "$RDIR/seq-%s.out" >> "$R" 2>/dev/null || :' % n)
             a('say "SHELL-RC %s rc=$SRC"' % n)
-            a('gate_rc %s "$SRC" %d' % (_q("%s.rc" % n), st["expect_rc"]))
+            blocked_rc = st.get("blocked_rc") or []
+            if not blocked_rc:
+                a('gate_rc %s "$SRC" %d'
+                  % (_q("%s.rc" % n), st["expect_rc"]))
+            else:
+                # Documented pending-feature outcome: these exit codes + one
+                # of the signature patterns are the expected BLOCKED state
+                # (e.g. cfg80211 M2 scan stub -EOPNOTSUPP), not a failure.
+                # The session continues, the step is recorded BLOCKED and the
+                # session result becomes BLOCKED:<step>.
+                check = " || ".join(
+                    "grep -q %s \"$RDIR/seq-%s.out\" 2>/dev/null"
+                    % (_q(pat), n) for pat in st["blocked_patterns"])
+                a('if [ "$SRC" = "%d" ]; then say "GATE %s PASS rc=$SRC"; else'
+                  % (st["expect_rc"], n))
+                a("  BLOCKED_HIT=0")
+                a('  case "$SRC" in')
+                a("    %s) if %s; then BLOCKED_HIT=1; fi;;"
+                  % ("|".join(str(x) for x in blocked_rc), check))
+                a("  esac")
+                a('  if [ "$BLOCKED_HIT" = "1" ]; then say "BLOCKED %s rc=$SRC '
+                  '(documented pending feature)"; SEQ_BLOCKED=%s;'
+                  % (n, n))
+                a('  else stop %s "exit code $SRC, expected %d"; fi'
+                  % (_q("%s.rc" % n), st["expect_rc"]))
+                a("fi")
             # The output file argument must be a DOUBLE-quoted expansion: a
             # single-quoted '$RDIR/...' reaches the gate literally (no shell
             # expansion) and grep fails on a file that does not exist - the
@@ -1129,10 +1187,21 @@ def _norm_ws(text: str) -> str:
 
 
 def _search_pattern_ws(text: str, pattern: str) -> bool:
-    """True if pattern matches raw text or the whitespace-normalised text."""
-    if re.search(pattern, text):
-        return True
-    return bool(re.search(pattern, _norm_ws(text)))
+    """True if pattern matches raw text or the whitespace-normalised text.
+
+    The pattern is normally a regular expression, but several sequences use
+    literal fragments that are not valid regexes - e.g. the E1 dp_rings gate
+    patterns '+0x38 = 0x00008000' or '+0x48 = 0xfffffcc1' raise
+    'nothing to repeat at position 0'.  Invalid regexes therefore fall back to
+    a literal substring match (raw and whitespace-normalised), so literal
+    output fragments gate correctly instead of erroring.
+    """
+    try:
+        if re.search(pattern, text):
+            return True
+        return bool(re.search(pattern, _norm_ws(text)))
+    except re.error:
+        return (pattern in text) or (pattern in _norm_ws(text))
 
 
 def _capture_text(reads: dict, section: str) -> str:
@@ -1341,14 +1410,31 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
                                      "reached the report)" % n}]
             else:
                 rc = int(m.group(1))
+                command = shell_command_text(st["cmd"], st["args"])
                 ok = rc == st["expect_rc"]
-                checks = [{"name": "%s.rc" % n, "kind": "shell",
-                           "command": shell_command_text(st["cmd"], st["args"]),
-                           "status": "PASS" if ok else "FAIL",
-                           "code": None if ok else "shell-rc-mismatch",
-                           "actual": "rc=%d" % rc,
-                           "detail": "exit code %d (expected %d)"
-                                     % (rc, st["expect_rc"])}]
+                blocked = False
+                if (not ok and st.get("blocked_rc")
+                        and rc in st["blocked_rc"]):
+                    body_text = _capture_text(reads, "seq-%s" % n)
+                    blocked = any(_search_pattern_ws(body_text, p)
+                                  for p in st["blocked_patterns"])
+                if blocked:
+                    checks = [{"name": "%s.rc" % n, "kind": "shell",
+                               "command": command, "status": "BLOCKED",
+                               "code": "blocked-driver",
+                               "actual": "rc=%d" % rc,
+                               "detail": ("documented pending-feature outcome: "
+                                          "rc=%d + signature pattern matched "
+                                          "(expected rc=%d when the feature "
+                                          "lands)" % (rc, st["expect_rc"]))}]
+                else:
+                    checks = [{"name": "%s.rc" % n, "kind": "shell",
+                               "command": command,
+                               "status": "PASS" if ok else "FAIL",
+                               "code": None if ok else "shell-rc-mismatch",
+                               "actual": "rc=%d" % rc,
+                               "detail": "exit code %d (expected %d)"
+                                         % (rc, st["expect_rc"])}]
                 body = "seq-%s" % n
                 checks += _check_patterns(n, "shell", st["cmd"],
                                           st["patterns"], body, reads)
@@ -1382,6 +1468,7 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
             if c["status"] == "PASS":
                 passed += 1
         n_fail = sum(1 for c in checks if c["status"] == "FAIL")
+        n_blocked = sum(1 for c in checks if c["status"] == "BLOCKED")
         if pre_stop is not None and all(
                 c["status"] in ("FAIL", "MISSING")
                 and c.get("code") in ("read-missing", "attr-capture-missing",
@@ -1393,7 +1480,8 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
             for c in checks:
                 c["status"] = "NOT-RUN"
                 c["code"] = "step-not-run"
-        status = "FAIL" if n_fail else "PASS"
+        status = ("FAIL" if n_fail else
+                  ("BLOCKED" if n_blocked else "PASS"))
         if pre_stop is not None and n_fail == 0 and failed_at is None:
             status = "NOT-RUN"
         if status == "FAIL" and failed_at is None:
@@ -1421,9 +1509,14 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
                         "detail": "device stopped: %s" % stop_rule})
                 failed_at = s["name"]
                 break
+    blocked_steps = [s["name"] for s in steps_out
+                     if s["status"] == "BLOCKED"]
     verdict = "PASS"
-    if any(s["status"] == "FAIL" for s in steps_out) or result == "STOP":
+    if any(s["status"] == "FAIL" for s in steps_out) \
+            or result in ("STOP", "FAIL"):
         verdict = "FAIL"
+    elif result == "BLOCKED" or blocked_steps:
+        verdict = "BLOCKED"
     if result is None:
         verdict = "NO-DATA"
     boot = {
@@ -1446,11 +1539,15 @@ def evaluate(seq: dict, summary: dict, plan=None) -> dict:
         "stop_rule": stop_rule, "failed_step": failed_at, "verdict": verdict,
         **evidence_pre,
         "steps": steps_out,
+        "blocked_step": blocked_steps[0] if blocked_steps else None,
         "totals": {"steps": len(steps_out), "checks": checked,
                    "passed": passed,
                    "failed": sum(1 for s in steps_out
                                  for c in s["checks"]
                                  if c["status"] == "FAIL"),
+                   "blocked": sum(1 for s in steps_out
+                                  for c in s["checks"]
+                                  if c["status"] == "BLOCKED"),
                    "missing": sum(1 for s in steps_out
                                   for c in s["checks"]
                                   if c["status"] == "MISSING"),
@@ -1480,6 +1577,8 @@ def _triage_for(evidence: dict) -> list:
         seen.append("device-read-empty")
     if evidence.get("pre_sequence_failure"):
         seen.append("pre-sequence-stop")
+    if evidence.get("verdict") == "BLOCKED" and "blocked-driver" not in seen:
+        seen.append("blocked-driver")
     for s in evidence.get("steps") or []:
         for c in s["checks"]:
             code = c.get("code")
