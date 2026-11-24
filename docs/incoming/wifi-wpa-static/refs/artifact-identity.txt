@@ -1,0 +1,22 @@
+# wifi-wpa-static pinned identities (host-only evidence; .ko never committed)
+# lane: wifi-wpa-static (task-139), 2026-11-28
+#
+# final combined hardened tree (staged from committed docs; CHAIN-ID-OK):
+#   size 269688  sha256 b5dfb883a0352d24d3279c73c6410d60c90318b2f17c84b9d3fa006ebb1a50b2
+#   (hardware-fired by the Lead 2026-11-28, opensource 0bc0e24; unstripped
+#    990760 B sha256 64ece2137ddd5698e8f53dca85dc35bfb5f17a9c70835ac983977799bf8c4c5a)
+#
+# this lane's patched build (NOT FIRED; built on top of the tree above):
+#   stripped   282048  sha256 11cee0aaf2d432846374673f4caad63ad66c57e1a41ae9165fcbe9b5a847160a
+#   unstripped 1047588 sha256 756ddf68ca26dff3d7a2021e71ea75de90d8d87445a22f43e2c67c160d3d5d2c
+#
+# pinned by this lane for the bench (parameters are runtime, not compile-time):
+#   wpa_keys=0        fail-closed default (no key frame ever posted)
+#   wpa_keys=1        enable the decoded key path (ladder R2)
+#   wpa_key_module=0  g0 header module/VAP index (same module as the AP start)
+#
+# upstream lane pins consumed by the chain assert:
+#   base        242572  44c6cc12b5c43d47b4b0ccd1da693c77b00e5ef48912625add52370ea4612c0b
+#   polished    242920  d145a2050cfcba7511d052da6eb67478dac75aa7285a1ad9c44b3dba822bd2c6
+#   dp-tuning   251924  175a4617f208ac7fb67cbd9074cb4eac18876ebf973d905d650f185eed7cc425
+#   stability   evidence/build-wpa-static.txt in this lane + wifi-stability/evidence/build-chain.txt

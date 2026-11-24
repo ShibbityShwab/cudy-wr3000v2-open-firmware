@@ -1,0 +1,57 @@
+== 1. portable builder host selftest
+key_selftest: all checks passed (cipher class, bodies, g0 frames, bounds)
+== 2. patch content
+  ok   patch adds/edits hi5622_key_frames.c
+  ok   patch adds/edits hi5622_key_frames.h
+  ok   patch adds/edits hi5622_keys.c
+  ok   patch adds/edits hi5622_keys.h
+  ok   patch adds/edits hi5622_frames_api.h
+  ok   patch adds/edits hi5622_cfg80211_ops.c
+  ok   patch adds/edits hi5622_vapscan_provider.c
+  ok   patch adds/edits hi5622_scan_logic.c
+  ok   patch adds/edits hi5622_cfg80211_logic.c
+  ok   patch adds/edits hi5622_cfg80211.c
+  ok   patch adds/edits Kbuild
+  ok   patch adds KEY_ADD cap
+  ok   patch wires .add_key
+  ok   patch carries cipher classifier
+== 3. decoded constants (src + tables)
+  ok   header constant HKF_CMD_ADD_KEY
+  ok   header constant 0x0078
+  ok   header constant HKF_CMD_SET_DEFAULT_KEY
+  ok   header constant 0x0079
+  ok   header constant HKF_CMD_DEL_KEY
+  ok   header constant 0x007a
+  ok   header constant HKF_KEY_MAX
+  ok   header constant HKF_SEQ_MAX
+  ok   header constant HKF_CIPHER_CLASS_DATA
+  ok   header constant HKF_CIPHER_CLASS_MGMT
+  ok   header constant HKF_CIPHER_CLASS_WEP
+  ok   TABLES has 0x0A5825
+  ok   TABLES has 0x0A5C9D
+  ok   TABLES has 0x0A4271
+  ok   TABLES has 0x10C23C
+  ok   TABLES has 0x0078
+  ok   TABLES has 0x0079
+  ok   TABLES has 0x007A
+  ok   TABLES has 0x44
+  ok   TABLES has 0x28
+  ok   TABLES records cfg80211 pairing rule
+  ok   REPORT records chain identity
+  ok   REPORT records patched artifact size
+== 4. fail-closed policy + no key material logging
+  ok   wpa_keys module param
+  ok   fail-closed default documented
+  ok   no key-material format argument in the kernel logging
+== 5. ladder
+  ok   ladders/wpa2-ap.json parses
+  ok   ladder marked not fired
+  ok   abort policy present
+== 6. evidence <-> refs consistency
+  ok   refs carry the asserted chain sha
+  ok   refs carry the patched artifact sha
+  ok   refs carry the patched artifact size
+== 7. host-only / no vendor-binary policy
+  ok   no binary/object/firmware files under the lane dir
+
+run-host-check: PASS

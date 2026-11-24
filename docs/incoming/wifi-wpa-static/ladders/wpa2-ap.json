@@ -1,0 +1,128 @@
+{
+  "lane": "wifi-wpa-static",
+  "task": "task-139",
+  "title": "WPA2-AP key install (M3) ladder - design only, NOT FIRED by this lane",
+  "host_only": true,
+  "preconditions": [
+    "fresh golden boot: page 0x86807FEF/7/2/0xABCD, mask 0, staging 0",
+    "attended session with the recovery door READY (tools/recovery-card.sh)",
+    "hostapd fixtures from wifi-image-polish/rootfs (open + wpa2)",
+    "module params recorded before the fire; one module load per boot"
+  ],
+  "module_params": {
+    "common": "allow_frames=32 h2d_send_budget=10 hcc_trace=1",
+    "r1": "wpa_keys=0 (fail-closed control)",
+    "r2": "wpa_keys=1 wpa_key_module=0"
+  },
+  "fixtures": {
+    "open": "wifi-image-polish rootfs/etc/hostapd-open.conf (2.4 GHz ch6, OPEN)",
+    "wpa2": "wifi-image-polish rootfs/etc/hostapd-wpa2.conf (WPA2-PSK/CCMP, rekey off for the first rung)"
+  },
+  "rungs": [
+    {
+      "id": "R0",
+      "name": "golden-boot control (open AP)",
+      "purpose": "prove the boot + AP-start baseline is unchanged by the key patch",
+      "steps": [
+        "boot fresh; capture page/mask",
+        "insmod hi5622_wifi wpa_keys=0 allow_frames=32 h2d_send_budget=10 hcc_trace=1",
+        "run the C2 ctx-create ladder, then hostapd with the OPEN fixture",
+        "record: ap rung rc, AP-ENABLED, page/mask, cfg80211_status"
+      ],
+      "pass": [
+        "AP-ENABLED (as the project baseline)",
+        "cfg80211_status shows wpa_keys=0",
+        "page 0x86807FEF golden, mask 0, no exception"
+      ]
+    },
+    {
+      "id": "R1",
+      "name": "fail-closed proof (wpa_keys=0 + WPA2 hostapd)",
+      "purpose": "prove the new path never writes a device register when disabled",
+      "steps": [
+        "boot fresh; page/mask",
+        "insmod hi5622_wifi wpa_keys=0 allow_frames=32 h2d_send_budget=10 hcc_trace=1",
+        "C2, then hostapd with the WPA2 fixture",
+        "capture dmesg and cfg80211_status"
+      ],
+      "pass": [
+        "start_ap posts the 4 AP frames, AP-ENABLED",
+        "add_key log: 'add_key refused - wpa_keys=0 (fail-closed default; ...)'",
+        "hostapd reports the key-install failure (-EOPNOTSUPP), AP stays in the old open-only state",
+        "cfg80211_status: wpa_keys=0, add_ok=0 add_err=0, gate_refused>=1",
+        "page golden, mask 0, no exception; out[0] consumed"
+      ],
+      "fail_if": [
+        "any key_add/key_del/key_default frame announce appears",
+        "page/mask changes or an exception is reported"
+      ]
+    },
+    {
+      "id": "R2",
+      "name": "PRIMARY: WPA2 group-key install at AP startup",
+      "purpose": "clear the M3 blocker: hostapd installs the GTK via cfg80211 add_key/set_default_key",
+      "steps": [
+        "fresh golden boot; page/mask",
+        "insmod hi5622_wifi wpa_keys=1 wpa_key_module=0 allow_frames=32 h2d_send_budget=10 hcc_trace=1",
+        "C2, then hostapd with the WPA2 fixture (no client needed)",
+        "watch dmesg: AP-start 4 frames, AP-ENABLED, then key_add, then key_default",
+        "record cfg80211_status and hostapd liveness for >=120 s"
+      ],
+      "expect_dmesg": [
+        "cfg80211: start_ap sequence frame 1/4 'ap_ssid' posted",
+        "cfg80211: start_ap sequence frame 2/4 'ap_cfg' posted (g0 carrier)",
+        "cfg80211: start_ap sequence posted",
+        "cfg80211: add_key posted (g0 id1 cmd 0x0078 'key_add', 96 B, module=0 idx=1 pairwise=0 cipher=0x000fac04 class=data key_len=16 seq_len=0) - firmware worker CA 0x0A5825 installs the key",
+        "cfg80211: set_default_key posted (g0 id1 cmd 0x0079 'key_default', 68 B, module=0 idx=1 uni=0 multi=1) - firmware worker CA 0x0A5C9D selects the default key",
+        "hostapd: no 'Failed to set key' / 'Failed to set beacon parameters' after the key lines"
+      ],
+      "pass": [
+        "AP-ENABLED and hostapd alive >=120 s",
+        "exactly one key_add (96 B) and one key_default (68 B) announce consumed",
+        "cfg80211_status: wpa_keys=1, add_ok=1, def_ok=1, del_ok=0, last_op=set_default_key, last_errno=0",
+        "page 0x86807FEF golden, mask 0, no exception, stale-VAP readback unchanged"
+      ],
+      "fail_if": [
+        "post refused (budget/gap/phase/out[0]) -> record the exact refusal line",
+        "page/mask abnormal, H2D lane closed, or firmware exception -> STOP, power-cycle",
+        "hostapd still reports a key error after both posts -> capture hostapd -dd log"
+      ],
+      "optional_readback": [
+        "firmware key-table manager at module_ctx+0x4b8 (requires the bench-proven module_ctx+0x190 readback recipe from wifi-ap-start)",
+        "user+0x310 = cipher low byte (0x04 CCMP), user+0x311 = default key index 1",
+        "user key cache slot stride 0x3c at user+0x58 (cipher, key_len, seq_len, key[32], seq[16])",
+        "this readback is optional evidence; never required to pass R2"
+      ]
+    },
+    {
+      "id": "R3",
+      "name": "BLOCKED-BY-RX: pairwise PTK (4-way handshake)",
+      "purpose": "document the next gate honestly, do not attempt to fake it",
+      "steps": [
+        "requires a real client association -> mgmt RX (assoc) + EAPOL RX/TX, both absent (0 RX captures)",
+        "when the RX path exists: 4-way M4 triggers NEW_KEY pairwise key_idx=0 MAC=STA (cmd 0x0078, pairwise=1) then DEL_KEY on deauth (cmd 0x007A)"
+      ],
+      "status": "expected to fail at association today; a posted pairwise add_key would be refused by the firmware user lookup for an unknown MAC (record the refusal, no retry)"
+    },
+    {
+      "id": "R4",
+      "name": "teardown/soak observation",
+      "purpose": "confirm no new leak or hot-path regression",
+      "steps": [
+        "hostapd kill -> stop_ap control path (user_del g0 id9)",
+        "60-minute soak sampler (wifi-stability soak tooling) alongside the AP",
+        "if a key_del is emitted during teardown, record it (expected only for a known STA)"
+      ],
+      "pass": [
+        "no new dmesg noise class from the key path when idle",
+        "page/mask stable across the soak; hostapd count stable"
+      ]
+    }
+  ],
+  "abort_policy": [
+    "any page != 0x86807FEF or mask != 0 -> stop, capture, power-cycle (never rmmod after release)",
+    "H2D lane closed / timeout -> stop; do not retry the same frame in the same boot",
+    "no bench link / recovery door not READY -> no fire"
+  ],
+  "not_fired_by_this_lane": true
+}
