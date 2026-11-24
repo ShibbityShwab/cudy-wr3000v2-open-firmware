@@ -36,9 +36,10 @@ $PY tools/verify_report.py
 ```
 
 Expected: a list of PASS lines (file presence, lane-path resolution, marker set, section coverage,
-claim-ID sequence, table/finding completeness, v3 milestone vocabulary, key-constant cross-checks
+claim-ID sequence, table/finding completeness, **v4** milestone vocabulary, key-constant cross-checks
 against the owning lanes' committed sources and the superproject ledger, forbidden-content scan) and
-a final PASS with the check count. Exit code 0 on success.
+a final PASS with the check count (v4 adds the AP-start/hostapd/air-TX/flash checks: sections
+6.1-6.12, findings F1-F14, tables T1-T31, claims EV-001..EV-278). Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -69,6 +70,12 @@ $PY wifi-ctx-create/tools/ctx_create_frame.py --frame    # the 48-byte create fr
 $PY wifi-bench-tooling/tools/selftest.py            # 503/503, PASS (incl. protocol mode, phase matrix, blocked outcomes)
 cd $REPO/opensource/docs/incoming/wifi-vap-scan && ./tools/build.sh   # 137/137 PASS, byte-exact g0 id7/id8/id9/id0xC builders
 cd $REPO/opensource/docs/incoming/wifi-scan-ap && $PY tools/selftest.py   # 294/294 PASS, provider caps 0x1f + fail-closed defaults
+cd $REPO/opensource/docs/incoming/wifi-vap-start && ./tools/build.sh      # 61/61 PASS, mode-1 VAP add/start builders + WAL envelopes
+cd $REPO/opensource/docs/incoming/wifi-scan-complete && ./tools/build.sh  # 373/373 + clean 6.18.60 module build
+cd $REPO/opensource/docs/incoming/wifi-ap-start && ./tools/build.sh       # 128/128 AP-start frame builders + emit
+cd $REPO/opensource/docs/incoming/wifi-ap-start && $PY tools/ap_start_re.py --selftest   # 63/63 static probes
+cd $REPO/opensource/docs/incoming/wifi-hostapd-deploy && ./tools/selftest.sh   # 14/14 host-only; then ./deploy-hostapd.sh --check (88/88) and ./tools/check-ladder.py (107/107)
+cd $REPO/opensource/docs/incoming/wifi-dp-air && ./tools/build.sh          # merge provenance + 1,483 checks + F-AIR sequence + clean 6.18.60 module build
 cd $REPO/opensource/docs/incoming/wifi-datapath-bringup && bash tools/build.sh  # 69/69 + 308/308 + 34/34, 6.18.60 module build (host-only; no device)
 $PY wifi-datapath/tools/build.sh                     # 77/77 PASS, frame builders + ring arithmetic
 $PY wifi-datapath/tools/fw_dp_tables.py --selftest   # 35/35 PASS, firmware key tables A/B
@@ -133,9 +140,12 @@ The patched images exist only outside the repository. Do not copy them into it.
 Read first: `wifi-driver-clean/BENCH-PROCEDURE.md`, `wifi-h2d-send/BENCH-PROCEDURE.md` Ladder C
 (ordered context-create -> TXQ) and Ladder D (calibration C1), `wifi-bench-tooling/README.md`,
 `wifi-cfg80211/REPORT.md` sec 8 (interface observation session) and the project's `RUNBOOK.md`.
-The generic ladder with pass gates is [TABLES.md](TABLES.md) T19. The cfg80211 bench-image build,
-extract and flash steps are in `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 2-4 (bench-only;
-the actual flash verified full-slot hash `1794a531...`). One-command session shape:
+The generic ladder with pass gates is [TABLES.md](TABLES.md) T19. The cfg80211 bench-image build
+and extract steps are in `wifi-upstream-target/CFG80211-BENCH-IMAGE.md` sec 2-4 (bench-only); the
+ABI-correct image and the attended flash procedure are in `wifi-abi-image/REPORT.md` +
+`wifi-abi-image/FLASH-RUNBOOK.md` (the flash itself was executed 2026-11-27 06:30: kernel slot
+read-back `1794a531...`, `ubiformat` OK, post-boot ABI receipt = the kmod pin; see REPORT 6.11/C44).
+One-command session shape:
 
 ```sh
 cd $REPO/opensource/docs/incoming/wifi-bench-tooling
@@ -156,8 +166,10 @@ $PY tools/phase_matrix.py --list-phases
 $PY tools/phase_matrix.py --phase all --dry-run \
     --module ../wifi-h2d-send/src/hi5622_wifi.ko \
     --module-for D1=../wifi-cfg80211/src/hi5622_wifi.ko \
-    --module-for D2=../wifi-cfg80211/src/hi5622_wifi.ko \
+    --module-for D2=<the mode-1 vap-start provider module, e.g. a 738,112 B e09dc697 build> \
     --module-for E1=../wifi-datapath-bringup/src/hi5622_wifi.ko \
+    --module-param-for D2 'allow_frames=12 vap_start_first=1 vap_start_mode=1 vap_start_module=0 frame_gap_ms=100 h2d_send_budget=8' \
+    --sequence-for D2 <the D2 TRUE-PASS ladder> \
     --fw-file /tmp/hi5622-patched/FIRMWARE.PD4.bin \
     --fw-manifest /tmp/hi5622-patched/manifest.json \
     --wifi-block-bin /tmp/blocks/wifi_block.bin \
@@ -169,8 +181,27 @@ $PY tools/phase_matrix.py --phase all --dry-run \
 The real-frame session (REPORT 6.7, TABLES T27) uses the cfg80211 mode with the scan-ap provider
 module (676,180 B sha256 `4a1c3b9a...`, caps 0x1f) and a small `allow_frames` budget (`N`) so the
 VAP `user_add`/`user_add_notify` and the 520 B scan request are posted; it must run after the C2
-ladder in the same boot and is attended-only. The single scan response wall (the per-radio VAP
-start object) means a second scan attempt without new evidence has no value.
+ladder in the same boot and is attended-only.
+
+The v4 ladders extend that flow, all attended and fail-closed:
+
+* **scan results (REPORT 6.9)** - load the mode-1 provider (`vap_start_first=1 vap_start_mode=1
+  vap_start_module=0`), create the VAP as managed, run one scan; expect the mode-1 VAP base
+  (`g0 id1` 48 B + 40 B) and then `g1 id17`/`g1 id15` results. The D2 TRUE-PASS ladder is the
+  scripted form; `scan-complete/TEST-LADDER.md` has the full-coverage rungs (auto window /
+  `scan_timeout_ms`).
+* **AP start (REPORT 6.10/6.11, TABLES T29/T30)** - deploy hostapd-mini + ucode via
+  `wifi-hostapd-deploy/deploy-hostapd.sh --apply --attended --yes-really`; load the v7 AP-start
+  module (`fd8e1439...`) with `vap_start_mode=1`; `iw phy phy0 interface add wlan0 type __ap`;
+  one bounded scan for the VAP base; `hostapd -B ... hostapd-open.conf`; then the read-only readback
+  pack (T29) - `AP-ENABLED` alone is not the gate.
+* **air-TX (REPORT 6.12, TABLES T31)** - deploy the merged data-plane module (`ca32aec4...`), run
+  the F-AIR sequence with `cat dp_probe` (READ) -> `echo 1 > dp_setup` -> `echo 1 >
+  h2d_txq_addr_sync` -> one `dp_tx_frame` -> read-only `dp_rx_poll`; POST-ONLY is a recorded
+  outcome, not a failure; an on-air claim needs an external observer.
+* **image (REPORT 6.11/C44)** - the ABI-correct image and the flash runbook are in
+  `wifi-abi-image/`; the flash was executed on 2026-11-27 06:30 and the post-boot ABI receipt is the
+  acceptance check (`apk query --fields version kernel` = the kmod pin).
 
 Mandatory rules (from the project, restated because violating them has cost recovery cycles):
 

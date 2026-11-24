@@ -21,8 +21,8 @@ OPENSOURCE = os.path.dirname(os.path.dirname(INCOMING))  # opensource
 REPO = os.path.dirname(OPENSOURCE)                # superproject root
 
 FILES = ["README.md", "REPORT.md", "TABLES.md", "EVIDENCE-INDEX.md", "REPRODUCE.md"]
-MIN_BYTES = {"REPORT.md": 130000, "TABLES.md": 55000, "EVIDENCE-INDEX.md": 45000,
-             "REPRODUCE.md": 8000, "README.md": 3000}
+MIN_BYTES = {"REPORT.md": 185000, "TABLES.md": 70000, "EVIDENCE-INDEX.md": 54000,
+             "REPRODUCE.md": 12000, "README.md": 4000}
 
 TEXT = {}
 checks = []
@@ -75,10 +75,15 @@ def check_report_structure():
     for must in ["user_add", "user_add_notify", "scan_req", "BLOCKED-DRIVER", "consume-only",
                  "4a1c3b9a", "8fc693ad", "0x0320", "one-command", "VAP start"]:
         check("REPORT covers the v3 milestone vocabulary: %s" % must, must in t)
-    subs = re.findall(r"^### (6\.\d) ", t, re.M)
-    check("REPORT section 6 has the v2+v3 subsections 6.1-6.8",
-          subs == ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.7", "6.8"], ",".join(subs))
-    check("REPORT carries findings F1-F11", all(("### F%d." % i) in t for i in range(1, 12)))
+    for must in ["AP-ENABLED", "cudy-ap-test", "fd8e1439", "ca32aec4", "REPORTS_OBSS",
+                 "mgmt_stypes", "POST-ONLY", "mode-1 VAP", "0x01010F18", "flashed image",
+                 "wiphy_new_nm", "g1 id0x23"]:
+        check("REPORT covers the v4 milestone vocabulary: %s" % must, must in t)
+    subs = re.findall(r"^### (6\.\d+) ", t, re.M)
+    check("REPORT section 6 has the v2+v3+v4 subsections 6.1-6.12",
+          subs == ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.7", "6.8", "6.9", "6.10", "6.11", "6.12"], ",".join(subs))
+    check("REPORT carries findings F1-F14", all(("### F%d." % i) in t for i in range(1, 15)))
+    check("REPORT is the v4 revision", "**v4**" in t)
 
 
 def check_markers():
@@ -136,9 +141,11 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 240 claims", len(uniq) >= 240, "%d" % len(uniq))
+    check("evidence index has at least 274 claims", len(uniq) >= 274, "%d" % len(uniq))
     check("evidence index carries the v3 range EV-196..EV-244", 196 in nums and 244 in nums,
           "196=%s 244=%s" % (196 in nums, 244 in nums))
+    check("evidence index carries the v4 range EV-245..EV-277", 245 in nums and 277 in nums,
+          "245=%s 277=%s" % (245 in nums, 277 in nums))
     check("evidence claims are numbered 1..N without gaps", uniq == list(range(1, len(uniq) + 1)),
           "max %d, count %d" % (uniq[-1] if uniq else 0, len(uniq)))
     rep = TEXT.get("REPORT.md", "")
@@ -230,8 +237,6 @@ def check_constants():
          get_lane("wifi-vap-scan/recipes/frames.md").lower()),
         ("scan request SR node word1", "02086d2b",
          get_lane("wifi-vap-scan/recipes/frames.md").lower()),
-        ("scan/VAP provider module hash", "4a1c3b9a",
-         get_lane("wifi-scan-ap/BUILD-NOTES.md").lower()),
         ("provider caps 0x1f", "0x1f",
          get_lane("wifi-scan-ap/REPORT.md").lower()),
         ("data-plane module hash", "8fc693ad",
@@ -244,6 +249,38 @@ def check_constants():
          get_lane("wifi-bench-tooling/PHASES.md").lower()),
         ("H1 static sentinel pointer", "0x00118d68",
          get_lane("wifi-fw-audit/REPORT.md").lower()),
+        ("AP-start module hash", "fd8e1439",
+         get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()),
+        ("AP-start module size 206,708 B", "206,708",
+         get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()),
+        ("hostapd AP mgmt bitmap 0x3c15", "0x3c15",
+         get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()),
+        ("REPORTS_OBSS gate", "reports_obss",
+         get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()),
+        ("wiphy_new_nm WARN line", "core.c:532",
+         get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()),
+        ("merged data-plane module hash", "ca32aec4",
+         get_lane("wifi-dp-air/BUILD-NOTES.md").lower()),
+        ("merged data-plane module size 886,864 B", "886,864",
+         get_lane("wifi-dp-air/BUILD-NOTES.md").lower()),
+        ("F-AIR sequence hash", "96354365",
+         get_lane("wifi-dp-air/LADDER-F-AIR.md").lower()),
+        ("g1 id17 channel record size 124 B", "124 b",
+         get_lane("wifi-scan-complete/REPORT.md").lower()),
+        ("g1 id15 beacon size 509 B", "509 b",
+         get_lane("wifi-scan-complete/REPORT.md").lower()),
+        ("hostapd-mini package size 283,790 B", "283,790",
+         get_lane("wifi-hostapd-deploy/REPORT.md").lower()),
+        ("AP interface type rule", "type __ap",
+         get_lane("wifi-hostapd-deploy/REPORT.md").lower()),
+        ("ctx0 BAR0 correction 0x7D1758", "0x7d1758",
+         get_lane("wifi-hostapd-deploy/REPORT.md").lower()),
+        ("ABI image container hash", "df6a78c3",
+         get_lane("wifi-abi-image/REPORT.md").lower()),
+        ("ABI image rootfs UBI hash", "62344e80",
+         get_lane("wifi-abi-image/REPORT.md").lower()),
+        ("ABI image kernel package pin", "6f995278",
+         get_lane("wifi-abi-image/REPORT.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src
@@ -258,6 +295,23 @@ def check_constants():
           txq_wire in tab.lower() and txq_wire in h2d_frames)
     check("context-create wire frame matches the owning lane",
           ctx_wire in tab.lower() and ctx_wire in h2d_send)
+
+    hostapd_lane = get_lane("wifi-ap-start/HOSTAPD-BRINGUP.md").lower()
+    ap_sizes = ["48 b", "40 b", "64 b", "184 b"]
+    check("AP-start frame sizes 48/40/64/184 B match the owning lane",
+          all(x in joined for x in ap_sizes) and all(x in hostapd_lane for x in ap_sizes))
+    scan_lane = get_lane("wifi-scan-complete/REPORT.md").lower()
+    check("scan-result numbers (6 results/6 beacons, 124/509 B) match the owning lane",
+          "6 x 124" in tab.lower() and "124 b" in scan_lane and "509 b" in scan_lane)
+    ledger_p = os.path.join(REPO, "mem-entries.md")
+    ledger_text = read(ledger_p).lower() if os.path.isfile(ledger_p) else ""
+    check("the matrix all-PASS evidence id appears in the report and the ledger",
+          "20261124t094716z" in joined and "20261124t094716z" in ledger_text)
+    check("the historical fired provider module (676,180 B / 4a1c3b9a...) is recorded in the report and the ledger",
+          "4a1c3b9a" in joined and "4a1c3b9a" in ledger_text)
+    scan_ap_notes = get_lane("wifi-scan-ap/BUILD-NOTES.md").lower()
+    check("the owning lane's current provider build (704,720 B / 20d38c5c...) is cross-checked",
+          "704,720" in joined and "20d38c5c" in joined and "20d38c5c" in scan_ap_notes)
 
     ledger_path = os.path.join(REPO, "mem-entries.md")
     status_path = os.path.join(REPO, "STATUS.md")
@@ -276,7 +330,18 @@ def check_constants():
                              ("ONE-COMMAND FULL BRING-UP MATRIX", "the one-command matrix entry"),
                              ("PHASE-MATRIX", "the phase-matrix evidence"),
                              ("61.5 s", "the bounded reboot observation"),
-                             ("H1 CONFIRMED", "the H1 consume-only verdict")]:
+                             ("H1 CONFIRMED", "the H1 consume-only verdict"),
+                             ("HISTORIC MILESTONE", "the first-live-AP milestone"),
+                             ("AP-ENABLED", "the AP-ENABLED state"),
+                             ("cudy-ap-test", "the AP SSID"),
+                             ("0x01010f18", "the VAP pointer"),
+                             ("0x70094810", "the ctx0 flag change"),
+                             ("FLASH COMPLETE", "the flash milestone"),
+                             ("handover2", "the handover script"),
+                             ("6f995278", "the kernel package ABI pin"),
+                             ("38 gates", "the post-flash T0 verify"),
+                             ("g1 id0x23", "the new post-AP D2H family"),
+                             ("12 bss", "the 12-BSS decode")]:
             check("ledger contains " + what, needle.lower() in ledger.lower())
     else:
         check("superproject ledger is readable (expected at ../mem-entries.md)", False, ledger_path)
@@ -340,13 +405,15 @@ def check_tables():
     check("markdown table rows are well formed", not bad, "; ".join(bad[:5]))
     tab = TEXT.get("TABLES.md", "")
     tabs = re.findall(r"^## (T\d+)\. ", tab, re.M)
-    check("TABLES.md contains at least 28 numbered tables", len(tabs) >= 28, "%d" % len(tabs))
+    check("TABLES.md contains at least 31 numbered tables", len(tabs) >= 31, "%d" % len(tabs))
     nums = [int(x[1:]) for x in tabs]
-    check("TABLES.md tables are numbered T1..T28 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
+    check("TABLES.md tables are numbered T1..T31 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
     for t_ in ["T21", "T22", "T23", "T24", "T25"]:
         check("TABLES.md carries the v2 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T26", "T27", "T28"]:
         check("TABLES.md carries the v3 table " + t_, ("## " + t_ + ". ") in tab)
+    for t_ in ["T29", "T30", "T31"]:
+        check("TABLES.md carries the v4 table " + t_, ("## " + t_ + ". ") in tab)
 
 
 def main():

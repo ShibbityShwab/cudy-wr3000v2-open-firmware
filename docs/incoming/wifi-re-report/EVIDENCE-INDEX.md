@@ -42,6 +42,14 @@ section of [REPORT.md](REPORT.md).
 | EV-199 | 1.2 | the MAC data path is host-set-up and TXQ-table-synced (E1 PASS), but no frame has traversed the rings | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build 69/69 + 308/308 + 34/34 |
 | EV-200 | 1.2 | one command runs the full matrix: boot/C2/D1/D2/E1 = PASS/PASS/PASS/BLOCKED-DRIVER/PASS | [V*] | `wifi-bench-tooling/PHASES.md`, TABLES T28 | ledger 2026-11-26 05:30 | - |
 | EV-201 | 1.3 | the four new breakthrough-ladder rungs (C2, H1, one-command matrix, real frames) and their key numbers | [V*]/[V] | REPORT sec 1.3/1.4; TABLES T23/T25/T26/T27/T28 | ledger 2026-11-25/26 | constants cross-checked |
+| EV-245 | 1.1 | the v4 chain extends to real scan results, the first live AP control plane, the first data-plane ring frame, the all-PASS matrix and the flash of the ABI-correct image | [V*]/[V] | REPORT sec 1.1; TABLES T21/T28/T29/T31 | ledger 2026-11-26 14:00 - 2026-11-27 06:30 | - |
+| EV-246 | 1.2 | the first live Wi-Fi AP is proven at the control-plane level: hostapd `AP-ENABLED`, four AP-start frames consumed, firmware VAP object present | [V*] | REPORT sec 1.2/6.11, TABLES T29 | ledger 2026-11-27 04:30 | - |
+| EV-247 | 1.2 | real firmware scan results are proven: mode-1 VAP base, 6 channel reports + 6 beacons within 5 s, 12 BSS entries decoded in a 13-channel run | [V*] | REPORT sec 1.2/6.9, TABLES T27 | ledger 2026-11-26 14:00/16:30 | - |
+| EV-248 | 1.2 | the one-command matrix is ALL-PASS: boot/C2/D1/D2/E1 = PASS/PASS/PASS/PASS/PASS | [V*] | TABLES T28, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-26 17:00 | - |
+| EV-249 | 1.2 | the first data-plane frame is POST-ONLY (published to the MAC TX ring, completion_pending=1); no association/beaconing is proven and the MAC has not completed a frame | [V*]/[U] | TABLES T31, REPORT 6.12/F14 | ledger 2026-11-27 02:30 | - |
+| EV-250 | 1.2 | the ABI-correct image was flashed (slot read-back + ABI receipt matched, kmod-ABI mismatch closed) and the AP reproduced on it from rootfs-native modules | [V*] | TABLES T21, REPORT sec 6.11/C44 | ledger 2026-11-27 06:30 | - |
+| EV-251 | 1.3 | the nine v4 breakthrough-ladder rungs (17-25) and their dates | [V*] | REPORT sec 1.3; lanes named per row | ledger 2026-11-26 12:00 - 2026-11-27 06:30 | - |
+| EV-252 | 1.4 | v4 key numbers: AP module/frames/readback, scan results, air-TX module, ABI image/flash, T0/userapd/gates numbers | [V]/[V*] | REPORT sec 1.4; TABLES T21/T29/T31 | lanes named per row | constants cross-checked in v4 verifier |
 
 ## Section 2 - system map
 
@@ -122,7 +130,10 @@ section of [REPORT.md](REPORT.md).
 | EV-204 | 4 F9 | the frame plane is host-implemented (dp_probe/dp_setup/dp_rings/dp_txq_sync) and E1 PASS; no frame has been sent or received | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build re-run |
 | EV-205 | 4 F10 | H1 confirmed: sentinel pointer keeps static `0x00118D68`, live handler table all zero, so PD4 dispatches through the ROM zero table and its handlers never execute; duplex is non-mailbox | [V*]/[I] | ledger 2026-11-25 21:30, `wifi-fw-audit/REPORT.md` sec 5, TABLES T25 | ledger 2026-11-25 21:30 | - |
 | EV-206 | 4 F11 | the four management-frame builders recovered from firmware handlers: g0 id7 168->180 B, id8 168->180 B, id9 12->24 B, id0xC 508->520 B, with SR node word1s | [V] | `wifi-vap-scan/REPORT.md` sec 3, `recipes/frames.md`, TABLES T27 | - | v3 host build 137/137 |
-| EV-207 | 4 F11 | provider module 676,180 B sha256 `4a1c3b9a...` with caps `0x1f`: id7 commits the VAP, id8/id0xC consumed in 0 polls, scan yields no results -> VAP-start wall | [V]/[V*] | `wifi-scan-ap/BUILD-NOTES.md`, `wifi-scan-ap/REPORT.md`, TABLES T27 | ledger 2026-11-26 04:30/06:30 | v3 source selftest 294/294 |
+| EV-207 | 4 F11 | provider module 676,180 B sha256 `4a1c3b9a...` (historical fired artifact, recorded in the ledger) with caps `0x1f`: id7 commits the VAP, id8/id0xC consumed in 0 polls, scan yields no results -> VAP-start wall | [V]/[V*] | ledger 2026-11-26 05:30/06:30; `wifi-scan-ap/REPORT.md` (later 704,720 B `20d38c5c...` build), TABLES T27 | ledger 2026-11-26 04:30/06:30 | v3 source selftest 294/294 |
+| EV-253 | 4 F12 | the AP-start crash was a missing firmware VAP object (workers deref `module_ctx+0x190` with no NULL check), not a malformed ap_auth; the mislabel was index-based and the 184 B frame was ap_cfg | [V]/[V*] | `wifi-ap-start/REPORT.md` sec 11.5/12, `HOSTAPD-BRINGUP.md` sec 12, REPORT F12 | ledger 2026-11-27 03:30/04:30 | - |
+| EV-254 | 4 F13 | hostapd's AP-ENABLED path is a cfg80211 capability ladder: ucode, `.connect`, `.mgmt_tx`, `mgmt_stypes`, `REPORTS_OBSS`, the connect/disconnect WARN, SET_INTERFACE/`type __ap`, and the firmware VAP base | [V]/[V*] | `wifi-ap-start/HOSTAPD-BRINGUP.md` sec 9-12, TABLES T30 | ledger 2026-11-26 20:30 - 2026-11-27 01:30 | - |
+| EV-255 | 4 F14 | AP-ENABLED is a control-plane milestone: not beaconing, association, WPA2 or data-path proof, and it runs on the PD4-patched research firmware | [V*]/[I] | REPORT F14/6.11/10.1, TABLES T29 | ledger 2026-11-27 04:30/06:30 | - |
 
 ## Section 5 - protocol reference
 
@@ -179,9 +190,18 @@ section of [REPORT.md](REPORT.md).
 | EV-213 | 6.8 | one-command matrix result: boot PASS, C2 PASS 54/54, D1 PASS 21/21, D2 BLOCKED-DRIVER, E1 PASS 37/37 with per-phase evidence and bounded reboots | [V*] | `wifi-bench-tooling/PHASES.md`, TABLES T28 | ledger 2026-11-26 05:30 | - |
 | EV-214 | 6.8 | bounded reboot orchestration: immediate `/sbin/reboot -f` background, every transport call budget-clamped, `[reboot]` progress, observed back after 61.5 s (uptime 46 s, seen_down=1), killable phase process groups under `--phase-timeout` | [V*] | `wifi-bench-tooling/REPORT.md` sec 9.9, ledger 2026-11-26 05:30 | ledger 2026-11-26 05:30 | - |
 | EV-215 | 6.8 | the bench-tooling device-free selftest is 503/503 in v3 (was 312 in v2) | [V] | `wifi-bench-tooling/tools/selftest.py` | - | **yes** (v3 re-run 503/503) |
-| EV-216 | 6.7 | provider facts: module 676,180 B sha256 `4a1c3b9a...`, caps `0x1f`, `frame_gap_ms` 20, `allow_frames` default 0 (fail-closed), 0 compiler/modpost warnings | [V] | `wifi-scan-ap/BUILD-NOTES.md`, `wifi-scan-ap/REPORT.md` | - | v3 source selftest 294/294 |
+| EV-216 | 6.7 | provider facts: the fired module was 676,180 B sha256 `4a1c3b9a...` (historical, ledger 2026-11-26 05:30/06:30); the owning lane's current build is 704,720 B `20d38c5c...`; caps `0x1f`, `frame_gap_ms` 20, `allow_frames` default 0 (fail-closed), 0 compiler/modpost warnings | [V] | `wifi-scan-ap/BUILD-NOTES.md`, `wifi-scan-ap/REPORT.md` | - | v4 verifier cross-checks both hashes |
 | EV-217 | 6.7 | state after the real-frame session: golden page `0x86807FEF/7/2/0xABCD`, state 1, mask 0, staging 0, heartbeats continuing, no exception, stock pair preserved | [V*] | ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
 | EV-218 | 6.4 | data-plane [U] remainders: no frame traversed, RX completion ring/descriptor format unconsumed, rings assume user index 0, TX entry encoder/20 B descriptor untested on hardware, band 1 untouched | [U]/[I] | `wifi-datapath-bringup/REPORT.md` sec 4, TABLES T26 | - | - |
+| EV-256 | 6.9 | mode-0 WAL VAP frames were consumed but did not create the firmware VAP object; the mode-1 `g0 id1` keys `0x0064`/`0x0065` do | [V*]/[I] | `wifi-vap-start/REPORT.md`, TABLES T27 | ledger 2026-11-26 13:00/14:00 | - |
+| EV-257 | 6.9 | first real scan results: 6 x 124 B g1 id17 + 6 x 509 B g1 id15 within 5 s; 12 BSS entries decoded in a 13-channel run (`finish-abort[host-timeout]`, 4/13 channels) | [V*] | `wifi-scan-complete/REPORT.md`, TABLES T27 | ledger 2026-11-26 14:00/16:30 | - |
+| EV-258 | 6.9 | scan completion model: auto window `clamp(3000+900n)`, `scan_timeout_ms`/`scan_dwell_ms`, channel-coverage finish + 500 ms settle, honest finish reasons | [V] | `wifi-scan-complete/REPORT.md` sec 3 | - | v4 re-run 373/373 + clean module build |
+| EV-259 | 6.10 | the hostapd gate ladder (v2-v7): each fix is a cfg80211 advertisement or host prerequisite, no wire byte changed; host-side 88/88 + 14/14 + 107/107 | [V]/[V*] | `wifi-ap-start/HOSTAPD-BRINGUP.md`, `wifi-hostapd-deploy/REPORT.md`, TABLES T30 | ledger 2026-11-26 20:30 - 2026-11-27 04:30 | v4 re-ran hostapd selftest 14/14 |
+| EV-260 | 6.11 | AP-start message map (48/40/64/184 B, keys/workers) and the readback pack that gates the claim | [V]/[V*] | TABLES T29, `wifi-ap-start/REPORT.md`/`TABLES.md` | ledger 2026-11-27 04:30 | - |
+| EV-261 | 6.11 | the live AP: hostapd `AP-ENABLED`, SSID `cudy-ap-test`, all four frames consumed in 0 polls, page golden/mask 0, `ctx0+0x18C` changed, VAP ptr `0x01010F18` | [V*] | ledger 2026-11-27 04:30; TABLES T29 | ledger 2026-11-27 04:30 | - |
+| EV-262 | 6.11 | the AP was reproduced on the flashed ABI-correct image (rootfs-native modules, T0 full-set verify 38 gates, ABI receipt = kmod pin) | [V*] | TABLES T21/T29, REPORT 6.11 | ledger 2026-11-27 06:30 | - |
+| EV-263 | 6.12 | the first data-plane frame: `dp_probe` READ -> `dp_setup` -> key-0x0320 sync -> `dp_tx_frame` published wptr 0->1, completion_pending=1 = POST-ONLY; 0 RX captures | [V]/[V*] | `wifi-dp-air/LADDER-F-AIR.md`, TABLES T31 | ledger 2026-11-27 02:30 | v4 build 1,483 checks + clean module |
+| EV-264 | 6.8 | final all-PASS matrix run: boot/C2/D1/D2/E1 PASS, evidence `20261124T094716Z`; D2 TRUE PASS from `20261124T094310Z` | [V*] | TABLES T28, `wifi-bench-tooling/PHASES.md` | ledger 2026-11-26 15:00/17:00 | - |
 
 ## Section 7 - bench evidence chain
 
@@ -231,6 +251,8 @@ section of [REPORT.md](REPORT.md).
 | EV-225 | 7 | 2026-11-26 05:30 - one-command full matrix complete with bounded reboot orchestration | [V*] | ledger 2026-11-26 05:30, TABLES T28 | ledger 2026-11-26 05:30 | - |
 | EV-226 | 7 | 2026-11-26 06:30 - three real frames (user_add, user_add_notify, first scan request) consumed in 0 polls; no scan results within 5 s -> scan aborted; VAP-start hypothesis | [V*] | ledger 2026-11-26 06:30, TABLES T27 | ledger 2026-11-26 06:30 | - |
 | EV-227 | 7 | end-of-chain state 2026-11-26 06:30: cfg80211 bench image on pair B, boot/C2/D1/E1 PASS in one command, D2 BLOCKED-DRIVER, no pending writes, stock pair preserved | [V*] | ledger 2026-11-26 06:30 | ledger 2026-11-26 06:30 | - |
+| EV-265 | 7 | the v4 session chain (2026-11-26 09:00 - 2026-11-27 09:00): T0 userspace PASS, mode-0/mode-1 VAP, first scan results, 12 BSS decode, all-PASS matrix, ABI image reproduction, dp-merge, AP fires v2-v7, air-TX POST-ONLY, first live AP, flash + AP on the flashed image, AP persistence + the new g1 id0x23 family | [V*]/[V] | REPORT sec 7, ledger entry per row | ledger 2026-11-26 09:00 - 2026-11-27 09:00 | - |
+| EV-275 | 7 | 2026-11-27 09:00 - the AP on the flashed image stayed live for minutes (hostapd processes alive, same SSID/type, no exceptions) and the D2H catalogue gained a boot-absent family: g1 id0x23 (35) count=6, 24 B + g1 id3 count=20 (466 B); likely AP/beacon-period activity [I], not an on-air proof | [V*]/[I]/[U] | ledger 2026-11-27 09:00; REPORT 6.11/F14 | ledger 2026-11-27 09:00 | - |
 
 ## Section 8 - corrections register
 
@@ -269,6 +291,8 @@ section of [REPORT.md](REPORT.md).
 | EV-230 | 8 | C31: the payload structs are no longer an absolute wall - byte-exact builders were accepted by the firmware (id7 commit, id8/id0xC consumed); remaining [U] fields did not block acceptance | [V]/[V*] | `wifi-vap-scan/REPORT.md`, TABLES T27, ledger 2026-11-26 | ledger 2026-11-26 04:30/06:30 | - |
 | EV-231 | 8 | C32: "data plane mapped only / TXQ sync not fired" is superseded - host implementation + E1 PASS, TXQ sync accepted; still no frame moved | [V]/[V*] | `wifi-datapath-bringup/REPORT.md`, TABLES T26 | ledger 2026-11-26 03:00 | v3 build re-run |
 | EV-232 | 8 | C33: a delivered scan request alone does not produce results; the per-radio VAP must be started (scan handler reads VAP id 0) | [V]/[V*]/[U] | firmware handler decode + scan attempt, TABLES T27 | ledger 2026-11-26 06:30 | - |
+| EV-266 | 8 | corrections C34-C44: mode-0/mode-1 VAP carrier, D2 all-PASS, ap_cfg/missing VAP object, NEW_BEACON/REPORTS_OBSS, mgmt registration gates, connect/disconnect WARN, dp_probe READ, POST-ONLY, AP-ENABLED limits, BAR0 0x7D1758, flash executed | [V]/[V*] | REPORT sec 8 | ledger 2026-11-26/27 | - |
+| EV-276 | 8 | C45: the AP milestone is strengthened by persistence + the new g1 id0x23 24 B D2H family after the AP start, but neither is an on-air beacon proof and the family's meaning is [U] | [V*]/[I]/[U] | ledger 2026-11-27 09:00, REPORT C45/6.11 | ledger 2026-11-27 09:00 | - |
 
 ## Section 9 - verification
 
@@ -292,8 +316,10 @@ section of [REPORT.md](REPORT.md).
 | EV-233 | 9.1 | v3 re-ran the host-only lane checks: bench-tooling 503/503, vap-scan 137/137, scan-ap source 294/294, fw-audit 14/14 + 14/14, datapath-bringup 69/69 + 308/308 + 34/34 | [V] | the lanes' committed selftest entry points | - | **yes** (v3) |
 | EV-234 | 9.1 | v3 compile-verified the data-plane module against the project 6.18.60 tree: 462,952 B sha256 `8fc693ad...`, vermagic 6.18.60, 0 compiler/modpost warnings, 13 dp symbols | [V] | `wifi-datapath-bringup/tools/build.sh`, v3 build log | - | **yes** (v3 build) |
 | EV-235 | 9.4 | the verifier was extended for v3: section 6.1-6.8, findings F1-F11, tables T1-T28, the v3 evidence range and the v3 milestone vocabulary/constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
-| EV-236 | 9.4 | v3 constants cross-checked against the owning lanes and ledger: `4a1c3b9a`/caps 0x1f, 180/180/520 B, `8fc693ad`/key 0x0320, 503 checks, H1 pack values | [V] | the lanes named per check, superproject ledger | - | **yes** (verifier) |
+| EV-236 | 9.4 | v3 constants cross-checked against the owning lanes and ledger: `4a1c3b9a`/caps 0x1f (historical fired build; current lane build `20d38c5c`/704,720 B), 180/180/520 B, `8fc693ad`/key 0x0320, 503 checks, H1 pack values | [V] | the lanes named per check, superproject ledger | - | **yes** (verifier) |
 | EV-237 | 9.3 | the bench-ladder map now includes the C2/D1/D2/E1 phases and the one-command matrix; every real run is attended and recovery-gated | [V*] | TABLES T28, `wifi-bench-tooling/README.md` | ledger 2026-11-26 05:30 | - |
+| EV-267 | 9.1 | v4 re-ran the host-only checks: bench-tooling 563/563, ap-start build 128/128 + RE probes 63/63, hostapd deploy 14/14, vap-start 61/61, scan-complete 373/373 + clean module build, dp-air 1,483 checks + clean module (886,864 B `ca32aec4...`) | [V] | the lanes' committed selftest entry points | - | **yes** (v4) |
+| EV-268 | 9.4 | the verifier was extended for v4: sections 6.1-6.12, findings F1-F14, tables T1-T31, the v4 claim range (245-277), the v4 vocabulary and the AP/air-TX/flash constants | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
 
 ## Sections 10-13 - limits, publication, lane map, conventions
 
@@ -319,12 +345,25 @@ section of [REPORT.md](REPORT.md).
 | EV-242 | 11 | PD4 remains research-only: H1 confirms it is a consume-only servicer, no vendor-clean mailbox alternative is proven, and it must never ship | [V*]/[I] | REPORT sec 11, `wifi-fw-audit/REPORT.md` | ledger 2026-11-25 21:30 | - |
 | EV-243 | 12 | the lane documentation map now covers wifi-vap-scan, wifi-scan-ap and wifi-datapath-bringup, and the updated bench-tooling/fw-audit roles | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
 | EV-244 | 13 | the glossary gained C2/provider-caps/user_add/scan_req/VAP-start/phase-matrix/dp_*/H1 terms | [V] | REPORT sec 13 | - | - |
+| EV-269 | 10 | v4 limits updated: control-plane AP (no beaconing/association), POST-ONLY data plane, bounded scan results, PD4 research firmware, bench-image/overlay instrument | [V*]/[I] | REPORT sec 10.1 | - | - |
+| EV-270 | 10.2 | v4 open questions re-ranked: (1) beaconing/association with an external observer, (2) TX completion/RX with the radio up, (3) mgmt TX/RX + add_key, (4) full 13-channel scan, (5) image/overlay follow-ups, then IRQ/vendor-clean/WAL/D2H/DR | [U]/[I] | REPORT sec 10.2 | - | - |
+| EV-271 | 11 | the first live AP is a control-plane research milestone on the PD4-patched firmware; it is not an upstreamable Wi-Fi stack and no vendor bytes are committed | [V*]/[I] | REPORT sec 11, project `PUBLISH.md` | ledger 2026-11-27 04:30/06:30 | - |
+| EV-277 | 11 | the upstream-final lane (2026-11-27 07:30) finalized the submission package: v1 form stale, v2 30-patch form specified but not generated, Wi-Fi milestone documented as research-only, GPL unanswered since 2026-10-01, Wi-Fi out of scope | [V] | `wifi-upstream-final/REPORT.md` + `AP-MILESTONE-HONEST.md` + `GPL-PD4-STATUS.md` | ledger 2026-11-27 07:30 | - |
+| EV-272 | 11 | the ABI-correct image flash: stock-assisted install, kernel slot read-back, handover, ABI receipt, rootfs-native modules; overlay wiped by design; stock pair A is the rollback | [V*] | TABLES T21, `wifi-abi-image/FLASH-RUNBOOK.md` | ledger 2026-11-27 06:30 | - |
+| EV-273 | 12 | the lane map now covers wifi-vap-start, wifi-scan-d2h, wifi-scan-complete, wifi-dp-txrx, wifi-dp-air, wifi-ap-start, wifi-hostapd-deploy, wifi-bench-session, wifi-image-deploy, wifi-abi-image and wifi-image-integration | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
+| EV-274 | 13 | the glossary gained mode-0/mode-1 VAP, mode-1 VAP base, AP start sequence, AP-ENABLED, hostapd-mini/ucode, mgmt_stypes, REPORTS_OBSS, `type __ap`, POST-ONLY/COMPLETED/air-CANDIDATE, F-AIR, T0/ABI-correct, `finish-ok[channel-coverage]` and readback-pack terms | [V] | REPORT sec 13 | - | - |
 
 
 ---
 
 **Coverage statement.** Every numbered section of [REPORT.md](REPORT.md) has at least one claim
 row here; every claim row carries a marker and either an artifact path, a ledger date, or an
-explicit [I]/[U] status. If a future edit adds a claim to the report without adding it here, the
-lane verifier's section-coverage check and the project documentation audit should catch it.
+explicit [I]/[U] status. v4 adds claim numbers **245-277**, covering the mode-1 VAP base and the first real
+scan results (6.9), the hostapd capability ladder (6.10), the first live AP and its reproduction on
+the flashed image plus the persistence observation (6.11), the first data-plane frame (6.12), the
+all-PASS matrix (6.8), the v4 session chain (7), corrections C34-C45 (8), the v4 verification (9),
+the updated limits/open questions (10), publication, the flash and the upstream-final package (11),
+the lane map (12) and the glossary (13). If a future
+edit adds a claim to the report without adding it here, the lane verifier's section-coverage check
+and the project documentation audit should catch it.
 

@@ -3,22 +3,30 @@
 **Project:** Cudy WR3000 v2.0 (luofu v2 board) bench reversal - Hi5671YV200 SoC + Hi5622v100 Wi-Fi
 endpoint, stock OpenWrt 22.03.6 / kernel 5.10.201, vendor firmware 928,920 B.
 
-**Document:** `wifi-re-report/REPORT.md`, umbrella narrative, **v3**. **Date:** 2026-11-26.
-**State cut-off:** `mem-entries.md` entry 2026-11-26 06:30 (the newest ledger entry at this
+**Document:** `wifi-re-report/REPORT.md`, umbrella narrative, **v4**. **Date:** 2026-11-27.
+**State cut-off:** `mem-entries.md` entry 2026-11-27 09:00 (the newest ledger entry at this
 revision); superseded claims are catalogued in section 8. **Status:** the full duplex HCC
 protocol, the operational message lap, the complete six-message calibration boot (C2, automated
 PASS), the first real Wi-Fi interface on our own image (cfg80211 wiphy registration + VAP netdev
-lifecycle), the **first real firmware management frames** (VAP `user_add`/`user_add_notify` and a
-520 B scan request, all consumed in 0 polls), the **MAC data-plane host setup + TXQ-table address
-sync** (automated E1 PASS) and the **one-command full bring-up matrix** (boot/C2/D1/E1 PASS, D2
-BLOCKED-DRIVER) are hardware-validated. Not validated: scan results (the firmware VAP-start wall),
-any association or frame TX/RX, and the firmware IRQ/handler layer (H1: PD4 is consume-only).
-Detail sources remain the lane reports listed in section 12; this document is the publication-grade
+lifecycle + real `.start_ap`), the first real firmware management frames, the first real
+firmware **scan results** (mode-1 VAP base; six channel reports + six beacons, later 12 BSS
+entries decoded), the **MAC data-plane host setup + TXQ-table address sync** (automated E1 PASS),
+the **first data-plane frame published to the MAC TX ring** (POST-ONLY), the **one-command full
+bring-up matrix** (boot/C2/D1/D2/E1 = ALL PASS) and - the v4 milestone - the **first live Wi-Fi AP
+on our clean-room stack**: hostapd `wlan0: AP-ENABLED`, SSID `cudy-ap-test`, with the four-message AP
+start consumed by the firmware. The ABI-correct image was then **flashed** (2026-11-27 06:30):
+kernel read-back matched the slot hash, the ABI receipt matched the kmod pin (`6.18.60~6f995278...`),
+the rootfs-native modules load without `/tmp`, and the AP came up again on the flashed image
+(`AP-ENABLED`). The AP state was still live minutes later and the firmware's D2H stream changed with
+the AP start (a new `g1 id0x23` 24 B event family) - indirect evidence the firmware is running the
+AP, but not an on-air beacon proof. Not validated: beaconing over the air, any client association,
+MAC TX completion / RX frame capture and a finish-ok 13-channel scan. The firmware IRQ/handler layer stays closed (H1:
+PD4 is consume-only) and every v4 bench result runs on the PD4-patched research firmware. Detail
+sources remain the lane reports listed in section 12; this document is the publication-grade
 synthesis, not a replacement.
 
-**Lane / task:** wifi-re-report, shared task `task-120` (v3; v2 was `task-116`, v1 `task-109`,
-cut off at 2026-11-25 06:00). Host-only: no device, UART, TFTP or network contact was made while
-writing it.
+**Lane / task:** wifi-re-report, shared task `task-129` (v4; v3 was `task-120`, v2 `task-116`,
+v1 `task-109`). Host-only: no device, UART, TFTP or network contact was made while writing it.
 **Safety:** nothing in this report authorises a bench fire; every hardware session cited here was
 attended and followed the project's recovery-door rules.
 
@@ -128,6 +136,55 @@ is recorded in section 8 (C29-C33).
    gains **EV-196..EV-244**, and the verification, limits, open questions, publication and
    lane-map sections are updated (sections 9-13).
 
+### 0.7 What changed in v4
+
+v3 stopped at the 2026-11-26 06:30 ledger entry. v4 integrates the 2026-11-26 08:20 - 2026-11-27
+09:00 milestones, the wave that turned the reverse-engineered AP path into the first live Wi-Fi AP
+on our own stack, flashed the ABI-correct image and reproduced the AP on it. The chip-protocol
+facts of v1-v3 are unchanged; where a v3 statement is now superseded it is recorded in section 8
+(C34-C45).
+
+1. **The scan wall is gone.** The mode-1 VAP base (`g0 id1` keys `0x0064`/`0x0065`) creates the
+   firmware VAP object the scan handler needs; the firmware produced the project's first real scan
+   results (six channel reports + six beacons, later 12 BSS entries decoded from `g1 id15`) and the
+   D2 phase flipped to **PASS** (section 6.9, correction C34).
+2. **The matrix is all-PASS.** The one-command matrix now returns boot/C2/D1/D2/E1 = PASS/PASS/
+   PASS/PASS/PASS (section 6.8, T28 updated, correction C35).
+3. **The hostapd path is reversed as capabilities.** Eight driver-side gates were found and fixed
+   one bench fire at a time - the missing ucode files, the fail-closed `.connect`, `.mgmt_tx`,
+   `wiphy->mgmt_stypes`, `WIPHY_FLAG_REPORTS_OBSS`, a paired `.disconnect` (the `wiphy_new_nm`
+   WARN), and the AP-type interface + mode-1 VAP base prerequisites (section 6.10, table T30).
+4. **The first live Wi-Fi AP.** On a fresh golden boot, hostapd reached the driver's `.start_ap`,
+   the firmware consumed the four-message AP start (vap_add 48 B -> vap_start 40 B -> ap_ssid
+   64 B -> ap_cfg 184 B) in 0 polls each, and hostapd printed **`wlan0: AP-ENABLED`** with SSID
+   `cudy-ap-test` (section 6.11, table T29, correction C36). The earlier crash was a missing
+   firmware VAP object, not a malformed frame.
+5. **The first data-plane frame reached the MAC ring.** Merging the E1 data plane into the mode-1
+   provider gave the first TX frame on the MAC MSDU ring: `dp_probe` (a READ) -> `dp_setup` ->
+   `h2d_txq_addr_sync` -> `dp_tx_frame` published `wptr 0x0000 -> 0x0001`; the completion read-back
+   is **POST-ONLY** (section 6.12, table T31, correction C41).
+6. **Userspace and image track advanced, and the image was flashed.** Native `iw` 6.17 /
+   `iwinfo` / `wireless-regdb` are deployed persistently through the T0 zero-flash path (49/49
+   gates, 0 failed); the hostapd package set is built and host-verified (88/88 checks + 14/14
+   selftests); the bench image was reproduced byte-for-byte with an ABI-correct rootfs
+   (sections 7, 9, 11). **Then the ABI-correct image was flashed (2026-11-27 06:30)**: kernel
+   read-back matched the slot hash, `ubiformat` OK, active pair untouched, handover completed
+   (`bootflag=b`, `boot_reg=0x21`), the box booted our rootfsb image and the post-boot ABI receipt
+   matched the kmod pin - the kmod-ABI mismatch is **closed**. The AP came up again on the flashed
+   image (`AP-ENABLED`), reproduced from rootfs-native modules (correction C44).
+7. **H1 is re-affirmed as the standing limit.** PD4 remains consume-only; every v4 bench fire used
+   the PD4-patched research firmware, and the first live AP does not change the upstream verdict
+   (section 6.6, correction C42).
+8. **AP persistence and a new firmware event family (2026-11-27 09:00).** The AP stayed live for
+   minutes after start, and the D2H catalogue gained a family absent at boot - `g1 id0x23` (35)
+   count=6, 24 B (plus `g1 id3` count=20, 466 B responses) - likely AP/beacon-period activity [I].
+   It is indirect evidence the firmware is running AP activity; the on-air beacon still needs an
+   external observer (section 6.11, correction C45).
+9. The corrections register gains C34-C45 (section 8), the evidence chain gains the 2026-11-26
+   09:00 - 2026-11-27 09:00 sessions (section 7), tables **T29-T31** are added and T28 is updated,
+   the evidence index gains **EV-245..EV-277**, and the verification, limits, open questions,
+   publication and lane-map sections are updated (sections 9-13).
+
 ---
 
 ## 1. Executive summary
@@ -158,17 +215,26 @@ SoC GPIO endpoint reset pulse
   -> real firmware VAP create: user_add (g0 id7, 180 B) + user_add_notify (g0 id8, 180 B)
      consumed in 0 polls; the firmware commits the VAP (user_id=0, vap_id=0)
   -> first real scan request (g0 id0xC, 520 B) consumed in 0 polls
-     -> no scan-result events within the 5 s bound: the firmware VAP-start wall (section 6.7)
+  -> mode-1 VAP base (g0 id1 keys 0x0064/0x0065) creates the firmware VAP object; the first real
+     scan results: six 124 B g1 id17 channel reports + six 509 B g1 id15 beacons (12 BSS decoded)
+  -> hostapd NEW_BEACON -> cfg80211 .start_ap -> the four-message AP start posted in order
+     (vap_add 48 B -> vap_start 40 B -> ap_ssid 64 B -> ap_cfg 184 B), consumed in 0 polls each
+  -> hostapd "wlan0: AP-ENABLED" with SSID cudy-ap-test: the first live Wi-Fi AP on our stack
   -> MAC data-plane host setup (dp_probe/dp_setup/dp_rings) + TXQ-table address sync
      (g0 id1, key 0x0320) accepted: automated E1 PASS 37/37, no exception
-  -> one command runs the whole matrix: boot PASS, C2 PASS, D1 PASS, D2 BLOCKED-DRIVER, E1 PASS
+  -> first data-plane frame published to the MAC TX MSDU ring (POST-ONLY: wptr 0->1,
+     completion_pending=1)
+  -> one command runs the whole matrix: boot/C2/D1/D2/E1 = PASS PASS PASS PASS PASS
+  -> the ABI-correct image is flashed (slot read-back + ABI receipt match); rootfs-native modules
+     load and the AP comes up AGAIN on the flashed image: hostapd "wlan0: AP-ENABLED"
 ```
 
 That is the project's Wi-Fi-side core RE goal: **the full duplex HCC protocol works on a
-clean-room host**, the first real Wi-Fi interface exists on our own image, and the firmware now
-receives and consumes our hand-built VAP-create and scan-request frames. The remaining work is the
-firmware-side VAP start/AP and scan completion, then the MAC frame plane in motion (sections
-6.7-6.8 and 10).
+clean-room host**, the first real Wi-Fi interface and the first live AP control plane exist on our
+own image, the firmware consumes our hand-built VAP/scan/AP frames and produces real scan results,
+and the MAC frame plane has published its first frame. The remaining work is the over-the-air
+proof (beaconing/association observed externally), TX completion and RX capture, the image flash,
+and the still-closed firmware/IRQ layer (sections 6.9-6.12 and 10).
 
 ### 1.2 What is proven, and what is not
 
@@ -181,20 +247,22 @@ firmware-side VAP start/AP and scan completion, then the MAC frame plane in moti
 | H2D transport (SR ring commit + mailbox announce) | **proven** [V*] |
 | firmware processes real H2D messages and answers | **proven** for the two ordered messages, the calibration class and the VAP/scan management-request classes [V*] |
 | calibration exchange (g0 id2 key 0x0101 -> g1 id3 298 B) | **proven** as a protocol exchange and completed for the whole six-message set (C2: all six answered, 298 B each); the answer bodies were counted, not decoded [V*] |
-| real firmware management frames (VAP add/notify + scan request) | **proven as delivered frames**: g0 id7 user_add 180 B, g0 id8 user_add_notify 180 B, g0 id0xC scan_req 520 B, each consumed in 0 polls; the firmware commits the VAP but produces no scan results yet [V*] |
-| one-command full bring-up matrix | **proven**: boot/C2/D1/E1 PASS and D2 BLOCKED-DRIVER in one command with bounded between-phase reboots [V*] |
-| cfg80211 management interface (wiphy + VAP netdev) | **proven** on our own image (M0/M1); firmware VAP objects are not created yet [V*] |
+| real firmware management frames + real scan results | **proven**: user_add g0 id7 180 B, user_add_notify g0 id8 180 B and scan_req g0 id0xC 520 B consumed in 0 polls; after the mode-1 VAP base the firmware returned real scan results (six g1 id17 124 B channel reports + six g1 id15 509 B beacons in a 5 s window; 12 BSS entries decoded from a 13-channel run) [V*] |
+| first live Wi-Fi AP (control plane) | **proven**: hostapd `AP-ENABLED`, `type AP, ssid cudy-ap-test`; the four-message AP start (vap_add 48 B, vap_start 40 B, ap_ssid 64 B, ap_cfg 184 B) consumed in 0 polls each, no exception [V*] |
+| one-command full bring-up matrix | **proven**: boot/C2/D1/D2/E1 = PASS/PASS/PASS/PASS/PASS in one command with bounded between-phase reboots [V*] |
+| cfg80211 management interface (wiphy + VAP netdev + real `.start_ap`) | **proven** on our own image (M0/M1 + the AP-start provider); after the mode-1 VAP base a firmware VAP object exists (`ctx0+0x190` nonzero) [V*] |
 | firmware IRQ/thread layer is alive on our boot | **not proven, and now explained** - the PD3/PD4 research patch services the mailbox without the IRQ layer; the H1 pack shows PD4 dispatches through an empty handler table (consume-only), so the duplex runs on the non-mailbox ETE/polled H2D path [V*] |
 | ETE engine DR (D2H) A->B copy | **host lever proven negative** - the only host-owned delta was tested (E1a/E1b); start is device/ROM state; direct read is the supported RX path [V*]/[I] |
-| firmware VAP/scan/AP control messages | **partially proven** - VAP add + notify + scan request frames built, delivered and consumed; scan **results** and the per-radio VAP start/AP family remain open [V*]/[U] |
-| MAC frame data path (TX/RX frames) | **host setup + TXQ address sync bench-validated** (E1 37/37) - separate slot-5 ring block programmed, no frame has traversed the rings yet [V]/[V*] |
+| firmware VAP/scan/AP control messages | **proven through AP start** - VAP add/start, scan request/results and the AP-config sequence are firmware-accepted; beaconing over the air, client join, WPA2 key install and the WAL AP carrier remain open [V*]/[U] |
+| MAC frame data path (TX/RX frames) | **first frame published to the MAC TX MSDU ring** (POST-ONLY: wptr 0->1, completion_pending=1); no MAC completion, no RX capture, no on-air observation yet [V]/[V*] |
+| beaconing / association / working link | **not proven** - `AP-ENABLED` is a host/control-plane fact; no beacon has been observed on the air, no client has associated, and no management TX/RX is implemented (the mgmt ops stay fail-closed) [I]/[U] |
 | upstreamable clean-room driver | **blocked** by the closed firmware blob and the unmatched vendor GPL request (section 11) |
 | PD4-patched vendor firmware | **research instrument only** - never a shipping change (section 6.6) |
 
 ### 1.3 The breakthrough ladder
 
-The investigation reached the result through sixteen hardware-validated breakthroughs; each is
-also a correction of the then-current model (section 8 gives the full register):
+The investigation reached the result through twenty-four hardware-validated breakthroughs; each
+is also a correction of the then-current model (section 8 gives the full register):
 
 | # | date | breakthrough |
 | ---: | --- | --- |
@@ -214,6 +282,16 @@ also a correction of the then-current model (section 8 gives the full register):
 | 14 | 2026-11-25 21:30 | **H1 confirmed**: PD4's live handler table is empty (the static sentinel pointer is unchanged), so its dispatcher handlers never execute; the duplex path is non-mailbox ETE/polled H2D [V*] |
 | 15 | 2026-11-26 05:30 | **one-command bring-up matrix**: boot/C2/D1/D2/E1 = PASS/PASS/PASS/BLOCKED-DRIVER/PASS with bounded reboot orchestration and per-phase evidence [V*] |
 | 16 | 2026-11-26 06:30 | **first real firmware management frames**: VAP user_add + notify + the first scan request posted and consumed in 0 polls; the scan-response wall is the firmware VAP start object [V*] |
+| 17 | 2026-11-26 12:00 | **T0 userspace deploy PASS**: native `iw` 6.17, `iwinfo`, `libiwinfo` and `wireless-regdb` installed persistently from the rootfs overlay (49/49 gates, 0 failed); modules stay in `/tmp` until the kmod-ABI path is taken [V*] |
+| 18 | 2026-11-26 14:00 | **first real firmware scan results**: mode-1 VAP create (`g0 id1` key 0x0064 48 B -> 0x0065 40 B) then scan_req -> six 124 B `g1 id17` channel reports + six 509 B `g1 id15` beacons; the v3 VAP-start wall is lifted [V*] |
+| 19 | 2026-11-26 16:30 | **first full BSS decode**: 12 BSS entries parsed from `g1 id15` beacons (SSID/DS/HT/RSN/WMM/country) into cfg80211; the firmware's real pacing (~3.5 s/channel) bounds a 13-channel run [V*] |
+| 20 | 2026-11-26 15:00/17:00 | **D2 TRUE PASS + one-command all-PASS matrix**: boot/C2/D1/D2/E1 = PASS/PASS/PASS/PASS/PASS with per-phase evidence (`build/wifi-bench-phase-matrix/20261124T094716Z/`) [V*] |
+| 21 | 2026-11-26 18:00 | **ABI-correct image reproduced byte-for-byte**: container `df6a78c3...`, slice `13e81214...`, slot `1794a531...`, rootfs `62344e80...`; the image rootfs apk db carries the kernel package the kmods pin (`6f995278...`), so the fix is a kernel+rootfs flash from one build - the runbook was ready; the flash was executed on 2026-11-27 06:30 (rung 25) [V] |
+| 22 | 2026-11-26 20:30 - 2026-11-27 01:30 | **hostapd runs on the image and the AP-setup capability ladder is climbed**: ucode files, fail-closed `.connect`/`.disconnect`, `.mgmt_tx`, `wiphy->mgmt_stypes`, `WIPHY_FLAG_REPORTS_OBSS`; each gate was made visible in dmesg and fixed by the ap-start lane [V*] |
+| 23 | 2026-11-27 02:30 | **first data-plane frame on the MAC TX ring**: `dp_probe` (READ) -> `dp_setup` -> key-0x0320 sync -> `dp_tx_frame` published (`wptr 0 -> 1`), completion_pending=1 -> POST-ONLY [V*] |
+| 24 | 2026-11-27 04:30 | **THE FIRST LIVE WI-FI AP ON OUR CLEAN-ROOM STACK**: fresh golden boot -> REPORTS_OBSS + mgmt_stypes -> start_ap -> four-message AP start consumed -> hostapd `wlan0: AP-ENABLED`, `type AP, ssid cudy-ap-test` [V*] |
+| 25 | 2026-11-27 06:30 | **the ABI-correct image is flashed and the AP runs on it**: slot read-back `1794a531...` matched, `ubiformat` OK, active pair untouched, handover `bootflag=b`/`boot_reg=0x21`, boot 6.18.60 from rootfsb; post-boot `apk query kernel` = `6f995278...` (ABI mismatch closed); rootfs-native modules load; hostapd `AP-ENABLED` again with all four AP-start frames consumed in 0 polls [V*] |
+| 26 | 2026-11-27 09:00 | **AP persistence + new firmware event family**: the AP is still live minutes after start (hostapd processes alive, `type AP, ssid cudy-ap-test`, no exceptions), and the D2H catalogue gained a family absent at boot: **`g1 id0x23` (35) count=6, 24 B**, plus `g1 id3` count=20 (466 B responses). Indirect evidence the firmware is running AP activity; beacons still need an external observer [V*] |
 
 ### 1.4 Key numbers
 
@@ -245,6 +323,20 @@ also a correction of the then-current model (section 8 gives the full register):
 | TXQ-table address sync | g0 id1 key `0x0320`, 32-byte frame, 4-byte table device VA; firmware worker CA `0x81445`; accepted (`txq_addr_sent=1 ok=2 timeout=0`) | [V]/[V*] |
 | one-command matrix | boot/C2/D1/D2/E1 = PASS/PASS/PASS/BLOCKED-DRIVER/PASS; C2 54/54, D1 21/21, E1 37/37; one reboot observed back in 61.5 s | [V*] |
 | H1 read pack | handler-table pointer CPU `0x10C1B0` = `0x00118D68`; live table CPU `0x118D68` all zero at 2 s and 48 s; ROM RAZ `0x2000` = 0; anchor CPU `0x40000` = `0x00046971` | [V*] |
+| mode-1 VAP-base provider | debug-stripped module 738,112 B sha256 `e09dc697...` (D2 TRUE PASS build); base provider tree 748,888 B sha256 `b42ff4ec...`; AP-start module 206,708 B sha256 `fd8e1439...` | [V]/[V*] |
+| first real scan results | 6 x 124 B `g1 id17` channel reports (channels 1-6) + 6 x 509 B `g1 id15` beacons within the 5 s bound; 12 BSS entries decoded in a 13-channel run (4/13 channels, ~3.5 s/ch) | [V*] |
+| AP-start frames | vap_add `g0 id1` 48 B -> vap_start `g0 id1` 40 B -> ap_ssid `g0 id1` key 0x0005 64 B -> ap_cfg `g0 id1` key 0x0127 184 B; consumed in 0 polls each | [V*] |
+| AP readback | page `0x86807FEF/7/2/0xABCD`, state 1, mask 0, staging 0; `ctx0+0x18C` changed (`0x70094810`); VAP pointer `ctx0+0x190` = `0x01010F18` (nonzero) | [V*] |
+| first live AP | hostapd-mini 2.12, ch 6 OPEN, beacon_int 100, DTIM 2; `wlan0: AP-ENABLED`, `type AP, ssid cudy-ap-test` | [V*] |
+| air-TX merged module | 886,864 B sha256 `ca32aec4...`; first TX frame: 32 B probe-req MPDU, ring entry 0, table wptr 0->1, completion_pending=1 = POST-ONLY | [V]/[V*] |
+| ABI-correct bench image | container `df6a78c3...` 6,533,439 B; kernel slice `13e81214...` 3,372,638 B; slot `1794a531...`; rootfs UBI `62344e80...`; image apk db kernel `6.18.60~6f995278...-r1`; ABI verifier 25/25 | [V] |
+| T0 userspace deploy | 49/49 gates, 0 failed; native `iw` 6.17 + `iwinfo` + `libiwinfo` + `wireless-regdb` persistent in the overlay; modules stay `/tmp` | [V*] |
+| hostapd package set | hostapd-mini 283,790 B + hostapd-common 1,922 B + ucode-mod-nl80211 24,228 B + ucode-mod-rtnl 29,292 B; no kernel= dependency; 88/88 host checks + 14/14 selftests | [V] |
+| all-PASS matrix evidence | `build/wifi-bench-phase-matrix/20261124T094716Z/` (PHASE-MATRIX.md, per-phase dirs); C2 54/54, D1 21/21, D2 PASS, E1 37/37 | [V*] |
+| image flash (2026-11-27 06:30) | ABI-correct container `df6a78c3...` flashed via `stock-telnet-install.sh` (slot read-back `1794a531...`, `ubiformat` OK, active pair untouched, handover `bootflag=b` + `boot_reg=0x21`); box boots 6.18.60 from rootfsb; `apk query kernel` = `6.18.60~6f995278...-r1` = the kmod pin | [V*] |
+| rootfs-native path | `modprobe cfg80211` + `modprobe hi5622_wifi` rc=0 from `/lib/modules/6.18.60` (no `/tmp`); native `iw` 6.17 + `iwinfo`; T0 full-set verify 38 gates PASS (one cosmetic receipt-missing: the flash wiped the overlay) | [V*] |
+| AP on the flashed image | hostapd AP-ENABLED again, rc=0, four hostapd processes, `type AP, ssid cudy-ap-test`; all four AP-start frames consumed 0 polls; page `0x86807FEF` golden, mask 0 | [V*] |
+| AP persistence + new D2H family | live minutes later (hostapd processes alive, same SSID/type, no exceptions); D2H catalogue after the AP start gains `g1 id0x23` (35) count=6 (24 B) + `g1 id3` count=20 (466 B) - absent at boot; meaning [U]/[I] (AP/beacon-period candidate) | [V*] |
 
 ---
 
@@ -893,6 +985,140 @@ them real; fields the lane could not pin (five scan flag bytes, the channel-inde
 [U]/[I] in T27. A second scan attempt without the VAP start object has no value and was not
 retried. No scan result, association or data frame has been observed yet.
 
+**v4 note.** The wall above was lifted one day later: the mode-1 VAP base created the firmware VAP
+object and the firmware produced real scan results (section 6.9, correction C34). The AP start and
+the first live AP followed from the same precondition (F12, F13, sections 6.10-6.11).
+
+---
+
+### F12. The AP-start crash: a firmware VAP object the AP path never created
+
+**Symptom / context.** After the hostapd capability gates were fixed (F13), the 2026-11-27 03:30
+fire reached the driver's `.start_ap`: dmesg `start_ap reached (iftype=3 beacon_interval=100
+dtim=2 head=63 tail=9)`, then `ap_ssid` (`g0 id1`, 64 B) posted and consumed in 0 polls. The very
+next frame's announce was not consumed (`out[0]=0x8` after 40 polls), the core closed the H2D lane,
+and the chip entered an **exception state**: page lost (`0xe22a0c00`), mask `0x18`, staging
+`0xffffffff`. The v6 dmesg label called that second frame `ap_auth`.
+
+**Work.** Two corrections came from static re-check of both carriers [V]. First, the g0 config-event
+carrier carries exactly two AP members - `ap_ssid` (`g0 id1` key `0x0005`, 64 B) and `ap_cfg`
+(`g0 id1` key `0x0127`, 184 B); firmware config-key table A has **no `0x006D` row**, and the
+36 B auth command `0x006D` exists only on the WAL group-2 vendor envelope. The label array was
+index-based, so index 1 printed `ap_auth` while the provider actually built `ap_cfg` (the 184 B
+frame). Second, the decoded AP workers - set-SSID CPU `0x82878` and AP-config CPU `0x84DA4` - both
+dereference the firmware VAP object at `module_ctx+0x190` with **no NULL check**
+(`ldr r3,[r4,#0x190]; ldrb r2,[r3,#0x64]`). The mode-1 VAP base that creates that object had only
+ever been posted by the scan path (`vap_start_first`); the AP path posted AP frames into a context
+with no VAP object. The exception is a firmware data abort in the worker, not a bad frame byte.
+
+**Interpretation.** The hostapd -> cfg80211 -> driver -> provider chain had already worked end to
+end on the first AP frame. The blocker was a **precondition object** the AP path inherited only by
+accident. The fix (v7) posts the mode-1 VAP base (`g0 id1` key `0x0064` 48 B -> key `0x0065`
+40 B) **always, once per module load, before any AP frame**, flag-guarded and fail-closed: if the
+base cannot be posted, the sequence aborts before the wire. The exception boot cannot be repaired
+host-side - a power-cycle and a fresh golden boot are mandatory (the 04:30 fire used one).
+
+**Residual risk.** Whether the SSID worker or the AP-config worker faulted first is [U] - announce
+consumption is at the SR/queue level, not proof the worker ran. The label bug is corrected in v7 by
+a carrier-aware label callback so dmesg prints `ap_cfg` for the 184 B frame. The VAP-base posting
+is once per module load, not once per `start_ap`; a second AP start without a reload would behave
+as the old flow (untested, out of scope for the first rung).
+
+---
+
+### F13. The hostapd AP path is a capability ladder, not one op
+
+**Symptom / context.** From 2026-11-26 20:30 to 2026-11-27 01:30, five hostapd fires failed with
+almost the same two lines ("Could not configure driver mode" / "nl80211 driver initialization
+failed") despite a clean iw-driven interface lifecycle. The isolation was manual: `iw dev wlan0
+set type managed` / `set type __ap` both returned 0 with the driver's dmesg, but hostapd's run
+produced no type-change message - so the failing step had to be inside hostapd's nl80211 setup,
+before any driver op it expected.
+
+**Work.** Each failure was decoded against the 6.18.60 cfg80211/nl80211 sources and fixed in the
+ap-start provider (v2-v6), one gate per fire [V]/[V*]:
+
+1. **ucode modules.** hostapd-mini is an OpenWrt wrapper: it loads `/usr/share/hostap/*.uc` from
+   the wifi-scripts package. The bench image lacked them -> "Error loading ucode: Unable to resolve
+   path for module 'common'". Bench workaround: push `common.uc`, `wdev.uc`, /usr/share/hostap/wifi-detect.uc;
+   image fix: `CONFIG_PACKAGE_wifi-scripts=y` (the wifi-scripts package).
+2. **NL80211_CMD_CONNECT advertisement.** cfg80211 advertises the CONNECT command only when
+   `rdev->ops->connect` (or `.auth`) exists; hostapd's shared init gate refuses a driver with
+   neither AUTHENTICATE nor CONNECT. A fail-closed `.connect` was added (advertisement only - the
+   AP path never calls it).
+3. **SET_INTERFACE semantics.** hostapd always issues `SET_INTERFACE(AP)` during init. The M1 op
+   had two real bugs: it returned 0 without storing `wdev->iftype` (cfg80211_change_iface WARNs and
+   later AP checks read a stale type), and it compared `params->use_4addr == -1` ("not specified")
+   as a real request and refused. v3 stores the iftype and treats -1 as unspecified. For a VAP
+   created as `type __ap`, the same-type call is a no-op that never reaches the op - the robust
+   bench flow.
+4. **`.mgmt_tx` gate.** hostapd subscribes to AP management frames with
+   `NL80211_CMD_REGISTER_FRAME`; `nl80211_register_mgmt()` refuses every subscription when the
+   driver has no `.mgmt_tx` ("not much point in registering if we can't reply"). v4 registers a
+   fail-closed `.mgmt_tx`.
+5. **`wiphy->mgmt_stypes` gate.** With `.mgmt_tx` present, the same path then calls
+   `cfg80211_mlme_register_mgmt()`, which requires a non-NULL `wiphy->mgmt_stypes` and the
+   per-iftype rx bit for every subscribed subtype. v5 advertises AP rx/tx = `0x3c15` (assoc/
+   reassoc request, probe request, disassoc, auth, deauth, action) plus STA/monitor tables; dmesg
+   confirms `mgmt_stypes advertised (AP rx=0x3c15 tx=0x3c15)`. Management TX stays fail-closed.
+6. **`WIPHY_FLAG_REPORTS_OBSS` gate.** The 01:30 failure was "Failed to set beacon parameters" with
+   no start_ap line. It was **not** SET_BEACON: the initial beacon is `NEW_BEACON`, and cfg80211's
+   SET_BEACON path needs a non-zero AP beacon interval that only a successful start_ap sets. With
+   userspace AP SME, hostapd first calls `nl80211_get_wiphy_data_ap()`, which registers
+   `NL80211_CMD_REGISTER_BEACONS`; cfg80211 rejects that with -EOPNOTSUPP unless
+   `WIPHY_FLAG_REPORTS_OBSS` is set, and hostapd returns -ENOBUFS **before building NEW_BEACON**.
+   v6 sets the flag (registration bookkeeping only; the driver has no OBSS reporting).
+7. **The `wiphy_new_nm` WARN.** The same fire showed a kernel WARNING at
+   `net/wireless/core.c:532`; that line is `WARN_ON(ops->connect && !ops->disconnect)`. v6 pairs the
+   v2 `.connect` gate with a fail-closed `.disconnect` stub.
+
+**Interpretation.** hostapd's AP-ENABLED path is gated by **cfg80211 advertisements** - op presence,
+`mgmt_stypes`, wiphy flags - not by `.start_ap` alone. Every gate fails with the same vague
+hostapd line, so the provider grew dmesg instrumentation at SET_INTERFACE / start_ap / mgmt_tx /
+module init. The final driver-side gate was F12 (the firmware VAP base); with it the same hostapd
+flow that had failed five times printed `AP-ENABLED`.
+
+**Residual risk.** The fixes are advertisements, not implementations: management TX/RX, OBSS
+reporting, beacon control and WPA2 `add_key` remain M3/absent and stay fail-closed. `change_beacon`
+is registered to accept SET_BEACON host-side and performs no firmware write yet. A real
+AP-with-clients milestone needs the missing ops, not just the advertisements.
+
+---
+
+### F14. `AP-ENABLED` is not a link: the v4 milestone's honest boundary
+
+**Symptom / context.** The 2026-11-27 04:30 fire is the project's headline milestone: hostapd
+reported `wlan0: AP-ENABLED` with SSID `cudy-ap-test`, and the firmware consumed the four AP-start
+messages in order with no exception. The risk is over-reading the word "AP".
+
+**What is proven.** The full control-plane chain hostapd -> cfg80211 -> clean driver -> frame
+provider -> HCC -> firmware real VAP object: (a) hostapd reached the driver's `.start_ap` and its
+`-B` daemonization returned only after interface setup; (b) the four messages - vap_add 48 B,
+vap_start 40 B, ap_ssid 64 B, ap_cfg 184 B - were posted and **consumed by the firmware in 0 polls
+each**; (c) the read-only firmware readback is clean: golden page, state 1, mask 0, staging 0,
+`ctx0+0x18C` changed (`0x70094810`), VAP pointer `ctx0+0x190` = `0x01010F18` nonzero; (d) hostapd
+then reports `AP-ENABLED` and `iw dev wlan0 info` shows `type AP, ssid cudy-ap-test` [V*].
+
+**What is not proven.** (a) **Beaconing**: the firmware-side beacon TX is not observable from the
+same radio, and `AP-ENABLED` only means the start was accepted; no D2H beacon event with a known
+meaning was recorded. The later persistence check strengthened the indirect evidence - the AP stayed
+live for minutes and the firmware's D2H catalogue gained a new `g1 id0x23` 24 B family after the AP
+start (absent at boot; AP/beacon-period candidate [U]) - but that is not an on-air proof.
+(b) **Association**: no client exists; management TX/RX is fail-closed and `add_key` is M3, so
+even an OPEN client has no implemented path. (c) **Data path**: the merged data-plane module's
+first frame is POST-ONLY (section 6.12) - the MAC did not consume it in this record. (d) **Delivery
+(added after the 06:30 flash)**: the ABI-correct image was flashed the same day and the AP came up
+again from rootfs-native modules, so the "image/runbook only" caveat is closed - but the flash does
+not add any over-the-air or association proof. (e) **Portability**: the AP runs on the PD4-patched
+research firmware; the vendor
+blob's mailbox dispatch cannot be programmed host-side, so this is a research artifact, not a
+shippable stack [V*]/[I].
+
+**Residual risk.** The natural next fires (beaconing observation with an external monitor, air-TX
+with the radio started, client association) each need a new instrumentation class (external
+observer or mgmt TX/RX). Until then the report must say "first live AP control plane", never "a
+working AP"; the claim rules in TABLES T29 are the gate.
+
 ---
 
 ## 5. Protocol reference (summary)
@@ -1098,13 +1324,15 @@ bench-only and is not part of the luofu kernel patch series (section 11). The wi
 (domain 0 -> 2.4 GHz) is an inference with a `band_force` override; the bench saw both bands
 listed on the two endpoints, not a per-band link test (C26).
 
-### 6.4 The data-plane architecture (mapped, host-implemented, not frame-moving)
+### 6.4 The data-plane architecture (mapped, host-implemented, first frame ring-published)
 
 The frame plane is fully mapped statically from the vendor host driver and the firmware and has now
 been added to the clean driver by the datapath-bringup lane (`dp_probe`/`dp_setup`/`dp_rings`/
-`dp_txq_sync`); its setup + TXQ-table address sync passed the automated E1 phase on hardware, but
-**no frame has been sent or received by our host** (details in `wifi-datapath/REPORT.md` and
-`wifi-datapath-bringup/REPORT.md`, tables T24/T26).
+`dp_txq_sync`); its setup + TXQ-table address sync passed the automated E1 phase on hardware. v4
+adds the merged data-plane provider: the host published its **first frame to the MAC TX MSDU ring**
+on 2026-11-27 02:30 (POST-ONLY - the MAC did not consume it in that record; section 6.12, table
+T31). **No frame has been completed or received by our host** (details in `wifi-datapath/REPORT.md`,
+`wifi-datapath-bringup/REPORT.md` and `wifi-dp-air/`, tables T24/T26/T31).
 
 **Two planes.** HCC/ETE = control/event messages (working). MAC slot-5 host-interface block =
 Wi-Fi frames (host setup + TXQ address sync validated by E1; no frame has moved yet). The blocks are
@@ -1244,7 +1472,10 @@ firmware for the first time; finding F11 carries the analysis, this section the 
 
 **Frames.** Three management frames were built by the provider (module 676,180 B sha256
 `4a1c3b9a...`, caps `0x1f`), passed the fail-closed gate and were consumed by the firmware with
-zero exceptions, on the standard cfg80211 bench image with the C2 ladder in the same boot:
+zero exceptions, on the standard cfg80211 bench image with the C2 ladder in the same boot. The
+owning lane later rebuilt the provider with the scan-D2H decoder integration (**704,720 B sha256
+`20d38c5c...`**, `wifi-scan-ap/BUILD-NOTES.md`); the 676,180 B build is the historical fired
+artifact, recorded in the ledger and in T27:
 
 | # | frame | wire | builder | SR node word1 | post result | firmware result |
 | ---: | --- | ---: | --- | --- | --- | --- |
@@ -1255,8 +1486,8 @@ zero exceptions, on the standard cfg80211 bench image with the C2 ladder in the 
 Table T27 has the full frame map and the un-pinned fields. The VAP del builder (`g0 id9`, 24 B) is
 byte-exact from the shipped del_user attr but was not needed in these sessions [V].
 
-**The scan wall.** After the scan request the driver waited its bounded 5000 ms for the D2H scan
-events (`g1 15/16/17`, `g2 2`), received none, and completed the cfg80211 scan as aborted
+**The scan wall (lifted in v4).** After the scan request the driver waited its bounded 5000 ms for
+the D2H scan events (`g1 15/16/17`, `g2 2`), received none, and completed the cfg80211 scan as aborted
 (`scan DONE (finish-abort, results=0 ... timeout=1) -> cfg80211_scan_done(aborted=1)`; `iw`
 reported "scan aborted!"). The direct-read catalogue contained only the boot-time unsolicited
 `g1 id3` (36 B), so the firmware had not sent result frames at all. The decoded firmware scan
@@ -1270,35 +1501,286 @@ defect: every frame the host posted was accepted and consumed.
 0, heartbeats continuing, no exception; the box stayed on the cfg80211 bench image with the stock
 pair preserved [V*].
 
-### 6.8 One command reproduces the whole bring-up matrix (2026-11-26 05:30)
+**v4 resolution.** The wall was not a builder defect: the mode-0 WAL group-2 VAP frames were
+consumed but did not create the firmware VAP object; the **mode-1** carrier (`g0 id1` keys
+`0x0064`/`0x0065`) does, and the firmware then produced real scan results (section 6.9, correction
+C34). The same precondition later gated the AP start (F12/6.11).
+
+### 6.8 One command reproduces the whole bring-up matrix (2026-11-26, final run 17:00)
 
 The wave-3 bench-tooling lane turned the phase ladders into a single fail-closed command. The real
 run
 
     phase_matrix.py --phase all --reboot-between --yes-really --attended
 
-returned, in one session and with bounded reboots between phases:
+returned, in one session and with bounded reboots between phases. v3 reported the v3-era run
+(05:30) where D2 was BLOCKED-DRIVER; the mode-1 VAP provider then produced real scan results, and
+the final v4 run is **all-PASS**:
 
 | phase | what it covers | result | checks |
 | --- | --- | --- | ---: |
 | boot | read-only golden page + ready handshake | PASS | 15/15 |
 | C2 | six-calibration boot (create + TXQ + six 298 B messages) | PASS | 54/54 |
 | D1 | cfg80211 wiphy + VAP netdev add/del via iw | PASS | 21/21 |
-| D2 | scan: fail-closed provider refuses before any VAP start | BLOCKED-DRIVER (expected; flips to PASS when the scan path is real) | 13 checks, 12 passed + 1 blocked scan step, 0 failed |
+| D2 | scan with the mode-1 VAP provider: iw rc=0, dmesg channel results, results>0 | **PASS** (22-step/48-check D2 TRUE PASS ladder; 2 writes) | session PASS / protocol verdict PASS |
 | E1 | MAC data-plane setup + TXQ-table address sync | PASS | 37/37 |
 
-Evidence: build/evidence-bench-gates/wifi-bench-phase-matrix/20261124T083424Z/ (PHASE-MATRIX.md,
-per-phase dirs, BRINGUP-STATUS.md). The orchestration that made it possible (commit `0394f80`):
-reboot-and-wait issues the immediate `/sbin/reboot -f` in the background, clamps **every**
-transport call to the remaining budget and logs `[reboot]` progress (observed: box back after
-61.5 s, uptime 46 s, `seen_down=1`), owns the between-phase reboot, aborts and marks the remaining
-phases NOT-RUN on failure, and runs each phase child in a killable process group under a hard
-`--phase-timeout`; the device-free selftest grew to **503/503** [V]. A D2 row is never faked: the
-runner classifies a documented pending-feature outcome from the session evidence
-(`blocked_rc`/`blocked_patterns`, rc 95/161, "Not supported") as BLOCKED-DRIVER instead of
-FAIL/ERROR, keeps the post-scan mask/catalogue/VAP-del steps running, and the row flips to PASS
-automatically when the provider path lands. This is the operator-visible state table for the whole
-wave (T28) [V*].
+Evidence: `build/wifi-bench-phase-matrix/20261124T094310Z/` (first D2 TRUE PASS) and
+`build/wifi-bench-phase-matrix/20261124T094716Z/` (the one-command all-PASS run; PHASE-MATRIX.md
+records session result PASS + protocol verdict PASS for every row). The orchestration that made it
+possible (commit `0394f80`): reboot-and-wait issues the immediate `/sbin/reboot -f` in the
+background, clamps **every** transport call to the remaining budget and logs `[reboot]` progress
+(observed: box back after 61.5 s, uptime 46 s, `seen_down=1`), owns the between-phase reboot,
+aborts and marks the remaining phases NOT-RUN on failure, and runs each phase child in a killable
+process group under a hard `--phase-timeout`; the device-free selftest grew to **563/563** in v4
+(was 503 in v3) [V]. A D2 row is never faked: the runner classifies a documented pending-feature
+outcome from the session evidence (`blocked_rc`/`blocked_patterns`, rc 95/161, "Not supported")
+as BLOCKED-DRIVER instead of FAIL/ERROR when results=0, and the row went PASS in the final runs
+because the firmware actually produced results - not because the classification was relaxed. This
+### 6.9 The mode-1 VAP base: first real scan results and the full BSS decode (2026-11-26)
+
+**Why this section exists.** v3 ended on the scan wall (6.7): the firmware accepted the VAP-create
+and scan-request frames but produced no results. The wave after it found the missing object, got
+the first real scan results, decoded them, and flipped D2 to PASS. This section is the operational
+record; finding F12 covers the same precondition for the AP path.
+
+**Two VAP-start families.** The vendor userspace has two equivalent-looking carriers, and only one
+creates the firmware object the handlers need [V]:
+
+* **mode 0 / WAL group-2 ("vendor order")**: cmd `0x0064` (VAP add, 56 B frame) + cmd `0x0065`
+  (VAP start, 44 B) - the vendor host's `wal_hipriv_add_vap`/`wal_start_vap` shape.
+* **mode 1 / `g0 id1` static keys**: key `0x0064` (VAP add, 48 B) + key `0x0065` (VAP start,
+  40 B) - the MAC-layer carrier dispatched through config-key table A (rows 1/2 -> workers
+  `0x449E4`/`0x46394`). This is the same carrier the bench-proven C2 frames ride.
+
+The 2026-11-26 13:00 fire posted the full mode-0 ladder (user_add, notify, WAL `0x64`, WAL `0x65`,
+scan_req): all five frames were consumed in 0 polls with mask 0 - and the scan still returned
+nothing. The read-only readback showed the module-0 context ($\rightarrow$ the VAP object) still
+zero: **the WAL group-2 frames did not create the firmware VAP object** [V*]/[I]. The lane's fix
+order was mode-1 next: post `g0 id1` key `0x0064` then `0x0065` before the scan
+(`vap_start_mode=1`), then user_add -> notify -> scan_req.
+
+**The first real scan results (14:00).** Fired with the rebuilt provider module (debug-stripped
+738,112 B sha256 `e09dc697...`; params `allow_frames=12 vap_start_first=1 vap_start_mode=1
+vap_start_module=0 frame_gap_ms=100 h2d_send_budget=8`) on a fresh PD4 golden boot [V*]:
+
+1. boot golden, C2 ladder clean (ctx + TXQ consumed in 0 polls);
+2. `iw phy phy0 interface add wlan0 type managed` -> user_add `g0 id7` 180 B + notify `g0 id8`
+   180 B consumed;
+3. `iw dev wlan0 scan` -> the provider posted **vap_add `g0 id1` 48 B (3/12)**, **vap_start
+   `g0 id1` 40 B (4/12)** and scan_req `g0 id0xC` 520 B (5/12), each consumed in 0 polls;
+4. the firmware answered: dmesg `cfg80211: scan channel result slot=0 ch=1 (2412 MHz)` .. slot=5
+   ch=6 (2437 MHz); `rd_catalog` showed **`g1 id17` (17) count=6 (124 B channel results) +
+   `g1 id15` (15) count=6 (509 B beacons)**; the scan completed `finish-abort` after 6 of 13
+   channels because the host bound was 5 s; mask 0, page/state golden, no exception [V*].
+
+That is the project's first real firmware scan result: the mode-1 VAP base removed the object
+precondition, the firmware scan engine ran, and the results were decoded into cfg80211 BSS
+entries.
+
+**The full BSS decode (16:30).** The scan-complete lane (module rebuilt from the mode-1 provider
+base, **748,888 B / 750,512 B builds** sha256 `b42ff4ec...`) added three things [V]/[V*]:
+
+* an **auto scan window** `clamp(3000 + n*900, 1000, 45000) ms` (14,700 ms for 13 channels) and a
+  `scan_timeout_ms` override, plus a `scan_dwell_ms` sweep knob (vendor dwell 60);
+* a **host-side completion rule**: success (`finish-ok[channel-coverage]`) when every requested
+  channel was reported by `g1 id17` and a 500 ms settle window passed; a firmware completion
+  (`g1 id16` status 1 / `g2 id2`) still wins immediately; a timeout is `finish-abort[host-timeout]`;
+* a **full beacon IE walk** of `g1 id15` (802.11 body + 20-byte trailer): SSID/hidden, DS, HT
+  cap/op, VHT, RSN, WMM, country, extended caps, ESS/privacy bits, channel from DS/HT-op, validated
+  IE chain -> `cfg80211_inform_bss()` with a per-BSS dmesg line.
+
+The 13-channel fire decoded **12 BSS entries** (the first full BSS decode) but still ended
+`finish-abort[host-timeout]`: the firmware's real pace is ~3.5 s/channel, slower than the ~830 ms/ch
+estimate, so the auto window was exhausted after 4/13 channels [V*]. The D2 ladder was fixed
+against the *functional* gate instead: scan results > 0, iw rc=0, clean page/mask - which is what
+the D2 TRUE PASS row records (6.8).
+
+| item | value | evidence |
+| --- | --- | --- |
+| mode-0 result | 5/5 frames consumed (incl. WAL `0x64`/`0x65`), scan results=0, module-0 VAP object zero | ledger 2026-11-26 13:00 | [V*] |
+| mode-1 frames | vap_add `g0 id1` 48 B -> vap_start `g0 id1` 40 B, both consumed in 0 polls | ledger 2026-11-26 14:00; `wifi-vap-start` | [V*] |
+| first results | 6 x 124 B `g1 id17` (ch 1-6) + 6 x 509 B `g1 id15` within 5 s; results=6 bss=6 complete=0 timeout=1 | ledger 2026-11-26 14:00; `wifi-scan-complete` | [V*] |
+| full decode | 12 BSS entries (SSID/DS/HT/RSN/WMM/country) from `g1 id15`; 4/13 channels at ~3.5 s/ch -> abort | ledger 2026-11-26 16:30 | [V*] |
+| scan completion | host coverage rule + 500 ms settle; `finish-ok[channel-coverage]` / `finish-ok[complete-event]`; firmware failure -> abort | `wifi-scan-complete/REPORT.md` sec 3 | [V] |
+| D2 ladder | 22 steps / 48 checks / 2 writes; PASS gates iw rc=0 + dmesg channel result + results>0 + mask/staging 0 + page golden | ledger 2026-11-26 15:00; T28 | [V*] |
+
+**Limits.** No `finish-ok` 13/13 scan is in the record; the 12-BSS run ended on the host timeout.
+Signal is 0 mBm by default (the trailer RSSI bytes are [U]); the 20-byte trailer semantics and the
+`g1 id16`/`g2 id2` status code space are partially open. A full-channel scan and an `iw` BSS
+listing in a passing D2 run remain follow-ups, not claimed results.
+
+### 6.10 The hostapd capability ladder: from AP-DISABLED to AP-ENABLED (2026-11-26/27)
+
+**Why this section exists.** With the AP-start sequence reversed (four-message AP config, 156 B body
+mapped) and the frames built, the trigger was hostapd's `NL80211_CMD_NEW_BEACON` -> cfg80211
+`.start_ap`. Getting hostapd to that point took five failed fires and seven distinct driver-side
+capability gates; F13 has the analysis, this section the operational record and the gate table
+(T30).
+
+**Starting point.** The bench image had no hostapd. The hostapd-deploy lane built the OpenWrt
+hostapd-mini v2.12 package set (with the ucode dependencies), host-verified it and wrote a
+zero-flash T0 deploy path; that lane never contacted the router. The Lead deployed/ran hostapd in
+the attended AP sessions.
+
+**The gate sequence, in the order the bench found it** [V*]:
+
+1. **ucode** - "Error loading ucode: Unable to resolve path for module 'common'": the image lacks
+   `/usr/share/hostap/*.uc` (wifi-scripts). Fixed for the bench by pushing the three files; the
+   real image fix is `CONFIG_PACKAGE_wifi-scripts=y`.
+2. **CONNECT advertisement** - "nl80211: Driver does not support authentication/association or
+   connect commands": hostapd's shared init gate refuses a driver advertising neither
+   AUTHENTICATE nor CONNECT. Fixed with a fail-closed `.connect` (v2).
+3. **SET_INTERFACE** - the M1 op refused/stored wrongly on type changes; v3 stores `wdev->iftype`
+   and treats `use_4addr=-1` as unspecified; a VAP created as `type __ap` makes hostapd's
+   SET_INTERFACE(AP) a same-type no-op.
+4. **`.mgmt_tx`** - hostapd's AP frame subscriptions (`NL80211_CMD_REGISTER_FRAME`) are rejected by
+   cfg80211 unless the driver has a mgmt_tx op. Fixed with a fail-closed `.mgmt_tx` (v4).
+5. **`mgmt_stypes`** - the subscriptions still need `wiphy->mgmt_stypes` with the AP rx bits.
+   Fixed by advertising AP rx/tx `0x3c15` (v5); dmesg confirms "hostapd frame subscriptions
+   accepted".
+6. **`REPORTS_OBSS`** - "Failed to set beacon parameters" was not SET_BEACON: hostapd's userspace
+   AP SME registers `NL80211_CMD_REGISTER_BEACONS` before it builds NEW_BEACON, and cfg80211
+   refuses without `WIPHY_FLAG_REPORTS_OBSS`. Fixed by setting the flag (v6).
+7. **connect/disconnect WARN** - the `wiphy_new_nm` warning at `core.c:532` is
+   `WARN_ON(ops->connect && !ops->disconnect)`; v6 pairs the gate with a fail-closed
+   `.disconnect`.
+8. **the firmware VAP base** - the last gate was F12: the AP frames need the mode-1 VAP object.
+   v7 posts `g0 id1` `0x0064` 48 B -> `0x0065` 40 B once per load before the AP sequence.
+
+**Interplay with the rest of the report.** None of these fixes changes a wire byte: the AP frames
+were already byte-exact (T29); the gates are cfg80211 advertisement requirements and one firmware
+precondition. That is why the same hostapd command flow that failed five times printed
+`AP-ENABLED` after the v7 module (6.11).
+
+**Host-side verification (no device).** `deploy-hostapd.sh --check` 88/88, `tools/selftest.sh`
+14/14, `tools/check-ladder.py` 107/107; the config fixtures (OPEN ch 6, WPA2 negative control) parse
+with a hostapd v2.12 build from the tree's own source, and the negative config is refused. The
+device-side deploy preflight is the authoritative gate for the running image.
+
+**Limits.** The gates are advertisements, not implementations: management TX/RX, OBSS reporting,
+beacon control and WPA2 `add_key` remain absent and fail-closed. `change_beacon` accepts
+SET_BEACON host-side with no firmware write. hostapd-mini does not autostart from `apk add` (no
+`/etc/rc.d` link), which is deliberate for the bench.
+
+### 6.11 THE FIRST LIVE WI-FI AP ON OUR CLEAN-ROOM STACK (2026-11-27 04:30)
+
+**Why this section exists.** This is the v4 headline: hostapd reached the driver's `.start_ap`,
+the firmware consumed the four-message AP start, and hostapd reported `wlan0: AP-ENABLED` with
+SSID `cudy-ap-test`. F12/F14 carry the analysis and the honest boundary; this section is the
+session record and the claim rules.
+
+**Session shape.** Fresh PD4 golden boot (the previous attempt had crashed the firmware - see
+F12), the v7 AP-start module **206,708 B sha256
+`fd8e1439c7c323eae57b291fd034a647815ba5ab1ca27bedd48f83b3f9a45020`**, module params
+`allow_frames=8 vap_start_first=1 vap_start_mode=1 vap_start_module=0 frame_gap_ms=100
+h2d_send_budget=8`, then the proven C2 ladder, `iw reg set US`, `iw phy phy0 interface add wlan0
+type __ap`, one bounded scan for the mode-1 VAP base, and hostapd-mini 2.12 with the OPEN ch 6
+config (beacon_int 100, DTIM 2).
+
+**The observed sequence** (dmesg / hostapd) [V*]:
+
+```
+cfg80211: REPORTS_OBSS flag set (hostapd wiphy-data AP registration)
+cfg80211: mgmt_stypes advertised (AP rx=0x3c15 tx=0x3c15) - hostapd frame subscriptions accepted
+cfg80211: start_ap reached (iftype=3 beacon_interval=100 dtim=2 head=63 tail=9) - provider gate next
+frame post vap_add:   g0 id1 total 48 B  ... posted 3/8, consumed 0 polls   [mode-1 VAP object]
+frame post vap_start: g0 id1 total 40 B  ... posted 4/8, consumed 0 polls
+frame post ap_ssid:   g0 id1 total 64 B  ... posted 5/8, consumed 0 polls   [key 0x0005]
+frame post ap_cfg:    g0 id1 total 184 B ... posted 6/8, consumed 0 polls   [key 0x0127]
+cfg80211: start_ap sequence posted to provider vapscan-0e4ad45
+hostapd: wlan0: interface state UNINITIALIZED->ENABLED
+hostapd: wlan0: AP-ENABLED
+iw dev wlan0 info -> type AP, ssid cudy-ap-test
+```
+
+**Readback** (read-only, after the sequence) [V*]: golden page `0x86807FEF/7/2/0xABCD`, state 1,
+mask 0, staging 0; `ctx0+0x18C` changed to `0x70094810`; VAP pointer `ctx0+0x190` =
+`0x01010F18` nonzero - the firmware AP object exists. No exception was raised; every AP-start
+frame was consumed on the first bounded poll. The VAP `+0x10 = 100` / `+0x14 = 2` dereference
+window remains [I] and was not read in this record; the PASS does not depend on it.
+
+**Claim rules.** A consumed AP-start sequence plus a clean firmware readback is the control-plane
+evidence. hostapd `AP-ENABLED` is a host-side fact; beaconing over the air is not observable from
+the same radio, no client associated, and the data plane is POST-ONLY (6.12). Never quote this
+milestone as "a working AP" without those limits; T29 has the exact tables.
+
+**On the flashed image (2026-11-27 06:30).** The milestone was then **reproduced on the delivered
+image**: the ABI-correct container (`df6a78c3...`) was flashed with the stock-assisted installer
+(kernel read-back matched slot `1794a531...`, `ubiformat` OK, active pair untouched; the tool's env
+step errored but the environment already read `bootflag=b`, and the handover script set
+`bootflag=b` + pristine `wifi_init` + `boot_reg=0x21`), the box rebooted into 6.18.60 from
+`ubi.mtd=rootfsb` with selector `0x11`, and the post-boot ABI receipt matched:
+`apk query --fields version kernel` = `6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1` = the kmod pin
+- **the kmod-ABI mismatch is closed**. Native `modprobe cfg80211` and `modprobe hi5622_wifi` returned
+rc=0 from `/lib/modules/6.18.60` (no `/tmp`), native `iw` 6.17 + `iwinfo` work, and the T0 full-set
+verify passed **38 gates** (only a cosmetic "receipt missing" because the flash wiped the overlay).
+With hostapd plus the ucode files, the PD4 firmware and the v7 ap-start driver, the same flow gave
+`AP-ENABLED` again (hostapd rc=0, four hostapd processes, `type AP, ssid cudy-ap-test`; all four
+AP-start frames consumed in 0 polls; page `0x86807FEF` golden, mask 0) [V*]. Minutes later the AP
+was still live (hostapd processes alive, same SSID/type, no exceptions) and the D2H catalogue had
+gained a family absent at boot: **`g1 id0x23` (35) count=6, 24 B** (plus `g1 id3` count=20, 466 B
+responses). The new family is likely AP/beacon-period firmware activity [I]; it is the first
+firmware-side sign that the AP start changed ongoing behaviour, but the on-air beacon still needs an
+external observer and the family's meaning remains [U].
+
+**What made it possible.** The whole chain, each link previously hardware-validated: clean-room
+PCIe transport -> golden boot -> HCC duplex -> calibration C2 -> cfg80211 wiphy/VAP -> mode-1 VAP
+create -> AP config; the v4 additions are the four AP messages, the capability gates, the firmware
+VAP precondition, and the ABI-correct image flash that closed the delivery caveat.
+
+### 6.12 The first data-plane frame on the MAC TX ring (POST-ONLY, 2026-11-27 02:30)
+
+**Why this section exists.** E1 (6.4) programmed the MAC slot-5 rings and synced the TXQ table, but
+no frame had traversed them. The dp-air lane merged that data plane into the hardware-validated
+mode-1 provider and delivered the F-AIR ladder; the first real fire put a frame on the ring. F14
+and correction C41 carry the honesty rules; this section is the record and the ladder map (T31).
+
+**Merged artifact.** `hi5622_wifi.ko` **886,864 B sha256
+`ca32aec46dae46de536281ee4dee8d8255d6981570b61bd86b186c50c6d5b4a0`** (revision 2): the
+provider tree `wifi-scan-complete/src` (748,888 B `b42ff4ec...`) plus the E1 data-plane objects and
+the wifi-dp-txrx portable TX/RX logic; merge provenance enforced by the lane's verifier; **1,483
+device-free host checks** (242 H2D + 254 txrx + 290 scan + 195 scan-complete + 454 cfg80211 + 48
+merge-specific), 0 compiler/modpost warnings, vermagic 6.18.60; the F-AIR sequence
+`bringup-f-air-txrx.json` is 30 steps / 83 checks / 7 writes (sha256 `96354365...`).
+
+**First fire (00:30) - fail-closed by design.** The ladder stopped at `dp_probe` because the
+operator wrote the attribute instead of reading it: `dp_probe` is a **READ** action (one read-only
+MAC word read); a write returns rc=1, performs no read and leaves `probe_ok=0`, so `dp_setup`
+and every later action refused. This was a documentation/attribute-mode bug, not a device fault
+(correction C40); revision 2 accepts both `cat dp_probe` and `echo 1 > dp_probe` as the *same
+read*, and the E1 doc's old `echo 1 >` spelling is retired.
+
+**Second fire (02:30) - the first frame** [V*]:
+
+1. boot ladder + C2 clean; mode-1 VAP + scan precondition in the same load;
+2. `cat dp_probe` -> `probe_ok=1 probe_value=0x00000020` (the readable MAC band-0 word);
+3. `echo 1 > dp_setup` -> rings 256/512/4095 (4-byte entries), TXQ table `0x2524` devva
+   `0x835d4000`, tx rings `8x64x8`, tx_ba_info `0x800` devva `0x84251000`, MSDU table 8 entries
+   at CA `0x01060850`/ACP `0x02060850`, MAC band 0 14 regs written+verified (mask `0xfffffcc1`);
+4. `echo 1 > h2d_txq_addr_sync` -> `g0 id1` key `0x0320` sent with TXQ-table devVA
+   `0x835d4000` (9508 B table, 32 B frame); firmware worker CA `0x81445` stores it;
+   `h2d_status ok=3 txq_addr_sent=1 timeout=0`;
+5. `echo 1 > dp_tx_frame` -> `DP tx_frame: type=1 fc=0x0040 mpdu=32 B buf_devva=0x84565004
+   ring[tid=0 idx=0]={buf=0x84565004 ctl=0x00108020} wptr 0x0000->0x0001 table@CA 0x01060850=
+   {ring=0x835d7000 wptr=0x00000001 rptr=0x00000000} completion_pending=1`;
+6. `dp_tx_status`: `bound=1 frame_ready=1 posted=1`, `wptr=0x0001`,
+   **completion_pending=1 = POST-ONLY**; `dp_rx_poll`: 0 captures (no started radio/peer at TX
+   time); post pack: mask 0, staging 0, page/state golden.
+
+**Interpretation.** The host -> coherent frame buffer -> 8-byte MSDU ring entry -> device-RAM
+12-byte table publish -> read-back chain is proven. The MAC did not consume the entry in that
+session (`completion_pending=1`), so the strongest verdict is POST-ONLY. `COMPLETED (MAC)` requires
+`completion_pending=0`; even then a broadcast probe request has no ACK and the clean-room host can
+only prove the MAC-completion chain - an **external observer** is required for any on-air claim,
+so the ladder's best honest label is air-CANDIDATE. The next fire can build on the first live AP:
+the radio/VAP are now up, and the merged module already carries the mode-1 provider, so a TX re-fire
+has the precondition the 02:30 session had to approximate.
+
+**Limits.** No TX completion, no RX capture, no observer, no data-class frame discrimination
+(optional `echo 2 > dp_tx_frame` posts a null-data at slot 1; the pair would settle the [I] ctl
+vap-type mapping). One boot = one setup + one 0x0320 sync + at most two TX posts + one RX poll; no
+retry after a failure.
 
 ---
 
@@ -1368,15 +1850,42 @@ was ever run from this document.
 | 2026-11-26 04:30 | **first real firmware management message** | g0 id7 user_add 180 B posted and consumed in 0 polls; VAP committed; gaps: g0 id8 refused inflight, scan caps 0x3 vs 0x1d | ledger 2026-11-26 04:30 [V*] |
 | 2026-11-26 05:30 | **one-command full matrix** | boot PASS, C2 PASS, D1 PASS, D2 BLOCKED-DRIVER, E1 PASS with bounded between-phase reboots (back in 61.5 s) | ledger 2026-11-26 05:30 [V*] |
 | 2026-11-26 06:30 | **three real frames incl. first scan request** | user_add g0 id7 180 B + user_add_notify g0 id8 180 B + scan_req g0 id0xC 520 B, all consumed in 0 polls; no scan results within 5 s -> scan aborted; VAP-start hypothesis | ledger 2026-11-26 06:30 [V*] |
+| 2026-11-26 09:00 | T0 deploy attempt | kernel-ABI gate failed closed (running kernel package 5de0e425 vs kmod pin 6f995278) and auto-rolled back cleanly; the five non-kmod packages were then installed manually -> native iw 6.17 + iwinfo from the rootfs | ledger 2026-11-26 09:00 [V*] |
+| 2026-11-26 12:00 | **T0 userspace-only deploy PASS** | 49 gates 0 failed; native iw/iwinfo/libiwinfo/regdb persistent; receipt written; VAP-start ladder 2nd fire found the frame-post handler gate (WAL g2 family) | ledger 2026-11-26 12:00 [V*] |
+| 2026-11-26 13:00 | **WAL group-2 frames on the wire** | all five mode-0 frames (user_add, notify, WAL vap_add 56 B, WAL vap_start 44 B, scan_req 520 B) consumed in 0 polls; scan still results=0; module-0 VAP object read zero | ledger 2026-11-26 13:00 [V*] |
+| 2026-11-26 14:00 | **MILESTONE: first real firmware scan results** | mode-1 VAP base -> vap_add g0 id1 48 B + vap_start g0 id1 40 B + scan_req 520 B consumed; firmware answered 6 x 124 B g1 id17 + 6 x 509 B g1 id15; page/mask clean | ledger 2026-11-26 14:00 [V*] |
+| 2026-11-26 15:00 | **D2 TRUE PASS + full matrix complete** | D2 ladder PASS (session result PASS; protocol verdict PASS); matrix boot/C2/D1/D2/E1 all PASS; evidence build/wifi-bench-phase-matrix/20261124T094310Z | ledger 2026-11-26 15:00 [V*] |
+| 2026-11-26 16:30 | **first full BSS decode** | 13-channel scan decoded 12 BSS entries from g1 id15 (SSID/DS/HT/RSN/WMM/country); still finish-abort[host-timeout] at 4/13 channels (~3.5 s/ch) | ledger 2026-11-26 16:30 [V*] |
+| 2026-11-26 17:00 | **CAPSTONE: one-command all-PASS matrix** | phase_matrix --phase all --reboot-between: boot/C2/D1/D2/E1 = PASS/PASS/PASS/PASS/PASS; evidence build/wifi-bench-phase-matrix/20261124T094716Z | ledger 2026-11-26 17:00 [V*] |
+| 2026-11-26 18:00 | ABI-correct image reproduced byte-for-byte (host-only) | container df6a78c3, slice 13e81214, slot 1794a531, rootfs 62344e80; image apk db kernel = 6f995278 = kmod pin; ABI verifier 25/25; flash runbook written (nothing flashed) | ledger 2026-11-26 18:00 [V] |
+| 2026-11-26 19:00 | dp-merge host deliverable | merged data-plane provider module 884,576 B ec74fccd + F-AIR ladder (30 steps/83 checks/7 writes; 1,483 host checks); not fired | ledger 2026-11-26 19:00 [V] |
+| 2026-11-26 20:30 | first AP fire | hostapd runs after the ucode workaround; fails "Driver does not support authentication/association or connect commands" (CONNECT advertisement gate); a new 466 B g1 id3 D2H frame followed the VAP base; page/mask clean | ledger 2026-11-26 20:30 [V*] |
+| 2026-11-26 21:30 | AP v2 fire | wrong build base caused a txq_sync72 timeout (H2D lane closed); hostapd still "Could not configure driver mode"; boot/page clean | ledger 2026-11-26 21:30 [V*] |
+| 2026-11-26 23:00 | AP v3 fire + isolation | the txq timeouts were a missing `fw_path=hi_wifi/FIRMWARE.PD4.bin` (unpatched firmware); C2 clean after the fix; manual station<->AP type change works -> the failing step is inside nl80211 setup before the driver op | ledger 2026-11-26 23:00 [V*] |
+| 2026-11-26 23:40 | AP v4 fire | .mgmt_tx alone did not pass the AP-setup gate; hostapd-mini -dd is compiled out (no visibility); boot/page clean | ledger 2026-11-26 23:40 [V*] |
+| 2026-11-27 00:30 | air-TX fire (fail-closed) | C2 clean; dp_probe was written instead of read -> probe_ok=0; dp_setup/0x0320/tx all refused; no device write; page/mask clean | ledger 2026-11-27 00:30 [V*] |
+| 2026-11-27 01:30 | AP v5 fire | mgmt_stypes advertised (AP rx=tx=0x3c15) -> hostapd subscriptions accepted; SET_BEACON hypothesis and the wiphy_new_nm WARN at core.c:532 recorded; boot/page clean | ledger 2026-11-27 01:30 [V*] |
+| 2026-11-27 02:30 | **MILESTONE: first data-plane frame on the MAC TX ring** | dp_probe read -> dp_setup (rings/TXQ/14 MAC regs) -> key-0x0320 sync -> dp_tx_frame published wptr 0->1; completion_pending=1 = POST-ONLY; RX 0 captures; page/mask clean | ledger 2026-11-27 02:30 [V*] |
+| 2026-11-27 03:30 | AP v6 fire: NEW_BEACON reached start_ap | start_ap reached (beacon_interval=100 dtim=2 head=63 tail=9); ap_ssid 64 B consumed; the next frame's announce unconsumed -> firmware exception (mask 0x18, page lost) = missing mode-1 VAP object (label bug called it ap_auth; it was ap_cfg) | ledger 2026-11-27 03:30 [V*] |
+| 2026-11-27 04:30 | **HISTORIC: first live Wi-Fi AP (control plane)** | fresh golden boot; v7 module; hostapd AP-ENABLED, SSID cudy-ap-test; vap_add 48 B -> vap_start 40 B -> ap_ssid 64 B -> ap_cfg 184 B all consumed 0 polls; page/mask clean; ctx0+0x18C changed; VAP ptr 0x01010F18 nonzero | ledger 2026-11-27 04:30 [V*] |
+| 2026-11-27 06:30 | **ABI-correct image FLASHED + AP runs on the flashed image** | stock-assisted install: kernel read-back matched slot 1794a531, ubiformat OK, active pair untouched, handover bootflag=b/boot_reg=0x21; boot 6.18.60 from ubi.mtd=rootfsb, selector 0x11; ABI receipt kernel = 6f995278 = kmod pin; native modprobe rc=0 from /lib/modules (no /tmp); T0 full-set verify 38 gates PASS; hostapd AP-ENABLED again, all four AP-start frames consumed 0 polls, page golden/mask 0 | ledger 2026-11-27 06:30 [V*] |
+| 2026-11-27 09:00 | AP persistence + new firmware event family | AP still live minutes after start (hostapd processes alive, same SSID/type, no exceptions); D2H catalogue gains g1 id0x23 (35) count=6 24 B + g1 id3 count=20 (466 B) - absent at boot; likely AP/beacon-period activity [I], on-air still unproven | ledger 2026-11-27 09:00 [V*] |
 
-End-of-chain bench state (ledger 2026-11-26 06:30): the box runs the cfg80211 bench image on
-pair B (new kernel on kernelb, rootfsb unchanged, stock pair A untouched and bootable); the boot,
-C2, D1 and E1 phases pass in one automated command and D2 is the one documented BLOCKED-DRIVER
-row; the firmware has received and consumed our VAP-add, notify and scan-request frames with no
-exception, but returns no scan results until a per-radio VAP start object exists. The box was left
-with no pending writes; the recovery path is the stock pair / physical recovery. This report's
-cut-off is that entry. The **host-only PD4 audit** (no device session; section 6.6,
-`wifi-fw-audit/REPORT.md`) and its H1/H2 pack outcome are also integrated here.
+End-of-chain bench state (ledger 2026-11-27 09:00): the box runs **our own flashed image** on pair B
+(6.18.60 from rootfsb, selector `0x11`; the ABI-correct container was installed with kernel
+read-back matching slot `1794a531...` and the post-boot `apk query kernel` receipt equal to the kmod
+pin `6f995278...`), with native `iw` 6.17 / `iwinfo` / `wireless-regdb` in the persistent overlay
+and the rootfs-native modules loading from `/lib/modules/6.18.60` (no `/tmp`). The last fire was
+the AP on that image: hostapd `AP-ENABLED` with SSID `cudy-ap-test`, all four AP-start messages
+consumed in 0 polls, exception mask 0, golden page, and a nonzero firmware VAP pointer. Minutes
+later the AP was still live and the D2H catalogue had gained the new `g1 id0x23` 24 B family
+(AP/beacon-period candidate [I]). Earlier in the same wave the one-command matrix went all-PASS, the firmware produced its first real scan
+results (12 BSS entries decoded), and the data plane published its first frame (POST-ONLY). The box
+was left with no pending writes; stock pair A is untouched and bootable; the recovery path is the
+stock pair / physical recovery. This report's cut-off is that entry. The **host-only** work (T0
+userspace deploy, hostapd package set, ABI image reproduction, verifier re-runs) is integrated
+where cited; none of it contacted the router, and the **PD4 audit** (no device session; section
+6.6, `wifi-fw-audit/REPORT.md`) still bounds the firmware side.
 
 ---
 
@@ -1422,6 +1931,18 @@ claim.
 | C31 | the user/vap-add (`g0 id7/8`, 0xA8) and scan (`g0 id0xC`, 0x1FC) payload structs are open [U], so no firmware VAP/scan operation can be attempted | byte-exact builders now exist and the firmware accepted them: g0 id7 180 B committed the VAP, g0 id8 180 B and g0 id0xC 520 B consumed in 0 polls; the `g0 id9` del builder is exact from the shipped attr. Unpinned fields remain [U], but they did not block acceptance | `wifi-vap-scan/REPORT.md`, ledger 2026-11-26 04:30/06:30; F11/6.7 | 2026-11-26 |
 | C32 | the MAC data plane is "mapped only"; the TXQ-table address sync has not been fired | the dp-bringup extension implements `dp_probe`/`dp_setup`/`dp_rings`/`dp_txq_sync`, programs the slot-5 TX/RX rings and sends the vendor's g0 id1 key-`0x0320` sync; automated E1 PASS 37/37 on hardware, no exception. Still no frame has moved | `wifi-datapath-bringup/REPORT.md`, ledger 2026-11-26 03:00; 6.4/6.8/T26 | 2026-11-26 03:00 |
 | C33 | a delivered scan request is expected to produce D2H scan results | not yet: the firmware scan handler (CA `0x6494C`) reads VAP id 0 and needs the per-radio VAP object in the started state; `g0 id7/8` only register the mailbox-layer user/VAP, so the scan completes aborted with zero results until the VAP-start family is found | firmware handler decode + scan attempt 2026-11-26 06:30; F11/6.7, Q1 in 10.2 | 2026-11-26 06:30 |
+| C34 | the vendor WAL group-2 VAP add/start (cmd `0x0064`/`0x0065`) is the VAP start that unlocks scan results | wrong carrier for our firmware path: the mode-0 WAL frames were consumed but did not populate the firmware VAP object (module-0 context read zero); the **g0 id1** MAC-layer keys `0x0064`/`0x0065` (`vap_start_mode=1`) create/bind it, and with them the firmware produced the first real scan results | ledger 2026-11-26 13:00/14:00; `wifi-vap-start`, `wifi-scan-complete`; F12/6.9 | 2026-11-26 13:00 -> 14:00 |
+| C35 | D2 (scan) stays BLOCKED-DRIVER until a new driver feature lands; an all-PASS matrix is not expected | D2 TRUE PASS after the mode-1 provider (results>0, iw rc=0, clean mask/page), and the one-command matrix returns boot/C2/D1/D2/E1 ALL PASS. BLOCKED-DRIVER remains the correct fail-closed verdict whenever results=0 - the classification was not relaxed | ledger 2026-11-26 15:00/17:00; `build/wifi-bench-phase-matrix/20261124T094716Z/`; T28 | 2026-11-26 15:00/17:00 |
+| C36 | the v6 AP-start crash was a malformed `ap_auth` frame (`g0 id1` key `0x006D`) | the g0 carrier carries only `ap_ssid` (key `0x0005`, 64 B) and `ap_cfg` (key `0x0127`, 184 B); table A has **no `0x006D` row** and `0x006D` exists only on the WAL envelope. The labelled "ap_auth" frame was `ap_cfg`, and the exception was the missing firmware VAP object (AP workers deref `module_ctx+0x190` with no NULL check) because the AP path never posted the mode-1 VAP base. v7 posts it first and the same frames are consumed cleanly | ledger 2026-11-27 03:30 -> 04:30; `wifi-ap-start/REPORT.md` sec 12; F12/6.11 | 2026-11-27 03:30 -> 04:30 |
+| C37 | hostapd fails at SET_BEACON because `change_beacon` is not registered | the initial beacon is `NL80211_CMD_NEW_BEACON`, and cfg80211's SET_BEACON path additionally needs a non-zero AP beacon interval that only a successful start_ap sets - SET_BEACON cannot be the first failure. The real blocker was `NL80211_CMD_REGISTER_BEACONS` being rejected without `WIPHY_FLAG_REPORTS_OBSS`, which made hostapd return -ENOBUFS before building NEW_BEACON | ledger 2026-11-27 01:30; `wifi-ap-start/HOSTAPD-BRINGUP.md` sec 11 | 2026-11-27 01:30 |
+| C38 | "Could not configure driver mode" is the driver's SET_INTERFACE op failing | the manual station<->AP type change works with the driver's dmesg; the isolated failure was cfg80211's **management-frame registration** gates - first the missing `.mgmt_tx` op (`nl80211_register_mgmt()` refuses), then the missing `wiphy->mgmt_stypes` table (`cfg80211_mlme_register_mgmt()` refuses). A same-type SET_INTERFACE never reaches the op | ledger 2026-11-26 23:00/23:40, 2026-11-27 01:30; F13/6.10 | 2026-11-26 23:00 -> 2026-11-27 01:30 |
+| C39 | a fail-closed `.connect` gate is enough for hostapd's nl80211 init | necessary but not sufficient: it must be paired with a `.disconnect` (the `wiphy_new_nm` WARN at `net/wireless/core.c:532` is `WARN_ON(ops->connect && !ops->disconnect)`) and with `mgmt_stypes`; three distinct gates, each found by a separate fire | ledger 2026-11-27 01:30; HOSTAPD-BRINGUP sec 10/11 | 2026-11-27 01:30 |
+| C40 | `dp_probe` is triggered by writing 1 (the E1 doc's attribute spelling) | `dp_probe` is a **READ** action (one read-only MAC word read); a write returns an error, performs no read and leaves probe_ok=0, so dp_setup fails closed. Revision 2 accepts `cat dp_probe` and `echo 1 > dp_probe` as the same read. The 2026-11-27 00:30 fire failed exactly this way | ledger 2026-11-27 00:30; `wifi-dp-air/LADDER-F-AIR.md` attr table | 2026-11-27 00:30 |
+| C41 | first air-TX = the MAC has transmitted a frame | the first fire publishes ONE frame to the MAC TX MSDU ring (wptr 0->1 with table read-back) and reads completion_pending=1: **POST-ONLY**. The host->ring->device-table publish chain is proven, but the MAC has not consumed the entry (COMPLETED-MAC = completion_pending 0) and there is no RX capture. A broadcast probe request has no ACK, so on-air proof needs an external observer -> at most air-CANDIDATE | ledger 2026-11-27 02:30; LADDER-F-AIR F4/F5; F14/6.12 | 2026-11-27 02:30 |
+| C42 | hostapd `AP-ENABLED` means a working AP | it is a **control-plane** milestone: hostapd -> cfg80211 -> driver `.start_ap` -> provider frames consumed plus a nonzero firmware VAP pointer. Beaconing over the air, client association, WPA2 key install and data-path frame movement are not proven, and the firmware is the PD4-patched research image | ledger 2026-11-27 04:30; 6.11; 10.1 | 2026-11-27 04:30 |
+| C43 | the module-0 context lives at BAR0 `0x7D2758` (ledger 2026-11-26 13:00 readback line) | arithmetic slip: the correct BAR0 is `0x7D1758` (CA `0x119758` + `0x6B8000`). The validated cross-check is ctx4 CA `0x11C458` -> BAR0 `0x7D4458`, and the D2 sequence reads ctx4+0x190 at `0x7D45E8` | `wifi-hostapd-deploy/REPORT.md` sec 5 F5 + `tools/check-ladder.py` (107 checks) | 2026-11-26 (readback correction) |
+| C45 | the AP milestone ends at "hostapd AP-ENABLED"; the firmware is not demonstrably running AP activity | the 09:00 persistence check strengthened it: the AP stayed live for minutes and the firmware's D2H catalogue gained a new `g1 id0x23` (35) 24 B family (absent at boot, `g1 id3` count 20 x 466 B) - likely AP/beacon-period activity [I]. Still not an on-air beacon proof (needs an external observer); the family's meaning is [U] | ledger 2026-11-27 09:00; REPORT 6.11/F14 | 2026-11-27 09:00 |
+| C44 | the ABI-correct image/flash is host-only work - "runbook ready, nothing flashed", and the bench still runs the modules from `/tmp` | superseded by the 2026-11-27 06:30 fire: the ABI-correct container was **flashed** with the stock-assisted installer (kernel read-back matched slot `1794a531...`, `ubiformat` OK, active pair untouched, handover `bootflag=b`/`boot_reg=0x21`), the box boots 6.18.60 from `ubi.mtd=rootfsb` with selector `0x11`, the post-boot `apk query kernel` receipt equals the kmod pin `6f995278...`, rootfs-native `modprobe` loads from `/lib/modules/6.18.60` (no `/tmp`), the T0 full-set verify passed 38 gates (one cosmetic receipt-missing), and hostapd reached `AP-ENABLED` on the flashed image | ledger 2026-11-27 06:30; `build/abi-image-artifacts/`; `tools/stock-telnet-install.sh`; `staging-fi/handover2.sh` | 2026-11-27 06:30 |
 
 ---
 
@@ -1431,11 +1952,12 @@ claim.
 
 Consolidation did not invent evidence; it re-ran the owning lanes' committed device-free checks to
 make sure the facts this report leans on still reproduce from the tree as committed. v2 re-ran every
-wave-2 lane check whose tools are host-only. v3 re-runs the report verifier plus the scan/VAP/
-data-plane/bench-tooling audit checks listed below, and compile-verifies the data-plane lane's
-module against the project 6.18.60 tree; the other kernel-module builds were verified by their
-owning lanes (not rebuilt here, to avoid touching the shared kernel tree while other lanes work).
-All checks are host-only and device-free:
+wave-2 lane check whose tools are host-only; v3 re-ran the scan/VAP/data-plane/bench-tooling audit
+checks. v4 re-runs the report verifier plus the AP/scan/data-plane/bench-tooling host checks listed
+below, including the **wifi-ap-start** and **wifi-hostapd-deploy** lanes that own the AP milestone
+and the **wifi-dp-air** merged build; it also re-runs the scan-complete and vap-start builds and
+rebuilds the merged data-plane module against the project 6.18.60 tree. All checks are host-only and
+device-free:
 
 | check | result | what it pins |
 | --- | --- | --- |
@@ -1444,7 +1966,7 @@ All checks are host-only and device-free:
 | `wifi-d2h-direct/tools/d2h_selftest.py` | **PASS**, 92/92 | direct-read service: node/frame decode, catalogue, consumer-advance rules |
 | `wifi-ctx-create/tools/ctx_create_re.py --selftest` | **PASS**, 40/40 | key tables, handler/worker/helper chain, read pack |
 | `wifi-ctx-create/tools/ctx_create_frame.py --selftest` | **PASS**, 26/26 | the context-create frame builder |
-| `wifi-bench-tooling/tools/selftest.py` | **PASS**, 503/503 (v3; was 312 in v2, 177 in v1) | session runner incl. protocol mode, guards, phase matrix, blocked-outcome classification and the bounded reboot path |
+| `wifi-bench-tooling/tools/selftest.py` | **PASS**, **563/563** (v4 re-run; was 503 in v3, 312 in v2, 177 in v1) | session runner incl. protocol mode, guards, phase matrix, blocked-outcome classification, the bounded reboot path and the F-AIR sequence/attr policy |
 | `wifi-datapath/tools/build.sh` + `fw_dp_tables.py --selftest` | **PASS**, 77/77 + 35/35 | two-plane model, TX/RX ring builders, key tables A/B |
 | `wifi-proto-seq/tools/selftest.sh` | **PASS**, 66/66 + 38/38 + 55/55 | config-sync decode, calibration frame builders, alg command table |
 | `wifi-ete-wake/tools/ete_wake.py selftest` | **PASS**, 81/81 | ETE trigger chain, host/vendor comparison, BAR0 map |
@@ -1454,6 +1976,12 @@ All checks are host-only and device-free:
 | `wifi-vap-scan/tools/build.sh` (host C99 `-Werror -pedantic`) | **PASS**, 137/137 checks | byte-exact g0 id7/id8/id9/id0xC builders, validator, SR node word1s and the V1-V4/S1-S2 ladder data |
 | `wifi-scan-ap/tools/selftest.py` | **PASS**, 294/294 source/contract checks (v3 re-run); the 248-check C selftest is the owning lane's record | provider caps 0x1f, one scan_done, fail-closed defaults, D2H hook, exact task-110 builder mapping |
 | `wifi-datapath-bringup` tools (host parts) | **PASS**, 69/69 data-plane logic + 308/308 inherited H2D + 34/34 static decode; module compile against 6.18.60 in v3 | TX/RX ring arithmetic, MAC program, MSDU table, TXQ sync builder and the E1 ladder |
+| `wifi-ap-start/tools/build.sh` | **PASS**, host strict compile + **128/128** frame selftest + frame emit (4 files) | the four-message AP-start builders, both carriers, wire validator and refusals |
+| `wifi-ap-start/tools/ap_start_re.py --selftest` | **PASS**, **63/63** static probes (pinned local vendor artifacts, read in place) | firmware table A rows, worker CAs, 156 B body offsets and the carrier envelopes |
+| `wifi-hostapd-deploy/tools/selftest.sh` | **PASS**, **14/14** (host-only, mutation controls; no device contact) | hostapd package pins, deploy script safety, ladder consistency |
+| `wifi-vap-start/tools/build.sh` | **PASS**, **61/61** | the mode-1 VAP add/start builders and the WAL group-2 envelopes |
+| `wifi-scan-complete/tools/build.sh` | **PASS**, **373/373** host checks + clean 6.18.60 module build (750,512 B sha256 `389ae6fe...`, 0 warnings) | auto scan window, coverage completion rule, g1 id15 IE decode |
+| `wifi-dp-air/tools/build.sh` | **PASS**, merge provenance + **1,483** inherited/merged host checks + F-AIR sequence validation + clean 6.18.60 module build (886,864 B sha256 `ca32aec4...`, 0 warnings) | merged data-plane provider, row layout of T31 |
 | `wifi-re-report/tools/verify_report.py` (this lane) | **PASS** (see 9.4) | this report's cross-references, markers, claim IDs and key constants |
 
 The remaining lane checks (e.g. `rom_s01.py` 70/70, `romdis.py` 86/86, `fw_pd_builder.py`
@@ -1492,6 +2020,14 @@ copies vendor bytes. See [REPRODUCE.md](REPRODUCE.md) for the exact commands. Th
 * VAP/scan frames and the data plane: `wifi-vap-scan/tools/build.sh` (137), `wifi-scan-ap/tools/selftest.py`
   (294), `wifi-datapath-bringup/tools/build.sh` (69 + 308 + 34, plus the 6.18.60 module build with
   0 warnings).
+* AP start and the hostapd integration: `wifi-ap-start/tools/build.sh` (128),
+  `wifi-ap-start/tools/ap_start_re.py --selftest` (63), `wifi-hostapd-deploy/tools/selftest.sh`
+  (14) plus `deploy-hostapd.sh --check` (88) and `check-ladder.py` (107); the hostapd config
+  fixtures validate with a hostapd v2.12 build from the tree's own source (OPEN fixture accepted,
+  broken negative control refused).
+* The merged data-plane provider: `wifi-dp-air/tools/build.sh` (merge provenance + 1,483 checks +
+  F-AIR sequence validation + clean 6.18.60 module build) and `wifi-scan-complete/tools/build.sh`
+  (373 checks + clean module build).
 * Target/bench image: `wifi-upstream-target/BUILD-VERIFICATION.md` has the exact build commands and
   artifact hashes; the flash steps are in `CFG80211-BENCH-IMAGE.md` sec 3 (bench-only, attended).
 
@@ -1503,10 +2039,16 @@ the reset pulse -> prepare/upload/verify -> custom-block seed -> hcc_arm/hcc_loo
 direct-read the responses. Ladder C1/C2 then runs the calibration set (section 6.2); the cfg80211
 observation session adds the module load, ready-gated wiphy registration and the nl80211 VAP
 create/delete cycle on the cfg80211 bench image (section 6.3); the real-frame session adds the
-provider load with `allow_frames=N` and the VAP/scan requests (section 6.7); and the phase matrix
-puts boot/C2/D1/D2/E1 behind one fail-closed command with bounded reboots (section 6.8). The
-generic ladder with pass gates is [TABLES.md](TABLES.md) T19; the v3 ladder/automation tables are
-T26-T28.
+provider load with `allow_frames=N` and the VAP/scan requests (section 6.7). The v4 path then adds:
+the mode-1 VAP base before the scan/report flow (section 6.9, `vap_start_mode=1`), the hostapd
+AP-start flow (packages + ucode, `type __ap`, one bounded scan for the VAP base, then
+`hostapd -B`: section 6.10/6.11), and the merged data-plane F-AIR ladder (dp_probe READ ->
+dp_setup -> key-0x0320 sync -> one TX frame -> read-only RX poll: section 6.12). The delivery step
+then flashed the ABI-correct image (kernel+rootfs from one build, attended, recovery armed) and
+re-ran the AP flow on the booted image, closing the kmod-ABI mismatch (section 6.11, correction
+C44). The one-command phase matrix (section 6.8) puts boot/C2/D1/D2/E1 behind one fail-closed
+command with bounded reboots. The generic ladder with pass gates is [TABLES.md](TABLES.md) T19; the v3/v4
+ladder/automation tables are T26-T31.
 
 **This report does not authorise a fire.** Benches are attended, recovery-gated operations; the
 router's UART is read-only and host->router TX is physically dead. See the project's
@@ -1530,14 +2072,24 @@ router's UART is read-only and host->router TX is physically dead. See the proje
    `wifi-upstream-target/BUILD-VERIFICATION.md`, the calibration family in `wifi-proto-seq`'s
    report, the MAC ring block in `wifi-datapath`'s report) and the end-state claims also appear in
    the append-only ledger and `STATUS.md`;
-7. the v2 tables T21-T25 and the v3 tables T26-T28 exist (T1..T28 numbered without gaps), and the
-   report carries findings F1-F11 and section-6 subsections 6.1-6.8;
+7. the v2 tables T21-T25, the v3 tables T26-T28 and the v4 tables T29-T31 exist (T1..T31 numbered
+   without gaps), and the report carries findings F1-F14 and section-6 subsections 6.1-6.12;
 8. the v3 milestone vocabulary and constants are cross-checked against the owning lanes and the
    ledger: the scan/VAP provider module hash `4a1c3b9a` and caps `0x1f` (wifi-scan-ap), the
    180 B/180 B/520 B frame totals and SR-node word1s (wifi-vap-scan), the data-plane module hash
    `8fc693ad`, TXQ key `0x0320` and dp attrs (wifi-datapath-bringup/REPORT.md), the phase-matrix
    PASS/BLOCKED results and the 503-check selftest (wifi-bench-tooling), and the H1 read-pack values
    `0x00118D68`/`0x118D68`/`0x00046971` (ledger 2026-11-25 21:30 + wifi-fw-audit section 5);
+9. the v4 milestone vocabulary and constants are cross-checked against the owning lanes and the
+   ledger: the AP-start frames (48/40/64/184 B) and the module `fd8e1439`/206,708 B
+   (wifi-ap-start), `REPORTS_OBSS`/`mgmt_stypes`/the `wiphy_new_nm` WARN (wifi-ap-start
+   HOSTAPD-BRINGUP), the AP readback `0x01010F18`/`0x70094810` and `AP-ENABLED`/`cudy-ap-test`
+   (ledger 2026-11-27 04:30), the merged module `ca32aec4`/886,864 B and the dp_probe READ rule
+   (wifi-dp-air), the 124 B/509 B scan results and the mode-1 scan milestone (wifi-scan-complete +
+   ledger 2026-11-26 14:00), the hostapd package identities, the `type __ap` rule and the
+   88/14/107 host-check numbers (wifi-hostapd-deploy), the all-PASS matrix evidence
+   (20261124T094716Z, ledger 2026-11-26 17:00), and the ABI image hashes
+   `df6a78c3`/`62344e80`/`6f995278` (wifi-abi-image);
 9. no forbidden content classes (private keys, secrets paths, oversized hex/base64 blobs that
    would smell of vendor binaries, per-unit MAC addresses) are present.
 
@@ -1558,83 +2110,114 @@ non-zero on failure.
    mailbox. They are bench-validated but must never be presented as product changes. The audit
    (section 6.6) confirms no vendor-clean mailbox-delivery alternative has been demonstrated; with
    H1 confirmed, PD4 is a consume-only mailbox servicer, and a shipped driver on this firmware does
-   not exist.
-3. **The result is message-level + management-level + real-request-level, not link-level.** Two
-   ordered config messages, six calibration messages, three VAP/scan management frames and the
-   TXQ-table address sync were consumed; a cfg80211 wiphy + VAP netdev lifecycle and a firmware
-   mailbox-layer VAP were hardware-validated. None of that proves a working Wi-Fi link: no
-   per-radio VAP is started, no scan returns results, no association happens and no frame is
-   transmitted.
-4. **The ETE DR direction is closed, not solved.** The host lever (E1a/E1b) is measured negative,
-   the direct device-ring read remains the supported RX path, and it is a research instrument: it
-   depends on this firmware's internal PKTRAM layout, it is polled with bounded batches and
-   overrun reporting (no engine flow control, no DMA to host DRAM), and it is not the vendor ABI.
-5. **The firmware IRQ/thread layer is still dormant, and H1 explains why PD4 works.** PD4 services
-   the mailbox registers through its own out[0] poll, but its sentinel branch always substitutes the
-   ROM zero table: the image's mailbox **handlers never execute** (H1). The working duplex is the
-   non-mailbox ETE/polled H2D path. The image dispatcher, event controller and scheduler services
-   the vendor stack depends on remain unexercised; later flows (scan completion, TX status, PM) may
-   need them.
-6. **Some frames are observed but not fully decoded.** The two v1 responses (g1 id3 36 B, g1 id0x12
+   not exist. **Every v4 bench result - including the first live AP - runs on the PD4-patched
+   research firmware.**
+3. **The result is message-level + management-level + real-request-level + first-AP-control-plane
+   level, not link-level.** Two ordered config messages, six calibration messages, the VAP/scan
+   management frames, the TXQ-table address sync, the mode-1 VAP base, the four AP-start messages,
+   the first data-plane ring entry and the hostapd `AP-ENABLED` handshake were consumed/accepted;
+   real scan results were decoded and a cfg80211 wiphy + VAP netdev + real `.start_ap` were
+   hardware-validated. None of that proves a working link: no beacon has been observed on the air,
+   no client has associated, no WPA2 key was installed, no TX frame completed at the MAC and no RX
+   frame was captured.
+4. **`AP-ENABLED` is a host/control-plane milestone.** hostapd's state plus the consumed AP-start
+   sequence plus the clean readback prove the control path and the firmware VAP object, not
+   beaconing, client service or data-path operation (F14/6.11). The 09:00 persistence check adds
+   indirect evidence (live AP state minutes later + a new `g1 id0x23` 24 B D2H family after the AP
+   start) but no on-air proof. Beaconing needs an external observer; association needs mgmt TX/RX
+   and `add_key`, which are absent.
+5. **The hostapd integration fixes are advertisements, not implementations.** `.connect`/
+   `.disconnect`, `.mgmt_tx`, `mgmt_stypes`, `REPORTS_OBSS` and `change_beacon` exist to satisfy
+   cfg80211/hostapd setup gates; management TX/RX, OBSS reporting, beacon control and WPA2
+   `add_key` stay M3/fail-closed. The hostapd package set is a bench fixture (deployed through the
+   T0 overlay path; it is not baked into the ABI image container).
+6. **Scan results are real but bounded.** The 14:00 fire got 6 channel reports + 6 beacons in 5 s;
+   the 16:30 13-channel run decoded 12 BSS entries but finished `finish-abort[host-timeout]` after
+   4/13 channels (~3.5 s/ch). No `finish-ok` 13/13 scan and no `iw` BSS listing in a passing run
+   are in the record; the scan-request flag bytes/channel-index convention and the g1 id15 trailer
+   semantics (signal 0 mBm by default) remain [U]/[I].
+7. **Some frames are observed but not fully decoded.** The two v1 responses (g1 id3 36 B, g1 id0x12
    40 B) are decoded structurally (C20); the calibration answer bodies were counted but not
    captured (length-only evidence); the scan-request payload still has unpinned flags/channel-index
-   fields [U]; and the D2H scan-result frames have never been seen, so their decode is best-effort
-   [I]/[U].
-7. **The context-create frame is synthesized**, not captured from the vendor driver; the vendor's
+   fields [U]; the g1 id15 20-byte trailer, `g1 id16` and `g2 id2` status code spaces are
+   partially open [U]/[I].
+8. **The context-create frame is synthesized**, not captured from the vendor driver; the vendor's
    sender for key `0x0064` is unproven [I]. Type-1/2/3 semantics are inferred from the allocator
    analysis plus one type-3 and one type-1 lap.
-8. **The Wi-Fi interface is M0/M1 plus mailbox-layer VAP traffic.** The wiphy is registered, VAP
-   netdevs can be created and deleted, and real g0 id7/id8 frames now create the mailbox-layer
-   user/VAP; the per-radio firmware VAP object is still not started, so the 520 B scan request is
-   accepted but yields no results. By default the provider is fail-closed (`allow_frames=0`,
-   `.scan` = `-EOPNOTSUPP`); real frames need an attended session with an explicit budget.
-9. **The MAC data plane is host-implemented and bench-fired, but frame-moving is not proven.** The
-   dp extension programs the slot-5 block and the TXQ address sync is accepted (E1 37/37), but no
-   TX ring entry or RX buffer has moved a frame, the RX completion ring and descriptor format are
-   unconsumed [U], the first rings assume user index 0 (no user has queued frames), the TX entry
-   encoder and 20-byte DMA descriptor are untested on hardware, and band 1 is untouched.
-10. **The cfg80211 bench image and the phase matrix are research instruments, not a release.** The
-    image carries a bench-only kernel config (not in the luofu patch series), the modules are loaded
-    from `/tmp` (not packaged in the rootfs), the image is installed manually from stock, and the
-    install path has never run end to end on a device. The one-command matrix is an operator tool
-    for attended, recovery-gated sessions only.
-11. **D2 (scan) is BLOCKED-DRIVER, not a pass.** The row is an honest pending-feature outcome; it
-    flips to PASS automatically when the scan path produces a real result. It must never be quoted
-    as "scan works".
-12. **Per-unit data stays out.** No MAC/serial/calibration value is in this report by policy; the
+9. **The Wi-Fi interface is M0/M1 plus mailbox-layer VAP traffic plus a real `.start_ap`.** The
+   wiphy is registered, VAP netdevs can be created and deleted, real g0 id7/id8 frames create the
+   mailbox-layer user/VAP, the mode-1 VAP base creates the per-radio firmware VAP object, and
+   hostapd reaches the driver's `.start_ap`. By default the provider is fail-closed
+   (`allow_frames=0`); real frames need an attended session with an explicit budget.
+10. **The ETE DR direction is closed, not solved.** The host lever (E1a/E1b) is measured negative,
+    the direct device-ring read remains the supported RX path, and it is a research instrument: it
+    depends on this firmware's internal PKTRAM layout, it is polled with bounded batches and
+    overrun reporting (no engine flow control, no DMA to host DRAM), and it is not the vendor ABI.
+11. **The MAC data plane published one frame; frame movement is not proven.** `dp_probe`/`
+    dp_setup`/key-0x0320 sync/`dp_tx_frame` ran clean and one 32 B probe request was published to
+    the MSDU ring, but `completion_pending=1` means the MAC did not consume it. There is no
+    completion, no RX capture and no observer; a broadcast probe request has no ACK, so the
+    strongest v4 verdict is POST-ONLY (air-CANDIDATE only with an external observer). The rings
+    assume user index 0 and band 1 is untouched.
+12. **The firmware IRQ/thread layer is still dormant, and H1 explains why PD4 works.** PD4 services
+    the mailbox registers through its own out[0] poll, but its sentinel branch always substitutes
+    the ROM zero table: the image's mailbox **handlers never execute** (H1). The working duplex is
+    the non-mailbox ETE/polled H2D path. The image dispatcher, event controller and scheduler
+    services the vendor stack depends on remain unexercised; later flows (TX status, PM, beacon
+    feedback) may need them.
+13. **The bench image, phase matrix and hostapd deploy are research instruments, not a release.**
+    The image carries a bench-only kernel config (not in the luofu patch series) and native
+    userspace (iw/iwinfo/regdb, later hostapd-mini + ucode) was installed into the running overlay
+    through the T0 zero-flash path. The ABI-correct image **was flashed** on 2026-11-27 06:30
+    (kernel+rootfs from one build, attended): the ABI receipt matches, the rootfs-native modules
+    load from `/lib/modules/6.18.60`, and hostapd reaches `AP-ENABLED` on the booted image. It
+    remains a research instrument: the driver is research code, the firmware is PD4-patched, the
+    flash wiped the overlay (fresh `/overlay`), and the one-command matrix is an operator tool for
+    attended, recovery-gated sessions only.
+14. **Per-unit data stays out.** No MAC/serial/calibration value is in this report by policy; the
     VAP address quoted by the lane is a locally-administered documentation address, not a unit MAC.
 
 ### 10.2 Ranked open questions
 
-1. **What starts the per-radio VAP object?** This is the v3 wall: the firmware scan handler
-   (CA `0x6494C`) reads VAP id 0 and needs the VAP started before results can flow. The vendor
-   order is user/vap add -> (start) -> scan/AP; candidates are the WAL group-2 AP start
-   (wifi-vendor-userspace) and the `g0 0xF/0x10` start_sta family (wifi-datapath). Once found, one
-   attended fire should produce the first g1 15/16/17 / g2 2 scan events.
-2. **Can the data plane move a frame now that the rings are up?** First TX: encode the 8-byte
-   MSDU-info entry and the 20-byte DMA descriptor, post one frame; RX: drain the completion ring
-   and parse the 0x28 B descriptor; resolve the user-index/queue question (the rings currently
-   assume user 0) and only then touch band 1.
-3. **Can a calibration answer body be captured, and what are the scan-request fields still marked
-   [U]** (five flag bytes, the channel-index convention)? Both need a bounded, immediate post-fire
-   read or a driver logging extension, not a new message class.
-4. **What unmasks the firmware's IRQ layer on a real vendor boot, and can the dispatcher be brought
+1. **Can the live AP be observed beaconing, and can a client associate?** This is the v4 wall: the
+   AP control plane is up (`AP-ENABLED`, SSID `cudy-ap-test`, firmware VAP object present, AP still
+   live minutes later), and the post-AP D2H stream gained a new `g1 id0x23` 24 B family (likely
+   AP/beacon-period activity [I]), but no beacon has been observed on the air and no client has
+   associated. An **external observer** (second station/monitor on ch 6) is the decisive test; a
+   monitor capture settles both the beacon question and the `g1 id0x23` meaning. Association additionally needs management TX/RX (fail-closed
+   today) and, for WPA2, the `add_key` M3 path.
+2. **Does the first data-plane frame complete now that the radio is up?** Re-fire the F-AIR ladder
+   with the mode-1 VAP base and the AP running in the same module load: `completion_pending=0` =
+   COMPLETED (MAC); then the read-only RX capture (0 captures so far). With the observer from Q1,
+   the same fire can upgrade air-CANDIDATE to an on-air observation. Optional rung: the second
+   frame form (`echo 2 >`) to settle the ctl vap-type mapping.
+3. **What implements management TX/RX, association and WPA2 keys?** The AP's mgmt ops are
+   fail-closed stubs; client auth/assoc frame delivery and probe/beacon handling are firmware-side
+   effects [U]; WPA2 needs `add_key`/`set_key` (M3). This is the next control-message class after
+   the AP start.
+4. **Can the scan finish all 13 channels and list BSS entries?** The auto window (14.7 s) and the
+   firmware pace (~3.5 s/ch) still ended in `finish-abort[host-timeout]` after 4/13 channels; a
+   larger `scan_timeout_ms` (up to 45 s) or a shorter channel list is the measurement. The
+   `scan_dwell_ms` unit question and the 12-BSS decode quality are open.
+5. **What remains on the image track?** The ABI-correct image is flashed and the ABI receipt
+   matches (Q5's old form is answered). Remaining: re-provision the overlay after the flash wiped
+   it (SSH keys/config/receipts), and bake hostapd + the wifi-scripts package into a rebuilt rootfs if the
+   AP is to survive a reflash - the kmod pin is unchanged, so only the rootfs hash would change.
+6. **Can a calibration answer body and the remaining [U] scan fields be captured** (five flag
+   bytes, the channel-index convention)? Both need a bounded, immediate post-fire read or a driver
+   logging extension, not a new message class.
+7. **What unmasks the firmware's IRQ layer on a real vendor boot, and can the dispatcher be brought
    up without a firmware patch?** H1 closes the PD4 branch question: its handlers never run. No
    host-only vendor-clean mailbox path is proven; the only candidate (spare-iATU aperture onto the
    event controller + one-shot raise of event 0x4C) is an untested device-write class (section 6.6).
-5. **What is the exact vendor CECE service protocol** (order, duration, ack semantics) for the
-   image handlers, and does any later flow require it?
-6. **What are the `g2` WAL config-command ids/payloads** for AP start, key install and per-VAP
-   config, and the `g0 id0xF/0x10/0x11` STA join shapes? This overlaps Q1 (AP start may be the VAP
-   start) and is the next control-message class after scan.
-7. **What do the D2H scan/join/PM result frames** (g1 15/16/17, g2 2/3/4/5/6, g3 17) mean
-   field-by-field, and what ordering do they require? Unanswerable until Q1.
-8. **What is the DR A->B copy's device/ROM start condition**, and could a future firmware patch or
-   a vendor-clean host path make the D2H path engine-based instead of direct-read?
-9. **Is there a host-visible trigger for the firmware's event layer** that the vendor host performs
-   before the ready exchange, or is it purely ROM/image internal? (Current answer: nothing visible;
-   the vendor sends nothing between release and ready - a negative result on the modules scanned,
-   not a proof about ROM code we cannot see.)
+8. **What are the `g2` WAL config-command ids/payloads** for AP start, key install and per-VAP
+   config, and the `g0 id0xF/0x10/0x11` STA join shapes? The AP config body is decoded and the g0
+   carrier is bench-proven; the WAL carrier may be needed for change-beacon/stop and key flows.
+9. **What do the D2H scan/join/PM result frames** (g1 15/16/17, g2 2/3/4/5/6, g3 17) mean
+   field-by-field, and what ordering do they require? The g1 id16/`g2 id2` status spaces and the
+   g1 id15 trailer are needed to trust firmware completion.
+10. **What is the DR A->B copy's device/ROM start condition**, and could a future firmware patch or
+    a vendor-clean host path make the D2H path engine-based instead of direct-read?
 
 ---
 
@@ -1647,15 +2230,27 @@ ROM identities appear as SHA-256 digests; the blobs stay at their local paths
 `/home/shibbityshwab/staging-fi/rom16k.bin`). Wire-frame hex dumps are protocol facts (headers of
 messages), not firmware content; the firmware patch recipes contain only the patch hunks (our own
 replacement code plus the 4-byte entry words they modify), consistent with the owning lanes'
-committed recipes.
+committed recipes. The bench modules (`.ko`), the hostapd package set (`.apk`) and the imported
+image artifacts are build products: only sizes, sha256 values and derived facts are committed; the
+files themselves stay local (gitignored).
 
 **The bench image is part of the experiment, not a deliverable.** The cfg80211 kernel is a
 bench-only config addition (it is not in the luofu kernel patch series), the Wi-Fi modules are
 loaded from `/tmp` rather than packaged in the rootfs, and the image was installed manually from
-stock. The board booted it, enumerated a Wi-Fi wiphy + VAP (section 6.3) and later accepted the
-real VAP/scan management frames (section 6.7); that is a hardware milestone for the research line,
-not a distributable OpenWrt image and not a claim of install-path readiness. The phase-matrix
-runner (section 6.8) is likewise an attended operator tool: every real run needs
+stock. The board booted it, enumerated a Wi-Fi wiphy + VAP (section 6.3), accepted the real
+VAP/scan management frames (section 6.7), returned real scan results (section 6.9), ran hostapd to
+`AP-ENABLED` (section 6.11) and published a first data-plane frame to the MAC ring (section 6.12);
+that is a hardware milestone for the research line, not a distributable OpenWrt image and not a
+claim of install-path readiness. The native userspace (`iw` 6.17, `iwinfo`,
+`wireless-regdb`, later hostapd-mini plus its ucode modules) was installed through the T0
+zero-flash path into the running pair-B overlay, not baked into the image container. The
+ABI-correct image was **flashed on 2026-11-27 06:30** (attended, recovery armed: kernel read-back
+matched the slot hash, `ubiformat` OK, active pair untouched, handover `bootflag=b`/`boot_reg=0x21`);
+the box boots our 6.18.60 rootfsb image, the post-boot ABI receipt matches the kmod pin, and the
+rootfs-native modules load without `/tmp`. That closes the install-path question for the bench
+image (overlay wiped and re-provisioned by design); it does not make the image a product - it is a
+bench instrument with a research driver and a PD4-patched firmware. The phase-matrix runner
+(section 6.8) and the AP/air-TX ladders are likewise attended operator tools: every real run needs
 `--yes-really --attended` and the project's recovery door.
 
 **Why it is publishable.** The repository is an intentionally public research notebook: negative
@@ -1671,12 +2266,21 @@ source request names the exact symbol families/headers (wifi-driver-re SUMMARY);
 to date. The clean-room line's ceiling is the message-level protocol, the M0/M1 management
 interface, the real VAP/scan management-frame requests and the host-side MAC data-plane setup
 proven here; the firmware remains closed, PD4 must never ship (H1 confirmed it is a consume-only
-servicer), and the MAC/MLME/data path remain vendor code. The target side did advance: the board tree builds end to end, the GP1 reset
+servicer), and the MAC/MLME/data path remain vendor code. v4 sharpens this rather than changing it:
+the **first live AP is a control-plane milestone** (hostapd `AP-ENABLED` + consumed AP-start
+frames + a firmware VAP object) that runs on the PD4-patched research firmware; no upstreamable
+Wi-Fi driver, firmware-loading path or beaconing proof follows from it. The target side did advance: the board tree builds end to end, the GP1 reset
 pulse and the boot-pair recorder fixes are committed, the bench image was built and booted, and
 the 67 target patches were classified for submission (26 keep / 17 fold / 24 drop -> proposed
 30-patch series + DTS-0001). The install path has still never run end to end on a device, the
 submission form has not been regenerated, and the history purge is pending - so this is still not
-an upstream submission (see `wifi-upstream-target/REPORT.md` and `docs/ROADMAP-OPENWRT.md`).
+an upstream submission (see `wifi-upstream-target/REPORT.md` and `docs/ROADMAP-OPENWRT.md`). The
+upstream-final lane (2026-11-27 07:30) finalized that package and recorded the honest state: the
+frozen v1 review form is stale (post-GP1 validated line, DTS-0001 still carries the retired
+wifi-pcie-hog, L1 = 55 needs 56), the v2 30-patch form is specified but **not generated**, the Wi-Fi
+milestone is documented as research-only on PD4-patched firmware, and the GPL request is
+unanswered since 2026-10-01 - so the Wi-Fi AP remains out of scope for the upstream submission
+(`wifi-upstream-final/`).
 
 **Licensing of this lane's own material.** The report text is part of the notebook; the verifier
 script is original code (GPL-2.0-compatible, matching the sibling lanes). Nothing here is copied
@@ -1722,17 +2326,29 @@ table and reproduction commands; where this report compresses, the lane expands.
 | `wifi-vendor-userspace` | userspace surfaces, startup trace/HCC mapping, cfg80211 scope, M0-M6 |
 | `wifi-driver-clean` | clean-room instrument driver (the bench baseline) |
 | `wifi-openwrt-pkg` | OpenWrt KernelPackage for the instrument driver |
-| `wifi-bench-tooling` | sections 6.8/7/T28: one-command phase matrix (boot/C2/D1/D2/E1), protocol mode, blocked-outcome classification, bounded reboot, guards, patch builder, audit |
+| `wifi-bench-tooling` | sections 6.8/7/T28/T31: one-command **all-PASS** phase matrix (boot/C2/D1/D2/E1), protocol mode, blocked-outcome classification, bounded reboot, guards, patch builder, the F-AIR sequence and 563 device-free selftests (v4) |
 | `wifi-ctx-create` | context-create message RE, frame builder, verification pack |
 | `wifi-cfg80211` | section 6.3: cfg80211 M0-M2 lane - wiphy, VAP model, registration gate, 39-op map |
 | `wifi-datapath` | section 6.4 / T24: two-plane model, MAC slot-5 rings, TX/RX formats, key tables A/B |
 | `wifi-ete-wake` | section 6.5: ETE trigger chain, host-owned field comparison, E1a/E1b ladder |
 | `wifi-proto-seq` | sections 5.7/6.2: config-sync decode, calibration family and response contract |
-| `wifi-upstream-target` | sections 6.3/11: target tree fixes, bench-image build/flash, submission classification |
-| `wifi-fw-audit` | section 6.6 / F10: PD4 minimality/safety audit, H1/H2 observation, ranked variants and the vendor-clean alternative analysis (task-115); the H1 pack outcome is integrated in v3 |
+| `wifi-upstream-target` | sections 6.3/11: target tree fixes, cfg80211 bench-image build/flash, patch classification |
+| `wifi-image-integration` | sections 6.3/11: the bench image build (iw/iwinfo/regdb/kmod packages), T0/T1 deploy options |
+| `wifi-image-deploy` | sections 7/11: the T0 zero-flash deploy tooling, userspace-only mode and the kernel-ABI failure analysis (task-119) |
+| `wifi-abi-image` | sections 6.11/7/11/T21: byte-for-byte image reproduction, from-bytes ABI verifier (25/25), host apk transaction simulation and the attended flash runbook (task-128); the flash itself was executed 2026-11-27 06:30 and the ABI receipt matched (ledger, correction C44) |
+| `wifi-upstream-final` | section 11: the finalized upstream submission package, the stale-v1/v2-form analysis, the research-only AP wording, the GPL/PD4 status and the publication checks (2026-11-27 07:30) |
+| `wifi-fw-audit` | section 6.6 / F10 / T25: PD4 minimality/safety audit, H1/H2 observation, ranked variants and the vendor-clean alternative analysis (task-115); the H1 **consume-only** verdict is integrated in v3 and stands as the v4 limit (F14/10.1) |
 | `wifi-vap-scan` | sections 6.7/7 / F11 / T27: byte-exact g0 id7/id8/id9/id0xC builders, firmware-handler decode (scan handler VAP-0 hardcode), V1-V4/S1-S2 ladder (task-110) |
 | `wifi-scan-ap` | sections 6.3/6.7 / F11 / T22/T27: cfg80211 scan/AP wiring, frame-provider contract and caps `0x1f`, bounded announce wait/frame gap, fail-closed gate, the 676,180 B provider module (task-113) |
+| `wifi-vap-start` | section 6.9 / T27: the VAP start family decode (mode-0 WAL `0x64`/`0x65` vs mode-1 `g0 id1` keys `0x0064`/`0x0065`), why mode-0 had no firmware effect, the provider extension and the VAP-start ladder (task-117) |
+| `wifi-scan-d2h` | section 6.9: scan D2H decode - g1 id15 beacon layout (802.11 body + 20-byte trailer), g1 id17 channel records, the firmware VAP-0 handler analysis (task-118) |
+| `wifi-scan-complete` | section 6.9 / T27: scan timing and completion semantics (auto window, channel-coverage finish), the full beacon IE decode into cfg80211 BSS entries (task-123) |
 | `wifi-datapath-bringup` | sections 6.4/6.8 / F9 / T26: host data-plane implementation (`dp_*` attrs), MAC slot-5 program, TXQ address sync, E1 ladder (task-111) |
+| `wifi-dp-txrx` | section 6.12 / T31: the 12-byte device-RAM MSDU table entry semantics, TX publish/completion read-back, the RX 0x28 B descriptor parser (task-122) |
+| `wifi-dp-air` | section 6.12 / T31: the merged data-plane provider module (1,483 host checks), the F-AIR ladder and its COMPLETED/POST-ONLY/NO-RX/BLOCKED-DRIVER outcomes (task-126) |
+| `wifi-ap-start` | sections 6.10/6.11 / F12-F14 / T29/T30: the AP-start RE (156 B body, both carriers, four messages), the provider integration, and the hostapd capability gates v2-v7 (task-121) |
+| `wifi-hostapd-deploy` | section 6.10 / T24/T30: the hostapd-mini package set, the zero-flash deploy path and the AP-start ladder readback pack (task-125) |
+| `wifi-bench-session` | sections 6.8/7: the next-bench-session package - gates, session plan, module/sequence pins and the AP preconditions (task-127) |
 
 Historical lanes still in the tree but not load-bearing for this report: `wifi-framework-port`,
 `wifi-shim-port`, `wifi-source-hunt`, `wifi-wal-glue`, `wifi-algcfg-slice`,
@@ -1776,6 +2392,19 @@ history beyond the package, and the phase-numbered docs under `opensource/docs/`
 | **phase matrix / BLOCKED-DRIVER** | `phase_matrix.py` runs boot/C2/D1/D2/E1 in one command with bounded reboots; BLOCKED-DRIVER is the honest pending-feature verdict (currently D2 scan), never a PASS |
 | **dp_* attrs / E1** | the data-plane sysfs attributes (`dp_probe`, `dp_setup`, `dp_rings`, `dp_txq_sync`) and the automated E1 phase that programs the MAC slot-5 block and sends the TXQ address sync |
 | **H1 (consume-only)** | the confirmed PD4 branch behaviour: the sentinel pointer keeps its static value and the live handler table is zero, so the firmware mailbox handlers never execute and the duplex rides the non-mailbox path |
+| **mode-0 / mode-1 VAP start** | the two VAP-start families: mode 0 = WAL group-2 vendor order (cmd `0x64`/`0x65`; consumed on the bench but it did not create the firmware VAP object), mode 1 = `g0 id1` MAC-layer keys `0x0064`/`0x0065` (the bench-proven carrier; `vap_start_mode=1`) |
+| **mode-1 VAP base** | the once-per-load pair vap_add `g0 id1` 48 B + vap_start `g0 id1` 40 B that creates the firmware VAP object at `ctx+0x190`; required before scan results and before the AP frames |
+| **AP start sequence** | the four post-ready AP messages: vap_add (48 B) -> vap_start (40 B) -> ap_ssid (`g0 id1` key `0x0005`, 64 B) -> ap_cfg (`g0 id1` key `0x0127`, 184 B), consumed in 0 polls each |
+| **AP-ENABLED** | hostapd's state after the driver's `.start_ap` returned success; a host/control-plane fact, not proof of beaconing |
+| **hostapd-mini / ucode** | the OpenWrt hostapd variant (v2.12) and the `/usr/share/hostap/*.uc` wifi-scripts modules it loads; bench-deployed through the T0 overlay path |
+| **mgmt_stypes** | `wiphy->mgmt_stypes[iftype].rx/tx` bitmaps; cfg80211 accepts hostapd's `NL80211_CMD_REGISTER_FRAME` subscriptions only when the AP bits are advertised (v5 fix; AP rx=tx=`0x3c15`) |
+| **REPORTS_OBSS** | `WIPHY_FLAG_REPORTS_OBSS`; userspace-AP-SME hostapd registers `NL80211_CMD_REGISTER_BEACONS` before building NEW_BEACON, and cfg80211 refuses that registration without the flag (v6 fix) |
+| **`type __ap`** | the interface type hostapd expects: it always issues SET_INTERFACE(AP) during init, and creating the VAP as AP type makes that a same-type no-op instead of a driver type-change |
+| **POST-ONLY / COMPLETED (MAC) / air-CANDIDATE** | air-TX ladder verdicts: POST-ONLY = the host published the ring entry + wptr but the MAC did not consume it (completion_pending=1); COMPLETED (MAC) = completion_pending=0; air-CANDIDATE = an external observer is still required for any on-air claim |
+| **F-AIR ladder** | the air-TX/RX ladder of wifi-dp-air: boot/control -> mode-1 VAP + scan precondition -> `dp_probe` (READ) -> `dp_setup` -> key-0x0320 sync -> one TX frame -> read-only RX poll |
+| **T0 deploy / ABI-correct image** | T0 = zero-flash persistent apk install into the running pair-B overlay (no flash/selector/reboot; rollback `apk del`); ABI-correct image = the rootfs apk db kernel version equals the kmod `kernel=` pin (`6f995278...`), so a kernel+rootfs flash from one build is the fix (runbook ready) |
+| **`finish-ok[channel-coverage]`** | the host-side scan completion rule: success when every requested channel was reported (g1 id17) plus a 500 ms settle window; a firmware completion (g1 id16 status 1 / g2 id2) still wins |
+| **readback pack** | the read-only BAR0/CA gate set used for every AP/air-TX PASS: golden page, state, exception mask, staging frame, module-table slot 0, `ctx0+0x18C`, VAP pointer `ctx0+0x190` |
 
 Conventions used in the tables: `??` = header byte not initialised by the firmware builder;
 "BAR0 = CPU + 0x6B8000" is the CPU->BAR0 rule; "BAR0 = 0x3B8000 + (CA - 0x40000000)" is the IO-CA
