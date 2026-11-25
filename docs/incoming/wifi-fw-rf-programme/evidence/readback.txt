@@ -1,0 +1,18 @@
+== read-only probe pack (phys = 0x40000000 + CPU + 0x6b8000) ==
+  object                           CPU        BAR0       phys      
+  ctx slot0 (u32)                  0x00171458 0x00829458 0x40829458
+  module-table base u16            0x00172504 0x0082a504 0x4082a504
+  ctx+0x004 create type            0x0011975c 0x007d175c 0x407d175c
+  ctx+0x440 gate                   0x00119b98 0x007d1b98 0x407d1b98
+  bandobj+0xEC8 gate               0x0015f438 0x00817438 0x40817438
+  ctx+0x4B0 perlink ptr            0x00119c08 0x007d1c08 0x407d1c08
+  ctx+0x4B8 bandobj ptr            0x00119c10 0x007d1c10 0x407d1c10
+  bandobj+0x1A00 publish           0x0015ff70 0x00817f70 0x40817f70
+  perlink+0x1C8 97008 flag         0x00175be0 0x0082dbe0 0x4082dbe0
+  P+0x1A00 = perlink+0x2820 (O)    0x00178238 0x00830238 0x40830238
+  two-step: ctx0 = u32(0x171458) + u16(0x172504)
+            P = u32(ctx+0x4B0); O = u32(P+0x1A00); R = u32(O+0x2D8)
+            then R+0x3A8/0x3AC/0x3B4/0x3CC/0x410/0x414
+            then the channel-table row 0x117AD4+4*idx (byte1 = slot);
+            if slot != 0xFF, the pool record 0x1ADC98+16*slot+8
+  forbidden: RC misc window 0x10160000..0x1016ffff (never read)

@@ -1,0 +1,18 @@
+== corrected call chain ==
+  0x0124 worker 0x841B8 -> CA 0x40684(ctx, perlink+0xE20, perlink)
+    0x40684: gate ctx[4]==2, CA 0x944DE==1
+    CA 0x101890(band=ctx+0x11, field=ctx+0x12, channel=ctx+0x10) -> 0/1  predicate
+    CA 0xA2FA2(perlink+0xE20, ctx)  RF register image
+    CA 0x89840(perlink, r6)         R+0x410 bit0 = r6
+    if perlink+0x1C8: CA 0x97008(ctx)  general channel apply (no RF)
+  CA 0xA2FA2 split: idx>=8 -> inline image, P+0xF87=1
+                    idx<8  -> CA 0x89924,   P+0xF87=0
+  object chain: perlink=*(ctx+0x4B0); P=perlink+0xE20; O=*(P+0x1A00); R=*(O+0x2D8)
+  precondition: *(P+0xF04) == 3 else CA 0xA2FA2 logs and returns
+  CA 0x101890: band!=1 -> 0; field 0 -> descriptor slot = channel index;
+               returns bit7 of byte[CA 0x1ADC98+idx*16+8+2]; writes nothing
+  helpers: CA 0xFC... 0xFDCE4 (VAP+0x1A0 band class), 0xF4FD8 (module+0x4AC),
+           0x97008 (band channel reconcile) - all no-RF
+  beacon: CA 0x46394 VAP start (ctx+0x0E=1, 0x971D8 start-on-band, G+0x370/0x374
+          callbacks); CA 0x84DA4 AP config -> VAP+0x13A beacon interval;
+          CA 0x7E5CC copies VAP+0x138/+0x13A into the BSS/beacon descriptor
