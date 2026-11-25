@@ -1,0 +1,75 @@
+== tools/decode_h2d.py --selftest ==
+selftest: PASS (validation + classification + diff)
+
+== vectors ==
+vectors written to /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-trace/tests: sampler.log kprobe.log bulk.bin (frames are synthetic except the documented 0xD8 geometry)
+
+== sampler-format decode + diff ==
+ring-state records: 2; event records: 2
+  first ring: {'ts': 1000, 'ch': 0, 'ctrl': 0, 'base': 2220109824, 'depth': 31, 'prod': 0, 'cons': 0}
+  last  ring: {'ts': 2000, 'ch': 0, 'ctrl': 0, 'base': 2220109824, 'depth': 31, 'prod': 8, 'cons': 2}
+wrote /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-trace/tests/messages.jsonl
+records=8 valid=6 quarantined=2
+families=5 span_s=0.5 formats=['sampler']
+  family g0/id/0x0007       x1
+  family g0/key/0x0004      x1
+  family g0/key/0x00d8      x2
+  family g1/id/0x0003       x1
+  family g2/id/0x0003       x1
+
+[matched] 2
+  g0/key/0x00d8      len=  48 g=0 id=1 bid=0x01 vap=0 chip=4 key=0x00d8 dlen=20
+  g0/id/0x0007       len= 180 g=0 id=7 bid=0x01 vap=0 chip=0
+
+[drift] 1
+  g0/key/0x00d8      len=  44 g=0 id=1 bid=0x01 vap=0 chip=4 key=0x00d8 dlen=16  (ours expects total=48 txq-mib-config)
+
+[missing] 1
+  g0/key/0x0004      len=  32 g=0 id=1 bid=0x01 vap=0 chip=4 key=0x0004 dlen=4
+
+[core] 1
+  g1/id/0x0003       len=  32 g=1 id=3 bid=0x01 vap=0 chip=0
+
+[g2] 1
+  g2/id/0x0003       len=  32 g=2 id=3 bid=0x01 vap=0 chip=0
+
+[g3] 0
+
+[quarantined] 2
+  g0/key/0x0004      len=  48 g=0 id=1 bid=0x01 vap=0 chip=4 key=0x0004 dlen=4  hard=['read-truncated']
+  g0/key/0x00d8      len= 200 g=0 id=1 bid=0x01 vap=0 chip=4 key=0x00d8 dlen=20  hard=['read-truncated']
+
+CAPTURE VALID: 6 messages, 5 families, 0.5 seconds
+  [PASS] sampler: 6 valid / 5 families / 0.5 s
+  [PASS] sampler: 2 quarantined
+  [PASS] bucket \[matched\] 2
+  [PASS] bucket \[drift\] 1
+  [PASS] bucket \[missing\] 1
+  [PASS] bucket \[core\] 1
+  [PASS] bucket \[g2\] 1
+  [PASS] the F1-a candidate (key 0x0004) surfaces in MISSING-IN-OURS
+  [PASS] the band-core dimension surfaces
+  [PASS] JSONL written (8 records)
+
+== kprobe-format decode ==
+records=2 valid=2 quarantined=0
+families=1 span_s=0.4 formats=['kprobe']
+  family g0/key/0x00d8      x2
+
+CAPTURE VALID: 2 messages, 1 families, 0.4 seconds
+  [PASS] kprobe: 2 valid messages
+
+== bulk-format decode (save_hostmem path) ==
+records=2 valid=2 quarantined=0
+families=2 span_s=0.0 formats=['bulk']
+  family g0/id/0x0007       x1
+  family g0/key/0x00d8      x1
+
+CAPTURE VALID: 2 messages, 2 families, 0.0 seconds
+  [PASS] bulk: 2 valid messages
+
+== device sampler cross-build ==
+  [PASS] /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-trace/omo_h2dsampler: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped
+  [PASS] static ARM ELF produced
+
+ALL HOST TESTS PASS

@@ -45,7 +45,6 @@ cp build/wifi-rx-h2d-trace/omo_h2dsampler "$P/usr/bin/omo-h2dsampler"
 cp opensource/docs/incoming/wifi-rx-h2d-trace/tools/omo-h2dtrace "$P/etc/init.d/omo-h2dtrace"
 chmod 755 "$P/usr/bin/omo-h2dsampler" "$P/etc/init.d/omo-h2dtrace"
 ln -sf ../init.d/omo-h2dtrace "$P/etc/rc.d/S08omo-h2dtrace"
-tar -C "$P" -tvf /dev/null 2>/dev/null || true
 find "$P" -ls
 ```
 
@@ -112,11 +111,13 @@ cat /sys/kernel/debug/tracing/available_tracers
 grep -c hcc_msg_tx /proc/kallsyms; cat /proc/sys/kernel/kptr_restrict
 
 # 4) /dev/mem host-RAM read (method A availability; READ-ONLY)
-#    the phase-25 measure read host DRAM through /dev/mem; verify the primitive exists:
+#    probe only a HOST RAM word here - do NOT touch the ETE/BAR0 window before the
+#    vendor PCIe driver has mapped it (an unmapped MMIO read can abort the box):
 ls -l /dev/mem
-devmem 0x403f2400                # ETE SR0 block: +0x00 ctrl; before the stack loads this may read 0
-#    after the vendor stack is up, 0x403f2400+0x10 is the SR base (nonzero host phys) and
-#    +0x14 = 0x1f. A read that faults/stops the box is a STOP (capture the UART, power-cycle).
+devmem 0x80000000                # host DDR: a plain RAM read, safe
+#    The sampler waits for hi5622v100_plat and for SR base != 0 before it reads the
+#    ETE window, so the window access is ordered after the vendor init. If /dev/mem
+#    RAM reads fail (e.g. STRICT_DEVMEM), use method C (save_hostmem) instead.
 ```
 
 **STOP conditions:** `/dev/mem` missing or the read faults the box; `/etc/rc.d/luofu` ordering differs
@@ -195,7 +196,11 @@ also arm the kprobe set listed in REPORT §4.3 and write `trace_pipe` to
 Method C (fallback only, if method A is unavailable): with the stock stack up and
 `wifi_debug.ko` loaded once, read the SR base from the ETE window, then
 `echo 'save_hostmem 0 0x<base> 4096 /overlay/h2d-bulk.bin' > /sys/hisys/plat/pcie`, fetch the file,
-decode the node array offline with `decode_h2d.py --format nodes` (see H2D-FORMATS F2/F3).
+decode the nodes/frames offline with:
+
+    decode_h2d.py --format bulk --dump FILE --dump-base PHY --nodebase SR_BASE --depth 32
+
+(see H2D-FORMATS F2/F3).
 Never load `plat_debug.ko` alongside it and never unload either (reboot instead).
 
 ## T7. Cleanup + return to pair B (attended) ~15 min

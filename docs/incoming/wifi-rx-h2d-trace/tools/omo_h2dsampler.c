@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -260,7 +261,7 @@ int main(int argc, char **argv)
 	const char *stop_path = "/overlay/h2d-trace.stop";
 	uint32_t window = ETE_DEFAULT_WINDOW;
 	unsigned duration = 180, period_ms = 20, wait_max = 120;
-	uint64_t ts0, ts_ring = 0, last_state = 0, last_report = 0;
+	uint64_t ts0, ts_ring = 0, last_state = 0;
 	struct chan_state st[SR_CHANNELS];
 	int opt, i, ring_seen = 0;
 
@@ -373,7 +374,6 @@ int main(int argc, char **argv)
 		}
 		usleep(period_ms * 1000u);
 	}
-	(void)last_report;
 	log_line("E ts_ms=%llu msg=stopped", (unsigned long long)now_ms());
 	if (!quiet)
 		fprintf(stderr, "omo-h2dsampler: done; log=%s\n", log_path);

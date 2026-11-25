@@ -1,8 +1,8 @@
 #!/bin/sh
 # omo-h2dtrace - one-shot read-only vendor H2D capture for the stock pair-A image.
 # Installed by lane rx-h2d-trace (task-176) via the crafted config-backup restore channel;
-# starts the sampler BEFORE the vendor wifi stack loads (S08 ordering; proved in phase 21
-# that an S08 aid runs inside/before the module-load window).
+# starts the sampler BEFORE the vendor wifi stack loads (S08 ordering; phase 21 proved that
+# an S08 aid runs inside/before the module-load window).
 #
 # READ-ONLY: the sampler only pread()s /dev/mem; this script only starts it. It never writes
 # device registers, never flashes, never loads/unloads kernel modules.
@@ -22,6 +22,6 @@ while [ ! -e /dev/mem ] && [ $i -lt 60 ]; do
 	usleep 100000 2>/dev/null || sleep 1
 done
 
-echo "omo-h2dtrace: starting sampler at \$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERR"
+echo "omo-h2dtrace: starting sampler at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERR"
 nohup /usr/bin/omo-h2dsampler -o "$LOG" -t 180 -r 20 >>"$ERR" 2>&1 &
 exit 0
