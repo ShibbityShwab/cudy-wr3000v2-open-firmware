@@ -46,3 +46,21 @@
 - PASS: a 160 MHz AP beacon + an 80+80/160 client association.
 - Test: the fire with the 160 MHz config + the observer's width check.
 - State: NOT STARTED.
+
+## 5G-4 update (2026-11-27, the fw-chan-worker decode) - THE G6b REFUSAL WAS A HOST FALSE NEGATIVE
+
+The byte at module ctx+0x13 is the firmware's CHANNEL-TABLE INDEX (band 1 ch36 = 0 by
+construction), not a valid flag: the beacon lane's wait predicate (byte+0x13 == 1) could
+never pass for ch36, so the G6b 'REFUSED' (05:30) did not test the timing candidate.
+The worker: the per-link gate, the channel-table validation, the ctx store, then the
+5 GHz-only RF programme CA 0x40684 -> 0x101890 (silently gated on module+0x440 == 1 and
+band_object+0xEC8 == 1; skipped with NO log if either is 0, the worker still returns 0).
+
+The re-fire (NO rebuild): CW-0 = the existing module bc1cc0ea, the 5 GHz AP on ch40
+(band-1 index 1) + ap_chan_wait_ms=300 -> the old gate passes (word 0x01000128) -> the
+AP frames post after the completed wait -> the observer scans 5200 MHz. If the beacon
+appears, the 5 GHz blocker was the predicate all along. CW-2 = the read-only gate pack
+(module+0x440 CA 0x119B98, bandobj+0xEC8 CA 0x15F438, perlink+0x1C8 CA 0x175BE0, the ctx
+word 0x119768) decides whether 0x101890 was skipped. CW-1 = the corrected ch36 rung with
+the fixed module 9a5b048e.
+
