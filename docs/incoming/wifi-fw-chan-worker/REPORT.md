@@ -365,6 +365,8 @@ Decision:
 | `--decode` | the dispatch/store/post-store trace (`evidence/decode.txt`) |
 | `--tables` | both firmware channel tables + ctx-word encoding + the G6b table (`evidence/tables.txt`) |
 | `--readback` | the read-only BAR0 pack and the 5 GHz RF-gate decision tree (`evidence/readback.txt`) |
+| `tools/run-host-tests.sh` | the full host verification: firmware decode **89/89** + portable C model **38/38** (`evidence/host-tests.txt`) |
+| `tools/build-chan-worker.sh` | patch applies to the pinned beacon-lane base, clean module build (0 warnings/errors), debug-strip safe, **59 params**, decoded predicate linked; artifact 358,256 B sha256 `9a5b048e...775fa6` (local, uncommitted; `evidence/build-artifact.txt`) |
 | fire | **not fired by this lane**: `FIRE-RECIPE.md` is the Lead's one-shot rung |
 
 ## 11. Sources

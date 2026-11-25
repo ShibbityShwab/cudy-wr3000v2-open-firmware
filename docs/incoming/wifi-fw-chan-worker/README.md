@@ -30,7 +30,12 @@ read-only BAR0 pack in TABLES T7 decides at the next fire whether it ran.
 | `TABLES.md` | T1-T8: addresses, channel tables, store map, the G6b proof, the silent gates, the vendor transaction, the read-only BAR0 pack, the fire lines explained |
 | `FIRE-RECIPE.md` | the one-shot rungs: **CW-0 zero-rebuild control (ch40)**, CW-1 corrected gate, CW-2 read-only RF-gate pack; decision tree; safety rules |
 | `tools/fw_chan_worker_re.py` | the reproduction: `--decode`, `--tables`, `--readback`, `--selftest` (89/89 PASS). Reads the pinned local blobs in place; copies no vendor byte |
-| `evidence/` | the captured outputs: `selftest.txt`, `decode.txt`, `tables.txt`, `readback.txt` |
+| `patches/0001-chan-gate-fix.patch` | the host fix + read-only gate pack against the beacon-lane build tree (pinned base; no wire byte, no register write) |
+| `src/` | the committed portable model: `hi5622_chan_gate.c/.h` (byte-identical to the patched tree) + `chan_gate_selftest.c` (38 host checks) |
+| `tools/build-chan-worker.sh` | host build of the corrected module from the pinned base (pins, drift checks, artifact contract) |
+| `tools/run-host-tests.sh` | one-command host verification: the firmware decode selftest + the portable C model selftest |
+| `BUILD-NOTES.md` | the build chain, base pins, artifact identity, and what was / was not verified |
+| `evidence/` | the captured outputs: `selftest.txt`, `decode.txt`, `tables.txt`, `readback.txt`, `host-tests.txt`, `build-artifact.txt`, `build.log` |
 
 ## Reproduce (host only)
 

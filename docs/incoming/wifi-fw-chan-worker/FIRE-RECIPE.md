@@ -134,12 +134,20 @@ candidate; do not repeat CW-0 on the same boot with other channels.
 
 ## Rung CW-2 (read-only): the 5 GHz RF-gate pack (the decisive classification)
 
-Needs the corrected gate module patch (`patches/0001-chan-gate-fix.patch`,
-delivered with this lane's second commit) - it adds **read-only** dmesg reads
-and fixes the wait predicate; it changes no wire byte and adds no register
-write. If the patch is not built, the same words can be read through the
-phase-25 read-only /dev/mem + BAR0 window mechanism (h2d-trace RUNBOOK style) -
-never via a write.
+Needs the corrected gate module built from this lane's patch.  Host build
+(local; the Lead deploys the .ko to the router's module dir):
+
+    ../wifi-5ghz-beacon/tools/build-beacon5g-ready.sh   # pinned base tree (once)
+    ./tools/build-chan-worker.sh
+    # artifact: /tmp/chanworker-artifact/hi5622_wifi.ko
+    #   358,256 B sha256 9a5b048e7e21a4212c83d75fa9542afac9c9de89e93089c25694849cf7775fa6
+    #   59 params, clean build (see BUILD-NOTES.md / evidence/build-artifact.txt)
+
+The patch adds **read-only** dmesg reads and fixes the wait predicate; it
+changes no wire byte and adds no register write (`patches/0001-chan-gate-fix.patch`,
+sha256 `7f72d0ed...20dccd`).  If the patched module is not deployed, the
+same words can be read through the phase-25 read-only /dev/mem + BAR0 window
+mechanism (h2d-trace RUNBOOK style) - never via a write.
 
 The pack reads (CPU; BAR0 = CPU + 0x6B8000):
 
@@ -163,10 +171,10 @@ bandobj+0xEC8.
 
 ## Rung CW-1 (corrected gate on ch36; the beacon lane's G6b done right)
 
-With `patches/0001-chan-gate-fix.patch` built (`ap_chan_wait_ms=300`): the
+With the built corrected module (`9a5b048e...775fa6`; `ap_chan_wait_ms=300`): the
 wait predicate is the decoded store - `word == channel | band<<8 |
 body[1]<<16 | index(band,channel)<<24` - and the gate logs the index as an
-index. Re-run the banner lane's G6a/G6b rung unchanged with the 5 GHz AP on
+index. Re-run the beacon lane's G6a/G6b rung unchanged with the 5 GHz AP on
 **ch36**; the expected pass line is `word=0x00000124` (index 0). PASS is the
 same as CW-0.4 but on 5180 MHz. CW-1 is the fix the beacon lane intended; CW-0
 is its zero-rebuild control.
