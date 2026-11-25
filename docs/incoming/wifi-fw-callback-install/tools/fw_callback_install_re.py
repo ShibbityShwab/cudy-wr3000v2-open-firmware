@@ -294,6 +294,13 @@ def parse_store(text):
         regs = [norm_reg(r) for r in
                 re.findall(r"\b(?:r\d+|lr|sp|pc)\b", bm.group(2))]
         return ("stm", base, 0, regs)
+    bm = re.search(r"\[(\w+),\s*(\w+)(?:,\s*lsl #(\d+))?\]", rest)
+    if bm:
+        base = norm_reg(bm.group(1))
+        regs = [norm_reg(r) for r in
+                re.findall(r"\b(?:r\d+|lr|sp|pc)\b", rest[:bm.start()])]
+        return ("IDX", base, norm_reg(bm.group(2)),
+                int(bm.group(3)) if bm.group(3) else 0, regs)
     bm = re.search(r"\[(\w+)(?:,\s*#(-?\d+))?\]", rest)
     if not bm:
         return None
@@ -321,6 +328,9 @@ class Taint:
         self.img = img
         self.fw = fw
         self.events = []          # (addr, kind, target, value)
+        self.reads = []           # (addr, target, reg)
+        self.indexed = []         # (addr, base, idx, shift, value) G+index
+        self.value_stores = []    # (addr, base, off, value) G stored as data
         self.call_sites = []      # (addr, target, {argreg: value})
         self._done = set()
 
@@ -404,6 +414,11 @@ class Taint:
                 m2 = LDRMEM_RE.match(t)
                 if m2:
                     dst = norm_reg(m2.group(1))
+                    bas = norm_reg(m2.group(2))
+                    io = int(m2.group(3)) if m2.group(3) else 0
+                    if bas in regs and regs[bas][0] == "G":
+                        self.reads.append((i.addr, ("G", regs[bas][1] + io),
+                                           dst))
                     regs.pop(dst, None)
                 continue
             # ---- arithmetic
@@ -442,6 +457,15 @@ class Taint:
             # ---- store
             st = parse_store(t)
             if st:
+                if st[0] == "IDX":
+                    _, base, idxr, shift, sregs = st
+                    if base in regs and regs[base][0] == "G":
+                        val = None
+                        if sregs and sregs[0] in regs:
+                            val = regs[sregs[0]]
+                        self.indexed.append((i.addr, regs[base][1], idxr,
+                                             shift, val))
+                    continue
                 kind, base, off, sregs = st
                 if base in regs:
                     b = regs[base]
@@ -460,6 +484,11 @@ class Taint:
                             if sregs and sregs[0] in regs:
                                 val = regs[sregs[0]]
                             self.events.append((i.addr, kind, ("G", tgt), val))
+                elif sregs and sregs[0] in regs and regs[sregs[0]][0] == "G":
+                    # a G-derived pointer is stored into some other object:
+                    # possible alias that a later writer could use as a base
+                    self.value_stores.append((i.addr, base, off,
+                                              regs[sregs[0]]))
                 continue
             # ---- call
             if t.startswith("bl"):
@@ -687,7 +716,7 @@ def cmd_search(img, fw):
     print("== 5. hook-offset store inventory with ANY base")
     for i in img.ins:
         st = parse_store(i.text)
-        if not st:
+        if not st or st[0] == "IDX":
             continue
         kind, base, off, regs = st
         if off not in HOOKS:
@@ -769,7 +798,7 @@ def cmd_search(img, fw):
     print("== 12. every word-store in the image with immediate offset 880 (0x370)")
     for i in img.ins:
         st = parse_store(i.text)
-        if not st:
+        if not st or st[0] == "IDX":
             continue
         kind, base, off, regs = st
         if off != 0x370 or kind not in ("str", "strd", "stm"):
@@ -796,6 +825,41 @@ def cmd_search(img, fw):
                            sorted(gargs.items()))))
     print()
 
+    print("== 14b. G used as a stored VALUE (possible alias pointers)")
+    seen = set()
+    for addr, base, off, val in t.value_stores:
+        key = (addr, base, off)
+        if key in seen:
+            continue
+        seen.add(key)
+        print("  %06x  store G+0x%x -> [%s, #0x%x]"
+              % (addr, val[1], base, off))
+    print()
+
+    print("== 14b2. G-base INDEXED (register-offset) accesses")
+    for addr, boff, idxr, shift, val in t.indexed:
+        fs = img.function_start(addr)
+        print("  %06x  [G+0x%x + %s<<%d] fn 0x%06x" % (addr, boff, idxr,
+                                                        shift, fs or 0))
+    print()
+
+    print("== 14c. G+0x364..0x378 READ sites (hook-block reads)")
+    for addr, tgt, dst in t.reads:
+        if tgt[0] == "G" and 0x364 <= tgt[1] <= 0x378:
+            fs = img.function_start(addr)
+            nxt = []
+            idx = img.index.get(addr)
+            has_blx = False
+            for k in range(1, 9):
+                if idx is not None and idx + k < len(img.ins):
+                    tt = img.ins[idx + k].text
+                    nxt.append(img.ins[idx + k].addr)
+                    if "blx" in tt:
+                        has_blx = True
+            print("  %06x  G+0x%x -> %-4s fn 0x%06x  blx-within-8:%s"
+                  % (addr, tgt[1], dst, fs or 0, has_blx))
+    print()
+
     print("== 14. boot-installer functions: starts, callers, table entries")
     for probe in (0x5CF48, 0x5C2E2, 0x5967C, 0x59E54, 0x59CA6, 0x59F3E):
         fs = img.function_start(probe)
@@ -809,12 +873,61 @@ def cmd_search(img, fw):
     return 0
 
 
+CALLBACKS = {
+    0x364: 0x565C4, 0x368: 0x52BE0, 0x36C: 0x727D0,
+    0x370: None, 0x374: 0x57638, 0x378: 0x68C0A,
+}
+
+
+def cmd_callbacks(img, fw):
+    pro = img.prologues()
+
+    def next_pro(addr):
+        for p in pro:
+            if p > addr:
+                return p
+        return addr + 0x400
+
+    print("== installed callbacks in the G hook block 0x364..0x378")
+    for off, entry in sorted(CALLBACKS.items()):
+        if entry is None:
+            print("  G+0x%03x : NONE (slot never installed; no writer in image)" % off)
+            continue
+        end = min(next_pro(entry), entry + 0x400)
+        calls = []
+        lits = []
+        for i in img.window(entry, end):
+            t = img.strip_comment(i.text)
+            bt = img.branch_target(i.text)
+            if bt is not None and t.startswith("bl"):
+                calls.append("%06x->%06x" % (i.addr, bt))
+            lit = img.lit_at(i)
+            if lit is not None:
+                lits.append("%06x:%08x" % (i.addr, fw.u32(lit) or 0))
+        print("  G+0x%03x = 0x%06x (CA 0x%06x, value 0x%06x) region end 0x%06x"
+              % (off, entry, entry, entry | 1, end))
+        print("      calls   : %s" % calls)
+        print("      literals: %s" % lits[:20])
+    print()
+
+    print("== VAP start-on-band 0x971D8: the ONLY caller of G+0x370 / G+0x374")
+    for i in img.window(0x97352, 0x97378):
+        print_ins(img, fw, i)
+    print()
+
+    print("== G+0x378 is called from a different path (0x0B56EA)")
+    for i in img.window(0x0B56EA, 0x0B5700):
+        print_ins(img, fw, i)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--fw", default=DEFAULT_FW)
     ap.add_argument("--objdump", default=DEFAULT_OD)
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--search", action="store_true")
+    ap.add_argument("--callbacks", action="store_true")
     ap.add_argument("--dump", nargs=2, metavar=("LO", "HI"))
     ap.add_argument("--fn", metavar="ADDR")
     ap.add_argument("--xref", metavar="CA")
@@ -828,6 +941,8 @@ def main(argv=None):
         return cmd_selftest(img, fw)
     if args.search:
         return cmd_search(img, fw)
+    if args.callbacks:
+        return cmd_callbacks(img, fw)
     if args.dump:
         lo, hi = int(args.dump[0], 0), int(args.dump[1], 0)
         for i in img.window(lo, hi):

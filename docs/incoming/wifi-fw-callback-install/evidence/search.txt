@@ -501,6 +501,18 @@ G stores in that function: 4  0x268 0x288 0x29c 0x2b8
   041b4c -> 0x0401d0 (fn 0x04007e) args r3=G+0x0
   040082 -> 0x0403c6 (fn 0x0401ee) args r3=G+0x0
 
+== 14b. G used as a stored VALUE (possible alias pointers)
+  042a28  store G+0x0 -> [r3, #0x64]
+  042a36  store G+0x0 -> [r3, #0x64]
+  042a10  store G+0x0 -> [sp, #0x0]
+
+== 14b2. G-base INDEXED (register-offset) accesses
+
+== 14c. G+0x364..0x378 READ sites (hook-block reads)
+  097360  G+0x370 -> r3   fn 0x0971d8  blx-within-8:True
+  09736a  G+0x374 -> r3   fn 0x0971d8  blx-within-8:True
+  0b56ec  G+0x378 -> r4   fn 0x0b55e0  blx-within-8:True
+
 == 14. boot-installer functions: starts, callers, table entries
   probe 05cf48 -> fn [I] 0x05b426  callers []  code-ptr occurrences []
   probe 05c2e2 -> fn [I] 0x05b426  callers []  code-ptr occurrences []

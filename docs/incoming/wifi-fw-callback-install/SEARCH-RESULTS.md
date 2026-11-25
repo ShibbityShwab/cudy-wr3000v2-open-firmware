@@ -39,8 +39,9 @@ Evidence grade: **[V]** for every instruction address/value quoted,
   0xC8000 ish); this lane uses only the sha-pinned recovery-extract copy.
   [V] local compare.
 * CPU = file offset + **0x40000**; BAR0 = CPU + 0x6B8000; bar0read phys =
-  0x40000000 + BAR0 (= CPU + 0x46B8000). These are the committed lane
-  conventions.
+  **0x40000000 + CPU + 0x6B8000**. These are the committed lane conventions
+  (the "CPU + 0x46B8000" shorthand in some older docs drops the 0x40000000
+  base - do not use it).
 * G = `CA 0x1747C4` is **outside the image** (file offset 0x1347C4 >
   0xE2C98): it is a runtime-RAM global, reachable only through the
   `CA 0x1747C4` pointer literal. [V] `evidence/selftest.txt:3`.
