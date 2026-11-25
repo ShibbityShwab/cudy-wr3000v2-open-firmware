@@ -56,7 +56,7 @@ PASS  CA 0x463fe  bl 0xd4048                                            mctx[15]
 PASS  CA 0x46408  ldrb r3, [r4, #4]                                     mctx[4] create type
 PASS  CA 0x4640a  cmp r3, #2                                            AP branch
 PASS  CA 0x46418  movs r3, #1                                           VAP started state = 1
-PASS  CA 0x4641a  strb r3, [r4, #14]                                    the ONLY mctx[0x0E]=1 store
+PASS  CA 0x4641a  strb r3, [r4, #14]                                    the 0->1 mctx[0x0E] store (0x4AF0C only normalises 2->1)
 PASS  CA 0x4646e  ldrb r1, [r4, #17]                                    AP branch reads the band field
 PASS  CA 0x46470  ldrb.w r3, [r2, #88]                                  deref of mctx[0x190] (fault risk if 0)
 PASS  CA 0x4af2a  ldrb r3, [r4, #1]                                     state[1]

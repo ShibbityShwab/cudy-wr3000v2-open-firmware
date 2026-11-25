@@ -77,8 +77,9 @@ Pseudo-code, exactly as compiled:
     return 0;
 
 The per-entry gate is therefore: **m[4] == 2 (AP create type) AND
-m[0x0E] in {1,2,3}** (1 = set by key 0x0065 AP start; 2 = CA 0x4AF0C writes it
-on start; 3 = deferred-start marker, T4/T7).
+m[0x0E] in {1,2,3}** (1 = set by the key 0x0065 AP start (the 0->1 store);
+2 = observed before CA 0x4AF0C normalises it to 1 on a later start; 3 =
+deferred-start marker, T4/T7).
 
 The return-0 branch at 0x4AEC6 requires 0x944DE == 1 (band already up: T6) and
 0x101890 == 1 (RF programme).  On a fresh band-1 VAP m[0x10] (channel) is 0, so
@@ -121,7 +122,7 @@ per ../wifi-band1-start/TABLES.md T5 [V].
 | module ctx (mctx) | mctx = table[idx] + base | both functions return it |
 | mctx[0] | index | 0xFE6BC stores body[4] |
 | mctx[4] | create type (2 = AP) | 0xFE6EA-0xFE6EE: mctx[4] = body[0] |
-| mctx[0x0E] | VAP start state (1..3) | writers below |
+| mctx[0x0E] | VAP start state (1..3) | 1 = key 0x0065 AP branch 0x46418-0x4641A (0->1), 2->1 at 0x4B04E, 4 = non-AP paths |
 | mctx[0x10] | channel | 0xFE738: 0 |
 | mctx[0x11] | band (1 = 5 GHz) | 0xFE72A-0xFE736: body[17] if 1 else 0 |
 | mctx[0x12] | field | 0xFE734-0xFE752 (AP branch: 0) |
@@ -163,7 +164,7 @@ Band object fields (bandobj = mctx[0x4B8]):
 | 3 | 0x463FC | CA 0xD4048(mctx, body[1]) -> **mctx[15] = body[1]** (0xD4072-0xD4074) |
 | 4 | 0x46408-0x4640C | if mctx[4] != 2 -> STA branch (0x464D8: mctx[0x0E] = 4) |
 | 5 | 0x4640E-0x46414 | CA 0xBD114(mctx, mctx[0x190]) - tolerates a zero argument |
-| 6 | **0x46418-0x4641A** | **movs r3,#1; strb r3,[mctx+0x0E] -> mctx[0x0E] = 1** |
+| 6 | **0x46418-0x4641A** | **movs r3,#1; strb r3,[mctx+0x0E] -> mctx[0x0E] = 1** (the 0->1 store; CA 0x4AF0C's tail also writes 1 here, only when it was 2) |
 | 7 | 0x4641C-0x46426 | CA 0xD41AC(mctx); may return early (log only) - mctx[0x0E] stays 1 |
 | 8 | 0x46434-0x4643C | CA 0xF593C(mctx[0x4AC], mctx[4]) |
 | 9 | 0x46440-0x4644A | if published != 0: bandobj[0x13BC] = 0xFF (0x464E0), continue |

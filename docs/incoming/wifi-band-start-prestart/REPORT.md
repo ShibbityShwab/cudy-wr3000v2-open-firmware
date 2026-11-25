@@ -102,7 +102,9 @@ is missing: nothing in our ladder writes mctx[0x0E] before the 0x0242.
 
 **The key-0x0065 VAP start.**  The firmware worker CA 0x46394 (dispatch table A
 row 2) has an AP branch that sets **mctx[0x0E] = 1** at CA 0x46418-0x4641A
-before any per-link work; for create type 1 (STA) it sets 4 instead (0x464D8).
+before any per-link work; for create type 1 (STA) it sets 4 instead (0x464D8),
+and CA 0x4AF0C's tail normalises a 2 to 1 (0x4B042-0x4B04E) on later starts.
+The 0->1 transition before the first start is only produced by CA 0x46394.
 It also writes mctx[17] = body[2], mctx[18] = body[3], mctx[15] = body[1]
 (via CA 0xD4048) and u32[mctx+0x444] = body[4..7] [TABLES T7].
 
@@ -173,7 +175,30 @@ every other byte/order unchanged; gate it on G1-G11/G13 read-only probes and
 prove G12=1 before letting the 0x0242 run.  Full procedure and decision table:
 [FIRE-RECIPE.md](FIRE-RECIPE.md).
 
-## 8. Honest limits
+
+## 8. Corrections to the sibling lanes (for the record)
+
+* ../wifi-band1-start-send-2 REPORT section 4 stopped at "CA 0x4AE7C reads
+  bandobj+0x12 and needs exactly 1 ... resolves the entry ... returns 0 when
+  the 0x944DE/0x101890 branch succeeds or when no entry matches".  The
+  per-entry condition is not count-only: the resolver returns the entry only
+  when **mctx[4] == 2 && mctx[0x0E] in {1,2,3}**, and mctx[0x0E] has no writer
+  on our ladder before the 0x0242 - that is the missing message.  count != 1
+  is a separate, unconditional return 0.
+* The same lane's fire-recipe decision table should add: "count=1 and the
+  resolver still returns 0 -> check mctx[4] and mctx[0x0E]; the key-0x0065 VAP
+  start is missing" instead of only "look at the 0x4C3FC/0x4AE7C path".
+* ../wifi-band1-start-send FIRE-RECIPE's expected band_start dmesg line should
+  not assume state[1] comes from state[0] alone; the 0x0242 subcmd-1 start is
+  doubly conditional (state[1] != 0 AND mctx[0x0E] == 1 at CA 0x4C602-0x4C60C).
+* ../wifi-vap-start's g0-id1 key-0x0065 KAT is the right 40-B carrier but was
+  built with body[2] = 0; for a band-1 VAP body[2] must be 1 because mctx[0x11]
+  is the band field the later 5 GHz RF branch CA 0x40684 requires.
+* The 0x0242 worker calls CA 0x4AE7C **twice** (once inside CA 0x4C3FC, once at
+  0x4C5FA); both need the same mctx[0x0E] state, which is why the pre-start
+  success alone is not enough - the second call must also return the mctx.
+
+## 9. Honest limits
 
 * Static decode only.  The 0x0065 worker's per-link setup path is decoded only
   to the fault boundary (TABLES T7 step 10-11); the CA 0x4C3FC success

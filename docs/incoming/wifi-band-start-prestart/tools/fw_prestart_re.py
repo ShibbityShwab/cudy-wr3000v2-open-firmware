@@ -120,7 +120,7 @@ CHECK_INSNS = [
     (0x46408, "ldrb r3, [r4, #4]", "mctx[4] create type"),
     (0x4640A, "cmp r3, #2", "AP branch"),
     (0x46418, "movs r3, #1", "VAP started state = 1"),
-    (0x4641A, "strb r3, [r4, #14]", "the ONLY mctx[0x0E]=1 store"),
+    (0x4641A, "strb r3, [r4, #14]", "the 0->1 mctx[0x0E] store (0x4AF0C only normalises 2->1)"),
     (0x4646E, "ldrb r1, [r4, #17]", "AP branch reads the band field"),
     (0x46470, "ldrb.w r3, [r2, #88]", "deref of mctx[0x190] (fault risk if 0)"),
     # CA 0x4AF0C - the per-band MAC start guards

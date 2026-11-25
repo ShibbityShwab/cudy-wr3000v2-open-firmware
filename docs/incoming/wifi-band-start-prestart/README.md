@@ -19,8 +19,9 @@ the resolver returns a non-NULL band-VAP object.  The resolver does need
 bandobj+0x12 == 1 (the R3b readback's count=1 satisfies it), but for the single
 entry it then requires the **module context** to have mctx[4] == 2 (AP create
 type) **and mctx[0x0E] in {1,2,3}** (the VAP started/up state).  mctx[0x0E] is
-written **only by the key-0x0065 VAP start worker CA 0x46394**, which sets it to
-1 in its AP branch (CA 0x46418-0x4641A).  The stock sends that 0x0065 event as
+set to 1 in its AP branch by the key-0x0065 VAP start worker CA 0x46394 (CA
+0x46418-0x4641A; CA 0x4AF0C later normalises a 2 to 1, and the non-AP paths
+write 4).  The stock sends that 0x0065 event as
 part of its AP-start path (host module hmac_config_start_vap_event, 12-byte
 body); our ladder sends the equivalent only as a **late WAL group-2** frame
 (ap_vap_start, plan step 8, *after* ap_cfg) - i.e. after the 0x0242 has already
@@ -32,9 +33,10 @@ VAP-add field.
 
 ## 1. What this lane adds over the sibling decodes
 
-* CA 0x4C3FC's **full** logic: three early returns that exit *without* writing
-  state[4], the mode==2 forced failure, the success sub-branches (state[1] and
-  the [mctx+0x190]+0x10 ring math), and the only 0xFF store.
+* CA 0x4C3FC's **full** logic: the two early returns that exit *without*
+  writing state[4], the mode==2 forced failure, the success sub-branches
+  (state[1] and the [mctx+0x190]+0x10 ring math), and the only 0xFF store.
+  The 0x0242 worker calls CA 0x4AE7C a second time after the pre-start.
 * CA 0x4AE7C's **exact return semantics**: the mctx[4]==2 &&
   (mctx[0x0E]-1)<=2 gate, the 0x944DE -> 0x101890 "already-programmed" return-0
   branch, and the object-identity proof that CA 0x4AE7C's 0xBCD7E(idx) is the
