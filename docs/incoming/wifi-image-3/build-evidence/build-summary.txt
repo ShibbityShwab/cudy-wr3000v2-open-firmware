@@ -1,0 +1,19 @@
+# wifi-image-3 (task-196) build record
+build_start_utc=2026-11-25T15:37:57Z
+build_end_utc=2026-11-25T15:37:59Z
+base_image=wifi-image-update (image #2 + regdomain cfg80211 + ax hostapd)
+base_squashfs=b461df0cbc804587fdb789030b368b79d3544c4caa7c5f329a4ab0828e8cb77a (3997696 B)
+base_ubi=d3c665f16e76811d741bcaa7a670a6467e6a8c3ad0d49f61363a0157e2832d57 (4456448 B)
+prev_container=8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8 (7188799 B)
+kernel_slice=13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f (3372638 B) UNCHANGED
+kernel_slot=1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e (not a container member; rootfs-only flash)
+module_activity=545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99 (379092 B, 64 params)
+module_installed=a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed (358544 B, 64 params)
+root_squashfs=ecbba4f97300607cd41614ab09c9aa6378bcea215e8de37f4c3097b860a0bfaf (4009984 B)
+rootfs_ubi=90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3 (4456448 B) fits mtd14=24379392 YES
+container=4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53 (7843840 B)
+squashfs_mkfs_time=1794002400 (pinned: reproducible squashfs bytes)
+ubinize_image_seq=1003
+container_member_epoch=2026-11-27 00:00:00 +0700
+verify_rc=0
+local_artifacts=/home/shibbityshwab/wifi-image-3-artifacts

@@ -1,0 +1,17 @@
+# merged-source delta vs the F2 tree (/tmp/dfsmode-build)
+# only the three merged features are added/touched; the 5 GHz chain files are unchanged
+
+== files only in the IMAGE #3 tree ==
+hi5622_ba.c
+hi5622_ba.h
+hi5622_he_caps.c
+hi5622_he_caps.h
+
+== files only in the F2 tree ==
+
+== files that differ ==
+hi5622_cfg80211.c
+hi5622_dp_txrx.c
+hi5622_rx_live.c
+hi5622_rx_live.h
+Kbuild

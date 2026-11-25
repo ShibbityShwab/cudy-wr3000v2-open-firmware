@@ -1,0 +1,428 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+#
+# hi5622-load - one-shot bring-up of the clean-room Hi5622V100 Wi-Fi driver
+# on the Cudy WR3000 v2.0 IMAGE #3 (OpenWrt, kernel 6.18.60).
+#
+# MODULE: the IMAGE #3 merged clean-room driver,
+#   activity (strip --strip-debug): 379,092 B sha256
+#     545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99,
+#   installed (/lib/modules/6.18.60/hi5622_wifi.ko): 358,544 B sha256
+#     a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed,
+# 64 module parameters, vermagic "6.18.60 SMP mod_unload ARMv7 p2v8",
+# depends=cfg80211.
+# Chain: image #2's CORRECTED FINAL ASSOCIATION tree + the CORRECTED mgmt-TX
+# carrier (HCC g0 id6 control message) + the EAPOL/data RX refill watermark
+# (rx_refill_wm) + THE 5 GHz CHAIN (band5g, vap5g, ap_chan_wait_ms, the
+# 0x00F7 desc_table, the 0x01F7 dfs_mode, the F2 field-B per-module-context
+# fix) + the HE (802.11ax) capability advertisement (he_caps) + the
+# fail-closed BA skeleton (ba_enable).
+# Bench-proven constituents: the F2 fire (2026-11-27 23:30) programmed the
+# 5 GHz RF with this chain (mode 3 on band 1; R+0x3A8=0x01800060,
+# R+0x3AC=0x03E6138A); the HE AP is live with he_caps=1 + the ax hostapd;
+# the image-2 association chain was hardware-accepted (mgmt-TX carrier 86 B
+# posted / 0 polls; RX live bank CA 0x40050000 armed status 0x182).  The
+# EXACT 64-param merged module is NOT fired as a combination: the new
+# features are fail-closed by default (0) and inert until a fire enables
+# them.  See docs/incoming/wifi-image-3/.
+#
+# WHY THIS SCRIPT EXISTS
+#   The module parameters are load-time only and the shipped image's modprobe
+#   does NOT pass module arguments (bench-confirmed 2026-11-27), while
+#   "insmod module.ko key=value ..." is the proven path.  This loader therefore
+#   discovers the kernel release, loads cfg80211 before the driver, calls
+#   insmod with the packaged defaults spelled out explicitly, verifies the
+#   parameters really took effect, then runs the C2 ladder and (optionally)
+#   starts hostapd.  One command, no arguments:
+#
+#       /usr/sbin/hi5622-load          # = /etc/init.d/hi5622-wifi start
+#
+#   Settings come from /etc/config/hi5622 (uci: hi5622.main.* / hi5622.ap.*);
+#   every one falls back to the shipped default when uci is absent, which is
+#   what makes "HI5622_DRY_RUN=1 hi5622-load" safe on a host.
+#
+# POLICY (see docs/incoming/wifi-final-image-2/)
+#   * Bench default is hi5622.main.autoload=0: nothing runs at boot.
+#   * The driver boot ladder writes the device on load, so this script is for
+#     an attended session unless the operator opted into autoload.
+#   * It never unloads the module (bench rule: no rmmod after a CPU release).
+#   * The vendor-derived PD4 firmware and wifi_block.bin are never packaged;
+#     they must already be at /lib/firmware/hi_wifi/ (firmware policy).
+set -eu
+
+DRY_RUN=${HI5622_DRY_RUN:-0}
+DO_C2=1
+DO_AP=1
+QUIET=0
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-n|--dry-run) DRY_RUN=1 ;;
+		--no-c2)      DO_C2=0 ;;
+		--no-ap)      DO_AP=0 ;;
+		-q|--quiet)   QUIET=1 ;;
+		-h|--help)
+			sed -n '3,41p' "$0" | sed 's/^# \{0,1\}//'
+			exit 0 ;;
+		*) echo "hi5622-load: unknown argument: $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+log() {
+	[ "$QUIET" -eq 1 ] && return 0
+	echo "hi5622-load: $*"
+	if command -v logger >/dev/null 2>&1; then
+		logger -t hi5622-load "$*" || true
+	fi
+	return 0
+}
+
+fatal() {
+	echo "hi5622-load: ERROR: $*" >&2
+	if command -v logger >/dev/null 2>&1; then
+		logger -t hi5622-load "ERROR: $*" || true
+	fi
+	exit 1
+}
+
+# uci_get <section.option> <default>
+uci_get() {
+	_v=""
+	if command -v uci >/dev/null 2>&1; then
+		_v=$(uci -q get "hi5622.$1" 2>/dev/null) || _v=""
+	fi
+	if [ -n "$_v" ]; then printf '%s' "$_v"; else printf '%s' "$2"; fi
+}
+
+# run the command, or only print it in dry-run
+run() {
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "  [dry-run] $*"
+	else
+		"$@"
+	fi
+}
+
+# write a sysfs value ("echo N > attr" without a shell redirect for dry-run)
+sysfs_write() {
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "  [dry-run] echo $2 > $1"
+	else
+		printf '%s\n' "$2" > "$1"
+	fi
+}
+
+module_loaded() {
+	grep -q "^$1 " /proc/modules 2>/dev/null
+}
+
+# find the Hi5622 PCI endpoint (vendor 0x59e7 / device 0x0005)
+find_pci() {
+	for _d in /sys/bus/pci/devices/*; do
+		[ -f "$_d/vendor" ] || continue
+		[ "$(cat "$_d/vendor")" = "0x59e7" ] || continue
+		[ "$(cat "$_d/device")" = "0x0005" ] || continue
+		printf '%s' "$_d"
+		return 0
+	done
+	return 1
+}
+
+# read back a module parameter; fails closed when it differs from the request
+verify_param() {
+	_got=$(cat "/sys/module/hi5622_wifi/parameters/$1" 2>/dev/null) || _got="<missing>"
+	if [ "$_got" != "$2" ]; then
+		fatal "module parameter $1=$_got (requested $2) - load did not apply the packaged defaults"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# settings (packaged defaults = the FINAL all-patch single-boot recipe:
+# wifi-stability/FINAL-INTEGRATION.md section 4 - allow_frames=32 and
+# h2d_send_budget=10 are required for the WPA2/RX rungs)
+# ---------------------------------------------------------------------------
+FW_PATH=$(uci_get main.fw_path 'hi_wifi/FIRMWARE.PD4.bin')
+WIFI_BLOCK_PATH=$(uci_get main.wifi_block_path 'hi_wifi/wifi_block.bin')
+ALLOW_FRAMES=$(uci_get main.allow_frames '32')
+FRAME_GAP_MS=$(uci_get main.frame_gap_ms '100')
+H2D_SEND_BUDGET=$(uci_get main.h2d_send_budget '10')
+VAP_START_FIRST=$(uci_get main.vap_start_first '1')
+VAP_START_MODE=$(uci_get main.vap_start_mode '1')
+VAP_START_MODULE=$(uci_get main.vap_start_module '0')
+SCAN_DWELL_MS=$(uci_get main.scan_dwell_ms '60')
+HCC_POLL_MS=$(uci_get main.hcc_poll_ms '5')
+RX_ENABLE=$(uci_get main.rx_enable '1')
+RX_REFILL_WM=$(uci_get main.rx_refill_wm '75')
+BEACON_STATIC=$(uci_get main.beacon_static '1')
+BEACON_VAP_START=$(uci_get main.beacon_vap_start '1')
+WPA_KEYS=$(uci_get main.wpa_keys '1')
+WPA_KEY_MODULE=$(uci_get main.wpa_key_module '0')
+STA_JOIN=$(uci_get main.sta_join '0')
+HT_MODE=$(uci_get main.ht_mode '0')
+VHT_CAP=$(uci_get main.vht_cap '0')
+BAND_VENDOR=$(uci_get main.band_vendor '0')
+SCAN_BAND_CFG=$(uci_get main.scan_band_cfg '0')
+# image #3: the 5 GHz / 802.11ax / BA gates (all fail-closed by default)
+BAND5G=$(uci_get main.band5g '0')
+VAP5G=$(uci_get main.vap5g '0')
+AP_CHAN_WAIT_MS=$(uci_get main.ap_chan_wait_ms '300')
+DESC_TABLE=$(uci_get main.desc_table '0')
+DFS_MODE=$(uci_get main.dfs_mode '0')
+HE_CAPS=$(uci_get main.he_caps '0')
+BA_ENABLE=$(uci_get main.ba_enable '0')
+MGMT_TX=$(uci_get main.mgmt_tx '0')
+MGMT_RX=$(uci_get main.mgmt_rx '0')
+STA_OPS=$(uci_get main.sta_ops '0')
+EAPOL_RX=$(uci_get main.eapol_rx '0')
+STA_USER_DEL=$(uci_get main.sta_user_del '0')
+DATA_TX=$(uci_get main.data_tx '0')
+DATA_TX_PEER=$(uci_get main.data_tx_peer '1')
+DATA_TX_PROTECT=$(uci_get main.data_tx_protect '0')
+DATA_TX_TIMEOUT_MS=$(uci_get main.data_tx_timeout_ms '200')
+HCC_TRACE=$(uci_get main.hcc_trace '0')
+STOP_AP_MODE=$(uci_get main.stop_ap_mode '0')
+MGMT_DIAG=$(uci_get main.mgmt_diag '0')
+TXQ_PUBLISH=$(uci_get main.txq_publish '1')
+C2_LADDER=$(uci_get main.c2_ladder '1')
+STRICT=$(uci_get main.strict '1')
+WIPHY_TIMEOUT=$(uci_get main.wiphy_timeout '30')
+
+# image #3 fail-closed consistency: the 5 GHz chain's frames are only ever
+# posted on a band-1 AP start, so enabling them without band5g=1 is a mistake
+# the loader refuses BEFORE the driver load (no partial state).
+if [ "$DESC_TABLE" != "0" ] || [ "$DFS_MODE" != "0" ] || [ "$VAP5G" != "0" ]; then
+	[ "$BAND5G" = "1" ] || fatal "desc_table/dfs_mode/vap5g require band5g=1 (the 5 GHz chain is fail-closed)"
+fi
+if [ "$BAND5G" != "0" ] && [ "$BAND5G" != "1" ]; then fatal "band5g=$BAND5G (0/1 only)"; fi
+if [ "$HE_CAPS" != "0" ] && [ "$HE_CAPS" != "1" ]; then fatal "he_caps=$HE_CAPS (0/1 only; >1 is refused by the module)"; fi
+AP_ENABLED=$(uci_get ap.enabled '0')
+AP_IFNAME=$(uci_get ap.ifname 'wlan0')
+AP_PHY=$(uci_get ap.phy 'auto')
+AP_TYPE=$(uci_get ap.type '__ap')
+AP_CONF=$(uci_get ap.config '/etc/hi5622/hostapd-open.conf')
+AP_COUNTRY=$(uci_get ap.country '')
+
+REL=$(uname -r)
+KODIR="/lib/modules/$REL"
+CFG_KO="$KODIR/cfg80211.ko"
+DRV_KO="$KODIR/hi5622_wifi.ko"
+
+log "kernel $REL; module $DRV_KO; fw_path=$FW_PATH"
+log "defaults: allow_frames=$ALLOW_FRAMES frame_gap_ms=$FRAME_GAP_MS h2d_send_budget=$H2D_SEND_BUDGET vap_start_mode=$VAP_START_MODE vap_start_first=$VAP_START_FIRST scan_dwell_ms=$SCAN_DWELL_MS hcc_poll_ms=$HCC_POLL_MS"
+log "features: rx_enable=$RX_ENABLE rx_refill_wm=$RX_REFILL_WM beacon_static=$BEACON_STATIC beacon_vap_start=$BEACON_VAP_START wpa_keys=$WPA_KEYS wpa_key_module=$WPA_KEY_MODULE sta_join=$STA_JOIN ht_mode=$HT_MODE vht_cap=$VHT_CAP band_vendor=$BAND_VENDOR scan_band_cfg=$SCAN_BAND_CFG"
+log "5GHz/AX/BA (image #3; fail-closed unless the fire enables them): band5g=$BAND5G vap5g=$VAP5G ap_chan_wait_ms=$AP_CHAN_WAIT_MS desc_table=$DESC_TABLE dfs_mode=$DFS_MODE he_caps=$HE_CAPS ba_enable=$BA_ENABLE"
+log "association (fail-closed unless the fire enables them): mgmt_tx=$MGMT_TX mgmt_rx=$MGMT_RX sta_ops=$STA_OPS eapol_rx=$EAPOL_RX sta_user_del=$STA_USER_DEL data_tx=$DATA_TX data_tx_peer=$DATA_TX_PEER data_tx_protect=$DATA_TX_PROTECT data_tx_timeout_ms=$DATA_TX_TIMEOUT_MS"
+[ "$DRY_RUN" -eq 1 ] && log "dry-run: no module load, no device write, no hostapd start"
+
+# ---------------------------------------------------------------------------
+# 0. firmware preflight (policy: the PD4 image is never packaged)
+# ---------------------------------------------------------------------------
+if [ "$DRY_RUN" -eq 0 ]; then
+	[ -f "/lib/firmware/$FW_PATH" ] || fatal "firmware missing: /lib/firmware/$FW_PATH - push the PD4 artifact manually (never packaged; see /etc/hi5622/FIRMWARE-POLICY.txt)"
+	[ -f "/lib/firmware/$WIFI_BLOCK_PATH" ] || fatal "Wi-Fi custom block missing: /lib/firmware/$WIFI_BLOCK_PATH - push the locally captured block manually (never packaged)"
+fi
+
+# ---------------------------------------------------------------------------
+# 1. cfg80211 first (the driver imports its symbols)
+# ---------------------------------------------------------------------------
+if module_loaded cfg80211; then
+	log "cfg80211 already loaded"
+else
+	if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$CFG_KO" ]; then
+		fatal "missing $CFG_KO (install kmod-hi5622-cfg80211 / the target-kernel cfg80211)"
+	fi
+	log "loading cfg80211"
+	run insmod "$CFG_KO"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. the driver - explicit insmod arguments, then verify they took effect
+# ---------------------------------------------------------------------------
+if module_loaded hi5622_wifi; then
+	CUR_FW=$(cat /sys/module/hi5622_wifi/parameters/fw_path 2>/dev/null) || CUR_FW="<missing>"
+	if [ "$CUR_FW" = "$FW_PATH" ]; then
+		log "hi5622_wifi already loaded with fw_path=$CUR_FW - not reloading (load-time parameters)"
+	else
+		fatal "hi5622_wifi already loaded with fw_path=$CUR_FW (wanted $FW_PATH); parameters are load-time only and rmmod is forbidden after a CPU release - reboot"
+	fi
+else
+	if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$DRV_KO" ]; then
+		fatal "missing $DRV_KO (install kmod-hi5622-wifi from the image)"
+	fi
+	log "loading driver (boot ladder runs on load; x=1 applies to the device)"
+	run insmod "$DRV_KO" \
+		"fw_path=$FW_PATH" \
+		"wifi_block_path=$WIFI_BLOCK_PATH" \
+		"allow_frames=$ALLOW_FRAMES" \
+		"frame_gap_ms=$FRAME_GAP_MS" \
+		"h2d_send_budget=$H2D_SEND_BUDGET" \
+		"vap_start_first=$VAP_START_FIRST" \
+		"vap_start_mode=$VAP_START_MODE" \
+		"vap_start_module=$VAP_START_MODULE" \
+		"scan_dwell_ms=$SCAN_DWELL_MS" \
+		"hcc_poll_ms=$HCC_POLL_MS" \
+		"hcc_trace=$HCC_TRACE" \
+		"stop_ap_mode=$STOP_AP_MODE" \
+		"mgmt_diag=$MGMT_DIAG" \
+		"rx_enable=$RX_ENABLE" \
+		"rx_refill_wm=$RX_REFILL_WM" \
+		"beacon_static=$BEACON_STATIC" \
+		"beacon_vap_start=$BEACON_VAP_START" \
+		"wpa_keys=$WPA_KEYS" \
+		"wpa_key_module=$WPA_KEY_MODULE" \
+		"sta_join=$STA_JOIN" \
+		"ht_mode=$HT_MODE" \
+		"vht_cap=$VHT_CAP" \
+		"band_vendor=$BAND_VENDOR" \
+		"scan_band_cfg=$SCAN_BAND_CFG" \
+		"band5g=$BAND5G" \
+		"vap5g=$VAP5G" \
+		"ap_chan_wait_ms=$AP_CHAN_WAIT_MS" \
+		"desc_table=$DESC_TABLE" \
+		"dfs_mode=$DFS_MODE" \
+		"he_caps=$HE_CAPS" \
+		"ba_enable=$BA_ENABLE" \
+		"mgmt_tx=$MGMT_TX" \
+		"mgmt_rx=$MGMT_RX" \
+		"sta_ops=$STA_OPS" \
+		"eapol_rx=$EAPOL_RX" \
+		"sta_user_del=$STA_USER_DEL" \
+		"data_tx=$DATA_TX" \
+		"data_tx_peer=$DATA_TX_PEER" \
+		"data_tx_protect=$DATA_TX_PROTECT" \
+		"data_tx_timeout_ms=$DATA_TX_TIMEOUT_MS" \
+		"txq_publish=$TXQ_PUBLISH" \
+		"cfg80211_auto=1" \
+		"ap_start_mode=0" \
+		"rd_ab_write=0" \
+		"hcc_cece_mode=0" \
+		"allow_unseeded_release=0"
+	if [ "$DRY_RUN" -eq 0 ]; then
+		verify_param fw_path "$FW_PATH"
+		verify_param wifi_block_path "$WIFI_BLOCK_PATH"
+		verify_param allow_frames "$ALLOW_FRAMES"
+		verify_param frame_gap_ms "$FRAME_GAP_MS"
+		verify_param h2d_send_budget "$H2D_SEND_BUDGET"
+		verify_param vap_start_mode "$VAP_START_MODE"
+		verify_param rx_enable "$RX_ENABLE"
+		verify_param rx_refill_wm "$RX_REFILL_WM"
+		verify_param beacon_static "$BEACON_STATIC"
+		verify_param wpa_keys "$WPA_KEYS"
+		verify_param mgmt_tx "$MGMT_TX"
+		verify_param data_tx "$DATA_TX"
+		verify_param band5g "$BAND5G"
+		verify_param vap5g "$VAP5G"
+		verify_param ap_chan_wait_ms "$AP_CHAN_WAIT_MS"
+		verify_param desc_table "$DESC_TABLE"
+		verify_param dfs_mode "$DFS_MODE"
+		verify_param he_caps "$HE_CAPS"
+		verify_param ba_enable "$BA_ENABLE"
+		log "module parameters verified from /sys/module/hi5622_wifi/parameters (insmod applied them)"
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. wait for the wiphy (registered after the ready handshake, ~3 s after
+#    release; the module itself owns the 30 s ready wait)
+# ---------------------------------------------------------------------------
+PHY=""
+i=0
+while [ "$i" -lt "$WIPHY_TIMEOUT" ]; do
+	if [ "$DRY_RUN" -eq 1 ]; then PHY="<phy>"; break; fi
+	for _p in /sys/class/ieee80211/phy*; do
+		[ -e "$_p" ] && PHY="${_p##*/}"
+	done
+	[ -n "$PHY" ] && break
+	i=$((i + 1))
+	sleep 1
+done
+if [ -z "$PHY" ]; then
+	if [ "$STRICT" = "1" ]; then
+		fatal "no wiphy under /sys/class/ieee80211 within ${WIPHY_TIMEOUT}s - inspect 'dmesg | tail' and the transport status attr"
+	else
+		log "WARN: no wiphy within ${WIPHY_TIMEOUT}s (strict=0)"
+	fi
+fi
+log "wiphy: $PHY"
+
+# ---------------------------------------------------------------------------
+# 4. C2 ladder: ordered ctx-create (t1, value 3) -> txq sync72
+#    NOTE: the real sysfs attribute is h2d_ctx_create; the write VALUE selects
+#    the t1/t2/t3 grammar (the stale "h2d_ctx_create_t1" spelling in some lane
+#    notes does not exist in sysfs).
+# ---------------------------------------------------------------------------
+if [ "$C2_LADDER" = "1" ] && [ "$DO_C2" -eq 1 ]; then
+	D=""
+	if [ "$DRY_RUN" -eq 1 ]; then
+		D="<pci:59e7:0005>"
+	else
+		D=$(find_pci) || D=""
+	fi
+	if [ -n "$D" ]; then
+		log "C2 ladder on $D: h2d_ctx_create=3 -> h2d_txq_sync72=1"
+		sysfs_write "$D/h2d_ctx_create" "3"
+		sysfs_write "$D/h2d_txq_sync72" "1"
+		if [ "$DRY_RUN" -eq 0 ]; then
+			H2D=$(cat "$D/h2d_status")
+			echo "hi5622-load: h2d_status: $H2D"
+			case "$H2D" in
+				*"ok=2"*"timeout=0"*"refused=0"*) log "C2 ladder OK (frames_sent=2, no timeout/refusal)" ;;
+				*)
+					if [ "$STRICT" = "1" ]; then
+						fatal "C2 ladder not clean (expected ok=2 timeout=0 refused=0): $H2D"
+					else
+						log "WARN: C2 ladder not clean (strict=0)"
+					fi ;;
+			esac
+		fi
+	else
+		if [ "$STRICT" = "1" ]; then
+			fatal "Hi5622 PCI endpoint 59e7:0005 not found - cannot run the C2 ladder"
+		else
+			log "WARN: Hi5622 PCI endpoint not found (strict=0)"
+		fi
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. optional AP: regulatory country, AP-type VAP, hostapd
+# ---------------------------------------------------------------------------
+if [ "$AP_ENABLED" = "1" ] && [ "$DO_AP" -eq 1 ]; then
+	if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$AP_CONF" ]; then
+		fatal "hostapd config missing: $AP_CONF"
+	fi
+	if [ -n "$AP_COUNTRY" ]; then
+		log "regulatory country: $AP_COUNTRY"
+		run iw reg set "$AP_COUNTRY"
+	fi
+	if [ "$DRY_RUN" -eq 0 ] && iw dev "$AP_IFNAME" info >/dev/null 2>&1; then
+		log "interface $AP_IFNAME already exists"
+	else
+		[ "$AP_PHY" = "auto" ] && AP_PHY="$PHY"
+		log "creating $AP_IFNAME type $AP_TYPE on $AP_PHY"
+		run iw phy "$AP_PHY" interface add "$AP_IFNAME" type "$AP_TYPE"
+	fi
+	run ip link set "$AP_IFNAME" up
+	log "starting hostapd: $AP_CONF"
+	run hostapd -B -t -P /var/run/hi5622-hostapd.pid "$AP_CONF"
+	if [ "$DRY_RUN" -eq 0 ]; then
+		i=0
+		while [ "$i" -lt 10 ]; do
+			if iw dev "$AP_IFNAME" info 2>/dev/null | grep -q 'type AP'; then
+				log "AP up: $AP_IFNAME type AP (hostapd AP-ENABLED)"
+				break
+			fi
+			i=$((i + 1))
+			sleep 1
+		done
+		if [ "$i" -ge 10 ]; then
+			fatal "hostapd did not reach AP-ENABLED on $AP_IFNAME within 10 s; hostapd log: /var/log/hostapd or dmesg"
+		fi
+	fi
+else
+	log "AP start disabled (hi5622.ap.enabled=$AP_ENABLED)"
+fi
+
+log "done"
+exit 0

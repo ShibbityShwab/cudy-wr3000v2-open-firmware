@@ -1,0 +1,69 @@
+# symbol-size comparison: F2 5GHz module (unbuilt source: /tmp/dfsmode-build) vs IMAGE #3 merged module
+# method: cross nm --print-size --defined-only; unique symbols only (duplicate __UNIQUE_ID_* excluded)
+
+unique symbols same size : 986
+unique symbols size diff : 5
+symbols only in F2       : 0 (must be 0: nothing from the 5 GHz chain is dropped)
+symbols only in IMAGE #3 : 50 (the merged features)
+
+== size-changed symbols (all userspace/feature-status functions) ==
+cfg80211_status_show                     000001d4 -> 000001dc
+hi5622_cfg80211_init                     00000910 -> 00000b08
+hi5622_cfg80211_remove                   00000150 -> 00000160
+hi5622_dp_rx_capture_show                00000364 -> 000003dc
+hi5622_dp_rx_drain_store                 00000824 -> 00000ad0
+
+== the 5 GHz / beacon chain: every symbol present, every size identical ==
+5GHz-chain symbols compared: 182 ; differing/missing: 0
+
+== new symbols (the merged feature surface) ==
+  __param_ba_enable                        00000014
+  __param_he_caps                          00000014
+  __param_rx_refill_wm                     00000014
+  __param_str_ba_enable                    0000000a
+  __param_str_he_caps                      00000008
+  __param_str_rx_refill_wm                 0000000d
+  ba_copy_addr                             00000034
+  ba_parse_body                            0000010c
+  ba_post_relay_addba_rsp                  000000c4
+  ba_post_relay_delba                      000000c8
+  dptx_rx_refill_wm                        00000004
+  dptx_rx_wm_ring                          0000029c
+  hi5622_ba_build_addba_req                00000138
+  hi5622_ba_build_addba_rsp                00000130
+  hi5622_ba_build_ampdu_end                00000060
+  hi5622_ba_build_ampdu_start              00000080
+  hi5622_ba_build_delba                    000000d0
+  hi5622_ba_build_relay_addba_rsp          000000f8
+  hi5622_ba_build_relay_delba              00000090
+  hi5622_ba_build_tx_notify                00000078
+  hi5622_ba_check_enabled                  0000002c
+  hi5622_ba_core_init                      00000014
+  hi5622_ba_core_set_addrs                 0000002c
+  hi5622_ba_d2h                            000002e0
+  hi5622_ba_enable                         00000004
+  hi5622_ba_mgmt_rx                        00000028
+  hi5622_ba_mgmt_rx.part.0                 0000030c
+  hi5622_ba_parse_action                   0000006c
+  hi5622_ba_peer_drop                      00000038
+  hi5622_ba_peer_get                       000000d0
+  hi5622_ba_peer_get_by_uid                0000004c
+  hi5622_ba_tx_burst_end                   00000178
+  hi5622_ba_tx_mpdu                        000001e0
+  hi5622_ba_tx_start                       00000028
+  hi5622_ba_tx_start.part.0                000001cc
+  hi5622_ba_wrap_h2d                       0000005c
+  hi5622_he_caps                           00000004
+  hi5622_he_caps_band_name                 00000020
+  hi5622_he_caps_build_ie                  00000104
+  hi5622_he_caps_fill                      000000c4
+  hi5622_he_caps_ie_len                    00000070
+  hi5622_he_caps_mcs_len                   0000006c
+  hi5622_he_caps_policy                    00000018
+  hi5622_rx_wm_plan                        000000a8
+  hi5622_rx_wm_target                      00000070
+  hi5622_rx_wm_triggered                   0000007c
+  hic_mcs_2g                               0000000c
+  hic_mcs_5g                               0000000c
+  hic_phy_cap_2g                           0000000b
+  hic_phy_cap_5g                           0000000b

@@ -1,0 +1,60 @@
+# IMAGE #3 driver module - build chain (host-only; the .ko is local evidence)
+#
+# The IMAGE #3 module merges the three newest clean-room driver feature lines
+# onto the bench-proven 5 GHz chain tip (the F2 fire module):
+#
+#   F2 5 GHz chain tree  (/tmp/dfsmode-build when this lane ran; the tree that
+#   built /tmp/f2-module.ko, 364,184 B sha256 12427b8675b91515..., 61 params,
+#   fired as the F2 on 2026-11-27 23:30: the 5 GHz RF was PROGRAMMED)
+#     = r1-band base (e8b17f72, 356,612 B) + wifi-desc-table-send/patches/0001
+#       + wifi-dfs-mode-send/patches/0001 + wifi-fw-dfs-worker/patches/
+#         0001-fieldb-context.patch (the field-B 0x00 per-module-context fix)
+#   + wifi-rx-watermark/patches/0001-rx-refill-watermark.patch     (T4)
+#   + wifi-ba-agg/patches/0001-ba-skeleton.patch                   (BA)
+#   + wifi-ax-he-caps/patches/0001-he-caps.patch                   (HE)
+#     (+ wifi-ax-he-caps/src/hi5622_he_caps.c/.h copied in)
+#
+# Patch application record (2026-11-28, host-only):
+#   T4 : applied cleanly (3 files: hi5622_rx_live.h/.c, hi5622_dp_txrx.c)
+#   BA : applied cleanly; Kbuild hunk offset +2 (hi5622_ba.o added)
+#   HE : hi5622_cfg80211.c hunk applied cleanly; the HE Kbuild hunk does NOT
+#        apply (the F2 tree's Kbuild already carries hi5622_desc_table.o +
+#        hi5622_dfs_mode.o lines the patch was not written against) -> the
+#        hi5622_he_caps.o object line was added manually after
+#        hi5622_dfs_mode.o.  The two portable files came from the HE lane src.
+#   No file from the F2 tree was dropped: 0 symbols exist only in F2.
+#
+# Build (0 warnings, 0 errors):
+#   KDIR=/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+#   CROSS=/home/shibbityshwab/openwrt-lab-upstream-target/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-
+#   make ARCH=arm CROSS_COMPILE=$CROSS -C $KDIR M=$PWD modules
+#
+# Strip / package forms:
+#   activity  = arm-openwrt-linux-strip --strip-debug     -> 379,092 B  sha256 545192df...
+#   installed = OpenWrt scripts/strip-kmod.sh (NO_RENAME=1)
+#               = -x -G __this_module --strip-unneeded -R .note.gnu.build-id
+#               + objcopy -R .comment -R .pdr -R .mdebug.abi32 ...
+#               -> 358,544 B  sha256 a717c86d...  (.text identical to activity)
+#   The image #2 lane's installed module (328,788 B b4c076bf...) is the same
+#   transformation applied to the image #2 artifact - reproduced exactly by the
+#   same strip-kmod invocation, which is how the installed-form hash is pinned.
+#
+# Validation of the merge:
+#   - symbol preservation vs the F2 tree: 986 unique symbols identical, 5 sized
+#     differently (all cfg80211/dp status functions), 0 symbols only in F2,
+#     182/182 5 GHz/beacon chain symbols present with identical sizes
+#     (see symbol-preservation.txt),
+#   - the three constituent lanes' host tests pass on the merged sources:
+#     wifi-rx-watermark 127 checks, wifi-ax-he-caps 109+22 checks,
+#     wifi-ba-agg 183 checks (see host-tests-*.txt),
+#   - 64 params, vermagic 6.18.60 SMP mod_unload ARMv7 p2v8, depends=cfg80211,
+#     license GPL.
+#
+# HONESTY: the F2 module is the bench-proven one for the 5 GHz chain; the HE
+# module (475975d3) is the bench-proven one for the AX advertisement; the
+# image-2 module (d2c608e7) is the bench-accepted association/RX-watermark one.
+# This merged 64-param module is the SUM of those verified code paths but the
+# exact combination was NOT fired by this host-only lane.  Every added feature
+# is fail-closed at load (he_caps=0, ba_enable=0, band5g=0, desc_table=0,
+# dfs_mode=0) and inert until a fire enables it; the loader refuses the 5 GHz
+# gates without band5g=1.

@@ -1,0 +1,4 @@
+UBI image: 4456448 B, PEB 131072 B, 34 PEBs
+volume 0: 32 LEBs, 4009984 B reassembled -> /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-3/build-evidence/work/verify/rootfs.vol0.squashfs
+header: 687371732d030000
+format: squashfs (magic hsqs) OK

@@ -1,0 +1,53 @@
+== build selftest (cc)
+== run selftest
+he_caps_selftest: 109 checks, 0 failures
+PASS
+
+== part 2: run the offline on-air HE checker selftest
+{
+  "verdict": "PASS",
+  "detail": "1/1 beacon(s) carry the contract HE capabilities (ext-id 35) + HE Operation (ext-id 36)",
+  "beacons": 1,
+  "matched": 1,
+  "band": "2g",
+  "ssid": "cudy-ap-test",
+  "observed": [
+    {
+      "bssid": "02:00:00:68:00:01",
+      "band": "2g",
+      "he_oper": true,
+      "he_cap_hex": "0100000000000200000000000000000000fafffaff"
+    }
+  ]
+}
+HE-IE-VERDICT|PASS|1/1 beacon(s) carry the contract HE capabilities (ext-id 35) + HE Operation (ext-id 36)
+{
+  "verdict": "FAIL",
+  "detail": "expected beacon(s) present but no HE Capabilities element (ext 0x23): firmware beacon has no HE IE",
+  "beacons": 1,
+  "matched": 0,
+  "band": "2g",
+  "ssid": "cudy-ap-test",
+  "observed": [
+    {
+      "bssid": "02:00:00:68:00:01",
+      "band": "2g",
+      "he_oper": true,
+      "he_cap_hex": null
+    }
+  ]
+}
+HE-IE-VERDICT|FAIL|expected beacon(s) present but no HE Capabilities element (ext 0x23): firmware beacon has no HE IE
+{
+  "verdict": "INCONCLUSIVE",
+  "detail": "no beacon for SSID 'cudy-ap-test' in the capture",
+  "beacons": 0,
+  "matched": 0,
+  "band": null,
+  "ssid": "cudy-ap-test",
+  "observed": []
+}
+HE-IE-VERDICT|INCONCLUSIVE|no beacon for SSID 'cudy-ap-test' in the capture
+INCONCLUSIVE|pcap too short
+check_he_ie_selftest: 22 checks, 0 failures
+PASS

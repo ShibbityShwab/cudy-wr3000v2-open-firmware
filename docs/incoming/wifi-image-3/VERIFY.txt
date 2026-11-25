@@ -1,0 +1,141 @@
+== wifi-image-3 verification (built bytes), task-196 ==
+container: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-3/build-evidence/work/image-3-sysupgrade.bin
+RECORD  container size/sha256 = 7843840 / 4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53
+
+PASS  container has exactly 6 tar members (dir + CONTROL + INSTALL-STATUS + fip-manifest + kernel + root)
+PASS  container carries sysupgrade-cudy_wr3000-v2/CONTROL
+PASS  container carries sysupgrade-cudy_wr3000-v2/INSTALL-STATUS.txt
+PASS  container carries sysupgrade-cudy_wr3000-v2/fip-manifest.txt
+PASS  container carries sysupgrade-cudy_wr3000-v2/kernel
+PASS  container carries sysupgrade-cudy_wr3000-v2/root
+PASS  container root dir member present
+PASS  kernel slice is the validated 13e81214... (sha, UNCHANGED)
+PASS  kernel slice size unchanged (3372638 B)
+RECORD  kernel slot 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e is NOT a container member: a rootfs-only flash writes mtd14 and leaves kernelb/mtd12 untouched
+PASS  CONTROL names the cudy_wr3000-v2 board
+PASS  CONTROL names the hisilicon/luofu target
+PASS  fip-manifest slice-sha256 matches the unchanged kernel slice
+PASS  every container member carries the pinned IMAGE_EPOCH mtime (reproducible tar)
+PASS  every container member is owned by uid/gid 0 (root)
+RECORD  rootfs.ubi size = 4456448 B
+PASS  rootfs member starts with the UBI# EC magic
+PASS  rootfs UBI is a whole number of 128 KiB PEBs (34)
+PASS  rootfs UBI fits rootfsb/mtd14 (0x1740000 = 24379392 B; 19922944 B free)
+RECORD  rootfs squashfs (UBI vol0) size/sha256 = 4009984 / ecbba4f97300607cd41614ab09c9aa6378bcea215e8de37f4c3097b860a0bfaf
+PASS  UBI volume 0 reassembles to a squashfs (hsqs magic)
+PASS  UBI volume 0 (squashfs) extracted
+PASS  squashfs superblock magic hsqs present
+RECORD  squashfs needs 32 LEBs of 126976 B; UBI has 34 PEBs
+PASS  UBI PEB count covers the squashfs LEBs plus the overlay volume
+PASS  squashfs compression is xz (the image recipe)
+PASS  squashfs block size is 262144
+PASS  squashfs ARM BCJ filter is set (-Xbcj arm)
+PASS  squashfs superblock is readable/complete
+PASS  rootfs carries the expected 524 files (image #2 inventory + the 3 new payload files)
+RECORD  rootfs: 524 files, 199 symlinks, 89 dirs
+PASS  rootfs carries /lib/modules/6.18.60/hi5622_wifi.ko
+PASS  installed module sha256 is the pinned IMAGE #3 installed form (a717c86d...)
+PASS  installed module size is 358544 B (strip-kmod form)
+PASS  module modinfo name is hi5622_wifi
+PASS  module vermagic is 6.18.60
+PASS  module depends on cfg80211
+PASS  module exposes the pinned 64 parameters
+PASS  module parameter rx_refill_wm present
+PASS  module parameter desc_table present
+PASS  module parameter dfs_mode present
+PASS  module parameter band5g present
+PASS  module parameter vap5g present
+PASS  module parameter ap_chan_wait_ms present
+PASS  module parameter he_caps present
+PASS  module parameter ba_enable present
+PASS  module parameter mgmt_tx present
+PASS  module parameter data_tx present
+PASS  module parameter beacon_static present
+PASS  verify input module-installed is the pinned artifact (a717c86d...)
+PASS  verify input module-installed size is 358544 B
+PASS  verify input module-activity is the pinned artifact (545192df...)
+PASS  verify input module-activity size is 379092 B
+PASS  installed .text is byte-identical to the activity artifact .text (strip-kmod changed only metadata)
+PASS  module feature string present: rx_refill_wm
+PASS  module feature string present: RX watermark:
+PASS  module feature string present: desc_table
+PASS  module feature string present: dfs_mode
+PASS  module feature string present: he_caps
+PASS  module feature string present: ba_enable
+PASS  module feature string present: himg_build_hcc_mgmt_tx
+PASS  module feature string present: cfg80211_rx_mgmt_ext
+PASS  module feature string present: data-tx tx: posts=
+PASS  module license is GPL
+RECORD  module installed: 358544 B sha256 a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed, 64 params; activity: 379092 B sha256 545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99
+PASS  rootfs carries the target-kernel cfg80211.ko
+PASS  cfg80211.ko is the regdomain-fixed build (bc4d9c73...)
+PASS  cfg80211.ko size is the fixed 2,317,952 B (the unsigned-regdb build)
+PASS  cfg80211.ko has no undefined pkcs7/x509 symbols (the signature requirement is compiled out)
+PASS  rootfs carries /usr/sbin/hostapd
+PASS  hostapd is the 802.11ax build (fef44f3b...)
+PASS  hostapd size is the pinned 1,618,388 B ax build
+PASS  hostapd is NOT the image #2 SAE build (451dd49f...)
+PASS  hostapd is an ELF binary
+PASS  hostapd links libmbedcrypto (SAE/ECC backend)
+PASS  hostapd carries the CONFIG_DRIVER_11AX_SUPPORT code (ieee80211ax parse path)
+PASS  hostapd carries the HE/MBSS consistency code (full ax variant)
+PASS  bench userspace present: /usr/sbin/iw
+PASS  bench userspace present: /usr/bin/iwinfo
+PASS  bench userspace present: /usr/share/ucode/iwinfo.uc
+PASS  bench userspace present: /usr/share/ucode/wifi/hostapd.uc
+PASS  bench userspace present: /sbin/init
+PASS  bench userspace present: /lib/firmware/regulatory.db
+PASS  wireless regulatory.db present (6332 B)
+PASS  payload carried byte-identical: /usr/sbin/hi5622-load
+PASS  payload carried byte-identical: /etc/config/hi5622
+PASS  payload carried byte-identical: /etc/modprobe.d/hi5622-wifi.conf
+PASS  payload carried byte-identical: /etc/init.d/hi5622-wifi
+PASS  payload carried byte-identical: /etc/hi5622/hostapd-open-ax.conf
+PASS  payload carried byte-identical: /etc/hi5622/hostapd-open-5g40.conf
+PASS  payload carried byte-identical: /etc/hi5622/IMAGE-3-NOTES.txt
+PASS  rc.d link /etc/rc.d/S96hi5622-wifi present
+PASS  rc.d link points at ../init.d/hi5622-wifi
+PASS  extracted hi5622-load passes sh -n (host syntax check)
+PASS  bench policy: hi5622.main.autoload defaults to 0 (nothing loads at boot)
+PASS  uci carries the image #3 option band5g
+PASS  uci carries the image #3 option vap5g
+PASS  uci carries the image #3 option ap_chan_wait_ms
+PASS  uci carries the image #3 option desc_table
+PASS  uci carries the image #3 option dfs_mode
+PASS  uci carries the image #3 option he_caps
+PASS  uci carries the image #3 option ba_enable
+PASS  the new 5 GHz/AX/BA gates ship FAIL-CLOSED (0)
+PASS  uci policy is labelled IMAGE #3
+PASS  loader is labelled IMAGE #3 with the new module identity
+PASS  loader passes the new module parameter band5g
+PASS  loader passes the new module parameter vap5g
+PASS  loader passes the new module parameter ap_chan_wait_ms
+PASS  loader passes the new module parameter desc_table
+PASS  loader passes the new module parameter dfs_mode
+PASS  loader passes the new module parameter he_caps
+PASS  loader passes the new module parameter ba_enable
+PASS  loader verifies the readback of band5g
+PASS  loader verifies the readback of vap5g
+PASS  loader verifies the readback of ap_chan_wait_ms
+PASS  loader verifies the readback of desc_table
+PASS  loader verifies the readback of dfs_mode
+PASS  loader verifies the readback of he_caps
+PASS  loader verifies the readback of ba_enable
+PASS  loader refuses the 5 GHz gates without band5g=1 (fail-closed consistency)
+PASS  modprobe defaults mirror the fail-closed AX/5 GHz gates
+PASS  every loader insmod parameter exists in the module (46 passed)
+PASS  every loader uci key is present in /etc/config/hi5622 (44 keys)
+PASS  no vendor firmware / PD4 / wifi_block binary is packaged (firmware policy)
+PASS  firmware policy text present in the rootfs
+PASS  no unexpected >4 MiB file in the rootfs
+PASS  package db records kmod-hi5622-wifi
+PASS  package db records kmod-hi5622-cfg80211
+PASS  package db records hostapd-mbedtls (the ax hostapd's package)
+PASS  package db carries the full bench stack (83 packages)
+PASS  /dev/console is preserved as a character device (faithful squashfs extraction)
+PASS  kernel module metadata present (/lib/modules/6.18.60/modules.builtin)
+PASS  installed module is 0644 root:root
+PASS  hostapd is mode 0755
+PASS  all six WPA2/WPA3 hostapd fixtures survive in /etc/hi5622/
+
+verify-image-3: 129 passed, 0 failed

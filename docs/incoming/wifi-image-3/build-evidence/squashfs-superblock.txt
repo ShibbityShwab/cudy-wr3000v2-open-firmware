@@ -1,0 +1,19 @@
+Found a valid SQUASHFS 4:0 superblock on /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-image-3/build-evidence/work/root.squashfs.
+Creation or last append time Sat Nov  7 05:00:00 2026
+Filesystem size 4008076 bytes (3914.14 Kbytes / 3.82 Mbytes)
+Compression xz
+	Dictionary size 262144
+	Filters selected: arm
+Block size 262144
+Filesystem is exportable via NFS
+Inodes are compressed
+Data is compressed
+Uids/Gids (Id table) are compressed
+Fragments are compressed
+Tailends are not packed into fragments
+Xattrs are compressed
+Duplicates are removed
+Number of fragments 24
+Number of inodes 813
+Number of ids 2
+Number of xattr ids 0

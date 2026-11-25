@@ -1,0 +1,84 @@
+# wifi-image-3 (task-196) - AUTHORITATIVE ARTIFACT IDENTITIES
+#
+# Built host-side by tools/bake-image-3.sh from the pinned inputs below.
+# THREE consecutive bakes are byte-identical (build-evidence/build-runs.txt).
+# Local artifacts (never committed, never flashed by this lane):
+#   /home/shibbityshwab/wifi-image-3-artifacts/
+#   /home/shibbityshwab/wifi-image-3-module-artifacts/
+#
+# == THE FLASH UNIT: the sysupgrade container ==
+sha256  4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53
+size    7,843,840 B
+path    image-3-sysupgrade.bin
+members 6 (dir, CONTROL, INSTALL-STATUS.txt, fip-manifest.txt, kernel, root)
+note    replaced image #2 container 7,188,799 B sha256
+        8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
+        (image #2 is the verified base; the container layout is unchanged)
+
+# == KERNEL SLICE - UNCHANGED (must stay byte-identical) ==
+sha256  13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+size    3,372,638 B
+path    kernel-slice.bin
+slot    1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e
+        (8,650,752 B kernelb/mtd12 slot - NOT a container member, NOT written
+         by a rootfs-only flash)
+note    identical to the image #2 kernel slice; the image is rootfs-only
+
+# == ROOTFS ==
+sha256  90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3
+size    4,456,448 B  (34 PEBs of 128 KiB)
+path    rootfs.ubi
+sha256  ecbba4f97300607cd41614ab09c9aa6378bcea215e8de37f4c3097b860a0bfaf
+size    4,009,984 B
+path    root.squashfs
+note    squashfs options: -comp xz -b 262144 -Xbcj arm -noappend
+        plus -mkfs-time/-all-time 1794002400 (2026-11-27 00:00:00 +0700) so the
+        squashfs/UBI/container bytes are reproducible
+        base rootfs (wifi-image-update): root.squashfs 3,997,696 B
+        b461df0cbc804587fdb789030b368b79d3544c4caa7c5f329a4ab0828e8cb77a /
+        rootfs.ubi 4,456,448 B
+        d3c665f16e76811d741bcaa7a670a6467e6a8c3ad0d49f61363a0157e2832d57
+note    mtd14 (rootfsb, 0x1740000 = 24,379,392 B): 19,922,944 B free after this
+        UBI -> the rootfs-only flash is feasible
+
+# == THE IMAGE #3 DRIVER MODULE (the merged 64-param module) ==
+activity (strip --strip-debug):
+sha256  545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99
+size    379,092 B
+installed (OpenWrt strip-kmod form, /lib/modules/6.18.60/hi5622_wifi.ko):
+sha256  a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed
+size    358,544 B   params 64
+params  the F2 5 GHz chain (61) + rx_refill_wm + he_caps + ba_enable
+vermagic 6.18.60 SMP mod_unload ARMv7 p2v8 ; depends cfg80211 ; license GPL
+proof   installed .text == activity .text (byte-identical)
+
+# == USERSPACE CARRIES (the bench-proven image-update fixes, unchanged) ==
+/lib/modules/6.18.60/cfg80211.ko
+sha256  bc4d9c73f5dae02b7e31dd378891b86a29e38eb783fa690e045a0cd6b9861b91
+size    2,317,952 B   (the regdomain fix: REQUIRE_SIGNED_REGDB off; 0 pkcs7 refs)
+        base image #2 cfg80211.ko: 406,028 B
+        11a5e2b57f31e07b3e692ac084c2aa278bc5d1e5485e7c51e6cb114cfe57c46a
+/usr/sbin/hostapd
+sha256  fef44f3bdfc87c583f8d694338f9eb715c756d85422ef7c81b51e19040a838e6
+size    1,618,388 B   (the 802.11ax hostapd: CONFIG_DRIVER_11AX_SUPPORT)
+        base image #2 hostapd: 1,032,951 B
+        451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
+
+# == CONTAINER / ROOTFS STRUCTURE ==
+rootfs file count   524 files (image #2's 521 + the 3 new payload files)
+symlinks / dirs     199 / 89
+package db          83 packages (hostapd-mbedtls, kmod-hi5622-wifi,
+                    kmod-hi5622-cfg80211, iw, iwinfo, wireless-regdb, ...)
+device nodes        /dev/console preserved as a character device
+vendor firmware     NONE packaged (PD4 + wifi_block are manual pushes only)
+container members   mtime 2026-11-27 00:00:00 +0700, owner 0/0 (reproducible tar)
+verify              129 passed, 0 failed (build-evidence/verify.txt)
+selftest            102 passed, 0 failed, 0 skipped
+
+# == PINNED INPUTS (so the bake can be re-run) ==
+base root.squashfs   b461df0cbc804587fdb789030b368b79d3544c4caa7c5f329a4ab0828e8cb77a (3,997,696 B)
+base rootfs.ubi      d3c665f16e76811d741bcaa7a670a6467e6a8c3ad0d49f61363a0157e2832d57 (4,456,448 B)
+image #2 container   8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8 (7,188,799 B)
+module activity      545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99 (379,092 B)
+module installed     a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed (358,544 B)
+kernel slice         13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f (3,372,638 B)

@@ -1,0 +1,131 @@
+== wifi-rx-watermark host selftest (portable rules + ring model)
+PASS: target 256/75 = 192 (>= 3/4 posted)
+PASS: target 512/75 = 384
+PASS: target 256/100 = full ring
+PASS: target 256/50 = 128
+PASS: target 256/33 = 84 (floor)
+PASS: target 512/33 = 168 (floor)
+PASS: target 256/1 = 2 (floor, nonzero)
+PASS: target wm=0 disabled
+PASS: target wm>100 refused
+PASS: target depth 0 refused
+PASS: target NULL refused
+PASS: trigger 191 < 192
+PASS: trigger 192 == target is healthy
+PASS: trigger full ring healthy
+PASS: trigger posted>depth refused
+PASS: trigger disabled at wm=0
+PASS: trigger small 383 < 384
+PASS: plan healthy ring publishes nothing
+PASS: plan trigger at 191 bounded by cap 64
+PASS: plan bounded by queued buffers
+PASS: plan bounded by cap (136 queued, 136 room)
+PASS: plan avail>depth refused
+PASS: plan posted>depth refused
+PASS: plan disabled at wm=0 even when empty
+PASS: plan depth 0 refused
+PASS: plan wm>100 refused
+PASS: plan NULL refused
+PASS: plan 512/100 at 511: only one slot can be re-published
+PASS: free ring full: producer 0x8000 vs consumer 0 => 256 posted
+PASS: 32 free entries consumed => 224 posted
+PASS: no posted entries after one lap
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: burst: 256 entries posted after init
+PASS: burst: device consumed 200 free entries
+PASS: burst: 56 posted after the 200-entry burst
+PASS: burst: drain 1 re-published 64 (window refill only)
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: burst: posted 120 after drain 1 (old window refill)
+PASS: burst: watermark tripped once and classified CREDIT_LOW (queue empty)
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: burst: watermark recovered posted to 184 after drain 2
+PASS: burst: second CREDIT_LOW while still below 192
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: burst: posted 248 after drain 3 (above 3/4 target)
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: burst: idle after backlog drained, queue 8 above-watermark buffers
+PASS: burst: above-watermark idle drain publishes nothing (floor, not full)
+PASS: burst: no further CREDIT_LOW once above the watermark
+PASS: control: device consumed 200 free entries
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: control: completion backlog fully drained
+PASS: control: old path leaked 136 slots (posted 120, stuck) - the T4 bug
+PASS: control: old path stays leaked with no new completions
+PASS: control: watermark disabled does nothing (old behaviour preserved)
+PASS: repair: leaked state reached with wm=0 (pending==0, 136 queued)
+PASS: repair: pending==0 drain republished 64 queued buffers
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: repair: posted 184 after first pass (cap bound)
+PASS: repair: CREDIT_LOW while below the watermark
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: repair: posted 248 after second pass
+PASS: repair: above watermark, remaining 8 buffers stay queued (bounded)
+PASS: repair: no CREDIT_LOW after recovery
+PASS: sustained<=64: every drain kept all ring/buffer invariants, <=cap refills
+PASS: sustained<=64: ring returns to full after every drain (no permanent leak)
+PASS: sustained<=64: posted never lost a buffer and CREDIT_LOW never tripped
+PASS: lap: device consumed exactly one full lap (phase bit flip)
+PASS: lap: no posted entries after the full lap
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: lap: all lap completions drained
+PASS: lap: ring recovered to the 3/4 target after the one-lap burst
+PASS: lap: watermark re-published 128 of the lap (window refill did 64)
+PASS: lap: 64 above-watermark buffers stay queued (bounded)
+PASS: small: 512 posted after init
+PASS: small: 12 posted after a 500-entry burst
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: small: 76 posted after drain 1
+PASS: buffer state partition covers the whole ring
+PASS: posted count == ring producer-consumer distance
+PASS: ring slots hold exactly the posted buffers, no duplicate
+PASS: in-flight count matches completion backlog
+PASS: queued count matches refill queue
+PASS: small: posted >= 3/4 target after recovery
+PASS: small: 396 posted (target 384) once the queue above the watermark is left alone
+PASS: small: 116 buffers stay queued above the watermark
+PASS: plan grid: bounded by avail/room/cap and trigger-gated
+PASS: plan grid: trigger cases exercised
+
+== 127 checks, 0 failures
+RESULT: PASS

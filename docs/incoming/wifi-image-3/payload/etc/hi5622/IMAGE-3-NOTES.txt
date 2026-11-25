@@ -1,0 +1,51 @@
+IMAGE #3 - OPERATOR NOTES (text only; no firmware, no vendor binary)
+======================================================================
+
+Board: Cudy WR3000 v2.0 (Hi5671YV200 + Hi5622V100).  Kernel 6.18.60.
+Image: wifi-image-3 (task-196) - the verified image #2 rootfs carrying:
+  * the bench-proven 5 GHz regdomain cfg80211.ko (country US; 5 GHz IR)
+  * the 802.11ax hostapd (mbedtls full variant, CONFIG_DRIVER_11AX_SUPPORT)
+  * the IMAGE #3 driver module (5 GHz chain + he_caps + BA skeleton)
+
+BEFORE ANY LOAD (firmware policy - the PD4 image and the Wi-Fi custom block
+are NEVER packaged; push them by hand, attended):
+  /lib/firmware/hi_wifi/FIRMWARE.PD4.bin   (research-patched PD4 image)
+  /lib/firmware/hi_wifi/wifi_block.bin     (the locally captured custom block)
+
+BENCH DEFAULT: hi5622.main.autoload=0 - nothing loads at boot.  Load by hand:
+  /usr/sbin/hi5622-load
+
+2.4 GHz OPEN AP (proven class):
+  uci set hi5622.main.autoload=0
+  uci set hi5622.ap.enabled=1
+  uci set hi5622.ap.country='US'
+  uci set hi5622.ap.config='/etc/hi5622/hostapd-open.conf'
+  /usr/sbin/hi5622-load
+
+2.4 GHz 802.11ax HE AP (proven: HE IEs on air):
+  uci set hi5622.main.he_caps=1
+  uci set hi5622.ap.enabled=1
+  uci set hi5622.ap.country='US'
+  uci set hi5622.ap.config='/etc/hi5622/hostapd-open-ax.conf'
+  /usr/sbin/hi5622-load
+
+5 GHz ch40 AP (the 2026-11-27 F2 fire recipe: RF PROVEN, beacon = TBTT gated):
+  uci set hi5622.main.band5g=1
+  uci set hi5622.main.vap5g=1
+  uci set hi5622.main.desc_table=1
+  uci set hi5622.main.dfs_mode=1
+  uci set hi5622.main.ap_chan_wait_ms=300
+  uci set hi5622.ap.enabled=1
+  uci set hi5622.ap.country='US'
+  uci set hi5622.ap.ifname='wlan5'
+  uci set hi5622.ap.config='/etc/hi5622/hostapd-open-5g40.conf'
+  /usr/sbin/hi5622-load
+
+NOTES
+  * The module parameters are LOAD-TIME only.  There is no rmmod after a CPU
+    release (bench rule); changing a gate = reboot.
+  * A module parameter that the loader passes but the module does not expose
+    fails closed (insmod would fail; the loader verifies the readback).
+  * The 5 GHz gates are refused by the loader when band5g!=1 (no partial state).
+  * BA (A-MPDU aggregation) is a fail-closed skeleton: ba_enable=0 until a
+    peer can associate and the wifi-ba-agg rungs run.
