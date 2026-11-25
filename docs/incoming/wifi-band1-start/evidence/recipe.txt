@@ -1,0 +1,14 @@
+== R3b-extension rungs (the Lead fires; host-only lane)
+  F0 read P1 pack; 2.4 GHz reference must be alive.
+  F1 g0-id1 0x0064: field B=0 len=24, data[4]=N (free module,
+     <=0x12), data[0x12]=1 (band1), data[1]=0x12 (parent),
+     data[0]=2 (AP).  Check ctx(N)+0x4B8 == 0x15E570.
+  F2 g0-id1 0x0242: field B=N, len>=5,
+     body[0]=1 (sync start), body[2]=1 -> band start 0x4AF0C
+     via 0x4C5E2/0x4C612. Check 0x4010C220 & 0x1029.
+  F3 if F2 did not arm: 0x0242 field B=N body[0]=2 (forced
+     start 0x4C634 -> 0x4AF0C at 0x4C652). Check again.
+  F4 if still not armed: 0x0243 field B=N (worker 0x8419C ->
+     0x4BDCE(bandobj,5,0); arms only when state[1]==3).
+  F5 re-read P1; classify; beacon check. Abort rules in
+     ../FIRE-RECIPE.md.

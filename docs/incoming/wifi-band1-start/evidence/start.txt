@@ -1,0 +1,53 @@
+== band start CA 0x4af0c (per-band MAC start; R3's 0x4010C220 |= 0x1029)
+  04af0c: push.w {r0, r1, r2, r4, r5, r6, r7, r8, sb, lr}
+  04af10: ldrb r3, [r1]
+  04af12: mov r7, r0
+  04af14: lsls r3, r3, #0x1e
+  04af16: mov r4, r1
+  04af18: bpl #0x4af2a
+
+== register literals of the function
+  pool CA 0x4b0f4 = 0x4011451c
+  pool CA 0x4b0fc = 0x4010c220
+  pool CA 0x4b100 = 0x4011080c
+  pool CA 0x4b104 = 0x40101220
+  pool CA 0x4b114 = 0x40108214
+  pool CA 0x4b118 = 0x40114500
+  pool CA 0x4b11c = 0x40110500
+  pool CA 0x4b108 = 0x40114520
+
+== band==1 branch: OR 1,8,0x20,0x1000 into 0x4010C220
+  04afb2: orr r2, r2, #1
+  04afb6: str r2, [r3]
+  04afb8: ldr r2, [r3]
+  04afba: ldr r2, [r3]
+  04afbc: orr r2, r2, #8
+  04afc0: str r2, [r3]
+  04afc2: ldr r2, [r3]
+  04afc4: ldr r2, [r3]
+  04afc6: orr r2, r2, #0x20
+  04afca: str r2, [r3]
+  04afcc: ldr r2, [r3]
+  04afce: ldr r2, [r3]
+  04afd0: orr r2, r2, #0x1000
+  04afd4: str r2, [r3]
+  04afd6: movs r1, #1
+  04afd8: mov r0, r6
+  04afda: ldr r3, [r3]
+  04afdc: bl #0xf4504
+  04afe0: ldr r2, [pc, #0x11c]
+  04afe2: ldrb r3, [r6, #1]
+
+== band==0 branch: OR 1,2,4,8 into 0x40108214
+  04b0c6: ldr r2, [r3]
+  04b0c8: orr r2, r2, #1
+  04b0cc: str r2, [r3]
+  04b0ce: ldr r2, [r3]
+  04b0d0: ldr r2, [r3]
+  04b0d2: orr r2, r2, #2
+  04b0d6: str r2, [r3]
+  04b0d8: ldr r2, [r3]
+  04b0da: ldr r2, [r3]
+  04b0dc: orr r2, r2, #4
+  04b0e0: str r2, [r3]
+  04b0e2: ldr r2, [r3]

@@ -1,0 +1,44 @@
+== G hook block CA 0x1747C4; G+0x370 = CA 0x174B34
+  literal 0x174B34 occurrences: []
+  literal 0x174B38 occurrences: []
+  stores with disp 0x370:
+    04b6cc: str.w r2, [r3, #0x370]   (base r3)
+    04b7ec: str.w r7, [r3, #0x370]   (base r3)
+    057868: str.w r4, [r5, #0x370]   (base r5)
+    088398: str.w r3, [r2, #0x370]   (base r2)
+    0883a8: str.w r3, [r2, #0x370]   (base r2)
+    08bb1e: str.w r3, [r2, #0x370]   (base r2)
+    08bb2e: str.w r3, [r2, #0x370]   (base r2)
+    08bdba: str.w r3, [r2, #0x370]   (base r2)
+    08bdca: str.w r3, [r2, #0x370]   (base r2)
+    08c004: str.w r3, [r2, #0x370]   (base r2)
+    08c014: str.w r3, [r2, #0x370]   (base r2)
+    08c27c: str.w r3, [r2, #0x370]   (base r2)
+    08c28c: str.w r3, [r2, #0x370]   (base r2)
+    08c4dc: str.w r3, [r2, #0x370]   (base r2)
+    08c4ec: str.w r3, [r2, #0x370]   (base r2)
+    0c01dc: strb.w fp, [r4, #0x370]   (base r4)
+    0c1bce: str.w r0, [r3, #0x370]   (base r3)
+    0c1c3a: str.w r0, [r3, #0x370]   (base r3)
+    0e7b10: strb.w r3, [r4, #0x370]   (base r4)
+
+== the VAP-on-band hook user (the only G+0x370/G+0x374 reader)
+  097352: ldr r7, [pc, #0x108]
+  097354: mov r1, r4
+  097356: mov r0, r6
+  097358: bl #0x96ca8
+  09735c: ldr r3, [r7]
+  09735e: cbz r3, #0x97374
+  097360: ldr.w r3, [r7, #0x370]
+  097364: cbz r3, #0x9736a
+  097366: mov r0, r4
+  097368: blx r3
+  09736a: ldr.w r3, [r7, #0x374]
+  09736e: cbz r3, #0x97374
+
+== installer slots (five installed, 0x370 never)
+  G+0x364 <- 0x5d13a
+  G+0x368 <- 0x5cfc2
+  G+0x36c <- 0x5cf60
+  G+0x374 <- 0x5d144
+  G+0x378 <- 0x5c3b6

@@ -1,0 +1,21 @@
+== direct BL sites of the band start CA 0x4af0c
+  0x4beb0
+  0x4c34e
+  0x4c3ec
+  0x4c612
+  0x4c652
+
+== enclosing helpers
+  0x4BDCE (contains 0x4BEB0) is called from: 0x644d8 0x841aa 0x98b8a 0xa1594 0xb877e 0xba174
+  0x4C524 is table A key 0x242 worker (green AP)
+  0x4C3AC is called from: 0x4c4ea 0x4c626
+
+== key -> worker chain reaching the band start
+  key 0x0242 rows: [('A', 76, '0x4c524')]
+  key 0x0243 rows: [('A', 77, '0x8419c')]
+  key 0x01fe rows: [('A', 53, '0xa14bc')]
+  key 0x0067 rows: [('A', 4, '0x45f74')]
+  key 0x0065 rows: [('A', 2, '0x46394')]
+  key 0x0073 rows: [('A', 20, '0x84920')]
+
+== stop CA 0xbe294 callers 0x4c27a 0x4c6a0

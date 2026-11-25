@@ -1,0 +1,41 @@
+== key 0x242 worker 0x4C524: subcommand jump table
+  body[0]=0 -> 0x4c54a  diag
+  body[0]=1 -> 0x4c5e2  sync/conditional start
+  body[0]=2 -> 0x4c634  forced start
+  body[0]=3 -> 0x4c662  stop
+  body[0]=4 -> 0x4c6a6  flag bit1
+  body[0]=5 -> 0x4c6ba  state+0x6C
+  body[0]=6 -> 0x4c6c0  state+0x70
+  body[0]=7 -> 0x4c6c6  state[5]
+  body[0]=8 -> 0x4c6cc  state[6]
+
+== key 0x243 worker 0x8419C -> 0x4BDCE(bandobj, 5, 0)
+  08419c: push {r3, lr}
+  08419e: cbz r0, #0x841b2
+  0841a0: ldr.w r0, [r0, #0x4b8]
+  0841a4: cbz r0, #0x841b2
+  0841a6: movs r2, #0
+  0841a8: movs r1, #5
+  0841aa: bl #0x4bdce
+
+== key 0x73 worker 0x84920: body[0]=4 -> 0x971D8 at 0x8498E
+  084920: push {r4, r5, r6, lr}
+  084922: mov r4, r0
+  084924: ldrb r6, [r0, #0xe]
+  084926: movs r0, #0
+  084928: ldrb r5, [r2]
+  08492a: bl #0x581c8
+  084986: cmp r6, #4
+  084988: beq #0x8499e
+  08498a: mov r0, r3
+  08498c: mov r1, r4
+
+== key 0x64 worker 0x449E4: band bind
+  044b6c: ldrb r1, [r7, #0x12]
+  044b6e: ldrb r0, [r4, #2]
+  044b70: bl #0xa4fc8
+  044b74: cbz r0, #0x44b7e
+  044b76: add.w r1, r0, #0x1a00
+  044b7a: ldr r3, [r1]
+  044b7c: cbnz r3, #0x44bbc
+  044b7e: mov.w r1, #0x2cc

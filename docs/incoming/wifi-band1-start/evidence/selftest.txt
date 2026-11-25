@@ -1,0 +1,49 @@
+PASS  1 firmware size pinned  [928920]
+PASS  2 firmware sha256 pinned  [7fc87e2051e80b5e...]
+PASS  3 CA convention: 0x97352 is 'ldr r7, [pc, #264]'  [['ldr r7, [pc, #0x108]']]
+PASS  4 CA convention: literal at 0x9745C is G (0x1747C4)  [0x1747c4]
+PASS  5 band start 0x4AF0C starts with a push  [push.w {r0, r1, r2, r4, r5, r6, r7, r8, sb, lr}]
+PASS  6 band start literal pool writes the R3 registers  [0x4b0f4=0x4011451c; 0x4b0fc=0x4010c220; 0x4b100=0x4011080c; 0x4b104=0x40101220; 0x4b114=0x40108214; 0x4b118=0x40114500; 0x4b11c=0x40110500]
+PASS  7 band byte source is u8(perlink+0x11D) at 0x4AF5C  [['ldrb.w r3, [r6, #0x11d]', 'cmp r3, #1']]
+PASS  8 band==1 branch writes 0x4010C220 (pool 0x4B0FC)
+PASS  9 band==0 branch writes 0x40108214 (pool 0x4B114)
+PASS 10 band start has exactly five direct BL sites  [['0x4beb0', '0x4c34e', '0x4c3ec', '0x4c612', '0x4c652']]
+PASS 11 VAP-on-band 0x971D8 has exactly three BL sites  [['0x46038', '0x464b0', '0x8498e']]
+PASS 12 table key 0x0064 -> worker 0x449e4  [['0x449e4']]
+PASS 13 table key 0x0065 -> worker 0x46394  [['0x46394']]
+PASS 14 table key 0x0067 -> worker 0x45f74  [['0x45f74']]
+PASS 15 table key 0x0073 -> worker 0x84920  [['0x84920']]
+PASS 16 table key 0x0242 -> worker 0x4c524  [['0x4c524']]
+PASS 17 table key 0x0243 -> worker 0x8419c  [['0x8419c']]
+PASS 18 table key 0x01fe -> worker 0xa14bc  [['0xa14bc']]
+PASS 19 table key 0x0124 -> worker 0x841b8  [['0x841b8']]
+PASS 20 table key 0x0127 -> worker 0x84da4  [['0x84da4']]
+PASS 21 table key 0x01f7 -> worker 0xb5b9c  [['0xb5b9c']]
+PASS 22 green-ap worker 0x4C524 prologue  [push {r0, r1, r4, r5, r6, lr}]
+PASS 23 green-ap worker reads band object ctx+0x4B8  [ldr.w r5, [r0, #0x4b8]]
+PASS 24 green-ap tbb subcommand table (9 entries)  [[312650, 312802, 312884, 312930, 312998, 313018, 313024, 313030, 313036]]
+PASS 25 green-ap subcmd 1 -> conditional start (0x4C5E2)
+PASS 26 green-ap subcmd 2 -> forced start 0x4AF0C at 0x4C652
+PASS 27 green-ap subcmd 3 -> stop 0xBE294 at 0x4C6A0
+PASS 28 green-ap subcmd 1 path start site 0x4C612
+PASS 29 recent-cfg worker 0x8419C calls helper 0x4BDCE with r1=5  [['movs r2, #0', 'movs r1, #5', 'bl #0x4bdce']]
+PASS 30 helper 0x4BDCE contains a band-start call site 0x4BEB0
+PASS 31 vap-state-syn worker 0x84920 calls 0x971D8 at 0x8498E  [bl #0x971d8]
+PASS 32 no literal 0x174B34 in the image  [[]]
+PASS 33 no literal 0x174B38 in the image  [[]]
+PASS 34 19 image store instructions use disp 0x370 (all non-G bases)  [['0x4b6cc', '0x4b7ec', '0x57868', '0x88398', '0x883a8', '0x8bb1e', '0x8bb2e', '0x8bdba', '0x8bdca', '0x8c004', '0x8c014', '0x8c27c', '0x8c28c', '0x8c4dc', '0x8c4ec', '0xc01dc', '0xc1bce', '0xc1c3a', '0xe7b10']]
+PASS 35 no disp-0x370 store inside the G-callback installer
+PASS 36 installer writes the five other hook slots, never 0x370  [{868: True, 872: True, 876: True, 884: True, 888: True}]
+PASS 37 installer is called from the pre-HCC boot init at 0x48442  [['0x48442']]
+PASS 38 TRX triple literal 0x4010E150 appears once (worker 0xE8520)  [['0xe8660']]
+PASS 39 TRX worker writes 0x33/0xFF/0xFF to 0x4010E150/154/158  [['movs r2, #0x33', 'ldr r3, [pc, #0x74]', 'str r2, [r3]', 'movs r3, #0xff', 'ldr r2, [pc, #0x74]', 'str r3, [r2]', 'str r3, [r2, #4]']]
+PASS 40 band0 probe helper 0xD973C targets 0x40108214
+PASS 41 band1 probe helper 0xD9604 targets 0x4010C220
+PASS 42 band1 reset helper 0xD968C targets 0x40114500
+PASS 43 band0 reset helper 0xD97BC targets 0x40110500
+PASS 44 VAP-add worker 0x449E4 band lookup from body[0x12] at 0x44B6C  [['ldrb r1, [r7, #0x12]', 'ldrb r0, [r4, #2]', 'bl #0xa4fc8']]
+PASS 45 VAP-add binds ctx+0x4B0/+0x4B8/+0x4B4 at 0x44BBC/42/46  [['str.w r3, [r4, #0x4b0]', 'str.w r0, [r4, #0x4b8]', 'str.w r3, [r4, #0x4b4]']]
+PASS 46 G+0x370 RAM phys = 0x4082CB34  [0x4082cb34]
+PASS 47 band1 0x4010C220 IO phys = 0x404C4220  [0x404c4220]
+
+47 checks, 0 FAIL

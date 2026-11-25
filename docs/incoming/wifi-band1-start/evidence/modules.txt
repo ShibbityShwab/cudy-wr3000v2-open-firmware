@@ -1,0 +1,5 @@
+== boot-module scan for firmware-callback constants (/home/shibbityshwab/recovery-extract/lib/hisilicon/ko)
+  hi5622v100_wifi.ko: 0x4af0d be @ file 0x324ab3
+  interpretation: a firmware CA inside a host-built H2D body
+  would be little-endian; a big-endian-only hit is unrelated
+  module data (the lone BE hit above is such a coincidence).

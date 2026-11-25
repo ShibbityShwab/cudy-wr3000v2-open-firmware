@@ -1,0 +1,27 @@
+== P1 read-only probe pack (phys, read-only; the Lead fires)
+  G head                       phys 0x4082c7c4
+  G+0x370 hook                 phys 0x4082cb34
+  G+0x374 hook                 phys 0x4082cb38
+  band1 0x4010C220             phys 0x404c4220
+  band0 0x40108214             phys 0x404c0214
+  band0 0x4010820C             phys 0x404c020c
+  gate band0 0x4011080C        phys 0x404c880c
+  gate band1 0x4011480C        phys 0x404cc80c
+  run bits 0x40101220          phys 0x404b9220
+  band1 trx 0x4010E150         phys 0x404c6150
+  band1 trx 0x4010E154         phys 0x404c6154
+  band1 trx 0x4010E158         phys 0x404c6158
+  band0 MAC 0x40110500         phys 0x404c8500
+  band1 MAC 0x40114500         phys 0x404cc500
+  band0 MAC 0x4011051C         phys 0x404c851c
+  band1 MAC 0x4011451C         phys 0x404cc51c
+  band obj0 0x15CA08           phys 0x40814a08
+  band obj1 0x15E570           phys 0x40816570
+  band1 state +0x14D0          phys 0x40817a40
+  band0 state +0x14D0          phys 0x40815ed8
+  band1 perlink ptr +0x1A00    phys 0x40817f70
+  band0 perlink ptr +0x1A00    phys 0x40816408
+  ctx slot table 0x171458      phys 0x40829458
+
+  after-fire: 0x4010C220 must contain 0x1029; state[1] == 2;
+              state +0x64 increments; new ctx+0x4B8 == 0x15E570
