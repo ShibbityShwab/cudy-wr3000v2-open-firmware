@@ -1,0 +1,68 @@
+=== R3 read-only probe pack (differential band0 vs band1) ===
+Firmware RAM: BAR0 = CPU + 0x6B8000 ; phys = 0x40000000 + BAR0
+Device IO   : BAR0 = 0x3B8000 + (CPU - 0x40000000) ; phys = 0x40000000 + BAR0
+
+--- RAM anchors (CA + BAR0 + phys) ---
+object                             CA         BAR0       phys       len  expected
+------------------------------------------------------------------------------------------------------------------------
+ctx slot k ptr (k=0..18)           0x00171458 0x00829458 0x40829458 4    0x00119758 for k=0
+ctx table u16 bias                 0x00172504 0x0082A504 0x4082A504 2    0
+ctx0 body                          0x00119758 0x007D1758 0x407D1758 4    first slot body
+ctx0+0x4B0 perlink                 0x00119C08 0x007D1C08 0x407D1C08 4    0x00175A18 [V*]
+ctx0+0x4B8 bandobj                 0x00119C10 0x007D1C10 0x407D1C10 4    0x0015E570 [V*]
+bandobj0 perlink                   0x0015E408 0x00816408 0x40816408 4    published per-link
+bandobj1 perlink                   0x0015FF70 0x00817F70 0x40817F70 4    published per-link
+bandobj0 +0xD6C                    0x0015D774 0x00815774 0x40815774 1    band field
+bandobj0 +0xD6D                    0x0015D775 0x00815775 0x40815775 1    band field
+bandobj0 +0xD70                    0x0015D778 0x00815778 0x40815778 1    band id
+bandobj1 +0xD6C                    0x0015F2DC 0x008172DC 0x408172DC 1    band field
+bandobj1 +0xD6D                    0x0015F2DD 0x008172DD 0x408172DD 1    band field
+bandobj1 +0xD70                    0x0015F2E0 0x008172E0 0x408172E0 1    band id
+G head                             0x001747C4 0x0082C7C4 0x4082C7C4 4    nonzero
+G+0x370 MAC-start cb               0x00174B34 0x0082CB34 0x4082CB34 4    0 by design
+G+0x374 beacon-start cb            0x00174B38 0x0082CB38 0x4082CB38 4    0x00057639 [V*]
+band-0 map side (pool slot)        0x001ADC98 0x00865C98 0x40865C98 8    desc-pool default
+
+--- two-step per-link objects (resolve pointer first) ---
+  band_b obj  = 0x15CA08 + 0x1B68*band  (band0 0x15CA08, band1 0x15E570)
+  perlink[b]  = u32(band_b obj + 0x1A00)
+  beacon state = perlink[b] + 0x6B8/0x6BC/0x6C0/0x6C4/0x6C6
+  descriptor dump for the diff: u32(perlink[b]+0x6C0) is a 92-byte object; read its first 32 bytes for band0 and band1 and diff
+
+--- device IO (same offsets in both per-band blocks) ---
+object                               CPU/CA     BAR0       phys       len  expected
+------------------------------------------------------------------------------------------------------------------------------
+band0 +0x500 reset/status            0x40110500 0x004C8500 0x404C8500 4    0x55/0xFF sequence
+band0 +0x51C status                  0x4011051C 0x004C851C 0x404C851C 4    0xFF after reset
+band0 +0x520 status                  0x40110520 0x004C8520 0x404C8520 4    0xFF after reset
+band0 +0x548                         0x40110548 0x004C8548 0x404C8548 4    final 0x6101<<0 | ...
+band0 +0x54C                         0x4011054C 0x004C854C 0x404C854C 4    final 0x6101<<0 | ...
+band0 +0x588                         0x40110588 0x004C8588 0x404C8588 4    0x33/0x22 class
+band0 +0x594                         0x40110594 0x004C8594 0x404C8594 4    0x33/0x22 class
+band0 +0x5BC                         0x401105BC 0x004C85BC 0x404C85BC 4    band id
+band0 +0x80C                         0x4011080C 0x004C880C 0x404C880C 4    bit0 = MAC start done
+band0 enable 0x40108214              0x40108214 0x004C0214 0x404C0214 4    bits 0..3 = 0xF
+band0 TRX 0x4010820C                 0x4010820C 0x004C020C 0x404C020C 4    enable-TRX path
+band1 +0x500 reset/status            0x40114500 0x004CC500 0x404CC500 4    0x55/0xFF sequence
+band1 +0x51C status                  0x4011451C 0x004CC51C 0x404CC51C 4    0xFF after reset
+band1 +0x520 status                  0x40114520 0x004CC520 0x404CC520 4    0xFF after reset
+band1 +0x548                         0x40114548 0x004CC548 0x404CC548 4    final 0x6101 (0x6000 marker)
+band1 +0x54C                         0x4011454C 0x004CC54C 0x404CC54C 4    final 0x6101 (0x6000 marker)
+band1 +0x588                         0x40114588 0x004CC588 0x404CC588 4    0x35/0x24 class
+band1 +0x594                         0x40114594 0x004CC594 0x404CC594 4    0x35/0x24 class
+band1 +0x5AC                         0x401145AC 0x004CC5AC 0x404CC5AC 4    restore-table byte<<4|byte
+band1 +0x5BC                         0x401145BC 0x004CC5BC 0x404CC5BC 4    band id
+band1 +0x80C                         0x4011480C 0x004CC80C 0x404CC80C 4    bit0 = MAC start done
+band1 TRX 0x4010E150                 0x4010E150 0x004C6150 0x404C6150 4    0x33 (enable-TRX band1)
+band1 TRX 0x4010E154                 0x4010E154 0x004C6154 0x404C6154 4    0xFF
+band1 TRX 0x4010E158                 0x4010E158 0x004C6158 0x404C6158 4    0xFF
+SMAC IRQ status 0x4010C200           0x4010C200 0x004C4200 0x404C4200 4    pending bits
+SMAC IRQ enable 0x4010C220           0x4010C220 0x004C4220 0x404C4220 4    contains 0x1029 (band1)
+global 0x40101220                    0x40101220 0x004B9220 0x404B9220 4    bit0 band1, bit1 band0
+global flags 0x40101208              0x40101208 0x004B9208 0x404B9208 4    beacon/TRX gate bits 0..3
+SoC INTC 0x40002264                  0x40002264 0x003BA264 0x403BA264 4    band TRX path
+SoC INTC 0x40002268                  0x40002268 0x003BA268 0x403BA268 4    band TRX path
+SoC INTC 0x4000226C                  0x4000226C 0x003BA26C 0x403BA26C 4    band TRX path
+
+forbidden: RC misc window 0x10160000..0x1016FFFF (never read)
+all reads are side-effect free; no write is authorised by this lane

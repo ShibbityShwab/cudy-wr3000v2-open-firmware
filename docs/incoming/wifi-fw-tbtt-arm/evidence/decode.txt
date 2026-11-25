@@ -1,0 +1,69 @@
+=== 5 GHz TBTT arm - decode ===
+
+[A] per-band MAC block and its init tables
+    band0 device CA 0x40110000, band1 0x40114000 (delta 0x4000)
+    init tables CA 0x105714 / 0x105770 (23 pairs of {u16 off,u16 val})
+    table literals CA 0x9F494 -> 0x105714 and CA 0x9F964 -> 0x105770
+    offsets programmed: 0x548 0x54C 0x550 0x554 0x55C 0x560 0x564 0x568 0x588 0x594 0x5BC
+    band-1 differences:
+      idx  2  band0 (0x588,0x0033)  band1 (0x588,0x0035)
+      idx  3  band0 (0x588,0x0022)  band1 (0x588,0x0024)
+      idx  4  band0 (0x548,0x0000)  band1 (0x548,0x6000)
+      idx  5  band0 (0x548,0x0001)  band1 (0x548,0x6001)
+      idx  7  band0 (0x548,0x0101)  band1 (0x548,0x6101)
+      idx 12  band0 (0x594,0x0033)  band1 (0x594,0x0035)
+      idx 13  band0 (0x594,0x0022)  band1 (0x594,0x0024)
+      idx 14  band0 (0x54C,0x0000)  band1 (0x54C,0x6000)
+      idx 15  band0 (0x54C,0x0001)  band1 (0x54C,0x6001)
+      idx 17  band0 (0x54C,0x0101)  band1 (0x54C,0x6101)
+
+[B] per-band MAC start CA 0x4AF0C / stop CA 0xBE294
+    @04AF5C  ldrb.w   r3, [r6, #285]               band = u8(perlink+0x11D)
+    @04AF62  mov.w    r3, #85                      reset value 0x55
+    @04AF7E  movs     r3, #255                     reset value 0xFF
+    @04AFA4  ldrb.w   r3, [r6, #285]               band = u8(perlink+0x11D) (again)
+    @04AFB2  orr.w    r2, r2, #1                   0x4010C220 |= 1
+    @04AFBC  orr.w    r2, r2, #8                   0x4010C220 |= 8
+    @04AFC6  orr.w    r2, r2, #32                  0x4010C220 |= 0x20
+    @04AFD0  orr.w    r2, r2, #4096                0x4010C220 |= 0x1000
+    @04B008  movne    r2, #2                       0x40101220 value 2 (band0)
+    @04B00A  moveq    r2, #1                       0x40101220 value 1 (band1)
+    @04B0D2  orr.w    r2, r2, #2                   0x40108214 |= 2 (band0)
+    @04B0DC  orr.w    r2, r2, #4                   0x40108214 |= 4 (band0)
+
+[C] VAP start CA 0x46394 - beacon state (287636..0x467C8)
+    @0464F2  ldrb.w   r3, [r6, #1734]              first-start guard: perlink+0x6C6
+    @046586  movs     r3, #16                      0x6C4 = 16
+    @046590  str.w    r7, [r6, #1728]              0x6C0 = 92 B descriptor
+    @046596  str.w    r9, [r6, #1720]              0x6B8 = 280 B beacon buffer
+    @04659A  strb.w   r3, [r6, #1734]              0x6C6 = 1
+    @0464B0  bl       0x971d8                      band start CA 0x971D8
+    @0466CE  bl       0xb5290                      beacon queue: CA 0xB5290
+    @0466E8  bl       0xb7208                      beacon queue: CA 0xB7208
+    @0466F8  bl       0xb3018                      beacon queue: CA 0xB3018
+    @04670C  bl       0xee394                      aux object: CA 0xEE394
+    @046714  str      r0, [r5, #0]                 store into perlink+0x6BC
+
+[D] rate-control descriptor filler CA 0x7E5CC (correction)
+    only caller @0x72184 inside rate-adaptation fn CA 0x70490
+    @07E5F4  ldrsb.w  r3, [r0, #44]                rate field from rate object +0x2c
+    @07E634  ldrh.w   r3, [r5, #312]               VAP+0x138 -> desc+0x25E
+    @07E63C  ldrh.w   r3, [r5, #314]               VAP+0x13A -> desc+0x260
+
+[E] beacon/TRX message-processor workers (0x40101220 / 0x40101208)
+    CA 0xE6A26 resume_a
+    CA 0xE6A70 suspend_a
+    CA 0xE6AB4 resume_b
+    CA 0xE6B00 suspend_b
+
+[F] band-1 TRX enable CA 0xE8520
+    @0E85E6  movs     r2, #51                      0x33 -> 0x4010E150
+    @0E85EE  ldr      r2, [pc, #116]               0xFF -> 0x4010E154
+    @0E85F2  str      r3, [r2, #4]                 0xFF -> 0x4010E158
+    @0E854C  bl       0xd97bc                      band1 disable helper 0xD97BC
+    @0E8550  bl       0xd973c                      band1 disable helper 0xD973C
+
+[G] TBTT ISR names and the per-band hook table
+    smac_tbtt_5g_isr   CA 0x1229E8 (name blob; no pointer, no code reference)
+    smac_tbtt_2g_isr   CA 0x1229FC (name blob; no pointer, no code reference)
+    G table CA 0x1747C4 (literal CA 0x9745C); G+0x370/G+0x374 read @0x97360/0x9736A, called @0x97366/0x97372
