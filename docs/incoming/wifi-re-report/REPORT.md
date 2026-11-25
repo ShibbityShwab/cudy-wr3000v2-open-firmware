@@ -3,9 +3,11 @@
 **Project:** Cudy WR3000 v2.0 (luofu v2 board) bench reversal - Hi5671YV200 SoC + Hi5622v100 Wi-Fi
 endpoint, stock OpenWrt 22.03.6 / kernel 5.10.201, vendor firmware 928,920 B.
 
-**Document:** `wifi-re-report/REPORT.md`, umbrella narrative, **v5**. **Date:** 2026-11-29.
-**State cut-off:** `mem-entries.md` entry 2026-11-29 01:00 (the newest ledger entry at this
-revision); superseded claims are catalogued in section 8. **Status:** the full duplex HCC
+**Document:** `wifi-re-report/REPORT.md`, umbrella narrative, **v6**. **Date:** 2026-11-25.
+**State cut-off:** the final appended `mem-entries.md` entry, 2026-11-25 13:00 (the association
+module + corrected-management-TX wave; it sits at the ledger tail after the 2026-11-29 static-wave
+entries and is therefore the live state - file-tail wins per the project rule). Superseded claims
+are catalogued in section 8. **Status (v5 chain, retained):** the full duplex HCC
 protocol, the operational message lap, the complete six-message calibration boot (C2, automated
 PASS), the first real Wi-Fi interface on our own image (cfg80211 wiphy registration + VAP netdev
 lifecycle + real `.start_ap`), the first real firmware management frames, the first real
@@ -30,17 +32,39 @@ with the H1 pacing config), the STA/5GHz/HT/VHT model decoded (patch fail-closed
 **E2 AP restart in one boot**, and a **40-minute AP soak (242/242 samples golden)**. The wave
 culminated in the **final all-patch module**: one clean-room module carrying every feature was
 validated in **one boot** - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all
-PASS, module **308,080 B sha256 `5b587949...`**, 47 parameters, 0 warnings (6.18/F20). Still not
-validated: beaconing over the air, any client association, an RX frame capture with on-air traffic,
-a fired STA join, the 5 GHz band config and baking the final module into the image. The firmware
-IRQ/handler layer stays
+PASS, module **308,080 B sha256 `5b587949...`**, 47 parameters, 0 warnings (6.18/F20).
+
+**v6 (this revision) closes the association chain's software side and corrects the management-frame
+carriers.** The final **association module** (the all-patch chain plus wpa3-sae, ap-mgmt, sta-ops and
+data-tx) was built by the stability lane with **56 parameters** (`344,472 B sha256 251d08f0...`) and
+rebuilt with the corrected device management-TX carrier as the **344,372 B sha256 `ab9e18a4...`**
+artifact. The **device mgmt-TX carrier is a raw HCC group-0 id-6 control message** (12-byte header +
+48-byte device TX-control block + inline frame; completion = DMAC config-syn event **0x01F3** ->
+host-internal g2 id13), not the WAL `0x01F2` TLV - which is a host-internal WAL->HMAC request; the
+ap-mgmt M2 ladder is superseded and the corrected carrier is **hardware-accepted** (a g0 id6 frame
+posted 86 B and was consumed in 0 polls). **Management RX is the D2H CRX event `g1 id13`** (60-byte
+prefix: 12-byte HCC + 48-byte RX info; frame at +48), not data-ring traffic - a client scan that
+produces zero ring completions is expected architecture. The **sibling-GPL and public-research lanes**
+(Hi3881V100 GPL, Hi1105, Linux RX-ring cross-check) confirm the architecture, refute the Hi3881
+`SET_RX_FILTER` transplant for luofu (**absent** in both vendor modules), and place the scan ceiling
+on the **DMAC/firmware side**; no public exact-chip source exists and the Cudy WR3000 2.0 GPL section
+is empty (verified). Two operational corrections were established: the **RX arm ordering is AP-start
+first -> `dp_setup` -> `rx_arm`** (live status **0x182** vs the **0x02** left by an AP start after
+`dp_setup`; the vendor initialises the RX rings once before any AP start), and the **R11 scan sweep**
+settles the H1 ceiling at **8 channels max (field10=25)**, the other rungs 6-7 - 13 remains
+structurally unreachable. The remaining association blocker is **physical RF**: with no antennas the
+bench sees **~44 dB path loss** (AP TX ~-64 dBm at 30 cm) and the client's own RX is marginal, on top
+of a flaky host MT7922 - the user is attaching the antennas. One boot of the corrected association
+module validated AP-ENABLED + TX COMPLETED + **RX armed (status 0x182)** with the AP-first order.
+Still not validated: a real client association/4-way PTK (RF-gated), beaconing observed with a
+reliable client, an RX data capture and the final image bake. The firmware IRQ/handler layer stays
 closed (H1: PD4 is consume-only) and every bench result runs on the PD4-patched research firmware.
 Detail sources remain the lane reports listed in section 12; this document is the publication-grade
 synthesis, not a replacement.
 
-**Lane / task:** wifi-re-report, shared task `task-129` **v5 addendum** (v4 was the task-129
-original; v3 was `task-120`, v2 `task-116`, v1 `task-109`). Host-only: no device, UART, TFTP or
-network contact was made while writing it.
+**Lane / task:** wifi-re-report, shared task `task-157` **v6** (v5 was the `task-129` addendum; v4
+the task-129 original; v3 `task-120`, v2 `task-116`, v1 `task-109`). Host-only: no device, UART,
+TFTP or network contact was made while writing it.
 **Safety:** nothing in this report authorises a bench fire; every hardware session cited here was
 attended and followed the project's recovery-door rules.
 
@@ -251,6 +275,55 @@ in section 8 (C46-C55).
    rows for 2026-11-28/29, and the evidence index gains **EV-278..EV-308**; limits, open questions,
    publication, lane map and glossary are updated (sections 9-13).
 
+### 0.9 What changed in v6
+
+v5 stopped at the 2026-11-29 01:00 ledger entry (the static-wave close). v6 integrates the final
+appended wave of entries (ledger 2026-11-25 11:30-13:00 at the file tail): the association module,
+the corrected device management-TX carrier, management RX, the sibling-GPL/public-research analysis,
+the RX-arm ordering correction, the final R11 scan sweep and the RF measurement. The
+chip-protocol facts of v1-v5 are unchanged; where a v5 statement is now superseded it is recorded
+in section 8 (C57-C63).
+
+1. **The association module exists and is the final association artifact.** The stability lane
+   built the all-patch chain + wpa3-sae + ap-mgmt + sta-ops + data-tx
+   (`wifi-stability/ASSOCIATION-INTEGRATION.md`): **56 parameters, 0 warnings, stripped 344,472 B
+   sha256 `251d08f0...`**, with two documented conflict resolutions (Kbuild union, teardown-hook
+   union; `mgmt_stypes` is owned by wpa3-sae, AP tx=0x3c2a). It was then rebuilt with the
+   corrected device management-TX carrier as the **344,372 B sha256 `ab9e18a4...`** artifact
+   (section 6.19, F21, T39).
+2. **The device management-TX carrier was wrong and is now corrected and hardware-accepted.** The
+   WAL `0x01F2` cfg-event is a host-internal WAL->HMAC request; the device-facing message is a
+   **raw HCC group-0 id-6 control message** (12-byte header + 48-byte device TX-control block +
+   inline frame; completion = DMAC config-syn event **0x01F3** -> host-internal g2 id13). The
+   ap-mgmt M2 ladder is superseded; the corrected carrier fired on the bench: one g0 id6 frame
+   **posted 86 B, consumed 0 polls**, page golden / mask 0 (section 6.20, F22, T40).
+3. **Management RX is the D2H CRX event g1 id13, not ring traffic.** 60-byte prefix (12-byte HCC
+   + 48-byte RX info), frame at prefix+48, channel +7, u16 length +17, RSSI +39; the vendor D2H
+   dispatch table pairs cfg-event id **0x0d** with `hmac_rx_process_mgmt_event`, so a client scan
+   yielding zero completion-ring entries is expected architecture (section 6.21, F23, T41).
+4. **Sibling GPL + public research cross-validate the architecture and produce two hard negatives.**
+   Hi3881V100 (GPLv2) and Hi1105 (structure-only) confirm the CRX/DRX split, the free-ring
+   producer-as-RX-enable model and the refill watermark; the Hi3881 per-VAP `SET_RX_FILTER`
+   (0xF7B9FAEA) **does not exist in either luofu vendor module** (do not port it); the scan cap is
+   **DMAC/firmware-side** (the sibling sends the whole channel list in one request); and no public
+   exact-chip source exists (the Cudy WR3000 2.0 GPL section is empty, verified; licensing is
+   MIT-vs-GPL-2.0, facts only) (section 6.22, F24, T42).
+5. **The RX arm ordering is corrected: AP-start first -> `dp_setup` -> `rx_arm`.** The vendor
+   initialises the RX rings once at device init (before any AP start) and never re-initialises
+   them; on the bench an AP start **after** `dp_setup` left the live status at **0x02**, while the
+   AP-first order gives the full **0x182** with norm/small rptr 0x20 (section 6.23, F25, T43).
+6. **The R11 scan sweep is final.** With the refined 44-byte g0 id10 shape, `field10=25` yields the
+   maximum **8 channels**; the other rungs (29/33/41/64) yield 7/6/6/6; no rung approaches 13. The
+   ceiling is DMAC/firmware-side and structural (section 6.24, F26, T44).
+7. **RF is the remaining association gate.** The bench has no antennas: **~44 dB path loss**, AP TX
+   measured **-64 dBm at 30 cm**, and the host client's RX is marginal (plus a flaky MT7922). The
+   corrected association module's one-boot validation reached AP-ENABLED + TX COMPLETED + RX arm
+   (0x182) with the AP-first order; a real client association needs the antennas (section 6.25, F27,
+   T45).
+8. Findings **F21-F27**, sections **6.19-6.25**, tables **T39-T45**, evidence-chain rows for
+   2026-11-25, corrections **C57-C63**, the v6 verification rows, re-ranked limits/open questions,
+   publication/lane-map/glossary updates, and **EV-309..EV-345**.
+
 ---
 
 ## 1. Executive summary
@@ -301,15 +374,31 @@ SoC GPIO endpoint reset pulse
   -> final all-patch module (2026-11-29 01:00): ONE boot with every feature live - vendor
      five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS (module 308,080 B
      sha256 5b587949..., 47 params); page golden / mask 0
+  -> final association module: all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx (56 params,
+     344,472 B sha256 251d08f0..., rebuilt with the corrected carrier as 344,372 B ab9e18a4...)
+  -> corrected device mgmt-TX carrier: raw HCC g0 id6 control message (12 B header + 48 B device
+     TX control + inline frame; completion DMAC 0x01F3 -> host g2 id13) -> HARDWARE-ACCEPTED
+     (one frame posted 86 B, consumed 0 polls)
+  -> mgmt RX = D2H CRX event g1 id13 (60 B prefix: 12 B HCC + 48 B RX info; frame at +48); the
+     MAC ring stays empty for management traffic by design
+  -> one boot of the corrected association module with the AP-first order: AP-ENABLED + TX
+     COMPLETED + RX armed (live bank status 0x182)
+  -> sibling-GPL/public research: CRX/DRX split + producer-as-RX-enable confirmed; luofu has NO
+     SET_RX_FILTER sender; scan cap is DMAC-side; no public exact-chip source (GPL section empty)
+  -> R11 sweep final: 8 channels max (field10=25), others 6-7; remaining association gate = RF
+     (~44 dB path loss, no antennas, AP TX ~-64 dBm at 30 cm, marginal client RX)
 ```
 
 That is the project's Wi-Fi-side core RE goal: **the full duplex HCC protocol works on a
 clean-room host**, the first real Wi-Fi interface and the first live AP control plane exist on our
 own image, the firmware consumes our hand-built VAP/scan/AP/WPA2 frames and produces real scan
-results, the MAC RX consumer and TX completion are proven at the device level, and the vendor AP
-sequence is reproduced exactly. The remaining work is the over-the-air proof (beaconing/
-association observed externally), RX captures with live traffic, a fired STA join, the all-patch
-single-module validation and the still-closed firmware/IRQ layer (sections 6.9-6.17 and 10).
+results, the MAC RX consumer and TX completion are proven at the device level, the vendor AP
+sequence is reproduced exactly, and the association-chain software (keys, station ops, EAPOL/data
+TX, management TX/RX carriers) now exists in one module with the corrected carriers. The remaining
+work is the over-the-air proof (beaconing/association observed with a client), RX captures with
+live traffic, a fired STA join, the image bake, the still-closed firmware/IRQ layer and - the v6
+finding - the **RF path**: with no antennas the bench cannot close a client association (sections
+6.9-6.25 and 10).
 
 ### 1.2 What is proven, and what is not
 
@@ -335,13 +424,21 @@ single-module validation and the still-closed firmware/IRQ layer (sections 6.9-6
 | WPA2-AP security | **GTK proven**: hostapd WPA2-AP reaches `AP-ENABLED` and the group key (idx 1, CCMP, 16 B) is installed + selected via two consumed firmware frames; the 4-way PTK and client association stay RX-gated [V*] |
 | STA / 5 GHz / HT-VHT | **static model decoded, patch fail-closed, not fired as a connect rung** - connect is WAL cfg-event `0x0123` (108 B), disconnect `0x00d0` (16 B), firmware owns auth/assoc, 5 GHz is one wiphy per band (14/29-channel tables), HT cap `0x0062`, VHT 2SS with `0x00400000`/`0x00400064`; `sta_join`/`ht_mode`/`vht_cap` default off. The patch is in the final all-patch module but `sta_join=0` kept the join unexercised [V]/[U] |
 | final all-patch module (one boot) | **proven**: one clean-room module (**308,080 B sha256 `5b587949...`**, 47 params) validated in a single fresh boot - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS; page golden/mask 0 (section 6.18, F20, T38) [V*] |
+| association module (software chain) | **built and validated in one boot**: all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx in one module (**56 params**, 344,472 B `251d08f0...`, rebuilt with the corrected carrier as 344,372 B `ab9e18a4...`); a corrected-module boot reached AP-ENABLED + TX COMPLETED + RX armed 0x182 with the AP-first order; a real client association/4-way PTK is not yet proven (RF-gated) [V]/[V*] |
+| device management-TX carrier | **corrected + hardware-accepted**: raw HCC g0 id6 control message (12 B header + 48 B device TX control + inline frame), completion DMAC **0x01F3** -> host-internal g2 id13; the WAL `0x01F2` TLV is host-internal and the ap-mgmt M2 ladder is superseded; fired: posted 86 B, consumed 0 polls [V]/[V*] |
+| management RX | **decoded as the D2H CRX event g1 id13** (60 B prefix, frame at +48; RX info +7 channel, +17 u16 len, +39 s8 RSSI; dispatch pairing cfg-event 0x0d -> `hmac_rx_process_mgmt_event`); a scan yields no ring completions by design [V]/[V*] |
+| sibling-GPL / public research | **two negatives + architecture support**: luofu has no `SET_RX_FILTER` sender (Hi3881-only mechanism; do not port), the scan cap is DMAC/firmware-side (the sibling sends the full channel list), no public exact-chip source, Cudy 2.0 GPL section empty (verified), MIT-vs-GPL-2.0 facts-only use [V]/[I] |
+| RX arm ordering | **corrected**: AP-start first -> `dp_setup` -> `rx_arm`; an AP start after `dp_setup` left the live status at 0x02, the AP-first order gives 0x182 (norm/small rptr 0x20) [V*] |
+| scan ceiling (R11 final) | **8 channels max** with `field10=25`; other rungs 29/33/41/64 -> 7/6/6/6; 13 structurally unreachable (DMAC/firmware-side) [V*] |
+| RF / air path | **the remaining association gate**: ~44 dB path loss with no antennas, AP TX ~-64 dBm at 30 cm, marginal host-client RX + flaky MT7922; antennas being attached [V*/I] |
 | upstreamable clean-room driver | **blocked** by the closed firmware blob and the unmatched vendor GPL request (section 11) |
 | PD4-patched vendor firmware | **research instrument only** - never a shipping change (section 6.6) |
 
 ### 1.3 The breakthrough ladder
 
-The investigation reached the result through thirty-three hardware-validated breakthroughs; each
-is also a correction of the then-current model (section 8 gives the full register):
+The investigation reached the result through thirty-nine hardware-validated breakthroughs (rungs
+34-39 are the v6 association / mgmt-carrier / RX-ordering / scan-sweep / RF wave); each is also a
+correction of the then-current model (section 8 gives the full register):
 
 | # | date | breakthrough |
 | ---: | --- | --- |
@@ -378,6 +475,12 @@ is also a correction of the then-current model (section 8 gives the full registe
 | 31 | 2026-11-28 22:00 | **five-message vendor AP-start order implemented and AP-ENABLED**: vap_add -> `ap_chan` (32 B, band=0 channel=6, channel context programmed BEFORE `ap_cfg`) -> ap_ssid -> ap_cfg -> `ap_vap_start` AFTER ap_cfg; hostapd `AP-ENABLED`, page golden/mask 0 [V*] |
 | 32 | 2026-11-28 23:00 | **WPA2-AP GTK install PROVEN**: WPA2 hostapd AP reaches `AP-ENABLED`; `key_add` (96 B, idx=1, cipher 0xfac04) + `key_default` (68 B, multi=1) consumed in 0 polls by firmware workers CA 0x0A5825/0x0A5C9D - the M3 unblock is live, PTK remains RX-gated [V*] |
 | 33 | 2026-11-29 01:00 | **FINAL ALL-PATCH MODULE VALIDATED IN ONE BOOT**: one clean-room module (stripped 308,080 B sha256 `5b587949...`, 47 params, 0 warnings) carries every feature - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS on a fresh golden boot, page golden/mask 0 [V*] |
+| 34 | 2026-11-25 11:30 | **final association module built**: all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx in one module, **56 parameters**, 0 warnings, stripped `344,472 B sha256 251d08f0...`; two documented additive conflict resolutions [V] |
+| 35 | 2026-11-25 13:00 | **corrected device management-TX carrier hardware-accepted**: raw HCC g0 id6 control message (12 B header + 48 B TX control + inline frame) posted 86 B and consumed in 0 polls; DMAC completion **0x01F3** -> host-internal g2 id13; the WAL 0x01F2 TLV is host-internal; the module rebuild is `344,372 B sha256 ab9e18a4...` [V*]/[V] |
+| 36 | 2026-11-25 | **management RX + sibling/public research**: mgmt frames are the D2H CRX event g1 id13 (not ring traffic); the Hi3881 `SET_RX_FILTER` has no luofu sender; the scan cap is DMAC-side; no public exact-chip source and the Cudy 2.0 GPL section is empty (verified) [V]/[I] |
+| 37 | 2026-11-25 | **RX arm ordering corrected**: AP-start first -> `dp_setup` -> `rx_arm`; the live status is 0x182 with the AP-first order vs 0x02 when the AP start runs after `dp_setup` - the vendor initialises the RX rings once before AP start [V*] |
+| 38 | 2026-11-25 | **R11 scan sweep final**: the refined 44-byte g0 id10 shape gives at most **8 channels** (field10=25); 29/33/41/64 give 7/6/6/6; the ceiling is DMAC/firmware-side [V*] |
+| 39 | 2026-11-25 | **RF measurement**: no antennas = **~44 dB path loss**, AP TX ~-64 dBm at 30 cm, marginal client RX on a flaky MT7922 - the remaining association gate, separate from the (now complete) software chain [V*/I] |
 
 ### 1.4 Key numbers
 
@@ -434,6 +537,14 @@ is also a correction of the then-current model (section 8 gives the full registe
 | static-wave artifacts | rx-static stripped **280,736 B `5b43d0a2...`**; wpa-static **282,048 B `11cee0aa...`**; beacon-order **276,140 B `300cd392...`**; scan-full stripped **263,704 B `4dd008d8...`**; sta-static **278,044 B `333c72a5...`** (all host-built, local evidence only) | [V] |
 | final all-patch module | stripped **308,080 B sha256 `5b587949...`**, 47 parameters, 0 warnings, cfg80211 contract 10 (opensource `008aca5`); chain base -> polish `d145a205` -> dp-tuning `175a4617` -> scan R4 -> stability `b5dfb883` -> rx -> beacon order -> wpa -> sta | [V] |
 | one-boot final validation | vendor five-message AP order -> hostapd `AP-ENABLED` with WPA2 config; GTK key_add 96 B + set_default 68 B; TX `COMPLETED` (TXQ table wptr=rptr=1); RX arm status 0x182/mask 0xfffffcc1/rptr 0x20; page golden/mask 0 | [V*] |
+
+| final association module | chain all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx; **56 parameters**, 0 warnings, stripped **344,472 B sha256 251d08f0...** (unstripped 1,323,608 B `1d470e61...`); rebuilt with the corrected carrier as **344,372 B sha256 `ab9e18a4...`** (unstripped 1,324,532 B `2d9c3f11...`) | [V] |
+| corrected mgmt-TX carrier | raw HCC **g0 id6**: 12-B HCC header + 48-B device TX control + inline 802.11 frame (wire offset 60); completion = DMAC config-syn **0x01F3** (499) -> `hmac_mgmt_tx_event_status` -> host-internal g2 id13; no DMA descriptor / host-DRAM address needed | [V] |
+| mgmt-TX fire | one g0 id6 frame **posted 86 B, consumed 0 polls**; page `0x86807FEF` golden, mask 0 (corrected-carrier module `ab9e18a4`) | [V*] |
+| mgmt RX (CRX) | D2H **g1 id13**: 60-B prefix (12-B HCC + 48-B RX info), frame at +48; RX info +7 channel, +17 u16 frame_len, +39 s8 RSSI; dispatch pairing cfg-event **0x0d** -> `hmac_rx_process_mgmt_event` | [V] |
+| RX arm ordering | AP-start **first** -> `dp_setup` -> `rx_arm`; live status **0x182** vs **0x02** when the AP start runs after `dp_setup` (the vendor inits RX once, before AP start) | [V*] |
+| R11 scan sweep (final) | `field10` 25 -> **8** channels (max); 29 -> 7; 33/41/64 -> 6/6/6; no 13-channel rung; refined 44-B g0 id10 shape | [V*] |
+| RF bench reality | no antennas: **~44 dB path loss**; AP TX **~-64 dBm at 30 cm**; host-client RX marginal + flaky MT7922; client association RF-gated | [V*/I] |
 
 ---
 
@@ -1444,6 +1555,244 @@ was not exercised (`sta_join=0`); the 5 GHz band config was not fired; and the f
 has to be baked into the self-contained image. None of these changes the feature-complete status
 at the device level.
 
+### F21. The association module: one chain, 56 parameters - and the corrected-carrier rebuild
+
+**Symptom / context.** v5 ended with the final all-patch module (F20) proving AP order + GTK + TX
+completion + RX arm, but the association-specific layers (WPA3 advertisement, management TX/RX,
+station ops/EAPOL RX, host->AP data TX) existed only as separate lane patches that had never been
+merged, so a client association could not be attempted with one module.
+
+**Work.** The stability lane re-staged the final all-patch tree and applied the four association
+patches in order [V]: wpa3-sae (AKM PSK+SAE, BIP-GMAC suites, `mgmt_stypes` AP tx=0x3c2a,
+`.set_default_mgmt_key` + the management-cipher latch), ap-mgmt (management TX/RX hooks,
+`mgmt_tx`/`mgmt_rx`), sta-ops (`.add/change/del/get/dump_station`, per-STA firmware context
+`g0 id7` + `g0 id1` cmd 0x07d2, EAPOL/data RX, `sta_ops`/`eapol_rx`/`sta_user_del`) and data-tx
+(`ndo_start_xmit` -> dp TX ring, EAPOL msg1/msg3, `data_tx`/`data_tx_peer`/`data_tx_protect`/
+`data_tx_timeout_ms`). The merge needs exactly two conflict resolutions, both additive: the Kbuild
+object union and the cfg80211 teardown-hook union; `mgmt_stypes` ownership stays with wpa3-sae.
+Build: **0 warnings, 56 module parameters, stripped 344,472 B sha256 `251d08f0...`**, 12 cfg80211
+symvers lines and three imported cfg80211 symbols; the module is local evidence only (gitignored)
+and is rebuilt by `wifi-stability/tools/build-association-module.sh` [V].
+
+**Correction that produced the final artifact.** The ap-mgmt lane's device carrier later turned
+out to be the wrong message (F22). The sibling-GPL lane's corrected `g0 id6` patch applies to this
+final association tree and rebuilds it as **344,372 B sha256 `ab9e18a4...`, 56 params** [V]. That
+is the artifact the Lead fired on the bench and the one the image-2 lane stages. (The stability
+lane's ASSOCIATION-INTEGRATION.md was written before the fire and says "not fired"; the corrected
+rebuild and its bench fire are recorded in the ledger 2026-11-25 11:30-13:00.)
+
+**Bench (ledger 2026-11-25 11:30-13:00).** The corrected module was loaded with the full parameter
+set (`mgmt_tx=1 mgmt_rx=1 sta_ops=1 eapol_rx=1 data_tx=1 ... rx_enable=1 beacon_static=1
+beacon_vap_start=1 wpa_keys=1`) on a fresh PD4 golden boot. One boot reached: **hostapd
+AP-ENABLED** through the five-message vendor order, **TX COMPLETED** on the dp TX ring, and
+**RX armed** with the live bank at CA 0x40050000 status **0x182** - using the **AP-first order**
+(`AP -> dp_setup -> rx_arm`) - plus one management frame accepted on the corrected `g0 id6`
+carrier (**posted 86 B, consumed 0 polls**); page `0x86807FEF` golden, mask 0, staging 0 [V*].
+No client association/4-way PTK result was recorded: the bench client path was RF-blocked (F27).
+
+**Interpretation.** The association-chain software is now one module and its control/device paths
+fire together; what remains is the air-side client exchange. The per-STA context, EAPOL delivery,
+data-TX and mgmt-RX rungs stay unproven until a client is actually heard.
+
+**Residual risk.** The per-STA firmware context is table-A cross-checked but has not been
+exercised with a real station; the EAPOL RX classifier runs on the (still empty) data ring;
+`data_tx` has never carried a real EAPOL-Key msg1; the 0x01F3 completion is not decoded by the
+driver (cfg80211 status comes from the local post); RF is the open physical gate.
+
+---
+
+### F22. The management-TX device carrier is a raw HCC g0 id6 control message
+
+**Symptom / context.** v5's ap-mgmt lane had decoded management TX as a WAL cfg-event TLV
+`0x01F2` and planned a "M2" fire. The PD4 firmware table A contains no `0x01F2` row, which looked
+like a blocker. The public-research-2 lane then mapped the sibling architecture and found the WAL
+TLV to be a host-internal request, and our own vendor disassembly corroborated it [V]/[V*].
+
+**Work.** The vendor path [V*]: `wal_cfg80211_mgmt_tx` -> WLAN_CFGID_CFG80211_MGMT_TX request
+(host-internal) -> `hmac_wpas_mgmt_tx` at 0x4050c -> helper 0x3fe68, which does
+`hcc_msg_alloc(48 + frame_len)` + `hcc_msg_tx` directly - **not** a WAL re-post. The resulting
+device message is a **raw HCC group-0 id-6 control message**:
+- 12-byte HCC header: group 0, low-nibble 1, `[vap+1]`/`[vap]` field A/B, u16 total length,
+  **id 6** at +6, `0x5A5A` tag at +0x0A;
+- payload: a **48-byte device TX-control block** (frame_len-24 at +0, 24 at +2, flags 0x03 at +6,
+  cookie nibble at +8, station user/assoc id at +9 (0x0fff when none), tail zero) then the
+  **802.11 frame inline at payload+48** (wire offset 60).
+Completion: the device returns a DMAC->HMAC config-syn event **0x01F3 (499)**, whose handler
+`hmac_mgmt_tx_event_status` (0x427e4) re-posts a **host-internal HCC g2 id13** message with
+`{u32 frame_id at +12; u8 status at +16}` - that host-internal relay is what the ap-mgmt lane had
+decoded as "the completion", not a device frame. Because the frame travels inline, the VMSPLIT-3G
+host-DRAM-address problem disappears: no `dma_alloc_coherent` and no device-visible pointer are
+needed for management TX [V].
+
+**Bench (ledger 2026-11-25 13:00).** The corrected patch was applied to the final association
+tree (module `ab9e18a4`, 344,372 B) and fired with `mgmt_tx=1 mgmt_rx=1`: the driver posted one
+`g0 id6` management frame of **86 B total** and the firmware **consumed it in 0 polls**; page
+`0x86807FEF` golden, mask 0, staging 0, no exception [V*]. The ap-mgmt M2 ladder rung that would
+have fired the WAL TLV is **withdrawn** (C57).
+
+**Interpretation.** Management TX now has a hardware-accepted device carrier with the frame
+inline. Whether the firmware puts the frame on the air (auth/assoc response) still needs an
+external client or observer; the driver deliberately reports its cfg80211 status from the post
+consumption because the 0x01F3 device status envelope is not yet wired to a completion callback.
+
+**Residual risk.** The 48-byte TX-control tail is only partially decoded (vendor-written fields
+pinned, rest zero); station-assoc-id 0x0fff vs a real user id is untested; the 0x01F3 payload's
+`status`/`???` fields need a live capture; the vendor host bound (frame_len <= 588 B) should be
+treated as the safe limit even though our builder accepts up to 1612 B.
+
+---
+
+### F23. Management RX is a D2H CRX event (g1 id13), not data-ring traffic
+
+**Symptom / context.** "RX captures 0" had been re-scoped by F15 to "no traffic yet", but a client
+scan is traffic: the laptop's probe/auth frames still never appeared in the MAC completion ring.
+That looked like a missing filter or a broken decoder.
+
+**Work.** Both the sibling analysis and our own vendor module say management frames are a separate
+event family [V]/[V*]. Hi3881V100's GPL stack splits `FRW_EVENT_TYPE_WLAN_CRX` (management/
+control, scan results, peer reports) -> `hmac_rx_process_mgmt_event` from
+`FRW_EVENT_TYPE_WLAN_DRX` (data) -> the data path. In our 2.5.24 module the D2H cfg-event
+dispatch table pairs **event id 0x0d (13)** with `hmac_rx_process_mgmt_event`, and the ring-entry
+processing never dispatches management frames. Our committed decode of the event is the
+**60-byte prefix**: 12-byte HCC header + 48-byte RX-info block, the 802.11 frame at prefix+48
+(length = total-60), RX info +7 channel, +17 u16 frame_len, +39 s8 RSSI; delivery is
+`cfg80211_rx_mgmt_ext` (ap-mgmt lane) [V]/[V*].
+
+**Bench implication.** During a client scan the MAC data-ring completion wptr legitimately stays
+0: those frames are D2H CRX events on `g1 id13`, which the `mgmt_rx=1` hook decodes. The data ring
+matters for EAPOL/data after association (the sta-ops lane's EAPOL delivery path). The bench's
+"ring drain 0 under a laptop scan" is therefore **expected architecture, not a defect** (C59).
+
+**Interpretation.** Keeping the `g1 id13` decoder is correct; the confusion was only naming: the
+device management-*TX* completion is the DMAC config-syn `0x01F3`; the device management-*RX*
+event is `g1 id13`; `g2 id13` is the host-internal WAL mgmt-TX-status relay. No filter message is
+involved (F24/T2 negative).
+
+**Residual risk.** The RX-info tail beyond channel/length/RSSI is [U]; the event was verified
+statically (dispatch table + 48-byte class cross-check) and by the decoder, not yet on live
+management traffic (the client association that would produce it is RF-gated).
+
+---
+
+### F24. Sibling GPL and public research: architecture confirmed, two hard negatives
+
+**Symptom / context.** The reference driver for this silicon family is not public. The notebook
+committed study notes on two public siblings - Hi3881V100 (OpenHarmony, GPLv2) and Hi1105 (public
+kernel tree, no open licence) - plus a deeper public-research lane for the source hunt and the
+Linux RX-ring cross-check. Neither is a source-code base; both are architecture evidence.
+
+**Work and results** [V] (with local vendor-module cross-checks [V*]):
+1. **RX architecture confirmed.** CRX (management/control) vs DRX (data) split; the ring data path
+   never carries management. The vendor's own RX init fills both free rings and publishes the
+   producers - **no reset-mask write, no enable bit and no H2D RX-enable message**, matching the
+   rx-static lane. The host owes the consumer/refill half (implemented as `dp_rx_drain`).
+2. **Ring model cross-checked.** Hi1105 uses the same packed pointer convention (15 index bits +
+   phase bit 15) and the same *large* ring depths (small free ring 512, completion ring 4095);
+   entries are 8 B there vs our 4 B, normal ring 4095 vs our 256 - the same design line.
+3. **Two hard negatives.** (a) The Hi3881 per-VAP `SET_RX_FILTER` WLAN_CTX event (AP-UP
+   `0xF7B9FAEA`, AP+STA `0x73B9FACA`, BIT4 = broadcast management) has **no sender in either
+   luofu vendor module** - no symbol, string, immediate or VAP-state call site; do not invent it
+   (C60). (b) **No public exact-chip source**: OpenHarmony has only hi3881v100; the Cudy WR3000
+   2.0 GPL section is present but empty (raw HTML verified) while v1 has a real row; no Jeton GPL;
+   no mainline HiSilicon Wi-Fi driver.
+4. **The scan cap is DMAC/firmware-side.** The sibling host sends the entire cfg80211 channel list
+   in one `mac_scan_req` event; there is no host cap to lift. This supports F18/F26's structural
+   ceiling.
+5. **Linux RX-ring cross-check.** Across mt76/iwlwifi/ath10k/ath11k/brcmfmac/mwifiex: publishing
+   the free-buffer producer is the RX enable, completions carry buffer addresses, and the host
+   consumes -> refills -> republishes at a **watermark** (iwlwifi's RX_STALLED is the failure
+   mode). Our drain refills only inside a drain action - a watermark/credit rule is the
+   recommended hardening for sustained EAPOL (P1/P3 proposals, host-tested, not in the fired
+   module).
+6. **Licensing.** Our tree is MIT; the Hi3881 sources are GPL-2.0 and the Hi1105 tree is not
+   open-licenced - only derived facts/structures were used, no verbatim source was copied.
+
+**Interpretation.** The sibling work independently validates the RX model, kills the filter-message
+hypothesis, and puts the scan limit where the bench already located it. It changes nothing about
+the upstream verdict (the exact chip remains closed).
+
+**Residual risk.** The validity-wait/clear-after-read and refill-watermark proposals are designs,
+not fired code; the Hi1105 tree has no licence and must never be cited as a licence-compatible
+origin.
+
+---
+
+### F25. The RX arm ordering: AP-start first, then dp_setup, then rx_arm
+
+**Symptom / context.** The RX arm reads (F15/6.13) were taken in different orders on different
+boots. The sibling-GPL analysis flagged an ordering discrepancy as an open item (its H7): the
+vendor initialises the RX rings **once** in its device-init path (before any AP start) and never
+re-initialises them, yet the bench had observed an AP start after `dp_setup` clearing the live
+status word.
+
+**Work.** Static: the vendor's `shuangta_rx_host_init_dscr_queue` programs ring address/size/
+buffer length, fills both free rings and publishes the producers - called from device init, not
+from the AP-start path [V*]. The AP-start sequence therefore never reprograms the RX block. Bench:
+with **AP start after `dp_setup`**, the live bank status reads **0x02** (the AP-start path had
+cleared the armed state); with the **AP-first order** - AP start -> `dp_setup` -> `rx_arm` - the
+arm reads the full **0x182** with mask 0xfffffcc1 and norm/small rptr 0x20, the exact vendor
+mirror [V*]. The v5 arm fire and the association-module one-boot validation both used the
+AP-first order.
+
+**Interpretation.** The ordering is part of the RX contract on this bench: any AP start (or
+restart) between `dp_setup` and `dp_rx_arm` invalidates the arm, so the rule is AP first ->
+`dp_setup` -> `rx_arm`, and re-arm after any AP start. This explains the earlier 0x02 vs 0x182
+inconsistency without invoking a second enable path (C61).
+
+**Residual risk.** Which write inside the AP-start path clears the live status is still [U] (a
+one-message bisect over the five AP messages would pin it); the vendor never hits the case because
+it never re-inits RX after AP start; the same rule on 5 GHz is [I]/untested.
+
+---
+
+### F26. The R11 scan sweep: 8 channels is the final ceiling
+
+**Symptom / context.** v5 closed the 13-channel question structurally (the scan engine consumes
+slot 0 only). The refined 44-byte g0 id10 shape from the scan-full lane still had one open
+parameter - `field10`, whose mapping to the result-counter/pace was [I] - so the R11 ladder swept
+it.
+
+**Work / result.** The final sweep (refined vendor-shaped 44-B frame, subtype-2 clear removed
+where noted, fixed scan timeout, one rung per `field10` value) measured: **`field10=25` -> 8
+channels (the maximum)**, `29` -> 7, `33` -> 6, `41` -> 6, `64` -> 6 [V*]. The earlier R10c
+points (13 -> 7, 25 -> 8) are consistent; no rung reaches 9, and 13/13 is not reachable through
+`field10`/mode/start/use2. The H1 effect is pacing (preset counter +0x104 and mode +0x103), not a
+channel count (F18/C49); the remaining ceiling is DMAC/firmware-side (F24 confirms the sibling host
+has no cap to relax).
+
+**Interpretation.** The scan line stays closed: ship the default 6-channel single-shot batching
+and keep H1 opt-in for the 7-8 channel case. R11 closes the last tuning knob (C62).
+
+**Residual risk.** `field10` values beyond the swept set and the interaction with 5 GHz channel
+ids are [U]; the 44-byte subtype-2 clear path is only relevant when `use2=1`; batching across
+requests remains the only 13-channel path.
+
+---
+
+### F27. RF is the remaining gate: ~44 dB path loss, no antennas, marginal client RX
+
+**Symptom / context.** With the software chain complete (AP-ENABLED + GTK + station ops + mgmt
+TX/RX + EAPOL/data TX in one module), a client association should now be a matter of firing the L5
+ladder. The bench instead hits a physical wall: the router's antenna connectors are empty while
+the user attaches the antennas.
+
+**Work / measurement.** The sibling analysis recorded the bench's **~44 dB path loss with no
+antennas** as a non-host-evaluable hypothesis (its H6) [V*]. The v6 bench record adds: the AP's TX
+is measured at about **-64 dBm at 30 cm** on the host observer, the client's own RX is marginal,
+and the host MT7922 is flaky under repeated iface/supplicant churn. These numbers are consistent
+with a ~40-50 dB antenna-path deficit, not with a software fault: the same module posts and
+consumes every firmware message and arms the RX consumer (F21-F25).
+
+**Interpretation.** RF is the remaining association gate; the corrected association module's
+one-boot validation deliberately stops at AP-ENABLED + TX COMPLETED + RX arm (0x182) until the
+antennas are attached. The software-side prerequisite list for the client-association ladder is
+now complete and documented; the L5 result is a measurement to capture, not an implementation gap.
+
+**Residual risk.** The -64 dBm/30 cm and 44 dB figures are bench-note/observer numbers, not
+calibrated RF measurements; with antennas attached the next-rung expectation is signal
+improvement first (client association), not protocol changes. The flaky MT7922 may still need the
+observer harness's reset sequence.
+
 ---
 
 ## 5. Protocol reference (summary)
@@ -2372,6 +2721,240 @@ connect unexercised), the 5 GHz band config, and baking the final module into th
 image. The module chain and fire recipe are the record for those follow-ups. The validation matrix
 is T38.
 
+### 6.19 The association module: the full chain and its one-boot validation (2026-11-25)
+
+**Why this section exists.** F21 has the analysis; this is the operational record. v5's F20 ended
+at the device-level feature set of the all-patch module; the association wave added the four
+remaining layers and merged them into one module that could be fired at a client.
+
+**Build chain (T39).** `all-patch 5b587949` (base `44c6cc12` -> polish `d145a205` -> dp-tuning
+`175a4617` -> scan R4 -> stability `b5dfb883` -> rx -> beacon(+72dabe8) -> wpa -> sta) +
+wpa3-sae + ap-mgmt + sta-ops + data-tx. Two additive conflict resolutions only: the Kbuild object
+union and the cfg80211 teardown-hook union; `mgmt_stypes` is owned by wpa3-sae (AP tx=0x3c2a).
+Identity: **56 parameters, 0 warnings, stripped 344,472 B sha256 `251d08f0...`** (unstripped
+1,323,608 B `1d470e61...`), 12 cfg80211 symvers lines, imports `cfg80211_bss_iter`,
+`cfg80211_mgmt_tx_status_ext`, `cfg80211_rx_mgmt_ext`; reproducible via
+`wifi-stability/tools/build-association-module.sh`, which asserts the upstream all-patch identity
+and refuses drift [V].
+
+**Corrected-carrier rebuild.** The ap-mgmt device carrier correction (6.20) applies to this tree
+as `wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch` (5 files, 366 diff lines,
+applies cleanly, 0 warnings) and rebuilds the module as **stripped 344,372 B sha256
+`ab9e18a4...`** (unstripped 1,324,532 B `2d9c3f11...`), still **56 params**; the host-side
+builder test is **41/41** [V]. The patch removes the DMA descriptor + `dma_alloc_coherent`
+requirement for management TX (the frame travels inline).
+
+**One-boot validation (fresh PD4 golden boot, full param set).**
+
+| # | feature | observed | evidence |
+| ---: | --- | --- | --- |
+| 1 | AP, vendor five-message order | `vap_add -> ap_chan (32 B, band=0 channel=6) -> ap_ssid -> ap_cfg -> ap_vap_start`; hostapd `AP-ENABLED` | [V*] |
+| 2 | TX completion | `dp_tx_complete_poll verdict=COMPLETED` (TXQ publish enabled; device rptr == wptr) | [V*] |
+| 3 | RX arm, AP-first order | AP start -> `dp_setup` -> `dp_rx_arm`; live bank CA 0x40050000 **status 0x182**, mask 0xfffffcc1, norm/small rptr 0x0020 | [V*] |
+| 4 | corrected mgmt-TX carrier | one `g0 id6` management frame **posted 86 B, consumed 0 polls** | [V*] |
+| 5 | post pack | page `0x86807FEF` golden, state 1, mask 0, staging 0, no exceptions | [V*] |
+
+**Fire recipe (T39).** The full recipe is ASSOCIATION-INTEGRATION.md section 4: fresh golden boot,
+PD4 firmware pushed by hand, one module load with `mgmt_tx=1 mgmt_rx=1 sta_ops=1 eapol_rx=1
+sta_user_del=0 data_tx=1 data_tx_peer=1 data_tx_protect=0 rx_enable=1 beacon_static=1
+beacon_vap_start=1 wpa_keys=1` plus the proven ladder params, then the AP 5-message order ->
+`dp_probe` -> `dp_setup` -> `h2d_txq_addr_sync` -> `dp_rx_arm` -> hostapd WPA2 AP -> client
+auth/assoc. Controls: the same load with `mgmt_tx=0 / sta_ops=0 / data_tx=0` must fail closed.
+One load per boot, page/mask/staging receipt on every rung, no retry on an exception.
+
+**Module availability.** The artifact lives in `/tmp` (local evidence only, never committed) and
+`/tmp` may be cleaned; it is rebuilt at any time by
+`wifi-stability/tools/build-association-module.sh` plus the sibling carrier patch. The image-2
+lane stages exactly this artifact.
+
+**Limits.** The one-boot validation proves the control/device paths coexist; the association
+rungs (client auth/assoc, hostapd `STA added`, EAPOL 4-way, PTK, data) are the L5 measurement and
+were not captured because the client path was RF-blocked (6.25/F27). WPA3-SAE additionally needs a
+SAE-capable hostapd (image B) and the same management path.
+
+---
+
+### 6.20 The corrected management-TX carrier: HCC g0 id6 (2026-11-25)
+
+**Why this section exists.** Management TX is the host->AP auth/assoc response path; it was the
+last software dependency between an `AP-ENABLED` hostapd and a real client. v5 believed the
+carrier was a WAL cfg-event; v6 corrects and fires it. T40 has the wire map.
+
+**The correction.** The ap-mgmt lane's `0x01F2` WAL cfg-event is the **host-internal** WAL->HMAC
+request (`wal_cfg80211_mgmt_tx` -> WLAN_CFGID_CFG80211_MGMT_TX -> `hmac_wpas_mgmt_tx`); the
+device-facing message is a **raw HCC group-0 id-6 control message** built by the helper at
+0x3fe68 with `hcc_msg_alloc(48 + frame_len)`: 12-B HCC header, 48-B device TX-control block, then
+the 802.11 frame inline (wire offset 60) [V*]. The completion is a DMAC->HMAC config-syn event
+**0x01F3**, handled by `hmac_mgmt_tx_event_status` which re-posts the host-internal g2 id13 relay
+(the ap-mgmt lane's "status event") with `{frame_id +12, status +16}` [V*]. Two independent
+generations agree (Hi3881 2021, Hi1105) and the PD4 table-A absence of `0x01F2` is now expected,
+not a blocker [V].
+
+**The fire.** Corrected patch -> association tree -> module `ab9e18a4` (6.19); one load with
+`mgmt_tx=1 mgmt_rx=1`. The driver posted a **86 B** `g0 id6` management frame (12 + 48 + 26-byte
+management frame) and the firmware consumed it in **0 polls**; page golden, mask 0 [V*]. The
+corrected builder was host-tested **41/41** (`wifi-sibling-gpl/evidence/mgmt-ctrl-selftest.txt`)
+and the patch builds warning-free (`wifi-sibling-gpl/evidence/mgmt-carrier-build.log`) [V].
+
+**Status of the old ladder.** The ap-mgmt lane's M2 rung (`mgmt_tx=1` with the WAL TLV) is
+**superseded and must not be fired** - it would post a message the firmware does not dispatch
+(likely a WAL-queue dead end, not a crash). The corrected rung is "R-B" in
+`wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md`.
+
+**Open.** The firmware's on-air action (auth/assoc response) needs a client/observer. The 0x01F3
+status envelope is not decoded in the driver; the cfg80211 status comes from the local post
+consumption. The 48-B control tail is only partially decoded.
+
+---
+
+### 6.21 Management RX: the CRX event g1 id13 (2026-11-25)
+
+**Why this section exists.** The RX arm is proven (F15) but no frame has been captured. The
+correction that closes this question is: management RX is **not** a ring capture - it is the D2H
+CRX event `g1 id13`. T41 has the layout and the dispatch pairing.
+
+**Decode.** `g1 id13`: 60-byte prefix = 12-byte HCC header + 48-byte RX-info block; the 802.11
+frame starts at prefix+48 and the length is total-60; RX info carries channel at +7, u16 frame_len
+at +17, s8 RSSI at +39; delivery is `cfg80211_rx_mgmt_ext` [V]. The 12-byte HCC header convention
+is independently confirmed by the mgmt-TX decode (6.20), and the 48-byte RX-info class matches the
+sibling `hmac_rx_ctl_stru`/CRX event shape [V]/[I]. Our own 2.5.24 module's D2H cfg-event
+dispatch pairs **id 0x0d** with `hmac_rx_process_mgmt_event` - the only caller of the AP/STA FSM
+dispatch in the RX direction - and the ring-entry processor never dispatches management
+frames [V*].
+
+**Consequences.** (a) The `mgmt_rx=1` hook is the right delivery path; no filter message is
+needed (F24/T2 negative). (b) During a client scan the MAC data-ring completion wptr is expected
+to stay 0; the data ring (EAPOL after association) is fed only by associated data traffic. (c) The
+naming must not conflate the device TX completion `0x01F3` with the host-internal WAL relay
+`g2 id13` or with this RX event - three different things (C58/C59).
+
+**Open.** No live `g1 id13` frame has been decoded yet (the client that would generate one is
+RF-gated); the RX-info tail beyond channel/length/RSSI is [U]; the ap-mgmt decoder exists but the
+hook is default-off.
+
+---
+
+### 6.22 Sibling GPL and public research: the comparison and the negatives (2026-11-25)
+
+**Why this section exists.** Two host-only lanes studied the only public relatives of this stack
+and the public record for the exact chip. Their output is architecture evidence plus a set of
+negative results that stop future work from chasing non-existent host steps. T42 has the
+comparison table.
+
+**Sources.** Hi3881V100 (OpenHarmony `device_soc_hisilicon`, pinned commit, GPLv2) and Hi1105
+(public kernel tree, no open licence - structure reference only); every quoted line was re-fetched
+and hash-checked (`wifi-public-research-2/VERIFY-fetch.txt`: 51/51 byte+sha matches;
+`wifi-public-research-2/SOURCES.tsv`) [V]. Our own vendor modules (2.4.15/2.5.24) were
+cross-checked by relocatable disassembly [V*].
+
+**What transfers.** CRX/DRX split; free-ring producer publish as the RX enable; packed 15-bit +
+phase pointer; the two large ring depths; completion entries carry buffer addresses; the refill
+watermark and completion-entry validity wait; station add before assoc response; EAPOL as data;
+management TX as one host->firmware event.
+
+**What does not.** The Hi3881 `SET_RX_FILTER` (0xF7B9FAEA) has **no luofu counterpart** (no
+sender in either vendor module); the SDIO/HCC-credit specifics; any 8-byte-entry ring arithmetic
+(ours are 4 B); and any code text (licence mismatch and clean-room policy).
+
+**The two hard negatives for the bench.** (1) No missing host RX-filter message: if management RX
+is silent after the corrected carriers, the next hypothesis is firmware VAP/user state or RF - not
+a filter. (2) No host-side scan cap to relax: the full channel list is one request in the sibling;
+our 6 -> 7/8 ceiling lives in the firmware/DMAC.
+
+**Public record for the exact chip.** No public hi5622/luofu source, datasheet or SDK; OpenHarmony
+has only hi3881v100; the Cudy WR3000 2.0 GPL download section exists but is **empty** (raw HTML
+verified; v1 has a real GPL row); no Jeton GPL; no mainline HiSilicon Wi-Fi driver; FCC/regulatory
+docs are not public. Upstream/legal conclusions are unchanged.
+
+---
+
+### 6.23 The RX arm ordering: AP-start first, then dp_setup, then rx_arm (2026-11-25)
+
+**Why this section exists.** The RX arm read 0x182 in some sessions and 0x02 in others. The
+difference was order, not hardware. T43 has the two sequences and their observations.
+
+**The two sequences.**
+
+| sequence | live-bank status (CA 0x40050000 +0x00) | interpretation |
+| --- | ---: | --- |
+| `dp_setup` -> AP start -> `dp_rx_arm` | **0x02** | the AP-start path clears the armed state; the arm reads a partially reset block |
+| AP start -> `dp_setup` -> `dp_rx_arm` | **0x182** (mask 0xfffffcc1, norm/small rptr 0x20) | the full vendor-mirror armed state |
+
+[V*]
+
+**Why the vendor never sees this.** Its RX rings are initialised once in the device-init path
+(`shuangta_rx_host_init_dscr_queue`: ring address/size/buffer length + fill both free rings +
+publish producers) and never re-initialised; the AP-start path does not touch the RX block. On
+our bench the arm is a separate action after `dp_setup`, so the order (and a re-arm after any AP
+start/restart) matters [V*].
+
+**Rule and evidence.** AP first -> `dp_setup` -> `rx_arm`, and re-arm after any AP start. The v5
+arm fire (6.13) and the association-module one-boot validation (6.19) both follow it, and both
+read the vendor mirror. The AP-first order is also what the mgmt-TX/L5 ladder needs (the AP must
+exist before management TX can answer a client).
+
+**Open.** Which register write inside the AP-start path clears the status is [U]; a one-message
+bisect over the five AP messages (read the live bank after each post) would pin it.
+
+---
+
+### 6.24 The R11 scan sweep: the final numbers (2026-11-25)
+
+**Why this section exists.** F26 gives the analysis; this is the measurement record. T44 has the
+sweep.
+
+**Setup.** Refined 44-byte vendor-shaped g0 id10 band-config (the scan-full lane's builder), one
+rung per `field10` value, fixed scan timeout, subtype-2 clear applied unless noted; readout is the
+H1 band-config dmesg line plus the channel/BSS counts. Page/mask stayed golden/0 on every rung.
+
+| `field10` | channels swept | note |
+| ---: | ---: | --- |
+| 25 | **8** | maximum observed; the best rung |
+| 29 | 7 | - |
+| 33 | 6 | - |
+| 41 | 6 | - |
+| 64 | 6 | - |
+
+[V*]
+
+**Context.** These are the final values of the R11 ladder (v5 had the first points: field10 13 ->
+7, 25 -> 8). No rung reaches 9 and 13/13 never occurs; the R11.6 slot falsifier (slots 1..7) and
+the R11.4 mode discriminator did not move the count, consistent with the structural closure. The
+shipped default remains the 6-channel single-shot request with host batching; H1
+(`scan_band_cfg=1`) is opt-in for 7-8 channels.
+
+**Open.** The exact semantic of `field10` (counter preset vs count) beyond the measured shape is
+[I]; 5 GHz channel ids remain [U].
+
+---
+
+### 6.25 The RF measurement: the remaining physical gate (2026-11-25)
+
+**Why this section exists.** After 6.19-6.24 the assocation software prerequisites are complete;
+the association attempt nevertheless fails physically. This section records the measurement
+honestly so the next bench session is planned as an RF fix, not a software hunt. T45 summarises.
+
+**Measurement.** The bench router has **no antennas attached** (the user is attaching them while
+the software wave continues). With that:
+- the sibling analysis records **~44 dB path loss** (its H6, non-host-evaluable) [V*];
+- the v6 bench record measures the AP's TX at about **-64 dBm at 30 cm** on the host observer;
+- the host client's own RX is marginal, and the host MT7922 is flaky under repeated
+  iface/supplicant churn (the observer harness must reset it) [V*/I].
+
+**Cross-check that this is RF, not software.** In the same sessions the same module
+posts/consumes every firmware message with 0-poll consumption, reaches `AP-ENABLED`, completes TX
+at the MAC level, arms RX to the vendor mirror and has one management frame accepted on the
+corrected carrier. An antenna-path deficit of ~40-50 dB explains why a client cannot hear/associate
+while the firmware paths are healthy.
+
+**Plan.** Attach the antennas (user action) -> re-run the external observer beacon capture -> fire
+the L5 client-association ladder on the corrected association module (hostapd WPA2, on-air
+observer) -> capture auth/assoc via `g1 id13`, `STA added`, EAPOL 4-way via data_tx/dp_rx and
+the PTK key install. The WPA3-SAE variant follows on the SAE-capable image.
+
+**Open.** The dB figures are bench-note/observer numbers, not calibrated RF measurements; the
+host's flaky MT7922 may need a documented reset sequence in the observer harness.
+
 ---
 
 ## 7. Bench evidence chain
@@ -2472,7 +3055,9 @@ was ever run from this document.
 | 2026-11-28 23:00 | **WPA2-AP GTK install proven** | WPA2 hostapd AP-ENABLED; `key_add` 96 B (idx=1, cipher 0xfac04) + `key_default` 68 B (multi=1) consumed 0 polls; page golden/mask 0 | ledger 2026-11-28 23:00 [V*] |
 | 2026-11-28 17:00 | **full 13-channel scan closed (negative result)** | g0 id10 is a BA relay; scan engine uses slot 0 only; no subtype-1 write to +0xFE; ceiling 6 (7-8 with H1); corrections 0x10CD5C/44 B/payload+0x14 | ledger 2026-11-28 17:00; wifi-scan-full [V]/[V*] |
 | 2026-11-29 00:00 | static-wave fires summary + integration tasked | 3/3 fired features passed (RX arm, 5-message order, WPA2 GTK) + 40-min soak; all-patch single-module validation and external-observer air test remain; report v5 tasked | ledger 2026-11-29 00:00 [V*] |
-| 2026-11-29 01:00 | **FINAL ALL-PATCH MODULE VALIDATED IN ONE BOOT** | one module (stripped 308,080 B sha256 `5b587949...`, 47 params, 0 warnings, opensource `008aca5`) on a fresh golden boot: vendor five-message AP order + hostapd `AP-ENABLED` with WPA2 config; GTK key_add 96 B + set_default 68 B consumed; TX `COMPLETED`; RX arm PASS (live bank vendor mirror); page golden/mask 0/staging 0, no exceptions | ledger 2026-11-29 01:00 [V*] |
+| 2026-11-29 01:00 | **FINAL ALL-PATCH MODULE VALIDATED IN ONE BOOT** | one module (stripped 308,080 B sha256 `5b587949...`, 47 params, 0 warnings, opensource `008aca5`) on a fresh golden boot: vendor five-message AP order + hostapd `AP-ENABLED` with WPA2 config; GTK key_add 96 B + set_default 68 B consumed; TX `COMPLETED`; RX arm PASS (live bank vendor mirror); page golden/mask 0/staging 0, no exceptions | ledger 2026-11-29 01:00 [V*] || 2026-11-25 11:30 | **final association module built** | all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx in one module: 56 params, 0 warnings, stripped `344,472 B sha256 `251d08f0...``; two additive conflict resolutions; then rebuilt with the corrected carrier as `344,372 B sha256 `ab9e18a4...`` | ledger 2026-11-25 11:30; `wifi-stability/ASSOCIATION-INTEGRATION.md`, `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` [V] |
+| 2026-11-25 12:00 | **public research + sibling GPL** | mgmt-TX WAL TLV is host-internal (device carrier corrected downstream); mgmt RX is the CRX event; Hi3881 SET_RX_FILTER absent on luofu; scan cap DMAC-side; no public exact-chip source, Cudy 2.0 GPL empty (verified) | ledger 2026-11-25 12:00; `wifi-public-research-2/REPORT.md`, `wifi-sibling-gpl/REPORT.md` [V]/[I] |
+| 2026-11-25 13:00 | **corrected mgmt-TX carrier accepted + association-module boot** | one boot of the corrected module (`ab9e18a4`): AP-ENABLED (5-message order) + TX COMPLETED + RX armed 0x182 with the AP-first order; one g0 id6 management frame posted 86 B, consumed 0 polls; page golden/mask 0; R11 sweep final (8 max at field10=25); RF measurement ~44 dB path loss / AP TX ~-64 dBm at 30 cm | ledger 2026-11-25 13:00; `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` [V*] |
 
 End-of-chain bench state (ledger 2026-11-29 01:00): the box runs **our own flashed image** (6.18.60
 from rootfsb, selector `0x11`; the ABI-correct container was installed with kernel read-back
@@ -2495,6 +3080,18 @@ is the stock pair / physical recovery. The **host-only** work (static lanes, T0 
 hostapd package set, ABI image reproduction, verifier re-runs) is integrated where cited; none of it
 contacted the router, and the **PD4 audit** (no device session; section 6.6,
 `wifi-fw-audit/REPORT.md`) still bounds the firmware side.
+
+**v6 end state (ledger tail 2026-11-25 13:00).** The association wave leaves the bench with the
+**corrected association module** (`ab9e18a4`, 56 params) as the current artifact: on a fresh golden
+boot it reached `AP-ENABLED` (five-message order) + TX `COMPLETED` + RX armed (`status 0x182`) with
+the **AP-first order**, and accepted one `g0 id6` management frame (posted 86 B, consumed 0 polls);
+page `0x86807FEF` golden, state 1, mask 0, staging 0, no exceptions. The management frame carriers
+are now: device TX completion = DMAC `0x01F3` -> host-internal g2 id13; device management RX = D2H
+CRX `g1 id13`; host-internal WAL request = `0x01F2`. The scan sweep is final (8 channels max with
+H1) and the remaining blocker for a client association is **RF** (no antennas: ~44 dB path loss,
+AP TX ~-64 dBm at 30 cm, marginal client RX + flaky MT7922) while the user attaches the antennas.
+The image-2 lane stages this module into the SAE-capable image; the association/4-way ladders
+(L5) wait on the antenna fix.
 
 ---
 
@@ -2563,6 +3160,14 @@ claim.
 | C55 | an AP can start only once per boot / restart needs a reboot (cfg80211 `-EALREADY`) | E2 plain restart is achieved after the stability hardening (real `stop_ap` clearing `ap.beacon_interval` + per-ctx VAP-base latch cleared on user_del/probe); the final R4 combined module restarts the AP in one boot. The in-boot AP-after-scan crash class was the stale module-global latch - fixed; a fresh boot remains the safe ladder rule | [V*]/[V] | ledger 2026-11-27 23:00, 2026-11-28 13:30; 1.2/6.11 | 2026-11-28 |
 | C56 | the static-wave features are separate module artifacts and the all-patch integration is pending | integrated: the final all-patch module (opensource `008aca5`, stripped **308,080 B sha256 `5b587949...`**, 47 params, 0 warnings, six documented additive conflict resolutions, reproducible drift-refusing build script) was **fired in one boot** - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS, page golden/mask 0. Remaining gaps are the on-air observer, an RX capture with traffic, a fired STA join, the 5 GHz band config and the image bake | [V]/[V*] | `wifi-stability/FINAL-INTEGRATION.md`, ledger 2026-11-29 01:00; F20/6.18 | 2026-11-29 01:00 |
 | C44 | the ABI-correct image/flash is host-only work - "runbook ready, nothing flashed", and the bench still runs the modules from `/tmp` | superseded by the 2026-11-27 06:30 fire: the ABI-correct container was **flashed** with the stock-assisted installer (kernel read-back matched slot `1794a531...`, `ubiformat` OK, active pair untouched, handover `bootflag=b`/`boot_reg=0x21`), the box boots 6.18.60 from `ubi.mtd=rootfsb` with selector `0x11`, the post-boot `apk query kernel` receipt equals the kmod pin `6f995278...`, rootfs-native `modprobe` loads from `/lib/modules/6.18.60` (no `/tmp`), the T0 full-set verify passed 38 gates (one cosmetic receipt-missing), and hostapd reached `AP-ENABLED` on the flashed image | ledger 2026-11-27 06:30; `build/abi-image-artifacts/`; `tools/stock-telnet-install.sh`; `staging-fi/handover2.sh` | 2026-11-27 06:30 |
+| C57 | the device management-TX carrier is the WAL cfg-event TLV `0x01F2` (the ap-mgmt M2 ladder) | **wrong message**: `0x01F2` is the **host-internal** WAL->HMAC request; the device-facing message is a **raw HCC group-0 id-6 control message** - 12-byte HCC header + **48-byte device TX-control block** + inline 802.11 frame (wire offset 60) - and the completion is the DMAC->HMAC config-syn event **0x01F3**, whose handler re-posts the host-internal g2 id13 relay. Fired: one g0 id6 frame **posted 86 B, consumed 0 polls**; no DMA descriptor / host-DRAM pointer needed. The M2 ladder (fire the WAL TLV) is withdrawn | [V]/[V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md`, ledger 2026-11-25 13:00; F22/6.20 T40 | 2026-11-25 13:00 |
+| C58 | `g2 id13` is the device management-TX status event, and `g1 id13`/`g2 id13` are interchangeable naming | three distinct objects: device mgmt-TX completion = DMAC **0x01F3**; device mgmt **RX** = D2H CRX **g1 id13** (60-B prefix, frame at +48); host-internal WAL mgmt-TX-status relay = **g2 id13**. Keep the g1 id13 RX decoder; do not use g2 id13 as the device completion | [V] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T1.4/T3; F22/F23 T41 | 2026-11-25 |
+| C59 | a client scan should produce MAC completion-ring entries, and a zero ring means the RX path is broken/misconfigured | management frames are delivered as **D2H CRX events (g1 id13)**, not ring traffic; the MAC data ring carries **data** frames (EAPOL/ARP/DHCP/ping) after association. A client scan legitimately leaves the completion ring empty (expected architecture) | [V]/[V*] | `wifi-sibling-gpl/REPORT.md` T1/§6, `wifi-public-research-2/REPORT.md` §5; F23 | 2026-11-25 |
+| C60 | the Hi3881 per-VAP `SET_RX_FILTER` WLAN_CTX event (0xF7B9FAEA) is a missing host step for luofu | **evidence-backed negative**: no sender/symbol/string/immediate and no VAP-state call site exists in either luofu vendor module (2.4.15/2.5.24); do not invent one. If management RX is still silent after the corrected carriers, the next hypotheses are firmware VAP/user state or RF - not a filter message | [V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T2; F24/6.22 T42 | 2026-11-25 |
+| C61 | `dp_setup` then an AP start (in any order) leaves RX armed the same way | order matters on this bench: an AP start **after** `dp_setup` clears the live status to **0x02**; the rule is **AP-start first -> `dp_setup` -> `rx_arm`** (status **0x182**), and re-arm after any AP start/restart. The vendor initialises the RX rings once at device init, before any AP start, and never re-initialises them | [V*] | `wifi-sibling-gpl/REPORT.md` H7, v6 bench record; F25/6.23 T43 | 2026-11-25 |
+| C62 | a larger `field10` (or more slot configs) can reach 13 scan channels | final R11 sweep: **max 8 channels** at `field10=25`; 29/33/41/64 -> 7/6/6/6; the ceiling is DMAC/firmware-side and structural; 13 channels only via host batching (6+6+1) | [V*] | `wifi-scan-full/TEST-LADDER-R11.md`, `wifi-scan-tuning/FINDINGS-R10C.md`; F26/6.24 T44 | 2026-11-25 |
+| C63 | client association is blocked only on software (mgmt TX/RX + station ops + data TX) | the software chain is complete in one module and fires; the remaining gate is **RF**: no antennas on the bench (~44 dB path loss), AP TX ~-64 dBm at 30 cm, marginal client RX and a flaky host MT7922. The corrected association-module boot stops at AP-ENABLED + TX COMPLETED + RX armed (0x182) until the antennas are attached | [V*]/[I] | v6 bench record; `wifi-sibling-gpl/REPORT.md` H6; F27/6.25 T45 | 2026-11-25 |
+| C64 | the final association artifact is the stability lane's `344,472 B sha256 251d08f0...` module | that is the predecessor build; the **current/final association artifact** is the **344,372 B sha256 `ab9e18a4...`** rebuild (final association tree + the corrected `0001-mgmt-tx-hcc-g0id6-carrier.patch`), also **56 params**; the image-2 lane stages `ab9e18a4` | [V] | `wifi-stability/ASSOCIATION-INTEGRATION.md` + `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T1.5; 6.19 T39 | 2026-11-25 |
 
 ---
 
@@ -2575,8 +3180,10 @@ make sure the facts this report leans on still reproduce from the tree as commit
 wave-2 lane check whose tools are host-only; v3 re-ran the scan/VAP/data-plane/bench-tooling audit
 checks. v4 re-ran the report verifier plus the AP/scan/data-plane/bench-tooling host checks;
 v5 re-runs the report verifier plus the **static-wave** lanes that own the new findings (rx-static,
-wpa-static, scan-full, sta-static, beacon-static) and the v4 lane checks listed below. All checks are
-host-only and device-free:
+wpa-static, scan-full, sta-static, beacon-static) and the v4 lane checks listed below; v6 adds the
+new lanes' host checks (sibling-GPL management-carrier 41/41 and RX-model 94/94, the
+association-module build identity, and the public-research fetch manifest/verify tooling). All
+checks are host-only and device-free:
 
 | check | result | what it pins |
 | --- | --- | --- |
@@ -2608,6 +3215,12 @@ host-only and device-free:
 | `wifi-beacon-static` tools (`build-host.sh`, `beacon_re.py`, `build-module.sh`) | **PASS**, **65/65** host checks + **33/33** static probes on 2.5.24 and 2.4.15; module build 0 warnings (stripped 276,140 B `300cd392...` after the guard fix) | five-message AP order, no host beacon template (T34) |
 | `wifi-stability/tools/build-all-patch-module.sh` | **PASS** in the lane's record: chain re-stage + nine-patch apply with six additive conflict resolutions, 0 warnings, 47 params, artifact identity **308,080 B sha256 `5b587949...`** (opensource `008aca5`); the one-boot validation fire is hardware evidence, not a host test | the final integration module (T38/F20) |
 | `wifi-re-report/tools/verify_report.py` (this lane) | **PASS** (see 9.4) | this report's cross-references, markers, claim IDs and key constants |
+| `wifi-sibling-gpl/tools/mgmt_ctrl_selftest.c` (host C99 build) | **PASS**, **41/41** | corrected g0 id6 builder: 12-B header fields, 48-B TX-control map, frame min/max refusals, known/unknown station user id, deprecated WAL builder record, g1 id13 RX decode |
+| `wifi-sibling-gpl/tools/rx_model_selftest.c` (host C99 build) | **PASS**, **94/94** | sibling-derived completion-entry validity wait + clear-after-read and the association-ordering guard rules (P1/P2 proposals) |
+| `wifi-sibling-gpl/tools/verify_quotes.py` + evidence | lane record: **PASS** (network re-fetch; the committed `wifi-sibling-gpl/evidence/verify-quotes.txt` holds the result) | every quoted sibling line re-fetched at the pinned commits |
+| `wifi-public-research-2/VERIFY-fetch.txt` | **PASS**, **51/51** byte-count + sha256 matches | the public-source constants and citations used in T42 (network re-fetch is the lane's record) |
+| `wifi-stability/tools/build-association-module.sh` | **PASS** in the lane record: all-patch identity asserted, four association patches applied, two additive resolves, 0 warnings, 56 params, stripped **344,472 B sha256 251d08f0...**; the corrected-carrier rebuild is **344,372 B `ab9e18a4...`** with the carrier host test 41/41 | the final association module (T39/F21) |
+
 
 The remaining lane checks (e.g. `rom_s01.py` 70/70, `romdis.py` 86/86, `fw_pd_builder.py`
 56/56, `pd2_re.py` 33/33, the target-tree mocked harness 94/94 + 103/103 + 77/77) were re-run by
@@ -2655,6 +3268,20 @@ copies vendor bytes. See [REPRODUCE.md](REPRODUCE.md) for the exact commands. Th
   (373 checks + clean module build).
 * Target/bench image: `wifi-upstream-target/BUILD-VERIFICATION.md` has the exact build commands and
   artifact hashes; the flash steps are in `CFG80211-BENCH-IMAGE.md` sec 3 (bench-only, attended).
+* Sibling GPL and public research: the raw paths/line citations are in `wifi-sibling-gpl/REPORT.md`
+  + `wifi-sibling-gpl/TABLES.md`; `tools/verify_quotes.py` re-fetches every quoted line (network;
+  the lane's committed `wifi-sibling-gpl/evidence/verify-quotes.txt` is the record), and
+  `wifi-public-research-2/SOURCES.tsv` + `VERIFY-fetch.txt` pin the **51/51** fetch manifest.
+* Management carrier and RX model: `gcc -std=c99 -I src -o /tmp/mgmt_ctrl_selftest
+  wifi-sibling-gpl/tools/mgmt_ctrl_selftest.c wifi-sibling-gpl/src/hi5622_mgmt_logic.c` (41/41),
+  `wifi-sibling-gpl/tools/rx_model_selftest.c` (94/94), and `patch -p1 --dry-run` of
+  `wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch` against the final association
+  tree (5 files, applies cleanly).
+* Association module: `wifi-stability/tools/build-association-module.sh` re-stages the all-patch
+  chain, applies wpa3-sae/ap-mgmt/sta-ops/data-tx, resolves the two documented conflicts, builds
+  and identity-checks the module (needs the 6.18.60 KDIR + toolchain; host-only; the resulting
+  `.ko` is local evidence only).
+
 
 ### 9.3 Reproducing the bench result
 
@@ -2674,6 +3301,15 @@ re-ran the AP flow on the booted image, closing the kmod-ABI mismatch (section 6
 C44). The one-command phase matrix (section 6.8) puts boot/C2/D1/D2/E1 behind one fail-closed
 command with bounded reboots. The generic ladder with pass gates is [TABLES.md](TABLES.md) T19; the v3/v4
 ladder/automation tables are T26-T31.
+**v6 association/management ladder (bench, attended).** After the module load and the proven AP 5-message
+order, the association fire is: `cat dp_probe` -> `echo 1 > dp_setup` -> `echo 1 > h2d_txq_addr_sync`
+-> `echo 1 > dp_rx_arm` (**AP first**, F25) -> hostapd WPA2 AP -> external client auth/assoc
+(`g1 id13` expected on the mgmt-RX path; `.mgmt_tx` now answers on the corrected `g0 id6` carrier)
+-> hostapd `STA added` (`g0 id7` + `0x07d2`) -> EAPOL msg1/msg3 through `ndo_start_xmit` and
+`dp_rx_drain` for msg2/4 -> PTK install. Stop rules unchanged (one load per boot, page/mask/staging
+receipt every rung, no retry on an exception). The L5 result was not captured: the client path is
+RF-gated until the antennas are attached (F27/6.25).
+
 
 **This report does not authorise a fire.** Benches are attended, recovery-gated operations; the
 router's UART is read-only and host->router TX is physically dead. See the project's
@@ -2719,7 +3355,17 @@ router's UART is read-only and host->router TX is physically dead. See the proje
    TX-COMPLETED/E2/soak facts (ledger 2026-11-28 01:00/13:30); and the final all-patch module
    `5b587949`/308,080 B/47 params (wifi-stability/FINAL-INTEGRATION.md + ledger 2026-11-29 01:00);
 9. no forbidden content classes (private keys, secrets paths, oversized hex/base64 blobs that
-   would smell of vendor binaries, per-unit MAC addresses) are present.
+   would smell of vendor binaries, per-unit MAC addresses) are present;
+10. the v6 association/management vocabulary and constants are cross-checked against the owning
+   lanes and the ledger: the final association module `251d08f0`/344,472 B/56 params and the
+   corrected-carrier rebuild `ab9e18a4`/344,372 B (wifi-stability ASSOCIATION-INTEGRATION +
+   wifi-sibling-gpl MGMT-CARRIER-CORRECTION); the corrected carrier's g0 id6 shape, completion
+   `0x01F3` and 48-byte TX-control block (wifi-sibling-gpl); the mgmt RX `g1 id13` decode and the
+   dispatch pairing `0x0d` (wifi-sibling-gpl + wifi-ap-mgmt); the two hard negatives (no luofu
+   SET_RX_FILTER, scan cap DMAC-side) and the 51/51 public-source manifest
+   (wifi-sibling-gpl/wifi-public-research-2); the RX-first ordering `0x182`/`0x02` (wifi-sibling-gpl
+   H7 + ledger); the R11 sweep values (wifi-scan-tuning FINDINGS-R10C + wifi-scan-full R11); and
+   the RF measurement (~44 dB / -64 dBm at 30 cm) from the bench record.
 
 Run it with the project venv python. It prints one PASS/FAIL line per check group and exits
 non-zero on failure.
@@ -2831,7 +3477,43 @@ non-zero on failure.
     the external-observer on-air proof (beacon/association/4-way PTK), an RX capture with traffic,
     a fired STA join, the 5 GHz band config, and baking the final module into the self-contained image.
 
+18. **The association-chain software is complete but unexercised.** The final association module
+    (56 params, `ab9e18a4`) carries WPA3 advertisement, management TX/RX, station ops/EAPOL RX and
+    host->AP data TX in one artifact, and one boot validated AP-ENABLED + TX COMPLETED + RX arm
+    (0x182) + one accepted `g0 id6` management frame. The rungs that need a client -
+    `.add_station`/`0x07d2` with a real station, EAPOL msg1/msg2 flow, the 4-way PTK and
+    `CHANGE_STATION authorized` - remain unproven.
+19. **The management carriers are correct but the client-facing result is unproven.** Management TX
+    is a hardware-accepted HCC g0 id6 message; management RX is the D2H CRX `g1 id13` event. The
+    0x01F3 completion envelope is not decoded in the driver (status comes from the post), no live
+    `g1 id13` frame has been decoded yet, and whether the firmware puts a host-built auth/assoc
+    response on the air is [U].
+20. **RF is a physical gate, not a software task.** The bench has no antennas (~44 dB path loss, AP
+    TX ~-64 dBm at 30 cm, marginal client RX + flaky host MT7922). The association/4-way ladders
+    cannot close until the antennas are attached, whatever the software state; the corrected
+    module boot deliberately stops before the client rungs.
+21. **The sibling/public work is architecture evidence only.** Hi3881V100 is GPLv2 (study-only), the
+    Hi1105 tree has no open licence, and no public source documents the exact chip; the derived
+    facts and negative results (no luofu SET_RX_FILTER, scan cap DMAC-side, no exact-chip GPL)
+    change neither the clean-room boundary nor the upstream blocker.
+
 ### 10.2 Ranked open questions
+
+**v6 re-ranking (2026-11-25).** The v6 wave moved two former top questions to "software
+complete": management TX now has the correct hardware-accepted carrier and management RX is the
+CRX event, and the association-chain software exists in one module. The ranking is therefore:
+(1) **client association with the antennas attached** - the corrected module + hostapd WPA2 AP +
+   the on-air observer; capture auth/assoc via `g1 id13`, `STA added`, EAPOL 4-way, PTK;
+(2) **on-air beacon/association proof with a reliable client** and the RX data capture that comes
+   with it (the RF fix also unblocks the 4-way PTK);
+(3) **the image bake of the corrected association module** (image-2: SAE hostapd + WPA2/WPA3
+   configs + the `ab9e18a4` module; kernel slice unchanged) and the post-boot receipt;
+(4) **5 GHz / STA-join rungs** once association works (band5g endpoint-0001 ready handshake, the
+   `sta_join=2` risk, WAL join fields);
+(5) **RX hardening proposals** (completion validity wait/clear-after-read, refill watermark) before
+   sustained EAPOL;
+(6) the firmware/IRQ-layer, vendor-clean-mailbox and GPL-source questions (unchanged).
+Items 1-12 below are the v5 ranking, retained as history; where they differ, this note wins.
 
 1. **Can the live AP be observed beaconing, and can a client associate?** This is the v5 wall: the
    AP control plane is up (`AP-ENABLED`, SSID `cudy-ap-test`, firmware VAP object present, AP
@@ -2926,6 +3608,17 @@ host-only: only derived addresses/offsets/ids, original C and synthetic test vec
 committed; the patched/fired `.ko` artifacts stay local (gitignored) and no vendor code byte,
 firmware byte or calibration value is reproduced. The bench fires quoted in section 7 are the
 Lead's attended sessions, and the static lanes' modules are identified by size+sha256 only.
+
+**v6 association/management artifacts.** The v6 wave commits text + derived facts only: the
+association-module identity (size, sha256, 56 params, build recipe) and the corrected-carrier
+identity are recorded by size+sha256; the `.ko` artifacts stay in `/tmp` (local evidence, rebuildable
+from the committed scripts and patches). The sibling sources are public (Hi3881V100 GPLv2,
+OpenHarmony pinned commit; Hi1105 public kernel tree) and the committed notes carry raw paths/line
+numbers and a 51/51 fetch manifest - **no sibling source text is copied**, and the Hi1105 tree is
+explicitly not licence-compatible. The management-TX/RX wire layouts are protocol facts decoded from
+our own vendor modules (no bytes reproduced). No per-unit RF calibration value or identity is
+committed: the RF statement is a bench observation (~44 dB path loss, -64 dBm at 30 cm), not a
+calibration dump.
 
 **Why it is publishable.** The repository is an intentionally public research notebook: negative
 results, dead ends and the ledger are part of the record. This report is written to that standard:
@@ -3032,8 +3725,14 @@ table and reproduction commands; where this report compresses, the lane expands.
 | `wifi-scan-full` | section 6.16 / F18 / T35: the g0 id10 per-slot decode (BA relay, slot-0-only scan engine, 44 B shape) and the closed 13-channel ceiling (task-138) |
 | `wifi-sta-static` | section 6.17 / F19 / T36: STA connect/disconnect WAL opcodes, the per-band 5 GHz model and the HT/VHT words (task-141) |
 | `wifi-beacon-static` | section 6.15 / F17 / T34: the five-message vendor AP-start order, the firmware-owned beacon model and the guard-fix fire (task-140) |
-| `wifi-scan-tuning` | sections 6.16/10.2: scan timing/auto-window retuning, H1 pacing sweep, the measured 6/7-8-channel ceiling and the batching design (task-133) |
-| `wifi-stability` | sections 6.11/6.18/10.1 / F20 / T38: the A-D state-machine matrix (stale VAP-base latch, missing stop_ap), the E2 restart hardening, the final R4 combined module and the **final all-patch integration module** (308,080 B `5b587949...`, one-boot validation) |
+| `wifi-ap-mgmt` | section 6.20/6.21 / F22/F23 / T40/T41: the WAL mgmt-tx family decode (carrier superseded by C57), the D2H management-RX `g1 id13` decode and the M2 ladder (withdrawn) |
+| `wifi-sta-ops` | sections 6.19/6.21: the station lifecycle (`.add/change/del/get/dump_station`), the per-STA firmware context (`g0 id7` + `g0 id1` cmd 0x07d2) and the EAPOL/data RX delivery path used by the association module |
+| `wifi-data-tx` | section 6.19: `ndo_start_xmit` -> the proven dp TX ring (EAPOL msg1/msg3), peer-aware fail-closed data path, the TX-completion PTK heuristic deliberately not used to authorize |
+| `wifi-sibling-gpl` | sections 6.20/6.21/6.22/6.23 / F22-F25 / T40-T43: the corrected device mgmt-TX carrier (HCC g0 id6 + 0x01F3 completion), the luofu SET_RX_FILTER negative, the g1 id13 mgmt-RX confirmation, the RX-ordering discrepancy (H7) and the sibling-derived RX hardening proposals |
+| `wifi-public-research-2` | section 6.22 / F24 / T42: the exact-chip source hunt, the Hi3881/Hi1105 comparisons, the Linux RX-ring cross-check and the 51/51 fetch manifest |
+
+| `wifi-scan-tuning` | sections 6.16/6.24/10.2 / F26 / T44: scan timing/auto-window retuning, H1 pacing sweep, the measured 6/7-8-channel ceiling, the final R11 `field10` sweep values (8 max at 25) and the batching design (task-133) |
+| `wifi-stability` | sections 6.11/6.18/6.19/10.1 / F20/F21 / T38/T39: the A-D state-machine matrix (stale VAP-base latch, missing stop_ap), the E2 restart hardening, the final R4 combined module, the **final all-patch integration module** (308,080 B `5b587949...`, one-boot validation) and the **final association module** (56 params, 344,472 B `251d08f0...`; corrected-carrier rebuild 344,372 B `ab9e18a4...`) |
 | `wifi-dp-tuning` | sections 6.12/10.1: the TXQ-table queue-state publish that closed POST-ONLY (COMPLETED (MAC)) and the dp_tx_complete_poll (task-136) |
 | `wifi-image-polish` | section 11: the deployable rootfs payload (loader, init, uci/modprobe.d, hostapd fixtures, PD4 policy) and the mgmt_diag/hcc_trace gating |
 | `wifi-perf-baseline` | section 6.16/10: the 105-metric baseline harness and the measured bring-up/D2H/heartbeat/timing numbers |
@@ -3108,6 +3807,15 @@ history beyond the package, and the phase-numbered docs under `opensource/docs/`
 | **E2 restart / soak** | an AP stop+restart in one boot after the stability hardening (a real stop_ap clears ap.beacon_interval); the 40-minute AP soak = 242 samples all golden |
 | **static-RE wave** | the five host-only 2026-11-28 lanes (rx, wpa, scan-full, sta, beacon) whose derived-only docs + patches + ladders are integrated in sections 6.13-6.17 |
 | **all-patch module** | the final integration build: one clean-room module carrying the polish, dp-tuning, scan R4, stability, rx, beacon-order, wpa and sta features (stripped 308,080 B sha256 `5b587949...`, 47 params); validated in one boot (AP five-message order + WPA2 GTK + TX COMPLETED + RX arm) |
+
+| **g0 id6 mgmt-TX carrier** | the device-facing management-TX message: a raw HCC group-0 id-6 control message (12-B header + 48-B device TX-control block + inline 802.11 frame at wire offset 60); the WAL `0x01F2` TLV is the host-internal WAL->HMAC request, not a device message |
+| **0x01F3 completion / g2 id13 relay** | the DMAC->HMAC config-syn event (id 499) whose vendor handler `hmac_mgmt_tx_event_status` re-posts the host-internal HCC g2 id13 message with `{frame_id +12, status +16}`; the driver reports cfg80211 status from the post consumption, not from 0x01F3 yet |
+| **CRX event g1 id13** | the D2H management-RX event: 60-byte prefix (12-B HCC + 48-B RX info), frame at +48, channel +7, u16 frame_len +17, s8 RSSI +39; delivery via `cfg80211_rx_mgmt_ext`; the dispatch pairing is cfg-event id 0x0d -> `hmac_rx_process_mgmt_event` |
+| **SET_RX_FILTER (luofu negative)** | the Hi3881 per-VAP RX-filter event (AP-UP 0xF7B9FAEA, AP+STA 0x73B9FACA, BIT4 broadcast mgmt); **no sender exists in either luofu vendor module**, so it must not be ported |
+| **RX arm ordering** | the bench contract AP-start first -> `dp_setup` -> `rx_arm`: an AP start after `dp_setup` clears the live status to 0x02; the AP-first order reads the vendor-mirror 0x182; re-arm after any AP start |
+| **R11 / field10** | the final scan sweep: refined 44-byte g0 id10 band-config with `field10` as the pacing/counter lever; max **8** channels (field10=25), 29/33/41/64 -> 7/6/6/6; 13 structurally unreachable |
+| **RF gate / path loss** | the remaining association blocker: no antennas on the bench means ~44 dB path loss, AP TX ~-64 dBm at 30 cm, marginal client RX + flaky host MT7922; a physical gate, not a software one |
+| **association module** | the final association artifact: all-patch chain + wpa3-sae + ap-mgmt + sta-ops + data-tx, **56 parameters**, stripped 344,472 B sha256 `251d08f0...`, rebuilt with the corrected mgmt-TX carrier as **344,372 B sha256 `ab9e18a4...`** |
 
 Conventions used in the tables: `??` = header byte not initialised by the firmware builder;
 "BAR0 = CPU + 0x6B8000" is the CPU->BAR0 rule; "BAR0 = 0x3B8000 + (CA - 0x40000000)" is the IO-CA

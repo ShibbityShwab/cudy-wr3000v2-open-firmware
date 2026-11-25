@@ -36,11 +36,15 @@ $PY tools/verify_report.py
 ```
 
 Expected: a list of PASS lines (file presence, lane-path resolution, marker set, section coverage,
-claim-ID sequence, table/finding completeness, **v4** milestone vocabulary, key-constant cross-checks
-against the owning lanes' committed sources and the superproject ledger, forbidden-content scan) and
-a final PASS with the check count (v5 adds the static-RE-wave checks: sections 6.1-6.17, findings
-F1-F19, tables T1-T37, claims EV-001..EV-305, including the RX live-bank, WPA2 key, five-message
-AP-order, scan-ceiling and STA/5GHz/HT constants). Exit code 0 on success.
+claim-ID sequence, table/finding completeness, the v2-v5 milestone vocabulary, key-constant
+cross-checks against the owning lanes' committed sources and the superproject ledger,
+forbidden-content scan) and a final PASS with the check count. v5 added the static-RE-wave checks
+(sections 6.1-6.17, findings F1-F19, tables T1-T37, claims EV-001..EV-305); **v6 extends the same
+checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-340** - the
+association module identities and 56 params, the corrected g0 id6 mgmt-TX carrier, the g1 id13
+management-RX event, the SET_RX_FILTER negative, the RX arm ordering (0x182 vs 0x02), the R11
+`field10` values, the RF path-loss observation and the 51/51 public-source manifest. At the v6
+cut-off the verifier reports **RESULT: PASS (290/290 checks)**. Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -120,6 +124,33 @@ $PY wifi-driver-re/...                                 # see wifi-driver-re/REPO
 $PY wifi-host-replica/tools/...                        # relocation-aware disassembly/call census
 $PY wifi-vendor-userspace/tools/regen-evidence.sh /path/to/extracted/rootfs
 ```
+
+## 4.1 Reproduce the v6 association / management wave (host-only)
+
+```sh
+cd $REPO/opensource/docs/incoming
+# corrected device management-TX carrier + sibling-derived RX model (sibling-GPL lane)
+gcc -std=c99 -Wall -Wextra -O2 -I wifi-sibling-gpl/src -o /tmp/mgmt_ctrl_selftest \
+    wifi-sibling-gpl/tools/mgmt_ctrl_selftest.c wifi-sibling-gpl/src/hi5622_mgmt_logic.c
+/tmp/mgmt_ctrl_selftest                             # 41/41
+gcc -std=c99 -Wall -Wextra -O2 -I wifi-sibling-gpl/src -o /tmp/rx_model_selftest \
+    wifi-sibling-gpl/tools/rx_model_selftest.c
+/tmp/rx_model_selftest                              # 94/94
+# the carrier patch applies to the final association tree (dry-run; tree = build-script output)
+cd /tmp/wifi-assoc-build/integ 2>/dev/null && patch -p1 --dry-run \
+    < "$REPO/opensource/docs/incoming/wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch"
+# the final association module (host build; needs the 6.18.60 KDIR + OpenWrt toolchain; .ko local)
+cd $REPO/opensource/docs/incoming/wifi-stability && ./tools/build-association-module.sh
+```
+
+Identity checks: the stability lane records the final association module as **56 params, stripped
+344,472 B sha256 `251d08f0...`**, and the corrected-carrier rebuild as **344,372 B sha256
+`ab9e18a4...`** (`wifi-sibling-gpl/evidence/mgmt-carrier-artifact.txt`); the wire/layout facts are
+in [TABLES.md](TABLES.md) T39-T44. The public-source manifest is in
+`wifi-public-research-2/SOURCES.tsv` + `VERIFY-fetch.txt` (51/51 byte+sha matches at the pinned
+commits; re-fetching is a network action). The R11 scan ladder is `wifi-scan-full/TEST-LADDER-R11.md`
+(attended; the final sweep values are in T44), and the RF statement (~44 dB path loss) is a bench
+observation, not a reproducible host test.
 
 ## 5. Reproduce the firmware patch recipes (host-only)
 
@@ -212,6 +243,16 @@ The v4 ladders extend that flow, all attended and fail-closed:
   proof), `wpa_keys=1` + WPA2 hostapd (GTK install), `beacon_static=1 beacon_vap_start=1` (five-message
   vendor order), and the dp-tuning `tx_complete_ms` ladder (TX COMPLETED). All are attended-only and
   must run on a fresh PD4 golden boot; never re-send a refused frame in the same boot.
+* **v6 association/management ladders (REPORT 6.19-6.25, TABLES T39-T45)** - load the corrected
+  association module (`ab9e18a4...`; rebuild via the stability build script + the sibling carrier
+  patch) with `mgmt_tx=1 mgmt_rx=1 sta_ops=1 eapol_rx=1 data_tx=1 rx_enable=1 beacon_static=1
+  beacon_vap_start=1 wpa_keys=1`; fire the five-message AP order, then (**AP first**) `cat dp_probe`
+  -> `echo 1 > dp_setup` -> `echo 1 > h2d_txq_addr_sync` -> `echo 1 > dp_rx_arm` -> hostapd WPA2
+  AP -> client L5 (auth/assoc via `g1 id13` + the corrected `g0 id6` carrier, then EAPOL through
+  `ndo_start_xmit`/`dp_rx_drain`). Expect one `g0 id6` management frame posted/consumed (86 B),
+  `g1 id13` management RX on the CRX path and the live-bank 0x182 readback. **RF precondition:**
+  antennas attached - with none the AP TX is ~-64 dBm at 30 cm and the client cannot associate
+  (6.25). One load per boot; no retry.
 * **image (REPORT 6.11/C44)** - the ABI-correct image and the flash runbook are in
   `wifi-abi-image/`; the flash was executed on 2026-11-27 06:30 and the post-boot ABI receipt is the
   acceptance check (`apk query --fields version kernel` = the kmod pin).

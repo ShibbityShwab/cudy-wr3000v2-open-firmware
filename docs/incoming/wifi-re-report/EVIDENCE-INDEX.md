@@ -55,6 +55,11 @@ section of [REPORT.md](REPORT.md).
 | EV-280 | 1.3 | the six v5 breakthrough-ladder rungs (27-32): TX COMPLETED, final R4+soak, scan ceiling, RX arm, five-message order, WPA2 GTK | [V*]/[V] | REPORT sec 1.3; lanes named per row | ledger 2026-11-28 | - |
 | EV-281 | 1.4 | v5 key numbers: RX live bank/header, WPA2 commands/workers/GTK frames, five-message AP order, scan ceiling, STA/5GHz/HT words, TX-completion/E2/soak, static-wave artifacts | [V]/[V*] | REPORT sec 1.4; TABLES T32-T37 | lanes named per row | constants cross-checked in v5 verifier |
 
+
+| EV-309 | 1.1 | the v6 chain extends to the final association module, the corrected device management-TX carrier (g0 id6), the management-RX CRX event (g1 id13), the sibling/public negatives, the AP-first RX ordering, the R11 scan ceiling and the RF gate | [V*]/[V] | REPORT sec 1.1; TABLES T39-T45 | ledger 2026-11-25 11:30-13:00 | - |
+| EV-310 | 1.2 | v6 proven/not-proven: the association-chain software fires in one module (AP-ENABLED + TX COMPLETED + RX armed 0x182 + one g0 id6 mgmt frame); a real client association/4-way PTK is RF-gated | [V*]/[U] | REPORT sec 1.2, TABLES T39/T45 | ledger 2026-11-25 13:00 | - |
+| EV-311 | 1.3 | the six v6 breakthrough-ladder rungs (34-39): association module, corrected carrier fire, mgmt RX + sibling negatives, RX ordering, R11 sweep, RF measurement | [V*]/[V] | REPORT sec 1.3; lanes named per row | ledger 2026-11-25 | - |
+| EV-312 | 1.4 | v6 key numbers: association module 344,472 B 251d08f0.../56 params and corrected rebuild 344,372 B ab9e18a4...; g0 id6 carrier + 0x01F3/g2 id13; g1 id13 mgmt RX; RX arm 0x182 vs 0x02; R11 8-ch max; RF ~44 dB | [V]/[V*] | REPORT sec 1.4; TABLES T39-T45 | lanes named per row | constants cross-checked in v6 verifier |
 ## Section 2 - system map
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -72,6 +77,8 @@ section of [REPORT.md](REPORT.md).
 | EV-132 | 2.2 | the MAC host-interface block CA 0x40040000/0x40060000 lies inside region 3 (BAR0 0x418000/0x438000); a MAC-window read once bus-errored, so ladder B2 reads before writing | [V]/[V*] | `wifi-datapath/REPORT.md` sec 2.1/9.4 | - | - |
 | EV-133 | 2.5 | device map rows for the MAC slot-5 ring block and the firmware key tables A/B | [V] | `wifi-datapath/REPORT.md` sec 2/4 | - | - |
 
+
+| EV-313 | 2.3 | v6 layer map: management TX/RX is a host<->DMAC event family separate from the MAC data rings - device mgmt-TX completion DMAC 0x01F3 -> host-internal g2 id13; device mgmt RX D2H CRX g1 id13; the data ring carries data/EAPOL after association | [V]/[V*] | REPORT sec 6.20/6.21/6.22; `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T1/T3 | ledger 2026-11-25 13:00 | - |
 ## Section 3 - boot chain
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -145,6 +152,14 @@ section of [REPORT.md](REPORT.md).
 | EV-286 | 4 F19 | STA is a WAL connect-SME (0x0123/108 B, 0x00d0/16 B), 5 GHz is one wiphy per band (14/29-channel tables) and HT/VHT words are 0x0062 / 0x00400000 / 0x00400064; capability only, patch not fired as a connect rung | [V]/[U] | `wifi-sta-static/REPORT.md`, TABLES T36 | - | - |
 | EV-306 | 4 F20 | the final all-patch module: one clean-room module (stripped 308,080 B sha256 `5b587949...`, 47 params, 0 warnings) validated in one boot - vendor five-message AP order + WPA2-AP GTK + TX COMPLETED + RX arm all PASS; remaining gaps are on-air/RX-traffic/STA-join/5GHz/image-bake | [V]/[V*] | `wifi-stability/FINAL-INTEGRATION.md`, ledger 2026-11-29 01:00, TABLES T38 | ledger 2026-11-29 01:00 | - |
 
+
+| EV-314 | 4 F21 | the final association module exists: all-patch + wpa3-sae + ap-mgmt + sta-ops + data-tx, two additive conflict resolutions, 56 params, 0 warnings, stripped 344,472 B `251d08f0...`, rebuilt with the corrected carrier as 344,372 B `ab9e18a4...` | [V] | `wifi-stability/ASSOCIATION-INTEGRATION.md`, `wifi-stability/evidence/assoc-identity.txt`, REPORT F21/T39 | - | - |
+| EV-315 | 4 F22 | the device mgmt-TX carrier is a raw HCC g0 id6 control message (12 B header + 48 B device TX control + inline frame; completion DMAC 0x01F3 -> host-internal g2 id13), not the WAL 0x01F2 host-internal TLV; corrected patch 5 files/366 lines, host test 41/41, module 344,372 B `ab9e18a4...` | [V]/[V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T1, REPORT F22/T40 | ledger 2026-11-25 13:00 | host test record |
+| EV-316 | 4 F23 | management RX is the D2H CRX event g1 id13 (60 B prefix = 12 B HCC + 48 B RX info, frame at +48, channel +7, len +17, RSSI +39); dispatch pairing cfg-event 0x0d -> `hmac_rx_process_mgmt_event`; a scan leaves the data ring empty by design | [V]/[V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T3, `wifi-ap-mgmt/REPORT.md`, REPORT F23/T41 | - | - |
+| EV-317 | 4 F24 | sibling GPL/public research: CRX/DRX split + producer-as-RX-enable + refill watermark confirmed; two hard negatives (no luofu SET_RX_FILTER sender; no public exact-chip source, Cudy 2.0 GPL section empty) and the scan cap is DMAC-side | [V]/[V*] | `wifi-sibling-gpl/REPORT.md`, `wifi-public-research-2/REPORT.md` + `SOURCES.tsv`/`VERIFY-fetch.txt`, REPORT F24/T42 | - | lane host tests + 51/51 fetch manifest |
+| EV-318 | 4 F25 | RX arm ordering: AP-start first -> `dp_setup` -> `rx_arm` gives status 0x182 (vendor mirror) while an AP start after `dp_setup` leaves 0x02; the vendor initialises RX once at device init | [V*] | `wifi-sibling-gpl/REPORT.md` H7, v6 bench record, REPORT F25/T43 | ledger 2026-11-25 | - |
+| EV-319 | 4 F26 | final R11 scan sweep: 8 channels max at `field10=25`, 29/33/41/64 -> 7/6/6/6; 13 structurally unreachable; H1 is pacing, the ceiling is DMAC/firmware-side | [V*] | `wifi-scan-tuning/FINDINGS-R10C.md`, `wifi-scan-full/TEST-LADDER-R11.md`, REPORT F26/T44 | ledger 2026-11-25 12:00 | - |
+| EV-320 | 4 F27 | RF is the remaining association gate: no antennas, ~44 dB path loss, AP TX ~-64 dBm at 30 cm, marginal client RX + flaky MT7922; the software chain is complete in one module | [V*]/[I] | `wifi-sibling-gpl/REPORT.md` H6, v6 bench record, REPORT F27/T45 | ledger 2026-11-25 13:00 | - |
 ## Section 5 - protocol reference
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -224,6 +239,14 @@ section of [REPORT.md](REPORT.md).
 | EV-296 | 6.11 | E2 AP restart in one boot + 40-min AP soak: final R4 combined module (stripped 269,688 B sha256 `b5dfb883...`) restarted the AP and gave 242/242 golden samples | [V*] | ledger 2026-11-28 13:30/21:00, TABLES T37 | ledger 2026-11-28 13:30 | - |
 | EV-307 | 6.18 | the one-boot final all-patch validation: AP five-message order -> hostapd AP-ENABLED with WPA2 config; GTK key_add 96 B + set_default 68 B consumed; TX COMPLETED (TXQ table wptr=rptr=1); RX arm status 0x182/mask 0xfffffcc1/rptr 0x20; page golden/mask 0 | [V*] | ledger 2026-11-29 01:00, TABLES T38 | ledger 2026-11-29 01:00 | - |
 
+
+| EV-321 | 6.19 | the final association module: chain/conflicts/identity (56 params, 344,472 B `251d08f0...`; corrected rebuild 344,372 B `ab9e18a4...`), the build script, the fire recipe and the one-boot validation rows (AP order + TX COMPLETED + RX 0x182 + g0 id6 86 B) | [V]/[V*] | `wifi-stability/ASSOCIATION-INTEGRATION.md`, `wifi-stability/tools/build-association-module.sh`, REPORT 6.19/T39 | ledger 2026-11-25 11:30-13:00 | build script lane record |
+| EV-322 | 6.20 | the corrected carrier operational record: vendor call chain, 12-B header + 48-B control frame layout, 0x01F3 completion -> g2 id13 relay, the 86 B fired frame, the withdrawn M2 rung | [V]/[V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md`, REPORT 6.20/T40 | ledger 2026-11-25 13:00 | host test 41/41 |
+| EV-323 | 6.21 | the mgmt-RX operational record: g1 id13 layout/delivery, the expected-empty ring during scans, and the three-object naming separation (0x01F3 / g1 id13 / g2 id13) | [V]/[V*] | `wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md` T3, `wifi-ap-mgmt/REPORT.md`, REPORT 6.21/T41 | - | - |
+| EV-324 | 6.22 | sibling/public comparison record: sources/pins/licences, what transfers vs what does not, the two negatives, the scan-cap finding and the public source hunt | [V] | `wifi-sibling-gpl/REPORT.md` + `TABLES.md`, `wifi-public-research-2/REPORT.md`, REPORT 6.22/T42 | - | 51/51 fetch manifest |
+| EV-325 | 6.23 | RX ordering record: the two sequence/status rows (0x02 vs 0x182), the vendor init-once evidence, the bench rule and the open bisect | [V*]/[U] | `wifi-sibling-gpl/REPORT.md` H7, REPORT 6.23/T43 | bench record | - |
+| EV-326 | 6.24 | R11 sweep record: the field10 -> channels rows (25->8, 29->7, 33/41/64->6), the H1 pacing interpretation, the batched-13 fallback and the shipped default | [V*] | `wifi-scan-tuning/FINDINGS-R10C.md`, `wifi-scan-full/TEST-LADDER-R11.md`, REPORT 6.24/T44 | ledger 2026-11-25 12:00 | - |
+| EV-327 | 6.25 | RF record: the no-antennas measurement (~44 dB path loss, AP TX ~-64 dBm at 30 cm), the cross-check that the software paths are healthy, and the antenna/L5 plan | [V*]/[I] | REPORT 6.25/T45, `wifi-sibling-gpl/REPORT.md` H6 | ledger 2026-11-25 13:00 | - |
 ## Section 7 - bench evidence chain
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -276,6 +299,9 @@ section of [REPORT.md](REPORT.md).
 | EV-275 | 7 | 2026-11-27 09:00 - the AP on the flashed image stayed live for minutes (hostapd processes alive, same SSID/type, no exceptions) and the D2H catalogue gained a boot-absent family: g1 id0x23 (35) count=6, 24 B + g1 id3 count=20 (466 B); likely AP/beacon-period activity [I], not an on-air proof | [V*]/[I]/[U] | ledger 2026-11-27 09:00; REPORT 6.11/F14 | ledger 2026-11-27 09:00 | - |
 | EV-297 | 7 | the v5 session chain (2026-11-27 20:30 - 2026-11-29 00:00): tuning baseline, stability A-D boots, TX COMPLETED, scan-tuning/H1 re-arm, final R4 + soak, the 5-lane static wave, RX arm PASS, five-message AP order fire, WPA2 GTK fire, integration tasked | [V*]/[V] | REPORT sec 7, ledger entry per row | ledger 2026-11-27 20:30 - 2026-11-29 00:00 | - |
 
+
+| EV-328 | 7 | v6 evidence-chain rows: the association module build (11:30), the public/sibling research (12:00) and the corrected-carrier acceptance + association-module boot + R11 + RF measurement (13:00) | [V]/[V*] | REPORT sec 7, TABLES T39-T45 | ledger 2026-11-25 11:30/12:00/13:00 | - |
+| EV-329 | 7 | the v6 end state: corrected association module (`ab9e18a4`) with AP-ENABLED + TX COMPLETED + RX armed 0x182 (AP-first) + one g0 id6 frame accepted; the three management carriers separated; RF is the remaining gate | [V*] | REPORT sec 7 end-state paragraph, TABLES T45 | ledger tail 2026-11-25 13:00 | - |
 ## Section 8 - corrections register
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -318,6 +344,8 @@ section of [REPORT.md](REPORT.md).
 | EV-298 | 8 | v5 corrections C46-C56: RX wrong-block/live-bank, no extra RX enable, five-message AP order, scan ceiling/dispatch/shape corrections, key commands not MAC registers, STA WAL/connect-SME, per-band wiphy/HT-VHT, module_ctx+0x190 async, TX COMPLETED, E2 restart, final all-patch integration | [V]/[V*] | REPORT sec 8; the five static lane reports + wifi-stability FINAL-INTEGRATION.md; TABLES T32-T38 | ledger 2026-11-27/29 | - |
 | EV-308 | 8 | C56: the static features are no longer separate artifacts - the final all-patch module (opensource `008aca5`, 308,080 B `5b587949...`, 47 params, six additive conflict resolutions) was fired in one boot with AP order + WPA2 GTK + TX COMPLETED + RX arm all PASS | [V]/[V*] | `wifi-stability/FINAL-INTEGRATION.md`, ledger 2026-11-29 01:00; F20/6.18 | ledger 2026-11-29 01:00 | - |
 
+
+| EV-330 | 8 | v6 corrections C57-C64: mgmt-TX carrier g0 id6 (not WAL 0x01F2), g2 id13 vs g1 id13 vs 0x01F3, mgmt is not ring traffic, no luofu SET_RX_FILTER, AP-first RX ordering, R11 ceiling 8, RF is the remaining gate, and the final artifact is the 344,372 B `ab9e18a4...` rebuild | [V]/[V*] | REPORT sec 8; the owning lane reports named per row | ledger 2026-11-25 | - |
 ## Section 9 - verification
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -347,6 +375,12 @@ section of [REPORT.md](REPORT.md).
 | EV-299 | 9.1 | v5 re-ran the host-only static-lane checks: rx-static 51/51 + clean build, wpa-static host check PASS + chain identity CHAIN-ID-OK, scan-full 90/90 host + static-evidence PASS (lane record 65/65) + clean build, sta-static host selftests + build, beacon-static 65/65 (static probes 33/33 per vendor version, lane record) | [V] | the lanes' committed selftest entry points | - | **yes** (v5) |
 | EV-300 | 9.4 | the verifier was extended for v5: sections 6.1-6.18, findings F1-F20, tables T1-T38, the v5 claim range (278-308), the static-wave/final-module vocabulary and constants (RX live bank, key commands/workers, five-message order, scan-full corrections, STA/5GHz/HT words, all-patch module `5b587949`/308,080 B) | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
 
+
+| EV-331 | 9.1 | v6 re-ran the new host checks: sibling-GPL mgmt-carrier 41/41, RX-model 94/94, the association-module build identity (56 params / 344,472 B `251d08f0...`, corrected 344,372 B `ab9e18a4...`), and read the public-research 51/51 fetch manifest | [V] | the lanes' committed selftest entry points, REPORT sec 9.1 | - | **yes** (v6) |
+| EV-332 | 9.1 | the public-source manifest re-fetch: 51/51 remote sources byte-count + sha256 match at the pinned commits (lane record; network re-fetch) | [V] | `wifi-public-research-2/VERIFY-fetch.txt`, `SOURCES.tsv` | - | lane record |
+| EV-333 | 9.2 | the v6 reproduction commands: mgmt_ctrl_selftest (41/41), rx_model_selftest (94/94), the carrier patch dry-run, the association-module build script and the sibling quote verifier | [V] | REPORT sec 9.2; the lanes' tools | - | - |
+| EV-334 | 9.3 | the v6 association/management bench ladder: AP-first dp probe/setup/TXQ/RX-arm -> hostapd WPA2 AP -> client auth/assoc via g1 id13 + corrected g0 id6 -> STA added -> EAPOL via data_tx/dp_rx -> PTK; one load per boot, no retry | [V*] | REPORT sec 9.3, REPORT 6.19/6.25 | - | - |
+| EV-335 | 9.4 | the verifier was extended for v6: sections 6.19-6.25, findings F21-F27, tables T39-T45, the claim range 309-340, the v6 vocabulary and constants (association modules, g0 id6/0x01F3/g1 id13, RX ordering, R11 values, RF) | [V] | `wifi-re-report/tools/verify_report.py` | - | **yes** (verifier PASS) |
 ## Sections 10-13 - limits, publication, lane map, conventions
 
 | ID | section | claim | marker | artifact(s) | bench/ledger | re-verified here |
@@ -385,6 +419,12 @@ section of [REPORT.md](REPORT.md).
 | EV-305 | 13 | the glossary gained live-bank/rx_arm, completion entry/36 B header, WPA2 GTK/PTK, key cmds 0x78/79/7A, five-message AP order/ap_chan, SMAC beacons, scan ceiling/H1 pacing, STA connect-SME, per-band wiphy, TXQ publish/COMPLETED, E2 restart/soak and static-RE wave terms | [V] | REPORT sec 13 | - | - |
 
 
+| EV-336 | 10 | v6 limits added: the association-chain software is complete but unexercised (real station/EAPOL/PTK open); the mgmt carriers are correct but no live g1 id13/0x01F3 completion exists; RF is a physical gate; the sibling work is architecture evidence only | [V*]/[I]/[U] | REPORT sec 10.1 items 18-21 | - | - |
+| EV-337 | 10.2 | v6 open-question ranking: (1) client association with antennas, (2) on-air beacon + RX capture, (3) image-2 bake, (4) 5 GHz/STA-join rungs, (5) RX hardening, (6) firmware/IRQ/GPL - with the v5 ranking retained as history | [I]/[U] | REPORT sec 10.2 v6 note | - | - |
+| EV-338 | 11 | v6 publication boundary: association/carrier identities by size+sha256 only, .ko local; sibling sources study-only (GPLv2 facts, no licence on Hi1105, no text copied); management wire layouts are derived protocol facts; no calibration/RF per-unit data | [V]/[I] | REPORT sec 11 v6 paragraph; project `PUBLISH.md` | - | verifier checks |
+| EV-339 | 12 | the lane map now covers wifi-ap-mgmt, wifi-sta-ops, wifi-data-tx, wifi-sibling-gpl and wifi-public-research-2, and the wifi-stability/scan-tuning rows include the association module and R11 sweep | [V] | the directory listing under `opensource/docs/incoming/` | - | **yes** (verifier checks) |
+| EV-340 | 13 | the glossary gained g0 id6 mgmt-TX carrier, 0x01F3/g2 id13 relay, CRX g1 id13, SET_RX_FILTER negative, RX arm ordering, R11/field10, RF gate and association module | [V] | REPORT sec 13 | - | - |
+
 ---
 
 **Coverage statement.** Every numbered section of [REPORT.md](REPORT.md) has at least one claim
@@ -396,7 +436,7 @@ live-bank correction and `dp_rx_arm` proof (6.13), the WPA2 key protocol and GTK
 five-message AP order and its fire (6.15), the scan-ceiling negative (6.16), the STA/5GHz/HT-VHT
 tables (6.17), the TX-COMPLETED/E2-restart/soak facts (6.11/6.12), the v5 session chain (7),
 corrections C46-C55 (8), the v5 verification (9), limits/open questions (10), publication boundary
-and lane map (11/12) and the glossary (13). If a future
+and lane map (11/12) and the glossary (13). **v6 adds claim numbers 309-340**: the final association module (6.19), the corrected device management-TX carrier (6.20), the management-RX CRX event (6.21), the sibling/public comparison and negatives (6.22), the RX arm ordering (6.23), the R11 sweep (6.24), the RF measurement (6.25), the v6 sessions/end state (7), corrections C57-C64 (8), the v6 verification (9), limits/open questions (10), publication boundary (11), lane map (12) and glossary (13). If a future
 edit adds a claim to the report without adding it here, the lane verifier's section-coverage check
 and the project documentation audit should catch it.
 

@@ -83,11 +83,15 @@ def check_report_structure():
                  "0x0123", "0x00d0", "0x0062", "0x00400064", "five-message", "txq-table",
                  "rx_arm", "gtk", "slot 0 only", "wpa2", "5b587949", "all-patch", "308,080"]:
         check("REPORT covers the v5 static-wave vocabulary: %s" % must, must in t.lower())
+    for must in ["ab9e18a4", "251d08f0", "0x01f3", "0x01f2", "g0 id6", "g1 id13",
+                 "set_rx_filter", "field10", "44 db", "0x182", "association module",
+                 "ap-first", "60-byte prefix", "r11", "rf"]:
+        check("REPORT covers the v6 association/management vocabulary: %s" % must, must in t.lower())
     subs = re.findall(r"^### (6\.\d+) ", t, re.M)
-    check("REPORT section 6 has the v2+v3+v4+v5 subsections 6.1-6.18",
-          subs == ["6." + str(i) for i in range(1, 19)], ",".join(subs))
-    check("REPORT carries findings F1-F20", all(("### F%d." % i) in t for i in range(1, 21)))
-    check("REPORT is the v5 revision", "**v5**" in t)
+    check("REPORT section 6 has the v2-v6 subsections 6.1-6.25",
+          subs == ["6." + str(i) for i in range(1, 26)], ",".join(subs))
+    check("REPORT carries findings F1-F27", all(("### F%d." % i) in t for i in range(1, 28)))
+    check("REPORT is the v6 revision", "**v6**" in t)
 
 
 def check_markers():
@@ -145,9 +149,11 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 308 claims", len(uniq) >= 308, "%d" % len(uniq))
+    check("evidence index has at least 340 claims", len(uniq) >= 340, "%d" % len(uniq))
     check("evidence index carries the v5 range EV-278..EV-308", 278 in nums and 308 in nums,
           "278=%s 308=%s" % (278 in nums, 308 in nums))
+    check("evidence index carries the v6 range EV-309..EV-340", 309 in nums and 340 in nums,
+          "309=%s 340=%s" % (309 in nums, 340 in nums))
     check("evidence index carries the v3 range EV-196..EV-244", 196 in nums and 244 in nums,
           "196=%s 244=%s" % (196 in nums, 244 in nums))
     check("evidence index carries the v4 range EV-245..EV-277", 245 in nums and 277 in nums,
@@ -321,11 +327,55 @@ def check_constants():
          get_lane("wifi-stability/FINAL-INTEGRATION.md").lower()),
         ("final all-patch module size 308,080 B", "308,080",
          get_lane("wifi-stability/FINAL-INTEGRATION.md").lower()),
+        ("final association module hash", "251d08f0",
+         get_lane("wifi-stability/ASSOCIATION-INTEGRATION.md").lower()),
+        ("final association module size 344,472 B", "344,472",
+         get_lane("wifi-stability/ASSOCIATION-INTEGRATION.md").lower()),
+        ("final association module parameters 56", "56 params",
+         get_lane("wifi-stability/ASSOCIATION-INTEGRATION.md").lower()),
+        ("corrected-carrier module hash", "ab9e18a4",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("corrected-carrier module size 344,372 B", "344,372",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("mgmt-TX completion event", "0x01f3",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("WAL host-internal event", "0x01f2",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("mgmt-TX device carrier", "g0 id6",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("mgmt-RX CRX event", "g1 id13",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("mgmt-RX 60-byte prefix", "60-byte prefix",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("luofu SET_RX_FILTER negative", "set_rx_filter",
+         get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()),
+        ("Hi3881 RX-filter constant", "0xf7b9faea",
+         get_lane("wifi-sibling-gpl/TABLES.md").lower()),
+        ("RF path-loss observation", "44 db path loss",
+         get_lane("wifi-sibling-gpl/REPORT.md").lower()),
+        ("R11 sweep field10 lever", "field10=25",
+         get_lane("wifi-scan-tuning/FINDINGS-R10C.md").lower()),
+        ("public-research fetch manifest", "51/51",
+         get_lane("wifi-public-research-2/README.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src
         check("cross-check: " + name + " matches the owning lane source", ok,
               "report=%s lane=%s" % (needle in joined, needle in src))
+
+    mgmt_carrier = get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()
+    sibling_rep = get_lane("wifi-sibling-gpl/REPORT.md").lower()
+    check("the g0 id 6 device carrier is cross-checked against the sibling lane",
+          "g0 id6" in joined and "g0 id 6" in mgmt_carrier)
+    check("the RX-ordering 0x02-vs-0x182 observation is cross-checked against the sibling lane",
+          "0x182" in joined and "0x02 vs 0x182" in sibling_rep)
+    check("the 56-parameter association module is cross-checked against the stability lane",
+          "56 parameters" in joined and "56 params" in
+          get_lane("wifi-stability/ASSOCIATION-INTEGRATION.md").lower())
+    ledger_p2 = os.path.join(REPO, "mem-entries.md")
+    ledger_t2 = read(ledger_p2).lower() if os.path.isfile(ledger_p2) else ""
+    check("the v6 ledger tail records the association wave",
+          "final association module" in ledger_t2 and "corrected mgmt-tx" in ledger_t2)
 
     txq_wire = "000100043000010000005a5a0000000001000000d8001400"
     ctx_wire = "000100043000010000005a5a000000000100000064001400"
@@ -403,7 +453,17 @@ def check_constants():
                              ("0x0a5825", "the add_key worker"),
                              ("0x0124", "the AP channel command"),
                              ("final all-patch", "the final all-patch module"),
-                             ("5b587949", "the final module hash")]:
+                             ("5b587949", "the final module hash"),
+                             ("g0 id6", "the corrected g0 id6 carrier"),
+                             ("86 b", "the 86 B management frame"),
+                             ("field10=25", "the R11 sweep value"),
+                             ("best remains 8", "the R11 8-channel best"),
+                             ("sibling", "the sibling research lane"),
+                             ("public-research-2", "the public research lane"),
+                             ("association module", "the association module"),
+                             ("0x182", "the RX armed status"),
+                             ("set_rx_filter", "the SET_RX_FILTER negative"),
+                             ("r11", "the R11 sweep")]:
             check("ledger contains " + what, needle.lower() in ledger.lower())
     else:
         check("superproject ledger is readable (expected at ../mem-entries.md)", False, ledger_path)
@@ -467,9 +527,9 @@ def check_tables():
     check("markdown table rows are well formed", not bad, "; ".join(bad[:5]))
     tab = TEXT.get("TABLES.md", "")
     tabs = re.findall(r"^## (T\d+)\. ", tab, re.M)
-    check("TABLES.md contains at least 38 numbered tables", len(tabs) >= 38, "%d" % len(tabs))
+    check("TABLES.md contains at least 45 numbered tables", len(tabs) >= 45, "%d" % len(tabs))
     nums = [int(x[1:]) for x in tabs]
-    check("TABLES.md tables are numbered T1..T38 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
+    check("TABLES.md tables are numbered T1..T45 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
     for t_ in ["T21", "T22", "T23", "T24", "T25"]:
         check("TABLES.md carries the v2 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T26", "T27", "T28"]:
@@ -478,6 +538,8 @@ def check_tables():
         check("TABLES.md carries the v4 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T32", "T33", "T34", "T35", "T36", "T37", "T38"]:
         check("TABLES.md carries the v5 table " + t_, ("## " + t_ + ". ") in tab)
+    for t_ in ["T39", "T40", "T41", "T42", "T43", "T44", "T45"]:
+        check("TABLES.md carries the v6 table " + t_, ("## " + t_ + ". ") in tab)
 
 
 def main():
