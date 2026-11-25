@@ -1,0 +1,7 @@
+== 1. compile the real patched-tree models + the real sibling builders
+== 2. run the C selftest (KAT, plan order, fail-closed matrix, G5/G12)
+vap_start_g0_selftest: 278 checks, 0 failures
+== 3. independent Python re-derivation + source contract
+vap_start_g0_frame_test: 73 checks, 0 failures
+== TOTAL: 351 checks, 0 failures (C 278/0, Python 73/0)
+== ALL HOST TESTS PASS (no device contacted)

@@ -1,0 +1,16 @@
+# key-0x0065 VAP-start wire frame (host-built KAT, src/vap_start_g0_selftest.c)
+# carrier: g0 id1 config event | 12-B hdr + 8-B token + key u16 + len u16 + body(12) + 4 x FF
+# header: 00 01 00 <field B = the VAP/module index> 28 00 01 00 00 00 5a 5a
+# token:  00 00 00 00 01 00 00 00   (inherited; the key workers do not parse it)
+# key 0x0065 | len 0x000c | body 00 01 01 00 00 00 00 00 00 00 00 00 | ff ff ff ff
+# body map: [0]=start_vap arg 0, [1]=vap+0x0F state 1, [2]=vap+0x11 band 1,
+#           [3]=vap+0x12 field 0, [4..7]=vap+0x414 u32 word 0
+# total = 12+8+2+2+12+4 = 40 B; SR node word1 = (40 << 16) | 0x6D2B = 0x00286D2B
+
+frame fieldB=0  000100002800010000005a5a000000000100000065000c00000101000000000000000000ffffffff
+frame fieldB=4  000100042800010000005a5a000000000100000065000c00000101000000000000000000ffffffff
+
+# the same 40-B bytes are produced by the sibling lane's independent builder
+# (../wifi-vap-start/src/vapstart_frames.c vsf_build_vap_start with
+# channel=0 state=1 cfg_a=1 cfg_b=0 cfg_word=0 field_b=<index>): asserted for
+# every module index 0..0x12 by src/vap_start_g0_selftest.c.

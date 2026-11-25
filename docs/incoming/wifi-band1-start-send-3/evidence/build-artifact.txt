@@ -1,0 +1,11 @@
+artifact: /tmp/g0start-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 382072 B (stripped); unstripped 1422988 B
+sha256: bb0434c24b333f889daf6b062b6e771cb5b045e28ad2ef9c9c2c05f2a78c9711
+unstripped sha256: 05ca89cc9e348cf3f99270d4c5c94b2dc9e3a09e3ebbbf3cfa290e84b6ea0cc4
+text sha256: 3d3b45ffe483a7740c93aa6458a02461bf1226578371350d55df85ea8b972cc3
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 65 (64 send-2 + vap_start_g0)
+chain: fired 0x0242 base (e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + send-2 patch (968d70c5c4f13005e6ddee7f1bed2423888c8a58ed7582a7806b8ea031b813fb) + this lane patch (0a8a1c1bda3ebaaf05933b670d996a2962f2679ecf0075237bf6d4adef30fc4c)
+vap_start_g0: read-only uint, default 0; <= 1 with beacon_static=1 enforced before any frame; band-1 post only after G1..G13; G12 gates the 0x0242
+frame: 40 B g0 id1 key 0x0065 (field B=vap index), body {00,01,01,00,00,00,00,00,00,00,00,00}, total 0x28, node word1 0x00286d2b
+patched tree shas: scan=da488e3cd69db6c9d6c9f661806eecf21ccc6f44f4f0dd08ab5571c7d1f95370 logic.c=7e5edbc42a3c4abd2c619672226870fb13db48c3045fd49252b3a200d321326c logic.h=fc4e43d1d55a36f0d92deafd144f4488515515dc4e7e516a1f3f04c1f6c994d8 bstart.h=3fd2c6088af4381736854e5ca1e6c176e0ae659b72a1b9f051f2bd1fef972aea vsg.c=ece5c0d60701d05ce0c1ab5afbb75229cfb2a2734bf9c17fb99706e0eb2e81ff vsg.h=68c2eb79cb77cf33bae6559659b28f8ff58bf6d396e9cd4bec26b7d2e6e4eef8 kbuild=1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d
