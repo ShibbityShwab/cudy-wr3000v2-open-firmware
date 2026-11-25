@@ -1,0 +1,344 @@
+# lane wifi-fw-chan-worker (task-180) - correct the 5 GHz channel-activation gate
+# and add the read-only 5 GHz RF-programme gate pack.
+#
+# Base tree: the wifi-5ghz-beacon lane's build tree
+#   (/tmp/beacon5g-build, built by ../wifi-5ghz-beacon/tools/build-beacon5g-ready.sh;
+#    base artifact hi5622_wifi.ko 356,600 B sha256 bc1cc0ea...a1bbb, 59 params).
+# Base file pins (sha256; the build script refuses on drift):
+#   Kbuild  6659213e5621d75bd929820442bc7454eca73ad99895423ac8f3cf1a1077f5e7
+#   hi5622_scan.c  6a0695a510897a4766587ac93efcebbdb1f7a5f6cf36770196af9593a9b28af4
+#   hi5622_beacon5g.c  9ab8d1a6a73a88feccc1a7785198dd22184279a13fa9bbf57c996267cf018670
+#   hi5622_beacon5g.h  e150e0250270198e4d010fb90b8770fa6e9ba6cf280cd6e37a00f11e0d0fee47
+#
+# What changed (no wire byte, no register write):
+#   1. hi5622_chan_gate.[ch] (new source files + Kbuild object): the decoded
+#      firmware channel semantics - the per-band channel tables, the exact
+#      ctx+0x10 store word, the corrected readiness predicate and the silent
+#      5 GHz RF-programme gate.
+#   2. hi5622_beacon5g.c: hi5622_beacon5g_chan_ctx_ready() now calls the
+#      decoded predicate (was: byte+0x13 == 1, which could never pass for
+#      band 1 ch36 because +0x13 is the channel-table index).
+#   3. hi5622_scan.c: the read-only gate pack labels +0x13 as table_index and
+#      adds the module_type / module+0x440 / bandobj+0xEC8 / perlink+0x1C8
+#      reads with the 0x40684->0x101890 RAN/SKIPPED classification; the wait
+#      failure text reports the expected word.
+#
+# Apply: patch -p1 < 0001-chan-gate-fix.patch   (in the staged tree)
+# Build: ../tools/build-chan-worker.sh (host-only; .ko is local evidence only)
+
+--- a/Kbuild
++++ b/Kbuild
+@@ -34,6 +34,7 @@
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
++		 hi5622_chan_gate.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -41,6 +41,7 @@
+ #include "hi5622_band5g.h"
+ #include "hi5622_vapmsg5g.h"
+ #include "hi5622_beacon5g.h"
++#include "hi5622_chan_gate.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -1483,6 +1484,8 @@
+ 				       struct device *dev)
+ {
+ 	u32 slot0, base, mctx, chrd, vap, link, bandobj, pub0, pub1;
++	u32 mtype, m440, ec8 = 0u, pc8 = 0u;
++	bool rf_ran;
+ 
+ 	if (!ctx || !ctx->windows_programmed || !dev)
+ 		return;
+@@ -1499,10 +1502,30 @@
+ 	vap = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_VAP_OFF);
+ 	link = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_LINK_OFF);
+ 	bandobj = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_BAND_OBJ_OFF);
++	/* lane wifi-fw-chan-worker (task-180): byte +0x13 is the firmware
++	 * channel-table INDEX, not a validity flag (band 1 ch36 is index 0). */
+ 	dev_info(dev,
+-		 "cfg80211: start_ap beacon_static module ctx readback: slot0=0x%08x base=0x%08x ctx=0x%08x chan=0x%08x (channel=%u band=%u field=%u valid=%u) vap=0x%08x perlink=0x%08x bandobject=0x%08x\n",
++		 "cfg80211: start_ap beacon_static module ctx readback: slot0=0x%08x base=0x%08x ctx=0x%08x chan=0x%08x (channel=%u band=%u field=%u table_index=%u) vap=0x%08x perlink=0x%08x bandobject=0x%08x\n",
+ 		 slot0, base, mctx, chrd, chrd & 0xffu, (chrd >> 8) & 0xffu,
+ 		 (chrd >> 16) & 0xffu, (chrd >> 24) & 0xffu, vap, link, bandobj);
++	/* lane wifi-fw-chan-worker (task-180): the silent 5 GHz RF-programme
++	 * gate.  CA 0x40684 runs CA 0x101890 (the band-1 RF programme) only
++	 * when the create type is 2 and CA 0x944DE passes (module+0x440 == 1
++	 * and band_object+0xEC8 == 1); otherwise it is skipped silently and
++	 * the worker still returns 0.  Read-only, non-gating. */
++	mtype = hi5622_fw_ram_read(ctx, mctx + HI5622_CHAN_GATE_MCTX_TYPE_OFF);
++	m440 = hi5622_fw_ram_read(ctx, mctx + HI5622_CHAN_GATE_MCTX_440_OFF);
++	if (bandobj)
++		ec8 = hi5622_fw_ram_read(ctx, bandobj +
++					 HI5622_CHAN_GATE_BAND_OBJ_EC8_OFF);
++	if (link)
++		pc8 = hi5622_fw_ram_read(ctx, link +
++					 HI5622_CHAN_GATE_PERLINK_C8_OFF);
++	rf_ran = hi5622_chan_gate_rf_ran(mtype, m440, ec8);
++	dev_info(dev,
++		 "cfg80211: start_ap beacon_static 5GHz RF programme: module_type=%u module+0x440=%u bandobj+0xEC8=%u perlink+0x1C8=%u -> the 0x40684 gate %s CA 0x101890 (ran iff type==2 && module+0x440==1 && bandobj+0xEC8==1)\n",
++		 mtype, m440, ec8, pc8,
++		 rf_ran ? "RAN" : "SKIPPED - silent, no beacon possible from this branch");
+ 	pub0 = hi5622_fw_ram_read(ctx, HI5622_BEACON5G_BAND0_PUBLISH_CPU);
+ 	pub1 = hi5622_fw_ram_read(ctx, HI5622_BEACON5G_BAND1_PUBLISH_CPU);
+ 	dev_info(dev,
+@@ -1861,17 +1884,23 @@
+ 						waited += HI5622_BEACON5G_WAIT_POLL_MS;
+ 					}
+ 					if (!ready) {
++						u32 want = 0u;
++
++						(void)hi5622_chan_gate_expected_word(
++							p->band, p->channel,
++							(unsigned int)((chrd >> 16) & 0xffu),
++							&want);
+ 						dev_warn(wdev_dev,
+-							 "cfg80211: start_ap beacon_static REFUSED - the firmware module channel context did not report channel=%u band=%u valid after %u ms (ctx 0x%08x word=0x%08x); the 5GHz channel/RF was not programmed - no AP frame sent, power-cycle\n",
++							 "cfg80211: start_ap beacon_static REFUSED - the firmware module channel context is not the decoded store for channel=%u band=%u after %u ms (ctx 0x%08x word=0x%08x expected=0x%08x; the index byte is the channel-table index, not a valid flag); no AP frame sent, power-cycle\n",
+ 							 (unsigned)p->channel,
+ 							 (unsigned)p->band, waited,
+-							 b5.mctx, chrd);
++							 b5.mctx, chrd, want);
+ 						rc = -EIO;
+ 						goto out;
+ 					}
+ 					dev_info(wdev_dev,
+-						 "cfg80211: 5GHz channel activation: firmware channel context programmed after %u ms (word=0x%08x)\n",
+-						 waited, chrd);
++						 "cfg80211: 5GHz channel activation: the firmware module channel context is the decoded store after %u ms (word=0x%08x, table index=%u)\n",
++						 waited, chrd, (chrd >> 24) & 0xffu);
+ 				}
+ 			}
+ 			hi5622_scan_beacon5g_gates(c->ctx, wdev_dev);
+
+--- a/hi5622_beacon5g.c
++++ b/hi5622_beacon5g.c
+@@ -5,6 +5,7 @@
+  * for the derivation and ../REPORT.md for the vendor decode.
+  */
+ #include "hi5622_beacon5g.h"
++#include "hi5622_chan_gate.h"
+ 
+ /* Firmware RAM window bounds (region 5; project convention, hi5622_contract.h:
+  * CPU 0x00100000..0x0217ffff).  A ctx outside it is a bad read, not a
+@@ -27,12 +28,12 @@
+ bool hi5622_beacon5g_chan_ctx_ready(u32 word, unsigned int band,
+ 				    unsigned int channel)
+ {
+-	if (band > 1u || channel == 0u || channel > 0xffffu)
+-		return false;
+-	/* Worker body map [V]: +0x10 channel, +0x11 band, +0x13 valid. */
+-	return (unsigned int)(word & 0xffu) == channel &&
+-	       (unsigned int)((word >> 8) & 0xffu) == band &&
+-	       ((word >> 24) & 0xffu) == 1u;
++	/* lane wifi-fw-chan-worker (task-180): the worker's +0x13 byte is the
++	 * firmware CHANNEL-TABLE INDEX, not a validity flag (band 1 ch36 is
++	 * index 0).  The corrected readiness predicate is the decoded store:
++	 * word == channel | band<<8 | body[1]<<16 | index<<24.  See
++	 * ../REPORT.md section 4 and hi5622_chan_gate.c. */
++	return hi5622_chan_gate_word_ready(word, band, channel);
+ }
+ 
+ int hi5622_beacon5g_plan(unsigned int wait_param, unsigned int beacon_static,
+
+--- a/hi5622_beacon5g.h
++++ b/hi5622_beacon5g.h
+@@ -137,11 +137,11 @@
+  * dereference a guessed context). */
+ u32 hi5622_beacon5g_mctx_ca(u32 slot0, u32 base);
+ 
+-/* True when the module channel config worker's 4-byte body at ctx+0x10
+- * reports (channel, band, valid).  The worker stores body[2] (channel) at
+- * byte 0, body[0] (band) at byte 1, body[1] at byte 2 and 1 at byte 3 after
+- * its band/channel validation [V] - so this is the firmware's own
+- * "channel programmed" flag, not a timing guess. */
++/* True when the module channel config worker's 4-byte body at ctx+0x10 is
++ * the decoded store for (band, channel): byte 0 = channel, byte 1 = band,
++ * byte 2 = body[1], byte 3 = the firmware CHANNEL-TABLE INDEX.  Byte 3 is
++ * not a validity flag (band 1 ch36 is index 0) - the corrected predicate is
++ * hi5622_chan_gate_word_ready() (lane wifi-fw-chan-worker, task-180). */
+ bool hi5622_beacon5g_chan_ctx_ready(u32 word, unsigned int band,
+ 				    unsigned int channel);
+ 
+
+--- a/hi5622_chan_gate.c
++++ b/hi5622_chan_gate.c
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_chan_gate.c - decoded firmware channel-context semantics
++ * (lane wifi-fw-chan-worker, task-180).  Pure C99; the derivation is in
++ * ../REPORT.md, the evidence in ../TABLES.md.  No vendor byte is reproduced.
++ */
++#include "hi5622_chan_gate.h"
++
++/* The firmware's per-band channel lists, read from the pinned image by
++ * ../tools/fw_chan_worker_re.py --tables (asserted by --selftest):
++ * band 0 table CA 0x117B48 (14 entries), band 1 table CA 0x117AD4 (29). */
++static const u8 hi5622_chan_gate_band0_table[HI5622_CHAN_GATE_BAND0_COUNT] = {
++	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
++};
++
++static const u8 hi5622_chan_gate_band1_table[HI5622_CHAN_GATE_BAND1_COUNT] = {
++	36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124,
++	128, 132, 136, 140, 144, 149, 153, 157, 161, 165, 184, 188, 192, 196
++};
++
++int hi5622_chan_gate_index(unsigned int band, unsigned int channel)
++{
++	const u8 *tab;
++	unsigned int n, i;
++
++	if (band == 0u) {
++		tab = hi5622_chan_gate_band0_table;
++		n = HI5622_CHAN_GATE_BAND0_COUNT;
++	} else if (band == 1u) {
++		tab = hi5622_chan_gate_band1_table;
++		n = HI5622_CHAN_GATE_BAND1_COUNT;
++	} else {
++		return -1;
++	}
++	for (i = 0u; i < n; i++) {
++		if ((unsigned int)tab[i] == channel)
++			return (int)i;
++	}
++	return -1;
++}
++
++bool hi5622_chan_gate_expected_word(unsigned int band, unsigned int channel,
++				    unsigned int field, u32 *word)
++{
++	int idx;
++
++	if (!word || channel == 0u || channel > 0xffu || field > 0xffu)
++		return false;
++	idx = hi5622_chan_gate_index(band, channel);
++	if (idx < 0)
++		return false;
++	*word = (u32)(channel & 0xffu) | ((u32)(band & 0xffu) << 8) |
++		((u32)(field & 0xffu) << 16) | ((u32)idx << 24);
++	return true;
++}
++
++bool hi5622_chan_gate_word_ready(u32 word, unsigned int band,
++				 unsigned int channel)
++{
++	unsigned int field = (unsigned int)((word >> 16) & 0xffu);
++	u32 want;
++
++	if (!hi5622_chan_gate_expected_word(band, channel, field, &want))
++		return false;
++	return word == want;
++}
++
++bool hi5622_chan_gate_rf_ran(u32 module_type, u32 module_440,
++			     u32 band_obj_ec8)
++{
++	/* CA 0x40684: type gate; CA 0x944DE: band 1 (already stored),
++	 * module+0x440 == 1, band_object+0xEC8 == 1. */
++	return module_type == 2u && module_440 == 1u && band_obj_ec8 == 1u;
++}
+
+--- a/hi5622_chan_gate.h
++++ b/hi5622_chan_gate.h
+@@ -0,0 +1,94 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_chan_gate.h - decoded firmware channel-context semantics for the
++ * Hi5622V100 clean-room host (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-fw-chan-worker, shared task task-180,
++ * 2026-11-27).  No vendor source, object code, firmware byte, calibration
++ * value or secret is reproduced here; the derivation is in ../REPORT.md and
++ * the evidence tables are ../TABLES.md.
++ *
++ * WHY THIS FILE EXISTS
++ * --------------------
++ * The firmware group-0 id-1 channel-config worker (key 0x0124, CA 0x841B8)
++ * validates (band, channel) against the firmware's own per-band channel
++ * tables (CA 0x117B48 band 0: 14 channels 1..14; CA 0x117AD4 band 1: 29
++ * channels 36..196) and, on success, stores four bytes at module_ctx+0x10:
++ *
++ *   +0x10 = channel        +0x11 = band
++ *   +0x12 = body[1]        +0x13 = THE CHANNEL-TABLE INDEX
++ *
++ * The byte at +0x13 is NOT a validity flag.  For band 1 channel 36 it is 0
++ * by construction.  The previous lane's wait gate (task-175) required that
++ * byte to be 1, so its G6b rung could never pass for ch36 - a host-side gate
++ * bug (REPORT section 4).  This file implements the decoded semantics:
++ *
++ *  - hi5622_chan_gate_index(): the table index the firmware computes, or -1
++ *    when the worker would reject the pair with return 0x3E8;
++ *  - hi5622_chan_gate_expected_word(): the exact u32 the worker stores;
++ *  - hi5622_chan_gate_word_ready(): the fail-closed readiness predicate
++ *    (the word must equal the expected store, including the index);
++ *  - hi5622_chan_gate_rf_ran(): the post-store 5 GHz RF-programme gate.  The
++ *    worker's CA 0x40684 call runs CA 0x101890 (the band-1 RF programme) only
++ *    when module[4] (the create type) == 2, module+0x440 == 1 and
++ *    band_object+0xEC8 == 1; otherwise it is skipped silently and the worker
++ *    still returns 0.  The module gate pack logs the three read-only inputs
++ *    and this predicate classifies them.
++ *
++ * The 2.4 GHz path is unchanged by construction (the wait only applies to a
++ * band-1 AP and this file is only consulted by the band-1 wait and the
++ * read-only gate pack).
++ *
++ * Pure C99: the same code compiles in the kernel module and in the host
++ * selftest (../../src/chan_gate_selftest.c).
++ */
++#ifndef HI5622_CHAN_GATE_H
++#define HI5622_CHAN_GATE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++#endif
++
++/* Firmware per-band channel tables (validate helper CA 0x10172C). */
++#define HI5622_CHAN_GATE_BAND0_COUNT	14u
++#define HI5622_CHAN_GATE_BAND1_COUNT	29u
++
++/* Module-context / band-object / per-link field offsets used by the
++ * read-only gate pack (CPU addresses in ../TABLES.md T5/T7). */
++#define HI5622_CHAN_GATE_MCTX_TYPE_OFF		0x004u
++#define HI5622_CHAN_GATE_MCTX_440_OFF		0x440u
++#define HI5622_CHAN_GATE_BAND_OBJ_EC8_OFF	0xEC8u
++#define HI5622_CHAN_GATE_PERLINK_C8_OFF		0x1C8u
++
++/* The firmware channel-table index for (band, channel); -1 (as an int) when
++ * the worker would reject the pair (return 0x3E8, no store). */
++int hi5622_chan_gate_index(unsigned int band, unsigned int channel);
++
++/* The exact u32 the 0x0124 worker stores at module_ctx+0x10 for
++ * (band, channel, body[1]=field).  false when the pair would be rejected. */
++bool hi5622_chan_gate_expected_word(unsigned int band, unsigned int channel,
++				    unsigned int field, u32 *word);
++
++/* Decoded readiness: the stored word equals the expected store for this
++ * (band, channel) and its index byte is the firmware table index.  A stale
++ * word, the previous channel's word or the pre-store zero all fail. */
++bool hi5622_chan_gate_word_ready(u32 word, unsigned int band,
++				 unsigned int channel);
++
++/* The post-store 5 GHz RF-programme gate (CA 0x40684 -> CA 0x101890):
++ * module[4] (create type) must be 2 and both module+0x440 and the band
++ * object's +0xEC8 must be 1.  All three are read-only firmware RAM reads. */
++bool hi5622_chan_gate_rf_ran(u32 module_type, u32 module_440,
++			     u32 band_obj_ec8);
++
++#endif /* HI5622_CHAN_GATE_H */

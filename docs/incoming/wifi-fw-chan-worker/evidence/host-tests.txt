@@ -1,0 +1,11 @@
+== 1. fw_chan_worker_re.py --selftest (firmware decode, 89 checks)
+PASS  vendor channel helper sends cmd 0x0124 and then blocks in wal_check_and_release_msg_resp
+
+fw_chan_worker_re: 89/89 PASS
+
+== 2. chan_gate_selftest (portable C model of the decoded predicate)
+PASS  rf_ran false for the all-zero boot state
+
+chan_gate_selftest: 38 checks, 0 failures
+
+run-host-tests: PASS

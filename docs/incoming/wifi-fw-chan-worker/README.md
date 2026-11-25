@@ -41,6 +41,13 @@ read-only BAR0 pack in TABLES T7 decides at the next fire whether it ran.
     .provision-venv/bin/python tools/fw_chan_worker_re.py --readback
     .provision-venv/bin/python tools/fw_chan_worker_re.py --decode
 
+The corrected module (host build; the .ko is local evidence only):
+
+    ../wifi-5ghz-beacon/tools/build-beacon5g-ready.sh   # the pinned base tree (once)
+    ./tools/build-chan-worker.sh                        # stage+patch+build+contract
+    # -> /tmp/chanworker-artifact/hi5622_wifi.ko 358,256 B
+    #    sha256 9a5b048e...775fa6, 59 params (not bench-fired)
+
 The tool needs only the Python standard library plus the local optional
 artifacts: the firmware image is the pinned `FIRMWARE.bin`
 (928,920 B, sha256 `7fc87e20...311b`), the vendor module is the pinned 2.4.15

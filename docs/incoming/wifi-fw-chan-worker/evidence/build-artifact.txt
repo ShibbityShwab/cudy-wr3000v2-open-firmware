@@ -1,0 +1,21 @@
+# build + artifact evidence (lane wifi-fw-chan-worker, task-180); host-only.
+# the .ko is LOCAL evidence only and is never committed.
+== 0. pin the base tree sources
+   base pinned (scan/b5c/b5h)
+== 1. base tree staged: 89 files
+== 2. apply the channel-gate patch
+== 3. src/ matches the patched driver sources
+== 4. module build clean (0 warnings/errors)
+== 5. debug-strip keeps .text identical
+== 6. contract PASS: 59 params, ap_chan_wait_ms/vap5g present,
+      hi5622_chan_gate_word_ready linked
+
+artifact: /tmp/chanworker-artifact/hi5622_wifi.ko
+9a5b048e7e21a4212c83d75fa9542afac9c9de89e93089c25694849cf7775fa6  /tmp/chanworker-artifact/hi5622_wifi.ko
+-rw-r--r-- 1 shibbityshwab shibbityshwab 358256 พ.ย.  25 18:51 /tmp/chanworker-artifact/hi5622_wifi.ko
+NOTE: local evidence only - never committed.
+
+patch: patches/0001-chan-gate-fix.patch  7f72d0edff50f0d3f580414c4422f1195ee4387d36e50b1fe7bb1de59720dccd  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-fw-chan-worker/patches/0001-chan-gate-fix.patch
+base tree: /tmp/beacon5g-build (wifi-5ghz-beacon lane); base artifact 356,600 B sha256 bc1cc0ea...a1bbb
+artifact: /tmp/chanworker-artifact/hi5622_wifi.ko  9a5b048e7e21a4212c83d75fa9542afac9c9de89e93089c25694849cf7775fa6  /tmp/chanworker-artifact/hi5622_wifi.ko  358256
+kernel: 6.18.60 (openwrt-lab-upstream-target build_dir)

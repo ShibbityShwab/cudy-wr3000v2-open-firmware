@@ -139,3 +139,13 @@ silently and the 5 GHz failure is that gate, not the 0x0124 worker.
 | G6a | chan=0x00000124 (channel=36 band=1 field=0 valid=0) | the complete, successful 0x0124 store; bytes 36,1,0,index 0 |
 | G6b | REFUSED ... did not report channel=36 band=1 valid after 300 ms (word=0x00000124) | host gate required index==1; impossible for ch36 -> void negative |
 | G6a | page golden:1 | no exception; the worker did not fault |
+
+## T9. Host artifacts of this lane (local .ko; not bench-fired) [V]
+
+| item | identity |
+| --- | --- |
+| decode tool | `tools/fw_chan_worker_re.py` - `--selftest` 89/89 PASS (firmware + vendor-module windows, both channel tables, the G6b proof, the silent gates, PD4 non-overlap) |
+| portable C model | `src/hi5622_chan_gate.c/.h` - byte-identical to the patched driver tree; `src/chan_gate_selftest.c` 38 checks, 0 failures |
+| driver patch | `patches/0001-chan-gate-fix.patch`, sha256 `7f72d0ed...20dccd`; base = the wifi-5ghz-beacon tree (pins in BUILD-NOTES) |
+| corrected module | `/tmp/chanworker-artifact/hi5622_wifi.ko` 358,256 B sha256 `9a5b048e...775fa6`, 59 params, clean build, .text-identical after debug-strip; LOCAL EVIDENCE ONLY |
+| what it changes on the wire | nothing; the 2.4 GHz path is untouched; the wait predicate is the decoded store; the RF-gate pack is read-only |
