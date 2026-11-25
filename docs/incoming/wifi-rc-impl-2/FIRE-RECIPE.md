@@ -41,6 +41,29 @@ If `h2d_ctx_attest` reports `valid=0`, STOP (capture; power-cycle; no TXQ
 frame, no RC frame).  The driver itself refuses the TXQ frame in that state
 (fail-closed) - the command lets the Lead see why.
 
+### How to load: do NOT let the IMAGE #3 loader run its own C2 ladder
+
+`/etc/init.d/hi5622-wifi` is a no-op at boot (shipped `hi5622.main.autoload=0`
+policy), so nothing runs unless the operator starts it.  But the IMAGE #3
+`/usr/sbin/hi5622-load` still hard-codes the OLD C2:
+
+    log "C2 ladder on $D: h2d_ctx_create=3 -> h2d_txq_sync72=1"
+    sysfs_write "$D/h2d_ctx_create" "3"      # <- the fault class RC-2 refuses
+    sysfs_write "$D/h2d_txq_sync72" "1"      # <- would be REFUSED (type 3)
+
+with `strict=1` that path is fatal.  Correct attended options:
+
+1. **Preferred: the manual ladder in R1 below** (insmod + the boot ladder +
+   the type-1 C2 + the 2.4 GHz AP + the SET).  This is the recipe the Lead
+   fires; it never runs the image loader.
+2. If the loader is used: patch its `h2d_ctx_create` write to **1** first (and
+   its comment), then a plain `hi5622-load` does load + corrected C2 + AP in the
+   vendor order.  Do **not** run it unpatched with the RC-2 module.
+3. `hi5622-load --no-c2 --no-ap` only loads the module (then R1's manual ladder
+   from step `echo 1 > $D/h2d_ctx_create`).  Do not use `--no-c2` while leaving
+   the AP on: the AP-start frames would precede the C2 create (the
+   pre-VAP/precondition fault class).
+
 ## R-1 (negative control, no message) - default-off must refuse
 
 Load with the default `rate_ctl=0` (and the normal AP ladder).  After the core

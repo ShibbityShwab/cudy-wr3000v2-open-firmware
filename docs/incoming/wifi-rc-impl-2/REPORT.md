@@ -71,10 +71,15 @@ unless the recorded facts are all true (see sec 5), and logs a fresh
 read-only attestation at send time as bench evidence.
 
 **Finding for the image lanes:** the IMAGE #3 payload loader still writes the
-old value - `payload/usr/sbin/hi5622-load` line ~364: `sysfs_write "$D/h2d_ctx_create" "3"`
+old value - `payload/usr/sbin/hi5622-load`: `sysfs_write "$D/h2d_ctx_create" "3"`
 (and `payload/etc/config/hi5622` documents "h2d_ctx_create=3").  With RC-2's
-gate that load would refuse the TXQ sync (fail-closed) and therefore refuse the
-rate SET.  **Any image that should carry the RC retry must pass 1, not 3.**
+gate that load refuses the TXQ sync (fail-closed) and, with the loader's
+`strict=1`, fails the service; the rate SET can never run on that boot (the
+context-create is one-shot, so a later type-1 retry is refused as a duplicate).
+**Any image that should carry the RC retry must pass 1, not 3.**  Mitigations
+for the RC fire: the manual ladder in FIRE-RECIPE.md (preferred), patch the
+loader value to 1, or `hi5622-load --no-c2 --no-ap` before the manual C2.
+(Shipped `hi5622.main.autoload=0` means nothing runs at boot by default.)
 
 ## 3. The rate_ctl SET rate_mode auto frame (byte-exact)
 
