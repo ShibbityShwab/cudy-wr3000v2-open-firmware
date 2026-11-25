@@ -61,3 +61,21 @@ VAP-add field.
   ap_chan step must also precede the 0x0242 (the success sub-branch reads
   [mctx+0x190]+0x10), is the fire's second observable; the recipe carries both
   outcomes as a decision table.
+
+## 3. Reproduce (host-only, read-only)
+
+    python3 tools/fw_prestart_re.py --selftest --host-modules <ko-dir>
+        # 95 checks, 0 failures (firmware sha/literals/instruction flow + host
+        # module sha/symbols/key-0x0065 emitter shape)
+    python3 tools/fw_prestart_re.py --decode    # the decode summary
+    python3 tools/fw_prestart_re.py --probe     # the read-only probe pack
+    python3 tools/fw_prestart_re.py --frame     # the 40-B key-0x0065 frame
+    python3 tools/fw_prestart_re.py --host-table --host-modules <ko-dir>
+        # 9 green_ap command names/ids, 0 failures
+
+The tool finds the local pinned FIRMWARE.bin and the OpenWrt objdump itself
+(pass --fw/ARM_OBJDUMP to override); it reads the vendor artifacts in place and
+prints only derived addresses, mnemonics, table words and probe addresses.
+Evidence: [evidence/selftest.txt](evidence/selftest.txt),
+[evidence/decode.txt](evidence/decode.txt), [evidence/probe.txt](evidence/probe.txt),
+[evidence/frame.txt](evidence/frame.txt), [evidence/host-table.txt](evidence/host-table.txt).

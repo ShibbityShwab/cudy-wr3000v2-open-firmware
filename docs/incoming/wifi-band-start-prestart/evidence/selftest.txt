@@ -1,0 +1,102 @@
+# lane wifi-band-start-prestart - reproduction checks
+# tool: tools/fw_prestart_re.py ; pinned FIRMWARE.bin sha 7fc87e20...311b
+# host module: hi5622v100_wifi.ko local rootfs copy
+# host-only, no device contact
+
+PASS  firmware size 928920 (want 928920)
+PASS  firmware sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+PASS  objdump: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/waves/2026-11-19-smp-fix/openwrt/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-objdump
+PASS  CA 0x4ae80  ldrb r3, [r0, #18]                                    count = bandobj+0x12
+PASS  CA 0x4ae84  cmp r3, #1                                            count must be exactly 1
+PASS  CA 0x4ae86  bne.n 0x4aee8                                         count != 1 -> return 0
+PASS  CA 0x4ae96  ldrb r0, [r5, r6]                                     band VAP list entry
+PASS  CA 0x4ae98  bl 0xbcd7e                                            entry -> module context
+PASS  CA 0x4aeb0  bl 0x944de                                            the 5 GHz gate
+PASS  CA 0x4aeb4  cmp r0, #1                                            gate must return 1
+PASS  CA 0x4aebe  bl 0x101890                                           band-1 RF programme
+PASS  CA 0x4aec6  mov.w r1, #498                                        log 0x1F2 on the already-programmed branch
+PASS  CA 0x4aed0  movs r4, #0                                           already-programmed -> return 0
+PASS  CA 0x4aed4  ldrb r3, [r4, #4]                                     mctx[4] (create type)
+PASS  CA 0x4aed6  cmp r3, #2                                            create type must be 2 (AP)
+PASS  CA 0x4aeda  ldrb r3, [r4, #14]                                    mctx[0x0E] (VAP start state)
+PASS  CA 0x4aedc  subs r3, #1                                           state-1
+PASS  CA 0x4aede  cmp r3, #2                                            0x0E in 1..3
+PASS  CA 0x4aee2  mov r0, r4                                            return the module context
+PASS  CA 0x4c3fc  stmdb sp!, {r0, r1, r4, r5, r6, r7, r8, lr}           prologue
+PASS  CA 0x4c404  ldrb.w r3, [r0, r8]                                   state[0] gate
+PASS  CA 0x4c424  ldrb.w r0, [r0, #3438]                                bandobj+0xD6E gate
+PASS  CA 0x4c428  bl 0x581c8                                            band-id resolve
+PASS  CA 0x4c438  bl 0x4ae7c                                            the resolver call
+PASS  CA 0x4c442  cmp r6, #2                                            mode 2 forced failure
+PASS  CA 0x4c446  ldrb r0, [r0, #0]                                     entry[0] = module index
+PASS  CA 0x4c448  strb r0, [r4, #4]                                     state[4] = index
+PASS  CA 0x4c4da  movs r3, #1                                           state[1] = 1 (pre-started)
+PASS  CA 0x4c4dc  strb r3, [r4, #1]                                     state[1] store
+PASS  CA 0x4c4ee  movs r3, #255                                         failure marker
+PASS  CA 0x4c4f0  strb r3, [r4, #4]                                     state[4] = 0xFF (the observed store)
+PASS  CA 0x4c3ce  cmp r3, #3                                            state[1] == 3
+PASS  CA 0x4c3ec  bl 0x4af0c                                            deferred start call
+PASS  CA 0x4c3f2  strb r3, [r4, #1]                                     state[1] = 0
+PASS  CA 0x944f2  ldrb r0, [r0, #0]                                     mctx[0] index
+PASS  CA 0x944f4  bl 0xbcdc4                                            bound band object
+PASS  CA 0x94500  ldrb r3, [r5, #17]                                    mctx[0x11] = band
+PASS  CA 0x94502  cmp r3, #1                                            band must be 1
+PASS  CA 0x94506  ldrb.w r3, [r5, #1088]                                mctx[0x440] band-config flag
+PASS  CA 0x9450e  ldrb.w r0, [r0, #3784]                                return bandobj[0xEC8]
+PASS  CA 0x4c5f4  bl 0x4c3fc                                            pre-start call (mode 0)
+PASS  CA 0x4c5fa  bl 0x4ae7c                                            SECOND resolver call
+PASS  CA 0x4c602  ldrb r3, [r4, #1]                                     state[1] must be nonzero
+PASS  CA 0x4c608  ldrb r3, [r0, #14]                                    mctx[0x0E] must be 1
+PASS  CA 0x4c612  bl 0x4af0c                                            the MAC start
+PASS  CA 0x46394  stmdb sp!, {r4, r5, r6, r7, r8, r9, sl, fp, lr}       prologue
+PASS  CA 0x463ec  ldrb r3, [r5, #2]                                     body[2]
+PASS  CA 0x463f0  strb r3, [r4, #17]                                    mctx[0x11] = body[2] (band)
+PASS  CA 0x463fc  ldrb r1, [r5, #1]                                     body[1]
+PASS  CA 0x463fe  bl 0xd4048                                            mctx[15] = body[1]
+PASS  CA 0x46408  ldrb r3, [r4, #4]                                     mctx[4] create type
+PASS  CA 0x4640a  cmp r3, #2                                            AP branch
+PASS  CA 0x46418  movs r3, #1                                           VAP started state = 1
+PASS  CA 0x4641a  strb r3, [r4, #14]                                    the ONLY mctx[0x0E]=1 store
+PASS  CA 0x4646e  ldrb r1, [r4, #17]                                    AP branch reads the band field
+PASS  CA 0x46470  ldrb.w r3, [r2, #88]                                  deref of mctx[0x190] (fault risk if 0)
+PASS  CA 0x4af2a  ldrb r3, [r4, #1]                                     state[1]
+PASS  CA 0x4af2c  cmp r3, #2                                            already started
+PASS  CA 0x4af32  ldrb r0, [r4, #4]                                     state[4]
+PASS  CA 0x4af34  cmp r0, #255                                          0xFF -> refuse (R3b)
+PASS  CA 0x4af3a  bl 0x961ae                                            the bound module ctx must resolve
+PASS  CA 0xfe6ea  str r1, [r0, #8]                                      create helper prologue body
+PASS  CA 0xfe6ec  ldrb r1, [r6, #0]                                     body[0]
+PASS  CA 0xfe6ee  strb r1, [r0, #4]                                     mctx[4] = create type
+PASS  CA 0xfe72a  ldrb r2, [r6, #17]                                    body[17]
+PASS  CA 0xfe736  strb r2, [r0, #17]                                    mctx[0x11] = band if 1
+PASS  CA 0x449e4  stmdb sp!, {r4, r5, r6, r7, r8, r9, sl, fp, lr}       prologue
+PASS  CA 0x44bbc  str.w r3, [r4, #1200]                                 bind mctx+0x4B0 = per-link
+PASS  CA 0x44bc2  str.w r0, [r4, #1208]                                 bind mctx+0x4B8 = band object
+PASS  CA 0x44bc6  str.w r3, [r4, #1204]                                 bind mctx+0x4B4 = vap object
+PASS  CA 0x44c24  strb.w lr, [r0, #18]                                  band list count = count+1
+PASS  CA 0x44c28  strb.w ip, [r0, r3]                                   band list entry = body[4]
+PASS  CA 0x48d26  str.w r3, [r4, #3784]                                 bandobj+0xEC8 = 0x01000101
+PASS  CA 0xbcdc0  word 0x00170e08  0xBCD7E table-base literal
+PASS  CA 0x943c8  word 0x00170e28  0x943AC global object (type 0)
+PASS  CA 0x4af04  word 0x20290d5c  0x4AE7C log context
+PASS  CA 0xfe574  word 0x001adb80  type-0 object base for 0xFE578(0,idx)
+PASS  CA 0x4c3f8  word 0x20290d5c  0x4C3AC log context
+PASS  CA 0x4c520  word 0x10290d5c  0x4C3FC second log context
+PASS  0xBCD7E table base = literal+0x650 = 0x171458 (want 0x171458)
+PASS  0xFE578 table base = literal+0x630 = 0x171458 (want 0x171458)
+PASS  common offset = 0x171504 from both accessors
+PASS  host module size 3581748 (want 3581748)
+PASS  host module sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2
+PASS  host symbol hmac_config_start_vap_event present
+PASS  host symbol hmac_start_bss_in_available_channel present
+PASS  host symbol wal_hipriv_green_ap present
+PASS  host symbol wal_green_ap_analysis_process present
+PASS  host symbol g_ast_mac_green_ap_config_table present
+PASS  host key-0x0065 emitter: body[1] = vap+0x0F  (ldrb	r1, [r0, #15])
+PASS  host key-0x0065 emitter: body[2] = vap+0x11 (band)  (ldrb	r1, [r0, #17])
+PASS  host key-0x0065 emitter: body[3] = vap+0x12 (field)  (ldrb	r1, [r0, #18])
+PASS  host key-0x0065 emitter: key 0x0065  (mov	r1, #101)
+PASS  host key-0x0065 emitter: config event send  (bl	5717c <hmac_config_send_event>)
+PASS  host key-0x0065 emitter: 12-byte body  (mov	r2, #12)
+
+95 checks, 0 failures

@@ -1,0 +1,12 @@
+WAL green_ap command table g_ast_mac_green_ap_config_table @ .data+0x1ad8
+PASS  entry 0: name=info       id=0
+PASS  entry 1: name=enable     id=1
+PASS  entry 2: name=work       id=2
+PASS  entry 3: name=pause      id=3
+PASS  entry 4: name=log_en     id=4
+PASS  entry 5: name=free_cca   id=5
+PASS  entry 6: name=free_gap   id=6
+PASS  entry 7: name=work_slot  id=7
+PASS  entry 8: name=pause_slot id=8
+
+9 entries, 0 failures

@@ -1,0 +1,12 @@
+key-0x0065 VAP-start frame (40 B, same carrier as the proven 0x0242
+frame). field B = vap_add_index; body {00,01,01,00,00,00,00,00,00,00,00,00}:
+  header 12 B: 00 01 00 <field B> <total u16 = 0x0028> 01 00 00 00 5a 5a
+  token   8 B: 00 00 00 00 01 00 00 00
+  key u16    : 65 00   (0x0065 VAP start, worker CA 0x46394)
+  len u16    : 0c 00   (12-byte body)
+  body 12 B  : 00 01 01 00 00 00 00 00 00 00 00 00
+  tail  4 B  : ff ff ff ff
+
+the sibling lane wifi-vap-start has the identical 40-B g0-id1 carrier
+KAT with body[2]=0; for the band-1 VAP body[2] must be 1 (mctx[0x11]
+is the band the later 5 GHz RF branch CA 0x40684 requires).

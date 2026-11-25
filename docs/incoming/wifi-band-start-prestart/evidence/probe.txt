@@ -1,0 +1,20 @@
+read-only probe pack (object-relative; resolve mctx with the existing
+bench-proven chain: SLOT0 CA 0x175458, BASE CA 0x17A504, mctx = slot+base)
+  G1   u32 mctx                     nonzero                  ladder/readback
+  G2   u8 bandobj+0x12              == 1                     band VAP list count
+  G3   u8 bandobj[0]                == vap_add_index         list entry
+  G4   u32 bandobj+0x1A00           nonzero                  published per-link (bind gate)
+  G5   u32 mctx+0x190               nonzero                  async object; 0x0065 worker deref
+  G6   u32 mctx+0x4AC               nonzero                  start-helper object
+  G7   u8 mctx+4                    == 2                     create type AP
+  G8   u8 mctx+0x11                 == 1                     band = 5 GHz
+  G9   u8 mctx+0x440                == 0                     band-config flag (0x944DE gate)
+  G10  u8 bandobj+0xD6E             == 0                     0x4C3FC band-id gate
+  G11  u8 bandobj+0xEC8             == 0                     band-up flag
+  G12  u8 mctx+0x0E                 0 -> 1 after key 0x0065  VAP start state
+  G13  state[0],state[1],state[4]   0 / 0 / 0 fresh          run-state at bandobj+0x14D0
+  G14  u8 perlink+0x6C6             observation              0x0065 per-link branch
+
+after the key-0x0065 post: re-read G12; only G12==1 may let the
+0x0242 sync-start run (0x4C524 requires state[1]!=0 and mctx[0x0E]==1).
+P1 after a successful start: 0x4010C220 == 0x404C4220 (arm bits 0x1029).
