@@ -41,3 +41,27 @@ A lane's fire recipe is NOT trusted until: the host tests run from the committed
 patch applies to the pinned base, and the recipe matches the proven bench protocol
 (BENCH-FACTS/LESSONS: recovery armed, UART read-only, one AP per load, power-cycle on the
 exception mask/page change).
+
+## Update (after the lanes' final commits)
+
+### rx-ba-agg - the PARTIAL verdict is now PASS
+The lane's final commit (792d2af) added the userspace-compilable portable model:
+./tools/run-host-tests.sh -> "ba_selftest: 183 checks, 0 failures" (verified by the Lead).
+It also adds the fail-closed ba_enable skeleton patch + 147 static anchors re-verified against
+the vendor module/firmware + the fire recipe. The earlier gap (a kernel-header-dependent
+selftest) is resolved.
+
+### rx-rate-ctl (task-179) - the decode delivered
+docs/incoming/wifi-rate-ctl/ (README/REPORT/TABLES/src/patches/tools/evidence) - the vendor
+alg_cfg engine / rate-control command surface decode + the prepared bench ladder. Host tests
+to be re-run by the Lead before any fire (the verification pattern).
+
+### The swarm's final state (all 5 lanes delivered)
+- rx-h2d-trace (RX-1/RX-2): PASS - the stock H2D trace plan + the tools + the F1 bound
+  ("more static analysis cannot close F1 - the trace is the discriminator").
+- ax-he-caps (AX-1): PASS - the HE decode + the module (475975d3) + the fire recipe.
+- rx-ba-agg (BA-1/BA-2): PASS - the BA machinery + the portable model + the patch + the recipe.
+- rx-5g-beacon (5G-4): PASS - the mis-addressed-readback correction + the synchronous ap_chan
+  insight + the module (bc1cc0ea) + the G6a/G6b recipe.
+- rx-rate-ctl (RC-1): the decode delivered.
+
