@@ -38,9 +38,9 @@ Bottom line (details in REPORT.md):
    MD present/caps -> VAP+0x138 bits 0..2, MDID -> VAP+0x13A, hidden_ssid,
    HT/VHT hints. The band is carried by the VAP-add, not by 0x0127.
 3. **The per-link beacon state is created by the VAP start (0x0065) on the
-   FIRST start of a VAP on that band**: per-link +0x6B8 (280 B beacon buffer
-   pointer), +0x6BC (aux object), +0x6C0 (92 B descriptor pointer), +0x6C4 = 16
-   and **+0x6C6 = 1 (beacon state enabled)**. The worker then calls the
+   FIRST start of a VAP on that band** (fields [V], role names [I]): per-link
+   +0x6B8 (280 B allocation), +0x6BC (aux object), +0x6C0 (92 B allocation),
+   +0x6C4 = 16 and **+0x6C6 = 1 (beacon state enabled)**. The worker then calls the
    band-start CA 0x971D8, which invokes the runtime callback table
    G = CA 0x1747C4: **G+0x370 (MAC start)** and **G+0x374 (beacon start)**.
 4. **The per-band MAC/TBTT hardware differs and is initialised per band.**
