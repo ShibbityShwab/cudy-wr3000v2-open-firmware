@@ -65,3 +65,25 @@ to be re-run by the Lead before any fire (the verification pattern).
   insight + the module (bc1cc0ea) + the G6a/G6b recipe.
 - rx-rate-ctl (RC-1): the decode delivered.
 
+
+### rx-rate-ctl (task-179, RC-1) - PASS
+Verified: docs/incoming/wifi-rate-ctl/tools/run-host-tests.sh -> the decode selftest 41/41, the
+portable logic 70/70, the frame cross-check against the patched driver tree 144/144 - all PASS.
+Decoded: the alg engine (414-row command table + the 416-entry dispatch LUT + all 57 rate-family
+wire layouts), the carrier (HCC g0 id2 / key 0x0101 - the bench-proven calibration carrier), the
+rate-control surface (rate_mode auto/fixed, 26 autorate knobs, ar_probe, the fixed-rate blocks,
+the TPC family, the per-rate power arrays) and the key finding: THE VENDOR USERSACE NEVER
+CONFIGURES RATE CONTROL - the firmware adapts on its own; the deterministic control is SET
+rate_mode auto (a 39-byte g0 id2 frame). Delivered: the fail-closed patch (471,580 B, 11 params,
+8 WO + 2 RO attrs, the D2H g1 id3 capture = the rate-selection observable) + the R-1..R3 recipe.
+Limits: the shorter blob acceptance [I]; the dedicated-parser commands [U] (refused by default).
+
+## The swarm's final verification scoreboard
+| lane | verdict |
+| --- | --- |
+| rx-h2d-trace (RX-1/RX-2) | PASS |
+| ax-he-caps (AX-1) | PASS - and FIRED: 802.11ax live on air (cudy-ap-test-he, HE caps + HE Operation + BSS Color) |
+| rx-ba-agg (BA-1/BA-2) | PASS (the portable model 183/183 + the 147 static anchors) |
+| rx-5g-beacon (5G-4) | PASS (the mis-addressed-readback correction + the module + the G6a/G6b recipe) |
+| rx-rate-ctl (RC-1) | PASS (41/41 decode + 70/70 logic + 144/144 frame) |
+
