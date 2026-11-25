@@ -1,0 +1,13 @@
+current 0x01F7 frame (as fired, field B = 4):
+  000100041d00010000005a5a0000000001000000f701010003ffffffff
+  hdr  : 000100041d00010000005a5a
+  token: 0000000001000000
+  key  : f701  (0x01F7)
+  len  : 0100  (1)
+  body : 03  (mode 3)
+  tail : ffffffff
+  hdr total 0x001D, wire total 29 B
+fixed 0x01F7 frame (field B = 0 = the AP-start module):
+  000100001d00010000005a5a0000000001000000f701010003ffffffff
+  only byte [3] differs: 0x04 -> 0x00 (hdr[3] = field B)
+the 0x00F7 desc-table frame needs the same one-byte change (b[3]).

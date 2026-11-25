@@ -1,0 +1,22 @@
+--- a/hi5622_dfs_mode.h	2026-11-25 21:54:53.308151814 +0700
++++ b/hi5622_dfs_mode.h	2026-11-25 21:54:53.320720815 +0700
+@@ -83,7 +83,7 @@
+ #define HI5622_DFS_MODE_BODY_LEN	1u	/* body[0] = mode */
+ #define HI5622_DFS_MODE_MODE		3u	/* mode 3 = the ch36..64 RF image */
+ #define HI5622_DFS_MODE_FA		0x00u	/* header byte 2 (inherited family) */
+-#define HI5622_DFS_MODE_FB		0x04u	/* header byte 3 (vendor-wire value) */
++#define HI5622_DFS_MODE_FB		0x00u	/* header byte 3: field B = the AP-start module/VAP context */
+ #define HI5622_DFS_MODE_WIRE_LEN	29u	/* 12+8+2+2+1+4 */
+ #define HI5622_DFS_MODE_TOTAL_FIELD	0x001du	/* total at hdr+4 = wire len */
+ /* SR node word1 = (frame_total << 16) | 0x6D2B (h2d_frames convention). */
+--- a/hi5622_desc_table.c	2026-11-25 21:54:53.309072556 +0700
++++ b/hi5622_desc_table.c	2026-11-25 21:54:53.320753636 +0700
+@@ -106,7 +106,7 @@
+ 	b[0] = 0x00u;				/* group 0 */
+ 	b[1] = 0x01u;				/* alloc nibble 1, dst 0 */
+ 	b[2] = 0x00u;				/* fa */
+-	b[3] = 0x04u;				/* fb */
++	b[3] = 0x00u;				/* fb = field B: the AP-start module/VAP context */
+ 	dt_put16(b + 4, (u16)HI5622_DESC_TABLE_WIRE_LEN);	/* total 0x44 */
+ 	dt_put16(b + 6, 0x0001u);		/* message id 1 */
+ 	b[8] = 0x00u;				/* fc */

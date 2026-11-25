@@ -1,0 +1,22 @@
+READ-ONLY probe pack.  BAR0 = CPU + 0x6B8000; host phys =
+0x40000000 + BAR0 (the F0/F1 fire form), e.g. CPU 0x11C910 ->
+phys 0x40828910.  No probe writes anything.  If u16(0x171504) is
+non-zero, add it to the context-derived addresses (0x11xxxx).  The
+band-object addresses below already include no base offset.
+
+sz   CPU       BAR0      phys          what / expected
+u32  0x0171458 0x0829458 0x40829458  G table slot0 = context[0] ptr | 0x00119758
+u32  0x0171468 0x0829468 0x40829468  G table slot4 = context[4] ptr | 0x0011C458
+u16  0x0171504 0x0829504 0x40829504  G+0x6DC common offset | 0x0000 [I]
+u32  0x011C910 0x07D4910 0x407D4910  ctx4+0x4B8 band object (what the fired frame targets) | 0x0015CA08 under H2 (band 0); 0 = unbound fallback
+u32  0x0119C10 0x07D1C10 0x407D1C10  ctx0+0x4B8 band object (the AP ladder's context) | 0x0015E570
+u32  0x015FF70 0x0817F70 0x40817F70  band1+0x1A00 published per-link | 0x00175A18
+u8   0x015F2E0 0x08172E0 0x408172E0  band1+0xD70 attach (verified probe address) | 1
+u8   0x015F474 0x0817474 0x40817474  band1+0xF04 mode byte (the 5 GHz gate) | 0 before F2, 3 after
+u32  0x0175CF0 0x082DCF0 0x4082DCF0  R = *(band1 published+0x2D8) | 0x400B2000
+u8   0x015D90C 0x081590C 0x4081590C  band0+0xF04 mode byte (the fired frame's real target) | 3 => H2 confirmed (worker ran on band 0); 0 => fallback
+u8   0x015D778 0x0815778 0x40815778  band0+0xD70 attach | 1 required for the band-0 write
+u32  0x015E408 0x0816408 0x40816408  band0+0x1A00 published per-link | 0x00174BF0
+u32  0x015E6E0 0x08166E0 0x408166E0  band0 R = *(band0 published+0x2D8) | nonzero
+u32  0x011C5E8 0x07D45E8 0x407D45E8  ctx4+0x190 (C2 ctx_create result) | nonzero
+u32  0x01198E8 0x07D18E8 0x407D18E8  ctx0+0x190 (AP vap_add result) | nonzero

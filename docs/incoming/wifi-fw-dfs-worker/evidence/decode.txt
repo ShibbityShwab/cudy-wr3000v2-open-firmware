@@ -1,0 +1,42 @@
+g0-id1 handler CA 0x43D58 (groups 0 id 1 config event)
+  0x43D72  ldrb r1,[r0,#3]        field B (per-module context index)
+  0x43D74  movs r0,#0 ; 0x43D76 bl CA 0xFE578
+  0x43D90  ldrh r2,[r4,#20]       u16 key = hdr+20 (payload+8)
+  0x43D92..0x43DA6 scan table A (CA 0x10C23C, 217 entries, bound 0x6C8)
+  0x43DAC..0x43DBE scan table B (CA 0x103BF8, bound 0x2C0)
+  0x43DCE  ldr r3,[entry+4]       worker (entry = {u16 key,u16 pad,u32 worker})
+  0x43DEC  add.w r2,r4,#24        body pointer = hdr+24
+  0x43DF0  ldrb r1,[r4,#22]       length = ONE BYTE hdr+22
+  0x43DF2  blx r3                worker(r0=ctx, r1=len, r2=body)
+  NO length/flag/checksum compare anywhere in the dispatcher.
+
+table A row 93: key 0x01F7 worker 0x000B5B9D (thumb)
+table A row 92: key 0x00F7 worker 0x00045A31 (thumb)
+
+worker CA 0xB5B9C key 0x01F7:
+  0xB5B9E  r4 = *(ctx + 0x4B8)       band object; ctx==0/gate -> log 1442, ret 0x64
+  0xB5BAA  O  = *(r4 + 0x1A00)       published per-link; 0 -> log 1442
+  0xB5BC8  a  = *(r4 + 0xD70)        band attach; a != 1 -> log 1448, ret 0
+  0xB5BE2  mode = body[0]            1..5 (1/2/5 explicit image blocks;
+                                       3 -> bl CA 0x89924(O) ch36..64 image;
+                                       4 -> fall-through; out of range -> log 1485)
+  0xB5D1C  *(r4 + 0xF04) = mode      the ONLY mode-byte writer in the image
+  0xB5CEE  memcpy_s(O+0x1C3, 4, &{mode,len[1..3]}, 4)
+  common: band fields +0xF00..+0x10F4 then the tbb per-mode tail
+
+context lookup CA 0xFE578(0, fieldB):
+  ctx = *(u32)(G + 0x630 + 4*fieldB) + u16(G + 0x6DC),  G = 0x00170E28
+  fieldB 0..0x12; boot init CA 0x49204 fills all 19 slots with
+  0x119758 + k*0xB40 and zeroes each 2880-byte body.
+  the band binding of a context is created by the key-0x64 worker
+  CA 0x449E4: ctx+0x4B0 = band published per-link,
+  ctx+0x4B8 = CA 0xA4FC8(band) = 0x15CA08 + 0x1B68*band
+  from body[0x12].
+
+THE MISMATCH:
+  boot C2 ctx_create : key 0x0064 module/fieldB 4 band body[0x12]=0
+                       -> module 4 (ctx 0x11C458) + 0x4B8 = BAND 0 0x15CA08
+  AP-start vap_add   : key 0x0064 module/fieldB 0 band body[0x12]=1
+                       -> module 0 (ctx 0x119758) + 0x4B8 = BAND 1 0x15E570
+  0x01F7 frame field B = 4 -> the worker programmed BAND 0's mode
+  byte (0x15D90C) and BAND 0's RF image, not BAND 1's.
