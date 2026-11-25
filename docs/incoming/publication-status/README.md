@@ -48,13 +48,13 @@ modules stay **out** of both.
 | check | command | result |
 | --- | --- | --- |
 | project repo policy (root) | `tools/check-repo.sh` | **PASS** (10/10: docs/tools, shadow guard, kernel snapshot, no vendor `.ko`, no vendor binaries in the published half, STATUS freshness, retired phrases, links, tool refs) |
-| publish-readiness (legacy half) | `opensource/tools/publish-prep-check.sh` | **FAIL** - summary **19 PASS / 7 FAIL / 6 WARN** (the honest pre-existing state; no new failure from this wave) |
+| publish-readiness (legacy half) | `opensource/tools/publish-prep-check.sh` | **FAIL** - the run recorded during this review: **19 PASS / 7 FAIL / 6 WARN**; re-run from the shared worktree while the swarm was mid-commit: **17 PASS / 7 FAIL / 8 WARN** (the two extra WARNs are "worktree dirty" and "6 commits ahead of origin"; one extra FAIL is the in-flight `upstream-v4` lane's not-yet-written links). All are pre-existing or other-lane in-flight items - **no new finding comes from this wave's files** |
 | curated-vs-source delta | `publication-status/surface-delta.txt` | 92 changed + 16 curated-only files; 251 source commits since pin `a0aa6b1` |
 | curated repo cleanliness | `git -C /home/shibbityshwab/repos/cudy-wr3000v2-openwrt status` | clean; 324 tracked files; tip = origin/main = `4bd4360` |
 | report verifier | `wifi-re-report/tools/verify_report.py` | **PASS (358/358)** |
 | secret/credential scan of the new files | `git grep` for keys/MACs in the changed paths | no secret, no real MAC, no vendor byte (the report/lanes carry placeholders and derived constants only) |
 
-The publish-prep **7 FAILs** are the known open items, not this wave's regressions: shallow-clone
+The publish-prep FAILs are the known open items, not this wave's regressions (the historical/structural ones plus, during the swarm, the dirty-worktree/ahead-of-origin warnings and the in-flight `upstream-v4` lane's links): shallow-clone
 history scan (procedural - run on a full clone), the missing `COPYING`/DCO/SPDX/Copyright items
 (B2), the "clean-room" wording in README/NOTICE (item 5), the **ten legacy vendor `.o` blobs still
 reachable from history** (item 1 - owner-only purge), the binary/trailer history blobs
