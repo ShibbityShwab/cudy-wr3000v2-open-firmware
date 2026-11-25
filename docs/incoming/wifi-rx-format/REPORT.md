@@ -658,3 +658,51 @@ Under the identity record the transform collapses to 'devva = hostca', so a raw 
 4. fire rung: same R2 with rx_entry_xform=1; PASS = frame captured in a buffer / no page loss; FAIL + unchanged = the transform record is not the issue.
 
 Honest state: the relation, the record layout, the iATU programming path and the identity record are decoded; the actual (host_base, devva_base) pair for the RX/TX window is one extraction step away (the record table beyond index 0 and the selected index), so no transform patch is shipped in this addendum yet - shipping a guessed constant into the MAC's DMA path is exactly the crash class this lane exists to prevent.
+---
+
+## 13. Follow-up 4 (2026-11-25): address-transform FINAL decode - it is IDENTITY; the transform is NOT the fix (honest negative)
+
+Lead asked for the full window-record table, oal_pcie_host_init's index source, and the derived (host_base, devva_base, size), then either the rx_entry_xform patch or an explicit negative. Result: **identity; no patch shipped.**
+
+### 13.1 Full 24-byte record table (.data+0x1fb8)
+
+The table pointer is the literal at .text+0xc0cc = **0x00001fb8** (stored addend, not .data+0). Dumped .data+0x1fb8 onward and its relocations:
+
+    rec00 @.data+0x1fb8: 0x80000000 0x00000000 0xffffffff 0x00000000 0x80000000 0x00000000
+
+and the next bytes are CODE (Thumb), proven by .rel.data entries at .data+0x1fdc onward (R_ARM_MOVW_ABS_NC .LC25, R_ARM_CALL oam_error_log0, printk, __stack_chk_fail, __stack_chk_guard). There is **exactly one 24-byte window record in this build**; it is NOT followed by further records.
+
+Record fields (from pcie_hostca_to_devva 0xaefc / pcie_devva_to_hostca 0xadec / oal_pcie_devca_to_hostva 0x6914):
+
+| word | field | rec00 value |
+| --- | --- | --- |
+| +0x00/+0x04 | devCA window base (lo/hi) | 0x80000000 / 0 |
+| +0x08/+0x0c | devCA window end (lo/hi) | 0xffffffff / 0 |
+| +0x10/+0x14 | host-window base (lo/hi) | 0x80000000 / 0 |
+
+so the window is devCA [0x80000000, 0xffffffff] <-> host window starting at 0x80000000, i.e. **devva = hostca (identity)** over the whole host-DRAM window.
+
+### 13.2 Which record the luofu probe selects
+
+oal_pcie_host_init (0xbefc) sets iface[+0xc4] = TABLE + 24*arg. Caller oal_pci_lres_init at 0x7cb8-0x7cc8:
+
+    ldrb r1,[sp,#3]      ; revision byte (config offset 8)
+    ldrb r2,[sp,#2]      ; <- arg2 = get_chip_type() output byte (0x7c50/0x7c54)
+    bl   oal_pcie_host_init
+
+get_chip_type (0x1bd04) copies a board-info byte (LANCHOR0+1) into that byte; index 0 is the only architectural possibility in this build (any nonzero index would read the code region after rec00 as a window descriptor, which is impossible), so the luofu probe uses **rec00 = identity**. Cross-check: the committed stock dump's RX ring/buffer devVAs (CA +0x20/+0x24/+0x28 = 0x844c7000/0x844c8000/0x83734000) are **plain host bus addresses**, exactly what identity predicts. The earlier reading that those words are zero came from the parity code's RANGE-check placeholder, not from the committed dump (which carries the real 0x8xxxxxxx values).
+
+### 13.3 Why TX worked: because the transform IS identity
+
+Our raw dma_alloc_coherent bus VAs (0x8xxxxxxx) are inside the identity window, so they are already valid devVAs - no transform was ever needed for TX or RX. The vendor's RX producer bias (add_buff: hostca = skb->data + 0xc0000004 + 0x600000) is the WOC-allocator kernel-VA -> host-CA convention: oal_dma_map_single (0x6b0c) shows the direct-map relation (pfn from addr+0x40000000), i.e. the bias is exactly the constant that converts a kernel VA to the identity-window host CA for WOC skbs. It does not imply a non-identity window.
+
+### 13.4 Consequence: no rx_entry_xform patch, next candidates
+
+Shipping a transform would be wrong: identity means our current entries are already correct, and a transform would break a working path. Next suspects, in order:
+
+1. **Buffer provenance/cache attributes.** The vendor allocates RX buffers through hi_net_woc_alloc_skb (defined in **hi_kpie.ko**, present in the full module set) - a dedicated WOC region/allocator, not the generic coherent pool. The RX write master may require that memory class (non-cached/WOC-mapped). Test: allocate the RX pools from the same allocator class/mapping the vendor uses (or a carve-out with identical attributes), then repeat R2.
+2. **Completion-ring format/ownership.** The MAC writes a 4-byte completion entry; verify the echo value/order and whether the host consumer must be pre-published with a specific phase before the first completion (the bit-10 error fired with consumer 0 / producer 0).
+3. **Ring-entry phase/order.** Free-ring entries and producer 0x8000 match the vendor stock mirror, but the device's first-completion expectation could be phase-sensitive; a rung that pre-publishes the completion consumer with phase 1 (0x8000) instead of 0 is cheap.
+4. **Device-owned live +0x04 = 0x8000 vs stock 0** - still unexplained; record it before/after the trigger in every rung.
+
+Bench state note: the transform question is closed (identity). The stock-control run (vendor image receiving the same auth frames) remains the decisive discriminator for the fault class, and the WOC/allocator provenance (candidate 1) is the top remaining host-side difference.
