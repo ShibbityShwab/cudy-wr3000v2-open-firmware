@@ -141,11 +141,12 @@ usage:
 exit: 0 = PASS, 1 = FAIL (do not fire), 2 = usage / missing input.
 
 --stock-witness is a text file produced on the stock pair-A shell, one "key value"
-line each (values may contain spaces only for cmdline):
+line each (cmdline keeps the whole rest of the line; every other key uses its first
+token, and a leading "bootflag=" is stripped):
   cmdline   cat /proc/cmdline
   ubimtd    cat /sys/class/ubi/ubi0/mtd_num
   cell      cat /sys/devices/platform/sysenv/boot_reg
-  bootflag  fw_printenv bootflag | sed 's/^bootflag=//'
+  bootflag  fw_printenv bootflag
   kernelb   dd if=/dev/mtd12 bs=131072 count=66 2>/dev/null | sha256sum
   kernela   dd if=/dev/mtd11 bs=131072 count=66 2>/dev/null | sha256sum
 --proc-mtd is "cat /proc/mtd" (the stock partition table).  The witness hash is the
@@ -330,6 +331,7 @@ else
 	fail "container mismatch: size $_csz B (want $C_SIZE B), sha256 $_csh (want $C_SHA) - this is NOT the baked IMAGE #3 artifact"
 fi
 record "container $C_SIZE B; kernel member $K_SIZE B; root member $R_SIZE B; tar metadata $((C_SIZE - K_SIZE - R_SIZE)) B"
+record "the $C_SIZE B container is a host tar, not a single-slot payload: it is written as the kernel member ($K_SIZE B -> mtd12 slot $KSLOT_SIZE B) and the root member ($R_SIZE B -> mtd14)"
 
 EXTRACT=0
 if tar -tf "$CONTAINER" > "$TMPDIR_PF/members.txt" 2>"$TMPDIR_PF/tar.err"; then
@@ -474,10 +476,15 @@ if [ -n "$WITNESS" ]; then
 		if [ -z "$_w_kb" ]; then _w_kb=$(witness_get "$WITNESS" mtd12); fi
 		_w_ka=$(witness_get "$WITNESS" kernela)
 		if [ -z "$_w_ka" ]; then _w_ka=$(witness_get "$WITNESS" mtd11); fi
-		_w_ubi=$(printf '%s' "$_w_ubi" | tr -d ' \r\n')
-		_w_cell=$(printf '%s' "$_w_cell" | tr -d ' \r\n')
-		_w_flag=$(printf '%s' "$_w_flag" | tr -d ' \r\n')
-		_w_kb=$(printf '%s' "$_w_kb" | tr -d ' \r\n')
+		# normalize: cmdline keeps the whole rest of the line; the other keys use
+		# their first token (so a raw 'sha256sum' line with '  -' also parses) and
+		# bootflag may be printed as 'bootflag=a' or just 'a'.
+		_w_ubi=$(printf '%s' "$_w_ubi" | tr -d '\r' | awk '{print $1}')
+		_w_cell=$(printf '%s' "$_w_cell" | tr -d '\r' | awk '{print $1}')
+		_w_flag=$(printf '%s' "$_w_flag" | tr -d '\r' | awk '{print $1}')
+		_w_flag=$(printf '%s' "$_w_flag" | sed 's/^bootflag=//')
+		_w_kb=$(printf '%s' "$_w_kb" | tr -d '\r' | awk '{print $1}')
+		_w_ka=$(printf '%s' "$_w_ka" | tr -d '\r' | awk '{print $1}')
 		case "$_w_cmd" in
 		*rootfsb*)
 			fail "witness: the stock cmdline uses ubi.mtd=rootfsb - stock is not on pair A; fix the pair first" ;;

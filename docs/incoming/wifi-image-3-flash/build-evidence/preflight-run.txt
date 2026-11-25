@@ -9,6 +9,7 @@ proc-mtd  : (not supplied)
 
 PASS  container is the pinned IMAGE #3 build (4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53, 7843840 B)
 RECORD container 7843840 B; kernel member 3372638 B; root member 4456448 B; tar metadata 14754 B
+RECORD the 7843840 B container is a host tar, not a single-slot payload: it is written as the kernel member (3372638 B -> mtd12 slot 8650752 B) and the root member (4456448 B -> mtd14)
 PASS  container has exactly 6 tar members (dir + CONTROL + INSTALL-STATUS + fip-manifest + kernel + root)
 PASS  container carries the sysupgrade-cudy_wr3000-v2 directory member
 PASS  kernel slice (member) is the pinned artifact (13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f, 3372638 B)

@@ -38,10 +38,10 @@ from what this runbook expects at any step: **STOP**, record, do not improvise.
    or Path B full container (section 7: kernelb + rootfsb through
    `tools/stock-telnet-install.sh --apply`). Then the **pair-b handover**
    (env `bootflag=b` + selector `0x11`, read back, reboot).
-6. **Post-boot receipts** R1-R10 (section 8): kernel pin, module hash/params,
+6. **Post-boot receipts** R1-R8 (section 8): kernel pin, module hash/params,
    regdomain US, HE AP, 5 GHz gates, page golden, firmware re-push.
-7. **Rollback** = the pair switch back to A + a previous rootfs UBI (section 10);
-   physical RESET+TFTP is the last resort. **STOP conditions: section 11.**
+7. **Rollback** = the pair switch back to A + a previous rootfs UBI (section 9);
+   physical RESET+TFTP is the last resort. **STOP conditions: section 10.**
 
 ---
 
@@ -70,6 +70,17 @@ the merged 64-param module, the image #3 text policy payload). Therefore:
   which verifies uploads, both read-backs, the untouched active pair, the handover and
   the booted identity. Use it when kernelb's content cannot be confirmed, or as the
   reconstruction path. The extra kernel erase/write is redundant but safe (same bytes).
+
+Provenance of every value and step: the image identities and feasibility are the
+image-3 lane ([../wifi-image-3/HASHES.txt](../wifi-image-3/HASHES.txt),
+[VERIFY.txt](../wifi-image-3/VERIFY.txt),
+[FLASH-FEASIBILITY.md](../wifi-image-3/FLASH-FEASIBILITY.md)); the userspace carries
+(the fixed cfg80211 + ax hostapd) are the wifi-image-update lane
+([../wifi-image-update/README.md](../wifi-image-update/README.md)); the rootfs-only
+write shape continues the final-image-2 lane
+([../wifi-final-image-2/FLASH-FEASIBILITY.md](../wifi-final-image-2/FLASH-FEASIBILITY.md));
+the stock telnet transport and handover are the ABI-image lane
+([../wifi-abi-image/FLASH-RUNBOOK.md](../wifi-abi-image/FLASH-RUNBOOK.md)).
 
 **Not an install path:** the vendor stock `sysupgrade` / LuCI web-flash UI. The
 container's own `INSTALL-STATUS.txt` says **NOT FLASHABLE-UNTIL-INSTALLED**; its
@@ -127,7 +138,7 @@ A short hold leaves `0 second(s)` and the box boots normally. Do this dry-run
 
 **Keep the TFTP server running** until the post-boot receipts pass. After a recovery
 the stock LAN returns at `192.168.10.1`; the recovered overlay is empty (reinstall
-the project key / start dropbear with `-R` - RUNBOOK.md section 6).
+the project key / start dropbear with `-R` - root RUNBOOK.md section 6).
 
 ### 2.4 Read-only UART capture
 
@@ -272,7 +283,7 @@ Do not write from a stock boot whose pair state was not verified in section 5.
 ## 5. Stock read-only gates + the on-box witness (the other half of the fire gate)
 
 Run everything here from the stocks pair-A root shell (section 4.2), **read-only**.
-Every line must match; any deviation is a STOP (section 11) - do not "fix" it by
+Every line must match; any deviation is a STOP (section 10) - do not "fix" it by
 writing from this boot.
 
 ### 5.1 The gates
@@ -284,8 +295,8 @@ writing from this boot.
 | attached UBI | `cat /sys/class/ubi/ubi0/mtd_num` | `13` (rootfsa) |
 | selector cell | `cat /sys/devices/platform/sysenv/boot_reg` | `0x10` (pair A) |
 | U-Boot env | `ln -sf /bin/fw_printenv /tmp/fw_getenv; /tmp/fw_getenv bootflag` | `bootflag=a` |
-| kernelb (the slot Path A must not change) | `dd if=/dev/mtd12 bs=131072 count=66 2>/dev/null | sha256sum` | `1794a531...54460e` (**required by Path A**) |
-| kernela (rollback witness) | `dd if=/dev/mtd11 bs=131072 count=66 2>/dev/null | sha256sum` | record it |
+| kernelb (the slot Path A must not change) | `dd if=/dev/mtd12 bs=131072 count=66 2>/dev/null \| sha256sum` | `1794a531...54460e` (**required by Path A**) |
+| kernela (rollback witness) | `dd if=/dev/mtd11 bs=131072 count=66 2>/dev/null \| sha256sum` | record it |
 | partition table | `cat /proc/mtd` | mtd11/12 `00840000`, mtd13/14 `01740000`, erase `00020000` |
 
 Why each one matters: if the stock boot itself is on rootfsb (or env bootflag=b, or
@@ -332,7 +343,7 @@ cd opensource/docs/incoming/wifi-image-3-flash
 # expected tail: RESULT: PASS - fire-ready for the ROOTFS-ONLY path: ...
 ```
 
-Save the output with the session evidence (section 12). From here on, the write is
+Save the output with the session evidence (section 11). From here on, the write is
 the only remaining decision: section 6 (Path A) or section 7 (Path B).
 
 ---
@@ -340,7 +351,8 @@ the only remaining decision: section 6 (Path A) or section 7 (Path B).
 ## 6. Path A - the rootfs-only write (recommended; mtd14 only)
 
 This is the strict minimal write: **one** `ubiformat` of mtd14, no kernel write,
-no pair-A write. The sequence is the image-3 feasibility sequence
+no pair-A write. The sequence is the image-3 feasibility sequence (itself the
+final-image-2 lane's rootfs-only install shape, new hash)
 ([../wifi-image-3/FLASH-FEASIBILITY.md](../wifi-image-3/FLASH-FEASIBILITY.md) section 3)
 with the pair-A gates of section 5 in front of it.
 
@@ -410,7 +422,7 @@ cell-only or env-only edit mixes the pairs.
 
 Wait up to ~240 s for ping/SSH. If the box stays silent: wait 2 minutes, then a
 plain power-cycle (no RESET hold) retries the loader path; if it stays silent, the
-recovery card is armed - physical RESET+TFTP (section 10.4).
+recovery card is armed - physical RESET+TFTP (section 9.4).
 
 Then run the **post-boot receipts** (section 8) before anything else.
 
@@ -428,10 +440,13 @@ Then run the **post-boot receipts** (section 8) before anything else.
 ## 7. Path B - the full sysupgrade-container write (kernelb + rootfsb)
 
 Use this path when the on-box kernelb identity cannot be confirmed, or as the
-reconstruction/insurance path. The container's two members are written by the
-project installer over the same stock root telnet transport; the tool verifies the
-uploads, the whole kernel-slot read-back, the untouched active pair, the handover and
-the booted identity. Source: [../wifi-abi-image/FLASH-RUNBOOK.md](../wifi-abi-image/FLASH-RUNBOOK.md)
+reconstruction/insurance path. "Full sysupgrade container" here means **the project
+installer writing both members of the sysupgrade tar** - it is explicitly **not** the
+vendor OpenWrt `sysupgrade` applet/web UI (section 1: the container is
+NOT-FLASHABLE-UNTIL-INSTALLED). The container's two members are written over the
+same stock root telnet transport; the tool verifies the uploads, the whole
+kernel-slot read-back, the untouched active pair, the handover and the booted
+identity. Source: [../wifi-abi-image/FLASH-RUNBOOK.md](../wifi-abi-image/FLASH-RUNBOOK.md)
 sections 6-7 (validated 2026-11-21/26), retargeted to IMAGE #3.
 
 ### 7.1 Host: stage + inspect (read-only on the box)
@@ -507,9 +522,10 @@ kernelb slot 1794a531...). Do not improvise a different order.
 ## 8. Post-boot receipts (the flash is only installed when these pass)
 
 The box now boots IMAGE #3 (kernelb unchanged, the new rootfsb). Run the receipts
-below **before** any Wi-Fi rung. R1-R5 are safe boot receipts (no device writes, no
-firmware needed); R6-R8 are rung receipts and are only run when the operator
-deliberately enables one bench-proven rung.
+below **before** any Wi-Fi rung. R1-R4 are safe boot receipts (no device writes);
+R5 re-pushes the by-hand firmware/block artifacts (the image never packages them);
+R6-R8 are rung receipts and are only run when the operator deliberately enables
+one bench-proven rung.
 
 Host note: the flashed image answers SSH at **192.168.1.1**; `tools/rsh.sh`
 defaults to the stock address, so prefix it:
@@ -595,8 +611,10 @@ the module is loaded: the image is not the shipped fail-closed policy.
 ### 8.4 R4 - the regdomain is US and the 5 GHz band is IR (the cfg80211 fix)
 
 ```
-R 'modprobe cfg80211; dmesg | tail -3'
-#   no "regulatory.db ... failed" / pkcs7 error line (the REQUIRE_SIGNED_REGDB fix)
+R 'insmod /lib/modules/6.18.60/cfg80211.ko 2>/dev/null; dmesg | tail -3'
+#   no "regulatory.db ... failed" / pkcs7 error line (the REQUIRE_SIGNED_REGDB fix);
+#   the loader itself insmods this exact file (insmod is the available tool; an
+#   already-loaded EEXIST is harmless)
 R 'iw reg set US; iw reg get'
 #   country US: DFS-FCC
 R 'iw reg get | grep "5170 - 5250"'
