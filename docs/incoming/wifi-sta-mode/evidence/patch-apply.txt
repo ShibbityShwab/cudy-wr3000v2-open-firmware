@@ -1,0 +1,16 @@
+PATCH APPLY CHECK (fresh association tree + two prerequisite patches)
+date: 2026-11-25
+
+$ patch -p1 < wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch
+  (applied)
+$ patch -p1 < wifi-sta-join/patches/0001-sta-join-hardening.patch
+  (applied)
+$ patch -p1 --dry-run < wifi-sta-mode/patches/0001-sta-mode-connect-crx.patch
+checking file Kbuild
+checking file cfg80211-provider.symvers
+checking file hi5622_mgmt.c
+checking file hi5622_sta.c
+checking file hi5622_sta_mode.c
+checking file hi5622_sta_mode.h
+checking file hi5622_sta_sme.c
+checking file hi5622_sta_sme.h

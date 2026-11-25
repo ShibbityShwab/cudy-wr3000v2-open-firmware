@@ -1,0 +1,1459 @@
+diff --git a/Kbuild b/Kbuild
+index 0fc0fc2..3d12d6c 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -35,6 +35,7 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+ 		 hi5622_band_cfg.o hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
++		 hi5622_sta_sme.o hi5622_sta_mode.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \
+ 		 hi5622_data_tx_logic.o hi5622_data_tx.o
+diff --git a/cfg80211-provider.symvers b/cfg80211-provider.symvers
+index eda925b..252498c 100644
+--- a/cfg80211-provider.symvers
++++ b/cfg80211-provider.symvers
+@@ -10,3 +10,5 @@
+ 0x00000000	cfg80211_bss_iter	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	cfg80211_mgmt_tx_status_ext	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	cfg80211_rx_mgmt_ext	cfg80211	EXPORT_SYMBOL	
++0x00000000	cfg80211_connect_done	cfg80211	EXPORT_SYMBOL	
++0x00000000	cfg80211_disconnected	cfg80211	EXPORT_SYMBOL	
+diff --git a/hi5622_mgmt.c b/hi5622_mgmt.c
+index a01d8b0..796568b 100644
+--- a/hi5622_mgmt.c
++++ b/hi5622_mgmt.c
+@@ -34,6 +34,7 @@
+ #include "hi5622_frames_api.h"
+ #include "hi5622_mgmt.h"
+ #include "hi5622_mgmt_logic.h"
++#include "hi5622_sta_mode.h"
+ #include "hi5622_sta_ops_logic.h"
+ 
+ /* Management-frame TX carrier (wifi-ap-mgmt, task-143).  Default 0 keeps the
+@@ -199,6 +200,10 @@ void hi5622_mgmt_deliver(struct hi5622_pci *ctx, const u8 *hdr,
+ 		return;
+ 	}
+ 	mgmt_state.rx_events++;
++	/* wifi-sta-mode: the STA kernel-SME consumes auth/assoc responses on the
++	 * CRX path before the AP-delivery gate; 1 = consumed by the STA connect. */
++	if (hi5622_sta_crx_deliver(ctx, &rx))
++		return;
+ 	if (!hi5622_mgmt_rx)
+ 		return;		/* count only (fail-closed default) */
+ 	c = ctx->cfg;
+diff --git a/hi5622_sta.c b/hi5622_sta.c
+index b93a122..0935755 100644
+--- a/hi5622_sta.c
++++ b/hi5622_sta.c
+@@ -69,6 +69,7 @@
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_frames.h"
+ #include "hi5622_sta_logic.h"
++#include "hi5622_sta_mode.h"
+ 
+ /* 0 = fail closed (default), 1 = build+validate only, 2 = one post/load. */
+ unsigned int hi5622_sta_join;
+@@ -298,6 +299,16 @@ int hi5622_sta_connect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	rc = hi5622_sta_mode_precheck(dev, sme);
++	if (rc) {
++		s->refusals++;
++		s->last_error = rc;
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta mode: precheck refused the connect (%d) - no join frame built, no device write\n",
++			 rc);
++		return rc;
++	}
++
+ 	post = hi5622_sta_join == HI5622_STA_JOIN_POST;
+ 	rc = hi5622_sta_join_gate(hi5622_sta_join, hi5622_allow_frames,
+ 				  s->join_attempted ? 1 : 0);
+@@ -374,6 +385,13 @@ int hi5622_sta_connect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 			 sme->privacy ? 1 : 0, sme->bssid, bufs.bssid_va,
+ 			 bufs.ssid_va, bufs.ie_va, bufs.key_va, bufs.key_len);
+ 		hi5622_sta_buf_free(c);
++		if (hi5622_sta_connect_mode != 0) {
++			rc = hi5622_sta_mode_dry(c, dev, sme);
++			if (rc) {
++				s->last_error = rc;
++				return rc;
++			}
++		}
+ 		s->last_error = -EOPNOTSUPP;
+ 		return -EOPNOTSUPP;
+ 	}
+@@ -399,6 +417,8 @@ int hi5622_sta_connect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 	dev_info(&c->ctx->pdev->dev,
+ 		 "sta connect: WAL cfg-event opcode 0x%x posted (bssid=%pM) - completion arrives as D2H WAL group2 id3 and is DECODED LOG-ONLY; cfg80211_connect_done is NOT faked (RX/AP-mgmt lanes own it)\n",
+ 		 HI5622_STA_WAL_CMD_CONNECT, s->bssid);
++	if (hi5622_sta_connect_mode != 0)
++		return hi5622_sta_mode_begin(c, dev, sme);
+ 	return 0;
+ }
+ 
+@@ -483,6 +503,8 @@ int hi5622_sta_disconnect(struct hi5622_cfg80211 *c, struct net_device *dev,
+ 	dev_info(&c->ctx->pdev->dev,
+ 		 "sta disconnect: WAL cfg-event opcode 0x%x posted (reason=%u, bssid=%pM) - join buffer freed\n",
+ 		 HI5622_STA_WAL_CMD_DISCONNECT, reason_code, s->bssid);
++	if (hi5622_sta_connect_mode != 0)
++		hi5622_sta_mode_disconnect(c, dev, reason_code);
+ 	return 0;
+ }
+ 
+@@ -548,4 +570,5 @@ void hi5622_sta_remove(struct hi5622_cfg80211 *c)
+ 		return;
+ 	hi5622_sta_buf_free(c);
+ 	c->sta.join_posted = false;
++	hi5622_sta_mode_remove(c);
+ }
+diff --git a/hi5622_sta_mode.c b/hi5622_sta_mode.c
+new file mode 100644
+index 0000000..2a3b908
+--- /dev/null
++++ b/hi5622_sta_mode.c
+@@ -0,0 +1,614 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_sta_mode.c - kernel-side STA (client) kernel-SME glue for the
++ * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-sta-mode, shared task task-155,
++ * 2026-11-25).  The wire layouts and the state machine live in the portable
++ * hi5622_sta_sme.c; this file only:
++ *   - holds the per-connect context and the module parameters,
++ *   - posts auth/assoc requests on the corrected device-facing management-TX
++ *     carrier (raw HCC group 0 id 6, frame inline; sibling-gpl task-151),
++ *   - consumes the CRX (D2H g1 id13) auth/assoc responses,
++ *   - reports cfg80211_connect_done()/cfg80211_disconnected().
++ *
++ * WHY THE COMPLETION IS ON THE CRX PATH (not the data ring, not a firmware
++ * completion record): the pinned vendor module is a split-MAC host SME - the
++ * STA FSM table {scan_rsp, join_rsp, auth_rsp, asoc_rsp} at .rodata+0x8074 is
++ * reached from hmac_rx_process_mgmt_event (D2H chip group 1 id 13), and
++ * hmac_handle_asoc_rsp_sta parses the received association response, syncs
++ * the association state to the device (H2D g2 id3) and reports the connect
++ * result to cfg80211.  So the association response management frame is the
++ * completion event; this file routes it into the kernel SME and calls
++ * cfg80211_connect_done() with the locally-held req_ie/resp_ie - it never
++ * dereferences a firmware-supplied IE address (the sta-join lane's log-only
++ * g2 id3 decoder stays as a diagnostic for the full-MAC alternative).
++ *
++ * SAFETY: every post goes through hi5622_frame_post() (allow_frames budget,
++ * inter-frame gap, armed/released/ACTIVE lane gates, structural + firmware
++ * handler validation) and only when sta_connect=2; a failed post is final
++ * (no retry).  No device register is written here.
++ */
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <linux/etherdevice.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_cfg80211.h"
++#include "hi5622_contract.h"
++#include "hi5622_driver.h"
++#include "hi5622_frame_post.h"
++#include "hi5622_frames_api.h"
++#include "hi5622_mgmt_logic.h"
++#include "hi5622_sta_mode.h"
++#include "hi5622_sta_sme.h"
++
++/* STA connect mode: 0 = fail closed (default), 1 = build/validate only,
++ * 2 = live host-SME handshake.  Read-only: the mode cannot be flipped on a
++ * boot that already fired (one connect per load, no retry). */
++unsigned int hi5622_sta_connect_mode;
++module_param_named(sta_connect, hi5622_sta_connect_mode, uint, 0444);
++MODULE_PARM_DESC(sta_connect,
++		 "STA client connect flow: 0=fail-closed default (join-only path), 1=dry run (build+validate join/auth/assoc, post nothing), 2=live (join post + host-SME auth/assoc over the HCC g0 id6 mgmt carrier + CRX completion; needs sta_join=2 and allow_frames budget)");
++
++#define HI5622_STA_MODE_TIMEOUT_MIN_MS	500u
++#define HI5622_STA_MODE_TIMEOUT_MAX_MS	60000u
++static unsigned int hi5622_sta_connect_timeout_ms = 4000u;
++module_param_named(sta_connect_timeout_ms, hi5622_sta_connect_timeout_ms,
++		   uint, 0644);
++MODULE_PARM_DESC(sta_connect_timeout_ms,
++		 "bounded auth/assoc response timeout for the STA host-SME connect (500..60000 ms, default 4000)");
++
++#define HI5622_STA_MODE_DRY	1u
++#define HI5622_STA_MODE_LIVE	2u
++
++/* The join gate lives in hi5622_sta.c (wifi-sta-join lane); LIVE requires the
++ * same mode there so one switch cannot silently post an un-gated join. */
++extern unsigned int hi5622_sta_join;
++
++struct hi5622_sta_mode_state {
++	struct mutex		lock;
++	struct delayed_work	timer;
++	struct net_device	*dev;		/* connect owner while in flight */
++	u8			own_mac[6];
++	u8			bssid[6];
++	u8			ssid[HISM_MAX_SSID];
++	u8			ssid_len;
++	u8			req_ie[HISM_MAX_IE];
++	u16			req_ie_len;
++	u8			resp_ie[HISM_MAX_IE];
++	u16			resp_ie_len;
++	u8			privacy;
++	u8			channel;
++	u32			seq;		/* mgmt-frame cookie counter */
++	u32			state;		/* HISM_* */
++	bool			armed;
++	u32			auth_posts;
++	u32			assoc_posts;
++	u32			auth_rx;
++	u32			assoc_rx;
++	u32			completed_ok;
++	u32			completed_fail;
++	u32			timeouts;
++	u32			refused;
++	u32			rx_dropped;
++	u32			rx_bad;
++	u32			mlme_errors;
++};
++
++static struct hi5622_sta_mode_state sm = {
++	.lock = __MUTEX_INITIALIZER(sm.lock),
++	.state = HISM_OFF,
++};
++
++static void hi5622_sta_mode_timer_work(struct work_struct *work);
++
++/* ---------------------------------------------------------------------
++ * Management-carrier TX (corrected g0 id6 carrier, sibling-gpl task-151).
++ * Caller must hold sm.lock (sequence/cookie/channel come from the connect
++ * context).  Returns 0 only after hi5622_frame_post() accepted the frame and
++ * the coalesced announce was consumed.
++ * -------------------------------------------------------------------*/
++static int hi5622_sta_mode_post_mgmt(struct hi5622_cfg80211 *c,
++				     const u8 *frame, size_t frame_len,
++				     const char *what)
++{
++	const struct hi5622_frame_ops *ops;
++	struct hi5622_mgmt_tx_params p;
++	u8 wire[HIMG_MGMT_TX_MAX_TOTAL];
++	size_t wire_len = 0;
++	int rc;
++
++	if (!c || !c->ctx || !frame)
++		return -EINVAL;
++	if (frame_len < HISM_MGMT_HDR_LEN || frame_len > HIMG_MAX_FRAME_TX)
++		return -EINVAL;
++	if (himg_mgmt_frame_ok(frame, frame_len))
++		return -EINVAL;
++	ops = hi5622_frame_ops_get();
++	if (!ops || !(ops->caps & HI5622_FRAME_CAP_MGMT_TX) ||
++	    !ops->build_mgmt_tx)
++		return -EOPNOTSUPP;
++	memset(&p, 0, sizeof(p));
++	p.channel = sm.channel;
++	p.len = (u16)frame_len;
++	p.seq = ++sm.seq;
++	p.dst = 0u;			/* single STA VAP -> dst nibble 0 [V] */
++	p.frame = frame;
++	p.frame_len = (u16)frame_len;
++	p.cookie = (u16)(p.seq & 0x0fu);
++	p.user_id = 0u;			/* no station user -> 0x0fff    */
++	p.vap_id = 0u;
++	p.band = (sm.channel > 14u) ? 1u : 0u;
++	p.hdr2 = 0u;
++	rc = ops->build_mgmt_tx(wire, sizeof(wire), &wire_len, &p);
++	if (rc)
++		return rc;
++	return hi5622_frame_post(c->ctx, wire, wire_len, what, NULL);
++}
++
++static int hi5622_sta_mode_send_auth_locked(struct hi5622_cfg80211 *c)
++{
++	struct hism_auth_req ar;
++	u8 frame[HISM_AUTH_FRAME_LEN];
++	size_t frame_len = 0;
++	int rc;
++
++	memset(&ar, 0, sizeof(ar));
++	ar.own = sm.own_mac;
++	ar.bssid = sm.bssid;
++	ar.seq = (u16)(sm.seq & 0x0fu);
++	rc = hism_build_auth_req(frame, sizeof(frame), &frame_len, &ar);
++	if (rc) {
++		sm.mlme_errors++;
++		return -EINVAL;
++	}
++	rc = hi5622_sta_mode_post_mgmt(c, frame, frame_len, "sta_auth_req");
++	if (rc) {
++		sm.mlme_errors++;
++		return rc;
++	}
++	sm.auth_posts++;
++	sm.state = HISM_AUTH_SENT;
++	return 0;
++}
++
++static int hi5622_sta_mode_send_assoc_locked(struct hi5622_cfg80211 *c)
++{
++	struct hism_assoc_req ar;
++	const u8 *assoc_ie = NULL;
++	size_t assoc_ie_len = 0;
++	u8 frame[HISM_MAX_FRAME];
++	size_t frame_len = 0;
++	size_t copied = 0;
++	int rc;
++
++	memset(&ar, 0, sizeof(ar));
++	ar.own = sm.own_mac;
++	ar.bssid = sm.bssid;
++	ar.ssid = sm.ssid;
++	ar.ssid_len = sm.ssid_len;
++	ar.privacy = sm.privacy ? 1 : 0;
++	ar.seq = (u16)(sm.seq & 0x0fu);
++	rc = hism_build_assoc_req(frame, sizeof(frame), &frame_len,
++				  &assoc_ie, &assoc_ie_len, &ar);
++	if (rc) {
++		sm.mlme_errors++;
++		return -EINVAL;
++	}
++	rc = hi5622_sta_mode_post_mgmt(c, frame, frame_len, "sta_assoc_req");
++	if (rc) {
++		sm.mlme_errors++;
++		return rc;
++	}
++	sm.assoc_posts++;
++	/* remember the association-request IE list for cfg80211_connect_done */
++	if (assoc_ie_len && assoc_ie) {
++		rc = hism_ie_copy(sm.req_ie, sizeof(sm.req_ie), assoc_ie,
++				  assoc_ie_len, &copied);
++		if (rc) {
++			sm.mlme_errors++;
++			return -E2BIG;
++		}
++		sm.req_ie_len = (u16)copied;
++	}
++	sm.state = HISM_ASSOC_SENT;
++	return 0;
++}
++
++/* Finish the in-flight connect under sm.lock.  status 0 = success (802.11
++ * status); positive 802.11 status = AP rejection; negative = local failure.
++ * ies/ies_len = association response IEs (success only).  cfg80211 callbacks
++ * run while the lock is held so remove/disconnect cannot clear sm.dev in
++ * between (the service thread and the timer take the same lock). */
++static void hi5622_sta_mode_finish_locked(int status, const u8 *ies,
++					  size_t ies_len, u16 timeout_reason)
++{
++	struct cfg80211_connect_resp_params cp;
++	struct net_device *dev = sm.dev;
++
++	if (!dev) {
++		sm.state = HISM_OFF;
++		return;
++	}
++	if (sm.armed) {
++		cancel_delayed_work(&sm.timer);
++		sm.armed = false;
++	}
++	if (ies && ies_len) {
++		size_t copied = 0;
++
++		if (!hism_ie_copy(sm.resp_ie, sizeof(sm.resp_ie), ies,
++				  ies_len, &copied))
++			sm.resp_ie_len = (u16)copied;
++		else
++			sm.resp_ie_len = 0;
++	} else {
++		sm.resp_ie_len = 0;
++	}
++	memset(&cp, 0, sizeof(cp));
++	cp.status = status;
++	cp.timeout_reason = timeout_reason;
++	cp.req_ie = sm.req_ie_len ? sm.req_ie : NULL;
++	cp.req_ie_len = sm.req_ie_len;
++	cp.resp_ie = sm.resp_ie_len ? sm.resp_ie : NULL;
++	cp.resp_ie_len = sm.resp_ie_len;
++	cp.links[0].bssid = sm.bssid;
++	if (status == 0)
++		sm.completed_ok++;
++	else
++		sm.completed_fail++;
++	cfg80211_connect_done(dev, &cp, GFP_KERNEL);
++}
++
++static void hi5622_sta_mode_timer_work(struct work_struct *work)
++{
++	u16 reason;
++
++	mutex_lock(&sm.lock);
++	sm.armed = false;
++	if (!sm.dev || !hism_state_pending(sm.state)) {
++		mutex_unlock(&sm.lock);
++		return;
++	}
++	sm.timeouts++;
++	sm.state = HISM_FAILED;
++	reason = hism_timeout_reason(sm.state);
++	if (sm.dev)
++		dev_warn(&sm.dev->dev,
++			 "sta mode: connect timeout (state failed, timeout_reason=%u) - failing the connect, one shot no retry\n",
++			 reason);
++	hi5622_sta_mode_finish_locked(-1, NULL, 0, reason);
++	mutex_unlock(&sm.lock);
++}
++
++/* ---------------------------------------------------------------------
++ * Pre-.connect validation (module-parameter contract)
++ * -------------------------------------------------------------------*/
++int hi5622_sta_mode_precheck(struct net_device *dev,
++			     struct cfg80211_connect_params *sme)
++{
++	if (hi5622_sta_connect_mode == 0u)
++		return 0;		/* legacy join-only path (sta_join) */
++	if (hi5622_sta_connect_mode > HI5622_STA_MODE_LIVE)
++		return -EINVAL;
++	if (hi5622_sta_connect_mode != hi5622_sta_join) {
++		pr_warn("hi5622: sta_connect=%u needs the same sta_join=%u (the join post is the first frame of the flow) - fail closed\n",
++			hi5622_sta_connect_mode, hi5622_sta_join);
++		return -EINVAL;
++	}
++	if (!dev || !sme)
++		return -EINVAL;
++	if (hi5622_sta_connect_mode == HI5622_STA_MODE_LIVE) {
++		if (!dev->dev_addr || !hism_mac_ok(dev->dev_addr)) {
++			pr_warn("hi5622: sta mode: invalid own MAC - fail closed\n");
++			return -EINVAL;
++		}
++		if (!sme->channel) {
++			pr_warn("hi5622: sta mode: connect request has no BSS channel (needed for the device TX control block) - fail closed\n");
++			return -EINVAL;
++		}
++		if (hi5622_sta_connect_timeout_ms <
++				HI5622_STA_MODE_TIMEOUT_MIN_MS ||
++		    hi5622_sta_connect_timeout_ms >
++				HI5622_STA_MODE_TIMEOUT_MAX_MS) {
++			pr_warn("hi5622: sta mode: sta_connect_timeout_ms=%u out of range %u..%u - fail closed\n",
++				hi5622_sta_connect_timeout_ms,
++				HI5622_STA_MODE_TIMEOUT_MIN_MS,
++				HI5622_STA_MODE_TIMEOUT_MAX_MS);
++			return -EINVAL;
++		}
++		/* join + auth + assoc = three provider frames of the budget */
++		if (hi5622_allow_frames < 3u) {
++			pr_warn("hi5622: sta mode LIVE needs allow_frames>=3 (join+auth+assoc), have %u - fail closed\n",
++				hi5622_allow_frames);
++			return -EPERM;
++		}
++	}
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Begin the host-SME handshake after the WAL join was accepted.
++ * -------------------------------------------------------------------*/
++int hi5622_sta_mode_begin(struct hi5622_cfg80211 *c, struct net_device *dev,
++			  struct cfg80211_connect_params *sme)
++{
++	struct device *d;
++	size_t copied = 0;
++	int rc;
++
++	if (hi5622_sta_connect_mode == 0u)
++		return 0;
++	if (!c || !c->ctx || !dev || !sme)
++		return -EINVAL;
++	d = &c->ctx->pdev->dev;
++	if (hi5622_sta_connect_mode != HI5622_STA_MODE_LIVE) {
++		dev_info(d,
++			 "sta mode DRY: join body built+validated; host-SME auth/assoc frames are dry-built too, nothing posted\n");
++		return 0;
++	}
++	if (!sme->bssid || !sme->ssid || sme->ssid_len == 0 ||
++	    sme->ssid_len > HISM_MAX_SSID)
++		return -EINVAL;
++
++	mutex_lock(&sm.lock);
++	if (sm.state != HISM_OFF && sm.state != HISM_FAILED) {
++		sm.refused++;
++		rc = -EALREADY;
++		goto out;
++	}
++	memset(&sm.own_mac, 0, sizeof(sm.own_mac));
++	memcpy(sm.own_mac, dev->dev_addr, ETH_ALEN);
++	memcpy(sm.bssid, sme->bssid, ETH_ALEN);
++	sm.ssid_len = (u8)sme->ssid_len;
++	memcpy(sm.ssid, sme->ssid, sme->ssid_len);
++	sm.privacy = sme->privacy ? 1u : 0u;
++	sm.channel = (u8)sme->channel->hw_value;
++	sm.req_ie_len = 0;
++	if (sme->ie_len) {
++		rc = hism_ie_copy(sm.req_ie, sizeof(sm.req_ie), sme->ie,
++				  sme->ie_len, &copied);
++		if (rc) {
++			sm.refused++;
++			goto out;
++		}
++		sm.req_ie_len = (u16)copied;
++	}
++	sm.resp_ie_len = 0;
++	sm.dev = dev;
++	sm.state = HISM_JOIN_POSTED;
++	sm.seq = 0;
++	INIT_DELAYED_WORK(&sm.timer, hi5622_sta_mode_timer_work);
++	rc = hi5622_sta_mode_send_auth_locked(c);
++	if (rc) {
++		sm.state = HISM_FAILED;
++		sm.dev = NULL;
++		goto out;
++	}
++	schedule_delayed_work(&sm.timer,
++			      msecs_to_jiffies(hi5622_sta_connect_timeout_ms));
++	sm.armed = true;
++	dev_info(d,
++		 "sta mode: host-SME connect started (bssid=%pM ch=%u auth=%zu B posted on g0 id6; waiting for the CRX auth response, timeout %u ms)\n",
++		 sm.bssid, sm.channel, (size_t)HISM_AUTH_FRAME_LEN,
++		 hi5622_sta_connect_timeout_ms);
++out:
++	mutex_unlock(&sm.lock);
++	return rc;
++}
++
++/* ---------------------------------------------------------------------
++ * DRY run (sta_connect=1): build+validate the whole handshake locally.
++ * Nothing is posted and no state changes; returns 0 when every frame is
++ * valid, negative errno on the first refusal.
++ * -------------------------------------------------------------------*/
++int hi5622_sta_mode_dry(struct hi5622_cfg80211 *c, struct net_device *dev,
++			struct cfg80211_connect_params *sme)
++{
++	struct hism_auth_req ar;
++	struct hism_assoc_req as;
++	const u8 *assoc_ie = NULL;
++	size_t assoc_ie_len = 0;
++	u8 frame[HISM_MAX_FRAME];
++	size_t frame_len = 0;
++	int rc;
++
++	if (hi5622_sta_connect_mode != HI5622_STA_MODE_DRY)
++		return 0;		/* caller keeps the join-only behaviour */
++	if (!c || !c->ctx || !dev || !sme)
++		return -EINVAL;
++	memset(&ar, 0, sizeof(ar));
++	ar.own = dev->dev_addr;
++	ar.bssid = sme->bssid;
++	ar.seq = 0u;
++	rc = hism_build_auth_req(frame, sizeof(frame), &frame_len, &ar);
++	if (rc) {
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta mode DRY: auth request refused (%d)\n", rc);
++		return -EINVAL;
++	}
++	memset(&as, 0, sizeof(as));
++	as.own = dev->dev_addr;
++	as.bssid = sme->bssid;
++	as.ssid = sme->ssid;
++	as.ssid_len = (u8)sme->ssid_len;
++	as.privacy = sme->privacy ? 1 : 0;
++	as.seq = 0u;
++	rc = hism_build_assoc_req(frame, sizeof(frame), &frame_len,
++				  &assoc_ie, &assoc_ie_len, &as);
++	if (rc) {
++		dev_warn(&c->ctx->pdev->dev,
++			 "sta mode DRY: assoc request refused (%d)\n", rc);
++		return -EINVAL;
++	}
++	dev_info(&c->ctx->pdev->dev,
++		 "sta mode DRY: auth request 30 B and assoc request %zu B (IE list %zu B) built+validated - nothing posted, no state change\n",
++		 frame_len, assoc_ie_len);
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Disconnect teardown (after the WAL 0x00d0 disconnect was posted).
++ * -------------------------------------------------------------------*/
++void hi5622_sta_mode_disconnect(struct hi5622_cfg80211 *c,
++				struct net_device *dev, u16 reason)
++{
++	bool pending;
++
++	if (hi5622_sta_connect_mode == 0u || !dev)
++		return;
++	mutex_lock(&sm.lock);
++	if (!sm.dev) {
++		mutex_unlock(&sm.lock);
++		return;
++	}
++	if (sm.armed) {
++		cancel_delayed_work(&sm.timer);
++		sm.armed = false;
++	}
++	pending = hism_state_pending(sm.state);
++	sm.state = HISM_OFF;
++	sm.dev = NULL;
++	if (pending) {
++		struct cfg80211_connect_resp_params cp;
++
++		memset(&cp, 0, sizeof(cp));
++		cp.status = -1;
++		cp.timeout_reason = HISM_TIMEOUT_UNSPECIFIED;
++		cp.links[0].bssid = sm.bssid;
++		cfg80211_connect_done(dev, &cp, GFP_KERNEL);
++	} else {
++		cfg80211_disconnected(dev, reason, NULL, 0, true, GFP_KERNEL);
++	}
++	mutex_unlock(&sm.lock);
++	if (c && c->ctx)
++		dev_info(&c->ctx->pdev->dev,
++			 "sta mode: disconnect reported to cfg80211 (reason=%u, pending=%u); mode state off\n",
++			 reason, pending ? 1u : 0u);
++}
++
++void hi5622_sta_mode_remove(struct hi5622_cfg80211 *c)
++{
++	mutex_lock(&sm.lock);
++	if (sm.armed) {
++		cancel_delayed_work(&sm.timer);
++		sm.armed = false;
++	}
++	sm.dev = NULL;
++	sm.state = HISM_OFF;
++	mutex_unlock(&sm.lock);
++}
++
++/* ---------------------------------------------------------------------
++ * CRX path: consume auth/assoc responses (D2H group 1 id 13).
++ * Returns 1 when consumed.  Runs in the HCC service thread, so the lock is
++ * trylock-only; a dropped frame is counted and never retried (fail-closed).
++ * -------------------------------------------------------------------*/
++int hi5622_sta_crx_deliver(struct hi5622_pci *ctx,
++			   const struct himg_rx_frame *rx)
++{
++	struct hi5622_cfg80211 *c;
++	struct hism_resp rsp;
++	int handled = 0;
++	int rc;
++
++	if (!ctx || !rx || !ctx->cfg)
++		return 0;
++	if (hi5622_sta_connect_mode != HI5622_STA_MODE_LIVE)
++		return 0;
++	if (rx->subtype != HISM_SUBTYPE_AUTH &&
++	    rx->subtype != HISM_SUBTYPE_ASSOC_RESP)
++		return 0;
++	c = ctx->cfg;
++	if (!mutex_trylock(&sm.lock)) {
++		sm.rx_dropped++;
++		return 0;
++	}
++	if (!sm.dev)
++		goto out;
++	if (!hism_resp_for_us(rx->frame, rx->frame_len, sm.own_mac, sm.bssid)) {
++		sm.rx_bad++;
++		goto out;
++	}
++	if (rx->subtype == HISM_SUBTYPE_AUTH) {
++		if (sm.state != HISM_AUTH_SENT) {
++			sm.rx_bad++;
++			goto out;
++		}
++		rc = hism_decode_auth_resp(rx->frame, rx->frame_len, &rsp);
++		if (rc) {
++			sm.rx_bad++;
++			goto out;
++		}
++		handled = 1;
++		sm.auth_rx++;
++		if (hism_auth_rsp_apply(&sm.state, rsp.status)) {
++			sm.state = HISM_FAILED;
++			hi5622_sta_mode_finish_locked(-EIO, NULL, 0,
++						      HISM_TIMEOUT_UNSPECIFIED);
++			goto out;
++		}
++		if (rsp.status != HISM_STATUS_SUCCESS) {
++			dev_warn(&ctx->pdev->dev,
++				 "sta mode: auth response status=%u - connect failed (no retry)\n",
++				 rsp.status);
++			hi5622_sta_mode_finish_locked((int)rsp.status, NULL, 0,
++						      HISM_TIMEOUT_UNSPECIFIED);
++			goto out;
++		}
++		rc = hi5622_sta_mode_send_assoc_locked(c);
++		if (rc) {
++			dev_warn(&ctx->pdev->dev,
++				 "sta mode: assoc request post refused (%d) - connect failed, no retry\n",
++				 rc);
++			hi5622_sta_mode_finish_locked(-EIO, NULL, 0,
++						      HISM_TIMEOUT_UNSPECIFIED);
++			goto out;
++		}
++		dev_info(&ctx->pdev->dev,
++			 "sta mode: auth response OK -> assoc request posted (state %s)\n",
++			 hism_state_name(sm.state));
++	} else {
++		if (sm.state != HISM_ASSOC_SENT) {
++			sm.rx_bad++;
++			goto out;
++		}
++		rc = hism_decode_assoc_resp(rx->frame, rx->frame_len, &rsp);
++		if (rc) {
++			sm.rx_bad++;
++			goto out;
++		}
++		handled = 1;
++		sm.assoc_rx++;
++		if (hism_assoc_rsp_apply(&sm.state, rsp.status)) {
++			sm.state = HISM_FAILED;
++			hi5622_sta_mode_finish_locked(-EIO, NULL, 0,
++						      HISM_TIMEOUT_UNSPECIFIED);
++			goto out;
++		}
++		if (rsp.status != HISM_STATUS_SUCCESS) {
++			dev_warn(&ctx->pdev->dev,
++				 "sta mode: assoc response status=%u - connect failed (no retry)\n",
++				 rsp.status);
++			hi5622_sta_mode_finish_locked((int)rsp.status, NULL, 0,
++						      HISM_TIMEOUT_UNSPECIFIED);
++			goto out;
++		}
++		dev_info(&ctx->pdev->dev,
++			 "sta mode: assoc response OK (aid=%u, resp IEs %zu B) -> cfg80211_connect_done(status=0) on the CRX path\n",
++			 rsp.aid, rsp.ies_len);
++		hi5622_sta_mode_finish_locked(0, rsp.ies, rsp.ies_len,
++					      HISM_TIMEOUT_UNSPECIFIED);
++	}
++out:
++	mutex_unlock(&sm.lock);
++	return handled;
++}
+diff --git a/hi5622_sta_mode.h b/hi5622_sta_mode.h
+new file mode 100644
+index 0000000..0b84900
+--- /dev/null
++++ b/hi5622_sta_mode.h
+@@ -0,0 +1,87 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_sta_mode.h - kernel-side STA (client) kernel-SME glue for the
++ * Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-sta-mode, shared task task-155,
++ * 2026-11-25).  Splits the STA connect work into:
++ *   - hi5622_sta_sme.c  portable C99 logic (frame builders, decoders, FSM)
++ *   - this file         kernel glue (cfg80211 completion, module params,
++ *                       mgmt-carrier TX, CRX delivery hook)
++ *
++ * FLOW after the WAL cfg-event 0x123 join post (hi5622_sta.c):
++ *   1. hi5622_sta_mode_begin() stores the connect context and posts the
++ *      802.11 authentication request on the corrected g0 id6 mgmt carrier.
++ *   2. Device->host auth response arrives on the CRX path
++ *      (D2H g1 id13 -> hi5622_mgmt_deliver -> hi5622_sta_crx_deliver), the
++ *      assoc request is posted.
++ *   3. Device->host assoc response completes the connect:
++ *      cfg80211_connect_done(status=0, bssid, req_ie, resp_ie).  This is the
++ *      "assoc completion on the CRX path" - NOT a data-ring event and NOT a
++ *      firmware-allocated completion record (see hi5622_sta_sme.h).
++ *   4. A bounded connect timer (sta_connect_timeout_ms) fails the connect
++ *      through cfg80211_connect_done(status=-1, timeout_reason=...) when the
++ *      AP never answers - one shot, no retry.
++ *
++ * Fail-closed contract (compiled defaults):
++ *   sta_connect=0  (default) OFF: the .connect/.disconnect path is the
++ *                  wifi-sta-join lane's join-only path; nothing new posts.
++ *   sta_connect=1  DRY: the join body (hi5622_sta.c) and the auth/assoc
++ *                  frames are built+validated, NOTHING is posted.
++ *   sta_connect=2  LIVE: requires sta_join=2 (the join post), a board that
++ *                  passed the post gates and allow_frames budget; posts the
++ *                  join, then auth, then assoc, and completes through CRX.
++ * No key material is ever touched by these builders.
++ */
++#ifndef HI5622_STA_MODE_H
++#define HI5622_STA_MODE_H
++
++#ifndef __KERNEL__
++#error "hi5622_sta_mode.h is kernel-only; portable logic is hi5622_sta_sme.h"
++#endif
++
++#include <linux/types.h>
++
++struct cfg80211_connect_params;
++struct hi5622_cfg80211;
++struct hi5622_pci;
++struct himg_rx_frame;
++struct net_device;
++
++/* module parameter (defined in hi5622_sta_mode.c; read by hi5622_sta.c). */
++extern unsigned int hi5622_sta_connect_mode;
++
++/* Pre-.connect validation.  Returns 0 for OFF (legacy join-only path) and
++ * for a consistent DRY/LIVE request; -EINVAL/-EPERM otherwise.  Called
++ * before the join frame is built or posted. */
++int hi5622_sta_mode_precheck(struct net_device *dev,
++			     struct cfg80211_connect_params *sme);
++
++/* After a successful WAL join post: start the host-SME handshake (LIVE) or
++ * return 0 for DRY.  0 = the connect is in flight (completion owed through
++ * cfg80211_connect_done); negative errno = refused before the first mgmt
++ * frame (cfg80211 will report the .connect error). */
++int hi5622_sta_mode_begin(struct hi5622_cfg80211 *c, struct net_device *dev,
++			  struct cfg80211_connect_params *sme);
++
++/* DRY (sta_connect=1): build+validate the auth/assoc frames, post nothing. */
++int hi5622_sta_mode_dry(struct hi5622_cfg80211 *c, struct net_device *dev,
++			struct cfg80211_connect_params *sme);
++
++/* Teardown after a posted WAL disconnect: reports cfg80211_disconnected()
++ * when connected, or fails a pending connect, under the mode lock. */
++void hi5622_sta_mode_disconnect(struct hi5622_cfg80211 *c,
++				struct net_device *dev, u16 reason);
++
++/* Cancel the timer and drop the context (cfg80211 removal). */
++void hi5622_sta_mode_remove(struct hi5622_cfg80211 *c);
++
++/* CRX delivery hook: called from hi5622_mgmt_deliver() for every decoded
++ * D2H group-1 id-13 management frame.  Returns 1 when the STA kernel-SME
++ * consumed the frame (the AP-delivery path must then not forward it), 0
++ * otherwise.  Never sleeps under the HCC service thread lock (trylock) and
++ * is fail-closed (an out-of-order response is counted and dropped). */
++int hi5622_sta_crx_deliver(struct hi5622_pci *ctx,
++			   const struct himg_rx_frame *rx);
++
++#endif /* HI5622_STA_MODE_H */
+diff --git a/hi5622_sta_sme.c b/hi5622_sta_sme.c
+new file mode 100644
+index 0000000..549baf0
+--- /dev/null
++++ b/hi5622_sta_sme.c
+@@ -0,0 +1,368 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_sta_sme.c - portable kernel-SME logic for the STA (client) connect
++ * flow of the Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-sta-mode, shared task task-155,
++ * 2026-11-25).  See hi5622_sta_sme.h for the decoded model and evidence
++ * markers.  Pure C99, no libc: host-tested by tools/sta_mode_selftest.c and
++ * built into the 6.18 kernel module unchanged.
++ *
++ * SAFETY: these builders only produce public over-the-air management frames
++ * (auth request / assoc request) and the decoded H2D association-state sync;
++ * no key material, no secret, no device register access.  Every decoder is
++ * fail-closed: a short, wrong-subtype or malformed-IE frame is refused, never
++ * partially accepted.
++ */
++#include "hi5622_sta_sme.h"
++
++/* ---------------------------------------------------------------------
++ * Small endian helpers (the wire format is little-endian; the target is
++ * ARMv7 little-endian, but keep this explicit for the host tests).
++ * -------------------------------------------------------------------*/
++static u16 hl_get16(const u8 *p)
++{
++	return (u16)((u16)p[0] | ((u16)p[1] << 8));
++}
++
++static void hl_put16(u8 *p, u16 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)((v >> 8) & 0xffu);
++}
++
++static void hl_copy(u8 *dst, const u8 *src, size_t n)
++{
++	size_t i;
++
++	for (i = 0; i < n; i++)
++		dst[i] = src[i];
++}
++
++static void hl_zero(u8 *dst, size_t n)
++{
++	size_t i;
++
++	for (i = 0; i < n; i++)
++		dst[i] = 0u;
++}
++
++static int hl_mac_eq(const u8 *a, const u8 *b)
++{
++	size_t i;
++
++	for (i = 0; i < 6u; i++) {
++		if (a[i] != b[i])
++			return 0;
++	}
++	return 1;
++}
++
++/* ---------------------------------------------------------------------
++ * State machine
++ * -------------------------------------------------------------------*/
++const char *hism_state_name(u32 state)
++{
++	switch (state) {
++	case HISM_OFF:		return "off";
++	case HISM_JOIN_POSTED:	return "join_posted";
++	case HISM_AUTH_SENT:	return "auth_sent";
++	case HISM_AUTH_DONE:	return "auth_done";
++	case HISM_ASSOC_SENT:	return "assoc_sent";
++	case HISM_CONNECTED:	return "connected";
++	case HISM_FAILED:	return "failed";
++	default:		return "invalid";
++	}
++}
++
++int hism_state_pending(u32 state)
++{
++	return state == HISM_JOIN_POSTED || state == HISM_AUTH_SENT ||
++	       state == HISM_AUTH_DONE || state == HISM_ASSOC_SENT;
++}
++
++int hism_auth_rsp_apply(u32 *state, u16 status)
++{
++	if (!state || *state > HISM_STATE_MAX)
++		return -1;
++	if (*state != HISM_AUTH_SENT)
++		return -2;	/* out of order: never completes a connect */
++	*state = (status == HISM_STATUS_SUCCESS) ? HISM_AUTH_DONE
++						 : HISM_FAILED;
++	return 0;
++}
++
++int hism_assoc_rsp_apply(u32 *state, u16 status)
++{
++	if (!state || *state > HISM_STATE_MAX)
++		return -1;
++	if (*state != HISM_ASSOC_SENT)
++		return -2;	/* out of order */
++	*state = (status == HISM_STATUS_SUCCESS) ? HISM_CONNECTED
++						 : HISM_FAILED;
++	return 0;
++}
++
++u16 hism_timeout_reason(u32 state)
++{
++	if (state == HISM_AUTH_SENT)
++		return HISM_TIMEOUT_AUTH;
++	if (state == HISM_ASSOC_SENT || state == HISM_AUTH_DONE)
++		return HISM_TIMEOUT_ASSOC;
++	return HISM_TIMEOUT_UNSPECIFIED;
++}
++
++/* ---------------------------------------------------------------------
++ * Address / frame builders
++ * -------------------------------------------------------------------*/
++int hism_mac_ok(const u8 *mac)
++{
++	u8 or_all = 0u;
++	size_t i;
++
++	if (!mac)
++		return 0;
++	for (i = 0; i < 6u; i++)
++		or_all = (u8)(or_all | mac[i]);
++	if (or_all == 0u)
++		return 0;			/* all-zero */
++	if (mac[0] & 0x01u)
++		return 0;			/* multicast/broadcast */
++	return 1;
++}
++
++int hism_build_auth_req(u8 *frame, size_t cap, size_t *out_len,
++			const struct hism_auth_req *p)
++{
++	if (!frame || !out_len || !p || !hism_mac_ok(p->own) ||
++	    !hism_mac_ok(p->bssid))
++		return -1;
++	if (cap < HISM_AUTH_FRAME_LEN)
++		return -2;
++	hl_zero(frame, HISM_AUTH_FRAME_LEN);
++	frame[0] = HISM_FC0_AUTH;
++	frame[1] = 0x00u;
++	hl_put16(frame + 2, 0u);		/* duration */
++	hl_copy(frame + 4, p->bssid, 6);	/* addr1 = DA = AP */
++	hl_copy(frame + 10, p->own, 6);		/* addr2 = SA = us  */
++	hl_copy(frame + 16, p->bssid, 6);	/* addr3 = BSSID    */
++	hl_put16(frame + 22, (u16)((p->seq & 0x0fu) << 4));
++	hl_put16(frame + 24, HISM_AUTH_ALGO_OPEN);
++	hl_put16(frame + 26, HISM_AUTH_SEQ_OPEN);
++	hl_put16(frame + 28, HISM_STATUS_SUCCESS);
++	*out_len = HISM_AUTH_FRAME_LEN;
++	return 0;
++}
++
++int hism_build_assoc_req(u8 *frame, size_t cap, size_t *out_len,
++			 const u8 **assoc_ie, size_t *assoc_ie_len,
++			 const struct hism_assoc_req *p)
++{
++	size_t off, need;
++	u16 capab;
++
++	if (assoc_ie)
++		*assoc_ie = NULL;
++	if (assoc_ie_len)
++		*assoc_ie_len = 0;
++	if (!frame || !out_len || !p || !hism_mac_ok(p->own) ||
++	    !hism_mac_ok(p->bssid))
++		return -1;
++	if (!p->ssid || p->ssid_len == 0u || p->ssid_len > HISM_MAX_SSID)
++		return -1;
++	/* 24 hdr + 4 fixed + SSID IE + rates IE + ext-rates IE */
++	need = HISM_ASSOC_HDR_IE_OFF + 2u + (size_t)p->ssid_len +
++	       2u + HISM_RATES_BASIC_LEN + 2u + HISM_RATES_EXT_LEN;
++	if (need > HISM_MAX_FRAME || cap < need)
++		return -2;
++
++	hl_zero(frame, need);
++	frame[0] = HISM_FC0_ASSOC_REQ;
++	frame[1] = 0x00u;
++	hl_put16(frame + 2, 0u);		/* duration */
++	hl_copy(frame + 4, p->bssid, 6);	/* addr1 = DA = AP */
++	hl_copy(frame + 10, p->own, 6);		/* addr2 = SA = us  */
++	hl_copy(frame + 16, p->bssid, 6);	/* addr3 = BSSID    */
++	hl_put16(frame + 22, (u16)((p->seq & 0x0fu) << 4));
++
++	capab = (u16)(HISM_CAP_ESS | HISM_CAP_SHORT_PREAMBLE);
++	if (p->privacy)
++		capab = (u16)(capab | HISM_CAP_PRIVACY);
++	hl_put16(frame + 24, capab);
++	hl_put16(frame + 26, HISM_LISTEN_INTERVAL);
++
++	off = HISM_ASSOC_HDR_IE_OFF;
++	frame[off++] = HISM_EID_SSID;
++	frame[off++] = p->ssid_len;
++	hl_copy(frame + off, p->ssid, p->ssid_len);
++	off += p->ssid_len;
++	frame[off++] = HISM_EID_SUPPORTED_RATES;
++	frame[off++] = HISM_RATES_BASIC_LEN;
++	hl_copy(frame + off, hism_rates_basic, HISM_RATES_BASIC_LEN);
++	off += HISM_RATES_BASIC_LEN;
++	frame[off++] = HISM_EID_EXT_SUPPORTED_RATES;
++	frame[off++] = HISM_RATES_EXT_LEN;
++	hl_copy(frame + off, hism_rates_ext, HISM_RATES_EXT_LEN);
++	off += HISM_RATES_EXT_LEN;
++
++	*out_len = off;
++	if (assoc_ie)
++		*assoc_ie = frame + HISM_ASSOC_HDR_IE_OFF;
++	if (assoc_ie_len)
++		*assoc_ie_len = off - HISM_ASSOC_HDR_IE_OFF;
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Response decoders.  Subtype first, then length, then the fixed body;
++ * the assoc-response IE list is boundary-checked element by element so a
++ * truncated/corrupt IE can never reach cfg80211.
++ * -------------------------------------------------------------------*/
++static int hl_check_mgmt(const u8 *frame, size_t len, u8 subtype)
++{
++	if (!frame)
++		return -1;
++	if (len < HISM_MGMT_HDR_LEN)
++		return -1;
++	if ((frame[0] & 0x03u) != 0u)		/* protocol version 0 */
++		return -1;
++	if (((frame[0] >> 2) & 0x03u) != 0u)	/* type management    */
++		return -1;
++	if (((frame[0] >> 4) & 0x0fu) != subtype)
++		return -3;			/* not our subtype    */
++	return 0;
++}
++
++int hism_decode_auth_resp(const u8 *frame, size_t len, struct hism_resp *out)
++{
++	int rc;
++
++	if (!out)
++		return -1;
++	rc = hl_check_mgmt(frame, len, HISM_SUBTYPE_AUTH);
++	if (rc)
++		return rc;
++	if (len < HISM_AUTH_RESP_MIN_LEN)
++		return -1;
++	hl_zero((u8 *)out, sizeof(*out));
++	out->status = hl_get16(frame + 28);
++	out->aid = 0u;
++	out->ies = NULL;
++	out->ies_len = 0u;
++	return 0;
++}
++
++int hism_decode_assoc_resp(const u8 *frame, size_t len, struct hism_resp *out)
++{
++	size_t off;
++
++	if (!out)
++		return -1;
++	if (hl_check_mgmt(frame, len, HISM_SUBTYPE_ASSOC_RESP))
++		return hl_check_mgmt(frame, len, HISM_SUBTYPE_ASSOC_RESP);
++	if (len < HISM_ASSOC_RESP_MIN_LEN)
++		return -1;
++	/* IE list boundary check (element id + length + body) */
++	off = HISM_ASSOC_RESP_IE_OFF;
++	while (off < len) {
++		size_t elen;
++
++		if (len - off < 2u)
++			return -1;
++		elen = (size_t)frame[off + 1u];
++		if (len - off - 2u < elen)
++			return -1;
++		off += 2u + elen;
++	}
++	if (off != len)
++		return -1;
++	hl_zero((u8 *)out, sizeof(*out));
++	out->status = hl_get16(frame + 26);
++	out->aid = (u16)(hl_get16(frame + 28) & 0x3fffu);
++	out->ies = frame + HISM_ASSOC_RESP_IE_OFF;
++	out->ies_len = len - HISM_ASSOC_RESP_IE_OFF;
++	return 0;
++}
++
++int hism_resp_for_us(const u8 *frame, size_t len, const u8 *own,
++		     const u8 *bssid)
++{
++	if (!frame || !own || !bssid || len < HISM_MGMT_HDR_LEN)
++		return 0;
++	return hl_mac_eq(frame + 4, own) && hl_mac_eq(frame + 16, bssid);
++}
++
++int hism_ie_copy(u8 *dst, size_t cap, const u8 *ies, size_t ies_len,
++		 size_t *out_len)
++{
++	if (out_len)
++		*out_len = 0;
++	if (!dst)
++		return -1;
++	if (ies_len == 0u || !ies)
++		return 0;
++	if (ies_len > cap)
++		return -2;
++	hl_copy(dst, ies, ies_len);
++	if (out_len)
++		*out_len = ies_len;
++	return 0;
++}
++
++/* ---------------------------------------------------------------------
++ * Association-state sync H2D frame (decoded, host-tested, not posted)
++ * -------------------------------------------------------------------*/
++int hism_build_assoc_sync(u8 *frame, size_t cap, size_t *out_len,
++			  const struct hism_sync *p)
++{
++	u8 *pl;
++
++	if (!frame || !out_len || !p || !hism_mac_ok(p->bssid))
++		return -1;
++	if (p->dst > 0x0fu)
++		return -1;
++	if (p->req_ie_len > HISM_MAX_IE || p->resp_ie_len > HISM_MAX_IE)
++		return -1;
++	/* both IE buffers must be device-visible addresses: non-zero, aligned */
++	if (p->req_ie_va == 0u || p->resp_ie_va == 0u)
++		return -1;
++	if ((p->req_ie_va & 0x3u) || (p->resp_ie_va & 0x3u))
++		return -1;
++	if (cap < HISM_SYNC_FRAME_LEN)
++		return -2;
++
++	hl_zero(frame, HISM_SYNC_FRAME_LEN);
++	frame[0] = (u8)HISM_SYNC_GROUP;			/* group nibble   */
++	frame[1] = (u8)(((p->dst & 0x0fu) << 4) | 0x01u);/* dst + alloc    */
++	frame[2] = p->hdr2;
++	frame[3] = p->vap_id;
++	hl_put16(frame + 4, (u16)HISM_SYNC_FRAME_LEN);	/* total length   */
++	frame[6] = (u8)HISM_SYNC_ID;
++	frame[7] = 0x00u;
++	frame[8] = 0x00u;
++	frame[9] = (u8)(p->dst & 0x0fu);
++	hl_put16(frame + 10, HISM_HCC_TAG);
++
++	pl = frame + HISM_HCC_HDR_LEN;
++	hl_put16(pl + HISM_SYNC_OFF_STATUS, p->status);
++	hl_copy(pl + HISM_SYNC_OFF_BSSID, p->bssid, 6);
++	/* 32-bit fields (little-endian) */
++	pl[HISM_SYNC_OFF_REQ_IE_LEN + 0u] = (u8)(p->req_ie_len & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_LEN + 1u] = (u8)((p->req_ie_len >> 8) & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_LEN + 2u] = (u8)((p->req_ie_len >> 16) & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_LEN + 3u] = (u8)((p->req_ie_len >> 24) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_LEN + 0u] = (u8)(p->resp_ie_len & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_LEN + 1u] = (u8)((p->resp_ie_len >> 8) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_LEN + 2u] = (u8)((p->resp_ie_len >> 16) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_LEN + 3u] = (u8)((p->resp_ie_len >> 24) & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_VA + 0u] = (u8)(p->req_ie_va & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_VA + 1u] = (u8)((p->req_ie_va >> 8) & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_VA + 2u] = (u8)((p->req_ie_va >> 16) & 0xffu);
++	pl[HISM_SYNC_OFF_REQ_IE_VA + 3u] = (u8)((p->req_ie_va >> 24) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_VA + 0u] = (u8)(p->resp_ie_va & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_VA + 1u] = (u8)((p->resp_ie_va >> 8) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_VA + 2u] = (u8)((p->resp_ie_va >> 16) & 0xffu);
++	pl[HISM_SYNC_OFF_RESP_IE_VA + 3u] = (u8)((p->resp_ie_va >> 24) & 0xffu);
++	*out_len = HISM_SYNC_FRAME_LEN;
++	return 0;
++}
+diff --git a/hi5622_sta_sme.h b/hi5622_sta_sme.h
+new file mode 100644
+index 0000000..b02d42c
+--- /dev/null
++++ b/hi5622_sta_sme.h
+@@ -0,0 +1,254 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_sta_sme.h - portable kernel-SME logic for the STA (client) connect
++ * flow of the Hi5622V100 clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-sta-mode, shared task task-155,
++ * 2026-11-25).  Pure C99: compiles unchanged in the 6.18 kernel module and
++ * host-side (tools/sta_mode_selftest.c).  No vendor source text, object code,
++ * firmware byte or calibration value is reproduced.
++ *
++ * Evidence markers: [V] re-derived from the pinned local vendor module
++ * (hi5622v100_wifi.ko 2.5.24; read-only local artifact, never committed),
++ * [W] from the public Hi3881V100 GPL sibling source, [I] inference.
++ *
++ * MODEL - why this file exists
++ * ----------------------------
++ * The luofu vendor driver is a split-MAC host SME, not a full-MAC device
++ * SME: hmac_handle_asoc_rsp_sta (wifi.ko 2.5.24 .text+0x99040) is part of the
++ * STA FSM dispatch table {scan_rsp, join_rsp, auth_rsp, asoc_rsp} at
++ * .rodata+0x8074 and is reached from the management-RX path
++ * (hmac_rx_process_mgmt_event = D2H chip group 1 id 13) [V].  It parses the
++ * received 802.11 association response, syncs the association state to the
++ * device (H2D group 2 id 3, 12-byte HCC header + 28-byte payload copied from
++ * its FSM record, .text+0x99090/0x99134) and reports the result to cfg80211
++ * through the WAL asoc-completion path [V].  The sibling [W] hmac_sme_sta.c
++ * follows the same order: join -> auth request -> auth response -> assoc
++ * request -> assoc response -> connect result.
++ *
++ * Therefore the COMPLETION of a client (STA) association on our driver is
++ * NOT a data-ring event and NOT a firmware-allocated completion record: it
++ * is the received association response frame arriving on the CRX management
++ * event path (our D2H g1 id13 decoder), processed by the driver-side SME.
++ * The vendor .connect first posts the 108-byte WAL cfg-event 0x123 join body
++ * (hi5622_sta_frames.c) to configure the device STA context; the host SME
++ * then transmits auth/assoc requests on the corrected device-facing mgmt-TX
++ * carrier (raw HCC group 0 id 6 control message with the frame inline,
++ * sibling-gpl task-151) and consumes the responses here.
++ *
++ * The state machine is deliberately small and fail-closed: every transition
++ * is checked by this portable layer, the kernel glue only posts frames when
++ * the module parameters request it, and no key material ever passes through
++ * these builders (the WPA2/WPA3 keys travel in the join body and the 4-way
++ * EAPOL exchange, which rides the inherited data path).
++ */
++#ifndef HI5622_STA_SME_H
++#define HI5622_STA_SME_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stddef.h>
++#include <stdint.h>
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++typedef uint64_t u64;
++#endif
++#endif
++
++/* ===================================================================
++ * 1. 802.11 management frame constants (IEEE 802.11-2020)
++ *
++ * Frame control byte 0: protocol version 0 (bits 0-1), type management 0
++ * (bits 2-3), subtype in bits 4-7.  All frames here use the three-address
++ * management header (24 bytes): FC, duration, addr1(DA), addr2(SA),
++ * addr3(BSSID), sequence control.  Little-endian on the wire.
++ * =================================================================== */
++#define HISM_MGMT_HDR_LEN	24u
++#define HISM_FC0_AUTH		0xb0u	/* type 0, subtype 0x0b (auth)     */
++#define HISM_FC0_ASSOC_REQ	0x00u	/* type 0, subtype 0x00 (assoc req)*/
++#define HISM_FC0_ASSOC_RESP	0x10u	/* type 0, subtype 0x01 (assoc rsp)*/
++#define HISM_SUBTYPE_ASSOC_REQ	0x00u
++#define HISM_SUBTYPE_ASSOC_RESP	0x01u
++#define HISM_SUBTYPE_AUTH	0x0bu
++
++/* Authentication body: algorithm (0 = open system), sequence (1), status. */
++#define HISM_AUTH_ALGO_OPEN	0u
++#define HISM_AUTH_SEQ_OPEN	1u
++#define HISM_AUTH_BODY_LEN	6u
++#define HISM_AUTH_FRAME_LEN	(HISM_MGMT_HDR_LEN + HISM_AUTH_BODY_LEN)
++
++/* Association request body: capability info + listen interval + IEs. */
++#define HISM_ASSOC_FIXED_LEN	4u
++#define HISM_ASSOC_HDR_IE_OFF	(HISM_MGMT_HDR_LEN + HISM_ASSOC_FIXED_LEN)
++#define HISM_CAP_ESS		0x0001u
++#define HISM_CAP_PRIVACY	0x0010u
++#define HISM_CAP_SHORT_PREAMBLE	0x0020u
++#define HISM_LISTEN_INTERVAL	10u
++
++/* Association response body: capability + status + AID, then IEs. */
++#define HISM_ASSOC_RESP_MIN_LEN	30u
++#define HISM_ASSOC_RESP_IE_OFF	30u
++#define HISM_AUTH_RESP_MIN_LEN	30u
++#define HISM_STATUS_SUCCESS	0u
++
++/* Element IDs and the fixed basic-rate set this driver advertises.
++ * Supported rates IE: 8 bytes 1..18 Mbit/s; extended supported rates IE:
++ * the 24/36/48/54 Mbit/s remainder (802.11-2020 9.4.2.3 / table 9-43). */
++#define HISM_EID_SSID		0u
++#define HISM_EID_SUPPORTED_RATES 1u
++#define HISM_EID_EXT_SUPPORTED_RATES 50u
++#define HISM_RATES_BASIC_LEN	8u
++#define HISM_RATES_EXT_LEN	4u
++static const u8 hism_rates_basic[HISM_RATES_BASIC_LEN] = {
++	0x82u, 0x84u, 0x8bu, 0x96u, 0x0cu, 0x12u, 0x18u, 0x24u
++};
++static const u8 hism_rates_ext[HISM_RATES_EXT_LEN] = {
++	0x30u, 0x48u, 0x60u, 0x6cu
++};
++
++/* Bounds.  32 = SSID max, the IE blob is bounded so the whole assoc frame
++ * always fits HISM_MAX_FRAME (and the vendor host frame bound of 588 B). */
++#define HISM_MAX_SSID		32u
++#define HISM_MAX_IE		512u
++#define HISM_MAX_FRAME		(HISM_ASSOC_HDR_IE_OFF + 2u + HISM_MAX_SSID + \
++				 2u + HISM_RATES_BASIC_LEN + 2u + HISM_RATES_EXT_LEN)
++
++/* ===================================================================
++ * 2. SME state machine (cfg80211 kernel-SME connect)
++ *
++ *   OFF -> JOIN_POSTED (WAL 0x123 join accepted by the post gate)
++ *       -> AUTH_SENT   (auth request posted)
++ *       -> AUTH_DONE   (auth response status 0; assoc request next)
++ *       -> ASSOC_SENT  (assoc request posted)
++ *       -> CONNECTED   (assoc response status 0; cfg80211_connect_done(0))
++ *   any pending state + AP status != 0 / timeout -> FAILED (connect_done)
++ *
++ * Every transition is validated here; an out-of-order response is refused
++ * (-EPROTO) and never completes the connect.
++ * =================================================================== */
++#define HISM_OFF		0u
++#define HISM_JOIN_POSTED	1u
++#define HISM_AUTH_SENT		2u
++#define HISM_AUTH_DONE		3u
++#define HISM_ASSOC_SENT		4u
++#define HISM_CONNECTED		5u
++#define HISM_FAILED		6u
++#define HISM_STATE_MAX		HISM_FAILED
++
++const char *hism_state_name(u32 state);
++
++/* 1 = the state is a pending connect (in flight, completion still owed). */
++int hism_state_pending(u32 state);
++
++/* Apply the auth response.  *state must be HISM_AUTH_SENT.
++ * status 0 -> HISM_AUTH_DONE (caller posts the assoc request and moves to
++ * HISM_ASSOC_SENT); status != 0 -> HISM_FAILED.  Returns 0 on a valid
++ * transition, -EPROTO on an out-of-order response. */
++int hism_auth_rsp_apply(u32 *state, u16 status);
++
++/* Apply the assoc response.  *state must be HISM_ASSOC_SENT.
++ * status 0 -> HISM_CONNECTED, status != 0 -> HISM_FAILED. */
++int hism_assoc_rsp_apply(u32 *state, u16 status);
++
++/* cfg80211 timeout_reason for a timeout in this state (enum
++ * nl80211_timeout_reason: 0 unspecified, 2 AUTH, 3 ASSOC). */
++#define HISM_TIMEOUT_UNSPECIFIED	0u
++#define HISM_TIMEOUT_AUTH		2u
++#define HISM_TIMEOUT_ASSOC		3u
++u16 hism_timeout_reason(u32 state);
++
++/* ===================================================================
++ * 3. Frame builders (host-tested byte layouts)
++ * =================================================================== */
++struct hism_auth_req {
++	const u8 *own;		/* addr2 = our STA MAC (6 bytes)          */
++	const u8 *bssid;	/* addr1/addr3 = target AP BSSID (6 bytes)*/
++	u16 seq;		/* sequence-control value (4-bit seq)     */
++};
++
++struct hism_assoc_req {
++	const u8 *own;
++	const u8 *bssid;
++	const u8 *ssid;		/* 1..32 bytes                            */
++	u8 ssid_len;
++	int privacy;		/* 1 = set the Privacy capability bit      */
++	u16 seq;
++};
++
++/* 0 = built; -EINVAL/-ENOSPC otherwise.  out_len is set on success. */
++int hism_build_auth_req(u8 *frame, size_t cap, size_t *out_len,
++			const struct hism_auth_req *p);
++/* assoc_ie/assoc_ie_len (optional) receive the IE blob offset/length inside
++ * the built frame; that blob is the association-request IE list. */
++int hism_build_assoc_req(u8 *frame, size_t cap, size_t *out_len,
++			 const u8 **assoc_ie, size_t *assoc_ie_len,
++			 const struct hism_assoc_req *p);
++
++/* Address sanity used by the glue before building. */
++int hism_mac_ok(const u8 *mac);
++
++/* ===================================================================
++ * 4. Response decoders (reject partial/other-subtype frames)
++ * =================================================================== */
++struct hism_resp {
++	u16 status;		/* 802.11 status code (0 = success)        */
++	u16 aid;		/* assoc response AID (0 for auth)        */
++	const u8 *ies;		/* assoc response IEs (NULL for auth)     */
++	size_t ies_len;
++};
++
++/* 0 = decoded; -ENODATA = not our subtype; -EPROTO = malformed. */
++int hism_decode_auth_resp(const u8 *frame, size_t len, struct hism_resp *out);
++int hism_decode_assoc_resp(const u8 *frame, size_t len, struct hism_resp *out);
++
++/* 1 = this response is addressed to us (addr1 == own, addr3 == bssid). */
++int hism_resp_for_us(const u8 *frame, size_t len, const u8 *own,
++		     const u8 *bssid);
++
++/* Bounded copy of a response IE blob; returns 0 or -E2BIG. */
++int hism_ie_copy(u8 *dst, size_t cap, const u8 *ies, size_t ies_len,
++		 size_t *out_len);
++
++/* ===================================================================
++ * 5. Association-state sync (H2D) - decoded but NOT posted by this lane
++ *
++ * hmac_handle_asoc_rsp_sta posts the association state to the device:
++ * H2D HCC group 2, id 3, 12-byte header + 28-byte payload copied from its
++ * FSM record (= the same 28-byte assoc-completion record shape decoded by
++ * the wifi-sta-join lane) [V .text+0x99090 hcc_msg_alloc(28),
++ * .text+0x99134 memcpy 28 B to payload+12].  The firmware receive-table
++ * entry for group 2 id 3 is [U] on our image and hi5622_frame_post() would
++ * refuse it, so the kernel glue keeps this builder host-tested only until a
++ * ladder rung proves the firmware accepts it.
++ * =================================================================== */
++#define HISM_SYNC_GROUP		2u
++#define HISM_SYNC_ID		3u
++#define HISM_HCC_HDR_LEN	12u
++#define HISM_HCC_TAG		0x5a5au
++#define HISM_SYNC_PAYLOAD_LEN	28u
++#define HISM_SYNC_FRAME_LEN	(HISM_HCC_HDR_LEN + HISM_SYNC_PAYLOAD_LEN)
++#define HISM_SYNC_OFF_STATUS	0x02u
++#define HISM_SYNC_OFF_BSSID	0x04u
++#define HISM_SYNC_OFF_REQ_IE_LEN 0x0cu
++#define HISM_SYNC_OFF_RESP_IE_LEN 0x10u
++#define HISM_SYNC_OFF_REQ_IE_VA	0x14u
++#define HISM_SYNC_OFF_RESP_IE_VA 0x18u
++struct hism_sync {
++	u16 status;
++	const u8 *bssid;
++	u32 req_ie_len;
++	u32 resp_ie_len;
++	u32 req_ie_va;		/* device-visible host-DRAM address        */
++	u32 resp_ie_va;
++	u8 dst;			/* hdr[1] high nibble (band/core)         */
++	u8 vap_id;		/* hdr[3]                                 */
++	u8 hdr2;		/* hdr[2]                                 */
++};
++int hism_build_assoc_sync(u8 *frame, size_t cap, size_t *out_len,
++			  const struct hism_sync *p);
++
++#endif /* HI5622_STA_SME_H */

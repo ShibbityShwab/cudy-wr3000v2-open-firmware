@@ -1,0 +1,17 @@
+STA-MODE MODULE ARTIFACT IDENTITY (host-only, NOT fired)
+date            : 2026-11-25
+chain           : FINAL ASSOCIATION 61f7880 tree
+                  + wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch
+                  + wifi-sta-join/patches/0001-sta-join-hardening.patch
+                  + wifi-sta-mode/patches/0001-sta-mode-connect-crx.patch
+kernel tree     : /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+cross toolchain : gcc 14.4.0 (arm-openwrt-linux-muslgnueabi-)
+stripped        : 364,572 B sha256 8c0adf93995fd5014b73107de7fed77c825e3eee88fec8cc7a1c284f501c2059
+unstripped      : 1,396,116 B sha256 01912d661c0643b46bd7439cda80fc776ed4495d066264c0a85d263eb5ddb938
+strip check     : .text byte-identical (objcopy + cmp)
+vermagic        : 6.18.60 SMP mod_unload ARMv7 p2v8
+module params   : 58 (56 inherited + sta_connect + sta_connect_timeout_ms)
+cfg80211 symvers: 14 lines; imports cfg80211_connect_done, cfg80211_disconnected
+compiler/modpost: 0 warnings / 0 errors / no undefined symbols
+host selftests  : 140/140 PASS (strict C99 -Wall -Wextra -Werror -pedantic)
+artifact path   : /tmp/wifi-sta-mode-artifact/ (local evidence only, never committed)
