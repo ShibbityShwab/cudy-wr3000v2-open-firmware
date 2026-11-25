@@ -1,0 +1,510 @@
+== 0. artifact
+firmware: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+size 928920  sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b  CPU=file+0x40000
+G=CA 0x1747c4 -> G+0x370=CA 0x174b34, G+0x374=CA 0x174b38
+
+== 1. direct address construction / literal tables
+movw/movt immediates 0x4b34/0x4b38 : 0
+raw LE32 literal 0x174B34 : 0 []
+raw LE32 literal 0x174B38 : 0 []
+
+== 2. G-pointer (CA 0x1747c4) occurrences in the image
+count 75
+referenced by a load  : 74
+data occurrences only : 1  ['0x1060a8']
+
+== 3. G-base reference sites (ldr = CA 0x1747c4)
+  site 041db0  reg r3   literal 041dcc  enclosing function 0x041b2a
+  site 042972  reg r3   literal 0429ac  enclosing function 0x042858
+  site 044642  reg r7   literal 0448a0  enclosing function 0x04455a
+  site 048cc4  reg r3   literal 048de8  enclosing function 0x047628
+  site 048f72  reg r4   literal 049144  enclosing function 0x047628
+  site 04d7b4  reg r3   literal 04d900  enclosing function 0x04d730
+  site 04d7de  reg r3   literal 04d900  enclosing function 0x04d730
+  site 04fc7e  reg r3   literal 04fcf4  enclosing function 0x04fa24
+  site 05973e  reg r4   literal 059a24  enclosing function 0x0596e0
+  site 059e54  reg r4   literal 05a030  enclosing function 0x0596e0
+  site 05a15e  reg r0   literal 05a3a8  enclosing function 0x0596e0
+  site 05b43c  reg r4   literal 05b76c  enclosing function 0x05b426
+  site 05c2e2  reg r4   literal 05c4e4  enclosing function 0x05b426
+  site 05cf48  reg r3   literal 05d1b8  enclosing function 0x05b426
+  site 06156c  reg r3   literal 061640  enclosing function 0x060b4c
+  site 06244a  reg r3   literal 062650  enclosing function 0x061f1c
+  site 0628a4  reg r3   literal 062b24  enclosing function 0x0627fc
+  site 07f54a  reg r3   literal 07f71c  enclosing function 0x07eff8
+  site 0811e4  reg r4   literal 081214  enclosing function 0x080c3c
+  site 08176a  reg r3   literal 0817ac  enclosing function 0x080c3c
+  site 081a2a  reg r3   literal 081a4c  enclosing function 0x080c3c
+  site 08239a  reg r3   literal 0823dc  enclosing function 0x080c3c
+  site 0831cc  reg r3   literal 0831f8  enclosing function 0x08313c
+  site 086ef2  reg r2   literal 087000  enclosing function 0x086c8e
+  site 08cbfc  reg r3   literal 08cc0c  enclosing function 0x08c510
+  site 08cdc2  reg r3   literal 08cedc  enclosing function 0x08cda0
+  site 08d228  reg r3   literal 08d2b0  enclosing function 0x08d064
+  site 08dd98  reg r3   literal 08e050  enclosing function 0x08dd78
+  site 08e086  reg r3   literal 08e09c  enclosing function 0x08dd78
+  site 08e132  reg r3   literal 08e29c  enclosing function 0x08e0cc
+  site 08e382  reg r3   literal 08e4f4  enclosing function 0x08e308
+  site 08e3f2  reg r3   literal 08e4f4  enclosing function 0x08e308
+  site 091540  reg r4   literal 091810  enclosing function 0x0914cc
+  site 091910  reg r7   literal 091984  enclosing function 0x0914cc
+  site 09297c  reg r9   literal 092bb8  enclosing function 0x092888
+  site 092dbe  reg r3   literal 092e64  enclosing function 0x092d28
+  site 0942ee  reg r11  literal 094388  enclosing function 0x09420c
+  site 0947e6  reg r5   literal 094808  enclosing function 0x09420c
+  site 097352  reg r7   literal 09745c  enclosing function 0x0971d8
+  site 097c20  reg r3   literal 097c9c  enclosing function 0x0974f8
+  site 097df0  reg r7   literal 097f5c  enclosing function 0x097cac
+  site 0a4054  reg r7   literal 0a4070  enclosing function 0x0a3c4c
+  site 0adcc8  reg r3   literal 0adfe4  enclosing function 0x0acd74
+  site 0b54da  reg r2   literal 0b5508  enclosing function 0x0b53a4
+  site 0b563c  reg r3   literal 0b5684  enclosing function 0x0b55e0
+  site 0b56ea  reg r3   literal 0b571c  enclosing function 0x0b55e0
+  site 0b7448  reg r4   literal 0b7470  enclosing function 0x0b70b4
+  site 0b74de  reg r7   literal 0b75d0  enclosing function 0x0b70b4
+  site 0b75d8  reg r6   literal 0b761c  enclosing function 0x0b70b4
+  site 0b7624  reg r3   literal 0b7634  enclosing function 0x0b70b4
+  site 0b7638  reg r3   literal 0b7648  enclosing function 0x0b70b4
+  site 0b7660  reg r3   literal 0b7680  enclosing function 0x0b70b4
+  site 0b768a  reg r3   literal 0b7698  enclosing function 0x0b70b4
+  site 0b76a4  reg r6   literal 0b76d4  enclosing function 0x0b70b4
+  site 0b7710  reg r7   literal 0b7754  enclosing function 0x0b70b4
+  site 0b77e6  reg r8   literal 0b781c  enclosing function 0x0b7758
+  site 0b7828  reg r7   literal 0b7844  enclosing function 0x0b7758
+  site 0b787e  reg r7   literal 0b78a0  enclosing function 0x0b7758
+  site 0b78ac  reg r5   literal 0b78fc  enclosing function 0x0b7758
+  site 0b790c  reg r7   literal 0b7928  enclosing function 0x0b7758
+  site 0b7bd0  reg r8   literal 0b7c84  enclosing function 0x0b7a3c
+  site 0b80b2  reg r3   literal 0b80d0  enclosing function 0x0b7a3c
+  site 0b80da  reg r4   literal 0b80f8  enclosing function 0x0b7a3c
+  site 0b8184  reg r4   literal 0b8198  enclosing function 0x0b8100
+  site 0b81de  reg r3   literal 0b81f8  enclosing function 0x0b8100
+  site 0b81fe  reg r3   literal 0b8218  enclosing function 0x0b8100
+  site 0b8248  reg r3   literal 0b8260  enclosing function 0x0b8100
+  site 0b8dbc  reg r3   literal 0b8f28  enclosing function 0x0b89c4
+  site 0ba388  reg r3   literal 0ba4b0  enclosing function 0x0ba1c8
+  site 0bb4e0  reg r4   literal 0bb688  enclosing function 0x0ba1c8
+  site 0d6cb4  reg r3   literal 0d6cc8  enclosing function 0x0d6ae4
+  site 0d6ccc  reg r2   literal 0d6cd8  enclosing function 0x0d6ae4
+  site 0d6cdc  reg r2   literal 0d6ce8  enclosing function 0x0d6ae4
+  site 0de18a  reg r3   literal 0de23c  enclosing function 0x0de060
+  site 0dfefe  reg r3   literal 0dffa8  enclosing function 0x0df97a
+  site 0ebdd8  reg r3   literal 0ec0c8  enclosing function 0x0ebd98
+resolved G load sites: 76
+
+== 4. G stores found by the taint scan (all offsets)
+distinct G store offsets: 145
+  G+0x000  0d6cd4  str    fn 0x0d6ae4
+  G+0x000  0d6ce2  str    fn 0x0d6ae4
+  G+0x004  059780  str    fn 0x0596e0
+  G+0x004  05b5dc  str    fn 0x05b426 value 0x000ec79d
+  G+0x008  05b4c8  str    fn 0x05b426 value 0x00058ba9
+  G+0x014  059f4a  str    fn 0x0596e0 value 0x00000000
+  G+0x014  05cfcc  str    fn 0x05b426 value 0x000543f5
+  G+0x018  059e78  str    fn 0x0596e0
+  G+0x024  0598ac  str    fn 0x0596e0 value 0x00000000
+  G+0x030  05c3b2  str    fn 0x05b426 value 0x0006a961
+  G+0x034  0ebe12  str    fn 0x0ebd98 value 0x000c35a5
+  G+0x038  05d058  str    fn 0x05b426 value 0x000e416d
+  G+0x03c  059fde  str    fn 0x0596e0 value 0x00000000
+  G+0x03c  05d162  str    fn 0x05b426 value 0x00053cfd
+  G+0x044  059782  str    fn 0x0596e0
+  G+0x044  05b5e0  str    fn 0x05b426 value 0x000ec77d
+  G+0x050  059f5e  str    fn 0x0596e0 value 0x00000000
+  G+0x050  05cfb8  str    fn 0x05b426 value 0x0007980d
+  G+0x058  059e7a  str    fn 0x0596e0
+  G+0x060  0598ae  str    fn 0x0596e0 value 0x00000000
+  G+0x064  059e72  str    fn 0x0596e0
+  G+0x070  05b4c0  str    fn 0x05b426 value 0x00058a01
+  G+0x074  05975e  str    fn 0x0596e0
+  G+0x07c  05982c  str    fn 0x0596e0 value 0x00000000
+  G+0x07c  05b71e  str    fn 0x05b426 value 0x000ed761
+  G+0x080  059f46  str    fn 0x0596e0 value 0x00000000
+  G+0x080  05cfe4  str    fn 0x05b426 value 0x00073c81
+  G+0x088  059e90  str    fn 0x0596e0
+  G+0x094  086f10  str    fn 0x086c8e
+  G+0x098  0598b0  str    fn 0x0596e0 value 0x00000000
+  G+0x09c  059976  str    fn 0x0596e0 value 0x00000000
+  G+0x09c  05c2f8  str    fn 0x05b426 value 0x000659bd
+  G+0x0a0  059914  str    fn 0x0596e0 value 0x00000000
+  G+0x0a4  05c3a6  str    fn 0x05b426 value 0x0006af69
+  G+0x0ac  0597b8  str    fn 0x0596e0 value 0x00000000
+  G+0x0b4  0ebe16  str    fn 0x0ebd98 value 0x000c3add
+  G+0x0b8  05b4fe  str    fn 0x05b426 value 0x000ab939
+  G+0x0c0  05d04e  str    fn 0x05b426 value 0x000e5bb5
+  G+0x0c4  059fd6  str    fn 0x0596e0 value 0x00000000
+  G+0x0c4  05d156  str    fn 0x05b426 value 0x00055cd9
+  G+0x0c8  059f88  str    fn 0x0596e0 value 0x00000000
+  G+0x0d4  0597da  str    fn 0x0596e0 value 0x00000000
+  G+0x0d4  05b6d8  str    fn 0x05b426 value 0x000762c9
+  G+0x0e4  05b524  str    fn 0x05b426 value 0x000d686d
+  G+0x0e8  05b4b6  str    fn 0x05b426 value 0x00058add
+  G+0x0ec  05975a  str    fn 0x0596e0
+  G+0x0f8  086f14  str    fn 0x086c8e
+  G+0x0fc  0598ca  str    fn 0x0596e0 value 0x00000000
+  G+0x100  05997a  str    fn 0x0596e0 value 0x00000000
+  G+0x100  05c2fe  str    fn 0x05b426 value 0x00066741
+  G+0x108  059e7c  str    fn 0x0596e0
+  G+0x110  05c3bc  str    fn 0x05b426 value 0x000675bd
+  G+0x114  059f42  str    fn 0x0596e0 value 0x00000000
+  G+0x118  0597ca  str    fn 0x0596e0 value 0x00000000
+  G+0x118  05cf4e  str    fn 0x05b426 value 0x00073149
+  G+0x120  059fda  str    fn 0x0596e0 value 0x00000000
+  G+0x120  05d15c  str    fn 0x05b426 value 0x00057045
+  G+0x124  059f96  str    fn 0x0596e0 value 0x00000000
+  G+0x13c  0597b4  str    fn 0x0596e0 value 0x00000000
+  G+0x140  0597ce  str    fn 0x0596e0 value 0x00000000
+  G+0x140  05cf56  str    fn 0x05b426 value 0x000790a5
+  G+0x148  059816  str    fn 0x0596e0 value 0x00000000
+  G+0x148  05b722  str    fn 0x05b426 value 0x0006adcd
+  G+0x14c  0597b0  str    fn 0x0596e0 value 0x00000000
+  G+0x14c  05b59e  str    fn 0x05b426 value 0x000ecb59
+  G+0x150  05977c  str    fn 0x0596e0
+  G+0x150  05b5d6  str    fn 0x05b426 value 0x000ec8a9
+  G+0x154  05981a  str    fn 0x0596e0 value 0x00000000
+  G+0x154  05b728  str    fn 0x05b426 value 0x000ed295
+  G+0x158  059770  str    fn 0x0596e0
+  G+0x158  05b628  str    fn 0x05b426 value 0x000fb493
+  G+0x15c  059768  str    fn 0x0596e0
+  G+0x15c  05b634  str    fn 0x05b426 value 0x000f82ad
+  G+0x164  059756  str    fn 0x0596e0
+  G+0x16c  05976c  str    fn 0x0596e0
+  G+0x16c  05b62e  str    fn 0x05b426 value 0x000fa895
+  G+0x170  059fe0  str    fn 0x0596e0 value 0x00000000
+  G+0x170  05d174  str    fn 0x05b426 value 0x000532cd
+  G+0x174  059774  str    fn 0x0596e0
+  G+0x174  05b618  str    fn 0x05b426 value 0x000fb735
+  G+0x178  059778  str    fn 0x0596e0
+  G+0x178  05b622  str    fn 0x05b426 value 0x000f9375
+  G+0x17c  059fec  str    fn 0x0596e0 value 0x00000000
+  G+0x180  059ff0  str    fn 0x0596e0 value 0x00000000
+  G+0x184  059ff4  str    fn 0x0596e0 value 0x00000000
+  G+0x190  05b496  str    fn 0x05b426 value 0x00058cf9
+  G+0x194  05b4ee  str    fn 0x05b426 value 0x000a91a9
+  G+0x198  05980e  str    fn 0x0596e0 value 0x00000000
+  G+0x198  05b710  str    fn 0x05b426 value 0x00066bb5
+  G+0x19c  059764  str    fn 0x0596e0
+  G+0x1a4  0598b4  str    fn 0x0596e0 value 0x00000000
+  G+0x1ac  086f00  str    fn 0x086c8e
+  G+0x1b0  05996e  str    fn 0x0596e0 value 0x00000000
+  G+0x1b0  05c2ea  str    fn 0x05b426 value 0x00068a35
+  G+0x1b8  059e80  str    fn 0x0596e0
+  G+0x1c0  05990c  str    fn 0x0596e0 value 0x00000000
+  G+0x1c8  05c3c2  str    fn 0x05b426 value 0x00065439
+  G+0x1d4  05d03e  str    fn 0x05b426 value 0x000e5681
+  G+0x1d8  059f3a  str    fn 0x0596e0 value 0x00000000
+  G+0x1d8  05cfd8  str    fn 0x05b426 value 0x00073555
+  G+0x1dc  059fcc  str    fn 0x0596e0 value 0x00000000
+  G+0x1dc  05d14a  str    fn 0x05b426 value 0x00050a71
+  G+0x1e0  059f92  str    fn 0x0596e0 value 0x00000000
+  G+0x1e4  0597d2  str    fn 0x0596e0 value 0x00000000
+  G+0x1e4  05b6cc  str    fn 0x05b426 value 0x00077129
+  G+0x1f4  05b49e  str    fn 0x05b426 value 0x00058c85
+  G+0x1f8  05b4f8  str    fn 0x05b426 value 0x000a9115
+  G+0x1fc  059812  str    fn 0x0596e0 value 0x00000000
+  G+0x1fc  05b718  str    fn 0x05b426 value 0x0006aecd
+  G+0x200  059760  str    fn 0x0596e0
+  G+0x208  0598b8  str    fn 0x0596e0 value 0x00000000
+  G+0x210  086f04  str    fn 0x086c8e
+  G+0x214  059972  str    fn 0x0596e0 value 0x00000000
+  G+0x214  05c2f2  str    fn 0x05b426 value 0x00065f51
+  G+0x21c  059e84  str    fn 0x0596e0
+  G+0x224  059910  str    fn 0x0596e0 value 0x00000000
+  G+0x228  05c3c8  str    fn 0x05b426 value 0x00065401
+  G+0x230  0597bc  str    fn 0x0596e0 value 0x00000000
+  G+0x238  05d046  str    fn 0x05b426 value 0x000e0779
+  G+0x23c  059f36  str    fn 0x0596e0 value 0x00000000
+  G+0x23c  05cfde  str    fn 0x05b426 value 0x00050b0d
+  G+0x240  059fd2  str    fn 0x0596e0 value 0x00000000
+  G+0x240  05d150  str    fn 0x05b426 value 0x000574a1
+  G+0x244  059f8e  str    fn 0x0596e0 value 0x00000000
+  G+0x24c  0597d6  str    fn 0x0596e0 value 0x00000000
+  G+0x24c  05b6d2  str    fn 0x05b426 value 0x00076f85
+  G+0x25c  05b4a6  str    fn 0x05b426 value 0x00057ff1
+  G+0x260  059824  str    fn 0x0596e0 value 0x00000000
+  G+0x260  05b740  str    fn 0x05b426 value 0x000edcad
+  G+0x268  048ccc  str    fn 0x047628 value 0x000a12b9
+  G+0x268  086ef8  str    fn 0x086c8e
+  G+0x278  059e74  str    fn 0x0596e0
+  G+0x27c  059986  str    fn 0x0596e0 value 0x00000000
+  G+0x27c  05c310  str    fn 0x05b426 value 0x00064e39
+  G+0x280  059828  str    fn 0x0596e0 value 0x00000000
+  G+0x280  05b746  str    fn 0x05b426 value 0x000eca9d
+  G+0x288  048cd6  str    fn 0x047628 value 0x000a19d9
+  G+0x288  086efc  str    fn 0x086c8e
+  G+0x298  05998a  str    fn 0x0596e0 value 0x00000000
+  G+0x298  05c316  str    fn 0x05b426 value 0x00064db9
+  G+0x29c  048ce0  str    fn 0x047628 value 0x000a1279
+  G+0x29c  086f08  str    fn 0x086c8e
+  G+0x2a8  059e5c  str    fn 0x0596e0
+  G+0x2a8  0ebe1c  str    fn 0x0ebd98 value 0x000c39b3
+  G+0x2b8  048cea  str    fn 0x047628 value 0x000a1239
+  G+0x2b8  086f0c  str    fn 0x086c8e
+  G+0x2bc  059e60  str    fn 0x0596e0
+  G+0x2bc  0ebe22  str    fn 0x0ebd98 value 0x000c3a15
+  G+0x2c4  05b4d0  str    fn 0x05b426 value 0x000589b1
+  G+0x2d4  0597c0  str    fn 0x0596e0 value 0x00000000
+  G+0x2dc  059e94  str    fn 0x0596e0
+  G+0x2e0  05b4d6  str    fn 0x05b426 value 0x00058989
+  G+0x2f0  05b450  str    fn 0x05b426 value 0x00092f5d
+  G+0x300  05b4e2  str    fn 0x05b426 value 0x00058939
+  G+0x30c  05b4dc  str    fn 0x05b426 value 0x00058961
+  G+0x318  059fe4  str    fn 0x0596e0 value 0x00000000
+  G+0x318  05d168  str    fn 0x05b426 value 0x00050965
+  G+0x31c  059fe8  str    fn 0x0596e0 value 0x00000000
+  G+0x31c  05d16e  str    fn 0x05b426 value 0x0005091d
+  G+0x320  05b4ae  str    fn 0x05b426 value 0x000589d9
+  G+0x324  059e8c  str    fn 0x0596e0
+  G+0x328  05997e  str    fn 0x0596e0 value 0x00000000
+  G+0x328  05c304  str    fn 0x05b426 value 0x00065ec1
+  G+0x32c  05c3ac  str    fn 0x05b426 value 0x00067299
+  G+0x334  0597c4  str    fn 0x0596e0 value 0x00000000
+  G+0x338  05cfa8  str    fn 0x05b426 value 0x0007365d
+  G+0x340  059e88  str    fn 0x0596e0
+  G+0x364  05d13a  str    fn 0x05b426 value 0x000565c5
+  G+0x368  059f3e  str    fn 0x0596e0 value 0x00000000
+  G+0x368  05cfc2  str    fn 0x05b426 value 0x00052be1
+  G+0x36c  05cf60  str    fn 0x05b426 value 0x000727d1
+  G+0x374  05d144  str    fn 0x05b426 value 0x00057639
+  G+0x378  05c3b6  str    fn 0x05b426 value 0x00068c0b
+  G+0x394  05c376  str    fn 0x05b426 value 0x00057df1
+  G+0x398  05c370  str    fn 0x05b426 value 0x00057a75
+  G+0x39c  059982  str    fn 0x0596e0 value 0x00000000
+  G+0x39c  05c30a  str    fn 0x05b426 value 0x000656e5
+  G+0x3a0  059e98  str    fn 0x0596e0
+  G+0x3b4  059918  str    fn 0x0596e0 value 0x00000000
+  G+0x3b4  05c350  str    fn 0x05b426 value 0x00057e69
+  G+0x3b8  0ebde6  str    fn 0x0ebd98
+  G+0x3bc  0ebddc  str    fn 0x0ebd98
+  G+0x3c0  0ebdea  str    fn 0x0ebd98 value 0x0009f2c5
+  G+0x3c4  0ebdf0  str    fn 0x0ebd98
+  G+0x3c8  0ebdfa  str    fn 0x0ebd98 value 0x000eb955
+  G+0x3d4  0ebe00  str    fn 0x0ebd98 value 0x000c5421
+  G+0x3d8  0ebde0  str    fn 0x0ebd98 value 0x000eaee1
+  G+0x3dc  0ebe06  str    fn 0x0ebd98 value 0x000db65d
+  G+0x3e0  0ebdf4  str    fn 0x0ebd98 value 0x000ebaa5
+  G+0x3e4  0ebe0c  str    fn 0x0ebd98 value 0x000dad61
+  G+0x3ec  059f5a  str    fn 0x0596e0 value 0x00000000
+  G+0x3ec  05cfd2  str    fn 0x05b426 value 0x0005271d
+  G+0x3f0  059f56  str    fn 0x0596e0 value 0x00000000
+  G+0x3f0  05cfb0  str    fn 0x05b426 value 0x00073b01
+  G+0x3f8  05b504  str    fn 0x05b426 value 0x000d65d9
+  G+0x408  05b52e  str    fn 0x05b426 value 0x000d5f09
+  G+0x410  05b72e  str    fn 0x05b426 value 0x000ed325
+  G+0x414  0597de  str    fn 0x0596e0 value 0x00000000
+  G+0x414  05b6de  str    fn 0x05b426 value 0x000728e1
+
+G+0x370 STORES: 0    <- the question
+hook-block store counts: {'0x364': 1, '0x368': 2, '0x36c': 1, '0x370': 0, '0x374': 1, '0x378': 1}
+
+== 5. hook-offset store inventory with ANY base
+  04087e  str      base r2   off 0x378  fn 0x0406f6  str.w	r1, [r2, #888]
+  04b6cc  str      base r3   off 0x370  fn 0x04b5e8  str.w	r2, [r3, #880]
+  04b7ec  str      base r3   off 0x370  fn 0x04b5e8  str.w	r7, [r3, #880]
+  057868  str      base r5   off 0x370  fn 0x05779c  str.w	r4, [r5, #880]
+  059ca6  str      base r4   off 0x378  fn 0x0596e0  str.w	r6, [r4, #888]
+  059f3e  str      base r4   off 0x368  fn 0x0596e0  str.w	r5, [r4, #872]
+  05c3b6  str      base r4   off 0x378  fn 0x05b426  str.w	r3, [r4, #888]
+  05cf60  str      base r3   off 0x36c  fn 0x05b426  str.w	r2, [r3, #876]
+  05cfc2  str      base r11  off 0x368  fn 0x05b426  str.w	r3, [fp, #872]
+  05d13a  str      base r11  off 0x364  fn 0x05b426  str.w	r3, [fp, #868]
+  05d144  str      base r11  off 0x374  fn 0x05b426  str.w	r3, [fp, #884]
+  07179e  strb     base r6   off 0x378  fn 0x071090  strb.w	r1, [r6, #888]
+  0717ae  strb     base r3   off 0x364  fn 0x071090  strb.w	r0, [r3, #868]
+  0818b2  strb     base r3   off 0x364  fn 0x080c3c  strb.w	r1, [r3, #868]
+  0882e4  str      base r2   off 0x374  fn 0x08785c  str.w	r3, [r2, #884]
+  088306  str      base r1   off 0x364  fn 0x08785c  str.w	r3, [r1, #868]
+  088316  str      base r1   off 0x36c  fn 0x08785c  str.w	r3, [r1, #876]
+  08833c  str      base r2   off 0x364  fn 0x08785c  str.w	r3, [r2, #868]
+  08834e  str      base r2   off 0x36c  fn 0x08785c  str.w	r3, [r2, #876]
+  088398  str      base r2   off 0x370  fn 0x08785c  str.w	r3, [r2, #880]
+  0883a8  str      base r2   off 0x370  fn 0x08785c  str.w	r3, [r2, #880]
+  08ba70  str      base r2   off 0x374  fn 0x089bc8  str.w	r3, [r2, #884]
+  08ba92  str      base r1   off 0x364  fn 0x089bc8  str.w	r3, [r1, #868]
+  08baa2  str      base r1   off 0x36c  fn 0x089bc8  str.w	r3, [r1, #876]
+  08bac8  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08badc  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08bb1e  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08bb2e  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08bd0c  str      base r2   off 0x374  fn 0x089bc8  str.w	r3, [r2, #884]
+  08bd2e  str      base r1   off 0x364  fn 0x089bc8  str.w	r3, [r1, #868]
+  08bd3e  str      base r1   off 0x36c  fn 0x089bc8  str.w	r3, [r1, #876]
+  08bd64  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08bd78  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08bdba  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08bdca  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08bf54  str      base r2   off 0x374  fn 0x089bc8  str.w	r3, [r2, #884]
+  08bf76  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08bf88  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08bfaa  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08bfbc  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08c004  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08c014  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08c1cc  str      base r2   off 0x374  fn 0x089bc8  str.w	r3, [r2, #884]
+  08c1ee  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08c200  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08c222  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08c234  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08c27c  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08c28c  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08c42c  str      base r2   off 0x374  fn 0x089bc8  str.w	r3, [r2, #884]
+  08c44e  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08c460  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08c482  str      base r2   off 0x364  fn 0x089bc8  str.w	r3, [r2, #868]
+  08c494  str      base r2   off 0x36c  fn 0x089bc8  str.w	r3, [r2, #876]
+  08c4dc  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  08c4ec  str      base r2   off 0x370  fn 0x089bc8  str.w	r3, [r2, #880]
+  0c01c4  strh     base r4   off 0x374  fn 0x0c016c  strh.w	r3, [r4, #884]
+  0c01dc  strb     base r4   off 0x370  fn 0x0c016c  strb.w	fp, [r4, #880]
+  0c0382  str      base r4   off 0x364  fn 0x0c016c  str.w	r3, [r4, #868]
+  0c03b0  str      base r4   off 0x368  fn 0x0c016c  str.w	r3, [r4, #872]
+  0c1bce  str      base r3   off 0x370  fn 0x0c1b4c  str.w	r0, [r3, #880]
+  0c1bda  str      base r3   off 0x374  fn 0x0c1b4c  str.w	r0, [r3, #884]
+  0c1be6  str      base r3   off 0x378  fn 0x0c1b4c  str.w	r0, [r3, #888]
+  0c1c3a  str      base r3   off 0x370  fn 0x0c1b4c  str.w	r0, [r3, #880]
+  0c1c46  str      base r3   off 0x374  fn 0x0c1b4c  str.w	r0, [r3, #884]
+  0c1c52  str      base r3   off 0x378  fn 0x0c1b4c  str.w	r0, [r3, #888]
+  0c3340  str      base r1   off 0x364  fn 0x0c3224  str.w	r2, [r1, #868]
+  0d87d8  strh     base r1   off 0x364  fn 0x0d85d0  strh.w	r3, [r1, #868]
+  0d8a56  strh     base r3   off 0x364  fn 0x0d85d0  strh.w	r2, [r3, #868]
+  0e6eb2  strh     base r0   off 0x364  fn 0x0e6d68  strh.w	r2, [r0, #868]
+  0e6ec8  strh     base r0   off 0x364  fn 0x0e6d68  strh.w	r6, [r0, #868]
+  0e7b02  strb     base r4   off 0x36c  fn 0x0e7850  strb.w	r3, [r4, #876]
+  0e7b10  strb     base r4   off 0x370  fn 0x0e7850  strb.w	r3, [r4, #880]
+  0e81fc  str      base r5   off 0x378  fn 0x0e81c0  str.w	r3, [r5, #888]
+  0e8dc8  strh     base r4   off 0x368  fn 0x0e8c00  strh.w	r3, [r4, #872]
+  0e959e  strh     base r3   off 0x364  fn 0x0e8ec0  strh.w	fp, [r3, #868]
+  0f384a  str      base r1   off 0x374  fn 0x0f27f8  str.w	r3, [r1, #884]
+  0ff048  strb     base r3   off 0x364  fn 0x0fe6bc  strb.w	r7, [r3, #868]
+  0ff050  strb     base r3   off 0x368  fn 0x0fe6bc  strb.w	r0, [r3, #872]
+  118f88  str      base r1   off 0x368  fn 0x118ee0  str.w	r6, [r1, #872]
+  118f9a  str      base r1   off 0x368  fn 0x118ee0  str.w	r5, [r1, #872]
+  121a74  strb     base r9   off 0x368  fn 0x120a7a  strb.w	r1, [r9, #872]
+
+== 6. desc-pool boot block (CA 0x485FA..0x4861E, bl 0x1017F8)
+enclosing function start (heuristic): 0x047628
+G stores in that function: 4  0x268 0x288 0x29c 0x2b8
+  0485e0: 789b         ldrb	r3, [r3, #2]
+  0485e2: 70ec         strb	r4, [r5, #3]
+  0485e4: 706c         strb	r4, [r5, #1]
+  0485e6: f88d 3056    strb.w	r3, [sp, #86]	@ 0x56
+  0485ea: 2303         movs	r3, #3
+  0485ec: f8ad 2054    strh.w	r2, [sp, #84]	@ 0x54
+  0485f0: 4619         mov	r1, r3
+  0485f2: aa15         add	r2, sp, #84	@ 0x54
+  0485f4: 4638         mov	r0, r7
+  0485f6: f079 fc25    bl	0xc1e44
+  0485fa: 2302         movs	r3, #2
+  0485fc: 713b         strb	r3, [r7, #4]
+  0485fe: f44f 7396    mov.w	r3, #300	@ 0x12c
+  048602: 221e         movs	r2, #30
+  048604: f641 7cff    movw	ip, #8191	@ 0x1fff
+  048608: f240 2101    movw	r1, #513	@ 0x201
+  04860c: 81fb         strh	r3, [r7, #14]
+  04860e: 83fb         strh	r3, [r7, #30]
+  048610: f06f 4360    mvn.w	r3, #3758096384	@ 0xe0000000
+  048614: 733a         strb	r2, [r7, #12]
+  048616: e9c7 c105    strd	ip, r1, [r7, #20]
+  04861a: 773a         strb	r2, [r7, #28]
+  04861c: 627b         str	r3, [r7, #36]	@ 0x24
+  04861e: 60bc         str	r4, [r7, #8]
+  048620: f0b9 f8ea    bl	0x1017f8
+  048624: f44f 7280    mov.w	r2, #256	@ 0x100
+  048628: f895 3501    ldrb.w	r3, [r5, #1281]	@ 0x501
+  04862c: f885 451d    strb.w	r4, [r5, #1309]	@ 0x51d
+  048630: f364 0300    bfi	r3, r4, #0, #1
+
+== 7. VAP start-on-band CA 0x971D8 callback dispatch
+  097340: f640 5153    movw	r1, #3411	@ 0xd53
+  097344: f7ff fce2    bl	0x96d0c
+  097348: 2801         cmp	r0, #1
+  09734a: d0f1         beq.n	0x97330
+  09734c: 4648         mov	r0, r9
+  09734e: f7ca fd61    bl	0x61e14
+  097352: 4f42         ldr	r7, [pc, #264]	@ (0x9745c)   ; literal @09745c = 0x001747c4
+  097354: 4621         mov	r1, r4
+  097356: 4630         mov	r0, r6
+  097358: f7ff fca6    bl	0x96ca8
+  09735c: 683b         ldr	r3, [r7, #0]
+  09735e: b14b         cbz	r3, 0x97374
+  097360: f8d7 3370    ldr.w	r3, [r7, #880]	@ 0x370
+  097364: b10b         cbz	r3, 0x9736a
+  097366: 4620         mov	r0, r4
+  097368: 4798         blx	r3
+  09736a: f8d7 3374    ldr.w	r3, [r7, #884]	@ 0x374
+  09736e: b10b         cbz	r3, 0x97374
+  097370: 4620         mov	r0, r4
+  097372: 4798         blx	r3
+  097374: b355         cbz	r5, 0x973cc
+  097376: 7c2b         ldrb	r3, [r5, #16]
+  097378: f896 1d72    ldrb.w	r1, [r6, #3442]	@ 0xd72
+  09737c: f8d4 84b0    ldr.w	r8, [r4, #1200]	@ 0x4b0
+  097380: 428b         cmp	r3, r1
+
+== 8. installed callback values -> candidate target functions
+  G+0x364 <= 0x0565c5 (function start [I] 0x0565c4) callers [] code-ptr occurrences [('0x5d27c', '0x565c5')]
+  G+0x368 <= 0x052be1 (function start [I] 0x052b80) callers [] code-ptr occurrences [('0x5d1e8', '0x52be1')]
+  G+0x36c <= 0x0727d1 (function start [I] 0x07256c) callers [] code-ptr occurrences [('0x5d1c8', '0x727d1')]
+  G+0x374 <= 0x057639 (function start [I] 0x057554) callers [] code-ptr occurrences [('0x5d280', '0x57639')]
+  G+0x378 <= 0x068c0b (function start [I] 0x068c0a) callers [] code-ptr occurrences [('0x5c540', '0x68c0b')]
+
+== 9. hook installers: function starts + callers
+  installer fn 0x0596e0 [I] : [(872, 368446)]
+      callers: []
+      function-pointer table entries (Thumb-bit occurrences): []
+  installer fn 0x05b426 [I] : [(872, 380866), (888, 377782), (876, 380768), (868, 381242), (884, 381252)]
+      callers: []
+      function-pointer table entries (Thumb-bit occurrences): []
+
+== 10. data-only G pointer occurrences (possible registration tables)
+  CA 0x1060a8  neighbours: 0x0e5a010e 0x010e5b01 0x00010e5c 0x00174be0 0x001747c4 0x00172134 0x00000002 0x010582b8 0x74726968
+
+== 11. G stored into hook block 0x360..0x380 (the writer answer)
+  G+0x364  store 05d13a  str   value 0x000565c5  fn 0x05b426
+  G+0x368  store 059f3e  str   value 0x00000000  fn 0x0596e0
+  G+0x368  store 05cfc2  str   value 0x00052be1  fn 0x05b426
+  G+0x36c  store 05cf60  str   value 0x000727d1  fn 0x05b426
+  G+0x374  store 05d144  str   value 0x00057639  fn 0x05b426
+  G+0x378  store 05c3b6  str   value 0x00068c0b  fn 0x05b426
+  G+0x370 present: False
+
+== 12. every word-store in the image with immediate offset 880 (0x370)
+  04b6cc  fn 0x04b5e8  base r3    str.w	r2, [r3, #880]
+  04b7ec  fn 0x04b5e8  base r3    str.w	r7, [r3, #880]
+  057868  fn 0x05779c  base r5    str.w	r4, [r5, #880]
+  088398  fn 0x08785c  base r2    str.w	r3, [r2, #880]
+  0883a8  fn 0x08785c  base r2    str.w	r3, [r2, #880]
+  08bb1e  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08bb2e  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08bdba  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08bdca  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c004  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c014  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c27c  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c28c  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c4dc  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  08c4ec  fn 0x089bc8  base r2    str.w	r3, [r2, #880]
+  0c1bce  fn 0x0c1b4c  base r3    str.w	r0, [r3, #880]
+  0c1c3a  fn 0x0c1b4c  base r3    str.w	r0, [r3, #880]
+
+== 13. direct call sites passing G (or a G-derived pointer) as an arg
+  05a160 -> 0x0c1e0c (fn 0x0c1b4c) args r0=G+0x0
+  05cf68 -> 0x0a4fc8 (fn 0x0a4db0) args r3=G+0x0
+  086f2c -> 0x0fdfd0 (fn 0x0fdb72) args r2=G+0x0
+  0fdb8a -> 0x042c28 (fn 0x042a10) args r2=G+0x0
+  042a3a -> 0x0d3fe2 (fn 0x0d1b6c) args r2=G+0x0
+  08cdd0 -> 0x042c28 (fn 0x042a10) args r3=G+0x0
+  08d236 -> 0x042c28 (fn 0x042a10) args r3=G+0x0
+  08e142 -> 0x042c28 (fn 0x042a10) args r3=G+0x0
+  08e40c -> 0x08e3d2 (fn 0x08e308) args r3=G+0x17
+  0b5710 -> 0x041f90 (fn 0x041b2a) args r3=G+0x0
+  041b4c -> 0x0401d0 (fn 0x04007e) args r3=G+0x0
+  040082 -> 0x0403c6 (fn 0x0401ee) args r3=G+0x0
+
+== 14. boot-installer functions: starts, callers, table entries
+  probe 05cf48 -> fn [I] 0x05b426  callers []  code-ptr occurrences []
+  probe 05c2e2 -> fn [I] 0x05b426  callers []  code-ptr occurrences []
+  probe 05967c -> fn [I] 0x05967c  callers ['0x7d1cc', '0x7d226']  code-ptr occurrences []
+  probe 059e54 -> fn [I] 0x0596e0  callers []  code-ptr occurrences []
+  probe 059ca6 -> fn [I] 0x0596e0  callers []  code-ptr occurrences []
+  probe 059f3e -> fn [I] 0x0596e0  callers []  code-ptr occurrences []
