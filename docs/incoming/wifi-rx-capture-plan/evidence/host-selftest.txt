@@ -1,0 +1,12 @@
+=== host orchestrator checks ===
+ok   router script present
+ok   analyzer present
+ok   analyzer selftest
+ok   host script parses
+HOST SELFTEST PASS
+
+=== syntax ===
+sh -n: OK
+
+=== sha256 ===
+ffd70a78175386e58ed1f4fe90419225a06b3e72764b0b7ad0983c2d963967d5  scripts/host/rx-capture-host.sh

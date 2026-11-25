@@ -1,0 +1,16 @@
+=== analyzer selftest (synthetic bundles, 8 verdicts) ===
+ok   mac-nosee                    got=V-MAC-NOSEE              expected=V-MAC-NOSEE
+ok   mac-saw-nowrite              got=V-MAC-SAW-NOWRITE        expected=V-MAC-SAW-NOWRITE
+ok   mac-wrote-noevent            got=V-MAC-WROTE-NOEVENT      expected=V-MAC-WROTE-NOEVENT
+ok   event-not-delivered          got=V-EVENT-NOT-DELIVERED    expected=V-EVENT-NOT-DELIVERED
+ok   delivered-no-ap              got=V-DELIVERED-NO-AP        expected=V-DELIVERED-NO-AP
+ok   crash                        got=V-CRASH                  expected=V-CRASH
+ok   notrigger                    got=V-NOTRIGGER              expected=V-NOTRIGGER
+ok   inconclusive                 got=V-INCONCLUSIVE           expected=V-INCONCLUSIVE
+SELFTEST PASS (8 cases)
+
+=== syntax ===
+py_compile: OK
+
+=== sha256 ===
+f32e52201af8bb0c63cbb5d2601fbe81b5ccb885cb289fa8f77ab906a8644f98  scripts/host/analyze_capture.py

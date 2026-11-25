@@ -1,0 +1,24 @@
+=== lane tree ===
+./ANALYSIS-TEMPLATE.md
+./evidence/analysis-selftest.txt
+./evidence/host-selftest.txt
+./evidence/router-selftest.txt
+./evidence/selftest-README.txt
+./evidence/tree.txt
+./.gitignore
+./README.md
+./REPORT.md
+./RUNBOOK.md
+./scripts/host/analyze_capture.py
+./scripts/host/rx-capture-host.sh
+./scripts/router/rx-capture-router.sh
+
+=== line counts ===
+   457 REPORT.md
+   136 RUNBOOK.md
+   100 ANALYSIS-TEMPLATE.md
+    62 README.md
+   680 scripts/router/rx-capture-router.sh
+   235 scripts/host/rx-capture-host.sh
+   671 scripts/host/analyze_capture.py
+  2341 total

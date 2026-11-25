@@ -1,0 +1,21 @@
+=== router script selftest (read-only structural checks) ===
+ok   script parses (sh -n)
+ok   declares READ-ONLY contract
+ok   no /dev/mem write open
+ok   no of=/dev/mem
+ok   no module load/unload commands
+ok   no reboot/poweroff command
+ok   no flash write form
+ok   live bank CA present
+ok   vendor mask constant present
+ok   status bit map complete
+ok   bar0 translation documented
+ok   crash exit code is 3
+ok   raw path is O_RDONLY only
+SELFTEST PASS
+
+=== syntax ===
+sh -n: OK
+
+=== sha256 ===
+b58aa038500efc46d3c9159a26d7479d4934de49a85ee66e3fa219b86ef03b34  scripts/router/rx-capture-router.sh
