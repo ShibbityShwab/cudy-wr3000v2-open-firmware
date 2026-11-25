@@ -1193,3 +1193,147 @@ staging 0, no exception.
 | association L5 (client auth/assoc/4-way) | `ab9e18a4` ready | **NOT CAPTURED** - client association is RF-gated until the antennas are attached; the software chain (mgmt TX/RX, station ops, EAPOL/data TX) is in place | [V]/[U] |
 | image bake #2 successor - RX watermark (2026-11-25) | final association module rebuilt with the RX refill watermark (`rx_refill_wm`, default 75, fail-closed at boot): staged **`d2c608e7...` 347,388 B / 57 params**, installed **328,788 B `b4c076bf...`** (.text identical); SAE hostapd `451dd49f...` unchanged; kernel slice UNCHANGED | **baked + host-verified, NOT flashed**: container **7,188,799 B sha256 `8ba1ad22...`**; kernel slice 3,372,638 B `13e81214...` / slot `1794a531...` (rootfs-only); rootfs UBI **3,801,088 B `31e7a39c...`**; squashfs 3,318,696 B `cb42bfed...`; 83 pkgs; **verify 84/84 PASS**; three bakes byte-identical. The earlier `0d9429ec`/`ab9e18a4` row is the pre-watermark image-2 history | [V] (`wifi-final-image-2/HASHES.txt`) |
 | image bake #2 (pre-watermark history, 2026-11-25) | SAE hostapd `451dd49f...` + WPA2/WPA3 configs + the corrected module `ab9e18a4` (staged 344,372 B; installed 325,932 B sha256 `4f1b45c1...`, .text identical; 56 params); kernel slice UNCHANGED | **baked + host-verified, NOT flashed**: container **7,188,799 B sha256 `0d9429ec...`**; kernel slice **3,372,638 B `13e81214...` / slot `1794a531...`** (rootfs-only); rootfs UBI **3,801,088 B `44df3a63...`**; 83 packages; **verify 82/82 PASS**; three recorded bakes byte-identical | [V] (`wifi-final-image-2/HASHES.txt`) |
+
+## T46. The final RX hunt - R0 parity and R2 observe-only capture (2026-11-26)
+
+Source: `wifi-rx-vendor-diff/REPORT.md` + `wifi-rx-capture-plan/REPORT.md` + `wifi-rx-format/REPORT.md`
+and the RX-hunt ledger entries (05:00/06:00/08:30). R0 and R2 are both **read-only** runs: R0
+performs no device write at all; R2 runs the observe-only drain (`rx_drain_write=0`) so a capture
+can be proven without publishing completion entries.
+
+### T46.1 R0 parity - device-owned live bank vs the committed vendor stock capture
+
+| live-bank word (CA 0x40050000) | ours (R0) | vendor stock | verdict |
+| --- | ---: | ---: | --- |
+| `+0x14` | `0x00200020` | `0x00200020` | DEVICE_OK |
+| `+0x24` | `0x00800000` | `0x00800000` | DEVICE_OK |
+| `+0x28` | `0x01800800` | `0x01800800` | DEVICE_OK |
+| `+0x2c` | `0x02801000` | `0x02801000` | DEVICE_OK |
+| `+0x30` | `0x03801800` | `0x03801800` | DEVICE_OK |
+| `+0x04` (device-owned, stock 0) | `0x8000` | `0x00000000` | only mismatch |
+| config block (CA 0x40040000) | 21/21 match | - | mismatch=0 |
+
+Summary line: `cfg{21 mismatch=0} live{17 mismatch=1 device_zero=0 read_fail=0}`; status `0x182`,
+active `0x102` (bits 1+8), rx=0 (idle). **The device-side RX state is the vendor's.**
+
+### T46.2 R2 observe-only capture - the status transition
+
+| observation | value | note |
+| --- | --- | --- |
+| trigger | the laptop sent 3 auth frames at the AP BSSID | its own kernel log: `send auth ... try 1/3..3/3 -> authentication timed out` [V*] |
+| status before | `0x00000182` | active bits 1+8, RX idle |
+| status after | `0x00000582` | **+0x400 = bit 10** (RX-side error class) |
+| drain output | `actions=1 frames=0 bad=0 chains=0` | **the MAC received; no host memory write** |
+| completion ring | `cmp_wptr=0 / cmp_rptr=0 / head_cmp=0` | empty |
+| page during the attempts | golden:0 (gate `0xcece`, exception class `0x04000010`) | the receive path faults the device; recovered by a chip power-cycle |
+| machw word7/word9 + config block | read close to stock; config block matched stock exactly | the config is not the gap |
+
+### T46.3 The isolation that localises the fault
+
+| run | RX rings | same client frames | outcome |
+| --- | --- | --- | --- |
+| A | **none** (`rx_enable=0`) | yes (3 auth frames) | status stayed `0x182`, page **golden:1**, no exception -> frames alone are harmless |
+| B | armed (`rx_enable=1`, observe-only) | yes | status `0x582`, `frames=0`, page lost -> the fault needs **our rings + an arriving frame** |
+
+Reading: the device RX state is vendor-exact, the MAC receives, and the write path fails only with
+our armed rings - a **firmware-mediated RX write failure**, not a missing host register.
+
+---
+
+## T47. The stock control and the PD4 discriminator (2026-11-26)
+
+Source: the RX-hunt ledger entries 10:00 (stock control) and 11:00 (stock-firmware test); the PD4
+decode is in the fw-audit lane (C29, F10).
+
+| test | procedure | result | consequence |
+| --- | --- | --- | --- |
+| stock control (SC-1) | switch to vendor pair A; stock AP `Cudy-1C73` on air; the same laptop attempts it | **`Cudy-1C73` at -31 dBm, channel 7**; `[4566.387795] wlan0: authenticated`, `[4566.458373] wlan0: associated` (the client's 802.11 layer completed despite the NM WPA prompt) | the device/radio/RX hardware is **proven fine** on the same chip; the fault is host-side |
+| PD4 discriminator | boot our image with the **stock** firmware (`fw_path=hi_wifi/FIRMWARE.bin`) | boot ladder completes, `READY_TXQ_SYNC`, boot latched, id1/id2 seen, page golden, wiphy registered; **H2D refused -16** (`DP txq_sync ... (-16)`, `start_ap ... VAP add not posted (-16)`) | PD4 is **not needed for the boot handshake**; it **is required for our H2D path** (the stock firmware lacks the poller) and it is additive to the RX path -> **PD4 is not the RX breaker** |
+
+PD4 shape (research artifact, never shipped): a 4-byte segment at file offset 37226 (the boot-task
+success epilogue CPU 0x4916A) branches into the 64-byte stub at CPU 0x108240 (the all-zero
+static-data gap); the stub waits for the HCC instance (CPU 0x10C190), polls mailbox out[0]
+(CA 0x40039010) and calls the firmware's own event-0x4C wrapper CPU 0x40294 -> H2D dispatcher
+CPU 0xC18AC. H1 (fw-audit) established the dispatcher is consume-only through the ROM zero table.
+
+Bench bookkeeping after the test: the box was returned to our image with the stock firmware loaded
+(the H2D-refused session) - the next fire needs a **fresh boot + the PD4 firmware explicitly**.
+
+---
+
+## T48. The two final candidate fires - completion phase and WOC buffer class (2026-11-26)
+
+Source: `wifi-rx-completion-phase/REPORT.md` and `wifi-rx-woc-class/REPORT.md`; the fire records are
+the RX-hunt ledger entries 12:00 (prepublish) and 13:00 (WOC class). Both modules were built from the
+lanes' committed patch chains; both fires used a fresh gold boot, the PD4 firmware, the AP enabled
+and the same laptop 3-auth-frame trigger.
+
+| item | completion-phase fire | WOC-class fire |
+| --- | --- | --- |
+| lane / task | `wifi-rx-completion-phase` (task-168) | `wifi-rx-woc-class` (task-167) |
+| parameter | `rx_cmp_prepublish=1` (default 0, fail-closed) | `rx_buf_class=1` (default 0 = coherent) |
+| artifact | `bc942e13...`, 60 params (association base + vendor-diff + phase patch) | **365,332 B sha256 `3363903a...`**, 60 params (association base + vendor-diff + class patch) |
+| mechanism | one-shot pre-arm publish of the completion consumer = phase 1 (`0x8000`; vendor initial `0x0000`), status-reaction watch + rollback | RX pools allocated as cacheable skb slab + held `DMA_FROM_DEVICE` map + per-publish cache maintenance (the vendor WOC class) |
+| device reaction | consumer `+0x40 = 0x8000` accepted; status **`0x182 -> 0x186` = bit 2 (RX complete)**, page golden:1 | dmesg `DP setup: OK - RX buffer class 1 (vendor WOC)`; AP-ENABLED; page golden:1 |
+| client traffic | laptop 3 auth frames | laptop 3 auth frames |
+| capture | **`frames=0`**, completion ring empty | **`frames=0`**, status `0x582` (bit 10) |
+| verdict | **not the fix** (the phase is real; the write is missing) | **not the fix** (the buffer class is not the gate) |
+| what it rules out | "the DMAC needs a non-zero consumer phase before its first completion write" | "the RX write master requires the vendor's non-coherent buffer class" |
+| page-loss note | intermittent across runs; this run stayed golden | page stayed golden; the RX fault is the separate class |
+
+Reading: both candidate classes are measured and excluded; what remains is not a host-side
+configuration choice (F1 - the firmware-side RX init).
+
+---
+
+## T49. The vendor architecture decode from the unstripped Wi-Fi module (2026-11-26)
+
+Source: RX-hunt ledger entries 14:00-17:00 (the symbol-based decode); the vendor module set is read
+in place at its local path and is never committed. Everything in this table is an address, symbol
+name or structure/layout fact decoded from the local artifact.
+
+### T49.1 The asset
+
+| item | value | evidence |
+| --- | --- | --- |
+| `hi5622v100_wifi.ko` | **unstripped, 17,059 symbols** (incl. 565 `hmac_config_*` + the wal/smac/hmac internals) | [V] |
+| who sends HCC messages | only the Wi-Fi module (the plat module imports **no** `hcc_*` symbols) | [V] |
+| module set / rootfs (local only) | 58 modules at `recovery-extract/lib/hisilicon/ko/`; vendor rootfs 2.4.15/2.5.24 | [V] |
+
+### T49.2 The init chain
+
+| symbol | role / callees | evidence |
+| --- | --- | --- |
+| `hmac_main_init` (0x3f6b8) | the top-level Wi-Fi init: res/vap-dev init, `hcc_msg_register_tab_chip` x3, `hdpp_main_init`, acs/psta/phy-event/spectral/csi/stat/multiap/rrm/ie-switch/pfm/fsm/board inits, `hcc_set_state` | [V] |
+| `hdpp_main_init` | the datapath plane: `hdpp_chip_init`, `hdpp_var_init`, `hdpp_hisi_thread_init`, `hcc_queue_register_customer_for_chip/core`, `hcc_msg_register_tab_chip/core` | [V] |
+| `hdpp_user_rx_init` (0x1d64) | per-user RX init: 8x `hmac_ba_rx_init` (block-ack RX sessions at user+0x670, 0x80 each) - runs when a station/user is added | [V] |
+
+### T49.3 The generic config-event message (g0 id1)
+
+| header field | value | note |
+| --- | --- | --- |
+| `[+0]` / `[+1]` | group / dst nibbles | from the config descriptor |
+| `[+6]` | **1** | the message id (g0 id1) |
+| `[+20]` | **u16 config sub-event id** | the discriminator the vendor senders set |
+| `[+22]` | payload length | - |
+| `[+24]` | payload start | `hdpp_config_send_event` @0x59c0 allocates payload+16 and copies it there, then `hcc_msg_tx` |
+
+Our driver already sends g0 id1 for vap_add/ap_chan/ap_ssid/ap_cfg/vap_start - the vendor's id-1
+messages carry the sub-event at header+20; the decoded contract is what lets a candidate RX config
+event be built byte-correctly.
+
+### T49.4 The config tables and the senders
+
+| item | value | note |
+| --- | --- | --- |
+| `g_ast_*_config_table` | dmac fast aging, hmac car, hmac traffic control, mac green-ap, mac ns/cfg, mac pm, mac rssi, mac speedtest | 8-byte entries {pointer, size 7/8/9, index, 0} = the **config-item registry** (host command surface), not the RX init |
+| message-sending functions | **82** enumerated (init-relevant: `hdpp_config_send_event`, `hmac_config_send_event`, `hmac_config_h2d_send_app_ie`, `hmac_config_alg_send_event`, `hmac_config_receive_all_sta_rssi`, `hmac_cfg_tx_sched_switch`, `hmac_chan_do_sync`, `hmac_mgmt_reset_psm`, ...) | the init-chain callees are the candidate senders of the missing RX config event |
+| firmware handler strings | `smac_msg_proc_rx_ring_reset_req` @file 0xE28BC; `..._enable_trx_req` @0xE29A8 | no direct literal references -> a table indirection; the handlers are the firmware side of the missing pre-RX request |
+
+### T49.5 The F1 lead
+
+| item | statement | evidence |
+| --- | --- | --- |
+| F1 | the firmware's RX ring/PPDU state is never (re)initialised because our minimal host message set omits the vendor init chain's RX config events; hence the MAC receives but the firmware writes nothing (and can fault the DMAC on an arriving frame) | [I], supported by R0/R2 + the two negative candidate fires + the init-chain decode |
+| next decode | walk `hdpp_chip_init`/`hdpp_var_init`/`hmac_board_init` and list every `hdpp_config_send_event`/`hmac_config_send_event` call site (sub-event id + payload); match the firmware handler ids; the decisive reference is a **stock H2D trace**; implement the candidate fail-closed + fire with the laptop auth as the discriminator | [I]/[U] |
+| honest provenance | the v7 candidate-lane reports were reconstructed at closeout from committed artifacts + the bench record; the fired module identities are known; the exact WOC-fired patch/base pair is [U] | [V]/[U] |

@@ -39,12 +39,16 @@ Expected: a list of PASS lines (file presence, lane-path resolution, marker set,
 claim-ID sequence, table/finding completeness, the v2-v5 milestone vocabulary, key-constant
 cross-checks against the owning lanes' committed sources and the superproject ledger,
 forbidden-content scan) and a final PASS with the check count. v5 added the static-RE-wave checks
-(sections 6.1-6.17, findings F1-F19, tables T1-T37, claims EV-001..EV-305); **v6 extends the same
-checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-342** - the
-association module identities and 56 params, the corrected g0 id6 mgmt-TX carrier, the g1 id13
-management-RX event, the SET_RX_FILTER negative, the RX arm ordering (0x182 vs 0x02), the R11
-`field10` values, the RF path-loss observation and the 51/51 public-source manifest. At the v6
-cut-off the verifier reports **RESULT: PASS (303/303 checks)**; the image-2 bakes are
+(sections 6.1-6.17, findings F1-F19, tables T1-T37, claims EV-001..EV-305); v6 added sections
+6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-342. **v7 extends the checks to
+sections 6.26-6.29, findings F28-F30, tables T46-T49, claims EV-343..EV-372 and corrections
+C65-C71** - the R0 parity device words/config block, the R2 status transition (0x182 -> 0x582,
+`frames=0`), the stock control and PD4 discriminator, the address-transform identity, the
+completion-phase prepublish (`bc942e13`, `0x8000`, `0x186`) and the WOC-class fire
+(`3363903a`, `rx_buf_class`), the stock-control/PD4 ledger outcomes and the vendor-architecture
+facts (17,059 symbols, `hdpp_config_send_event`, the g0 id1 `[+20]` sub-event, the
+`g_ast_*_config_table` family, 82 senders, the `rx_ring_reset_req`/`enable_trx_req` strings). At the
+v7 cut-off the verifier reports **RESULT: PASS (358/358 checks)**; the image-2 bakes are
 cross-checked against `wifi-final-image-2/` - the pre-watermark history (container `0d9429ec...`,
 module `ab9e18a4...`/installed `4f1b45c1...`, rootfs UBI `44df3a63...`) and the **successor FINAL
 image-2** (container `8ba1ad22...`, module `d2c608e7...` 57 params / installed `b4c076bf...`,
@@ -161,6 +165,33 @@ local artifacts directory and the shared OpenWrt tree; host-only, nothing flashe
 is recorded in `wifi-final-image-2/HASHES.txt` and the report's T45 (the CURRENT FINAL row is
 the RX-watermark successor container `8ba1ad22...`; the earlier `0d9429ec...` row is history).
 
+## 4.2 Reproduce the final RX-hunt wave (host-only)
+
+```sh
+cd $REPO/opensource/docs/incoming
+# the two candidate lanes' device-free selftests / model builds
+sh wifi-rx-completion-phase/tools/run-host-tests.sh     # 102 checks, 0 failures, PASS
+cc -std=c99 -Wall -Wextra -Werror -pedantic -O2 -c \
+    wifi-rx-woc-class/src/hi5622_rx_woc.c -o /tmp/rx_woc_model.o   # clean compile (no harness shipped by the lane)
+# the RX parity/observe model selftests (vendor-diff + capture-plan lanes)
+sh wifi-rx-vendor-diff/tools/run-host-tests.sh          # 440/440 host checks (see the lane BUILD-NOTES)
+python3 wifi-rx-capture-plan/scripts/host/analyze_capture.py selftest   # 8/8 verdict fixtures
+sh wifi-rx-capture-plan/scripts/router/rx-capture-router.sh selftest    # 13 checks (no device)
+# the address-transform identity record and the pre-RX-request negative
+grep -n 'identity record\|rx_entry_xform' wifi-rx-format/REPORT.md | head
+```
+
+Identity/fact checks: the R0 parity words and config count are in [TABLES.md](TABLES.md) T46.1
+(cross-checked against `wifi-rx-vendor-diff/REPORT.md`); the R2 status/observe result in T46.2-T46.3
+(`wifi-rx-capture-plan` + `wifi-rx-vendor-diff`); the stock control and PD4 discriminator in T47
+(quoted from the append-only ledger's 10:00/11:00 entries - the control itself was an attended bench
+session, not a host test); the two candidate fires in T48 (module identities
+`bc942e13...`/`3363903a...`, both 60 params, both `frames=0`; the modules are local-only and were
+built by the Lead from the committed patch chains); the vendor architecture decode in T49 (read from
+the local vendor module set in place - no bytes copied; the module is not needed for the verifier).
+
+---
+
 ## 5. Reproduce the firmware patch recipes (host-only)
 
 ```sh
@@ -262,6 +293,15 @@ The v4 ladders extend that flow, all attended and fail-closed:
   `g1 id13` management RX on the CRX path and the live-bank 0x182 readback. **RF precondition:**
   antennas attached - with none the AP TX is ~-64 dBm at 30 cm and the client cannot associate
   (6.25). One load per boot; no retry.
+* **v7 RX-hunt ladders (REPORT 6.26-6.29, TABLES T46-T49)** - START with the read-only rungs:
+  `cat dp_rx_parity` (R0: zero device writes; report the five device-owned words + the 21-word
+  config block) and the observe-only drain (`rx_drain_write=0`, R2: `frames=0`/status read) while
+  the laptop sends 3 auth frames; then the two candidate rungs only behind their fail-closed params
+  (`rx_cmp_prepublish=1` before `dp_rx_arm`; `rx_buf_class=1` at load) on **separate fresh PD4
+  golden boots**, one idea per boot, stop on any exception/page loss/no-retry. The v7 hunt's
+  hardware record is in the ledger (stock control, R2, both fires); the current open target is the
+  firmware-side RX init (F1 - the vendor init-chain config-event decode + a stock H2D trace), not
+  another host rung.
 * **image (REPORT 6.11/C44)** - the ABI-correct image and the flash runbook are in
   `wifi-abi-image/`; the flash was executed on 2026-11-27 06:30 and the post-boot ABI receipt is the
   acceptance check (`apk query --fields version kernel` = the kmod pin).

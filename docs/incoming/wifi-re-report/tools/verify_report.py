@@ -87,11 +87,17 @@ def check_report_structure():
                  "set_rx_filter", "field10", "44 db", "0x182", "association module",
                  "ap-first", "60-byte prefix", "r11", "rf"]:
         check("REPORT covers the v6 association/management vocabulary: %s" % must, must in t.lower())
+    for must in ["059", "0x8000", "frames=0", "0x582", "0x186", "17,059", "hdpp_main_init",
+                 "g0 id1", "config-event", "stock control", "identity", "WOC", "completion-phase",
+                 "rx_ring_reset_req", "enable_trx_req", "F1"]:
+        check("REPORT covers the v7 RX-hunt vocabulary: %s" % must, must.lower() in t.lower())
     subs = re.findall(r"^### (6\.\d+) ", t, re.M)
-    check("REPORT section 6 has the v2-v6 subsections 6.1-6.25",
-          subs == ["6." + str(i) for i in range(1, 26)], ",".join(subs))
-    check("REPORT carries findings F1-F27", all(("### F%d." % i) in t for i in range(1, 28)))
-    check("REPORT is the v6 revision", "**v6**" in t)
+    check("REPORT section 6 has the v2-v7 subsections 6.1-6.29",
+          subs == ["6." + str(i) for i in range(1, 30)], ",".join(subs))
+    check("REPORT carries findings F1-F30", all(("### F%d." % i) in t for i in range(1, 31)))
+    check("REPORT is the v7 revision", "**v7**" in t)
+    check("REPORT carries the v7 corrections C65-C71",
+          all(("| C%d |" % i) in t for i in range(65, 72)))
 
 
 def check_markers():
@@ -149,7 +155,9 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 342 claims", len(uniq) >= 342, "%d" % len(uniq))
+    check("evidence index has at least 372 claims", len(uniq) >= 372, "%d" % len(uniq))
+    check("evidence index carries the v7 range EV-343..EV-372", 343 in nums and 372 in nums,
+          "343=%s 372=%s" % (343 in nums, 372 in nums))
     check("evidence index carries the v5 range EV-278..EV-308", 278 in nums and 308 in nums,
           "278=%s 308=%s" % (278 in nums, 308 in nums))
     check("evidence index carries the v6 range EV-309..EV-342", 309 in nums and 342 in nums,
@@ -389,6 +397,58 @@ def check_constants():
         check("cross-check: " + name + " matches the owning lane source", ok,
               "report=%s lane=%s" % (needle in joined, needle in src))
 
+    # ---------------- v7 RX-hunt cross-checks ----------------
+    ledger_v7 = read(os.path.join(REPO, "mem-entries.md")).lower()
+    rxdiff = get_lane("wifi-rx-vendor-diff/REPORT.md").lower()
+    rxcap = get_lane("wifi-rx-capture-plan/REPORT.md").lower()
+    rxfmt = get_lane("wifi-rx-format/REPORT.md").lower()
+    cmp_rep = get_lane("wifi-rx-completion-phase/REPORT.md").lower()
+    cmp_patch = get_lane("wifi-rx-completion-phase/patches/0001-rx-cmp-phase-prepublish.patch").lower()
+    woc_rep = get_lane("wifi-rx-woc-class/REPORT.md").lower()
+    woc_patch = get_lane("wifi-rx-woc-class/patches/0001-rx-woc-class.patch").lower()
+    v7_consts = [
+        ("R0 parity device word +0x14", "0x00200020", rxdiff),
+        ("R0 parity device word +0x24", "0x00800000", rxdiff),
+        ("R0 parity device word +0x28", "0x01800800", rxdiff),
+        ("R0 parity config block", "config block", rxdiff),
+        ("R2 observe drain zero-write vocabulary", "observe-only", rxdiff),
+        ("R2 status-bit map bit 10", "bit 10", rxcap),
+        ("completion-phase lane artifact", "bc942e13", cmp_rep),
+        ("completion-phase prepublish value", "0x8000", cmp_rep),
+        ("completion-phase prepublish verdict string", "phase1-accepted-idle", cmp_patch),
+        ("completion-phase vendor initial consumer", "0x0000", cmp_rep),
+        ("WOC-class lane artifact", "3363903a", woc_rep),
+        ("WOC-class parameter", "rx_buf_class", woc_patch),
+        ("WOC class is a streaming DMA_FROM_DEVICE class", "dma_from_device", woc_patch),
+        ("address transform is identity", "identity", rxfmt),
+        ("stock control AP name", "cudy-1c73", ledger_v7),
+        ("stock control client auth+assoc", "authenticated", ledger_v7),
+        ("stock control client association", "associated", ledger_v7),
+        ("PD4 discriminator H2D refusal", "(-16)", ledger_v7),
+        ("vendor module symbol count", "17,059 symbols", ledger_v7),
+        ("vendor init chain root", "hmac_main_init", ledger_v7),
+        ("vendor config-event sender", "hdpp_config_send_event", ledger_v7),
+        ("vendor config-table family", "g_ast_", ledger_v7),
+        ("vendor message-sender count", "82 message-sending", ledger_v7),
+        ("firmware rx_ring_reset_req string", "rx_ring_reset_req", ledger_v7),
+        ("firmware enable_trx_req string", "enable_trx_req", ledger_v7),
+        ("PD4 poller file offset", "37226", ledger_v7),
+        ("PD4 cave CPU address", "0x108240", ledger_v7),
+        ("prepublish fire ledger entry", "prepublish fire", ledger_v7),
+        ("WOC fire ledger entry", "woc-class fire", ledger_v7),
+    ]
+    for name, needle, src in v7_consts:
+        ok = needle in joined and needle in src
+        check("v7 cross-check: " + name + " matches the owning source", ok,
+              "report=%s source=%s" % (needle in joined, needle in src))
+    check("the v7 R0 parity config count 21/21 is recorded",
+          "21/21" in joined and ("21/21" in rxdiff or "config block 21" in rxdiff))
+    check("the v7 stock-control outcome is recorded in the ledger",
+          "the device works" in ledger_v7 and "host-side" in ledger_v7)
+    check("the v7 F1 lead is recorded in the ledger",
+          "firmware rx configuration" in ledger_v7 or "firmware rx config" in ledger_v7 or
+          "rx ring/ppdu state is never" in ledger_v7)
+
     mgmt_carrier = get_lane("wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md").lower()
     sibling_rep = get_lane("wifi-sibling-gpl/REPORT.md").lower()
     check("the g0 id 6 device carrier is cross-checked against the sibling lane",
@@ -501,6 +561,8 @@ def check_constants():
               "FIRST REAL WiFi INTERFACE" in status and "1794a531" in status)
         check("STATUS.md carries the automation-matrix + real-frame section (3l)",
               "3l." in status and "user_add" in status and "consume-only" in status)
+        check("STATUS.md carries the live-AP / WPA3 state",
+              "cudy-ap-test" in status and "WPA3" in status)
 
 
 def check_forbidden():
@@ -553,9 +615,9 @@ def check_tables():
     check("markdown table rows are well formed", not bad, "; ".join(bad[:5]))
     tab = TEXT.get("TABLES.md", "")
     tabs = re.findall(r"^## (T\d+)\. ", tab, re.M)
-    check("TABLES.md contains at least 45 numbered tables", len(tabs) >= 45, "%d" % len(tabs))
+    check("TABLES.md contains at least 49 numbered tables", len(tabs) >= 49, "%d" % len(tabs))
     nums = [int(x[1:]) for x in tabs]
-    check("TABLES.md tables are numbered T1..T45 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
+    check("TABLES.md tables are numbered T1..T49 without gaps", nums == list(range(1, len(nums) + 1)), ",".join(map(str, nums)))
     for t_ in ["T21", "T22", "T23", "T24", "T25"]:
         check("TABLES.md carries the v2 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T26", "T27", "T28"]:
@@ -566,6 +628,8 @@ def check_tables():
         check("TABLES.md carries the v5 table " + t_, ("## " + t_ + ". ") in tab)
     for t_ in ["T39", "T40", "T41", "T42", "T43", "T44", "T45"]:
         check("TABLES.md carries the v6 table " + t_, ("## " + t_ + ". ") in tab)
+    for t_ in ["T46", "T47", "T48", "T49"]:
+        check("TABLES.md carries the v7 table " + t_, ("## " + t_ + ". ") in tab)
 
 
 def main():
