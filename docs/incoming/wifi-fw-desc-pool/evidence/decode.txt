@@ -1,0 +1,46 @@
+== C2: the descriptor-pool populator ==
+  pool CA 0x1ADC98: +0x04 u8 count (boot default 2); record i at
+    pool+16*i: +0x08 u32 word {byte0 band 0=2g/1=5g, byte2 bit7 valid},
+    +0x0C u8, +0x0E u16, +0x14 u32 channel bitmap
+  populator CA 0x1017F8(band0 CA 0x117B48, band1 CA 0x117AD4):
+    1) all slot bytes (row+1) = 0xFF    (CA 0x101802 / CA 0x101814)
+    2) for i in 0..count-1: type=[pool+16i+8] byte0; bmap=[pool+16i+0x14]
+       type 0 -> for b in 0..13 if bmap&(1<<b): CA 0x117B48+4b+1 = i
+       type 1 -> for b in 0..28 if bmap&(1<<b): CA 0x117AD4+4b+1 = i
+  boot pool builder: CA 0x485FA..0x4861E then bl 0x1017F8 (CA 0x48620)
+    count=2; rec0 bitmap 0x1FFF (13 ch); rec1 word 0x00000201 (band1),
+    rec1 bitmap 0x1FFFFFFF (29 ch); rec1 byte2 = 0x02 -> valid bit 0
+  H2D 0x00F7 worker CA 0x45A30: installs a host descriptor blob into the
+    pool (CA 0x1037BC gate + memcpy_s CA 0xC1E44(dst=pool, max=0x148,
+    src=body, len=8+body[4]*16)) then bl 0x1017F8 (CA 0x45A76)
+  H2D 0x00DA worker CA 0x43460: edits record +0x0C/+0x0E from the body
+  consequence: without 0xF7 the tables keep slot=i (boot default) and
+    the band-1 descriptor word is 0x201 -> CA 0x101890 returns 0 by design;
+    the 0x00800000 valid bit is host-supplied in the 0xF7 blob only
+  chain: CA 0x101650 mapper -> CA 0x117AD4 slot -> CA 0x1ADC98+16s+8
+         -> CA 0x101890 byte2 bit7 -> CA 0x89840 latches into R+0x410 b0
+== C2 descriptor defaults (derived from the boot builder) ==
+  rec  band  word       bitmap        channel slots
+  0    2.4G  0x00000000 0x00001FFF    13 of the 14 band-0 rows
+  1    5G    0x00000201 0x1FFFFFFF    all 29 band-1 rows
+  valid bit (byte2 bit7 of the record word) = 0 in both boot records
+
+== C4 ini policy landing (plat.ko, host side) ==
+  ini key                     item id  landing (g_dev_custom_info)
+  beacon_2g_tx_policy=0       0xAE     +0x91C (byte) / +0x91D (b16-23)
+  beacon_5g_tx_policy=2       0xAF     +0x7AE (u16 lo), +0x7B4 (b16-31)
+  parse path: ini_cfg_init -> hwifi_config_init(17/18/19) ->
+              hwifi_get_init_value(18,id) (CA 0x16AC) -> g_al_dts_params[id]
+              -> hwifi_get_dts_dpd_pwr_customize_param (CA 0x4950)
+  blob: g_dev_custom_info bss 0xC88 size 0x9A8, exported to wifi.ko;
+        registered by plat_main_init CA 0x3054; send: dev_custom_send
+        CA 0x1BE98 -> bal_write (bus path, 0x60-byte record)
+
+== C5 band-1 start/TBTT hooks ==
+  VAP start-on-band CA 0x971D8 calls G+0x370 (CA 0x00174B34) and
+  G+0x374 (CA 0x00174B38) with the VAP ctx after the band/link reconcile
+  G = CA 0x1747C4 (literal CA 0x9745C); guarded by G+0 != 0
+  VAP+0x58 bit2 = band-1 VAP flag (VAP start CA 0x46394)
+  VAP+0x13A u16 = beacon interval (AP config CA 0x84DA4, body+0x94)
+  CA 0x7E5CC copies VAP+0x13A -> beacon descriptor +0x260
+  ISR name blob CA 0x12266C: no code reference in the image (name-

@@ -1,0 +1,30 @@
+== read-only probe pack (phys = 0x40000000 + CPU + 0x6b8000) ==
+  object                         CPU        BAR0       phys      
+  ctx slot0 (module table)       0x00171458 0x00829458 0x40829458
+  module-table base u16          0x00172504 0x0082a504 0x4082a504
+  ctx0+0x004 create type         0x0011975c 0x007d175c 0x407d175c
+  ctx0+0x440 gate                0x00119b98 0x007d1b98 0x407d1b98
+  bandobj+0xEC8 gate             0x0015f438 0x00817438 0x40817438
+  ctx0+0x4B0 perlink             0x00119c08 0x007d1c08 0x407d1c08
+  ctx0+0x4B8 bandobj             0x00119c10 0x007d1c10 0x407d1c10
+  bandobj+0x1A00 publish         0x0015ff70 0x00817f70 0x40817f70
+  P+0x1A00 (O ptr)               0x00178238 0x00830238 0x40830238
+  P+0xF04 (RF mode)              0x0017773c 0x0082f73c 0x4082f73c
+  P+0xF87 (range flag)           0x001777bf 0x0082f7bf 0x4082f7bf
+  pool count+header u32          0x001adc98 0x00865c98 0x40865c98
+  pool rec0 word (+8)            0x001adca0 0x00865ca0 0x40865ca0
+  pool rec1 word (+8)            0x001adcb0 0x00865cb0 0x40865cb0
+  pool rec1 bitmap (+0x14)       0x001adcbc 0x00865cbc 0x40865cbc
+  chan-table B1 row idx1         0x00117ad8 0x007cfad8 0x407cfad8
+  chan-table B0 row idx0         0x00117b48 0x007cfb48 0x407cfb48
+  G+0x000 global head            0x001747c4 0x0082c7c4 0x4082c7c4
+  G+0x370 mac-start cb           0x00174b34 0x0082cb34 0x4082cb34
+  G+0x374 beacon-start cb        0x00174b38 0x0082cb38 0x4082cb38
+  band0 object                   0x0015ca08 0x00814a08 0x40814a08
+  band1 object                   0x0015e570 0x00816570 0x40816570
+  two-step: ctx0 = u32(0x171458)+u16(0x172504); perlink = u32(ctx+0x4B0)
+            O = u32(perlink+0x2820); R = u32(O+0x2D8); R+0x3A8..+0x418
+            VAP = u32(ctx+0x190); VAP+0x58 byte, VAP+0x13A u16
+  pool: count = u8(0x1ADC9C); rec1 word = u32(0x1ADCB0)
+        chan row B1 = u32(0x117AD4+4*idx); B0 = u32(0x117B48+4*idx)
+  forbidden: RC misc window 0x10160000..0x1016ffff

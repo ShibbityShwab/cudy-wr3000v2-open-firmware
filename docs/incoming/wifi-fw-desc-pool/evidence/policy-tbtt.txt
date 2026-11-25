@@ -1,0 +1,22 @@
+== C4: hi5622v100_plat.ko beacon policy path ==
+  ini: /lib/firmware/hi_wifi/cfg_hi5622v100_hisi.ini [HOST_WIFI_NORMAL]
+       beacon_2g_tx_policy=0   beacon_5g_tx_policy=2
+  key table (plat.ko .data+0x530/+0x538): id 0xAE/0xAF -> key strings
+  parser: plat_main_init CA 0x3054 -> hwifi_config_init(17,18,19)
+          -> hwifi_get_init_value(module, id) CA 0x16AC
+          -> hwifi_get_dts_dpd_pwr_customize_param CA 0x4950
+  landing: g_dev_custom_info bss 0xC88 (+0x91C 2g, +0x7AE 5g)
+  reach: g_dev_custom_info exported (ksymtab) and imported by
+         hi5622v100_wifi.ko; dev_custom_send CA 0x1BE98 writes a
+         0x60-byte record through bal_write
+  verdict: host-side platform/ini data; our five H2D frames carry no
+           ini-derived per-band field -> cannot synthesise the value
+== C5: band-1 start/TBTT arm ==
+  G (CA 0x1747C4) callback slots: +0x370 CA 0x00174B34, +0x374 CA 0x00174B38
+  CA 0x971D8 flow: resolve band/link (CA 0xA4CA4) -> compare band/VAP
+    -> if G+0 != 0: call G+0x370(ctx), G+0x374(ctx)
+  band-1 VAP flags: VAP+0x58 bit2 (band != 0); VAP+0x13A beacon int
+  registry: ISR names CA 0x12266C (45 names) incl smac_tbtt_5g_isr
+    CA 0x1229E8; the blob has no static reference -> handler map [U]
+  discriminator: read G+0x370/G+0x374 and the two band objects twice
+    (working band-0 is the reference); NULL/zero band-1 cb = C5
