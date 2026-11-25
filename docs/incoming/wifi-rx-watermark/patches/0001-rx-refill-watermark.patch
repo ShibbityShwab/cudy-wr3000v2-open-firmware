@@ -1,0 +1,409 @@
+--- a/hi5622_rx_live.h	2026-11-25 12:44:28.996553747 +0700
++++ b/hi5622_rx_live.h	2026-11-25 12:44:28.997091480 +0700
+@@ -163,4 +163,44 @@
+  * not masked. */
+ int hi5622_rx_status_rx_bit(rx_u32 status, rx_u32 mask, rx_u32 *active);
+ 
++/* ===================================================================
++ * 4. Free-ring refill watermark (lane wifi-rx-watermark, task-156)
++ *
++ * Publishing free-buffer producer entries is what keeps the MAC RX engine
++ * fed: the device consumes one posted entry per received frame and hands the
++ * buffer back through the completion ring.  The drain may only re-publish
++ * buffers a validated completion returned, and one drain action consumes at
++ * most rx_drain_max completions; a completion backlog larger than that used
++ * to leak posted entries permanently (their free-ring slots were never
++ * re-published), so sustained EAPOL/data traffic could starve the MAC at its
++ * prefetch watermark (the iwlwifi RX_STALLED shape; the sibling Hi1105 HAL
++ * treats a free-ring-empty event as a first-class refill trigger).  The
++ * watermark pass keeps the posted count at >= wm_pct percent of depth
++ * (ath11k-style >= 3/4) as long as returned buffers exist.
++ *
++ * Policy (all integer, bounded, fail-closed - host-tested by
++ * tools/rx_wm_selftest.c):
++ *   target  = depth * wm_pct / 100      (0 = disabled; clamped to >= 1 for
++ *                                        any 0 < wm_pct <= 100)
++ *   trigger = posted < target
++ *   refill  = min(avail, depth - posted, cap) when triggered, else 0
++ * posted is the producer-consumer distance (hi5622_rx_ring_pending is used in
++ * that direction as well); avail is the count of buffers returned by drained
++ * completions and still queued; cap is the per-action bound.  depth - posted
++ * is exactly the number of consumed-but-not-republished slots, so a refill can
++ * never overwrite a posted entry.  Malformed input returns a negative error;
++ * nothing is clamped or guessed.
++ * =================================================================== */
++#define HIL_RX_WM_PCT_MAX    100u  /* rx_refill_wm is a percent of depth   */
++#define HIL_RX_WM_PCT_DEF     75u  /* keep >= 3/4 posted (ath11k-style)    */
++
++/* Target posted slots for one free ring (0 = watermark disabled). */
++int hi5622_rx_wm_target(rx_u32 depth, unsigned int wm_pct, rx_u32 *target);
++/* 1 = posted is below the watermark (refill needed), 0 = healthy, <0 = error. */
++int hi5622_rx_wm_triggered(rx_u32 depth, unsigned int wm_pct, rx_u32 posted);
++/* Buffers to re-publish this action: 0 when healthy, else min(avail,
++ * depth - posted, cap).  Errors are returned, never clamped. */
++int hi5622_rx_wm_plan(rx_u32 depth, unsigned int wm_pct, rx_u32 posted,
++                      rx_u32 avail, rx_u32 cap, rx_u32 *refill);
++
+ #endif /* HI5622_RX_LIVE_H */
+--- a/hi5622_rx_live.c	2026-11-25 12:44:28.998037893 +0700
++++ b/hi5622_rx_live.c	2026-11-25 12:44:28.998601825 +0700
+@@ -156,3 +156,67 @@
+     *active = ((status & ~mask) & (1u << HIL_RX_INT_RX_BIT)) ? 1u : 0u;
+     return HIL_RX_OK;
+ }
++
++/* -------------------------------------------------------------------
++ * Free-ring refill watermark (lane wifi-rx-watermark, task-156).
++ *
++ * See the header for the policy.  The rules are deliberately total and
++ * fail-closed: every input is range-checked, the result is bounded by both the
++ * queue and the ring room, and a malformed state returns an error so the
++ * driver closes the RX lane instead of guessing a pointer.
++ * ------------------------------------------------------------------- */
++int hi5622_rx_wm_target(rx_u32 depth, unsigned int wm_pct, rx_u32 *target)
++{
++    rx_u32 t;
++
++    if (target == NULL || depth == 0u || depth > HIL_RX_IDX_MASK)
++        return HIL_RX_EARG;
++    if (wm_pct > HIL_RX_WM_PCT_MAX)
++        return HIL_RX_ERANGE;
++    if (wm_pct == 0u) {
++        *target = 0u; /* disabled */
++        return HIL_RX_OK;
++    }
++    t = (depth * (rx_u32)wm_pct) / 100u;
++    if (t == 0u)
++        t = 1u; /* a set watermark always asks for at least one posted slot */
++    *target = t;
++    return HIL_RX_OK;
++}
++
++int hi5622_rx_wm_triggered(rx_u32 depth, unsigned int wm_pct, rx_u32 posted)
++{
++    rx_u32 target;
++    int rc;
++
++    if (posted > depth)
++        return HIL_RX_EFORMAT;
++    rc = hi5622_rx_wm_target(depth, wm_pct, &target);
++    if (rc != HIL_RX_OK)
++        return rc;
++    return (posted < target) ? 1 : 0;
++}
++
++int hi5622_rx_wm_plan(rx_u32 depth, unsigned int wm_pct, rx_u32 posted,
++                      rx_u32 avail, rx_u32 cap, rx_u32 *refill)
++{
++    rx_u32 target, room, n;
++    int rc;
++
++    if (refill == NULL)
++        return HIL_RX_EARG;
++    *refill = 0u;
++    if (posted > depth || avail > depth)
++        return HIL_RX_ERANGE;
++    rc = hi5622_rx_wm_target(depth, wm_pct, &target);
++    if (rc != HIL_RX_OK)
++        return rc;
++    if (posted >= target)
++        return HIL_RX_OK; /* healthy: no trigger */
++    room = depth - posted; /* consumed slots no live entry occupies */
++    n = (avail < room) ? avail : room;
++    if (n > cap)
++        n = cap;
++    *refill = n;
++    return HIL_RX_OK;
++}
+--- a/hi5622_dp_txrx.c	2026-11-25 12:44:28.999368359 +0700
++++ b/hi5622_dp_txrx.c	2026-11-25 12:44:29.000064701 +0700
+@@ -79,6 +79,22 @@
+ MODULE_PARM_DESC(rx_drain_max,
+ 	"maximum completion-ring entries consumed by one dp_rx_drain write (1..64)");
+ 
++/* wifi-rx-watermark (shared task task-156): sustained free-ring refill.  The
++ * drain re-publishes buffers handed back by validated completions; a backlog
++ * larger than one bounded drain action used to leak posted entries (their
++ * free-ring slots were never re-published), so sustained EAPOL/data traffic
++ * could starve the MAC at its prefetch watermark.  The watermark pass keeps
++ * both free rings posted at >= rx_refill_wm percent of depth as long as
++ * returned buffers exist (ath11k-style >= 3/4; iwlwifi RX_STALLED is the
++ * avoided failure mode).  It is gated exactly like the rest of the RX path
++ * (rx_enable=1 + dp_rx_arm + write gate); 0 is the old rx-static behaviour.
++ * Values above 100 are clamped to 100 at use (an invalid value can never
++ * over-publish or over-refill; the clamp direction is fail-closed). */
++static unsigned int dptx_rx_refill_wm = HIL_RX_WM_PCT_DEF;
++module_param_named(rx_refill_wm, dptx_rx_refill_wm, uint, 0644);
++MODULE_PARM_DESC(rx_refill_wm,
++	"RX free-ring refill watermark as a percent of ring depth (0..100; 0=off=old behaviour, default 75 = keep >=3/4 posted); the drain re-publishes completed buffers when the posted count drops below it");
++
+ /* Documentation-example address (02:00:... locally administered); never a
+  * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
+ static const u8 dptx_example_addr[6] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x01 };
+@@ -196,6 +212,16 @@
+ 	u16  rx_refill_small_head;
+ 	u16  rx_refill_small_count;
+ 	u32  rx_new_cap_count;
++	/* wifi-rx-watermark (task-156): sustained refill telemetry */
++	u32  rx_wm_posted_norm;
++	u32  rx_wm_posted_small;
++	u32  rx_wm_target_norm;
++	u32  rx_wm_target_small;
++	u32  rx_wm_trips;
++	u32  rx_wm_credit_low;
++	u32  rx_wm_refilled_norm;
++	u32  rx_wm_refilled_small;
++	bool rx_wm_low;
+ 	u32  rx_last_err;
+ };
+ 
+@@ -276,6 +302,19 @@
+ 	*cmp_wptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_CMP_WPTR);
+ }
+ 
++/* Read the live ring bank and refuse the 0xffffffff transport-miss value in
++ * one place (wifi-rx-watermark task-156 uses this for the fresh consumer
++ * snapshot the refill watermark is computed against). */
++static int dptx_live_read_checked(struct hi5622_pci *ctx, u32 *status,
++				  u32 *norm_rptr, u32 *small_rptr, u32 *cmp_wptr)
++{
++	dptx_live_read(ctx, status, norm_rptr, small_rptr, cmp_wptr);
++	if (*status == 0xffffffffu || *norm_rptr == 0xffffffffu ||
++	    *small_rptr == 0xffffffffu || *cmp_wptr == 0xffffffffu)
++		return -EFAULT;
++	return 0;
++}
++
+ /* Publish a packed 16-bit ring index to a config-block word, preserving the
+  * upper half (the vendor hal_set_* accessors do a 32-bit RMW while the
+  * hal_ring_set_sw2hw paths store a zero-extended u16).  Read-back checked. */
+@@ -891,6 +930,15 @@
+ 			 t->rx_drained, t->rx_bad_entry, t->rx_chain_refused,
+ 			 t->rx_new_cap_count, t->rx_refilled_norm,
+ 			 t->rx_refilled_small);
++	/* wifi-rx-watermark (task-156): sustained refill state. */
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX watermark: rx_refill_wm=%u%% target{norm=%u small=%u} posted{norm=%u small=%u} trips=%u credit_low=%u%s refilled{norm=%u small=%u}\n",
++			 dptx_rx_refill_wm, t->rx_wm_target_norm,
++			 t->rx_wm_target_small, t->rx_wm_posted_norm,
++			 t->rx_wm_posted_small, t->rx_wm_trips,
++			 t->rx_wm_credit_low,
++			 t->rx_wm_low ? " CREDIT_LOW" : "",
++			 t->rx_wm_refilled_norm, t->rx_wm_refilled_small);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+ 			 "RX static live bank CA 0x40050000: status=0x%08x norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x prod{norm=0x%04x small=0x%04x} cmp_cons=0x%04x last_err=%d\n",
+ 			 t->rx_live_status, t->rx_live_norm_rptr,
+@@ -1034,6 +1082,133 @@
+ 	return refilled;
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* wifi-rx-watermark (task-156): sustained free-ring refill pass      */
++/* ------------------------------------------------------------------ */
++
++/* Re-publish queued completed buffers into one free ring when its posted count
++ * (producer - live consumer) is below the watermark.  Bounds: only buffers
++ * queued by validated completions, only depth - posted ring slots (the exact
++ * number of consumed-but-not-republished slots), and at most cap buffers this
++ * action (cap = the clamped rx_drain_max).  On success the producer is
++ * published once and last_*_rptr is refreshed so the next window refill cannot
++ * double-count a slot this pass already re-published.  Any error is returned
++ * for the caller to close the lane (fail-closed, no retry). */
++static int dptx_rx_wm_ring(struct hi5622_dp_txrx *t, u8 ring_kind,
++			   unsigned int wm_pct, u32 fresh_rptr, u32 cap,
++			   int *refilled)
++{
++	struct hi5622_pci *ctx = t->ctx;
++	u32 depth, cfg_off, prod, posted, target, plan, buf_dma, idx, queued;
++	u32 *q;
++	u16 *head, *count;
++	void *ring;
++	int rc;
++
++	if (ring_kind == 0u) {
++		depth = HIL_RX_NORM_DEPTH;
++		cfg_off = HIL_RX_CFG_WPTR_NORM;
++		q = t->rx_refill_norm_q;
++		head = &t->rx_refill_norm_head;
++		count = &t->rx_refill_norm_count;
++		ring = t->rx_norm_ring;
++		prod = t->rx_norm_prod;
++	} else {
++		depth = HIL_RX_SMALL_DEPTH;
++		cfg_off = HIL_RX_CFG_WPTR_SMALL;
++		q = t->rx_refill_small_q;
++		head = &t->rx_refill_small_head;
++		count = &t->rx_refill_small_count;
++		ring = t->rx_small_ring;
++		prod = t->rx_small_prod;
++	}
++	if (!ring)
++		return HIL_RX_EARG;
++	rc = hi5622_rx_ring_pending(prod, fresh_rptr, depth, &posted);
++	if (rc != HIL_RX_OK)
++		return rc;
++	rc = hi5622_rx_wm_target(depth, wm_pct, &target);
++	if (rc != HIL_RX_OK)
++		return rc;
++	if (ring_kind == 0u) {
++		t->rx_wm_posted_norm = posted;
++		t->rx_wm_target_norm = target;
++	} else {
++		t->rx_wm_posted_small = posted;
++		t->rx_wm_target_small = target;
++	}
++	if (posted >= target)
++		return 0; /* healthy */
++	t->rx_wm_trips++;
++	queued = (u32)*count;
++	rc = hi5622_rx_wm_plan(depth, wm_pct, posted, queued, cap, &plan);
++	if (rc != HIL_RX_OK)
++		return rc;
++	while (plan > 0u) {
++		idx = prod & HIL_RX_IDX_MASK;
++		if (idx >= depth)
++			return HIL_RX_ERANGE;
++		buf_dma = q[*head];
++		((u32 *)ring)[idx] = buf_dma + HIL_RX_SKB_WORD;
++		*head = (u16)(((u32)*head + 1u) % depth);
++		(*count)--;
++		prod = hi5622_rx_idx_advance(prod, depth);
++		plan--;
++		(*refilled)++;
++	}
++	if (*refilled > 0) {
++		dma_wmb();
++		rc = dptx_publish16(ctx, cfg_off, prod, NULL);
++		if (rc)
++			return rc;
++	}
++	if (ring_kind == 0u) {
++		t->rx_norm_prod = prod;
++		t->rx_last_norm_rptr = fresh_rptr;
++		t->rx_wm_refilled_norm += (u32)*refilled;
++		t->rx_wm_posted_norm = posted + (u32)*refilled;
++	} else {
++		t->rx_small_prod = prod;
++		t->rx_last_small_rptr = fresh_rptr;
++		t->rx_wm_refilled_small += (u32)*refilled;
++		t->rx_wm_posted_small = posted + (u32)*refilled;
++	}
++	rc = hi5622_rx_wm_triggered(depth, wm_pct, posted + (u32)*refilled);
++	if (rc < 0)
++		return rc;
++	if (rc == 1) {
++		/* Still below the watermark after publishing everything returned:
++		 * the completion backlog is larger than this action can hand back.
++		 * Classify as CREDIT_LOW (sibling H4 starvation precondition); the
++		 * next drain re-checks.  This is telemetry, not a lane-closing
++		 * condition by itself. */
++		t->rx_wm_credit_low++;
++		t->rx_wm_low = true;
++	}
++	return 0;
++}
++
++/* Both free rings.  wm_pct == 0 disables the pass and keeps the old rx-static
++ * behaviour exactly (no ring pointer is touched by it). */
++static int dptx_rx_wm_refill(struct hi5622_dp_txrx *t, unsigned int wm_pct,
++			     u32 fresh_norm_rptr, u32 fresh_small_rptr, u32 cap,
++			     int *norm_refilled, int *small_refilled)
++{
++	int rc;
++
++	*norm_refilled = 0;
++	*small_refilled = 0;
++	if (wm_pct == 0u)
++		return 0;
++	if (wm_pct > HIL_RX_WM_PCT_MAX)
++		wm_pct = HIL_RX_WM_PCT_MAX; /* clamp: never over-refill */
++	rc = dptx_rx_wm_ring(t, 0u, wm_pct, fresh_norm_rptr, cap, norm_refilled);
++	if (rc != HIL_RX_OK)
++		return rc;
++	return dptx_rx_wm_ring(t, 1u, wm_pct, fresh_small_rptr, cap,
++			       small_refilled);
++}
++
+ static ssize_t dptx_rx_fail(struct device *dev, struct hi5622_dp_txrx *t,
+ 			    int rc, const char *why)
+ {
+@@ -1165,7 +1340,7 @@
+ 	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
+ 	struct hi5622_pci *ctx;
+ 	u32 st, nr, sr, cw, pending, max, cons, active = 0u;
+-	int rc, i, norm_refill, small_refill;
++	int rc, i, norm_refill, small_refill, wm_norm_refill, wm_small_refill;
+ 
+ 	(void)attr;
+ 	if (!t || !t->ctx)
+@@ -1223,6 +1398,23 @@
+ 	if (pending == 0u) {
+ 		hi5622_rx_status_rx_bit(st, dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK),
+ 					&active);
++		/* task-156: with no new completion there can still be returned
++		 * buffers queued from an earlier bounded drain (the old code leaked
++		 * exactly those slots).  The watermark pass is a no-op at
++		 * rx_refill_wm=0; otherwise it re-publishes up to the ring capacity
++		 * from the queue - bounded by max and by depth - posted. */
++		rc = dptx_rx_wm_refill(t, dptx_rx_refill_wm, nr, sr, max,
++				       &wm_norm_refill, &wm_small_refill);
++		if (rc < 0)
++			goto drain_refuse;
++		if (wm_norm_refill + wm_small_refill > 0) {
++			mutex_unlock(&t->lock);
++			dev_info(dev,
++				 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x) - watermark refill re-published %d norm / %d small queued buffers (producer moved, completion consumer did not)\n",
++				 st, active, nr, sr, cw, t->rx_cmp_cons,
++				 wm_norm_refill, wm_small_refill);
++			return (ssize_t)count;
++		}
+ 		mutex_unlock(&t->lock);
+ 		dev_info(dev,
+ 			 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x) - no pointer moved\n",
+@@ -1307,7 +1499,10 @@
+ 	}
+ 	/* Commit point: every entry validated.  Refill the free rings first (the
+ 	 * buffers were handed back by completions, so this cannot double-hand a
+-	 * live buffer), then publish the completion-ring consumer last. */
++	 * live buffer), then run the watermark pass against a FRESH live-bank
++	 * consumer snapshot (task-156: the bounded window refill alone leaks
++	 * posted entries when the completion backlog exceeds rx_drain_max), then
++	 * publish the completion-ring consumer last. */
+ 	norm_refill = dptx_rx_refill(t, 0u);
+ 	if (norm_refill < 0) {
+ 		rc = norm_refill;
+@@ -1318,6 +1513,17 @@
+ 		rc = small_refill;
+ 		goto drain_refuse;
+ 	}
++	rc = dptx_live_read_checked(ctx, &st, &nr, &sr, &cw);
++	if (rc)
++		goto drain_refuse;
++	t->rx_live_status = st;
++	t->rx_live_norm_rptr = nr;
++	t->rx_live_small_rptr = sr;
++	t->rx_live_cmp_wptr = cw;
++	rc = dptx_rx_wm_refill(t, dptx_rx_refill_wm, nr, sr, max,
++			       &wm_norm_refill, &wm_small_refill);
++	if (rc < 0)
++		goto drain_refuse;
+ 	t->rx_cmp_cons = cons;
+ 	rc = dptx_publish16(ctx, HIL_RX_CFG_CMP_RPTR, cons, NULL);
+ 	if (rc)
+@@ -1334,10 +1540,13 @@
+ 	t->rx_drain_actions++;
+ 	mutex_unlock(&t->lock);
+ 	dev_info(dev,
+-		 "DP rx_drain: drained=%u/%u cmp_cons=0x%04x live{cmp_wptr=0x%04x norm_rptr=0x%04x small_rptr=0x%04x status=0x%08x} refilled{norm=%d small=%d} totals{drained=%u actions=%u bad=%u chain=%u} - completion ring consumer published, free rings refilled\n",
++		 "DP rx_drain: drained=%u/%u cmp_cons=0x%04x live{cmp_wptr=0x%04x norm_rptr=0x%04x small_rptr=0x%04x status=0x%08x} refilled{norm=%d small=%d} wm{pct=%u trips=%u credit_low=%u refilled{norm=%d small=%d} posted{norm=%u small=%u} target{norm=%u small=%u}} totals{drained=%u actions=%u bad=%u chain=%u} - completion ring consumer published, free rings refilled\n",
+ 		 pending, pending, cons, cw, nr, sr, st, norm_refill, small_refill,
+-		 t->rx_drained, t->rx_drain_actions, t->rx_bad_entry,
+-		 t->rx_chain_refused);
++		 dptx_rx_refill_wm, t->rx_wm_trips, t->rx_wm_credit_low,
++		 wm_norm_refill, wm_small_refill, t->rx_wm_posted_norm,
++		 t->rx_wm_posted_small, t->rx_wm_target_norm,
++		 t->rx_wm_target_small, t->rx_drained, t->rx_drain_actions,
++		 t->rx_bad_entry, t->rx_chain_refused);
+ 	return (ssize_t)count;
+ 
+ drain_refuse:

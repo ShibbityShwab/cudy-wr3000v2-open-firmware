@@ -1,0 +1,63 @@
+WATERMARK MODULE IDENTITY (host-built, NOT fired)
+chain: final association tree 251d08f0 (all-patch 5b587949 + wpa3-sae + ap-mgmt + sta-ops + data-tx)
+     + wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch (corrected mgmt-TX carrier)
+     + this lane patches/0001-rx-refill-watermark.patch (rx_refill_wm)
+build tree: /tmp/wifi-rx-watermark-build/final (KDIR 6.18.60, arm-openwrt-linux-muslgnueabi-)
+
+stripped  : 347388 B sha256 d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+unstripped: 1332996 B sha256 f11835e8c47839d6ccba368ea64800912bfe5e93bd5ef5581f868b73ce858dc7
+params    : 57 (baseline 56 + rx_refill_wm)
+vermagic  : vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+depends   :         cfg80211
+
+new param (modinfo -p):
+rx_enable: (uint)
+rx_drain_max: (uint)
+rx_refill_wm: (uint)
+
+source default: 93:static unsigned int dptx_rx_refill_wm = HIL_RX_WM_PCT_DEF;
+pct default constant: 195:#define HIL_RX_WM_PCT_DEF     75u  /* keep >= 3/4 posted (ath11k-style)    */
+drain param description:
+rx_refill_wm: (uint)
+sysfs telemetry string:
+RX watermark: rx_refill_wm=%u%% target{norm=%u small=%u} posted{norm=%u small=%u} trips=%u credit_low=%u%s refilled{norm=%u small=%u}
+
+-- strip identity --
+strip leaves .text byte-identical: YES
+
+-- cfg80211 provider symvers (unchanged baseline = 12 lines) --
+12
+
+-- imported cfg80211 symbols --
+         U cfg80211_bss_iter
+         U cfg80211_inform_bss_data
+         U cfg80211_mgmt_tx_status_ext
+         U cfg80211_put_bss
+         U cfg80211_register_netdevice
+         U cfg80211_rx_mgmt_ext
+         U cfg80211_scan_done
+         U cfg80211_unregister_wdev
+
+-- modpost undefined symbols: 0 --
+
+-- baseline reproduction check --
+baseline rebuild (assoc+mgmt, no watermark) at /tmp/wifi-rx-watermark-build/baseline:
+  stripped: 344372 B sha256 d6aaf24281e3211cf4c409a946e20bdb38e3e8b594eebdf65827f6e5c1ef78b8
+  pinned ab9e18a4: 344372 B sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+  differing bytes: 20 (cmp positions 233353..233372)
+  -> GNU build-id note of the pinned artifact:   GNU                  0x00000014	NT_GNU_BUILD_ID (unique build ID bitstring)
+  -> GNU build-id note of the rebuild:            GNU                  0x00000014	NT_GNU_BUILD_ID (unique build ID bitstring)
+  => the only difference is the 20-byte .note.gnu.build-id: GNU ld SHA1-hashes the pre-strip
+     DWARF, whose comp_dir carries the absolute build path.  Code sections are identical:
+     baseline .text == pinned ab9e18a4 .text: YES
+  => rebuilding THIS watermark module at a different path keeps the same code and params but
+     changes sha256 through that build-id: quote the sha of the exact .ko that is baked.
+
+-- independent rebuild at a DIFFERENT host path (/tmp/wifi-rx-watermark-build/rebuild) --
+artifact: /tmp/wifi-rx-watermark-artifact-test/hi5622_wifi.stripped.ko
+  size: 347388 B
+  sha256: eb0a3c35eb5c42c346a075d8f183e65a4055ba9a8e41747ec44c053a739ef156
+  vs authoritative: d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+  => .text byte-identical, .rodata byte-identical, modinfo -p identical; only the
+     20-byte GNU build-id note differs (path hash in pre-strip DWARF comp_dir).
+     The quoted artifact sha is therefore path-bound: bake/compare the exact file.

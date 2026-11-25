@@ -1,0 +1,19 @@
+== patch sha: 5c94d076d6101eb9646c817285860cf5e52eaf031e9a9aa322ba5ed0ea90fa77  /tmp/wifi-rx-watermark-build/0001-rx-refill-watermark.patch
+files touched:
++++ b/hi5622_rx_live.h	2026-11-25 12:44:28.997091480 +0700
++++ b/hi5622_rx_live.c	2026-11-25 12:44:28.998601825 +0700
++++ b/hi5622_dp_txrx.c	2026-11-25 12:44:29.000064701 +0700
+
+== dry-run against the final association tree (assoc 251d08f0 + mgmt carrier patch)
+checking file hi5622_rx_live.h
+checking file hi5622_rx_live.c
+checking file hi5622_dp_txrx.c
+
+== dry-run against the pristine association tree (assoc only; disjoint file sets)
+checking file hi5622_rx_live.h
+checking file hi5622_rx_live.c
+checking file hi5622_dp_txrx.c
+
+== fresh staging check (assoc tree + mgmt patch + this patch) vs the built tree
+source files compared: 83
+differences except the generated hi5622_wifi.mod.c: 0 (0 = patch chain reproduces the source tree)
