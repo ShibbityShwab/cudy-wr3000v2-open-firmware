@@ -1,0 +1,84 @@
+# wifi-rx-vendor-diff - artifact identity (host-built, NOT fired, NOT in any image)
+# generated: 2026-11-25T06:40:37Z
+
+## recorded artifact (build dir /tmp/rxvd-module)
+81ab72c157dd6f1005a4a9012eb8210161a30fde55bc1c2064bde21a7c48031c  hi5622_wifi.stripped.ko
+068c61a92fbb717abced119b77087127dba6a763ba872997967b31f198ba78da  hi5622_wifi.ko.unstripped
+size stripped: 361872
+size unstripped: 1367620
+text bytes: 152176
+
+## lane-script rebuild (build-rx-diff-module.sh; build dir /tmp/rx-vendor-diff-build)
+stripped sha256: 9a0d7ddf6be02da412d526d1707e72bef2fcfa2b057b2f73d47763cc6039a26a
+unstripped sha256: 0bef8f630a5b1010715c7ba8c41a79c57aec3c6350980dc393c8995567177154
+size: 361872
+
+## .text identity across build paths (build-id only differs)
+main.text vs script.text identical: yes
+
+## params (59)
+data_tx: (uint)
+data_tx_peer: (uint)
+data_tx_protect: (uint)
+data_tx_timeout_ms: (uint)
+mgmt_tx: (uint)
+mgmt_rx: (uint)
+sta_ops: (uint)
+eapol_rx: (uint)
+sta_user_del: (uint)
+sta_join: (uint)
+wpa_keys: (uint)
+wpa_key_module: (uint)
+scan_trust_rssi: (uint)
+vap_start_first: (uint)
+vap_start_mode: (uint)
+vap_start_module: (uint)
+ap_start_mode: (uint)
+beacon_static: (uint)
+beacon_vap_start: (uint)
+scan_timeout_ms: (uint)
+scan_dwell_ms: (uint)
+scan_chan_time_ms: (uint)
+scan_req_batch: (uint)
+scan_batch_gap_ms: (uint)
+scan_band_cfg: (uint)
+scan_band_cfg_chan: (uint)
+scan_band_cfg_slot: (uint)
+scan_band_cfg_start: (uint)
+scan_band_cfg_field10: (uint)
+scan_band_cfg_mode: (uint)
+scan_band_cfg_cmp: (uint)
+scan_band_cfg_use2: (uint)
+stop_ap_mode: (uint)
+allow_frames: (uint)
+frame_gap_ms: (uint)
+mgmt_diag: (uint)
+cfg80211_auto: (uint)
+band_force: (int)
+ht_mode: (uint)
+vht_cap: (uint)
+band_vendor: (uint)
+txq_publish: (uint)
+tx_complete_ms: (uint)
+mac_tail_writes: (uint)
+rx_enable: (uint)
+rx_clear_status: (uint)
+rx_drain_max: (uint)
+rx_refill_wm: (uint)
+rx_drain_write: (uint)
+rx_status_service: (uint)
+h2d_send_budget: (uint)
+hcc_poll_ms: (uint)
+hcc_cece_mode: (uint)
+hcc_trace: (uint)
+rd_ab_write: (uint)
+fw_path: (charp)
+wifi_block_path: (charp)
+plat_block_path: (charp)
+allow_unseeded_release: (uint)
+
+## vermagic
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+
+## build warnings/errors
+count: 0

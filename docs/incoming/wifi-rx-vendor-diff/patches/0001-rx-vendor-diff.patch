@@ -1,0 +1,1052 @@
+--- a/Kbuild
++++ b/Kbuild
+@@ -26,6 +26,7 @@
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+ 		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+ 		 hi5622_rx_live.o \
++		 hi5622_rx_diff.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
+--- a/hi5622_dp.c
++++ b/hi5622_dp.c
+@@ -920,6 +920,14 @@
+ static struct device_attribute dev_attr_dp_rx_drain =
+     __ATTR(dp_rx_drain, 0200, NULL, hi5622_dp_rx_drain_store);
+ 
++/* wifi-rx-vendor-diff lane (task-162): read-only vendor-state parity (the
++ * definitive VENDOR-vs-OURS RX diff) and the fail-closed vendor status-clear
++ * write behind rx_status_service=1. */
++static struct device_attribute dev_attr_dp_rx_parity =
++    __ATTR(dp_rx_parity, 0444, hi5622_dp_rx_parity_show, NULL);
++static struct device_attribute dev_attr_dp_rx_status_clear =
++    __ATTR(dp_rx_status_clear, 0200, NULL, hi5622_dp_rx_status_clear_store);
++
+ /* wifi-dp-tuning lane (task-134): TXQ-table publish evidence, bounded
+  * completion poll and the two opt-in MAC-tail experiment attributes. */
+ static struct device_attribute dev_attr_dp_txq_table =
+@@ -944,6 +952,8 @@
+     &dev_attr_dp_rx_capture.attr,
+     &dev_attr_dp_rx_arm.attr,
+     &dev_attr_dp_rx_drain.attr,
++    &dev_attr_dp_rx_parity.attr,
++    &dev_attr_dp_rx_status_clear.attr,
+     &dev_attr_dp_txq_table.attr,
+     &dev_attr_dp_tx_complete_poll.attr,
+     &dev_attr_dp_mac_ext.attr,
+--- a/hi5622_dp_txrx.c
++++ b/hi5622_dp_txrx.c
+@@ -38,6 +38,7 @@
+ #include "dp_rings.h"
+ #include "dp_txrx.h"
+ #include "hi5622_rx_live.h"
++#include "hi5622_rx_diff.h"
+ #include "hi5622_sta_ops.h"
+ 
+ #define DPTX_FRAME_OWNER 0x54585258u /* "TXRX" host bookkeeping word */
+@@ -93,7 +94,22 @@
+ static unsigned int dptx_rx_refill_wm = HIL_RX_WM_PCT_DEF;
+ module_param_named(rx_refill_wm, dptx_rx_refill_wm, uint, 0644);
+ MODULE_PARM_DESC(rx_refill_wm,
+-	"RX free-ring refill watermark as a percent of ring depth (0..100; 0=off=old behaviour, default 75 = keep >=3/4 posted); the drain re-publishes completed buffers when the posted count drops below it");
++	"RX free-ring refill watermark as a percent of ring depth (0..100; 0=off=old behaviour, default 75 = keep >=3/4 posted);\n"
++	" the drain re-publishes completed buffers when the posted count drops below it");
++
++/* wifi-rx-vendor-diff (task-162): crash containment.  The drain is the only
++ * RX pointer mover; with rx_drain_write=0 (default) it becomes an OBSERVE-ONLY
++ * action that reads the completion ring + returned buffers and moves nothing.
++ * rx_status_service=1 additionally enables the one vendor write class our
++ * driver never performed: the W1C of the served RX status bit (+0x44). */
++static unsigned int dptx_rx_drain_write = 0u;
++module_param_named(rx_drain_write, dptx_rx_drain_write, uint, 0644);
++MODULE_PARM_DESC(rx_drain_write,
++	"1 = dp_rx_drain may publish/refill ring pointers (the rx-static path); 0 (default) = observe-only, zero device writes");
++static unsigned int dptx_rx_status_service = 0u;
++module_param_named(rx_status_service, dptx_rx_status_service, uint, 0644);
++MODULE_PARM_DESC(rx_status_service,
++	"1 = dp_rx_status_clear may W1C the served RX status bit (config +0x44); 0 (default) = read-only");
+ 
+ /* Documentation-example address (02:00:... locally administered); never a
+  * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
+@@ -223,6 +239,20 @@
+ 	u32  rx_wm_refilled_small;
+ 	bool rx_wm_low;
+ 	u32  rx_last_err;
++	/* wifi-rx-vendor-diff (task-162): observe-only rung + vendor parity. */
++	u32  rx_obs_actions;
++	u32  rx_obs_frames;
++	u32  rx_obs_bad;
++	u32  rx_obs_chains;
++	u32  rx_obs_seen_wptr;
++	u32  rx_obs_last_status;
++	u32  rx_parity_passes;
++	u32  rx_parity_cfg_mismatch;
++	u32  rx_parity_live_mismatch;
++	u32  rx_parity_live_device_zero;
++	u32  rx_parity_read_fail;
++	u32  rx_status_clears;
++	u32  rx_status_last_cleared;
+ };
+ 
+ static LIST_HEAD(dptx_list);
+@@ -945,6 +975,16 @@
+ 			 t->rx_live_small_rptr, t->rx_live_cmp_wptr,
+ 			 t->rx_norm_prod & 0xffffu, t->rx_small_prod & 0xffffu,
+ 			 t->rx_cmp_cons & 0xffffu, (int)t->rx_last_err);
++	/* wifi-rx-vendor-diff (task-162): observe-only + vendor parity state. */
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX vendor-diff: rx_drain_write=%u rx_status_service=%u observe{actions=%u frames=%u bad=%u chains=%u last_wptr=0x%04x} parity{passes=%u cfg_mismatch=%u live_mismatch=%u live_device_zero=%u read_fail=%u} status_clears=%u\n",
++			 dptx_rx_drain_write, dptx_rx_status_service,
++			 t->rx_obs_actions, t->rx_obs_frames, t->rx_obs_bad,
++			 t->rx_obs_chains, t->rx_obs_seen_wptr,
++			 t->rx_parity_passes, t->rx_parity_cfg_mismatch,
++			 t->rx_parity_live_mismatch,
++			 t->rx_parity_live_device_zero, t->rx_parity_read_fail,
++			 t->rx_status_clears);
+ 	mutex_unlock(&t->lock);
+ 	return pos;
+ }
+@@ -1220,6 +1260,362 @@
+ 	return rc < 0 ? rc : -EIO;
+ }
+ 
++
++/* ------------------------------------------------------------------ */
++/* wifi-rx-vendor-diff (task-162, shared task-162): the VENDOR-vs-OURS    */
++/* RX state parity (read-only) and the observe-only drain rung.           */
++/* ------------------------------------------------------------------ */
++
++/* Config-block address words are classified by content:
++ *  +0x04/+0x20/+0x24/+0x28 = 4-byte-aligned host-DRAM device VAs;
++ *  +0x10 = the device-RAM MSDU-info table ACP alias. */
++static int dptx_cfg_word_range_ok(u32 off, u32 v)
++{
++	if ((v & 3u) != 0u)
++		return 0;
++	switch (off) {
++	case 0x04u:
++	case 0x20u:
++	case 0x24u:
++	case 0x28u:
++		return v >= DP_HOST_DMA_LO && v <= DP_HOST_DMA_HI;
++	case 0x10u:
++		return v >= DP_ACP_CA_LO && v <= DP_ACP_CA_HI;
++	default:
++		return 1;
++	}
++}
++
++struct dptx_parity_stat {
++	u32 cfg_checked;
++	u32 cfg_mismatch;
++	u32 cfg_read_fail;
++	u32 live_checked;
++	u32 live_mismatch;
++	u32 live_device_zero;
++	u32 live_read_fail;
++};
++
++static void dptx_par_line(char *buf, size_t cap, size_t *pos,
++			  const char *fmt, ...)
++{
++	va_list ap;
++	int n;
++
++	if (!buf || !pos || *pos >= cap)
++		return;
++	va_start(ap, fmt);
++	n = vscnprintf(buf + *pos, cap - *pos, fmt, ap);
++	va_end(ap);
++	if (n > 0)
++		*pos += (size_t)n;
++}
++
++/* Read-only scan of the two vendor RX blocks.  verbos=1 renders every word
++ * (dp_rx_parity); verbose=0 only refreshes the counters (dp_rx_capture). */
++static int dptx_rx_parity_scan(struct hi5622_dp_txrx *t, int verbose,
++			       char *buf, size_t cap, size_t *pos,
++			       struct dptx_parity_stat *st)
++{
++	const struct hi5622_rx_word *tab;
++	unsigned int n, i;
++	enum hi5622_rx_parity par;
++	u32 v;
++	int rc;
++
++	memset(st, 0, sizeof(*st));
++	tab = hi5622_rx_cfg_words(&n);
++	for (i = 0; i < n; i++) {
++		int range_ok;
++
++		v = dptx_mac_read(t->ctx, tab[i].off);
++		range_ok = dptx_cfg_word_range_ok(tab[i].off, v);
++		rc = hi5622_rx_parity_classify(&tab[i], v, range_ok, &par);
++		if (rc)
++			return rc;
++		st->cfg_checked++;
++		if (par == HIRD_PAR_READ_FAIL)
++			st->cfg_read_fail++;
++		else if (par == HIRD_PAR_MISMATCH || par == HIRD_PAR_RANGE_BAD)
++			st->cfg_mismatch++;
++		if (verbose)
++			dptx_par_line(buf, cap, pos,
++				      "parity cfg %08x+0x%02x actual=0x%08x stock=0x%08x %-10s %s\n",
++				      HIRD_CFG_CA, (unsigned int)tab[i].off, v,
++				      tab[i].v, hi5622_rx_parity_name(par),
++				      tab[i].name);
++	}
++	tab = hi5622_rx_live_words(&n);
++	for (i = 0; i < n; i++) {
++		v = dptx_mac_read_live(t->ctx, tab[i].off);
++		rc = hi5622_rx_parity_classify(&tab[i], v, 0, &par);
++		if (rc)
++			return rc;
++		st->live_checked++;
++		if (par == HIRD_PAR_READ_FAIL)
++			st->live_read_fail++;
++		else if (par == HIRD_PAR_MISMATCH)
++			st->live_mismatch++;
++		else if (par == HIRD_PAR_DEVICE_ZERO)
++			st->live_device_zero++;
++		if (verbose)
++			dptx_par_line(buf, cap, pos,
++				      "parity live %08x+0x%02x actual=0x%08x stock=0x%08x %-10s %s\n",
++				      HIRD_LIVE_CA, (unsigned int)tab[i].off, v,
++				      tab[i].v, hi5622_rx_parity_name(par),
++				      tab[i].name);
++	}
++	return HIL_RX_OK;
++}
++
++ssize_t hi5622_dp_rx_parity_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct dptx_parity_stat st;
++	struct hi5622_rx_status_dec dec;
++	char bits[112];
++	size_t pos = 0;
++	u32 status, mask;
++	int rc, bl;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	mutex_lock(&t->lock);
++	if (!t->bound) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	rc = dptx_rx_parity_scan(t, 1, buf, PAGE_SIZE, &pos, &st);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++	status = dptx_mac_read_live(t->ctx, HIL_RX_LIVE_STATUS);
++	mask = dptx_mac_read(t->ctx, HIL_RX_CFG_INT_MASK);
++	rc = hi5622_rx_status_decode(status, mask, &dec);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++	bl = hi5622_rx_status_bits_str(&dec, bits, sizeof(bits));
++	dptx_par_line(buf, PAGE_SIZE, &pos,
++		      "parity summary: cfg{checked=%u mismatch=%u read_fail=%u} live{checked=%u mismatch=%u device_zero=%u read_fail=%u} passes=%u\n",
++		      st.cfg_checked, st.cfg_mismatch, st.cfg_read_fail,
++		      st.live_checked, st.live_mismatch, st.live_device_zero,
++		      st.live_read_fail, t->rx_parity_passes + 1u);
++	dptx_par_line(buf, PAGE_SIZE, &pos,
++		      "parity status: CA 0x%08x status=0x%08x mask=0x%08x active=0x%08x %s%s\n",
++		      HIRD_LIVE_CA, status, mask, dec.active,
++		      bl > 0 ? bits : "(bits?)",
++		      dec.rx_active ? " rx-completion-pending" : " rx-completion-idle");
++	dptx_par_line(buf, PAGE_SIZE, &pos,
++		      "parity note: DEVICE_ZERO on live +0x14/+0x24..+0x30 means the device-side RX/MAC state never reached the vendor stock shape (the highest-value missing link); MISMATCH on cfg fixed words means the host RX program differs.\n");
++	t->rx_parity_passes++;
++	t->rx_parity_cfg_mismatch = st.cfg_mismatch;
++	t->rx_parity_live_mismatch = st.live_mismatch;
++	t->rx_parity_live_device_zero = st.live_device_zero;
++	t->rx_parity_read_fail = st.cfg_read_fail + st.live_read_fail;
++	mutex_unlock(&t->lock);
++	dev_info(dev,
++		 "DP rx_parity: read-only vendor-state diff rendered (cfg mismatch=%u live mismatch=%u live device_zero=%u read_fail=%u)\n",
++		 st.cfg_mismatch, st.live_mismatch, st.live_device_zero,
++		 st.cfg_read_fail + st.live_read_fail);
++	return (ssize_t)pos;
++}
++
++/* Observe-only drain rung: prove the device wrote completions WITHOUT moving
++ * any ring pointer (the crash-containment rung).  Reads the live bank, the
++ * completion ring memory and the returned buffers; never writes a register or
++ * ring entry.  A malformed entry/header is counted, not lane-closing: nothing
++ * was consumed, so the next action can still be a clean observe or (if the
++ * diagnostic says so) a write-enabled drain. */
++static int dptx_rx_observe(struct device *dev,
++			   struct hi5622_dp_txrx *t, u32 max,
++			   u32 *frames_out, u32 *bad_out)
++{
++	struct hi5622_pci *ctx = t->ctx;
++	struct hi5622_rx_status_dec dec;
++	char bits[112];
++	u32 st, nr, sr, cw, mask, pending, cons, frames = 0, bad = 0;
++	u32 chains = 0, shown = 0;
++	int rc, bl;
++
++	*frames_out = 0;
++	*bad_out = 0;
++	dptx_live_read(ctx, &st, &nr, &sr, &cw);
++	t->rx_live_status = st;
++	t->rx_live_norm_rptr = nr;
++	t->rx_live_small_rptr = sr;
++	t->rx_live_cmp_wptr = cw;
++	if (st == 0xffffffffu || nr == 0xffffffffu || sr == 0xffffffffu ||
++	    cw == 0xffffffffu)
++		return -EFAULT;
++	mask = dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK);
++	rc = hi5622_rx_status_decode(st, mask, &dec);
++	if (rc)
++		return rc;
++	bl = hi5622_rx_status_bits_str(&dec, bits, sizeof(bits));
++	rc = hi5622_rx_ring_pending(cw, t->rx_cmp_cons, HIL_RX_CMP_DEPTH,
++				    &pending);
++	if (rc)
++		return rc;
++	t->rx_obs_seen_wptr = cw;
++	t->rx_obs_last_status = st;
++	if (pending == 0u) {
++		t->rx_obs_actions++;
++		dev_info(dev,
++			 "DP rx_observe: OBSERVE-ONLY (zero device writes) status=0x%08x %s norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x - no completion pending\n",
++			 st, bl > 0 ? bits : "(bits?)", nr, sr, cw,
++			 t->rx_cmp_cons);
++		return HIL_RX_OK;
++	}
++	if (pending > max)
++		pending = max;
++	cons = t->rx_cmp_cons;
++	for (u32 i = 0; i < pending; i++) {
++		u32 slot = cons & HIL_RX_IDX_MASK;
++		u32 entry, slot_idx = 0, buf_dma = 0;
++		u8 ring_kind = 0xffu;
++		const u8 *cpu;
++		struct hi5622_rx_hdr hdr;
++		u32 dma_cap;
++
++		if (slot >= HIL_RX_CMP_DEPTH) {
++			bad++;
++			break;
++		}
++		dma_rmb();
++		entry = ((const u32 *)(const void *)t->rx_cmp_ring)[slot];
++		rc = hi5622_rx_obs_entry(entry, t->rx_norm_dma,
++					 HIL_RX_NORM_DEPTH, t->rx_small_dma,
++					 HIL_RX_SMALL_DEPTH, &ring_kind,
++					 &slot_idx, &buf_dma);
++		if (rc != HIRD_OBS_FRAME) {
++			bad++;
++			break;
++		}
++		cpu = (ring_kind == 0u) ?
++			(const u8 *)t->rx_norm_cpu[slot_idx] :
++			(const u8 *)t->rx_small_cpu[slot_idx];
++		if (!cpu) {
++			bad++;
++			break;
++		}
++		dma_cap = (ring_kind == 0u) ? HIL_RX_NORM_BUFLEN :
++					      HIL_RX_SMALL_BUFLEN;
++		rc = hi5622_rx_hdr_parse(cpu + HIL_RX_SKB_WORD, dma_cap, &hdr);
++		if (rc == HIL_RX_ECHAIN) {
++			chains++;
++			bad++;
++			break;
++		}
++		if (rc != HIL_RX_OK) {
++			bad++;
++			break;
++		}
++		frames++;
++		if (shown < 3u) {
++			shown++;
++			dev_info(dev,
++				 "DP rx_observe: frame %u %s slot=%u entry=0x%08x len(+0x1a)=%u flags9=0x%02x status_b=0x%02x next=0x%08x (READ-ONLY: no pointer published)\n",
++				 frames, ring_kind == 0u ? "norm" : "small",
++				 slot_idx, entry, hdr.payload_len, hdr.flags9,
++				 hdr.status_b, hdr.next_devva);
++		}
++		cons = hi5622_rx_idx_advance(cons, HIL_RX_CMP_DEPTH);
++	}
++	t->rx_obs_actions++;
++	t->rx_obs_frames += frames;
++	t->rx_obs_bad += bad;
++	t->rx_obs_chains += chains;
++	dev_info(dev,
++		 "DP rx_observe: OBSERVE-ONLY (zero device writes) status=0x%08x %s norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x pending=%u frames=%u bad=%u chains=%u totals{actions=%u frames=%u bad=%u} - no ring pointer moved\n",
++		 st, bl > 0 ? bits : "(bits?)", nr, sr, cw, t->rx_cmp_cons,
++		 pending, frames, bad, chains, t->rx_obs_actions,
++		 t->rx_obs_frames, t->rx_obs_bad);
++	*frames_out = frames;
++	*bad_out = bad;
++	return HIL_RX_OK;
++}
++
++/* The one vendor RX-service write our driver never performed: after serving a
++ * completion the vendor ISR W1Cs the served status bits to config +0x44
++ * (shuangta_clear_host_mac_int_status).  This action is fail-closed: only the
++ * RX-completion bit (2) may be cleared, only when it is actually observable,
++ * and only with rx_status_service=1 + rx_enable=1 + the dp_setup/TXQ write
++ * gate satisfied. */
++ssize_t hi5622_dp_rx_status_clear_store(struct device *dev,
++					struct device_attribute *attr,
++					const char *buf, size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	struct hi5622_rx_status_dec dec;
++	char bits[112];
++	u32 status, mask, w1c;
++	int rc, bl;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	mutex_lock(&t->lock);
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (!dptx_rx_status_service) {
++		dev_warn(dev,
++			 "DP rx_status_clear: REFUSED - rx_status_service=0 (default; read-only policy)\n");
++		mutex_unlock(&t->lock);
++		return -EPERM;
++	}
++	if (!dptx_rx_enable || !t->rx_armed) {
++		mutex_unlock(&t->lock);
++		return -EPERM;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc) {
++		dev_warn(dev,
++			 "DP rx_status_clear: refused by gate '%s' - no device write\n",
++			 dptx_gate_name(rc));
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++	status = dptx_mac_read_live(ctx, HIL_RX_LIVE_STATUS);
++	mask = dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK);
++	rc = hi5622_rx_status_decode(status, mask, &dec);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		return rc;
++	}
++	bl = hi5622_rx_status_bits_str(&dec, bits, sizeof(bits));
++	if (!dec.rx_active) {
++		mutex_unlock(&t->lock);
++		dev_info(dev,
++			 "DP rx_status_clear: status=0x%08x %s - RX completion bit not observable, no write performed\n",
++			 status, bl > 0 ? bits : "(bits?)");
++		return (ssize_t)count;
++	}
++	w1c = 1u << HIRD_STATUS_RX_BIT;
++	rc = dptx_mac_write_checked(ctx, HIL_RX_CFG_INT_STATUS, w1c);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	t->rx_status_clears++;
++	t->rx_status_last_cleared = w1c;
++	mutex_unlock(&t->lock);
++	dev_info(dev,
++		 "DP rx_status_clear: W1C 0x%08x to config +0x44 from status=0x%08x %s (vendor clear path; only the RX completion bit) - clears=%u\n",
++		 w1c, status, bl > 0 ? bits : "(bits?)", t->rx_status_clears);
++	return (ssize_t)count;
++}
++
+ /* dp_rx_arm: read-only validation of the live RX bank.  This is the mirror of
+  * the TXQ publish proof for the RX direction: it must show that the MAC has
+  * consumed the free-ring entries the 14-write program published.  It never
+@@ -1317,6 +1713,25 @@
+ 		 nw & 0xffffu, sw & 0xffffu, cr & 0xffffu);
+ 	dev_info(dev,
+ 		 "DP rx_arm: verdict - free-rptr movement proves the MAC consumed published free entries (vendor stock mirror was norm/small rptr = 0x20 after a full fill); config-bank +0x4c/+0x50/+0x54 are NOT the live counters (vendor never reads them, and the stock dump keeps them 0 while 0x40050008/0x0c = 0x20).  Arm is read-only; dp_rx_drain is the first pointer-moving action.\n");
++	{
++		struct hi5622_rx_status_dec dec;
++		char bits[112];
++		int bl = 0;
++		u32 extra[HIRD_LIVE_EXTRA_COUNT];
++		unsigned int i;
++
++		if (hi5622_rx_status_decode(st, mask, &dec) == HIL_RX_OK)
++			bl = hi5622_rx_status_bits_str(&dec, bits, sizeof(bits));
++		for (i = 0; i < HIRD_LIVE_EXTRA_COUNT; i++)
++			extra[i] = dptx_mac_read_live(ctx,
++						      hi5622_rx_live_extra_offsets[i]);
++		dev_info(dev,
++			 "DP rx_arm: status decode active=0x%08x %s fwd=0x%x (vendor stock status=0x400 is masked; our observable bits are the vendor firmware-forward class - task-162)\n",
++			 dec.active, bl > 0 ? bits : "(bits?)", dec.forward_bits);
++		dev_info(dev,
++			 "DP rx_arm: live-bank device-owned words 0x14=0x%08x 0x24=0x%08x 0x28=0x%08x 0x2c=0x%08x 0x30=0x%08x (vendor idle 0x00200020/0x00800000/0x01800800/0x02801000/0x03801800; all-zero = device RX state not initialized - run 'cat dp_rx_parity' for the full diff)\n",
++			 extra[0], extra[1], extra[2], extra[3], extra[4]);
++	}
+ 	return (ssize_t)count;
+ 
+ arm_refuse:
+@@ -1376,6 +1791,19 @@
+ 		mutex_unlock(&t->lock);
+ 		return rc;
+ 	}
++	/* task-162: crash-containment rung.  Unless rx_drain_write=1, the drain
++	 * is OBSERVE-ONLY: it reads the live bank, the completion ring memory and
++	 * the returned buffers, proving the device path without publishing a
++	 * single producer/consumer index (zero device writes). */
++	if (!dptx_rx_drain_write) {
++		u32 frames = 0u, bad = 0u;
++
++		rc = dptx_rx_observe(dev, t, max, &frames, &bad);
++		mutex_unlock(&t->lock);
++		if (rc)
++			return rc;
++		return (ssize_t)count;
++	}
+ 	dptx_live_read(ctx, &st, &nr, &sr, &cw);
+ 	t->rx_live_status = st;
+ 	t->rx_live_norm_rptr = nr;
+--- a/hi5622_dp_txrx.h
++++ b/hi5622_dp_txrx.h
+@@ -84,6 +84,16 @@
+                                  struct device_attribute *attr,
+                                  const char *buf, size_t count);
+ 
++/* wifi-rx-vendor-diff (shared task task-162): the VENDOR-vs-OURS RX state
++ * parity (read-only; dp_rx_parity) and the one vendor RX-service write the
++ * driver never performed (W1C of the served RX status bit; fail-closed behind
++ * rx_status_service=1). */
++ssize_t hi5622_dp_rx_parity_show(struct device *dev,
++                                 struct device_attribute *attr, char *buf);
++ssize_t hi5622_dp_rx_status_clear_store(struct device *dev,
++                                        struct device_attribute *attr,
++                                        const char *buf, size_t count);
++
+ /* wifi-dp-tuning (shared task task-134): TXQ-table queue-state publish and the
+  * bounded completion/consumer read surface. */
+ ssize_t hi5622_dp_txq_show(struct device *dev,
+--- a/hi5622_rx_diff.c
++++ b/hi5622_rx_diff.c
+@@ -0,0 +1,337 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rx_diff.c - portable VENDOR-vs-OURS RX state parity tables and rules
++ * (lane wifi-rx-vendor-diff, shared task task-162).  ORIGINAL clean-room code;
++ * derived facts only (see hi5622_rx_diff.h and the lane REPORT.md).
++ */
++#include "hi5622_rx_diff.h"
++
++#ifdef __KERNEL__
++#include <linux/kernel.h>
++#else
++#include <stdio.h>
++#endif
++
++/* -------------------------------------------------------------------
++ * 1a. Vendor stock config block CA 0x40040000 (machw array word 5)
++ *
++ * Source: committed register dump opensource/dumps/reg_all.txt (vendor
++ * driver live, band 0) + the statically decoded clean-room 14-write model
++ * (dp_rings.c).  "vendor never reads" words +0x4c/+0x50/+0x54 are 0 in the
++ * stock dump, exactly as the vendor accessor census predicted.
++ * ------------------------------------------------------------------- */
++static const struct hi5622_rx_word rx_cfg_words[] = {
++	{ 0x00u, 0x00000100u, HIRD_KIND_MATCH,   "tx_ba_info depth (init 0x100)" },
++	{ 0x04u, 0x00000000u, HIRD_KIND_RANGE,   "tx_ba_info addr (host devVA)" },
++	{ 0x10u, 0x00000000u, HIRD_KIND_RANGE,   "msdu_info_ring_ptr_table ACP" },
++	{ 0x1cu, 0x00b0063cu, HIRD_KIND_MATCH,   "rx_norm_len[15:0]|small[31:16]" },
++	{ 0x20u, 0x00000000u, HIRD_KIND_RANGE,   "rx norm free ring addr" },
++	{ 0x24u, 0x00000000u, HIRD_KIND_RANGE,   "rx small free ring addr" },
++	{ 0x28u, 0x00000000u, HIRD_KIND_RANGE,   "rx completion ring addr" },
++	{ 0x2cu, 0x00000100u, HIRD_KIND_MATCH,   "rx norm ring depth 256" },
++	{ 0x30u, 0x00000200u, HIRD_KIND_MATCH,   "rx small ring depth 512" },
++	{ 0x34u, 0x00000fffu, HIRD_KIND_MATCH,   "rx completion depth 4095" },
++	{ 0x38u, 0x00008000u, HIRD_KIND_DYNAMIC, "norm free-ring wptr (host)" },
++	{ 0x3cu, 0x00008000u, HIRD_KIND_DYNAMIC, "small free-ring wptr (host)" },
++	{ 0x40u, 0x00000000u, HIRD_KIND_DYNAMIC, "completion ring rptr (host)" },
++	{ 0x44u, 0x00000000u, HIRD_KIND_DYNAMIC, "host MAC int status W1C" },
++	{ 0x48u, 0xfffffcc1u, HIRD_KIND_MATCH,   "host MAC int mask" },
++	{ 0x4cu, 0x00000000u, HIRD_KIND_UNKNOWN, "vendor never reads (stock 0)" },
++	{ 0x50u, 0x00000000u, HIRD_KIND_UNKNOWN, "vendor never reads (stock 0)" },
++	{ 0x54u, 0x00000000u, HIRD_KIND_UNKNOWN, "vendor never reads (stock 0)" },
++	{ 0x58u, 0x00000000u, HIRD_KIND_UNKNOWN, "stock 0, writer [U]" },
++	{ 0x5cu, 0x00000004u, HIRD_KIND_UNKNOWN, "stock 4, writer [U]" },
++	{ 0x6cu, 0x00000004u, HIRD_KIND_UNKNOWN, "stock 4, writer [U]" },
++};
++
++/* -------------------------------------------------------------------
++ * 1b. Vendor stock live bank CA 0x40050000 (machw array word 8)
++ *
++ * Source: the same committed stock dump.  Status/ring pointers are device
++ * telemetry (dynamic); +0x14 and +0x24..+0x30 are NON-ZERO in the vendor idle
++ * dump but have NO host-driver accessor in the 2.4.15/2.5.24 modules - i.e.
++ * device-owned state.  They are the highest-value parity targets for the
++ * "RX armed but silent" symptom: an all-zero read from our box would prove the
++ * device-side RX/MAC state never reached the vendor stock shape.
++ * ------------------------------------------------------------------- */
++static const struct hi5622_rx_word rx_live_words[] = {
++	{ 0x00u, 0x00000400u, HIRD_KIND_DYNAMIC, "host MAC int status (live)" },
++	{ 0x04u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x08u, 0x00000020u, HIRD_KIND_DYNAMIC, "norm free-ring device rptr" },
++	{ 0x0cu, 0x00000020u, HIRD_KIND_DYNAMIC, "small free-ring device rptr" },
++	{ 0x10u, 0x00000000u, HIRD_KIND_DYNAMIC, "completion ring device wptr" },
++	{ 0x14u, 0x00200020u, HIRD_KIND_DEVICE,  "device-owned RX meta, stock 0x00200020" },
++	{ 0x18u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x1cu, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x20u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x24u, 0x00800000u, HIRD_KIND_DEVICE,  "device-owned queue meta 0" },
++	{ 0x28u, 0x01800800u, HIRD_KIND_DEVICE,  "device-owned queue meta 1" },
++	{ 0x2cu, 0x02801000u, HIRD_KIND_DEVICE,  "device-owned queue meta 2" },
++	{ 0x30u, 0x03801800u, HIRD_KIND_DEVICE,  "device-owned queue meta 3" },
++	{ 0x34u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x38u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x3cu, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++	{ 0x40u, 0x00000000u, HIRD_KIND_UNKNOWN, "device-owned, stock 0" },
++};
++
++const rx_u16 hi5622_rx_live_extra_offsets[HIRD_LIVE_EXTRA_COUNT] = {
++	0x14u, 0x24u, 0x28u, 0x2cu, 0x30u,
++};
++
++const struct hi5622_rx_word *hi5622_rx_cfg_words(unsigned int *count)
++{
++	if (count)
++		*count = (unsigned int)(sizeof(rx_cfg_words) / sizeof(rx_cfg_words[0]));
++	return rx_cfg_words;
++}
++
++const struct hi5622_rx_word *hi5622_rx_live_words(unsigned int *count)
++{
++	if (count)
++		*count = (unsigned int)(sizeof(rx_live_words) / sizeof(rx_live_words[0]));
++	return rx_live_words;
++}
++
++int hi5622_rx_parity_classify(const struct hi5622_rx_word *w,
++			      rx_u32 actual, int range_ok,
++			      enum hi5622_rx_parity *out)
++{
++	if (!w || !out)
++		return HIL_RX_EARG;
++	if (actual == 0xffffffffu) {
++		*out = HIRD_PAR_READ_FAIL;
++		return HIL_RX_OK;
++	}
++	switch (w->kind) {
++	case HIRD_KIND_MATCH:
++		*out = (actual == w->v) ? HIRD_PAR_MATCH : HIRD_PAR_MISMATCH;
++		break;
++	case HIRD_KIND_RANGE:
++		*out = range_ok ? HIRD_PAR_RANGE_OK : HIRD_PAR_RANGE_BAD;
++		break;
++	case HIRD_KIND_DYNAMIC:
++		*out = HIRD_PAR_DYNAMIC;
++		break;
++	case HIRD_KIND_DEVICE:
++		*out = (actual != 0u) ? HIRD_PAR_DEVICE_OK : HIRD_PAR_DEVICE_ZERO;
++		break;
++	case HIRD_KIND_UNKNOWN:
++	default:
++		*out = (actual == w->v) ? HIRD_PAR_MATCH : HIRD_PAR_MISMATCH;
++		break;
++	}
++	return HIL_RX_OK;
++}
++
++const char *hi5622_rx_parity_name(enum hi5622_rx_parity p)
++{
++	switch (p) {
++	case HIRD_PAR_MATCH:		return "MATCH";
++	case HIRD_PAR_MISMATCH:		return "MISMATCH";
++	case HIRD_PAR_RANGE_OK:		return "RANGE_OK";
++	case HIRD_PAR_RANGE_BAD:	return "RANGE_BAD";
++	case HIRD_PAR_DYNAMIC:		return "DYNAMIC";
++	case HIRD_PAR_READ_FAIL:	return "READ_FAIL";
++	case HIRD_PAR_DEVICE_ZERO:	return "DEVICE_ZERO";
++	case HIRD_PAR_DEVICE_OK:	return "DEVICE_OK";
++	default:			return "?";
++	}
++}
++
++/* -------------------------------------------------------------------
++ * 2. Host-MAC interrupt status bits (vendor ISR shuangta_irq_host_mac_isr)
++ * ------------------------------------------------------------------- */
++static const char *const rx_status_bit_names[HIRD_STATUS_BITS] = {
++	"forward-core",		/* 0  vendor helper 0x39558                */
++	"forward-core",		/* 1  vendor helper 0x39558                */
++	"rx-completion",	/* 2  the RX service branch                */
++	"norm-ring",		/* 3  norm free-ring condition helper      */
++	"small-ring",		/* 4  small free-ring condition helper     */
++	"error-forward",	/* 5  error log + firmware forward         */
++	"service-6",		/* 6  vendor service path                  */
++	"service-7",		/* 7  vendor service path                  */
++	"forward-core",		/* 8  vendor helper 0x3920c (16 B msg)     */
++	"forward-core",		/* 9  vendor forward path                  */
++	"forward-core",		/* 10 vendor forward path                  */
++	"masked-11", "masked-12", "masked-13", "masked-14", "masked-15",
++};
++
++const char *hi5622_rx_status_bit_name(unsigned int bit)
++{
++	if (bit >= HIRD_STATUS_BITS)
++		return NULL;
++	return rx_status_bit_names[bit];
++}
++
++int hi5622_rx_status_decode(rx_u32 status, rx_u32 mask,
++			    struct hi5622_rx_status_dec *out)
++{
++	rx_u32 forward = 0u;
++	unsigned int i;
++
++	if (!out)
++		return HIL_RX_EARG;
++	out->status = status;
++	out->mask = mask;
++	out->active = status & ~mask;
++	out->rx_active = (out->active & (1u << HIRD_STATUS_RX_BIT)) ? 1u : 0u;
++	for (i = 0; i < HIRD_STATUS_BITS; i++) {
++		if (!(out->active & (1u << i)))
++			continue;
++		if (i == 0u || i == 1u || i == 8u || i == 9u || i == 10u)
++			forward |= 1u << i;
++	}
++	out->forward_bits = forward;
++	return HIL_RX_OK;
++}
++
++int hi5622_rx_status_bits_str(const struct hi5622_rx_status_dec *d,
++			      char *buf, unsigned int cap)
++{
++	unsigned int i, used = 0, first = 1;
++	int n;
++
++	if (!d || !buf || cap == 0u)
++		return HIL_RX_EARG;
++	n = snprintf(buf, cap, "bits=");
++	if (n < 0 || (unsigned int)n >= cap)
++		return HIL_RX_EARG;
++	used = (unsigned int)n;
++	for (i = 0; i < HIRD_STATUS_BITS; i++) {
++		if (!(d->active & (1u << i)))
++			continue;
++		n = snprintf(buf + used, cap - used, "%s%u", first ? "" : ",", i);
++		if (n < 0 || (unsigned int)n >= cap - used)
++			return HIL_RX_EARG;
++		used += (unsigned int)n;
++		first = 0;
++	}
++	if (first) {
++		n = snprintf(buf + used, cap - used, "none");
++		if (n < 0 || (unsigned int)n >= cap - used)
++			return HIL_RX_EARG;
++		used += (unsigned int)n;
++	}
++	n = snprintf(buf + used, cap - used, " (rx=%u fwd=0x%x)",
++		     d->rx_active, d->forward_bits);
++	if (n < 0 || (unsigned int)n >= cap - used)
++		return HIL_RX_EARG;
++	return (int)(used + (unsigned int)n);
++}
++
++/* -------------------------------------------------------------------
++ * 3. Read-only completion observation
++ * ------------------------------------------------------------------- */
++int hi5622_rx_obs_entry(rx_u32 entry,
++			const rx_u32 *norm_dma, rx_u32 ndepth,
++			const rx_u32 *small_dma, rx_u32 sdepth,
++			rx_u8 *ring_kind, rx_u32 *slot,
++			rx_u32 *buf_dma)
++{
++	rx_u32 i;
++
++	if (!ring_kind || !slot || !buf_dma)
++		return HIL_RX_EARG;
++	/* The completion entry is the 4-byte device VA of buffer+4 [V]. */
++	if ((entry & (HIL_RX_SKB_WORD - 1u)) != 0u)
++		return HIRD_OBS_BAD_ENTRY;
++	if (norm_dma) {
++		for (i = 0; i < ndepth; i++) {
++			if ((rx_u32)(norm_dma[i] + HIL_RX_SKB_WORD) != entry)
++				continue;
++			*ring_kind = 0u;
++			*slot = i;
++			*buf_dma = norm_dma[i];
++			return HIRD_OBS_FRAME;
++		}
++	}
++	if (small_dma) {
++		for (i = 0; i < sdepth; i++) {
++			if ((rx_u32)(small_dma[i] + HIL_RX_SKB_WORD) != entry)
++				continue;
++			*ring_kind = 1u;
++			*slot = i;
++			*buf_dma = small_dma[i];
++			return HIRD_OBS_FRAME;
++		}
++	}
++	return HIRD_OBS_BAD_ENTRY;
++}
++
++/* -------------------------------------------------------------------
++ * 4. Vendor RX-init program parity
++ * ------------------------------------------------------------------- */
++const struct hi5622_rx_word hi5622_rx_init_fixed[HIRD_INIT_FIXED_COUNT] = {
++	{ 0x00u, 0x00000100u, HIRD_KIND_MATCH, "tx_ba_info_buff_depth=0x100" },
++	{ 0x1cu, 0x00b0063cu, HIRD_KIND_MATCH, "rx norm/small buffer lengths" },
++	{ 0x2cu, 0x00000100u, HIRD_KIND_MATCH, "rx norm free ring size=256" },
++	{ 0x30u, 0x00000200u, HIRD_KIND_MATCH, "rx small free ring size=512" },
++	{ 0x34u, 0x00000fffu, HIRD_KIND_MATCH, "rx completion ring size=4095" },
++	{ 0x48u, 0xfffffcc1u, HIRD_KIND_MATCH, "host MAC interrupt mask init" },
++};
++
++/* Address-bearing program words: presence required, value range-checked by the
++ * caller (dp_mac_program already refuses out-of-window addresses). */
++static const rx_u16 rx_init_addr_offsets[] = {
++	0x04u, 0x10u, 0x20u, 0x24u, 0x28u,
++};
++#define HIRD_INIT_ADDR_COUNT	5u
++
++int hi5622_rx_init_program_check(const struct dp_mac_reg *regs,
++				 unsigned int count,
++				 struct hi5622_rx_init_check *out)
++{
++	unsigned int i, j;
++
++	if (out) {
++		out->missing_mask = 0u;
++		out->fail_name = NULL;
++		out->bad_value = 0u;
++	}
++	if (!regs || count == 0u)
++		return HIL_RX_EARG;
++	for (i = 0; i < HIRD_INIT_FIXED_COUNT; i++) {
++		const struct hi5622_rx_word *w = &hi5622_rx_init_fixed[i];
++		int found = 0;
++
++		for (j = 0; j < count; j++) {
++			if (regs[j].off != w->off)
++				continue;
++			if (regs[j].value != w->v) {
++				if (out) {
++					out->missing_mask |= 1u << i;
++					out->fail_name = w->name;
++					out->bad_value = regs[j].value;
++				}
++				return HIL_RX_EFORMAT;
++			}
++			found = 1;
++			break;
++		}
++		if (!found) {
++			if (out) {
++				out->missing_mask |= 1u << i;
++				out->fail_name = w->name;
++			}
++			return HIL_RX_EFORMAT;
++		}
++	}
++	for (i = 0; i < HIRD_INIT_ADDR_COUNT; i++) {
++		int found = 0;
++
++		for (j = 0; j < count; j++) {
++			if (regs[j].off == rx_init_addr_offsets[i]) {
++				found = 1;
++				break;
++			}
++		}
++		if (!found) {
++			if (out) {
++				out->missing_mask |= 1u << (HIRD_INIT_FIXED_COUNT + i);
++				out->fail_name = "ring/table address word missing";
++			}
++			return HIL_RX_EFORMAT;
++		}
++	}
++	return HIL_RX_OK;
++}
+--- a/hi5622_rx_diff.h
++++ b/hi5622_rx_diff.h
+@@ -0,0 +1,173 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rx_diff.h - portable VENDOR-vs-OURS RX state parity, status decode
++ * and read-only capture rules (lane wifi-rx-vendor-diff, shared task task-162).
++ *
++ * ORIGINAL clean-room code.  Every constant below is a DERIVED FACT decoded by
++ * the project's committed static-RE lanes from the local vendor artifacts and
++ * quoted in docs/incoming/wifi-rx-vendor-diff/REPORT.md; no vendor code text,
++ * binary, firmware byte or per-unit identity is reproduced here.
++ *
++ * Purpose: the MAC RX path captures nothing even though the free-ring consumer
++ * is armed (live bank CA 0x40050000 status=0x182 norm/small rptr=0x20,
++ * cmp_wptr=0).  The definitive way to close that gap is a byte-exact diff of
++ * the vendor's stock RX state (committed dump opensource/dumps/reg_all.txt,
++ * taken with the vendor driver live) against ours.  This file carries:
++ *
++ *   1. the vendor stock value of every RX-relevant word,
++ *   2. the classification of each word (host writes it / host maintains a
++ *      pointer / device-owned telemetry / vendor never touches it),
++ *   3. the host-MAC interrupt status bit decode decoded from the vendor ISR
++ *      shuangta_irq_host_mac_isr, and
++ *   4. the read-only observation rules used to prove "the MAC wrote a
++ *      completion" without moving a single ring pointer (crash-safe rung).
++ *
++ * The driver (hi5622_dp_txrx.c) renders these tables as the read-only sysfs
++ * action "dp_rx_parity" and uses the observer in the observe-only rung of
++ * dp_rx_drain.  Everything here is host-tested by tools/rx_parity_selftest.c.
++ */
++#ifndef _HI5622_RX_DIFF_H
++#define _HI5622_RX_DIFF_H
++
++#include "hi5622_rx_live.h"
++#include "dp_rings.h"
++
++/* -------------------------------------------------------------------
++ * 1. Word classification
++ * ------------------------------------------------------------------- */
++enum hi5622_rx_word_expect {
++	HIRD_KIND_MATCH = 0,	/* fixed host-written value; compare exactly   */
++	HIRD_KIND_RANGE,	/* host-written 32-bit device VA (window check) */
++	HIRD_KIND_DYNAMIC,	/* host-maintained packed index / W1C status   */
++	HIRD_KIND_DEVICE,	/* device-owned: printed for parity, never written */
++	HIRD_KIND_UNKNOWN	/* vendor stock value, writer unknown [U]      */
++};
++
++struct hi5622_rx_word {
++	rx_u16 off;
++	rx_u32 v;		/* vendor stock value (0 where not fixed)  */
++	rx_u8 kind;
++	const char *name;
++};
++
++/* Result of comparing one actual word against the table. */
++enum hi5622_rx_parity {
++	HIRD_PAR_MATCH = 0,	/* exact match                                 */
++	HIRD_PAR_MISMATCH,	/* fixed expected differs                      */
++	HIRD_PAR_RANGE_OK,	/* address inside the host DMA window          */
++	HIRD_PAR_RANGE_BAD,	/* address outside / unaligned                 */
++	HIRD_PAR_DYNAMIC,	/* pointer/status: no fixed expected value     */
++	HIRD_PAR_READ_FAIL,	/* transport miss (0xffffffff)                 */
++	HIRD_PAR_DEVICE_ZERO,	/* device-owned word reads zero: vendor nonzero */
++	HIRD_PAR_DEVICE_OK	/* device-owned word equals vendor stock       */
++};
++
++/* Vendor stock tables.  Band-0 CAs: config block 0x40040000 (machw array
++ * word 5) and live bank 0x40050000 (machw array word 8). */
++#define HIRD_CFG_CA		0x40040000u
++#define HIRD_LIVE_CA		0x40050000u
++#define HIRD_LIVE_SPAN		0x44u	/* vendor dump covers +0x00..+0x40 */
++#define HIRD_CFG_SPAN		0xb0u	/* vendor dump covers +0x00..+0xac */
++
++const struct hi5622_rx_word *hi5622_rx_cfg_words(unsigned int *count);
++const struct hi5622_rx_word *hi5622_rx_live_words(unsigned int *count);
++
++/* Classify one word.  range_ok is used only for HIRD_KIND_RANGE words
++ * (1 = valid device VA inside the host DMA window, 0 = invalid). */
++int hi5622_rx_parity_classify(const struct hi5622_rx_word *w,
++			      rx_u32 actual, int range_ok,
++			      enum hi5622_rx_parity *out);
++const char *hi5622_rx_parity_name(enum hi5622_rx_parity p);
++
++/* Number of device-owned live-bank words the vendor stock dump shows as
++ * non-zero (the "unexplained live-bank state" this lane tracks). */
++#define HIRD_LIVE_EXTRA_COUNT	5u
++extern const rx_u16 hi5622_rx_live_extra_offsets[HIRD_LIVE_EXTRA_COUNT];
++
++/* -------------------------------------------------------------------
++ * 2. Host-MAC interrupt status decode (CA 0x40050000 +0x00, mask +0x48)
++ *
++ * Decoded from the vendor ISR shuangta_irq_host_mac_isr (0x39a1c) bit walk:
++ *   bit 2  : RX completion service (refill free rings, drain completion ring,
++ *            publish cmp consumer, W1C served bits)                      [V]
++ *   bit 3  : norm free-ring condition (service helper may mask irq 3)     [V]
++ *   bit 4  : small free-ring condition (may mask irq 4)                   [V]
++ *   bit 1  : vendor forwards an HCC control message to the firmware core
++ *            (helper 0x39558, hcc_msg_alloc(4))                           [V]
++ *   bit 8  : vendor forwards an event to the firmware core
++ *            (helper 0x3920c, hcc_msg_alloc(16), group 0 id 7 header)     [V]
++ *   bits 0,5,6,7,9,10 : further vendor service/forward paths              [V]
++ * Mask 0xfffffcc1 leaves bits 1,2,3,4,5,8,9 observable (status & ~mask).
++ * Vendor stock idle status = 0x400 (masked away); ours reads 0x182 => active
++ * bits 1 and 8, both of which the vendor services by forwarding messages to
++ * the firmware core - a host write class our driver does not implement (a
++ * candidate link, not proven needed for RX capture).
++ * ------------------------------------------------------------------- */
++#define HIRD_STATUS_BITS	16u
++#define HIRD_STATUS_RX_BIT	2u
++
++struct hi5622_rx_status_dec {
++	rx_u32 status;
++	rx_u32 mask;
++	rx_u32 active;		/* status & ~mask                     */
++	rx_u32 rx_active;	/* bit 2 observable                   */
++	rx_u32 forward_bits;	/* active bits the vendor forwards    */
++};
++
++int hi5622_rx_status_decode(rx_u32 status, rx_u32 mask,
++			    struct hi5622_rx_status_dec *out);
++const char *hi5622_rx_status_bit_name(unsigned int bit);
++int hi5622_rx_status_bits_str(const struct hi5622_rx_status_dec *d,
++			      char *buf, unsigned int cap);
++
++/* -------------------------------------------------------------------
++ * 3. Read-only completion observation (crash-safe capture rung)
++ *
++ * Observe-only mode proves the device path by reading the completion ring
++ * memory and the returned buffers WITHOUT publishing any producer/consumer
++ * index.  Rules (all fail-closed, host-tested):
++ *   - the entry is the device VA of buffer+4, 4-aligned;
++ *   - it must equal one of the two pool device VAs (norm then small);
++ *   - the slot must be below the ring depth;
++ *   - the 36-byte header at buffer+4 must parse (length bounds, no chain).
++ * ------------------------------------------------------------------- */
++enum hi5622_rx_obs {
++	HIRD_OBS_NONE = 0,	/* no pending completion                    */
++	HIRD_OBS_FRAME,		/* completion entry valid, header accepted  */
++	HIRD_OBS_BAD_ENTRY,	/* entry not in either RX pool              */
++	HIRD_OBS_BAD_HDR,	/* 36-B header refused                      */
++	HIRD_OBS_CHAIN		/* sub-MSDU chain (refused until decoded)   */
++};
++
++/* Locate a completion entry in the two pools read-only.  On HIRD_OBS_FRAME/
++ * BAD_HDR/CHAIN, *ring_kind (0 norm, 1 small), *slot and *buf_dma are set. */
++int hi5622_rx_obs_entry(rx_u32 entry,
++			const rx_u32 *norm_dma, rx_u32 ndepth,
++			const rx_u32 *small_dma, rx_u32 sdepth,
++			rx_u8 *ring_kind, rx_u32 *slot,
++			rx_u32 *buf_dma);
++
++/* -------------------------------------------------------------------
++ * 4. Vendor RX-init program parity (the 12-write enable, statically decoded)
++ *
++ * Vendor sequence: shuangta_rx_host_init_dscr_queue 0x37888 writes +0x1c
++ * (norm len), +0x20, +0x2c, +0x1c (small len), +0x24, +0x30, +0x28, +0x34,
++ * fills both free rings, then chip IRQ init writes +0x48 = 0xfffffcc1.  The
++ * clean-room 14-write program (dp_mac_program) covers the same registers.
++ * This check asserts the fixed words of a built program are the vendor-derived
++ * values and that the required offsets are all present.
++ * ------------------------------------------------------------------- */
++struct hi5622_rx_init_check {
++	rx_u32 missing_mask;	/* bit i set = required word i absent */
++	const char *fail_name;		/* first failing word name, or NULL   */
++	rx_u32 bad_value;	/* first mismatching value, or 0      */
++};
++
++#define HIRD_INIT_FIXED_COUNT	6u
++extern const struct hi5622_rx_word hi5622_rx_init_fixed[HIRD_INIT_FIXED_COUNT];
++
++int hi5622_rx_init_program_check(const struct dp_mac_reg *regs,
++				 unsigned int count,
++				 struct hi5622_rx_init_check *out);
++
++#endif /* _HI5622_RX_DIFF_H */

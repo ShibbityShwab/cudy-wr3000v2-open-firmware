@@ -1,0 +1,27 @@
+# patch application verification (host-only)
+# generated: 2026-11-25T06:40:38Z
+
+# patch: patches/0001-rx-vendor-diff.patch (1052 lines)
+# base: FINAL association + corrected mgmt carrier + RX watermark staged tree
+
+## dry-run on a clean copy of the base tree
+checking file Kbuild
+checking file hi5622_dp.c
+checking file hi5622_dp_txrx.c
+checking file hi5622_dp_txrx.h
+checking file hi5622_rx_diff.c
+checking file hi5622_rx_diff.h
+DRY-RUN: OK
+
+## apply + compare the 6 files with the built tree (/tmp/rxvd-module)
+IDENTICAL Kbuild
+IDENTICAL hi5622_dp.c
+IDENTICAL hi5622_dp_txrx.c
+IDENTICAL hi5622_dp_txrx.h
+IDENTICAL hi5622_rx_diff.c
+IDENTICAL hi5622_rx_diff.h
+
+## rebuilt .text identity (fresh patched tree /tmp/rxvd-verify vs recorded artifact)
+TEXT IDENTICAL (fresh-tree rebuild)
+recorded stripped sha: 81ab72c157dd6f1005a4a9012eb8210161a30fde55bc1c2064bde21a7c48031c
+fresh-tree stripped sha: 192e8c2da6f7bab3880725d57e86dddef51d99238fdd26c1b8c0651c9d5d3b9e  (build-id differs by path only)
