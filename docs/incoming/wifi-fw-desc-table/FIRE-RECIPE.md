@@ -89,9 +89,11 @@ Read-only verification (probe pack TABLES T7; phys = CPU + 0x46B8000):
 | 3 | pool rec1 bitmap CPU 0x1ADCBC | 0x000000FF |
 | 4 | band-1 map ch36 row CPU 0x117AD4 | byte1 = **01** (was 0xFF) |
 | 5 | band-0 map ch1 row CPU 0x117B48 | byte1 = 00 (unchanged) |
-| 6 | R+0x410 after a 0x0124 re-post | **bit0 = 1** (the predicate saw the armed record) |
-| 7 | R+0x3AC | **0x03E6138A** (the RF chain image) |
-| 8 | ch36 beacon | present (host scan) |
+| 6 | **P+0x1A00 (O)** CPU 0x178238 (phys 0x40830238) | **nonzero** (the descriptor/PHY publish word) |
+| 6a | **P+0xF04** CPU 0x17773C (phys 0x4082F73C) | **nonzero** (mode byte = 3: band-1 PHY init ran) |
+| 7 | R+0x410 after a 0x0124 re-post | **bit0 = 1** (the predicate saw the armed record) |
+| 8 | R+0x3AC | **0x03E6138A** (the RF chain image) |
+| 9 | ch36 beacon | present (host scan) |
 
 Chain for the pointers (sibling lanes): ctx0 = u32(0x171458) + u16(0x172504);
 perlink = u32(ctx0+0x4B0); O = u32(perlink+0x2820); R = u32(O+0x2D8). Probes 6/7

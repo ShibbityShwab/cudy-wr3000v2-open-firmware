@@ -1,0 +1,130 @@
+# evidence - fw_desc_table_re.py --selftest (task-187)
+# generated 2569-11-25T13:46:49Z from the pinned local artifacts
+
+PASS  firmware size 928,920 B
+PASS  image ends CA 0x122C98
+PASS  hmac_config_set_country at .text+0x63B6C
+PASS  hmac_config_send_event at .text+0x5717C
+PASS  mac_regdomain_set_country at .text+0x206E0
+PASS  mac_init_channel_list at .text+0x205E4
+PASS  wal_config_set_country at .text+0x12AE0C
+PASS  wal_regdomain_update at .text+0x1226F0
+PASS  hwifi_config_init_ini_country at .text+0x1558
+PASS  hwifi_config_init_ini at .text+0x122FE0
+PASS  wal_hipriv_setcountry at .text+0x122D0C
+PASS  emitter: count = blob[4]
+PASS  emitter: len = 8 + count*16
+PASS  emitter: key = 0x00F7
+PASS  emitter: call site 0x63C3C -> hmac_config_send_event
+PASS  builder: hcc_msg_tx at .text+0x57210
+PASS  builder: memcpy_s at .text+0x57200
+PASS  builder: payload at hdr+12
+PASS  builder: key u16 at hdr+20
+PASS  builder: len u16 at hdr+22
+PASS  filler 0x121E24: ldrsb r2, [r4, #12]
+PASS  filler 0x121E2C: strb r2, [r1]
+PASS  filler 0x121E40: ldrsb r2, [r4, #13]
+PASS  filler 0x121E44: strb r2, [r1, #1]
+PASS  filler 0x121E48: strb r3, [r1, #2]
+PASS  filler 0x121E94: strb r3, [r5, #3]
+PASS  filler 0x121E9C: strb r3, [r5, #4]
+PASS  filler 0x121F80: strb lr, [r5, #8]
+PASS  filler 0x121FAC: strb r3, [r5, #9]
+PASS  filler 0x121FF8: str r0, [r5, #20]
+PASS  filler 0x122000: strb r3, [r5, #10]
+PASS  filler: byte2 bit2 from next-block flags & 4
+PASS  filler: byte2 bit1 from next-block flags & 8
+PASS  filler: the only write to record byte2 is a zero (no 0x80)
+PASS  host twin: blob = *cfg
+PASS  host twin: count = blob[4]
+PASS  host twin: bound 0x148 = 8+20*16
+PASS  host twin: strcmp(current, blob) at 0x2072C
+PASS  host twin: memcpy_s(copy, 0x148, blob, len) at 0x2075C
+PASS  host twin map: clear band0 row slot to 0xFF
+PASS  host twin map: band0 bitmap at record+0x0C
+PASS  decoy GET: wal_ioctl_get_reg_domain g2 cmd 0xF7
+PASS  decoy: wal_regdomain_update g2 cmd 0xF7
+PASS  decoy: its wrapper word = 0x000400F7 (host pointer payload)
+PASS  decoy: wal_regdomain_update sends via wal_send_cfg_event (g2)
+PASS  plat.ko contains no 0xF7 message key
+PASS  emitter: the 0xF7 call is the hmac constructor
+PASS  handler: key = u16 [msg+20]
+PASS  handler: table A bound 217*8 = 0x6C8
+PASS  handler: worker = entry+4
+PASS  handler: body = msg+24
+PASS  handler: r1 = len low byte
+PASS  handler: call worker
+PASS  handler: table A literal = CA 0x10C23C
+PASS  table A row 92 key = 0x00F7
+PASS  table A row 92 worker = CA 0x45A30 (Thumb)
+PASS  worker: gate gets (pool, body)
+PASS  worker: blx CA 0x1037BC (ARM state)
+PASS  worker: gate==0 -> skip the copy, still populate
+PASS  worker: count = body[4]
+PASS  worker: destMax 0x148
+PASS  worker: len = 8 + count*16
+PASS  worker: memcpy_s(pool, 0x148, body, len)
+PASS  worker: refusal code 0x8B2D
+PASS  worker: populator CA 0x1017F8
+PASS  worker: band object = [ctx+0x4B8]
+PASS  worker: pool literal CA 0x1ADC98
+PASS  gate 0x1037BC: eor ip, r0, r1
+PASS  gate 0x1037C0: tst ip, #3
+PASS  gate 0x1037C4: bne 0x103850
+PASS  gate 0x1037C8: ands ip, r0, #3
+PASS  gate 0x1037D4: ldr r2, [r0], #4
+PASS  gate 0x1037FC: push {r4}
+PASS  gate 0x103800: mov r4, #1
+PASS  gate 0x103804: orr r4, r4, r4, lsl #8
+PASS  gate 0x103808: orr r4, r4, r4, lsl #16
+PASS  gate 0x103810: cmp r2, r3
+PASS  gate 0x103840: and r3, r3, #255
+PASS  gate 0x10384C: bx lr
+PASS  gate: byte-tail compare (strcmp)
+PASS  boot pool 0x485FA: movs r3, #2
+PASS  boot pool 0x48602: movs r2, #30
+PASS  boot pool 0x48604: movw ip, #8191
+PASS  boot pool 0x48608: movw r1, #513
+PASS  boot pool 0x4861E: str r4, [r7, #8]
+PASS  boot pool 0x48620: bl 0x1017f8
+PASS  boot pool: pool literal CA 0x1ADC98
+PASS  boot pool: cc literal CA 0x1043A2
+PASS  boot pool: default cc string '99' (the gate baseline)
+PASS  boot pool 0x4860C: strh r3, [r7, #14]
+PASS  boot pool 0x4860E: strh r3, [r7, #30]
+PASS  boot pool 0x48610: mvn.w r3, #3758096384
+PASS  boot pool 0x48614: strb r2, [r7, #12]
+PASS  boot pool 0x48616: strd ip, r1, [r7, #20]
+PASS  boot pool 0x4861A: strb r2, [r7, #28]
+PASS  boot pool 0x4861C: str r3, [r7, #36]
+PASS  predicate 0x101894: cmp r0, #1
+PASS  predicate 0x1018AC: bl 0x10172c
+PASS  predicate 0x10192C: bl 0x101650
+PASS  predicate 0x101932: ldrb r3, [r0, #2]
+PASS  predicate 0x101934: lsls r3, r3, #31
+PASS  predicate 0x101936: bmi.w 0x101bd8
+PASS  predicate 0x101BD8: movs r0, #1
+PASS  predicate: field table literal CA 0x10BE68
+PASS  frame = the committed 68-byte image
+PASS  frame total 0x44
+PASS  frame key at +0x14 = 0x00F7
+PASS  frame is g0 id1 with tag 0x5A5A
+PASS  hdr total == wire length
+PASS  blob cc != '99', count 2
+PASS  rec1 word 0x00800201 (band1, bw20, valid)
+PASS  rec1 valid bit 0x00800000 set
+PASS  rec1 bitmap = ch36-64 (0xFF)
+PASS  worker length within the 0x148 pool window
+PASS  SR node word1 0x00446D2B
+
+115 checks, 0 failed
+SELFTEST PASS
+
+# --frame
+blob (40 B): 5553000002000000000080001e002c0100000000ff1f0000010280001e002c0100000000ff000000
+frame (68 B): 000100044400010000005a5a0000000001000000f70028005553000002000000000080001e002c0100000000ff1f0000010280001e002c0100000000ff000000ffffffff
+hdr total=0x0044 id=0x0001 group=0 tag=0x5A5A
+key=0x00F7 payload_len=0x0028 count=2
+rec1 word=0x00800201 bitmap=0x000000FF (ch36..64)
+cc=US (must differ from boot '99')
+SR node word1=0x00446D2B

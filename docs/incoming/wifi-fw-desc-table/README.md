@@ -18,7 +18,8 @@ Read in this order:
    notes, the verification rungs (R0 host test, R1 install probe, R2 predicate/
    RF/beacon, R3 fallbacks) and the abort rules.
 4. **tools/fw_desc_table_re.py** - re-derives the decode from the pinned local
-   artifacts, re-emits the exact frame, `--selftest` (see evidence/).
+   artifacts, re-emits the exact frame, `--selftest` (115 assertions, PASS -
+   see evidence/selftest.txt), `--frame` / `--tables` / `--probes`.
 
 ## Key results
 

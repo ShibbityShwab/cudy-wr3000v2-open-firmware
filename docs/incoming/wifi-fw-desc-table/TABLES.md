@@ -146,7 +146,9 @@ After a good 0x00F7: +0x00 = 55 53 ("US"), +0x18 = 01 02 80 00
 | 4 | pool rec1 bitmap | 0x1ADCBC | 0x865CBC | 0x40865CBC | 4 | 0x000000FF |
 | 5 | band-1 map ch36 row (idx 0) | 0x117AD4 | 0x7CFAD4 | 0x407CFAD4 | 4 | byte1 = 01 (was 0xFF) |
 | 6 | band-0 map ch1 row (idx 0) | 0x117B48 | 0x7CFB48 | 0x407CFB48 | 4 | byte1 = 00 |
-| 7 | R+0x410 (RF block) | chain: perlink=u32(ctx+0x4B0); O=u32(perlink+0x1A00); R=u32(O+0x2D8) | | | 4 | bit0 = 1 after a 0x0124 re-post |
+| 7 | **P+0x1A00 (O)** | 0x178238 | 0x830238 | 0x40830238 | 4 | **nonzero** (the perlink publish word) |
+| 7a | **P+0xF04 mode byte** | 0x17773C | 0x82F73C | 0x4082F73C | 4 | **nonzero** (byte = 3, the band-1 PHY mode) |
+| 7b | R+0x410 (RF block) | chain: perlink=u32(ctx+0x4B0); O=u32(perlink+0x2820); R=u32(O+0x2D8) | | | 4 | bit0 = 1 after a 0x0124 re-post |
 | 8 | R+0x3AC | same R | | | 4 | 0x03E6138A |
 | 9 | band object ctx+0x4B8 | - | - | - | 4 | nonzero (else the worker returns 0x64) |
 | 10 | ctx0 slot/gates | sibling pack | | | | 0x00119758, 2, 1, 1 |
