@@ -107,3 +107,23 @@ swarm lanes; the Lead fires.
 5. AX-1..AX-7 (the 802.11ax feature set) -> the full Wi-Fi 6
 6. The rest (roaming/services/power save)
 7. IMG/PUB (the delivery track, parallel)
+
+## The deep specs (each item: the vendor source, the PASS/FAIL, the test, the deps, the state)
+
+| spec | areas |
+| --- | --- |
+| [SPEC-RX.md](SPEC-RX.md) | the RX gate RX-1..RX-5 (the critical path): the stock H2D trace, the firmware RX init, the probe verdict, the candidate negatives, the F4 forwarding |
+| [SPEC-5G.md](SPEC-5G.md) | 5G-1..5G-6 (wiphy/regdomain/order DONE; the beaconing in progress; DFS, 160 MHz) |
+| [SPEC-AX.md](SPEC-AX.md) | AX-1..AX-7 (the 802.11ax set; the vendor's HE block decoded; the HE caps partial) |
+| [SPEC-BA-RC.md](SPEC-BA-RC.md) | BA-1..3 (the aggregation; the BA-1 partial - the selftest needs the portable model) + RC-1..3 (the rate control) |
+| [SPEC-PM-ROAM.md](SPEC-PM-ROAM.md) | PM-1..2 (power save), RO-1..3 (k/v/r), SV-1..4 (WPS/mesh/monitor/stats) |
+| [SPEC-IMG-PUB.md](SPEC-IMG-PUB.md) | IMG-1..2 (the image bake/install), PUB-1..3 (the upstream/publication track) |
+
+## Verification status (the Lead's pass, docs/incoming/LANE-VERIFICATION/)
+
+- rx-h2d-trace: PASS (the RUNBOOK + the read-only trace method)
+- ax-he-caps: PASS (the tests 109/109 + the patch)
+- rx-ba-agg: PARTIAL (the decode usable; the selftest is kernel-header-dependent -> the
+  portable model must be committed before the fire)
+- rx-5g-beacon / rx-rate-ctl: in progress
+
