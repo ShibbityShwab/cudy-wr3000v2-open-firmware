@@ -17,7 +17,7 @@ roots are attributed hunk-by-hunk.  The one fully mechanical entry fold
 (**027 -> 0019**) was executed, integrated into the full 26-patch series and
 validated (26/26 patch(1)+git am identical, checkpatch-neutral).  The other
 9 composing folds are delivered as re-contextualized overlays; 8 of them
-still need a gate/placement decision (**9 of 11 overlays add a
+still need a gate/placement decision (**7 of 10 overlays add a
 `module_param` gate**), so **no new RFC entry 0027-0030 is complete yet**.
 The lane also found the v2 plan does not agree with itself (fold 031 is
 missing from the submission-series delta table; the gate policy is

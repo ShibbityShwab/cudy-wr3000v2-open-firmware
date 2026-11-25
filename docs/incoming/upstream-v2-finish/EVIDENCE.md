@@ -15,7 +15,7 @@ network, no device, no vendor bytes.
 | E8 | Current L2 review form re-validated PASS this session (26/26 patch(1)+git am, identical trees, 3 offsets, 0 fuzz, 0 errors / 73 warnings) | [`validation/baseline-L2/`](validation/baseline-L2/) |
 | E9 | Current L1 release line re-validated PASS this session (55/55, 152 file events, 3 offsets, 0 fuzz, strict git apply all 55, loader hand-off DTS contract OK, board DTB 12,848 B `1c200daf...`, DTS-0001 DTB 12,680 B `2a5eb334...`) | [`validation/baseline-L1/summary.txt`](validation/baseline-L1/summary.txt) |
 | E10 | The v2 plan inconsistencies K1-K6 are reproducible (21 checks, 18 PASS, 3 FAIL) | [`validation/consistency-check.md`](validation/consistency-check.md), [`tools/check-v2-plan.py`](tools/check-v2-plan.py) |
-| E11 | 9 of 11 composed fold overlays add a `module_param` gate; only 027/044/067 do not | [`artifacts/fold-overlays/MANIFEST.md`](artifacts/fold-overlays/MANIFEST.md) |
+| E11 | 7 of 10 composed fold overlays add a `module_param` gate; only 027/044/067 do not | [`artifacts/fold-overlays/MANIFEST.md`](artifacts/fold-overlays/MANIFEST.md) |
 | E12 | No hardware/bench contact, no L0/review-form edit, no post/push | the lane's commit history under `opensource/docs/incoming/upstream-v2-finish/` only; this page |
 
 ## Reproduce

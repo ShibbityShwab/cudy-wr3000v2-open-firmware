@@ -120,7 +120,7 @@ The other mechanical-looking entry folds are **not** text merges:
    it).
 2. 8 composing folds need the gate/placement decision; the overlays in
    `artifacts/fold-overlays/` are the raw material, not the final patches.
-   Nine of the eleven overlays add a `module_param` gate (only 027/044/067 do
+   Seven of the ten overlays add a `module_param` gate (only 027/044/067 do
    not) - the acceptance rule "no `luofu_*` module parameters / bench gates"
    cannot be met without stripping them.
 3. The four new RFC entries (0027-0030): content candidates exist for 0027

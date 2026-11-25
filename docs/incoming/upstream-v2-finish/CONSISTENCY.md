@@ -30,7 +30,7 @@ fold set".)
   gate; a normal boot keeps the block read-only", 0030 "the engine stays
   behind the attending arm option".
 - The tree confirms the gap: the frozen v1 form already carries 6
-  `module_param` gates (0020:1, 0022:2, 0025:3); nine of the eleven composed
+  `module_param` gates (0020:1, 0022:2, 0025:3); seven of the ten composed
   fold overlays in [`artifacts/fold-overlays/`](artifacts/fold-overlays/)
   add a `module_param` gate (all but 027/044/067).
 
