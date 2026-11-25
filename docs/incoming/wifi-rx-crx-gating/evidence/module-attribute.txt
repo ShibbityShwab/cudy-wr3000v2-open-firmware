@@ -1,0 +1,6 @@
+# sysfs attribute symbol presence in the built module
+
+crx_gate
+14
+
+artifact: hi5622_wifi.ko 1351256 B sha256 48fbc51b19465814046e60e1752342d67fc149bba60e4a2b244893ce8c04318e

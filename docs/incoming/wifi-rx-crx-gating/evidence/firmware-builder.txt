@@ -1,0 +1,87 @@
+# firmware CPU 0xBA000-0xBA1A0 derived annotation (builder + gates)
+# source: local FIRMWARE.bin, Thumb disassembly, CPU = file + 0x40000
+# instruction mnemonics/addresses only; no vendor bytes are stored here
+
+000ba0a0:  movs     r1, #6
+000ba0a2:  ldrb.w   r0, [r6, #0xd6d]
+000ba0a6:  bl       #0x4c9b4
+000ba0aa:  mov.w    sb, #1
+000ba0ae:  ldr.w    r8, [pc, #0x44]   ; [0x000ba0f4] = 0x10380cf8
+000ba0b2:  ldr.w    sl, [pc, #0x34]   ; [0x000ba0e8] = 0x20380cf8
+000ba0b6:  ldr      r3, [sp, #0x60]
+000ba0b8:  cmp      r3, r7
+000ba0ba:  beq.w    #0xb987e
+000ba0be:  mov      r0, r7
+000ba0c0:  bl       #0x1024ea
+000ba0c4:  mov      r5, r0
+000ba0c6:  bl       #0x409ea
+000ba0ca:  mov      r4, r0
+000ba0cc:  mov      r0, r5
+000ba0ce:  bl       #0x40cba
+000ba0d2:  mov      r3, r0
+000ba0d4:  cbnz     r0, #0xba0f8
+000ba0d6:  movw     r1, #0x48c
+000ba0da:  mov      r0, r8
+000ba0dc:  bl       #0x42c28
+000ba0e0:  mov      r0, r5
+000ba0e2:  bl       #0x1024e6
+000ba0e6:  b        #0xba0b6
+000ba0e8:  lsrs     r0, r7, #0x13
+000ba0ea:  movs     r0, #0x38
+000ba0ec:  lsrs     r4, r0, #0x14
+000ba0ee:  asrs     r0, r7, #0x20
+000ba0f0:  lsrs     r4, r0, #0x14
+000ba0f2:  movs     r0, #0x38
+000ba0f4:  lsrs     r0, r7, #0x13
+000ba0f6:  asrs     r0, r7, #0x20
+000ba0f8:  ldrh.w   fp, [r0, #0x11]
+000ba0fc:  ldrb     r0, [r0, #6]
+000ba0fe:  add.w    r2, fp, #0x30
+000ba102:  uxth     r2, r2
+000ba104:  str      r2, [sp, #0x10]
+000ba106:  str      r3, [sp, #0xc]
+000ba108:  bl       #0xbc524
+000ba10c:  ldr      r2, [sp, #0x10]
+000ba10e:  ldr      r3, [sp, #0xc]
+000ba110:  add.w    r1, r2, #0xc
+000ba114:  cmp.w    r1, #0x680
+000ba118:  bls      #0xba134
+000ba11a:  movw     r1, #0x497
+000ba11e:  mov      r0, sl
+000ba120:  bl       #0x41f90
+000ba124:  ldr      r3, [sp, #8]
+000ba126:  ldr      r2, [sp, #8]
+000ba128:  ldrb.w   r3, [r3, #0xcc5]
+000ba12c:  adds     r3, #1
+000ba12e:  strb.w   r3, [r2, #0xcc5]
+000ba132:  b        #0xba0e0
+000ba134:  cbnz     r0, #0xba144
+000ba136:  ldrb     r2, [r3, #6]
+000ba138:  movw     r1, #0x49f
+000ba13c:  mov      r0, r8
+000ba13e:  bl       #0x41f90
+000ba142:  b        #0xba0e0
+000ba144:  ldrb     r3, [r4]
+000ba146:  add.w    fp, fp, #0x3c
+000ba14a:  bfi      r3, sb, #0, #4
+000ba14e:  strb     r3, [r4]
+000ba150:  movs     r3, #0xd
+000ba152:  strb     r3, [r4, #6]
+000ba154:  movs     r3, #0
+000ba156:  strh.w   fp, [r4, #4]
+000ba15a:  strb     r3, [r4, #7]
+000ba15c:  ldrb     r2, [r0, #2]
+000ba15e:  ldrb     r3, [r4, #1]
+000ba160:  movs     r1, #2
+000ba162:  bfi      r3, r2, #4, #4
+000ba166:  strb     r3, [r4, #1]
+000ba168:  ldrb     r3, [r0, #1]
+000ba16a:  mov      r2, r5
+000ba16c:  strb     r3, [r4, #2]
+000ba16e:  ldrb     r3, [r0]
+000ba170:  mov      r0, r6
+000ba172:  strb     r3, [r4, #3]
+000ba174:  bl       #0x4bdce
+000ba178:  mov      r0, r5
+000ba17a:  bl       #0x102760
+000ba17e:  mov      r4, r0

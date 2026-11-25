@@ -1,0 +1,8 @@
+# patch apply + source comparison (tools/build.sh step 2)
+
+patching file hi5622_crx_gate.c
+patching file hi5622_crx_gate.h
+patching file hi5622_dp.c
+patching file Kbuild
+
+PASS: patched tree matches src/ byte-for-byte for Kbuild, hi5622_dp.c, hi5622_crx_gate.c, hi5622_crx_gate.h

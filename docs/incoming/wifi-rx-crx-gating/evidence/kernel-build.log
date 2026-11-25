@@ -1,0 +1,28 @@
+# kernel build against the project 6.18.60 tree (host-only)
+
+  CC [M]  hi5622_scan_d2h.o
+  CC [M]  hi5622_vapscan_provider.o
+  CC [M]  vapstart_frames.o
+  CC [M]  hi5622_ap_frames.o
+  CC [M]  hi5622_band_cfg.o
+  CC [M]  hi5622_key_frames.o
+  CC [M]  hi5622_keys.o
+  CC [M]  hi5622_sta_logic.o
+  CC [M]  hi5622_sta_frames.o
+  CC [M]  hi5622_sta.o
+  CC [M]  hi5622_sta_ops_logic.o
+  CC [M]  hi5622_sta_ops.o
+  CC [M]  hi5622_mgmt_logic.o
+  CC [M]  hi5622_mgmt.o
+  CC [M]  hi5622_data_tx_logic.o
+  CC [M]  hi5622_data_tx.o
+  LD [M]  hi5622_wifi.o
+  CC [M]  hi5622_wifi.mod.o
+  CC [M]  .module-common.o
+  LD [M]  hi5622_wifi.ko
+
+RC=0 warnings=0
+unstripped 1351256 48fbc51b19465814046e60e1752342d67fc149bba60e4a2b244893ce8c04318e
+stripped   352020 a9d3835aebdc01b9a898cfec2c0db9c90b563ac232da96302a951178fd0fc855
+vermagic 6.18.60 SMP mod_unload ARMv7 p2v8
+depends cfg80211

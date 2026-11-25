@@ -1,0 +1,32 @@
+# vendor hmac D2H dispatch table, .data + 0x584, 28 entries x 12 B
+# layout {u16 id; u16 pad; u32 handler (R_ARM_ABS32); u32 flags}
+# parsed from the local vendor module in place (never committed)
+
+idx  0 id=0x00 (  0) sym=hmac_sdt_up_reg_val handler_word=0x00000000 flags=0x00000000
+idx  1 id=0x01 (  1) sym=hmac_create_ba_event handler_word=0x00000000 flags=0x00000000
+idx  2 id=0x02 (  2) sym=hmac_del_ba_event handler_word=0x00000000 flags=0x00000000
+idx  3 id=0x03 (  3) sym=hmac_event_config_syn handler_word=0x00000000 flags=0x00000000
+idx  4 id=0x05 (  5) sym=hmac_syn_info_event handler_word=0x00000000 flags=0x00000000
+idx  5 id=0x09 (  9) sym=hmac_bandwidth_info_syn_event handler_word=0x00000000 flags=0x00000000
+idx  6 id=0x0a ( 10) sym=hmac_protection_info_syn_event handler_word=0x00000000 flags=0x00000000
+idx  7 id=0x0b ( 11) sym=hmac_ch_status_info_syn_event handler_word=0x00000000 flags=0x00000000
+idx  8 id=0x0d ( 13) sym=hmac_rx_process_mgmt_event handler_word=0x00000000 flags=0x00000000
+idx  9 id=0x0e ( 14) sym=hmac_mgmt_rx_delba_event handler_word=0x00000000 flags=0x00000000
+idx 10 id=0x0f ( 15) sym=hmac_scan_proc_scanned_bss handler_word=0x00000000 flags=0x00000000
+idx 11 id=0x10 ( 16) sym=hmac_scan_proc_scan_comp_event handler_word=0x00000000 flags=0x00000000
+idx 12 id=0x11 ( 17) sym=hmac_scan_process_chan_result_event handler_word=0x00000000 flags=0x00000000
+idx 13 id=0x12 ( 18) sym=hmac_event_acs_response handler_word=0x00000000 flags=0x00000000
+idx 14 id=0x14 ( 20) sym=hmac_mgmt_send_disasoc_deauth_event handler_word=0x00000000 flags=0x00000000
+idx 15 id=0x15 ( 21) sym=hmac_mgmt_send_disasoc_deauth_event handler_word=0x00000000 flags=0x00000000
+idx 16 id=0x16 ( 22) sym=hmac_chan_switch_to_new_chan_complete handler_word=0x00000000 flags=0x00000000
+idx 17 id=0x18 ( 24) sym=hmac_mgmt_tbtt_event handler_word=0x00000000 flags=0x00000000
+idx 18 id=0x19 ( 25) sym=hmac_dfs_radar_detect_event handler_word=0x00000000 flags=0x00000000
+idx 19 id=0x1a ( 26) sym=hmac_proc_disasoc_misc_event handler_word=0x00000000 flags=0x00000000
+idx 20 id=0x1d ( 29) sym=hmac_acs_process_rescan_event handler_word=0x00000000 flags=0x00000000
+idx 21 id=0x1f ( 31) sym=hmac_csi_complete handler_word=0x00000000 flags=0x00000000
+idx 22 id=0x22 ( 34) sym=hmac_sr_bss_color_change_event handler_word=0x00000000 flags=0x00000000
+idx 23 id=0x23 ( 35) sym=hmac_sr_syn_parameter_event handler_word=0x00000000 flags=0x00000000
+idx 24 id=0x24 ( 36) sym=hmac_chr_report_msg handler_word=0x00000000 flags=0x00000000
+idx 25 id=0x26 ( 38) sym=hmac_config_set_security_port_event handler_word=0x00000000 flags=0x00000000
+idx 26 id=0x27 ( 39) sym=hmac_update_fbt_scan_result handler_word=0x00000000 flags=0x00000000
+idx 27 id=0x25 ( 37) sym=hmac_pfm_detect_process_event handler_word=0x00000000 flags=0x00000000

@@ -1,0 +1,545 @@
+diff -Nur a/hi5622_crx_gate.c b/hi5622_crx_gate.c
+--- a/hi5622_crx_gate.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_crx_gate.c	2026-11-25 13:37:33.546506231 +0700
+@@ -0,0 +1,303 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_crx_gate.c - CRX delivery contract decoder + read-only firmware
++ * gate probe for the Hi5622V100 clean-room host (Cudy WR3000 v2.0).
++ *
++ * ORIGINAL clean-room code (lane wifi-rx-crx-gating, shared task task-164).
++ * No vendor source/object code, firmware byte, calibration value or per-unit
++ * identity is reproduced; every constant is a derived fact cited in
++ * REPORT.md with its firmware CPU address.
++ *
++ * The portable half (decoder + classifier) is device-free and pinned by
++ * tools/crx_gate_selftest.c.  The kernel half performs READ-ONLY reads of
++ * the mapped BAR0 windows (all six inbound regions are host-visible; the
++ * firmware-RAM and device-IO objects are read through the same range-checked
++ * translation the rest of the driver uses).  It performs NO device write,
++ * allocates nothing and holds no lock across a read.
++ */
++#include "hi5622_crx_gate.h"
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/pci.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#include "hi5622_driver.h"
++#include "hi5622_hcc.h"
++#else
++#include <errno.h>
++#include <string.h>
++#endif
++
++/* ===================================================================
++ * 1. Strict CRX wire decode (portable)
++ * =================================================================== */
++int hcg_decode_crx(hcg_u32 total, const hcg_u8 *data, struct hcg_decode *out)
++{
++	hcg_u16 tag, len, hdr_total;
++	hcg_u8 group, id, channel;
++	const hcg_u8 *info;
++	const hcg_u8 *frame;
++	hcg_s8 rssi;
++
++	if (!data || !out)
++		return -EINVAL;
++	if (total < HCG_PREFIX_LEN + HCG_MIN_FRAME_LEN)
++		return -ENODATA;
++	if (total > HCG_FW_TOTAL_CAP)
++		return -EMSGSIZE;
++	tag = (hcg_u16)data[10] | ((hcg_u16)data[11] << 8);
++	if (tag != HCG_TAG)
++		return -EPROTO;
++	group = data[0] & 0x0fu;
++	if (group != HCG_GROUP_HMAC)
++		return -EPROTO;
++	id = (hcg_u8)data[6] | ((hcg_u8)data[7] << 8);
++	if (id != HCG_ID_CRX)
++		return -EPROTO;
++	hdr_total = (hcg_u16)data[4] | ((hcg_u16)data[5] << 8);
++	if (hdr_total != total)
++		return -EPROTO;
++	info = data + HCG_HCC_HDR_LEN;
++	len = (hcg_u16)info[HCG_INFO_FRAME_LEN] |
++	      ((hcg_u16)info[HCG_INFO_FRAME_LEN + 1] << 8);
++	if (len != total - HCG_PREFIX_LEN)
++		return -EPROTO;
++	if (len < HCG_MIN_FRAME_LEN || len > HCG_MAX_FRAME_LEN)
++		return -EMSGSIZE;
++	if (info[HCG_INFO_FLAG] == 0)
++		return -ENODATA;
++	channel = info[HCG_INFO_CHANNEL];
++	if (!(channel == 14u || (channel >= 1u && channel <= 13u) ||
++	      (channel >= 32u && channel <= 177u)))
++		return -ERANGE;
++	rssi = (hcg_s8)info[HCG_INFO_RSSI];
++	if (rssi > 0 || rssi < -120)
++		return -ERANGE;
++	frame = data + HCG_PREFIX_LEN;
++	if ((frame[0] & HCG_FC_VERSION_MASK) != 0u)
++		return -EPROTO;
++	if ((frame[0] & HCG_FC_TYPE_MASK) != 0u)
++		return -EPROTO;
++	out->channel = channel;
++	out->rssi = rssi;
++	out->frame_len = len;
++	out->dst_nibble = (hcg_u8)((data[1] >> 4) & 0x0fu);
++	out->frame = frame;
++	return 0;
++}
++
++/* ===================================================================
++ * 2. Verdict classifier (portable, pure)
++ * =================================================================== */
++enum hcg_verdict hcg_classify(const struct hcg_probe *p)
++{
++	hcg_u32 i, trigger = 0, producer = 0;
++	bool mac_rx_bit;
++
++	if (!p)
++		return HCG_V_REFUSED;
++	if (!p->mac_ok)
++		return HCG_V_MAC_UNREADABLE;
++	if (!p->fw_ok)
++		return HCG_V_FW_UNREADABLE;
++	for (i = 0; i < HCG_FW_DR_COUNT; i++) {
++		trigger += p->fw_dr_trigger[i];
++		producer |= p->fw_dr_producer[i];
++	}
++	mac_rx_bit = (p->mac_status & (1u << HCG_MAC_RX_STATUS_BIT)) != 0u;
++	if (p->crx_seen != 0u)
++		return (mac_rx_bit || p->mac_cmp_wptr != 0u) ?
++		       HCG_V_CRX_AND_DATA : HCG_V_CRX_ONLY;
++	if (producer == 0u && trigger == 0u && p->d2h_frames_seen == 0u)
++		return HCG_V_FW_MACHINERY_IDLE;
++	/* The measured silent state: the MAC prefetched its 32 free buffers
++	 * at init (rptr 0x20) and never produced a completion, never raised the
++	 * RX status bit.  The firmware D2H machinery is alive (ready/heartbeat
++	 * frames seen) but no CRX arrived, i.e. the firmware RX input is dry. */
++	if (!mac_rx_bit && p->mac_cmp_wptr == 0u &&
++	    p->mac_norm_rptr == HCG_MAC_PREFETCH_EXPECTED &&
++	    p->mac_small_rptr == HCG_MAC_PREFETCH_EXPECTED)
++		return HCG_V_MAC_RX_IDLE;
++	return HCG_V_INCONSISTENT;
++}
++
++const char *hcg_verdict_name(enum hcg_verdict v)
++{
++	switch (v) {
++	case HCG_V_REFUSED:           return "REFUSED";
++	case HCG_V_MAC_UNREADABLE:    return "MAC-UNREADABLE";
++	case HCG_V_FW_UNREADABLE:     return "FW-UNREADABLE";
++	case HCG_V_FW_MACHINERY_IDLE: return "FW-D2H-IDLE";
++	case HCG_V_MAC_RX_IDLE:       return "MAC-RX-IDLE-UPSTREAM";
++	case HCG_V_CRX_ONLY:          return "CRX-DELIVERED";
++	case HCG_V_CRX_AND_DATA:      return "CRX-AND-DATA";
++	case HCG_V_INCONSISTENT:      return "INCONSISTENT";
++	default:                      return "UNKNOWN";
++	}
++}
++
++const char *hcg_verdict_reason(enum hcg_verdict v)
++{
++	switch (v) {
++	case HCG_V_REFUSED:
++		return "probe refused (driver not armed/windows not programmed)";
++	case HCG_V_MAC_UNREADABLE:
++		return "MAC band0 CA 0x40050000 or mask CA 0x40040048 unreadable";
++	case HCG_V_FW_UNREADABLE:
++		return "firmware hcc instance/DR records unreadable through BAR0";
++	case HCG_V_FW_MACHINERY_IDLE:
++		return "no D2H deposit ever: firmware D2H machinery not running";
++	case HCG_V_MAC_RX_IDLE:
++		return "firmware D2H alive but MAC RX idle: no completion, no RX status bit2, prefetch-only 0x20 - the missing input is upstream of CRX delivery (MAC/DMAC RX hardware config)";
++	case HCG_V_CRX_ONLY:
++		return "group-1 id-13 CRX frames are being delivered; host-ring data still idle (expected for management-only traffic)";
++	case HCG_V_CRX_AND_DATA:
++		return "CRX and host-ring RX activity both present";
++	case HCG_V_INCONSISTENT:
++		return "unexpected state: record the raw fields before any further action";
++	default:
++		return "unknown verdict";
++	}
++}
++
++#ifdef __KERNEL__
++/* ===================================================================
++ * 3. Read-only probe (kernel)
++ * =================================================================== */
++static hcg_u32 hcg_read_ca(struct hi5622_pci *ctx, hcg_u32 ca, bool *ok)
++{
++	hcg_u32 bar0 = hi5622_ca_to_bar0(ca);
++	hcg_u32 v;
++
++	if (!bar0 || !ok) {
++		if (ok)
++			*ok = false;
++		return 0;
++	}
++	v = readl(ctx->bar0 + bar0);
++	if (v == 0xffffffffu) {
++		*ok = false;
++		return 0;
++	}
++	return v;
++}
++
++int hi5622_crx_gate_probe(struct hi5622_pci *ctx, struct hcg_probe *p)
++{
++	struct hi5622_hcc_service *svc;
++	bool ok = true, fw_ok = true;
++	hcg_u32 i;
++
++	if (!ctx || !p || !ctx->bar0)
++		return -ENODEV;
++	if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed)
++		return -EBUSY;
++	svc = ctx->hcc;
++	memset(p, 0, sizeof(*p));
++
++	/* MAC live bank (band 0): the RX-direction mirror of the TXQ proof. */
++	p->mac_status = hcg_read_ca(ctx, HCG_MAC_CA_BAND0 + HCG_MAC_OFF_STATUS, &ok);
++	p->mac_norm_rptr = hcg_read_ca(ctx,
++			HCG_MAC_CA_BAND0 + HCG_MAC_OFF_NORM_RPTR, &ok);
++	p->mac_small_rptr = hcg_read_ca(ctx,
++			HCG_MAC_CA_BAND0 + HCG_MAC_OFF_SMALL_RPTR, &ok);
++	p->mac_cmp_wptr = hcg_read_ca(ctx,
++			HCG_MAC_CA_BAND0 + HCG_MAC_OFF_CMP_WPTR, &ok);
++	p->mac_mask = hcg_read_ca(ctx,
++			HCG_MAC_CFG_CA_BAND0 + HCG_MAC_OFF_MASK, &ok);
++	p->mac_ok = ok;
++
++	/* Firmware D2H objects: hcc instance in the ROM/WRAM inbound region. */
++	p->fw_hcc_instance = hcg_read_ca(ctx, HCG_FW_HCC_INSTANCE_CA, &fw_ok);
++	p->fw_dr_base = hcg_read_ca(ctx,
++		HCG_FW_HCC_INSTANCE_CA + HCG_FW_INST_OFF_DR, &fw_ok);
++	if (fw_ok && (p->fw_dr_base < HCG_FW_RAM_CA_LO ||
++		      p->fw_dr_base > HCG_FW_RAM_CA_HI -
++		      HCG_FW_DR_STRIDE * HCG_FW_DR_COUNT))
++		fw_ok = false;
++	if (fw_ok) {
++		for (i = 0; i < HCG_FW_DR_COUNT; i++) {
++			hcg_u32 rec = p->fw_dr_base + i * HCG_FW_DR_STRIDE;
++
++			p->fw_dr_producer[i] = hcg_read_ca(ctx,
++				rec + HCG_FW_DR_OFF_PRODUCER, &fw_ok);
++			p->fw_dr_progress[i] = hcg_read_ca(ctx,
++				rec + HCG_FW_DR_OFF_PROGRESS, &fw_ok);
++			p->fw_dr_trigger[i] = hcg_read_ca(ctx,
++				rec + HCG_FW_DR_OFF_TRIGGER, &fw_ok);
++			p->fw_dr_released[i] = hcg_read_ca(ctx,
++				rec + HCG_FW_DR_OFF_RELEASED, &fw_ok);
++			if (!fw_ok)
++				break;
++		}
++	}
++	p->fw_ok = fw_ok;
++
++	/* Host delivery side: the direct D2H catalogue already counted the
++	 * frames; group 1 / id 13 is the management-RX family. */
++	p->d2h_frames_seen = svc->rd.seen_count;
++	for (i = 0; i < svc->rd.seen_count; i++) {
++		const struct hi5622_d2h_seen *s = &svc->rd.seen[i];
++
++		if (s->group == HCG_GROUP_HMAC && s->id == HCG_ID_CRX) {
++			p->crx_seen = s->count;
++			p->crx_bytes = s->last_total;
++		}
++	}
++	return 0;
++}
++
++ssize_t hi5622_dp_crx_gate_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	struct hcg_probe p;
++	enum hcg_verdict v;
++	int rc, pos = 0;
++	hcg_u32 i;
++
++	if (!ctx || !ctx->dp)
++		return -ENODEV;
++	rc = hi5622_crx_gate_probe(ctx, &p);
++	if (rc)
++		return rc;
++	v = hcg_classify(&p);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"crx_gate (READ-ONLY firmware delivery-gate probe; no device writes)\n");
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"verdict: %s - %s\n",
++		hcg_verdict_name(v), hcg_verdict_reason(v));
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"MAC band0 CA 0x%08x: status=0x%08x mask=0x%08x (expect 0x%08x)\n",
++		HCG_MAC_CA_BAND0, p.mac_status, p.mac_mask,
++		HCG_MAC_MASK_EXPECTED);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"MAC rings: norm_rptr=0x%08x small_rptr=0x%08x cmp_wptr=0x%08x (prefetch-only state is 0x20/0x20/0x0; RX status bit%d=%u)\n",
++		p.mac_norm_rptr, p.mac_small_rptr, p.mac_cmp_wptr,
++		HCG_MAC_RX_STATUS_BIT,
++		(p.mac_status >> HCG_MAC_RX_STATUS_BIT) & 1u);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"firmware: hcc_instance CA 0x%08x (expect 0x%08x) dr_base CA 0x%08x readable=%u\n",
++		p.fw_hcc_instance, HCG_FW_HCC_INSTANCE_CA,
++		p.fw_dr_base, p.fw_ok ? 1u : 0u);
++	if (p.fw_ok) {
++		for (i = 0; i < HCG_FW_DR_COUNT; i++)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				"  DR%u: producer=0x%08x progress=0x%08x trigger=%u released=%u\n",
++				i, p.fw_dr_producer[i], p.fw_dr_progress[i],
++				p.fw_dr_trigger[i], p.fw_dr_released[i]);
++	}
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"host D2H catalogue: entries=%u crx(g1 id13)=%u last_crx_bytes=%u\n",
++		p.d2h_frames_seen, p.crx_seen, p.crx_bytes);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"expected CRX wire form: total=60+frame_len, id=13, group=1, channel=info+7, len=info+0x11, rssi=info+0x27, len+60<=0x680 (firmware builder CPU 0xBA144)\n");
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++		"note: CA 0x4016xxxx event-controller words are NOT host-visible through the six inbound regions and are refused by construction\n");
++	return pos;
++}
++#endif /* __KERNEL__ */
+diff -Nur a/hi5622_crx_gate.h b/hi5622_crx_gate.h
+--- a/hi5622_crx_gate.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_crx_gate.h	2026-11-25 13:38:37.042441494 +0700
+@@ -0,0 +1,188 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_crx_gate.h - the management-RX (CRX) delivery contract and the
++ * read-only firmware-side gate probe for the Hi5622V100 clean-room host
++ * (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-rx-crx-gating, shared task task-164).
++ * No vendor source/object code, firmware byte, calibration value or per-unit
++ * identity is reproduced: every constant below is a derived fact from the
++ * local vendor disassembly lanes, cited in REPORT.md with the firmware CPU
++ * address that pins it.
++ *
++ * Why this file exists.  The router receives no management frames although
++ * the host RX rings are armed and the D2H receive service is alive.  Static
++ * reversal of the firmware shows the CRX path itself is COMPLETE and
++ * autonomous: the firmware builds the D2H management-RX message itself
++ * (group 1 / id 13) with a strict 60 + frame_len wire form and needs no host
++ * message, mask or ring to do it.  What is missing is the *input*: the
++ * firmware's RX forwarding pipeline never runs because no received frame
++ * reaches it.  This module implements the delivery-side contract (strict
++ * frame decoder, so a CRX message can never be half-decoded) and the
++ * read-only probe that attributes the silence to the MAC RX hardware, the
++ * firmware RX machinery, or the host delivery path - with no device writes.
++ *
++ * Evidence markers: [V] decoded from the named local firmware image (CPU
++ * address = file offset + 0x40000); [V*] bench-measured by an earlier lane
++ * and quoted from the project reports; [I] inference; [U] unknown.
++ */
++#ifndef _HI5622_CRX_GATE_H
++#define _HI5622_CRX_GATE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#include <linux/device.h>
++struct hi5622_pci;
++typedef u8  hcg_u8;
++typedef u16 hcg_u16;
++typedef u32 hcg_u32;
++typedef s8  hcg_s8;
++#else
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  hcg_u8;
++typedef uint16_t hcg_u16;
++typedef uint32_t hcg_u32;
++typedef int8_t   hcg_s8;
++#endif
++
++/* ===================================================================
++ * 1. The CRX wire contract [V] (firmware CPU 0xBA0AA - 0xBA17A)
++ *
++ * The firmware builds the D2H management-RX message inside the handler at
++ * CPU 0xB9780 (registered as its group-2 id-2/id-5 dispatch entry):
++ *
++ *   hdr[0]  group nibble = 1      (mov.w sb,#1 at 0xBA0AA, bfi at 0xBA14A)
++ *   hdr[6]  id = 13               (movs r3,#0xd / strb [r4,#6] at 0xBA150)
++ *   hdr[4]  total = frame_len+60  (ldrh [info+0x11] + 0x3c, 0xBA0F8,0xBA146)
++ *   hdr[1]  dst nibble           (info[+2] << 4, 0xBA15C-0xBA166)
++ *   hdr[2..3] metadata bytes     (info[+1], info[+0], 0xBA168-0xBA172)
++ *   payload 48-byte RX info      (memcpy 0x30 B at 0xBA022-0xBA02A)
++ *   payload+48 802.11 MPDU       (frame_len bytes, 0xBA050-0xBA062)
++ *
++ * The 48-byte RX info fields the host consumes [V]:
++ *   +0x07 u8  channel            (host hmac_rx_mgmt_send_to_host msg+31)
++ *   +0x11 u16 frame_len          (host cross-check data+29 vs total-60)
++ *   +0x27 s8  RSSI               (host clamp(100+rssi))
++ *   +0x06 u8  forward flag       (firmware drops when 0: 0xBA134)
++ *   +0x02 u8  header length      (firmware compare vs len: 0xB9A84)
++ *
++ * Firmware-side hard cap: total = len+60 must be <= 0x680 (0xBA110-0xBA118).
++ * =================================================================== */
++#define HCG_GROUP_HMAC        1u    /* [V] host hmac D2H dispatch table   */
++#define HCG_ID_CRX            13u   /* [V] id -> hmac_rx_process_mgmt_event */
++#define HCG_HCC_HDR_LEN       12u
++#define HCG_RX_INFO_LEN       48u
++#define HCG_PREFIX_LEN        (HCG_HCC_HDR_LEN + HCG_RX_INFO_LEN)
++#define HCG_FW_TOTAL_CAP      0x680u
++#define HCG_MAX_FRAME_LEN     (HCG_FW_TOTAL_CAP - HCG_PREFIX_LEN)
++#define HCG_MIN_FRAME_LEN     10u
++#define HCG_TAG               0x5a5au
++
++#define HCG_INFO_CHANNEL      0x07u
++#define HCG_INFO_FRAME_LEN    0x11u
++#define HCG_INFO_RSSI         0x27u
++#define HCG_INFO_FLAG         0x06u
++#define HCG_INFO_HDRLEN       0x02u
++
++/* 802.11 management frame control: version 0, type 0 (management). */
++#define HCG_FC_TYPE_MASK      0x0cu
++#define HCG_FC_VERSION_MASK   0x03u
++
++/* ===================================================================
++ * 2. The firmware-side gate matrix (what a silent state is ranked by)
++ *
++ * MAC live bank = machw array word 8, CA 0x40050000 band 0 [V rx-static]:
++ *   +0x00 host-MAC interrupt status, +0x08 norm free-ring rptr,
++ *   +0x0c small free-ring rptr, +0x10 completion-ring wptr.
++ *   RX status bit = 2 (0x04) [V shuangta_irq_host_mac_isr].
++ *   Config mask CA 0x40040000 +0x48, vendor live value 0xfffffcc1.
++ *
++ * Firmware D2H machinery [V ete-engine / d2h-direct lanes]:
++ *   hcc instance CA 0x0010C0F4 [V*], +0x14 = DR record array base CA
++ *   (0x354 B per DR channel; DR0 = record 0 at CA 0x0010F2B8).
++ *   record +0x0c packed producer, +0x10 progress index,
++ *   +0x344 sending-trigger counter, +0x34c released-node counter.
++ * The firmware image does NOT access the MAC host-interface blocks
++ * 0x40040000/0x40050000 (whole-image literal census: only the constants
++ * 0x40041001/0x40042000 appear, used as data/base values, never as register
++ * accesses) - so those ring words are consumed by the MAC hardware only.
++ * =================================================================== */
++#define HCG_MAC_CA_BAND0      0x40050000u
++#define HCG_MAC_CFG_CA_BAND0  0x40040000u
++#define HCG_MAC_OFF_STATUS    0x00u
++#define HCG_MAC_OFF_MASK      0x48u
++#define HCG_MAC_OFF_NORM_RPTR 0x08u
++#define HCG_MAC_OFF_SMALL_RPTR 0x0cu
++#define HCG_MAC_OFF_CMP_WPTR  0x10u
++#define HCG_MAC_RX_STATUS_BIT 2u
++#define HCG_MAC_MASK_EXPECTED 0xfffffcc1u
++#define HCG_MAC_PREFETCH_EXPECTED 0x20u
++
++#define HCG_FW_HCC_INSTANCE_CA 0x0010C0F4u  /* [V*] bench-read golden boot */
++#define HCG_FW_INST_OFF_DR     0x14u
++#define HCG_FW_DR_STRIDE       0x354u
++#define HCG_FW_DR_OFF_PRODUCER 0x0cu
++#define HCG_FW_DR_OFF_PROGRESS 0x10u
++#define HCG_FW_DR_OFF_TRIGGER  0x344u
++#define HCG_FW_DR_OFF_RELEASED 0x34cu
++#define HCG_FW_DR_COUNT        4u
++#define HCG_FW_RAM_CA_LO       0x00000000u  /* region 0 (ROM_WRAM)      */
++#define HCG_FW_RAM_CA_HI       0x001bffffu
++#define HCG_IO_CA_LO          0x40000000u
++#define HCG_IO_CA_HI          0x4011ffffu
++
++/* ===================================================================
++ * 3. Probe result, decode result, verdict
++ * =================================================================== */
++struct hcg_probe {
++	hcg_u32 mac_status;
++	hcg_u32 mac_mask;
++	hcg_u32 mac_norm_rptr;
++	hcg_u32 mac_small_rptr;
++	hcg_u32 mac_cmp_wptr;
++	hcg_u32 fw_hcc_instance;
++	hcg_u32 fw_dr_base;
++	hcg_u32 fw_dr_producer[HCG_FW_DR_COUNT];
++	hcg_u32 fw_dr_progress[HCG_FW_DR_COUNT];
++	hcg_u32 fw_dr_trigger[HCG_FW_DR_COUNT];
++	hcg_u32 fw_dr_released[HCG_FW_DR_COUNT];
++	hcg_u32 crx_seen;
++	hcg_u32 crx_bytes;
++	hcg_u32 d2h_frames_seen;
++	bool    mac_ok;
++	bool    fw_ok;
++};
++
++struct hcg_decode {
++	hcg_u8  channel;
++	hcg_s8  rssi;
++	hcg_u16 frame_len;
++	hcg_u8  dst_nibble;
++	const hcg_u8 *frame;
++};
++
++enum hcg_verdict {
++	HCG_V_REFUSED = 0,
++	HCG_V_MAC_UNREADABLE,
++	HCG_V_FW_UNREADABLE,
++	HCG_V_FW_MACHINERY_IDLE,
++	HCG_V_MAC_RX_IDLE,
++	HCG_V_CRX_ONLY,
++	HCG_V_CRX_AND_DATA,
++	HCG_V_INCONSISTENT,
++};
++
++int hcg_decode_crx(hcg_u32 total, const hcg_u8 *data, struct hcg_decode *out);
++enum hcg_verdict hcg_classify(const struct hcg_probe *p);
++const char *hcg_verdict_name(enum hcg_verdict v);
++const char *hcg_verdict_reason(enum hcg_verdict v);
++
++#ifdef __KERNEL__
++int hi5622_crx_gate_probe(struct hi5622_pci *ctx, struct hcg_probe *p);
++ssize_t hi5622_dp_crx_gate_show(struct device *dev,
++				struct device_attribute *attr, char *buf);
++#endif
++
++#endif /* _HI5622_CRX_GATE_H */
+diff -Nur a/hi5622_dp.c b/hi5622_dp.c
+--- a/hi5622_dp.c	2026-11-25 13:37:33.545314223 +0700
++++ b/hi5622_dp.c	2026-11-25 13:37:33.545886437 +0700
+@@ -60,6 +60,7 @@
+ #include "h2d_send.h"
+ #include "dp_rings.h"
+ #include "hi5622_dp_txrx.h"
++#include "hi5622_crx_gate.h"
+ 
+ /* Host bookkeeping + DMA area size per RX buffer (vendor: 4-byte skb word
+  * followed by the descriptor/MPDU area). */
+@@ -900,6 +901,14 @@
+ }
+ static DEVICE_ATTR_WO(h2d_txq_addr_sync);
+ 
++/* wifi-rx-crx-gating lane (task-164): READ-ONLY firmware CRX delivery-gate
++ * probe.  It reads the MAC live bank, the config mask and the firmware's
++ * group-A DR record counters through the six mapped inbound regions, then
++ * classifies why the management-RX (D2H group 1 / id 13) path is silent.
++ * It never writes a device register, never allocates and never retries. */
++static struct device_attribute dev_attr_crx_gate =
++    __ATTR(crx_gate, 0444, hi5622_dp_crx_gate_show, NULL);
++
+ /* wifi-dp-txrx lane (task-122): handler prototypes come from
+  * hi5622_dp_txrx.h; the attribute objects must live in this translation unit
+  * because the 6.18 DEVICE_ATTR_RO/WO macros define them static. */
+@@ -948,6 +957,7 @@
+     &dev_attr_dp_tx_complete_poll.attr,
+     &dev_attr_dp_mac_ext.attr,
+     &dev_attr_dp_mac_tail_init.attr,
++    &dev_attr_crx_gate.attr,
+     NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_dp);
+diff -Nur a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-25 13:37:33.545293113 +0700
++++ b/Kbuild	2026-11-25 13:37:33.545867342 +0700
+@@ -25,7 +25,7 @@
+ 		 hcc_core.o hcc_core_kernel.o \
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+ 		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+-		 hi5622_rx_live.o \
++		 hi5622_rx_live.o hi5622_crx_gate.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
