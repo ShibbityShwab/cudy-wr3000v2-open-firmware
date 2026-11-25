@@ -1,0 +1,52 @@
+== 1. static decode selftest (vendor module must exist locally) ==
+PASS vendor module sha256 pin (22fa789a3d431f49)
+PASS process table has 414 entries
+PASS process row rate_mode SET present with cfg id 401
+PASS rate_mode SET is device-processed with a device response
+PASS process row ar_dev_param SET present with cfg id 409
+PASS ar_dev_param SET is device-processed with a device response
+PASS process row hi_rate SET present with cfg id 411
+PASS hi_rate SET is device-processed with a device response
+PASS process row legacy_rate SET present with cfg id 416
+PASS legacy_rate SET is device-processed with a device response
+PASS process row ar_probe SET present with cfg id 419
+PASS ar_probe SET is device-processed with a device response
+PASS process row tpc_mode SET present with cfg id 1801
+PASS tpc_mode SET is device-processed with a device response
+PASS process row tpc_pow_lvl SET present with cfg id 1802
+PASS tpc_pow_lvl SET is device-processed with a device response
+PASS process row get_current_ration GET present with cfg id 421
+PASS get_current_ration GET is device-processed with a device response
+PASS LUT has 416 entries
+PASS rate_mode SET alg_cfg blob length = 10 header + 1 value byte
+PASS rate_mode SET value is one byte at blob+10
+PASS ar_dev_param SET blob length 15 (u8 id + u32 value)
+PASS ar_dev_param field map {u8 name-id at +10, u32 value at +11}
+PASS get_current_ration GET blob length 30 with a 6-byte MAC at +10
+PASS autorate output table has 22 per-id rows
+PASS autorate output table covers ids 401..422
+PASS tpc output table covers 1801/1802/1804/1805/1806/1809 (not 1803/1807/1808)
+PASS top-level output dispatcher has 32 id ranges
+PASS top-level range 401..422 -> alg_autorate_config_param_output_entry
+PASS top-level range 1801..1809 -> alg_tpc_bbit_config_param_output_entry
+PASS rate_mode value table = auto(0)/fixed(1)
+PASS ar_dev_param value table has 26 tuning knobs
+PASS ar_dev_param id 0 = sudden_good_delta_gdpt_ratio
+PASS legacy rate table has 12 rates (1M..54M)
+PASS tpc_fix_pow_mode = data/mag/ctrl
+PASS protocol table starts 11b/11ag/11n
+PASS rate family wire layouts decoded (57 rows)
+PASS every autorate-family id except the read-only get_current_ration has a SET layout
+PASS every autorate-family id with a GET row has a GET layout
+PASS no GET layout for gi_type/ar_probe/ar_scen_mode (write-only controls)
+PASS get_current_ration is GET-only
+decode_alg_engine: 41/41 checks PASS
+
+== 2. portable logic selftest ==
+rate_ctl_logic_selftest: 70/70 checks PASS
+
+== 3. frame cross-check against the patched driver tree ==
+files touched: 11
+frame_crosscheck_selftest: 144/144 checks PASS
+
+OK: host tests PASS (decode + logic + frame cross-check)

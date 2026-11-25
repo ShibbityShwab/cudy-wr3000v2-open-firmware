@@ -2,7 +2,8 @@
 
 **Lane:** wifi-rate-ctl (shared task task-179). **Status:** host deliverables
 committed 2026-11-25; the bench ladder is prepared for the Lead (this lane
-never contacts the device).
+never contacts the device).  Recorded: decode 41/41 + logic 70/70 + frame
+cross-check 144/144 PASS; patched module builds clean (471,580 B, 0 warnings).
 
 ## What this lane answers
 
@@ -48,6 +49,7 @@ the rate family is device-processed with the same wait-for-device flag
     ./tools/run-host-tests.sh          # decode selftest + C logic selftest
     ./tools/build-rate-ctl.sh          # apply patch to a staged copy + build
                                        # (host build; no device, no image)
+    # recorded identities are in BUILD-NOTES.md and evidence/
 
 The vendor module is read in place from
 /home/shibbityshwab/recovery-extract/lib/hisilicon/ko/hi5622v100_wifi.ko

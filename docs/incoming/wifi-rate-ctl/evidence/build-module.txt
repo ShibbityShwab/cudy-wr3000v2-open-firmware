@@ -1,0 +1,22 @@
+== 0. stage + apply the patch ==
+files touched: 11
+
+== 1. host tests ==
+
+== 3. frame cross-check against the patched driver tree ==
+files touched: 11
+frame_crosscheck_selftest: 144/144 checks PASS
+
+OK: host tests PASS (decode + logic + frame cross-check)
+
+== 2. kernel module build (project 6.18.60) ==
+module      : /tmp/wifi-rate-ctl-build/src/hi5622_wifi.ko
+size_bytes  : 471580
+sha256      : 96c541599a73a8f2ae6fa020cdfc6ce5767cbf33aa19d637a92ebd94cbd42f78
+vermagic    : 6.18.60 SMP mod_unload ARMv7 p2v8 
+params      : 11
+rate params : 3
+warnings    : 0 (compiler+modpost; 0 expected)
+log         : /tmp/wifi-rate-ctl-build/build.log
+
+OK: patched module built clean (471580 B, sha256 96c541599a73a8f2ae6fa020cdfc6ce5767cbf33aa19d637a92ebd94cbd42f78); artifact: /tmp/wifi-rate-ctl-build/artifact/hi5622_wifi.ko

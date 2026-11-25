@@ -1,0 +1,30 @@
+patch: patches/0001-rate-ctl.patch
+size_bytes: 56801
+sha256: 140a808e8db0f845becbbb5ea60afc314acfe335bec8917945d9ebf9f453c5a8
+
+applied-to: a pristine source-only copy of ../wifi-h2d-send/src
+command   : patch -p1 --batch --forward -s -d <stage> -i patches/0001-rate-ctl.patch
+
+files_touched: 11 (new: 4)
+  src/h2d_send.c
+  src/h2d_send.h
+  src/h2d_send_logic.c
+  src/h2d_send_logic.h
+  src/hcc.c
+  src/hi5622_rate_ctl.c
+  src/hi5622_rate_ctl.h
+  src/hi5622_rate_ctl_logic.c
+  src/hi5622_rate_ctl_logic.h
+  src/Kbuild
+  src/main.c
+insertions: 1424
+deletions: 10
+
+base source pins (patched files):
+69a85acff6255d0bfc19ce0c153685063d3ab79c1affce20eeca4226f77debfb  h2d_send.c
+a4bf833878cfef4041419b699fc36c7688f52e4be8a775dcde00ff507b4c73ca  h2d_send.h
+e295310b73c5f8f733e5b260a1b63555185bdcc1b356c2b66a01128c7516a4c7  h2d_send_logic.c
+d9d5c7ec03f9686d50e2e33e7a9d45bebcd3336be348c6a64049981b53da02c1  h2d_send_logic.h
+ae4cda3ff5283fb2bbe20a4bedcadc5efd3151f26d6dcbcb5afccfd7d6cab756  hcc.c
+86cd86b74e01fba06187673214d9fd5b78029a463316e31834dd456fb93faa32  main.c
+8ee7c6f468a5e0f2559316f76e13356b767266de9cfc61cdbaea807c7929fa14  Kbuild

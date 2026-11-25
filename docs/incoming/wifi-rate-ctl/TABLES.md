@@ -9,7 +9,7 @@ curated subset the driver patch and the fire recipe use.
 ## T1. The alg_cfg blob (10-byte header + value) [V]
 
     +0  u16 cfg id          +2 u8 cfg_type (0 SET / 1 GET)
-    +3  u8  pkt_type        +4 u32 dev_ret (host 0)
+    +3  u8  pkt_type (token enum 0..12; 13 = none)  +4 u32 dev_ret (host 0)
     +8  u8  need_w4 (1)     +9 u8 reserved
     +10 value[]
 

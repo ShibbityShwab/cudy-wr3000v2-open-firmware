@@ -32,9 +32,9 @@ adaptation runs on its own and the vendor host never configures it - **but the
 rate mode is host-selectable**: the deterministic-enable frame is one 39-byte
 g0 id2/key-0x0101 config event whose 11-byte alg_cfg blob is
 
-    cfg id 401 LE = 91 01 | type SET = 00 | pkt_type 00 | dev_ret 00000000 |
+    cfg id 401 LE = 91 01 | type SET = 00 | pkt_type 0d | dev_ret 00000000 |
     need_w4 01 | resv 00 | value 00 (auto)
-    => blob 91 01 00 00 00 00 00 00 01 00 00  inside the config-event frame
+    => blob 91 01 00 0d 00 00 00 00 01 00 00  inside the config-event frame
     (section 4).  The observable is the firmware's g1 id3 config-sync answer
     plus the GET readback (section 8).  Setting a static/fixed rate instead is
     the rate_mode fixed value 1, or the per-packet-type fixed blocks
@@ -187,7 +187,11 @@ model and host parser agree):
 
     +0  u16 cfg_id
     +2  u8  cfg_type     0 = SET, 1 = GET
-    +3  u8  pkt_type     0 = irrelevant (the leading packet-type token)
+    +3  u8  pkt_type     the leading packet-type token enum 0..12; 13
+                         (RC_PKT_NONE) = no token was given (the vendor
+                         encoder's own value for these commands; the 0 used
+                         by the bench-proven calibration frame is tolerated
+                         by that handler but is not the encoder output) [V]
     +4  u32 dev_ret      host writes 0; the device overwrites it
     +8  u8  need_w4_dev_return   1 = the device answers (our SETs/GETs use 1)
     +9  u8  reserved     0
@@ -197,12 +201,12 @@ Examples (cfg id / access -> blob hex):
 
 | message | blob hex | frame total |
 | --- | --- | ---: |
-| SET rate_mode auto | 91 01 00 00 00 00 00 00 01 00 00 | 39 B |
-| SET rate_mode fixed | 91 01 00 00 00 00 00 00 01 00 01 | 39 B |
-| GET rate_mode | 91 01 01 00 00 00 00 00 01 00 00 | 39 B |
-| SET ar_dev_param id 12 (tx_rate_aging_time) = 100 | 99 01 00 00 00 00 00 00 01 00 0c 64 00 00 00 | 43 B |
-| SET tpc_pow_lvl ctrl(2) level 3 | 0a 07 00 00 00 00 00 00 01 00 02 03 | 40 B |
-| GET get_current_ration for 02:00:00:00:00:01 | a5 01 01 00 00 00 00 00 01 00 02 00 00 00 00 01 (30 B) | 58 B |
+| SET rate_mode auto | 91 01 00 0d 00 00 00 00 01 00 00 | 39 B |
+| SET rate_mode fixed | 91 01 00 0d 00 00 00 00 01 00 01 | 39 B |
+| GET rate_mode | 91 01 01 0d 00 00 00 00 01 00 00 | 39 B |
+| SET ar_dev_param id 12 (tx_rate_aging_time) = 100 | 99 01 00 0d 00 00 00 00 01 00 0c 64 00 00 00 | 43 B |
+| SET tpc_pow_lvl ctrl(2) level 3 | 0a 07 00 0d 00 00 00 00 01 00 02 03 | 40 B |
+| GET get_current_ration for 02:00:00:00:00:01 | a5 01 01 0d 00 00 00 00 01 00 02 00 00 00 00 01 (30 B) | 58 B |
 
 Carrier frame: HCC group 0 id 2, key 0x0101, token/fields per
 h2d_build_g0_cfg_event: 12-byte header {group 0 | hdr[1] = (dst<<4)|0x01 |
@@ -426,12 +430,18 @@ Ordered by strength (the fire recipe uses 1-3; 4 is optional):
   config-event frame builder, D2H config-sync parser, strict grammar/value
   tables, fail-closed decision matrix.
 * src/rate_ctl_logic_selftest.c - host KATs and matrix tests.
-* patches/0001-rate-ctl.patch - the fail-closed driver patch (new module
-  surface: default-off rate_ctl parameter, WO attrs rate_mode / rate_mode_get
-  / ar_dev_param_set / ar_dev_param_get / tpc_pow_lvl / ration_get, RO
-  status/log; D2H sync capture; same SR-node/mailbox gates and one-idea budget
-  as the proven H2D path).
-* FIRE-RECIPE.md - the attended ladder R0..R3 with stop rules.
+* patches/0001-rate-ctl.patch (56,801 B, 11 files: 7 edits + 4 new) - the
+  fail-closed driver patch on the wifi-h2d-send tree: default-off rate_ctl
+  parameter + rate_ctl_fb (header field B, default 4) + rate_ctl_arbitrary
+  (raw-probe gate, default 0); WO attrs rc_rate_mode / rc_rate_mode_get /
+  rc_ar_set / rc_ar_get / rc_tpc_pow / rc_tpc_get / rc_ration_get / rc_send,
+  RO attrs rc_status / rc_log; D2H g1 id3 config-sync capture; the same
+  SR-node/mailbox gates and one-idea budget as the proven H2D path.  Built
+  clean against the project 6.18.60 tree: 471,580 B module, 11 params,
+  0 warnings (evidence/build-module.txt).
+* FIRE-RECIPE.md - the attended ladder R-1/R0..R3 with stop rules.
+* Host tests: decode 41/41, portable logic 70/70, frame cross-check 144/144
+  (evidence/host-tests.txt).
 * BUILD-NOTES.md - the pinned build chain and artifact identity.
 * evidence/ - decode selftest, generated tables, host tests, build.
 
