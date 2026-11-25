@@ -1,8 +1,8 @@
 package installed : /home/shibbityshwab/openwrt-lab-selectorfix-img/package/hi5622-wifi
 mode              : PREBUILT (no compile; the validated bytes are installed)
-module artifact   : /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
-module size/sha   : 344372 B / ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+module artifact   : /tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko
+module size/sha   : 347388 B / d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
 module vermagic   : 6.18.60 SMP mod_unload ARMv7 p2v8 
 module depends    : cfg80211
-identity manifest : prebuilt/prebuilt-sha256.txt sha256 fd059fef0ee3eb18023d77067396f67a810a082ac4e0e42f4674b6eed1a821f0
+identity manifest : prebuilt/prebuilt-sha256.txt sha256 fa36cd243b58f3034efd753c812b5001555f46f6dd6344d85f36b1cd3a528afa
 next: append ../config-delta.config to /home/shibbityshwab/openwrt-lab-selectorfix-img/.config, run make defconfig, then make -jN

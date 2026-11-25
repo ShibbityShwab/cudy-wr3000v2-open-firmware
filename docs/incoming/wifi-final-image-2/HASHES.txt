@@ -8,13 +8,22 @@
 # Image/UBI/kernel/module binaries are LOCAL artefacts, never committed:
 #   /home/shibbityshwab/wifi-final-image-2-artifacts/
 #
+# TWO BAKES IN THIS LANE (same tree/recipe; the second supersedes the first):
+#   image-2 baseline   container 0d9429ec...  module ab9e18a4... (344,372 B, 56 params)
+#   image-2 FINAL      container 8ba1ad22...  module d2c608e7... (347,388 B, 57 params,
+#                      + EAPOL/data RX refill watermark from task-156)
+# The FINAL image is the one below (container 8ba1ad22...); it reproduced
+# byte-identically in the three recorded runs after the final payload edit
+# (05:48:53Z, 05:49:20Z, 05:49:33Z; the 05:48:53 verifier failure was a
+# verifier-wording bug fixed without changing image bytes).
+#
 # ===========================================================================
 # BUILD ENVIRONMENT PINS
 # ===========================================================================
 openwrt_tree                = /home/shibbityshwab/openwrt-lab-selectorfix-img
 tree_git_head               = 27663a0 (asserted)
 tree_config_sha256          = 9052d5e36fd30e6c59276910f2b286d5a109a5dffd03f3a8e1386aece0ed075d
-built_kernel_config_sha256  = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (pre == post, both runs)
+built_kernel_config_sha256  = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (pre == post, every run)
 target_kernel_config_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
 profile                     = DEVICE_cudy_wr3000-v2 (hisilicon/luofu)
 kernel                      = linux-6.18.60, OpenWrt GCC 14.4.0, arm_cortex-a9 musl-eabi
@@ -23,11 +32,13 @@ kernel                      = linux-6.18.60, OpenWrt GCC 14.4.0, arm_cortex-a9 m
 # FINAL IMAGE #2 - the container (sysupgrade .bin, the flash unit)
 # ===========================================================================
 container_size             = 7,188,799 B
-container_sha256           = 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
-container_before_sha256    = 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
-                             (three recorded bakes are byte-identical -> reproducible)
+container_sha256           = 8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
+container_reproduced       = 3x byte-identical (build-evidence/build-runs.txt)
 predecessor_container      = 8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
                              (wifi-hostapd-sae image B, the SAE-hostapd base of this image)
+superseded_first_bake      = 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+                             (same image with the pre-watermark module ab9e18a4; kept as
+                              history in build-evidence/build-runs.txt)
 
 # ===========================================================================
 # KERNEL SLICE - UNCHANGED (rootfs-only successor)
@@ -44,28 +55,29 @@ kernel_cmdline             = CONFIG_CMDLINE / CONFIG_CMDLINE_FORCE=y in the buil
 # ROOTFS (rebuilt; the only changed flash member)
 # ===========================================================================
 rootfs_ubi_size            = 3,801,088 B
-rootfs_ubi_sha256          = 44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
-root_squashfs_size         = 3,316,684 B
-root_squashfs_sha256       = f0f970e20d9ea412f6f535c835cadbb57655824d3236a0f63243f394a7dc7a94
-rootfs_ubi_volume_size     = 3,317,760 B (root.squashfs + 1,076 B zero padding)
+rootfs_ubi_sha256          = 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
+root_squashfs_size         = 3,318,696 B
+root_squashfs_sha256       = cb42bfed25a12698770236b44bb8e73fafcf362d7571911f6470374090ce0578
+rootfs_ubi_volume_size     = 3,321,856 B (root.squashfs + 3,160 B zero padding)
 mtd14_rootfsb_size         = 24,379,392 B (0x1740000); 20,578,304 B free -> FITS
 manifest_packages          = 83 (hostapd-mbedtls, hostapd-common, libmbedtls21, iw,
                              wireless-regdb, wifi-scripts, kmod-hi5622-wifi,
                              kmod-hi5622-cfg80211; NO hostapd-mini)
 
 # ===========================================================================
-# kmod-hi5622-wifi - THE CORRECTED FINAL ASSOCIATION MODULE
+# kmod-hi5622-wifi - CORRECTED FINAL ASSOCIATION + RX-WATERMARK MODULE
 # ===========================================================================
-module_artifact_path       = /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
-module_artifact_size       = 344,372 B
-module_artifact_sha256     = ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
-module_artifact_params     = 56
+module_artifact_path       = /tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko
+                             (durable gitignored copy: build/wifi-rx-watermark/hi5622_wifi.stripped.ko)
+module_artifact_size       = 347,388 B
+module_artifact_sha256     = d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+module_artifact_params     = 57 (baseline 56 + rx_refill_wm)
 module_artifact_vermagic   = 6.18.60 SMP mod_unload ARMv7 p2v8
 module_artifact_depends    = cfg80211
 module_artifact_license    = GPL
-module_installed_size      = 325,932 B (/lib/modules/6.18.60/hi5622_wifi.ko)
-module_installed_sha256    = 4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
-module_text_size           = 144,572 B (.text; installed == artifact, strip removed only symbols/debug)
+module_installed_size      = 328,788 B (/lib/modules/6.18.60/hi5622_wifi.ko)
+module_installed_sha256    = b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
+module_text_size           = 146,448 B (.text; installed == artifact, strip removed only symbols/debug)
 module_carrier             = CORRECTED mgmt-TX carrier: raw HCC g0 id6 control message
                              (12-B HCC header + 48-B device TX control + inline frame);
                              completion DMAC 0x01F3 -> host g2 id13.  The superseded
@@ -73,9 +85,15 @@ module_carrier             = CORRECTED mgmt-TX carrier: raw HCC g0 id6 control m
 module_carrier_evidence    = hardware-accepted on the bench: posted 86 B, consumed 0 polls
                              (recorded by the sibling-gpl/wifi-stability wave; this exact
                              combined module was NOT re-fired by this lane)
-module_source_chain        = final all-patch tree (5b587949) + wpa3-sae + ap-mgmt
-                             + sta-ops + data-tx + sibling-gpl patch
-                             0001-mgmt-tx-hcc-g0id6-carrier.patch
+module_watermark           = rx_refill_wm: uint, percent of RX ring depth (0..100, 0 =
+                             watermark disabled), DEFAULT 75 (keep >= 3/4 of both RX free
+                             rings posted, ath11k-style).  FAIL-CLOSED at boot: inert unless
+                             the operator sets rx_enable=1 and writes dp_rx_arm; the drain
+                             only re-publishes buffers returned by validated completions.
+module_source_chain        = final association tree 251d08f0 (all-patch 5b587949 +
+                             wpa3-sae + ap-mgmt + sta-ops + data-tx)
+                             + wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch
+                             + wifi-rx-watermark/patches/0001-rx-refill-watermark.patch
 
 # ===========================================================================
 # HOSTAPD / USERSPACE CARRIED IN THE IMAGE
@@ -94,17 +112,17 @@ kmods                      = /lib/modules/6.18.60/{cfg80211,hi5622_wifi}.ko, car
 # ===========================================================================
 # ROOTFS PAYLOAD (byte-identical in the image; hashes from build-evidence/payload-manifest.txt)
 # ===========================================================================
-6ff692c535549dc239e3a1ff3bfc8babd7218367432a8ff4313bd8b24e2dc4cf  etc/config/hi5622
-8f278072f07bca5fc5ad263cb5495d221437a7474880a58b8ad2ed07186476f6  etc/hi5622/FIRMWARE-POLICY.txt
+1b0a2727799381039411c47c179b65b5681a6f4e7f67d8cb398c6f22dc5d5073  etc/config/hi5622
+608a73f4d4b59c4b75a43f8a4fdda67fb886fa9198871e948ff2d25f140f7042  etc/hi5622/FIRMWARE-POLICY.txt
 f776437e6162b59cc63e47769f7a8e51c6991e2b210cc377669c7dbbe72f67d3  etc/hi5622/hostapd-open.conf
 bfc7faaf645e1afa08fe362d1023d0d476e06b8435a606be521ea37be108d935  etc/hi5622/hostapd-open.proven.conf
 d1f5f67cf2ee7bca656230c2104ab85fce120bf3392b97fc5e615c82634df09a  etc/hi5622/hostapd-wpa2.conf
 be3797285f8584c85775290205efa119cfb6ff720a2008cb540e7a40f207409e  etc/hi5622/hostapd-wpa2-hardened.conf
 d824fd1381881f62d255e26175b8e44e892e6c071190b68445e37ea05b3018af  etc/hi5622/hostapd-wpa2-wpa3.conf
 6ba5d4f1c6f7ed66a862bbc46e724b8bbf5c12e8e236eec43e58124cf5c4fd05  etc/hi5622/hostapd-wpa3-sae.conf
-5cd9f4eb6136cec0c8b992e8514872118c60b777b1a888f2e1ac26e6f8879097  etc/init.d/hi5622-wifi
-1175f50faae5e7e3849b978c47ec06f57b4050cc8c391beb1e99f3183e6513c5  etc/modprobe.d/hi5622-wifi.conf
-7267d5f13db1a7b2a92fc3c29a5178ba6dc59cf9bd967329b9ba7c7448cd40a0  usr/sbin/hi5622-load
+93c820724eb4f15d3aff9b9edf573f3ccba381ba906bdef35db9c1a007caec9f  etc/init.d/hi5622-wifi
+ae3f72ae732e9126c2fe00233ee496618adc7c6c3c26e43cb1d73e513751cd7b  etc/modprobe.d/hi5622-wifi.conf
+4002a309ac385371db12deb40cd911de3c2bdd6257c1bb040b02a3ea253eaf40  usr/sbin/hi5622-load
 
 # ===========================================================================
 # POLICY

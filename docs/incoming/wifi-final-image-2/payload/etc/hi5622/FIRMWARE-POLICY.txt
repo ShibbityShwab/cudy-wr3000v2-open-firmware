@@ -22,9 +22,9 @@ removes them.  This is deliberate: see PACKAGING.md in
 docs/incoming/wifi-image-polish/ for the full policy and the commands.
 
 The driver module itself IS in this image (/lib/modules/6.18.60/hi5622_wifi.ko,
-the CORRECTED FINAL ASSOCIATION build 344,372 B sha256 ab9e18a4..., installed
-stripped form recorded in ../HASHES.txt) because it is our clean-room GPL code,
-not vendor-derived.
+the CORRECTED FINAL ASSOCIATION + RX-WATERMARK build 347,388 B sha256
+d2c608e7..., 57 params, installed stripped form recorded in ../HASHES.txt)
+because it is our clean-room GPL code, not vendor-derived.
 
 Upstream note: the packaged default fw_path is the research PD4 name only
 because the bench image is a research instrument.  An upstreamable driver

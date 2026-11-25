@@ -4,16 +4,18 @@
 # hi5622-load - one-shot bring-up of the clean-room Hi5622V100 Wi-Fi driver
 # on the Cudy WR3000 v2.0 FINAL IMAGE #2 (OpenWrt, kernel 6.18.60).
 #
-# MODULE: the CORRECTED FINAL ASSOCIATION clean-room driver, 344,372 B
-# sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e,
-# 56 module parameters, vermagic "6.18.60 SMP mod_unload ARMv7 p2v8",
+# MODULE: the CORRECTED FINAL ASSOCIATION + RX-WATERMARK clean-room driver,
+# 347,388 B sha256 d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6,
+# 57 module parameters, vermagic "6.18.60 SMP mod_unload ARMv7 p2v8",
 # depends=cfg80211.  Chain: final all-patch tree + wpa3-sae + ap-mgmt +
 # sta-ops + data-tx + the CORRECTED mgmt-TX carrier (HCC g0 id6 control
-# message, not the old host-internal WAL 0x01F2).  Hardware-accepted carrier:
-# 86 B posted, consumed 0 polls; RX live bank CA 0x40050000 armed status 0x182.
-# The AP / WPA2-GTK / WPA3-on-air milestones were fired on earlier modules of
-# this chain; this exact combined module is NOT yet fired (the association
-# ladder is the first run).  See docs/incoming/wifi-final-image-2/.
+# message, not the old host-internal WAL 0x01F2) + the EAPOL/data RX refill
+# watermark (rx_refill_wm; default 75, fail-closed/inert until the attended
+# RX drain).  Hardware-accepted carrier: 86 B posted, consumed 0 polls; RX
+# live bank CA 0x40050000 armed status 0x182.  The AP / WPA2-GTK /
+# WPA3-on-air milestones were fired on earlier modules of this chain; this
+# exact combined module is NOT yet fired (the association ladder is the first
+# run).  See docs/incoming/wifi-final-image-2/.
 #
 # WHY THIS SCRIPT EXISTS
 #   The module parameters are load-time only and the shipped image's modprobe
@@ -142,6 +144,7 @@ VAP_START_MODULE=$(uci_get main.vap_start_module '0')
 SCAN_DWELL_MS=$(uci_get main.scan_dwell_ms '60')
 HCC_POLL_MS=$(uci_get main.hcc_poll_ms '5')
 RX_ENABLE=$(uci_get main.rx_enable '1')
+RX_REFILL_WM=$(uci_get main.rx_refill_wm '75')
 BEACON_STATIC=$(uci_get main.beacon_static '1')
 BEACON_VAP_START=$(uci_get main.beacon_vap_start '1')
 WPA_KEYS=$(uci_get main.wpa_keys '1')
@@ -181,7 +184,7 @@ DRV_KO="$KODIR/hi5622_wifi.ko"
 
 log "kernel $REL; module $DRV_KO; fw_path=$FW_PATH"
 log "defaults: allow_frames=$ALLOW_FRAMES frame_gap_ms=$FRAME_GAP_MS h2d_send_budget=$H2D_SEND_BUDGET vap_start_mode=$VAP_START_MODE vap_start_first=$VAP_START_FIRST scan_dwell_ms=$SCAN_DWELL_MS hcc_poll_ms=$HCC_POLL_MS"
-log "features: rx_enable=$RX_ENABLE beacon_static=$BEACON_STATIC beacon_vap_start=$BEACON_VAP_START wpa_keys=$WPA_KEYS wpa_key_module=$WPA_KEY_MODULE sta_join=$STA_JOIN ht_mode=$HT_MODE vht_cap=$VHT_CAP band_vendor=$BAND_VENDOR scan_band_cfg=$SCAN_BAND_CFG"
+log "features: rx_enable=$RX_ENABLE rx_refill_wm=$RX_REFILL_WM beacon_static=$BEACON_STATIC beacon_vap_start=$BEACON_VAP_START wpa_keys=$WPA_KEYS wpa_key_module=$WPA_KEY_MODULE sta_join=$STA_JOIN ht_mode=$HT_MODE vht_cap=$VHT_CAP band_vendor=$BAND_VENDOR scan_band_cfg=$SCAN_BAND_CFG"
 log "association (fail-closed unless the fire enables them): mgmt_tx=$MGMT_TX mgmt_rx=$MGMT_RX sta_ops=$STA_OPS eapol_rx=$EAPOL_RX sta_user_del=$STA_USER_DEL data_tx=$DATA_TX data_tx_peer=$DATA_TX_PEER data_tx_protect=$DATA_TX_PROTECT data_tx_timeout_ms=$DATA_TX_TIMEOUT_MS"
 [ "$DRY_RUN" -eq 1 ] && log "dry-run: no module load, no device write, no hostapd start"
 
@@ -236,6 +239,7 @@ else
 		"stop_ap_mode=$STOP_AP_MODE" \
 		"mgmt_diag=$MGMT_DIAG" \
 		"rx_enable=$RX_ENABLE" \
+		"rx_refill_wm=$RX_REFILL_WM" \
 		"beacon_static=$BEACON_STATIC" \
 		"beacon_vap_start=$BEACON_VAP_START" \
 		"wpa_keys=$WPA_KEYS" \
@@ -268,6 +272,7 @@ else
 		verify_param h2d_send_budget "$H2D_SEND_BUDGET"
 		verify_param vap_start_mode "$VAP_START_MODE"
 		verify_param rx_enable "$RX_ENABLE"
+		verify_param rx_refill_wm "$RX_REFILL_WM"
 		verify_param beacon_static "$BEACON_STATIC"
 		verify_param wpa_keys "$WPA_KEYS"
 		verify_param mgmt_tx "$MGMT_TX"

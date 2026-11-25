@@ -6,15 +6,19 @@
 #
 # Successor of the wifi-hostapd-sae image B (container 8944740e...): same
 # rootfs-only recipe (SAE-capable hostapd-mbedtls, iw/iwinfo/ucode/regdb, the
-# clean-room cfg80211 + hi5622 kmods) with the CORRECTED FINAL ASSOCIATION
-# driver module installed as kmod-hi5622-wifi, the WPA2/WPA3 hostapd fixtures
-# and the hi5622 loader/init (autoload=0).  The hardware-validated kernel
-# slice 13e81214... (slot 1794a531...) MUST stay byte-identical.
+# clean-room cfg80211 + hi5622 kmods) with the CORRECTED FINAL ASSOCIATION +
+# RX-WATERMARK driver module installed as kmod-hi5622-wifi, the WPA2/WPA3
+# hostapd fixtures and the hi5622 loader/init (autoload=0).  The
+# hardware-validated kernel slice 13e81214... (slot 1794a531...) MUST stay
+# byte-identical.
 #
-# Default driver pin (task-159):
-#   344,372 B sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
-#   56 params; final association tree + wifi-sibling-gpl corrected mgmt-TX
-#   carrier patch (HCC g0 id6 control message).
+# Default driver pin (task-159 final; rx-watermark rebuild, task-156):
+#   347,388 B sha256 d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+#   57 params; final association tree + wifi-sibling-gpl corrected mgmt-TX
+#   carrier patch (HCC g0 id6 control message) + EAPOL/data RX refill watermark
+#   (rx_refill_wm, default 75).
+# The pre-watermark baseline module (344,372 B ab9e18a4..., 56 params) can be
+# baked with the DRIVER_* env pins below (see BUILD-NOTES.md).
 # A successor artifact (e.g. the rx-watermark rebuild) can be baked by pinning
 # the env vars DRIVER_KO / DRIVER_SHA / DRIVER_SIZE / DRIVER_PARAMS /
 # DRIVER_INSTALLED_SHA.  A DRIVER_SHA mismatch aborts.
@@ -43,12 +47,17 @@ EXPECTED_KERNEL_SLOT=1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec5905
 PREV_CONTAINER=8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
 
 # ---- corrected association module pins (task-159 baseline) -----------------
-DRIVER_KO=${DRIVER_KO:-/tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko}
-DRIVER_SHA=${DRIVER_SHA:-ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e}
-DRIVER_SIZE=${DRIVER_SIZE:-344372}
-DRIVER_PARAMS=${DRIVER_PARAMS:-56}
+DRIVER_KO=${DRIVER_KO:-/tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko}
+DRIVER_SHA=${DRIVER_SHA:-d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6}
+DRIVER_SIZE=${DRIVER_SIZE:-347388}
+DRIVER_PARAMS=${DRIVER_PARAMS:-57}
 DRIVER_INSTALLED_SHA=${DRIVER_INSTALLED_SHA:-}
-DRIVER_LABEL=${DRIVER_LABEL:-CORRECTED FINAL ASSOCIATION module (assoc tree + sibling HCC g0 id6 mgmt-TX carrier) + hostapd-mbedtls SAE}
+DRIVER_LABEL=${DRIVER_LABEL:-CORRECTED FINAL ASSOCIATION + RX-WATERMARK module (assoc tree + sibling HCC g0 id6 mgmt-TX carrier + rx_refill_wm) + hostapd-mbedtls SAE}
+# durable (gitignored) fallback copy if /tmp was cleaned:
+DURABLE_DRIVER=$LANE/../../../../build/wifi-rx-watermark/hi5622_wifi.stripped.ko
+if [ ! -f "$DRIVER_KO" ] && [ -f "$DURABLE_DRIVER" ]; then
+	DRIVER_KO=$DURABLE_DRIVER
+fi
 
 WORK=$LANE/build-evidence/work
 EVID=$LANE/build-evidence
@@ -219,6 +228,9 @@ SQ=$KDIR/root.squashfs
 SQ_SIZE=$(stat -c %s "$SQ"); SQ_SHA=$(sha256sum "$SQ" | cut -d' ' -f1)
 
 # installed module identity (from the built rootfs, not from the input file)
+# NOTE: unsquashfs refuses an existing target directory; remove the previous
+# run's extraction or the identity check silently reads stale bytes.
+rm -rf "$WORK/rootfs-extract"
 unsquashfs -no-exit-code -d "$WORK/rootfs-extract" "$SQ" >/dev/null 2>&1 || true
 KO_INST=$WORK/rootfs-extract/lib/modules/6.18.60/hi5622_wifi.ko
 [ -f "$KO_INST" ] || die "installed hi5622_wifi.ko missing from the built rootfs"

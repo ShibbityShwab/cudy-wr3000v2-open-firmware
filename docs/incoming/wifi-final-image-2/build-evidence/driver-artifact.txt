@@ -1,14 +1,14 @@
 # driver artifact identity (wifi-final-image-2, task-159)
-artifact_path=/tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
-artifact_size=344372
-artifact_sha256=ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
-artifact_params=56
+artifact_path=/tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko
+artifact_size=347388
+artifact_sha256=d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+artifact_params=57
 artifact_vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
 artifact_depends=cfg80211
 artifact_license=GPL
-installed_size=325932
-installed_sha256=4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
-installed_params=56
+installed_size=328788
+installed_sha256=b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
+installed_params=57
 # feature strings asserted by the verifier:
 feature_present=himg_build_hcc_mgmt_tx
 feature_present=hmac_mgmt_tx_event_status

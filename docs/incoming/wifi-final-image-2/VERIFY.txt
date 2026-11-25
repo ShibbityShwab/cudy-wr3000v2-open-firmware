@@ -1,17 +1,17 @@
 == wifi-final-image-2 verification (built bytes), task-159 ==
 container : /home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
-RECORD  container size/sha256 = 7188799 / 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+RECORD  container size/sha256 = 7188799 / 8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
 
 PASS  container kernel slice is the validated 13e81214... (sha)
 PASS  kernel slice size unchanged (3372638 B)
 RECORD  kernel slot 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e (8650752 B) is NOT a container member and needs no write (rootfs-only flash)
 PASS  built kernel config (source of the slice, config sha 08b6e595) forces cmdline ubi.mtd=rootfsb (rootfs-only install writes mtd14, pair b stays active)
 RECORD  note: CONFIG_CMDLINE lives in the self-decompressing kernel payload and is asserted from the built kernel config, not by string-scanning the uImage
-RECORD  rootfs.ubi size/sha256 = 3801088 / 44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
+RECORD  rootfs.ubi size/sha256 = 3801088 / 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
 PASS  rootfs UBI starts with UBI# EC magic
 PASS  rootfs UBI fits the rootfsb/mtd14 partition (0x1740000 = 24379392 B; 20578304 B free)
-PASS  UBI volume 0 == build_dir root.squashfs prefix (3316684 B) + zero padding only
-RECORD  volume size 3317760 B, squashfs 3316684 B, end padding 1076 B
+PASS  UBI volume 0 == build_dir root.squashfs prefix (3318696 B) + zero padding only
+RECORD  volume size 3321856 B, squashfs 3318696 B, end padding 3160 B
 RECORD  image /usr/sbin/hostapd size/sha256 = 1032951 / 451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
 PASS  hostapd is the SAE-capable mbedtls full variant (sha 451dd49f...)
 PASS  hostapd is NOT the old SAE-less hostapd-mini (13cb3a43.../504,333 B)
@@ -34,21 +34,23 @@ PASS  ucode carry: /usr/share/hostap/wifi-detect.uc
 PASS  wireless-regdb regulatory.db carried
 PASS  kmod-hi5622-cfg80211 cfg80211.ko carried
 PASS  kmod-hi5622-wifi hi5622_wifi.ko carried
-PASS  input module artifact sha matches pin (ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e)
-PASS  input module artifact size matches pin (344372 B)
-PASS  input module artifact carries 56 parameters
-RECORD  module artifact: /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko (sha ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e)
-RECORD  installed module size/sha256 = 325932 / 4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
+PASS  input module artifact sha matches pin (d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6)
+PASS  input module artifact size matches pin (347388 B)
+PASS  input module artifact carries 57 parameters
+RECORD  module artifact: /tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko (sha d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6)
+RECORD  installed module size/sha256 = 328788 / b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
 PASS  installed module name hi5622_wifi
 PASS  installed module vermagic 6.18.60
 PASS  installed module depends cfg80211
-PASS  installed module carries 56 parameters
+PASS  installed module carries 57 parameters
+PASS  installed module carries the RX refill watermark param (rx_refill_wm)
+PASS  installed module carries the RX watermark telemetry string
 PASS  CORRECTED carrier builder symbol himg_build_hcc_mgmt_tx present
 PASS  superseded WAL 0x01F2 carrier log string ABSENT (corrected g0 id6 carrier)
 PASS  superseded descriptor-carrier (host-DRAM frame addr) log string ABSENT
 PASS  installed module imports the association cfg80211 symbols
 PASS  installed module depends exactly cfg80211 (no unresolved module dependency)
-PASS  installed module .text is byte-identical to the pinned artifact (strip only removed symbols/debug; 144572 B .text)
+PASS  installed module .text is byte-identical to the pinned artifact (strip only removed symbols/debug; 146448 B .text)
 PASS  module feature strings: sta_ops + data_tx + set_default_mgmt_key + DP rx_arm present
 
 PASS  image carries etc/hi5622/hostapd-open.conf
@@ -64,21 +66,21 @@ PASS  image etc/hi5622/hostapd-wpa2-wpa3.conf byte-identical to lane payload (d8
 PASS  image carries etc/hi5622/hostapd-wpa3-sae.conf
 PASS  image etc/hi5622/hostapd-wpa3-sae.conf byte-identical to lane payload (6ba5d4f1c6f7ed66a862bbc46e724b8bbf5c12e8e236eec43e58124cf5c4fd05)
 PASS  image carries etc/config/hi5622
-PASS  image etc/config/hi5622 byte-identical to lane payload (6ff692c535549dc239e3a1ff3bfc8babd7218367432a8ff4313bd8b24e2dc4cf)
+PASS  image etc/config/hi5622 byte-identical to lane payload (1b0a2727799381039411c47c179b65b5681a6f4e7f67d8cb398c6f22dc5d5073)
 PASS  image carries etc/init.d/hi5622-wifi
-PASS  image etc/init.d/hi5622-wifi byte-identical to lane payload (5cd9f4eb6136cec0c8b992e8514872118c60b777b1a888f2e1ac26e6f8879097)
+PASS  image etc/init.d/hi5622-wifi byte-identical to lane payload (93c820724eb4f15d3aff9b9edf573f3ccba381ba906bdef35db9c1a007caec9f)
 PASS  image carries etc/modprobe.d/hi5622-wifi.conf
-PASS  image etc/modprobe.d/hi5622-wifi.conf byte-identical to lane payload (1175f50faae5e7e3849b978c47ec06f57b4050cc8c391beb1e99f3183e6513c5)
+PASS  image etc/modprobe.d/hi5622-wifi.conf byte-identical to lane payload (ae3f72ae732e9126c2fe00233ee496618adc7c6c3c26e43cb1d73e513751cd7b)
 PASS  image carries etc/hi5622/FIRMWARE-POLICY.txt
-PASS  image etc/hi5622/FIRMWARE-POLICY.txt byte-identical to lane payload (8f278072f07bca5fc5ad263cb5495d221437a7474880a58b8ad2ed07186476f6)
+PASS  image etc/hi5622/FIRMWARE-POLICY.txt byte-identical to lane payload (608a73f4d4b59c4b75a43f8a4fdda67fb886fa9198871e948ff2d25f140f7042)
 PASS  image carries usr/sbin/hi5622-load
-PASS  image usr/sbin/hi5622-load byte-identical to lane payload (7267d5f13db1a7b2a92fc3c29a5178ba6dc59cf9bd967329b9ba7c7448cd40a0)
+PASS  image usr/sbin/hi5622-load byte-identical to lane payload (4002a309ac385371db12deb40cd911de3c2bdd6257c1bb040b02a3ea253eaf40)
 PASS  hi5622-load is executable in the image
 PASS  hi5622-wifi init script is executable
 PASS  hi5622-wifi rc.d S96 link present (service is autoload=0 no-op)
 PASS  hi5622 uci policy autoload=0 (nothing loads at boot)
 PASS  association gate mgmt_tx fail-closed (0) in the image policy
-PASS  image uci policy names the corrected association module sha
+PASS  image uci policy names the baked module sha (d2c608e7...)
 PASS  manifest has hostapd-mbedtls
 PASS  manifest has hostapd-common
 PASS  manifest has libmbedtls21
@@ -96,5 +98,5 @@ RECORD  rootfs-only flash feasibility: kernel member sha unchanged (13e812144576
 RECORD    only changed flash member = rootfs UBI 3801088 B (<= mtd14 0x1740000/24379392 B); same container size class as 8944740e; kernel config forces ubi.mtd=rootfsb -> write mtd14, stay pair b
 PASS  rootfs-only flash geometry re-checked (see FLASH-FEASIBILITY.md for the manual sequence)
 
-== verify-final-image-2: 82 passed, 0 failed ==
+== verify-final-image-2: 84 passed, 0 failed ==
 RESULT: PASS - FINAL IMAGE #2 carries the corrected association module, SAE hostapd, WPA2/WPA3 fixtures, iw/ucode/regdb, and the validated kernel slice (UNCHANGED)

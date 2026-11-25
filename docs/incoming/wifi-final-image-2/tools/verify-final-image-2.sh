@@ -78,7 +78,7 @@ done
 [ -n "$CONTAINER" ] || { echo "verify-final-image-2: --container is required" >&2; exit 2; }
 [ -f "$CONTAINER" ] || { echo "verify-final-image-2: no such container: $CONTAINER" >&2; exit 2; }
 [ -x /usr/bin/unsquashfs ] || { echo "verify-final-image-2: unsquashfs missing on host" >&2; exit 2; }
-MOD_PARAMS=${MOD_PARAMS:-56}
+MOD_PARAMS=${MOD_PARAMS:-57}
 
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf 'PASS  %s\n' "$*"; }
@@ -177,6 +177,8 @@ if [ -f "$KO" ]; then
 	echo "$(modinfo -F depends "$KO")" | grep -q cfg80211 && pass "installed module depends cfg80211" || fail "installed module does not depend on cfg80211"
 	KPARMS=$(modinfo -F parm "$KO" | wc -l)
 	[ "$KPARMS" = "$MOD_PARAMS" ] && pass "installed module carries $MOD_PARAMS parameters" || fail "installed module parameter count $KPARMS != $MOD_PARAMS"
+	modinfo -p "$KO" | grep -q '^rx_refill_wm:' && pass "installed module carries the RX refill watermark param (rx_refill_wm)" || fail "installed module has no rx_refill_wm param (not the watermark build)"
+	strings -a "$KO" | grep -qF 'RX watermark: rx_refill_wm=' && pass "installed module carries the RX watermark telemetry string" || fail "installed module has no RX watermark telemetry string"
 	[ -n "$MOD_INST_SHA" ] && { [ "$KO_SHA" = "$MOD_INST_SHA" ] && pass "installed module sha matches pin ($MOD_INST_SHA)" || fail "installed module sha $KO_SHA != pinned $MOD_INST_SHA"; }
 	NMFILE=$WORK/module.nm
 	nm "$KO" > "$NMFILE" 2>/dev/null || true
@@ -235,7 +237,8 @@ done
 [ -L "$RF/etc/rc.d/S96hi5622-wifi" ] && pass "hi5622-wifi rc.d S96 link present (service is autoload=0 no-op)" || fail "hi5622-wifi rc.d link absent"
 grep -qE "option autoload '0'" "$RF/etc/config/hi5622" && pass "hi5622 uci policy autoload=0 (nothing loads at boot)" || fail "hi5622 uci autoload policy missing"
 grep -qE '^\s*option mgmt_tx .0.' "$RF/etc/config/hi5622" && pass "association gate mgmt_tx fail-closed (0) in the image policy" || fail "mgmt_tx fail-closed policy missing"
-grep -q 'ab9e18a4' "$RF/etc/config/hi5622" && pass "image uci policy names the corrected association module sha" || fail "image uci policy does not name the corrected module sha"
+SHA8=${MOD_ART_SHA:0:8}; SHA8=${SHA8:-d2c608e7}
+grep -q "$SHA8" "$RF/etc/config/hi5622" && pass "image uci policy names the baked module sha ($SHA8...)" || fail "image uci policy does not name the baked module sha ($SHA8...)"
 
 # ---- 6. package manifest -------------------------------------------------
 MANIFEST=$(ls -t "$OWRT"/bin/targets/hisilicon/luofu/*.manifest 2>/dev/null | head -1 || true)

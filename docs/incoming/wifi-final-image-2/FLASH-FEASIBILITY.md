@@ -17,8 +17,8 @@ rootfs; what changed versus image B is the rootfs content only.
 | full kernel slot (8,650,752 B) | `1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e` | the kernelb/mtd12 content is already the validated slice; a rootfs-only install leaves it untouched |
 | built kernel .config | `08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c` (pre == post, all runs) | the kernel was NOT rebuilt (8-10 s rootfs-only builds) |
 | FORCED cmdline | `CONFIG_CMDLINE="ubi.mtd=rootfsb ..."` + `CONFIG_CMDLINE_FORCE=y` | the image still roots from the **rootfsb** UBI volume -> write mtd14, stay pair b |
-| new rootfs UBI | 3,801,088 B sha256 `44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb` | the only changed flash member |
-| container | 7,188,799 B sha256 `0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15` | same container SIZE as image B `8944740e` (7,188,799 B) -> the installer's split arithmetic is unchanged |
+| new rootfs UBI | 3,801,088 B sha256 `31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d` | the only changed flash member |
+| container | 7,188,799 B sha256 `8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8` | same container SIZE as image B `8944740e` (7,188,799 B) -> the installer's split arithmetic is unchanged |
 
 The sysupgrade container still carries both members; extracting only `root`
 gives the new rootfs UBI with the hash above.
@@ -44,14 +44,14 @@ unnecessary kernel-slot erase/write.
     # host, from the container
     tar -xOf final-image-2-sysupgrade.bin sysupgrade-cudy_wr3000-v2/root > rootfs.ubi
     sha256sum rootfs.ubi
-    # must be 44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
+    # must be 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
     # serve rootfs.ubi over the same HTTP base the tool uses (default
     # http://192.168.10.44:8000)
 
     # stock pair-A root telnet shell (recovery armed; pair A active)
     dd if=/dev/mtd12 bs=131072 count=66 2>/dev/null | sha256sum   # expect 1794a531...
     cd /tmp && wget -q -O /tmp/fi2-r.ubi http://192.168.10.44:8000/rootfs.ubi
-    sha256sum /tmp/fi2-r.ubi      # must match 44df3a63...
+    sha256sum /tmp/fi2-r.ubi      # must match 31e7a39c...
     ubiformat /dev/mtd14 -y -f /tmp/fi2-r.ubi ; echo UBI=$?   # expect UBI=0
     dd if=/dev/mtd12 bs=131072 count=66 2>/dev/null | sha256sum   # still 1794a531...
     ln -sf /bin/fw_printenv /tmp/fw_setenv; /tmp/fw_setenv bootflag b
@@ -76,7 +76,8 @@ unnecessary kernel-slot erase/write.
 
 * stock pair A stays bootable throughout - kernelb and pair A are never written
   by a rootfs-only install.
-* The previous image rootfs (image B `7817f090...`, or task-147 `6196232d...`)
+* The previous image rootfs (image B `7817f090...`, task-147 `6196232d...`, or
+  this lane's first image-2 bake `44df3a63...` with the pre-watermark module)
   can be re-written to mtd14 the same way, then handed back to pair b.
 * Physical RESET+TFTP recovery remains the last resort (BENCH-FACTS.md).
 

@@ -1,5 +1,5 @@
 --- /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image-2/build-evidence/work/.config.pre-build	2026-11-24 10:56:54.557769878 +0700
-+++ /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image-2/build-evidence/work/.config.resolved	2026-11-25 12:44:21.524295589 +0700
++++ /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-final-image-2/build-evidence/work/.config.resolved	2026-11-25 12:49:33.127077251 +0700
 @@ -298,7 +298,7 @@
  CONFIG_KERNEL_JFS_POSIX_ACL=y
  # end of Filesystem ACL and attr support options

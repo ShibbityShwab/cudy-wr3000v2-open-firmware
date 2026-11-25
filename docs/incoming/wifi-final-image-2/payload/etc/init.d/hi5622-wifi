@@ -4,7 +4,7 @@
 # /etc/init.d/hi5622-wifi - clean-room Hi5622V100 Wi-Fi bring-up service.
 # (wifi-final-image-2, task-159; behaviour identical to the wifi-image-polish
 # service, retargeted to the CORRECTED FINAL ASSOCIATION module's loader
-# policy: 56 params, association gates fail-closed at boot.)
+# policy: 57 params incl. rx_refill_wm, association gates fail-closed at boot.)
 #
 # BENCH POLICY: hi5622.main.autoload=0 is the shipped default, so this service
 # is a no-op at boot; the operator starts it explicitly.  Set autoload=1 (and

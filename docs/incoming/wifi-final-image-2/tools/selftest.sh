@@ -15,10 +15,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 LANE=$(cd "$HERE/.." && pwd)
 R=$LANE/payload
 HOSTAPD=${HOSTAPD_VALIDATOR:-}
-DRIVER_KO=${DRIVER_KO:-/tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko}
-MODULE_SHA=ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
-MODULE_SIZE=344372
-MODULE_PARAMS=56
+DRIVER_KO=${DRIVER_KO:-/tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko}
+MODULE_SHA=d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+MODULE_SIZE=347388
+MODULE_PARAMS=57
 
 PASS=0; FAIL=0; SKIP=0
 ok()   { printf 'PASS  %s\n' "$*"; PASS=$((PASS + 1)); }
@@ -126,6 +126,7 @@ for kv in "fw_path=hi_wifi/FIRMWARE.PD4.bin" "wifi_block_path=hi_wifi/wifi_block
           "wpa_keys=1" "wpa_key_module=0" "sta_join=0" "ht_mode=0" "vht_cap=0" \
           "band_vendor=0" "scan_band_cfg=0" \
           "mgmt_tx=0" "mgmt_rx=0" "sta_ops=0" "eapol_rx=0" "sta_user_del=0" \
+          "rx_refill_wm=75" \
           "data_tx=0" "data_tx_peer=1" "data_tx_protect=0" "data_tx_timeout_ms=200" \
           "txq_publish=1" "cfg80211_auto=1" "ap_start_mode=0" "rd_ab_write=0" \
           "hcc_cece_mode=0" "allow_unseeded_release=0"; do
@@ -134,7 +135,7 @@ for kv in "fw_path=hi_wifi/FIRMWARE.PD4.bin" "wifi_block_path=hi_wifi/wifi_block
 		*) bad "loader dry-run missing parameter: $kv"; PARAM_MISSING=$((PARAM_MISSING + 1)) ;;
 	esac
 done
-[ "$PARAM_MISSING" -eq 0 ] && ok "loader dry-run passes the full 56-param module parameter set (38 explicit args)"
+[ "$PARAM_MISSING" -eq 0 ] && ok "loader dry-run passes the full 57-param module parameter set (39 explicit args)"
 case "$DRYRUN" in
 	*rmmod*) bad "loader rmmods the driver (forbidden)" ;;
 	*) ok "loader never unloads the module (no rmmod)" ;;
@@ -241,12 +242,13 @@ if [ -f "$DRIVER_KO" ]; then
 	SHA=$(sha256sum "$DRIVER_KO" | cut -d' ' -f1)
 	SIZE=$(stat -c %s "$DRIVER_KO")
 	NP=$(modinfo -p "$DRIVER_KO" 2>/dev/null | wc -l)
-	[ "$SHA" = "$MODULE_SHA" ] && ok "module artifact sha ab9e18a4... matches the task-159 pin" || bad "module artifact sha $SHA != pinned $MODULE_SHA"
+	[ "$SHA" = "$MODULE_SHA" ] && ok "module artifact sha d2c608e7... matches the task-159 final (watermark) pin" || bad "module artifact sha $SHA != pinned $MODULE_SHA"
 	[ "$SIZE" = "$MODULE_SIZE" ] && ok "module artifact size $MODULE_SIZE B matches the pin" || bad "module artifact size $SIZE != pinned $MODULE_SIZE"
 	[ "$NP" = "$MODULE_PARAMS" ] && ok "module artifact carries $MODULE_PARAMS parameters" || bad "module artifact param count $NP != $MODULE_PARAMS"
 	NM=$(nm "$DRIVER_KO" 2>/dev/null || true)
-	case "$NM" in *" T himg_build_hcc_mgmt_tx"*) ok "corrected carrier builder symbol present (himg_build_hcc_mgmt_tx)" ;; *) bad "corrected carrier builder symbol missing" ;; esac
+	case "$NM" in *" himg_build_hcc_mgmt_tx"*) ok "corrected carrier builder symbol present (himg_build_hcc_mgmt_tx)" ;; *) bad "corrected carrier builder symbol missing" ;; esac
 	if strings -a "$DRIVER_KO" | grep -q 'WAL cfg-event carrier'; then bad "superseded WAL carrier string still present"; else ok "superseded WAL 0x01F2 carrier string absent"; fi
+	modinfo -p "$DRIVER_KO" | grep -q '^rx_refill_wm:' && ok "RX refill watermark param present (rx_refill_wm)" || bad "rx_refill_wm param missing"
 else
 	skip "module artifact not present: $DRIVER_KO (rebuild recipe in BUILD-NOTES.md; image/verify checks re-run at bake)"
 fi

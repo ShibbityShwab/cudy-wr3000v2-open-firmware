@@ -3,12 +3,13 @@
 # (wifi-final-image-2, task-159: FINAL IMAGE #2).
 #
 # Image: wifi-final-image-2 (OpenWrt 6.18.60 bench image).
-# Driver: the CORRECTED FINAL ASSOCIATION clean-room module
-#   344,372 B sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
-#   56 module parameters; vermagic "6.18.60 SMP mod_unload ARMv7 p2v8";
+# Driver: the CORRECTED FINAL ASSOCIATION + RX-WATERMARK clean-room module
+#   347,388 B sha256 d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+#   57 module parameters; vermagic "6.18.60 SMP mod_unload ARMv7 p2v8";
 #   depends=cfg80211.  Chain: final all-patch tree + wpa3-sae + ap-mgmt +
 #   sta-ops + data-tx + the sibling-derived CORRECTED mgmt-TX carrier
-#   (HCC g0 id6 control message, wifi-sibling-gpl patch 0001).
+#   (HCC g0 id6 control message, wifi-sibling-gpl patch 0001) + the
+#   EAPOL/data RX refill watermark (task-156, rx_refill_wm).
 #   Hardware-accepted on the bench: the corrected carrier posted 86 B and was
 #   consumed 0 polls; RX live bank CA 0x40050000 armed status 0x182.
 #
@@ -53,6 +54,12 @@ config driver 'main'
 	# RX consumer arm on the live bank (CA 0x40050000); drain needs on-air
 	# traffic, so this only arms the proven consumer.
 	option rx_enable '1'
+	# EAPOL/data RX refill watermark (percent of ring depth, 0..100; 0 =
+	# watermark pass disabled = old rx-static behaviour).  DEFAULT 75 keeps
+	# >= 3/4 of both free rings posted (ath11k-style).  FAIL-CLOSED AT BOOT:
+	# inert unless the operator sets rx_enable=1 AND writes dp_rx_arm; the
+	# drain only re-publishes buffers returned by validated completions.
+	option rx_refill_wm '75'
 	# Five-message vendor AP order + firmware beacon path (no host template).
 	option beacon_static '1'
 	option beacon_vap_start '1'

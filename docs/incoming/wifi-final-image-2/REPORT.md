@@ -1,21 +1,22 @@
 # REPORT - FINAL IMAGE #2 (wifi-final-image-2, task-159)
 
-**Status: BUILT + VERIFIED host-side (verify 82/82 PASS; selftest 49 passed,
-0 failed, 1 skipped).
+**Status: BUILT + VERIFIED host-side (verify 84/84 PASS; selftest 50 passed,
+0 failed, 1 skipped - only the optional ARM hostapd binary validator).
 NOT flashed, NOT booted by this lane.** Kernel slice **UNCHANGED**
 (`13e81214...` / slot `1794a531...`); rootfs-only successor of the
 wifi-hostapd-sae image B (`8944740e...`). The image carries the **corrected
-final association module** `ab9e18a4...` (56 params) as
-`kmod-hi5622-wifi`, the **WPA2/WPA3 hostapd fixtures** and the **hi5622
-loader/init with autoload=0**.
+final association module with the RX refill watermark** `d2c608e7...`
+(347,388 B, **57 params**) as `kmod-hi5622-wifi`, the **WPA2/WPA3 hostapd
+fixtures** and the **hi5622 loader/init with autoload=0**.
 
 Headline identities:
 
-    container   7,188,799 B  sha256 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+    container   7,188,799 B  sha256 8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
     kernel      3,372,638 B  sha256 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f  (UNCHANGED, slot 1794a531...)
-    rootfs UBI  3,801,088 B  sha256 44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
-    module art.   344,372 B  sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e  (56 params)
-    module inst.  325,932 B  sha256 4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
+    rootfs UBI  3,801,088 B  sha256 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
+    squashfs    3,318,696 B  sha256 cb42bfed25a12698770236b44bb8e73fafcf362d7571911f6470374090ce0578
+    module art.   347,388 B  sha256 d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6  (57 params)
+    module inst.  328,788 B  sha256 b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
     manifest     83 packages (hostapd-mbedtls SAE, iw, ucode wifi-scripts, regdb, kmods)
 
 ---
@@ -28,20 +29,26 @@ slice:
     ae5e28bf (wifi-image-integration)
       -> 0efcd1f1 (wifi-final-image: all-patch module 5b587949 + hostapd fixtures)
       -> a31bc405 (image A: + SAE hostapd; 8944740e = image B: + wpa3-sae module)
-      -> 0d9429ec (THIS image #2: corrected association module ab9e18a4)
+      -> 0d9429ec (image-2 first bake: corrected association module ab9e18a4)
+      -> 8ba1ad22 (THIS FINAL image-2: corrected association + RX-watermark module d2c608e7)
 
 Everything except the rootfs is identical across the chain; the kernel slice is
 the same `13e81214...` bytes that the ABI image install already wrote, so a
 rootfs-only flash (mtd14 / pair b) is sufficient - see
 [FLASH-FEASIBILITY.md](FLASH-FEASIBILITY.md).
 
+The first bake of this lane (`0d9429ec`, module `ab9e18a4`, 56 params) is
+kept in the run history; the **RX-watermark rebuild delivered by the
+wifi-rx-watermark lane (task-156) supersedes it**, and the final image is
+`8ba1ad22` with module `d2c608e7`.
+
 **Delta versus image B (`8944740e`):**
 
-1. `kmod-hi5622-wifi` = the corrected FINAL ASSOCIATION module (the image-B
-   `wpa3-sae` module `c7124bb9` is superseded; it is subsumed by this chain).
-2. The hi5622 loader/init/uci policy retargeted to the 56-param module; the
+1. `kmod-hi5622-wifi` = the corrected FINAL ASSOCIATION + RX-WATERMARK module
+   (the image-B `wpa3-sae` module `c7124bb9` is subsumed by this chain).
+2. The hi5622 loader/init/uci policy retargeted to the 57-param module; the
    association gates (mgmt_tx/mgmt_rx/sta_ops/eapol_rx/sta_user_del/data_tx)
-   added as **fail-closed** uci options.
+   and `rx_refill_wm` added to the shipped policy (**fail-closed** defaults).
 3. The six WPA2/WPA3 hostapd fixtures are carried (image B carried the SAE
    three; this image carries those **plus** the proven open and WPA2 fixtures,
    all byte-identical to committed payload text).
@@ -51,11 +58,11 @@ rootfs-only flash (mtd14 / pair b) is sufficient - see
 
 | property | value |
 | --- | --- |
-| artifact | `/tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko` - 344,372 B sha256 `ab9e18a4...` |
-| params | **56** (47 all-patch + 9 association) |
+| artifact | `/tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko` (durable copy `build/wifi-rx-watermark/`) - 347,388 B sha256 `d2c608e7...` |
+| params | **57** (47 all-patch + 9 association + `rx_refill_wm`) |
 | vermagic / deps | `6.18.60 SMP mod_unload ARMv7 p2v8` / `cfg80211` |
-| installed | 325,932 B sha256 `4f1b45c1...` (.text 144,572 B byte-identical to the artifact) |
-| source chain | final all-patch tree (5b587949) + **wpa3-sae** + **ap-mgmt** + **sta-ops** + **data-tx** + the sibling-gpl **corrected mgmt-TX carrier** patch |
+| installed | 328,788 B sha256 `b4c076bf...` (.text 146,448 B byte-identical to the artifact) |
+| source chain | final association tree 251d08f0 (all-patch 5b587949 + wpa3-sae + ap-mgmt + sta-ops + data-tx) + sibling-gpl **corrected mgmt-TX carrier** patch + watermark patch |
 | not-yet-fired | this exact combined module; its parts were built/host-tested, the AP/WPA2-GTK/TX/RX and WPA3-on-air milestones were fired on earlier modules of the same chain |
 
 **The corrected mgmt-TX carrier.** The mgmt-TX path in image B's module was the
@@ -69,6 +76,15 @@ log string is **absent**. Bench evidence from the carrier wave: the corrected
 carrier was **hardware-accepted - posted 86 B, consumed 0 polls** (one mgmt
 frame per load).
 
+**The RX refill watermark (T4, task-156).** `rx_refill_wm` = uint, percent of
+RX ring depth (0..100; 0 disables the watermark pass = old rx-static
+behaviour), **default 75** = keep >= 3/4 of both free RX rings posted
+(ath11k-style) so a drained EAPOL/data RX ring is refilled before it stalls
+(iwlwifi RX_STALLED failure mode). **Fail-closed at boot:** inert unless the
+operator sets `rx_enable=1` AND writes `dp_rx_arm`; the drain only
+re-publishes buffers returned by validated completions (bounded, never
+over-fills, closes the RX lane on any anomaly).
+
 **What else the module carries (all behind fail-closed params):**
 `mgmt_rx` (D2H CRX event `g1 id13` -> `cfg80211_rx_mgmt_ext`), `sta_ops`
 (`.add/change/del/get/dump_station` + per-STA firmware context `g0 id7
@@ -78,9 +94,10 @@ ring/TXQ path, EAPOL msg1/msg3), plus the WPA3 PMF/IGTK path
 (`.set_default_mgmt_key`, AP `mgmt_stypes=0x3c2a`) proven on air by the
 wpa3-sae wave.
 
-Verifier evidence for the installed module: 56 params; symbol
-`himg_build_hcc_mgmt_tx`; WAL `0x01F2` carrier string absent; descriptor
-carrier (`mgmt_tx: DMA frame buffer`) absent; imports
+Verifier evidence for the installed module: 57 params; `rx_refill_wm` param +
+RX-watermark telemetry string present; symbol `himg_build_hcc_mgmt_tx`; WAL
+`0x01F2` carrier string absent; descriptor carrier
+(`mgmt_tx: DMA frame buffer`) absent; imports
 `cfg80211_mgmt_tx_status_ext`, `cfg80211_rx_mgmt_ext`,
 `cfg80211_bss_iter`; depends exactly `cfg80211`; feature strings
 `sta_ops: STA %pM added`, `data-tx tx: posts=`,
@@ -109,9 +126,10 @@ claim that a secured client joined.
 ## 4. Loader / init policy (`autoload=0`, association gates fail-closed)
 
 `/usr/sbin/hi5622-load` (called by `/etc/init.d/hi5622-wifi`, rc.d `S96`) is
-retargeted to the 56-param module: it spells out **38 explicit insmod args**
-(including the 9 new association params), loads `cfg80211` first, verifies the
-parameters took effect, runs the C2 ladder, and optionally starts hostapd.
+retargeted to the 57-param module: it spells out **39 explicit insmod args**
+(including the 9 association params and `rx_refill_wm`), loads `cfg80211`
+first, verifies the parameters took effect, runs the C2 ladder, and optionally
+starts hostapd.
 
 * Shipped policy: `hi5622.main.autoload='0'` - nothing loads at boot
   (`/etc/config/hi5622`; modprobe.d mirrors the same defaults).
@@ -119,6 +137,7 @@ parameters took effect, runs the C2 ladder, and optionally starts hostapd.
   sta_user_del=0 data_tx=0 data_tx_peer=1 data_tx_protect=0
   data_tx_timeout_ms=200` (fail-closed; the image boots exactly as safe as the
   proven baseline).
+* RX watermark default: `rx_refill_wm=75`, inert until the attended RX drain.
 * Validated feature gates stay on as in the proven recipe:
   `rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_keys=1`, budgets
   `allow_frames=32 h2d_send_budget=10`.
@@ -127,7 +146,7 @@ The lane selftest runs the loader dry-run and asserts the full argument set,
 no `rmmod`, the C2 ladder, uci<->loader<->modprobe consistency and the
 fail-closed gate defaults.
 
-## 5. Verification (from the built bytes, 82/82 PASS)
+## 5. Verification (from the built bytes, 84/84 PASS)
 
 `tools/verify-final-image-2.sh` checks, from the container bytes:
 
@@ -139,14 +158,14 @@ fail-closed gate defaults.
   `wifi/hostapd` ucode modules; `regulatory.db`; `cfg80211.ko` +
   `hi5622_wifi.ko`.
 * **module identity**: pinned artifact sha/size/params, installed sha recorded,
-  56 params, corrected carrier symbol present + superseded carrier strings
-  absent, association cfg80211 imports, `.text` byte-identical to the pinned
-  artifact.
+  57 params + `rx_refill_wm` + watermark telemetry, corrected carrier symbol
+  present + superseded carrier strings absent, association cfg80211 imports,
+  `.text` byte-identical to the pinned artifact.
 * **payload**: all 6 hostapd fixtures + `/etc/config/hi5622`,
   `/etc/init.d/hi5622-wifi`, `/etc/modprobe.d/hi5622-wifi.conf`,
   `FIRMWARE-POLICY.txt`, `/usr/sbin/hi5622-load` byte-identical to committed
   payload; rc.d link present; `autoload=0`; `mgmt_tx=0` fail-closed; uci
-  names the corrected module sha.
+  names the baked module sha.
 * **manifest** (83 packages): hostapd-mbedtls, hostapd-common, libmbedtls21,
   iw, wireless-regdb, wifi-scripts, kmod-hi5622-wifi, kmod-hi5622-cfg80211;
   **no hostapd-mini**.
@@ -157,20 +176,21 @@ Full output: [VERIFY.txt](VERIFY.txt).
 
 ## 6. Reproducibility
 
-Three recorded bakes (and two earlier runs during verifier development) all
-produce the **byte-identical container** `0d9429ec...`, rootfs UBI
-`44df3a63...`, squashfs `f0f970e2...`, installed module `4f1b45c1...`
-(`build-evidence/build-runs.txt`; 8-10 s rootfs-only builds, kernel not
-rebuilt).
+The final image reproduced **byte-identically** in the three recorded builds
+after the final payload edit: container `8ba1ad22...`, rootfs UBI
+`31e7a39c...`, squashfs `cb42bfed...`, installed module `b4c076bf...`
+(`build-evidence/build-runs.txt`; 7-8 s rootfs-only builds, kernel never
+rebuilt). The earlier image-2 first bake with the pre-watermark module
+(`0d9429ec...`, module `ab9e18a4...`) is kept in the same run history.
 
 ## 7. Rootfs-only flash feasibility
 
 Re-checked: **YES**. Kernel member `13e81214...` unchanged -> kernelb/mtd12
 slot `1794a531...` already contains those bytes and needs **no write**; the
 only changed member is rootfs UBI 3,801,088 B (fits mtd14 0x1740000 =
-24,379,392 B with 20,578,304 B free); same container size as image B; forced
-cmdline still roots from `rootfsb`. Manual strict sequence and preconditions:
-[FLASH-FEASIBILITY.md](FLASH-FEASIBILITY.md).
+24,379,392 B with 20,578,304 B free); same container size as image B
+(7,188,799 B); forced cmdline still roots from `rootfsb`. Manual strict
+sequence and preconditions: [FLASH-FEASIBILITY.md](FLASH-FEASIBILITY.md).
 
 ## 8. Association fire recipe for THIS image (next bench step)
 
@@ -184,9 +204,10 @@ normal loader:
     uci set hi5622.main.sta_ops=1        # add/change/del_station + per-STA ctx
     uci set hi5622.main.eapol_rx=1       # 802.11->802.3 EAPOL into rx drain
     uci set hi5622.main.data_tx=1        # ndo_start_xmit -> dp TX (EAPOL msg1/3)
+    uci set hi5622.main.rx_refill_wm=75  # kept >=3/4 RX rings posted (0 = control)
     uci commit hi5622 && /etc/init.d/hi5622-wifi start
     # (equivalent explicit insmod: the ASSOCIATION-INTEGRATION recipe + the new
-    #  gates; hcc_trace=1 is recommended for the first association run)
+    #  gates + rx_refill_wm; hcc_trace=1 is recommended for the first run)
 
 Then start the AP with a WPA2 fixture
 (`uci set hi5622.ap.enabled=1; uci set hi5622.ap.config=/etc/hi5622/hostapd-wpa2.conf`
@@ -195,9 +216,10 @@ before the load), and have the external client associate.
 Expected evidence per rung: page `0x86807FEF/7/2/0xABCD` + mask 0; AP-ENABLED
 with the 5-message vendor order; `frame post 'mgmt_tx': g0 id6 total 86 B ...
 consumed after 0 polls` (auth/assoc response); `cfg80211: mgmt RX delivered
-(subtype ...)`; sta_ops add; `data_tx_status` posts/completed advancing;
-hostapd 4-way (WPA2) or SAE (WPA3). Controls: with the gates at 0 the same load
-must keep `.mgmt_tx` fail-closed (`-EOPNOTSUPP`) - no post.
+(subtype ...)`; sta_ops add; `data_tx_status` posts/completed advancing; the
+RX watermark telemetry line; hostapd 4-way (WPA2) or SAE (WPA3). Controls: with
+the gates at 0 the same load must keep `.mgmt_tx` fail-closed
+(`-EOPNOTSUPP`) - no post; `rx_refill_wm=0` is the no-watermark control.
 
 **Stop rules unchanged:** anything unexpected on the page/mask/exception path ->
 power-cycle, no retry in the same boot; the module boot ladder and H2D lane are
@@ -210,15 +232,13 @@ one-shot.
   RF (antennas being attached) and the flaky client MT7922.
 * The corrected carrier was hardware-accepted (86 B posted, consumed 0 polls)
   in the carrier wave; this **combined** module has not been re-fired.
+* The RX watermark is host-tested (127 checks in the wifi-rx-watermark lane) but
+  not yet exercised on hardware by this lane; it is fail-closed at boot.
 * WPA3-SAE on-air (SAE AKM, MFP-required, BIP-CMAC-256) is proven on the
   earlier wpa3-sae module; this module includes that code path and the corrected
   mgmt TX, but the combination is a pending bench step.
-* The **rx-watermark lane (task-156)** is rebuilding the module as assoc +
-  corrected carrier + **RX refill watermark** (new `rx_refill_wm`, default 75,
-  inert unless the operator enables/runs the RX drain). If that build lands, it
-  supersedes this module for the image; `tools/bake-final-image-2.sh` accepts
-  `DRIVER_KO/DRIVER_SHA/DRIVER_SIZE/DRIVER_PARAMS` pins and re-bakes from the
-  same tree in ~10 s. **This image is the current baked baseline (`ab9e18a4`).**
+* Module sha changes with the build path via the 20-byte GNU build-id; the
+  installed-identity evidence is the exact baked artifact sha + .text equality.
 * Vendor-derived PD4 firmware and `wifi_block.bin` are never packaged (manual
   push after flash, overlay wipe removes them - by policy).
 * Bench-only image; not an upstream artifact.
@@ -228,7 +248,7 @@ one-shot.
 | file | content |
 | --- | --- |
 | [HASHES.txt](HASHES.txt) | authoritative container/rootfs/kernel/module/payload hashes |
-| [VERIFY.txt](VERIFY.txt) | verifier output over the built bytes (82/82) |
+| [VERIFY.txt](VERIFY.txt) | verifier output over the built bytes (84/84) |
 | [BUILD-NOTES.md](BUILD-NOTES.md) | exact inputs, command sequence, reproducibility, tree state, module rebuild recipe |
 | [FLASH-FEASIBILITY.md](FLASH-FEASIBILITY.md) | rootfs-only install re-check + manual sequence |
 | `build-evidence/` | build log, run history, driver identity, payload manifest, kernel identity, applied config delta |
