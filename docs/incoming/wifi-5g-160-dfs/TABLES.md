@@ -27,7 +27,7 @@ inference; **[U]** needs a device read.
 | 0x07E7 | 94 | 0xB58FC | CAC/radar state sync: body[0] 1 = arm (six radar-detect registers + flag obj+0x4A5=1), 0 = disarm |
 | 0x0136 | 95 | 0xB5F3C | DFS radartool: body is the userspace radartool STRING (28-entry string table at CA 0x105B68) |
 | 0x01F7 | 93 | 0xB5B9C | DFS/RF mode (field-B = per-module context; the F2 fix): mode 3 -> CA 0x89924 ch36-64 RF image |
-| 0x00F7 | 92 | 0x285231 | descriptor-table pool (CA 0x1ADC98) |
+| 0x00F7 | 92 | 0x45A30 | descriptor-table pool (CA 0x1ADC98) |
 
 ## T3. Firmware channel tables [V]
 
