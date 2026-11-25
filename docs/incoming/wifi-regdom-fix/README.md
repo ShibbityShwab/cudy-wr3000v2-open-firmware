@@ -39,3 +39,26 @@ tools/verify-final-image-2.sh with the new hash pinned.
 
     iw reg get                    # expect: country US: DFS-FCC
     iw reg get | grep 5170-5250   # expect the IR flags (no PASSIVE-SCAN)
+
+## Two image-update paths
+
+### A. Re-bake (clean, recommended)
+The bake source tree (OWRT, /home/shibbityshwab/openwrt-lab-selectorfix-img) now carries the
+config change (target/linux/hisilicon/luofu/config-6.18 + the build tree .config), and the
+built net/wireless/cfg80211.ko in the kernel tree is the fixed one. A re-bake via
+docs/incoming/wifi-final-image-2/tools/bake-final-image-2.sh will rebuild the kernel modules
+with the new config and carry the fixed cfg80211.ko. A full re-bake is a long build; combine
+it with the next pending image changes (e.g. the 5GHz VAP fix, docs/incoming/wifi-5ghz-vap-msg/).
+
+### B. Targeted rootfs patch (fast, for the existing image #2)
+1. unsquashfs /home/shibbityshwab/wifi-final-image-2-artifacts/root.squashfs -d /tmp/root-patch
+2. cp <fixed>/cfg80211.ko /tmp/root-patch/lib/modules/6.18.60/cfg80211.ko
+3. mksquashfs /tmp/root-patch /tmp/root-new.squashfs -comp xz -b 262144 -Xbcj arm -noappend
+   (the original superblock: block 262144, xz, "Filters selected: arm" - the ARM BCJ filter)
+4. ubinize (the original rootfs.ubi volume layout; the extractor
+   docs/incoming/wifi-image-integration/tools/extract-ubi-rootfs.py documents the volume map)
+5. rebuild the sysupgrade container (the final-image-2 lane's structure: the kernel slice
+   unchanged + the new rootfs.ubi + the manifest/header)
+6. re-run docs/incoming/wifi-final-image-2/tools/verify-final-image-2.sh with the new
+   rootfs/squashfs hashes pinned.
+
